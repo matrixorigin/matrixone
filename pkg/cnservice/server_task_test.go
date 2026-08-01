@@ -19,6 +19,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -248,6 +249,18 @@ func (ts *testTS) QueryDaemonTask(ctx context.Context, conds ...taskservice.Cond
 }
 
 func (ts *testTS) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, cond ...taskservice.Condition) (int, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ts *testTS) UpdateDaemonTaskStatus(
+	ctx context.Context,
+	taskID uint64,
+	status task.TaskStatus,
+	updateAt time.Time,
+	endAt time.Time,
+	cond ...taskservice.Condition,
+) (int, error) {
 	//TODO implement me
 	panic("implement me")
 }

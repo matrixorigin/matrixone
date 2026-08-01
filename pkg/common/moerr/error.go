@@ -99,6 +99,7 @@ const (
 	ErrDerivedMustHaveAlias uint16 = 20320
 	ErrWrongUsage           uint16 = 20321
 	ErrUpdateTableUsed      uint16 = 20322
+	ErrWindowInvalidUse     uint16 = 20323
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -425,6 +426,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDerivedMustHaveAlias: {ER_DERIVED_MUST_HAVE_ALIAS, []string{"42000"}, "Every derived table must have its own alias"},
 	ErrWrongUsage:           {ER_WRONG_USAGE, []string{MySQLDefaultSqlState}, "Incorrect usage of %s and %s"},
 	ErrUpdateTableUsed:      {ER_UPDATE_TABLE_USED, []string{MySQLDefaultSqlState}, "You can't specify target table '%-.192s' for update in FROM clause"},
+	ErrWindowInvalidUse:     {ER_WINDOW_INVALID_WINDOW_FUNC_USE, []string{"HY000"}, "You cannot use the window function '%s' in this context"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -1012,6 +1014,10 @@ func NewWrongUsage(ctx context.Context, first, second string) *Error {
 
 func NewUpdateTableUsed(ctx context.Context, table string) *Error {
 	return newError(ctx, ErrUpdateTableUsed, table)
+}
+
+func NewWindowInvalidUse(ctx context.Context, function string) *Error {
+	return newError(ctx, ErrWindowInvalidUse, function)
 }
 
 func NewInvalidTypeForJSON(ctx context.Context, argument int, function string) *Error {

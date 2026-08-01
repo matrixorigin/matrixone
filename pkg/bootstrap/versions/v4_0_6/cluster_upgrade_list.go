@@ -13,6 +13,62 @@
 // limitations under the License.
 package v4_0_6
 
-import "github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+import (
+	"fmt"
 
-var clusterUpgEntries = []versions.UpgradeEntry{}
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+)
+
+// retiredKafkaSinkTaskCode is the wire value formerly assigned to
+// TaskCode_ConnectorKafkaSink. The protobuf value is reserved, so persisted
+// daemon tasks can still be identified without restoring the removed feature.
+const retiredKafkaSinkTaskCode = 4
+
+var clusterUpgEntries = []versions.UpgradeEntry{
+	retireKafkaSinkDaemonTasks,
+}
+
+var retireKafkaSinkDaemonTasks = versions.UpgradeEntry{
+	Schema:    catalog.MOTaskDB,
+	TableName: catalog.MOSysDaemonTask,
+	UpgType:   versions.MODIFY_METADATA,
+	UpgSql: fmt.Sprintf(
+		"update %s.%s set task_status = %d, update_at = current_timestamp() where %s",
+		catalog.MOTaskDB,
+		catalog.MOSysDaemonTask,
+		task.TaskStatus_CancelRequested,
+		activeKafkaSinkTaskFilter(),
+	),
+	CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+		exists, err := versions.CheckTableDataExist(
+			txn,
+			accountID,
+			fmt.Sprintf(
+				"select 1 from %s.%s where %s limit 1",
+				catalog.MOTaskDB,
+				catalog.MOSysDaemonTask,
+				activeKafkaSinkTaskFilter(),
+			),
+		)
+		return !exists, err
+	},
+}
+
+// activeKafkaSinkTaskFilter deliberately enumerates known non-terminal states.
+// Unknown future states and historical terminal rows must not be rewritten by
+// a compatibility migration.
+func activeKafkaSinkTaskFilter() string {
+	return fmt.Sprintf(
+		"task_metadata_executor = %d and task_status in (%d, %d, %d, %d, %d, %d)",
+		retiredKafkaSinkTaskCode,
+		task.TaskStatus_Created,
+		task.TaskStatus_Running,
+		task.TaskStatus_Paused,
+		task.TaskStatus_ResumeRequested,
+		task.TaskStatus_PauseRequested,
+		task.TaskStatus_RestartRequested,
+	)
+}

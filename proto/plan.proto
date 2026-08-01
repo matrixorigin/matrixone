@@ -385,6 +385,7 @@ message CheckDef {
   string name = 1;
   // Name for anonymous constraints, __mo_chk_[INDEX_ID]
   Expr check = 2;
+  string origin_sql = 3;
 }
 
 message Partition {
@@ -746,7 +747,8 @@ message Node {
     FUNCTION_SCAN = 3;
     EXTERNAL_SCAN = 4;
     MATERIAL_SCAN = 5;
-    SOURCE_SCAN = 6;
+    reserved 6; // former SOURCE_SCAN
+    reserved "SOURCE_SCAN";
     EXTERNAL_FUNCTION = 7;
 
     // Proper Relational Operators
@@ -1360,7 +1362,8 @@ message DataDefinition {
     ALTER_SEQUENCE = 30;
     DROP_SEQUENCE = 31;
     SHOW_SEQUENCES = 32;
-    SHOW_CONNECTORS = 33;
+    reserved 33; // former SHOW_CONNECTORS
+    reserved "SHOW_CONNECTORS";
     SHOW_UPGRADE = 34;
     RENAME_TABLE = 35;
     CREATE_PITR = 36;

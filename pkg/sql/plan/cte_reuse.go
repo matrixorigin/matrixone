@@ -161,7 +161,7 @@ func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[in
 	seen[nodeID] = true
 	node := builder.qry.Nodes[nodeID]
 	switch node.NodeType {
-	case planpb.Node_FUNCTION_SCAN, planpb.Node_EXTERNAL_SCAN, planpb.Node_SOURCE_SCAN,
+	case planpb.Node_FUNCTION_SCAN, planpb.Node_EXTERNAL_SCAN,
 		planpb.Node_EXTERNAL_FUNCTION, planpb.Node_LOCK_OP, planpb.Node_INSERT,
 		planpb.Node_DELETE, planpb.Node_MULTI_UPDATE, planpb.Node_POSTDML,
 		planpb.Node_RECURSIVE_CTE, planpb.Node_RECURSIVE_SCAN, planpb.Node_SINK,

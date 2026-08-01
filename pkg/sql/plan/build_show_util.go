@@ -42,14 +42,27 @@ func ConstructCreateTableSQL(
 	useDbName bool,
 	cloneStmt *tree.CloneTable,
 ) (string, tree.Statement, error) {
+	return constructCreateTableSQL(ctx, tableDef, snapshot, useDbName, cloneStmt, true)
+}
 
+func constructCreateTableSQL(
+	ctx CompilerContext,
+	tableDef *plan.TableDef,
+	snapshot *Snapshot,
+	useDbName bool,
+	cloneStmt *tree.CloneTable,
+	includeChecks bool,
+) (string, tree.Statement, error) {
 	var err error
 	var createStr string
 	rewritePairs := make([]struct {
 		display string
 		rewrite string
 	}, 0)
-	checkDefs := extractTopLevelCheckDefs(tableDef)
+	var checkDefs []string
+	if includeChecks {
+		checkDefs = constructCheckDefs(tableDef)
+	}
 	var mongoEnvelope sqlmongodb.CreateSQLEnvelope
 	mongoColumns := make(map[string]sqlmongodb.ColumnMapping)
 	if tableDef.TableType == catalog.SystemExternalRel {
@@ -760,6 +773,34 @@ func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
 		if isTopLevelCheckDef(segment) {
 			checks = append(checks, segment)
 		}
+	}
+	return checks
+}
+
+func constructCheckDefs(tableDef *plan.TableDef) []string {
+	if tableDef == nil || tableDef.TableType == catalog.SystemExternalRel {
+		return nil
+	}
+	if len(tableDef.Checks) == 0 {
+		return extractTopLevelCheckDefs(tableDef)
+	}
+
+	checks := make([]string, 0, len(tableDef.Checks))
+	for _, check := range tableDef.Checks {
+		if check == nil || check.OriginSql == "" {
+			continue
+		}
+		checks = append(
+			checks,
+			fmt.Sprintf(
+				"CONSTRAINT `%s` CHECK (%s)",
+				formatStr(check.Name),
+				check.OriginSql,
+			),
+		)
+	}
+	if len(checks) == 0 {
+		return extractTopLevelCheckDefs(tableDef)
 	}
 	return checks
 }

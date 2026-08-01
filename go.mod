@@ -29,7 +29,6 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/cockroachdb/errors v1.9.1
 	github.com/colinmarc/hdfs/v2 v2.4.0
-	github.com/confluentinc/confluent-kafka-go/v2 v2.4.0
 	github.com/containerd/cgroups/v3 v3.0.1
 	github.com/cpegeric/pdftotext-go v0.0.0-20241112123704-49cb86a3790e
 	github.com/detailyang/go-fallocate v0.0.0-20180908115635-432fa640bd2e
@@ -58,7 +57,6 @@ require (
 	github.com/hayageek/threadsafe v1.0.1
 	github.com/itchyny/gojq v0.12.16
 	github.com/jcmturner/gokrb5/v8 v8.4.4
-	github.com/jhump/protoreflect v1.15.2
 	github.com/jonboulle/clockwork v0.4.0
 	github.com/json-iterator/go v1.1.12
 	github.com/klauspost/compress v1.18.2
@@ -140,7 +138,6 @@ require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.24.2 // indirect
-	github.com/bufbuild/protocompile v0.6.0 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/bytedance/sonic/loader v0.5.1 // indirect
 	github.com/charmbracelet/colorprofile v0.2.3-0.20250311203215-f60798e515dc // indirect

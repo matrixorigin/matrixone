@@ -9960,17 +9960,8 @@ func TestDedupSnapshot1(t *testing.T) {
 
 	targetLSN := tae.Wal.GetLSNWatermark()
 	require.NotZero(t, targetLSN)
-	require.Eventually(
-		t,
-		func() bool {
-			return tae.AllCheckpointsFinished() &&
-				tae.Wal.GetCheckpointed() >= targetLSN
-		},
-		30*time.Second,
-		25*time.Millisecond,
-		"background checkpoint did not cover LSN %d",
-		targetLSN,
-	)
+	tae.WaitAllCheckpointsFinished()
+	require.GreaterOrEqual(t, tae.Wal.GetCheckpointed(), targetLSN)
 
 	txn, rel := tae.GetRelation()
 	startTS := txn.GetStartTS()
