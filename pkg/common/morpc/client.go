@@ -224,7 +224,10 @@ func WithClientDisableRetry() ClientOption {
 // WithClientLogger set client logger
 func WithClientLogger(logger *zap.Logger) ClientOption {
 	return func(c *client) {
+		// Keep the general client logger quiet for compatibility, but retain the
+		// caller's logger for explicitly rate-limited lifecycle diagnostics.
 		c.logger = logutil.GetPanicLoggerWithLevel(zap.FatalLevel)
+		c.diagnosticLogger = logger
 	}
 }
 
@@ -397,6 +400,12 @@ type client struct {
 		autoCreateQueueWaitTimeout    time.Duration
 		autoCreateQueueWaitTimeoutSet bool
 	}
+
+	// Keep failure-only diagnostics after the pre-existing hot client state so
+	// adding observability does not shift the mutex/pool fields used by every
+	// Send.
+	diagnosticLogger        *zap.Logger
+	autoCreateTimeoutLogger *logutil.RateLimitedLogger
 }
 
 // NewClient create rpc client with options
@@ -449,6 +458,14 @@ func NewClient(
 
 func (c *client) adjust() {
 	c.logger = logutil.Adjust(c.logger).Named(c.name)
+	c.diagnosticLogger = logutil.Adjust(c.diagnosticLogger)
+	// This logger has exactly one static event population. Retain only one keyed
+	// limiter state so a future accidental dynamic key cannot grow per-client
+	// diagnostic memory.
+	c.autoCreateTimeoutLogger = logutil.NewRateLimitedLoggerWithConfig(
+		c.diagnosticLogger,
+		logutil.RateLimitedLoggerConfig{MaxKeys: 1},
+	)
 	if c.createC == nil {
 		c.createC = make(chan string, 16)
 	}
@@ -1449,7 +1466,11 @@ type backendCreateState struct {
 	// ready together can therefore classify the result by event time rather
 	// than scheduler selection order.
 	completedAt atomic.Pointer[time.Time]
-	done        chan struct{}
+	// timeoutObserved deduplicates diagnostics and event metrics for callers
+	// coalesced on this exact create state. The request-impact counter remains
+	// per caller.
+	timeoutObserved atomic.Bool
+	done            chan struct{}
 	// factoryErr is set only when factory I/O completed with an error while
 	// this exact state still owned the remote generation. Closing done
 	// publishes it to waiters. Definitive connection errors are returned
@@ -1943,7 +1964,7 @@ func (c *client) handleAutoCreateWait(
 		!creationStart.IsZero() {
 		elapsed := time.Since(*creationStart)
 		if elapsed >= timeout {
-			return false, c.autoCreateTimeoutError(backend, elapsed, timeout)
+			return false, c.autoCreateTimeoutError(backend, elapsed, timeout, nil)
 		}
 	}
 
@@ -2157,6 +2178,7 @@ func (c *client) handleBackendCreateAdmissionDeadline(
 				backend,
 				time.Since(creationStart),
 				timeout,
+				state,
 			)
 		}
 	}
@@ -2172,6 +2194,7 @@ func (c *client) handleBackendCreateAdmissionDeadline(
 			backend,
 			time.Since(creationStart),
 			timeout,
+			state,
 		)
 	}
 	// The state was replaced without this waiter owning its completion. Treat
@@ -2216,6 +2239,7 @@ func (c *client) waitBackendFactoryCompletion(
 					backend,
 					completedAt.Sub(creationStart),
 					timeout,
+					state,
 				)
 			}
 			select {
@@ -2238,6 +2262,7 @@ func (c *client) waitBackendFactoryCompletion(
 				backend,
 				time.Since(creationStart),
 				timeout,
+				state,
 			)
 		}
 		timer := time.NewTimer(remaining)
@@ -2274,6 +2299,7 @@ func (c *client) classifyBackendFactoryCompletion(
 			backend,
 			completedAt.Sub(creationStart),
 			timeout,
+			state,
 		)
 	}
 	return definitiveBackendCreateError(state.factoryErr)
@@ -2297,7 +2323,7 @@ func (c *client) waitBackendRetryBackoff(
 	if timeout := c.options.autoCreateWaitTimeout; timeout > 0 {
 		remaining := timeout - time.Since(creationStart)
 		if remaining <= 0 {
-			return c.autoCreateTimeoutError(backend, time.Since(creationStart), timeout)
+			return c.autoCreateTimeoutError(backend, time.Since(creationStart), timeout, nil)
 		}
 		if remaining < wait {
 			wait = remaining
@@ -2316,7 +2342,7 @@ func (c *client) waitBackendRetryBackoff(
 	case <-timer.C:
 		if timedByCreateTimeout {
 			timeout := c.options.autoCreateWaitTimeout
-			return c.autoCreateTimeoutError(backend, time.Since(creationStart), timeout)
+			return c.autoCreateTimeoutError(backend, time.Since(creationStart), timeout, nil)
 		}
 		return nil
 	}
@@ -2326,12 +2352,29 @@ func (c *client) autoCreateTimeoutError(
 	backend string,
 	waited time.Duration,
 	timeout time.Duration,
+	state *backendCreateState,
 ) error {
-	c.logger.Warn("auto-create backend timed out",
+	c.metrics.autoCreateTimeoutCounter.Inc()
+	scope := "capacity-or-retry"
+	if state != nil {
+		scope = "create-state"
+		if !state.timeoutObserved.CompareAndSwap(false, true) {
+			return ErrBackendCreateTimeout
+		}
+		c.metrics.autoCreateTimeoutEventCounter.Inc()
+	}
+	c.autoCreateTimeoutLogger.WarnWithConfig(
+		"backend-auto-create-timeout",
+		"auto-create backend timed out",
+		logutil.RateLimitConfig{
+			Interval:   time.Minute,
+			BurstCount: 1,
+		},
+		zap.String("client", c.name),
 		zap.String("backend", backend),
+		zap.String("scope", scope),
 		zap.Duration("waited", waited),
 		zap.Duration("timeout", timeout))
-	c.metrics.autoCreateTimeoutCounter.Inc()
 	return ErrBackendCreateTimeout
 }
 

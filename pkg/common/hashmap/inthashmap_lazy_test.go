@@ -120,6 +120,27 @@ func TestIntHashMapIteratorLazyBuffers(t *testing.T) {
 	})
 }
 
+func TestIntHashMapFloat32ZeroCountWithNonZeroStart(t *testing.T) {
+	for _, scale := range []int32{0, 2} {
+		t.Run(fmt.Sprintf("scale-%d", scale), func(t *testing.T) {
+			m := mpool.MustNewZero()
+			typ := types.T_float32.ToType()
+			typ.Scale = scale
+			vec := vector.NewVec(typ)
+			defer vec.Free(m)
+			vecs := []*vector.Vector{vec}
+
+			intMap, err := NewIntHashMap(false, m)
+			require.NoError(t, err)
+			defer intMap.Free()
+			intItr := intMap.NewIterator()
+			require.NotPanics(t, func() {
+				intItr.encodeHashKeys(vecs, 1, 0)
+			})
+		})
+	}
+}
+
 func assertIntIteratorCapacity(t *testing.T, itr *intHashMapIterator, want int, hasNull bool) {
 	t.Helper()
 	if want == 0 {
@@ -140,6 +161,7 @@ func assertIntIteratorCapacity(t *testing.T, itr *intHashMapIterator, want int, 
 var (
 	benchmarkIntIterator *intHashMapIterator
 	benchmarkIntValues   []uint64
+	benchmarkIntZValues  []int64
 )
 
 func BenchmarkIntHashMapIteratorFirstInsert(b *testing.B) {
@@ -166,6 +188,43 @@ func BenchmarkIntHashMapIteratorFirstInsert(b *testing.B) {
 				}
 				benchmarkIntIterator = itr
 				benchmarkIntValues = vs
+			}
+		})
+	}
+}
+
+func BenchmarkIntHashMapFindFloat32(b *testing.B) {
+	const count = UnitLimit
+
+	for _, scale := range []int32{0, 2} {
+		b.Run(fmt.Sprintf("scale-%d/rows-%d", scale, count), func(b *testing.B) {
+			m := mpool.MustNewZero()
+			mp, err := NewIntHashMap(false, m)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer mp.Free()
+
+			typ := types.T_float32.ToType()
+			typ.Scale = scale
+			vec := vector.NewVec(typ)
+			defer vec.Free(m)
+			for i := 0; i < count; i++ {
+				if err := vector.AppendFixed(vec, float32(i)+0.125, false, m); err != nil {
+					b.Fatal(err)
+				}
+			}
+			vecs := []*vector.Vector{vec}
+			itr := mp.NewIterator()
+			if _, _, err := itr.Insert(0, count, vecs); err != nil {
+				b.Fatal(err)
+			}
+
+			b.ReportAllocs()
+			b.SetBytes(int64(count * types.T_float32.TypeLen()))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				benchmarkIntValues, benchmarkIntZValues = itr.Find(0, count, vecs)
 			}
 		})
 	}

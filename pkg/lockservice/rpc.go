@@ -44,12 +44,12 @@ var (
 	defaultRPCEnqueueTimeout   = time.Second * 5
 	defaultHandleWorkers       = 12
 	defaultHandleGetTxnWorkers = 4
-	// Backend creation/recovery must fail fast when a remote lock service is
-	// gone. Factory execution and process-local queue admission are different
-	// failure domains: the former is peer health, while the latter is transient
-	// local congestion and must not trip the peer circuit breaker.
-	backendCreateWaitTimeout      = 500 * time.Millisecond
-	backendCreateQueueWaitTimeout = 5 * time.Second
+	// Recovery identity and validation probes must fail fast when a remote lock
+	// service is gone. Factory execution and process-local queue admission are
+	// different failure domains: the former is peer health, while the latter is
+	// transient local congestion and must not trip the peer circuit breaker.
+	recoveryBackendCreateWaitTimeout = 500 * time.Millisecond
+	backendCreateQueueWaitTimeout    = 5 * time.Second
 	// Recovery endpoints are hints: eviction safely falls back to service
 	// discovery and the negative-response confirmation path. Keep a hard bound
 	// so historical CN UUID churn cannot grow the client for its whole lifetime.
@@ -153,14 +153,11 @@ func NewClient(
 		morpc.WithBackendReadTimeout(defaultRPCTimeout),
 		morpc.WithBackendFreeOrphansResponse(releaseResponse))
 
-	// Bound backend creation for every lockservice transport. The short budget
-	// starts only when peer factory work is admitted; the longer, independent
-	// queue budget bounds local congestion without attributing it to the peer.
-	c.cfg.ClientOptions = append(
-		c.cfg.ClientOptions,
-		morpc.WithClientAutoCreateWaitTimeout(backendCreateWaitTimeout),
-		morpc.WithClientAutoCreateQueueWaitTimeout(backendCreateQueueWaitTimeout),
-	)
+	// Bound process-local create-queue congestion for every transport. Normal
+	// Lock/Unlock, keepalive, and control traffic must otherwise follow the
+	// caller's context: a healthy peer can legitimately take more than 500ms to
+	// establish a cold connection when a CN is CPU saturated.
+	*c.cfg = withBackendCreateQueueWaitTimeout(*c.cfg)
 	controlClient, err := c.cfg.NewControlClient(
 		service,
 		"lock-control-client",
@@ -176,6 +173,7 @@ func NewClient(
 			return controlClient.Ping(ctx, remote)
 		}),
 	)
+	recoveryConfig := withBackendCreateWaitTimeout(*c.cfg)
 
 	client, err := c.cfg.NewClient(
 		service,
@@ -186,7 +184,7 @@ func NewClient(
 	}
 	c.client = client
 	createdClients = append(createdClients, client)
-	activeTxnClient, err := c.cfg.NewClient(
+	activeTxnClient, err := recoveryConfig.NewClient(
 		service,
 		"lock-active-txn-client",
 		func() morpc.Message { return acquireResponse() })
@@ -195,7 +193,7 @@ func NewClient(
 	}
 	c.activeTxnClient = activeTxnClient
 	createdClients = append(createdClients, activeTxnClient)
-	validationClient, err := c.cfg.NewClient(
+	validationClient, err := recoveryConfig.NewClient(
 		service,
 		"lock-validation-client",
 		func() morpc.Message { return acquireResponse() })
@@ -221,6 +219,26 @@ func NewClient(
 	c.keeperClient = keeperClient
 	createdClients = append(createdClients, keeperClient)
 	return c, nil
+}
+
+func withBackendCreateWaitTimeout(cfg morpc.Config) morpc.Config {
+	cfg.ClientOptions = append(
+		append([]morpc.ClientOption(nil), cfg.ClientOptions...),
+		morpc.WithClientAutoCreateWaitTimeout(
+			recoveryBackendCreateWaitTimeout,
+		),
+	)
+	return cfg
+}
+
+func withBackendCreateQueueWaitTimeout(cfg morpc.Config) morpc.Config {
+	cfg.ClientOptions = append(
+		append([]morpc.ClientOption(nil), cfg.ClientOptions...),
+		morpc.WithClientAutoCreateQueueWaitTimeout(
+			backendCreateQueueWaitTimeout,
+		),
+	)
+	return cfg
 }
 
 func closeCreatedClients(clients []io.Closer) error {
@@ -442,6 +460,9 @@ func lockserviceRemoteRPCErrorType(err error) string {
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
 		return "backend_cannot_connect"
+	}
+	if errors.Is(err, morpc.ErrBackendCreateTimeout) {
+		return "backend_create_timeout"
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) {
 		return "backend_closed"

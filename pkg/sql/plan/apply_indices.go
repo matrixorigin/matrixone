@@ -2638,7 +2638,12 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		rightTags[tag] = true
 	}
 
-	col2Cond := make(map[int32]int)
+	type indexJoinCondition struct {
+		exprIdx  int
+		hashSlot int
+	}
+	col2Cond := make(map[int32]indexJoinCondition)
+	hashSlot := 0
 	for i, expr := range node.OnList {
 		if !isEquiCond(expr, leftTags, rightTags) {
 			continue
@@ -2646,10 +2651,15 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 
 		col := expr.GetF().Args[0].GetCol()
 		if col == nil {
+			hashSlot++
 			continue
 		}
 
-		col2Cond[col.ColPos] = i
+		col2Cond[col.ColPos] = indexJoinCondition{
+			exprIdx:  i,
+			hashSlot: hashSlot,
+		}
+		hashSlot++
 	}
 
 	joinOnPK := true
@@ -2667,7 +2677,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	}
 
 	indexes := builder.filterRegularIndexesByJoinHints(leftChild, leftChild.TableDef.Indexes)
-	condIdx := make([]int, 0, len(col2Cond))
+	condIdx := make([]indexJoinCondition, 0, len(col2Cond))
 	for _, idxDef := range indexes {
 		if !idxDef.TableExist || !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) || isSpatialIndexDef(idxDef) {
 			continue
@@ -2717,25 +2727,30 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		rfTag := builder.genNewMsgTag()
 
 		var rfBuildExpr *plan.Expr
+		var componentProbeExprs []*plan.Expr
 		if numParts == 1 {
+			condition := node.OnList[condIdx[0].exprIdx].GetF()
 			rfBuildExpr = &plan.Expr{
-				Typ: idxTableDef.Cols[0].Typ,
+				Typ: condition.Args[1].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: -1,
-						ColPos: 0,
+						ColPos: int32(condIdx[0].hashSlot),
 					},
 				},
 			}
 		} else {
 			serialArgs := make([]*plan.Expr, len(condIdx))
+			componentProbeExprs = make([]*plan.Expr, len(condIdx))
 			for i := range condIdx {
+				componentProbeExprs[i] =
+					node.OnList[condIdx[i].exprIdx].GetF().Args[0]
 				serialArgs[i] = &plan.Expr{
-					Typ: node.OnList[condIdx[i]].GetF().Args[1].Typ,
+					Typ: node.OnList[condIdx[i].exprIdx].GetF().Args[1].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: -1,
-							ColPos: int32(condIdx[i]),
+							ColPos: int32(condIdx[i].hashSlot),
 						},
 					},
 				}
@@ -2752,6 +2767,39 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 				},
 			},
 		}
+		var nodeProbeRuntimeFilter, nodeBuildRuntimeFilter *plan.RuntimeFilterSpec
+		var hasRuntimeFilter bool
+		if len(componentProbeExprs) == 0 {
+			nodeProbeRuntimeFilter, nodeBuildRuntimeFilter, hasRuntimeFilter =
+				builder.makeExactRuntimeFilterPair(
+					rfTag,
+					len(condIdx) < numParts,
+					GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt),
+					probeExpr,
+					rfBuildExpr,
+					false,
+				)
+		} else {
+			nodeProbeRuntimeFilter, nodeBuildRuntimeFilter, hasRuntimeFilter =
+				builder.makeSerializedExactRuntimeFilterPair(
+					rfTag,
+					len(condIdx) < numParts,
+					GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt),
+					probeExpr,
+					rfBuildExpr,
+					componentProbeExprs,
+					false,
+				)
+		}
+		if !hasRuntimeFilter && !forceJoinIndex {
+			// The index lookup cost model assumes targeted runtime-filter
+			// pruning.  Without a materializable exact pair this rewrite would
+			// scan the index table under a no-op PASS dependency.
+			continue
+		}
+		// FORCE INDEX remains an explicit request to use the index even when
+		// its serialized lookup key has no proven exact-filter contract. Honor
+		// the hint without publishing a no-op dependency or optimistic stats.
 
 		// recod index table scan info
 		idxScanInfo := plan.IndexScanInfo{
@@ -2763,22 +2811,27 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			IndexTableName: idxDef.IndexTableName,
 		}
 
-		nodeProbeRuntimeFilter := MakeRuntimeFilter(rfTag, len(condIdx) < numParts, 0, probeExpr, false)
-		idxTableNodeID := builder.appendNode(&plan.Node{
-			NodeType:               plan.Node_TABLE_SCAN,
-			TableDef:               idxTableDef,
-			ObjRef:                 idxObjRef,
-			IndexScanInfo:          idxScanInfo,
-			ParentObjRef:           DeepCopyObjectRef(leftChild.ObjRef),
-			BindingTags:            []int32{idxTag},
-			ScanSnapshot:           leftChild.ScanSnapshot,
-			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{nodeProbeRuntimeFilter},
-		}, builder.ctxByNode[nodeID])
+		idxTableNode := &plan.Node{
+			NodeType:      plan.Node_TABLE_SCAN,
+			TableDef:      idxTableDef,
+			ObjRef:        idxObjRef,
+			IndexScanInfo: idxScanInfo,
+			ParentObjRef:  DeepCopyObjectRef(leftChild.ObjRef),
+			BindingTags:   []int32{idxTag},
+			ScanSnapshot:  leftChild.ScanSnapshot,
+		}
+		if hasRuntimeFilter {
+			idxTableNode.RuntimeFilterProbeList =
+				[]*plan.RuntimeFilterSpec{nodeProbeRuntimeFilter}
+		}
+		idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[nodeID])
 		builder.inheritIndexHints(idxTableNodeID, leftChild.NodeId)
 
-		nodeBuildRuntimeFilter := MakeRuntimeFilter(rfTag, len(condIdx) < numParts, GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt), rfBuildExpr, false)
-		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, nodeBuildRuntimeFilter)
-		recalcStatsByRuntimeFilter(builder.qry.Nodes[idxTableNodeID], node, builder)
+		if hasRuntimeFilter {
+			node.RuntimeFilterBuildList = append(
+				node.RuntimeFilterBuildList, nodeBuildRuntimeFilter)
+			recalcStatsByRuntimeFilter(builder.qry.Nodes[idxTableNodeID], node, builder)
+		}
 
 		pkExpr := &plan.Expr{
 			Typ: leftChild.TableDef.Cols[pkIdx].Typ,
