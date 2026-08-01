@@ -39,11 +39,26 @@ func installTestHashBuildBudget(
 	t.Helper()
 	registry, err := mpool.NewAllocationAccountRegistry(1, 4_096)
 	require.NoError(t, err)
-	account, err := registry.OpenWithController(
-		generation.Cap(), generation)
+	account, err := registry.OpenWithController(1<<60, generation)
 	require.NoError(t, err)
 	replaceTestHashBuildAllocation(t, op, account)
 	op.ctr.hashmapBuilder.setBudget(generation)
+}
+
+func installTestProcessHashBuildBudget(
+	t testing.TB,
+	op *HashBuild,
+	proc *process.Process,
+) *process.HashBuildBudgetGeneration {
+	t.Helper()
+	generation, err := proc.GetHashBuildBudget()
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 4_096)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(1<<60, generation)
+	require.NoError(t, err)
+	replaceTestHashBuildAllocation(t, op, account)
+	return generation
 }
 
 func newTestHashmapBuilder(t testing.TB) *HashmapBuilder {

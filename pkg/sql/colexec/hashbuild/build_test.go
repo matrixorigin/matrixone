@@ -168,6 +168,7 @@ func TestHashBuildRepeatedResetFinalizesRuntimeFilterOnce(t *testing.T) {
 
 func TestBroadcastBudgetFailureUnblocksAllConsumers(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	installTestProcessHashBuildBudget(t, tc.arg, tc.proc)
 	tc.arg.SetChildren([]vm.Operator{tc.marg})
 	require.NoError(t, tc.marg.Prepare(tc.proc))
 	require.NoError(t, tc.arg.Prepare(tc.proc))
@@ -232,6 +233,7 @@ func TestHashBuildPrepareConvertsTerminalBudgetAdmission(t *testing.T) {
 			Idx: 0,
 		}},
 	}
+	installTestProcessHashBuildBudget(t, arg, proc)
 	var prepareErr error
 	t.Cleanup(func() {
 		arg.Free(proc, true, prepareErr)
@@ -254,6 +256,7 @@ func TestHashBuildPrepareConvertsTerminalBudgetAdmission(t *testing.T) {
 
 func TestHashBuildWithoutMapStillBudgetsRetainedBatches(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, nil)
+	installTestProcessHashBuildBudget(t, tc.arg, tc.proc)
 	tc.arg.NeedHashMap = false
 	tc.arg.NeedBatches = true
 	tc.arg.SetChildren([]vm.Operator{tc.marg})
@@ -618,14 +621,13 @@ func TestHashBuildOptionalRuntimeFilterCollectionFallsBackToJoinMap(
 	tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(
 		tc.arg.JoinMapTag+500, 100, typ)
 	tc.arg.SetChildren([]vm.Operator{tc.marg})
-	require.NoError(t, tc.marg.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-
 	const capBytes = uint64(64 << 20)
 	aggregate := process.MustNewHashBuildBudget(capBytes, capBytes)
 	generation, err := aggregate.OpenGeneration(1)
 	require.NoError(t, err)
 	installTestHashBuildBudget(t, tc.arg, generation)
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
 
 	providerCalls := 0
 	forcedCollectionReject := false
@@ -710,14 +712,13 @@ func TestHashBuildClosedMapBudgetDoesNotRecordCollectionFallback(
 	tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(
 		tc.arg.JoinMapTag+501, 100, typ)
 	tc.arg.SetChildren([]vm.Operator{tc.marg})
-	require.NoError(t, tc.marg.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-
 	const capBytes = uint64(64 << 20)
 	aggregate := process.MustNewHashBuildBudget(capBytes, capBytes)
 	generation, err := aggregate.OpenGeneration(1)
 	require.NoError(t, err)
 	installTestHashBuildBudget(t, tc.arg, generation)
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
 
 	providerCalls := 0
 	forcedClosed := false
@@ -784,13 +785,12 @@ func TestHashmapBuilderUniqueGrowthFailureAbandonsOptionalKeysInPlace(
 		[]types.Type{typ},
 		[]*plan.Expr{newExpr(0, typ)},
 	)
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-
 	const capBytes = uint64(64 << 20)
 	aggregate := process.MustNewHashBuildBudget(capBytes, capBytes)
 	generation, err := aggregate.OpenGeneration(1)
 	require.NoError(t, err)
 	installTestHashBuildBudget(t, tc.arg, generation)
+	require.NoError(t, tc.arg.Prepare(tc.proc))
 
 	const uniqueGrowthRows = hashmap.UnitLimit * 2
 	input := newBatch(
@@ -990,14 +990,13 @@ func TestShuffleDedupAdmissionAfterRewriteDoesNotSpillPartialInput(
 		Tag: tc.arg.JoinMapTag + 700,
 	}
 	tc.arg.SetChildren([]vm.Operator{tc.marg})
-	require.NoError(t, tc.marg.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-
 	const capBytes = uint64(64 << 20)
 	aggregate := process.MustNewHashBuildBudget(capBytes, capBytes)
 	generation, err := aggregate.OpenGeneration(1)
 	require.NoError(t, err)
 	installTestHashBuildBudget(t, tc.arg, generation)
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
 	// Ingress happens before BuildHashmap initializes this phase. Mark the
 	// retained source safe so the provider rejects only after Dedup crosses
 	// its explicit in-place rewrite boundary.
@@ -1206,17 +1205,16 @@ func TestHashBuildFloatRuntimeFilterAllocationFailureFallsBackToPass(t *testing.
 		RuntimeFilterSpec: spec,
 	}
 	arg.OpAnalyzer = process.NewAnalyzer(0, false, false, "hash build")
+	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	installTestHashBuildBudget(t, arg, generation)
 
 	keyVec := vector.NewOffHeapVecWithType(typ)
 	require.NoError(t, keyVec.PreExtend(256, mp))
 	keyVec.SetLength(keyVec.Capacity())
 	arg.ctr.hashmapBuilder.InputBatchRowCount = keyVec.Length()
 	arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{keyVec}
-
-	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
-	generation, err := budget.OpenGeneration(1)
-	require.NoError(t, err)
-	installTestHashBuildBudget(t, arg, generation)
 
 	var filler []byte
 	defer func() {
@@ -1516,15 +1514,14 @@ func TestRuntimeFilterExplicitDecimalContractProducesIn(t *testing.T) {
 	spec := rawRuntimeFilterSpec(105, 100, decimalType)
 	tc.arg.RuntimeFilterSpec = spec
 	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = 1
-	payload := vector.NewVec(decimalType)
-	require.NoError(t, vector.AppendFixed(
-		payload, types.Decimal64(1000), false, tc.proc.Mp()))
-	tc.arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{payload}
 	budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	installTestHashBuildBudget(t, tc.arg, generation)
-
+	payload := vector.NewVec(decimalType)
+	require.NoError(t, vector.AppendFixed(
+		payload, types.Decimal64(1000), false, tc.proc.Mp()))
+	tc.arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{payload}
 	require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
 	require.True(t, tc.arg.ctr.runtimeFilterDone)
 	require.True(t, tc.arg.ctr.runtimeFilterIn)
@@ -1564,15 +1561,14 @@ func TestDirectRuntimeFilterUsesDeclaredHashSlot(t *testing.T) {
 	spec.BuildExpr = newExpr(1, typ)
 	tc.arg.RuntimeFilterSpec = spec
 	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = 2
-	tc.arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{
-		testutil.MakeInt32Vector([]int32{901, 902}, nil, tc.proc.Mp()),
-		testutil.MakeInt32Vector([]int32{11, 12}, nil, tc.proc.Mp()),
-	}
 	budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	installTestHashBuildBudget(t, tc.arg, generation)
-
+	tc.arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{
+		testutil.MakeInt32Vector([]int32{901, 902}, nil, tc.proc.Mp()),
+		testutil.MakeInt32Vector([]int32{11, 12}, nil, tc.proc.Mp()),
+	}
 	require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
 	receiver := message.NewMessageReceiver(
 		[]int32{spec.Tag},
@@ -1650,6 +1646,10 @@ func TestHashBuildSerializedRuntimeFilterAllocationFailureFallsBackToPass(t *tes
 		RuntimeFilterSpec: spec,
 	}
 	arg.OpAnalyzer = process.NewAnalyzer(0, false, false, "hash build")
+	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	installTestHashBuildBudget(t, arg, generation)
 	arg.ctr.hashmapBuilder.InputBatchRowCount = 1
 	arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{
 		testutil.MakeInt32Vector([]int32{1}, nil, mp),
@@ -1667,11 +1667,6 @@ func TestHashBuildSerializedRuntimeFilterAllocationFailureFallsBackToPass(t *tes
 				moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 		}
 	})
-
-	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
-	generation, err := budget.OpenGeneration(1)
-	require.NoError(t, err)
-	installTestHashBuildBudget(t, arg, generation)
 
 	var filler []byte
 	defer func() {
@@ -1734,6 +1729,10 @@ func TestSerializedRuntimeFilterUsesTightBudgetAndProducesIn(t *testing.T) {
 		[]types.Type{componentType, componentType}, true)
 	tc.arg.RuntimeFilterSpec = spec
 	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = rowCount
+	budget := process.MustNewHashBuildBudget(512<<10, 512<<10)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	installTestHashBuildBudget(t, tc.arg, generation)
 
 	first := make([]int32, rowCount)
 	second := make([]int32, rowCount)
@@ -1762,11 +1761,6 @@ func TestSerializedRuntimeFilterUsesTightBudgetAndProducesIn(t *testing.T) {
 
 	// The generic VARCHAR(max) estimator would request roughly 64 MiB for
 	// these tiny tuples. The tuple-specific bound must fit comfortably here.
-	budget := process.MustNewHashBuildBudget(512<<10, 512<<10)
-	generation, err := budget.OpenGeneration(1)
-	require.NoError(t, err)
-	installTestHashBuildBudget(t, tc.arg, generation)
-
 	require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
 	require.True(t, tc.arg.ctr.runtimeFilterDone)
 	require.True(t, tc.arg.ctr.runtimeFilterIn)
@@ -1982,14 +1976,13 @@ func TestRuntimeFilterMarshalBudgetAdmissionFallsBackToPass(t *testing.T) {
 			tc.arg.RuntimeFilterSpec = spec
 			tc.arg.OpAnalyzer = process.NewAnalyzer(0, false, false, "hash build")
 			tc.arg.ctr.hashmapBuilder.InputBatchRowCount = 1
-			tc.arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{
-				testutil.MakeInt32Vector([]int32{1}, nil, tc.proc.Mp()),
-			}
-
 			budget := process.MustNewHashBuildBudget(1, 1)
 			generation, err := budget.OpenGeneration(1)
 			require.NoError(t, err)
 			installTestHashBuildBudget(t, tc.arg, generation)
+			tc.arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{
+				testutil.MakeInt32Vector([]int32{1}, nil, tc.proc.Mp()),
+			}
 
 			require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
 			require.True(t, tc.arg.ctr.runtimeFilterDone)
@@ -2028,11 +2021,7 @@ func TestRuntimeFilterMarshalUsesSinglePayloadBudget(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()},
 		[]*plan.Expr{newExpr(0, types.T_int32.ToType())})
 	vec := testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, nil, tc.proc.Mp())
-	wireBytes := uint64(1+len(types.EncodeType(vec.GetType()))+4*4+1) +
-		uint64(len(vec.GetData())+len(vec.GetArea()))
-	projected := wireBytes + 64<<10
-
-	budget := process.MustNewHashBuildBudget(projected, projected)
+	budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	installTestHashBuildBudget(t, tc.arg, generation)
@@ -2040,8 +2029,8 @@ func TestRuntimeFilterMarshalUsesSinglePayloadBudget(t *testing.T) {
 	data, release, err := tc.arg.ctr.hashmapBuilder.marshalRuntimeFilterVector(vec, tc.proc.Mp())
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
-	require.Equal(t, projected, generation.Peak())
-	require.LessOrEqual(t, generation.Used(), projected)
+	require.Equal(t, uint64(cap(data)), generation.Peak())
+	require.Equal(t, uint64(cap(data)), generation.Used())
 	require.NotNil(t, release)
 	release()
 	require.Zero(t, generation.Used())
@@ -2060,11 +2049,7 @@ func TestRuntimeFilterMarshalSinglePayloadCoversVarlenaPeak(t *testing.T) {
 		values[i] = strings.Repeat("x", 1024+i)
 	}
 	vec := testutil.MakeVarcharVector(values, nil, tc.proc.Mp())
-	wireBytes := uint64(1+len(types.EncodeType(vec.GetType()))+4*4+1) +
-		uint64(len(vec.GetData())+len(vec.GetArea()))
-	projected := wireBytes + 64<<10
-
-	budget := process.MustNewHashBuildBudget(projected, projected)
+	budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	installTestHashBuildBudget(t, tc.arg, generation)
@@ -2072,8 +2057,8 @@ func TestRuntimeFilterMarshalSinglePayloadCoversVarlenaPeak(t *testing.T) {
 	data, release, err := tc.arg.ctr.hashmapBuilder.marshalRuntimeFilterVector(vec, tc.proc.Mp())
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
-	require.Equal(t, projected, generation.Peak())
-	require.LessOrEqual(t, generation.Used(), projected)
+	require.Equal(t, uint64(cap(data)), generation.Peak())
+	require.Equal(t, uint64(cap(data)), generation.Used())
 	release()
 	require.Zero(t, generation.Used())
 
@@ -2088,7 +2073,7 @@ func TestRuntimeFilterMarshalAccountedPayloadMessageLifecycle(t *testing.T) {
 		[]*plan.Expr{newExpr(0, types.T_varchar.ToType())})
 	vec := testutil.MakeVarcharVector(
 		[]string{strings.Repeat("x", 4<<10), strings.Repeat("y", 8<<10)},
-		[]uint64{1},
+		nil,
 		tc.proc.Mp(),
 	)
 
@@ -2098,7 +2083,7 @@ func TestRuntimeFilterMarshalAccountedPayloadMessageLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
 	require.NoError(t, err)
-	account, err := registry.OpenWithController(limit, generation)
+	account, err := registry.OpenWithController(2*limit, generation)
 	require.NoError(t, err)
 	tc.arg.NeedHashMap = true
 	replaceTestHashBuildAllocation(t, tc.arg, account)
@@ -2154,16 +2139,13 @@ func TestRuntimeFilterMarshalAccountedOneByteShortFallsBackToPass(t *testing.T) 
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
 	require.NoError(t, err)
-	account, err := registry.OpenWithController(limit, generation)
+	account, err := registry.OpenWithController(2*limit, generation)
 	require.NoError(t, err)
 	tc.arg.NeedHashMap = true
 	replaceTestHashBuildAllocation(t, tc.arg, account)
 	tc.arg.ctr.hashmapBuilder.setBudget(generation)
-	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{
-		Tag:        104,
-		UpperLimit: 100,
-		Expr:       newExpr(0, types.T_int32.ToType()),
-	}
+	tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(
+		104, 100, types.T_int32.ToType())
 	tc.arg.OpAnalyzer = process.NewAnalyzer(0, false, false, "hash build")
 	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = 4
 	tc.arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{

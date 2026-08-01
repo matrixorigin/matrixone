@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -89,6 +90,23 @@ func TestTerminalBudgetError(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
 		require.Contains(t, err.Error(), "hash build resource budget exceeded")
 		require.NotContains(t, err.Error(), process.ErrHashBuildBudgetAdmission.Error())
+	})
+
+	t.Run("physical capacity is terminal resource exhaustion", func(t *testing.T) {
+		err := TerminalBudgetError(
+			context.Background(), mpool.ErrAllocationAccountCapacity)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
+		require.Contains(t, err.Error(), "hash build memory budget exceeded")
+		require.Contains(t, err.Error(), "processLimitationSize")
+	})
+
+	t.Run("physical lifecycle failure stays fatal", func(t *testing.T) {
+		joined := errors.Join(
+			mpool.ErrAllocationAccountCapacity,
+			mpool.ErrAllocationAccountSealed,
+		)
+		require.Same(t, joined,
+			TerminalBudgetError(context.Background(), joined))
 	})
 
 	for _, lifecycle := range []error{

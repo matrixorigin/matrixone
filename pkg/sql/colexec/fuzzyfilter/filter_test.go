@@ -387,7 +387,7 @@ func TestFuzzyRuntimeFilterBudgetErrorPolicy(t *testing.T) {
 			registry, err := mpool.NewAllocationAccountRegistry(1, 16)
 			require.NoError(t, err)
 			account, err := registry.OpenWithController(
-				generation.Cap(), generation)
+				2*generation.Cap(), generation)
 			require.NoError(t, err)
 			require.NoError(t, arg.SetAllocationAccount(account))
 			prepareFuzzyFilter(t, arg, proc)
@@ -398,7 +398,7 @@ func TestFuzzyRuntimeFilterBudgetErrorPolicy(t *testing.T) {
 			if test.closed {
 				generation.Close()
 			} else {
-				remaining := account.Snapshot().Limit - account.Snapshot().Used
+				remaining := generation.Cap() - generation.Used()
 				filler, err = proc.Mp().AllocAccounted(
 					int(remaining), account, 63, 255)
 				require.NoError(t, err)

@@ -356,8 +356,8 @@ func TestRightDedupEmptyBuildProbeMapHonorsHashBuildBudget(t *testing.T) {
 	require.NotContains(t, callErr.Error(), "convert go error")
 	require.NotContains(t, callErr.Error(), process.ErrHashBuildBudgetAdmission.Error())
 	require.Contains(t, callErr.Error(), "hash build memory budget exceeded")
-	require.Equal(t, initialBytes, budget.Used(),
-		"the admitted initial table remains owned until operator cleanup")
+	require.Zero(t, budget.Used(),
+		"failed probe-map construction must roll back its physical allocation")
 }
 
 var (

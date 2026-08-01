@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -27,7 +28,7 @@ import (
 // operator's public Call boundary. Spill and other recovery paths must keep the
 // typed admission error until they have exhausted every recovery option.
 func TerminalBudgetError(ctx context.Context, err error) error {
-	if err == nil || !errors.Is(err, process.ErrHashBuildBudgetAdmission) {
+	if err == nil {
 		return err
 	}
 	// A joined lifecycle/accounting failure is not a capacity rejection. Keep
@@ -40,6 +41,23 @@ func TerminalBudgetError(ctx context.Context, err error) error {
 
 	var budgetErr *process.HashBuildBudgetError
 	if !errors.As(err, &budgetErr) || budgetErr.Kind != process.HashBuildBudgetErrorAdmission {
+		switch {
+		case mpool.AllocationFailureReasonOf(err) ==
+			mpool.AllocationFailureCapacity:
+			return moerr.NewResourceExhaustedf(ctx,
+				"hash build memory budget exceeded; reduce join build width or query concurrency, increase processLimitationSize, or lower join_spill_mem for an eligible shuffle join")
+		case errors.Is(err, process.ErrHashBuildBudgetAdmission):
+			return moerr.NewResourceExhaustedf(ctx,
+				"hash build resource budget exceeded; inspect hash-build budget metrics and resource limits")
+		default:
+			return err
+		}
+	}
+	if budgetErr.Component == 0 {
+		reason := terminalBudgetReason(budgetErr.Message)
+		if reason != "" {
+			return moerr.NewResourceExhaustedf(ctx, "%s", reason)
+		}
 		return moerr.NewResourceExhaustedf(
 			ctx,
 			"hash build resource budget exceeded; inspect hash-build budget metrics and resource limits",

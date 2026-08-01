@@ -152,7 +152,7 @@ const (
 type HashBuildBudgetComponent uint8
 
 const (
-	HashBuildBudgetComponentMemory HashBuildBudgetComponent = iota
+	HashBuildBudgetComponentMemory HashBuildBudgetComponent = iota + 1
 	HashBuildBudgetComponentSpillDisk
 	HashBuildBudgetComponentSpillFD
 )
