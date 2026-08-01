@@ -188,16 +188,17 @@ references parent_composite_action(a, b) on update cascade
 insert into parent_composite_action values (1, 2), (3, 4);
 insert into child_composite_action(id, a, b) values (10, 1, 2), (20, 3, 4);
 update parent_composite_action set a = 11, b = 12 where a = 1 and b = 2;
+not supported: parent foreign key action requires complete child update row closure
 select row_count();
 ➤ row_count()[-5,64,0]  𝄀
-1
+0
 select * from parent_composite_action order by a, b;
 ➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-3  ¦  4  𝄀
-11  ¦  12
+1  ¦  2  𝄀
+3  ¦  4
 select * from child_composite_action order by id;
 ➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  generated_sum[4,32,0]  𝄀
-10  ¦  11  ¦  12  ¦  23  𝄀
+10  ¦  1  ¦  2  ¦  3  𝄀
 20  ¦  3  ¦  4  ¦  7
 create table child_second_cascade (
 id int primary key,
@@ -271,7 +272,7 @@ references parent_generated_unique(id) on update cascade
 insert into parent_generated_unique values (1), (12);
 insert into child_generated_unique(id, parent_id) values (10, 1), (20, 12);
 update parent_generated_unique set id = 2 where id = 1;
-Duplicate entry '2' for key 'u'
+not supported: parent foreign key action requires complete child update row closure
 select * from parent_generated_unique order by id;
 ➤ id[4,32,0]  𝄀
 1  𝄀

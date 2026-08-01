@@ -472,9 +472,8 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 			builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
 			_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
 			require.ErrorContains(t, err, "complete child update row closure")
-			route, reason, _ := classifyUpdatePlannerError(err)
-			require.Equal(t, updatePlannerLegacy, route)
-			require.Equal(t, updateRouteReasonForeignKey, reason)
+			route, _, _ := classifyUpdatePlannerError(err)
+			require.Equal(t, updatePlannerRejected, route)
 		})
 	}
 

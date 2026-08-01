@@ -508,7 +508,7 @@ func (builder *QueryBuilder) validateModernUpdateParentRowClosure(
 	for _, col := range childTableDef.Cols {
 		childColByID[col.ColId] = col
 		if col.GeneratedCol != nil || col.OnUpdate != nil {
-			return builder.newLegacyUpdateParentRowClosureError()
+			return builder.newUnsupportedUpdateParentRowClosureError()
 		}
 	}
 	for _, col := range parentTableDef.Cols {
@@ -531,7 +531,7 @@ func (builder *QueryBuilder) validateModernUpdateParentRowClosure(
 			parentCol.Typ.Width != childCol.Typ.Width ||
 			parentCol.Typ.Scale != childCol.Typ.Scale ||
 			parentCol.Typ.Enumvalues != childCol.Typ.Enumvalues {
-			return builder.newLegacyUpdateParentRowClosureError()
+			return builder.newUnsupportedUpdateParentRowClosureError()
 		}
 	}
 	for _, idxDef := range childTableDef.Indexes {
@@ -540,7 +540,7 @@ func (builder *QueryBuilder) validateModernUpdateParentRowClosure(
 		}
 		for _, part := range idxDef.Parts {
 			if _, changed := updatedChildNames[catalog.ResolveAlias(part)]; changed {
-				return builder.newLegacyUpdateParentRowClosureError()
+				return builder.newUnsupportedUpdateParentRowClosureError()
 			}
 		}
 	}
@@ -548,20 +548,17 @@ func (builder *QueryBuilder) validateModernUpdateParentRowClosure(
 		planutil.JudgeIsCompositeClusterByColumn(childTableDef.ClusterBy.Name) {
 		for _, colName := range planutil.SplitCompositeClusterByColumnName(childTableDef.ClusterBy.Name) {
 			if _, changed := updatedChildNames[colName]; changed {
-				return builder.newLegacyUpdateParentRowClosureError()
+				return builder.newUnsupportedUpdateParentRowClosureError()
 			}
 		}
 	}
 	return nil
 }
 
-func (builder *QueryBuilder) newLegacyUpdateParentRowClosureError() error {
-	return newLegacyUpdatePlannerRouteError(
-		updateRouteReasonForeignKey,
-		moerr.NewUnsupportedDML(
-			builder.GetContext(),
-			"parent foreign key action requires complete child update row closure",
-		),
+func (builder *QueryBuilder) newUnsupportedUpdateParentRowClosureError() error {
+	return moerr.NewNotSupported(
+		builder.GetContext(),
+		"parent foreign key action requires complete child update row closure",
 	)
 }
 
