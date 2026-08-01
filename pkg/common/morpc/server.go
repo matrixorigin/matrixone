@@ -683,10 +683,10 @@ func (cs *clientSession) RemoteAddress() string {
 
 func (cs *clientSession) Close() error {
 	cs.streamStateMu.Lock()
-	defer cs.streamStateMu.Unlock()
 	cs.mu.Lock()
-	defer cs.mu.Unlock()
 	if cs.mu.closed {
+		cs.mu.Unlock()
+		cs.streamStateMu.Unlock()
 		return nil
 	}
 	close(cs.closedC)
@@ -700,10 +700,17 @@ func (cs *clientSession) Close() error {
 		cs.metrics.messageCacheStateGauge.Sub(float64(len(cs.mu.caches)))
 	}
 	clear(cs.receivedStreamSequences)
+	caches := make([]cacheWithContext, 0, len(cs.mu.caches))
 	for _, c := range cs.mu.caches {
-		c.close()
+		caches = append(caches, c)
 	}
 	cs.mu.caches = nil
+	cs.mu.Unlock()
+	cs.streamStateMu.Unlock()
+
+	for _, c := range caches {
+		c.close()
+	}
 	cs.cancelWrite()
 	return cs.conn.Close()
 }
@@ -841,17 +848,21 @@ func (cs *clientSession) checkCacheTimeout() {
 			case <-cs.closedC:
 				return
 			case <-timer.C:
+				var expired []cacheWithContext
 				cs.mu.Lock()
 				for k, c := range cs.mu.caches {
 					if c.closeIfTimeout() {
-						c.close()
 						delete(cs.mu.caches, k)
+						expired = append(expired, c)
 						if cs.metrics != nil {
 							cs.metrics.messageCacheStateGauge.Dec()
 						}
 					}
 				}
 				cs.mu.Unlock()
+				for _, c := range expired {
+					c.close()
+				}
 				timer.Reset(time.Second)
 			}
 		}
@@ -968,17 +979,20 @@ func (cs *clientSession) CreateCacheWithCancel(
 
 func (cs *clientSession) DeleteCache(cacheID uint64) {
 	cs.mu.Lock()
-	defer cs.mu.Unlock()
-
 	if cs.mu.closed {
+		cs.mu.Unlock()
 		return
 	}
-	if c, ok := cs.mu.caches[cacheID]; ok {
-		c.close()
+	c, ok := cs.mu.caches[cacheID]
+	if ok {
 		delete(cs.mu.caches, cacheID)
 		if cs.metrics != nil {
 			cs.metrics.messageCacheStateGauge.Dec()
 		}
+	}
+	cs.mu.Unlock()
+	if ok {
+		c.close()
 	}
 }
 

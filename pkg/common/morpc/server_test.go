@@ -850,6 +850,71 @@ func TestCancelableMessageCacheLifecycle(t *testing.T) {
 	})
 }
 
+func TestCancelableMessageCacheCallbacksCanReenterSession(t *testing.T) {
+	assertReentrantCancel := func(
+		t *testing.T,
+		cs *clientSession,
+		trigger func(),
+	) {
+		t.Helper()
+		callbackDone := make(chan struct{})
+		_, err := cs.CreateCacheWithCancel(
+			context.Background(),
+			1,
+			func() {
+				_, _ = cs.GetCache(1)
+				close(callbackDone)
+			},
+		)
+		require.NoError(t, err)
+		triggerDone := make(chan struct{})
+		go func() {
+			trigger()
+			close(triggerDone)
+		}()
+		select {
+		case <-callbackDone:
+		case <-time.After(time.Second):
+			t.Fatal("cache cancel callback deadlocked while re-entering the session")
+		}
+		select {
+		case <-triggerDone:
+		case <-time.After(time.Second):
+			t.Fatal("cache cleanup did not return after the callback completed")
+		}
+	}
+
+	t.Run("delete", func(t *testing.T) {
+		cs := newClientSession(nil, newTestIOSession(nil, nil), nil, nil, nil)
+		assertReentrantCancel(t, cs, func() { cs.DeleteCache(1) })
+		require.NoError(t, cs.Close())
+	})
+
+	t.Run("session close", func(t *testing.T) {
+		cs := newClientSession(nil, newTestIOSession(nil, nil), nil, nil, nil)
+		assertReentrantCancel(t, cs, func() { _ = cs.Close() })
+		require.NoError(t, cs.Close())
+	})
+
+	t.Run("request timeout", func(t *testing.T) {
+		cs := newClientSession(nil, newTestIOSession(nil, nil), nil, nil, nil)
+		ctx, expire := context.WithCancel(context.Background())
+		callbackDone := make(chan struct{})
+		_, err := cs.CreateCacheWithCancel(ctx, 1, func() {
+			_, _ = cs.GetCache(1)
+			close(callbackDone)
+		})
+		require.NoError(t, err)
+		expire()
+		select {
+		case <-callbackDone:
+		case <-time.After(2500 * time.Millisecond):
+			t.Fatal("timeout cancel callback deadlocked while re-entering the session")
+		}
+		require.NoError(t, cs.Close())
+	})
+}
+
 func TestStreamServerWithSequenceNotMatch(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
 		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
