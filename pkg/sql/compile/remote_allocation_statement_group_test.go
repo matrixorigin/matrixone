@@ -252,6 +252,68 @@ func TestRemoteAllocationStatementGroupExpiresMissingFragment(t *testing.T) {
 	require.False(t, registry.AdmissionSuspended())
 }
 
+func TestRemoteAllocationStatementRegistrationTimerStartsBeforeFinish(t *testing.T) {
+	previousTimeout := remoteAllocationStatementRegistrationTimeout
+	remoteAllocationStatementRegistrationTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		remoteAllocationStatementRegistrationTimeout = previousTimeout
+	})
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+	require.NoError(t, err)
+	board := message.NewMessageBoard()
+	producer := newTestAllocationLifecycleCompile(t, registry, func(
+		mpool.AllocationAccountTerminalSnapshot,
+	) {
+		t.Fatal("expired remote statement group must own terminal export")
+	})
+	producer.MessageBoard = board
+	attempt, err := producer.beginAllocationAccountAttempt()
+	require.NoError(t, err)
+	buffer, err := producer.proc.Mp().AllocAccounted(
+		64,
+		attempt.account,
+		mpool.AllocationOwner(1),
+		mpool.AllocationSite(1),
+	)
+	require.NoError(t, err)
+	var destroyed atomic.Int32
+	message.SendMessage(&remoteAllocationAccountedMessage{
+		mp:        producer.proc.Mp(),
+		buffer:    buffer,
+		destroyed: &destroyed,
+	}, board)
+
+	canceled := make(chan error, 1)
+	participant, err := acquireRemoteAllocationStatementParticipant(
+		board,
+		2,
+		func(cause error) { canceled <- cause },
+	)
+	require.NoError(t, err)
+
+	select {
+	case cause := <-canceled:
+		require.Error(t, cause)
+	case <-time.After(time.Second):
+		t.Fatal("registration timeout did not cancel the active fragment")
+	}
+	require.Eventually(t, func() bool {
+		return destroyed.Load() == 1 && strings.Contains(board.DebugString(), "closed")
+	}, time.Second, time.Millisecond)
+
+	participant.stage(attempt, producer.proc.Mp())
+	terminal, err := participant.finish(errors.New("active fragment observed cancellation"))
+	require.Error(t, err)
+	require.True(t, terminal.complete)
+	require.Len(t, terminal.allocation, 1)
+	require.Equal(t, mpool.AllocationAccountTerminalValid, terminal.allocation[0].State)
+	require.Zero(t, terminal.allocation[0].Used)
+	require.Zero(t, terminal.memory.LiveBytesAtSeal)
+	require.Zero(t, registry.LiveAllocationMetadata())
+	require.False(t, remoteAllocationStatementGroupRegistered(board))
+}
+
 func TestRemoteAllocationStatementGroupFailureAbortsMissingFragment(t *testing.T) {
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
 	require.NoError(t, err)

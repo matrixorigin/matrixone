@@ -1158,6 +1158,30 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	return bat.Clone(mp, bat.offHeap || bat.hasAllocationAccountVector())
 }
 
+// CloneWithoutAllocationAccount deep-copies bat without carrying an
+// allocation account into the destination. Use it only at an ownership
+// boundary whose destination can outlive the source account.
+func (bat *Batch) CloneWithoutAllocationAccount(
+	mp *mpool.MPool,
+	offHeap bool,
+) (*Batch, error) {
+	attrs, attrTypes := bat.GetSchema()
+	cloned := NewWithSchema(offHeap, attrs, attrTypes)
+	cloned.Recursive = bat.Recursive
+	if err := bat.CloneTo(cloned, mp); err != nil {
+		return nil, err
+	}
+	return cloned, nil
+}
+
+// DupWithoutAllocationAccount is the ownership-boundary counterpart of Dup.
+func (bat *Batch) DupWithoutAllocationAccount(mp *mpool.MPool) (*Batch, error) {
+	return bat.CloneWithoutAllocationAccount(
+		mp,
+		bat.offHeap || bat.hasAllocationAccountVector(),
+	)
+}
+
 func (bat *Batch) hasAllocationAccountVector() bool {
 	for _, vec := range bat.Vecs {
 		if vec != nil && vec.AllocationAccountSelection() != nil {

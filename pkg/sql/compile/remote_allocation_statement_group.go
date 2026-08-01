@@ -183,9 +183,16 @@ func acquireRemoteAllocationStatementParticipant(
 	}
 	group.registered++
 	group.participants = append(group.participants, participant)
-	if group.registered == group.expected && group.timer != nil {
-		group.timer.Stop()
-		group.timer = nil
+	if group.registered == group.expected {
+		if group.timer != nil {
+			group.timer.Stop()
+			group.timer = nil
+		}
+	} else if group.timer == nil {
+		group.timer = time.AfterFunc(
+			remoteAllocationStatementRegistrationTimeout,
+			func() { expireRemoteAllocationStatementGroup(group) },
+		)
 	}
 	return participant, nil
 }

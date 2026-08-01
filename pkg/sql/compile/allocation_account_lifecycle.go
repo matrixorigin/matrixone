@@ -16,9 +16,9 @@ package compile
 
 import (
 	"errors"
-	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -31,7 +31,9 @@ func allocationLifecycleCall(call func() error) (err error) {
 			err = errors.Join(
 				err,
 				mpool.ErrAllocationAccountInvariant,
-				fmt.Errorf("allocation lifecycle panic: %v", recovered),
+				moerr.NewInternalErrorNoCtxf(
+					"allocation lifecycle panic: %v", recovered,
+				),
 			)
 		}
 	}()

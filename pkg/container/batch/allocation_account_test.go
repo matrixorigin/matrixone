@@ -170,6 +170,48 @@ func TestBatchAllocationAccountCloneDupAndWindow(t *testing.T) {
 	finalizeTestBatchAllocationAccount(t, state)
 }
 
+func TestBatchDupWithoutAllocationAccountCrossesStatementBoundary(t *testing.T) {
+	state := newTestBatchAllocationAccount(t, 64)
+	mp := mpool.MustNewZero()
+	source := newBatchAllocationTestSource(t, mp, state.selection)
+	sourceUsed := state.account.Snapshot().Used
+	require.Positive(t, sourceUsed)
+
+	cloned, err := source.DupWithoutAllocationAccount(mp)
+	require.NoError(t, err)
+	require.Nil(t, cloned.AllocationAccountSelection())
+	for _, vec := range cloned.Vecs {
+		require.Nil(t, vec.AllocationAccountSelection())
+	}
+	require.Equal(t, source.RowCount(), cloned.RowCount())
+	require.Equal(
+		t,
+		int64(0),
+		vector.GetFixedAtNoTypeCheck[int64](cloned.Vecs[0], 0),
+	)
+	require.Equal(
+		t,
+		[]byte("batch allocation payload that is not inline"),
+		cloned.Vecs[1].GetBytesAt(0),
+	)
+	require.Equal(t, sourceUsed, state.account.Snapshot().Used)
+
+	source.Clean(mp)
+	finalizeTestBatchAllocationAccount(t, state)
+	require.Equal(
+		t,
+		int64(0),
+		vector.GetFixedAtNoTypeCheck[int64](cloned.Vecs[0], 0),
+	)
+	require.Equal(
+		t,
+		[]byte("batch allocation payload that is not inline"),
+		cloned.Vecs[1].GetBytesAt(0),
+	)
+	cloned.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestBatchAccountedReaderAcceptsBitmapCapacityBeyondLogicalRows(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 64)
 	mp := mpool.MustNewZero()
