@@ -28,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -427,6 +429,43 @@ func TestAllocationAccountConfiguresEveryStatementOwner(t *testing.T) {
 	}
 	_, _, err = registry.CompleteTerminal(account)
 	require.NoError(t, err)
+}
+
+func TestAllocationAccountTransportParticipantsDoNotActivateLifecycle(t *testing.T) {
+	connectorOp := connector.NewArgument()
+	dispatchOp := dispatch.NewArgument()
+	t.Cleanup(connectorOp.Release)
+	t.Cleanup(dispatchOp.Release)
+	c := &Compile{
+		proc:         testutil.NewProcess(t),
+		MessageBoard: message.NewMessageBoard(),
+		scopes: []*Scope{
+			{RootOp: connectorOp},
+			{RootOp: dispatchOp},
+		},
+	}
+	require.NoError(t, c.ensureAllocationAccountLifecycle(func(
+		mpool.AllocationAccountTerminalSnapshot,
+	) {
+	}))
+	require.Nil(t, c.allocationAccountOwners)
+	require.Nil(t, c.allocationControllerProvider)
+	require.Nil(t, c.allocationAccountRegistry)
+	require.NoError(t, c.attachRuntimeAllocationOwners(c.scopes))
+
+	transportOwners := []executionAllocationAccountOwner{
+		connectorOp,
+		dispatchOp,
+	}
+	require.False(t, hasAllocationAccountActivator(transportOwners))
+
+	active := &allocationLifecycleOwnerOperator{
+		MockOperator: colexec.NewMockOperator(),
+	}
+	require.True(t, hasAllocationAccountActivator(append(transportOwners, active)))
+	require.ErrorIs(t, c.attachRuntimeAllocationOwners([]*Scope{{
+		RootOp: active,
+	}}), mpool.ErrAllocationAccountInvariant)
 }
 
 func TestAllocationAccountCollectsProductConsumerAndHashBuild(t *testing.T) {

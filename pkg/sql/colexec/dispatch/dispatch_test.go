@@ -897,6 +897,131 @@ func TestDispatchResetEndPreservesQueuedBroadcastBatchUntilDeferredCleanup(t *te
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestDispatchAllocationClearFinalizesTerminalSpoolPending(t *testing.T) {
+	testDispatchAllocationClearFinalizesSpool(t, false)
+}
+
+func TestDispatchAccountedDeferredCleanupReleasesReusableCache(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newDispatchSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := pSpool.InitMyPipelineSpool(mp, 1)
+	done, err := sp.SendBatch(context.Background(), 0, src, nil)
+	require.NoError(t, err)
+	require.False(t, done)
+	got, info := sp.ReceiveBatch(0)
+	require.NoError(t, info)
+	require.NotNil(t, got)
+	sp.ReleaseCurrent(0)
+	require.Positive(t, mp.CurrNB())
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	d := &Dispatch{cleanupSpool: sp}
+	require.NoError(t, d.SetAllocationAccount(account))
+	d.CleanupDeferredSpool()
+	require.Same(t, sp, d.cleanupSpool)
+	require.Zero(t, mp.CurrNB())
+	require.NoError(t, d.ClearAllocationAccount(account))
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+}
+
+func TestDispatchAllocationAccountContract(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(2, 1)
+	require.NoError(t, err)
+	first, err := registry.Open(1)
+	require.NoError(t, err)
+	second, err := registry.Open(1)
+	require.NoError(t, err)
+	d := &Dispatch{}
+	require.False(t, d.ActivatesAllocationAccountLifecycle())
+	require.ErrorIs(t, d.SetAllocationAccount(nil), mpool.ErrAllocationAccountInvalid)
+	require.NoError(t, d.SetAllocationAccount(first))
+	require.ErrorIs(t, d.SetAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
+	require.ErrorIs(t, d.ClearAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
+	d.ctr = &container{sp: &pSpool.PipelineSpool{}}
+	require.ErrorIs(t, d.ClearAllocationAccount(first), mpool.ErrAllocationAccountInvariant)
+	d.ctr = nil
+	require.NoError(t, d.ClearAllocationAccount(first))
+	require.NoError(t, d.ClearAllocationAccount(first))
+	_, _, err = registry.CompleteTerminal(first)
+	require.NoError(t, err)
+	_, _, err = registry.CompleteTerminal(second)
+	require.NoError(t, err)
+}
+
+func TestDispatchAllocationClearFinalizesAbortedSpool(t *testing.T) {
+	testDispatchAllocationClearFinalizesSpool(t, true)
+}
+
+func testDispatchAllocationClearFinalizesSpool(t *testing.T, abort bool) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		1,
+		102,
+		103,
+		104,
+		105,
+	)
+	require.NoError(t, err)
+	src := batch.NewOffHeapWithSize(1)
+	require.NoError(t, src.SetAllocationAccount(selection))
+	src.SetVector(0, vector.NewOffHeapVecWithType(types.T_int64.ToType()))
+	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(1), false, mp))
+	src.SetRowCount(1)
+
+	sp := pSpool.InitMyPipelineSpool(mp, 1)
+	done, err := sp.SendBatch(context.Background(), 0, src, nil)
+	require.NoError(t, err)
+	require.False(t, done)
+
+	d := &Dispatch{}
+	require.NoError(t, d.SetAllocationAccount(account))
+	if abort {
+		got, info := sp.ReceiveBatch(0)
+		require.NoError(t, info)
+		require.NotNil(t, got)
+		d.ctr = &container{sp: sp}
+		d.Reset(nil, true, moerr.NewInternalErrorNoCtx("pipeline failed"))
+		require.Same(t, sp, d.cleanupSpool)
+		sp.ReleaseCurrent(0)
+	} else {
+		d.cleanupSpool = sp
+		sp.ForceCleanupAfterTerminalSignal()
+	}
+	d.CleanupDeferredSpool()
+	require.Same(t, sp, d.cleanupSpool)
+	require.NoError(t, d.ClearAllocationAccount(account))
+	require.Nil(t, d.cleanupSpool)
+
+	src.Clean(mp)
+	snapshot := account.Seal()
+	require.Zero(t, snapshot.Used)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+}
+
 // TestReceiverDone_OldBehavior tests the old behavior (kept for backward compatibility verification)
 func TestReceiverDone_OldBehavior(t *testing.T) {
 	proc := testutil.NewProcess(t)

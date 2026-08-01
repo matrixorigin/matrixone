@@ -45,6 +45,22 @@ type executionAllocationAccountOwner interface {
 	ClearAllocationAccount(*mpool.AllocationAccount) error
 }
 
+type executionAllocationAccountActivationPolicy interface {
+	ActivatesAllocationAccountLifecycle() bool
+}
+
+func hasAllocationAccountActivator(
+	owners []executionAllocationAccountOwner,
+) bool {
+	for _, owner := range owners {
+		policy, ok := owner.(executionAllocationAccountActivationPolicy)
+		if !ok || policy.ActivatesAllocationAccountLifecycle() {
+			return true
+		}
+	}
+	return false
+}
+
 // statementAllocationAttempt owns one local execution generation. The
 // MessageBoard pointer is captured at open so prepared/retry Reset cannot make
 // terminal cleanup drain a newer board.
@@ -182,8 +198,11 @@ func (c *Compile) attachRuntimeAllocationOwners(scopes []*Scope) error {
 	}
 	if c.allocationAttempt == nil {
 		owners, err := collectAllocationAccountOwners(scopes)
-		if err != nil || len(owners) == 0 {
+		if err != nil {
 			return err
+		}
+		if !hasAllocationAccountActivator(owners) {
+			return nil
 		}
 		return mpool.ErrAllocationAccountInvariant
 	}
@@ -267,7 +286,7 @@ func (c *Compile) ensureAllocationAccountLifecycle(
 		return err
 	}
 	c.allocationAccountOwners = owners
-	if len(owners) == 0 {
+	if !hasAllocationAccountActivator(owners) {
 		c.allocationAccountOwners = nil
 		if c.allocationControllerProvider != nil {
 			c.allocationAccountRegistry = nil

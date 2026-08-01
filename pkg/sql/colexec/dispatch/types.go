@@ -76,8 +76,9 @@ type container struct {
 }
 
 type Dispatch struct {
-	ctr          *container
-	cleanupSpool *pSpool.PipelineSpool
+	ctr               *container
+	cleanupSpool      *pSpool.PipelineSpool
+	allocationAccount *mpool.AllocationAccount
 
 	// MaterializedSource is used by a multi-reference CTE whose consumers can
 	// have execution dependencies on one another. It is local-only and bypasses
@@ -107,6 +108,45 @@ type Dispatch struct {
 
 func (dispatch *Dispatch) GetOperatorBase() *vm.OperatorBase {
 	return &dispatch.OperatorBase
+}
+
+func (dispatch *Dispatch) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if account == nil || account.Handle() == 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if dispatch.allocationAccount != nil && dispatch.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	dispatch.allocationAccount = account
+	return nil
+}
+
+// ActivatesAllocationAccountLifecycle reports that Dispatch only participates
+// in an account already required by an allocation-producing operator.
+func (dispatch *Dispatch) ActivatesAllocationAccountLifecycle() bool {
+	return false
+}
+
+func (dispatch *Dispatch) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if dispatch.allocationAccount == nil {
+		return nil
+	}
+	if dispatch.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if dispatch.ctr != nil && dispatch.ctr.sp != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	if dispatch.cleanupSpool != nil {
+		dispatch.cleanupSpool.FinalizeAfterConsumersQuiesced()
+		dispatch.cleanupSpool = nil
+	}
+	dispatch.allocationAccount = nil
+	return nil
 }
 
 func init() {
@@ -286,7 +326,11 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 				abortErr = fallbackErr
 			}
 			sp.Abort(abortErr)
-			dispatch.cleanupSpool = nil
+			if dispatch.allocationAccount != nil {
+				dispatch.cleanupSpool = sp
+			} else {
+				dispatch.cleanupSpool = nil
+			}
 		}
 		dispatch.ctr.sp = nil
 	} else {
@@ -306,6 +350,10 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 // and leaves no receiver goroutine that can read pending signals later.
 func (dispatch *Dispatch) CleanupDeferredSpool() {
 	if dispatch.cleanupSpool == nil {
+		return
+	}
+	if dispatch.allocationAccount != nil {
+		dispatch.cleanupSpool.ReleaseReusableCacheAfterProducerQuiesced()
 		return
 	}
 	dispatch.cleanupSpool.ForceCleanupAfterTerminalSignal()

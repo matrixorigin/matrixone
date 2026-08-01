@@ -303,6 +303,103 @@ func TestPipelineSpoolForceCleanupAfterTerminalSignalDoesNotNeedNilEndMessage(t 
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestPipelineSpoolReleaseReusableCacheBeforeFinalization(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := InitMyPipelineSpool(mp, 2)
+	for range 2 {
+		done, err := sp.SendBatch(context.Background(), 0, src, nil)
+		require.NoError(t, err)
+		require.False(t, done)
+	}
+	got, info := sp.ReceiveBatch(0)
+	require.NoError(t, info)
+	require.NotNil(t, got)
+	sp.ReleaseCurrent(0)
+	got, info = sp.ReceiveBatch(0)
+	require.NoError(t, info)
+	require.NotNil(t, got)
+	beforeRelease := mp.CurrNB()
+
+	sp.ReleaseReusableCacheAfterProducerQuiesced()
+	require.Positive(t, mp.CurrNB())
+	require.Less(t, mp.CurrNB(), beforeRelease)
+
+	sp.ReleaseCurrent(0)
+	require.Positive(t, mp.CurrNB())
+	sp.FinalizeAfterConsumersQuiesced()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestPipelineSpoolFinalizeAfterConsumersQuiescedReleasesPendingBatch(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := InitMyPipelineSpool(mp, 1)
+	done, err := sp.SendBatch(context.Background(), 0, src, nil)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	sp.ForceCleanupAfterTerminalSignal()
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	sp.FinalizeAfterConsumersQuiesced()
+	require.Equal(t, int64(0), mp.CurrNB())
+	sp.FinalizeAfterConsumersQuiesced()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestPipelineSpoolFinalizeAfterConsumersQuiescedReleasesBroadcastCurrentAndPending(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := InitMyPipelineSpool(mp, 2)
+	done, err := sp.SendBatch(context.Background(), SendToAllLocal, src, nil)
+	require.NoError(t, err)
+	require.False(t, done)
+	got, info := sp.ReceiveBatch(0)
+	require.NoError(t, info)
+	require.NotNil(t, got)
+	require.Greater(t, mp.CurrNB(), int64(0))
+
+	sp.FinalizeAfterConsumersQuiesced()
+	require.Equal(t, int64(0), mp.CurrNB())
+	sp.FinalizeAfterConsumersQuiesced()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func TestPipelineSpoolLateReleaseAfterTerminalCleanupFreesDirectly(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() {

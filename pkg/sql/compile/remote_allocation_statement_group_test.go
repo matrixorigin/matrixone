@@ -23,6 +23,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/stretchr/testify/require"
@@ -124,6 +126,15 @@ func TestRemoteAllocationTopologyCapabilityIsRequiredForOwners(t *testing.T) {
 		scopes,
 		map[string]uint32{"cn-a:6001": 1},
 	))
+
+	connectorOp := connector.NewArgument()
+	dispatchOp := dispatch.NewArgument()
+	t.Cleanup(connectorOp.Release)
+	t.Cleanup(dispatchOp.Release)
+	require.NoError(t, validateRemoteAllocationTopologyCapability([]*Scope{
+		{RootOp: connectorOp},
+		{RootOp: dispatchOp},
+	}, nil))
 }
 
 func TestRemoteAllocationStatementGroupDefersSharedBoardTerminal(t *testing.T) {

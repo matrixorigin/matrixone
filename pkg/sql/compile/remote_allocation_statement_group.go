@@ -97,8 +97,11 @@ func validateRemoteAllocationTopologyCapability(
 		return nil
 	}
 	owners, err := collectAllocationAccountOwners(scopes)
-	if err != nil || len(owners) == 0 {
+	if err != nil {
 		return err
+	}
+	if !hasAllocationAccountActivator(owners) {
+		return nil
 	}
 	return moerr.NewNotSupportedNoCtx(
 		"remote allocation-accounted execution requires fragment topology metadata",
