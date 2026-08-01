@@ -809,14 +809,17 @@ func (ndesc *NodeDescribeImpl) GetBlockFilterConditionInfo(ctx context.Context, 
 }
 
 func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	if ndesc.Node.NodeType == plan.Node_JOIN && ndesc.Node.Stats.HashmapStats.Shuffle {
-		return "", nil
-	}
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
 	buf.WriteString("Runtime Filter Probe: ")
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.RuntimeFilterProbeList {
+			if v == nil || v.Expr == nil {
+				// A shuffle runtime filter carries a PASS marker without an
+				// expression. It controls dataflow but is not an EXPLAINable
+				// predicate.
+				continue
+			}
 			if !first {
 				buf.WriteString(", ")
 			}
@@ -829,6 +832,9 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, opt
 				buf.WriteString(" Match Prefix")
 			}
 		}
+		if first {
+			return "", nil
+		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return "", moerr.NewNYI(ctx, "explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
@@ -838,9 +844,6 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, opt
 }
 
 func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	if ndesc.Node.NodeType == plan.Node_JOIN && ndesc.Node.Stats.HashmapStats.Shuffle {
-		return "", nil
-	}
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
 	buf.WriteString("Runtime Filter Build: ")
 	if options.Format == EXPLAIN_FORMAT_TEXT {
@@ -864,6 +867,9 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, op
 			if err != nil {
 				return "", err
 			}
+		}
+		if first {
+			return "", nil
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return "", moerr.NewNYI(ctx, "explain format json")
