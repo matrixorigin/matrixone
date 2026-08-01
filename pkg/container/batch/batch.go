@@ -241,6 +241,9 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	vecs := bat.Vecs
 	// SelectColumns and ReplaceVector can leave multiple slots pointing to the
 	// same Vector. Reuse each receiver for at most one decoded column.
+	// Most batches are narrow, so avoid allocating a map on every decode. The
+	// prefix scan is bounded; wide batches keep the linear-time map path.
+	const linearReceiverScanLimit = 64
 	var usedReceivers map[*vector.Vector]struct{}
 	for i := 0; i < vecsLen; i++ {
 		size, err := cursor.readUint32()
@@ -255,9 +258,20 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 			return err
 		}
 		if vecs[i] != nil {
-			if _, used := usedReceivers[vecs[i]]; used {
-				vecs[i] = nil
+			used := false
+			if vecsLen <= linearReceiverScanLimit {
+				for j := 0; j < i; j++ {
+					if vecs[j] == vecs[i] {
+						used = true
+						break
+					}
+				}
 			} else {
+				_, used = usedReceivers[vecs[i]]
+			}
+			if used {
+				vecs[i] = nil
+			} else if vecsLen > linearReceiverScanLimit {
 				if usedReceivers == nil {
 					usedReceivers = make(map[*vector.Vector]struct{}, vecsLen)
 				}

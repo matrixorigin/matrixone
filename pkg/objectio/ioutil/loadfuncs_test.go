@@ -16,6 +16,8 @@ package ioutil
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -23,9 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/require"
 )
@@ -76,6 +81,195 @@ func (d *releaseTrackingData) Retain() {
 func (d *releaseTrackingData) Release() {
 	d.Data.Release()
 	d.outstanding.Add(-1)
+}
+
+func TestLoadColumnsDataIntoSelectedRowsUsesHotSealedCache(t *testing.T) {
+	const rowCount = 8192
+	ctx := context.Background()
+	cacheCapacity := toml.ByteSize(64 << 20)
+	fs, err := fileservice.NewLocalFS2(
+		ctx,
+		defines.SharedFileServiceName,
+		t.TempDir(),
+		fileservice.CacheConfig{MemoryCapacity: &cacheCapacity},
+		nil,
+	)
+	require.NoError(t, err)
+	fs.SetAsyncUpdate(false)
+	t.Cleanup(func() {
+		fs.Close(ctx)
+	})
+
+	typs := []types.Type{
+		types.T_int32.ToType(),
+		types.T_int32.ToType(),
+		types.New(types.T_char, 120, 0),
+		types.New(types.T_char, 60, 0),
+	}
+	writeMP := mpool.MustNewZero()
+	input := batch.NewWithSize(len(typs))
+	for i := range typs {
+		input.Vecs[i] = vector.NewVec(typs[i])
+	}
+	for i := 0; i < rowCount; i++ {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(i+1), false, writeMP))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], int32((i*7919)%rowCount), false, writeMP))
+		require.NoError(t, vector.AppendBytes(
+			input.Vecs[2],
+			[]byte(fmt.Sprintf("%08d", i)+strings.Repeat("c", 111)),
+			false,
+			writeMP,
+		))
+		require.NoError(t, vector.AppendBytes(
+			input.Vecs[3],
+			[]byte(fmt.Sprintf("%08d", i)+strings.Repeat("p", 51)),
+			false,
+			writeMP,
+		))
+	}
+	input.SetRowCount(rowCount)
+
+	writer := ConstructWriter(0, []uint16{0, 1, 2, 3}, -1, false, false, fs)
+	_, err = writer.WriteBatch(input)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	location := stats.ObjectLocation()
+	input.Clean(writeMP)
+	require.Zero(t, writeMP.CurrNB())
+	mpool.DeleteMPool(writeMP)
+
+	newDestinations := func() []*vector.Vector {
+		ret := make([]*vector.Vector, len(typs))
+		for i := range typs {
+			ret[i] = vector.NewOffHeapVecWithType(typs[i])
+		}
+		return ret
+	}
+	freeDestinations := func(vectors []*vector.Vector, mp *mpool.MPool) {
+		for _, vec := range vectors {
+			vec.Free(mp)
+		}
+	}
+
+	// Populate the memory cache deterministically before measuring the bounded
+	// selected-row materialization path.
+	warmMP := mpool.MustNewZero()
+	warm := newDestinations()
+	deleteMask, _, err := LoadColumnsDataInto(
+		ctx,
+		[]uint16{0, 1, 2, 3},
+		typs,
+		fs,
+		location,
+		warm,
+		[]int64{0},
+		nil,
+		warmMP,
+		fileservice.Policy(0),
+	)
+	require.NoError(t, err)
+	deleteMask.Release()
+	freeDestinations(warm, warmMP)
+	require.Zero(t, warmMP.CurrNB())
+	mpool.DeleteMPool(warmMP)
+
+	queryMP, err := mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(queryMP)
+	sels := []int64{0, 7, 511, 1024, 2047, 4096, 6143, 7001, 8000, 8191}
+	selected := newDestinations()
+	deleteMask, fromCache, err := LoadColumnsDataInto(
+		ctx,
+		[]uint16{0, 1, 2, 3},
+		typs,
+		fs,
+		location,
+		selected,
+		sels,
+		nil,
+		queryMP,
+		fileservice.Policy(0),
+	)
+	require.NoError(t, err)
+	deleteMask.Release()
+	require.True(t, fromCache)
+	require.Equal(t, len(sels), selected[0].Length())
+	ids := vector.MustFixedColWithTypeCheck[int32](selected[0])
+	keys := vector.MustFixedColWithTypeCheck[int32](selected[1])
+	for i, sel := range sels {
+		require.Equal(t, int32(sel+1), ids[i])
+		require.Equal(t, int32((sel*7919)%rowCount), keys[i])
+		require.Equal(t, fmt.Sprintf("%08d", sel)+strings.Repeat("c", 111), selected[2].GetStringAt(i))
+		require.Equal(t, fmt.Sprintf("%08d", sel)+strings.Repeat("p", 51), selected[3].GetStringAt(i))
+	}
+
+	target := []byte(fmt.Sprintf("%08d", rowCount-1) + strings.Repeat("c", 111))
+	search := objectio.NewReadFilterSearch(typs[2].Oid, [][]byte{target})
+	beforeSearch := queryMP.CurrNB()
+	found, fromCache, err := LoadColumnDataBySearch(
+		ctx,
+		2,
+		typs[2],
+		fs,
+		location,
+		search,
+		false,
+		nil,
+		queryMP,
+		fileservice.Policy(0),
+	)
+	require.NoError(t, err)
+	require.True(t, fromCache)
+	require.Equal(t, []int64{rowCount - 1}, found)
+	require.Equal(t, beforeSearch, queryMP.CurrNB(), "scoped search must not duplicate the full varchar column")
+
+	selected[2].GetBytesAt(0)[0] = 'X'
+	again := newDestinations()
+	deleteMask, fromCache, err = LoadColumnsDataInto(
+		ctx,
+		[]uint16{0, 1, 2, 3},
+		typs,
+		fs,
+		location,
+		again,
+		sels[:1],
+		nil,
+		queryMP,
+		fileservice.Policy(0),
+	)
+	require.NoError(t, err)
+	deleteMask.Release()
+	require.True(t, fromCache)
+	require.Equal(t, fmt.Sprintf("%08d", sels[0])+strings.Repeat("c", 111), again[2].GetStringAt(0))
+
+	trackingFS := &releaseTrackingFS{FileService: fs}
+	partial := []*vector.Vector{
+		vector.NewOffHeapVecWithType(typs[2]),
+		vector.NewOffHeapVecWithType(types.T_int64.ToType()),
+	}
+	_, _, err = LoadColumnsDataInto(
+		ctx,
+		[]uint16{2, 3},
+		typs[2:],
+		trackingFS,
+		location,
+		partial,
+		sels[:1],
+		nil,
+		queryMP,
+		fileservice.Policy(0),
+	)
+	require.Error(t, err)
+	require.Positive(t, trackingFS.tracked.Load())
+	require.Zero(t, trackingFS.outstanding.Load(), "all cache leases must be released after a later column fails")
+	require.Equal(t, 1, partial[0].Length())
+
+	freeDestinations(selected, queryMP)
+	freeDestinations(again, queryMP)
+	freeDestinations(partial, queryMP)
+	require.Zero(t, queryMP.CurrNB())
 }
 
 func TestLoadColumns2NeedCopyReleasesSourceCachedData(t *testing.T) {
