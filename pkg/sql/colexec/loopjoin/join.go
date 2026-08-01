@@ -73,6 +73,7 @@ func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 		execs, err = hashbuild.NewExpressionExecutors(
 			proc,
 			[]*plan.Expr{loopJoin.NonEqCond},
+			loopJoin.allocationAccount,
 		)
 		if err != nil {
 			return err
@@ -130,7 +131,9 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.batIdx = 0
 			}
 
-			loopJoin.resetResultBat()
+			if err = loopJoin.resetResultBat(); err != nil {
+				return result, err
+			}
 			for i, rp := range loopJoin.ResultCols {
 				if rp.Rel == 0 {
 					ctr.resBat.Vecs[i].SetSorted(ctr.inBat.Vecs[rp.Pos].GetSorted())
@@ -435,7 +438,7 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 	return nil
 }
 
-func (loopJoin *LoopJoin) resetResultBat() {
+func (loopJoin *LoopJoin) resetResultBat() error {
 	ctr := &loopJoin.ctr
 	if ctr.resBat != nil {
 		ctr.resBat.CleanOnlyData()
@@ -444,21 +447,37 @@ func (loopJoin *LoopJoin) resetResultBat() {
 			ctr.resBat.Vecs[i].SetLength(0)
 		}
 	} else {
-		ctr.resBat = batch.NewWithSize(len(loopJoin.ResultCols))
+		ctr.resBat = batch.NewOffHeapWithSize(len(loopJoin.ResultCols))
 
 		for i, rp := range loopJoin.ResultCols {
 			switch rp.Rel {
 			case 0:
-				ctr.resBat.Vecs[i] = vector.NewVec(*ctr.inBat.Vecs[rp.Pos].GetType())
+				var leftType types.Type
+				if ctr.inBat != nil && int(rp.Pos) < len(ctr.inBat.Vecs) {
+					leftType = *ctr.inBat.Vecs[rp.Pos].GetType()
+				} else if int(rp.Pos) < len(loopJoin.LeftTypes) {
+					leftType = loopJoin.LeftTypes[rp.Pos]
+				} else {
+					ctr.resBat.Clean(nil)
+					ctr.resBat = nil
+					return process.ErrHashBuildBudgetInvalid
+				}
+				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(leftType)
 
 			case 1:
-				ctr.resBat.Vecs[i] = vector.NewVec(loopJoin.RightTypes[rp.Pos])
+				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(loopJoin.RightTypes[rp.Pos])
 
 			case -1:
-				ctr.resBat.Vecs[i] = vector.NewVec(types.T_bool.ToType())
+				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
 			}
 		}
+		if err := ctr.resBat.SetAllocationAccount(loopJoin.resultAllocation); err != nil {
+			ctr.resBat.Clean(nil)
+			ctr.resBat = nil
+			return err
+		}
 	}
+	return nil
 }
 
 // initRightMatchedBitmap allocates the per-build-row matched bitmap.
@@ -505,24 +524,8 @@ func (ctr *container) initRightMatchedBitmap(
 // columns. Iterator is monotonic, so rightMatchedBat only advances.
 func (ctr *container) finalize(ap *LoopJoin, proc *process.Process, result *vm.CallResult) error {
 	bats := ctr.mp.GetBatches()
-	if ctr.resBat == nil {
-		ctr.resBat = batch.NewWithSize(len(ap.ResultCols))
-		for i, rp := range ap.ResultCols {
-			switch rp.Rel {
-			case 0:
-				ctr.resBat.Vecs[i] = vector.NewVec(ap.LeftTypes[rp.Pos])
-			case 1:
-				ctr.resBat.Vecs[i] = vector.NewVec(ap.RightTypes[rp.Pos])
-			default:
-				ctr.resBat.Vecs[i] = vector.NewVec(types.T_bool.ToType())
-			}
-		}
-	} else {
-		ctr.resBat.CleanOnlyData()
-		for i := range ctr.resBat.Vecs {
-			ctr.resBat.Vecs[i].SetClass(vector.FLAT)
-			ctr.resBat.Vecs[i].SetLength(0)
-		}
+	if err := ap.resetResultBat(); err != nil {
+		return err
 	}
 
 	rowCnt := 0

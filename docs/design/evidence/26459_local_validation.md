@@ -8,7 +8,8 @@ are not retained as validation dimensions.
 
 - no production allocation-account enable switch;
 - no HashBuild logical-size memory reservation token;
-- no join/HashBuild expression account pretending to cover library Go heap;
+- every join/HashBuild expression-owned MPool vector is constructed with the
+  attempt account, while opaque library Go heap remains an explicit boundary;
 - SpillEngine construction rejects a missing or closed budget generation;
 - runtime scan/load clones are attached to the current attempt before worker
   `Prepare`;
@@ -24,7 +25,8 @@ link flags, and runtime paths match the MatrixOne build contract.
 .agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=240s \
   ./pkg/common/mpool ./pkg/common/bitmap ./pkg/common/hashmap/... \
   ./pkg/container/vector ./pkg/container/batch ./pkg/vm/message \
-  ./pkg/vm/process ./pkg/sql/colexec/hashbuild \
+  ./pkg/vm/process ./pkg/sql/util ./pkg/sql/colexec \
+  ./pkg/sql/colexec/hashbuild \
   ./pkg/sql/colexec/hashjoin ./pkg/sql/colexec/dedupjoin \
   ./pkg/sql/colexec/rightdedupjoin ./pkg/sql/colexec/loopjoin \
   ./pkg/sql/colexec/product ./pkg/sql/colexec/productl2 \
@@ -35,8 +37,11 @@ Selected race coverage:
 
 ```text
 .agents/skills/mo-dev/scripts/mo-cgo-test -race -count=1 -timeout=300s \
-  ./pkg/common/mpool ./pkg/sql/colexec/hashjoin \
-  ./pkg/container/pSpool ./pkg/sql/colexec/productl2 \
+  ./pkg/common/mpool ./pkg/container/vector ./pkg/container/pSpool \
+  ./pkg/sql/util ./pkg/sql/colexec ./pkg/sql/colexec/hashbuild \
+  ./pkg/sql/colexec/hashjoin ./pkg/sql/colexec/loopjoin \
+  ./pkg/sql/colexec/dedupjoin ./pkg/sql/colexec/rightdedupjoin \
+  ./pkg/sql/colexec/productl2 \
   ./pkg/sql/colexec/spillutil ./pkg/sql/colexec/sample ./pkg/sql/compile
 ```
 
@@ -78,6 +83,11 @@ The local suite covers:
 - recursive spill row/schema/file validation;
 - minimum-unit and monotonic pressure termination;
 - optional runtime-filter degradation;
+- nested/selected expression result accounting, capacity rejection, transfer,
+  and terminal release;
+- HashJoin, LoopJoin, DedupJoin multi-batch finalize, and RightDedupJoin result
+  accounting, batch-local reuse, capacity rejection, and prepared
+  `Reset -> ClearAllocationAccount` terminal release;
 - grouping-aware copy, hash, equality, and ordering;
 - late and alternating Sample grouping domains across row, percent, and merge
   modes;

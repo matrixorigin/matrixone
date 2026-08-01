@@ -29,21 +29,27 @@ family:
 - hash table cells, descriptors, iterator keys, and selection lists;
 - copied build batches and retained unique keys;
 - JoinMap-owned batches and grouping metadata;
-- join matched/capture/result state;
+- HashJoin, LoopJoin, DedupJoin, and RightDedupJoin result/finalize state;
+- join matched/capture state;
 - Product result state;
 - runtime-filter payloads until ownership transfer;
 - spill encode/decode/scatter buffers and rebuilt retained state.
 
-ExpressionExecutor results, caches, and library-internal Go heap objects are
-not HashBuild-retained storage. They remain in the existing MPool/Go runtime
-domain. When an expression result is copied into a retained batch, key, or
-result vector, that destination allocation is charged. This boundary avoids a
-misleading partial "exact expression memory" account for regexp, JSON, JQ, and
-other libraries that do not expose allocator/free hooks.
+HashBuild and join expression trees receive the same account before
+construction. Their fixed/variable values, nested function results, selected
+row buffers, list results, and other owned MPool vectors allocate directly
+through it. Function-result wrappers retain the immutable selection even when
+the current vector is transferred, so later reuse cannot fall back to an
+unaccounted vector. Borrowed input and serialized-plan vectors keep their
+source ownership.
 
-The account is therefore not advertised as total query RSS. General transient
-expression admission is a separate problem and must not be represented by an
-estimated charge inside this exact, terminal-zero ledger.
+Library-internal Go heap objects remain outside the controlled domain. This
+explicit boundary avoids pretending that regexp, JSON, JQ, and other libraries
+with no allocator/free hooks are exactly charged.
+
+The account is therefore not advertised as total query RSS. Unobservable
+library allocations must not be represented by an estimated charge inside
+this exact, terminal-zero ledger.
 
 ProductL2 scratch and native CPU/GPU index storage are also outside this first
 controlled domain. ProductL2 still consumes an accounted JoinMap: those source

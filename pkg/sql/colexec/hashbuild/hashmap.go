@@ -196,6 +196,7 @@ func (hb *HashmapBuilder) Prepare(
 		executors, err := NewExpressionExecutors(
 			proc,
 			keyCols,
+			hb.mapAllocationAccount,
 		)
 		if err != nil {
 			return err

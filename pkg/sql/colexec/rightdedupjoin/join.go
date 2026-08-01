@@ -64,6 +64,7 @@ func (rightDedupJoin *RightDedupJoin) Prepare(proc *process.Process) (err error)
 		evalExecs, err = hashbuild.NewExpressionExecutors(
 			proc,
 			rightDedupJoin.Conditions[0],
+			rightDedupJoin.allocationAccount,
 		)
 		if err != nil {
 			return err
@@ -73,6 +74,7 @@ func (rightDedupJoin *RightDedupJoin) Prepare(proc *process.Process) (err error)
 		updateExecs, err = hashbuild.NewExpressionExecutors(
 			proc,
 			rightDedupJoin.UpdateColExprList,
+			rightDedupJoin.allocationAccount,
 		)
 		if err != nil {
 			for _, exec := range evalExecs {
@@ -399,16 +401,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 		}
 	}
 
-	ctr.resetResultBatch()
-	if ctr.resultBatch == nil {
-		ctr.resultBatch = batch.NewOffHeapWithSize(len(ap.Result))
-		for i, rp := range ap.Result {
-			if rp.Rel == 0 {
-				ctr.resultBatch.Vecs[i] = vector.NewOffHeapVecWithType(ap.LeftTypes[rp.Pos])
-			} else {
-				ctr.resultBatch.Vecs[i] = vector.NewOffHeapVecWithType(ap.RightTypes[rp.Pos])
-			}
-		}
+	if err := ap.resetResultBatch(); err != nil {
+		return err
 	}
 
 	for i, rp := range ap.Result {

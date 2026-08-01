@@ -91,11 +91,17 @@ its join consumers: hash tables, copied build batches, JoinMap state, retained
 keys, join bitmaps/capture/result state, Product result state,
 runtime-filter payloads, and spill encode/decode/rebuild buffers.
 
-ExpressionExecutor temporary results, caches, and library-internal Go heap
-remain in the existing MPool/Go runtime domain. They cannot truthfully be put
-in an exact terminal-zero account while regexp, JSON, JQ, and similar libraries
-do not expose allocator/free hooks. An expression value becomes accounted when
-it is physically copied into retained HashBuild/join storage.
+Every MPool-backed vector owned by a HashBuild/join ExpressionExecutor tree is
+inside the account: fixed and variable values, reusable function results,
+nested child results, selected-row buffers, and list results. Allocation
+provenance is installed when the tree is constructed, before the first owned
+capacity allocation. Borrowed input and serialized-plan vectors keep their
+source ownership.
+
+Library-internal Go heap used by regexp, JSON, JQ, and similar implementations
+remains outside this controlled domain because those libraries do not expose
+allocator/free hooks. The account is exact for its stated allocator-visible
+domain; it is not advertised as total expression memory or total query RSS.
 
 This is a static ownership boundary, not a runtime fallback. A future general
 expression-memory design must either use allocator-aware implementations or a
@@ -221,11 +227,12 @@ also creates a second release owner beside MPool.
 Sampling is observational, process-wide, and too late to authorize a specific
 allocation.
 
-### Account only selected expression buffers
+### Estimate or manually charge selected expression buffers
 
-This reports false exactness while opaque library Go heap remains untracked.
-The implementation therefore accounts retained copies, not partial expression
-internals.
+This creates another ledger and still reports false exactness. The
+implementation instead propagates one immutable allocation selection through
+the complete expression tree and charges every physical MPool capacity change;
+opaque library Go heap remains an explicit boundary rather than an estimate.
 
 ### Keep old and new production paths behind a switch
 

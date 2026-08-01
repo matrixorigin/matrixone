@@ -532,7 +532,7 @@ func TestAccountedRuntimeFilterUniqueKeysDegradeWithoutFailingHashBuild(t *testi
 	require.LessOrEqual(t, constrained.Peak, baseline.Peak)
 }
 
-func TestSpillExpressionTemporaryIsOutsideRetainedAccount(t *testing.T) {
+func TestSpillExpressionStorageUsesRetainedAccount(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	budget := process.MustNewHashBuildBudget(16<<20, 16<<20)
@@ -550,6 +550,7 @@ func TestSpillExpressionTemporaryIsOutsideRetainedAccount(t *testing.T) {
 	expr := makeIssue26454ConcatKey(t, proc)
 	executors, err := ctr.initSpillExprExecs(proc, []*plan.Expr{expr})
 	require.NoError(t, err)
+	constructorUsed := account.Snapshot().Used
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
 	input.Vecs[1] = testutil.MakeInt32Vector([]int32{3, 4}, nil, proc.Mp())
@@ -558,8 +559,8 @@ func TestSpillExpressionTemporaryIsOutsideRetainedAccount(t *testing.T) {
 	result, err := executors[0].Eval(proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"1-3", "2-4"}, vector.InefficientMustStrCol(result))
-	require.Zero(t, account.Snapshot().Used)
-	require.Zero(t, generation.Used())
+	require.Greater(t, account.Snapshot().Used, constructorUsed)
+	require.Equal(t, account.Snapshot().Used, generation.Used())
 
 	ctr.freeSpillExprExecs()
 	require.Zero(t, account.Snapshot().Used)
@@ -567,6 +568,52 @@ func TestSpillExpressionTemporaryIsOutsideRetainedAccount(t *testing.T) {
 	require.NoError(t, op.ClearAllocationAccount(account))
 	_, _, err = registry.CompleteTerminal(account)
 	require.NoError(t, err)
+}
+
+func TestSpillExpressionStorageHonorsAccountCapacity(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	run := func(limit uint64) (uint64, error) {
+		budget := process.MustNewHashBuildBudget(16<<20, 16<<20)
+		generation, err := budget.OpenGeneration(1)
+		require.NoError(t, err)
+		registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+		require.NoError(t, err)
+		account, err := registry.OpenWithController(limit, generation)
+		require.NoError(t, err)
+		var op HashBuild
+		op.NeedHashMap = true
+		require.NoError(t, op.SetAllocationAccount(account))
+		op.ctr.hashmapBuilder.setBudget(generation)
+		executors, evalErr := op.ctr.initSpillExprExecs(
+			proc,
+			[]*plan.Expr{makeIssue26454ConcatKey(t, proc)},
+		)
+		if evalErr == nil {
+			input := testutil.NewBatch(
+				[]types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
+				true,
+				10_000,
+				proc.Mp(),
+			)
+			_, evalErr = executors[0].Eval(proc, []*batch.Batch{input}, nil)
+			input.Clean(proc.Mp())
+		}
+		peak := account.Snapshot().Peak
+		op.ctr.freeSpillExprExecs()
+		require.Zero(t, account.Snapshot().Used)
+		require.Zero(t, generation.Used())
+		require.NoError(t, op.ClearAllocationAccount(account))
+		_, _, terminalErr := registry.CompleteTerminal(account)
+		require.NoError(t, terminalErr)
+		return peak, evalErr
+	}
+
+	peak, err := run(16 << 20)
+	require.NoError(t, err)
+	require.Greater(t, peak, uint64(1))
+	_, err = run(peak - 1)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 }
 
 func TestIssue26454ExpressionKeyBuildUsesActualCapacity(t *testing.T) {

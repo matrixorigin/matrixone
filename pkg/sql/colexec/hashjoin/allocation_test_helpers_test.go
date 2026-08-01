@@ -18,6 +18,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,4 +39,46 @@ func installTestAllocation(t testing.TB, owners ...testAllocationOwner) *mpool.A
 		require.NoError(t, owner.SetAllocationAccount(account))
 	}
 	return account
+}
+
+func TestHashJoinResultBatchUsesAllocationAccount(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	arg := &HashJoin{
+		ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}},
+		LeftTypes:  []types.Type{types.T_int64.ToType()},
+	}
+	account := installTestAllocation(t, arg)
+	require.NoError(t, arg.resetResultBat())
+	require.Same(t, arg.resultAllocation, arg.ctr.resBat.Vecs[0].AllocationAccountSelection())
+	require.NoError(t, vector.AppendFixed(arg.ctr.resBat.Vecs[0], int64(1), false, proc.Mp()))
+	used := account.Snapshot().Used
+	require.Positive(t, used)
+	require.NoError(t, arg.resetResultBat())
+	require.Equal(t, used, account.Snapshot().Used)
+
+	arg.Reset(proc, false, nil)
+	require.Nil(t, arg.ctr.resBat)
+	require.Zero(t, account.Snapshot().Used)
+	require.NoError(t, arg.ClearAllocationAccount(account))
+}
+
+func TestHashJoinResultBatchHonorsAllocationCapacity(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1)
+	require.NoError(t, err)
+	arg := &HashJoin{
+		ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}},
+		LeftTypes:  []types.Type{types.T_int64.ToType()},
+	}
+	require.NoError(t, arg.SetAllocationAccount(account))
+	require.NoError(t, arg.resetResultBat())
+	err = vector.AppendFixed(arg.ctr.resBat.Vecs[0], int64(1), false, proc.Mp())
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Zero(t, account.Snapshot().Used)
+	arg.Reset(proc, false, nil)
+	require.NoError(t, arg.ClearAllocationAccount(account))
 }

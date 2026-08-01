@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -49,6 +50,13 @@ const (
 )
 
 const hashJoinAllocationSiteMatchedRows mpool.AllocationSite = 80
+
+const (
+	hashJoinAllocationSiteResultData mpool.AllocationSite = iota + 102
+	hashJoinAllocationSiteResultArea
+	hashJoinAllocationSiteResultNulls
+	hashJoinAllocationSiteResultGrouping
+)
 
 type container struct {
 	state       int
@@ -137,6 +145,7 @@ type HashJoin struct {
 	JoinMapTag         int32
 	SpillThreshold     int64
 	allocationAccount  *mpool.AllocationAccount
+	resultAllocation   *vector.AllocationAccountSelection
 
 	vm.OperatorBase
 }
@@ -154,7 +163,19 @@ func (hashJoin *HashJoin) SetAllocationAccount(
 	if hashJoin.allocationAccount == account {
 		return nil
 	}
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		hashbuild.HashBuildAllocationOwner,
+		hashJoinAllocationSiteResultData,
+		hashJoinAllocationSiteResultArea,
+		hashJoinAllocationSiteResultNulls,
+		hashJoinAllocationSiteResultGrouping,
+	)
+	if err != nil {
+		return err
+	}
 	hashJoin.allocationAccount = account
+	hashJoin.resultAllocation = selection
 	return nil
 }
 
@@ -170,13 +191,15 @@ func (hashJoin *HashJoin) ClearAllocationAccount(
 	if hashJoin.ctr.mp != nil || hashJoin.ctr.spillEngine != nil ||
 		len(hashJoin.ctr.eqCondExecs) != 0 ||
 		hashJoin.ctr.nonEqCondExec != nil ||
-		hashJoin.ctr.rightRowsMatched != nil {
+		hashJoin.ctr.rightRowsMatched != nil ||
+		hashJoin.ctr.resBat != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	if hashJoin.NumCPU > 1 && !hashJoin.Mailbox.Terminal() {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	hashJoin.allocationAccount = nil
+	hashJoin.resultAllocation = nil
 	return nil
 }
 
@@ -241,6 +264,10 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.cleanEqCondExecutors()
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
+	if ctr.resBat != nil {
+		ctr.resBat.Clean(proc.GetMPool())
+		ctr.resBat = nil
+	}
 	ctr.freeRightRowsMatched(proc)
 	ctr.rightMatchedIter = nil
 	ctr.skipProbe = false

@@ -855,6 +855,7 @@ func (ctr *container) initSpillExprExecs(proc *process.Process, conditions []*pl
 		execs, err := NewExpressionExecutors(
 			proc,
 			conditions,
+			ctr.hashmapBuilder.mapAllocationAccount,
 		)
 		if err != nil {
 			return nil, err

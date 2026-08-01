@@ -15,17 +15,27 @@
 package hashbuild
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const (
+	hashBuildAllocationSiteExpressionData mpool.AllocationSite = iota + 98
+	hashBuildAllocationSiteExpressionArea
+	hashBuildAllocationSiteExpressionNulls
+	hashBuildAllocationSiteExpressionGrouping
+)
+
 // NewExpressionExecutors constructs expression trees used by HashBuild and
-// join operators. Expression temporaries are not retained HashBuild storage;
-// only their explicit copies into retained destinations enter the account.
+// join operators. Every MPool vector owned by the tree, including nested
+// function results and reusable selection buffers, shares the query account.
 func NewExpressionExecutors(
 	proc *process.Process,
 	exprs []*plan.Expr,
+	account *mpool.AllocationAccount,
 ) ([]colexec.ExpressionExecutor, error) {
 	if len(exprs) == 0 {
 		return nil, process.ErrHashBuildBudgetInvalid
@@ -35,5 +45,18 @@ func NewExpressionExecutors(
 			return nil, process.ErrHashBuildBudgetInvalid
 		}
 	}
-	return colexec.NewExpressionExecutorsFromPlanExpressions(proc, exprs)
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		HashBuildAllocationOwner,
+		hashBuildAllocationSiteExpressionData,
+		hashBuildAllocationSiteExpressionArea,
+		hashBuildAllocationSiteExpressionNulls,
+		hashBuildAllocationSiteExpressionGrouping,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(
+		proc, exprs, selection,
+	)
 }

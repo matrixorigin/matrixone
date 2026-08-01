@@ -54,6 +54,13 @@ const (
 	dedupJoinAllocationSiteFinalizeSelections
 )
 
+const (
+	dedupJoinAllocationSiteResultData mpool.AllocationSite = iota + 110
+	dedupJoinAllocationSiteResultArea
+	dedupJoinAllocationSiteResultNulls
+	dedupJoinAllocationSiteResultGrouping
+)
+
 // WorkerJoinMsg carries per-worker state from non-merger workers to the
 // merger worker at finalize time. Regular DEDUP JOIN only populates matched;
 // the REPLACE INTO merged main-table scan path (OldColCapture) additionally
@@ -309,6 +316,7 @@ type DedupJoin struct {
 	OldColCaptureProbeIdxList       []int32
 	allocationAccount               *mpool.AllocationAccount
 	stateAllocation                 *vector.AllocationAccountSelection
+	resultAllocation                *vector.AllocationAccountSelection
 
 	vm.OperatorBase
 }
@@ -337,8 +345,20 @@ func (dedupJoin *DedupJoin) SetAllocationAccount(
 	if err != nil {
 		return err
 	}
+	resultSelection, err := vector.NewAllocationAccountSelection(
+		account,
+		hashbuild.HashBuildAllocationOwner,
+		dedupJoinAllocationSiteResultData,
+		dedupJoinAllocationSiteResultArea,
+		dedupJoinAllocationSiteResultNulls,
+		dedupJoinAllocationSiteResultGrouping,
+	)
+	if err != nil {
+		return err
+	}
 	dedupJoin.allocationAccount = account
 	dedupJoin.stateAllocation = selection
+	dedupJoin.resultAllocation = resultSelection
 	return nil
 }
 
@@ -354,11 +374,13 @@ func (dedupJoin *DedupJoin) ClearAllocationAccount(
 	if dedupJoin.ctr.mp != nil || dedupJoin.ctr.spillEngine != nil ||
 		len(dedupJoin.ctr.evecs) != 0 || len(dedupJoin.ctr.exprExecs) != 0 ||
 		dedupJoin.ctr.matched != nil || dedupJoin.ctr.captured != nil ||
-		len(dedupJoin.ctr.capturedVecs) != 0 {
+		len(dedupJoin.ctr.capturedVecs) != 0 || dedupJoin.ctr.rbat != nil ||
+		len(dedupJoin.ctr.buf) != 0 {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	dedupJoin.allocationAccount = nil
 	dedupJoin.stateAllocation = nil
+	dedupJoin.resultAllocation = nil
 	return nil
 }
 
@@ -430,7 +452,7 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	}
 	ctr.maxAllocSize = 0
 
-	ctr.cleanBuf(proc)
+	ctr.cleanResultBatches(proc)
 	ctr.cleanBucketState(proc)
 	ctr.cleanExprExecutor()
 	if ctr.spillEngine != nil {
@@ -450,7 +472,7 @@ func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err
 		// reopened prepared-pipeline generation stopped from Free.
 		dedupJoin.Mailbox.drain(proc)
 	}
-	ctr.cleanBuf(proc)
+	ctr.cleanResultBatches(proc)
 	ctr.cleanBucketState(proc)
 	ctr.cleanBatch(proc)
 	ctr.cleanExprExecutor()
@@ -481,6 +503,14 @@ func (ctr *container) cleanBuf(proc *process.Process) {
 		}
 	}
 	ctr.buf = nil
+}
+
+func (ctr *container) cleanResultBatches(proc *process.Process) {
+	ctr.cleanBuf(proc)
+	if ctr.rbat != nil {
+		ctr.rbat.Clean(proc.GetMPool())
+		ctr.rbat = nil
+	}
 }
 
 func (ctr *container) cleanCaptured(proc *process.Process) {

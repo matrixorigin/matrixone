@@ -190,7 +190,7 @@ func TestHashMarkJoinEmptySpillBucketTruthTable(t *testing.T) {
 			tc.arg.ctr.leftBat = probe
 			tc.arg.ctr.globalBuildRowCnt = tt.globalBuildRowCnt
 			tc.arg.ctr.buildHasNullKey = tt.buildHasNullKey
-			tc.arg.resetResultBat()
+			require.NoError(t, tc.arg.resetResultBat())
 
 			var result vm.CallResult
 			require.NoError(t, tc.arg.ctr.emptyProbe(tc.arg, tc.proc, &result))

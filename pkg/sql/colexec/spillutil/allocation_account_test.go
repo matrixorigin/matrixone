@@ -24,7 +24,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -35,6 +37,32 @@ type testSpillAllocationAccount struct {
 	account    *mpool.AllocationAccount
 	allocation *SpillAllocationAccount
 	generation *process.HashBuildBudgetGeneration
+}
+
+func makeTestCastKeyExpr(
+	t testing.TB,
+	proc *process.Process,
+) []*plan.Expr {
+	t.Helper()
+	expr, err := plan2.BindFuncExprImplByPlanExpr(
+		proc.Ctx,
+		"cast",
+		[]*plan.Expr{
+			{
+				Typ:  plan.Type{Id: int32(types.T_int32)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+			},
+			{
+				Typ: plan.Type{
+					Id:    int32(types.T_varchar),
+					Width: types.MaxVarcharLen,
+				},
+				Expr: &plan.Expr_T{T: &plan.TargetType{}},
+			},
+		},
+	)
+	require.NoError(t, err)
+	return []*plan.Expr{expr}
 }
 
 func TestNewSpillEngineRequiresBudgetGeneration(t *testing.T) {
@@ -748,7 +776,7 @@ func TestSpillAllocationAccountRebuildAndRecursiveSpillLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	engine, err := NewSpillEngine(
 		SpillEngineConfig{
-			BuildKeyExprs:           makeTestKeyExpr(),
+			BuildKeyExprs:           makeTestCastKeyExpr(t, proc),
 			Budget:                  generation,
 			SpillThreshold:          100,
 			NeedsBuildForEmptyProbe: true,
@@ -770,6 +798,7 @@ func TestSpillAllocationAccountRebuildAndRecursiveSpillLifecycle(t *testing.T) {
 
 	respills := 0
 	ready := 0
+	expressionStorageObserved := false
 	for steps := 0; engine.HasMoreBuckets(); steps++ {
 		require.Less(t, steps, 4_096, "recursive spill queue made no progress")
 		jm, result, rebuildErr := engine.RebuildHashmap(proc, analyzer)
@@ -777,6 +806,8 @@ func TestSpillAllocationAccountRebuildAndRecursiveSpillLifecycle(t *testing.T) {
 		switch result {
 		case BucketReSpilled:
 			respills++
+			expressionStorageObserved = expressionStorageObserved ||
+				(len(engine.keyExecs) == 1 && account.Snapshot().Used > 0)
 		case BucketReady:
 			ready++
 			require.NotNil(t, jm)
@@ -789,6 +820,7 @@ func TestSpillAllocationAccountRebuildAndRecursiveSpillLifecycle(t *testing.T) {
 	}
 	require.Positive(t, respills)
 	require.Positive(t, ready)
+	require.True(t, expressionStorageObserved)
 	require.Positive(t, account.Snapshot().Peak)
 
 	engine.Cleanup(proc)

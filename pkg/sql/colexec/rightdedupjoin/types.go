@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -40,6 +41,13 @@ const (
 )
 
 const rightDedupJoinAllocationSiteMatched mpool.AllocationSite = 90
+
+const (
+	rightDedupJoinAllocationSiteResultData mpool.AllocationSite = iota + 114
+	rightDedupJoinAllocationSiteResultArea
+	rightDedupJoinAllocationSiteResultNulls
+	rightDedupJoinAllocationSiteResultGrouping
+)
 
 type evalVector struct {
 	executor colexec.ExpressionExecutor
@@ -89,6 +97,7 @@ type RightDedupJoin struct {
 	UpdateColIdxList  []int32
 	UpdateColExprList []*plan.Expr
 	allocationAccount *mpool.AllocationAccount
+	resultAllocation  *vector.AllocationAccountSelection
 
 	vm.OperatorBase
 }
@@ -106,7 +115,19 @@ func (rightDedupJoin *RightDedupJoin) SetAllocationAccount(
 	if rightDedupJoin.allocationAccount == account {
 		return nil
 	}
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		hashbuild.HashBuildAllocationOwner,
+		rightDedupJoinAllocationSiteResultData,
+		rightDedupJoinAllocationSiteResultArea,
+		rightDedupJoinAllocationSiteResultNulls,
+		rightDedupJoinAllocationSiteResultGrouping,
+	)
+	if err != nil {
+		return err
+	}
 	rightDedupJoin.allocationAccount = account
+	rightDedupJoin.resultAllocation = selection
 	return nil
 }
 
@@ -123,10 +144,12 @@ func (rightDedupJoin *RightDedupJoin) ClearAllocationAccount(
 		rightDedupJoin.ctr.spillEngine != nil ||
 		len(rightDedupJoin.ctr.evecs) != 0 ||
 		len(rightDedupJoin.ctr.exprExecs) != 0 ||
-		rightDedupJoin.ctr.matched != nil {
+		rightDedupJoin.ctr.matched != nil ||
+		rightDedupJoin.ctr.resultBatch != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	rightDedupJoin.allocationAccount = nil
+	rightDedupJoin.resultAllocation = nil
 	return nil
 }
 
@@ -174,7 +197,7 @@ func (rightDedupJoin *RightDedupJoin) Reset(proc *process.Process, pipelineFaile
 
 	ctr.cleanBitmap(proc)
 	ctr.cleanHashMap()
-	ctr.resetResultBatch()
+	ctr.cleanResultBatch(proc)
 	ctr.cleanExprExecutor()
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
@@ -233,6 +256,32 @@ func (ctr *container) resetResultBatch() {
 		vec.SetClass(vector.FLAT)
 		vec.SetLength(0)
 	}
+}
+
+func (rightDedupJoin *RightDedupJoin) resetResultBatch() error {
+	ctr := &rightDedupJoin.ctr
+	ctr.resetResultBatch()
+	if ctr.resultBatch != nil {
+		return nil
+	}
+	ctr.resultBatch = batch.NewOffHeapWithSize(len(rightDedupJoin.Result))
+	for i, rp := range rightDedupJoin.Result {
+		if rp.Rel == 0 {
+			ctr.resultBatch.Vecs[i] = vector.NewOffHeapVecWithType(
+				rightDedupJoin.LeftTypes[rp.Pos],
+			)
+		} else {
+			ctr.resultBatch.Vecs[i] = vector.NewOffHeapVecWithType(
+				rightDedupJoin.RightTypes[rp.Pos],
+			)
+		}
+	}
+	if err := ctr.resultBatch.SetAllocationAccount(rightDedupJoin.resultAllocation); err != nil {
+		ctr.resultBatch.Clean(nil)
+		ctr.resultBatch = nil
+		return err
+	}
+	return nil
 }
 
 func (ctr *container) cleanResultBatch(proc *process.Process) {

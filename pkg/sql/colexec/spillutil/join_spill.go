@@ -2115,6 +2115,7 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 		execs, err := hashbuild.NewExpressionExecutors(
 			proc,
 			e.cfg.BuildKeyExprs,
+			e.allocation.account,
 		)
 		if err != nil {
 			for _, exec := range execs {

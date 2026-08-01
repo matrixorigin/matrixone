@@ -97,6 +97,7 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 		eqCondExecs, err := hashbuild.NewExpressionExecutors(
 			proc,
 			hashJoin.EqConds[0],
+			hashJoin.allocationAccount,
 		)
 		if err != nil {
 			return err
@@ -108,6 +109,7 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 			nonEqExecs, err = hashbuild.NewExpressionExecutors(
 				proc,
 				[]*plan.Expr{hashJoin.NonEqCond},
+				hashJoin.allocationAccount,
 			)
 			if err != nil {
 				for _, exec := range eqCondExecs {
@@ -213,7 +215,9 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.lastIdx = 0
 			}
 
-			hashJoin.resetResultBat()
+			if err = hashJoin.resetResultBat(); err != nil {
+				return result, err
+			}
 			for i, rp := range hashJoin.ResultCols {
 				if rp.Rel == 0 {
 					ctr.resBat.Vecs[i].SetSorted(ctr.leftBat.Vecs[rp.Pos].GetSorted())
@@ -831,11 +835,17 @@ func (ctr *container) appendMarkForEmptyBuildBucket(marker *vector.Vector, proc 
 	}
 	for _, vec := range ctr.eqCondVecs {
 		if vec.IsConstNull() {
+			if err := marker.PreExtendNulls(rowCnt, proc.Mp()); err != nil {
+				return err
+			}
 			marker.GetNulls().AddRange(0, uint64(rowCnt))
 			return nil
 		}
 		if !vec.GetNulls().Any() {
 			continue
+		}
+		if err := marker.PreExtendNulls(rowCnt, proc.Mp()); err != nil {
+			return err
 		}
 		nulls.Or(marker.GetNulls(), vec.GetNulls(), marker.GetNulls())
 	}
@@ -892,7 +902,9 @@ func (ctr *container) syncBitmap(hashJoin *HashJoin, proc *process.Process) erro
 }
 
 func (ctr *container) finalize(hashJoin *HashJoin, proc *process.Process, result *vm.CallResult) error {
-	hashJoin.resetResultBat()
+	if err := hashJoin.resetResultBat(); err != nil {
+		return err
+	}
 	rowCnt := 0
 
 	for ; rowCnt < colexec.DefaultBatchSize && ctr.rightMatchedIter.HasNext(); rowCnt++ {
@@ -1020,7 +1032,7 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 	return nil
 }
 
-func (hashJoin *HashJoin) resetResultBat() {
+func (hashJoin *HashJoin) resetResultBat() error {
 	ctr := &hashJoin.ctr
 	if ctr.resBat != nil {
 		ctr.resBat.CleanOnlyData()
@@ -1041,5 +1053,11 @@ func (hashJoin *HashJoin) resetResultBat() {
 				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
 			}
 		}
+		if err := ctr.resBat.SetAllocationAccount(hashJoin.resultAllocation); err != nil {
+			ctr.resBat.Clean(nil)
+			ctr.resBat = nil
+			return err
+		}
 	}
+	return nil
 }

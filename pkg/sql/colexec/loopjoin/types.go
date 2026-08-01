@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -40,6 +41,13 @@ const (
 const (
 	loopJoinAllocationSiteMatched mpool.AllocationSite = iota + 92
 	loopJoinAllocationSiteBatchOffsets
+)
+
+const (
+	loopJoinAllocationSiteResultData mpool.AllocationSite = iota + 106
+	loopJoinAllocationSiteResultArea
+	loopJoinAllocationSiteResultNulls
+	loopJoinAllocationSiteResultGrouping
 )
 
 type container struct {
@@ -74,6 +82,7 @@ type LoopJoin struct {
 	JoinType          plan.Node_JoinType
 	MarkPos           int
 	allocationAccount *mpool.AllocationAccount
+	resultAllocation  *vector.AllocationAccountSelection
 
 	vm.OperatorBase
 }
@@ -91,7 +100,19 @@ func (loopJoin *LoopJoin) SetAllocationAccount(
 	if loopJoin.allocationAccount == account {
 		return nil
 	}
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		hashbuild.HashBuildAllocationOwner,
+		loopJoinAllocationSiteResultData,
+		loopJoinAllocationSiteResultArea,
+		loopJoinAllocationSiteResultNulls,
+		loopJoinAllocationSiteResultGrouping,
+	)
+	if err != nil {
+		return err
+	}
 	loopJoin.allocationAccount = account
+	loopJoin.resultAllocation = selection
 	return nil
 }
 
@@ -106,10 +127,11 @@ func (loopJoin *LoopJoin) ClearAllocationAccount(
 	}
 	ctr := &loopJoin.ctr
 	if ctr.mp != nil || ctr.expr != nil || ctr.rightRowsMatched != nil ||
-		len(ctr.rightBatchOffset) != 0 {
+		len(ctr.rightBatchOffset) != 0 || ctr.resBat != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	loopJoin.allocationAccount = nil
+	loopJoin.resultAllocation = nil
 	return nil
 }
 
@@ -152,6 +174,10 @@ func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	// of carrying generation-bound storage across Reset.
 	ctr.cleanNonEqCondExecutor()
 	ctr.cleanHashMap()
+	if ctr.resBat != nil {
+		ctr.resBat.Clean(proc.GetMPool())
+		ctr.resBat = nil
+	}
 	ctr.state = Build
 	ctr.inBat = nil
 	ctr.cleanRightMatchState(proc)
