@@ -154,20 +154,16 @@ func (d *DataBranchCreateTable) StmtKind() StmtKind {
 }
 
 func (d *DataBranchCreateTable) Format(ctx *FmtCtx) {
-	ctx.WriteString("data branch create table ")
-	quoteIdentifier := ctx.quoteIdentifier
-	ctx.quoteIdentifier = true
-	d.CreateTable.Table.Format(ctx)
-	ctx.quoteIdentifier = quoteIdentifier
-	ctx.WriteString(" from ")
-	quoteIdentifier = ctx.quoteIdentifier
-	ctx.quoteIdentifier = true
-	d.SrcTable.Format(ctx)
-	ctx.quoteIdentifier = quoteIdentifier
-	if d.ToAccountOpt != nil {
-		ctx.WriteByte(' ')
-		d.ToAccountOpt.Format(ctx)
-	}
+	formatDataBranchStatement(ctx, func() {
+		ctx.WriteString("data branch create table ")
+		d.CreateTable.Table.Format(ctx)
+		ctx.WriteString(" from ")
+		d.SrcTable.Format(ctx)
+		if d.ToAccountOpt != nil {
+			ctx.WriteByte(' ')
+			d.ToAccountOpt.Format(ctx)
+		}
+	})
 }
 
 func (d *DataBranchCreateTable) String() string {
@@ -213,8 +209,10 @@ func (d *DataBranchDeleteTable) StmtKind() StmtKind {
 }
 
 func (d *DataBranchDeleteTable) Format(ctx *FmtCtx) {
-	//TODO implement me
-	panic("implement me")
+	formatDataBranchStatement(ctx, func() {
+		ctx.WriteString("data branch delete table ")
+		d.TableName.Format(ctx)
+	})
 }
 
 func (d *DataBranchDeleteTable) String() string {
@@ -230,8 +228,7 @@ func (d *DataBranchDeleteTable) GetQueryType() string {
 }
 
 func (d *DataBranchDeleteTable) TypeName() string {
-	//TODO implement me
-	panic("implement me")
+	return "data branch delete table"
 }
 
 func (d *DataBranchDeleteTable) Free() {
@@ -259,8 +256,19 @@ func (d *DataBranchCreateDatabase) StmtKind() StmtKind {
 }
 
 func (d *DataBranchCreateDatabase) Format(ctx *FmtCtx) {
-	//TODO implement me
-	panic("implement me")
+	formatDataBranchStatement(ctx, func() {
+		ctx.WriteString("data branch create database ")
+		ctx.WriteIdentifier(d.DstDatabase)
+		ctx.WriteString(" from ")
+		ctx.WriteIdentifier(d.SrcDatabase)
+		if d.AtTsExpr != nil {
+			d.AtTsExpr.Format(ctx)
+		}
+		if d.ToAccountOpt != nil {
+			ctx.WriteByte(' ')
+			d.ToAccountOpt.Format(ctx)
+		}
+	})
 }
 
 func (d *DataBranchCreateDatabase) String() string {
@@ -276,8 +284,7 @@ func (d *DataBranchCreateDatabase) GetQueryType() string {
 }
 
 func (d *DataBranchCreateDatabase) TypeName() string {
-	//TODO implement me
-	panic("implement me")
+	return "data branch create database"
 }
 
 func (d *DataBranchCreateDatabase) Free() {
@@ -306,8 +313,10 @@ func (d *DataBranchDeleteDatabase) StmtKind() StmtKind {
 }
 
 func (d *DataBranchDeleteDatabase) Format(ctx *FmtCtx) {
-	//TODO implement me
-	panic("implement me")
+	formatDataBranchStatement(ctx, func() {
+		ctx.WriteString("data branch delete database ")
+		ctx.WriteIdentifier(d.DatabaseName)
+	})
 }
 
 func (d *DataBranchDeleteDatabase) String() string {
@@ -323,8 +332,7 @@ func (d *DataBranchDeleteDatabase) GetQueryType() string {
 }
 
 func (d *DataBranchDeleteDatabase) TypeName() string {
-	//TODO implement me
-	panic("implement me")
+	return "data branch delete database"
 }
 
 func (d *DataBranchDeleteDatabase) Free() {
@@ -356,6 +364,24 @@ type DiffOutputOpt struct {
 	DirPath string
 }
 
+func (o *DiffOutputOpt) Format(ctx *FmtCtx) {
+	ctx.WriteString(" output ")
+	switch {
+	case o.As.ObjectName != "":
+		ctx.WriteString("as ")
+		o.As.Format(ctx)
+	case o.Limit != nil:
+		fmt.Fprintf(ctx, "limit %d", *o.Limit)
+	case o.Count:
+		ctx.WriteString("count")
+	case o.Summary:
+		ctx.WriteString("summary")
+	default:
+		ctx.WriteString("file ")
+		NewNumVal(o.DirPath, o.DirPath, false, P_char).Format(ctx)
+	}
+}
+
 type DataBranchDiff struct {
 	statementImpl
 
@@ -366,8 +392,7 @@ type DataBranchDiff struct {
 }
 
 func (s *DataBranchDiff) TypeName() string {
-	//TODO implement me
-	panic("implement me")
+	return "data branch diff"
 }
 
 func (s *DataBranchDiff) reset() {
@@ -383,8 +408,20 @@ func (s *DataBranchDiff) StmtKind() StmtKind {
 }
 
 func (s *DataBranchDiff) Format(ctx *FmtCtx) {
-	//TODO implement me
-	panic("implement me")
+	formatDataBranchStatement(ctx, func() {
+		ctx.WriteString("data branch diff ")
+		s.TargetTable.Format(ctx)
+		ctx.WriteString(" against ")
+		s.BaseTable.Format(ctx)
+		if len(s.Columns) > 0 {
+			ctx.WriteString(" columns (")
+			s.Columns.Format(ctx)
+			ctx.WriteByte(')')
+		}
+		if s.OutputOpt != nil {
+			s.OutputOpt.Format(ctx)
+		}
+	})
 }
 
 func (s *DataBranchDiff) String() string {
@@ -407,6 +444,18 @@ type ConflictOpt struct {
 	Opt int
 }
 
+func (o *ConflictOpt) Format(ctx *FmtCtx) {
+	ctx.WriteString(" when conflict ")
+	switch o.Opt {
+	case CONFLICT_FAIL:
+		ctx.WriteString("fail")
+	case CONFLICT_SKIP:
+		ctx.WriteString("skip")
+	case CONFLICT_ACCEPT:
+		ctx.WriteString("accept")
+	}
+}
+
 type DataBranchMerge struct {
 	statementImpl
 	SrcTable    TableName
@@ -415,8 +464,7 @@ type DataBranchMerge struct {
 }
 
 func (s *DataBranchMerge) TypeName() string {
-	//TODO implement me
-	panic("implement me")
+	return "data branch merge"
 }
 
 func (s *DataBranchMerge) reset() {
@@ -432,8 +480,15 @@ func (s *DataBranchMerge) StmtKind() StmtKind {
 }
 
 func (s *DataBranchMerge) Format(ctx *FmtCtx) {
-	//TODO implement me
-	panic("implement me")
+	formatDataBranchStatement(ctx, func() {
+		ctx.WriteString("data branch merge ")
+		s.SrcTable.Format(ctx)
+		ctx.WriteString(" into ")
+		s.DstTable.Format(ctx)
+		if s.ConflictOpt != nil {
+			s.ConflictOpt.Format(ctx)
+		}
+	})
 }
 
 func (s *DataBranchMerge) String() string {
@@ -711,16 +766,20 @@ func (s *DataBranchPick) Format(ctx *FmtCtx) {
 		ctx.WriteByte(')')
 	}
 	if s.ConflictOpt != nil {
-		ctx.WriteString(" when conflict ")
-		switch s.ConflictOpt.Opt {
-		case CONFLICT_FAIL:
-			ctx.WriteString("fail")
-		case CONFLICT_SKIP:
-			ctx.WriteString("skip")
-		case CONFLICT_ACCEPT:
-			ctx.WriteString("accept")
-		}
+		s.ConflictOpt.Format(ctx)
 	}
+}
+
+func formatDataBranchStatement(ctx *FmtCtx, format func()) {
+	quoteIdentifier := ctx.quoteIdentifier
+	singleQuoteString := ctx.singleQuoteString
+	ctx.quoteIdentifier = true
+	ctx.singleQuoteString = true
+	defer func() {
+		ctx.quoteIdentifier = quoteIdentifier
+		ctx.singleQuoteString = singleQuoteString
+	}()
+	format()
 }
 
 func (s *DataBranchPick) String() string {

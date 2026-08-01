@@ -771,6 +771,90 @@ func TestDataBranchCreateTablePreservesQuotedApostropheIdentifier(t *testing.T) 
 	require.Equal(t, tree.Identifier("quote'src"), branchStmt.SrcTable.ObjectName)
 }
 
+func TestDataBranchStatementFormatRoundTrip(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "create table",
+			sql:  "data branch create table `dst``table` from `src``table` to account `acc``name`",
+			want: "data branch create table `dst``table` from `src``table` to account `acc``name`",
+		},
+		{
+			name: "delete table",
+			sql:  "data branch delete table `db``name`.`table``name`",
+			want: "data branch delete table `db``name`.`table``name`",
+		},
+		{
+			name: "create database",
+			sql:  "data branch create database `dst``db` from `src``db`{snapshot='snap''one'} to account `acc``name`",
+			want: "data branch create database `dst``db` from `src``db`{snapshot = 'snap''one'} to account `acc``name`",
+		},
+		{
+			name: "delete database",
+			sql:  "data branch delete database `db``name`",
+			want: "data branch delete database `db``name`",
+		},
+		{
+			name: "diff output as",
+			sql:  "data branch diff `db`.`target`{snapshot='target snap'} against `db`.`base`{snapshot='base snap'} columns (`id`, `select`) output as `out`.`result`",
+			want: "data branch diff `db`.`target`{snapshot = 'target snap'} against `db`.`base`{snapshot = 'base snap'} columns (`id`, `select`) output as `out`.`result`",
+		},
+		{
+			name: "diff output empty file",
+			sql:  "data branch diff target against base output file ''",
+			want: "data branch diff `target` against `base` output file ''",
+		},
+		{
+			name: "diff output file",
+			sql:  "data branch diff target against base output file '/tmp/branch''s/'",
+			want: "data branch diff `target` against `base` output file '/tmp/branch''s/'",
+		},
+		{
+			name: "diff output zero limit",
+			sql:  "data branch diff target against base output limit 0",
+			want: "data branch diff `target` against `base` output limit 0",
+		},
+		{
+			name: "diff output count",
+			sql:  "data branch diff target against base output count",
+			want: "data branch diff `target` against `base` output count",
+		},
+		{
+			name: "diff output summary",
+			sql:  "data branch diff target against base output summary",
+			want: "data branch diff `target` against `base` output summary",
+		},
+		{
+			name: "merge default conflict behavior",
+			sql:  "data branch merge src into dst",
+			want: "data branch merge `src` into `dst`",
+		},
+		{
+			name: "merge explicit conflict behavior",
+			sql:  "data branch merge src into dst when conflict skip",
+			want: "data branch merge `src` into `dst` when conflict skip",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			formatted := tree.String(stmt, dialect.MYSQL)
+			require.Equal(t, test.want, formatted)
+
+			reparsed, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err)
+			defer reparsed.Free()
+			require.IsType(t, stmt, reparsed)
+			require.Equal(t, formatted, tree.String(reparsed, dialect.MYSQL))
+		})
+	}
+}
+
 func TestDataBranchDiffOutputModes(t *testing.T) {
 	stmt, err := ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} output summary`, 1)
 	require.NoError(t, err)

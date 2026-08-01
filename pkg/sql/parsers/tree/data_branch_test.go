@@ -57,16 +57,14 @@ func TestDataBranchDeleteTableLifecycle(t *testing.T) {
 	require.Equal(t, QueryTypeOth, stmt.GetQueryType())
 	require.Equal(t, DataBranch_DeleteTable, stmt.DataBranchType())
 
-	stmt.TableName.ObjectName = Identifier("table")
+	stmt.TableName = makeDataBranchTableName("db`name", "table`name", nil)
+	ctx := NewFmtCtx(dialect.MYSQL)
+	stmt.Format(ctx)
+	require.Equal(t, "data branch delete table `db``name`.`table``name`", ctx.String())
+	require.Equal(t, "data branch delete table", stmt.TypeName())
+
 	stmt.reset()
 	require.Equal(t, Identifier(""), stmt.TableName.ObjectName)
-
-	require.Panics(t, func() {
-		stmt.Format(nil)
-	})
-	require.Panics(t, func() {
-		stmt.TypeName()
-	})
 
 	stmt.Free()
 }
@@ -81,14 +79,21 @@ func TestDataBranchCreateDatabaseLifecycle(t *testing.T) {
 	require.Equal(t, QueryTypeOth, stmt.GetQueryType())
 	require.Equal(t, DataBranch_CreateDatabase, stmt.DataBranchType())
 
-	stmt.reset()
+	stmt.DstDatabase = Identifier("dst`db")
+	stmt.SrcDatabase = Identifier("src`db")
+	stmt.AtTsExpr = &AtTimeStamp{
+		Type: ATTIMESTAMPSNAPSHOT,
+		Expr: NewNumVal("snap'one", "snap'one", false, P_char),
+	}
+	stmt.ToAccountOpt = &ToAccountOpt{AccountName: Identifier("acc`name")}
+	ctx := NewFmtCtx(dialect.MYSQL)
+	stmt.Format(ctx)
+	require.Equal(t, "data branch create database `dst``db` from `src``db`{snapshot = 'snap''one'} to account `acc``name`", ctx.String())
+	require.Equal(t, "data branch create database", stmt.TypeName())
 
-	require.Panics(t, func() {
-		stmt.Format(nil)
-	})
-	require.Panics(t, func() {
-		stmt.TypeName()
-	})
+	stmt.reset()
+	require.Empty(t, stmt.DstDatabase)
+	require.Nil(t, stmt.AtTsExpr)
 
 	stmt.Free()
 }
@@ -103,16 +108,14 @@ func TestDataBranchDeleteDatabaseLifecycle(t *testing.T) {
 	require.Equal(t, QueryTypeOth, stmt.GetQueryType())
 	require.Equal(t, DataBranch_DeleteDatabase, stmt.DataBranchType())
 
-	stmt.DatabaseName = Identifier("db")
+	stmt.DatabaseName = Identifier("db`name")
+	ctx := NewFmtCtx(dialect.MYSQL)
+	stmt.Format(ctx)
+	require.Equal(t, "data branch delete database `db``name`", ctx.String())
+	require.Equal(t, "data branch delete database", stmt.TypeName())
+
 	stmt.reset()
 	require.Equal(t, Identifier(""), stmt.DatabaseName)
-
-	require.Panics(t, func() {
-		stmt.Format(nil)
-	})
-	require.Panics(t, func() {
-		stmt.TypeName()
-	})
 
 	stmt.Free()
 }
@@ -126,19 +129,19 @@ func TestDataBranchDiffLifecycle(t *testing.T) {
 	require.Equal(t, "branch diff", stmt.String())
 	require.Equal(t, QueryTypeOth, stmt.GetQueryType())
 
-	stmt.TargetTable.ObjectName = Identifier("target")
-	stmt.BaseTable.ObjectName = Identifier("base")
-	stmt.OutputOpt = &DiffOutputOpt{Count: true, Summary: true}
+	stmt.TargetTable = makeDataBranchTableName("db", "target", nil)
+	stmt.BaseTable = makeDataBranchTableName("db", "base", nil)
+	stmt.Columns = IdentifierList{Identifier("id"), Identifier("select")}
+	stmt.OutputOpt = &DiffOutputOpt{Count: true}
+	ctx := NewFmtCtx(dialect.MYSQL)
+	stmt.Format(ctx)
+	require.Equal(t, "data branch diff `db`.`target` against `db`.`base` columns (`id`, `select`) output count", ctx.String())
+	require.Equal(t, "data branch diff", stmt.TypeName())
+
 	stmt.reset()
 	require.Equal(t, Identifier(""), stmt.TargetTable.ObjectName)
+	require.Nil(t, stmt.Columns)
 	require.Nil(t, stmt.OutputOpt)
-
-	require.Panics(t, func() {
-		stmt.Format(nil)
-	})
-	require.Panics(t, func() {
-		stmt.TypeName()
-	})
 
 	stmt.Free()
 }
@@ -152,21 +155,78 @@ func TestDataBranchMergeLifecycle(t *testing.T) {
 	require.Equal(t, "branch merge", stmt.String())
 	require.Equal(t, QueryTypeOth, stmt.GetQueryType())
 
-	stmt.SrcTable.ObjectName = Identifier("src")
-	stmt.DstTable.ObjectName = Identifier("dst")
+	stmt.SrcTable = makeDataBranchTableName("db", "src", nil)
+	stmt.DstTable = makeDataBranchTableName("db", "dst", nil)
 	stmt.ConflictOpt = &ConflictOpt{Opt: CONFLICT_ACCEPT}
+	ctx := NewFmtCtx(dialect.MYSQL)
+	stmt.Format(ctx)
+	require.Equal(t, "data branch merge `db`.`src` into `db`.`dst` when conflict accept", ctx.String())
+	require.Equal(t, "data branch merge", stmt.TypeName())
+
 	stmt.reset()
 	require.Equal(t, Identifier(""), stmt.SrcTable.ObjectName)
 	require.Nil(t, stmt.ConflictOpt)
 
-	require.Panics(t, func() {
-		stmt.Format(nil)
-	})
-	require.Panics(t, func() {
-		stmt.TypeName()
-	})
-
 	stmt.Free()
+}
+
+func TestDataBranchDiffFormatOutputOptions(t *testing.T) {
+	limit := int64(0)
+	for _, test := range []struct {
+		name   string
+		option *DiffOutputOpt
+		want   string
+	}{
+		{name: "none", want: "data branch diff `target` against `base`"},
+		{name: "as", option: &DiffOutputOpt{As: makeDataBranchTableName("out", "result", nil)}, want: "data branch diff `target` against `base` output as `out`.`result`"},
+		{name: "empty file", option: &DiffOutputOpt{}, want: "data branch diff `target` against `base` output file ''"},
+		{name: "file", option: &DiffOutputOpt{DirPath: "/tmp/branch's/"}, want: "data branch diff `target` against `base` output file '/tmp/branch''s/'"},
+		{name: "zero limit", option: &DiffOutputOpt{Limit: &limit}, want: "data branch diff `target` against `base` output limit 0"},
+		{name: "count", option: &DiffOutputOpt{Count: true}, want: "data branch diff `target` against `base` output count"},
+		{name: "summary", option: &DiffOutputOpt{Summary: true}, want: "data branch diff `target` against `base` output summary"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt := &DataBranchDiff{
+				TargetTable: makeDataBranchTableName("", "target", nil),
+				BaseTable:   makeDataBranchTableName("", "base", nil),
+				OutputOpt:   test.option,
+			}
+			require.Equal(t, test.want, String(stmt, dialect.MYSQL))
+		})
+	}
+}
+
+func TestDataBranchMergeFormatConflictOptions(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		conflict *ConflictOpt
+		want     string
+	}{
+		{name: "default", want: "data branch merge `src` into `dst`"},
+		{name: "fail", conflict: &ConflictOpt{Opt: CONFLICT_FAIL}, want: "data branch merge `src` into `dst` when conflict fail"},
+		{name: "skip", conflict: &ConflictOpt{Opt: CONFLICT_SKIP}, want: "data branch merge `src` into `dst` when conflict skip"},
+		{name: "accept", conflict: &ConflictOpt{Opt: CONFLICT_ACCEPT}, want: "data branch merge `src` into `dst` when conflict accept"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt := &DataBranchMerge{
+				SrcTable:    makeDataBranchTableName("", "src", nil),
+				DstTable:    makeDataBranchTableName("", "dst", nil),
+				ConflictOpt: test.conflict,
+			}
+			require.Equal(t, test.want, String(stmt, dialect.MYSQL))
+		})
+	}
+}
+
+func makeDataBranchTableName(database, table string, atTsExpr *AtTimeStamp) TableName {
+	return *NewTableName(
+		Identifier(table),
+		ObjectNamePrefix{
+			SchemaName:     Identifier(database),
+			ExplicitSchema: database != "",
+		},
+		atTsExpr,
+	)
 }
 
 func TestObjectListLifecycle(t *testing.T) {
