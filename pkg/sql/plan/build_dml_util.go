@@ -3543,15 +3543,13 @@ func appendDeleteIndexTablePlan(
 	}
 
 	leftscan := &plan.Node{
-		NodeType:               plan.Node_TABLE_SCAN,
-		Stats:                  &plan.Stats{},
-		ObjRef:                 uniqueObjRef,
-		TableDef:               uniqueTableDef,
-		ProjectList:            scanNodeProject,
-		RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)},
+		NodeType:    plan.Node_TABLE_SCAN,
+		Stats:       &plan.Stats{},
+		ObjRef:      uniqueObjRef,
+		TableDef:    uniqueTableDef,
+		ProjectList: scanNodeProject,
 	}
 	leftId := builder.appendNode(leftscan, bindCtx)
-	leftscan.Stats.ForceOneCN = true //to avoid bugs ,maybe refactor in the future
 
 	// append projection
 	projectList = append(projectList, &plan.Expr{
@@ -3643,13 +3641,28 @@ func appendDeleteIndexTablePlan(
 	joinConds = []*Expr{condExpr}
 
 	buildExpr := &plan.Expr{
-		Typ: pkTyp,
+		Typ: condExpr.GetF().Args[1].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 0,
 				ColPos: 0,
 			},
 		},
+	}
+	probeSpec, buildSpec, hasRuntimeFilter := builder.makeExactRuntimeFilterPair(
+		rfTag,
+		false,
+		GetInFilterCardLimitOnPK(
+			builder.compCtx.GetProcess().GetService(),
+			builder.qry.Nodes[leftId].Stats.TableCnt,
+		),
+		probeExpr,
+		buildExpr,
+		false,
+	)
+	if hasRuntimeFilter {
+		leftscan.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
+		leftscan.Stats.ForceOneCN = true
 	}
 
 	/*
@@ -3691,17 +3704,21 @@ func appendDeleteIndexTablePlan(
 		While secondary indexes don't store NULL values, they DO need RIGHT JOIN to handle
 		new inserts that don't yet exist in the index table.
 	*/
-	sid := builder.compCtx.GetProcess().GetService()
-	lastNodeId = builder.appendNode(&plan.Node{
-		NodeType:               plan.Node_JOIN,
-		Children:               []int32{leftId, lastNodeId},
-		JoinType:               plan.Node_RIGHT,
-		IsRightJoin:            true,
-		OnList:                 joinConds,
-		ProjectList:            projectList,
-		RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, builder.qry.Nodes[leftId].Stats.TableCnt), buildExpr, false)},
-	}, bindCtx)
-	recalcStatsByRuntimeFilter(builder.qry.Nodes[leftId], builder.qry.Nodes[lastNodeId], builder)
+	joinNode := &plan.Node{
+		NodeType:    plan.Node_JOIN,
+		Children:    []int32{leftId, lastNodeId},
+		JoinType:    plan.Node_RIGHT,
+		IsRightJoin: true,
+		OnList:      joinConds,
+		ProjectList: projectList,
+	}
+	if hasRuntimeFilter {
+		joinNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{buildSpec}
+	}
+	lastNodeId = builder.appendNode(joinNode, bindCtx)
+	if hasRuntimeFilter {
+		recalcStatsByRuntimeFilter(builder.qry.Nodes[leftId], joinNode, builder)
+	}
 	return lastNodeId, nil
 }
 
@@ -6088,15 +6105,13 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		}
 
 		idxScanNode := &plan.Node{
-			NodeType:               plan.Node_TABLE_SCAN,
-			Stats:                  &plan.Stats{},
-			ObjRef:                 indexObjRef,
-			TableDef:               newIndexTableDef,
-			ProjectList:            scanNodeProject,
-			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr, true)},
+			NodeType:    plan.Node_TABLE_SCAN,
+			Stats:       &plan.Stats{},
+			ObjRef:      indexObjRef,
+			TableDef:    newIndexTableDef,
+			ProjectList: scanNodeProject,
 		}
 		idxScanId := builder.appendNode(idxScanNode, bindCtx)
-		idxScanNode.Stats.ForceOneCN = true
 
 		var leftExpr = &plan.Expr{
 			Typ: scanNodeProject[1].Typ,
@@ -6157,7 +6172,7 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		)
 
 		rfBuildExpr := &plan.Expr{
-			Typ: orgPkType,
+			Typ: joinCond.GetF().Args[1].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
@@ -6167,14 +6182,27 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		}
 
 		sid := builder.compCtx.GetProcess().GetService()
-		lastNodeId = builder.appendNode(&plan.Node{
-			NodeType:               plan.Node_JOIN,
-			JoinType:               plan.Node_INNER,
-			Children:               []int32{idxScanId, lastNodeId},
-			OnList:                 []*Expr{joinCond},
-			ProjectList:            projectList,
-			RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimit(sid), rfBuildExpr, true)},
-		}, bindCtx)
+		probeSpec, buildSpec, hasRuntimeFilter := builder.makeExactRuntimeFilterPair(
+			rfTag,
+			false,
+			GetInFilterCardLimit(sid),
+			probeExpr,
+			rfBuildExpr,
+			true,
+		)
+		joinNode := &plan.Node{
+			NodeType:    plan.Node_JOIN,
+			JoinType:    plan.Node_INNER,
+			Children:    []int32{idxScanId, lastNodeId},
+			OnList:      []*Expr{joinCond},
+			ProjectList: projectList,
+		}
+		if hasRuntimeFilter {
+			idxScanNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
+			idxScanNode.Stats.ForceOneCN = true
+			joinNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{buildSpec}
+		}
+		lastNodeId = builder.appendNode(joinNode, bindCtx)
 
 		deleteIdx := 0
 		retPkPos := deleteIdx + 2

@@ -2866,50 +2866,72 @@ func (tbl *txnTable) PKPersistedBetween(
 		v2.TxnPKChangeCheckIOCounter.Inc()
 
 		for _, blk := range candidateBlks {
-			release, _, err := ioutil.LoadColumns(
-				ctx,
-				[]uint16{uint16(pkSeq), objectio.SEQNUM_COMMITTS},
-				[]types.Type{pkType, types.T_TS.ToType()},
-				fs,
-				blk.MetaLocation(),
-				cacheVectors,
-				tbl.proc.Load().GetMPool(),
-				fileservice.Policy(0),
-			)
-			if err != nil {
-				releasePKCheckSemaphore()
-				reason = "data_block_read_error"
-				return true, err
-			}
-
 			searchFunc := filter.DecideSearchFunc(blk.IsSorted())
 			if searchFunc == nil {
 				searchFunc = buildUnsortedFilter()
 			}
 
-			sels := searchFunc(cacheVectors)
-			if len(sels) > 0 {
-				changed, ok := pkCommitTSMatchedInRange(&cacheVectors[1], sels, from, to)
-				release()
-				if !ok || changed {
-					releasePKCheckSemaphore()
-					if ok {
-						reason = "data_commit_ts_hit"
+			var matched, usable bool
+			if filter.CachedSearch != nil {
+				matched, usable, _, err = ioutil.LoadColumnDataBySearchAndCheckTS(
+					ctx,
+					uint16(pkSeq),
+					pkType,
+					fs,
+					blk.MetaLocation(),
+					filter.CachedSearch,
+					blk.IsSorted() && !filter.HasFakePK,
+					objectio.SEQNUM_COMMITTS,
+					from,
+					to,
+					tbl.proc.Load().GetMPool(),
+					fileservice.Policy(0),
+				)
+			} else {
+				var release func()
+				release, _, err = ioutil.LoadColumns(
+					ctx,
+					[]uint16{uint16(pkSeq), objectio.SEQNUM_COMMITTS},
+					[]types.Type{pkType, objectio.TSType},
+					fs,
+					blk.MetaLocation(),
+					cacheVectors,
+					tbl.proc.Load().GetMPool(),
+					fileservice.Policy(0),
+				)
+				if err == nil {
+					sels := searchFunc(cacheVectors)
+					if len(sels) == 0 {
+						matched, usable = false, true
 					} else {
-						reason = "data_commit_ts_unavailable"
+						matched, usable = pkCommitTSMatchedInRange(&cacheVectors[1], sels, from, to)
 					}
-					return true, nil
+					release()
 				}
-				continue
 			}
-			release()
+			if err != nil {
+				releasePKCheckSemaphore()
+				reason = "data_block_read_error"
+				return true, err
+			}
+			if !usable || matched {
+				releasePKCheckSemaphore()
+				if usable {
+					reason = "data_commit_ts_hit"
+				} else {
+					reason = "data_commit_ts_unavailable"
+				}
+				return true, nil
+			}
 		}
 		releasePKCheckSemaphore()
 	}
 	if checkTombstone {
 		pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 		pkType := plan2.ExprType2Type(&pkDef.Typ)
-		changed, tombstoneReason, err := tombstonePKExistsInRange(ctx, p, from, to, keys, pkType, fs)
+		changed, tombstoneReason, err := tombstonePKExistsInRange(
+			ctx, p, from, to, keys, pkType, fs, tbl.proc.Load().GetMPool(),
+		)
 		if changed {
 			reason = tombstoneReason
 		}
@@ -2929,6 +2951,7 @@ func tombstonePKExistsInRange(
 	keys *vector.Vector,
 	pkType types.Type,
 	fs fileservice.FileService,
+	mp *mpool.MPool,
 ) (bool, string, error) {
 	tombObjs := p.GetChangedTombstoneObjsBetween(from)
 	if len(tombObjs) == 0 {
@@ -2943,10 +2966,74 @@ func tombstonePKExistsInRange(
 		}
 	}
 	searchKeys := LinearSearchOffsetByValFactory(keys)
+	var cachedSearch *objectio.ReadFilterSearch
+	switch pkType.Oid {
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary,
+		types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+		if keys.GetType().Oid != pkType.Oid {
+			break
+		}
+		cachedSearch = objectio.NewReadFilterSearch(
+			pkType.Oid,
+			vector.InefficientMustBytesCol(keys),
+		)
+	}
 	for _, obj := range tombObjs {
 		for blkIdx := uint32(0); blkIdx < obj.BlkCnt(); blkIdx++ {
 			loc := obj.BlockLocation(uint16(blkIdx), objectio.BlockMaxRows)
 			isCNCreated := obj.GetCNCreated()
+			if cachedSearch != nil {
+				// Tombstone objects are ordered by rowid, not by the copied PK
+				// column. Always use the linear search even when object metadata
+				// carries a sorted flag.
+				if isCNCreated {
+					hits, _, err := ioutil.LoadColumnDataBySearch(
+						ctx,
+						objectio.TombstoneAttr_PK_SeqNum,
+						pkType,
+						fs,
+						loc,
+						cachedSearch,
+						false,
+						nil,
+						mp,
+						fileservice.Policy(0),
+					)
+					if err != nil {
+						return true, "tombstone_read_error", nil
+					}
+					if len(hits) > 0 {
+						return true, "tombstone_cn_hit", nil
+					}
+					continue
+				}
+
+				changed, usable, _, err := ioutil.LoadColumnDataBySearchAndCheckTS(
+					ctx,
+					objectio.TombstoneAttr_PK_SeqNum,
+					pkType,
+					fs,
+					loc,
+					cachedSearch,
+					false,
+					objectio.TombstoneAttr_CommitTs_SeqNum,
+					from,
+					to,
+					mp,
+					fileservice.Policy(0),
+				)
+				if err != nil {
+					return true, "tombstone_read_error", nil
+				}
+				if !usable || changed {
+					if usable {
+						return true, "tombstone_commit_ts_hit", nil
+					}
+					return true, "tombstone_commit_ts_unavailable", nil
+				}
+				continue
+			}
+
 			vecCount := 3
 			if isCNCreated {
 				vecCount = 2

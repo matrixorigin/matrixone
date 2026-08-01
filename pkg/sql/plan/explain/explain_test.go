@@ -70,6 +70,36 @@ func TestBasicSqlExplain(t *testing.T) {
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
+func TestRuntimeFilterBuildExplainUsesGuardedExpression(t *testing.T) {
+	node := &plan2.Node{
+		NodeType: plan2.Node_JOIN,
+		Stats:    &plan2.Stats{HashmapStats: &plan2.HashMapStats{}},
+		RuntimeFilterBuildList: []*plan2.RuntimeFilterSpec{
+			nil,
+			{},
+			{
+				BuildExpr: &plan2.Expr{
+					Typ: plan2.Type{Id: int32(types.T_int64)},
+					Expr: &plan2.Expr_Col{Col: &plan2.ColRef{
+						Name: "build_key",
+					}},
+				},
+			},
+		},
+	}
+
+	got, err := NewNodeDescriptionImpl(node).GetRuntimeFilterBuildInfo(
+		context.Background(),
+		&ExplainOptions{Format: EXPLAIN_FORMAT_TEXT},
+	)
+	if err != nil {
+		t.Fatalf("GetRuntimeFilterBuildInfo() error = %v", err)
+	}
+	if !strings.Contains(got, "build_key") {
+		t.Fatalf("GetRuntimeFilterBuildInfo() = %q", got)
+	}
+}
+
 // Single table query
 func TestSingleTableQuery(t *testing.T) {
 	sqls := []string{

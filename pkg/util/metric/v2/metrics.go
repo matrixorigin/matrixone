@@ -219,6 +219,7 @@ func initRPCMetrics() {
 	registry.MustRegister(rpcGCInactiveProcessedCounter)
 	registry.MustRegister(rpcGCCreateProcessedCounter)
 	registry.MustRegister(rpcBackendAutoCreateTimeoutCounter)
+	registry.MustRegister(rpcBackendAutoCreateTimeoutEventCounter)
 	registry.MustRegister(rpcBackendUnavailableCounter)
 	registry.MustRegister(rpcCircuitBreakerStateGauge)
 	registry.MustRegister(rpcCircuitBreakerTripsCounter)

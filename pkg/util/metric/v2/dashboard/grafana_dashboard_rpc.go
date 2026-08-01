@@ -207,11 +207,14 @@ func (c *DashboardCreator) initRPCConnectionMetricsRow() dashboard.Option {
 func (c *DashboardCreator) initRPCBackendHealthRow() dashboard.Option {
 	return dashboard.Row(
 		"Backend Health & Failures",
-		c.withGraph(
-			"Auto-Create Timeout Rate",
+		c.withMultiGraph(
+			"Auto-Create Timeout Impact vs Events",
 			4,
-			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_auto_create_timeout_total", "")+`[$interval])) by (name)`,
-			"{{ name }}",
+			[]string{
+				`sum(rate(` + c.getMetricWithFilter("mo_rpc_backend_auto_create_timeout_total", "") + `[$interval])) by (name)`,
+				`sum(rate(` + c.getMetricWithFilter("mo_rpc_backend_auto_create_timeout_event_total", "") + `[$interval])) by (name)`,
+			},
+			[]string{"{{ name }} - requests", "{{ name }} - create events"},
 			axis.Unit("timeouts/s"),
 			axis.Min(0)),
 

@@ -3901,7 +3901,9 @@ func orderBySpecsHaveUserLevelLockFunction(specs []*plan.OrderBySpec) bool {
 
 func runtimeFilterSpecsHaveUserLevelLockFunction(specs []*plan.RuntimeFilterSpec) bool {
 	for _, spec := range specs {
-		if spec != nil && exprHasUserLevelLockFunction(spec.Expr) {
+		if spec != nil &&
+			(exprHasUserLevelLockFunction(spec.Expr) ||
+				exprHasUserLevelLockFunction(spec.BuildExpr)) {
 			return true
 		}
 	}
@@ -5046,9 +5048,9 @@ func (c *Compile) supportsRemoteOrderedAggregates() bool {
 }
 
 func supportsRemoteOrderedAggregates(service string) bool {
-	// MOProtocolVersion is the cluster-wide negotiated floor. It reaches v6
-	// only after every pipeline receiver understands Aggregate.config_type,
-	// and is lowered again before a rollback introduces a v5 receiver.
+	// MOProtocolVersion is the service-local deployment rollout gate.
+	// Deployment orchestration raises it after participating receivers
+	// understand Aggregate.config_type and lowers it before rollback.
 	version, ok := moruntime.ServiceRuntime(service).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	if !ok {

@@ -28,6 +28,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
@@ -77,11 +78,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -589,21 +592,149 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 	proc := &process.Process{}
 	proc.Base = &process.BaseProcess{}
 
-	t.Run("FuzzyFilter_BuildIdx", func(t *testing.T) {
+	t.Run("FuzzyFilter_RuntimeFilterPairContract", func(t *testing.T) {
+		probeType := &planpb.Type{
+			Id:    int32(types.T_decimal64),
+			Width: 18,
+			Scale: 2,
+		}
 		op := &fuzzyfilter.FuzzyFilter{
-			N:        42.5,
-			PkName:   "pk",
-			BuildIdx: 7,
+			N:                  42.5,
+			PkName:             "pk",
+			PkTyp:              *probeType,
+			BuildIdx:           1,
+			IfInsertFromUnique: true,
+			RuntimeFilterSpec: &planpb.RuntimeFilterSpec{
+				Tag:        40,
+				UpperLimit: 128,
+				BuildExpr: &planpb.Expr{
+					Typ: *probeType,
+					Expr: &planpb.Expr_Col{
+						Col: &planpb.ColRef{ColPos: 0},
+					},
+				},
+				KeyEncoding: planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
+				ProbeType:   probeType,
+			},
 		}
 		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
 		require.NoError(t, err)
-		require.Equal(t, int32(7), pipeInstr.FuzzyFilter.BuildIdx)
+		require.Equal(t, int32(1), pipeInstr.FuzzyFilter.BuildIdx)
+		require.Equal(t, op.RuntimeFilterSpec, pipeInstr.FuzzyFilter.RuntimeFilterSpec)
 
-		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		wireBytes, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		wireInstr := new(pipeline.Instruction)
+		require.NoError(t, wireInstr.Unmarshal(wireBytes))
+
+		restored, err := convertToVmOperator(wireInstr, ctx, nil)
 		require.NoError(t, err)
 		restoredOp := restored.(*fuzzyfilter.FuzzyFilter)
-		require.Equal(t, 7, restoredOp.BuildIdx)
+		require.Equal(t, 1, restoredOp.BuildIdx)
 		require.Equal(t, "pk", restoredOp.PkName)
+		require.True(t, restoredOp.IfInsertFromUnique)
+		require.Equal(t, op.RuntimeFilterSpec, restoredOp.RuntimeFilterSpec)
+		require.NotSame(t, op.RuntimeFilterSpec, restoredOp.RuntimeFilterSpec)
+		require.NotSame(t,
+			op.RuntimeFilterSpec.ProbeType,
+			restoredOp.RuntimeFilterSpec.ProbeType)
+		require.Equal(t, keycodec.ExactRuntimeFilterRaw,
+			runtimefilter.ExactKeyEncoding(
+				restoredOp.RuntimeFilterSpec,
+				types.New(types.T_decimal64, 18, 2),
+			))
+	})
+
+	t.Run("HashBuild_RuntimeFilterPairContract", func(t *testing.T) {
+		probeType := &planpb.Type{
+			Id:    int32(types.T_varchar),
+			Width: types.MaxVarcharLen,
+		}
+		componentType := planpb.Type{
+			Id:    int32(types.T_decimal64),
+			Width: 18,
+			Scale: 2,
+		}
+		buildExpr := &planpb.Expr{
+			Typ: *probeType,
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{
+					ObjName: planfunction.SerialFullFunctionName,
+					Obj:     planfunction.SerialFullFunctionEncodeID,
+				},
+				Args: []*planpb.Expr{{
+					Typ: componentType,
+					Expr: &planpb.Expr_Col{
+						Col: &planpb.ColRef{ColPos: 0},
+					},
+				}},
+			}},
+		}
+		op := hashbuild.NewArgument()
+		defer op.Release()
+		op.RuntimeFilterSpec = &planpb.RuntimeFilterSpec{
+			Tag:                    41,
+			UpperLimit:             128,
+			MatchPrefix:            true,
+			BuildExpr:              buildExpr,
+			KeyEncoding:            planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_SERIAL_FULL_V1,
+			ProbeType:              probeType,
+			KeyComponentProbeTypes: []planpb.Type{componentType},
+		}
+
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.Equal(t, op.RuntimeFilterSpec, pipeInstr.HashBuild.RuntimeFilterSpec)
+
+		wireBytes, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		wireInstr := new(pipeline.Instruction)
+		require.NoError(t, wireInstr.Unmarshal(wireBytes))
+		require.NotSame(t, op.RuntimeFilterSpec, wireInstr.HashBuild.RuntimeFilterSpec)
+		require.NotSame(t, op.RuntimeFilterSpec.ProbeType,
+			wireInstr.HashBuild.RuntimeFilterSpec.ProbeType)
+
+		restored, err := convertToVmOperator(wireInstr, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*hashbuild.HashBuild)
+		defer restoredOp.Release()
+		require.Equal(t, op.RuntimeFilterSpec, restoredOp.RuntimeFilterSpec)
+		require.Equal(t,
+			planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_SERIAL_FULL_V1,
+			restoredOp.RuntimeFilterSpec.GetKeyEncoding())
+		require.Equal(t, probeType, restoredOp.RuntimeFilterSpec.GetProbeType())
+		require.Nil(t, restoredOp.RuntimeFilterSpec.GetExpr())
+		require.Equal(t, *probeType,
+			restoredOp.RuntimeFilterSpec.GetBuildExpr().Typ)
+		require.Equal(t, []planpb.Type{componentType},
+			restoredOp.RuntimeFilterSpec.GetKeyComponentProbeTypes())
+		require.True(t, restoredOp.RuntimeFilterSpec.GetMatchPrefix())
+	})
+
+	t.Run("HashBuild_LegacyRuntimeFilterHasNoImplicitContract", func(t *testing.T) {
+		op := hashbuild.NewArgument()
+		defer op.Release()
+		op.RuntimeFilterSpec = &planpb.RuntimeFilterSpec{
+			Tag:        42,
+			UpperLimit: 128,
+			Expr: &planpb.Expr{Typ: planpb.Type{
+				Id: int32(types.T_decimal64), Width: 18, Scale: 3,
+			}},
+		}
+
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		wireBytes, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		wireInstr := new(pipeline.Instruction)
+		require.NoError(t, wireInstr.Unmarshal(wireBytes))
+
+		spec := wireInstr.HashBuild.GetRuntimeFilterSpec()
+		require.NotNil(t, spec)
+		require.Nil(t, spec.ProbeType)
+		require.Equal(t,
+			planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_UNSPECIFIED,
+			spec.KeyEncoding)
 	})
 
 	t.Run("TableFunction_IndexReaderParam", func(t *testing.T) {
@@ -611,7 +742,16 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		op := &table_function.TableFunction{
 			FuncName: "ivf_search",
 			RuntimeFilterSpecs: []*planpb.RuntimeFilterSpec{
-				{Tag: 42, MatchPrefix: true, UpperLimit: 128, NotOnPk: true},
+				{
+					Tag:         42,
+					MatchPrefix: true,
+					UpperLimit:  128,
+					NotOnPk:     true,
+					KeyEncoding: planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
+					ProbeType: &planpb.Type{
+						Id: int32(types.T_float64),
+					},
+				},
 			},
 			IndexReaderParam: &planpb.IndexReaderParam{
 				PartitionCnCnt: 2,
@@ -629,6 +769,10 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.True(t, pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetMatchPrefix())
 		require.Equal(t, int32(128), pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetUpperLimit())
 		require.True(t, pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetNotOnPk())
+		require.Equal(t, planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
+			pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetKeyEncoding())
+		require.Equal(t, int32(types.T_float64),
+			pipeInstr.TableFunction.GetRuntimeFilterProbeList()[0].GetProbeType().GetId())
 
 		wireBytes, err := pipeInstr.Marshal()
 		require.NoError(t, err)
@@ -648,6 +792,10 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.True(t, restoredOp.RuntimeFilterSpecs[0].GetMatchPrefix())
 		require.Equal(t, int32(128), restoredOp.RuntimeFilterSpecs[0].GetUpperLimit())
 		require.True(t, restoredOp.RuntimeFilterSpecs[0].GetNotOnPk())
+		require.Equal(t, planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
+			restoredOp.RuntimeFilterSpecs[0].GetKeyEncoding())
+		require.Equal(t, int32(types.T_float64),
+			restoredOp.RuntimeFilterSpecs[0].GetProbeType().GetId())
 	})
 
 	t.Run("TableFunction_Limit", func(t *testing.T) {

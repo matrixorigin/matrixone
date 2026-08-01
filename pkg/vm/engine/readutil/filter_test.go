@@ -2001,6 +2001,127 @@ func TestBuildBlockPKSearchFuncsRejectMalformedFilters(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestConstructBlockPKFilterGuardsCachedVarlenSearch(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer mpool.DeleteMPool(mp)
+
+	badLength := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(badLength, []byte("x"), false, mp))
+	badLength.SetLength(2)
+
+	badArea := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(badArea, bytes.Repeat([]byte("x"), 32), false, mp))
+	areaValues := vector.MustFixedColNoTypeCheck[types.Varlena](badArea)
+	areaValues[0].SetOffsetLen(uint32(len(badArea.GetArea())+1), 1)
+
+	nullValue := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(nullValue, nil, true, mp))
+
+	oidMismatch := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(oidMismatch, []byte("x"), false, mp))
+
+	for name, filter := range map[string]BasePKFilter{
+		"logical length exceeds data": {
+			Valid: true, Op: function.IN, Oid: types.T_varchar, Vec: badLength,
+		},
+		"varlena area out of bounds": {
+			Valid: true, Op: function.IN, Oid: types.T_varchar, Vec: badArea,
+		},
+		"null IN value": {
+			Valid: true, Op: function.IN, Oid: types.T_varchar, Vec: nullValue,
+		},
+		"filter and vector OID mismatch": {
+			Valid: true, Op: function.IN, Oid: types.T_char, Vec: oidMismatch,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.NotPanics(t, func() {
+				filter, err := ConstructBlockPKFilter(false, filter, nil)
+				require.NoError(t, err)
+				require.False(t, filter.Valid)
+				require.Nil(t, filter.CachedSearch)
+			})
+		})
+	}
+
+	valid := BasePKFilter{
+		Valid: true,
+		Op:    function.EQUAL,
+		Oid:   types.T_varchar,
+		LB:    []byte("needle"),
+	}
+	fake, err := ConstructBlockPKFilter(true, valid, nil)
+	require.NoError(t, err)
+	require.True(t, fake.Valid)
+	require.Nil(t, fake.CachedSearch)
+	unordered := vector.NewVec(types.T_varchar.ToType())
+	for _, value := range []string{"z", "needle", "a"} {
+		require.NoError(t, vector.AppendBytes(unordered, []byte(value), false, mp))
+	}
+	require.Equal(t, []int64{1}, fake.DecideSearchFunc(true)(containers.Vectors{*unordered}))
+	unordered.Free(mp)
+
+	withBF, err := ConstructBlockPKFilter(
+		false,
+		valid,
+		&testMembershipFilter{hits: []uint8{1}},
+	)
+	require.NoError(t, err)
+	require.True(t, withBF.Valid)
+	require.Nil(t, withBF.CachedSearch)
+
+	badLength.Free(mp)
+	badArea.Free(mp)
+	nullValue.Free(mp)
+	oidMismatch.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestConstructBlockPKFilterBuildsCachedCompoundPKSearch(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer mpool.DeleteMPool(mp)
+	values := vector.NewVec(types.T_varchar.ToType())
+	for _, value := range []string{"a", "b"} {
+		require.NoError(t, vector.AppendBytes(values, []byte(value), false, mp))
+	}
+	values.SetSorted(true)
+	defer values.Free(mp)
+
+	filters := []BasePKFilter{
+		{Valid: true, Op: function.EQUAL, Oid: types.T_varchar, LB: []byte("a")},
+		{Valid: true, Op: function.IN, Oid: types.T_varchar, Vec: values},
+		{Valid: true, Op: function.PREFIX_EQ, Oid: types.T_varchar, LB: []byte("a")},
+		{Valid: true, Op: function.PREFIX_IN, Oid: types.T_varchar, Vec: values},
+		{Valid: true, Op: function.LESS_THAN, Oid: types.T_varchar, LB: []byte("b")},
+		{Valid: true, Op: function.LESS_EQUAL, Oid: types.T_varchar, LB: []byte("b")},
+		{Valid: true, Op: function.GREAT_THAN, Oid: types.T_varchar, LB: []byte("a")},
+		{Valid: true, Op: function.GREAT_EQUAL, Oid: types.T_varchar, LB: []byte("a")},
+		{Valid: true, Op: function.BETWEEN, Oid: types.T_varchar, LB: []byte("a"), UB: []byte("c")},
+		{Valid: true, Op: RangeLeftOpen, Oid: types.T_varchar, LB: []byte("a"), UB: []byte("c")},
+		{Valid: true, Op: RangeRightOpen, Oid: types.T_varchar, LB: []byte("a"), UB: []byte("c")},
+		{Valid: true, Op: RangeBothOpen, Oid: types.T_varchar, LB: []byte("a"), UB: []byte("c")},
+		{Valid: true, Op: function.PREFIX_BETWEEN, Oid: types.T_varchar, LB: []byte("a"), UB: []byte("c")},
+		{Valid: true, Op: PrefixRangeLeftOpen, Oid: types.T_varchar, LB: []byte("a"), UB: []byte("c")},
+		{Valid: true, Op: PrefixRangeRightOpen, Oid: types.T_varchar, LB: []byte("a"), UB: []byte("c")},
+		{Valid: true, Op: PrefixRangeBothOpen, Oid: types.T_varchar, LB: []byte("a"), UB: []byte("c")},
+	}
+	for _, base := range filters {
+		filter, err := ConstructBlockPKFilter(false, base, nil)
+		require.NoError(t, err)
+		require.True(t, filter.Valid, "op %d", base.Op)
+		require.NotNil(t, filter.CachedSearch, "op %d", base.Op)
+	}
+
+	disjunct := BasePKFilter{Valid: true, Disjuncts: []BasePKFilter{
+		{Valid: true, Op: function.EQUAL, Oid: types.T_varchar, LB: []byte("a")},
+		{Valid: true, Op: function.PREFIX_EQ, Oid: types.T_varchar, LB: []byte("b")},
+	}}
+	filter, err := ConstructBlockPKFilter(false, disjunct, nil)
+	require.NoError(t, err)
+	require.True(t, filter.Valid)
+	require.NotNil(t, filter.CachedSearch)
+}
+
 func TestBuildBlockPKSearchFuncsFailsOpenOnInputTypeMismatch(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
 	values := vector.NewVec(types.T_varchar.ToType())
