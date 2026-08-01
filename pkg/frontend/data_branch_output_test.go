@@ -746,6 +746,61 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 	})
 }
 
+func TestDataBranchOutputLimitBoundaries(t *testing.T) {
+	tests := []struct {
+		name      string
+		limit     int64
+		wantRows  uint64
+		wantStops int
+	}{
+		{name: "zero", limit: 0, wantRows: 0, wantStops: 1},
+		{name: "one", limit: 1, wantRows: 1, wantStops: 1},
+		{name: "exact row count", limit: 2, wantRows: 2, wantStops: 1},
+		{name: "above row count", limit: 3, wantRows: 2, wantStops: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			ses := newValidateSession(t)
+			ses.SetMysqlResultSet(&MysqlResultSet{})
+
+			ctrl := gomock.NewController(t)
+			tblStuff := newTestBranchTableStuff(ctrl)
+			bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+			t.Cleanup(func() {
+				tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
+			})
+			for i, name := range []string{"one", "two"} {
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i+1), false, ses.proc.Mp()))
+				require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(name), false, ses.proc.Mp()))
+				require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte("hidden"), false, ses.proc.Mp()))
+			}
+			bat.SetRowCount(2)
+
+			retCh := make(chan batchWithKind, 1)
+			retCh <- batchWithKind{name: "child", kind: diffUpdate, batch: bat}
+			close(retCh)
+
+			stopCalls := 0
+			stmt := &tree.DataBranchDiff{OutputOpt: &tree.DiffOutputOpt{Limit: &tt.limit}}
+			require.NoError(t, satisfyDiffOutputOpt(
+				ctx,
+				cancel,
+				func() { stopCalls++ },
+				ses,
+				nil,
+				stmt,
+				branchMetaInfo{},
+				tblStuff,
+				retCh,
+			))
+			require.Equal(t, tt.wantRows, ses.GetMysqlResultSet().GetRowCount())
+			require.Equal(t, tt.wantStops, stopCalls)
+		})
+	}
+}
+
 func TestDataBranchOutputResolveProjectedIdxes(t *testing.T) {
 	tblStuff := tableStuff{}
 	tblStuff.def.colNames = []string{"id", "name", "age"}
