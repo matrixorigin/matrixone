@@ -96,8 +96,10 @@ func runShardClusterTestWithReuse(
 		return nil
 	}
 	c, err := createFunc()
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, c.Close()) })
 	run(c)
 	return nil
 }

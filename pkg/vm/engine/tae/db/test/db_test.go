@@ -14374,7 +14374,77 @@ func TestCheckpointTableIDBatch2(t *testing.T) {
 	assert.Equal(t, 100000+1+3+2, rowCount) // 100000 mock, 1 special, 3 mo_catalog tables, 2 user tables
 }
 
-func TestGlobalCheckpointFailsClosedWithoutTableIDBatch(t *testing.T) {
+func TestRepeatedForceGCKPUsesFreshICKPBoundary(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	// The strongest automatic-GCKP contention: every ICKP is otherwise
+	// immediately eligible to be consumed before the force request can use it.
+	opts.CheckpointCfg.GlobalMinCount = 1
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	t.Cleanup(func() { require.NoError(t, tae.Close()) })
+
+	schema := catalog.MockSchemaAll(2, 1)
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 5)
+	t.Cleanup(bat.Close)
+	tae.CreateRelAndAppend2(bat, true)
+
+	require.NoError(t, tae.DB.ForceGlobalCheckpoint(ctx, tae.TxnMgr.Now(), time.Hour))
+	firstGlobal := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
+	require.NotNil(t, firstGlobal)
+	require.True(t, firstGlobal.IsFinished())
+
+	// Match the production state that exposed the bug: checkpoint GC keeps the
+	// durable GCKP and retires its underlying ICKP.
+	require.NoError(t, tae.BGCheckpointRunner.GCByTS(ctx, tae.TxnMgr.Now()))
+	require.Eventually(t, func() bool {
+		return tae.BGCheckpointRunner.MaxIncrementalCheckpoint() == nil &&
+			!tae.BGCheckpointRunner.GCNeeded()
+	}, testutil.TestCheckpointTimeout, 10*time.Millisecond)
+
+	// Repeating a force request at an already covered timestamp must obtain a
+	// fresh HLC/ICKP boundary. Building GCKP directly from firstGlobal would
+	// create a one-tick table-history hole.
+	require.NoError(t, tae.DB.ForceGlobalCheckpoint(ctx, firstGlobal.GetEnd(), time.Hour))
+	secondGlobal := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
+	secondICKP := tae.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	require.NotNil(t, secondGlobal)
+	require.NotNil(t, secondICKP)
+	require.NotSame(t, firstGlobal, secondGlobal)
+	secondICKPEnd := secondICKP.GetEnd()
+	secondGlobalEnd := secondGlobal.GetEnd()
+	require.True(t, secondGlobalEnd.GT(&secondICKPEnd))
+	require.Equal(t, secondICKPEnd.Next(), secondGlobalEnd)
+
+	_, historyEnd, historyKnown, err := logtail.ReadTableIDHistoryRange(
+		ctx,
+		secondGlobal.GetTableIDLocation(),
+		common.CheckpointAllocator,
+		tae.Runtime.Fs,
+	)
+	require.NoError(t, err)
+	require.True(t, historyKnown)
+	requiredHistoryEnd := secondGlobalEnd.Prev()
+	require.False(t, historyEnd.LT(&requiredHistoryEnd))
+
+	// Once GC removes the second ICKP as well, the following ICKP must still be
+	// able to consume the retained GCKP index. This closes the full
+	// force -> GC -> next-force lifecycle, not only the immediate return value.
+	require.NoError(t, tae.BGCheckpointRunner.GCByTS(ctx, tae.TxnMgr.Now()))
+	require.Eventually(t, func() bool {
+		return tae.BGCheckpointRunner.MaxIncrementalCheckpoint() == nil &&
+			!tae.BGCheckpointRunner.GCNeeded()
+	}, testutil.TestCheckpointTimeout, 10*time.Millisecond)
+	require.NoError(t, tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now()))
+	nextICKP := tae.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	require.NotNil(t, nextICKP)
+	require.Equal(t, secondGlobal.GetEnd(), nextICKP.GetStart())
+}
+
+func TestGlobalCheckpointTableIDHistoryFallbackAndFailClosed(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
@@ -14437,11 +14507,13 @@ func TestGlobalCheckpointFailsClosedWithoutTableIDBatch(t *testing.T) {
 	require.True(t, checkpointContainsTable(predecessor))
 	predecessor.SetTableIDLocation(nil)
 
-	err := forceGlobalCheckpoint(predecessor.GetEnd(), time.Nanosecond)
-	require.ErrorContains(t, err, "table-ID history is incomplete")
-
+	// The underlying ICKP is still retained. It is a real data boundary and can
+	// safely rebuild the missing GCKP index without starting a partial range.
+	require.NoError(t, forceGlobalCheckpoint(predecessor.GetEnd(), time.Hour))
 	global := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
-	require.Same(t, predecessor, global)
+	require.NotSame(t, predecessor, global)
+	require.NotEmpty(t, global.GetTableIDLocation())
+	predecessor = global
 
 	assertProductionFallbackSource := func() {
 		t.Helper()
@@ -14452,8 +14524,8 @@ func TestGlobalCheckpointFailsClosedWithoutTableIDBatch(t *testing.T) {
 	}
 	assertProductionFallbackSource()
 
-	// Exercise the real checkpoint-GC path. Since no replacement GCKP was
-	// published, its safe timestamp must not retire the fallback source.
+	// Exercise the real checkpoint-GC path. It may retire the underlying ICKP,
+	// but must retain the newest finished GCKP as the production fallback.
 	gcTS := tae.TxnMgr.Now()
 	require.NoError(t, tae.BGCheckpointRunner.GCByTS(ctx, gcTS))
 	require.Eventually(t, func() bool {
@@ -14485,7 +14557,7 @@ func TestGlobalCheckpointFailsClosedWithoutTableIDBatch(t *testing.T) {
 		replayed.GetEnd().Physical()+(historyWindow/2).Nanoseconds(),
 		0,
 	)
-	err = forceGlobalCheckpoint(partialTarget, time.Nanosecond)
+	err := forceGlobalCheckpoint(partialTarget, time.Nanosecond)
 	require.ErrorContains(t, err, "table-ID history is incomplete")
 	require.Same(t, replayed, tae.BGCheckpointRunner.MaxGlobalCheckpoint())
 

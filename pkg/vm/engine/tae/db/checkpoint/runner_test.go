@@ -53,6 +53,25 @@ func TestContextForForceICKP(t *testing.T) {
 	})
 }
 
+func TestForceICKPRetryBackoffIsBoundedAndCancelable(t *testing.T) {
+	delay := time.Duration(0)
+	for i := 0; i < 32; i++ {
+		next := nextForceICKPRetryDelay(delay)
+		assert.Greater(t, next, time.Duration(0))
+		assert.LessOrEqual(t, next, forceICKPRetryMaximumDelay)
+		assert.GreaterOrEqual(t, next, delay)
+		delay = next
+	}
+	assert.Equal(t, forceICKPRetryMaximumDelay, delay)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	started := time.Now()
+	err := waitForCheckpointRetry(ctx, context.Background(), time.Hour)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Less(t, time.Since(started), time.Second)
+}
+
 func TestCkpCheck(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
@@ -823,14 +842,14 @@ func TestResolveCheckpointLSNAfterIncrementalGC(t *testing.T) {
 	assert.Equal(t, uint64(43), resolveCheckpointLSN(store, 43))
 }
 
-func TestForceGCKPRebuildsGlobalForRequestedRetention(t *testing.T) {
+func TestForceGCKPPreservesRequestedRetention(t *testing.T) {
 	r := NewRunner(context.Background(), nil, nil, nil, nil, nil)
 	defer r.StopExecutor(ErrStopRunner)
 
 	existingEnd := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	existing := NewCheckpointEntry("", types.TS{}, existingEnd, ET_Global)
+	existing := NewCheckpointEntry("", types.TS{}, existingEnd, ET_Incremental)
 	existing.SetState(ST_Finished)
-	assert.True(t, r.store.AddGCKPFinishedEntry(existing))
+	assert.True(t, r.store.AddICKPFinishedEntry(existing))
 
 	requestedRetention := 2 * time.Hour
 	executor := r.executor.Load()
@@ -850,10 +869,10 @@ func TestForceGCKPRebuildsGlobalForRequestedRetention(t *testing.T) {
 		assert.Equal(t, requestedRetention, executed.histroyRetention)
 		assert.Same(t, existing, executed.predecessor)
 	}
-	assert.NotSame(t, existing, r.store.MaxGlobalCheckpoint())
+	assert.NotNil(t, r.store.MaxGlobalCheckpoint())
 }
 
-func TestForceGCKPReportsGlobalRebuildFailure(t *testing.T) {
+func TestForceGCKPRequiresFreshICKPAfterGlobal(t *testing.T) {
 	r := NewRunner(context.Background(), nil, nil, nil, nil, nil)
 	defer r.StopExecutor(ErrStopRunner)
 
@@ -861,6 +880,28 @@ func TestForceGCKPReportsGlobalRebuildFailure(t *testing.T) {
 	existing := NewCheckpointEntry("", types.TS{}, existingEnd, ET_Global)
 	existing.SetState(ST_Finished)
 	assert.True(t, r.store.AddGCKPFinishedEntry(existing))
+
+	executed := false
+	r.executor.Load().runGCKPFunc = func(context.Context, *gckpContext, *runner) error {
+		executed = true
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	assert.ErrorIs(t, r.ForceGCKP(ctx, existingEnd, 2*time.Hour), ErrGCKPNeedsFreshICKP)
+	assert.False(t, executed)
+	assert.Same(t, existing, r.store.MaxGlobalCheckpoint())
+}
+
+func TestForceGCKPReportsGlobalRebuildFailure(t *testing.T) {
+	r := NewRunner(context.Background(), nil, nil, nil, nil, nil)
+	defer r.StopExecutor(ErrStopRunner)
+
+	existingEnd := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	existing := NewCheckpointEntry("", types.TS{}, existingEnd, ET_Incremental)
+	existing.SetState(ST_Finished)
+	assert.True(t, r.store.AddICKPFinishedEntry(existing))
 	r.executor.Load().runGCKPFunc = func(context.Context, *gckpContext, *runner) error {
 		return ErrBadIntent
 	}
@@ -868,7 +909,36 @@ func TestForceGCKPReportsGlobalRebuildFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	assert.ErrorIs(t, r.ForceGCKP(ctx, existingEnd, 2*time.Hour), ErrBadIntent)
-	assert.Same(t, existing, r.store.MaxGlobalCheckpoint())
+	assert.Nil(t, r.store.MaxGlobalCheckpoint())
+}
+
+func TestReleaseForceGCKPReservationRetriggersUncoveredICKP(t *testing.T) {
+	r := NewRunner(context.Background(), nil, nil, nil, nil, nil)
+	defer r.StopExecutor(ErrStopRunner)
+
+	end := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	incremental := NewCheckpointEntry("", types.TS{}, end, ET_Incremental)
+	incremental.SetState(ST_Finished)
+	assert.True(t, r.store.AddICKPFinishedEntry(incremental))
+
+	executed := make(chan *gckpContext, 1)
+	executor := r.executor.Load()
+	executor.globalPolicy.minCount = 1
+	executor.runGCKPFunc = func(_ context.Context, request *gckpContext, _ *runner) error {
+		executed <- request
+		return nil
+	}
+
+	r.forceGCKPRequests.Add(1)
+	r.releaseForceGCKPReservation()
+	select {
+	case request := <-executed:
+		assert.Same(t, incremental, request.predecessor)
+		assert.Equal(t, end, request.end)
+	case <-time.After(time.Second):
+		t.Fatal("suppressed automatic GCKP was not handed back")
+	}
+	assert.Zero(t, r.forceGCKPRequests.Load())
 }
 
 func Test_Executor1(t *testing.T) {

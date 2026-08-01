@@ -208,6 +208,12 @@ type runner struct {
 	store *runnerStore
 
 	executor atomic.Pointer[checkpointExecutor]
+	// forceGCKPRequests reserves newly committed ICKPs for an in-flight force
+	// request. Without this handoff, a count-based automatic GCKP can consume
+	// every fresh ICKP before the force request publishes its required
+	// retention. Multiple force callers share the reservation and their queued
+	// contexts are merged by the GCKP executor.
+	forceGCKPRequests atomic.Int64
 
 	postCheckpointQueue sm.Queue
 	gcCheckpointQueue   sm.Queue

@@ -15,6 +15,7 @@
 package checkpoint
 
 import (
+	"errors"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -74,9 +75,15 @@ func (executor *checkpointExecutor) onGCKPEntries(items ...any) {
 		}
 
 		var createdEntry string
+		var ctxStr string
+		if mergedCtx != nil {
+			ctxStr = mergedCtx.String()
+		}
 		logger := logutil.Debug
 		if err != nil {
-			logger = logutil.Error
+			if !errors.Is(err, ErrGCKPNeedsFreshICKP) {
+				logger = logutil.Error
+			}
 		} else {
 			toEntry := executor.runner.store.MaxGlobalCheckpoint()
 			if toEntry != nil {
@@ -89,7 +96,7 @@ func (executor *checkpointExecutor) onGCKPEntries(items ...any) {
 			logger(
 				"GCKP-Execute-End",
 				zap.Duration("cost", time.Since(now)),
-				zap.String("ctx", mergedCtx.String()),
+				zap.String("ctx", ctxStr),
 				zap.String("created", createdEntry),
 				zap.Error(err),
 			)
@@ -113,9 +120,16 @@ func (executor *checkpointExecutor) onGCKPEntries(items ...any) {
 
 	if mergedCtx.force {
 		// A force request must produce a checkpoint with its requested retention.
-		// Rebase it on the latest finished checkpoint so a concurrent GCKP cannot
-		// make the request look successful without actually executing it.
-		mergedCtx.rebase(executor.runner.store.MaxCheckpoint())
+		// Rebase it on the latest finished ICKP so a concurrent GCKP cannot make
+		// the request look successful without actually executing it. A finished
+		// GCKP is only a synthetic successor boundary; the DB coordinator must
+		// flush a fresh ICKP before another GCKP can be built.
+		predecessor := executor.runner.store.MaxCheckpoint()
+		if predecessor == nil || !predecessor.IsIncremental() {
+			err = ErrGCKPNeedsFreshICKP
+			return
+		}
+		mergedCtx.rebase(predecessor)
 	}
 
 	fromEntry := executor.runner.store.MaxGlobalCheckpoint()

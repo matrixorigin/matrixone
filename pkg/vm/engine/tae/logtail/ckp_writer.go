@@ -695,6 +695,75 @@ func SyncTableIDBatch(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (locations objectio.LocationSlice, err error) {
+	locations, _, _, _, err = syncTableIDBatch(
+		ctx,
+		start, end,
+		ttl,
+		sinkerThreshold,
+		ckpLocation,
+		ckpVersion,
+		prevTableIDLocation,
+		types.TS{},
+		mp,
+		fs,
+	)
+	return
+}
+
+// SyncTableIDBatchWithHistory merges the table-ID index and returns the
+// coverage marker observed while streaming the predecessor. If
+// requiredPreviousEnd is non-empty, the merge fails before reading the current
+// checkpoint unless the predecessor proves history through that boundary.
+// This lets checkpoint publication validate continuity without reading the
+// predecessor index a second time.
+func SyncTableIDBatchWithHistory(
+	ctx context.Context,
+	start, end types.TS,
+	ttl time.Duration,
+	sinkerThreshold int,
+	ckpLocation objectio.Location,
+	ckpVersion uint32,
+	prevTableIDLocation objectio.LocationSlice,
+	requiredPreviousEnd types.TS,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (
+	locations objectio.LocationSlice,
+	historyStart, historyEnd types.TS,
+	historyKnown bool,
+	err error,
+) {
+	return syncTableIDBatch(
+		ctx,
+		start, end,
+		ttl,
+		sinkerThreshold,
+		ckpLocation,
+		ckpVersion,
+		prevTableIDLocation,
+		requiredPreviousEnd,
+		mp,
+		fs,
+	)
+}
+
+func syncTableIDBatch(
+	ctx context.Context,
+	start, end types.TS,
+	ttl time.Duration,
+	sinkerThreshold int,
+	ckpLocation objectio.Location,
+	ckpVersion uint32,
+	prevTableIDLocation objectio.LocationSlice,
+	requiredPreviousEnd types.TS,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (
+	locations objectio.LocationSlice,
+	historyStart, historyEnd types.TS,
+	historyKnown bool,
+	err error,
+) {
 	dataFactory := ioutil.NewFSinkerImplFactory(
 		TableIDSeqnums,
 		-1,
@@ -788,6 +857,21 @@ func SyncTableIDBatch(
 		if err != nil {
 			return
 		}
+	}
+
+	if hasPreviousHistory && tableBatchStart.GT(&tableBatchEnd) {
+		hasPreviousHistory = false
+	}
+	historyStart = tableBatchStart
+	historyEnd = tableBatchEnd
+	historyKnown = hasPreviousHistory
+	if !requiredPreviousEnd.IsEmpty() &&
+		(!historyKnown || historyEnd.LT(&requiredPreviousEnd)) {
+		err = fmt.Errorf(
+			"table-ID predecessor history is incomplete: covered %s-%s, required through %s",
+			historyStart.ToString(), historyEnd.ToString(), requiredPreviousEnd.ToString(),
+		)
+		return
 	}
 
 	if !ckpLocation.IsEmpty() {
@@ -891,9 +975,6 @@ func SyncTableIDBatch(
 
 	}
 
-	if hasPreviousHistory && tableBatchStart.GT(&tableBatchEnd) {
-		hasPreviousHistory = false
-	}
 	if hasPreviousHistory && !start.IsEmpty() {
 		// Carrying an index across a gap would make the new coverage row claim
 		// history that neither the predecessor index nor this checkpoint
@@ -913,21 +994,26 @@ func SyncTableIDBatch(
 		tableBatchStart = minTS
 	}
 
-	if !hasPreviousHistory {
+	if !hasPreviousHistory && !ckpLocation.IsEmpty() {
 		tableBatchStart = start
 		tableBatchEnd = end
+		hasPreviousHistory = true
 	}
 
-	vector.AppendFixed(bat.Vecs[0], uint32(0), false, mp)
-	vector.AppendFixed(bat.Vecs[1], uint64(0), false, mp)
-	vector.AppendFixed(bat.Vecs[2], uint64(0), false, mp)
-	vector.AppendFixed(bat.Vecs[3], tableBatchStart, false, mp)
-	vector.AppendFixed(bat.Vecs[4], tableBatchEnd, false, mp)
+	if hasPreviousHistory {
+		vector.AppendFixed(bat.Vecs[0], uint32(0), false, mp)
+		vector.AppendFixed(bat.Vecs[1], uint64(0), false, mp)
+		vector.AppendFixed(bat.Vecs[2], uint64(0), false, mp)
+		vector.AppendFixed(bat.Vecs[3], tableBatchStart, false, mp)
+		vector.AppendFixed(bat.Vecs[4], tableBatchEnd, false, mp)
+	}
 
 	bat.SetRowCount(bat.Vecs[0].Length())
 
-	if err = sinker.Write(ctx, bat); err != nil {
-		return
+	if bat.RowCount() > 0 {
+		if err = sinker.Write(ctx, bat); err != nil {
+			return
+		}
 	}
 
 	if err = sinker.Sync(ctx); err != nil {
@@ -944,6 +1030,9 @@ func SyncTableIDBatch(
 		location.SetID(uint16(file.BlkCnt()))
 		locations.Append(location)
 	}
+	historyStart = tableBatchStart
+	historyEnd = tableBatchEnd
+	historyKnown = hasPreviousHistory
 	return
 }
 

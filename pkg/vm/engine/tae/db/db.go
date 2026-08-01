@@ -16,6 +16,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync/atomic"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
@@ -44,6 +46,34 @@ import (
 var (
 	ErrClosed = moerr.NewInternalErrorNoCtx("tae: closed")
 )
+
+const (
+	maxForceGCKPFreshICKPRetries = 8
+	forceGCKPRetryInitialDelay   = 10 * time.Millisecond
+	forceGCKPRetryMaximumDelay   = 500 * time.Millisecond
+)
+
+func forceGCKPRetryDelay(retry int) time.Duration {
+	delay := forceGCKPRetryInitialDelay
+	for i := 1; i < retry && delay < forceGCKPRetryMaximumDelay; i++ {
+		delay *= 2
+	}
+	if delay > forceGCKPRetryMaximumDelay {
+		return forceGCKPRetryMaximumDelay
+	}
+	return delay
+}
+
+func waitForceGCKPRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-timer.C:
+		return nil
+	}
+}
 
 type DBTxnMode uint32
 
@@ -204,31 +234,65 @@ func (db *DB) ForceGlobalCheckpoint(
 	ts types.TS,
 	historyRetention time.Duration,
 ) (err error) {
-	t0 := time.Now()
-	err = db.BGFlusher.ForceFlush(ctx, ts)
-	forceFlushDuration := time.Since(t0)
+	var (
+		t0                 = time.Now()
+		requestedTS        = ts
+		checkpointTS       = ts
+		forceFlushDuration time.Duration
+		freshICKPRetries   int
+	)
 	defer func() {
 		logger := logutil.Info
 		if err != nil {
 			logger = logutil.Error
 		}
 		logger(
-			"DB-Force-ICKP",
+			"DB-Force-GCKP",
 			zap.Duration("total-cost", time.Since(t0)),
 			zap.Duration("force-flush-cost", forceFlushDuration),
-			zap.Duration("histroy-retention", historyRetention),
+			zap.Duration("history-retention", historyRetention),
+			zap.String("requested-ts", requestedTS.ToString()),
+			zap.String("checkpoint-ts", checkpointTS.ToString()),
+			zap.Int("fresh-ickp-retries", freshICKPRetries),
 			zap.Error(err),
 		)
 	}()
 
-	if err != nil {
-		return
-	}
+	for {
+		flushStart := time.Now()
+		err = db.BGFlusher.ForceFlush(ctx, checkpointTS)
+		forceFlushDuration += time.Since(flushStart)
+		if err != nil {
+			return
+		}
 
-	err = db.BGCheckpointRunner.ForceGCKP(
-		ctx, ts, historyRetention,
-	)
-	return err
+		err = db.BGCheckpointRunner.ForceGCKP(
+			ctx, checkpointTS, historyRetention,
+		)
+		if !errors.Is(err, checkpoint.ErrGCKPNeedsFreshICKP) {
+			return
+		}
+		if freshICKPRetries >= maxForceGCKPFreshICKPRetries {
+			err = fmt.Errorf(
+				"force global checkpoint could not obtain a fresh incremental predecessor after %d retries: %w",
+				freshICKPRetries, err,
+			)
+			return
+		}
+
+		freshICKPRetries++
+		v2.TaskForceGCKPFreshICKPRetryCounter.Inc()
+		if err = waitForceGCKPRetry(
+			ctx,
+			forceGCKPRetryDelay(freshICKPRetries),
+		); err != nil {
+			return
+		}
+		// Only the transaction manager owns the engine's HLC. Its Now value is a
+		// real data boundary that the flusher can make durable; never synthesize
+		// checkpoint progress with TS.Next here.
+		checkpointTS = db.TxnMgr.Now()
+	}
 }
 
 func (db *DB) ForceCheckpointForBackup(

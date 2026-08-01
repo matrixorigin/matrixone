@@ -181,9 +181,74 @@ func TestSyncTableIDBatchDoesNotClaimHistoryAcrossGap(t *testing.T) {
 		fs,
 	)
 	require.NoError(t, err)
+	// There is no current checkpoint payload in this merge. Once the previous
+	// range is discontinuous, emitting a marker for currentStart-currentEnd
+	// would claim history backed by neither input.
+	require.False(t, known)
+	require.True(t, historyStart.IsEmpty())
+	require.True(t, historyEnd.IsEmpty())
+}
+
+func TestSyncTableIDBatchValidatesPredecessorInSinglePass(t *testing.T) {
+	proc := testutil.NewProc(t)
+	fs, err := fileservice.Get[fileservice.FileService](
+		proc.GetFileService(),
+		defines.SharedFileServiceName,
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	previousStart := types.BuildTS(time.Now().UnixNano()-time.Hour.Nanoseconds(), 0)
+	previousEnd := types.BuildTS(previousStart.Physical()+time.Minute.Nanoseconds(), 0)
+	previous, err := MockTableIDBatch(
+		ctx,
+		previousStart,
+		previousEnd,
+		64,
+		1,
+		proc.Mp(),
+		fs,
+	)
+	require.NoError(t, err)
+
+	locations, historyStart, historyEnd, known, err := SyncTableIDBatchWithHistory(
+		ctx,
+		types.TS{},
+		previousEnd.Next(),
+		24*time.Hour,
+		64,
+		objectio.Location{},
+		0,
+		previous,
+		previousEnd,
+		proc.Mp(),
+		fs,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, locations)
 	require.True(t, known)
-	require.Equal(t, currentStart, historyStart)
-	require.Equal(t, currentEnd, historyEnd)
+	require.Equal(t, previousStart, historyStart)
+	require.Equal(t, previousEnd, historyEnd)
+
+	missingHistoryEnd := previousEnd.Next()
+	invalidGlobalEnd := missingHistoryEnd.Next()
+	_, historyStart, historyEnd, known, err = SyncTableIDBatchWithHistory(
+		ctx,
+		types.TS{},
+		invalidGlobalEnd,
+		24*time.Hour,
+		64,
+		objectio.Location{},
+		0,
+		previous,
+		missingHistoryEnd,
+		proc.Mp(),
+		fs,
+	)
+	require.ErrorContains(t, err, "table-ID predecessor history is incomplete")
+	require.True(t, known)
+	require.Equal(t, previousStart, historyStart)
+	require.Equal(t, previousEnd, historyEnd)
 }
 
 func makeCheckpointObjectRanges(
