@@ -1098,7 +1098,7 @@ func (v *Vector) unmarshalBinary(data []byte, validateValues bool) error {
 	if err != nil {
 		return err
 	}
-	if v.hasBackingStorage() {
+	if v.hasOwnedBackingStorage() {
 		return allocationAccountInvalid(
 			"cannot replace owned vector storage with aliases",
 		)

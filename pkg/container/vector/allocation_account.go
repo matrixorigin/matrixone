@@ -227,6 +227,17 @@ func (v *Vector) hasBackingStorage() bool {
 		v.gsp.GetBitmap().ExternalStorageCapacity() != 0
 }
 
+// hasOwnedBackingStorage reports storage that UnmarshalBinary cannot replace
+// without losing an MPool-owned allocation. Data and area marked cantFree are
+// borrowed aliases; ordinary bitmap backing is Go-owned and remains GC-visible
+// after replacement. Accounted bitmap storage is explicit external storage.
+func (v *Vector) hasOwnedBackingStorage() bool {
+	return cap(v.data) != 0 && !v.cantFreeData ||
+		cap(v.area) != 0 && !v.cantFreeArea ||
+		v.nsp.GetBitmap().ExternalStorageCapacity() != 0 ||
+		v.gsp.GetBitmap().ExternalStorageCapacity() != 0
+}
+
 // SetAllocationAccount selects the account used by future owned allocations.
 // It is intentionally explicit and is legal only before the first backing
 // allocation. Reset retains the selection; Free clears it.

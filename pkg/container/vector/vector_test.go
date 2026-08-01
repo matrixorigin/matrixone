@@ -3020,15 +3020,17 @@ func TestGetAny(t *testing.T) {
 
 func BenchmarkUnmarshal(b *testing.B) {
 	mp := mpool.MustNewZero()
-	vec := NewVec(types.T_int8.ToType())
-	AppendAny(vec, int8(42), false, mp)
-	data, err := vec.MarshalBinary()
+	source := NewVec(types.T_int8.ToType())
+	AppendAny(source, int8(42), false, mp)
+	data, err := source.MarshalBinary()
 	if err != nil {
 		b.Fatal(err)
 	}
+	source.Free(mp)
+	var target Vector
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err := vec.UnmarshalBinary(data)
+		err := target.UnmarshalBinary(data)
 		if err != nil {
 			b.Fatal(err)
 		}

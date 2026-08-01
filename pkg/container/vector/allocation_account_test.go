@@ -1229,3 +1229,27 @@ func TestUnmarshalBinaryRejectsOwnedDestinationWithoutLosingBacking(t *testing.T
 	target.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }
+
+func TestUnmarshalBinaryReplacesBorrowedAliases(t *testing.T) {
+	mp := mpool.MustNewZero()
+	first := NewVec(types.T_int64.ToType())
+	second := NewVec(types.T_int64.ToType())
+	require.NoError(t, AppendFixedList(first, []int64{1, 2}, nil, mp))
+	require.NoError(t, AppendFixedList(second, []int64{3, 4}, []bool{true, false}, mp))
+	firstData, err := first.MarshalBinary()
+	require.NoError(t, err)
+	secondData, err := second.MarshalBinary()
+	require.NoError(t, err)
+
+	var target Vector
+	require.NoError(t, target.UnmarshalBinary(firstData))
+	require.Equal(t, []int64{1, 2}, MustFixedColWithTypeCheck[int64](&target))
+	require.NoError(t, target.UnmarshalBinaryTrusted(secondData))
+	require.Equal(t, []int64{0, 4}, MustFixedColWithTypeCheck[int64](&target))
+	require.True(t, target.GetNulls().Contains(0))
+
+	first.Free(mp)
+	second.Free(mp)
+	target.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
