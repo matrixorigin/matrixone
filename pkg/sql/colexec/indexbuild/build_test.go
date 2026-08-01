@@ -256,7 +256,7 @@ func TestIndexBuildFloatRuntimeFilterClosesConstSignedZero(t *testing.T) {
 				moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 		}
 	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion7)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion8)
 
 	for _, test := range []struct {
 		name       string
@@ -389,7 +389,7 @@ func TestIndexBuildRuntimeFilterClosureFailureFailsOpen(t *testing.T) {
 	rt := moruntime.ServiceRuntime(service)
 	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion7)
+		moruntime.MOProtocolVersion, defines.MORPCVersion8)
 	t.Cleanup(func() {
 		if hadOriginal {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)

@@ -567,7 +567,7 @@ func TestEnumIndexJoinsRemainEligible(t *testing.T) {
 	rt := moruntime.ServiceRuntime("")
 	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion7)
+		moruntime.MOProtocolVersion, defines.MORPCVersion8)
 	t.Cleanup(func() {
 		if hadOriginal {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
@@ -687,7 +687,7 @@ func TestUniqueIndexRuntimeFilterUsesSelectedHashSlot(t *testing.T) {
 	rt := moruntime.ServiceRuntime("")
 	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion7)
+		moruntime.MOProtocolVersion, defines.MORPCVersion8)
 	t.Cleanup(func() {
 		if hadOriginal {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
@@ -790,7 +790,7 @@ func TestIndexJoinGeneratedSerializedRuntimeFilterExecutesEndToEnd(t *testing.T)
 	rt := moruntime.ServiceRuntime("")
 	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion7)
+		moruntime.MOProtocolVersion, defines.MORPCVersion8)
 	t.Cleanup(func() {
 		if hadOriginal {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)

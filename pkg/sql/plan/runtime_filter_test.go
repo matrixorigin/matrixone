@@ -200,7 +200,7 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 	original, hadOriginal := rt.GetGlobalVariables(
 		moruntime.MOProtocolVersion)
 	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion7)
+		moruntime.MOProtocolVersion, defines.MORPCVersion8)
 	t.Cleanup(func() {
 		if hadOriginal {
 			rt.SetGlobalVariables(
@@ -349,17 +349,17 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 			}
 		})
 
-		gateV6 := build(defines.MORPCVersion6)
-		require.Empty(t, gateV6.qry.Nodes[2].RuntimeFilterBuildList)
-		require.Empty(t, gateV6.qry.Nodes[0].RuntimeFilterProbeList)
-
 		gateV7 := build(defines.MORPCVersion7)
-		require.Len(t, gateV7.qry.Nodes[2].RuntimeFilterBuildList, 1)
+		require.Empty(t, gateV7.qry.Nodes[2].RuntimeFilterBuildList)
+		require.Empty(t, gateV7.qry.Nodes[0].RuntimeFilterProbeList)
+
+		gateV8 := build(defines.MORPCVersion8)
+		require.Len(t, gateV8.qry.Nodes[2].RuntimeFilterBuildList, 1)
 		require.Equal(t,
 			planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
-			gateV7.qry.Nodes[2].RuntimeFilterBuildList[0].KeyEncoding)
+			gateV8.qry.Nodes[2].RuntimeFilterBuildList[0].KeyEncoding)
 
-		loweredGate := build(defines.MORPCVersion6)
+		loweredGate := build(defines.MORPCVersion7)
 		require.Empty(t, loweredGate.qry.Nodes[2].RuntimeFilterBuildList)
 		require.Empty(t, loweredGate.qry.Nodes[0].RuntimeFilterProbeList)
 	})
@@ -385,7 +385,7 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 		buildExpr := GetColExpr(typ, -1, 0)
 
 		rt.SetGlobalVariables(
-			moruntime.MOProtocolVersion, defines.MORPCVersion6)
+			moruntime.MOProtocolVersion, defines.MORPCVersion7)
 		_, preRollout, ok := builder.makeExactRuntimeFilterPair(
 			1, false, 100, probeExpr, buildExpr, false)
 		require.True(t, ok)
@@ -398,7 +398,7 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 			exprStructuralEqual(preRollout.Expr, preRollout.BuildExpr))
 
 		rt.SetGlobalVariables(
-			moruntime.MOProtocolVersion, defines.MORPCVersion7)
+			moruntime.MOProtocolVersion, defines.MORPCVersion8)
 		_, versioned, ok := builder.makeExactRuntimeFilterPair(
 			1, false, 100, probeExpr, buildExpr, false)
 		require.True(t, ok)
@@ -406,7 +406,7 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 		require.NotNil(t, versioned.BuildExpr)
 
 		rt.SetGlobalVariables(
-			moruntime.MOProtocolVersion, defines.MORPCVersion6)
+			moruntime.MOProtocolVersion, defines.MORPCVersion7)
 		_, loweredGate, ok := builder.makeExactRuntimeFilterPair(
 			1, false, 100, probeExpr, buildExpr, false)
 		require.True(t, ok)
@@ -438,21 +438,21 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 			"ENUM RAW must wait for versioned consumers with ENUM IN")
 
 		rt.SetGlobalVariables(
-			moruntime.MOProtocolVersion, defines.MORPCVersion7)
-		_, decimalV7, ok := builder.makeExactRuntimeFilterPair(
+			moruntime.MOProtocolVersion, defines.MORPCVersion8)
+		_, decimalV8, ok := builder.makeExactRuntimeFilterPair(
 			2, false, 100, decimalProbe, decimalBuild, false)
 		require.True(t, ok)
-		require.Nil(t, decimalV7.Expr)
-		require.NotNil(t, decimalV7.BuildExpr)
+		require.Nil(t, decimalV8.Expr)
+		require.NotNil(t, decimalV8.BuildExpr)
 
-		_, enumV7, ok := builder.makeExactRuntimeFilterPair(
+		_, enumV8, ok := builder.makeExactRuntimeFilterPair(
 			3, false, 100, enumProbe, enumBuild, false)
 		require.True(t, ok)
 		require.Equal(t,
 			planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
-			enumV7.KeyEncoding)
-		require.Nil(t, enumV7.Expr)
-		require.NotNil(t, enumV7.BuildExpr)
+			enumV8.KeyEncoding)
+		require.Nil(t, enumV8.Expr)
+		require.NotNil(t, enumV8.BuildExpr)
 	})
 }
 
@@ -543,7 +543,7 @@ func TestSerializedExactRuntimeFilterPairContract(t *testing.T) {
 		}
 	})
 	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion7)
+		moruntime.MOProtocolVersion, defines.MORPCVersion8)
 
 	varcharType := planpb.Type{
 		Id: int32(types.T_varchar), Width: types.MaxVarcharLen,
@@ -762,7 +762,7 @@ func TestSerializedExactRuntimeFilterPairContract(t *testing.T) {
 
 	t.Run("pre-rollout deployment omits tuple contract", func(t *testing.T) {
 		rt.SetGlobalVariables(
-			moruntime.MOProtocolVersion, defines.MORPCVersion6)
+			moruntime.MOProtocolVersion, defines.MORPCVersion7)
 		build, err := BindFuncExprImplByPlanExpr(
 			builder.GetContext(),
 			function.SerialFunctionName,
@@ -853,7 +853,7 @@ func TestFinalizeFuzzyRuntimeFilterKeepsDecisionAtomic(t *testing.T) {
 		original, hadOriginal := rt.GetGlobalVariables(
 			moruntime.MOProtocolVersion)
 		rt.SetGlobalVariables(
-			moruntime.MOProtocolVersion, defines.MORPCVersion6)
+			moruntime.MOProtocolVersion, defines.MORPCVersion7)
 		t.Cleanup(func() {
 			if hadOriginal {
 				rt.SetGlobalVariables(

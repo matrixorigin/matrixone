@@ -153,7 +153,7 @@ func localProtocolEnablesVersionedExactKeyContract(sid string) bool {
 	// MOProtocolVersion is a service-local compatibility gate written by the
 	// deployment control plane. This helper does not discover peers or infer
 	// their capabilities. Deployment orchestration is responsible for raising
-	// participating services consistently after rollout, and for draining v7
+	// participating services consistently after rollout, and for draining v8
 	// work before lowering the gate and reintroducing older participants.
 	rt := runtime.ServiceRuntime(sid)
 	if rt == nil {
@@ -164,7 +164,7 @@ func localProtocolEnablesVersionedExactKeyContract(sid string) bool {
 		return false
 	}
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion7
+	return ok && version >= defines.MORPCVersion8
 }
 
 func (builder *QueryBuilder) exactRuntimeFilterPlanEncoding(
@@ -181,7 +181,7 @@ func (builder *QueryBuilder) exactRuntimeFilterPlanEncoding(
 			builder.compCtx.GetProcess().GetService(),
 		) {
 		// Only metadata-independent raw types can keep their exact filters below
-		// v7. Metadata-dependent contracts, new closures, and types without a
+		// v8. Metadata-dependent contracts, new closures, and types without a
 		// legacy consumer executor remain disabled until rollout completes.
 		// Guarded BuildExpr still makes an unexpected older producer fail open.
 		return keycodec.ExactRuntimeFilterUnsupported, false
@@ -235,7 +235,7 @@ func (builder *QueryBuilder) makeExactRuntimeFilterPair(
 	switch encoding {
 	case keycodec.ExactRuntimeFilterRaw:
 		// Metadata-independent RAW_V1 needs no producer-side transformation.
-		// Below v7, retain an identical legacy expression only for types whose
+		// Below v8, retain an identical legacy expression only for types whose
 		// old producer and consumer contracts are both safe. Once rollout
 		// completes, publish only BuildExpr so compatibility metadata does not
 		// permanently inflate every exact-filter plan.
