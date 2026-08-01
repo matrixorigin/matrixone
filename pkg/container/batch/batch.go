@@ -928,10 +928,10 @@ func (bat *Batch) CloneSelectedColumns(
 ) (cloned *Batch, err error) {
 	cloned = NewWithSize(len(selectCols))
 	cloned.Attrs = selectAttrs
-	cloned.offHeap = bat.offHeap
+	cloned.offHeap = bat.offHeap || bat.selectedColumnsHaveAllocationAccount(selectCols)
 	var typ types.Type
 	for idx := range selectCols {
-		if bat.offHeap {
+		if cloned.offHeap {
 			cloned.Vecs[idx] = vector.NewOffHeapVecWithType(typ)
 		} else {
 			cloned.Vecs[idx] = vector.NewVec(typ)
@@ -1155,7 +1155,26 @@ func (bat *Batch) CloneTo(toBat *Batch, mp *mpool.MPool) (err error) {
 // Dup used to copy a Batch object, this method will create a new batch
 // and copy all vectors (Vecs) of the current batch to the new batch.
 func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
-	return bat.Clone(mp, bat.offHeap)
+	return bat.Clone(mp, bat.offHeap || bat.hasAllocationAccountVector())
+}
+
+func (bat *Batch) hasAllocationAccountVector() bool {
+	for _, vec := range bat.Vecs {
+		if vec != nil && vec.AllocationAccountSelection() != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (bat *Batch) selectedColumnsHaveAllocationAccount(selectCols []int) bool {
+	for _, sourceIdx := range selectCols {
+		vec := bat.Vecs[sourceIdx]
+		if vec != nil && vec.AllocationAccountSelection() != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (bat *Batch) Union(bat2 *Batch, sels []int64, m *mpool.MPool) error {

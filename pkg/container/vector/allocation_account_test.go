@@ -121,8 +121,13 @@ func TestVectorAllocationAccountConfiguration(t *testing.T) {
 	require.Panics(t, func() {
 		vec.SetOffHeap(false)
 	})
-	_, err = vec.Dup(mp)
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+	sourceUsed := state.account.Snapshot().Used
+	dup, err := vec.Dup(mp)
+	require.NoError(t, err)
+	require.Same(t, state.selection, dup.AllocationAccountSelection())
+	require.Greater(t, state.account.Snapshot().Used, sourceUsed)
+	dup.Free(mp)
+	require.Equal(t, sourceUsed, state.account.Snapshot().Used)
 	_, err = vec.CloneToFlatCompact(mp)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
 

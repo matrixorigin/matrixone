@@ -439,6 +439,42 @@ func TestMixedBatchAllocationClonePreservesVectorProvenance(t *testing.T) {
 	finalizeTestBatchAllocationAccount(t, state)
 }
 
+func TestBatchImplicitClonesPromoteAccountedVectorsOffHeap(t *testing.T) {
+	state := newTestBatchAllocationAccount(t, 16)
+	mp := mpool.MustNewZero()
+	source := NewWithSize(2)
+	source.Attrs = []string{"accounted", "unaccounted"}
+	source.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	require.NoError(t, source.Vecs[0].SetAllocationAccount(state.selection))
+	source.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(source.Vecs[1], int64(2), false, mp))
+	source.SetRowCount(1)
+	sourceUsed := state.account.Snapshot().Used
+
+	dup, err := source.Dup(mp)
+	require.NoError(t, err)
+	require.True(t, dup.offHeap)
+	require.Same(t, state.selection, dup.Vecs[0].AllocationAccountSelection())
+	require.Nil(t, dup.Vecs[1].AllocationAccountSelection())
+	dup.Clean(mp)
+	require.Equal(t, sourceUsed, state.account.Snapshot().Used)
+
+	selected, err := source.CloneSelectedColumns(
+		[]int{0},
+		[]string{"accounted"},
+		mp,
+	)
+	require.NoError(t, err)
+	require.True(t, selected.offHeap)
+	require.Same(t, state.selection, selected.Vecs[0].AllocationAccountSelection())
+	selected.Clean(mp)
+	require.Equal(t, sourceUsed, state.account.Snapshot().Used)
+
+	source.Clean(mp)
+	finalizeTestBatchAllocationAccount(t, state)
+}
+
 func TestMixedBatchAllocationBatchSetPreservesVectorProvenance(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 128)
 	mp := mpool.MustNewZero()

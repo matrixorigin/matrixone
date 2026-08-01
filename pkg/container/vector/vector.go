@@ -1570,9 +1570,7 @@ func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool)
 // Dup use to copy an identical vector
 func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 	if v.allocationAccount != nil {
-		return nil, allocationAccountInvalid(
-			"accounted vector duplication requires an off-heap destination",
-		)
+		return v.dup(mp, true, true, v.allocationAccount)
 	}
 	return v.dup(mp, false, v.offHeap, nil)
 }

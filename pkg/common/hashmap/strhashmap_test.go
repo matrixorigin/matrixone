@@ -463,8 +463,8 @@ func TestHashMapIteratorsRejectMalformedRowShapes(t *testing.T) {
 		require.NoError(t, err)
 		for _, vecs := range [][]*vector.Vector{
 			nil,
-			[]*vector.Vector{nil},
-			[]*vector.Vector{short},
+			{nil},
+			{short},
 		} {
 			_, _, err = iterator.Insert(0, 2, vecs)
 			require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)

@@ -155,10 +155,7 @@ func (itr *strHashmapIterator) prepareHashKeys(
 			}
 			values, area := vector.MustVarlenaRawData(vec)
 			for i := 0; i < count; i++ {
-				value := values[start+i].ByteSlice()
-				if area != nil {
-					value = values[start+i].GetByteSlice(area)
-				}
+				value := values[start+i].GetByteSlice(area)
 				if err := add(i, prefix+4+len(value)); err != nil {
 					return err
 				}
