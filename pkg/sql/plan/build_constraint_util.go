@@ -1160,7 +1160,7 @@ func forceCastExpr2WithProcess(
 	}
 	var err error
 	var rewritten bool
-	expr, rewritten, err = rewriteEnumDisplayValueToJSONCast(ctx, expr, targetType.Typ)
+	expr, rewritten, err = rewriteMySQLSpecialTypeDisplayCast(ctx, expr, targetType.Typ)
 	if err != nil {
 		return nil, err
 	}
@@ -1363,7 +1363,7 @@ func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, fun
 	}
 	var err error
 	var rewritten bool
-	expr, rewritten, err = rewriteEnumDisplayValueToJSONCast(ctx, expr, targetType)
+	expr, rewritten, err = rewriteMySQLSpecialTypeDisplayCast(ctx, expr, targetType)
 	if err != nil {
 		return nil, err
 	}
