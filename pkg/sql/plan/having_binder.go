@@ -189,7 +189,7 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	}
 
 	b.insideAgg = true
-	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+	expr, err := b.bindPreparedNumericAggregateFuncExpr(funcName, astExpr.Exprs, depth)
 	if err != nil {
 		return nil, err
 	}
