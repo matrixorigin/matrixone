@@ -125,33 +125,55 @@ type server struct {
 	}
 }
 
-// serverConnectionTracker joins the connection goroutines admitted by an RPC
-// server. goetty's application Stop disconnects active sessions, but it does
-// not wait for each connection handler to observe that disconnect and return.
-// The application listener is stopped before wait is called, so no Add can
-// race with Wait.
+// serverConnectionTracker joins MORPC connection handlers without occupying
+// goetty's public IOSessionAware callback. Once sealed, handlers that have not
+// entered MORPC are rejected and every admitted handler has one finish owner.
 type serverConnectionTracker struct {
-	wg      sync.WaitGroup
-	entries sync.Map
-}
-
-func (t *serverConnectionTracker) Created(rs goetty.IOSession) {
-	t.wg.Add(1)
-	t.entries.Store(rs.ID(), struct{}{})
-}
-
-func (t *serverConnectionTracker) Closed(rs goetty.IOSession) {
-	t.finish(rs)
-}
-
-func (t *serverConnectionTracker) finish(rs goetty.IOSession) {
-	if _, ok := t.entries.LoadAndDelete(rs.ID()); ok {
-		t.wg.Done()
+	mu struct {
+		sync.Mutex
+		sealed bool
+		active int
+		done   chan struct{}
 	}
 }
 
-func (t *serverConnectionTracker) wait() {
-	t.wg.Wait()
+func (t *serverConnectionTracker) begin() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.mu.sealed {
+		return false
+	}
+	t.mu.active++
+	return true
+}
+
+func (t *serverConnectionTracker) finish() {
+	t.mu.Lock()
+	t.mu.active--
+	if t.mu.active < 0 {
+		t.mu.Unlock()
+		panic("morpc: negative active server connection count")
+	}
+	if t.mu.sealed && t.mu.active == 0 && t.mu.done != nil {
+		close(t.mu.done)
+		t.mu.done = nil
+	}
+	t.mu.Unlock()
+}
+
+func (t *serverConnectionTracker) sealAndWait() {
+	t.mu.Lock()
+	t.mu.sealed = true
+	if t.mu.active == 0 {
+		t.mu.Unlock()
+		return
+	}
+	if t.mu.done == nil {
+		t.mu.done = make(chan struct{})
+	}
+	done := t.mu.done
+	t.mu.Unlock()
+	<-done
 }
 
 // NewRPCServer create rpc server with options. After the rpc server starts, one link corresponds to two
@@ -176,8 +198,7 @@ func NewRPCServer(
 	s.adjust()
 
 	s.options.goettyOptions = append(s.options.goettyOptions,
-		goetty.WithSessionCodec(codec),
-		goetty.WithSessionAware(s.connections))
+		goetty.WithSessionCodec(codec))
 	// Don't pass session logger to goetty to avoid noisy error logs from goetty library
 	// (e.g., "close connection failed" which is expected during normal connection lifecycle)
 
@@ -186,7 +207,6 @@ func NewRPCServer(
 		s.onMessage,
 		goetty.WithAppLogger(s.logger),
 		goetty.WithAppHandleSessionFunc(s.handleConnection),
-		goetty.WithAppSessionAware(s.connections),
 		goetty.WithAppSessionOptions(s.options.goettyOptions...),
 	)
 	if err != nil {
@@ -207,7 +227,10 @@ func NewRPCServer(
 }
 
 func (s *server) handleConnection(rs goetty.IOSession) error {
-	defer s.connections.finish(rs)
+	if !s.connections.begin() {
+		return nil
+	}
+	defer s.connections.finish()
 
 	sequence := uint64(0)
 	for {
@@ -244,9 +267,9 @@ func (s *server) Close() error {
 	}
 	if err == nil {
 		// application.Stop first seals listener admission and disconnects every
-		// active session. Join the corresponding connection goroutines only
-		// after that seal, so WaitGroup.Add cannot race with Wait.
-		s.connections.wait()
+		// active session. Seal MORPC handler admission after that point, then
+		// join every handler that entered before the seal.
+		s.connections.sealAndWait()
 	}
 
 	return err
