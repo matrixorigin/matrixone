@@ -513,18 +513,65 @@ func isSupportedShuffleJoinKeyType(typ int32) bool {
 	}
 }
 
+func shuffleJoinCandidateSurvivesRecheck(node *plan.Node, ndv float64) bool {
+	hashmapStats := node.Stats.HashmapStats
+	if hashmapStats.ShuffleType == plan.ShuffleType_Hash && hashmapStats.HashmapSize < threshHoldForHashShuffle {
+		return false
+	}
+	if hashmapStats.ShuffleType == plan.ShuffleType_Range && hashmapStats.Ranges == nil &&
+		hashmapStats.ShuffleColMax-hashmapStats.ShuffleColMin < 100000 {
+		return false
+	}
+	if hashmapStats.ShuffleMethod != plan.ShuffleMethod_Reuse &&
+		ndv >= 0 && ndv < ShuffleThreshHoldOfNDV {
+		return false
+	}
+	if hashmapStats.ShuffleType == plan.ShuffleType_Hash &&
+		node.JoinType == plan.Node_DEDUP && node.IsRightJoin {
+		return false
+	}
+	return true
+}
+
+// planShuffleJoinCandidate applies the existing candidate-specific shuffle
+// rules to a copy of the join statistics. Candidate selection must use the
+// same range/hash recheck as the final plan; otherwise an apparently valid
+// condition can be rejected later and hide a usable condition after it. The
+// returned statistics are reused by the caller so the selected candidate is
+// not planned twice.
+func planShuffleJoinCandidate(
+	node *plan.Node,
+	builder *QueryBuilder,
+	condition *plan.Expr,
+	leftHashCol, rightHashCol *plan.ColRef,
+) (plan.HashMapStats, bool) {
+	candidateNode := *node
+	candidateStats := *node.Stats
+	candidateHashmapStats := *node.Stats.HashmapStats
+	candidateNode.Stats = &candidateStats
+	candidateStats.HashmapStats = &candidateHashmapStats
+
+	isExprBasedShuffle := leftHashCol == nil || rightHashCol == nil
+	if isExprBasedShuffle {
+		candidateHashmapStats.ShuffleType = plan.ShuffleType_Hash
+	} else {
+		determineShuffleType(leftHashCol, &candidateNode, builder)
+	}
+	return candidateHashmapStats, shuffleJoinCandidateSurvivesRecheck(&candidateNode, condition.Ndv)
+}
+
 // selectShuffleJoinCondition keeps the first condition that the current plan
-// can already shuffle on, including reuse and unknown-NDV plans. It only scans
-// later conditions when an earlier condition is unsupported or known to be
-// below the NDV threshold. This removes predicate-order-dependent eligibility
-// without changing established valid plans.
+// can actually shuffle on after the existing range/hash recheck. It only scans
+// later conditions when an earlier condition is unsupported or rejected by
+// those rules. This removes predicate-order-dependent eligibility without
+// changing established valid plans.
 func selectShuffleJoinCondition(
 	node *plan.Node,
 	builder *QueryBuilder,
 	onList []*plan.Expr,
 	leftTags, rightTags map[int32]bool,
 	afterRemap bool,
-) int {
+) (int, plan.HashMapStats, bool) {
 	firstSupportedIdx := -1
 
 	for i, condition := range onList {
@@ -552,15 +599,19 @@ func selectShuffleJoinCondition(
 		if firstSupportedIdx == -1 {
 			firstSupportedIdx = i
 		}
-		if _, reusable := reusableShuffleChild(leftHashCol, node, builder); reusable {
-			return i
+		_, reusable := reusableShuffleChild(leftHashCol, node, builder)
+		if !reusable && condition.Ndv >= 0 && condition.Ndv < ShuffleThreshHoldOfNDV {
+			continue
 		}
-		if condition.Ndv < 0 || condition.Ndv >= ShuffleThreshHoldOfNDV {
-			return i
+		candidateStats, eligible := planShuffleJoinCandidate(
+			node, builder, condition, leftHashCol, rightHashCol,
+		)
+		if eligible {
+			return i, candidateStats, true
 		}
 	}
 
-	return firstSupportedIdx
+	return firstSupportedIdx, plan.HashMapStats{}, false
 }
 
 // determineShuffleForJoinWithColRefMode plans join shuffle either before or
@@ -626,7 +677,9 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 	if node.JoinType == plan.Node_MARK && !markJoinSupportsShuffle(node, builder, leftTags, rightTags, afterRemap) {
 		return
 	}
-	idx := selectShuffleJoinCondition(node, builder, node.OnList, leftTags, rightTags, afterRemap)
+	idx, candidateHashmapStats, candidatePlanned := selectShuffleJoinCondition(
+		node, builder, node.OnList, leftTags, rightTags, afterRemap,
+	)
 	if idx == -1 {
 		return
 	}
@@ -664,9 +717,15 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 	// Only integer and string keys are supported by the shuffle executor.
 	isExprBasedShuffle := leftHashCol == nil || rightHashCol == nil
 	if isSupportedShuffleJoinKeyType(typ) {
-		node.Stats.HashmapStats.ShuffleColIdx = int32(idx)
-		node.Stats.HashmapStats.Shuffle = true
-		if leftHashCol != nil && !isExprBasedShuffle {
+		if candidatePlanned {
+			candidateHashmapStats.ShuffleColIdx = int32(idx)
+			candidateHashmapStats.Shuffle = true
+			*node.Stats.HashmapStats = candidateHashmapStats
+		} else {
+			node.Stats.HashmapStats.ShuffleColIdx = int32(idx)
+			node.Stats.HashmapStats.Shuffle = true
+		}
+		if !candidatePlanned && leftHashCol != nil && !isExprBasedShuffle {
 			determineShuffleType(leftHashCol, node, builder)
 		}
 		// For expression-based shuffle (serial_full/serial in join condition):
@@ -682,25 +741,7 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 
 	//recheck shuffle plan
 	if node.Stats.HashmapStats.Shuffle {
-		if node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && node.Stats.HashmapStats.HashmapSize < threshHoldForHashShuffle {
-			node.Stats.HashmapStats.Shuffle = false
-		}
-
-		if node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range && node.Stats.HashmapStats.Ranges == nil && node.Stats.HashmapStats.ShuffleColMax-node.Stats.HashmapStats.ShuffleColMin < 100000 {
-			node.Stats.HashmapStats.Shuffle = false
-		}
-		if node.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Reuse {
-			highestNDV := node.OnList[idx].Ndv
-			// A negative NDV means that statistics are unavailable.  Do not treat
-			// unknown cardinality as low cardinality: for a large build side that
-			// would turn a valid shuffle plan back into a broadcast hash build and
-			// can concentrate the entire hash table on one CN.
-			if highestNDV >= 0 && highestNDV < ShuffleThreshHoldOfNDV {
-				node.Stats.HashmapStats.Shuffle = false
-			}
-		}
-
-		if node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && node.JoinType == plan.Node_DEDUP && node.IsRightJoin {
+		if !shuffleJoinCandidateSurvivesRecheck(node, node.OnList[idx].Ndv) {
 			node.Stats.HashmapStats.Shuffle = false
 		}
 
