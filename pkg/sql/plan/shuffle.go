@@ -394,9 +394,10 @@ func reusableShuffleChild(
 	col *plan.ColRef,
 	node *plan.Node,
 	builder *QueryBuilder,
+	afterRemap bool,
 ) (*plan.Node, bool) {
 	if col == nil || node == nil || builder == nil || builder.qry == nil ||
-		len(node.Children) == 0 || builder.tag2Table[col.RelPos] != nil {
+		len(node.Children) == 0 {
 		return nil, false
 	}
 	childID := node.Children[0]
@@ -406,15 +407,56 @@ func reusableShuffleChild(
 	child := builder.qry.Nodes[childID]
 	if child == nil || child.NodeType != plan.Node_AGG || child.Stats == nil ||
 		child.Stats.HashmapStats == nil || !child.Stats.HashmapStats.Shuffle ||
-		len(child.BindingTags) == 0 || col.RelPos != child.BindingTags[0] ||
-		col.ColPos < 0 || int(col.ColPos) >= len(child.GroupBy) {
+		child.Stats.HashmapStats.ShuffleColIdx < 0 ||
+		int(child.Stats.HashmapStats.ShuffleColIdx) >= len(child.GroupBy) {
 		return nil, false
 	}
-	groupCol := child.GroupBy[col.ColPos].GetCol()
+
+	shuffleColIdx := child.Stats.HashmapStats.ShuffleColIdx
+	if afterRemap {
+		// Aggregate group keys are exposed as RelPos -1. ColPos retains the
+		// original group-by index even when ProjectList is compacted, while the
+		// join column position refers to the compacted output slot.
+		if col.RelPos != 0 || col.ColPos < 0 || int(col.ColPos) >= len(child.ProjectList) {
+			return nil, false
+		}
+		projectCol := child.ProjectList[col.ColPos].GetCol()
+		if projectCol == nil || projectCol.RelPos != -1 || projectCol.ColPos != shuffleColIdx {
+			return nil, false
+		}
+		return child, true
+	}
+
+	if builder.tag2Table[col.RelPos] != nil || len(child.BindingTags) == 0 ||
+		col.RelPos != child.BindingTags[0] || col.ColPos != shuffleColIdx {
+		return nil, false
+	}
+	groupCol := child.GroupBy[shuffleColIdx].GetCol()
 	if groupCol == nil || builder.tag2Table[groupCol.RelPos] == nil {
 		return nil, false
 	}
 	return child, true
+}
+
+func resetShuffleStrategy(hashmapStats *plan.HashMapStats) {
+	hashmapStats.ShuffleType = plan.ShuffleType_Hash
+	hashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
+	hashmapStats.ShuffleColMin = 0
+	hashmapStats.ShuffleColMax = 0
+	hashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
+	hashmapStats.Nullcnt = 0
+	hashmapStats.Ranges = nil
+}
+
+func reuseShuffleStrategy(hashmapStats *plan.HashMapStats, child *plan.Node) {
+	childStats := child.Stats.HashmapStats
+	hashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
+	hashmapStats.ShuffleType = childStats.ShuffleType
+	hashmapStats.ShuffleTypeForMultiCN = childStats.ShuffleTypeForMultiCN
+	hashmapStats.ShuffleColMin = childStats.ShuffleColMin
+	hashmapStats.ShuffleColMax = childStats.ShuffleColMax
+	hashmapStats.Ranges = childStats.Ranges
+	hashmapStats.Nullcnt = childStats.Nullcnt
 }
 
 func maybeSorted(node *plan.Node, builder *QueryBuilder, tag int32) bool {
@@ -431,26 +473,48 @@ func maybeSorted(node *plan.Node, builder *QueryBuilder, tag int32) bool {
 }
 
 func determineShuffleType(col *plan.ColRef, node *plan.Node, builder *QueryBuilder) {
-	// hash by default
-	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
+	determineShuffleTypeWithColRefMode(col, node, builder, false)
+}
 
-	if builder == nil {
+func determineShuffleTypeWithColRefMode(
+	col *plan.ColRef,
+	node *plan.Node,
+	builder *QueryBuilder,
+	afterRemap bool,
+) {
+	// Every planning pass starts from a normal hash strategy. Candidate-specific
+	// range/reuse state must be proved again for the current column.
+	resetShuffleStrategy(node.Stats.HashmapStats)
+
+	if col == nil || builder == nil {
 		return
 	}
-	tableDef, ok := builder.tag2Table[col.RelPos]
 
+	if child, reusable := reusableShuffleChild(col, node, builder, afterRemap); reusable {
+		reuseShuffleStrategy(node.Stats.HashmapStats, child)
+		return
+	}
+	determineNonReusableShuffleType(col, node, builder, afterRemap)
+}
+
+func determineNonReusableShuffleType(
+	col *plan.ColRef,
+	node *plan.Node,
+	builder *QueryBuilder,
+	afterRemap bool,
+) {
+	if col == nil || builder == nil {
+		return
+	}
+	// Global binding tags and table statistics are no longer addressable after
+	// remapping. If reuse was not structurally re-proved above, hash shuffle is
+	// the only strategy that can be derived from the late plan safely.
+	if afterRemap {
+		return
+	}
+
+	tableDef, ok := builder.tag2Table[col.RelPos]
 	if !ok {
-		child, reusable := reusableShuffleChild(col, node, builder)
-		if !reusable {
-			return
-		}
-		node.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
-		node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
-		node.Stats.HashmapStats.HashmapSize = child.Stats.HashmapStats.HashmapSize
-		node.Stats.HashmapStats.ShuffleColMin = child.Stats.HashmapStats.ShuffleColMin
-		node.Stats.HashmapStats.ShuffleColMax = child.Stats.HashmapStats.ShuffleColMax
-		node.Stats.HashmapStats.Ranges = child.Stats.HashmapStats.Ranges
-		node.Stats.HashmapStats.Nullcnt = child.Stats.HashmapStats.Nullcnt
 		return
 	}
 
@@ -544,18 +608,40 @@ func planShuffleJoinCandidate(
 	builder *QueryBuilder,
 	condition *plan.Expr,
 	leftHashCol, rightHashCol *plan.ColRef,
+	afterRemap bool,
 ) (plan.HashMapStats, bool) {
 	candidateNode := *node
 	candidateStats := *node.Stats
-	candidateHashmapStats := *node.Stats.HashmapStats
+	// HashmapSize and HashOnPK describe the join itself. All shuffle-strategy
+	// fields are candidate-local and must not leak from a previous key or pass.
+	candidateHashmapStats := plan.HashMapStats{
+		HashmapSize:   node.Stats.HashmapStats.HashmapSize,
+		HashOnPK:      node.Stats.HashmapStats.HashOnPK,
+		ShuffleColIdx: -1,
+	}
 	candidateNode.Stats = &candidateStats
 	candidateStats.HashmapStats = &candidateHashmapStats
+	resetShuffleStrategy(&candidateHashmapStats)
 
 	isExprBasedShuffle := leftHashCol == nil || rightHashCol == nil
 	if isExprBasedShuffle {
-		candidateHashmapStats.ShuffleType = plan.ShuffleType_Hash
+		// Expressions cannot reuse an aggregate column partition. Shortcut the
+		// same known-low NDV guard used by the final check.
+		if condition.Ndv >= 0 && condition.Ndv < ShuffleThreshHoldOfNDV {
+			return candidateHashmapStats, false
+		}
 	} else {
-		determineShuffleType(leftHashCol, &candidateNode, builder)
+		child, reusable := reusableShuffleChild(leftHashCol, &candidateNode, builder, afterRemap)
+		if reusable {
+			reuseShuffleStrategy(&candidateHashmapStats, child)
+		} else {
+			// Reuse is the only exception to the low-NDV guard. Check it once,
+			// before looking up range statistics for a candidate that cannot win.
+			if condition.Ndv >= 0 && condition.Ndv < ShuffleThreshHoldOfNDV {
+				return candidateHashmapStats, false
+			}
+			determineNonReusableShuffleType(leftHashCol, &candidateNode, builder, afterRemap)
+		}
 	}
 	return candidateHashmapStats, shuffleJoinCandidateSurvivesRecheck(&candidateNode, condition.Ndv)
 }
@@ -571,8 +657,9 @@ func selectShuffleJoinCondition(
 	onList []*plan.Expr,
 	leftTags, rightTags map[int32]bool,
 	afterRemap bool,
-) (int, plan.HashMapStats, bool) {
+) (int, plan.HashMapStats) {
 	firstSupportedIdx := -1
+	var firstSupportedStats plan.HashMapStats
 
 	for i, condition := range onList {
 		fn := condition.GetF()
@@ -596,22 +683,19 @@ func selectShuffleJoinCondition(
 			continue
 		}
 
+		candidateStats, eligible := planShuffleJoinCandidate(
+			node, builder, condition, leftHashCol, rightHashCol, afterRemap,
+		)
 		if firstSupportedIdx == -1 {
 			firstSupportedIdx = i
+			firstSupportedStats = candidateStats
 		}
-		_, reusable := reusableShuffleChild(leftHashCol, node, builder)
-		if !reusable && condition.Ndv >= 0 && condition.Ndv < ShuffleThreshHoldOfNDV {
-			continue
-		}
-		candidateStats, eligible := planShuffleJoinCandidate(
-			node, builder, condition, leftHashCol, rightHashCol,
-		)
 		if eligible {
-			return i, candidateStats, true
+			return i, candidateStats
 		}
 	}
 
-	return firstSupportedIdx, plan.HashMapStats{}, false
+	return firstSupportedIdx, firstSupportedStats
 }
 
 // determineShuffleForJoinWithColRefMode plans join shuffle either before or
@@ -623,6 +707,7 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 	// do not shuffle by default
 	node.Stats.HashmapStats.Shuffle = false
 	node.Stats.HashmapStats.ShuffleColIdx = -1
+	resetShuffleStrategy(node.Stats.HashmapStats)
 	if node.NodeType != plan.Node_JOIN {
 		return
 	}
@@ -677,7 +762,7 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 	if node.JoinType == plan.Node_MARK && !markJoinSupportsShuffle(node, builder, leftTags, rightTags, afterRemap) {
 		return
 	}
-	idx, candidateHashmapStats, candidatePlanned := selectShuffleJoinCondition(
+	idx, candidateHashmapStats := selectShuffleJoinCondition(
 		node, builder, node.OnList, leftTags, rightTags, afterRemap,
 	)
 	if idx == -1 {
@@ -717,17 +802,9 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 	// Only integer and string keys are supported by the shuffle executor.
 	isExprBasedShuffle := leftHashCol == nil || rightHashCol == nil
 	if isSupportedShuffleJoinKeyType(typ) {
-		if candidatePlanned {
-			candidateHashmapStats.ShuffleColIdx = int32(idx)
-			candidateHashmapStats.Shuffle = true
-			*node.Stats.HashmapStats = candidateHashmapStats
-		} else {
-			node.Stats.HashmapStats.ShuffleColIdx = int32(idx)
-			node.Stats.HashmapStats.Shuffle = true
-		}
-		if !candidatePlanned && leftHashCol != nil && !isExprBasedShuffle {
-			determineShuffleType(leftHashCol, node, builder)
-		}
+		candidateHashmapStats.ShuffleColIdx = int32(idx)
+		candidateHashmapStats.Shuffle = true
+		*node.Stats.HashmapStats = candidateHashmapStats
 		// For expression-based shuffle (serial_full/serial in join condition):
 		// Force hash shuffle because range shuffle depends on column stats (min/max/ranges)
 		// which don't apply to expression results. Hash shuffle works universally.
