@@ -256,7 +256,7 @@ func mysqlSpecialTypeFuncNames(typ *plan.Type) (string, string, string, error) {
 // belongs to a visible string expression. Provenance is deliberately narrow:
 // an exact ENUM/SET display call originates it, and an exact ColRef may carry it
 // through a query boundary. Any cast or other string expression clears it.
-func (ctx *BindContext) mysqlSpecialOrderTypeForExpr(expr *plan.Expr) *plan.Type {
+func (bc *BindContext) mysqlSpecialOrderTypeForExpr(expr *plan.Expr) *plan.Type {
 	if expr == nil || !types.T(expr.Typ.Id).IsMySQLString() {
 		return nil
 	}
@@ -273,26 +273,26 @@ func (ctx *BindContext) mysqlSpecialOrderTypeForExpr(expr *plan.Expr) *plan.Type
 	if col == nil {
 		return nil
 	}
-	if col.RelPos == ctx.projectTag {
-		if typ, recorded := ctx.mysqlSpecialOrderTypes[col.ColPos]; recorded {
+	if col.RelPos == bc.projectTag {
+		if typ, recorded := bc.mysqlSpecialOrderTypes[col.ColPos]; recorded {
 			return DeepCopyType(typ)
 		}
 	}
-	binding := ctx.bindingByTag[col.RelPos]
+	binding := bc.bindingByTag[col.RelPos]
 	if binding == nil || col.ColPos < 0 || int(col.ColPos) >= len(binding.mysqlSpecialOrderTypes) {
 		return nil
 	}
 	return DeepCopyType(binding.mysqlSpecialOrderTypes[col.ColPos])
 }
 
-func (ctx *BindContext) mysqlSpecialOrderTypeForProject(colPos int32) *plan.Type {
-	if typ, recorded := ctx.mysqlSpecialOrderTypes[colPos]; recorded {
+func (bc *BindContext) mysqlSpecialOrderTypeForProject(colPos int32) *plan.Type {
+	if typ, recorded := bc.mysqlSpecialOrderTypes[colPos]; recorded {
 		return DeepCopyType(typ)
 	}
-	if colPos < 0 || int(colPos) >= len(ctx.projects) {
+	if colPos < 0 || int(colPos) >= len(bc.projects) {
 		return nil
 	}
-	return ctx.mysqlSpecialOrderTypeForExpr(ctx.projects[colPos])
+	return bc.mysqlSpecialOrderTypeForExpr(bc.projects[colPos])
 }
 
 func mysqlSpecialOrderTypesCompatible(left, right *plan.Type) bool {

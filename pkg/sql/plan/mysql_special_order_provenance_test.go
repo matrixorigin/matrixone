@@ -82,7 +82,7 @@ func requireSingleSortKeyType(t *testing.T, logicPlan *planpb.Plan, typ types.T)
 
 func requireSingleWindowOrderKeyType(t *testing.T, logicPlan *planpb.Plan, typ types.T) {
 	t.Helper()
-	var found []*planpb.Expr
+	found := make([]*planpb.Expr, 0, len(logicPlan.GetQuery().Nodes))
 	for _, node := range logicPlan.GetQuery().Nodes {
 		if node.NodeType != planpb.Node_WINDOW {
 			continue
