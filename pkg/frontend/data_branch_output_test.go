@@ -807,8 +807,8 @@ func TestDataBranchOutputLimitBoundaries(t *testing.T) {
 		wantStops int
 	}{
 		{name: "zero", limit: 0, wantRows: 0, wantStops: 1},
-		{name: "one", limit: 1, wantRows: 1, wantStops: 1},
-		{name: "exact row count", limit: 2, wantRows: 2, wantStops: 1},
+		{name: "one", limit: 1, wantRows: 1, wantStops: 0},
+		{name: "exact row count", limit: 2, wantRows: 2, wantStops: 0},
 		{name: "above row count", limit: 3, wantRows: 2, wantStops: 0},
 	}
 
@@ -850,6 +850,65 @@ func TestDataBranchOutputLimitBoundaries(t *testing.T) {
 			))
 			require.Equal(t, tt.wantRows, ses.GetMysqlResultSet().GetRowCount())
 			require.Equal(t, tt.wantStops, stopCalls)
+		})
+	}
+}
+
+func TestDataBranchOutputLimitUsesFinalPKOrder(t *testing.T) {
+	tests := []struct {
+		name    string
+		limit   int64
+		ids     []int64
+		wantIDs []int64
+	}{
+		{name: "one row", limit: 1, ids: []int64{100, 1}, wantIDs: []int64{1}},
+		{name: "multiple rows", limit: 2, ids: []int64{100, 1, 50}, wantIDs: []int64{1, 50}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			ses := newValidateSession(t)
+			ses.SetMysqlResultSet(&MysqlResultSet{})
+
+			ctrl := gomock.NewController(t)
+			tblStuff := newTestBranchTableStuff(ctrl)
+			t.Cleanup(func() {
+				tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
+			})
+
+			retCh := make(chan batchWithKind, len(tt.ids))
+			for _, id := range tt.ids {
+				bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], id, false, ses.proc.Mp()))
+				require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("value"), false, ses.proc.Mp()))
+				require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte("hidden"), false, ses.proc.Mp()))
+				bat.SetRowCount(1)
+				retCh <- batchWithKind{name: "side", kind: diffInsert, batch: bat}
+			}
+			close(retCh)
+
+			stopCalls := 0
+			stmt := &tree.DataBranchDiff{OutputOpt: &tree.DiffOutputOpt{Limit: &tt.limit}}
+			require.NoError(t, satisfyDiffOutputOpt(
+				ctx,
+				cancel,
+				func() { stopCalls++ },
+				ses,
+				nil,
+				stmt,
+				branchMetaInfo{},
+				tblStuff,
+				retCh,
+			))
+
+			require.Equal(t, uint64(len(tt.wantIDs)), ses.GetMysqlResultSet().GetRowCount())
+			for i, wantID := range tt.wantIDs {
+				row, err := ses.GetMysqlResultSet().GetRow(ctx, uint64(i))
+				require.NoError(t, err)
+				require.Equal(t, wantID, row[2])
+			}
+			require.Zero(t, stopCalls, "positive limits must consume every producer row before selecting the sorted prefix")
 		})
 	}
 }

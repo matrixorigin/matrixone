@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"bytes"
+	"container/heap"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -794,6 +795,45 @@ func execDataBranchOutputSQL(ctx context.Context, bh BackgroundExec, sql string)
 	return nil
 }
 
+func compareDiffOutputRows(a, b []any, pkColIdxes []int) int {
+	for _, idx := range pkColIdxes {
+		if cmp := types.CompareValue(a[idx+2], b[idx+2]); cmp != 0 {
+			return cmp
+		}
+	}
+	return 0
+}
+
+// diffOutputRowHeap is a max-heap by primary key. Keeping the largest retained
+// row at the root lets OUTPUT LIMIT select the globally smallest rows while
+// holding at most LIMIT rows in memory.
+type diffOutputRowHeap struct {
+	rows       [][]any
+	pkColIdxes []int
+}
+
+func (h diffOutputRowHeap) Len() int { return len(h.rows) }
+
+func (h diffOutputRowHeap) Less(i, j int) bool {
+	return compareDiffOutputRows(h.rows[i], h.rows[j], h.pkColIdxes) > 0
+}
+
+func (h diffOutputRowHeap) Swap(i, j int) {
+	h.rows[i], h.rows[j] = h.rows[j], h.rows[i]
+}
+
+func (h *diffOutputRowHeap) Push(value any) {
+	h.rows = append(h.rows, value.([]any))
+}
+
+func (h *diffOutputRowHeap) Pop() any {
+	last := len(h.rows) - 1
+	value := h.rows[last]
+	h.rows[last] = nil
+	h.rows = h.rows[:last]
+	return value
+}
+
 func satisfyDiffOutputOpt(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -817,13 +857,7 @@ func satisfyDiffOutputOpt(
 	}()
 
 	if stmt.OutputOpt == nil || stmt.OutputOpt.Limit != nil {
-		var (
-			rows = make([][]any, 0, 100)
-		)
-		limitReached := func() bool {
-			return stmt.OutputOpt != nil && stmt.OutputOpt.Limit != nil &&
-				int64(len(rows)) >= *stmt.OutputOpt.Limit
-		}
+		rows := make([][]any, 0, 100)
 
 		// Resolve column projection (nil means show all visible columns).
 		displayIdxes, resolveErr := resolveProjectedIdxes(stmt.Columns, tblStuff)
@@ -854,10 +888,18 @@ func satisfyDiffOutputOpt(
 			rowSize = slices.Max(extractIdxes) + 3
 		}
 
-		if limitReached() {
+		var limit *int64
+		if stmt.OutputOpt != nil {
+			limit = stmt.OutputOpt.Limit
+		}
+		if limit != nil && *limit == 0 {
 			// The limit is already satisfied before consuming any rows (LIMIT 0).
 			hitLimit = true
 			stop()
+		}
+		rowHeap := diffOutputRowHeap{
+			rows:       rows,
+			pkColIdxes: tblStuff.def.pkColIdxes,
 		}
 
 		for wrapped := range retCh {
@@ -892,26 +934,24 @@ func satisfyDiffOutputOpt(
 					}
 				}
 
-				rows = append(rows, row)
-				if limitReached() {
-					// hit limit, cancel producers but keep draining the channel
-					hitLimit = true
-					stop()
-					break
+				if limit == nil {
+					rowHeap.rows = append(rowHeap.rows, row)
+				} else if int64(len(rowHeap.rows)) < *limit {
+					rowHeap.rows = append(rowHeap.rows, row)
+					if int64(len(rowHeap.rows)) == *limit {
+						heap.Init(&rowHeap)
+					}
+				} else if compareDiffOutputRows(row, rowHeap.rows[0], rowHeap.pkColIdxes) < 0 {
+					rowHeap.rows[0] = row
+					heap.Fix(&rowHeap, 0)
 				}
 			}
 			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 		}
 
+		rows = rowHeap.rows
 		slices.SortFunc(rows, func(a, b []any) int {
-			for _, idx := range tblStuff.def.pkColIdxes {
-				if cmp := types.CompareValue(
-					a[idx+2], b[idx+2],
-				); cmp != 0 {
-					return cmp
-				}
-			}
-			return 0
+			return compareDiffOutputRows(a, b, tblStuff.def.pkColIdxes)
 		})
 
 		if displayIdxes != nil {
