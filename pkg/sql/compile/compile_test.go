@@ -849,11 +849,18 @@ func TestCompileLocalShuffleJoinOnlySkipsProvenProbeShuffle(t *testing.T) {
 	tests := []struct {
 		name             string
 		method           plan.ShuffleMethod
+		shuffleType      plan.ShuffleType
 		wantProbeShuffle bool
 	}{
 		{
 			name:             "normal strategy repartitions probe",
 			method:           plan.ShuffleMethod_Normal,
+			wantProbeShuffle: true,
+		},
+		{
+			name:             "normal range strategy repartitions probe",
+			method:           plan.ShuffleMethod_Normal,
+			shuffleType:      plan.ShuffleType_Range,
 			wantProbeShuffle: true,
 		},
 		{
@@ -868,6 +875,7 @@ func TestCompileLocalShuffleJoinOnlySkipsProvenProbeShuffle(t *testing.T) {
 			c := newCompileForShuffleJoinTest(t, engine.Nodes{cn})
 			node := newShuffleJoinTestNode(dop)
 			node.Stats.HashmapStats.ShuffleMethod = tt.method
+			node.Stats.HashmapStats.ShuffleType = tt.shuffleType
 			left := &plan.Node{Stats: &plan.Stats{Dop: dop}}
 			right := &plan.Node{Stats: &plan.Stats{Dop: dop}}
 			probe := newShuffleJoinTestScope(t, cn, int(dop))
@@ -882,6 +890,8 @@ func TestCompileLocalShuffleJoinOnlySkipsProvenProbeShuffle(t *testing.T) {
 			probeInput := result[0].RootOp.GetOperatorBase().GetChildren(0)
 			if tt.wantProbeShuffle {
 				require.IsType(t, &shuffle.Shuffle{}, probeInput)
+				probeShuffle := probeInput.(*shuffle.Shuffle)
+				require.Equal(t, int32(tt.shuffleType), probeShuffle.ShuffleType)
 				require.Same(t, originalProbeRoot, probeInput.GetOperatorBase().GetChildren(0))
 			} else {
 				require.Same(t, originalProbeRoot, probeInput)

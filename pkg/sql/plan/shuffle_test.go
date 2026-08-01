@@ -1034,7 +1034,7 @@ func TestSelectShuffleJoinConditionAdversarialPermutations(t *testing.T) {
 				}},
 			}
 
-			idx, _ := selectShuffleJoinCondition(node, builder, conditions, leftTags, rightTags, false)
+			idx, _ := selectShuffleJoinCondition(node, builder, conditions, leftTags, rightTags, false, nil)
 
 			require.NotEqual(t, -1, idx)
 			require.Same(t, reusable, conditions[idx])

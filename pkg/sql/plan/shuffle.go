@@ -459,6 +459,28 @@ func reuseShuffleStrategy(hashmapStats *plan.HashMapStats, child *plan.Node) {
 	hashmapStats.Nullcnt = childStats.Nullcnt
 }
 
+// restoreRangeStrategyAfterRemap carries only range boundaries derived for the
+// same join condition before remapping. remapAllColRefs mutates OnList
+// expressions in place and never reorders them, so ShuffleColIdx remains the
+// stable condition identity across tempOptimizeForDML. Physical Reuse and the
+// multi-CN Hybrid decision are deliberately excluded: both depend on the
+// current child topology and must be proved again.
+func restoreRangeStrategyAfterRemap(
+	hashmapStats, previous *plan.HashMapStats,
+	candidateIdx int32,
+) bool {
+	if previous == nil || previous.ShuffleColIdx != candidateIdx ||
+		previous.ShuffleType != plan.ShuffleType_Range {
+		return false
+	}
+	hashmapStats.ShuffleType = plan.ShuffleType_Range
+	hashmapStats.ShuffleColMin = previous.ShuffleColMin
+	hashmapStats.ShuffleColMax = previous.ShuffleColMax
+	hashmapStats.Ranges = previous.Ranges
+	hashmapStats.Nullcnt = previous.Nullcnt
+	return true
+}
+
 func maybeSorted(node *plan.Node, builder *QueryBuilder, tag int32) bool {
 	// for scan node, primary key and cluster by may be sorted
 	if node.NodeType == plan.Node_TABLE_SCAN {
@@ -609,6 +631,8 @@ func planShuffleJoinCandidate(
 	condition *plan.Expr,
 	leftHashCol, rightHashCol *plan.ColRef,
 	afterRemap bool,
+	candidateIdx int32,
+	previousHashmapStats *plan.HashMapStats,
 ) (plan.HashMapStats, bool) {
 	candidateNode := *node
 	candidateStats := *node.Stats
@@ -640,7 +664,11 @@ func planShuffleJoinCandidate(
 			if condition.Ndv >= 0 && condition.Ndv < ShuffleThreshHoldOfNDV {
 				return candidateHashmapStats, false
 			}
-			determineNonReusableShuffleType(leftHashCol, &candidateNode, builder, afterRemap)
+			if !afterRemap || !restoreRangeStrategyAfterRemap(
+				&candidateHashmapStats, previousHashmapStats, candidateIdx,
+			) {
+				determineNonReusableShuffleType(leftHashCol, &candidateNode, builder, afterRemap)
+			}
 		}
 	}
 	return candidateHashmapStats, shuffleJoinCandidateSurvivesRecheck(&candidateNode, condition.Ndv)
@@ -657,6 +685,7 @@ func selectShuffleJoinCondition(
 	onList []*plan.Expr,
 	leftTags, rightTags map[int32]bool,
 	afterRemap bool,
+	previousHashmapStats *plan.HashMapStats,
 ) (int, plan.HashMapStats) {
 	firstSupportedIdx := -1
 	var firstSupportedStats plan.HashMapStats
@@ -685,6 +714,7 @@ func selectShuffleJoinCondition(
 
 		candidateStats, eligible := planShuffleJoinCandidate(
 			node, builder, condition, leftHashCol, rightHashCol, afterRemap,
+			int32(i), previousHashmapStats,
 		)
 		if firstSupportedIdx == -1 {
 			firstSupportedIdx = i
@@ -704,6 +734,11 @@ func selectShuffleJoinCondition(
 // createQuery has remapped column references to local RelPos 0/1, so they must
 // use the positional form instead.
 func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilder, afterRemap bool) {
+	var previousHashmapStats *plan.HashMapStats
+	if afterRemap {
+		previous := *node.Stats.HashmapStats
+		previousHashmapStats = &previous
+	}
 	// do not shuffle by default
 	node.Stats.HashmapStats.Shuffle = false
 	node.Stats.HashmapStats.ShuffleColIdx = -1
@@ -764,6 +799,7 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 	}
 	idx, candidateHashmapStats := selectShuffleJoinCondition(
 		node, builder, node.OnList, leftTags, rightTags, afterRemap,
+		previousHashmapStats,
 	)
 	if idx == -1 {
 		return
