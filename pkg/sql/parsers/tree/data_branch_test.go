@@ -451,11 +451,7 @@ func TestDataBranchPickFormat(t *testing.T) {
 	}
 	ctx := NewFmtCtx(0)
 	stmt.Format(ctx)
-	require.Contains(t, ctx.String(), "data branch pick")
-	require.Contains(t, ctx.String(), "src")
-	require.Contains(t, ctx.String(), "into")
-	require.Contains(t, ctx.String(), "dst")
-	require.Contains(t, ctx.String(), "keys (")
+	require.Equal(t, "data branch pick `src` into `dst` keys (1, 2)", ctx.String())
 
 	// With BETWEEN SNAPSHOT
 	stmt2 := &DataBranchPick{
@@ -466,10 +462,7 @@ func TestDataBranchPickFormat(t *testing.T) {
 	}
 	ctx = NewFmtCtx(0)
 	stmt2.Format(ctx)
-	result := ctx.String()
-	require.Contains(t, result, "between snapshot")
-	require.Contains(t, result, "snap_start")
-	require.Contains(t, result, "snap_end")
+	require.Equal(t, "data branch pick `src` into `dst` between snapshot 'snap_start' and 'snap_end'", ctx.String())
 
 	// With conflict options
 	for _, tt := range []struct {
@@ -491,6 +484,6 @@ func TestDataBranchPickFormat(t *testing.T) {
 		}
 		ctx = NewFmtCtx(0)
 		stmt3.Format(ctx)
-		require.Contains(t, ctx.String(), "when conflict "+tt.expect)
+		require.Equal(t, "data branch pick `src` into `dst` keys (1) when conflict "+tt.expect, ctx.String())
 	}
 }

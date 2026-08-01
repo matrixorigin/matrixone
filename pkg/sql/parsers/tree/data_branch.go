@@ -378,7 +378,7 @@ func (o *DiffOutputOpt) Format(ctx *FmtCtx) {
 		ctx.WriteString("summary")
 	default:
 		ctx.WriteString("file ")
-		NewNumVal(o.DirPath, o.DirPath, false, P_char).Format(ctx)
+		formatDataBranchString(ctx, o.DirPath)
 	}
 }
 
@@ -741,33 +741,39 @@ func (s *DataBranchPick) StmtKind() StmtKind {
 }
 
 func (s *DataBranchPick) Format(ctx *FmtCtx) {
-	ctx.WriteString("data branch pick ")
-	s.SrcTable.Format(ctx)
-	ctx.WriteString(" into ")
-	s.DstTable.Format(ctx)
-	if s.BetweenFrom != "" && s.BetweenTo != "" {
-		ctx.WriteString(" between snapshot ")
-		ctx.WriteString(s.BetweenFrom)
-		ctx.WriteString(" and ")
-		ctx.WriteString(s.BetweenTo)
-	}
-	if s.Keys != nil {
-		ctx.WriteString(" keys (")
-		if s.Keys.Type == PickKeysSubquery && s.Keys.Select != nil {
-			s.Keys.Select.Format(ctx)
-		} else {
-			for i, e := range s.Keys.KeyExprs {
-				if i > 0 {
-					ctx.WriteString(", ")
-				}
-				e.Format(ctx)
-			}
+	formatDataBranchStatement(ctx, func() {
+		ctx.WriteString("data branch pick ")
+		s.SrcTable.Format(ctx)
+		ctx.WriteString(" into ")
+		s.DstTable.Format(ctx)
+		if s.BetweenFrom != "" && s.BetweenTo != "" {
+			ctx.WriteString(" between snapshot ")
+			formatDataBranchString(ctx, s.BetweenFrom)
+			ctx.WriteString(" and ")
+			formatDataBranchString(ctx, s.BetweenTo)
 		}
-		ctx.WriteByte(')')
-	}
-	if s.ConflictOpt != nil {
-		s.ConflictOpt.Format(ctx)
-	}
+		if s.Keys != nil {
+			ctx.WriteString(" keys (")
+			if s.Keys.Type == PickKeysSubquery && s.Keys.Select != nil {
+				s.Keys.Select.Format(ctx)
+			} else {
+				for i, e := range s.Keys.KeyExprs {
+					if i > 0 {
+						ctx.WriteString(", ")
+					}
+					e.Format(ctx)
+				}
+			}
+			ctx.WriteByte(')')
+		}
+		if s.ConflictOpt != nil {
+			s.ConflictOpt.Format(ctx)
+		}
+	})
+}
+
+func formatDataBranchString(ctx *FmtCtx, value string) {
+	NewNumVal(value, value, false, P_char).Format(ctx)
 }
 
 func formatDataBranchStatement(ctx *FmtCtx, format func()) {

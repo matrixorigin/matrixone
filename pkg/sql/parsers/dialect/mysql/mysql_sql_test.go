@@ -855,6 +855,73 @@ func TestDataBranchStatementFormatRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDataBranchPickFormatRoundTrip(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		sql          string
+		want         string
+		wantSrcDB    tree.Identifier
+		wantSrc      tree.Identifier
+		wantDst      tree.Identifier
+		wantFrom     string
+		wantTo       string
+		wantKeys     bool
+		wantConflict int
+	}{
+		{
+			name:         "quoted tables",
+			sql:          "data branch pick `select`.`src``table` into `dst``table` keys (1) when conflict skip",
+			want:         "data branch pick `select`.`src``table` into `dst``table` keys (1) when conflict skip",
+			wantSrcDB:    tree.Identifier("select"),
+			wantSrc:      tree.Identifier("src`table"),
+			wantDst:      tree.Identifier("dst`table"),
+			wantKeys:     true,
+			wantConflict: tree.CONFLICT_SKIP,
+		},
+		{
+			name:         "string snapshots",
+			sql:          "data branch pick src into dst between snapshot 'snap one' and 'snap''two' when conflict accept",
+			want:         "data branch pick `src` into `dst` between snapshot 'snap one' and 'snap''two' when conflict accept",
+			wantSrc:      tree.Identifier("src"),
+			wantDst:      tree.Identifier("dst"),
+			wantFrom:     "snap one",
+			wantTo:       "snap'two",
+			wantConflict: tree.CONFLICT_ACCEPT,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			formatted := tree.String(stmt, dialect.MYSQL)
+			require.Equal(t, test.want, formatted)
+
+			reparsed, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err)
+			defer reparsed.Free()
+
+			pick, ok := reparsed.(*tree.DataBranchPick)
+			require.True(t, ok)
+			require.Equal(t, test.wantSrcDB, pick.SrcTable.SchemaName)
+			require.Equal(t, test.wantSrc, pick.SrcTable.ObjectName)
+			require.Equal(t, test.wantDst, pick.DstTable.ObjectName)
+			require.Equal(t, test.wantFrom, pick.BetweenFrom)
+			require.Equal(t, test.wantTo, pick.BetweenTo)
+			if test.wantKeys {
+				require.NotNil(t, pick.Keys)
+				require.Equal(t, tree.PickKeysValues, pick.Keys.Type)
+				require.Len(t, pick.Keys.KeyExprs, 1)
+			} else {
+				require.Nil(t, pick.Keys)
+			}
+			require.NotNil(t, pick.ConflictOpt)
+			require.Equal(t, test.wantConflict, pick.ConflictOpt.Opt)
+			require.Equal(t, formatted, tree.String(reparsed, dialect.MYSQL))
+		})
+	}
+}
+
 func TestDataBranchDiffOutputModes(t *testing.T) {
 	stmt, err := ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} output summary`, 1)
 	require.NoError(t, err)
