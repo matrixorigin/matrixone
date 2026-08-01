@@ -144,31 +144,32 @@ func (job *checkpointJob) doGlobalCheckpoint(
 
 	entry.SetLocation(location, location)
 
-	var tableIDSourceLocation objectio.Location
-	tableIDSourceVersion := predecessor.GetVersion()
 	predecessorTableIDLocation := predecessor.GetTableIDLocation()
-	if predecessorTableIDLocation.Len() == 0 {
-		tableIDSourceLocation = location
-		tableIDSourceVersion = entry.GetVersion()
+	// An absent predecessor index does not prove how much history its checkpoint
+	// contains. Keep the new index empty so changed-table discovery
+	// falls back to the durable checkpoint data instead of trusting a partial index.
+	if predecessorTableIDLocation.Len() > 0 {
+		var emptyLocation objectio.Location
+		tableIDLocation, syncErr := logtail.SyncTableIDBatch(
+			job.executor.ctx,
+			entry.start,
+			entry.end,
+			job.executor.cfg.TableIDHistoryDuration,
+			job.executor.cfg.TableIDSinkerThreshold,
+			emptyLocation,
+			predecessor.GetVersion(),
+			predecessorTableIDLocation,
+			common.CheckpointAllocator,
+			runner.rt.Fs,
+		)
+		if syncErr != nil {
+			runner.store.RemoveGCKPIntent()
+			errPhase = "sync-table-id"
+			err = syncErr
+			return
+		}
+		entry.SetTableIDLocation(tableIDLocation)
 	}
-	tableIDLocation, err := logtail.SyncTableIDBatch(
-		job.executor.ctx,
-		entry.start,
-		entry.end,
-		job.executor.cfg.TableIDHistoryDuration,
-		job.executor.cfg.TableIDSinkerThreshold,
-		tableIDSourceLocation,
-		tableIDSourceVersion,
-		predecessorTableIDLocation,
-		common.CheckpointAllocator,
-		runner.rt.Fs,
-	)
-	if err != nil {
-		runner.store.RemoveGCKPIntent()
-		errPhase = "sync-table-id"
-		return
-	}
-	entry.SetTableIDLocation(tableIDLocation)
 
 	files = append(files, location.Name().String())
 	var name string
