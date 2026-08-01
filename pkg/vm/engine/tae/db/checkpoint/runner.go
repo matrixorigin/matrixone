@@ -62,6 +62,10 @@ type gckpContext struct {
 	histroyRetention time.Duration
 	truncateLSN      uint64
 	ckpLSN           uint64
+	// predecessor is the finished incremental checkpoint covered by end.
+	// Keeping the entry in the request pins the metadata needed by GCKP even
+	// if checkpoint GC removes the entry from the runner store concurrently.
+	predecessor *CheckpointEntry
 }
 
 func (g gckpContext) String() string {
@@ -89,6 +93,7 @@ func (g *gckpContext) Merge(other *gckpContext) {
 	g.histroyRetention = other.histroyRetention
 	g.truncateLSN = other.truncateLSN
 	g.ckpLSN = other.ckpLSN
+	g.predecessor = other.predecessor
 }
 
 // Q: What does runner do?

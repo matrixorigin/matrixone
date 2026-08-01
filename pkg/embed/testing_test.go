@@ -30,8 +30,8 @@ func (panicTestReporter) Fatalf(format string, args ...any) {
 	panic(fmt.Sprintf(format, args...))
 }
 
-func TestOnceClusterReportsInitializationError(t *testing.T) {
-	state := onceCluster{}
+func TestSharedTestClusterReportsInitializationError(t *testing.T) {
+	state := SharedTestCluster{}
 	wantErr := errors.New("cluster startup failed")
 	initCalls := 0
 	testCalls := 0
@@ -46,12 +46,57 @@ func TestOnceClusterReportsInitializationError(t *testing.T) {
 	reporter := panicTestReporter{}
 	for range 2 {
 		require.PanicsWithValue(t,
-			"failed to initialize base cluster: cluster startup failed",
+			"failed to initialize shared cluster: cluster startup failed",
 			func() {
-				state.run(reporter, init, test)
+				state.Run(reporter, init, test)
 			},
 		)
 	}
 	require.Equal(t, 1, initCalls)
 	require.Zero(t, testCalls)
+}
+
+func TestSharedTestClusterRejectsNilInitialization(t *testing.T) {
+	state := SharedTestCluster{}
+	reporter := panicTestReporter{}
+
+	require.PanicsWithValue(t,
+		"failed to initialize shared cluster: internal error: cluster initializer returned nil without an error",
+		func() {
+			state.Run(reporter, func() (Cluster, error) {
+				return nil, nil
+			}, func(Cluster) {
+				t.Fatal("test callback must not run")
+			})
+		},
+	)
+}
+
+func TestSharedTestClusterClosesFailedInitialization(t *testing.T) {
+	lease, err := acquireClusterPortLease()
+	require.NoError(t, err)
+	value := &cluster{
+		portLease:     lease,
+		portLeaseBase: lease.base,
+		portLeaseNext: lease.base,
+	}
+	t.Cleanup(func() {
+		if value.portLease != nil {
+			require.NoError(t, value.releasePortLeaseLocked())
+		}
+	})
+
+	state := SharedTestCluster{}
+	require.PanicsWithValue(t,
+		"failed to initialize shared cluster: cluster startup failed",
+		func() {
+			state.Run(panicTestReporter{}, func() (Cluster, error) {
+				return value, errors.New("cluster startup failed")
+			}, func(Cluster) {
+				t.Fatal("test callback must not run")
+			})
+		},
+	)
+	require.Nil(t, value.portLease)
+	require.Nil(t, state.cluster)
 }

@@ -96,15 +96,48 @@ func (s *runnerStore) GetCheckpointed() types.TS {
 
 func (s *runnerStore) MaxIncrementalCheckpoint() *CheckpointEntry {
 	s.RLock()
-	maxEntry, _ := s.incrementals.Max()
-	s.RUnlock()
-	if maxEntry == nil || maxEntry.IsFinished() {
-		return maxEntry
+	defer s.RUnlock()
+	return s.maxFinishedIncrementalCheckpointLocked()
+}
+
+// MaxCheckpoint returns the finished checkpoint with the greatest end TS.
+// A global checkpoint can cover incremental checkpoints which are then
+// removed by checkpoint GC, so callers that need a durable progress boundary
+// must not rely on MaxIncrementalCheckpoint alone.
+func (s *runnerStore) MaxCheckpoint() *CheckpointEntry {
+	s.RLock()
+	defer s.RUnlock()
+
+	max := s.MaxFinishedGlobalCheckpointLocked()
+	incremental := s.maxFinishedIncrementalCheckpointLocked()
+	if incremental == nil {
+		return max
 	}
-	entries := s.GetAllIncrementalCheckpoints()
-	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].IsFinished() {
-			return entries[i]
+	if max == nil {
+		return incremental
+	}
+	incrementalEnd := incremental.GetEnd()
+	maxEnd := max.GetEnd()
+	if incrementalEnd.GT(&maxEnd) {
+		return incremental
+	}
+	return max
+}
+
+func (s *runnerStore) maxFinishedIncrementalCheckpointLocked() *CheckpointEntry {
+	entry, ok := s.incrementals.Max()
+	if !ok {
+		return nil
+	}
+	if entry.IsFinished() {
+		return entry
+	}
+	it := s.incrementals.Iter()
+	defer it.Release()
+	it.Seek(entry)
+	for it.Prev() {
+		if it.Item().IsFinished() {
+			return it.Item()
 		}
 	}
 	return nil
@@ -552,20 +585,22 @@ func (s *runnerStore) GetAllCheckpoints() []*CheckpointEntry {
 }
 
 func (s *runnerStore) MaxFinishedGlobalCheckpointLocked() *CheckpointEntry {
-	g, ok := s.globals.Max()
+	entry, ok := s.globals.Max()
 	if !ok {
 		return nil
 	}
-	if g.IsFinished() {
-		return g
+	if entry.IsFinished() {
+		return entry
 	}
 	it := s.globals.Iter()
-	it.Seek(g)
 	defer it.Release()
-	if !it.Prev() {
-		return nil
+	it.Seek(entry)
+	for it.Prev() {
+		if it.Item().IsFinished() {
+			return it.Item()
+		}
 	}
-	return it.Item()
+	return nil
 }
 
 // GetIncrementalCountAfterGlobal returns the number of incremental checkpoints that are not covered by the latest global checkpoint.
@@ -693,20 +728,8 @@ func (s *runnerStore) ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry {
 // return the max finished global checkpoint
 func (s *runnerStore) MaxGlobalCheckpoint() *CheckpointEntry {
 	s.RLock()
-	global, _ := s.globals.Max()
-	s.RUnlock()
-	if global == nil || global.IsFinished() {
-		return global
-	}
-	s.Lock()
-	items := s.globals.Items()
-	s.Unlock()
-	for i := len(items) - 1; i >= 0; i-- {
-		if items[i].IsFinished() {
-			return items[i]
-		}
-	}
-	return nil
+	defer s.RUnlock()
+	return s.MaxFinishedGlobalCheckpointLocked()
 }
 
 func (s *runnerStore) IsStale(ts *types.TS) bool {
@@ -904,26 +927,15 @@ func (s *runnerStore) minTSLocked() types.TS {
 
 // here we only consider the global checkpoints as the safe GC timestamp
 func (s *runnerStore) getSafeGCTSLocked() (ts types.TS) {
-	if s.globals.Len() <= 1 {
-		return
-	}
-	maxGlobal, _ := s.globals.Max()
-	// if there's no global checkpoint, no need to GC
+	// A pending GCKP is not a durable replacement for its incremental
+	// predecessor. Advancing GC from an intent can remove the only finished
+	// checkpoint before the GCKP commits, leaving no recoverable boundary if
+	// the job fails. Only a finished global checkpoint can make earlier
+	// checkpoint entries collectible.
+	maxGlobal := s.MaxFinishedGlobalCheckpointLocked()
 	if maxGlobal == nil {
 		return
 	}
-	// if the max global checkpoint is finished, we can GC checkpoints before it
-	if maxGlobal.IsFinished() {
-		ts = maxGlobal.GetEnd()
-		ts = ts.Prev()
-		return
-	}
-	// only one non-finished global checkpoint, no need to GC
-	if s.globals.Len() == 1 {
-		return
-	}
-	items := s.globals.Items()
-	maxGlobal = items[len(items)-1]
 	ts = maxGlobal.GetEnd()
 	ts = ts.Prev()
 	return

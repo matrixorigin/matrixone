@@ -760,6 +760,55 @@ func Test_RunnerStore7(t *testing.T) {
 	assert.NoError(t, err)
 
 }
+
+func TestRunnerStoreMaxCheckpoint(t *testing.T) {
+	store := newRunnerStore("", time.Second, time.Second*1000)
+
+	previousGlobalEnd := types.NextGlobalTsForTest()
+	previousGlobal := NewCheckpointEntry("", types.TS{}, previousGlobalEnd, ET_Global)
+	previousGlobal.SetState(ST_Finished)
+	assert.True(t, store.AddGCKPFinishedEntry(previousGlobal))
+	assert.Same(t, previousGlobal, store.MaxCheckpoint())
+
+	incrementalEnd := types.NextGlobalTsForTest()
+	incremental := NewCheckpointEntry("", previousGlobalEnd, incrementalEnd, ET_Incremental)
+	incremental.SetState(ST_Finished)
+	assert.True(t, store.AddICKPFinishedEntry(incremental))
+	assert.Same(t, incremental, store.MaxCheckpoint())
+	inFlightGlobal := gckpContext{end: incrementalEnd, predecessor: incremental}
+
+	globalEnd := incrementalEnd.Next()
+	global := NewCheckpointEntry("", types.TS{}, globalEnd, ET_Global)
+	assert.True(t, store.AddGCKPIntent(global))
+
+	// A pending GCKP must not advance the durable GC boundary or remove the
+	// predecessor it still needs to commit.
+	_, updated := store.UpdateGCIntent(&globalEnd)
+	assert.True(t, updated)
+	globalDeleted, incrementalDeleted := store.TryGC()
+	assert.Zero(t, globalDeleted)
+	assert.Zero(t, incrementalDeleted)
+	assert.Same(t, incremental, store.MaxIncrementalCheckpoint())
+	assert.Same(t, incremental, store.MaxCheckpoint())
+
+	// Once the GCKP is finished it durably replaces both the old global and its
+	// incremental predecessor, so the same GC intent can collect them.
+	global.SetState(ST_Finished)
+	globalDeleted, incrementalDeleted = store.TryGC()
+	assert.Equal(t, 1, globalDeleted)
+	assert.Equal(t, 1, incrementalDeleted)
+	assert.Nil(t, store.MaxIncrementalCheckpoint())
+	assert.Same(t, global, store.MaxCheckpoint())
+	assert.Same(t, incremental, inFlightGlobal.predecessor)
+	assert.True(t, inFlightGlobal.predecessor.IsFinished())
+	assert.Equal(t, incrementalEnd, inFlightGlobal.predecessor.GetEnd())
+
+	newIncrementalEnd := types.NextGlobalTsForTest()
+	newIncremental := NewCheckpointEntry("", globalEnd, newIncrementalEnd, ET_Incremental)
+	newIncremental.SetState(ST_Finished)
+	assert.True(t, store.AddICKPFinishedEntry(newIncremental))
+	assert.Same(t, newIncremental, store.MaxCheckpoint())
+}
 func Test_Executor1(t *testing.T) {
 	var (
 		gctx1, gctx2 gckpContext
@@ -771,12 +820,14 @@ func Test_Executor1(t *testing.T) {
 	gctx2.histroyRetention = time.Duration(1)
 	gctx2.ckpLSN = 100
 	gctx2.truncateLSN = 10
+	gctx2.predecessor = NewCheckpointEntry("", gctx1.end, gctx2.end, ET_Incremental)
 	gctx1.Merge(&gctx2)
 	assert.True(t, gctx1.force)
 	assert.Equal(t, gctx2.end, gctx1.end)
 	assert.Equal(t, gctx2.histroyRetention, gctx1.histroyRetention)
 	assert.Equal(t, gctx2.ckpLSN, gctx1.ckpLSN)
 	assert.Equal(t, gctx2.truncateLSN, gctx1.truncateLSN)
+	assert.Same(t, gctx2.predecessor, gctx1.predecessor)
 
 	executor := newCheckpointExecutor(nil, nil)
 	assert.True(t, executor.active.Load())

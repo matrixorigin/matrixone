@@ -113,15 +113,9 @@ func (h *Handle) HandleSnapshotRead(
 		v2.TaskSnapshotReadReqDurationHistogram.Observe(time.Since(now).Seconds())
 	}()
 	maxEnd := types.TS{}
-	maxCheckpoint := h.db.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	maxCheckpoint := h.db.BGCheckpointRunner.MaxCheckpoint()
 	if maxCheckpoint != nil {
 		maxEnd = maxCheckpoint.GetEnd()
-	}
-	if maxEnd.IsEmpty() {
-		maxGlobal := h.db.BGCheckpointRunner.MaxGlobalCheckpoint()
-		if maxGlobal != nil {
-			maxEnd = maxGlobal.GetEnd()
-		}
 	}
 	snapshot := types.TimestampToTS(*req.Snapshot)
 	if snapshot.GT(&maxEnd) {
@@ -258,26 +252,9 @@ func getChangedListFromCheckpoints(
 			zap.String("hint", hint))
 	}
 
-	var ckp *checkpoint.CheckpointEntry
-	maxICKP := h.GetDB().BGCheckpointRunner.MaxIncrementalCheckpoint()
-	maxGCKP := h.GetDB().BGCheckpointRunner.MaxGlobalCheckpoint()
-	if maxICKP == nil && maxGCKP == nil {
+	ckp := h.GetDB().BGCheckpointRunner.MaxCheckpoint()
+	if ckp == nil {
 		return
-	}
-	if maxICKP == nil {
-		ckp = maxGCKP
-	}
-	if maxGCKP == nil {
-		ckp = maxICKP
-	}
-	if maxICKP != nil && maxGCKP != nil {
-		gckpEnd := maxGCKP.GetEnd()
-		ickpEnd := maxICKP.GetEnd()
-		if ickpEnd.GT(&gckpEnd) {
-			ckp = maxICKP
-		} else {
-			ckp = maxGCKP
-		}
 	}
 
 	tableIDLocation := ckp.GetTableIDLocation()

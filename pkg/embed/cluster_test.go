@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/gofrs/flock"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -75,7 +77,7 @@ func TestOperatorOwnsConstructedServiceBeforeStart(t *testing.T) {
 }
 
 func TestBasicCluster(t *testing.T) {
-	c, err := NewCluster(
+	c, err := StartTestCluster(
 		WithCNCount(3),
 		WithPreStart(
 			func(svc ServiceOperator) {
@@ -90,7 +92,6 @@ func TestBasicCluster(t *testing.T) {
 		),
 	)
 	require.NoError(t, err)
-	require.NoError(t, c.Start())
 	defer func() {
 		require.NoError(t, c.Close())
 	}()
@@ -142,7 +143,7 @@ func TestHAKeeperHeartbeatTimeoutHonorsLegacyTNConfig(t *testing.T) {
 }
 
 func TestSingleCNCluster(t *testing.T) {
-	c, err := NewCluster()
+	c, err := NewCluster(WithTesting())
 	require.NoError(t, err)
 	require.NoError(t, c.Start())
 	defer func() {
@@ -160,9 +161,8 @@ func TestSingleCNCluster(t *testing.T) {
 }
 
 func TestClusterCanStartNewCNServices(t *testing.T) {
-	c, err := NewCluster(WithCNCount(3))
+	c, err := StartTestCluster(WithCNCount(3))
 	require.NoError(t, err)
-	require.NoError(t, c.Start())
 	defer func() {
 		require.NoError(t, c.Close())
 	}()
@@ -176,43 +176,38 @@ func TestClusterCanStartNewCNServices(t *testing.T) {
 }
 
 func TestMultiClusterCanWork(t *testing.T) {
-	new := func() Cluster {
-		c, err := NewCluster(WithCNCount(3))
+	new := func() *cluster {
+		value, err := StartTestCluster(WithCNCount(1))
 		require.NoError(t, err)
-		require.NoError(t, c.Start())
 		t.Cleanup(func() {
-			require.NoError(t, c.Close())
+			require.NoError(t, value.Close())
 		})
-
-		validCNCanWork(t, c, 0)
-		validCNCanWork(t, c, 1)
-		validCNCanWork(t, c, 2)
-		return c
+		return value.(*cluster)
 	}
 
-	new()
-	new()
+	first := new()
+	second := new()
+	require.NotEqual(t, first.ID(), second.ID())
+	require.NotEqual(t, first.options.dataPath, second.options.dataPath)
+	require.NotEqual(t, first.portLease.base, second.portLease.base)
+	validCNCanWork(t, first, 0)
+	validCNCanWork(t, second, 0)
 }
 
 func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
 	RunBaseClusterTests(t,
 		func(c Cluster) {
 			validCNCanWork(t, c, 0)
-			validCNCanWork(t, c, 1)
-			validCNCanWork(t, c, 2)
 		},
 	)
 
-	c, err := NewCluster(WithCNCount(3))
+	c, err := StartTestCluster(WithCNCount(1))
 	require.NoError(t, err)
-	require.NoError(t, c.Start())
 	defer func() {
 		require.NoError(t, c.Close())
 	}()
 
 	validCNCanWork(t, c, 0)
-	validCNCanWork(t, c, 1)
-	validCNCanWork(t, c, 2)
 }
 
 func TestBaseClusterOnlyStartOnce(t *testing.T) {
@@ -402,6 +397,97 @@ func TestGetInitValueWithEmptyNameMustPanic(t *testing.T) {
 	getInitValue("")
 }
 
+func TestClusterPortLeasesAreExclusive(t *testing.T) {
+	first, err := acquireClusterPortLease()
+	require.NoError(t, err)
+	firstCluster := &cluster{
+		id:            1,
+		portLease:     first,
+		portLeaseBase: first.base,
+		portLeaseNext: first.base,
+	}
+	t.Cleanup(func() {
+		if firstCluster.portLease != nil {
+			require.NoError(t, firstCluster.releasePortLeaseLocked())
+		}
+	})
+
+	second, err := acquireClusterPortLease()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, second.lock.Close()) })
+
+	require.NotEqual(t, first.base, second.base)
+	if first.base < second.base {
+		require.GreaterOrEqual(t, second.base-first.base, portLeaseSpan)
+	} else {
+		require.GreaterOrEqual(t, first.base-second.base, portLeaseSpan)
+	}
+
+	firstPort := firstCluster.nextBasePort()
+	require.Greater(t, firstPort, int(first.base))
+	require.Less(t, firstPort, int(first.base+portLeaseSpan))
+
+	require.NoError(t, firstCluster.releasePortLeaseLocked())
+	contender, locked, err := tryAcquireClusterPortLease(first.base)
+	require.NoError(t, err)
+	require.True(t, locked)
+	require.Error(t, firstCluster.ensurePortLeaseLocked())
+	require.NoError(t, contender.lock.Close())
+	require.NoError(t, firstCluster.ensurePortLeaseLocked())
+	require.Equal(t, firstPort+int(basePortStep), firstCluster.nextBasePort())
+	require.NoError(t, firstCluster.releasePortLeaseLocked())
+}
+
+func TestClusterStartupLeaseIsExclusive(t *testing.T) {
+	first, err := acquireClusterStartupLease(context.Background())
+	require.NoError(t, err)
+	firstClosed := false
+	t.Cleanup(func() {
+		if !firstClosed {
+			require.NoError(t, first.Close())
+		}
+	})
+
+	contender := flock.New(filepath.Join(os.TempDir(), clusterStartupLeaseFilename))
+	locked, err := contender.TryLock()
+	require.NoError(t, err)
+	require.False(t, locked)
+	require.NoError(t, contender.Close())
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = acquireClusterStartupLease(canceledCtx)
+	require.ErrorIs(t, err, context.Canceled)
+
+	require.NoError(t, first.Close())
+	firstClosed = true
+	next, err := acquireClusterStartupLease(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, next.Close())
+}
+
+func TestWithTestingUsesCoherentHAKeeperTimeouts(t *testing.T) {
+	clusterValue, err := NewCluster(WithTesting())
+	require.NoError(t, err)
+	c := clusterValue.(*cluster)
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+
+	for _, svc := range c.services {
+		cfg := svc.GetServiceConfig()
+		switch svc.ServiceType() {
+		case metadata.ServiceType_CN:
+			require.Equal(t, testHAKeeperHeartbeatTimeout, cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
+		case metadata.ServiceType_TN:
+			require.Equal(t, testHAKeeperHeartbeatTimeout,
+				cfg.getTNServiceConfig().HAKeeper.HeatbeatTimeout.Duration)
+		case metadata.ServiceType_LOG:
+			require.Equal(t, testHAKeeperStoreTimeout,
+				cfg.LogService.HAKeeperConfig.TNStoreTimeout.Duration)
+			require.Equal(t, testHAKeeperStoreTimeout,
+				cfg.LogService.HAKeeperConfig.CNStoreTimeout.Duration)
+		}
+	}
+}
+
 func validCNCanWork(
 	t *testing.T,
 	c Cluster,
@@ -546,6 +632,8 @@ func TestDoStartLockedErrorPaths(t *testing.T) {
 
 func TestClusterStartRollbackClosesPartiallyStartedServices(t *testing.T) {
 	startErr := errors.New("TN wait for HAKeeper timed out")
+	portLease, err := acquireClusterPortLease()
+	require.NoError(t, err)
 	logService := &closeTrackingService{}
 	logFS := &closeTrackingFileService{}
 	tnFS := &closeTrackingFileService{}
@@ -561,8 +649,16 @@ func TestClusterStartRollbackClosesPartiallyStartedServices(t *testing.T) {
 	tnOp := &operator{serviceType: metadata.ServiceType_TN}
 	cnOp := &operator{serviceType: metadata.ServiceType_CN}
 	c := &cluster{
-		services: []*operator{logOp, tnOp, cnOp},
+		services:      []*operator{logOp, tnOp, cnOp},
+		portLease:     portLease,
+		portLeaseBase: portLease.base,
+		portLeaseNext: portLease.base,
 	}
+	t.Cleanup(func() {
+		if c.portLease != nil {
+			require.NoError(t, c.releasePortLeaseLocked())
+		}
+	})
 	c.startFn = func(op *operator) error {
 		switch op.serviceType {
 		case metadata.ServiceType_LOG:
@@ -583,7 +679,7 @@ func TestClusterStartRollbackClosesPartiallyStartedServices(t *testing.T) {
 		return nil
 	}
 
-	err := c.Start()
+	err = c.Start()
 	require.ErrorIs(t, err, startErr)
 	require.Equal(t, int32(1), logService.closeCount.Load())
 	require.Equal(t, int32(1), logFS.closeCount.Load())

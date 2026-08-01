@@ -5347,12 +5347,6 @@ func TestReadCheckpoint(t *testing.T) {
 	defer bat.Close()
 
 	tae.CreateRelAndAppend(bat, true)
-	now := time.Now()
-	tae.WaitAllCheckpointsFinished()
-	t.Log(time.Since(now))
-	t.Logf("Checkpointed: %d", tae.Runtime.Scheduler.GetCheckpointedLSN())
-	t.Logf("GetPenddingLSNCnt: %d", tae.Runtime.Scheduler.GetPenddingLSNCnt())
-	assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
 	tids := []uint64{
 		pkgcatalog.MO_DATABASE_ID,
 		pkgcatalog.MO_TABLES_ID,
@@ -5360,59 +5354,61 @@ func TestReadCheckpoint(t *testing.T) {
 		1000,
 	}
 
-	now = time.Now()
-	tae.WaitAllCheckpointsFinished()
-	t.Log(time.Since(now))
-
-	now = time.Now()
-	testutils.WaitExpect(10000, func() bool {
-		return tae.BGCheckpointRunner.GetIncrementalCountAfterGlobal() == 0
-	})
-	t.Log(time.Since(now))
-	assert.Equal(t, 0, tae.BGCheckpointRunner.GetIncrementalCountAfterGlobal())
+	checkpointTarget := tae.TxnMgr.Now()
+	checkpointCtx, cancelCheckpoint := context.WithTimeout(ctx, testutil.TestCheckpointTimeout)
+	require.NoError(t, tae.DB.ForceGlobalCheckpoint(checkpointCtx, checkpointTarget, 0))
+	cancelCheckpoint()
+	global := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
+	require.NotNil(t, global)
+	require.True(t, global.IsFinished())
+	globalEnd := global.GetEnd()
+	require.Truef(t, globalEnd.GE(&checkpointTarget),
+		"global checkpoint end %s does not cover target %s",
+		globalEnd.ToString(), checkpointTarget.ToString())
 
 	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	err = tae.BGCheckpointRunner.GCByTS(context.Background(), gcTS)
-	assert.NoError(t, err)
-	now = time.Now()
-	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
-	testutils.WaitExpect(10000, func() bool {
-		tae.BGCheckpointRunner.GCNeeded()
+	require.NoError(t, tae.BGCheckpointRunner.GCByTS(context.Background(), gcTS))
+	require.Eventually(t, func() bool {
 		return !tae.BGCheckpointRunner.GCNeeded()
-	})
-	t.Log(time.Since(now))
-	assert.False(t, tae.BGCheckpointRunner.GCNeeded())
-	entries := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
-	for _, entry := range entries {
-		t.Log(entry.String())
-		t.Log(entry.JsonString())
+	}, testutil.TestCheckpointTimeout, 10*time.Millisecond,
+		"checkpoint GC did not consume intent through %s", gcTS.ToString())
+
+	readCheckpoint := func(entry *checkpoint.CheckpointEntry) {
+		t.Helper()
 		ranges, err := entry.GetTableRanges(ctx, common.CheckpointAllocator, tae.Runtime.Fs)
-		assert.NoError(t, err)
-		rangeJson, err := json.Marshal(ranges)
-		assert.NoError(t, err)
-		t.Log(string(rangeJson))
+		require.NoError(t, err)
+		rangeJSON, err := json.Marshal(ranges)
+		require.NoError(t, err)
+		t.Log(string(rangeJSON))
 
 		ranges, err = entry.GetTableRangesByID(ctx, 1000, common.CheckpointAllocator, tae.Runtime.Fs)
-		assert.NoError(t, err)
-		rangeJson, err = json.Marshal(ranges)
-		assert.NoError(t, err)
-		t.Log(string(rangeJson))
-	}
-	for _, entry := range entries {
+		require.NoError(t, err)
+		rangeJSON, err = json.Marshal(ranges)
+		require.NoError(t, err)
+		t.Log(string(rangeJSON))
+
 		for _, tid := range tids {
-			_, err := entry.GetTableByID(context.Background(), tae.Runtime.Fs, tid, common.CheckpointAllocator)
-			assert.NoError(t, err)
+			_, err := entry.GetTableByID(ctx, tae.Runtime.Fs, tid, common.CheckpointAllocator)
+			require.NoError(t, err)
 			t.Logf("table %d", tid)
 		}
 	}
-	tae.Restart(ctx)
-	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
-	entry := entries[len(entries)-1]
-	for _, tid := range tids {
-		_, err := entry.GetTableByID(context.Background(), tae.Runtime.Fs, tid, common.CheckpointAllocator)
-		assert.NoError(t, err)
-		t.Logf("table %d", tid)
+
+	entries := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
+	require.NotEmpty(t, entries)
+	for _, entry := range entries {
+		t.Log(entry.String())
+		t.Log(entry.JsonString())
+		readCheckpoint(entry)
 	}
+
+	tae.Restart(ctx)
+	replayed := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
+	require.NotNil(t, replayed)
+	require.True(t, replayed.IsFinished())
+	replayedEnd := replayed.GetEnd()
+	require.True(t, replayedEnd.GE(&globalEnd))
+	readCheckpoint(replayed)
 }
 
 func TestDelete4(t *testing.T) {
@@ -7684,6 +7680,92 @@ func TestAppendAndGC2(t *testing.T) {
 	}
 }
 
+func waitForMinMergedCheckpoint(
+	t *testing.T,
+	database *db.DB,
+	target types.TS,
+) *checkpoint.CheckpointEntry {
+	t.Helper()
+	var last atomic.Pointer[checkpoint.CheckpointEntry]
+	require.Eventually(
+		t,
+		func() bool {
+			entry := database.DiskCleaner.GetCleaner().GetMinMerged()
+			last.Store(entry)
+			if entry == nil {
+				return false
+			}
+			end := entry.GetEnd()
+			return end.GE(&target)
+		},
+		testutil.TestCheckpointTimeout,
+		10*time.Millisecond,
+		"disk cleaner did not scan through checkpoint target %s",
+		target.ToString(),
+	)
+	return last.Load()
+}
+
+func appendSnapshotRecord(
+	t *testing.T,
+	database *db.DB,
+	databaseName string,
+	tableName string,
+) types.TS {
+	t.Helper()
+	txn, err := database.StartTxn(nil)
+	require.NoError(t, err)
+	snapshot := txn.GetStartTS()
+
+	attrs := []string{"col0", "col1", "ts", "col3", "col4", "col5", "col6", "id"}
+	vecTypes := []types.Type{
+		types.T_uint64.ToType(),
+		types.T_uint64.ToType(),
+		types.T_int64.ToType(),
+		types.T_enum.ToType(),
+		types.T_uint64.ToType(),
+		types.T_uint64.ToType(),
+		types.T_uint64.ToType(),
+		types.T_uint64.ToType(),
+	}
+	data := containers.BuildBatch(attrs, vecTypes, containers.Options{})
+	defer data.Close()
+	data.Vecs[0].Append(uint64(0), false)
+	data.Vecs[1].Append(uint64(0), false)
+	data.Vecs[2].Append(snapshot.Physical(), false)
+	data.Vecs[3].Append(types.Enum(1), false)
+	data.Vecs[4].Append(uint64(0), false)
+	data.Vecs[5].Append(uint64(0), false)
+	data.Vecs[6].Append(uint64(0), false)
+	data.Vecs[7].Append(uint64(0), false)
+
+	dbHandle, err := txn.GetDatabase(databaseName)
+	require.NoError(t, err)
+	relation, err := dbHandle.GetRelationByName(tableName)
+	require.NoError(t, err)
+	require.NoError(t, relation.Append(context.Background(), data))
+	require.NoError(t, txn.Commit(context.Background()))
+	return snapshot
+}
+
+func appendBatchesConcurrently(
+	t *testing.T,
+	pool *ants.Pool,
+	database *db.DB,
+	batches []*containers.Batch,
+	tableNames ...string,
+) {
+	t.Helper()
+	var wg sync.WaitGroup
+	for _, data := range batches {
+		for _, tableName := range tableNames {
+			wg.Add(1)
+			require.NoError(t, pool.Submit(testutil.AppendClosure(t, data, tableName, database, &wg)))
+		}
+	}
+	wg.Wait()
+}
+
 func TestSnapshotGC(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -7777,97 +7859,46 @@ func TestSnapshotGC(t *testing.T) {
 	bats := bat.Split(bat.Length())
 
 	pool, err := ants.NewPool(20)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	defer pool.Release()
-	snapshots := make([]int64, 0)
-	var wg sync.WaitGroup
-	var snapWG sync.WaitGroup
-	snapWG.Add(1)
-	var viewSnapshot types.TS
-	var snapshot int64
-	go func() {
-		i := 0
-		for {
-			if i > 3 {
-				snapWG.Done()
-				break
-			}
-			if i == 2 {
-				viewSnapshot = types.BuildTS(snapshot, 0)
-			}
-			i++
-			time.Sleep(200 * time.Millisecond)
-			snapshot = time.Now().UTC().UnixNano()
-			snapshots = append(snapshots, snapshot)
-			attrs := []string{"col0", "col1", "ts", "col3", "col4", "col5", "col6", "id"}
-			vecTypes := []types.Type{types.T_uint64.ToType(),
-				types.T_uint64.ToType(), types.T_int64.ToType(),
-				types.T_enum.ToType(), types.T_uint64.ToType(), types.T_uint64.ToType(),
-				types.T_uint64.ToType(), types.T_uint64.ToType()}
-			opt := containers.Options{}
-			opt.Capacity = 0
-			data1 := containers.BuildBatch(attrs, vecTypes, opt)
-			data1.Vecs[0].Append(uint64(0), false)
-			data1.Vecs[1].Append(uint64(0), false)
-			data1.Vecs[2].Append(snapshot, false)
-			data1.Vecs[3].Append(types.Enum(1), false)
-			data1.Vecs[4].Append(uint64(0), false)
-			data1.Vecs[5].Append(uint64(0), false)
-			data1.Vecs[6].Append(uint64(0), false)
-			data1.Vecs[7].Append(uint64(0), false)
-			txn1, _ := db.StartTxn(nil)
-			database, _ := txn1.GetDatabase("db")
-			rel, _ := database.GetRelationByName(snapshotSchema.Name)
-			err = rel.Append(context.Background(), data1)
-			data1.Close()
-			assert.Nil(t, err)
-			assert.Nil(t, txn1.Commit(context.Background()))
-		}
-	}()
-	for _, data := range bats {
-		wg.Add(2)
-		err := pool.Submit(testutil.AppendClosure(t, data, schema1.Name, db, &wg))
-		assert.Nil(t, err)
 
-		err = pool.Submit(testutil.AppendClosure(t, data, schema3.Name, db, &wg))
-		assert.Nil(t, err)
-	}
-	snapWG.Wait()
-	wg.Wait()
+	// Establish an explicit snapshot boundary: objects from the first phase
+	// must be visible at viewSnapshot, while objects from the second phase are
+	// newer. The old test tried to obtain this ordering with wall-clock sleeps
+	// racing a background goroutine.
+	appendSnapshotRecord(t, db, "db", snapshotSchema.Name)
+	midpoint := len(bats) / 2
+	appendBatchesConcurrently(t, pool, db, bats[:midpoint], schema1.Name, schema3.Name)
+	viewSnapshot := appendSnapshotRecord(t, db, "db", snapshotSchema.Name)
+	appendBatchesConcurrently(t, pool, db, bats[midpoint:], schema1.Name, schema3.Name)
+	appendSnapshotRecord(t, db, "db", snapshotSchema.Name)
+	appendSnapshotRecord(t, db, "db", snapshotSchema.Name)
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	checkpointTarget := db.TxnMgr.Now()
 	ckpCtx, cancel := context.WithTimeout(ctx, testutil.TestCheckpointTimeout)
-	err = db.ForceCheckpoint(ckpCtx, db.TxnMgr.Now())
+	err = db.ForceCheckpoint(ckpCtx, checkpointTarget)
 	cancel()
 	require.NoError(t, err)
-	testutils.WaitExpect(5000, func() bool {
-		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
-	})
 	db.DiskCleaner.GetCleaner().EnableGC()
-	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
-	testutils.WaitExpect(5000, func() bool {
-		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
-	})
-	if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
-		return
-	}
-	assert.NotNil(t, minMerged)
+	minMerged := waitForMinMergedCheckpoint(t, db, checkpointTarget)
 	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	tae.RestartDisableGC(ctx)
 	db = tae.DB
-	testutils.WaitExpect(5000, func() bool {
+	require.Eventually(t, func() bool {
 		if db.DiskCleaner.GetCleaner().GetScanWaterMark() == nil {
 			return false
 		}
 		end := db.DiskCleaner.GetCleaner().GetScanWaterMark().GetEnd()
 		minEnd := minMerged.GetEnd()
 		return end.GE(&minEnd)
-	})
+	}, testutil.TestCheckpointTimeout, 10*time.Millisecond,
+		"restarted disk cleaner did not scan through minimum merged checkpoint %s", minMerged.GetEnd().ToString())
 	end := db.DiskCleaner.GetCleaner().GetScanWaterMark().GetEnd()
 	minEnd := minMerged.GetEnd()
-	assert.True(t, end.GE(&minEnd))
+	require.True(t, end.GE(&minEnd))
 	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	tbl := rele2.GetMeta().(*catalog.TableEntry)
 	db2, err := db.Catalog.GetDatabaseByID(tbl.GetDB().ID)
 	assert.NoError(t, err)
@@ -8696,58 +8727,16 @@ func TestMergeGC(t *testing.T) {
 	bats := bat.Split(bat.Length())
 
 	pool, err := ants.NewPool(20)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	defer pool.Release()
-	snapshots := make([]int64, 0)
-	var wg sync.WaitGroup
-	var snapWG sync.WaitGroup
-	snapWG.Add(1)
-	go func() {
-		i := 0
-		for {
-			if i > 3 {
-				snapWG.Done()
-				break
-			}
-			i++
-			time.Sleep(200 * time.Millisecond)
-			snapshot := time.Now().UTC().UnixNano()
-			snapshots = append(snapshots, snapshot)
-			attrs := []string{"col0", "col1", "ts", "col3", "col4", "col5", "col6", "id"}
-			vecTypes := []types.Type{types.T_uint64.ToType(),
-				types.T_uint64.ToType(), types.T_int64.ToType(),
-				types.T_enum.ToType(), types.T_uint64.ToType(), types.T_uint64.ToType(),
-				types.T_uint64.ToType(), types.T_uint64.ToType()}
-			opt := containers.Options{}
-			opt.Capacity = 0
-			data1 := containers.BuildBatch(attrs, vecTypes, opt)
-			data1.Vecs[0].Append(uint64(0), false)
-			data1.Vecs[1].Append(uint64(0), false)
-			data1.Vecs[2].Append(snapshot, false)
-			data1.Vecs[3].Append(types.Enum(1), false)
-			data1.Vecs[4].Append(uint64(0), false)
-			data1.Vecs[5].Append(uint64(0), false)
-			data1.Vecs[6].Append(uint64(0), false)
-			data1.Vecs[7].Append(uint64(0), false)
-			txn1, _ := db.StartTxn(nil)
-			database, _ := txn1.GetDatabase("db")
-			rel, _ := database.GetRelationByName(snapshotSchema.Name)
-			err = rel.Append(context.Background(), data1)
-			data1.Close()
-			assert.Nil(t, err)
-			assert.Nil(t, txn1.Commit(context.Background()))
-		}
-	}()
-	for _, data := range bats {
-		wg.Add(2)
-		err := pool.Submit(testutil.AppendClosure(t, data, schema1.Name, db, &wg))
-		assert.Nil(t, err)
 
-		err = pool.Submit(testutil.AppendClosure(t, data, schema2.Name, db, &wg))
-		assert.Nil(t, err)
-	}
-	snapWG.Wait()
-	wg.Wait()
+	appendSnapshotRecord(t, db, "db", snapshotSchema.Name)
+	midpoint := len(bats) / 2
+	appendBatchesConcurrently(t, pool, db, bats[:midpoint], schema1.Name, schema2.Name)
+	appendSnapshotRecord(t, db, "db", snapshotSchema.Name)
+	appendBatchesConcurrently(t, pool, db, bats[midpoint:], schema1.Name, schema2.Name)
+	appendSnapshotRecord(t, db, "db", snapshotSchema.Name)
+	appendSnapshotRecord(t, db, "db", snapshotSchema.Name)
 	txn, err := db.StartTxn(nil)
 	require.NoError(t, err)
 	db1, err := txn.GetDatabase("db")
@@ -8763,32 +8752,19 @@ func TestMergeGC(t *testing.T) {
 		assert.NoError(t, err)
 		err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
 		if err != nil {
-			t.Logf("range delete %v, rollbacking", err)
 			_ = txn.Rollback(context.Background())
-			return
+			require.NoError(t, err, "range delete failed")
 		}
 	}
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit(context.Background()))
-	testutil.WaitAllCheckpointsFinished(t, db)
+	require.NoError(t, txn.Commit(context.Background()))
+	checkpointTarget := txn.GetCommitTS()
+	ckpCtx, cancel := context.WithTimeout(ctx, testutil.TestCheckpointTimeout)
+	require.NoError(t, db.ForceCheckpoint(ckpCtx, checkpointTarget))
+	cancel()
 	db.DiskCleaner.GetCleaner().EnableGC()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	testutil.WaitAllCheckpointsFinished(t, db)
-	testutils.WaitExpect(5000, func() bool {
-		stage := db.BGCheckpointRunner.GetLowWaterMark()
-		return !stage.IsEmpty()
-	})
-	testutils.WaitExpect(5000, func() bool {
-		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
-	})
-	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
-	testutils.WaitExpect(5000, func() bool {
-		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
-	})
-	if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
-		return
-	}
-	assert.NotNil(t, minMerged)
+	minMerged := waitForMinMergedCheckpoint(t, db, checkpointTarget)
+	require.NotNil(t, minMerged)
 
 }
 
@@ -8846,8 +8822,9 @@ func TestCkpLeak(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	wg.Wait()
+	checkpointTarget := db.TxnMgr.Now()
 	ckpCtx, cancel := context.WithTimeout(ctx, testutil.TestCheckpointTimeout)
-	err = db.ForceCheckpoint(ckpCtx, db.TxnMgr.Now())
+	err = db.ForceCheckpoint(ckpCtx, checkpointTarget)
 	cancel()
 	require.NoError(t, err)
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
@@ -8867,25 +8844,16 @@ func TestCkpLeak(t *testing.T) {
 		}
 		return true
 	}
-	testutils.WaitExpect(5000, func() bool {
-		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
-	})
-	if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
-		return
-	}
+	waitForMinMergedCheckpoint(t, db, checkpointTarget)
 	tae.Restart(ctx)
 	db = tae.DB
-	testutils.WaitExpect(5000, func() bool {
-		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
-	})
-	if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
-		return
-	}
-	testutils.WaitExpect(5000, func() bool {
+	waitForMinMergedCheckpoint(t, db, checkpointTarget)
+	require.Eventually(t, func() bool {
 		return checkLeak()
-	})
+	}, testutil.TestCheckpointTimeout, 10*time.Millisecond,
+		"checkpoint compaction retained duplicate compacted files")
 	ok := checkLeak()
-	assert.True(t, ok)
+	require.True(t, ok)
 
 }
 
@@ -9630,6 +9598,7 @@ func TestGCCatalog2(t *testing.T) {
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 33)
 
+	var lastAppendableCount atomic.Int64
 	checkCompactAndGCFn := func() bool {
 		p := &catalog.LoopProcessor{}
 		appendableCount := 0
@@ -9644,13 +9613,31 @@ func TestGCCatalog2(t *testing.T) {
 		}
 		err := tae.Catalog.RecurLoop(p)
 		assert.NoError(t, err)
+		lastAppendableCount.Store(int64(appendableCount))
 		return appendableCount == 0
 	}
 
 	tae.CreateRelAndAppend(bat, true)
 	t.Log(tae.Catalog.SimplePPString(3))
-	testutils.WaitExpect(10000, checkCompactAndGCFn)
-	assert.True(t, checkCompactAndGCFn())
+	target := testutil.ForceCheckpointBeyondCatalogGCBoundary(
+		t,
+		tae.DB,
+		tae.TxnMgr.Now(),
+	)
+	if !assert.Eventually(
+		t,
+		checkCompactAndGCFn,
+		testutil.TestCheckpointTimeout,
+		10*time.Millisecond,
+	) {
+		require.FailNowf(
+			t,
+			"catalog compaction did not finish",
+			"checkpoint target=%s appendable objects=%d",
+			target.ToString(),
+			lastAppendableCount.Load(),
+		)
+	}
 	t.Log(tae.Catalog.SimplePPString(3))
 }
 func TestGCCatalog3(t *testing.T) {
@@ -9668,6 +9655,7 @@ func TestGCCatalog3(t *testing.T) {
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 33)
 
+	var lastDBCount atomic.Int64
 	checkCompactAndGCFn := func() bool {
 		p := &catalog.LoopProcessor{}
 		dbCount := 0
@@ -9680,6 +9668,7 @@ func TestGCCatalog3(t *testing.T) {
 		}
 		err := tae.Catalog.RecurLoop(p)
 		assert.NoError(t, err)
+		lastDBCount.Store(int64(dbCount))
 		return dbCount == 0
 	}
 
@@ -9687,12 +9676,27 @@ func TestGCCatalog3(t *testing.T) {
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
 	_, err = txn.DropDatabase("db")
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit(context.Background()))
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(context.Background()))
+	dropCommitTS := txn.GetCommitTS()
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	testutils.WaitExpect(10000, checkCompactAndGCFn)
-	assert.True(t, checkCompactAndGCFn())
+	target := testutil.ForceCheckpointBeyondCatalogGCBoundary(t, tae.DB, dropCommitTS)
+	if !assert.Eventually(
+		t,
+		checkCompactAndGCFn,
+		testutil.TestCheckpointTimeout,
+		10*time.Millisecond,
+	) {
+		require.FailNowf(
+			t,
+			"catalog GC did not remove database",
+			"drop commit=%s checkpoint target=%s remaining databases=%d",
+			dropCommitTS.ToString(),
+			target.ToString(),
+			lastDBCount.Load(),
+		)
+	}
 	t.Log(tae.Catalog.SimplePPString(3))
 }
 

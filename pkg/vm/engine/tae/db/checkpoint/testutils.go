@@ -121,11 +121,16 @@ func (r *runner) ForceGCKP(
 		return
 	}
 
-	maxEntry = r.store.MaxIncrementalCheckpoint()
+	maxEntry = r.store.MaxCheckpoint()
 
-	// should not happend
+	// ForceICKP may return after an automatic GCKP has already covered end and
+	// checkpoint GC has removed its incremental predecessor from the store. In
+	// that case the requested global checkpoint is already durable.
 	if maxEntry == nil || maxEntry.end.LT(&end) {
 		err = ErrPendingCheckpoint
+		return
+	}
+	if maxEntry.IsGlobal() {
 		return
 	}
 
@@ -135,6 +140,7 @@ func (r *runner) ForceGCKP(
 		histroyRetention: histroyRetention,
 		truncateLSN:      maxEntry.truncateLSN,
 		ckpLSN:           maxEntry.ckpLSN,
+		predecessor:      maxEntry,
 	}
 
 	if err = r.TryTriggerExecuteGCKP(request); err != nil {

@@ -27,9 +27,9 @@ import (
 )
 
 func Test_UpgradeEntry(t *testing.T) {
-	c, err := embed.NewCluster(embed.WithCNCount(1))
+	c, err := embed.StartTestCluster(embed.WithCNCount(1))
 	require.NoError(t, err)
-	require.NoError(t, c.Start())
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
 
 	svc, err := c.GetCNService(0)
 	require.NoError(t, err)

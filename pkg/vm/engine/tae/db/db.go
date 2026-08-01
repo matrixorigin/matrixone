@@ -258,7 +258,11 @@ func (db *DB) ForceCheckpointForBackup(
 		return
 	}
 
-	maxEntry := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	maxEntry := db.BGCheckpointRunner.MaxCheckpoint()
+	if maxEntry == nil {
+		err = moerr.NewInternalError(ctx, "force checkpoint completed without a finished checkpoint")
+		return
+	}
 	maxEnd := maxEntry.GetEnd()
 	start := maxEnd.Next()
 	end := db.TxnMgr.Now()

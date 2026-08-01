@@ -16,6 +16,11 @@ package embed
 
 import "time"
 
+const (
+	testHAKeeperHeartbeatTimeout = 30 * time.Second
+	testHAKeeperStoreTimeout     = 60 * time.Second
+)
+
 func WithConfigs(
 	configs []string,
 ) Option {
@@ -43,6 +48,12 @@ func WithCNCount(
 func WithTesting() Option {
 	return func(c *cluster) {
 		c.options.testing = true
+		if c.options.heartbeatTimeout == 0 {
+			c.options.heartbeatTimeout = testHAKeeperHeartbeatTimeout
+		}
+		if c.options.storeTimeout == 0 {
+			c.options.storeTimeout = testHAKeeperStoreTimeout
+		}
 	}
 }
 

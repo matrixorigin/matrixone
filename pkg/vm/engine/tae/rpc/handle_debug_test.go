@@ -49,13 +49,17 @@ func TestHandleTTLChecker(t *testing.T) {
 func TestHandleBackup(t *testing.T) {
 	h := mockTAEHandle(context.Background(), t, &options.Options{})
 
-	req := &cmd_util.Checkpoint{
-		FlushDuration: 10 * time.Second,
-	}
+	// The success path must not encode a machine-speed assumption as the
+	// request's flush deadline. The outer context bounds the test itself while
+	// HandleBackup remains responsible for completing all checkpoint phases.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	req := &cmd_util.Checkpoint{}
 	resp := &api.SyncLogTailResp{}
 
-	cb, err := h.HandleBackup(context.Background(), txn.TxnMeta{}, req, resp)
+	cb, err := h.HandleBackup(ctx, txn.TxnMeta{}, req, resp)
 	require.NoError(t, err)
+	require.NotEmpty(t, resp.CkpLocation)
 	if cb != nil {
 		cb()
 	}

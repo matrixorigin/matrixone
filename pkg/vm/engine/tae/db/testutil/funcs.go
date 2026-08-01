@@ -328,6 +328,38 @@ func WaitAllCheckpointsFinished(t *testing.T, e *db.DB, timeoutMS ...int) {
 	)
 }
 
+// ForceCheckpointBeyondCatalogGCBoundary creates and waits for an incremental
+// checkpoint whose catalog-GC watermark is strictly newer than boundary.
+// Catalog GC subtracts GCInMemoryTTL from the latest checkpoint end, so forcing
+// only boundary itself does not make metadata committed at boundary eligible.
+func ForceCheckpointBeyondCatalogGCBoundary(
+	t *testing.T,
+	e *db.DB,
+	boundary types.TS,
+) types.TS {
+	require.NotNil(t, e.Opts.GCCfg)
+	target := types.BuildTS(
+		boundary.Physical()+int64(e.Opts.GCCfg.GCInMemoryTTL)+1,
+		0,
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), TestCheckpointTimeout)
+	defer cancel()
+	require.NoError(t, e.ForceCheckpoint(ctx, target))
+
+	checkpointed := e.BGCheckpointRunner.MaxCheckpoint()
+	require.NotNil(t, checkpointed)
+	require.True(t, checkpointed.IsFinished())
+	end := checkpointed.GetEnd()
+	require.Truef(
+		t,
+		end.GE(&target),
+		"checkpoint end %s does not cover catalog-GC target %s",
+		end.ToString(),
+		target.ToString(),
+	)
+	return target
+}
+
 func CreateRelationAndAppend(
 	t *testing.T,
 	tenantID uint32,
@@ -707,6 +739,10 @@ func IsCatalogEqual(t *testing.T, c1, c2 *catalog.Catalog) {
 }
 
 func DeleteAll(t *testing.T, accountID uint32, db *db.DB, dbName, tableName string) {
+	DeleteAllWithCommitTS(t, accountID, db, dbName, tableName)
+}
+
+func DeleteAllWithCommitTS(t *testing.T, accountID uint32, db *db.DB, dbName, tableName string) types.TS {
 	txn, rel := GetRelation(t, accountID, db, dbName, tableName)
 	schema := rel.GetMeta().(*catalog.TableEntry).GetLastestSchemaLocked(false)
 	pkIdx := schema.GetPrimaryKey().Idx
@@ -719,20 +755,26 @@ func DeleteAll(t *testing.T, accountID uint32, db *db.DB, dbName, tableName stri
 		for i := uint16(0); i < blkCnt; i++ {
 			var view *containers.Batch
 			err := blk.HybridScan(context.Background(), &view, i, []int{rowIDIdx, pkIdx}, common.DefaultAllocator)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			defer view.Close()
 			view.Compact()
 			err = rel.DeleteByPhyAddrKeys(view.Vecs[0], view.Vecs[1], handle.DT_Normal)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 		}
 	}
 	err := txn.Commit(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	return txn.GetCommitTS()
 }
 
 func Append(t *testing.T, accountID uint32, db *db.DB, dbName, tableName string, bat *containers.Batch) {
+	AppendWithCommitTS(t, accountID, db, dbName, tableName, bat)
+}
+
+func AppendWithCommitTS(t *testing.T, accountID uint32, db *db.DB, dbName, tableName string, bat *containers.Batch) types.TS {
 	txn, rel := GetRelation(t, accountID, db, dbName, tableName)
-	assert.NoError(t, rel.Append(context.Background(), bat))
+	require.NoError(t, rel.Append(context.Background(), bat))
 	err := txn.Commit(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	return txn.GetCommitTS()
 }

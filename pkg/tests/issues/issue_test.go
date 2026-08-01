@@ -932,7 +932,7 @@ func TestIssue19551(t *testing.T) {
 }
 
 func TestSpeedupAbortAllTxn(t *testing.T) {
-	c, err := embed.NewCluster(
+	c, err := embed.StartTestCluster(
 		embed.WithPreStart(
 			func(so embed.ServiceOperator) {
 				if so.ServiceType() == metadata.ServiceType_CN {
@@ -946,7 +946,6 @@ func TestSpeedupAbortAllTxn(t *testing.T) {
 		),
 	)
 	require.NoError(t, err)
-	require.NoError(t, c.Start())
 	defer func() {
 		require.NoError(t, c.Close())
 	}()

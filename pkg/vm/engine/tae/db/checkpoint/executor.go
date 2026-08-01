@@ -59,13 +59,17 @@ func (job *checkpointJob) RunGCKP(ctx context.Context) (err error) {
 		job.gckpCtx.ckpLSN,
 		job.gckpCtx.truncateLSN,
 		job.gckpCtx.histroyRetention,
+		job.gckpCtx.predecessor,
 	)
 
 	return
 }
 
 func (job *checkpointJob) doGlobalCheckpoint(
-	end types.TS, ckpLSN, truncateLSN uint64, interval time.Duration,
+	end types.TS,
+	ckpLSN, truncateLSN uint64,
+	interval time.Duration,
+	predecessor *CheckpointEntry,
 ) (entry *CheckpointEntry, err error) {
 	var (
 		errPhase string
@@ -106,6 +110,12 @@ func (job *checkpointJob) doGlobalCheckpoint(
 			)
 		}
 	}()
+	if predecessor == nil || !predecessor.IsFinished() || !predecessor.end.EQ(&end) {
+		errPhase = "resolve-predecessor"
+		err = moerr.NewInternalErrorNoCtxf(
+			"global checkpoint %s has no finished incremental predecessor", end.ToString())
+		return
+	}
 
 	if ok := runner.store.AddGCKPIntent(entry); !ok {
 		err = ErrBadIntent
@@ -134,16 +144,6 @@ func (job *checkpointJob) doGlobalCheckpoint(
 
 	entry.SetLocation(location, location)
 
-	ickps := runner.store.GetAllIncrementalCheckpoints()
-	var preICKP *CheckpointEntry
-	ickpEnd := entry.end.Prev()
-	for _, ckp := range ickps {
-		if ckp.end.EQ(&ickpEnd) {
-			preICKP = ckp
-			break
-		}
-	}
-
 	var emptyLocation objectio.Location
 	tableIDLocation, err := logtail.SyncTableIDBatch(
 		job.executor.ctx,
@@ -152,8 +152,8 @@ func (job *checkpointJob) doGlobalCheckpoint(
 		job.executor.cfg.TableIDHistoryDuration,
 		job.executor.cfg.TableIDSinkerThreshold,
 		emptyLocation,
-		preICKP.GetVersion(),
-		preICKP.GetTableIDLocation(),
+		predecessor.GetVersion(),
+		predecessor.GetTableIDLocation(),
 		common.CheckpointAllocator,
 		runner.rt.Fs,
 	)
@@ -333,6 +333,7 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 			histroyRetention: job.executor.cfg.GlobalHistoryDuration,
 			ckpLSN:           lsn,
 			truncateLSN:      lsnToTruncate,
+			predecessor:      entry,
 		})
 	}()
 

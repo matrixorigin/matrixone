@@ -16,10 +16,12 @@ package embed
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	mruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -30,11 +32,15 @@ import (
 )
 
 var (
-	basicClusterState onceCluster
-	basicRunningMutex sync.Mutex
+	basicClusterState SharedTestCluster
 )
 
-type onceCluster struct {
+// SharedTestCluster serializes tests that reuse an expensive embedded cluster
+// and preserves the first initialization result. Initialization callbacks must
+// return errors instead of failing the current test from inside sync.Once, so a
+// failed startup is reported consistently to every later caller.
+type SharedTestCluster struct {
+	mu      sync.Mutex
 	once    sync.Once
 	cluster Cluster
 	err     error
@@ -45,16 +51,27 @@ type testReporter interface {
 	Fatalf(format string, args ...any)
 }
 
-func (c *onceCluster) run(
+func (c *SharedTestCluster) Run(
 	t testReporter,
 	init func() (Cluster, error),
 	fn func(Cluster),
 ) {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	c.once.Do(func() {
 		c.cluster, c.err = init()
+		if c.err != nil && c.cluster != nil {
+			c.err = errors.Join(c.err, c.cluster.Close())
+			c.cluster = nil
+		}
+		if c.err == nil && c.cluster == nil {
+			c.err = moerr.NewInternalErrorNoCtx("cluster initializer returned nil without an error")
+		}
 	})
 	if c.err != nil {
-		t.Fatalf("failed to initialize base cluster: %v", c.err)
+		t.Fatalf("failed to initialize shared cluster: %v", c.err)
 		return
 	}
 	fn(c.cluster)
@@ -64,15 +81,29 @@ func init() {
 	stats.SkipPanicONDuplicate.Store(true)
 }
 
+// StartTestCluster constructs and starts an embedded cluster with test mode
+// enabled. If startup fails, it closes the partially started cluster before
+// returning the original error.
+func StartTestCluster(opts ...Option) (Cluster, error) {
+	opts = append([]Option{WithTesting()}, opts...)
+	c, err := NewCluster(opts...)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.Start(); err != nil {
+		return nil, errors.Join(err, c.Close())
+	}
+	return c, nil
+}
+
 const (
 	basicClusterHAKeeperHeartbeatTimeout = 30 * time.Second
 	basicClusterHAKeeperStoreTimeout     = 60 * time.Second
 )
 
 func startBasicCluster() (Cluster, error) {
-	c, err := NewCluster(
+	return StartTestCluster(
 		WithCNCount(3),
-		WithTesting(),
 		WithHAKeeperHeartbeatTimeout(basicClusterHAKeeperHeartbeatTimeout),
 		WithPreStart(func(svc ServiceOperator) {
 			switch svc.ServiceType() {
@@ -101,13 +132,6 @@ func startBasicCluster() (Cluster, error) {
 			}
 		}),
 	)
-	if err != nil {
-		return nil, err
-	}
-	if err := c.Start(); err != nil {
-		return nil, err
-	}
-	return c, nil
 }
 
 func prepareBasicCluster(c Cluster) {
@@ -151,11 +175,7 @@ func RunBaseClusterTests(
 	fn func(Cluster),
 ) {
 	t.Helper()
-	// we must make all tests which use the basicCluster to be run in sequence
-	basicRunningMutex.Lock()
-	defer basicRunningMutex.Unlock()
-
-	basicClusterState.run(t, startBasicCluster, func(c Cluster) {
+	basicClusterState.Run(t, startBasicCluster, func(c Cluster) {
 		prepareBasicCluster(c)
 		fn(c)
 	})
