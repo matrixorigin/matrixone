@@ -227,11 +227,12 @@ type BaseOptimizer struct {
 }
 
 type ViewData struct {
-	Stmt            string
-	DefaultDatabase string
-	SQLMode         *string          `json:"sql_mode,omitempty"`
-	SecurityType    string           `json:"security_type,omitempty"`
-	Dependencies    []ViewDependency `json:"dependencies,omitempty"`
+	Stmt                   string
+	DefaultDatabase        string
+	SQLMode                *string          `json:"sql_mode,omitempty"`
+	SecurityType           string           `json:"security_type,omitempty"`
+	Dependencies           []ViewDependency `json:"dependencies,omitempty"`
+	MetadataRefreshPending bool             `json:"metadata_refresh_pending,omitempty"`
 }
 
 type ViewDependency struct {

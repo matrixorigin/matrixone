@@ -30,6 +30,14 @@ alter table recreated_source modify column a bigint;
 -- @ignore:5,6
 desc recreated_view;
 
+create table `recreated\%_source` (a int);
+create view recreated_quoted_view as select a from `recreated\%_source`;
+drop table `recreated\%_source`;
+create table `recreated\%_source` (a int);
+alter table `recreated\%_source` modify column a bigint;
+-- @ignore:5,6
+desc recreated_quoted_view;
+
 create table ambiguity_left (a int);
 create table ambiguity_right (b int);
 create view ambiguity_view as
@@ -160,6 +168,17 @@ subdb.source_t {snapshot = 'view_alter_sub_sn'} frozen;
 alter table localdb.local_source_t modify column a bigint;
 -- @ignore:5,6
 desc localdb.snapshot_sub_v;
+create snapshot view_alter_retry_sn for account view_alter_sub;
+create view localdb.snapshot_retry_v as
+select live.a, frozen.a as frozen_a
+from localdb.local_source_t live,
+subdb.source_t {snapshot = 'view_alter_retry_sn'} frozen;
+drop snapshot view_alter_retry_sn;
+alter table localdb.local_source_t modify column a decimal(9, 1);
+create snapshot view_alter_retry_sn for account view_alter_sub;
+-- @ignore:5,6
+desc localdb.snapshot_retry_v;
+drop snapshot view_alter_retry_sn;
 -- @session
 
 -- @session:id=1&user=view_alter_pub:admin&password=111
@@ -184,6 +203,14 @@ where table_schema = 'localdb' and table_name = 'v' and column_name = 'a';
 
 -- @session:id=1&user=view_alter_pub:admin&password=111
 alter publication pub database pubdb table source_t, excluded_t;
+-- @session
+
+-- @session:id=2&user=view_alter_sub:admin&password=111
+-- @ignore:5,6
+desc localdb.v;
+-- @session
+
+-- @session:id=1&user=view_alter_pub:admin&password=111
 alter table pubdb.source_t modify column a decimal(12, 3);
 -- @session
 
@@ -193,7 +220,7 @@ desc localdb.v;
 
 -- @session:id=1&user=view_alter_pub:admin&password=111
 create database pubdb2;
-create table pubdb2.source_t (a int);
+create table pubdb2.source_t (a varchar(20));
 create publication pub2 database pubdb2 table source_t account view_alter_sub;
 -- @session
 

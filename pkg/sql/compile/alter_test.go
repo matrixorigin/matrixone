@@ -156,7 +156,8 @@ func TestBuildViewMetadataRefreshQueryEscapesLegacyTableName(t *testing.T) {
 	require.Contains(t, query, `"database_name":"db","table_name"`)
 	require.Contains(t, query, `"subscription_table":"x`)
 	require.Contains(t, query, "pub_account_id = 7")
-	require.NotContains(t, query, "account_id = 7 and viewdef not like")
+	require.Contains(t, query, "json_extract(viewdef, '$.dependencies') is null")
+	require.NotContains(t, query, "viewdef like '\\%")
 }
 
 func TestCurrentViewSubscriptionResolver(t *testing.T) {
@@ -194,20 +195,24 @@ func TestCurrentViewSubscriptionResolver(t *testing.T) {
 		return &plan.SubscriptionMeta{AccountId: int32(snapshot.GetTS().GetPhysicalTime())}, nil
 	}
 	meta, err = resolver.GetSubscriptionMeta("historical_subdb", &plan.Snapshot{
-		TS: &timestamp.Timestamp{PhysicalTime: 1},
+		TS:     &timestamp.Timestamp{PhysicalTime: 1},
+		Tenant: &plan.SnapshotTenant{TenantID: 11},
 	})
 	require.NoError(t, err)
 	require.Equal(t, int32(1), meta.GetAccountId())
 	_, err = resolver.GetSubscriptionMeta("historical_subdb", &plan.Snapshot{
-		TS: &timestamp.Timestamp{PhysicalTime: 1},
+		TS:     &timestamp.Timestamp{PhysicalTime: 1},
+		Tenant: &plan.SnapshotTenant{TenantID: 11},
 	})
 	require.NoError(t, err)
 	meta, err = resolver.GetSubscriptionMeta("historical_subdb", &plan.Snapshot{
-		TS: &timestamp.Timestamp{PhysicalTime: 2},
+		TS:     &timestamp.Timestamp{PhysicalTime: 2},
+		Tenant: &plan.SnapshotTenant{TenantID: 11},
 	})
 	require.NoError(t, err)
 	require.Equal(t, int32(2), meta.GetAccountId())
 	require.Len(t, loaded, 2)
+	require.Equal(t, uint32(11), loaded[0].accountID)
 }
 
 func TestLoadSnapshotViewSubscriptionKeepsSystemPublisher(t *testing.T) {

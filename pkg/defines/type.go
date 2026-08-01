@@ -252,6 +252,13 @@ type DatTypKey struct{}
 type TableIDKey struct{}
 type LogicalIdKey struct{}
 type ViewMetadataRefreshKey struct{}
+type ViewMetadataRetryKey struct{}
+
+type ViewMetadataRetry struct {
+	TargetViewID         uint64
+	TargetViewVersion    uint32
+	TargetViewDefinition string
+}
 
 // CarryOnCtxKeys defines keys needed to be serialized when pass context through net
 var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}

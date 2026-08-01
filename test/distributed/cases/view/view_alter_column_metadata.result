@@ -26,7 +26,15 @@ create table recreated_source (a int);
 alter table recreated_source modify column a bigint;
 desc recreated_view;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦
+create table `recreated\%_source` (a int);
+create view recreated_quoted_view as select a from `recreated\%_source`;
+drop table `recreated\%_source`;
+create table `recreated\%_source` (a int);
+alter table `recreated\%_source` modify column a bigint;
+desc recreated_quoted_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦
 create table ambiguity_left (a int);
 create table ambiguity_right (b int);
 create view ambiguity_view as
@@ -34,11 +42,11 @@ select a from ambiguity_left, ambiguity_right;
 alter table ambiguity_right rename column b to a;
 desc ambiguity_right;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 alter table ambiguity_right rename column a to b;
 desc ambiguity_view;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 create table original_view_metadata as
 select relname, rel_id, creator, owner, created_time
 from mo_catalog.mo_tables
@@ -53,7 +61,7 @@ id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 code  ¦  VARCHAR(60)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 qty  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 price  ¦  DECIMAL(10,2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-total  ¦  DECIMAL(38,2)  ¦  NO  ¦    ¦  null  ¦    ¦  
+total  ¦  DECIMAL(38,2)  ¦  NO  ¦    ¦  null  ¦    ¦
 alter table view_alter_column_metadata.source_t change column qty qty bigint not null default 1;
 desc view_alter_column_metadata.v_source_t;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
@@ -61,7 +69,7 @@ id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 code  ¦  VARCHAR(60)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 qty  ¦  BIGINT(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 price  ¦  DECIMAL(10,2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-total  ¦  DECIMAL(38,2)  ¦  NO  ¦    ¦  null  ¦    ¦  
+total  ¦  DECIMAL(38,2)  ¦  NO  ¦    ¦  null  ¦    ¦
 alter table view_alter_column_metadata.source_t modify column price decimal(20, 5) not null;
 desc view_alter_column_metadata.v_source_t;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
@@ -69,7 +77,7 @@ id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 code  ¦  VARCHAR(60)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 qty  ¦  BIGINT(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 price  ¦  DECIMAL(20,5)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-total  ¦  DECIMAL(38,5)  ¦  NO  ¦    ¦  null  ¦    ¦  
+total  ¦  DECIMAL(38,5)  ¦  NO  ¦    ¦  null  ¦    ¦
 insert into view_alter_column_metadata.source_t values
 (2, 'this-code-is-longer-than-five-characters', 5000000000, 12345.67891, 2);
 select id, code, qty, price, total from view_alter_column_metadata.v_source_t order by id;
@@ -82,16 +90,16 @@ id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 code  ¦  VARCHAR(60)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 qty  ¦  BIGINT(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 price  ¦  DECIMAL(20,5)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-total  ¦  DECIMAL(38,5)  ¦  NO  ¦    ¦  null  ¦    ¦  
+total  ¦  DECIMAL(38,5)  ¦  NO  ¦    ¦  null  ¦    ¦
 desc view_alter_column_metadata.v_nested;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 code  ¦  VARCHAR(60)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 qty  ¦  BIGINT(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-total  ¦  DECIMAL(38,5)  ¦  NO  ¦    ¦  null  ¦    ¦  
+total  ¦  DECIMAL(38,5)  ¦  NO  ¦    ¦  null  ¦    ¦
 desc view_alter_column_metadata_cross.v_cross;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 code  ¦  VARCHAR(60)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-price  ¦  DECIMAL(20,5)  ¦  NO  ¦    ¦  null  ¦    ¦  
+price  ¦  DECIMAL(20,5)  ¦  NO  ¦    ¦  null  ¦    ¦
 select
 table_schema,
 table_name,
@@ -133,7 +141,7 @@ desc view_alter_column_metadata.ctas_view;
 id  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 code  ¦  VARCHAR(60)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 qty  ¦  BIGINT(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-price  ¦  DECIMAL(20,5)  ¦  NO  ¦    ¦  null  ¦    ¦  
+price  ¦  DECIMAL(20,5)  ¦  NO  ¦    ¦  null  ¦    ¦
 use view_alter_column_metadata;
 create table snapshot_live (a int);
 create table snapshot_frozen (b int);
@@ -150,15 +158,15 @@ alter table view_alter_column_metadata.snapshot_live modify column a bigint;
 desc view_alter_column_metadata.mixed_snapshot_v;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc view_alter_column_metadata.snapshot_text_v;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-marker  ¦  VARCHAR(22)  ¦  NO  ¦    ¦  null  ¦    ¦  
+marker  ¦  VARCHAR(22)  ¦  NO  ¦    ¦  null  ¦    ¦
 desc view_alter_column_metadata.udf_v;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-udf_value  ¦  BIGINT(0)  ¦  NO  ¦    ¦  null  ¦    ¦  
+udf_value  ¦  BIGINT(0)  ¦  NO  ¦    ¦  null  ¦    ¦
 drop function view_alter_column_metadata.refresh_udf();
 drop snapshot view_alter_column_metadata_sn;
 create table deleted_snapshot_live (a int);
@@ -173,7 +181,7 @@ alter table deleted_snapshot_live modify column a bigint;
 desc deleted_snapshot_v;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 drop database view_alter_column_metadata;
 drop database view_alter_column_metadata_cross;
 drop account if exists view_alter_pub;
@@ -199,11 +207,24 @@ alter table localdb.local_source_t modify column a bigint;
 desc localdb.snapshot_sub_v;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-frozen_a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+frozen_a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦
+create snapshot view_alter_retry_sn for account view_alter_sub;
+create view localdb.snapshot_retry_v as
+select live.a, frozen.a as frozen_a
+from localdb.local_source_t live,
+subdb.source_t {snapshot = 'view_alter_retry_sn'} frozen;
+drop snapshot view_alter_retry_sn;
+alter table localdb.local_source_t modify column a decimal(9, 1);
+create snapshot view_alter_retry_sn for account view_alter_sub;
+desc localdb.snapshot_retry_v;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  DECIMAL(9,1)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+frozen_a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦
+drop snapshot view_alter_retry_sn;
 alter table pubdb.source_t modify column a bigint;
 desc localdb.v;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦
 alter publication pub database pubdb table excluded_t;
 alter table pubdb.source_t modify column a decimal(10, 2);
 select column_type
@@ -212,12 +233,15 @@ where table_schema = 'localdb' and table_name = 'v' and column_name = 'a';
 ➤ column_type[12,-1,0]  𝄀
 BIGINT(64)
 alter publication pub database pubdb table source_t, excluded_t;
+desc localdb.v;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  DECIMAL(10,2)  ¦  YES  ¦    ¦  null  ¦    ¦
 alter table pubdb.source_t modify column a decimal(12, 3);
 desc localdb.v;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  DECIMAL(12,3)  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  DECIMAL(12,3)  ¦  YES  ¦    ¦  null  ¦    ¦
 create database pubdb2;
-create table pubdb2.source_t (a int);
+create table pubdb2.source_t (a varchar(20));
 create publication pub2 database pubdb2 table source_t account view_alter_sub;
 drop database subdb;
 create database subdb from view_alter_pub publication pub2;
@@ -227,14 +251,16 @@ select live.a, old_source.a as old_a, new_source.a as new_a
 from localdb.local_source_t live,
 subdb.source_t {snapshot = 'view_alter_sub_sn'} old_source,
 subdb.source_t {snapshot = 'view_alter_sub_sn2'} new_source;
-SQL parser error: table "source_t" does not exist
 alter table localdb.local_source_t modify column a decimal(10, 2);
 desc localdb.dual_snapshot_sub_v;
-no such table localdb.dual_snapshot_sub_v
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  DECIMAL(10,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+old_a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+new_a  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦
 alter table pubdb2.source_t modify column a bigint;
 desc localdb.v;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦
 drop snapshot view_alter_sub_sn2;
 drop snapshot view_alter_sub_sn;
 drop database localdb;

@@ -1050,6 +1050,9 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 	}
 
 	bh := tcc.getOrCreateBackExec(tempCtx)
+	if back, ok := bh.(*backExec); ok {
+		back.UpdateTxn(txn)
+	}
 	bh.ClearExecResultSet()
 	return getSubscriptionMeta(tempCtx, dbName, tcc.GetSession(), txn, bh)
 }

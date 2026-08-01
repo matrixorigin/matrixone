@@ -455,10 +455,10 @@ func (s *Scope) AlterView(c *Compile) error {
 	var refresh viewMetadataRefreshContext
 	var refreshedViewData plan2.ViewData
 	if isViewMetadataRefresh(c.proc.Ctx) {
-		refresh, _ = c.proc.Ctx.Value(defines.ViewMetadataRefreshKey{}).(viewMetadataRefreshContext)
+		refresh, _ = viewMetadataRefreshContextFromContext(c.proc.Ctx)
 		if replaceDef.GetViewSql() == nil ||
 			json.Unmarshal([]byte(replaceDef.GetViewSql().GetView()), &refreshedViewData) != nil ||
-			!viewDependsOnTable(refreshedViewData.Dependencies, refresh) {
+			(!refresh.retry && !viewDependsOnTable(refreshedViewData.Dependencies, refresh)) {
 			return nil
 		}
 	}
@@ -498,24 +498,25 @@ func (s *Scope) AlterView(c *Compile) error {
 			replaceDef.Cols = qry.GetTableDef().GetCols()
 			replaceDef.Name2ColIndex = nil
 		}
-		dependenciesChanged := false
+		viewDataChanged := false
 		if currentDef.GetViewSql() != nil && qry.GetTableDef().GetViewSql() != nil {
 			var currentViewData plan2.ViewData
 			if json.Unmarshal([]byte(currentDef.GetViewSql().GetView()), &currentViewData) == nil &&
 				len(refreshedViewData.Dependencies) > 0 {
-				dependenciesChanged = !slices.Equal(
+				viewDataChanged = currentViewData.MetadataRefreshPending || !slices.Equal(
 					currentViewData.Dependencies,
 					refreshedViewData.Dependencies,
 				)
-				if dependenciesChanged {
+				if viewDataChanged {
 					currentViewData.Dependencies = refreshedViewData.Dependencies
+					currentViewData.MetadataRefreshPending = false
 					if encoded, err := json.Marshal(currentViewData); err == nil {
 						replaceDef.ViewSql = &plan.ViewDef{View: string(encoded)}
 					}
 				}
 			}
 		}
-		if !columnsChanged && !dependenciesChanged {
+		if !columnsChanged && !viewDataChanged {
 			return nil
 		}
 	}

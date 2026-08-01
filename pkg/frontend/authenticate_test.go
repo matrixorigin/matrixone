@@ -15649,6 +15649,10 @@ func TestDoDropSnapshot(t *testing.T) {
 }
 
 func TestDoCreateSnapshot(t *testing.T) {
+	retryStub := gostub.Stub(&retryPendingViewMetadataFunc, func(context.Context, *Session, BackgroundExec) error {
+		return nil
+	})
+	defer retryStub.Reset()
 	convey.Convey("doCreateSnapshot success", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()

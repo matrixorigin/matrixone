@@ -423,7 +423,6 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 	); err != nil {
 		return
 	}
-
 	return
 }
 
@@ -632,6 +631,9 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		insertSubAccounts, newSubAccounts,
 	); err != nil {
 		return
+	}
+	if err = retryPendingViewMetadataFunc(ctx, ses, bh); err != nil {
+		return err
 	}
 
 	return

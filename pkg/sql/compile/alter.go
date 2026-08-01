@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1921,6 +1922,7 @@ type viewMetadataRefresh struct {
 }
 
 type viewMetadataRefreshContext struct {
+	retry                bool
 	sourceAccountID      uint32
 	sourceLogicalID      uint64
 	currentSourceTableID uint64
@@ -1967,8 +1969,12 @@ func (r currentViewSubscriptionResolver) GetSubscriptionMeta(
 	if !plan2.IsSnapshotValid(snapshot) {
 		return r.byDatabase[strings.ToLower(database)], nil
 	}
+	accountID := r.accountID
+	if snapshot.GetTenant() != nil {
+		accountID = snapshot.GetTenant().GetTenantID()
+	}
 	key := viewMetadataSnapshotSubscriptionKey{
-		accountID:    r.accountID,
+		accountID:    accountID,
 		database:     strings.ToLower(database),
 		physicalTime: snapshot.GetTS().GetPhysicalTime(),
 		logicalTime:  snapshot.GetTS().GetLogicalTime(),
@@ -1979,7 +1985,7 @@ func (r currentViewSubscriptionResolver) GetSubscriptionMeta(
 	if r.loadSnapshot == nil {
 		return nil, nil
 	}
-	meta, err := r.loadSnapshot(r.accountID, database, snapshot)
+	meta, err := r.loadSnapshot(accountID, database, snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -2021,8 +2027,27 @@ func isViewMetadataRefresh(ctx context.Context) bool {
 	if ctx == nil {
 		return false
 	}
-	refresh, _ := ctx.Value(defines.ViewMetadataRefreshKey{}).(viewMetadataRefreshContext)
-	return refresh.sourceLogicalID != 0 || refresh.currentSourceTableID != 0
+	_, ok := viewMetadataRefreshContextFromContext(ctx)
+	return ok
+}
+
+func viewMetadataRefreshContextFromContext(ctx context.Context) (viewMetadataRefreshContext, bool) {
+	if ctx == nil {
+		return viewMetadataRefreshContext{}, false
+	}
+	if refresh, ok := ctx.Value(defines.ViewMetadataRefreshKey{}).(viewMetadataRefreshContext); ok {
+		return refresh, true
+	}
+	retry, ok := ctx.Value(defines.ViewMetadataRetryKey{}).(defines.ViewMetadataRetry)
+	if !ok {
+		return viewMetadataRefreshContext{}, false
+	}
+	return viewMetadataRefreshContext{
+		retry:                true,
+		targetViewID:         retry.TargetViewID,
+		targetViewVersion:    retry.TargetViewVersion,
+		targetViewDefinition: retry.TargetViewDefinition,
+	}, true
 }
 
 func refreshViewMetadataAfterAlter(
@@ -2168,6 +2193,9 @@ func refreshViewMetadataAfterAlter(
 					if !canSkipViewMetadataRefreshError(err) {
 						return err
 					}
+					if err := markViewMetadataRefreshPending(c, view); err != nil {
+						return err
+					}
 					logutil.Warn("skip refreshing invalid view metadata",
 						zap.String("database", view.database),
 						zap.String("view", view.name),
@@ -2194,6 +2222,58 @@ func refreshViewMetadataAfterAlter(
 		}
 	}
 	return nil
+}
+
+func markViewMetadataRefreshPending(c *Compile, view viewMetadataRefresh) error {
+	if view.viewData.MetadataRefreshPending {
+		return nil
+	}
+	oldCtx := c.proc.Ctx
+	c.proc.Ctx = defines.AttachAccountId(oldCtx, view.accountID)
+	defer func() { c.proc.Ctx = oldCtx }()
+	if err := lockMoDatabase(c, view.database, lock.LockMode_Shared); err != nil {
+		return err
+	}
+	db, err := c.e.Database(c.proc.Ctx, view.database, c.proc.GetTxnOperator())
+	if err != nil {
+		return err
+	}
+	if err = lockMoTable(c, view.database, view.name, lock.LockMode_Exclusive); err != nil {
+		return err
+	}
+	rel, err := db.Relation(c.proc.Ctx, view.name, nil)
+	if err != nil {
+		return err
+	}
+	refresh := viewMetadataRefreshContext{
+		targetViewID:         view.id,
+		targetViewVersion:    view.version,
+		targetViewDefinition: view.definition,
+	}
+	if !viewMetadataRefreshGenerationMatches(c.proc.Ctx, rel, refresh) {
+		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+	}
+	def := plan2.DeepCopyTableDef(rel.GetTableDef(c.proc.Ctx), true)
+	var current plan2.ViewData
+	if def.GetViewSql() == nil || json.Unmarshal([]byte(def.GetViewSql().GetView()), &current) != nil {
+		return nil
+	}
+	current.MetadataRefreshPending = true
+	encoded, err := json.Marshal(current)
+	if err != nil {
+		return err
+	}
+	def.ViewSql = &plan2.ViewDef{View: string(encoded)}
+	databaseID, err := strconv.ParseUint(db.GetDatabaseId(c.proc.Ctx), 10, 64)
+	if err != nil {
+		return err
+	}
+	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.ViewMetadataRefreshKey{}, refresh)
+	return rel.AlterTable(
+		context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql),
+		nil,
+		[]*api.AlterTableReq{api.NewReplaceDefReq(databaseID, rel.GetTableID(c.proc.Ctx), def)},
+	)
 }
 
 func checkViewMetadataCandidateLimit(ctx context.Context, count int) error {
@@ -2480,12 +2560,12 @@ func buildViewMetadataRefreshQuery(
 	databaseNameJSON, _ := json.Marshal(sourceDatabase)
 	tableNameJSON, _ := json.Marshal(sourceTable)
 	qualifiedNameCandidate := sqlquote.String(
-		"%\"database_name\":" + string(databaseNameJSON) +
-			",\"table_name\":" + string(tableNameJSON) + "%",
+		"\"database_name\":" + string(databaseNameJSON) +
+			",\"table_name\":" + string(tableNameJSON),
 	)
 	publisherQualifiedNameCandidate := sqlquote.String(
-		"%\"publisher_db\":" + string(databaseNameJSON) +
-			",\"publisher_table\":" + string(tableNameJSON) + "%",
+		"\"publisher_db\":" + string(databaseNameJSON) +
+			",\"publisher_table\":" + string(tableNameJSON),
 	)
 	subscriptionNamePrefix := sqlquote.String("\"subscription_db\":")
 	subscriptionTableSuffix := sqlquote.String(
@@ -2497,7 +2577,7 @@ func buildViewMetadataRefreshQuery(
 			"and reldatabase not in ('%s', '%s') and rel_id > %d "+
 			"and ((((account_id = %d) or account_id in "+
 			"(select sub_account_id from %s.%s where pub_account_id = %d and status = %d)) "+
-			"and viewdef not like '%%\\\"dependencies\\\":%%' "+
+			"and json_extract(viewdef, '$.dependencies') is null "+
 			"and instr(viewdef, %s) > 0) "+
 			"or (viewdef like '%%\\\"account_id\\\":%d,%%' "+
 			"and (viewdef like '%%\\\"logical_id\\\":%d,%%' "+
@@ -2507,8 +2587,8 @@ func buildViewMetadataRefreshQuery(
 			"and viewdef not like '%%\\\"logical_id\\\":%%') "+
 			"or ((((account_id = %d) or account_id in "+
 			"(select sub_account_id from %s.%s where pub_account_id = %d and status = %d)) "+
-			"and viewdef like '%%\\\"dependencies\\\":%%' and "+
-			"(viewdef like %s or viewdef like %s)) "+
+			"and json_extract(viewdef, '$.dependencies') is not null and "+
+			"(instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0)) "+
 			"or exists (select 1 from %s.%s where sub_account_id = account_id "+
 			"and pub_account_id = %d and lower(pub_database) = lower(%s) and status = %d "+
 			"and instr(viewdef, concat(%s, char(34), "+
@@ -2695,6 +2775,20 @@ func buildRefreshViewSQL(
 	fmtCtx.WriteString(" as ")
 	source.Format(fmtCtx)
 	return fmtCtx.String(), nil
+}
+
+func BuildViewMetadataRefreshSQL(
+	ctx context.Context,
+	lower int64,
+	database string,
+	name string,
+	viewData plan2.ViewData,
+) (string, error) {
+	return buildRefreshViewSQL(ctx, lower, viewMetadataRefresh{
+		database: database,
+		name:     name,
+		viewData: viewData,
+	})
 }
 
 func (s *Scope) RenameTable(c *Compile) (err error) {

@@ -156,6 +156,10 @@ func Test_showTablesFromDbQuotesDatabaseName(t *testing.T) {
 }
 
 func Test_doAlterPublication(t *testing.T) {
+	retryStub := gostub.Stub(&retryPendingViewMetadataFunc, func(context.Context, *Session, BackgroundExec) error {
+		return nil
+	})
+	defer retryStub.Reset()
 	mockedAccountsResults := func(ctrl *gomock.Controller) []interface{} {
 		er := mock_frontend.NewMockExecResult(ctrl)
 		er.EXPECT().GetRowCount().Return(uint64(2)).AnyTimes()
