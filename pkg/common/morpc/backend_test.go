@@ -1652,6 +1652,60 @@ func TestRemoteBackendUsesSharedLogger(t *testing.T) {
 	assert.Same(t, logger, b.logger, "backend should use shared logger, not a With() clone")
 }
 
+func TestGoettyBasedBackendFactoryConcurrentCreateOptions(t *testing.T) {
+	app := newTestApp(t, func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+		return conn.Write(msg, goetty.WriteOptions{Flush: true})
+	})
+	require.NoError(t, app.Start())
+	defer func() { require.NoError(t, app.Stop()) }()
+
+	ready := make(chan struct{}, 2)
+	release := make(chan struct{})
+	options := make([]BackendOption, 1, 2)
+	options[0] = func(rb *remoteBackend) {
+		rb.metrics = newMetrics(t.Name())
+		ready <- struct{}{}
+		<-release
+	}
+	factory := NewGoettyBasedBackendFactory(newTestCodec(), options...)
+
+	type createResult struct {
+		backend Backend
+		err     error
+	}
+	create := func(bufferSize int) <-chan createResult {
+		resultC := make(chan createResult, 1)
+		go func() {
+			backend, err := factory.Create(testAddr, WithBackendBufferSize(bufferSize))
+			resultC <- createResult{backend: backend, err: err}
+		}()
+		return resultC
+	}
+
+	firstC := create(1)
+	secondC := create(2)
+	<-ready
+	<-ready
+	close(release)
+
+	first := <-firstC
+	second := <-secondC
+	defer func() {
+		if first.backend != nil {
+			first.backend.Close()
+		}
+		if second.backend != nil {
+			second.backend.Close()
+		}
+	}()
+	require.NoError(t, first.err)
+	require.NoError(t, second.err)
+	firstBackend := first.backend.(*remoteBackend)
+	secondBackend := second.backend.(*remoteBackend)
+	require.Equal(t, 1, firstBackend.options.bufferSize)
+	require.Equal(t, 2, secondBackend.options.bufferSize)
+}
+
 func TestRemoteBackendCloseDoesNotLogExpectedDoubleClose(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	core, logs := observer.New(zap.ErrorLevel)
