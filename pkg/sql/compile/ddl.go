@@ -463,8 +463,10 @@ func (s *Scope) AlterView(c *Compile) error {
 		}
 	}
 
-	if err := lockAndValidateViewDependencies(c, replaceDef.GetViewSql()); err != nil {
-		return err
+	if !isViewMetadataRefresh(c.proc.Ctx) {
+		if err := lockAndValidateViewDependencies(c, replaceDef.GetViewSql()); err != nil {
+			return err
+		}
 	}
 	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
@@ -2189,6 +2191,31 @@ func (s *Scope) CreateTable(c *Compile) error {
 		// The temporary table and all follow-up metadata/index/CTAS work have
 		// completed. Keep the alias registered in the session.
 		rollbackTempAlias = false
+	}
+	if !isTemp &&
+		!features.IsPartition(qry.GetTableDef().GetFeatureFlag()) &&
+		!plan2.IsFkBannedDatabase(dbName) {
+		accountID, err := defines.GetAccountId(c.proc.Ctx)
+		if err != nil {
+			return err
+		}
+		currentDef := main.GetTableDef(c.proc.Ctx)
+		logicalID := currentDef.GetLogicalId()
+		if logicalID == 0 {
+			logicalID = main.GetTableID(c.proc.Ctx)
+		}
+		if err = refreshViewMetadataAfterAlter(
+			c,
+			accountID,
+			logicalID,
+			main.GetTableID(c.proc.Ctx),
+			main.GetTableID(c.proc.Ctx),
+			dbName,
+			tblName,
+			true,
+		); err != nil {
+			return err
+		}
 	}
 	return nil
 }

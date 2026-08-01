@@ -54,6 +54,13 @@ type viewMetadataRefreshResolver struct {
 	subscriptions   currentViewSubscriptionResolver
 }
 
+type viewMetadataUDFNotFoundError struct {
+	cause error
+}
+
+func (e *viewMetadataUDFNotFoundError) Error() string { return e.cause.Error() }
+func (e *viewMetadataUDFNotFoundError) Unwrap() error { return e.cause }
+
 func (r viewMetadataRefreshResolver) GetSubscriptionMeta(
 	database string,
 	snapshot *plan.Snapshot,
@@ -222,7 +229,9 @@ func (r viewMetadataRefreshResolver) ResolveUdf(
 		return nil, err
 	}
 	if !foundRows {
-		return nil, moerr.NewNotSupportedf(ctx, "function or operator '%s'", name)
+		return nil, &viewMetadataUDFNotFoundError{
+			cause: moerr.NewNotSupportedf(ctx, "function or operator '%s'", name),
+		}
 	}
 	if len(matches) == 0 {
 		return nil, moerr.NewInvalidInputf(

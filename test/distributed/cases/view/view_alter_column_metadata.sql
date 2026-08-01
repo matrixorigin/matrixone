@@ -38,6 +38,16 @@ alter table `recreated\%_source` modify column a bigint;
 -- @ignore:5,6
 desc recreated_quoted_view;
 
+create table recreated_pending_live (a int);
+create table recreated_pending_source (b int);
+create view recreated_pending_view as
+select live.a, source.b from recreated_pending_live live, recreated_pending_source source;
+drop table recreated_pending_source;
+alter table recreated_pending_live modify column a bigint;
+create table recreated_pending_source (b decimal(11, 2));
+-- @ignore:5,6
+desc recreated_pending_view;
+
 create table ambiguity_left (a int);
 create table ambiguity_right (b int);
 create view ambiguity_view as
@@ -115,6 +125,13 @@ from snapshot_live live, snapshot_frozen { snapshot = 'view_alter_column_metadat
 create view snapshot_text_v as
 select a, '{snapshot is only text' as marker from snapshot_live;
 create view udf_v as select a, refresh_udf() as udf_value from snapshot_live;
+create table sql_mode_source (a varchar(5));
+set sql_mode = 'PIPES_AS_CONCAT';
+create view sql_mode_v as select a || '-suffix' as combined from sql_mode_source;
+set sql_mode = '';
+alter table sql_mode_source modify column a varchar(20);
+-- @ignore:5,6
+desc sql_mode_v;
 use view_alter_column_metadata_cross;
 alter table view_alter_column_metadata.snapshot_live modify column a bigint;
 -- @ignore:5,6
@@ -124,6 +141,9 @@ desc view_alter_column_metadata.snapshot_text_v;
 -- @ignore:5,6
 desc view_alter_column_metadata.udf_v;
 drop function view_alter_column_metadata.refresh_udf();
+alter table view_alter_column_metadata.snapshot_live modify column a decimal(12, 2);
+-- @ignore:5,6
+desc view_alter_column_metadata.udf_v;
 drop snapshot view_alter_column_metadata_sn;
 
 create table deleted_snapshot_live (a int);
@@ -137,6 +157,30 @@ drop snapshot deleted_snapshot_sn;
 alter table deleted_snapshot_live modify column a bigint;
 -- @ignore:5,6
 desc deleted_snapshot_v;
+
+create table pending_live_one (a int);
+create table pending_live_two (a int);
+create table pending_frozen (b int);
+create snapshot pending_snapshot_one for account sys;
+create snapshot pending_snapshot_two for account sys;
+create view pending_view_one as
+select live.a, frozen.b from pending_live_one live,
+pending_frozen {snapshot = 'pending_snapshot_one'} frozen;
+create view pending_view_two as
+select live.a, frozen.b from pending_live_two live,
+pending_frozen {snapshot = 'pending_snapshot_two'} frozen;
+drop snapshot pending_snapshot_one;
+drop snapshot pending_snapshot_two;
+alter table pending_live_one modify column a bigint;
+alter table pending_live_two modify column a decimal(10, 3);
+create snapshot pending_snapshot_two for account sys;
+create snapshot pending_snapshot_one for account sys;
+-- @ignore:5,6
+desc pending_view_one;
+-- @ignore:5,6
+desc pending_view_two;
+drop snapshot pending_snapshot_one;
+drop snapshot pending_snapshot_two;
 
 drop database view_alter_column_metadata;
 drop database view_alter_column_metadata_cross;

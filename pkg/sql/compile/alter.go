@@ -1878,6 +1878,7 @@ func (s *Scope) doAlterTable(c *Compile) error {
 			relation.GetTableID(c.proc.Ctx),
 			qry.GetDatabase(),
 			qry.GetTableDef().GetName(),
+			false,
 		)
 	} else {
 		err = s.AlterTableInplace(c)
@@ -1906,6 +1907,7 @@ func (s *Scope) doAlterTable(c *Compile) error {
 		qry.GetTableDef().GetTblId(),
 		qry.GetDatabase(),
 		qry.GetTableDef().GetName(),
+		false,
 	)
 }
 
@@ -1942,6 +1944,8 @@ type viewMetadataSubscriptionResolverKey struct{}
 type viewMetadataCompilerContextKey struct{}
 
 type viewMetadataResolverKey struct{}
+
+type viewMetadataSQLModeKey struct{}
 
 type viewMetadataSubscriptionResolver interface {
 	GetSubscriptionMeta(string, *plan2.Snapshot) (*plan2.SubscriptionMeta, error)
@@ -2003,7 +2007,7 @@ func (e *viewMetadataRefreshPlanError) Unwrap() error {
 }
 
 func wrapViewMetadataRefreshPlanError(ctx context.Context, err error) error {
-	if err == nil || ctx.Value(defines.ViewMetadataRefreshKey{}) == nil {
+	if err == nil || !isViewMetadataRefresh(ctx) {
 		return err
 	}
 	return &viewMetadataRefreshPlanError{err: err}
@@ -2058,6 +2062,7 @@ func refreshViewMetadataAfterAlter(
 	currentSourceTableID uint64,
 	sourceDatabase string,
 	sourceTable string,
+	onlyPending bool,
 ) error {
 	var dependentViews int
 	var examinedCandidates int
@@ -2084,6 +2089,7 @@ func refreshViewMetadataAfterAlter(
 				source.database,
 				source.tableName,
 				afterViewID,
+				onlyPending,
 			)
 			if err != nil {
 				return err
@@ -2481,6 +2487,7 @@ func loadViewMetadataRefreshPage(
 	sourceDatabase string,
 	sourceTable string,
 	afterViewID uint64,
+	onlyPending bool,
 ) ([]viewMetadataRefresh, error) {
 	const pageSize = 128
 	sql := buildViewMetadataRefreshQuery(
@@ -2491,6 +2498,7 @@ func loadViewMetadataRefreshPage(
 		sourceTable,
 		afterViewID,
 		pageSize,
+		onlyPending,
 	)
 	result, err := c.runSqlWithResultAndOptions(
 		sql,
@@ -2555,7 +2563,12 @@ func buildViewMetadataRefreshQuery(
 	sourceTable string,
 	afterViewID uint64,
 	pageSize int,
+	onlyPending ...bool,
 ) string {
+	pendingFilter := ""
+	if len(onlyPending) > 0 && onlyPending[0] {
+		pendingFilter = "and json_unquote(json_extract(viewdef, '$.metadata_refresh_pending')) = 'true' "
+	}
 	legacyCandidate := sqlquote.String(sourceTable)
 	databaseNameJSON, _ := json.Marshal(sourceDatabase)
 	tableNameJSON, _ := json.Marshal(sourceTable)
@@ -2573,7 +2586,7 @@ func buildViewMetadataRefreshQuery(
 	)
 	return fmt.Sprintf(
 		"select account_id, rel_id, rel_logical_id, rel_version, reldatabase, relname, viewdef from %s.mo_tables "+
-			"where relkind = '%s' "+
+			"where relkind = '%s' %s"+
 			"and reldatabase not in ('%s', '%s') and rel_id > %d "+
 			"and ((((account_id = %d) or account_id in "+
 			"(select sub_account_id from %s.%s where pub_account_id = %d and status = %d)) "+
@@ -2597,6 +2610,7 @@ func buildViewMetadataRefreshQuery(
 			"order by rel_id limit %d",
 		catalog.MO_CATALOG,
 		catalog.SystemViewRel,
+		pendingFilter,
 		catalog.MO_CATALOG,
 		"information_schema",
 		afterViewID,
@@ -2665,6 +2679,7 @@ func runViewMetadataRefreshSQL(
 			subscriptions:   subscriptions,
 		},
 	)
+	c.proc.Ctx = context.WithValue(c.proc.Ctx, viewMetadataSQLModeKey{}, sqlMode)
 	if helper := c.proc.GetSessionInfo().SqlHelper; helper != nil {
 		if compilerContext, ok := helper.GetCompilerContext().(plan2.CompilerContext); ok {
 			c.proc.Ctx = context.WithValue(
@@ -2704,6 +2719,10 @@ func canSkipViewMetadataRefreshError(err error) bool {
 	if errors.As(planErr.err, &snapshotNotFound) {
 		return true
 	}
+	var udfNotFound *viewMetadataUDFNotFoundError
+	if errors.As(planErr.err, &udfNotFound) {
+		return true
+	}
 	code, ok := moerr.GetMoErrCode(planErr.err)
 	if !ok {
 		return false
@@ -2719,6 +2738,32 @@ func canSkipViewMetadataRefreshError(err error) bool {
 		moerr.ErrNoSuchTable,
 		moerr.ErrNoDB,
 		moerr.ErrBadView:
+		return true
+	default:
+		return false
+	}
+}
+
+func CanSkipViewMetadataRefreshError(err error) bool {
+	if canSkipViewMetadataRefreshError(err) || plan2.IsSnapshotNotFound(err) {
+		return true
+	}
+	code, ok := moerr.GetMoErrCode(err)
+	if !ok {
+		return false
+	}
+	switch code {
+	case moerr.ErrInvalidInput,
+		moerr.ErrConstraintViolation,
+		moerr.ErrParseError,
+		moerr.ErrBadFieldError,
+		moerr.ErrOperandColumns,
+		moerr.ErrViewWrongList,
+		moerr.ErrBadDB,
+		moerr.ErrNoSuchTable,
+		moerr.ErrNoDB,
+		moerr.ErrBadView,
+		moerr.ErrNotSupported:
 		return true
 	default:
 		return false

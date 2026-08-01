@@ -165,7 +165,7 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 	require.Equal(t, 2, dependentViews)
 	require.Empty(t, rel.alterReqs, "unchanged refresh must not advance the view schema")
 	require.Equal(t, 2, tableLockCalls)
-	require.Equal(t, 2, dependencyLockCalls)
+	require.Zero(t, dependencyLockCalls, "automatic refresh must not invert source-table lock order")
 
 	refreshedViewSQL := newDef.GetViewSql().GetView()
 	newDef.ViewSql.View = `{"Stmt":"alter view v as select a from unrelated","dependencies":[{"account_id":8,"account_id_set":true,"table_id":2,"logical_id":2,"version":1}]}`
@@ -190,6 +190,7 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 		rel.alterReqs[0].GetReplaceDef().GetDef().GetViewSql().GetView(),
 		"an explicit ALTER VIEW must replace the stored view definition",
 	)
+	require.Equal(t, 1, dependencyLockCalls, "explicit ALTER VIEW must still validate dependency generations")
 
 	delete(db.rels, "v")
 	require.Error(t, s.AlterView(c))

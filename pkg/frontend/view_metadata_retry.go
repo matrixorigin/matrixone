@@ -20,7 +20,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -33,16 +32,7 @@ var retryPendingViewMetadataFunc = retryPendingViewMetadata
 
 func retryPendingViewMetadata(ctx context.Context, ses *Session, bh BackgroundExec) error {
 	bh.ClearExecResultSet()
-	query := fmt.Sprintf(
-		"select account_id, rel_id, rel_version, reldatabase, relname, viewdef "+
-			"from %s.%s where relkind = '%s' and "+
-			"json_unquote(json_extract(viewdef, '$.metadata_refresh_pending')) = 'true' "+
-			"order by account_id, rel_id limit %d",
-		catalog.MO_CATALOG,
-		catalog.MO_TABLES,
-		catalog.SystemViewRel,
-		maxPendingViewMetadataRetries+1,
-	)
+	query := buildPendingViewMetadataRetryQuery()
 	if err := bh.Exec(defines.AttachAccountId(ctx, catalog.System_Account), query); err != nil {
 		return err
 	}
@@ -52,9 +42,6 @@ func retryPendingViewMetadata(ctx context.Context, ses *Session, bh BackgroundEx
 	}
 	if !execResultArrayHasData(results) {
 		return nil
-	}
-	if results[0].GetRowCount() > maxPendingViewMetadataRetries {
-		return moerr.NewInvalidInputf(ctx, "dependency recovery affects more than %d pending views", maxPendingViewMetadataRetries)
 	}
 	lower := int64(1)
 	if value, err := ses.GetSessionSysVar("lower_case_table_names"); err == nil {
@@ -111,7 +98,7 @@ func retryPendingViewMetadata(ctx context.Context, ses *Session, bh BackgroundEx
 		}
 		bh.ClearExecResultSet()
 		if err = bh.ExecWithSQLMode(retryCtx, sql, sqlMode); err != nil {
-			if canSkipPendingViewMetadataRetry(err) {
+			if compile.CanSkipViewMetadataRefreshError(err) {
 				continue
 			}
 			return err
@@ -120,24 +107,15 @@ func retryPendingViewMetadata(ctx context.Context, ses *Session, bh BackgroundEx
 	return nil
 }
 
-func canSkipPendingViewMetadataRetry(err error) bool {
-	code, ok := moerr.GetMoErrCode(err)
-	if !ok {
-		return false
-	}
-	switch code {
-	case moerr.ErrInvalidInput,
-		moerr.ErrConstraintViolation,
-		moerr.ErrParseError,
-		moerr.ErrBadFieldError,
-		moerr.ErrOperandColumns,
-		moerr.ErrViewWrongList,
-		moerr.ErrBadDB,
-		moerr.ErrNoSuchTable,
-		moerr.ErrNoDB,
-		moerr.ErrBadView:
-		return true
-	default:
-		return false
-	}
+func buildPendingViewMetadataRetryQuery() string {
+	return fmt.Sprintf(
+		"select account_id, rel_id, rel_version, reldatabase, relname, viewdef "+
+			"from %s.%s where relkind = '%s' and "+
+			"json_unquote(json_extract(viewdef, '$.metadata_refresh_pending')) = 'true' "+
+			"order by account_id, rel_id limit %d",
+		catalog.MO_CATALOG,
+		catalog.MO_TABLES,
+		catalog.SystemViewRel,
+		maxPendingViewMetadataRetries,
+	)
 }

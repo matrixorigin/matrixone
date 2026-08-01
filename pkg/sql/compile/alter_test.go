@@ -158,6 +158,8 @@ func TestBuildViewMetadataRefreshQueryEscapesLegacyTableName(t *testing.T) {
 	require.Contains(t, query, "pub_account_id = 7")
 	require.Contains(t, query, "json_extract(viewdef, '$.dependencies') is null")
 	require.NotContains(t, query, "viewdef like '\\%")
+	pendingQuery := buildViewMetadataRefreshQuery(7, 24, 42, "db", "source", 0, 128, true)
+	require.Contains(t, pendingQuery, "json_extract(viewdef, '$.metadata_refresh_pending')")
 }
 
 func TestCurrentViewSubscriptionResolver(t *testing.T) {
@@ -365,6 +367,12 @@ func TestCanSkipViewMetadataRefreshError(t *testing.T) {
 	require.False(t, canSkipViewMetadataRefreshError(
 		context.Canceled,
 	))
+	require.True(t, CanSkipViewMetadataRefreshError(
+		moerr.NewNotSupported(ctx, "missing UDF"),
+	))
+	require.False(t, CanSkipViewMetadataRefreshError(
+		moerr.NewInternalError(ctx, "catalog write failed"),
+	))
 }
 
 func TestRefreshViewMetadataAfterAlter(t *testing.T) {
@@ -423,7 +431,7 @@ func TestRefreshViewMetadataAfterAlter(t *testing.T) {
 	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
 	c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, 7)
 	require.NoError(t, refreshViewMetadataAfterAlter(
-		c, 7, sourceLogicalID, sourceTableID, sourceTableID, "db", "source_t",
+		c, 7, sourceLogicalID, sourceTableID, sourceTableID, "db", "source_t", false,
 	))
 	require.Equal(t, []string{
 		query,

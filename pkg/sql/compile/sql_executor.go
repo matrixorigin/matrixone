@@ -348,7 +348,13 @@ func (exec *txnExecutor) Exec(
 
 	receiveAt := time.Now()
 	lower := exec.opts.LowerCaseTableNames()
-	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, lower)
+	var stmts []tree.Statement
+	var err error
+	if sqlMode, ok := exec.ctx.Value(viewMetadataSQLModeKey{}).(string); ok {
+		stmts, err = parsers.ParseWithSQLMode(exec.ctx, dialect.MYSQL, sql, lower, sqlMode)
+	} else {
+		stmts, err = parsers.Parse(exec.ctx, dialect.MYSQL, sql, lower)
+	}
 	defer func() {
 		for _, stmt := range stmts {
 			stmt.Free()
