@@ -806,6 +806,10 @@ func satisfyDiffOutputOpt(
 		var (
 			rows = make([][]any, 0, 100)
 		)
+		limitReached := func() bool {
+			return stmt.OutputOpt != nil && stmt.OutputOpt.Limit != nil &&
+				int64(len(rows)) >= *stmt.OutputOpt.Limit
+		}
 
 		// Resolve column projection (nil means show all visible columns).
 		displayIdxes, resolveErr := resolveProjectedIdxes(stmt.Columns, tblStuff)
@@ -834,6 +838,12 @@ func satisfyDiffOutputOpt(
 			}
 			// Sparse row: indexed by colIdx+2, so size must accommodate the largest index.
 			rowSize = slices.Max(extractIdxes) + 3
+		}
+
+		if limitReached() {
+			// The limit is already satisfied before consuming any rows (LIMIT 0).
+			hitLimit = true
+			stop()
 		}
 
 		for wrapped := range retCh {
@@ -869,8 +879,7 @@ func satisfyDiffOutputOpt(
 				}
 
 				rows = append(rows, row)
-				if stmt.OutputOpt != nil && stmt.OutputOpt.Limit != nil &&
-					int64(len(rows)) >= *stmt.OutputOpt.Limit {
+				if limitReached() {
 					// hit limit, cancel producers but keep draining the channel
 					hitLimit = true
 					stop()
