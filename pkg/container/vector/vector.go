@@ -1643,13 +1643,8 @@ func (v *Vector) dup(
 	if v.IsConstNull() {
 		w.length = v.length
 		if v.HasGrouping() {
-			groupingRows := v.GetGrouping().GetBitmap().Len()
-			if groupingRows < 0 || groupingRows > int64(math.MaxInt) {
-				w.Free(mp)
-				return nil, mpool.ErrAllocationAccountInvalid
-			}
 			if err := w.ensureGroupingCapacity(
-				int(groupingRows),
+				v.length,
 				mp,
 			); err != nil {
 				w.Free(mp)
@@ -1674,22 +1669,18 @@ func (v *Vector) dup(
 		}
 		dataLen *= v.length
 	}
-	if nullRows := v.GetNulls().GetBitmap().Len(); !v.GetNulls().EmptyByFlag() {
-		if nullRows < 0 || nullRows > int64(math.MaxInt) {
-			w.Free(mp)
-			return nil, mpool.ErrAllocationAccountInvalid
-		}
-		if err := w.ensureNullCapacity(int(nullRows), mp); err != nil {
+	// Bitmap logical length only reaches the highest set bit, so it can be much
+	// shorter than a sparse vector. The duplicate must cover the complete row
+	// domain because allocation-free transforms (for example ordered Shrink)
+	// may address every output row.
+	if !v.GetNulls().EmptyByFlag() {
+		if err := w.ensureNullCapacity(v.length, mp); err != nil {
 			w.Free(mp)
 			return nil, err
 		}
 	}
-	if groupingRows := v.GetGrouping().GetBitmap().Len(); !v.GetGrouping().EmptyByFlag() {
-		if groupingRows < 0 || groupingRows > int64(math.MaxInt) {
-			w.Free(mp)
-			return nil, mpool.ErrAllocationAccountInvalid
-		}
-		if err := w.ensureGroupingCapacity(int(groupingRows), mp); err != nil {
+	if !v.GetGrouping().EmptyByFlag() {
+		if err := w.ensureGroupingCapacity(v.length, mp); err != nil {
 			w.Free(mp)
 			return nil, err
 		}

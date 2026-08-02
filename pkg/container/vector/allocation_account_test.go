@@ -318,6 +318,46 @@ func TestVectorAllocationAccountBitmapShrinkUsesNoScratch(t *testing.T) {
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
+func TestVectorAllocationAccountDupPreservesSparseBitmapRowDomain(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 8<<20, 16)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	require.NoError(t, AppendFixed(vec, int64(0), true, mp))
+	for i := 1; i < 130; i++ {
+		require.NoError(t, AppendFixed(vec, int64(i), false, mp))
+	}
+	require.NoError(t, vec.ensureGroupingCapacity(1, mp))
+	vec.GetGrouping().Add(0)
+	require.Equal(t, 1, vec.GetNulls().Count())
+	require.Equal(t, 1, vec.GetGrouping().Count())
+	dup, err := vec.Dup(mp)
+	require.NoError(t, err)
+	require.GreaterOrEqual(
+		t,
+		dup.GetNulls().GetBitmap().ExternalStorageCapacity(),
+		3,
+	)
+	require.GreaterOrEqual(
+		t,
+		dup.GetGrouping().GetBitmap().ExternalStorageCapacity(),
+		3,
+	)
+	sels := make([]int64, 129)
+	for i := range sels {
+		sels[i] = int64(i + 1)
+	}
+	require.NotPanics(t, func() {
+		dup.Shrink(sels, false)
+	})
+	require.Equal(t, 129, dup.Length())
+	require.Zero(t, dup.GetNulls().Count())
+	require.Zero(t, dup.GetGrouping().Count())
+
+	dup.Free(mp)
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
 func TestVectorAllocationAccountBitmapShuffleAccountsScratch(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 8<<20, 16)
 	mp := mpool.MustNewZero()
