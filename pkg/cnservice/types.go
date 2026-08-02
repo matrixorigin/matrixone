@@ -668,12 +668,17 @@ type service struct {
 	queryClient qclient.QueryClient
 	// udfService is used to handle non-sql udf
 	udfService       udf.Service
+	bootstrapMu      sync.RWMutex
 	bootstrapService bootstrap.Service
-	incrservice      incrservice.AutoIncrementService
-	txnTraceService  trace.Service
+	// beforeBootstrapClose is a deterministic test barrier.
+	beforeBootstrapClose func()
+	incrservice          incrservice.AutoIncrementService
+	txnTraceService      trace.Service
 
-	stopper *stopper.Stopper
-	aicm    *defines.AutoIncrCacheManager
+	stopper   *stopper.Stopper
+	aicm      *defines.AutoIncrCacheManager
+	closeOnce sync.Once
+	closeErr  error
 
 	task struct {
 		sync.RWMutex

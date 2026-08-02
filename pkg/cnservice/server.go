@@ -385,18 +385,24 @@ func (s *service) registerDefaultIcebergMaintenanceExecutor(ctx context.Context)
 	return nil
 }
 
-func (s *service) Start() error {
-	if err := s.bootstrap(); err != nil {
+func (s *service) Start() (err error) {
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, s.Close())
+		}
+	}()
+
+	if err = s.bootstrap(); err != nil {
 		return err
 	}
 
 	s.initSqlWriterFactory()
 
-	if err := s.queryService.Start(); err != nil {
+	if err = s.queryService.Start(); err != nil {
 		return err
 	}
 
-	err := s.runMoServer()
+	err = s.runMoServer()
 	if err != nil {
 		return err
 	}
@@ -411,50 +417,53 @@ func (s *service) Start() error {
 }
 
 func (s *service) Close() error {
-	defer logutil.LogClose(s.logger, "cnservice")()
+	s.closeOnce.Do(func() {
+		defer logutil.LogClose(s.logger, "cnservice")()
 
-	s.stopper.Stop()
+		s.stopper.Stop()
 
-	return closeCNServiceSteps(
-		s.closeBootstrapService,
-		s.stopFrontend,
-		// Frontend shutdown stops accepting interactive work, while stopTask
-		// drains scheduled ingestion statements. Only after both producers have
-		// stopped may the MongoDB pool disconnect clients still leased by a
-		// MongoScan operator.
-		s.stopTask,
-		s.closeMongoDBRuntime,
-		s.closePipelineAdmission,
-		s.server.Close,
-		s.stopRPCs,
-		s.waitPipelineHandlers,
-		s.closeIncrService,
-		s.closeTxnTraceService,
-		func() error {
-			// stop I/O pipeline
-			ioutil.Stop(s.cfg.UUID)
-			return nil
-		},
-		func() error {
-			if s.gossipNode != nil {
-				return s.gossipNode.Leave(time.Second)
-			}
-			return nil
-		},
-		s.lockService.Close,
-		func() error {
-			if s.shardService != nil {
-				return s.shardService.Close()
-			}
-			return nil
-		},
-		func() error {
-			if s.pipelines.client != nil {
-				return s.pipelines.client.Close()
-			}
-			return nil
-		},
-	)
+		s.closeErr = closeCNServiceSteps(
+			s.stopFrontend,
+			s.closeBootstrapService,
+			// Frontend shutdown stops accepting interactive work, while stopTask
+			// drains scheduled ingestion statements. Only after both producers have
+			// stopped may the MongoDB pool disconnect clients still leased by a
+			// MongoScan operator.
+			s.stopTask,
+			s.closeMongoDBRuntime,
+			s.closePipelineAdmission,
+			s.server.Close,
+			s.stopRPCs,
+			s.waitPipelineHandlers,
+			s.closeIncrService,
+			s.closeTxnTraceService,
+			func() error {
+				// stop I/O pipeline
+				ioutil.Stop(s.cfg.UUID)
+				return nil
+			},
+			func() error {
+				if s.gossipNode != nil {
+					return s.gossipNode.Leave(time.Second)
+				}
+				return nil
+			},
+			s.lockService.Close,
+			func() error {
+				if s.shardService != nil {
+					return s.shardService.Close()
+				}
+				return nil
+			},
+			func() error {
+				if s.pipelines.client != nil {
+					return s.pipelines.client.Close()
+				}
+				return nil
+			},
+		)
+	})
+	return s.closeErr
 }
 
 func (s *service) closePipelineAdmission() error {
@@ -506,6 +515,11 @@ func (s *service) waitPipelineHandlers() error {
 }
 
 func (s *service) closeBootstrapService() error {
+	if s.beforeBootstrapClose != nil {
+		s.beforeBootstrapClose()
+	}
+	s.bootstrapMu.Lock()
+	defer s.bootstrapMu.Unlock()
 	if s.bootstrapService == nil {
 		return nil
 	}
@@ -560,7 +574,12 @@ func (s *service) SessionMgr() *queryservice.SessionManager {
 }
 
 func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
-	finalVersion := s.GetFinalVersion()
+	s.bootstrapMu.RLock()
+	defer s.bootstrapMu.RUnlock()
+	if s.bootstrapService == nil {
+		return moerr.NewInvalidStateNoCtx("bootstrap service is closed")
+	}
+	finalVersion := s.bootstrapService.GetFinalVersion()
 	tenantFetchFunc := func() (int32, string, error) {
 		return int32(tenantID), finalVersion, nil
 	}
@@ -574,6 +593,11 @@ func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
 
 // UpgradeTenant Manual command tenant upgrade entrance
 func (s *service) UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error {
+	s.bootstrapMu.RLock()
+	defer s.bootstrapMu.RUnlock()
+	if s.bootstrapService == nil {
+		return moerr.NewInvalidStateNoCtx("bootstrap service is closed")
+	}
 	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*120, moerr.CauseUpgradeTenant)
 	defer cancel()
 	if _, err := s.bootstrapService.UpgradeTenant(ctx, tenantName, retryCount, isALLAccount); err != nil {
@@ -583,6 +607,11 @@ func (s *service) UpgradeTenant(ctx context.Context, tenantName string, retryCou
 }
 
 func (s *service) GetFinalVersion() string {
+	s.bootstrapMu.RLock()
+	defer s.bootstrapMu.RUnlock()
+	if s.bootstrapService == nil {
+		return ""
+	}
 	return s.bootstrapService.GetFinalVersion()
 }
 
@@ -1012,6 +1041,8 @@ func (s *service) GetSQLExecutor() executor.SQLExecutor {
 }
 
 func (s *service) GetBootstrapService() bootstrap.Service {
+	s.bootstrapMu.RLock()
+	defer s.bootstrapMu.RUnlock()
 	return s.bootstrapService
 }
 
@@ -1169,6 +1200,8 @@ func (s *service) bootstrap() error {
 	s.initTxnTraceService()
 
 	rt := runtime.ServiceRuntime(s.cfg.UUID)
+	s.bootstrapMu.Lock()
+	defer s.bootstrapMu.Unlock()
 	if s.bootstrapService == nil {
 		s.bootstrapService = bootstrap.NewService(
 			s.cfg.UUID,
@@ -1195,6 +1228,11 @@ func (s *service) bootstrap() error {
 
 	if s.cfg.AutomaticUpgrade {
 		return s.stopper.RunTask(func(ctx context.Context) {
+			s.bootstrapMu.RLock()
+			defer s.bootstrapMu.RUnlock()
+			if s.bootstrapService == nil {
+				return
+			}
 			ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*120, moerr.CauseBootstrap2)
 			defer cancel()
 			if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {

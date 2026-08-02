@@ -70,6 +70,22 @@ func (s closeErrorMOServer) Stop() error {
 	return s.err
 }
 
+type listeningMOServer struct {
+	listener net.Listener
+}
+
+func (s *listeningMOServer) GetRoutineManager() *frontend.RoutineManager {
+	return nil
+}
+
+func (s *listeningMOServer) Start() error {
+	return nil
+}
+
+func (s *listeningMOServer) Stop() error {
+	return s.listener.Close()
+}
+
 type closeOnlyRPCServer struct {
 	closeErr error
 	onClose  func()
@@ -380,6 +396,7 @@ type testBootService struct {
 	closeCount   int
 	closeErr     error
 	bootstrapErr error
+	maybeUpgrade func()
 }
 
 func (boot *testBootService) Bootstrap(ctx context.Context) error {
@@ -392,6 +409,9 @@ func (boot *testBootService) BootstrapUpgrade(ctx context.Context) error {
 }
 
 func (boot *testBootService) MaybeUpgradeTenant(ctx context.Context, tenantFetchFunc func() (int32, string, error), txnOp client.TxnOperator) (bool, error) {
+	if boot.maybeUpgrade != nil {
+		boot.maybeUpgrade()
+	}
 	if boot.choice == 1 {
 		return false, moerr.NewInternalErrorNoCtx("return_err")
 	}
@@ -425,6 +445,9 @@ func TestServiceStartBootstrapFailureCanBeRolledBack(t *testing.T) {
 		func(rt moruntime.Runtime) {
 			bootstrapErr := errors.New("bootstrap connection reset")
 			boot := &testBootService{bootstrapErr: bootstrapErr}
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			listenerAddr := listener.Addr().String()
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 			ls := mock_lock.NewMockLockService(ctrl)
@@ -436,7 +459,7 @@ func TestServiceStartBootstrapFailureCanBeRolledBack(t *testing.T) {
 				logger:             zap.NewNop(),
 				stopper:            stopper.NewStopper("test-bootstrap-failure"),
 				bootstrapService:   boot,
-				mo:                 closeErrorMOServer{},
+				mo:                 &listeningMOServer{listener: listener},
 				cancelMoServerFunc: func() {},
 				server:             closeOnlyRPCServer{},
 				lockService:        ls,
@@ -449,22 +472,19 @@ func TestServiceStartBootstrapFailureCanBeRolledBack(t *testing.T) {
 				close(stopped)
 			}))
 
-			err := s.Start()
+			err = s.Start()
 			require.ErrorIs(t, err, bootstrapErr)
-			require.NotNil(t, s.incrservice)
-			require.NotNil(t, s.txnTraceService)
-			_, ok := rt.GetGlobalVariables(moruntime.AutoIncrementService)
-			require.True(t, ok)
-			_, ok = rt.GetGlobalVariables(moruntime.TxnTraceService)
-			require.True(t, ok)
-			require.NoError(t, s.Close())
-			require.Equal(t, 1, boot.closeCount)
 			require.Nil(t, s.incrservice)
 			require.Nil(t, s.txnTraceService)
-			_, ok = rt.GetGlobalVariables(moruntime.AutoIncrementService)
+			_, ok := rt.GetGlobalVariables(moruntime.AutoIncrementService)
 			require.False(t, ok)
 			_, ok = rt.GetGlobalVariables(moruntime.TxnTraceService)
 			require.False(t, ok)
+			require.NoError(t, s.Close())
+			require.Equal(t, 1, boot.closeCount)
+			reused, err := net.Listen("tcp", listenerAddr)
+			require.NoError(t, err)
+			require.NoError(t, reused.Close())
 			select {
 			case <-stopped:
 			case <-time.After(time.Second):
@@ -472,6 +492,48 @@ func TestServiceStartBootstrapFailureCanBeRolledBack(t *testing.T) {
 			}
 		},
 	)
+}
+
+func TestBootstrapRetirementWaitsForTenantUpgradeConsumer(t *testing.T) {
+	consumerEntered := make(chan struct{})
+	releaseConsumer := make(chan struct{})
+	closeAttempted := make(chan struct{})
+	boot := &testBootService{
+		maybeUpgrade: func() {
+			close(consumerEntered)
+			<-releaseConsumer
+		},
+	}
+	s := &service{
+		bootstrapService: boot,
+		beforeBootstrapClose: func() {
+			close(closeAttempted)
+		},
+	}
+
+	upgradeDone := make(chan error, 1)
+	go func() {
+		upgradeDone <- s.CheckTenantUpgrade(context.Background(), 1)
+	}()
+	<-consumerEntered
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- s.closeBootstrapService()
+	}()
+	<-closeAttempted
+	select {
+	case err := <-closeDone:
+		t.Fatalf("bootstrap retired while tenant upgrade was active: %v", err)
+	default:
+	}
+
+	close(releaseConsumer)
+	require.NoError(t, <-upgradeDone)
+	require.NoError(t, <-closeDone)
+	require.Equal(t, 1, boot.closeCount)
+	require.Empty(t, s.GetFinalVersion())
+	require.Error(t, s.CheckTenantUpgrade(context.Background(), 1))
 }
 
 func TestServiceCloseWaitsForTraceProducers(t *testing.T) {
@@ -657,6 +719,7 @@ func TestFragmentedPipelineCacheSurvivesHandlerRelease(t *testing.T) {
 		require.NoError(t, listener.Close())
 
 		firstFragmentAdmitted := make(chan struct{})
+		cacheScanned := make(chan struct{}, 4)
 		assembled := make(chan []byte, 1)
 		var admissions atomic.Int32
 		s := &service{cfg: &Config{UUID: t.Name()}}
@@ -699,6 +762,12 @@ func TestFragmentedPipelineCacheSurvivesHandlerRelease(t *testing.T) {
 				}),
 			),
 			morpc.WithServerDisableAutoCancelContext(),
+			morpc.WithServerMessageCacheScanHookForTesting(func() {
+				select {
+				case cacheScanned <- struct{}{}:
+				default:
+				}
+			}),
 		)
 		require.NoError(t, err)
 		rpcServer.RegisterRequestHandler(s.handleRequest)
@@ -725,9 +794,15 @@ func TestFragmentedPipelineCacheSurvivesHandlerRelease(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal("first fragment was not admitted")
 		}
-		// MORPC scans canceled cache contexts once per second. Waiting for two
-		// scans proves the per-handler context did not own the fragmented cache.
-		time.Sleep(2200 * time.Millisecond)
+		// Observe two completed MORPC cleanup scans. The fragmented cache must
+		// survive both after the first per-handler context has been released.
+		for range 2 {
+			select {
+			case <-cacheScanned:
+			case <-ctx.Done():
+				t.Fatal("message cache timeout scan did not run")
+			}
+		}
 		require.NoError(t, stream.Send(ctx, &pipeline.Message{
 			Id:   stream.ID(),
 			Cmd:  pipeline.Method_PipelineMessage,

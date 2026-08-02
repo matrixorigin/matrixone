@@ -100,6 +100,14 @@ func WithServerHandler(
 	}
 }
 
+// WithServerMessageCacheScanHookForTesting installs a hook invoked after each
+// message cache timeout scan.
+func WithServerMessageCacheScanHookForTesting(hook func()) ServerOption {
+	return func(s *server) {
+		s.options.messageCacheScanHook = hook
+	}
+}
+
 type server struct {
 	name        string
 	metrics     *serverMetrics
@@ -117,6 +125,7 @@ type server struct {
 		filter                   func(Message) bool
 		releaseMessageFunc       func(Message)
 		disableAutoCancelContext bool
+		messageCacheScanHook     func()
 	}
 	pool struct {
 		futures *sync.Pool
@@ -509,6 +518,7 @@ func (s *server) getSession(rs goetty.IOSession) (*clientSession, error) {
 	}
 
 	cs := newClientSession(s.metrics, rs, s.codec, s.newFuture, s.options.releaseMessageFunc)
+	cs.messageCacheScanHook = s.options.messageCacheScanHook
 	v, loaded := s.sessions.LoadOrStore(rs.ID(), cs)
 	if loaded {
 		close(cs.c)
@@ -644,6 +654,7 @@ type clientSession struct {
 	ctx                     context.Context
 	releaseMessageFunc      func(Message)
 	checkTimeoutCacheOnce   sync.Once
+	messageCacheScanHook    func()
 	closedC                 chan struct{}
 	disconnectedC           chan struct{}
 	mu                      struct {
@@ -862,6 +873,9 @@ func (cs *clientSession) checkCacheTimeout() {
 				cs.mu.Unlock()
 				for _, c := range expired {
 					c.close()
+				}
+				if cs.messageCacheScanHook != nil {
+					cs.messageCacheScanHook()
 				}
 				timer.Reset(time.Second)
 			}
