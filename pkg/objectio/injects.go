@@ -36,8 +36,9 @@ const (
 	FJ_FlushTimeout               = "fj/flush/timeout"
 	FJ_FlushEntry                 = "fj/flush/entry"
 
-	FJ_CheckpointSave = "fj/checkpoint/save"
-	FJ_GCKPWait1      = "fj/gckp/wait1"
+	FJ_CheckpointSave      = "fj/checkpoint/save"
+	FJ_GCKPWait1           = "fj/gckp/wait1"
+	FJ_GCKPWaitAfterIntent = "fj/gckp/wait-after-intent"
 
 	FJ_TraceRanges         = "fj/trace/ranges"
 	FJ_TracePartitionState = "fj/trace/partitionstate"

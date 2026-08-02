@@ -98,7 +98,7 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 		case Build:
 			err = rightDedupJoin.build(analyzer, proc)
 			if err != nil {
-				return result, err
+				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
 			if ctr.mp == nil && ctr.spillEngine == nil {
 				ctr.state = End
@@ -112,7 +112,7 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 				var readErr error
 				bat, readErr = ctr.spillEngine.NextProbeBatch(proc)
 				if readErr != nil {
-					return result, readErr
+					return result, hashbuild.TerminalBudgetError(proc.Ctx, readErr)
 				}
 				if bat == nil {
 					ctr.spillEngine.FinishBucket()
@@ -125,7 +125,7 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 			} else {
 				input, err = vm.ChildrenCall(rightDedupJoin.GetChildren(0), proc, analyzer)
 				if err != nil {
-					return result, err
+					return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 				}
 				bat = input.Batch
 				if bat == nil {
@@ -140,7 +140,7 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 				continue
 			}
 			if err := ctr.probe(bat, rightDedupJoin, proc, analyzer, &result); err != nil {
-				return result, err
+				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
 			return result, nil
 		case Finalize:
@@ -167,10 +167,10 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 						}
 					})
 				if bktErr != nil {
-					return result, bktErr
+					return result, hashbuild.TerminalBudgetError(proc.Ctx, bktErr)
 				}
 				if initErr != nil {
-					return result, initErr
+					return result, hashbuild.TerminalBudgetError(proc.Ctx, initErr)
 				}
 				if ok {
 					ctr.state = Probe

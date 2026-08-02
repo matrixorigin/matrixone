@@ -760,6 +760,187 @@ func TestSetDisplayValueToJSONQuotesAcrossPlannerPaths(t *testing.T) {
 	}
 }
 
+func TestProjectedSetNumericCastUsesStoredBitmap(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	mock.ctxt.tables["nation"].Cols[1].Typ = plan.Type{Id: int32(types.T_uint64), Enumvalues: ",a"}
+
+	for _, tc := range []struct {
+		name            string
+		sql             string
+		wantStringCast  bool
+		wantBitmapCarry bool
+	}{
+		{
+			name:            "derived table",
+			sql:             "select cast(name as unsigned) from (select n_name as name from nation) src",
+			wantBitmapCarry: true,
+		},
+		{
+			name:            "pure set union all",
+			sql:             "select cast(name as unsigned) from (select n_name as name from nation union all select n_name from nation) src",
+			wantBitmapCarry: true,
+		},
+		{
+			name:            "three-way pure set union all",
+			sql:             "select cast(name as unsigned) from (select n_name as name from nation union all select n_name from nation union all select n_name from nation) src",
+			wantBitmapCarry: true,
+		},
+		{
+			name:            "pure set intersect",
+			sql:             "select cast(name as unsigned) from (select n_name as name from nation intersect select n_name from nation) src",
+			wantBitmapCarry: true,
+		},
+		{
+			name:            "pure set minus",
+			sql:             "select cast(name as unsigned) from (select n_name as name from nation minus select n_name from nation) src",
+			wantBitmapCarry: true,
+		},
+		{
+			name:           "mixed set and varchar union all",
+			sql:            "select cast(name as unsigned) from (select n_name as name from nation union all select n_comment from nation) src",
+			wantStringCast: true,
+		},
+		{
+			name:           "three-way mixed set and varchar union all",
+			sql:            "select cast(name as unsigned) from (select n_name as name from nation union all select n_comment from nation union all select n_name from nation) src",
+			wantStringCast: true,
+		},
+		{
+			name:            "nested intersect precedence",
+			sql:             "select cast(name as unsigned) from (select n_name as name from nation union all select n_name from nation intersect select n_name from nation) src",
+			wantBitmapCarry: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantStringCast, planHasVarcharToIntegerCast(logicPlan))
+			require.Equal(t, tc.wantBitmapCarry, planHasPlainUint64ColRef(logicPlan))
+			requireSetOperationProjectionWidths(t, logicPlan)
+		})
+	}
+}
+
+func requireSetOperationProjectionWidths(t *testing.T, p *Plan) {
+	t.Helper()
+	p = resolveQueryPlan(p)
+	require.NotNil(t, p)
+	query := p.GetQuery()
+	require.NotNil(t, query)
+	for nodeID, node := range query.Nodes {
+		switch node.NodeType {
+		case plan.Node_UNION, plan.Node_UNION_ALL,
+			plan.Node_MINUS, plan.Node_MINUS_ALL,
+			plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+			for _, childID := range node.Children {
+				require.GreaterOrEqual(t, childID, int32(0), "set node %d has invalid child", nodeID)
+				require.Less(t, int(childID), len(query.Nodes), "set node %d has invalid child", nodeID)
+				require.Len(t, query.Nodes[childID].ProjectList, len(node.ProjectList),
+					"set node %d child %d projection width", nodeID, childID)
+			}
+		}
+	}
+}
+
+func TestInsertSelectProjectedSetUsesStoredBitmap(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	mock.ctxt.tables["nation"].Cols[1].Typ = plan.Type{Id: int32(types.T_uint64), Enumvalues: ",a"}
+	addSetBitmapDestinationForTest(mock)
+
+	logicPlan, err := runOneStmt(
+		mock,
+		t,
+		"insert into set_bitmap_destination(id, bitmap) select n_nationkey, n_name from nation",
+	)
+	require.NoError(t, err)
+	require.False(t, planHasVarcharToIntegerCast(logicPlan))
+	require.True(t, planHasPlainUint64ColRef(logicPlan))
+}
+
+func addSetBitmapDestinationForTest(mock *MockOptimizer) {
+	const tableName = "set_bitmap_destination"
+	idType := plan.Type{Id: int32(types.T_int32), NotNullable: true}
+	bitmapType := plan.Type{Id: int32(types.T_uint64)}
+	rowIDType := plan.Type{Id: int32(types.T_Rowid), NotNullable: true, Width: 16}
+	cols := []*ColDef{
+		{ColId: 0, Name: "id", OriginName: "id", Typ: idType, Primary: true, Pkidx: 1, Default: &plan.Default{}},
+		{ColId: 1, Name: "bitmap", OriginName: "bitmap", Typ: bitmapType, Default: &plan.Default{NullAbility: true}},
+		{ColId: 2, Name: catalog.Row_ID, OriginName: catalog.Row_ID, Typ: rowIDType, Hidden: true, Default: &plan.Default{}},
+	}
+	mock.ctxt.objects[tableName] = &ObjectRef{SchemaName: "tpch", ObjName: tableName, Obj: 23179}
+	mock.ctxt.tables[tableName] = &TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		TblId:     23179,
+		Name:      tableName,
+		Cols:      cols,
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Cols:        []uint64{0},
+			Names:       []string{"id"},
+			CompPkeyCol: cols[0],
+		},
+	}
+	mock.ctxt.id2name[23179] = tableName
+	mock.ctxt.pks[tableName] = []int{0}
+}
+
+func planHasVarcharToIntegerCast(p *Plan) bool {
+	return planHasExpr(p, func(expr *plan.Expr) bool {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
+			return false
+		}
+		name := fn.Func.ObjName
+		return (name == "cast" || name == "cast_strict" || name == "cast_assign") &&
+			fn.Args[0].Typ.Id == int32(types.T_varchar) && types.T(expr.Typ.Id).IsInteger()
+	})
+}
+
+func planHasPlainUint64ColRef(p *Plan) bool {
+	return planHasExpr(p, func(expr *plan.Expr) bool {
+		return expr.GetCol() != nil && expr.Typ.Id == int32(types.T_uint64) && expr.Typ.Enumvalues == ""
+	})
+}
+
+func planHasExpr(p *Plan, match func(*plan.Expr) bool) bool {
+	p = resolveQueryPlan(p)
+	if p == nil || p.GetQuery() == nil {
+		return false
+	}
+	var visit func(*plan.Expr) bool
+	visit = func(expr *plan.Expr) bool {
+		if expr == nil {
+			return false
+		}
+		if match(expr) {
+			return true
+		}
+		if fn := expr.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				if visit(arg) {
+					return true
+				}
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				if visit(item) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, node := range p.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			if visit(expr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestOnDuplicateUpdateVarcharFromTextUsesAssignmentCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addTextCastTableForTest(mock)

@@ -1480,7 +1480,9 @@ func NewGoettyBasedBackendFactory(codec Codec, options ...BackendOption) Backend
 func (bf *goettyBasedBackendFactory) Create(
 	remote string,
 	extraOptions ...BackendOption) (Backend, error) {
-	opts := append(bf.options, extraOptions...)
+	opts := make([]BackendOption, 0, len(bf.options)+len(extraOptions))
+	opts = append(opts, bf.options...)
+	opts = append(opts, extraOptions...)
 	return NewRemoteBackend(remote, bf.codec, opts...)
 }
 

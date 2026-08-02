@@ -847,6 +847,14 @@ message Node {
     OUTERAPPLY = 1;
   }
 
+  // FuzzyBuildSide is an explicit, planner-finalized execution decision.
+  // UNSPECIFIED preserves legacy plans, whose compiler selects by cost.
+  enum FuzzyBuildSide {
+    FUZZY_BUILD_SIDE_UNSPECIFIED = 0;
+    FUZZY_BUILD_SIDE_TABLE = 1;
+    FUZZY_BUILD_SIDE_SINK = 2;
+  }
+
   NodeType node_type = 1;
   int32 node_id = 2;
   Stats stats = 3;
@@ -978,6 +986,15 @@ message Node {
   // TIME_WINDOW only: explicitly generate missing buckets between each
   // partition's observed minimum and maximum timestamp.
   GapFillMode gap_fill_mode = 75;
+
+  // RECURSIVE_CTE only: exclude rows already emitted by the anchor or an
+  // earlier recursive iteration, implementing UNION / UNION DISTINCT fixpoint
+  // semantics instead of UNION ALL bag semantics.
+  bool recursive_union_distinct = 76;
+
+  // FUZZY_FILTER only. Keeping this separate from runtime-filter metadata
+  // makes build-side selection idempotent across repeated optimizer passes.
+  FuzzyBuildSide fuzzy_build_side = 77;
 }
 
 message SnapshotExtraInfo {
@@ -1145,6 +1162,26 @@ message PreInsertCtx {
   bool is_new_update = 8;
 }
 
+// RuntimeFilterKeyEncoding records the versioned producer-side closure
+// guaranteed by an exact runtime-filter payload.  UNSPECIFIED is the
+// legacy/default state and must fail open: old plans do not carry the probe
+// type needed to validate the SQL equality contract at execution.
+enum RuntimeFilterKeyEncoding {
+  RUNTIME_FILTER_KEY_UNSPECIFIED = 0;
+  RUNTIME_FILTER_KEY_RAW_V1 = 1;
+  // The payload contains both physical representations of zero whenever zero
+  // is present, so raw Bloom-filter consumers cannot reject a SQL-equal signed
+  // zero. A producer which cannot perform that closure must publish PASS.
+  RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1 = 2;
+  // SERIAL_V1 and SERIAL_FULL_V1 describe the corresponding tuple encoders.
+  // Their ordered component contracts are carried in
+  // key_component_probe_types. A producer must validate every component
+  // before evaluating the encoder; an unrecognized or invalid contract is
+  // PASS.
+  RUNTIME_FILTER_KEY_SERIAL_V1 = 3;
+  RUNTIME_FILTER_KEY_SERIAL_FULL_V1 = 4;
+}
+
 message RuntimeFilterSpec {
   int32 tag = 1;
   bool match_prefix = 2;
@@ -1152,6 +1189,21 @@ message RuntimeFilterSpec {
   Expr expr = 4;
   bool not_on_pk = 5;
   bool use_membership_filter = 6;
+  RuntimeFilterKeyEncoding key_encoding = 7;
+  // probe_type and build_expr.Typ form the two-sided SQL equality contract.
+  // The actual build vector is checked against both at execution time.
+  Type probe_type = 8;
+  // Ordered SQL probe-side component types for versioned tuple encodings.
+  // build_expr's ordered column arguments provide the declared build types;
+  // executors additionally validate the materialized component vectors.
+  repeated Type key_component_probe_types = 9 [(gogoproto.nullable) = false];
+  // Producer expression for a versioned exact-key contract.
+  // Below the rollout gate, metadata-independent RAW_V1 may also carry an
+  // identical legacy expr so pre-contract executors retain raw-safe filters.
+  // Versioned steady-state, metadata-dependent, and transforming encodings
+  // leave legacy expr unset. Probe specs continue to use expr for scan-side
+  // evaluation.
+  Expr build_expr = 10;
 }
 
 message IdList {

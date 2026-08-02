@@ -798,7 +798,28 @@ func (v *Vector) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
 	return nil
 }
 
+// UnmarshalBinary binds a vector to its binary encoding after fully validating
+// the representation. In addition to constant-time framing, size, and overflow
+// checks, it verifies null-bitmap contents and every varlena or array payload.
+// Callers must use this checked API for wire, disk, RPC, or otherwise
+// unvalidated bytes.
 func (v *Vector) UnmarshalBinary(data []byte) error {
+	return v.unmarshalBinary(data, true)
+}
+
+// UnmarshalBinaryTrusted binds a vector to an encoding that has already passed
+// UnmarshalBinary and has remained immutable since that validation. It keeps
+// all constant-time framing and representation checks, but skips the linear
+// null-bitmap and varlen payload scans.
+//
+// Callers must not use this method for wire, disk, RPC, or otherwise
+// unvalidated bytes. Prefer UnmarshalBinary unless the caller owns an explicit
+// validation boundary.
+func (v *Vector) UnmarshalBinaryTrusted(data []byte) error {
+	return v.unmarshalBinary(data, false)
+}
+
+func (v *Vector) unmarshalBinary(data []byte, validateValues bool) error {
 	read := func(size int) ([]byte, error) {
 		if size < 0 || size > len(data) {
 			return nil, io.ErrUnexpectedEOF
@@ -857,7 +878,7 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	}
 
 	decodedType := types.DecodeType(typ)
-	if err := validateVectorNullBitmap(nspData); err != nil {
+	if err := validateVectorNullBitmap(nspData, validateValues); err != nil {
 		return err
 	}
 	var nsp nulls.Nulls
@@ -866,7 +887,7 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 			return err
 		}
 	}
-	if err := validateVectorBinary(class[0], decodedType, length, vecData, area, &nsp); err != nil {
+	if err := validateVectorBinary(class[0], decodedType, length, vecData, area, &nsp, validateValues); err != nil {
 		return err
 	}
 	v.class = int(class[0])
@@ -883,7 +904,14 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-func validateVectorBinary(class byte, typ types.Type, length uint32, data, area []byte, nsp *nulls.Nulls) error {
+func validateVectorBinary(
+	class byte,
+	typ types.Type,
+	length uint32,
+	data, area []byte,
+	nsp *nulls.Nulls,
+	validateValues bool,
+) error {
 	if class > DIST {
 		return moerr.NewInvalidInputNoCtx("invalid vector class")
 	}
@@ -898,7 +926,7 @@ func validateVectorBinary(class byte, typ types.Type, length uint32, data, area 
 	} else if uint64(len(data)) != uint64(length)*uint64(typeSize) {
 		return moerr.NewInvalidInputNoCtx("invalid vector data size")
 	}
-	if typ.IsVarlen() {
+	if validateValues && typ.IsVarlen() {
 		values := types.DecodeSlice[types.Varlena](data)
 		arrayElementSize := 0
 		switch typ.Oid {
@@ -933,7 +961,7 @@ func validateVectorBinary(class byte, typ types.Type, length uint32, data, area 
 // The bitmap length tracks allocated coverage and may exceed the vector's
 // logical length after range operations or reuse. Validate only the bitmap's
 // own representation invariants here.
-func validateVectorNullBitmap(data []byte) error {
+func validateVectorNullBitmap(data []byte, validateValues bool) error {
 	if len(data) == 0 {
 		return nil
 	}
@@ -943,12 +971,15 @@ func validateVectorNullBitmap(data []byte) error {
 	count := types.DecodeInt64(data[:8])
 	bitmapLen := types.DecodeUint64(data[8:16])
 	bitmapDataLen := types.DecodeUint64(data[16:24])
-	if count < 0 || bitmapLen > uint64(1<<63-1) ||
+	if count < 0 || bitmapLen > uint64(1<<63-1) || uint64(count) > bitmapLen ||
 		bitmapDataLen%8 != 0 || bitmapDataLen != uint64(len(data)-24) {
 		return moerr.NewInvalidInputNoCtx("invalid vector null bitmap")
 	}
 	if bitmapDataLen != ((bitmapLen+63)/64)*8 {
 		return moerr.NewInvalidInputNoCtx("invalid vector null bitmap size")
+	}
+	if !validateValues {
+		return nil
 	}
 	words := types.DecodeSlice[uint64](data[24:])
 	actualCount := int64(0)
@@ -4539,12 +4570,20 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		maxv = types.EncodeUint64(&maxVal)
 
 	case types.T_float32:
-		minVal, maxVal := OrderedGetMinAndMax[float32](v)
+		minVal, maxVal, hasComparableValue := FloatGetMinAndMax[float32](v)
+		if !hasComparableValue {
+			ok = false
+			return
+		}
 		minv = types.EncodeFloat32(&minVal)
 		maxv = types.EncodeFloat32(&maxVal)
 
 	case types.T_float64:
-		minVal, maxVal := OrderedGetMinAndMax[float64](v)
+		minVal, maxVal, hasComparableValue := FloatGetMinAndMax[float64](v)
+		if !hasComparableValue {
+			ok = false
+			return
+		}
 		minv = types.EncodeFloat64(&minVal)
 		maxv = types.EncodeFloat64(&maxVal)
 
