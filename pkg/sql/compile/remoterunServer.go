@@ -403,6 +403,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 				runCompile.addr,
 			)
 			allocationParticipant, runErr = acquireRemoteAllocationStatementParticipant(
+				allocationGroupKey,
 				runCompile.MessageBoard,
 				expectedFragments,
 				func(cause error) {

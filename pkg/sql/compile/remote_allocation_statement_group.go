@@ -59,6 +59,11 @@ func remoteAllocationStatementGroupKey(
 // statement's execution time.
 var remoteAllocationStatementRegistrationTimeout = 5 * time.Minute
 
+// A late RPC can carry a new MessageBoard, so keep a bounded record of an
+// incomplete execution after its active group has been released. The record
+// contains no statement resources.
+var remoteAllocationStatementTombstoneTimeout = 5 * time.Minute
+
 // collectRemoteFragmentCounts computes the number of pipeline RPCs that the
 // complete physical scope graph will send to each CN. The execution address
 // changes when traversal crosses a Remote scope: nested scopes targeting that
@@ -110,9 +115,17 @@ func validateRemoteAllocationTopologyCapability(
 
 var remoteAllocationStatementGroups = struct {
 	sync.Mutex
-	byBoard map[*message.MessageBoard]*remoteAllocationStatementGroup
+	byBoard    map[*message.MessageBoard]*remoteAllocationStatementGroup
+	byKey      map[string]*remoteAllocationStatementGroup
+	tombstones map[string]*remoteAllocationStatementTombstone
 }{
-	byBoard: make(map[*message.MessageBoard]*remoteAllocationStatementGroup),
+	byBoard:    make(map[*message.MessageBoard]*remoteAllocationStatementGroup),
+	byKey:      make(map[string]*remoteAllocationStatementGroup),
+	tombstones: make(map[string]*remoteAllocationStatementTombstone),
+}
+
+type remoteAllocationStatementTombstone struct {
+	timer *time.Timer
 }
 
 // remoteAllocationStatementGroup is the terminal owner for all pipeline RPCs
@@ -120,6 +133,7 @@ var remoteAllocationStatementGroups = struct {
 // no individual fragment may close it or validate transferred allocations
 // while a sibling can still consume them.
 type remoteAllocationStatementGroup struct {
+	key          string
 	board        *message.MessageBoard
 	expected     uint32
 	registered   uint32
@@ -152,11 +166,12 @@ type remoteAllocationStatementTerminal struct {
 }
 
 func acquireRemoteAllocationStatementParticipant(
+	key string,
 	board *message.MessageBoard,
 	expected uint32,
 	cancel func(error),
 ) (*remoteAllocationStatementParticipant, error) {
-	if board == nil {
+	if key == "" || board == nil {
 		return nil, mpool.ErrAllocationAccountInvariant
 	}
 	if expected == 0 {
@@ -165,15 +180,29 @@ func acquireRemoteAllocationStatementParticipant(
 
 	remoteAllocationStatementGroups.Lock()
 	defer remoteAllocationStatementGroups.Unlock()
+	if remoteAllocationStatementGroups.tombstones[key] != nil {
+		return nil, errors.Join(
+			mpool.ErrAllocationAccountInvariant,
+			moerr.NewInternalErrorNoCtx("remote allocation statement group already aborted"),
+		)
+	}
 	group := remoteAllocationStatementGroups.byBoard[board]
 	if group == nil {
+		if remoteAllocationStatementGroups.byKey[key] != nil {
+			return nil, errors.Join(
+				mpool.ErrAllocationAccountInvariant,
+				moerr.NewInternalErrorNoCtx("remote allocation statement group key already registered"),
+			)
+		}
 		group = &remoteAllocationStatementGroup{
+			key:      key,
 			board:    board,
 			expected: expected,
 		}
 		remoteAllocationStatementGroups.byBoard[board] = group
+		remoteAllocationStatementGroups.byKey[key] = group
 	}
-	if group.expected != expected || group.finalized ||
+	if group.key != key || group.expected != expected || group.finalized ||
 		group.expired || group.registered >= group.expected {
 		return nil, errors.Join(
 			mpool.ErrAllocationAccountInvariant,
@@ -325,6 +354,9 @@ func releaseRemoteAllocationStatementGroup(group *remoteAllocationStatementGroup
 	if remoteAllocationStatementGroups.byBoard[group.board] == group {
 		delete(remoteAllocationStatementGroups.byBoard, group.board)
 	}
+	if remoteAllocationStatementGroups.byKey[group.key] == group {
+		delete(remoteAllocationStatementGroups.byKey, group.key)
+	}
 	remoteAllocationStatementGroups.Unlock()
 }
 
@@ -360,6 +392,9 @@ func takeRemoteAllocationStatementGroupLocked(
 	group *remoteAllocationStatementGroup,
 ) ([]*statementAllocationAttempt, []*mpool.MPool) {
 	group.finalized = true
+	if group.expired && group.registered < group.expected {
+		installRemoteAllocationStatementTombstoneLocked(group.key)
+	}
 	if group.timer != nil {
 		group.timer.Stop()
 		group.timer = nil
@@ -369,6 +404,24 @@ func takeRemoteAllocationStatementGroupLocked(
 	pools := group.pools
 	group.pools = nil
 	return attempts, pools
+}
+
+func installRemoteAllocationStatementTombstoneLocked(key string) {
+	if remoteAllocationStatementGroups.tombstones[key] != nil {
+		return
+	}
+	tombstone := &remoteAllocationStatementTombstone{}
+	remoteAllocationStatementGroups.tombstones[key] = tombstone
+	tombstone.timer = time.AfterFunc(
+		remoteAllocationStatementTombstoneTimeout,
+		func() {
+			remoteAllocationStatementGroups.Lock()
+			if remoteAllocationStatementGroups.tombstones[key] == tombstone {
+				delete(remoteAllocationStatementGroups.tombstones, key)
+			}
+			remoteAllocationStatementGroups.Unlock()
+		},
+	)
 }
 
 func completeRemoteAllocationStatementGroup(
