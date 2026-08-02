@@ -39,7 +39,7 @@ var methodVersions = map[txn.TxnMethod]int64{
 	txn.TxnMethod_Read:                     defines.MORPCVersion1,
 	txn.TxnMethod_Write:                    defines.MORPCVersion1,
 	txn.TxnMethod_Commit:                   defines.MORPCVersion1,
-	txn.TxnMethod_CommitAutoIncrEpochFence: defines.MORPCVersion7,
+	txn.TxnMethod_CommitAutoIncrEpochFence: defines.MORPCVersion9,
 	txn.TxnMethod_Rollback:                 defines.MORPCVersion1,
 
 	txn.TxnMethod_DEBUG: defines.MORPCVersion1,

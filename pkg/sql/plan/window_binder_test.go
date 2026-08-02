@@ -44,6 +44,10 @@ func (b *stubWindowBinder) bindFuncExprImplByAstExpr(name string, args []tree.Ex
 	return b.bindFuncExprFunc(name, args, depth)
 }
 
+func (b *stubWindowBinder) bindPreparedNumericAggregateFuncExpr(name string, args []tree.Expr, depth int32) (*planpb.Expr, error) {
+	return b.bindFuncExprImplByAstExpr(name, args, depth)
+}
+
 func (b *stubWindowBinder) bindPreparedRowsFrameBound(expr tree.Expr) (*planpb.Expr, error) {
 	return b.bindPreparedRowsFrameBoundFunc(expr)
 }

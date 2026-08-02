@@ -38,21 +38,21 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestAutoIncrEpochFenceCommitRequiresV7(t *testing.T) {
+func TestAutoIncrEpochFenceCommitRequiresV9(t *testing.T) {
 	rt := newTestRuntime(newTestClock(), zap.NewNop())
 	req := &txn.TxnRequest{Method: txn.TxnMethod_CommitAutoIncrEpochFence}
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion6)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion8)
 	require.Error(t, checkMethodVersion(context.Background(), rt, req))
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion7)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion9)
 	require.NoError(t, checkMethodVersion(context.Background(), rt, req))
 
 	legacyMethods := map[txn.TxnMethod]int64{txn.TxnMethod_Commit: defines.MORPCVersion1}
 	require.Error(t, runtime.CheckMethodVersionWithRuntime(context.Background(), rt, legacyMethods, req))
 }
 
-func TestAutoIncrEpochFenceCommitNetworkDispatchRequiresV7(t *testing.T) {
+func TestAutoIncrEpochFenceCommitNetworkDispatchRequiresV9(t *testing.T) {
 	runTestTxnServer(t, testTN1Addr, func(s *server) {
 		var calls atomic.Int32
 		s.RegisterMethodHandler(txn.TxnMethod_CommitAutoIncrEpochFence, func(
@@ -64,22 +64,22 @@ func TestAutoIncrEpochFenceCommitNetworkDispatchRequiresV7(t *testing.T) {
 			return nil
 		})
 
-		s.rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion6)
-		v6Message := newMessage(&txn.TxnRequest{Method: txn.TxnMethod_CommitAutoIncrEpochFence})
+		s.rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion8)
+		v8Message := newMessage(&txn.TxnRequest{Method: txn.TxnMethod_CommitAutoIncrEpochFence})
 		require.Error(t, s.onMessage(
 			context.Background(),
-			v6Message,
+			v8Message,
 			1,
 			newTestClientSession(make(chan morpc.Message, 1)),
 		))
-		require.Zero(t, calls.Load(), "V6 must reject before invoking the handler")
+		require.Zero(t, calls.Load(), "V8 must reject before invoking the handler")
 
-		s.rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion7)
-		v7Message := newMessage(&txn.TxnRequest{Method: txn.TxnMethod_CommitAutoIncrEpochFence})
-		defer v7Message.Cancel()
+		s.rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion9)
+		v9Message := newMessage(&txn.TxnRequest{Method: txn.TxnMethod_CommitAutoIncrEpochFence})
+		defer v9Message.Cancel()
 		require.NoError(t, s.onMessage(
 			context.Background(),
-			v7Message,
+			v9Message,
 			2,
 			newTestClientSession(make(chan morpc.Message, 1)),
 		))
@@ -462,6 +462,12 @@ func (cs *testClientSession) AsyncWrite(response morpc.Message) error {
 func (cs *testClientSession) CreateCache(
 	ctx context.Context,
 	cacheID uint64) (morpc.MessageCache, error) {
+	panic("not implement")
+}
+func (cs *testClientSession) CreateCacheWithCancel(
+	context.Context,
+	uint64,
+	context.CancelFunc) (morpc.MessageCache, error) {
 	panic("not implement")
 }
 

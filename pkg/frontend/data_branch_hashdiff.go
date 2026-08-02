@@ -218,9 +218,12 @@ func handleDelsOnLCA(
 		mots := fmt.Sprintf("{MO_TS=%d} ", snapshot.PhysicalTime)
 		pkNames := lcaTblDef.Pkey.Names
 		quotedPKNames := make([]string, len(pkNames))
+		quotedPKValueAliases := make([]string, len(pkNames))
 		for i, name := range pkNames {
 			quotedPKNames[i] = quoteIdentifierForSQL(name)
+			quotedPKValueAliases[i] = quoteIdentifierForSQL(fmt.Sprintf("__mo_data_branch_pk_%d", i))
 		}
+		quotedOrdinalAlias := quoteIdentifierForSQL("__mo_data_branch_ordinal")
 
 		// composite pk
 		if baseTblDef.Pkey.CompPkeyCol != nil {
@@ -276,9 +279,16 @@ func handleDelsOnLCA(
 		}
 
 		selectCols := make([]string, len(lcaLayout.attrs)+1)
-		selectCols[0] = "pks.__idx_"
+		selectCols[0] = fmt.Sprintf("pks.%s", quotedOrdinalAlias)
 		for i, colName := range lcaLayout.attrs {
-			selectCols[i+1] = fmt.Sprintf("lca.%s", quoteIdentifierForSQL(colName))
+			colExpr := fmt.Sprintf("lca.%s", quoteIdentifierForSQL(colName))
+			if lcaLayout.types[i].Oid == types.T_uint64 && lcaLayout.enumValues[i] != "" {
+				// SET is stored as uint64 but ordinary SQL projection exposes its
+				// display label. Request the physical bitmap explicitly so the
+				// probe remains lossless even when the SET has an empty member.
+				colExpr = fmt.Sprintf("cast(%s as unsigned)", colExpr)
+			}
+			selectCols[i+1] = colExpr
 		}
 
 		sqlBuf.Reset()
@@ -290,22 +300,22 @@ func handleDelsOnLCA(
 			mots),
 		)
 		sqlBuf.WriteString(fmt.Sprintf(
-			"right join (values %s) as pks(__idx_,%s) on ",
-			valsBuf.String(), strings.Join(quotedPKNames, ",")),
+			"right join (values %s) as pks(%s,%s) on ",
+			valsBuf.String(), quotedOrdinalAlias, strings.Join(quotedPKValueAliases, ",")),
 		)
 
 		for i := range quotedPKNames {
 			sqlBuf.WriteString(fmt.Sprintf("lca.%s = ", quotedPKNames[i]))
 			if castType, ok := lcaProbeJoinCastType(colTypes[expandedPKColIdxes[i]]); ok {
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as %s)", quotedPKNames[i], castType))
+				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as %s)", quotedPKValueAliases[i], castType))
 			} else {
-				sqlBuf.WriteString(fmt.Sprintf("pks.%s", quotedPKNames[i]))
+				sqlBuf.WriteString(fmt.Sprintf("pks.%s", quotedPKValueAliases[i]))
 			}
 			if i != len(quotedPKNames)-1 {
 				sqlBuf.WriteString(" AND ")
 			}
 		}
-		sqlBuf.WriteString(" order by pks.__idx_")
+		sqlBuf.WriteString(fmt.Sprintf(" order by pks.%s", quotedOrdinalAlias))
 
 		sqlPreview := sqlBuf.String()
 		if len(sqlPreview) > 512 {
@@ -504,8 +514,10 @@ func handleDelsOnLCA(
 // appendLCAProbeValue appends a column returned by the LCA SQL probe to the
 // corresponding physical table vector. A RIGHT JOIN exposes ENUM columns as
 // VARCHAR labels, so they need to be restored to their physical enum codes
-// before the batch enters the diff pipeline. Other columns must retain their
-// physical type; copying mismatched vector storage would silently corrupt data.
+// before the batch enters the diff pipeline. SET columns are projected as
+// unsigned bitmaps by the SQL probe and therefore arrive with their physical
+// type. Other columns must retain their physical type; copying mismatched vector
+// storage would silently corrupt data.
 func appendLCAProbeValue(
 	dst, src *vector.Vector,
 	row int,

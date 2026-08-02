@@ -33,4 +33,8 @@ func TestRuntime(t *testing.T) {
 	vv, ok := rt.GetGlobalVariables(k)
 	assert.Equal(t, v, vv)
 	assert.True(t, ok)
+	assert.False(t, rt.CompareAndDeleteGlobalVariables(k, "other"))
+	assert.True(t, rt.CompareAndDeleteGlobalVariables(k, v))
+	_, ok = rt.GetGlobalVariables(k)
+	assert.False(t, ok)
 }

@@ -721,6 +721,35 @@ func TestMergeTxnWorkspaceKeepsCatalogBeforeDependentData(t *testing.T) {
 	require.Less(t, createIdx, dataIdx)
 }
 
+func TestMergeTxnWorkspaceDeduplicatesDeleteSelections(t *testing.T) {
+	proc := testutil.NewProc(t)
+	bat := newInsertBatchWithRowIDForTest(t, proc, []int64{10, 20, 30, 40})
+	txn := &Transaction{
+		proc:            proc,
+		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)},
+		batchSelectList: make(map[*batch.Batch][]int64),
+		writes: []Entry{{
+			typ:        INSERT,
+			tableId:    42,
+			databaseId: 7,
+			bat:        bat,
+		}},
+		approximateInMemInsertCnt: bat.RowCount(),
+	}
+	defer bat.Clean(proc.Mp())
+
+	// Two internal delete passes select the same rows. Their raw event count
+	// equals the batch row count, but only half of the rows are deleted.
+	txn.addBatchSelectionsLocked(bat, []int64{1, 3})
+	txn.addBatchSelectionsLocked(bat, []int64{1, 3})
+	require.Equal(t, []int64{1, 3}, txn.batchSelectList[bat])
+
+	require.NoError(t, txn.mergeTxnWorkspaceLocked(context.Background()))
+	require.Equal(t, 2, bat.RowCount())
+	require.Equal(t, []int64{10, 30}, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[1]))
+	require.Equal(t, 2, txn.approximateInMemInsertCnt)
+}
+
 func TestResolvePKCheckPosForWriteWithActiveTxnTable(t *testing.T) {
 	txn := newTransactionWithActivePKTableForTest(t, "pk")
 

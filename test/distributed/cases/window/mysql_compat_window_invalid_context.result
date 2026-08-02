@@ -1,0 +1,32 @@
+drop database if exists mysql_compat_window_invalid_context;
+create database mysql_compat_window_invalid_context;
+use mysql_compat_window_invalid_context;
+set @old_sql_mode = @@session.sql_mode;
+set session sql_mode = '';
+create table t (id int primary key, grp int, v int, rn int default 0);
+insert into t values (1,1,10,0),(2,1,20,0),(3,2,30,0),(4,2,40,0);
+update t set rn = row_number() over (order by id);
+You cannot use the window function 'row_number' in this context
+create table check_bad (
+id int primary key,
+v int,
+check (row_number() over (order by v) > 0)
+);
+You cannot use the window function 'row_number' in this context
+set session sql_mode = 'MATRIXONE_NATIVE';
+update t set rn = row_number() over (order by id);
+select id, rn from t order by id;
+➤ id[4,32,0]  ¦  rn[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4
+create table check_bad (
+id int primary key,
+v int,
+check (row_number() over (order by v) > 0)
+);
+You cannot use the window function 'row_number' in this context
+drop table t;
+set session sql_mode = @old_sql_mode;
+drop database mysql_compat_window_invalid_context;

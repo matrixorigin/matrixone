@@ -26,6 +26,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -66,6 +67,121 @@ func isDataBranchUserVisibleColumn(col *plan.ColDef) bool {
 	default:
 		return true
 	}
+}
+
+func isDataBranchWritableColumn(col *plan.ColDef) bool {
+	return isDataBranchUserVisibleColumn(col) && col.GeneratedCol == nil
+}
+
+func dataBranchGeneratedColumnsEqual(left, right *plan.GeneratedCol) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	if left.IsStored != right.IsStored {
+		return false
+	}
+	if left.Expr != nil || right.Expr != nil {
+		return proto.Equal(left.Expr, right.Expr)
+	}
+	return left.OriginString != "" && left.OriginString == right.OriginString
+}
+
+func dataBranchGeneratedColumnsLogicallyEqual(
+	tarCol, baseCol *plan.ColDef,
+	tarDef, baseDef *plan.TableDef,
+	resolveBaseColumn dataBranchEndpointColumnResolver,
+) bool {
+	left, right := tarCol.GeneratedCol, baseCol.GeneratedCol
+	if left == nil || right == nil {
+		return left == right
+	}
+	if left.IsStored != right.IsStored {
+		return false
+	}
+	if left.Expr == nil || right.Expr == nil {
+		return left.Expr == nil && right.Expr == nil &&
+			left.OriginString != "" && left.OriginString == right.OriginString
+	}
+
+	leftExpr := proto.Clone(left.Expr).(*plan.Expr)
+	rightExpr := proto.Clone(right.Expr).(*plan.Expr)
+	leftOK := canonicalizeDataBranchGeneratedExpr(leftExpr, func(pos int32) (string, bool) {
+		col := dataBranchGeneratedExprColumn(tarDef, pos)
+		if col == nil {
+			return "", false
+		}
+		resolved := resolveBaseColumn(col)
+		if resolved == nil {
+			return "", false
+		}
+		return strings.ToLower(resolved.Name), true
+	})
+	rightOK := canonicalizeDataBranchGeneratedExpr(rightExpr, func(pos int32) (string, bool) {
+		col := dataBranchGeneratedExprColumn(baseDef, pos)
+		if col == nil {
+			return "", false
+		}
+		return strings.ToLower(col.Name), true
+	})
+	return leftOK && rightOK && proto.Equal(leftExpr, rightExpr)
+}
+
+func dataBranchGeneratedExprColumn(tblDef *plan.TableDef, pos int32) *plan.ColDef {
+	if tblDef == nil || pos < 0 {
+		return nil
+	}
+	// GeneratedColBinder assigns ColPos over user DDL columns. Runtime table
+	// definitions may prefix rowid or contain other internal hidden columns.
+	var generatedExprPos int32
+	for _, col := range tblDef.Cols {
+		if !isDataBranchUserVisibleColumn(col) {
+			continue
+		}
+		if generatedExprPos == pos {
+			return col
+		}
+		generatedExprPos++
+	}
+	return nil
+}
+
+func canonicalizeDataBranchGeneratedExpr(
+	expr *plan.Expr,
+	resolveColumn func(int32) (string, bool),
+) bool {
+	if expr == nil {
+		return true
+	}
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		name, ok := resolveColumn(item.Col.ColPos)
+		if !ok {
+			return false
+		}
+		item.Col = &plan.ColRef{Name: name}
+	case *plan.Expr_Lit:
+		return canonicalizeDataBranchGeneratedExpr(item.Lit.Src, resolveColumn)
+	case *plan.Expr_F:
+		for _, arg := range item.F.Args {
+			if !canonicalizeDataBranchGeneratedExpr(arg, resolveColumn) {
+				return false
+			}
+		}
+	case *plan.Expr_List:
+		for _, listExpr := range item.List.List {
+			if !canonicalizeDataBranchGeneratedExpr(listExpr, resolveColumn) {
+				return false
+			}
+		}
+	case *plan.Expr_T, *plan.Expr_Max, *plan.Expr_Vec, *plan.Expr_Fold:
+		// These leaf expressions contain no column references.
+	case *plan.Expr_Raw, *plan.Expr_Corr, *plan.Expr_W, *plan.Expr_Sub,
+		*plan.Expr_P, *plan.Expr_V:
+		// GeneratedColBinder rejects these endpoint-dependent expression kinds.
+		// Fail closed if malformed or legacy catalog metadata contains one.
+		return false
+	}
+	return true
 }
 
 func dataBranchFakePKColIdxes(tblDef *plan.TableDef) []int {
@@ -1064,6 +1180,9 @@ func getTableStuff(
 		if isDataBranchUserVisibleColumn(col) {
 			tblStuff.def.visibleIdxes = append(tblStuff.def.visibleIdxes, len(tblStuff.def.colNames)-1)
 		}
+		if isDataBranchWritableColumn(col) {
+			tblStuff.def.writableIdxes = append(tblStuff.def.writableIdxes, len(tblStuff.def.colNames)-1)
+		}
 	}
 
 	if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
@@ -1189,6 +1308,15 @@ func reconcileDataBranchEndpointSchema(
 	}
 	tables.def.commonIdxes = commonIdxes
 	tables.def.commonVisibleIdxes = commonVisibleIdxes
+	commonVisibleSet := make(map[int]struct{}, len(commonVisibleIdxes))
+	for _, idx := range commonVisibleIdxes {
+		commonVisibleSet[idx] = struct{}{}
+	}
+	for _, idx := range tables.def.writableIdxes {
+		if _, ok := commonVisibleSet[idx]; ok {
+			tables.def.commonWritableIdxes = append(tables.def.commonWritableIdxes, idx)
+		}
+	}
 	tables.def.tarOnlyIdxes = tarOnlyIdxes
 
 	baseDataCols := make([]*plan.ColDef, 0, len(baseDef.Cols))
@@ -1378,7 +1506,10 @@ func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
 			leftDef.Cols[i].ClusterBy != rightDef.Cols[i].ClusterBy ||
 			leftDef.Cols[i].Primary != rightDef.Cols[i].Primary ||
 			leftDef.Cols[i].Seqnum != rightDef.Cols[i].Seqnum ||
-			leftDef.Cols[i].NotNull != rightDef.Cols[i].NotNull {
+			leftDef.Cols[i].NotNull != rightDef.Cols[i].NotNull ||
+			!dataBranchGeneratedColumnsEqual(
+				leftDef.Cols[i].GeneratedCol, rightDef.Cols[i].GeneratedCol,
+			) {
 			return false
 		}
 	}
@@ -1472,6 +1603,15 @@ func checkSchemaCompatibilityWithResolver(
 		name := strings.ToLower(tarCol.Name)
 		baseCol := resolveBaseColumn(tarCol)
 		if baseCol != nil {
+			if !dataBranchGeneratedColumnsLogicallyEqual(
+				tarCol, baseCol, tarDef, baseDef, resolveBaseColumn,
+			) {
+				err = moerr.NewInternalErrorNoCtxf(
+					"schema compatibility check: column '%s' has different generated definitions",
+					tarCol.Name,
+				)
+				return
+			}
 			if baseCol.Typ.Id == tarCol.Typ.Id {
 				if !dataBranchColumnTypeAttributesEqual(baseCol.Typ, tarCol.Typ) {
 					err = moerr.NewInternalErrorNoCtxf(
@@ -1488,12 +1628,12 @@ func checkSchemaCompatibilityWithResolver(
 					return
 				}
 				commonIdxes = append(commonIdxes, dataIdx)
+				commonColNameSet[name] = true
+				commonColNameSet[strings.ToLower(baseCol.Name)] = true
 				if isDataBranchUserVisibleColumn(tarCol) {
 					commonVisibleIdxes = append(commonVisibleIdxes, dataIdx)
-					commonColNameSet[name] = true
-					commonColNameSet[strings.ToLower(baseCol.Name)] = true
-					delete(baseVisibleColMap, strings.ToLower(baseCol.Name))
 				}
+				delete(baseVisibleColMap, strings.ToLower(baseCol.Name))
 			} else {
 				err = moerr.NewInternalErrorNoCtxf(
 					"schema compatibility check: column '%s' exists in both schemas but has different types (target: %d, base: %d)",

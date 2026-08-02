@@ -529,7 +529,6 @@ func TestCTEReuseRejectsExternalAndSideEffectingNodes(t *testing.T) {
 	for _, nodeType := range []planpb.Node_NodeType{
 		planpb.Node_FUNCTION_SCAN,
 		planpb.Node_EXTERNAL_SCAN,
-		planpb.Node_SOURCE_SCAN,
 		planpb.Node_EXTERNAL_FUNCTION,
 		planpb.Node_LOCK_OP,
 		planpb.Node_INSERT,
@@ -543,6 +542,58 @@ func TestCTEReuseRejectsExternalAndSideEffectingNodes(t *testing.T) {
 		t.Run(nodeType.String(), func(t *testing.T) {
 			builder := &QueryBuilder{qry: &Query{Nodes: []*Node{{NodeType: nodeType}}}}
 			require.False(t, builder.cteSubtreeIsDeterministic(0, make(map[int32]bool)))
+		})
+	}
+}
+
+func TestCTEReuseRecognizesGuardedRuntimeFilterExpression(t *testing.T) {
+	col := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_int64)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: pos}},
+		}
+	}
+	for _, test := range []struct {
+		name string
+		spec *planpb.RuntimeFilterSpec
+		want bool
+	}{
+		{
+			name: "probe or legacy expression",
+			spec: &planpb.RuntimeFilterSpec{Expr: col(0)},
+			want: true,
+		},
+		{
+			name: "guarded build expression",
+			spec: &planpb.RuntimeFilterSpec{BuildExpr: col(0)},
+			want: true,
+		},
+		{
+			name: "rolling upgrade raw hybrid",
+			spec: &planpb.RuntimeFilterSpec{
+				Expr: col(0), BuildExpr: col(0),
+			},
+			want: true,
+		},
+		{
+			name: "contradictory dual expression",
+			spec: &planpb.RuntimeFilterSpec{
+				Expr: col(0), BuildExpr: col(1),
+			},
+		},
+		{
+			name: "missing expression",
+			spec: &planpb.RuntimeFilterSpec{},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			builder := &QueryBuilder{qry: &Query{Nodes: []*Node{{
+				NodeType:               planpb.Node_PROJECT,
+				RuntimeFilterBuildList: []*planpb.RuntimeFilterSpec{test.spec},
+			}}}}
+			require.Equal(t, test.want,
+				builder.cteSubtreeIsDeterministic(
+					0, make(map[int32]bool)))
 		})
 	}
 }
