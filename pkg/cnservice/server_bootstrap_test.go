@@ -16,7 +16,11 @@ package cnservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"os"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -79,40 +83,52 @@ func TestHandleBootstrapErr(t *testing.T) {
 		assert.ErrorIs(t, err, context.Canceled)
 	})
 
-	t.Run("context.DeadlineExceeded panics", func(t *testing.T) {
+	t.Run("context.DeadlineExceeded returns error", func(t *testing.T) {
 		ctx := context.Background()
-		assert.Panics(t, func() {
-			handleBootstrapErr(ctx, context.DeadlineExceeded)
-		})
+		err := handleBootstrapErr(ctx, context.DeadlineExceeded)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
 	})
 
-	t.Run("bootstrap timeout with cause panics", func(t *testing.T) {
-		// Simulate the real bootstrap context: WithTimeoutCause sets a
-		// custom cause, but the 5-minute timeout is a legitimate failure
-		// that must still panic.
+	t.Run("bootstrap timeout preserves cause", func(t *testing.T) {
 		ctx, cancel := context.WithTimeoutCause(
 			context.Background(), 0, moerr.CauseBootstrap,
 		)
 		defer cancel()
-		// Wait for the timeout to fire.
 		<-ctx.Done()
 
-		assert.Panics(t, func() {
-			handleBootstrapErr(ctx, ctx.Err())
-		})
+		err := handleBootstrapErr(ctx, ctx.Err())
+		require.Error(t, err)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.Contains(t, err.Error(), "bootstrap")
 	})
 
-	t.Run("other error panics", func(t *testing.T) {
+	t.Run("other error returns error", func(t *testing.T) {
 		ctx := context.Background()
-		assert.Panics(t, func() {
-			handleBootstrapErr(ctx, fmt.Errorf("SQL execution failed"))
-		})
+		bootstrapErr := errors.New("SQL execution failed")
+		err := handleBootstrapErr(ctx, bootstrapErr)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, bootstrapErr)
 	})
 
-	t.Run("moerr wrapped error panics", func(t *testing.T) {
+	t.Run("moerr wrapped error returns error", func(t *testing.T) {
 		ctx := context.Background()
-		assert.Panics(t, func() {
-			handleBootstrapErr(ctx, moerr.NewInternalErrorNoCtx("bootstrap init failed"))
-		})
+		bootstrapErr := moerr.NewInternalErrorNoCtx("bootstrap init failed")
+		err := handleBootstrapErr(ctx, bootstrapErr)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, bootstrapErr)
+	})
+
+	t.Run("connection reset returns error", func(t *testing.T) {
+		ctx := context.Background()
+		bootstrapErr := &net.OpError{
+			Op:  "read",
+			Net: "tcp4",
+			Err: os.NewSyscallError("read", syscall.ECONNRESET),
+		}
+		err := handleBootstrapErr(ctx, bootstrapErr)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, bootstrapErr)
+		assert.ErrorIs(t, err, syscall.ECONNRESET)
 	})
 }
