@@ -203,6 +203,29 @@ if "$download_script" http://example.invalid/dependency "$expected_sha256" "$MO_
 fi
 assert_count 0
 
+new_case directory-destination
+mkdir "$MO_DOWNLOAD_MOCK_STATE/result"
+MO_DOWNLOAD_MOCK_MODE=success
+export MO_DOWNLOAD_MOCK_MODE
+if "$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+	fail "directory destination unexpectedly succeeded"
+fi
+assert_count 0
+[ -d "$MO_DOWNLOAD_MOCK_STATE/result" ] || fail "directory destination was modified"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+new_case symlink-directory-destination
+mkdir "$MO_DOWNLOAD_MOCK_STATE/real-directory"
+ln -s real-directory "$MO_DOWNLOAD_MOCK_STATE/result"
+MO_DOWNLOAD_MOCK_MODE=success
+export MO_DOWNLOAD_MOCK_MODE
+if "$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+	fail "symlink-to-directory destination unexpectedly succeeded"
+fi
+assert_count 0
+[ -L "$MO_DOWNLOAD_MOCK_STATE/result" ] || fail "directory symlink destination was modified"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
 new_case fresh-download
 MO_DOWNLOAD_MOCK_MODE=success
 export MO_DOWNLOAD_MOCK_MODE

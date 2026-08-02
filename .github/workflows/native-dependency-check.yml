@@ -87,8 +87,10 @@ jobs:
           --user 65534:65534
           matrixone-native-check:${{ matrix.arch }}
           sh -c
-          'test -r thirdparties/install/lib/${{ matrix.onnx_library }} &&
-          test -r cgo/libmo.so && test -r cgo/libmo.a'
+          'test -f thirdparties/install/lib/${{ matrix.onnx_library }} &&
+          test -r thirdparties/install/lib/${{ matrix.onnx_library }} &&
+          test -f cgo/libmo.so && test -r cgo/libmo.so &&
+          test -f cgo/libmo.a && test -r cgo/libmo.a'
 
   dockerfile:
     name: Dockerfile (amd64 + arm64)

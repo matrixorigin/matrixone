@@ -41,6 +41,10 @@ case "$url" in
 		exit 2
 		;;
 esac
+[ ! -d "$destination" ] || {
+	echo "destination must be a file path, got directory: $destination" >&2
+	exit 2
+}
 command -v "$curl_bin" >/dev/null 2>&1 || {
 	echo "curl command not found: $curl_bin" >&2
 	exit 2
