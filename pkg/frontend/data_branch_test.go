@@ -1484,6 +1484,94 @@ func TestCheckSchemaCompatibility_GeneratedDefinitionsUseLogicalColumnIdentity(t
 	})
 }
 
+func TestCanonicalizeDataBranchGeneratedExpr(t *testing.T) {
+	intType := plan.Type{Id: int32(types.T_int64)}
+	expr := &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+		{Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 9, ColPos: 0}}},
+		{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Src: &plan.Expr{
+			Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 9, ColPos: 1}},
+		}}}},
+	}}}}
+	references := []string{"old_a", "old_b"}
+	require.True(t, canonicalizeDataBranchGeneratedExpr(expr, func(pos int32) (string, bool) {
+		if pos < 0 || int(pos) >= len(references) {
+			return "", false
+		}
+		return references[pos], true
+	}))
+	require.Equal(t, &plan.ColRef{Name: "old_a"}, expr.GetList().List[0].GetCol())
+	require.Equal(t, &plan.ColRef{Name: "old_b"}, expr.GetList().List[1].GetLit().Src.GetCol())
+
+	require.True(t, canonicalizeDataBranchGeneratedExpr(nil, nil))
+	require.True(t, canonicalizeDataBranchGeneratedExpr(
+		&plan.Expr{Expr: &plan.Expr_T{T: &plan.TargetType{}}}, nil,
+	))
+	require.False(t, canonicalizeDataBranchGeneratedExpr(
+		&plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}}},
+		func(int32) (string, bool) { return "", false },
+	))
+	require.False(t, canonicalizeDataBranchGeneratedExpr(
+		&plan.Expr{Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{ColPos: 0}}}, nil,
+	))
+}
+
+func TestDataBranchGeneratedColumnsLogicallyEqualBoundaries(t *testing.T) {
+	intType := plan.Type{Id: int32(types.T_int64)}
+	colExpr := func(pos int32) *plan.Expr {
+		return &plan.Expr{Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}
+	}
+	newTableDef := func(expr *plan.Expr, origin string, stored bool) (*plan.TableDef, *plan.ColDef) {
+		generated := &plan.ColDef{
+			Name: "g", Typ: intType,
+			GeneratedCol: &plan.GeneratedCol{Expr: expr, OriginString: origin, IsStored: stored},
+		}
+		return &plan.TableDef{Cols: []*plan.ColDef{
+			{Name: catalog.Row_ID, Hidden: true},
+			{Name: "a", Typ: intType},
+			generated,
+		}}, generated
+	}
+	resolveByName := func(def *plan.TableDef) dataBranchEndpointColumnResolver {
+		return func(col *plan.ColDef) *plan.ColDef {
+			return dataBranchColumnDefByLogicalName(def, col)
+		}
+	}
+
+	tarDef, tarCol := newTableDef(nil, "a * 2", true)
+	baseDef, baseCol := newTableDef(nil, "a * 2", true)
+	require.True(t, dataBranchGeneratedColumnsLogicallyEqual(
+		tarCol, baseCol, tarDef, baseDef, resolveByName(baseDef),
+	))
+	baseCol.GeneratedCol.OriginString = ""
+	require.False(t, dataBranchGeneratedColumnsLogicallyEqual(
+		tarCol, baseCol, tarDef, baseDef, resolveByName(baseDef),
+	))
+
+	baseCol.GeneratedCol = nil
+	require.False(t, dataBranchGeneratedColumnsLogicallyEqual(
+		tarCol, baseCol, tarDef, baseDef, resolveByName(baseDef),
+	))
+	baseDef, baseCol = newTableDef(colExpr(0), "a", true)
+	require.False(t, dataBranchGeneratedColumnsLogicallyEqual(
+		tarCol, baseCol, tarDef, baseDef, resolveByName(baseDef),
+	))
+	baseDef, baseCol = newTableDef(nil, "a * 2", false)
+	require.False(t, dataBranchGeneratedColumnsLogicallyEqual(
+		tarCol, baseCol, tarDef, baseDef, resolveByName(baseDef),
+	))
+
+	tarDef, tarCol = newTableDef(colExpr(9), "missing", true)
+	baseDef, baseCol = newTableDef(colExpr(0), "a", true)
+	require.False(t, dataBranchGeneratedColumnsLogicallyEqual(
+		tarCol, baseCol, tarDef, baseDef, resolveByName(baseDef),
+	))
+	tarDef, tarCol = newTableDef(colExpr(0), "a", true)
+	baseDef, baseCol = newTableDef(colExpr(9), "missing", true)
+	require.False(t, dataBranchGeneratedColumnsLogicallyEqual(
+		tarCol, baseCol, tarDef, baseDef, resolveByName(baseDef),
+	))
+}
+
 func TestCheckSchemaCompatibility_StoredGeneratedPrimaryKey(t *testing.T) {
 	newTableDef := func() *plan.TableDef {
 		return &plan.TableDef{

@@ -173,33 +173,12 @@ func canonicalizeDataBranchGeneratedExpr(
 				return false
 			}
 		}
-	case *plan.Expr_W:
-		if !canonicalizeDataBranchGeneratedExpr(item.W.WindowFunc, resolveColumn) {
-			return false
-		}
-		for _, partitionExpr := range item.W.PartitionBy {
-			if !canonicalizeDataBranchGeneratedExpr(partitionExpr, resolveColumn) {
-				return false
-			}
-		}
-		for _, order := range item.W.OrderBy {
-			if !canonicalizeDataBranchGeneratedExpr(order.Expr, resolveColumn) {
-				return false
-			}
-		}
-		if item.W.Frame != nil {
-			if item.W.Frame.Start != nil &&
-				!canonicalizeDataBranchGeneratedExpr(item.W.Frame.Start.Val, resolveColumn) {
-				return false
-			}
-			if item.W.Frame.End != nil &&
-				!canonicalizeDataBranchGeneratedExpr(item.W.Frame.End.Val, resolveColumn) {
-				return false
-			}
-		}
-	case *plan.Expr_Sub:
-		return canonicalizeDataBranchGeneratedExpr(item.Sub.Child, resolveColumn)
-	case *plan.Expr_Raw, *plan.Expr_Corr:
+	case *plan.Expr_T, *plan.Expr_Max, *plan.Expr_Vec, *plan.Expr_Fold:
+		// These leaf expressions contain no column references.
+	case *plan.Expr_Raw, *plan.Expr_Corr, *plan.Expr_W, *plan.Expr_Sub,
+		*plan.Expr_P, *plan.Expr_V:
+		// GeneratedColBinder rejects these endpoint-dependent expression kinds.
+		// Fail closed if malformed or legacy catalog metadata contains one.
 		return false
 	}
 	return true
