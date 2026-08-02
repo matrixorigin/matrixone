@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,11 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var (
-	once         sync.Once
-	shareCluster embed.Cluster
-	mu           sync.Mutex
-)
+var sharedCluster embed.SharedTestCluster
 
 func TestTableFeatures(t *testing.T) {
 	runFeaturesTests(
@@ -117,27 +112,12 @@ func runFeaturesTests(
 	t *testing.T,
 	fn func(embed.Cluster),
 ) error {
-	mu.Lock()
-	defer mu.Unlock()
-
-	var c embed.Cluster
-	createFunc := func() embed.Cluster {
-		new, err := embed.NewCluster(
+	createFunc := func() (embed.Cluster, error) {
+		return embed.StartTestCluster(
 			embed.WithCNCount(3),
-			embed.WithTesting(),
 		)
-		require.NoError(t, err)
-		require.NoError(t, new.Start())
-		return new
 	}
 
-	once.Do(
-		func() {
-			c = createFunc()
-			shareCluster = c
-		},
-	)
-	c = shareCluster
-	fn(c)
+	sharedCluster.Run(t, createFunc, fn)
 	return nil
 }

@@ -1136,3 +1136,64 @@ func (reader *SyncTableIDReader) Read(ctx context.Context) (release func(), bat 
 	bat.SetRowCount(preTableIDVecs.Rows())
 	return
 }
+
+// ReadTableIDHistoryRange returns the time range that a table-ID index proves
+// it covers. The range is stored in a special row that may live in any block,
+// so callers must not infer coverage from an individual batch.
+//
+// Multiple special rows are not expected for one index. If they are present,
+// use their intersection: this preserves only the history every fragment
+// claims to cover. A missing or contradictory range is reported as unknown so
+// callers can fail closed or use the durable checkpoint fallback.
+func ReadTableIDHistoryRange(
+	ctx context.Context,
+	locations objectio.LocationSlice,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (start, end types.TS, ok bool, err error) {
+	if locations.Len() == 0 {
+		return
+	}
+
+	reader, err := NewSyncTableIDReader(locations, mp, fs)
+	if err != nil {
+		return types.TS{}, types.TS{}, false, err
+	}
+
+	for {
+		release, bat, isEnd, readErr := reader.Read(ctx)
+		if readErr != nil {
+			return types.TS{}, types.TS{}, false, readErr
+		}
+		if isEnd {
+			break
+		}
+
+		func() {
+			defer release()
+			tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
+			starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
+			ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
+			for i := 0; i < bat.RowCount(); i++ {
+				if tableIDs[i] != CKPTableIDBatch_SpecialTableID {
+					continue
+				}
+				if !ok {
+					start, end, ok = starts[i], ends[i], true
+					continue
+				}
+				if start.LT(&starts[i]) {
+					start = starts[i]
+				}
+				if end.GT(&ends[i]) {
+					end = ends[i]
+				}
+			}
+		}()
+	}
+
+	if ok && start.GT(&end) {
+		return types.TS{}, types.TS{}, false, nil
+	}
+	return
+}
