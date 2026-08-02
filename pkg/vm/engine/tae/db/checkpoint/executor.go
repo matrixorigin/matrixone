@@ -16,6 +16,7 @@ package checkpoint
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
@@ -72,10 +74,15 @@ func (job *checkpointJob) doGlobalCheckpoint(
 	predecessor *CheckpointEntry,
 ) (entry *CheckpointEntry, err error) {
 	var (
-		errPhase string
-		fields   []zap.Field
-		now      = time.Now()
-		runner   = job.executor.runner
+		errPhase           string
+		fields             []zap.Field
+		now                = time.Now()
+		runner             = job.executor.runner
+		files              []string
+		tableIDLocation    objectio.LocationSlice
+		metadataPublished  bool
+		rollbackFileCount  int
+		rollbackCleanupErr error
 	)
 
 	entry = NewCheckpointEntry(
@@ -94,13 +101,21 @@ func (job *checkpointJob) doGlobalCheckpoint(
 
 	defer func() {
 		if err != nil {
-			logutil.Error(
-				"GCKP-Execute-Error",
+			errorFields := []zap.Field{
 				zap.String("entry", entry.String()),
 				zap.String("phase", errPhase),
 				zap.Error(err),
 				zap.Duration("cost", time.Since(now)),
-			)
+			}
+			if rollbackFileCount > 0 {
+				errorFields = append(errorFields,
+					zap.Int("rollback-object-count", rollbackFileCount))
+			}
+			if rollbackCleanupErr != nil {
+				errorFields = append(errorFields,
+					zap.NamedError("rollback-error", rollbackCleanupErr))
+			}
+			logutil.Error("GCKP-Execute-Error", errorFields...)
 		} else {
 			fields = append(fields, zap.Duration("cost", time.Since(now)))
 			fields = append(fields, zap.String("entry", entry.String()))
@@ -108,6 +123,29 @@ func (job *checkpointJob) doGlobalCheckpoint(
 				"GCKP-Execute-End",
 				fields...,
 			)
+		}
+	}()
+	defer func() {
+		// A panic may occur after saveCheckpoint has made metadata durable but
+		// before it returns. Only an explicit pre-publication error is safe to
+		// roll back; an uncertain publication state must never lose referenced
+		// data.
+		if metadataPublished || err == nil {
+			return
+		}
+		unpublishedFiles := append([]string(nil), files...)
+		for i := 0; i < tableIDLocation.Len(); i++ {
+			unpublishedFiles = append(
+				unpublishedFiles, tableIDLocation.Get(i).Name().String())
+		}
+		if len(unpublishedFiles) == 0 {
+			return
+		}
+		rollbackFileCount, rollbackCleanupErr =
+			ioutil.DeleteUnpublishedObjects(
+				job.executor.ctx, runner.rt.Fs, unpublishedFiles...)
+		if rollbackCleanupErr != nil {
+			err = errors.Join(err, rollbackCleanupErr)
 		}
 	}()
 	if predecessor == nil || !predecessor.IsFinished() ||
@@ -131,7 +169,10 @@ func (job *checkpointJob) doGlobalCheckpoint(
 	objectio.WaitInjectedCtx(job.executor.ctx, objectio.FJ_GCKPWaitAfterIntent)
 
 	var emptyLocation objectio.Location
-	tableIDLocation, historyStart, historyEnd, historyKnown, syncErr :=
+	var historyStart, historyEnd types.TS
+	var historyKnown bool
+	var syncErr error
+	tableIDLocation, historyStart, historyEnd, historyKnown, syncErr =
 		logtail.SyncTableIDBatchWithHistory(
 			job.executor.ctx,
 			entry.start,
@@ -179,7 +220,8 @@ func (job *checkpointJob) doGlobalCheckpoint(
 	}
 	defer data.Close()
 
-	location, files, err := data.Sync(
+	var location objectio.Location
+	location, files, err = data.Sync(
 		job.executor.ctx, runner.rt.Fs,
 	)
 	fields = data.ExportStats("")
@@ -198,6 +240,7 @@ func (job *checkpointJob) doGlobalCheckpoint(
 		errPhase = "save"
 		return
 	}
+	metadataPublished = true
 	defer func() {
 		entry.SetState(ST_Finished)
 	}()
@@ -285,12 +328,17 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 	}
 
 	var (
-		errPhase      string
-		lsnToTruncate uint64
-		lsn           uint64
-		fatal         bool
-		fields        []zap.Field
-		now           = time.Now()
+		errPhase           string
+		lsnToTruncate      uint64
+		lsn                uint64
+		fatal              bool
+		fields             []zap.Field
+		now                = time.Now()
+		files              []string
+		tableIDLocation    objectio.LocationSlice
+		metadataPublished  bool
+		rollbackFileCount  int
+		rollbackCleanupErr error
 	)
 
 	logutil.Info(
@@ -306,13 +354,21 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 			} else {
 				logger = logutil.Error
 			}
-			logger(
-				"ICKP-Execute-Error",
+			errorFields := []zap.Field{
 				zap.String("entry", entry.String()),
 				zap.Error(err),
 				zap.String("phase", errPhase),
 				zap.Duration("cost", time.Since(now)),
-			)
+			}
+			if rollbackFileCount > 0 {
+				errorFields = append(errorFields,
+					zap.Int("rollback-object-count", rollbackFileCount))
+			}
+			if rollbackCleanupErr != nil {
+				errorFields = append(errorFields,
+					zap.NamedError("rollback-error", rollbackCleanupErr))
+			}
+			logger("ICKP-Execute-Error", errorFields...)
 		} else {
 			fields = append(fields, zap.Duration("cost", time.Since(now)))
 			fields = append(fields, zap.Uint64("truncate", lsnToTruncate))
@@ -326,6 +382,27 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 			)
 		}
 	}()
+	defer func() {
+		// See doGlobalCheckpoint: a panic leaves publication uncertain, so only
+		// an explicit error before the durable metadata boundary may delete data.
+		if metadataPublished || err == nil {
+			return
+		}
+		unpublishedFiles := append([]string(nil), files...)
+		for i := 0; i < tableIDLocation.Len(); i++ {
+			unpublishedFiles = append(
+				unpublishedFiles, tableIDLocation.Get(i).Name().String())
+		}
+		if len(unpublishedFiles) == 0 {
+			return
+		}
+		rollbackFileCount, rollbackCleanupErr =
+			ioutil.DeleteUnpublishedObjects(
+				job.executor.ctx, runner.rt.Fs, unpublishedFiles...)
+		if rollbackCleanupErr != nil {
+			err = errors.Join(err, rollbackCleanupErr)
+		}
+	}()
 
 	preTableIDLocation, requiredHistoryEnd, err :=
 		job.resolveICKPTableIDPredecessor(entry)
@@ -335,7 +412,6 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 		return err
 	}
 
-	var files []string
 	var file string
 	if fields, files, err = job.executor.doIncrementalCheckpoint(entry); err != nil {
 		errPhase = "do-ckp"
@@ -343,7 +419,7 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 		return
 	}
 
-	tableIDLocation, _, _, _, err := logtail.SyncTableIDBatchWithHistory(
+	tableIDLocation, _, _, _, err = logtail.SyncTableIDBatchWithHistory(
 		job.executor.ctx,
 		entry.start,
 		entry.end,
@@ -387,6 +463,7 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 		rollback()
 		return
 	}
+	metadataPublished = true
 
 	defer func() {
 		runner.store.CommitICKPIntent(entry)

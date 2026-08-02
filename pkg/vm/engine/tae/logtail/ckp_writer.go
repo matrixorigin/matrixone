@@ -16,6 +16,7 @@ package logtail
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -256,6 +257,16 @@ func (data *CheckpointData_V2) Sync(
 	ctx context.Context,
 	fs fileservice.FileService,
 ) (location objectio.Location, ckpfiles []string, err error) {
+	transferred := false
+	defer func() {
+		if transferred {
+			return
+		}
+		if cleanupErr := deletePersistedCheckpointObjects(ctx, data.sinker); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
+	}()
+
 	if data.batch != nil && data.batch.RowCount() != 0 {
 		err = data.sinker.Write(ctx, data.batch)
 		if err != nil {
@@ -299,8 +310,18 @@ func (data *CheckpointData_V2) Sync(
 	for _, obj := range files {
 		ckpfiles = append(ckpfiles, obj.ObjectName().String())
 	}
+	transferred = true
 	return
 }
+
+func deletePersistedCheckpointObjects(ctx context.Context, sinker *ioutil.Sinker) error {
+	count, err := sinker.DeletePersisted(ctx)
+	if err != nil {
+		return fmt.Errorf("delete %d unpublished checkpoint objects: %w", count, err)
+	}
+	return nil
+}
+
 func (data *CheckpointData_V2) Close() {
 	data.batch.FreeColumns(data.allocator)
 	data.sinker.Close()
@@ -782,6 +803,15 @@ func syncTableIDBatch(
 		ioutil.WithMemorySizeThreshold(sinkerThreshold),
 	)
 	defer sinker.Close()
+	transferred := false
+	defer func() {
+		if transferred {
+			return
+		}
+		if cleanupErr := deletePersistedCheckpointObjects(ctx, sinker); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
+	}()
 	bat := batch.NewWithSchema(false, TableIDAttrs, TableIDTypes)
 	defer bat.Clean(mp)
 
@@ -1035,6 +1065,7 @@ func syncTableIDBatch(
 	historyStart = tableBatchStart
 	historyEnd = tableBatchEnd
 	historyKnown = hasPreviousHistory
+	transferred = true
 	return
 }
 

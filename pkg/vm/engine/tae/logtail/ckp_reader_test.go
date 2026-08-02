@@ -16,6 +16,8 @@ package logtail
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -30,6 +32,55 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/stretchr/testify/require"
 )
+
+type trackingDeleteFileService struct {
+	fileservice.FileService
+	err     error
+	deleted []string
+	batches [][]string
+}
+
+func (fs *trackingDeleteFileService) Delete(
+	ctx context.Context,
+	files ...string,
+) error {
+	fs.deleted = append(fs.deleted, files...)
+	fs.batches = append(fs.batches, append([]string(nil), files...))
+	if fs.err != nil {
+		return fs.err
+	}
+	return fs.FileService.Delete(ctx, files...)
+}
+
+func TestDeleteUnpublishedObjectsUsesBoundedBatches(t *testing.T) {
+	proc := testutil.NewProc(t)
+	fs, err := fileservice.Get[fileservice.FileService](
+		proc.GetFileService(),
+		defines.SharedFileServiceName,
+	)
+	require.NoError(t, err)
+	trackingFS := &trackingDeleteFileService{FileService: fs}
+
+	files := make([]string, 1001)
+	for i := range files {
+		files[i] = fmt.Sprintf("unpublished-%d", i)
+	}
+	files = append(files, "", files[0])
+	count, err := ioutil.DeleteUnpublishedObjects(
+		context.Background(), trackingFS, files...)
+	require.NoError(t, err)
+	require.Equal(t, 1001, count)
+	require.Len(t, trackingFS.batches, 2)
+	require.Len(t, trackingFS.batches[0], 1000)
+	require.Len(t, trackingFS.batches[1], 1)
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	count, err = ioutil.DeleteUnpublishedObjects(
+		canceledCtx, trackingFS, "canceled-cleanup")
+	require.Equal(t, 1, count)
+	require.ErrorIs(t, err, context.Canceled)
+}
 
 func TestConsumeCheckpointWithTableID(t *testing.T) {
 	proc := testutil.NewProc(t)
@@ -205,7 +256,7 @@ func TestSyncTableIDBatchValidatesPredecessorInSinglePass(t *testing.T) {
 		previousStart,
 		previousEnd,
 		64,
-		1,
+		BatchRowCountThreshold+17,
 		proc.Mp(),
 		fs,
 	)
@@ -229,9 +280,20 @@ func TestSyncTableIDBatchValidatesPredecessorInSinglePass(t *testing.T) {
 	require.True(t, known)
 	require.Equal(t, previousStart, historyStart)
 	require.Equal(t, previousEnd, historyEnd)
+	listFiles := func() []string {
+		entries, listErr := fileservice.SortedList(fs.List(ctx, ""))
+		require.NoError(t, listErr)
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name)
+		}
+		return names
+	}
+	filesBeforeFailure := listFiles()
 
 	missingHistoryEnd := previousEnd.Next()
 	invalidGlobalEnd := missingHistoryEnd.Next()
+	trackingFS := &trackingDeleteFileService{FileService: fs}
 	_, historyStart, historyEnd, known, err = SyncTableIDBatchWithHistory(
 		ctx,
 		types.TS{},
@@ -243,12 +305,40 @@ func TestSyncTableIDBatchValidatesPredecessorInSinglePass(t *testing.T) {
 		previous,
 		missingHistoryEnd,
 		proc.Mp(),
-		fs,
+		trackingFS,
 	)
 	require.ErrorContains(t, err, "table-ID predecessor history is incomplete")
+	require.NotEmpty(t, trackingFS.deleted,
+		"the test must spill before predecessor validation fails")
+	require.Equal(t, filesBeforeFailure, listFiles(),
+		"failed table-ID construction must not retain spilled objects")
 	require.True(t, known)
 	require.Equal(t, previousStart, historyStart)
 	require.Equal(t, previousEnd, historyEnd)
+
+	deleteErr := errors.New("injected checkpoint object delete failure")
+	failingFS := &trackingDeleteFileService{FileService: fs, err: deleteErr}
+	_, _, _, _, err = SyncTableIDBatchWithHistory(
+		ctx,
+		types.TS{},
+		invalidGlobalEnd,
+		24*time.Hour,
+		64,
+		objectio.Location{},
+		0,
+		previous,
+		missingHistoryEnd,
+		proc.Mp(),
+		failingFS,
+	)
+	require.ErrorContains(t, err, "table-ID predecessor history is incomplete")
+	require.ErrorIs(t, err, deleteErr)
+	require.NotEmpty(t, failingFS.deleted)
+	// The injected failure deliberately leaves the test objects behind. Remove
+	// them through the underlying service so the fixture also proves the exact
+	// attempted ownership set is sufficient for cleanup.
+	require.NoError(t, fs.Delete(ctx, failingFS.deleted...))
+	require.Equal(t, filesBeforeFailure, listFiles())
 }
 
 func makeCheckpointObjectRanges(

@@ -87,6 +87,17 @@ const (
 	defaultGlobalCheckpointTimeout = 10 * time.Second
 )
 
+func snapshotFileService(t testing.TB, fs fileservice.FileService) []string {
+	t.Helper()
+	entries, err := fileservice.SortedList(fs.List(context.Background(), ""))
+	require.NoError(t, err)
+	files := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		files = append(files, fmt.Sprintf("%s:%t:%d", entry.Name, entry.IsDir, entry.Size))
+	}
+	return files
+}
+
 func TestCancelableJob(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -9288,10 +9299,14 @@ func Test_CheckpointChaos1(t *testing.T) {
 	assert.NoError(t, err)
 
 	now := tae.TxnMgr.Now()
+	require.NoError(t, tae.DB.ForceFlush(ctx, now))
+	filesBeforeFailure := snapshotFileService(t, tae.Runtime.Fs)
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	err = tae.DB.ForceCheckpoint(ctx, now)
 	assert.Error(t, err)
+	require.Equal(t, filesBeforeFailure, snapshotFileService(t, tae.Runtime.Fs),
+		"failed ICKP publication must roll back its data and table-ID objects")
 
 	maxEntry := tae.BGCheckpointRunner.MaxIncrementalCheckpoint()
 	assert.Nilf(t, maxEntry, maxEntry.String())
@@ -9373,8 +9388,11 @@ func Test_CheckpointChaos2(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
 	defer cancel()
 	maxICKP := tae.DB.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	filesBeforeFailure := snapshotFileService(t, tae.Runtime.Fs)
 	err = tae.DB.ForceGlobalCheckpoint(ctx, maxICKP.GetEnd(), 0)
 	assert.Error(t, err)
+	require.Equal(t, filesBeforeFailure, snapshotFileService(t, tae.Runtime.Fs),
+		"failed GCKP publication must roll back its data and table-ID objects")
 	maxGCKP := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
 	assert.Nilf(t, maxGCKP, maxGCKP.String())
 
@@ -14557,9 +14575,18 @@ func TestGlobalCheckpointTableIDHistoryFallbackAndFailClosed(t *testing.T) {
 		replayed.GetEnd().Physical()+(historyWindow/2).Nanoseconds(),
 		0,
 	)
-	err := forceGlobalCheckpoint(partialTarget, time.Nanosecond)
-	require.ErrorContains(t, err, "table-ID history is incomplete")
-	require.Same(t, replayed, tae.BGCheckpointRunner.MaxGlobalCheckpoint())
+	// Materialize the legitimate ICKP first, then isolate repeated failed GCKP
+	// attempts. No attempt may retain an object that durable metadata cannot
+	// reach.
+	require.NoError(t, tae.DB.ForceCheckpoint(ctx, partialTarget))
+	filesBeforeFailure := snapshotFileService(t, tae.Runtime.Fs)
+	for range 3 {
+		err := forceGlobalCheckpoint(partialTarget, time.Nanosecond)
+		require.ErrorContains(t, err, "table-ID history is incomplete")
+		require.Same(t, replayed, tae.BGCheckpointRunner.MaxGlobalCheckpoint())
+		require.Equal(t, filesBeforeFailure, snapshotFileService(t, tae.Runtime.Fs),
+			"retrying a fail-closed GCKP must not accumulate unreachable objects")
+	}
 
 	recoveryTarget := types.BuildTS(
 		replayed.GetEnd().Physical()+historyWindow.Nanoseconds()+1,
