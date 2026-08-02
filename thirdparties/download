@@ -31,6 +31,7 @@ attempts=${MO_DOWNLOAD_ATTEMPTS:-4}
 connect_timeout=${MO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}
 max_time=${MO_DOWNLOAD_MAX_TIME_SECONDS:-120}
 max_bytes=${MO_DOWNLOAD_MAX_BYTES:-134217728}
+retry_delay=${MO_DOWNLOAD_RETRY_DELAY_SECONDS:-1}
 curl_bin=${MO_DOWNLOAD_CURL_BIN:-curl}
 
 case "$url" in
@@ -60,6 +61,13 @@ require_positive_integer MO_DOWNLOAD_ATTEMPTS "$attempts"
 require_positive_integer MO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS "$connect_timeout"
 require_positive_integer MO_DOWNLOAD_MAX_TIME_SECONDS "$max_time"
 require_positive_integer MO_DOWNLOAD_MAX_BYTES "$max_bytes"
+
+case "$retry_delay" in
+	'' | *[!0-9]*)
+		echo "MO_DOWNLOAD_RETRY_DELAY_SECONDS must be a non-negative integer, got '$retry_delay'" >&2
+		exit 2
+		;;
+esac
 
 case "$expected_sha256" in
 	*[!0-9a-fA-F]*)
@@ -133,7 +141,7 @@ if [ $((max_bytes % 512)) -ne 0 ]; then
 	max_file_blocks=$((max_file_blocks + 1))
 fi
 
-download_once() (
+run_curl() (
 	current_file_blocks=$(ulimit -f)
 	case "$current_file_blocks" in
 		unlimited)
@@ -151,24 +159,51 @@ download_once() (
 			;;
 	esac
 
-	retry_count=$((attempts - 1))
-	retry_max_time=$((max_time * attempts))
 	exec "$curl_bin" --disable --fail --location --show-error \
 		--proto '=https' --proto-redir '=https' \
 		--connect-timeout "$connect_timeout" --max-time "$max_time" \
-		--retry "$retry_count" --retry-all-errors \
-		--retry-max-time "$retry_max_time" \
 		--max-filesize "$max_bytes" \
+		"$@" \
 		--output "$tmp" "$url"
 )
 
-echo "downloading dependency (up to $attempts attempts)"
-if download_once; then
-	:
+# curl 7.71 added --retry-all-errors. Prefer curl's native retry engine when
+# available because it understands Retry-After. Ubuntu 20.04 ships curl 7.68,
+# so retain a bounded POSIX fallback for otherwise retryable transport errors.
+if "$curl_bin" --disable --help all 2>/dev/null \
+	| grep -q -- '--retry-all-errors'; then
+	retry_count=$((attempts - 1))
+	retry_max_time=$((max_time * attempts))
+	echo "downloading dependency (up to $attempts attempts)"
+	if run_curl \
+		--retry "$retry_count" --retry-all-errors \
+		--retry-max-time "$retry_max_time"; then
+		:
+	else
+		status=$?
+		echo "dependency download failed with curl exit code $status" >&2
+		exit 1
+	fi
 else
-	status=$?
-	echo "dependency download failed with curl exit code $status" >&2
-	exit 1
+	attempt=1
+	while :; do
+		# Do not let bytes from a failed legacy attempt influence the next one.
+		: > "$tmp"
+		echo "downloading dependency (attempt $attempt/$attempts; legacy curl retry)"
+		if run_curl; then
+			break
+		else
+			status=$?
+		fi
+		if [ "$attempt" -ge "$attempts" ]; then
+			echo "dependency download failed with curl exit code $status after $attempt attempts" >&2
+			exit 1
+		fi
+		if [ "$retry_delay" -gt 0 ]; then
+			sleep "$retry_delay"
+		fi
+		attempt=$((attempt + 1))
+	done
 fi
 if ! verify_file "$tmp"; then
 	echo "$verification_error" >&2

@@ -17,6 +17,15 @@
 set -eu
 
 mock_curl() {
+	if [ "${1:-}" = --disable ] && [ "${2:-}" = --help ] && [ "${3:-}" = all ]; then
+		if [ "${MO_DOWNLOAD_MOCK_RETRY_ALL_ERRORS:-1}" = 1 ]; then
+			printf '%s\n' '     --retry-all-errors'
+		else
+			printf '%s\n' '     --retry <num>'
+		fi
+		exit 0
+	fi
+
 	output=
 	retry_count=
 	retry_max_time=
@@ -65,7 +74,7 @@ mock_curl() {
 	printf '%s\n' "$count" > "$MO_DOWNLOAD_MOCK_STATE/count"
 
 	case "$MO_DOWNLOAD_MOCK_MODE:$count" in
-		always-fail:*)
+		transport-once:1 | always-fail:*)
 			exit 56
 			;;
 		always-corrupt:*)
@@ -113,9 +122,11 @@ export MO_DOWNLOAD_ATTEMPTS=3
 export MO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS=1
 export MO_DOWNLOAD_MAX_TIME_SECONDS=1
 export MO_DOWNLOAD_MAX_BYTES=1048576
+export MO_DOWNLOAD_RETRY_DELAY_SECONDS=0
 export MO_DOWNLOAD_CURL_BIN="$0"
 export MO_DOWNLOAD_MOCK_CHILD=1
 export MO_DOWNLOAD_MOCK_FIXTURE="$fixture"
+export MO_DOWNLOAD_MOCK_RETRY_ALL_ERRORS=1
 
 fail() {
 	echo "FAIL: $*" >&2
@@ -138,6 +149,15 @@ assert_retry_contract() {
 	[ "$retry_count" -eq $((MO_DOWNLOAD_ATTEMPTS - 1)) ] || fail "curl retry count is $retry_count"
 	[ "$retry_max_time" -eq $((MO_DOWNLOAD_MAX_TIME_SECONDS * MO_DOWNLOAD_ATTEMPTS)) ] || fail "curl retry time is $retry_max_time"
 	[ "$retry_all_errors" -eq 1 ] || fail "curl retry-all-errors is missing"
+}
+
+assert_legacy_retry_contract() {
+	IFS= read -r retry_count < "$MO_DOWNLOAD_MOCK_STATE/retry-count"
+	IFS= read -r retry_max_time < "$MO_DOWNLOAD_MOCK_STATE/retry-max-time"
+	IFS= read -r retry_all_errors < "$MO_DOWNLOAD_MOCK_STATE/retry-all-errors"
+	[ -z "$retry_count" ] || fail "legacy curl unexpectedly received --retry $retry_count"
+	[ -z "$retry_max_time" ] || fail "legacy curl unexpectedly received --retry-max-time $retry_max_time"
+	[ "$retry_all_errors" -eq 0 ] || fail "legacy curl unexpectedly received --retry-all-errors"
 }
 
 assert_no_temp_files() {
@@ -212,6 +232,19 @@ assert_count 1
 assert_retry_contract
 cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "stale cache was not replaced"
 assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+new_case legacy-transport-retry
+MO_DOWNLOAD_MOCK_MODE=transport-once
+MO_DOWNLOAD_MOCK_RETRY_ALL_ERRORS=0
+export MO_DOWNLOAD_MOCK_MODE MO_DOWNLOAD_MOCK_RETRY_ALL_ERRORS
+"$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"
+assert_count 2
+assert_legacy_retry_contract
+cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "legacy curl retry installed wrong content"
+assert_publicly_readable "$MO_DOWNLOAD_MOCK_STATE/result"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+MO_DOWNLOAD_MOCK_RETRY_ALL_ERRORS=1
+export MO_DOWNLOAD_MOCK_RETRY_ALL_ERRORS
 
 new_case exhausted-transport
 printf 'previous invalid dependency\n' > "$MO_DOWNLOAD_MOCK_STATE/result"
