@@ -18,11 +18,18 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
+
+func isPerformStatement(stmt tree.Statement) bool {
+	selectStmt, ok := stmt.(*tree.Select)
+	return ok && selectStmt.IsPerform
+}
 
 // executeStatusStmt run the statement that responses status t
 func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
@@ -34,6 +41,22 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	ep := ses.GetExportConfig()
 	switch st := execCtx.stmt.(type) {
 	case *tree.Select:
+		if st.IsPerform {
+			ses.rs = &plan.ResultColDef{
+				ResultCols: plan2.GetResultColumnsFromPlan(execCtx.cw.Plan()),
+			}
+			runBegin := time.Now()
+			if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
+				return
+			}
+			if execCtx.runResult != nil {
+				execCtx.runResult.AffectRows = 0
+			}
+			if time.Since(runBegin) > time.Second {
+				ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
+			}
+			return
+		}
 		if ep.needExportToFile() {
 			defer ep.Close()
 			columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)

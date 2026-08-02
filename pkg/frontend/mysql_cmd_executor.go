@@ -762,7 +762,7 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch, crs 
 	}
 	tTime := time.Since(begin)
 	n := 0
-	if bat != nil && bat.Vecs[0] != nil {
+	if !isPerformStatement(execCtx.stmt) && bat != nil && bat.Vecs[0] != nil {
 		n = bat.Vecs[0].Length()
 		ses.sentRows.Add(int64(n))
 	}

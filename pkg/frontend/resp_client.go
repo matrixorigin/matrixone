@@ -213,6 +213,10 @@ func (resper *MysqlResp) RespResult(execCtx *ExecCtx, crs *perfcounter.CounterSe
 		}
 	}
 
+	if isPerformStatement(execCtx.stmt) {
+		return nil
+	}
+
 	//!!!NOTE: after that above
 	if bat == nil {
 		return nil

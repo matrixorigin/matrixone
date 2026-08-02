@@ -543,6 +543,9 @@ func sqlTaskInt64(v any) int64 {
 // Do
 %token <str> DO
 
+// Perform
+%token <str> PERFORM
+
 // Declare
 %token <str> DECLARE
 
@@ -620,7 +623,7 @@ func sqlTaskInt64(v any) int64 {
 %type <statement> analyze_stmt check_table_stmt show_profile_stmt
 %type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt reset_stmt
 %type <statement> replace_stmt
-%type <statement> do_stmt
+%type <statement> do_stmt perform_stmt
 %type <statement> declare_stmt
 %type <statement> values_stmt
 %type <statement> call_stmt
@@ -1075,6 +1078,7 @@ normal_stmt:
 |   load_table_stmt
 |   load_extension_stmt
 |   do_stmt
+|   perform_stmt
 |   values_stmt
 |   select_stmt
     {
@@ -3372,6 +3376,7 @@ prepareable_stmt:
 |   drop_stmt
 |   show_stmt
 |   update_stmt
+|   perform_stmt
 |   select_stmt
     {
         $$ = $1
@@ -14434,6 +14439,13 @@ do_stmt:
         }
     }
 
+perform_stmt:
+    PERFORM select_stmt
+    {
+        $2.IsPerform = true
+        $$ = $2
+    }
+
 declare_stmt:
     DECLARE var_name_list column_type
     {
@@ -14854,6 +14866,7 @@ non_reserved_keyword:
 |   DISK
 |   DUMP
 |   DO
+|   PERFORM
 |   DOUBLE
 |   DIRECTORY
 |   DISTRIBUTION_MODE
