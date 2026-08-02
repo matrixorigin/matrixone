@@ -713,6 +713,7 @@ func (cs *clientSession) Close() error {
 	clear(cs.receivedStreamSequences)
 	caches := make([]cacheWithContext, 0, len(cs.mu.caches))
 	for _, c := range cs.mu.caches {
+		c.closeCache()
 		caches = append(caches, c)
 	}
 	cs.mu.caches = nil
@@ -720,7 +721,7 @@ func (cs *clientSession) Close() error {
 	cs.streamStateMu.Unlock()
 
 	for _, c := range caches {
-		c.close()
+		c.cancelContexts()
 	}
 	cs.cancelWrite()
 	return cs.conn.Close()
@@ -863,16 +864,13 @@ func (cs *clientSession) checkCacheTimeout() {
 				cs.mu.Lock()
 				for k, c := range cs.mu.caches {
 					if c.closeIfTimeout() {
-						delete(cs.mu.caches, k)
-						expired = append(expired, c)
-						if cs.metrics != nil {
-							cs.metrics.messageCacheStateGauge.Dec()
-						}
+						retired, _ := cs.retireCacheLocked(k)
+						expired = append(expired, retired)
 					}
 				}
 				cs.mu.Unlock()
 				for _, c := range expired {
-					c.close()
+					c.cancelContexts()
 				}
 				if cs.messageCacheScanHook != nil {
 					cs.messageCacheScanHook()
@@ -997,17 +995,30 @@ func (cs *clientSession) DeleteCache(cacheID uint64) {
 		cs.mu.Unlock()
 		return
 	}
-	c, ok := cs.mu.caches[cacheID]
-	if ok {
-		delete(cs.mu.caches, cacheID)
-		if cs.metrics != nil {
-			cs.metrics.messageCacheStateGauge.Dec()
-		}
-	}
+	c, ok := cs.retireCacheLocked(cacheID)
 	cs.mu.Unlock()
 	if ok {
-		c.close()
+		c.cancelContexts()
 	}
+}
+
+// retireCacheLocked closes a cache before publishing its removal. This keeps
+// the registry and every cache handle in one lifecycle state: once callers can
+// no longer discover the cache, previously returned handles are already closed.
+// The caller must hold cs.mu for writing. Transferred context cancellation is
+// deliberately deferred until after the lock is released because it may re-enter
+// the session.
+func (cs *clientSession) retireCacheLocked(cacheID uint64) (cacheWithContext, bool) {
+	c, ok := cs.mu.caches[cacheID]
+	if !ok {
+		return cacheWithContext{}, false
+	}
+	c.closeCache()
+	delete(cs.mu.caches, cacheID)
+	if cs.metrics != nil {
+		cs.metrics.messageCacheStateGauge.Dec()
+	}
+	return c, true
 }
 
 func (cs *clientSession) GetCache(cacheID uint64) (MessageCache, error) {
@@ -1030,8 +1041,11 @@ type cacheWithContext struct {
 	cancels []context.CancelFunc
 }
 
-func (c cacheWithContext) close() {
+func (c cacheWithContext) closeCache() {
 	c.cache.Close()
+}
+
+func (c cacheWithContext) cancelContexts() {
 	for _, cancel := range c.cancels {
 		cancel()
 	}
