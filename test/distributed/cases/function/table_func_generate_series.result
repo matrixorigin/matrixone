@@ -290,23 +290,23 @@ from issue_26431 d
 join generate_series(1, 5) g on d.i = g.result;
 rhs_count
 3
+select count(*) as correlated_count
+from issue_26431 d
+join generate_series(d.i, d.i) g on d.i = g.result;
+correlated_count
+3
 select count(*) as lhs_count
 from generate_series(1, 5) g
 join issue_26431 d on d.i = g.result;
 lhs_count
 3
 with gs as (
-    select result from generate_series(1, 5) g
+select result from generate_series(1, 5) g
 )
 select count(*) as cte_count
 from issue_26431 d
 join gs on d.i = gs.result;
 cte_count
-3
-select count(*) as random_count
-from issue_26431 d
-join generate_random_int64(5, 42) g on d.i = g.nth;
-random_count
 3
 select count(*) as unnest_count
 from issue_26431 d

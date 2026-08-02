@@ -203,6 +203,9 @@ func (builder *QueryBuilder) buildFullTextIndexTokenize(
 	if inputNodeID < 0 || int(inputNodeID) >= len(builder.qry.Nodes) {
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "fulltext_index_tokenize requires a left input relation")
 	}
+	// inputNodeID supplies planning metadata such as the primary-key type. It
+	// does not by itself make the relation an execution child; buildTableFunction
+	// derives that dependency independently from the normalized arguments.
 	scanNode := builder.qry.Nodes[inputNodeID]
 	if scanNode.NodeType == plan.Node_TABLE_SCAN {
 		if len(exprs) < 3 {

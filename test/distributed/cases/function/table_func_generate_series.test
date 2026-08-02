@@ -82,6 +82,11 @@ insert into issue_26431 values (1), (2), (3);
 select count(*) as rhs_count
 from issue_26431 d
 join generate_series(1, 5) g on d.i = g.result;
+-- Use one generated row per left row so this case isolates the execution
+-- dependency without defining separate overlapping-range JOIN semantics.
+select count(*) as correlated_count
+from issue_26431 d
+join generate_series(d.i, d.i) g on d.i = g.result;
 select count(*) as lhs_count
 from generate_series(1, 5) g
 join issue_26431 d on d.i = g.result;
@@ -93,11 +98,7 @@ from issue_26431 d
 join gs on d.i = gs.result;
 
 -- The dependency rule is shared by all table functions, not special-cased
--- for generate_series.  generate_random_int64 has a stable ordinal column;
--- unnest has three literal-array rows.
-select count(*) as random_count
-from issue_26431 d
-join generate_random_int64(5, 42) g on d.i = g.nth;
+-- for generate_series.  unnest has three literal-array rows.
 select count(*) as unnest_count
 from issue_26431 d
 join unnest('[1, 2, 3]') u on true;

@@ -233,6 +233,14 @@ func TestTableFunctionInputDependency(t *testing.T) {
 			tableScans:     2,
 		},
 		{
+			name: "JOIN chain discovers dependencies in the complete left subtree",
+			sql: "select * from nation n join region r on n.n_regionkey = r.r_regionkey " +
+				"join generate_series(r.r_regionkey, r.r_regionkey) g on r.r_regionkey = g.result",
+			functionName:   "generate_series",
+			dependsOnInput: true,
+			tableScans:     4,
+		},
+		{
 			name:           "generic table function shares the source rule",
 			sql:            "select * from nation n join generate_random_int64(5, 42) g on n.n_nationkey = g.nth",
 			functionName:   "generate_random_int64",
@@ -243,6 +251,13 @@ func TestTableFunctionInputDependency(t *testing.T) {
 			name:           "unnest with literal input is a source",
 			sql:            "select * from nation n join unnest('[1, 2, 3]') u on true",
 			functionName:   "unnest",
+			dependsOnInput: false,
+			tableScans:     1,
+		},
+		{
+			name:           "fulltext JOIN uses input metadata without forcing execution dependency",
+			sql:            "select * from nation n join fulltext_index_tokenize('', 1, 'body') f on true",
+			functionName:   "fulltext_index_tokenize",
 			dependsOnInput: false,
 			tableScans:     1,
 		},
@@ -279,4 +294,13 @@ func TestTableFunctionInputDependency(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFullTextIndexTokenizeRequiresInputRelation(t *testing.T) {
+	_, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"select * from fulltext_index_tokenize('', 1, 'body') f",
+	)
+	require.ErrorContains(t, err, "fulltext_index_tokenize requires a left input relation")
 }
