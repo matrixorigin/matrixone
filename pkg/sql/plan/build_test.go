@@ -781,6 +781,11 @@ func TestProjectedSetNumericCastUsesStoredBitmap(t *testing.T) {
 			wantBitmapCarry: true,
 		},
 		{
+			name:            "three-way pure set union all",
+			sql:             "select cast(name as unsigned) from (select n_name as name from nation union all select n_name from nation union all select n_name from nation) src",
+			wantBitmapCarry: true,
+		},
+		{
 			name:            "pure set intersect",
 			sql:             "select cast(name as unsigned) from (select n_name as name from nation intersect select n_name from nation) src",
 			wantBitmapCarry: true,
@@ -795,13 +800,45 @@ func TestProjectedSetNumericCastUsesStoredBitmap(t *testing.T) {
 			sql:            "select cast(name as unsigned) from (select n_name as name from nation union all select n_comment from nation) src",
 			wantStringCast: true,
 		},
+		{
+			name:           "three-way mixed set and varchar union all",
+			sql:            "select cast(name as unsigned) from (select n_name as name from nation union all select n_comment from nation union all select n_name from nation) src",
+			wantStringCast: true,
+		},
+		{
+			name:            "nested intersect precedence",
+			sql:             "select cast(name as unsigned) from (select n_name as name from nation union all select n_name from nation intersect select n_name from nation) src",
+			wantBitmapCarry: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logicPlan, err := runOneStmt(mock, t, tc.sql)
 			require.NoError(t, err)
 			require.Equal(t, tc.wantStringCast, planHasVarcharToIntegerCast(logicPlan))
 			require.Equal(t, tc.wantBitmapCarry, planHasPlainUint64ColRef(logicPlan))
+			requireSetOperationProjectionWidths(t, logicPlan)
 		})
+	}
+}
+
+func requireSetOperationProjectionWidths(t *testing.T, p *Plan) {
+	t.Helper()
+	p = resolveQueryPlan(p)
+	require.NotNil(t, p)
+	query := p.GetQuery()
+	require.NotNil(t, query)
+	for nodeID, node := range query.Nodes {
+		switch node.NodeType {
+		case plan.Node_UNION, plan.Node_UNION_ALL,
+			plan.Node_MINUS, plan.Node_MINUS_ALL,
+			plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+			for _, childID := range node.Children {
+				require.GreaterOrEqual(t, childID, int32(0), "set node %d has invalid child", nodeID)
+				require.Less(t, int(childID), len(query.Nodes), "set node %d has invalid child", nodeID)
+				require.Len(t, query.Nodes[childID].ProjectList, len(node.ProjectList),
+					"set node %d child %d projection width", nodeID, childID)
+			}
+		}
 	}
 }
 
