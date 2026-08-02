@@ -1562,6 +1562,20 @@ func TestRetainedSpillRecoveryProjectionMatrix(t *testing.T) {
 				{kind: "nullable", rows: 2*colexec.DefaultBatchSize + 17, payloadBytes: 64},
 			},
 		},
+		{
+			name: "partial-tail-with-exact-full-remainder",
+			ingresses: []ingressSpec{
+				{kind: "fixed", rows: colexec.DefaultBatchSize - 1},
+				{kind: "fixed", rows: colexec.DefaultBatchSize + 1},
+			},
+		},
+		{
+			name: "partial-tail-with-larger-varlen-remainder",
+			ingresses: []ingressSpec{
+				{kind: "const", rows: colexec.DefaultBatchSize - 1, payloadBytes: 1},
+				{kind: "const", rows: colexec.DefaultBatchSize + 2, payloadBytes: 64},
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -1648,6 +1662,18 @@ func TestRetainedSpillRecoveryProjectionMatrix(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, wantSelected, actualSelected)
 			}
+			if test.name == "partial-tail-with-exact-full-remainder" {
+				require.Zero(t, hb.retainedSpillTailSelected)
+				require.Equal(t, colexec.DefaultBatchSize,
+					hb.Batches.Buf[len(hb.Batches.Buf)-1].RowCount())
+			}
+			if test.name == "partial-tail-with-larger-varlen-remainder" {
+				tail := hb.Batches.Buf[len(hb.Batches.Buf)-1]
+				require.Equal(t, 1, tail.RowCount())
+				actualSelected, err := spillMaterializedBytes(tail)
+				require.NoError(t, err)
+				require.Equal(t, actualSelected, hb.retainedSpillTailSelected)
+			}
 
 			hb.cleanBatches(proc)
 			require.Zero(t, hb.retainedSpillTailSelected)
@@ -1675,6 +1701,129 @@ func TestSpillRecoveryReservationRoundingBoundaries(t *testing.T) {
 	}
 	_, err := spillRecoveryReservationBytes(math.MaxUint64)
 	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+}
+
+func TestSpillRecoveryReservationLifecycle(t *testing.T) {
+	t.Run("reserve-reuse-grow-release", func(t *testing.T) {
+		const capBytes = 2 * spillRecoveryReservationQuantum
+		budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+		generation, err := budget.OpenGeneration(1)
+		require.NoError(t, err)
+		defer generation.Close()
+
+		ctr := &container{}
+		ctr.hashmapBuilder.setBudget(generation)
+		analyzer := process.NewAnalyzer(0, false, false, "recovery lifecycle")
+
+		require.NoError(t, ctr.ensureSpillRecoveryReservationBytes(
+			spillRecoveryReservationQuantum, analyzer))
+		token := ctr.spillScratchReservation
+		require.NotNil(t, token)
+		require.Equal(t, spillRecoveryReservationQuantum, token.Size())
+		require.Equal(t, spillRecoveryReservationQuantum, generation.Used())
+
+		reserveCount := generation.ReserveCount()
+		require.NoError(t, ctr.ensureSpillRecoveryReservationBytes(1, analyzer))
+		require.Same(t, token, ctr.spillScratchReservation)
+		require.Equal(t, reserveCount, generation.ReserveCount())
+
+		require.NoError(t, ctr.ensureSpillRecoveryReservationBytes(capBytes, analyzer))
+		require.Same(t, token, ctr.spillScratchReservation)
+		require.Equal(t, capBytes, ctr.spillScratchBase)
+		require.Equal(t, capBytes, token.Size())
+		require.Equal(t, capBytes, generation.Used())
+		require.Equal(t, reserveCount+1, generation.ReserveCount())
+
+		extra := analyzer.GetOpStats().ExtraStats
+		require.Equal(t, int64(1), extra["HashBuildSpillRecoveryGrowCount"])
+		require.Equal(t, int64(spillRecoveryReservationQuantum),
+			extra["HashBuildSpillRecoveryGrowBytes"])
+		require.Equal(t, int64(capBytes), extra["HashBuildSpillRecoveryReservedBytes"])
+
+		ctr.releaseSpillScratchReservation()
+		require.Nil(t, ctr.spillScratchReservation)
+		require.Zero(t, ctr.spillScratchBase)
+		require.Zero(t, generation.Used())
+	})
+
+	t.Run("grow-rejection-preserves-old-lease", func(t *testing.T) {
+		const capBytes = spillRecoveryReservationQuantum
+		budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+		generation, err := budget.OpenGeneration(1)
+		require.NoError(t, err)
+		defer generation.Close()
+
+		ctr := &container{}
+		ctr.hashmapBuilder.setBudget(generation)
+		analyzer := process.NewAnalyzer(0, false, false, "recovery grow rejection")
+		require.NoError(t, ctr.ensureSpillRecoveryReservationBytes(capBytes, analyzer))
+		token := ctr.spillScratchReservation
+
+		err = ctr.ensureSpillRecoveryReservationBytes(2*capBytes, analyzer)
+		require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+		require.Same(t, token, ctr.spillScratchReservation)
+		require.Equal(t, capBytes, ctr.spillScratchBase)
+		require.Equal(t, capBytes, token.Size())
+		require.Equal(t, capBytes, generation.Used())
+		require.Equal(t, uint64(1), generation.ReserveCount())
+		require.Equal(t, uint64(1), generation.RejectCount())
+
+		extra := analyzer.GetOpStats().ExtraStats
+		require.Equal(t, int64(1), extra["HashBuildSpillRecoveryGrowRejects"])
+		require.Zero(t, extra["HashBuildSpillRecoveryGrowCount"])
+		require.NoError(t, ctr.ensureSpillRecoveryReservationBytes(capBytes, analyzer),
+			"a failed grow must leave the prior recovery lease reusable")
+
+		ctr.releaseSpillScratchReservation()
+		require.Zero(t, generation.Used())
+	})
+}
+
+func TestSpillRecoveryRejectsInvalidProofsWithoutChargingBudget(t *testing.T) {
+	const capBytes = spillRecoveryReservationQuantum
+	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+
+	ctr := &container{}
+	ctr.hashmapBuilder.setBudget(generation)
+	analyzer := process.NewAnalyzer(0, false, false, "invalid recovery proof")
+
+	upper, hasVarlen, err := spillDirectRecoveryBudgetUpper(nil)
+	require.NoError(t, err)
+	require.Zero(t, upper)
+	require.False(t, hasVarlen)
+	require.NoError(t, ctr.ensureDirectSpillRecovery(nil, analyzer))
+
+	malformed := batch.NewOffHeapWithSize(1)
+	malformed.SetRowCount(1)
+	err = ctr.ensureDirectSpillRecovery(malformed, analyzer)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	require.Nil(t, ctr.spillScratchReservation)
+	require.Zero(t, generation.Used())
+
+	for _, test := range []struct {
+		name       string
+		projection batchCopyProjection
+	}{
+		{name: "empty-destination", projection: batchCopyProjection{}},
+		{
+			name: "selected-size-overflow",
+			projection: batchCopyProjection{
+				maxRetainedRows:     1,
+				maxRetainedSelected: math.MaxUint64,
+				columns:             1,
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := ctr.ensureRetainedSpillRecovery(test.projection, analyzer)
+			require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+			require.Nil(t, ctr.spillScratchReservation)
+			require.Zero(t, generation.Used())
+		})
+	}
 }
 
 func TestSpillDirectRecoveryUpperBoundsExactMatrix(t *testing.T) {

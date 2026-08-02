@@ -497,6 +497,27 @@ func TestCopyBuildBatchBudgetsWideVarcharPartialTailReplacement(t *testing.T) {
 	require.Equal(t, colexec.DefaultBatchSize, hb.Batches.Buf[0].RowCount())
 }
 
+func TestCopyBuildBatchProjectedWithoutBudgetTracksPartialTail(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	input := testutil.NewBatch(
+		[]types.Type{types.T_int32.ToType()}, true, 3, proc.Mp())
+	defer input.Clean(proc.Mp())
+
+	var hb HashmapBuilder
+	projection, err := hb.projectedBatchCopy(input)
+	require.NoError(t, err)
+	require.Positive(t, projection.nextTailSelected)
+	require.NoError(t, hb.copyBuildBatchProjected(input, proc, projection))
+	defer hb.cleanBatches(proc)
+
+	require.Len(t, hb.Batches.Buf, 1)
+	require.Equal(t, input.RowCount(), hb.Batches.Buf[0].RowCount())
+	require.Equal(t, projection.nextTailSelected, hb.retainedSpillTailSelected)
+	require.Empty(t, hb.batchReservations)
+}
+
 func TestProjectedPartialTailReplacementMatchesUnionBatch(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -978,6 +999,32 @@ func TestUniqueAppendBudgetIncludesDeadAreaCopiedByUnionBatch(t *testing.T) {
 	hb.releaseReservations()
 	require.Zero(t, generation.Used())
 	generation.Close()
+}
+
+func TestUnionBatchAreaProjectionBoundaries(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	inline := testutil.MakeVarcharVector([]string{"inline"}, nil, proc.Mp())
+	defer inline.Free(proc.Mp())
+	require.Empty(t, inline.GetArea())
+
+	physical, selected, err := unionBatchAreaProjection(inline, 0, 0)
+	require.NoError(t, err)
+	require.Zero(t, physical)
+	require.Zero(t, selected)
+
+	physical, selected, err = unionBatchAreaProjection(inline, 0, 1)
+	require.NoError(t, err)
+	require.Zero(t, physical)
+	require.Zero(t, selected)
+
+	_, _, err = unionBatchAreaProjection(inline, -1, 1)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+
+	selected, err = logicalAppendAreaBytes(inline, 0, 0)
+	require.NoError(t, err)
+	require.Zero(t, selected)
 }
 
 func TestCleanCopiedBatchReleasesCoalescedIngressReservations(t *testing.T) {
