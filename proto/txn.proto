@@ -91,7 +91,7 @@ message TxnMeta {
     bool                      Mirror       = 10;
     // LockService lock service's service address. Empty if is not pessimistic txn.
     string                    LockService  = 11;
-    // RequireAutoIncrEpochFenceCommit requires the V7-only terminal commit
+    // RequireAutoIncrEpochFenceCommit requires the V9-only terminal commit
     // method. It is monotonic for the lifetime of the transaction.
     bool                      RequireAutoIncrEpochFenceCommit = 12;
 }

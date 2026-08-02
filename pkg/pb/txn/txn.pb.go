@@ -225,7 +225,7 @@ type TxnMeta struct {
 	Mirror bool `protobuf:"varint,10,opt,name=Mirror,proto3" json:"Mirror,omitempty"`
 	// LockService lock service's service address. Empty if is not pessimistic txn.
 	LockService string `protobuf:"bytes,11,opt,name=LockService,proto3" json:"LockService,omitempty"`
-	// RequireAutoIncrEpochFenceCommit requires the V7-only terminal commit
+	// RequireAutoIncrEpochFenceCommit requires the V9-only terminal commit
 	// method. It is monotonic for the lifetime of the transaction.
 	RequireAutoIncrEpochFenceCommit bool     `protobuf:"varint,12,opt,name=RequireAutoIncrEpochFenceCommit,proto3" json:"RequireAutoIncrEpochFenceCommit,omitempty"`
 	XXX_NoUnkeyedLiteral            struct{} `json:"-"`
