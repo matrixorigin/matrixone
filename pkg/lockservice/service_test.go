@@ -2497,8 +2497,14 @@ func TestCheckTxnTimeout(t *testing.T) {
 				}
 			}
 
-			l2.checkTxnTimeout(ctx)
-			require.True(t, l2.activeTxnHolder.empty())
+			// A recovery RPC timeout is deliberately indeterminate: the current
+			// scan must retain the transaction and a later scan retries it. Assert
+			// the scanner's eventual contract instead of requiring a cold recovery
+			// connection to be created within one 500ms attempt.
+			require.Eventually(t, func() bool {
+				l2.checkTxnTimeout(ctx)
+				return l2.activeTxnHolder.empty()
+			}, time.Second*10, time.Millisecond*10)
 		},
 		nil,
 	)
