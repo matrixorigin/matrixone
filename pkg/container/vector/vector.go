@@ -1644,7 +1644,7 @@ func (v *Vector) dup(
 		w.length = v.length
 		if v.HasGrouping() {
 			if err := w.ensureGroupingCapacity(
-				v.length,
+				max(v.length, int(v.GetGrouping().GetBitmap().Len())),
 				mp,
 			); err != nil {
 				w.Free(mp)
@@ -1669,18 +1669,23 @@ func (v *Vector) dup(
 		}
 		dataLen *= v.length
 	}
-	// Bitmap logical length only reaches the highest set bit, so it can be much
-	// shorter than a sparse vector. The duplicate must cover the complete row
-	// domain because allocation-free transforms (for example ordered Shrink)
-	// may address every output row.
-	if !v.GetNulls().EmptyByFlag() {
-		if err := w.ensureNullCapacity(v.length, mp); err != nil {
+	// A bitmap may be shorter than a sparse vector or longer than a reused vector
+	// that was shortened with SetLength. Preserve both the complete row domain
+	// and the source bitmap extent before InitWith copies its storage.
+	if v.GetNulls().GetBitmap().Len() > 0 {
+		if err := w.ensureNullCapacity(
+			max(v.length, int(v.GetNulls().GetBitmap().Len())),
+			mp,
+		); err != nil {
 			w.Free(mp)
 			return nil, err
 		}
 	}
-	if !v.GetGrouping().EmptyByFlag() {
-		if err := w.ensureGroupingCapacity(v.length, mp); err != nil {
+	if v.GetGrouping().GetBitmap().Len() > 0 {
+		if err := w.ensureGroupingCapacity(
+			max(v.length, int(v.GetGrouping().GetBitmap().Len())),
+			mp,
+		); err != nil {
 			w.Free(mp)
 			return nil, err
 		}
