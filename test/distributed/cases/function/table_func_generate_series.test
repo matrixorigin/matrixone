@@ -74,3 +74,37 @@ select * from generate_random_float64(10, 42, '') t;
 select * from generate_random_float64(10, 42, 'exp') t;
 select * from generate_random_float64(10, 42, 'normal') t;
 
+-- Non-correlated table functions on the right side of JOIN are source
+-- relations.  They must not inherit a per-left-row execution dependency.
+drop table if exists issue_26431;
+create table issue_26431(i int primary key);
+insert into issue_26431 values (1), (2), (3);
+select count(*) as rhs_count
+from issue_26431 d
+join generate_series(1, 5) g on d.i = g.result;
+select count(*) as lhs_count
+from generate_series(1, 5) g
+join issue_26431 d on d.i = g.result;
+with gs as (
+    select result from generate_series(1, 5) g
+)
+select count(*) as cte_count
+from issue_26431 d
+join gs on d.i = gs.result;
+
+-- The dependency rule is shared by all table functions, not special-cased
+-- for generate_series.  generate_random_int64 has a stable ordinal column;
+-- unnest has three literal-array rows.
+select count(*) as random_count
+from issue_26431 d
+join generate_random_int64(5, 42) g on d.i = g.nth;
+select count(*) as unnest_count
+from issue_26431 d
+join unnest('[1, 2, 3]') u on true;
+
+-- APPLY remains explicitly row dependent even when its arguments are
+-- constants; its operator, rather than FUNCTION_SCAN.Children, owns that.
+select count(*) as apply_count
+from issue_26431 d
+cross apply generate_series(1, 5) g;
+drop table issue_26431;

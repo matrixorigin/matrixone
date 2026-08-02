@@ -282,3 +282,40 @@ nth    f64
 8    0.6296099782367262
 9    1.565520076524086
 10    -0.834259977430416
+drop table if exists issue_26431;
+create table issue_26431(i int primary key);
+insert into issue_26431 values (1), (2), (3);
+select count(*) as rhs_count
+from issue_26431 d
+join generate_series(1, 5) g on d.i = g.result;
+rhs_count
+3
+select count(*) as lhs_count
+from generate_series(1, 5) g
+join issue_26431 d on d.i = g.result;
+lhs_count
+3
+with gs as (
+    select result from generate_series(1, 5) g
+)
+select count(*) as cte_count
+from issue_26431 d
+join gs on d.i = gs.result;
+cte_count
+3
+select count(*) as random_count
+from issue_26431 d
+join generate_random_int64(5, 42) g on d.i = g.nth;
+random_count
+3
+select count(*) as unnest_count
+from issue_26431 d
+join unnest('[1, 2, 3]') u on true;
+unnest_count
+9
+select count(*) as apply_count
+from issue_26431 d
+cross apply generate_series(1, 5) g;
+apply_count
+15
+drop table issue_26431;
