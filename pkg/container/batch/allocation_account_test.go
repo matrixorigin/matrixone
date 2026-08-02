@@ -543,6 +543,79 @@ func TestMixedBatchAllocationBatchSetPreservesVectorProvenance(t *testing.T) {
 	finalizeTestBatchAllocationAccount(t, state)
 }
 
+func TestBatchSetFillsTailAcrossEquivalentAllocationSelections(t *testing.T) {
+	state := newTestBatchAllocationAccount(t, 128)
+	equivalent, err := vector.NewAllocationAccountSelection(
+		state.account,
+		1,
+		1,
+		2,
+		3,
+		4,
+	)
+	require.NoError(t, err)
+	require.NotSame(t, state.selection, equivalent)
+	mp := mpool.MustNewZero()
+	set := NewBatchSet(4)
+	first := newMixedBatchAllocationSource(t, mp, state.selection, 2)
+	second := newMixedBatchAllocationSource(t, mp, equivalent, 2)
+
+	_, err = set.Extend(mp, first, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, set.ReadyDeltaFor(second, second.RowCount()))
+	_, err = set.Extend(mp, second, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, set.Length())
+	require.Equal(t, 1, set.ReadyCount())
+	require.Equal(t, 4, set.Get(0).RowCount())
+	require.Same(t, state.selection, set.Get(0).Vecs[0].AllocationAccountSelection())
+
+	first.Clean(mp)
+	second.Clean(mp)
+	set.Clean(mp)
+	finalizeTestBatchAllocationAccount(t, state)
+}
+
+func TestBatchSetCoalescesEquivalentParallelProducerChunks(t *testing.T) {
+	const (
+		batchMaxRows = 8192
+		chunkRows    = 72
+		chunkCount   = 114
+	)
+	state := newTestBatchAllocationAccount(t, 256)
+	mp := mpool.MustNewZero()
+	set := NewBatchSet(batchMaxRows)
+
+	for range chunkCount {
+		selection, err := vector.NewAllocationAccountSelection(
+			state.account,
+			1,
+			1,
+			2,
+			3,
+			4,
+		)
+		require.NoError(t, err)
+		source := newMixedBatchAllocationSource(
+			t,
+			mp,
+			selection,
+			chunkRows,
+		)
+		_, err = set.Extend(mp, source, nil)
+		require.NoError(t, err)
+		source.Clean(mp)
+	}
+
+	require.Equal(t, 2, set.Length())
+	require.Equal(t, 1, set.ReadyCount())
+	require.Equal(t, batchMaxRows, set.Get(0).RowCount())
+	require.Equal(t, chunkRows*chunkCount-batchMaxRows, set.Get(1).RowCount())
+
+	set.Clean(mp)
+	finalizeTestBatchAllocationAccount(t, state)
+}
+
 func TestBatchSetStartsNewTailWhenVectorProvenanceChanges(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 128)
 	mp := mpool.MustNewZero()

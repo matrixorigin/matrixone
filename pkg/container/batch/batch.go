@@ -765,7 +765,10 @@ func (bat *Batch) prepareOwnedDecodeVectors(count int, mp *mpool.MPool) error {
 			vec.Free(mp)
 		}
 		vec.SetOffHeap(bat.offHeap)
-		if vec.AllocationAccountSelection() != selection {
+		if !vector.AllocationAccountSelectionsEqual(
+			vec.AllocationAccountSelection(),
+			selection,
+		) {
 			if err := vec.CanSetAllocationAccount(selection); err != nil {
 				vec.Free(mp)
 				vec.SetOffHeap(bat.offHeap)
@@ -1071,7 +1074,10 @@ func vectorAllocationSelectionsMatch(left, right *Batch) bool {
 	if left == nil || right == nil || len(left.Vecs) != len(right.Vecs) {
 		return false
 	}
-	if left.allocationAccount != right.allocationAccount {
+	if !vector.AllocationAccountSelectionsEqual(
+		left.allocationAccount,
+		right.allocationAccount,
+	) {
 		return false
 	}
 	for i := range left.Vecs {
@@ -1081,8 +1087,10 @@ func vectorAllocationSelectionsMatch(left, right *Batch) bool {
 			}
 			continue
 		}
-		if left.Vecs[i].AllocationAccountSelection() !=
-			right.Vecs[i].AllocationAccountSelection() {
+		if !vector.AllocationAccountSelectionsEqual(
+			left.Vecs[i].AllocationAccountSelection(),
+			right.Vecs[i].AllocationAccountSelection(),
+		) {
 			return false
 		}
 	}

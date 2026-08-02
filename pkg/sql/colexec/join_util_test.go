@@ -194,6 +194,39 @@ func TestBatchesShrinkPreservesAllocationAndRollback(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestCopyIntoBatchesAcceptsEquivalentAllocationSelection(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	first, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	second, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	require.NotSame(t, first, second)
+	input := testutil.NewBatch(
+		[]types.Type{types.T_int64.ToType()},
+		true,
+		32,
+		proc.Mp(),
+	)
+	defer input.Clean(proc.Mp())
+
+	var batches Batches
+	require.NoError(t, batches.CopyIntoBatchesWithAllocation(input, proc, first))
+	require.NoError(t, batches.CopyIntoBatchesWithAllocation(input, proc, second))
+	require.Len(t, batches.Buf, 1)
+	require.Equal(t, 64, batches.RowCount())
+	require.Same(t, first, batches.Buf[0].AllocationAccountSelection())
+
+	batches.Clean(proc.Mp())
+	require.Zero(t, account.Snapshot().Used)
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+}
+
 func TestCopyIntoBatchesAllocationFailureRollsBackPartialTail(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

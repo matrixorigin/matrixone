@@ -81,7 +81,10 @@ func (bs *Batches) CopyIntoBatchesWithAllocation(
 	selection *vector.AllocationAccountSelection,
 ) (err error) {
 	if len(bs.Buf) > 0 &&
-		bs.Buf[len(bs.Buf)-1].AllocationAccountSelection() != selection {
+		!vector.AllocationAccountSelectionsEqual(
+			bs.Buf[len(bs.Buf)-1].AllocationAccountSelection(),
+			selection,
+		) {
 		return mpool.ErrAllocationAccountMismatch
 	}
 
@@ -136,7 +139,10 @@ func (bs *Batches) copyIntoBatches(
 		bs.Buf = make([]*batch.Batch, 0, 16)
 	}
 	if len(bs.Buf) > 0 &&
-		bs.Buf[len(bs.Buf)-1].AllocationAccountSelection() != selection {
+		!vector.AllocationAccountSelectionsEqual(
+			bs.Buf[len(bs.Buf)-1].AllocationAccountSelection(),
+			selection,
+		) {
 		return mpool.ErrAllocationAccountMismatch
 	}
 
@@ -174,7 +180,10 @@ func (bs *Batches) copyIntoBatches(
 		lenBuf := len(bs.Buf)
 		if lenBuf > 0 && bs.Buf[lenBuf-1].RowCount() != DefaultBatchSize {
 			tmp = bs.Buf[lenBuf-1]
-			if tmp.AllocationAccountSelection() != selection {
+			if !vector.AllocationAccountSelectionsEqual(
+				tmp.AllocationAccountSelection(),
+				selection,
+			) {
 				return mpool.ErrAllocationAccountMismatch
 			}
 		} else {

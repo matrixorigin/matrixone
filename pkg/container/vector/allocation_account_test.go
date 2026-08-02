@@ -136,6 +136,46 @@ func TestVectorAllocationAccountConfiguration(t *testing.T) {
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
+func TestAllocationAccountSelectionsEqual(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 8)
+	equivalent, err := NewAllocationAccountSelection(
+		state.account,
+		testVectorAllocationOwner,
+		testVectorDataAllocationSite,
+		testVectorAreaAllocationSite,
+		testVectorNullAllocationSite,
+		testVectorGroupAllocationSite,
+	)
+	require.NoError(t, err)
+	differentSite, err := NewAllocationAccountSelection(
+		state.account,
+		testVectorAllocationOwner,
+		testVectorDataAllocationSite+1,
+		testVectorAreaAllocationSite,
+		testVectorNullAllocationSite,
+		testVectorGroupAllocationSite,
+	)
+	require.NoError(t, err)
+
+	require.NotSame(t, state.selection, equivalent)
+	require.True(t, AllocationAccountSelectionsEqual(state.selection, equivalent))
+	require.False(t, AllocationAccountSelectionsEqual(state.selection, differentSite))
+	require.False(t, AllocationAccountSelectionsEqual(state.selection, nil))
+	require.True(t, AllocationAccountSelectionsEqual(nil, nil))
+
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	require.NoError(t, AppendFixed(vec, int64(1), false, mp))
+	require.NoError(t, vec.CanSetAllocationAccount(equivalent))
+	require.NoError(t, vec.SetAllocationAccount(equivalent))
+	// Equivalent provenance is a no-op: existing physical ownership remains
+	// attached to the original immutable selection.
+	require.Same(t, state.selection, vec.AllocationAccountSelection())
+	vec.Free(mp)
+
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
 func TestVectorAllocationAccountFixedResetReuseAndFree(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 16)
 	mp := mpool.MustNewZero()
@@ -1092,10 +1132,20 @@ func TestDetachedBufferPreservesAllocationProvenance(t *testing.T) {
 	source.Free(mp)
 	require.Equal(t, used, state.account.Snapshot().Used)
 
+	equivalent, err := NewAllocationAccountSelection(
+		state.account,
+		testVectorAllocationOwner,
+		testVectorDataAllocationSite,
+		testVectorAreaAllocationSite,
+		testVectorNullAllocationSite,
+		testVectorGroupAllocationSite,
+	)
+	require.NoError(t, err)
+	require.NotSame(t, state.selection, equivalent)
 	destination := newAccountedTestVector(
 		t,
 		types.T_varchar.ToType(),
-		state.selection,
+		equivalent,
 	)
 	require.True(t, data.CanAttachTo(destination, DetachedDataBuffer))
 	require.False(t, data.CanAttachTo(destination, DetachedAreaBuffer))

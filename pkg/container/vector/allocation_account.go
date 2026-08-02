@@ -47,6 +47,25 @@ type AllocationAccountSelection struct {
 	groupingSite mpool.AllocationSite
 }
 
+// AllocationAccountSelectionsEqual reports whether two immutable selections
+// describe the same physical allocation provenance. Separately constructed
+// selections are interchangeable only when they charge the same account,
+// owner, and allocation sites.
+func AllocationAccountSelectionsEqual(
+	left, right *AllocationAccountSelection,
+) bool {
+	if left == right {
+		return true
+	}
+	return left != nil && right != nil &&
+		left.account == right.account &&
+		left.owner == right.owner &&
+		left.dataSite == right.dataSite &&
+		left.areaSite == right.areaSite &&
+		left.nullsSite == right.nullsSite &&
+		left.groupingSite == right.groupingSite
+}
+
 func NewAllocationAccountSelection(
 	account *mpool.AllocationAccount,
 	owner mpool.AllocationOwner,
@@ -209,7 +228,7 @@ func (v *Vector) CanSetAllocationAccount(
 			)
 		}
 	}
-	if v.allocationAccount == selection {
+	if AllocationAccountSelectionsEqual(v.allocationAccount, selection) {
 		return nil
 	}
 	if v.hasBackingStorage() {
@@ -247,7 +266,7 @@ func (v *Vector) SetAllocationAccount(
 	if err := v.CanSetAllocationAccount(selection); err != nil {
 		return err
 	}
-	if v.allocationAccount == selection {
+	if AllocationAccountSelectionsEqual(v.allocationAccount, selection) {
 		return nil
 	}
 	if v.allocationAccount != nil && selection == nil {

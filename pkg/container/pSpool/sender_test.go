@@ -114,6 +114,16 @@ func TestCachedBatchPreservesAllocationProvenance(t *testing.T) {
 		4,
 	)
 	require.NoError(t, err)
+	equivalentSelection, err := vector.NewAllocationAccountSelection(
+		account,
+		1,
+		1,
+		2,
+		3,
+		4,
+	)
+	require.NoError(t, err)
+	require.NotSame(t, selection, equivalentSelection)
 	otherAccount, err := registry.Open(1 << 20)
 	require.NoError(t, err)
 	otherSelection, err := vector.NewAllocationAccountSelection(
@@ -145,7 +155,7 @@ func TestCachedBatchPreservesAllocationProvenance(t *testing.T) {
 		return source
 	}
 	firstSource := newSource("first cached allocation payload", selection)
-	secondSource := newSource("second", selection)
+	secondSource := newSource("second", equivalentSelection)
 	secondSource.Vecs[0].ToConst()
 	cache := initCachedBatch(mp, 1)
 
@@ -169,7 +179,7 @@ func TestCachedBatchPreservesAllocationProvenance(t *testing.T) {
 	require.Same(t, selection, second.AllocationAccountSelection())
 	require.Same(
 		t,
-		selection,
+		equivalentSelection,
 		second.Vecs[0].AllocationAccountSelection(),
 	)
 	require.True(t, second.Vecs[0].GetGrouping().Contains(0))

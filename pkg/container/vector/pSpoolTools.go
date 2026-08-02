@@ -72,7 +72,7 @@ func (b *DetachedBuffer) CanAttachTo(
 	kind DetachedBufferKind,
 ) bool {
 	if b == nil || v == nil || cap(b.data) == 0 ||
-		b.selection != v.allocationAccount ||
+		!AllocationAccountSelectionsEqual(b.selection, v.allocationAccount) ||
 		kind > DetachedAreaBuffer {
 		return false
 	}

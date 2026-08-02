@@ -72,7 +72,10 @@ func (cb *cachedBatch) GetCopiedBatch(
 	cacheID, dst = cb.buffer.getCacheID()
 	dst.Recursive = src.Recursive
 	dst.ShuffleIDX = src.ShuffleIDX
-	if sourceSelection := src.AllocationAccountSelection(); sourceSelection != dst.AllocationAccountSelection() {
+	if sourceSelection := src.AllocationAccountSelection(); !vector.AllocationAccountSelectionsEqual(
+		sourceSelection,
+		dst.AllocationAccountSelection(),
+	) {
 		if err = dst.SetAllocationAccount(sourceSelection); err != nil {
 			cb.CacheBatch(true, cacheID, dst)
 			return nil, false, 0, err
