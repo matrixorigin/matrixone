@@ -293,6 +293,9 @@ func (hb *HashmapBuilder) copyBuildBatchProjected(
 ) error {
 	if hb.budget == nil {
 		if err := hb.Batches.CopyIntoBatches(src, proc); err != nil {
+			// CopyIntoBatches destroys every retained destination on failure.
+			// Keep the derived tail state transactional with that owner cleanup.
+			hb.retainedSpillTailSelected = 0
 			return err
 		}
 		hb.retainedSpillTailSelected = projection.nextTailSelected

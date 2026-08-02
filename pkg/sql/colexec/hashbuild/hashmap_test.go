@@ -518,6 +518,46 @@ func TestCopyBuildBatchProjectedWithoutBudgetTracksPartialTail(t *testing.T) {
 	require.Empty(t, hb.batchReservations)
 }
 
+func TestCopyBuildBatchProjectedWithoutBudgetFailureClearsTailProjection(t *testing.T) {
+	mp, err := mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	first := testutil.NewBatch(
+		[]types.Type{types.T_int32.ToType()}, true, 1, proc.Mp())
+	second := testutil.NewBatch(
+		[]types.Type{types.T_int32.ToType()}, true,
+		colexec.DefaultBatchSize-1, proc.Mp())
+	var filler []byte
+	defer func() {
+		if filler != nil {
+			mp.Free(filler)
+		}
+		first.Clean(proc.Mp())
+		second.Clean(proc.Mp())
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	var hb HashmapBuilder
+	projection, err := hb.projectedBatchCopy(first)
+	require.NoError(t, err)
+	require.NoError(t, hb.copyBuildBatchProjected(first, proc, projection))
+	require.Positive(t, hb.retainedSpillTailSelected)
+
+	projection, err = hb.projectedBatchCopy(second)
+	require.NoError(t, err)
+	filler, err = mp.Alloc(int(mp.Cap()-mp.CurrNB()), true)
+	require.NoError(t, err)
+	require.Equal(t, mp.Cap(), mp.CurrNB())
+
+	err = hb.copyBuildBatchProjected(second, proc, projection)
+	require.Error(t, err)
+	require.Empty(t, hb.Batches.Buf)
+	require.Zero(t, hb.retainedSpillTailSelected)
+	require.Empty(t, hb.batchReservations)
+}
+
 func TestProjectedPartialTailReplacementMatchesUnionBatch(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -1149,12 +1189,12 @@ func TestSpillExpressionHashKeyUsesBoundedAdmission(t *testing.T) {
 	require.NoError(t, err)
 	ctr.hashmapBuilder.setBudget(generation)
 	expr := makeExpressionLeaseTestExpr(t, proc)
-	_, err = ctr.initSpillExprExecs(proc, []*plan.Expr{expr})
+	err = initSpillExprExecsForTest(&ctr, proc, []*plan.Expr{expr})
 	require.NoError(t, err)
-	require.NoError(t, ctr.spillExprLease.Run(proc, 8192, func(_ int) error { return nil }))
-	require.Positive(t, ctr.spillExprLease.Reserved())
-	require.Equal(t, ctr.spillExprLease.Reserved(), generation.Used())
-	ctr.freeSpillExprExecs()
+	require.NoError(t, ctr.hashmapBuilder.expressionLease.Run(proc, 8192, func(_ int) error { return nil }))
+	require.Positive(t, ctr.hashmapBuilder.expressionLease.Reserved())
+	require.Equal(t, ctr.hashmapBuilder.expressionLease.Reserved(), generation.Used())
+	ctr.hashmapBuilder.FreeExecutors()
 	require.Zero(t, generation.Used())
 }
 

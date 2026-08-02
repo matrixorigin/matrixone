@@ -2809,6 +2809,118 @@ func TestShuffleHashBuildPreservesRecoveryHeadroomAcrossSharedBudgetPressure(t *
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
+func TestShuffleHashBuildExpressionRecoverySurvivesSharedBudgetPressure(t *testing.T) {
+	bindProc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	left := newExpr(0, types.T_int32.ToType())
+	right := newExpr(1, types.T_int32.ToType())
+	modulo, err := plan2.BindFuncExprImplByPlanExpr(
+		bindProc.Ctx,
+		"%",
+		[]*plan.Expr{left, right},
+	)
+	require.NoError(t, err)
+	bindProc.Free()
+
+	typ := types.T_int32.ToType()
+	tc := newTestCase(
+		t,
+		[]bool{false, false},
+		[]types.Type{typ, typ},
+		[]*plan.Expr{modulo},
+	)
+	tc.arg.IsShuffle = true
+	tc.arg.ShuffleIdx = 0
+	tc.arg.SpillThreshold = 2 * colexec.DefaultBatchSize
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 3505}
+
+	makeBuildBatch := func(base int32) *batch.Batch {
+		leftValues := make([]int32, colexec.DefaultBatchSize)
+		rightValues := make([]int32, colexec.DefaultBatchSize)
+		for i := range leftValues {
+			leftValues[i] = base + int32(i)
+			rightValues[i] = int32(i%97 + 1)
+		}
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = testutil.MakeInt32Vector(leftValues, nil, tc.proc.Mp())
+		bat.Vecs[1] = testutil.MakeInt32Vector(rightValues, nil, tc.proc.Mp())
+		bat.SetRowCount(len(leftValues))
+		return bat
+	}
+	first := makeBuildBatch(0)
+	second := makeBuildBatch(colexec.DefaultBatchSize)
+	input := newGatedHashBuildInput(first, second)
+	tc.arg.SetChildren([]vm.Operator{input})
+
+	// Initialize the Process-owned generation before Prepare so both the build
+	// expression lease and every later recovery owner charge the same ledger.
+	const capBytes = uint64(64 << 20)
+	tc.proc.Base.Lim.Size = int64(capBytes)
+	generation, err := tc.proc.GetHashBuildBudget()
+	require.NoError(t, err)
+	require.NoError(t, input.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+
+	type execOutcome struct {
+		result vm.CallResult
+		err    error
+	}
+	execDone := make(chan execOutcome, 1)
+	go func() {
+		result, execErr := vm.Exec(tc.arg, tc.proc)
+		execDone <- execOutcome{result: result, err: execErr}
+	}()
+
+	select {
+	case <-input.firstBatchRetained:
+	case outcome := <-execDone:
+		t.Fatalf("HashBuild stopped before retaining the first batch: result=%+v err=%v", outcome.result, outcome.err)
+	}
+	continued := false
+	defer func() {
+		if !continued {
+			close(input.continueInput)
+		}
+	}()
+
+	usedAfterFirst := generation.Used()
+	require.Less(t, usedAfterFirst, capBytes)
+	blocker, err := generation.Reserve(capBytes - usedAfterFirst)
+	require.NoError(t, err)
+	require.Equal(t, capBytes, generation.Used())
+
+	close(input.continueInput)
+	continued = true
+	outcome := <-execDone
+	require.NoError(t, outcome.err)
+	require.Equal(t, vm.ExecStop, outcome.result.Status)
+
+	result, err := message.ReceiveJoinMapResult(
+		tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx,
+		tc.proc.GetMessageBoard(), tc.proc.Ctx)
+	require.NoError(t, err)
+	require.True(t, result.IsSuccess())
+	jm := result.JoinMap()
+	require.NotNil(t, jm)
+	require.True(t, jm.IsSpilled())
+	require.Equal(t, int64(2*colexec.DefaultBatchSize), jm.GetRowCount())
+	payload, err := jm.TakeSpillBuildPayload()
+	require.NoError(t, err)
+	require.NoError(t, payload.Close())
+	require.Equal(t, int64(1),
+		tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillStarts"])
+
+	require.True(t, blocker.Release())
+	require.Zero(t, generation.Used())
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	input.Reset(tc.proc, false, nil)
+	input.Free(tc.proc, false, nil)
+	first.Clean(tc.proc.Mp())
+	second.Clean(tc.proc.Mp())
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
 func TestShuffleHashBuildRecoveryLeaseSharedGenerationFanout(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -3005,7 +3117,8 @@ func TestShuffleHashBuildRecoveryAdmissionFailsBeforeRetain(t *testing.T) {
 		"terminal spill admission must use the resource-exhausted wire code")
 	require.Contains(t, buildErr.Error(), "hash build memory budget exceeded")
 	extra := tc.arg.OpAnalyzer.GetOpStats().ExtraStats
-	require.Zero(t, extra["HashBuildSpillStarts"])
+	require.Equal(t, int64(1), extra["HashBuildSpillStarts"],
+		"the terminal direct-spill transition is counted even when admission rejects before I/O")
 	require.Equal(t, int64(1), extra["HashBuildSpillRecoveryReserveRejects"])
 	require.Zero(t, extra["HashBuildSpillScratchReserveRejects"])
 	require.Equal(t, int64(1), extra["QueryHashBudgetRejects"])
@@ -3024,6 +3137,77 @@ func TestShuffleHashBuildRecoveryAdmissionFailsBeforeRetain(t *testing.T) {
 	tc.arg.Free(tc.proc, true, buildErr)
 	build.Clean(tc.proc.Mp())
 	require.Zero(t, generation.Used())
+	generation.Close()
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
+func TestShuffleHashBuildSpillModeReclaimsOptionalCacheForRecoveryGrowth(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	tc.arg.IsShuffle = true
+	tc.arg.ShuffleIdx = 0
+	tc.arg.SpillThreshold = 1
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 3510}
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+
+	first := newBatch(tc.types, tc.proc, 1)
+	second := newBatch(tc.types, tc.proc, 2048)
+	firstNeed, err := spillBudgetBytes(first)
+	require.NoError(t, err)
+	firstNeed, err = spillRecoveryReservationBytes(firstNeed)
+	require.NoError(t, err)
+	secondNeed, err := spillBudgetBytes(second)
+	require.NoError(t, err)
+	secondNeed, err = spillRecoveryReservationBytes(secondNeed)
+	require.NoError(t, err)
+	require.Equal(t, firstNeed+uint64(spillWriteCoalesceSize), secondNeed,
+		"fixture needs one optional-cache quantum between recovery high waters")
+
+	budget := process.MustNewHashBuildBudget(secondNeed, secondNeed)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(first, nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(second, nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+	result, buildErr := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, buildErr)
+	require.Equal(t, vm.ExecStop, result.Status)
+
+	joinResult, err := message.ReceiveJoinMapResult(
+		tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx,
+		tc.proc.GetMessageBoard(), tc.proc.Ctx)
+	require.NoError(t, err)
+	require.True(t, joinResult.IsSuccess())
+	jm := joinResult.JoinMap()
+	require.NotNil(t, jm)
+	require.True(t, jm.IsSpilled())
+	require.Equal(t, int64(2049), jm.GetRowCount())
+	payload, err := jm.TakeSpillBuildPayload()
+	require.NoError(t, err)
+	require.NoError(t, payload.Close())
+
+	extra := tc.arg.OpAnalyzer.GetOpStats().ExtraStats
+	require.Equal(t, int64(1), extra["HashBuildSpillStarts"])
+	require.Equal(t, int64(1), extra["HashBuildSpillRecoveryGrowRejects"])
+	require.Equal(t, int64(1), extra["HashBuildSpillRecoveryGrowCount"])
+	require.Equal(t, int64(secondNeed-firstNeed),
+		extra["HashBuildSpillRecoveryGrowBytes"])
+	require.Equal(t, int64(1), extra["HashBuildCoalesceGrowRejects"],
+		"one failed optional probe switches the rest of this batch to write-through")
+	require.Equal(t, int64(2), extra["QueryHashBudgetRejects"])
+	require.Zero(t, generation.Used())
+	require.Zero(t, generation.SpillDiskUsed())
+	require.Zero(t, generation.SpillFDUsed())
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.marg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	first.Clean(tc.proc.Mp())
+	second.Clean(tc.proc.Mp())
 	generation.Close()
 	tc.proc.Free()
 	require.Zero(t, tc.proc.Mp().CurrNB())
@@ -3066,9 +3250,10 @@ func TestShuffleHashBuildSpillModeGrowthRejectReleasesRecoveryLease(t *testing.T
 
 	extra := tc.arg.OpAnalyzer.GetOpStats().ExtraStats
 	require.Equal(t, int64(1), extra["HashBuildSpillStarts"])
-	require.Equal(t, int64(1), extra["HashBuildSpillRecoveryGrowRejects"])
+	require.Equal(t, int64(2), extra["HashBuildSpillRecoveryGrowRejects"],
+		"reclaim retries once, then preserves a genuine over-cap failure")
 	require.Zero(t, extra["HashBuildCoalesceGrowRejects"])
-	require.Equal(t, int64(1), extra["QueryHashBudgetRejects"])
+	require.Equal(t, int64(2), extra["QueryHashBudgetRejects"])
 	require.Nil(t, tc.arg.ctr.spillScratchReservation)
 	require.Zero(t, tc.arg.ctr.spillScratchBase)
 	require.Zero(t, generation.Used())

@@ -419,20 +419,12 @@ func expressionTreePeakWithSelection(
 			fid, _ = function.DecodeOverloadID(node.F.Func.Obj)
 		}
 		for i, arg := range node.F.Args {
-			childMayReceivePartialSelection := mayReceivePartialSelection
-			switch fid {
-			case function.IFF:
-				// IFF evaluates only its value branches through generated
-				// selection masks. Its condition inherits the caller mask.
-				childMayReceivePartialSelection = mayReceivePartialSelection || i > 0
-			case function.CASE, function.COALESCE:
-				childMayReceivePartialSelection = true
-			}
 			child, _, childErr := expressionTreePeakWithSelection(
 				proc,
 				arg,
 				rows,
-				childMayReceivePartialSelection,
+				expressionChildMayReceivePartialSelection(
+					fid, i, mayReceivePartialSelection),
 			)
 			if childErr != nil || total > math.MaxUint64-child {
 				return 0, 0, process.ErrHashBuildBudgetInvalid

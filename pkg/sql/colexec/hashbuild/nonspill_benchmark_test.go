@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -57,8 +58,10 @@ func BenchmarkHashBuildNonSpillE2E(b *testing.B) {
 		name                string
 		typ                 types.Type
 		varcharPayloadBytes int
+		computed            bool
 	}{
 		{name: "INT64", typ: types.T_int64.ToType()},
+		{name: "INT64_PLUS_ZERO", typ: types.T_int64.ToType(), computed: true},
 		{name: "VARCHAR_INLINE", typ: types.T_varchar.ToType()},
 		{
 			name:                "VARCHAR_AREA_128",
@@ -69,7 +72,7 @@ func BenchmarkHashBuildNonSpillE2E(b *testing.B) {
 	for _, benchmark := range benchmarks {
 		b.Run("Shuffle/"+benchmark.name, func(b *testing.B) {
 			benchmarkHashBuildNonSpillE2E(
-				b, benchmark.typ, benchmark.varcharPayloadBytes)
+				b, benchmark.typ, benchmark.varcharPayloadBytes, benchmark.computed)
 		})
 	}
 }
@@ -78,6 +81,7 @@ func benchmarkHashBuildNonSpillE2E(
 	b *testing.B,
 	keyType types.Type,
 	varcharPayloadBytes int,
+	computed bool,
 ) {
 	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
@@ -94,6 +98,15 @@ func benchmarkHashBuildNonSpillE2E(
 	budget, err := proc.GetHashBuildBudget()
 	require.NoError(b, err)
 	require.NotNil(b, budget)
+	keyExpr := nonSpillBenchmarkColumnExpr(0, keyType)
+	if computed {
+		keyExpr, err = plan2.BindFuncExprImplByPlanExpr(
+			proc.Ctx,
+			"+",
+			[]*plan.Expr{keyExpr, plan2.MakePlan2Int64ConstExprWithType(0)},
+		)
+		require.NoError(b, err)
+	}
 
 	b.SetBytes(inputBytes)
 	b.ReportAllocs()
@@ -106,7 +119,7 @@ func benchmarkHashBuildNonSpillE2E(
 
 	for i := 0; i < b.N; i++ {
 		child := colexec.NewMockOperator().WithBatchs(inputs)
-		arg := newNonSpillBenchmarkHashBuild(keyType, child)
+		arg := newNonSpillBenchmarkHashBuild(keyExpr, child)
 		require.NoError(b, child.Prepare(proc))
 		require.NoError(b, arg.Prepare(proc))
 		before := budget.Snapshot()
@@ -124,6 +137,12 @@ func benchmarkHashBuildNonSpillE2E(
 			b,
 			int64(nonSpillBenchmarkBatchCount*nonSpillBenchmarkBatchRows),
 			joinMap.GetRowCount(),
+		)
+		require.Equal(
+			b,
+			uint64(nonSpillBenchmarkBatchCount*nonSpillBenchmarkBatchRows),
+			joinMap.GetGroupCount(),
+			"benchmark keys must remain unique",
 		)
 		afterBuild := budget.Snapshot()
 		require.Greater(b, afterBuild.ReserveCount, before.ReserveCount)
@@ -156,10 +175,9 @@ func benchmarkHashBuildNonSpillE2E(
 }
 
 func newNonSpillBenchmarkHashBuild(
-	keyType types.Type,
+	keyExpr *plan.Expr,
 	child vm.Operator,
 ) *HashBuild {
-	keyExpr := nonSpillBenchmarkColumnExpr(0, keyType)
 	arg := &HashBuild{
 		NeedHashMap:    true,
 		NeedBatches:    true,

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -95,6 +96,31 @@ func freeExpressionLeaseTestExecutors(executors []colexec.ExpressionExecutor) {
 	}
 }
 
+func TestExpressionChildMayReceivePartialSelection(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		fid      int32
+		argument int
+		parent   bool
+		want     bool
+	}{
+		{name: "ordinary root", fid: -1, argument: 1},
+		{name: "ordinary nested", fid: -1, argument: 0, parent: true, want: true},
+		{name: "iff condition", fid: function.IFF, argument: 0},
+		{name: "iff branch", fid: function.IFF, argument: 1, want: true},
+		{name: "case first condition", fid: function.CASE, argument: 0},
+		{name: "case later condition", fid: function.CASE, argument: 2, want: true},
+		{name: "coalesce first value", fid: function.COALESCE, argument: 0},
+		{name: "coalesce later value", fid: function.COALESCE, argument: 1, want: true},
+		{name: "nested first argument", fid: function.COALESCE, argument: 0, parent: true, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, expressionChildMayReceivePartialSelection(
+				test.fid, test.argument, test.parent))
+		})
+	}
+}
+
 func TestExpressionMemoryLeaseReusesRetainedHighWater(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -149,6 +175,242 @@ func TestExpressionMemoryLeaseReusesRetainedHighWater(t *testing.T) {
 		return evalExpressionLeaseTestExecutors(proc, executors, large)
 	}))
 	require.Equal(t, reservesAfterLarge, generation.ReserveCount())
+
+	freeExpressionLeaseTestExecutors(executors)
+	lease.Release()
+	require.Zero(t, generation.Used())
+}
+
+func TestExpressionMemoryLeasePreAdmitsRecoveryRun(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	expr := makeExpressionLeaseTestExpr(t, proc)
+	const budgetCap = uint64(8 << 20)
+	budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	executors, lease, err := NewBudgetedExpressionExecutors(
+		proc, generation, []*plan.Expr{expr}, false)
+	require.NoError(t, err)
+
+	input := makeExpressionLeaseTestBatch(proc, colexec.DefaultBatchSize)
+	defer input.Clean(proc.Mp())
+	small := makeExpressionLeaseTestBatch(proc, 1)
+	defer small.Clean(proc.Mp())
+	require.NoError(t, lease.EnsureRunRecovery(proc, input.RowCount()))
+	require.Positive(t, lease.Reserved())
+	require.Equal(t, lease.Reserved(), generation.Used())
+	preparedReserved := lease.Reserved()
+
+	blocker, err := generation.Reserve(budgetCap - generation.Used())
+	require.NoError(t, err)
+	require.Equal(t, budgetCap, generation.Used())
+	reservesAtFullBudget := generation.ReserveCount()
+	require.NoError(t, lease.Eval(
+		proc,
+		[]*batch.Batch{small},
+		small.RowCount(),
+		func(_ int, _ *vector.Vector) error { return nil },
+	))
+	require.Equal(t, budgetCap, generation.Used(),
+		"a smaller first run must retain the future fixed-width growth overlap")
+	reconcilesBeforeHighWater := generation.ReconcileCount()
+	require.NoError(t, lease.Eval(
+		proc,
+		[]*batch.Batch{input},
+		input.RowCount(),
+		func(_ int, _ *vector.Vector) error { return nil },
+	))
+	require.Less(t, lease.Reserved(), preparedReserved,
+		"the fixed-width standby must be returned after reaching its high water")
+	require.Greater(t, generation.ReconcileCount(), reconcilesBeforeHighWater)
+	reconcilesAfterHighWater := generation.ReconcileCount()
+	for _, steady := range []*batch.Batch{input, small, input, small} {
+		require.NoError(t, lease.Eval(
+			proc,
+			[]*batch.Batch{steady},
+			steady.RowCount(),
+			func(_ int, _ *vector.Vector) error { return nil },
+		))
+	}
+	require.Equal(t, reservesAtFullBudget, generation.ReserveCount(),
+		"a prepared recovery run must not reserve after sibling pressure arrives")
+	require.Equal(t, reconcilesAfterHighWater, generation.ReconcileCount(),
+		"steady fixed-width evaluation must not reconcile per batch")
+
+	require.True(t, blocker.Release())
+	freeExpressionLeaseTestExecutors(executors)
+	lease.Release()
+	require.Zero(t, generation.Used())
+}
+
+func TestExpressionMemoryLeaseRecoveryGrowFailureKeepsPriorGuarantee(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	expr := makeExpressionLeaseTestExpr(t, proc)
+	const budgetCap = uint64(8 << 20)
+	budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	executors, lease, err := NewBudgetedExpressionExecutors(
+		proc, generation, []*plan.Expr{expr}, false)
+	require.NoError(t, err)
+
+	small := makeExpressionLeaseTestBatch(proc, 1)
+	defer small.Clean(proc.Mp())
+	require.NoError(t, lease.EnsureRunRecovery(proc, small.RowCount()))
+	oldReserved := lease.Reserved()
+	blocker, err := generation.Reserve(budgetCap - generation.Used())
+	require.NoError(t, err)
+
+	err = lease.EnsureRunRecovery(proc, colexec.DefaultBatchSize)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.Equal(t, oldReserved, lease.Reserved())
+	require.True(t, lease.recoveryReady)
+	require.Equal(t, small.RowCount(), lease.recoveryRows)
+	require.NoError(t, lease.Eval(
+		proc,
+		[]*batch.Batch{small},
+		small.RowCount(),
+		func(_ int, _ *vector.Vector) error { return nil },
+	), "the prior retained-batch bound must remain drainable")
+
+	require.True(t, blocker.Release())
+	freeExpressionLeaseTestExecutors(executors)
+	lease.Release()
+	require.Zero(t, generation.Used())
+}
+
+func TestExpressionMemoryLeasePreAdmitsVariableReplacement(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	col := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	expr, err := plan2.BindFuncExprImplByPlanExpr(
+		proc.Ctx, "lower", []*plan.Expr{col})
+	require.NoError(t, err)
+	peak, err := expressionVectorPeak(proc, expr, 1, false)
+	require.NoError(t, err)
+	require.Less(t, peak, uint64(32<<20))
+
+	const budgetCap = uint64(64 << 20)
+	budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	executors, lease, err := NewBudgetedExpressionExecutors(
+		proc, generation, []*plan.Expr{expr}, false)
+	require.NoError(t, err)
+	require.NoError(t, lease.EnsureRunRecovery(proc, 1))
+	require.Equal(t, 2*peak, lease.Reserved(),
+		"one variable root needs its retained result plus one replacement")
+
+	makeInput := func(value string) *batch.Batch {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = testutil.MakeVarcharVector([]string{value}, nil, proc.Mp())
+		bat.SetRowCount(1)
+		return bat
+	}
+	short := makeInput("a")
+	long := makeInput(strings.Repeat("b", 64<<10))
+	defer short.Clean(proc.Mp())
+	defer long.Clean(proc.Mp())
+
+	blocker, err := generation.Reserve(budgetCap - generation.Used())
+	require.NoError(t, err)
+	reservesAtFullBudget := generation.ReserveCount()
+	for _, input := range []*batch.Batch{short, long} {
+		require.NoError(t, lease.Eval(
+			proc,
+			[]*batch.Batch{input},
+			1,
+			func(_ int, _ *vector.Vector) error { return nil },
+		))
+	}
+	require.Equal(t, reservesAtFullBudget, generation.ReserveCount(),
+		"variable-size reuse must consume the pre-admitted replacement overlap")
+
+	require.True(t, blocker.Release())
+	freeExpressionLeaseTestExecutors(executors)
+	lease.Release()
+	require.Zero(t, generation.Used())
+}
+
+func TestExpressionMemoryLeaseRecoveryUsesSequentialRootPeak(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	col := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	expr, err := plan2.BindFuncExprImplByPlanExpr(
+		proc.Ctx, "lower", []*plan.Expr{col})
+	require.NoError(t, err)
+	peak, err := expressionVectorPeak(proc, expr, 1, false)
+	require.NoError(t, err)
+
+	budget := process.MustNewHashBuildBudget(4*peak, 4*peak)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	exprs := []*plan.Expr{expr, expr}
+	executors, lease, err := NewBudgetedExpressionExecutors(
+		proc, generation, exprs, false)
+	require.NoError(t, err)
+	require.Zero(t, lease.Reserved())
+	require.NoError(t, lease.EnsureRunRecovery(proc, 1))
+	require.Equal(t, 3*peak, lease.Reserved(),
+		"sequential roots share one replacement standby instead of each reserving two copies")
+
+	freeExpressionLeaseTestExecutors(executors)
+	lease.Release()
+	require.Zero(t, generation.Used())
+}
+
+func TestExpressionMemoryLeaseRecoveryKeepsPriorRootHighWater(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	col := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	expr, err := plan2.BindFuncExprImplByPlanExpr(
+		proc.Ctx, "lower", []*plan.Expr{col})
+	require.NoError(t, err)
+	smallPeak, err := expressionVectorPeak(proc, expr, 1, false)
+	require.NoError(t, err)
+	largePeak, err := expressionVectorPeak(proc, expr, 2, false)
+	require.NoError(t, err)
+	require.Greater(t, largePeak, smallPeak)
+
+	const budgetCap = uint64(128 << 20)
+	budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	exprs := []*plan.Expr{expr, expr}
+	executors, lease, err := NewBudgetedExpressionExecutors(
+		proc, generation, exprs, false)
+	require.NoError(t, err)
+
+	large := batch.NewWithSize(1)
+	large.Vecs[0] = testutil.MakeVarcharVector([]string{"a", "b"}, nil, proc.Mp())
+	large.SetRowCount(2)
+	defer large.Clean(proc.Mp())
+	stopAfterFirstRoot := errors.New("stop after first root")
+	err = lease.Run(proc, large.RowCount(), func(index int) error {
+		_, evalErr := executors[index].Eval(
+			proc, []*batch.Batch{large}, nil)
+		if evalErr != nil {
+			return evalErr
+		}
+		return stopAfterFirstRoot
+	})
+	require.ErrorIs(t, err, stopAfterFirstRoot)
+	require.Equal(t, largePeak, lease.Reserved())
+
+	require.NoError(t, lease.EnsureRunRecovery(proc, 1))
+	require.Equal(t, largePeak+2*smallPeak, lease.Reserved(),
+		"a smaller re-preflight must retain the prior root plus the next root and its replacement")
 
 	freeExpressionLeaseTestExecutors(executors)
 	lease.Release()
@@ -525,6 +787,110 @@ func TestExpressionMemoryLeaseCoversFlowControlSelectedScratch(t *testing.T) {
 	require.True(t, ok)
 	require.LessOrEqual(t, retained, lease.Reserved())
 
+	freeExpressionLeaseTestExecutors(executors)
+	lease.Release()
+	require.Zero(t, generation.Used())
+}
+
+func TestExpressionMemoryLeaseKeepsFixedFlowControlReplacementStandby(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	condition := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	makePlusZero := func(colPos int32) *plan.Expr {
+		col := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int32)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: colPos}},
+		}
+		expr, err := plan2.BindFuncExprImplByPlanExpr(
+			proc.Ctx,
+			"+",
+			[]*plan.Expr{col, plan2.MakePlan2Int32ConstExprWithType(0)},
+		)
+		require.NoError(t, err)
+		return expr
+	}
+	expr, err := plan2.BindFuncExprImplByPlanExpr(
+		proc.Ctx,
+		"iff",
+		[]*plan.Expr{condition, makePlusZero(1), makePlusZero(2)},
+	)
+	require.NoError(t, err)
+
+	const rows = colexec.DefaultBatchSize
+	peak, err := expressionVectorPeak(proc, expr, rows, false)
+	require.NoError(t, err)
+	budgetCap := 4 * peak
+	budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	executors, lease, err := NewBudgetedExpressionExecutors(
+		proc,
+		generation,
+		[]*plan.Expr{expr},
+		false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, lease.EnsureRunRecovery(proc, rows))
+	prepared := lease.Reserved()
+	require.Greater(t, prepared, peak)
+	reconcilesAfterPrepare := generation.ReconcileCount()
+
+	makeInput := func(trueRows int) *batch.Batch {
+		mask := make([]bool, rows)
+		left := make([]int32, rows)
+		right := make([]int32, rows)
+		for row := range rows {
+			mask[row] = row < trueRows
+			left[row] = int32(row)
+			right[row] = int32(rows - row)
+		}
+		bat := batch.NewWithSize(3)
+		bat.Vecs[0] = testutil.MakeBoolVector(mask, nil, proc.Mp())
+		bat.Vecs[1] = testutil.MakeInt32Vector(left, nil, proc.Mp())
+		bat.Vecs[2] = testutil.MakeInt32Vector(right, nil, proc.Mp())
+		bat.SetRowCount(rows)
+		return bat
+	}
+	mostlyFalse := makeInput(1)
+	mostlyTrue := makeInput(rows - 1)
+	defer mostlyFalse.Clean(proc.Mp())
+	defer mostlyTrue.Clean(proc.Mp())
+
+	require.NoError(t, lease.Eval(
+		proc,
+		[]*batch.Batch{mostlyFalse},
+		rows,
+		func(_ int, _ *vector.Vector) error { return nil },
+	))
+	require.Equal(t, prepared, lease.Reserved(),
+		"one mask distribution cannot settle another distribution's scratch peak")
+	require.Equal(t, lease.Reserved(), generation.Used())
+	require.Equal(t, reconcilesAfterPrepare, generation.ReconcileCount(),
+		"a mask-dependent fixed tree must keep its replacement standby")
+	retainedBefore, ok := lease.Retained()
+	require.True(t, ok)
+
+	blocker, err := generation.Reserve(budgetCap - generation.Used())
+	require.NoError(t, err)
+	reservesAtFullBudget := generation.ReserveCount()
+	require.NoError(t, lease.Eval(
+		proc,
+		[]*batch.Batch{mostlyTrue},
+		rows,
+		func(_ int, _ *vector.Vector) error { return nil },
+	))
+	retainedAfter, ok := lease.Retained()
+	require.True(t, ok)
+	require.Greater(t, retainedAfter, retainedBefore,
+		"changing only the mask must exercise fixed-width selected-scratch growth")
+	require.Equal(t, reservesAtFullBudget, generation.ReserveCount())
+	require.Equal(t, reconcilesAfterPrepare, generation.ReconcileCount())
+	require.LessOrEqual(t, retainedAfter, lease.Reserved())
+
+	require.True(t, blocker.Release())
 	freeExpressionLeaseTestExecutors(executors)
 	lease.Release()
 	require.Zero(t, generation.Used())

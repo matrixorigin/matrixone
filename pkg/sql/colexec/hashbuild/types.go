@@ -92,10 +92,6 @@ type container struct {
 	// spillScratchBase is the retained scratch floor. Coalesce-buffer growth is
 	// charged on top and must never be mistaken for this floor.
 	spillScratchBase uint64
-
-	// cached expression executors for spill (reused across batches)
-	spillExprExecs []colexec.ExpressionExecutor
-	spillExprLease *ExpressionMemoryLease
 }
 
 // spillFileBundle is deliberately owned by hashbuild.  Build converts each
@@ -367,7 +363,6 @@ func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err
 	hashBuild.cleanupSpillFiles(proc)
 	hashBuild.ctr.spillFS = nil
 	hashBuild.ctr.hashmapBuilder.Free(proc)
-	hashBuild.ctr.freeSpillExprExecs()
 	hashBuild.ctr.dropSpillScratchBuffers()
 	hashBuild.ctr.releaseSpillScratchReservation()
 }
