@@ -207,13 +207,13 @@ func (txn *Transaction) checkWorkspaceAccountingLocked() error {
 		entry := &txn.writes[i]
 		if entry.bat == nil {
 			if entry.accountedSize != 0 {
-				return fmt.Errorf("entry %d: nil batch accounts %d bytes", i, entry.accountedSize)
+				return moerr.NewInternalErrorNoCtxf("entry %d: nil batch accounts %d bytes", i, entry.accountedSize)
 			}
 			continue
 		}
 		size := uint64(entry.bat.Size())
 		if entry.accountedSize != size {
-			return fmt.Errorf("entry %d: accounted size %d, batch size %d", i, entry.accountedSize, size)
+			return moerr.NewInternalErrorNoCtxf("entry %d: accounted size %d, batch size %d", i, entry.accountedSize, size)
 		}
 		workspaceSize += size
 		if entry.fileName != "" || catalog.IsSystemTable(entry.tableId) {
@@ -232,7 +232,7 @@ func (txn *Transaction) checkWorkspaceAccountingLocked() error {
 		txn.approximateInMemInsertSize != insertSize ||
 		txn.approximateInMemInsertCnt != insertCnt ||
 		txn.approximateInMemDeleteCnt != deleteCnt {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"workspace accounting mismatch: workspace %d/%d, insert bytes %d/%d, insert rows %d/%d, delete rows %d/%d",
 			txn.workspaceSize, workspaceSize,
 			txn.approximateInMemInsertSize, insertSize,
