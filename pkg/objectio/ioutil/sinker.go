@@ -17,6 +17,7 @@ package ioutil
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -471,8 +472,11 @@ func DeleteUnpublishedObjects(
 		err := fs.Delete(deleteCtx, unique[start:end]...)
 		cancel()
 		if err != nil {
-			return len(unique), fmt.Errorf(
-				"delete unpublished objects [%d:%d]: %w", start, end, err)
+			return len(unique), errors.Join(
+				moerr.NewInternalErrorf(
+					ctx, "delete unpublished objects [%d:%d]", start, end),
+				err,
+			)
 		}
 	}
 	return len(unique), nil
