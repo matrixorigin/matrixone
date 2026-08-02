@@ -176,27 +176,27 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 				if db.Opts.CatalogCfg.DisableGC {
 					return
 				}
-				ckp := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
+				ckp := db.BGCheckpointRunner.MaxCheckpoint()
 				if ckp == nil {
 					return
 				}
-				wartMark := ckp.GetEnd()
-				if wartMark.IsEmpty() {
+				waterMark := ckp.GetEnd()
+				if waterMark.IsEmpty() {
 					return
 				}
 
-				ts := types.BuildTS(wartMark.Physical()-
+				ts := types.BuildTS(waterMark.Physical()-
 					int64(db.Opts.GCCfg.GCInMemoryTTL), 0)
-				if wartMark.GE(&ts) {
-					wartMark = ts
+				if waterMark.GE(&ts) {
+					waterMark = ts
 				}
 				if db.Opts.GCTimeCheckerFactory != nil {
 					op := db.Opts.GCTimeCheckerFactory(db)
-					if !op(&wartMark) {
+					if !op(&waterMark) {
 						return
 					}
 				}
-				db.Catalog.GCByTS(ctx, wartMark)
+				db.Catalog.GCByTS(ctx, waterMark)
 			},
 			1,
 		)
@@ -207,7 +207,7 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 			db.Opts.CheckpointCfg.GCCheckpointInterval,
 			func(ctx context.Context) {
 				db.LogtailMgr.TryCompactTable()
-				ckp := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
+				ckp := db.BGCheckpointRunner.MaxCheckpoint()
 				if ckp == nil {
 					return
 				}

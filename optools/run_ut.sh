@@ -32,6 +32,7 @@ fi
 
 shopt -s expand_aliases
 source ./utilities.sh
+source ./ut_tools.bash
 go version
 
 BUILD_WKSP=$(dirname "$PWD") && cd $BUILD_WKSP
@@ -316,7 +317,7 @@ function ut_summary(){
   # analyzer cannot parse a truncated/interleaved go test JSON stream.
   mkdir -p "${report_path}/failed/outputs"
 
-  if ! go install github.com/matrixorigin/go-ut-analysis@latest; then
+  if ! install_go_ut_analysis; then
     analysis_status=1
     logger "ERR" "failed to install go-ut-analysis"
   else

@@ -1255,14 +1255,19 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *
 		if !ok {
 			return moerr.NewInvalidInputNoCtxf("unsupported unary expression type for PK filter: %T", e.Expr)
 		}
+		negative := false
 		s := num.String()
 		switch e.Op {
 		case tree.UNARY_MINUS:
+			negative = true
 			s = "-" + s
 		case tree.UNARY_PLUS:
 			s = "+" + s
 		default:
 			return moerr.NewInvalidInputNoCtxf("unsupported unary operator for PK filter: %v", e.Op)
+		}
+		if pkType.Oid.IsInteger() && (num.ValType == tree.P_hexnum || num.ValType == tree.P_float64) {
+			return appendIntegerNumValToVec(vec, num, negative, pkType, tz, mp)
 		}
 		return appendNumericStringToVec(vec, s, pkType, tz, mp)
 	case *tree.StrVal:
@@ -1276,7 +1281,51 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *
 // appendNumValToVec converts a numeric literal to the correct typed value
 // and appends it to the vector.
 func appendNumValToVec(vec *vector.Vector, val *tree.NumVal, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
+	if pkType.Oid.IsInteger() && (val.ValType == tree.P_hexnum || val.ValType == tree.P_float64) {
+		return appendIntegerNumValToVec(vec, val, false, pkType, tz, mp)
+	}
 	return appendNumericStringToVec(vec, val.String(), pkType, tz, mp)
+}
+
+func appendIntegerNumValToVec(
+	vec *vector.Vector,
+	val *tree.NumVal,
+	negative bool,
+	pkType types.Type,
+	tz *time.Location,
+	mp *mpool.MPool,
+) error {
+	var n *big.Int
+	switch val.ValType {
+	case tree.P_hexnum:
+		s := val.String()
+		if len(s) < 3 || (s[:2] != "0x" && s[:2] != "0X") {
+			return moerr.NewInvalidInputNoCtxf("invalid hexadecimal literal %q", s)
+		}
+		var ok bool
+		n, ok = new(big.Int).SetString(s[2:], 16)
+		if !ok {
+			return moerr.NewInvalidInputNoCtxf("invalid hexadecimal literal %q", s)
+		}
+	case tree.P_float64:
+		r, ok := new(big.Rat).SetString(val.String())
+		if !ok {
+			return moerr.NewInvalidInputNoCtxf("invalid numeric literal %q", val.String())
+		}
+		if !r.IsInt() {
+			return moerr.NewInvalidInputNoCtxf(
+				"numeric literal %q is not an integer for primary key type %s",
+				val.String(), pkType.String(),
+			)
+		}
+		n = new(big.Int).Set(r.Num())
+	default:
+		return moerr.NewInvalidInputNoCtxf("unsupported numeric literal %q", val.String())
+	}
+	if negative {
+		n.Neg(n)
+	}
+	return appendNumericStringToVec(vec, n.String(), pkType, tz, mp)
 }
 
 func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
