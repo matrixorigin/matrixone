@@ -55,6 +55,26 @@ var (
 )
 
 var (
+	taskCheckpointRetryCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "checkpoint_retry_total",
+			Help:      "Total number of forced checkpoint retries by reason.",
+		}, []string{"reason"})
+
+	TaskForceICKPPendingRetryCounter = taskCheckpointRetryCounter.WithLabelValues(
+		"force_ickp_pending",
+	)
+	TaskForceICKPNoProgressRetryCounter = taskCheckpointRetryCounter.WithLabelValues(
+		"force_ickp_no_progress",
+	)
+	TaskForceGCKPFreshICKPRetryCounter = taskCheckpointRetryCounter.WithLabelValues(
+		"force_gckp_fresh_ickp",
+	)
+)
+
+var (
 	taskDNMergeStuffCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
