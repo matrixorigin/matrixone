@@ -96,4 +96,88 @@ data branch diff generated_pk_source against generated_pk_destination output sum
 data branch merge generated_pk_source into generated_pk_destination when conflict accept;
 select a, g from generated_pk_destination order by g;
 
+-- Generated expressions use logical column identity rather than endpoint-local
+-- ordinals when unrelated endpoint schemas order their columns differently.
+create table reordered_matching_source (
+    id int primary key,
+    a int,
+    b int,
+    g int generated always as (a * 2) stored
+);
+insert into reordered_matching_source(id, a, b) values (1, 10, 7);
+create table reordered_matching_destination (
+    id int primary key,
+    b int,
+    a int,
+    g int generated always as (a * 2) stored
+);
+insert into reordered_matching_destination(id, b, a) values (1, 7, 9);
+data branch merge reordered_matching_source into reordered_matching_destination when conflict accept;
+select id, a, b, g from reordered_matching_destination order by id;
+data branch diff reordered_matching_source against reordered_matching_destination output summary;
+
+-- These expressions have protobuf-equal local ordinals (ColPos 1) but refer to
+-- different logical columns: source.a versus destination.b.
+create table reordered_mismatch_source (
+    id int primary key,
+    a int,
+    b int,
+    g int generated always as (a * 2) stored
+);
+insert into reordered_mismatch_source(id, a, b) values (1, 10, 7);
+create table reordered_mismatch_destination (
+    id int primary key,
+    b int,
+    a int,
+    g int generated always as (b * 2) stored
+);
+insert into reordered_mismatch_destination(id, b, a) values (1, 7, 9);
+-- @regex("schema compatibility check: column 'g' has different generated definitions", true)
+data branch diff reordered_mismatch_source against reordered_mismatch_destination output summary;
+-- @regex("schema compatibility check: column 'g' has different generated definitions", true)
+data branch merge reordered_mismatch_source into reordered_mismatch_destination when conflict accept;
+select id, a, b, g from reordered_mismatch_destination order by id;
+
+-- Matching generated primary-key expressions remain compatible across a
+-- reordered schema and retain consistent row identity.
+create table reordered_generated_pk_source (
+    a int,
+    b int,
+    g int generated always as (a * 2) stored,
+    primary key (g)
+);
+insert into reordered_generated_pk_source(a, b) values (10, 7);
+create table reordered_generated_pk_destination (
+    b int,
+    a int,
+    g int generated always as (a * 2) stored,
+    primary key (g)
+);
+insert into reordered_generated_pk_destination(b, a) values (8, 10);
+data branch merge reordered_generated_pk_source into reordered_generated_pk_destination when conflict accept;
+select a, b, g from reordered_generated_pk_destination order by g;
+data branch diff reordered_generated_pk_source against reordered_generated_pk_destination output summary;
+
+-- Generated primary-key expressions with colliding local ordinals but different
+-- logical references cannot share row identity.
+create table reordered_generated_pk_mismatch_source (
+    a int,
+    b int,
+    g int generated always as (a * 2) stored,
+    primary key (g)
+);
+insert into reordered_generated_pk_mismatch_source(a, b) values (10, 7);
+create table reordered_generated_pk_mismatch_destination (
+    b int,
+    a int,
+    g int generated always as (b * 2) stored,
+    primary key (g)
+);
+insert into reordered_generated_pk_mismatch_destination(b, a) values (7, 10);
+-- @regex("schema compatibility check: column 'g' has different generated definitions", true)
+data branch diff reordered_generated_pk_mismatch_source against reordered_generated_pk_mismatch_destination output summary;
+-- @regex("schema compatibility check: column 'g' has different generated definitions", true)
+data branch merge reordered_generated_pk_mismatch_source into reordered_generated_pk_mismatch_destination when conflict accept;
+select a, b, g from reordered_generated_pk_mismatch_destination order by g;
+
 drop database data_branch_generated_column;

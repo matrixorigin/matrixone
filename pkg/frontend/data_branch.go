@@ -86,6 +86,125 @@ func dataBranchGeneratedColumnsEqual(left, right *plan.GeneratedCol) bool {
 	return left.OriginString != "" && left.OriginString == right.OriginString
 }
 
+func dataBranchGeneratedColumnsLogicallyEqual(
+	tarCol, baseCol *plan.ColDef,
+	tarDef, baseDef *plan.TableDef,
+	resolveBaseColumn dataBranchEndpointColumnResolver,
+) bool {
+	left, right := tarCol.GeneratedCol, baseCol.GeneratedCol
+	if left == nil || right == nil {
+		return left == right
+	}
+	if left.IsStored != right.IsStored {
+		return false
+	}
+	if left.Expr == nil || right.Expr == nil {
+		return left.Expr == nil && right.Expr == nil &&
+			left.OriginString != "" && left.OriginString == right.OriginString
+	}
+
+	leftExpr := proto.Clone(left.Expr).(*plan.Expr)
+	rightExpr := proto.Clone(right.Expr).(*plan.Expr)
+	leftOK := canonicalizeDataBranchGeneratedExpr(leftExpr, func(pos int32) (string, bool) {
+		col := dataBranchGeneratedExprColumn(tarDef, pos)
+		if col == nil {
+			return "", false
+		}
+		resolved := resolveBaseColumn(col)
+		if resolved == nil {
+			return "", false
+		}
+		return strings.ToLower(resolved.Name), true
+	})
+	rightOK := canonicalizeDataBranchGeneratedExpr(rightExpr, func(pos int32) (string, bool) {
+		col := dataBranchGeneratedExprColumn(baseDef, pos)
+		if col == nil {
+			return "", false
+		}
+		return strings.ToLower(col.Name), true
+	})
+	return leftOK && rightOK && proto.Equal(leftExpr, rightExpr)
+}
+
+func dataBranchGeneratedExprColumn(tblDef *plan.TableDef, pos int32) *plan.ColDef {
+	if tblDef == nil || pos < 0 {
+		return nil
+	}
+	// GeneratedColBinder assigns ColPos over user DDL columns. Runtime table
+	// definitions may prefix rowid or contain other internal hidden columns.
+	var generatedExprPos int32
+	for _, col := range tblDef.Cols {
+		if !isDataBranchUserVisibleColumn(col) {
+			continue
+		}
+		if generatedExprPos == pos {
+			return col
+		}
+		generatedExprPos++
+	}
+	return nil
+}
+
+func canonicalizeDataBranchGeneratedExpr(
+	expr *plan.Expr,
+	resolveColumn func(int32) (string, bool),
+) bool {
+	if expr == nil {
+		return true
+	}
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		name, ok := resolveColumn(item.Col.ColPos)
+		if !ok {
+			return false
+		}
+		item.Col = &plan.ColRef{Name: name}
+	case *plan.Expr_Lit:
+		return canonicalizeDataBranchGeneratedExpr(item.Lit.Src, resolveColumn)
+	case *plan.Expr_F:
+		for _, arg := range item.F.Args {
+			if !canonicalizeDataBranchGeneratedExpr(arg, resolveColumn) {
+				return false
+			}
+		}
+	case *plan.Expr_List:
+		for _, listExpr := range item.List.List {
+			if !canonicalizeDataBranchGeneratedExpr(listExpr, resolveColumn) {
+				return false
+			}
+		}
+	case *plan.Expr_W:
+		if !canonicalizeDataBranchGeneratedExpr(item.W.WindowFunc, resolveColumn) {
+			return false
+		}
+		for _, partitionExpr := range item.W.PartitionBy {
+			if !canonicalizeDataBranchGeneratedExpr(partitionExpr, resolveColumn) {
+				return false
+			}
+		}
+		for _, order := range item.W.OrderBy {
+			if !canonicalizeDataBranchGeneratedExpr(order.Expr, resolveColumn) {
+				return false
+			}
+		}
+		if item.W.Frame != nil {
+			if item.W.Frame.Start != nil &&
+				!canonicalizeDataBranchGeneratedExpr(item.W.Frame.Start.Val, resolveColumn) {
+				return false
+			}
+			if item.W.Frame.End != nil &&
+				!canonicalizeDataBranchGeneratedExpr(item.W.Frame.End.Val, resolveColumn) {
+				return false
+			}
+		}
+	case *plan.Expr_Sub:
+		return canonicalizeDataBranchGeneratedExpr(item.Sub.Child, resolveColumn)
+	case *plan.Expr_Raw, *plan.Expr_Corr:
+		return false
+	}
+	return true
+}
+
 func dataBranchFakePKColIdxes(tblDef *plan.TableDef) []int {
 	idxes := make([]int, 0, len(tblDef.Cols))
 	dataIdx := 0
@@ -1505,7 +1624,9 @@ func checkSchemaCompatibilityWithResolver(
 		name := strings.ToLower(tarCol.Name)
 		baseCol := resolveBaseColumn(tarCol)
 		if baseCol != nil {
-			if !dataBranchGeneratedColumnsEqual(tarCol.GeneratedCol, baseCol.GeneratedCol) {
+			if !dataBranchGeneratedColumnsLogicallyEqual(
+				tarCol, baseCol, tarDef, baseDef, resolveBaseColumn,
+			) {
 				err = moerr.NewInternalErrorNoCtxf(
 					"schema compatibility check: column '%s' has different generated definitions",
 					tarCol.Name,

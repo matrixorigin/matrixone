@@ -1374,6 +1374,116 @@ func TestCheckSchemaCompatibility_RejectsDifferentGeneratedDefinitions(t *testin
 	}
 }
 
+func TestCheckSchemaCompatibility_GeneratedDefinitionsUseLogicalColumnIdentity(t *testing.T) {
+	intType := plan.Type{Id: int32(types.T_int64)}
+	generatedExpr := func(colPos int32) *plan.Expr {
+		return &plan.Expr{
+			Typ: intType,
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: 1, ObjName: "*"},
+				Args: []*plan.Expr{
+					{Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: colPos}}},
+					{Typ: intType, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 2}}}},
+				},
+			}},
+		}
+	}
+	newTableDef := func(reordered, generatedPK, referencesA bool) *plan.TableDef {
+		pkeyName := "id"
+		if generatedPK {
+			pkeyName = "g"
+		}
+		cols := []*plan.ColDef{
+			{Name: "id", Typ: intType},
+			{Name: "a", Typ: intType},
+			{Name: "b", Typ: intType},
+		}
+		if reordered {
+			cols[1], cols[2] = cols[2], cols[1]
+		}
+		refName := "b"
+		if referencesA {
+			refName = "a"
+		}
+		refPos := int32(0)
+		for i, col := range cols {
+			if col.Name == refName {
+				refPos = int32(i)
+				break
+			}
+		}
+		cols = append(cols, &plan.ColDef{
+			Name: "g", Typ: intType,
+			GeneratedCol: &plan.GeneratedCol{Expr: generatedExpr(refPos), OriginString: refName + " * 2", IsStored: true},
+		})
+		cols = append([]*plan.ColDef{{Name: catalog.Row_ID, Hidden: true}}, cols...)
+		return &plan.TableDef{
+			Pkey: &plan.PrimaryKeyDef{Names: []string{pkeyName}, PkeyColName: pkeyName},
+			Cols: cols,
+		}
+	}
+
+	for _, generatedPK := range []bool{false, true} {
+		t.Run(fmt.Sprintf("generated_pk_%t_matching_reordered", generatedPK), func(t *testing.T) {
+			_, _, _, err := checkSchemaCompatibility(
+				newTableDef(false, generatedPK, true),
+				newTableDef(true, generatedPK, true),
+			)
+			require.NoError(t, err)
+		})
+		t.Run(fmt.Sprintf("generated_pk_%t_mismatching_reordered", generatedPK), func(t *testing.T) {
+			_, _, _, err := checkSchemaCompatibility(
+				newTableDef(false, generatedPK, true),
+				newTableDef(true, generatedPK, false),
+			)
+			require.ErrorContains(t, err, "column 'g' has different generated definitions")
+		})
+	}
+
+	t.Run("lineage_resolver_canonicalizes_renamed_reference", func(t *testing.T) {
+		tarDef := &plan.TableDef{
+			Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: intType},
+				{Name: "new_a", Typ: intType},
+				{
+					Name: "g", Typ: intType,
+					GeneratedCol: &plan.GeneratedCol{Expr: generatedExpr(1), IsStored: true},
+				},
+			},
+		}
+		tarDef.Cols = append([]*plan.ColDef{{Name: catalog.Row_ID, Hidden: true}}, tarDef.Cols...)
+		baseDef := &plan.TableDef{
+			Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: intType},
+				{Name: "old_a", Typ: intType},
+				{
+					Name: "g", Typ: intType,
+					GeneratedCol: &plan.GeneratedCol{Expr: generatedExpr(1), IsStored: true},
+				},
+			},
+		}
+		baseDef.Cols = append([]*plan.ColDef{{Name: catalog.Row_ID, Hidden: true}}, baseDef.Cols...)
+		resolveBaseColumn := func(tarCol *plan.ColDef) *plan.ColDef {
+			switch tarCol.Name {
+			case "id":
+				return baseDef.Cols[1]
+			case "new_a":
+				return baseDef.Cols[2]
+			case "g":
+				return baseDef.Cols[3]
+			default:
+				return nil
+			}
+		}
+		_, _, _, err := checkSchemaCompatibilityWithResolver(
+			tarDef, baseDef, resolveBaseColumn,
+		)
+		require.NoError(t, err)
+	})
+}
+
 func TestCheckSchemaCompatibility_StoredGeneratedPrimaryKey(t *testing.T) {
 	newTableDef := func() *plan.TableDef {
 		return &plan.TableDef{
