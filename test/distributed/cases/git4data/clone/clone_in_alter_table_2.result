@@ -260,7 +260,7 @@ ft_tag_body  ¦  FULLTEXT  ¦  doc_body,tag  ¦  fulltext  ¦    ¦  -  𝄀
 ft_title_body  ¦  FULLTEXT  ¦  doc_body,title  ¦  fulltext  ¦    ¦  -  𝄀
 idx_account_status  ¦  MULTIPLE  ¦  account_id,status  ¦    ¦    ¦  -  𝄀
 idx_embedding  ¦  MULTIPLE  ¦  embedding  ¦  ivfflat  ¦  centroids,entries,metadata  ¦  {"lists":"3","op_type":"vector_cosine_ops"}  𝄀
-idx_tenant_shard  ¦  MULTIPLE  ¦  tenant  ¦    ¦    ¦  -  𝄀
+idx_tenant_shard  ¦  MULTIPLE  ¦  shard,tenant  ¦    ¦    ¦  -  𝄀
 uk_tenant_doc  ¦  UNIQUE  ¦  doc_code,tenant  ¦    ¦    ¦  -
 drop table t4;
 SET experimental_fulltext_index = 0;

@@ -1841,9 +1841,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				if err != nil {
 					return err
 				}
-				for j := 0; j < cur.bat.RowCount(); j++ {
-					txn.batchSelectList[cur.bat] = append(txn.batchSelectList[cur.bat], int64(j))
-				}
+				txn.selectAllBatchRowsLocked(cur.bat)
 
 			}
 		}
