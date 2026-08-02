@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -585,6 +586,110 @@ func TestAppendExprToVec_BoolLiteral(t *testing.T) {
 	err = appendExprToVec(vec, expr, pkType, time.UTC, mp)
 	require.NoError(t, err)
 	require.True(t, vector.GetFixedAtNoTypeCheck[bool](vec, 0))
+}
+
+func TestAppendExprToVec_IntegerPKNumericLiteralForms(t *testing.T) {
+	stmtNode, err := parsers.ParseOne(
+		context.Background(),
+		dialect.MYSQL,
+		"data branch pick src into dst keys(0x2, 3e0, -4e0, +5e0, -0x6)",
+		1,
+	)
+	require.NoError(t, err)
+
+	stmt, ok := stmtNode.(*tree.DataBranchPick)
+	require.True(t, ok)
+	require.Len(t, stmt.Keys.KeyExprs, 5)
+
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	vec := vector.NewVec(types.T_int32.ToType())
+	defer vec.Free(mp)
+	for _, expr := range stmt.Keys.KeyExprs {
+		require.NoError(t, appendExprToVec(vec, expr, *vec.GetType(), time.UTC, mp))
+	}
+	require.Equal(t, []int32{2, 3, -4, 5, -6}, vector.MustFixedColNoTypeCheck[int32](vec))
+}
+
+func TestAppendExprToVec_IntegerPKNumericLiteralBoundaries(t *testing.T) {
+	tests := []struct {
+		name    string
+		literal string
+		pkType  types.Type
+		want    any
+		wantErr string
+	}{
+		{name: "signed minimum", literal: "-1.28e2", pkType: types.T_int8.ToType(), want: int8(-128)},
+		{name: "signed maximum", literal: "+1.27e2", pkType: types.T_int8.ToType(), want: int8(127)},
+		{name: "unsigned negative zero", literal: "-0x0", pkType: types.T_uint8.ToType(), want: uint8(0)},
+		{name: "unsigned maximum", literal: "0xffffffffffffffff", pkType: types.T_uint64.ToType(), want: uint64(math.MaxUint64)},
+		{name: "fractional scientific", literal: "1.1e0", pkType: types.T_int32.ToType(), wantErr: "is not an integer"},
+		{name: "signed underflow", literal: "-1.29e2", pkType: types.T_int8.ToType(), wantErr: "out of range"},
+		{name: "signed overflow", literal: "1.28e2", pkType: types.T_int8.ToType(), wantErr: "out of range"},
+		{name: "unsigned negative", literal: "-1e0", pkType: types.T_uint8.ToType(), wantErr: "invalid syntax"},
+		{name: "unsigned overflow", literal: "0x100", pkType: types.T_uint8.ToType(), wantErr: "out of range"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stmtNode, err := parsers.ParseOne(
+				context.Background(),
+				dialect.MYSQL,
+				"data branch pick src into dst keys("+tc.literal+")",
+				1,
+			)
+			require.NoError(t, err)
+			stmt := stmtNode.(*tree.DataBranchPick)
+
+			mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+			require.NoError(t, err)
+			defer mp.Free(nil)
+			vec := vector.NewVec(tc.pkType)
+			defer vec.Free(mp)
+
+			err = appendExprToVec(vec, stmt.Keys.KeyExprs[0], tc.pkType, time.UTC, mp)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				require.Zero(t, vec.Length())
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, 1, vec.Length())
+			switch want := tc.want.(type) {
+			case int8:
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int8](vec, 0))
+			case uint8:
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[uint8](vec, 0))
+			case uint64:
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[uint64](vec, 0))
+			default:
+				t.Fatalf("unsupported expected type %T", want)
+			}
+		})
+	}
+}
+
+func TestAppendExprToVec_PreservesUnarySignForFloatPK(t *testing.T) {
+	stmtNode, err := parsers.ParseOne(
+		context.Background(),
+		dialect.MYSQL,
+		"data branch pick src into dst keys(-3e0)",
+		1,
+	)
+	require.NoError(t, err)
+	stmt := stmtNode.(*tree.DataBranchPick)
+
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+	pkType := types.T_float64.ToType()
+	vec := vector.NewVec(pkType)
+	defer vec.Free(mp)
+
+	require.NoError(t, appendExprToVec(vec, stmt.Keys.KeyExprs[0], pkType, time.UTC, mp))
+	require.Equal(t, float64(-3), vector.GetFixedAtNoTypeCheck[float64](vec, 0))
 }
 
 func TestAppendExprToVec_UnaryMinus(t *testing.T) {
