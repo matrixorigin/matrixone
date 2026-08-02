@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
@@ -30,13 +31,17 @@ const maxPendingViewMetadataRetries = 1024
 
 var retryPendingViewMetadataFunc = retryPendingViewMetadata
 
+type pendingViewMetadataRetryCursor struct {
+	sync.Mutex
+	accountID  uint64
+	viewID     uint64
+	generation uint64
+}
+
+var pendingViewMetadataCursor pendingViewMetadataRetryCursor
+
 func retryPendingViewMetadata(ctx context.Context, ses *Session, bh BackgroundExec) error {
-	bh.ClearExecResultSet()
-	query := buildPendingViewMetadataRetryQuery()
-	if err := bh.Exec(defines.AttachAccountId(ctx, catalog.System_Account), query); err != nil {
-		return err
-	}
-	results, err := getResultSet(ctx, bh)
+	results, err := loadPendingViewMetadataRetryPage(ctx, bh)
 	if err != nil {
 		return err
 	}
@@ -89,6 +94,9 @@ func retryPendingViewMetadata(ctx context.Context, ses *Session, bh BackgroundEx
 		if viewData.DefaultDatabase != "" {
 			bh.ClearExecResultSet()
 			if err = bh.Exec(retryCtx, "use "+sqlquote.Ident(viewData.DefaultDatabase)); err != nil {
+				if compile.CanSkipViewMetadataRefreshError(err) {
+					continue
+				}
 				return err
 			}
 		}
@@ -107,15 +115,83 @@ func retryPendingViewMetadata(ctx context.Context, ses *Session, bh BackgroundEx
 	return nil
 }
 
-func buildPendingViewMetadataRetryQuery() string {
+func loadPendingViewMetadataRetryPage(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) {
+	load := func(accountID, viewID uint64) ([]ExecResult, error) {
+		bh.ClearExecResultSet()
+		query := buildPendingViewMetadataRetryQuery(accountID, viewID)
+		if err := bh.Exec(defines.AttachAccountId(ctx, catalog.System_Account), query); err != nil {
+			return nil, err
+		}
+		return getResultSet(ctx, bh)
+	}
+
+	pendingViewMetadataCursor.Lock()
+	accountID := pendingViewMetadataCursor.accountID
+	viewID := pendingViewMetadataCursor.viewID
+	generation := pendingViewMetadataCursor.generation
+	pendingViewMetadataCursor.Unlock()
+	results, err := load(accountID, viewID)
+	if err != nil {
+		return nil, err
+	}
+	if !execResultArrayHasData(results) &&
+		(accountID != 0 || viewID != 0) {
+		results, err = load(0, 0)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !execResultArrayHasData(results) {
+		pendingViewMetadataCursor.Lock()
+		if pendingViewMetadataCursor.generation == generation {
+			pendingViewMetadataCursor.accountID = 0
+			pendingViewMetadataCursor.viewID = 0
+			pendingViewMetadataCursor.generation++
+		}
+		pendingViewMetadataCursor.Unlock()
+		return results, nil
+	}
+
+	last := results[0].GetRowCount() - 1
+	next := &pendingViewMetadataRetryCursor{}
+	next.accountID, err = results[0].GetUint64(ctx, last, 0)
+	if err != nil {
+		return nil, err
+	}
+	next.viewID, err = results[0].GetUint64(ctx, last, 1)
+	if err != nil {
+		return nil, err
+	}
+	pendingViewMetadataCursor.Lock()
+	if pendingViewMetadataCursor.generation == generation {
+		pendingViewMetadataCursor.accountID = next.accountID
+		pendingViewMetadataCursor.viewID = next.viewID
+		pendingViewMetadataCursor.generation++
+	}
+	pendingViewMetadataCursor.Unlock()
+	return results, nil
+}
+
+func buildPendingViewMetadataRetryQuery(after ...uint64) string {
+	var accountID, viewID uint64
+	if len(after) > 0 {
+		accountID = after[0]
+	}
+	if len(after) > 1 {
+		viewID = after[1]
+	}
 	return fmt.Sprintf(
 		"select account_id, rel_id, rel_version, reldatabase, relname, viewdef "+
 			"from %s.%s where relkind = '%s' and "+
 			"json_unquote(json_extract(viewdef, '$.metadata_refresh_pending')) = 'true' "+
+			"and (account_id > %d or (account_id = %d and rel_id > %d)) "+
 			"order by account_id, rel_id limit %d",
 		catalog.MO_CATALOG,
 		catalog.MO_TABLES,
 		catalog.SystemViewRel,
+		accountID,
+		accountID,
+		viewID,
 		maxPendingViewMetadataRetries,
 	)
 }
