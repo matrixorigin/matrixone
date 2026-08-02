@@ -215,13 +215,11 @@ func (mergeOrder *MergeOrder) cleanBatchAndCol(proc *process.Process) {
 	mp := proc.Mp()
 	ctr := &mergeOrder.ctr
 	for i := range ctr.batchList {
+		if ctr.batchList[i] != nil && i < len(ctr.orderCols) && ctr.orderCols[i] != nil {
+			freeOrderColumns(mp, ctr.batchList[i], ctr.orderCols[i])
+		}
 		if ctr.batchList[i] != nil {
 			ctr.batchList[i].Clean(mp)
-		}
-	}
-	for i := range ctr.orderCols {
-		if ctr.orderCols[i] != nil {
-			freeOrderColumns(mp, ctr.batchList[i], ctr.orderCols[i])
 		}
 	}
 }
