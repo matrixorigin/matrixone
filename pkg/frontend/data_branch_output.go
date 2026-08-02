@@ -795,13 +795,39 @@ func execDataBranchOutputSQL(ctx context.Context, bh BackgroundExec, sql string)
 	return nil
 }
 
-func compareDiffOutputRows(a, b []any, pkColIdxes []int) int {
-	for _, idx := range pkColIdxes {
-		if cmp := types.CompareValue(a[idx+2], b[idx+2]); cmp != 0 {
+type diffOutputPKValues struct {
+	values     []any
+	pkColIdxes []int
+}
+
+func (values diffOutputPKValues) len() int {
+	if values.pkColIdxes == nil {
+		return len(values.values)
+	}
+	return len(values.pkColIdxes)
+}
+
+func (values diffOutputPKValues) at(idx int) any {
+	if values.pkColIdxes == nil {
+		return values.values[idx]
+	}
+	return values.values[values.pkColIdxes[idx]+2]
+}
+
+func compareDiffOutputPKValues(a, b diffOutputPKValues) int {
+	for idx := range a.len() {
+		if cmp := types.CompareValue(a.at(idx), b.at(idx)); cmp != 0 {
 			return cmp
 		}
 	}
 	return 0
+}
+
+func compareDiffOutputRows(a, b []any, pkColIdxes []int) int {
+	return compareDiffOutputPKValues(
+		diffOutputPKValues{values: a, pkColIdxes: pkColIdxes},
+		diffOutputPKValues{values: b, pkColIdxes: pkColIdxes},
+	)
 }
 
 // diffOutputRowHeap is a max-heap by primary key. Keeping the largest retained
@@ -901,6 +927,45 @@ func satisfyDiffOutputOpt(
 			rows:       rows,
 			pkColIdxes: tblStuff.def.pkColIdxes,
 		}
+		materializeIdxes := extractIdxes
+		var candidatePK []any
+		if limit != nil && *limit > 0 {
+			candidatePK = make([]any, len(tblStuff.def.pkColIdxes))
+			pkIdxes := make(map[int]struct{}, len(tblStuff.def.pkColIdxes))
+			for _, idx := range tblStuff.def.pkColIdxes {
+				pkIdxes[idx] = struct{}{}
+			}
+			materializeIdxes = make([]int, 0, len(extractIdxes))
+			for _, idx := range extractIdxes {
+				if _, isPK := pkIdxes[idx]; !isPK {
+					materializeIdxes = append(materializeIdxes, idx)
+				}
+			}
+		}
+
+		materializeRow := func(
+			wrapped batchWithKind,
+			rowIdx int,
+			idxes []int,
+			pkValues []any,
+		) ([]any, error) {
+			row := make([]any, rowSize)
+			row[0] = wrapped.name
+			row[1] = wrapped.kind
+			for idx, colIdx := range tblStuff.def.pkColIdxes {
+				if pkValues != nil {
+					row[colIdx+2] = pkValues[idx]
+				}
+			}
+			for _, colIdx := range idxes {
+				if err := extractRowFromVector(
+					ctx, ses, wrapped.batch.Vecs[colIdx], colIdx+2, row, rowIdx, false,
+				); err != nil {
+					return nil, err
+				}
+			}
+			return row, nil
+		}
 
 		for wrapped := range retCh {
 			if first != nil {
@@ -919,29 +984,42 @@ func satisfyDiffOutputOpt(
 			}
 
 			for rowIdx := range wrapped.batch.RowCount() {
-				var (
-					row = make([]any, rowSize)
-				)
-				row[0] = wrapped.name
-				row[1] = wrapped.kind
+				if limit == nil {
+					row, materializeErr := materializeRow(wrapped, rowIdx, extractIdxes, nil)
+					if materializeErr != nil {
+						return materializeErr
+					}
+					rowHeap.rows = append(rowHeap.rows, row)
+					continue
+				}
 
-				for _, colIdx := range extractIdxes {
-					vec := wrapped.batch.Vecs[colIdx]
+				for idx, colIdx := range tblStuff.def.pkColIdxes {
 					if err = extractRowFromVector(
-						ctx, ses, vec, colIdx+2, row, rowIdx, false,
+						ctx, ses, wrapped.batch.Vecs[colIdx], idx, candidatePK, rowIdx, false,
 					); err != nil {
 						return
 					}
 				}
 
-				if limit == nil {
-					rowHeap.rows = append(rowHeap.rows, row)
-				} else if int64(len(rowHeap.rows)) < *limit {
+				fillsHeap := int64(len(rowHeap.rows)) < *limit
+				replacesRoot := !fillsHeap && compareDiffOutputPKValues(
+					diffOutputPKValues{values: candidatePK},
+					diffOutputPKValues{values: rowHeap.rows[0], pkColIdxes: rowHeap.pkColIdxes},
+				) < 0
+				if !fillsHeap && !replacesRoot {
+					continue
+				}
+
+				row, materializeErr := materializeRow(wrapped, rowIdx, materializeIdxes, candidatePK)
+				if materializeErr != nil {
+					return materializeErr
+				}
+				if fillsHeap {
 					rowHeap.rows = append(rowHeap.rows, row)
 					if int64(len(rowHeap.rows)) == *limit {
 						heap.Init(&rowHeap)
 					}
-				} else if compareDiffOutputRows(row, rowHeap.rows[0], rowHeap.pkColIdxes) < 0 {
+				} else {
 					rowHeap.rows[0] = row
 					heap.Fix(&rowHeap, 0)
 				}

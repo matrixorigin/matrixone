@@ -881,7 +881,7 @@ func TestDataBranchOutputLimitUsesFinalPKOrder(t *testing.T) {
 			for _, id := range tt.ids {
 				bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
 				require.NoError(t, vector.AppendFixed(bat.Vecs[0], id, false, ses.proc.Mp()))
-				require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("value"), false, ses.proc.Mp()))
+				require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte{byte(id)}, false, ses.proc.Mp()))
 				require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte("hidden"), false, ses.proc.Mp()))
 				bat.SetRowCount(1)
 				retCh <- batchWithKind{name: "side", kind: diffInsert, batch: bat}
@@ -907,9 +907,77 @@ func TestDataBranchOutputLimitUsesFinalPKOrder(t *testing.T) {
 				row, err := ses.GetMysqlResultSet().GetRow(ctx, uint64(i))
 				require.NoError(t, err)
 				require.Equal(t, wantID, row[2])
+				require.Equal(t, []byte{byte(wantID)}, row[3])
 			}
 			require.Zero(t, stopCalls, "positive limits must consume every producer row before selecting the sorted prefix")
 		})
+	}
+}
+
+func BenchmarkDataBranchOutputLimitWideRows(b *testing.B) {
+	const (
+		rowCount    = 64
+		payloadSize = 64 << 10
+	)
+
+	ses := newValidateSession(b)
+	ctrl := gomock.NewController(b)
+	tblStuff := newTestBranchTableStuff(ctrl)
+	b.Cleanup(func() {
+		tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
+	})
+
+	payload := bytes.Repeat([]byte{'x'}, payloadSize)
+	limit := int64(1)
+	stmt := &tree.DataBranchDiff{OutputOpt: &tree.DiffOutputOpt{Limit: &limit}}
+	b.SetBytes(rowCount * payloadSize)
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for range b.N {
+		b.StopTimer()
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+		// The first row is the final LIMIT 1 winner. The remaining ascending
+		// keys isolate the cost of rejecting wide payloads.
+		for id := range rowCount {
+			if err := vector.AppendFixed(bat.Vecs[0], int64(id), false, ses.proc.Mp()); err != nil {
+				b.Fatal(err)
+			}
+			if err := vector.AppendBytes(bat.Vecs[1], payload, false, ses.proc.Mp()); err != nil {
+				b.Fatal(err)
+			}
+			if err := vector.AppendBytes(bat.Vecs[2], []byte("hidden"), false, ses.proc.Mp()); err != nil {
+				b.Fatal(err)
+			}
+		}
+		bat.SetRowCount(rowCount)
+
+		retCh := make(chan batchWithKind, 1)
+		retCh <- batchWithKind{name: "child", kind: diffInsert, batch: bat}
+		close(retCh)
+		ctx, cancel := context.WithCancel(context.Background())
+		b.StartTimer()
+
+		err := satisfyDiffOutputOpt(
+			ctx,
+			cancel,
+			func() {},
+			ses,
+			nil,
+			stmt,
+			branchMetaInfo{},
+			tblStuff,
+			retCh,
+		)
+
+		b.StopTimer()
+		if err != nil {
+			b.Fatal(err)
+		}
+		if got := ses.GetMysqlResultSet().GetRowCount(); got != 1 {
+			b.Fatalf("expected one retained row, got %d", got)
+		}
 	}
 }
 
