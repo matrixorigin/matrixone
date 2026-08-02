@@ -320,6 +320,11 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		ctr.hashmapBuilder.InputBatchRowCount += result.Batch.RowCount()
 		// If in spill mode, spill this batch directly to open files.
 		if spillMode {
+			if hashBuild.IsShuffle {
+				if err := ctr.ensureDirectSpillRecovery(result.Batch, analyzer); err != nil {
+					return err
+				}
+			}
 			err := ctr.spillBatchBounded(proc, result.Batch, spillFiles, ctr.spillExprExecs, analyzer, false)
 			if err != nil {
 				return err
@@ -331,6 +336,23 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		// speculative spill sizing and reservation off the resident hot path while
 		// preserving enough budget headroom to drain the batches already retained.
 		if hashBuild.shouldSpillBeforeRetain(inputBatchSize) {
+			if hashBuild.IsShuffle {
+				// The current batch is still upstream-owned. If its direct recovery
+				// cannot grow while retained copies consume the shared generation,
+				// drain those copies under their existing lease and retry once.
+				if err := ctr.ensureDirectSpillRecovery(result.Batch, analyzer); err != nil {
+					if !errors.Is(err, process.ErrHashBuildBudgetAdmission) ||
+						len(ctr.hashmapBuilder.Batches.Buf) == 0 {
+						return err
+					}
+					if err := startSpill(); err != nil {
+						return err
+					}
+					if err := ctr.ensureDirectSpillRecovery(result.Batch, analyzer); err != nil {
+						return err
+					}
+				}
+			}
 			if err := startSpill(); err != nil {
 				return err
 			}
@@ -342,13 +364,33 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 
 		// Store original batch
 		retainedMemBefore := ctr.hashmapBuilder.Batches.MemSize
-		err = ctr.hashmapBuilder.copyBuildBatch(result.Batch, proc)
+		if hashBuild.IsShuffle {
+			// The retained destination may differ materially from ingress: const
+			// vectors become ordinary vectors and partial tails grow. Reuse the one
+			// unavoidable copy allocation projection to reserve the largest
+			// destination's future spill peak before any source row is retained.
+			var projection batchCopyProjection
+			projection, err = ctr.hashmapBuilder.projectedBatchCopy(result.Batch)
+			if err == nil {
+				err = ctr.ensureRetainedSpillRecovery(projection, analyzer)
+			}
+			if err == nil {
+				err = ctr.hashmapBuilder.copyBuildBatchProjected(result.Batch, proc, projection)
+			}
+		} else {
+			err = ctr.hashmapBuilder.copyBuildBatch(result.Batch, proc)
+		}
 		if err != nil {
 			if hashBuild.IsShuffle && errors.Is(err, process.ErrHashBuildBudgetAdmission) {
 				// The source batch is still owned by the upstream operator.  Do
 				// not retry CopyIntoBatches (or increment row count again); enter
-				// spill recovery and write this batch directly.
+				// spill recovery, then prove and write this batch directly. Any
+				// older retained copies are drained first under the recovery lease
+				// they already own, releasing their budget before this proof.
 				if err := startSpill(); err != nil {
+					return err
+				}
+				if err := ctr.ensureDirectSpillRecovery(result.Batch, analyzer); err != nil {
 					return err
 				}
 				if err := ctr.spillBatchBounded(proc, result.Batch, spillFiles, ctr.spillExprExecs, analyzer, false); err != nil {
@@ -448,9 +490,9 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 				// publishing a semantically incomplete spill payload.
 				return err
 			}
-			// Preserve the copied batches and discard only partial map state.
-			// Scratch is admitted lazily while draining; failure remains a
-			// controlled resource error rather than an allocation past the cap.
+			// Preserve the copied batches and discard only partial map state. Every
+			// retained destination already owns a recovery high-water lease, so a
+			// hard map-budget rejection cannot strand the build in memory.
 			ctr.hashmapBuilder.FreeHashMapOnly(proc)
 			if err := startSpill(); err != nil {
 				return err

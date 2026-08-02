@@ -76,6 +76,12 @@ type HashmapBuilder struct {
 	budget                    *process.HashBuildBudgetGeneration
 	mapReservation            *hashMapReservationOwner
 	batchReservations         []*process.HashBuildReservation
+	// retainedSpillTailSelected is the logical materialized size of the one
+	// partial CopyIntoBatches tail. Varlena descriptors may share one physical
+	// payload while a later spill selection repeats it per logical row; tracking
+	// the logical sum incrementally avoids both an unsafe allocation proxy and
+	// repeatedly rescanning the growing tail.
+	retainedSpillTailSelected uint64
 	auxReservation            *process.HashBuildReservation
 	keyExprs                  []*plan.Expr
 	expressionLease           *ExpressionMemoryLease
@@ -126,6 +132,7 @@ func (hb *HashmapBuilder) GetJoinMap(mp *mpool.MPool) *message.JoinMap {
 	hb.StrHashMap = nil
 	hb.DelRows = nil
 	hb.Batches.Reset()
+	hb.retainedSpillTailSelected = 0
 	// Iterators are producer scratch and are not part of JoinMap ownership.
 	// Drop budgeted cached backing before transferring the encompassing aux
 	// reservation to a consumer that may free it immediately after publication.
@@ -227,6 +234,7 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 	hb.hashMapRowCountSet = false
 	hb.HasNullKey = false
 	hb.Batches.Reset()
+	hb.retainedSpillTailSelected = 0
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
 	hb.IgnoreRows = nil
@@ -253,6 +261,7 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.needDupVec = false
 	hb.HasNullKey = false
 	hb.Batches.Reset()
+	hb.retainedSpillTailSelected = 0
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
 	hb.FreeExecutors()
@@ -298,6 +307,7 @@ func (hb *HashmapBuilder) FreeHashMapAndBatches(proc *process.Process) {
 	}
 	hb.Sels.Free(proc.Mp())
 	hb.Batches.Clean(proc.Mp())
+	hb.retainedSpillTailSelected = 0
 	hb.releaseReservations()
 }
 

@@ -21,6 +21,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1514,6 +1515,277 @@ func TestSpillMaterializedEstimateFollowsFullBatchCloneToSemantics(t *testing.T)
 	selected.SetRowCount(colexec.DefaultBatchSize)
 	require.Equal(t, colexec.DefaultBatchSize*(4<<10), len(selected.Vecs[0].GetArea()))
 	require.GreaterOrEqual(t, estimated, uint64(selected.Allocated()))
+}
+
+func TestRetainedSpillRecoveryProjectionMatrix(t *testing.T) {
+	type ingressSpec struct {
+		kind         string
+		rows         int
+		payloadBytes int
+	}
+	tests := []struct {
+		name      string
+		ingresses []ingressSpec
+	}{
+		{
+			name: "fixed-boundaries-and-full-tail-swap",
+			ingresses: []ingressSpec{
+				{kind: "fixed", rows: colexec.DefaultBatchSize - 1},
+				{kind: "fixed", rows: 1},
+				{kind: "fixed", rows: colexec.DefaultBatchSize},
+				{kind: "fixed", rows: colexec.DefaultBatchSize + 1},
+			},
+		},
+		{
+			name: "const-varlen-incremental-tail",
+			ingresses: []ingressSpec{
+				{kind: "const", rows: 1, payloadBytes: 1024},
+				{kind: "const", rows: 31, payloadBytes: 2048},
+				{kind: "const", rows: colexec.DefaultBatchSize - 32, payloadBytes: 512},
+			},
+		},
+		{
+			name: "const-varlen-exact-full-batch",
+			ingresses: []ingressSpec{
+				{kind: "const", rows: colexec.DefaultBatchSize, payloadBytes: 4096},
+			},
+		},
+		{
+			name: "shared-varlen-exact-full-batch",
+			ingresses: []ingressSpec{
+				{kind: "shared", rows: colexec.DefaultBatchSize, payloadBytes: 1024},
+			},
+		},
+		{
+			name: "nullable-varlen-multiple-destinations",
+			ingresses: []ingressSpec{
+				{kind: "nullable", rows: 2*colexec.DefaultBatchSize + 17, payloadBytes: 64},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			budget := process.MustNewHashBuildBudget(4<<30, 4<<30)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			defer generation.Close()
+			var hb HashmapBuilder
+			hb.setBudget(generation)
+			defer hb.cleanBatches(proc)
+
+			var recoveryHighWater uint64
+			for ingressIndex, spec := range test.ingresses {
+				source := batch.NewWithSize(1)
+				switch spec.kind {
+				case "fixed":
+					values := make([]int32, spec.rows)
+					for i := range values {
+						values[i] = int32(ingressIndex*100_000 + i)
+					}
+					source.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+				case "const":
+					payload := bytes.Repeat([]byte{'x'}, spec.payloadBytes)
+					source.Vecs[0], err = vector.NewConstBytes(
+						types.T_varchar.ToType(), payload, spec.rows, proc.Mp())
+					require.NoError(t, err)
+				case "shared":
+					// UnionBatch deliberately flattens a constant while retaining one
+					// physical payload shared by every descriptor. This is a regular
+					// non-const vector, so recovery projection must follow logical row
+					// references rather than use class as a proxy for area ownership.
+					payload := bytes.Repeat([]byte{'x'}, spec.payloadBytes)
+					constant, constErr := vector.NewConstBytes(
+						types.T_varchar.ToType(), payload, spec.rows, proc.Mp())
+					require.NoError(t, constErr)
+					source.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+					require.NoError(t, source.Vecs[0].UnionBatch(
+						constant, 0, spec.rows, nil, proc.Mp()))
+					constant.Free(proc.Mp())
+					require.False(t, source.Vecs[0].IsConst())
+					require.Equal(t, spec.payloadBytes, len(source.Vecs[0].GetArea()))
+				case "nullable":
+					values := make([]string, spec.rows)
+					nulls := make([]uint64, 0, spec.rows/5+1)
+					for i := range values {
+						values[i] = strings.Repeat(string(rune('a'+i%17)), spec.payloadBytes)
+						if i%5 == 0 {
+							nulls = append(nulls, uint64(i))
+						}
+					}
+					source.Vecs[0] = testutil.MakeVarcharVector(values, nulls, proc.Mp())
+				default:
+					t.Fatalf("unknown ingress kind %q", spec.kind)
+				}
+				source.SetRowCount(spec.rows)
+
+				projection, projectionErr := hb.projectedBatchCopy(source)
+				require.NoError(t, projectionErr)
+				projectedNeed, projectionErr := spillRetainedRecoveryBudgetBytes(projection)
+				require.NoError(t, projectionErr)
+				projectedNeed, projectionErr = spillRecoveryReservationBytes(projectedNeed)
+				require.NoError(t, projectionErr)
+				recoveryHighWater = max(recoveryHighWater, projectedNeed)
+
+				require.NoError(t, hb.copyBuildBatchProjected(source, proc, projection))
+				require.Equal(t, projection.nextTailSelected, hb.retainedSpillTailSelected)
+				source.Clean(proc.Mp())
+
+				for retainedIndex, retained := range hb.Batches.Buf {
+					actualNeed, actualErr := spillScratchBudgetBytes(retained, true)
+					require.NoError(t, actualErr)
+					require.LessOrEqualf(t, actualNeed, recoveryHighWater,
+						"ingress=%d retained=%d rows=%d", ingressIndex, retainedIndex, retained.RowCount())
+				}
+			}
+
+			if test.name == "const-varlen-exact-full-batch" {
+				wantSelected := uint64(colexec.DefaultBatchSize) *
+					(uint64(types.T_varchar.ToType().TypeSize()) + 4096)
+				actualSelected, err := spillMaterializedBytes(hb.Batches.Buf[0])
+				require.NoError(t, err)
+				require.Equal(t, wantSelected, actualSelected)
+			}
+
+			hb.cleanBatches(proc)
+			require.Zero(t, hb.retainedSpillTailSelected)
+			require.Zero(t, generation.Used())
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestSpillRecoveryReservationRoundingBoundaries(t *testing.T) {
+	tests := []struct {
+		need uint64
+		want uint64
+	}{
+		{need: 0, want: 0},
+		{need: 1, want: spillRecoveryReservationQuantum},
+		{need: spillRecoveryReservationQuantum - 1, want: spillRecoveryReservationQuantum},
+		{need: spillRecoveryReservationQuantum, want: spillRecoveryReservationQuantum},
+		{need: spillRecoveryReservationQuantum + 1, want: 2 * spillRecoveryReservationQuantum},
+	}
+	for _, test := range tests {
+		got, err := spillRecoveryReservationBytes(test.need)
+		require.NoError(t, err)
+		require.Equal(t, test.want, got)
+	}
+	_, err := spillRecoveryReservationBytes(math.MaxUint64)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+}
+
+func TestSpillDirectRecoveryUpperBoundsExactMatrix(t *testing.T) {
+	tests := []struct {
+		name       string
+		makeBatch  func(*testing.T, *process.Process) *batch.Batch
+		hasVarlen  bool
+		exactUpper bool
+	}{
+		{
+			name: "fixed",
+			makeBatch: func(_ *testing.T, proc *process.Process) *batch.Batch {
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, nil, proc.Mp())
+				bat.SetRowCount(4)
+				return bat
+			},
+			exactUpper: true,
+		},
+		{
+			name: "const-varlen",
+			makeBatch: func(t *testing.T, proc *process.Process) *batch.Batch {
+				bat := batch.NewWithSize(1)
+				var err error
+				bat.Vecs[0], err = vector.NewConstBytes(
+					types.T_varchar.ToType(), bytes.Repeat([]byte{'x'}, 4096),
+					colexec.DefaultBatchSize, proc.Mp())
+				require.NoError(t, err)
+				bat.SetRowCount(colexec.DefaultBatchSize)
+				return bat
+			},
+			hasVarlen:  true,
+			exactUpper: true,
+		},
+		{
+			name: "shared-varlen",
+			makeBatch: func(t *testing.T, proc *process.Process) *batch.Batch {
+				constant, err := vector.NewConstBytes(
+					types.T_varchar.ToType(), bytes.Repeat([]byte{'x'}, 4096),
+					colexec.DefaultBatchSize, proc.Mp())
+				require.NoError(t, err)
+				defer constant.Free(proc.Mp())
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+				require.NoError(t, bat.Vecs[0].UnionBatch(
+					constant, 0, colexec.DefaultBatchSize, nil, proc.Mp()))
+				require.False(t, bat.Vecs[0].IsConst())
+				require.Equal(t, 4096, len(bat.Vecs[0].GetArea()))
+				bat.SetRowCount(colexec.DefaultBatchSize)
+				return bat
+			},
+			hasVarlen:  true,
+			exactUpper: true,
+		},
+		{
+			name: "nullable-varlen",
+			makeBatch: func(_ *testing.T, proc *process.Process) *batch.Batch {
+				const rows = 1024
+				values := make([]string, rows)
+				nulls := make([]uint64, 0, rows/2)
+				for i := range values {
+					values[i] = strings.Repeat("x", 128)
+					if i%2 == 0 {
+						nulls = append(nulls, uint64(i))
+					}
+				}
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = testutil.MakeVarcharVector(values, nulls, proc.Mp())
+				bat.SetRowCount(rows)
+				return bat
+			},
+			hasVarlen: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			bat := test.makeBatch(t, proc)
+			defer bat.Clean(proc.Mp())
+
+			upper, hasVarlen, err := spillDirectRecoveryBudgetUpper(bat)
+			require.NoError(t, err)
+			exact, err := spillBudgetBytes(bat)
+			require.NoError(t, err)
+			require.Equal(t, test.hasVarlen, hasVarlen)
+			require.GreaterOrEqual(t, upper, exact)
+			if test.exactUpper {
+				require.Equal(t, exact, upper)
+			}
+
+			capBytes, err := spillRecoveryReservationBytes(exact)
+			require.NoError(t, err)
+			budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			defer generation.Close()
+			ctr := &container{}
+			ctr.hashmapBuilder.setBudget(generation)
+			analyzer := process.NewAnalyzer(0, false, false, "direct recovery upper")
+			require.NoError(t, ctr.ensureDirectSpillRecovery(bat, analyzer))
+			reserved := ctr.spillScratchBase
+			reserveCount := generation.ReserveCount()
+			require.NoError(t, ctr.ensureDirectSpillRecovery(bat, analyzer))
+			require.Equal(t, reserved, ctr.spillScratchBase)
+			require.Equal(t, reserveCount, generation.ReserveCount())
+			ctr.releaseSpillScratchReservation()
+			require.Zero(t, generation.Used())
+		})
+	}
 }
 
 func TestSpillBatchLazyReservationFailsClosed(t *testing.T) {

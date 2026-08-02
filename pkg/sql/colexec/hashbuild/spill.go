@@ -239,6 +239,198 @@ func spillScratchBudgetBytes(bat *batch.Batch, sourceAlreadyCharged bool) (uint6
 	return need - source, nil
 }
 
+const spillRecoveryReservationQuantum = uint64(64 << 10)
+
+// spillRecoveryReservationBytes rounds a recovery high-water mark to a small,
+// fixed allocation quantum. The lease is per HashBuild execution, not per
+// batch: rounding avoids rescanning near-identical varlen batches merely
+// because their payload differs by a few bytes, while keeping the bounded
+// over-reservation independent of row count, fanout, and query shape.
+func spillRecoveryReservationBytes(need uint64) (uint64, error) {
+	if need == 0 {
+		return 0, nil
+	}
+	if need > math.MaxUint64-(spillRecoveryReservationQuantum-1) {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	return (need + spillRecoveryReservationQuantum - 1) &^ (spillRecoveryReservationQuantum - 1), nil
+}
+
+// spillDirectRecoveryBudgetUpper is a row-scan-free upper bound used to decide
+// whether the current recovery lease can already spill an upstream batch.
+// Fixed-width and const batches are exact apart from bounded slack. A regular
+// varlen vector may have every descriptor reference the same physical area, so
+// rows*area is the smallest representation-independent bound available without
+// inspecting descriptors. Such batches are scanned exactly only when this
+// conservative bound crosses the retained high-water mark; this path is cold
+// for normal resident builds.
+func spillDirectRecoveryBudgetUpper(bat *batch.Batch) (uint64, bool, error) {
+	if bat == nil || bat.RowCount() <= 0 {
+		return 0, false, nil
+	}
+	rows := uint64(bat.RowCount())
+	var selected uint64
+	hasVarlen := false
+	for _, vec := range bat.Vecs {
+		if vec == nil {
+			return 0, false, process.ErrHashBuildBudgetInvalid
+		}
+		typeSize := vec.GetType().TypeSize()
+		if typeSize < 0 {
+			return 0, false, process.ErrHashBuildBudgetInvalid
+		}
+		descriptors, err := spillCheckedMul(rows, uint64(typeSize))
+		if err != nil {
+			return 0, false, err
+		}
+		selected, err = spillCheckedAdd(selected, descriptors)
+		if err != nil {
+			return 0, false, err
+		}
+		if vec.GetType().IsVarlen() && !vec.IsConstNull() {
+			hasVarlen = true
+			payloadUpper := uint64(len(vec.GetArea()))
+			if !vec.IsConst() {
+				payloadUpper, err = spillCheckedMul(payloadUpper, rows)
+				if err != nil {
+					return 0, false, err
+				}
+			}
+			selected, err = spillCheckedAdd(selected, payloadUpper)
+			if err != nil {
+				return 0, false, err
+			}
+		}
+	}
+	materializationSlack, err := spillMaterializationSlack(uint64(len(bat.Vecs)))
+	if err != nil {
+		return 0, false, err
+	}
+	selected, err = spillCheckedAdd(selected, materializationSlack)
+	if err != nil {
+		return 0, false, err
+	}
+	allocated := bat.Allocated()
+	if allocated < 0 {
+		return 0, false, process.ErrHashBuildBudgetInvalid
+	}
+	need, err := spillPeakBudgetFor(rows, uint64(allocated), selected, uint64(len(bat.Vecs)))
+	return need, hasVarlen, err
+}
+
+// spillRetainedRecoveryBudgetBytes turns the allocation projection already
+// required by CopyIntoBatches into a future-drain proof. The projection tracks
+// logical spill materialization rather than physical retained allocation:
+// ordinary non-const descriptors can also share one retained payload while a
+// later spill selection copies it once per row. Source memory itself is covered
+// separately by the retained-batch reservation.
+func spillRetainedRecoveryBudgetBytes(projection batchCopyProjection) (uint64, error) {
+	if projection.maxRetainedRows <= 0 || projection.columns < 0 {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	materializationSlack, err := spillMaterializationSlack(uint64(projection.columns))
+	if err != nil {
+		return 0, err
+	}
+	selected, err := spillCheckedAdd(
+		projection.maxRetainedSelected,
+		materializationSlack,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return spillPeakBudgetFor(
+		uint64(projection.maxRetainedRows),
+		0,
+		selected,
+		uint64(projection.columns),
+	)
+}
+
+func (ctr *container) ensureSpillRecoveryReservationBytes(
+	need uint64,
+	analyzer process.Analyzer,
+) error {
+	if ctr.hashmapBuilder.budget == nil || need == 0 || need <= ctr.spillScratchBase {
+		return nil
+	}
+	var err error
+	if ctr.spillScratchReservation == nil {
+		ctr.spillScratchReservation, err = ctr.hashmapBuilder.budget.Reserve(need)
+		if err != nil {
+			analyzer.GetOpStats().AddExtraStat("HashBuildSpillRecoveryReserveRejects", 1)
+			return err
+		}
+		ctr.spillScratchBase = need
+		analyzer.GetOpStats().SetMaxExtraStat(
+			"HashBuildSpillRecoveryReservedBytes", hashBuildStatInt64(need))
+		analyzer.GetOpStats().SetMaxExtraStat(
+			"HashBuildSpillScratchPeakBytes", hashBuildStatInt64(need))
+		return nil
+	}
+
+	grow := need - ctr.spillScratchBase
+	if err = ctr.spillScratchReservation.Grow(grow); err != nil {
+		analyzer.GetOpStats().AddExtraStat("HashBuildSpillRecoveryGrowRejects", 1)
+		return err
+	}
+	ctr.spillScratchBase = need
+	analyzer.GetOpStats().AddExtraStat("HashBuildSpillRecoveryGrowCount", 1)
+	analyzer.GetOpStats().AddExtraStat(
+		"HashBuildSpillRecoveryGrowBytes", hashBuildStatInt64(grow))
+	analyzer.GetOpStats().SetMaxExtraStat(
+		"HashBuildSpillRecoveryReservedBytes", hashBuildStatInt64(need))
+	analyzer.GetOpStats().SetMaxExtraStat(
+		"HashBuildSpillScratchPeakBytes", hashBuildStatInt64(need))
+	return nil
+}
+
+func (ctr *container) ensureDirectSpillRecovery(
+	bat *batch.Batch,
+	analyzer process.Analyzer,
+) error {
+	upper, hasVarlen, err := spillDirectRecoveryBudgetUpper(bat)
+	if err != nil {
+		return err
+	}
+	if upper <= ctr.spillScratchBase {
+		return nil
+	}
+	need := upper
+	if hasVarlen {
+		// The cheap upper includes dead/null varlena area. Pay the exact live-row
+		// scan only when a larger lease may be required, avoiding both false
+		// admission failure and a scan on steady-state batches.
+		need, err = spillBudgetBytes(bat)
+		if err != nil {
+			return err
+		}
+		if need <= ctr.spillScratchBase {
+			return nil
+		}
+	}
+	need, err = spillRecoveryReservationBytes(need)
+	if err != nil {
+		return err
+	}
+	return ctr.ensureSpillRecoveryReservationBytes(need, analyzer)
+}
+
+func (ctr *container) ensureRetainedSpillRecovery(
+	projection batchCopyProjection,
+	analyzer process.Analyzer,
+) error {
+	need, err := spillRetainedRecoveryBudgetBytes(projection)
+	if err != nil {
+		return err
+	}
+	need, err = spillRecoveryReservationBytes(need)
+	if err != nil {
+		return err
+	}
+	return ctr.ensureSpillRecoveryReservationBytes(need, analyzer)
+}
+
 func (ctr *container) growSpillScratchTransient(
 	required uint64,
 	analyzer process.Analyzer,

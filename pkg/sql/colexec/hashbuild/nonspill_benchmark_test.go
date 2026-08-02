@@ -17,6 +17,7 @@ package hashbuild
 import (
 	"math"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -53,27 +54,39 @@ const (
 //	  ./pkg/sql/colexec/hashbuild
 func BenchmarkHashBuildNonSpillE2E(b *testing.B) {
 	benchmarks := []struct {
-		name string
-		typ  types.Type
+		name                string
+		typ                 types.Type
+		varcharPayloadBytes int
 	}{
 		{name: "INT64", typ: types.T_int64.ToType()},
-		{name: "VARCHAR", typ: types.T_varchar.ToType()},
+		{name: "VARCHAR_INLINE", typ: types.T_varchar.ToType()},
+		{
+			name:                "VARCHAR_AREA_128",
+			typ:                 types.T_varchar.ToType(),
+			varcharPayloadBytes: 128,
+		},
 	}
 	for _, benchmark := range benchmarks {
 		b.Run("Shuffle/"+benchmark.name, func(b *testing.B) {
-			benchmarkHashBuildNonSpillE2E(b, benchmark.typ)
+			benchmarkHashBuildNonSpillE2E(
+				b, benchmark.typ, benchmark.varcharPayloadBytes)
 		})
 	}
 }
 
-func benchmarkHashBuildNonSpillE2E(b *testing.B, keyType types.Type) {
+func benchmarkHashBuildNonSpillE2E(
+	b *testing.B,
+	keyType types.Type,
+	varcharPayloadBytes int,
+) {
 	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	proc.Base.Lim.Size = 4 << 30
 	proc.Base.Lim.BatchRows = nonSpillBenchmarkBatchRows
 	proc.Base.Lim.BatchSize = 64 << 20
 
-	inputs := makeNonSpillBenchmarkBatches(b, proc, keyType)
+	inputs := makeNonSpillBenchmarkBatches(
+		b, proc, keyType, varcharPayloadBytes)
 	var inputBytes int64
 	for _, input := range inputs {
 		inputBytes += int64(input.Size())
@@ -186,6 +199,7 @@ func makeNonSpillBenchmarkBatches(
 	b testing.TB,
 	proc *process.Process,
 	typ types.Type,
+	varcharPayloadBytes int,
 ) []*batch.Batch {
 	inputs := make([]*batch.Batch, nonSpillBenchmarkBatchCount)
 	for batchIndex := range inputs {
@@ -201,11 +215,15 @@ func makeNonSpillBenchmarkBatches(
 					vector.AppendFixed(vec, int64(value), false, proc.Mp()),
 				)
 			case types.T_varchar:
+				key := "key-" + strconv.Itoa(value)
+				if varcharPayloadBytes > len(key) {
+					key += strings.Repeat("x", varcharPayloadBytes-len(key))
+				}
 				require.NoError(
 					b,
 					vector.AppendBytes(
 						vec,
-						[]byte("key-"+strconv.Itoa(value)),
+						[]byte(key),
 						false,
 						proc.Mp(),
 					),

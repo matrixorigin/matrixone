@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"sync"
@@ -48,6 +49,46 @@ const (
 	Rows          = 10     // default rows
 	BenchmarkRows = 100000 // default rows for benchmark
 )
+
+// gatedHashBuildInput exposes a deterministic boundary after HashBuild has
+// retained the first batch and before it can pull the second one. Tests use
+// that boundary to model other workers charging the same query generation
+// without scheduler sleeps or polling.
+type gatedHashBuildInput struct {
+	*colexec.MockOperator
+	batches            []*batch.Batch
+	current            int
+	firstBatchRetained chan struct{}
+	continueInput      chan struct{}
+}
+
+func newGatedHashBuildInput(batches ...*batch.Batch) *gatedHashBuildInput {
+	return &gatedHashBuildInput{
+		MockOperator:       colexec.NewMockOperator(),
+		batches:            batches,
+		firstBatchRetained: make(chan struct{}),
+		continueInput:      make(chan struct{}),
+	}
+}
+
+func (op *gatedHashBuildInput) Call(proc *process.Process) (vm.CallResult, error) {
+	result := vm.NewCallResult()
+	if op.current >= len(op.batches) {
+		result.Status = vm.ExecStop
+		return result, nil
+	}
+	if op.current == 1 {
+		close(op.firstBatchRetained)
+		select {
+		case <-op.continueInput:
+		case <-proc.Ctx.Done():
+			return result, context.Cause(proc.Ctx)
+		}
+	}
+	result.Batch = op.batches[op.current]
+	op.current++
+	return result, nil
+}
 
 func runtimeFilterPlanType(typ types.Type) *plan.Type {
 	return &plan.Type{
@@ -2518,7 +2559,7 @@ func TestHashBuildRejectsSharedSpillPayload(t *testing.T) {
 	tc.proc.Free()
 }
 
-func TestShuffleHashBuildDoesNotPreflightFutureSpill(t *testing.T) {
+func TestShuffleHashBuildRecoveryLeaseDoesNotForceSpill(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_varchar.ToType()}, []*plan.Expr{newExpr(0, types.T_varchar.ToType())})
 	tc.arg.IsShuffle = true
 	tc.arg.ShuffleIdx = 0
@@ -2558,9 +2599,10 @@ func TestShuffleHashBuildDoesNotPreflightFutureSpill(t *testing.T) {
 	jm := result.JoinMap()
 	require.NotNil(t, jm)
 	require.False(t, jm.IsSpilled(),
-		"a resident build must not pay for or be redirected by hypothetical future spill scratch")
+		"a recovery lease changes admission ownership, not the local spill policy")
 	require.Equal(t, int64(1), jm.GetRowCount())
 	require.Zero(t, tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillStarts"])
+	require.Positive(t, tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillRecoveryReservedBytes"])
 	jm.Free()
 	require.Zero(t, generation.Used())
 	require.Zero(t, generation.SpillDiskUsed())
@@ -2599,41 +2641,23 @@ func TestShuffleHashBuildSpillsBeforeRetainingThresholdCrossingBatch(t *testing.
 	tc.arg.SpillThreshold = inputSize + 1
 	tc.arg.ctr.setSpillThreshold(tc.arg.SpillThreshold)
 
-	copyPeak, err := tc.arg.ctr.hashmapBuilder.projectedBatchCopyBytes(first)
+	projection, err := tc.arg.ctr.hashmapBuilder.projectedBatchCopy(first)
 	require.NoError(t, err)
-	retainedScratch, err := spillScratchBudgetBytes(first, true)
+	directRecovery, err := spillBudgetBytes(first)
 	require.NoError(t, err)
-	directScratch, err := spillBudgetBytes(second)
+	directRecovery, err = spillRecoveryReservationBytes(directRecovery)
+	require.NoError(t, err)
+	retainedRecovery, err := spillRetainedRecoveryBudgetBytes(projection)
+	require.NoError(t, err)
+	retainedRecovery, err = spillRecoveryReservationBytes(retainedRecovery)
 	require.NoError(t, err)
 
-	// Calibrate the retained reservation and the second copy's pre-allocation
-	// peak. The final cap deliberately admits both copies (the old path reaches
-	// its post-copy threshold) but rejects scratch while both sources are live;
-	// the pre-copy path needs only one retained source plus scratch, then the
-	// direct scratch after that source is released.
-	calibrationBudget := process.MustNewHashBuildBudget(1<<30, 1<<30)
-	calibration, err := calibrationBudget.OpenGeneration(1)
-	require.NoError(t, err)
-	var calibrationBuilder HashmapBuilder
-	calibrationBuilder.setBudget(calibration)
-	require.NoError(t, calibrationBuilder.copyBuildBatch(first, tc.proc))
-	actualFirst := calibration.Used()
-	secondCopyPeak, err := calibrationBuilder.projectedBatchCopyBytes(second)
-	require.NoError(t, err)
-	calibrationBuilder.cleanBatches(tc.proc)
-	require.Zero(t, calibration.Used())
-	calibration.Close()
-
+	// Admit the first recovery lease and its retained-copy allocation together.
+	// The second batch crosses the local threshold and must be spilled directly,
+	// without a second retained copy or any failed shared-budget admission.
 	coalesceSlack := uint64(spillNumBuckets * spillWriteCoalesceSize)
-	capBytes := max(
-		copyPeak,
-		actualFirst+secondCopyPeak,
-		actualFirst+retainedScratch,
-		directScratch,
-	) + coalesceSlack
-	oldPostCopyPeak := 2*actualFirst + retainedScratch
-	require.Less(t, capBytes, oldPostCopyPeak,
-		"fixture must reject lazy scratch only after retaining the crossing batch")
+	capBytes := max(directRecovery, retainedRecovery) +
+		projection.admissionBytes + coalesceSlack
 	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
@@ -2678,7 +2702,272 @@ func TestShuffleHashBuildSpillsBeforeRetainingThresholdCrossingBatch(t *testing.
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
-func TestShuffleHashBuildLazySpillAdmissionFailsClosed(t *testing.T) {
+func TestShuffleHashBuildPreservesRecoveryHeadroomAcrossSharedBudgetPressure(t *testing.T) {
+	typ := types.T_int32.ToType()
+	tc := newTestCase(t, []bool{false}, []types.Type{typ}, []*plan.Expr{newExpr(0, typ)})
+	tc.arg.IsShuffle = true
+	tc.arg.ShuffleIdx = 0
+	tc.arg.SpillThreshold = 2 * colexec.DefaultBatchSize
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 3503}
+
+	makeBuildBatch := func(base int32) *batch.Batch {
+		values := make([]int32, colexec.DefaultBatchSize)
+		for i := range values {
+			values[i] = base + int32(i)
+		}
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, tc.proc.Mp())
+		bat.SetRowCount(len(values))
+		return bat
+	}
+	first := makeBuildBatch(0)
+	second := makeBuildBatch(colexec.DefaultBatchSize)
+	input := newGatedHashBuildInput(first, second)
+	tc.arg.SetChildren([]vm.Operator{input})
+	require.NoError(t, input.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+
+	directNeed, err := spillBudgetBytes(first)
+	require.NoError(t, err)
+	retainedNeed, err := spillScratchBudgetBytes(first, true)
+	require.NoError(t, err)
+	recoveryNeed := max(directNeed, retainedNeed)
+	require.Positive(t, recoveryNeed)
+
+	const capBytes = uint64(64 << 20)
+	require.Less(t, recoveryNeed, capBytes/2)
+	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+
+	type execOutcome struct {
+		result vm.CallResult
+		err    error
+	}
+	execDone := make(chan execOutcome, 1)
+	go func() {
+		result, execErr := vm.Exec(tc.arg, tc.proc)
+		execDone <- execOutcome{result: result, err: execErr}
+	}()
+
+	select {
+	case <-input.firstBatchRetained:
+	case outcome := <-execDone:
+		t.Fatalf("HashBuild stopped before retaining the first batch: result=%+v err=%v", outcome.result, outcome.err)
+	}
+	continued := false
+	defer func() {
+		if !continued {
+			close(input.continueInput)
+		}
+	}()
+
+	usedAfterFirst := generation.Used()
+	require.Less(t, usedAfterFirst+recoveryNeed, capBytes)
+	// Model sibling HashBuild workers consuming every byte except one less than
+	// this worker needs to recover. A valid recovery lease is already charged
+	// and remains usable; a lazy design has no way to start spilling here.
+	blockerBytes := capBytes - usedAfterFirst - (retainedNeed - 1)
+	blocker, err := generation.Reserve(blockerBytes)
+	require.NoError(t, err)
+
+	close(input.continueInput)
+	continued = true
+	outcome := <-execDone
+	require.NoError(t, outcome.err)
+	require.Equal(t, vm.ExecStop, outcome.result.Status)
+
+	result, err := message.ReceiveJoinMapResult(
+		tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx,
+		tc.proc.GetMessageBoard(), tc.proc.Ctx)
+	require.NoError(t, err)
+	require.True(t, result.IsSuccess())
+	jm := result.JoinMap()
+	require.NotNil(t, jm)
+	require.True(t, jm.IsSpilled())
+	require.Equal(t, int64(2*colexec.DefaultBatchSize), jm.GetRowCount())
+	payload, err := jm.TakeSpillBuildPayload()
+	require.NoError(t, err)
+	require.NoError(t, payload.Close())
+
+	extra := tc.arg.OpAnalyzer.GetOpStats().ExtraStats
+	require.Equal(t, int64(1), extra["HashBuildSpillStarts"])
+	require.Zero(t, extra["HashBuildSpillScratchReserveRejects"])
+	require.Zero(t, extra["HashBuildSpillScratchGrowRejects"])
+
+	require.True(t, blocker.Release())
+	require.Zero(t, generation.Used())
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	input.Reset(tc.proc, false, nil)
+	input.Free(tc.proc, false, nil)
+	first.Clean(tc.proc.Mp())
+	second.Clean(tc.proc.Mp())
+	generation.Close()
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
+func TestShuffleHashBuildRecoveryLeaseSharedGenerationFanout(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	values := make([]int32, colexec.DefaultBatchSize)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.SetRowCount(len(values))
+	defer bat.Clean(proc.Mp())
+
+	var projectionBuilder HashmapBuilder
+	projection, err := projectionBuilder.projectedBatchCopy(bat)
+	require.NoError(t, err)
+	directNeed, err := spillBudgetBytes(bat)
+	require.NoError(t, err)
+	directNeed, err = spillRecoveryReservationBytes(directNeed)
+	require.NoError(t, err)
+	retainedNeed, err := spillRetainedRecoveryBudgetBytes(projection)
+	require.NoError(t, err)
+	retainedNeed, err = spillRecoveryReservationBytes(retainedNeed)
+	require.NoError(t, err)
+	perWorker := max(directNeed, retainedNeed)
+
+	for _, workers := range []int{1, 8, 64} {
+		t.Run(fmt.Sprintf("workers-%d", workers), func(t *testing.T) {
+			capBytes, err := spillCheckedMul(perWorker, uint64(workers))
+			require.NoError(t, err)
+			budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+
+			containers := make([]container, workers)
+			analyzers := make([]process.Analyzer, workers)
+			start := make(chan struct{})
+			errs := make(chan error, workers)
+			var wg sync.WaitGroup
+			for i := range containers {
+				containers[i].hashmapBuilder.setBudget(generation)
+				analyzers[i] = process.NewAnalyzer(i, false, false, "recovery fanout")
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					<-start
+					if reserveErr := containers[i].ensureDirectSpillRecovery(bat, analyzers[i]); reserveErr != nil {
+						errs <- reserveErr
+						return
+					}
+					errs <- containers[i].ensureRetainedSpillRecovery(projection, analyzers[i])
+				}(i)
+			}
+			close(start)
+			wg.Wait()
+			close(errs)
+			for reserveErr := range errs {
+				require.NoError(t, reserveErr)
+			}
+			require.Equal(t, capBytes, generation.Used())
+			for i := range containers {
+				require.Equal(t, perWorker, containers[i].spillScratchBase)
+				require.NotNil(t, containers[i].spillScratchReservation)
+			}
+
+			wg = sync.WaitGroup{}
+			for i := range containers {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					containers[i].releaseSpillScratchReservation()
+					containers[i].releaseSpillScratchReservation()
+				}(i)
+			}
+			wg.Wait()
+			require.Zero(t, generation.Used())
+			generation.Close()
+		})
+	}
+}
+
+func TestShuffleHashBuildCancellationReleasesRecoveryLease(t *testing.T) {
+	typ := types.T_int32.ToType()
+	tc := newTestCase(t, []bool{false}, []types.Type{typ}, []*plan.Expr{newExpr(0, typ)})
+	tc.arg.IsShuffle = true
+	tc.arg.ShuffleIdx = 0
+	tc.arg.SpillThreshold = math.MaxInt64
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 3504}
+
+	ctx, cancel := context.WithCancelCause(tc.proc.Ctx)
+	process.ReplacePipelineCtx(tc.proc, ctx, cancel)
+	makeBuildBatch := func(base int32) *batch.Batch {
+		values := make([]int32, colexec.DefaultBatchSize)
+		for i := range values {
+			values[i] = base + int32(i)
+		}
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, tc.proc.Mp())
+		bat.SetRowCount(len(values))
+		return bat
+	}
+	first := makeBuildBatch(0)
+	second := makeBuildBatch(colexec.DefaultBatchSize)
+	input := newGatedHashBuildInput(first, second)
+	tc.arg.SetChildren([]vm.Operator{input})
+	require.NoError(t, input.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+
+	const capBytes = uint64(64 << 20)
+	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+
+	type execOutcome struct {
+		result vm.CallResult
+		err    error
+	}
+	execDone := make(chan execOutcome, 1)
+	go func() {
+		result, execErr := vm.Exec(tc.arg, tc.proc)
+		execDone <- execOutcome{result: result, err: execErr}
+	}()
+	select {
+	case <-input.firstBatchRetained:
+	case outcome := <-execDone:
+		t.Fatalf("HashBuild stopped before the cancellation boundary: result=%+v err=%v", outcome.result, outcome.err)
+	}
+	require.NotNil(t, tc.arg.ctr.spillScratchReservation)
+	require.Positive(t, generation.Used())
+
+	cancel(context.Canceled)
+	outcome := <-execDone
+	require.ErrorIs(t, outcome.err, context.Canceled)
+	require.Nil(t, tc.arg.ctr.spillScratchReservation,
+		"build terminal cleanup owns the recovery lease")
+	require.Positive(t, generation.Used(),
+		"the copied batch remains owned until pipeline Reset")
+
+	terminal, err := message.ReceiveJoinMapResult(
+		tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx,
+		tc.proc.GetMessageBoard(), context.Background())
+	require.NoError(t, err)
+	require.True(t, terminal.IsBuildError())
+
+	tc.arg.Reset(tc.proc, true, outcome.err)
+	tc.arg.Reset(tc.proc, true, outcome.err)
+	input.Reset(tc.proc, true, outcome.err)
+	require.Zero(t, generation.Used())
+	tc.arg.Free(tc.proc, true, outcome.err)
+	tc.arg.Free(tc.proc, true, outcome.err)
+	input.Free(tc.proc, true, outcome.err)
+	first.Clean(tc.proc.Mp())
+	second.Clean(tc.proc.Mp())
+	generation.Close()
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
+func TestShuffleHashBuildRecoveryAdmissionFailsBeforeRetain(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_varchar.ToType()}, []*plan.Expr{newExpr(0, types.T_varchar.ToType())})
 	tc.arg.IsShuffle = true
 	tc.arg.ShuffleIdx = 0
@@ -2698,10 +2987,9 @@ func TestShuffleHashBuildLazySpillAdmissionFailsClosed(t *testing.T) {
 	require.NoError(t, err)
 	build.SetRowCount(1)
 
-	// Leave enough budget for the retained copy itself, but not for the
-	// additional scratch needed after the threshold requests spill. The lazy
-	// path must fail before scratch allocation instead of requiring every
-	// resident batch to pre-admit a hypothetical future spill.
+	// Leave enough budget for the retained copy in isolation, but not for the
+	// direct recovery path. Retention is forbidden: failing before the copy is
+	// the only state that neither exceeds the cap nor strands owned build rows.
 	copyPeak, err := tc.arg.ctr.hashmapBuilder.projectedBatchCopyBytes(build)
 	require.NoError(t, err)
 	budget := process.MustNewHashBuildBudget(copyPeak, copyPeak)
@@ -2717,8 +3005,9 @@ func TestShuffleHashBuildLazySpillAdmissionFailsClosed(t *testing.T) {
 		"terminal spill admission must use the resource-exhausted wire code")
 	require.Contains(t, buildErr.Error(), "hash build memory budget exceeded")
 	extra := tc.arg.OpAnalyzer.GetOpStats().ExtraStats
-	require.Equal(t, int64(1), extra["HashBuildSpillStarts"])
-	require.Equal(t, int64(1), extra["HashBuildSpillScratchReserveRejects"])
+	require.Zero(t, extra["HashBuildSpillStarts"])
+	require.Equal(t, int64(1), extra["HashBuildSpillRecoveryReserveRejects"])
+	require.Zero(t, extra["HashBuildSpillScratchReserveRejects"])
 	require.Equal(t, int64(1), extra["QueryHashBudgetRejects"])
 
 	result, err := message.ReceiveJoinMapResult(

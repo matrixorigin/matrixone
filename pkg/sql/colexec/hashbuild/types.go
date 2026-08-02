@@ -83,9 +83,11 @@ type container struct {
 	spillBucketWriteBufs [spillNumBuckets]bytes.Buffer
 	spillBucketWriteRows [spillNumBuckets]int64
 	spillKeyVecs         []*vector.Vector
-	// spillScratchReservation is a query/CN-charged lease retained while spill
-	// buffers are reusable. It is established lazily before the first scratch
-	// allocation and released with the execution generation.
+	// spillScratchReservation is the query/CN-charged recovery lease for this
+	// execution. Shuffle HashBuild establishes it before retaining spillable
+	// data; spill then reuses the same lease for its bounded scratch buffers.
+	// Direct spill callers may still establish it lazily. Reset, Free, and the
+	// build terminal cleanup all release it idempotently.
 	spillScratchReservation *process.HashBuildReservation
 	// spillScratchBase is the retained scratch floor. Coalesce-buffer growth is
 	// charged on top and must never be mistaken for this floor.
@@ -399,6 +401,9 @@ func hasHashBuildDiagnosticStats(extra map[string]int64) bool {
 		extra["HashBuildRuntimeFilterCollectionFallbacks"] != 0 ||
 		extra["HashBuildRuntimeFilterBudgetFallbacks"] != 0 ||
 		extra["HashBuildRuntimeFilterAllocationFallbacks"] != 0 ||
+		extra["HashBuildSpillRecoveryReserveRejects"] != 0 ||
+		extra["HashBuildSpillRecoveryGrowRejects"] != 0 ||
+		extra["HashBuildSpillRecoveryGrowCount"] != 0 ||
 		extra["HashBuildSpillScratchReserveRejects"] != 0 ||
 		extra["HashBuildSpillScratchGrowRejects"] != 0 ||
 		extra["HashBuildSpillScratchGrowCount"] != 0
@@ -471,6 +476,7 @@ func (hb *HashmapBuilder) CleanCopiedBatchAt(idx int, proc *process.Process) err
 	// reservation cannot be matched safely to Batches.Buf[idx]. Keep the
 	// conservative charges until the last physical batch has been dropped.
 	if len(hb.Batches.Buf) == 0 {
+		hb.retainedSpillTailSelected = 0
 		hb.releaseBatchReservations()
 	}
 	return nil
@@ -509,6 +515,7 @@ func (hb *HashmapBuilder) DrainCopiedBatches(
 	}
 	hb.Batches.Buf = nil
 	hb.Batches.MemSize = 0
+	hb.retainedSpillTailSelected = 0
 	hb.releaseBatchReservations()
 	return nil
 }
