@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"net"
 	"testing"
 	"time"
 
@@ -88,4 +89,41 @@ func TestNewTestServicesUseIndependentPorts(t *testing.T) {
 	})
 
 	require.NotEqual(t, ccfg1.ServiceAddresses, ccfg2.ServiceAddresses)
+}
+
+func TestNewTestServiceRetriesRaftPortCollisionWithStableIdentity(t *testing.T) {
+	// Reserve the exact endpoint that Dragonboat will bind. This exercises the
+	// address-collision retry contract without depending on memberlist's
+	// wildcard binding and self-join timing, which differ across platforms.
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, listener.Close())
+	})
+	occupiedAddress := listener.Addr().String()
+
+	baseGenerator := newTestServiceConfigGenerator(vfs.NewStrictMem())
+	var generatedIDs []string
+	attempts := 0
+	service, ccfg, err := newTestService(func() Config {
+		cfg := baseGenerator()
+		generatedIDs = append(generatedIDs, cfg.UUID)
+		attempts++
+		if attempts == 1 {
+			cfg.RaftAddress = occupiedAddress
+		}
+		return cfg
+	})
+	require.NoError(t, err)
+	require.NotNil(t, service)
+	t.Cleanup(func() {
+		require.NoError(t, service.Close())
+	})
+
+	require.GreaterOrEqual(t, attempts, 2)
+	require.NotZero(t, ccfg.LogShardID)
+	require.NotEmpty(t, ccfg.ServiceAddresses)
+	for _, generatedID := range generatedIDs {
+		require.Equal(t, service.ID(), generatedID)
+	}
 }

@@ -110,7 +110,8 @@ func MergeSortBatches(
 	case types.T_uuid:
 		ds := &fixedDataSlice[types.Uuid]{getFixedCols[types.Uuid](batches, sortKeyIdx)}
 		merge = newMerge(sort.UuidLess, ds, nulls)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_datalink:
 		ds := &varlenaDataSlice{getVarlenaCols(batches, sortKeyIdx)}
 		merge = newMerge(sort.GenericLess[string], ds, nulls)
 	case types.T_Rowid:

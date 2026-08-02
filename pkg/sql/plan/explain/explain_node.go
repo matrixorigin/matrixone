@@ -809,7 +809,7 @@ func (ndesc *NodeDescribeImpl) GetBlockFilterConditionInfo(ctx context.Context, 
 }
 
 func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	if ndesc.Node.NodeType == plan.Node_JOIN && ndesc.Node.Stats.HashmapStats.Shuffle {
+	if !hasRuntimeFilterProbeExpr(ndesc.Node.RuntimeFilterProbeList) {
 		return "", nil
 	}
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
@@ -817,6 +817,11 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, opt
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.RuntimeFilterProbeList {
+			if v == nil || v.Expr == nil {
+				// Expression-less specs are control or transport markers, not
+				// predicates that EXPLAIN can render.
+				continue
+			}
 			if !first {
 				buf.WriteString(", ")
 			}
@@ -838,7 +843,7 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, opt
 }
 
 func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	if ndesc.Node.NodeType == plan.Node_JOIN && ndesc.Node.Stats.HashmapStats.Shuffle {
+	if !hasRuntimeFilterBuildExpr(ndesc.Node.RuntimeFilterBuildList) {
 		return "", nil
 	}
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
@@ -846,11 +851,15 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, op
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.RuntimeFilterBuildList {
+			expr := runtimeFilterBuildExpr(v)
+			if expr == nil {
+				continue
+			}
 			if !first {
 				buf.WriteString(", ")
 			}
 			first = false
-			err := describeExpr(ctx, v.Expr, options, buf)
+			err := describeExpr(ctx, expr, options, buf)
 			if err != nil {
 				return "", err
 			}
@@ -861,6 +870,34 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, op
 		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
 	return buf.String(), nil
+}
+
+func hasRuntimeFilterProbeExpr(specs []*plan.RuntimeFilterSpec) bool {
+	for _, spec := range specs {
+		if spec != nil && spec.Expr != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRuntimeFilterBuildExpr(specs []*plan.RuntimeFilterSpec) bool {
+	for _, spec := range specs {
+		if runtimeFilterBuildExpr(spec) != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeFilterBuildExpr(spec *plan.RuntimeFilterSpec) *plan.Expr {
+	if spec == nil {
+		return nil
+	}
+	if spec.BuildExpr != nil {
+		return spec.BuildExpr
+	}
+	return spec.Expr
 }
 
 func (ndesc *NodeDescribeImpl) GetSendMessageInfo(ctx context.Context, options *ExplainOptions) (string, error) {

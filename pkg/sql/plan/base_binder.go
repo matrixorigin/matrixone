@@ -164,7 +164,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		}
 		if b.builder != nil {
 			var rewritten bool
-			expr, rewritten, err = b.builder.rewriteProjectedEnumOrSetDisplayValueToJSONCast(expr, expr, typ)
+			expr, rewritten, err = b.builder.rewriteProjectedMySQLSpecialTypeDisplayCast(expr, expr, typ)
 			if err != nil {
 				return
 			}
@@ -4454,7 +4454,7 @@ func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) 
 func appendCastBeforeExprWithOverload(
 	ctx context.Context, expr *Expr, toType Type, overloadID int32, isBin ...bool,
 ) (*Expr, error) {
-	expr, rewritten, err := rewriteEnumDisplayValueToJSONCast(ctx, expr, toType)
+	expr, rewritten, err := rewriteMySQLSpecialTypeDisplayCast(ctx, expr, toType)
 	if err != nil {
 		return nil, err
 	}
@@ -4494,7 +4494,16 @@ func appendCastBeforeExprWithOverload(
 	}, nil
 }
 
-func rewriteEnumDisplayValueToJSONCast(ctx context.Context, expr *Expr, toType Type) (*Expr, bool, error) {
+func rewriteMySQLSpecialTypeDisplayCast(ctx context.Context, expr *Expr, toType Type) (*Expr, bool, error) {
+	if isSetDisplayValueExpr(expr) && types.T(toType.Id).IsInteger() && !isSetPlanType(&toType) {
+		// SET columns are wrapped with cast_set_index_to_value during column
+		// binding so ordinary projections expose their labels. Integer casts
+		// require the stored bitmap instead; casting the label is both incorrect
+		// and lossy for SET definitions that contain an empty member.
+		if bitmap, ok := storedSetBitmapExpr(expr); ok {
+			return bitmap, false, nil
+		}
+	}
 	if toType.Id != int32(types.T_json) {
 		return expr, false, nil
 	}
@@ -4508,13 +4517,39 @@ func rewriteEnumDisplayValueToJSONCast(ctx context.Context, expr *Expr, toType T
 	return expr, false, nil
 }
 
-func isEnumOrSetDisplayValueExpr(expr *Expr) bool {
+func storedSetBitmapExpr(expr *Expr) (*Expr, bool) {
+	if !isSetDisplayValueExpr(expr) {
+		return expr, false
+	}
+	fn := expr.GetF()
+	if len(fn.Args) != 2 || fn.Args[1] == nil {
+		return expr, false
+	}
+	bitmap := DeepCopyExpr(fn.Args[1])
+	// The hidden projection is the physical uint64 representation, not a SQL
+	// SET value. Clear the member metadata so downstream assignment treats it
+	// as an ordinary bitmap and does not convert it back through SET semantics.
+	bitmap.Typ.Enumvalues = ""
+	return bitmap, true
+}
+
+func isSetDisplayValueExpr(expr *Expr) bool {
 	if expr == nil {
 		return false
 	}
 	fn := expr.GetF()
-	return fn != nil && fn.Func != nil &&
-		(fn.Func.ObjName == moEnumCastIndexToValueFun || fn.Func.ObjName == moSetCastIndexToValueFun)
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == moSetCastIndexToValueFun
+}
+
+func isEnumOrSetDisplayValueExpr(expr *Expr) bool {
+	if isSetDisplayValueExpr(expr) {
+		return true
+	}
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == moEnumCastIndexToValueFun
 }
 
 func quoteEnumOrSetDisplayValueAsJSON(ctx context.Context, expr *Expr) (*Expr, error) {

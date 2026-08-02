@@ -119,15 +119,7 @@ func jsonOverlaps(
 		return nil
 	}
 
-	rs.UseOptFunctionParamFrame(2)
-	left := jsonOverlapOperand{
-		parameter: parameters[0],
-		wrapper:   vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0]),
-	}
-	right := jsonOverlapOperand{
-		parameter: parameters[1],
-		wrapper:   vector.OptGetBytesParamFromWrapper(rs, 1, parameters[1]),
-	}
+	left, right := newJSONOverlapOperands(parameters, rs)
 	var workspace jsonOverlapWorkspace
 	defer workspace.clear()
 	defer left.prepared.clear()
@@ -173,6 +165,22 @@ func jsonOverlaps(
 		}
 	}
 	return nil
+}
+
+func newJSONOverlapOperands(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+) (left, right jsonOverlapOperand) {
+	result.UseOptFunctionParamFrame(2)
+	left = jsonOverlapOperand{
+		parameter: parameters[0],
+		wrapper:   vector.OptGetBytesParamFromWrapper(result, 0, parameters[0]),
+	}
+	right = jsonOverlapOperand{
+		parameter: parameters[1],
+		wrapper:   vector.OptGetBytesParamFromWrapper(result, 1, parameters[1]),
+	}
+	return left, right
 }
 
 func jsonOverlapEvaluableRows(left, right *jsonOverlapOperand, length int, selectList *FunctionSelectList) int {

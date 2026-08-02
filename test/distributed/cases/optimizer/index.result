@@ -40,9 +40,7 @@ Project  𝄀
   ->  Join  𝄀
         Join Type: INNER   hashOnPK  𝄀
         Join Cond: (t2.c0 = t1.c1)  𝄀
-        Runtime Filter Build: serial(#[-1,0])  𝄀
         ->  Table Scan on d1.t2  𝄀
-              Runtime Filter Probe: t2.__mo_cpkey_col Match Prefix  𝄀
         ->  Join  𝄀
               Join Type: INDEX  𝄀
               Join Cond: (t1.c1 = __mo_index_pri_col)  𝄀

@@ -82,6 +82,7 @@ func initMemMetrics() {
 func initTaskMetrics() {
 	registry.MustRegister(taskShortDurationHistogram)
 	registry.MustRegister(taskLongDurationHistogram)
+	registry.MustRegister(taskCheckpointRetryCounter)
 
 	registry.MustRegister(taskDNMergeStuffCounter)
 	registry.MustRegister(taskDNMergeDurationHistogram)
