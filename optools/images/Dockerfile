@@ -1,9 +1,6 @@
 FROM matrixorigin/golang:1.26.4-ubuntu22.04 AS build-base
 
-# goproxy
-ARG GOPROXY="https://proxy.golang.org,direct"
 ENV GOWORK=off
-RUN go env -w GOPROXY=${GOPROXY}
 
 WORKDIR /go/src/github.com/matrixorigin/matrixone
 
@@ -19,6 +16,11 @@ COPY cgo cgo
 RUN make -C cgo
 
 FROM build-base AS builder
+
+# GOPROXY affects Go modules, not native dependencies. Keeping it out of the
+# native stage preserves that expensive cache when build environments differ.
+ARG GOPROXY="https://proxy.golang.org,direct"
+RUN go env -w GOPROXY=${GOPROXY}
 
 # Typecheck: enable type checking for ToSliceNoTypeCheck and ToSliceNoTypeCheck2
 # Default: 0 (disabled), set to 1 to enable

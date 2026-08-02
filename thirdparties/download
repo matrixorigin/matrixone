@@ -31,8 +31,6 @@ attempts=${MO_DOWNLOAD_ATTEMPTS:-4}
 connect_timeout=${MO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}
 max_time=${MO_DOWNLOAD_MAX_TIME_SECONDS:-120}
 max_bytes=${MO_DOWNLOAD_MAX_BYTES:-134217728}
-backoff=${MO_DOWNLOAD_INITIAL_BACKOFF_SECONDS:-2}
-max_backoff=${MO_DOWNLOAD_MAX_BACKOFF_SECONDS:-10}
 curl_bin=${MO_DOWNLOAD_CURL_BIN:-curl}
 
 case "$url" in
@@ -58,26 +56,10 @@ require_positive_integer() {
 	esac
 }
 
-require_non_negative_integer() {
-	name=$1
-	value=$2
-	case "$value" in
-		'' | *[!0-9]*)
-			echo "$name must be a non-negative integer, got '$value'" >&2
-			exit 2
-			;;
-	esac
-}
-
 require_positive_integer MO_DOWNLOAD_ATTEMPTS "$attempts"
 require_positive_integer MO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS "$connect_timeout"
 require_positive_integer MO_DOWNLOAD_MAX_TIME_SECONDS "$max_time"
 require_positive_integer MO_DOWNLOAD_MAX_BYTES "$max_bytes"
-require_non_negative_integer MO_DOWNLOAD_INITIAL_BACKOFF_SECONDS "$backoff"
-require_non_negative_integer MO_DOWNLOAD_MAX_BACKOFF_SECONDS "$max_backoff"
-if [ "$backoff" -gt "$max_backoff" ]; then
-	backoff=$max_backoff
-fi
 
 case "$expected_sha256" in
 	*[!0-9a-fA-F]*)
@@ -121,6 +103,7 @@ verify_file() {
 }
 
 if [ -f "$destination" ] && verify_file "$destination"; then
+	chmod 0644 "$destination"
 	echo "using verified cached download: $destination"
 	exit 0
 fi
@@ -141,47 +124,57 @@ trap 'exit 129' HUP
 trap 'exit 143' TERM
 tmp=$(mktemp "${destination}.download.XXXXXX")
 
-attempt=1
-delay=$backoff
-while [ "$attempt" -le "$attempts" ]; do
-	echo "downloading dependency (attempt $attempt/$attempts)"
-	if "$curl_bin" --disable --fail --location --show-error \
+# curl versions before 8.4 only honor --max-filesize when the server declares
+# Content-Length. A POSIX file-size limit also bounds chunked/unknown-length
+# responses. The checksum/byte verification below enforces the exact limit;
+# ulimit has the POSIX-mandated 512-byte granularity.
+max_file_blocks=$((max_bytes / 512))
+if [ $((max_bytes % 512)) -ne 0 ]; then
+	max_file_blocks=$((max_file_blocks + 1))
+fi
+
+download_once() (
+	current_file_blocks=$(ulimit -f)
+	case "$current_file_blocks" in
+		unlimited)
+			ulimit -f "$max_file_blocks"
+			;;
+		*[!0-9]*)
+			echo "cannot determine inherited file-size limit: $current_file_blocks" >&2
+			exit 2
+			;;
+		*)
+			# Never relax a stricter limit inherited from the caller.
+			if [ "$current_file_blocks" -gt "$max_file_blocks" ]; then
+				ulimit -f "$max_file_blocks"
+			fi
+			;;
+	esac
+
+	retry_count=$((attempts - 1))
+	retry_max_time=$((max_time * attempts))
+	exec "$curl_bin" --disable --fail --location --show-error \
 		--proto '=https' --proto-redir '=https' \
 		--connect-timeout "$connect_timeout" --max-time "$max_time" \
+		--retry "$retry_count" --retry-all-errors \
+		--retry-max-time "$retry_max_time" \
 		--max-filesize "$max_bytes" \
-		--output "$tmp" "$url"; then
-		if verify_file "$tmp"; then
-			mv -f "$tmp" "$destination"
-			echo "downloaded and verified: $destination"
-			exit 0
-		fi
-		echo "$verification_error" >&2
-	else
-		status=$?
-		echo "download failed with curl exit code $status" >&2
-	fi
+		--output "$tmp" "$url"
+)
 
-	if [ "$attempt" -eq "$attempts" ]; then
-		break
-	fi
+echo "downloading dependency (up to $attempts attempts)"
+if download_once; then
+	:
+else
+	status=$?
+	echo "dependency download failed with curl exit code $status" >&2
+	exit 1
+fi
+if ! verify_file "$tmp"; then
+	echo "$verification_error" >&2
+	exit 1
+fi
 
-	if [ "$delay" -gt 0 ]; then
-		# Equal jitter keeps concurrent CI builds from retrying in lockstep while
-		# retaining a bounded exponential backoff.
-		half_delay=$((delay / 2))
-		jitter=$(( $$ % (delay - half_delay + 1) ))
-		sleep_for=$((half_delay + jitter))
-		echo "retrying in ${sleep_for}s" >&2
-		sleep "$sleep_for"
-	fi
-	attempt=$((attempt + 1))
-	if [ "$delay" -lt "$max_backoff" ]; then
-		delay=$((delay * 2))
-		if [ "$delay" -gt "$max_backoff" ]; then
-			delay=$max_backoff
-		fi
-	fi
-done
-
-echo "dependency download failed after $attempts attempts" >&2
-exit 1
+chmod 0644 "$tmp"
+mv -f "$tmp" "$destination"
+echo "downloaded and verified: $destination"
