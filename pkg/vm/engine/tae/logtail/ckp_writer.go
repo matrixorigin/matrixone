@@ -16,10 +16,12 @@ package logtail
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -255,6 +257,16 @@ func (data *CheckpointData_V2) Sync(
 	ctx context.Context,
 	fs fileservice.FileService,
 ) (location objectio.Location, ckpfiles []string, err error) {
+	transferred := false
+	defer func() {
+		if transferred {
+			return
+		}
+		if cleanupErr := deletePersistedCheckpointObjects(ctx, data.sinker); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
+	}()
+
 	if data.batch != nil && data.batch.RowCount() != 0 {
 		err = data.sinker.Write(ctx, data.batch)
 		if err != nil {
@@ -298,8 +310,22 @@ func (data *CheckpointData_V2) Sync(
 	for _, obj := range files {
 		ckpfiles = append(ckpfiles, obj.ObjectName().String())
 	}
+	transferred = true
 	return
 }
+
+func deletePersistedCheckpointObjects(ctx context.Context, sinker *ioutil.Sinker) error {
+	count, err := sinker.DeletePersisted(ctx)
+	if err != nil {
+		return errors.Join(
+			moerr.NewInternalErrorf(
+				ctx, "delete %d unpublished checkpoint objects", count),
+			err,
+		)
+	}
+	return nil
+}
+
 func (data *CheckpointData_V2) Close() {
 	data.batch.FreeColumns(data.allocator)
 	data.sinker.Close()
@@ -695,6 +721,75 @@ func SyncTableIDBatch(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (locations objectio.LocationSlice, err error) {
+	locations, _, _, _, err = syncTableIDBatch(
+		ctx,
+		start, end,
+		ttl,
+		sinkerThreshold,
+		ckpLocation,
+		ckpVersion,
+		prevTableIDLocation,
+		types.TS{},
+		mp,
+		fs,
+	)
+	return
+}
+
+// SyncTableIDBatchWithHistory merges the table-ID index and returns the
+// coverage marker observed while streaming the predecessor. If
+// requiredPreviousEnd is non-empty, the merge fails before reading the current
+// checkpoint unless the predecessor proves history through that boundary.
+// This lets checkpoint publication validate continuity without reading the
+// predecessor index a second time.
+func SyncTableIDBatchWithHistory(
+	ctx context.Context,
+	start, end types.TS,
+	ttl time.Duration,
+	sinkerThreshold int,
+	ckpLocation objectio.Location,
+	ckpVersion uint32,
+	prevTableIDLocation objectio.LocationSlice,
+	requiredPreviousEnd types.TS,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (
+	locations objectio.LocationSlice,
+	historyStart, historyEnd types.TS,
+	historyKnown bool,
+	err error,
+) {
+	return syncTableIDBatch(
+		ctx,
+		start, end,
+		ttl,
+		sinkerThreshold,
+		ckpLocation,
+		ckpVersion,
+		prevTableIDLocation,
+		requiredPreviousEnd,
+		mp,
+		fs,
+	)
+}
+
+func syncTableIDBatch(
+	ctx context.Context,
+	start, end types.TS,
+	ttl time.Duration,
+	sinkerThreshold int,
+	ckpLocation objectio.Location,
+	ckpVersion uint32,
+	prevTableIDLocation objectio.LocationSlice,
+	requiredPreviousEnd types.TS,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (
+	locations objectio.LocationSlice,
+	historyStart, historyEnd types.TS,
+	historyKnown bool,
+	err error,
+) {
 	dataFactory := ioutil.NewFSinkerImplFactory(
 		TableIDSeqnums,
 		-1,
@@ -712,14 +807,24 @@ func SyncTableIDBatch(
 		ioutil.WithMemorySizeThreshold(sinkerThreshold),
 	)
 	defer sinker.Close()
+	transferred := false
+	defer func() {
+		if transferred {
+			return
+		}
+		if cleanupErr := deletePersistedCheckpointObjects(ctx, sinker); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
+	}()
 	bat := batch.NewWithSchema(false, TableIDAttrs, TableIDTypes)
 	defer bat.Clean(mp)
 
 	tableBatchStart := types.MaxTs()
 	tableBatchEnd := types.TS{}
+	hasPreviousHistory := false
 	minTS := types.BuildTS(end.Physical()-ttl.Nanoseconds(), 0)
 
-	consumeFn := func(preTableIDBatch *batch.Batch, release func()) {
+	consumeFn := func(preTableIDBatch *batch.Batch) error {
 		accountIDs := vector.MustFixedColNoTypeCheck[uint32](preTableIDBatch.Vecs[0])
 		dbIDs := vector.MustFixedColNoTypeCheck[uint64](preTableIDBatch.Vecs[1])
 		tableIDs := vector.MustFixedColNoTypeCheck[uint64](preTableIDBatch.Vecs[2])
@@ -728,8 +833,19 @@ func SyncTableIDBatch(
 
 		for i := 0; i < preTableIDBatch.RowCount(); i++ {
 			if tableIDs[i] == CKPTableIDBatch_SpecialTableID {
-				tableBatchStart = starts[i]
-				tableBatchEnd = ends[i]
+				if !hasPreviousHistory {
+					tableBatchStart = starts[i]
+					tableBatchEnd = ends[i]
+					hasPreviousHistory = true
+				} else {
+					// Preserve only the range every fragment proves it covers.
+					if tableBatchStart.LT(&starts[i]) {
+						tableBatchStart = starts[i]
+					}
+					if tableBatchEnd.GT(&ends[i]) {
+						tableBatchEnd = ends[i]
+					}
+				}
 			}
 			if ends[i].LT(&minTS) {
 				continue
@@ -745,10 +861,13 @@ func SyncTableIDBatch(
 			bat.SetRowCount(bat.Vecs[0].Length())
 
 			if bat.RowCount() >= BatchRowCountThreshold {
-				sinker.Write(ctx, bat)
+				if err := sinker.Write(ctx, bat); err != nil {
+					return err
+				}
 				bat.CleanOnlyData()
 			}
 		}
+		return nil
 	}
 
 	reader, err := NewSyncTableIDReader(prevTableIDLocation, mp, fs)
@@ -766,8 +885,29 @@ func SyncTableIDBatch(
 		if isEnd {
 			break
 		}
-		defer release()
-		consumeFn(bat, release)
+		func() {
+			defer release()
+			err = consumeFn(bat)
+		}()
+		if err != nil {
+			return
+		}
+	}
+
+	if hasPreviousHistory && tableBatchStart.GT(&tableBatchEnd) {
+		hasPreviousHistory = false
+	}
+	historyStart = tableBatchStart
+	historyEnd = tableBatchEnd
+	historyKnown = hasPreviousHistory
+	if !requiredPreviousEnd.IsEmpty() &&
+		(!historyKnown || historyEnd.LT(&requiredPreviousEnd)) {
+		err = moerr.NewInternalErrorf(
+			ctx,
+			"table-ID predecessor history is incomplete: covered %s-%s, required through %s",
+			historyStart.ToString(), historyEnd.ToString(), requiredPreviousEnd.ToString(),
+		)
+		return
 	}
 
 	if !ckpLocation.IsEmpty() {
@@ -783,7 +923,7 @@ func SyncTableIDBatch(
 			end     types.TS
 		}
 		tableInfofs := make(map[uint64]*tableInfo)
-		reader.ForEachRow(
+		if err = reader.ForEachRow(
 			ctx,
 			func(
 				account uint32,
@@ -847,7 +987,9 @@ func SyncTableIDBatch(
 				}
 				return nil
 			},
-		)
+		); err != nil {
+			return
+		}
 
 		for tid, info := range tableInfofs {
 			if tid == CKPTableIDBatch_SpecialTableID {
@@ -858,14 +1000,28 @@ func SyncTableIDBatch(
 			vector.AppendFixed(bat.Vecs[2], tid, false, mp)
 			vector.AppendFixed(bat.Vecs[3], info.start, false, mp)
 			vector.AppendFixed(bat.Vecs[4], info.end, false, mp)
+			bat.SetRowCount(bat.Vecs[0].Length())
 			if bat.RowCount() >= BatchRowCountThreshold {
-				sinker.Write(ctx, bat)
+				if err = sinker.Write(ctx, bat); err != nil {
+					return
+				}
 				bat.CleanOnlyData()
 			}
 		}
 
 	}
 
+	if hasPreviousHistory && !start.IsEmpty() {
+		// Carrying an index across a gap would make the new coverage row claim
+		// history that neither the predecessor index nor this checkpoint
+		// contains. Reject that authority while the predecessor is already being
+		// streamed; the durable checkpoints remain available to the fallback
+		// reader until a continuous index is rebuilt.
+		requiredPreviousEnd := start.Prev()
+		if tableBatchEnd.LT(&requiredPreviousEnd) {
+			hasPreviousHistory = false
+		}
+	}
 	if !ckpLocation.IsEmpty() {
 		tableBatchEnd = end
 	}
@@ -874,21 +1030,26 @@ func SyncTableIDBatch(
 		tableBatchStart = minTS
 	}
 
-	if prevTableIDLocation.Len() == 0 {
+	if !hasPreviousHistory && !ckpLocation.IsEmpty() {
 		tableBatchStart = start
 		tableBatchEnd = end
+		hasPreviousHistory = true
 	}
 
-	vector.AppendFixed(bat.Vecs[0], uint32(0), false, mp)
-	vector.AppendFixed(bat.Vecs[1], uint64(0), false, mp)
-	vector.AppendFixed(bat.Vecs[2], uint64(0), false, mp)
-	vector.AppendFixed(bat.Vecs[3], tableBatchStart, false, mp)
-	vector.AppendFixed(bat.Vecs[4], tableBatchEnd, false, mp)
+	if hasPreviousHistory {
+		vector.AppendFixed(bat.Vecs[0], uint32(0), false, mp)
+		vector.AppendFixed(bat.Vecs[1], uint64(0), false, mp)
+		vector.AppendFixed(bat.Vecs[2], uint64(0), false, mp)
+		vector.AppendFixed(bat.Vecs[3], tableBatchStart, false, mp)
+		vector.AppendFixed(bat.Vecs[4], tableBatchEnd, false, mp)
+	}
 
 	bat.SetRowCount(bat.Vecs[0].Length())
 
-	if err = sinker.Write(ctx, bat); err != nil {
-		return
+	if bat.RowCount() > 0 {
+		if err = sinker.Write(ctx, bat); err != nil {
+			return
+		}
 	}
 
 	if err = sinker.Sync(ctx); err != nil {
@@ -905,6 +1066,10 @@ func SyncTableIDBatch(
 		location.SetID(uint16(file.BlkCnt()))
 		locations.Append(location)
 	}
+	historyStart = tableBatchStart
+	historyEnd = tableBatchEnd
+	historyKnown = hasPreviousHistory
+	transferred = true
 	return
 }
 
@@ -944,7 +1109,9 @@ func MockTableIDBatch(
 		vector.AppendFixed(bat.Vecs[4], end, false, mp)
 		bat.SetRowCount(bat.Vecs[0].Length())
 		if bat.RowCount() >= BatchRowCountThreshold {
-			sinker.Write(ctx, bat)
+			if err = sinker.Write(ctx, bat); err != nil {
+				return
+			}
 			bat.CleanOnlyData()
 		}
 	}

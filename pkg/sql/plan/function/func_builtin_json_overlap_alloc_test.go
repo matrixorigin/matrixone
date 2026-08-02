@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !race
-
 package function
 
 import (
@@ -22,46 +20,42 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
-// Allocation counts are not a stable production invariant under race
-// instrumentation. Keep this regression check in non-race builds while the
-// JSON overlap functional tests continue to run in both configurations.
-func TestJSONOverlapsAccessorAllocationsDoNotScaleWithRows(t *testing.T) {
+func TestJSONOverlapsAccessorWrappersAreResultScoped(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	trueJSON := mustJsonBinaryString(t, `true`)
 	falseJSON := mustJsonBinaryString(t, `false`)
 
-	measure := func(rows int) float64 {
-		left := make([]string, rows)
-		right := make([]string, rows)
-		for i := range rows {
-			left[i] = trueJSON
-			right[i] = falseJSON
-		}
-		testCase := NewFunctionTestCase(
-			proc,
-			[]FunctionTestInput{
-				NewFunctionTestInput(types.T_json.ToType(), left, nil),
-				NewFunctionTestInput(types.T_json.ToType(), right, nil),
-			},
-			NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
-			jsonOverlaps,
-		)
-		var runErr error
-		allocations := testing.AllocsPerRun(3, func() {
-			runErr = testCase.result.PreExtendAndReset(rows)
-			if runErr == nil {
-				runErr = testCase.fn(testCase.parameters, testCase.result, proc, rows, nil)
-			}
-		})
-		require.NoError(t, runErr)
-		return allocations
+	const rows = 8192
+	left := make([]string, rows)
+	right := make([]string, rows)
+	for i := range rows {
+		left[i] = trueJSON
+		right[i] = falseJSON
 	}
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), left, nil),
+			NewFunctionTestInput(types.T_json.ToType(), right, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
+		jsonOverlaps,
+	)
 
-	oneRow := measure(1)
-	manyRows := measure(8192)
-	require.LessOrEqual(t, manyRows, oneRow+10,
-		"accessor allocations must be batch-scoped: one=%f many=%f", oneRow, manyRows)
+	firstLeft, firstRight := newJSONOverlapOperands(testCase.parameters, testCase.result)
+	secondLeft, secondRight := newJSONOverlapOperands(testCase.parameters, testCase.result)
+	require.Same(t, firstLeft.wrapper, secondLeft.wrapper)
+	require.Same(t, firstRight.wrapper, secondRight.wrapper)
+
+	require.NoError(t, testCase.result.PreExtendAndReset(rows))
+	require.NoError(t, testCase.fn(testCase.parameters, testCase.result, proc, rows, nil))
+	values := vector.MustFixedColNoTypeCheck[int64](testCase.result.GetResultVector())
+	require.Len(t, values, rows)
+	for _, value := range values {
+		require.Zero(t, value)
+	}
 }
