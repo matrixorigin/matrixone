@@ -59,18 +59,3 @@ function install_go_ut_analysis() {
     retry_command "${max_attempts}" "${delay_seconds}" \
         go install "github.com/matrixorigin/go-ut-analysis@${GO_UT_ANALYSIS_VERSION}"
 }
-
-function exclude_packages() {
-    if (( $# == 0 )); then
-        echo "Usage: exclude_packages SCOPE [PACKAGE...]" >&2
-        return 2
-    fi
-
-    local scope=$1
-    local package
-    shift
-    for package in "$@"; do
-        scope=$(printf '%s\n' "${scope}" | grep -Fvx "${package}" || true)
-    done
-    printf '%s\n' "${scope}"
-}

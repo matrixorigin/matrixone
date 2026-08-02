@@ -119,35 +119,3 @@ func TestInstallGoUTAnalysisPreservesFinalFailure(t *testing.T) {
 	}
 	assertAttempts(t, counter, arguments, 3)
 }
-
-func TestExcludePackages(t *testing.T) {
-	toolsPath, err := filepath.Abs("ut_tools.bash")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("bash", "-c", `source "$1"; exclude_packages "$2" pkg/embed pkg/tests/ddl`,
-		"bash", toolsPath, "pkg/a\npkg/embed\npkg/tests/ddl\npkg/z")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("exclude packages: %v: %s", err, output)
-	}
-	if got, want := string(output), "pkg/a\npkg/z\n"; got != want {
-		t.Fatalf("unexpected filtered scope: got %q, want %q", got, want)
-	}
-}
-
-func TestExcludePackagesRejectsMissingScope(t *testing.T) {
-	toolsPath, err := filepath.Abs("ut_tools.bash")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("bash", "-c", `source "$1"; exclude_packages`, "bash", toolsPath)
-	output, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("expected missing scope to fail: %s", output)
-	}
-	exitError, ok := err.(*exec.ExitError)
-	if !ok || exitError.ExitCode() != 2 {
-		t.Fatalf("expected status 2, got %v: %s", err, output)
-	}
-}

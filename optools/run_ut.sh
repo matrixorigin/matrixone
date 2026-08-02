@@ -217,46 +217,8 @@ function run_tests(){
 
     if [[ $SKIP_TESTS == 'race' ]]; then
         logger "INF" "Run UT without race check"
-        local embedded_test_scope
-        local parallel_test_scope
-        local parallel_status=0
-        local embedded_status=0
-
-        # Each of these packages starts or reuses a complete embedded cluster.
-        # Running several such packages together can exhaust a 16 GiB runner
-        # after startup and starve HAKeeper/Dragonboat even though their port
-        # ranges and bootstrap phases are isolated.
-        if ! embedded_test_scope=$(go list ${GO_MODULE_MODE} \
-            ./pkg/embed \
-            ./pkg/tests/ddl \
-            ./pkg/tests/dml \
-            ./pkg/tests/features \
-            ./pkg/tests/issues \
-            ./pkg/tests/partition \
-            ./pkg/tests/shard \
-            ./pkg/tests/txnexecutor \
-            ./pkg/tests/upgrade); then
-            logger "ERR" "Failed to resolve embedded-cluster test packages"
-            UT_TEST_STATUS=1
-            return 0
-        fi
-        parallel_test_scope=$(exclude_packages "${test_scope}" ${embedded_test_scope})
-
-        if [[ -n "${parallel_test_scope}" ]]; then
-            logger "INF" "Run ordinary UT packages with parallelism ${UT_PARALLEL}"
-            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" ${parallel_test_scope} > $UT_REPORT
-            parallel_status=$?
-        else
-            : > "${UT_REPORT}"
-        fi
-
-        logger "INF" "Run embedded-cluster UT packages serially"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" ${embedded_test_scope} >> $UT_REPORT
-        embedded_status=$?
-
-        if (( parallel_status != 0 || embedded_status != 0 )); then
-            UT_TEST_STATUS=1
-        fi
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m"  $test_scope > $UT_REPORT
+        UT_TEST_STATUS=$?
     else
         logger "INF" "Run UT with race check"
         local plan_package
