@@ -737,6 +737,11 @@ func TestFinishStreamRacesWithSessionClose(t *testing.T) {
 }
 
 func TestServerTimeoutCacheWillRemoved(t *testing.T) {
+	type cacheObservation struct {
+		cache   MessageCache
+		session ClientSession
+	}
+
 	scanDone := make(chan struct{}, 1)
 	testRPCServer(t, func(rs *server) {
 		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
@@ -747,34 +752,46 @@ func TestServerTimeoutCacheWillRemoved(t *testing.T) {
 			assert.NoError(t, c.Close())
 		}()
 
-		cc := make(chan MessageCache, 1)
+		cacheCreated := make(chan cacheObservation, 1)
 		rs.RegisterRequestHandler(func(ctx context.Context, msg RPCMessage, seq uint64, cs ClientSession) error {
 			request := msg.Message
 			cache, err := cs.CreateCache(ctx, request.GetID())
 			if err != nil {
 				return err
 			}
-			cc <- cache
-			return cache.Add(request)
+			if err := cache.Add(request); err != nil {
+				return err
+			}
+			select {
+			case cacheCreated <- cacheObservation{
+				cache:   cache,
+				session: cs,
+			}:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		})
 
 		st, err := c.NewStream(context.Background(), testAddr, false)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		defer func() {
 			assert.NoError(t, st.Close(false))
 		}()
 
 		// Stream.Send requires request.GetID() == stream.ID(); stream id is assigned by backend at NewStream().
-		assert.NoError(t, st.Send(ctx, newTestMessage(st.ID())))
-		cache := <-cc
-		v, ok := rs.sessions.Load(uint64(1))
-		require.True(t, ok)
-		cs := v.(*clientSession)
+		require.NoError(t, st.Send(ctx, newTestMessage(st.ID())))
+		var observation cacheObservation
+		select {
+		case observation = <-cacheCreated:
+		case <-ctx.Done():
+			t.Fatal("server handler did not create the message cache")
+		}
 	waitForRetirement:
 		for {
 			select {
 			case <-scanDone:
-				cached, err := cs.GetCache(st.ID())
+				cached, err := observation.session.GetCache(st.ID())
 				require.NoError(t, err)
 				if cached == nil {
 					break waitForRetirement
@@ -783,7 +800,7 @@ func TestServerTimeoutCacheWillRemoved(t *testing.T) {
 				t.Fatal("message cache was not retired by timeout scans")
 			}
 		}
-		_, err = cache.Len()
+		_, err = observation.cache.Len()
 		require.Error(t, err, "expired cache must be closed before removal")
 	}, WithServerMessageCacheScanHookForTesting(func() {
 		select {
