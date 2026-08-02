@@ -2841,8 +2841,8 @@ func dataBranchSourceColToTargetIdx(
 // isDataBranchDerivedCompositePKColumn reports whether the two columns are the
 // hidden serialization of the same logical composite primary key. COPY ALTER
 // rebuilds this derived column and may assign it a new Seqnum even though the
-// component-column identities, which checkDataBranchPrimaryKeyCompatibility
-// has already validated, remain unchanged.
+// component-column identities, which schema reconciliation has already
+// validated, remain unchanged.
 func isDataBranchDerivedCompositePKColumn(
 	sourceDef, targetDef *plan2.TableDef,
 	sourceCol, targetCol *plan2.ColDef,
@@ -2992,14 +2992,22 @@ func dataBranchHistoricalProbeStuff(
 ) tableStuff {
 	probeStuff := tblStuff
 	probeStuff.lcaRel = endpointRel
-	if endpointRel.GetTableID(ctx) == tblStuff.tarRel.GetTableID(ctx) {
+	endpointTableID := endpointRel.GetTableID(ctx)
+	if endpointTableID == tblStuff.tarRel.GetTableID(ctx) {
 		// Target-side hydration restores the current values of columns that
 		// were absent or incompatible in an older physical generation.
 		probeStuff.tarRel = endpointRel
 		probeStuff.def.tarOnlyIdxes = nil
 		probeStuff.def.lcaColNames = nil
-	} else {
+	} else if endpointTableID == tblStuff.baseRel.GetTableID(ctx) {
+		// Base-side hydration emits SQL against the base endpoint, so map the
+		// target batch layout to the base endpoint's visible column names.
 		probeStuff.def.lcaColNames = probeStuff.def.baseColNames
+	} else {
+		// A bounded target-side PICK can hydrate from an older physical target
+		// generation. Its relation definition already carries that generation's
+		// exact names; base endpoint names are neither valid nor needed here.
+		probeStuff.def.lcaColNames = nil
 	}
 	return probeStuff
 }

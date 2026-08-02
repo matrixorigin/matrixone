@@ -1522,15 +1522,6 @@ func dataBranchPrimaryKeyColumns(tblDef *plan.TableDef) (kind int, names []strin
 	return normalKind, []string{tblDef.Pkey.PkeyColName}
 }
 
-func checkDataBranchPrimaryKeyCompatibility(tarDef, baseDef *plan.TableDef) error {
-	return checkDataBranchPrimaryKeyCompatibilityWithResolver(
-		tarDef, baseDef,
-		func(tarCol *plan.ColDef) *plan.ColDef {
-			return dataBranchColumnDefByLogicalName(baseDef, tarCol)
-		},
-	)
-}
-
 func checkDataBranchPrimaryKeyCompatibilityWithResolver(
 	tarDef, baseDef *plan.TableDef,
 	resolveBaseColumn dataBranchEndpointColumnResolver,

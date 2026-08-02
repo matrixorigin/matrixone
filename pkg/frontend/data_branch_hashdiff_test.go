@@ -1191,12 +1191,14 @@ func TestLCAProbeColumnLayoutKeepsHistoricalNameAfterEndpointRename(t *testing.T
 	require.Equal(t, []string{"id"}, pkNames)
 }
 
-func TestDataBranchHistoricalProbeStuffUsesEndpointRenameMapping(t *testing.T) {
+func TestDataBranchHistoricalProbeStuffMapsOnlyBaseEndpointNames(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	targetRel := mock_frontend.NewMockRelation(ctrl)
 	baseRel := mock_frontend.NewMockRelation(ctrl)
+	historicalTargetRel := mock_frontend.NewMockRelation(ctrl)
 	targetRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(2)).AnyTimes()
 	baseRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(3)).AnyTimes()
+	historicalTargetRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(4)).AnyTimes()
 	tblStuff := tableStuff{tarRel: targetRel, baseRel: baseRel}
 	tblStuff.def.baseColNames = []string{"a", "base_name"}
 	tblStuff.def.lcaColNames = []string{"a", "ancestor_name"}
@@ -1206,6 +1208,12 @@ func TestDataBranchHistoricalProbeStuffUsesEndpointRenameMapping(t *testing.T) {
 
 	baseProbe := dataBranchHistoricalProbeStuff(context.Background(), tblStuff, baseRel)
 	require.Equal(t, []string{"a", "base_name"}, baseProbe.def.lcaColNames)
+
+	historicalTargetProbe := dataBranchHistoricalProbeStuff(
+		context.Background(), tblStuff, historicalTargetRel,
+	)
+	require.Nil(t, historicalTargetProbe.def.lcaColNames)
+	require.Same(t, targetRel, historicalTargetProbe.tarRel)
 }
 
 func TestLCAProbeColumnLayoutExcludesIncompatibleTargetOnlyColumn(t *testing.T) {
