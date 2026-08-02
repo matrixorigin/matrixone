@@ -90,21 +90,21 @@ L_COMMENT      VARCHAR(44) NOT NULL,
 PRIMARY KEY (L_ORDERKEY, L_LINENUMBER),constraint fk_l1 foreign key(L_ORDERKEY) REFERENCES ORDERS_fk(o_orderkey),constraint fk_l2 foreign key(L_PARTKEY) REFERENCES PART_fk(P_PARTKEY),constraint fk_l3 foreign key(L_SUPPKEY) REFERENCES SUPPLIER_fk(S_SUPPKEY));
 insert into lineitem_fk values(5999968,199,9991,2,46,63179.16,0.08,0.06,"R","F","1993-09-16","1993-09-21","1993-10-02","COLLECT COD","RAIL","dolites wake");
 update nation_fk set n_nationkey=10 where n_nationkey=13;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update lineitem_fk set l_partkey=2 where l_suppkey=9991;
 Cannot add or update a child row: a foreign key constraint fails
 update PARTSUPP_fk set PS_PARTKEY=40;
 Cannot add or update a child row: a foreign key constraint fails
 update orders_fk set O_ORDERKEY=1 where O_CUSTKEY=12;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update supplier_fk set s_suppkey=11 where s_nationkey=13;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update customer_fk set c_nationkey=6;
 Cannot add or update a child row: a foreign key constraint fails
 update part_fk set p_partkey=200 where P_RETAILPRICE=2097.99;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update region_fk set r_regionkey=5 where r_name="ASIA";
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 delete from nation_fk where n_nationkey=13;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 select * from SUPPLIER_fk;
