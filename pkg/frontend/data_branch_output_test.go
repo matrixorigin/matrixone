@@ -665,6 +665,43 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 		require.Equal(t, uint32(types.MaxVarcharLen), col.Length())
 	})
 
+	t.Run("default output preserves binary charset metadata", func(t *testing.T) {
+		binaryTblStuff := tblStuff
+		binaryTblStuff.def.colNames = []string{"b", "bn", "vb", "s"}
+		binaryTblStuff.def.colTypes = []types.Type{
+			types.New(types.T_bit, 10, 0),
+			types.New(types.T_binary, 8, 0),
+			types.New(types.T_varbinary, 32, 0),
+			types.New(types.T_varchar, 32, 0),
+		}
+		binaryTblStuff.def.visibleIdxes = []int{0, 1, 2, 3}
+
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		stmt := &tree.DataBranchDiff{
+			TargetTable: *target,
+			BaseTable:   *base,
+			OutputOpt:   nil,
+		}
+		require.NoError(t, buildOutputSchema(ctx, ses, stmt, binaryTblStuff))
+
+		mrs := ses.GetMysqlResultSet()
+		for idx, expectedType := range []defines.MysqlType{
+			defines.MYSQL_TYPE_BIT,
+			defines.MYSQL_TYPE_VARCHAR,
+			defines.MYSQL_TYPE_VARCHAR,
+			defines.MYSQL_TYPE_VAR_STRING,
+		} {
+			col, err := mrs.GetColumn(ctx, uint64(idx+2))
+			require.NoError(t, err)
+			require.Equal(t, expectedType, col.ColumnType())
+			expectedCharset := uint16(charsetBinary)
+			if idx == 3 {
+				expectedCharset = charsetVarchar
+			}
+			require.Equal(t, expectedCharset, col.(*MysqlColumn).Charset())
+		}
+	})
+
 	t.Run("summary output", func(t *testing.T) {
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := &tree.DataBranchDiff{
