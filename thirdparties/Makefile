@@ -13,6 +13,7 @@
 # limitations under the License.
 
 PWD=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+DOWNLOAD=$(PWD)/download
 UNAME_S=$(shell uname -s | tr A-Z a-z)
 UNAME_M=$(shell uname -m)
 # Extracted third-party sources live in _-prefixed directories: go/build skips
@@ -172,17 +173,13 @@ install/lib/libroaring.a:
 #   linux amd64  -> onnxruntime.so
 #   linux arm64  -> onnxruntime_arm64.so
 #   macOS arm64  -> onnxruntime_arm64.dylib
-onnxruntime: install/lib/$(ONNX_LIB)
+onnxruntime: | init
+	$(DOWNLOAD) "$(ONNX_BASE_URL)/$(ONNX_SRC)" "$(ONNX_SHA256)" "install/lib/$(ONNX_LIB)"
 
-# Download to a temp file, verify the pinned SHA-256, then move into place.
-# sha256sum on linux, shasum -a 256 on macOS.
-install/lib/$(ONNX_LIB): | init
-	curl -fSL -o $@.tmp $(ONNX_BASE_URL)/$(ONNX_SRC)
-	@echo "$(ONNX_SHA256)  $@.tmp" | (command -v sha256sum > /dev/null && sha256sum -c - || shasum -a 256 -c -) \
-		|| { echo "onnxruntime checksum mismatch for $(ONNX_SRC)"; rm -f $@.tmp; exit 1; }
-	mv $@.tmp $@
+test-download:
+	$(PWD)/download_test
 
 clean:
 	rm -rf install $(USEARCH_DIR) $(STRINGZILLA_DIR) $(SIMSIMD_DIR) $(FP16_DIR) $(CROARING_TMP)
 
-.PHONY: usearch stringzilla fp16 simsimd init croaring onnxruntime
+.PHONY: usearch stringzilla fp16 simsimd init croaring onnxruntime test-download
