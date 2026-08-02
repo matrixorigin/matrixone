@@ -109,7 +109,7 @@ jobs:
   matrixone-coverage-merge:
     name: Matrixone Utils CI
     needs: [check-pr-valid, bvt-group-plan, matrixone-ut-coverage, matrixone-compose-ci, matrixone-standalone-ci]
-    if: ${{ always() && needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
+    if: ${{ !cancelled() && needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/coverage-merge.yaml@main
     with:
       prerequisites_ready: ${{ needs.bvt-group-plan.result == 'success' && needs.matrixone-ut-coverage.result == 'success' && needs.matrixone-ut-coverage.outputs.coverage_ready == 'true' && needs.matrixone-compose-ci.result == 'success' && needs.matrixone-standalone-ci.result == 'success' }}
