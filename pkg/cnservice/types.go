@@ -51,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -619,6 +620,16 @@ func (s *service) getPartitionServiceConfig() partitionservice.Config {
 	return s.cfg.PartitionService
 }
 
+type serviceLifecycleState uint8
+
+const (
+	serviceInitialized serviceLifecycleState = iota
+	serviceStarting
+	serviceStarted
+	serviceClosing
+	serviceClosed
+)
+
 type service struct {
 	metadata       metadata.CNStore
 	cfg            *Config
@@ -667,11 +678,19 @@ type service struct {
 	queryClient qclient.QueryClient
 	// udfService is used to handle non-sql udf
 	udfService       udf.Service
+	bootstrapMu      sync.RWMutex
 	bootstrapService bootstrap.Service
-	incrservice      incrservice.AutoIncrementService
+	// beforeBootstrapClose is a deterministic test barrier.
+	beforeBootstrapClose func()
+	incrservice          incrservice.AutoIncrementService
+	txnTraceService      trace.Service
 
-	stopper *stopper.Stopper
-	aicm    *defines.AutoIncrCacheManager
+	stopper     *stopper.Stopper
+	aicm        *defines.AutoIncrCacheManager
+	lifecycleMu sync.Mutex
+	lifecycle   serviceLifecycleState
+	closeOnce   sync.Once
+	closeErr    error
 
 	task struct {
 		sync.RWMutex
@@ -696,6 +715,13 @@ type service struct {
 		// details are not recorded for simplicity as suggested by @nnsgmsone
 		counter atomic.Int64
 		client  cnclient.PipelineClient
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		closing bool
+		nextID  uint64
+		cancels map[uint64]context.CancelFunc
+
+		beforeAdmission func()
 	}
 
 	CNMemoryThrottler rscthrottler.RSCThrottler

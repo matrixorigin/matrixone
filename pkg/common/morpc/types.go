@@ -147,6 +147,8 @@ type ClientSession interface {
 	// CreateCache create a message cache using cache ID. Cache will removed if
 	// context is done.
 	CreateCache(ctx context.Context, cacheID uint64) (MessageCache, error)
+	// CreateCacheWithCancel transfers cancel ownership to the cache.
+	CreateCacheWithCancel(ctx context.Context, cacheID uint64, cancel context.CancelFunc) (MessageCache, error)
 	// DeleteCache delete cache using the spec cacheID
 	DeleteCache(cacheID uint64)
 	// GetCache returns the message cache

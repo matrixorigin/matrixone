@@ -53,6 +53,9 @@ func (s *testMethodBasedClientSession) AsyncWrite(Message) error {
 func (s *testMethodBasedClientSession) CreateCache(context.Context, uint64) (MessageCache, error) {
 	panic("not implemented")
 }
+func (s *testMethodBasedClientSession) CreateCacheWithCancel(context.Context, uint64, context.CancelFunc) (MessageCache, error) {
+	return nil, nil
+}
 
 func (s *testMethodBasedClientSession) DeleteCache(uint64) {
 	panic("not implemented")
