@@ -174,7 +174,14 @@ func (mergeOrder *MergeOrder) Reset(proc *process.Process, pipelineFailed bool, 
 		}
 	}
 	if ctr.buf != nil {
-		ctr.buf.CleanOnlyData()
+		if ctr.buf.HasAllocationAccount() {
+			// The final merge batch may directly own a child execution's result.
+			// Accounted storage cannot survive that execution's Reset boundary.
+			ctr.buf.Clean(proc.Mp())
+			ctr.buf = nil
+		} else {
+			ctr.buf.CleanOnlyData()
+		}
 	}
 }
 

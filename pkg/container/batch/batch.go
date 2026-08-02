@@ -1191,6 +1191,12 @@ func (bat *Batch) hasAllocationAccountVector() bool {
 	return false
 }
 
+// HasAllocationAccount reports whether the batch or one of its vectors owns
+// memory charged to an execution-scoped allocation account.
+func (bat *Batch) HasAllocationAccount() bool {
+	return bat != nil && (bat.allocationAccount != nil || bat.hasAllocationAccountVector())
+}
+
 func (bat *Batch) selectedColumnsHaveAllocationAccount(selectCols []int) bool {
 	for _, sourceIdx := range selectCols {
 		vec := bat.Vecs[sourceIdx]
