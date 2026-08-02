@@ -1166,6 +1166,31 @@ func TestLCAProbeColumnLayoutUsesLineageResolvedRename(t *testing.T) {
 	require.Equal(t, []int{0, 1}, layout.targetIdxes)
 }
 
+func TestLCAProbeColumnLayoutKeepsHistoricalNameAfterEndpointRename(t *testing.T) {
+	lcaDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "id_new", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+	}}
+	targetDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "id", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+	}}
+
+	layout, err := lcaProbeColumnLayout(
+		lcaDef,
+		targetDef,
+		[]string{"id"},
+		[]types.Type{types.T_int64.ToType()},
+		nil,
+		[]string{"id"},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"id"}, layout.attrs)
+	require.Equal(t, []int{0}, layout.targetIdxes)
+	pkNames, err := layout.columnNamesForTargetIndexes([]int{0})
+	require.NoError(t, err)
+	require.Equal(t, []string{"id"}, pkNames)
+}
+
 func TestDataBranchHistoricalProbeStuffUsesEndpointRenameMapping(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	targetRel := mock_frontend.NewMockRelation(ctrl)
@@ -1394,6 +1419,45 @@ func decodeCapturedRows(t *testing.T, bat *batch.Batch, colTypes []types.Type) [
 
 func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 	ses := newValidateSession(t)
+
+	t.Run("uses historical primary key name after LCA endpoint rename", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tblStuff := newTestBranchTableStuff(ctrl)
+		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+		tblStuff.def.lcaColNames = []string{"id", "name", "hidden"}
+		lcaDef := newTestBranchTableDef("lca_tbl", "name")
+		lcaDef.Cols[0].Name = "id_new"
+		lcaDef.Pkey.Names = []string{"id_new"}
+		lcaDef.Pkey.PkeyColName = "id_new"
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().
+			GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().
+			GetTableID(gomock.Any()).Return(uint64(75)).AnyTimes()
+
+		wantErr := moerr.NewInternalErrorNoCtx("stop after sql capture")
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, sql string) error {
+				require.Contains(t, sql, "lca.`id`")
+				require.NotContains(t, sql, "lca.`id_new`")
+				return wantErr
+			}).
+			Times(1)
+
+		tBat := batch.NewWithSize(1)
+		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], int64(1), false, ses.proc.Mp()))
+		tBat.SetRowCount(1)
+		defer tBat.Clean(ses.proc.Mp())
+
+		_, err := handleDelsOnLCA(
+			context.Background(), ses, bh, tBat, tblStuff,
+			types.BuildTS(10, 0).ToTimestamp(),
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
 
 	t.Run("quotes primary key identifiers in generated join", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
@@ -1711,6 +1775,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 
 		tblStuff := newTestBranchTableStuff(ctrl)
 		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+		tblStuff.def.pkKind = fakeKind
 		lcaDef := newTestBranchTableDef("lca_tbl", "name")
 		lcaDef.Pkey = &plan.PrimaryKeyDef{
 			Names:       []string{"__mo_fake_pk_col"},
@@ -1756,6 +1821,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 
 		tblStuff := newTestBranchTableStuff(ctrl)
 		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+		tblStuff.def.pkKind = compositeKind
 		lcaDef := newTestBranchTableDef("lca_tbl", "name")
 		lcaDef.Pkey = &plan.PrimaryKeyDef{
 			Names:       []string{"id", "name"},
@@ -2898,6 +2964,29 @@ func TestDataBranchSourceColToTargetIdxAllowsCopyAlterIdentityReassignment(t *te
 	}
 
 	mapping, err := dataBranchSourceColToTargetIdx(sourceDef, targetDef, []string{"a", "b"}, nil)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1}, mapping)
+}
+
+func TestDataBranchSourceColToTargetIdxPreservesRenamedPrimaryKeyIdentity(t *testing.T) {
+	sourceDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "payload", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+	}
+	targetDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id_new", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "payload", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id_new", Names: []string{"id_new"}},
+	}
+
+	mapping, err := dataBranchSourceColToTargetIdx(
+		sourceDef, targetDef, []string{"id_new", "payload"}, nil,
+	)
 	require.NoError(t, err)
 	require.Equal(t, []int{0, 1}, mapping)
 }

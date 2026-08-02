@@ -51,6 +51,30 @@ type lcaProbeLayout struct {
 	enumValues  []string
 }
 
+func (layout lcaProbeLayout) columnNameForTargetIndex(targetIdx int) (string, bool) {
+	for i, candidateIdx := range layout.targetIdxes {
+		if candidateIdx == targetIdx {
+			return layout.attrs[i], true
+		}
+	}
+	return "", false
+}
+
+func (layout lcaProbeLayout) columnNamesForTargetIndexes(targetIdxes []int) ([]string, error) {
+	names := make([]string, len(targetIdxes))
+	for i, targetIdx := range targetIdxes {
+		name, ok := layout.columnNameForTargetIndex(targetIdx)
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"data branch: target column index %d is absent from LCA probe layout",
+				targetIdx,
+			)
+		}
+		names[i] = name
+	}
+	return names, nil
+}
+
 func lcaProbeResultTargetIndexes(
 	layout lcaProbeLayout,
 	targetColumnCount int,
@@ -123,9 +147,26 @@ func lcaProbeColumnLayout(
 				"DATA BRANCH target column %q is unavailable", name,
 			)
 		}
-		var lcaCol *plan2.ColDef
+		var (
+			lcaCol      *plan2.ColDef
+			lcaAttrName string
+		)
 		if targetIdx < len(lcaColNames) && lcaColNames[targetIdx] != "" {
-			lcaCol = dataBranchColumnDefByName(lcaDef, lcaColNames[targetIdx])
+			lcaAttrName = lcaColNames[targetIdx]
+			lcaCol = dataBranchColumnDefByName(lcaDef, lcaAttrName)
+			if lcaCol == nil {
+				// The LCA relation may also be a current endpoint whose visible
+				// name changed after the LCA snapshot. Keep the validated
+				// historical name for time-travel SQL while taking compatible
+				// type metadata from the same stable endpoint identity.
+				lcaCol = dataBranchEndpointColumnDef(lcaDef, targetCol)
+			}
+			if lcaCol == nil {
+				return lcaProbeLayout{}, moerr.NewInternalErrorNoCtxf(
+					"LCA data branch column %q cannot be resolved at the current endpoint",
+					lcaAttrName,
+				)
+			}
 		}
 		if lcaCol == nil {
 			lcaCol = dataBranchColumnDefByLogicalName(lcaDef, targetCol)
@@ -141,6 +182,9 @@ func lcaProbeColumnLayout(
 		if lcaCol == nil {
 			continue
 		}
+		if lcaAttrName == "" {
+			lcaAttrName = lcaCol.Name
+		}
 		derivedCompositePK := isDataBranchDerivedCompositePKColumn(
 			lcaDef, targetDef, lcaCol, targetCol,
 		)
@@ -152,7 +196,7 @@ func lcaProbeColumnLayout(
 				targetCol.Name,
 			)
 		}
-		layout.attrs = append(layout.attrs, lcaCol.Name)
+		layout.attrs = append(layout.attrs, lcaAttrName)
 		layout.types = append(layout.types, types.New(types.T(lcaCol.Typ.Id), lcaCol.Typ.Width, lcaCol.Typ.Scale))
 		layout.targetIdxes = append(layout.targetIdxes, targetIdx)
 		layout.enumValues = append(layout.enumValues, lcaCol.Typ.Enumvalues)
@@ -179,7 +223,6 @@ func handleDelsOnLCA(
 		fullTargetLayout bool
 
 		lcaTblDef    = tblStuff.lcaRel.GetTableDef(ctx)
-		baseTblDef   = tblStuff.baseRel.GetTableDef(ctx)
 		targetTblDef = tblStuff.tarRel.GetTableDef(ctx)
 
 		colTypes           = tblStuff.def.colTypes
@@ -216,7 +259,16 @@ func handleDelsOnLCA(
 		// timestamp may fail with unknown db/table even though the caller already
 		// knows the stable table ID.
 		mots := fmt.Sprintf("{MO_TS=%d} ", snapshot.PhysicalTime)
-		pkNames := lcaTblDef.Pkey.Names
+		var pkNames []string
+		if tblStuff.def.pkKind == fakeKind {
+			// The synthetic hash column is internal and cannot be renamed.
+			pkNames = []string{catalog.FakePrimaryKeyColName}
+		} else {
+			pkNames, err = lcaLayout.columnNamesForTargetIndexes(expandedPKColIdxes)
+			if err != nil {
+				return nil, err
+			}
+		}
 		quotedPKNames := make([]string, len(pkNames))
 		quotedPKValueAliases := make([]string, len(pkNames))
 		for i, name := range pkNames {
@@ -226,7 +278,7 @@ func handleDelsOnLCA(
 		quotedOrdinalAlias := quoteIdentifierForSQL("__mo_data_branch_ordinal")
 
 		// composite pk
-		if baseTblDef.Pkey.CompPkeyCol != nil {
+		if tblStuff.def.pkKind == compositeKind {
 			var tuple types.Tuple
 			cols, area := vector.MustVarlenaRawData(tBat.Vecs[0])
 			for i := range cols {
@@ -251,7 +303,7 @@ func handleDelsOnLCA(
 					valsBuf.WriteString(", ")
 				}
 			}
-		} else if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		} else if tblStuff.def.pkKind == fakeKind {
 			// fake pk
 			pks := vector.MustFixedColNoTypeCheck[uint64](tBat.Vecs[0])
 			for i := range pks {
@@ -630,15 +682,14 @@ func runLCAProbeWithReaderFallback(
 	if err != nil {
 		return executor.Result{}, err
 	}
-	lcaPKIdx := slices.IndexFunc(lcaLayout.attrs, func(name string) bool {
-		return strings.EqualFold(name, lcaTblDef.Pkey.PkeyColName)
-	})
-	if lcaPKIdx < 0 {
+	lcaPKName, ok := lcaLayout.columnNameForTargetIndex(tblStuff.def.pkColIdx)
+	if !ok {
 		return executor.Result{}, moerr.NewInternalErrorNoCtxf(
-			"data branch: LCA primary key column %q is absent from probe layout",
-			lcaTblDef.Pkey.PkeyColName,
+			"data branch: target primary key column index %d is absent from LCA probe layout",
+			tblStuff.def.pkColIdx,
 		)
 	}
+	lcaPKIdx := slices.Index(lcaLayout.attrs, lcaPKName)
 	// Build a sorted IN vector for reader-side PK filtering.
 	// The sorted-search path uses binary search over the IN value array and
 	// assumes the array is ordered; an unsorted IN vector can drop valid hits.
@@ -648,7 +699,7 @@ func runLCAProbeWithReaderFallback(
 		return executor.Result{}, err
 	}
 	filterVec.InplaceSort()
-	pkFilterExpr := readutil.ConstructInExpr(ctx, lcaTblDef.Pkey.PkeyColName, filterVec)
+	pkFilterExpr := readutil.ConstructInExpr(ctx, lcaPKName, filterVec)
 	prepareCost = time.Since(start)
 
 	tmp := batch.NewWithSize(len(lcaLayout.attrs))
@@ -2709,7 +2760,13 @@ func dataBranchSourceColToTargetIdx(
 	if sourceDef == nil || targetDef == nil {
 		return nil, moerr.NewInternalErrorNoCtx("missing schema for historical data branch projection")
 	}
-	if err := checkDataBranchPrimaryKeyCompatibility(targetDef, sourceDef); err != nil {
+	if err := checkDataBranchPrimaryKeyCompatibilityWithResolver(
+		targetDef,
+		sourceDef,
+		func(targetCol *plan2.ColDef) *plan2.ColDef {
+			return dataBranchEndpointColumnDef(sourceDef, targetCol)
+		},
+	); err != nil {
 		return nil, moerr.NewNotSupportedNoCtxf(
 			"historical data branch primary key is incompatible with the endpoint schema: %s",
 			err.Error(),
@@ -2750,7 +2807,7 @@ func dataBranchSourceColToTargetIdx(
 		if col.Name == catalog.Row_ID {
 			continue
 		}
-		targetCol := dataBranchColumnDefByLogicalName(targetDef, col)
+		targetCol := dataBranchEndpointColumnDef(targetDef, col)
 		targetIdx := -1
 		if targetCol != nil {
 			targetIdx = dataBranchColumnIndexByName(targetColNames, targetCol.Name)
