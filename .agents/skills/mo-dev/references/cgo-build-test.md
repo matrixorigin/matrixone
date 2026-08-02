@@ -239,7 +239,10 @@ baseline_log="$baseline_parent/baseline.log"
 cleanup_baseline() {
   git worktree remove --force "$baseline_dir" 2>/dev/null || true
 }
-trap cleanup_baseline EXIT INT HUP TERM
+trap cleanup_baseline EXIT
+trap 'exit 130' INT
+trap 'exit 129' HUP
+trap 'exit 143' TERM
 
 # In the isolated worktree, recreate matching native artifacts and run the
 # exact candidate command with the same Go/toolchain/module inputs.
@@ -250,6 +253,26 @@ printf 'baseline exit status: %s\n' "$baseline_status"
 printf 'baseline log retained for signature comparison: %s\n' "$baseline_log"
 cleanup_baseline
 trap - EXIT INT HUP TERM
+```
+
+Keep cleanup and signal termination as separate responsibilities. The `EXIT`
+trap owns worktree cleanup; each signal trap must terminate with its conventional
+`128 + signal` status so a cancelled command cannot continue into baseline
+attribution. This minimal oracle must report status 130, record exactly one
+`cleanup` line, and never record `continued`:
+
+```bash
+signal_log=$(mktemp)
+signal_status=0
+sh -c '
+  trap '\''printf "cleanup\\n" >> "$1"'\'' EXIT
+  trap '\''exit 130'\'' INT
+  kill -INT $$
+  printf "continued\\n" >> "$1"
+' sh "$signal_log" || signal_status=$?
+test "$signal_status" -eq 130
+test "$(cat "$signal_log")" = cleanup
+rm -f "$signal_log"
 ```
 
 A candidate failure is pre-existing evidence only when the baseline also fails

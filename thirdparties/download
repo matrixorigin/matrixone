@@ -45,11 +45,6 @@ esac
 	echo "destination must be a file path, got directory: $destination" >&2
 	exit 2
 }
-command -v "$curl_bin" >/dev/null 2>&1 || {
-	echo "curl command not found: $curl_bin" >&2
-	exit 2
-}
-
 require_positive_integer() {
 	name=$1
 	value=$2
@@ -119,6 +114,11 @@ if [ -f "$destination" ] && verify_file "$destination"; then
 	echo "using verified cached download: $destination"
 	exit 0
 fi
+
+command -v "$curl_bin" >/dev/null 2>&1 || {
+	echo "curl command not found: $curl_bin" >&2
+	exit 2
+}
 
 destination_dir=$(dirname "$destination")
 [ -d "$destination_dir" ] || {

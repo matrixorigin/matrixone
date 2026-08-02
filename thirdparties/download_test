@@ -195,6 +195,30 @@ assert_count 0
 cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "cache hit changed destination"
 assert_publicly_readable "$MO_DOWNLOAD_MOCK_STATE/result"
 
+new_case cache-hit-without-curl
+cp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result"
+MO_DOWNLOAD_CURL_BIN="$MO_DOWNLOAD_MOCK_STATE/missing-curl"
+export MO_DOWNLOAD_CURL_BIN
+"$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"
+assert_count 0
+cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "curl-free cache hit changed destination"
+assert_publicly_readable "$MO_DOWNLOAD_MOCK_STATE/result"
+
+new_case cache-miss-without-curl
+MO_DOWNLOAD_CURL_BIN="$MO_DOWNLOAD_MOCK_STATE/missing-curl"
+export MO_DOWNLOAD_CURL_BIN
+if "$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"; then
+	fail "cache miss without curl unexpectedly succeeded"
+else
+	status=$?
+fi
+[ "$status" -eq 2 ] || fail "cache miss without curl returned status $status, expected 2"
+assert_count 0
+[ ! -e "$MO_DOWNLOAD_MOCK_STATE/result" ] || fail "cache miss without curl created destination"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+MO_DOWNLOAD_CURL_BIN="$0"
+export MO_DOWNLOAD_CURL_BIN
+
 new_case insecure-url
 MO_DOWNLOAD_MOCK_MODE=success
 export MO_DOWNLOAD_MOCK_MODE
