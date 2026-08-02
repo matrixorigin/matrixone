@@ -392,14 +392,20 @@ func (c *testMessageCache) Close() {
 var _ bootstrap.Service = new(testBootService)
 
 type testBootService struct {
-	choice       int
-	closeCount   int
-	closeErr     error
-	bootstrapErr error
-	maybeUpgrade func()
+	choice         int
+	closeCount     int
+	closeErr       error
+	bootstrapErr   error
+	bootstrapCount atomic.Int32
+	bootstrapHook  func()
+	maybeUpgrade   func()
 }
 
 func (boot *testBootService) Bootstrap(ctx context.Context) error {
+	boot.bootstrapCount.Add(1)
+	if boot.bootstrapHook != nil {
+		boot.bootstrapHook()
+	}
 	return boot.bootstrapErr
 }
 
@@ -444,7 +450,15 @@ func TestServiceStartBootstrapFailureCanBeRolledBack(t *testing.T) {
 		t.Name(),
 		func(rt moruntime.Runtime) {
 			bootstrapErr := errors.New("bootstrap connection reset")
-			boot := &testBootService{bootstrapErr: bootstrapErr}
+			bootstrapEntered := make(chan struct{})
+			releaseBootstrap := make(chan struct{})
+			boot := &testBootService{
+				bootstrapErr: bootstrapErr,
+				bootstrapHook: func() {
+					close(bootstrapEntered)
+					<-releaseBootstrap
+				},
+			}
 			listener, err := net.Listen("tcp", "127.0.0.1:0")
 			require.NoError(t, err)
 			listenerAddr := listener.Addr().String()
@@ -472,14 +486,42 @@ func TestServiceStartBootstrapFailureCanBeRolledBack(t *testing.T) {
 				close(stopped)
 			}))
 
-			err = s.Start()
+			startDone := make(chan error, 1)
+			go func() {
+				startDone <- s.Start()
+			}()
+			<-bootstrapEntered
+			if s.lifecycleMu.TryLock() {
+				s.lifecycleMu.Unlock()
+				t.Fatal("Start did not own the lifecycle transition")
+			}
+			closeDone := make(chan error, 1)
+			go func() {
+				closeDone <- s.Close()
+			}()
+			close(releaseBootstrap)
+
+			err = <-startDone
 			require.ErrorIs(t, err, bootstrapErr)
+			require.NoError(t, <-closeDone)
 			require.Nil(t, s.incrservice)
 			require.Nil(t, s.txnTraceService)
 			_, ok := rt.GetGlobalVariables(moruntime.AutoIncrementService)
 			require.False(t, ok)
 			_, ok = rt.GetGlobalVariables(moruntime.TxnTraceService)
 			require.False(t, ok)
+
+			err = s.Start()
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState))
+			require.Equal(t, int32(1), boot.bootstrapCount.Load())
+			require.Nil(t, s.incrservice)
+			require.Nil(t, s.txnTraceService)
+			_, ok = rt.GetGlobalVariables(moruntime.AutoIncrementService)
+			require.False(t, ok)
+			_, ok = rt.GetGlobalVariables(moruntime.TxnTraceService)
+			require.False(t, ok)
+
 			require.NoError(t, s.Close())
 			require.Equal(t, 1, boot.closeCount)
 			reused, err := net.Listen("tcp", listenerAddr)

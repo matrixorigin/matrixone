@@ -386,10 +386,20 @@ func (s *service) registerDefaultIcebergMaintenanceExecutor(ctx context.Context)
 }
 
 func (s *service) Start() (err error) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.lifecycle != serviceInitialized {
+		return moerr.NewInvalidStateNoCtx("CN service already started or closed")
+	}
+	s.lifecycle = serviceStarting
 	defer func() {
 		if err != nil {
-			err = errors.Join(err, s.Close())
+			s.lifecycle = serviceClosing
+			err = errors.Join(err, s.closeService())
+			s.lifecycle = serviceClosed
+			return
 		}
+		s.lifecycle = serviceStarted
 	}()
 
 	if err = s.bootstrap(); err != nil {
@@ -417,6 +427,17 @@ func (s *service) Start() (err error) {
 }
 
 func (s *service) Close() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.lifecycle != serviceClosed {
+		s.lifecycle = serviceClosing
+	}
+	err := s.closeService()
+	s.lifecycle = serviceClosed
+	return err
+}
+
+func (s *service) closeService() error {
 	s.closeOnce.Do(func() {
 		defer logutil.LogClose(s.logger, "cnservice")()
 

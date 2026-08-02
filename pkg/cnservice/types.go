@@ -620,6 +620,16 @@ func (s *service) getPartitionServiceConfig() partitionservice.Config {
 	return s.cfg.PartitionService
 }
 
+type serviceLifecycleState uint8
+
+const (
+	serviceInitialized serviceLifecycleState = iota
+	serviceStarting
+	serviceStarted
+	serviceClosing
+	serviceClosed
+)
+
 type service struct {
 	metadata       metadata.CNStore
 	cfg            *Config
@@ -675,10 +685,12 @@ type service struct {
 	incrservice          incrservice.AutoIncrementService
 	txnTraceService      trace.Service
 
-	stopper   *stopper.Stopper
-	aicm      *defines.AutoIncrCacheManager
-	closeOnce sync.Once
-	closeErr  error
+	stopper     *stopper.Stopper
+	aicm        *defines.AutoIncrCacheManager
+	lifecycleMu sync.Mutex
+	lifecycle   serviceLifecycleState
+	closeOnce   sync.Once
+	closeErr    error
 
 	task struct {
 		sync.RWMutex
