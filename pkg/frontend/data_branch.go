@@ -26,6 +26,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -60,15 +61,29 @@ func isDataBranchUserVisibleColumn(col *plan.ColDef) bool {
 	if col.Hidden {
 		return false
 	}
-	if col.GeneratedCol != nil {
-		return false
-	}
 	switch col.Name {
 	case catalog.Row_ID, catalog.FakePrimaryKeyColName, catalog.CPrimaryKeyColName:
 		return false
 	default:
 		return true
 	}
+}
+
+func isDataBranchWritableColumn(col *plan.ColDef) bool {
+	return isDataBranchUserVisibleColumn(col) && col.GeneratedCol == nil
+}
+
+func dataBranchGeneratedColumnsEqual(left, right *plan.GeneratedCol) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	if left.IsStored != right.IsStored {
+		return false
+	}
+	if left.Expr != nil || right.Expr != nil {
+		return proto.Equal(left.Expr, right.Expr)
+	}
+	return left.OriginString != "" && left.OriginString == right.OriginString
 }
 
 func dataBranchFakePKColIdxes(tblDef *plan.TableDef) []int {
@@ -1067,6 +1082,9 @@ func getTableStuff(
 		if isDataBranchUserVisibleColumn(col) {
 			tblStuff.def.visibleIdxes = append(tblStuff.def.visibleIdxes, len(tblStuff.def.colNames)-1)
 		}
+		if isDataBranchWritableColumn(col) {
+			tblStuff.def.writableIdxes = append(tblStuff.def.writableIdxes, len(tblStuff.def.colNames)-1)
+		}
 	}
 
 	if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
@@ -1192,6 +1210,15 @@ func reconcileDataBranchEndpointSchema(
 	}
 	tables.def.commonIdxes = commonIdxes
 	tables.def.commonVisibleIdxes = commonVisibleIdxes
+	commonVisibleSet := make(map[int]struct{}, len(commonVisibleIdxes))
+	for _, idx := range commonVisibleIdxes {
+		commonVisibleSet[idx] = struct{}{}
+	}
+	for _, idx := range tables.def.writableIdxes {
+		if _, ok := commonVisibleSet[idx]; ok {
+			tables.def.commonWritableIdxes = append(tables.def.commonWritableIdxes, idx)
+		}
+	}
 	tables.def.tarOnlyIdxes = tarOnlyIdxes
 
 	baseDataCols := make([]*plan.ColDef, 0, len(baseDef.Cols))
@@ -1381,7 +1408,10 @@ func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
 			leftDef.Cols[i].ClusterBy != rightDef.Cols[i].ClusterBy ||
 			leftDef.Cols[i].Primary != rightDef.Cols[i].Primary ||
 			leftDef.Cols[i].Seqnum != rightDef.Cols[i].Seqnum ||
-			leftDef.Cols[i].NotNull != rightDef.Cols[i].NotNull {
+			leftDef.Cols[i].NotNull != rightDef.Cols[i].NotNull ||
+			!dataBranchGeneratedColumnsEqual(
+				leftDef.Cols[i].GeneratedCol, rightDef.Cols[i].GeneratedCol,
+			) {
 			return false
 		}
 	}
@@ -1474,11 +1504,14 @@ func checkSchemaCompatibilityWithResolver(
 
 		name := strings.ToLower(tarCol.Name)
 		baseCol := resolveBaseColumn(tarCol)
-		if baseCol != nil &&
-			isDataBranchUserVisibleColumn(tarCol) != isDataBranchUserVisibleColumn(baseCol) {
-			baseCol = nil
-		}
 		if baseCol != nil {
+			if !dataBranchGeneratedColumnsEqual(tarCol.GeneratedCol, baseCol.GeneratedCol) {
+				err = moerr.NewInternalErrorNoCtxf(
+					"schema compatibility check: column '%s' has different generated definitions",
+					tarCol.Name,
+				)
+				return
+			}
 			if baseCol.Typ.Id == tarCol.Typ.Id {
 				if !dataBranchColumnTypeAttributesEqual(baseCol.Typ, tarCol.Typ) {
 					err = moerr.NewInternalErrorNoCtxf(
@@ -1499,8 +1532,8 @@ func checkSchemaCompatibilityWithResolver(
 				commonColNameSet[strings.ToLower(baseCol.Name)] = true
 				if isDataBranchUserVisibleColumn(tarCol) {
 					commonVisibleIdxes = append(commonVisibleIdxes, dataIdx)
-					delete(baseVisibleColMap, strings.ToLower(baseCol.Name))
 				}
+				delete(baseVisibleColMap, strings.ToLower(baseCol.Name))
 			} else {
 				err = moerr.NewInternalErrorNoCtxf(
 					"schema compatibility check: column '%s' exists in both schemas but has different types (target: %d, base: %d)",

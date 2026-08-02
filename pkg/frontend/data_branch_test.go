@@ -42,18 +42,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDataBranchUserVisibleColumn(t *testing.T) {
+func TestDataBranchColumnClassification(t *testing.T) {
 	require.True(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: "tenant"}))
-	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{
+	require.True(t, isDataBranchWritableColumn(&plan.ColDef{Name: "tenant"}))
+	require.True(t, isDataBranchUserVisibleColumn(&plan.ColDef{
 		Name: "stored_total", GeneratedCol: &plan.GeneratedCol{IsStored: true},
 	}))
-	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{
+	require.False(t, isDataBranchWritableColumn(&plan.ColDef{
+		Name: "stored_total", GeneratedCol: &plan.GeneratedCol{IsStored: true},
+	}))
+	require.True(t, isDataBranchUserVisibleColumn(&plan.ColDef{
+		Name: "virtual_total", GeneratedCol: &plan.GeneratedCol{IsStored: false},
+	}))
+	require.False(t, isDataBranchWritableColumn(&plan.ColDef{
 		Name: "virtual_total", GeneratedCol: &plan.GeneratedCol{IsStored: false},
 	}))
 	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: catalog.FakePrimaryKeyColName, Hidden: true}))
 	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: catalog.CPrimaryKeyColName, Hidden: true}))
 	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: "__mo_cbkey_006tenant003seq", Hidden: true}))
 	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: catalog.Row_ID, Hidden: true}))
+	require.False(t, dataBranchGeneratedColumnsEqual(&plan.GeneratedCol{}, &plan.GeneratedCol{}))
+	require.True(t, dataBranchGeneratedColumnsEqual(
+		&plan.GeneratedCol{OriginString: "tenant * 2", IsStored: true},
+		&plan.GeneratedCol{OriginString: "tenant * 2", IsStored: true},
+	))
 }
 
 func TestPrepareDataBranchWorkerValidatesBeforeAllocation(t *testing.T) {
@@ -115,7 +127,7 @@ func TestDataBranchFakePKColIdxesUseOnlyVisibleColumns(t *testing.T) {
 			{Name: catalog.FakePrimaryKeyColName, Hidden: true},
 		},
 	}
-	require.Equal(t, []int{0, 2}, dataBranchFakePKColIdxes(tblDef))
+	require.Equal(t, []int{0, 2, 3}, dataBranchFakePKColIdxes(tblDef))
 }
 
 func TestDataBranchSchemaEquivalentRequiresCompleteLogicalTypes(t *testing.T) {
@@ -1273,7 +1285,7 @@ func TestCheckSchemaCompatibility_HiddenColumnsAreNotOutputColumns(t *testing.T)
 	require.Empty(t, tarOnlyIdxes)
 }
 
-func TestCheckSchemaCompatibility_GeneratedColumnsAreNotOutputColumns(t *testing.T) {
+func TestCheckSchemaCompatibility_GeneratedColumnsRemainVisible(t *testing.T) {
 	newTableDef := func(stored bool) *plan.TableDef {
 		return &plan.TableDef{
 			Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
@@ -1283,7 +1295,7 @@ func TestCheckSchemaCompatibility_GeneratedColumnsAreNotOutputColumns(t *testing
 				{
 					Name:         "generated_value",
 					Typ:          plan.Type{Id: int32(types.T_int64)},
-					GeneratedCol: &plan.GeneratedCol{IsStored: stored},
+					GeneratedCol: &plan.GeneratedCol{OriginString: "value * 2", IsStored: stored},
 				},
 			},
 		}
@@ -1301,13 +1313,13 @@ func TestCheckSchemaCompatibility_GeneratedColumnsAreNotOutputColumns(t *testing
 				checkSchemaCompatibility(newTableDef(tc.stored), newTableDef(tc.stored))
 			require.NoError(t, err)
 			require.Equal(t, []int{0, 1, 2}, commonIdxes)
-			require.Equal(t, []int{0, 1}, commonVisibleIdxes)
+			require.Equal(t, []int{0, 1, 2}, commonVisibleIdxes)
 			require.Empty(t, tarOnlyIdxes)
 		})
 	}
 }
 
-func TestCheckSchemaCompatibility_DestinationGeneratedColumnIsNotWritable(t *testing.T) {
+func TestCheckSchemaCompatibility_RejectsGeneratedAndOrdinaryMismatch(t *testing.T) {
 	ordinaryDef := &plan.TableDef{
 		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
 		Cols: []*plan.ColDef{
@@ -1324,20 +1336,42 @@ func TestCheckSchemaCompatibility_DestinationGeneratedColumnIsNotWritable(t *tes
 			{
 				Name:         "derived",
 				Typ:          plan.Type{Id: int32(types.T_int64)},
-				GeneratedCol: &plan.GeneratedCol{IsStored: true},
+				GeneratedCol: &plan.GeneratedCol{OriginString: "value * 2", IsStored: true},
 			},
 		},
 	}
 
-	commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err :=
-		checkSchemaCompatibility(ordinaryDef, generatedDef)
-	require.NoError(t, err)
-	require.Equal(t, []int{0, 1}, commonIdxes)
-	require.Equal(t, []int{0, 1}, commonVisibleIdxes)
-	require.Equal(t, []int{2}, tarOnlyIdxes)
+	_, _, _, err := checkSchemaCompatibility(ordinaryDef, generatedDef)
+	require.ErrorContains(t, err, "column 'derived' has different generated definitions")
 
 	_, _, _, err = checkSchemaCompatibility(generatedDef, ordinaryDef)
-	require.ErrorContains(t, err, "base column 'derived' is not present in target schema")
+	require.ErrorContains(t, err, "column 'derived' has different generated definitions")
+}
+
+func TestCheckSchemaCompatibility_RejectsDifferentGeneratedDefinitions(t *testing.T) {
+	newTableDef := func(expr string, generatedPK bool) *plan.TableDef {
+		pkeyName := "id"
+		if generatedPK {
+			pkeyName = "generated_id"
+		}
+		return &plan.TableDef{
+			Pkey: &plan.PrimaryKeyDef{Names: []string{pkeyName}, PkeyColName: pkeyName},
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+				{
+					Name: "generated_id", Typ: plan.Type{Id: int32(types.T_int64)},
+					GeneratedCol: &plan.GeneratedCol{OriginString: expr, IsStored: true},
+				},
+			},
+		}
+	}
+
+	for _, generatedPK := range []bool{false, true} {
+		_, _, _, err := checkSchemaCompatibility(
+			newTableDef("id * 2", generatedPK), newTableDef("id * 3", generatedPK),
+		)
+		require.ErrorContains(t, err, "column 'generated_id' has different generated definitions")
+	}
 }
 
 func TestCheckSchemaCompatibility_StoredGeneratedPrimaryKey(t *testing.T) {
@@ -1349,7 +1383,7 @@ func TestCheckSchemaCompatibility_StoredGeneratedPrimaryKey(t *testing.T) {
 				{
 					Name:         "generated_id",
 					Typ:          plan.Type{Id: int32(types.T_int64)},
-					GeneratedCol: &plan.GeneratedCol{IsStored: true},
+					GeneratedCol: &plan.GeneratedCol{OriginString: "value * 2", IsStored: true},
 				},
 			},
 		}
@@ -1359,19 +1393,25 @@ func TestCheckSchemaCompatibility_StoredGeneratedPrimaryKey(t *testing.T) {
 		checkSchemaCompatibility(newTableDef(), newTableDef())
 	require.NoError(t, err)
 	require.Equal(t, []int{0, 1}, commonIdxes)
-	require.Equal(t, []int{0}, commonVisibleIdxes)
+	require.Equal(t, []int{0, 1}, commonVisibleIdxes)
 	require.Empty(t, tarOnlyIdxes)
 }
 
 func TestCheckSchemaCompatibility_RejectsBaseOnlyVisibleColumn(t *testing.T) {
-	tarDef := &plan.TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "a"}, Cols: []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}}}}
-	baseDef := &plan.TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "a"}, Cols: []*plan.ColDef{
-		{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
-		{Name: "removed", Typ: plan.Type{Id: int32(types.T_int64)}},
-	}}
+	for _, generated := range []bool{false, true} {
+		tarDef := &plan.TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "a"}, Cols: []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}}}}
+		baseOnly := &plan.ColDef{Name: "removed", Typ: plan.Type{Id: int32(types.T_int64)}}
+		if generated {
+			baseOnly.GeneratedCol = &plan.GeneratedCol{OriginString: "a * 2", IsStored: true}
+		}
+		baseDef := &plan.TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "a"}, Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			baseOnly,
+		}}
 
-	_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
-	require.ErrorContains(t, err, "base column 'removed' is not present in target schema")
+		_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
+		require.ErrorContains(t, err, "base column 'removed' is not present in target schema")
+	}
 }
 
 func TestCheckSchemaCompatibility_PKChanged(t *testing.T) {

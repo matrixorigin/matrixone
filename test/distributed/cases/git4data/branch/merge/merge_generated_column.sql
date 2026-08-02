@@ -15,6 +15,10 @@ update stored_branch set a = 11 where id = 1;
 insert into stored_branch(id, a, b) values (3, 50, 60);
 delete from stored_branch where id = 2;
 data branch diff stored_branch against stored_base output summary;
+data branch diff stored_branch against stored_base;
+data branch diff stored_branch against stored_base columns(c, id);
+data branch diff stored_branch against stored_base columns(c, id) output as stored_generated_diff;
+select __mo_diff_source, __mo_diff_flag, c, id from stored_generated_diff order by id, __mo_diff_source;
 data branch merge stored_branch into stored_base when conflict accept;
 select id, a, b, c from stored_base order by id;
 data branch diff stored_branch against stored_base output summary;
@@ -36,24 +40,24 @@ data branch pick virtual_branch into virtual_base keys(1, 2, 3) when conflict ac
 select id, a, b, c from virtual_base order by id;
 data branch diff virtual_branch against virtual_base output summary;
 
--- A destination generated column is non-writable even when an unrelated
--- source table has an ordinary column with the same name and type.
-create table ordinary_source (
+-- Generated columns are common only when their generation semantics match.
+create table formula_source (
     id int primary key,
     a int,
-    b int,
-    c int
+    g int generated always as (a * 2) stored
 );
-insert into ordinary_source values (1, 11, 20, -1), (3, 50, 60, -1);
-create table generated_destination (
+insert into formula_source(id, a) values (1, 11);
+create table formula_destination (
     id int primary key,
     a int,
-    b int,
-    c int generated always as (a + b) stored
+    g int generated always as (a * 3) stored
 );
-insert into generated_destination(id, a, b) values (1, 10, 20), (2, 30, 40);
-data branch merge ordinary_source into generated_destination when conflict accept;
-select id, a, b, c from generated_destination order by id;
+insert into formula_destination(id, a) values (1, 10);
+-- @regex("schema compatibility check: column 'g' has different generated definitions", true)
+data branch diff formula_source against formula_destination output summary;
+-- @regex("schema compatibility check: column 'g' has different generated definitions", true)
+data branch merge formula_source into formula_destination when conflict accept;
+select id, a, g from formula_destination order by id;
 
 -- A STORED generated primary key participates in row identity but is still
 -- omitted from destination writes.
@@ -72,5 +76,24 @@ data branch diff stored_generated_pk_branch against stored_generated_pk_base out
 data branch merge stored_generated_pk_branch into stored_generated_pk_base when conflict accept;
 select a, b, payload from stored_generated_pk_base order by b;
 data branch diff stored_generated_pk_branch against stored_generated_pk_base output summary;
+
+-- Mismatched generated primary-key formulas cannot share row identity.
+create table generated_pk_source (
+    a int,
+    g int generated always as (a * 2) stored,
+    primary key (g)
+);
+insert into generated_pk_source(a) values (1);
+create table generated_pk_destination (
+    a int,
+    g int generated always as (a * 3) stored,
+    primary key (g)
+);
+insert into generated_pk_destination(a) values (1);
+-- @regex("schema compatibility check: column 'g' has different generated definitions", true)
+data branch diff generated_pk_source against generated_pk_destination output summary;
+-- @regex("schema compatibility check: column 'g' has different generated definitions", true)
+data branch merge generated_pk_source into generated_pk_destination when conflict accept;
+select a, g from generated_pk_destination order by g;
 
 drop database data_branch_generated_column;
