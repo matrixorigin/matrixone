@@ -3396,8 +3396,7 @@ func TestAssignmentCastRollingUpgradePlanGate(t *testing.T) {
 }
 
 func TestInsertAddsCheckConstraintFilter(t *testing.T) {
-	build := func(sql string) *plan.Query {
-		mock := NewMockOptimizer(true)
+	addDeptCheck := func(mock *MockOptimizer) {
 		tableDef := mock.ctxt.tables["dept"]
 		colPos := tableDef.Name2ColIndex["deptno"]
 		colExpr := &plan.Expr{
@@ -3416,6 +3415,11 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 			Name:  "dept_chk_1",
 			Check: checkExpr,
 		}}
+	}
+
+	build := func(sql string) *plan.Query {
+		mock := NewMockOptimizer(true)
+		addDeptCheck(mock)
 
 		stmt, err := mysql.ParseOne(t.Context(), sql, 1)
 		require.NoError(t, err)
@@ -3441,6 +3445,25 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 		require.True(t, found)
 	})
 
+	t.Run("replace rejects mixed-version cluster", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		addDeptCheck(mock)
+		proc := testutil.NewProc(nil)
+		rt := moruntime.ServiceRuntime(proc.GetService())
+		defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion6)
+		mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+
+		stmt, err := mysql.ParseOne(
+			t.Context(),
+			"replace into dept values (1, 'Sales', 'NY')",
+			1,
+		)
+		require.NoError(t, err)
+		_, err = mock.Optimize(stmt)
+		require.ErrorContains(t, err, "CHECK constraints require all CNs to support protocol version 7")
+	})
+
 	t.Run("insert ignore filters invalid rows", func(t *testing.T) {
 		query := build("insert ignore into dept values (1, 'Sales', 'NY')")
 		found := false
@@ -3456,6 +3479,28 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 		}
 		require.True(t, found)
 	})
+
+	for _, sql := range []string{
+		"replace into dept values (1, 'Sales', 'NY')",
+		"replace into dept set deptno = 1, dname = 'Sales', loc = 'NY'",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			query := build(sql)
+			found := false
+			for _, node := range query.Nodes {
+				if node.NodeType != plan.Node_FILTER {
+					continue
+				}
+				for _, expr := range node.FilterList {
+					if expr.GetF() != nil &&
+						expr.GetF().GetFunc().GetObjName() == "_check_constraint_assert" {
+						found = true
+					}
+				}
+			}
+			require.True(t, found)
+		})
+	}
 
 	t.Run("ODKU without unique key asserts on legacy fallback", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
@@ -3825,6 +3870,69 @@ func TestInsertIgnoreChildParentFKDropsRows(t *testing.T) {
 	assert.True(t, hasParentJoin, "INSERT IGNORE FK row-skip should outer-join the parent table")
 	assert.True(t, hasFilter, "INSERT IGNORE FK row-skip should contain the parent-existence FILTER node")
 	assert.True(t, hasMultiUpdate, "INSERT IGNORE FK should stay on the modern MULTI_UPDATE path")
+}
+
+func TestCheckConstraintWithChildForeignKey(t *testing.T) {
+	build := func(sql string) *plan.Query {
+		mock := NewMockOptimizer(true)
+		tableDef := mock.ctxt.tables["emp"]
+		colPos := tableDef.Name2ColIndex["empno"]
+		colExpr := &plan.Expr{
+			Typ: tableDef.Cols[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: 0, ColPos: colPos},
+			},
+		}
+		checkExpr, err := BindFuncExprImplByPlanExpr(
+			t.Context(),
+			">",
+			[]*plan.Expr{colExpr, MakePlan2Int64ConstExprWithType(0)},
+		)
+		require.NoError(t, err)
+		tableDef.Checks = []*plan.CheckDef{{
+			Name:  "positive_empno",
+			Check: checkExpr,
+		}}
+
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		require.NotNil(t, query)
+		return query
+	}
+
+	assertPlanShape := func(t *testing.T, query *plan.Query, checkFunc string) {
+		t.Helper()
+		hasCheck, hasParentJoin, hasMultiUpdate := false, false, false
+		for _, node := range query.Nodes {
+			if node.NodeType == plan.Node_FILTER {
+				for _, expr := range node.FilterList {
+					if expr.GetF() != nil && expr.GetF().GetFunc().GetObjName() == checkFunc {
+						hasCheck = true
+					}
+				}
+			}
+			if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+				hasParentJoin = true
+			}
+			if node.NodeType == plan.Node_MULTI_UPDATE {
+				hasMultiUpdate = true
+			}
+		}
+		require.True(t, hasCheck)
+		require.True(t, hasParentJoin)
+		require.True(t, hasMultiUpdate)
+	}
+
+	t.Run("replace", func(t *testing.T) {
+		query := build("REPLACE INTO emp (empno, deptno) VALUES (1, 10)")
+		assertPlanShape(t, query, "_check_constraint_assert")
+	})
+
+	t.Run("insert ignore", func(t *testing.T) {
+		query := build("INSERT IGNORE INTO emp (empno, deptno) VALUES (1, 10)")
+		assertPlanShape(t, query, "coalesce")
+	})
 }
 
 func TestInsertOnDupSelfReferFKUsesModernPath(t *testing.T) {
