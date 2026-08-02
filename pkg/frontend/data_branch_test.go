@@ -985,7 +985,7 @@ func buildArrayVector[T types.RealNumbers](t *testing.T, mp *mpool.MPool, typ ty
 	return vec
 }
 
-func newValidateSession(t *testing.T) *Session {
+func newValidateSession(t testing.TB) *Session {
 	t.Helper()
 
 	proc := testutil.NewProcess(t)
