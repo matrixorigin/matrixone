@@ -248,10 +248,11 @@ begin;
 update parent_lock_order set id = 2 where id = 1;
 -- @session:id=1{
 use update_modern_fk;
+set session lock_wait_timeout = 1;
 begin;
--- @wait:0:commit
+-- @regex("(?s)Lock wait timeout exceeded; try restarting transaction",true)
 insert into child_lock_order values (10, 1);
-commit;
+rollback;
 -- @session}
 commit;
 select * from parent_lock_order;

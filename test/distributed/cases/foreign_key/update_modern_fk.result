@@ -308,10 +308,12 @@ insert into parent_lock_order values (1);
 begin;
 update parent_lock_order set id = 2 where id = 1;
 use update_modern_fk;
+set session lock_wait_timeout = 1;
 begin;
 insert into child_lock_order values (10, 1);
-internal error: Cannot add or update a child row: a foreign key constraint fails
-commit;
+-- @regex("(?s)Lock wait timeout exceeded; try restarting transaction", true)
+Lock wait timeout exceeded; try restarting transaction
+rollback;
 commit;
 select * from parent_lock_order;
 ➤ id[4,32,0]  𝄀
