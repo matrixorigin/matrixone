@@ -2551,6 +2551,17 @@ func TestAppendLCAProbeValue(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "unexpected LCA probe type conversion")
 	})
+
+	t.Run("rejects set display label instead of guessing its bitmap", func(t *testing.T) {
+		src := vector.NewVec(types.T_varchar.ToType())
+		dst := vector.NewVec(types.T_uint64.ToType())
+		defer src.Free(mp)
+		defer dst.Free(mp)
+
+		require.NoError(t, vector.AppendBytes(src, []byte("2"), false, mp))
+		err := appendLCAProbeValue(dst, src, 0, "", mp)
+		require.ErrorContains(t, err, "unexpected LCA probe type conversion")
+	})
 }
 
 func TestValidateLeadingRowID(t *testing.T) {
