@@ -193,8 +193,11 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 			joinType = plan.Node_LEFT
 		}
 
-		matchMarker, emptyProjection, reconstructEmptyProjection :=
-			builder.prepareCorrelatedScalarAggregateEmptyProjection(subID, subCtx, joinPreds)
+		postJoinProjection, finalizeProjection, err :=
+			builder.prepareCorrelatedScalarAggregatePostJoinProjection(subID, subCtx, joinPreds)
+		if err != nil {
+			return nodeID, nil, err
+		}
 
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
@@ -213,7 +216,9 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 		}
 
 		retExpr := scalarMatch
-		if retExpr == nil {
+		if finalizeProjection {
+			retExpr = postJoinProjection
+		} else if retExpr == nil {
 			retExpr = &plan.Expr{
 				Typ: subCtx.results[0].Typ,
 				Expr: &plan.Expr_Col{
@@ -234,16 +239,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 				return 0, nil, err
 			}
 		}
-		if reconstructEmptyProjection {
-			retExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
-				matchMarker,
-				retExpr,
-				emptyProjection,
-			})
-			if err != nil {
-				return nodeID, retExpr, err
-			}
-		} else if rewriteCount {
+		if !finalizeProjection && rewriteCount {
 			argsType := make([]types.Type, 1)
 			argsType[0] = makeTypeByPlan2Expr(retExpr)
 			fGet, err := function.GetFunctionByName(builder.GetContext(), "isnull", argsType)
@@ -608,103 +604,138 @@ func (builder *QueryBuilder) generateRowComparison(op string, child *plan.Expr, 
 	}
 }
 
-// prepareCorrelatedScalarAggregateEmptyProjection reconstructs the scalar
-// projection for an empty correlated aggregate group. pullupThroughAgg groups
-// the inner input by the correlation key, so a missing key produces no right
-// row and a LEFT JOIN cannot execute the original projection. A hidden marker
-// distinguishes that case from a matching group whose aggregate value is NULL.
+// prepareCorrelatedScalarAggregatePostJoinProjection moves the scalar final
+// expression above the LEFT JOIN used to decorrelate an implicit single-group
+// aggregate. pullupThroughAgg groups the inner input by the correlation key, so
+// a missing key produces no right row. Evaluating COALESCE, arithmetic, or CASE
+// below the join would therefore skip the expression for that outer row.
 //
-// This is intentionally limited to the ordinary PROJECT -> AGG shape of an
-// implicit single-group aggregate. Wrappers that can remove or reorder the
-// aggregate row (for example HAVING, DISTINCT, SORT, or LIMIT) keep the legacy
-// behavior.
-func (builder *QueryBuilder) prepareCorrelatedScalarAggregateEmptyProjection(
+// The right projection is rewritten to expose only raw aggregate outputs and
+// the correlation keys that pullupThroughProj already appended. COUNT outputs
+// are restored to zero after null extension; other supported aggregates keep
+// NULL as their empty-input value. The saved final expression is then evaluated
+// against those post-join values.
+//
+// This is intentionally limited to the ordinary PROJECT -> AGG shape. Wrappers
+// that can remove or reorder the aggregate row (for example HAVING, DISTINCT,
+// SORT, or LIMIT) keep the legacy path.
+func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 	subID int32,
 	subCtx *BindContext,
 	joinPreds []*plan.Expr,
-) (*plan.Expr, *plan.Expr, bool) {
+) (*plan.Expr, bool, error) {
 	if !subCtx.hasSingleRow || len(subCtx.groups) != 0 || len(subCtx.aggregates) == 0 || len(joinPreds) == 0 {
-		return nil, nil, false
+		return nil, false, nil
 	}
 
 	project := builder.qry.Nodes[subID]
 	if project.NodeType != plan.Node_PROJECT || len(project.Children) != 1 || len(project.BindingTags) != 1 ||
 		len(project.ProjectList) == 0 || project.Limit != nil || project.Offset != nil || project.RankOption != nil {
-		return nil, nil, false
+		return nil, false, nil
 	}
 
 	agg := builder.qry.Nodes[project.Children[0]]
 	if agg.NodeType != plan.Node_AGG || len(agg.BindingTags) < 2 || agg.BindingTags[1] != subCtx.aggregateTag ||
 		len(agg.AggList) != len(subCtx.aggregates) {
-		return nil, nil, false
+		return nil, false, nil
 	}
 
-	emptyValues := make([]*plan.Expr, len(agg.AggList))
+	projectTag := project.BindingTags[0]
+	projectedAggregates := make([]*plan.Expr, len(agg.AggList))
+	rawAggregates := make([]*plan.Expr, len(agg.AggList))
+	firstAppendedPos := int32(len(project.ProjectList))
 	for i, aggregate := range agg.AggList {
 		fn := aggregate.GetF()
 		if fn == nil || fn.Func == nil {
-			return nil, nil, false
+			return nil, false, nil
 		}
+
+		projectPos := int32(0)
+		if i > 0 {
+			projectPos = firstAppendedPos + int32(i-1)
+		}
+		rawAggregates[i] = GetColExpr(aggregate.Typ, subCtx.aggregateTag, int32(i))
+		projected := GetColExpr(aggregate.Typ, projectTag, projectPos)
+		projected.Typ.NotNullable = false
 
 		switch fn.Func.ObjName {
-		case "sum", "avg", "min", "max":
-			emptyValues[i] = makePlan2NullConstExprWithType()
-			emptyValues[i].Typ = aggregate.Typ
-			emptyValues[i].Typ.NotNullable = false
+		case "sum", "avg", "min", "max", "json_arrayagg":
+			projectedAggregates[i] = projected
 		case "count", "starcount":
-			emptyValues[i] = makePlan2Int64ConstExprWithType(0)
-			emptyValues[i].Typ = aggregate.Typ
-			emptyValues[i].Typ.NotNullable = true
+			var err error
+			projectedAggregates[i], err = builder.restoreEmptyCount(projected, aggregate.Typ)
+			if err != nil {
+				return nil, false, err
+			}
 		default:
-			return nil, nil, false
+			return nil, false, nil
 		}
 	}
 
-	emptyProjection := DeepCopyExpr(project.ProjectList[0])
-	if !replaceAggregateRefsWithEmptyValues(emptyProjection, subCtx.aggregateTag, emptyValues) {
-		return nil, nil, false
+	postJoinProjection, ok := replaceAggregateRefsForPostJoin(
+		DeepCopyExpr(project.ProjectList[0]), subCtx.aggregateTag, projectedAggregates)
+	if !ok {
+		return nil, false, nil
 	}
-	emptyProjection, stillCorrelated := decreaseDepth(emptyProjection)
+	postJoinProjection, stillCorrelated := decreaseDepth(postJoinProjection)
 	if stillCorrelated {
-		return nil, nil, false
+		return nil, false, nil
 	}
 
-	markerPos := int32(len(project.ProjectList))
-	project.ProjectList = append(project.ProjectList, DeepCopyExpr(constTrue))
-	markerType := constTrue.Typ
-	markerType.NotNullable = false
-	matchMarker := GetColExpr(markerType, project.BindingTags[0], markerPos)
-	return matchMarker, emptyProjection, true
+	newProjectList := make([]*plan.Expr, len(project.ProjectList), len(project.ProjectList)+len(rawAggregates)-1)
+	copy(newProjectList, project.ProjectList)
+	newProjectList[0] = rawAggregates[0]
+	newProjectList = append(newProjectList, rawAggregates[1:]...)
+	project.ProjectList = newProjectList
+	return postJoinProjection, true, nil
 }
 
-func replaceAggregateRefsWithEmptyValues(expr *plan.Expr, aggregateTag int32, emptyValues []*plan.Expr) bool {
+func (builder *QueryBuilder) restoreEmptyCount(countExpr *plan.Expr, aggregateType plan.Type) (*plan.Expr, error) {
+	isNullExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{countExpr})
+	if err != nil {
+		return nil, err
+	}
+	zeroExpr := makePlan2Int64ConstExprWithType(0)
+	zeroExpr.Typ = aggregateType
+	zeroExpr.Typ.NotNullable = true
+	return BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
+		isNullExpr,
+		zeroExpr,
+		DeepCopyExpr(countExpr),
+	})
+}
+
+func replaceAggregateRefsForPostJoin(
+	expr *plan.Expr,
+	aggregateTag int32,
+	projectedAggregates []*plan.Expr,
+) (*plan.Expr, bool) {
 	if expr == nil {
-		return false
+		return nil, false
 	}
 
 	switch item := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		if item.Col.RelPos != aggregateTag {
-			return true
+			return nil, false
 		}
-		if item.Col.ColPos < 0 || int(item.Col.ColPos) >= len(emptyValues) {
-			return false
+		if item.Col.ColPos < 0 || int(item.Col.ColPos) >= len(projectedAggregates) {
+			return nil, false
 		}
-		emptyValue := DeepCopyExpr(emptyValues[item.Col.ColPos])
-		expr.Typ = emptyValue.Typ
-		expr.Expr = emptyValue.Expr
-		return true
+		return DeepCopyExpr(projectedAggregates[item.Col.ColPos]), true
 	case *plan.Expr_F:
-		for _, arg := range item.F.Args {
-			if !replaceAggregateRefsWithEmptyValues(arg, aggregateTag, emptyValues) {
-				return false
+		for i, arg := range item.F.Args {
+			var ok bool
+			item.F.Args[i], ok = replaceAggregateRefsForPostJoin(arg, aggregateTag, projectedAggregates)
+			if !ok {
+				return nil, false
 			}
 		}
-		return true
+		return expr, true
 	case *plan.Expr_List, *plan.Expr_W, *plan.Expr_Sub:
-		return false
+		return nil, false
 	default:
-		return true
+		return expr, true
 	}
 }
 

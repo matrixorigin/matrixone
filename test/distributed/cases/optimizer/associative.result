@@ -131,7 +131,7 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: sum(lineitem.l_extendedprice)  𝄀
         ->  Filter  𝄀
-              Filter Cond: (cast(lineitem.l_quantity AS DECIMAL128(38, 2)) < CASE WHEN #[0,1] THEN 0.2 * avg(lineitem.l_quantity) ELSE (null) END)
+              Filter Cond: (cast(lineitem.l_quantity AS DECIMAL128(38, 2)) < 0.2 * avg(lineitem.l_quantity))
               -- HINT: Cast expression may prevent index usage  𝄀
               ->  Join  𝄀
                     Join Type: RIGHT  𝄀
@@ -174,7 +174,7 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: sum(lineitem.l_extendedprice)  𝄀
         ->  Filter  𝄀
-              Filter Cond: (cast(lineitem.l_quantity AS DECIMAL128(38, 2)) < CASE WHEN #[0,1] THEN 0.2 * avg(lineitem.l_quantity) ELSE (null) END)
+              Filter Cond: (cast(lineitem.l_quantity AS DECIMAL128(38, 2)) < 0.2 * avg(lineitem.l_quantity))
               -- HINT: Cast expression may prevent index usage  𝄀
               ->  Join  𝄀
                     Join Type: RIGHT  𝄀
