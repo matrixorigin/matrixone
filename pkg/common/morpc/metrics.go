@@ -47,6 +47,7 @@ type metrics struct {
 	connectDurationHistogram      prometheus.Observer
 	doneDurationHistogram         prometheus.Observer
 	autoCreateTimeoutCounter      prometheus.Counter // tracks auto-create wait timeouts
+	autoCreateTimeoutEventCounter prometheus.Counter // tracks distinct create states causing wait timeouts
 	backendUnavailableCounter     prometheus.Counter // tracks backend unavailable (pool has backends but all down)
 }
 
@@ -72,6 +73,7 @@ func newMetrics(name string) *metrics {
 		inputBytesCounter:             v2.NewRPCInputCounter(),
 		outputBytesCounter:            v2.NewRPCOutputCounter(),
 		autoCreateTimeoutCounter:      v2.NewRPCBackendAutoCreateTimeoutCounterByName(name),
+		autoCreateTimeoutEventCounter: v2.NewRPCBackendAutoCreateTimeoutEventCounterByName(name),
 		backendUnavailableCounter:     v2.NewRPCBackendUnavailableCounterByName(name),
 	}
 }
@@ -92,6 +94,9 @@ func rpcMetricErrorType(err error) string {
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
 		return "backend_cannot_connect"
+	}
+	if errors.Is(err, ErrBackendCreateTimeout) {
+		return "backend_create_timeout"
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) || errors.Is(err, backendClosed) {
 		return "backend_closed"

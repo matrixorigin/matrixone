@@ -62,6 +62,11 @@ func TestLength(t *testing.T) {
 	}
 }
 
+func TestCapacityForUntypedNull(t *testing.T) {
+	vec := NewVec(types.T_any.ToType())
+	require.Equal(t, 0, vec.Capacity())
+}
+
 func TestDupOffHeap(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_varchar.ToType())
@@ -1824,6 +1829,47 @@ func TestUnmarshalBinaryRejectsUnsupportedZeroSizeType(t *testing.T) {
 			require.Error(t, unmarshalErr)
 		})
 	}
+}
+
+func TestUnmarshalBinaryTrustedKeepsStructuralChecks(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytes(source, []byte("value longer than inline storage"), false, mp))
+	data, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Free(mp)
+
+	for end := len(data) - 1; end >= 0; end-- {
+		target := NewVecFromReuse()
+		var unmarshalErr error
+		require.NotPanics(t, func() {
+			unmarshalErr = target.UnmarshalBinaryTrusted(data[:end])
+		}, "truncation at %d bytes", end)
+		require.Error(t, unmarshalErr, "truncation at %d bytes", end)
+	}
+}
+
+func TestUnmarshalBinaryTrustedRequiresPriorSemanticValidation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytes(source, []byte("value longer than inline storage"), false, mp))
+	data, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Free(mp)
+
+	// Preserve the complete frame while forging an out-of-range Varlena
+	// offset. The checked boundary rejects it; the trusted bind intentionally
+	// relies on a previous checked decode and immutable bytes.
+	corrupted := append([]byte(nil), data...)
+	varlenOffset := 1 + types.TSize + 4 + 4
+	invalidOffset := uint32(len(data) + 1)
+	copy(corrupted[varlenOffset+4:varlenOffset+8], types.EncodeUint32(&invalidOffset))
+
+	checked := NewVecFromReuse()
+	require.Error(t, checked.UnmarshalBinary(corrupted))
+
+	trusted := NewVecFromReuse()
+	require.NoError(t, trusted.UnmarshalBinaryTrusted(corrupted))
 }
 
 func TestStrMarshalAndUnMarshal(t *testing.T) {

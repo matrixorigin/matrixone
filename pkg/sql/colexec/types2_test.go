@@ -58,6 +58,9 @@ func (m *mockClientSession) Close() error {
 func (m *mockClientSession) CreateCache(ctx context.Context, cacheID uint64) (morpc.MessageCache, error) {
 	return nil, nil
 }
+func (m *mockClientSession) CreateCacheWithCancel(context.Context, uint64, context.CancelFunc) (morpc.MessageCache, error) {
+	return nil, nil
+}
 
 func (m *mockClientSession) DeleteCache(cacheID uint64) {}
 

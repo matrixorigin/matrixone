@@ -434,7 +434,7 @@ func simpleAstMarshal(stmt tree.Statement) ([]byte, error) {
 		*tree.ShowGrants, *tree.ShowIndex,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList,
-		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowConnectors,
+		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus,
 		*tree.ShowLogserviceReplicas, *tree.ShowLogserviceStores, *tree.ShowLogserviceSettings, *tree.ShowRecoveryWindow:
 		s.Typ = int(astShowNone)
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:

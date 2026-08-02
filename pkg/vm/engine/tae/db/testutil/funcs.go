@@ -17,8 +17,10 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"testing"
+	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -326,6 +328,80 @@ func WaitAllCheckpointsFinished(t *testing.T, e *db.DB, timeoutMS ...int) {
 		e.Wal.GetLSNWatermark(),
 		e.Runtime.Scheduler.GetPenddingLSNCnt(),
 	)
+}
+
+// ForceCheckpointBeyondCatalogGCBoundary flushes changes through boundary, then
+// creates and waits for a checkpoint whose catalog-GC watermark is strictly
+// newer than every transaction needed by that flush.
+//
+// ForceFlush can commit a flush-table-tail transaction after boundary. Building
+// the checkpoint target from the caller's boundary would therefore allow the
+// checkpoint to finish while catalog GC still has to retain the old appendable
+// objects. Capture a new boundary only after ForceFlush has completed, then
+// advance the checkpoint by GCInMemoryTTL.
+func ForceCheckpointBeyondCatalogGCBoundary(
+	t *testing.T,
+	e *db.DB,
+	boundary types.TS,
+) types.TS {
+	require.NotNil(t, e.Opts.GCCfg)
+
+	func() {
+		ctx, cancel := context.WithTimeout(context.Background(), TestCheckpointTimeout)
+		defer cancel()
+		require.NoError(t, e.ForceFlush(ctx, boundary))
+	}()
+
+	postFlushBoundary := e.TxnMgr.Now()
+	if postFlushBoundary.LT(&boundary) {
+		postFlushBoundary = boundary
+	}
+	ttl := int64(e.Opts.GCCfg.GCInMemoryTTL)
+	require.GreaterOrEqual(t, ttl, int64(0))
+	require.Less(t, postFlushBoundary.Physical(), int64(math.MaxInt64)-ttl)
+
+	// A checkpoint must never claim a future timestamp: later transactions could
+	// otherwise commit inside an interval that has already been checkpointed.
+	// Wait for the transaction clock to cross the retention boundary and use an
+	// allocated, publish-safe timestamp as the checkpoint target.
+	var target types.TS
+	require.Eventually(
+		t,
+		func() bool {
+			target = e.TxnMgr.Now()
+			return target.Physical() > postFlushBoundary.Physical()+ttl
+		},
+		TestCheckpointTimeout,
+		time.Millisecond,
+		"transaction clock did not pass catalog-GC retention boundary %s",
+		postFlushBoundary.ToString(),
+	)
+	func() {
+		ctx, cancel := context.WithTimeout(context.Background(), TestCheckpointTimeout)
+		defer cancel()
+		require.NoError(t, e.BGCheckpointRunner.ForceICKP(ctx, &target))
+	}()
+
+	checkpointed := e.BGCheckpointRunner.MaxCheckpoint()
+	require.NotNil(t, checkpointed)
+	require.True(t, checkpointed.IsFinished())
+	end := checkpointed.GetEnd()
+	require.Truef(
+		t,
+		end.GE(&target),
+		"checkpoint end %s does not cover catalog-GC target %s",
+		end.ToString(),
+		target.ToString(),
+	)
+	gcWatermark := types.BuildTS(end.Physical()-ttl, 0)
+	require.Truef(
+		t,
+		gcWatermark.GT(&postFlushBoundary),
+		"catalog-GC watermark %s does not pass post-flush boundary %s",
+		gcWatermark.ToString(),
+		postFlushBoundary.ToString(),
+	)
+	return target
 }
 
 func CreateRelationAndAppend(
@@ -707,6 +783,10 @@ func IsCatalogEqual(t *testing.T, c1, c2 *catalog.Catalog) {
 }
 
 func DeleteAll(t *testing.T, accountID uint32, db *db.DB, dbName, tableName string) {
+	DeleteAllWithCommitTS(t, accountID, db, dbName, tableName)
+}
+
+func DeleteAllWithCommitTS(t *testing.T, accountID uint32, db *db.DB, dbName, tableName string) types.TS {
 	txn, rel := GetRelation(t, accountID, db, dbName, tableName)
 	schema := rel.GetMeta().(*catalog.TableEntry).GetLastestSchemaLocked(false)
 	pkIdx := schema.GetPrimaryKey().Idx
@@ -719,20 +799,26 @@ func DeleteAll(t *testing.T, accountID uint32, db *db.DB, dbName, tableName stri
 		for i := uint16(0); i < blkCnt; i++ {
 			var view *containers.Batch
 			err := blk.HybridScan(context.Background(), &view, i, []int{rowIDIdx, pkIdx}, common.DefaultAllocator)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			defer view.Close()
 			view.Compact()
 			err = rel.DeleteByPhyAddrKeys(view.Vecs[0], view.Vecs[1], handle.DT_Normal)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 		}
 	}
 	err := txn.Commit(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	return txn.GetCommitTS()
 }
 
 func Append(t *testing.T, accountID uint32, db *db.DB, dbName, tableName string, bat *containers.Batch) {
+	AppendWithCommitTS(t, accountID, db, dbName, tableName, bat)
+}
+
+func AppendWithCommitTS(t *testing.T, accountID uint32, db *db.DB, dbName, tableName string, bat *containers.Batch) types.TS {
 	txn, rel := GetRelation(t, accountID, db, dbName, tableName)
-	assert.NoError(t, rel.Append(context.Background(), bat))
+	require.NoError(t, rel.Append(context.Background(), bat))
 	err := txn.Commit(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	return txn.GetCommitTS()
 }

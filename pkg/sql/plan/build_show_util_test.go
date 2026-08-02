@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -25,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
@@ -367,14 +370,133 @@ func Test_ShowCreateTableUsesStoredDDLForChecks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("construct show create failed: %+v", err)
 	}
-	if !strings.Contains(showSQL, "CONSTRAINT chk_age CHECK (c_age IS NULL OR (c_age >= 0 AND c_age <= 200))") {
+	if !strings.Contains(showSQL, "CONSTRAINT `chk_age` CHECK (`c_age` is null or (`c_age` >= 0 and `c_age` <= 200))") {
 		t.Fatalf("expected chk_age check constraint in show create output: %s", showSQL)
 	}
-	if !strings.Contains(showSQL, "CONSTRAINT chk_score CHECK (c_score IS NULL OR (c_score >= 0 AND c_score <= 100))") {
+	if !strings.Contains(showSQL, "CONSTRAINT `chk_score` CHECK (`c_score` is null or (`c_score` >= 0 and `c_score` <= 100))") {
 		t.Fatalf("expected chk_score check constraint in show create output: %s", showSQL)
 	}
 	if !strings.Contains(showSQL, "PRIMARY KEY (`id`)") {
 		t.Fatalf("expected canonical primary key output to be preserved: %s", showSQL)
+	}
+}
+
+func TestConstructCreateTableSQLUsesStructuredColumnCheck(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(
+		mock,
+		"create table t(a int constraint positive_a check (a > 0))",
+	)
+	require.NoError(t, err)
+	require.Len(t, tableDef.Checks, 1)
+	tableDef.Createsql = "create table t(a int)"
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(
+		t,
+		showSQL,
+		"CONSTRAINT `positive_a` CHECK (`a` > 0)",
+	)
+}
+
+func TestConstructCreateTableSQLPreservesCheckAcrossSQLModes(t *testing.T) {
+	build := func(sql, sqlMode string) *plan.TableDef {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.SetSqlModeOverride(sqlMode)
+		stmt, err := parsers.ParseOneWithSQLMode(
+			context.Background(),
+			dialect.MYSQL,
+			sql,
+			1,
+			sqlMode,
+		)
+		require.NoError(t, err)
+		defer stmt.Free()
+		built, err := BuildPlan(&mock.ctxt, stmt, false)
+		require.NoError(t, err)
+		return built.GetDdl().GetCreateTable().GetTableDef()
+	}
+
+	testCases := []struct {
+		name       string
+		sourceMode string
+		replayMode string
+		createSQL  string
+		canonical  string
+	}{
+		{
+			name:       "no backslash escapes to default",
+			sourceMode: "NO_BACKSLASH_ESCAPES",
+			replayMode: "",
+			createSQL:  `create table t(s varchar(10), check (s = 'a\nb'))`,
+			canonical:  "cast(0x615c6e62 as varchar)",
+		},
+		{
+			name:       "default to no backslash escapes",
+			sourceMode: "",
+			replayMode: "NO_BACKSLASH_ESCAPES",
+			createSQL:  `create table t(s varchar(10), check (s = 'a\\nb'))`,
+			canonical:  "cast(0x615c6e62 as varchar)",
+		},
+		{
+			name:       "binary string keeps introducer",
+			sourceMode: "",
+			replayMode: "NO_BACKSLASH_ESCAPES",
+			createSQL:  `create table t(b varbinary(10), check (b = _binary 'x'))`,
+			canonical:  "_binary 0x78",
+		},
+		{
+			name:       "binary string with backslash",
+			sourceMode: "NO_BACKSLASH_ESCAPES",
+			replayMode: "",
+			createSQL:  `create table t(b varbinary(10), check (b = _binary 'x\y'))`,
+			canonical:  "_binary 0x785c79",
+		},
+		{
+			name:       "binary hex keeps introducer",
+			sourceMode: "",
+			replayMode: "NO_BACKSLASH_ESCAPES",
+			createSQL:  `create table t(b varbinary(10), check (bit_count(_binary X'3132') > 0))`,
+			canonical:  "_binary 0x3132",
+		},
+		{
+			name:       "name const keeps literal contract",
+			sourceMode: "NO_BACKSLASH_ESCAPES",
+			replayMode: "",
+			createSQL:  `create table t(a int, check (name_const('a\b', 1) = 1))`,
+			canonical:  "name_const(0x615c62, 1)",
+		},
+		{
+			name:       "name const value from no backslash escapes",
+			sourceMode: "NO_BACKSLASH_ESCAPES",
+			replayMode: "",
+			createSQL:  `create table t(s varchar(10), check (name_const('n', 'a\b') = s))`,
+			canonical:  "name_const('n', cast(0x615c62 as varchar))",
+		},
+		{
+			name:       "name const value from default mode",
+			sourceMode: "",
+			replayMode: "NO_BACKSLASH_ESCAPES",
+			createSQL:  `create table t(s varchar(10), check (name_const('n', 'a\\b') = s))`,
+			canonical:  "name_const('n', cast(0x615c62 as varchar))",
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tableDef := build(tc.createSQL, tc.sourceMode)
+			require.Len(t, tableDef.Checks, 1)
+			require.Contains(t, tableDef.Checks[0].OriginSql, tc.canonical)
+
+			showSQL, _, err := ConstructCreateTableSQL(nil, tableDef, nil, false, nil)
+			require.NoError(t, err)
+			require.Contains(t, showSQL, tc.canonical)
+
+			replayedTableDef := build(showSQL, tc.replayMode)
+			require.Len(t, replayedTableDef.Checks, 1)
+			require.Equal(t, tableDef.Checks[0].OriginSql, replayedTableDef.Checks[0].OriginSql)
+			require.Equal(t, tableDef.Checks[0].Check, replayedTableDef.Checks[0].Check)
+		})
 	}
 }
 

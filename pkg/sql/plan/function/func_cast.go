@@ -7048,7 +7048,10 @@ func strToDate(proc *process.Process,
 			s := convertByteSliceToString(v)
 			val, err := types.ParseDateCast(s)
 			if err != nil {
-				// Invalid date string returns NULL (MySQL behavior)
+				if assignmentCast {
+					return err
+				}
+				// Invalid date strings in expression casts return SQL NULL.
 				if err := to.Append(dft, true); err != nil {
 					return err
 				}
