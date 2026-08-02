@@ -59,6 +59,8 @@ func BenchmarkHashBuildNonSpillE2E(b *testing.B) {
 		typ                 types.Type
 		varcharPayloadBytes int
 		computed            bool
+		columns             int
+		batchCount          int
 	}{
 		{name: "INT64", typ: types.T_int64.ToType()},
 		{name: "INT64_PLUS_ZERO", typ: types.T_int64.ToType(), computed: true},
@@ -68,13 +70,68 @@ func BenchmarkHashBuildNonSpillE2E(b *testing.B) {
 			typ:                 types.T_varchar.ToType(),
 			varcharPayloadBytes: 128,
 		},
+		{
+			name:                "VARCHAR_32X128",
+			typ:                 types.T_varchar.ToType(),
+			varcharPayloadBytes: 128,
+			columns:             32,
+			batchCount:          1,
+		},
 	}
 	for _, benchmark := range benchmarks {
 		b.Run("Shuffle/"+benchmark.name, func(b *testing.B) {
 			benchmarkHashBuildNonSpillE2E(
-				b, benchmark.typ, benchmark.varcharPayloadBytes, benchmark.computed)
+				b,
+				benchmark.typ,
+				benchmark.varcharPayloadBytes,
+				benchmark.computed,
+				benchmark.columns,
+				benchmark.batchCount,
+			)
 		})
 	}
+}
+
+// BenchmarkUnionBatchAreaProjectionWideVarchar isolates the recovery
+// projection paid by an ordinary non-spill ingress batch. The common flat
+// representation should be O(columns), while shared or partial vectors retain
+// the descriptor-scan fallback covered by unit tests.
+func BenchmarkUnionBatchAreaProjectionWideVarchar(b *testing.B) {
+	mp := mpool.MustNewZero()
+	input := batch.NewWithSize(32)
+	payload := make([]byte, 128)
+	for column := range input.Vecs {
+		vec := vector.NewVec(types.T_varchar.ToType())
+		for range nonSpillBenchmarkBatchRows {
+			if err := vector.AppendBytes(vec, payload, false, mp); err != nil {
+				b.Fatal(err)
+			}
+		}
+		input.SetVector(int32(column), vec)
+	}
+	input.SetRowCount(nonSpillBenchmarkBatchRows)
+
+	b.ReportAllocs()
+	b.ReportMetric(float64(len(input.Vecs)), "columns/op")
+	b.ResetTimer()
+	var projected uint64
+	for range b.N {
+		for _, vec := range input.Vecs {
+			_, selected, err := unionBatchAreaProjection(
+				vec, 0, nonSpillBenchmarkBatchRows)
+			if err != nil {
+				b.Fatal(err)
+			}
+			projected += selected
+		}
+	}
+	b.StopTimer()
+	if projected == 0 {
+		b.Fatal("projection was not evaluated")
+	}
+	input.Clean(mp)
+	require.Zero(b, mp.CurrNB())
+	mpool.DeleteMPool(mp)
 }
 
 func benchmarkHashBuildNonSpillE2E(
@@ -82,7 +139,15 @@ func benchmarkHashBuildNonSpillE2E(
 	keyType types.Type,
 	varcharPayloadBytes int,
 	computed bool,
+	columns int,
+	batchCount int,
 ) {
+	if columns == 0 {
+		columns = 1
+	}
+	if batchCount == 0 {
+		batchCount = nonSpillBenchmarkBatchCount
+	}
 	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	proc.Base.Lim.Size = 4 << 30
@@ -90,7 +155,7 @@ func benchmarkHashBuildNonSpillE2E(
 	proc.Base.Lim.BatchSize = 64 << 20
 
 	inputs := makeNonSpillBenchmarkBatches(
-		b, proc, keyType, varcharPayloadBytes)
+		b, proc, keyType, varcharPayloadBytes, columns, batchCount)
 	var inputBytes int64
 	for _, input := range inputs {
 		inputBytes += int64(input.Size())
@@ -111,7 +176,7 @@ func benchmarkHashBuildNonSpillE2E(
 	b.SetBytes(inputBytes)
 	b.ReportAllocs()
 	b.ReportMetric(
-		float64(nonSpillBenchmarkBatchCount*nonSpillBenchmarkBatchRows),
+		float64(batchCount*nonSpillBenchmarkBatchRows),
 		"rows/op",
 	)
 	b.ResetTimer()
@@ -135,12 +200,12 @@ func benchmarkHashBuildNonSpillE2E(
 		require.False(b, joinMap.IsSpilled())
 		require.Equal(
 			b,
-			int64(nonSpillBenchmarkBatchCount*nonSpillBenchmarkBatchRows),
+			int64(batchCount*nonSpillBenchmarkBatchRows),
 			joinMap.GetRowCount(),
 		)
 		require.Equal(
 			b,
-			uint64(nonSpillBenchmarkBatchCount*nonSpillBenchmarkBatchRows),
+			uint64(batchCount*nonSpillBenchmarkBatchRows),
 			joinMap.GetGroupCount(),
 			"benchmark keys must remain unique",
 		)
@@ -218,39 +283,43 @@ func makeNonSpillBenchmarkBatches(
 	proc *process.Process,
 	typ types.Type,
 	varcharPayloadBytes int,
+	columns int,
+	batchCount int,
 ) []*batch.Batch {
-	inputs := make([]*batch.Batch, nonSpillBenchmarkBatchCount)
+	inputs := make([]*batch.Batch, batchCount)
 	for batchIndex := range inputs {
-		input := batch.NewWithSize(1)
-		vec := vector.NewVec(typ)
-		rowBase := batchIndex * nonSpillBenchmarkBatchRows
-		for row := 0; row < nonSpillBenchmarkBatchRows; row++ {
-			value := rowBase + row
-			switch typ.Oid {
-			case types.T_int64:
-				require.NoError(
-					b,
-					vector.AppendFixed(vec, int64(value), false, proc.Mp()),
-				)
-			case types.T_varchar:
-				key := "key-" + strconv.Itoa(value)
-				if varcharPayloadBytes > len(key) {
-					key += strings.Repeat("x", varcharPayloadBytes-len(key))
+		input := batch.NewWithSize(columns)
+		for column := 0; column < columns; column++ {
+			vec := vector.NewVec(typ)
+			rowBase := batchIndex * nonSpillBenchmarkBatchRows
+			for row := 0; row < nonSpillBenchmarkBatchRows; row++ {
+				value := rowBase + row
+				switch typ.Oid {
+				case types.T_int64:
+					require.NoError(
+						b,
+						vector.AppendFixed(vec, int64(value), false, proc.Mp()),
+					)
+				case types.T_varchar:
+					key := "key-" + strconv.Itoa(value) + "-" + strconv.Itoa(column)
+					if varcharPayloadBytes > len(key) {
+						key += strings.Repeat("x", varcharPayloadBytes-len(key))
+					}
+					require.NoError(
+						b,
+						vector.AppendBytes(
+							vec,
+							[]byte(key),
+							false,
+							proc.Mp(),
+						),
+					)
+				default:
+					b.Fatalf("unsupported non-spill benchmark type %s", typ.Oid)
 				}
-				require.NoError(
-					b,
-					vector.AppendBytes(
-						vec,
-						[]byte(key),
-						false,
-						proc.Mp(),
-					),
-				)
-			default:
-				b.Fatalf("unsupported non-spill benchmark type %s", typ.Oid)
 			}
+			input.SetVector(int32(column), vec)
 		}
-		input.SetVector(0, vec)
 		input.SetRowCount(nonSpillBenchmarkBatchRows)
 		inputs[batchIndex] = input
 	}

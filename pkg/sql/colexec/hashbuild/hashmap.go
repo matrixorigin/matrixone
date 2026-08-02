@@ -458,7 +458,7 @@ func expressionTreePeakWithSelection(
 		// expose a bounded vector-evaluator tree here.
 		return 0, 0, process.ErrHashBuildBudgetInvalid
 	}
-	output, err = expressionTypePeak(expr.Typ, rows)
+	output, err = expressionResultPeak(expr, rows)
 	if err != nil || total > math.MaxUint64-output {
 		return 0, 0, process.ErrHashBuildBudgetInvalid
 	}
@@ -485,6 +485,45 @@ func expressionTreePeakWithSelection(
 		}
 	}
 	return total, output, nil
+}
+
+// expressionResultPeak keeps the generic SQL-type bound for ordinary
+// functions, but lets functions with a stronger allocation contract provide a
+// tighter result bound. serial and serial_full are the first such functions:
+// their packer output is the sum of the component encodings, not an arbitrary
+// VARCHAR(max) value.
+func expressionResultPeak(expr *plan.Expr, rows uint64) (uint64, error) {
+	if expr == nil {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	fn, ok := expr.Expr.(*plan.Expr_F)
+	if !ok || fn.F == nil || fn.F.Func == nil {
+		return expressionTypePeak(expr.Typ, rows)
+	}
+	fid, _ := function.DecodeOverloadID(fn.F.Func.Obj)
+	if fid != function.SERIAL && fid != function.SERIAL_FULL {
+		return expressionTypePeak(expr.Typ, rows)
+	}
+
+	var payloadPerRow uint64
+	for _, arg := range fn.F.Args {
+		if arg == nil {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		component, supported := function.SerialEncodedTypeSizeBound(types.New(
+			types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale,
+		))
+		if !supported {
+			// Keep the pre-existing representation-independent bound if the
+			// encoder contract does not recognize a planner type.
+			return expressionTypePeak(expr.Typ, rows)
+		}
+		if payloadPerRow > math.MaxUint64-component {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		payloadPerRow += component
+	}
+	return expressionWidthPeak(payloadPerRow, rows)
 }
 
 func nodeFunctionArgs(expr *plan.Expr) []*plan.Expr {
@@ -553,7 +592,14 @@ func expressionTypePeak(typ plan.Type, rows uint64) (uint64, error) {
 	if width < 1 {
 		width = 1
 	}
-	perRow := uint64(width) + 32
+	return expressionWidthPeak(uint64(width), rows)
+}
+
+func expressionWidthPeak(width, rows uint64) (uint64, error) {
+	if width > math.MaxUint64-32 {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	perRow := width + 32
 	if rows > (math.MaxUint64-(64<<10))/perRow {
 		return 0, process.ErrHashBuildBudgetInvalid
 	}

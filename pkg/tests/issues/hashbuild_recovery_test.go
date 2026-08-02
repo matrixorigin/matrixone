@@ -37,9 +37,10 @@ const (
 )
 
 // TestHashBuildSharedBudgetRecoverySQL is the SQL-protocol counterexample for
-// late spill admission. join_spill_mem remains disabled: a finite query budget
-// must force a parallel shuffle HashBuild to transition from retained data to
-// spill without losing rows or surfacing a terminal memory error.
+// late spill admission. join_spill_mem remains at its automatic threshold: a
+// lower finite query budget must force a parallel shuffle HashBuild to
+// transition from retained data to spill without losing rows or surfacing a
+// terminal memory error.
 //
 // The physical input is intentionally narrow and bounded. Patched statistics
 // select the same shuffle topology as a large analytical join, while the CN's
@@ -88,7 +89,8 @@ func TestHashBuildSharedBudgetRecoverySQL(t *testing.T) {
 	execJoinSpillSQL(t, ctx, conn, "use `"+dbName+"`")
 	execJoinSpillSQL(t, ctx, conn, "set @@max_dop = 8")
 	defer resetOptimizerHintsOnCN(t, port)
-	execJoinSpillSQL(t, ctx, conn, `set session optimizer_hints = "forceOneCN=1"`)
+	execJoinSpillSQL(t, ctx, conn,
+		`set session optimizer_hints = "forceOneCN=1,joinOrdering=1"`)
 	execJoinSpillSQL(t, ctx, conn, "set @@join_spill_mem = 0")
 
 	execJoinSpillSQL(t, ctx, conn,
@@ -104,9 +106,18 @@ func TestHashBuildSharedBudgetRecoverySQL(t *testing.T) {
 	patchJoinSpillStats(t, ctx, conn, dbName, "recovery_probe", 20_000_000)
 	patchJoinSpillStats(t, ctx, conn, dbName, "recovery_build", 10_000_000)
 	query := `select count(*)
-		from recovery_probe p join recovery_build b on p.k = b.k`
+		from recovery_probe p join recovery_build b
+			on serial_full(p.k, p.payload) = serial_full(b.k, b.payload)`
 	plan := queryJoinSpillText(t, ctx, conn, "explain "+query)
-	require.Contains(t, plan, "shuffle: range(")
+	require.Contains(t, plan, "shuffle: hash(")
+	require.Contains(t, plan, "serial_full(",
+		"the public regression must exercise the expression-key recovery path")
+	probeScan := strings.Index(plan, ".recovery_probe")
+	buildScan := strings.Index(plan, ".recovery_build")
+	require.NotEqualf(t, -1, probeScan, "probe scan missing from plan:\n%s", plan)
+	require.NotEqualf(t, -1, buildScan, "build scan missing from plan:\n%s", plan)
+	require.Lessf(t, probeScan, buildScan,
+		"the million-row table must remain the right/hash-build input:\n%s", plan)
 
 	spillBefore := promtestutil.ToFloat64(
 		metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1"))
@@ -115,7 +126,7 @@ func TestHashBuildSharedBudgetRecoverySQL(t *testing.T) {
 	require.Equal(t, int64(4096), count)
 	require.Greater(t, promtestutil.ToFloat64(
 		metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1")), spillBefore,
-		"the zero-threshold query must spill because of the shared hard budget")
+		"the automatic-threshold query must spill because of the shared hard budget")
 
 	// A terminal recovery bug often leaves the service reachable but the query
 	// dependency graph poisoned. Verify both the result and a fresh statement.

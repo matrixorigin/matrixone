@@ -1067,6 +1067,47 @@ func TestUnionBatchAreaProjectionBoundaries(t *testing.T) {
 	require.Zero(t, selected)
 }
 
+func TestUnionBatchAreaProjectionWideFlatAndSharedRepresentations(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	typ := types.New(types.T_varchar, 128, 0)
+	const rows = 128
+	payload := make([]byte, 128)
+
+	flat := vector.NewVec(typ)
+	for range rows {
+		require.NoError(t, vector.AppendBytes(flat, payload, false, proc.Mp()))
+	}
+	defer flat.Free(proc.Mp())
+	require.True(t, flat.VarlenaAreaIsDisjoint())
+	physical, selected, err := unionBatchAreaProjection(flat, 0, rows)
+	require.NoError(t, err)
+	require.Equal(t, rows*len(payload), physical)
+	require.Equal(t, uint64(physical), selected)
+
+	constant, err := vector.NewConstBytes(typ, payload, rows, proc.Mp())
+	require.NoError(t, err)
+	defer constant.Free(proc.Mp())
+	shared := vector.NewVec(typ)
+	require.NoError(t, shared.UnionBatch(constant, 0, rows, nil, proc.Mp()))
+	defer shared.Free(proc.Mp())
+	require.False(t, shared.IsConst())
+	require.False(t, shared.VarlenaAreaIsDisjoint())
+	require.Equal(t, len(payload), len(shared.GetArea()))
+
+	physical, selected, err = unionBatchAreaProjection(shared, 0, rows)
+	require.NoError(t, err)
+	require.Equal(t, len(payload), physical)
+	require.Equal(t, uint64(rows*len(payload)), selected,
+		"a shared flat representation must retain the descriptor-scan fallback")
+
+	physical, selected, err = unionBatchAreaProjection(flat, 1, rows-1)
+	require.NoError(t, err)
+	require.Equal(t, (rows-1)*len(payload), physical)
+	require.Equal(t, uint64(physical), selected,
+		"a partial range must retain its exact-copy path")
+}
+
 func TestCleanCopiedBatchReleasesCoalescedIngressReservations(t *testing.T) {
 	const budgetCap = uint64(4 << 20)
 	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)

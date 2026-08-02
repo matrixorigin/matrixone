@@ -2809,13 +2809,13 @@ func TestShuffleHashBuildPreservesRecoveryHeadroomAcrossSharedBudgetPressure(t *
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
-func TestShuffleHashBuildExpressionRecoverySurvivesSharedBudgetPressure(t *testing.T) {
+func TestShuffleHashBuildSerialFullRecoverySurvivesSharedBudgetPressure(t *testing.T) {
 	bindProc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	left := newExpr(0, types.T_int32.ToType())
 	right := newExpr(1, types.T_int32.ToType())
-	modulo, err := plan2.BindFuncExprImplByPlanExpr(
+	serialFull, err := plan2.BindFuncExprImplByPlanExpr(
 		bindProc.Ctx,
-		"%",
+		"serial_full",
 		[]*plan.Expr{left, right},
 	)
 	require.NoError(t, err)
@@ -2826,7 +2826,7 @@ func TestShuffleHashBuildExpressionRecoverySurvivesSharedBudgetPressure(t *testi
 		t,
 		[]bool{false, false},
 		[]types.Type{typ, typ},
-		[]*plan.Expr{modulo},
+		[]*plan.Expr{serialFull},
 	)
 	tc.arg.IsShuffle = true
 	tc.arg.ShuffleIdx = 0

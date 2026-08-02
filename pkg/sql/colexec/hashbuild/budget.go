@@ -999,12 +999,23 @@ func unionBatchAreaProjection(
 			uint64(physicalBytes), uint64(rows))
 		return physicalBytes, selectedPayload, err
 	}
+	if start == 0 && rows == src.Length() {
+		if src.VarlenaAreaIsDisjoint() {
+			// The retained full-vector copy preserves the complete physical area.
+			// Disjoint live descriptors prove their logical payload cannot exceed
+			// that area even when it contains dead bytes. This avoids an
+			// O(columns*rows) pre-spill scan for ordinary append-built vectors.
+			return len(src.GetArea()), uint64(len(src.GetArea())), nil
+		}
+		livePayload, err := logicalAppendAreaBytes(src, start, rows)
+		if err != nil {
+			return 0, 0, err
+		}
+		return len(src.GetArea()), livePayload, nil
+	}
 	livePayload, err := logicalAppendAreaBytes(src, start, rows)
 	if err != nil {
 		return 0, 0, err
-	}
-	if start == 0 && rows == src.Length() {
-		return len(src.GetArea()), livePayload, nil
 	}
 	if livePayload > uint64(math.MaxInt) {
 		return 0, 0, process.ErrHashBuildBudgetInvalid
