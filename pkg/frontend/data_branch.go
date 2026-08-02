@@ -60,6 +60,9 @@ func isDataBranchUserVisibleColumn(col *plan.ColDef) bool {
 	if col.Hidden {
 		return false
 	}
+	if col.GeneratedCol != nil {
+		return false
+	}
 	switch col.Name {
 	case catalog.Row_ID, catalog.FakePrimaryKeyColName, catalog.CPrimaryKeyColName:
 		return false
@@ -1471,6 +1474,10 @@ func checkSchemaCompatibilityWithResolver(
 
 		name := strings.ToLower(tarCol.Name)
 		baseCol := resolveBaseColumn(tarCol)
+		if baseCol != nil &&
+			isDataBranchUserVisibleColumn(tarCol) != isDataBranchUserVisibleColumn(baseCol) {
+			baseCol = nil
+		}
 		if baseCol != nil {
 			if baseCol.Typ.Id == tarCol.Typ.Id {
 				if !dataBranchColumnTypeAttributesEqual(baseCol.Typ, tarCol.Typ) {
@@ -1488,10 +1495,10 @@ func checkSchemaCompatibilityWithResolver(
 					return
 				}
 				commonIdxes = append(commonIdxes, dataIdx)
+				commonColNameSet[name] = true
+				commonColNameSet[strings.ToLower(baseCol.Name)] = true
 				if isDataBranchUserVisibleColumn(tarCol) {
 					commonVisibleIdxes = append(commonVisibleIdxes, dataIdx)
-					commonColNameSet[name] = true
-					commonColNameSet[strings.ToLower(baseCol.Name)] = true
 					delete(baseVisibleColMap, strings.ToLower(baseCol.Name))
 				}
 			} else {
