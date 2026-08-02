@@ -281,7 +281,14 @@ func handleDelsOnLCA(
 		selectCols := make([]string, len(lcaLayout.attrs)+1)
 		selectCols[0] = fmt.Sprintf("pks.%s", quotedOrdinalAlias)
 		for i, colName := range lcaLayout.attrs {
-			selectCols[i+1] = fmt.Sprintf("lca.%s", quoteIdentifierForSQL(colName))
+			colExpr := fmt.Sprintf("lca.%s", quoteIdentifierForSQL(colName))
+			if lcaLayout.types[i].Oid == types.T_uint64 && lcaLayout.enumValues[i] != "" {
+				// SET is stored as uint64 but ordinary SQL projection exposes its
+				// display label. Request the physical bitmap explicitly so the
+				// probe remains lossless even when the SET has an empty member.
+				colExpr = fmt.Sprintf("cast(%s as unsigned)", colExpr)
+			}
+			selectCols[i+1] = colExpr
 		}
 
 		sqlBuf.Reset()
@@ -507,8 +514,10 @@ func handleDelsOnLCA(
 // appendLCAProbeValue appends a column returned by the LCA SQL probe to the
 // corresponding physical table vector. A RIGHT JOIN exposes ENUM columns as
 // VARCHAR labels, so they need to be restored to their physical enum codes
-// before the batch enters the diff pipeline. Other columns must retain their
-// physical type; copying mismatched vector storage would silently corrupt data.
+// before the batch enters the diff pipeline. SET columns are projected as
+// unsigned bitmaps by the SQL probe and therefore arrive with their physical
+// type. Other columns must retain their physical type; copying mismatched vector
+// storage would silently corrupt data.
 func appendLCAProbeValue(
 	dst, src *vector.Vector,
 	row int,

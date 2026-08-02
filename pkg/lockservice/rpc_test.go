@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1330,8 +1329,12 @@ func TestLockTableBindChanged(t *testing.T) {
 
 func TestNewClientWithMOCluster(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
-	assert.NoError(t, os.RemoveAll(testSockets[7:]))
+	testSocketDir, err := createTestSocketDir()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, removeTestSocketDir(testSocketDir))
+	}()
+	testSockets := testSocketAddress(testSocketDir, "rpc.sock")
 	sid := "sid"
 	runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
 	cluster := clusterservice.NewMOCluster(
@@ -2026,8 +2029,12 @@ func runRPCTests(
 
 			reuse.RunReuseTests(func() {
 				defer leaktest.AfterTest(t)()
-				testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
-				assert.NoError(t, os.RemoveAll(testSockets[7:]))
+				testSocketDir, err := createTestSocketDir()
+				require.NoError(t, err)
+				defer func() {
+					require.NoError(t, removeTestSocketDir(testSocketDir))
+				}()
+				testSockets := testSocketAddress(testSocketDir, "rpc.sock")
 
 				cluster := clusterservice.NewMOCluster(
 					sid,
@@ -2081,8 +2088,12 @@ func runRPCServerNoCloseTests(
 		sid,
 		func(rt runtime.Runtime) {
 			defer leaktest.AfterTest(t)()
-			testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
-			assert.NoError(t, os.RemoveAll(testSockets[7:]))
+			testSocketDir, err := createTestSocketDir()
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, removeTestSocketDir(testSocketDir))
+			}()
+			testSockets := testSocketAddress(testSocketDir, "rpc.sock")
 
 			cluster := clusterservice.NewMOCluster(
 				sid,
@@ -2110,6 +2121,9 @@ func runRPCServerNoCloseTests(
 
 			s, err := NewServer(sid, testSockets, morpc.Config{}, opts...)
 			require.NoError(t, err)
+			defer func() {
+				assert.NoError(t, s.Close())
+			}()
 			require.NoError(t, s.Start())
 
 			c, err := NewClient(sid, morpc.Config{})
