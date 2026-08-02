@@ -1733,6 +1733,20 @@ func (txn *Transaction) deleteBatch(
 	return bat
 }
 
+func (txn *Transaction) addBatchSelectionsLocked(bat *batch.Batch, sels []int64) {
+	selections := append(txn.batchSelectList[bat], sels...)
+	slices.Sort(selections)
+	txn.batchSelectList[bat] = slices.Compact(selections)
+}
+
+func (txn *Transaction) selectAllBatchRowsLocked(bat *batch.Batch) {
+	selections := txn.batchSelectList[bat][:0]
+	for i := range bat.RowCount() {
+		selections = append(selections, int64(i))
+	}
+	txn.batchSelectList[bat] = selections
+}
+
 // Delete rows belongs to uncommitted raw data batch in txn's workspace.
 func (txn *Transaction) deleteTableWrites(
 	databaseId uint64,
@@ -1790,7 +1804,7 @@ func (txn *Transaction) deleteTableWrites(
 			}
 		}
 		if len(sels) > 0 {
-			txn.batchSelectList[entry.bat] = append(txn.batchSelectList[entry.bat], sels...)
+			txn.addBatchSelectionsLocked(entry.bat, sels)
 		}
 	}
 }
@@ -1856,8 +1870,10 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	if len(txn.batchSelectList) > 0 {
 		for _, e := range txn.writes {
 			if sels, ok := txn.batchSelectList[e.bat]; ok {
-				txn.approximateInMemInsertCnt -= len(sels)
+				// Repeated internal deletes can select the same workspace row more than once.
 				slices.Sort(sels)
+				sels = slices.Compact(sels)
+				txn.approximateInMemInsertCnt -= len(sels)
 				shrinkBatchWithRowids(e.bat, sels)
 				delete(txn.batchSelectList, e.bat)
 			}
