@@ -64,6 +64,34 @@ func TestLength(t *testing.T) {
 	}
 }
 
+func TestAppendCheckpointRollback(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_varchar.ToType())
+	defer vec.Free(mp)
+	first := strings.Repeat("a", 64)
+	require.NoError(t, AppendBytes(vec, []byte(first), false, mp))
+	vec.GetGrouping().Set(0)
+	vec.SetSorted(true)
+	checkpoint := vec.MakeAppendCheckpoint()
+
+	require.NoError(t, AppendBytes(vec, []byte(strings.Repeat("b", 96)), false, mp))
+	vec.GetNulls().Set(1)
+	vec.GetGrouping().Set(1)
+	// Grouping publication can precede a failed varlen copy and therefore can
+	// extend beyond the length reached by the copy itself.
+	vec.GetGrouping().Set(2)
+	vec.SetSorted(false)
+	vec.RollbackAppend(checkpoint, 2)
+
+	require.Equal(t, 1, vec.Length())
+	require.Equal(t, []string{first}, InefficientMustStrCol(vec))
+	require.False(t, vec.GetNulls().Contains(1))
+	require.True(t, vec.GetGrouping().Contains(0))
+	require.False(t, vec.GetGrouping().Contains(1))
+	require.False(t, vec.GetGrouping().Contains(2))
+	require.True(t, vec.GetSorted())
+}
+
 func TestCapacityForUntypedNull(t *testing.T) {
 	vec := NewVec(types.T_any.ToType())
 	require.Equal(t, 0, vec.Capacity())

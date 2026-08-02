@@ -199,6 +199,40 @@ func (v *Vector) SetLength(n int) {
 	v.length = n
 }
 
+// AppendCheckpoint captures the logical state changed by append operations.
+// Capacity growth is deliberately not rolled back: it remains owned by the
+// vector and can be reused by a later append.
+type AppendCheckpoint struct {
+	length     int
+	areaLength int
+	sorted     bool
+}
+
+func (v *Vector) MakeAppendCheckpoint() AppendCheckpoint {
+	return AppendCheckpoint{
+		length:     v.length,
+		areaLength: len(v.area),
+		sorted:     v.sorted,
+	}
+}
+
+// RollbackAppend restores the logical state captured before an attempted
+// append. attemptedRows is needed because grouping bits can be published
+// before a varlen copy fails and advances length.
+func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) {
+	if checkpoint.length < 0 || checkpoint.length > v.length ||
+		checkpoint.areaLength < 0 || checkpoint.areaLength > len(v.area) ||
+		attemptedRows < 0 {
+		panic("invalid vector append checkpoint")
+	}
+	end := max(v.length, checkpoint.length+attemptedRows)
+	nulls.RemoveRange(&v.nsp, uint64(checkpoint.length), uint64(end))
+	nulls.RemoveRange(&v.gsp, uint64(checkpoint.length), uint64(end))
+	v.length = checkpoint.length
+	v.area = v.area[:checkpoint.areaLength]
+	v.sorted = checkpoint.sorted
+}
+
 // Size of data, I think this function is inherently broken.  This
 // Size is not meaningful other than used in (approximate) memory accounting.
 func (v *Vector) Size() int {

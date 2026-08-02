@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -25,6 +26,65 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
+
+type testAppendCapacityController struct {
+	limit atomic.Uint64
+	used  atomic.Uint64
+}
+
+func (c *testAppendCapacityController) AcquireAllocationCapacity(size uint64) error {
+	for {
+		used := c.used.Load()
+		limit := c.limit.Load()
+		if size > limit || used > limit-size {
+			return mpool.ErrAllocationAccountCapacity
+		}
+		if c.used.CompareAndSwap(used, used+size) {
+			return nil
+		}
+	}
+}
+
+func (c *testAppendCapacityController) ReleaseAllocationCapacity(size uint64) {
+	for {
+		used := c.used.Load()
+		if size > used {
+			panic("test allocation capacity underflow")
+		}
+		if c.used.CompareAndSwap(used, used-size) {
+			return
+		}
+	}
+}
+
+func BenchmarkCopyIntoBatchesPartialTail(b *testing.B) {
+	const rowsPerInput = 128
+	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	defer proc.Free()
+	input := testutil.NewBatch(
+		[]types.Type{
+			types.T_int64.ToType(),
+			types.T_int64.ToType(),
+			types.T_int64.ToType(),
+			types.T_int64.ToType(),
+		},
+		true,
+		rowsPerInput,
+		proc.Mp(),
+	)
+	defer input.Clean(proc.Mp())
+
+	b.ResetTimer()
+	for range b.N {
+		var batches Batches
+		for rows := 0; rows < DefaultBatchSize; rows += rowsPerInput {
+			if err := batches.CopyIntoBatches(input, proc); err != nil {
+				b.Fatal(err)
+			}
+		}
+		batches.Clean(proc.Mp())
+	}
+}
 
 func TestBatches(t *testing.T) {
 	var batches Batches
@@ -131,5 +191,96 @@ func TestBatchesShrinkPreservesAllocationAndRollback(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, mpool.IsRetryableAllocationCapacity(err))
 	_, err = measure(1<<20, true)
+	require.NoError(t, err)
+}
+
+func TestCopyIntoBatchesAllocationFailureRollsBackPartialTail(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	controller := &testAppendCapacityController{}
+	controller.limit.Store(1 << 60)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(1<<60, controller)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	typesInTail := []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}
+	initial := testutil.NewBatch(typesInTail, true, 1, proc.Mp())
+	defer initial.Clean(proc.Mp())
+	var batches Batches
+	require.NoError(t, batches.CopyIntoBatchesWithAllocation(initial, proc, selection))
+	require.Len(t, batches.Buf, 1)
+	require.Equal(t, 1, batches.RowCount())
+	firstBefore := append([]int64(nil), vector.MustFixedColNoTypeCheck[int64](batches.Buf[0].Vecs[0])...)
+	secondBefore := append([]int64(nil), vector.MustFixedColNoTypeCheck[int64](batches.Buf[0].Vecs[1])...)
+
+	const appendRows = 128
+	oldCapacity := cap(batches.Buf[0].Vecs[0].GetData())
+	requiredBytes := (batches.RowCount() + appendRows) * types.T_int64.ToType().TypeSize()
+	newCapacity, ok := mpool.GrowCapacity(int64(oldCapacity), int64(requiredBytes))
+	require.True(t, ok)
+	require.Greater(t, newCapacity, int64(oldCapacity))
+	controller.limit.Store(controller.used.Load() + uint64(newCapacity))
+
+	more := testutil.NewBatch(typesInTail, true, appendRows, proc.Mp())
+	defer more.Clean(proc.Mp())
+	err = batches.CopyIntoBatchesWithAllocation(more, proc, selection)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Len(t, batches.Buf, 1)
+	require.Equal(t, 1, batches.RowCount())
+	require.Equal(t, firstBefore, vector.MustFixedColNoTypeCheck[int64](batches.Buf[0].Vecs[0]))
+	require.Equal(t, secondBefore, vector.MustFixedColNoTypeCheck[int64](batches.Buf[0].Vecs[1]))
+
+	controller.limit.Store(1 << 60)
+	require.NoError(t, batches.CopyIntoBatchesWithAllocation(more, proc, selection))
+	require.Equal(t, 1+appendRows, batches.RowCount())
+	batches.Clean(proc.Mp())
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, controller.used.Load())
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+}
+
+func TestCopyIntoBatchesFailureRollsBackEarlierTailChunk(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	controller := &testAppendCapacityController{}
+	controller.limit.Store(1 << 60)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(1<<60, controller)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	typesInTail := []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}
+	initial := testutil.NewBatch(typesInTail, true, DefaultBatchSize-2, proc.Mp())
+	defer initial.Clean(proc.Mp())
+	var batches Batches
+	require.NoError(t, batches.CopyIntoBatchesWithAllocation(initial, proc, selection))
+	firstBefore := append([]int64(nil), vector.MustFixedColNoTypeCheck[int64](batches.Buf[0].Vecs[0])...)
+	secondBefore := append([]int64(nil), vector.MustFixedColNoTypeCheck[int64](batches.Buf[0].Vecs[1])...)
+
+	// Filling the last two rows needs no growth. Reject creation of the next
+	// batch, after that first chunk has already succeeded.
+	controller.limit.Store(controller.used.Load())
+	more := testutil.NewBatch(typesInTail, true, 128, proc.Mp())
+	defer more.Clean(proc.Mp())
+	err = batches.CopyIntoBatchesWithAllocation(more, proc, selection)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Len(t, batches.Buf, 1)
+	require.Equal(t, DefaultBatchSize-2, batches.RowCount())
+	require.Equal(t, firstBefore, vector.MustFixedColNoTypeCheck[int64](batches.Buf[0].Vecs[0]))
+	require.Equal(t, secondBefore, vector.MustFixedColNoTypeCheck[int64](batches.Buf[0].Vecs[1]))
+
+	controller.limit.Store(1 << 60)
+	require.NoError(t, batches.CopyIntoBatchesWithAllocation(more, proc, selection))
+	require.Equal(t, DefaultBatchSize-2+128, batches.RowCount())
+	batches.Clean(proc.Mp())
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, controller.used.Load())
+	_, _, err = registry.CompleteTerminal(account)
 	require.NoError(t, err)
 }

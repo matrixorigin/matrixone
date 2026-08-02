@@ -71,9 +71,10 @@ func (bs *Batches) CopyIntoBatches(src *batch.Batch, proc *process.Process) (err
 //
 // The append is transactional. In particular, an allocation rejection while
 // copying a later input must not destroy batches retained from earlier inputs:
-// HashBuild needs those batches intact to recover by spilling them. A partial
-// tail is copied into the private staging set before it is extended, so an
-// error cannot leave the published tail partially mutated either.
+// HashBuild needs those batches intact to recover by spilling them. Existing
+// vectors are restored to logical append checkpoints on failure; successful
+// capacity growth remains owned and reusable. This avoids repeatedly copying
+// a partial 8,192-row tail as small input batches arrive.
 func (bs *Batches) CopyIntoBatchesWithAllocation(
 	src *batch.Batch,
 	proc *process.Process,
@@ -84,46 +85,46 @@ func (bs *Batches) CopyIntoBatchesWithAllocation(
 		return mpool.ErrAllocationAccountMismatch
 	}
 
-	var staged Batches
-	defer func() {
-		if err != nil {
-			staged.Clean(proc.Mp())
+	originalLen := len(bs.Buf)
+	originalMemSize := bs.MemSize
+	originalNil := bs.Buf == nil
+	var originalTail *batch.Batch
+	originalTailRows := 0
+	var localTailCheckpoints [16]vector.AppendCheckpoint
+	var tailCheckpoints []vector.AppendCheckpoint
+	if originalLen > 0 && bs.Buf[originalLen-1].RowCount() != DefaultBatchSize {
+		originalTail = bs.Buf[originalLen-1]
+		originalTailRows = originalTail.RowCount()
+		if len(originalTail.Vecs) > len(localTailCheckpoints) {
+			tailCheckpoints = make([]vector.AppendCheckpoint, len(originalTail.Vecs))
+		} else {
+			tailCheckpoints = localTailCheckpoints[:len(originalTail.Vecs)]
 		}
-	}()
-
-	replaceTail := len(bs.Buf) > 0 &&
-		bs.Buf[len(bs.Buf)-1].RowCount() != DefaultBatchSize
-	if replaceTail {
-		if err = staged.copyIntoBatches(
-			bs.Buf[len(bs.Buf)-1],
-			proc,
-			selection,
-		); err != nil {
-			return err
+		for i := range originalTail.Vecs {
+			tailCheckpoints[i] = originalTail.Vecs[i].MakeAppendCheckpoint()
 		}
 	}
-	if err = staged.copyIntoBatches(src, proc, selection); err != nil {
-		return err
-	}
-
-	if replaceTail {
-		oldTail := bs.Buf[len(bs.Buf)-1]
-		bs.Buf = bs.Buf[:len(bs.Buf)-1]
-		bs.Buf = append(bs.Buf, staged.Buf...)
-		bs.MemSize += staged.MemSize
-		staged.Buf = nil
-		staged.MemSize = 0
-		oldTail.Clean(proc.Mp())
+	if err = bs.copyIntoBatches(src, proc, selection); err == nil {
 		return nil
 	}
-	if bs.Buf == nil {
-		bs.Buf = make([]*batch.Batch, 0, max(16, len(staged.Buf)))
+	for i := originalLen; i < len(bs.Buf); i++ {
+		bs.Buf[i].Clean(proc.Mp())
 	}
-	bs.Buf = append(bs.Buf, staged.Buf...)
-	bs.MemSize += staged.MemSize
-	staged.Buf = nil
-	staged.MemSize = 0
-	return nil
+	bs.Buf = bs.Buf[:originalLen]
+	if originalNil {
+		bs.Buf = nil
+	}
+	if originalTail != nil {
+		for i := range originalTail.Vecs {
+			originalTail.Vecs[i].RollbackAppend(
+				tailCheckpoints[i],
+				DefaultBatchSize-originalTailRows,
+			)
+		}
+		originalTail.SetRowCount(originalTailRows)
+	}
+	bs.MemSize = originalMemSize
+	return err
 }
 
 func (bs *Batches) copyIntoBatches(
@@ -150,6 +151,9 @@ func (bs *Batches) copyIntoBatches(
 			}
 		}
 		if err != nil {
+			if tmp != nil {
+				tmp.Clean(proc.Mp())
+			}
 			return err
 		}
 		bs.MemSize += int64(tmp.Size())
@@ -280,8 +284,21 @@ func appendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Batch, offset int,
 	if length+offset > src.RowCount() {
 		length = src.RowCount() - offset
 	}
+	var localCheckpoints [16]vector.AppendCheckpoint
+	var checkpoints []vector.AppendCheckpoint
+	if len(dst.Vecs) > len(localCheckpoints) {
+		checkpoints = make([]vector.AppendCheckpoint, len(dst.Vecs))
+	} else {
+		checkpoints = localCheckpoints[:len(dst.Vecs)]
+	}
+	for i := range dst.Vecs {
+		checkpoints[i] = dst.Vecs[i].MakeAppendCheckpoint()
+	}
 	for i := range dst.Vecs {
 		if err = dst.Vecs[i].UnionBatch(src.Vecs[i], int64(offset), length, nil, proc.Mp()); err != nil {
+			for j := 0; j <= i; j++ {
+				dst.Vecs[j].RollbackAppend(checkpoints[j], length)
+			}
 			return 0, err
 		}
 		dst.Vecs[i].SetSorted(false)

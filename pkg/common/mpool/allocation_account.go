@@ -809,10 +809,11 @@ func (r allocationAccountRequest) validate() error {
 }
 
 type allocationLease struct {
-	account *AllocationAccount
-	owner   AllocationOwner
-	site    AllocationSite
-	_       [6]byte
+	account  *AllocationAccount
+	owner    AllocationOwner
+	site     AllocationSite
+	profiled bool
+	_        [5]byte
 }
 
 func (l allocationLease) release(capacity uint64) {

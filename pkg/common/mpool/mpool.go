@@ -954,9 +954,10 @@ func (mp *MPool) allocAccounted(
 	}
 	hdr.SetGuard()
 	lease := allocationLease{
-		account: request.account,
-		owner:   request.owner,
-		site:    request.site,
+		account:  request.account,
+		owner:    request.owner,
+		site:     request.site,
+		profiled: ProfilingEnabled(),
 	}
 
 	gcurr := globalStats.RecordAlloc("global", sz)
@@ -991,7 +992,7 @@ func (mp *MPool) allocAccounted(
 	if mp.details != nil {
 		mp.details.recordAlloc(detailk, sz)
 	}
-	profileRecordAlloc(3, uintptr(ptr), sz)
+	profileRecordAccountedAlloc(lease, sz)
 	return bs, nil
 }
 
@@ -1030,7 +1031,11 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 			// consistent with freePtrInternal.
 			if hdr.isOffHeap() {
 				sz := int64(hdr.allocSz)
-				profileRecordFree(uintptr(ptr), sz)
+				if hdr.isAccounted() {
+					profileRecordAccountedFree(lease, sz)
+				} else {
+					profileRecordFree(uintptr(ptr), sz)
+				}
 				globalStats.RecordFree("global", sz)
 				simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
 				if hdr.isAccounted() {
@@ -1069,7 +1074,11 @@ func (mp *MPool) freePtrInternal(
 			bs[i] = 0xDD
 		}
 	}
-	profileRecordFree(uintptr(ptr), sz)
+	if hdr.isAccounted() {
+		profileRecordAccountedFree(lease, sz)
+	} else {
+		profileRecordFree(uintptr(ptr), sz)
+	}
 	mp.stats.RecordFree(mp.tag, sz)
 	globalStats.RecordFree("global", sz)
 	mp.resource.recordFree(sz)
