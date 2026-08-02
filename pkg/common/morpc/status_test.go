@@ -16,6 +16,7 @@ package morpc
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -139,6 +140,8 @@ func TestRPCMetricErrorType(t *testing.T) {
 		{"rpc timeout", moerr.NewRPCTimeoutNoCtx(), "rpc_timeout"},
 		{"backend cannot connect", moerr.NewBackendCannotConnectNoCtx(), "backend_cannot_connect"},
 		{"backend cannot connect wraps net error", moerr.NewBackendCannotConnectNoCtx(&mockNetError{}), "backend_cannot_connect"},
+		{"backend create timeout", ErrBackendCreateTimeout, "backend_create_timeout"},
+		{"wrapped backend create timeout", fmt.Errorf("wrapped: %w", ErrBackendCreateTimeout), "backend_create_timeout"},
 		{"backend closed", moerr.NewBackendClosedNoCtx(), "backend_closed"},
 		{"moerr unexpected eof", moerr.NewUnexpectedEOFNoCtx("test"), "unexpected_eof"},
 		{"unexpected eof", io.ErrUnexpectedEOF, "unexpected_eof"},

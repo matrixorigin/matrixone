@@ -15,7 +15,6 @@
 package hashbuild
 
 import (
-	"bytes"
 	"math"
 	"sync"
 
@@ -25,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -202,6 +202,79 @@ func batchesAllocated(batches []*batch.Batch) uint64 {
 	return total
 }
 
+type batchCopyAllocationSnapshot struct {
+	length        int
+	tail          *batch.Batch
+	tailAllocated uint64
+}
+
+func snapshotBatchCopyAllocation(batches []*batch.Batch) (batchCopyAllocationSnapshot, error) {
+	snapshot := batchCopyAllocationSnapshot{length: len(batches)}
+	if snapshot.length == 0 {
+		return snapshot, nil
+	}
+	snapshot.tail = batches[snapshot.length-1]
+	if snapshot.tail == nil {
+		return batchCopyAllocationSnapshot{}, process.ErrHashBuildBudgetInvalid
+	}
+	allocated := snapshot.tail.Allocated()
+	if allocated < 0 {
+		return batchCopyAllocationSnapshot{}, process.ErrHashBuildBudgetInvalid
+	}
+	snapshot.tailAllocated = uint64(allocated)
+	return snapshot, nil
+}
+
+// batchCopyAllocatedDelta relies on CopyIntoBatches' append-only contract: it
+// may grow the old partial tail and append destination batches. A full-size
+// source can swap one new batch with that partial tail, so inspect the old tail
+// plus the appended suffix by identity instead of rescanning every retained
+// batch. Across a build this keeps retained-copy accounting linear in the
+// number of destination batches rather than quadratic.
+func batchCopyAllocatedDelta(
+	batches []*batch.Batch,
+	snapshot batchCopyAllocationSnapshot,
+) (uint64, error) {
+	if snapshot.length < 0 || len(batches) < snapshot.length {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	start := 0
+	seenTail := snapshot.length == 0
+	if snapshot.length > 0 {
+		if snapshot.tail == nil {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		start = snapshot.length - 1
+	}
+	var delta uint64
+	for i := start; i < len(batches); i++ {
+		bat := batches[i]
+		if bat == nil {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		allocated := bat.Allocated()
+		if allocated < 0 {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		value := uint64(allocated)
+		if bat == snapshot.tail {
+			if seenTail || value < snapshot.tailAllocated {
+				return 0, process.ErrHashBuildBudgetInvalid
+			}
+			seenTail = true
+			value -= snapshot.tailAllocated
+		}
+		if delta > math.MaxUint64-value {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		delta += value
+	}
+	if !seenTail {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	return delta, nil
+}
+
 func (hb *HashmapBuilder) copyBuildBatch(src *batch.Batch, proc *process.Process) error {
 	if hb.budget == nil {
 		return hb.Batches.CopyIntoBatches(src, proc)
@@ -214,20 +287,23 @@ func (hb *HashmapBuilder) copyBuildBatch(src *batch.Batch, proc *process.Process
 	if err != nil {
 		return err
 	}
-	before := batchesAllocated(hb.Batches.Buf)
+	snapshot, err := snapshotBatchCopyAllocation(hb.Batches.Buf)
+	if err != nil {
+		reservation.Release()
+		return err
+	}
 	if err = hb.Batches.CopyIntoBatches(src, proc); err != nil {
 		reservation.Release()
 		hb.releaseBatchReservations()
 		return err
 	}
-	after := batchesAllocated(hb.Batches.Buf)
-	if after < before {
+	actual, err := batchCopyAllocatedDelta(hb.Batches.Buf, snapshot)
+	if err != nil {
 		hb.Batches.Clean(proc.Mp())
 		reservation.Release()
 		hb.releaseBatchReservations()
-		return process.ErrHashBuildBudgetInvalid
+		return err
 	}
-	actual := after - before
 	metadata, ok := retainedMetadataAllowance(src)
 	if !ok || actual > math.MaxUint64-metadata {
 		hb.Batches.Clean(proc.Mp())
@@ -308,20 +384,8 @@ func projectedPartialTailReplacementBytes(
 			retained += uint64(newCap) - uint64(oldDataCap)
 		}
 
-		areaRows := appendRows
-		if srcVec.IsConst() && areaRows > 0 {
-			// UnionBatch materializes one varlen payload and broadcasts its header.
-			areaRows = 1
-		}
-		areaBytes := 0
-		var areaErr error
-		if !srcVec.IsConst() && appendRows == srcVec.Length() && srcVec.GetType().IsVarlen() {
-			// The whole-vector fast path copies the complete area with Grow2,
-			// including retained bytes beyond the current logical values.
-			areaBytes = len(srcVec.GetArea())
-		} else {
-			areaBytes, areaErr = uniqueAppendAreaBytes(srcVec, 0, areaRows, nil)
-		}
+		areaBytes, areaErr :=
+			unionBatchAreaBytes(srcVec, 0, appendRows)
 		if areaErr != nil || areaBytes > math.MaxInt-len(dstVec.GetArea()) {
 			return 0, 0, process.ErrHashBuildBudgetInvalid
 		}
@@ -362,7 +426,6 @@ func projectedNewDestinationBytes(src *batch.Batch, start, rows int) (uint64, er
 		if segmentRows > colexec.DefaultBatchSize {
 			segmentRows = colexec.DefaultBatchSize
 		}
-		wholeSource := offset == 0 && segmentRows == src.RowCount()
 		for _, vec := range src.Vecs {
 			if vec == nil {
 				return 0, process.ErrHashBuildBudgetInvalid
@@ -382,18 +445,8 @@ func projectedNewDestinationBytes(src *batch.Batch, start, rows int) (uint64, er
 				continue
 			}
 
-			var areaBytes int
-			var areaErr error
-			switch {
-			case vec.IsConst():
-				areaBytes, areaErr = uniqueAppendAreaBytes(vec, 0, 1, nil)
-			case wholeSource:
-				// UnionBatch's whole-vector fast path copies the complete source
-				// area once and preserves shared offsets.
-				areaBytes = len(vec.GetArea())
-			default:
-				areaBytes, areaErr = uniqueAppendAreaBytes(vec, offset, segmentRows, nil)
-			}
+			areaBytes, areaErr :=
+				unionBatchAreaBytes(vec, offset, segmentRows)
 			if areaErr != nil {
 				return 0, process.ErrHashBuildBudgetInvalid
 			}
@@ -487,13 +540,41 @@ func (hb *HashmapBuilder) cleanBatches(proc *process.Process) {
 	hb.releaseBatchReservations()
 }
 
-func (hb *HashmapBuilder) reserveBuildAux(needUniqueVec bool) error {
-	if hb.budget == nil || hb.auxReservation != nil {
-		return nil
+func (hb *HashmapBuilder) buildAuxBytes(
+	needUniqueVec bool,
+) (uint64, error) {
+	uniqueBytes, err := hb.uniqueJoinKeyBytes()
+	if err != nil {
+		return 0, err
 	}
-	// Covers one persistent join-key copy, its bounded allocator growth, plus
-	// O(rows) sels/dedup/bitmap scratch and the cold Int/String iterator's
-	// fixed UnitLimit Go slices. Retained
+	return hb.buildAuxBytesWithUniqueProjection(
+		needUniqueVec, uniqueBytes)
+}
+
+func (hb *HashmapBuilder) uniqueJoinKeyBytes() (uint64, error) {
+	var total uint64
+	for _, vec := range hb.UniqueJoinKeys {
+		if vec == nil {
+			continue
+		}
+		allocated := vec.Allocated()
+		if allocated < 0 ||
+			total > math.MaxUint64-uint64(allocated) {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		total += uint64(allocated)
+	}
+	return total, nil
+}
+
+func (hb *HashmapBuilder) buildAuxBytesWithUniqueProjection(
+	needUniqueVec bool,
+	uniqueBytes uint64,
+) (uint64, error) {
+	// Covers mandatory hashmap/sels scratch plus the selected runtime-filter
+	// key vectors' actual persistent capacities. Before their first append, a
+	// bounded source-relative estimate admits the optional owner; every grow is
+	// then preflighted against its exact mpool capacity. Retained
 	// build batches are already charged by batchReservations, expression results
 	// have their own reservations, and runtime-filter serialization is admitted
 	// separately. Charging multiple whole-batch copies here double-counts those
@@ -504,23 +585,158 @@ func (hb *HashmapBuilder) reserveBuildAux(needUniqueVec bool) error {
 		if bytes%4 != 0 {
 			growthSlack++
 		}
+		if uniqueBytes > growthSlack {
+			growthSlack = uniqueBytes
+		}
 		if bytes > math.MaxUint64-growthSlack {
-			return process.ErrHashBuildBudgetInvalid
+			return 0, process.ErrHashBuildBudgetInvalid
 		}
 		bytes += growthSlack
 	}
-	rows := uint64(hb.InputBatchRowCount)
+	rowCount := hb.InputBatchRowCount
+	if hb.hashMapRowCountSet {
+		rowCount = hb.hashMapRowCount
+	}
+	rows := uint64(rowCount)
 	const iteratorScratch = uint64(640 << 10)
 	if rows > math.MaxUint64/64 || bytes > math.MaxUint64-rows*64 || bytes+rows*64 > math.MaxUint64-iteratorScratch {
-		return process.ErrHashBuildBudgetInvalid
+		return 0, process.ErrHashBuildBudgetInvalid
 	}
 	bytes += rows*64 + iteratorScratch
+	return bytes, nil
+}
+
+func (hb *HashmapBuilder) reserveBuildAux(needUniqueVec bool) error {
+	if hb.budget == nil {
+		return nil
+	}
+	if hb.auxReservation != nil {
+		// BuildHashmap can be retried on the same retained batches with a
+		// different optional-runtime-filter decision. Reconcile the existing
+		// owner instead of silently retaining the previous projection (or,
+		// worse, collecting optional keys under a mandatory-only charge).
+		return hb.resizeBuildAuxReservation(needUniqueVec)
+	}
+	bytes, err := hb.buildAuxBytes(needUniqueVec)
+	if err != nil {
+		return err
+	}
 	token, err := hb.budget.Reserve(bytes)
 	if err != nil {
 		return err
 	}
 	hb.auxReservation = token
 	return nil
+}
+
+// abandonOptionalRuntimeFilterKeys removes only the exact-filter owner from an
+// in-progress mandatory map build. No map or input batch is replayed. The
+// persistent auxiliary reservation is reconciled to the same projection used
+// by a build which never requested UniqueJoinKeys.
+func (hb *HashmapBuilder) abandonOptionalRuntimeFilterKeys(
+	proc *process.Process,
+) error {
+	if err := hb.releaseOptionalRuntimeFilterKeys(proc); err != nil {
+		return err
+	}
+	hb.runtimeFilterCollectionFallback = true
+	return nil
+}
+
+// fallbackOptionalRuntimeFilterCollection converts only a proven optional
+// cause into in-place key abandonment. Fatal causes are returned unchanged,
+// leaving the fallback bit untouched and builder ownership with terminal
+// cleanup.
+func (hb *HashmapBuilder) fallbackOptionalRuntimeFilterCollection(
+	proc *process.Process,
+	cause error,
+) error {
+	if runtimefilter.ClassifyOptionalFallback(cause) ==
+		runtimefilter.OptionalFallbackNone {
+		return cause
+	}
+	if err := hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
+		return err
+	}
+	return nil
+}
+
+// releaseOptionalRuntimeFilterKeys drops terminal producer-only state without
+// marking collection fallback. The JoinMap retains only the mandatory
+// auxiliary projection, so its transferred budget owner must be reconciled
+// before publication.
+func (hb *HashmapBuilder) releaseOptionalRuntimeFilterKeys(
+	proc *process.Process,
+) error {
+	for i := range hb.UniqueJoinKeys {
+		if hb.UniqueJoinKeys[i] != nil {
+			hb.UniqueJoinKeys[i].Free(proc.Mp())
+		}
+	}
+	hb.UniqueJoinKeys = nil
+	hb.uniqueSels = nil
+	if hb.auxReservation == nil {
+		return nil
+	}
+	required, err := hb.buildAuxBytes(false)
+	if err != nil {
+		return err
+	}
+	if required > hb.auxReservation.Size() {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	_, err = hb.auxReservation.ReconcileDown(required)
+	return err
+}
+
+func (hb *HashmapBuilder) resizeBuildAuxReservation(
+	needUniqueVec bool,
+) error {
+	if hb.budget == nil {
+		return nil
+	}
+	if hb.auxReservation == nil {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	target, err := hb.buildAuxBytes(needUniqueVec)
+	if err != nil {
+		return err
+	}
+	current := hb.auxReservation.Size()
+	switch {
+	case current < target:
+		return hb.auxReservation.Grow(target - current)
+	case current > target:
+		_, err = hb.auxReservation.ReconcileDown(target)
+		return err
+	default:
+		return nil
+	}
+}
+
+// prepareCanonicalRuntimeFilterCollection first resizes the mandatory
+// auxiliary owner for a Dedup input after its in-place canonical rewrite. It
+// then attempts the optional UniqueJoinKeys delta. Failure of only that delta
+// disables the runtime filter without failing the canonical map build.
+func (hb *HashmapBuilder) prepareCanonicalRuntimeFilterCollection(
+	requested bool,
+) (bool, error) {
+	if err := hb.resizeBuildAuxReservation(false); err != nil {
+		return false, err
+	}
+	if !requested {
+		return false, nil
+	}
+	if err := hb.resizeBuildAuxReservation(true); err != nil {
+		if runtimefilter.ClassifyOptionalFallback(err) !=
+			runtimefilter.OptionalFallbackBudgetAdmission {
+			return false, err
+		}
+		hb.runtimeFilterCollectionFallback = true
+		return false, nil
+	}
+	hb.runtimeFilterCollectionFallback = false
+	return true, nil
 }
 
 func uniqueAppendAreaBytes(src *vector.Vector, start, rows int, sels []int64) (int, error) {
@@ -558,6 +774,35 @@ func uniqueAppendAreaBytes(src *vector.Vector, start, rows int, sels []int64) (i
 	return areaBytes, nil
 }
 
+// unionBatchAreaBytes mirrors Vector.UnionBatch's flags=nil varlen paths.
+// In particular, its whole-vector fast path copies the complete source area,
+// including bytes no longer referenced after SetLength/Shrink. Budget
+// admission must therefore use len(area), not only the live row references.
+func unionBatchAreaBytes(
+	src *vector.Vector,
+	start, rows int,
+) (int, error) {
+	if src == nil || !src.GetType().IsVarlen() {
+		return 0, nil
+	}
+	if start < 0 || rows < 0 ||
+		start > src.Length() || rows > src.Length()-start {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	if rows == 0 {
+		return 0, nil
+	}
+	if src.IsConst() {
+		// UnionBatch materializes the constant payload once and broadcasts its
+		// varlena header to the appended logical rows.
+		return uniqueAppendAreaBytes(src, 0, 1, nil)
+	}
+	if start == 0 && rows == src.Length() {
+		return len(src.GetArea()), nil
+	}
+	return uniqueAppendAreaBytes(src, start, rows, nil)
+}
+
 func (hb *HashmapBuilder) reserveUniqueAppendOverlap(dst *vector.Vector, rows, areaBytes int) (*process.HashBuildReservation, error) {
 	if hb.budget == nil {
 		return nil, nil
@@ -571,6 +816,11 @@ func (hb *HashmapBuilder) reserveUniqueAppendOverlap(dst *vector.Vector, rows, a
 		return nil, process.ErrHashBuildBudgetInvalid
 	}
 	requiredData := (dst.Length() + rows) * typeSize
+	dataCapacity, ok := mpool.GrowCapacity(
+		int64(cap(dst.GetData())), int64(requiredData))
+	if !ok || dataCapacity < 0 {
+		return nil, process.ErrHashBuildBudgetInvalid
+	}
 	var overlap uint64
 	if requiredData > cap(dst.GetData()) {
 		overlap = uint64(cap(dst.GetData()))
@@ -578,11 +828,51 @@ func (hb *HashmapBuilder) reserveUniqueAppendOverlap(dst *vector.Vector, rows, a
 	if len(dst.GetArea()) > math.MaxInt-areaBytes {
 		return nil, process.ErrHashBuildBudgetInvalid
 	}
-	if len(dst.GetArea())+areaBytes > cap(dst.GetArea()) {
+	requiredArea := len(dst.GetArea()) + areaBytes
+	areaCapacity, ok := mpool.GrowCapacity(
+		int64(cap(dst.GetArea())), int64(requiredArea))
+	if !ok || areaCapacity < 0 {
+		return nil, process.ErrHashBuildBudgetInvalid
+	}
+	if requiredArea > cap(dst.GetArea()) {
 		if overlap > math.MaxUint64-uint64(cap(dst.GetArea())) {
 			return nil, process.ErrHashBuildBudgetInvalid
 		}
 		overlap += uint64(cap(dst.GetArea()))
+	}
+	if requiredData <= cap(dst.GetData()) &&
+		requiredArea <= cap(dst.GetArea()) {
+		// The persistent capacities were admitted by their preceding grow.
+		// Avoid rescanning every retained batch for each UnitLimit append which
+		// stays within those capacities; only allocator growth changes either
+		// the retained owner or the temporary replacement overlap.
+		return nil, nil
+	}
+
+	currentUnique, err := hb.uniqueJoinKeyBytes()
+	if err != nil {
+		return nil, err
+	}
+	oldCapacity := uint64(cap(dst.GetData())) +
+		uint64(cap(dst.GetArea()))
+	newCapacity := uint64(dataCapacity) + uint64(areaCapacity)
+	if currentUnique < oldCapacity ||
+		currentUnique-oldCapacity > math.MaxUint64-newCapacity {
+		return nil, process.ErrHashBuildBudgetInvalid
+	}
+	projectedUnique := currentUnique - oldCapacity + newCapacity
+	target, err := hb.buildAuxBytesWithUniqueProjection(
+		true, projectedUnique)
+	if err != nil {
+		return nil, err
+	}
+	if hb.auxReservation == nil {
+		return nil, process.ErrHashBuildBudgetInvalid
+	}
+	if current := hb.auxReservation.Size(); current < target {
+		if err = hb.auxReservation.Grow(target - current); err != nil {
+			return nil, err
+		}
 	}
 	if overlap == 0 {
 		return nil, nil
@@ -591,57 +881,7 @@ func (hb *HashmapBuilder) reserveUniqueAppendOverlap(dst *vector.Vector, rows, a
 }
 
 func (hb *HashmapBuilder) marshalRuntimeFilterVector(vec *vector.Vector) ([]byte, func(), error) {
-	if vec == nil || hb.budget == nil {
-		return nil, nil, process.ErrHashBuildBudgetInvalid
-	}
-	// The source vector is already charged by the hash-build auxiliary
-	// reservation. Charge one serialized payload plus the temporary null bitmap
-	// and pre-grow the output buffer so serialization cannot double its peak.
-	payload := uint64(len(vec.GetData())) + uint64(len(vec.GetArea()))
-	rows := uint64(vec.Length())
-	if rows > math.MaxUint64/16 {
-		return nil, nil, process.ErrHashBuildBudgetInvalid
-	}
-	metadata := rows * 16
-	if metadata > math.MaxUint64-4096 || payload > math.MaxUint64-(metadata+4096) {
-		return nil, nil, process.ErrHashBuildBudgetInvalid
-	}
-	payload += metadata + 4096
-	nullPeak := (rows+7)/8 + 24
-	const allocationSlack = uint64(64 << 10)
-	if payload > math.MaxUint64-nullPeak-allocationSlack {
-		return nil, nil, process.ErrHashBuildBudgetInvalid
-	}
-	projected := payload + nullPeak + allocationSlack
-	token, err := hb.budget.Reserve(projected)
-	if err != nil {
-		return nil, nil, err
-	}
-	if payload > uint64(math.MaxInt) {
-		token.Release()
-		return nil, nil, process.ErrHashBuildBudgetInvalid
-	}
-	var buf bytes.Buffer
-	buf.Grow(int(payload))
-	if uint64(buf.Cap())+nullPeak > projected {
-		token.Release()
-		return nil, nil, process.ErrHashBuildBudgetInvalid
-	}
-	err = vec.MarshalBinaryWithBuffer(&buf)
-	if err != nil {
-		token.Release()
-		return nil, nil, err
-	}
-	data := buf.Bytes()
-	if uint64(len(data)) > payload {
-		token.Release()
-		return nil, nil, process.ErrHashBuildBudgetInvalid
-	}
-	if _, err = token.ReconcileDown(uint64(cap(data))); err != nil {
-		token.Release()
-		return nil, nil, err
-	}
-	return data, func() { token.Release() }, nil
+	return runtimefilter.MarshalExactFilterVector(vec, hb.budget)
 }
 
 func (hb *HashmapBuilder) releaseBatchReservations() {

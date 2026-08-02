@@ -30,7 +30,11 @@ import (
 
 func makeRightSingleTopologyPlan(tag int32) *plan.Query {
 	probeSpec := &plan.RuntimeFilterSpec{Tag: tag, Expr: &plan.Expr{}}
-	buildSpec := &plan.RuntimeFilterSpec{Tag: tag, Expr: &plan.Expr{}}
+	buildSpec := &plan.RuntimeFilterSpec{
+		Tag:         tag,
+		BuildExpr:   &plan.Expr{},
+		KeyEncoding: plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
+	}
 	return &plan.Query{Nodes: []*plan.Node{
 		{
 			NodeType:               plan.Node_TABLE_SCAN,

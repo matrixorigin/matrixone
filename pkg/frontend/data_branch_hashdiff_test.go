@@ -1075,6 +1075,9 @@ func newTestBranchTableStuff(ctrl *gomock.Controller) tableStuff {
 	}
 	tblStuff.def.pkKind = normalKind
 	tblStuff.def.visibleIdxes = []int{0, 1}
+	tblStuff.def.writableIdxes = []int{0, 1}
+	tblStuff.def.commonVisibleIdxes = []int{0, 1}
+	tblStuff.def.commonWritableIdxes = []int{0, 1}
 	tblStuff.def.pkColIdx = 0
 	tblStuff.def.pkColIdxes = []int{0}
 	tblStuff.retPool = &retBatchList{}
@@ -2550,6 +2553,17 @@ func TestAppendLCAProbeValue(t *testing.T) {
 		err := appendLCAProbeValue(dst, src, 0, "", mp)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "unexpected LCA probe type conversion")
+	})
+
+	t.Run("rejects set display label instead of guessing its bitmap", func(t *testing.T) {
+		src := vector.NewVec(types.T_varchar.ToType())
+		dst := vector.NewVec(types.T_uint64.ToType())
+		defer src.Free(mp)
+		defer dst.Free(mp)
+
+		require.NoError(t, vector.AppendBytes(src, []byte("2"), false, mp))
+		err := appendLCAProbeValue(dst, src, 0, "", mp)
+		require.ErrorContains(t, err, "unexpected LCA probe type conversion")
 	})
 }
 

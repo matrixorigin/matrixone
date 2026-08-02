@@ -546,6 +546,58 @@ func TestCTEReuseRejectsExternalAndSideEffectingNodes(t *testing.T) {
 	}
 }
 
+func TestCTEReuseRecognizesGuardedRuntimeFilterExpression(t *testing.T) {
+	col := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_int64)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: pos}},
+		}
+	}
+	for _, test := range []struct {
+		name string
+		spec *planpb.RuntimeFilterSpec
+		want bool
+	}{
+		{
+			name: "probe or legacy expression",
+			spec: &planpb.RuntimeFilterSpec{Expr: col(0)},
+			want: true,
+		},
+		{
+			name: "guarded build expression",
+			spec: &planpb.RuntimeFilterSpec{BuildExpr: col(0)},
+			want: true,
+		},
+		{
+			name: "rolling upgrade raw hybrid",
+			spec: &planpb.RuntimeFilterSpec{
+				Expr: col(0), BuildExpr: col(0),
+			},
+			want: true,
+		},
+		{
+			name: "contradictory dual expression",
+			spec: &planpb.RuntimeFilterSpec{
+				Expr: col(0), BuildExpr: col(1),
+			},
+		},
+		{
+			name: "missing expression",
+			spec: &planpb.RuntimeFilterSpec{},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			builder := &QueryBuilder{qry: &Query{Nodes: []*Node{{
+				NodeType:               planpb.Node_PROJECT,
+				RuntimeFilterBuildList: []*planpb.RuntimeFilterSpec{test.spec},
+			}}}}
+			require.Equal(t, test.want,
+				builder.cteSubtreeIsDeterministic(
+					0, make(map[int32]bool)))
+		})
+	}
+}
+
 func TestCTEMultiReferenceReusePreservesConsumerBindings(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	logicPlan, err := runOneStmt(mock, t, `

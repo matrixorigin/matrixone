@@ -269,6 +269,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 			return moerr.NewInternalError(ctx, "query client is nil")
 		}
 		l.remoteCache = NewRemoteCache(config.QueryClient, config.KeyRouterFactory)
+		l.remoteCache.setAllocator(l)
 		logutil.Info("fileservice: remote cache initialized",
 			zap.Any("fs-name", l.name),
 		)

@@ -269,6 +269,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 			return moerr.NewInternalError(ctx, "query client is nil")
 		}
 		s.remoteCache = NewRemoteCache(config.QueryClient, config.KeyRouterFactory)
+		s.remoteCache.setAllocator(s)
 		logutil.Info("fileservice: remote cache initialized",
 			zap.Any("fs-name", s.name),
 		)
