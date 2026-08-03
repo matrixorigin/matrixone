@@ -1281,6 +1281,9 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *
 // appendNumValToVec converts a numeric literal to the correct typed value
 // and appends it to the vector.
 func appendNumValToVec(vec *vector.Vector, val *tree.NumVal, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
+	if pkType.Oid == types.T_bit && val.ValType == tree.P_bit {
+		return appendIntegerNumValToVec(vec, val, false, pkType, tz, mp)
+	}
 	if pkType.Oid.IsInteger() && (val.ValType == tree.P_hexnum || val.ValType == tree.P_float64) {
 		return appendIntegerNumValToVec(vec, val, false, pkType, tz, mp)
 	}
@@ -1306,6 +1309,16 @@ func appendIntegerNumValToVec(
 		n, ok = new(big.Int).SetString(s[2:], 16)
 		if !ok {
 			return moerr.NewInvalidInputNoCtxf("invalid hexadecimal literal %q", s)
+		}
+	case tree.P_bit:
+		s := val.String()
+		if len(s) < 3 || (s[:2] != "0b" && s[:2] != "0B") {
+			return moerr.NewInvalidInputNoCtxf("invalid bit literal %q", s)
+		}
+		var ok bool
+		n, ok = new(big.Int).SetString(s[2:], 2)
+		if !ok {
+			return moerr.NewInvalidInputNoCtxf("invalid bit literal %q", s)
 		}
 	case tree.P_float64:
 		r, ok := new(big.Rat).SetString(val.String())

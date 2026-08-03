@@ -588,6 +588,56 @@ func TestAppendExprToVec_BoolLiteral(t *testing.T) {
 	require.True(t, vector.GetFixedAtNoTypeCheck[bool](vec, 0))
 }
 
+func TestAppendExprToVec_BitLiteral(t *testing.T) {
+	tests := []struct {
+		name    string
+		literal string
+		pkType  types.Type
+		want    uint64
+		wantErr string
+	}{
+		{name: "bit8 zero", literal: "b'00000000'", pkType: types.New(types.T_bit, 8, 0), want: 0},
+		{name: "bit8 one", literal: "b'00000001'", pkType: types.New(types.T_bit, 8, 0), want: 1},
+		{name: "bit8 uppercase prefix", literal: "B'10000000'", pkType: types.New(types.T_bit, 8, 0), want: 128},
+		{name: "bit8 maximum", literal: "b'11111111'", pkType: types.New(types.T_bit, 8, 0), want: math.MaxUint8},
+		{name: "bit64 maximum", literal: "b'1111111111111111111111111111111111111111111111111111111111111111'", pkType: types.New(types.T_bit, 64, 0), want: math.MaxUint64},
+		{name: "bit8 overflow", literal: "b'100000000'", pkType: types.New(types.T_bit, 8, 0), wantErr: "out of range"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stmtNode, err := parsers.ParseOne(
+				context.Background(),
+				dialect.MYSQL,
+				"data branch pick src into dst keys("+tc.literal+")",
+				1,
+			)
+			require.NoError(t, err)
+			stmt := stmtNode.(*tree.DataBranchPick)
+			require.Len(t, stmt.Keys.KeyExprs, 1)
+			num, ok := stmt.Keys.KeyExprs[0].(*tree.NumVal)
+			require.True(t, ok)
+			require.Equal(t, tree.P_bit, num.ValType)
+
+			mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+			require.NoError(t, err)
+			defer mp.Free(nil)
+			vec := vector.NewVec(tc.pkType)
+			defer vec.Free(mp)
+
+			err = appendExprToVec(vec, num, tc.pkType, time.UTC, mp)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				require.Zero(t, vec.Length())
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, 1, vec.Length())
+			require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[uint64](vec, 0))
+		})
+	}
+}
+
 func TestAppendExprToVec_IntegerPKNumericLiteralForms(t *testing.T) {
 	stmtNode, err := parsers.ParseOne(
 		context.Background(),
