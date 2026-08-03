@@ -52,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -781,6 +782,31 @@ func TestRefreshViewMetadataTraversesBeyondLegacyCandidateLimit(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestShouldUseFixedAlterCopySnapshot(t *testing.T) {
+	require.True(t, isExplicitAlterTxn(true, true))
+	require.True(t, isExplicitAlterTxn(false, false))
+	require.False(t, isExplicitAlterTxn(false, true))
+
+	require.True(t, shouldUseFixedAlterCopySnapshot(true, false))
+	require.False(t, shouldUseFixedAlterCopySnapshot(true, true))
+	require.False(t, shouldUseFixedAlterCopySnapshot(false, false))
+	require.False(t, shouldUseFixedAlterCopySnapshot(false, true))
+}
+
+func TestAlterCopySQLAtLineageSnapshot(t *testing.T) {
+	const sql = "insert into copy select * from source"
+	require.Equal(t, sql, alterCopySQLAtLineageSnapshot(sql, alterDataBranchLineagePlan{}))
+	require.Equal(t, sql, alterCopySQLAtLineageSnapshot(sql, alterDataBranchLineagePlan{
+		enabled: true,
+		cloneTS: 123,
+	}))
+	require.Equal(t, sql+" {MO_TS = 123}", alterCopySQLAtLineageSnapshot(sql, alterDataBranchLineagePlan{
+		enabled:     true,
+		fixedCopyTS: true,
+		cloneTS:     123,
+	}))
+}
+
 func TestAlterCopySameStatementColumnReplacement(t *testing.T) {
 	tableDef := &plan2.TableDef{Cols: []*plan2.ColDef{
 		{Name: "a", ColId: 1, Seqnum: 0},
@@ -1005,6 +1031,70 @@ func TestPrepareAlterDataBranchLineageAllowsHistoricalSourceTxn(t *testing.T) {
 	}
 }
 
+func TestPrepareAlterDataBranchLineageAllowsHistoricalOnlyGenerationInExplicitTxn(t *testing.T) {
+	const (
+		oldTableID    = uint64(42)
+		parentTableID = uint64(41)
+		database      = "test"
+		table         = "dept"
+		cloneTS       = int64(100)
+	)
+	ctrl := gomock.NewController(t)
+	spyExec := &alterCopyInsertSpyExecutor{
+		results:         make(map[string]executor.Result),
+		resultSequences: make(map[string][]executor.Result),
+	}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{ByBegin: true, Autocommit: true}).AnyTimes()
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: cloneTS + 1}).AnyTimes()
+	c.proc.Base.TxnOperator = txnOp
+
+	participationSQL := alterDataBranchParticipationSQL(oldTableID)
+	metadataSQL := "select table_id, p_table_id, clone_ts, creator, level, table_deleted from mo_catalog.mo_branch_metadata"
+	lockedMetadataSQL := metadataSQL + " for update"
+	edgeSQL := alterDataBranchLineageEdgeSQL()
+	snapshotSourceSQL := alterDataBranchSnapshotSourceSQL()
+	pitrSourceSQL := alterDataBranchPitrSourceSQL()
+	spyExec.results[participationSQL] = newAlterCopyFixedResult(
+		t, c.proc.Mp(), types.T_int32.ToType(), []int32{1},
+	)
+	newMetadataResult := func() executor.Result {
+		return newAlterLineageMetadataResult(
+			t, c.proc.Mp(), []uint64{oldTableID}, []uint64{parentTableID}, []int64{cloneTS},
+			[]uint64{uint64(catalog.System_Account)}, []string{databranchutils.AlterLineageLevel}, []bool{false},
+		)
+	}
+	spyExec.resultSequences[metadataSQL] = []executor.Result{newMetadataResult(), newMetadataResult()}
+	spyExec.results[lockedMetadataSQL] = newMetadataResult()
+	spyExec.results[edgeSQL] = newAlterLineageEdgeResult(
+		t, c.proc.Mp(), []string{databranchutils.BranchSnapshotName(oldTableID)}, []int64{cloneTS},
+		[]string{""}, []string{database}, []string{table}, []uint64{parentTableID},
+	)
+	spyExec.results[snapshotSourceSQL] = newAlterLineageSnapshotSourceResult(
+		t, c.proc.Mp(), []int64{cloneTS - 1}, []string{"table"}, []string{""},
+		[]string{database}, []string{table}, []uint64{parentTableID},
+	)
+	spyExec.results[pitrSourceSQL] = newAlterLineagePitrSourceResult(
+		t, c.proc.Mp(), nil, nil, nil, nil, nil, nil, nil,
+	)
+
+	lineagePlan, err := c.prepareAlterDataBranchLineage(oldTableID, database, table)
+	require.NoError(t, err)
+	require.True(t, lineagePlan.enabled)
+	require.False(t, lineagePlan.preserveHistoricalSource)
+	require.Equal(t, []string{
+		participationSQL,
+		metadataSQL,
+		lockedMetadataSQL,
+		edgeSQL,
+		snapshotSourceSQL,
+		pitrSourceSQL,
+		metadataSQL,
+	}, spyExec.executedSQLs)
+}
+
 func TestShouldAdvanceAlterDataBranchLineageSnapshot(t *testing.T) {
 	require.True(t, shouldAdvanceAlterDataBranchLineageSnapshot(true, true))
 	require.False(t, shouldAdvanceAlterDataBranchLineageSnapshot(true, false))
@@ -1187,14 +1277,15 @@ func TestAlterCopyAutoIncrementCleanupDiscardsTrackedReset(t *testing.T) {
 }
 
 type alterCopyInsertSpyExecutor struct {
-	insertSQL    string
-	insertErr    error
-	insertCtx    context.Context
-	insertOption executor.StatementOption
-	results      map[string]executor.Result
-	errs         map[string]error
-	onExec       func(context.Context, string)
-	executedSQLs []string
+	insertSQL       string
+	insertErr       error
+	insertCtx       context.Context
+	insertOption    executor.StatementOption
+	results         map[string]executor.Result
+	resultSequences map[string][]executor.Result
+	errs            map[string]error
+	onExec          func(context.Context, string)
+	executedSQLs    []string
 }
 
 func TestReconcileAlterCopyAutoIncrementUsesStableIdentityAndSafeBounds(t *testing.T) {
@@ -1366,6 +1457,10 @@ func (e *alterCopyInsertSpyExecutor) Exec(
 		if err, ok := e.errs[sql]; ok {
 			return executor.Result{}, err
 		}
+	}
+	if results := e.resultSequences[sql]; len(results) > 0 {
+		e.resultSequences[sql] = results[1:]
+		return results[0], nil
 	}
 	if e.results != nil {
 		if res, ok := e.results[sql]; ok {

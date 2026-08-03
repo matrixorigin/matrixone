@@ -133,18 +133,35 @@ func createTableSQLForCatalog(ctx CompilerContext, stmt *tree.CreateTable) strin
 
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.IdentifierList) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
+	validate := func(query *Query) error {
+		for _, node := range query.Nodes {
+			if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil {
+				continue
+			}
+			if !node.TableDef.IsTemporary && node.TableDef.TableType != catalog.SystemTemporaryTable {
+				continue
+			}
+
+			tableName := node.TableDef.OriginalName
+			if tableName == "" {
+				tableName = node.TableDef.Name
+			}
+			return moerr.NewViewSelectTmpTable(ctx.GetContext(), tableName)
+		}
+		return nil
+	}
 
 	// check view statement
 	var stmtPlan *Plan
 	var err error
 	switch s := stmt.Select.(type) {
 	case *tree.ParenSelect:
-		stmtPlan, err = bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, s.Select, false, true)
+		stmtPlan, err = bindAndOptimizeSelectQueryWithValidator(plan.Query_SELECT, ctx, s.Select, false, true, validate)
 		if err != nil {
 			return nil, err
 		}
 	default:
-		stmtPlan, err = bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt, false, true)
+		stmtPlan, err = bindAndOptimizeSelectQueryWithValidator(plan.Query_SELECT, ctx, stmt, false, true, validate)
 		if err != nil {
 			return nil, err
 		}
