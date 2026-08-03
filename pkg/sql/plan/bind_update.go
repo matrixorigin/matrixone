@@ -85,21 +85,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if err != nil {
 		return 0, err
 	}
-	for i, tableDef := range dmlCtx.tableDefs {
-		affected, affectedErr := builder.updateActuallyAffectsForeignKey(
-			bindCtx, tableDef, dmlCtx.updateCol2Expr[i])
-		if affectedErr != nil {
-			return 0, affectedErr
-		}
-		if affected {
-			// FK validation and parent-side actions depend on the current
-			// foreign_key_checks value. Mark the plan before that value is
-			// inspected so a plan built with checks disabled cannot be reused
-			// after they are enabled (or vice versa).
-			builder.qry.HasForeignKeyAction = true
-			break
-		}
-	}
 	if err = validateUpdateTargetSubqueries(builder.compCtx, stmt, dmlCtx.objRefs, dmlCtx.tableDefs); err != nil {
 		return 0, err
 	}
@@ -150,34 +135,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		validIndexes, _ := getValidIndexes(tableDef)
 		tableDef.Indexes = validIndexes
 
-		var pkAndUkCols = make(map[string]bool)
-
-		if tableDef.Name == catalog.MO_PUBS || tableDef.Name == catalog.MO_SUBS {
-			for _, colName := range tableDef.Pkey.Names {
-				pkAndUkCols[colName] = true
-			}
-		}
-
-		for _, idxDef := range tableDef.Indexes {
-			if !idxDef.Unique {
-				continue
-			}
-
-			if tableDef.Name == catalog.MO_PUBS || tableDef.Name == catalog.MO_SUBS {
-				for _, colName := range idxDef.Parts {
-					pkAndUkCols[catalog.ResolveAlias(colName)] = true
-				}
-			}
-		}
-
 		for colName, updateExpr := range dmlCtx.updateCol2Expr[i] {
-			if pkAndUkCols[colName] {
-				return 0, newLegacyUpdatePlannerRouteError(
-					updateRouteReasonPubSubKey,
-					moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update pk/uk on pub/sub table"),
-				)
-			}
-
 			// Check: cannot update a generated column (unless SET gen_col = DEFAULT)
 			isGenCol := false
 			for _, colDef := range tableDef.Cols {
@@ -204,13 +162,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			for _, colDef := range tableDef.Cols {
 				if colDef.Name == colName {
 					if isEnumOrSetPlanType(&colDef.Typ) {
-						if colDef.Typ.AutoIncr {
-							return 0, newLegacyUpdatePlannerRouteError(
-								updateRouteReasonAutoIncrement,
-								moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value"),
-							)
-						}
-
 						updateExpr, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), colDef.Typ, updateExpr)
 						if err != nil {
 							return 0, err
@@ -411,6 +362,31 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			oldColName2Idx[alias+"."+col.Name] = int32(len(selectNode.ProjectList))
 			selectNode.ProjectList = append(selectNode.ProjectList, selectNode.ProjectList[oldPos])
 			selectNode.ProjectList[oldPos] = genExpr
+		}
+	}
+
+	fkChecksEnabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
+	if err != nil {
+		return 0, err
+	}
+	if updateMayDependOnForeignKeys(dmlCtx, newColName2Idx) {
+		// The plan shape and planner route depend on foreign_key_checks.
+		// Preserve that dependency even while checks are disabled so prepared
+		// and generic plan caches rebuild after either session-state transition.
+		builder.qry.HasForeignKeyAction = true
+	}
+	if fkChecksEnabled {
+		for i, tableDef := range dmlCtx.tableDefs {
+			if updateAutoIncrCols[i] &&
+				len(affectedUpdateChildFks(tableDef, dmlCtx.aliases[i], newColName2Idx)) > 0 {
+				return 0, newLegacyUpdatePlannerRouteError(
+					updateRouteReasonAutoIncrementFK,
+					moerr.NewUnsupportedDML(
+						builder.compCtx.GetContext(),
+						"auto_increment foreign key update",
+					),
+				)
+			}
 		}
 	}
 
@@ -1209,69 +1185,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
 
 	return lastNodeID, err
-}
-
-func (builder *QueryBuilder) updateActuallyAffectsForeignKey(
-	bindCtx *BindContext,
-	tableDef *plan.TableDef,
-	updatedCols map[string]tree.Expr,
-) (bool, error) {
-	if tableDef == nil || len(updatedCols) == 0 {
-		return false, nil
-	}
-	// Keep this sensitivity set aligned with the final UPDATE row image. The
-	// binder applies every ON UPDATE expression and recomputes generated columns
-	// after explicit assignments, so either can make an otherwise unrelated SET
-	// clause FK-sensitive. This must be computed before foreign_key_checks is
-	// consulted so prepared plans are rebuilt when that variable changes.
-	affectedCols := make(map[string]struct{}, len(updatedCols)+len(tableDef.Cols))
-	for colName := range updatedCols {
-		affectedCols[colName] = struct{}{}
-	}
-	colIDToName := make(map[uint64]string, len(tableDef.Cols))
-	for _, col := range tableDef.Cols {
-		colIDToName[col.ColId] = col.Name
-		if col.OnUpdate != nil || col.GeneratedCol != nil {
-			affectedCols[col.Name] = struct{}{}
-		}
-	}
-	for _, fk := range tableDef.Fkeys {
-		for _, colID := range fk.Cols {
-			if _, ok := affectedCols[colIDToName[colID]]; ok {
-				return true, nil
-			}
-		}
-	}
-
-	visited := make(map[uint64]struct{}, len(tableDef.RefChildTbls))
-	for _, childID := range tableDef.RefChildTbls {
-		if childID == 0 {
-			childID = tableDef.TblId
-		}
-		if _, ok := visited[childID]; ok {
-			continue
-		}
-		visited[childID] = struct{}{}
-		_, childDef, err := builder.compCtx.ResolveById(childID, bindCtx.snapshot)
-		if err != nil {
-			return false, err
-		}
-		if childDef == nil {
-			return false, moerr.NewInternalErrorf(
-				builder.GetContext(), "foreign-key child table %d not found", childID)
-		}
-		for _, fk := range childDef.Fkeys {
-			if fk.ForeignTbl != tableDef.TblId && !(fk.ForeignTbl == 0 && childDef.TblId == tableDef.TblId) {
-				continue
-			}
-			for _, parentColID := range fk.ForeignCols {
-				if _, ok := affectedCols[colIDToName[parentColID]]; ok {
-					return true, nil
-				}
-			}
-		}
-	}
-	return false, nil
 }
 
 func irregularIndexAffectedByUpdate(

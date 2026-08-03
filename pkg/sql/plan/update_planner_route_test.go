@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -198,27 +197,6 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 			wantRoute:  updatePlannerModern,
 			wantReason: updateRouteReasonNone,
 		},
-		{
-			name: "pub sub key",
-			sql:  "UPDATE nation SET n_nationkey = 2",
-			prepare: func(mock *MockOptimizer) {
-				mock.ctxt.tables["nation"].Name = catalog.MO_PUBS
-			},
-			wantRoute:  updatePlannerLegacy,
-			wantReason: updateRouteReasonPubSubKey,
-		},
-		{
-			name: "set auto increment",
-			sql:  "UPDATE nation SET n_nationkey = 2",
-			prepare: func(mock *MockOptimizer) {
-				col := mock.ctxt.tables["nation"].Cols[0]
-				col.Typ.Id = int32(types.T_uint64)
-				col.Typ.Enumvalues = "one,two"
-				col.Typ.AutoIncr = true
-			},
-			wantRoute:  updatePlannerLegacy,
-			wantReason: updateRouteReasonAutoIncrement,
-		},
 	}
 
 	for _, test := range tests {
@@ -263,6 +241,13 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		emp.Fkeys[0].ForeignCols = []uint64{0}
 		dept.RefChildTbls = []uint64{emp.TblId}
 		mock.ctxt.id2name[emp.TblId] = "emp"
+	}
+	disableForeignKeyChecks := func(mock *MockOptimizer) {
+		mock.ctxt.SetContext(context.WithValue(
+			mock.ctxt.GetContext(),
+			defines.DisableFkCheck{},
+			true,
+		))
 	}
 
 	t.Run("unrelated child column uses multi update without parent probe", func(t *testing.T) {
@@ -351,6 +336,58 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 			query,
 			foreignKeyNoReferencedRowAssert,
 		))
+	})
+
+	t.Run("auto increment child key uses legacy final row validation", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock)
+		emp := mock.ctxt.tables["emp"]
+		for _, col := range emp.Cols {
+			if col.Name == "deptno" {
+				col.Typ.AutoIncr = true
+			}
+		}
+
+		stmt, err := parsers.ParseOne(
+			mock.CurrentContext().GetContext(),
+			dialect.MYSQL,
+			"UPDATE emp SET deptno = if(empno = 1, null, deptno)",
+			1,
+		)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		require.Error(t, err)
+		route, reason, _ := classifyUpdatePlannerError(err)
+		require.Equal(t, updatePlannerLegacy, route)
+		require.Equal(t, updateRouteReasonAutoIncrementFK, reason)
+	})
+
+	t.Run("disabled checks keep auto increment child key on modern route", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock)
+		disableForeignKeyChecks(mock)
+		emp := mock.ctxt.tables["emp"]
+		for _, col := range emp.Cols {
+			if col.Name == "deptno" {
+				col.Typ.AutoIncr = true
+			}
+		}
+
+		logicPlan, err := runOneStmt(
+			mock,
+			t,
+			"UPDATE emp SET deptno = if(empno = 1, null, deptno)",
+		)
+		require.NoError(t, err)
+
+		query := logicPlan.GetQuery()
+		require.True(t, query.GetHasForeignKeyAction())
+		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
+		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_PRE_INSERT))
+		require.Equal(t, 0, countUpdateFkMarkJoins(query))
 	})
 
 	t.Run("affected restricted parent key stays modern with child probe", func(t *testing.T) {
@@ -875,24 +912,25 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 		return -1
 	}
 
-	t.Run("child check sees generated key", func(t *testing.T) {
+	t.Run("child generated key uses legacy final row validation", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareEmpDept(mock)
 		mock.ctxt.tables["emp"].Cols[7].Typ.AutoIncr = true
-		query := bindDirect(t, mock, "UPDATE emp SET deptno = DEFAULT")
-		preInsert := firstNode(query, func(node *planpb.Node) bool {
-			return node.NodeType == planpb.Node_PRE_INSERT
-		})
-		markJoin := firstNode(query, func(node *planpb.Node) bool {
-			return node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_MARK
-		})
-		require.NotEqual(t, -1, preInsert)
-		require.NotEqual(t, -1, markJoin)
-		require.Less(t, preInsert, markJoin)
-		require.True(t, updateFkPlanContainsTypedAssert(
-			query,
-			foreignKeyNoReferencedRowAssert,
-		))
+		stmt, err := parsers.ParseOne(
+			mock.CurrentContext().GetContext(),
+			dialect.MYSQL,
+			"UPDATE emp SET deptno = DEFAULT",
+			1,
+		)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		require.ErrorContains(t, err, "auto_increment foreign key update")
+		route, reason, _ := classifyUpdatePlannerError(err)
+		require.Equal(t, updatePlannerLegacy, route)
+		require.Equal(t, updateRouteReasonAutoIncrementFK, reason)
 	})
 
 	t.Run("parent action on generated key uses legacy planner", func(t *testing.T) {

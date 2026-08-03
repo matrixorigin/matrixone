@@ -193,6 +193,22 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 	return lastNodeID, selectNodeTag, selectNode, nil
 }
 
+func updateMayDependOnForeignKeys(
+	dmlCtx *DMLContext,
+	newColName2Idx map[string]int32,
+) bool {
+	for i, tableDef := range dmlCtx.tableDefs {
+		if len(dmlCtx.updateCol2Expr[i]) == 0 {
+			continue
+		}
+		if len(affectedUpdateChildFks(tableDef, dmlCtx.aliases[i], newColName2Idx)) > 0 ||
+			len(tableDef.RefChildTbls) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func affectedUpdateChildFks(
 	tableDef *plan.TableDef,
 	alias string,
