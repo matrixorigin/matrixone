@@ -275,7 +275,22 @@ func TestRefreshPendingViewMetadataAfterSubscriptionCreate(t *testing.T) {
 	require.NoError(t, executor.AppendStringRows(result, 3, []string{"pub"}))
 	require.NoError(t, executor.AppendStringRows(result, 4, []string{"pubdb"}))
 	require.NoError(t, executor.AppendStringRows(result, 5, []string{"source_t"}))
-	pendingQuery := buildViewMetadataRefreshQuery(0, 24, 1, "pubdb", "source_t", 0, 128, true)
+	pendingQuery := buildViewMetadataRefreshQueryWithLegacySubscriptions(
+		0, 24, 1, "pubdb", "source_t", 0, 128, true,
+		[]legacySubscriptionViewCandidate{{
+			accountID: 7, subscriptionDatabase: "SUBDB", tableName: "source_t",
+		}},
+	)
+	require.Contains(t, pendingQuery,
+		"account_id = 7 and json_extract(viewdef, '$.dependencies') is null")
+	require.Contains(t, pendingQuery, "instr(lower(viewdef), lower('SUBDB')) > 0")
+	stmts, err := mysql.Parse(context.Background(), pendingQuery, 1)
+	require.NoError(t, err)
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
 	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
 		subscriptionQuery: result.GetResult(),
 		pendingQuery:      {},
@@ -317,6 +332,18 @@ func TestRefreshPendingViewMetadataAfterAccountPublicationSubscriptionCreate(t *
 	require.NoError(t, executor.AppendStringRows(result, 5, []string{pubsub.TableAll}))
 	pendingDB1 := buildViewMetadataRefreshQuery(0, 24, 1, "db1", "source_t", 0, 128, true)
 	pendingDB2 := buildViewMetadataRefreshQuery(0, 25, 1, "db2", "other_t", 0, 128, true)
+	pendingDB1 = buildViewMetadataRefreshQueryWithLegacySubscriptions(
+		0, 24, 1, "db1", "source_t", 0, 128, true,
+		[]legacySubscriptionViewCandidate{{
+			accountID: 7, subscriptionDatabase: "subdb", tableName: "source_t",
+		}},
+	)
+	pendingDB2 = buildViewMetadataRefreshQueryWithLegacySubscriptions(
+		0, 25, 1, "db2", "other_t", 0, 128, true,
+		[]legacySubscriptionViewCandidate{{
+			accountID: 7, subscriptionDatabase: "subdb", tableName: "other_t",
+		}},
+	)
 	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
 		subscriptionQuery: result.GetResult(),
 		pendingDB1:        {},
@@ -566,6 +593,63 @@ func TestRefreshViewMetadataAfterAlter(t *testing.T) {
 			viewMetadataRefreshContext{sourceLogicalID: sourceLogicalID},
 		),
 	))
+}
+
+func TestRefreshPendingLegacySubscriptionView(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mp := mpool.MustNewZero()
+	candidate := legacySubscriptionViewCandidate{
+		accountID: 7, subscriptionDatabase: "subdb", tableName: "source_t",
+	}
+	query := buildViewMetadataRefreshQueryWithLegacySubscriptions(
+		0, 24, 42, "pubdb", "source_t", 0, 128, true,
+		[]legacySubscriptionViewCandidate{candidate},
+	)
+	nextQuery := strings.Replace(query, "rel_id > 0", "rel_id > 9", 1)
+	subscriptionQuery := "select sub_name, pub_account_id, pub_account_name, pub_name, " +
+		"pub_database, pub_tables from mo_catalog.mo_subs " +
+		"where sub_account_id = 7 and sub_name is not null and status = 0"
+
+	bat := batch.NewWithSize(7)
+	bat.SetRowCount(1)
+	bat.Vecs[0] = vector.NewVec(types.T_uint32.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], uint32(7), false, mp))
+	bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], uint64(9), false, mp))
+	bat.Vecs[2] = vector.NewVec(types.T_uint64.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[2], uint64(9), false, mp))
+	bat.Vecs[3] = vector.NewVec(types.T_uint32.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[3], uint32(3), false, mp))
+	for i := 4; i < len(bat.Vecs); i++ {
+		bat.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
+	}
+	require.NoError(t, vector.AppendBytes(bat.Vecs[4], []byte("localdb"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[5], []byte("legacy_v"), false, mp))
+	require.NoError(t, vector.AppendBytes(
+		bat.Vecs[6],
+		[]byte(`{"Stmt":"create view legacy_v as select b from subdb.source_t","DefaultDatabase":"localdb","metadata_refresh_pending":true}`),
+		false,
+		mp,
+	))
+
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		query:             {Mp: mp, Batches: []*batch.Batch{bat}},
+		subscriptionQuery: {},
+		nextQuery:         {},
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, 7)
+
+	require.NoError(t, refreshViewMetadataAfterAlter(
+		c, 0, 24, 42, 42, "pubdb", "source_t", true, candidate,
+	))
+	require.Equal(t, []string{
+		query,
+		subscriptionQuery,
+		"alter view `localdb`.`legacy_v` as select `b` from `subdb`.`source_t`",
+		nextQuery,
+	}, spyExec.executedSQLs)
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestRefreshViewMetadataTraversesBeyondLegacyCandidateLimit(t *testing.T) {
