@@ -370,6 +370,65 @@ func TestBuildCTASPreservesMySQLSpecialColumnTypes(t *testing.T) {
 	require.Equal(t, int32(types.T_varchar), cols[2].Typ.GetId())
 }
 
+func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {
+	const createViewSQL = "create view v_enum_set as select priority, flags, n_name from nation"
+	ctx := NewMockCompilerContext(false)
+	addMySQLSpecialTypeColumns(ctx)
+	createCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createViewSQL}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createViewSQL, 1)
+	require.NoError(t, err)
+	createPlan, err := BuildPlan(createCtx, stmt, false)
+	stmt.Free()
+	require.NoError(t, err)
+
+	viewDef := DeepCopyTableDef(createPlan.GetDdl().GetCreateView().GetTableDef(), true)
+	viewDef.Name = "v_enum_set"
+	viewDef.DbName = "tpch"
+	viewDef.TableType = catalog.SystemViewRel
+	ctx.tables["v_enum_set"] = viewDef
+	ctx.objects["v_enum_set"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v_enum_set"}
+
+	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"select priority from v_enum_set order by priority", 1)
+	require.NoError(t, err)
+	selectPlan, err := BuildPlan(ctx, stmt, false)
+	stmt.Free()
+	require.NoError(t, err)
+
+	var sortKey *plan.Expr
+	for _, node := range selectPlan.GetQuery().GetNodes() {
+		if node.GetNodeType() == plan.Node_SORT {
+			require.Len(t, node.GetOrderBy(), 1)
+			sortKey = node.GetOrderBy()[0].GetExpr()
+			break
+		}
+	}
+	require.NotNil(t, sortKey)
+	sortType := sortKey.GetTyp()
+	require.Equal(t, int32(types.T_enum), sortType.GetId())
+	require.Equal(t, "low,medium,high", sortType.GetEnumvalues())
+	query := selectPlan.GetQuery()
+	require.Len(t, query.GetSteps(), 1)
+	resultNode := query.GetNodes()[query.GetSteps()[0]]
+	require.Len(t, resultNode.GetProjectList(), 1)
+	resultType := resultNode.GetProjectList()[0].GetTyp()
+	require.Equal(t, int32(types.T_varchar), resultType.GetId())
+
+	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table copied_from_view as select priority, flags, n_name from v_enum_set", 1)
+	require.NoError(t, err)
+	ctasPlan, err := BuildPlan(ctx, stmt, false)
+	stmt.Free()
+	require.NoError(t, err)
+	cols := ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 3)
+	require.True(t, isEnumPlanType(&cols[0].Typ))
+	require.Equal(t, "low,medium,high", cols[0].Typ.GetEnumvalues())
+	require.True(t, isSetPlanType(&cols[1].Typ))
+	require.Equal(t, "red,green,blue", cols[1].Typ.GetEnumvalues())
+	require.Equal(t, int32(types.T_varchar), cols[2].Typ.GetId())
+}
+
 func TestMySQLSpecialTypeSourceTypeRejectsNonTransparentExpressions(t *testing.T) {
 	enumType := plan.Type{Id: int32(types.T_enum), Enumvalues: "low,high"}
 	valid := &plan.Expr{

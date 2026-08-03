@@ -8739,6 +8739,7 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return
 	}
+	restoreViewMySQLSpecialTypeProjects(viewCtx)
 	if len(viewStmt.ColNames) > 0 {
 		if len(viewStmt.ColNames) != len(viewCtx.headings) {
 			return 0, moerr.NewViewWrongList(builder.GetContext())
@@ -8750,6 +8751,30 @@ func (builder *QueryBuilder) bindView(
 	ctx.recordViews([]string{viewDependencyKey})
 	ctx.recordViews(viewCtx.views)
 	return
+}
+
+// restoreViewMySQLSpecialTypeProjects exposes the stored ENUM/SET index at the
+// view boundary. The outer query binder then treats it like an ordinary special
+// type column and adds the display wrapper required by its own projection.
+func restoreViewMySQLSpecialTypeProjects(ctx *BindContext) {
+	visibleProjects := min(len(ctx.headings), len(ctx.projects))
+	for i := 0; i < visibleProjects; i++ {
+		sourceExpr, ok := mysqlSpecialTypeSourceExpr(ctx.projects[i])
+		if !ok {
+			continue
+		}
+
+		oldProject := ctx.projects[i]
+		restored := DeepCopyExpr(sourceExpr)
+		ctx.projects[i] = restored
+		if i < len(ctx.results) {
+			if ctx.results[i] == oldProject {
+				ctx.results[i] = restored
+			} else {
+				ctx.results[i].Typ = restored.Typ
+			}
+		}
+	}
 }
 
 // ViewData persisted before parser SQL mode was recorded used MatrixOne's

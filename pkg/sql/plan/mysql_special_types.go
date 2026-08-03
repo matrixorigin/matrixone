@@ -255,6 +255,14 @@ func mysqlSpecialTypeFuncNames(typ *plan.Type) (string, string, string, error) {
 // display wrapper inserted by the column binder. Persisted output schemas use
 // this type instead of the wrapper's VARCHAR result type.
 func mysqlSpecialTypeSourceType(expr *plan.Expr) (*plan.Type, bool) {
+	sourceExpr, ok := mysqlSpecialTypeSourceExpr(expr)
+	if !ok {
+		return nil, false
+	}
+	return &sourceExpr.Typ, true
+}
+
+func mysqlSpecialTypeSourceExpr(expr *plan.Expr) (*plan.Expr, bool) {
 	if expr == nil {
 		return nil, false
 	}
@@ -263,12 +271,12 @@ func mysqlSpecialTypeSourceType(expr *plan.Expr) (*plan.Type, bool) {
 		return nil, false
 	}
 
-	sourceType := &fn.Args[1].Typ
+	sourceExpr := fn.Args[1]
 	switch fn.Func.ObjName {
 	case moEnumCastIndexToValueFun:
-		return sourceType, isEnumPlanType(sourceType)
+		return sourceExpr, isEnumPlanType(&sourceExpr.Typ)
 	case moSetCastIndexToValueFun:
-		return sourceType, isSetPlanType(sourceType)
+		return sourceExpr, isSetPlanType(&sourceExpr.Typ)
 	default:
 		return nil, false
 	}
