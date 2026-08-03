@@ -116,27 +116,29 @@ func TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget(t *testing.T) {
 	patchJoinSpillStatsWithNDV(t, ctx, conn, dbName, "broadcast_build", 64, 64)
 	controlPlan := queryJoinSpillText(t, ctx, conn, "explain "+query)
 	require.NotContains(t, controlPlan, "shuffle:", "low-NDV join must remain broadcast:\n%s", controlPlan)
-	controlResult, err := conn.QueryContext(ctx, query)
+	controlPayloads, err := func() (_ []int64, err error) {
+		controlResult, err := conn.QueryContext(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			err = errors.Join(err, controlResult.Close(), controlResult.Err())
+		}()
+
+		payloads := make([]int64, 0, 1)
+		for controlResult.Next() {
+			var payload sql.NullInt64
+			if err = controlResult.Scan(&payload); err != nil {
+				return nil, err
+			}
+			if !payload.Valid {
+				return nil, errors.New("admitted broadcast join returned an unmatched NULL payload")
+			}
+			payloads = append(payloads, payload.Int64)
+		}
+		return payloads, nil
+	}()
 	require.NoError(t, err)
-	controlPayloads := make([]int64, 0, 1)
-	var controlErr error
-	for controlResult.Next() {
-		var payload sql.NullInt64
-		if controlErr = controlResult.Scan(&payload); controlErr != nil {
-			break
-		}
-		if !payload.Valid {
-			controlErr = errors.New("admitted broadcast join returned an unmatched NULL payload")
-			break
-		}
-		controlPayloads = append(controlPayloads, payload.Int64)
-	}
-	if controlErr == nil {
-		controlErr = controlResult.Err()
-	}
-	controlCloseErr := controlResult.Close()
-	require.NoError(t, controlErr)
-	require.NoError(t, controlCloseErr)
 	require.Equal(t, []int64{1}, controlPayloads)
 
 	execJoinSpillSQL(t, ctx, conn, "truncate table broadcast_build")
@@ -153,12 +155,16 @@ func TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget(t *testing.T) {
 	// The frontend returns this terminal build failure before creating a result
 	// set, which is stronger than checking that a partially read result set is
 	// empty: no probe row can have escaped the failed dependency.
-	failedResult, err := conn.QueryContext(ctx, query)
-	var failedCloseErr error
-	if failedResult != nil {
-		failedCloseErr = failedResult.Close()
-	}
-	require.NoError(t, failedCloseErr)
+	err = func() (err error) {
+		failedResult, err := conn.QueryContext(ctx, query)
+		if failedResult == nil {
+			return err
+		}
+		defer func() {
+			err = errors.Join(err, failedResult.Close(), failedResult.Err())
+		}()
+		return err
+	}()
 	require.Error(t, err)
 	var mysqlErr *mysqlDriver.MySQLError
 	require.True(t, errors.As(err, &mysqlErr), "expected MySQL protocol error, got %T: %v", err, err)
