@@ -343,6 +343,61 @@ func (bc *BindContext) mysqlSpecialOrderTypeForProject(colPos int32) *plan.Type 
 	return bc.mysqlSpecialOrderTypeForExpr(bc.projects[colPos])
 }
 
+// mysqlSpecialColumnTypeForExpr returns catalog provenance for a visible
+// ENUM/SET display value. Unlike ordering provenance, it intentionally does
+// not cross set-operation outputs.
+func (bc *BindContext) mysqlSpecialColumnTypeForExpr(expr *plan.Expr) *plan.Type {
+	if expr == nil || !types.T(expr.Typ.Id).IsMySQLString() {
+		return nil
+	}
+	if isEnumOrSetDisplayValueExpr(expr) {
+		fn := expr.GetF()
+		if len(fn.Args) == 2 && isEnumOrSetPlanType(&fn.Args[1].Typ) {
+			return DeepCopyType(&fn.Args[1].Typ)
+		}
+		return nil
+	}
+
+	col := expr.GetCol()
+	if col == nil {
+		return nil
+	}
+	if col.RelPos == bc.projectTag && col.ColPos >= 0 && int(col.ColPos) < len(bc.projects) {
+		project := bc.projects[col.ColPos]
+		if project == nil {
+			return nil
+		}
+		if projectCol := project.GetCol(); projectCol != nil &&
+			projectCol.RelPos == col.RelPos && projectCol.ColPos == col.ColPos {
+			return nil
+		}
+		return bc.mysqlSpecialColumnTypeForExpr(project)
+	}
+	if bc.groupTag > 0 && col.RelPos == bc.groupTag && col.ColPos >= 0 && int(col.ColPos) < len(bc.groups) {
+		groupExpr := bc.groups[col.ColPos]
+		if groupExpr == nil {
+			return nil
+		}
+		if groupCol := groupExpr.GetCol(); groupCol != nil &&
+			groupCol.RelPos == col.RelPos && groupCol.ColPos == col.ColPos {
+			return nil
+		}
+		return bc.mysqlSpecialColumnTypeForExpr(groupExpr)
+	}
+	binding := bc.bindingByTag[col.RelPos]
+	if binding == nil || col.ColPos < 0 || int(col.ColPos) >= len(binding.mysqlSpecialColumnTypes) {
+		return nil
+	}
+	return DeepCopyType(binding.mysqlSpecialColumnTypes[col.ColPos])
+}
+
+func (bc *BindContext) mysqlSpecialColumnTypeForProject(colPos int32) *plan.Type {
+	if colPos < 0 || int(colPos) >= len(bc.projects) {
+		return nil
+	}
+	return bc.mysqlSpecialColumnTypeForExpr(bc.projects[colPos])
+}
+
 func mysqlSpecialOrderTypesCompatible(left, right *plan.Type) bool {
 	return left != nil && right != nil && left.Id == right.Id && left.Enumvalues == right.Enumvalues
 }

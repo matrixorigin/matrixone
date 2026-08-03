@@ -39,6 +39,20 @@ func bindAndOptimizeSelectQueryWithValidator(
 	skipStats bool,
 	validate func(*Query) error,
 ) (*Plan, error) {
+	return bindAndOptimizeSelectQueryWithValidatorAndCapture(
+		stmtType, ctx, stmt, isPrepareStmt, skipStats, validate, nil,
+	)
+}
+
+func bindAndOptimizeSelectQueryWithValidatorAndCapture(
+	stmtType plan.Query_StatementType,
+	ctx CompilerContext,
+	stmt *tree.Select,
+	isPrepareStmt bool,
+	skipStats bool,
+	validate func(*Query) error,
+	capture func(*BindContext),
+) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
@@ -57,6 +71,9 @@ func bindAndOptimizeSelectQueryWithValidator(
 	builder.skipStats = skipStats
 	rootId = builder.reuseMultiReferenceCTEs(rootId)
 	ctx.SetViews(bindCtx.views)
+	if capture != nil {
+		capture(bindCtx)
+	}
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
 	if validate != nil {

@@ -152,15 +152,24 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 
 	// check view statement
 	var stmtPlan *Plan
+	var mysqlSpecialColumnTypes []*plan.Type
+	captureColumnTypes := func(bindCtx *BindContext) {
+		mysqlSpecialColumnTypes = make([]*plan.Type, len(bindCtx.headings))
+		for i := range mysqlSpecialColumnTypes {
+			mysqlSpecialColumnTypes[i] = bindCtx.mysqlSpecialColumnTypeForProject(int32(i))
+		}
+	}
 	var err error
 	switch s := stmt.Select.(type) {
 	case *tree.ParenSelect:
-		stmtPlan, err = bindAndOptimizeSelectQueryWithValidator(plan.Query_SELECT, ctx, s.Select, false, true, validate)
+		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
+			plan.Query_SELECT, ctx, s.Select, false, true, validate, captureColumnTypes)
 		if err != nil {
 			return nil, err
 		}
 	default:
-		stmtPlan, err = bindAndOptimizeSelectQueryWithValidator(plan.Query_SELECT, ctx, stmt, false, true, validate)
+		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
+			plan.Query_SELECT, ctx, stmt, false, true, validate, captureColumnTypes)
 		if err != nil {
 			return nil, err
 		}
@@ -180,8 +189,8 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 			name = originName
 		}
 		typ := &expr.Typ
-		if sourceType, ok := mysqlSpecialTypeSourceType(expr); ok {
-			typ = sourceType
+		if idx < len(mysqlSpecialColumnTypes) && mysqlSpecialColumnTypes[idx] != nil {
+			typ = mysqlSpecialColumnTypes[idx]
 		}
 		cols[idx] = &plan.ColDef{
 			Name:       strings.ToLower(name),

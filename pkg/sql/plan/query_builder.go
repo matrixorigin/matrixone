@@ -9478,6 +9478,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var colIsHidden []bool
 	var types []*plan.Type
 	var mysqlSpecialOrderTypes []*plan.Type
+	var mysqlSpecialColumnTypes []*plan.Type
 	var defaultVals []string
 	var binding *Binding
 	var bindingToReplace *Binding
@@ -9601,6 +9602,12 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				}
 				mysqlSpecialOrderTypes[i] = orderType
 			}
+			if columnType := subCtx.mysqlSpecialColumnTypeForProject(int32(i)); columnType != nil {
+				if mysqlSpecialColumnTypes == nil {
+					mysqlSpecialColumnTypes = make([]*plan.Type, colLength)
+				}
+				mysqlSpecialColumnTypes[i] = columnType
+			}
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
@@ -9608,6 +9615,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		binding = NewBinding(tag, nodeID, "", table, 0, cols, colIsHidden, types, false, defaultVals)
 		binding.originCols = originCols
 		binding.mysqlSpecialOrderTypes = mysqlSpecialOrderTypes
+		binding.mysqlSpecialColumnTypes = mysqlSpecialColumnTypes
 	}
 
 	if bindingToReplace != nil {

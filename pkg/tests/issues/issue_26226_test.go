@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,6 +47,11 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 			"insert into " + db + ".t values (1, ''), (2, 1)",
 			"create view " + db + ".v_raw as select flags from " + db + ".t where id = 2",
 			"create view " + db + ".v as select distinct flags from " + db + ".t",
+			"create view " + db + ".v_order as select flags from " + db + ".t order by flags",
+			"create view " + db + ".v_group as select flags from " + db + ".t group by flags",
+			"create view " + db + ".v_derived as select flags from (select flags from " + db + ".t) d",
+			"create view " + db + ".v_cte as with d as (select flags from " + db + ".t) select flags from d",
+			"create view " + db + ".v_union as select flags from " + db + ".t union all select flags from " + db + ".t",
 			"create table " + db + ".copied as select flags from " + db + ".v_raw",
 			"create table " + db + ".inserted (flags set('', 'a'))",
 			"insert into " + db + ".inserted select flags from " + db + ".v_raw",
@@ -69,6 +75,25 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 			"select count(*) from "+db+".v").Scan(&viewCount))
 		require.Equal(t, 1, baseCount)
 		require.Equal(t, baseCount, viewCount)
+		for _, test := range []struct {
+			viewName string
+			dataType string
+		}{
+			{viewName: "v_raw", dataType: "set"},
+			{viewName: "v", dataType: "set"},
+			{viewName: "v_order", dataType: "set"},
+			{viewName: "v_group", dataType: "set"},
+			{viewName: "v_derived", dataType: "set"},
+			{viewName: "v_cte", dataType: "set"},
+			{viewName: "v_union", dataType: "varchar"},
+		} {
+			var dataType string
+			require.NoError(t, dbConn.QueryRowContext(ctx,
+				"select data_type from information_schema.columns "+
+					"where table_schema = ? and table_name = ? and column_name = 'flags'",
+				db, test.viewName).Scan(&dataType))
+			require.Equal(t, test.dataType, strings.ToLower(dataType), test.viewName)
+		}
 
 		for _, query := range []string{
 			"select cast(flags as unsigned) from " + db + ".t where id = 2",

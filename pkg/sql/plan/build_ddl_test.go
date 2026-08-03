@@ -382,6 +382,49 @@ func TestBuildCreateViewPreservesMySQLSpecialColumnTypes(t *testing.T) {
 	require.Equal(t, int32(types.T_varchar), nameType.GetId())
 }
 
+func TestBuildCreateViewTracksMySQLSpecialColumnTypeProvenance(t *testing.T) {
+	tests := []struct {
+		name            string
+		selectSQL       string
+		wantSpecialType bool
+	}{
+		{name: "direct", selectSQL: "select priority, flags from nation", wantSpecialType: true},
+		{name: "order by", selectSQL: "select priority, flags from nation order by priority, flags", wantSpecialType: true},
+		{name: "group by", selectSQL: "select priority, flags from nation group by priority, flags", wantSpecialType: true},
+		{name: "distinct", selectSQL: "select distinct priority, flags from nation", wantSpecialType: true},
+		{name: "derived table", selectSQL: "select priority, flags from (select priority, flags from nation) d", wantSpecialType: true},
+		{name: "cte", selectSQL: "with d as (select priority, flags from nation) select priority, flags from d", wantSpecialType: true},
+		{name: "union all", selectSQL: "select priority, flags from nation union all select priority, flags from nation"},
+		{name: "string expressions", selectSQL: "select concat(priority, ''), concat(flags, '') from nation"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rootSQL := "create view v as " + test.selectSQL
+			ctx := &rootSQLCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false),
+				rootSQL:             rootSQL,
+			}
+			addMySQLSpecialTypeColumns(ctx.MockCompilerContext)
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			viewPlan, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			cols := viewPlan.GetDdl().GetCreateView().GetTableDef().GetCols()
+			require.Len(t, cols, 2)
+			if test.wantSpecialType {
+				require.True(t, isEnumPlanType(&cols[0].Typ))
+				require.True(t, isSetPlanType(&cols[1].Typ))
+			} else {
+				require.Equal(t, int32(types.T_varchar), cols[0].Typ.GetId())
+				require.Equal(t, int32(types.T_varchar), cols[1].Typ.GetId())
+			}
+		})
+	}
+}
+
 func TestBuildCTASPreservesMySQLSpecialColumnTypes(t *testing.T) {
 	const sql = "create table copied as select priority, flags, n_name from nation"
 	ctx := NewMockCompilerContext(false)

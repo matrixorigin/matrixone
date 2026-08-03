@@ -673,7 +673,11 @@ type Binding struct {
 	// the string column is a pure display of the recorded ENUM/SET storage
 	// type, and may therefore use definition-order semantics when ordered.
 	mysqlSpecialOrderTypes []*plan.Type
-	refCnts                []uint
+	// mysqlSpecialColumnTypes is aligned with cols. It records only transparent
+	// column provenance suitable for persisted catalog types; set operations do
+	// not propagate it.
+	mysqlSpecialColumnTypes []*plan.Type
+	refCnts                 []uint
 	// lower case
 	colIdByName    map[string]int32
 	isClusterTable bool
