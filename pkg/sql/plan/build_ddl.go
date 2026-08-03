@@ -162,11 +162,15 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 			originName = string(colNames[idx])
 			name = originName
 		}
+		typ := &expr.Typ
+		if sourceType, ok := mysqlSpecialTypeSourceType(expr); ok {
+			typ = sourceType
+		}
 		cols[idx] = &plan.ColDef{
 			Name:       strings.ToLower(name),
 			OriginName: originName,
 			Alg:        plan.CompressType_Lz4,
-			Typ:        expr.Typ,
+			Typ:        *typ,
 			Default: &plan.Default{
 				NullAbility:  !expr.Typ.NotNullable,
 				Expr:         nil,
@@ -258,16 +262,9 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 			if binding, ok := bindCtx.bindingByTable[tblName]; ok {
 				defaultVal = binding.defaults[binding.colIdByName[colName]]
 			}
-		case *plan.Expr_F:
-			// enum
-			if e.F.Func.ObjName == moEnumCastIndexToValueFun || e.F.Func.ObjName == moSetCastIndexToValueFun {
-				// cast_index_to_value('apple,banana,orange', cast(col_name as T_uint16))
-				colRef := e.F.Args[1].Expr.(*plan.Expr_Col).Col
-				tblName, colName := getTblAndColName(colRef.RelPos, colRef.ColPos)
-				if binding, ok := bindCtx.bindingByTable[tblName]; ok {
-					typ = binding.types[binding.colIdByName[colName]]
-				}
-			}
+		}
+		if sourceType, ok := mysqlSpecialTypeSourceType(expr); ok {
+			typ = sourceType
 		}
 
 		cols[i] = &plan.ColDef{

@@ -299,6 +299,106 @@ func TestBuildCreateViewExplicitColumnList(t *testing.T) {
 	})
 }
 
+func addMySQLSpecialTypeColumns(ctx *MockCompilerContext) {
+	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols,
+		&plan.ColDef{
+			Name: "priority",
+			Typ: plan.Type{
+				Id:          int32(types.T_enum),
+				Enumvalues:  "low,medium,high",
+				NotNullable: true,
+			},
+		},
+		&plan.ColDef{
+			Name: "flags",
+			Typ: plan.Type{
+				Id:         int32(types.T_uint64),
+				Enumvalues: "red,green,blue",
+			},
+		},
+	)
+}
+
+func TestBuildCreateViewPreservesMySQLSpecialColumnTypes(t *testing.T) {
+	const rootSQL = "create view v (renamed_priority, renamed_flags, renamed_name) as " +
+		"select priority, flags, n_name from nation"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	addMySQLSpecialTypeColumns(ctx.MockCompilerContext)
+
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateView().GetTableDef().GetCols()
+	require.Len(t, cols, 3)
+	priorityType := cols[0].GetTyp()
+	flagsType := cols[1].GetTyp()
+	nameType := cols[2].GetTyp()
+	require.Equal(t, "renamed_priority", cols[0].GetName())
+	require.Equal(t, int32(types.T_enum), priorityType.GetId())
+	require.Equal(t, "low,medium,high", priorityType.GetEnumvalues())
+	require.True(t, priorityType.GetNotNullable())
+	require.Equal(t, "renamed_flags", cols[1].GetName())
+	require.Equal(t, int32(types.T_uint64), flagsType.GetId())
+	require.Equal(t, "red,green,blue", flagsType.GetEnumvalues())
+	require.False(t, flagsType.GetNotNullable())
+	require.Equal(t, "renamed_name", cols[2].GetName())
+	require.Equal(t, int32(types.T_varchar), nameType.GetId())
+}
+
+func TestBuildCTASPreservesMySQLSpecialColumnTypes(t *testing.T) {
+	const sql = "create table copied as select priority, flags, n_name from nation"
+	ctx := NewMockCompilerContext(false)
+	addMySQLSpecialTypeColumns(ctx)
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 3)
+	require.True(t, isEnumPlanType(&cols[0].Typ))
+	require.Equal(t, "low,medium,high", cols[0].Typ.GetEnumvalues())
+	require.True(t, isSetPlanType(&cols[1].Typ))
+	require.Equal(t, "red,green,blue", cols[1].Typ.GetEnumvalues())
+	require.Equal(t, int32(types.T_varchar), cols[2].Typ.GetId())
+}
+
+func TestMySQLSpecialTypeSourceTypeRejectsNonTransparentExpressions(t *testing.T) {
+	enumType := plan.Type{Id: int32(types.T_enum), Enumvalues: "low,high"}
+	valid := &plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: moEnumCastIndexToValueFun},
+			Args: []*plan.Expr{
+				{Typ: plan.Type{Id: int32(types.T_varchar)}},
+				{Typ: enumType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 2}}},
+			},
+		}},
+	}
+
+	got, ok := mysqlSpecialTypeSourceType(valid)
+	require.True(t, ok)
+	require.Equal(t, enumType, *got)
+
+	for _, mutate := range []func(*plan.Expr){
+		func(expr *plan.Expr) { expr.GetF().Args = expr.GetF().Args[:1] },
+		func(expr *plan.Expr) { expr.GetF().Args[1].Expr = nil },
+		func(expr *plan.Expr) { expr.GetF().Args[1].Typ.Id = int32(types.T_varchar) },
+		func(expr *plan.Expr) { expr.GetF().Func.ObjName = "concat" },
+	} {
+		expr := DeepCopyExpr(valid)
+		mutate(expr)
+		_, ok = mysqlSpecialTypeSourceType(expr)
+		require.False(t, ok)
+	}
+}
+
 func TestBuildTemporaryTableMarksCatalogRelkind(t *testing.T) {
 	const rootSQL = "create temporary table temp_marked (id int, unique key uk_id (id))"
 	ctx := &rootSQLCompilerContext{

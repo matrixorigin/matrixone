@@ -251,6 +251,29 @@ func mysqlSpecialTypeFuncNames(typ *plan.Type) (string, string, string, error) {
 	}
 }
 
+// mysqlSpecialTypeSourceType returns the source ENUM/SET type for the transparent
+// display wrapper inserted by the column binder. Persisted output schemas use
+// this type instead of the wrapper's VARCHAR result type.
+func mysqlSpecialTypeSourceType(expr *plan.Expr) (*plan.Type, bool) {
+	if expr == nil {
+		return nil, false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 || fn.Args[1] == nil || fn.Args[1].GetCol() == nil {
+		return nil, false
+	}
+
+	sourceType := &fn.Args[1].Typ
+	switch fn.Func.ObjName {
+	case moEnumCastIndexToValueFun:
+		return sourceType, isEnumPlanType(sourceType)
+	case moSetCastIndexToValueFun:
+		return sourceType, isSetPlanType(sourceType)
+	default:
+		return nil, false
+	}
+}
+
 func wrapAstExprForMySQLSpecialType(ctx context.Context, targetType plan.Type, astExpr tree.Expr) (tree.Expr, error) {
 	if !isEnumOrSetPlanType(&targetType) {
 		return astExpr, nil
