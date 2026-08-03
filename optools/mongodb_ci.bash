@@ -130,7 +130,7 @@ generate_mo_config() {
     printf '\n[cn.frontend.mongodb]\n'
     printf 'enable = true\nallow-loopback = true\n'
     printf 'connect-timeout = "10s"\nserver-selection-timeout = "10s"\nsocket-timeout = "30s"\n'
-    printf 'batch-rows = 2\nmax-source-concurrency = 2\n'
+    printf 'batch-rows = 2\nmax-batch-bytes = 1048576\nmax-value-bytes = 524288\nmax-source-concurrency = 2\n'
   } >>"$generated_dir/cn.toml"
   sed -e "s#\./etc/launch/log.toml#$generated_dir/log.toml#" \
       -e "s#\./etc/launch/tn.toml#$generated_dir/tn.toml#" \
