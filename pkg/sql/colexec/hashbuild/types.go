@@ -83,23 +83,15 @@ type container struct {
 	spillBucketWriteBufs [spillNumBuckets]bytes.Buffer
 	spillBucketWriteRows [spillNumBuckets]int64
 	spillKeyVecs         []*vector.Vector
-	// spillScratchReservation is a query/CN-charged emergency lease retained
-	// while Shuffle build batches accumulate. It prevents retained copies from
-	// consuming the scratch required to recover from hard-budget rejection.
+	// spillScratchReservation is the query/CN-charged recovery lease for this
+	// execution. Shuffle HashBuild establishes it before retaining spillable
+	// data; spill then reuses the same lease for its bounded scratch buffers.
+	// Direct spill callers may still establish it lazily. Reset, Free, and the
+	// build terminal cleanup all release it idempotently.
 	spillScratchReservation *process.HashBuildReservation
-	// spillScratchEmergency marks a lease pre-admitted by
-	// ensureDirectSpillScratchReservation or
-	// ensureRetainedSpillScratchReservation. An uncharged upstream batch may
-	// not grow beyond this lease. A retained batch may grow it because its
-	// source memory remains charged separately while the batch is drained.
-	spillScratchEmergency bool
-	// spillScratchBase is the transient emergency floor. Coalesce-buffer
-	// growth is charged on top and must never be mistaken for this floor.
+	// spillScratchBase is the retained scratch floor. Coalesce-buffer growth is
+	// charged on top and must never be mistaken for this floor.
 	spillScratchBase uint64
-
-	// cached expression executors for spill (reused across batches)
-	spillExprExecs       []colexec.ExpressionExecutor
-	spillExprReservation *process.HashBuildReservation
 }
 
 // spillFileBundle is deliberately owned by hashbuild.  Build converts each
@@ -337,6 +329,7 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 		hashBuild.cleanupSpillFiles(proc)
 	}
 	hashBuild.ctr.spilledFds = nil
+	hashBuild.ctr.spillFS = nil
 	hashBuild.ctr.state = BuildHashMap
 	hashBuild.ctr.runtimeFilterIn = false
 	if !hashBuild.ctr.runtimeFilterDone {
@@ -348,8 +341,11 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 		} else {
 			message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
 		}
+		hashBuild.ctr.runtimeFilterDone = hashBuild.RuntimeFilterSpec != nil
 	}
-	hashBuild.ctr.runtimeFilterDone = false
+	// Keep the terminal gate closed for this execution generation. Prepare is
+	// the only boundary that opens it for the next generation, which makes
+	// repeated Reset calls idempotent.
 }
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	hashBuild.ctr.terminalMu.Lock()
@@ -365,8 +361,8 @@ func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err
 		hashBuild.publishBuildError(proc, err)
 	}
 	hashBuild.cleanupSpillFiles(proc)
+	hashBuild.ctr.spillFS = nil
 	hashBuild.ctr.hashmapBuilder.Free(proc)
-	hashBuild.ctr.freeSpillExprExecs()
 	hashBuild.ctr.dropSpillScratchBuffers()
 	hashBuild.ctr.releaseSpillScratchReservation()
 }
@@ -380,13 +376,7 @@ func (hashBuild *HashBuild) logDiagnostics(proc *process.Process, pipelineFailed
 		return
 	}
 	extra := hashBuild.OpAnalyzer.GetOpStats().ExtraStats
-	if extra["HashBuildSpillStarts"] == 0 &&
-		extra["QueryHashBudgetRejects"] == 0 &&
-		extra["HashBuildRuntimeFilterBudgetFallbacks"] == 0 &&
-		extra["HashBuildEmergencyScratchGrowRejects"] == 0 &&
-		extra["HashBuildSpillScratchGrowRejects"] == 0 &&
-		extra["HashBuildRetainedEmergencyGrowCount"] == 0 &&
-		extra["HashBuildRetainedEmergencyGrowRejects"] == 0 {
+	if !hasHashBuildDiagnosticStats(extra) {
 		return
 	}
 	logutil.Info("operator diagnostic summary",
@@ -398,6 +388,20 @@ func (hashBuild *HashBuild) logDiagnostics(proc *process.Process, pipelineFailed
 		zap.Bool("pipeline_failed", pipelineFailed),
 		zap.Error(err),
 		zap.Any("extra_stats", extra))
+}
+
+func hasHashBuildDiagnosticStats(extra map[string]int64) bool {
+	return extra["HashBuildSpillStarts"] != 0 ||
+		extra["QueryHashBudgetRejects"] != 0 ||
+		extra["HashBuildRuntimeFilterCollectionFallbacks"] != 0 ||
+		extra["HashBuildRuntimeFilterBudgetFallbacks"] != 0 ||
+		extra["HashBuildRuntimeFilterAllocationFallbacks"] != 0 ||
+		extra["HashBuildSpillRecoveryReserveRejects"] != 0 ||
+		extra["HashBuildSpillRecoveryGrowRejects"] != 0 ||
+		extra["HashBuildSpillRecoveryGrowCount"] != 0 ||
+		extra["HashBuildSpillScratchReserveRejects"] != 0 ||
+		extra["HashBuildSpillScratchGrowRejects"] != 0 ||
+		extra["HashBuildSpillScratchGrowCount"] != 0
 }
 
 func (hashBuild *HashBuild) publishJoinMap(proc *process.Process, jm *message.JoinMap) bool {
@@ -467,6 +471,7 @@ func (hb *HashmapBuilder) CleanCopiedBatchAt(idx int, proc *process.Process) err
 	// reservation cannot be matched safely to Batches.Buf[idx]. Keep the
 	// conservative charges until the last physical batch has been dropped.
 	if len(hb.Batches.Buf) == 0 {
+		hb.retainedSpillTailSelected = 0
 		hb.releaseBatchReservations()
 	}
 	return nil
@@ -505,6 +510,7 @@ func (hb *HashmapBuilder) DrainCopiedBatches(
 	}
 	hb.Batches.Buf = nil
 	hb.Batches.MemSize = 0
+	hb.retainedSpillTailSelected = 0
 	hb.releaseBatchReservations()
 	return nil
 }

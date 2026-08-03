@@ -113,15 +113,9 @@ func (h *Handle) HandleSnapshotRead(
 		v2.TaskSnapshotReadReqDurationHistogram.Observe(time.Since(now).Seconds())
 	}()
 	maxEnd := types.TS{}
-	maxCheckpoint := h.db.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	maxCheckpoint := h.db.BGCheckpointRunner.MaxCheckpoint()
 	if maxCheckpoint != nil {
 		maxEnd = maxCheckpoint.GetEnd()
-	}
-	if maxEnd.IsEmpty() {
-		maxGlobal := h.db.BGCheckpointRunner.MaxGlobalCheckpoint()
-		if maxGlobal != nil {
-			maxEnd = maxGlobal.GetEnd()
-		}
 	}
 	snapshot := types.TimestampToTS(*req.Snapshot)
 	if snapshot.GT(&maxEnd) {
@@ -258,31 +252,15 @@ func getChangedListFromCheckpoints(
 			zap.String("hint", hint))
 	}
 
-	var ckp *checkpoint.CheckpointEntry
-	maxICKP := h.GetDB().BGCheckpointRunner.MaxIncrementalCheckpoint()
-	maxGCKP := h.GetDB().BGCheckpointRunner.MaxGlobalCheckpoint()
-	if maxICKP == nil && maxGCKP == nil {
+	ckp := h.GetDB().BGCheckpointRunner.MaxCheckpoint()
+	if ckp == nil {
 		return
-	}
-	if maxICKP == nil {
-		ckp = maxGCKP
-	}
-	if maxGCKP == nil {
-		ckp = maxICKP
-	}
-	if maxICKP != nil && maxGCKP != nil {
-		gckpEnd := maxGCKP.GetEnd()
-		ickpEnd := maxICKP.GetEnd()
-		if ickpEnd.GT(&gckpEnd) {
-			ckp = maxICKP
-		} else {
-			ckp = maxGCKP
-		}
 	}
 
 	tableIDLocation := ckp.GetTableIDLocation()
+	checkpointCoverageEnd := ckp.GetEnd().Prev()
 	accIds, dbIds, tblIds, oldest, ok := tryGetChangedListFromTableIDBatch(
-		ctx, from, to, tableIDLocation, h, isTheTblIWantWithTimeRange,
+		ctx, from, checkpointCoverageEnd, tableIDLocation, h, isTheTblIWantWithTimeRange,
 	)
 	// for ckp with old version,
 	// tableIDLocation is empty,
@@ -378,7 +356,7 @@ func getChangedListFromCheckpoints(
 func tryGetChangedListFromTableIDBatch(
 	ctx context.Context,
 	from types.TS,
-	to types.TS,
+	requiredHistoryEnd types.TS,
 	tableIDLocations objectio.LocationSlice,
 	h *Handle,
 	isTheTblIWantWithTimeRange func(exists []uint64, tblId uint64, start, end types.TS) bool,
@@ -393,33 +371,28 @@ func tryGetChangedListFromTableIDBatch(
 		return
 	}
 
-	consumeFn := func(bat *batch.Batch, release func()) {
-
-		defer release()
+	var historyEnd types.TS
+	consumeFn := func(bat *batch.Batch) {
 		accounts := vector.MustFixedColNoTypeCheck[uint32](bat.Vecs[0])
 		dbids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[1])
 		tids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
 		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
 		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
 
-		var start types.TS
 		for i := 0; i < bat.RowCount(); i++ {
 			if tids[i] == logtail.CKPTableIDBatch_SpecialTableID {
-				start = starts[i]
-				break
-			}
-		}
-		if start.GT(&from) {
-			return
-		}
-		ok = true
-		oldest = start
-
-		tblIds = make([]uint64, 0)
-		accIds = make([]uint64, 0)
-		dbIds = make([]uint64, 0)
-		for i := 0; i < bat.RowCount(); i++ {
-			if tids[i] == logtail.CKPTableIDBatch_SpecialTableID {
+				if !ok {
+					oldest, historyEnd, ok = starts[i], ends[i], true
+				} else {
+					// Multiple coverage rows are unexpected. Their intersection is
+					// the only range all fragments prove is available.
+					if oldest.LT(&starts[i]) {
+						oldest = starts[i]
+					}
+					if historyEnd.GT(&ends[i]) {
+						historyEnd = ends[i]
+					}
+				}
 				continue
 			}
 			if !isTheTblIWantWithTimeRange(tblIds, tids[i], starts[i], ends[i]) {
@@ -435,12 +408,18 @@ func tryGetChangedListFromTableIDBatch(
 	for {
 		release, bat, isEnd, err := reader.Read(ctx)
 		if err != nil {
-			return
+			return nil, nil, nil, types.MaxTs(), false
 		}
 		if isEnd {
 			break
 		}
-		consumeFn(bat, release)
+		func() {
+			defer release()
+			consumeFn(bat)
+		}()
+	}
+	if !ok || oldest.GT(&historyEnd) || oldest.GT(&from) || historyEnd.LT(&requiredHistoryEnd) {
+		return nil, nil, nil, types.MaxTs(), false
 	}
 	return
 }

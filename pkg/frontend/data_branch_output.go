@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"bytes"
+	"container/heap"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -33,6 +34,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -50,7 +52,16 @@ func makeFileName(
 	baseAtTsExpr *tree.AtTimeStamp,
 	tarAtTsExpr *tree.AtTimeStamp,
 	tblStuff tableStuff,
-) string {
+) (string, error) {
+	return makeFileNameWithUUID(baseAtTsExpr, tarAtTsExpr, tblStuff, uuid.NewRandom)
+}
+
+func makeFileNameWithUUID(
+	baseAtTsExpr *tree.AtTimeStamp,
+	tarAtTsExpr *tree.AtTimeStamp,
+	tblStuff tableStuff,
+	newUUID func() (uuid.UUID, error),
+) (string, error) {
 	var (
 		srcName  = encodeDiffFileNamePart(tblStuff.tarRel.GetTableName())
 		baseName = encodeDiffFileNamePart(tblStuff.baseRel.GetTableName())
@@ -65,14 +76,18 @@ func makeFileName(
 	}
 
 	namePrefix := fmt.Sprintf("diff_%s_%s", srcName, baseName)
-	timeSuffix := "_" + time.Now().UTC().Format("20060102_150405")
-	if len(namePrefix)+len(timeSuffix) <= maxDiffFileNameStemBytes {
-		return namePrefix + timeSuffix
+	id, err := newUUID()
+	if err != nil {
+		return "", moerr.NewInternalErrorNoCtxf("generate data branch output file name: %v", err)
+	}
+	uniqueSuffix := fmt.Sprintf("_%s_%s", time.Now().UTC().Format("20060102_150405"), id)
+	if len(namePrefix)+len(uniqueSuffix) <= maxDiffFileNameStemBytes {
+		return namePrefix + uniqueSuffix, nil
 	}
 
 	digest := sha256.Sum256([]byte(namePrefix))
-	digestSuffix := fmt.Sprintf("_%x%s", digest[:16], timeSuffix)
-	return truncateDiffFileNamePrefix(namePrefix, maxDiffFileNameStemBytes-len(digestSuffix)) + digestSuffix
+	digestSuffix := fmt.Sprintf("_%x%s", digest[:16], uniqueSuffix)
+	return truncateDiffFileNamePrefix(namePrefix, maxDiffFileNameStemBytes-len(digestSuffix)) + digestSuffix, nil
 }
 
 const maxDiffFileNameStemBytes = 240
@@ -129,7 +144,7 @@ type applyBatchInfo struct {
 	insertTable        string
 	deleteKeyNames     []string
 	deleteStageNames   []string
-	visibleNames       []string
+	writableNames      []string
 	disableInsertStage bool
 }
 
@@ -205,13 +220,17 @@ func newApplyBatchInfo(
 	deleteKeyNames := make([]string, len(deleteKeyColIdxes))
 	deleteStageNames := make([]string, len(deleteKeyColIdxes))
 	for i, idx := range deleteKeyColIdxes {
-		deleteKeyNames[i] = tblStuff.def.colNames[idx]
+		deleteKeyNames[i] = tblStuff.def.baseColNames[idx]
 		deleteStageNames[i] = fmt.Sprintf("branch_apply_key_%d", i)
 	}
 
-	visibleNames := make([]string, len(tblStuff.def.visibleIdxes))
-	for i, idx := range tblStuff.def.visibleIdxes {
-		visibleNames[i] = tblStuff.def.colNames[idx]
+	writableIdxes := tblStuff.def.writableIdxes
+	if len(tblStuff.def.tarOnlyIdxes) > 0 {
+		writableIdxes = tblStuff.def.commonWritableIdxes
+	}
+	writableNames := make([]string, len(writableIdxes))
+	for i, idx := range writableIdxes {
+		writableNames[i] = tblStuff.def.baseColNames[idx]
 	}
 
 	seq := atomic.AddUint64(&diffTempTableSeq, 1)
@@ -223,7 +242,7 @@ func newApplyBatchInfo(
 		insertTable:        fmt.Sprintf("__mo_diff_ins_%s_%d", sessionTag, seq),
 		deleteKeyNames:     deleteKeyNames,
 		deleteStageNames:   deleteStageNames,
-		visibleNames:       visibleNames,
+		writableNames:      writableNames,
 		disableInsertStage: disableInsertStage,
 	}
 }
@@ -464,10 +483,18 @@ func (output *diffOutputTable) createSQL(ctx context.Context, tblStuff tableStuf
 	}
 
 	projectedNames := make([]string, len(output.projectedIdxes))
+	projectedTargetOnly := make([]bool, len(output.projectedIdxes))
+	targetOnlyIdxes := make(map[int]struct{}, len(tblStuff.def.tarOnlyIdxes))
+	for _, idx := range tblStuff.def.tarOnlyIdxes {
+		targetOnlyIdxes[idx] = struct{}{}
+	}
 	for i, idx := range output.projectedIdxes {
 		projectedNames[i] = tblStuff.def.colNames[idx]
+		_, projectedTargetOnly[i] = targetOnlyIdxes[idx]
 	}
-	baseColDefs, err := dataBranchColumnsByIdentity(targetTableDef, baseTableDef, projectedNames)
+	outputColDefs, targetOnly, err := dataBranchOutputColumnDefs(
+		targetTableDef, baseTableDef, projectedNames, projectedTargetOnly,
+	)
 	if err != nil {
 		return "", err
 	}
@@ -477,10 +504,10 @@ func (output *diffOutputTable) createSQL(ctx context.Context, tblStuff tableStuf
 		fmt.Sprintf("%s varchar(16) default null", quoteIdentifierForSQL(output.columnNames[1])),
 	}
 	for i, name := range projectedNames {
-		colDef := baseColDefs[i]
+		colDef := outputColDefs[i]
 
 		columnDef := fmt.Sprintf("%s %s", quoteIdentifierForSQL(name), plan2.FormatColType(colDef.Typ))
-		if colDef.Typ.NotNullable {
+		if colDef.Typ.NotNullable && !targetOnly[i] {
 			columnDef += " not null"
 		} else {
 			columnDef += " default null"
@@ -505,6 +532,9 @@ func dataBranchColumnDefByName(tableDef *plan2.TableDef, name string) *plan2.Col
 }
 
 func dataBranchColumnDefByIdentity(tableDef *plan2.TableDef, sourceColDef *plan2.ColDef) *plan2.ColDef {
+	if tableDef == nil || sourceColDef == nil || sourceColDef.ColId == 0 {
+		return nil
+	}
 	for _, colDef := range tableDef.Cols {
 		if colDef != nil &&
 			colDef.ColId == sourceColDef.ColId &&
@@ -515,36 +545,86 @@ func dataBranchColumnDefByIdentity(tableDef *plan2.TableDef, sourceColDef *plan2
 	return nil
 }
 
+func dataBranchColumnDefByLogicalName(tableDef *plan2.TableDef, sourceColDef *plan2.ColDef) *plan2.ColDef {
+	if tableDef == nil || sourceColDef == nil {
+		return nil
+	}
+	if colDef := dataBranchColumnDefByName(tableDef, sourceColDef.Name); colDef != nil {
+		return colDef
+	}
+	if originName := sourceColDef.GetOriginCaseName(); !strings.EqualFold(originName, sourceColDef.Name) {
+		if colDef := dataBranchColumnDefByName(tableDef, originName); colDef != nil {
+			return colDef
+		}
+	}
+	for _, colDef := range tableDef.Cols {
+		if colDef != nil && !strings.EqualFold(colDef.GetOriginCaseName(), colDef.Name) &&
+			strings.EqualFold(colDef.GetOriginCaseName(), sourceColDef.Name) {
+			return colDef
+		}
+	}
+	return nil
+}
+
+func dataBranchEndpointColumnDef(tableDef *plan2.TableDef, sourceColDef *plan2.ColDef) *plan2.ColDef {
+	if colDef := dataBranchColumnDefByLogicalName(tableDef, sourceColDef); colDef != nil {
+		return colDef
+	}
+	// A rename on an ordinary clone keeps the physical identity even when the
+	// endpoint definition no longer carries OriginName. Later path validation
+	// still rejects DROP/ADD discontinuities before DIFF or MERGE reads data.
+	colDef := dataBranchColumnDefByIdentity(tableDef, sourceColDef)
+	if colDef == nil ||
+		isDataBranchUserVisibleColumn(colDef) != isDataBranchUserVisibleColumn(sourceColDef) ||
+		!isDataBranchLogicalTypeEquivalent(colDef.Typ, sourceColDef.Typ) ||
+		colDef.NotNull != sourceColDef.NotNull {
+		return nil
+	}
+	return colDef
+}
+
 // dataBranchColumnsByIdentity maps each source column name to the column with
 // the same stable identity in the destination definition. Column names are
 // intentionally not part of schema equivalence: a branch may rename a column
 // without changing its identity, so physical reads from another branch or an
 // ancestor must resolve that branch's local name through ColId and Seqnum.
-func dataBranchColumnsByIdentity(
+func dataBranchOutputColumnDefs(
 	sourceTableDef *plan2.TableDef,
 	destinationTableDef *plan2.TableDef,
 	sourceColumnNames []string,
-) ([]*plan2.ColDef, error) {
+	sourceTargetOnly []bool,
+) ([]*plan2.ColDef, []bool, error) {
 	if sourceTableDef == nil || destinationTableDef == nil {
-		return nil, moerr.NewInternalErrorNoCtx("DATA BRANCH table definition is unavailable")
+		return nil, nil, moerr.NewInternalErrorNoCtx("DATA BRANCH table definition is unavailable")
+	}
+	if len(sourceColumnNames) != len(sourceTargetOnly) {
+		return nil, nil, moerr.NewInternalErrorNoCtx("DATA BRANCH output column classification is unavailable")
 	}
 
-	destinationColDefs := make([]*plan2.ColDef, len(sourceColumnNames))
+	outputColDefs := make([]*plan2.ColDef, len(sourceColumnNames))
+	targetOnly := make([]bool, len(sourceColumnNames))
 	for i, sourceColumnName := range sourceColumnNames {
 		sourceColDef := dataBranchColumnDefByName(sourceTableDef, sourceColumnName)
 		if sourceColDef == nil {
-			return nil, moerr.NewInternalErrorNoCtxf(
+			return nil, nil, moerr.NewInternalErrorNoCtxf(
 				"DATA BRANCH source column %q is unavailable", sourceColumnName,
 			)
 		}
-		destinationColDefs[i] = dataBranchColumnDefByIdentity(destinationTableDef, sourceColDef)
-		if destinationColDefs[i] == nil {
-			return nil, moerr.NewInternalErrorNoCtxf(
-				"DATA BRANCH destination column for source column %q is unavailable", sourceColumnName,
-			)
+		outputColDefs[i] = dataBranchColumnDefByIdentity(destinationTableDef, sourceColDef)
+		if outputColDefs[i] == nil {
+			if !sourceTargetOnly[i] {
+				return nil, nil, moerr.NewInternalErrorNoCtxf(
+					"DATA BRANCH destination column for source column %q is unavailable", sourceColumnName,
+				)
+			}
+			// A target-only column has no base identity. Keep its target type in
+			// the materialized schema, but make the output column nullable because
+			// base-side DIFF rows project target-only values as NULL.
+			outputColDefs[i] = sourceColDef
+			targetOnly[i] = true
 		}
 	}
-	return destinationColDefs, nil
+	return outputColDefs, targetOnly, nil
 }
 
 func (output *diffOutputTable) insertSQL(values *bytes.Buffer) string {
@@ -715,6 +795,71 @@ func execDataBranchOutputSQL(ctx context.Context, bh BackgroundExec, sql string)
 	return nil
 }
 
+type diffOutputPKValues struct {
+	values     []any
+	pkColIdxes []int
+}
+
+func (values diffOutputPKValues) len() int {
+	if values.pkColIdxes == nil {
+		return len(values.values)
+	}
+	return len(values.pkColIdxes)
+}
+
+func (values diffOutputPKValues) at(idx int) any {
+	if values.pkColIdxes == nil {
+		return values.values[idx]
+	}
+	return values.values[values.pkColIdxes[idx]+2]
+}
+
+func compareDiffOutputPKValues(a, b diffOutputPKValues) int {
+	for idx := range a.len() {
+		if cmp := types.CompareValue(a.at(idx), b.at(idx)); cmp != 0 {
+			return cmp
+		}
+	}
+	return 0
+}
+
+func compareDiffOutputRows(a, b []any, pkColIdxes []int) int {
+	return compareDiffOutputPKValues(
+		diffOutputPKValues{values: a, pkColIdxes: pkColIdxes},
+		diffOutputPKValues{values: b, pkColIdxes: pkColIdxes},
+	)
+}
+
+// diffOutputRowHeap is a max-heap by primary key. Keeping the largest retained
+// row at the root lets OUTPUT LIMIT select the globally smallest rows while
+// holding at most LIMIT rows in memory.
+type diffOutputRowHeap struct {
+	rows       [][]any
+	pkColIdxes []int
+}
+
+func (h diffOutputRowHeap) Len() int { return len(h.rows) }
+
+func (h diffOutputRowHeap) Less(i, j int) bool {
+	return compareDiffOutputRows(h.rows[i], h.rows[j], h.pkColIdxes) > 0
+}
+
+func (h diffOutputRowHeap) Swap(i, j int) {
+	h.rows[i], h.rows[j] = h.rows[j], h.rows[i]
+}
+
+func (h *diffOutputRowHeap) Push(value any) {
+	h.rows = append(h.rows, value.([]any))
+}
+
+func (h *diffOutputRowHeap) Pop() any {
+	last := len(h.rows) - 1
+	value := h.rows[last]
+	h.rows[last] = nil
+	h.rows = h.rows[:last]
+	return value
+}
+
 func satisfyDiffOutputOpt(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -738,9 +883,7 @@ func satisfyDiffOutputOpt(
 	}()
 
 	if stmt.OutputOpt == nil || stmt.OutputOpt.Limit != nil {
-		var (
-			rows = make([][]any, 0, 100)
-		)
+		rows := make([][]any, 0, 100)
 
 		// Resolve column projection (nil means show all visible columns).
 		displayIdxes, resolveErr := resolveProjectedIdxes(stmt.Columns, tblStuff)
@@ -771,6 +914,59 @@ func satisfyDiffOutputOpt(
 			rowSize = slices.Max(extractIdxes) + 3
 		}
 
+		var limit *int64
+		if stmt.OutputOpt != nil {
+			limit = stmt.OutputOpt.Limit
+		}
+		if limit != nil && *limit == 0 {
+			// The limit is already satisfied before consuming any rows (LIMIT 0).
+			hitLimit = true
+			stop()
+		}
+		rowHeap := diffOutputRowHeap{
+			rows:       rows,
+			pkColIdxes: tblStuff.def.pkColIdxes,
+		}
+		materializeIdxes := extractIdxes
+		var candidatePK []any
+		if limit != nil && *limit > 0 {
+			candidatePK = make([]any, len(tblStuff.def.pkColIdxes))
+			pkIdxes := make(map[int]struct{}, len(tblStuff.def.pkColIdxes))
+			for _, idx := range tblStuff.def.pkColIdxes {
+				pkIdxes[idx] = struct{}{}
+			}
+			materializeIdxes = make([]int, 0, len(extractIdxes))
+			for _, idx := range extractIdxes {
+				if _, isPK := pkIdxes[idx]; !isPK {
+					materializeIdxes = append(materializeIdxes, idx)
+				}
+			}
+		}
+
+		materializeRow := func(
+			wrapped batchWithKind,
+			rowIdx int,
+			idxes []int,
+			pkValues []any,
+		) ([]any, error) {
+			row := make([]any, rowSize)
+			row[0] = wrapped.name
+			row[1] = wrapped.kind
+			for idx, colIdx := range tblStuff.def.pkColIdxes {
+				if pkValues != nil {
+					row[colIdx+2] = pkValues[idx]
+				}
+			}
+			for _, colIdx := range idxes {
+				if err := extractRowFromVector(
+					ctx, ses, wrapped.batch.Vecs[colIdx], colIdx+2, row, rowIdx, false,
+				); err != nil {
+					return nil, err
+				}
+			}
+			return row, nil
+		}
+
 		for wrapped := range retCh {
 			if first != nil {
 				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
@@ -788,42 +984,52 @@ func satisfyDiffOutputOpt(
 			}
 
 			for rowIdx := range wrapped.batch.RowCount() {
-				var (
-					row = make([]any, rowSize)
-				)
-				row[0] = wrapped.name
-				row[1] = wrapped.kind
+				if limit == nil {
+					row, materializeErr := materializeRow(wrapped, rowIdx, extractIdxes, nil)
+					if materializeErr != nil {
+						return materializeErr
+					}
+					rowHeap.rows = append(rowHeap.rows, row)
+					continue
+				}
 
-				for _, colIdx := range extractIdxes {
-					vec := wrapped.batch.Vecs[colIdx]
+				for idx, colIdx := range tblStuff.def.pkColIdxes {
 					if err = extractRowFromVector(
-						ctx, ses, vec, colIdx+2, row, rowIdx, false,
+						ctx, ses, wrapped.batch.Vecs[colIdx], idx, candidatePK, rowIdx, false,
 					); err != nil {
 						return
 					}
 				}
 
-				rows = append(rows, row)
-				if stmt.OutputOpt != nil && stmt.OutputOpt.Limit != nil &&
-					int64(len(rows)) >= *stmt.OutputOpt.Limit {
-					// hit limit, cancel producers but keep draining the channel
-					hitLimit = true
-					stop()
-					break
+				fillsHeap := int64(len(rowHeap.rows)) < *limit
+				replacesRoot := !fillsHeap && compareDiffOutputPKValues(
+					diffOutputPKValues{values: candidatePK},
+					diffOutputPKValues{values: rowHeap.rows[0], pkColIdxes: rowHeap.pkColIdxes},
+				) < 0
+				if !fillsHeap && !replacesRoot {
+					continue
+				}
+
+				row, materializeErr := materializeRow(wrapped, rowIdx, materializeIdxes, candidatePK)
+				if materializeErr != nil {
+					return materializeErr
+				}
+				if fillsHeap {
+					rowHeap.rows = append(rowHeap.rows, row)
+					if int64(len(rowHeap.rows)) == *limit {
+						heap.Init(&rowHeap)
+					}
+				} else {
+					rowHeap.rows[0] = row
+					heap.Fix(&rowHeap, 0)
 				}
 			}
 			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 		}
 
+		rows = rowHeap.rows
 		slices.SortFunc(rows, func(a, b []any) int {
-			for _, idx := range tblStuff.def.pkColIdxes {
-				if cmp := types.CompareValue(
-					a[idx+2], b[idx+2],
-				); cmp != 0 {
-					return cmp
-				}
-			}
-			return 0
+			return compareDiffOutputRows(a, b, tblStuff.def.pkColIdxes)
 		})
 
 		if displayIdxes != nil {
@@ -945,17 +1151,17 @@ func satisfyDiffOutputOpt(
 			fileHint     string
 			fullFilePath string
 			writeFile    func([]byte) error
-			release      func()
+			release      func() error
 			cleanup      func()
 			succeeded    bool
 		)
 
 		defer func() {
+			if release != nil {
+				err = errors.Join(err, release())
+			}
 			if !succeeded && cleanup != nil {
 				cleanup()
-			}
-			if release != nil {
-				release()
 			}
 			releaseBuffer(tblStuff.bufPool, deleteFromValsBuffer)
 			releaseBuffer(tblStuff.bufPool, insertIntoValsBuffer)
@@ -1040,6 +1246,11 @@ func satisfyDiffOutputOpt(
 				return err
 			}
 		}
+		if err = release(); err != nil {
+			release = nil
+			return err
+		}
+		release = nil
 
 		succeeded = true
 		mrs.AddRow([]any{fullFilePath, fileHint})
@@ -1291,9 +1502,12 @@ func writeCSV(
 		mrs        = &MysqlResultSet{}
 		sqlRetHint string
 		sqlRetPath string
-		fileName   = makeFileName(stmt.BaseTable.AtTsExpr, stmt.TargetTable.AtTsExpr, tblStuff)
+		fileName   string
 		cleanup    func()
 	)
+	if fileName, err = makeFileName(stmt.BaseTable.AtTsExpr, stmt.TargetTable.AtTsExpr, tblStuff); err != nil {
+		return
+	}
 
 	ep := &ExportConfig{
 		userConfig: newDiffCSVUserConfig(),
@@ -1524,7 +1738,7 @@ func writeDeleteRowSQLFull(
 		if i > 0 {
 			buf.WriteString(" and ")
 		}
-		colName := quoteIdentifierForSQL(tblStuff.def.colNames[idx])
+		colName := quoteIdentifierForSQL(tblStuff.def.baseColNames[idx])
 		if row[idx] == nil {
 			buf.WriteString(colName)
 			buf.WriteString(" is null")
@@ -1625,7 +1839,11 @@ func appendDataBranchApplyRowAsSQLValues(
 			}
 		}
 	} else {
-		if err = writeInsertRowValues(ses, tblStuff, row, tmpValsBuffer); err != nil {
+		insertIdxes := tblStuff.def.writableIdxes
+		if len(tblStuff.def.tarOnlyIdxes) > 0 {
+			insertIdxes = tblStuff.def.commonWritableIdxes
+		}
+		if err = writeInsertRowValues(ses, tblStuff, row, tmpValsBuffer, insertIdxes); err != nil {
 			return err
 		}
 	}
@@ -1678,7 +1896,7 @@ func prepareFSForDiffAsFile(
 ) (
 	sqlRetPath, sqlRetHint string,
 	writeFile func([]byte) error,
-	release func(),
+	release func() error,
 	cleanup func(),
 	err error,
 ) {
@@ -1689,7 +1907,9 @@ func prepareFSForDiffAsFile(
 		fullFilePath string
 	)
 
-	fileName = makeFileName(stmt.BaseTable.AtTsExpr, stmt.TargetTable.AtTsExpr, tblStuff)
+	if fileName, err = makeFileName(stmt.BaseTable.AtTsExpr, stmt.TargetTable.AtTsExpr, tblStuff); err != nil {
+		return
+	}
 	fileName += ".sql"
 
 	sqlRetPath = path.Join(stmt.OutputOpt.DirPath, fileName)
@@ -1778,13 +1998,14 @@ func prepareFSForDiffAsFile(
 			})
 		}
 
-		release = func() {
-			_ = mut.Close()
+		release = func() error {
+			closeErr := mut.Close()
 			targetFS.Close(ctx)
+			return closeErr
 		}
 	} else {
 		if writeFile, release, err = newSingleWriteAppender(
-			ctx, tblStuff.worker, targetFS, targetPath, cleanup,
+			ctx, tblStuff.worker, targetFS, targetPath,
 		); err != nil {
 			return
 		}
@@ -1798,8 +2019,7 @@ func newSingleWriteAppender(
 	worker *ants.Pool,
 	targetFS fileservice.FileService,
 	targetPath string,
-	onError func(),
-) (writeFile func([]byte) error, release func(), err error) {
+) (writeFile func([]byte) error, release func() error, err error) {
 	pr, pw := io.Pipe()
 	done := make(chan error, 1)
 
@@ -1839,12 +2059,11 @@ func newSingleWriteAppender(
 		return err
 	}
 
-	release = func() {
-		_ = pw.Close()
-		if wErr := <-done; wErr != nil && onError != nil {
-			onError()
-		}
+	release = func() error {
+		closeErr := pw.Close()
+		writeErr := <-done
 		targetFS.Close(ctx)
+		return errors.Join(closeErr, writeErr)
 	}
 
 	return
@@ -1984,13 +2203,14 @@ func writeInsertRowValues(
 	tblStuff tableStuff,
 	row []any,
 	buf *bytes.Buffer,
+	idxes []int,
 ) error {
 	buf.WriteString("(")
-	for i, idx := range tblStuff.def.visibleIdxes {
+	for i, idx := range idxes {
 		if err := formatValIntoString(ses, row[idx], tblStuff.def.colTypes[idx], buf); err != nil {
 			return err
 		}
-		if i != len(tblStuff.def.visibleIdxes)-1 {
+		if i != len(idxes)-1 {
 			buf.WriteString(",")
 		}
 	}
@@ -1999,10 +2219,10 @@ func writeInsertRowValues(
 	return nil
 }
 
-func quotedColumnNamesByIdxes(tblStuff tableStuff, idxes []int) []string {
+func quotedBaseColumnNamesByIdxes(tblStuff tableStuff, idxes []int) []string {
 	names := make([]string, len(idxes))
 	for i, idx := range idxes {
-		names[i] = quoteIdentifierForSQL(tblStuff.def.colNames[idx])
+		names[i] = quoteIdentifierForSQL(tblStuff.def.baseColNames[idx])
 	}
 	return names
 }
@@ -2169,7 +2389,7 @@ func initApplyTables(
 		)
 	}
 	deleteCols := strings.Join(deleteSelectExprs, ",")
-	insertCols := joinQuotedColumnNames(batchInfo.visibleNames)
+	insertCols := joinQuotedColumnNames(batchInfo.writableNames)
 
 	stmts := []string{
 		fmt.Sprintf("drop table if exists %s", deleteTable),
@@ -2269,7 +2489,7 @@ func flushSqlValues(
 
 		if !batchInfo.disableInsertStage {
 			insertStmt := fmt.Sprintf("insert into %s values %s", insertTable, buf.String())
-			cols := joinQuotedColumnNames(batchInfo.visibleNames)
+			cols := joinQuotedColumnNames(batchInfo.writableNames)
 			applyStmt := fmt.Sprintf(
 				"insert into %s (%s) select %s from %s",
 				baseTable, cols, cols, insertTable,
@@ -2283,13 +2503,17 @@ func flushSqlValues(
 	defer releaseBuffer(tblStuff.bufPool, sqlBuffer)
 
 	initInsertIntoBuf := func() {
+		insertIdxes := tblStuff.def.writableIdxes
+		if len(tblStuff.def.tarOnlyIdxes) > 0 {
+			insertIdxes = tblStuff.def.commonWritableIdxes
+		}
 		sqlBuffer.WriteString(fmt.Sprintf(
 			"insert into %s (%s) values ",
 			qualifiedTableName(
 				tblStuff.baseRel.GetTableDef(ctx).DbName,
 				tblStuff.baseRel.GetTableDef(ctx).Name,
 			),
-			strings.Join(quotedColumnNamesByIdxes(tblStuff, tblStuff.def.visibleIdxes), ","),
+			strings.Join(quotedBaseColumnNamesByIdxes(tblStuff, insertIdxes), ","),
 		))
 	}
 
@@ -2301,10 +2525,10 @@ func flushSqlValues(
 					tblStuff.baseRel.GetTableDef(ctx).DbName,
 					tblStuff.baseRel.GetTableDef(ctx).Name,
 				),
-				quoteIdentifierForSQL(tblStuff.def.colNames[tblStuff.def.pkColIdx]),
+				quoteIdentifierForSQL(tblStuff.def.baseColNames[tblStuff.def.pkColIdx]),
 			))
 		} else {
-			pkNames := quotedColumnNamesByIdxes(tblStuff, tblStuff.def.pkColIdxes)
+			pkNames := quotedBaseColumnNamesByIdxes(tblStuff, tblStuff.def.pkColIdxes)
 			sqlBuffer.WriteString(fmt.Sprintf(
 				"delete from %s where (%s) in (",
 				qualifiedTableName(

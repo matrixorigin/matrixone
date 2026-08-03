@@ -107,6 +107,55 @@ func Benchmark_GoRutinues(b *testing.B) {
 	})
 }
 
+func TestEffectiveGoMaxProcs(t *testing.T) {
+	tests := []struct {
+		name            string
+		availableCPUs   int
+		currentMaxProcs int
+		expected        int
+	}{
+		{
+			name:            "available CPUs unavailable",
+			availableCPUs:   0,
+			currentMaxProcs: 8,
+			expected:        8,
+		},
+		{
+			name:            "scheduler limit unavailable",
+			availableCPUs:   24,
+			currentMaxProcs: 0,
+			expected:        24,
+		},
+		{
+			name:            "scheduler limit below available CPUs",
+			availableCPUs:   24,
+			currentMaxProcs: 8,
+			expected:        8,
+		},
+		{
+			name:            "scheduler limit matches available CPUs",
+			availableCPUs:   24,
+			currentMaxProcs: 24,
+			expected:        24,
+		},
+		{
+			name:            "scheduler limit above available CPUs",
+			availableCPUs:   24,
+			currentMaxProcs: 32,
+			expected:        24,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.expected, effectiveGoMaxProcs(
+				test.availableCPUs,
+				test.currentMaxProcs,
+			))
+		})
+	}
+}
+
 // TestSetGoMaxProcs
 // ut for https://github.com/matrixorigin/MO-Cloud/issues/4486
 func TestSetGoMaxProcs(t *testing.T) {

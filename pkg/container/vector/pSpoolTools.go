@@ -16,17 +16,24 @@ package vector
 
 // SetVecData is dangerous and should be used with caution.
 func SetVecData(v *Vector, data []byte) {
+	if v.typ.IsVarlen() {
+		v.areaDisjoint = false
+	}
 	data = data[:cap(data)]
 	v.data = data
 }
 
 // SetVecArea is dangerous and should be used with caution.
 func SetVecArea(v *Vector, area []byte) {
+	v.areaDisjoint = false
 	v.area = area
 }
 
 // GetAndClearVecData is a dangerous function that may cause data leakage.
 func GetAndClearVecData(v *Vector) []byte {
+	if v.typ.IsVarlen() {
+		v.areaDisjoint = false
+	}
 	s := v.data
 	v.data = nil
 	return s
@@ -34,6 +41,7 @@ func GetAndClearVecData(v *Vector) []byte {
 
 // GetAndClearVecArea is a dangerous function that may cause data leakage.
 func GetAndClearVecArea(v *Vector) []byte {
+	v.areaDisjoint = false
 	s := v.area
 	v.area = nil
 	return s

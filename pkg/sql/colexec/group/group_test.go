@@ -17,6 +17,9 @@ package group
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -50,6 +53,23 @@ func sumAgg(pos int32) aggexec.AggFuncExecExpression {
 
 func countStarAgg() aggexec.AggFuncExecExpression {
 	return aggexec.MakeAggFunctionExpression(aggexec.AggIdOfCountStar, false, []*plan.Expr{colExpr(0, types.T_int32)}, nil)
+}
+
+func orderedGroupConcatAgg(distinct bool) aggexec.AggFuncExecExpression {
+	config := []byte{2}
+	config = binary.BigEndian.AppendUint32(config, 1)
+	config = binary.BigEndian.AppendUint32(config, 1)
+	config = append(config, 1)
+	config = binary.BigEndian.AppendUint32(config, 1)
+	config = binary.BigEndian.AppendUint32(config, 1)
+	config = append(config, '|')
+	return aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfGroupConcat,
+		distinct,
+		[]*plan.Expr{colExpr(1, types.T_varchar), colExpr(2, types.T_int64)},
+		config,
+		plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+	)
 }
 
 func newGroupOp(proc *process.Process, groupBy []*plan.Expr, aggs []aggexec.AggFuncExecExpression) *Group {
@@ -273,6 +293,54 @@ func TestGroupSpillReloadKeepsPreallocationBounded(t *testing.T) {
 	require.Positive(t, extra["GroupHashBuildGrowthBytes"])
 	g.Free(proc, false, nil)
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestGroupedOrderedGroupConcatComposesWithGenericSpill(t *testing.T) {
+	for _, distinct := range []bool{false, true} {
+		t.Run(fmt.Sprintf("distinct=%t", distinct), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			const rows = 512
+			groups := make([]int32, rows)
+			values := make([]string, rows)
+			orderKeys := make([]int64, rows)
+			for i := range rows {
+				groups[i] = 1
+				values[i] = fmt.Sprintf("%04d-%s", i, strings.Repeat("x", 256))
+				orderKeys[i] = int64(rows - i)
+			}
+			input := batch.NewWithSize(3)
+			input.Vecs[0] = testutil.MakeInt32Vector(groups, nil, proc.Mp())
+			input.Vecs[1] = testutil.MakeVarcharVector(values, nil, proc.Mp())
+			input.Vecs[2] = testutil.MakeInt64Vector(orderKeys, nil, proc.Mp())
+			input.SetRowCount(rows)
+
+			g := newGroupOp(
+				proc,
+				[]*plan.Expr{colExpr(0, types.T_int32)},
+				[]aggexec.AggFuncExecExpression{orderedGroupConcatAgg(distinct), countStarAgg()},
+			)
+			g.SpillMem = 64 << 10
+			g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+			require.NoError(t, g.Prepare(proc))
+
+			results := collectBatches(t, g, proc)
+			require.Len(t, results, 1)
+			require.Equal(t, 1, results[0].RowCount())
+			require.Equal(t, int64(rows), vector.MustFixedColNoTypeCheck[int64](results[0].Vecs[2])[0])
+			parts := strings.Split(string(results[0].Vecs[1].GetBytesAt(0)), "|")
+			require.Len(t, parts, rows)
+			require.Equal(t, values[rows-1], parts[0])
+			require.Equal(t, values[0], parts[rows-1])
+
+			extra := g.OpAnalyzer.GetOpStats().ExtraStats
+			require.Equal(t, int64(spillMaxPass), extra["GroupSpillMaxLevel"])
+			require.Positive(t, extra["GroupSpillRespills"])
+			g.Free(proc, false, nil)
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
 }
 
 func TestSpillReloadPreallocationRespectsByteLimit(t *testing.T) {

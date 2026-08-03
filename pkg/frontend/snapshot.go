@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -66,11 +67,11 @@ const (
 
 	checkSnapshotTsFormat = `select snapshot_id from mo_catalog.mo_snapshots where ts = %d order by snapshot_id;`
 
-	restoreTableDataByTsFmt = "create table `%s`.`%s` clone `%s`.`%s` {MO_TS = %d }"
-	//restoreTableDataByTsFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {MO_TS = %d }"
+	restoreTableDataByTsFmt = "create table %s clone %s {MO_TS = %d }"
+	//restoreTableDataByTsFmt = "insert into %s SELECT * FROM %s {MO_TS = %d }"
 
-	restoreTableDataByNameFmt = "create table `%s`.`%s` clone `%s`.`%s` {SNAPSHOT = '%s'}"
-	//restoreTableDataByNameFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {SNAPSHOT = '%s'}"
+	restoreTableDataByNameFmt = "create table %s clone %s {SNAPSHOT = %s}"
+	//restoreTableDataByNameFmt = "insert into %s SELECT * FROM %s {SNAPSHOT = %s}"
 
 	getPastAccountsFmt = "select account_id, account_name, admin_name, comments from mo_catalog.mo_account {MO_TS = %d } ORDER BY account_id ASC;"
 
@@ -134,6 +135,45 @@ var (
 	}
 )
 
+func restoreTableDataByTsSQL(dbName, tableName string, snapshotTS int64) string {
+	qualifiedName := qualifiedTableName(dbName, tableName)
+	return fmt.Sprintf(restoreTableDataByTsFmt, qualifiedName, qualifiedName, snapshotTS)
+}
+
+func restoreTableDataByNameSQL(dbName, tableName, snapshotName string) string {
+	qualifiedName := qualifiedTableName(dbName, tableName)
+	return fmt.Sprintf(restoreTableDataByNameFmt,
+		qualifiedName, qualifiedName, escapeSQLString(snapshotName))
+}
+
+func showCreateTableSQL(dbName, tableName string) string {
+	return "show create table " + qualifiedTableName(dbName, tableName)
+}
+
+func useDatabaseSQL(dbName string) string {
+	return "use " + quoteIdentifierForSQL(dbName)
+}
+
+func createDatabaseIfNotExistsSQL(dbName string) string {
+	return "CREATE DATABASE IF NOT EXISTS " + quoteIdentifierForSQL(dbName)
+}
+
+func dropDatabaseIfExistsSQL(dbName string) string {
+	return "drop database if exists " + quoteIdentifierForSQL(dbName)
+}
+
+func dropTableIfExistsSQL(dbName, tableName string) string {
+	name := quoteIdentifierForSQL(tableName)
+	if dbName != "" {
+		name = qualifiedTableName(dbName, tableName)
+	}
+	return "drop table if exists " + name
+}
+
+func dropViewIfExistsSQL(viewName string) string {
+	return "drop view if exists " + quoteIdentifierForSQL(viewName)
+}
+
 type snapshotRecord struct {
 	snapshotId   string
 	snapshotName string
@@ -179,8 +219,7 @@ func NewSubDbRestoreRecord(dbName string, account uint32, createSql string, spTs
 	}
 }
 
-func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapShot) error {
-	var err error
+func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapShot) (err error) {
 	var snapshotLevel tree.SnapshotLevel
 	var snapshotForAccount string
 	var snapshotName string
@@ -246,6 +285,13 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		} else {
 			return nil
 		}
+	}
+
+	// Serialize the timestamp choice and owner-row publication with COPY ALTER.
+	// Unlike locking mo_snapshots itself, this stable catalog write also covers
+	// an empty owner set and forces an optimistic loser to retry.
+	if err = lockDataBranchLineageOwnerPublication(ctx, bh); err != nil {
+		return err
 	}
 
 	// 3.1 generate snapshot id
@@ -566,6 +612,9 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 		if err != nil {
 			return err
 		}
+		if err = compactHistoricalAlterLineageWithBH(ctx, bh, time.Now().UTC()); err != nil {
+			return err
+		}
 	}
 
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("drop snapshot %s success", string(stmt.Name)))
@@ -588,12 +637,13 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	var restoreAccount uint32
 	var toAccountId uint32
+	var retiredMongoDBAccountIDs []uint32
 	// restore as a txn
 	if err = bh.Exec(ctx, "begin;"); err != nil {
 		return stats, err
 	}
 	defer func() {
-		err = finishTxn(ctx, bh, err)
+		err = finishTxnAndRetireMongoDBAccounts(ctx, bh, ses.GetService(), retiredMongoDBAccountIDs, err)
 	}()
 
 	// check snapshot
@@ -623,7 +673,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 		// restore cluster
 		subDbToRestore := make(map[string]*subDbRestoreRecord)
-		if err = restoreToCluster(ctx, ses, bh, snapshotName, snapshot.ts, subDbToRestore); err != nil {
+		if err = restoreToCluster(ctx, ses, bh, snapshotName, snapshot.ts, subDbToRestore, &retiredMongoDBAccountIDs); err != nil {
 			return
 		}
 
@@ -648,6 +698,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		if err != nil {
 			return stats, err
 		}
+		markMongoDBAccountForRetirement(&retiredMongoDBAccountIDs, toAccountId)
 		return
 	}
 
@@ -661,8 +712,22 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		Tenant: &plan.SnapshotTenant{TenantID: restoreAccount},
 	}
 
+	sourceTableInfos, err := collectRestoreSourceTableInfos(
+		dbName,
+		tblName,
+		func() ([]string, error) {
+			return showDatabasesAtTS(ctx, ses.GetService(), bh, snapshot.ts, restoreAccount)
+		},
+		func(sourceDBName string, sourceTblName string) ([]*tableInfo, error) {
+			return getTableInfos(ctx, ses.GetService(), bh, tempSnap, sourceDBName, sourceTblName)
+		},
+	)
+	if err != nil {
+		return stats, err
+	}
+
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, tempSnap, dbName, tblName)
+	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, tempSnap, dbName, tblName, sourceTableInfos)
 	if err != nil {
 		return
 	}
@@ -692,6 +757,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			nil); err != nil {
 			return stats, err
 		}
+		markMongoDBAccountForRetirement(&retiredMongoDBAccountIDs, toAccountId)
 	case tree.RESTORELEVELDATABASE:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelDatabase)
 
@@ -903,7 +969,7 @@ func deleteCurFkTables(
 	ctx = defines.AttachAccountId(ctx, toAccountId)
 
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, nil, dbName, tblName)
+	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, nil, dbName, tblName, nil)
 	if err != nil {
 		return
 	}
@@ -928,7 +994,7 @@ func deleteCurFkTables(
 			}
 
 			getLogger(sid).Debug(fmt.Sprintf("start to drop table: %v", tblInfo.tblName))
-			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`.`%s`", tblInfo.dbName, tblInfo.tblName)); err != nil {
+			if err = bh.Exec(ctx, dropTableIfExistsSQL(tblInfo.dbName, tblInfo.tblName)); err != nil {
 				return
 			}
 		}
@@ -1166,7 +1232,7 @@ func restoreToDatabaseOrTable(
 
 		return
 	} else {
-		createDbSql = fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbName)
+		createDbSql = createDatabaseIfNotExistsSQL(dbName)
 		// create db
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to create db: %v, create db sql: %s", snapshotName, dbName, createDbSql))
 		if err = bh.Exec(toCtx, createDbSql); err != nil {
@@ -1323,7 +1389,7 @@ func dropClusterTable(
 	for _, tblInfo := range tableInfos {
 		if toAccountId == 0 && tblInfo.typ == clusterTable {
 			getLogger(sid).Debug(fmt.Sprintf("[%s] start to drop system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
-			if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`.`%s`", moCatalog, tblInfo.tblName)); err != nil {
+			if err = bh.Exec(ctx, dropTableIfExistsSQL(moCatalog, tblInfo.tblName)); err != nil {
 				return
 			}
 		}
@@ -1379,11 +1445,11 @@ func restoreViews(
 			getLogger(ses.GetService()).Debug(fmt.Sprintf(
 				"[%s] start to restore view: %v", snapshotName, tblInfo.tblName))
 
-			if err = bh.Exec(toCtx, "use `"+tblInfo.dbName+"`"); err != nil {
+			if err = bh.Exec(toCtx, useDatabaseSQL(tblInfo.dbName)); err != nil {
 				return err
 			}
 
-			if err = bh.Exec(toCtx, "drop view if exists "+tblInfo.tblName); err != nil {
+			if err = bh.Exec(toCtx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
 				return err
 			}
 
@@ -1537,12 +1603,12 @@ func recreateTable(
 		return
 	}
 
-	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
+	if err = bh.Exec(ctx, useDatabaseSQL(tblInfo.dbName)); err != nil {
 		return
 	}
 
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to drop table: %v,", snapshotName, tblInfo.tblName))
-	sql := fmt.Sprintf("drop table if exists `%s`", tblInfo.tblName)
+	sql := dropTableIfExistsSQL("", tblInfo.tblName)
 	if err = bh.Exec(ctx, sql); err != nil {
 		return
 	}
@@ -1561,7 +1627,7 @@ func recreateTable(
 
 	if curAccountId == toAccountId {
 		// insert data
-		insertIntoSql := fmt.Sprintf(restoreTableDataByTsFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, snapshotTs)
+		insertIntoSql := restoreTableDataByTsSQL(tblInfo.dbName, tblInfo.tblName, snapshotTs)
 		beginTime := time.Now()
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to insert select table: %v, insert sql: %s", snapshotName, tblInfo.tblName, insertIntoSql))
 		if err = bh.Exec(ctx, insertIntoSql); err != nil {
@@ -1573,7 +1639,7 @@ func recreateTable(
 		}
 		getLogger(sid).Debug(fmt.Sprintf("[%s] insert select table: %v, cost: %v", snapshotName, tblInfo.tblName, time.Since(beginTime)))
 	} else {
-		insertIntoSql := fmt.Sprintf(restoreTableDataByNameFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, snapshotName)
+		insertIntoSql := restoreTableDataByNameSQL(tblInfo.dbName, tblInfo.tblName, snapshotName)
 		beginTime := time.Now()
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to insert select table: %v, insert sql: %s", snapshotName, tblInfo.tblName, insertIntoSql))
 		if err = bh.ExecRestore(ctx, insertIntoSql, curAccountId, toAccountId); err != nil {
@@ -1877,6 +1943,27 @@ func showDatabases(ctx context.Context, sid string, bh BackgroundExec, snapshotN
 	return dbNames, nil
 }
 
+func showDatabasesAtTS(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	ts int64,
+	accountID uint32,
+) ([]string, error) {
+	getLogger(sid).Debug(fmt.Sprintf("[%d:%d] start to get all database", accountID, ts))
+	sql := fmt.Sprintf("show databases {MO_TS = %d}", ts)
+	colsList, err := getStringColsList(defines.AttachAccountId(ctx, accountID), bh, sql, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	dbNames := make([]string, len(colsList))
+	for i, cols := range colsList {
+		dbNames[i] = cols[0]
+	}
+	return dbNames, nil
+}
+
 func showFullTables(
 	ctx context.Context,
 	sid string,
@@ -1959,25 +2046,43 @@ func buildTableInfoListWhereClause(dbName string, tblName string, accountId uint
 	)
 	clusterTableClause := fmt.Sprintf(" or relkind = %s", quoteSQLStringLiteral(catalog.SystemClusterRel))
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTableClause)
-	indexTablePattern := quoteSQLLikePattern(catalog.IndexTableNamePrefix)
-	tempTablePattern := quoteSQLLikePattern("__mo_tmp_")
 	whereClause := fmt.Sprintf(
-		"reldatabase = %s and relname != %s and relname not like %s escape %s and relname not like %s escape %s and relname != %s and relkind != %s and (%s)",
+		"reldatabase = %s and relkind not in (%s) and %s and relkind != %s and (%s)",
 		quoteSQLStringLiteral(dbName),
-		quoteSQLStringLiteral(catalog.MOAutoIncrTable),
-		indexTablePattern,
-		quoteSQLStringLiteral(`\`),
-		tempTablePattern,
-		quoteSQLStringLiteral(`\`),
-		quoteSQLStringLiteral(catalog.MO_ACCOUNT_LOCK),
+		hiddenIndexTableTypesSQL(),
+		catalog.NonTemporaryTableSQLPredicate(""),
 		quoteSQLStringLiteral(catalog.SystemPartitionRel),
 		accountClause,
 	)
+	if dbName == moCatalog {
+		indexTablePattern := quoteSQLLikePattern(catalog.IndexTableNamePrefix)
+		whereClause += fmt.Sprintf(
+			" and relname != %s and relname != %s and relname not like %s escape %s",
+			quoteSQLStringLiteral(catalog.MOAutoIncrTable),
+			quoteSQLStringLiteral(catalog.MO_ACCOUNT_LOCK),
+			indexTablePattern,
+			quoteSQLStringLiteral(`\`),
+		)
+	}
 	if len(tblName) > 0 {
-		whereClause += fmt.Sprintf(" and relname like %s", quoteSQLStringLiteral(tblName))
+		whereClause += fmt.Sprintf(" and relname = %s", quoteSQLStringLiteral(tblName))
 	}
 	whereClause += fmt.Sprintf(" and relkind != %s", quoteSQLStringLiteral(catalog.SystemSequenceRel))
 	return whereClause
+}
+
+func hiddenIndexTableTypesSQL() string {
+	types := []string{catalog.SystemIndexRel}
+	for _, plugin := range indexplugin.All() {
+		types = append(types, plugin.Catalog().HiddenTableTypes()...)
+	}
+	slices.Sort(types)
+	types = slices.Compact(types)
+	quoted := make([]string, len(types))
+	for i, typ := range types {
+		quoted[i] = quoteSQLStringLiteral(typ)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 func quoteSQLLikePattern(literalPrefix string) string {
@@ -2344,14 +2449,62 @@ func fkTablesTopoSort(
 	snapshot *plan.Snapshot,
 	dbName string,
 	tblName string,
+	tableInfos []*tableInfo,
 ) (sortedTbls []string, err error) {
 
-	// get foreign key deps from mo_catalog.mo_foreign_keys
+	// mo_foreign_keys is required for unresolved forward references, while the
+	// table schema is the durable source for resolved constraints. Older COPY
+	// ALTER versions could lose catalog rows without losing the table
+	// constraint, so restore and clone reconcile both representations.
 	fkDeps, err := getFkDeps(ctx, bh, snapshot, dbName, tblName)
 	if err != nil {
 		return
 	}
+	return topoSortRestoreFkDeps(ctx, fkDeps, tableInfos)
+}
 
+func topoSortRestoreFkDeps(
+	ctx context.Context,
+	catalogFkDeps map[string][]string,
+	tableInfos []*tableInfo,
+) ([]string, error) {
+	schemaFkDeps, err := getFkDepsFromTableInfos(ctx, tableInfos)
+	if err != nil {
+		return nil, err
+	}
+	mergeFkDeps(catalogFkDeps, schemaFkDeps)
+	return topoSortFkDeps(catalogFkDeps)
+}
+
+func collectRestoreSourceTableInfos(
+	dbName string,
+	tblName string,
+	listDatabases func() ([]string, error),
+	getTableInfosForDatabase func(string, string) ([]*tableInfo, error),
+) ([]*tableInfo, error) {
+	if dbName != "" {
+		return getTableInfosForDatabase(dbName, tblName)
+	}
+
+	dbNames, err := listDatabases()
+	if err != nil {
+		return nil, err
+	}
+	var tableInfos []*tableInfo
+	for _, sourceDBName := range dbNames {
+		if needSkipDb(sourceDBName) {
+			continue
+		}
+		dbTableInfos, err := getTableInfosForDatabase(sourceDBName, "")
+		if err != nil {
+			return nil, err
+		}
+		tableInfos = append(tableInfos, dbTableInfos...)
+	}
+	return tableInfos, nil
+}
+
+func topoSortFkDeps(fkDeps map[string][]string) ([]string, error) {
 	g := toposort{next: make(map[string][]string)}
 	for key, deps := range fkDeps {
 		g.addVertex(key)
@@ -2362,8 +2515,71 @@ func fkTablesTopoSort(
 			}
 		}
 	}
-	sortedTbls, err = g.sort()
-	return
+	return g.sort()
+}
+
+func getFkDepsFromTableInfos(
+	ctx context.Context,
+	tableInfos []*tableInfo,
+) (map[string][]string, error) {
+	deps := make(map[string][]string)
+	for _, info := range tableInfos {
+		if info == nil || info.typ == view || info.createSql == "" {
+			continue
+		}
+		statements, err := parsers.Parse(ctx, dialect.MYSQL, info.createSql, 0)
+		if err != nil {
+			return nil, err
+		}
+		if len(statements) != 1 {
+			return nil, moerr.NewInternalErrorf(
+				ctx,
+				"expected one CREATE TABLE statement for %s.%s, got %d",
+				info.dbName,
+				info.tblName,
+				len(statements),
+			)
+		}
+		createTable, ok := statements[0].(*tree.CreateTable)
+		if !ok {
+			return nil, moerr.NewInternalErrorf(
+				ctx,
+				"expected CREATE TABLE statement for %s.%s",
+				info.dbName,
+				info.tblName,
+			)
+		}
+		childKey := genKey(info.dbName, info.tblName)
+		for _, tableDef := range createTable.Defs {
+			foreignKey, ok := tableDef.(*tree.ForeignKey)
+			if !ok || foreignKey.Refer == nil {
+				continue
+			}
+			parentDB := string(foreignKey.Refer.TableName.SchemaName)
+			if parentDB == "" {
+				parentDB = info.dbName
+			}
+			parentTable := string(foreignKey.Refer.TableName.ObjectName)
+			deps[childKey] = append(deps[childKey], genKey(parentDB, parentTable))
+		}
+	}
+	return deps, nil
+}
+
+func mergeFkDeps(dst, src map[string][]string) {
+	for child, parents := range src {
+		seen := make(map[string]struct{}, len(dst[child])+len(parents))
+		for _, parent := range dst[child] {
+			seen[parent] = struct{}{}
+		}
+		for _, parent := range parents {
+			if _, exists := seen[parent]; exists {
+				continue
+			}
+			seen[parent] = struct{}{}
+			dst[child] = append(dst[child], parent)
+		}
+	}
 }
 
 func restoreToCluster(ctx context.Context,
@@ -2372,6 +2588,7 @@ func restoreToCluster(ctx context.Context,
 	snapshotName string,
 	snapshotTs int64,
 	subDbToRestore map[string]*subDbRestoreRecord,
+	retiredMongoDBAccountIDs *[]uint32,
 ) (err error) {
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to restore cluster, restore timestamp: %d", snapshotName, snapshotTs))
 
@@ -2427,6 +2644,7 @@ func restoreToCluster(ctx context.Context,
 		if err != nil {
 			return err
 		}
+		markMongoDBAccountForRetirement(retiredMongoDBAccountIDs, uint32(account.accountId))
 	}
 
 	// get restore accounts exists in snapshot
@@ -2445,6 +2663,7 @@ func restoreToCluster(ctx context.Context,
 		if err = restoreAccountUsingClusterSnapshotToNew(ctx, ses, bh, snapshotName, snapshotTs, account, uint64(newAccountId), subDbToRestore, isRestoreToCluster, isNeedToCleanToDatabase); err != nil {
 			return err
 		}
+		markMongoDBAccountForRetirement(retiredMongoDBAccountIDs, newAccountId)
 
 		getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] restore account: %v, account id: %d success", snapshotName, account.accountName, account.accountId))
 	}
@@ -2643,7 +2862,38 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 	// get topo sorted tables with foreign key
 	var sortedFkTbls []string
 	var fkTableMap map[string]*tableInfo
-	sortedFkTbls, err = fkTablesTopoSortWithTS(ctx, bh, "", "", snapshotTs, uint32(fromAccount), uint32(toAccountId))
+	sourceTableInfos, err := collectRestoreSourceTableInfos(
+		"",
+		"",
+		func() ([]string, error) {
+			return showDatabasesFromTS(ctx, ses.GetService(), bh, snapshotTs, uint32(fromAccount), uint32(toAccountId))
+		},
+		func(sourceDBName string, sourceTblName string) ([]*tableInfo, error) {
+			return getTableInfosFromTS(
+				ctx,
+				ses.GetService(),
+				bh,
+				sourceDBName,
+				sourceTblName,
+				snapshotTs,
+				uint32(fromAccount),
+				uint32(toAccountId),
+			)
+		},
+	)
+	if err != nil {
+		return err
+	}
+	sortedFkTbls, err = fkTablesTopoSortWithTS(
+		ctx,
+		bh,
+		"",
+		"",
+		snapshotTs,
+		uint32(fromAccount),
+		uint32(toAccountId),
+		sourceTableInfos,
+	)
 	if err != nil {
 		return err
 	}
@@ -2857,7 +3107,7 @@ func dropDb(ctx context.Context, bh BackgroundExec, dbName string) (err error) {
 	}
 
 	// drop db
-	return bh.Exec(ctx, fmt.Sprintf("drop database if exists `%s`", dbName))
+	return bh.Exec(ctx, dropDatabaseIfExistsSQL(dbName))
 }
 
 // checkTableIsMaster check if the table is master table

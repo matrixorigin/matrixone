@@ -42,6 +42,25 @@ create unique index idx_unique_c3 on t3(c3);
 insert into t3 values (4, 30, 'D');
 select * from t3;
 
+-- Nullable parts of a UNIQUE key do not participate in uniqueness checks.
+-- The physical temporary index-table name must still be recognized as an
+-- index table so its NULL key row is skipped rather than rejected by the
+-- internal __mo_index_idx_col NOT NULL constraint.
+create temporary table t_nullable_unique (
+    id int primary key,
+    a int,
+    b varchar(20),
+    unique key uk_ab(a, b),
+    key idx_b(b)
+);
+insert into t_nullable_unique values (1, 1, 'x');
+insert into t_nullable_unique values (2, 1, 'y');
+insert into t_nullable_unique values (3, null, 'x');
+-- @regex("Duplicate entry",true)
+insert into t_nullable_unique values (4, 1, 'x');
+select id, a, b from t_nullable_unique order by id;
+drop table t_nullable_unique;
+
 -- 4. Test DROP INDEX
 drop index idx_c2_c3 on t3;
 show index from t3;

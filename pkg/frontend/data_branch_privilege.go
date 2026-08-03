@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -756,9 +757,10 @@ func validateActiveBranchChildTableIDs(
 		}
 
 		sql := fmt.Sprintf(
-			"select table_id from %s.%s where table_deleted = false and table_id in (%s)",
+			"select table_id from %s.%s where table_deleted = false and level != '%s' and table_id in (%s)",
 			catalog.MO_CATALOG,
 			catalog.MO_BRANCH_METADATA,
+			databranchutils.AlterLineageLevel,
 			formatUintList(idList[start:end]),
 		)
 		sqlRet, err := runSql(sysCtx, ses, bh, sql, nil, nil)

@@ -123,6 +123,7 @@ var _ ProxyHAKeeperClient = (*managedHAKeeperClient)(nil)
 
 var newHAKeeperClientFunc = newHAKeeperClient
 var sendCNAllocateIDFunc = (*hakeeperClient).sendCNAllocateID
+var sendCNAllocateIDWithRequestIDFunc = (*hakeeperClient).sendCNAllocateIDWithRequestID
 
 // NewClusterHAKeeperClient creates a HAKeeper client to query cluster details.
 //
@@ -544,6 +545,59 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 		allocIDs.nextID = firstID + 1
 		allocIDs.lastID = firstID + batchSize - 1
 		return firstID, err
+	}
+}
+
+// AllocateIDByKeyWithRequestID allocates keyed IDs idempotently for callers
+// that retain requestID across retries and restarts. This is intentionally not
+// part of basicHAKeeperClient: only bootstrap lock acquisition needs the
+// persistent request identity.
+func (c *managedHAKeeperClient) AllocateIDByKeyWithRequestID(
+	ctx context.Context,
+	key string,
+	batchSize uint64,
+	requestID string,
+) (uint64, error) {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return 0, err
+	}
+	if key == "" {
+		return 0, moerr.NewInternalError(ctx, "key should not be empty")
+	}
+	if batchSize != 1 {
+		return 0, moerr.NewInvalidInput(ctx, "idempotent keyed allocation batch size must be one")
+	}
+	if requestID == "" {
+		return 0, moerr.NewInvalidInput(ctx, "request ID should not be empty")
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for {
+		if err := c.prepareClientLocked(ctx); err != nil {
+			if c.isRetryableError(err) {
+				if err := c.waitRetryLocked(ctx); err != nil {
+					return 0, err
+				}
+				continue
+			}
+			return 0, err
+		}
+		id, err := sendCNAllocateIDWithRequestIDFunc(c.mu.client, ctx, key, batchSize, requestID)
+		if err != nil {
+			if shouldResetHAKeeperClient(err) {
+				c.resetClientLocked()
+			}
+			if c.isRetryableError(err) {
+				if err := c.waitRetryLocked(ctx); err != nil {
+					return 0, err
+				}
+				continue
+			}
+			return 0, err
+		}
+		return id, nil
 	}
 }
 
@@ -1187,6 +1241,24 @@ func (c *hakeeperClient) sendCNAllocateID(
 	req := pb.Request{
 		Method:       pb.CN_ALLOCATE_ID,
 		CNAllocateID: &pb.CNAllocateID{Key: key, Batch: batch},
+	}
+	resp, err := c.request(ctx, req)
+	if err != nil {
+		return 0, err
+	}
+	return resp.AllocateID.FirstID, nil
+}
+
+func (c *hakeeperClient) sendCNAllocateIDWithRequestID(
+	ctx context.Context, key string, batch uint64, requestID string,
+) (uint64, error) {
+	req := pb.Request{
+		Method: pb.CN_ALLOCATE_ID,
+		CNAllocateID: &pb.CNAllocateID{
+			Key:       key,
+			Batch:     batch,
+			RequestID: requestID,
+		},
 	}
 	resp, err := c.request(ctx, req)
 	if err != nil {

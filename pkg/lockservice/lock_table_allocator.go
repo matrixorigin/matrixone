@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strconv"
 	"sync"
@@ -58,6 +59,8 @@ type lockTableAllocator struct {
 	ctl             sync.Map // lock service id -> *commitCtl
 	ctlMu           sync.RWMutex
 	allocatorID     string
+	closeOnce       sync.Once
+	closeErr        error
 	// version is the allocator process epoch. It is set once when the
 	// allocator is constructed; production code must not mutate it at runtime.
 	version uint64
@@ -308,21 +311,17 @@ func (l *lockTableAllocator) Valid(
 }
 
 func (l *lockTableAllocator) Close() error {
-	l.stopper.Stop()
-	var err error
-	err1 := l.server.Close()
-	l.logger.Debug("lock service allocator server closed",
-		zap.Error(err))
-	if err1 != nil {
-		err = err1
-	}
-	err2 := l.client.Close()
-	l.logger.Debug("lock service allocator client closed",
-		zap.Error(err))
-	if err2 != nil {
-		err = err2
-	}
-	return err
+	l.closeOnce.Do(func() {
+		l.stopper.Stop()
+		serverErr := l.server.Close()
+		l.logger.Debug("lock service allocator server closed",
+			zap.Error(serverErr))
+		clientErr := l.client.Close()
+		l.logger.Debug("lock service allocator client closed",
+			zap.Error(clientErr))
+		l.closeErr = errors.Join(serverErr, clientErr)
+	})
+	return l.closeErr
 }
 
 func (l *lockTableAllocator) GetLatest(groupID uint32, tableID uint64) pb.LockTable {
@@ -414,6 +413,12 @@ func (l *lockTableAllocator) canRestartService(serviceID string) bool {
 func (l *lockTableAllocator) disableTableBinds(b *serviceBinds) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	b.Lock()
+	defer b.Unlock()
+	l.disableTableBindsLocked(b)
+}
+
+func (l *lockTableAllocator) disableTableBindsLocked(b *serviceBinds) {
 	// we can't just delete the LockTable's effectiveness binding directly, we
 	// need to keep the binding version.
 	for g, tables := range b.groupTables {
@@ -430,6 +435,29 @@ func (l *lockTableAllocator) disableTableBinds(b *serviceBinds) {
 	delete(l.mu.services, b.serviceID)
 	l.logger.Info("service removed",
 		zap.String("service", b.serviceID))
+}
+
+// disableTableBindsAtGeneration commits validation evidence only if it still
+// describes the serviceBinds object and keepalive generation sampled by
+// getTimeoutBinds. A successful keepalive after that snapshot is newer positive
+// evidence and must win over the stale validation result.
+func (l *lockTableAllocator) disableTableBindsAtGeneration(
+	b *serviceBinds,
+	keepaliveGeneration uint64,
+) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.mu.services[b.serviceID] != b {
+		return false
+	}
+	b.Lock()
+	defer b.Unlock()
+	if b.keepaliveGeneration != keepaliveGeneration {
+		return false
+	}
+	b.disableLocked()
+	l.disableTableBindsLocked(b)
+	return true
 }
 
 func (l *lockTableAllocator) disableTableBindsWithoutDelete(b *serviceBinds) {
@@ -484,14 +512,25 @@ func (l *lockTableAllocator) getServiceBindsWithoutPrefix(serviceID string) *ser
 	return nil
 }
 
-func (l *lockTableAllocator) getTimeoutBinds(now time.Time) []*serviceBinds {
+type timedOutServiceBinds struct {
+	binds               *serviceBinds
+	keepaliveGeneration uint64
+}
+
+func (l *lockTableAllocator) getTimeoutBinds(now time.Time) []timedOutServiceBinds {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	var values []*serviceBinds
+	var values []timedOutServiceBinds
 	for _, b := range l.mu.services {
-		if b.timeout(now, l.keepBindTimeout*keepBindGraceFactor) {
-			values = append(values, b)
+		if generation, ok := b.timeoutSnapshot(
+			now,
+			l.keepBindTimeout*keepBindGraceFactor,
+		); ok {
+			values = append(values, timedOutServiceBinds{
+				binds:               b,
+				keepaliveGeneration: generation,
+			})
 		}
 	}
 	return values
@@ -641,24 +680,47 @@ func (l *lockTableAllocator) checkInvalidBinds(ctx context.Context) {
 					zap.Duration("timeout", l.keepBindTimeout),
 					zap.Int("count", len(timeoutBinds)))
 			}
-			for _, b := range timeoutBinds {
-				valid, err := validateService(
-					l.keepBindTimeout,
-					b.getServiceID(),
-					l.client,
-					l.logger,
-				)
-				if err != nil && isRetryError(err) {
-					continue
-				}
-				if !valid {
-					b.disable()
-					l.disableTableBinds(b)
-				}
+			if !l.validateTimeoutBinds(ctx, timeoutBinds) {
+				return
 			}
 			timer.Reset(l.keepBindTimeout)
 		}
 	}
+}
+
+func (l *lockTableAllocator) validateTimeoutBinds(
+	ctx context.Context,
+	timeoutBinds []timedOutServiceBinds,
+) bool {
+	for _, timeoutBind := range timeoutBinds {
+		if ctx.Err() != nil {
+			return false
+		}
+		b := timeoutBind.binds
+		valid, err := validateServiceWithContext(
+			ctx,
+			l.keepBindTimeout,
+			b.getServiceID(),
+			l.client,
+			l.logger,
+		)
+		// Re-check immediately after the RPC because cancellation can race a
+		// stale negative response. Once shutdown is observable here, stop the
+		// batch without mutating this or any later bind.
+		if ctx.Err() != nil {
+			return false
+		}
+		if err != nil && isRetryError(err) {
+			continue
+		}
+		if !valid {
+			l.disableTableBindsAtGeneration(
+				b,
+				timeoutBind.keepaliveGeneration,
+			)
+		}
+	}
+	return true
 }
 
 func (l *lockTableAllocator) cleanCommitState(ctx context.Context) {
@@ -874,9 +936,12 @@ type serviceBinds struct {
 	serviceID         string
 	groupTables       map[uint32]map[uint64]struct{}
 	lastKeepaliveTime time.Time
-	disabled          bool
-	status            pb.Status
-	txnIDs            [][]byte
+	// keepaliveGeneration orders positive liveness evidence against an
+	// asynchronous validation that may later try to disable this service.
+	keepaliveGeneration uint64
+	disabled            bool
+	status              pb.Status
+	txnIDs              [][]byte
 }
 
 func newServiceBinds(
@@ -931,6 +996,7 @@ func (b *serviceBinds) active() bool {
 		return false
 	}
 	b.lastKeepaliveTime = time.Now()
+	b.keepaliveGeneration++
 	b.logger.Debug("lock service binds active")
 	return true
 }
@@ -953,18 +1019,23 @@ func (b *serviceBinds) getServiceID() string {
 	return b.serviceID
 }
 
-func (b *serviceBinds) timeout(
+func (b *serviceBinds) timeoutSnapshot(
 	now time.Time,
-	timeout time.Duration) bool {
+	timeout time.Duration,
+) (uint64, bool) {
 	b.RLock()
 	defer b.RUnlock()
 	v := now.Sub(b.lastKeepaliveTime)
-	return v >= timeout
+	return b.keepaliveGeneration, v >= timeout
 }
 
 func (b *serviceBinds) disable() {
 	b.Lock()
 	defer b.Unlock()
+	b.disableLocked()
+}
+
+func (b *serviceBinds) disableLocked() {
 	b.disabled = true
 	b.logger.Info("bind disabled",
 		zap.String("service", b.serviceID))
@@ -1215,29 +1286,78 @@ func validateService(
 	client Client,
 	logger *log.MOLogger,
 ) (bool, error) {
+	return validateServiceWithContext(
+		context.Background(),
+		timeout,
+		serviceID,
+		client,
+		logger,
+	)
+}
+
+func validateServiceWithContext(
+	parent context.Context,
+	timeout time.Duration,
+	serviceID string,
+	client Client,
+	logger *log.MOLogger,
+) (bool, error) {
 	// Enforce minimum timeout to avoid immediate failures from misconfiguration
 	const minTimeout = 100 * time.Millisecond
 	if timeout < minTimeout {
 		timeout = minTimeout
 	}
-	ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseValidateService)
+	ctx, cancel := context.WithTimeoutCause(parent, timeout, moerr.CauseValidateService)
 	defer cancel()
 
-	req := acquireRequest()
-	defer releaseRequest(req)
+	for attempt := 0; attempt < 2; attempt++ {
+		req := acquireRequest()
+		req.Method = pb.Method_ValidateService
+		req.ValidateService.ServiceID = serviceID
 
-	req.Method = pb.Method_ValidateService
-	req.ValidateService.ServiceID = serviceID
+		resp, err := client.Send(ctx, req)
+		releaseRequest(req)
+		if err != nil {
+			if parentErr := parent.Err(); parentErr != nil {
+				return false, parentErr
+			}
+			err = moerr.AttachCause(ctx, err)
+			logPingFailed(logger, serviceID, err)
+			return false, err
+		}
+		valid := resp.ValidateService.OK
+		releaseResponse(resp)
+		if valid || attempt == 1 {
+			return valid, nil
+		}
 
-	resp, err := client.Send(ctx, req)
-	if err != nil {
-		err = moerr.AttachCause(ctx, err)
-		logPingFailed(logger, serviceID, err)
-		return false, err
+		// A negative response can come from a live but stale endpoint after a
+		// hostname/IP or service-incarnation reassignment. It is not sufficient
+		// evidence to disable allocator binds until a fresh validation transport
+		// and authoritative discovery refresh confirm it.
+		resetter, ok := client.(interface {
+			ResetValidationBackend(context.Context, string) error
+		})
+		if !ok {
+			if parentErr := parent.Err(); parentErr != nil {
+				return false, parentErr
+			}
+			err := moerr.NewInternalErrorNoCtx(
+				"cannot confirm negative lockservice identity without validation backend reset",
+			)
+			logPingFailed(logger, serviceID, err)
+			return false, err
+		}
+		if err := resetter.ResetValidationBackend(ctx, serviceID); err != nil {
+			if parentErr := parent.Err(); parentErr != nil {
+				return false, parentErr
+			}
+			err = moerr.AttachCause(ctx, err)
+			logPingFailed(logger, serviceID, err)
+			return false, err
+		}
 	}
-	defer releaseResponse(resp)
-
-	return resp.ValidateService.OK, nil
+	panic("unreachable")
 }
 
 type ctlState int

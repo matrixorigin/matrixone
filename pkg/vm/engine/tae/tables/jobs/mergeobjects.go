@@ -522,7 +522,14 @@ func HandleMergeEntryInTxn(
 	transferTable *mergesort.TransferTable,
 	rt *dbutils.Runtime,
 	isTombstone bool,
-) ([]*catalog.ObjectEntry, error) {
+) (createdObjs []*catalog.ObjectEntry, err error) {
+	transferTableOwned := true
+	defer func() {
+		if err != nil && transferTableOwned && transferTable != nil {
+			transferTable.Release()
+		}
+	}()
+
 	database, err := txn.GetDatabaseByID(entry.DbId)
 	if err != nil {
 		return nil, err
@@ -533,7 +540,7 @@ func HandleMergeEntryInTxn(
 	}
 
 	mergedObjs := make([]*catalog.ObjectEntry, 0, len(entry.MergedObjs))
-	createdObjs := make([]*catalog.ObjectEntry, 0, len(entry.CreatedObjs))
+	createdObjs = make([]*catalog.ObjectEntry, 0, len(entry.CreatedObjs))
 	ids := make([]*common.ID, 0, len(entry.MergedObjs)*2)
 
 	// drop merged blocks and objects
@@ -597,6 +604,9 @@ func HandleMergeEntryInTxn(
 		isTombstone,
 		rt,
 	)
+	// NewMergeObjectsEntry owns transferTable even when its preparation fails:
+	// its error path rolls the transfer state back before returning.
+	transferTableOwned = false
 	if err != nil {
 		return nil, err
 	}
@@ -605,12 +615,14 @@ func HandleMergeEntryInTxn(
 		if err = txn.LogTxnEntry(
 			entry.DbId, entry.TblId, txnEntry, nil, ids,
 		); err != nil {
+			txnEntry.RollbackTransferState()
 			return nil, err
 		}
 	} else {
 		if err = txn.LogTxnEntry(
 			entry.DbId, entry.TblId, txnEntry, ids, nil,
 		); err != nil {
+			txnEntry.RollbackTransferState()
 			return nil, err
 		}
 	}

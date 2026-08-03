@@ -49,7 +49,7 @@ func IsParameterModificationStatement(stmt tree.Statement) bool {
 // IsPrepareStatement checks the statement is the Prepare statement.
 func IsPrepareStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
-	case *tree.PrepareStmt, *tree.PrepareString:
+	case *tree.PrepareStmt, *tree.PrepareString, *tree.PrepareVar:
 		return true
 	}
 	return false
@@ -113,7 +113,6 @@ func planChangesCatalog(queryPlan *plan.Plan) bool {
 		plan.DataDefinition_LOCK_TABLES,
 		plan.DataDefinition_UNLOCK_TABLES,
 		plan.DataDefinition_SHOW_SEQUENCES,
-		plan.DataDefinition_SHOW_CONNECTORS,
 		plan.DataDefinition_SHOW_UPGRADE:
 		return false
 	default:
@@ -250,7 +249,6 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.ShowPublicationCoverage,
 		*tree.ShowBackendServers,
 		*tree.ShowAccountUpgrade,
-		*tree.ShowConnectors,
 		*tree.ShowIcebergCatalogs,
 		*tree.ShowIcebergNamespaces,
 		*tree.ShowIcebergTables,
@@ -265,16 +263,13 @@ func statementCanBeExecutedInUncommittedTransaction(
 	case *tree.PrepareStmt:
 		return statementCanBeExecutedInUncommittedTransaction(ctx, ses, st.Stmt)
 	case *tree.PrepareString:
-		v, err := ses.GetSessionSysVar("lower_case_table_names")
-		if err != nil {
-			v = int64(1)
-		}
-		preStmt, err := mysql.ParseOneWithSQLMode(ctx, st.Sql, v.(int64), sessionSQLModeForParser(ses))
+		return preparedSQLCanBeExecutedInUncommittedTransaction(ctx, ses, st.Sql)
+	case *tree.PrepareVar:
+		prepareSQL, err := prepareSQLFromUserVar(ses, st.Var)
 		if err != nil {
 			return false, err
 		}
-		defer preStmt.Free()
-		return statementCanBeExecutedInUncommittedTransaction(ctx, ses, preStmt)
+		return preparedSQLCanBeExecutedInUncommittedTransaction(ctx, ses, prepareSQL)
 	case *tree.Execute:
 		preName := string(st.Name)
 		preStmt, err := ses.GetPrepareStmt(ctx, preName)
@@ -332,4 +327,29 @@ func statementCanBeExecutedInUncommittedTransaction(
 	}
 
 	return false, nil
+}
+
+func preparedSQLCanBeExecutedInUncommittedTransaction(
+	ctx context.Context,
+	ses FeSession,
+	sql string,
+) (bool, error) {
+	parserSes := ses
+	if ses.IsBackgroundSession() {
+		owner, err := preparedStatementOwner(ctx, ses)
+		if err != nil {
+			return false, err
+		}
+		parserSes = owner
+	}
+	v, err := parserSes.GetSessionSysVar("lower_case_table_names")
+	if err != nil {
+		v = int64(1)
+	}
+	preStmt, err := mysql.ParseOneWithSQLMode(ctx, sql, v.(int64), sessionSQLModeForParser(parserSes))
+	if err != nil {
+		return false, err
+	}
+	defer preStmt.Free()
+	return statementCanBeExecutedInUncommittedTransaction(ctx, ses, preStmt)
 }

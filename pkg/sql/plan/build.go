@@ -43,10 +43,11 @@ func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerC
 	if err != nil {
 		return nil, err
 	}
+	builder.skipStats = skipStats
+	rootId = builder.reuseMultiReferenceCTEs(rootId)
 	ctx.SetViews(bindCtx.views)
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
-	builder.skipStats = skipStats
 	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
@@ -183,7 +184,28 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 	if err != nil {
 		return nil, err
 	}
-	if len(tblInfo.tableDefs) == 1 {
+	// FK checks/actions are all disabled when foreign_key_checks is off, the
+	// same way MySQL skips foreign-key enforcement. Gate every FK SQL below
+	// (self-referencing checks, the RESTRICT pre-check, and the non-self
+	// parent-side actions) under one guard so the behavior is consistent.
+	fkChecksEnabled, err := IsForeignKeyChecksEnabled(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(tblInfo.tableDefs) == 1 &&
+		(len(tblInfo.tableDefs[0].Fkeys) > 0 || len(tblInfo.tableDefs[0].RefChildTbls) > 0) {
+		// The presence or absence of DetectSqls depends on the session's
+		// foreign_key_checks value. Keep the plan FK-sensitive even when the
+		// variable is currently off, otherwise a cached plan built without the
+		// checks could survive after they are enabled.
+		query.HasForeignKeyAction = true
+	}
+	if fkChecksEnabled && len(tblInfo.tableDefs) == 1 {
+		if len(tblInfo.tableDefs[0].RefChildTbls) > 0 {
+			// Parent-side actions are part of the modern REPLACE plan. Keep a
+			// marker solely for the optimistic-transaction fail-closed guard.
+			query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_PLAN:")
+		}
 		sqls, err := genSqlsForCheckFKSelfRefer(
 			ctx.GetContext(),
 			tblInfo.objRef[0].SchemaName,
@@ -194,7 +216,7 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		if err != nil {
 			return nil, err
 		}
-		query.DetectSqls = sqls
+		query.DetectSqls = append(query.DetectSqls, sqls...)
 
 		// Generate pre-check SQLs for parent→child safety (RESTRICT).
 		preCheckSqls, err := genPreCheckSqlsForReplaceFKSelfRefer(
@@ -304,6 +326,9 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	defer func() {
 		v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
 	}()
+	if err := validateMultiTableUpdateClauses(ctx, stmt); err != nil {
+		return nil, err
+	}
 
 	builder := NewQueryBuilder(plan.Query_UPDATE, ctx, isPrepareStmt, true)
 	bindCtx := NewBindContext(builder, nil)
@@ -313,13 +338,19 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 
 	rootId, err := builder.bindUpdate(stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
-			if err.Error() == icebergRowLevelDMLUnsupportedMsg {
-				return buildIcebergUpdatePlan(stmt, ctx, isPrepareStmt)
-			}
+		route, reason, routedErr := classifyUpdatePlannerError(err)
+		switch route {
+		case updatePlannerLegacy:
+			recordUpdatePlannerRoute(route, reason, "selected")
 			return buildTableUpdate(stmt, ctx, isPrepareStmt)
+		case updatePlannerSpecialized:
+			recordUpdatePlannerRoute(route, reason, "selected")
+			return buildIcebergUpdatePlan(stmt, ctx, isPrepareStmt)
+		case updatePlannerRejected, updatePlannerUnknown:
+			recordUpdatePlannerRoute(route, reason, "rejected")
+			return nil, routedErr
 		}
-		return nil, err
+		return nil, routedErr
 	}
 	ctx.SetViews(bindCtx.views)
 
@@ -329,6 +360,10 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	if err != nil {
 		return nil, err
 	}
+	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
+		return nil, err
+	}
+	recordUpdatePlannerRoute(updatePlannerModern, updateRouteReasonNone, "selected")
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -437,8 +472,6 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildDropView(stmt, ctx)
 	case *tree.CreateView:
 		return buildCreateView(stmt, ctx)
-	case *tree.CreateSource:
-		return buildCreateSource(stmt, ctx)
 	case *tree.AlterView:
 		return buildAlterView(stmt, ctx)
 	case *tree.AlterTable:

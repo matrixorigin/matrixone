@@ -281,6 +281,11 @@ ifeq ("$(UNAME_S)","darwin")
 GOLDFLAGS:=-ldflags="-extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
 endif
 
+# Keep all mo-service build variants on one compiler/feature contract. Targets
+# may differ in how native dependencies are produced, never in the Go binary
+# they emit.
+MO_SERVICE_BUILD=$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+
 ifeq ($(GOBUILD_OPT),)
 	GOBUILD_OPT :=
 endif
@@ -309,17 +314,17 @@ jieba-dict:
 .PHONY: build
 build: config cgo thirdparties jieba-dict
 	$(info [Build binary])
-	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(MO_SERVICE_BUILD)
 
-# Build with native libraries supplied by a prebuilt image. This target is for
-# CI image builds: unlike build, it must not rebuild cgo or thirdparties after
-# the source tree has been copied into the builder.
+# Build with native libraries supplied by a prebuilt stage or image. This target
+# is for CI image builds: unlike build, it must not rebuild cgo or thirdparties
+# after the source tree has been copied into the builder.
 .PHONY: build-with-prebuilt-native
 build-with-prebuilt-native: config jieba-dict
 	@test -f "$(CGO_DIR)/libmo.so" || test -f "$(CGO_DIR)/libmo.dylib"
 	@test -f "$(THIRDPARTIES_INSTALL_DIR)/lib/libusearch_c.so" || test -f "$(THIRDPARTIES_INSTALL_DIR)/lib/libusearch_c.dylib"
 	$(info [Build binary with prebuilt native libraries])
-	$(CGO_OPTS) go build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(MO_SERVICE_BUILD)
 
 # https://wiki.musl-libc.org/getting-started.html
 # https://musl.cc/
@@ -462,6 +467,14 @@ test-iceberg-readiness:
 .PHONY: test-iceberg-e2e-local
 test-iceberg-e2e-local:
 	@optools/iceberg_ci.bash e2e-local
+
+.PHONY: test-mongodb-e2e-local
+test-mongodb-e2e-local:
+	@optools/mongodb_ci.bash e2e-local
+
+.PHONY: test-mongodb-unit
+test-mongodb-unit:
+	@optools/mongodb_ci.bash unit
 
 .PHONY: test-iceberg-local
 test-iceberg-local:

@@ -300,6 +300,8 @@ func TestAggregator(t *testing.T) {
 
 func TestAggregatorWithStmtMerge(t *testing.T) {
 	c := GetTracerProvider()
+	oldEnableStmtMerge := c.enableStmtMerge
+	t.Cleanup(func() { c.enableStmtMerge = oldEnableStmtMerge })
 	c.enableStmtMerge = true
 
 	var sessionId = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}
@@ -510,6 +512,8 @@ func TestAggregator_MarkExported(t *testing.T) {
 
 func TestAggregator_PopResultsBeforeWindow(t *testing.T) {
 	c := GetTracerProvider()
+	oldEnableStmtMerge := c.enableStmtMerge
+	t.Cleanup(func() { c.enableStmtMerge = oldEnableStmtMerge })
 	c.enableStmtMerge = true
 
 	var sessionId = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1}

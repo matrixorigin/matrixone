@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -149,7 +150,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		case Build:
 			err = hashJoin.build(analyzer, proc)
 			if err != nil {
-				return result, err
+				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
 
 			if ctr.mp == nil && ctr.spillEngine == nil && !hashJoin.EmitUnmatchedProbe() && !hashJoin.IsMark() {
@@ -170,7 +171,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.leftBat == nil {
 				input, err = hashJoin.getInputBatch(proc, analyzer)
 				if err != nil {
-					return result, err
+					return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 				}
 				bat := input.Batch
 
@@ -218,7 +219,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					targetVec = ctr.resBat.Vecs[i]
 					err = targetVec.UnionBatch(srcVec, 0, rowCount, nil, proc.Mp())
 					if err != nil {
-						return result, err
+						return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 					}
 				}
 
@@ -237,7 +238,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				err = ctr.probe(hashJoin, proc, &result)
 			}
 			if err != nil {
-				return result, err
+				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
 
 			if hashJoin.IsRightSemi() || hashJoin.IsRightAnti() {
@@ -254,7 +255,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		case SyncBitmap:
 			err := ctr.syncBitmap(hashJoin, proc)
 			if err != nil {
-				return result, err
+				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
 
 			// Only enter Finalize when syncBitmap ran to completion and set
@@ -273,7 +274,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		case Finalize:
 			err := ctr.finalize(hashJoin, proc, &result)
 			if err != nil {
-				return result, err
+				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
 
 			if result.Batch == nil {
@@ -332,23 +333,21 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 
 		// Handle spilled build side
 		if ctr.mp.IsSpilled() {
-			files := ctr.mp.TakeSpillBuildFiles()
-			var budget *process.HashBuildBudgetGeneration
-			if files != nil {
-				var ok bool
-				budget, ok = ctr.mp.TakeSpillBudget().(*process.HashBuildBudgetGeneration)
-				if !ok || budget == nil {
-					for _, file := range files {
-						_ = file.Close()
-					}
-					return moerr.NewInternalError(proc.Ctx, "spilled join map is missing its producer budget generation")
-				}
-			} else {
-				budget, err = proc.GetHashBuildBudget()
-				if err != nil {
-					return err
-				}
+			payload, budget, takeErr := spillutil.TakeSpillBuildPayload(proc, ctr.mp)
+			if takeErr != nil {
+				return takeErr
 			}
+			probeExpressionLease, leaseErr := hashbuild.NewExpressionMemoryLease(
+				budget, hashJoin.EqConds[0], ctr.eqCondExecs, false)
+			if leaseErr != nil {
+				_ = payload.Close()
+				ctr.mp.Free()
+				ctr.mp = nil
+				ctr.cleanEqCondExecutors()
+				ctr.releaseProbeExpressionLease()
+				return leaseErr
+			}
+			ctr.probeExpressionLease = probeExpressionLease
 			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
 				BuildKeyExprs:           hashJoin.EqConds[1],
 				ProbeKeyExprs:           hashJoin.EqConds[0],
@@ -359,11 +358,12 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				NeedAllocateSels:        !hashJoin.HashOnPK,
 				NeedBatches:             hashJoin.NeedBuildBatches(),
 				Budget:                  budget,
+				ProbeExpressionLease:    probeExpressionLease,
 			})
-			if files != nil {
-				engine.InitFromSpilledFiles(files)
+			if len(payload.Files) > 0 {
+				engine.InitFromSpilledFiles(payload.Files)
 			} else {
-				engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
+				engine.InitFromSpilledMap(payload.LegacyFds)
 			}
 			if err := engine.ScatterProbeTable(proc,
 				func() (*batch.Batch, error) {
@@ -471,7 +471,7 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 }
 
 func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *vm.CallResult) error {
-	err := ctr.evalJoinCondition(ctr.leftBat, proc)
+	err := ctr.evalJoinConditionBudgeted(ctr.leftBat, proc)
 	if err != nil {
 		return err
 	}
@@ -542,7 +542,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 
 			if z == 0 || v == 0 {
 				if ctr.probeEmitUnmatched {
-					ctr.appendOneNotMatch(hashJoin, proc, row)
+					if err = ctr.appendOneNotMatch(hashJoin, proc, row); err != nil {
+						return err
+					}
 					resRowCnt++
 				}
 
@@ -618,7 +620,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 						}
 					} else if ctr.probeLeftSemi {
-						ctr.appendOneNotMatch(hashJoin, proc, row)
+						if err = ctr.appendOneNotMatch(hashJoin, proc, row); err != nil {
+							return err
+						}
 						resRowCnt++
 						ctr.sels = nil
 					} else if ctr.probeLeftAnti {
@@ -704,7 +708,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 						ctr.leftRowMatched = true
 
 						if ctr.probeRightSemiAnti {
-							ctr.appendOneMatch(hashJoin, proc, int64(row), idx1, idx2)
+							if err = ctr.appendOneMatch(hashJoin, proc, int64(row), idx1, idx2); err != nil {
+								return err
+							}
 							resRowCnt++
 						}
 
@@ -717,7 +723,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 
 				if len(ctr.sels) == 0 &&
 					!ctr.leftRowMatched && ctr.probeEmitUnmatched {
-					ctr.appendOneNotMatch(hashJoin, proc, int64(row))
+					if err = ctr.appendOneNotMatch(hashJoin, proc, int64(row)); err != nil {
+						return err
+					}
 					resRowCnt++
 				}
 			}
@@ -779,7 +787,7 @@ func (ctr *container) appendMarkForEmptyBuildBucket(marker *vector.Vector, proc 
 		return vector.SetConstNull(marker, rowCnt, proc.Mp())
 	}
 
-	if err := ctr.evalJoinCondition(ctr.leftBat, proc); err != nil {
+	if err := ctr.evalJoinConditionBudgeted(ctr.leftBat, proc); err != nil {
 		return err
 	}
 	if err := vector.AppendMultiFixed(marker, false, false, rowCnt, proc.Mp()); err != nil {
@@ -974,6 +982,16 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 		ctr.eqCondVecs[i] = vec
 	}
 	return nil
+}
+
+func (ctr *container) evalJoinConditionBudgeted(bat *batch.Batch, proc *process.Process) error {
+	if ctr.probeExpressionLease == nil {
+		return ctr.evalJoinCondition(bat, proc)
+	}
+	return ctr.probeExpressionLease.Eval(proc, []*batch.Batch{bat}, bat.RowCount(), func(i int, vec *vector.Vector) error {
+		ctr.eqCondVecs[i] = vec
+		return nil
+	})
 }
 
 func (hashJoin *HashJoin) resetResultBat() {

@@ -36,8 +36,9 @@ const (
 	FJ_FlushTimeout               = "fj/flush/timeout"
 	FJ_FlushEntry                 = "fj/flush/entry"
 
-	FJ_CheckpointSave = "fj/checkpoint/save"
-	FJ_GCKPWait1      = "fj/gckp/wait1"
+	FJ_CheckpointSave      = "fj/checkpoint/save"
+	FJ_GCKPWait1           = "fj/gckp/wait1"
+	FJ_GCKPWaitAfterIntent = "fj/gckp/wait-after-intent"
 
 	FJ_TraceRanges         = "fj/trace/ranges"
 	FJ_TracePartitionState = "fj/trace/partitionstate"
@@ -464,6 +465,18 @@ func NotifyInjected(key string) {
 func ISCPExecutorInjected() (string, bool) {
 	_, sarg, injected := fault.TriggerFault(FJ_CDCExecutor)
 	return sarg, injected
+}
+
+// ISCPExecutorFaultWaitKey identifies the optional phase barrier for one
+// executor fault. Tests install the barrier before enabling the matching fault,
+// then observe its waiter to prove that the asynchronous worker reached the
+// intended failure point.
+func ISCPExecutorFaultWaitKey(msg string) string {
+	return FJ_CDCExecutor + ":" + msg
+}
+
+func WaitForISCPExecutorFault(ctx context.Context, msg string) {
+	WaitInjectedCtx(ctx, ISCPExecutorFaultWaitKey(msg))
 }
 
 func CDCScanTableInjected() (string, bool) {

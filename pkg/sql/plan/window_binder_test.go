@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -41,6 +42,10 @@ func (b *stubWindowBinder) BindExpr(expr tree.Expr, depth int32, isRoot bool) (*
 
 func (b *stubWindowBinder) bindFuncExprImplByAstExpr(name string, args []tree.Expr, depth int32) (*planpb.Expr, error) {
 	return b.bindFuncExprFunc(name, args, depth)
+}
+
+func (b *stubWindowBinder) bindPreparedNumericAggregateFuncExpr(name string, args []tree.Expr, depth int32) (*planpb.Expr, error) {
+	return b.bindFuncExprImplByAstExpr(name, args, depth)
 }
 
 func (b *stubWindowBinder) bindPreparedRowsFrameBound(expr tree.Expr) (*planpb.Expr, error) {
@@ -170,6 +175,50 @@ func TestPreparedWindowFrameMarkers(t *testing.T) {
 	window := firstWindowSpec(t, queryPlan)
 	requirePreparedRowsFrameParam(t, window.Frame.Start.Val, 1)
 	requirePreparedRowsFrameParam(t, window.Frame.End.Val, 2)
+}
+
+func TestNthValueRequiresConstantPositiveOffset(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	tests := []struct {
+		name    string
+		sql     string
+		wantErr bool
+	}{
+		{
+			name: "constant positive expression",
+			sql:  "select nth_value(a, 1 + 1) over (order by a) from select_test.bind_select",
+		},
+		{
+			name:    "zero offset",
+			sql:     "select nth_value(a, 0) over (order by a) from select_test.bind_select",
+			wantErr: true,
+		},
+		{
+			name:    "column offset",
+			sql:     "select nth_value(a, a - 1) over (order by a) from select_test.bind_select",
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(ctx, stmt, false)
+			if !tc.wantErr {
+				require.NoError(t, err)
+				return
+			}
+
+			require.Error(t, err)
+			require.Equal(t, "Incorrect arguments to nth_value", err.Error())
+			moErr, ok := err.(*moerr.Error)
+			require.True(t, ok)
+			require.Equal(t, moerr.ER_WRONG_ARGUMENTS, moErr.MySQLCode())
+			require.Equal(t, moerr.MySQLDefaultSqlState, moErr.SqlState())
+		})
+	}
 }
 
 func TestPreparedWindowRangeFrameMarkersAreUnsupported(t *testing.T) {
@@ -755,6 +804,38 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 
 		_, err := bindWindowFuncExpr(binder, ctx, "sum", testRangeWindowExpr(), 0, true)
 		require.Error(t, err)
+	})
+
+	t.Run("range frame without offsets accepts non-numeric order by", func(t *testing.T) {
+		binder := &stubWindowBinder{
+			bindExprFunc: func(tree.Expr, int32, bool) (*planpb.Expr, error) {
+				return makePlan2StringConstExprWithType("x"), nil
+			},
+			bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) {
+				return makePlan2Int64ConstExprWithType(1), nil
+			},
+			makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) {
+				return makePlan2Int64ConstExprWithType(1), nil
+			},
+		}
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+		ws := testRangeWindowExpr().WindowSpec
+		ws.Frame.Start.Expr = nil
+		ws.Frame.Start.UnBounded = true
+		ws.Frame.End = &tree.FrameBound{Type: tree.CurrentRow}
+
+		expr, err := bindWindowFuncExpr(
+			binder,
+			ctx,
+			"sum",
+			testWindowFuncExpr("sum", tree.FUNC_TYPE_DEFAULT, ws, testNumVal(1)),
+			0,
+			true,
+		)
+		require.NoError(t, err)
+		require.NotNil(t, expr)
+		require.Len(t, ctx.windows, 1)
+		require.Equal(t, planpb.FrameClause_RANGE, ctx.windows[0].GetW().Frame.Type)
 	})
 
 	t.Run("buildWindowColRefExpr keeps tag and column", func(t *testing.T) {

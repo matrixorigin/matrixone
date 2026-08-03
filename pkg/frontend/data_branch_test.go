@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -35,30 +36,98 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
-func TestDataBranchUserVisibleColumn(t *testing.T) {
+func TestDataBranchColumnClassification(t *testing.T) {
 	require.True(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: "tenant"}))
+	require.True(t, isDataBranchWritableColumn(&plan.ColDef{Name: "tenant"}))
+	require.True(t, isDataBranchUserVisibleColumn(&plan.ColDef{
+		Name: "stored_total", GeneratedCol: &plan.GeneratedCol{IsStored: true},
+	}))
+	require.False(t, isDataBranchWritableColumn(&plan.ColDef{
+		Name: "stored_total", GeneratedCol: &plan.GeneratedCol{IsStored: true},
+	}))
+	require.True(t, isDataBranchUserVisibleColumn(&plan.ColDef{
+		Name: "virtual_total", GeneratedCol: &plan.GeneratedCol{IsStored: false},
+	}))
+	require.False(t, isDataBranchWritableColumn(&plan.ColDef{
+		Name: "virtual_total", GeneratedCol: &plan.GeneratedCol{IsStored: false},
+	}))
 	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: catalog.FakePrimaryKeyColName, Hidden: true}))
 	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: catalog.CPrimaryKeyColName, Hidden: true}))
 	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: "__mo_cbkey_006tenant003seq", Hidden: true}))
 	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: catalog.Row_ID, Hidden: true}))
+	require.False(t, dataBranchGeneratedColumnsEqual(&plan.GeneratedCol{}, &plan.GeneratedCol{}))
+	require.True(t, dataBranchGeneratedColumnsEqual(
+		&plan.GeneratedCol{OriginString: "tenant * 2", IsStored: true},
+		&plan.GeneratedCol{OriginString: "tenant * 2", IsStored: true},
+	))
+}
+
+func TestPrepareDataBranchWorkerValidatesBeforeAllocation(t *testing.T) {
+	t.Run("invalid diff projection", func(t *testing.T) {
+		tblStuff := tableStuff{}
+		tblStuff.def.colNames = []string{"id"}
+		tblStuff.def.visibleIdxes = []int{0}
+		stmt := &tree.DataBranchDiff{
+			Columns: tree.IdentifierList{tree.Identifier("missing")},
+		}
+
+		err := prepareDataBranchWorker(stmt, nil, &tblStuff)
+		require.Error(t, err)
+		require.Nil(t, tblStuff.worker)
+	})
+
+	t.Run("pick without primary key", func(t *testing.T) {
+		tblStuff := tableStuff{}
+		tblStuff.def.pkKind = fakeKind
+		stmt := &tree.DataBranchPick{}
+
+		err := prepareDataBranchWorker(nil, stmt, &tblStuff)
+		require.ErrorContains(t, err, "requires a table with a primary key")
+		require.Nil(t, tblStuff.worker)
+	})
+
+	t.Run("valid statement creates releasable worker", func(t *testing.T) {
+		tblStuff := tableStuff{}
+
+		require.NoError(t, prepareDataBranchWorker(nil, nil, &tblStuff))
+		require.NotNil(t, tblStuff.worker)
+		tblStuff.worker.Release()
+		require.True(t, tblStuff.worker.IsClosed())
+	})
+}
+
+func TestValidateDataBranchCreateTxn(t *testing.T) {
+	require.NoError(t, validateDataBranchCreateTxn(true))
+	err := validateDataBranchCreateTxn(false)
+	require.ErrorContains(t, err,
+		"CREATE DATA BRANCH is not supported with optimistic transactions")
+}
+
+func TestBranchQuotaUsageSQLUsesTargetOwnerAndExcludesRootAlterLineage(t *testing.T) {
+	require.Equal(t,
+		"select count(*) from mo_catalog.mo_branch_metadata b join mo_catalog.mo_tables t on b.table_id = t.rel_id where t.account_id = 7 and b.table_deleted = false and b.level != 'alter' for update",
+		branchQuotaUsageSQL(7),
+	)
 }
 
 func TestDataBranchFakePKColIdxesUseOnlyVisibleColumns(t *testing.T) {
 	tblDef := &plan.TableDef{
 		Cols: []*plan.ColDef{
+			{Name: catalog.Row_ID, Hidden: true},
 			{Name: "tenant"},
 			{Name: "__mo_cbkey_006tenant003seq", Hidden: true},
 			{Name: "payload"},
+			{Name: "generated_payload", GeneratedCol: &plan.GeneratedCol{IsStored: true}},
 			{Name: catalog.FakePrimaryKeyColName, Hidden: true},
-			{Name: catalog.Row_ID, Hidden: true},
 		},
 	}
-	require.Equal(t, []int{0, 2}, dataBranchFakePKColIdxes(tblDef))
+	require.Equal(t, []int{0, 2, 3}, dataBranchFakePKColIdxes(tblDef))
 }
 
 func TestDataBranchSchemaEquivalentRequiresCompleteLogicalTypes(t *testing.T) {
@@ -173,6 +242,39 @@ func TestFormatValIntoString_Time(t *testing.T) {
 
 	require.NoError(t, formatValIntoString(ses, val, types.New(types.T_time, 0, 6), &buf))
 	require.Equal(t, `'12:34:56.123456'`, buf.String())
+}
+
+func TestFormatValIntoString_Bit(t *testing.T) {
+	var buf bytes.Buffer
+	ses := &Session{}
+
+	require.NoError(t, formatValIntoString(ses, uint64(7), types.New(types.T_bit, 0, 0), &buf))
+	require.Equal(t, "7", buf.String())
+}
+
+func TestFormatValIntoString_UUID(t *testing.T) {
+	var buf bytes.Buffer
+	ses := &Session{}
+	uuidValue := types.Uuid{0x1b, 0x50, 0xc1, 0x37, 0x2d, 0xba, 0x11, 0xed, 0x94, 0x0f, 0x00, 0x0c, 0x29, 0x84, 0x79, 0x04}
+
+	require.NoError(t, formatValIntoString(ses, uuidValue, types.New(types.T_uuid, 0, 0), &buf))
+	require.Equal(t, "'1b50c137-2dba-11ed-940f-000c29847904'", buf.String())
+}
+
+func TestFormatValIntoString_GeometryText(t *testing.T) {
+	var buf bytes.Buffer
+	ses := &Session{}
+
+	require.NoError(t, formatValIntoString(ses, []byte("POINT(2 2)"), types.New(types.T_geometry, 0, 0), &buf))
+	require.Equal(t, "st_geomfromtext('POINT(2 2)')", buf.String())
+
+	buf.Reset()
+	require.NoError(t, formatValIntoString(ses, []byte("POINT(2 2)"), types.New(types.T_geometry32, 0, 0), &buf))
+	require.Equal(t, "st_geomfromtext('POINT(2 2)')", buf.String())
+
+	buf.Reset()
+	require.NoError(t, formatValIntoString(ses, []byte("POINT(2 2)"), types.New(types.T_geometry32, 4326+1, 0), &buf))
+	require.Equal(t, "st_geomfromtext('POINT(2 2)', 4326)", buf.String())
 }
 
 func TestFormatValIntoString_JSONEscaping(t *testing.T) {
@@ -377,18 +479,24 @@ func TestAppendTupleValueToVector_VarlenaAndNull(t *testing.T) {
 	require.Equal(t, 2, varcharVec.Length())
 	require.True(t, varcharVec.GetNulls().Contains(1))
 
+	decimalVec := vector.NewVec(types.New(types.T_decimal256, 65, 30))
+	decimalValue, err := types.ParseDecimal256("42.000000000000000000000000000000", 65, 30)
+	require.NoError(t, err)
+	require.NoError(t, appendTupleValueToVector(decimalVec, types.EncodeDecimal256(&decimalValue), mp))
+	require.Equal(t, decimalValue, vector.GetFixedAtNoTypeCheck[types.Decimal256](decimalVec, 0))
+
 	datetimeVec := vector.NewVec(types.New(types.T_datetime, 0, 6))
-	err := appendTupleValueToVector(datetimeVec, []byte("not-raw-fixed"), mp)
+	err = appendTupleValueToVector(datetimeVec, []byte("not-raw-fixed"), mp)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unexpected byte slice for fixed-width column")
 
 	decimalTyp := types.New(types.T_decimal256, 39, 4)
-	decimalVec := vector.NewVec(decimalTyp)
+	wideDecimalVec := vector.NewVec(decimalTyp)
 	decimalVal, err := types.ParseDecimal256("12345678901234567890123456789012344.1234", decimalTyp.Width, decimalTyp.Scale)
 	require.NoError(t, err)
-	require.NoError(t, appendTupleValueToVector(decimalVec, types.EncodeDecimal256(&decimalVal), mp))
-	require.Equal(t, 1, decimalVec.Length())
-	require.Equal(t, decimalVal, vector.GetFixedAtNoTypeCheck[types.Decimal256](decimalVec, 0))
+	require.NoError(t, appendTupleValueToVector(wideDecimalVec, types.EncodeDecimal256(&decimalVal), mp))
+	require.Equal(t, 1, wideDecimalVec.Length())
+	require.Equal(t, decimalVal, vector.GetFixedAtNoTypeCheck[types.Decimal256](wideDecimalVec, 0))
 
 	yearVec := vector.NewVec(types.T_year.ToType())
 	yearVal := types.MoYear(2024)
@@ -651,6 +759,16 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 			},
 		},
 		{
+			name: "geometry32",
+			build: func(t *testing.T, mp *mpool.MPool) (*vector.Vector, *vector.Vector, int) {
+				typ := types.T_geometry32.ToType()
+				leftVal, rightVal := []byte{0x01, 0x02, 0x03}, []byte{0x01, 0x02, 0x04}
+				leftVec := buildBytesVector(t, mp, typ, leftVal)
+				rightVec := buildBytesVector(t, mp, typ, rightVal)
+				return leftVec, rightVec, types.CompareValue(leftVal, rightVal)
+			},
+		},
+		{
 			name: "array_float32",
 			build: func(t *testing.T, mp *mpool.MPool) (*vector.Vector, *vector.Vector, int) {
 				typ := types.New(types.T_array_float32, 2, 0)
@@ -886,7 +1004,7 @@ func buildArrayVector[T types.RealNumbers](t *testing.T, mp *mpool.MPool, typ ty
 	return vec
 }
 
-func newValidateSession(t *testing.T) *Session {
+func newValidateSession(t testing.TB) *Session {
 	t.Helper()
 
 	proc := testutil.NewProcess(t)
@@ -1013,4 +1131,1063 @@ func TestValidateOutputDirPath(t *testing.T) {
 		err := validateOutputDirPath(ctx, ses, "s3-opts,endpoint=http://127.0.0.1:65535,region=us-east-1,bucket=b,key=k,secret=s,prefix=tmp:")
 		require.Error(t, err)
 	})
+}
+
+func TestCheckSchemaCompatibility_Identical(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Name: "target",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Name: "base",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1}, commonIdxes)
+	require.Equal(t, []int{0, 1}, commonVisibleIdxes)
+	require.Empty(t, tarOnlyIdxes)
+}
+
+func TestCheckSchemaCompatibility_ExtraColumnOnTarget(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Name: "target",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "c", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Name: "base",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1}, commonIdxes)
+	require.Equal(t, []int{0, 1}, commonVisibleIdxes)
+	require.Equal(t, []int{2}, tarOnlyIdxes)
+}
+
+func TestCheckSchemaCompatibility_ReturnsDataBatchIndexes(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Name: "target",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: catalog.Row_ID, Hidden: true},
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "c", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Name: "base",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: catalog.Row_ID, Hidden: true},
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1}, commonIdxes)
+	require.Equal(t, []int{0, 1}, commonVisibleIdxes)
+	require.Equal(t, []int{2}, tarOnlyIdxes)
+}
+
+func TestCheckSchemaCompatibility_SeparatesPhysicalAndVisibleCommonIndexes(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Name: "target",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: catalog.Row_ID, Hidden: true},
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "__mo_cbkey_001a", Typ: plan.Type{Id: int32(types.T_varchar)}, Hidden: true},
+			{Name: "c", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Name: "base",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: catalog.Row_ID, Hidden: true},
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "__mo_cbkey_001a", Typ: plan.Type{Id: int32(types.T_varchar)}, Hidden: true},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1, 3}, commonIdxes)
+	require.Equal(t, []int{0, 3}, commonVisibleIdxes)
+	require.Equal(t, []int{2}, tarOnlyIdxes)
+}
+
+func TestCheckSchemaCompatibility_HiddenColumnsAreNotOutputColumns(t *testing.T) {
+	tarDef := &plan.TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "a"}, Cols: []*plan.ColDef{
+		{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "hidden", Hidden: true, Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+	}}
+	baseDef := &plan.TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "a"}, Cols: []*plan.ColDef{
+		{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "hidden", Hidden: true, Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+	}}
+
+	commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1, 2}, commonIdxes)
+	require.Equal(t, []int{0, 2}, commonVisibleIdxes)
+	require.Empty(t, tarOnlyIdxes)
+}
+
+func TestCheckSchemaCompatibility_GeneratedColumnsRemainVisible(t *testing.T) {
+	newTableDef := func(stored bool) *plan.TableDef {
+		return &plan.TableDef{
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+				{Name: "value", Typ: plan.Type{Id: int32(types.T_int64)}},
+				{
+					Name:         "generated_value",
+					Typ:          plan.Type{Id: int32(types.T_int64)},
+					GeneratedCol: &plan.GeneratedCol{OriginString: "value * 2", IsStored: stored},
+				},
+			},
+		}
+	}
+
+	for _, tc := range []struct {
+		name   string
+		stored bool
+	}{
+		{name: "stored", stored: true},
+		{name: "virtual", stored: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err :=
+				checkSchemaCompatibility(newTableDef(tc.stored), newTableDef(tc.stored))
+			require.NoError(t, err)
+			require.Equal(t, []int{0, 1, 2}, commonIdxes)
+			require.Equal(t, []int{0, 1, 2}, commonVisibleIdxes)
+			require.Empty(t, tarOnlyIdxes)
+		})
+	}
+}
+
+func TestCheckSchemaCompatibility_RejectsGeneratedAndOrdinaryMismatch(t *testing.T) {
+	ordinaryDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "value", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "derived", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	generatedDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "value", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{
+				Name:         "derived",
+				Typ:          plan.Type{Id: int32(types.T_int64)},
+				GeneratedCol: &plan.GeneratedCol{OriginString: "value * 2", IsStored: true},
+			},
+		},
+	}
+
+	_, _, _, err := checkSchemaCompatibility(ordinaryDef, generatedDef)
+	require.ErrorContains(t, err, "column 'derived' has different generated definitions")
+
+	_, _, _, err = checkSchemaCompatibility(generatedDef, ordinaryDef)
+	require.ErrorContains(t, err, "column 'derived' has different generated definitions")
+}
+
+func TestCheckSchemaCompatibility_RejectsDifferentGeneratedDefinitions(t *testing.T) {
+	newTableDef := func(expr string, generatedPK bool) *plan.TableDef {
+		pkeyName := "id"
+		if generatedPK {
+			pkeyName = "generated_id"
+		}
+		return &plan.TableDef{
+			Pkey: &plan.PrimaryKeyDef{Names: []string{pkeyName}, PkeyColName: pkeyName},
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+				{
+					Name: "generated_id", Typ: plan.Type{Id: int32(types.T_int64)},
+					GeneratedCol: &plan.GeneratedCol{OriginString: expr, IsStored: true},
+				},
+			},
+		}
+	}
+
+	for _, generatedPK := range []bool{false, true} {
+		_, _, _, err := checkSchemaCompatibility(
+			newTableDef("id * 2", generatedPK), newTableDef("id * 3", generatedPK),
+		)
+		require.ErrorContains(t, err, "column 'generated_id' has different generated definitions")
+	}
+}
+
+func TestCheckSchemaCompatibility_GeneratedDefinitionsUseLogicalColumnIdentity(t *testing.T) {
+	intType := plan.Type{Id: int32(types.T_int64)}
+	generatedExpr := func(colPos int32) *plan.Expr {
+		return &plan.Expr{
+			Typ: intType,
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: 1, ObjName: "*"},
+				Args: []*plan.Expr{
+					{Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: colPos}}},
+					{Typ: intType, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 2}}}},
+				},
+			}},
+		}
+	}
+	newTableDef := func(reordered, generatedPK, referencesA bool) *plan.TableDef {
+		pkeyName := "id"
+		if generatedPK {
+			pkeyName = "g"
+		}
+		cols := []*plan.ColDef{
+			{Name: "id", Typ: intType},
+			{Name: "a", Typ: intType},
+			{Name: "b", Typ: intType},
+		}
+		if reordered {
+			cols[1], cols[2] = cols[2], cols[1]
+		}
+		refName := "b"
+		if referencesA {
+			refName = "a"
+		}
+		refPos := int32(0)
+		for i, col := range cols {
+			if col.Name == refName {
+				refPos = int32(i)
+				break
+			}
+		}
+		cols = append(cols, &plan.ColDef{
+			Name: "g", Typ: intType,
+			GeneratedCol: &plan.GeneratedCol{Expr: generatedExpr(refPos), OriginString: refName + " * 2", IsStored: true},
+		})
+		cols = append([]*plan.ColDef{{Name: catalog.Row_ID, Hidden: true}}, cols...)
+		return &plan.TableDef{
+			Pkey: &plan.PrimaryKeyDef{Names: []string{pkeyName}, PkeyColName: pkeyName},
+			Cols: cols,
+		}
+	}
+
+	for _, generatedPK := range []bool{false, true} {
+		t.Run(fmt.Sprintf("generated_pk_%t_matching_reordered", generatedPK), func(t *testing.T) {
+			_, _, _, err := checkSchemaCompatibility(
+				newTableDef(false, generatedPK, true),
+				newTableDef(true, generatedPK, true),
+			)
+			require.NoError(t, err)
+		})
+		t.Run(fmt.Sprintf("generated_pk_%t_mismatching_reordered", generatedPK), func(t *testing.T) {
+			_, _, _, err := checkSchemaCompatibility(
+				newTableDef(false, generatedPK, true),
+				newTableDef(true, generatedPK, false),
+			)
+			require.ErrorContains(t, err, "column 'g' has different generated definitions")
+		})
+	}
+
+	t.Run("lineage_resolver_canonicalizes_renamed_reference", func(t *testing.T) {
+		tarDef := &plan.TableDef{
+			Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: intType},
+				{Name: "new_a", Typ: intType},
+				{
+					Name: "g", Typ: intType,
+					GeneratedCol: &plan.GeneratedCol{Expr: generatedExpr(1), IsStored: true},
+				},
+			},
+		}
+		tarDef.Cols = append([]*plan.ColDef{{Name: catalog.Row_ID, Hidden: true}}, tarDef.Cols...)
+		baseDef := &plan.TableDef{
+			Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: intType},
+				{Name: "old_a", Typ: intType},
+				{
+					Name: "g", Typ: intType,
+					GeneratedCol: &plan.GeneratedCol{Expr: generatedExpr(1), IsStored: true},
+				},
+			},
+		}
+		baseDef.Cols = append([]*plan.ColDef{{Name: catalog.Row_ID, Hidden: true}}, baseDef.Cols...)
+		resolveBaseColumn := func(tarCol *plan.ColDef) *plan.ColDef {
+			switch tarCol.Name {
+			case "id":
+				return baseDef.Cols[1]
+			case "new_a":
+				return baseDef.Cols[2]
+			case "g":
+				return baseDef.Cols[3]
+			default:
+				return nil
+			}
+		}
+		_, _, _, err := checkSchemaCompatibilityWithResolver(
+			tarDef, baseDef, resolveBaseColumn,
+		)
+		require.NoError(t, err)
+	})
+}
+
+func TestCanonicalizeDataBranchGeneratedExpr(t *testing.T) {
+	intType := plan.Type{Id: int32(types.T_int64)}
+	expr := &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+		{Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 9, ColPos: 0}}},
+		{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Src: &plan.Expr{
+			Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 9, ColPos: 1}},
+		}}}},
+	}}}}
+	references := []string{"old_a", "old_b"}
+	require.True(t, canonicalizeDataBranchGeneratedExpr(expr, func(pos int32) (string, bool) {
+		if pos < 0 || int(pos) >= len(references) {
+			return "", false
+		}
+		return references[pos], true
+	}))
+	require.Equal(t, &plan.ColRef{Name: "old_a"}, expr.GetList().List[0].GetCol())
+	require.Equal(t, &plan.ColRef{Name: "old_b"}, expr.GetList().List[1].GetLit().Src.GetCol())
+
+	require.True(t, canonicalizeDataBranchGeneratedExpr(nil, nil))
+	require.True(t, canonicalizeDataBranchGeneratedExpr(
+		&plan.Expr{Expr: &plan.Expr_T{T: &plan.TargetType{}}}, nil,
+	))
+	require.False(t, canonicalizeDataBranchGeneratedExpr(
+		&plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}}},
+		func(int32) (string, bool) { return "", false },
+	))
+	require.False(t, canonicalizeDataBranchGeneratedExpr(
+		&plan.Expr{Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{ColPos: 0}}}, nil,
+	))
+}
+
+func TestDataBranchGeneratedColumnsLogicallyEqualBoundaries(t *testing.T) {
+	intType := plan.Type{Id: int32(types.T_int64)}
+	colExpr := func(pos int32) *plan.Expr {
+		return &plan.Expr{Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}
+	}
+	newTableDef := func(expr *plan.Expr, origin string, stored bool) (*plan.TableDef, *plan.ColDef) {
+		generated := &plan.ColDef{
+			Name: "g", Typ: intType,
+			GeneratedCol: &plan.GeneratedCol{Expr: expr, OriginString: origin, IsStored: stored},
+		}
+		return &plan.TableDef{Cols: []*plan.ColDef{
+			{Name: catalog.Row_ID, Hidden: true},
+			{Name: "a", Typ: intType},
+			generated,
+		}}, generated
+	}
+	resolveByName := func(def *plan.TableDef) dataBranchEndpointColumnResolver {
+		return func(col *plan.ColDef) *plan.ColDef {
+			return dataBranchColumnDefByLogicalName(def, col)
+		}
+	}
+
+	tarDef, tarCol := newTableDef(nil, "a * 2", true)
+	baseDef, baseCol := newTableDef(nil, "a * 2", true)
+	require.True(t, dataBranchGeneratedColumnsLogicallyEqual(
+		tarCol, baseCol, tarDef, baseDef, resolveByName(baseDef),
+	))
+	baseCol.GeneratedCol.OriginString = ""
+	require.False(t, dataBranchGeneratedColumnsLogicallyEqual(
+		tarCol, baseCol, tarDef, baseDef, resolveByName(baseDef),
+	))
+
+	baseCol.GeneratedCol = nil
+	require.False(t, dataBranchGeneratedColumnsLogicallyEqual(
+		tarCol, baseCol, tarDef, baseDef, resolveByName(baseDef),
+	))
+	baseDef, baseCol = newTableDef(colExpr(0), "a", true)
+	require.False(t, dataBranchGeneratedColumnsLogicallyEqual(
+		tarCol, baseCol, tarDef, baseDef, resolveByName(baseDef),
+	))
+	baseDef, baseCol = newTableDef(nil, "a * 2", false)
+	require.False(t, dataBranchGeneratedColumnsLogicallyEqual(
+		tarCol, baseCol, tarDef, baseDef, resolveByName(baseDef),
+	))
+
+	tarDef, tarCol = newTableDef(colExpr(9), "missing", true)
+	baseDef, baseCol = newTableDef(colExpr(0), "a", true)
+	require.False(t, dataBranchGeneratedColumnsLogicallyEqual(
+		tarCol, baseCol, tarDef, baseDef, resolveByName(baseDef),
+	))
+	tarDef, tarCol = newTableDef(colExpr(0), "a", true)
+	baseDef, baseCol = newTableDef(colExpr(9), "missing", true)
+	require.False(t, dataBranchGeneratedColumnsLogicallyEqual(
+		tarCol, baseCol, tarDef, baseDef, resolveByName(baseDef),
+	))
+}
+
+func TestCheckSchemaCompatibility_StoredGeneratedPrimaryKey(t *testing.T) {
+	newTableDef := func() *plan.TableDef {
+		return &plan.TableDef{
+			Pkey: &plan.PrimaryKeyDef{Names: []string{"generated_id"}, PkeyColName: "generated_id"},
+			Cols: []*plan.ColDef{
+				{Name: "value", Typ: plan.Type{Id: int32(types.T_int64)}},
+				{
+					Name:         "generated_id",
+					Typ:          plan.Type{Id: int32(types.T_int64)},
+					GeneratedCol: &plan.GeneratedCol{OriginString: "value * 2", IsStored: true},
+				},
+			},
+		}
+	}
+
+	commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err :=
+		checkSchemaCompatibility(newTableDef(), newTableDef())
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1}, commonIdxes)
+	require.Equal(t, []int{0, 1}, commonVisibleIdxes)
+	require.Empty(t, tarOnlyIdxes)
+}
+
+func TestCheckSchemaCompatibility_RejectsBaseOnlyVisibleColumn(t *testing.T) {
+	for _, generated := range []bool{false, true} {
+		tarDef := &plan.TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "a"}, Cols: []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}}}}
+		baseOnly := &plan.ColDef{Name: "removed", Typ: plan.Type{Id: int32(types.T_int64)}}
+		if generated {
+			baseOnly.GeneratedCol = &plan.GeneratedCol{OriginString: "a * 2", IsStored: true}
+		}
+		baseDef := &plan.TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "a"}, Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			baseOnly,
+		}}
+
+		_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
+		require.ErrorContains(t, err, "base column 'removed' is not present in target schema")
+	}
+}
+
+func TestCheckSchemaCompatibility_PKChanged(t *testing.T) {
+	// base has PK on column "a" which is also in target, so it passes.
+	// We need a case where the BASE's PK column does NOT exist in target.
+	// Target has different columns entirely, so base PK "a" is missing from common.
+	tarDef := &plan.TableDef{
+		Name: "target",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"x"},
+			PkeyColName: "x",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "x", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "y", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Name: "base",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "primary key column")
+}
+
+func TestCheckSchemaCompatibility_RejectsChangedPrimaryKeyWithCommonColumns(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"b"}, PkeyColName: "b"},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.ErrorContains(t, err, "primary key columns")
+}
+
+func TestCheckSchemaCompatibilityWithResolver_AcceptsRenamedPrimaryKey(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"id_new"}, PkeyColName: "id_new"},
+		Cols: []*plan.ColDef{
+			{ColId: 1, Seqnum: 0, Name: "id_new", Primary: true, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 2, Seqnum: 1, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols: []*plan.ColDef{
+			{ColId: 1, Seqnum: 0, Name: "id", Primary: true, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 2, Seqnum: 1, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err := checkSchemaCompatibilityWithResolver(
+		tarDef,
+		baseDef,
+		func(tarCol *plan.ColDef) *plan.ColDef {
+			return dataBranchEndpointColumnDef(baseDef, tarCol)
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1}, commonIdxes)
+	require.Equal(t, []int{0, 1}, commonVisibleIdxes)
+	require.Empty(t, tarOnlyIdxes)
+}
+
+func TestCheckSchemaCompatibility_TypeMismatch(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Name: "target",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_varchar)}}, // varchar in target
+		},
+	}
+	baseDef := &plan.TableDef{
+		Name: "base",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}}, // int in base
+		},
+	}
+
+	_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "has different types")
+}
+
+func TestCheckSchemaCompatibility_AllowsCopyAlterIdentityReassignment(t *testing.T) {
+	baseDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{
+			{Name: "a", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	targetDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{
+			{Name: "a", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Seqnum: 2, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	_, _, _, err := checkSchemaCompatibility(targetDef, baseDef)
+	require.NoError(t, err)
+
+	// Physical reordering preserves Seqnum and remains compatible.
+	targetDef.Cols[1].Seqnum = 1
+	targetDef.Cols[0], targetDef.Cols[1] = targetDef.Cols[1], targetDef.Cols[0]
+	_, _, _, err = checkSchemaCompatibility(targetDef, baseDef)
+	require.NoError(t, err)
+}
+
+func TestValidateDataBranchColumnLineage(t *testing.T) {
+	tableDef := func(cols ...*plan.ColDef) *plan.TableDef {
+		return &plan.TableDef{Cols: cols}
+	}
+	col := func(name string, id uint64, seq uint32) *plan.ColDef {
+		return &plan.ColDef{
+			Name: name, ColId: id, Seqnum: seq,
+			Typ: plan.Type{Id: int32(types.T_int64)},
+		}
+	}
+
+	t.Run("copy alter preserves same-name columns", func(t *testing.T) {
+		tarDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 10, 1), col("c", 11, 0), col("b", 12, 2)),
+		}
+		baseDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 20, 0), col("b", 21, 1)),
+		}
+		require.NoError(t, validateDataBranchColumnLineage(
+			tarDefs, []bool{false, true}, baseDefs, []bool{false, false},
+		))
+	})
+
+	t.Run("drop and add same name is discontinuous", func(t *testing.T) {
+		tarDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 10, 0)),
+			tableDef(col("a", 20, 0), col("b", 21, 1)),
+		}
+		baseDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 30, 0), col("b", 31, 1)),
+		}
+		err := validateDataBranchColumnLineage(
+			tarDefs, []bool{false, true, true}, baseDefs, []bool{false, false},
+		)
+		require.ErrorContains(t, err, "column 'b' has different identity")
+	})
+
+	t.Run("independent additions are compatible", func(t *testing.T) {
+		tarDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0)),
+			tableDef(col("a", 10, 0), col("c", 11, 1)),
+		}
+		baseDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0)),
+			tableDef(col("a", 20, 0), col("c", 21, 1)),
+		}
+		require.NoError(t, validateDataBranchColumnLineage(
+			tarDefs, []bool{false, true}, baseDefs, []bool{false, true},
+		))
+	})
+
+	t.Run("added column cannot be dropped and recreated", func(t *testing.T) {
+		tarDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0)),
+			tableDef(col("a", 10, 0), col("c", 11, 1)),
+			tableDef(col("a", 20, 0)),
+			tableDef(col("a", 30, 0), col("c", 31, 1)),
+		}
+		baseDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0)),
+			tableDef(col("a", 40, 0), col("c", 41, 1)),
+		}
+		err := validateDataBranchColumnLineage(
+			tarDefs, []bool{false, true, true, true}, baseDefs, []bool{false, true},
+		)
+		require.ErrorContains(t, err, "column 'c' has different identity")
+	})
+
+	t.Run("rename across a clone edge preserves identity", func(t *testing.T) {
+		tarDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 1, 0), &plan.ColDef{
+				Name: "bb", OriginName: "b", ColId: 2, Seqnum: 1,
+				Typ: plan.Type{Id: int32(types.T_int64)},
+			}),
+		}
+		baseDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+		}
+		require.NoError(t, validateDataBranchColumnLineage(
+			tarDefs, []bool{false, false}, baseDefs, []bool{false, false},
+		))
+	})
+
+	t.Run("rename on LCA endpoint after fork preserves identity", func(t *testing.T) {
+		lcaAtFork := tableDef(col("a", 1, 0), col("b", 2, 1))
+		tarEndpoint := tableDef(col("a", 1, 0), col("b", 2, 1))
+		baseEndpoint := tableDef(col("a", 1, 0), col("bb", 2, 1))
+
+		endpointColumns, err := dataBranchLineageEndpointColumns(
+			[]*plan.TableDef{lcaAtFork, tarEndpoint}, []bool{false, false},
+			[]*plan.TableDef{baseEndpoint}, []bool{false},
+		)
+		require.NoError(t, err)
+		require.Same(t, baseEndpoint.Cols[1], endpointColumns["b"])
+	})
+
+	t.Run("replacement on LCA endpoint after fork remains discontinuous", func(t *testing.T) {
+		lcaAtFork := tableDef(col("a", 1, 0), col("b", 2, 1))
+		tarEndpoint := tableDef(col("a", 1, 0), col("b", 2, 1))
+		baseWithoutColumn := tableDef(col("a", 10, 0))
+		baseReplacement := tableDef(col("a", 20, 0), col("bb", 2, 1))
+
+		endpointColumns, err := dataBranchLineageEndpointColumns(
+			[]*plan.TableDef{lcaAtFork, tarEndpoint}, []bool{false, false},
+			[]*plan.TableDef{lcaAtFork, baseWithoutColumn, baseReplacement}, []bool{false, true, true},
+		)
+		require.NoError(t, err)
+		require.NotContains(t, endpointColumns, "b")
+	})
+
+	t.Run("rename preserves stable identity across edge kinds", func(t *testing.T) {
+		for _, tc := range []struct {
+			name        string
+			originName  string
+			lineageOnly bool
+		}{
+			{name: "ordinary with origin name", originName: "b"},
+			{name: "ordinary without origin name"},
+			{name: "alter with origin name", originName: "b", lineageOnly: true},
+			{name: "alter without origin name", lineageOnly: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				renamed := col("bb", 2, 1)
+				renamed.OriginName = tc.originName
+				tarDefs := []*plan.TableDef{
+					tableDef(col("a", 1, 0), col("b", 2, 1)),
+					tableDef(col("a", 1, 0), renamed),
+				}
+				baseDefs := []*plan.TableDef{
+					tableDef(col("a", 1, 0), col("b", 2, 1)),
+					tableDef(col("a", 1, 0), col("b", 2, 1)),
+				}
+
+				reachesLCA, lcaCol, redefined := dataBranchColumnReachesLCA(
+					tarDefs, []bool{false, tc.lineageOnly}, renamed,
+				)
+				require.True(t, reachesLCA)
+				require.False(t, redefined)
+				require.Same(t, tarDefs[0].Cols[1], lcaCol)
+				require.NoError(t, validateDataBranchColumnLineage(
+					tarDefs, []bool{false, tc.lineageOnly},
+					baseDefs, []bool{false, false},
+				))
+			})
+		}
+	})
+
+	t.Run("replacement with colliding endpoint identity remains discontinuous", func(t *testing.T) {
+		tarDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 10, 0)),
+			tableDef(col("a", 20, 0), col("c", 2, 1)),
+		}
+		baseDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+		}
+		endpointColumns, err := dataBranchLineageEndpointColumns(
+			tarDefs, []bool{false, true, true}, baseDefs, []bool{false, false},
+		)
+		require.NoError(t, err)
+		require.NotContains(t, endpointColumns, "c")
+	})
+
+	t.Run("independent different-name additions do not pair on colliding identity", func(t *testing.T) {
+		tarDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0)),
+			tableDef(col("a", 10, 0), col("c", 2, 1)),
+		}
+		baseDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0)),
+			tableDef(col("a", 20, 0), col("d", 2, 1)),
+		}
+		endpointColumns, err := dataBranchLineageEndpointColumns(
+			tarDefs, []bool{false, true}, baseDefs, []bool{false, true},
+		)
+		require.NoError(t, err)
+		require.NotContains(t, endpointColumns, "c")
+	})
+
+	t.Run("target-only addition does not reuse a preserved column identity", func(t *testing.T) {
+		tarDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 10, 0), col("c", 2, 1), col("b", 11, 2)),
+		}
+		baseDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 20, 0), col("b", 21, 1)),
+		}
+		endpointColumns, err := dataBranchLineageEndpointColumns(
+			tarDefs, []bool{false, true}, baseDefs, []bool{false, false},
+		)
+		require.NoError(t, err)
+		require.NotContains(t, endpointColumns, "c")
+	})
+
+	t.Run("endpoint-ambiguous rename shape is excluded by producer guard", func(t *testing.T) {
+		previousDef := tableDef(col("a", 1, 0), col("b", 2, 1))
+		currentDef := tableDef(col("a", 1, 0), col("c", 2, 1))
+		// Endpoint schemas alone are indistinguishable from a rename. The
+		// ALTER producer rejects this DROP+ADD shape before publishing the
+		// lineage edge; this assertion documents the remaining local signal.
+		require.Same(t, previousDef.Cols[1], dataBranchColumnDefByRenameIdentity(
+			previousDef, currentDef, currentDef.Cols[1],
+		))
+	})
+
+	t.Run("rename identity survives unrelated modify and reorder", func(t *testing.T) {
+		previousDef := tableDef(col("a", 1, 0), col("b", 2, 1))
+		renamed := col("bb", 2, 1)
+		renamed.Typ.Id = int32(types.T_varchar)
+		modified := col("a", 1, 0)
+		modified.NotNull = true
+		currentDef := tableDef(renamed, modified)
+		require.Same(t, previousDef.Cols[1], dataBranchColumnDefByRenameIdentity(
+			previousDef, currentDef, renamed,
+		))
+	})
+
+	t.Run("unchanged names cannot exchange physical identities", func(t *testing.T) {
+		previousDef := tableDef(col("a", 1, 0), col("b", 2, 1))
+		renamed := col("bb", 1, 0)
+		currentDef := tableDef(col("a", 2, 1), renamed)
+		require.Nil(t, dataBranchColumnDefByRenameIdentity(
+			previousDef, currentDef, renamed,
+		))
+	})
+
+	t.Run("column dropped by sibling remains target only after type change", func(t *testing.T) {
+		varcharCol := col("c", 12, 1)
+		varcharCol.Typ.Id = int32(types.T_varchar)
+		tarDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("c", 2, 1)),
+			tableDef(col("a", 10, 0), varcharCol),
+		}
+		baseDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("c", 2, 1)),
+			tableDef(col("a", 20, 0)),
+		}
+		endpointColumns, err := dataBranchLineageEndpointColumns(
+			tarDefs, []bool{false, true}, baseDefs, []bool{false, true},
+		)
+		require.NoError(t, err)
+		require.NotContains(t, endpointColumns, "c")
+	})
+}
+
+func TestCheckSchemaCompatibility_AllowsStableIdentityRename(t *testing.T) {
+	baseDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{
+			{Name: "a", ColId: 1, Seqnum: 0, Primary: true, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	targetDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{
+			{Name: "a", ColId: 1, Seqnum: 0, Primary: true, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "bb", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	endpointColumns, err := dataBranchLineageEndpointColumns(
+		[]*plan.TableDef{baseDef, targetDef}, []bool{false, true},
+		[]*plan.TableDef{baseDef, baseDef}, []bool{false, false},
+	)
+	require.NoError(t, err)
+	common, visible, targetOnly, err := checkSchemaCompatibilityWithResolver(
+		targetDef, baseDef,
+		func(targetCol *plan.ColDef) *plan.ColDef {
+			if baseCol := endpointColumns[strings.ToLower(targetCol.Name)]; baseCol != nil {
+				return baseCol
+			}
+			return dataBranchColumnDefByLogicalName(baseDef, targetCol)
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1}, common)
+	require.Equal(t, []int{0, 1}, visible)
+	require.Empty(t, targetOnly)
+}
+
+func TestCheckSchemaCompatibility_RejectsDifferentTypeAttributes(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "amount", Typ: plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2}},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "amount", Typ: plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 0}},
+		},
+	}
+
+	_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.ErrorContains(t, err, "different type attributes")
+}
+
+func TestCheckSchemaCompatibility_RejectsDifferentColumnNullability(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}, NotNull: false},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}, NotNull: true},
+		},
+	}
+
+	_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.ErrorContains(t, err, "different nullability")
+}
+
+func TestCheckSchemaCompatibility_BaseOnlyVisibleColumnRejected(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Name: "target",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Name: "base",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a"},
+			PkeyColName: "a",
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "base column 'b' is not present in target schema")
+}
+
+func TestCheckSchemaCompatibility_CompositePK(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Name: "target",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a", "b"},
+			PkeyColName: "__cpkey__",
+			CompPkeyCol: &plan.ColDef{Name: "__cpkey__"},
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "c", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Name: "base",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"a", "b"},
+			PkeyColName: "__cpkey__",
+			CompPkeyCol: &plan.ColDef{Name: "__cpkey__"},
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1}, commonIdxes)
+	require.Equal(t, []int{0, 1}, commonVisibleIdxes)
+	require.Equal(t, []int{2}, tarOnlyIdxes)
+}
+
+func TestCheckSchemaCompatibility_FakePKRejectsTargetOnlyColumns(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Name: "target",
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: catalog.FakePrimaryKeyColName,
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "c", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Name: "base",
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: catalog.FakePrimaryKeyColName,
+		},
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	_, _, _, err := checkSchemaCompatibility(tarDef, baseDef)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "require an explicit primary key")
+}
+
+func TestDataBranchCollectRelationSnapshot(t *testing.T) {
+	endpointSP := types.BuildTS(300, 7)
+	transitionTS := types.BuildTS(200, 3)
+
+	require.Equal(t, endpointSP, dataBranchCollectRelationSnapshot(endpointSP, transitionTS, true))
+	require.Equal(t, transitionTS, dataBranchCollectRelationSnapshot(endpointSP, transitionTS, false))
+}
+
+func TestBranchMetaInfoLCASnapshotIgnoresAlterLineageEdges(t *testing.T) {
+	alterTS := types.BuildTS(200, 0)
+	forkTS := types.BuildTS(100, 0)
+	tarSP := types.BuildTS(300, 0)
+	baseSP := types.BuildTS(250, 0)
+	info := branchMetaInfo{
+		pathFromLCAToTar:             []uint64{1, 2},
+		pathFromLCAToTarTS:           []types.TS{{}, alterTS},
+		pathFromLCAToTarLineageOnly:  []bool{false, true},
+		pathFromLCAToBase:            []uint64{1, 3},
+		pathFromLCAToBaseTS:          []types.TS{{}, forkTS},
+		pathFromLCAToBaseLineageOnly: []bool{false, false},
+	}
+
+	require.Equal(t, forkTS, info.tarLCASnapshot(baseSP))
+	require.Equal(t, forkTS, info.baseLCASnapshot(tarSP))
 }

@@ -30,6 +30,16 @@ import (
 
 const hashBuildMinimumReserve = uint64(4 << 30)
 
+const (
+	// Keep a process-wide reserve for listeners, RPC connections, object
+	// storage, logs, and other descriptors that are not represented by the
+	// hash-build spill ledger. The proportional reserve keeps the spill
+	// subsystem from consuming an otherwise healthy CN's whole RLIMIT, while
+	// the absolute floor protects low-limit containers.
+	hashBuildNonSpillFDHeadroom    = uint64(64)
+	hashBuildNonSpillFDHeadroomDiv = uint64(4)
+)
+
 // hashBuildBudgetCapRefreshTTL bounds how long a sampled configuration ceiling
 // may be reused. The inputs are limits/reservations, not current memory usage.
 // Cgroup max and host total are process-start snapshots; changing either
@@ -125,11 +135,25 @@ const (
 	HashBuildBudgetErrorCeilingMissing
 )
 
+// HashBuildBudgetResource identifies the finite resource whose admission
+// failed. It is separate from Kind: every resource can reject capacity, while
+// lifecycle and accounting failures remain resource-independent.
+type HashBuildBudgetResource uint8
+
+const (
+	HashBuildBudgetResourceUnknown HashBuildBudgetResource = iota
+	HashBuildBudgetResourceMemory
+	HashBuildBudgetResourceSpillDisk
+	HashBuildBudgetResourceSpillFD
+)
+
 // HashBuildBudgetError carries bounded, observational details for an
-// admission failure.  Requested, Used and Cap are bytes and are always safe
-// to inspect (they are never produced by overflowing arithmetic).
+// admission failure. Requested, Used and Cap use the unit named by Resource
+// (bytes for memory/spill disk, descriptors for spill FD) and are always safe
+// to inspect; they are never produced by overflowing arithmetic.
 type HashBuildBudgetError struct {
 	Kind      HashBuildBudgetErrorKind
+	Resource  HashBuildBudgetResource
 	Requested uint64
 	Used      uint64
 	Cap       uint64
@@ -144,6 +168,8 @@ func (e *HashBuildBudgetError) Error() string {
 		return e.Message
 	}
 	switch e.Kind {
+	case HashBuildBudgetErrorAdmission:
+		return fmt.Sprintf("%s: requested=%d used=%d cap=%d", ErrHashBuildBudgetAdmission, e.Requested, e.Used, e.Cap)
 	case HashBuildBudgetErrorClosed:
 		return ErrHashBuildBudgetClosed.Error()
 	case HashBuildBudgetErrorInvalid:
@@ -151,7 +177,7 @@ func (e *HashBuildBudgetError) Error() string {
 	case HashBuildBudgetErrorCeilingMissing:
 		return ErrHashBuildCeilingMissing.Error()
 	default:
-		return fmt.Sprintf("%s: requested=%d used=%d cap=%d", ErrHashBuildBudgetAdmission, e.Requested, e.Used, e.Cap)
+		return fmt.Sprintf("%s: unknown kind=%d", ErrHashBuildBudgetInvalid, e.Kind)
 	}
 }
 
@@ -160,6 +186,8 @@ func (e *HashBuildBudgetError) Unwrap() error {
 		return nil
 	}
 	switch e.Kind {
+	case HashBuildBudgetErrorAdmission:
+		return ErrHashBuildBudgetAdmission
 	case HashBuildBudgetErrorClosed:
 		return ErrHashBuildBudgetClosed
 	case HashBuildBudgetErrorInvalid:
@@ -167,19 +195,19 @@ func (e *HashBuildBudgetError) Unwrap() error {
 	case HashBuildBudgetErrorCeilingMissing:
 		return ErrHashBuildCeilingMissing
 	default:
-		return ErrHashBuildBudgetAdmission
+		return ErrHashBuildBudgetInvalid
 	}
 }
 
-// Is lets admission handling classify both a cap rejection and a closed
-// budget without depending on the concrete error type, while retaining the
-// more specific closed sentinel for lifecycle diagnostics.
+// Is keeps capacity admission, lifecycle, and accounting failures disjoint.
+// Callers may recover a capacity rejection through spill, while Closed and
+// other lifecycle failures must remain fatal.
 func (e *HashBuildBudgetError) Is(target error) bool {
 	if e == nil {
 		return false
 	}
 	if target == ErrHashBuildBudgetAdmission || target == ErrHashBuildBudgetRejected {
-		return e.Kind == HashBuildBudgetErrorAdmission || e.Kind == HashBuildBudgetErrorClosed
+		return e.Kind == HashBuildBudgetErrorAdmission
 	}
 	switch e.Kind {
 	case HashBuildBudgetErrorClosed:
@@ -221,8 +249,14 @@ type HashBuildBudget struct {
 	closed                bool
 	spillDiskCap          uint64
 	spillDiskUsed         uint64
-	spillFDCap            uint64
-	spillFDUsed           uint64
+	// spillFDConfiguredCap is the finite logical ledger limit. spillFDCap is
+	// its current effective value after applying the process RLIMIT_NOFILE
+	// ceiling. Keeping both lets a budget recover if an administrator raises
+	// the process limit, while every file reservation still preflights a
+	// runtime decrease.
+	spillFDConfiguredCap uint64
+	spillFDCap           uint64
+	spillFDUsed          uint64
 }
 
 // NewHashBuildBudget creates a local-CN budget.  Both caps are finite and
@@ -237,9 +271,12 @@ func NewHashBuildBudget(aggregateCap, queryCap uint64) (*HashBuildBudget, error)
 			Message:   fmt.Sprintf("%s: aggregate=%d query=%d", ErrHashBuildBudgetInvalid, aggregateCap, queryCap),
 		}
 	}
+	configuredFDCap := configuredSpillFDCap(aggregateCap)
 	return &HashBuildBudget{
 		aggregateCap: aggregateCap, queryCap: queryCap,
-		spillDiskCap: defaultSpillCap(aggregateCap), spillFDCap: defaultSpillFDCap(aggregateCap),
+		spillDiskCap:         defaultSpillCap(aggregateCap),
+		spillFDConfiguredCap: configuredFDCap,
+		spillFDCap:           clampSpillFDCapToProcess(configuredFDCap),
 		// Keep direct callers' historical provider semantics (sample before
 		// every reservation). CN budgets obtained through GetHashBuildBudget
 		// opt into the short shared cache below.
@@ -255,13 +292,14 @@ func defaultSpillCap(memoryCap uint64) uint64 {
 	return memoryCap * 8
 }
 
-func defaultSpillFDCap(memoryCap uint64) uint64 {
+func configuredSpillFDCap(memoryCap uint64) uint64 {
 	// A finite cap derived from memory keeps FD admission bounded while
-	// retaining enough fanout for normal (32-way) spill partitions.
-	// A 16-way shuffle query can have 16 concurrent build partitions, each
-	// owning 32 first-pass files and up to 64 transactional build/probe child
-	// files during re-spill. Keep that normal peak admissible while retaining a
-	// finite query/CN ledger that rejects runaway fanout.
+	// cushioning the first 32-way repartition peak. One engine can retain 32
+	// build plus 32 probe files and open up to 64 child writers while it
+	// re-partitions a bucket; 16 concurrent engines therefore reach roughly
+	// 2048 descriptors. Deeper skew can retain a larger bucket queue and is
+	// intentionally allowed to fail controlled FD admission: this floor is a
+	// bounded operating allowance, not a completion guarantee.
 	const minFD = uint64(2048)
 	const bytesPerFD = uint64(4 << 20)
 	cap := memoryCap / bytesPerFD
@@ -269,6 +307,38 @@ func defaultSpillFDCap(memoryCap uint64) uint64 {
 		cap = minFD
 	}
 	return cap
+}
+
+// clampSpillFDCap is the pure policy boundary between the finite spill ledger
+// and the process-wide open-file ceiling. A failed/unsupported RLIMIT sample
+// fails closed: resident joins remain usable, while spill-file admission is
+// disabled. The headroom reduces spill's contribution to EMFILE risk, but it
+// cannot account for the process's actual non-spill descriptors and therefore
+// cannot guarantee that a later physical open will succeed.
+func clampSpillFDCap(configured, processLimit uint64, limitKnown bool) uint64 {
+	if configured == 0 || !limitKnown {
+		return 0
+	}
+	if processLimit == math.MaxUint64 {
+		return configured
+	}
+	headroom := processLimit / hashBuildNonSpillFDHeadroomDiv
+	if headroom < hashBuildNonSpillFDHeadroom {
+		headroom = hashBuildNonSpillFDHeadroom
+	}
+	if headroom >= processLimit {
+		return 0
+	}
+	processSpillCap := processLimit - headroom
+	if configured < processSpillCap {
+		return configured
+	}
+	return processSpillCap
+}
+
+func clampSpillFDCapToProcess(configured uint64) uint64 {
+	limit, ok := processOpenFileLimit()
+	return clampSpillFDCap(configured, limit, ok)
 }
 
 // HashBuildBudgetSnapshot is an immutable observational view of CN charges.
@@ -326,18 +396,51 @@ func (b *HashBuildBudget) SetSpillCaps(diskBytes, fds uint64) error {
 	if b == nil {
 		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid}
 	}
+	processLimit, limitKnown := processOpenFileLimit()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if diskBytes == 0 {
 		diskBytes = defaultSpillCap(b.aggregateCap)
 	}
 	if fds == 0 {
-		fds = defaultSpillFDCap(b.aggregateCap)
+		fds = configuredSpillFDCap(b.aggregateCap)
 	}
-	if b.spillDiskUsed > diskBytes || b.spillFDUsed > fds {
-		return newAdmissionError(0, b.spillDiskUsed, diskBytes)
+	effectiveFDCap := clampSpillFDCap(fds, processLimit, limitKnown)
+	if b.spillDiskUsed > diskBytes {
+		return newAdmissionError(HashBuildBudgetResourceSpillDisk, 0, b.spillDiskUsed, diskBytes)
 	}
-	b.spillDiskCap, b.spillFDCap = diskBytes, fds
+	if b.spillFDUsed > effectiveFDCap {
+		return newAdmissionError(HashBuildBudgetResourceSpillFD, 0, b.spillFDUsed, effectiveFDCap)
+	}
+	b.spillDiskCap = diskBytes
+	b.spillFDConfiguredCap = fds
+	b.spillFDCap = effectiveFDCap
+	return nil
+}
+
+// raiseSpillDiskCapToExplicitLimit honors the operator-configured process
+// spill limit at the shared CN ledger. Zero keeps the bounded default, and a
+// smaller explicit limit remains generation-local. Growing is monotonic so an
+// active reservation admitted under an earlier configuration is never made
+// invalid by a concurrent process.
+func (b *HashBuildBudget) raiseSpillDiskCapToExplicitLimit(diskBytes uint64) error {
+	if b == nil {
+		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid}
+	}
+	if diskBytes == 0 {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return &HashBuildBudgetError{
+			Kind:    HashBuildBudgetErrorClosed,
+			Message: ErrHashBuildBudgetClosed.Error(),
+		}
+	}
+	if diskBytes > b.spillDiskCap {
+		b.spillDiskCap = diskBytes
+	}
 	return nil
 }
 
@@ -727,7 +830,7 @@ type HashBuildBudgetGeneration struct {
 	used                                                    uint64
 	closed                                                  bool
 	spillDiskCap, spillDiskUsed                             uint64
-	spillFDCap, spillFDUsed                                 uint64
+	spillFDConfiguredCap, spillFDCap, spillFDUsed           uint64
 	reserveCount, rejectCount, reconcileCount, releaseCount uint64
 	peakUsed                                                uint64
 }
@@ -761,8 +864,18 @@ func (b *HashBuildBudget) OpenGeneration(id uint64) (*HashBuildBudgetGeneration,
 	if b.closed {
 		return nil, &HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed, Message: ErrHashBuildBudgetClosed.Error()}
 	}
+	configuredFDCap := configuredSpillFDCap(b.queryCap)
+	if configuredFDCap > b.spillFDConfiguredCap {
+		configuredFDCap = b.spillFDConfiguredCap
+	}
+	effectiveFDCap := configuredFDCap
+	if effectiveFDCap > b.spillFDCap {
+		effectiveFDCap = b.spillFDCap
+	}
 	return &HashBuildBudgetGeneration{budget: b, id: id, cap: b.queryCap,
-		spillDiskCap: defaultSpillCap(b.queryCap), spillFDCap: defaultSpillFDCap(b.queryCap)}, nil
+		spillDiskCap:         defaultSpillCap(b.queryCap),
+		spillFDConfiguredCap: configuredFDCap,
+		spillFDCap:           effectiveFDCap}, nil
 }
 
 // OpenGenerationWithCap opens a generation with a query-specific cap while
@@ -780,8 +893,18 @@ func (b *HashBuildBudget) OpenGenerationWithCap(id, cap uint64) (*HashBuildBudge
 	if cap > b.aggregateCap {
 		return nil, &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid, Requested: cap, Cap: b.aggregateCap}
 	}
+	configuredFDCap := configuredSpillFDCap(cap)
+	if configuredFDCap > b.spillFDConfiguredCap {
+		configuredFDCap = b.spillFDConfiguredCap
+	}
+	effectiveFDCap := configuredFDCap
+	if effectiveFDCap > b.spillFDCap {
+		effectiveFDCap = b.spillFDCap
+	}
 	return &HashBuildBudgetGeneration{budget: b, id: id, cap: cap,
-		spillDiskCap: defaultSpillCap(cap), spillFDCap: defaultSpillFDCap(cap)}, nil
+		spillDiskCap:         defaultSpillCap(cap),
+		spillFDConfiguredCap: configuredFDCap,
+		spillFDCap:           effectiveFDCap}, nil
 }
 
 // OpenGenerationWithSpillCaps opens a generation with explicit memory, disk,
@@ -796,17 +919,85 @@ func (b *HashBuildBudget) OpenGenerationWithSpillCaps(id, memoryCap, spillDiskCa
 		spillDiskCap = defaultSpillCap(memoryCap)
 	}
 	if spillFDCap == 0 {
-		spillFDCap = defaultSpillFDCap(memoryCap)
+		spillFDCap = configuredSpillFDCap(memoryCap)
 	}
 	if spillDiskCap > b.spillDiskCap {
 		spillDiskCap = b.spillDiskCap
 	}
-	if spillFDCap > b.spillFDCap {
-		spillFDCap = b.spillFDCap
+	if spillFDCap > b.spillFDConfiguredCap {
+		spillFDCap = b.spillFDConfiguredCap
 	}
-	g.spillDiskCap, g.spillFDCap = spillDiskCap, spillFDCap
+	effectiveFDCap := spillFDCap
+	if effectiveFDCap > b.spillFDCap {
+		effectiveFDCap = b.spillFDCap
+	}
+	g.spillDiskCap = spillDiskCap
+	g.spillFDConfiguredCap = spillFDCap
+	g.spillFDCap = effectiveFDCap
 	b.mu.Unlock()
 	return g, nil
+}
+
+// openProcessGeneration opens the generation selected by GetHashBuildBudget.
+// The resolved query cap can become stale before another statement finishes
+// lowering the shared CN aggregate. Clamp and construct under one aggregate
+// lock so an ordinary process cannot observe that race as an invalid budget.
+func (b *HashBuildBudget) openProcessGeneration(
+	id, requestedMemoryCap, spillDiskCap uint64,
+) (*HashBuildBudgetGeneration, error) {
+	if b == nil || requestedMemoryCap == 0 {
+		return nil, &HashBuildBudgetError{
+			Kind:      HashBuildBudgetErrorInvalid,
+			Requested: requestedMemoryCap,
+			Message:   "invalid process hash build generation cap",
+		}
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return nil, &HashBuildBudgetError{
+			Kind:    HashBuildBudgetErrorClosed,
+			Message: ErrHashBuildBudgetClosed.Error(),
+		}
+	}
+
+	memoryCap := requestedMemoryCap
+	if memoryCap > b.aggregateCap {
+		memoryCap = b.aggregateCap
+	}
+	if memoryCap == 0 {
+		return nil, &HashBuildBudgetError{
+			Kind:      HashBuildBudgetErrorInvalid,
+			Requested: requestedMemoryCap,
+			Cap:       b.aggregateCap,
+			Message:   "zero live process hash build generation cap",
+		}
+	}
+
+	if spillDiskCap == 0 {
+		spillDiskCap = defaultSpillCap(memoryCap)
+	}
+	if spillDiskCap > b.spillDiskCap {
+		spillDiskCap = b.spillDiskCap
+	}
+	configuredFDCap := configuredSpillFDCap(memoryCap)
+	if configuredFDCap > b.spillFDConfiguredCap {
+		configuredFDCap = b.spillFDConfiguredCap
+	}
+	effectiveFDCap := configuredFDCap
+	if effectiveFDCap > b.spillFDCap {
+		effectiveFDCap = b.spillFDCap
+	}
+
+	return &HashBuildBudgetGeneration{
+		budget:               b,
+		id:                   id,
+		cap:                  memoryCap,
+		spillDiskCap:         spillDiskCap,
+		spillFDConfiguredCap: configuredFDCap,
+		spillFDCap:           effectiveFDCap,
+	}, nil
 }
 
 // OpenGenerationWithLimits is a compatibility spelling for explicit spill caps.
@@ -1040,7 +1231,7 @@ func (g *HashBuildBudgetGeneration) reserveLocked(size uint64, recordAggregateRe
 			g.rejectCount++
 			observeHashBuildBudget("memory", "reject", "cn", size)
 		}
-		return nil, newAdmissionError(size, b.aggregateUsed, b.aggregateCap), true
+		return nil, newAdmissionError(HashBuildBudgetResourceMemory, size, b.aggregateUsed, b.aggregateCap), true
 	}
 	b.aggregateUsed += size
 	if g.used > g.cap || size > g.cap-g.used {
@@ -1048,7 +1239,7 @@ func (g *HashBuildBudgetGeneration) reserveLocked(size uint64, recordAggregateRe
 		b.aggregateUsed -= size
 		g.rejectCount++
 		observeHashBuildBudget("memory", "reject", "query", size)
-		return nil, newAdmissionError(size, g.used, g.cap), false
+		return nil, newAdmissionError(HashBuildBudgetResourceMemory, size, g.used, g.cap), false
 	}
 	g.used += size
 	g.reserveCount++
@@ -1088,6 +1279,7 @@ func (r *HashBuildReservation) Grow(additional uint64) error {
 	}
 	if b.closed || r.generation.closed {
 		r.generation.rejectCount++
+		observeHashBuildBudget("memory", "reject", "query", additional)
 		err := &HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed, Requested: additional, Used: r.generation.used, Cap: r.generation.cap}
 		b.mu.Unlock()
 		return err
@@ -1157,6 +1349,7 @@ func (r *HashBuildReservation) growLocked(additional uint64, recordAggregateReje
 	}
 	if b.closed || g.closed {
 		g.rejectCount++
+		observeHashBuildBudget("memory", "reject", "query", additional)
 		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed, Requested: additional, Used: g.used, Cap: g.cap}, false
 	}
 	if b.aggregateUsed > b.aggregateCap || additional > b.aggregateCap-b.aggregateUsed {
@@ -1166,12 +1359,12 @@ func (r *HashBuildReservation) growLocked(additional uint64, recordAggregateReje
 			g.rejectCount++
 			observeHashBuildBudget("memory", "reject", "cn", additional)
 		}
-		return newAdmissionError(additional, b.aggregateUsed, b.aggregateCap), true
+		return newAdmissionError(HashBuildBudgetResourceMemory, additional, b.aggregateUsed, b.aggregateCap), true
 	}
 	if g.used > g.cap || additional > g.cap-g.used {
 		g.rejectCount++
 		observeHashBuildBudget("memory", "reject", "query", additional)
-		return newAdmissionError(additional, g.used, g.cap), false
+		return newAdmissionError(HashBuildBudgetResourceMemory, additional, g.used, g.cap), false
 	}
 	if r.core.size > math.MaxUint64-additional {
 		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid, Requested: additional, Message: "hash build reservation size overflow"}, false
@@ -1186,9 +1379,10 @@ func (r *HashBuildReservation) growLocked(additional uint64, recordAggregateReje
 	return nil, false
 }
 
-func newAdmissionError(requested, used, cap uint64) error {
+func newAdmissionError(resource HashBuildBudgetResource, requested, used, cap uint64) error {
 	return &HashBuildBudgetError{
 		Kind:      HashBuildBudgetErrorAdmission,
+		Resource:  resource,
 		Requested: requested,
 		Used:      used,
 		Cap:       cap,
@@ -1396,12 +1590,12 @@ func (g *HashBuildBudgetGeneration) ReserveSpillDisk(size uint64) (*HashBuildSpi
 	if b.spillDiskUsed > b.spillDiskCap || size > b.spillDiskCap-b.spillDiskUsed {
 		g.rejectCount++
 		observeHashBuildBudget("spill_disk", "reject", "cn", size)
-		return nil, newAdmissionError(size, b.spillDiskUsed, b.spillDiskCap)
+		return nil, newAdmissionError(HashBuildBudgetResourceSpillDisk, size, b.spillDiskUsed, b.spillDiskCap)
 	}
 	if g.spillDiskUsed > g.spillDiskCap || size > g.spillDiskCap-g.spillDiskUsed {
 		g.rejectCount++
 		observeHashBuildBudget("spill_disk", "reject", "query", size)
-		return nil, newAdmissionError(size, g.spillDiskUsed, g.spillDiskCap)
+		return nil, newAdmissionError(HashBuildBudgetResourceSpillDisk, size, g.spillDiskUsed, g.spillDiskCap)
 	}
 	b.spillDiskUsed += size
 	g.spillDiskUsed += size
@@ -1433,17 +1627,18 @@ func (r *HashBuildSpillDiskReservation) Grow(additional uint64) error {
 	}
 	if b.closed || g.closed {
 		g.rejectCount++
+		observeHashBuildBudget("spill_disk", "reject", "query", additional)
 		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed, Requested: additional}
 	}
 	if b.spillDiskUsed > b.spillDiskCap || additional > b.spillDiskCap-b.spillDiskUsed {
 		g.rejectCount++
 		observeHashBuildBudget("spill_disk", "reject", "cn", additional)
-		return newAdmissionError(additional, b.spillDiskUsed, b.spillDiskCap)
+		return newAdmissionError(HashBuildBudgetResourceSpillDisk, additional, b.spillDiskUsed, b.spillDiskCap)
 	}
 	if g.spillDiskUsed > g.spillDiskCap || additional > g.spillDiskCap-g.spillDiskUsed {
 		g.rejectCount++
 		observeHashBuildBudget("spill_disk", "reject", "query", additional)
-		return newAdmissionError(additional, g.spillDiskUsed, g.spillDiskCap)
+		return newAdmissionError(HashBuildBudgetResourceSpillDisk, additional, g.spillDiskUsed, g.spillDiskCap)
 	}
 	if r.core.size > math.MaxUint64-additional {
 		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid, Requested: additional, Message: "spill disk reservation size overflow"}
@@ -1464,20 +1659,29 @@ func (g *HashBuildBudgetGeneration) ReserveSpillFD(size uint64) (*HashBuildSpill
 	b := g.budget
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	// Sample while holding the ledger lock. Otherwise an older high-limit
+	// sample can be delayed, overtake a concurrent low-limit sample, and raise
+	// the effective cap again after an administrator lowers RLIMIT_NOFILE.
+	processLimit, limitKnown := processOpenFileLimit()
 	if b.closed || g.closed {
 		g.rejectCount++
 		observeHashBuildBudget("spill_fd", "reject", "query", size)
 		return nil, &HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed, Requested: size}
 	}
+	b.spillFDCap = clampSpillFDCap(b.spillFDConfiguredCap, processLimit, limitKnown)
+	g.spillFDCap = g.spillFDConfiguredCap
+	if g.spillFDCap > b.spillFDCap {
+		g.spillFDCap = b.spillFDCap
+	}
 	if b.spillFDUsed > b.spillFDCap || size > b.spillFDCap-b.spillFDUsed {
 		g.rejectCount++
 		observeHashBuildBudget("spill_fd", "reject", "cn", size)
-		return nil, newAdmissionError(size, b.spillFDUsed, b.spillFDCap)
+		return nil, newAdmissionError(HashBuildBudgetResourceSpillFD, size, b.spillFDUsed, b.spillFDCap)
 	}
 	if g.spillFDUsed > g.spillFDCap || size > g.spillFDCap-g.spillFDUsed {
 		g.rejectCount++
 		observeHashBuildBudget("spill_fd", "reject", "query", size)
-		return nil, newAdmissionError(size, g.spillFDUsed, g.spillFDCap)
+		return nil, newAdmissionError(HashBuildBudgetResourceSpillFD, size, g.spillFDUsed, g.spillFDCap)
 	}
 	b.spillFDUsed += size
 	g.spillFDUsed += size
@@ -1796,15 +2000,18 @@ func (proc *Process) GetHashBuildBudget() (*HashBuildBudgetGeneration, error) {
 			return nil, err
 		}
 	}
-	queryCap := ceiling.QueryCap
-	if aggregate.AggregateCap() < queryCap {
-		queryCap = aggregate.AggregateCap()
-	}
 	spillDiskCap := uint64(0)
 	if proc.Base.Lim.SpillSize > 0 {
 		spillDiskCap = uint64(proc.Base.Lim.SpillSize)
+		if err = aggregate.raiseSpillDiskCapToExplicitLimit(spillDiskCap); err != nil {
+			return nil, err
+		}
 	}
-	generation, err := aggregate.OpenGenerationWithSpillCaps(hashBuildGenerationSequence.Add(1), queryCap, spillDiskCap, 0)
+	generation, err := aggregate.openProcessGeneration(
+		hashBuildGenerationSequence.Add(1),
+		ceiling.QueryCap,
+		spillDiskCap,
+	)
 	if err != nil {
 		return nil, err
 	}

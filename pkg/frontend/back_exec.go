@@ -517,6 +517,9 @@ func doComQueryInBack(
 		)
 
 		tenant := backSes.GetTenantNameWithStmt(stmt)
+		if backSes.upstream != nil {
+			removePrepareStmtForReplacement(backSes.upstream, stmt)
+		}
 
 		/*
 				if it is in an active or multi-statement transaction, we check the type of the statement.
@@ -1239,7 +1242,7 @@ func (backSes *backSession) SetShowStmtType(statement ShowStatementType) {
 }
 
 func (backSes *backSession) RemovePrepareStmt(name string) bool {
-	return false
+	return backSes.upstream != nil && backSes.upstream.RemovePrepareStmt(name)
 }
 
 func (backSes *backSession) CountPayload(i int) {
@@ -1247,7 +1250,10 @@ func (backSes *backSession) CountPayload(i int) {
 }
 
 func (backSes *backSession) GetPrepareStmt(ctx context.Context, name string) (*PrepareStmt, error) {
-	return nil, moerr.NewInternalError(ctx, "do not support prepare in background exec")
+	if backSes.upstream == nil {
+		return nil, moerr.NewInternalError(ctx, "do not support prepare in background exec without upstream session")
+	}
+	return backSes.upstream.GetPrepareStmt(ctx, name)
 }
 
 func (backSes *backSession) IsBackgroundSession() bool {
@@ -1335,7 +1341,7 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 		return int64(1), nil
 	case "sql_mode":
 		return "", nil
-	case "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
+	case "foreign_key_checks", "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
 		return backSes.upstream.GetSessionSysVar(name)
 	}
 	return nil, nil

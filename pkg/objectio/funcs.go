@@ -127,7 +127,7 @@ func ReadOneBlock(
 	fs fileservice.FileService,
 	policy fileservice.Policy,
 ) (ioVec fileservice.IOVector, err error) {
-	return ReadOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, constructorFactory, policy)
+	return ReadOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, columnCacheConstructorFactory, policy)
 }
 
 func ReadOneBlockWithMeta(
@@ -182,11 +182,7 @@ func ReadOneBlockWithMeta(
 			} else {
 				col := blkmeta.ColumnMeta(seqnum)
 				ext := col.Location()
-				ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-					Offset:      int64(ext.Offset()),
-					Size:        int64(ext.Length()),
-					ToCacheData: factory(int64(ext.OriginSize()), ext.Alg()),
-				})
+				ioVec.Entries = append(ioVec.Entries, newColumnIOEntry(ext, factory))
 			}
 			continue
 		}
@@ -200,11 +196,7 @@ func ReadOneBlockWithMeta(
 		// read written normal column
 		col := blkmeta.ColumnMeta(seqnum)
 		ext := col.Location()
-		ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-			Offset:      int64(ext.Offset()),
-			Size:        int64(ext.Length()),
-			ToCacheData: factory(int64(ext.OriginSize()), ext.Alg()),
-		})
+		ioVec.Entries = append(ioVec.Entries, newColumnIOEntry(ext, factory))
 	}
 	if len(ioVec.Entries) > 0 {
 		err = fs.Read(ctx, &ioVec)
@@ -283,12 +275,7 @@ func ReadAllBlocksWithMeta(
 			}
 			col := blkmeta.ColumnMeta(seqnum)
 			ext := col.Location()
-			ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-				Offset: int64(ext.Offset()),
-				Size:   int64(ext.Length()),
-
-				ToCacheData: factory(int64(ext.OriginSize()), ext.Alg()),
-			})
+			ioVec.Entries = append(ioVec.Entries, newColumnIOEntry(ext, factory))
 
 		}
 	}
@@ -322,10 +309,10 @@ func ReadOneBlockAllColumns(
 		col := blkmeta.ColumnMeta(seqnum)
 		ext := col.Location()
 		ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-			Offset: int64(ext.Offset()),
-			Size:   int64(ext.Length()),
-
-			ToCacheData: constructorFactory(int64(ext.OriginSize()), ext.Alg()),
+			Offset:         int64(ext.Offset()),
+			Size:           int64(ext.Length()),
+			CachedDataSize: int64(ext.OriginSize()),
+			ToCacheData:    constructorFactory(int64(ext.OriginSize()), ext.Alg()),
 		})
 	}
 

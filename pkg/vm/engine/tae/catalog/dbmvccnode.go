@@ -39,6 +39,10 @@ func (e *EmptyMVCCNode) CloneData() *EmptyMVCCNode {
 	return &EmptyMVCCNode{}
 }
 
+func (e *EmptyMVCCNode) CloneForDelete() *EmptyMVCCNode {
+	return &EmptyMVCCNode{}
+}
+
 func (e *EmptyMVCCNode) String() string {
 	return ""
 }

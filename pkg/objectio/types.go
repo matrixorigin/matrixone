@@ -15,7 +15,9 @@
 package objectio
 
 import (
+	"bytes"
 	"context"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -45,11 +47,146 @@ type ColumnMetaFetcher interface {
 
 type ReadFilterSearchFuncType func(containers.Vectors) []int64
 
+type readFilterSearchKind uint8
+
+const (
+	readFilterSearchExact readFilterSearchKind = iota
+	readFilterSearchPrefix
+	readFilterSearchLess
+	readFilterSearchGreater
+	readFilterSearchBetween
+	readFilterSearchPrefixBetween
+)
+
+type readFilterSearchTerm struct {
+	kind   readFilterSearchKind
+	values [][]byte
+	lb     []byte
+	ub     []byte
+	closed bool
+	hint   uint8
+}
+
+// ReadFilterSearch is an immutable search description for a single varlen
+// column. It lets ObjectIO execute supported PK predicates without exposing
+// its borrowed cache-backed Vector to a callback.
+type ReadFilterSearch struct {
+	oid   types.T
+	terms []readFilterSearchTerm
+}
+
+// NewReadFilterSearch creates an exact byte-membership search. It is used for
+// EQ/IN predicates and for exact tombstone PK checks.
+func NewReadFilterSearch(oid types.T, values [][]byte) *ReadFilterSearch {
+	switch oid {
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_json, types.T_blob, types.T_text, types.T_array_float32,
+		types.T_array_float64, types.T_datalink:
+	default:
+		return nil
+	}
+	return newReadFilterSearch(oid, readFilterSearchTerm{
+		kind:   readFilterSearchExact,
+		values: values,
+	})
+}
+
+// The remaining constructors are deliberately limited to varchar. MatrixOne's
+// hidden compound primary key is varchar; keeping this boundary avoids changing
+// predicate support for unrelated logical types.
+func NewReadFilterPrefixSearch(oid types.T, values [][]byte) *ReadFilterSearch {
+	if oid != types.T_varchar {
+		return nil
+	}
+	return newReadFilterSearch(oid, readFilterSearchTerm{
+		kind:   readFilterSearchPrefix,
+		values: values,
+	})
+}
+
+func NewReadFilterLessSearch(oid types.T, bound []byte, closed bool) *ReadFilterSearch {
+	if oid != types.T_varchar {
+		return nil
+	}
+	return newReadFilterSearch(oid, readFilterSearchTerm{
+		kind:   readFilterSearchLess,
+		ub:     bound,
+		closed: closed,
+	})
+}
+
+func NewReadFilterGreaterSearch(oid types.T, bound []byte, closed bool) *ReadFilterSearch {
+	if oid != types.T_varchar {
+		return nil
+	}
+	return newReadFilterSearch(oid, readFilterSearchTerm{
+		kind:   readFilterSearchGreater,
+		lb:     bound,
+		closed: closed,
+	})
+}
+
+func NewReadFilterBetweenSearch(oid types.T, lb, ub []byte, hint uint8) *ReadFilterSearch {
+	if oid != types.T_varchar || hint > 3 {
+		return nil
+	}
+	return newReadFilterSearch(oid, readFilterSearchTerm{
+		kind: readFilterSearchBetween,
+		lb:   lb,
+		ub:   ub,
+		hint: hint,
+	})
+}
+
+func NewReadFilterPrefixBetweenSearch(oid types.T, lb, ub []byte, hint uint8) *ReadFilterSearch {
+	if oid != types.T_varchar || hint > 3 {
+		return nil
+	}
+	return newReadFilterSearch(oid, readFilterSearchTerm{
+		kind: readFilterSearchPrefixBetween,
+		lb:   lb,
+		ub:   ub,
+		hint: hint,
+	})
+}
+
+func newReadFilterSearch(oid types.T, term readFilterSearchTerm) *ReadFilterSearch {
+	term.lb = bytes.Clone(term.lb)
+	term.ub = bytes.Clone(term.ub)
+	if term.values != nil {
+		copied := make([][]byte, len(term.values))
+		for i := range term.values {
+			copied[i] = bytes.Clone(term.values[i])
+		}
+		slices.SortFunc(copied, bytes.Compare)
+		term.values = copied
+	}
+	return &ReadFilterSearch{oid: oid, terms: []readFilterSearchTerm{term}}
+}
+
+// CombineReadFilterSearch combines disjunct terms. All inputs must target the
+// same physical OID; nil denotes an unsupported predicate and fails closed to
+// the legacy search path at construction time.
+func CombineReadFilterSearch(searches ...*ReadFilterSearch) *ReadFilterSearch {
+	if len(searches) == 0 || searches[0] == nil {
+		return nil
+	}
+	combined := &ReadFilterSearch{oid: searches[0].oid}
+	for _, search := range searches {
+		if search == nil || search.oid != combined.oid {
+			return nil
+		}
+		combined.terms = append(combined.terms, search.terms...)
+	}
+	return combined
+}
+
 type BlockReadFilter struct {
 	HasFakePK          bool
 	Valid              bool
 	SortedSearchFunc   ReadFilterSearchFuncType
 	UnSortedSearchFunc ReadFilterSearchFuncType
+	CachedSearch       *ReadFilterSearch
 	Cleanup            func() // Cleanup function to release resources (e.g., reusableTempVec)
 }
 

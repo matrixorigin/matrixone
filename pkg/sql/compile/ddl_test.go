@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -213,6 +214,23 @@ func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 			Table:    "t2",
 		})
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	})
+
+	t.Run("TemporaryPlanDoesNotFallThroughToPermanentTable", func(t *testing.T) {
+		c := newCompileWithStubEngine(t, newStubEngine(), "drop temporary table t2")
+		c.proc.Session = &testInternalExecutorSession{}
+		s := &Scope{}
+		qry := &plan2.DropTable{
+			Database: "db1",
+			Table:    "t2",
+			TableDef: &plan2.TableDef{IsTemporary: true},
+		}
+
+		err := s.dropTableSingle(c, qry)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+
+		qry.IfExists = true
+		require.NoError(t, s.dropTableSingle(c, qry))
 	})
 }
 func Test_lockIndexTable(t *testing.T) {
@@ -921,6 +939,97 @@ func Test_getSqlForCheckPitrDup(t *testing.T) {
 	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELTABLE), false)), "table_name = 'tb'")
 }
 
+func TestPitrInternalSQLEscapesStringLiterals(t *testing.T) {
+	assert.Contains(
+		t,
+		getSqlForCheckPitrExists("pi'tr\\name", 7),
+		"pitr_name = 'pi''tr\\\\name'",
+	)
+
+	p := &plan2.CreatePitr{
+		Level:            int32(tree.PITRLEVELTABLE),
+		CurrentAccountId: 1,
+		DatabaseName:     "db'name",
+		TableName:        "tb\\name",
+	}
+	sql := getSqlForCheckPitrDup(p)
+	assert.Contains(t, sql, "database_name = 'db''name'")
+	assert.Contains(t, sql, "table_name = 'tb\\\\name'")
+}
+
+func TestPreparePitrPublicationSerializesCopyAlter(t *testing.T) {
+	var publicationLock sync.Mutex
+	currentTableID := uint64(1)
+	copyHasLock := make(chan struct{})
+	releaseCopy := make(chan struct{})
+	copyDone := make(chan struct{})
+
+	go func() {
+		publicationLock.Lock()
+		close(copyHasLock)
+		<-releaseCopy
+		currentTableID = 2
+		publicationLock.Unlock()
+		close(copyDone)
+	}()
+	<-copyHasLock
+
+	pitrTriedLock := make(chan struct{})
+	pitrResult := make(chan uint64, 1)
+	pitrErr := make(chan error, 1)
+	go func() {
+		objectID, err := preparePitrPublication(
+			func() error {
+				close(pitrTriedLock)
+				publicationLock.Lock()
+				return nil
+			},
+			func() error { return nil },
+			func() (uint64, error) { return currentTableID, nil },
+		)
+		if err != nil {
+			pitrErr <- err
+			return
+		}
+		pitrResult <- objectID
+	}()
+	<-pitrTriedLock
+
+	select {
+	case objectID := <-pitrResult:
+		publicationLock.Unlock()
+		t.Fatalf("PITR resolved table ID %d before COPY ALTER released the publication barrier", objectID)
+	default:
+	}
+
+	close(releaseCopy)
+	<-copyDone
+	select {
+	case err := <-pitrErr:
+		t.Fatal(err)
+	case objectID := <-pitrResult:
+		require.Equal(t, uint64(2), objectID)
+		publicationLock.Unlock()
+	}
+}
+
+func TestResolveCurrentPitrObjectIDRefreshesPlannedTableID(t *testing.T) {
+	eng := newStubEngine()
+	db := newStubDatabase("db")
+	db.rels["tbl"] = newStubRelation("tbl")
+	eng.dbs["db"] = db
+	c := &Compile{e: eng, proc: testutil.NewProc(t)}
+
+	objectID, err := c.resolveCurrentPitrObjectID(&plan2.CreatePitr{
+		Level:        int32(tree.PITRLEVELTABLE),
+		DatabaseName: "db",
+		TableName:    "tbl",
+		TableId:      99,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), objectID)
+}
+
 func TestCheckSysMoCatalogPitrResult(t *testing.T) {
 	mp := mpool.MustNewZero()
 	ctx := context.Background()
@@ -1073,6 +1182,21 @@ func Test_toHours(t *testing.T) {
 			t.Fatalf("toHours(%d,%q)=%d, want %d", c.val, c.unit, got, c.want)
 		}
 	}
+}
+
+func TestPitrGranularitySqlEscapesStringLiterals(t *testing.T) {
+	dbWithAccount := getPitrDatabaseGranularitySql("db'name", 7, true)
+	require.Contains(t, dbWithAccount, "lower(database_name) = 'db''name'")
+	require.Contains(t, dbWithAccount, "account_id = 7")
+
+	dbWithoutAccount := getPitrDatabaseGranularitySql("db\\name", 7, false)
+	require.Contains(t, dbWithoutAccount, "lower(database_name) = 'db\\\\name'")
+	require.NotContains(t, dbWithoutAccount, "account_id")
+
+	tbl := getPitrTableGranularitySql("db'name", "tbl\\name", 9)
+	require.Contains(t, tbl, "lower(database_name)='db''name'")
+	require.Contains(t, tbl, "lower(table_name)='tbl\\\\name'")
+	require.Contains(t, tbl, "account_id = 9")
 }
 
 // TestDropDatabase_SnapshotAdvance verifies that DropDatabase safely advances

@@ -129,10 +129,14 @@ insert into t1 (a, b) values (1,4572794622775114594), (2,18196094287899841997),
 insert into t2 (c) values (1), (2), (3);
 select t1.a, (case t1.a when 0 then 0 else t1.b end) d from t1
 join t2 on t1.a=t2.c order by d;
-Data truncation: data out of range: data type int64, value '18196094287899841997'
+➤ a[4,32,0]  ¦  d[3,21,0]  𝄀
+1  ¦  4572794622775114594  𝄀
+3  ¦  11120436154190595086  𝄀
+2  ¦  18196094287899841997
 select t1.a, (case t1.a when 0 then 0 else t1.b end) d from t1
 join t2 on t1.a=t2.c where b=11120436154190595086 order by d;
-Data truncation: data out of range: data type int64, value '11120436154190595086'
+➤ a[4,32,0]  ¦  d[3,21,0]  𝄀
+3  ¦  11120436154190595086
 drop table if exists small;
 drop table if exists big;
 CREATE TABLE small (id int not null,PRIMARY KEY (id));
@@ -153,7 +157,8 @@ drop table if exists small;
 drop table if exists big;
 SELECT 'case+union+test'
 UNION
-SELECT CASE '1' WHEN '2' THEN 'BUG' ELSE 'nobug' END;
+SELECT CASE '1' WHEN '2' THEN 'BUG' ELSE 'nobug' END
+ORDER BY 1;
 ➤ case+union+test[12,-1,0]  𝄀
 case+union+test  𝄀
 nobug
@@ -360,5 +365,169 @@ drop view if exists v_coalesce_meta;
 create view v_coalesce_meta as select coalesce(cast(null as decimal(23,2)), 7.01970 * cast(-58140.00 as decimal(23,2))) as c;
 desc v_coalesce_meta;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-c  ¦  DECIMAL(38,7)  ¦  YES  ¦    ¦  null  ¦    ¦  
+c  ¦  DECIMAL(38,7)  ¦  NO  ¦    ¦  null  ¦    ¦  
 drop view v_coalesce_meta;
+drop view if exists v_flow_metadata_safe;
+create view v_flow_metadata_safe as
+select if(1, '2', 3) as if_str_num,
+if(1, cast(1 as unsigned), cast(-1 as signed)) as if_unsigned_signed,
+case when 1 then cast('2024-01-01' as date) else cast('2024-01-02 03:04:05' as datetime) end as case_date_dt,
+case when 1 then _binary 'a' else 'bc' end as case_binary_char,
+ifnull(null, 9.5) as ifnull_decimal,
+nullif('01', 1) as nullif_mixed,
+coalesce(null, '8', 9) as coalesce_str_num,
+greatest(cast('2024-01-02' as date), cast('2023-12-31' as date)) as greatest_date;
+desc v_flow_metadata_safe;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+if_str_num  ¦  VARCHAR(2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+if_unsigned_signed  ¦  DECIMAL(21,0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+case_date_dt  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_binary_char  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_decimal  ¦  DECIMAL(2,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+nullif_mixed  ¦  VARCHAR(2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_str_num  ¦  VARCHAR(2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+greatest_date  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select column_name, column_type, is_nullable, character_maximum_length, numeric_precision, numeric_scale
+from information_schema.columns
+where table_schema = database() and table_name = 'v_flow_metadata_safe'
+order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  column_type[12,-1,0]  ¦  is_nullable[12,-1,0]  ¦  character_maximum_length[-5,64,0]  ¦  numeric_precision[-5,64,0]  ¦  numeric_scale[-5,64,0]  𝄀
+if_str_num  ¦  VARCHAR(2)  ¦  NO  ¦  2  ¦  null  ¦  null  𝄀
+if_unsigned_signed  ¦  DECIMAL(21,0)  ¦  NO  ¦  null  ¦  21  ¦  0  𝄀
+case_date_dt  ¦  DATETIME(0)  ¦  YES  ¦  null  ¦  null  ¦  null  𝄀
+case_binary_char  ¦  VARBINARY(8)  ¦  NO  ¦  8  ¦  null  ¦  null  𝄀
+ifnull_decimal  ¦  DECIMAL(2,1)  ¦  NO  ¦  null  ¦  2  ¦  1  𝄀
+nullif_mixed  ¦  VARCHAR(2)  ¦  YES  ¦  2  ¦  null  ¦  null  𝄀
+coalesce_str_num  ¦  VARCHAR(2)  ¦  NO  ¦  2  ¦  null  ¦  null  𝄀
+greatest_date  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null
+select * from v_flow_metadata_safe;
+➤ if_str_num[12,-1,0]  ¦  if_unsigned_signed[3,21,0]  ¦  case_date_dt[93,64,0]  ¦  case_binary_char[12,24,0]  ¦  ifnull_decimal[3,2,1]  ¦  nullif_mixed[12,-1,0]  ¦  coalesce_str_num[12,-1,0]  ¦  greatest_date[91,64,0]  𝄀
+2  ¦  1  ¦  2024-01-01 00:00:00  ¦  a  ¦  9.5  ¦  null  ¦  8  ¦  2024-01-02
+drop view v_flow_metadata_safe;
+drop view if exists v_case_temporal_else;
+create view v_case_temporal_else as
+select case when 0 then cast('2024-01-02 03:04:05' as datetime) else cast('2024-01-01' as date) end as case_date_dt_else;
+desc v_case_temporal_else;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+case_date_dt_else  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from v_case_temporal_else;
+➤ case_date_dt_else[93,64,0]  𝄀
+2024-01-01 00:00:00
+drop view v_case_temporal_else;
+drop view if exists v_if_binary_char;
+create view v_if_binary_char as
+select if(1, _binary 'a', 'bc') as if_binary_char;
+desc v_if_binary_char;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+if_binary_char  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦  
+select hex(if_binary_char) as if_binary_char_hex from v_if_binary_char;
+➤ if_binary_char_hex[12,-1,0]  𝄀
+61
+drop view v_if_binary_char;
+drop table if exists t_flow_metadata;
+create table t_flow_metadata (
+id int primary key,
+n_nullable int,
+n_notnull int not null,
+d_nullable date,
+d_notnull date not null
+);
+insert into t_flow_metadata values
+(1, null, 7, null, '2024-01-02'),
+(2, 5, 8, '2024-01-03', '2024-01-04');
+drop view if exists v_flow_metadata_columns;
+create view v_flow_metadata_columns as
+select ifnull(null, 9.5) as ifnull_null_first,
+ifnull(n_nullable, 9.5) as ifnull_nullable_col,
+ifnull(n_notnull, 9.5) as ifnull_notnull_col,
+coalesce(null, '8', 9) as coalesce_null_first,
+coalesce(n_nullable, 9) as coalesce_nullable_col,
+coalesce(n_notnull, 9) as coalesce_notnull_col,
+greatest(cast('2024-01-02' as date), cast('2023-12-31' as date)) as greatest_const,
+greatest(d_nullable, cast('2023-12-31' as date)) as greatest_nullable_col,
+greatest(d_notnull, cast('2023-12-31' as date)) as greatest_notnull_col
+from t_flow_metadata;
+desc v_flow_metadata_columns;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+ifnull_null_first  ¦  DECIMAL(2,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_nullable_col  ¦  DECIMAL(11,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_notnull_col  ¦  DECIMAL(11,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_null_first  ¦  VARCHAR(2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_nullable_col  ¦  BIGINT(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_notnull_col  ¦  BIGINT(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+greatest_const  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_nullable_col  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_notnull_col  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select column_name, column_type, is_nullable, character_maximum_length, numeric_precision, numeric_scale
+from information_schema.columns
+where table_schema = database() and table_name = 'v_flow_metadata_columns'
+order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  column_type[12,-1,0]  ¦  is_nullable[12,-1,0]  ¦  character_maximum_length[-5,64,0]  ¦  numeric_precision[-5,64,0]  ¦  numeric_scale[-5,64,0]  𝄀
+ifnull_null_first  ¦  DECIMAL(2,1)  ¦  NO  ¦  null  ¦  2  ¦  1  𝄀
+ifnull_nullable_col  ¦  DECIMAL(11,1)  ¦  NO  ¦  null  ¦  11  ¦  1  𝄀
+ifnull_notnull_col  ¦  DECIMAL(11,1)  ¦  NO  ¦  null  ¦  11  ¦  1  𝄀
+coalesce_null_first  ¦  VARCHAR(2)  ¦  NO  ¦  2  ¦  null  ¦  null  𝄀
+coalesce_nullable_col  ¦  BIGINT(0)  ¦  NO  ¦  null  ¦  null  ¦  null  𝄀
+coalesce_notnull_col  ¦  BIGINT(0)  ¦  NO  ¦  null  ¦  null  ¦  null  𝄀
+greatest_const  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null  𝄀
+greatest_nullable_col  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null  𝄀
+greatest_notnull_col  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null
+select * from v_flow_metadata_columns order by ifnull_notnull_col;
+➤ ifnull_null_first[3,2,1]  ¦  ifnull_nullable_col[3,11,1]  ¦  ifnull_notnull_col[3,11,1]  ¦  coalesce_null_first[12,-1,0]  ¦  coalesce_nullable_col[-5,64,0]  ¦  coalesce_notnull_col[-5,64,0]  ¦  greatest_const[91,64,0]  ¦  greatest_nullable_col[91,64,0]  ¦  greatest_notnull_col[91,64,0]  𝄀
+9.5  ¦  9.5  ¦  7.0  ¦  8  ¦  9  ¦  7  ¦  2024-01-02  ¦  null  ¦  2024-01-02  𝄀
+9.5  ¦  5.0  ¦  8.0  ¦  8  ¦  5  ¦  8  ¦  2024-01-02  ¦  2024-01-03  ¦  2024-01-04
+drop view v_flow_metadata_columns;
+select if(1, cast(18446744073709551615 as unsigned), cast(-1 as signed)) as if_uint64_signed_max,
+if(0, cast(18446744073709551615 as unsigned), cast(-1 as signed)) as if_uint64_signed_negative,
+case when 1 then cast(18446744073709551615 as unsigned) else cast(-1 as signed) end as case_uint64_signed_max;
+➤ if_uint64_signed_max[3,21,0]  ¦  if_uint64_signed_negative[3,21,0]  ¦  case_uint64_signed_max[3,21,0]  𝄀
+18446744073709551615  ¦  -1  ¦  18446744073709551615
+select case
+when false then null
+when true then cast(18446744073709551615 as unsigned)
+else cast(-1 as signed)
+end as case_leading_null_uint64_max,
+case
+when false then cast(18446744073709551615 as unsigned)
+when false then null
+else cast(-1 as signed)
+end as case_middle_null_signed_negative,
+case
+when true then cast(18446744073709551615 as unsigned)
+when false then cast(-1 as signed)
+else null
+end as case_trailing_null_uint64_max;
+➤ case_leading_null_uint64_max[3,21,0]  ¦  case_middle_null_signed_negative[3,21,0]  ¦  case_trailing_null_uint64_max[3,21,0]  𝄀
+18446744073709551615  ¦  -1  ¦  18446744073709551615
+select hex(case when 1 then _binary 'a' else 'bc' end) as case_binary_hex,
+hex(case when 0 then _binary 'a' else 'bc' end) as case_char_hex;
+➤ case_binary_hex[12,-1,0]  ¦  case_char_hex[12,-1,0]  𝄀
+61  ¦  6263
+drop view if exists v_case_binary_utf8;
+create view v_case_binary_utf8 as
+select case when 1 then _binary 'a' else '中文' end as case_binary_utf8;
+desc v_case_binary_utf8;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+case_binary_utf8  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦  
+select hex(case when 0 then _binary 'a' else '中文' end) as case_utf8_hex;
+➤ case_utf8_hex[12,-1,0]  𝄀
+E4B8ADE69687
+drop view v_case_binary_utf8;
+drop view if exists v_case_binary_null;
+create view v_case_binary_null as
+select case when 1 then null else cast('a' as binary(4)) end as fixed_leading_null,
+case when 1 then cast('a' as binary(4)) else null end as fixed_trailing_null,
+case when 0 then cast('a' as binary(4)) when 1 then null else cast('b' as binary(4)) end as fixed_middle_null,
+case when 1 then null else cast('a' as varbinary(4)) end as var_leading_null,
+case when 1 then cast('a' as varbinary(4)) else null end as var_trailing_null,
+case when 0 then cast('a' as varbinary(4)) when 1 then null else cast('b' as varbinary(4)) end as var_middle_null;
+desc v_case_binary_null;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+fixed_leading_null  ¦  BINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+fixed_trailing_null  ¦  BINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+fixed_middle_null  ¦  BINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+var_leading_null  ¦  VARBINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+var_trailing_null  ¦  VARBINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+var_middle_null  ¦  VARBINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+drop view v_case_binary_null;
+drop table t_flow_metadata;

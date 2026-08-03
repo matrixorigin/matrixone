@@ -162,11 +162,61 @@ func (bat *Batch) UnmarshalBinary(data []byte) (err error) {
 	return bat.UnmarshalBinaryWithAnyMp(data, nil)
 }
 
-func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err error) {
-	bat.rowCount = int(types.DecodeInt64(data[:8]))
-	data = data[8:]
+type batchUnmarshalCursor struct {
+	data []byte
+}
 
-	l := types.DecodeInt32(data[:4])
+func (c *batchUnmarshalCursor) read(size int) ([]byte, error) {
+	if size < 0 || size > len(c.data) {
+		return nil, io.ErrUnexpectedEOF
+	}
+	data := c.data[:size]
+	c.data = c.data[size:]
+	return data, nil
+}
+
+func (c *batchUnmarshalCursor) readInt32() (int32, error) {
+	data, err := c.read(4)
+	if err != nil {
+		return 0, err
+	}
+	return types.DecodeInt32(data), nil
+}
+
+func (c *batchUnmarshalCursor) readInt64() (int64, error) {
+	data, err := c.read(8)
+	if err != nil {
+		return 0, err
+	}
+	return types.DecodeInt64(data), nil
+}
+
+func (c *batchUnmarshalCursor) readUint32() (uint32, error) {
+	data, err := c.read(4)
+	if err != nil {
+		return 0, err
+	}
+	return types.DecodeUint32(data), nil
+}
+
+func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err error) {
+	cursor := batchUnmarshalCursor{data: data}
+	rowCount, err := cursor.readInt64()
+	if err != nil {
+		return err
+	}
+	if rowCount < 0 || int64(int(rowCount)) != rowCount {
+		return moerr.NewInvalidInputNoCtx("invalid batch row count")
+	}
+	decodedRowCount := int(rowCount)
+
+	l, err := cursor.readInt32()
+	if err != nil {
+		return err
+	}
+	if l < 0 || int64(l) > int64(len(cursor.data)/4) {
+		return moerr.NewInvalidInputNoCtx("invalid batch vector count")
+	}
 	// Fix for bug #23156: Handle Vecs length changes (from d4b79f12) while maintaining revert version's firstTime logic
 	firstTime := bat.Vecs == nil
 	vecsLen := int(l)
@@ -176,33 +226,82 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	// This ensures Vecs are properly reset and prevents stale data from previous unmarshal operations
 	if firstTime || vecsLenChanged {
 		if vecsLenChanged && len(bat.Vecs) > 0 {
+			if mp == nil {
+				for _, vec := range bat.Vecs {
+					if vec != nil && !vec.NeedDup() {
+						return moerr.NewInvalidInputNoCtx("cannot unmarshal into an owned batch vector without a memory pool")
+					}
+				}
+			}
 			bat.Clean(mp)
 		}
 		bat.Vecs = make([]*vector.Vector, vecsLen)
-		for i := range bat.Vecs {
-			if bat.offHeap {
-				bat.Vecs[i] = vector.NewOffHeapVec()
-			} else {
-				bat.Vecs[i] = vector.NewVecFromReuse()
-			}
-		}
 	}
 
 	vecs := bat.Vecs
-	data = data[4:]
-
+	// SelectColumns and ReplaceVector can leave multiple slots pointing to the
+	// same Vector. Reuse each receiver for at most one decoded column.
+	// Most batches are narrow, so avoid allocating a map on every decode. The
+	// prefix scan is bounded; wide batches keep the linear-time map path.
+	const linearReceiverScanLimit = 64
+	var usedReceivers map[*vector.Vector]struct{}
 	for i := 0; i < vecsLen; i++ {
-		size := types.DecodeInt32(data[:4])
-		data = data[4:]
-
-		if err := vecs[i].UnmarshalBinary(data[:size]); err != nil {
+		size, err := cursor.readUint32()
+		if err != nil {
 			return err
 		}
-
-		data = data[size:]
+		if uint64(size) > uint64(len(cursor.data)) {
+			return io.ErrUnexpectedEOF
+		}
+		vecData, err := cursor.read(int(size))
+		if err != nil {
+			return err
+		}
+		if vecs[i] != nil {
+			used := false
+			if vecsLen <= linearReceiverScanLimit {
+				for j := 0; j < i; j++ {
+					if vecs[j] == vecs[i] {
+						used = true
+						break
+					}
+				}
+			} else {
+				_, used = usedReceivers[vecs[i]]
+			}
+			if used {
+				vecs[i] = nil
+			} else if vecsLen > linearReceiverScanLimit {
+				if usedReceivers == nil {
+					usedReceivers = make(map[*vector.Vector]struct{}, vecsLen)
+				}
+				usedReceivers[vecs[i]] = struct{}{}
+			}
+		}
+		if vecs[i] == nil {
+			if bat.offHeap {
+				vecs[i] = vector.NewOffHeapVec()
+			} else {
+				vecs[i] = vector.NewVecFromReuse()
+			}
+		} else if vecs[i].Allocated() > 0 || vecs[i].NeedDup() {
+			if mp == nil && !vecs[i].NeedDup() {
+				return moerr.NewInvalidInputNoCtx("cannot unmarshal into an owned batch vector without a memory pool")
+			}
+			vecs[i].Free(mp)
+		}
+		if err := vecs[i].UnmarshalBinary(vecData); err != nil {
+			return err
+		}
 	}
 
-	l = types.DecodeInt32(data[:4])
+	l, err = cursor.readInt32()
+	if err != nil {
+		return err
+	}
+	if l < 0 || int64(l) > int64(len(cursor.data)/4) {
+		return moerr.NewInvalidInputNoCtx("invalid batch attribute count")
+	}
 	// Fix for bug #23156: Attrs length MUST always match Vecs length
 	// Vecs length (vecsLen) is authoritative - it's already allocated and deserialized
 	// If serialized Attrs length differs from Vecs length, we use Vecs length as the source of truth
@@ -232,7 +331,6 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 			bat.Attrs[i] = ""
 		}
 	}
-	data = data[4:]
 
 	// Read serialized Attrs, but only up to min(serializedAttrsLen, attrsLen)
 	// If serialized length > attrsLen: ignore excess (data inconsistency, attrsLen is authoritative)
@@ -242,10 +340,18 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 		attrsToRead = attrsLen
 	}
 	for i := 0; i < attrsToRead; i++ {
-		size := types.DecodeInt32(data[:4])
-		data = data[4:]
-		bat.Attrs[i] = string(data[:size])
-		data = data[size:]
+		size, err := cursor.readInt32()
+		if err != nil {
+			return err
+		}
+		if size < 0 {
+			return moerr.NewInvalidInputNoCtx("invalid batch attribute size")
+		}
+		attrData, err := cursor.read(int(size))
+		if err != nil {
+			return err
+		}
+		bat.Attrs[i] = string(attrData)
 	}
 	// CRITICAL FIX: Clear remaining Attrs to prevent stale values when serializedAttrsLen < attrsLen
 	// This is essential for batch reuse scenarios (e.g., UPDATE operations with IVF index)
@@ -254,21 +360,42 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	}
 	// If serialized Attrs length > vecsLen, skip the excess data
 	for i := attrsToRead; i < serializedAttrsLen; i++ {
-		size := types.DecodeInt32(data[:4])
-		data = data[4:]
-		data = data[size:]
+		size, err := cursor.readInt32()
+		if err != nil {
+			return err
+		}
+		if size < 0 {
+			return moerr.NewInvalidInputNoCtx("invalid batch attribute size")
+		}
+		if _, err := cursor.read(int(size)); err != nil {
+			return err
+		}
 	}
 
 	// ExtraBuf
-	l = types.DecodeInt32(data[:4])
-	data = data[4:]
+	l, err = cursor.readInt32()
+	if err != nil {
+		return err
+	}
+	if l < 0 {
+		return moerr.NewInvalidInputNoCtx("invalid batch extra buffer size")
+	}
+	extraBuf, err := cursor.read(int(l))
+	if err != nil {
+		return err
+	}
 	bat.ExtraBuf = nil
-	bat.ExtraBuf = append(bat.ExtraBuf, data[:l]...)
-	data = data[l:]
+	bat.ExtraBuf = append(bat.ExtraBuf, extraBuf...)
 
-	bat.Recursive = types.DecodeInt32(data[:4])
-	data = data[4:]
-	bat.ShuffleIDX = types.DecodeInt32(data[:4])
+	bat.Recursive, err = cursor.readInt32()
+	if err != nil {
+		return err
+	}
+	bat.ShuffleIDX, err = cursor.readInt32()
+	if err != nil {
+		return err
+	}
+	bat.rowCount = decodedRowCount
 	return nil
 }
 

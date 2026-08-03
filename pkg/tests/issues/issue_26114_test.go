@@ -30,7 +30,7 @@ import (
 )
 
 func TestIssue26114CrossAccountBranchUsesTargetQuotaAndOwnership(t *testing.T) {
-	require.NoError(t, runIssue26087AuthenticatedClusterTest(func(c embed.Cluster) {
+	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 		defer cancel()
 
@@ -145,11 +145,11 @@ func TestIssue26114CrossAccountBranchUsesTargetQuotaAndOwnership(t *testing.T) {
 			"select count(*) from mo_catalog.mo_branch_metadata b join mo_catalog.mo_tables t on b.table_id = t.rel_id "+
 				"where t.account_id = %d and b.creator = %d and b.table_deleted = false", accountID, accountID)).Scan(&count))
 		require.Equal(t, 4, count)
-	}))
+	})
 }
 
 func TestIssue26114LegacyCrossAccountMetadataCountsTowardTargetQuota(t *testing.T) {
-	require.NoError(t, runIssue26087AuthenticatedClusterTest(func(c embed.Cluster) {
+	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 		defer cancel()
 
@@ -218,5 +218,5 @@ func TestIssue26114LegacyCrossAccountMetadataCountsTowardTargetQuota(t *testing.
 		require.NoError(t, tenantDB.QueryRowContext(ctx,
 			"select count(*) from mo_catalog.mo_tables where reldatabase = '"+targetDB+"' and relname in ('legacy', 'should_reject')").Scan(&activeTargetTables))
 		require.Equal(t, 1, activeTargetTables)
-	}))
+	})
 }

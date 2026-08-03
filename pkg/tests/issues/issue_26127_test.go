@@ -26,7 +26,7 @@ import (
 )
 
 func TestIssue26127CloneAndBranchEmbeddedBacktickTable(t *testing.T) {
-	require.NoError(t, runIssue26087AuthenticatedClusterTest(func(c embed.Cluster) {
+	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 		defer cancel()
 
@@ -44,10 +44,17 @@ func TestIssue26127CloneAndBranchEmbeddedBacktickTable(t *testing.T) {
 			branchDB       = "issue_26127_branch"
 			cloneDB        = "issue_26127_clone"
 			sourceTableSQL = "`src``table`"
+			sourceViewSQL  = "`view``v`"
+			roleName       = "issue_26127_view_role"
+			userName       = "issue_26127_view_user"
+			snapshotName   = "issue_26127_snapshot"
 		)
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cleanupCancel()
+			execSQLMaybe(t, cleanupCtx, db, "drop snapshot if exists "+snapshotName)
+			execSQLMaybe(t, cleanupCtx, db, "drop user if exists "+userName)
+			execSQLMaybe(t, cleanupCtx, db, "drop role if exists "+roleName)
 			for _, name := range []string{branchDB, cloneDB, sourceDB} {
 				execSQLMaybe(t, cleanupCtx, db, "drop database if exists `"+name+"`")
 			}
@@ -56,7 +63,21 @@ func TestIssue26127CloneAndBranchEmbeddedBacktickTable(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create database `"+sourceDB+"`")
 		execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`."+sourceTableSQL+" (id int primary key, note varchar(32))")
 		execSQLRequire(t, ctx, db, "insert into `"+sourceDB+"`."+sourceTableSQL+" values (1, 'source-row')")
+		execSQLRequire(t, ctx, db, "create view `"+sourceDB+"`."+sourceViewSQL+" as select id, note from `"+sourceDB+"`."+sourceTableSQL)
 		assertIssue26127Row(t, ctx, db, sourceDB, sourceTableSQL)
+		assertIssue26127ViewCount(t, ctx, db, sourceDB, sourceViewSQL, 1)
+
+		execSQLRequire(t, ctx, db, "create role "+roleName)
+		execSQLRequire(t, ctx, db, "create user "+userName+" identified by '111' default role "+roleName)
+		execSQLRequire(t, ctx, db, "grant "+roleName+" to "+userName)
+		execSQLRequire(t, ctx, db, "grant connect on account * to "+roleName)
+		execSQLRequire(t, ctx, db, "grant select on view `"+sourceDB+"`."+sourceViewSQL+" to "+roleName)
+
+		userDB, err := sql.Open("mysql", fmt.Sprintf(userName+":111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer userDB.Close()
+		assertIssue26127ViewCount(t, ctx, userDB, sourceDB, sourceViewSQL, 1)
+		execSQLRequire(t, ctx, db, "create snapshot "+snapshotName+" for database `"+sourceDB+"`")
 
 		t.Run("ordinary table clone", func(t *testing.T) {
 			execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`.`ordinary_clone` clone `"+sourceDB+"`."+sourceTableSQL)
@@ -69,10 +90,18 @@ func TestIssue26127CloneAndBranchEmbeddedBacktickTable(t *testing.T) {
 		t.Run("database branch", func(t *testing.T) {
 			execSQLRequire(t, ctx, db, "data branch create database `"+branchDB+"` from `"+sourceDB+"`")
 			assertIssue26127Row(t, ctx, db, branchDB, sourceTableSQL)
+			assertIssue26127ViewCount(t, ctx, db, branchDB, sourceViewSQL, 1)
 		})
 		t.Run("database clone", func(t *testing.T) {
 			execSQLRequire(t, ctx, db, "create database `"+cloneDB+"` clone `"+sourceDB+"`")
 			assertIssue26127Row(t, ctx, db, cloneDB, sourceTableSQL)
+			assertIssue26127ViewCount(t, ctx, db, cloneDB, sourceViewSQL, 1)
+		})
+		t.Run("snapshot restore", func(t *testing.T) {
+			execSQLRequire(t, ctx, db, "insert into `"+sourceDB+"`."+sourceTableSQL+" values (2, 'after-snapshot')")
+			assertIssue26127ViewCount(t, ctx, db, sourceDB, sourceViewSQL, 2)
+			execSQLRequire(t, ctx, db, "restore database `"+sourceDB+"` {snapshot=\""+snapshotName+"\"}")
+			assertIssue26127ViewCount(t, ctx, db, sourceDB, sourceViewSQL, 1)
 		})
 		t.Run("drop database", func(t *testing.T) {
 			execSQLRequire(t, ctx, db, "drop database `"+sourceDB+"`")
@@ -81,7 +110,15 @@ func TestIssue26127CloneAndBranchEmbeddedBacktickTable(t *testing.T) {
 				"select count(*) from mo_catalog.mo_database where datname = '"+sourceDB+"'").Scan(&count))
 			require.Zero(t, count)
 		})
-	}))
+	})
+}
+
+func assertIssue26127ViewCount(t *testing.T, ctx context.Context, db *sql.DB, databaseName, viewNameSQL string, expected int) {
+	t.Helper()
+	var count int
+	require.NoError(t, db.QueryRowContext(ctx,
+		"select count(*) from `"+databaseName+"`."+viewNameSQL).Scan(&count))
+	require.Equal(t, expected, count)
 }
 
 func assertIssue26127Row(t *testing.T, ctx context.Context, db *sql.DB, databaseName, tableNameSQL string) {

@@ -106,13 +106,6 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 			ses.RemovePrepareStmt(execCtx.prepareStmt.Name)
 			return
 		}
-	case *tree.CreateConnector:
-		ses.EnterFPrint(FPCreateConnector)
-		defer ses.ExitFPrint(FPCreateConnector)
-		err = handleCreateConnector(execCtx.reqCtx, ses, st)
-		if err != nil {
-			return
-		}
 	case *tree.PauseDaemonTask:
 		ses.EnterFPrint(FPPauseDaemonTask)
 		defer ses.ExitFPrint(FPPauseDaemonTask)
@@ -170,19 +163,6 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleShowSQLTaskRuns(execCtx.reqCtx, ses, execCtx, st); err != nil {
 			return
 		}
-	case *tree.DropConnector:
-		ses.EnterFPrint(FPDropConnector)
-		defer ses.ExitFPrint(FPDropConnector)
-		err = handleDropConnector(execCtx.reqCtx, ses, st)
-		if err != nil {
-			return
-		}
-	case *tree.ShowConnectors:
-		ses.EnterFPrint(FPShowConnectors)
-		defer ses.ExitFPrint(FPShowConnectors)
-		if err = handleShowConnectors(execCtx.reqCtx, ses); err != nil {
-			return
-		}
 	case *tree.CreateIcebergCatalog:
 		if err = handleCreateIcebergCatalog(execCtx.reqCtx, ses, st); err != nil {
 			return
@@ -205,6 +185,22 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		}
 	case *tree.ShowIcebergTables:
 		if err = handleShowIcebergTables(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.CreateMongoDBConnection:
+		if err = handleCreateMongoDBConnection(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.AlterMongoDBConnection:
+		if err = handleAlterMongoDBConnection(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.DropMongoDBConnection:
+		if err = handleDropMongoDBConnection(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.ShowMongoDBConnections:
+		if err = handleShowMongoDBConnections(execCtx.reqCtx, ses, st); err != nil {
 			return
 		}
 	case *tree.Deallocate:

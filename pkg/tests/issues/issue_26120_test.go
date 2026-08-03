@@ -27,7 +27,7 @@ import (
 )
 
 func TestIssue26120SnapshotBranchKeepsHistoricalParentIdentity(t *testing.T) {
-	require.NoError(t, runIssue26087AuthenticatedClusterTest(func(c embed.Cluster) {
+	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 		defer cancel()
 
@@ -84,7 +84,7 @@ func TestIssue26120SnapshotBranchKeepsHistoricalParentIdentity(t *testing.T) {
 
 		execSQLRequire(t, ctx, db, "data branch diff `"+tableDB+"`.`child_t` against `"+tableDB+"`.`parent_t`")
 		execSQLRequire(t, ctx, db, "data branch diff `"+databaseDst+"`.`parent_t` against `"+databaseSrc+"`.`parent_t`")
-	}))
+	})
 }
 
 func relationIDAtSnapshot(t *testing.T, ctx context.Context, db *sql.DB, databaseName, tableName, snapshotName string) uint64 {

@@ -60,6 +60,61 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestDropFunctionIfExists(t *testing.T) {
+	tests := []struct {
+		sql      string
+		ifExists bool
+	}{
+		{sql: "drop function f_lookup (int)"},
+		{sql: "drop function if exists f_lookup (p_id int)", ifExists: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			drop, ok := stmt.(*tree.DropFunction)
+			require.True(t, ok)
+			require.Equal(t, test.ifExists, drop.IfExists)
+			require.Equal(t, test.sql, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+}
+
+func TestQuantifiedTableSubqueryParse(t *testing.T) {
+	tests := []struct {
+		sql  string
+		want string
+	}{
+		{
+			sql:  "select 1 where 1 = any (table tv)",
+			want: "select * from tv",
+		},
+		{
+			sql:  "select 1 where 1 = any (table tv order by v desc limit 1)",
+			want: "select * from tv order by v desc limit 1",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			selectStmt := stmt.(*tree.Select)
+			where := selectStmt.Select.(*tree.SelectClause).Where
+			comparison := where.Expr.(*tree.ComparisonExpr)
+			subquery := comparison.Right.(*tree.Subquery)
+			parenSelect := subquery.Select.(*tree.ParenSelect)
+
+			require.Equal(t, test.want, tree.String(parenSelect.Select, dialect.MYSQL))
+		})
+	}
+}
+
 func TestSQLModeParserModes(t *testing.T) {
 	t.Run("ansi quotes changes double quoted token from string to identifier", func(t *testing.T) {
 		stmt, err := ParseOneWithSQLMode(context.Background(), `select "abc"`, 1, "")
@@ -379,6 +434,17 @@ func TestPreparedWindowFrameMarkers(t *testing.T) {
 	require.IsType(t, &tree.ParamExpr{}, window.Frame.End.Expr)
 }
 
+func TestVarianceWindowSpec(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"select variance(amount) over (partition by customer_id) from orders",
+		1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	window := extractFirstWindowSpec(t, stmt)
+	require.Len(t, window.PartitionBy, 1)
+}
+
 func firstColumnType(t *testing.T, stmt tree.Statement) tree.InternalType {
 	t.Helper()
 	createTable, ok := stmt.(*tree.CreateTable)
@@ -423,6 +489,43 @@ func TestPositionFunctionSyntax(t *testing.T) {
 	for _, sql := range tests {
 		_, err := ParseOne(context.TODO(), sql, 1)
 		require.NoError(t, err, sql)
+	}
+}
+
+func TestIntegralToUint64(t *testing.T) {
+	require.Equal(t, uint64(1), integralToUint64(int64(1)))
+	require.Equal(t, uint64(1<<63), integralToUint64(uint64(1<<63)))
+	require.PanicsWithValue(t, "unexpected integral type string", func() {
+		integralToUint64("1")
+	})
+}
+
+func TestTableOptionAutoIncrementUint64Boundaries(t *testing.T) {
+	tests := []struct {
+		value string
+		want  uint64
+	}{
+		{value: "9223372036854775807", want: 9223372036854775807},
+		{value: "9223372036854775808", want: 9223372036854775808},
+		{value: "18446744073709551614", want: 18446744073709551614},
+		{value: "18446744073709551615", want: 18446744073709551615},
+	}
+
+	for _, test := range tests {
+		t.Run(test.value, func(t *testing.T) {
+			sql := "create table t (id bigint unsigned auto_increment primary key) auto_increment = " + test.value
+			stmt, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			createTable, ok := stmt.(*tree.CreateTable)
+			require.True(t, ok)
+			require.Len(t, createTable.Options, 1)
+			option, ok := createTable.Options[0].(*tree.TableOptionAutoIncrement)
+			require.True(t, ok)
+			require.Equal(t, test.want, option.Value)
+			require.Contains(t, tree.String(stmt, dialect.MYSQL), "auto_increment = "+test.value)
+		})
 	}
 }
 
@@ -518,16 +621,20 @@ func TestBinaryIntroducedHexLiteralHasDistinctType(t *testing.T) {
 	require.Equal(t, tree.P_ScoreBinary, binaryString.ValType)
 }
 
-func TestCreateSourceWithOptionsFree(t *testing.T) {
-	stmt, err := ParseOne(context.TODO(), `create source src1(a varchar) with (
-		"type"='kafka',
-		"topic"='t1',
-		"partition"='0',
-		"value"='json',
-		"bootstrap.servers"='127.0.0.1:9092'
-	)`, 1)
-	require.NoError(t, err)
-	require.NotPanics(t, stmt.Free)
+func TestRemovedStreamStatementsAreRejected(t *testing.T) {
+	for _, sql := range []string{
+		"create source src (id bigint) with (type = 'kafka')",
+		"drop source src",
+		"create connector for dst with (type = 'kafka')",
+		"drop connector dst",
+		"show connectors",
+		"create dynamic table dst as select * from src",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestCloneTableParsePreservesCloneOptions(t *testing.T) {
@@ -654,6 +761,167 @@ func TestDataBranchCreateTableParsesWithLeadingComment(t *testing.T) {
 	require.Equal(t, tree.Identifier("src"), branchStmt.SrcTable.ObjectName)
 }
 
+func TestDataBranchCreateTablePreservesQuotedApostropheIdentifier(t *testing.T) {
+	stmt, err := ParseOne(context.TODO(), "data branch create table `quote'dst` from `quote'src`", 1)
+	require.NoError(t, err)
+
+	branchStmt, ok := stmt.(*tree.DataBranchCreateTable)
+	require.True(t, ok)
+	require.Equal(t, tree.Identifier("quote'dst"), branchStmt.CreateTable.Table.ObjectName)
+	require.Equal(t, tree.Identifier("quote'src"), branchStmt.SrcTable.ObjectName)
+}
+
+func TestDataBranchStatementFormatRoundTrip(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "create table",
+			sql:  "data branch create table `dst``table` from `src``table` to account `acc``name`",
+			want: "data branch create table `dst``table` from `src``table` to account `acc``name`",
+		},
+		{
+			name: "delete table",
+			sql:  "data branch delete table `db``name`.`table``name`",
+			want: "data branch delete table `db``name`.`table``name`",
+		},
+		{
+			name: "create database",
+			sql:  "data branch create database `dst``db` from `src``db`{snapshot='snap''one'} to account `acc``name`",
+			want: "data branch create database `dst``db` from `src``db`{snapshot = 'snap''one'} to account `acc``name`",
+		},
+		{
+			name: "delete database",
+			sql:  "data branch delete database `db``name`",
+			want: "data branch delete database `db``name`",
+		},
+		{
+			name: "diff output as",
+			sql:  "data branch diff `db`.`target`{snapshot='target snap'} against `db`.`base`{snapshot='base snap'} columns (`id`, `select`) output as `out`.`result`",
+			want: "data branch diff `db`.`target`{snapshot = 'target snap'} against `db`.`base`{snapshot = 'base snap'} columns (`id`, `select`) output as `out`.`result`",
+		},
+		{
+			name: "diff output empty file",
+			sql:  "data branch diff target against base output file ''",
+			want: "data branch diff `target` against `base` output file ''",
+		},
+		{
+			name: "diff output file",
+			sql:  "data branch diff target against base output file '/tmp/branch''s/'",
+			want: "data branch diff `target` against `base` output file '/tmp/branch''s/'",
+		},
+		{
+			name: "diff output zero limit",
+			sql:  "data branch diff target against base output limit 0",
+			want: "data branch diff `target` against `base` output limit 0",
+		},
+		{
+			name: "diff output count",
+			sql:  "data branch diff target against base output count",
+			want: "data branch diff `target` against `base` output count",
+		},
+		{
+			name: "diff output summary",
+			sql:  "data branch diff target against base output summary",
+			want: "data branch diff `target` against `base` output summary",
+		},
+		{
+			name: "merge default conflict behavior",
+			sql:  "data branch merge src into dst",
+			want: "data branch merge `src` into `dst`",
+		},
+		{
+			name: "merge explicit conflict behavior",
+			sql:  "data branch merge src into dst when conflict skip",
+			want: "data branch merge `src` into `dst` when conflict skip",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			formatted := tree.String(stmt, dialect.MYSQL)
+			require.Equal(t, test.want, formatted)
+
+			reparsed, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err)
+			defer reparsed.Free()
+			require.IsType(t, stmt, reparsed)
+			require.Equal(t, formatted, tree.String(reparsed, dialect.MYSQL))
+		})
+	}
+}
+
+func TestDataBranchPickFormatRoundTrip(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		sql          string
+		want         string
+		wantSrcDB    tree.Identifier
+		wantSrc      tree.Identifier
+		wantDst      tree.Identifier
+		wantFrom     string
+		wantTo       string
+		wantKeys     bool
+		wantConflict int
+	}{
+		{
+			name:         "quoted tables",
+			sql:          "data branch pick `select`.`src``table` into `dst``table` keys (1) when conflict skip",
+			want:         "data branch pick `select`.`src``table` into `dst``table` keys (1) when conflict skip",
+			wantSrcDB:    tree.Identifier("select"),
+			wantSrc:      tree.Identifier("src`table"),
+			wantDst:      tree.Identifier("dst`table"),
+			wantKeys:     true,
+			wantConflict: tree.CONFLICT_SKIP,
+		},
+		{
+			name:         "string snapshots",
+			sql:          "data branch pick src into dst between snapshot 'snap one' and 'snap''two' when conflict accept",
+			want:         "data branch pick `src` into `dst` between snapshot 'snap one' and 'snap''two' when conflict accept",
+			wantSrc:      tree.Identifier("src"),
+			wantDst:      tree.Identifier("dst"),
+			wantFrom:     "snap one",
+			wantTo:       "snap'two",
+			wantConflict: tree.CONFLICT_ACCEPT,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			formatted := tree.String(stmt, dialect.MYSQL)
+			require.Equal(t, test.want, formatted)
+
+			reparsed, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err)
+			defer reparsed.Free()
+
+			pick, ok := reparsed.(*tree.DataBranchPick)
+			require.True(t, ok)
+			require.Equal(t, test.wantSrcDB, pick.SrcTable.SchemaName)
+			require.Equal(t, test.wantSrc, pick.SrcTable.ObjectName)
+			require.Equal(t, test.wantDst, pick.DstTable.ObjectName)
+			require.Equal(t, test.wantFrom, pick.BetweenFrom)
+			require.Equal(t, test.wantTo, pick.BetweenTo)
+			if test.wantKeys {
+				require.NotNil(t, pick.Keys)
+				require.Equal(t, tree.PickKeysValues, pick.Keys.Type)
+				require.Len(t, pick.Keys.KeyExprs, 1)
+			} else {
+				require.Nil(t, pick.Keys)
+			}
+			require.NotNil(t, pick.ConflictOpt)
+			require.Equal(t, test.wantConflict, pick.ConflictOpt.Opt)
+			require.Equal(t, formatted, tree.String(reparsed, dialect.MYSQL))
+		})
+	}
+}
+
 func TestDataBranchDiffOutputModes(t *testing.T) {
 	stmt, err := ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} output summary`, 1)
 	require.NoError(t, err)
@@ -674,6 +942,31 @@ func TestDataBranchDiffOutputModes(t *testing.T) {
 	require.False(t, diffStmt.OutputOpt.Summary)
 	require.True(t, diffStmt.OutputOpt.Count)
 	require.Nil(t, diffStmt.Columns)
+}
+
+func TestDataBranchDiffOutputLimitBoundaries(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "data branch diff t1 against t2 output limit 9223372036854775807", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	diffStmt, ok := stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.NotNil(t, diffStmt.OutputOpt.Limit)
+	require.Equal(t, int64(9223372036854775807), *diffStmt.OutputOpt.Limit)
+
+	for _, value := range []string{
+		"9223372036854775808",
+		"18446744073709551615",
+	} {
+		t.Run(value, func(t *testing.T) {
+			_, parseErr := ParseOne(context.Background(), "data branch diff t1 against t2 output limit "+value, 1)
+			require.ErrorContains(t, parseErr, "OUTPUT LIMIT is out of range")
+		})
+	}
+
+	_, err = ParseOne(context.Background(), "data branch diff t1 against t2 output limit 18446744073709551616", 1)
+	require.ErrorContains(t, err, "syntax error")
 }
 
 func TestDataBranchDiffColumns(t *testing.T) {
@@ -923,29 +1216,8 @@ var (
 		input:  "alter table t1 alter index idx1 IVFFLAT auto_update = false",
 		output: "alter table t1 alter index idx1 ivfflat auto_update = false",
 	}, {
-		input:  "create connector for s with (\"type\"='kafka', \"topic\"= 'user', \"partition\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
-		output: "create connector for s with (type = kafka, topic = user, partition = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
-	}, {
 		input:  "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > \"2023-08-01 00:00:00.000\" and ts < \"2023-08-01 00:50:00.000\" interval(ts, 10, minute) sliding(5, minute) fill(prev);",
 		output: "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > 2023-08-01 00:00:00.000 and ts < 2023-08-01 00:50:00.000 interval(ts, 10, minute) sliding(5, minute) fill(prev)",
-	}, {
-		input:  "create connector for s with (\"type\"='kafkamo', \"topic\"= 'user', \"partion\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
-		output: "create connector for s with (type = kafkamo, topic = user, partion = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
-	}, {
-		input:  "create source s(a varchar, b varchar) with (\"type\"='kafka', \"topic\"= 'user', \"partion\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
-		output: "create source s (a varchar, b varchar) with (type = kafka, topic = user, partion = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
-	}, {
-		input:  "drop source if exists s",
-		output: "drop table if exists s",
-	}, {
-		input:  "CREATE source pageviews (\n    page_id BIGINT KEY\n  ) WITH (\n    KAFKA_TOPIC = 'keyed-pageviews-topic',\n    VALUE_FORMAT = 'JSON_SR',\n    VALUE_SCHEMA_ID = 2\n  );",
-		output: "create source pageviews (page_id bigint key) with (kafka_topic = keyed-pageviews-topic, value_format = JSON_SR, value_schema_id = 2)",
-	}, {
-		input:  "CREATE source pageviews (\n    viewtime BIGINT,\n    user_id VARCHAR\n  ) WITH (\n    KAFKA_TOPIC = 'keyless-pageviews-topic',\n    KEY_FORMAT = 'AVRO',\n    KEY_SCHEMA_ID = 1,\n    VALUE_FORMAT = 'JSON_SR'\n  );",
-		output: "create source pageviews (viewtime bigint, user_id varchar) with (kafka_topic = keyless-pageviews-topic, key_format = AVRO, key_schema_id = 1, value_format = JSON_SR)",
-	}, {
-		input:  "CREATE source pageviews (page_id BIGINT, viewtime BIGINT, user_id VARCHAR) WITH (\n    KAFKA_TOPIC = 'keyless-pageviews-topic',\n    VALUE_FORMAT = 'JSON'\n  )",
-		output: "create source pageviews (page_id bigint, viewtime bigint, user_id varchar) with (kafka_topic = keyless-pageviews-topic, value_format = JSON)",
 	}, {
 		input:  "select row_number() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
 		output: "select row_number() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
@@ -1466,10 +1738,10 @@ var (
 			input: "select cast(variance(ff) as decimal(10, 3)) from t2",
 		}, {
 			input:  "SELECT GROUP_CONCAT(DISTINCT 2) from t1",
-			output: "select GROUP_CONCAT(distinct 2, ,) from t1",
+			output: "select GROUP_CONCAT(distinct 2 separator ,) from t1",
 		}, {
 			input:  "SELECT GROUP_CONCAT(DISTINCT a order by a) from t1",
-			output: "select GROUP_CONCAT(distinct a, ,order by a) from t1",
+			output: "select GROUP_CONCAT(distinct a order by a separator ,) from t1",
 		}, {
 			input: "select variance(2) from t1",
 		}, {
@@ -1704,6 +1976,9 @@ var (
 		}, {
 			input: "create table t (a int, b char, check (1 + 1) enforced)",
 		}, {
+			input:  "create table t (a int, constraint positive_a check (a > 0))",
+			output: "create table t (a int, constraint positive_a check (a > 0) enforced)",
+		}, {
 			input: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
 		}, {
 			input:  "create table t (a int, b char, constraint sdf foreign key (a, b) references b(a asc, b desc))",
@@ -1723,12 +1998,6 @@ var (
 			output: "create table t (a int, b char, constraint p1 primary key idx using none (a, b))",
 		}, {
 			input: "create table t (a int, b char, primary key idx (a, b))",
-		}, {
-			input:  "create dynamic table t as select a from t1",
-			output: "create dynamic table t as select a from t1",
-		}, {
-			input:  "create dynamic table t as select a from t1 with (\"type\"='kafka')",
-			output: "create dynamic table t as select a from t1 with (type = kafka)",
 		}, {
 			input:  "create external table t (a int) infile 'data.txt'",
 			output: "create external table t (a int) infile 'data.txt'",
@@ -2389,6 +2658,8 @@ var (
 		}, {
 			input: "drop table if exists t1, t2, db.t",
 		}, {
+			input: "drop temporary table if exists t1, t2, db.t",
+		}, {
 			input: "drop table db.t",
 		}, {
 			input: "drop table if exists t",
@@ -2527,7 +2798,7 @@ var (
 			input: "create table t (a float(20, 20) not null, b int(20) null, c int(30) null)",
 		}, {
 			input:  "create table t1 (t time(3) null, dt datetime(6) null, ts timestamp(1) null)",
-			output: "create table t1 (t time(3, 3) null, dt datetime(6, 6) null, ts timestamp(1, 1) null)",
+			output: "create table t1 (t time(3) null, dt datetime(6) null, ts timestamp(1) null)",
 		}, {
 			input:  "create table t1 (a int default 1 + 1 - 2 * 3 / 4 div 7 ^ 8 << 9 >> 10 % 11)",
 			output: "create table t1 (a int default 1 + 1 - 2 * 3 / 4 div 7 ^ 8 << 9 >> 10 % 11)",
@@ -3952,10 +4223,6 @@ var (
 			output: "create table ecbase_push_log (id bigint not null auto_increment comment 主键, create_time datetime not null default CURRENT_TIMESTAMP() comment 创建时间) engine = innodb auto_increment = 654 charset = utf8mb4 Collate = utf8mb4_general_ci comment = '推送记录表' partition by range columns (create_time) (partition p20240115 values less than (2024-01-15 00:00:00) engine = innodb, partition p20240116 values less than (2024-01-16 00:00:00) engine = innodb, partition p20240117 values less than (2024-01-17 00:00:00) engine = innodb, partition p20240118 values less than (2024-01-18 00:00:00) engine = innodb, partition p20240119 values less than (2024-01-19 00:00:00) engine = innodb, partition p20240120 values less than (2024-01-20 00:00:00) engine = innodb, partition p20240121 values less than (2024-01-21 00:00:00) engine = innodb, partition p20240122 values less than (2024-01-22 00:00:00) engine = innodb, partition p20240123 values less than (2024-01-23 00:00:00) engine = innodb, partition p20240124 values less than (2024-01-24 00:00:00) engine = innodb, partition p20240125 values less than (2024-01-25 00:00:00) engine = innodb)",
 		},
 		{
-			input:  "show connectors",
-			output: "show connectors",
-		},
-		{
 			input:  "show index from t1 from db",
 			output: "show index from t1 from db",
 		},
@@ -4408,6 +4675,27 @@ func TestValid(t *testing.T) {
 			t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", tcase.output, out)
 		}
 		ast.StmtKind()
+	}
+}
+
+func TestGroupConcatDeparseRoundTrip(t *testing.T) {
+	for _, sql := range []string{
+		"select group_concat(v order by v) from t",
+		"select group_concat(distinct v order by v desc separator '|') from t",
+	} {
+		ast, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err)
+
+		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		ast.Format(fmtCtx)
+		formatted := fmtCtx.String()
+		require.Contains(t, formatted, " separator ")
+
+		roundTripped, err := ParseOne(context.Background(), formatted, 1)
+		require.NoError(t, err, formatted)
+		roundTripFmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		roundTripped.Format(roundTripFmtCtx)
+		require.Equal(t, formatted, roundTripFmtCtx.String())
 	}
 }
 

@@ -560,6 +560,34 @@ func TestDispatchResetFailedNilErrorNotifiesRemoteWithCause(t *testing.T) {
 	}
 }
 
+func TestDispatchResetSkipsInvalidRemoteReceiversAndNotifiesHealthyPeer(t *testing.T) {
+	_ = colexec.NewServer("")
+
+	want := moerr.NewInternalErrorNoCtx("cleanup")
+	errCh := make(chan error, 1)
+	d := &Dispatch{
+		ctr: &container{
+			isRemote: true,
+			remoteReceivers: []*process.WrapCs{
+				nil,
+				{},
+				{Err: errCh},
+			},
+		},
+	}
+
+	require.NotPanics(t, func() {
+		d.Reset(nil, true, want)
+	})
+
+	select {
+	case got := <-errCh:
+		require.ErrorIs(t, got, want)
+	default:
+		t.Fatal("Dispatch.Reset did not notify healthy remote receiver after invalid peers")
+	}
+}
+
 func TestDispatchResetSendsHealthyLocalRegWhenEarlierRegIsFull(t *testing.T) {
 	oldSignalSendTimeout := process.PipelineSignalSendTimeout
 	process.PipelineSignalSendTimeout = 10 * time.Millisecond

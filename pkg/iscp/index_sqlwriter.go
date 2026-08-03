@@ -337,7 +337,7 @@ func (w *FulltextSqlWriter) toFulltextUpsert(upsert bool) ([]byte, error) {
 		sql += fmt.Sprintf("REPLACE INTO %s ", sqlquote.QualifiedIdent(w.dbName, w.indexTableName))
 	}
 
-	sql += fmt.Sprintf("WITH src as (SELECT %s FROM (VALUES %s)) ", cols, string(w.vbuf))
+	sql += fmt.Sprintf("WITH src as (SELECT %s FROM (VALUES %s) as __mo_iscp_values) ", cols, string(w.vbuf))
 	sql += fmt.Sprintf("SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('%s', %d, %s) as f", w.param, w.pkType.Oid, cnames_str)
 
 	return []byte(sql), nil
@@ -777,7 +777,7 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 		sqlquote.QualifiedIdent(w.info.DBName, w.meta_tbl), catalog.SystemSI_IVFFLAT_TblCol_Metadata_key)
 
 	sql += fmt.Sprintf("WITH centroid as (SELECT * FROM %s WHERE `%s` = (%s) ), ", sqlquote.QualifiedIdent(w.info.DBName, w.centroids_tbl), catalog.SystemSI_IVFFLAT_TblCol_Centroids_version, versql)
-	sql += fmt.Sprintf("src as (SELECT %s FROM (VALUES %s)) ", cols, string(w.vbuf))
+	sql += fmt.Sprintf("src as (SELECT %s FROM (VALUES %s) as __mo_iscp_values) ", cols, string(w.vbuf))
 	sql += fmt.Sprintf("SELECT `%s`, `%s`, %s FROM src CENTROIDX('%s') JOIN centroid using (`%s`, `%s`)",
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,

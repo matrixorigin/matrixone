@@ -237,18 +237,26 @@ type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
 
-	ctxByNode            []*BindContext
-	nameByColRef         map[[2]int32]string
-	protectedScans       map[int32]int
-	projectSpecialGuards map[int32]*specialIndexGuard
-	indexHintsByScan     map[int32]*indexHintSet
-	indexHintOwnerByNode map[int32]int32
+	ctxByNode                   []*BindContext
+	nameByColRef                map[[2]int32]string
+	protectedScans              map[int32]int
+	projectSpecialGuards        map[int32]*specialIndexGuard
+	setBitmapByDisplayNode      map[[2]int32]int32
+	indexHintsByScan            map[int32]*indexHintSet
+	indexHintOwnerByNode        map[int32]int32
+	preserveSinkProjection      map[int32]struct{}
+	preserveLockProjection      map[int32]struct{}
+	preservePreInsertProjection map[int32]struct{}
+	preserveInsertProjection    map[int32]struct{}
+	preserveScanProjection      map[int32]struct{}
+	positionalSinkScans         map[int32]struct{}
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
 
-	nextBindTag int32
-	nextMsgTag  int32
+	nextBindTag      int32
+	nextMsgTag       int32
+	nextSQLUdfCallID uint64
 
 	isPrepareStatement    bool
 	mysqlCompatible       bool
@@ -306,6 +314,11 @@ type QueryBuilder struct {
 	// so positions recorded pre-prune (e.g. the REPLACE old-PK key) must be remapped
 	// through this map before use.
 	sinkColRef map[[2]int32]int
+
+	// cteRefs contains only non-recursive CTEs that were actually bound. It is
+	// populated lazily so unused CTE bodies retain their existing lazy-binding
+	// semantics.
+	cteRefs []*CTERef
 }
 
 type OptimizerHints struct {
@@ -339,6 +352,18 @@ type CTERef struct {
 	maskedCTEs     map[string]bool
 	snapshot       *Snapshot
 	declarationCtx *BindContext
+	occurrences    []cteOccurrence
+	hasNestedRef   bool
+	hasNestedUse   bool
+}
+
+type cteOccurrence struct {
+	rootID       int32
+	rootTag      int32
+	ctx          *BindContext
+	headings     []string
+	types        []plan.Type
+	isCorrelated bool
 }
 
 type CteBindState struct {
@@ -380,6 +405,7 @@ type BindContext struct {
 	//cteState records state of binding cte
 	cteState                     CteBindState
 	sliding                      bool
+	explicitSliding              bool
 	isDistinct                   bool
 	normalizeGroupingSetDistinct bool
 	isCorrelated                 bool
@@ -440,6 +466,11 @@ type BindContext struct {
 	// Only populated when the column has been merged through at least one
 	// FULL OUTER JOIN ... USING. Length is always >= 2 when present.
 	outerUsingCols map[string][]string
+	// sqlUdfArgs holds the already-bound arguments of the SQL UDF currently
+	// being expanded in this query block. The UDF body uses body-unique marker
+	// names for its $n parameters; resolving those markers from a child query
+	// block turns the argument's column references into correlated references.
+	sqlUdfArgs map[string]*plan.Expr
 
 	// for join tables
 	bindingTree *BindingTreeNode
@@ -450,10 +481,6 @@ type BindContext struct {
 
 	// sample function related.
 	sampleFunc SampleFuncCtx
-
-	// groupConcatOrderBys stores ORDER BY specs from group_concat functions.
-	// Used to generate a Sort node before the Agg node instead of using window function.
-	groupConcatOrderBys []*plan.OrderBySpec
 
 	snapshot *Snapshot
 	// all view keys(dbName#viewName)
@@ -512,14 +539,15 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	sysCtx                context.Context
-	builder               *QueryBuilder
-	ctx                   *BindContext
-	impl                  Binder
-	boundCols             []string
-	numericParamType      *Type
-	numericSubqueryTarget *Type
-	numericFunctionTarget bool
+	sysCtx                           context.Context
+	builder                          *QueryBuilder
+	ctx                              *BindContext
+	impl                             Binder
+	boundCols                        []string
+	numericParamType                 *Type
+	numericSubqueryTarget            *Type
+	numericFunctionTarget            bool
+	allowCanonicalNameConstValueCast bool
 }
 
 type DefaultBinder struct {

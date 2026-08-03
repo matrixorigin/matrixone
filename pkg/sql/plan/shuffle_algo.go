@@ -23,6 +23,9 @@ func NewShuffleRange(isString bool) *pb.ShuffleRange {
 }
 
 func ShuffleRangeReEvalUnsigned(ranges []float64, k2 int, nullCnt int64, tableCnt int64) []uint64 {
+	if k2 <= 1 {
+		return nil
+	}
 	k1 := len(ranges)
 	if k2 > k1/2 {
 		return nil
@@ -42,6 +45,9 @@ func ShuffleRangeReEvalUnsigned(ranges []float64, k2 int, nullCnt int64, tableCn
 }
 
 func ShuffleRangeReEvalSigned(ranges []float64, k2 int, nullCnt int64, tableCnt int64) []int64 {
+	if k2 <= 1 {
+		return nil
+	}
 	k1 := len(ranges)
 	if k2 > k1/2 {
 		return nil

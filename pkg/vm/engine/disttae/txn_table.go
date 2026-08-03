@@ -1574,6 +1574,8 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			name2index[catalog.Row_ID] = int32(len(cols) - 1)
 		}
 
+		// IsTemporary is session state, not a projection of the durable marker.
+		// The compiler sets it only after resolving a session's temporary alias.
 		tbl.tableDef = &plan.TableDef{
 			TblId:         tbl.tableId,
 			Name:          tbl.tableName,
@@ -1598,6 +1600,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			tbl.tableDef.FeatureFlag = tbl.extraInfo.FeatureFlag
 			tbl.tableDef.AutoIncrOffset = tbl.extraInfo.AutoIncrOffset
 			tbl.tableDef.AutoIncrEpoch = tbl.extraInfo.AutoIncrEpoch
+			tbl.tableDef.Checks = tbl.extraInfo.Checks
 		}
 	}
 	return tbl.tableDef
@@ -1819,32 +1822,31 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	if createdInTxn {
 		// 3. adjust writes for the table
 		txn.Lock()
+		defer txn.Unlock()
 		for i, n := 0, len(txn.writes); i < n; i++ {
 			if cur := txn.writes[i]; cur.tableId == tbl.tableId && cur.bat != nil && cur.bat.RowCount() > 0 {
 				if sels, exist := txn.batchSelectList[cur.bat]; exist && len(sels) == cur.bat.RowCount() {
 					continue
 				}
-				txn.writes = append(txn.writes, txn.writes[i]) // copy by value
-				transfered := &txn.writes[len(txn.writes)-1]
-				transfered.tableName = tbl.tableName // in case renaming
-				transfered.bat, err = cur.bat.Dup(txn.proc.Mp())
-				if len(renameColMap) > 0 {
-					for i, attr := range transfered.bat.Attrs {
-						if newName, ok := renameColMap[attr]; ok {
-							transfered.bat.Attrs[i] = newName
-						}
-					}
-				}
+				transferred := cur
+				transferred.tableName = tbl.tableName // in case renaming
+				transferred.bat, err = cur.bat.Dup(txn.proc.Mp())
+				transferred.accountedSize = 0
 				if err != nil {
 					return err
 				}
-				for j := 0; j < cur.bat.RowCount(); j++ {
-					txn.batchSelectList[cur.bat] = append(txn.batchSelectList[cur.bat], int64(j))
+				if len(renameColMap) > 0 {
+					for i, attr := range transferred.bat.Attrs {
+						if newName, ok := renameColMap[attr]; ok {
+							transferred.bat.Attrs[i] = newName
+						}
+					}
 				}
+				txn.appendWorkspaceEntryLocked(transferred)
+				txn.selectAllBatchRowsLocked(cur.bat)
 
 			}
 		}
-		txn.Unlock()
 	}
 
 	return nil
@@ -2140,7 +2142,10 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 		autoIncrEpochKnown: true,
 	}
 
-	tbl.getTxn().writes = append(tbl.getTxn().writes, entry)
+	txn := tbl.getTxn()
+	txn.Lock()
+	defer txn.Unlock()
+	txn.appendWorkspaceEntryLocked(entry)
 	return nil
 }
 
@@ -2630,6 +2635,9 @@ func pkCommitTSMatchedInRange(
 			return false, false
 		}
 		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
+		if len(aborts) != len(timestamps) {
+			return false, false
+		}
 	}
 	for _, sel := range sels {
 		if sel < 0 || int(sel) >= len(timestamps) {
@@ -2638,8 +2646,13 @@ func pkCommitTSMatchedInRange(
 		if commitTSVec.IsNull(uint64(sel)) {
 			return false, false
 		}
-		if aborts != nil && aborts[sel] {
-			continue
+		if aborts != nil {
+			if abortVec.IsNull(uint64(sel)) {
+				return false, false
+			}
+			if aborts[sel] {
+				continue
+			}
 		}
 		ts := timestamps[sel]
 		if ts.GT(&from) && ts.LE(&to) {
@@ -2844,50 +2857,72 @@ func (tbl *txnTable) PKPersistedBetween(
 		v2.TxnPKChangeCheckIOCounter.Inc()
 
 		for _, blk := range candidateBlks {
-			release, _, err := ioutil.LoadColumns(
-				ctx,
-				[]uint16{uint16(pkSeq), objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
-				[]types.Type{pkType, types.T_TS.ToType(), types.T_bool.ToType()},
-				fs,
-				blk.MetaLocation(),
-				cacheVectors,
-				tbl.proc.Load().GetMPool(),
-				fileservice.Policy(0),
-			)
-			if err != nil {
-				releasePKCheckSemaphore()
-				reason = "data_block_read_error"
-				return true, err
-			}
-
 			searchFunc := filter.DecideSearchFunc(blk.IsSorted())
 			if searchFunc == nil {
 				searchFunc = buildUnsortedFilter()
 			}
 
-			sels := searchFunc(cacheVectors)
-			if len(sels) > 0 {
-				changed, ok := pkCommitTSMatchedInRange(&cacheVectors[1], &cacheVectors[2], sels, from, to)
-				release()
-				if !ok || changed {
-					releasePKCheckSemaphore()
-					if ok {
-						reason = "data_commit_ts_hit"
+			var matched, usable bool
+			if filter.CachedSearch != nil {
+				matched, usable, _, err = ioutil.LoadColumnDataBySearchAndCheckTS(
+					ctx,
+					uint16(pkSeq),
+					pkType,
+					fs,
+					blk.MetaLocation(),
+					filter.CachedSearch,
+					blk.IsSorted() && !filter.HasFakePK,
+					objectio.SEQNUM_COMMITTS,
+					from,
+					to,
+					tbl.proc.Load().GetMPool(),
+					fileservice.Policy(0),
+				)
+			} else {
+				var release func()
+				release, _, err = ioutil.LoadColumns(
+					ctx,
+					[]uint16{uint16(pkSeq), objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+					[]types.Type{pkType, objectio.TSType, types.T_bool.ToType()},
+					fs,
+					blk.MetaLocation(),
+					cacheVectors,
+					tbl.proc.Load().GetMPool(),
+					fileservice.Policy(0),
+				)
+				if err == nil {
+					sels := searchFunc(cacheVectors)
+					if len(sels) == 0 {
+						matched, usable = false, true
 					} else {
-						reason = "data_commit_ts_unavailable"
+						matched, usable = pkCommitTSMatchedInRange(&cacheVectors[1], &cacheVectors[2], sels, from, to)
 					}
-					return true, nil
+					release()
 				}
-				continue
 			}
-			release()
+			if err != nil {
+				releasePKCheckSemaphore()
+				reason = "data_block_read_error"
+				return true, err
+			}
+			if !usable || matched {
+				releasePKCheckSemaphore()
+				if usable {
+					reason = "data_commit_ts_hit"
+				} else {
+					reason = "data_commit_ts_unavailable"
+				}
+				return true, nil
+			}
 		}
 		releasePKCheckSemaphore()
 	}
 	if checkTombstone {
 		pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 		pkType := plan2.ExprType2Type(&pkDef.Typ)
-		changed, tombstoneReason, err := tombstonePKExistsInRange(ctx, p, from, to, keys, pkType, fs)
+		changed, tombstoneReason, err := tombstonePKExistsInRange(
+			ctx, p, from, to, keys, pkType, fs, tbl.proc.Load().GetMPool(),
+		)
 		if changed {
 			reason = tombstoneReason
 		}
@@ -2907,6 +2942,7 @@ func tombstonePKExistsInRange(
 	keys *vector.Vector,
 	pkType types.Type,
 	fs fileservice.FileService,
+	mp *mpool.MPool,
 ) (bool, string, error) {
 	tombObjs := p.GetChangedTombstoneObjsBetween(from)
 	if len(tombObjs) == 0 {
@@ -2921,10 +2957,74 @@ func tombstonePKExistsInRange(
 		}
 	}
 	searchKeys := LinearSearchOffsetByValFactory(keys)
+	var cachedSearch *objectio.ReadFilterSearch
+	switch pkType.Oid {
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary,
+		types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+		if keys.GetType().Oid != pkType.Oid {
+			break
+		}
+		cachedSearch = objectio.NewReadFilterSearch(
+			pkType.Oid,
+			vector.InefficientMustBytesCol(keys),
+		)
+	}
 	for _, obj := range tombObjs {
 		for blkIdx := uint32(0); blkIdx < obj.BlkCnt(); blkIdx++ {
 			loc := obj.BlockLocation(uint16(blkIdx), objectio.BlockMaxRows)
 			isCNCreated := obj.GetCNCreated()
+			if cachedSearch != nil {
+				// Tombstone objects are ordered by rowid, not by the copied PK
+				// column. Always use the linear search even when object metadata
+				// carries a sorted flag.
+				if isCNCreated {
+					hits, _, err := ioutil.LoadColumnDataBySearch(
+						ctx,
+						objectio.TombstoneAttr_PK_SeqNum,
+						pkType,
+						fs,
+						loc,
+						cachedSearch,
+						false,
+						nil,
+						mp,
+						fileservice.Policy(0),
+					)
+					if err != nil {
+						return true, "tombstone_read_error", nil
+					}
+					if len(hits) > 0 {
+						return true, "tombstone_cn_hit", nil
+					}
+					continue
+				}
+
+				changed, usable, _, err := ioutil.LoadColumnDataBySearchAndCheckTS(
+					ctx,
+					objectio.TombstoneAttr_PK_SeqNum,
+					pkType,
+					fs,
+					loc,
+					cachedSearch,
+					false,
+					objectio.TombstoneAttr_CommitTs_SeqNum,
+					from,
+					to,
+					mp,
+					fileservice.Policy(0),
+				)
+				if err != nil {
+					return true, "tombstone_read_error", nil
+				}
+				if !usable || changed {
+					if usable {
+						return true, "tombstone_commit_ts_hit", nil
+					}
+					return true, "tombstone_commit_ts_unavailable", nil
+				}
+				continue
+			}
+
 			vecCount := 4
 			if isCNCreated {
 				vecCount = 2
