@@ -324,6 +324,9 @@ type PrepareStmt struct {
 	// protocolVersion is the cluster protocol used to build PreparePlan.
 	// A version change can alter internal function IDs in generated DML plans.
 	protocolVersion int64
+	// dynamicNumericParams marks plans whose arithmetic parameter types must be
+	// specialized from each EXECUTE value instead of using a cached compile.
+	dynamicNumericParams bool
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode

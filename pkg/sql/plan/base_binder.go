@@ -65,11 +65,11 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 	switch exprImpl := astExpr.(type) {
 	case *tree.NumVal:
 		bindType := b.defaultValueBindType()
-		if b.numericParamType != nil && types.T(b.numericParamType.Id) == types.T_decimal256 {
+		if b.numericParamType != nil && isPreparedDynamicNumericType(*b.numericParamType) {
 			bindType = *b.numericParamType
 		}
 		expr, err = b.bindNumVal(exprImpl, bindType)
-		if err == nil && b.numericParamType != nil && types.T(b.numericParamType.Id) == types.T_decimal256 &&
+		if err == nil && b.numericParamType != nil && isPreparedDynamicNumericType(*b.numericParamType) &&
 			(exprImpl.ValType == tree.P_int64 || exprImpl.ValType == tree.P_uint64) {
 			expr, err = appendCastBeforeExpr(b.GetContext(), expr, *b.numericParamType)
 		}
@@ -1234,7 +1234,9 @@ func numericTypeFromAstScan(scan numericAstTypeScan, outer *Type) (Type, bool) {
 		// computation type, so use MySQL's maximum DECIMAL parameter domain to
 		// preserve both integral precision and later fractional executions.
 		typ := types.New(types.T_decimal256, 65, 30)
-		return makePlan2Type(&typ), true
+		planType := makePlan2Type(&typ)
+		planType.Table = preparedDynamicNumericTypeMarker
+		return planType, true
 	}
 	for i := range scan.literalIntegers {
 		typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.literalIntegers[i]))
@@ -1250,6 +1252,13 @@ func numericTypeFromAstScan(scan numericAstTypeScan, outer *Type) (Type, bool) {
 	}
 	return makePlan2Type(&resolved), true
 }
+
+func isPreparedDynamicNumericType(typ Type) bool {
+	return types.T(typ.Id) == types.T_decimal256 && typ.Width == 65 && typ.Scale == 30 &&
+		typ.Table == preparedDynamicNumericTypeMarker
+}
+
+const preparedDynamicNumericTypeMarker = "__mo_prepared_dynamic_numeric"
 
 func (b *baseBinder) numericScalarSubqueryAstTypes(
 	subquery *tree.Subquery,

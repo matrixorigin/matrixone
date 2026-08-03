@@ -3177,6 +3177,58 @@ func ValidatePreparedPaginationParams(ctx context.Context, preparePlan *Plan, pa
 	return nil
 }
 
+// HasPreparedDynamicNumericParams reports whether a canonical prepared plan
+// must be specialized with this execution's numeric parameter precision and
+// scale before compilation.
+func HasPreparedDynamicNumericParams(preparePlan *Plan) bool {
+	rule := &preparedDynamicNumericParamRule{}
+	visitor := NewVisitPlan(preparePlan, []VisitPlanRule{rule})
+	_ = visitor.Visit(context.Background())
+	return rule.found
+}
+
+type preparedDynamicNumericParamRule struct {
+	found bool
+}
+
+func (rule *preparedDynamicNumericParamRule) MatchNode(*Node) bool { return false }
+func (rule *preparedDynamicNumericParamRule) IsApplyExpr() bool    { return true }
+func (rule *preparedDynamicNumericParamRule) ApplyNode(*Node) error {
+	return nil
+}
+func (rule *preparedDynamicNumericParamRule) ApplyExpr(expr *Expr) (*Expr, error) {
+	rule.found = rule.found || containsPreparedDynamicNumericParam(expr)
+	return expr, nil
+}
+
+func containsPreparedDynamicNumericParam(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetP() != nil && isPreparedDynamicNumericType(expr.Typ) {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func.GetObjName() == "cast" && isPreparedDynamicNumericType(expr.Typ) &&
+			len(fn.Args) > 0 && fn.Args[0].GetP() != nil {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if containsPreparedDynamicNumericParam(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if containsPreparedDynamicNumericParam(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func collectParamRefPositions(expr *Expr, positions map[int32]struct{}) {
 	if expr == nil {
 		return

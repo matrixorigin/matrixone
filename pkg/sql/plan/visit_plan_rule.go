@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"sort"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
@@ -438,13 +439,34 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	case *plan.Expr_F:
 		needResetFunction := false
 		for i, arg := range exprImpl.F.Args {
-			if _, ok := arg.Expr.(*plan.Expr_P); ok {
+			_, directParam := arg.Expr.(*plan.Expr_P)
+			dynamicNumericParam := containsPreparedDynamicNumericParam(arg)
+			rewrittenArg, rewriteErr := rule.ApplyExpr(arg)
+			if rewriteErr != nil {
+				return nil, rewriteErr
+			}
+			if directParam || (dynamicNumericParam && rewrittenArg != arg) {
 				needResetFunction = true
 			}
-			exprImpl.F.Args[i], err = rule.ApplyExpr(arg)
-			if err != nil {
-				return nil, err
+			exprImpl.F.Args[i] = rewrittenArg
+		}
+		if exprImpl.F.Func.GetObjName() == "cast" && isPreparedDynamicNumericType(e.Typ) {
+			value := exprImpl.F.Args[0]
+			if literal := value.GetLit(); literal != nil {
+				var decimal string
+				switch literalValue := literal.Value.(type) {
+				case *plan.Literal_Sval:
+					decimal = literalValue.Sval
+				case *plan.Literal_I64Val:
+					decimal = strconv.FormatInt(literalValue.I64Val, 10)
+				case *plan.Literal_U64Val:
+					decimal = strconv.FormatUint(literalValue.U64Val, 10)
+				}
+				if decimal != "" {
+					return makePlan2DecimalExprWithType(rule.ctx, decimal, literal.GetIsBin())
+				}
 			}
+			return value, nil
 		}
 
 		// reset function

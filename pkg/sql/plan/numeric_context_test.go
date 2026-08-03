@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -667,6 +668,32 @@ func TestPrepareStatementKeepsDynamicNumericLiteralDomain(t *testing.T) {
 	root := prepare.Plan.GetQuery().Nodes[prepare.Plan.GetQuery().Steps[0]]
 	require.NotEmpty(t, root.ProjectList)
 	require.Equal(t, int32(types.T_decimal256), root.ProjectList[0].Typ.Id)
+}
+
+func TestPreparedDynamicNumericPlanSpecializesPerExecutionValue(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select ? + 1")
+	require.True(t, HasPreparedDynamicNumericParams(prepare.Plan))
+
+	values := []string{
+		"12345678901234567890123456789012345678901234567890123456789012345",
+		"-12345678901234567890123456789012345678901234567890123456789012345",
+		"0.123456789012345678901234567890",
+		"-0.123456789012345678901234567890",
+	}
+	for _, value := range values {
+		t.Run(value, func(t *testing.T) {
+			specialized, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{value})
+			require.NoError(t, err)
+			require.False(t, HasPreparedDynamicNumericParams(specialized))
+			require.Empty(t, collectPlanParamTypes(specialized))
+		})
+	}
+
+	require.True(t, HasPreparedDynamicNumericParams(prepare.Plan), "specialization must not mutate the canonical plan")
+
+	explicitCast := buildPreparedAggregatePlan(t, "select cast(? as decimal(65, 30)) + 1")
+	require.False(t, HasPreparedDynamicNumericParams(explicitCast.Plan),
+		"an explicit DECIMAL(65,30) cast is a user contract, not a dynamic marker")
 }
 
 func numericTestBinding(table, col string, typ types.Type) *Binding {

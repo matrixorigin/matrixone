@@ -143,12 +143,13 @@ func newPreparedExecuteEnvForSQL(t testing.TB, stmtID uint32, sql string) (*Sess
 	require.NoError(t, err)
 
 	prepareStmt := &PrepareStmt{
-		Name:                stmtName,
-		Sql:                 prepareString.Sql,
-		PreparePlan:         preparePlan,
-		PrepareStmt:         stmts[0],
-		getFromSendLongData: make(map[int]struct{}),
-		protocolVersion:     currentProtocolVersion(proc),
+		Name:                 stmtName,
+		Sql:                  prepareString.Sql,
+		PreparePlan:          preparePlan,
+		PrepareStmt:          stmts[0],
+		getFromSendLongData:  make(map[int]struct{}),
+		protocolVersion:      currentProtocolVersion(proc),
+		dynamicNumericParams: plan2.HasPreparedDynamicNumericParams(preparePlan.GetDcl().GetPrepare().Plan),
 	}
 	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, prepareStmt))
 
@@ -299,6 +300,48 @@ func TestPreparedBinaryPaginationUsesProtocolParamType(t *testing.T) {
 	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	require.Same(t, params, cw.proc.GetPrepareParams())
+}
+
+func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 111, "select ? + 1")
+	defer prepareStmt.Close()
+	defer cw.proc.SetPrepareParams(nil)
+	canonical := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	require.True(t, plan2.HasPreparedDynamicNumericParams(canonical))
+
+	execPlan := &plan.Execute{
+		Name: prepareStmt.Name,
+		Args: []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "numeric_param"}}}},
+	}
+	for _, value := range []string{
+		"12345678901234567890123456789012345678901234567890123456789012345",
+		"0.123456789012345678901234567890",
+	} {
+		require.NoError(t, ses.SetUserDefinedVar("numeric_param", value, ""))
+		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+		require.NoError(t, err)
+		require.Nil(t, comp)
+		require.False(t, plan2.HasPreparedDynamicNumericParams(executionPlan))
+	}
+
+	for _, value := range []string{
+		"-12345678901234567890123456789012345678901234567890123456789012345",
+		"-0.123456789012345678901234567890",
+	} {
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
+		prepareStmt.params = params
+		prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		require.Nil(t, comp)
+		require.False(t, plan2.HasPreparedDynamicNumericParams(executionPlan))
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+		prepareStmt.params = nil
+	}
+
+	require.True(t, plan2.HasPreparedDynamicNumericParams(canonical))
 }
 
 func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {

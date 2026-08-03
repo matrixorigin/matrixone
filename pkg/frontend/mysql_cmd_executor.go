@@ -1986,9 +1986,11 @@ func createPrepareStmtInSession(
 		owner, originSQL, schedulingSQLMode)
 	var comp *compile.Compile
 	prepareControl := preparePlan.GetDcl().GetPrepare()
+	dynamicNumericParams := plan2.HasPreparedDynamicNumericParams(prepareControl.Plan)
 	_, isQueryPlan := prepareControl.Plan.Plan.(*plan.Plan_Query)
 	if !executionSes.IsBackgroundSession() &&
 		isQueryPlan &&
+		!dynamicNumericParams &&
 		shouldCachePrepareCompile(prepareControl.Plan) &&
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
@@ -2008,20 +2010,21 @@ func createPrepareStmtInSession(
 	}
 
 	prepareStmt := &PrepareStmt{
-		Name:                preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:                 originSQL,
-		compile:             comp,
-		PreparePlan:         preparePlan,
-		PrepareStmt:         saveStmt,
-		NativeMode:          owner.sqlModeHasMatrixOneNative(),
-		remapDb:             maps.Clone(execCtx.remapDb),
-		defaultDatabase:     executionSes.GetTxnCompileCtx().GetDatabase(),
-		tempTableVersion:    owner.GetTempTableVersion(),
-		ddlVersion:          owner.getDDLVersion(),
-		cloneSQL:            cloneSQL,
-		protocolVersion:     protocolVersion,
-		getFromSendLongData: make(map[int]struct{}),
-		schedulingSQLMode:   schedulingSQLMode,
+		Name:                 preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:                  originSQL,
+		compile:              comp,
+		PreparePlan:          preparePlan,
+		PrepareStmt:          saveStmt,
+		NativeMode:           owner.sqlModeHasMatrixOneNative(),
+		remapDb:              maps.Clone(execCtx.remapDb),
+		defaultDatabase:      executionSes.GetTxnCompileCtx().GetDatabase(),
+		tempTableVersion:     owner.GetTempTableVersion(),
+		ddlVersion:           owner.getDDLVersion(),
+		cloneSQL:             cloneSQL,
+		protocolVersion:      protocolVersion,
+		dynamicNumericParams: dynamicNumericParams,
+		getFromSendLongData:  make(map[int]struct{}),
+		schedulingSQLMode:    schedulingSQLMode,
 	}
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)

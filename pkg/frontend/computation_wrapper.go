@@ -804,6 +804,7 @@ func initExecuteStmtParamWithResolverInSession(
 
 		preparePlan = newPreparePlan
 		prepareStmt.PreparePlan = newPlan
+		prepareStmt.dynamicNumericParams = plan2.HasPreparedDynamicNumericParams(newPreparePlan.Plan)
 		prepareStmt.ColDefData = newColDefData
 		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
 			execCtx.prepareColDef = newColDefData
@@ -837,7 +838,8 @@ func initExecuteStmtParamWithResolverInSession(
 			owner, originSQL, prepareStmt.schedulingSQLMode)
 		if !executionSes.IsBackgroundSession() {
 			if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok &&
-				shouldCachePrepareCompile(preparePlan.Plan) && !executionIntent.Explicit {
+				!prepareStmt.dynamicNumericParams && shouldCachePrepareCompile(preparePlan.Plan) &&
+				!executionIntent.Explicit {
 				// Prepare-time compiles are cached and must not retain a statement-owned trace.
 				// The execution path attaches the current wrapper trace after cache retrieval.
 				comp, err := createCompile(execCtx, executionSes, cwft.proc, originSQL, originSQL, &prepareStmt.schedulingSQLMode, prepareStmt.PrepareStmt, preparePlan.Plan, owner.GetOutputCallback(execCtx), true, nil)
@@ -857,6 +859,8 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 	numParams := len(preparePlan.ParamTypes)
+	executionPlan := preparePlan.Plan
+	needsNumericSpecialization := prepareStmt.dynamicNumericParams
 	cwft.paramVals = nil
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
 		if prepareStmt.params.Length() != numParams {
@@ -872,6 +876,14 @@ func initExecuteStmtParamWithResolverInSession(
 			cwft.paramVals = nil
 			return nil, nil, nil, originSQL, false, err
 		}
+		if needsNumericSpecialization {
+			executionPlan, err = plan2.FillValuesOfParamsInPlan(reqCtx, preparePlan.Plan, cwft.paramVals)
+			if err != nil {
+				cwft.proc.SetPrepareParams(nil)
+				cwft.paramVals = nil
+				return nil, nil, nil, originSQL, false, err
+			}
+		}
 	} else if execPlan != nil && len(execPlan.Args) > 0 {
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
@@ -883,6 +895,13 @@ func initExecuteStmtParamWithResolverInSession(
 		if err = plan2.ValidatePreparedPaginationParams(reqCtx, preparePlan.Plan, paramVals); err != nil {
 			params.Free(cwft.proc.Mp())
 			return nil, nil, nil, originSQL, false, err
+		}
+		if needsNumericSpecialization {
+			executionPlan, err = plan2.FillValuesOfParamsInPlan(reqCtx, preparePlan.Plan, paramVals)
+			if err != nil {
+				params.Free(cwft.proc.Mp())
+				return nil, nil, nil, originSQL, false, err
+			}
 		}
 		cwft.proc.SetOwnedPrepareParamsWithIsBin(params, paramIsBin)
 		cwft.paramVals = paramVals
@@ -901,6 +920,9 @@ func initExecuteStmtParamWithResolverInSession(
 	cwft.hasPreparedSchedulingSQLMode = true
 	cwft.preparedSchedulingSQL = originSQL
 	retComp := prepareStmt.compile
+	if needsNumericSpecialization {
+		retComp = nil
+	}
 	if executionSes.IsBackgroundSession() {
 		// A cached compile owns pipelines tied to the client process used at
 		// PREPARE time. A procedure executes with a distinct background process.
@@ -914,7 +936,7 @@ func initExecuteStmtParamWithResolverInSession(
 	if err != nil {
 		return nil, nil, nil, "", false, err
 	}
-	return retComp, preparePlan.Plan, executionStmt, originSQL, owned, nil
+	return retComp, executionPlan, executionStmt, originSQL, owned, nil
 }
 
 func prepareSchemaAccountID(currentAccountID uint32, obj *plan.ObjectRef) uint32 {
