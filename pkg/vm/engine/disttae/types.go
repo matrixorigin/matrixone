@@ -1189,8 +1189,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 			if txn.writes[i].bat == nil {
 				continue
 			}
-			txn.workspaceSize -= uint64(txn.writes[i].bat.Size())
-			txn.writes[i].bat.Clean(txn.proc.Mp())
+			txn.releaseWorkspaceEntryBatchLocked(i)
 		}
 		txn.writes = txn.writes[:end]
 		txn.offsets = txn.offsets[:txn.statementID]
@@ -1207,6 +1206,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 			}
 		}
 	}
+	txn.assertWorkspaceAccountingLocked()
 	// rollback current statement's writes info
 	for b := range txn.batchSelectList {
 		delete(txn.batchSelectList, b)
@@ -1280,9 +1280,13 @@ type Entry struct {
 	// blockName for s3 file
 	fileName string
 	//tuples would be applied to the table which belongs to the tenant(accountId)
-	bat       *batch.Batch
-	tnStore   DNStore
-	pkChkByTN int8
+	bat *batch.Batch
+	// accountedSize is the batch size currently included in workspaceSize.
+	// Keeping it on the entry lets in-place mutations remove the old
+	// contribution before accounting for the batch's new state.
+	accountedSize uint64
+	tnStore       DNStore
+	pkChkByTN     int8
 	// autoIncrEpoch is the allocator epoch used to plan this user-table write.
 	// autoIncrEpochKnown distinguishes a valid initial zero epoch from an
 	// old CN that did not send the dependency.

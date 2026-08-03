@@ -279,11 +279,29 @@ func (hb *HashmapBuilder) copyBuildBatch(src *batch.Batch, proc *process.Process
 	if hb.budget == nil {
 		return hb.Batches.CopyIntoBatches(src, proc)
 	}
-	projected, err := hb.projectedBatchCopyBytes(src)
+	projection, err := hb.projectedBatchCopy(src)
 	if err != nil {
 		return err
 	}
-	reservation, err := hb.budget.Reserve(projected)
+	return hb.copyBuildBatchProjected(src, proc, projection)
+}
+
+func (hb *HashmapBuilder) copyBuildBatchProjected(
+	src *batch.Batch,
+	proc *process.Process,
+	projection batchCopyProjection,
+) error {
+	if hb.budget == nil {
+		if err := hb.Batches.CopyIntoBatches(src, proc); err != nil {
+			// CopyIntoBatches destroys every retained destination on failure.
+			// Keep the derived tail state transactional with that owner cleanup.
+			hb.retainedSpillTailSelected = 0
+			return err
+		}
+		hb.retainedSpillTailSelected = projection.nextTailSelected
+		return nil
+	}
+	reservation, err := hb.budget.Reserve(projection.admissionBytes)
 	if err != nil {
 		return err
 	}
@@ -295,11 +313,13 @@ func (hb *HashmapBuilder) copyBuildBatch(src *batch.Batch, proc *process.Process
 	if err = hb.Batches.CopyIntoBatches(src, proc); err != nil {
 		reservation.Release()
 		hb.releaseBatchReservations()
+		hb.retainedSpillTailSelected = 0
 		return err
 	}
 	actual, err := batchCopyAllocatedDelta(hb.Batches.Buf, snapshot)
 	if err != nil {
 		hb.Batches.Clean(proc.Mp())
+		hb.retainedSpillTailSelected = 0
 		reservation.Release()
 		hb.releaseBatchReservations()
 		return err
@@ -307,26 +327,30 @@ func (hb *HashmapBuilder) copyBuildBatch(src *batch.Batch, proc *process.Process
 	metadata, ok := retainedMetadataAllowance(src)
 	if !ok || actual > math.MaxUint64-metadata {
 		hb.Batches.Clean(proc.Mp())
+		hb.retainedSpillTailSelected = 0
 		reservation.Release()
 		hb.releaseBatchReservations()
 		return process.ErrHashBuildBudgetInvalid
 	}
 	actual += metadata
-	if actual > projected {
+	if actual > projection.admissionBytes {
 		// This indicates an incomplete pre-allocation bound. Fail closed after
 		// cleaning; never legitimize the excess with post-allocation admission.
 		hb.Batches.Clean(proc.Mp())
+		hb.retainedSpillTailSelected = 0
 		reservation.Release()
 		hb.releaseBatchReservations()
 		return process.ErrHashBuildBudgetInvalid
 	}
 	if _, err = reservation.ReconcileDown(actual); err != nil {
 		hb.Batches.Clean(proc.Mp())
+		hb.retainedSpillTailSelected = 0
 		reservation.Release()
 		hb.releaseBatchReservations()
 		return err
 	}
 	hb.batchReservations = append(hb.batchReservations, reservation)
+	hb.retainedSpillTailSelected = projection.nextTailSelected
 	return nil
 }
 
@@ -351,32 +375,53 @@ func retainedMetadataAllowance(src *batch.Batch) (uint64, bool) {
 	return rows * perRow, true
 }
 
-// projectedPartialTailReplacementBytes follows UnionBatch's allocation order.
-// The existing tail reservation covers old capacities. At each grow, admission
-// needs the complete replacement capacity plus deltas retained by earlier grows.
-func projectedPartialTailReplacementBytes(
+func projectedSpillSelectedAppendBytes(
+	src *vector.Vector,
+	rows int,
+	payloadBytes uint64,
+) (uint64, error) {
+	if src == nil || rows < 0 {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	typeSize := src.GetType().TypeSize()
+	if typeSize < 0 {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	selected, err := spillCheckedMul(uint64(rows), uint64(typeSize))
+	if err != nil {
+		return 0, err
+	}
+	return spillCheckedAdd(selected, payloadBytes)
+}
+
+// projectedPartialTailReplacement follows UnionBatch's allocation order. The
+// existing tail reservation covers old capacities. At each grow, admission
+// needs the complete replacement capacity plus deltas retained by earlier
+// grows. appendedSelected is the logical spill materialization contributed by
+// this source range, computed from the same varlen scan used for allocation.
+func projectedPartialTailReplacement(
 	tail, src *batch.Batch,
 	appendRows int,
-) (peak, retained uint64, err error) {
+) (peak, retained, appendedSelected uint64, err error) {
 	if tail == nil || src == nil || appendRows < 0 || len(tail.Vecs) != len(src.Vecs) {
-		return 0, 0, process.ErrHashBuildBudgetInvalid
+		return 0, 0, 0, process.ErrHashBuildBudgetInvalid
 	}
 	for i, srcVec := range src.Vecs {
 		dstVec := tail.Vecs[i]
 		if dstVec == nil || srcVec == nil || dstVec.Length() > math.MaxInt-appendRows {
-			return 0, 0, process.ErrHashBuildBudgetInvalid
+			return 0, 0, 0, process.ErrHashBuildBudgetInvalid
 		}
 
 		typeSize := srcVec.GetType().TypeSize()
 		requiredRows := dstVec.Length() + appendRows
 		if typeSize < 0 || (typeSize > 0 && requiredRows > math.MaxInt/typeSize) {
-			return 0, 0, process.ErrHashBuildBudgetInvalid
+			return 0, 0, 0, process.ErrHashBuildBudgetInvalid
 		}
 		oldDataCap := cap(dstVec.GetData())
 		if requiredData := requiredRows * typeSize; requiredData > oldDataCap {
 			newCap, ok := mpool.GrowCapacity(int64(oldDataCap), int64(requiredData))
 			if !ok || retained > math.MaxUint64-uint64(newCap) {
-				return 0, 0, process.ErrHashBuildBudgetInvalid
+				return 0, 0, 0, process.ErrHashBuildBudgetInvalid
 			}
 			if candidate := retained + uint64(newCap); candidate > peak {
 				peak = candidate
@@ -384,17 +429,26 @@ func projectedPartialTailReplacementBytes(
 			retained += uint64(newCap) - uint64(oldDataCap)
 		}
 
-		areaBytes, areaErr :=
-			unionBatchAreaBytes(srcVec, 0, appendRows)
+		areaBytes, selectedPayload, areaErr :=
+			unionBatchAreaProjection(srcVec, 0, appendRows)
 		if areaErr != nil || areaBytes > math.MaxInt-len(dstVec.GetArea()) {
-			return 0, 0, process.ErrHashBuildBudgetInvalid
+			return 0, 0, 0, process.ErrHashBuildBudgetInvalid
+		}
+		selected, selectedErr := projectedSpillSelectedAppendBytes(
+			srcVec, appendRows, selectedPayload)
+		if selectedErr != nil {
+			return 0, 0, 0, selectedErr
+		}
+		appendedSelected, selectedErr = spillCheckedAdd(appendedSelected, selected)
+		if selectedErr != nil {
+			return 0, 0, 0, selectedErr
 		}
 		oldAreaCap := cap(dstVec.GetArea())
 		requiredArea := len(dstVec.GetArea()) + areaBytes
 		if requiredArea > oldAreaCap {
 			newCap, ok := mpool.GrowCapacity(int64(oldAreaCap), int64(requiredArea))
 			if !ok || retained > math.MaxUint64-uint64(newCap) {
-				return 0, 0, process.ErrHashBuildBudgetInvalid
+				return 0, 0, 0, process.ErrHashBuildBudgetInvalid
 			}
 			if candidate := retained + uint64(newCap); candidate > peak {
 				peak = candidate
@@ -402,23 +456,43 @@ func projectedPartialTailReplacementBytes(
 			retained += uint64(newCap) - uint64(oldAreaCap)
 		}
 	}
-	return peak, retained, nil
+	return peak, retained, appendedSelected, nil
 }
 
-// projectedNewDestinationBytes follows CopyIntoBatches for destinations that
-// start empty. Each destination vector is pre-extended to its final row count,
-// and each varlen area is then grown once by UnionBatch.
-func projectedNewDestinationBytes(src *batch.Batch, start, rows int) (uint64, error) {
+func projectedPartialTailReplacementBytes(
+	tail, src *batch.Batch,
+	appendRows int,
+) (peak, retained uint64, err error) {
+	peak, retained, _, err = projectedPartialTailReplacement(tail, src, appendRows)
+	return peak, retained, err
+}
+
+type batchCopyProjection struct {
+	admissionBytes      uint64
+	maxRetainedSelected uint64
+	maxRetainedRows     int
+	nextTailSelected    uint64
+	columns             int
+}
+
+// projectedNewDestinationAllocation follows CopyIntoBatches for destinations
+// that start empty. In addition to the total pre-allocation charge, it records
+// the largest individual destination. HashBuild reuses that already-required
+// projection to prove the future spill of every retained destination without
+// adding another varlen row scan to the non-spill path.
+func projectedNewDestinationAllocation(
+	src *batch.Batch,
+	start, rows int,
+) (total uint64, maxRows int, maxSelected, lastSelected uint64, err error) {
 	if src == nil || start < 0 || rows < 0 || start > src.RowCount() || rows > src.RowCount()-start {
-		return 0, process.ErrHashBuildBudgetInvalid
+		return 0, 0, 0, 0, process.ErrHashBuildBudgetInvalid
 	}
 	end := start + rows
-	var total uint64
-	add := func(value uint64) error {
-		if total > math.MaxUint64-value {
+	add := func(target *uint64, value uint64) error {
+		if *target > math.MaxUint64-value {
 			return process.ErrHashBuildBudgetInvalid
 		}
-		total += value
+		*target += value
 		return nil
 	}
 	for offset := start; offset < end; {
@@ -426,52 +500,79 @@ func projectedNewDestinationBytes(src *batch.Batch, start, rows int) (uint64, er
 		if segmentRows > colexec.DefaultBatchSize {
 			segmentRows = colexec.DefaultBatchSize
 		}
+		var segmentAllocated uint64
+		var segmentSelected uint64
 		for _, vec := range src.Vecs {
 			if vec == nil {
-				return 0, process.ErrHashBuildBudgetInvalid
+				return 0, 0, 0, 0, process.ErrHashBuildBudgetInvalid
 			}
 			typeSize := vec.GetType().TypeSize()
 			if typeSize < 0 || (typeSize > 0 && segmentRows > math.MaxInt/typeSize) {
-				return 0, process.ErrHashBuildBudgetInvalid
+				return 0, 0, 0, 0, process.ErrHashBuildBudgetInvalid
 			}
 			dataCap, ok := mpool.GrowCapacity(0, int64(segmentRows*typeSize))
 			if !ok || dataCap < 0 {
-				return 0, process.ErrHashBuildBudgetInvalid
+				return 0, 0, 0, 0, process.ErrHashBuildBudgetInvalid
 			}
-			if err := add(uint64(dataCap)); err != nil {
-				return 0, err
+			if err = add(&segmentAllocated, uint64(dataCap)); err != nil {
+				return 0, 0, 0, 0, err
 			}
-			if !vec.GetType().IsVarlen() {
-				continue
+			areaBytes := 0
+			var selectedPayload uint64
+			if vec.GetType().IsVarlen() {
+				var areaErr error
+				areaBytes, selectedPayload, areaErr =
+					unionBatchAreaProjection(vec, offset, segmentRows)
+				if areaErr != nil {
+					return 0, 0, 0, 0, process.ErrHashBuildBudgetInvalid
+				}
+				areaCap, ok := mpool.GrowCapacity(0, int64(areaBytes))
+				if !ok || areaCap < 0 {
+					return 0, 0, 0, 0, process.ErrHashBuildBudgetInvalid
+				}
+				if err = add(&segmentAllocated, uint64(areaCap)); err != nil {
+					return 0, 0, 0, 0, err
+				}
 			}
-
-			areaBytes, areaErr :=
-				unionBatchAreaBytes(vec, offset, segmentRows)
-			if areaErr != nil {
-				return 0, process.ErrHashBuildBudgetInvalid
+			selected, selectedErr := projectedSpillSelectedAppendBytes(
+				vec, segmentRows, selectedPayload)
+			if selectedErr != nil {
+				return 0, 0, 0, 0, selectedErr
 			}
-			areaCap, ok := mpool.GrowCapacity(0, int64(areaBytes))
-			if !ok || areaCap < 0 {
-				return 0, process.ErrHashBuildBudgetInvalid
+			if err = add(&segmentSelected, selected); err != nil {
+				return 0, 0, 0, 0, err
 			}
-			if err := add(uint64(areaCap)); err != nil {
-				return 0, err
-			}
+		}
+		if err = add(&total, segmentAllocated); err != nil {
+			return 0, 0, 0, 0, err
+		}
+		if segmentSelected > maxSelected {
+			maxSelected = segmentSelected
+		}
+		lastSelected = segmentSelected
+		if segmentRows > maxRows {
+			maxRows = segmentRows
 		}
 		offset += segmentRows
 	}
-	return total, nil
+	return total, maxRows, maxSelected, lastSelected, nil
 }
 
-func (hb *HashmapBuilder) projectedBatchCopyBytes(src *batch.Batch) (uint64, error) {
+func projectedNewDestinationBytes(src *batch.Batch, start, rows int) (uint64, error) {
+	total, _, _, _, err := projectedNewDestinationAllocation(src, start, rows)
+	return total, err
+}
+
+func (hb *HashmapBuilder) projectedBatchCopy(src *batch.Batch) (batchCopyProjection, error) {
 	if src == nil || src.RowCount() < 0 {
-		return 0, process.ErrHashBuildBudgetInvalid
+		return batchCopyProjection{}, process.ErrHashBuildBudgetInvalid
 	}
+	projection := batchCopyProjection{columns: len(src.Vecs)}
 	rows := uint64(src.RowCount())
 	last := len(hb.Batches.Buf) - 1
-	hasPartialTail := rows != uint64(colexec.DefaultBatchSize) &&
-		last >= 0 && hb.Batches.Buf[last] != nil &&
+	hadPartialTail := last >= 0 && hb.Batches.Buf[last] != nil &&
 		hb.Batches.Buf[last].RowCount() != colexec.DefaultBatchSize
+	hasPartialTail := rows != uint64(colexec.DefaultBatchSize) && hadPartialTail
 	appendRows := 0
 	if hasPartialTail {
 		// CopyIntoBatches appends into the partial tail. Derive each replacement
@@ -480,40 +581,80 @@ func (hb *HashmapBuilder) projectedBatchCopyBytes(src *batch.Batch) (uint64, err
 		// 1.25x steps before reaching the required size.
 		tail := hb.Batches.Buf[last]
 		if tail.RowCount() < 0 || tail.RowCount() >= colexec.DefaultBatchSize {
-			return 0, process.ErrHashBuildBudgetInvalid
+			return batchCopyProjection{}, process.ErrHashBuildBudgetInvalid
 		}
 		appendRows = colexec.DefaultBatchSize - tail.RowCount()
 		if appendRows > src.RowCount() {
 			appendRows = src.RowCount()
 		}
-		replacementPeak, retainedDelta, err := projectedPartialTailReplacementBytes(tail, src, appendRows)
+		replacementPeak, retainedDelta, appendedSelected, err :=
+			projectedPartialTailReplacement(tail, src, appendRows)
 		if err != nil {
-			return 0, err
+			return batchCopyProjection{}, err
 		}
 		projected := replacementPeak
+		combinedSelected, err := spillCheckedAdd(
+			hb.retainedSpillTailSelected, appendedSelected)
+		if err != nil {
+			return batchCopyProjection{}, err
+		}
+		projection.maxRetainedRows = tail.RowCount() + appendRows
+		projection.maxRetainedSelected = combinedSelected
+		if projection.maxRetainedRows < colexec.DefaultBatchSize {
+			projection.nextTailSelected = combinedSelected
+		}
 		if appendRows < src.RowCount() {
 			// After the tail grow finishes, its retained delta stays live while
 			// CopyIntoBatches materializes the remaining source rows.
-			remaining, err := projectedNewDestinationBytes(
+			remaining, maxRows, maxSelected, lastSelected, err := projectedNewDestinationAllocation(
 				src, appendRows, src.RowCount()-appendRows,
 			)
 			if err != nil {
-				return 0, err
+				return batchCopyProjection{}, err
 			}
 			if retainedDelta > math.MaxUint64-remaining {
-				return 0, process.ErrHashBuildBudgetInvalid
+				return batchCopyProjection{}, process.ErrHashBuildBudgetInvalid
 			}
 			if retained := retainedDelta + remaining; retained > projected {
 				projected = retained
 			}
+			if maxSelected > projection.maxRetainedSelected {
+				projection.maxRetainedSelected = maxSelected
+			}
+			if maxRows > projection.maxRetainedRows {
+				projection.maxRetainedRows = maxRows
+			}
+			remainingRows := src.RowCount() - appendRows
+			if remainingRows%colexec.DefaultBatchSize != 0 {
+				projection.nextTailSelected = lastSelected
+			} else {
+				projection.nextTailSelected = 0
+			}
 		}
-		return projectedBatchCopyWithMetadata(src, projected)
+		projection.admissionBytes, err = projectedBatchCopyWithMetadata(src, projected)
+		return projection, err
 	}
-	projected, err := projectedNewDestinationBytes(src, 0, src.RowCount())
+	projected, maxRows, maxSelected, lastSelected, err := projectedNewDestinationAllocation(
+		src, 0, src.RowCount())
 	if err != nil {
-		return 0, err
+		return batchCopyProjection{}, err
 	}
-	return projectedBatchCopyWithMetadata(src, projected)
+	projection.admissionBytes, err = projectedBatchCopyWithMetadata(src, projected)
+	projection.maxRetainedRows = maxRows
+	projection.maxRetainedSelected = maxSelected
+	if src.RowCount() == colexec.DefaultBatchSize && hadPartialTail {
+		// CopyIntoBatches swaps the new full batch before the old partial tail;
+		// the cached tail itself is unchanged.
+		projection.nextTailSelected = hb.retainedSpillTailSelected
+	} else if src.RowCount()%colexec.DefaultBatchSize != 0 {
+		projection.nextTailSelected = lastSelected
+	}
+	return projection, err
+}
+
+func (hb *HashmapBuilder) projectedBatchCopyBytes(src *batch.Batch) (uint64, error) {
+	projection, err := hb.projectedBatchCopy(src)
+	return projection.admissionBytes, err
 }
 
 func projectedBatchCopyWithMetadata(src *batch.Batch, projected uint64) (uint64, error) {
@@ -537,6 +678,7 @@ func projectedBatchCopyWithMetadata(src *batch.Batch, projected uint64) (uint64,
 
 func (hb *HashmapBuilder) cleanBatches(proc *process.Process) {
 	hb.Batches.Clean(proc.Mp())
+	hb.retainedSpillTailSelected = 0
 	hb.releaseBatchReservations()
 }
 
@@ -774,33 +916,118 @@ func uniqueAppendAreaBytes(src *vector.Vector, start, rows int, sels []int64) (i
 	return areaBytes, nil
 }
 
-// unionBatchAreaBytes mirrors Vector.UnionBatch's flags=nil varlen paths.
-// In particular, its whole-vector fast path copies the complete source area,
-// including bytes no longer referenced after SetLength/Shrink. Budget
-// admission must therefore use len(area), not only the live row references.
-func unionBatchAreaBytes(
+// logicalAppendAreaBytes sums the payload that UnionInt32 will materialize for
+// a contiguous non-const source range. It is intentionally separate from the
+// general selected-row helper above: retained-copy projection runs once per
+// ingress batch, so its common no-area and no-null paths avoid per-row class,
+// bitmap, and selection checks.
+func logicalAppendAreaBytes(src *vector.Vector, start, rows int) (uint64, error) {
+	if src == nil || !src.GetType().IsVarlen() || start < 0 || rows < 0 ||
+		start > src.Length() || rows > src.Length()-start || src.IsConst() {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	if rows == 0 || len(src.GetArea()) == 0 {
+		return 0, nil
+	}
+	values, _ := vector.MustVarlenaRawData(src)
+	end := start + rows
+	if end > len(values) {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	var payload uint64
+	if src.GetNulls().EmptyByFlag() {
+		for i := start; i < end; i++ {
+			if values[i].IsSmall() {
+				continue
+			}
+			_, length := values[i].OffsetLen()
+			if payload > math.MaxUint64-uint64(length) {
+				return 0, process.ErrHashBuildBudgetInvalid
+			}
+			payload += uint64(length)
+		}
+		return payload, nil
+	}
+	for i := start; i < end; i++ {
+		if src.GetNulls().Contains(uint64(i)) {
+			continue
+		}
+		if values[i].IsSmall() {
+			continue
+		}
+		_, length := values[i].OffsetLen()
+		if payload > math.MaxUint64-uint64(length) {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		payload += uint64(length)
+	}
+	return payload, nil
+}
+
+// unionBatchAreaProjection mirrors Vector.UnionBatch's flags=nil varlen paths
+// and keeps physical retention separate from logical spill materialization.
+// A whole-vector copy retains the complete source area, including stale bytes,
+// while shared varlena descriptors can make a later UnionInt32 copy the same
+// payload once per logical row. One live-descriptor scan therefore supplies the
+// exact selected payload without treating vector class as an ownership proxy.
+func unionBatchAreaProjection(
 	src *vector.Vector,
 	start, rows int,
-) (int, error) {
+) (physicalBytes int, selectedPayload uint64, err error) {
 	if src == nil || !src.GetType().IsVarlen() {
-		return 0, nil
+		return 0, 0, nil
 	}
 	if start < 0 || rows < 0 ||
 		start > src.Length() || rows > src.Length()-start {
-		return 0, process.ErrHashBuildBudgetInvalid
+		return 0, 0, process.ErrHashBuildBudgetInvalid
 	}
 	if rows == 0 {
-		return 0, nil
+		return 0, 0, nil
+	}
+	if len(src.GetArea()) == 0 {
+		return 0, 0, nil
 	}
 	if src.IsConst() {
 		// UnionBatch materializes the constant payload once and broadcasts its
-		// varlena header to the appended logical rows.
-		return uniqueAppendAreaBytes(src, 0, 1, nil)
+		// varlena header to the appended logical rows. UnionInt32 later copies
+		// that referenced payload once for every selected row.
+		physicalBytes, err = uniqueAppendAreaBytes(src, 0, 1, nil)
+		if err != nil {
+			return 0, 0, err
+		}
+		selectedPayload, err = spillCheckedMul(
+			uint64(physicalBytes), uint64(rows))
+		return physicalBytes, selectedPayload, err
 	}
 	if start == 0 && rows == src.Length() {
-		return len(src.GetArea()), nil
+		if src.VarlenaAreaIsDisjoint() {
+			// The retained full-vector copy preserves the complete physical area.
+			// Disjoint live descriptors prove their logical payload cannot exceed
+			// that area even when it contains dead bytes. This avoids an
+			// O(columns*rows) pre-spill scan for ordinary append-built vectors.
+			return len(src.GetArea()), uint64(len(src.GetArea())), nil
+		}
+		livePayload, err := logicalAppendAreaBytes(src, start, rows)
+		if err != nil {
+			return 0, 0, err
+		}
+		return len(src.GetArea()), livePayload, nil
 	}
-	return uniqueAppendAreaBytes(src, start, rows, nil)
+	livePayload, err := logicalAppendAreaBytes(src, start, rows)
+	if err != nil {
+		return 0, 0, err
+	}
+	if livePayload > uint64(math.MaxInt) {
+		return 0, 0, process.ErrHashBuildBudgetInvalid
+	}
+	return int(livePayload), livePayload, nil
+}
+
+// unionBatchAreaBytes is kept as the allocation-only projection used by
+// focused CopyIntoBatches admission tests.
+func unionBatchAreaBytes(src *vector.Vector, start, rows int) (int, error) {
+	physical, _, err := unionBatchAreaProjection(src, start, rows)
+	return physical, err
 }
 
 func (hb *HashmapBuilder) reserveUniqueAppendOverlap(dst *vector.Vector, rows, areaBytes int) (*process.HashBuildReservation, error) {
