@@ -1,0 +1,14 @@
+name: Object Storage Integration
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 18 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  object-storage-integration:
+    uses: matrixorigin/CI/.github/workflows/object-storage-integration.yaml@main
+    secrets: inherit

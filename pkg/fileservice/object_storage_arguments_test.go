@@ -25,11 +25,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
+
+const runExternalObjectStorageTestsEnv = "MO_RUN_EXTERNAL_OBJECT_STORAGE_TESTS"
 
 func TestObjectStorageArguments(t *testing.T) {
 
@@ -64,14 +65,29 @@ func TestObjectStorageArguments(t *testing.T) {
 	})
 }
 
-func objectStorageArgumentsForTest(defaultName string, t *testing.T) (ret []ObjectStorageArguments) {
-
-	// disk
-	ret = append(ret, ObjectStorageArguments{
+func localObjectStorageArgumentsForTest(defaultName string, t *testing.T) []ObjectStorageArguments {
+	return []ObjectStorageArguments{{
 		Name:     defaultName,
 		Endpoint: "disk",
 		Bucket:   t.TempDir(),
-	})
+	}}
+}
+
+func shouldRunExternalObjectStorageTests(short bool, enabled string) bool {
+	return !short && enabled == "1"
+}
+
+func requireExternalObjectStorageTests(t *testing.T) {
+	t.Helper()
+	if shouldRunExternalObjectStorageTests(testing.Short(), os.Getenv(runExternalObjectStorageTestsEnv)) {
+		return
+	}
+	t.Skipf("external object storage tests require -short=false and %s=1", runExternalObjectStorageTestsEnv)
+}
+
+func externalObjectStorageArgumentsForTest(defaultName string, t *testing.T) (ret []ObjectStorageArguments) {
+	t.Helper()
+	requireExternalObjectStorageTests(t)
 
 	// s3.json
 	content, err := os.ReadFile("s3.json")
@@ -86,19 +102,22 @@ func objectStorageArgumentsForTest(defaultName string, t *testing.T) (ret []Obje
 				RoleARN   string `json:"role-arn"`
 			}
 
-			if err := json.Unmarshal(content, &config); err == nil {
-				ret = append(ret, ObjectStorageArguments{
-					Name:      "s3.json " + defaultName,
-					Endpoint:  config.Endpoint,
-					Region:    config.Region,
-					KeyID:     config.APIKey,
-					KeySecret: config.APISecret,
-					Bucket:    config.Bucket,
-					RoleARN:   config.RoleARN,
-					KeyPrefix: fmt.Sprintf("%v", rand.Int64()),
-				})
+			if err := json.Unmarshal(content, &config); err != nil {
+				t.Fatalf("parse s3.json: %v", err)
 			}
+			ret = append(ret, ObjectStorageArguments{
+				Name:      "s3.json " + defaultName,
+				Endpoint:  config.Endpoint,
+				Region:    config.Region,
+				KeyID:     config.APIKey,
+				KeySecret: config.APISecret,
+				Bucket:    config.Bucket,
+				RoleARN:   config.RoleARN,
+				KeyPrefix: fmt.Sprintf("%v", rand.Int64()),
+			})
 		}
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("read s3.json: %v", err)
 	}
 
 	// s3_fs_test_new.xml
@@ -108,15 +127,18 @@ func objectStorageArgumentsForTest(defaultName string, t *testing.T) (ret []Obje
 			XMLName xml.Name               `xml:"Spec"`
 			Cases   []S3CredentialTestCase `xml:"Case"`
 		}
-		if err := xml.Unmarshal(content, &spec); err == nil {
-			for _, kase := range spec.Cases {
-				if kase.Skip {
-					continue
-				}
-				kase.KeyPrefix = fmt.Sprintf("%v", rand.Int64())
-				ret = append(ret, kase.ObjectStorageArguments)
-			}
+		if err := xml.Unmarshal(content, &spec); err != nil {
+			t.Fatalf("parse s3_fs_test_new.xml: %v", err)
 		}
+		for _, kase := range spec.Cases {
+			if kase.Skip {
+				continue
+			}
+			kase.KeyPrefix = fmt.Sprintf("%v", rand.Int64())
+			ret = append(ret, kase.ObjectStorageArguments)
+		}
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("read s3_fs_test_new.xml: %v", err)
 	}
 
 	// envs
@@ -137,20 +159,40 @@ func objectStorageArgumentsForTest(defaultName string, t *testing.T) (ret []Obje
 		reader := csv.NewReader(strings.NewReader(value))
 		argStrs, err := reader.Read()
 		if err != nil {
-			logutil.Warn("bad S3FS test spec", zap.Any("spec", value))
-			continue
+			t.Fatalf("parse %s: %v", name, err)
 		}
 		var args ObjectStorageArguments
 		if err := args.SetFromString(argStrs); err != nil {
-			logutil.Warn("bad S3FS test spec", zap.Any("spec", value))
-			continue
+			t.Fatalf("parse %s: %v", name, err)
 		}
 		args.KeyPrefix = fmt.Sprintf("%v", rand.Int64())
 
 		ret = append(ret, args)
 	}
+	if len(ret) == 0 {
+		t.Fatalf("%s=1 but no external object storage test configuration was found", runExternalObjectStorageTestsEnv)
+	}
 
 	return ret
+}
+
+func TestShouldRunExternalObjectStorageTests(t *testing.T) {
+	testCases := []struct {
+		name    string
+		short   bool
+		enabled string
+		want    bool
+	}{
+		{name: "explicitly enabled", enabled: "1", want: true},
+		{name: "disabled by default"},
+		{name: "short mode wins", short: true, enabled: "1"},
+		{name: "invalid value", enabled: "true"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			assert.Equal(t, testCase.want, shouldRunExternalObjectStorageTests(testCase.short, testCase.enabled))
+		})
+	}
 }
 
 func TestQCloudRegion(t *testing.T) {

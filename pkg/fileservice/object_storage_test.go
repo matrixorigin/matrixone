@@ -224,7 +224,16 @@ func testObjectStorageWithParentContext[T ObjectStorage](
 }
 
 func TestObjectStorages(t *testing.T) {
-	for _, args := range objectStorageArgumentsForTest("test", t) {
+	testObjectStorages(t, localObjectStorageArgumentsForTest("test", t))
+}
+
+func TestObjectStoragesExternal(t *testing.T) {
+	testObjectStorages(t, externalObjectStorageArgumentsForTest("test", t))
+}
+
+func testObjectStorages(t *testing.T, testArguments []ObjectStorageArguments) {
+	t.Helper()
+	for _, args := range testArguments {
 
 		t.Run(args.Name, func(t *testing.T) {
 			specCtx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)

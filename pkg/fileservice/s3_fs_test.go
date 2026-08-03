@@ -1508,13 +1508,14 @@ type S3CredentialTestCase struct {
 	ObjectStorageArguments
 }
 
-var s3CredentialTestCases = func() []S3CredentialTestCase {
+func s3CredentialTestCasesForTest(t *testing.T) []S3CredentialTestCase {
+	t.Helper()
 	content, err := os.ReadFile("s3_fs_test_new.xml")
 	if os.IsNotExist(err) {
 		return nil
 	}
 	if err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
 	var spec struct {
 		XMLName xml.Name               `xml:"Spec"`
@@ -1522,12 +1523,14 @@ var s3CredentialTestCases = func() []S3CredentialTestCase {
 	}
 	err = xml.Unmarshal(content, &spec)
 	if err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
 	return spec.Cases
-}()
+}
 
 func TestNewS3FSFromSpec(t *testing.T) {
+	requireExternalObjectStorageTests(t)
+	s3CredentialTestCases := s3CredentialTestCasesForTest(t)
 	if len(s3CredentialTestCases) == 0 {
 		t.Skip("no case")
 	}
@@ -1748,8 +1751,16 @@ func BenchmarkS3FSAllocateCacheData(b *testing.B) {
 }
 
 func TestS3FSFromSpecs(t *testing.T) {
+	testS3FSFromSpecs(t, localObjectStorageArgumentsForTest("test", t))
+}
 
-	for _, args := range objectStorageArgumentsForTest("test", t) {
+func TestS3FSFromExternalSpecs(t *testing.T) {
+	testS3FSFromSpecs(t, externalObjectStorageArgumentsForTest("test", t))
+}
+
+func testS3FSFromSpecs(t *testing.T, testArguments []ObjectStorageArguments) {
+	t.Helper()
+	for _, args := range testArguments {
 
 		t.Run(args.Name, func(t *testing.T) {
 
