@@ -705,7 +705,7 @@ select * from auto_increment_alter_quoted order by `1id`;
 10    10
 drop table auto_increment_alter_quoted;
 drop table if exists auto_increment_alter_copy;
-create table auto_increment_alter_copy(id bigint primary key auto_increment, v int) auto_increment = 1000;
+create table auto_increment_alter_copy(id bigint primary key auto_increment, v int) auto_increment = 10;
 insert into auto_increment_alter_copy(v) values (1);
 delete from auto_increment_alter_copy;
 alter table auto_increment_alter_copy auto_increment = 100, algorithm = copy;
