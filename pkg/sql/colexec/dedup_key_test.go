@@ -50,3 +50,19 @@ func TestFormatDedupKeyDecodesFloatIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "-0", got)
 }
+
+func TestFormatDedupKeyRejectsMalformedEncodedIdentity(t *testing.T) {
+	pool := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_varchar.ToType())
+	defer vec.Free(pool)
+	require.NoError(t, vector.AppendBytes(vec, []byte{0xff}, false, pool))
+
+	_, err := FormatDedupKey(vec, 0, []plan.Type{{Id: int32(types.T_float64)}})
+	require.Error(t, err)
+
+	_, err = FormatDedupKey(vec, 0, []plan.Type{
+		{Id: int32(types.T_float64)},
+		{Id: int32(types.T_int64)},
+	})
+	require.Error(t, err)
+}

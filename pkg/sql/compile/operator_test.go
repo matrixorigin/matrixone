@@ -160,6 +160,18 @@ func TestConstructFuzzyFilterUsesFinalizedBuildSide(t *testing.T) {
 
 		require.Equal(t, identityType, op.PkTyp)
 	})
+
+	t.Run("uses table projection when sink projection is absent", func(t *testing.T) {
+		node, tableScan, sinkScan, _ := newNodes(
+			plan.Node_FUZZY_BUILD_SIDE_TABLE, 10, 10)
+		identityType := plan.Type{Id: int32(types.T_varchar)}
+		tableScan.ProjectList = []*plan.Expr{{Typ: identityType}}
+
+		op := constructFuzzyFilter(node, tableScan, sinkScan)
+		defer op.Release()
+
+		require.Equal(t, identityType, op.PkTyp)
+	})
 }
 
 func TestConstructAggregateConfigIncludesGroupConcatMaxLen(t *testing.T) {

@@ -85,6 +85,33 @@ func TestExactFloatFuzzyCheckPreservesStorageIdentity(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(vec, negativeZero, false, mp))
 	err = f.firstlyCheck(context.Background(), vec)
 	require.ErrorContains(t, err, "Duplicate entry '-0'")
+
+	_, err = f.exactFloatKeyDisplay([]byte{0xff})
+	require.Error(t, err)
+}
+
+func TestFuzzyCheckDuplicateSQLModes(t *testing.T) {
+	compound := &fuzzyCheck{
+		db:           "db",
+		tbl:          "t",
+		condition:    "(a = 1 and b = 2)",
+		isCompound:   true,
+		compoundCols: []*plan.ColDef{{Name: "a"}, {Name: "b"}},
+	}
+	require.Equal(t,
+		"select serial(a, b) from `db`.`t` where (a = 1 and b = 2) group by serial(a, b) having count(*) > 1 limit 1;",
+		compound.duplicateCheckSQL())
+
+	hidden := &fuzzyCheck{
+		db:               "db",
+		tbl:              "hidden",
+		attr:             "k",
+		condition:        "1, 2",
+		onlyInsertHidden: true,
+	}
+	require.Equal(t,
+		"select k from `db`.`hidden` where k in (1, 2) group by k having count(*) > 1 limit 1;",
+		hidden.duplicateCheckSQL())
 }
 
 func TestVectorToStringNullHandling(t *testing.T) {
