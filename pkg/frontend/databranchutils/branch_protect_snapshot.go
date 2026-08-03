@@ -232,32 +232,7 @@ func ComputeAlterLineageCompactionPlan(
 		if _, ok := visited[start]; ok {
 			continue
 		}
-		component := make([]uint64, 0, 4)
-		stack := []uint64{start}
-		logicalOwner := false
-		for len(stack) > 0 {
-			last := len(stack) - 1
-			tableID := stack[last]
-			stack = stack[:last]
-			if tableID == 0 {
-				continue
-			}
-			if _, ok := visited[tableID]; ok {
-				continue
-			}
-			visited[tableID] = struct{}{}
-			component = append(component, tableID)
-
-			if meta, ok := dag.Info[tableID]; ok {
-				if !meta.Deleted && isLogicalBranchOwnerLevel(meta.Level) {
-					logicalOwner = true
-				}
-				if meta.ParentTableID != 0 {
-					stack = append(stack, meta.ParentTableID)
-				}
-			}
-			stack = append(stack, dag.Children[tableID]...)
-		}
+		component, logicalOwner := dag.connectedComponent(start, visited)
 
 		if logicalOwner {
 			continue
@@ -313,6 +288,48 @@ func ComputeAlterLineageCompactionPlan(
 	sort.Slice(plan.TableIDs, func(i, j int) bool { return plan.TableIDs[i] < plan.TableIDs[j] })
 	sort.Strings(plan.SnapshotNames)
 	return plan
+}
+
+func (d BranchReclaimDag) connectedComponent(
+	start uint64,
+	visited map[uint64]struct{},
+) (component []uint64, hasLiveLogicalBranch bool) {
+	stack := []uint64{start}
+	for len(stack) > 0 {
+		last := len(stack) - 1
+		tableID := stack[last]
+		stack = stack[:last]
+		if tableID == 0 {
+			continue
+		}
+		if _, ok := visited[tableID]; ok {
+			continue
+		}
+		visited[tableID] = struct{}{}
+		component = append(component, tableID)
+
+		if meta, ok := d.Info[tableID]; ok {
+			if !meta.Deleted && isLogicalBranchOwnerLevel(meta.Level) {
+				hasLiveLogicalBranch = true
+			}
+			if meta.ParentTableID != 0 {
+				stack = append(stack, meta.ParentTableID)
+			}
+		}
+		stack = append(stack, d.Children[tableID]...)
+	}
+	return component, hasLiveLogicalBranch
+}
+
+// ComponentHasLiveLogicalBranch reports whether the lineage component that
+// contains start has a live logical branch owner. Plain "alter" rows only pin
+// historical physical generations and do not represent logical branches.
+func (d BranchReclaimDag) ComponentHasLiveLogicalBranch(start uint64) bool {
+	_, hasLiveLogicalBranch := d.connectedComponent(
+		start,
+		make(map[uint64]struct{}, len(d.Info)),
+	)
+	return hasLiveLogicalBranch
 }
 
 // BuildAlterLineageSnapshotDeleteSQL deletes only branch-managed snapshots.

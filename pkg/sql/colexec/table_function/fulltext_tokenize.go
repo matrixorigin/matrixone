@@ -135,21 +135,16 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 	idVec := tf.ctr.argVecs[0]
 	id := vector.GetAny(idVec, nthRow, true)
 
-	isnull := false
-	for i := 1; i < vlen; i++ {
-		isnull = (isnull || tf.ctr.argVecs[i].IsNull(uint64(nthRow)))
-	}
-
-	if isnull {
-		return nil
-	}
-
 	switch u.param.Parser {
 	case "", "ngram", "default", "gojieba":
 
 		var content bytes.Buffer
+		hasContentColumn := false
 		for i := 1; i < vlen; i++ {
-			if i > 1 {
+			if tf.ctr.argVecs[i].IsNull(uint64(nthRow)) {
+				continue
+			}
+			if hasContentColumn {
 				content.WriteByte('\n')
 			}
 			data := tf.ctr.argVecs[i].GetStringAt(nthRow)
@@ -172,6 +167,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			} else {
 				content.WriteString(data)
 			}
+			hasContentColumn = true
 		}
 
 		var tok tokenizer.Tokenizer
@@ -201,6 +197,9 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 	case "json":
 		joffset := int32(0)
 		for i := 1; i < vlen; i++ {
+			if tf.ctr.argVecs[i].IsNull(uint64(nthRow)) {
+				continue
+			}
 			c := tf.ctr.argVecs[i].GetRawBytesAt(nthRow)
 
 			var bj bytejson.ByteJson
@@ -238,6 +237,9 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 	case "json_value":
 		joffset := int32(0)
 		for i := 1; i < vlen; i++ {
+			if tf.ctr.argVecs[i].IsNull(uint64(nthRow)) {
+				continue
+			}
 			c := tf.ctr.argVecs[i].GetRawBytesAt(nthRow)
 
 			var bj bytejson.ByteJson
