@@ -883,28 +883,6 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 	if err != nil {
 		return err
 	}
-	if !uniqueReference {
-		partitionPositions := make([]int32, 0, len(affectedFK.fk.ForeignCols))
-		for _, parentColID := range affectedFK.fk.ForeignCols {
-			partitionPositions = append(
-				partitionPositions,
-				oldColName2Idx[parentAlias+"."+parentColIDToName[parentColID]],
-			)
-		}
-		parentNodeID, parentNode, sourceTag, err = builder.appendRowNumberGuardNode(
-			bindCtx,
-			parentNodeID,
-			parentNode,
-			sourceTag,
-			partitionPositions,
-			"parent foreign key action has an ambiguous non-unique referenced-key mapping",
-			foreignKeyAmbiguousMappingAssert,
-		)
-		if err != nil {
-			return err
-		}
-	}
-
 	childTableDef := affectedFK.childTableDef
 	childTag := builder.genNewBindTag()
 	builder.addNameByColRef(childTag, childTableDef)
@@ -984,6 +962,72 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 		JoinType: plan.Node_INNER,
 		OnList:   joinPreds,
 	}, bindCtx)
+	if !uniqueReference {
+		mappingTag := builder.genNewBindTag()
+		mappingProjection := make([]*plan.Expr, 0, len(childTableDef.Cols)+len(newChildExprs))
+		for i, col := range childTableDef.Cols {
+			mappingProjection = append(mappingProjection, &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: childTag,
+					ColPos: int32(i),
+				}},
+			})
+		}
+		mappingNewChildExprs := make(map[int32]*plan.Expr, len(newChildExprs))
+		for _, childColID := range affectedFK.fk.Cols {
+			childPos := childColIDToPos[childColID]
+			newPos := int32(len(mappingProjection))
+			mappingProjection = append(mappingProjection, newChildExprs[childPos])
+			mappingNewChildExprs[childPos] = &plan.Expr{
+				Typ: childTableDef.Cols[childPos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: mappingTag,
+					ColPos: newPos,
+				}},
+			}
+		}
+		joinNodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{joinNodeID},
+			ProjectList: mappingProjection,
+			BindingTags: []int32{mappingTag},
+		}, bindCtx)
+		childTag = mappingTag
+		newChildExprs = mappingNewChildExprs
+
+		childRowIDPos := childTableDef.Name2ColIndex[catalog.Row_ID]
+		childRowIDExpr := &plan.Expr{
+			Typ: childTableDef.Cols[childRowIDPos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: childTag,
+				ColPos: childRowIDPos,
+			}},
+		}
+		mappingIdentity := []*plan.Expr{childRowIDExpr}
+		if affectedFK.fk.OnUpdate == plan.ForeignKeyDef_CASCADE {
+			for _, childColID := range affectedFK.fk.Cols {
+				mappingIdentity = append(mappingIdentity, newChildExprs[childColIDToPos[childColID]])
+			}
+		}
+		joinNodeID, err = builder.appendRowNumberMappingGuardNode(
+			bindCtx, joinNodeID, mappingIdentity, "", "")
+		if err != nil {
+			return err
+		}
+		if affectedFK.fk.OnUpdate == plan.ForeignKeyDef_CASCADE {
+			joinNodeID, err = builder.appendRowNumberMappingGuardNode(
+				bindCtx,
+				joinNodeID,
+				[]*plan.Expr{childRowIDExpr},
+				"parent foreign key action has an ambiguous non-unique referenced-key mapping",
+				foreignKeyAmbiguousMappingAssert,
+			)
+			if err != nil {
+				return err
+			}
+		}
+	}
 
 	type mutationIndex struct {
 		def      *plan.IndexDef
@@ -1212,6 +1256,96 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 	builder.appendStep(actionNodeID)
 	builder.qry.HasForeignKeyAction = true
 	return nil
+}
+
+func (builder *QueryBuilder) appendRowNumberMappingGuardNode(
+	bindCtx *BindContext,
+	lastNodeID int32,
+	partitionByExprs []*plan.Expr,
+	duplicateErrorMessage string,
+	duplicateErrorType string,
+) (int32, error) {
+	if len(partitionByExprs) == 0 {
+		return lastNodeID, nil
+	}
+
+	partitionBy := make([]*plan.OrderBySpec, 0, len(partitionByExprs))
+	for _, expr := range partitionByExprs {
+		partitionBy = append(partitionBy, &plan.OrderBySpec{
+			Expr: expr,
+			Flag: plan.OrderBySpec_INTERNAL,
+		})
+	}
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PARTITION,
+		Children: []int32{lastNodeID},
+		OrderBy:  partitionBy,
+	}, bindCtx)
+
+	rowNumberFunc, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "row_number", nil)
+	if err != nil {
+		return 0, err
+	}
+	windowTag := builder.genNewBindTag()
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType: plan.Node_WINDOW,
+		Children: []int32{lastNodeID},
+		WinSpecList: []*plan.Expr{{
+			Typ: rowNumberFunc.Typ,
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				WindowFunc:  rowNumberFunc,
+				Name:        "row_number",
+				PartitionBy: partitionByExprs,
+				Frame: &plan.FrameClause{
+					Type: plan.FrameClause_ROWS,
+					Start: &plan.FrameBound{
+						Type:      plan.FrameBound_PRECEDING,
+						UnBounded: true,
+					},
+					End: &plan.FrameBound{
+						Type:      plan.FrameBound_FOLLOWING,
+						UnBounded: true,
+					},
+				},
+			}},
+		}},
+		WindowIdx:   0,
+		BindingTags: []int32{windowTag},
+	}, bindCtx)
+
+	rowNumberCol := &plan.Expr{
+		Typ: rowNumberFunc.Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: windowTag,
+			ColPos: 0,
+			Name:   "__mo_fk_mapping_row_number",
+		}},
+	}
+	keepFirstRowExpr, err := BindFuncExprImplByPlanExpr(
+		builder.GetContext(), "=", []*plan.Expr{rowNumberCol, makePlan2Int64ConstExprWithType(1)})
+	if err != nil {
+		return 0, err
+	}
+	guardExpr := keepFirstRowExpr
+	if duplicateErrorType != "" {
+		guardExpr, err = BindFuncExprImplByPlanExpr(
+			builder.GetContext(),
+			"assert",
+			[]*plan.Expr{
+				keepFirstRowExpr,
+				makePlan2StringConstExprWithType(duplicateErrorMessage),
+				makePlan2StringConstExprWithType(duplicateErrorType),
+			},
+		)
+		if err != nil {
+			return 0, err
+		}
+	}
+	return builder.appendNode(&plan.Node{
+		NodeType:   plan.Node_FILTER,
+		Children:   []int32{lastNodeID},
+		FilterList: []*plan.Expr{guardExpr},
+	}, bindCtx), nil
 }
 
 func (builder *QueryBuilder) buildUpdateMutationIndexKey(

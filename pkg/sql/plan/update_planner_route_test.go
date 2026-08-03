@@ -599,26 +599,43 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 		})
 	}
 
-	t.Run("non unique referenced prefix uses runtime ambiguity guard", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
-		prepareEmpDept(mock, planpb.ForeignKeyDef_CASCADE)
-		dept := mock.ctxt.tables["dept"]
-		dept.Pkey = &planpb.PrimaryKeyDef{
-			Names: []string{"deptno", "dname"}, PkeyColName: "deptno",
-		}
+	for _, test := range []struct {
+		name        string
+		action      planpb.ForeignKeyDef_RefAction
+		windowCount int
+		ambiguous   bool
+	}{
+		{name: "cascade guards distinct child outputs", action: planpb.ForeignKeyDef_CASCADE, windowCount: 2, ambiguous: true},
+		{name: "set null only deduplicates child identity", action: planpb.ForeignKeyDef_SET_NULL, windowCount: 1},
+	} {
+		t.Run("non unique referenced prefix "+test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			prepareEmpDept(mock, test.action)
+			dept := mock.ctxt.tables["dept"]
+			dept.Pkey = &planpb.PrimaryKeyDef{
+				Names: []string{"deptno", "dname"}, PkeyColName: "deptno",
+			}
 
-		stmt, err := parsers.ParseOne(
-			mock.CurrentContext().GetContext(), dialect.MYSQL,
-			"UPDATE dept SET deptno = 2", 1)
-		require.NoError(t, err)
-		defer stmt.Free()
+			stmt, err := parsers.ParseOne(
+				mock.CurrentContext().GetContext(), dialect.MYSQL,
+				"UPDATE dept SET deptno = 2", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
 
-		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
-		require.NoError(t, err)
-		require.True(t, updateFkPlanContainsTypedAssert(
-			builder.qry, foreignKeyAmbiguousMappingAssert))
-	})
+			builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
+			_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+			require.NoError(t, err)
+			require.Equal(t, test.ambiguous, updateFkPlanContainsTypedAssert(
+				builder.qry, foreignKeyAmbiguousMappingAssert))
+			windowCount := 0
+			for _, node := range builder.qry.Nodes {
+				if node.NodeType == planpb.Node_WINDOW {
+					windowCount++
+				}
+			}
+			require.Equal(t, test.windowCount, windowCount)
+		})
+	}
 }
 
 func TestBindUpdateForeignKeySensitivityIncludesImplicitFinalRowChanges(t *testing.T) {

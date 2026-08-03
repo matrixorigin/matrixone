@@ -127,6 +127,84 @@ func TestIssue26339ForeignKeyExecutionRegressions(t *testing.T) {
 			require.Zero(t, orphanCount)
 		})
 
+		t.Run("non unique referenced prefix validates actual child mappings", func(t *testing.T) {
+			execSQLRequire(t, ctx, db, "create table "+database+".mapping_parent ("+
+				"a int, b int, primary key (a, b))")
+			execSQLRequire(t, ctx, db, "create table "+database+".mapping_child ("+
+				"id int primary key, parent_a int, foreign key (parent_a) "+
+				"references "+database+".mapping_parent(a) on update cascade)")
+
+			// No child row means there is no referential-action target to make
+			// ambiguous, even when changed parents share the same old prefix.
+			execSQLRequire(t, ctx, db,
+				"insert into "+database+".mapping_parent values (1, 1), (1, 2)")
+			execSQLRequire(t, ctx, db,
+				"update "+database+".mapping_parent set a = b + 1 where a = 1")
+			var parentCount int
+			require.NoError(t, db.QueryRowContext(ctx,
+				"select count(*) from "+database+".mapping_parent where (a, b) in ((2, 1), (3, 2))").
+				Scan(&parentCount))
+			require.Equal(t, 2, parentCount)
+
+			execSQLRequire(t, ctx, db, "delete from "+database+".mapping_parent")
+			execSQLRequire(t, ctx, db,
+				"insert into "+database+".mapping_parent values (1, 1), (1, 2)")
+			execSQLRequire(t, ctx, db,
+				"insert into "+database+".mapping_child values (10, 1)")
+
+			// Duplicate parent matches are safe when they produce one identical
+			// new tuple for the child row.
+			execSQLRequire(t, ctx, db,
+				"update "+database+".mapping_parent set a = 2 where a = 1")
+			var childParent int
+			require.NoError(t, db.QueryRowContext(ctx,
+				"select parent_a from "+database+".mapping_child where id = 10").Scan(&childParent))
+			require.Equal(t, 2, childParent)
+
+			execSQLRequire(t, ctx, db, "delete from "+database+".mapping_child")
+			execSQLRequire(t, ctx, db, "delete from "+database+".mapping_parent")
+			execSQLRequire(t, ctx, db,
+				"insert into "+database+".mapping_parent values (1, 1), (1, 2)")
+			execSQLRequire(t, ctx, db,
+				"insert into "+database+".mapping_child values (10, 1)")
+
+			// Distinct outputs for the same child remain ambiguous and the whole
+			// statement must roll back.
+			_, updateErr := db.ExecContext(ctx,
+				"update "+database+".mapping_parent set a = b + 1 where a = 1")
+			require.Error(t, updateErr)
+			var mysqlErr *mysql.MySQLError
+			require.ErrorAs(t, updateErr, &mysqlErr)
+			require.Equal(t, uint16(20105), mysqlErr.Number)
+			require.Contains(t, updateErr.Error(), "ambiguous non-unique referenced-key mapping")
+
+			var originalParentCount, orphanCount int
+			require.NoError(t, db.QueryRowContext(ctx,
+				"select count(*) from "+database+".mapping_parent where a = 1").Scan(&originalParentCount))
+			require.NoError(t, db.QueryRowContext(ctx,
+				"select count(*) from "+database+".mapping_child c left join "+
+					database+".mapping_parent p on c.parent_a = p.a where p.a is null").Scan(&orphanCount))
+			require.Equal(t, 2, originalParentCount)
+			require.Zero(t, orphanCount)
+
+			execSQLRequire(t, ctx, db, "create table "+database+".set_null_parent ("+
+				"a int, b int, primary key (a, b))")
+			execSQLRequire(t, ctx, db, "create table "+database+".set_null_child ("+
+				"id int primary key, parent_a int, foreign key (parent_a) "+
+				"references "+database+".set_null_parent(a) on update set null)")
+			execSQLRequire(t, ctx, db,
+				"insert into "+database+".set_null_parent values (1, 1), (1, 2)")
+			execSQLRequire(t, ctx, db,
+				"insert into "+database+".set_null_child values (10, 1)")
+			execSQLRequire(t, ctx, db,
+				"update "+database+".set_null_parent set a = b + 1 where a = 1")
+			var nullChildCount int
+			require.NoError(t, db.QueryRowContext(ctx,
+				"select count(*) from "+database+".set_null_child where id = 10 and parent_a is null").
+				Scan(&nullChildCount))
+			require.Equal(t, 1, nullChildCount)
+		})
+
 		t.Run("prepared implicit on update observes enabled foreign key checks", func(t *testing.T) {
 			conn, err := db.Conn(ctx)
 			require.NoError(t, err)
