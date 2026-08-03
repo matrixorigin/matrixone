@@ -282,6 +282,13 @@ func TestPreparedBinaryParamRuntimeType(t *testing.T) {
 	require.Equal(t, types.T_any, preparedBinaryParamRuntimeType([]byte{byte(defines.MYSQL_TYPE_LONG)}, 1))
 }
 
+func TestPreparedTextParamRuntimeType(t *testing.T) {
+	require.Equal(t, types.T_float32, preparedTextParamRuntimeType(float32(1e10)))
+	require.Equal(t, types.T_float64, preparedTextParamRuntimeType(float64(1e100)))
+	require.Equal(t, types.T_any, preparedTextParamRuntimeType(int64(1)))
+	require.Equal(t, types.T_any, preparedTextParamRuntimeType("1e10"))
+}
+
 func TestPreparedBinaryPaginationUsesProtocolParamType(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 110, "select 1 limit ?")
 	defer prepareStmt.Close()
@@ -324,6 +331,15 @@ func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
 		require.False(t, plan2.HasPreparedDynamicNumericParams(executionPlan))
 	}
 
+	for _, value := range []float64{1e10, 1e-10, 1e100, -1e10} {
+		require.NoError(t, ses.SetUserDefinedVar("numeric_param", value, ""))
+		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+		require.NoError(t, err)
+		require.Nil(t, comp)
+		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
+		require.True(t, types.T(root.ProjectList[0].Typ.Id).IsFloat())
+	}
+
 	for _, value := range []string{
 		"-12345678901234567890123456789012345678901234567890123456789012345",
 		"-0.123456789012345678901234567890",
@@ -336,6 +352,31 @@ func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
 		require.NoError(t, err)
 		require.Nil(t, comp)
 		require.False(t, plan2.HasPreparedDynamicNumericParams(executionPlan))
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+		prepareStmt.params = nil
+	}
+
+	for _, test := range []struct {
+		value string
+		typ   defines.MysqlType
+	}{
+		{value: "1e+10", typ: defines.MYSQL_TYPE_FLOAT},
+		{value: "1e-10", typ: defines.MYSQL_TYPE_DOUBLE},
+		{value: "1e+100", typ: defines.MYSQL_TYPE_DOUBLE},
+		{value: "-1e+10", typ: defines.MYSQL_TYPE_DOUBLE},
+		{value: "+Inf", typ: defines.MYSQL_TYPE_DOUBLE},
+		{value: "NaN", typ: defines.MYSQL_TYPE_DOUBLE},
+	} {
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(test.value), false, cw.proc.Mp()))
+		prepareStmt.params = params
+		prepareStmt.ParamTypes = []byte{byte(test.typ), 0}
+		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		require.Nil(t, comp)
+		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
+		require.True(t, types.T(root.ProjectList[0].Typ.Id).IsFloat())
 		cw.proc.SetPrepareParams(nil)
 		params.Free(cw.proc.Mp())
 		prepareStmt.params = nil

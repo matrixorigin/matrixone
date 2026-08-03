@@ -21,6 +21,7 @@ import (
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -438,6 +439,11 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
 		needResetFunction := false
+		dynamicParamPos := int32(-1)
+		if exprImpl.F.Func.GetObjName() == "cast" && isPreparedDynamicNumericType(e.Typ) &&
+			len(exprImpl.F.Args) > 0 && exprImpl.F.Args[0].GetP() != nil {
+			dynamicParamPos = exprImpl.F.Args[0].GetP().Pos
+		}
 		for i, arg := range exprImpl.F.Args {
 			_, directParam := arg.Expr.(*plan.Expr_P)
 			dynamicNumericParam := containsPreparedDynamicNumericParam(arg)
@@ -451,6 +457,24 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			exprImpl.F.Args[i] = rewrittenArg
 		}
 		if exprImpl.F.Func.GetObjName() == "cast" && isPreparedDynamicNumericType(e.Typ) {
+			if dynamicParamPos >= 0 && int(dynamicParamPos) < len(rule.params) {
+				param := rule.params[dynamicParamPos]
+				value := param.GetLit().GetSval()
+				switch types.T(param.Typ.Id) {
+				case types.T_float32:
+					parsed, parseErr := strconv.ParseFloat(value, 32)
+					if parseErr != nil {
+						return nil, parseErr
+					}
+					return MakePlan2Float32ConstExprWithType(float32(parsed)), nil
+				case types.T_float64:
+					parsed, parseErr := strconv.ParseFloat(value, 64)
+					if parseErr != nil {
+						return nil, parseErr
+					}
+					return MakePlan2Float64ConstExprWithType(parsed), nil
+				}
+			}
 			value := exprImpl.F.Args[0]
 			if literal := value.GetLit(); literal != nil {
 				var decimal string

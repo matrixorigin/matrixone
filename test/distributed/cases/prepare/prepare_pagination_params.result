@@ -34,6 +34,22 @@ SET @numeric_param = 12345678901234567890123456789012345678901234567890123456789
 EXECUTE numeric_reexecute USING @numeric_param;
 ➤ plus_one[3,65,0]  𝄀
 12345678901234567890123456789012345678901234567890123456789012346
+SET @numeric_param = 1e10;
+EXECUTE numeric_reexecute USING @numeric_param;
+➤ plus_one[8,54,0]  𝄀
+1.0000000001E10
+SET @numeric_param = 1e-10;
+EXECUTE numeric_reexecute USING @numeric_param;
+➤ plus_one[8,54,0]  𝄀
+1.0000000001
+SET @numeric_param = 1e100;
+EXECUTE numeric_reexecute USING @numeric_param;
+➤ plus_one[8,54,0]  𝄀
+1.0E100
+SET @numeric_param = -1e10;
+EXECUTE numeric_reexecute USING @numeric_param;
+➤ plus_one[8,54,0]  𝄀
+-9.999999999E9
 DEALLOCATE PREPARE numeric_reexecute;
 CREATE TABLE pagination_rows (id INT PRIMARY KEY);
 INSERT INTO pagination_rows VALUES (1), (2), (3), (4);

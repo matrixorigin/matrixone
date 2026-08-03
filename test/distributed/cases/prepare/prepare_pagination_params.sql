@@ -19,6 +19,14 @@ SET @numeric_param = -0.123456789012345678901234567890;
 EXECUTE numeric_reexecute USING @numeric_param;
 SET @numeric_param = 12345678901234567890123456789012345678901234567890123456789012345;
 EXECUTE numeric_reexecute USING @numeric_param;
+SET @numeric_param = 1e10;
+EXECUTE numeric_reexecute USING @numeric_param;
+SET @numeric_param = 1e-10;
+EXECUTE numeric_reexecute USING @numeric_param;
+SET @numeric_param = 1e100;
+EXECUTE numeric_reexecute USING @numeric_param;
+SET @numeric_param = -1e10;
+EXECUTE numeric_reexecute USING @numeric_param;
 DEALLOCATE PREPARE numeric_reexecute;
 
 CREATE TABLE pagination_rows (id INT PRIMARY KEY);

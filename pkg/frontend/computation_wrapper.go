@@ -910,6 +910,17 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 	}
+	if needsNumericSpecialization && execCtx.input != nil && execCtx.input.isBinaryProtExecute {
+		columns := plan2.GetResultColumnsFromPlan(executionPlan)
+		resper := execCtx.resper
+		if executionSes.IsBackgroundSession() {
+			resper = owner.GetResponser()
+		}
+		execCtx.prepareColDef, err = resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
+		if err != nil {
+			return nil, nil, nil, originSQL, false, err
+		}
+	}
 	// A cached prepared Compile already owns a materialized worker topology.
 	// Explicit scheduling intent must be evaluated for this execution, so it
 	// cannot reuse a topology compiled under the prepare-time defaults. Keep a
@@ -1128,9 +1139,24 @@ func buildExecuteUserParams(
 				return
 			}
 		}
-		paramVals[i] = plan2.ParamValue{Value: param, IsBin: paramIsBin[i]}
+		paramVals[i] = plan2.ParamValue{
+			Value:       param,
+			IsBin:       paramIsBin[i],
+			RuntimeType: preparedTextParamRuntimeType(param),
+		}
 	}
 	return
+}
+
+func preparedTextParamRuntimeType(value any) types.T {
+	switch value.(type) {
+	case float32:
+		return types.T_float32
+	case float64:
+		return types.T_float64
+	default:
+		return types.T_any
+	}
 }
 
 func shouldCachePrepareCompile(p *plan.Plan) bool {

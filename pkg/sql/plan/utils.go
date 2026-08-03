@@ -3273,9 +3273,11 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	params := make([]*Expr, len(paramVals))
 	for i, val := range paramVals {
 		isBin := false
+		runtimeType := types.T_any
 		if param, ok := val.(ParamValue); ok {
 			val = param.Value
 			isBin = param.IsBin
+			runtimeType = param.RuntimeType
 		}
 		if val == nil {
 			pc := &plan.Literal{
@@ -3295,6 +3297,10 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 					Lit: pc,
 				},
 			}
+		}
+		if runtimeType != types.T_any {
+			typ := runtimeType.ToType()
+			params[i].Typ = makePlan2Type(&typ)
 		}
 	}
 	paramRule := NewResetParamRefRule(ctx, params)

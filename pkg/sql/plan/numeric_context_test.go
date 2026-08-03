@@ -691,6 +691,29 @@ func TestPreparedDynamicNumericPlanSpecializesPerExecutionValue(t *testing.T) {
 
 	require.True(t, HasPreparedDynamicNumericParams(prepare.Plan), "specialization must not mutate the canonical plan")
 
+	for _, test := range []struct {
+		name        string
+		value       string
+		runtimeType types.T
+	}{
+		{name: "float32 exponent", value: "1e+10", runtimeType: types.T_float32},
+		{name: "float64 small exponent", value: "1e-10", runtimeType: types.T_float64},
+		{name: "float64 large exponent", value: "1e+100", runtimeType: types.T_float64},
+		{name: "float64 negative exponent", value: "-1e+10", runtimeType: types.T_float64},
+		{name: "float64 infinity", value: "+Inf", runtimeType: types.T_float64},
+		{name: "float64 not a number", value: "NaN", runtimeType: types.T_float64},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			specialized, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{ParamValue{
+				Value: test.value, RuntimeType: test.runtimeType,
+			}})
+			require.NoError(t, err)
+			root := specialized.GetQuery().Nodes[specialized.GetQuery().Steps[0]]
+			require.NotEmpty(t, root.ProjectList)
+			require.True(t, types.T(root.ProjectList[0].Typ.Id).IsFloat())
+		})
+	}
+
 	explicitCast := buildPreparedAggregatePlan(t, "select cast(? as decimal(65, 30)) + 1")
 	require.False(t, HasPreparedDynamicNumericParams(explicitCast.Plan),
 		"an explicit DECIMAL(65,30) cast is a user contract, not a dynamic marker")
