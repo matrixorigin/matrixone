@@ -15,25 +15,208 @@
 package lockservice
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	"os"
+	"math"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"golang.org/x/exp/rand"
 )
+
+func TestLockTableAllocatorCloseJoinsErrorsAndIsIdempotent(t *testing.T) {
+	serverErr := errors.New("server close failed")
+	clientErr := errors.New("client close failed")
+	server := &closeResultServer{err: serverErr}
+	client := &closeResultClient{err: clientErr}
+	allocator := &lockTableAllocator{
+		logger:  getLogger(""),
+		stopper: stopper.NewStopper("test-lock-table-allocator-close"),
+		server:  server,
+		client:  client,
+	}
+
+	for range 2 {
+		err := allocator.Close()
+		require.ErrorIs(t, err, serverErr)
+		require.ErrorIs(t, err, clientErr)
+	}
+	require.Equal(t, 1, server.calls)
+	require.Equal(t, 1, client.calls)
+	require.ErrorIs(t,
+		allocator.stopper.RunTask(func(context.Context) {}),
+		stopper.ErrUnavailable,
+	)
+}
+
+func TestLockTableAllocatorCloseCancelsValidationBatch(t *testing.T) {
+	client := &cancelAwareValidationClient{
+		started: make(chan struct{}),
+	}
+	server := &closeResultServer{}
+	allocator := &lockTableAllocator{
+		logger:          getLogger(""),
+		stopper:         stopper.NewStopper("test-lock-table-allocator-validation-close"),
+		keepBindTimeout: time.Hour,
+		server:          server,
+		client:          client,
+	}
+	binds := []timedOutServiceBinds{
+		{binds: newServiceBinds("s1", allocator.logger, allocator.logger)},
+		{binds: newServiceBinds("s2", allocator.logger, allocator.logger)},
+	}
+	require.NoError(t, allocator.stopper.RunTask(func(ctx context.Context) {
+		allocator.validateTimeoutBinds(ctx, binds)
+	}))
+
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("validation did not start")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- allocator.Close()
+	}()
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("allocator close did not cancel validation")
+	}
+	require.Equal(t, int32(1), client.sendCalls.Load(),
+		"shutdown must not start validation for the next timed-out bind")
+	require.Equal(t, int32(1), client.closeCalls.Load())
+	require.Equal(t, 1, server.calls)
+}
+
+type cancelAwareValidationClient struct {
+	Client
+	started    chan struct{}
+	sendCalls  atomic.Int32
+	closeCalls atomic.Int32
+}
+
+func (c *cancelAwareValidationClient) Send(
+	ctx context.Context,
+	_ *pb.Request,
+) (*pb.Response, error) {
+	if c.sendCalls.Add(1) == 1 {
+		close(c.started)
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (c *cancelAwareValidationClient) Close() error {
+	c.closeCalls.Add(1)
+	return nil
+}
+
+type keepaliveDuringValidationClient struct {
+	Client
+	binds        *serviceBinds
+	sendCalls    int
+	resetCalls   int
+	becameActive bool
+}
+
+func (c *keepaliveDuringValidationClient) Send(
+	_ context.Context,
+	_ *pb.Request,
+) (*pb.Response, error) {
+	c.sendCalls++
+	if c.sendCalls == 2 {
+		c.becameActive = c.binds.active()
+	}
+	resp := acquireResponse()
+	resp.ValidateService.OK = false
+	return resp, nil
+}
+
+func (c *keepaliveDuringValidationClient) ResetValidationBackend(
+	context.Context,
+	string,
+) error {
+	c.resetCalls++
+	return nil
+}
+
+func TestValidateTimeoutBindsDoesNotCommitAcrossKeepaliveGeneration(t *testing.T) {
+	logger := getLogger("")
+	const (
+		serviceID = "service-generation"
+		groupID   = uint32(1)
+		tableID   = uint64(2)
+	)
+	binds := newServiceBinds(serviceID, logger, logger)
+	require.True(t, binds.bind(groupID, tableID))
+	binds.Lock()
+	binds.lastKeepaliveTime = time.Now().Add(-time.Hour)
+	binds.Unlock()
+
+	client := &keepaliveDuringValidationClient{binds: binds}
+	allocator := &lockTableAllocator{
+		logger:          logger,
+		keepBindTimeout: time.Second,
+		client:          client,
+	}
+	allocator.mu.services = map[string]*serviceBinds{serviceID: binds}
+	allocator.mu.lockTables = map[uint32]map[uint64]pb.LockTable{
+		groupID: {
+			tableID: {
+				Group:     groupID,
+				Table:     tableID,
+				ServiceID: serviceID,
+				Valid:     true,
+			},
+		},
+	}
+
+	timeoutBinds := allocator.getTimeoutBinds(time.Now())
+	require.Len(t, timeoutBinds, 1)
+	require.True(t, allocator.validateTimeoutBinds(
+		context.Background(),
+		timeoutBinds,
+	))
+
+	require.Equal(t, 2, client.sendCalls)
+	require.Equal(t, 1, client.resetCalls)
+	require.True(t, client.becameActive)
+	require.Same(t, binds, allocator.getServiceBinds(serviceID))
+	require.False(t, binds.disabled)
+	require.True(t, allocator.GetLatest(groupID, tableID).Valid)
+}
+
+type fenceTestClock struct {
+	upper timestamp.Timestamp
+}
+
+func (c *fenceTestClock) HasNetworkLatency() bool  { return false }
+func (c *fenceTestClock) MaxOffset() time.Duration { return 0 }
+func (c *fenceTestClock) Now() (timestamp.Timestamp, timestamp.Timestamp) {
+	return timestamp.Timestamp{}, c.upper
+}
+func (c *fenceTestClock) Update(timestamp.Timestamp) {}
+func (c *fenceTestClock) SetNodeID(uint16)           {}
 
 func TestGetBindInRestartService(t *testing.T) {
 	runLockTableAllocatorTest(
@@ -85,7 +268,7 @@ func TestGetWithNoBind(t *testing.T) {
 		time.Hour,
 		func(a *lockTableAllocator) {
 			assert.Equal(t,
-				pb.LockTable{Valid: true, ServiceID: "s1", Table: 1, OriginTable: 1, Version: a.version},
+				pb.LockTable{Valid: true, ServiceID: "s1", Table: 1, OriginTable: 1, Version: a.version, AllocatorID: a.allocatorID},
 				a.Get("s1", 0, 1, 0, pb.Sharding_None))
 		})
 }
@@ -98,7 +281,7 @@ func TestGetWithAlreadyBind(t *testing.T) {
 			// register s1 first
 			a.Get("s1", 0, 1, 0, pb.Sharding_None)
 			assert.Equal(t,
-				pb.LockTable{Valid: true, ServiceID: "s1", Table: 1, OriginTable: 1, Version: a.version},
+				pb.LockTable{Valid: true, ServiceID: "s1", Table: 1, OriginTable: 1, Version: a.version, AllocatorID: a.allocatorID},
 				a.Get("s2", 0, 1, 0, pb.Sharding_None))
 		})
 }
@@ -112,7 +295,7 @@ func TestGetWithBindInvalid(t *testing.T) {
 			a.Get("s1", 0, 1, 0, pb.Sharding_None)
 			a.disableTableBinds(a.getServiceBinds("s1"))
 			assert.Equal(t,
-				pb.LockTable{Valid: true, ServiceID: "s2", Table: 1, OriginTable: 1, Version: a.version + 1},
+				pb.LockTable{Valid: true, ServiceID: "s2", Table: 1, OriginTable: 1, Version: a.version + 1, AllocatorID: a.allocatorID},
 				a.Get("s2", 0, 1, 0, pb.Sharding_None))
 		})
 }
@@ -131,7 +314,7 @@ func TestGetWithBindAndServiceBothInvalid(t *testing.T) {
 			a.getServiceBinds("s2").disable()
 
 			assert.Equal(t,
-				pb.LockTable{Valid: false, ServiceID: "s1", Table: 1, OriginTable: 1, Version: a.version},
+				pb.LockTable{Valid: false, ServiceID: "s1", Table: 1, OriginTable: 1, Version: a.version, AllocatorID: a.allocatorID},
 				a.Get("s2", 0, 1, 0, pb.Sharding_None))
 		})
 }
@@ -238,10 +421,166 @@ func TestValid(t *testing.T) {
 			assert.Empty(t, valid)
 
 			c := a.getCtl("s1")
-			state, ok := c.states.Load(string([]byte{}))
+			state, ok := c.getCommitState(string([]byte{}))
 			require.True(t, ok)
-			require.Equal(t, committingState, state)
+			require.Equal(t, committingState, state.state)
+			require.Equal(t, uint32(1), state.inflight)
 		})
+}
+
+func TestCannotCommitWaitsForAllCommitAttempts(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			txnID := []byte("txn1")
+			bind := a.Get("s1", 0, 4, 0, pb.Sharding_None)
+			for i := 0; i < 2; i++ {
+				invalid, err := a.Valid("s1", txnID, []pb.LockTable{bind})
+				require.NoError(t, err)
+				require.Empty(t, invalid)
+			}
+
+			orphan := []pb.OrphanTxn{{Service: "s1", Txn: [][]byte{txnID}}}
+			require.Equal(t, [][]byte{txnID}, a.AddCannotCommit(orphan))
+			a.FinishCommit("s1", txnID)
+			require.Equal(t, [][]byte{txnID}, a.AddCannotCommit(orphan))
+			a.FinishCommit("s1", txnID)
+			require.Empty(t, a.AddCannotCommit(orphan))
+
+			_, err := a.Valid("s1", txnID, []pb.LockTable{bind})
+			require.Error(t, err)
+		})
+}
+
+func TestCleanCommitStateKeepsInflightCommit(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			txnID := []byte("txn1")
+			bind := a.Get("s1", 0, 4, 0, pb.Sharding_None)
+			_, err := a.Valid("s1", txnID, []pb.LockTable{bind})
+			require.NoError(t, err)
+
+			a.ctlMu.Lock()
+			a.cleanCtlLocked("s1", nil, false, a.getCtl("s1").currentGeneration())
+			a.ctlMu.Unlock()
+
+			state, ok := a.getCtl("s1").getCommitState(string(txnID))
+			require.True(t, ok)
+			require.Equal(t, uint32(1), state.inflight)
+			require.Equal(t, [][]byte{txnID}, a.AddCannotCommit([]pb.OrphanTxn{{
+				Service: "s1",
+				Txn:     [][]byte{txnID},
+			}}))
+		})
+}
+
+func TestCleanCommitStatePreservesCannotCommitWhenServiceStateUnknown(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			c := a.getCtl("s1")
+			require.Equal(t, cannotCommitState, c.tryCannotCommit("txn1"))
+
+			a.ctlMu.Lock()
+			a.cleanCtlLocked("s1", nil, true, c.currentGeneration())
+			a.ctlMu.Unlock()
+			state, ok := c.getCommitState("txn1")
+			require.True(t, ok)
+			require.Equal(t, cannotCommitState, state.state)
+
+			a.ctlMu.Lock()
+			a.cleanCtlLocked("s1", nil, false, c.currentGeneration())
+			a.ctlMu.Unlock()
+			_, ok = c.getCommitState("txn1")
+			require.False(t, ok)
+		})
+}
+
+func TestCleanerPreservesCannotCommitOnActiveTxnQueryError(t *testing.T) {
+	ready := make(chan struct{})
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			c := a.getCtl("s1")
+			require.Equal(t, cannotCommitState, c.tryCannotCommit("cannot"))
+			require.Equal(t, committingState, c.beginCommit("inflight"))
+			close(ready)
+
+			require.Eventually(t, func() bool {
+				return a.HasInvalidService("s1")
+			}, time.Second*3, time.Millisecond*10)
+			state, exists := c.getCommitState("cannot")
+			require.True(t, exists)
+			require.Equal(t, cannotCommitState, state.state)
+			require.Equal(t, [][]byte{[]byte("inflight")}, a.AddCannotCommit([]pb.OrphanTxn{{
+				Service: "s1",
+				Txn:     [][]byte{[]byte("inflight")},
+			}}))
+			a.FinishCommit("s1", []byte("inflight"))
+		},
+		func(lta *lockTableAllocator) {
+			lta.keepBindTimeout = time.Millisecond * 20
+			lta.options.getActiveTxnFunc = func(context.Context, string) (bool, [][]byte, error) {
+				<-ready
+				return false, nil, moerr.NewBackendClosedNoCtx()
+			}
+		})
+}
+
+func TestCannotCommitGenerationRefresh(t *testing.T) {
+	c := &commitCtl{}
+	require.Equal(t, cannotCommitState, c.tryCannotCommit("refreshed"))
+	require.Equal(t, cannotCommitState, c.tryCannotCommit("rejected"))
+	watermark := c.currentGeneration()
+
+	require.Equal(t, cannotCommitState, c.tryCannotCommit("refreshed"))
+	require.Equal(t, cannotCommitState, c.beginCommit("rejected"))
+	c.clean(nil, false, watermark, getLogger(""))
+
+	_, ok := c.getCommitState("refreshed")
+	require.True(t, ok)
+	_, ok = c.getCommitState("rejected")
+	require.True(t, ok)
+}
+
+func TestCommitCtlGenerationOverflowFailsClosed(t *testing.T) {
+	c := &commitCtl{generation: math.MaxUint64 - 1}
+	require.Equal(t, cannotCommitState, c.tryCannotCommit("txn1"))
+	require.Equal(t, uint64(math.MaxUint64), c.currentGeneration())
+
+	c.clean(nil, false, math.MaxUint64, getLogger(""))
+	_, ok := c.getCommitState("txn1")
+	require.True(t, ok)
+	require.Equal(t, uint64(math.MaxUint64), c.currentGeneration())
+}
+
+func TestGetCtlGenerationWithMissingService(t *testing.T) {
+	a := &lockTableAllocator{}
+	_, ok := a.getCtlGeneration("missing")
+	require.False(t, ok)
+}
+
+func TestNewFenceTSDominatesUpperLogicalTimestamp(t *testing.T) {
+	upper := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7, NodeID: 3}
+	a := &lockTableAllocator{clock: &fenceTestClock{upper: upper}}
+	fenceTS := a.newFenceTS()
+	require.Equal(t, timestamp.Timestamp{PhysicalTime: 101, NodeID: 3}, fenceTS)
+	require.True(t, upper.Less(fenceTS))
+}
+
+func TestNewFenceTSFailsClosedAtPhysicalLimit(t *testing.T) {
+	a := &lockTableAllocator{clock: &fenceTestClock{
+		upper: timestamp.Timestamp{PhysicalTime: math.MaxInt64, LogicalTime: 7},
+	}}
+	require.True(t, a.newFenceTS().IsEmpty())
+
+	a.clock = nil
+	require.True(t, a.newFenceTS().IsEmpty())
 }
 
 func TestValidWithServiceInvalid(t *testing.T) {
@@ -276,7 +615,7 @@ func TestValidWithCannotCommitState(t *testing.T) {
 			txn := []byte{1}
 
 			c := a.getCtl("s1")
-			require.Equal(t, cannotCommitState, c.add(string(txn), cannotCommitState))
+			require.Equal(t, cannotCommitState, c.tryCannotCommit(string(txn)))
 
 			b := a.Get("s1", 0, 4, 0, pb.Sharding_None)
 			_, err := a.Valid("s1", txn, []pb.LockTable{b})
@@ -291,7 +630,8 @@ func TestCtlCanRemovedByInvalidService(t *testing.T) {
 		time.Hour,
 		func(a *lockTableAllocator) {
 			c := a.getCtl("s1")
-			c.add("t1", committingState)
+			c.beginCommit("t1")
+			require.True(t, c.finishCommit("t1"))
 			close(ch)
 			for {
 				n := 0
@@ -306,7 +646,7 @@ func TestCtlCanRemovedByInvalidService(t *testing.T) {
 		},
 		func(lta *lockTableAllocator) {
 			lta.keepBindTimeout = time.Millisecond * 100
-			lta.options.getActiveTxnFunc = func(sid string) (bool, [][]byte, error) {
+			lta.options.getActiveTxnFunc = func(context.Context, string) (bool, [][]byte, error) {
 				<-ch
 				return false, nil, nil
 			}
@@ -320,23 +660,18 @@ func TestCtlCanRemovedByNotActiveTxn(t *testing.T) {
 		time.Hour,
 		func(a *lockTableAllocator) {
 			c := a.getCtl("s1")
-			c.add("t1", committingState)
-			c.add("t2", committingState)
+			c.tryCannotCommit("t1")
+			c.tryCannotCommit("t2")
 			close(ch)
 			for {
-				n := 0
-				c.states.Range(func(key, value any) bool {
-					n++
-					return true
-				})
-				if n == 1 {
+				if c.size() == 1 {
 					return
 				}
 			}
 		},
 		func(lta *lockTableAllocator) {
 			lta.keepBindTimeout = time.Millisecond * 100
-			lta.options.getActiveTxnFunc = func(sid string) (bool, [][]byte, error) {
+			lta.options.getActiveTxnFunc = func(context.Context, string) (bool, [][]byte, error) {
 				<-ch
 				return true, [][]byte{[]byte("t2")}, nil
 			}
@@ -426,7 +761,12 @@ func runValidBenchmark(b *testing.B, name string, tables int) {
 					return time.Now().UTC().UnixNano()
 				}, 0))),
 		)
-		testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
+		testSocketDir, err := createTestSocketDir()
+		require.NoError(b, err)
+		defer func() {
+			require.NoError(b, removeTestSocketDir(testSocketDir))
+		}()
+		testSockets := testSocketAddress(testSocketDir, "allocator.sock")
 		a := NewLockTableAllocator("", testSockets, time.Hour, morpc.Config{})
 		defer func() {
 			assert.NoError(b, a.Close())
@@ -462,8 +802,12 @@ func runLockTableAllocatorTest(
 		func(rt runtime.Runtime) {
 			reuse.RunReuseTests(func() {
 				defer leaktest.AfterTest(t)()
-				testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
-				require.NoError(t, os.RemoveAll(testSockets[7:]))
+				testSocketDir, err := createTestSocketDir()
+				require.NoError(t, err)
+				defer func() {
+					require.NoError(t, removeTestSocketDir(testSocketDir))
+				}()
+				testSockets := testSocketAddress(testSocketDir, "allocator.sock")
 				cluster := clusterservice.NewMOCluster(
 					sid,
 					nil,

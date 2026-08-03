@@ -14,8 +14,9 @@ select sinh(d),sinh(fl)from t1;
 select atan(d),atan(fl)from t1;
 select acos(d),acos(fl)from t1;
 
-select cot(d),cot(fl) from t1;
+select cot(d),cot(fl) from t1 where d is null or (d <> 0 and fl <> 0);
 select cot(d),cot(fl) from t1 where d <> 0;
+select cot(0);
 
 select tan(d),tan(fl) from t1;
 select sin(d),sin(fl) from t1;

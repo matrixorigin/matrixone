@@ -16,11 +16,11 @@ package product
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -128,9 +128,9 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (product *Product) build(proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &product.ctr
-	start := time.Now()
-	defer analyzer.WaitStop(start)
-	mp, err := message.ReceiveJoinMap(product.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	mp, err := process.MeasureWait(analyzer, resource.WaitOther, func() (*message.JoinMap, error) {
+		return message.ReceiveJoinMap(product.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	})
 	if err != nil {
 		return err
 	}

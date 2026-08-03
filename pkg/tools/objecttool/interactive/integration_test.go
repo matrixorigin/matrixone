@@ -46,12 +46,18 @@ func createTestObjectFileWithRows(t *testing.T, dir string, filename string, row
 
 // createTestObjectFileWithRowsAndCols creates a test object file with custom rows and columns
 func createTestObjectFileWithRowsAndCols(t *testing.T, dir string, filename string, rowCount, colCount int) string {
+	return createTestObjectFileWithBackend(t, dir, filename, rowCount, colCount, "DISK")
+}
+
+// createTestObjectFileWithBackend writes a test object file using the given
+// fileservice backend ("DISK" CRC-framed or "DISK-V2" raw).
+func createTestObjectFileWithBackend(t *testing.T, dir string, filename string, rowCount, colCount int, backend string) string {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 
 	c := fileservice.Config{
 		Name:    defines.LocalFileServiceName,
-		Backend: "DISK",
+		Backend: backend,
 		DataDir: dir,
 		Cache:   fileservice.DisabledCacheConfig,
 	}
@@ -163,6 +169,47 @@ func createTestObjectFileWithRowsAndCols(t *testing.T, dir string, filename stri
 	require.NoError(t, err)
 
 	return filepath.Join(dir, filename)
+}
+
+// TestObjectReaderBackendDISKV2 proves the offline-kind selector works: a DISK-V2
+// (raw) object file is readable via OpenWithKind("local2") but not via the
+// default local DISK (CRC) reader, and vice versa.
+func TestObjectReaderBackendDISKV2(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("DISK-V2 written, read with local2", func(t *testing.T) {
+		dir, err := os.MkdirTemp("", "mo_objv2")
+		require.NoError(t, err)
+		defer os.RemoveAll(dir)
+		path := createTestObjectFileWithBackend(t, dir, "v2.obj", 30, 8, "DISK-V2")
+
+		reader, err := objecttool.OpenWithKind(ctx, path, objectio.OfflineKindLocal2)
+		require.NoError(t, err)
+		require.NotNil(t, reader)
+		require.Equal(t, uint64(30), reader.Info().RowCount)
+		reader.Close()
+
+		// default local (DISK/CRC) reader cannot read raw data
+		_, err = objecttool.Open(ctx, path)
+		require.Error(t, err)
+	})
+
+	t.Run("DISK written, read with local2 fails", func(t *testing.T) {
+		dir, err := os.MkdirTemp("", "mo_objdisk")
+		require.NoError(t, err)
+		defer os.RemoveAll(dir)
+		path := createTestObjectFileWithBackend(t, dir, "v1.obj", 30, 8, "DISK")
+
+		// default local (DISK/CRC) reader works
+		reader, err := objecttool.Open(ctx, path)
+		require.NoError(t, err)
+		require.Equal(t, uint64(30), reader.Info().RowCount)
+		reader.Close()
+
+		// local2 (raw) reader misreads CRC-framed data
+		_, err = objecttool.OpenWithKind(ctx, path, objectio.OfflineKindLocal2)
+		require.Error(t, err)
+	})
 }
 
 // TestObjectReaderOpen tests ObjectReader.Open with real file

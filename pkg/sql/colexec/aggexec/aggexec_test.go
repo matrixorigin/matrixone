@@ -30,11 +30,9 @@ func TestMakeAggSpecialAgg(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}()
 
-	const testAggID = -9901
 	param := types.T_int64.ToType()
-	RegisterAvgTwCache(testAggID)
 
-	exec, err := MakeAgg(mp, testAggID, false, param)
+	exec, err := MakeAgg(mp, AggIdOfAvgTwCache, false, param)
 	require.NoError(t, err)
 
 	require.NoError(t, exec.GroupGrow(2))
@@ -71,6 +69,162 @@ func TestVectorsUnmarshalFromReader(t *testing.T) {
 
 	exec.Free()
 	exec2.Free()
+}
+
+func TestAggExecUnmarshalReplacesExistingState(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		require.Equal(t, int64(0), mp.CurrNB())
+	}()
+	newExec := func() *countColumnExec {
+		return newCountColumnExec(
+			mp,
+			AggIdOfCountColumn,
+			false,
+			[]types.Type{types.T_int64.ToType()},
+		).(*countColumnExec)
+	}
+
+	t.Run("empty", func(t *testing.T) {
+		target := newExec()
+		defer target.Free()
+		require.NoError(t, target.GroupGrow(1))
+
+		empty := newExec()
+		var buf bytes.Buffer
+		require.NoError(t, empty.SaveIntermediateResult(0, nil, &buf))
+		empty.Free()
+		require.NoError(t, target.UnmarshalFromReader(bytes.NewReader(buf.Bytes()), mp))
+		require.Zero(t, target.GetNumGroups())
+	})
+
+	t.Run("multiple_chunks", func(t *testing.T) {
+		target := newExec()
+		defer target.Free()
+		require.NoError(t, target.GroupGrow(2))
+
+		source := newExec()
+		defer source.Free()
+		require.NoError(t, source.GroupGrow(AggBatchSize+1))
+		flags := [][]uint8{make([]uint8, AggBatchSize), {1}}
+		for i := range flags[0] {
+			flags[0][i] = 1
+		}
+		var buf bytes.Buffer
+		require.NoError(t, source.SaveIntermediateResult(AggBatchSize+1, flags, &buf))
+		require.NoError(t, target.UnmarshalFromReader(bytes.NewReader(buf.Bytes()), mp))
+		require.Equal(t, AggBatchSize+1, target.GetNumGroups())
+
+		results, err := target.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 2)
+		for _, result := range results {
+			result.Free(mp)
+		}
+	})
+}
+
+func TestIntermediateResultCompactsAndReusesSingleChunk(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		require.Equal(t, int64(0), mp.CurrNB())
+	}()
+
+	info := aggInfo{stateTypes: []types.Type{types.T_int64.ToType()}}
+	source := &aggExec{mp: mp, aggInfo: info, chunkSize: AggBatchSize}
+	require.NoError(t, source.GroupGrow(2*AggBatchSize+2))
+
+	flags := make([][]uint8, 3)
+	flags[2] = []uint8{1, 1}
+	var encoded bytes.Buffer
+	require.NoError(t, source.SaveIntermediateResult(2, flags, &encoded))
+
+	header := bytes.NewReader(encoded.Bytes())
+	magic, err := types.ReadUint64(header)
+	require.NoError(t, err)
+	require.Equal(t, magicNumber, magic)
+	chunks, err := types.ReadInt32(header)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), chunks)
+
+	target := &aggExec{mp: mp, aggInfo: info, chunkSize: AggBatchSize}
+	require.NoError(t, target.UnmarshalFromReader(bytes.NewReader(encoded.Bytes()), mp))
+	require.Equal(t, 2, target.GetNumGroups())
+	retained := mp.CurrNB()
+	for range 100 {
+		require.NoError(t, target.UnmarshalFromReader(bytes.NewReader(encoded.Bytes()), mp))
+		require.Equal(t, 2, target.GetNumGroups())
+		require.Equal(t, retained, mp.CurrNB())
+	}
+
+	source.Free()
+	target.Free()
+}
+
+func TestAggStateReadRejectsNegativeCountBeforeReuse(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := aggInfo{stateTypes: []types.Type{types.T_int64.ToType()}}
+	state := aggState{}
+	require.NoError(t, state.init(mp, 0, AggBatchSize, &info, false))
+
+	var encoded bytes.Buffer
+	types.WriteInt32(&encoded, -1)
+	_, err := state.readState(mp, &encoded, &info)
+	require.ErrorContains(t, err, "invalid count: -1")
+
+	state.free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func BenchmarkIntermediateResultUnmarshal(b *testing.B) {
+	mp := mpool.MustNewZero()
+	info := aggInfo{stateTypes: []types.Type{types.T_int64.ToType()}}
+	source := &aggExec{mp: mp, aggInfo: info, chunkSize: AggBatchSize}
+	require.NoError(b, source.GroupGrow(256))
+	flags := make([]uint8, 256)
+	for i := range flags {
+		flags[i] = 1
+	}
+
+	var compact bytes.Buffer
+	require.NoError(b, source.SaveIntermediateResult(256, [][]uint8{flags}, &compact))
+
+	// Q18 profiles showed roughly 977 state chunks with one selected chunk per
+	// spill record. Reproduce the legacy wire shape exactly: 976 zero-length
+	// chunks followed by the selected state.
+	var legacy bytes.Buffer
+	require.NoError(b, types.WriteUint64(&legacy, magicNumber))
+	types.WriteInt32(&legacy, 977)
+	for range 976 {
+		types.WriteInt32(&legacy, 0)
+	}
+	require.NoError(b, source.state[0].writeStateToBuf(mp, &source.aggInfo, flags, &legacy))
+	require.NoError(b, types.WriteUint64(&legacy, magicNumber))
+
+	benchmarks := []struct {
+		name    string
+		encoded []byte
+	}{
+		{name: "legacy-977-chunks", encoded: legacy.Bytes()},
+		{name: "compact-one-chunk", encoded: compact.Bytes()},
+	}
+	for _, benchmark := range benchmarks {
+		b.Run(benchmark.name, func(b *testing.B) {
+			target := &aggExec{mp: mp, aggInfo: info, chunkSize: AggBatchSize}
+			b.ResetTimer()
+			for range b.N {
+				if err := target.UnmarshalFromReader(bytes.NewReader(benchmark.encoded), mp); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(len(benchmark.encoded)), "bytes/record")
+			target.Free()
+		})
+	}
+
+	source.Free()
+	require.Zero(b, mp.CurrNB())
 }
 
 func TestAggStateInitSaveArgCleanup(t *testing.T) {

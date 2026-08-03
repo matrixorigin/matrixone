@@ -67,6 +67,10 @@ type PartitionState struct {
 	//current partitionState can serve snapshot read only if start <= ts <= end
 	start types.TS
 	end   types.TS
+	// appliedTo is the latest logtail timestamp that has been fully applied
+	// to this state. Duration end can be MaxTs for subscribed latest states,
+	// so it is not a physical applied watermark.
+	appliedTo types.TS
 
 	// index
 
@@ -486,39 +490,29 @@ func (p *PartitionState) HandleDataObjectList(
 			p.dataObjectTSIndex.Set(e)
 		}
 
-		// for appendable object, gc rows when delete object
-		iter := p.rows.Copy().Iter()
-		defer iter.Release()
-		objID := objEntry.ObjectStats.ObjectName().ObjectId()
-		trunctPoint := startTSCol[idx]
-		blkCnt := objEntry.ObjectStats.BlkCnt()
-		for i := uint32(0); i < blkCnt; i++ {
-
-			blkID := objectio.NewBlockidWithObjectID(objID, uint16(i))
-			pivot := &RowEntry{
-				// aobj has only one blk
-				BlockID: blkID,
-			}
-			for ok := iter.Seek(pivot); ok; ok = iter.Next() {
-				entry := iter.Item()
-				if entry.BlockID != blkID {
-					break
+		// Only dropped appendable objects need in-memory row GC. Keeping this
+		// outside the non-appendable groups avoids copying and seeking the row
+		// tree once per persisted object.
+		if objEntry.GetAppendable() {
+			iter := p.rows.Copy().Iter()
+			objID := objEntry.ObjectStats.ObjectName().ObjectId()
+			trunctPoint := startTSCol[idx]
+			blkCnt := objEntry.ObjectStats.BlkCnt()
+			for i := uint32(0); i < blkCnt; i++ {
+				blkID := objectio.NewBlockidWithObjectID(objID, uint16(i))
+				pivot := &RowEntry{
+					BlockID: blkID,
 				}
-
-				// cannot gc the inmem tombstone at this point
-				if entry.Deleted {
-					continue
-				}
-
-				// if the inserting block is appendable, need to delete the rows for it;
-				// if the inserting block is non-appendable and has delta location, need to delete
-				// the deletes for it.
-				if objEntry.GetAppendable() {
+				for ok := iter.Seek(pivot); ok; ok = iter.Next() {
+					entry := iter.Item()
+					if entry.BlockID != blkID {
+						break
+					}
+					if entry.Deleted {
+						continue
+					}
 					if entry.Time.LE(&trunctPoint) {
-						// delete the row
 						p.rows.Delete(entry)
-
-						// delete the row's primary index
 						if len(entry.PrimaryIndexBytes) > 0 {
 							p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
 								Bytes:      entry.PrimaryIndexBytes,
@@ -530,26 +524,8 @@ func (p *PartitionState) HandleDataObjectList(
 						blockDeleted++
 					}
 				}
-
-				//it's tricky here.
-				//Due to consuming lazily the checkpoint,
-				//we have to take the following scenario into account:
-				//1. CN receives deletes for a non-appendable block from the log tail,
-				//   then apply the deletes into PartitionState.rows.
-				//2. CN receives block meta of the above non-appendable block to be inserted
-				//   from the checkpoint, then apply the block meta into PartitionState.blocks.
-				// So , if the above scenario happens, we need to set the non-appendable block into
-				// PartitionState.dirtyBlocks.
-				//if !objEntry.EntryState && !objEntry.HasDeltaLoc {
-				//	p.dirtyBlocks.Set(entry.BlockID)
-				//	break
-				//}
 			}
-
-			// if there are no rows for the block, delete the block from the dirty
-			//if objEntry.EntryState && scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
-			//	p.dirtyBlocks.Delete(*blkID)
-			//}
+			iter.Release()
 		}
 
 		p.prefetchObject(fs, objEntry)
@@ -683,27 +659,18 @@ func (p *PartitionState) HandleRowsDelete(
 	ctx context.Context,
 	input *api.Batch,
 	packer *types.Packer,
-	pool *mpool.MPool,
+	_ *mpool.MPool,
 ) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsDelete")
 	defer task.End()
-
-	vec := mustVectorFromProto(input.Vecs[0])
-	defer vec.Free(pool)
-	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
-
-	vec = mustVectorFromProto(input.Vecs[1])
-	defer vec.Free(pool)
-	timeVector := vector.MustFixedColWithTypeCheck[types.TS](vec)
-
-	vec = mustVectorFromProto(input.Vecs[3])
-	defer vec.Free(pool)
-	tbRowIdVector := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
 
 	batch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
 		panic(err)
 	}
+	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](batch.Vecs[0])
+	timeVector := vector.MustFixedColWithTypeCheck[types.TS](batch.Vecs[1])
+	tbRowIdVector := vector.MustFixedColWithTypeCheck[types.Rowid](batch.Vecs[3])
 
 	var primaryKeys [][]byte
 	if len(input.Vecs) > 2 {
@@ -777,25 +744,19 @@ func (p *PartitionState) HandleRowsInsert(
 	input *api.Batch,
 	primarySeqnum int,
 	packer *types.Packer,
-	pool *mpool.MPool,
+	_ *mpool.MPool,
 ) (
 	primaryKeys [][]byte,
 ) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsInsert")
 	defer task.End()
 
-	vec := mustVectorFromProto(input.Vecs[0])
-	defer vec.Free(pool)
-	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](vec)
-
-	vec = mustVectorFromProto(input.Vecs[1])
-	defer vec.Free(pool)
-	timeVector := vector.MustFixedColWithTypeCheck[types.TS](vec)
-
 	batch, err := batch.ProtoBatchToBatch(input)
 	if err != nil {
 		panic(err)
 	}
+	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](batch.Vecs[0])
+	timeVector := vector.MustFixedColWithTypeCheck[types.TS](batch.Vecs[1])
 	primaryKeys = readutil.EncodePrimaryKeyVector(
 		batch.Vecs[2+primarySeqnum],
 		packer,
@@ -858,6 +819,7 @@ func (p *PartitionState) Copy() *PartitionState {
 		lastFlushTimestamp:        p.lastFlushTimestamp,
 		start:                     p.start,
 		end:                       p.end,
+		appliedTo:                 p.appliedTo,
 		prefetch:                  p.prefetch,
 	}
 	if len(p.checkpoints) > 0 {
@@ -1185,6 +1147,19 @@ func (p *PartitionState) UpdateDuration(start types.TS, end types.TS) {
 
 func (p *PartitionState) GetDuration() (types.TS, types.TS) {
 	return p.start, p.end
+}
+
+func (p *PartitionState) UpdateAppliedTo(ts types.TS) {
+	if ts.IsEmpty() {
+		return
+	}
+	if p.appliedTo.IsEmpty() || p.appliedTo.LT(&ts) {
+		p.appliedTo = ts
+	}
+}
+
+func (p *PartitionState) GetAppliedTo() types.TS {
+	return p.appliedTo
 }
 
 func (p *PartitionState) IsValid() bool {

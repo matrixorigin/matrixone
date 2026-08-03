@@ -45,7 +45,7 @@ Project  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t1  𝄀
               Filter Cond: prefix_eq(t1.__mo_cbkey_002c1002c2)  𝄀
-              Block Filter Cond: prefix_eq(t1.__mo_cbkey_002c1002c2)
+              Block Filter Cond: prefix_eq(t1.__mo_cbkey_002c1002c2), (t1.c1 = 1)
 select count(*) from t1 where c1 = 1;
 ➤ count(*)[-5,64,0]  𝄀
 10
@@ -67,7 +67,7 @@ Project  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t1  𝄀
               Filter Cond: prefix_in(t1.__mo_cbkey_002c1002c2)  𝄀
-              Block Filter Cond: prefix_in(t1.__mo_cbkey_002c1002c2)
+              Block Filter Cond: prefix_in(t1.__mo_cbkey_002c1002c2), t1.c1 in ([1 2 3])
 select count(*) from t1 where c1 in (1,2,3);
 ➤ count(*)[-5,64,0]  𝄀
 30
@@ -78,7 +78,7 @@ Project  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t1  𝄀
               Filter Cond: prefix_between(t1.__mo_cbkey_002c1002c2)  𝄀
-              Block Filter Cond: prefix_between(t1.__mo_cbkey_002c1002c2)
+              Block Filter Cond: prefix_between(t1.__mo_cbkey_002c1002c2), t1.c1 BETWEEN 1 AND 5
 select count(*) from t1 where c1 between 1 and 5;
 ➤ count(*)[-5,64,0]  𝄀
 50
@@ -89,7 +89,7 @@ Project  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t1  𝄀
               Filter Cond: (t1.__mo_cbkey_002c1002c2 = )  𝄀
-              Block Filter Cond: (t1.__mo_cbkey_002c1002c2 = )
+              Block Filter Cond: (t1.__mo_cbkey_002c1002c2 = ), (t1.c1 = 2), (t1.c2 = 10)
 select count(*) from t1 where c1 = 2 and c2 = 10;
 ➤ count(*)[-5,64,0]  𝄀
 0
@@ -100,7 +100,7 @@ Project  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t1  𝄀
               Filter Cond: prefix_in_range(t1.__mo_cbkey_002c1002c2)  𝄀
-              Block Filter Cond: prefix_in_range(t1.__mo_cbkey_002c1002c2)
+              Block Filter Cond: prefix_in_range(t1.__mo_cbkey_002c1002c2), (t1.c1 = 5), (t1.c2 > 10)
 select count(*) from t1 where c1 = 5 and c2 > 10;
 ➤ count(*)[-5,64,0]  𝄀
 0
@@ -111,7 +111,7 @@ Project  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t1  𝄀
               Filter Cond: t1.__mo_cbkey_002c1002c2 in ()  𝄀
-              Block Filter Cond: t1.__mo_cbkey_002c1002c2 in ()
+              Block Filter Cond: t1.__mo_cbkey_002c1002c2 in (), (t1.c1 = 3), t1.c2 in ([1 2 3])
 select count(*) from t1 where c1 = 3 and c2 in (1,2,3);
 ➤ count(*)[-5,64,0]  𝄀
 10
@@ -122,7 +122,7 @@ Project  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t1  𝄀
               Filter Cond: t1.__mo_cbkey_002c1002c2 BETWEEN '::' AND '::'  𝄀
-              Block Filter Cond: t1.__mo_cbkey_002c1002c2 BETWEEN '::' AND '::'
+              Block Filter Cond: t1.__mo_cbkey_002c1002c2 BETWEEN '::' AND '::', (t1.c1 = 4), t1.c2 BETWEEN 1 AND 5
 select count(*) from t1 where c1=4 and c2 between 1 and 5;
 ➤ count(*)[-5,64,0]  𝄀
 10
@@ -133,7 +133,7 @@ Project  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t2  𝄀
               Filter Cond: prefix_eq(t2.__mo_cpkey_col)  𝄀
-              Block Filter Cond: prefix_eq(t2.__mo_cpkey_col)
+              Block Filter Cond: prefix_eq(t2.__mo_cpkey_col), (t2.c1 = 1)
 select count(*) from t2 where c1 = 1;
 ➤ count(*)[-5,64,0]  𝄀
 10000
@@ -155,7 +155,7 @@ Project  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t2  𝄀
               Filter Cond: prefix_in(t2.__mo_cpkey_col)  𝄀
-              Block Filter Cond: prefix_in(t2.__mo_cpkey_col)
+              Block Filter Cond: prefix_in(t2.__mo_cpkey_col), t2.c1 in ([1 2 3])
 select count(*) from t2 where c1 in (1,2,3);
 ➤ count(*)[-5,64,0]  𝄀
 30000
@@ -166,7 +166,7 @@ Project  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t2  𝄀
               Filter Cond: prefix_between(t2.__mo_cpkey_col)  𝄀
-              Block Filter Cond: prefix_between(t2.__mo_cpkey_col)
+              Block Filter Cond: prefix_between(t2.__mo_cpkey_col), t2.c1 BETWEEN 1 AND 5
 select count(*) from t2 where c1 between 1 and 5;
 ➤ count(*)[-5,64,0]  𝄀
 50000
@@ -177,7 +177,7 @@ Project  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t2  𝄀
               Filter Cond: (t2.__mo_cpkey_col = )  𝄀
-              Block Filter Cond: (t2.__mo_cpkey_col = )
+              Block Filter Cond: (t2.__mo_cpkey_col = ), (t2.c1 = 2), (t2.c2 = 10)
 select count(*) from t2 where c1 = 2 and c2 = 10;
 ➤ count(*)[-5,64,0]  𝄀
 0
@@ -188,7 +188,7 @@ Project  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t2  𝄀
               Filter Cond: prefix_in_range(t2.__mo_cpkey_col)  𝄀
-              Block Filter Cond: prefix_in_range(t2.__mo_cpkey_col)
+              Block Filter Cond: prefix_in_range(t2.__mo_cpkey_col), (t2.c1 = 5), (t2.c2 > 10)
 select count(*) from t2 where c1 = 5 and c2 > 10;
 ➤ count(*)[-5,64,0]  𝄀
 9999
@@ -199,7 +199,7 @@ Project  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t2  𝄀
               Filter Cond: t2.__mo_cpkey_col in ()  𝄀
-              Block Filter Cond: t2.__mo_cpkey_col in ()
+              Block Filter Cond: t2.__mo_cpkey_col in (), (t2.c1 = 3), t2.c2 in ([1 2 3])
 select count(*) from t2 where c1 = 3 and c2 in (1,2,3);
 ➤ count(*)[-5,64,0]  𝄀
 1
@@ -210,7 +210,7 @@ Project  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t2  𝄀
               Filter Cond: t2.__mo_cpkey_col BETWEEN '::' AND '::'  𝄀
-              Block Filter Cond: t2.__mo_cpkey_col BETWEEN '::' AND '::'
+              Block Filter Cond: t2.__mo_cpkey_col BETWEEN '::' AND '::', (t2.c1 = 4), t2.c2 BETWEEN 1 AND 5
 select count(*) from t2 where c1=4 and c2 between 1 and 5;
 ➤ count(*)[-5,64,0]  𝄀
 1
@@ -221,7 +221,7 @@ Project  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t2  𝄀
               Filter Cond: true, in_range(t2.__mo_cpkey_col)  𝄀
-              Block Filter Cond: in_range(t2.__mo_cpkey_col)
+              Block Filter Cond: in_range(t2.__mo_cpkey_col), (t2.c1 = 5), (t2.c2 > 3), (t2.c2 < 100)
 select count(*) from t2 where c1 = 5 and c2 > 3 and c2 < 100;
 ➤ count(*)[-5,64,0]  𝄀
 1
@@ -232,7 +232,7 @@ Project  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on d1.t2  𝄀
               Filter Cond: true, t2.__mo_cpkey_col BETWEEN '::' AND '::d'  𝄀
-              Block Filter Cond: t2.__mo_cpkey_col BETWEEN '::' AND '::d'
+              Block Filter Cond: t2.__mo_cpkey_col BETWEEN '::' AND '::d', (t2.c1 = 5), (t2.c2 >= 3), (t2.c2 <= 100)
 select count(*) from t2 where c1 = 5 and c2 >= 3 and c2 <= 100;
 ➤ count(*)[-5,64,0]  𝄀
 1

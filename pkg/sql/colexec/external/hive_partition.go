@@ -15,12 +15,13 @@
 package external
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"iter"
 	"net/url"
 	"path"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -497,8 +498,8 @@ func DiscoverHivePartitionsWithPruneExpr(
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(result.Files, func(i, j int) bool {
-		return result.Files[i].FilePath < result.Files[j].FilePath
+	slices.SortFunc(result.Files, func(a, b PartitionFileEntry) int {
+		return cmp.Compare(a.FilePath, b.FilePath)
 	})
 	result.DiscoveredFiles = len(result.Files)
 	for _, file := range result.Files {
@@ -699,8 +700,8 @@ func discoverRecursive(
 		}
 	}
 
-	sort.Slice(childPrefixes, func(i, j int) bool {
-		return childPrefixes[i].prefix < childPrefixes[j].prefix
+	slices.SortFunc(childPrefixes, func(a, b childPartition) int {
+		return cmp.Compare(a.prefix, b.prefix)
 	})
 
 	// Count all matching partitions at this level before descending. Otherwise
@@ -1120,12 +1121,9 @@ func matchUintRange(dirVal, lowVal, highVal string, bitSize int) MatchResult {
 // appended to every external table's TableDef.Cols (query_builder.go:4902)
 // and its value is known before we open any parquet file.
 //
-// STATEMENT_ACCOUNT ("account") is deliberately excluded. It is not a
-// virtual column on Hive/Parquet tables — it is synthesized per-batch by
-// makeFilepathBatch (external.go:322) only for CSV external tables' tenant
-// filter evaluation. Including it here would misclassify any physical
-// column literally named "account" as a filepath filter and evaluate it
-// against getAccountCol(path), producing wrong results.
+// A physical column named "account" is deliberately excluded. QueryBuilder
+// appends only __mo_filepath as an external-table virtual column; account is
+// ordinary row data even when its name resembles a tenant path component.
 var filePathColSet = map[string]bool{
 	catalog.ExternalFilePath: true,
 }

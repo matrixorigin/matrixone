@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"fmt"
 	"regexp"
+	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -26,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -49,6 +52,10 @@ func newOpBuiltInRegexp() *opBuiltInRegexp {
 }
 
 func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if len(parameters) == 3 {
+		return op.likeFnWithEscape(parameters, result, proc, length, selectList, false)
+	}
+
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[bool](result)
@@ -69,6 +76,10 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 }
 
 func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if len(parameters) == 3 {
+		return op.likeFnWithEscape(parameters, result, proc, length, selectList, true)
+	}
+
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[bool](result)
@@ -86,6 +97,66 @@ func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.Fu
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return op.regMap.regularMatchForLikeOp(bytes.ToLower(v2), bytes.ToLower(v1))
 	}, selectList)
+}
+
+func (op *opBuiltInRegexp) likeFnWithEscape(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+	caseInsensitive bool,
+) error {
+	if !parameters[2].IsConst() {
+		return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
+	}
+
+	var escapeBytes []byte
+	escapeIsNull := parameters[2].IsConstNull()
+	if !escapeIsNull {
+		escapeParam := vector.GenerateFunctionStrParameter(parameters[2])
+		var isNull bool
+		escapeBytes, isNull = escapeParam.GetStrValue(0)
+		escapeIsNull = isNull
+	}
+
+	escapeEnabled := false
+	var escape rune
+	if !escapeIsNull {
+		if !utf8.Valid(escapeBytes) || utf8.RuneCount(escapeBytes) > 1 {
+			return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
+		}
+		if len(escapeBytes) == 0 && likeNoBackslashEscapes(proc) {
+			return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
+		}
+
+		escapeEnabled = len(escapeBytes) != 0
+		if escapeEnabled {
+			escape, _ = utf8.DecodeRune(escapeBytes)
+		}
+	}
+	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters[:2], result, proc, length, func(value, pattern []byte) (bool, error) {
+		return op.regMap.regularMatchForLikeOpWithEscape(pattern, value, escape, escapeEnabled, caseInsensitive)
+	}, selectList)
+}
+
+func likeNoBackslashEscapes(proc *process.Process) bool {
+	if proc == nil || proc.Base == nil {
+		return false
+	}
+
+	mode := proc.GetSessionInfo().SqlMode
+	if resolver := proc.GetResolveVariableFunc(); resolver != nil {
+		if value, err := resolver("sql_mode", true, false); err == nil {
+			if sessionMode, ok := value.(string); ok {
+				mode = sessionMode
+			}
+		}
+	}
+	if mode == process.EmptySqlModeSentinel {
+		mode = ""
+	}
+	return mysql.HasSQLMode(mode, "NO_BACKSLASH_ESCAPES")
 }
 
 func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], rs *vector.FunctionResult[bool], length int,
@@ -284,7 +355,7 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 
 func (op *opBuiltInRegexp) builtInRegMatch(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opBinaryStrStrToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 string) (bool, error) {
-		reg, err := op.regMap.getRegularMatcher(v2)
+		reg, err := op.regMap.getRegularMatcherForMatch(v2)
 		if err != nil {
 			return false, err
 		}
@@ -294,7 +365,7 @@ func (op *opBuiltInRegexp) builtInRegMatch(parameters []*vector.Vector, result v
 
 func (op *opBuiltInRegexp) builtInNotRegMatch(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opBinaryStrStrToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 string) (bool, error) {
-		reg, err := op.regMap.getRegularMatcher(v2)
+		reg, err := op.regMap.getRegularMatcherForMatch(v2)
 		if err != nil {
 			return false, err
 		}
@@ -615,7 +686,24 @@ func (rs *regexpSet) getRegularMatcher(pat string) (*regexp.Regexp, error) {
 	return reg, nil
 }
 
+func (rs *regexpSet) getRegularMatcherForMatch(pat string) (*regexp.Regexp, error) {
+	if pat == "" {
+		return nil, moerr.NewRegexpIllegalArgumentNoCtx()
+	}
+	return rs.getRegularMatcher(pat)
+}
+
 func (rs *regexpSet) regularMatchForLikeOp(pat []byte, str []byte) (match bool, err error) {
+	return rs.regularMatchForLikeOpWithEscape(pat, str, DefaultEscapeChar, true, false)
+}
+
+func (rs *regexpSet) regularMatchForLikeOpWithEscape(
+	pat []byte,
+	str []byte,
+	escape rune,
+	escapeEnabled bool,
+	caseInsensitive bool,
+) (match bool, err error) {
 	replace := func(s string) string {
 		isRegexMeta := func(r rune) bool {
 			switch r {
@@ -626,6 +714,9 @@ func (rs *regexpSet) regularMatchForLikeOp(pat []byte, str []byte) (match bool, 
 			}
 		}
 		appendLiteral := func(buf *bytes.Buffer, r rune) {
+			if caseInsensitive {
+				r = unicode.ToLower(r)
+			}
 			if isRegexMeta(r) {
 				buf.WriteByte('\\')
 			}
@@ -643,19 +734,19 @@ func (rs *regexpSet) regularMatchForLikeOp(pat []byte, str []byte) (match bool, 
 				escaped = false
 				continue
 			}
-			switch r {
-			case '\\':
+			switch {
+			case escapeEnabled && r == escape:
 				escaped = true
-			case '_':
+			case r == '_':
 				buf.WriteByte('.')
-			case '%':
+			case r == '%':
 				buf.WriteString(".*")
 			default:
 				appendLiteral(&buf, r)
 			}
 		}
 		if escaped {
-			appendLiteral(&buf, '\\')
+			appendLiteral(&buf, escape)
 		}
 		return buf.String()
 	}
@@ -667,6 +758,9 @@ func (rs *regexpSet) regularMatchForLikeOp(pat []byte, str []byte) (match bool, 
 	reg, err := rs.getRegularMatcher(realPat)
 	if err != nil {
 		return false, nil
+	}
+	if caseInsensitive {
+		str = []byte(strings.ToLower(util.UnsafeBytesToString(str)))
 	}
 	return reg.Match(str), nil
 }
@@ -779,6 +873,9 @@ func (rs *regexpSet) regularLike(pat string, str string, matchType string) (bool
 	mt, err := getPureMatchType(matchType)
 	if err != nil {
 		return false, err
+	}
+	if pat == "" {
+		return false, moerr.NewRegexpIllegalArgumentNoCtx()
 	}
 	rule := fmt.Sprintf("(?%s)%s", mt, pat)
 

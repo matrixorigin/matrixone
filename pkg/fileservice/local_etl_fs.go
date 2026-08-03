@@ -16,13 +16,14 @@ package fileservice
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"io"
 	"iter"
 	"os"
 	pathpkg "path"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -123,8 +124,8 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 	nativePath := l.toNativeFilePath(path.File)
 
 	// sort
-	sort.Slice(vector.Entries, func(i, j int) bool {
-		return vector.Entries[i].Offset < vector.Entries[j].Offset
+	slices.SortFunc(vector.Entries, func(a, b IOEntry) int {
+		return cmp.Compare(a.Offset, b.Offset)
 	})
 
 	// size
@@ -446,10 +447,13 @@ func (l *LocalETLFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEnt
 			if strings.HasPrefix(name, ".") {
 				continue
 			}
-			info, err := entry.Info()
+			info, ok, err := localDirEntryInfo(entry)
 			if err != nil {
 				yield(nil, err)
 				return
+			}
+			if !ok {
+				continue
 			}
 			isDir, err := entryIsDir(nativePath, name, info)
 			if err != nil {

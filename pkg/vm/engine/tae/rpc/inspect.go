@@ -114,12 +114,6 @@ func initCommand(_ context.Context, inspectCtx *inspectContext) *cobra.Command {
 	gc := &GCArg{}
 	rootCmd.AddCommand(gc.PrepareCommand())
 
-	copyTable := &DumpTableArg{}
-	rootCmd.AddCommand(copyTable.PrepareCommand())
-
-	applyTable := &ApplyTableDataArg{}
-	rootCmd.AddCommand(applyTable.PrepareCommand())
-
 	manifest := &manifestArg{}
 	rootCmd.AddCommand(manifest.PrepareCommand())
 	return rootCmd
@@ -839,7 +833,10 @@ func parseTableTarget(address string, ac *cmd_util.AccessInfo, db *db.DB) (*cata
 		return nil, moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid db.table: %q", address))
 	}
 
-	txn, _ := db.StartTxn(nil)
+	txn, err := db.StartTxn(nil)
+	if err != nil {
+		return nil, err
+	}
 	committed := false
 	defer func() {
 		if !committed {

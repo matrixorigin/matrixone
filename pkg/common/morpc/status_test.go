@@ -16,6 +16,7 @@ package morpc
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -60,6 +61,8 @@ func TestGetStatusCategory(t *testing.T) {
 		{"ErrServiceUnavailable", moerr.NewServiceUnavailableNoCtx("test"), StatusTransient},
 		{"ErrConnectionReset", moerr.NewConnectionReset(context.Background()), StatusTransient},
 		{"ErrBackendCreating", ErrBackendCreating, StatusTransient},
+		{"ErrBackendCreateQueueFull", ErrBackendCreateQueueFull, StatusTransient},
+		{"ErrBackendCreateQueueTimeout", ErrBackendCreateQueueTimeout, StatusTransient},
 
 		// Unavailable errors (moerr)
 		{"ErrBackendClosed", moerr.NewBackendClosedNoCtx(), StatusUnavailable},
@@ -123,6 +126,34 @@ func TestGetStatusCategoryNetError(t *testing.T) {
 			err := &mockNetError{timeout: tt.timeout}
 			got := GetStatusCategory(err)
 			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+func TestRPCMetricErrorType(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"nil", nil, "none"},
+		{"rpc timeout", moerr.NewRPCTimeoutNoCtx(), "rpc_timeout"},
+		{"backend cannot connect", moerr.NewBackendCannotConnectNoCtx(), "backend_cannot_connect"},
+		{"backend cannot connect wraps net error", moerr.NewBackendCannotConnectNoCtx(&mockNetError{}), "backend_cannot_connect"},
+		{"backend create timeout", ErrBackendCreateTimeout, "backend_create_timeout"},
+		{"wrapped backend create timeout", fmt.Errorf("wrapped: %w", ErrBackendCreateTimeout), "backend_create_timeout"},
+		{"backend closed", moerr.NewBackendClosedNoCtx(), "backend_closed"},
+		{"moerr unexpected eof", moerr.NewUnexpectedEOFNoCtx("test"), "unexpected_eof"},
+		{"unexpected eof", io.ErrUnexpectedEOF, "unexpected_eof"},
+		{"eof", io.EOF, "eof"},
+		{"deadline", os.ErrDeadlineExceeded, "timeout"},
+		{"net timeout", &mockNetError{timeout: true}, "timeout"},
+		{"string timeout", moerr.NewInternalErrorNoCtx("read tcp 127.0.0.1:6003: i/o timeout"), "timeout"},
+		{"other", moerr.NewInternalErrorNoCtx("other"), "other"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, rpcMetricErrorType(tt.err))
 		})
 	}
 }

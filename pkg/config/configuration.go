@@ -16,12 +16,15 @@ package config
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -179,6 +182,9 @@ var (
 
 	// defaultLongSpanTime default: 10 s
 	defaultLongSpanTime = 10 * time.Second
+	// defaultDisableSpan keeps the legacy effective configuration aligned with
+	// the permanently retired Span runtime.
+	defaultDisableSpan = true
 
 	defaultAggregationWindow = 5 * time.Second
 
@@ -205,6 +211,231 @@ var (
 	defaultConnectTimeout = time.Minute
 )
 
+const (
+	IcebergConfigKeyManifestCacheBytes      = "iceberg.scan.manifest_cache_bytes"
+	IcebergConfigKeyManifestCacheTTL        = "iceberg.scan.manifest_cache_ttl"
+	IcebergConfigKeyManifestReadParallelism = "iceberg.scan.manifest_read_parallelism"
+	IcebergConfigKeyMaxManifestFiles        = "iceberg.scan.max_manifest_files"
+	IcebergConfigKeyMaxDataFiles            = "iceberg.scan.max_data_files"
+	IcebergConfigKeyPlanningMaxMemory       = "iceberg.scan.planning_max_memory"
+	IcebergConfigKeyServerPlanningMode      = "iceberg.scan.server_planning"
+	IcebergConfigKeyPlanningTimeout         = "iceberg.planning.timeout"
+	IcebergConfigKeyDeleteMaxMemory         = "iceberg.delete.max_memory"
+	IcebergConfigKeyDMLMaxMemory            = "iceberg.write.dml_max_memory"
+	IcebergConfigKeyEnableDeleteSpill       = "iceberg.delete.enable_spill"
+	IcebergConfigKeyWriteOrphanTTL          = "iceberg.write.orphan_ttl"
+	IcebergConfigKeyEnableOrphanGC          = "iceberg.write.enable_orphan_gc"
+	IcebergConfigKeyProtectedCNToCN         = "iceberg.security.protected_cn_to_cn"
+
+	IcebergServerPlanningOff      = "off"
+	IcebergServerPlanningAuto     = "auto"
+	IcebergServerPlanningRequired = "required"
+)
+
+type IcebergParameters struct {
+	Enable                  bool          `toml:"enable" user_setting:"advanced"`
+	EnablePerAccount        bool          `toml:"enable-per-account" user_setting:"advanced"`
+	ManifestCacheBytes      int64         `toml:"manifest-cache-bytes" user_setting:"advanced"`
+	ManifestCacheTTL        toml.Duration `toml:"manifest-cache-ttl" user_setting:"advanced"`
+	ManifestReadParallelism int           `toml:"manifest-read-parallelism" user_setting:"advanced"`
+	MaxManifestFiles        int           `toml:"max-manifest-files" user_setting:"advanced"`
+	MaxDataFiles            int           `toml:"max-data-files" user_setting:"advanced"`
+	PlanningMaxMemory       int64         `toml:"planning-max-memory" user_setting:"advanced"`
+	ServerPlanningMode      string        `toml:"server-planning-mode" user_setting:"advanced"`
+	PlanningTimeout         toml.Duration `toml:"planning-timeout" user_setting:"advanced"`
+	EnableWrite             bool          `toml:"enable-write" user_setting:"advanced"`
+	EnableDelete            bool          `toml:"enable-delete" user_setting:"advanced"`
+	DeleteMaxMemory         int64         `toml:"delete-max-memory" user_setting:"advanced"`
+	DMLMaxMemory            int64         `toml:"dml-max-memory" user_setting:"advanced"`
+	EnableDeleteSpill       bool          `toml:"enable-delete-spill" user_setting:"advanced"`
+	EnableDML               bool          `toml:"enable-dml" user_setting:"advanced"`
+	EnableMaintenance       bool          `toml:"enable-maintenance" user_setting:"advanced"`
+	EnableRemoteSigning     bool          `toml:"enable-remote-signing" user_setting:"advanced"`
+	ProtectedCNToCN         bool          `toml:"protected-cn-to-cn" user_setting:"advanced"`
+	OrphanTTL               toml.Duration `toml:"orphan-ttl" user_setting:"advanced"`
+	EnableOrphanGC          bool          `toml:"enable-orphan-gc" user_setting:"advanced"`
+}
+
+type MongoDBParameters struct {
+	Enable                 bool          `toml:"enable" user_setting:"advanced"`
+	EnablePerAccount       bool          `toml:"enable-per-account" user_setting:"advanced"`
+	AllowedAccounts        []uint32      `toml:"allowed-accounts" user_setting:"advanced"`
+	AllowLoopback          bool          `toml:"allow-loopback" user_setting:"advanced"`
+	AllowedHostSuffixes    []string      `toml:"allowed-host-suffixes" user_setting:"advanced"`
+	AllowedCIDRs           []string      `toml:"allowed-cidrs" user_setting:"advanced"`
+	ConnectTimeout         toml.Duration `toml:"connect-timeout" user_setting:"advanced"`
+	ServerSelectionTimeout toml.Duration `toml:"server-selection-timeout" user_setting:"advanced"`
+	SocketTimeout          toml.Duration `toml:"socket-timeout" user_setting:"advanced"`
+	MaxPoolSize            uint64        `toml:"max-pool-size" user_setting:"advanced"`
+	MinPoolSize            uint64        `toml:"min-pool-size" user_setting:"advanced"`
+	MaxConnecting          uint64        `toml:"max-connecting" user_setting:"advanced"`
+	MaxCachedClients       int           `toml:"max-cached-clients" user_setting:"advanced"`
+	BatchRows              int32         `toml:"batch-rows" user_setting:"advanced"`
+	MaxBatchBytes          int64         `toml:"max-batch-bytes" user_setting:"advanced"`
+	MaxValueBytes          int64         `toml:"max-value-bytes" user_setting:"advanced"`
+	MaxScanRows            int64         `toml:"max-scan-rows" user_setting:"advanced"`
+	MaxScanBytes           int64         `toml:"max-scan-bytes" user_setting:"advanced"`
+	MaxConversionErrors    int64         `toml:"max-conversion-errors" user_setting:"advanced"`
+	MaxConversionErrorRate float64       `toml:"max-conversion-error-rate" user_setting:"advanced"`
+	MaxSourceConcurrency   int           `toml:"max-source-concurrency" user_setting:"advanced"`
+}
+
+func (parameters *MongoDBParameters) SetDefaultValues() {
+	if parameters.ConnectTimeout.Duration == 0 {
+		parameters.ConnectTimeout.Duration = 10 * time.Second
+	}
+	if parameters.ServerSelectionTimeout.Duration == 0 {
+		parameters.ServerSelectionTimeout.Duration = 10 * time.Second
+	}
+	if parameters.SocketTimeout.Duration == 0 {
+		parameters.SocketTimeout.Duration = 30 * time.Second
+	}
+	if parameters.MaxPoolSize == 0 {
+		parameters.MaxPoolSize = 32
+	}
+	if parameters.MaxConnecting == 0 {
+		parameters.MaxConnecting = 2
+	}
+	if parameters.MaxCachedClients == 0 {
+		parameters.MaxCachedClients = 64
+	}
+	if parameters.BatchRows == 0 {
+		parameters.BatchRows = 8192
+	}
+	if parameters.MaxBatchBytes == 0 {
+		parameters.MaxBatchBytes = 64 << 20
+	}
+	if parameters.MaxValueBytes == 0 {
+		parameters.MaxValueBytes = 16 << 20
+	}
+	if parameters.MaxScanRows == 0 {
+		parameters.MaxScanRows = 50_000_000
+	}
+	if parameters.MaxScanBytes == 0 {
+		parameters.MaxScanBytes = 32 << 30
+	}
+	if parameters.MaxConversionErrors == 0 {
+		parameters.MaxConversionErrors = 1_000
+	}
+	if parameters.MaxConversionErrorRate == 0 {
+		parameters.MaxConversionErrorRate = 0.10
+	}
+	if parameters.MaxSourceConcurrency == 0 {
+		parameters.MaxSourceConcurrency = 4
+	}
+}
+
+func (parameters MongoDBParameters) Validate(ctx context.Context) error {
+	if parameters.ConnectTimeout.Duration <= 0 || parameters.ServerSelectionTimeout.Duration <= 0 || parameters.SocketTimeout.Duration <= 0 {
+		return moerr.NewBadConfig(ctx, "mongodb timeouts must be greater than zero")
+	}
+	if parameters.MaxPoolSize == 0 || parameters.MaxConnecting == 0 || parameters.MaxCachedClients <= 0 || parameters.MinPoolSize > parameters.MaxPoolSize {
+		return moerr.NewBadConfig(ctx, "mongodb pool limits are invalid")
+	}
+	if parameters.BatchRows <= 0 || parameters.MaxBatchBytes <= 0 || parameters.MaxValueBytes <= 0 || parameters.MaxValueBytes > parameters.MaxBatchBytes {
+		return moerr.NewBadConfig(ctx, "mongodb batch/value limits are invalid")
+	}
+	if parameters.MaxScanRows <= 0 || parameters.MaxScanBytes <= 0 || parameters.MaxSourceConcurrency <= 0 {
+		return moerr.NewBadConfig(ctx, "mongodb source protection limits must be greater than zero")
+	}
+	if parameters.MaxConversionErrors <= 0 || parameters.MaxConversionErrorRate <= 0 || parameters.MaxConversionErrorRate > 1 {
+		return moerr.NewBadConfig(ctx, "mongodb conversion error limits are invalid")
+	}
+	for _, raw := range parameters.AllowedHostSuffixes {
+		suffix := strings.Trim(strings.TrimSpace(raw), ".")
+		if suffix == "" || net.ParseIP(suffix) != nil || strings.ContainsAny(suffix, "*/@: \t\r\n") {
+			return moerr.NewBadConfig(ctx, "mongodb allowed host suffix is invalid")
+		}
+	}
+	for _, raw := range parameters.AllowedCIDRs {
+		if _, _, err := net.ParseCIDR(strings.TrimSpace(raw)); err != nil {
+			return moerr.NewBadConfig(ctx, "mongodb allowed CIDR is invalid")
+		}
+	}
+	return nil
+}
+
+func (ip *IcebergParameters) SetDefaultValues() {
+	if ip.ManifestCacheBytes == 0 {
+		ip.ManifestCacheBytes = 256 << 20
+	}
+	if ip.ManifestCacheTTL.Duration == 0 {
+		ip.ManifestCacheTTL.Duration = 5 * time.Minute
+	}
+	if ip.ManifestReadParallelism == 0 {
+		ip.ManifestReadParallelism = 8
+	}
+	if ip.MaxManifestFiles == 0 {
+		ip.MaxManifestFiles = 100000
+	}
+	if ip.MaxDataFiles == 0 {
+		ip.MaxDataFiles = 1000000
+	}
+	if ip.PlanningMaxMemory == 0 {
+		ip.PlanningMaxMemory = 256 << 20
+	}
+	if ip.ServerPlanningMode == "" {
+		ip.ServerPlanningMode = IcebergServerPlanningAuto
+	}
+	if ip.PlanningTimeout.Duration == 0 {
+		ip.PlanningTimeout.Duration = 30 * time.Second
+	}
+	if ip.DeleteMaxMemory == 0 {
+		ip.DeleteMaxMemory = 256 << 20
+	}
+	if ip.DMLMaxMemory == 0 {
+		ip.DMLMaxMemory = 256 << 20
+	}
+	if ip.OrphanTTL.Duration == 0 {
+		ip.OrphanTTL.Duration = 24 * time.Hour
+	}
+}
+
+func (ip IcebergParameters) Validate(ctx context.Context) error {
+	if ip.ManifestCacheBytes < 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyManifestCacheBytes+" must be greater than or equal to zero")
+	}
+	if ip.ManifestCacheTTL.Duration < 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyManifestCacheTTL+" must be greater than or equal to zero")
+	}
+	if ip.ManifestReadParallelism <= 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyManifestReadParallelism+" must be greater than zero")
+	}
+	if ip.MaxManifestFiles <= 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyMaxManifestFiles+" must be greater than zero")
+	}
+	if ip.MaxDataFiles <= 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyMaxDataFiles+" must be greater than zero")
+	}
+	if ip.PlanningMaxMemory <= 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyPlanningMaxMemory+" must be greater than zero")
+	}
+	switch ip.ServerPlanningMode {
+	case IcebergServerPlanningOff, IcebergServerPlanningAuto, IcebergServerPlanningRequired:
+	default:
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyServerPlanningMode+" must be off, auto, or required")
+	}
+	if ip.PlanningTimeout.Duration < 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyPlanningTimeout+" must be greater than or equal to zero")
+	}
+	if ip.DeleteMaxMemory < 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyDeleteMaxMemory+" must be greater than or equal to zero")
+	}
+	if ip.DMLMaxMemory <= 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyDMLMaxMemory+" must be greater than zero")
+	}
+	if ip.EnableDeleteSpill {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyEnableDeleteSpill+" is not supported; keep enable-delete-spill disabled")
+	}
+	if ip.OrphanTTL.Duration < 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyWriteOrphanTTL+" must be greater than or equal to zero")
+	}
+	if ip.EnableOrphanGC {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyEnableOrphanGC+" is not supported; orphan files are recorded for audited cleanup")
+	}
+	return nil
+}
+
 // FrontendParameters of the frontend
 type FrontendParameters struct {
 	MoVersion string
@@ -229,6 +460,9 @@ type FrontendParameters struct {
 
 	//process.Limitation.Size. default: 10 << 32 = 42949672960
 	ProcessLimitationSize int64 `toml:"processLimitationSize"`
+
+	// process.Limitation.SpillSize. Zero selects the bounded query default.
+	ProcessLimitationSpillSize int64 `toml:"processLimitationSpillSize"`
 
 	//process.Limitation.BatchRows. default: 10 << 32 = 42949672960
 	ProcessLimitationBatchRows int64 `toml:"processLimitationBatchRows"`
@@ -373,6 +607,9 @@ type FrontendParameters struct {
 	// Can be overridden per-session with SET sidecar_url = '...' or
 	// globally for new sessions with SET GLOBAL sidecar_url = '...'.
 	SidecarURL string `toml:"sidecarUrl" user_setting:"advanced"`
+
+	Iceberg IcebergParameters `toml:"iceberg" user_setting:"advanced"`
+	MongoDB MongoDBParameters `toml:"mongodb" user_setting:"advanced"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -529,6 +766,9 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	if fp.ConnectTimeout.Duration == 0 {
 		fp.ConnectTimeout.Duration = defaultConnectTimeout
 	}
+
+	fp.Iceberg.SetDefaultValues()
+	fp.MongoDB.SetDefaultValues()
 }
 
 func (fp *FrontendParameters) SetMaxMessageSize(size uint64) {
@@ -612,7 +852,7 @@ type ObservabilityParameters struct {
 	// DisableTrace default is false. if false, enable trace at booting
 	DisableTrace bool `toml:"disable-trace" user_setting:"advanced"`
 
-	// EnableTraceDebug default is false. With true, system will check all the children span is ended, which belong to the closing span.
+	// EnableTraceDebug is retained for configuration compatibility after Span recording was retired.
 	EnableTraceDebug bool `toml:"enable-trace-debug"`
 
 	// TraceExportInterval default is 15s.
@@ -642,16 +882,17 @@ type ObservabilityParameters struct {
 	// PS: only used while MO init.
 	MergeCycle toml.Duration `toml:"merge-cycle"`
 
-	// DisableSpan default: false. Disable span collection
+	// DisableSpan defaults to true and is retained for configuration compatibility.
+	// Span recording cannot be enabled; statement, log, and error collection is independent.
 	DisableSpan bool `toml:"disable-span"`
 
-	// EnableSpanProfile default: false. Do NO profile by default.
+	// EnableSpanProfile is retained for configuration compatibility and has no effect.
 	EnableSpanProfile bool `toml:"enable-span-profile"`
 
 	// DisableError default: false. Disable error collection
 	DisableError bool `toml:"disable-error"`
 
-	// LongSpanTime default: 500 ms. Only record span, which duration >= LongSpanTime
+	// LongSpanTime is retained for configuration compatibility and has no effect.
 	LongSpanTime toml.Duration `toml:"long-span-time"`
 
 	// SkipRunningStmt default: false. Skip status:Running entry while collect statement_info
@@ -739,7 +980,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		MetricStorageUsageUpdateInterval:   toml.Duration{},
 		MetricStorageUsageCheckNewInterval: toml.Duration{},
 		MergeCycle:                         toml.Duration{},
-		DisableSpan:                        false,
+		DisableSpan:                        defaultDisableSpan,
 		EnableSpanProfile:                  false,
 		DisableError:                       false,
 		LongSpanTime:                       toml.Duration{},
@@ -894,7 +1135,7 @@ func (op *ObservabilityParameters) resetConfigByOld() {
 	resetBoolConfig(&op.DisableMetric, false, op.DisableMetricV12)
 	resetBoolConfig(&op.DisableTrace, false, op.DisableTraceV12)
 	resetBoolConfig(&op.DisableError, false, op.DisableErrorV12)
-	resetBoolConfig(&op.DisableSpan, false, op.DisableSpanV12)
+	resetBoolConfig(&op.DisableSpan, defaultDisableSpan, op.DisableSpanV12)
 	// part metric
 	resetDurationConfig(&op.MetricStorageUsageUpdateInterval.Duration,
 		defaultMetricUpdateStorageUsageInterval,

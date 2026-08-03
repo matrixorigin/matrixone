@@ -87,6 +87,7 @@ func NewTopProcess(
 
 		// 2. fields from make.
 		LastInsertID: new(uint64),
+		AffectedRows: new(int64),
 
 		// 3. other fields.
 		logger:             util.GetLogger(sid),
@@ -239,6 +240,13 @@ func (proc *Process) Free() {
 		proc.Base.messageBoard.Reset()
 		proc.Base.messageBoard = nil
 	}
+	proc.Base.cteMemoryBudgetMu.Lock()
+	if proc.Base.cteMemoryBudget != nil {
+		proc.Base.cteMemoryBudget.Close()
+		proc.Base.cteMemoryBudget = nil
+	}
+	proc.Base.cteMemoryBudgetMu.Unlock()
+	proc.setPrepareParams(nil, nil, false)
 }
 
 type QueryBaseContext struct {

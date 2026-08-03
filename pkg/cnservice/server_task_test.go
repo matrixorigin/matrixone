@@ -16,10 +16,14 @@ package cnservice
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -32,12 +36,15 @@ import (
 var _ logservice.CNHAKeeperClient = new(testHAKClient)
 
 type testHAKClient struct {
-	cfg *Config
+	cfg        *Config
+	closeErr   error
+	clusterErr error
+	closed     int
 }
 
 func (client *testHAKClient) Close() error {
-	//TODO implement me
-	panic("implement me")
+	client.closed++
+	return client.closeErr
 }
 
 func (client *testHAKClient) AllocateID(ctx context.Context) (uint64, error) {
@@ -56,8 +63,7 @@ func (client *testHAKClient) AllocateIDByKeyWithBatch(ctx context.Context, key s
 }
 
 func (client *testHAKClient) GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
-	//TODO implement me
-	panic("implement me")
+	return pb.ClusterDetails{}, client.clusterErr
 }
 
 func (client *testHAKClient) GetClusterState(ctx context.Context) (pb.CheckerState, error) {
@@ -96,6 +102,9 @@ func (client *testHAKClient) UpdateNonVotingLocality(ctx context.Context, locali
 var _ taskservice.TaskRunner = new(testRunner)
 
 type testRunner struct {
+	stopErr   error
+	stopped   int
+	executors map[task.TaskCode]taskservice.TaskExecutor
 }
 
 func (runner *testRunner) ID() string {
@@ -109,8 +118,8 @@ func (runner *testRunner) Start() error {
 }
 
 func (runner *testRunner) Stop() error {
-	//TODO implement me
-	panic("implement me")
+	runner.stopped++
+	return runner.stopErr
 }
 
 func (runner *testRunner) Parallelism() int {
@@ -119,6 +128,10 @@ func (runner *testRunner) Parallelism() int {
 }
 
 func (runner *testRunner) RegisterExecutor(code task.TaskCode, executor taskservice.TaskExecutor) {
+	if runner.executors == nil {
+		runner.executors = make(map[task.TaskCode]taskservice.TaskExecutor)
+	}
+	runner.executors[code] = executor
 	if code == task.TaskCode_MergeObject {
 		tsk := &task.AsyncTask{}
 		_ = executor(context.Background(), tsk)
@@ -126,8 +139,7 @@ func (runner *testRunner) RegisterExecutor(code task.TaskCode, executor taskserv
 }
 
 func (runner *testRunner) GetExecutor(code task.TaskCode) taskservice.TaskExecutor {
-	//TODO implement me
-	panic("implement me")
+	return runner.executors[code]
 }
 
 func (runner *testRunner) Attach(ctx context.Context, taskID uint64, routine taskservice.ActiveRoutine) error {
@@ -138,12 +150,14 @@ func (runner *testRunner) Attach(ctx context.Context, taskID uint64, routine tas
 var _ taskservice.TaskServiceHolder = new(testHolder)
 
 type testHolder struct {
-	ts taskservice.TaskService
+	ts       taskservice.TaskService
+	closeErr error
+	closed   int
 }
 
 func (holder *testHolder) Close() error {
-	//TODO implement me
-	panic("implement me")
+	holder.closed++
+	return holder.closeErr
 }
 
 func (holder *testHolder) Get() (taskservice.TaskService, bool) {
@@ -155,9 +169,27 @@ func (holder *testHolder) Create(command pb.CreateTaskService) error {
 	panic("implement me")
 }
 
+func TestStopTaskStopsRunnerAfterHolderCloseFailure(t *testing.T) {
+	holderErr := errors.New("holder close failed")
+	runnerErr := errors.New("runner stop failed")
+	holder := &testHolder{closeErr: holderErr}
+	runner := &testRunner{stopErr: runnerErr}
+	sv := &service{logger: zap.NewNop()}
+	sv.task.holder = holder
+	sv.task.runner = runner
+
+	err := sv.stopTask()
+	assert.ErrorIs(t, err, holderErr)
+	assert.ErrorIs(t, err, runnerErr)
+	assert.Equal(t, 1, holder.closed)
+	assert.Equal(t, 1, runner.stopped)
+}
+
 var _ taskservice.TaskService = new(testTS)
 
 type testTS struct {
+	cronTasks []task.TaskMetadata
+	cronExprs []string
 }
 
 func (ts *testTS) Close() error {
@@ -175,9 +207,10 @@ func (ts *testTS) CreateBatch(ctx context.Context, metadata []task.TaskMetadata)
 	panic("implement me")
 }
 
-func (ts *testTS) CreateCronTask(ctx context.Context, task task.TaskMetadata, cronExpr string) error {
-	//TODO implement me
-	panic("implement me")
+func (ts *testTS) CreateCronTask(ctx context.Context, metadata task.TaskMetadata, cronExpr string) error {
+	ts.cronTasks = append(ts.cronTasks, metadata)
+	ts.cronExprs = append(ts.cronExprs, cronExpr)
+	return nil
 }
 
 func (ts *testTS) Allocate(ctx context.Context, value task.AsyncTask, taskRunner string) error {
@@ -216,6 +249,18 @@ func (ts *testTS) QueryDaemonTask(ctx context.Context, conds ...taskservice.Cond
 }
 
 func (ts *testTS) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, cond ...taskservice.Condition) (int, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ts *testTS) UpdateDaemonTaskStatus(
+	ctx context.Context,
+	taskID uint64,
+	status task.TaskStatus,
+	updateAt time.Time,
+	endAt time.Time,
+	cond ...taskservice.Condition,
+) (int, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -304,4 +349,9 @@ func Test_registerExecutorsLocked(t *testing.T) {
 	}
 
 	sv.registerExecutorsLocked()
+	require.NotNil(t, run.GetExecutor(task.TaskCode_DataBranchLineageGC))
+	require.Len(t, ts.cronTasks, 1)
+	assert.Equal(t, task.TaskCode_DataBranchLineageGC, ts.cronTasks[0].Executor)
+	assert.Equal(t, "data_branch_lineage_gc", ts.cronTasks[0].ID)
+	assert.Equal(t, "0 */5 * * * *", ts.cronExprs[0])
 }

@@ -1216,3 +1216,49 @@ drop table if exists corr_in_t3;
 
 drop table test;
 drop database test;
+
+-- @case
+-- @desc:scalar subquery in SELECT list returning multiple rows
+-- @label:bvt
+create database test_subq_err;
+use test_subq_err;
+create table t1 (a int);
+insert into t1 values (1), (2);
+select (select a from t1) from t1;
+drop database test_subq_err;
+
+-- @case
+-- @desc:scalar subquery in WHERE with equality returning multiple rows
+-- @label:bvt
+create database test_subq_err;
+use test_subq_err;
+create table t1 (a int);
+create table t2 (a int);
+insert into t1 values (1);
+insert into t2 values (1), (1);
+select * from t1 where a = (select a from t2 where t2.a = t1.a);
+drop database test_subq_err;
+
+-- @case
+-- @desc:scalar subquery with non-equi condition returning multiple rows
+-- @label:bvt
+create database test_subq_err;
+use test_subq_err;
+create table t1 (a int);
+create table t2 (a int, b int);
+insert into t1 values (3);
+insert into t2 values (1, 10), (2, 20);
+select * from t1 where a > (select b from t2 where t2.a < t1.a);
+drop database test_subq_err;
+
+-- @case
+-- @desc:scalar subquery in SELECT list returning multiple rows without correlation
+-- @label:bvt
+create database test_subq_err;
+use test_subq_err;
+create table t1 (a int);
+create table t2 (a int);
+insert into t1 values (1);
+insert into t2 values (1), (2), (3);
+select (select a from t2) from t1;
+drop database test_subq_err;

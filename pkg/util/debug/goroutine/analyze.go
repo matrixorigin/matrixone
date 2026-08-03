@@ -16,7 +16,8 @@ package goroutine
 
 import (
 	"bytes"
-	"sort"
+	"cmp"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
 )
@@ -113,8 +114,8 @@ func (z *analyzer) group(
 			handle(i)
 		}
 	}
-	sort.Slice(groups, func(i, j int) bool {
-		return len(groups[i]) > len(groups[j])
+	slices.SortFunc(groups, func(a, b []int) int {
+		return cmp.Compare(len(b), len(a))
 	})
 	return groups
 }

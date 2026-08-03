@@ -17,7 +17,6 @@ package plan
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -61,7 +60,7 @@ func (s *SampleFuncCtx) BindSampleColumn(ctx *BindContext, binder *ProjectionBin
 
 	pList := make([]*plan.Expr, 0, len(sampleList))
 	for _, se := range sampleList {
-		astStr := tree.String(se.Expr, dialect.MYSQL)
+		astStr := semanticAstKey(se.Expr)
 
 		if _, ok := ctx.groupByAst[astStr]; ok {
 			return nil, moerr.NewInternalErrorNoCtx("cannot sample the group by column.")

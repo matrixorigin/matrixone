@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/mohae/deepcopy"
 	"github.com/stretchr/testify/require"
@@ -94,8 +93,6 @@ func TestCanHandleSelfCmd(t *testing.T) {
 		sender    requestSender
 	}
 
-	trace.InitMOCtledSpan()
-
 	initRuntime(nil, nil)
 
 	uuid := uuid2.New().String()
@@ -114,16 +111,8 @@ func TestCanHandleSelfCmd(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, ret, Result{
 		Method: TraceSpanMethod,
-		Data:   fmt.Sprintf("%s:[s3 local] enabled, [] failed; ", uuid),
+		Data:   fmt.Sprintf("%s:%s; ", uuid, TraceSpanRetiredResponse),
 	})
-
-	k1 := trace.MOCtledSpanEnableConfig.NameToKind["s3"]
-	k2 := trace.MOCtledSpanEnableConfig.NameToKind["local"]
-	require.Equal(t, true, trace.MOCtledSpanEnableConfig.KindToState[k1].Enable)
-	require.Equal(t, int64(10), trace.MOCtledSpanEnableConfig.KindToState[k1].Threshold.Milliseconds())
-	require.Equal(t, true, trace.MOCtledSpanEnableConfig.KindToState[k2].Enable)
-	require.Equal(t, int64(10), trace.MOCtledSpanEnableConfig.KindToState[k2].Threshold.Milliseconds())
-
 }
 
 func TestCanTransferQuery(t *testing.T) {
@@ -148,8 +137,6 @@ func TestCanTransferQuery(t *testing.T) {
 	a1.parameter = fmt.Sprintf("%s,%s:enable:s3,local:0", uuids[0], uuids[1])
 
 	initRuntime(uuids, addrs)
-	trace.InitMOCtledSpan()
-
 	qs1, err := queryservice.NewQueryService(uuids[0], addrs[0], morpc.Config{})
 	require.Nil(t, err)
 	qs2, err := queryservice.NewQueryService(uuids[1], addrs[1], morpc.Config{})
@@ -175,8 +162,8 @@ func TestCanTransferQuery(t *testing.T) {
 	ret, err := handleTraceSpan(a1.proc, a1.service, a1.parameter, a1.sender)
 	require.Nil(t, err)
 
-	str1 := fmt.Sprintf("%s:[s3 local] enabled, [] failed; ", uuids[0])
-	str2 := fmt.Sprintf("%s:[s3 local] enabled, [] failed; ", uuids[1])
+	str1 := fmt.Sprintf("%s:%s; ", uuids[0], TraceSpanRetiredResponse)
+	str2 := fmt.Sprintf("%s:%s; ", uuids[1], TraceSpanRetiredResponse)
 
 	require.True(t, func() bool {
 		if ret.Data == str1+str2 ||

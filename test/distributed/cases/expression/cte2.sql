@@ -29,7 +29,7 @@ from
         select * from c
         union all
         select * from v1
-    )
+    ) as c_union
 ;
 
 
@@ -44,7 +44,7 @@ select distinct
 from
     (
         select * from v2
-    )
+    ) as v2_sub
 ;
 
 select * from v2;

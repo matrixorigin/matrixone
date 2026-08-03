@@ -1,26 +1,26 @@
 select CASE "b" when "a" then 1 when "b" then 2 END;
-case b when a then 1 when b then 2 end
+➤ case b when a then 1 when b then 2 end[-5,64,0]  𝄀
 2
 select CASE "c" when "a" then 1 when "b" then 2 END;
-case c when a then 1 when b then 2 end
+➤ case c when a then 1 when b then 2 end[-5,64,0]  𝄀
 null
 select CASE "c" when "a" then 1 when "b" then 2 ELSE 3 END;
-case c when a then 1 when b then 2 else 3 end
+➤ case c when a then 1 when b then 2 else 3 end[-5,64,0]  𝄀
 3
 select CASE when 1=0 then "true" else "false" END;
-case when 1 = 0 then true else false end
+➤ case when 1 = 0 then true else false end[12,-1,0]  𝄀
 false
 select CASE 1 when 1 then "one" WHEN 2 then "two" ELSE "more" END;
-case 1 when 1 then one when 2 then two else more end
+➤ case 1 when 1 then one when 2 then two else more end[12,-1,0]  𝄀
 one
 select CASE 2.0 when 1 then "one" WHEN 2.0 then "two" ELSE "more" END;
-case 2.0 when 1 then one when 2.0 then two else more end
+➤ case 2.0 when 1 then one when 2.0 then two else more end[12,-1,0]  𝄀
 two
 select (CASE "two" when "one" then "1" WHEN "two" then "2" END) | 0;
-(case two when one then 1 when two then 2 end) | 0
+➤ (case two when one then 1 when two then 2 end) | 0[-5,64,0]  𝄀
 2
 select (CASE "two" when "one" then 1.00 WHEN "two" then 2.00 END) +0.0;
-(case two when one then 1.00 when two then 2.00 end) + 0.0
+➤ (case two when one then 1.00 when two then 2.00 end) + 0.0[3,18,2]  𝄀
 2.00
 select case 1/0 when "a" then "true" else "false" END;
 ➤ case 1 / 0 when a then true else false end[12,-1,0]  𝄀
@@ -35,31 +35,31 @@ select (case 1/0 when "a" then "true" END) + 0.0;
 ➤ (case 1 / 0 when a then true end) + 0.0[8,54,0]  𝄀
 null
 select case when 1>0 then "TRUE" else "FALSE" END;
-case when 1 > 0 then TRUE else FALSE end
+➤ case when 1 > 0 then TRUE else FALSE end[12,-1,0]  𝄀
 TRUE
 select case when 1<0 then "TRUE" else "FALSE" END;
-case when 1 < 0 then TRUE else FALSE end
+➤ case when 1 < 0 then TRUE else FALSE end[12,-1,0]  𝄀
 FALSE
 SELECT CAST(CASE WHEN 0 THEN '2001-01-01' END AS DATE);
-cast(case when 0 then 2001-01-01 end as date)
+➤ cast(case when 0 then 2001-01-01 end as date)[91,64,0]  𝄀
 null
 SELECT CAST(CASE WHEN 0 THEN DATE'2001-01-01' END AS DATE);
-cast(case when 0 then DATE(2001-01-01) end as date)
+➤ cast(case when 0 then DATE(2001-01-01) end as date)[91,64,0]  𝄀
 null
 select case 1.0 when 0.1 then "a" when 1.0 then "b" else "c" END;
-case 1.0 when 0.1 then a when 1.0 then b else c end
+➤ case 1.0 when 0.1 then a when 1.0 then b else c end[12,-1,0]  𝄀
 b
 select case 0.1 when 0.1 then "a" when 1.0 then "b" else "c" END;
-case 0.1 when 0.1 then a when 1.0 then b else c end
+➤ case 0.1 when 0.1 then a when 1.0 then b else c end[12,-1,0]  𝄀
 a
 select case 1 when 0.1 then "a" when 1.0 then "b" else "c" END;
-case 1 when 0.1 then a when 1.0 then b else c end
+➤ case 1 when 0.1 then a when 1.0 then b else c end[12,-1,0]  𝄀
 b
 select case 1.0 when 0.1 then "a" when 1 then "b" else "c" END;
-case 1.0 when 0.1 then a when 1 then b else c end
+➤ case 1.0 when 0.1 then a when 1 then b else c end[12,-1,0]  𝄀
 b
 select case 1.001 when 0.1 then "a" when 1 then "b" else "c" END;
-case 1.001 when 0.1 then a when 1 then b else c end
+➤ case 1.001 when 0.1 then a when 1 then b else c end[12,-1,0]  𝄀
 c
 drop table if exists t1;
 drop table if exists t2;
@@ -78,30 +78,30 @@ drop table if exists t1;
 create table t1 (a int);
 insert into t1 values(1),(2),(3),(4);
 select case a when 1 then 2 when 2 then 3 else 0 end as fcase, count(*) from t1 group by fcase;
-fcase    count(*)
-2    1
-3    1
-0    2
+➤ fcase[-5,64,0]  ¦  count(*)[-5,64,0]  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+0  ¦  2
 select case a when 1 then "one" when 2 then "two" else "nothing" end as fcase, count(*) from t1 group by fcase;
-fcase    count(*)
-one    1
-two    1
-nothing    2
+➤ fcase[12,-1,0]  ¦  count(*)[-5,64,0]  𝄀
+one  ¦  1  𝄀
+two  ¦  1  𝄀
+nothing  ¦  2
 drop table if exists t1;
 create table t1 (`row` int not null, col int not null, val varchar(255) not null);
 insert into t1 values (1,1,'orange'),(1,2,'large'),(2,1,'yellow'),(2,2,'medium'),(3,1,'green'),(3,2,'small');
 select col,val, case when val="orange" then 1 when upper(val)="LARGE" then 2  else 3 end from t1;
-col    val    case when val = orange then 1 when upper(val) = LARGE then 2 else 3 end
-1    orange    1
-2    large    2
-1    yellow    3
-2    medium    3
-1    green    3
-2    small    3
+➤ col[4,32,0]  ¦  val[12,-1,0]  ¦  case when val = orange then 1 when upper(val) = LARGE then 2 else 3 end[-5,64,0]  𝄀
+1  ¦  orange  ¦  1  𝄀
+2  ¦  large  ¦  2  𝄀
+1  ¦  yellow  ¦  3  𝄀
+2  ¦  medium  ¦  3  𝄀
+1  ¦  green  ¦  3  𝄀
+2  ¦  small  ¦  3
 select max(case col when 1 then val else null end) as color from t1 group by `row`;
-color
-orange
-yellow
+➤ color[12,-1,0]  𝄀
+orange  𝄀
+yellow  𝄀
 green
 drop table if exists t1;
 create table t1(a float, b int default 3);
@@ -109,15 +109,15 @@ insert into t1 (a) values (2), (11), (8);
 select min(a), min(case when 1=1 then a else NULL end),
 min(case when 1!=1 then NULL else a end)
 from t1 where b=3 group by b;
-min(a)    min(case when 1 = 1 then a else null end)    min(case when 1 != 1 then null else a end)
-2.0    2.0    2.0
+➤ min(a)[7,24,0]  ¦  min(case when 1 = 1 then a else null end)[7,24,0]  ¦  min(case when 1 != 1 then null else a end)[7,24,0]  𝄀
+2.0  ¦  2.0  ¦  2.0
 drop table if exists  t1;
 CREATE TABLE t1 (a INT, b INT);
 INSERT INTO t1 VALUES (1,1),(2,1),(3,2),(4,2),(5,3),(6,3);
 SELECT CASE WHEN AVG(a)>=0 THEN 'Positive' ELSE 'Negative' END FROM t1 GROUP BY b;
-case when AVG(a) >= 0 then Positive else Negative end
-Positive
-Positive
+➤ case when AVG(a) >= 0 then Positive else Negative end[12,-1,0]  𝄀
+Positive  𝄀
+Positive  𝄀
 Positive
 drop table if exists  t1;
 drop table if exists  t1;
@@ -129,10 +129,14 @@ insert into t1 (a, b) values (1,4572794622775114594), (2,18196094287899841997),
 insert into t2 (c) values (1), (2), (3);
 select t1.a, (case t1.a when 0 then 0 else t1.b end) d from t1
 join t2 on t1.a=t2.c order by d;
-Data truncation: data out of range: data type int64, value '18196094287899841997'
+➤ a[4,32,0]  ¦  d[3,21,0]  𝄀
+1  ¦  4572794622775114594  𝄀
+3  ¦  11120436154190595086  𝄀
+2  ¦  18196094287899841997
 select t1.a, (case t1.a when 0 then 0 else t1.b end) d from t1
 join t2 on t1.a=t2.c where b=11120436154190595086 order by d;
-Data truncation: data out of range: data type int64, value '11120436154190595086'
+➤ a[4,32,0]  ¦  d[3,21,0]  𝄀
+3  ¦  11120436154190595086
 drop table if exists small;
 drop table if exists big;
 CREATE TABLE small (id int not null,PRIMARY KEY (id));
@@ -144,41 +148,42 @@ CASE id WHEN 0 THEN 0 ELSE 1 END AS simple,
 CASE WHEN id=0 THEN NULL ELSE 1 END AS cond
 FROM small) AS dt
 ON big.id=dt.dt_id;
-id    dt_id    simple    cond
-1    1    1    1
-2    2    1    1
-3    null    null    null
-4    null    null    null
+➤ id[4,32,0]  ¦  dt_id[4,32,0]  ¦  simple[-5,64,0]  ¦  cond[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  1  ¦  1  𝄀
+3  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  null
 drop table if exists small;
 drop table if exists big;
 SELECT 'case+union+test'
 UNION
-SELECT CASE '1' WHEN '2' THEN 'BUG' ELSE 'nobug' END;
-case+union+test
+SELECT CASE '1' WHEN '2' THEN 'BUG' ELSE 'nobug' END
+ORDER BY 1;
+➤ case+union+test[12,-1,0]  𝄀
+case+union+test  𝄀
 nobug
-case+union+test
 drop table t1;
 CREATE TABLE t1(a int);
 insert into t1 values(1),(1),(2),(1),(3),(2),(1);
 SELECT 1 FROM t1 WHERE a=1 AND CASE 1 WHEN a THEN 1 ELSE 1 END;
-1
-1
-1
-1
+➤ 1[-5,64,0]  𝄀
+1  𝄀
+1  𝄀
+1  𝄀
 1
 DROP TABLE if exists t1;
 DROP TABLE if exists t1;
 create table t1 (USR_ID int not null, MAX_REQ int not null);
 insert into t1 values (1, 3);
 select count(*) + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ from t1 group by MAX_REQ;
-count(*) + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ
+➤ count(*) + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ + MAX_REQ - MAX_REQ[-5,64,0]  𝄀
 1
 select Case When Count(*) < MAX_REQ Then 1 Else 0 End from t1 where t1.USR_ID = 1 group by MAX_REQ;
-case when Count(*) < MAX_REQ then 1 else 0 end
+➤ case when Count(*) < MAX_REQ then 1 else 0 end[-5,64,0]  𝄀
 1
 DROP TABLE if exists t1;
 select case when 1 in (1.0, 2.0, 3.0) then true else false end;
-case when 1 in (1.0, 2.0, 3.0) then true else false end
+➤ case when 1 in (1.0, 2.0, 3.0) then true else false end[-7,1,0]  𝄀
 1
 DROP TABLE if exists t1;
 CREATE TABLE t1 (
@@ -210,33 +215,33 @@ insert into t1 values
 (19, 7986, '1771-12-06'),
 (20, 7987, '1985-10-06');
 select id, case when id < 5 then 0 when id < 10 then 1 when id < 15 then 2 when true then 3 else -1 end as xxx from t1;
-id    xxx
-1    0
-2    0
-3    0
-4    0
-5    1
-6    1
-7    1
-8    1
-9    1
-10    2
-11    2
-12    2
-13    2
-14    2
-15    3
-16    3
-17    3
-18    3
-19    3
-20    3
+➤ id[4,32,0]  ¦  xxx[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  0  𝄀
+4  ¦  0  𝄀
+5  ¦  1  𝄀
+6  ¦  1  𝄀
+7  ¦  1  𝄀
+8  ¦  1  𝄀
+9  ¦  1  𝄀
+10  ¦  2  𝄀
+11  ¦  2  𝄀
+12  ¦  2  𝄀
+13  ¦  2  𝄀
+14  ¦  2  𝄀
+15  ¦  3  𝄀
+16  ¦  3  𝄀
+17  ¦  3  𝄀
+18  ¦  3  𝄀
+19  ¦  3  𝄀
+20  ¦  3
 DROP TABLE t1;
 create table t1(a varchar(100));
 insert into t1 values ("a");
 select a, case when a="a" then 1 when upper(a)="b" then 2 end from t1;
-a    case when a = a then 1 when upper(a) = b then 2 end
-a    1
+➤ a[12,-1,0]  ¦  case when a = a then 1 when upper(a) = b then 2 end[-5,64,0]  𝄀
+a  ¦  1
 drop table if exists t1;
 SELECT
 7.01970 * CAST(-58140.00 AS DECIMAL(23,2)) AS direct_mul,
@@ -244,121 +249,285 @@ CASE WHEN 'USD' = 'RMB'
 THEN CAST(-58140.00 AS DECIMAL(23,2))
 ELSE 7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
 END AS bug_case;
-direct_mul    bug_case
--408125.3580000    -408125.3580000
+➤ direct_mul[3,38,7]  ¦  bug_case[3,38,7]  𝄀
+-408125.3580000  ¦  -408125.3580000
 SELECT
 CASE WHEN 'USD' = 'USD'
 THEN CAST(-58140.00 AS DECIMAL(23,2))
 ELSE 7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
 END AS bug_case_then;
-bug_case_then
+➤ bug_case_then[3,38,7]  𝄀
 -58140.0000000
 SELECT
 IFF('USD' = 'USD',
 CAST(-58140.00 AS DECIMAL(23,2)),
 7.01970 * CAST(-58140.00 AS DECIMAL(23,2))) AS bug_iff;
-bug_iff
+➤ bug_iff[3,38,7]  𝄀
 -58140.0000000
 SELECT
 CASE WHEN 1 = 1
 THEN CAST(1 AS DECIMAL(38,0))
 ELSE CAST(0 AS DECIMAL(38,20))
 END AS case_decimal256_then;
-case_decimal256_then
+➤ case_decimal256_then[3,58,20]  𝄀
 1.00000000000000000000
 SELECT
 CASE WHEN 1 = 2
 THEN CAST(1 AS DECIMAL(38,0))
 ELSE CAST(0 AS DECIMAL(38,20))
 END AS case_decimal256_else;
-case_decimal256_else
+➤ case_decimal256_else[3,58,20]  𝄀
 0E-20
 SELECT
 IFF(1 = 1,
 CAST(1 AS DECIMAL(38,0)),
 CAST(0 AS DECIMAL(38,20))) AS iff_decimal256_true;
-iff_decimal256_true
+➤ iff_decimal256_true[3,58,20]  𝄀
 1.00000000000000000000
 SELECT
 IFF(1 = 2,
 CAST(1 AS DECIMAL(38,0)),
 CAST(0 AS DECIMAL(38,20))) AS iff_decimal256_false;
-iff_decimal256_false
+➤ iff_decimal256_false[3,58,20]  𝄀
 0E-20
 SELECT 7.01970 * CAST(-58140.00 AS DECIMAL(23,2)) AS direct_mul;
-direct_mul
+➤ direct_mul[3,38,7]  𝄀
 -408125.3580000
 SELECT COALESCE(
 CAST(NULL AS DECIMAL(23,2)),
 7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
 ) AS coalesce_decimal_scale;
-coalesce_decimal_scale
+➤ coalesce_decimal_scale[3,38,7]  𝄀
 -408125.3580000
 SELECT COALESCE(
 CAST(1.23 AS DECIMAL(23,2)),
 7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
 ) AS coalesce_first_non_null;
-coalesce_first_non_null
+➤ coalesce_first_non_null[3,38,7]  𝄀
 1.2300000
 SELECT (CASE WHEN 1 = 1 THEN CAST(1 AS DECIMAL(38,0))
 ELSE CAST(0 AS DECIMAL(38,20)) END)
 = CAST(1 AS DECIMAL(38,20)) AS decimal256_eq_decimal128;
-decimal256_eq_decimal128
+➤ decimal256_eq_decimal128[-7,1,0]  𝄀
 1
 SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
 ELSE CAST(0 AS DECIMAL(38,20)) END)
 > CAST(1 AS DECIMAL(38,20)) AS decimal256_gt_decimal128;
-decimal256_gt_decimal128
+➤ decimal256_gt_decimal128[-7,1,0]  𝄀
 1
 SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
 ELSE CAST(0 AS DECIMAL(38,20)) END)
 < CAST(1 AS DECIMAL(38,20)) AS decimal256_lt_decimal128;
-decimal256_lt_decimal128
+➤ decimal256_lt_decimal128[-7,1,0]  𝄀
 0
 SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
 ELSE CAST(0 AS DECIMAL(38,20)) END)
 != CAST(1 AS DECIMAL(38,20)) AS decimal256_ne_decimal128;
-decimal256_ne_decimal128
+➤ decimal256_ne_decimal128[-7,1,0]  𝄀
 1
 SELECT (CASE WHEN 1 = 1 THEN CAST(5 AS DECIMAL(38,0))
 ELSE CAST(0 AS DECIMAL(38,20)) END)
 BETWEEN CAST(1 AS DECIMAL(38,20)) AND CAST(10 AS DECIMAL(38,20)) AS decimal256_between;
-decimal256_between
+➤ decimal256_between[-7,1,0]  𝄀
 1
 SELECT COALESCE(CAST(1 AS DECIMAL(38,0)), CAST(0.5 AS DECIMAL(30,30))) AS coalesce_promote_decimal256;
-coalesce_promote_decimal256
+➤ coalesce_promote_decimal256[3,68,30]  𝄀
 1.000000000000000000000000000000
 SELECT COALESCE(CAST(12345678901234567890123456789012345678 AS DECIMAL(38,0)), CAST(0.5 AS DECIMAL(30,30))) AS coalesce_promote_bignum;
-coalesce_promote_bignum
+➤ coalesce_promote_bignum[3,68,30]  𝄀
 12345678901234567890123456789012345678.000000000000000000000000000000
 drop table if exists t_coalesce_col;
 create table t_coalesce_col (id int, a decimal(23,2), b decimal(38,7));
 insert into t_coalesce_col values (1, null, 7.01970 * cast(-58140.00 as decimal(23,2))), (2, 1.23, 7.01970 * cast(-58140.00 as decimal(23,2)));
 select id, coalesce(a, b) as col_coalesce from t_coalesce_col order by id;
-id    col_coalesce
-1    -408125.3580000
-2    1.2300000
+➤ id[4,32,0]  ¦  col_coalesce[3,38,7]  𝄀
+1  ¦  -408125.3580000  𝄀
+2  ¦  1.2300000
 drop table t_coalesce_col;
 drop table if exists t_coalesce_mix;
 create table t_coalesce_mix (id int, i int, d decimal(20,5));
 insert into t_coalesce_mix values (1, null, 1.50000), (2, 10, 2.50000);
 select id, coalesce(i, d) as mix_coalesce from t_coalesce_mix order by id;
-id    mix_coalesce
-1    1.50000
-2    10.00000
+➤ id[4,32,0]  ¦  mix_coalesce[3,20,5]  𝄀
+1  ¦  1.50000  𝄀
+2  ¦  10.00000
 drop table t_coalesce_mix;
 select coalesce(null, 1, cast(0.5 as decimal(10,5))) as mix_const_coalesce;
-mix_const_coalesce
+➤ mix_const_coalesce[3,24,5]  𝄀
 1.00000
 select coalesce(null, cast(1.23 as decimal(23,2)), cast(4.56780 as decimal(38,7))) as three_branch;
-three_branch
+➤ three_branch[3,38,7]  𝄀
 1.2300000
 select coalesce(cast(null as decimal(23,2)), cast(null as decimal(20,5)), 7.01970 * cast(-58140.00 as decimal(23,2))) as three_branch_all_decimal;
-three_branch_all_decimal
+➤ three_branch_all_decimal[3,38,7]  𝄀
 -408125.3580000
 drop view if exists v_coalesce_meta;
 create view v_coalesce_meta as select coalesce(cast(null as decimal(23,2)), 7.01970 * cast(-58140.00 as decimal(23,2))) as c;
 desc v_coalesce_meta;
-Field    Type    Null    Key    Default    Extra    Comment
-c    DECIMAL(38,7)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+c  ¦  DECIMAL(38,7)  ¦  NO  ¦    ¦  null  ¦    ¦  
 drop view v_coalesce_meta;
+drop view if exists v_flow_metadata_safe;
+create view v_flow_metadata_safe as
+select if(1, '2', 3) as if_str_num,
+if(1, cast(1 as unsigned), cast(-1 as signed)) as if_unsigned_signed,
+case when 1 then cast('2024-01-01' as date) else cast('2024-01-02 03:04:05' as datetime) end as case_date_dt,
+case when 1 then _binary 'a' else 'bc' end as case_binary_char,
+ifnull(null, 9.5) as ifnull_decimal,
+nullif('01', 1) as nullif_mixed,
+coalesce(null, '8', 9) as coalesce_str_num,
+greatest(cast('2024-01-02' as date), cast('2023-12-31' as date)) as greatest_date;
+desc v_flow_metadata_safe;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+if_str_num  ¦  VARCHAR(2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+if_unsigned_signed  ¦  DECIMAL(21,0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+case_date_dt  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+case_binary_char  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_decimal  ¦  DECIMAL(2,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+nullif_mixed  ¦  VARCHAR(2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_str_num  ¦  VARCHAR(2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+greatest_date  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select column_name, column_type, is_nullable, character_maximum_length, numeric_precision, numeric_scale
+from information_schema.columns
+where table_schema = database() and table_name = 'v_flow_metadata_safe'
+order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  column_type[12,-1,0]  ¦  is_nullable[12,-1,0]  ¦  character_maximum_length[-5,64,0]  ¦  numeric_precision[-5,64,0]  ¦  numeric_scale[-5,64,0]  𝄀
+if_str_num  ¦  VARCHAR(2)  ¦  NO  ¦  2  ¦  null  ¦  null  𝄀
+if_unsigned_signed  ¦  DECIMAL(21,0)  ¦  NO  ¦  null  ¦  21  ¦  0  𝄀
+case_date_dt  ¦  DATETIME(0)  ¦  YES  ¦  null  ¦  null  ¦  null  𝄀
+case_binary_char  ¦  VARBINARY(8)  ¦  NO  ¦  8  ¦  null  ¦  null  𝄀
+ifnull_decimal  ¦  DECIMAL(2,1)  ¦  NO  ¦  null  ¦  2  ¦  1  𝄀
+nullif_mixed  ¦  VARCHAR(2)  ¦  YES  ¦  2  ¦  null  ¦  null  𝄀
+coalesce_str_num  ¦  VARCHAR(2)  ¦  NO  ¦  2  ¦  null  ¦  null  𝄀
+greatest_date  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null
+select * from v_flow_metadata_safe;
+➤ if_str_num[12,-1,0]  ¦  if_unsigned_signed[3,21,0]  ¦  case_date_dt[93,64,0]  ¦  case_binary_char[12,24,0]  ¦  ifnull_decimal[3,2,1]  ¦  nullif_mixed[12,-1,0]  ¦  coalesce_str_num[12,-1,0]  ¦  greatest_date[91,64,0]  𝄀
+2  ¦  1  ¦  2024-01-01 00:00:00  ¦  a  ¦  9.5  ¦  null  ¦  8  ¦  2024-01-02
+drop view v_flow_metadata_safe;
+drop view if exists v_case_temporal_else;
+create view v_case_temporal_else as
+select case when 0 then cast('2024-01-02 03:04:05' as datetime) else cast('2024-01-01' as date) end as case_date_dt_else;
+desc v_case_temporal_else;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+case_date_dt_else  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from v_case_temporal_else;
+➤ case_date_dt_else[93,64,0]  𝄀
+2024-01-01 00:00:00
+drop view v_case_temporal_else;
+drop view if exists v_if_binary_char;
+create view v_if_binary_char as
+select if(1, _binary 'a', 'bc') as if_binary_char;
+desc v_if_binary_char;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+if_binary_char  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦  
+select hex(if_binary_char) as if_binary_char_hex from v_if_binary_char;
+➤ if_binary_char_hex[12,-1,0]  𝄀
+61
+drop view v_if_binary_char;
+drop table if exists t_flow_metadata;
+create table t_flow_metadata (
+id int primary key,
+n_nullable int,
+n_notnull int not null,
+d_nullable date,
+d_notnull date not null
+);
+insert into t_flow_metadata values
+(1, null, 7, null, '2024-01-02'),
+(2, 5, 8, '2024-01-03', '2024-01-04');
+drop view if exists v_flow_metadata_columns;
+create view v_flow_metadata_columns as
+select ifnull(null, 9.5) as ifnull_null_first,
+ifnull(n_nullable, 9.5) as ifnull_nullable_col,
+ifnull(n_notnull, 9.5) as ifnull_notnull_col,
+coalesce(null, '8', 9) as coalesce_null_first,
+coalesce(n_nullable, 9) as coalesce_nullable_col,
+coalesce(n_notnull, 9) as coalesce_notnull_col,
+greatest(cast('2024-01-02' as date), cast('2023-12-31' as date)) as greatest_const,
+greatest(d_nullable, cast('2023-12-31' as date)) as greatest_nullable_col,
+greatest(d_notnull, cast('2023-12-31' as date)) as greatest_notnull_col
+from t_flow_metadata;
+desc v_flow_metadata_columns;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+ifnull_null_first  ¦  DECIMAL(2,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_nullable_col  ¦  DECIMAL(11,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_notnull_col  ¦  DECIMAL(11,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_null_first  ¦  VARCHAR(2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_nullable_col  ¦  BIGINT(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_notnull_col  ¦  BIGINT(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+greatest_const  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_nullable_col  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+greatest_notnull_col  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select column_name, column_type, is_nullable, character_maximum_length, numeric_precision, numeric_scale
+from information_schema.columns
+where table_schema = database() and table_name = 'v_flow_metadata_columns'
+order by ordinal_position;
+➤ column_name[12,-1,0]  ¦  column_type[12,-1,0]  ¦  is_nullable[12,-1,0]  ¦  character_maximum_length[-5,64,0]  ¦  numeric_precision[-5,64,0]  ¦  numeric_scale[-5,64,0]  𝄀
+ifnull_null_first  ¦  DECIMAL(2,1)  ¦  NO  ¦  null  ¦  2  ¦  1  𝄀
+ifnull_nullable_col  ¦  DECIMAL(11,1)  ¦  NO  ¦  null  ¦  11  ¦  1  𝄀
+ifnull_notnull_col  ¦  DECIMAL(11,1)  ¦  NO  ¦  null  ¦  11  ¦  1  𝄀
+coalesce_null_first  ¦  VARCHAR(2)  ¦  NO  ¦  2  ¦  null  ¦  null  𝄀
+coalesce_nullable_col  ¦  BIGINT(0)  ¦  NO  ¦  null  ¦  null  ¦  null  𝄀
+coalesce_notnull_col  ¦  BIGINT(0)  ¦  NO  ¦  null  ¦  null  ¦  null  𝄀
+greatest_const  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null  𝄀
+greatest_nullable_col  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null  𝄀
+greatest_notnull_col  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null
+select * from v_flow_metadata_columns order by ifnull_notnull_col;
+➤ ifnull_null_first[3,2,1]  ¦  ifnull_nullable_col[3,11,1]  ¦  ifnull_notnull_col[3,11,1]  ¦  coalesce_null_first[12,-1,0]  ¦  coalesce_nullable_col[-5,64,0]  ¦  coalesce_notnull_col[-5,64,0]  ¦  greatest_const[91,64,0]  ¦  greatest_nullable_col[91,64,0]  ¦  greatest_notnull_col[91,64,0]  𝄀
+9.5  ¦  9.5  ¦  7.0  ¦  8  ¦  9  ¦  7  ¦  2024-01-02  ¦  null  ¦  2024-01-02  𝄀
+9.5  ¦  5.0  ¦  8.0  ¦  8  ¦  5  ¦  8  ¦  2024-01-02  ¦  2024-01-03  ¦  2024-01-04
+drop view v_flow_metadata_columns;
+select if(1, cast(18446744073709551615 as unsigned), cast(-1 as signed)) as if_uint64_signed_max,
+if(0, cast(18446744073709551615 as unsigned), cast(-1 as signed)) as if_uint64_signed_negative,
+case when 1 then cast(18446744073709551615 as unsigned) else cast(-1 as signed) end as case_uint64_signed_max;
+➤ if_uint64_signed_max[3,21,0]  ¦  if_uint64_signed_negative[3,21,0]  ¦  case_uint64_signed_max[3,21,0]  𝄀
+18446744073709551615  ¦  -1  ¦  18446744073709551615
+select case
+when false then null
+when true then cast(18446744073709551615 as unsigned)
+else cast(-1 as signed)
+end as case_leading_null_uint64_max,
+case
+when false then cast(18446744073709551615 as unsigned)
+when false then null
+else cast(-1 as signed)
+end as case_middle_null_signed_negative,
+case
+when true then cast(18446744073709551615 as unsigned)
+when false then cast(-1 as signed)
+else null
+end as case_trailing_null_uint64_max;
+➤ case_leading_null_uint64_max[3,21,0]  ¦  case_middle_null_signed_negative[3,21,0]  ¦  case_trailing_null_uint64_max[3,21,0]  𝄀
+18446744073709551615  ¦  -1  ¦  18446744073709551615
+select hex(case when 1 then _binary 'a' else 'bc' end) as case_binary_hex,
+hex(case when 0 then _binary 'a' else 'bc' end) as case_char_hex;
+➤ case_binary_hex[12,-1,0]  ¦  case_char_hex[12,-1,0]  𝄀
+61  ¦  6263
+drop view if exists v_case_binary_utf8;
+create view v_case_binary_utf8 as
+select case when 1 then _binary 'a' else '中文' end as case_binary_utf8;
+desc v_case_binary_utf8;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+case_binary_utf8  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦  
+select hex(case when 0 then _binary 'a' else '中文' end) as case_utf8_hex;
+➤ case_utf8_hex[12,-1,0]  𝄀
+E4B8ADE69687
+drop view v_case_binary_utf8;
+drop view if exists v_case_binary_null;
+create view v_case_binary_null as
+select case when 1 then null else cast('a' as binary(4)) end as fixed_leading_null,
+case when 1 then cast('a' as binary(4)) else null end as fixed_trailing_null,
+case when 0 then cast('a' as binary(4)) when 1 then null else cast('b' as binary(4)) end as fixed_middle_null,
+case when 1 then null else cast('a' as varbinary(4)) end as var_leading_null,
+case when 1 then cast('a' as varbinary(4)) else null end as var_trailing_null,
+case when 0 then cast('a' as varbinary(4)) when 1 then null else cast('b' as varbinary(4)) end as var_middle_null;
+desc v_case_binary_null;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+fixed_leading_null  ¦  BINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+fixed_trailing_null  ¦  BINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+fixed_middle_null  ¦  BINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+var_leading_null  ¦  VARBINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+var_trailing_null  ¦  VARBINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+var_middle_null  ¦  VARBINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
+drop view v_case_binary_null;
+drop table t_flow_metadata;

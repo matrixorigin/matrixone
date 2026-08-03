@@ -205,6 +205,80 @@ func TestLoadGlobalFileIndex_MultipleIndexFiles(t *testing.T) {
 	assert.True(t, idx.Has("file2.obj"))
 }
 
+func TestLoadGlobalFileIndex_OrdersTimestampNumerically(t *testing.T) {
+	testCases := []struct {
+		name      string
+		olderName string
+		newerName string
+	}{
+		{
+			name:      "logical width",
+			olderName: "file_index_1-9.idx",
+			newerName: "file_index_1-10.idx",
+		},
+		{
+			name:      "physical width",
+			olderName: "file_index_9-0.idx",
+			newerName: "file_index_10-0.idx",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx := context.Background()
+			fs, err := fileservice.NewMemoryFS("test", fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			require.NoError(t, writeFile(ctx, fs, testCase.olderName, []byte("older.obj\n")))
+			require.NoError(t, writeFile(ctx, fs, testCase.newerName, []byte("newer.obj\n")))
+
+			idx, err := LoadGlobalFileIndex(ctx, fs)
+			require.NoError(t, err)
+			require.NotNil(t, idx)
+			require.True(t, idx.Has("newer.obj"))
+			require.False(t, idx.Has("older.obj"))
+		})
+	}
+}
+
+func TestLoadGlobalFileIndex_IgnoresInvalidTimestampNames(t *testing.T) {
+	invalidNames := []string{
+		"file_index_12345.idx",
+		"file_index_.idx",
+		"file_index_abc.idx",
+		"file_index_1-two.idx",
+		"file_index_1-2-3.idx",
+		"file_index_-1-0.idx",
+		"file_index_0-4294967296.idx",
+	}
+
+	for _, name := range invalidNames {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			fs, err := fileservice.NewMemoryFS("test", fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			require.NoError(t, writeFile(ctx, fs, name, []byte("invalid.obj\n")))
+
+			idx, err := LoadGlobalFileIndex(ctx, fs)
+			require.NoError(t, err)
+			require.Nil(t, idx)
+		})
+	}
+}
+
+func TestLoadGlobalFileIndex_InvalidTimestampDoesNotMaskValidIndex(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("test", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	require.NoError(t, writeFile(ctx, fs, "file_index_10-0.idx", []byte("valid.obj\n")))
+	require.NoError(t, writeFile(ctx, fs, "file_index_zzz.idx", []byte("invalid.obj\n")))
+
+	idx, err := LoadGlobalFileIndex(ctx, fs)
+	require.NoError(t, err)
+	require.NotNil(t, idx)
+	require.True(t, idx.Has("valid.obj"))
+	require.False(t, idx.Has("invalid.obj"))
+}
+
 func TestLoadGlobalFileIndex_IgnoreNonIndexFiles(t *testing.T) {
 	ctx := context.Background()
 

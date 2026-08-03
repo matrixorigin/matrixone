@@ -142,6 +142,11 @@ var (
 		"last_run=?, " +
 		"details=? where task_id=?"
 
+	updateDaemonTaskStatus = "update sys_daemon_task set " +
+		"task_status=?, " +
+		"update_at=?, " +
+		"end_at=? where task_id=?"
+
 	heartbeatDaemonTask = "update sys_daemon_task set last_heartbeat=? where task_id=?"
 
 	deleteDaemonTask = "delete from sys_daemon_task where 1=1"
@@ -277,6 +282,8 @@ var (
 		"error_message=?," +
 		"gate_result=?," +
 		"runner_cn=? where run_id=?"
+	completeSQLTaskRun = updateSQLTaskRun +
+		" and status=? and runner_cn=? and attempt_number=?"
 
 	selectSQLTaskRun = "select " + sqlTaskRunSelectColumns + " from sql_task_run where 1=1"
 
@@ -1136,7 +1143,7 @@ func (m *mysqlTaskStorage) CompleteSQLTaskRun(ctx context.Context, run SQLTaskRu
 	if taskFrameworkDisabled() {
 		return 0, nil
 	}
-	exec, err := execUpdateSQLTaskRun(ctx, m.db, run)
+	exec, err := execCompleteSQLTaskRun(ctx, m.db, run)
 	if err != nil {
 		return 0, err
 	}
@@ -1145,6 +1152,32 @@ func (m *mysqlTaskStorage) CompleteSQLTaskRun(ctx context.Context, run SQLTaskRu
 		return 0, err
 	}
 	return int(affected), nil
+}
+
+func execCompleteSQLTaskRun(ctx context.Context, exec sqlTaskRunExecer, run SQLTaskRun) (sql.Result, error) {
+	return exec.ExecContext(
+		ctx,
+		completeSQLTaskRun,
+		run.TaskID,
+		run.TaskName,
+		run.AccountID,
+		nullTime(run.ScheduledAt),
+		nullTime(run.StartedAt),
+		nullTime(run.FinishedAt),
+		run.DurationSeconds,
+		run.Status,
+		run.TriggerType,
+		run.AttemptNumber,
+		run.RowsAffected,
+		run.ErrorCode,
+		nullString(run.ErrorMessage),
+		sqlTaskEnabledValue(run.GateResult),
+		run.RunnerCN,
+		run.RunID,
+		SQLTaskStatusRunning,
+		run.RunnerCN,
+		run.AttemptNumber,
+	)
 }
 
 type sqlTaskRunExecer interface {
@@ -1531,9 +1564,12 @@ func (m *mysqlTaskStorage) RunUpdateDaemonTask(ctx context.Context, tasks []task
 			if err != nil {
 				return err
 			}
-			details, err := t.Details.Marshal()
-			if err != nil {
-				return err
+			var details any
+			if t.Details != nil {
+				details, err = t.Details.Marshal()
+				if err != nil {
+					return err
+				}
 			}
 
 			var lastHeartbeat, updateAt, endAt, lastRun any
@@ -1579,6 +1615,49 @@ func (m *mysqlTaskStorage) RunUpdateDaemonTask(ctx context.Context, tasks []task
 		}
 	}
 	return n, nil
+}
+
+func (m *mysqlTaskStorage) UpdateDaemonTaskStatus(
+	ctx context.Context,
+	taskID uint64,
+	status task.TaskStatus,
+	updateAt time.Time,
+	endAt time.Time,
+	conditions ...Condition,
+) (int, error) {
+	if taskFrameworkDisabled() {
+		return 0, nil
+	}
+	return m.RunUpdateDaemonTaskStatus(
+		ctx,
+		taskID,
+		status,
+		updateAt,
+		endAt,
+		m.db,
+		conditions...,
+	)
+}
+
+func (m *mysqlTaskStorage) RunUpdateDaemonTaskStatus(
+	ctx context.Context,
+	taskID uint64,
+	status task.TaskStatus,
+	updateAt time.Time,
+	endAt time.Time,
+	db SqlExecutor,
+	conditions ...Condition,
+) (int, error) {
+	updateSQL := updateDaemonTaskStatus + buildDaemonTaskWhereClause(newConditions(conditions...))
+	exec, err := db.ExecContext(ctx, updateSQL, status, updateAt, nullTime(endAt), taskID)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := exec.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(affected), nil
 }
 
 func (m *mysqlTaskStorage) DeleteDaemonTask(ctx context.Context, condition ...Condition) (int, error) {
@@ -1893,13 +1972,22 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 				return 0, err
 			}
 			if dTask.TaskStatus != targetStatus {
-				logutil.Info("cdc.task.state.transition",
-					zap.String("task-name", details.CreateCdc.TaskName),
-					zap.Uint64("task-id", dTask.ID),
-					zap.Uint64("account-id", uint64(dTask.AccountID)),
-					zap.String("from-status", dTask.TaskStatus.String()),
-					zap.String("to-status", targetStatus.String()),
-				)
+				if targetStatus == task.TaskStatus_RestartRequested {
+					eventCDCRestartRequestStateUpdated.InfoLazy(func() []zap.Field {
+						return cdcRestartEventFields(dTask,
+							zap.String("from-status", dTask.TaskStatus.String()),
+							zap.String("to-status", targetStatus.String()),
+						)
+					})
+				} else {
+					logutil.Info("cdc.task.state.transition",
+						zap.String("task-name", details.CreateCdc.TaskName),
+						zap.Uint64("task-id", dTask.ID),
+						zap.Uint64("account-id", uint64(dTask.AccountID)),
+						zap.String("from-status", dTask.TaskStatus.String()),
+						zap.String("to-status", targetStatus.String()),
+					)
+				}
 			}
 			dTask.TaskStatus = targetStatus
 			updateTasks = append(updateTasks, dTask)

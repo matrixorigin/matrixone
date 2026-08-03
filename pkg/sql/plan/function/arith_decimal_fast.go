@@ -142,9 +142,10 @@ func d128AddSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
 		if noNull {
 			for i := 0; i < len1; i++ {
 				signX := v1[i].B64_127 >> 63
+				signY := v2[i].B64_127 >> 63
 				rs[i].B0_63, carry = bits.Add64(v1[i].B0_63, v2[i].B0_63, 0)
 				rs[i].B64_127, _ = bits.Add64(v1[i].B64_127, v2[i].B64_127, carry)
-				if signX == v2[i].B64_127>>63 && signX != rs[i].B64_127>>63 {
+				if signX == signY && signX != rs[i].B64_127>>63 {
 					return i
 				}
 			}
@@ -154,9 +155,10 @@ func d128AddSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
 					continue
 				}
 				signX := v1[i].B64_127 >> 63
+				signY := v2[i].B64_127 >> 63
 				rs[i].B0_63, carry = bits.Add64(v1[i].B0_63, v2[i].B0_63, 0)
 				rs[i].B64_127, _ = bits.Add64(v1[i].B64_127, v2[i].B64_127, carry)
-				if signX == v2[i].B64_127>>63 && signX != rs[i].B64_127>>63 {
+				if signX == signY && signX != rs[i].B64_127>>63 {
 					return i
 				}
 			}
@@ -166,9 +168,10 @@ func d128AddSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
 		signA := a.B64_127 >> 63
 		if noNull {
 			for i := 0; i < len2; i++ {
+				signY := v2[i].B64_127 >> 63
 				rs[i].B0_63, carry = bits.Add64(a.B0_63, v2[i].B0_63, 0)
 				rs[i].B64_127, _ = bits.Add64(a.B64_127, v2[i].B64_127, carry)
-				if signA == v2[i].B64_127>>63 && signA != rs[i].B64_127>>63 {
+				if signA == signY && signA != rs[i].B64_127>>63 {
 					return i
 				}
 			}
@@ -177,9 +180,10 @@ func d128AddSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
+				signY := v2[i].B64_127 >> 63
 				rs[i].B0_63, carry = bits.Add64(a.B0_63, v2[i].B0_63, 0)
 				rs[i].B64_127, _ = bits.Add64(a.B64_127, v2[i].B64_127, carry)
-				if signA == v2[i].B64_127>>63 && signA != rs[i].B64_127>>63 {
+				if signA == signY && signA != rs[i].B64_127>>63 {
 					return i
 				}
 			}
@@ -189,9 +193,10 @@ func d128AddSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
 		signB := b.B64_127 >> 63
 		if noNull {
 			for i := 0; i < len1; i++ {
+				signX := v1[i].B64_127 >> 63
 				rs[i].B0_63, carry = bits.Add64(v1[i].B0_63, b.B0_63, 0)
 				rs[i].B64_127, _ = bits.Add64(v1[i].B64_127, b.B64_127, carry)
-				if v1[i].B64_127>>63 == signB && v1[i].B64_127>>63 != rs[i].B64_127>>63 {
+				if signX == signB && signX != rs[i].B64_127>>63 {
 					return i
 				}
 			}
@@ -200,9 +205,10 @@ func d128AddSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
+				signX := v1[i].B64_127 >> 63
 				rs[i].B0_63, carry = bits.Add64(v1[i].B0_63, b.B0_63, 0)
 				rs[i].B64_127, _ = bits.Add64(v1[i].B64_127, b.B64_127, carry)
-				if v1[i].B64_127>>63 == signB && v1[i].B64_127>>63 != rs[i].B64_127>>63 {
+				if signX == signB && signX != rs[i].B64_127>>63 {
 					return i
 				}
 			}
@@ -293,9 +299,10 @@ func d128SubSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
 		if noNull {
 			for i := 0; i < len1; i++ {
 				signX := v1[i].B64_127 >> 63
+				signY := v2[i].B64_127 >> 63
 				rs[i].B0_63, borrow = bits.Sub64(v1[i].B0_63, v2[i].B0_63, 0)
 				rs[i].B64_127, _ = bits.Sub64(v1[i].B64_127, v2[i].B64_127, borrow)
-				if signX != v2[i].B64_127>>63 && signX != rs[i].B64_127>>63 {
+				if signX != signY && signX != rs[i].B64_127>>63 {
 					return i
 				}
 			}
@@ -305,9 +312,10 @@ func d128SubSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
 					continue
 				}
 				signX := v1[i].B64_127 >> 63
+				signY := v2[i].B64_127 >> 63
 				rs[i].B0_63, borrow = bits.Sub64(v1[i].B0_63, v2[i].B0_63, 0)
 				rs[i].B64_127, _ = bits.Sub64(v1[i].B64_127, v2[i].B64_127, borrow)
-				if signX != v2[i].B64_127>>63 && signX != rs[i].B64_127>>63 {
+				if signX != signY && signX != rs[i].B64_127>>63 {
 					return i
 				}
 			}
@@ -317,9 +325,10 @@ func d128SubSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
 		signA := a.B64_127 >> 63
 		if noNull {
 			for i := 0; i < len2; i++ {
+				signY := v2[i].B64_127 >> 63
 				rs[i].B0_63, borrow = bits.Sub64(a.B0_63, v2[i].B0_63, 0)
 				rs[i].B64_127, _ = bits.Sub64(a.B64_127, v2[i].B64_127, borrow)
-				if signA != v2[i].B64_127>>63 && signA != rs[i].B64_127>>63 {
+				if signA != signY && signA != rs[i].B64_127>>63 {
 					return i
 				}
 			}
@@ -328,9 +337,10 @@ func d128SubSameScale(v1, v2, rs []types.Decimal128, rsnull *nulls.Nulls) int {
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
+				signY := v2[i].B64_127 >> 63
 				rs[i].B0_63, borrow = bits.Sub64(a.B0_63, v2[i].B0_63, 0)
 				rs[i].B64_127, _ = bits.Sub64(a.B64_127, v2[i].B64_127, borrow)
-				if signA != v2[i].B64_127>>63 && signA != rs[i].B64_127>>63 {
+				if signA != signY && signA != rs[i].B64_127>>63 {
 					return i
 				}
 			}
@@ -3785,9 +3795,10 @@ func d64AddSameScale(v1, v2, rs []types.Decimal64, rsnull *nulls.Nulls) int {
 	if len1 == len2 {
 		if noNull {
 			for i := 0; i < len1; i++ {
-				rs[i] = v1[i] + v2[i]
 				signX := uint64(v1[i]) >> 63
-				if signX == uint64(v2[i])>>63 && signX != uint64(rs[i])>>63 {
+				signY := uint64(v2[i]) >> 63
+				rs[i] = v1[i] + v2[i]
+				if signX == signY && signX != uint64(rs[i])>>63 {
 					return i
 				}
 			}
@@ -3796,9 +3807,10 @@ func d64AddSameScale(v1, v2, rs []types.Decimal64, rsnull *nulls.Nulls) int {
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
-				rs[i] = v1[i] + v2[i]
 				signX := uint64(v1[i]) >> 63
-				if signX == uint64(v2[i])>>63 && signX != uint64(rs[i])>>63 {
+				signY := uint64(v2[i]) >> 63
+				rs[i] = v1[i] + v2[i]
+				if signX == signY && signX != uint64(rs[i])>>63 {
 					return i
 				}
 			}
@@ -3808,8 +3820,9 @@ func d64AddSameScale(v1, v2, rs []types.Decimal64, rsnull *nulls.Nulls) int {
 		signA := uint64(a) >> 63
 		if noNull {
 			for i := 0; i < len2; i++ {
+				signY := uint64(v2[i]) >> 63
 				rs[i] = a + v2[i]
-				if signA == uint64(v2[i])>>63 && signA != uint64(rs[i])>>63 {
+				if signA == signY && signA != uint64(rs[i])>>63 {
 					return i
 				}
 			}
@@ -3818,8 +3831,9 @@ func d64AddSameScale(v1, v2, rs []types.Decimal64, rsnull *nulls.Nulls) int {
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
+				signY := uint64(v2[i]) >> 63
 				rs[i] = a + v2[i]
-				if signA == uint64(v2[i])>>63 && signA != uint64(rs[i])>>63 {
+				if signA == signY && signA != uint64(rs[i])>>63 {
 					return i
 				}
 			}
@@ -3829,8 +3843,9 @@ func d64AddSameScale(v1, v2, rs []types.Decimal64, rsnull *nulls.Nulls) int {
 		signB := uint64(b) >> 63
 		if noNull {
 			for i := 0; i < len1; i++ {
+				signX := uint64(v1[i]) >> 63
 				rs[i] = v1[i] + b
-				if uint64(v1[i])>>63 == signB && uint64(v1[i])>>63 != uint64(rs[i])>>63 {
+				if signX == signB && signX != uint64(rs[i])>>63 {
 					return i
 				}
 			}
@@ -3839,8 +3854,9 @@ func d64AddSameScale(v1, v2, rs []types.Decimal64, rsnull *nulls.Nulls) int {
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
+				signX := uint64(v1[i]) >> 63
 				rs[i] = v1[i] + b
-				if uint64(v1[i])>>63 == signB && uint64(v1[i])>>63 != uint64(rs[i])>>63 {
+				if signX == signB && signX != uint64(rs[i])>>63 {
 					return i
 				}
 			}
@@ -3924,9 +3940,10 @@ func d64SubSameScale(v1, v2, rs []types.Decimal64, rsnull *nulls.Nulls) int {
 	if len1 == len2 {
 		if noNull {
 			for i := 0; i < len1; i++ {
-				rs[i] = v1[i] - v2[i]
 				signX := uint64(v1[i]) >> 63
-				if signX != uint64(v2[i])>>63 && signX != uint64(rs[i])>>63 {
+				signY := uint64(v2[i]) >> 63
+				rs[i] = v1[i] - v2[i]
+				if signX != signY && signX != uint64(rs[i])>>63 {
 					return i
 				}
 			}
@@ -3935,9 +3952,10 @@ func d64SubSameScale(v1, v2, rs []types.Decimal64, rsnull *nulls.Nulls) int {
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
-				rs[i] = v1[i] - v2[i]
 				signX := uint64(v1[i]) >> 63
-				if signX != uint64(v2[i])>>63 && signX != uint64(rs[i])>>63 {
+				signY := uint64(v2[i]) >> 63
+				rs[i] = v1[i] - v2[i]
+				if signX != signY && signX != uint64(rs[i])>>63 {
 					return i
 				}
 			}
@@ -3947,8 +3965,9 @@ func d64SubSameScale(v1, v2, rs []types.Decimal64, rsnull *nulls.Nulls) int {
 		signA := uint64(a) >> 63
 		if noNull {
 			for i := 0; i < len2; i++ {
+				signY := uint64(v2[i]) >> 63
 				rs[i] = a - v2[i]
-				if signA != uint64(v2[i])>>63 && signA != uint64(rs[i])>>63 {
+				if signA != signY && signA != uint64(rs[i])>>63 {
 					return i
 				}
 			}
@@ -3957,8 +3976,9 @@ func d64SubSameScale(v1, v2, rs []types.Decimal64, rsnull *nulls.Nulls) int {
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
+				signY := uint64(v2[i]) >> 63
 				rs[i] = a - v2[i]
-				if signA != uint64(v2[i])>>63 && signA != uint64(rs[i])>>63 {
+				if signA != signY && signA != uint64(rs[i])>>63 {
 					return i
 				}
 			}
@@ -3968,8 +3988,9 @@ func d64SubSameScale(v1, v2, rs []types.Decimal64, rsnull *nulls.Nulls) int {
 		signB := uint64(b) >> 63
 		if noNull {
 			for i := 0; i < len1; i++ {
+				signX := uint64(v1[i]) >> 63
 				rs[i] = v1[i] - b
-				if uint64(v1[i])>>63 != signB && uint64(v1[i])>>63 != uint64(rs[i])>>63 {
+				if signX != signB && signX != uint64(rs[i])>>63 {
 					return i
 				}
 			}
@@ -3978,8 +3999,9 @@ func d64SubSameScale(v1, v2, rs []types.Decimal64, rsnull *nulls.Nulls) int {
 				if bmp.Contains(uint64(i)) {
 					continue
 				}
+				signX := uint64(v1[i]) >> 63
 				rs[i] = v1[i] - b
-				if uint64(v1[i])>>63 != signB && uint64(v1[i])>>63 != uint64(rs[i])>>63 {
+				if signX != signB && signX != uint64(rs[i])>>63 {
 					return i
 				}
 			}

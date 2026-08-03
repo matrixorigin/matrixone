@@ -30,6 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	moconfig "github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -61,6 +63,14 @@ type handler struct {
 	queryClient client.QueryClient
 	// connCache is the cache of server connections.
 	connCache ConnCache
+	// sessionAllocator owns all MySQL protocol buffers retained by this Proxy.
+	// Sharing it avoids one ManagedAllocator (and its arenas) per connection.
+	sessionAllocator frontend.Allocator
+	// connectionLimiter bounds aggregate and per-tenant live connections.
+	connectionLimiter *connectionLimiter
+	// protocolMemoryLimiter serializes phase overlap against the headroom left
+	// after steady per-connection protocol memory has been reserved.
+	protocolMemoryLimiter *protocolMemoryLimiter
 }
 
 var ErrNoAvailableCNServers = moerr.NewInternalErrorNoCtx("no available CN servers")
@@ -75,6 +85,17 @@ func newProxyHandler(
 	haKeeperClient logservice.ProxyHAKeeperClient,
 	test bool,
 ) (*handler, error) {
+	protocolMemoryLimiter, err := newProtocolMemoryLimiter(&cfg)
+	if err != nil {
+		return nil, err
+	}
+	frontendParameters := &moconfig.FrontendParameters{
+		GuestMmuLimitation: int64(protocolMemoryLimiter.budget.managedBytes),
+	}
+	sessionAllocator := frontend.NewSessionAllocator(
+		moconfig.NewParameterUnit(frontendParameters, nil, nil, nil),
+	)
+
 	// Create the MO cluster.
 	mc := clusterservice.NewMOCluster(cfg.UUID, haKeeperClient, cfg.Cluster.RefreshInterval.Duration)
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
@@ -99,9 +120,11 @@ func newProxyHandler(
 
 	var ru Router
 	if test {
-		ru = newRouter(mc, re, re.connManager, false)
+		ru = newRouter(mc, re, re.connManager, false,
+			withSessionAllocator(sessionAllocator))
 	} else {
 		routerOpts := []routeOption{
+			withSessionAllocator(sessionAllocator),
 			withConnectTimeout(cfg.ConnectTimeout.Duration),
 			withAuthTimeout(cfg.AuthTimeout.Duration),
 			withCNHealthCheckCooldown(
@@ -145,19 +168,33 @@ func newProxyHandler(
 	if err != nil {
 		return nil, err
 	}
+	maxConnections := cfg.MaxConnections
+	if maxConnections == 0 {
+		maxConnections = defaultMaxConnections
+	}
+	maxConnectionsPerTenant := cfg.MaxConnectionsPerTenant
+	if maxConnectionsPerTenant == 0 {
+		maxConnectionsPerTenant = min(defaultMaxConnectionsPerTenant, maxConnections)
+	}
 	h := &handler{
-		ctx:            ctx,
-		logger:         rt.Logger(),
-		config:         cfg,
-		stopper:        st,
-		moCluster:      mc,
-		counterSet:     cs,
-		router:         ru,
-		rebalancer:     re,
-		haKeeperClient: haKeeperClient,
-		ipNetList:      ipNetList,
-		sqlWorker:      sw,
-		queryClient:    qc,
+		ctx:              ctx,
+		logger:           rt.Logger(),
+		config:           cfg,
+		stopper:          st,
+		moCluster:        mc,
+		counterSet:       cs,
+		router:           ru,
+		rebalancer:       re,
+		haKeeperClient:   haKeeperClient,
+		ipNetList:        ipNetList,
+		sqlWorker:        sw,
+		queryClient:      qc,
+		sessionAllocator: sessionAllocator,
+		connectionLimiter: newConnectionLimiter(
+			maxConnections,
+			maxConnectionsPerTenant,
+		),
+		protocolMemoryLimiter: protocolMemoryLimiter,
 	}
 	if h.config.ConnCacheEnabled && h.config.Plugin == nil {
 		var cacheOpts []connCacheOption
@@ -177,21 +214,52 @@ func (h *handler) handle(c goetty.IOSession) error {
 	h.logger.Info("new connection comes", zap.Uint64("session ID", c.ID()))
 	v2.ProxyConnectAcceptedCounter.Inc()
 	h.counterSet.connAccepted.Add(1)
+	defer func() {
+		v2.ProxyConnectClosedCounter.Inc()
+	}()
+
+	admission, preadmitted := takeConnectionAdmission(c.RawConn())
+	if !preadmitted {
+		var ok bool
+		admission, ok = h.connectionLimiter.acquire()
+		if !ok {
+			v2.ProxyConnectRejectCounter.Inc()
+			writeConnectionLimitError(c.RawConn())
+			return nil
+		}
+	} else if admission == nil {
+		// Goetty shutdown may close the raw connection immediately before the
+		// handler begins. In that ordering the connection wrapper remains the
+		// lease owner and has already released it.
+		v2.ProxyConnectRejectCounter.Inc()
+		return nil
+	}
+	defer admission.release()
+
+	v2.ProxyConnectionsCurrentGauge.Inc()
 	h.counterSet.connTotal.Add(1)
 	defer func() {
-		v2.ProxyConnectCurrentCounter.Inc()
+		v2.ProxyConnectionsCurrentGauge.Dec()
 		h.counterSet.connTotal.Add(-1)
 	}()
 
 	// Create a new tunnel to manage client connection and server connection.
-	t := newTunnel(h.ctx, h.logger, h.counterSet,
+	tunnelOptions := []tunnelOption{
 		withRealConn(),
 		withRebalancePolicy(RebalancePolicyMapping[h.config.RebalancePolicy]),
 		withRebalancer(h.rebalancer),
 		withConnCacheEnabled(h.connCache != nil),
-	)
+	}
+	if h.connCache != nil {
+		tunnelOptions = append(tunnelOptions, withCacheReuseBarrier())
+	}
+	t := newTunnel(h.ctx, h.logger, h.counterSet, tunnelOptions...)
 	defer func() {
 		_ = t.Close()
+		// This defer was installed before the client/server and event-handler
+		// cleanup defers, so reaching it proves the old tunnel generation can no
+		// longer touch a backend that is about to be reused.
+		t.markCacheReuseReady()
 	}()
 
 	cc, err := newClientConn(
@@ -207,6 +275,9 @@ func (h *handler) handle(c goetty.IOSession) error {
 		h.ipNetList,
 		h.queryClient,
 		h.connCache,
+		withClientConnAllocator(h.sessionAllocator),
+		withClientConnAdmission(admission),
+		withClientConnProtocolMemoryLimiter(h.protocolMemoryLimiter),
 	)
 	if err != nil {
 		h.logger.Error("failed to create client conn", zap.Error(err))
@@ -217,9 +288,15 @@ func (h *handler) handle(c goetty.IOSession) error {
 
 	// client builds connections with a best CN server and returns
 	// the server connection.
-	sc, err := cc.BuildConnWithServer("")
+	sc, err := cc.BuildConnWithServer(h.ctx, "")
 	if err != nil {
 		if isConnEndErr(err) {
+			return nil
+		}
+		if isProxyAdmissionError(err) {
+			v2.ProxyConnectRejectCounter.Inc()
+			h.logger.Debug("connection rejected during handshake", zap.Error(err))
+			cc.SendErrToClient(err)
 			return nil
 		}
 		h.logger.Error("failed to create server conn", zap.Error(err))
@@ -246,9 +323,10 @@ func (h *handler) handle(c goetty.IOSession) error {
 			serverC = sc
 		}
 		if serverC != nil {
-			if err := serverC.Quit(); err != nil {
-				_ = serverC.Close()
-			}
+			// This connection was not admitted to the cache. A protocol QUIT can
+			// wait indefinitely for a broken CN to close its side; direct Close is
+			// the terminal ownership edge and also removes connManager state.
+			_ = serverC.Close()
 		}
 	}()
 
@@ -269,7 +347,10 @@ func (h *handler) handle(c goetty.IOSession) error {
 	if err := st.RunNamedTask("event-handler", func(ctx context.Context) {
 		for {
 			select {
-			case e := <-t.reqC:
+			case e, ok := <-t.reqC:
+				if !ok {
+					return
+				}
 				if err := cc.HandleEvent(ctx, e, t.respC); err != nil {
 					h.logger.Error("failed to handle event",
 						zap.Any("event", e), zap.Error(err))
@@ -305,14 +386,23 @@ func (h *handler) handle(c goetty.IOSession) error {
 	}
 }
 
+func (h *handler) rejectBeforeSession(conn net.Conn) {
+	v2.ProxyConnectAcceptedCounter.Inc()
+	v2.ProxyConnectRejectCounter.Inc()
+	v2.ProxyConnectClosedCounter.Inc()
+	h.counterSet.connAccepted.Add(1)
+	writeConnectionLimitError(conn)
+}
+
 func (h *handler) handleTunnelErr(err error, cc ClientConn, t *tunnel, sessionID uint64, goId int64) error {
+	skipCacheQuit := false
 	if getErrorCode(err) == codeClientDisconnect {
-		h.cleanupBackendOnClientDisconnect(err, cc, t)
+		skipCacheQuit = h.cleanupBackendOnClientDisconnect(err, cc, t)
 	}
 	if isEOFErr(err) || isConnEndErr(err) {
 		// On abnormal client disconnect, no COM_QUIT may be sent.
 		// Trigger quit path once to avoid leaking backend connections.
-		if h.connCache != nil {
+		if h.connCache != nil && !skipCacheQuit {
 			if clientConn, ok := cc.(*clientConn); ok {
 				if quitErr := clientConn.handleQuitEvent(h.ctx); quitErr != nil &&
 					!errors.Is(quitErr, errPipeClosed) {
@@ -342,32 +432,45 @@ func (h *handler) handleTunnelErr(err error, cc ClientConn, t *tunnel, sessionID
 	return err
 }
 
-func (h *handler) cleanupBackendOnClientDisconnect(err error, cc ClientConn, t *tunnel) {
+// cleanupBackendOnClientDisconnect returns true when the caller must not run
+// the conn-cache QUIT/cache path for this backend connection.
+func (h *handler) cleanupBackendOnClientDisconnect(err error, cc ClientConn, t *tunnel) bool {
 	if cc == nil || getErrorCode(err) != codeClientDisconnect {
-		return
+		return false
 	}
 	var currentSC ServerConn
 	if t != nil {
 		currentSC = t.getServerConn()
 	}
-	// For normal EOF / closed-connection exits, close the current backend
-	// session directly instead of creating an extra proxy->CN KILL connection.
+	if t != nil && t.hasExpectedCacheQuit() {
+		return false
+	}
+	if t != nil && t.hasExpectedClientQuit() {
+		h.closeBackendAfterClientDisconnect(cc, currentSC)
+		return true
+	}
 	if isEOFErr(err) || isConnEndErr(err) {
-		if t != nil && t.hasExpectedCacheQuit() {
-			return
+		if t == nil || !t.hasInFlightClientRequest() {
+			h.closeBackendAfterClientDisconnect(cc, currentSC)
+			return true
 		}
-		if currentSC != nil {
-			if err := currentSC.Close(); err != nil {
-				h.logger.Warn("failed to close backend connection after client disconnect",
-					zap.Uint32("Conn ID", cc.ConnID()),
-					zap.Error(err),
-				)
-			}
-		}
-		return
 	}
 	if err := cc.KillCurrentBackendConn(currentSC); err != nil {
 		h.logger.Warn("failed to kill backend connection after client disconnect",
+			zap.Uint32("Conn ID", cc.ConnID()),
+			zap.Error(err),
+		)
+	}
+	h.closeBackendAfterClientDisconnect(cc, currentSC)
+	return true
+}
+
+func (h *handler) closeBackendAfterClientDisconnect(cc ClientConn, sc ServerConn) {
+	if sc == nil {
+		return
+	}
+	if err := sc.Close(); err != nil {
+		h.logger.Warn("failed to close backend connection after client disconnect",
 			zap.Uint32("Conn ID", cc.ConnID()),
 			zap.Error(err),
 		)

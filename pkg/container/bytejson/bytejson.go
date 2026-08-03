@@ -16,6 +16,7 @@ package bytejson
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,11 +39,19 @@ func (bj ByteJson) String() string {
 }
 
 func (bj ByteJson) Unquote() (string, error) {
+	if bj.Type == TpCodeBlob {
+		if payload, ok := bj.persistedBitPayload(); ok {
+			return base64.StdEncoding.EncodeToString(payload), nil
+		}
+		return string(bj.GetString()), nil
+	}
+	if bj.Type == TpCodeOpaque || bj.Type == TpCodeBit {
+		return base64.StdEncoding.EncodeToString(bj.GetString()), nil
+	}
 	if bj.Type != TpCodeString &&
 		bj.Type != TpCodeDate &&
 		bj.Type != TpCodeTime &&
-		bj.Type != TpCodeDatetime &&
-		bj.Type != TpCodeBlob {
+		bj.Type != TpCodeDatetime {
 		return bj.String(), nil
 	}
 	str := bj.GetString()
@@ -88,10 +97,28 @@ func (bj ByteJson) MarshalJSON() ([]byte, error) {
 
 // Marshal transform bytejson to []byte,for storage
 func (bj ByteJson) Marshal() ([]byte, error) {
-	buf := make([]byte, len(bj.Data)+1)
-	buf[0] = byte(bj.Type)
-	copy(buf[1:], bj.Data)
+	stored, err := bj.StorageCompatible()
+	if err != nil {
+		return nil, err
+	}
+	buf := make([]byte, len(stored.Data)+1)
+	buf[0] = byte(stored.Type)
+	copy(buf[1:], stored.Data)
 	return buf, nil
+}
+
+// StorageCompatible returns a representation that only uses type codes known
+// before TpCodeOpaque and TpCodeBit were introduced. The receiver is returned
+// unchanged when it is already safe to persist.
+func (bj ByteJson) StorageCompatible() (ByteJson, error) {
+	if !bj.requiresLegacyBinaryEncoding() {
+		return bj, nil
+	}
+	tp, data, err := appendLegacyCompatibleJSON(nil, bj)
+	if err != nil {
+		return ByteJson{}, err
+	}
+	return ByteJson{Type: tp, Data: data}, nil
 }
 
 // Unmarshal transform storage []byte  to bytejson
@@ -105,6 +132,16 @@ func (bj *ByteJson) Unmarshal(buf []byte) error {
 // UnmarshalJSON transform visible []byte to bytejson
 func (bj *ByteJson) UnmarshalJSON(data []byte) error {
 	bs, err := ParseJsonByte(data)
+	if err != nil {
+		return err
+	}
+	bj.Data = bs[1:]
+	bj.Type = TpCode(bs[0])
+	return nil
+}
+
+func (bj *ByteJson) unmarshalJSONWithDepthLimit(data []byte, maxDepth int) error {
+	bs, err := parseJsonByte(data, maxDepth)
 	if err != nil {
 		return err
 	}
@@ -165,10 +202,27 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 	case TpCodeDecimal:
 		data := bj.GetString()
 		buf = append(buf, data...)
-	case TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
+	case TpCodeDate, TpCodeTime, TpCodeDatetime:
 		buf = append(buf, '"')
 		data := bj.GetString()
 		buf = append(buf, data...)
+		buf = append(buf, '"')
+	case TpCodeBlob:
+		buf = append(buf, '"')
+		if payload, ok := bj.persistedBitPayload(); ok {
+			start := len(buf)
+			buf = append(buf, make([]byte, base64.StdEncoding.EncodedLen(len(payload)))...)
+			base64.StdEncoding.Encode(buf[start:], payload)
+		} else {
+			buf = append(buf, bj.GetString()...)
+		}
+		buf = append(buf, '"')
+	case TpCodeOpaque, TpCodeBit:
+		buf = append(buf, '"')
+		data := bj.GetString()
+		start := len(buf)
+		buf = append(buf, make([]byte, base64.StdEncoding.EncodedLen(len(data)))...)
+		base64.StdEncoding.Encode(buf[start:], data)
 		buf = append(buf, '"')
 	default:
 		err = moerr.NewInvalidInputNoCtxf("invalid json type '%v'", bj.Type)
@@ -299,13 +353,380 @@ func (bj ByteJson) getValEntry(off int) ByteJson {
 		return ByteJson{Type: TpCodeLiteral, Data: bj.Data[off+valTypeSize : off+valTypeSize+1]}
 	case TpCodeUint64, TpCodeInt64, TpCodeFloat64:
 		return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+numberSize]}
-	case TpCodeString, TpCodeDecimal, TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
+	case TpCodeString, TpCodeDecimal, TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob, TpCodeOpaque, TpCodeBit:
 		num, length := calStrLen(bj.Data[valOff:])
 		totalLen := uint32(num) + uint32(length)
 		return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+totalLen]}
 	}
 	dataBytes := endian.Uint32(bj.Data[valOff+docSizeOff:])
 	return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+dataBytes]}
+}
+
+const persistedBitPrefix = "~mo:json-bit:v1:"
+
+func (bj ByteJson) persistedBitPayload() ([]byte, bool) {
+	if bj.Type != TpCodeBlob {
+		return nil, false
+	}
+	payload := bj.GetString()
+	if !bytes.HasPrefix(payload, []byte(persistedBitPrefix)) {
+		return nil, false
+	}
+	raw, err := base64.StdEncoding.DecodeString(string(payload[len(persistedBitPrefix):]))
+	if err != nil {
+		return nil, false
+	}
+	return raw, true
+}
+
+func (bj ByteJson) requiresLegacyBinaryEncoding() bool {
+	switch bj.Type {
+	case TpCodeOpaque, TpCodeBit:
+		return true
+	case TpCodeArray:
+		for i := 0; i < bj.GetElemCnt(); i++ {
+			if bj.getArrayElem(i).requiresLegacyBinaryEncoding() {
+				return true
+			}
+		}
+	case TpCodeObject:
+		for i := 0; i < bj.GetElemCnt(); i++ {
+			if bj.getObjectVal(i).requiresLegacyBinaryEncoding() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// appendLegacyCompatibleJSON writes only type codes understood by readers
+// predating TpCodeOpaque and TpCodeBit. Opaque values use the legacy BLOB
+// representation; BIT values use a tagged BLOB payload whose subtype new
+// readers recover through TYPE, display, and comparison operations.
+func appendLegacyCompatibleJSON(buf []byte, bj ByteJson) (TpCode, []byte, error) {
+	switch bj.Type {
+	case TpCodeOpaque:
+		encoded := base64.StdEncoding.EncodeToString(bj.GetString())
+		return TpCodeBlob, appendBinaryString(buf, encoded), nil
+	case TpCodeBit:
+		encoded := persistedBitPrefix + base64.StdEncoding.EncodeToString(bj.GetString())
+		return TpCodeBlob, appendBinaryString(buf, encoded), nil
+	case TpCodeArray:
+		data, err := appendLegacyCompatibleArray(buf, bj)
+		return TpCodeArray, data, err
+	case TpCodeObject:
+		data, err := appendLegacyCompatibleObject(buf, bj)
+		return TpCodeObject, data, err
+	default:
+		return bj.Type, append(buf, bj.Data...), nil
+	}
+}
+
+func appendLegacyCompatibleArray(buf []byte, bj ByteJson) ([]byte, error) {
+	docOff := len(buf)
+	count := bj.GetElemCnt()
+	buf = appendUint32(buf, uint32(count))
+	buf = appendZero(buf, docSizeOff)
+	valEntryBegin := len(buf)
+	buf = appendZero(buf, count*valEntrySize)
+	for i := 0; i < count; i++ {
+		var err error
+		buf, err = appendLegacyCompatibleValueEntry(buf, docOff, valEntryBegin+i*valEntrySize, bj.getArrayElem(i))
+		if err != nil {
+			return nil, err
+		}
+	}
+	endian.PutUint32(buf[docOff+docSizeOff:], uint32(len(buf)-docOff))
+	return buf, nil
+}
+
+func appendLegacyCompatibleObject(buf []byte, bj ByteJson) ([]byte, error) {
+	docOff := len(buf)
+	count := bj.GetElemCnt()
+	buf = appendUint32(buf, uint32(count))
+	buf = appendZero(buf, docSizeOff)
+	keyEntryBegin := len(buf)
+	buf = appendZero(buf, count*keyEntrySize)
+	valEntryBegin := len(buf)
+	buf = appendZero(buf, count*valEntrySize)
+	for i := 0; i < count; i++ {
+		key := bj.getObjectKey(i)
+		keyEntryOff := keyEntryBegin + i*keyEntrySize
+		endian.PutUint32(buf[keyEntryOff:], uint32(len(buf)-docOff))
+		endian.PutUint16(buf[keyEntryOff+keyOriginOff:], uint16(len(key)))
+		buf = append(buf, key...)
+	}
+	for i := 0; i < count; i++ {
+		var err error
+		buf, err = appendLegacyCompatibleValueEntry(buf, docOff, valEntryBegin+i*valEntrySize, bj.getObjectVal(i))
+		if err != nil {
+			return nil, err
+		}
+	}
+	endian.PutUint32(buf[docOff+docSizeOff:], uint32(len(buf)-docOff))
+	return buf, nil
+}
+
+func appendLegacyCompatibleValueEntry(buf []byte, docOff, valEntryOff int, bj ByteJson) ([]byte, error) {
+	elemOff := len(buf)
+	tp, buf, err := appendLegacyCompatibleJSON(buf, bj)
+	if err != nil {
+		return nil, err
+	}
+	buf[valEntryOff] = byte(tp)
+	if tp == TpCodeLiteral {
+		buf[valEntryOff+valTypeSize] = buf[elemOff]
+		return buf[:elemOff], nil
+	}
+	endian.PutUint32(buf[valEntryOff+valTypeSize:], uint32(elemOff-docOff))
+	return buf, nil
+}
+
+type binaryJSONSubtype uint8
+
+const (
+	binaryJSONBit binaryJSONSubtype = iota
+	binaryJSONBlob
+)
+
+const (
+	binaryJSONCompareEncodedChunkSize = 4 * 1024
+	binaryJSONCompareDecodedChunkSize = binaryJSONCompareEncodedChunkSize / 4 * 3
+)
+
+type binaryJSONValueView struct {
+	subtype       binaryJSONSubtype
+	rawPayload    []byte
+	legacyEncoded []byte
+	fallbackRaw   []byte
+}
+
+func binaryJSONValue(bj ByteJson) (binaryJSONValueView, bool) {
+	switch bj.Type {
+	case TpCodeBlob:
+		payload := bj.GetString()
+		if bytes.HasPrefix(payload, []byte(persistedBitPrefix)) {
+			encoded := payload[len(persistedBitPrefix):]
+			if _, ok := base64DecodedLen(encoded); ok {
+				return binaryJSONValueView{
+					subtype:       binaryJSONBit,
+					legacyEncoded: encoded,
+				}, true
+			}
+		}
+		return binaryJSONValueView{
+			subtype:       binaryJSONBlob,
+			legacyEncoded: payload,
+			fallbackRaw:   payload,
+		}, true
+	case TpCodeOpaque:
+		return binaryJSONValueView{
+			subtype:    binaryJSONBlob,
+			rawPayload: bj.GetString(),
+		}, true
+	case TpCodeBit:
+		return binaryJSONValueView{
+			subtype:    binaryJSONBit,
+			rawPayload: bj.GetString(),
+		}, true
+	default:
+		return binaryJSONValueView{}, false
+	}
+}
+
+// CompareBinaryJSON compares opaque JSON values by their MySQL subtype and
+// original bytes. TpCodeBlob is the legacy BLOB encoding and aliases Opaque.
+func CompareBinaryJSON(left, right ByteJson) (int, bool) {
+	leftValue, leftOK := binaryJSONValue(left)
+	rightValue, rightOK := binaryJSONValue(right)
+	if !leftOK || !rightOK {
+		return 0, false
+	}
+	if leftValue.subtype != rightValue.subtype {
+		return int(leftValue.subtype) - int(rightValue.subtype), true
+	}
+	switch {
+	case leftValue.legacyEncoded != nil && rightValue.legacyEncoded != nil:
+		if cmp, ok := compareDecodedBase64Payloads(leftValue.legacyEncoded, rightValue.legacyEncoded); ok {
+			return cmp, true
+		}
+		return bytes.Compare(leftValue.fallbackRaw, rightValue.fallbackRaw), true
+	case leftValue.legacyEncoded != nil:
+		if cmp, ok := compareDecodedBase64WithRaw(leftValue.legacyEncoded, rightValue.rawPayload); ok {
+			return cmp, true
+		}
+		return bytes.Compare(leftValue.fallbackRaw, rightValue.rawPayload), true
+	case rightValue.legacyEncoded != nil:
+		if cmp, ok := compareDecodedBase64WithRaw(rightValue.legacyEncoded, leftValue.rawPayload); ok {
+			return -cmp, true
+		}
+		return bytes.Compare(leftValue.rawPayload, rightValue.fallbackRaw), true
+	default:
+		return bytes.Compare(leftValue.rawPayload, rightValue.rawPayload), true
+	}
+}
+
+// BinaryJSONPayloadLen returns the decoded byte length of an opaque JSON
+// value. It keeps legacy TpCodeBlob values compatible with new raw payloads.
+func BinaryJSONPayloadLen(bj ByteJson) (int, bool) {
+	value, ok := binaryJSONValue(bj)
+	if !ok {
+		return 0, false
+	}
+	if value.legacyEncoded == nil {
+		return len(value.rawPayload), true
+	}
+	if n, ok := base64DecodedLen(value.legacyEncoded); ok {
+		return n, true
+	}
+	return len(value.fallbackRaw), true
+}
+
+func compareDecodedBase64Payloads(leftEncoded, rightEncoded []byte) (int, bool) {
+	var leftBuf [binaryJSONCompareDecodedChunkSize]byte
+	var rightBuf [binaryJSONCompareDecodedChunkSize]byte
+	var leftEncOff, rightEncOff int
+	var leftN, rightN int
+	var leftOff, rightOff int
+	for {
+		if leftOff == leftN && leftEncOff < len(leftEncoded) {
+			n, nextOff, ok := decodeBase64Chunk(leftEncoded, leftEncOff, leftBuf[:])
+			if !ok {
+				return 0, false
+			}
+			leftEncOff, leftN, leftOff = nextOff, n, 0
+		}
+		if rightOff == rightN && rightEncOff < len(rightEncoded) {
+			n, nextOff, ok := decodeBase64Chunk(rightEncoded, rightEncOff, rightBuf[:])
+			if !ok {
+				return 0, false
+			}
+			rightEncOff, rightN, rightOff = nextOff, n, 0
+		}
+		leftAvail := leftN - leftOff
+		rightAvail := rightN - rightOff
+		if leftAvail == 0 || rightAvail == 0 {
+			switch {
+			case leftAvail == 0 && rightAvail == 0:
+				if leftEncOff == len(leftEncoded) && rightEncOff == len(rightEncoded) {
+					return 0, true
+				}
+				continue
+			case leftAvail == 0 && leftEncOff == len(leftEncoded):
+				return -1, true
+			case rightAvail == 0 && rightEncOff == len(rightEncoded):
+				return 1, true
+			default:
+				continue
+			}
+		}
+
+		chunkLen := leftAvail
+		if rightAvail < chunkLen {
+			chunkLen = rightAvail
+		}
+		if cmp := bytes.Compare(leftBuf[leftOff:leftOff+chunkLen], rightBuf[rightOff:rightOff+chunkLen]); cmp != 0 {
+			return cmp, true
+		}
+		leftOff += chunkLen
+		rightOff += chunkLen
+	}
+}
+
+func compareDecodedBase64WithRaw(encoded, raw []byte) (int, bool) {
+	var decodedBuf [binaryJSONCompareDecodedChunkSize]byte
+	var encodedOff, rawOff int
+	var decodedN, decodedOff int
+	for {
+		if decodedOff == decodedN && encodedOff < len(encoded) {
+			n, nextOff, ok := decodeBase64Chunk(encoded, encodedOff, decodedBuf[:])
+			if !ok {
+				return 0, false
+			}
+			encodedOff, decodedN, decodedOff = nextOff, n, 0
+		}
+		decodedAvail := decodedN - decodedOff
+		rawAvail := len(raw) - rawOff
+		if decodedAvail == 0 || rawAvail == 0 {
+			switch {
+			case decodedAvail == 0 && rawAvail == 0:
+				if encodedOff == len(encoded) {
+					return 0, true
+				}
+				continue
+			case decodedAvail == 0 && encodedOff == len(encoded):
+				return -1, true
+			case rawAvail == 0:
+				return 1, true
+			default:
+				continue
+			}
+		}
+		chunkLen := decodedAvail
+		if rawAvail < chunkLen {
+			chunkLen = rawAvail
+		}
+		if cmp := bytes.Compare(decodedBuf[decodedOff:decodedOff+chunkLen], raw[rawOff:rawOff+chunkLen]); cmp != 0 {
+			return cmp, true
+		}
+		decodedOff += chunkLen
+		rawOff += chunkLen
+	}
+}
+
+func base64DecodedLen(encoded []byte) (int, bool) {
+	var buf [binaryJSONCompareDecodedChunkSize]byte
+	total := 0
+	for off := 0; off < len(encoded); {
+		n, nextOff, ok := decodeBase64Chunk(encoded, off, buf[:])
+		if !ok {
+			return 0, false
+		}
+		total += n
+		off = nextOff
+	}
+	return total, true
+}
+
+func decodeBase64Chunk(encoded []byte, offset int, dst []byte) (int, int, bool) {
+	if offset >= len(encoded) {
+		return 0, offset, true
+	}
+	end := base64ChunkEnd(encoded, offset)
+	n, err := base64.StdEncoding.Decode(dst, encoded[offset:end])
+	if err != nil {
+		return 0, offset, false
+	}
+	return n, end, true
+}
+
+// base64ChunkEnd selects a complete Base64 quantum. EncodeJson emits compact
+// Base64, but DecodeString historically also accepted CR/LF in legacy values;
+// retaining quantum alignment preserves that behavior while keeping decoding
+// bounded by the fixed comparison buffer.
+func base64ChunkEnd(encoded []byte, offset int) int {
+	limit := offset + binaryJSONCompareEncodedChunkSize
+	if limit >= len(encoded) {
+		return len(encoded)
+	}
+	if bytes.IndexByte(encoded[offset:limit], '\r') == -1 &&
+		bytes.IndexByte(encoded[offset:limit], '\n') == -1 {
+		return limit
+	}
+	end := offset
+	base64Chars := 0
+	for i := offset; i < len(encoded); i++ {
+		if encoded[i] != '\r' && encoded[i] != '\n' {
+			base64Chars++
+			if base64Chars%4 == 0 {
+				end = i + 1
+			}
+		}
+		if i+1 >= limit && end != offset {
+			return end
+		}
+	}
+	return len(encoded)
 }
 
 func (bj ByteJson) queryValByKey(key []byte) ByteJson {
@@ -371,19 +792,18 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 				cur = bj.query(cur, &nPath)
 			}
 		case subPathRange:
-			se := sub.iRange.genRange(bj.GetElemCnt())
-			if se[0] == 0 {
+			if sub.iRange.matchesIndex(0, 1) {
 				cur = bj.query(cur, &nPath)
 			}
 		case subPathKey:
-			cnt := bj.GetElemCnt()
-			if sub.key == "*" {
-				for i := 0; i < cnt; i++ {
-					cur = bj.getObjectVal(i).query(cur, &nPath)
-				}
-			} else {
-				tmp := bj.queryValByKey(util.UnsafeStringToBytes(sub.key))
+			tmp, exists := bj.queryValByKeyExists(util.UnsafeStringToBytes(sub.key))
+			if exists {
 				cur = tmp.query(cur, &nPath)
+			}
+		case subPathKeyWildcard:
+			cnt := bj.GetElemCnt()
+			for i := 0; i < cnt; i++ {
+				cur = bj.getObjectVal(i).query(cur, &nPath)
 			}
 		}
 		return cur
@@ -395,8 +815,6 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 		case subPathIdx:
 			idx, _, last := sub.idx.genIndex(cnt)
 			if last && idx < 0 || cnt <= idx {
-				tmp := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
-				cur = append(cur, tmp)
 				return cur
 			}
 			if idx == subPathIdxALL {
@@ -407,53 +825,163 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 				cur = bj.getArrayElem(idx).query(cur, &nPath)
 			}
 		case subPathRange:
+			if cnt == 0 {
+				return cur
+			}
 			se := sub.iRange.genRange(cnt)
-			if se[0] == subPathIdxErr {
-				tmp := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
-				cur = append(cur, tmp)
+			if se[0] < 0 || se[1] < 0 {
 				return cur
 			}
 			for i := se[0]; i <= se[1]; i++ {
 				cur = bj.getArrayElem(i).query(cur, &nPath)
 			}
 		}
+		return cur
+	}
+	if sub.tp == subPathIdx {
+		idx, _, _ := sub.idx.genIndex(1)
+		if idx == 0 {
+			return bj.query(cur, &nPath)
+		}
+	}
+	if sub.tp == subPathRange && sub.iRange.matchesIndex(0, 1) {
+		return bj.query(cur, &nPath)
 	}
 	return cur
 }
 
 func (bj ByteJson) Query(paths []*Path) ByteJson {
+	result, _ := bj.QueryWithExists(paths)
+	return result
+}
+
+// QueryWithExists returns the selected JSON value and whether any path matched.
+// A matched JSON literal null is a value and therefore returns exists=true.
+func (bj ByteJson) QueryWithExists(paths []*Path) (ByteJson, bool) {
 	out := make([]ByteJson, 0, len(paths))
 	for _, path := range paths {
 		tmp := bj.query(nil, path)
 		if len(tmp) > 0 {
-			allNull := checkAllNull(tmp)
-			if !allNull {
-				out = append(out, tmp...)
-			}
+			out = append(out, tmp...)
 		}
 	}
 	if len(out) == 0 {
-		return ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
+		return Null, false
 	}
-	if len(out) == 1 && len(paths) == 1 {
-		return out[0]
+	if len(out) == 1 && len(paths) == 1 && !paths[0].mayReturnMultiple() {
+		return out[0], true
 	}
-	allNull := checkAllNull(out)
-	if allNull {
-		return ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
+	return mergeToArray(out), true
+}
+
+// PathExists reports whether path selects at least one JSON value. A selected
+// JSON literal null counts as an existing path. Array index zero autowraps
+// non-array values to match JSON_CONTAINS_PATH semantics.
+func (bj ByteJson) PathExists(path *Path) bool {
+	return bj.pathExists(path)
+}
+
+func (bj ByteJson) pathExists(path *Path) bool {
+	if path.empty() {
+		return true
 	}
-	return mergeToArray(out)
+
+	sub, nextPath := path.step()
+	if sub.tp == subPathDoubleStar {
+		if bj.pathExists(&nextPath) {
+			return true
+		}
+		if bj.Type == TpCodeObject {
+			for i := 0; i < bj.GetElemCnt(); i++ {
+				if bj.getObjectVal(i).pathExists(path) {
+					return true
+				}
+			}
+		} else if bj.Type == TpCodeArray {
+			for i := 0; i < bj.GetElemCnt(); i++ {
+				if bj.getArrayElem(i).pathExists(path) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	switch bj.Type {
+	case TpCodeObject:
+		switch sub.tp {
+		case subPathIdx:
+			idx, _, _ := sub.idx.genIndex(1)
+			return idx == 0 && bj.pathExists(&nextPath)
+		case subPathRange:
+			return sub.iRange.matchesIndex(0, 1) && bj.pathExists(&nextPath)
+		case subPathKey:
+			value, ok := bj.queryValByKeyExists(util.UnsafeStringToBytes(sub.key))
+			return ok && value.pathExists(&nextPath)
+		case subPathKeyWildcard:
+			for i := 0; i < bj.GetElemCnt(); i++ {
+				if bj.getObjectVal(i).pathExists(&nextPath) {
+					return true
+				}
+			}
+		}
+	case TpCodeArray:
+		count := bj.GetElemCnt()
+		switch sub.tp {
+		case subPathIdx:
+			idx, _, last := sub.idx.genIndex(count)
+			if (last && idx < 0) || count <= idx {
+				return false
+			}
+			if idx == subPathIdxALL {
+				for i := 0; i < count; i++ {
+					if bj.getArrayElem(i).pathExists(&nextPath) {
+						return true
+					}
+				}
+				return false
+			}
+			return bj.getArrayElem(idx).pathExists(&nextPath)
+		case subPathRange:
+			for i := 0; i < count; i++ {
+				if sub.iRange.matchesIndex(i, count) && bj.getArrayElem(i).pathExists(&nextPath) {
+					return true
+				}
+			}
+		}
+	default:
+		if sub.tp == subPathIdx {
+			idx, _, _ := sub.idx.genIndex(1)
+			return idx == 0 && bj.pathExists(&nextPath)
+		}
+		if sub.tp == subPathRange {
+			return sub.iRange.matchesIndex(0, 1) && bj.pathExists(&nextPath)
+		}
+	}
+
+	return false
 }
 
 func (bj ByteJson) querySimple(path *Path) ByteJson {
-	val, ok := bj.querySimpleExist(path)
+	val, ok := bj.querySimpleExist(path, false)
 	if !ok {
 		return Null
 	}
 	return val
 }
 
-func (bj ByteJson) querySimpleExist(path *Path) (ByteJson, bool) {
+// QuerySimpleExist returns the value at a simple path and whether the path exists.
+func (bj ByteJson) QuerySimpleExist(path *Path) (ByteJson, bool) {
+	return bj.querySimpleExist(path, false)
+}
+
+// QuerySimpleContainPath returns the value at a simple path using JSON_CONTAINS
+// scalar-[0] autowrap semantics for scalar array-index access.
+func (bj ByteJson) QuerySimpleContainPath(path *Path) (ByteJson, bool) {
+	return bj.querySimpleExist(path, true)
+}
+
+func (bj ByteJson) querySimpleExist(path *Path, autowrapScalarIndex bool) (ByteJson, bool) {
 	cur := bj
 	// don't go through th step(), recursive call route.  We know
 	// we have a simple path, each step will bring us to ONE SINGLE next value.
@@ -462,20 +990,16 @@ func (bj ByteJson) querySimpleExist(path *Path) (ByteJson, bool) {
 		if cur.Type == TpCodeObject {
 			switch sub.tp {
 			case subPathIdx:
+				// obj[0] is itself, continue
 				start, _, _ := sub.idx.genIndex(1)
 				if start != 0 {
 					return Null, false
 				}
-				// obj[0] is itself, continue
 			case subPathKey:
-				if sub.key == "*" {
-					panic("bytejson simple path should not contain *")
-				} else {
-					var ok bool
-					cur, ok = cur.queryValByKeyExists(util.UnsafeStringToBytes(sub.key))
-					if !ok {
-						return Null, false
-					}
+				var ok bool
+				cur, ok = cur.queryValByKeyExists(util.UnsafeStringToBytes(sub.key))
+				if !ok {
+					return Null, false
 				}
 			default:
 				return Null, false
@@ -496,6 +1020,12 @@ func (bj ByteJson) querySimpleExist(path *Path) (ByteJson, bool) {
 				cur = cur.getArrayElem(idx)
 			}
 		} else {
+			if autowrapScalarIndex && sub.tp == subPathIdx {
+				idx, _, _ := sub.idx.genIndex(1)
+				if idx == 0 {
+					continue
+				}
+			}
 			return Null, false
 		}
 	}
@@ -503,27 +1033,31 @@ func (bj ByteJson) querySimpleExist(path *Path) (ByteJson, bool) {
 }
 
 func (bj ByteJson) QuerySimple(paths []*Path) ByteJson {
+	result, _ := bj.QuerySimpleWithExists(paths)
+	return result
+}
+
+// QuerySimpleWithExists is the simple-path variant of QueryWithExists.
+func (bj ByteJson) QuerySimpleWithExists(paths []*Path) (ByteJson, bool) {
 	if len(paths) == 0 {
 		// not retrieve anything
-		return Null
+		return Null, false
 	} else if len(paths) == 1 {
 		// only retrieve one path
-		return bj.querySimple(paths[0])
+		return bj.querySimpleExist(paths[0], true)
 	} else {
 		// retrieve multiple paths, merge them into an array
 		out := make([]ByteJson, 0, len(paths))
 		for _, path := range paths {
-			tmp := bj.querySimple(path)
-			// strange behavior, skipping Null value.
-			if !tmp.IsNull() {
+			tmp, exists := bj.querySimpleExist(path, true)
+			if exists {
 				out = append(out, tmp)
 			}
 		}
-		// strange behavior, we actually return Null instead of an array of nulls.
-		if checkAllNull(out) {
-			return Null
+		if len(out) == 0 {
+			return Null, false
 		}
-		return mergeToArray(out)
+		return mergeToArray(out), true
 	}
 }
 
@@ -563,6 +1097,28 @@ func (bj ByteJson) Modify(pathList []*Path, valList []ByteJson, modifyType JsonM
 			return Null, moerr.NewInvalidInputNoCtx("invalid modify type")
 		}
 
+		if err != nil {
+			return Null, err
+		}
+	}
+	return bj, nil
+}
+
+func (bj ByteJson) Remove(pathList []*Path) (ByteJson, error) {
+	if len(pathList) == 0 {
+		return bj, nil
+	}
+
+	for _, path := range pathList {
+		if path == nil || path.empty() || !path.IsSimple() {
+			return Null, moerr.NewInvalidInputNoCtx("path expression is not simple")
+		}
+	}
+
+	var err error
+	for _, path := range pathList {
+		modifier := &bytejsonModifier{bj: bj}
+		bj, err = modifier.remove(path)
 		if err != nil {
 			return Null, err
 		}
@@ -614,15 +1170,13 @@ func (bj ByteJson) queryWithSubPath(keys []string, vals []ByteJson, path *Path, 
 				keys, vals = bj.queryWithSubPath(keys, vals, &nPath, newPathStr)
 			}
 		case subPathKey:
-			if sub.key == "*" {
-				for i := 0; i < cnt; i++ {
-					newPathStr := fmt.Sprintf("%s.%s", pathStr, bj.getObjectKey(i))
-					keys, vals = bj.getObjectVal(i).queryWithSubPath(keys, vals, &nPath, newPathStr)
-				}
-			} else {
-				tmp := bj.queryValByKey(util.UnsafeStringToBytes(sub.key))
-				newPathStr := fmt.Sprintf("%s.%s", pathStr, sub.key)
-				keys, vals = tmp.queryWithSubPath(keys, vals, &nPath, newPathStr)
+			tmp := bj.queryValByKey(util.UnsafeStringToBytes(sub.key))
+			newPathStr := fmt.Sprintf("%s.%s", pathStr, sub.key)
+			keys, vals = tmp.queryWithSubPath(keys, vals, &nPath, newPathStr)
+		case subPathKeyWildcard:
+			for i := 0; i < cnt; i++ {
+				newPathStr := fmt.Sprintf("%s.%s", pathStr, bj.getObjectKey(i))
+				keys, vals = bj.getObjectVal(i).queryWithSubPath(keys, vals, &nPath, newPathStr)
 			}
 		}
 	}
@@ -781,7 +1335,11 @@ func ParseJsonByteFromString(s string) ([]byte, error) {
 }
 
 func ParseJsonByte(data []byte) ([]byte, error) {
-	n, err := ParseNode(data)
+	return parseJsonByte(data, 0)
+}
+
+func parseJsonByte(data []byte, maxDepth int) ([]byte, error) {
+	n, err := parseNode(data, maxDepth)
 	if err != nil {
 		return nil, err
 	}
@@ -801,16 +1359,22 @@ func ParseNodeString(s string) (Node, error) {
 }
 
 func ParseNode(data []byte) (Node, error) {
-	p := parser{src: data}
+	return parseNode(data, 0)
+}
+
+func parseNode(data []byte, maxDepth int) (Node, error) {
+	p := parser{src: data, maxDepth: maxDepth}
 	return p.do()
 }
 
 type parser struct {
-	src   []byte
-	stack []*Group
-	tz    *json2.Tokenizer
-	state func(*parser) int
-	top   Node
+	src      []byte
+	stack    []*Group
+	tz       *json2.Tokenizer
+	state    func(*parser) int
+	top      Node
+	maxDepth int
+	depthErr error
 }
 
 func (p *parser) do() (Node, error) {
@@ -830,6 +1394,9 @@ func (p *parser) do() (Node, error) {
 			for _, g := range p.stack {
 				g.free()
 			}
+			if p.depthErr != nil {
+				return z, p.depthErr
+			}
 			if errors.Is(p.tz.Err, io.EOF) {
 				return z, io.ErrUnexpectedEOF
 			}
@@ -841,9 +1408,12 @@ func (p *parser) do() (Node, error) {
 		case scanEnd:
 			if p.tz.Next() {
 				p.top.Free()
+				p.top = Node{}
 				return z, moerr.NewInvalidInputNoCtxf("invalid json: %s", p.src)
 			}
 			if p.tz.Err != nil {
+				p.top.Free()
+				p.top = Node{}
 				return z, moerr.NewInternalErrorNoCtxf("parse json: %v", p.tz.Err)
 			}
 			return p.top, nil
@@ -862,11 +1432,15 @@ func (p *parser) stateBeginValue() int {
 
 	switch k.Class() {
 	case json2.Array:
-		p.openGroup(k)
+		if !p.openGroup(k) {
+			return scanError
+		}
 		p.state = (*parser).stateBeginValueOrEmpty
 		return scanContinue
 	case json2.Object:
-		p.openGroup(k)
+		if !p.openGroup(k) {
+			return scanError
+		}
 		p.state = (*parser).stateObjectKeyOrEmpty
 		return scanContinue
 	}
@@ -958,10 +1532,16 @@ func (p *parser) stateEndValue() int {
 	return scanError
 }
 
-func (p *parser) openGroup(k json2.Kind) {
+func (p *parser) openGroup(k json2.Kind) bool {
+	if p.maxDepth > 0 && len(p.stack) >= p.maxDepth {
+		p.depthErr = newJSONDocumentDepthError(p.maxDepth)
+		p.tz.Err = p.depthErr
+		return false
+	}
 	g := reuse.Alloc[Group](nil)
 	g.Obj = k == json2.Object
 	p.stack = append(p.stack, g)
+	return true
 }
 
 func (p *parser) closeGroup() {

@@ -120,7 +120,7 @@ func TestMessageBoardFinalizerDestroysQueuedMessages(t *testing.T) {
 	}, 5*time.Second, 20*time.Millisecond)
 }
 
-func TestTakeSpillBuildFds(t *testing.T) {
+func TestLegacySpillBuildPayload(t *testing.T) {
 	t.Run("transfers_ownership", func(t *testing.T) {
 		f1, err := os.CreateTemp("", "test_fd_*")
 		require.NoError(t, err)
@@ -129,36 +129,77 @@ func TestTakeSpillBuildFds(t *testing.T) {
 		require.NoError(t, err)
 		defer os.Remove(f2.Name())
 
-		jm := &JoinMap{SpillBuildFds: []*os.File{f1, f2}}
-		fds := jm.TakeSpillBuildFds()
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
+		jm.IncRef(1)
+		require.NoError(t, jm.SetSpillBuildPayload(SpillBuildPayload{
+			LegacyFds: []*os.File{f1, f2},
+		}))
+		payload, err := jm.TakeSpillBuildPayload()
+		require.NoError(t, err)
 
-		require.Len(t, fds, 2)
-		require.Same(t, f1, fds[0])
-		require.Same(t, f2, fds[1])
-		require.Nil(t, jm.SpillBuildFds)
+		require.Len(t, payload.LegacyFds, 2)
+		require.Same(t, f1, payload.LegacyFds[0])
+		require.Same(t, f2, payload.LegacyFds[1])
 
-		// Cleanup
-		f1.Close()
-		f2.Close()
+		require.NoError(t, payload.Close())
 	})
 
-	t.Run("second_call_returns_nil", func(t *testing.T) {
+	t.Run("second_call_returns_explicit_error", func(t *testing.T) {
 		f, err := os.CreateTemp("", "test_fd_*")
 		require.NoError(t, err)
 		defer os.Remove(f.Name())
-		defer f.Close()
 
-		jm := &JoinMap{SpillBuildFds: []*os.File{f}}
-		jm.TakeSpillBuildFds()
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
+		jm.IncRef(1)
+		require.NoError(t, jm.SetSpillBuildPayload(SpillBuildPayload{
+			LegacyFds: []*os.File{f},
+		}))
+		payload, err := jm.TakeSpillBuildPayload()
+		require.NoError(t, err)
 
-		fds := jm.TakeSpillBuildFds()
-		require.Nil(t, fds)
+		_, err = jm.TakeSpillBuildPayload()
+		require.ErrorIs(t, err, ErrSpillBuildPayloadTaken)
+		require.NoError(t, payload.Close())
 	})
 
-	t.Run("nil_fds", func(t *testing.T) {
-		jm := &JoinMap{SpillBuildFds: nil}
-		fds := jm.TakeSpillBuildFds()
-		require.Nil(t, fds)
+	t.Run("empty_payload_is_rejected", func(t *testing.T) {
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
+		jm.IncRef(1)
+		require.ErrorIs(t, jm.SetSpillBuildPayload(SpillBuildPayload{}), ErrSpillBuildPayloadEmpty)
+	})
+
+	t.Run("mixed_payload_is_rejected", func(t *testing.T) {
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
+		jm.IncRef(1)
+		require.ErrorIs(t, jm.SetSpillBuildPayload(SpillBuildPayload{
+			Files:     []*SpillFile{nil},
+			LegacyFds: []*os.File{nil},
+			BudgetRef: struct{}{},
+		}), ErrSpillBuildPayloadMixed)
+	})
+
+	t.Run("legacy_payload_with_budget_is_rejected", func(t *testing.T) {
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
+		jm.IncRef(1)
+		require.ErrorIs(t, jm.SetSpillBuildPayload(SpillBuildPayload{
+			LegacyFds: []*os.File{nil},
+			BudgetRef: struct{}{},
+		}), ErrSpillBuildLegacyBudget)
+	})
+
+	t.Run("free_before_set_rejects_late_publication", func(t *testing.T) {
+		f, err := os.CreateTemp("", "test_fd_*")
+		require.NoError(t, err)
+		defer os.Remove(f.Name())
+
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
+		jm.IncRef(1)
+		jm.FreeMemory()
+		payload := SpillBuildPayload{LegacyFds: []*os.File{f}}
+		require.ErrorIs(t, jm.SetSpillBuildPayload(payload), ErrSpillBuildPayloadTaken)
+		_, err = f.Stat()
+		require.NoError(t, err, "rejected late payload remains caller-owned")
+		require.NoError(t, payload.Close())
 	})
 }
 
@@ -172,14 +213,13 @@ func TestFreeMemoryClosesSpillFds(t *testing.T) {
 		require.NoError(t, err)
 		defer os.Remove(f2.Name())
 
-		jm := &JoinMap{
-			valid:         true,
-			mpool:         mp,
-			SpillBuildFds: []*os.File{f1, f2},
-		}
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mp)
+		jm.IncRef(1)
+		require.NoError(t, jm.SetSpillBuildPayload(SpillBuildPayload{
+			LegacyFds: []*os.File{f1, f2},
+		}))
 		jm.FreeMemory()
 
-		require.Nil(t, jm.SpillBuildFds)
 		require.False(t, jm.valid)
 
 		// Verify fds are closed
@@ -195,13 +235,12 @@ func TestFreeMemoryClosesSpillFds(t *testing.T) {
 		require.NoError(t, err)
 		defer os.Remove(f.Name())
 
-		jm := &JoinMap{
-			valid:         true,
-			mpool:         mp,
-			SpillBuildFds: []*os.File{f, nil},
-		}
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mp)
+		jm.IncRef(1)
+		require.NoError(t, jm.SetSpillBuildPayload(SpillBuildPayload{
+			LegacyFds: []*os.File{f, nil},
+		}))
 		jm.FreeMemory() // must not panic on nil entry
-		require.Nil(t, jm.SpillBuildFds)
 	})
 
 	t.Run("take_then_free_does_not_double_close", func(t *testing.T) {
@@ -210,22 +249,22 @@ func TestFreeMemoryClosesSpillFds(t *testing.T) {
 		require.NoError(t, err)
 		defer os.Remove(f.Name())
 
-		jm := &JoinMap{
-			valid:         true,
-			mpool:         mp,
-			SpillBuildFds: []*os.File{f},
-		}
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mp)
+		jm.IncRef(1)
+		require.NoError(t, jm.SetSpillBuildPayload(SpillBuildPayload{
+			LegacyFds: []*os.File{f},
+		}))
+		payload, err := jm.TakeSpillBuildPayload()
+		require.NoError(t, err)
+		require.Len(t, payload.LegacyFds, 1)
 
-		fds := jm.TakeSpillBuildFds()
-		require.Len(t, fds, 1)
-
-		// FreeMemory after TakeSpillBuildFds should not close the fds
+		// FreeMemory after TakeSpillBuildPayload should not close the fds.
 		jm.FreeMemory()
 
 		// fd is still open (caller owns it)
 		_, err = f.Stat()
 		require.NoError(t, err)
-		f.Close()
+		require.NoError(t, payload.Close())
 	})
 
 	t.Run("double_free_safe", func(t *testing.T) {
@@ -236,6 +275,149 @@ func TestFreeMemoryClosesSpillFds(t *testing.T) {
 		}
 		jm.FreeMemory()
 		jm.FreeMemory() // must not panic
+	})
+}
+
+func TestAccountedSpillFileOwnership(t *testing.T) {
+	var releases atomic.Int32
+	newFile := func() (*SpillFile, string) {
+		fd, err := os.CreateTemp("", "test_accounted_spill_*")
+		require.NoError(t, err)
+		return NewSpillFile(fd, 7, 11, func() { releases.Add(1) }), fd.Name()
+	}
+
+	t.Run("free_closes_and_releases_once", func(t *testing.T) {
+		releases.Store(0)
+		file, name := newFile()
+		defer os.Remove(name)
+		fd := file.File()
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
+		jm.IncRef(1)
+		require.NoError(t, jm.SetSpillBuildPayload(SpillBuildPayload{
+			Files:     []*SpillFile{file},
+			BudgetRef: struct{}{},
+		}))
+		require.True(t, jm.IsSpilled())
+		require.Equal(t, int64(7), file.Rows())
+		require.Equal(t, uint64(11), file.Bytes())
+
+		jm.FreeMemory()
+		jm.FreeMemory()
+		require.Equal(t, int32(1), releases.Load())
+		_, err := fd.Stat()
+		require.Error(t, err)
+	})
+
+	t.Run("take_moves_complete_ownership", func(t *testing.T) {
+		releases.Store(0)
+		file, name := newFile()
+		defer os.Remove(name)
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
+		jm.IncRef(1)
+		budgetIdentity := &struct{ generation uint64 }{generation: 9}
+		require.NoError(t, jm.SetSpillBuildPayload(SpillBuildPayload{
+			Files:     []*SpillFile{file},
+			BudgetRef: budgetIdentity,
+		}))
+
+		payload, err := jm.TakeSpillBuildPayload()
+		require.NoError(t, err)
+		require.Len(t, payload.Files, 1)
+		require.Same(t, budgetIdentity, payload.BudgetRef)
+		_, err = jm.TakeSpillBuildPayload()
+		require.ErrorIs(t, err, ErrSpillBuildPayloadTaken)
+		jm.FreeMemory()
+		require.Zero(t, releases.Load())
+		require.NoError(t, payload.Close())
+		require.NoError(t, payload.Close())
+		require.Equal(t, int32(1), releases.Load())
+	})
+
+	t.Run("shared_map_rejected_without_ownership_transfer", func(t *testing.T) {
+		releases.Store(0)
+		file, name := newFile()
+		defer os.Remove(name)
+		fd := file.File()
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
+		jm.IncRef(2)
+		payload := SpillBuildPayload{Files: []*SpillFile{file}, BudgetRef: struct{}{}}
+
+		err := jm.SetSpillBuildPayload(payload)
+		require.ErrorIs(t, err, ErrSpillBuildShared)
+		require.False(t, jm.IsSpilled())
+		jm.FreeMemory()
+		require.Zero(t, releases.Load(), "rejected payload must remain caller-owned")
+		_, err = fd.Stat()
+		require.NoError(t, err)
+		require.NoError(t, payload.Close())
+		require.Equal(t, int32(1), releases.Load())
+	})
+
+	t.Run("missing_budget_reference_is_rejected_without_transfer", func(t *testing.T) {
+		releases.Store(0)
+		file, name := newFile()
+		defer os.Remove(name)
+		fd := file.File()
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
+		jm.IncRef(1)
+		payload := SpillBuildPayload{Files: []*SpillFile{file}}
+
+		err := jm.SetSpillBuildPayload(payload)
+		require.ErrorIs(t, err, ErrSpillBuildBudgetRef)
+		require.False(t, jm.IsSpilled())
+		jm.FreeMemory()
+		require.Zero(t, releases.Load())
+		_, err = fd.Stat()
+		require.NoError(t, err)
+		require.NoError(t, payload.Close())
+		require.Equal(t, int32(1), releases.Load())
+	})
+
+	t.Run("concurrent_take_moves_files_and_budget_together_once", func(t *testing.T) {
+		releases.Store(0)
+		file, name := newFile()
+		defer os.Remove(name)
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
+		jm.IncRef(1)
+		budgetIdentity := &struct{ generation uint64 }{generation: 11}
+		require.NoError(t, jm.SetSpillBuildPayload(SpillBuildPayload{
+			Files:     []*SpillFile{file},
+			BudgetRef: budgetIdentity,
+		}))
+
+		const callers = 16
+		type takeResult struct {
+			payload SpillBuildPayload
+			err     error
+		}
+		results := make(chan takeResult, callers)
+		var wg sync.WaitGroup
+		for range callers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				payload, err := jm.TakeSpillBuildPayload()
+				results <- takeResult{payload: payload, err: err}
+			}()
+		}
+		wg.Wait()
+		close(results)
+
+		var winner SpillBuildPayload
+		successes := 0
+		for result := range results {
+			if result.err == nil {
+				successes++
+				winner = result.payload
+				continue
+			}
+			require.ErrorIs(t, result.err, ErrSpillBuildPayloadTaken)
+		}
+		require.Equal(t, 1, successes)
+		require.Len(t, winner.Files, 1)
+		require.Same(t, budgetIdentity, winner.BudgetRef)
+		require.NoError(t, winner.Close())
+		require.Equal(t, int32(1), releases.Load())
 	})
 }
 
@@ -258,6 +440,17 @@ func TestIsDeleted(t *testing.T) {
 		require.True(t, jm.IsDeleted(42))
 		require.False(t, jm.IsDeleted(10))
 	})
+}
+
+func BenchmarkJoinMapResidentSpillCheck(b *testing.B) {
+	jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if jm.IsSpilled() {
+			b.Fatal("resident JoinMap reported spill")
+		}
+	}
 }
 
 func TestJoinMapRefCount(t *testing.T) {

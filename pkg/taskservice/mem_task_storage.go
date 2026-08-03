@@ -15,9 +15,10 @@
 package taskservice
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -137,7 +138,7 @@ func (s *memTaskStorage) QueryAsyncTask(ctx context.Context, conds ...Condition)
 	for _, task := range s.asyncTasks {
 		sortedTasks = append(sortedTasks, task)
 	}
-	sort.Slice(sortedTasks, func(i, j int) bool { return sortedTasks[i].ID < sortedTasks[j].ID })
+	slices.SortFunc(sortedTasks, func(a, b task.AsyncTask) int { return cmp.Compare(a.ID, b.ID) })
 
 	var result []task.AsyncTask
 	for _, task := range sortedTasks {
@@ -177,7 +178,7 @@ func (s *memTaskStorage) QueryCronTask(context.Context, ...Condition) ([]task.Cr
 	for _, v := range s.cronTasks {
 		tasks = append(tasks, v)
 	}
-	sort.Slice(tasks, func(i, j int) bool { return tasks[i].ID < tasks[j].ID })
+	slices.SortFunc(tasks, func(a, b task.CronTask) int { return cmp.Compare(a.ID, b.ID) })
 	return tasks, nil
 }
 
@@ -287,7 +288,7 @@ func (s *memTaskStorage) QuerySQLTask(ctx context.Context, conds ...Condition) (
 	for _, t := range s.sqlTasks {
 		sortedTasks = append(sortedTasks, t)
 	}
-	sort.Slice(sortedTasks, func(i, j int) bool { return sortedTasks[i].TaskID < sortedTasks[j].TaskID })
+	slices.SortFunc(sortedTasks, func(a, b SQLTask) int { return cmp.Compare(a.TaskID, b.TaskID) })
 
 	var result []SQLTask
 	for _, t := range sortedTasks {
@@ -340,7 +341,7 @@ func (s *memTaskStorage) QuerySQLTaskRun(ctx context.Context, conds ...Condition
 	for _, run := range s.sqlTaskRuns {
 		sortedRuns = append(sortedRuns, run)
 	}
-	sort.Slice(sortedRuns, func(i, j int) bool { return sortedRuns[i].RunID > sortedRuns[j].RunID })
+	slices.SortFunc(sortedRuns, func(a, b SQLTaskRun) int { return cmp.Compare(b.RunID, a.RunID) })
 
 	var result []SQLTaskRun
 	for _, run := range sortedRuns {
@@ -385,11 +386,11 @@ func (s *memTaskStorage) QueryLatestSQLTaskRun(ctx context.Context, accountID ui
 	for _, run := range latestByTask {
 		result = append(result, run)
 	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].TaskID == result[j].TaskID {
-			return result[i].RunID > result[j].RunID
+	slices.SortFunc(result, func(a, b SQLTaskRun) int {
+		if c := cmp.Compare(a.TaskID, b.TaskID); c != 0 {
+			return c
 		}
-		return result[i].TaskID < result[j].TaskID
+		return cmp.Compare(b.RunID, a.RunID)
 	})
 	return result, nil
 }
@@ -422,7 +423,11 @@ func (s *memTaskStorage) CompleteSQLTaskRun(ctx context.Context, run SQLTaskRun)
 	s.Lock()
 	defer s.Unlock()
 
-	if _, ok := s.sqlTaskRuns[run.RunID]; !ok {
+	existing, ok := s.sqlTaskRuns[run.RunID]
+	if !ok ||
+		existing.Status != SQLTaskStatusRunning ||
+		existing.RunnerCN != run.RunnerCN ||
+		existing.AttemptNumber != run.AttemptNumber {
 		return 0, nil
 	}
 	s.sqlTaskRuns[run.RunID] = run
@@ -468,6 +473,34 @@ func (s *memTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []task.Daem
 	return n, nil
 }
 
+func (s *memTaskStorage) UpdateDaemonTaskStatus(
+	ctx context.Context,
+	taskID uint64,
+	status task.TaskStatus,
+	updateAt time.Time,
+	endAt time.Time,
+	conds ...Condition,
+) (int, error) {
+	if s.preUpdate != nil {
+		s.preUpdate()
+	}
+
+	c := newConditions(conds...)
+
+	s.Lock()
+	defer s.Unlock()
+
+	t, ok := s.daemonTasks[taskID]
+	if !ok || !s.filterDaemonTask(c, t) {
+		return 0, nil
+	}
+	t.TaskStatus = status
+	t.UpdateAt = updateAt
+	t.EndAt = endAt
+	s.daemonTasks[taskID] = t
+	return 1, nil
+}
+
 func (s *memTaskStorage) DeleteDaemonTask(ctx context.Context, conds ...Condition) (int, error) {
 	c := newConditions(conds...)
 
@@ -498,7 +531,7 @@ func (s *memTaskStorage) QueryDaemonTask(ctx context.Context, conds ...Condition
 	for _, t := range s.daemonTasks {
 		sortedTasks = append(sortedTasks, deepcopy.Copy(t).(task.DaemonTask))
 	}
-	sort.Slice(sortedTasks, func(i, j int) bool { return sortedTasks[i].ID < sortedTasks[j].ID })
+	slices.SortFunc(sortedTasks, func(a, b task.DaemonTask) int { return cmp.Compare(a.ID, b.ID) })
 
 	var result []task.DaemonTask
 	for _, task := range sortedTasks {
@@ -522,9 +555,10 @@ func (s *memTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task.D
 
 	n := 0
 	for _, t := range tasks {
-		if _, ok := s.daemonTasks[t.ID]; ok {
+		if current, ok := s.daemonTasks[t.ID]; ok {
 			n++
-			s.daemonTasks[t.ID] = t
+			current.LastHeartbeat = t.LastHeartbeat
+			s.daemonTasks[t.ID] = current
 		}
 	}
 	return n, nil
@@ -600,6 +634,13 @@ func (s *memTaskStorage) filterDaemonTask(c *conditions, task task.DaemonTask) b
 
 	if cond, e := (*c)[CondTaskStatus]; e {
 		ok = cond.eval(task.TaskStatus)
+	}
+	if !ok {
+		return false
+	}
+
+	if cond, e := (*c)[CondTaskExecutor]; e {
+		ok = cond.eval(task.Metadata.Executor)
 	}
 	if !ok {
 		return false

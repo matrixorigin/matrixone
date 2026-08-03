@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -131,6 +132,11 @@ func shouldLogPKPersistedChanged(tableID uint64) bool {
 }
 
 var _ engine.Relation = new(txnTable)
+
+func (tbl *txnTable) NewRelationHandle() engine.Relation {
+	canonical := &txnTableDelegate{origin: tbl}
+	return canonical.NewRelationHandle()
+}
 
 func newTxnTable(
 	ctx context.Context,
@@ -1568,6 +1574,8 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			name2index[catalog.Row_ID] = int32(len(cols) - 1)
 		}
 
+		// IsTemporary is session state, not a projection of the durable marker.
+		// The compiler sets it only after resolving a session's temporary alias.
 		tbl.tableDef = &plan.TableDef{
 			TblId:         tbl.tableId,
 			Name:          tbl.tableName,
@@ -1590,6 +1598,9 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		}
 		if tbl.extraInfo != nil {
 			tbl.tableDef.FeatureFlag = tbl.extraInfo.FeatureFlag
+			tbl.tableDef.AutoIncrOffset = tbl.extraInfo.AutoIncrOffset
+			tbl.tableDef.AutoIncrEpoch = tbl.extraInfo.AutoIncrEpoch
+			tbl.tableDef.Checks = tbl.extraInfo.Checks
 		}
 	}
 	return tbl.tableDef
@@ -1633,10 +1644,26 @@ func (tbl *txnTable) isCreatedInTxn(_ context.Context) (bool, error) {
 
 }
 
+func validateAutoIncrEpochAdvance(current uint32, resets uint64) error {
+	if uint64(current)+resets > math.MaxUint32 {
+		return moerr.NewInternalErrorNoCtx("AUTO_INCREMENT epoch exhausted")
+	}
+	return nil
+}
+
 func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
 	// AlterTale Inplace do not touch columns, we don't use NextSeqNum at the moment.
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("cannot alter table in snapshot operation")
+	}
+	var autoIncrResetCount uint64
+	for _, req := range reqs {
+		if req.GetKind() == api.AlterKind_UpdateAutoIncrement {
+			autoIncrResetCount++
+		}
+	}
+	if err := validateAutoIncrEpochAdvance(tbl.extraInfo.AutoIncrEpoch, autoIncrResetCount); err != nil {
+		return err
 	}
 
 	var err error
@@ -1647,6 +1674,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	oldPartInfo := tbl.partition
 	oldComment := tbl.comment
 	oldConstraint := tbl.constraint
+	oldAutoIncrOffset := tbl.extraInfo.AutoIncrOffset
+	oldAutoIncrEpoch := tbl.extraInfo.AutoIncrEpoch
 	// The fact that the tableDef brought by alter requests can appended to the tail of original defs presupposes:
 	// 1. late arriving tableDef will overwrite the existing tableDef
 	// 2. any TableDef about columns, like AttritebuteDef, PrimaryKeyDef, or CluterbyDef do not change, ensuring genColumnsFromDefs works well
@@ -1669,6 +1698,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				// Rollback for ReplaceDef is handled by restoring defs
 			case api.AlterKind_RenameColumn:
 				// RenameColumn takes effect in form of ReplaceDef
+			case api.AlterKind_UpdateAutoIncrement:
+				tbl.extraInfo.AutoIncrOffset = oldAutoIncrOffset
+				tbl.extraInfo.AutoIncrEpoch = oldAutoIncrEpoch
 			}
 		}
 		tbl.defs = olddefs
@@ -1706,6 +1738,10 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			hasReplaceDef = true
 			re := req.GetRenameCol()
 			renameColMap[re.OldName] = re.NewName
+		case api.AlterKind_UpdateAutoIncrement:
+			tbl.extraInfo.AutoIncrOffset = req.GetUpdateAutoIncrement().GetOffset()
+			tbl.extraInfo.AutoIncrEpoch++
+			req.GetUpdateAutoIncrement().Epoch = tbl.extraInfo.AutoIncrEpoch
 		default:
 			panic("not supported")
 		}
@@ -1786,32 +1822,31 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	if createdInTxn {
 		// 3. adjust writes for the table
 		txn.Lock()
+		defer txn.Unlock()
 		for i, n := 0, len(txn.writes); i < n; i++ {
 			if cur := txn.writes[i]; cur.tableId == tbl.tableId && cur.bat != nil && cur.bat.RowCount() > 0 {
 				if sels, exist := txn.batchSelectList[cur.bat]; exist && len(sels) == cur.bat.RowCount() {
 					continue
 				}
-				txn.writes = append(txn.writes, txn.writes[i]) // copy by value
-				transfered := &txn.writes[len(txn.writes)-1]
-				transfered.tableName = tbl.tableName // in case renaming
-				transfered.bat, err = cur.bat.Dup(txn.proc.Mp())
-				if len(renameColMap) > 0 {
-					for i, attr := range transfered.bat.Attrs {
-						if newName, ok := renameColMap[attr]; ok {
-							transfered.bat.Attrs[i] = newName
-						}
-					}
-				}
+				transferred := cur
+				transferred.tableName = tbl.tableName // in case renaming
+				transferred.bat, err = cur.bat.Dup(txn.proc.Mp())
+				transferred.accountedSize = 0
 				if err != nil {
 					return err
 				}
-				for j := 0; j < cur.bat.RowCount(); j++ {
-					txn.batchSelectList[cur.bat] = append(txn.batchSelectList[cur.bat], int64(j))
+				if len(renameColMap) > 0 {
+					for i, attr := range transferred.bat.Attrs {
+						if newName, ok := renameColMap[attr]; ok {
+							transferred.bat.Attrs[i] = newName
+						}
+					}
 				}
+				txn.appendWorkspaceEntryLocked(transferred)
+				txn.selectAllBatchRowsLocked(cur.bat)
 
 			}
 		}
-		txn.Unlock()
 	}
 
 	return nil
@@ -1862,7 +1897,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		tbl.getTxn().hasS3Op.Store(true)
 		//bocks maybe come from different S3 object, here we just need to make sure fileName is not Nil.
 		fileName := objectio.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0)).MetaLocation().Name().String()
-		return tbl.getTxn().WriteFile(
+		return tbl.getTxn().writeFileWithAutoIncrEpoch(
 			INSERT,
 			tbl.accountId,
 			tbl.db.databaseId,
@@ -1871,13 +1906,13 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 			tbl.tableName,
 			fileName,
 			bat,
-			tbl.getTxn().tnStores[0])
+			tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch)
 	}
 	ibat, err := util.CopyBatch(bat, tbl.getTxn().proc)
 	if err != nil {
 		return err
 	}
-	if _, err := tbl.getTxn().WriteBatch(
+	if _, err := tbl.getTxn().writeBatchWithAutoIncrEpoch(
 		INSERT,
 		"",
 		tbl.accountId,
@@ -1887,6 +1922,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		tbl.tableName,
 		ibat,
 		tbl.getTxn().tnStores[0],
+		tbl.extraInfo.AutoIncrEpoch,
 	); err != nil {
 		ibat.Clean(tbl.getTxn().proc.Mp())
 		return err
@@ -2052,14 +2088,14 @@ func (tbl *txnTable) Delete(
 		skipTransfer := ctx.Value(defines.SkipTransferKey{}) != nil
 		if skipTransfer {
 			tbl.getTxn().Lock()
-			err := tbl.getTxn().WriteFileLockedSkipTransfer(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
-				tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0])
+			err := tbl.getTxn().writeFileLockedSkipTransferWithAutoIncrEpoch(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
+				tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch)
 			tbl.getTxn().Unlock()
 			return err
 		}
 
-		if err := tbl.getTxn().WriteFile(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0]); err != nil {
+		if err := tbl.getTxn().writeFileWithAutoIncrEpoch(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
+			tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
 			return err
 		}
 
@@ -2093,18 +2129,23 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 
 	// Create entry with EntrySoftDeleteObject type
 	entry := Entry{
-		typ:          SOFT_DELETE_OBJECT,
-		bat:          bat,
-		tnStore:      tbl.getTxn().tnStores[0],
-		tableId:      tbl.tableId,
-		databaseId:   tbl.db.databaseId,
-		tableName:    tbl.tableName,
-		databaseName: tbl.db.databaseName,
-		accountId:    tbl.accountId,
-		fileName:     makeSoftDeleteFileName(isTombstone),
+		typ:                SOFT_DELETE_OBJECT,
+		bat:                bat,
+		tnStore:            tbl.getTxn().tnStores[0],
+		tableId:            tbl.tableId,
+		databaseId:         tbl.db.databaseId,
+		tableName:          tbl.tableName,
+		databaseName:       tbl.db.databaseName,
+		accountId:          tbl.accountId,
+		fileName:           makeSoftDeleteFileName(isTombstone),
+		autoIncrEpoch:      tbl.extraInfo.AutoIncrEpoch,
+		autoIncrEpochKnown: true,
 	}
 
-	tbl.getTxn().writes = append(tbl.getTxn().writes, entry)
+	txn := tbl.getTxn()
+	txn.Lock()
+	defer txn.Unlock()
+	txn.appendWorkspaceEntryLocked(entry)
 	return nil
 }
 
@@ -2113,8 +2154,8 @@ func (tbl *txnTable) writeTnPartition(_ context.Context, bat *batch.Batch) error
 	if err != nil {
 		return err
 	}
-	if _, err := tbl.getTxn().WriteBatch(DELETE, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
-		tbl.db.databaseName, tbl.tableName, ibat, tbl.getTxn().tnStores[0]); err != nil {
+	if _, err := tbl.getTxn().writeBatchWithAutoIncrEpoch(DELETE, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
+		tbl.db.databaseName, tbl.tableName, ibat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
 		ibat.Clean(tbl.getTxn().proc.Mp())
 		return err
 	}
@@ -2455,6 +2496,7 @@ func (tbl *txnTable) getPartitionState(
 	var (
 		eng          = tbl.eng.(*Engine)
 		createdInTxn bool
+		pending      bool
 	)
 
 	createdInTxn, err = tbl.isCreatedInTxn(ctx)
@@ -2482,6 +2524,7 @@ func (tbl *txnTable) getPartitionState(
 		tbl.tableName,
 		tbl.db.databaseId,
 		tbl.db.databaseName,
+		&pending,
 	); err != nil {
 		logutil.Error(
 			"Txn-Table-ToSubscribeTable-Failed",
@@ -2499,8 +2542,23 @@ func (tbl *txnTable) getPartitionState(
 			return nil, err
 		}
 
-	} else if ps != nil && ps.CanServe(types.TimestampToTS(tbl.db.op.SnapshotTS())) {
-		return
+	} else {
+		var ok bool
+		ps, ok, err = eng.PushClient().waitCanServeTableSnapshot(
+			ctx,
+			uint64(tbl.accountId),
+			tbl.db.databaseId,
+			tbl.tableId,
+			ps,
+			pending,
+			tbl.db.op.SnapshotTS(),
+		)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return
+		}
 	}
 
 	//Try to create a snapshot partition state for the table through consume the history checkpoints.
@@ -2745,6 +2803,9 @@ func (tbl *txnTable) PKPersistedBetween(
 	if err != nil {
 		return false, err
 	}
+	if filter.Cleanup != nil {
+		defer filter.Cleanup()
+	}
 
 	buildUnsortedFilter := func() objectio.ReadFilterSearchFuncType {
 		inner := LinearSearchOffsetByValFactory(keys)
@@ -2777,50 +2838,72 @@ func (tbl *txnTable) PKPersistedBetween(
 		v2.TxnPKChangeCheckIOCounter.Inc()
 
 		for _, blk := range candidateBlks {
-			release, _, err := ioutil.LoadColumns(
-				ctx,
-				[]uint16{uint16(pkSeq), objectio.SEQNUM_COMMITTS},
-				[]types.Type{pkType, types.T_TS.ToType()},
-				fs,
-				blk.MetaLocation(),
-				cacheVectors,
-				tbl.proc.Load().GetMPool(),
-				fileservice.Policy(0),
-			)
-			if err != nil {
-				releasePKCheckSemaphore()
-				reason = "data_block_read_error"
-				return true, err
-			}
-
 			searchFunc := filter.DecideSearchFunc(blk.IsSorted())
 			if searchFunc == nil {
 				searchFunc = buildUnsortedFilter()
 			}
 
-			sels := searchFunc(cacheVectors)
-			if len(sels) > 0 {
-				changed, ok := pkCommitTSMatchedInRange(&cacheVectors[1], sels, from, to)
-				release()
-				if !ok || changed {
-					releasePKCheckSemaphore()
-					if ok {
-						reason = "data_commit_ts_hit"
+			var matched, usable bool
+			if filter.CachedSearch != nil {
+				matched, usable, _, err = ioutil.LoadColumnDataBySearchAndCheckTS(
+					ctx,
+					uint16(pkSeq),
+					pkType,
+					fs,
+					blk.MetaLocation(),
+					filter.CachedSearch,
+					blk.IsSorted() && !filter.HasFakePK,
+					objectio.SEQNUM_COMMITTS,
+					from,
+					to,
+					tbl.proc.Load().GetMPool(),
+					fileservice.Policy(0),
+				)
+			} else {
+				var release func()
+				release, _, err = ioutil.LoadColumns(
+					ctx,
+					[]uint16{uint16(pkSeq), objectio.SEQNUM_COMMITTS},
+					[]types.Type{pkType, objectio.TSType},
+					fs,
+					blk.MetaLocation(),
+					cacheVectors,
+					tbl.proc.Load().GetMPool(),
+					fileservice.Policy(0),
+				)
+				if err == nil {
+					sels := searchFunc(cacheVectors)
+					if len(sels) == 0 {
+						matched, usable = false, true
 					} else {
-						reason = "data_commit_ts_unavailable"
+						matched, usable = pkCommitTSMatchedInRange(&cacheVectors[1], sels, from, to)
 					}
-					return true, nil
+					release()
 				}
-				continue
 			}
-			release()
+			if err != nil {
+				releasePKCheckSemaphore()
+				reason = "data_block_read_error"
+				return true, err
+			}
+			if !usable || matched {
+				releasePKCheckSemaphore()
+				if usable {
+					reason = "data_commit_ts_hit"
+				} else {
+					reason = "data_commit_ts_unavailable"
+				}
+				return true, nil
+			}
 		}
 		releasePKCheckSemaphore()
 	}
 	if checkTombstone {
 		pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 		pkType := plan2.ExprType2Type(&pkDef.Typ)
-		changed, tombstoneReason, err := tombstonePKExistsInRange(ctx, p, from, to, keys, pkType, fs)
+		changed, tombstoneReason, err := tombstonePKExistsInRange(
+			ctx, p, from, to, keys, pkType, fs, tbl.proc.Load().GetMPool(),
+		)
 		if changed {
 			reason = tombstoneReason
 		}
@@ -2840,6 +2923,7 @@ func tombstonePKExistsInRange(
 	keys *vector.Vector,
 	pkType types.Type,
 	fs fileservice.FileService,
+	mp *mpool.MPool,
 ) (bool, string, error) {
 	tombObjs := p.GetChangedTombstoneObjsBetween(from)
 	if len(tombObjs) == 0 {
@@ -2854,10 +2938,74 @@ func tombstonePKExistsInRange(
 		}
 	}
 	searchKeys := LinearSearchOffsetByValFactory(keys)
+	var cachedSearch *objectio.ReadFilterSearch
+	switch pkType.Oid {
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary,
+		types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+		if keys.GetType().Oid != pkType.Oid {
+			break
+		}
+		cachedSearch = objectio.NewReadFilterSearch(
+			pkType.Oid,
+			vector.InefficientMustBytesCol(keys),
+		)
+	}
 	for _, obj := range tombObjs {
 		for blkIdx := uint32(0); blkIdx < obj.BlkCnt(); blkIdx++ {
 			loc := obj.BlockLocation(uint16(blkIdx), objectio.BlockMaxRows)
 			isCNCreated := obj.GetCNCreated()
+			if cachedSearch != nil {
+				// Tombstone objects are ordered by rowid, not by the copied PK
+				// column. Always use the linear search even when object metadata
+				// carries a sorted flag.
+				if isCNCreated {
+					hits, _, err := ioutil.LoadColumnDataBySearch(
+						ctx,
+						objectio.TombstoneAttr_PK_SeqNum,
+						pkType,
+						fs,
+						loc,
+						cachedSearch,
+						false,
+						nil,
+						mp,
+						fileservice.Policy(0),
+					)
+					if err != nil {
+						return true, "tombstone_read_error", nil
+					}
+					if len(hits) > 0 {
+						return true, "tombstone_cn_hit", nil
+					}
+					continue
+				}
+
+				changed, usable, _, err := ioutil.LoadColumnDataBySearchAndCheckTS(
+					ctx,
+					objectio.TombstoneAttr_PK_SeqNum,
+					pkType,
+					fs,
+					loc,
+					cachedSearch,
+					false,
+					objectio.TombstoneAttr_CommitTs_SeqNum,
+					from,
+					to,
+					mp,
+					fileservice.Policy(0),
+				)
+				if err != nil {
+					return true, "tombstone_read_error", nil
+				}
+				if !usable || changed {
+					if usable {
+						return true, "tombstone_commit_ts_hit", nil
+					}
+					return true, "tombstone_commit_ts_unavailable", nil
+				}
+				continue
+			}
+
 			vecCount := 3
 			if isCNCreated {
 				vecCount = 2
@@ -2898,7 +3046,7 @@ func (tbl *txnTable) PrimaryKeysMayBeUpserted(
 	pkIndex int32,
 ) (bool, error) {
 	keysVector := batch.GetVector(pkIndex)
-	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, false)
+	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, false, false)
 }
 
 func (tbl *txnTable) PrimaryKeysMayBeModified(
@@ -2910,7 +3058,106 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 	_ int32,
 ) (bool, error) {
 	keysVector := batch.GetVector(pkIndex)
-	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, true)
+	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, true, true)
+}
+
+func (tbl *txnTable) getPartitionStateForPKCheck(
+	ctx context.Context,
+	to types.TS,
+) (*logtailreplay.PartitionState, bool, error) {
+	eng := tbl.eng.(*Engine)
+	var checkedCreatedInTxn bool
+	var createdInTxn bool
+	var ticker *time.Ticker
+	defer func() {
+		if ticker != nil {
+			ticker.Stop()
+		}
+	}()
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+
+		ps, subscribed, state, pending := eng.PushClient().getSubscribedSnapshotForPKCheck(
+			ctx,
+			uint64(tbl.accountId),
+			tbl.db.databaseId,
+			tbl.tableId,
+		)
+		if subscribed {
+			canServe, needWait := canServeTableSnapshotWithPending(
+				ps,
+				to.ToTimestamp(),
+				pending,
+			)
+			if canServe || !needWait {
+				return ps, canServe, nil
+			}
+
+			if ticker == nil {
+				ticker = time.NewTicker(time.Millisecond)
+			}
+			select {
+			case <-ctx.Done():
+				return nil, false, ctx.Err()
+			case <-ticker.C:
+			}
+			continue
+		}
+		if !checkedCreatedInTxn {
+			var err error
+			createdInTxn, err = tbl.isCreatedInTxn(ctx)
+			if err != nil {
+				return nil, false, err
+			}
+			checkedCreatedInTxn = true
+		}
+		if createdInTxn {
+			// A table created by this transaction has no committed remote history.
+			// Preserve the existing empty latest-state behavior without requiring a
+			// logtail subscription for a table that TN cannot expose yet.
+			part, err := eng.LazyLoadLatestCkp(
+				ctx,
+				uint64(tbl.accountId),
+				tbl.tableId,
+				tbl.tableName,
+				tbl.db.databaseId,
+				tbl.db.databaseName,
+			)
+			if err != nil {
+				return nil, false, err
+			}
+			return part.Snapshot(), true, nil
+		}
+		if state == InvalidSubState {
+			// Reconnect closes the push-client admission gate before clearing the
+			// old subscription map. Do not let getPartitionState reuse an entry
+			// from that old generation. The caller already holds the row lock, so
+			// waiting for an unbounded reconnect would retain locks and active-txn
+			// admission. This error is handled as a whole-txn rollback by frontend.
+			return nil, false, moerr.NewRetryForCNRollingRestart()
+		}
+
+		// Drive the existing subscription state machine to completion, then
+		// recapture both the pending marker and partition snapshot atomically with
+		// respect to reconnect/unsubscribe generation changes. Do not use the
+		// returned state directly: reconnect may replace its generation meanwhile.
+		loaded, err := tbl.getPartitionState(ctx)
+		if err != nil {
+			return nil, false, err
+		}
+		if loaded != nil {
+			_, end := loaded.GetDuration()
+			if end != types.MaxTs() {
+				// SubRspTableNotExist can still produce a finite historical
+				// partition for an old-table snapshot. It is a terminal fallback:
+				// use it only when it physically covers the PK-check upper bound.
+				return loaded, loaded.CanServe(to), nil
+			}
+		}
+	}
 }
 
 func (tbl *txnTable) primaryKeysMayBeChanged(
@@ -2919,6 +3166,7 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	to types.TS,
 	keysVector *vector.Vector,
 	checkTombstone bool,
+	requireSubscribed bool,
 ) (bool, error) {
 	start := time.Now()
 	defer func() {
@@ -2944,20 +3192,36 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
 	}
-	// Measure LazyLoadLatestCkp duration
-	lazyLoadStart := time.Now()
-	part, err := tbl.eng.(*Engine).LazyLoadLatestCkp(
-		ctx,
-		uint64(tbl.accountId),
-		tbl.tableId,
-		tbl.tableName,
-		tbl.db.databaseId,
-		tbl.db.databaseName)
-	v2.TxnLazyLoadCkpDurationHistogram.Observe(time.Since(lazyLoadStart).Seconds())
-	if err != nil {
-		return false, err
+
+	var snap *logtailreplay.PartitionState
+	if requireSubscribed {
+		var ready bool
+		snap, ready, err = tbl.getPartitionStateForPKCheck(ctx, to)
+		if err != nil {
+			return false, err
+		}
+		if !ready {
+			// A subscribed state that cannot cover the upper timestamp is unknown,
+			// not proof that the primary keys were unchanged. Returning true makes
+			// LockOp retry the statement on a fresh table snapshot.
+			return true, nil
+		}
+	} else {
+		// Measure LazyLoadLatestCkp duration
+		lazyLoadStart := time.Now()
+		part, err := tbl.eng.(*Engine).LazyLoadLatestCkp(
+			ctx,
+			uint64(tbl.accountId),
+			tbl.tableId,
+			tbl.tableName,
+			tbl.db.databaseId,
+			tbl.db.databaseName)
+		v2.TxnLazyLoadCkpDurationHistogram.Observe(time.Since(lazyLoadStart).Seconds())
+		if err != nil {
+			return false, err
+		}
+		snap = part.Snapshot()
 	}
-	snap := part.Snapshot()
 
 	var packer *types.Packer
 	put := tbl.eng.(*Engine).packerPool.Get(&packer)
@@ -3070,23 +3334,8 @@ func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objecti
 	return objStats, nil
 }
 
-// Reset what?
-// TODO: txnTable should be stateless
 func (tbl *txnTable) Reset(op client.TxnOperator) error {
-	ws := op.GetWorkspace()
-	if ws == nil {
-		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("workspace is nil when reset relation %s:%s",
-			tbl.db.databaseName, tbl.tableName))
-	}
-	txn, ok := ws.(*Transaction)
-	if !ok {
-		return moerr.NewInternalErrorNoCtx("failed to assert txn")
-	}
-	tbl.db.op = op
-	tbl.proc.Store(txn.proc)
-	tbl.createdInTxn = false
-	tbl.lastTS = op.SnapshotTS()
-	return nil
+	return moerr.NewInternalErrorNoCtx("cannot reset a shared relation; use an exclusive relation handle")
 }
 
 func (tbl *txnTable) getSortKeyPosAndSortKeyIsPK() (int, bool) {

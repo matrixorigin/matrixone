@@ -30,7 +30,7 @@ func (p *Path) init(subs []subPath) {
 		if sub.tp == subPathDoubleStar {
 			p.flag |= pathFlagDoubleStar
 		}
-		if sub.tp == subPathKey && sub.key == "*" {
+		if sub.tp == subPathKeyWildcard {
 			p.flag |= pathFlagSingleStar
 		}
 		if sub.tp == subPathIdx && sub.idx.num == subPathIdxALL && sub.idx.tp == numberIndices {
@@ -59,14 +59,23 @@ func (p *Path) IsSimple() bool {
 	}
 
 	for _, sub := range p.paths {
-		if (sub.tp == subPathKey && sub.key != "*") ||
-			sub.tp == subPathIdx {
+		if sub.tp == subPathKey || sub.tp == subPathIdx {
 			continue
 		} else {
 			return false
 		}
 	}
 	return true
+}
+
+func (p *Path) mayReturnMultiple() bool {
+	for _, sub := range p.paths {
+		if sub.tp == subPathDoubleStar || sub.tp == subPathKeyWildcard || sub.tp == subPathRange ||
+			(sub.tp == subPathIdx && sub.idx.num == subPathIdxALL) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Path) popOneSubPath() (Path, subPath) {
@@ -92,6 +101,8 @@ func (p *Path) String() string {
 			s.WriteString(".")
 			//TODO check here is ok
 			s.WriteString(strconv.Quote(sub.key))
+		case subPathKeyWildcard:
+			s.WriteString(".*")
 		case subPathDoubleStar:
 			s.WriteString("**")
 		}
@@ -312,7 +323,7 @@ func (pg *pathGenerator) generateKey(legs []subPath) ([]subPath, bool) {
 	if pg.front() == '*' {
 		pg.next()
 		legs = append(legs, subPath{
-			tp:  subPathKey,
+			tp:  subPathKeyWildcard,
 			key: "*",
 		})
 	} else {
@@ -378,10 +389,16 @@ func (pi subPathIndices) genIndex(cnt int) (int, int, bool) {
 func (pe subPathRangeExpr) genRange(cnt int) (ret [2]int) {
 	orig1, mdf1, _ := pe.start.genIndex(cnt)
 	orig2, mdf2, _ := pe.end.genIndex(cnt)
-	if orig1 > orig2 {
+	if orig1 > orig2 || orig2 < 0 || orig1 >= cnt {
 		ret[0], ret[1] = subPathIdxErr, subPathIdxErr
 		return
 	}
 	ret[0], ret[1] = mdf1, mdf2
 	return
+}
+
+func (pe subPathRangeExpr) matchesIndex(index, cnt int) bool {
+	start, _, _ := pe.start.genIndex(cnt)
+	end, _, _ := pe.end.genIndex(cnt)
+	return start <= end && start <= index && index <= end
 }

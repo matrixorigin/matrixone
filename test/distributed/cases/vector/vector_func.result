@@ -110,13 +110,13 @@ null
 null
 0.0892967922254718
 0.0026287815810781172
-select * from (select SUMMATION(vecf32_3),SUMMATION(vecf32_5) from vtab32);
+select * from (select SUMMATION(vecf32_3),SUMMATION(vecf32_5) from vtab32) as vectors;
 summation(vecf32_3)    summation(vecf32_5)
 null    null
 1.9714266657829285    null
 33.89660960435867    4771.603164553642
 837.3288311958313    9376.918968319893
-select SUMMATION(vecf64_3),SUMMATION(vecf64_5) from (select * from vtab64);
+select SUMMATION(vecf64_3),SUMMATION(vecf64_5) from (select * from vtab64) as vectors;
 SUMMATION(vecf64_3)    SUMMATION(vecf64_5)
 null    null
 1.9714266299999998    null
@@ -231,13 +231,13 @@ null
 null
 0.008823603248169682
 8.083431024216991E-6
-select * from (select inner_product(vecf32_3,vecf32_3),inner_product(vecf32_5,vecf32_5) from vtab32);
+select * from (select inner_product(vecf32_3,vecf32_3),inner_product(vecf32_5,vecf32_5) from vtab32) as vectors;
 inner_product(vecf32_3, vecf32_3)    inner_product(vecf32_5, vecf32_5)
 null    null
 -1.3494319915771484    null
 -937.032958984375    -2.1506858E7
 -675766.875    -7.6586264E7
-select inner_product(vecf64_3,vecf64_3), inner_product(vecf64_5,vecf64_5) from (select * from vtab64);
+select inner_product(vecf64_3,vecf64_3), inner_product(vecf64_5,vecf64_5) from (select * from vtab64) as vectors;
 inner_product(vecf64_3, vecf64_3)    inner_product(vecf64_5, vecf64_5)
 null    null
 -1.349431853018031    null
@@ -346,13 +346,13 @@ null
 null
 0.0892967922254718
 0.0026287815810781172
-select * from (select l1_norm(vecf32_3),l1_norm(vecf32_5) from vtab32);
+select * from (select l1_norm(vecf32_3),l1_norm(vecf32_5) from vtab32) as vectors;
 l1_norm(vecf32_3)    l1_norm(vecf32_5)
 null    null
 1.9714267253875732    null
 33.896610260009766    4771.60302734375
 837.328857421875    9376.9189453125
-select l1_norm(vecf64_3),l1_norm(vecf64_5) from (select * from vtab64);
+select l1_norm(vecf64_3),l1_norm(vecf64_5) from (select * from vtab64) as vectors;
 l1_norm(vecf64_3)    l1_norm(vecf64_5)
 null    null
 1.9714266299999998    null
@@ -461,13 +461,13 @@ null
 null
 0.0939340366862283
 0.0028431375317098167
-select * from (select l2_norm(vecf32_3),l2_norm(vecf32_5) from vtab32);
+select * from (select l2_norm(vecf32_3),l2_norm(vecf32_5) from vtab32) as vectors;
 l2_norm(vecf32_3)    l2_norm(vecf32_5)
 null    null
 1.161650538444519    null
 30.61099624633789    4637.548828125
 822.0504150390625    8751.357421875
-select l2_norm(vecf64_3),l2_norm(vecf64_5) from (select * from vtab64);
+select l2_norm(vecf64_3),l2_norm(vecf64_5) from (select * from vtab64) as vectors;
 l2_norm(vecf64_3)    l2_norm(vecf64_5)
 null    null
 1.1616504866000061    null
@@ -573,13 +573,13 @@ null
 null
 0.6
 0.6
-select * from (select vector_dims(vecf32_3),vector_dims(vecf32_5) from vtab32);
+select * from (select vector_dims(vecf32_3),vector_dims(vecf32_5) from vtab32) as vectors;
 vector_dims(vecf32_3)    vector_dims(vecf32_5)
 null    null
 3    null
 3    5
 3    5
-select vector_dims(vecf64_3),vector_dims(vecf64_5) from (select * from vtab64);
+select vector_dims(vecf64_3),vector_dims(vecf64_5) from (select * from vtab64) as vectors;
 vector_dims(vecf64_3)    vector_dims(vecf64_5)
 null    null
 3    null
@@ -736,13 +736,13 @@ null
 null
 0.9998301634819335
 0.24089657066059744
-select * from (select cosine_similarity(vecf32_3,vecf32_3_1),cosine_similarity(vecf32_5,vecf32_5_1) from vtab32_1);
+select * from (select cosine_similarity(vecf32_3,vecf32_3_1),cosine_similarity(vecf32_5,vecf32_5_1) from vtab32_1) as vectors;
 cosine_similarity(vecf32_3, vecf32_3_1)    cosine_similarity(vecf32_5, vecf32_5_1)
 null    null
 0.8273802995681763    null
 0.978813886642456    0.9999862313270569
 0.9998854398727417    0.9999974966049194
-select cosine_similarity(vecf64_3,vecf64_3_1), cosine_similarity(vecf64_5,vecf64_5_1) from (select * from vtab64_1);
+select cosine_similarity(vecf64_3,vecf64_3_1), cosine_similarity(vecf64_5,vecf64_5_1) from (select * from vtab64_1) as vectors;
 cosine_similarity(vecf64_3, vecf64_3_1)    cosine_similarity(vecf64_5, vecf64_5_1)
 null    null
 0.5432725329691298    null

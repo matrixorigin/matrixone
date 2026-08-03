@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"math/big"
 	"runtime"
 	"strconv"
 	"strings"
@@ -33,11 +34,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
+
+var resolveSnapshotForBetween = resolveSnapshot
 
 // resolveBetweenSnapshots resolves two snapshot names to types.TS values.
 // Used by BETWEEN SNAPSHOT sp1 AND sp2 to produce timestamps for the
@@ -54,12 +58,18 @@ func resolveBetweenSnapshots(ses *Session, fromName, toName string) (from, to *t
 		Expr:         tree.NewNumVal(toName, toName, false, tree.P_char),
 	}
 
-	fromSnap, err := resolveSnapshot(ses, fromAtTs)
+	fromSnap, err := resolveSnapshotForBetween(ses, fromAtTs)
 	if err != nil {
+		if plan2.IsSnapshotNotFound(err) {
+			return nil, nil, moerr.NewInvalidInputNoCtxf("snapshot '%s' not found", fromName)
+		}
 		return nil, nil, moerr.NewInvalidInputNoCtxf("cannot resolve snapshot '%s': %v", fromName, err)
 	}
-	toSnap, err := resolveSnapshot(ses, toAtTs)
+	toSnap, err := resolveSnapshotForBetween(ses, toAtTs)
 	if err != nil {
+		if plan2.IsSnapshotNotFound(err) {
+			return nil, nil, moerr.NewInvalidInputNoCtxf("snapshot '%s' not found", toName)
+		}
 		return nil, nil, moerr.NewInvalidInputNoCtxf("cannot resolve snapshot '%s': %v", toName, err)
 	}
 	if fromSnap == nil || fromSnap.TS == nil {
@@ -71,7 +81,21 @@ func resolveBetweenSnapshots(ses *Session, fromName, toName string) (from, to *t
 
 	fromTS := types.TimestampToTS(*fromSnap.TS)
 	toTS := types.TimestampToTS(*toSnap.TS)
+	if err = validateBetweenSnapshotRange(fromName, toName, &fromTS, &toTS); err != nil {
+		return nil, nil, err
+	}
 	return &fromTS, &toTS, nil
+}
+
+func validateBetweenSnapshotRange(fromName, toName string, fromTS, toTS *types.TS) error {
+	if !fromTS.GT(toTS) {
+		return nil
+	}
+	return moerr.NewInvalidInputNoCtxf(
+		"invalid BETWEEN SNAPSHOT range: start snapshot '%s' is later than end snapshot '%s'",
+		fromName,
+		toName,
+	)
 }
 
 func handleBranchPick(
@@ -96,8 +120,8 @@ func validateDataBranchPickOptions(
 	ses *Session,
 	stmt *tree.DataBranchPick,
 ) error {
-	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
-		return moerr.NewInternalError(ctx, "DATA BRANCH PICK is not supported in explicit transactions")
+	if dataBranchPickTxnNotAllowed(ses) {
+		return moerr.NewInternalError(ctx, dataBranchMergePickTxnErrorInfo())
 	}
 
 	hasBetween := stmt.BetweenFrom != "" && stmt.BetweenTo != ""
@@ -345,8 +369,8 @@ func extractPKAsString(
 // extractPKVal extracts the Go value from a vector at the given row index.
 func extractPKVal(vec *vector.Vector, rowIdx int) any {
 	switch vec.GetType().Oid {
-	case types.T_datetime, types.T_timestamp, types.T_decimal64,
-		types.T_decimal128, types.T_time:
+	case types.T_datetime, types.T_timestamp, types.T_year, types.T_decimal64,
+		types.T_decimal128, types.T_decimal256, types.T_time:
 		return types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
 	case types.T_bool:
 		return vector.GetFixedAtNoTypeCheck[bool](vec, rowIdx)
@@ -613,6 +637,10 @@ func formatPickKeyVectorValueAsString(ses *Session, vec *vector.Vector, rowIdx i
 		return vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, rowIdx).Format(vec.GetType().Scale), nil
 	case types.T_decimal128:
 		return vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, rowIdx).Format(vec.GetType().Scale), nil
+	case types.T_decimal256:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, rowIdx).Format(vec.GetType().Scale), nil
+	case types.T_year:
+		return vector.GetFixedAtNoTypeCheck[types.MoYear](vec, rowIdx).String(), nil
 	case types.T_date:
 		return vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIdx).String(), nil
 	case types.T_datetime:
@@ -694,13 +722,29 @@ func materializeSubqueryUnified(
 	if stmt.Keys.Select == nil {
 		return nil, moerr.NewInvalidInputNoCtx("KEYS subquery is nil")
 	}
-	if _, err = buildPlanWithAuthorization(ctx, ses, ses.GetTxnCompileCtx(), stmt.Keys.Select); err != nil {
+	subqueryPlan, err := buildPlanWithAuthorization(ctx, ses, ses.GetTxnCompileCtx(), stmt.Keys.Select)
+	if err != nil {
 		return nil, err
 	}
 
 	pkType := tblStuff.def.colTypes[tblStuff.def.pkColIdx]
 	isComposite := tblStuff.def.pkKind == compositeKind
 	nPKCols := len(tblStuff.def.pkColIdxes)
+	subqueryCols := 0
+	if subqueryPlan != nil && subqueryPlan.GetQuery() != nil {
+		subqueryCols = len(subqueryPlan.GetQuery().GetHeadings())
+	}
+	if isComposite {
+		if subqueryCols != nPKCols {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"KEYS subquery returns %d columns but composite primary key has %d columns",
+				subqueryCols, nPKCols)
+		}
+	} else if subqueryCols != 1 {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"KEYS subquery returns %d columns but table has a single-column primary key",
+			subqueryCols)
+	}
 
 	// Compose the subquery SQL: wrap the user's SELECT with ORDER BY for
 	// streaming sorted results.  For composite PKs we ORDER BY all component
@@ -1042,6 +1086,8 @@ func (sb *segmentBuilder) observe(pkBytes []byte) {
 		sb.curMin = pk
 		sb.curMax = pk
 		sb.curCount = 1
+		sb.gapSum = 0
+		sb.gapCount = 0
 		return
 	}
 
@@ -1135,9 +1181,49 @@ func numericGap(a, b []byte, pkType types.Type) float64 {
 		va := types.Decimal128ToFloat64(types.DecodeDecimal128(a), pkType.Scale)
 		vb := types.Decimal128ToFloat64(types.DecodeDecimal128(b), pkType.Scale)
 		return math.Abs(vb - va)
+	case types.T_decimal256:
+		return decimal256AbsGap(
+			types.DecodeDecimal256(a),
+			types.DecodeDecimal256(b),
+			pkType.Scale,
+		)
 	default:
 		return 0
 	}
+}
+
+func decimal256AbsGap(a, b types.Decimal256, scale int32) float64 {
+	ai := decimal256ToBigInt(a)
+	bi := decimal256ToBigInt(b)
+	diff := new(big.Int).Sub(bi, ai)
+	diff.Abs(diff)
+
+	f := new(big.Float).SetPrec(256).SetInt(diff)
+	if scale > 0 {
+		divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil)
+		f.Quo(f, new(big.Float).SetPrec(256).SetInt(divisor))
+	}
+	v, _ := f.Float64()
+	return v
+}
+
+func decimal256ToBigInt(x types.Decimal256) *big.Int {
+	negative := x.Sign()
+	if negative {
+		x = x.Minus()
+	}
+
+	n := new(big.Int).SetUint64(x.B192_255)
+	n.Lsh(n, 64)
+	n.Add(n, new(big.Int).SetUint64(x.B128_191))
+	n.Lsh(n, 64)
+	n.Add(n, new(big.Int).SetUint64(x.B64_127))
+	n.Lsh(n, 64)
+	n.Add(n, new(big.Int).SetUint64(x.B0_63))
+	if negative {
+		n.Neg(n)
+	}
+	return n
 }
 
 func isNumericType(oid types.T) bool {
@@ -1145,7 +1231,7 @@ func isNumericType(oid types.T) bool {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128:
+		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	default:
 		return false
@@ -1169,14 +1255,19 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *
 		if !ok {
 			return moerr.NewInvalidInputNoCtxf("unsupported unary expression type for PK filter: %T", e.Expr)
 		}
+		negative := false
 		s := num.String()
 		switch e.Op {
 		case tree.UNARY_MINUS:
+			negative = true
 			s = "-" + s
 		case tree.UNARY_PLUS:
 			s = "+" + s
 		default:
 			return moerr.NewInvalidInputNoCtxf("unsupported unary operator for PK filter: %v", e.Op)
+		}
+		if pkType.Oid.IsInteger() && (num.ValType == tree.P_hexnum || num.ValType == tree.P_float64) {
+			return appendIntegerNumValToVec(vec, num, negative, pkType, tz, mp)
 		}
 		return appendNumericStringToVec(vec, s, pkType, tz, mp)
 	case *tree.StrVal:
@@ -1190,11 +1281,67 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *
 // appendNumValToVec converts a numeric literal to the correct typed value
 // and appends it to the vector.
 func appendNumValToVec(vec *vector.Vector, val *tree.NumVal, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
+	if pkType.Oid.IsInteger() && (val.ValType == tree.P_hexnum || val.ValType == tree.P_float64) {
+		return appendIntegerNumValToVec(vec, val, false, pkType, tz, mp)
+	}
 	return appendNumericStringToVec(vec, val.String(), pkType, tz, mp)
+}
+
+func appendIntegerNumValToVec(
+	vec *vector.Vector,
+	val *tree.NumVal,
+	negative bool,
+	pkType types.Type,
+	tz *time.Location,
+	mp *mpool.MPool,
+) error {
+	var n *big.Int
+	switch val.ValType {
+	case tree.P_hexnum:
+		s := val.String()
+		if len(s) < 3 || (s[:2] != "0x" && s[:2] != "0X") {
+			return moerr.NewInvalidInputNoCtxf("invalid hexadecimal literal %q", s)
+		}
+		var ok bool
+		n, ok = new(big.Int).SetString(s[2:], 16)
+		if !ok {
+			return moerr.NewInvalidInputNoCtxf("invalid hexadecimal literal %q", s)
+		}
+	case tree.P_float64:
+		r, ok := new(big.Rat).SetString(val.String())
+		if !ok {
+			return moerr.NewInvalidInputNoCtxf("invalid numeric literal %q", val.String())
+		}
+		if !r.IsInt() {
+			return moerr.NewInvalidInputNoCtxf(
+				"numeric literal %q is not an integer for primary key type %s",
+				val.String(), pkType.String(),
+			)
+		}
+		n = new(big.Int).Set(r.Num())
+	default:
+		return moerr.NewInvalidInputNoCtxf("unsupported numeric literal %q", val.String())
+	}
+	if negative {
+		n.Neg(n)
+	}
+	return appendNumericStringToVec(vec, n.String(), pkType, tz, mp)
 }
 
 func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
 	switch pkType.Oid {
+	case types.T_bool:
+		v, err := types.ParseBool(s)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_bit:
+		v, err := strconv.ParseUint(s, 10, int(pkType.Width))
+		if err != nil {
+			return moerr.NewOutOfRangeNoCtxf(fmt.Sprintf("bit(%d)", pkType.Width), "value '%s'", s)
+		}
+		return vector.AppendFixed(vec, v, false, mp)
 	case types.T_int8:
 		v, err := strconv.ParseInt(s, 10, 8)
 		if err != nil {
@@ -1269,8 +1416,20 @@ func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, t
 			return err
 		}
 		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_decimal256:
+		v, err := types.ParseDecimal256(s, pkType.Width, pkType.Scale)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
 	case types.T_date:
 		v, err := types.ParseDateCast(s)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, v, false, mp)
+	case types.T_year:
+		v, err := types.ParseMoYear(s)
 		if err != nil {
 			return err
 		}
@@ -1312,46 +1471,8 @@ func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, t
 }
 
 // appendStrValToVec handles string literal values for typed PK columns.
-// For varlen types (varchar, char, text, blob) it appends raw bytes directly.
-// For fixed-width types (date, datetime, timestamp, time, uuid) it parses the
-// string into the correct typed value before appending.
 func appendStrValToVec(vec *vector.Vector, s string, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
-	switch pkType.Oid {
-	case types.T_varchar, types.T_char, types.T_text, types.T_blob:
-		return vector.AppendBytes(vec, []byte(s), false, mp)
-	case types.T_date:
-		v, err := types.ParseDateCast(s)
-		if err != nil {
-			return err
-		}
-		return vector.AppendFixed(vec, v, false, mp)
-	case types.T_datetime:
-		v, err := types.ParseDatetime(s, pkType.Scale)
-		if err != nil {
-			return err
-		}
-		return vector.AppendFixed(vec, v, false, mp)
-	case types.T_timestamp:
-		v, err := types.ParseTimestamp(normalizePickTimeZone(tz), s, pkType.Scale)
-		if err != nil {
-			return err
-		}
-		return vector.AppendFixed(vec, v, false, mp)
-	case types.T_time:
-		v, err := types.ParseTime(s, pkType.Scale)
-		if err != nil {
-			return err
-		}
-		return vector.AppendFixed(vec, v, false, mp)
-	case types.T_uuid:
-		v, err := types.ParseUuid(s)
-		if err != nil {
-			return err
-		}
-		return vector.AppendFixed(vec, v, false, mp)
-	default:
-		return moerr.NewInvalidInputNoCtxf("unsupported PK type for string literal: %s", pkType.Oid.String())
-	}
+	return appendNumericStringToVec(vec, s, pkType, tz, mp)
 }
 
 // freePKFilter is a no-op retained for call-site compatibility.

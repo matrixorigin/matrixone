@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseTNConfig(t *testing.T) {
@@ -62,13 +63,13 @@ func TestParseTNConfig(t *testing.T) {
 	data-dir = "data dir"
 	
 	[tn.Txn.Storage]
-	# txn storage backend implementation. [TAE|MEM]
-	backend = "MEM"
+	# txn storage backend implementation. [TAE|MEMKV]
+	backend = "MEMKV"
 	`
 	cfg := &Config{}
 	err := parseFromString(data, cfg)
 	assert.NoError(t, err)
-	assert.Equal(t, tnservice.StorageMEM, cfg.getTNServiceConfig().Txn.Storage.Backend)
+	assert.Equal(t, tnservice.StorageMEMKV, cfg.getTNServiceConfig().Txn.Storage.Backend)
 	assert.Equal(t, 2, len(cfg.FileServices))
 	assert.Equal(t, "local", cfg.FileServices[0].Name)
 	assert.Equal(t, defines.SharedFileServiceName, cfg.FileServices[1].Name)
@@ -192,4 +193,29 @@ func TestDumpCommonConfig(t *testing.T) {
 	cfg1 := *NewConfig()
 	_, err := dumpCommonConfig(cfg1)
 	assert.NoError(t, err)
+}
+
+func TestObservabilityRetiresSpansByDefault(t *testing.T) {
+	cfg := NewConfig()
+	effective := cfg.getObservabilityConfig()
+	require.True(t, effective.DisableSpan)
+	require.False(t, effective.DisableTrace)
+	require.False(t, effective.DisableError)
+
+	// Keep accepting the legacy key. Runtime Span recording remains retired even
+	// when old configuration explicitly sets it to false.
+	cfg = NewConfig()
+	err := parseFromString("[observability]\ndisable-span = false", cfg)
+	require.NoError(t, err)
+	effective = cfg.getObservabilityConfig()
+	require.False(t, effective.DisableSpan)
+	require.False(t, effective.DisableTrace)
+	require.False(t, effective.DisableError)
+
+	// The current key must win over the deprecated v1.2 key when both exist.
+	cfg = NewConfig()
+	err = parseFromString("[observability]\ndisable-span = false\ndisableSpan = true", cfg)
+	require.NoError(t, err)
+	effective = cfg.getObservabilityConfig()
+	require.False(t, effective.DisableSpan)
 }

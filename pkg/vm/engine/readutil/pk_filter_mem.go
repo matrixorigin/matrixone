@@ -17,6 +17,7 @@ package readutil
 import (
 	"bytes"
 	"fmt"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,13 +32,22 @@ import (
 	"go.uber.org/zap"
 )
 
+// MemPKFilterSpec describes one atomic primary-key predicate. Multiple specs
+// are OR-ed by partition-state iterators.
+type MemPKFilterSpec struct {
+	Op   int
+	Keys [][]byte
+}
+
 type MemPKFilter struct {
-	op      int
-	packed  [][]byte
-	inSet   map[string]struct{} // pre-built hashmap for IN filter
-	isVec   bool
-	isValid bool
-	TS      types.TS
+	op        int
+	packed    [][]byte
+	inSet     map[string]struct{}
+	prefixes  [][]byte
+	disjuncts []MemPKFilter
+	isVec     bool
+	isValid   bool
+	TS        types.TS
 
 	exact struct {
 		hit bool
@@ -60,6 +70,21 @@ func (f *MemPKFilter) Keys() [][]byte {
 	return f.packed
 }
 
+func (f *MemPKFilter) Specs() []MemPKFilterSpec {
+	if !f.isValid {
+		return nil
+	}
+	if len(f.disjuncts) == 0 {
+		return []MemPKFilterSpec{{Op: f.op, Keys: f.packed}}
+	}
+
+	specs := make([]MemPKFilterSpec, 0, len(f.disjuncts))
+	for idx := range f.disjuncts {
+		specs = append(specs, f.disjuncts[idx].Specs()...)
+	}
+	return specs
+}
+
 func NewMemPKFilter(
 	tableDef *plan.TableDef,
 	ts timestamp.Timestamp,
@@ -70,12 +95,34 @@ func NewMemPKFilter(
 
 	filter.TS = types.TimestampToTS(ts)
 
-	if !basePKFilter.Valid || tableDef.Pkey == nil {
+	if !basePKFilter.Valid || tableDef == nil || tableDef.Pkey == nil || packerPool == nil {
 		return
 	}
 
-	// Currently only support single atomic filter in memory path.
 	if len(basePKFilter.Disjuncts) > 0 {
+		filter.disjuncts = make([]MemPKFilter, 0, len(basePKFilter.Disjuncts))
+		for idx := range basePKFilter.Disjuncts {
+			disjunct, err := NewMemPKFilter(
+				tableDef,
+				ts,
+				packerPool,
+				basePKFilter.Disjuncts[idx],
+				engine.FilterHint{},
+			)
+			if err != nil {
+				return MemPKFilter{}, err
+			}
+			if !disjunct.Valid() {
+				return MemPKFilter{TS: filter.TS}, nil
+			}
+			filter.disjuncts = append(filter.disjuncts, disjunct)
+		}
+		filter.isValid = len(filter.disjuncts) > 0
+		filter.isVec = true
+		filter.setFilterHint(tableDef, filterHint)
+		return
+	}
+	if !validBlockPKSearchFilter(basePKFilter) {
 		return
 	}
 
@@ -87,6 +134,16 @@ func NewMemPKFilter(
 
 	if basePKFilter.Op != function.IN && basePKFilter.Op != function.PREFIX_IN {
 		switch basePKFilter.Oid {
+		case types.T_bool:
+			lbVal = types.DecodeBool(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeBool(basePKFilter.UB)
+			}
+		case types.T_bit:
+			lbVal = types.DecodeUint64(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeUint64(basePKFilter.UB)
+			}
 		case types.T_int8:
 			lbVal = types.DecodeInt8(basePKFilter.LB)
 			if len(basePKFilter.UB) > 0 {
@@ -157,6 +214,11 @@ func NewMemPKFilter(
 			if len(basePKFilter.UB) > 0 {
 				ubVal = types.DecodeTimestamp(basePKFilter.UB)
 			}
+		case types.T_year:
+			lbVal = types.DecodeMoYear(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeMoYear(basePKFilter.UB)
+			}
 		case types.T_decimal64:
 			lbVal = types.DecodeDecimal64(basePKFilter.LB)
 			if len(basePKFilter.UB) > 0 {
@@ -167,7 +229,12 @@ func NewMemPKFilter(
 			if len(basePKFilter.UB) > 0 {
 				ubVal = types.DecodeDecimal128(basePKFilter.UB)
 			}
-		case types.T_varchar, types.T_char, types.T_binary:
+		case types.T_decimal256:
+			lbVal = types.DecodeDecimal256(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeDecimal256(basePKFilter.UB)
+			}
+		case types.T_varchar, types.T_char, types.T_binary, types.T_varbinary:
 			lbVal = basePKFilter.LB
 			ubVal = basePKFilter.UB
 		case types.T_json:
@@ -223,10 +290,14 @@ func NewMemPKFilter(
 		filter.SetFullData(basePKFilter.Op, false, packed...)
 
 	case function.PREFIX_BETWEEN, function.BETWEEN,
-		RangeLeftOpen, RangeRightOpen, RangeBothOpen:
+		RangeLeftOpen, RangeRightOpen, RangeBothOpen,
+		PrefixRangeLeftOpen, PrefixRangeRightOpen, PrefixRangeBothOpen:
 		packed = append(packed, EncodePrimaryKey(lbVal, packer))
 		packed = append(packed, EncodePrimaryKey(ubVal, packer))
-		if basePKFilter.Op == function.PREFIX_BETWEEN {
+		if basePKFilter.Op == function.PREFIX_BETWEEN ||
+			basePKFilter.Op == PrefixRangeLeftOpen ||
+			basePKFilter.Op == PrefixRangeRightOpen ||
+			basePKFilter.Op == PrefixRangeBothOpen {
 			packed[0] = packed[0][0 : len(packed[0])-1]
 			packed[1] = packed[1][0 : len(packed[1])-1]
 		}
@@ -235,29 +306,33 @@ func NewMemPKFilter(
 		return
 	}
 
-	filter.FilterHint = filterHint
-	if filter.FilterHint.BF != nil && filter.FilterHint.BF.Valid() {
-		filter.HasBF = true
-		filter.BFSeqNum = -1
+	filter.setFilterHint(tableDef, filterHint)
+
+	return
+}
+
+func (f *MemPKFilter) setFilterHint(tableDef *plan.TableDef, filterHint engine.FilterHint) {
+	f.FilterHint = filterHint
+	if f.FilterHint.BF != nil && f.FilterHint.BF.Valid() {
+		f.HasBF = true
+		f.BFSeqNum = -1
 		// For IVF entries table, use __mo_index_pri_col for BF filtering.
 		for _, col := range tableDef.Cols {
 			if col.Name == catalog.IndexTablePrimaryColName {
-				filter.BFSeqNum = int16(col.Seqnum)
+				f.BFSeqNum = int16(col.Seqnum)
 				break
 			}
 		}
 		// For fulltext index table, use doc_id column for BF filtering.
-		if filter.BFSeqNum == -1 && catalog.IsFullTextIndexTableType(tableDef.TableType, tableDef.Name) {
+		if f.BFSeqNum == -1 && catalog.IsFullTextIndexTableType(tableDef.TableType, tableDef.Name) {
 			for _, col := range tableDef.Cols {
 				if col.Name == catalog.FullTextIndex_TabCol_Id {
-					filter.BFSeqNum = int16(col.Seqnum)
+					f.BFSeqNum = int16(col.Seqnum)
 					break
 				}
 			}
 		}
 	}
-
-	return
 }
 
 func (f *MemPKFilter) InKind() (int, bool) {
@@ -284,6 +359,10 @@ func (f *MemPKFilter) Must() bool {
 
 func (f *MemPKFilter) String() string {
 	var buf bytes.Buffer
+	if len(f.disjuncts) > 0 {
+		buf.WriteString(fmt.Sprintf("InMemPKFilter{disjuncts: %d, isValid: %v}", len(f.disjuncts), f.isValid))
+		return buf.String()
+	}
 	buf.WriteString(fmt.Sprintf("InMemPKFilter{op: %d, isVec: %v, isValid: %v vals: [", f.op, f.isVec, f.isValid))
 	for x := range f.packed {
 		buf.WriteString(fmt.Sprintf("%x, ", f.packed[x]))
@@ -297,10 +376,86 @@ func (f *MemPKFilter) SetNull() {
 }
 
 func (f *MemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
-	f.packed = append(f.packed, val...)
+	f.packed = append(f.packed[:0], val...)
 	f.op = op
 	f.isVec = isVec
 	f.isValid = true
+	f.inSet = nil
+	f.prefixes = nil
+	f.disjuncts = nil
+
+	if op == function.IN || op == function.PREFIX_IN {
+		sort.Slice(f.packed, func(i, j int) bool {
+			return bytes.Compare(f.packed[i], f.packed[j]) < 0
+		})
+	}
+	if op == function.IN {
+		f.inSet = make(map[string]struct{}, len(f.packed))
+		for _, key := range f.packed {
+			f.inSet[string(key)] = struct{}{}
+		}
+	}
+	if op == function.PREFIX_IN {
+		f.prefixes = make([][]byte, 0, len(f.packed))
+		for _, prefix := range f.packed {
+			if len(f.prefixes) > 0 && bytes.HasPrefix(prefix, f.prefixes[len(f.prefixes)-1]) {
+				continue
+			}
+			f.prefixes = append(f.prefixes, prefix)
+		}
+	}
+}
+
+func (f *MemPKFilter) matches(key []byte) bool {
+	if len(f.disjuncts) > 0 {
+		for idx := range f.disjuncts {
+			if f.disjuncts[idx].matches(key) {
+				return true
+			}
+		}
+		return false
+	}
+
+	switch f.op {
+	case function.EQUAL:
+		return len(f.packed) == 1 && bytes.Equal(key, f.packed[0])
+	case function.PREFIX_EQ:
+		return len(f.packed) == 1 && bytes.HasPrefix(key, f.packed[0])
+	case function.IN:
+		_, ok := f.inSet[string(key)]
+		return ok
+	case function.PREFIX_IN:
+		idx := sort.Search(len(f.prefixes), func(idx int) bool {
+			return bytes.Compare(f.prefixes[idx], key) > 0
+		}) - 1
+		return idx >= 0 && bytes.HasPrefix(key, f.prefixes[idx])
+	case function.BETWEEN:
+		return len(f.packed) == 2 && bytes.Compare(key, f.packed[0]) >= 0 && bytes.Compare(key, f.packed[1]) <= 0
+	case RangeRightOpen:
+		return len(f.packed) == 2 && bytes.Compare(key, f.packed[0]) >= 0 && bytes.Compare(key, f.packed[1]) < 0
+	case RangeLeftOpen:
+		return len(f.packed) == 2 && bytes.Compare(key, f.packed[0]) > 0 && bytes.Compare(key, f.packed[1]) <= 0
+	case RangeBothOpen:
+		return len(f.packed) == 2 && bytes.Compare(key, f.packed[0]) > 0 && bytes.Compare(key, f.packed[1]) < 0
+	case function.PREFIX_BETWEEN:
+		return len(f.packed) == 2 && types.PrefixCompare(key, f.packed[0]) >= 0 && types.PrefixCompare(key, f.packed[1]) <= 0
+	case PrefixRangeLeftOpen:
+		return len(f.packed) == 2 && types.PrefixCompare(key, f.packed[0]) > 0 && types.PrefixCompare(key, f.packed[1]) <= 0
+	case PrefixRangeRightOpen:
+		return len(f.packed) == 2 && types.PrefixCompare(key, f.packed[0]) >= 0 && types.PrefixCompare(key, f.packed[1]) < 0
+	case PrefixRangeBothOpen:
+		return len(f.packed) == 2 && types.PrefixCompare(key, f.packed[0]) > 0 && types.PrefixCompare(key, f.packed[1]) < 0
+	case function.GREAT_EQUAL:
+		return len(f.packed) == 1 && bytes.Compare(key, f.packed[0]) >= 0
+	case function.GREAT_THAN:
+		return len(f.packed) == 1 && bytes.Compare(key, f.packed[0]) > 0
+	case function.LESS_EQUAL:
+		return len(f.packed) == 1 && bytes.Compare(key, f.packed[0]) <= 0
+	case function.LESS_THAN:
+		return len(f.packed) == 1 && bytes.Compare(key, f.packed[0]) < 0
+	default:
+		return true
+	}
 }
 
 func (f *MemPKFilter) FilterVector(
@@ -309,94 +464,9 @@ func (f *MemPKFilter) FilterVector(
 	skipMask *objectio.Bitmap,
 ) {
 	keys := EncodePrimaryKeyVector(vec, packer)
-
-	// For IN filter, use hashmap for O(1) lookup
-	if f.op == function.IN {
-		// Lazy build hashmap on first use
-		if f.inSet == nil && len(f.packed) > 0 {
-			f.inSet = make(map[string]struct{}, len(f.packed))
-			for _, k := range f.packed {
-				f.inSet[string(k)] = struct{}{}
-			}
-		}
-		for i := 0; i < len(keys); i++ {
-			if _, ok := f.inSet[string(keys[i])]; !ok {
-				skipMask.Add(uint64(i))
-			}
-		}
-		return
-	}
-
-	// For PREFIX_IN with small list, use linear search
-	if f.op == function.PREFIX_IN && len(f.packed) > 4 {
-		return
-	}
-
 	for i := 0; i < len(keys); i++ {
-		switch f.op {
-		case function.EQUAL:
-			if !bytes.Equal(keys[i], f.packed[0]) {
-				skipMask.Add(uint64(i))
-			}
-
-		case function.PREFIX_EQ:
-			if !bytes.HasPrefix(keys[i], f.packed[0]) {
-				skipMask.Add(uint64(i))
-			}
-
-		case function.PREFIX_IN:
-			in := false
-			for _, k := range f.packed {
-				if bytes.HasPrefix(keys[i], k) {
-					in = true
-					break
-				}
-			}
-			if !in {
-				skipMask.Add(uint64(i))
-			}
-		case function.BETWEEN:
-			if !(bytes.Compare(keys[i], f.packed[0]) >= 0 && bytes.Compare(keys[i], f.packed[1]) <= 0) {
-				skipMask.Add(uint64(i))
-			}
-
-		case RangeRightOpen:
-			if !(bytes.Compare(keys[i], f.packed[0]) >= 0 && bytes.Compare(keys[i], f.packed[1]) < 0) {
-				skipMask.Add(uint64(i))
-			}
-
-		case RangeLeftOpen:
-			if !(bytes.Compare(keys[i], f.packed[0]) > 0 && bytes.Compare(keys[i], f.packed[1]) <= 0) {
-				skipMask.Add(uint64(i))
-			}
-
-		case RangeBothOpen:
-			if !(bytes.Compare(keys[i], f.packed[0]) > 0 && bytes.Compare(keys[i], f.packed[1]) < 0) {
-				skipMask.Add(uint64(i))
-			}
-
-		case function.GREAT_EQUAL:
-			if !(bytes.Compare(keys[i], f.packed[0]) >= 0) {
-				skipMask.Add(uint64(i))
-			}
-
-		case function.GREAT_THAN:
-			if !(bytes.Compare(keys[i], f.packed[0]) > 0) {
-				skipMask.Add(uint64(i))
-			}
-
-		case function.LESS_EQUAL:
-			if !(bytes.Compare(keys[i], f.packed[0]) <= 0) {
-				skipMask.Add(uint64(i))
-			}
-
-		case function.LESS_THAN:
-			if !(bytes.Compare(keys[i], f.packed[0]) < 0) {
-				skipMask.Add(uint64(i))
-			}
-
-		default:
-			// skip nothing
+		if !f.matches(keys[i]) {
+			skipMask.Add(uint64(i))
 		}
 	}
 }

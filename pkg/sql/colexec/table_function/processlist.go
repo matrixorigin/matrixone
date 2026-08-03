@@ -16,7 +16,7 @@ package table_function
 
 import (
 	"context"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -190,8 +190,8 @@ func fetchSessions(
 	retErr = queryservice.RequestMultipleCn(ctx, nodes, qc, genRequest, handleValidResponse, nil)
 
 	// Sort by session start time.
-	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].SessionStart.Before(sessions[j].SessionStart)
+	slices.SortFunc(sessions, func(a, b *status.Session) int {
+		return a.SessionStart.Compare(b.SessionStart)
 	})
 
 	return sessions, retErr

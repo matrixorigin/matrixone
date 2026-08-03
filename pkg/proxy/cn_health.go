@@ -63,6 +63,14 @@ const (
 	defaultCNHealthSweepInterval = time.Minute * 5
 )
 
+var (
+	eventProxyCNHealthRecovered              = logutil.Event{Name: "proxy.cn-health.recovered", Message: "proxy CN health recovered"}
+	eventProxyCNHealthTripped                = logutil.Event{Name: "proxy.cn-health.tripped", Message: "proxy CN health tripped"}
+	eventProxyCNHealthRetripped              = logutil.Event{Name: "proxy.cn-health.retripped", Message: "proxy CN health probe failed and re-tripped"}
+	eventProxyCNHealthRecoveryProbe          = logutil.Event{Name: "proxy.cn-health.recovery-probe", Message: "proxy CN health probing recovery"}
+	eventProxyCNHealthAllCandidatesUnhealthy = logutil.Event{Name: "proxy.cn-health.all-candidates-unhealthy", Message: "all candidate CN servers are temporarily unhealthy"}
+)
+
 // cnBreaker holds the circuit-breaker state for a single CN server.
 type cnBreaker struct {
 	// consecutiveFailures counts connect failures since the last success.
@@ -252,9 +260,11 @@ func (h *cnHealthChecker) reportSuccess(uuid, addr string) {
 		// Healthy is represented by the absence of a breaker entry.
 		delete(h.breakers, uuid)
 		if wasOpen {
-			logutil.Info("proxy CN health recovered",
-				zap.String("cn", uuid),
-				zap.String("address", addr))
+			v2.ProxyCNHealthCounter.WithLabelValues("recover").Inc()
+			eventProxyCNHealthRecovered.InfoLazy(func() []zap.Field {
+				fields := logutil.StringFingerprintFields("cn", uuid)
+				return append(fields, logutil.StringFingerprintFields("address", addr)...)
+			})
 		}
 	}
 }
@@ -288,12 +298,12 @@ func (h *cnHealthChecker) reportFailure(uuid, addr string) {
 		case !wasOpen:
 			// closed -> open: the CN just became unhealthy.
 			v2.ProxyConnectCNHealthTripCounter.Inc()
-			logutil.Warn("proxy CN health tripped",
-				zap.String("cn", uuid),
-				zap.String("address", addr),
-				zap.Int("consecutive_failures", b.consecutiveFailures),
-				zap.Duration("cooldown", cooldown),
-				zap.Time("open_until", b.openUntil))
+			v2.ProxyCNHealthCounter.WithLabelValues("trip").Inc()
+			eventProxyCNHealthTripped.WarnLazy(func() []zap.Field {
+				fields := logutil.StringFingerprintFields("cn", uuid)
+				fields = append(fields, logutil.StringFingerprintFields("address", addr)...)
+				return append(fields, zap.Int("consecutive-failure-count", b.consecutiveFailures), zap.Duration("cooldown", cooldown), zap.Time("open-until", b.openUntil))
+			})
 		default:
 			// Already open: this is a continued failure, which for an open
 			// CN means a half-open probe just failed. Without a distinct
@@ -302,13 +312,12 @@ func (h *cnHealthChecker) reportFailure(uuid, addr string) {
 			// The probe rate is bounded (one per CN per cooldown), so this
 			// cannot storm.
 			v2.ProxyConnectCNHealthRetripCounter.Inc()
-			logutil.Warn("proxy CN health probe failed, re-tripping",
-				zap.String("cn", uuid),
-				zap.String("address", addr),
-				zap.Bool("after_probe", wasProbing),
-				zap.Int("consecutive_failures", b.consecutiveFailures),
-				zap.Duration("cooldown", cooldown),
-				zap.Time("open_until", b.openUntil))
+			v2.ProxyCNHealthCounter.WithLabelValues("retrip").Inc()
+			eventProxyCNHealthRetripped.WarnLazy(func() []zap.Field {
+				fields := logutil.StringFingerprintFields("cn", uuid)
+				fields = append(fields, logutil.StringFingerprintFields("address", addr)...)
+				return append(fields, zap.Bool("after-probe", wasProbing), zap.Int("consecutive-failure-count", b.consecutiveFailures), zap.Duration("cooldown", cooldown), zap.Time("open-until", b.openUntil))
+			})
 		}
 	}
 }
@@ -403,12 +412,14 @@ func (h *cnHealthChecker) pick(cns []*CNServer) (candidates []*CNServer, allBusy
 		probeBreaker.probeInFlight = true
 		probeBreaker.probeDeadline = now.Add(h.probeWindow)
 		v2.ProxyConnectCNHealthProbeCounter.Inc()
+		v2.ProxyCNHealthCounter.WithLabelValues("probe").Inc()
 		// Bounded to one probe per CN per cooldown window, so this is safe to
 		// log; it makes recovery attempts visible. Debug level keeps it quiet
 		// for normal operation.
-		logutil.Debug("proxy CN health probing recovery",
-			zap.String("cn", probe.uuid),
-			zap.String("address", probe.addr))
+		eventProxyCNHealthRecoveryProbe.DebugLazy(func() []zap.Field {
+			fields := logutil.StringFingerprintFields("cn", probe.uuid)
+			return append(fields, logutil.StringFingerprintFields("address", probe.addr)...)
+		})
 		return []*CNServer{probe}, false
 	}
 	if len(closed) > 0 {
@@ -423,8 +434,9 @@ func (h *cnHealthChecker) pick(cns []*CNServer) (candidates []*CNServer, allBusy
 	// ungated log would storm. The counter still increments every time.
 	if now.Sub(h.lastAllBusyLog) >= cnHealthAllBusyLogInterval {
 		h.lastAllBusyLog = now
-		logutil.Warn("proxy: all candidate CN servers are temporarily unhealthy",
-			zap.Int("candidate_count", len(cns)))
+		eventProxyCNHealthAllCandidatesUnhealthy.WarnLazy(func() []zap.Field {
+			return []zap.Field{zap.Int("candidate-count", len(cns))}
+		})
 	}
 	return nil, true
 }

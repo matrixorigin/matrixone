@@ -20,7 +20,7 @@ import (
 	"math"
 	"math/bits"
 	"math/rand"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -285,14 +285,14 @@ func GatherLayerZeroMergeTasks(ctx context.Context,
 		typ := objList[0].SortKeyZoneMap().GetType()
 		scale := objList[0].SortKeyZoneMap().GetScale()
 		if typ != types.T_any {
-			sort.Slice(objList, func(i, j int) bool {
+			slices.SortFunc(objList, func(a, b *objectio.ObjectStats) int {
 				return compute.Compare(
-					objList[i].SortKeyZoneMap().GetMinBuf(),
-					objList[j].SortKeyZoneMap().GetMinBuf(),
+					a.SortKeyZoneMap().GetMinBuf(),
+					b.SortKeyZoneMap().GetMinBuf(),
 					typ,
 					scale,
 					scale,
-				) < 0
+				)
 			})
 		}
 		for _, obj := range objList {

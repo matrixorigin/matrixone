@@ -136,6 +136,12 @@ func (op *implPrefixIn) doPrefixIn(parameters []*vector.Vector, result vector.Fu
 
 	lvec := parameters[0]
 	res := vector.MustFixedColWithTypeCheck[bool](result.GetResultVector())
+	if len(op.vals) == 0 {
+		for i := range length {
+			res[i] = false
+		}
+		return nil
+	}
 
 	lcol, larea := vector.MustVarlenaRawData(lvec)
 	lvecHasNull := lvec.HasNull()

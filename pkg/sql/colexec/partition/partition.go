@@ -30,6 +30,18 @@ import (
 
 const opName = "partition"
 
+const cancellationCheckInterval = 1024
+
+func checkCanceled(proc *process.Process, iteration int) error {
+	if iteration&(cancellationCheckInterval-1) != 0 {
+		return nil
+	}
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return err
+	}
+	return nil
+}
+
 func (partition *Partition) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
 	buf.WriteString(": partition([")
@@ -191,6 +203,9 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 	var cols []*vector.Vector
 	fromRemoveBatch := false
 	for {
+		if err = checkCanceled(proc, wholeLength); err != nil {
+			return false, err
+		}
 		if wholeLength == 0 || fromRemoveBatch {
 			choice = ctr.pickFirstRow()
 		} else {

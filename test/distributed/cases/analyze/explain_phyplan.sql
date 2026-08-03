@@ -51,7 +51,7 @@ explain phyplan select * from emp;
 explain phyplan select empno, ename, job from emp where sal > 2000;
 
 -- check verbose headers, (?s) make . match any character, including newlines
--- @regex("(?s)MemoryUsage.*CPU",true)
+-- @regex("(?s)ActiveTime.*WaitTime.*PeakMemory.*CPU",true)
 -- check left join index keeps consistent in probe and build phase
 -- @regex("(?s)hash join\(idx:(\d+).*hash build\(idx:\1",true)
 explain phyplan verbose select a.ename,b.dname from emp a left join dept b on a.deptno = b.deptno;

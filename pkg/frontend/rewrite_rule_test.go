@@ -27,7 +27,10 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -543,6 +546,220 @@ func TestRewriteSQLPropagatesRuleCacheLoadError(t *testing.T) {
 	require.Equal(t, sql, rewritten)
 }
 
+func TestRewriteSQLMaterializesPolicyPerStatement(t *testing.T) {
+	ctx := context.Background()
+	newSession := func(t *testing.T, roleRule, sessionRule string) *Session {
+		t.Helper()
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		ses.rewriteEnabled.Store(true)
+		if sessionRule != "" {
+			require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites",
+				`{"rewrites":{"db.t":"`+sessionRule+`"}}`))
+		}
+		ses.ruleCache = make(map[string]string)
+		if roleRule != "" {
+			ses.ruleCache["db.t"] = roleRule
+		}
+		return ses
+	}
+	decodeChain := func(t *testing.T, fragment string) []string {
+		t.Helper()
+		content, ok := leadingHintContent(fragment)
+		require.True(t, ok, "fragment has no materialized hint: %q", fragment)
+		chains, _, err := parsers.DecodeRewriteHint(ctx, content)
+		require.NoError(t, err)
+		return chains["db.t"]
+	}
+
+	t.Run("parser boundary errors keep parse classification", func(t *testing.T) {
+		ses := newSession(t, "", "")
+		sql := "/*! {\n" +
+			"  \"rewrites\": {\"hint_test.users\": \"select * from users\"}\n" +
+			"} */ drop table if exists users"
+
+		rewritten, err := rewriteSQL(ctx, ses, sql)
+		require.Equal(t, sql, rewritten)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrParseError),
+			"expected parse error, got %T: %v", err, err)
+		require.True(t, strings.HasPrefix(err.Error(), "SQL parser error:"),
+			"expected parser error prefix, got %q", err.Error())
+	})
+
+	t.Run("role and session policy reach later statement", func(t *testing.T) {
+		ses := newSession(t,
+			"select * from db.t where role_keep = 1",
+			"select * from db.t where session_keep = 1")
+		rewritten, err := rewriteSQL(ctx, ses, "select 1; analyze table db.t(id)")
+		require.NoError(t, err)
+		fragments := parsers.SplitSqlBySemicolon(rewritten)
+		require.Len(t, fragments, 2)
+		require.Equal(t, []string{
+			"select * from db.t where role_keep = 1",
+			"select * from db.t where session_keep = 1",
+		}, decodeChain(t, fragments[1]))
+	})
+
+	t.Run("later inline layers after role and session", func(t *testing.T) {
+		ses := newSession(t,
+			"select * from db.t where role_keep = 1",
+			"select * from db.t where session_keep = 1")
+		sql := `select 1; /*+ {"rewrites":{"db.t":"select * from db.t where inline_keep = 1"}} */ analyze table db.t(id)`
+		rewritten, err := rewriteSQL(ctx, ses, sql)
+		require.NoError(t, err)
+		fragments := parsers.SplitSqlBySemicolon(rewritten)
+		require.Len(t, fragments, 2)
+		require.Equal(t, []string{
+			"select * from db.t where role_keep = 1",
+			"select * from db.t where session_keep = 1",
+			"select * from db.t where inline_keep = 1",
+		}, decodeChain(t, fragments[1]))
+	})
+
+	t.Run("strings comments blanks and trailing comment stay aligned", func(t *testing.T) {
+		ses := newSession(t, "select * from db.t where role_keep = 1", "")
+		sql := "select ';' as semi /* block ; */;; -- comment ;\nanalyze table db.t(id); /* tail ; comment */"
+		rewritten, err := rewriteSQL(ctx, ses, sql)
+		require.NoError(t, err)
+		fragments := parsers.SplitSqlBySemicolon(rewritten)
+		require.Len(t, fragments, 4)
+		require.Contains(t, fragments[0], "select ';' as semi /* block ; */")
+		require.Empty(t, fragments[1])
+		require.Contains(t, fragments[2], "analyze table db.t(id)")
+		require.Equal(t, []string{"select * from db.t where role_keep = 1"}, decodeChain(t, fragments[2]))
+		require.Equal(t, "/* tail ; comment */", fragments[3])
+
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, rewritten, 1)
+		require.NoError(t, err)
+		require.Len(t, stmts, 2)
+		records, err := sqlForRecordByStatement(ctx, rewritten)
+		require.NoError(t, err)
+		require.Len(t, records, 2)
+		require.Contains(t, records[0], "select ';' as semi /* block ; */")
+		require.Contains(t, records[1], "analyze table db.t(id)")
+		require.Equal(t, []string{"select * from db.t where role_keep = 1"}, decodeChain(t, records[1]))
+	})
+
+	t.Run("single statement behavior stays unchanged", func(t *testing.T) {
+		ses := newSession(t, "select * from db.t where role_keep = 1", "")
+		rewritten, err := rewriteSQL(ctx, ses, "  analyze table db.t(id)  ")
+		require.NoError(t, err)
+		require.Equal(t, []string{"select * from db.t where role_keep = 1"}, decodeChain(t, rewritten))
+		require.True(t, strings.HasSuffix(rewritten, "  analyze table db.t(id)  "))
+	})
+
+	t.Run("single synthetic blank record stays available", func(t *testing.T) {
+		records, err := sqlForRecordByStatement(ctx, "")
+		require.NoError(t, err)
+		require.Equal(t, []string{""}, records)
+	})
+
+	t.Run("multi blank and comment fragments keep empty statement record", func(t *testing.T) {
+		for _, sql := range []string{";;", "/* comment */; -- another comment"} {
+			records, err := sqlForRecordByStatement(ctx, sql)
+			require.NoError(t, err)
+			require.Equal(t, []string{""}, records, sql)
+		}
+	})
+
+	t.Run("compound create task is one policy boundary", func(t *testing.T) {
+		ses := newSession(t, "select * from db.t where role_keep = 1", "")
+		sql := "create task task_quotes when ('gate' = 'gate') as begin\n" +
+			"  insert into gate_sink select 'gate-ok';\n" +
+			"  select case when 1 = 1 then 'PASS' else 'FAIL' end;\n" +
+			"end"
+
+		rewritten, err := rewriteSQL(ctx, ses, sql)
+		require.NoError(t, err)
+		require.Equal(t, 1, strings.Count(rewritten, `/*+ {"rewrites"`))
+
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, rewritten, 1)
+		require.NoError(t, err)
+		defer func() {
+			for _, stmt := range stmts {
+				stmt.Free()
+			}
+		}()
+		require.Len(t, stmts, 1)
+		require.IsType(t, &tree.CreateSQLTask{}, stmts[0])
+		require.NoError(t, parsers.AddRewriteHints(ctx, stmts, rewritten))
+	})
+
+	t.Run("compound boundary preserves following remap", func(t *testing.T) {
+		ses := newSession(t, "select * from db.t where role_keep = 1", "")
+		compound := "create task task_quotes when ('gate' = 'gate') as begin\n" +
+			"  insert into gate_sink select 'gate-ok';\n" +
+			"  select case when 1 = 1 then 'PASS' else 'FAIL' end;\n" +
+			"end"
+		sql := compound + `; /*+ {"remapdb":{"src":"dst"}} */ select * from src.t`
+
+		rewritten, err := rewriteSQL(ctx, ses, sql)
+		require.NoError(t, err)
+		remaps, err := extractRemapDbByStatement(ctx, rewritten)
+		require.NoError(t, err)
+		require.Len(t, remaps, 2)
+		require.Empty(t, remaps[0])
+		require.Equal(t, "dst", remaps[1]["src"])
+
+		records, err := sqlForRecordByStatement(ctx, rewritten)
+		require.NoError(t, err)
+		require.Len(t, records, 2)
+		require.Contains(t, records[0], "insert into gate_sink")
+		require.Contains(t, records[0], "select case when")
+	})
+}
+
+func TestRewritePolicySnapshotUsesCurrentSQLModeAndFrozenEnablement(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.rewriteEnabled.Store(true)
+	ses.ruleCache = map[string]string{}
+	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites", `{"remapdb":{"src":"dst"}}`))
+
+	policy, err := captureRewritePolicy(ctx, ses)
+	require.NoError(t, err)
+
+	// Earlier statements in the same COM_QUERY may mutate both values. The
+	// request must retain the original policy while parsing the next fragment
+	// with the SQL mode that is current at that point in staged execution.
+	ses.rewriteEnabled.Store(false)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites", ""))
+	rewritten, err := policy.rewrite(ctx, `select 'a\'; select * from src.t`, "NO_BACKSLASH_ESCAPES")
+	require.NoError(t, err)
+
+	fragments, err := parsers.SplitSqlByStatementWithSQLMode(ctx, rewritten, "NO_BACKSLASH_ESCAPES")
+	require.NoError(t, err)
+	require.Len(t, fragments, 2)
+	for _, fragment := range fragments {
+		content, ok := leadingHintContent(fragment)
+		require.True(t, ok)
+		_, remapDb, err := parsers.DecodeRewriteHint(ctx, content)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"src": "dst"}, remapDb)
+	}
+}
+
+func TestRewriteSQLFromMaterializedPolicy(t *testing.T) {
+	ctx := context.Background()
+	outer := `/*+ {"rewrites":{"src.t":["select * from src.t where role_keep = 1","select * from src.t where session_keep = 1"]},"remapdb":{"src":"session_db"}} */ prepare s from 'select 1'`
+	inner := `/*+ {"rewrites":{"src.t":"select * from src.t where inline_keep = 1"},"remapdb":{"src":"inline_db"}} */ select * from src.t`
+
+	rewritten, err := rewriteSQLFromMaterializedPolicy(ctx, outer, inner)
+	require.NoError(t, err)
+	content, ok := leadingHintContent(rewritten)
+	require.True(t, ok)
+	chains, remapDb, err := parsers.DecodeRewriteHint(ctx, content)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"select * from src.t where role_keep = 1",
+		"select * from src.t where session_keep = 1",
+		"select * from src.t where inline_keep = 1",
+	}, chains["src.t"])
+	require.Equal(t, "inline_db", remapDb["src"])
+}
+
 func TestValidateRewriteRuleSQL(t *testing.T) {
 	ctx := context.Background()
 
@@ -601,6 +818,283 @@ func TestHandleAlterRoleAddRuleRejectsInvalidRuleSQLBeforeWriting(t *testing.T) 
 		require.NotContains(t, strings.ToLower(sql), "delete from mo_catalog.mo_role_rule")
 		require.NotContains(t, strings.ToLower(sql), "insert into mo_catalog.mo_role_rule")
 	}
+}
+
+// TestParseSessionRewrites covers the remap_rewrites value parser: the bare map
+// form, the wrapped {"rewrites": {...}} form, empty/blank input, and malformed
+// JSON.
+func TestParseSessionRewrites(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("empty", func(t *testing.T) {
+		rules, remap, err := parseSessionRewrites(ctx, "")
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+		require.Len(t, remap, 0)
+	})
+	t.Run("blank", func(t *testing.T) {
+		rules, remap, err := parseSessionRewrites(ctx, "   ")
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+		require.Len(t, remap, 0)
+	})
+	t.Run("bare map", func(t *testing.T) {
+		rules, remap, err := parseSessionRewrites(ctx, `{"db1.t1": "select a, b from db2.t1"}`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"db1.t1": "select a, b from db2.t1"}, rules)
+		require.Len(t, remap, 0)
+	})
+	t.Run("wrapped rewrites form", func(t *testing.T) {
+		rules, remap, err := parseSessionRewrites(ctx, `{"rewrites": {"db1.t1": "select a from db2.t1"}}`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"db1.t1": "select a from db2.t1"}, rules)
+		require.Len(t, remap, 0)
+	})
+	t.Run("remapdb only", func(t *testing.T) {
+		rules, remap, err := parseSessionRewrites(ctx, `{"remapdb": {"dbxxx": "dbyyy"}}`)
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+		require.Equal(t, map[string]string{"dbxxx": "dbyyy"}, remap)
+	})
+	t.Run("rewrites and remapdb", func(t *testing.T) {
+		rules, remap, err := parseSessionRewrites(ctx,
+			`{"rewrites": {"db.t1": "select * from db.t1"}, "remapdb": {"dbxxx": "dbyyy"}}`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"db.t1": "select * from db.t1"}, rules)
+		require.Equal(t, map[string]string{"dbxxx": "dbyyy"}, remap)
+	})
+	t.Run("two keys", func(t *testing.T) {
+		rules, _, err := parseSessionRewrites(ctx, `{"db.t1": "select * from t1", "db.t2": "select * from t2"}`)
+		require.NoError(t, err)
+		require.Len(t, rules, 2)
+	})
+	t.Run("malformed json", func(t *testing.T) {
+		_, _, err := parseSessionRewrites(ctx, `{not json}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid remap_rewrites value")
+	})
+	t.Run("array (chain) rewrite value is rejected", func(t *testing.T) {
+		// A table must map to a single SQL string, not a list.
+		_, _, err := parseSessionRewrites(ctx,
+			`{"rewrites": {"db.t": ["select * from db.t", "select * from db.t where x > 0"]}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be a single SQL string")
+	})
+	t.Run("rewrite value of wrong type is rejected", func(t *testing.T) {
+		_, _, err := parseSessionRewrites(ctx, `{"rewrites": {"db.t": 123}}`)
+		require.Error(t, err)
+	})
+}
+
+// TestExtractInlineRemapDb covers reading back remapdb from the merged hint,
+// which must stay correct even when rewrites are present in array (chain) form.
+func TestExtractInlineRemapDb(t *testing.T) {
+	t.Run("remapdb alongside chained rewrites", func(t *testing.T) {
+		remap := extractInlineRemapDb(
+			`/*+ {"rewrites": {"db.t": ["s1", "s2"]}, "remapdb": {"dbx": "dby"}} */ select * from dbx.t`)
+		require.Equal(t, "dby", remap["dbx"])
+	})
+	t.Run("no remapdb", func(t *testing.T) {
+		require.Nil(t, extractInlineRemapDb(`/*+ {"rewrites": {"db.t": "s1"}} */ select 1`))
+	})
+	t.Run("no hint", func(t *testing.T) {
+		require.Nil(t, extractInlineRemapDb(`select 1`))
+	})
+}
+
+// TestValidateRemapRewrites covers the SET-time validation of the
+// remap_rewrites session variable.
+func TestValidateRemapRewrites(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("empty is valid", func(t *testing.T) {
+		require.NoError(t, validateRemapRewrites(ctx, ""))
+	})
+	t.Run("valid bare map", func(t *testing.T) {
+		require.NoError(t, validateRemapRewrites(ctx, `{"db.t1": "select a from db2.t1"}`))
+	})
+	t.Run("valid wrapped form", func(t *testing.T) {
+		require.NoError(t, validateRemapRewrites(ctx, `{"rewrites": {"db.t1": "select a from db2.t1"}}`))
+	})
+	t.Run("non-string rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, int64(1))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be a string")
+	})
+	t.Run("malformed json rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{not json}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid remap_rewrites value")
+	})
+	t.Run("non-select rule rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"db.t1": "delete from t1"}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "only accept SELECT-like statements")
+	})
+	t.Run("empty key rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"  ": "select 1"}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "table key must not be empty")
+	})
+	t.Run("unqualified key rejected (issue #25188)", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"t": "select * from t where i < 10"}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be qualified as database.table")
+	})
+	t.Run("over-qualified key rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"a.b.c": "select 1"}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be qualified as database.table")
+	})
+	t.Run("empty db part rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{".t": "select 1"}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be qualified as database.table")
+	})
+	t.Run("valid remapdb multi", func(t *testing.T) {
+		require.NoError(t, validateRemapRewrites(ctx, `{"remapdb": {"a": "b", "x": "y"}}`))
+	})
+	t.Run("remapdb invalid identifier rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"remapdb": {"a.b": "c"}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "valid identifiers")
+	})
+	t.Run("remapdb chaining rejected (x->y, y->z)", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"remapdb": {"x": "y", "y": "z"}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must not be both a source and a destination")
+	})
+	t.Run("remapdb self-map rejected (x->x)", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"remapdb": {"x": "x"}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must not be both a source and a destination")
+	})
+	t.Run("remapdb system database source rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"remapdb": {"mysql": "y"}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must not remap a system database")
+	})
+	t.Run("remapdb mo_ prefix destination rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"remapdb": {"x": "mo_secret"}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must not remap a system database")
+	})
+	t.Run("remapdb multiple sources to one dest allowed", func(t *testing.T) {
+		require.NoError(t, validateRemapRewrites(ctx, `{"remapdb": {"a": "z", "b": "z"}}`))
+	})
+}
+
+// TestLeadingHintContent covers extraction of the inner content of a leading
+// /*+ ... */ hint.
+func TestLeadingHintContent(t *testing.T) {
+	cases := []struct {
+		name   string
+		sql    string
+		want   string
+		wantOk bool
+	}{
+		{"plus hint", `/*+ {"rewrites": {}} */ select 1`, ` {"rewrites": {}} `, true},
+		{"bang plus hint", `/*!+ {"a":1} */ select 1`, ` {"a":1} `, true},
+		{"leading spaces", "  \n/*+ {} */ select 1", " {} ", true},
+		{"no hint", "select 1", "", false},
+		{"plain comment not a hint", "/* normal */ select 1", "", false},
+		{"unterminated", "/*+ {oops select 1", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := leadingHintContent(c.sql)
+			require.Equal(t, c.wantOk, ok)
+			if c.wantOk {
+				require.Equal(t, c.want, got)
+			}
+		})
+	}
+}
+
+// TestExtractInlineRewrites covers pulling rewrite rules out of an inline hint.
+func TestExtractInlineRewrites(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("no hint", func(t *testing.T) {
+		rules, remap, err := extractInlineRewrites(ctx, "select * from t")
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+		require.Len(t, remap, 0)
+	})
+	t.Run("non-json hint ignored", func(t *testing.T) {
+		rules, remap, err := extractInlineRewrites(ctx, "/*+ NO_INDEX(t) */ select * from t")
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+		require.Len(t, remap, 0)
+	})
+	t.Run("rewrites hint (single string value)", func(t *testing.T) {
+		rules, _, err := extractInlineRewrites(ctx, `/*+ {"rewrites": {"db.t1": "select a from db.t1"}} */ select * from db.t1`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"db.t1": "select a from db.t1"}, rules)
+	})
+	t.Run("array (chain) value rejected: user input must be a string", func(t *testing.T) {
+		_, _, err := extractInlineRewrites(ctx, `/*+ {"rewrites": {"db.t1": ["select a from db.t1", "select a from db.t1 where a > 0"]}} */ select * from db.t1`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be a single SQL string")
+	})
+	t.Run("object value rejected", func(t *testing.T) {
+		_, _, err := extractInlineRewrites(ctx, `/*+ {"rewrites": {"db.t1": {"x": "y"}}} */ select * from db.t1`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be a single SQL string")
+	})
+	t.Run("remapdb hint", func(t *testing.T) {
+		_, remap, err := extractInlineRewrites(ctx, `/*+ {"remapdb": {"dbxxx": "dbyyy"}} */ select * from dbxxx.t`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"dbxxx": "dbyyy"}, remap)
+	})
+	t.Run("malformed json hint is deferred to the parser (no error here)", func(t *testing.T) {
+		// extractInlineRewrites only rejects array/object values; other parse
+		// problems are left to AddRewriteHints so the error is reported there.
+		rules, remap, err := extractInlineRewrites(ctx, `/*+ {not json} */ select 1`)
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+		require.Len(t, remap, 0)
+	})
+}
+
+// TestFormatRewriteHintChains verifies that a single-layer chain is emitted as
+// a plain string (backward compatible) and a multi-layer chain is emitted as an
+// ordered JSON array (innermost first, outermost last).
+func TestFormatRewriteHintChains(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("single layer is a string", func(t *testing.T) {
+		hint, err := formatRewriteHintChains(ctx, map[string][]string{
+			"db.t1": {"select * from db.t1 where a > 1"},
+		}, nil)
+		require.NoError(t, err)
+		require.Contains(t, hint, `"db.t1":"select * from db.t1 where a > 1"`)
+		require.NotContains(t, hint, "[")
+	})
+
+	t.Run("multi layer is an ordered array", func(t *testing.T) {
+		hint, err := formatRewriteHintChains(ctx, map[string][]string{
+			"db.t1": {"role_sql", "session_sql", "inline_sql"},
+		}, nil)
+		require.NoError(t, err)
+		require.Contains(t, hint, `"db.t1":["role_sql","session_sql","inline_sql"]`)
+	})
+
+	t.Run("remapdb included", func(t *testing.T) {
+		hint, err := formatRewriteHintChains(ctx, map[string][]string{
+			"db.t1": {"select * from db.t1"},
+		}, map[string]string{"dbxxx": "dbyyy"})
+		require.NoError(t, err)
+		require.Contains(t, hint, `"remapdb":{"dbxxx":"dbyyy"}`)
+	})
+
+	t.Run("empty chain skipped", func(t *testing.T) {
+		hint, err := formatRewriteHintChains(ctx, map[string][]string{
+			"db.t1": {},
+		}, nil)
+		require.NoError(t, err)
+		require.Contains(t, hint, `"rewrites":{}`)
+	})
 }
 
 func TestHandleAlterRoleAddRuleWritesValidRuleAndInvalidatesCache(t *testing.T) {

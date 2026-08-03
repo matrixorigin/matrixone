@@ -83,6 +83,9 @@ func MergeSortBatches(
 	case types.T_date:
 		ds := &fixedDataSlice[types.Date]{getFixedCols[types.Date](batches, sortKeyIdx)}
 		merge = newMerge(sort.GenericLess[types.Date], ds, nulls)
+	case types.T_year:
+		ds := &fixedDataSlice[types.MoYear]{getFixedCols[types.MoYear](batches, sortKeyIdx)}
+		merge = newMerge(sort.GenericLess[types.MoYear], ds, nulls)
 	case types.T_datetime:
 		ds := &fixedDataSlice[types.Datetime]{getFixedCols[types.Datetime](batches, sortKeyIdx)}
 		merge = newMerge(sort.GenericLess[types.Datetime], ds, nulls)
@@ -101,10 +104,14 @@ func MergeSortBatches(
 	case types.T_decimal128:
 		ds := &fixedDataSlice[types.Decimal128]{getFixedCols[types.Decimal128](batches, sortKeyIdx)}
 		merge = newMerge(sort.Decimal128Less, ds, nulls)
+	case types.T_decimal256:
+		ds := &fixedDataSlice[types.Decimal256]{getFixedCols[types.Decimal256](batches, sortKeyIdx)}
+		merge = newMerge(sort.Decimal256Less, ds, nulls)
 	case types.T_uuid:
 		ds := &fixedDataSlice[types.Uuid]{getFixedCols[types.Uuid](batches, sortKeyIdx)}
 		merge = newMerge(sort.UuidLess, ds, nulls)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_datalink:
 		ds := &varlenaDataSlice{getVarlenaCols(batches, sortKeyIdx)}
 		merge = newMerge(sort.GenericLess[string], ds, nulls)
 	case types.T_Rowid:

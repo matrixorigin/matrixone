@@ -88,6 +88,14 @@ func ChangeColumn(
 		return false, err
 	}
 
+	if oldColName != newColName {
+		sqls, err := handleAlterRenameColumnWithPluginHooks(tableDef, oldColName, newColName)
+		if err != nil {
+			return false, err
+		}
+		alterCtx.UpdateSqls = append(alterCtx.UpdateSqls, sqls...)
+	}
+
 	updateClusterByInTableDef(ctx, tableDef, newColName, oldColName)
 
 	delete(alterCtx.alterColMap, oldColName)
@@ -122,6 +130,7 @@ func buildColumnAndConstraint(
 
 	newCol := &ColDef{
 		ColId:      oldCol.ColId,
+		Seqnum:     oldCol.Seqnum,
 		Primary:    oldCol.Primary,
 		ClusterBy:  oldCol.ClusterBy,
 		Name:       newColName,

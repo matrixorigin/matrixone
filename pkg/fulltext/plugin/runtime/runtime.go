@@ -88,6 +88,9 @@ func (CatalogHooks) SupportedVectorTypes() []types.T { return nil }
 // SupportedPrimaryKeyTypes: fulltext imposes no PK-type constraint.
 func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return nil }
 
+// ValidQuantization — full-text indexes have no quantization, so nothing to gate.
+func (CatalogHooks) ValidQuantization(_, _ string) error { return nil }
+
 // SupportedOpTypes — fulltext has no metric/op-type concept.
 // SupportedIncludeColumnTypes: this index has no INCLUDE-column support.
 func (CatalogHooks) SupportedIncludeColumnTypes() []types.T { return nil }

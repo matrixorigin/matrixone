@@ -15,8 +15,9 @@
 package common
 
 import (
+	"cmp"
 	"io"
-	"sort"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -44,8 +45,8 @@ func (intervals *ClosedIntervals) GetMin() uint64 {
 }
 func (intervals *ClosedIntervals) TryMerge(o *ClosedIntervals) {
 	intervals.Intervals = append(intervals.Intervals, o.Intervals...)
-	sort.Slice(intervals.Intervals, func(i, j int) bool {
-		return intervals.Intervals[i].Start < intervals.Intervals[j].Start
+	slices.SortFunc(intervals.Intervals, func(a, b *ClosedInterval) int {
+		return cmp.Compare(a.Start, b.Start)
 	})
 	newIntervals := make([]*ClosedInterval, 0)
 	if len(intervals.Intervals) == 0 {
@@ -222,9 +223,7 @@ func NewClosedIntervalsBySlice(array []uint64) *ClosedIntervals {
 	if len(array) == 0 {
 		return ranges
 	}
-	sort.Slice(array, func(i, j int) bool {
-		return array[i] < array[j]
-	})
+	slices.Sort(array)
 	interval := &ClosedInterval{Start: array[0]}
 	pre := array[0]
 	array = array[1:]

@@ -1605,6 +1605,38 @@ func NewChangesHandlerWithCheckpointRange(
 	)
 }
 
+// NewChangesHandlerWithCheckpointRangeRecovery rebuilds CollectChanges(start,
+// end) from checkpoint metadata using range-aware object selection while
+// preserving CDC/checkpoint recovery merge semantics.
+func NewChangesHandlerWithCheckpointRangeRecovery(
+	ctx context.Context,
+	tid uint64,
+	sid string,
+	checkpoints []*checkpoint.CheckpointEntry,
+	start, end types.TS,
+	skipDeletes bool,
+	maxRow uint32,
+	primarySeqnum int,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (changeHandle *ChangeHandler, err error) {
+	return newChangesHandlerWithCheckpointEntries(
+		ctx,
+		tid,
+		sid,
+		checkpoints,
+		start,
+		end,
+		skipDeletes,
+		maxRow,
+		primarySeqnum,
+		mp,
+		fs,
+		checkpointObjectSelectionRange,
+		true,
+	)
+}
+
 // NewChangesHandlerWithPartitionStateRange rebuilds CollectChanges(start, end)
 // from the partition state visible at the range end snapshot.
 //
@@ -2489,6 +2521,8 @@ func appendFromEntry(src, vec *vector.Vector, offset int, mp *mpool.MPool) {
 			val = vector.GetFixedAtNoTypeCheck[types.Decimal64](src, offset)
 		case types.T_decimal128:
 			val = vector.GetFixedAtNoTypeCheck[types.Decimal128](src, offset)
+		case types.T_decimal256:
+			val = vector.GetFixedAtNoTypeCheck[types.Decimal256](src, offset)
 		case types.T_uuid:
 			val = vector.GetFixedAtNoTypeCheck[types.Uuid](src, offset)
 		case types.T_float32:
@@ -2497,6 +2531,8 @@ func appendFromEntry(src, vec *vector.Vector, offset int, mp *mpool.MPool) {
 			val = vector.GetFixedAtNoTypeCheck[float64](src, offset)
 		case types.T_date:
 			val = vector.GetFixedAtNoTypeCheck[types.Date](src, offset)
+		case types.T_year:
+			val = vector.GetFixedAtNoTypeCheck[types.MoYear](src, offset)
 		case types.T_time:
 			val = vector.GetFixedAtNoTypeCheck[types.Time](src, offset)
 		case types.T_datetime:
@@ -2512,7 +2548,9 @@ func appendFromEntry(src, vec *vector.Vector, offset int, mp *mpool.MPool) {
 		case types.T_Blockid:
 			val = vector.GetFixedAtNoTypeCheck[types.Blockid](src, offset)
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-			types.T_array_float32, types.T_array_float64, types.T_datalink:
+			types.T_array_float32, types.T_array_float64,
+			types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+			types.T_datalink, types.T_geometry, types.T_geometry32:
 			val = src.GetBytesAt(offset)
 		default:
 			//return vector.ErrVecTypeNotSupport

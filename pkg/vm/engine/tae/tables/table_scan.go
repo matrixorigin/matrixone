@@ -80,8 +80,10 @@ TombstoneRangeScanByObject scans the an object's tombstones committed in the ran
 Since the returned batch must have accruate ts for each row, we need collect the data from appendable objects.
 
 Targets:
-1. CNCreated entries where start <= CreatedAt <= end
-2. Appendable entries where x <= CreatedAt <= end, where x is the first appendable entry with CreatedAt < start
+ 1. CNCreated entries where start <= CreatedAt <= end
+ 2. Appendable entries whose catalog lifetime can overlap the range. All live
+    appendable entries created before end remain candidates because their rows
+    can commit out of object creation order.
 */
 func TombstoneRangeScanByObject(
 	ctx context.Context,
@@ -94,15 +96,16 @@ func TombstoneRangeScanByObject(
 	tableEntry.WaitTombstoneObjectCommitted(end)
 	it := tableEntry.MakeTombstoneObjectIt()
 	defer it.Release()
-	earlybreak := false
+	// CreatedAt orders catalog publication, not the commit timestamps of rows
+	// appended later. Concurrent flushes can populate multiple appendable
+	// tombstone objects and commit them out of creation order, so an older
+	// object can still contain deletes in [start, end]. Do not stop the scan
+	// solely because an object's catalog lifetime precedes start.
 	for ok := it.Last(); ok; ok = it.Prev() {
-		if earlybreak {
-			break
-		}
-
 		tombstone := it.Item()
-		// we only check the created version of the object.
-		if tombstone.HasDropIntent() {
+		if tombstone.IsCEntry() && tombstone.HasDCounterpart() && tombstone.GetNextVersion().HasDropCommitted() {
+			// The dropped counterpart owns the persisted appendable tombstone data.
+			// Scanning both versions duplicates the same committed delete rows.
 			continue
 		}
 
@@ -111,11 +114,21 @@ func TombstoneRangeScanByObject(
 				// committing create object is excluded here
 				continue
 			}
-			// first committed appendable object with CreatedAt < start, stop at next round
-			if tombstone.CreatedAt.LT(&start) {
-				earlybreak = true
+			if tombstone.DeletedAt.Equal(&txnif.UncommitTS) {
+				// Its C counterpart remains visible until the drop commits.
+				continue
+			}
+			if tombstone.HasDropCommitted() {
+				deleteAt := tombstone.GetDeleteAt()
+				if tombstone.CreatedAt.GT(&end) || deleteAt.LT(&start) {
+					continue
+				}
 			}
 		} else {
+			// we only check the created version of the object.
+			if tombstone.HasDropIntent() {
+				continue
+			}
 			if !tombstone.ObjectStats.GetCNCreated() {
 				continue
 			}

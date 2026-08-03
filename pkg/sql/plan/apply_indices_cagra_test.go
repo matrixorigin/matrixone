@@ -52,6 +52,7 @@ func cagraScanNode() *plan.Node {
 // l2_distance(col, vec_lit) shape — matches what buildVectorSortContext
 // produces in the planner for the prepare* path.
 func cagraVecCtx(scanNode *plan.Node) *vectorSortContext {
+	limit := makePlan2Uint64ConstExprWithType(10)
 	return &vectorSortContext{
 		distFnExpr: &plan.Function{
 			Func: &ObjectRef{ObjName: "l2_distance"},
@@ -66,7 +67,9 @@ func cagraVecCtx(scanNode *plan.Node) *vectorSortContext {
 				},
 			},
 		},
-		scanNode: scanNode,
+		scanNode:    scanNode,
+		limit:       DeepCopyExpr(limit),
+		resultLimit: limit,
 	}
 }
 
@@ -376,8 +379,9 @@ func TestApplyIndicesForSortUsingCagra_Success(t *testing.T) {
 			Typ:  plan.Type{Id: int32(types.T_float64)},
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
 		},
-		limit:      &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
-		rankOption: &plan.RankOption{Mode: "pre"},
+		limit:       &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
+		resultLimit: makePlan2Uint64ConstExprWithType(10),
+		rankOption:  &plan.RankOption{Mode: "pre"},
 	}
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
 	mti := &MultiTableIndex{
@@ -548,8 +552,9 @@ func TestApplyIndicesForSortUsingCagra_RichPushdown(t *testing.T) {
 		},
 		// Constant limit + non-empty FilterList → triggers the over-fetch
 		// numeric branch (lines that scale the limit by an over-fetch factor).
-		limit:      &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 5}}}},
-		rankOption: &plan.RankOption{Mode: "pre"},
+		limit:       &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 5}}}},
+		resultLimit: makePlan2Uint64ConstExprWithType(5),
+		rankOption:  &plan.RankOption{Mode: "pre"},
 	}
 
 	// IndexAlgoParams declares "price" as INCLUDE; ensure both metaDef and
@@ -654,8 +659,9 @@ func TestApplyIndicesForSortUsingCagra_Success_WithFiltersOverFetch(t *testing.T
 		},
 		// Non-Lit limit forces the "DeepCopyExpr(limit)" branch in the
 		// over-fetch code path.
-		limit:      &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{}}},
-		rankOption: &plan.RankOption{Mode: "pre"},
+		limit:       &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{}}},
+		resultLimit: &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{}}},
+		rankOption:  &plan.RankOption{Mode: "pre"},
 	}
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
 	mti := &MultiTableIndex{

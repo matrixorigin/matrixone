@@ -16,50 +16,83 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 )
 
 const (
-	BootstrapInterval = time.Millisecond * 200
-	BootstrapTimeout  = time.Minute * 5
+	BootstrapInterval       = time.Millisecond * 200
+	BootstrapTimeout        = time.Minute * 5
+	bootstrapRequestTimeout = time.Second * 3
 )
 
-func (h *handler) bootstrap(ctx context.Context) {
-	ticker := time.NewTicker(time.Millisecond * 200)
+// bootstrap retries until the task-table credentials are available. It returns
+// nil on success, the parent cancellation on cancellation, or a deadline error
+// together with the last HAKeeper error when the bootstrap window expires.
+func (h *handler) bootstrap(ctx context.Context) error {
+	return h.bootstrapWithTimeout(ctx, BootstrapInterval, BootstrapTimeout)
+}
+
+func (h *handler) bootstrapWithTimeout(
+	ctx context.Context,
+	interval time.Duration,
+	timeout time.Duration,
+) error {
+	ctx, cancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseProxyBootstrap)
+	defer cancel()
+
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	retry := 0
 	getClient := func() util.HAKeeperClient {
 		return h.haKeeperClient
 	}
-	var state pb.CheckerState
-	var err error
-	for retry < int(BootstrapTimeout/BootstrapInterval) {
+	var lastErr error
+	for {
 		select {
 		case <-ticker.C:
-			func(ctx context.Context) {
-				ctx, cancel := context.WithTimeoutCause(ctx, time.Second*3, moerr.CauseProxyBootstrap)
-				defer cancel()
-				state, err = h.haKeeperClient.GetClusterState(ctx)
-				if err != nil {
-					panic(moerr.AttachCause(ctx, err))
-				}
-			}(ctx)
+			requestCtx, requestCancel := context.WithTimeoutCause(
+				ctx,
+				bootstrapRequestTimeout,
+				moerr.CauseProxyBootstrap,
+			)
+			state, err := h.haKeeperClient.GetClusterState(requestCtx)
+			if err != nil {
+				lastErr = moerr.AttachCause(requestCtx, err)
+			} else {
+				lastErr = nil
+			}
+			requestCancel()
+
+			if ctx.Err() != nil {
+				return bootstrapContextError(ctx, lastErr)
+			}
+			if err != nil {
+				continue
+			}
 			if state.TaskTableUser.GetUsername() != "" && state.TaskTableUser.GetPassword() != "" {
 				db_holder.SetSQLWriterDBUser(db_holder.MOLoggerUser, state.TaskTableUser.GetPassword())
 				db_holder.SetSQLWriterDBAddressFunc(util.AddressFunc(h.config.UUID, getClient))
 				h.sqlWorker.SetSQLUser(SQLUsername, state.TaskTableUser.GetPassword())
 				h.sqlWorker.SetAddressFn(util.AddressFunc(h.config.UUID, getClient))
-				return
+				return nil
 			}
 		case <-ctx.Done():
-			return
+			return bootstrapContextError(ctx, lastErr)
 		}
-		retry += 1
 	}
-	panic("proxy bootstrap failed")
+}
+
+func bootstrapContextError(ctx context.Context, lastErr error) error {
+	err := ctx.Err()
+	if cause := context.Cause(ctx); cause != nil && !errors.Is(err, cause) {
+		err = errors.Join(err, cause)
+	}
+	if errors.Is(err, context.DeadlineExceeded) && lastErr != nil {
+		err = errors.Join(err, lastErr)
+	}
+	return err
 }

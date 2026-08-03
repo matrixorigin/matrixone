@@ -358,7 +358,6 @@ func (w *CNS3Writer) FillBlockInfoBat() (*batch.Batch, error) {
 
 func AllocCNS3ResultBat(
 	isTombstone bool,
-	isMemoryTable bool,
 ) *batch.Batch {
 
 	var (
@@ -368,10 +367,7 @@ func AllocCNS3ResultBat(
 		blockInfoBat *batch.Batch
 	)
 
-	if isMemoryTable {
-		attrs = []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-		attrTypes = []types.Type{types.T_int16.ToType(), types.T_text.ToType(), types.T_binary.ToType()}
-	} else if !isTombstone {
+	if !isTombstone {
 		attrs = []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
 		attrTypes = []types.Type{types.T_text.ToType(), types.T_binary.ToType()}
 	} else {
@@ -394,7 +390,7 @@ func (w *CNS3Writer) ResetBlockInfoBat() {
 	if w.blockInfoBat != nil {
 		w.blockInfoBat.CleanOnlyData()
 	} else {
-		w.blockInfoBat = AllocCNS3ResultBat(w.isTombstone, false)
+		w.blockInfoBat = AllocCNS3ResultBat(w.isTombstone)
 	}
 }
 
@@ -443,29 +439,5 @@ func SortByKey(
 	if needSort {
 		return bat.Shuffle(sels, m)
 	}
-	return nil
-}
-
-func (w *CNS3Writer) OutputInMemoryData(result *batch.Batch) (err error) {
-	for _, bat := range w.sinker.GetInMemoryData() {
-		if err = vector.AppendFixed(
-			result.Vecs[0], int16(-1), false, w.sinker.GetMPool(),
-		); err != nil {
-			return
-		}
-
-		var buf []byte
-		if buf, err = bat.MarshalBinary(); err != nil {
-			return
-		}
-		if err = vector.AppendBytes(
-			result.Vecs[1], buf, false, w.sinker.GetMPool(),
-		); err != nil {
-			return
-		}
-	}
-
-	result.SetRowCount(result.Vecs[0].Length())
-
 	return nil
 }

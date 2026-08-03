@@ -37,7 +37,7 @@ func readWriteConfilictCheck(entry *catalog.ObjectEntry, ts types.TS, inqueue bo
 	needWait, txnToWait := lastNode.GetLastMVCCNode().NeedWaitCommitting(ts)
 	// TODO:
 	// I don't think we need to wait here any more. `block` and `Object` are
-	// local metadata and never be involved in a 2PC txn. So a prepared `block`
+	// local metadata and never span TN shards. So a prepared `block`
 	// will never be rollbacked
 	if needWait {
 		if inqueue {

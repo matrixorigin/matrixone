@@ -43,6 +43,9 @@ type RemoteCache struct {
 	keyRouter client.KeyRouter[query.CacheKey]
 	// We only init the key router for the first time.
 	init sync.Once
+	// allocator gives validated remote data independent ownership and applies
+	// the destination FileService's existing cache-capacity guard.
+	allocator CacheDataAllocator
 }
 
 var _ IOVectorCache = new(RemoteCache)
@@ -51,6 +54,13 @@ func NewRemoteCache(client client.QueryClient, factory KeyRouterFactory[query.Ca
 	return &RemoteCache{
 		client:           client,
 		keyRouterFactory: factory,
+		allocator:        DefaultCacheDataAllocator(),
+	}
+}
+
+func (r *RemoteCache) setAllocator(allocator CacheDataAllocator) {
+	if allocator != nil {
+		r.allocator = allocator
 	}
 }
 
@@ -114,26 +124,68 @@ func (r *RemoteCache) Read(ctx context.Context, vector *IOVector) error {
 		req.GetCacheDataRequest = &query.GetCacheDataRequest{
 			RequestCacheKey: key,
 		}
+		requestedIndexes := make(map[int]struct{}, len(key))
+		for _, cacheKey := range key {
+			requestedIndexes[int(cacheKey.Index)] = struct{}{}
+		}
 
 		func(ctx context.Context) {
 			ctx, cancel := context.WithTimeoutCause(ctx, time.Second*2, moerr.CauseRemoteCacheRead)
 			defer cancel()
 			resp, err := r.client.SendMessage(ctx, target, req)
-			if err != nil {
+			if err != nil || resp == nil {
 				// Do not return error here to read data from local storage.
 				return
 			}
 			defer r.client.Release(resp)
 			if resp.GetCacheDataResponse != nil {
+				seen := make(map[int]struct{}, len(requestedIndexes))
 				for _, cacheData := range resp.GetCacheDataResponse.ResponseCacheData {
-					numRead++
+					if cacheData == nil || cacheData.Index < 0 {
+						continue
+					}
 					idx := int(cacheData.Index)
+					if idx >= len(vector.Entries) {
+						continue
+					}
+					if _, ok := requestedIndexes[idx]; !ok {
+						continue
+					}
+					if _, ok := seen[idx]; ok {
+						continue
+					}
 					if cacheData.Hit {
-						vector.Entries[idx].done = true
-						vector.Entries[idx].CachedData = &Bytes{bytes: cacheData.Data}
-						vector.Entries[idx].fromCache = r
+						entry := &vector.Entries[idx]
+						expectedSize := entry.Size
+						if entry.CachedDataSize > 0 {
+							expectedSize = entry.CachedDataSize
+						}
+						if int64(len(cacheData.Data)) != expectedSize {
+							continue
+						}
+
+						var data fscache.Data
+						if entry.ValidateCacheData == nil {
+							data = NewBytes(cacheData.Data)
+						} else {
+							// The RPC response is released below. Give validated cache
+							// representations independent storage before sealing them.
+							owned := r.allocator.CopyToCacheData(ctx, cacheData.Data)
+							validated, validateErr := entry.ValidateCacheData(owned)
+							if validateErr != nil || validated == nil {
+								owned.Release()
+								continue
+							}
+							data = validated
+						}
+
+						entry.done = true
+						entry.CachedData = data
+						entry.fromCache = r
 						numHit++
 					}
+					seen[idx] = struct{}{}
+					numRead++
 				}
 			}
 		}(ctx)
@@ -162,27 +214,32 @@ func (r *RemoteCache) Close(ctx context.Context) {
 func HandleRemoteRead(
 	ctx context.Context, fs FileService, req *query.Request, resp *query.WrappedResponse,
 ) error {
-	if req.GetCacheDataRequest == nil {
+	if req == nil || req.GetCacheDataRequest == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
-	first := req.GetCacheDataRequest.RequestCacheKey[0].CacheKey
-	if first == nil { // We cannot get the first one.
-		return nil
+	keys := req.GetCacheDataRequest.RequestCacheKey
+	if len(keys) == 0 || keys[0] == nil || keys[0].CacheKey == nil {
+		return moerr.NewInternalError(ctx, "bad request")
 	}
+	first := keys[0].CacheKey
 
 	ioVec := &IOVector{
 		FilePath: first.Path,
 	}
-	ioVec.Entries = make([]IOEntry, len(req.GetCacheDataRequest.RequestCacheKey))
-	for i, k := range req.GetCacheDataRequest.RequestCacheKey {
+	ioVec.Entries = make([]IOEntry, len(keys))
+	for i, k := range keys {
+		if k == nil || k.CacheKey == nil || k.CacheKey.Path != first.Path {
+			return moerr.NewInternalError(ctx, "bad request")
+		}
 		ioVec.Entries[i].Offset = k.CacheKey.Offset
 		ioVec.Entries[i].Size = k.CacheKey.Sz
 	}
 	if err := fs.ReadCache(ctx, ioVec); err != nil {
+		ioVec.Release()
 		return err
 	}
-	respData := make([]*query.ResponseCacheData, len(req.GetCacheDataRequest.RequestCacheKey))
-	for i, k := range req.GetCacheDataRequest.RequestCacheKey {
+	respData := make([]*query.ResponseCacheData, len(keys))
+	for i, k := range keys {
 		var data []byte
 		if ioVec.Entries[i].CachedData != nil {
 			data = ioVec.Entries[i].CachedData.Bytes()

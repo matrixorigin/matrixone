@@ -29,7 +29,7 @@ MatrixOne supports multiple installation methods:
 **Step 1: Install mo_ctl tool**
 
 ```bash
-wget https://raw.githubusercontent.com/matrixorigin/mo_ctl_standalone/main/install.sh && sudo -u $(whoami) bash +x ./install.sh
+wget https://raw.githubusercontent.com/matrixorigin/mo_ctl_standalone/main/deploy/local/install.sh && sudo -u $(whoami) bash +x ./install.sh
 ```
 
 **Step 2: Configure deployment mode**
@@ -90,7 +90,7 @@ Build MatrixOne from source for development or customization.
 
 ### Prerequisites
 
-**1. Install Go (version 1.22 required)**
+**1. Install Go (version 1.26.4 or later required)**
 
 Follow the [official Go installation guide](https://go.dev/doc/install).
 
@@ -106,6 +106,10 @@ Install via the [official Git documentation](https://git-scm.com/download).
 
 Download from [MySQL Community Downloads](https://dev.mysql.com/downloads/mysql) and configure environment variables.
 
+**5. Install CMake (required by USearch)**
+
+Install via the [official CMake documentation](https://cmake.org/download).
+
 ### Build Steps
 
 **Step 1: Clone repository**
@@ -118,7 +122,7 @@ cd matrixone
 **Step 2: Prepare Dependencies**
 
 ```bash
-go mod vendor
+make config
 ```
 
 **Step 3: Build MatrixOne**
@@ -199,19 +203,19 @@ After installation, consider the following:
    - See [Password Management](https://docs.matrixorigin.cn/en/latest/MatrixOne/Security/password-mgmt/)
 
 2. **⚠️ Configure Performance (Important)**
-   
+
    **Default cache size is too small for production workloads.** For better query performance, adjust the memory cache configuration:
-   
+
    Edit your configuration file (`launch.toml` or `cn.toml`):
    ```toml
    [fileservice.cache]
    memory-capacity = "8GB"  # Adjust based on available memory
    ```
-   
+
    **Recommended settings:**
    - Development: 2-4GB
    - Production: 8-32GB (depending on workload and available RAM)
-   
+
    📖 **[Complete Configuration Guide →](https://docs.matrixorigin.cn/en/latest/MatrixOne/Reference/System-Parameters/standalone-configuration-settings/)**
 
 3. **Install Python SDK**
@@ -251,7 +255,7 @@ Restart MatrixOne after configuration changes.
 
 ### Build Issues
 
-- Ensure Go version 1.22 is installed: `go version`
+- Ensure Go version 1.26.4 or later is installed: `go version`
 - Verify GCC is available: `gcc --version`
 - Check disk space and memory availability
 
@@ -259,4 +263,3 @@ For more help, visit:
 - [MatrixOne Documentation](https://docs.matrixorigin.cn/en/latest/)
 - [GitHub Issues](https://github.com/matrixorigin/matrixone/issues)
 - [Community Slack](http://matrixoneworkspace.slack.com)
-

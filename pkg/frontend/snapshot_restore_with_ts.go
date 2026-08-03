@@ -23,33 +23,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
-func fkTablesTopoSortWithTS(ctx context.Context, bh BackgroundExec, dbName string, tblName string, ts int64, from, to uint32) (sortedTbls []string, err error) {
+func fkTablesTopoSortWithTS(
+	ctx context.Context,
+	bh BackgroundExec,
+	dbName string,
+	tblName string,
+	ts int64,
+	from,
+	to uint32,
+	tableInfos []*tableInfo,
+) (sortedTbls []string, err error) {
 	newCtx := defines.AttachAccountId(ctx, from)
 	getLogger("").Info(fmt.Sprintf("[%d:%d] start to get fk tables topo sort from account %d", from, ts, from))
-	// get foreign key deps from mo_catalog.mo_foreign_keys
 	fkDeps, err := getFkDepsWithTS(newCtx, bh, dbName, tblName, ts, from, to)
 	if err != nil {
 		return
 	}
-
-	g := toposort{next: make(map[string][]string)}
-	for key, deps := range fkDeps {
-		g.addVertex(key)
-		for _, depTbl := range deps {
-			// exclude self dep
-			if key != depTbl {
-				g.addEdge(depTbl, key)
-			}
-		}
-	}
-	sortedTbls, err = g.sort()
-	return
+	return topoSortRestoreFkDeps(ctx, fkDeps, tableInfos)
 }
 
 func getFkDepsWithTS(ctx context.Context, bh BackgroundExec, db string, tbl string, ts int64, from, to uint32) (ans map[string][]string, err error) {
@@ -59,9 +52,9 @@ func getFkDepsWithTS(ctx context.Context, bh BackgroundExec, db string, tbl stri
 	}
 
 	if len(db) > 0 {
-		sql += fmt.Sprintf(" where db_name = '%s'", db)
+		sql += fmt.Sprintf(" where db_name = %s", quoteSQLStringLiteral(db))
 		if len(tbl) > 0 {
-			sql += fmt.Sprintf(" and table_name = '%s'", tbl)
+			sql += fmt.Sprintf(" and table_name = %s", quoteSQLStringLiteral(tbl))
 		}
 	}
 
@@ -205,8 +198,8 @@ func showFullTablesFromTS(ctx context.Context,
 	sql := buildTableInfoListSQL(dbName, tblName, ts, from)
 
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] show full table `%s.%s` sql: %s", from, ts, dbName, tblName, sql))
-	// cols: table name, table type, relkind
-	colsList, err := getStringColsListFromTS(newCtx, bh, sql, from, to, 0, 1, 2)
+	// cols: table name, table type, relkind, view definition
+	colsList, err := getStringColsListFromTS(newCtx, bh, sql, from, to, 0, 1, 2, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -218,6 +211,7 @@ func showFullTablesFromTS(ctx context.Context,
 			tblName: cols[0],
 			typ:     tableType(cols[1]),
 			relKind: cols[2],
+			viewDef: cols[3],
 		}
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] show full table `%s.%s`, get table number `%d`", from, ts, dbName, tblName, len(ans)))
@@ -252,7 +246,7 @@ func getStringColsListFromTS(ctx context.Context, bh BackgroundExec, sql string,
 func getCreateTableSqlFromTS(ctx context.Context, bh BackgroundExec, dbName string, tblName string, ts int64, from, to uint32) (string, error) {
 	getLogger("").Info(fmt.Sprintf("[%d:%d] start to get create table sql: datatabse `%s`, table `%s`", from, ts, dbName, tblName))
 	newCtx := defines.AttachAccountId(ctx, from)
-	sql := fmt.Sprintf("show create table `%s`.`%s`", dbName, tblName)
+	sql := showCreateTableSQL(dbName, tblName)
 	if ts > 0 {
 		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
 	}
@@ -440,7 +434,7 @@ func restoreDatabaseFromTS(
 
 		return
 	} else {
-		createDbSql = fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbName)
+		createDbSql = createDatabaseIfNotExistsSQL(dbName)
 		// create db
 		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to create db: %v, create db sql: %s", restoreAccount, snapshotTs, dbName, createDbSql))
 		if err = bh.Exec(toCtx, createDbSql); err != nil {
@@ -534,12 +528,12 @@ func recreateTableFromTS(
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to restore table: %v, restore timestamp: %d", restoreAccount, snapshotTs, tblInfo.tblName, snapshotTs))
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
-	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
+	if err = bh.Exec(ctx, useDatabaseSQL(tblInfo.dbName)); err != nil {
 		return
 	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to drop table: %v,", restoreAccount, snapshotTs, tblInfo.tblName))
-	if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`", tblInfo.tblName)); err != nil {
+	if err = bh.Exec(ctx, dropTableIfExistsSQL("", tblInfo.tblName)); err != nil {
 		return
 	}
 
@@ -551,7 +545,7 @@ func recreateTableFromTS(
 		}
 	}
 
-	insertIntoSql := fmt.Sprintf(restoreTableDataByTsFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, snapshotTs)
+	insertIntoSql := restoreTableDataByTsSQL(tblInfo.dbName, tblInfo.tblName, snapshotTs)
 	beginTime := time.Now()
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to insert select table: %v, insert sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, insertIntoSql))
 	if err = bh.ExecRestore(ctx, insertIntoSql, restoreAccount, toAccountId); err != nil {
@@ -646,7 +640,6 @@ func restoreViewsFromTS(
 	var (
 		err         error
 		snapshot    *plan.Snapshot
-		stmts       []tree.Statement
 		sortedViews []string
 		oldSnapshot *plan.Snapshot
 	)
@@ -668,7 +661,7 @@ func restoreViewsFromTS(
 	g := toposort{next: make(map[string][]string)}
 	for key, viewEntry := range viewMap {
 		getLogger(ses.GetService()).Info(fmt.Sprintf("[%d:%d] start to restore view: %v", restoreAccount, snapshotTs, viewEntry.tblName))
-		stmts, err = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 1)
+		stmts, err := parseViewCreateSQLForRestore(ctx, viewEntry, 1)
 		if err != nil {
 			return err
 		}
@@ -676,10 +669,15 @@ func restoreViewsFromTS(
 		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
 		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		freeStatements(stmts)
 		if err != nil {
 			getLogger(ses.GetService()).Info(fmt.Sprintf("try to build view %v failed, try to build it again", viewEntry.tblName))
-			stmts, _ = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 0)
+			stmts, err = parseViewCreateSQLForRestore(ctx, viewEntry, 0)
+			if err != nil {
+				return err
+			}
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			freeStatements(stmts)
 			if err != nil {
 				return err
 			}
@@ -687,6 +685,10 @@ func restoreViewsFromTS(
 
 		g.addVertex(key)
 		for _, depView := range compCtx.GetViews() {
+			depView, err = normalizeViewDependencyKey(depView)
+			if err != nil {
+				return err
+			}
 			g.addEdge(depView, key)
 		}
 	}
@@ -704,16 +706,16 @@ func restoreViewsFromTS(
 		if tblInfo, ok := viewMap[key]; ok {
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%d:%d] start to restore view: %v, restore timestamp: %d", restoreAccount, snapshotTs, tblInfo.tblName, snapshot.TS.PhysicalTime))
 
-			if err = bh.Exec(toCtx, "use `"+tblInfo.dbName+"`"); err != nil {
+			if err = bh.Exec(toCtx, useDatabaseSQL(tblInfo.dbName)); err != nil {
 				return err
 			}
 
-			if err = bh.Exec(toCtx, "drop view if exists "+tblInfo.tblName); err != nil {
+			if err = bh.Exec(toCtx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
 				return err
 			}
 
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%d:%d] start to create view: %v, create view sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, tblInfo.createSql))
-			if err = bh.Exec(toCtx, tblInfo.createSql); err != nil {
+			if err = executeViewCreateSQLForRestore(toCtx, bh, tblInfo); err != nil {
 				return err
 			}
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%d:%d] restore view: %v success", restoreAccount, snapshotTs, tblInfo.tblName))

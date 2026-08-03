@@ -1,0 +1,49 @@
+drop database if exists time_window_gapfill_bvt;
+create database time_window_gapfill_bvt;
+use time_window_gapfill_bvt;
+
+create table readings(pump varchar(8), ts datetime, value int);
+insert into readings values
+    ('p1', '2026-01-01 10:00:00', 1),
+    ('p1', '2026-01-01 10:02:00', 3),
+    ('p2', '2026-01-01 11:00:00', 7),
+    ('p3', '2026-01-01 23:59:00', 10),
+    ('p3', '2026-01-02 00:01:00', 30);
+
+select pump, _wstart, _wend, sum(value) as value_sum
+from readings
+group by pump interval(ts, 1, minute) gapfill(partition)
+order by pump, _wstart;
+
+select pump, _wstart, coalesce(count(*), 0) as reading_count
+from readings
+group by pump interval(ts, 1, minute) gapfill(partition) fill(null)
+order by pump, _wstart;
+
+select pump, _wstart, sum(value) as value_sum
+from readings
+group by pump interval(ts, 1, minute) gapfill(partition) fill(value, 99)
+order by pump, _wstart;
+
+select pump, _wstart, sum(value) as value_sum
+from readings
+group by pump interval(ts, 1, minute) gapfill(partition) fill(prev)
+order by pump, _wstart;
+
+select pump, _wstart, sum(value) as value_sum
+from readings
+group by pump interval(ts, 1, minute) gapfill(partition) fill(next)
+order by pump, _wstart;
+
+select pump, _wstart, sum(value) as value_sum
+from readings
+group by pump interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by pump, _wstart;
+
+# Existing FILL(NULL) must not generate absent buckets.
+select pump, _wstart, sum(value) as value_sum
+from readings
+group by pump interval(ts, 1, minute) fill(null)
+order by pump, _wstart;
+
+drop database time_window_gapfill_bvt;

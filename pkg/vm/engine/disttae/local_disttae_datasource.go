@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -145,6 +144,12 @@ type LocalDisttaeDataSource struct {
 		entries     []workspaceDeleteEntry
 		byBlock     map[objectio.Blockid][]workspaceDeleteEntry
 	}
+
+	pStateTombstoneObjects struct {
+		initialized bool
+		index       tombstoneObjectIndex
+		candidates  []int
+	}
 }
 
 type workspaceDeleteEntry struct {
@@ -153,6 +158,11 @@ type workspaceDeleteEntry struct {
 }
 
 const mergeWorkspaceDeleteEntriesThreshold = 1024
+
+// Building the tombstone range index has a fixed per-scan cost. Benchmarks
+// with the QA shape (700 tombstone objects) put its break-even point below 32
+// blocks, so smaller scans retain the allocation-free linear iterator.
+const tombstoneRangeIndexMinBlocks = 32
 
 func (ls *LocalDisttaeDataSource) String() string {
 	blks := make([]*objectio.BlockInfo, ls.rangeSlice.Len())
@@ -337,29 +347,37 @@ func (ls *LocalDisttaeDataSource) sortBlockList() {
 	}
 	ls.rangeSlice = make(objectio.BlockInfoSlice, ls.rangeSlice.Size())
 
+	// compareInit orders uninitialized zone maps before initialized ones and
+	// treats two uninitialized zone maps as equal, so the comparator is a valid
+	// strict weak ordering (unlike a bare min/max compare, which is undefined for
+	// uninitialized zone maps). It returns (result, done): done is false only when
+	// both zone maps are initialized and the caller must compare values.
+	compareInit := func(a, b *blockSortHelper) (int, bool) {
+		ai, bi := a.zm.IsInited(), b.zm.IsInited()
+		if ai && bi {
+			return 0, false
+		}
+		if ai == bi {
+			return 0, true // both uninitialized: equal
+		}
+		if !ai {
+			return -1, true // uninitialized sorts first
+		}
+		return 1, true
+	}
 	if ls.desc {
-		sort.Slice(helper, func(i, j int) bool {
-			zm1 := helper[i].zm
-			if !zm1.IsInited() {
-				return true
+		slices.SortFunc(helper, func(a, b *blockSortHelper) int {
+			if r, done := compareInit(a, b); done {
+				return r
 			}
-			zm2 := helper[j].zm
-			if !zm2.IsInited() {
-				return false
-			}
-			return zm1.CompareMax(zm2) > 0
+			return b.zm.CompareMax(a.zm) // descending by max
 		})
 	} else {
-		sort.Slice(helper, func(i, j int) bool {
-			zm1 := helper[i].zm
-			if !zm1.IsInited() {
-				return true
+		slices.SortFunc(helper, func(a, b *blockSortHelper) int {
+			if r, done := compareInit(a, b); done {
+				return r
 			}
-			zm2 := helper[j].zm
-			if !zm2.IsInited() {
-				return false
-			}
-			return zm1.CompareMin(zm2) < 0
+			return a.zm.CompareMin(b.zm) // ascending by min
 		})
 	}
 
@@ -375,6 +393,9 @@ func (ls *LocalDisttaeDataSource) Close() {
 		ls.pStateRows.insIter.Close()
 		ls.pStateRows.insIter = nil
 	}
+	ls.pStateTombstoneObjects.initialized = false
+	ls.pStateTombstoneObjects.index = tombstoneObjectIndex{}
+	ls.pStateTombstoneObjects.candidates = nil
 }
 
 func (ls *LocalDisttaeDataSource) Next(
@@ -768,10 +789,9 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		if !ls.memPKFilter.Valid() {
 			ls.pStateRows.insIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)
 		} else {
-			ls.pStateRows.insIter = ls.pState.NewPrimaryKeyIter(
+			ls.pStateRows.insIter = ls.pState.NewPrimaryKeyIterWithFilters(
 				ls.memPKFilter.TS,
-				ls.memPKFilter.Op(),
-				ls.memPKFilter.Keys())
+				ls.memPKFilter.Specs())
 		}
 		if summaryBuf != nil {
 			summaryBuf.WriteString(fmt.Sprintf("[PScan] insIter created %v\n", ls.memPKFilter.String()))
@@ -1280,6 +1300,14 @@ func (ls *LocalDisttaeDataSource) getInMemDelIter(
 		ls.memPKFilter == nil || !ls.memPKFilter.Valid() {
 		return ls.pState.NewRowsIter(ls.snapshotTS, bid, true), false
 	}
+	filterSpecs := ls.memPKFilter.Specs()
+	if len(filterSpecs) > 1 {
+		return ls.pState.NewPrimaryKeyDelIterWithFilters(
+			&ls.memPKFilter.TS,
+			bid,
+			filterSpecs,
+		), false
+	}
 
 	inValCnt, ok := ls.memPKFilter.InKind()
 	if !ok {
@@ -1381,27 +1409,37 @@ func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 		return offsets, nil
 	}
 
-	var iter objectio.ObjectIter
-	getTombstone := func() (*objectio.ObjectStats, error) {
-		var err error
-		if iter == nil {
-			if iter, err = ls.pState.NewObjectsIter(
-				ls.snapshotTS, true, true,
-			); err != nil {
-				return nil, err
-			}
+	var (
+		getTombstone func() (*objectio.ObjectStats, error)
+		closeIter    = func() {}
+	)
+	if ls.rangeSlice.Len() >= tombstoneRangeIndexMinBlocks {
+		if err := ls.initPStateTombstoneObjectIndex(); err != nil {
+			return nil, err
 		}
-		if iter.Next() {
-			entry := iter.Entry()
-			return &entry.ObjectStats, nil
+		candidates := ls.pStateTombstoneObjects.index.selectCandidates(
+			bid, ls.pStateTombstoneObjects.candidates,
+		)
+		ls.pStateTombstoneObjects.candidates = candidates
+		statsIter := &indexedObjectStatsIter{
+			index:      &ls.pStateTombstoneObjects.index,
+			candidates: candidates,
 		}
-		return nil, nil
+		getTombstone = statsIter.next
+	} else {
+		iter, err := ls.pState.NewObjectsIter(
+			ls.snapshotTS, true, true,
+		)
+		if err != nil {
+			return nil, err
+		}
+		closeIter = func() {
+			_ = iter.Close()
+		}
+		statsIter := &reusableObjectStatsIter{iter: iter}
+		getTombstone = statsIter.next
 	}
-	defer func() {
-		if iter != nil {
-			iter.Close()
-		}
-	}()
+	defer closeIter()
 
 	// PXU TODO: handle len(offsets) < 10 or 20, 30?
 	if len(offsets) == 1 {
@@ -1446,6 +1484,51 @@ func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 	})
 
 	return offsets, nil
+}
+
+func (ls *LocalDisttaeDataSource) initPStateTombstoneObjectIndex() error {
+	if ls.pStateTombstoneObjects.initialized {
+		return nil
+	}
+	iter, err := ls.pState.NewObjectsIter(ls.snapshotTS, true, true)
+	if err != nil {
+		return err
+	}
+	defer iter.Close()
+
+	objects := make(
+		[]objectio.ObjectStats,
+		0,
+		ls.pState.ApproxTombstoneObjectsNum(),
+	)
+	statsIter := reusableObjectStatsIter{iter: iter}
+	for {
+		stats, err := statsIter.next()
+		if err != nil {
+			return err
+		}
+		if stats == nil {
+			break
+		}
+		objects = append(objects, *stats)
+	}
+	ls.pStateTombstoneObjects.index = newTombstoneObjectIndex(objects)
+	ls.pStateTombstoneObjects.initialized = true
+	return nil
+}
+
+type reusableObjectStatsIter struct {
+	iter    objectio.ObjectIter
+	current objectio.ObjectStats
+}
+
+// next returns stats that remain valid until the next call.
+func (i *reusableObjectStatsIter) next() (*objectio.ObjectStats, error) {
+	if !i.iter.Next() {
+		return nil, nil
+	}
+	i.current = i.iter.Entry().ObjectStats
+	return &i.current, nil
 }
 
 func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {

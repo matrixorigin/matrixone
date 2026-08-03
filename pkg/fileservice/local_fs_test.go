@@ -20,13 +20,29 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestLocalFSStatFileReturnsNonNotExistError(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "file"), []byte("data"), 0644))
+	fs, err := NewLocalFS(ctx, "local", root, DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	_, err = fs.StatFile(ctx, "file/child")
+	require.ErrorIs(t, err, syscall.ENOTDIR)
+}
 
 func TestLocalFS(t *testing.T) {
 
@@ -118,6 +134,38 @@ func TestLocalFS(t *testing.T) {
 		}
 	})
 
+}
+
+func TestLocalDirEntryInfoSkipsMissingEntries(t *testing.T) {
+	info, ok, err := localDirEntryInfo(fakeDirEntryInfo{
+		err: &os.PathError{Op: "lstat", Path: "/tmp/ccTEST.cdtor.c", Err: os.ErrNotExist},
+	})
+	assert.Nil(t, err)
+	assert.False(t, ok)
+	assert.Nil(t, info)
+
+	_, _, err = localDirEntryInfo(fakeDirEntryInfo{err: fs.ErrPermission})
+	assert.ErrorIs(t, err, fs.ErrPermission)
+}
+
+type fakeDirEntryInfo struct {
+	err error
+}
+
+func (f fakeDirEntryInfo) Name() string {
+	return "transient"
+}
+
+func (f fakeDirEntryInfo) IsDir() bool {
+	return false
+}
+
+func (f fakeDirEntryInfo) Type() fs.FileMode {
+	return 0
+}
+
+func (f fakeDirEntryInfo) Info() (fs.FileInfo, error) {
+	return nil, f.err
 }
 
 func BenchmarkLocalFS(b *testing.B) {

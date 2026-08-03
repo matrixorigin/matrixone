@@ -18,7 +18,9 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -30,12 +32,18 @@ import (
 
 var ErrDebugReplay = moerr.NewInternalErrorNoCtx("debug")
 
+type replayAObjectCreateObserver interface {
+	RecordReplayAObjectCreate(id *common.ID, isTombstone bool, ts types.TS)
+}
+
 type replayTxnStore struct {
 	txnbase.NoopTxnStore
-	Cmd      *txnbase.TxnCmd
-	Observer wal.ReplayObserver
-	catalog  *catalog.Catalog
-	ctx      context.Context
+	Cmd            *txnbase.TxnCmd
+	Observer       wal.ReplayObserver
+	catalog        *catalog.Catalog
+	ctx            context.Context
+	preparedTables map[uint64]*catalog.TableEntry
+	preparedTxnID  string
 }
 
 func MakeReplayTxn(
@@ -79,17 +87,58 @@ func (store *replayTxnStore) prepareCommit(txn txnif.AsyncTxn) (err error) {
 		command.SetReplayTxn(txn)
 		store.prepareCmd(command)
 	}
+	store.registerPreparedDMLTables(txn)
 	return
 }
 
 func (store *replayTxnStore) applyCommit(txn txnif.AsyncTxn) (err error) {
 	store.Cmd.ApplyCommit()
+	visibilityTS := txn.GetCommitTS()
+	store.resolvePreparedDMLTables(&visibilityTS)
 	return
 }
 
 func (store *replayTxnStore) applyRollback(txn txnif.AsyncTxn) (err error) {
 	store.Cmd.ApplyRollback()
+	store.resolvePreparedDMLTables(nil)
 	return
+}
+
+func (store *replayTxnStore) registerPreparedDMLTables(txn txnif.AsyncTxn) {
+	dirty := txn.GetMemo().GetDirty()
+	if dirty == nil || dirty.IsEmpty() {
+		return
+	}
+	store.preparedTxnID = txn.GetID()
+	store.preparedTables = make(map[uint64]*catalog.TableEntry, dirty.TableCount())
+	for _, record := range dirty.Tables {
+		db, err := store.catalog.GetDatabaseByID(record.DbID)
+		if err != nil {
+			// The checkpoint-restored catalog may have GCed a database that
+			// an idempotently replayed dirty-table memo still references.
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				continue
+			}
+			panic(err)
+		}
+		table, err := db.GetTableEntryByID(record.ID)
+		if err != nil {
+			// Keep replay idempotent for tables removed by the checkpoint.
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				continue
+			}
+			panic(err)
+		}
+		table.RegisterReplayedPreparedDML(store.preparedTxnID)
+		store.preparedTables[record.ID] = table
+	}
+}
+
+func (store *replayTxnStore) resolvePreparedDMLTables(visibilityTS *types.TS) {
+	for _, table := range store.preparedTables {
+		table.ResolveReplayedPreparedDML(store.preparedTxnID, visibilityTS)
+	}
+	store.preparedTables = nil
 }
 
 func (store *replayTxnStore) prepareRollback(txn txnif.AsyncTxn) (err error) {
@@ -128,17 +177,7 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 	_, sarg, _ := fault.TriggerFault("replay debug log")
 	for _, info := range cmd.Infos {
 		id := info.GetDest()
-		database, err := store.catalog.GetDatabaseByID(id.DbID)
-		if sarg != "" {
-			err = ErrDebugReplay
-		}
-		if err != nil {
-			logutil.Infof("cmd %v\ncatalog: %v", cmd.String(), store.catalog.SimplePPString(3))
-			if err != ErrDebugReplay {
-				panic(err)
-			}
-		}
-		blk, err := database.GetObjectEntryByID(id, cmd.IsTombstone)
+		blk, _, err := store.ensureReplayAObject(id, cmd.IsTombstone, cmd.Ts, observer)
 		if sarg != "" {
 			err = ErrDebugReplay
 		}
@@ -168,17 +207,7 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 
 	for _, info := range cmd.Infos {
 		id := info.GetDest()
-		database, err := store.catalog.GetDatabaseByID(id.DbID)
-		if sarg != "" {
-			err = ErrDebugReplay
-		}
-		if err != nil {
-			logutil.Infof("cmd %v\ncatalog: %v", cmd.String(), store.catalog.SimplePPString(3))
-			if err != ErrDebugReplay {
-				panic(err)
-			}
-		}
-		blk, err := database.GetObjectEntryByID(id, cmd.IsTombstone)
+		blk, _, err := store.ensureReplayAObject(id, cmd.IsTombstone, cmd.Ts, observer)
 		if sarg != "" {
 			err = ErrDebugReplay
 		}
@@ -219,18 +248,8 @@ func (store *replayTxnStore) replayDataCmds(cmd *updates.UpdateCmd, observer wal
 func (store *replayTxnStore) replayAppend(cmd *updates.UpdateCmd, observer wal.ReplayObserver) {
 	appendNode := cmd.GetAppendNode()
 	id := appendNode.GetID()
-	database, err := store.catalog.GetDatabaseByID(id.DbID)
 	_, sarg, _ := fault.TriggerFault("replay debug log")
-	if sarg != "" {
-		err = ErrDebugReplay
-	}
-	if err != nil {
-		logutil.Infof("cmd %v\ncatalog: %v", cmd.String(), store.catalog.SimplePPString(3))
-		if err != ErrDebugReplay {
-			panic(err)
-		}
-	}
-	obj, err := database.GetObjectEntryByID(id, cmd.GetAppendNode().IsTombstone())
+	obj, _, err := store.ensureReplayAObject(id, appendNode.IsTombstone(), replayAppendNodeCreateTS(appendNode), observer)
 	if sarg != "" {
 		err = ErrDebugReplay
 	}
@@ -252,4 +271,55 @@ func (store *replayTxnStore) replayAppend(cmd *updates.UpdateCmd, observer wal.R
 			panic(err)
 		}
 	}
+}
+
+func replayAppendNodeCreateTS(node *updates.AppendNode) types.TS {
+	if txn := node.GetTxn(); txn != nil {
+		return txn.GetCommitTS()
+	}
+	if ts := node.GetCommitTS(); !ts.IsEmpty() {
+		return ts
+	}
+	return node.GetPrepare()
+}
+
+func (store *replayTxnStore) ensureReplayAObject(
+	id *common.ID,
+	isTombstone bool,
+	createHint types.TS,
+	observer wal.ReplayObserver,
+) (obj *catalog.ObjectEntry, created bool, err error) {
+	database, err := store.catalog.GetDatabaseByID(id.DbID)
+	if err != nil {
+		return
+	}
+	obj, err = database.GetObjectEntryByID(id, isTombstone)
+	if err == nil {
+		return
+	}
+	if !moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+		return
+	}
+	table, err := database.GetTableEntryByID(id.TableID)
+	if err != nil {
+		return
+	}
+	stats := objectio.NewObjectStatsWithObjectID(id.ObjectID(), true, isTombstone, false)
+	var factory catalog.ObjectDataFactory
+	if store.catalog.DataFactory != nil {
+		factory = store.catalog.DataFactory.MakeObjectFactory()
+	}
+	obj, err = table.CreateCommittedObject(
+		createHint,
+		&objectio.CreateObjOpt{Stats: stats, IsTombstone: isTombstone},
+		factory,
+	)
+	if err != nil {
+		return
+	}
+	created = true
+	if recorder, ok := observer.(replayAObjectCreateObserver); ok {
+		recorder.RecordReplayAObjectCreate(id, isTombstone, createHint)
+	}
+	return
 }

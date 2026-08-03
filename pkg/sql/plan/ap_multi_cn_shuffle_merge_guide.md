@@ -1,7 +1,5 @@
 # AP Multi-CN Scan, Shuffle, and Merge Guide
 
-Version: upstream/main commit c3b10c30a7fa38c030733eba487d36a060c16623
-
 This guide explains how an AP query is planned and executed across multiple CNs, how each CN collects objects/blocks, and how results are merged. It reflects the current implementation in this repo.
 
 -------------------------------------------------------------------------------
@@ -87,11 +85,11 @@ Step 6: TableScan execution on each CN
 
 Step 7: Shuffle and dispatch during runtime (joins/aggregations)
 - When a plan node requires shuffle, compile constructs shuffle operators:
-  - `shuffle` or `shuffleV2` for data redistribution.
+  - `shuffle` for data redistribution.
   - `shufflebuild` for join build-side runtime filtering.
 - `dispatch` sends batches to local or remote receivers based on shuffle index.
 - Files: `pkg/sql/compile/operator.go`, `pkg/sql/compile/compile.go`,
-  `pkg/sql/colexec/shuffle`, `pkg/sql/colexec/shuffleV2`, `pkg/sql/colexec/dispatch`.
+  `pkg/sql/colexec/shuffle`, `pkg/sql/colexec/dispatch`.
 
 Step 8: Merge results and return to client
 - Remote CNs send batches back via the RemoteRun RPC stream.

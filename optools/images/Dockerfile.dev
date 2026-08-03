@@ -19,15 +19,20 @@ RUN apt-get update && apt-get install -y \
 
 # Set working directory
 WORKDIR /matrixone
+ENV GOWORK=off
 
-# Pre-download dependencies and generate vendor (this layer is cached)
+# Pre-download dependencies (this layer is cached).
 # Copy only go.mod and go.sum first for better caching
-# If go.mod/go.sum don't change, this layer (including vendor) will be cached
+# If go.mod/go.sum don't change, this layer will be cached
 # and won't re-download dependencies, significantly reducing build time
 COPY go.mod go.sum ./
 RUN go env -w GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy/,https://goproxy.io,direct && \
+    module_files="$(sha256sum go.mod go.sum)" && \
     go mod download && \
-    go mod vendor
+    if [ "$module_files" != "$(sha256sum go.mod go.sum)" ]; then \
+        echo "go mod download changed go.mod/go.sum; run make mod-tidy"; \
+        exit 1; \
+    fi
 
 # Copy build infrastructure (Makefile, cgo, thirdparties)
 # These change less frequently than source code

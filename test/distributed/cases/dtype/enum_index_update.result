@@ -1,0 +1,89 @@
+drop table if exists enum_idx05;
+create table enum_idx05 (id int primary key, status enum('new','paid','shipped'), key idx_status(status));
+insert into enum_idx05 values (1,'new'),(2,'paid');
+update enum_idx05 set status='paid' where id=1;
+select id, status from enum_idx05 order by id;
+id    status
+1    paid
+2    paid
+select id from enum_idx05 where status='new';
+id
+select id from enum_idx05 where status='paid' order by id;
+id
+1
+2
+drop table enum_idx05;
+drop table if exists enum_idx06;
+create table enum_idx06 (id int primary key, status enum('new','paid','shipped'), note varchar(20), key idx_note_status(note, status));
+insert into enum_idx06 values (1,'new','n1'),(2,'paid','n2');
+update enum_idx06 set status='paid', note='updated' where id=1;
+select id, status, note from enum_idx06 order by id;
+id    status    note
+1    paid    updated
+2    paid    n2
+drop table enum_idx06;
+drop table if exists enum_idx07;
+create table enum_idx07 (id int primary key, status enum('new','paid','shipped'), note varchar(20), unique key uk_status(status));
+insert into enum_idx07 values (1,'new','n1'),(2,'paid','n2');
+update enum_idx07 set status='shipped' where id=1;
+select id, status, note from enum_idx07 order by id;
+id    status    note
+1    shipped    n1
+2    paid    n2
+select id from enum_idx07 where status='new';
+id
+select id from enum_idx07 where status='shipped';
+id
+1
+update enum_idx07 set status='paid' where id=1;
+-- @regex("Duplicate entry", true)
+Duplicate entry '2' for key 'status'
+select id, status, note from enum_idx07 order by id;
+id    status    note
+1    shipped    n1
+2    paid    n2
+drop table enum_idx07;
+drop table if exists enum_idx08;
+create table enum_idx08 (id int primary key, status enum('new','paid','shipped'), note varchar(20), unique key uk_note_status(note, status));
+insert into enum_idx08 values (1,'new','n1'),(2,'paid','n2');
+update enum_idx08 set status='shipped', note='updated' where id=1;
+select id, status, note from enum_idx08 order by id;
+id    status    note
+1    shipped    updated
+2    paid    n2
+select id from enum_idx08 where note='updated' and status='shipped';
+id
+1
+select id from enum_idx08 where note='n1' and status='new';
+id
+update enum_idx08 set status='paid', note='n2' where id=1;
+-- @regex("Duplicate entry", true)
+Duplicate entry '(n2,2)' for key '(note,status)'
+select id, status, note from enum_idx08 order by id;
+id    status    note
+1    shipped    updated
+2    paid    n2
+drop table enum_idx08;
+drop table if exists set_idx01;
+create table set_idx01 (id int primary key, opts set('a','b','c'), key idx_opts(opts));
+insert into set_idx01 values (1,'a'),(2,'b');
+update set_idx01 set opts='c' where id=1;
+select id, opts from set_idx01 order by id;
+id    opts
+1    c
+2    b
+select id from set_idx01 where opts='a';
+id
+select id from set_idx01 where opts='c' order by id;
+id
+1
+drop table set_idx01;
+drop table if exists set_idx02;
+create table set_idx02 (id int primary key, opts set('a','b','c'), note varchar(20), key idx_note_opts(note, opts));
+insert into set_idx02 values (1,'a','n1'),(2,'b','n2');
+update set_idx02 set opts='c', note='updated' where id=1;
+select id, opts, note from set_idx02 order by id;
+id    opts    note
+1    c    updated
+2    b    n2
+drop table set_idx02;

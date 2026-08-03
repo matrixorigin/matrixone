@@ -201,10 +201,12 @@ func GetTenantCreateVersionForUpdate(
 	}
 	defer res.Close()
 	version := ""
-	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+	_, rows := readSingleRow(res, func(cols []*vector.Vector) {
 		version = cols[0].GetStringAt(0)
-		return true
 	})
+	if rows > 1 {
+		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", rows))
+	}
 	if version == "" {
 		getLogger(txn.Txn().TxnOptions().CN).Fatal(fmt.Sprintf("BUG: missing tenant: %d", tenantID))
 	}
@@ -244,10 +246,12 @@ func GetTenantVersion(
 	}
 	defer res.Close()
 	version := ""
-	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+	_, rows := readSingleRow(res, func(cols []*vector.Vector) {
 		version = cols[0].GetStringAt(0)
-		return true
 	})
+	if rows > 1 {
+		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", rows))
+	}
 	if version == "" {
 		getLogger(txn.Txn().TxnOptions().CN).Fatal(fmt.Sprintf("BUG: missing tenant: %d", tenantID))
 	}

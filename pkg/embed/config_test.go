@@ -62,13 +62,13 @@ func TestParseTNConfig(t *testing.T) {
 	data-dir = "data dir"
 
 	[tn.Txn.Storage]
-	# txn storage backend implementation. [TAE|MEM]
-	backend = "MEM"
+	# txn storage backend implementation. [TAE|MEMKV]
+	backend = "MEMKV"
 	`
 	cfg := &ServiceConfig{}
 	err := parseFromString(data, cfg)
 	assert.NoError(t, err)
-	assert.Equal(t, tnservice.StorageMEM, cfg.getTNServiceConfig().Txn.Storage.Backend)
+	assert.Equal(t, tnservice.StorageMEMKV, cfg.getTNServiceConfig().Txn.Storage.Backend)
 	assert.Equal(t, 2, len(cfg.FileServices))
 	assert.Equal(t, "local", cfg.FileServices[0].Name)
 	assert.Equal(t, defines.SharedFileServiceName, cfg.FileServices[1].Name)

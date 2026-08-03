@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
@@ -141,6 +142,7 @@ func TestTransactionFinalizeCommitUnknownCleansCCPRCache(t *testing.T) {
 	cache := NewCCPRTxnCache(gcPool, fs)
 	txnOp, closeFn := client.NewTestTxnOperator(ctx)
 	defer closeFn()
+	colexec.NewServer("")
 
 	objectName := "obj_unknown_finalize"
 	txnID := txnOp.Txn().ID

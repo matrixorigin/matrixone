@@ -117,7 +117,7 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 	buf := bytes.NewBuffer(make([]byte, 0, 400))
 	var err error
 	switch m.node.NodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_SOURCE_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN:
 		//"title" : "SNOWFLAKE_SAMPLE_DATA.TPCDS_SF10TCL.DATE_DIM",
 		if m.node.ObjRef != nil {
 			buf.WriteString(m.node.ObjRef.GetSchemaName() + "." + m.node.ObjRef.GetObjName())
@@ -250,7 +250,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 
 	// 1. Handling unique label information for different nodes
 	switch m.node.NodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_SOURCE_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN:
 		tableDef := m.node.TableDef
 		objRef := m.node.ObjRef
 		fullTableName := ""
@@ -723,13 +723,14 @@ const FSCacheDiskHit = "FileService Cache Disk Hit"
 const FSCacheRemoteRead = "FileService Cache Remote Read"
 const FSCacheRemoteHit = "FileService Cache Remote Hit"
 
+// GetStatistic4Trace returns the legacy per-operator diagnostic projection.
+// Authoritative statement billing is derived from the terminal resource root.
 func GetStatistic4Trace(ctx context.Context, node *plan.Node, options *ExplainOptions) (s statistic.StatsArray) {
 	s.Reset()
 	if options.Analyze && node.AnalyzeInfo != nil {
 		analyzeInfo := node.AnalyzeInfo
 		s.WithTimeConsumed(float64(analyzeInfo.TimeConsumed)).
 			WithMemorySize(float64(analyzeInfo.MemorySize)).
-			// cc https://github.com/matrixorigin/MO-Cloud/issues/4175#issuecomment-2375813480
 			WithS3IOInputCount(float64(analyzeInfo.S3Put) + objectio.EstimateS3Input(analyzeInfo.WrittenRows) + objectio.EstimateS3Input(analyzeInfo.DeletedRows)).
 			WithS3IOOutputCount(float64(analyzeInfo.S3Head + analyzeInfo.S3Get)).
 			WithS3IOListCount(float64(analyzeInfo.S3List)).
@@ -810,7 +811,7 @@ func (m MarshalNodeImpl) GetStatistics(ctx context.Context, options *ExplainOpti
 			{
 				Name:  MemorySize,
 				Value: analyzeInfo.MemorySize,
-				Unit:  Statistic_Unit_byte, //"byte",
+				Unit:  Statistic_Unit_byte,
 			},
 		}
 

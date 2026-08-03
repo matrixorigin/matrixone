@@ -43,10 +43,11 @@ func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerC
 	if err != nil {
 		return nil, err
 	}
+	builder.skipStats = skipStats
+	rootId = builder.reuseMultiReferenceCTEs(rootId)
 	ctx.SetViews(bindCtx.views)
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
-	builder.skipStats = skipStats
 	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
@@ -152,8 +153,13 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		// map the resolver's external-table fallback sentinel (raised for
 		// writable external tables) to the user-facing error every other DML
 		// kind produces, instead of leaking the internal signal to the client.
-		if moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) && err.Error() == externalTableUnsupportedDMLMsg {
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
+		if moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) {
+			switch err.Error() {
+			case icebergRowLevelDMLUnsupportedMsg:
+				return nil, moerr.NewNotSupported(ctx.GetContext(), "Iceberg row-level DML is not implemented")
+			case externalTableUnsupportedDMLMsg:
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
+			}
 		}
 		return nil, err
 	}
@@ -178,7 +184,28 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 	if err != nil {
 		return nil, err
 	}
-	if len(tblInfo.tableDefs) == 1 {
+	// FK checks/actions are all disabled when foreign_key_checks is off, the
+	// same way MySQL skips foreign-key enforcement. Gate every FK SQL below
+	// (self-referencing checks, the RESTRICT pre-check, and the non-self
+	// parent-side actions) under one guard so the behavior is consistent.
+	fkChecksEnabled, err := IsForeignKeyChecksEnabled(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(tblInfo.tableDefs) == 1 &&
+		(len(tblInfo.tableDefs[0].Fkeys) > 0 || len(tblInfo.tableDefs[0].RefChildTbls) > 0) {
+		// The presence or absence of DetectSqls depends on the session's
+		// foreign_key_checks value. Keep the plan FK-sensitive even when the
+		// variable is currently off, otherwise a cached plan built without the
+		// checks could survive after they are enabled.
+		query.HasForeignKeyAction = true
+	}
+	if fkChecksEnabled && len(tblInfo.tableDefs) == 1 {
+		if len(tblInfo.tableDefs[0].RefChildTbls) > 0 {
+			// Parent-side actions are part of the modern REPLACE plan. Keep a
+			// marker solely for the optimistic-transaction fail-closed guard.
+			query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_PLAN:")
+		}
 		sqls, err := genSqlsForCheckFKSelfRefer(
 			ctx.GetContext(),
 			tblInfo.objRef[0].SchemaName,
@@ -189,7 +216,7 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		if err != nil {
 			return nil, err
 		}
-		query.DetectSqls = sqls
+		query.DetectSqls = append(query.DetectSqls, sqls...)
 
 		// Generate pre-check SQLs for parent→child safety (RESTRICT).
 		preCheckSqls, err := genPreCheckSqlsForReplaceFKSelfRefer(
@@ -272,6 +299,9 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 	rootId, err := builder.bindDelete(ctx, stmt, bindCtx)
 	if err != nil {
 		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+			if err.Error() == icebergRowLevelDMLUnsupportedMsg {
+				return buildIcebergDeletePlan(stmt, ctx, isPrepareStmt)
+			}
 			return buildDelete(stmt, ctx, isPrepareStmt)
 		}
 		return nil, err
@@ -296,6 +326,9 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	defer func() {
 		v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
 	}()
+	if err := validateMultiTableUpdateClauses(ctx, stmt); err != nil {
+		return nil, err
+	}
 
 	builder := NewQueryBuilder(plan.Query_UPDATE, ctx, isPrepareStmt, true)
 	bindCtx := NewBindContext(builder, nil)
@@ -305,10 +338,19 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 
 	rootId, err := builder.bindUpdate(stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+		route, reason, routedErr := classifyUpdatePlannerError(err)
+		switch route {
+		case updatePlannerLegacy:
+			recordUpdatePlannerRoute(route, reason, "selected")
 			return buildTableUpdate(stmt, ctx, isPrepareStmt)
+		case updatePlannerSpecialized:
+			recordUpdatePlannerRoute(route, reason, "selected")
+			return buildIcebergUpdatePlan(stmt, ctx, isPrepareStmt)
+		case updatePlannerRejected, updatePlannerUnknown:
+			recordUpdatePlannerRoute(route, reason, "rejected")
+			return nil, routedErr
 		}
-		return nil, err
+		return nil, routedErr
 	}
 	ctx.SetViews(bindCtx.views)
 
@@ -318,6 +360,10 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	if err != nil {
 		return nil, err
 	}
+	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
+		return nil, err
+	}
+	recordUpdatePlannerRoute(updatePlannerModern, updateRouteReasonNone, "selected")
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -376,6 +422,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false)
 	case *tree.ParenSelect:
 		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false)
+	case *tree.ExplainStmt:
+		return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
 	case *tree.ExplainAnalyze:
 		return buildExplainAnalyze(ctx, stmt, isPrepareStmt)
 	case *tree.ExplainPhyPlan:
@@ -388,6 +436,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return bindAndOptimizeUpdateQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Delete:
 		return bindAndOptimizeDeleteQuery(ctx, stmt, isPrepareStmt, false)
+	case *tree.Merge:
+		return bindAndOptimizeMergeQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.BeginTransaction:
 		return buildBeginTransaction(stmt, ctx)
 	case *tree.CommitTransaction:
@@ -399,7 +449,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	case *tree.DropDatabase:
 		return buildDropDatabase(stmt, ctx)
 	case *tree.CreateTable:
-		return buildCreateTable(ctx, stmt, nil)
+		return buildCreateTable(ctx, stmt, nil, isPrepareStmt)
 	case *tree.CreatePitr:
 		return buildCreatePitr(stmt, ctx)
 	case *tree.CreateCDC:
@@ -422,8 +472,6 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildDropView(stmt, ctx)
 	case *tree.CreateView:
 		return buildCreateView(stmt, ctx)
-	case *tree.CreateSource:
-		return buildCreateSource(stmt, ctx)
 	case *tree.AlterView:
 		return buildAlterView(stmt, ctx)
 	case *tree.AlterTable:
@@ -477,7 +525,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	case *tree.ShowRolesStmt:
 		return buildShowRoles(stmt, ctx)
 	case *tree.SetVar:
-		return buildSetVariables(stmt, ctx)
+		return buildSetVariables(stmt, ctx, isPrepareStmt)
 	case *tree.Execute:
 		return buildExecute(stmt, ctx)
 	case *tree.Deallocate:
@@ -486,6 +534,11 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return bindAndOptimizeLoadQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.PrepareStmt, *tree.PrepareString:
 		return buildPrepare(stmt, ctx)
+	case *tree.CallStmt:
+		if isIcebergBuiltinCall(stmt) {
+			return buildIcebergBuiltinCall(stmt, ctx)
+		}
+		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	case *tree.Do, *tree.Declare:
 		return nil, moerr.NewNotSupported(ctx.GetContext(), tree.String(stmt, dialect.MYSQL))
 	case *tree.ValuesStatement:
@@ -565,6 +618,8 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 				{Typ: typ, Name: "Variable_name"},
 				{Typ: typ, Name: "Value"},
 			}
+		case plan.DataDefinition_CREATE_TABLE:
+			return nil
 		default:
 			// show statement(except show variables) will return a query
 			if logicPlan.Ddl.Query != nil {

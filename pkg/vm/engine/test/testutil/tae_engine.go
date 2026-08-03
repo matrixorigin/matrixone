@@ -117,18 +117,6 @@ func (ts *TestTxnStorage) Commit(ctx context.Context, request *txn.TxnRequest, r
 func (ts *TestTxnStorage) Rollback(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	return nil
 }
-func (ts *TestTxnStorage) Prepare(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	return nil
-}
-func (ts *TestTxnStorage) GetStatus(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	return nil
-}
-func (ts *TestTxnStorage) CommitTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	return nil
-}
-func (ts *TestTxnStorage) RollbackTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	return nil
-}
 func (ts *TestTxnStorage) Debug(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	return nil
 }
@@ -142,7 +130,10 @@ func NewTestTAEEngine(
 	rpcAgent *MockRPCAgent, opts *options.Options) (*TestTxnStorage, error) {
 
 	ioutil.Start("")
-	handle := InitTxnHandle(ctx, taeDir, opts)
+	handle, err := InitTxnHandle(ctx, taeDir, opts)
+	if err != nil {
+		return nil, err
+	}
 	logtailServer, err := NewMockLogtailServer(
 		ctx, handle.GetDB(), defaultLogtailConfig(), runtime.DefaultRuntime(), rpcAgent.MockLogtailPRCServerFactory)
 	if err != nil {
@@ -166,8 +157,11 @@ func NewTestTAEEngine(
 	return tc, nil
 }
 
-func InitTxnHandle(ctx context.Context, taeDir string, opts *options.Options) *rpc.Handle {
-	handle := rpc.NewTAEHandle(ctx, taeDir, nil, opts)
+func InitTxnHandle(ctx context.Context, taeDir string, opts *options.Options) (*rpc.Handle, error) {
+	handle, err := rpc.NewTAEHandle(ctx, taeDir, nil, opts)
+	if err != nil {
+		return nil, err
+	}
 	handle.GetDB().DiskCleaner.GetCleaner().AddChecker(
 		func(item any) bool {
 			minTS := handle.GetDB().TxnMgr.MinTSForTest()
@@ -176,5 +170,5 @@ func InitTxnHandle(ctx context.Context, taeDir string, opts *options.Options) *r
 			return !end.GE(&minTS)
 		}, "testdb")
 
-	return handle
+	return handle, nil
 }

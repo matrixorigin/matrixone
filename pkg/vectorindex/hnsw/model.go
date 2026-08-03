@@ -148,6 +148,10 @@ func (idx *HnswModel[T]) Destroy() error {
 }
 
 // Save the index to file
+// saveToFileCheckSum computes the on-disk checksum in SaveToFile. Indirected as a var so tests
+// can stub it to exercise the failure/cleanup path (#25630).
+var saveToFileCheckSum = vectorindex.CheckSum
+
 func (idx *HnswModel[T]) SaveToFile() error {
 
 	if idx.Index == nil {
@@ -197,27 +201,36 @@ func (idx *HnswModel[T]) SaveToFile() error {
 	if err != nil {
 		return err
 	}
+	// os.CreateTemp opens the file; we only need its (now reserved) name — usearch's
+	// Index.Save and CheckSum reopen the path themselves. Close our handle immediately,
+	// otherwise every save leaks a file descriptor (#25630). The deferred cleanup removes the
+	// temp file on any failure below (idx.Path is set to fpath only on success), so a partial
+	// file is never orphaned on disk.
+	fpath := f.Name()
+	_ = f.Close()
+	defer func() {
+		if idx.Path != fpath {
+			os.Remove(fpath)
+		}
+	}()
 
-	err = idx.Index.Save(f.Name())
-	if err != nil {
-		os.Remove(f.Name())
+	if err = idx.Index.Save(fpath); err != nil {
 		return err
 	}
 
 	// get new checksum
-	chksum, err := vectorindex.CheckSum(f.Name())
+	chksum, err := saveToFileCheckSum(fpath)
 	if err != nil {
 		return err
 	}
 	idx.Checksum = chksum
 
 	// free memory
-	err = idx.Index.Destroy()
-	if err != nil {
+	if err = idx.Index.Destroy(); err != nil {
 		return err
 	}
 	idx.Index = nil
-	idx.Path = f.Name()
+	idx.Path = fpath
 
 	// Do NOT set filesize here. filesize == 0 means file didn't save to database yet
 	/*

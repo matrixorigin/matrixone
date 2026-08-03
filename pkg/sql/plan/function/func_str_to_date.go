@@ -25,6 +25,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const strToDateMaxFsp = 6
+
+func normalizeStrToDateScale(scale int32) int32 {
+	if scale < 0 {
+		return 0
+	}
+	if scale > strToDateMaxFsp {
+		return strToDateMaxFsp
+	}
+	return scale
+}
+
 func builtInStrToDate(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])

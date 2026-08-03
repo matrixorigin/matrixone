@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
@@ -32,6 +34,22 @@ import (
 const (
 	Rows = 10
 )
+
+func TestGetTableDefRestoresChecksFromSchemaExtra(t *testing.T) {
+	check := &plan.CheckDef{Name: "t_chk_1", Check: &plan.Expr{}}
+	tableDef, _ := getTableDef(&TableItem{
+		Name:      "t",
+		ExtraInfo: &api.SchemaExtra{Checks: []*plan.CheckDef{check}},
+	}, nil)
+	require.Equal(t, []*plan.CheckDef{check}, tableDef.Checks)
+}
+
+func TestGetTableDefKeepsTemporarySessionStateContextual(t *testing.T) {
+	tableDef, _ := getTableDef(&TableItem{Kind: catalog.SystemTemporaryTable}, nil)
+	require.NotNil(t, tableDef)
+	require.Equal(t, catalog.SystemTemporaryTable, tableDef.TableType)
+	require.False(t, tableDef.IsTemporary)
+}
 
 func TestCatalogCacheConcurrentGC(t *testing.T) {
 	cc := NewCatalog()
@@ -102,6 +120,143 @@ func TestCrossAccGet(t *testing.T) {
 		AccountId: 1,
 		Name:      "ssb_1g",
 		Ts:        timestamp.Timestamp{PhysicalTime: 200},
+	}))
+}
+
+func TestHasNewerVersion(t *testing.T) {
+	cc := NewCatalog()
+	cc.tables.data.Set(&TableItem{
+		AccountId:  1,
+		DatabaseId: 2,
+		Name:       "t",
+		Id:         3,
+		Version:    2,
+		Ts:         timestamp.Timestamp{PhysicalTime: 200},
+	})
+
+	require.True(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1, DatabaseId: 2, Name: "t", TableId: 3, Version: 1,
+		Ts: timestamp.Timestamp{PhysicalTime: 100},
+	}))
+	require.False(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1, DatabaseId: 2, Name: "t", TableId: 3, Version: 2,
+		Ts: timestamp.Timestamp{PhysicalTime: 100},
+	}))
+	require.False(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1, DatabaseId: 2, Name: "t", TableId: 3, Version: 1,
+		Ts: timestamp.Timestamp{PhysicalTime: 300},
+	}))
+}
+
+func TestHasNewerVersionDetectsDatabaseRecreation(t *testing.T) {
+	cc := NewCatalog()
+	cc.databases.data.Set(&DatabaseItem{
+		AccountId: 1, Name: "db", Id: 20, Ts: timestamp.Timestamp{PhysicalTime: 200},
+	})
+	require.True(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "missing",
+		Ts: timestamp.Timestamp{PhysicalTime: 100},
+	}))
+	require.False(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1, DatabaseId: 20, DatabaseName: "db", Name: "missing",
+		Ts: timestamp.Timestamp{PhysicalTime: 300},
+	}))
+}
+
+func TestHasNewerVersionDetectsAnyTableChange(t *testing.T) {
+	cc := NewCatalog()
+	cc.setTableItem(&TableItem{
+		AccountId: 1, DatabaseId: 10, Name: "new_child", Id: 20,
+		Ts: timestamp.Timestamp{PhysicalTime: 200},
+	}, true)
+	require.False(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1, DatabaseId: 10, Name: "", Ts: timestamp.Timestamp{PhysicalTime: 100},
+	}))
+	require.False(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1, DatabaseId: 10, Name: "", Ts: timestamp.Timestamp{PhysicalTime: 300},
+	}))
+	require.True(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1, DatabaseId: 0, Name: "", Ts: timestamp.Timestamp{PhysicalTime: 100},
+	}))
+	require.False(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 2, DatabaseId: 0, Name: "", Ts: timestamp.Timestamp{PhysicalTime: 100},
+	}))
+
+	// Account-level dependencies use the high-watermark rather than walking
+	// retained table versions. A direct BTree insertion intentionally bypasses
+	// the production update path and therefore must not affect the result.
+	cc.tables.data.Set(&TableItem{
+		AccountId: 2, DatabaseId: 20, Name: "retained", Id: 30,
+		Ts: timestamp.Timestamp{PhysicalTime: 500},
+	})
+	require.False(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 2, DatabaseId: 0, Name: "", Ts: timestamp.Timestamp{PhysicalTime: 100},
+	}))
+
+	// Deletes advance the same account high-watermark.
+	cc.setTableItem(&TableItem{
+		AccountId: 1, DatabaseId: 10, Name: "new_child", Id: 20, deleted: true,
+		Ts: timestamp.Timestamp{PhysicalTime: 400},
+	}, false)
+	require.True(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1, DatabaseId: 0, Name: "", Ts: timestamp.Timestamp{PhysicalTime: 300},
+	}))
+}
+
+func TestAccountTableChangeHighWatermarkConcurrent(t *testing.T) {
+	cc := NewCatalog()
+	var wg sync.WaitGroup
+	for i := 1; i <= 64; i++ {
+		wg.Add(1)
+		go func(physicalTime int64) {
+			defer wg.Done()
+			cc.setTableItem(&TableItem{
+				AccountId: 1, DatabaseId: uint64(physicalTime), Name: "t",
+				Ts: timestamp.Timestamp{PhysicalTime: physicalTime},
+			}, true)
+		}(int64(i))
+	}
+	wg.Wait()
+
+	require.True(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1, DatabaseId: 0, Name: "", Ts: timestamp.Timestamp{PhysicalTime: 63},
+	}))
+	require.False(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1, DatabaseId: 0, Name: "", Ts: timestamp.Timestamp{PhysicalTime: 64},
+	}))
+}
+
+func TestPreparedMetadataHighWatermark(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := newTestTableBatch(mp)
+	defer bat.Clean(mp)
+	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
+
+	cc := NewCatalog()
+	cc.UpdatePreparedMetadata(bat)
+
+	var expected timestamp.Timestamp
+	for _, ts := range timestamps {
+		value := ts.ToTimestamp()
+		if value.Greater(expected) {
+			expected = value
+		}
+	}
+	require.Equal(t, expected, cc.GetPreparedMetadataTS())
+}
+
+func TestAccountTableChangeHighWatermarkCollisionIsConservative(t *testing.T) {
+	cc := NewCatalog()
+	cc.setTableItem(&TableItem{
+		AccountId: 1, DatabaseId: 10, Name: "t",
+		Ts: timestamp.Timestamp{PhysicalTime: 100},
+	}, true)
+
+	// A colliding account may rebuild conservatively, but it must never miss
+	// the bucket's latest table change.
+	require.True(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1 + tableChangeBucketCount, DatabaseId: 0,
+		Ts: timestamp.Timestamp{PhysicalTime: 1},
 	}))
 }
 

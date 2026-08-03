@@ -14,49 +14,49 @@ load data infile "$resources/load_data/not_exists.csv" into table t1 fields term
 invalid input: the file does not exist in load flow
 load data infile "$resources/load_data/set_null_1.csv" into table t1 fields terminated by ',' set col1=nullif(col1,'1');
 select * from t1;
-col1    col2    col3    col4    col5
-null    1    1.0    1111-11-11    1
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[7,24,0]  ¦  col4[91,64,0]  ¦  col5[12,0,0]  𝄀
+null  ¦  1  ¦  1.0  ¦  1111-11-11  ¦  1
 load data infile "$resources/load_data/set_null_1.csv" into table t1 fields terminated by ',' set col2=nullif(col2,'1');
 select * from t1;
-col1    col2    col3    col4    col5
-null    1    1.0    1111-11-11    1
-1    null    1.0    1111-11-11    1
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[7,24,0]  ¦  col4[91,64,0]  ¦  col5[12,0,0]  𝄀
+null  ¦  1  ¦  1.0  ¦  1111-11-11  ¦  1  𝄀
+1  ¦  null  ¦  1.0  ¦  1111-11-11  ¦  1
 load data infile "$resources/load_data/set_null_1.csv" into table t1 fields terminated by ',' set col2=nullif(col3,'"1111-11-11"');
 invalid input: the nullif func first param must equal to colName
 select * from t1;
-col1    col2    col3    col4    col5
-null    1    1.0    1111-11-11    1
-1    null    1.0    1111-11-11    1
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[7,24,0]  ¦  col4[91,64,0]  ¦  col5[12,0,0]  𝄀
+null  ¦  1  ¦  1.0  ¦  1111-11-11  ¦  1  𝄀
+1  ¦  null  ¦  1.0  ¦  1111-11-11  ¦  1
 load data infile "$resources/load_data/set_null_1.csv" into table t1 fields terminated by ',' set col4=nullif(col4,'1');
 select * from t1;
-col1    col2    col3    col4    col5
-null    1    1.0    1111-11-11    1
-1    null    1.0    1111-11-11    1
-1    1    1.0    1111-11-11    1
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[7,24,0]  ¦  col4[91,64,0]  ¦  col5[12,0,0]  𝄀
+null  ¦  1  ¦  1.0  ¦  1111-11-11  ¦  1  𝄀
+1  ¦  null  ¦  1.0  ¦  1111-11-11  ¦  1  𝄀
+1  ¦  1  ¦  1.0  ¦  1111-11-11  ¦  1
 load data infile "$resources/load_data/set_null_1.csv" into table t1 fields terminated by ',' set col1=nullif(col1,1), col2=nullif(col2,1),col3=nullif(col3,1) ,col4=nullif(col4,'1111-11-11'),col5=nullif(col5,1);
 select * from t1;
-col1    col2    col3    col4    col5
-null    1    1.0    1111-11-11    1
-1    null    1.0    1111-11-11    1
-1    1    1.0    1111-11-11    1
-null    null    null    null    null
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[7,24,0]  ¦  col4[91,64,0]  ¦  col5[12,0,0]  𝄀
+null  ¦  1  ¦  1.0  ¦  1111-11-11  ¦  1  𝄀
+1  ¦  null  ¦  1.0  ¦  1111-11-11  ¦  1  𝄀
+1  ¦  1  ¦  1.0  ¦  1111-11-11  ¦  1  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null
 load data infile "$resources/load_data/set_null_2.csv" into table t1 fields terminated by ',' set col1=nullif(col1,1), col2=nullif(col2,2),col3=nullif(col3,2) ,col4=nullif(col4,'1111-04-11'),col5=nullif(col5,5);
 select * from t1;
-col1    col2    col3    col4    col5
-null    1    1.0    1111-11-11    1
-1    null    1.0    1111-11-11    1
-1    1    1.0    1111-11-11    1
-null    null    null    null    null
-null    1    1.0    1111-11-11    1
-2    null    null    1111-02-11    2
-3    3    3.0    1111-03-11    3
-4    4    4.0    null    4
-5    5    5.0    1111-05-11    null
-6    6    6.0    1111-06-11    6
-7    7    7.0    1111-07-11    7
-8    8    8.0    1111-08-11    8
-9    9    9.0    1111-09-11    9
-10    10    10.0    1111-10-11    10
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[7,24,0]  ¦  col4[91,64,0]  ¦  col5[12,0,0]  𝄀
+null  ¦  1  ¦  1.0  ¦  1111-11-11  ¦  1  𝄀
+1  ¦  null  ¦  1.0  ¦  1111-11-11  ¦  1  𝄀
+1  ¦  1  ¦  1.0  ¦  1111-11-11  ¦  1  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  1  ¦  1.0  ¦  1111-11-11  ¦  1  𝄀
+2  ¦  null  ¦  null  ¦  1111-02-11  ¦  2  𝄀
+3  ¦  3  ¦  3.0  ¦  1111-03-11  ¦  3  𝄀
+4  ¦  4  ¦  4.0  ¦  null  ¦  4  𝄀
+5  ¦  5  ¦  5.0  ¦  1111-05-11  ¦  null  𝄀
+6  ¦  6  ¦  6.0  ¦  1111-06-11  ¦  6  𝄀
+7  ¦  7  ¦  7.0  ¦  1111-07-11  ¦  7  𝄀
+8  ¦  8  ¦  8.0  ¦  1111-08-11  ¦  8  𝄀
+9  ¦  9  ¦  9.0  ¦  1111-09-11  ¦  9  𝄀
+10  ¦  10  ¦  10.0  ¦  1111-10-11  ¦  10
 drop table t1;
 drop table if exists t2;
 create table t2(
@@ -65,42 +65,42 @@ col2 varchar(100)
 );
 load data infile "$resources/load_data/set_null_3.csv" into table t2 fields terminated by ',' set col1=nullif(col1,'null');
 select * from t2;
-col1    col2
-1    a
-2    b
-3    c
-4    d
-5    e
-6    f
-7    g
-8    null
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b  𝄀
+3  ¦  c  𝄀
+4  ¦  d  𝄀
+5  ¦  e  𝄀
+6  ¦  f  𝄀
+7  ¦  g  𝄀
+8  ¦  null
 delete from t2;
 insert into t2 values();
 select * from t2;
-col1    col2
-9    null
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
+9  ¦  null
 load data infile "$resources/load_data/set_null_3.csv" into table t2 character set utf8 fields terminated by ',' set col1=nullif(col1,'null');
 drop table t2;
 drop table if exists t3;
 create table t3(col1 varchar(20), col2 varchar(20));
 load data infile "$resources/load_data/set_null_4.csv" into table t3 fields terminated by ',' set col1=nullif(col1,'hello');
 select * from t3 order by col1;
-col1    col2
-null    world
-HELLO    world
-Hello    WORLD
+➤ col1[12,-1,0]  ¦  col2[12,-1,0]  𝄀
+null  ¦  world  𝄀
+HELLO  ¦  world  𝄀
+Hello  ¦  WORLD
 delete from t3;
 load data infile "$resources/load_data/set_null_4.csv" into table t3 fields terminated by ',' set col1=nullif(col1,'hello'), col2=nullif(col2, 'world');
 select * from t3 order by col1;
-col1    col2
-null    null
-HELLO    null
-Hello    WORLD
+➤ col1[12,-1,0]  ¦  col2[12,-1,0]  𝄀
+null  ¦  null  𝄀
+HELLO  ¦  null  𝄀
+Hello  ¦  WORLD
 delete from t3;
 load data infile "$resources/load_data/set_null_4.csv" into table t3 fields terminated by ',' set col1=nullif(col1,'hello'), col1=nullif(col1, 'HELLO');
 select * from t3 order by col1;
-col1    col2
-null    world
-null    world
-Hello    WORLD
+➤ col1[12,-1,0]  ¦  col2[12,-1,0]  𝄀
+null  ¦  world  𝄀
+null  ¦  world  𝄀
+Hello  ¦  WORLD
 drop table t3;

@@ -56,5 +56,20 @@ show tables from test;
 -- 5. ensure the shared files won't be deleted
 select count(*) from srcdb.t1 where a mod 100 = 0;
 
+-- 6. clone and branch a table created earlier in the same transaction
+begin;
+create table test.txn_src(a int primary key, b int);
+insert into test.txn_src values (1, 10), (2, 20);
+create table test.txn_clone clone test.txn_src;
+data branch create table test.txn_b1 from test.txn_src;
+data branch create table test.txn_b2 from test.txn_b1;
+select count(*) from test.txn_clone;
+select count(*) from test.txn_b2;
+commit;
+
+insert into test.txn_b2 values (3, 30);
+drop table test.txn_b1;
+data branch diff test.txn_b2 against test.txn_src output count;
+
 drop database test;
 drop database srcdb;

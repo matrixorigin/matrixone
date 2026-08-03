@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -575,8 +575,8 @@ func (sm *SnapshotMeta) updateTableInfo(
 	for _, info := range tObjects {
 		orderedInfos = append(orderedInfos, info)
 	}
-	sort.Slice(orderedInfos, func(i, j int) bool {
-		return orderedInfos[i].createAt.LT(&orderedInfos[j].createAt)
+	slices.SortFunc(orderedInfos, func(a, b *objectInfo) int {
+		return a.createAt.Compare(&b.createAt)
 	})
 
 	for _, obj := range orderedInfos {
@@ -728,9 +728,8 @@ func (sm *SnapshotMeta) updateTableInfo(
 			})
 		}
 	}
-	sort.Slice(deleteRows, func(i, j int) bool {
-		ts2 := deleteRows[j].ts
-		return deleteRows[i].ts.LT(&ts2)
+	slices.SortFunc(deleteRows, func(a, b tombstone) int {
+		return a.ts.Compare(&b.ts)
 	})
 
 	for _, delRow := range deleteRows {
@@ -1133,8 +1132,8 @@ func (sm *SnapshotMeta) GetSnapshot(
 	}
 
 	// Sort cluster snapshots
-	sort.Slice(snapshotInfo.cluster, func(i, j int) bool {
-		return snapshotInfo.cluster[i].LT(&snapshotInfo.cluster[j])
+	slices.SortFunc(snapshotInfo.cluster, func(a, b types.TS) int {
+		return a.Compare(&b)
 	})
 	logutil.Info(
 		"GetSnapshot-P3-Cluster",
@@ -1143,8 +1142,8 @@ func (sm *SnapshotMeta) GetSnapshot(
 
 	// Sort account snapshots
 	for accountID, tsList := range snapshotInfo.account {
-		sort.Slice(tsList, func(i, j int) bool {
-			return tsList[i].LT(&tsList[j])
+		slices.SortFunc(tsList, func(a, b types.TS) int {
+			return a.Compare(&b)
 		})
 		snapshotInfo.account[accountID] = tsList
 		logutil.Info(
@@ -1156,8 +1155,8 @@ func (sm *SnapshotMeta) GetSnapshot(
 
 	// Sort database snapshots
 	for dbID, tsList := range snapshotInfo.database {
-		sort.Slice(tsList, func(i, j int) bool {
-			return tsList[i].LT(&tsList[j])
+		slices.SortFunc(tsList, func(a, b types.TS) int {
+			return a.Compare(&b)
 		})
 		snapshotInfo.database[dbID] = tsList
 		logutil.Info(
@@ -1169,8 +1168,8 @@ func (sm *SnapshotMeta) GetSnapshot(
 
 	// Sort table snapshots
 	for tableID, tsList := range snapshotInfo.tables {
-		sort.Slice(tsList, func(i, j int) bool {
-			return tsList[i].LT(&tsList[j])
+		slices.SortFunc(tsList, func(a, b types.TS) int {
+			return a.Compare(&b)
 		})
 		snapshotInfo.tables[tableID] = tsList
 		logutil.Info(

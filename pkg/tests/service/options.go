@@ -275,20 +275,8 @@ func (opt Options) WithTNUseTAEStorage() Options {
 	return opt
 }
 
-// WithTNUseMEMStorage sets tn transaction use mem storage.
-func (opt Options) WithTNUseMEMStorage() Options {
-	opt.storage.tnStorage = tnservice.StorageMEM
-	return opt
-}
-
 // WithCNUseDistributedTAEEngine use distributed tae engine as cn engine
 func (opt Options) WithCNUseDistributedTAEEngine() Options {
-	opt.storage.cnEngine = cnservice.EngineDistributedTAE
-	return opt
-}
-
-// WithCNUseMemoryEngine use memory engine as cn engine
-func (opt Options) WithCNUseMemoryEngine() Options {
 	opt.storage.cnEngine = cnservice.EngineDistributedTAE
 	return opt
 }

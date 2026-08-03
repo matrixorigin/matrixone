@@ -26,7 +26,7 @@ import (
 
 func TestReaderSetIndexParamDoesNotPreallocateDistHeap(t *testing.T) {
 	r := &reader{}
-	limit := ^uint64(0)
+	limit := uint64(^uint(0) >> 1)
 
 	vectorCol := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_array_float32), Width: 2},
@@ -57,8 +57,21 @@ func TestReaderSetIndexParamDoesNotPreallocateDistHeap(t *testing.T) {
 		},
 	}
 	param := &plan.IndexReaderParam{
-		OrderBy: []*plan.OrderBySpec{{Expr: orderExpr}},
-		Limit:   plan2.MakePlan2Uint64ConstExprWithType(limit),
+		OrderBy:      []*plan.OrderBySpec{{Expr: orderExpr}},
+		Limit:        plan2.MakePlan2Uint64ConstExprWithType(limit),
+		OrigFuncName: metric.DistFn_L2Distance,
+		DistRange: &plan.DistRange{
+			LowerBoundType: plan.BoundType_INCLUSIVE,
+			LowerBound: &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_float64)},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: -1}}},
+			},
+			UpperBoundType: plan.BoundType_INCLUSIVE,
+			UpperBound: &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_float64)},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: 2}}},
+			},
+		},
 	}
 
 	require.NotPanics(t, func() {
@@ -66,6 +79,9 @@ func TestReaderSetIndexParamDoesNotPreallocateDistHeap(t *testing.T) {
 	})
 	require.NotNil(t, r.orderByLimit)
 	require.Equal(t, limit, r.orderByLimit.Limit)
+	require.Equal(t, plan.BoundType_UNBOUNDED, r.orderByLimit.LowerBoundType)
+	require.Equal(t, plan.BoundType_INCLUSIVE, r.orderByLimit.UpperBoundType)
+	require.Equal(t, float64(4), r.orderByLimit.UpperBound)
 	require.Zero(t, len(r.orderByLimit.DistHeap))
 	require.Zero(t, cap(r.orderByLimit.DistHeap))
 }
@@ -95,4 +111,51 @@ func TestReaderSetIndexParamSupportsOrderedLimit(t *testing.T) {
 	require.Equal(t, int32(1), r.orderByLimit.ColPos)
 	require.Equal(t, uint64(8), r.orderByLimit.Limit)
 	require.Nil(t, r.orderByLimit.NumVec)
+}
+
+func TestReaderSetIndexParamIgnoresUnevaluatedLimit(t *testing.T) {
+	validOrderBy := []*plan.OrderBySpec{{
+		Expr: &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+		},
+	}}
+	params := []*plan.IndexReaderParam{{
+		OrderBy: validOrderBy,
+		Limit: &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_uint64)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+		},
+	}, {
+		OrderBy: validOrderBy,
+		Limit: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Isnull: true,
+			Value:  &plan.Literal_U64Val{U64Val: 8},
+		}}},
+	}, {
+		OrderBy: validOrderBy,
+		Limit: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_I64Val{I64Val: 8},
+		}}},
+	}, {
+		OrderBy: []*plan.OrderBySpec{{
+			Expr: nil,
+		}},
+		Limit: plan2.MakePlan2Uint64ConstExprWithType(8),
+	}, {
+		OrderBy: []*plan.OrderBySpec{nil},
+		Limit:   plan2.MakePlan2Uint64ConstExprWithType(8),
+	}, {
+		OrderBy: validOrderBy,
+		Limit:   plan2.MakePlan2Uint64ConstExprWithType(0),
+	}, {
+		OrderBy: validOrderBy,
+		Limit:   plan2.MakePlan2Uint64ConstExprWithType(uint64(^uint(0)>>1) + 1),
+	}}
+
+	for _, param := range params {
+		r := &reader{}
+		require.NotPanics(t, func() { r.SetIndexParam(param) })
+		require.Nil(t, r.orderByLimit)
+	}
 }

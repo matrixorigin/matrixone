@@ -26,6 +26,26 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+type traceCodecIDGenerator struct {
+	next byte
+}
+
+func (g *traceCodecIDGenerator) NewIDs() (trace.TraceID, trace.SpanID) {
+	g.next++
+	var traceID trace.TraceID
+	traceID[len(traceID)-1] = g.next
+	var spanID trace.SpanID
+	spanID[len(spanID)-1] = g.next
+	return traceID, spanID
+}
+
+func (g *traceCodecIDGenerator) NewSpanID() trace.SpanID {
+	g.next++
+	var spanID trace.SpanID
+	spanID[len(spanID)-1] = g.next
+	return spanID
+}
+
 func TestEncodeContext(t *testing.T) {
 	hc := &deadlineContextCodec{}
 	out := buf.NewByteBuf(8)
@@ -76,6 +96,29 @@ func TestEncodeAndDecodeTrace(t *testing.T) {
 
 	span.Kind = trace.SpanKindRemote
 	assert.Equal(t, span, trace.SpanFromContext(msg.Ctx).SpanContext())
+}
+
+func TestGeneratedTraceContextSurvivesRPCCodec(t *testing.T) {
+	tracer := trace.NewNonRecordingTracer(&traceCodecIDGenerator{})
+	ctx, span := tracer.Start(context.Background(), "root", trace.WithNewRoot(true))
+	original := span.SpanContext()
+	assert.False(t, original.IsEmpty())
+
+	codec := &traceCodec{}
+	out := buf.NewByteBuf(1 + original.Size())
+	n, err := codec.Encode(&RPCMessage{Ctx: ctx}, out)
+	assert.NoError(t, err)
+	assert.Equal(t, 1+original.Size(), n)
+
+	_, data := out.ReadBytes(out.Readable())
+	msg := &RPCMessage{}
+	n, err = codec.Decode(msg, data)
+	assert.NoError(t, err)
+	assert.Equal(t, 1+original.Size(), n)
+
+	decoded := trace.SpanFromContext(msg.Ctx).SpanContext()
+	original.Kind = trace.SpanKindRemote
+	assert.Equal(t, original, decoded)
 }
 
 func TestEncodeAndDecodeClock(t *testing.T) {

@@ -680,6 +680,13 @@ func (fr *FunctionResult[T]) AppendByteJson(bj bytejson.ByteJson, isnull bool) e
 	return nil
 }
 
+func (fr *FunctionResult[T]) AppendByteJsonEncoded(enc bytejson.ByteJsonDataEncoder) error {
+	if !fr.vec.IsConst() {
+		return AppendByteJsonEncoded(fr.vec, enc, fr.mp)
+	}
+	return SetConstByteJsonEncoded(fr.vec, enc, fr.vec.Length(), fr.mp)
+}
+
 func (fr *FunctionResult[T]) AppendMustValue(val T) {
 	fr.cols[fr.length] = val
 	fr.length++

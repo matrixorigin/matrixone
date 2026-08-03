@@ -82,8 +82,6 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 5).")
 	}
 
-	colDefs := DeepCopyColDefList(ftIndexColdefs)
-
 	params, err := builder.getFullTextParams(tbl.Func)
 	if err != nil {
 		return 0, err
@@ -91,11 +89,16 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 	// remove the first argment and put the first argument to Param
 	exprs = exprs[1:]
 
-	// get the generated SQL
 	sql, err := builder.getFullTextSql(tbl.Func, params)
 	if err != nil {
 		return 0, err
 	}
+
+	return builder.buildFullTextIndexScanNode(ctx, exprs, children, params, sql)
+}
+
+func (builder *QueryBuilder) buildFullTextIndexScanNode(ctx *BindContext, exprs []*plan.Expr, children []int32, params string, sql string) (int32, error) {
+	colDefs := DeepCopyColDefList(ftIndexColdefs)
 
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,
@@ -117,25 +120,18 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 }
 
 func (builder *QueryBuilder) getFullTextSql(fn *tree.FuncExpr, params string) (string, error) {
-	var param fulltext.FullTextParserParam
-	if len(params) > 0 {
-		err := json.Unmarshal([]byte(params), &param)
-		if err != nil {
-			return "", err
-		}
-	}
-
 	if _, ok := fn.Exprs[2].(*tree.NumVal); !ok {
 		return "", moerr.NewInvalidInput(builder.GetContext(), "index table name is not a constant")
 	}
 
 	idxtbl := fn.Exprs[2].String()
 
-	if _, ok := fn.Exprs[3].(*tree.NumVal); !ok {
-		return "", moerr.NewInvalidInput(builder.GetContext(), "pattern is not a constant")
+	patternVal, ok := fn.Exprs[3].(*tree.NumVal)
+	if !ok {
+		return "", nil
 	}
 
-	pattern := fn.Exprs[3].String()
+	pattern := patternVal.String()
 	modeVal, ok := fn.Exprs[4].(*tree.NumVal)
 	if !ok {
 		return "", moerr.NewInvalidInput(builder.GetContext(), "mode is not a constant")
@@ -143,6 +139,18 @@ func (builder *QueryBuilder) getFullTextSql(fn *tree.FuncExpr, params string) (s
 	mode, ok := modeVal.Int64()
 	if !ok {
 		return "", moerr.NewInvalidInput(builder.GetContext(), "mode is not an integer")
+	}
+
+	return builder.getFullTextIndexScanSql(params, idxtbl, pattern, mode)
+}
+
+func (builder *QueryBuilder) getFullTextIndexScanSql(params string, idxtbl string, pattern string, mode int64) (string, error) {
+	var param fulltext.FullTextParserParam
+	if len(params) > 0 {
+		err := json.Unmarshal([]byte(params), &param)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	ps, err := fulltext.ParsePattern(pattern, mode, param.Parser)
@@ -174,7 +182,13 @@ func (builder *QueryBuilder) getFullTextSql(fn *tree.FuncExpr, params string) (s
 //
 // for composite key, use hex string X'abcd' as input of primary key and skip serial()
 // select unhex(hex(serial(cast(0 as smallint), cast(1 as int))));
-func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+func (builder *QueryBuilder) buildFullTextIndexTokenize(
+	tbl *tree.TableFunction,
+	ctx *BindContext,
+	exprs []*plan.Expr,
+	children []int32,
+	inputNodeID int32,
+) (int32, error) {
 
 	if len(exprs) < 3 {
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 3).")
@@ -186,7 +200,13 @@ func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction,
 		return 0, err
 	}
 
-	scanNode := builder.qry.Nodes[children[0]]
+	if inputNodeID < 0 || int(inputNodeID) >= len(builder.qry.Nodes) {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "fulltext_index_tokenize requires a left input relation")
+	}
+	// inputNodeID supplies planning metadata such as the primary-key type. It
+	// does not by itself make the relation an execution child; buildTableFunction
+	// derives that dependency independently from the normalized arguments.
+	scanNode := builder.qry.Nodes[inputNodeID]
 	if scanNode.NodeType == plan.Node_TABLE_SCAN {
 		if len(exprs) < 3 {
 			return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 3).")

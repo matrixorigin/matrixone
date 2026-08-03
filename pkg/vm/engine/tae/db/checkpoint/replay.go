@@ -17,7 +17,7 @@ package checkpoint
 import (
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -116,8 +116,8 @@ func (c *CkpReplayer) readCheckpointEntries() (
 		return
 	}
 
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].GetEnd().LT(files[j].GetEnd())
+	slices.SortFunc(files, func(a, b ioutil.TSRangeFile) int {
+		return a.GetEnd().Compare(b.GetEnd())
 	})
 
 	var (
@@ -501,8 +501,8 @@ func MergeCkpMeta(
 		return "", nil
 	}
 
-	sort.Slice(metaFiles, func(i, j int) bool {
-		return metaFiles[i].GetEnd().LT(metaFiles[j].GetEnd())
+	slices.SortFunc(metaFiles, func(a, b ioutil.TSRangeFile) int {
+		return a.GetEnd().Compare(b.GetEnd())
 	})
 
 	maxFile := metaFiles[len(metaFiles)-1]

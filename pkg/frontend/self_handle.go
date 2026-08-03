@@ -18,11 +18,15 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
 func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray, err error) {
-	finishRunSQL := enterFrontendRunSQL(ses, execCtx)
+	finishRunSQL, err := enterFrontendRunSQL(ses, execCtx)
+	if err != nil {
+		return stats, err
+	}
 	defer finishRunSQL()
 	ses.EnterFPrint(FPExecInFrontEnd)
 	defer ses.ExitFPrint(FPExecInFrontEnd)
@@ -47,6 +51,9 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 	case *tree.Use:
 		ses.EnterFPrint(FPUse)
 		defer ses.ExitFPrint(FPUse)
+		// USE is deliberately NOT affected by remapdb: it switches to the named
+		// database as written. remapdb instead redirects unqualified name
+		// resolution for whatever the current database is (see DefaultDatabase).
 		dbName := st.Name.Compare()
 		//use database
 		err = handleChangeDB(ses, execCtx, dbName)
@@ -57,6 +64,16 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 
 		//dump
 		err = handleDump(ses, execCtx, st)
+		if err != nil {
+			return
+		}
+	case *tree.DumpTable:
+		err = handleDumpTable(execCtx.reqCtx, ses, st)
+		if err != nil {
+			return
+		}
+	case *tree.LoadTable:
+		err = handleLoadTable(execCtx.reqCtx, ses, st)
 		if err != nil {
 			return
 		}
@@ -87,13 +104,6 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		_, err = authenticateUserCanExecutePrepareOrExecute(execCtx.reqCtx, ses, execCtx.prepareStmt.PrepareStmt, execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 		if err != nil {
 			ses.RemovePrepareStmt(execCtx.prepareStmt.Name)
-			return
-		}
-	case *tree.CreateConnector:
-		ses.EnterFPrint(FPCreateConnector)
-		defer ses.ExitFPrint(FPCreateConnector)
-		err = handleCreateConnector(execCtx.reqCtx, ses, st)
-		if err != nil {
 			return
 		}
 	case *tree.PauseDaemonTask:
@@ -153,17 +163,44 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleShowSQLTaskRuns(execCtx.reqCtx, ses, execCtx, st); err != nil {
 			return
 		}
-	case *tree.DropConnector:
-		ses.EnterFPrint(FPDropConnector)
-		defer ses.ExitFPrint(FPDropConnector)
-		err = handleDropConnector(execCtx.reqCtx, ses, st)
-		if err != nil {
+	case *tree.CreateIcebergCatalog:
+		if err = handleCreateIcebergCatalog(execCtx.reqCtx, ses, st); err != nil {
 			return
 		}
-	case *tree.ShowConnectors:
-		ses.EnterFPrint(FPShowConnectors)
-		defer ses.ExitFPrint(FPShowConnectors)
-		if err = handleShowConnectors(execCtx.reqCtx, ses); err != nil {
+	case *tree.AlterIcebergCatalog:
+		if err = handleAlterIcebergCatalog(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.DropIcebergCatalog:
+		if err = handleDropIcebergCatalog(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.ShowIcebergCatalogs:
+		if err = handleShowIcebergCatalogs(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.ShowIcebergNamespaces:
+		if err = handleShowIcebergNamespaces(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.ShowIcebergTables:
+		if err = handleShowIcebergTables(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.CreateMongoDBConnection:
+		if err = handleCreateMongoDBConnection(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.AlterMongoDBConnection:
+		if err = handleAlterMongoDBConnection(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.DropMongoDBConnection:
+		if err = handleDropMongoDBConnection(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.ShowMongoDBConnections:
+		if err = handleShowMongoDBConnections(execCtx.reqCtx, ses, st); err != nil {
 			return
 		}
 	case *tree.Deallocate:
@@ -205,6 +242,18 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		ses.EnterFPrint(FPAnalyzeStmt)
 		defer ses.ExitFPrint(FPAnalyzeStmt)
 		if err = handleAnalyzeStmt(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.CheckTableStmt:
+		ses.EnterFPrint(FPCheckTableStmt)
+		defer ses.ExitFPrint(FPCheckTableStmt)
+		if err = handleCheckTableStmt(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.ShowProfileStmt:
+		ses.EnterFPrint(FPShowProfileStmt)
+		defer ses.ExitFPrint(FPShowProfileStmt)
+		if err = handleShowProfileStmt(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.ExplainStmt:
@@ -674,7 +723,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 	case *tree.CloneTable:
 		ses.EnterFPrint(FPCloneTable)
 		defer ses.ExitFPrint(FPCloneTable)
-		if _, err = handleCloneTable(execCtx, ses, st, nil); err != nil {
+		if _, err = handleCloneTable(execCtx, ses, st, nil, nil); err != nil {
 			return
 		}
 
@@ -704,17 +753,17 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 	return
 }
 
-func enterFrontendRunSQL(ses *Session, execCtx *ExecCtx) func() {
+func enterFrontendRunSQL(ses *Session, execCtx *ExecCtx) (func(), error) {
 	if ses == nil || execCtx == nil {
-		return func() {}
+		return func() {}, nil
 	}
 	txnHandler := ses.GetTxnHandler()
 	if txnHandler == nil {
-		return func() {}
+		return func() {}, nil
 	}
 	txnOp := txnHandler.GetTxn()
 	if txnOp == nil {
-		return func() {}
+		return func() {}, nil
 	}
 	sqlText := execCtx.sqlOfStmt
 	if sqlText == "" {
@@ -725,7 +774,13 @@ func enterFrontendRunSQL(ses *Session, execCtx *ExecCtx) func() {
 		ctx = context.Background()
 	}
 	_, cancel := context.WithCancel(ctx)
-	token := txnOp.EnterRunSqlWithTokenAndSQL(cancel, sqlText)
+	token, err := client.TryEnterRunSqlWithTokenAndSQL(txnOp, cancel, sqlText)
+	if err != nil {
+		cancel()
+		return func() {}, err
+	}
+	// Legacy TxnOperator implementations may use zero as an opaque/no-op token.
+	// Preserve the pre-admission-API session bookkeeping contract for them.
 	if token != 0 {
 		ses.pushRunSQLToken(token)
 	}
@@ -735,5 +790,5 @@ func enterFrontendRunSQL(ses *Session, execCtx *ExecCtx) func() {
 			ses.popRunSQLToken()
 		}
 		cancel()
-	}
+	}, nil
 }

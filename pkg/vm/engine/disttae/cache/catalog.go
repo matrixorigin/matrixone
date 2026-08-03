@@ -15,7 +15,8 @@
 package cache
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 	"strings"
 	"sync"
 
@@ -39,7 +40,7 @@ import (
 )
 
 func NewCatalog() *CatalogCache {
-	return &CatalogCache{
+	cc := &CatalogCache{
 		tables: &tableCache{
 			data:       btree.NewBTreeG(tableItemLess),
 			cpkeyIndex: btree.NewBTreeG(tableItemCPKeyLess),
@@ -54,6 +55,7 @@ func NewCatalog() *CatalogCache {
 			end   types.TS
 		}{start: types.MaxTs()},
 	}
+	return cc
 }
 
 func (cc *CatalogCache) UpdateDuration(start types.TS, end types.TS) {
@@ -383,8 +385,60 @@ func (cc *CatalogCache) GetStartTS() types.TS {
 	return cc.mu.start
 }
 
+func (cc *CatalogCache) UpdatePreparedMetadata(bat *batch.Batch) {
+	if bat == nil || len(bat.Vecs) <= MO_TIMESTAMP_IDX {
+		return
+	}
+	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
+	cc.preparedMetadata.Lock()
+	defer cc.preparedMetadata.Unlock()
+	for _, ts := range timestamps {
+		value := ts.ToTimestamp()
+		if value.Greater(cc.preparedMetadata.ts) {
+			cc.preparedMetadata.ts = value
+		}
+	}
+}
+
+func (cc *CatalogCache) GetPreparedMetadataTS() timestamp.Timestamp {
+	cc.preparedMetadata.RLock()
+	defer cc.preparedMetadata.RUnlock()
+	return cc.preparedMetadata.ts
+}
+
 func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 	var find bool
+	if qry.DatabaseName != "" {
+		key := &DatabaseItem{
+			AccountId: qry.AccountId,
+			Name:      qry.DatabaseName,
+			Ts:        types.MaxTs().ToTimestamp(),
+		}
+		cc.databases.data.Ascend(key, func(item *DatabaseItem) bool {
+			if item.AccountId != qry.AccountId || item.Name != qry.DatabaseName {
+				return false
+			}
+			if item.Ts.Greater(qry.Ts) && (item.deleted || item.Id != qry.DatabaseId) {
+				find = true
+			}
+			return false
+		})
+		if find {
+			return true
+		}
+	}
+	if qry.Name == "" {
+		if qry.DatabaseId == 0 {
+			cc.tableChange.RLock()
+			latest := cc.tableChange.byAccount[tableChangeBucket(qry.AccountId)]
+			cc.tableChange.RUnlock()
+			return latest.Greater(qry.Ts)
+		}
+		// A database-only marker protects the target database identity. The
+		// database lookup above already detected deletion/recreation, and table
+		// changes inside the same database are unrelated to that dependency.
+		return false
+	}
 
 	key := &TableItem{
 		AccountId:  qry.AccountId,
@@ -398,7 +452,7 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 		}
 
 		if item.Ts.Greater(qry.Ts) {
-			if item.deleted || item.Id != qry.TableId || item.Version < qry.Version {
+			if item.deleted || item.Id != qry.TableId || item.Version > qry.Version {
 				find = true
 			}
 		}
@@ -427,6 +481,9 @@ func (cc *CatalogCache) GetDatabase(db *DatabaseItem) bool {
 }
 
 func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
+	cc.tableChange.Lock()
+	defer cc.tableChange.Unlock()
+
 	cpks := bat.GetVector(MO_OFF + 0)
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	for i, ts := range timestamps {
@@ -441,7 +498,7 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 				DatabaseId: item.DatabaseId,
 				Ts:         ts.ToTimestamp(),
 			}
-			cc.tables.data.Set(newItem)
+			cc.setTableItemLocked(newItem, false)
 			return false
 		})
 	}
@@ -517,10 +574,34 @@ func ParseTablesBatchAnd(bat *batch.Batch, f func(*TableItem)) {
 }
 
 func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
+	cc.tableChange.Lock()
+	defer cc.tableChange.Unlock()
+
 	ParseTablesBatchAnd(bat, func(item *TableItem) {
-		cc.tables.data.Set(item)
-		cc.tables.cpkeyIndex.Set(item)
+		cc.setTableItemLocked(item, true)
 	})
+}
+
+func (cc *CatalogCache) setTableItem(item *TableItem, updateCPKey bool) {
+	cc.tableChange.Lock()
+	defer cc.tableChange.Unlock()
+
+	cc.setTableItemLocked(item, updateCPKey)
+}
+
+func (cc *CatalogCache) setTableItemLocked(item *TableItem, updateCPKey bool) {
+	cc.tables.data.Set(item)
+	if updateCPKey {
+		cc.tables.cpkeyIndex.Set(item)
+	}
+	bucket := tableChangeBucket(item.AccountId)
+	if latest := cc.tableChange.byAccount[bucket]; item.Ts.Greater(latest) {
+		cc.tableChange.byAccount[bucket] = item.Ts
+	}
+}
+
+func tableChangeBucket(accountID uint32) uint32 {
+	return accountID % tableChangeBucketCount
 }
 
 func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
@@ -582,7 +663,7 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 }
 
 func InitTableItemWithColumns(item *TableItem, cols Columns) {
-	sort.Sort(cols)
+	slices.SortFunc(cols, func(a, b catalog.Column) int { return cmp.Compare(a.Num, b.Num) })
 	coldefs := make([]engine.TableDef, 0, len(cols))
 	for i, col := range cols {
 		if col.ConstraintType == catalog.SystemColPKConstraint {
@@ -661,7 +742,11 @@ func genTableDefOfColumn(col catalog.Column) engine.TableDef {
 	attr.AutoIncrement = col.IsAutoIncrement == 1
 	attr.Seqnum = col.Seqnum
 	attr.EnumVlaues = col.EnumValues
-	if err := types.Decode(col.Typ, &attr.Type); err != nil {
+	// Call the concrete Unmarshal method rather than types.Decode: passing
+	// &attr.Type through the encoding.BinaryUnmarshaler interface forces the
+	// whole attr local to escape to the heap. The direct method call avoids
+	// the extra standalone allocation per column.
+	if err := attr.Type.Unmarshal(col.Typ); err != nil {
 		panic(err)
 	}
 	attr.Default = new(plan.Default)
@@ -847,25 +932,30 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		clusterByDef.CompCbkeyCol = plan2.GetColDefFromTable(cols, clusterByDef.Name)
 	}
 
+	// IsTemporary is session state, not a projection of the durable marker.
+	// The compiler sets it only after resolving a session's temporary alias.
 	return &plan.TableDef{
-		TblId:         tblItem.Id,
-		Name:          tblItem.Name,
-		DbName:        tblItem.DatabaseName,
-		Cols:          cols,
-		Name2ColIndex: name2index,
-		Defs:          defs,
-		TableType:     TableType,
-		Createsql:     Createsql,
-		Pkey:          primarykey,
-		ViewSql:       viewSql,
-		Fkeys:         foreignKeys,
-		RefChildTbls:  refChildTbls,
-		ClusterBy:     clusterByDef,
-		Indexes:       indexes,
-		Version:       tblItem.Version,
-		DbId:          tblItem.DatabaseId,
-		Partition:     partition,
-		FeatureFlag:   tblItem.ExtraInfo.GetFeatureFlag(),
-		LogicalId:     tblItem.LogicalId,
+		TblId:          tblItem.Id,
+		Name:           tblItem.Name,
+		DbName:         tblItem.DatabaseName,
+		Cols:           cols,
+		Name2ColIndex:  name2index,
+		Defs:           defs,
+		TableType:      TableType,
+		Createsql:      Createsql,
+		Pkey:           primarykey,
+		ViewSql:        viewSql,
+		Fkeys:          foreignKeys,
+		RefChildTbls:   refChildTbls,
+		ClusterBy:      clusterByDef,
+		Indexes:        indexes,
+		Version:        tblItem.Version,
+		DbId:           tblItem.DatabaseId,
+		Partition:      partition,
+		FeatureFlag:    tblItem.ExtraInfo.GetFeatureFlag(),
+		AutoIncrOffset: tblItem.ExtraInfo.GetAutoIncrOffset(),
+		AutoIncrEpoch:  tblItem.ExtraInfo.GetAutoIncrEpoch(),
+		Checks:         tblItem.ExtraInfo.GetChecks(),
+		LogicalId:      tblItem.LogicalId,
 	}, tableDef
 }

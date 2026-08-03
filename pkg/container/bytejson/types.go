@@ -73,6 +73,7 @@ const (
 	subPathDoubleStar subPathType = iota + 1
 	subPathIdx
 	subPathKey
+	subPathKeyWildcard
 	subPathRange
 )
 
@@ -140,7 +141,11 @@ const (
 	TpCodeDate     TpCode = 0x0e
 	TpCodeTime     TpCode = 0x0f
 	TpCodeDatetime TpCode = 0x10
-	TpCodeBlob     TpCode = 0x11
+	// TpCodeBlob is the legacy base64-encoded BLOB representation. New binary
+	// JSON values retain their bytes in TpCodeOpaque and encode only on output.
+	TpCodeBlob   TpCode = 0x11
+	TpCodeOpaque TpCode = 0x12
+	TpCodeBit    TpCode = 0x13
 )
 
 func (bj ByteJson) TYPE() string {
@@ -168,7 +173,14 @@ func (bj ByteJson) TYPE() string {
 	case TpCodeDatetime:
 		return "DATETIME"
 	case TpCodeBlob:
+		if _, ok := bj.persistedBitPayload(); ok {
+			return "BIT"
+		}
 		return "BLOB"
+	case TpCodeOpaque:
+		return "BLOB"
+	case TpCodeBit:
+		return "BIT"
 	default:
 		return "OPAQUE"
 	}
@@ -185,6 +197,7 @@ var jsonTpOrder = map[string]int{
 	"TIME":     -8,
 	"DATETIME": -9,
 	"BLOB":     -10,
+	"BIT":      -10,
 	"LITERAL":  -11,
 }
 
@@ -202,6 +215,10 @@ const (
 )
 
 func CompareByteJson(left, right ByteJson) int {
+	if cmp, ok := CompareBinaryJSON(left, right); ok {
+		return cmp
+	}
+
 	order1 := jsonTpOrder[left.TYPE()]
 	order2 := jsonTpOrder[right.TYPE()]
 
@@ -235,7 +252,7 @@ func CompareByteJson(left, right ByteJson) int {
 			cmp = compareFloat64(left.GetFloat64(), right.GetFloat64())
 		case TpCodeDecimal:
 			cmp = compareByteJsonNumericExact(left, right)
-		case TpCodeString, TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
+		case TpCodeString, TpCodeDate, TpCodeTime, TpCodeDatetime:
 			cmp = bytes.Compare(left.GetString(), right.GetString())
 		case TpCodeArray:
 			leftCnt := left.GetElemCnt()

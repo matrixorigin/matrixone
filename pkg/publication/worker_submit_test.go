@@ -16,6 +16,7 @@ package publication
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -81,6 +82,38 @@ type mockJob struct{}
 func (m *mockJob) Execute()      {}
 func (m *mockJob) WaitDone() any { return nil }
 func (m *mockJob) GetType() int8 { return 0 }
+func (m *mockJob) Fail(error)    {}
+
+type legacyJob struct{}
+
+func (m *legacyJob) Execute()      {}
+func (m *legacyJob) WaitDone() any { return nil }
+func (m *legacyJob) GetType() int8 { return 0 }
+
+var _ Job = (*legacyJob)(nil)
+
+func TestWorkerAdmissionRequiresAdditiveTerminalContract(t *testing.T) {
+	filterWorker := NewFilterObjectWorker()
+	defer filterWorker.Stop()
+	require.ErrorContains(t,
+		filterWorker.SubmitFilterObject(&legacyJob{}),
+		"terminal failure completion",
+	)
+
+	chunkWorker := NewGetChunkWorker()
+	defer chunkWorker.Stop()
+	require.ErrorContains(t,
+		chunkWorker.SubmitGetChunk(&legacyJob{}),
+		"terminal failure completion",
+	)
+
+	writeWorker := NewWriteObjectWorker()
+	defer writeWorker.Stop()
+	require.ErrorContains(t,
+		writeWorker.SubmitWriteObject(&legacyJob{}),
+		"terminal failure completion",
+	)
+}
 
 // ---- Worker pool submit success tests ----
 
@@ -160,6 +193,26 @@ func TestWorkerSyncProtection_UpdateTTL(t *testing.T) {
 	w.RegisterSyncProtection("job-1", 2000) // update
 	ttl := w.GetSyncProtectionTTL("job-1")
 	assert.Equal(t, int64(2000), ttl)
+}
+
+func TestWorkerSyncProtection_StopDuringKeepAliveStart(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		w := &worker{
+			taskChan:           make(chan *TaskContext, 10),
+			syncProtectionJobs: make(map[string]*syncProtectionEntry),
+		}
+		w.ctx, w.cancel = context.WithCancel(context.Background())
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w.RunSyncProtectionKeepAlive()
+		}()
+
+		w.Stop()
+		wg.Wait()
+	}
 }
 
 // ---- Worker Submit tests ----

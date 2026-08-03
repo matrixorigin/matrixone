@@ -46,6 +46,10 @@ type MarshalerUnmarshaler interface {
 	UnmarshalFromReader(io.Reader) error
 }
 
+type freeableMarshalerUnmarshaler interface {
+	Free()
+}
+
 type aggInfo struct {
 	aggId                    int64
 	isDistinct               bool
@@ -238,7 +242,7 @@ func (ag *aggState) readStateArg(mp *mpool.MPool, i int32, r io.Reader, info *ag
 	}
 
 	for ui := uint32(0); ui < ag.argCnt[i]; ui++ {
-		if info.argTypes[0].IsFixedLen() {
+		if !info.usesOpaqueArgEncoding() && info.argTypes[0].IsFixedLen() {
 			binary.BigEndian.PutUint16(kbuf[:kAggArgPrefixSz], uint16(i))
 			if _, err = io.ReadFull(r, kbuf[kAggArgPrefixSz:]); err != nil {
 				return err
@@ -379,14 +383,38 @@ func (ag *aggState) readState(mp *mpool.MPool, reader io.Reader, info *aggInfo) 
 		return 0, err
 	}
 	if cnt == 0 {
+		if !info.saveArg && info.makeMarshalerUnmarshaler == nil {
+			ag.length = 0
+			for _, vec := range ag.vecs {
+				if vec != nil {
+					vec.CleanOnlyData()
+				}
+			}
+		} else {
+			ag.free(mp)
+			ag.length = 0
+			ag.capacity = 0
+		}
 		return 0, nil
 	}
 
-	if cnt > AggBatchSize {
+	if cnt < 0 || cnt > AggBatchSize {
 		return 0, moerr.NewInternalErrorNoCtxf("invalid count: %d", cnt)
 	}
-	if err := ag.init(mp, cnt, cnt, info, false); err != nil {
-		return 0, err
+	reuseVectors := !info.saveArg && info.makeMarshalerUnmarshaler == nil &&
+		len(ag.vecs) == len(info.stateTypes) && ag.capacity >= cnt
+	if reuseVectors {
+		ag.length = cnt
+		for _, vec := range ag.vecs {
+			if vec != nil {
+				vec.CleanOnlyData()
+			}
+		}
+	} else {
+		ag.free(mp)
+		if err := ag.init(mp, cnt, cnt, info, false); err != nil {
+			return 0, err
+		}
 	}
 
 	if !info.saveArg {
@@ -487,8 +515,15 @@ func (ag *aggState) insertArg(mp *mpool.MPool, kbuf []byte) error {
 		return err
 	}
 
-	// arena is full, we need to grow the arena.
-	argBuf, err := mp.Alloc(len(ag.argbuf)+kAggArgArenaSize, true)
+	// arena is full, we need to grow the arena. Grow by at least kAggArgArenaSize,
+	// but if a single key (plus its skiplist node overhead) needs more than that —
+	// e.g. a multi-column distinct key concatenating several large string args —
+	// grow by enough to fit it, otherwise the retry below would still ErrArenaFull.
+	grow := int64(kAggArgArenaSize)
+	if need := int64(arenaskl.MaxNodeSize(uint32(len(kbuf)), 0)); need > grow {
+		grow = need
+	}
+	argBuf, err := mp.Alloc(len(ag.argbuf)+int(grow), true)
 	if err != nil {
 		return err
 	}
@@ -617,6 +652,12 @@ func (ag *aggState) free(mp *mpool.MPool) {
 		vec.Free(mp)
 	}
 	ag.vecs = nil
+	for _, mob := range ag.mobs {
+		if freeable, ok := mob.(freeableMarshalerUnmarshaler); ok {
+			freeable.Free()
+		}
+	}
+	ag.mobs = nil
 }
 
 type aggExec struct {
@@ -731,9 +772,26 @@ func (ae *aggExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes
 		return err
 	}
 
-	// write the number of chunks
-	types.WriteInt32(buf, int32(len(flags)))
+	// Empty chunks carry no positional meaning in the intermediate format: the
+	// reader packs every selected state contiguously. Group spill commonly
+	// selects one 8K state chunk out of hundreds, so emitting all of the empty
+	// chunk headers bloats millions of small records and adds needless decode work.
+	// A nil/empty flag slice is the caller's compact representation of an empty
+	// chunk; non-empty all-zero flags remain encoded for compatibility.
+	var chunks int32
 	for i := range flags {
+		if len(flags[i]) > 0 {
+			chunks++
+		}
+	}
+	types.WriteInt32(buf, chunks)
+	for i := range flags {
+		if len(flags[i]) == 0 {
+			continue
+		}
+		if i >= len(ae.state) {
+			return moerr.NewInternalErrorNoCtxf("aggregate state chunk out of range: %d >= %d", i, len(ae.state))
+		}
 		if err := ae.state[i].writeStateToBuf(ae.mp, &ae.aggInfo, flags[i], buf); err != nil {
 			return err
 		}
@@ -774,12 +832,15 @@ func checkAggStateMagic(reader io.Reader) {
 	}
 }
 
-func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) (retErr error) {
 	checkAggStateMagic(reader)
 	defer checkAggStateMagic(reader)
-
-	// Always unmarshal from a clean state.
-	ae.Free()
+	defer func() {
+		if retErr != nil {
+			ae.Free()
+			ae.state = nil
+		}
+	}()
 
 	// read number of chunks
 	cnt, err := types.ReadInt32(reader)
@@ -789,10 +850,17 @@ func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error 
 
 	// nothing to read
 	if cnt == 0 {
+		ae.Free()
+		ae.state = nil
 		return nil
 	} else if cnt == 1 {
-		// easy case, just one chunk and we read it directly.
-		ae.state = make([]aggState, 1)
+		// The compact spill format makes this the common path. Retain one simple
+		// fixed-state chunk across records so UnmarshalWithReader can reuse its
+		// off-heap vector capacity instead of mmap/munmap for every small record.
+		if len(ae.state) != 1 {
+			ae.Free()
+			ae.state = make([]aggState, 1)
+		}
 		if _, err := ae.state[0].readState(mp, reader, &ae.aggInfo); err != nil {
 			return err
 		}
@@ -804,8 +872,17 @@ func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error 
 				}
 			}
 		}
+		if !ae.aggInfo.saveArg && ae.aggInfo.makeMarshalerUnmarshaler == nil {
+			ae.state[0].capacity = AggBatchSize
+		}
 		return nil
 	}
+
+	// Multi-chunk inputs may need to repack several independently allocated
+	// states. Keep their historical cleanup path; only the one-chunk path above
+	// has a complete bounded reuse invariant.
+	ae.Free()
+	ae.state = nil
 
 	// multi chunks to read, in this case, we will read each chunk and merge them
 	// into fully packed chunks.
@@ -855,24 +932,62 @@ func (ae *aggExec) Free() {
 }
 
 func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.Vector, distinct bool) error {
-	if len(vectors) != 1 {
-		return moerr.NewInternalErrorNoCtx("batchFillArgs: only one vector is supported")
-	}
-
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
 		}
 
 		idx := uint64(i) + uint64(offset)
-		if vectors[0].IsNull(idx) {
-			continue
-		} else {
+
+		// For single-vector, use the fast path.
+		if len(vectors) == 1 {
+			if vectors[0].IsNull(idx) {
+				continue
+			}
 			x, y := ae.getXY(group - 1)
 			bs := vectors[0].GetRawBytesAt(int(idx))
 			if err := ae.state[x].fillArg(ae.mp, y, bs, distinct); err != nil {
 				return err
 			}
+			continue
+		}
+
+		// For multi-vector (e.g. COUNT(DISTINCT col1, col2)):
+		// - Skip row if ANY column is NULL (MySQL semantics).
+		// - Encode all column values into a combined key:
+		//   [len1:4 bytes][raw1][len2:4 bytes][raw2]...
+		hasNull := false
+		for _, vec := range vectors {
+			if vec.IsNull(idx) {
+				hasNull = true
+				break
+			}
+		}
+		if hasNull {
+			continue
+		}
+
+		// Calculate total encoded size.
+		totalSize := 0
+		rawBytes := make([][]byte, len(vectors))
+		for j, vec := range vectors {
+			rawBytes[j] = vec.GetRawBytesAt(int(idx))
+			totalSize += 4 + len(rawBytes[j])
+		}
+
+		// Encode all columns into a single key.
+		buf := make([]byte, totalSize)
+		off := 0
+		for _, raw := range rawBytes {
+			binary.BigEndian.PutUint32(buf[off:], uint32(len(raw)))
+			off += 4
+			copy(buf[off:], raw)
+			off += len(raw)
+		}
+
+		x, y := ae.getXY(group - 1)
+		if err := ae.state[x].fillArg(ae.mp, y, buf, distinct); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -147,7 +147,7 @@ func TestShardedLoadWithFewerSavedShards(t *testing.T) {
 
 	// --- Save phase: 2 shards over devs[:2] ---
 	saveDevs := devs[:2]
-	src, err := NewGpuIvfFlat[float32](dataset, nVectors, dimension, L2Expanded,
+	src, err := NewGpuIvfFlat[float32, float32](dataset, nVectors, dimension, L2Expanded,
 		bp, saveDevs, uint32(len(saveDevs)), Sharded, nil)
 	if err != nil {
 		t.Fatalf("save-side build: %v", err)
@@ -182,7 +182,7 @@ func TestShardedLoadWithFewerSavedShards(t *testing.T) {
 
 	// --- Load phase: caller supplies ALL available devs; wrapper should
 	// truncate to the saved 2. ---
-	dst, err := NewGpuIvfFlatFromDataDirectory[float32](extractDir, dimension, L2Expanded,
+	dst, err := NewGpuIvfFlatFromDataDirectory[float32, float32](extractDir, dimension, L2Expanded,
 		bp, devs, uint32(len(devs)), Sharded)
 	if err != nil {
 		t.Fatalf("load with extra devices: %v", err)

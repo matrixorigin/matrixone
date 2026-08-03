@@ -16,6 +16,7 @@ package function
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -27,6 +28,7 @@ import (
 	"math"
 	"math/big"
 	"math/bits"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1148,7 +1150,7 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 			allNull = false
 		}
 		if allNull {
-			if err = rs.AppendBytes(nil, true); err != nil {
+			if err = rs.AppendBytes(nil, false); err != nil {
 				return err
 			}
 			continue
@@ -1222,16 +1224,16 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		fromTz, null2 := fromTzs.GetStrValue(i)
 		toTz, null3 := toTzs.GetStrValue(i)
 
-		if null1 || null2 || null3 {
+		if null1 || null2 || null3 || date == types.ZeroDatetime {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-			return nil
+			continue
 		} else if len(fromTz) == 0 || len(toTz) == 0 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-			return nil
+			continue
 		} else {
 			if !ivecs[1].IsConst() {
 				fromLoc = convertTimezone(string(fromTz))
@@ -1243,7 +1245,7 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				if err = rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
-				return nil
+				continue
 			}
 			maxStartTime := time.Date(9999, 12, 31, 23, 59, 59, 0, fromLoc)
 			maxEndTime := time.Date(9999, 12, 31, 23, 59, 59, 0, toLoc)
@@ -1277,6 +1279,10 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 func convertTimezone(tz string) *time.Location {
+	if tz == "" {
+		return nil
+	}
+
 	loc, err := time.LoadLocation(tz)
 	if err != nil && tz[0] != '+' && tz[0] != '-' {
 		return nil
@@ -1322,6 +1328,9 @@ func isDateOverflowMaxError(err error) bool {
 }
 
 func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Date, error) {
+	if start == types.ZeroDate {
+		return 0, dateOverflowMaxError
+	}
 	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
 	if diff == math.MaxInt64 {
 		return 0, datetimeOverflowMaxError
@@ -1442,6 +1451,9 @@ func isDatetimeOverflowMaxError(err error) bool {
 }
 
 func doDatetimeAdd(start types.Datetime, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
+	if start == types.ZeroDatetime {
+		return 0, datetimeOverflowMaxError
+	}
 	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
 	if diff == math.MaxInt64 {
 		return 0, datetimeOverflowMaxError
@@ -1573,6 +1585,9 @@ func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (type
 		// Both parsing failed, return the original error (invalid string)
 		return 0, err
 	}
+	if start == types.ZeroDatetime {
+		return 0, datetimeOverflowMaxError
+	}
 	dt, success := start.AddInterval(diff, iTyp, types.DateType)
 	if success {
 		// Check if result is less than minimum valid date (0001-01-01)
@@ -1653,6 +1668,9 @@ func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (type
 }
 
 func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, iTyp types.IntervalType) (types.Timestamp, error) {
+	if start == types.ZeroTimestamp {
+		return 0, datetimeOverflowMaxError
+	}
 	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
 	if diff == math.MaxInt64 {
 		return 0, datetimeOverflowMaxError
@@ -1699,6 +1717,15 @@ func Truncate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		v, null := ivec.GetValue(i)
 		if null {
 			return moerr.NewNotSupported(proc.Ctx, "now args of MO_WIN_TRUNCATE can not be NULL")
+		}
+		// ZeroDatetime is a distinct MySQL zero-date sentinel, not the
+		// 0001-01-01 epoch. It is a valid time-window grouping key but cannot
+		// participate in modulo arithmetic without being aliased to that epoch.
+		if v == types.ZeroDatetime {
+			if err = rs.Append(types.ZeroDatetime, false); err != nil {
+				return err
+			}
+			continue
 		}
 		if err = rs.Append(v-v%t, false); err != nil {
 			return err
@@ -1957,9 +1984,42 @@ func TimestampAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
-	return opBinaryFixedFixedToFixedWithErrorCheck[types.Timestamp, int64, types.Timestamp](ivecs, result, proc, length, func(v1 types.Timestamp, v2 int64) (types.Timestamp, error) {
-		return doTimestampAdd(proc.GetSessionInfo().TimeZone, v1, v2, iTyp)
-	}, selectList)
+	result.UseOptFunctionParamFrame(2)
+	p1 := vector.OptGetParamFromWrapper[types.Timestamp](rs, 0, ivecs[0])
+	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[types.Timestamp](rsVec)
+	rsNull := rsVec.GetNulls()
+	loc := proc.GetSessionInfo().TimeZone
+	if loc == nil {
+		loc = time.Local
+	}
+	if selectList != nil && selectList.IgnoreAllRow() {
+		nulls.AddRange(rsNull, 0, uint64(length))
+		return nil
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			rsNull.Add(i)
+			continue
+		}
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 || v2 == math.MaxInt64 {
+			rsNull.Add(i)
+			continue
+		}
+		resultTs, err := doTimestampAdd(loc, v1, v2, iTyp)
+		if err != nil {
+			if isDatetimeOverflowMaxError(err) {
+				rsNull.Add(i)
+				continue
+			}
+			return err
+		}
+		rss[i] = resultTs
+	}
+	return nil
 }
 
 func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -3154,7 +3214,7 @@ func addTimeToDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		dt, null1 := datetimes.GetValue(i)
 		time2Str, null2 := time2Param.GetStrValue(i)
 
-		if null1 || null2 {
+		if null1 || null2 || dt == types.ZeroDatetime {
 			if err := rs.Append(types.Datetime(0), true); err != nil {
 				return err
 			}
@@ -3204,7 +3264,7 @@ func addTimeToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		ts, null1 := timestamps.GetValue(i)
 		time2Str, null2 := time2Param.GetStrValue(i)
 
-		if null1 || null2 {
+		if null1 || null2 || ts == types.ZeroTimestamp {
 			if err := rs.Append(types.Timestamp(0), true); err != nil {
 				return err
 			}
@@ -3273,6 +3333,12 @@ func addTimeToString(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			}
 			// Convert time to datetime (using today's date)
 			dt = time1.ToDatetime(scale)
+		}
+		if dt == types.ZeroDatetime {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
 		}
 
 		// Parse time2 string
@@ -3400,7 +3466,7 @@ func subTimeFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWra
 		dt, null1 := datetimes.GetValue(i)
 		time2Str, null2 := time2Param.GetStrValue(i)
 
-		if null1 || null2 {
+		if null1 || null2 || dt == types.ZeroDatetime {
 			if err := rs.Append(types.Datetime(0), true); err != nil {
 				return err
 			}
@@ -3450,7 +3516,7 @@ func subTimeFromTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWr
 		ts, null1 := timestamps.GetValue(i)
 		time2Str, null2 := time2Param.GetStrValue(i)
 
-		if null1 || null2 {
+		if null1 || null2 || ts == types.ZeroTimestamp {
 			if err := rs.Append(types.Timestamp(0), true); err != nil {
 				return err
 			}
@@ -3520,6 +3586,12 @@ func subTimeFromString(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 			// Convert time to datetime (using today's date)
 			dt = time1.ToDatetime(scale)
 		}
+		if dt == types.ZeroDatetime {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
+		}
 
 		// Parse time2 string
 		time2, err := types.ParseTime(functionUtil.QuickBytesToStr(time2Str), scale)
@@ -3550,6 +3622,7 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
 	formats := vector.GenerateFunctionStrParameter(ivecs[1])
 	fmt, null2 := formats.GetStrValue(0)
+	null2 = null2 || len(fmt) == 0
 
 	var dateFmtOperator DateFormatFunc
 	switch string(fmt) {
@@ -3581,10 +3654,16 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			}
 		} else {
 			buf.Reset()
-			if err = dateFmtOperator(proc.Ctx, d, string(fmt), &buf); err != nil {
+			var isNull bool
+			if isNull, err = dateFmtOperator(proc.Ctx, d, string(fmt), &buf); err != nil {
 				return err
 			}
-			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
+			if isNull {
+				err = rs.AppendBytes(nil, true)
+			} else {
+				err = rs.AppendBytes(buf.Bytes(), false)
+			}
+			if err != nil {
 				return err
 			}
 		}
@@ -3592,11 +3671,11 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	return nil
 }
 
-type DateFormatFunc func(ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) error
+type DateFormatFunc func(ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) (isNull bool, err error)
 
 // DATE_FORMAT       datetime
 // handle '%d/%m/%Y' ->	 22/04/2021
-func date_format_combine_pattern1(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+func date_format_combine_pattern1(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
 	month := int(t.Month())
 	day := int(t.Day())
 	year := int(t.Year())
@@ -3617,11 +3696,11 @@ func date_format_combine_pattern1(ctx context.Context, t types.Datetime, format 
 	buf.WriteByte(byte('0' + (year / 100 % 10)))
 	buf.WriteByte(byte('0' + (year / 10 % 10)))
 	buf.WriteByte(byte('0' + (year % 10)))
-	return nil
+	return false, nil
 }
 
 // handle '%Y%m%d' ->   20210422
-func date_format_combine_pattern2(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+func date_format_combine_pattern2(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
 	year := t.Year()
 	month := int(t.Month())
 	day := int(t.Day())
@@ -3642,22 +3721,22 @@ func date_format_combine_pattern2(ctx context.Context, t types.Datetime, format 
 	// date conversion
 	buf.WriteByte(byte('0' + (day / 10)))
 	buf.WriteByte(byte('0' + (day % 10)))
-	return nil
+	return false, nil
 }
 
 // handle '%Y'  ->   2021
-func date_format_combine_pattern3(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+func date_format_combine_pattern3(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
 	year := t.Year()
 	// Year conversion
 	buf.WriteByte(byte('0' + (year / 1000 % 10)))
 	buf.WriteByte(byte('0' + (year / 100 % 10)))
 	buf.WriteByte(byte('0' + (year / 10 % 10)))
 	buf.WriteByte(byte('0' + (year % 10)))
-	return nil
+	return false, nil
 }
 
 // %Y-%m-%d	               2021-04-22
-func date_format_combine_pattern4(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+func date_format_combine_pattern4(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
 	year := t.Year()
 	month := int(t.Month())
 	day := int(t.Day())
@@ -3680,12 +3759,12 @@ func date_format_combine_pattern4(ctx context.Context, t types.Datetime, format 
 	buf.WriteByte('-')
 	buf.WriteByte(byte('0' + (day / 10)))
 	buf.WriteByte(byte('0' + (day % 10)))
-	return nil
+	return false, nil
 }
 
 // handle '%Y-%m-%d %H:%i:%s'  ->   2004-04-03 13:11:10
 // handle ' %Y-%m-%d %T'   ->   2004-04-03 13:11:10
-func date_format_combine_pattern5(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+func date_format_combine_pattern5(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
 	year := int(t.Year())
 	month := int(t.Month())
 	day := int(t.Day())
@@ -3731,11 +3810,11 @@ func date_format_combine_pattern5(ctx context.Context, t types.Datetime, format 
 	// Second conversion
 	buf.WriteByte(byte('0' + (sec / 10)))
 	buf.WriteByte(byte('0' + (sec % 10)))
-	return nil
+	return false, nil
 }
 
 // handle '%Y/%m/%d'  ->   2010/01/07
-func date_format_combine_pattern6(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+func date_format_combine_pattern6(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
 	year := t.Year()
 	month := int(t.Month())
 	day := int(t.Day())
@@ -3758,12 +3837,12 @@ func date_format_combine_pattern6(ctx context.Context, t types.Datetime, format 
 	buf.WriteByte('/')
 	buf.WriteByte(byte('0' + (day / 10)))
 	buf.WriteByte(byte('0' + (day % 10)))
-	return nil
+	return false, nil
 }
 
 // handle '%Y/%m/%d %H:%i:%s'   ->    2010/01/07 23:12:34
 // handle '%Y/%m/%d %T'   ->    2010/01/07 23:12:34
-func date_format_combine_pattern7(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+func date_format_combine_pattern7(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
 	year := int(t.Year())
 	month := int(t.Month())
 	day := int(t.Day())
@@ -3809,16 +3888,20 @@ func date_format_combine_pattern7(ctx context.Context, t types.Datetime, format 
 	// Second conversion
 	buf.WriteByte(byte('0' + (sec / 10)))
 	buf.WriteByte(byte('0' + (sec % 10)))
-	return nil
+	return false, nil
 }
 
 // datetimeFormat: format the datetime value according to the format string.
-func datetimeFormat(ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) error {
+func datetimeFormat(ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
 	inPatternMatch := false
 	for _, b := range format {
 		if inPatternMatch {
-			if err := makeDateFormat(ctx, datetime, b, buf); err != nil {
-				return err
+			isNull, err := makeDateFormat(ctx, datetime, b, buf)
+			if err != nil {
+				return false, err
+			}
+			if isNull {
+				return true, nil
 			}
 			inPatternMatch = false
 			continue
@@ -3831,8 +3914,14 @@ func datetimeFormat(ctx context.Context, datetime types.Datetime, format string,
 			buf.WriteRune(b)
 		}
 	}
-	return nil
+	if inPatternMatch {
+		buf.WriteByte('%')
+	}
+	return false, nil
 }
+
+// MySQL's calc_week underflows a 32-bit uint for the zero-date sentinel.
+const mysqlZeroDateWeekNumber = int(math.MaxUint32/7 + 1)
 
 var (
 	// WeekdayNames lists names of weekdays, which are used in builtin function `date_format`.
@@ -3875,18 +3964,18 @@ var (
 )
 
 // makeDateFormat: Get the format string corresponding to the date according to a single format character
-func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Buffer) error {
+func makeDateFormat(_ context.Context, t types.Datetime, b rune, buf *bytes.Buffer) (bool, error) {
 	switch b {
 	case 'b':
 		m := t.Month()
 		if m == 0 || m > 12 {
-			return moerr.NewInvalidInputf(ctx, "invalud date format for month '%d'", m)
+			return true, nil
 		}
 		buf.WriteString(MonthNames[m-1][:3])
 	case 'M':
 		m := t.Month()
 		if m == 0 || m > 12 {
-			return moerr.NewInvalidInputf(ctx, "invalud date format for month '%d'", m)
+			return true, nil
 		}
 		buf.WriteString(MonthNames[m-1])
 	case 'm':
@@ -3956,14 +4045,23 @@ func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Bu
 		fmt.Fprintf(buf, "%02d:%02d:%02d", t.Hour(), t.Minute(), t.Sec())
 	case 'U':
 		w := t.Week(0)
+		if t == types.ZeroDatetime {
+			w = mysqlZeroDateWeekNumber
+		}
 		FormatInt2BufByWidth(w, 2, buf)
 		//buf.WriteString(FormatIntByWidth(w, 2))
 	case 'u':
 		w := t.Week(1)
+		if t == types.ZeroDatetime {
+			w = mysqlZeroDateWeekNumber
+		}
 		FormatInt2BufByWidth(w, 2, buf)
 		//buf.WriteString(FormatIntByWidth(w, 2))
 	case 'V':
 		w := t.Week(2)
+		if t == types.ZeroDatetime {
+			w = mysqlZeroDateWeekNumber
+		}
 		FormatInt2BufByWidth(w, 2, buf)
 		//buf.WriteString(FormatIntByWidth(w, 2))
 	case 'v':
@@ -3971,11 +4069,20 @@ func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Bu
 		FormatInt2BufByWidth(w, 2, buf)
 		//buf.WriteString(FormatIntByWidth(w, 2))
 	case 'a':
+		if t.Year() == 0 && t.Month() == 0 {
+			return true, nil
+		}
 		weekday := t.DayOfWeek()
 		buf.WriteString(AbbrevWeekdayName[weekday])
 	case 'W':
+		if t.Year() == 0 && t.Month() == 0 {
+			return true, nil
+		}
 		buf.WriteString(t.DayOfWeek().String())
 	case 'w':
+		if t.Year() == 0 && t.Month() == 0 {
+			return true, nil
+		}
 		buf.WriteString(strconv.FormatInt(int64(t.DayOfWeek()), 10))
 	case 'X':
 		year, _ := t.YearWeek(2)
@@ -3986,6 +4093,10 @@ func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Bu
 			//buf.WriteString(FormatIntByWidth(year, 4))
 		}
 	case 'x':
+		if t == types.ZeroDatetime {
+			buf.WriteString("0001")
+			break
+		}
 		year, _ := t.YearWeek(3)
 		if year < 0 {
 			buf.WriteString(strconv.FormatUint(uint64(math.MaxUint32), 10))
@@ -4002,7 +4113,7 @@ func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Bu
 	default:
 		buf.WriteRune(b)
 	}
-	return nil
+	return false, nil
 }
 
 // TimeFormat: format the time value according to the format string.
@@ -4017,11 +4128,12 @@ func TimeFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	times := vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
 	formats := vector.GenerateFunctionStrParameter(ivecs[1])
 	fmt, null2 := formats.GetStrValue(0)
+	emptyFormat := len(fmt) == 0
 
 	var buf bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
 		t, null1 := times.GetValue(i)
-		if null1 || null2 {
+		if null1 || null2 || emptyFormat {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -4041,7 +4153,10 @@ func TimeFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 // timeFormat: Get the format string corresponding to the time according to format specifiers
 // Only supports time-related format specifiers: %H, %h, %I, %i, %k, %l, %S, %s, %f, %p, %r, %T
 func timeFormat(ctx context.Context, t types.Time, format string, buf *bytes.Buffer) error {
-	hour, minute, sec, msec, _ := t.ClockFormat()
+	hour, minute, sec, msec, isNeg := t.ClockFormat()
+	if isNeg && len(format) > 0 {
+		buf.WriteByte('-')
+	}
 	inPatternMatch := false
 	for _, b := range format {
 		if inPatternMatch {
@@ -4110,7 +4225,7 @@ func makeTimeFormat(ctx context.Context, hour uint64, minute, sec uint8, msec ui
 	case 'S', 's':
 		FormatInt2BufByWidth(int(sec), 2, buf)
 	case 'T':
-		fmt.Fprintf(buf, "%02d:%02d:%02d", hour%24, minute, sec)
+		fmt.Fprintf(buf, "%02d:%02d:%02d", hour, minute, sec)
 	default:
 		// For unsupported format specifiers, just write the character as-is
 		// This matches MySQL behavior where non-time format specifiers are ignored
@@ -4163,6 +4278,9 @@ func AbbrDayOfMonth(day int) string {
 }
 
 func doDateSub(start types.Date, diff int64, iTyp types.IntervalType) (types.Date, error) {
+	if start == types.ZeroDate {
+		return 0, datetimeOverflowMaxError
+	}
 	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
 	if diff == math.MaxInt64 {
 		return 0, datetimeOverflowMaxError
@@ -4193,6 +4311,9 @@ func doTimeSub(start types.Time, diff int64, iTyp types.IntervalType) (types.Tim
 }
 
 func doDatetimeSub(start types.Datetime, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
+	if start == types.ZeroDatetime {
+		return 0, datetimeOverflowMaxError
+	}
 	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
 	if diff == math.MaxInt64 {
 		return 0, datetimeOverflowMaxError
@@ -4236,6 +4357,9 @@ func doDateStringSub(startStr string, diff int64, iTyp types.IntervalType) (type
 		// Both parsing failed, return the original error (invalid string)
 		return 0, err
 	}
+	if start == types.ZeroDatetime {
+		return 0, datetimeOverflowMaxError
+	}
 	dt, success := start.AddInterval(-diff, iTyp, types.DateType)
 	if success {
 		return dt, nil
@@ -4273,6 +4397,9 @@ func doDateStringSub(startStr string, diff int64, iTyp types.IntervalType) (type
 }
 
 func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, iTyp types.IntervalType) (types.Timestamp, error) {
+	if start == types.ZeroTimestamp {
+		return 0, datetimeOverflowMaxError
+	}
 	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
 	if diff == math.MaxInt64 {
 		return 0, datetimeOverflowMaxError
@@ -4297,9 +4424,40 @@ func DateSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	iTyp := types.IntervalType(unit)
 
-	return opBinaryFixedFixedToFixedWithErrorCheck[types.Date, int64, types.Date](ivecs, result, proc, length, func(v1 types.Date, v2 int64) (types.Date, error) {
-		return doDateSub(v1, v2, iTyp)
-	}, selectList)
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[types.Date](result)
+	p1 := vector.OptGetParamFromWrapper[types.Date](rs, 0, ivecs[0])
+	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[types.Date](rsVec)
+	rsNull := rsVec.GetNulls()
+	if selectList != nil && selectList.IgnoreAllRow() {
+		nulls.AddRange(rsNull, 0, uint64(length))
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			rsNull.Add(i)
+			continue
+		}
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 || v2 == math.MaxInt64 {
+			rsNull.Add(i)
+			continue
+		}
+		resultDate, err := doDateSub(v1, v2, iTyp)
+		if err != nil {
+			if isDatetimeOverflowMaxError(err) {
+				rsNull.Add(i)
+				continue
+			}
+			return err
+		}
+		rss[i] = resultDate
+	}
+	return nil
 }
 
 func intToDate(v int32) (types.Date, error) {
@@ -4599,6 +4757,9 @@ type number interface {
 func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	tc := func(inputs []types.Type, t types.T) bool {
 		for _, input := range inputs {
+			if input.Oid == types.T_text && t == types.T_varchar {
+				continue
+			}
 			if (input.Oid == types.T_char && t == types.T_varchar) || (input.Oid == types.T_varchar && t == types.T_char) {
 				continue
 			}
@@ -5698,7 +5859,7 @@ func FromUnixTimeInt64Format(ivecs []*vector.Vector, result vector.FunctionResul
 		} else {
 			buf.Reset()
 			r := types.DatetimeFromUnix(proc.GetSessionInfo().TimeZone, v)
-			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
+			if _, err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
 			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
@@ -5730,7 +5891,7 @@ func FromUnixTimeUint64Format(ivecs []*vector.Vector, result vector.FunctionResu
 		} else {
 			buf.Reset()
 			r := types.DatetimeFromUnix(proc.GetSessionInfo().TimeZone, int64(v))
-			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
+			if _, err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
 			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
@@ -5763,7 +5924,7 @@ func FromUnixTimeFloat64Format(ivecs []*vector.Vector, result vector.FunctionRes
 			buf.Reset()
 			x, y := splitDecimalToIntAndFrac(v)
 			r := types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, x, y)
-			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
+			if _, err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
 			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
@@ -5800,7 +5961,7 @@ func FromUnixTimeDecimal256Format(ivecs []*vector.Vector, result vector.Function
 		} else {
 			buf.Reset()
 			r := types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, sec, nsec)
-			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
+			if _, err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
 			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
@@ -6101,7 +6262,9 @@ func ExtractFromDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		case "day":
 			r = uint32(d.Day())
 		case "week":
-			r = uint32(d.WeekOfYear2())
+			if d != types.ZeroDate {
+				r = uint32(d.WeekOfYear2())
+			}
 		case "month":
 			r = uint32(d.Month())
 		case "quarter":
@@ -6209,7 +6372,7 @@ func YearWeekDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 		}
 
 		date, null := dates.GetValue(i)
-		if null {
+		if null || date == types.ZeroDate {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -6252,7 +6415,7 @@ func YearWeekDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		}
 
 		dt, null := datetimes.GetValue(i)
-		if null {
+		if null || dt == types.ZeroDatetime {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -6299,7 +6462,7 @@ func YearWeekTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		}
 
 		ts, null := timestamps.GetValue(i)
-		if null {
+		if null || ts == types.ZeroTimestamp {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -6367,6 +6530,12 @@ func YearWeekString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 				}
 				continue
 			}
+			if date == types.ZeroDate {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
 			// Use date for YEARWEEK calculation
 			year, week := date.YearWeek(mode)
 			result := int64(year)*100 + int64(week)
@@ -6376,6 +6545,12 @@ func YearWeekString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			continue
 		}
 
+		if dt == types.ZeroDatetime {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		// Use datetime for YEARWEEK calculation
 		year, week := dt.YearWeek(mode)
 		result := int64(year)*100 + int64(week)
@@ -6403,7 +6578,11 @@ func extractFromDatetime(unit string, d types.Datetime) (string, error) {
 	case "day":
 		value = fmt.Sprintf("%02d", int(d.ToDate().Day()))
 	case "week":
-		value = fmt.Sprintf("%02d", int(d.ToDate().WeekOfYear2()))
+		if d == types.ZeroDatetime {
+			value = "00"
+		} else {
+			value = fmt.Sprintf("%02d", int(d.ToDate().WeekOfYear2()))
+		}
 	case "month":
 		value = fmt.Sprintf("%02d", int(d.ToDate().Month()))
 	case "quarter":
@@ -6611,6 +6790,20 @@ func extractFromVarchar(unit string, t string, scale int32) (string, error) {
 	var result string
 	if len(t) == 0 {
 		result = t
+	} else if extractUnitPrefersTime(unit) {
+		if value, err := types.ParseTime(t, scale); err == nil {
+			result, err = extractFromTime(unit, value)
+			if err != nil {
+				return "", err
+			}
+		} else if value, err := types.ParseDatetime(t, scale); err == nil {
+			result, err = extractFromDatetime(unit, value)
+			if err != nil {
+				return "", err
+			}
+		} else {
+			return "", moerr.NewInternalErrorNoCtx("invalid input")
+		}
 	} else if value, err := types.ParseDatetime(t, scale); err == nil {
 		result, err = extractFromDatetime(unit, value)
 		if err != nil {
@@ -6626,6 +6819,19 @@ func extractFromVarchar(unit string, t string, scale int32) (string, error) {
 	}
 
 	return result, nil
+}
+
+// Time-only EXTRACT units must interpret ambiguous strings such as "10:11:12"
+// as TIME, even though relaxed DATE parsing also accepts them as a date.
+func extractUnitPrefersTime(unit string) bool {
+	switch unit {
+	case "microsecond", "second", "minute", "hour",
+		"second_microsecond", "minute_microsecond", "minute_second",
+		"hour_microsecond", "hour_second", "hour_minute":
+		return true
+	default:
+		return false
+	}
 }
 
 func FindInSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -6722,6 +6928,13 @@ func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 	rs := vector.MustFunctionResult[float64](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v1, null1 := p1.GetValue(i)
 		v2, null2 := p2.GetValue(i)
 		if null1 || null2 {
@@ -6729,8 +6942,11 @@ func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 				return err
 			}
 		} else {
-			//TODO: Ignoring 4 switch cases:https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/power.go#L36
 			res := math.Pow(v1, v2)
+			if math.IsNaN(res) || math.IsInf(res, 0) {
+				return moerr.NewOutOfRangeNoCtxf(
+					"float64", "DOUBLE value is out of range in 'pow(%v,%v)'", v1, v2)
+			}
 			if err = rs.Append(res, false); err != nil {
 				return err
 			}
@@ -6740,7 +6956,52 @@ func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 }
 
 func TimeDiff[T types.Time | types.Datetime](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if _, isDatetime := any(*new(T)).(types.Datetime); isDatetime {
+		return timeDiffDatetime(ivecs, result, proc, length, selectList)
+	}
 	return opBinaryFixedFixedToFixedWithErrorCheck[T, T, types.Time](ivecs, result, proc, length, timeDiff[T], selectList)
+}
+
+func timeDiffDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[1])
+	rs := vector.MustFunctionResult[types.Time](result)
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for i := uint64(0); i < uint64(length); i++ {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 || v1 == types.ZeroDatetime || v2 == types.ZeroDatetime {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		timeDiff, err := timeDiff[types.Datetime](v1, v2)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(timeDiff, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func timeDiff[T types.Time | types.Datetime](v1, v2 T) (types.Time, error) {
@@ -6825,6 +7086,12 @@ func TimeDiffString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			// Convert time to datetime (using today's date)
 			dt2 = time2.ToDatetime(scale)
 		}
+		if dt1 == types.ZeroDatetime || dt2 == types.ZeroDatetime {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
 
 		// Calculate difference: expr1 - expr2
 		resultTime, err := timeDiff[types.Datetime](dt1, dt2)
@@ -6840,6 +7107,19 @@ func TimeDiffString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 		}
 	}
 	return nil
+}
+
+func appendTimestampDiffResult(
+	rs *vector.FunctionResult[int64],
+	unit []byte,
+	first, second types.Datetime,
+) error {
+	if first == types.ZeroDatetime || second == types.ZeroDatetime {
+		return rs.Append(0, true)
+	}
+	unitStr := strings.ToLower(functionUtil.QuickBytesToStr(unit))
+	res, _ := second.DateTimeDiffWithUnit(unitStr, first)
+	return rs.Append(res, false)
 }
 
 // TimestampDiff: TIMESTAMPDIFF(unit, datetime1, datetime2) - Returns datetime2 - datetime1
@@ -6859,11 +7139,7 @@ func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 				return err
 			}
 		} else {
-			// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-			// DateTimeDiffWithUnit expects lowercase unit string
-			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-			res, _ := v3.DateTimeDiffWithUnit(unitStr, v2)
-			if err = rs.Append(res, false); err != nil {
+			if err = appendTimestampDiffResult(rs, v1, v2, v3); err != nil {
 				return err
 			}
 		}
@@ -6893,11 +7169,7 @@ func TimestampDiffDate(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 			// Convert DATE to DATETIME for calculation (time part is 00:00:00)
 			dt2 := v2.ToDatetime()
 			dt3 := v3.ToDatetime()
-			// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-			// DateTimeDiffWithUnit expects lowercase unit string
-			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-			res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-			if err = rs.Append(res, false); err != nil {
+			if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 				return err
 			}
 		}
@@ -6929,11 +7201,7 @@ func TimestampDiffTimestamp(ivecs []*vector.Vector, result vector.FunctionResult
 			// Convert TIMESTAMP to DATETIME for calculation (considering timezone)
 			dt2 := v2.ToDatetime(loc)
 			dt3 := v3.ToDatetime(loc)
-			// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-			// DateTimeDiffWithUnit expects lowercase unit string
-			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-			res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-			if err = rs.Append(res, false); err != nil {
+			if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 				return err
 			}
 		}
@@ -6993,11 +7261,7 @@ func TimestampDiffString(ivecs []*vector.Vector, result vector.FunctionResultWra
 			dt3 = date3.ToDatetime()
 		}
 
-		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-		// DateTimeDiffWithUnit expects lowercase unit string
-		unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-		res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-		if err = rs.Append(res, false); err != nil {
+		if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 			return err
 		}
 	}
@@ -7044,11 +7308,7 @@ func TimestampDiffDateString(ivecs []*vector.Vector, result vector.FunctionResul
 			dt3 = date3.ToDatetime()
 		}
 
-		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-		// DateTimeDiffWithUnit expects lowercase unit string
-		unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-		res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-		if err = rs.Append(res, false); err != nil {
+		if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 			return err
 		}
 	}
@@ -7095,11 +7355,7 @@ func TimestampDiffStringDate(ivecs []*vector.Vector, result vector.FunctionResul
 		// Convert DATE to DATETIME (time part is 00:00:00)
 		dt3 := v3.ToDatetime()
 
-		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-		// DateTimeDiffWithUnit expects lowercase unit string
-		unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-		res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-		if err = rs.Append(res, false); err != nil {
+		if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 			return err
 		}
 	}
@@ -7136,11 +7392,7 @@ func TimestampDiffTimestampDate(ivecs []*vector.Vector, result vector.FunctionRe
 		// Convert DATE to DATETIME (time part is 00:00:00)
 		dt3 := v3.ToDatetime()
 
-		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-		// DateTimeDiffWithUnit expects lowercase unit string
-		unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-		res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-		if err = rs.Append(res, false); err != nil {
+		if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 			return err
 		}
 	}
@@ -7177,11 +7429,7 @@ func TimestampDiffDateTimestamp(ivecs []*vector.Vector, result vector.FunctionRe
 		// Convert TIMESTAMP to DATETIME (considering timezone)
 		dt3 := v3.ToDatetime(loc)
 
-		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-		// DateTimeDiffWithUnit expects lowercase unit string
-		unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-		res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-		if err = rs.Append(res, false); err != nil {
+		if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 			return err
 		}
 	}
@@ -7258,207 +7506,435 @@ func MakeDateString(
 	return nil
 }
 
-const (
-	maxMySQLTimeSeconds      = int64(838*types.SecsPerHour + 59*types.SecsPerMinute + 59)
-	maxMySQLTimeMicroSeconds = maxMySQLTimeSeconds * types.MicroSecsPerSec
-)
-
-func clampMySQLTimeMicroSeconds(microSeconds int64) int64 {
-	if microSeconds > maxMySQLTimeMicroSeconds {
-		return maxMySQLTimeMicroSeconds
+func makeTimeIntegerSecond(value int64, null bool) (int64, uint32, bool) {
+	if null || value < 0 || value >= 60 {
+		return 0, 0, true
 	}
-	if microSeconds < -maxMySQLTimeMicroSeconds {
-		return -maxMySQLTimeMicroSeconds
-	}
-	return microSeconds
+	return value, 0, false
 }
 
-func floatSecondsToMicroSeconds(v float64) int64 {
-	if v > float64(maxMySQLTimeSeconds) {
-		return maxMySQLTimeMicroSeconds
-	}
-	if v < -float64(maxMySQLTimeSeconds) {
-		return -maxMySQLTimeMicroSeconds
-	}
-	return int64(math.Round(v * float64(types.MicroSecsPerSec)))
-}
-
-func intSecondsToMicroSeconds(v int64) int64 {
-	if v > maxMySQLTimeSeconds {
-		return maxMySQLTimeMicroSeconds
-	}
-	if v < -maxMySQLTimeSeconds {
-		return -maxMySQLTimeMicroSeconds
-	}
-	return v * types.MicroSecsPerSec
-}
-
-func uintSecondsToMicroSeconds(v uint64) int64 {
-	if v > uint64(maxMySQLTimeSeconds) {
-		return maxMySQLTimeMicroSeconds
-	}
-	return int64(v) * types.MicroSecsPerSec
-}
-
-func makeTimeFromParts(hour, minute int64, secondMicroSeconds int64, rs *vector.FunctionResult[types.Time]) error {
-	if hour < 0 || minute < 0 || minute > 59 || secondMicroSeconds < 0 || secondMicroSeconds >= types.SecsPerMinute*types.MicroSecsPerSec {
+// makeTimeFromInt64: Helper function to create Time from int64 values
+func makeTimeFromInt64(hour, minute, second int64, microsecond uint32, rs *vector.FunctionResult[types.Time]) error {
+	if minute < 0 || minute > 59 || second < 0 || second > 60 || microsecond >= types.MicroSecsPerSec {
 		return rs.Append(types.Time(0), true)
 	}
+
+	maxTime := types.TimeFromClock(false, 838, 59, 59, 0)
 	if hour > 838 {
-		return rs.Append(types.Time(maxMySQLTimeMicroSeconds), false)
+		return rs.Append(maxTime, false)
+	}
+	if hour < -838 {
+		return rs.Append(-maxTime, false)
 	}
 
-	microSeconds := hour*types.SecsPerHour*types.MicroSecsPerSec +
-		minute*types.SecsPerMinute*types.MicroSecsPerSec +
-		secondMicroSeconds
-	return rs.Append(types.Time(clampMySQLTimeMicroSeconds(microSeconds)), false)
+	isNegative := hour < 0
+	if isNegative {
+		hour = -hour
+	}
+	timeValue := types.TimeFromClock(isNegative, uint64(hour), uint8(minute), uint8(second), microsecond)
+	if timeValue > maxTime {
+		timeValue = maxTime
+	} else if timeValue < -maxTime {
+		timeValue = -maxTime
+	}
+
+	return rs.Append(timeValue, false)
+}
+
+func makeTimeSignedIntegerGetter[T constraints.Signed](vec *vector.Vector) func(uint64) (int64, bool) {
+	param := vector.GenerateFunctionFixedTypeParameter[T](vec)
+	return func(i uint64) (int64, bool) {
+		value, null := param.GetValue(i)
+		return int64(value), null
+	}
+}
+
+func makeTimeUnsignedIntegerGetter[T constraints.Unsigned](vec *vector.Vector) func(uint64) (int64, bool) {
+	param := vector.GenerateFunctionFixedTypeParameter[T](vec)
+	return func(i uint64) (int64, bool) {
+		value, null := param.GetValue(i)
+		if uint64(value) > math.MaxInt64 {
+			return math.MaxInt64, null
+		}
+		return int64(value), null
+	}
+}
+
+func makeTimeIntegerGetter(vec *vector.Vector) (func(uint64) (int64, bool), bool) {
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		return makeTimeSignedIntegerGetter[int8](vec), true
+	case types.T_int16:
+		return makeTimeSignedIntegerGetter[int16](vec), true
+	case types.T_int32:
+		return makeTimeSignedIntegerGetter[int32](vec), true
+	case types.T_int64:
+		return makeTimeSignedIntegerGetter[int64](vec), true
+	case types.T_uint8:
+		return makeTimeUnsignedIntegerGetter[uint8](vec), true
+	case types.T_uint16:
+		return makeTimeUnsignedIntegerGetter[uint16](vec), true
+	case types.T_uint32:
+		return makeTimeUnsignedIntegerGetter[uint32](vec), true
+	case types.T_uint64:
+		return makeTimeUnsignedIntegerGetter[uint64](vec), true
+	default:
+		return nil, false
+	}
+}
+
+func makeTimeBinaryInteger(value []byte) int64 {
+	for len(value) > 0 && value[0] == 0 {
+		value = value[1:]
+	}
+	if len(value) > 8 {
+		return math.MaxInt64
+	}
+
+	var result uint64
+	for _, b := range value {
+		result = result<<8 | uint64(b)
+	}
+	if result > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(result)
+}
+
+func makeTimeFloatGetter[T constraints.Float](vec *vector.Vector) func(uint64) (float64, bool) {
+	param := vector.GenerateFunctionFixedTypeParameter[T](vec)
+	return func(i uint64) (float64, bool) {
+		value, null := param.GetValue(i)
+		return float64(value), null
+	}
+}
+
+func makeTimeExactInteger(value string) (int64, bool) {
+	exact, ok := new(big.Rat).SetString(value)
+	if !ok {
+		return 0, true
+	}
+	negative := exact.Sign() < 0
+	numerator := new(big.Int).Abs(exact.Num())
+	rounded, remainder := new(big.Int), new(big.Int)
+	rounded.QuoRem(numerator, exact.Denom(), remainder)
+	if new(big.Int).Lsh(remainder, 1).Cmp(exact.Denom()) >= 0 {
+		rounded.Add(rounded, big.NewInt(1))
+	}
+	if negative {
+		rounded.Neg(rounded)
+	}
+	if rounded.IsInt64() {
+		return rounded.Int64(), false
+	}
+	if negative {
+		return math.MinInt64, false
+	}
+	return math.MaxInt64, false
+}
+
+func makeTimeDecimal128IntegerGetter(vec *vector.Vector) func(uint64) (int64, bool) {
+	param := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](vec)
+	scale := vec.GetType().Scale
+	return func(i uint64) (int64, bool) {
+		value, null := param.GetValue(i)
+		if null {
+			return 0, true
+		}
+		return makeTimeExactInteger(value.Format(scale))
+	}
+}
+
+func makeTimeDecimal256IntegerGetter(vec *vector.Vector) func(uint64) (int64, bool) {
+	param := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](vec)
+	scale := vec.GetType().Scale
+	return func(i uint64) (int64, bool) {
+		value, null := param.GetValue(i)
+		if null {
+			return 0, true
+		}
+		return makeTimeExactInteger(value.Format(scale))
+	}
+}
+
+func makeTimeStringIntegerGetter(vec *vector.Vector) func(uint64) (int64, bool) {
+	param := vector.GenerateFunctionStrParameter(vec)
+	isBinary := vec.GetIsBin()
+	return func(i uint64) (int64, bool) {
+		value, null := param.GetStrValue(i)
+		if null {
+			return 0, true
+		}
+		if isBinary {
+			return makeTimeBinaryInteger(value), false
+		}
+		result, _ := parseLeadingInteger(strings.TrimSpace(functionUtil.QuickBytesToStr(value)))
+		return result, false
+	}
+}
+
+func makeTimeExactSecond(value string) (int64, uint32, bool) {
+	const maxExactSecondDigits = 4096
+	const maxExactSecondExponent = maxExactSecondDigits + 7
+
+	value = strings.TrimSpace(value)
+	if len(value) == 0 {
+		return 0, 0, false
+	}
+
+	end := 0
+	negative := false
+	if value[end] == '+' || value[end] == '-' {
+		negative = value[end] == '-'
+		end++
+	}
+
+	totalDigits := 0
+	firstNonzeroDigit := -1
+	lastNonzeroDigit := -1
+	integerStart := end
+	for end < len(value) && value[end] >= '0' && value[end] <= '9' {
+		if value[end] != '0' {
+			if firstNonzeroDigit == -1 {
+				firstNonzeroDigit = totalDigits
+			}
+			lastNonzeroDigit = totalDigits
+		}
+		end++
+		totalDigits++
+	}
+	integerEnd := end
+	fractionStart := end
+	fractionEnd := end
+	if end < len(value) && value[end] == '.' {
+		end++
+		fractionStart = end
+		for end < len(value) && value[end] >= '0' && value[end] <= '9' {
+			if value[end] != '0' {
+				if firstNonzeroDigit == -1 {
+					firstNonzeroDigit = totalDigits
+				}
+				lastNonzeroDigit = totalDigits
+			}
+			end++
+			totalDigits++
+		}
+		fractionEnd = end
+	}
+	if totalDigits == 0 {
+		return 0, 0, false
+	}
+	if firstNonzeroDigit == -1 {
+		return 0, 0, false
+	}
+	significantDigits := lastNonzeroDigit - firstNonzeroDigit + 1
+	if negative {
+		return 0, 0, true
+	}
+
+	exponent := 0
+	if end < len(value) && (value[end] == 'e' || value[end] == 'E') {
+		end++
+		negativeExponent := false
+		if end < len(value) && (value[end] == '+' || value[end] == '-') {
+			negativeExponent = value[end] == '-'
+			end++
+		}
+		exponentDigits := end
+		exponentMagnitude := 0
+		exponentLimit := maxExactSecondExponent + totalDigits
+		exponentOverflow := false
+		for end < len(value) && value[end] >= '0' && value[end] <= '9' {
+			digit := int(value[end] - '0')
+			if !exponentOverflow {
+				if exponentMagnitude > (exponentLimit-digit)/10 {
+					exponentOverflow = true
+				} else {
+					exponentMagnitude = exponentMagnitude*10 + digit
+				}
+			}
+			end++
+		}
+		if end != exponentDigits {
+			if exponentOverflow {
+				if negativeExponent {
+					return 0, 0, false
+				}
+				return 0, 0, true
+			} else if negativeExponent {
+				exponent = -exponentMagnitude
+			} else {
+				exponent = exponentMagnitude
+			}
+		}
+	}
+
+	fractionDigits := fractionEnd - fractionStart
+	trailingZeroDigits := totalDigits - lastNonzeroDigit - 1
+	exponent += trailingZeroDigits - fractionDigits
+	integerDigits := integerEnd - integerStart
+	significantDigitAt := func(index int) byte {
+		index += firstNonzeroDigit
+		if index < integerDigits {
+			return value[integerStart+index]
+		}
+		return value[fractionStart+index-integerDigits]
+	}
+
+	// Reject the exact value before rounding. The significant mantissa has no
+	// leading zero, so its decimal width is enough to classify it against 60
+	// without constructing a big.Int proportional to the input length.
+	integerValueDigits := significantDigits + exponent
+	if integerValueDigits > 2 ||
+		(integerValueDigits == 2 && significantDigitAt(0) >= '6') {
+		return 0, 0, true
+	}
+
+	// Round second*1e6 half away from zero. At most eight integer digits can
+	// survive the range check above; the next significant digit alone decides
+	// the rounding direction, so arbitrarily long VARCHAR/TEXT input stays
+	// bounded in memory.
+	scaledDigits := integerValueDigits + 6
+	if scaledDigits <= 0 {
+		if scaledDigits == 0 && significantDigitAt(0) >= '5' {
+			return 0, 1, false
+		}
+		return 0, 0, false
+	}
+	var totalMicroseconds int64
+	keptDigits := min(significantDigits, scaledDigits)
+	for i := 0; i < keptDigits; i++ {
+		totalMicroseconds = totalMicroseconds*10 + int64(significantDigitAt(i)-'0')
+	}
+	for i := significantDigits; i < scaledDigits; i++ {
+		totalMicroseconds *= 10
+	}
+	if scaledDigits < significantDigits && significantDigitAt(scaledDigits) >= '5' {
+		totalMicroseconds++
+	}
+	return totalMicroseconds / types.MicroSecsPerSec,
+		uint32(totalMicroseconds % types.MicroSecsPerSec), false
+}
+
+func makeTimeStringSecondGetter(vec *vector.Vector) func(uint64) (int64, uint32, bool) {
+	param := vector.GenerateFunctionStrParameter(vec)
+	isBinary := vec.GetIsBin()
+	return func(i uint64) (int64, uint32, bool) {
+		value, null := param.GetStrValue(i)
+		if null {
+			return 0, 0, true
+		}
+		if isBinary {
+			return makeTimeIntegerSecond(makeTimeBinaryInteger(value), false)
+		}
+		return makeTimeExactSecond(functionUtil.QuickBytesToStr(value))
+	}
 }
 
 // MakeTime: MAKETIME(hour, minute, second) - Returns a time value calculated from the hour, minute, and second arguments.
 func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Time](result)
 
-	// Check the types of input vectors and create appropriate parameter wrappers
-	hourType := ivecs[0].GetType().Oid
-	minuteType := ivecs[1].GetType().Oid
-	secondType := ivecs[2].GetType().Oid
-
-	// Create parameter wrappers based on types (these can be reused for all rows)
 	var getHourValue func(uint64) (int64, bool)
 	var getMinuteValue func(uint64) (int64, bool)
-	var getSecondValue func(uint64) (int64, bool)
+	var getSecondValue func(uint64) (int64, uint32, bool)
 
-	// Setup hour parameter extractor
-	switch hourType {
-	case types.T_int8:
-		hourParam := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[0])
-		getHourValue = func(i uint64) (int64, bool) {
-			val, null := hourParam.GetValue(i)
-			return int64(val), null
+	if ivecs[0].GetType().Oid.IsMySQLString() {
+		getHourValue = makeTimeStringIntegerGetter(ivecs[0])
+	} else if ivecs[0].GetType().Oid == types.T_decimal128 {
+		getHourValue = makeTimeDecimal128IntegerGetter(ivecs[0])
+	} else if ivecs[0].GetType().Oid == types.T_decimal256 {
+		getHourValue = makeTimeDecimal256IntegerGetter(ivecs[0])
+	} else if getter, ok := makeTimeIntegerGetter(ivecs[0]); ok {
+		getHourValue = getter
+	} else {
+		var getFloat func(uint64) (float64, bool)
+		switch ivecs[0].GetType().Oid {
+		case types.T_float32:
+			getFloat = makeTimeFloatGetter[float32](ivecs[0])
+		case types.T_float64:
+			getFloat = makeTimeFloatGetter[float64](ivecs[0])
+		default:
+			return moerr.NewInvalidArgNoCtx("MAKETIME hour parameter", ivecs[0].GetType().Oid)
 		}
-	case types.T_int16:
-		hourParam := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[0])
 		getHourValue = func(i uint64) (int64, bool) {
-			val, null := hourParam.GetValue(i)
-			return int64(val), null
+			value, null := getFloat(i)
+			if null || math.IsNaN(value) || math.IsInf(value, 0) {
+				return 0, true
+			}
+			rounded := math.Round(value)
+			if rounded >= float64(math.MaxInt64) {
+				return math.MaxInt64, false
+			}
+			if rounded <= float64(math.MinInt64) {
+				return math.MinInt64, false
+			}
+			return int64(rounded), false
 		}
-	case types.T_int32:
-		hourParam := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[0])
-		getHourValue = func(i uint64) (int64, bool) {
-			val, null := hourParam.GetValue(i)
-			return int64(val), null
-		}
-	case types.T_int64:
-		hourParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
-		getHourValue = func(i uint64) (int64, bool) {
-			val, null := hourParam.GetValue(i)
-			return val, null
-		}
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		hourParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
-		getHourValue = func(i uint64) (int64, bool) {
-			val, null := hourParam.GetValue(i)
-			return int64(val), null
-		}
-	case types.T_float32, types.T_float64:
-		hourParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
-		getHourValue = func(i uint64) (int64, bool) {
-			val, null := hourParam.GetValue(i)
-			return int64(val), null // Truncate decimal part
-		}
-	default:
-		return moerr.NewInvalidArgNoCtx("MAKETIME hour parameter", hourType)
 	}
 
-	// Setup minute parameter extractor
-	switch minuteType {
-	case types.T_int8:
-		minuteParam := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[1])
-		getMinuteValue = func(i uint64) (int64, bool) {
-			val, null := minuteParam.GetValue(i)
-			return int64(val), null
+	if ivecs[1].GetType().Oid.IsMySQLString() {
+		getMinuteValue = makeTimeStringIntegerGetter(ivecs[1])
+	} else if ivecs[1].GetType().Oid == types.T_decimal128 {
+		getMinuteValue = makeTimeDecimal128IntegerGetter(ivecs[1])
+	} else if ivecs[1].GetType().Oid == types.T_decimal256 {
+		getMinuteValue = makeTimeDecimal256IntegerGetter(ivecs[1])
+	} else if getter, ok := makeTimeIntegerGetter(ivecs[1]); ok {
+		getMinuteValue = getter
+	} else {
+		var getFloat func(uint64) (float64, bool)
+		switch ivecs[1].GetType().Oid {
+		case types.T_float32:
+			getFloat = makeTimeFloatGetter[float32](ivecs[1])
+		case types.T_float64:
+			getFloat = makeTimeFloatGetter[float64](ivecs[1])
+		default:
+			return moerr.NewInvalidArgNoCtx("MAKETIME minute parameter", ivecs[1].GetType().Oid)
 		}
-	case types.T_int16:
-		minuteParam := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[1])
 		getMinuteValue = func(i uint64) (int64, bool) {
-			val, null := minuteParam.GetValue(i)
-			return int64(val), null
+			value, null := getFloat(i)
+			if null || math.IsNaN(value) || math.IsInf(value, 0) {
+				return 0, true
+			}
+			rounded := math.Round(value)
+			if rounded < 0 || rounded >= 60 {
+				return 0, true
+			}
+			return int64(rounded), false
 		}
-	case types.T_int32:
-		minuteParam := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[1])
-		getMinuteValue = func(i uint64) (int64, bool) {
-			val, null := minuteParam.GetValue(i)
-			return int64(val), null
-		}
-	case types.T_int64:
-		minuteParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
-		getMinuteValue = func(i uint64) (int64, bool) {
-			val, null := minuteParam.GetValue(i)
-			return val, null
-		}
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		minuteParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[1])
-		getMinuteValue = func(i uint64) (int64, bool) {
-			val, null := minuteParam.GetValue(i)
-			return int64(val), null
-		}
-	case types.T_float32, types.T_float64:
-		minuteParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
-		getMinuteValue = func(i uint64) (int64, bool) {
-			val, null := minuteParam.GetValue(i)
-			return int64(val), null // Truncate decimal part
-		}
-	default:
-		return moerr.NewInvalidArgNoCtx("MAKETIME minute parameter", minuteType)
 	}
 
-	// Setup second parameter extractor
-	switch secondType {
-	case types.T_int8:
-		secondParam := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[2])
-		getSecondValue = func(i uint64) (int64, bool) {
-			val, null := secondParam.GetValue(i)
-			return int64(val), null
+	if ivecs[2].GetType().Oid.IsMySQLString() {
+		getSecondValue = makeTimeStringSecondGetter(ivecs[2])
+	} else if getter, ok := makeTimeIntegerGetter(ivecs[2]); ok {
+		getSecondValue = func(i uint64) (int64, uint32, bool) {
+			value, null := getter(i)
+			return makeTimeIntegerSecond(value, null)
 		}
-	case types.T_int16:
-		secondParam := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[2])
-		getSecondValue = func(i uint64) (int64, bool) {
-			val, null := secondParam.GetValue(i)
-			return int64(val), null
+	} else {
+		var getFloat func(uint64) (float64, bool)
+		switch ivecs[2].GetType().Oid {
+		case types.T_float32:
+			getFloat = makeTimeFloatGetter[float32](ivecs[2])
+		case types.T_float64:
+			getFloat = makeTimeFloatGetter[float64](ivecs[2])
+		default:
+			return moerr.NewInvalidArgNoCtx("MAKETIME second parameter", ivecs[2].GetType().Oid)
 		}
-	case types.T_int32:
-		secondParam := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[2])
-		getSecondValue = func(i uint64) (int64, bool) {
-			val, null := secondParam.GetValue(i)
-			return int64(val), null
+		getSecondValue = func(i uint64) (int64, uint32, bool) {
+			value, null := getFloat(i)
+			if null || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value >= 60 {
+				return 0, 0, true
+			}
+			total := int64(math.Round(value * float64(types.MicroSecsPerSec)))
+			return total / types.MicroSecsPerSec, uint32(total % types.MicroSecsPerSec), false
 		}
-	case types.T_int64:
-		secondParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
-		getSecondValue = func(i uint64) (int64, bool) {
-			val, null := secondParam.GetValue(i)
-			return val, null
-		}
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		secondParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[2])
-		getSecondValue = func(i uint64) (int64, bool) {
-			val, null := secondParam.GetValue(i)
-			return int64(val), null
-		}
-	case types.T_float32, types.T_float64:
-		secondParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[2])
-		getSecondValue = func(i uint64) (int64, bool) {
-			val, null := secondParam.GetValue(i)
-			return floatSecondsToMicroSeconds(val), null
-		}
-	default:
-		return moerr.NewInvalidArgNoCtx("MAKETIME second parameter", secondType)
 	}
 
-	// Process all rows
 	for i := uint64(0); i < uint64(length); i++ {
 		hourInt, null1 := getHourValue(i)
 		minuteInt, null2 := getMinuteValue(i)
-		secondInt, null3 := getSecondValue(i)
+		secondInt, microsecond, null3 := getSecondValue(i)
 
 		if null1 || null2 || null3 {
 			if err := rs.Append(types.Time(0), true); err != nil {
@@ -7467,11 +7943,7 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 			continue
 		}
 
-		if !secondType.IsFloat() {
-			secondInt *= types.MicroSecsPerSec
-		}
-
-		if err := makeTimeFromParts(hourInt, minuteInt, secondInt, rs); err != nil {
+		if err := makeTimeFromInt64(hourInt, minuteInt, secondInt, microsecond, rs); err != nil {
 			return err
 		}
 	}
@@ -7764,8 +8236,10 @@ func PeriodDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Time](result)
 
+	// seconds can be int64, uint64, or float64
 	secondsType := ivecs[0].GetType().Oid
 
+	// Create parameter extractor based on type
 	var getSecondsValue func(uint64) (int64, bool)
 
 	switch secondsType {
@@ -7773,26 +8247,31 @@ func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *p
 		secondsParam := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
 		getSecondsValue = func(i uint64) (int64, bool) {
 			val, null := secondsParam.GetValue(i)
-			return intSecondsToMicroSeconds(val), null
+			return val, null
 		}
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		secondsParam := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
 		getSecondsValue = func(i uint64) (int64, bool) {
 			val, null := secondsParam.GetValue(i)
-			return uintSecondsToMicroSeconds(val), null
+			return int64(val), null
 		}
 	case types.T_float32, types.T_float64:
 		secondsParam := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
 		getSecondsValue = func(i uint64) (int64, bool) {
 			val, null := secondsParam.GetValue(i)
-			return floatSecondsToMicroSeconds(val), null
+			return int64(val), null // Truncate decimal part
 		}
 	default:
 		return moerr.NewInvalidArgNoCtx("SEC_TO_TIME seconds parameter", secondsType)
 	}
 
+	// MySQL TIME range: -838:59:59 to 838:59:59
+	// In seconds: -3020399 to 3020399
+	const maxTimeSeconds = 3020399 // 838*3600 + 59*60 + 59
+	const minTimeSeconds = -3020399
+
 	for i := uint64(0); i < uint64(length); i++ {
-		microSeconds, null := getSecondsValue(i)
+		seconds, null := getSecondsValue(i)
 
 		if null {
 			if err := rs.Append(types.Time(0), true); err != nil {
@@ -7801,7 +8280,52 @@ func SecToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *p
 			continue
 		}
 
-		if err := rs.Append(types.Time(clampMySQLTimeMicroSeconds(microSeconds)), false); err != nil {
+		// Check if seconds is within valid TIME range
+		if seconds > maxTimeSeconds || seconds < minTimeSeconds {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Convert seconds to hours, minutes, and seconds
+		// Handle negative values
+		isNegative := seconds < 0
+		if isNegative {
+			seconds = -seconds
+		}
+
+		hours := seconds / 3600
+		remainingSeconds := seconds % 3600
+		minutes := remainingSeconds / 60
+		secs := remainingSeconds % 60
+
+		// Check if hours exceed MySQL TIME limit (838:59:59)
+		// MySQL TIME range is -838:59:59 to 838:59:59
+		if hours > 838 {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Create TIME value using TimeFromClock
+		// isNegative: true if the time should be negative
+		timeValue := types.TimeFromClock(isNegative, uint64(hours), uint8(minutes), uint8(secs), 0)
+
+		// Validate the resulting time
+		h := timeValue.Hour()
+		if h < 0 {
+			h = -h
+		}
+		if !types.ValidTime(uint64(h), uint64(timeValue.Minute()), uint64(timeValue.Sec())) {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.Append(timeValue, false); err != nil {
 			return err
 		}
 	}
@@ -7870,7 +8394,8 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 
 			// MySQL INSERT behavior:
 			// - If pos <= 0 or pos > string length, return original string
-			// - If replaceLen <= 0, insert newstr at position pos without removing anything
+			// - If replaceLen = 0, insert newstr at position pos without removing anything
+			// - If replaceLen < 0, replace from pos to the end of the string
 			// - Otherwise, replace replaceLen characters starting at pos with newstr
 			// - Position is 1-based
 
@@ -7878,7 +8403,7 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 			if pos <= 0 || pos > strLen {
 				// Invalid position, return original string
 				result = str
-			} else if replaceLen <= 0 {
+			} else if replaceLen == 0 {
 				// Insert without removing
 				posIdx := int(pos - 1) // Convert to 0-based index
 				if posIdx >= len(runes) {
@@ -7889,9 +8414,10 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proc
 			} else {
 				// Replace replaceLen characters starting at pos
 				posIdx := int(pos - 1) // Convert to 0-based index
-				endIdx := posIdx + int(replaceLen)
-				if endIdx > len(runes) {
-					endIdx = len(runes)
+				endIdx := len(runes)
+				remaining := int64(len(runes) - posIdx)
+				if replaceLen > 0 && replaceLen < remaining {
+					endIdx = posIdx + int(replaceLen)
 				}
 				if posIdx >= len(runes) {
 					result = str + newstr
@@ -10450,11 +10976,18 @@ func parameterIntervalsCoverSegment(intervals []geometryParamInterval) bool {
 		return false
 	}
 
-	sort.Slice(intervals, func(i, j int) bool {
-		if sameGeometryCoordinate(intervals[i].start, intervals[j].start) {
-			return intervals[i].end < intervals[j].end
+	// Sort by an exact total order on (start, end). Do NOT fold starts within an
+	// epsilon into an "equal" bucket here: an epsilon band is non-transitive
+	// (start A~B and B~C does not imply A~C), which violates slices.SortFunc's
+	// strict-weak-ordering contract and can leave a non-minimum-start interval at
+	// position 0 -- making the coverage check below wrongly bail on
+	// intervals[0].start > 1e-9. The epsilon tolerance stays in the gap/coverage
+	// loop, where it is applied pairwise and transitivity is not required.
+	slices.SortFunc(intervals, func(a, b geometryParamInterval) int {
+		if c := cmp.Compare(a.start, b.start); c != 0 {
+			return c
 		}
-		return intervals[i].start < intervals[j].start
+		return cmp.Compare(a.end, b.end)
 	})
 
 	coveredEnd := intervals[0].end
@@ -11628,6 +12161,73 @@ func CosineDistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vec
 	}, selectList)
 }
 
+// arrayDistanceNarrow computes a binary vector distance for the narrow element
+// types (bf16/f16/int8/uint8) using the NATIVE metric kernel for T — int8/uint8
+// run the INTEGER kernels (int32/int64 accumulate, no float upcast), bf16/f16 run
+// the fused decode-to-float32 kernels (no intermediate []float32 materialized).
+// This is the same kernel ivfflat's brute-force centroid scan uses, so the SQL
+// re-rank (l2_distance over a narrow entries column — the hot path) no longer
+// detours through the float32 bridge. It deliberately bypasses
+// batchArrayDistanceSync (the GPU/usearch path), which only supports native float
+// element types.
+//
+// m selects the kernel; sqrtResult sqrts the result for TRUE L2 (the kernel
+// returns squared L2 for Metric_L2Distance, matching ResolveDistanceFn). The int8
+// squared sum is exact in int64, so sqrt-in-float64 is at least as accurate as the
+// old float32 bridge and preserves ranking order.
+func arrayDistanceNarrow[T types.ArrayElement](
+	ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList,
+	m metric.MetricType, sqrtResult bool) error {
+	kernel, err := metric.ResolveDistanceFn[T, float64](m)
+	if err != nil {
+		return err
+	}
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
+		d, e := kernel(types.BytesToArray[T](v1), types.BytesToArray[T](v2))
+		if e != nil {
+			return 0, e
+		}
+		if sqrtResult {
+			d = math.Sqrt(d)
+		}
+		return d, nil
+	}, selectList)
+}
+
+// arrayDistanceViaF32 is retained only for cosine_similarity, whose float32
+// downcast corner-case handling (see moarray.CosineSimilarity) has no integer-
+// kernel equivalent. Operands are upcast to []float32 and run through the f32
+// kernel.
+func arrayDistanceViaF32[T types.ArrayElement](
+	ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList,
+	kernel func(v1, v2 []float32) (float64, error)) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (float64, error) {
+		f1 := types.ToFloat32Array[T](types.BytesToArray[T](v1))
+		f2 := types.ToFloat32Array[T](types.BytesToArray[T](v2))
+		return kernel(f1, f2)
+	}, selectList)
+}
+
+func L2DistanceArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return arrayDistanceNarrow[T](ivecs, result, proc, length, selectList, metric.Metric_L2Distance, true)
+}
+
+func L2DistanceSqArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return arrayDistanceNarrow[T](ivecs, result, proc, length, selectList, metric.Metric_L2sqDistance, false)
+}
+
+func InnerProductArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return arrayDistanceNarrow[T](ivecs, result, proc, length, selectList, metric.Metric_InnerProduct, false)
+}
+
+func CosineDistanceArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return arrayDistanceNarrow[T](ivecs, result, proc, length, selectList, metric.Metric_CosineDistance, false)
+}
+
+func CosineSimilarityArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return arrayDistanceViaF32[T](ivecs, result, proc, length, selectList, moarray.CosineSimilarity[float32])
+}
+
 func castBinaryArrayToInt(array []uint8) int64 {
 	var result int64
 	for i, value := range array {
@@ -11971,4 +12571,227 @@ func stPointImpl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, le
 		}
 	}
 	return nil
+}
+
+// DateTrunc truncates a datetime value to the specified precision.
+// Supported units: year, quarter, month, week, day, hour, minute, second.
+func DateTrunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[1])
+	rs := vector.MustFunctionResult[types.Datetime](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		unit, null1 := p1.GetStrValue(i)
+		dt, null2 := p2.GetValue(i)
+		if null1 || null2 || dt == types.ZeroDatetime {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+		} else {
+			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(unit))
+			truncated, err := dateTruncCore(unitStr, dt)
+			if err != nil {
+				return err
+			}
+			if err := rs.Append(truncated, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func dateTruncCheck(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	unitMatch, _ := tryToMatch([]types.Type{inputs[0]}, []types.T{types.T_varchar})
+	if unitMatch == matchFailed {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	var overloadIdx int
+	targetTypes := []types.Type{inputs[0], inputs[1]}
+	switch inputs[1].Oid {
+	case types.T_datetime:
+		overloadIdx = 0
+	case types.T_date:
+		overloadIdx = 1
+	case types.T_timestamp:
+		overloadIdx = 2
+	case types.T_any:
+		overloadIdx = 0
+		targetTypes[1] = types.T_datetime.ToType()
+	default:
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	if overloadIdx >= len(overloads) {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	if unitMatch == matchDirectly && targetTypes[1].Oid == inputs[1].Oid {
+		return newCheckResultWithSuccess(overloadIdx)
+	}
+
+	targetTypes[0] = types.T_varchar.ToType()
+	SetTargetScaleFromSource(&inputs[0], &targetTypes[0])
+	return newCheckResultWithCast(overloadIdx, targetTypes)
+}
+
+// DateTruncDate truncates a date value to the specified precision.
+// Sub-day units (hour, minute, second) are rejected because DATE has no time component.
+func DateTruncDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[1])
+	rs := vector.MustFunctionResult[types.Date](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		unit, null1 := p1.GetStrValue(i)
+		d, null2 := p2.GetValue(i)
+		if null1 || null2 || d == types.ZeroDate {
+			if err := rs.Append(types.Date(0), true); err != nil {
+				return err
+			}
+		} else {
+			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(unit))
+			if unitStr == "hour" || unitStr == "minute" || unitStr == "second" {
+				return moerr.NewInvalidInputNoCtxf("unsupported unit '%s' for date_trunc on DATE type", unitStr)
+			}
+			dt := d.ToDatetime()
+			truncated, err := dateTruncCore(unitStr, dt)
+			if err != nil {
+				return err
+			}
+			if err := rs.Append(truncated.ToDate(), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// DateTruncTimestamp truncates a timestamp value to the specified precision.
+// Returns TIMESTAMP to preserve the input's timezone/instant semantics.
+func DateTruncTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[1])
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		unit, null1 := p1.GetStrValue(i)
+		ts, null2 := p2.GetValue(i)
+		if null1 || null2 || ts == types.ZeroTimestamp {
+			if err := rs.Append(types.Timestamp(0), true); err != nil {
+				return err
+			}
+		} else {
+			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(unit))
+			loc := proc.GetSessionInfo().TimeZone
+			if loc == nil {
+				loc = time.Local
+			}
+			truncated, err := dateTruncTimestamp(unitStr, ts, loc)
+			if err != nil {
+				return err
+			}
+			if err := rs.Append(truncated, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func dateTruncTimestamp(unit string, ts types.Timestamp, loc *time.Location) (types.Timestamp, error) {
+	unixMicro := int64(ts) - int64(types.FromClockUTC(1970, 1, 1, 0, 0, 0, 0))
+	t := time.UnixMicro(unixMicro).In(loc)
+	switch unit {
+	case "hour":
+		return types.UnixMicroToTimestamp(t.Add(-time.Duration(t.Minute())*time.Minute -
+			time.Duration(t.Second())*time.Second -
+			time.Duration(t.Nanosecond()/1000)*time.Microsecond).UnixMicro()), nil
+	case "minute":
+		return types.UnixMicroToTimestamp(t.Add(-time.Duration(t.Second())*time.Second -
+			time.Duration(t.Nanosecond()/1000)*time.Microsecond).UnixMicro()), nil
+	case "second":
+		return types.UnixMicroToTimestamp(t.Add(-time.Duration(t.Nanosecond()/1000) * time.Microsecond).UnixMicro()), nil
+	default:
+		dt := ts.ToDatetime(loc)
+		truncated, err := dateTruncCore(unit, dt)
+		if err != nil {
+			return 0, err
+		}
+		return types.FromClockZone(loc,
+			int32(truncated.Year()), truncated.Month(), truncated.Day(),
+			uint8(truncated.Hour()), uint8(truncated.Minute()), uint8(truncated.Sec()),
+			uint32(truncated.MicroSec())), nil
+	}
+}
+
+// dateTruncCore performs the core truncation logic on a Datetime value.
+func dateTruncCore(unit string, dt types.Datetime) (types.Datetime, error) {
+	year := int32(dt.Year())
+	month := dt.Month()
+	day := dt.Day()
+	hour := dt.Hour()
+	minute := dt.Minute()
+	sec := dt.Sec()
+	var msec uint32
+
+	switch unit {
+	case "year":
+		month = 1
+		day = 1
+		hour = 0
+		minute = 0
+		sec = 0
+		msec = 0
+	case "quarter":
+		quarter := (int32(month) - 1) / 3
+		month = uint8(quarter*3 + 1)
+		day = 1
+		hour = 0
+		minute = 0
+		sec = 0
+		msec = 0
+	case "month":
+		day = 1
+		hour = 0
+		minute = 0
+		sec = 0
+		msec = 0
+	case "week":
+		// Move back to Monday of the current ISO week.
+		// DayOfWeek2 returns 0=Monday through 6=Sunday.
+		dow := dt.DayOfWeek2()
+		dateDays := dt.ToDate()
+		monDate := dateDays - types.Date(dow)
+		y, m, d, _ := monDate.Calendar(true)
+		year = y
+		month = m
+		day = d
+		hour = 0
+		minute = 0
+		sec = 0
+		msec = 0
+	case "day":
+		hour = 0
+		minute = 0
+		sec = 0
+		msec = 0
+	case "hour":
+		minute = 0
+		sec = 0
+		msec = 0
+	case "minute":
+		sec = 0
+		msec = 0
+	case "second":
+		msec = 0
+	default:
+		return types.Datetime(0), moerr.NewInvalidInputNoCtxf("unsupported unit '%s' for date_trunc", unit)
+	}
+
+	return types.DatetimeFromClock(year, month, day, uint8(hour), uint8(minute), uint8(sec), msec), nil
 }

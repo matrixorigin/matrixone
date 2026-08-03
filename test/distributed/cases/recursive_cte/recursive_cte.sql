@@ -47,3 +47,6 @@ set cte_max_recursion_depth = 0;
 with recursive c as (select a from t_cte_depth union all select a+1 from c where a < 5) select count(*) from c;
 set cte_max_recursion_depth = 100;
 drop table if exists t_cte_depth;
+
+-- recursive CTE consumers can be independently rebound under explicit aliases
+with recursive seq(n) as (select 1 union all select n + 1 from seq where n < 3) select count(*) as pairs, sum(a.n + b.n) as checksum from seq as a cross join seq as b;

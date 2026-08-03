@@ -71,7 +71,7 @@ func NewMergeObjectsEntry(
 	transferTable *mergesort.TransferTable,
 	isTombstone bool,
 	rt *dbutils.Runtime,
-) (*mergeObjectsEntry, error) {
+) (_ *mergeObjectsEntry, err error) {
 	totalCreatedBlkCnt := 0
 	for i, obj := range createdObjs {
 		createdObjs[i] = obj.GetLatestNode()
@@ -88,6 +88,11 @@ func NewMergeObjectsEntry(
 		isTombstone:   isTombstone,
 		taskName:      taskName,
 	}
+	defer func() {
+		if err != nil {
+			entry.RollbackTransferState()
+		}
+	}()
 
 	startTS := entry.txn.GetStartTS()
 	if entry.rt.BigDeleteHinter.HasBigDelAfter(entry.relation.ID(), &startTS) {
@@ -100,13 +105,12 @@ func NewMergeObjectsEntry(
 		if _, _, injected := fault.TriggerFault(objectio.FJ_TransferSlow); injected {
 			time.Sleep(time.Second)
 		}
-		var err error
 		// phase 1 transfer
 		entry.transCntBeforeCommit, _, err = entry.collectDelsAndTransfer(ctx, entry.txn.GetStartTS(), entry.collectTs)
 		if err != nil {
 			return nil, err
 		}
-		if err := entry.prepareTransferPage(ctx); err != nil {
+		if err = entry.prepareTransferPage(ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -204,7 +208,10 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) error {
 	return nil
 }
 
-func (entry *mergeObjectsEntry) PrepareRollback() (err error) {
+// RollbackTransferState releases the state created while preparing delete
+// transfer. It deliberately does not remove output object files: before the
+// entry is registered, that remains the merge task's responsibility.
+func (entry *mergeObjectsEntry) RollbackTransferState() {
 	if entry.transferTable != nil {
 		entry.transferTable.Release()
 		entry.transferTable = nil
@@ -219,6 +226,11 @@ func (entry *mergeObjectsEntry) PrepareRollback() (err error) {
 		}
 	}
 	entry.pageIds = nil
+	entry.delTbls = nil
+}
+
+func (entry *mergeObjectsEntry) PrepareRollback() (err error) {
+	entry.RollbackTransferState()
 
 	fs := entry.rt.Fs
 	// for io task, dispatch by round robin, scope can be nil
@@ -348,6 +360,11 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 	}
 	if rowIDVec != nil {
 		err = entry.relation.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_MergeCompact)
+		if err == nil {
+			if _, sarg, injected := fault.TriggerFault(objectio.FJ_TransferErrorAfterTransfer); injected {
+				err = moerr.NewInternalErrorNoCtx(sarg)
+			}
+		}
 	}
 	return
 }
@@ -366,6 +383,10 @@ func (s *tempStat) String() string {
 func (entry *mergeObjectsEntry) collectDelsAndTransfer(
 	ctx context.Context, from, to types.TS,
 ) (transCnt int, stat tempStat, err error) {
+	if _, sarg, injected := fault.TriggerFault(objectio.FJ_TransferError); injected {
+		err = moerr.NewInternalErrorNoCtx(sarg)
+		return
+	}
 	if len(entry.createdObjs) == 0 {
 		return
 	}
@@ -461,7 +482,7 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 	ctx := context.Background()
 	transCnt, stat, err := entry.collectDelsAndTransfer(ctx, entry.collectTs, entry.txn.GetPrepareTS().Prev())
 	if err != nil {
-		return nil
+		return err
 	}
 
 	inst1 := time.Now()

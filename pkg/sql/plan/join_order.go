@@ -16,7 +16,7 @@ package plan
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -158,16 +158,27 @@ func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]bool) bool {
 // Can only be used after optimizer!!!
 func IsEquiJoin2(exprs []*plan.Expr) bool {
 	for _, expr := range exprs {
-		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !IsEqualFunc(e.F.Func.GetObj()) {
-				continue
-			}
-			lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
-			if lpos == -1 || rpos == -1 || (lpos == rpos) {
-				continue
-			}
+		if isEquiCond2(expr) {
 			return true
 		}
+	}
+	return false
+}
+
+func isEquiCond2(expr *plan.Expr) bool {
+	e, ok := expr.Expr.(*plan.Expr_F)
+	if !ok || !IsEqualFunc(e.F.Func.GetObj()) {
+		return false
+	}
+	lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
+	if lpos == 0 && rpos == 1 {
+		return true
+	}
+	if lpos == 1 && rpos == 0 {
+		// Keep the executor contract identical before and after remapping: the
+		// probe/left expression is always argument 0.
+		e.F.Args[0], e.F.Args[1] = e.F.Args[1], e.F.Args[0]
+		return true
 	}
 	return false
 }
@@ -246,7 +257,9 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 		}
 	}
 
-	sort.Slice(subTrees, func(i, j int) bool { return compareStats(subTrees[i].Stats, subTrees[j].Stats) })
+	slices.SortFunc(subTrees, func(a, b *plan.Node) int {
+		return compareStats(a.Stats, b.Stats)
+	})
 
 	leafByTag := make(map[int32]int32)
 
@@ -559,7 +572,7 @@ func shouldChangeParent(self, currentParent, nextParent int32, vertices []*joinV
 		}
 	}
 	// self is the biggest node
-	return compareStats(nextParentStats, currentParentStats)
+	return compareStats(nextParentStats, currentParentStats) < 0
 }
 
 // buildSubJoinTree build sub- join tree for a fact table and all its dimension tables
@@ -579,7 +592,9 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		builder.buildSubJoinTree(vertices, child)
 		dimensions = append(dimensions, vertices[child])
 	}
-	sort.Slice(dimensions, func(i, j int) bool { return compareStats(dimensions[i].node.Stats, dimensions[j].node.Stats) })
+	slices.SortFunc(dimensions, func(a, b *joinVertex) int {
+		return compareStats(a.node.Stats, b.node.Stats)
+	})
 
 	for _, child := range dimensions {
 

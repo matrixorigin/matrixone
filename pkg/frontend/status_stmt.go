@@ -28,6 +28,7 @@ import (
 func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var loadLocalErrGroup *errgroup.Group
 	var columns []interface{}
+	execCtx.persistentDropTableTargets = nil
 
 	mrs := ses.GetMysqlResultSet()
 	ep := ses.GetExportConfig()
@@ -64,7 +65,9 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				Producing the data row and sending the data row
 			*/
 			// todo: add trace
-			if _, err = execCtx.runner.Run(0); err != nil {
+			// Keep runResult so ROW_COUNT()/the OK packet report this statement's
+			// affected rows instead of leaking the previous statement's value.
+			if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 				return
 			}
 
@@ -98,13 +101,6 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
-		// Start the dynamic table daemon task
-		if st.IsDynamicTable {
-			if err = handleCreateDynamicTable(execCtx.reqCtx, ses, st); err != nil {
-				return
-			}
-		}
-
 		// grant privilege implicitly
 		// must execute after run to get table id
 		err = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
@@ -114,11 +110,19 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 	default:
 		//change privilege
-		switch execCtx.stmt.(type) {
-		case *tree.DropTable, *tree.DropDatabase:
+		switch st := execCtx.stmt.(type) {
+		case *tree.DropTable:
+			execCtx.persistentDropTableTargets = capturePersistentDropTableTargets(ses, st)
 			ses.InvalidatePrivilegeCache()
 			// must execute before run to get database id or table id
-			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st); err != nil {
+			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st, execCtx.persistentDropTableTargets); err != nil {
+				return
+			}
+
+		case *tree.DropDatabase:
+			ses.InvalidatePrivilegeCache()
+			// must execute before run to get database id or table id
+			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st, nil); err != nil {
 				return
 			}
 
@@ -178,6 +182,32 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	}
 
 	return
+}
+
+// capturePersistentDropTableTargets classifies every DROP TABLE target while
+// the session's temporary aliases still exist. Both the pre-execution
+// ownership revoke and the post-execution dynamic-table cleanup must consume
+// this same snapshot: dropTableSingle removes temporary aliases as it runs.
+func capturePersistentDropTableTargets(ses *Session, st *tree.DropTable) tree.TableNames {
+	if st == nil || st.Temporary {
+		return nil
+	}
+
+	targets := make(tree.TableNames, 0, len(st.Names))
+	for _, name := range st.Names {
+		if name == nil {
+			continue
+		}
+		dbName := string(name.SchemaName)
+		if dbName == "" {
+			dbName = ses.GetDatabaseName()
+		}
+		if _, isTemporary := ses.GetTempTable(dbName, string(name.ObjectName)); isTemporary {
+			continue
+		}
+		targets = append(targets, name)
+	}
+	return targets
 }
 
 func (resper *MysqlResp) respStatus(ses *Session,
@@ -267,9 +297,6 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			if execCtx.proc.GetLastInsertID() != 0 {
 				ses.SetLastInsertID(execCtx.proc.GetLastInsertID())
 			}
-		case *tree.DropTable:
-			// handle dynamic table drop, cancel all the running daemon task
-			_ = handleDropDynamicTable(execCtx.reqCtx, ses, st)
 		case *tree.CreateDatabase:
 			_ = insertRecordToMoMysqlCompatibilityMode(execCtx.reqCtx, ses, execCtx.stmt)
 		case *tree.DropDatabase:

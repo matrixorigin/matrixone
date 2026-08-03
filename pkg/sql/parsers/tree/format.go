@@ -29,6 +29,17 @@ type FmtCtx struct {
 	quoteString       bool
 	singleQuoteString bool
 	quoteIdentifier   bool
+	// noBackslashEscape mirrors the NO_BACKSLASH_ESCAPES sql_mode: when set, string
+	// literals are emitted without backslash escaping (backslash is a literal char),
+	// so a value deparsed here re-parses to the same string under that mode. Nodes that
+	// re-escape a stored (already-unescaped) literal — e.g. FullTextMatchExpr's pattern
+	// — must consult this to keep format->parse idempotent under NO_BACKSLASH_ESCAPES.
+	noBackslashEscape bool
+	// modeIndependentStringLiterals emits string values containing backslashes
+	// as hex-to-varchar casts so the SQL reparses identically with or without
+	// NO_BACKSLASH_ESCAPES.
+	modeIndependentStringLiterals bool
+	paramExprOffset               bool
 }
 
 func NewFmtCtx(dialectType dialect.DialectType, opts ...FmtCtxOption) *FmtCtx {
@@ -63,6 +74,39 @@ func WithSingleQuoteString() FmtCtxOption {
 func WithQuoteIdentifier() FmtCtxOption {
 	return FmtCtxOption(func(ctx *FmtCtx) {
 		ctx.quoteIdentifier = true
+	})
+}
+
+// WithNoBackslashEscape makes string-literal formatting match the
+// NO_BACKSLASH_ESCAPES sql_mode: a deparse-then-reparse under that mode stays
+// idempotent (a backslash is emitted literally, not doubled). Pass this when the
+// output will be re-parsed with NO_BACKSLASH_ESCAPES active.
+func WithNoBackslashEscape() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.noBackslashEscape = true
+	})
+}
+
+// NoBackslashEscape reports whether string literals should be formatted for the
+// NO_BACKSLASH_ESCAPES sql_mode.
+func (ctx *FmtCtx) NoBackslashEscape() bool { return ctx.noBackslashEscape }
+
+func WithModeIndependentStringLiterals() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.modeIndependentStringLiterals = true
+	})
+}
+
+func (ctx *FmtCtx) ModeIndependentStringLiterals() bool {
+	return ctx.modeIndependentStringLiterals
+}
+
+// WithParamExprOffset includes a parameter's parser-assigned offset in its
+// formatted form. It is intended for internal semantic keys; SQL restored for
+// users must keep the default placeholder-only representation.
+func WithParamExprOffset() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.paramExprOffset = true
 	})
 }
 

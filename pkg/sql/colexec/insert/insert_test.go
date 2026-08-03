@@ -16,6 +16,7 @@ package insert
 
 import (
 	"context"
+	"errors"
 	goruntime "runtime"
 	"testing"
 	"time"
@@ -33,10 +34,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+type relationHandleFactory struct {
+	engine.Relation
+	handle         engine.Relation
+	newHandleCalls int
+}
+
+func (f *relationHandleFactory) NewRelationHandle() engine.Relation {
+	f.newHandleCalls++
+	return f.handle
+}
 
 func TestInsertOperator(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -57,12 +68,13 @@ func TestInsertOperator(t *testing.T) {
 	}).AnyTimes()
 
 	database := mock_frontend.NewMockDatabase(ctrl)
-	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(database, nil).AnyTimes()
+	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(database, nil).Times(1)
 
 	relation := mock_frontend.NewMockRelation(ctrl)
 	relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	relation.EXPECT().Reset(gomock.Any()).Return(nil).AnyTimes()
-	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
+	relation.EXPECT().Reset(gomock.Any()).Return(nil).Times(1)
+	factory := &relationHandleFactory{Relation: relation, handle: relation}
+	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(factory, nil).Times(1)
 
 	proc := testutil.NewProc(t)
 	proc.Base.TxnClient = txnClient
@@ -103,24 +115,68 @@ func TestInsertOperator(t *testing.T) {
 	resetChildren(&argument1, batch1)
 	err := argument1.Prepare(proc)
 	require.NoError(t, err)
+	firstSource := argument1.ctr.source
+	require.Same(t, relation, firstSource)
+	require.Equal(t, 1, factory.newHandleCalls)
 	_, err = vm.Exec(&argument1, proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), argument1.ctr.affectedRows)
 
 	argument1.Reset(proc, false, nil)
+	require.Same(t, firstSource, argument1.ctr.source)
 
 	resetChildren(&argument1, batch1)
 	err = argument1.Prepare(proc)
 	require.NoError(t, err)
+	require.Same(t, firstSource, argument1.ctr.source)
+	require.Equal(t, 1, factory.newHandleCalls)
 	_, err = vm.Exec(&argument1, proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), argument1.ctr.affectedRows)
 
 	argument1.Reset(proc, false, nil)
 	argument1.Free(proc, false, nil)
+	require.Nil(t, argument1.ctr.source)
 	argument1.GetChildren(0).Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+}
+
+func TestInsertPrepareRelationResetErrorKeepsHandle(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	resetErr := errors.New("reset relation")
+	eng := mock_frontend.NewMockEngine(ctrl)
+	database := mock_frontend.NewMockDatabase(ctrl)
+	relation := mock_frontend.NewMockRelation(ctrl)
+	factory := &relationHandleFactory{Relation: relation, handle: relation}
+
+	eng.EXPECT().Database(gomock.Any(), "testDb", gomock.Any()).Return(database, nil).Times(1)
+	database.EXPECT().Relation(gomock.Any(), "testTable", gomock.Any()).Return(factory, nil).Times(1)
+	relation.EXPECT().Reset(gomock.Any()).Return(resetErr).Times(1)
+
+	proc := testutil.NewProc(t)
+	arg := &Insert{
+		InsertCtx: &InsertCtx{
+			Engine: eng,
+			Ref: &plan.ObjectRef{
+				SchemaName: "testDb",
+				ObjName:    "testTable",
+			},
+		},
+	}
+
+	require.NoError(t, arg.Prepare(proc))
+	firstSource := arg.ctr.source
+	arg.Reset(proc, false, nil)
+	require.ErrorIs(t, arg.Prepare(proc), resetErr)
+	require.Same(t, firstSource, arg.ctr.source)
+	require.Equal(t, 1, factory.newHandleCalls)
+
+	arg.Free(proc, true, resetErr)
+	require.Nil(t, arg.ctr.source)
+	proc.Free()
 }
 
 func resetChildren(arg *Insert, bat *batch.Batch) {
@@ -152,22 +208,6 @@ func TestInsert_initBufForS3(t *testing.T) {
 			require.Equal(t, types.T_binary, insert.ctr.buf.Vecs[1].GetType().Oid)
 		})
 
-		t.Run(tt.name, func(t *testing.T) {
-			insert := &Insert{
-				InsertCtx: &InsertCtx{
-					Engine: &memoryengine.BindedEngine{},
-				},
-			}
-			insert.initBufForS3()
-			require.NotNil(t, insert.ctr.buf)
-			require.Equal(t, 3, len(insert.ctr.buf.Attrs))
-			require.Equal(t, catalog.BlockMeta_TableIdx_Insert, insert.ctr.buf.Attrs[0])
-			require.Equal(t, catalog.BlockMeta_BlockInfo, insert.ctr.buf.Attrs[1])
-			require.Equal(t, catalog.ObjectMeta_ObjectStats, insert.ctr.buf.Attrs[2])
-			require.Equal(t, types.T_int16, insert.ctr.buf.Vecs[0].GetType().Oid)
-			require.Equal(t, types.T_text, insert.ctr.buf.Vecs[1].GetType().Oid)
-			require.Equal(t, types.T_binary, insert.ctr.buf.Vecs[2].GetType().Oid)
-		})
 	}
 }
 

@@ -135,6 +135,63 @@ func TestGetResultVarClampsTinyVarianceToZero(t *testing.T) {
 	require.Equal(t, 0.0, got)
 }
 
+func TestVarStdDevBigIntReturnsFloat64(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	cases := []struct {
+		name string
+		typ  types.Type
+		make func(types.Type) AggFuncExec
+	}{
+		{
+			name: "var_pop_int64",
+			typ:  types.T_int64.ToTypeWithScale(-1),
+			make: func(typ types.Type) AggFuncExec {
+				return makeVarPopExec(mp, 0, false, typ)
+			},
+		},
+		{
+			name: "stddev_pop_uint64",
+			typ:  types.T_uint64.ToTypeWithScale(-1),
+			make: func(typ types.Type) AggFuncExec {
+				return makeStdDevPopExec(mp, 0, false, typ)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			curNB := mp.CurrNB()
+			exec := tc.make(tc.typ)
+			vec := vector.NewVec(tc.typ)
+			require.NoError(t, exec.GroupGrow(1))
+			switch tc.typ.Oid {
+			case types.T_int64:
+				require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
+				require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
+			case types.T_uint64:
+				require.NoError(t, vector.AppendFixed(vec, uint64(1), false, mp))
+				require.NoError(t, vector.AppendFixed(vec, uint64(1), false, mp))
+			}
+			require.NoError(t, exec.BatchFill(0, []uint64{1, 1}, []*vector.Vector{vec}))
+
+			vecs, err := exec.Flush()
+			require.NoError(t, err)
+			require.Len(t, vecs, 1)
+			require.Equal(t, types.T_float64, vecs[0].GetType().Oid)
+			require.Equal(t, 0.0, vector.MustFixedColNoTypeCheck[float64](vecs[0])[0])
+
+			for _, vec := range vecs {
+				vec.Free(mp)
+			}
+			vec.Free(mp)
+			exec.Free()
+			require.Equal(t, curNB, mp.CurrNB())
+		})
+	}
+}
+
 func TestVarSampleSingleNonNullValueReturnsNull(t *testing.T) {
 	tests := []struct {
 		name       string

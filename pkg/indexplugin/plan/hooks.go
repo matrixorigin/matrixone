@@ -71,6 +71,8 @@ type VectorSortContext struct {
 	DistFnExpr    *plan.Function
 	SortDirection plan.OrderBySpec_OrderByFlag
 	Limit         *plan.Expr
+	ResultLimit   *plan.Expr
+	ResultOffset  *plan.Expr
 	RankOption    *plan.RankOption
 
 	// ProviderNodeID and VecArgExpr are populated only when the ORDER

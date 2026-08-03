@@ -16,6 +16,8 @@ package compile
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -59,6 +61,27 @@ func TestConvertDBEOBToNoSuchTablePassThrough(t *testing.T) {
 	want := moerr.NewBadDB(context.Background(), "db1")
 	got := convertDBEOBToNoSuchTable(context.Background(), want, "db1", "t2")
 	require.Same(t, want, got)
+}
+
+func TestIsMissingCCPRMetadataTable(t *testing.T) {
+	tableName := catalog.MO_CCPR_TABLES
+
+	require.True(t, isMissingCCPRMetadataTable(
+		moerr.NewNoSuchTableNoCtx(catalog.MO_CATALOG, tableName),
+		tableName,
+	))
+	require.True(t, isMissingCCPRMetadataTable(
+		moerr.NewParseErrorNoCtx(fmt.Sprintf("table %q does not exist", tableName)),
+		tableName,
+	))
+	require.False(t, isMissingCCPRMetadataTable(
+		moerr.NewParseErrorNoCtx(`table "another_table" does not exist`),
+		tableName,
+	))
+	require.False(t, isMissingCCPRMetadataTable(
+		moerr.NewInternalErrorNoCtx("ccpr metadata query failed"),
+		tableName,
+	))
 }
 
 func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
@@ -191,6 +214,23 @@ func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 			Table:    "t2",
 		})
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	})
+
+	t.Run("TemporaryPlanDoesNotFallThroughToPermanentTable", func(t *testing.T) {
+		c := newCompileWithStubEngine(t, newStubEngine(), "drop temporary table t2")
+		c.proc.Session = &testInternalExecutorSession{}
+		s := &Scope{}
+		qry := &plan2.DropTable{
+			Database: "db1",
+			Table:    "t2",
+			TableDef: &plan2.TableDef{IsTemporary: true},
+		}
+
+		err := s.dropTableSingle(c, qry)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+
+		qry.IfExists = true
+		require.NoError(t, s.dropTableSingle(c, qry))
 	})
 }
 func Test_lockIndexTable(t *testing.T) {
@@ -497,6 +537,94 @@ func TestScope_CreateTable(t *testing.T) {
 		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
 		assert.Error(t, s.CreateTable(c))
 	})
+}
+
+func TestScopeCreateTemporaryTableRestoresCachedPlanOnError(t *testing.T) {
+	stubs := gostub.New()
+	defer stubs.Reset()
+	stubs.Stub(&engine.PlanDefsToExeDefs, func(_ *plan2.TableDef) ([]engine.TableDef, *api.SchemaExtra, error) {
+		return nil, nil, moerr.NewInternalErrorNoCtx("stop after temporary names are rewritten")
+	})
+
+	indexTable := &plan2.TableDef{
+		Name: "idx_table", TableType: catalog.SystemOrdinaryRel, TblId: 42,
+	}
+	index := &plan2.IndexDef{IndexTableName: indexTable.Name}
+	createTable := &plan2.CreateTable{
+		Database: "test", Temporary: true,
+		TableDef:    &plan2.TableDef{Name: "temporary_table", Indexes: []*plan2.IndexDef{index}},
+		IndexTables: []*plan2.TableDef{indexTable},
+	}
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_CreateTable{CreateTable: createTable},
+	}}}}
+	proc := testutil.NewProcess(t)
+	proc.Session = &testInternalExecutorSession{}
+	c := NewCompile("test", "test", "create temporary table temporary_table (a int)", "", "", nil, proc, nil, false, nil, time.Now())
+
+	require.Error(t, s.CreateTable(c))
+	require.Equal(t, "temporary_table", createTable.TableDef.Name)
+	require.Equal(t, "idx_table", indexTable.Name)
+	require.Equal(t, catalog.SystemOrdinaryRel, indexTable.TableType)
+	require.False(t, indexTable.IsTemporary)
+	require.Equal(t, uint64(42), indexTable.TblId)
+	require.Equal(t, "idx_table", index.IndexTableName)
+}
+
+type trackingTempTableSession struct {
+	tables map[string]string
+}
+
+func (s *trackingTempTableSession) GetTempTable(dbName, alias string) (string, bool) {
+	realName, ok := s.tables[dbName+"."+alias]
+	return realName, ok
+}
+
+func (s *trackingTempTableSession) AddTempTable(dbName, alias, realName string) {
+	s.tables[dbName+"."+alias] = realName
+}
+
+func (s *trackingTempTableSession) RemoveTempTable(dbName, alias string) {
+	delete(s.tables, dbName+"."+alias)
+}
+
+func (s *trackingTempTableSession) RemoveTempTableByRealName(string) {}
+
+func (s *trackingTempTableSession) GetSqlModeNoAutoValueOnZero() (bool, bool) {
+	return false, false
+}
+
+func TestScopeCreateTemporaryTableRollsBackAliasAfterLateFailure(t *testing.T) {
+	stubs := gostub.New()
+	defer stubs.Reset()
+	stubs.Stub(&engine.PlanDefsToExeDefs, func(_ *plan2.TableDef) ([]engine.TableDef, *api.SchemaExtra, error) {
+		return nil, &api.SchemaExtra{}, nil
+	})
+	stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+	stubs.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return nil })
+	stubs.Stub(&checkIndexInitializable, func(string, string) bool { return false })
+	stubs.Stub(&maybeCreateAutoIncrement, func(
+		context.Context, string, engine.Database, *plan2.TableDef, client.TxnOperator, func() string,
+	) error {
+		return moerr.NewInternalErrorNoCtx("late failure")
+	})
+
+	createTable := &plan2.CreateTable{
+		Database: "test", Temporary: true, TableDef: &plan2.TableDef{Name: "temporary_table"},
+	}
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_CreateTable{CreateTable: createTable},
+	}}}}
+	proc := testutil.NewProcess(t)
+	session := &trackingTempTableSession{tables: make(map[string]string)}
+	proc.Session = session
+	eng := newStubEngine()
+	eng.dbs["test"] = newStubDatabase("test")
+	c := NewCompile("test", "test", "create temporary table temporary_table (a int)", "", "", eng, proc, nil, false, nil, time.Now())
+
+	require.Error(t, s.CreateTable(c))
+	_, exists := session.GetTempTable("test", "temporary_table")
+	require.False(t, exists)
 }
 
 func TestScope_CreateView(t *testing.T) {
@@ -811,6 +939,97 @@ func Test_getSqlForCheckPitrDup(t *testing.T) {
 	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELTABLE), false)), "table_name = 'tb'")
 }
 
+func TestPitrInternalSQLEscapesStringLiterals(t *testing.T) {
+	assert.Contains(
+		t,
+		getSqlForCheckPitrExists("pi'tr\\name", 7),
+		"pitr_name = 'pi''tr\\\\name'",
+	)
+
+	p := &plan2.CreatePitr{
+		Level:            int32(tree.PITRLEVELTABLE),
+		CurrentAccountId: 1,
+		DatabaseName:     "db'name",
+		TableName:        "tb\\name",
+	}
+	sql := getSqlForCheckPitrDup(p)
+	assert.Contains(t, sql, "database_name = 'db''name'")
+	assert.Contains(t, sql, "table_name = 'tb\\\\name'")
+}
+
+func TestPreparePitrPublicationSerializesCopyAlter(t *testing.T) {
+	var publicationLock sync.Mutex
+	currentTableID := uint64(1)
+	copyHasLock := make(chan struct{})
+	releaseCopy := make(chan struct{})
+	copyDone := make(chan struct{})
+
+	go func() {
+		publicationLock.Lock()
+		close(copyHasLock)
+		<-releaseCopy
+		currentTableID = 2
+		publicationLock.Unlock()
+		close(copyDone)
+	}()
+	<-copyHasLock
+
+	pitrTriedLock := make(chan struct{})
+	pitrResult := make(chan uint64, 1)
+	pitrErr := make(chan error, 1)
+	go func() {
+		objectID, err := preparePitrPublication(
+			func() error {
+				close(pitrTriedLock)
+				publicationLock.Lock()
+				return nil
+			},
+			func() error { return nil },
+			func() (uint64, error) { return currentTableID, nil },
+		)
+		if err != nil {
+			pitrErr <- err
+			return
+		}
+		pitrResult <- objectID
+	}()
+	<-pitrTriedLock
+
+	select {
+	case objectID := <-pitrResult:
+		publicationLock.Unlock()
+		t.Fatalf("PITR resolved table ID %d before COPY ALTER released the publication barrier", objectID)
+	default:
+	}
+
+	close(releaseCopy)
+	<-copyDone
+	select {
+	case err := <-pitrErr:
+		t.Fatal(err)
+	case objectID := <-pitrResult:
+		require.Equal(t, uint64(2), objectID)
+		publicationLock.Unlock()
+	}
+}
+
+func TestResolveCurrentPitrObjectIDRefreshesPlannedTableID(t *testing.T) {
+	eng := newStubEngine()
+	db := newStubDatabase("db")
+	db.rels["tbl"] = newStubRelation("tbl")
+	eng.dbs["db"] = db
+	c := &Compile{e: eng, proc: testutil.NewProc(t)}
+
+	objectID, err := c.resolveCurrentPitrObjectID(&plan2.CreatePitr{
+		Level:        int32(tree.PITRLEVELTABLE),
+		DatabaseName: "db",
+		TableName:    "tbl",
+		TableId:      99,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), objectID)
+}
+
 func TestCheckSysMoCatalogPitrResult(t *testing.T) {
 	mp := mpool.MustNewZero()
 	ctx := context.Background()
@@ -965,13 +1184,26 @@ func Test_toHours(t *testing.T) {
 	}
 }
 
-// TestDropDatabase_SnapshotAdvanceAndRestore verifies that DropDatabase
-// unconditionally advances SnapshotTS via UpdateSnapshot(HLC Now) after
-// acquiring the exclusive lock, and restores the original SnapshotTS
-// before returning. This prevents the race condition where a concurrent
-// CLONE (CREATE TABLE) on another CN commits between the snapshot and
-// the lock acquisition, leaving orphan records in mo_tables.
-func TestDropDatabase_SnapshotAdvanceAndRestore(t *testing.T) {
+func TestPitrGranularitySqlEscapesStringLiterals(t *testing.T) {
+	dbWithAccount := getPitrDatabaseGranularitySql("db'name", 7, true)
+	require.Contains(t, dbWithAccount, "lower(database_name) = 'db''name'")
+	require.Contains(t, dbWithAccount, "account_id = 7")
+
+	dbWithoutAccount := getPitrDatabaseGranularitySql("db\\name", 7, false)
+	require.Contains(t, dbWithoutAccount, "lower(database_name) = 'db\\\\name'")
+	require.NotContains(t, dbWithoutAccount, "account_id")
+
+	tbl := getPitrTableGranularitySql("db'name", "tbl\\name", 9)
+	require.Contains(t, tbl, "lower(database_name)='db''name'")
+	require.Contains(t, tbl, "lower(table_name)='tbl\\\\name'")
+	require.Contains(t, tbl, "account_id = 9")
+}
+
+// TestDropDatabase_SnapshotAdvance verifies that DropDatabase safely advances
+// the workspace snapshot after acquiring the exclusive lock. This prevents a
+// concurrent CLONE from leaving orphan records and keeps transaction-local
+// tombstones valid at the new snapshot.
+func TestDropDatabase_SnapshotAdvance(t *testing.T) {
 	dropDbDef := &plan2.DropDatabase{
 		IfExists: false,
 		Database: "test_db",
@@ -994,9 +1226,9 @@ func TestDropDatabase_SnapshotAdvanceAndRestore(t *testing.T) {
 
 	origSnapshotTS := timestamp.Timestamp{PhysicalTime: 100}
 
-	// Test 1: Pessimistic + RC => UpdateSnapshot called with HLC Now,
-	// and SnapshotTS is restored after DropDatabase returns.
-	t.Run("advance_and_restore", func(t *testing.T) {
+	// Test 1: Pessimistic + RC advances the workspace with HLC Now and keeps
+	// the advanced snapshot after DropDatabase returns.
+	t.Run("advance_rc_workspace", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -1006,8 +1238,7 @@ func TestDropDatabase_SnapshotAdvanceAndRestore(t *testing.T) {
 		proc.Ctx = ctx
 		proc.ReplaceTopCtx(ctx)
 
-		// Use a real TxnMeta so the mock can simulate UpdateSnapshot
-		// and SetSnapshotTS mutations.
+		// Use a real TxnMeta so the workspace can simulate snapshot advancement.
 		txnMeta := txn.TxnMeta{
 			Mode:       txn.TxnMode_Pessimistic,
 			Isolation:  txn.TxnIsolation_RC,
@@ -1017,34 +1248,22 @@ func TestDropDatabase_SnapshotAdvanceAndRestore(t *testing.T) {
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
-		txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+		var advancedSnapshotTS timestamp.Timestamp
+		ws := &Ws{advanceSnapshot: func(_ context.Context, ts timestamp.Timestamp) error {
+			assert.True(t, origSnapshotTS.Less(ts),
+				"AdvanceSnapshot should be called with HLC Now > origSnapshotTS")
+			txnMeta.SnapshotTS = ts
+			advancedSnapshotTS = ts
+			return nil
+		}}
+		txnOp.EXPECT().GetWorkspace().Return(ws).AnyTimes()
 		txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
 		txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 		txnOp.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
-		txnOp.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOp.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 		txnOp.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOp.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 		txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOp.EXPECT().SnapshotTS().Return(origSnapshotTS).AnyTimes()
-		txnOp.EXPECT().SetSnapshotTS(origSnapshotTS).Do(
-			func(ts timestamp.Timestamp) {
-				txnMeta.SnapshotTS = ts
-			}).Times(1)
-
-		var advancedSnapshotTS timestamp.Timestamp
-		// Key assertion: UpdateSnapshot must be called exactly once with
-		// an HLC timestamp (we accept any value since HLC Now is dynamic).
-		txnOp.EXPECT().UpdateSnapshot(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(_ context.Context, ts timestamp.Timestamp) error {
-				// The timestamp should be a recent HLC Now, not the original.
-				assert.True(t, origSnapshotTS.Less(ts),
-					"UpdateSnapshot should be called with HLC Now > origSnapshotTS")
-				// Simulate what real UpdateSnapshot does: advance SnapshotTS.
-				txnMeta.SnapshotTS = ts
-				advancedSnapshotTS = ts
-				return nil
-			}).Times(1)
-
 		proc.Base.TxnOperator = txnOp
 
 		mockDb := mock_frontend.NewMockDatabase(ctrl)
@@ -1069,16 +1288,14 @@ func TestDropDatabase_SnapshotAdvanceAndRestore(t *testing.T) {
 
 		c := NewCompile("test", "test", "drop database test_db", "", "", eng, proc, nil, false, nil, time.Now())
 		err := s.DropDatabase(c)
-		// DropDatabase errors at Relations(), but the key assertions are:
-		// 1. UpdateSnapshot was called (enforced by Times(1))
-		// 2. SnapshotTS is restored to the original value by the defer
+		// DropDatabase errors at Relations(), after the snapshot behavior has
+		// already been observed.
 		assert.Error(t, err)
-		assert.Equal(t, origSnapshotTS, txnMeta.SnapshotTS,
-			"SnapshotTS must be restored to original after DropDatabase returns")
+		assert.Equal(t, advancedSnapshotTS, txnMeta.SnapshotTS,
+			"SnapshotTS must remain advanced after DropDatabase returns")
 	})
 
-	// Test 2: Non-pessimistic txn => UpdateSnapshot must NOT be called,
-	// but SnapshotTS restore defer still runs (no-op in this case).
+	// Test 2: non-RC transactions must not advance the workspace snapshot.
 	t.Run("skip_advance_for_non_rc", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -1098,23 +1315,18 @@ func TestDropDatabase_SnapshotAdvanceAndRestore(t *testing.T) {
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
-		txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+		ws := &Ws{advanceSnapshot: func(context.Context, timestamp.Timestamp) error {
+			t.Fatal("non-RC DropDatabase must not advance the workspace snapshot")
+			return nil
+		}}
+		txnOp.EXPECT().GetWorkspace().Return(ws).AnyTimes()
 		txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
 		txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 		txnOp.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
-		txnOp.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		txnOp.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 		txnOp.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOp.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()
 		txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		txnOp.EXPECT().SnapshotTS().Return(origSnapshotTS).AnyTimes()
-		txnOp.EXPECT().SetSnapshotTS(origSnapshotTS).Do(
-			func(ts timestamp.Timestamp) {
-				txnMeta.SnapshotTS = ts
-			}).Times(1)
-
-		// Key assertion: UpdateSnapshot must NOT be called for non-RC txn.
-		txnOp.EXPECT().UpdateSnapshot(gomock.Any(), gomock.Any()).Times(0)
-
 		proc.Base.TxnOperator = txnOp
 
 		mockDb := mock_frontend.NewMockDatabase(ctrl)
@@ -1259,6 +1471,58 @@ func TestDropDatabaseSkipsDeletedRelationsWhenCollectingTables(t *testing.T) {
 
 	c := NewCompile("test", "test", "drop database acc_test02", "", "", eng, proc, nil, false, nil, time.Now())
 	require.ErrorIs(t, s.DropDatabase(c), deleteStopErr)
+}
+
+func TestDropDatabaseSkipsForeignKeyCleanupWhenIgnored(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Buf = buffer.New()
+	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+	ctx = context.WithValue(ctx, defines.IgnoreForeignKey{}, true)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	txnMeta := txn.TxnMeta{}
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
+	txnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+	txnOp.EXPECT().SetSnapshotTS(gomock.Any()).AnyTimes()
+	txnOp.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+
+	stopErr := moerr.NewInternalError(ctx, "stop after FK cleanup check")
+	mockDb := mock_frontend.NewMockDatabase(ctrl)
+	mockDb.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+	mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("invalid").AnyTimes()
+	mockDb.EXPECT().Relations(gomock.Any()).Return(nil, stopErr).Times(1)
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	// The first lookup opens the database; the second collects its tables.
+	// A third lookup would mean removeFkeysRelationships was not skipped.
+	eng.EXPECT().Database(gomock.Any(), "db1", gomock.Any()).Return(mockDb, nil).Times(2)
+
+	lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
+		return nil
+	})
+	defer lockMoDb.Reset()
+
+	dropDbDef := &plan2.DropDatabase{Database: "db1"}
+	cplan := &plan.Plan{
+		Plan: &plan2.Plan_Ddl{
+			Ddl: &plan2.DataDefinition{
+				DdlType: plan2.DataDefinition_DROP_DATABASE,
+				Definition: &plan2.DataDefinition_DropDatabase{
+					DropDatabase: dropDbDef,
+				},
+			},
+		},
+	}
+	s := &Scope{Magic: DropDatabase, Plan: cplan}
+	c := NewCompile("test", "test", "drop database db1", "", "", eng, proc, nil, false, nil, time.Now())
+
+	require.ErrorIs(t, s.DropDatabase(c), stopErr)
 }
 
 func TestDropDatabaseReturnsInternalRelationErrorWhenCollectingTables(t *testing.T) {

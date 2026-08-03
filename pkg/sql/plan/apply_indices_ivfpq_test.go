@@ -48,6 +48,7 @@ func ivfpqScanNode() *plan.Node {
 }
 
 func ivfpqVecCtx(scanNode *plan.Node) *vectorSortContext {
+	limit := makePlan2Uint64ConstExprWithType(10)
 	return &vectorSortContext{
 		distFnExpr: &plan.Function{
 			Func: &ObjectRef{ObjName: "l2_distance"},
@@ -62,7 +63,9 @@ func ivfpqVecCtx(scanNode *plan.Node) *vectorSortContext {
 				},
 			},
 		},
-		scanNode: scanNode,
+		scanNode:    scanNode,
+		limit:       DeepCopyExpr(limit),
+		resultLimit: limit,
 	}
 }
 
@@ -386,8 +389,9 @@ func TestApplyIndicesForSortUsingIvfpq_Success(t *testing.T) {
 			Typ:  plan.Type{Id: int32(types.T_float64)},
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
 		},
-		limit:      &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
-		rankOption: &plan.RankOption{Mode: "pre"},
+		limit:       &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
+		resultLimit: makePlan2Uint64ConstExprWithType(10),
+		rankOption:  &plan.RankOption{Mode: "pre"},
 	}
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
 	mti := &MultiTableIndex{
@@ -548,8 +552,9 @@ func TestApplyIndicesForSortUsingIvfpq_RichPushdown(t *testing.T) {
 			Typ:  plan.Type{Id: int32(types.T_float64)},
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
 		},
-		limit:      &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 5}}}},
-		rankOption: &plan.RankOption{Mode: "pre"},
+		limit:       &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 5}}}},
+		resultLimit: makePlan2Uint64ConstExprWithType(5),
+		rankOption:  &plan.RankOption{Mode: "pre"},
 	}
 
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "included_columns":"price"}`
@@ -644,8 +649,9 @@ func TestApplyIndicesForSortUsingIvfpq_Success_WithFiltersOverFetch(t *testing.T
 			Typ:  plan.Type{Id: int32(types.T_float64)},
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
 		},
-		limit:      &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{}}},
-		rankOption: &plan.RankOption{Mode: "pre"},
+		limit:       &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{}}},
+		resultLimit: &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{}}},
+		rankOption:  &plan.RankOption{Mode: "pre"},
 	}
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
 	mti := &MultiTableIndex{

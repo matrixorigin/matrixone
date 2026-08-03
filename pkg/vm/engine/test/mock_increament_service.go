@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
@@ -113,6 +114,8 @@ func (m *MockAutoIncrementService) Delete(
 func (m *MockAutoIncrementService) InsertValues(
 	ctx context.Context,
 	tableID uint64,
+	tableVersion uint32,
+	txnOp client.TxnOperator,
 	vecs []*vector.Vector,
 	rows int,
 	estimate int64,
@@ -197,6 +200,35 @@ func (m *MockAutoIncrementService) Reload(ctx context.Context, tableID uint64) e
 	return nil
 }
 
+// SetOffset sets the offset of an auto-increment column
+func (m *MockAutoIncrementService) SetOffset(
+	ctx context.Context,
+	tableID uint64,
+	colName string,
+	offset uint64,
+	txn client.TxnOperator,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	counters, ok := m.counters[tableID]
+	if !ok {
+		return moerr.NewInternalErrorf(ctx, "table %d not found in mock auto-increment counters", tableID)
+	}
+	if current, ok := counters[colName]; !ok || current < offset {
+		counters[colName] = offset
+	}
+	return nil
+}
+
+// DiscardOffsetReset discards a transaction-private reset in the mock service.
+func (m *MockAutoIncrementService) DiscardOffsetReset(
+	ctx context.Context,
+	tableID uint64,
+	txn client.TxnOperator,
+) error {
+	return nil
+}
+
 // Close closes the service
 func (m *MockAutoIncrementService) Close() {
 	m.mu.Lock()
@@ -210,6 +242,8 @@ func (m *MockAutoIncrementService) Close() {
 func (m *MockAutoIncrementService) GetLastAllocateTS(
 	ctx context.Context,
 	tableID uint64,
+	tableVersion uint32,
+	txnOp client.TxnOperator,
 	colName string,
 ) (timestamp.Timestamp, error) {
 	return timestamp.Timestamp{}, nil

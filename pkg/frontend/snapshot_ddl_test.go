@@ -848,7 +848,7 @@ func setupHandlerTestSession(
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()

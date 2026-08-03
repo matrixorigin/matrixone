@@ -27,9 +27,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildReadersMembershipFilterFullCoverage(t *testing.T) {
-	// 1. Cover L1064-L1071 (case s.DataSource.Rel != nil) - if branch
-	t.Run("L1064-L1071_RelNotNull_MembershipFilterInSource", func(t *testing.T) {
+func TestBuildReadersPassesMembershipFilter(t *testing.T) {
+	t.Run("from source", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
 		expectedMembershipFilter := []byte{1, 2, 3}
 
@@ -61,8 +60,7 @@ func TestBuildReadersMembershipFilterFullCoverage(t *testing.T) {
 		require.Equal(t, expectedMembershipFilter, mockRel.capturedHint.MembershipFilterBytes)
 	})
 
-	// 2. Cover L1064-L1071 (case s.DataSource.Rel != nil) - else if branch (Context)
-	t.Run("L1064-L1071_RelNotNull_MembershipFilterInContext", func(t *testing.T) {
+	t.Run("from context", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
 		expectedMembershipFilter := []byte{7, 8, 9}
 		proc.Ctx = context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
@@ -93,76 +91,5 @@ func TestBuildReadersMembershipFilterFullCoverage(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, readers)
 		require.Equal(t, expectedMembershipFilter, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	// 3. Cover L1139-L1146 (default case, Rel is nil initially) - if branch
-	t.Run("L1139-L1146_RelNull_PanicHack_Source", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		expectedMembershipFilter := []byte{4, 5, 6}
-
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel:                   nil, // This triggers the default case
-				MembershipFilterBytes: expectedMembershipFilter,
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-		s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
-
-		defer func() {
-			if r := recover(); r != nil {
-				t.Logf("Caught expected panic: %v", r)
-			}
-		}()
-
-		_, _ = s.buildReaders(c)
-	})
-
-	// 4. Cover L1139-L1146 (default case) - else if branch (Context)
-	t.Run("L1139-L1146_RelNull_PanicHack_Context", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		expectedMembershipFilter := []byte{10, 11, 12}
-		proc.Ctx = context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
-
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel:                   nil, // This triggers the default case
-				MembershipFilterBytes: nil, // Trigger else if
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-		s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
-
-		defer func() {
-			if r := recover(); r != nil {
-				t.Logf("Caught expected panic: %v", r)
-			}
-		}()
-
-		_, _ = s.buildReaders(c)
 	})
 }

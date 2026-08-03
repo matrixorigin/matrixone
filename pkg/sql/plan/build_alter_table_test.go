@@ -53,6 +53,62 @@ func TestAlterTableAddColumns(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestAlterTableCopyPreservesFinalColumnReplacementIdentity(t *testing.T) {
+	for _, sql := range []string{
+		`ALTER TABLE t1 DROP COLUMN b, ADD COLUMN b INT;`,
+		`ALTER TABLE t1 RENAME COLUMN b TO tmp, DROP COLUMN tmp, ADD COLUMN b INT;`,
+		`ALTER TABLE t1 DROP COLUMN b, ADD COLUMN tmp INT, RENAME COLUMN tmp TO b;`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+			assert.NoError(t, err)
+
+			alter := logicPlan.GetDdl().GetAlterTable()
+			oldCol := FindColumn(alter.TableDef.Cols, "b")
+			newCol := FindColumn(alter.CopyTableDef.Cols, "b")
+			if assert.NotNil(t, oldCol) && assert.NotNil(t, newCol) {
+				assert.NotEqual(t,
+					[]uint64{oldCol.ColId, uint64(oldCol.Seqnum)},
+					[]uint64{newCol.ColId, uint64(newCol.Seqnum)},
+				)
+				_, mapped := alter.ChangeTblColIdMap[oldCol.ColId]
+				assert.False(t, mapped)
+			}
+		})
+	}
+}
+
+func TestAlterTableCopyPreservesExistingColumnIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		sql              string
+		finalName        string
+		expectsChangeMap bool
+	}{
+		{`ALTER TABLE t1 ALGORITHM=COPY, MODIFY COLUMN b VARCHAR(20);`, "b", true},
+		{`ALTER TABLE t1 RENAME COLUMN b TO bb;`, "bb", false},
+		{`ALTER TABLE t1 ALGORITHM=COPY, RENAME COLUMN b TO bb, MODIFY COLUMN a BIGINT;`, "bb", true},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, tc.sql)
+			assert.NoError(t, err)
+
+			alter := logicPlan.GetDdl().GetAlterTable()
+			oldCol := FindColumn(alter.TableDef.Cols, "b")
+			newCol := FindColumn(alter.CopyTableDef.Cols, tc.finalName)
+			if assert.NotNil(t, oldCol) && assert.NotNil(t, newCol) {
+				assert.Equal(t, oldCol.ColId, newCol.ColId)
+				assert.Equal(t, oldCol.Seqnum, newCol.Seqnum)
+				if tc.expectsChangeMap {
+					mapped, ok := alter.ChangeTblColIdMap[oldCol.ColId]
+					if assert.True(t, ok, "change map: %#v", alter.ChangeTblColIdMap) {
+						assert.Equal(t, tc.finalName, mapped.Name)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestAlterTableRejectsNonGeometrySRIDAttribute(t *testing.T) {
 	mock := NewMockOptimizer(false)
 
@@ -127,7 +183,7 @@ func Test_checkChangeTypeCompatible(t *testing.T) {
 		wantErr assert.ErrorAssertionFunc
 	}{
 		{
-			name: "test1",
+			name: "binary to json still rejected for ddl",
 			args: args{
 				ctx:    context.Background(),
 				origin: &plan.Type{Id: int32(types.T_binary)},
@@ -136,10 +192,19 @@ func Test_checkChangeTypeCompatible(t *testing.T) {
 			wantErr: assert.Error,
 		},
 		{
-			name: "test2",
+			name: "varchar to json remains allowed for ddl",
 			args: args{
 				ctx:    context.Background(),
-				origin: &plan.Type{Id: int32(types.T_binary)},
+				origin: &plan.Type{Id: int32(types.T_varchar)},
+				to:     &plan.Type{Id: int32(types.T_json)},
+			},
+			wantErr: assert.NoError,
+		},
+		{
+			name: "int to json rejected for ddl despite expression cast support",
+			args: args{
+				ctx:    context.Background(),
+				origin: &plan.Type{Id: int32(types.T_int32)},
 				to:     &plan.Type{Id: int32(types.T_json)},
 			},
 			wantErr: assert.Error,
@@ -635,4 +700,99 @@ func TestAlterTableVarcharLengthBumped(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAlterTableAlgorithmValidation(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	t.Run("COPY with matching ALGORITHM", func(t *testing.T) {
+		sqls := []string{
+			`ALTER TABLE t1 ALGORITHM=COPY, ADD COLUMN x INT;`,
+			`ALTER TABLE t1 ALGORITHM=DEFAULT, ADD COLUMN x INT;`,
+		}
+		runTestShouldPass(mock, t, sqls, false, false)
+	})
+
+	t.Run("COPY with conflicting ALGORITHM", func(t *testing.T) {
+		sqls := []string{
+			`ALTER TABLE t1 ALGORITHM=INPLACE, ADD COLUMN x INT;`,
+			`ALTER TABLE t1 ALGORITHM=INSTANT, DROP COLUMN b;`,
+		}
+		runTestShouldError(mock, t, sqls)
+	})
+
+	t.Run("INPLACE-eligible operations accept ALGORITHM=INPLACE and ALGORITHM=INSTANT", func(t *testing.T) {
+		sqls := []string{
+			`ALTER TABLE t1 ALGORITHM=INPLACE, ADD INDEX idx_a(a);`,
+			`ALTER TABLE t1 ALGORITHM=INSTANT, ADD INDEX idx_a(a);`,
+			`ALTER TABLE t1 ALGORITHM=DEFAULT, ADD INDEX idx_a(a);`,
+		}
+		runTestShouldPass(mock, t, sqls, false, false)
+	})
+
+	t.Run("INPLACE-eligible operations reject ALGORITHM=COPY", func(t *testing.T) {
+		_, err := buildSingleStmt(mock, t,
+			`ALTER TABLE t1 ALGORITHM=COPY, ADD INDEX idx_a(a);`)
+		assert.ErrorContains(t, err, "unsupported alter option in copy mode")
+	})
+
+	t.Run("COPY with LOCK=NONE", func(t *testing.T) {
+		sqls := []string{
+			`ALTER TABLE t1 LOCK=NONE, ADD COLUMN x INT;`,
+		}
+		runTestShouldError(mock, t, sqls)
+	})
+
+	t.Run("COPY with LOCK=SHARED/EXCLUSIVE", func(t *testing.T) {
+		sqls := []string{
+			`ALTER TABLE t1 LOCK=SHARED, ADD COLUMN x INT;`,
+			`ALTER TABLE t1 LOCK=EXCLUSIVE, ADD COLUMN x INT;`,
+		}
+		runTestShouldPass(mock, t, sqls, false, false)
+	})
+
+	t.Run("ALGORITHM conflict takes priority over LOCK", func(t *testing.T) {
+		_, err := buildSingleStmt(mock, t,
+			`ALTER TABLE t1 ALGORITHM=INPLACE, LOCK=NONE, ADD COLUMN x INT;`)
+		assert.ErrorContains(t, err, "ALGORITHM")
+	})
+
+	t.Run("repeated ALGORITHM hints on INPLACE operation, last hint wins", func(t *testing.T) {
+		// Multiple ALGORITHM clauses on an INPLACE-capable ADD INDEX:
+		// the last hint determines the final algorithm.
+		sqls := []string{
+			`ALTER TABLE t1 ALGORITHM=COPY, ALGORITHM=INPLACE, ADD INDEX idx_a(a);`,
+			`ALTER TABLE t1 ALGORITHM=INSTANT, ALGORITHM=INPLACE, ADD INDEX idx_a(a);`,
+			`ALTER TABLE t1 ALGORITHM=INPLACE, ALGORITHM=DEFAULT, ADD INDEX idx_a(a);`,
+		}
+		runTestShouldPass(mock, t, sqls, false, false)
+	})
+
+	t.Run("repeated ALGORITHM hints on INPLACE operation, last hint COPY rejected", func(t *testing.T) {
+		// ALGORITHM=INPLACE then ALGORITHM=COPY on ADD INDEX: last hint (COPY)
+		// routes through buildAlterTableCopy which does not support ADD INDEX.
+		_, err := buildSingleStmt(mock, t,
+			`ALTER TABLE t1 ALGORITHM=INPLACE, ALGORITHM=COPY, ADD INDEX idx_a(a);`)
+		assert.ErrorContains(t, err, "unsupported alter option in copy mode")
+	})
+
+	t.Run("repeated ALGORITHM hints on COPY-required operation, non-COPY rejected", func(t *testing.T) {
+		// ADD COLUMN requires COPY. All non-COPY hints are rejected against
+		// the stable requiredAlgorithm, regardless of what prior hints set.
+		sqls := []string{
+			`ALTER TABLE t1 ALGORITHM=INSTANT, ALGORITHM=INPLACE, ADD COLUMN x INT;`,
+			`ALTER TABLE t1 ALGORITHM=INPLACE, ALGORITHM=COPY, ADD COLUMN x INT;`,
+			`ALTER TABLE t1 ALGORITHM=COPY, ALGORITHM=INSTANT, ADD COLUMN x INT;`,
+		}
+		runTestShouldError(mock, t, sqls)
+	})
+
+	t.Run("repeated ALGORITHM hints on COPY-required operation, all COPY passes", func(t *testing.T) {
+		sqls := []string{
+			`ALTER TABLE t1 ALGORITHM=COPY, ALGORITHM=COPY, ADD COLUMN x INT;`,
+			`ALTER TABLE t1 ALGORITHM=DEFAULT, ALGORITHM=COPY, ADD COLUMN x INT;`,
+			`ALTER TABLE t1 ALGORITHM=COPY, ALGORITHM=DEFAULT, ADD COLUMN x INT;`,
+		}
+		runTestShouldPass(mock, t, sqls, false, false)
+	})
 }

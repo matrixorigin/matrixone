@@ -1,0 +1,95 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package frontend
+
+import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/stretchr/testify/require"
+)
+
+func TestShouldCachePrepareCompileForeignKeyActions(t *testing.T) {
+	makePlan := func(stmtType plan.Query_StatementType, hasForeignKeyAction bool) *plan.Plan {
+		return &plan.Plan{
+			Plan: &plan.Plan_Query{
+				Query: &plan.Query{
+					StmtType:            stmtType,
+					HasForeignKeyAction: hasForeignKeyAction,
+				},
+			},
+		}
+	}
+
+	require.True(t, shouldCachePrepareCompile(nil))
+	require.True(t, shouldCachePrepareCompile(&plan.Plan{}))
+	require.True(t, shouldCachePrepareCompile(makePlan(plan.Query_UPDATE, false)))
+	require.True(t, shouldCachePrepareCompile(makePlan(plan.Query_DELETE, false)))
+
+	require.False(t, shouldCachePrepareCompile(makePlan(plan.Query_UPDATE, true)))
+	require.False(t, shouldCachePrepareCompile(makePlan(plan.Query_DELETE, true)))
+	require.False(t, shouldCachePrepareCompile(makePlan(plan.Query_INSERT, true)))
+
+	require.True(t, checkNodeCanCache(makePlan(plan.Query_INSERT, false)))
+	require.False(t, checkNodeCanCache(makePlan(plan.Query_INSERT, true)))
+
+	require.False(t, shouldRebuildPreparePlan(false, nil))
+	require.False(t, shouldRebuildPreparePlan(false, makePlan(plan.Query_INSERT, false)))
+	require.True(t, shouldRebuildPreparePlan(false, makePlan(plan.Query_INSERT, true)))
+	require.True(t, shouldRebuildPreparePlan(true, makePlan(plan.Query_INSERT, false)))
+}
+
+func TestInitExecuteStmtParamRebuildsAcrossForeignKeyChecksTransitions(t *testing.T) {
+	for i, test := range []struct {
+		name string
+		from int64
+		to   int64
+	}{
+		{name: "disabled to enabled", from: 0, to: 1},
+		{name: "enabled to disabled", from: 1, to: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, uint32(120+i))
+			defer prepareStmt.Close()
+
+			require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "foreign_key_checks", test.from))
+			oldPlan := prepareStmt.PreparePlan
+			oldQuery := oldPlan.GetDcl().GetPrepare().GetPlan().GetQuery()
+			require.NotNil(t, oldQuery)
+			oldQuery.HasForeignKeyAction = true
+
+			require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "foreign_key_checks", test.to))
+			_, rebuiltPlan, rebuiltStmt, _, _, err := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepareStmt.Name,
+			)
+			require.NoError(t, err)
+			require.NotNil(t, rebuiltPlan)
+			require.NotNil(t, rebuiltStmt)
+			require.NotSame(t, oldPlan, prepareStmt.PreparePlan)
+		})
+	}
+}
+
+func TestShouldCachePrepareCompileRejectsIcebergScan(t *testing.T) {
+	p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{
+		NodeType: plan.Node_EXTERNAL_SCAN,
+		ExternScan: &plan.ExternScan{
+			Type:        int32(plan.ExternType_ICEBERG_TB),
+			IcebergScan: &plan.IcebergScan{},
+		},
+	}}}}}
+
+	require.False(t, shouldCachePrepareCompile(p))
+}

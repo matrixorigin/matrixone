@@ -272,3 +272,89 @@ select cid, a, b from t_odku_mfk_child order by cid;
 drop table if exists t_odku_mfk_child;
 drop table if exists t_odku_mfk_p1;
 drop table if exists t_odku_mfk_p2;
+drop table if exists t_odku_onupdate;
+create table t_odku_onupdate (
+id int primary key,
+v int,
+updated_at timestamp default current_timestamp on update current_timestamp
+);
+insert into t_odku_onupdate(id, v) values (1, 10);
+set @ts0 = (select updated_at from t_odku_onupdate where id = 1);
+select sleep(2);
+➤ sleep(2)[-6,8,0]  𝄀
+0
+insert into t_odku_onupdate(id, v) values (1, 10) on duplicate key update v = v;
+select updated_at = @ts0 as ts_unchanged from t_odku_onupdate where id = 1;
+➤ ts_unchanged[-7,1,0]  𝄀
+1
+insert into t_odku_onupdate(id, v) values (1, 99) on duplicate key update v = values(v);
+select v, updated_at > @ts0 as ts_advanced from t_odku_onupdate where id = 1;
+➤ v[4,32,0]  ¦  ts_advanced[-7,1,0]  𝄀
+99  ¦  1
+drop table if exists t_odku_onupdate;
+drop table if exists t_odku_onupdate_gen;
+create table t_odku_onupdate_gen (
+id int primary key,
+v int,
+updated_at timestamp default current_timestamp on update current_timestamp,
+g timestamp as (updated_at) stored
+);
+insert into t_odku_onupdate_gen(id, v) values (1, 10);
+set @g0 = (select g from t_odku_onupdate_gen where id = 1);
+select sleep(2);
+➤ sleep(2)[-6,8,0]  𝄀
+0
+insert into t_odku_onupdate_gen(id, v) values (1, 10) on duplicate key update v = v;
+select updated_at = @g0 as ts_unchanged, g = @g0 as g_unchanged from t_odku_onupdate_gen where id = 1;
+➤ ts_unchanged[-7,1,0]  ¦  g_unchanged[-7,1,0]  𝄀
+1  ¦  1
+insert into t_odku_onupdate_gen(id, v) values (1, 99) on duplicate key update v = values(v);
+select v, g > @g0 as g_advanced from t_odku_onupdate_gen where id = 1;
+➤ v[4,32,0]  ¦  g_advanced[-7,1,0]  𝄀
+99  ¦  1
+drop table if exists t_odku_onupdate_gen;
+drop table if exists t_odku_null_unique;
+create table t_odku_null_unique (a int unique key, b int);
+insert into t_odku_null_unique values (null, null) on duplicate key update b = values(b);
+select count(*) as after_first from t_odku_null_unique;
+➤ after_first[-5,64,0]  𝄀
+1
+insert into t_odku_null_unique values (null, null) on duplicate key update b = values(b);
+select count(*) as after_second from t_odku_null_unique;
+➤ after_second[-5,64,0]  𝄀
+2
+select a, b from t_odku_null_unique;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+null  ¦  null  𝄀
+null  ¦  null
+insert into t_odku_null_unique values (1, 10) on duplicate key update b = values(b);
+insert into t_odku_null_unique values (1, 20) on duplicate key update b = values(b);
+select a, b from t_odku_null_unique where a = 1;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  20
+insert into t_odku_null_unique values (1, 20) on duplicate key update b = values(b);
+select a, b from t_odku_null_unique where a = 1;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  20
+drop table if exists t_odku_null_unique;
+drop table if exists t_odku_sec_uk;
+create table t_odku_sec_uk (
+id int primary key,
+u int unique,
+v int,
+updated_at timestamp default current_timestamp on update current_timestamp
+);
+insert into t_odku_sec_uk(id, u, v) values (1, 10, 5);
+set @ts_sec = (select updated_at from t_odku_sec_uk where u = 10);
+select sleep(2);
+➤ sleep(2)[-6,8,0]  𝄀
+0
+insert into t_odku_sec_uk(id, u, v) values (2, 10, 99) on duplicate key update v = v;
+select id, u, v, updated_at = @ts_sec as ts_unchanged from t_odku_sec_uk order by id;
+➤ id[4,32,0]  ¦  u[4,32,0]  ¦  v[4,32,0]  ¦  ts_unchanged[-7,1,0]  𝄀
+1  ¦  10  ¦  5  ¦  1
+insert into t_odku_sec_uk(id, u, v) values (3, 10, 5) on duplicate key update v = v + 1;
+select id, u, v, updated_at > @ts_sec as ts_advanced from t_odku_sec_uk order by id;
+➤ id[4,32,0]  ¦  u[4,32,0]  ¦  v[4,32,0]  ¦  ts_advanced[-7,1,0]  𝄀
+1  ¦  10  ¦  6  ¦  1
+drop table if exists t_odku_sec_uk;

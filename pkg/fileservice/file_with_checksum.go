@@ -26,13 +26,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
-// FileWithChecksum maps file contents to blocks with checksum
+// FileWithChecksum maps file contents to blocks with checksum.
+//
+// When noChecksum is set the wrapper runs in passthrough mode: no CRC32 block
+// framing is applied, logical offset == physical offset, and reads/writes go
+// straight to the underlying file. This produces a raw on-disk layout that is
+// byte-identical to the S3 (disk-backed) file service. The wrapper still keeps
+// its own contentOffset and routes Read/Write through ReadAt/WriteAt (pread/
+// pwrite) so the read path can share one *os.File across IOVector entries
+// without the entries fighting over the kernel file offset.
 type FileWithChecksum[T FileLike] struct {
 	ctx              context.Context
 	underlying       T
 	blockSize        int
 	blockContentSize int
 	contentOffset    int64
+	noChecksum       bool
 	perfCounterSets  []*perfcounter.CounterSet
 }
 
@@ -53,11 +62,33 @@ func NewFileWithChecksum[T FileLike](
 	blockContentSize int,
 	perfCounterSets []*perfcounter.CounterSet,
 ) *FileWithChecksum[T] {
+	return newFileWithChecksum(ctx, underlying, blockContentSize, false, perfCounterSets)
+}
+
+// NewFileWithoutChecksum returns a FileWithChecksum in passthrough mode: raw
+// bytes, no CRC32 block framing.
+func NewFileWithoutChecksum[T FileLike](
+	ctx context.Context,
+	underlying T,
+	blockContentSize int,
+	perfCounterSets []*perfcounter.CounterSet,
+) *FileWithChecksum[T] {
+	return newFileWithChecksum(ctx, underlying, blockContentSize, true, perfCounterSets)
+}
+
+func newFileWithChecksum[T FileLike](
+	ctx context.Context,
+	underlying T,
+	blockContentSize int,
+	noChecksum bool,
+	perfCounterSets []*perfcounter.CounterSet,
+) *FileWithChecksum[T] {
 	return &FileWithChecksum[T]{
 		ctx:              ctx,
 		underlying:       underlying,
 		blockSize:        blockContentSize + _ChecksumSize,
 		blockContentSize: blockContentSize,
+		noChecksum:       noChecksum,
 		perfCounterSets:  perfCounterSets,
 	}
 }
@@ -68,12 +99,34 @@ func NewFileWithChecksumOSFile(
 	blockContentSize int,
 	perfCounterSets []*perfcounter.CounterSet,
 ) (*FileWithChecksum[*os.File], PutBack[*FileWithChecksum[*os.File]]) {
+	return newFileWithChecksumOSFile(ctx, underlying, blockContentSize, false, perfCounterSets)
+}
+
+// NewFileWithoutChecksumOSFile is the passthrough-mode counterpart of
+// NewFileWithChecksumOSFile.
+func NewFileWithoutChecksumOSFile(
+	ctx context.Context,
+	underlying *os.File,
+	blockContentSize int,
+	perfCounterSets []*perfcounter.CounterSet,
+) (*FileWithChecksum[*os.File], PutBack[*FileWithChecksum[*os.File]]) {
+	return newFileWithChecksumOSFile(ctx, underlying, blockContentSize, true, perfCounterSets)
+}
+
+func newFileWithChecksumOSFile(
+	ctx context.Context,
+	underlying *os.File,
+	blockContentSize int,
+	noChecksum bool,
+	perfCounterSets []*perfcounter.CounterSet,
+) (*FileWithChecksum[*os.File], PutBack[*FileWithChecksum[*os.File]]) {
 	var f *FileWithChecksum[*os.File]
 	put := fileWithChecksumPoolOSFile.Get(&f)
 	f.ctx = ctx
 	f.underlying = underlying
 	f.blockSize = blockContentSize + _ChecksumSize
 	f.blockContentSize = blockContentSize
+	f.noChecksum = noChecksum
 	f.perfCounterSets = perfCounterSets
 	return f, put
 }
@@ -120,6 +173,12 @@ var readCoalesceBufPool = sync.Pool{
 func (f *FileWithChecksum[T]) ReadAt(buf []byte, offset int64) (n int, err error) {
 	if len(buf) == 0 {
 		return 0, nil
+	}
+
+	if f.noChecksum {
+		// passthrough: logical offset == physical offset, no CRC, no
+		// de-interleave. io.EOF / short-read semantics come from the underlying.
+		return f.underlying.ReadAt(buf, offset)
 	}
 
 	blockSize := int64(f.blockSize)
@@ -206,6 +265,13 @@ func (f *FileWithChecksum[T]) Read(buf []byte) (n int, err error) {
 }
 
 func (f *FileWithChecksum[T]) WriteAt(buf []byte, offset int64) (n int, err error) {
+	if f.noChecksum {
+		// passthrough: pwrite at the logical offset. Handles offset>0 random
+		// writes and append natively; the block read-modify-write CRC path
+		// (and readBlock / the block pool) is never reached.
+		return f.underlying.WriteAt(buf, offset)
+	}
+
 	for len(buf) > 0 {
 
 		blockOffset, offsetInBlock := f.contentOffsetToBlockOffset(offset)
@@ -263,8 +329,13 @@ func (f *FileWithChecksum[T]) Seek(offset int64, whence int) (int64, error) {
 		return 0, err
 	}
 
-	nBlock := ceilingDiv(fileSize, int64(f.blockSize))
-	contentSize := fileSize - _ChecksumSize*nBlock
+	var contentSize int64
+	if f.noChecksum {
+		contentSize = fileSize
+	} else {
+		nBlock := ceilingDiv(fileSize, int64(f.blockSize))
+		contentSize = fileSize - _ChecksumSize*nBlock
+	}
 
 	switch whence {
 	case io.SeekStart:
@@ -291,6 +362,12 @@ func (f *FileWithChecksum[T]) contentOffsetToBlockOffset(
 	blockOffset int64,
 	offsetInBlock int64,
 ) {
+
+	if f.noChecksum {
+		// identity mapping: logical offset == physical offset. This also keeps
+		// dontNeedContentRange's fadvise range exact in passthrough mode.
+		return contentOffset, 0
+	}
 
 	nBlock := contentOffset / int64(f.blockContentSize)
 	blockOffset += nBlock * int64(f.blockSize)

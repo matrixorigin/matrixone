@@ -57,9 +57,6 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	mergeGroup.OpAnalyzer.Start()
-	defer mergeGroup.OpAnalyzer.Stop()
-
 	switch mergeGroup.ctr.state {
 	case vm.Build:
 		// receive data and merge.
@@ -89,7 +86,7 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 			}
 
 			if needSpill {
-				if bytes, rows, err := mergeGroup.ctr.spillDataToDisk(proc, nil); err != nil {
+				if bytes, rows, err := mergeGroup.ctr.spillDataToDisk(proc, mergeGroup.OpAnalyzer, nil); err != nil {
 					return vm.CancelResult, err
 				} else {
 					mergeGroup.OpAnalyzer.Spill(bytes)
@@ -110,7 +107,7 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 		}
 
 		if mergeGroup.ctr.isSpilling() {
-			if bytes, rows, err := mergeGroup.ctr.spillDataToDisk(proc, nil); err != nil {
+			if bytes, rows, err := mergeGroup.ctr.spillDataToDisk(proc, mergeGroup.OpAnalyzer, nil); err != nil {
 				return vm.CancelResult, err
 			} else {
 				mergeGroup.OpAnalyzer.Spill(bytes)
@@ -205,7 +202,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 			// MergeGroup restores nullable-key metadata from the serialized
 			// partial-group payload rather than guessing it from the first batch.
 			mergeGroup.ctr.initGroupKeyTypesFromBatch(bat.Vecs)
-			if err := mergeGroup.ctr.buildHashTable(proc.Ctx); err != nil {
+			if err := mergeGroup.ctr.buildHashTable(proc.Ctx, 0); err != nil {
 				return false, err
 			}
 		}

@@ -11,16 +11,17 @@ select abs(NULL);
 ➤ abs(null)[-5,64,0]  𝄀
 null
 select abs(9999999999999999999999);
-➤ abs(9999999999999999999999)[3,39,0]  𝄀
+➤ abs(9999999999999999999999)[3,38,0]  𝄀
 9999999999999999999999
 select abs(-9999999999999999999999);
-➤ abs(-9999999999999999999999)[3,39,0]  𝄀
+➤ abs(-9999999999999999999999)[3,38,0]  𝄀
 9999999999999999999999
 select abs(10/0);
 ➤ abs(10 / 0)[8,54,0]  𝄀
 null
 select abs(cast(-2 as unsigned)), abs(18446744073709551614), abs(-2);
-Data truncation: data out of range: data type uint64, value '-2'
+abs(cast(-2 as unsigned))	abs(18446744073709551614)	abs(-2)
+18446744073709551614	18446744073709551614	2
 CREATE TABLE t(u TINYINT UNSIGNED NOT NULL);
 INSERT INTO t VALUES (0), (3), (255);
 SELECT * FROM t WHERE ABS(u=256)=0;
@@ -29,9 +30,13 @@ DROP TABLE t;
 create table t1(a int, b int, c int);
 insert into t1 values(100,1,2),(200,1,1),(300,2,1),(400,2,2);
 select distinct b from t1 order by abs(b);
-SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+➤ b[4,32,0]  𝄀
+1  𝄀
+2
 select distinct b as z from t1 order by abs(z);
-SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+➤ z[4,32,0]  𝄀
+1  𝄀
+2
 select distinct abs(b) as z from t1 order by z;
 ➤ z[-5,64,0]  𝄀
 1  𝄀

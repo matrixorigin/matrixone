@@ -942,9 +942,9 @@ type CreateTable struct {
 	PartitionOption    *PartitionOption
 	ClusterByOption    *ClusterByOption
 	Param              *ExternParam
+	IcebergParam       *IcebergTableParam
+	MongoDBParam       *MongoDBTableParam
 	AsSource           *Select
-	IsDynamicTable     bool
-	DTOptions          []TableOption
 	IsAsSelect         bool
 	IsAsLike           bool
 	LikeTableName      TableName
@@ -963,13 +963,9 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	if node.IsClusterTable {
 		ctx.WriteString(" cluster")
 	}
-	if node.Param != nil {
+	if node.Param != nil || node.IcebergParam != nil || node.MongoDBParam != nil {
 		ctx.WriteString(" external")
 	}
-	if node.IsDynamicTable {
-		ctx.WriteString(" dynamic")
-	}
-
 	ctx.WriteString(" table")
 
 	if node.IfNotExists {
@@ -987,22 +983,9 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 
 	if node.SubscriptionOption != nil {
 		node.SubscriptionOption.Format(ctx)
-	} else if node.IsDynamicTable {
-		ctx.WriteString(" as ")
-		node.AsSource.Format(ctx)
-
-		if node.DTOptions != nil {
-			prefix := " with ("
-			for _, t := range node.DTOptions {
-				ctx.WriteString(prefix)
-				t.Format(ctx)
-				prefix = ", "
-			}
-			ctx.WriteByte(')')
-		}
 	} else {
 
-		if !node.IsAsSelect {
+		if !node.IsAsSelect && !(node.IcebergParam != nil && len(node.Defs) == 0) {
 			ctx.WriteString(" (")
 			for i, def := range node.Defs {
 				if i != 0 {
@@ -1020,12 +1003,21 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		node.AsSource.Format(ctx)
 	}
 
-	if node.Options != nil && !node.IsDynamicTable {
+	if node.Options != nil {
 		prefix := " "
 		for _, t := range node.Options {
 			ctx.WriteString(prefix)
 			t.Format(ctx)
 		}
+	}
+
+	if node.IcebergParam != nil {
+		ctx.WriteByte(' ')
+		node.IcebergParam.Format(ctx)
+	}
+	if node.MongoDBParam != nil {
+		ctx.WriteByte(' ')
+		node.MongoDBParam.Format(ctx)
 	}
 
 	if node.PartitionOption != nil {
@@ -1224,83 +1216,6 @@ func (node *CreateTable) reset() {
 	// 	reuse.Free[Select](node.AsSource, nil)
 	// }
 
-	if node.DTOptions != nil {
-		for _, item := range node.DTOptions {
-			switch opt := item.(type) {
-			case *TableOptionProperties:
-				opt.Free()
-			case *TableOptionEngine:
-				opt.Free()
-			case *TableOptionEngineAttr:
-				opt.Free()
-			case *TableOptionInsertMethod:
-				opt.Free()
-			case *TableOptionSecondaryEngine:
-				opt.Free()
-			case *TableOptionSecondaryEngineNull:
-				panic("currently not used")
-			case *TableOptionCharset:
-				opt.Free()
-			case *TableOptionCollate:
-				opt.Free()
-			case *TableOptionAUTOEXTEND_SIZE:
-				opt.Free()
-			case *TableOptionAutoIncrement:
-				opt.Free()
-			case *TableOptionComment:
-				opt.Free()
-			case *TableOptionAvgRowLength:
-				opt.Free()
-			case *TableOptionChecksum:
-				opt.Free()
-			case *TableOptionCompression:
-				opt.Free()
-			case *TableOptionConnection:
-				opt.Free()
-			case *TableOptionPassword:
-				opt.Free()
-			case *TableOptionKeyBlockSize:
-				opt.Free()
-			case *TableOptionMaxRows:
-				opt.Free()
-			case *TableOptionMinRows:
-				opt.Free()
-			case *TableOptionDelayKeyWrite:
-				opt.Free()
-			case *TableOptionRowFormat:
-				opt.Free()
-			case *TableOptionStartTrans:
-				opt.Free()
-			case *TableOptionSecondaryEngineAttr:
-				opt.Free()
-			case *TableOptionStatsPersistent:
-				opt.Free()
-			case *TableOptionStatsAutoRecalc:
-				opt.Free()
-			case *TableOptionPackKeys:
-				opt.Free()
-			case *TableOptionTablespace:
-				opt.Free()
-			case *TableOptionDataDirectory:
-				opt.Free()
-			case *TableOptionIndexDirectory:
-				opt.Free()
-			case *TableOptionStorageMedia:
-				opt.Free()
-			case *TableOptionStatsSamplePages:
-				opt.Free()
-			case *TableOptionUnion:
-				opt.Free()
-			case *TableOptionEncryption:
-				opt.Free()
-			default:
-				if opt != nil {
-					panic(fmt.Sprintf("miss Free for %v", item))
-				}
-			}
-		}
-	}
-
 	*node = CreateTable{}
 }
 
@@ -1389,6 +1304,10 @@ func (node *ColumnTableDef) reset() {
 			case *AttributeSRID:
 				opt.Free()
 			case *AttributeVisable:
+				opt.Free()
+			case *AttributeMongoDBPath:
+				opt.Free()
+			case *AttributeMongoDBConvert:
 				opt.Free()
 			case *KeyPart:
 				opt.Free()
@@ -2136,6 +2055,7 @@ type IndexOption struct {
 	KmeansTrainPercent       int64
 	KmeansMaxIteration       int64
 	MaxIndexCapacity         int64
+	QuantizerTrainLimit      int64
 	IncludeColumns           []*UnresolvedName
 }
 
@@ -2151,7 +2071,7 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		node.Quantization != "" || node.DistributionMode != "" ||
 		node.BitsPerCode != 0 || node.ITopkSize != 0 ||
 		node.KmeansTrainPercent != 0 || node.KmeansMaxIteration != 0 ||
-		node.MaxIndexCapacity != 0 ||
+		node.MaxIndexCapacity != 0 || node.QuantizerTrainLimit != 0 ||
 		len(node.IncludeColumns) != 0 {
 		ctx.WriteByte(' ')
 	}
@@ -2260,6 +2180,11 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.MaxIndexCapacity != 0 {
 		ctx.WriteString("MAX_INDEX_CAPACITY ")
 		ctx.WriteString(strconv.FormatInt(node.MaxIndexCapacity, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.QuantizerTrainLimit != 0 {
+		ctx.WriteString("QUANTIZER_TRAIN_LIMIT ")
+		ctx.WriteString(strconv.FormatInt(node.QuantizerTrainLimit, 10))
 		ctx.WriteByte(' ')
 	}
 	if len(node.IncludeColumns) != 0 {
@@ -2617,11 +2542,15 @@ func NewFullTextIndex(k []*KeyPart, n string, e bool, io *IndexOption) *FullText
 
 type CheckIndex struct {
 	tableDefImpl
-	Expr     Expr
-	Enforced bool
+	Expr             Expr
+	Enforced         bool
+	ConstraintSymbol string
 }
 
 func (node *CheckIndex) Format(ctx *FmtCtx) {
+	if node.ConstraintSymbol != "" {
+		ctx.WriteString("constraint " + node.ConstraintSymbol + " ")
+	}
 	ctx.WriteString("check (")
 	node.Expr.Format(ctx)
 	ctx.WriteByte(')')
@@ -3889,7 +3818,7 @@ type Partition struct {
 
 func (node *Partition) Format(ctx *FmtCtx) {
 	ctx.WriteString("partition ")
-	ctx.WriteString(string(node.Name))
+	ctx.WriteIdentifier(node.Name)
 	if node.Values != nil {
 		ctx.WriteByte(' ')
 		node.Values.Format(ctx)
@@ -4034,7 +3963,7 @@ type SubPartition struct {
 
 func (node *SubPartition) Format(ctx *FmtCtx) {
 	ctx.WriteString("subpartition ")
-	ctx.WriteString(string(node.Name))
+	ctx.WriteIdentifier(node.Name)
 
 	if node.Options != nil {
 		prefix := " "

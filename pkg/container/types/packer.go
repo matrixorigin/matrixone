@@ -30,6 +30,8 @@ type Packer struct {
 	bufferDeallocator malloc.Deallocator
 }
 
+const defaultPackerSize = uint64(4096)
+
 var packerAllocator = malloc.NewShardedAllocator(
 	runtime.GOMAXPROCS(0),
 	func() malloc.Allocator {
@@ -40,7 +42,53 @@ var packerAllocator = malloc.NewShardedAllocator(
 )
 
 func NewPacker() *Packer {
-	return NewPackerWithSize(4096)
+	return NewPackerWithSize(defaultPackerSize)
+}
+
+// PackerAllocationSize returns the backing size-class allocation made by
+// NewPackerWithSize. It lets memory-governed callers reserve the actual
+// allocation, including allocator rounding, before constructing a packer.
+func PackerAllocationSize(size uint64) (uint64, bool) {
+	return malloc.ClassAllocationSize(size)
+}
+
+// DefaultPackerCapacity returns the backing capacity retained by NewPacker.
+// Memory-governed callers use this value to admit construction before the
+// allocator is entered.
+func DefaultPackerCapacity() uint64 {
+	size, ok := PackerAllocationSize(defaultPackerSize)
+	if !ok {
+		panic("invalid default packer size")
+	}
+	return size
+}
+
+// PackerCapacityUpperBound bounds the backing capacity retained after any
+// sequence of Reset and append operations whose logical buffer length never
+// exceeds maxLength and whose individual append never exceeds maxAppend.
+//
+// ensureSizeSlow requests cap(buffer)+append from the class allocator. At a
+// growth point the old capacity is strictly less than maxLength, so the
+// request is at most maxLength+maxAppend-1. If the old capacity already covers
+// maxLength, no growth occurs. This mirrors the allocator contract without
+// replaying input-dependent append sequences in an admission hot path.
+func PackerCapacityUpperBound(maxLength, maxAppend uint64) (uint64, bool) {
+	initial := DefaultPackerCapacity()
+	if maxLength <= initial {
+		return initial, true
+	}
+	if maxAppend == 0 || maxLength > math.MaxUint64-maxAppend+1 {
+		return 0, false
+	}
+	request := maxLength + maxAppend - 1
+	capacity, ok := PackerAllocationSize(request)
+	if !ok {
+		return 0, false
+	}
+	if capacity < initial {
+		return initial, true
+	}
+	return capacity, true
 }
 
 func NewPackerWithSize(size uint64) *Packer {
@@ -55,7 +103,7 @@ func NewPackerWithSize(size uint64) *Packer {
 }
 
 func NewPackerArray(length int) []*Packer {
-	return NewPackerArrayWithSize(length, 4096)
+	return NewPackerArrayWithSize(length, defaultPackerSize)
 }
 
 func NewPackerArrayWithSize(length int, size uint64) []*Packer {
@@ -75,6 +123,14 @@ func (p *Packer) Close() {
 
 func (p *Packer) Reset() {
 	p.buffer = p.buffer[:0]
+}
+
+// Allocated returns the size-class capacity retained by the packer.
+func (p *Packer) Allocated() uint64 {
+	if p == nil {
+		return 0
+	}
+	return uint64(cap(p.buffer))
 }
 
 func (p *Packer) ensureSize(n int) {
@@ -281,6 +337,15 @@ func (p *Packer) EncodeDecimal128(e Decimal128) {
 	b := *(*[16]byte)(unsafe.Pointer(&e))
 	b[15] ^= 0x80
 	for i := 15; i >= 0; i-- {
+		p.putByte(b[i])
+	}
+}
+
+func (p *Packer) EncodeDecimal256(e Decimal256) {
+	p.putByte(decimal256Code)
+	b := *(*[32]byte)(unsafe.Pointer(&e))
+	b[31] ^= 0x80
+	for i := 31; i >= 0; i-- {
 		p.putByte(b[i])
 	}
 }

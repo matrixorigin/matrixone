@@ -71,6 +71,9 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	if err != nil {
 		return 0, err
 	}
+	if err = validateDeleteTargetSubqueries(builder.compCtx, stmt, dmlCtx.objRefs, dmlCtx.tableDefs); err != nil {
+		return 0, err
+	}
 
 	//FIXME: optimize truncate table?
 	if stmt.Where == nil && stmt.Limit == nil && len(stmt.TableRefs) == 0 {
@@ -304,7 +307,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			partitionPos = colName2Idx[i][colName]
 		}
 		updateCtx := &plan.UpdateCtx{
-			TableDef: DeepCopyTableDef(tableDef, true),
+			TableDef: CloneTableDefForPlan(tableDef, true),
 			ObjRef:   DeepCopyObjectRef(dmlCtx.objRefs[i]),
 		}
 
@@ -372,7 +375,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			}
 
 			dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, &plan.UpdateCtx{
-				TableDef: DeepCopyTableDef(idxNode.TableDef, true),
+				TableDef: CloneTableDefForPlan(idxNode.TableDef, true),
 				ObjRef:   DeepCopyObjectRef(idxNode.ObjRef),
 				DeleteCols: []plan.ColRef{
 					{

@@ -1,0 +1,16 @@
+logservices = [
+    "./etc/v1/launch-with-proxy/log.toml",
+]
+
+tnservices = [
+    "./etc/v1/launch-with-proxy/tn.toml"
+]
+
+cnservices = [
+    "./etc/v1/launch-with-proxy/cn1.toml",
+    "./etc/v1/launch-with-proxy/cn2.toml"
+]
+
+proxy-services = [
+    "./etc/v1/launch-with-proxy/proxy.toml"
+]

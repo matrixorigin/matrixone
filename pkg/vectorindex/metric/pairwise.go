@@ -54,13 +54,14 @@ var (
 // While this is currently synchronous for CPU (it performs the calculation in Launch),
 // it follows the asynchronous interface to support the pipelined execution model
 // used in the block reader.
-func PairwiseDistanceLaunchCPU[T types.RealNumbers](
+func PairwiseDistanceLaunchCPU[T types.ArrayElement](
 	x [][]T,
 	y [][]T,
 	metric MetricType,
 	dist []float32,
 ) (PairwiseJobHandle, error) {
-	distFn, err := ResolveDistanceFn[T](metric)
+	// R=float32: the output is []float32, matching the prior float32(d) truncation.
+	distFn, err := ResolveDistanceFn[T, float32](metric)
 	if err != nil {
 		return 0, err
 	}
@@ -75,38 +76,18 @@ func PairwiseDistanceLaunchCPU[T types.RealNumbers](
 		dist: dist,
 	}
 
-	// Do the calculation in Launch
-	switch xTyped := any(x).(type) {
-	case [][]float32:
-		yTyped := any(y).([][]float32)
-		dFn := any(distFn).(DistanceFunction[float32])
-		for r := 0; r < nX; r++ {
-			xr := xTyped[r]
-			for c := 0; c < nY; c++ {
-				d, err := dFn(xr, yTyped[c])
-				if err != nil {
-					job.err = err
-					goto DONE
-				}
-				dist[r*nY+c] = float32(d)
+	// One unified loop over any ArrayElement type — the resolver handles f32/f64
+	// and the narrow kernels (bf16/f16/int8/uint8) uniformly.
+	for r := 0; r < nX; r++ {
+		xr := x[r]
+		for c := 0; c < nY; c++ {
+			d, err := distFn(xr, y[c])
+			if err != nil {
+				job.err = err
+				goto DONE
 			}
+			dist[r*nY+c] = d
 		}
-	case [][]float64:
-		yTyped := any(y).([][]float64)
-		dFn := any(distFn).(DistanceFunction[float64])
-		for r := 0; r < nX; r++ {
-			xr := xTyped[r]
-			for c := 0; c < nY; c++ {
-				d, err := dFn(xr, yTyped[c])
-				if err != nil {
-					job.err = err
-					goto DONE
-				}
-				dist[r*nY+c] = float32(d)
-			}
-		}
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("unsupported type in PairwiseDistanceLaunchCPU")
 	}
 
 	if metric == Metric_L2Distance {

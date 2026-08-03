@@ -74,6 +74,48 @@ func TestLiteralID(t *testing.T) {
 	}
 }
 
+func TestQuotedUnicodeIdentifier(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		value string
+	}{
+		{name: "quoted Arabic", input: "`الكمية`", value: "الكمية"},
+		{name: "quoted Chinese", input: "`数量`", value: "数量"},
+		{name: "escaped delimiter with Unicode", input: "`数``量`", value: "数`量"},
+		{name: "latin1 client byte", input: "`\xe9`", value: "\xe9"},
+		{name: "latin1 client byte before escaped delimiter", input: "`\xe9``name`", value: "\xe9`name"},
+		{name: "latin1 bytes forming supplementary UTF-8", input: "`\xf0\x9f\x98\x80`", value: "\xf0\x9f\x98\x80"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, test.input)
+			token, value := scanner.Scan()
+			if token != QUOTE_ID || value != test.value {
+				t.Fatalf("Scan(%q) = (%s, %q), want (%s, %q)",
+					test.input, tokenName(token), value, tokenName(QUOTE_ID), test.value)
+			}
+		})
+	}
+}
+
+func TestScannerSQLModePipeConcat(t *testing.T) {
+	s := NewScannerWithSQLMode(dialect.MYSQL, "||", ParseSQLModeFlags("PIPES_AS_CONCAT"))
+	id, _ := s.Scan()
+	if id != PIPE_CONCAT {
+		t.Fatalf("PIPES_AS_CONCAT || token = %s, want PIPE_CONCAT", tokenName(id))
+	}
+	PutScanner(s)
+
+	s = NewScanner(dialect.MYSQL, "||")
+	defer PutScanner(s)
+	id, _ = s.Scan()
+	if id != OR {
+		t.Fatalf("default || token after scanner reuse = %s, want OR", tokenName(id))
+	}
+}
+
 func tokenName(id int) string {
 	if id == STRING {
 		return "STRING"
@@ -432,11 +474,12 @@ func TestScannerPoolCleanupAndThreshold(t *testing.T) {
 	s := NewScanner(dialect.MYSQL, "select 1")
 	// grow strBuilder a little to ensure it is cleared on Put
 	s.strBuilder.WriteString("abc")
+	s.executableCommentEnd = 42
 	PutScanner(s)
 
 	// Fetch again to see if we receive a cleared scanner from pool
 	s2 := NewScanner(dialect.MYSQL, "select 2")
-	if s2.LastToken != "" || s2.LastError != nil || s2.MysqlSpecialComment != nil || s2.Pos != 0 || s2.Line != 0 || s2.Col != 0 || s2.PrePos != 0 {
+	if s2.LastToken != "" || s2.LastError != nil || s2.MysqlSpecialComment != nil || s2.Pos != 0 || s2.Line != 0 || s2.Col != 0 || s2.PrePos != 0 || s2.executableCommentEnd != 0 {
 		t.Fatalf("pooled scanner should be reset: %+v", s2)
 	}
 	if s2.strBuilder.Len() != 0 {
@@ -460,6 +503,31 @@ func TestScannerPoolCleanupAndThreshold(t *testing.T) {
 		t.Fatalf("unexpected scanner buf after Get")
 	}
 	PutScanner(s3)
+}
+
+func TestExecutableCommentEndSkipsQuotedTerminator(t *testing.T) {
+	const sql = "prepare fromx /*! from select 'x*/y' */"
+	s := NewScanner(dialect.MYSQL, sql)
+	defer PutScanner(s)
+
+	for i := 0; i < 3; i++ {
+		if token, _ := s.Scan(); token == LEX_ERROR || token == EofChar() {
+			t.Fatalf("unexpected token %d", token)
+		}
+	}
+	s.TakeExecutableCommentEnd()
+	for {
+		token, _ := s.Scan()
+		if end := s.TakeExecutableCommentEnd(); end != 0 {
+			if end != len(sql) {
+				t.Fatalf("comment end = %d, want %d", end, len(sql))
+			}
+			return
+		}
+		if token == LEX_ERROR || token == EofChar() {
+			t.Fatal("executable comment terminator not found")
+		}
+	}
 }
 
 func TestPutScannerSmallKeepsBuffers(t *testing.T) {

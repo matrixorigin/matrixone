@@ -110,4 +110,67 @@ call test_inout_param(@id);
 select @id;
 drop procedure test_inout_param;
 
+-- @case
+-- @desc:PREPARE/EXECUTE inside a stored procedure (issue #25413)
+-- @label:bvt
+drop table if exists t_prepare_inside;
+create table t_prepare_inside (id int primary key, v int);
+insert into t_prepare_inside values (1, 10), (2, 20), (3, 30);
+drop procedure if exists test_prepare_literal;
+create procedure test_prepare_literal() 'begin prepare s from ''select sum(v) as prep_sum from t_prepare_inside''; execute s; deallocate prepare s; end';
+call test_prepare_literal();
+drop procedure test_prepare_literal;
+drop procedure if exists test_prepare_user_var;
+create procedure test_prepare_user_var() 'begin set @sql = ''select sum(v) as prep_sum from t_prepare_inside''; prepare s from @sql; execute s; deallocate prepare s; end';
+call test_prepare_user_var();
+drop procedure test_prepare_user_var;
+drop procedure if exists test_prepare_using;
+create procedure test_prepare_using() 'begin set @left_arg = 20; set @right_arg = 40; prepare s from ''select ? + ? as prep_sum''; execute s using @left_arg, @right_arg; end';
+call test_prepare_using();
+execute s using @left_arg, @right_arg;
+deallocate prepare s;
+drop procedure test_prepare_using;
+drop table t_prepare_inside;
+
+-- @case
+-- @desc:temporary table lifecycle inside a stored procedure
+-- @label:bvt
+drop procedure if exists test_temp_table_lifecycle;
+create procedure test_temp_table_lifecycle() 'begin create temporary table tmp_proc_lifecycle (id int primary key, v int); insert into tmp_proc_lifecycle select id, val from tbh1 where id <= 2; select sum(v) as tmp_sum from tmp_proc_lifecycle; drop table tmp_proc_lifecycle; end';
+call test_temp_table_lifecycle();
+drop procedure test_temp_table_lifecycle;
+
+-- @case
+-- @desc:temporary table created in a stored procedure remains bound to the caller session
+-- @label:bvt
+drop procedure if exists test_temp_table_session_binding;
+create procedure test_temp_table_session_binding() 'begin create temporary table tmp_proc_session (id int primary key, v int); insert into tmp_proc_session select id, val from tbh1 where id <= 2; end';
+call test_temp_table_session_binding();
+select sum(v) as tmp_sum from tmp_proc_session;
+drop table tmp_proc_session;
+drop procedure test_temp_table_session_binding;
+
+-- @case
+-- @desc:temporary table created in a nested stored procedure remains bound to the caller session
+-- @label:bvt
+drop procedure if exists test_nested_temp_table_outer;
+drop procedure if exists test_nested_temp_table_inner;
+create procedure test_nested_temp_table_inner() 'begin create temporary table tmp_nested_proc_session (id int primary key, v int); insert into tmp_nested_proc_session select id, val from tbh1 where id <= 2; end';
+create procedure test_nested_temp_table_outer() 'begin call test_nested_temp_table_inner(); end';
+call test_nested_temp_table_outer();
+select sum(v) as tmp_sum from tmp_nested_proc_session;
+drop table tmp_nested_proc_session;
+drop procedure test_nested_temp_table_outer;
+drop procedure test_nested_temp_table_inner;
+
+-- @case
+-- @desc:procedure parser SQL mode is retained after caller mode changes
+-- @label:bvt
+set sql_mode = 'PIPES_AS_CONCAT';
+create procedure test_sql_mode_pipes() 'begin select ''a''||''b'' as c; end';
+set sql_mode = '';
+call test_sql_mode_pipes();
+drop procedure test_sql_mode_pipes;
+set sql_mode = default;
+
 drop database if exists procedure_test;

@@ -40,12 +40,23 @@ import (
 var _ client.Workspace = (*testWorkspace)(nil)
 
 type testWorkspace struct {
-	start      bool
-	incr       bool
-	mu         sync.Mutex
-	stack      []uint64
-	stmtId     uint64
-	reportErr1 bool
+	start               bool
+	incr                bool
+	mu                  sync.Mutex
+	stack               []uint64
+	stmtId              uint64
+	reportErr1          bool
+	haveDDL             bool
+	protectedCloneFiles []string
+	trackedLoadFiles    []string
+}
+
+func (txn *testWorkspace) ProtectCloneFiles(names ...string) {
+	txn.protectedCloneFiles = append(txn.protectedCloneFiles, names...)
+}
+
+func (txn *testWorkspace) TrackLoadFiles(names ...string) {
+	txn.trackedLoadFiles = append(txn.trackedLoadFiles, names...)
 }
 
 func (txn *testWorkspace) SetCloneTxn(snapshot int64) {}
@@ -121,6 +132,10 @@ func (txn *testWorkspace) IncrStatementID(ctx context.Context, commit bool) erro
 	return nil
 }
 
+func (txn *testWorkspace) AdvanceSnapshot(context.Context, timestamp.Timestamp) error {
+	return nil
+}
+
 func (txn *testWorkspace) RollbackLastStatement(ctx context.Context) error {
 	txn.mu.Lock()
 	defer txn.mu.Unlock()
@@ -184,11 +199,11 @@ func (t *testWorkspace) BindTxnOp(op client.TxnOperator) {
 }
 
 func (t *testWorkspace) SetHaveDDL(flag bool) {
-	//TODO implement me
+	t.haveDDL = flag
 }
 
 func (t *testWorkspace) GetHaveDDL() bool {
-	return false
+	return t.haveDDL
 }
 
 func TestWorkspace(t *testing.T) {
@@ -283,7 +298,7 @@ func newMockErrSession(t *testing.T, ctx context.Context, ctrl *gomock.Controlle
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(moerr.NewInternalError(ctx, "throw error")).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-			txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+			txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 			txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 			wsp := newTestWorkspace()
 			txnOperator.EXPECT().GetWorkspace().Return(wsp).AnyTimes()
@@ -313,7 +328,7 @@ func newMockErrSession2(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-			txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+			txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 			txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 			wsp := newTestWorkspace()
 			wsp.reportErr1 = true
@@ -346,7 +361,7 @@ func newMockErrSession3(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(moerr.NewInternalError(ctx, "r-w conflicts")).AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-			txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+			txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 			txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 			wsp := newTestWorkspace()
 			wsp.reportErr1 = true
@@ -786,8 +801,8 @@ func Test_commit(t *testing.T) {
 	})
 }
 
-func TestCommitTxnUnknownPreservesTxnOperatorForLaterCleanup(t *testing.T) {
-	convey.Convey("commit ErrTxnUnknown keeps txn operator reachable", t, func() {
+func TestCommitTxnUnknownInvalidatesTxnOperator(t *testing.T) {
+	convey.Convey("commit ErrTxnUnknown invalidates the frontend txn operator", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -805,6 +820,7 @@ func TestCommitTxnUnknownPreservesTxnOperatorForLaterCleanup(t *testing.T) {
 			Status: txn.TxnStatus_Active,
 		}
 		txnOp.commitErr = moerr.NewTxnUnknown(ctx, "test")
+		txnOp.wp.SetHaveDDL(true)
 		ses.txnHandler.txnOp = txnOp
 		ses.txnHandler.txnCtx = ctx
 		ses.txnHandler.shareTxn = false
@@ -818,8 +834,184 @@ func TestCommitTxnUnknownPreservesTxnOperatorForLaterCleanup(t *testing.T) {
 		convey.So(moerr.IsMoErrCode(err, moerr.ErrTxnUnknown), convey.ShouldBeTrue)
 		convey.So(txnOp.commitCalls, convey.ShouldEqual, 1)
 		convey.So(txnOp.rollbackCalls, convey.ShouldEqual, 0)
-		convey.So(ses.GetTxnHandler().GetTxn(), convey.ShouldEqual, txnOp)
+		convey.So(ses.getDDLVersion(), convey.ShouldEqual, uint64(1))
+		convey.So(ses.GetTxnHandler().GetTxn(), convey.ShouldBeNil)
+		convey.So(ses.GetTxnHandler().InActiveTxn(), convey.ShouldBeFalse)
 	})
+}
+
+func TestCommitFailureAdvancesSessionGeneration(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: time.Second,
+	}).AnyTimes()
+	ses.txnHandler.storage = eng
+
+	txnOp := newTestTxnOp()
+	txnOp.meta = txn.TxnMeta{
+		ID:     []byte{1, 2, 3, 4},
+		Status: txn.TxnStatus_Active,
+	}
+	txnOp.wp.SetHaveDDL(true)
+	txnOp.commitErr = moerr.NewInternalError(ctx, "commit failed")
+	ses.txnHandler.txnOp = txnOp
+	ses.txnHandler.txnCtx = ctx
+	ses.txnHandler.shareTxn = false
+
+	ec := newTestExecCtx(ctx, ctrl)
+	ec.ses = ses
+	ec.stmt = &tree.Select{}
+	ec.txnOpt = FeTxnOption{autoCommit: true}
+
+	err := finishTxnFunc(ses, nil, ec)
+	if err == nil {
+		t.Fatal("expected commit failure")
+	}
+	if txnOp.commitCalls != 1 {
+		t.Fatalf("expected one commit call, got %d", txnOp.commitCalls)
+	}
+	if got := ses.getDDLVersion(); got != 1 {
+		t.Fatalf("unexpected DDL generation: got %d, want 1", got)
+	}
+}
+
+func TestRollbackDDLAdvancesSessionGeneration(t *testing.T) {
+	tests := []struct {
+		name            string
+		haveDDL         bool
+		rollbackError   bool
+		statementError  bool
+		expectedVersion uint64
+	}{
+		{
+			name:            "explicit rollback with DDL",
+			haveDDL:         true,
+			expectedVersion: 1,
+		},
+		{
+			name:            "error rollback with DDL",
+			haveDDL:         true,
+			statementError:  true,
+			expectedVersion: 1,
+		},
+		{
+			name:            "rollback without DDL",
+			expectedVersion: 0,
+		},
+		{
+			name:            "failed rollback with DDL",
+			haveDDL:         true,
+			rollbackError:   true,
+			expectedVersion: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+			ses := newTestSession(t, ctrl)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			eng.EXPECT().Hints().Return(engine.Hints{
+				CommitOrRollbackTimeout: time.Second,
+			}).AnyTimes()
+			ses.txnHandler.storage = eng
+
+			txnOp := newTestTxnOp()
+			txnOp.meta = txn.TxnMeta{
+				ID:     []byte{1, 2, 3, 4},
+				Status: txn.TxnStatus_Active,
+			}
+			txnOp.wp.SetHaveDDL(test.haveDDL)
+			if test.rollbackError {
+				txnOp.mod = modRollbackError
+			}
+			ses.txnHandler.txnOp = txnOp
+			ses.txnHandler.txnCtx = ctx
+			ses.txnHandler.shareTxn = false
+
+			ec := newTestExecCtx(ctx, ctrl)
+			ec.ses = ses
+			ec.stmt = &tree.RollbackTransaction{}
+			ec.txnOpt = FeTxnOption{autoCommit: true}
+
+			var err error
+			if test.statementError {
+				ec.stmt = &tree.Select{}
+				err = finishTxnFunc(
+					ses,
+					moerr.NewInternalError(ctx, "statement failed"),
+					ec,
+				)
+			} else {
+				ec.txnOpt.byRollback = true
+				err = ses.GetTxnHandler().Rollback(ec)
+			}
+			if test.rollbackError && err == nil {
+				t.Fatal("expected rollback failure")
+			}
+			if !test.rollbackError && test.statementError && err == nil {
+				t.Fatal("expected the original statement failure")
+			}
+			if !test.rollbackError && !test.statementError && err != nil {
+				t.Fatalf("rollback failed: %v", err)
+			}
+			if txnOp.rollbackCalls != 1 {
+				t.Fatalf("expected one rollback call, got %d", txnOp.rollbackCalls)
+			}
+			if got := ses.getDDLVersion(); got != test.expectedVersion {
+				t.Fatalf(
+					"unexpected DDL generation: got %d, want %d",
+					got,
+					test.expectedVersion,
+				)
+			}
+		})
+	}
+}
+
+func TestCommitPanicRollbackAdvancesSessionGeneration(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: time.Second,
+	}).AnyTimes()
+	ses.txnHandler.storage = eng
+
+	txnOp := newTestTxnOp()
+	txnOp.meta = txn.TxnMeta{
+		ID:     []byte{1, 2, 3, 4},
+		Status: txn.TxnStatus_Active,
+	}
+	txnOp.wp.SetHaveDDL(true)
+	txnOp.commitPanic = true
+	ses.txnHandler.txnOp = txnOp
+	ses.txnHandler.txnCtx = ctx
+	ses.txnHandler.shareTxn = false
+
+	ec := newTestExecCtx(ctx, ctrl)
+	ec.ses = ses
+	ec.stmt = &tree.Select{}
+	ec.txnOpt = FeTxnOption{autoCommit: true}
+
+	err := finishTxnFunc(ses, nil, ec)
+	if err == nil {
+		t.Fatal("expected commit panic error")
+	}
+	if txnOp.commitCalls != 1 {
+		t.Fatalf("expected one commit call, got %d", txnOp.commitCalls)
+	}
+	if txnOp.rollbackCalls != 1 {
+		t.Fatalf("expected one rollback call, got %d", txnOp.rollbackCalls)
+	}
+	if got := ses.getDDLVersion(); got != 1 {
+		t.Fatalf("unexpected DDL generation: got %d, want 1", got)
+	}
 }
 
 var _ TxnOperator = new(testTxnOp)
@@ -833,6 +1025,7 @@ type testTxnOp struct {
 	wp                   *testWorkspace
 	mod                  int
 	commitErr            error
+	commitPanic          bool
 	commitCalls          int
 	rollbackCalls        int
 	checkLockTableBinds  func(context.Context) error
@@ -925,6 +1118,9 @@ func (txnop *testTxnOp) WriteAndCommit(ctx context.Context, ops []txn.TxnRequest
 
 func (txnop *testTxnOp) Commit(ctx context.Context) error {
 	txnop.commitCalls++
+	if txnop.commitPanic {
+		panic("commit panic")
+	}
 	if txnop.commitErr != nil {
 		return txnop.commitErr
 	}
@@ -1003,7 +1199,7 @@ func (txnop *testTxnOp) NextSequence() uint64 {
 }
 
 func (txnop *testTxnOp) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
-	return 0
+	return 1
 }
 
 func (txnop *testTxnOp) ExitRunSqlWithToken(_ uint64) {

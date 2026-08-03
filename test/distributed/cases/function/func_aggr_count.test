@@ -265,3 +265,41 @@ SELECT COUNT(a) FROM t1;
 DELETE FROM t1 WHERE a%2=1;
 SELECT COUNT(*) FROM t1;
 DROP TABLE t1;
+
+# COUNT(DISTINCT expr1, expr2) — multi-column distinct count
+create table t_count_distinct_multi(g int, v int, txt varchar(8));
+insert into t_count_distinct_multi values
+  (null, null, 'n1'),
+  (null, 10,   'n2'),
+  (1,    null, 'a'),
+  (1,    5,    'b'),
+  (1,    5,    null),
+  (2,    null, null),
+  (2,    7,    'c'),
+  (3,    null, null);
+
+select count(distinct g, v) as cnt_g_v,
+       count(distinct g, txt) as cnt_g_txt
+from t_count_distinct_multi;
+
+select count(distinct g, v) as cnt_g_v
+from t_count_distinct_multi
+where g = 1;
+
+# Tuple syntax with multiple aggregates (regression: tuple must be expanded in binder, not just in optimizeDistinctAgg)
+select count(distinct (g, v)), count(*) from t_count_distinct_multi;
+select txt, count(distinct (g, v)), count(*) from t_count_distinct_multi group by txt order by txt;
+select count(distinct (g, v)), count(distinct g, v) from t_count_distinct_multi;
+
+# NULL literal argument: a row with any NULL column is skipped, so all count to 0
+select count(distinct null, 1) as c1, count(distinct 1, null) as c2, count(distinct null, null) as c3;
+
+# Multi-arg / tuple COUNT is only valid with DISTINCT; these must fail
+select count((g, v)) from t_count_distinct_multi;
+select count(g, v) over () from t_count_distinct_multi;
+select count((g, v)) over () from t_count_distinct_multi;
+
+# A multi-column row subquery is not a valid distinct key; reject, do not silently drop columns
+select count(distinct (select g, v from t_count_distinct_multi limit 1)) from t_count_distinct_multi;
+
+drop table t_count_distinct_multi;

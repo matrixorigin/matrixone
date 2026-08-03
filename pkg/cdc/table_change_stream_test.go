@@ -378,6 +378,90 @@ func TestTableChangeStream_Run_DuplicateReader(t *testing.T) {
 	}
 }
 
+func TestTableChangeStreamCleanupDoesNotDeleteReplacedReader(t *testing.T) {
+	runningReaders := &sync.Map{}
+
+	key := "db1.t1"
+	oldStream := &TableChangeStream{
+		accountId:               1,
+		taskId:                  "task1",
+		tableInfo:               &DbTableInfo{SourceDbName: "db1", SourceTblName: "t1", SourceTblId: 1},
+		sinker:                  newTableStreamRecordingSinker(),
+		watermarkUpdater:        newWatermarkUpdaterStub(),
+		watermarkKey:            &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"},
+		runningReaders:          runningReaders,
+		runningReaderKey:        key,
+		progressTracker:         nil,
+		watermarkStallThreshold: defaultWatermarkStallThreshold,
+	}
+	newStream := &TableChangeStream{
+		accountId:        1,
+		taskId:           "task1",
+		tableInfo:        &DbTableInfo{SourceDbName: "db1", SourceTblName: "t1", SourceTblId: 1},
+		sinker:           newTableStreamRecordingSinker(),
+		watermarkUpdater: newWatermarkUpdaterStub(),
+		watermarkKey:     &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"},
+		runningReaders:   runningReaders,
+		runningReaderKey: key,
+	}
+	runningReaders.Store(key, oldStream)
+	runningReaders.Store(key, newStream)
+
+	oldStream.wg.Add(1)
+	oldStream.cleanup(context.Background())
+
+	stored, ok := runningReaders.Load(key)
+	require.True(t, ok, "replaced reader ownership should remain")
+	require.Same(t, newStream, stored, "old cleanup must not delete a newer reader")
+}
+
+func TestTableChangeStreamCleanupKeepsOwnershipUntilCloseFinishes(t *testing.T) {
+	runningReaders := &sync.Map{}
+
+	key := "db1.t1"
+	sinker := newBlockingCloseSinker()
+	stream := &TableChangeStream{
+		accountId:               1,
+		taskId:                  "task1",
+		tableInfo:               &DbTableInfo{SourceDbName: "db1", SourceTblName: "t1", SourceTblId: 1},
+		sinker:                  sinker,
+		watermarkUpdater:        newWatermarkUpdaterStub(),
+		watermarkKey:            &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"},
+		runningReaders:          runningReaders,
+		runningReaderKey:        key,
+		progressTracker:         nil,
+		watermarkStallThreshold: defaultWatermarkStallThreshold,
+	}
+	runningReaders.Store(key, stream)
+
+	stream.wg.Add(1)
+	cleanupDone := make(chan struct{})
+	go func() {
+		stream.cleanup(context.Background())
+		close(cleanupDone)
+	}()
+
+	select {
+	case <-sinker.closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("expected cleanup to reach sinker close")
+	}
+
+	stored, ok := runningReaders.Load(key)
+	require.True(t, ok, "reader ownership should remain while cleanup is still closing")
+	require.Same(t, stream, stored, "old stream should keep ownership until cleanup finishes")
+
+	close(sinker.unblockClose)
+	select {
+	case <-cleanupDone:
+	case <-time.After(time.Second):
+		t.Fatal("cleanup did not finish after unblocking close")
+	}
+
+	_, ok = runningReaders.Load(key)
+	require.False(t, ok, "reader ownership should be removed after cleanup finishes")
+}
+
 // Integration: commit failure triggers EnsureCleanup rollback, then recovery succeeds
 func TestTableChangeStream_CommitFailure_EnsureCleanup_ThenRecover(t *testing.T) {
 	updaterStub := newWatermarkUpdaterStub()
@@ -893,20 +977,20 @@ func TestTableChangeStream_Run_ContextCancel(t *testing.T) {
 	h := newTableStreamHarness(t)
 	defer h.Close()
 
-	tail := createTestBatch(t, h.MP(), types.BuildTS(10, 0), []int32{1})
-	h.SetCollectBatches([]changeBatch{
-		{insert: tail, hint: engine.ChangesHandle_Tail_done},
-		{insert: nil, hint: engine.ChangesHandle_Tail_done},
+	ready := make(chan struct{})
+	h.SetCollectFactory(func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
+		return &blockingChangesHandle{ready: ready}, nil
 	})
 
 	ar := h.NewActiveRoutine()
 	errCh, done := h.RunStreamAsync(ar)
 
-	require.Eventually(t, func() bool {
-		return len(h.CollectCallsSnapshot()) > 0
-	}, time.Second, 10*time.Millisecond, "stream should begin collecting before cancellation")
-
-	opsBefore := h.Sinker().opsSnapshot()
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("collector did not block before context cancellation")
+	}
+	require.Empty(t, h.Sinker().opsSnapshot(), "blocked collector should not produce sink operations")
 
 	h.Cancel()
 	done()
@@ -923,7 +1007,7 @@ func TestTableChangeStream_Run_ContextCancel(t *testing.T) {
 	}
 
 	require.False(t, h.Stream().GetRetryable(), "cancel should not mark stream retryable")
-	require.Equal(t, opsBefore, h.Sinker().opsSnapshot(), "cancel should not produce additional sink operations")
+	require.Empty(t, h.Sinker().opsSnapshot(), "cancel should not produce sink or cleanup operations")
 }
 
 // Test ActiveRoutine Pause
@@ -1943,7 +2027,7 @@ func (n *noopTxnOperator) NextSequence() uint64 {
 }
 
 func (n *noopTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
-	return 0
+	return 1
 }
 func (n *noopTxnOperator) ExitRunSqlWithToken(_ uint64) {}
 func (n *noopTxnOperator) EnterIncrStmt()               {}
@@ -2062,7 +2146,7 @@ type tableStreamHarness struct {
 	getTxn         func(context.Context, engine.Engine, client.TxnOperator) error
 	getRelation    func(context.Context, engine.Engine, client.TxnOperator, uint64) (string, string, engine.Relation, error)
 	getSnapshotTS  func(client.TxnOperator) timestamp.Timestamp
-	enterRunSql    func(context.Context, client.TxnOperator, string) func()
+	tryEnterRunSql func(context.Context, client.TxnOperator, string) (func(), error)
 	collectFactory func(fromTs, toTs types.TS) (engine.ChangesHandle, error)
 
 	collectCallsMu sync.Mutex
@@ -2177,7 +2261,9 @@ func newTableStreamHarness(t *testing.T, opts ...tableStreamHarnessOption) *tabl
 		}
 		return ts
 	}
-	h.enterRunSql = func(context.Context, client.TxnOperator, string) func() { return func() {} }
+	h.tryEnterRunSql = func(context.Context, client.TxnOperator, string) (func(), error) {
+		return func() {}, nil
+	}
 	h.collectFactory = func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
 		return newImmediateChangesHandle(nil), nil
 	}
@@ -2203,8 +2289,8 @@ func (h *tableStreamHarness) installStubs() {
 	h.addStub(gostub.Stub(&GetSnapshotTS, func(op client.TxnOperator) timestamp.Timestamp {
 		return h.getSnapshotTS(op)
 	}))
-	h.addStub(gostub.Stub(&EnterRunSql, func(ctx context.Context, op client.TxnOperator, sql string) func() {
-		return h.enterRunSql(ctx, op, sql)
+	h.addStub(gostub.Stub(&TryEnterRunSql, func(ctx context.Context, op client.TxnOperator, sql string) (func(), error) {
+		return h.tryEnterRunSql(ctx, op, sql)
 	}))
 	h.addStub(gostub.Stub(&CollectChanges, func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
 		h.collectCallsMu.Lock()
@@ -2332,11 +2418,39 @@ func (h *tableStreamHarness) SetGetSnapshotTS(fn func(client.TxnOperator) timest
 	}
 }
 
-func (h *tableStreamHarness) SetEnterRunSql(fn func(context.Context, client.TxnOperator, string) func()) {
+func (h *tableStreamHarness) SetTryEnterRunSql(fn func(context.Context, client.TxnOperator, string) (func(), error)) {
 	if fn == nil {
-		fn = func(context.Context, client.TxnOperator, string) func() { return func() {} }
+		fn = func(context.Context, client.TxnOperator, string) (func(), error) {
+			return func() {}, nil
+		}
 	}
-	h.enterRunSql = fn
+	h.tryEnterRunSql = fn
+}
+
+func TestProcessOneRoundRejectsSealedTransaction(t *testing.T) {
+	expectedErr := moerr.NewTxnClosedNoCtx([]byte("sealed"))
+	var finishErr error
+	getTxnOpStub := gostub.Stub(&GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return newNoopTxnOperator(), nil
+	})
+	defer getTxnOpStub.Reset()
+	finishTxnStub := gostub.Stub(&FinishTxnOp, func(_ context.Context, err error, _ client.TxnOperator, _ engine.Engine) {
+		finishErr = err
+	})
+	defer finishTxnStub.Reset()
+	enterRunSQLStub := gostub.Stub(&TryEnterRunSql, func(context.Context, client.TxnOperator, string) (func(), error) {
+		return func() {}, expectedErr
+	})
+	defer enterRunSQLStub.Reset()
+	getTxnStub := gostub.Stub(&GetTxn, func(context.Context, engine.Engine, client.TxnOperator) error {
+		t.Fatal("GetTxn must not run after SQL registration is rejected")
+		return nil
+	})
+	defer getTxnStub.Reset()
+
+	err := (&TableChangeStream{}).processOneRound(context.Background(), &ActiveRoutine{})
+	require.ErrorIs(t, err, expectedErr)
+	require.ErrorIs(t, finishErr, expectedErr)
 }
 
 func (h *tableStreamHarness) SetCollectFactory(factory func(fromTs, toTs types.TS) (engine.ChangesHandle, error)) {
@@ -2421,6 +2535,28 @@ type tableStreamRecordingSinker struct {
 
 func newTableStreamRecordingSinker() *tableStreamRecordingSinker {
 	return &tableStreamRecordingSinker{recordingSinker: newRecordingSinker()}
+}
+
+type blockingCloseSinker struct {
+	*tableStreamRecordingSinker
+	closeStarted chan struct{}
+	unblockClose chan struct{}
+	closeOnce    sync.Once
+}
+
+func newBlockingCloseSinker() *blockingCloseSinker {
+	return &blockingCloseSinker{
+		tableStreamRecordingSinker: newTableStreamRecordingSinker(),
+		closeStarted:               make(chan struct{}),
+		unblockClose:               make(chan struct{}),
+	}
+}
+
+func (s *blockingCloseSinker) Close() {
+	s.closeOnce.Do(func() {
+		close(s.closeStarted)
+	})
+	<-s.unblockClose
 }
 
 func (s *tableStreamRecordingSinker) Sink(ctx context.Context, data *DecoderOutput) {

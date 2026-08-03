@@ -39,6 +39,28 @@ func NewJobEntry(
 	state int8,
 	dropAt types.Timestamp,
 ) *JobEntry {
+	return NewJobEntryWithStatus(
+		tableInfo, jobName, jobSpec, nil, jobID, watermark, state, dropAt,
+	)
+}
+
+// NewJobEntryWithStatus restores an entry from both catalog state and its
+// durable progress. NewJobEntry remains as the source-compatible constructor
+// for callers that do not have persisted status.
+func NewJobEntryWithStatus(
+	tableInfo *TableEntry,
+	jobName string,
+	jobSpec *JobSpec,
+	jobStatus *JobStatus,
+	jobID uint64,
+	watermark types.TS,
+	state int8,
+	dropAt types.Timestamp,
+) *JobEntry {
+	var currentLSN uint64
+	if jobStatus != nil {
+		currentLSN = jobStatus.LSN
+	}
 	jobEntry := &JobEntry{
 		tableInfo:          tableInfo,
 		jobName:            jobName,
@@ -48,6 +70,7 @@ func NewJobEntry(
 		persistedWatermark: watermark,
 		state:              state,
 		dropAt:             dropAt,
+		currentLSN:         currentLSN,
 	}
 	return jobEntry
 }

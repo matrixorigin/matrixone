@@ -38,7 +38,6 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Filter:                  "filter",
 	vm.Dispatch:                "dispatch",
 	vm.Shuffle:                 "shuffle",
-	vm.ShuffleV2:               "shuffleV2",
 	vm.Connector:               "connect",
 	vm.Projection:              "projection",
 	vm.HashJoin:                "hash join",
@@ -58,7 +57,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.PreInsertUnique:         "pre insert uk",
 	vm.PreInsertSecondaryIndex: "pre insert 2nd",
 	vm.External:                "external",
-	vm.Source:                  "source",
+	vm.MongoScan:               "mongodb scan",
 	vm.Minus:                   "minus",
 	vm.Intersect:               "intersect",
 	vm.IntersectAll:            "intersect all",
@@ -81,6 +80,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Apply:                   "apply",
 	vm.MultiUpdate:             "multi update",
 	vm.PostDml:                 "postdml",
+	vm.TableClone:              "table clone",
 }
 
 var debugMagicNames = map[magicType]string{

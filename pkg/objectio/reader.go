@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -165,7 +166,7 @@ func (r *objectReaderV1) ReadOneBlock(
 		return
 	}
 	meta, _ := metaHeader.DataMeta()
-	return ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, typs, m, r.fs, constructorFactory, r.dataReadPolicy)
+	return ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, typs, m, r.fs, columnCacheConstructorFactory, r.dataReadPolicy)
 }
 
 func (r *objectReaderV1) ReadSubBlock(
@@ -183,7 +184,7 @@ func (r *objectReaderV1) ReadSubBlock(
 	ioVecs = make([]fileservice.IOVector, 0, meta.BlockCount())
 	for i := uint32(0); i < meta.BlockCount(); i++ {
 		var ioVec fileservice.IOVector
-		ioVec, err = ReadOneBlockWithMeta(ctx, &meta, r.name, meta.BlockHeader().StartID()+uint16(i), idxs, typs, m, r.fs, constructorFactory, fileservice.Policy(0))
+		ioVec, err = ReadOneBlockWithMeta(ctx, &meta, r.name, meta.BlockHeader().StartID()+uint16(i), idxs, typs, m, r.fs, columnCacheConstructorFactory, fileservice.Policy(0))
 		if err != nil {
 			return
 		}
@@ -205,7 +206,7 @@ func (r *objectReaderV1) ReadOneSubBlock(
 		return
 	}
 	meta, _ := metaHeader.SubMeta(dataType)
-	ioVec, err = ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, typs, m, r.fs, constructorFactory, fileservice.Policy(0))
+	ioVec, err = ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, typs, m, r.fs, columnCacheConstructorFactory, fileservice.Policy(0))
 	if err != nil {
 		return
 	}
@@ -222,7 +223,7 @@ func (r *objectReaderV1) ReadAll(
 		return
 	}
 	meta := metaHeader.MustDataMeta()
-	return ReadAllBlocksWithMeta(ctx, &meta, r.name, idxs, r.dataReadPolicy, m, r.fs, constructorFactory)
+	return ReadAllBlocksWithMeta(ctx, &meta, r.name, idxs, r.dataReadPolicy, m, r.fs, columnCacheConstructorFactory)
 }
 
 // ReadOneBF read one bloom filter
@@ -297,12 +298,7 @@ func (r *objectReaderV1) ReadMultiSubBlocks(
 				continue
 			}
 			col := blkmeta.ColumnMeta(seqnum)
-			ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-				Offset: int64(col.Location().Offset()),
-				Size:   int64(col.Location().Length()),
-
-				ToCacheData: constructorFactory(int64(col.Location().OriginSize()), col.Location().Alg()),
-			})
+			ioVec.Entries = append(ioVec.Entries, newColumnIOEntry(col.Location(), columnCacheConstructorFactory))
 		}
 	}
 
@@ -332,6 +328,12 @@ func (r *objectReaderV1) ReadHeader(ctx context.Context, m *mpool.MPool) (h Head
 		return
 	}
 	h = Header(v)
+	if len(h) < HeaderSize || h.Magic() != uint64(Magic) {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"objectio %s: bad header magic (got %x, want %x): wrong on-disk format "+
+				"(e.g. a legacy DISK/CRC file read as raw DISK-V2) or corruption",
+			r.name, h.Magic(), uint64(Magic))
+	}
 	return
 }
 

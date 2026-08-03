@@ -24,6 +24,7 @@ import (
 	"net/http"
 	gotrace "runtime/trace"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -40,10 +41,34 @@ import (
 )
 
 type AliyunSDK struct {
-	name            string
-	bucket          *oss.Bucket
-	perfCounterSets []*perfcounter.CounterSet
-	listMaxKeys     int
+	name                 string
+	endpoint             string
+	bucket               *oss.Bucket
+	copyCredentialDomain objectStorageCopyCredentialDomain
+	perfCounterSets      []*perfcounter.CounterSet
+	listMaxKeys          int
+}
+
+var _ objectStorageCopier = new(AliyunSDK)
+
+func (a *AliyunSDK) CopyObject(
+	ctx context.Context,
+	src ObjectStorage,
+	srcKey string,
+	dstKey string,
+) (bool, error) {
+	s, ok := src.(*AliyunSDK)
+	if !ok || !strings.EqualFold(a.endpoint, s.endpoint) ||
+		!a.copyCredentialDomain.matches(s.copyCredentialDomain) {
+		return false, nil
+	}
+	_, err := a.bucket.CopyObjectFrom(
+		s.bucket.BucketName,
+		srcKey,
+		dstKey,
+		oss.WithContext(ctx),
+	)
+	return true, err
 }
 
 var (
@@ -115,8 +140,12 @@ func NewAliyunSDK(
 	}
 
 	return &AliyunSDK{
-		name:            args.Name,
-		bucket:          bucket,
+		name:     args.Name,
+		endpoint: args.Endpoint,
+		bucket:   bucket,
+		copyCredentialDomain: newObjectStorageCopyCredentialDomain(
+			args.KeyID, args.KeySecret, args.SecurityToken, args.RoleARN, args.ExternalID,
+		),
 		perfCounterSets: perfCounterSets,
 	}, nil
 }
@@ -248,7 +277,7 @@ func (a *AliyunSDK) Write(
 		if err != nil {
 			return err
 		}
-		_, err = DoWithRetry("write", func() (int, error) {
+		_, err = DoWithRetryContext(ctx, "write", func() (int, error) {
 			return 0, a.putObject(
 				ctx,
 				key,
@@ -384,7 +413,8 @@ func (a *AliyunSDK) listObjects(ctx context.Context, prefix string, cont string)
 	if a.listMaxKeys > 0 {
 		opts = append(opts, oss.MaxKeys(a.listMaxKeys))
 	}
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 list objects",
 		func() (oss.ListObjectsResultV2, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -400,7 +430,8 @@ func (a *AliyunSDK) listObjects(ctx context.Context, prefix string, cont string)
 func (a *AliyunSDK) statObject(ctx context.Context, key string) (http.Header, error) {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.statObject")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 head object",
 		func() (http.Header, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -437,13 +468,10 @@ func (a *AliyunSDK) putObject(
 		opts = append(opts, oss.Expires(*expire))
 	}
 
+	var n atomic.Int64
+	r = &countingReader{R: r, C: &n}
 	if sizeHint != nil {
 		opts = append(opts, oss.ContentLength(*sizeHint))
-		var n atomic.Int64
-		r = &countingReader{
-			R: r,
-			C: &n,
-		}
 		defer func() {
 			if err == nil && n.Load() != *sizeHint {
 				err = moerr.NewSizeNotMatchNoCtx(key)
@@ -451,15 +479,17 @@ func (a *AliyunSDK) putObject(
 		}()
 	}
 
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Put.Add(1)
-	}, a.perfCounterSets...)
+	recordS3PutRequest(ctx, a.perfCounterSets...)
 
-	return a.bucket.PutObject(
+	err = a.bucket.PutObject(
 		key,
 		r,
 		opts...,
 	)
+	if err == nil {
+		recordS3AcceptedBytes(ctx, n.Load(), a.perfCounterSets...)
+	}
+	return err
 }
 
 func (a *AliyunSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
@@ -481,7 +511,8 @@ func (a *AliyunSDK) getObject(ctx context.Context, key string, min *int64, max *
 			}
 			opts = append(opts, oss.NormalizedRange(rang))
 			opts = append(opts, oss.RangeBehavior("standard"))
-			r, err := DoWithRetry(
+			r, err := DoWithRetryContext(
+				ctx,
 				"s3 get object",
 				func() (io.ReadCloser, error) {
 					perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -519,7 +550,8 @@ func (a *AliyunSDK) getObject(ctx context.Context, key string, min *int64, max *
 func (a *AliyunSDK) deleteObject(ctx context.Context, key string) (bool, error) {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.deleteObject")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 delete object",
 		func() (bool, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -541,7 +573,8 @@ func (a *AliyunSDK) deleteObject(ctx context.Context, key string) (bool, error) 
 func (a *AliyunSDK) deleteObjects(ctx context.Context, keys ...string) (bool, error) {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.deleteObjects")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 delete objects",
 		func() (bool, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {

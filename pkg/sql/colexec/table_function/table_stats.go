@@ -15,8 +15,10 @@
 package table_function
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -27,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -71,26 +74,18 @@ func (s *tableStatsState) start(tf *TableFunction, proc *process.Process, nthRow
 		argsJSON = tf.ctr.argVecs[2].GetStringAt(nthRow)
 	}
 
-	// Parse table path
-	dbname, tablename, accountId, err := parseTablePathWithAccount(tablePath, proc)
+	// Parse table path before resolving the engine, preserving authorization
+	// checks before any account-scoped engine lookup.
+	dbname, tablename, accountID, err := parseTablePathWithAccount(tablePath, proc)
 	if err != nil {
 		return err
 	}
 
 	// Get engine
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	rel, err := getRelation(e, proc, dbname, tablename)
+	key, targetCtx, err := resolveTableStatsKeyParts(e, proc, dbname, tablename, accountID)
 	if err != nil {
 		return err
-	}
-
-	// Build stats key
-	key := pb.StatsInfoKey{
-		AccId:      accountId,
-		DatabaseID: rel.GetDBID(proc.Ctx),
-		TableID:    rel.GetTableID(proc.Ctx),
-		TableName:  tablename,
-		DbName:     dbname,
 	}
 
 	// Get GlobalStats
@@ -102,11 +97,11 @@ func (s *tableStatsState) start(tf *TableFunction, proc *process.Process, nthRow
 	// Execute command
 	switch command {
 	case CmdGet, "":
-		return s.executeGet(tf, proc, key, gs, argsJSON)
+		return s.executeGet(tf, proc, targetCtx, key, gs, argsJSON)
 	case CmdRefresh:
-		return s.executeRefresh(tf, proc, key, gs, argsJSON)
+		return s.executeRefresh(tf, proc, targetCtx, key, gs, argsJSON)
 	case CmdPatch:
-		return s.executePatch(tf, proc, key, gs, argsJSON)
+		return s.executePatch(tf, proc, targetCtx, key, gs, argsJSON)
 	default:
 		return moerr.NewInternalError(proc.Ctx,
 			fmt.Sprintf("unknown command: %s (supported: get, refresh, patch)", command))
@@ -116,10 +111,10 @@ func (s *tableStatsState) start(tf *TableFunction, proc *process.Process, nthRow
 // executeGet handles the 'get' command
 // args can be "verbose" to print all shuffle range results
 func (s *tableStatsState) executeGet(tf *TableFunction, proc *process.Process,
-	key pb.StatsInfoKey, gs *disttae.GlobalStats, args string) error {
+	ctx context.Context, key pb.StatsInfoKey, gs *disttae.GlobalStats, args string) error {
 
 	verbose := strings.ToLower(args) == "verbose"
-	stats := gs.Get(proc.Ctx, key, true)
+	stats := gs.Get(ctx, key, true)
 	samplingRatio := gs.GetSamplingRatio(key)
 
 	return fillStats(s.batch, tf, &key, stats, samplingRatio, verbose, proc)
@@ -128,7 +123,7 @@ func (s *tableStatsState) executeGet(tf *TableFunction, proc *process.Process,
 // executeRefresh handles the 'refresh' command
 // args is the refresh mode: "auto" or "full" (default: "auto")
 func (s *tableStatsState) executeRefresh(tf *TableFunction, proc *process.Process,
-	key pb.StatsInfoKey, gs *disttae.GlobalStats, args string) error {
+	ctx context.Context, key pb.StatsInfoKey, gs *disttae.GlobalStats, args string) error {
 
 	// Default mode is "auto"
 	mode := "auto"
@@ -142,11 +137,11 @@ func (s *tableStatsState) executeRefresh(tf *TableFunction, proc *process.Proces
 			fmt.Sprintf("invalid refresh mode: %s (must be 'auto' or 'full')", mode))
 	}
 
-	if err := gs.RefreshWithMode(proc.Ctx, key, mode); err != nil {
+	if err := gs.RefreshWithMode(ctx, key, mode); err != nil {
 		return err
 	}
 
-	stats := gs.Get(proc.Ctx, key, true)
+	stats := gs.Get(ctx, key, true)
 	samplingRatio := gs.GetSamplingRatio(key)
 
 	return fillStats(s.batch, tf, &key, stats, samplingRatio, false, proc)
@@ -154,7 +149,7 @@ func (s *tableStatsState) executeRefresh(tf *TableFunction, proc *process.Proces
 
 // executePatch handles the 'patch' command
 func (s *tableStatsState) executePatch(tf *TableFunction, proc *process.Process,
-	key pb.StatsInfoKey, gs *disttae.GlobalStats, argsJSON string) error {
+	ctx context.Context, key pb.StatsInfoKey, gs *disttae.GlobalStats, argsJSON string) error {
 
 	if argsJSON == "" {
 		return moerr.NewInternalError(proc.Ctx, "patch command requires args")
@@ -169,7 +164,7 @@ func (s *tableStatsState) executePatch(tf *TableFunction, proc *process.Process,
 		return err
 	}
 
-	stats := gs.Get(proc.Ctx, key, false)
+	stats := gs.Get(ctx, key, false)
 	samplingRatio := gs.GetSamplingRatio(key)
 
 	return fillStats(s.batch, tf, &key, stats, samplingRatio, false, proc)
@@ -193,6 +188,33 @@ func getGlobalStats(e engine.Engine) *disttae.GlobalStats {
 		return disttaeEng.GetGlobalStats()
 	}
 	return nil
+}
+
+// resolveTableStatsKey parses the table path, checks account permissions, and
+// resolves the relation using the requested account context. The process
+// context itself is never modified.
+func resolveTableStatsKey(e engine.Engine, proc *process.Process, tablePath string) (pb.StatsInfoKey, context.Context, error) {
+	dbname, tablename, accountID, err := parseTablePathWithAccount(tablePath, proc)
+	if err != nil {
+		return pb.StatsInfoKey{}, nil, err
+	}
+	return resolveTableStatsKeyParts(e, proc, dbname, tablename, accountID)
+}
+
+func resolveTableStatsKeyParts(e engine.Engine, proc *process.Process, dbname, tablename string, accountID uint32) (pb.StatsInfoKey, context.Context, error) {
+	targetCtx := defines.AttachAccountId(proc.Ctx, accountID)
+	rel, err := getRelation(e, targetCtx, proc.GetTxnOperator(), dbname, tablename)
+	if err != nil {
+		return pb.StatsInfoKey{}, nil, err
+	}
+
+	return pb.StatsInfoKey{
+		AccId:      accountID,
+		DatabaseID: rel.GetDBID(targetCtx),
+		TableID:    rel.GetTableID(targetCtx),
+		TableName:  tablename,
+		DbName:     dbname,
+	}, targetCtx, nil
 }
 
 // parseTablePathWithAccount parses "db.table" or "table" or "db.table.account_id" format
@@ -221,11 +243,11 @@ func parseTablePathWithAccount(path string, proc *process.Process) (string, stri
 
 	case 3:
 		// "db.table.account_id" format - use specified account
-		var specifiedAccountId uint32
-		_, err := fmt.Sscanf(parts[2], "%d", &specifiedAccountId)
+		parsedAccountId, err := strconv.ParseUint(parts[2], 10, 32)
 		if err != nil {
 			return "", "", 0, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("invalid account_id: %s (must be a number)", parts[2]))
 		}
+		specifiedAccountId := uint32(parsedAccountId)
 
 		// Permission check: only sys account (account_id = 0) can specify different account_id
 		if specifiedAccountId != currentAccountId && currentAccountId != catalog.System_Account {
@@ -240,15 +262,15 @@ func parseTablePathWithAccount(path string, proc *process.Process) (string, stri
 }
 
 // getRelation gets the relation for the specified table
-func getRelation(e engine.Engine, proc *process.Process, dbname, tablename string) (engine.Relation, error) {
-	db, err := e.Database(proc.Ctx, dbname, proc.GetTxnOperator())
+func getRelation(e engine.Engine, ctx context.Context, txnOperator client.TxnOperator, dbname, tablename string) (engine.Relation, error) {
+	db, err := e.Database(ctx, dbname, txnOperator)
 	if err != nil {
-		return nil, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("database %s not found: %v", dbname, err))
+		return nil, moerr.NewInternalError(ctx, fmt.Sprintf("database %s not found: %v", dbname, err))
 	}
 
-	rel, err := db.Relation(proc.Ctx, tablename, nil)
+	rel, err := db.Relation(ctx, tablename, nil)
 	if err != nil {
-		return nil, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("table %s.%s not found: %v", dbname, tablename, err))
+		return nil, moerr.NewInternalError(ctx, fmt.Sprintf("table %s.%s not found: %v", dbname, tablename, err))
 	}
 
 	return rel, nil

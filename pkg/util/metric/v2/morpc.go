@@ -107,6 +107,14 @@ var (
 			Help:      "Total number of auto-create backend wait timeouts.",
 		}, []string{"name"})
 
+	rpcBackendAutoCreateTimeoutEventCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "backend_auto_create_timeout_event_total",
+			Help:      "Total number of distinct backend-create states that caused one or more auto-create wait timeouts.",
+		}, []string{"name"})
+
 	rpcBackendUnavailableCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -130,6 +138,22 @@ var (
 			Name:      "circuit_breaker_trips_total",
 			Help:      "Total number of circuit breaker trips (closed -> open).",
 		}, []string{"name", "backend"})
+
+	rpcBackendErrorCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "backend_error_total",
+			Help:      "Total number of classified morpc backend errors.",
+		}, []string{"name", "backend", "phase", "error_type"})
+
+	lockserviceRemoteRPCErrorCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "lockservice",
+			Name:      "remote_rpc_error_total",
+			Help:      "Total number of classified lockservice remote RPC errors.",
+		}, []string{"method", "error_type"})
 )
 
 var (
@@ -164,6 +188,14 @@ var (
 			Name:      "server_session_size",
 			Help:      "Size of server sessions size.",
 		}, []string{"name"})
+
+	rpcServerStreamStateGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "server_stream_state_size",
+			Help:      "Current server-side stream sequence and fragment-cache entries.",
+		}, []string{"name", "type"})
 
 	rpcGCRegisteredClientsGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
@@ -324,6 +356,10 @@ func NewRPCServerSessionSizeGaugeByName(name string) prometheus.Gauge {
 	return rpcServerSessionSizeGauge.WithLabelValues(name)
 }
 
+func NewRPCServerStreamStateGaugeByName(name, stateType string) prometheus.Gauge {
+	return rpcServerStreamStateGauge.WithLabelValues(name, stateType)
+}
+
 func NewRPCInputCounter() prometheus.Counter {
 	return rpcNetworkBytesCounter.WithLabelValues("input")
 }
@@ -348,6 +384,10 @@ func NewRPCBackendAutoCreateTimeoutCounterByName(name string) prometheus.Counter
 	return rpcBackendAutoCreateTimeoutCounter.WithLabelValues(name)
 }
 
+func NewRPCBackendAutoCreateTimeoutEventCounterByName(name string) prometheus.Counter {
+	return rpcBackendAutoCreateTimeoutEventCounter.WithLabelValues(name)
+}
+
 func NewRPCBackendUnavailableCounterByName(name string) prometheus.Counter {
 	return rpcBackendUnavailableCounter.WithLabelValues(name)
 }
@@ -358,6 +398,14 @@ func NewRPCCircuitBreakerStateGauge(name, backend string) prometheus.Gauge {
 
 func NewRPCCircuitBreakerTripsCounter(name, backend string) prometheus.Counter {
 	return rpcCircuitBreakerTripsCounter.WithLabelValues(name, backend)
+}
+
+func NewRPCBackendErrorCounter(name, backend, phase, errorType string) prometheus.Counter {
+	return rpcBackendErrorCounter.WithLabelValues(name, backend, phase, errorType)
+}
+
+func NewLockserviceRemoteRPCErrorCounter(method, errorType string) prometheus.Counter {
+	return lockserviceRemoteRPCErrorCounter.WithLabelValues(method, errorType)
 }
 
 func GetRPCGCCreateProcessedCounter() prometheus.Counter {

@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"go.uber.org/zap"
 
@@ -30,6 +31,34 @@ import (
 
 type CDCCreateTaskRequest = tree.CreateCDC
 type CDCShowTaskRequest = tree.ShowCDC
+
+var (
+	eventCDCRestartStarted                = logutil.Event{Name: "frontend.cdc.restart.started", Message: "CDC task restart requested"}
+	eventCDCRestartInvalidTask            = logutil.Event{Name: "frontend.cdc.restart.invalid-task", Message: "CDC restart request has no task name"}
+	eventCDCRestartRequest                = logutil.Event{Name: "frontend.cdc.restart.request-accepted", Message: "CDC restart request was accepted"}
+	eventCDCRestartUpdateStarting         = logutil.Event{Name: "frontend.cdc.restart.update-starting", Message: "CDC restart is starting task update"}
+	eventCDCRestartTaskServiceUnavailable = logutil.Event{Name: "frontend.cdc.restart.task-service-unavailable", Message: "CDC restart cannot reach task service"}
+	eventCDCRestartPreparing              = logutil.Event{Name: "frontend.cdc.restart.preparing-update", Message: "CDC restart is preparing task update"}
+	eventCDCRestartUpdateFailed           = logutil.Event{Name: "frontend.cdc.restart.request-update-failed", Message: "CDC restart request update failed"}
+	eventCDCRestartUpdateCompleted        = logutil.Event{Name: "frontend.cdc.restart.request-updated", Message: "CDC restart request was persisted"}
+	eventCDCRestartLookupFailed           = logutil.Event{Name: "frontend.cdc.restart.task-lookup-failed", Message: "CDC restart task lookup failed"}
+	eventCDCRestartLookupCompleted        = logutil.Event{Name: "frontend.cdc.restart.task-lookup-completed", Message: "CDC restart task lookup completed"}
+	eventCDCRestartCatalogStateMarked     = logutil.Event{Name: "frontend.cdc.restart.catalog-state-marked", Message: "CDC restart marked catalog admission as restarting"}
+	eventCDCRestartCatalogMarkFailed      = logutil.Event{Name: "frontend.cdc.restart.catalog-mark-failed", Message: "CDC restart could not mark catalog admission"}
+)
+
+func isCDCRestart(status task.TaskStatus) bool {
+	return status == task.TaskStatus_RestartRequested
+}
+
+func cdcRestartFields(taskName string, fields ...zap.Field) []zap.Field {
+	out := logutil.StringFingerprintFields("task-name", taskName)
+	return append(out, fields...)
+}
+
+func cdcRestartAccountFields(accountID uint64) []zap.Field {
+	return logutil.StringFingerprintFields("account-id", strconv.FormatUint(accountID, 10))
+}
 
 // All handle functions
 // 1. handleCreateCdc: create a cdc task
@@ -57,22 +86,10 @@ func handleResumeCdc(ses *Session, execCtx *ExecCtx, st *tree.ResumeCDC) error {
 }
 
 func handleRestartCdc(ses *Session, execCtx *ExecCtx, st *tree.RestartCDC) error {
-	logutil.Info("cdc.restart.handle_restart.start",
-		zap.String("task-name", st.TaskName.String()),
-		zap.String("service", ses.GetService()),
-	)
-	err := handleUpdateCDCTaskRequest(execCtx.reqCtx, ses, st)
-	if err != nil {
-		logutil.Error("cdc.restart.handle_restart.failed",
-			zap.String("task-name", st.TaskName.String()),
-			zap.Error(err),
-		)
-	} else {
-		logutil.Info("cdc.restart.handle_restart.success",
-			zap.String("task-name", st.TaskName.String()),
-		)
-	}
-	return err
+	eventCDCRestartStarted.InfoLazy(func() []zap.Field {
+		return cdcRestartFields(st.TaskName.String(), logutil.StringFingerprintFields("service", ses.GetService())...)
+	})
+	return handleUpdateCDCTaskRequest(execCtx.reqCtx, ses, st)
 }
 
 func handleShowCdc(
@@ -169,7 +186,9 @@ func handleUpdateCDCTaskRequest(
 		operation = "restart"
 		taskName = updateReq.TaskName.String()
 		if len(taskName) == 0 {
-			logutil.Error("cdc.restart.invalid_task_name")
+			eventCDCRestartInvalidTask.ErrorLazy(func() []zap.Field {
+				return cdcRestartAccountFields(uint64(accountId))
+			})
 			return moerr.NewInternalError(ctx, "invalid restart cdc task name")
 		}
 		conds = append(
@@ -177,11 +196,6 @@ func handleUpdateCDCTaskRequest(
 			taskservice.WithAccountID(taskservice.EQ, accountId),
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 			taskservice.WithTaskName(taskservice.EQ, taskName),
-		)
-		logutil.Info("cdc.restart.parsed_request",
-			zap.String("task-name", taskName),
-			zap.Uint32("account-id", accountId),
-			zap.Int("condition-count", len(conds)),
 		)
 	default:
 		return moerr.NewInternalErrorf(
@@ -191,14 +205,23 @@ func handleUpdateCDCTaskRequest(
 		)
 	}
 
-	logutil.Info(
-		"cdc.task.request",
-		zap.String("statement-type", fmt.Sprintf("%T", req)),
-		zap.String("operation", operation),
-		zap.String("target-status", targetTaskStatus.String()),
-		zap.String("task-name", taskName),
-		zap.Uint32("account-id", accountId),
-	)
+	if isCDCRestart(targetTaskStatus) {
+		eventCDCRestartUpdateStarting.InfoLazy(func() []zap.Field {
+			return cdcRestartFields(taskName, append([]zap.Field{
+				zap.String("target-status", targetTaskStatus.String()),
+				zap.Int("condition-count", len(conds)),
+			}, cdcRestartAccountFields(uint64(accountId))...)...)
+		})
+	} else {
+		logutil.Info(
+			"cdc.task.request",
+			zap.String("statement-type", fmt.Sprintf("%T", req)),
+			zap.String("operation", operation),
+			zap.String("target-status", targetTaskStatus.String()),
+			zap.String("task-name", taskName),
+			zap.Uint32("account-id", accountId),
+		)
+	}
 
 	return doUpdateCDCTask(
 		ctx,
@@ -220,27 +243,45 @@ func doUpdateCDCTask(
 	service string,
 	conds ...taskservice.Condition,
 ) (err error) {
-	logutil.Info("cdc.do_update_task.start",
-		zap.String("target-status", targetTaskStatus.String()),
-		zap.Uint64("account-id", accountId),
-		zap.String("task-name", taskName),
-		zap.String("service", service),
-		zap.Int("condition-count", len(conds)),
-	)
+	if isCDCRestart(targetTaskStatus) {
+		eventCDCRestartRequest.InfoLazy(func() []zap.Field {
+			return cdcRestartFields(taskName, append([]zap.Field{
+				zap.String("target-status", targetTaskStatus.String()),
+				zap.Int("condition-count", len(conds)),
+			}, append(cdcRestartAccountFields(accountId), logutil.StringFingerprintFields("service", service)...)...)...)
+		})
+	} else {
+		logutil.Info("cdc.do_update_task.start",
+			zap.String("target-status", targetTaskStatus.String()),
+			zap.Uint64("account-id", accountId),
+			zap.String("task-name", taskName),
+			zap.String("service", service),
+			zap.Int("condition-count", len(conds)),
+		)
+	}
 
 	ts := getPu(service).TaskService
 	if ts == nil {
-		logutil.Warn("cdc.do_update_task.task_service_nil",
+		if isCDCRestart(targetTaskStatus) {
+			eventCDCRestartTaskServiceUnavailable.WarnLazy(func() []zap.Field {
+				return cdcRestartFields(taskName, append([]zap.Field{
+					zap.String("target-status", targetTaskStatus.String()),
+				}, logutil.StringFingerprintFields("service", service)...)...)
+			})
+		} else {
+			logutil.Warn("cdc.do_update_task.task_service_nil",
+				zap.String("task-name", taskName),
+				zap.String("target-status", targetTaskStatus.String()),
+			)
+		}
+		return nil
+	}
+	if !isCDCRestart(targetTaskStatus) {
+		logutil.Info("cdc.do_update_task.calling_update",
 			zap.String("task-name", taskName),
 			zap.String("target-status", targetTaskStatus.String()),
 		)
-		return nil
 	}
-
-	logutil.Info("cdc.do_update_task.calling_update",
-		zap.String("task-name", taskName),
-		zap.String("target-status", targetTaskStatus.String()),
-	)
 
 	affectedCount, err := ts.UpdateCDCTask(ctx,
 		targetTaskStatus,
@@ -250,11 +291,13 @@ func doUpdateCDCTask(
 			keys map[taskservice.CDCTaskKey]struct{},
 			tx taskservice.SqlExecutor,
 		) (int, error) {
-			logutil.Info("cdc.do_update_task.pre_update_callback",
-				zap.String("task-name", taskName),
-				zap.String("target-status", targetStatus.String()),
-				zap.Int("key-count", len(keys)),
-			)
+			if !isCDCRestart(targetStatus) {
+				logutil.Info("cdc.do_update_task.pre_update_callback",
+					zap.String("task-name", taskName),
+					zap.String("target-status", targetStatus.String()),
+					zap.Int("key-count", len(keys)),
+				)
+			}
 			return onPreUpdateCDCTasks(
 				ctx,
 				targetStatus,
@@ -269,18 +312,36 @@ func doUpdateCDCTask(
 	)
 
 	if err != nil {
-		logutil.Error("cdc.do_update_task.failed",
-			zap.String("task-name", taskName),
-			zap.String("target-status", targetTaskStatus.String()),
-			zap.Int("affected-count", affectedCount),
-			zap.Error(err),
-		)
+		if isCDCRestart(targetTaskStatus) {
+			eventCDCRestartUpdateFailed.ErrorLazy(func() []zap.Field {
+				return cdcRestartFields(taskName, append([]zap.Field{
+					zap.String("target-status", targetTaskStatus.String()),
+					zap.Int("affected-count", affectedCount),
+				}, logutil.ErrorFingerprintFields("error", err)...)...)
+			})
+		} else {
+			logutil.Error("cdc.do_update_task.failed",
+				zap.String("task-name", taskName),
+				zap.String("target-status", targetTaskStatus.String()),
+				zap.Int("affected-count", affectedCount),
+				zap.Error(err),
+			)
+		}
 	} else {
-		logutil.Info("cdc.do_update_task.success",
-			zap.String("task-name", taskName),
-			zap.String("target-status", targetTaskStatus.String()),
-			zap.Int("affected-count", affectedCount),
-		)
+		if isCDCRestart(targetTaskStatus) {
+			eventCDCRestartUpdateCompleted.InfoLazy(func() []zap.Field {
+				return cdcRestartFields(taskName,
+					zap.String("target-status", targetTaskStatus.String()),
+					zap.Int("affected-count", affectedCount),
+				)
+			})
+		} else {
+			logutil.Info("cdc.do_update_task.success",
+				zap.String("task-name", taskName),
+				zap.String("target-status", targetTaskStatus.String()),
+				zap.Int("affected-count", affectedCount),
+			)
+		}
 	}
 	return
 }
@@ -294,22 +355,32 @@ func onPreUpdateCDCTasks(
 	taskName string,
 	ifExists bool,
 ) (affectedCdcRow int, err error) {
-	logutil.Info("cdc.on_pre_update.start",
-		zap.String("target-status", targetTaskStatus.String()),
-		zap.Uint64("account-id", accountId),
-		zap.String("task-name", taskName),
-		zap.Int("input-key-count", len(keys)),
-	)
+	if isCDCRestart(targetTaskStatus) {
+		eventCDCRestartPreparing.DebugLazy(func() []zap.Field {
+			return cdcRestartFields(taskName, append([]zap.Field{
+				zap.String("target-status", targetTaskStatus.String()),
+				zap.Int("input-key-count", len(keys)),
+			}, cdcRestartAccountFields(accountId)...)...)
+		})
+	} else {
+		logutil.Info("cdc.on_pre_update.start",
+			zap.String("target-status", targetTaskStatus.String()),
+			zap.Uint64("account-id", accountId),
+			zap.String("task-name", taskName),
+			zap.Int("input-key-count", len(keys)),
+		)
+	}
 
 	var (
 		cnt int64
 		dao = NewCDCDao(nil, WithSQLExecutor(tx))
 	)
-
-	logutil.Info("cdc.on_pre_update.get_task_keys.start",
-		zap.String("task-name", taskName),
-		zap.Uint64("account-id", accountId),
-	)
+	if !isCDCRestart(targetTaskStatus) {
+		logutil.Info("cdc.on_pre_update.get_task_keys.start",
+			zap.String("task-name", taskName),
+			zap.Uint64("account-id", accountId),
+		)
+	}
 
 	if cnt, err = dao.GetTaskKeys(
 		ctx,
@@ -318,21 +389,61 @@ func onPreUpdateCDCTasks(
 		keys,
 		ifExists,
 	); err != nil {
-		logutil.Error("cdc.on_pre_update.get_task_keys.failed",
-			zap.String("task-name", taskName),
-			zap.Uint64("account-id", accountId),
-			zap.Error(err),
-		)
+		if isCDCRestart(targetTaskStatus) {
+			eventCDCRestartLookupFailed.ErrorLazy(func() []zap.Field {
+				return cdcRestartFields(taskName, append(cdcRestartAccountFields(accountId), logutil.ErrorFingerprintFields("error", err)...)...)
+			})
+		} else {
+			logutil.Error("cdc.on_pre_update.get_task_keys.failed",
+				zap.String("task-name", taskName),
+				zap.Uint64("account-id", accountId),
+				zap.Error(err),
+			)
+		}
 		return
 	}
 
-	logutil.Info("cdc.on_pre_update.get_task_keys.success",
-		zap.String("task-name", taskName),
-		zap.Int64("task-count", cnt),
-		zap.Int("key-count", len(keys)),
-	)
+	if isCDCRestart(targetTaskStatus) {
+		eventCDCRestartLookupCompleted.DebugLazy(func() []zap.Field {
+			return cdcRestartFields(taskName,
+				zap.Int64("task-count", cnt),
+				zap.Int("key-count", len(keys)),
+			)
+		})
+	} else {
+		logutil.Info("cdc.on_pre_update.get_task_keys.success",
+			zap.String("task-name", taskName),
+			zap.Int64("task-count", cnt),
+			zap.Int("key-count", len(keys)),
+		)
+	}
 
 	affectedCdcRow = int(cnt)
+	// RestartRequested is an admission request, not proof that a replacement
+	// executor is running. Persist a distinct marker rather than running: it
+	// both reports the admitted state honestly and fences a later pause from a
+	// delayed replacement startup.
+	if isCDCRestart(targetTaskStatus) {
+		if cnt, err = dao.PrepareUpdateTask(
+			ctx,
+			accountId,
+			taskName,
+			cdc.CDCState_Restarting,
+		); err != nil {
+			eventCDCRestartCatalogMarkFailed.ErrorLazy(func() []zap.Field {
+				return cdcRestartFields(taskName, append(cdcRestartAccountFields(accountId), logutil.ErrorFingerprintFields("error", err)...)...)
+			})
+			return
+		}
+		affectedCdcRow += int(cnt)
+		eventCDCRestartCatalogStateMarked.InfoLazy(func() []zap.Field {
+			return cdcRestartFields(taskName, append([]zap.Field{
+				zap.Int64("task-count", cnt),
+				zap.String("catalog-state", cdc.CDCState_Restarting),
+			}, cdcRestartAccountFields(accountId)...)...)
+		})
+		return affectedCdcRow, nil
+	}
 
 	//Cancel cdc task
 	if targetTaskStatus == task.TaskStatus_CancelRequested {
@@ -378,27 +489,29 @@ func onPreUpdateCDCTasks(
 		return
 	}
 
-	logutil.Debug(
-		"cdc.handle.update_task",
-		zap.Uint64("account-id", accountId),
-		zap.String("task-name", taskName),
-		zap.Int("key-count", len(keys)),
-		zap.String("target-status", targetTaskStatus.String()),
-	)
-
 	//step2: update or cancel cdc task
+	if !isCDCRestart(targetTaskStatus) {
+		logutil.Debug(
+			"cdc.handle.update_task",
+			zap.Uint64("account-id", accountId),
+			zap.String("task-name", taskName),
+			zap.Int("key-count", len(keys)),
+			zap.String("target-status", targetTaskStatus.String()),
+		)
+	}
 	var targetCDCStatus string
 	if targetTaskStatus == task.TaskStatus_PauseRequested {
 		targetCDCStatus = cdc.CDCState_Pausing
 	} else {
 		targetCDCStatus = cdc.CDCState_Running
 	}
-
-	logutil.Info("cdc.on_pre_update.update_task_status.start",
-		zap.String("task-name", taskName),
-		zap.String("target-task-status", targetTaskStatus.String()),
-		zap.String("target-cdc-status", targetCDCStatus),
-	)
+	if !isCDCRestart(targetTaskStatus) {
+		logutil.Info("cdc.on_pre_update.update_task_status.start",
+			zap.String("task-name", taskName),
+			zap.String("target-task-status", targetTaskStatus.String()),
+			zap.String("target-cdc-status", targetCDCStatus),
+		)
+	}
 
 	if cnt, err = dao.PrepareUpdateTask(
 		ctx,
@@ -422,11 +535,13 @@ func onPreUpdateCDCTasks(
 
 	affectedCdcRow += int(cnt)
 
-	logutil.Info("cdc.on_pre_update.complete",
-		zap.String("task-name", taskName),
-		zap.String("target-status", targetTaskStatus.String()),
-		zap.Int("total-affected-rows", affectedCdcRow),
-	)
+	if !isCDCRestart(targetTaskStatus) {
+		logutil.Info("cdc.on_pre_update.complete",
+			zap.String("task-name", taskName),
+			zap.String("target-status", targetTaskStatus.String()),
+			zap.Int("total-affected-rows", affectedCdcRow),
+		)
+	}
 
 	return
 }

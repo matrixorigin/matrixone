@@ -15,21 +15,82 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
+func (builder *QueryBuilder) makeUpdatedClusterByExpr(
+	alias string,
+	tableDef *plan.TableDef,
+	selectNode *plan.Node,
+	selectNodeTag int32,
+	oldColName2Idx map[string]int32,
+	newColName2Idx map[string]int32,
+) (*plan.Expr, error) {
+	if tableDef.ClusterBy == nil || !planutil.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+		return nil, nil
+	}
+
+	clusterByCols := planutil.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
+	args := make([]*plan.Expr, len(clusterByCols))
+	clusterByUpdated := false
+	for i, colName := range clusterByCols {
+		qualifiedName := alias + "." + colName
+		colPos, ok := oldColName2Idx[qualifiedName]
+		if !ok {
+			return nil, moerr.NewInternalErrorf(
+				builder.GetContext(),
+				"bind update err, can not find cluster by column %s",
+				colName,
+			)
+		}
+		if updatedPos, ok := newColName2Idx[qualifiedName]; ok {
+			colPos = updatedPos
+			clusterByUpdated = true
+		}
+		args[i] = &plan.Expr{
+			Typ: selectNode.ProjectList[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: selectNodeTag,
+					ColPos: colPos,
+					Name:   colName,
+				},
+			},
+		}
+	}
+	if !clusterByUpdated {
+		return nil, nil
+	}
+	return BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
+}
+
 func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext) (int32, error) {
+	if err := validateUpdateWindowFunctions(builder.compCtx, stmt); err != nil {
+		return 0, err
+	}
+
 	dmlCtx := NewDMLContext()
 	err := dmlCtx.ResolveUpdateTables(builder.compCtx, stmt)
 	if err != nil {
 		return 0, err
+	}
+	if err = validateUpdateTargetSubqueries(builder.compCtx, stmt, dmlCtx.objRefs, dmlCtx.tableDefs); err != nil {
+		return 0, err
+	}
+	onDuplicateAction := plan.Node_FAIL
+	if stmt.Ignore {
+		onDuplicateAction = plan.Node_IGNORE
 	}
 
 	var selectList []tree.SelectExpr
@@ -37,6 +98,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	newColName2Idx := make(map[string]int32)
 	updateAutoIncrCols := make([]bool, len(dmlCtx.aliases))
 	colOffsets := make([]int32, len(dmlCtx.aliases))
+	updateNumericTargets := make(map[int32]Type)
+	inlineIrregularIndexes := make([][]*plan.IndexDef, len(dmlCtx.aliases))
 
 	for i, alias := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
@@ -56,28 +119,17 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			})
 		}
 
-		// Check if any irregular index (vector/full-text) columns are being updated
-		// Only block UPDATE if the indexed columns are being updated
-		hasIrregularIndex := false
-		irregularIndexCols := make(map[string]bool)
-		for _, idxDef := range tableDef.Indexes {
-			if !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
-				hasIrregularIndex = true
-				// Collect all columns in this irregular index
-				for _, part := range idxDef.Parts {
-					resolvedColName := catalog.ResolveAlias(part)
-					irregularIndexCols[resolvedColName] = true
-				}
-			}
+		var legacyIrregularRoute bool
+		inlineIrregularIndexes[i], legacyIrregularRoute, err = classifyIrregularIndexesForUpdate(
+			builder.GetContext(), tableDef, dmlCtx.updateCol2Expr[i])
+		if err != nil {
+			return 0, err
 		}
-
-		// Only block if irregular index exists AND indexed columns are being updated
-		if hasIrregularIndex {
-			for colName := range dmlCtx.updateCol2Expr[i] {
-				if irregularIndexCols[colName] {
-					return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update vector/full-text index")
-				}
-			}
+		if legacyIrregularRoute {
+			return 0, newLegacyUpdatePlannerRouteError(
+				updateRouteReasonIrregularIndex,
+				moerr.NewUnsupportedDML(builder.GetContext(), "update vector/full-text index"),
+			)
 		}
 
 		validIndexes, _ := getValidIndexes(tableDef)
@@ -105,7 +157,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 		for colName, updateExpr := range dmlCtx.updateCol2Expr[i] {
 			if pkAndUkCols[colName] {
-				return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update pk/uk on pub/sub table")
+				return 0, newLegacyUpdatePlannerRouteError(
+					updateRouteReasonPubSubKey,
+					moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update pk/uk on pub/sub table"),
+				)
 			}
 
 			// Check: cannot update a generated column (unless SET gen_col = DEFAULT)
@@ -135,7 +190,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				if colDef.Name == colName {
 					if isEnumOrSetPlanType(&colDef.Typ) {
 						if colDef.Typ.AutoIncr {
-							return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value")
+							return 0, newLegacyUpdatePlannerRouteError(
+								updateRouteReasonAutoIncrement,
+								moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value"),
+							)
 						}
 
 						updateExpr, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), colDef.Typ, updateExpr)
@@ -157,6 +215,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 
 			oldPos := oldColName2Idx[alias+"."+colName]
+			if typ := tableDef.Cols[tableDef.Name2ColIndex[colName]].Typ; isNumericAssignmentTarget(typ) {
+				updateNumericTargets[oldPos] = typ
+			}
 			newColName2Idx[alias+"."+colName] = oldPos
 			oldColName2Idx[alias+"."+colName] = int32(len(selectList))
 			selectList = append(selectList, selectList[oldPos])
@@ -188,6 +249,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		OrderBy: stmt.OrderBy,
 		Limit:   stmt.Limit,
 		With:    stmt.With,
+	}
+	bindCtx.numericProjectionTypes = make([]Type, len(selectList))
+	for pos, typ := range updateNumericTargets {
+		bindCtx.numericProjectionTypes[pos] = typ
 	}
 
 	lastNodeID, err := builder.bindSelect(selectAst, bindCtx, false)
@@ -234,7 +299,31 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						return 0, err
 					}
 				} else {
-					selectNode.ProjectList[colPos], err = forceAssignmentCastExpr(builder.GetContext(), updateExpr, col.Typ)
+					selectNode.ProjectList[colPos], err = builder.forceProjectedAssignmentCastExpr(
+						updateExpr, updateExpr, col.Typ, stmt.Ignore)
+					if err != nil {
+						return 0, err
+					}
+				}
+
+				// The updated column's OLD value was appended to the project list as
+				// the raw column scan, which for ENUM/SET/geometry columns is a
+				// VARCHAR display value (cast_index_to_value for ENUM). Index tables
+				// store the typed value (e.g. the T_enum index), and INSERT casts the
+				// value before building index keys (bind_insert.go). Cast the OLD
+				// value the same way so UPDATE index-maintenance joins build keys in
+				// the stored typed representation; otherwise the join compares VARCHAR
+				// against the typed index key and either fails to bind (nil-pointer
+				// panic) or silently misses the row (update does not take effect).
+				if oldPos, ok := oldColName2Idx[alias+"."+col.Name]; ok && oldPos != colPos {
+					oldExpr := selectNode.ProjectList[oldPos]
+					if isEnumPlanType(&col.Typ) {
+						selectNode.ProjectList[oldPos], err = funcCastForEnumType(builder.GetContext(), oldExpr, col.Typ)
+					} else if isSetPlanType(&col.Typ) {
+						selectNode.ProjectList[oldPos], err = funcCastForSetType(builder.GetContext(), oldExpr, col.Typ)
+					} else if isGeometryPlanType(&col.Typ) {
+						selectNode.ProjectList[oldPos], err = funcCastForGeometryType(builder.GetContext(), oldExpr, col.Typ)
+					}
 					if err != nil {
 						return 0, err
 					}
@@ -243,6 +332,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
 					newDefExpr := DeepCopyExpr(col.OnUpdate.Expr)
 					err = replaceFuncId(builder.GetContext(), newDefExpr)
+					if err != nil {
+						return 0, err
+					}
 
 					oldPos := oldColName2Idx[alias+"."+col.Name]
 					newColName2Idx[alias+"."+col.Name] = oldPos
@@ -293,7 +385,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if col.GeneratedCol == nil {
 				continue
 			}
-			genExpr := substituteColRefsInExpr(col.GeneratedCol.Expr, selectNode.ProjectList, colOffsets[i])
+			genExpr := builder.applyGeneratedColumnAssignmentCast(
+				DeepCopyExpr(col.GeneratedCol.Expr),
+				stmt.Ignore,
+			)
+			genExpr = substituteColRefsInExpr(genExpr, selectNode.ProjectList, colOffsets[i])
 
 			oldPos := oldColName2Idx[alias+"."+col.Name]
 			newColName2Idx[alias+"."+col.Name] = oldPos
@@ -301,6 +397,44 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			selectNode.ProjectList = append(selectNode.ProjectList, selectNode.ProjectList[oldPos])
 			selectNode.ProjectList[oldPos] = genExpr
 		}
+	}
+
+	fkChecksEnabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
+	if err != nil {
+		return 0, err
+	}
+	if updateMayDependOnForeignKeys(dmlCtx, newColName2Idx) {
+		// The plan shape and planner route depend on foreign_key_checks.
+		// Preserve that dependency even while checks are disabled so prepared
+		// and generic plan caches rebuild after either session-state transition.
+		builder.qry.HasForeignKeyAction = true
+	}
+	if fkChecksEnabled {
+		for i, tableDef := range dmlCtx.tableDefs {
+			if updateAutoIncrCols[i] &&
+				len(affectedUpdateChildFks(tableDef, dmlCtx.aliases[i], newColName2Idx)) > 0 {
+				return 0, newLegacyUpdatePlannerRouteError(
+					updateRouteReasonAutoIncrement,
+					moerr.NewUnsupportedDML(
+						builder.compCtx.GetContext(),
+						"auto_increment foreign key update",
+					),
+				)
+			}
+		}
+	}
+
+	lastNodeID, selectNodeTag, selectNode, err = builder.appendUpdateForeignKeyChecks(
+		bindCtx,
+		dmlCtx,
+		lastNodeID,
+		selectNodeTag,
+		oldColName2Idx,
+		newColName2Idx,
+		fkChecksEnabled,
+	)
+	if err != nil {
+		return 0, err
 	}
 
 	for i, tableDef := range dmlCtx.tableDefs {
@@ -477,7 +611,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					Children:          []int32{scanNodeID, lastNodeID},
 					JoinType:          plan.Node_DEDUP,
 					OnList:            []*plan.Expr{joinCond},
-					OnDuplicateAction: plan.Node_FAIL,
+					OnDuplicateAction: onDuplicateAction,
 					DedupColName:      dedupColName,
 					DedupColTypes:     dedupColTypes,
 					DedupJoinCtx: &plan.DedupJoinCtx{
@@ -637,7 +771,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					Children:          []int32{idxTableNodeID, lastNodeID},
 					JoinType:          plan.Node_DEDUP,
 					OnList:            []*plan.Expr{joinCond},
-					OnDuplicateAction: plan.Node_FAIL,
+					OnDuplicateAction: onDuplicateAction,
 					DedupColName:      dedupColName,
 					DedupColTypes:     dedupColTypes,
 					DedupJoinCtx: &plan.DedupJoinCtx{
@@ -794,6 +928,17 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 		alias := dmlCtx.aliases[i]
 		insertCols := make([]plan.ColRef, len(tableDef.Cols)-1)
+		updatedClusterByExpr, err := builder.makeUpdatedClusterByExpr(
+			alias,
+			tableDef,
+			selectNode,
+			selectNodeTag,
+			oldColName2Idx,
+			newColName2Idx,
+		)
+		if err != nil {
+			return 0, err
+		}
 
 		for j, col := range tableDef.Cols {
 			finalColIdx := len(finalProjList)
@@ -803,21 +948,27 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				insertCols[j].ColPos = int32(finalColIdx)
 			}
 
-			colIdx := oldColName2Idx[alias+"."+col.Name]
-			if updateIdx, ok := newColName2Idx[alias+"."+col.Name]; ok {
-				colIdx = updateIdx
+			var finalExpr *plan.Expr
+			if updatedClusterByExpr != nil && col.Name == tableDef.ClusterBy.Name {
+				finalExpr = updatedClusterByExpr
+			} else {
+				colIdx := oldColName2Idx[alias+"."+col.Name]
+				if updateIdx, ok := newColName2Idx[alias+"."+col.Name]; ok {
+					colIdx = updateIdx
+				}
+				finalExpr = &plan.Expr{
+					Typ: selectNode.ProjectList[colIdx].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: selectNodeTag,
+							ColPos: colIdx,
+						},
+					},
+				}
 			}
 
 			finalColName2Idx[alias+"."+col.Name] = int32(finalColIdx)
-			finalProjList = append(finalProjList, &plan.Expr{
-				Typ: selectNode.ProjectList[colIdx].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: selectNodeTag,
-						ColPos: int32(colIdx),
-					},
-				},
-			})
+			finalProjList = append(finalProjList, finalExpr)
 		}
 
 		oldPkPos := finalColName2Idx[alias+"."+tableDef.Pkey.PkeyColName]
@@ -1024,6 +1175,31 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 	finalProjNode.ProjectList = finalProjList
 
+	// Synchronous irregular indexes share the exact final row image with the
+	// base-table MULTI_UPDATE. Their stale entries are deleted by the immutable
+	// old PK and rebuilt after createQuery from this materialized step. Async
+	// indexes are deliberately absent and remain CDC-only.
+	for i, indexes := range inlineIrregularIndexes {
+		if len(indexes) == 0 {
+			continue
+		}
+		alias := dmlCtx.aliases[i]
+		pkPos := finalColName2Idx[alias+"."+dmlCtx.tableDefs[i].Pkey.PkeyColName]
+		lastNodeID = builder.appendOnDupIrregularMaintSource(
+			bindCtx,
+			lastNodeID,
+			finalProjTag,
+			pkPos,
+			finalProjList[pkPos].Typ,
+			indexes,
+			dmlCtx.tableDefs[i],
+			dmlCtx.objRefs[i],
+		)
+		// Multi-target UPDATE is routed to the legacy planner before this point,
+		// so at most one target can require inline irregular maintenance here.
+		break
+	}
+
 	dmlNode := &plan.Node{
 		NodeType:      plan.Node_MULTI_UPDATE,
 		BindingTags:   []int32{builder.genNewBindTag()},
@@ -1043,6 +1219,148 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
 
 	return lastNodeID, err
+}
+
+func irregularIndexAffectedByUpdate(
+	tableDef *plan.TableDef,
+	idxDef *plan.IndexDef,
+	updateCols map[string]tree.Expr,
+) (bool, error) {
+	columnUpdated := func(colName string) bool {
+		colName = catalog.ResolveAlias(colName)
+		if _, ok := updateCols[colName]; ok {
+			return true
+		}
+		if tableDef == nil {
+			return false
+		}
+		colPos, ok := tableDef.Name2ColIndex[colName]
+		return ok && colPos >= 0 && int(colPos) < len(tableDef.Cols) && tableDef.Cols[colPos].OnUpdate != nil
+	}
+
+	for _, part := range idxDef.Parts {
+		if columnUpdated(part) {
+			return true, nil
+		}
+	}
+
+	p, ok := indexplugin.Get(idxDef.IndexAlgo)
+	if !ok {
+		for _, colName := range indexDefIncludedColumnsBestEffort(idxDef) {
+			if columnUpdated(colName) {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	rewriteHook, ok := p.Plan().(planplugin.UpdateColumnRewriteHook)
+	if !ok {
+		return false, nil
+	}
+	affectedCols := make(map[string]struct{}, len(updateCols))
+	for colName := range updateCols {
+		affectedCols[colName] = struct{}{}
+	}
+	if tableDef != nil {
+		for _, col := range tableDef.Cols {
+			if col.OnUpdate != nil {
+				affectedCols[col.Name] = struct{}{}
+			}
+		}
+	}
+	for colName := range affectedCols {
+		affected, err := rewriteHook.UpdateColumnRequiresIndexRewrite(tableDef, idxDef, colName)
+		if err != nil {
+			return false, err
+		}
+		if affected {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// classifyIrregularIndexesForUpdate separates synchronous inline maintenance
+// from CDC-only indexes using plugin metadata. The bool return preserves the
+// legacy route only for an affected irregular algorithm that has not migrated to
+// the plugin contract (currently MASTER); supported plugin indexes never fall
+// back. A synchronous-index PK update is rejected here, before lock/mutation
+// nodes are built, because its hidden rows are keyed by the old source PK.
+func classifyIrregularIndexesForUpdate(
+	ctx context.Context,
+	tableDef *plan.TableDef,
+	updateCols map[string]tree.Expr,
+) (inline []*plan.IndexDef, legacyRoute bool, err error) {
+	if tableDef == nil || len(updateCols) == 0 {
+		return nil, false, nil
+	}
+
+	pkUpdated := primaryKeyUpdated(tableDef, updateCols)
+	affectedSyncGroups := make(map[string]bool)
+	for _, idxDef := range tableDef.Indexes {
+		if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+			continue
+		}
+		affected, err := irregularIndexAffectedByUpdate(tableDef, idxDef, updateCols)
+		if err != nil {
+			return nil, false, err
+		}
+
+		p, ok := indexplugin.Get(idxDef.IndexAlgo)
+		if !ok {
+			if affected || pkUpdated {
+				return nil, true, nil
+			}
+			continue
+		}
+		desc := p.Catalog().SyncDescriptor()
+		if desc.AlwaysAsync {
+			continue
+		}
+		async, err := catalog.IsIndexAsync(idxDef.IndexAlgoParams)
+		if err != nil {
+			return nil, false, err
+		}
+		if async {
+			continue
+		}
+		if pkUpdated {
+			return nil, false, newUpdatePlannerRouteError(
+				updatePlannerRejected,
+				updateRouteReasonIrregularIndex,
+				moerr.NewUnsupportedDML(
+					ctx,
+					"update primary key on a table with a synchronous full-text/vector index"),
+			)
+		}
+		if affected {
+			affectedSyncGroups[idxDef.IndexName+"\x00"+idxDef.IndexTableName] = true
+		}
+	}
+
+	for _, idxDef := range tableDef.Indexes {
+		if !idxDef.TableExist || !affectedSyncGroups[idxDef.IndexName+"\x00"+idxDef.IndexTableName] {
+			continue
+		}
+		inline = append(inline, idxDef)
+	}
+	return inline, false, nil
+}
+
+func primaryKeyUpdated(tableDef *plan.TableDef, updateCols map[string]tree.Expr) bool {
+	if tableDef == nil || tableDef.Pkey == nil || len(updateCols) == 0 {
+		return false
+	}
+	for _, colName := range tableDef.Pkey.Names {
+		if _, ok := updateCols[catalog.ResolveAlias(colName)]; ok {
+			return true
+		}
+	}
+	if tableDef.Pkey.PkeyColName != "" && tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
+		_, ok := updateCols[catalog.ResolveAlias(tableDef.Pkey.PkeyColName)]
+		return ok
+	}
+	return false
 }
 
 func (builder *QueryBuilder) appendUpdateFromDedupNode(

@@ -16,15 +16,62 @@ package checkpoint
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"go.uber.org/zap"
 )
+
+const (
+	defaultForceICKPTimeout    = 2 * time.Minute
+	forceICKPRetryInitialDelay = 100 * time.Millisecond
+	forceICKPRetryMaximumDelay = time.Second
+)
+
+func nextForceICKPRetryDelay(current time.Duration) time.Duration {
+	if current <= 0 {
+		return forceICKPRetryInitialDelay
+	}
+	if current >= forceICKPRetryMaximumDelay/2 {
+		return forceICKPRetryMaximumDelay
+	}
+	return current * 2
+}
+
+func waitForCheckpointRetry(
+	ctx, runnerCtx context.Context,
+	delay time.Duration,
+) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-runnerCtx.Done():
+		return context.Cause(runnerCtx)
+	case <-timer.C:
+		return nil
+	}
+}
+
+func contextForForceICKP(
+	ctx context.Context,
+) (context.Context, context.CancelFunc) {
+	// A caller-provided deadline is part of the operation's contract. In
+	// particular, backup uses a longer request deadline because checkpoint
+	// duration scales with dirty data. Keep the historical timeout only as a
+	// safety net for callers that provide no deadline at all.
+	if _, ok := ctx.Deadline(); ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, defaultForceICKPTimeout)
+}
 
 type TestRunner interface {
 	EnableCheckpoint(*CheckpointCfg)
@@ -80,6 +127,9 @@ func (r *runner) EnableCheckpoint(cfg *CheckpointCfg) {
 func (r *runner) ForceGCKP(
 	ctx context.Context, end types.TS, histroyRetention time.Duration,
 ) (err error) {
+	r.forceGCKPRequests.Add(1)
+	defer r.releaseForceGCKPReservation()
+
 	var (
 		maxEntry *CheckpointEntry
 		now      = time.Now()
@@ -87,7 +137,11 @@ func (r *runner) ForceGCKP(
 	defer func() {
 		logger := logutil.Info
 		if err != nil {
-			logger = logutil.Error
+			if errors.Is(err, ErrGCKPNeedsFreshICKP) {
+				logger = logutil.Debug
+			} else {
+				logger = logutil.Error
+			}
 		}
 		var entryStr string
 		if maxEntry != nil {
@@ -106,11 +160,19 @@ func (r *runner) ForceGCKP(
 		return
 	}
 
-	maxEntry = r.store.MaxIncrementalCheckpoint()
+	maxEntry = r.store.MaxCheckpoint()
 
-	// should not happend
+	// ForceICKP may return after an automatic GCKP has already covered end and
+	// checkpoint GC has removed its incremental predecessor from the store. The
+	// finished GCKP can still be used as the predecessor of a new GCKP, but it
+	// cannot satisfy this request by itself: checkpoint metadata does not prove
+	// which history retention was used to create it.
 	if maxEntry == nil || maxEntry.end.LT(&end) {
 		err = ErrPendingCheckpoint
+		return
+	}
+	if !maxEntry.IsIncremental() {
+		err = ErrGCKPNeedsFreshICKP
 		return
 	}
 
@@ -120,75 +182,68 @@ func (r *runner) ForceGCKP(
 		histroyRetention: histroyRetention,
 		truncateLSN:      maxEntry.truncateLSN,
 		ckpLSN:           maxEntry.ckpLSN,
+		predecessor:      maxEntry,
+		done:             make(chan error, 1),
 	}
 
 	if err = r.TryTriggerExecuteGCKP(request); err != nil {
 		return
 	}
 
-	var job *checkpointJob
-
-	var retryTimes int
-
-	wait := func() {
-		interval := time.Millisecond * 10 * time.Duration(retryTimes+1)
-		time.Sleep(interval)
-		if retryTimes < 10 {
-			retryTimes++
-		}
-	}
-
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 
-	for {
-		select {
-		case <-ctx.Done():
-			err = context.Cause(ctx)
-			return
-		case <-r.ctx.Done():
-			err = context.Cause(r.ctx)
-			return
-		default:
-		}
+	select {
+	case <-ctx.Done():
+		err = context.Cause(ctx)
+	case <-r.ctx.Done():
+		err = context.Cause(r.ctx)
+	case err = <-request.done:
+	}
+	return
+}
 
-		global := r.store.MaxGlobalCheckpoint()
-		// if the max global contains the end, quick return
-		if global != nil && global.IsFinished() && global.end.GE(&end) {
-			return
-		}
+func (r *runner) releaseForceGCKPReservation() {
+	if r.forceGCKPRequests.Add(-1) != 0 || r.forceGCKPRequests.Load() != 0 {
+		return
+	}
 
-		if job, err = r.getRunningCKPJob(true); err != nil {
-			return
-		}
-
-		// if there is no running job or the running job is not the right one
-		// try to trigger the global checkpoint and wait for the next round
-		if job == nil || job.gckpCtx.end.LT(&end) {
-			wait()
-			continue
-		}
-
-		// [job != nil && job.gckpCtx.end >= end]
-		// wait for the job to finish
-		select {
-		case <-ctx.Done():
-			err = context.Cause(ctx)
-			return
-		case <-r.ctx.Done():
-			err = context.Cause(r.ctx)
-			return
-		case <-job.WaitC():
-			err = job.Err()
+	// An ICKP can commit after the force GCKP has pinned its predecessor. Its
+	// automatic trigger was deliberately suppressed by the reservation, so the
+	// last force waiter must hand that trigger back instead of losing it until a
+	// future ICKP happens to commit.
+	incremental := r.store.MaxIncrementalCheckpoint()
+	if incremental == nil {
+		return
+	}
+	incrementalEnd := incremental.GetEnd()
+	if global := r.store.MaxGlobalCheckpoint(); global != nil {
+		globalEnd := global.GetEnd()
+		if globalEnd.GT(&incrementalEnd) {
 			return
 		}
 	}
+	executor := r.executor.Load()
+	if executor == nil || r.forceGCKPRequests.Load() != 0 {
+		return
+	}
+	_ = r.TryTriggerExecuteGCKP(&gckpContext{
+		end:              incrementalEnd,
+		histroyRetention: executor.cfg.GlobalHistoryDuration,
+		ckpLSN:           incremental.LSN(),
+		truncateLSN:      incremental.GetTruncateLsn(),
+		predecessor:      incremental,
+	})
 }
 
 func (r *runner) ForceICKP(ctx context.Context, ts *types.TS) (err error) {
 	var (
-		intent Intent
-		now    = time.Now()
+		intent            Intent
+		now               = time.Now()
+		retryCount        int
+		pendingRetries    int
+		noProgressRetries int
+		retryDelay        time.Duration
 	)
 	defer func() {
 		logger := logutil.Info
@@ -204,11 +259,14 @@ func (r *runner) ForceICKP(ctx context.Context, ts *types.TS) (err error) {
 			zap.String("ts", ts.ToString()),
 			zap.Duration("cost", time.Since(now)),
 			zap.String("intent", intentStr),
+			zap.Int("retry-count", retryCount),
+			zap.Int("pending-retries", pendingRetries),
+			zap.Int("no-progress-retries", noProgressRetries),
 			zap.Error(err),
 		)
 	}()
 
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*2)
+	ctx, cancel := contextForForceICKP(ctx)
 	defer cancel()
 
 	for {
@@ -216,7 +274,13 @@ func (r *runner) ForceICKP(ctx context.Context, ts *types.TS) (err error) {
 			// for retryable error, we should retry
 			if err == ErrPendingCheckpoint {
 				err = nil
-				time.Sleep(time.Millisecond * 100)
+				retryDelay = nextForceICKPRetryDelay(retryDelay)
+				retryCount++
+				pendingRetries++
+				v2.TaskForceICKPPendingRetryCounter.Inc()
+				if err = waitForCheckpointRetry(ctx, r.ctx, retryDelay); err != nil {
+					return
+				}
 				continue
 			}
 			return
@@ -234,6 +298,13 @@ func (r *runner) ForceICKP(ctx context.Context, ts *types.TS) (err error) {
 		case <-intent.Wait():
 			checkpointed := r.store.MaxIncrementalCheckpoint()
 			if checkpointed == nil || checkpointed.end.LT(ts) {
+				retryDelay = nextForceICKPRetryDelay(retryDelay)
+				retryCount++
+				noProgressRetries++
+				v2.TaskForceICKPNoProgressRetryCounter.Inc()
+				if err = waitForCheckpointRetry(ctx, r.ctx, retryDelay); err != nil {
+					return
+				}
 				continue
 			}
 			intent = checkpointed

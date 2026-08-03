@@ -246,8 +246,8 @@ func (sm *ExecutorStateMachine) SetFailed(errMsg string) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	// Can transition to Failed from Starting
-	if sm.currentState == StateStarting {
+	switch sm.currentState {
+	case StateStarting, StateRunning:
 		sm.currentState = StateFailed
 		sm.errorMessage = errMsg
 		return nil

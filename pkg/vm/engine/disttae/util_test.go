@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -71,6 +72,50 @@ func TestLinearSearchOffsetByValFactory_Varchar(t *testing.T) {
 	keys.Free(mp)
 	target.Free(mp)
 	target2.Free(mp)
+}
+
+// narrowArrayLinearSearch exercises LinearSearchOffsetByValFactory for a narrow
+// vector array key type (vecbf16/vecf16/vecint8/vecuint8). Both the key-side map
+// build and the target-side search switch on the element type, so a narrow array
+// must be handled in both or this panics "not supported".
+func narrowArrayLinearSearch[T types.ArrayElement](t *testing.T, mp *mpool.MPool, oid types.T, a, b, c []T) {
+	typ := types.New(oid, int32(len(a)), 0)
+
+	keys := vector.NewVec(typ)
+	require.NoError(t, vector.AppendArray[T](keys, a, false, mp))
+	require.NoError(t, vector.AppendArray[T](keys, b, false, mp))
+	searchFn := LinearSearchOffsetByValFactory(keys)
+
+	// target with no matching key
+	target := vector.NewVec(typ)
+	require.NoError(t, vector.AppendArray[T](target, c, false, mp))
+	require.Empty(t, searchFn(target))
+
+	// target containing key b at index 1
+	target2 := vector.NewVec(typ)
+	require.NoError(t, vector.AppendArray[T](target2, c, false, mp))
+	require.NoError(t, vector.AppendArray[T](target2, b, false, mp))
+	require.Equal(t, []int64{1}, searchFn(target2))
+
+	keys.Free(mp)
+	target.Free(mp)
+	target2.Free(mp)
+}
+
+func TestLinearSearchOffsetByValFactory_NarrowArray(t *testing.T) {
+	mp := mpool.MustNewZero()
+	narrowArrayLinearSearch[types.Float16](t, mp, types.T_array_float16,
+		types.Float32ToFloat16Slice([]float32{1, 1}),
+		types.Float32ToFloat16Slice([]float32{2, 2}),
+		types.Float32ToFloat16Slice([]float32{3, 3}))
+	narrowArrayLinearSearch[types.BF16](t, mp, types.T_array_bf16,
+		types.Float32ToBF16Slice([]float32{1, 1}),
+		types.Float32ToBF16Slice([]float32{2, 2}),
+		types.Float32ToBF16Slice([]float32{3, 3}))
+	narrowArrayLinearSearch[int8](t, mp, types.T_array_int8,
+		[]int8{1, 1}, []int8{2, 2}, []int8{3, 3})
+	narrowArrayLinearSearch[uint8](t, mp, types.T_array_uint8,
+		[]uint8{1, 1}, []uint8{2, 2}, []uint8{3, 3})
 }
 
 func TestLinearSearchOffsetByValFactory_Int64(t *testing.T) {
@@ -145,28 +190,166 @@ func TestTombstonePKExistsInRange(t *testing.T) {
 	// Case 1: search for PK=200, should find it
 	keys1 := vector.NewVec(int32Type)
 	require.NoError(t, vector.AppendFixed[int32](keys1, 200, false, proc.GetMPool()))
-	changed, _, err := tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys1, int32Type, fs)
+	changed, _, err := tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys1, int32Type, fs, proc.GetMPool())
 	require.NoError(t, err)
 	require.True(t, changed)
 
 	// Case 2: search for PK=999, should not find it
 	keys2 := vector.NewVec(int32Type)
 	require.NoError(t, vector.AppendFixed[int32](keys2, 999, false, proc.GetMPool()))
-	changed, _, err = tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys2, int32Type, fs)
+	changed, _, err = tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys2, int32Type, fs, proc.GetMPool())
 	require.NoError(t, err)
 	require.False(t, changed)
 
 	// Case 3: search for PK=500, should find it in second tombstone
 	keys3 := vector.NewVec(int32Type)
 	require.NoError(t, vector.AppendFixed[int32](keys3, 500, false, proc.GetMPool()))
-	changed, _, err = tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys3, int32Type, fs)
+	changed, _, err = tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys3, int32Type, fs, proc.GetMPool())
 	require.NoError(t, err)
 	require.True(t, changed)
 
 	// Case 4: no tombstone objects changed after from=25
-	changed, _, err = tombstonePKExistsInRange(ctx, pState, types.BuildTS(25, 0), types.MaxTs(), keys1, int32Type, fs)
+	changed, _, err = tombstonePKExistsInRange(ctx, pState, types.BuildTS(25, 0), types.MaxTs(), keys1, int32Type, fs, proc.GetMPool())
 	require.NoError(t, err)
 	require.False(t, changed)
+}
+
+func TestTombstonePKExistsInRangeVarcharScopedSearch(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProc(t)
+	fs, err := fileservice.Get[fileservice.FileService](
+		proc.GetFileService(),
+		defines.SharedFileServiceName,
+	)
+	require.NoError(t, err)
+	mp := proc.GetMPool()
+	varcharType := types.T_varchar.ToType()
+
+	dataObjectID := objectio.NewObjectid()
+	makeRowid := func(row uint32) types.Rowid {
+		return types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjectID, 0, row)
+	}
+
+	tnWriter := ioutil.ConstructTombstoneWriter(
+		objectio.HiddenColumnSelection_CommitTS,
+		fs,
+	)
+	tnBatch := batch.NewWithSize(3)
+	tnBatch.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	tnBatch.Vecs[1] = vector.NewVec(varcharType)
+	tnBatch.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	for row, value := range []string{"z", "needle", "a"} {
+		require.NoError(t, vector.AppendFixed(tnBatch.Vecs[0], makeRowid(uint32(row)), false, mp))
+		require.NoError(t, vector.AppendBytes(tnBatch.Vecs[1], []byte(value), false, mp))
+		require.NoError(t, vector.AppendFixed(
+			tnBatch.Vecs[2],
+			types.BuildTS(int64((row+1)*10), 0),
+			false,
+			mp,
+		))
+	}
+	tnBatch.SetRowCount(3)
+	_, err = tnWriter.WriteBatch(tnBatch)
+	require.NoError(t, err)
+	_, _, err = tnWriter.Sync(ctx)
+	require.NoError(t, err)
+	tnStats := tnWriter.GetObjectStats()
+	tnBatch.Clean(mp)
+
+	tnState := logtailreplay.NewPartitionState("", true, 0, false)
+	require.NoError(t, tnState.HandleObjectEntry(ctx, fs, objectio.ObjectEntry{
+		ObjectStats: tnStats,
+		CreateTime:  types.BuildTS(40, 0),
+	}, true))
+	key := vector.NewVec(varcharType)
+	require.NoError(t, vector.AppendBytes(key, []byte("needle"), false, mp))
+	baseline := mp.CurrNB()
+
+	changed, reason, err := tombstonePKExistsInRange(
+		ctx,
+		tnState,
+		types.BuildTS(15, 0),
+		types.BuildTS(25, 0),
+		key,
+		varcharType,
+		fs,
+		mp,
+	)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, "tombstone_commit_ts_hit", reason)
+	require.Equal(t, baseline, mp.CurrNB())
+
+	changed, reason, err = tombstonePKExistsInRange(
+		ctx,
+		tnState,
+		types.BuildTS(20, 0),
+		types.BuildTS(30, 0),
+		key,
+		varcharType,
+		fs,
+		mp,
+	)
+	require.NoError(t, err)
+	require.False(t, changed, "the selected commit timestamp equals the open lower bound")
+	require.Empty(t, reason)
+	require.Equal(t, baseline, mp.CurrNB())
+
+	missing := vector.NewVec(varcharType)
+	require.NoError(t, vector.AppendBytes(missing, []byte("missing"), false, mp))
+	changed, reason, err = tombstonePKExistsInRange(
+		ctx,
+		tnState,
+		types.BuildTS(15, 0),
+		types.BuildTS(25, 0),
+		missing,
+		varcharType,
+		fs,
+		mp,
+	)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Empty(t, reason)
+
+	cnWriter := ioutil.ConstructTombstoneWriter(
+		objectio.HiddenColumnSelection_None,
+		fs,
+	)
+	cnBatch := batch.NewWithSize(2)
+	cnBatch.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	cnBatch.Vecs[1] = vector.NewVec(varcharType)
+	require.NoError(t, vector.AppendFixed(cnBatch.Vecs[0], makeRowid(3), false, mp))
+	require.NoError(t, vector.AppendBytes(cnBatch.Vecs[1], []byte("needle"), false, mp))
+	cnBatch.SetRowCount(1)
+	_, err = cnWriter.WriteBatch(cnBatch)
+	require.NoError(t, err)
+	_, _, err = cnWriter.Sync(ctx)
+	require.NoError(t, err)
+	cnObjectStats := cnWriter.GetObjectStats()
+	cnStats := cnObjectStats.Clone()
+	objectio.WithCNCreated()(cnStats)
+	cnBatch.Clean(mp)
+	cnState := logtailreplay.NewPartitionState("", true, 0, false)
+	require.NoError(t, cnState.HandleObjectEntry(ctx, fs, objectio.ObjectEntry{
+		ObjectStats: *cnStats,
+		CreateTime:  types.BuildTS(40, 0),
+	}, true))
+	changed, reason, err = tombstonePKExistsInRange(
+		ctx,
+		cnState,
+		types.BuildTS(15, 0),
+		types.BuildTS(25, 0),
+		key,
+		varcharType,
+		fs,
+		mp,
+	)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, "tombstone_cn_hit", reason)
+
+	key.Free(mp)
+	missing.Free(mp)
 }
 
 func TestBlockMetaMarshal(t *testing.T) {

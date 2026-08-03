@@ -17,6 +17,7 @@ package incrservice
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -90,6 +91,53 @@ func TestRangeAdd(t *testing.T) {
 	r.add(1, 2)
 	assert.Equal(t, 2, r.left())
 	assert.Equal(t, 4, len(r.values))
+}
+
+func TestRangeAllocateTimestampTracksMutations(t *testing.T) {
+	ts1 := timestamp.Timestamp{PhysicalTime: 1000, LogicalTime: 1}
+	ts2 := timestamp.Timestamp{PhysicalTime: 2000, LogicalTime: 2}
+	r := &ranges{step: 1}
+	r.addWithTimestamp(1, 5, ts1)
+	r.addWithTimestamp(5, 9, ts2)
+
+	skipped := &ranges{step: 1}
+	r.setManual(2, skipped)
+	require.Equal(t, []uint64{3, 5, 5, 9}, r.values)
+	require.Equal(t, []timestamp.Timestamp{ts1, ts2}, r.allocatedAt)
+	require.Equal(t, ts1, r.oldestAllocateAt())
+
+	require.True(t, r.updateTo(5))
+	require.Equal(t, []uint64{5, 9}, r.values)
+	require.Equal(t, []timestamp.Timestamp{ts2}, r.allocatedAt)
+	require.Equal(t, ts2, r.oldestAllocateAt())
+
+	for value := uint64(5); value < 9; value++ {
+		require.Equal(t, value, r.next())
+	}
+	require.True(t, r.oldestAllocateAt().IsEmpty())
+	require.Empty(t, r.allocatedAt)
+}
+
+func TestSetManualReusesRangeBackingStorage(t *testing.T) {
+	values := make([]uint64, 4, 4)
+	copy(values, []uint64{2, 5, 5, 9})
+	allocatedAt := make([]timestamp.Timestamp, 2, 2)
+	copy(allocatedAt, []timestamp.Timestamp{
+		{PhysicalTime: 1000, LogicalTime: 1},
+		{PhysicalTime: 2000, LogicalTime: 2},
+	})
+
+	r := ranges{
+		step:        1,
+		values:      values,
+		allocatedAt: allocatedAt,
+	}
+	skipped := &ranges{step: 1}
+	require.Zero(t, testing.AllocsPerRun(1000, func() {
+		r.values = values
+		r.allocatedAt = allocatedAt
+		r.setManual(1, skipped)
+	}))
 }
 
 func TestUpdateTo(t *testing.T) {

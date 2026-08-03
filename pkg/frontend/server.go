@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -41,11 +42,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
+var (
+	frontendConnectionCloseEvents = logutil.ConnectionCloseEvents{
+		Expected: logutil.Event{Name: "frontend.connection.close.expected", Message: "frontend connection closed during normal lifecycle"},
+		Failed:   logutil.Event{Name: "frontend.connection.close.failed", Message: "frontend connection close failed"},
+	}
+	frontendSessionReadEvents = logutil.ConnectionCloseEvents{
+		Expected: logutil.Event{Name: "frontend.session.read.expected", Message: "frontend session read closed during normal lifecycle"},
+		Failed:   logutil.Event{Name: "frontend.session.read.failed", Message: "frontend session read failed"},
+	}
+	frontendSessionHandleEvents = logutil.ConnectionCloseEvents{
+		Expected: logutil.Event{Name: "frontend.session.handle.expected", Message: "frontend session handling closed during normal lifecycle"},
+		Failed:   logutil.Event{Name: "frontend.session.handle.failed", Message: "frontend session handling failed"},
+	}
+)
+
 // RelationName counter for the new connection
 var initConnectionID uint32 = 1000
 
 // ConnIDAllocKey is used get connection ID from HAKeeper.
 var ConnIDAllocKey = "____server_conn_id"
+
+const (
+	clientDisconnectProbeInterval = 5 * time.Second
+	clientDisconnectProbeGrace    = 30 * time.Second
+)
 
 // MOServer MatrixOne Server
 type MOServer struct {
@@ -94,28 +115,46 @@ func (mo *MOServer) Start() error {
 	logutil.Infof("Server Listening on : %s ", mo.addr)
 	mo.running = true
 	mo.startTempTableGC(24 * time.Hour)
+	mo.startConnectionLivenessMonitor()
 	mo.startListener()
 	setMoServerStarted(mo.service, true)
 	return nil
 }
 
+func (mo *MOServer) startConnectionLivenessMonitor() {
+	if mo == nil || mo.rm == nil || mo.rm.ctx == nil {
+		return
+	}
+	mo.wg.Add(1)
+	go func() {
+		defer mo.wg.Done()
+		ticker := time.NewTicker(clientDisconnectProbeInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-mo.rm.ctx.Done():
+				return
+			case now := <-ticker.C:
+				mo.rm.cancelDisconnectedRequests(now, clientDisconnectProbeGrace, connectionPeerClosed)
+			}
+		}
+	}()
+}
+
 func (mo *MOServer) Stop() error {
 	mo.mu.Lock()
-	if !mo.running {
+	if !mo.running && len(mo.listeners) == 0 {
 		mo.mu.Unlock()
 		return nil
 	}
 	mo.running = false
+	listeners := mo.listeners
+	mo.listeners = nil
 	mo.mu.Unlock()
 
-	var errors []error
-	for _, listener := range mo.listeners {
-		if err := listener.Close(); err != nil {
-			errors = append(errors, err)
-		}
-	}
-	if len(errors) > 0 {
-		return errors[0]
+	var err error
+	for _, listener := range listeners {
+		err = errors.Join(err, listener.Close())
 	}
 
 	logutil.Debug("application listener closed")
@@ -129,7 +168,7 @@ func (mo *MOServer) Stop() error {
 	mo.rm.killNetConns()
 
 	logutil.Debug("application stopped")
-	return nil
+	return err
 }
 
 func (mo *MOServer) IsRunning() bool {
@@ -310,7 +349,7 @@ func (mo *MOServer) handleConn(ctx context.Context, conn net.Conn) {
 	defer func() {
 		if rs != nil {
 			if err := rs.Close(); err != nil {
-				logutil.LogConnectionCloseError("Close conn error", err)
+				logutil.LogConnectionCloseEvent(frontendConnectionCloseEvents, err)
 			}
 		}
 	}()
@@ -335,7 +374,7 @@ func (mo *MOServer) handleConn(ctx context.Context, conn net.Conn) {
 
 func (mo *MOServer) handleLoop(ctx context.Context, rs *Conn) {
 	if err := mo.handleMessage(ctx, rs); err != nil {
-		logutil.LogConnectionCloseError("handle session failed", err)
+		logutil.LogConnectionCloseEvent(frontendSessionHandleEvents, err)
 	}
 }
 
@@ -554,12 +593,38 @@ func setPu(service string, pu *config.ParameterUnit) {
 	getServerLevelVars(service).Pu.Store(pu)
 }
 
+func publishPuIfAbsent(service string, pu *config.ParameterUnit) *config.ParameterUnit {
+	InitServerLevelVars(service)
+	vars := getServerLevelVars(service)
+	if vars.Pu.CompareAndSwap(nil, pu) {
+		return pu
+	}
+	return vars.Pu.Load().(*config.ParameterUnit)
+}
+
 func SetPUForExternalUT(service string, pu *config.ParameterUnit) {
 	setPu(service, pu)
 }
 
+func getPuIfPresent(service string) *config.ParameterUnit {
+	vars := getServerLevelVars(service)
+	if vars == nil {
+		return nil
+	}
+	value := vars.Pu.Load()
+	if value == nil {
+		return nil
+	}
+	pu, _ := value.(*config.ParameterUnit)
+	return pu
+}
+
 func getPu(service string) *config.ParameterUnit {
-	return getServerLevelVars(service).Pu.Load().(*config.ParameterUnit)
+	pu := getPuIfPresent(service)
+	if pu == nil {
+		panic("parameter unit is not initialized")
+	}
+	return pu
 }
 
 func setAicm(service string, aicm *defines.AutoIncrCacheManager) {
@@ -653,7 +718,7 @@ func (mo *MOServer) handleMessage(ctx context.Context, rs *Conn) error {
 				return nil
 			}
 
-			logutil.LogConnectionCloseError("session read failed", err)
+			logutil.LogConnectionCloseEvent(frontendSessionReadEvents, err)
 			return err
 		}
 	}
@@ -674,7 +739,7 @@ func (mo *MOServer) handleRequest(rs *Conn) error {
 			return err
 		}
 
-		logutil.LogConnectionCloseError("session read failed", err)
+		logutil.LogConnectionCloseEvent(frontendSessionReadEvents, err)
 		return err
 	}
 
@@ -683,7 +748,7 @@ func (mo *MOServer) handleRequest(rs *Conn) error {
 		if skipClientQuit(err.Error()) {
 			return nil
 		} else {
-			logutil.LogConnectionCloseError("session handle failed, close this session", err)
+			logutil.LogConnectionCloseEvent(frontendSessionHandleEvents, err)
 		}
 		return err
 	}

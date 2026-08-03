@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -82,6 +83,35 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	if param := node.IndexReaderParam; param != nil {
+		if param.Limit != nil {
+			param.Limit, err = rule.ApplyExpr(param.Limit)
+			if err != nil {
+				return err
+			}
+		}
+		for i := range param.OrderBy {
+			param.OrderBy[i].Expr, err = rule.ApplyExpr(param.OrderBy[i].Expr)
+			if err != nil {
+				return err
+			}
+		}
+		if param.DistRange != nil {
+			if param.DistRange.LowerBound != nil {
+				param.DistRange.LowerBound, err = rule.ApplyExpr(param.DistRange.LowerBound)
+				if err != nil {
+					return err
+				}
+			}
+			if param.DistRange.UpperBound != nil {
+				param.DistRange.UpperBound, err = rule.ApplyExpr(param.DistRange.UpperBound)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	for i := range node.OnList {
 		node.OnList[i], err = rule.ApplyExpr(node.OnList[i])
 		if err != nil {
@@ -96,8 +126,29 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	for i := range node.AggList {
+		node.AggList[i], err = rule.ApplyExpr(node.AggList[i])
+		if err != nil {
+			return err
+		}
+	}
+
+	for i := range node.GroupBy {
+		node.GroupBy[i], err = rule.ApplyExpr(node.GroupBy[i])
+		if err != nil {
+			return err
+		}
+	}
+
 	for i := range node.OrderBy {
 		node.OrderBy[i].Expr, err = rule.ApplyExpr(node.OrderBy[i].Expr)
+		if err != nil {
+			return err
+		}
+	}
+
+	for i := range node.TimeWindowPartitionBy {
+		node.TimeWindowPartitionBy[i], err = rule.ApplyExpr(node.TimeWindowPartitionBy[i])
 		if err != nil {
 			return err
 		}
@@ -119,6 +170,13 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 
 	for i := range node.TblFuncExprList {
 		node.TblFuncExprList[i], err = rule.ApplyExpr(node.TblFuncExprList[i])
+		if err != nil {
+			return err
+		}
+	}
+
+	for i := range node.WinSpecList {
+		node.WinSpecList[i], err = rule.ApplyExpr(node.WinSpecList[i])
 		if err != nil {
 			return err
 		}
@@ -206,5 +264,66 @@ func (vq *VisitPlan) Visit(ctx context.Context) error {
 
 	}
 
+	return nil
+}
+
+// visitMissingNodeExprs applies expression rules to node fields that VisitPlan
+// does not currently cover. Keeping this pass separate makes callers safe both
+// before and after those fields are added to the generic visitor: parameter
+// collection is map-backed, and ordinal normalization tracks seen ParamRefs.
+func visitMissingNodeExprs(
+	qry *Query,
+	roots []int32,
+	rules []VisitPlanRule,
+) error {
+	visited := make(map[int32]struct{})
+	var visitNode func(int32) error
+	visitNode = func(nodeID int32) error {
+		if _, ok := visited[nodeID]; ok {
+			return nil
+		}
+		if nodeID < 0 || int(nodeID) >= len(qry.Nodes) {
+			return moerr.NewInternalErrorNoCtx("invalid query node id")
+		}
+		visited[nodeID] = struct{}{}
+		node := qry.Nodes[nodeID]
+		for _, child := range node.Children {
+			if err := visitNode(child); err != nil {
+				return err
+			}
+		}
+		for _, rule := range rules {
+			if !rule.IsApplyExpr() {
+				continue
+			}
+			for i := range node.GroupBy {
+				var err error
+				node.GroupBy[i], err = rule.ApplyExpr(node.GroupBy[i])
+				if err != nil {
+					return err
+				}
+			}
+			for i := range node.AggList {
+				var err error
+				node.AggList[i], err = rule.ApplyExpr(node.AggList[i])
+				if err != nil {
+					return err
+				}
+			}
+			for i := range node.WinSpecList {
+				var err error
+				node.WinSpecList[i], err = rule.ApplyExpr(node.WinSpecList[i])
+				if err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	for _, root := range roots {
+		if err := visitNode(root); err != nil {
+			return err
+		}
+	}
 	return nil
 }

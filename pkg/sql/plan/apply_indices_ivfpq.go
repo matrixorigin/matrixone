@@ -34,6 +34,7 @@ type ivfpqIndexContext struct {
 	vecLitArg    *plan.Expr
 	origFuncName string
 	partPos      int32
+	partType     plan.Type
 	pkPos        int32
 	pkType       plan.Type
 	params       string
@@ -82,6 +83,7 @@ func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext,
 
 	keyPart := idxDef.Parts[0]
 	partPos := vecCtx.scanNode.TableDef.Name2ColIndex[keyPart]
+	partType := vecCtx.scanNode.TableDef.Cols[partPos].Typ
 	_, vecLitArg, found := builder.getArgsFromDistFn(vecCtx.distFnExpr, partPos)
 	if !found {
 		return nil, nil
@@ -119,6 +121,7 @@ func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext,
 		vecLitArg:    vecLitArg,
 		origFuncName: origFuncName,
 		partPos:      partPos,
+		partType:     partType,
 		pkPos:        pkPos,
 		pkType:       pkType,
 		params:       idxDef.IndexAlgoParams,
@@ -131,13 +134,12 @@ func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext,
 
 func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (int32, error) {
 
-	if vecCtx == nil || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
+	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
 	}
 
 	ctx := builder.ctxByNode[nodeID]
 	projNode := vecCtx.projNode
-	sortNode := vecCtx.sortNode
 	scanNode := vecCtx.scanNode
 	childNode := vecCtx.childNode
 	orderExpr := vecCtx.orderExpr
@@ -148,7 +150,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 		return nodeID, err
 	}
 
-	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s", "batch_window": %d, "nprobe": %d, "gpu_multi_simulation": %d}`,
+	tblCfgStr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d, "orig_func_name": "%s", "batch_window": %d, "nprobe": %d, "gpu_multi_simulation": %d, "parttype": %d}`,
 		scanNode.ObjRef.SchemaName,
 		scanNode.TableDef.Name,
 		ivfpqCtx.metaDef.IndexTableName,
@@ -157,7 +159,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 		ivfpqCtx.origFuncName,
 		ivfpqCtx.batchWindow,
 		ivfpqCtx.nProbe,
-		ivfpqCtx.gpuMultiSim)
+		ivfpqCtx.gpuMultiSim,
+		ivfpqCtx.partType.Id)
 
 	// Predicate pushdown on INCLUDE columns and the primary key: peel
 	// filters that reference only INCLUDE columns (or the PK, routed to
@@ -266,7 +269,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 		if limitConst := limit.GetLit(); limitConst != nil {
 			originalLimit := limitConst.GetU64Val()
 			overFetchFactor := calculatePostFilterOverFetchFactor(originalLimit)
-			newLimit := max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
+			newLimit := calculateOverFetchLimit(originalLimit, overFetchFactor)
 			tableFuncNode.Limit = &Expr{
 				Typ: limit.Typ,
 				Expr: &plan.Expr_Lit{
@@ -332,13 +335,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 			Flag: vecCtx.sortDirection,
 		},
 	}
+	resultLimit, resultOffset := vectorResultPagination(vecCtx)
 
 	sortByID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
 		Children: []int32{joinNodeID},
 		OrderBy:  orderByScore,
-		Limit:    limit,
-		Offset:   DeepCopyExpr(sortNode.Offset),
+		Limit:    resultLimit,
+		Offset:   resultOffset,
 	}, ctx)
 
 	projNode.Children[0] = sortByID

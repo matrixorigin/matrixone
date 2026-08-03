@@ -58,11 +58,18 @@ const (
 	BackgroundCNSelector = "background-cn-selector"
 
 	PipelineClient = "pipeline-client"
+	// EnablePipelineStreamReuse controls FIN/FIN_ACK teardown for clean remote
+	// pipeline streams. Setting it to false provides a rolling rollback gate;
+	// absence defaults to enabled.
+	EnablePipelineStreamReuse = "enable-pipeline-stream-reuse"
 
 	// TestingContextKey is the key of context for testing
 	TestingContextKey = "testing-context"
 
 	CNMemoryThrottler = "cn-memory-throttler"
+
+	// ColexecServer is the colexec server owned by one CN service.
+	ColexecServer = "colexec-server"
 )
 
 // Runtime contains the runtime environment for a MO service. Each CN/DN/LOG service
@@ -103,6 +110,9 @@ type Runtime interface {
 	SetGlobalVariables(name string, value any)
 	// GetGlobalVariables get global variables, return false if variables not found.
 	GetGlobalVariables(name string) (any, bool)
+	// CompareAndDeleteGlobalVariables removes a variable only when its current
+	// value is the expected service generation.
+	CompareAndDeleteGlobalVariables(name string, old any) bool
 }
 
 // Option used to setup runtime

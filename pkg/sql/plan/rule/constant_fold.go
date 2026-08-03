@@ -154,7 +154,10 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			}
 			defer vec.Free(proc.Mp())
 
-			vec.InplaceSortAndCompact()
+			// Nullable IN-lists must keep their null bitmap aligned with values.
+			if !vec.IsConstNull() && !vec.GetNulls().Any() {
+				vec.InplaceSortAndCompact()
+			}
 
 			data, err := vec.MarshalBinary()
 			if err != nil {
@@ -190,6 +193,9 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	for i := range fn.Args {
 		fn.Args[i] = r.constantFold(fn.Args[i], proc)
 		isVec = isVec || fn.Args[i].GetVec() != nil
+	}
+	if r.isPrepared && isSqlModeDependentTemporalCast(fn) {
+		return expr
 	}
 	if f.IsAgg() || f.IsWin() {
 		return expr
@@ -437,7 +443,8 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 		decimalValue.A = int64(vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[row].B0_63)
 		decimalValue.B = int64(vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[row].B64_127)
 		return &plan.Literal{Value: &plan.Literal_Decimal128Val{Decimal128Val: decimalValue}}
-	case types.T_array_float32, types.T_array_float64:
+	case types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		data := vec.GetStringAt(int(row))
 		return &plan.Literal{
 			Value: &plan.Literal_VecVal{
@@ -574,7 +581,8 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 				err = vector.AppendBytes(vec, nil, false, proc.Mp())
 				return false, err
 			}
-		case types.T_array_float32, types.T_array_float64:
+		case types.T_array_float32, types.T_array_float64,
+			types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_VecVal); ok {
 				val := val.VecVal
 				err = vector.AppendBytes(vec, []byte(val), false, proc.Mp())
@@ -652,6 +660,27 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 	} else {
 		err = vector.AppendBytes(vec, nil, true, proc.Mp())
 		return false, err
+	}
+}
+
+func isSqlModeDependentTemporalCast(fn *plan.Function) bool {
+	functionID, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	if functionID != function.CAST || len(fn.Args) != 2 {
+		return false
+	}
+
+	switch types.T(fn.Args[0].Typ.Id) {
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_blob, types.T_text, types.T_datalink:
+	default:
+		return false
+	}
+
+	switch types.T(fn.Args[1].Typ.Id) {
+	case types.T_date, types.T_datetime, types.T_timestamp:
+		return true
+	default:
+		return false
 	}
 }
 

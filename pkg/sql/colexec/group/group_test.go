@@ -17,9 +17,13 @@ package group
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -49,6 +53,23 @@ func sumAgg(pos int32) aggexec.AggFuncExecExpression {
 
 func countStarAgg() aggexec.AggFuncExecExpression {
 	return aggexec.MakeAggFunctionExpression(aggexec.AggIdOfCountStar, false, []*plan.Expr{colExpr(0, types.T_int32)}, nil)
+}
+
+func orderedGroupConcatAgg(distinct bool) aggexec.AggFuncExecExpression {
+	config := []byte{2}
+	config = binary.BigEndian.AppendUint32(config, 1)
+	config = binary.BigEndian.AppendUint32(config, 1)
+	config = append(config, 1)
+	config = binary.BigEndian.AppendUint32(config, 1)
+	config = binary.BigEndian.AppendUint32(config, 1)
+	config = append(config, '|')
+	return aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfGroupConcat,
+		distinct,
+		[]*plan.Expr{colExpr(1, types.T_varchar), colExpr(2, types.T_int64)},
+		config,
+		plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+	)
 }
 
 func newGroupOp(proc *process.Process, groupBy []*plan.Expr, aggs []aggexec.AggFuncExecExpression) *Group {
@@ -181,10 +202,11 @@ func TestGroupByWithSum(t *testing.T) {
 	resetChildren(g, proc)
 	require.NoError(t, g.Prepare(proc))
 
-	var rowCount int
+	var rowCount, execCalls int
 	for {
 		result, err := vm.Exec(g, proc)
 		require.NoError(t, err)
+		execCalls++
 		if result.Status == vm.ExecStop || result.Batch == nil {
 			break
 		}
@@ -192,6 +214,7 @@ func TestGroupByWithSum(t *testing.T) {
 	}
 	// mock batch has 2 rows with distinct values (1, 1000) → 2 groups
 	require.Equal(t, 2, rowCount)
+	require.Equal(t, execCalls, g.OpAnalyzer.GetOpStats().CallNum)
 
 	g.Free(proc, false, nil)
 	proc.Free()
@@ -219,6 +242,129 @@ func TestGroupNoGroupBy(t *testing.T) {
 	g.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestGroupSpillReloadKeepsPreallocationBounded(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	const rows = 65536
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	input.SetRowCount(rows)
+
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, []aggexec.AggFuncExecExpression{countStarAgg()})
+	// Values below 10K are interpreted as a group-count spill threshold.
+	// One large input batch therefore establishes a 65,536-group high-water
+	// mark, while each of the 32 reload buckets is only about 2K groups.
+	g.SpillMem = 4096
+	g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+	require.NoError(t, g.Prepare(proc))
+
+	var outputRows int
+	for {
+		result, err := vm.Exec(g, proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop || result.Batch == nil {
+			break
+		}
+		outputRows += result.Batch.RowCount()
+	}
+
+	require.Equal(t, rows, outputRows)
+	require.Equal(t, uint64(rows), g.ctr.spillHashPreAllocSize)
+	extra := g.OpAnalyzer.GetOpStats().ExtraStats
+	require.Positive(t, extra["GroupSpillWriteCalls"])
+	require.Positive(t, extra["GroupSpillWriteNanos"])
+	require.Positive(t, extra["GroupSpillSerializedBytes"])
+	require.Positive(t, extra["GroupSpillAggChunkHeadersOmitted"])
+	require.Positive(t, extra["GroupSpillReloadBuckets"])
+	require.Positive(t, extra["GroupSpillReloadRecords"])
+	require.Positive(t, extra["GroupSpillAggExecReuseRecords"])
+	require.Equal(t, int64(rows), extra["GroupSpillReloadRows"])
+	require.Equal(t, int64(rows), extra["GroupSpillMaxGroups"])
+	require.Greater(t, extra["GroupSpillPreallocRows"], int64(aggHtPreAllocSize))
+	require.Positive(t, extra["GroupSpillReloadNanos"])
+	require.Equal(t, int64(1), extra["GroupHashBuildGrowthBatches"])
+	require.Positive(t, extra["GroupHashBuildGrowthBytes"])
+	g.Free(proc, false, nil)
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestGroupedOrderedGroupConcatComposesWithGenericSpill(t *testing.T) {
+	for _, distinct := range []bool{false, true} {
+		t.Run(fmt.Sprintf("distinct=%t", distinct), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			const rows = 512
+			groups := make([]int32, rows)
+			values := make([]string, rows)
+			orderKeys := make([]int64, rows)
+			for i := range rows {
+				groups[i] = 1
+				values[i] = fmt.Sprintf("%04d-%s", i, strings.Repeat("x", 256))
+				orderKeys[i] = int64(rows - i)
+			}
+			input := batch.NewWithSize(3)
+			input.Vecs[0] = testutil.MakeInt32Vector(groups, nil, proc.Mp())
+			input.Vecs[1] = testutil.MakeVarcharVector(values, nil, proc.Mp())
+			input.Vecs[2] = testutil.MakeInt64Vector(orderKeys, nil, proc.Mp())
+			input.SetRowCount(rows)
+
+			g := newGroupOp(
+				proc,
+				[]*plan.Expr{colExpr(0, types.T_int32)},
+				[]aggexec.AggFuncExecExpression{orderedGroupConcatAgg(distinct), countStarAgg()},
+			)
+			g.SpillMem = 64 << 10
+			g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+			require.NoError(t, g.Prepare(proc))
+
+			results := collectBatches(t, g, proc)
+			require.Len(t, results, 1)
+			require.Equal(t, 1, results[0].RowCount())
+			require.Equal(t, int64(rows), vector.MustFixedColNoTypeCheck[int64](results[0].Vecs[2])[0])
+			parts := strings.Split(string(results[0].Vecs[1].GetBytesAt(0)), "|")
+			require.Len(t, parts, rows)
+			require.Equal(t, values[rows-1], parts[0])
+			require.Equal(t, values[0], parts[rows-1])
+
+			extra := g.OpAnalyzer.GetOpStats().ExtraStats
+			require.Equal(t, int64(spillMaxPass), extra["GroupSpillMaxLevel"])
+			require.Positive(t, extra["GroupSpillRespills"])
+			g.Free(proc, false, nil)
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestSpillReloadPreallocationRespectsByteLimit(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	const requested = uint64(1 << 20)
+	ctr := container{
+		mp:                    proc.Mp(),
+		mtyp:                  H8,
+		spillMem:              1 << 20,
+		spillHashPreAllocSize: requested,
+	}
+	got := ctr.boundedSpillReloadPreAlloc(int64(requested))
+	require.Less(t, got, requested)
+	require.LessOrEqual(t,
+		hashtable.Int64HashMapInitialAllocationBytes()+hashtable.EstimateInt64HashMapSize(got),
+		uint64(ctr.spillMem))
+
+	// The sub-10K test mode is a group-count threshold rather than a byte
+	// budget, but the proven high-water cap still applies.
+	ctr.spillMem = 4096
+	ctr.spillHashPreAllocSize = 2048
+	require.Equal(t, uint64(2048), ctr.boundedSpillReloadPreAlloc(8192))
 }
 
 // TestGroupResetAndReuse: verify Reset allows the operator to be reused correctly.
@@ -265,6 +411,7 @@ func TestMergeGroupPreservesLateNullableGroupKeys(t *testing.T) {
 	require.NoError(t, merge.Prepare(proc))
 	finalBatches := collectBatches(t, merge, proc)
 	require.Len(t, finalBatches, 1)
+	require.Equal(t, len(finalBatches)+1, merge.OpAnalyzer.GetOpStats().CallNum)
 	assertMergedTicketCounts(t, finalBatches, 2, 2)
 	merge.Free(proc, false, nil)
 }

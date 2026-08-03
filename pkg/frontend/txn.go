@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -202,6 +203,9 @@ type TxnHandler struct {
 }
 
 func InitTxnHandler(service string, storage engine.Engine, connCtx context.Context, txnOp TxnOperator) *TxnHandler {
+	if connCtx == nil {
+		connCtx = context.Background()
+	}
 	ret := &TxnHandler{
 		service:      service,
 		storage:      &engine.EntireEngine{Engine: storage},
@@ -442,6 +446,16 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		}
 	}
 
+	// A DATA BRANCH create can use an independent background transaction for its
+	// quota check and clone. Apply the required mode to that owning transaction;
+	// shared explicit transactions keep their configured semantics and are
+	// validated by the quota checker instead.
+	if backSes, ok := execCtx.ses.(*backSession); ok && backSes.forcePessimisticRC {
+		opts = append(opts,
+			txnclient.WithTxnMode(pbtxn.TxnMode_Pessimistic),
+			txnclient.WithTxnIsolation(pbtxn.TxnIsolation_RC))
+	}
+
 	tempCtx, tempCancel := context.WithTimeoutCause(th.txnCtx, pu.SV.CreateTxnOpTimeout.Duration, moerr.CauseCreateTxnOpUnsafe)
 	defer tempCancel()
 
@@ -567,6 +581,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.EnterFPrint(FPCommitUnsafeBeforeCommitWithTxn)
 		defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeCommitWithTxn)
 		commitTs := th.txnOp.Txn().CommitTS
+		haveDDL := th.txnOp.GetWorkspace().GetHaveDDL()
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
 		commitResultUnknown := false
 		err, hasRecovered = ExecuteFuncWithRecover(func() error {
@@ -586,12 +601,18 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 					err = errors.Join(err, moerr.AttachCause(ctx2, err2))
 				}
 			}
+			advanceDDLVersionAfterDiscardedTxnDDL(execCtx.ses, haveDDL)
 			if !commitResultUnknown {
 				th.invalidateTxnUnsafe()
 			}
 		}
 		execCtx.ses.updateLastCommitTS(commitTs)
 		if commitResultUnknown {
+			// ErrTxnUnknown is terminal for this frontend handle. The operator
+			// has already finalized its workspace non-destructively; retaining it
+			// lets later rollback/connection cleanup reach destructive cleanup.
+			th.invalidateTxnUnsafe()
+			execCtx.ses.SetTxnId(dumpUUID[:])
 			return err
 		}
 	}
@@ -603,6 +624,23 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 // Rollback rolls back the txn
 // the option bits decide the actual behavior
 func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
+	return th.rollback(execCtx, nil)
+}
+
+// rollbackWithContext rolls back the txn using operationCtx as the parent of
+// the storage rollback context. Normal statement rollback intentionally uses
+// the transaction context so that request cancellation cannot skip cleanup.
+func (th *TxnHandler) rollbackWithContext(
+	operationCtx context.Context,
+	execCtx *ExecCtx,
+) error {
+	return th.rollback(execCtx, operationCtx)
+}
+
+func (th *TxnHandler) rollback(
+	execCtx *ExecCtx,
+	operationCtx context.Context,
+) error {
 	execCtx.ses.EnterFPrint(FPRollback)
 	defer execCtx.ses.ExitFPrint(FPRollback)
 	var err error
@@ -625,7 +663,7 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 		//Case1.1: autocommit && not_begin
 		//Case1.2: (not_autocommit || begin) && activeTxn && needToBeCommitted
 		//Case1.3: the error that should rollback the whole txn
-		err = th.rollbackUnsafe(execCtx)
+		err = th.rollbackUnsafe(execCtx, operationCtx)
 	} else {
 		//Case2: not ( autocommit && !begin ) && not ( activeTxn && needToBeCommitted )
 		//<==>  ( not_autocommit || begin ) && not ( activeTxn && needToBeCommitted )
@@ -634,11 +672,15 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 		defer execCtx.ses.ExitFPrint(FPRollbackUnsafe2)
 		//non derived statement
 		if th.txnOp != nil && !execCtx.ses.IsDerivedStmt() {
+			rollbackCtx := th.txnCtx
+			if operationCtx != nil {
+				rollbackCtx = operationCtx
+			}
 			err, hasRecovered = ExecuteFuncWithRecover(func() error {
-				return th.txnOp.GetWorkspace().RollbackLastStatement(th.txnCtx)
+				return th.txnOp.GetWorkspace().RollbackLastStatement(rollbackCtx)
 			})
 			if err != nil || hasRecovered {
-				err4 := th.rollbackUnsafe(execCtx)
+				err4 := th.rollbackUnsafe(execCtx, operationCtx)
 				return errors.Join(err, err4)
 			}
 		}
@@ -646,7 +688,10 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 	return err
 }
 
-func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
+func (th *TxnHandler) rollbackUnsafe(
+	execCtx *ExecCtx,
+	operationCtx context.Context,
+) error {
 	execCtx.ses.EnterFPrint(FPRollbackUnsafe)
 	defer execCtx.ses.ExitFPrint(FPRollbackUnsafe)
 	traceCtx := th.txnCtx
@@ -670,8 +715,12 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 		panic("context should not be nil")
 	}
 
+	rollbackCtx := th.txnCtx
+	if operationCtx != nil {
+		rollbackCtx = operationCtx
+	}
 	ctx2, cancel := context.WithTimeoutCause(
-		th.txnCtx,
+		rollbackCtx,
 		th.storage.Hints().CommitOrRollbackTimeout,
 		moerr.CauseRollbackUnsafe,
 	)
@@ -708,9 +757,11 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.EnterFPrint(FPRollbackUnsafeBeforeRollbackWithTxn)
 		defer execCtx.ses.ExitFPrint(FPRollbackUnsafeBeforeRollbackWithTxn)
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
+		haveDDL := th.txnOp.GetWorkspace().GetHaveDDL()
 		err, hasRecovered = ExecuteFuncWithRecover(func() error {
 			return th.txnOp.Rollback(ctx2)
 		})
+		advanceDDLVersionAfterDiscardedTxnDDL(execCtx.ses, haveDDL)
 		if err != nil || hasRecovered {
 			err = moerr.AttachCause(ctx2, err)
 			th.invalidateTxnUnsafe()
@@ -719,6 +770,18 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 	th.invalidateTxnUnsafe()
 	execCtx.ses.SetTxnId(dumpUUID[:])
 	return err
+}
+
+func advanceDDLVersionAfterDiscardedTxnDDL(ses FeSession, haveDDL bool) {
+	if !haveDDL {
+		return
+	}
+	if session := upstreamUserSession(ses); session != nil {
+		// Plans rebuilt against transaction-local DDL must not survive the
+		// rollback or failed terminal outcome of the workspace that supplied
+		// their schema.
+		session.advanceDDLVersion()
+	}
 }
 
 /*

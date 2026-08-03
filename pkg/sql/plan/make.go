@@ -66,18 +66,19 @@ func MakePlan2Decimal128ExprWithType(v types.Decimal128, typ *Type) *plan.Expr {
 
 func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) (*plan.Expr, error) {
 	var typ plan.Type
+	width := decimalLiteralPrecision(v)
 	_, scale, err := types.Parse128(v)
 	if err == nil && scale < 18 && len(v) < 18 {
 		typ = plan.Type{
 			Id:          int32(types.T_decimal64),
-			Width:       18,
+			Width:       width,
 			Scale:       scale,
 			NotNullable: true,
 		}
 	} else if err == nil {
 		typ = plan.Type{
 			Id:          int32(types.T_decimal128),
-			Width:       38,
+			Width:       width,
 			Scale:       scale,
 			NotNullable: true,
 		}
@@ -88,7 +89,7 @@ func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) 
 		}
 		typ = plan.Type{
 			Id:          int32(types.T_decimal256),
-			Width:       65,
+			Width:       width,
 			Scale:       scale,
 			NotNullable: true,
 		}
@@ -96,7 +97,24 @@ func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) 
 	return appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType(v, isBin...), typ)
 }
 
+func decimalLiteralPrecision(v string) int32 {
+	var width int32
+	for i := 0; i < len(v); i++ {
+		if v[i] >= '0' && v[i] <= '9' {
+			width++
+		}
+	}
+	if width == 0 {
+		return 1
+	}
+	return width
+}
+
 func makePlan2DateConstNullExpr(t types.T) *plan.Expr {
+	return makePlan2DateConstNullExprWithScale(t, 0)
+}
+
+func makePlan2DateConstNullExprWithScale(t types.T, scale int32) *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_Lit{
 			Lit: &Const{
@@ -105,6 +123,7 @@ func makePlan2DateConstNullExpr(t types.T) *plan.Expr {
 		},
 		Typ: plan.Type{
 			Id:          int32(t),
+			Scale:       scale,
 			NotNullable: false,
 		},
 	}
@@ -365,6 +384,62 @@ func makePlan2Vecf64ConstExprWithType(v string, l int32) *plan.Expr {
 	}
 }
 
+var MakePlan2VecBf16ConstExprWithType = makePlan2VecBf16ConstExprWithType
+
+// makePlan2VecBf16ConstExprWithType makes a vecbf16 const expr.
+func makePlan2VecBf16ConstExprWithType(v string, l int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Vecf32ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_array_bf16),
+			Width:       l,
+			NotNullable: true,
+		},
+	}
+}
+
+var MakePlan2VecF16ConstExprWithType = makePlan2VecF16ConstExprWithType
+
+// makePlan2VecF16ConstExprWithType makes a vecf16 const expr.
+func makePlan2VecF16ConstExprWithType(v string, l int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Vecf32ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_array_float16),
+			Width:       l,
+			NotNullable: true,
+		},
+	}
+}
+
+var MakePlan2VecInt8ConstExprWithType = makePlan2VecInt8ConstExprWithType
+
+// makePlan2VecInt8ConstExprWithType makes a vecint8 const expr.
+func makePlan2VecInt8ConstExprWithType(v string, l int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Vecf32ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_array_int8),
+			Width:       l,
+			NotNullable: true,
+		},
+	}
+}
+
+var MakePlan2VecUint8ConstExprWithType = makePlan2VecUint8ConstExprWithType
+
+// makePlan2VecUint8ConstExprWithType makes a vecuint8 const expr.
+func makePlan2VecUint8ConstExprWithType(v string, l int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Vecf32ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_array_uint8),
+			Width:       l,
+			NotNullable: true,
+		},
+	}
+}
+
 var MakePlan2StringVecExprWithType = makePlan2StringVecExprWithType
 
 func makePlan2StringVecExprWithType(mp *mpool.MPool, vals ...string) *plan.Expr {
@@ -553,6 +628,17 @@ func makePlan2StringConstExprWithType(v string, isBin ...bool) *plan.Expr {
 	}
 }
 
+func makePlan2VarBinaryConstExprWithType(v string) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2StringConstExpr(v, false),
+		Typ: plan.Type{
+			Id:          int32(types.T_varbinary),
+			NotNullable: true,
+			Width:       int32(len(v)),
+		},
+	}
+}
+
 func makePlan2NullTextConstExpr(v string) *plan.Expr_Lit {
 	c := &plan.Expr_Lit{Lit: &plan.Literal{
 		Isnull: true,
@@ -576,13 +662,13 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr,
 }
 
 // makePlan2AssignmentCastExpr builds a cast used when validating/storing a value
-// against a real column type (e.g. column DEFAULT / ON UPDATE). For CHAR/VARCHAR
-// targets it uses the strict cast so an over-length value is rejected instead of
-// being silently truncated, mirroring forceAssignmentCastExpr. Explicit SQL CAST
-// keeps the lenient generic cast (MySQL-compatible truncation).
+// against a real column type at the DDL layer (e.g. column DEFAULT / ON UPDATE).
+// It uses cast_strict for CHAR/VARCHAR width checks and temporal zero-date
+// preservation. DDL-specific error mapping is applied by the DDL validation
+// layer rather than changing cast_strict's execution contract.
 func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
 	funcName := "cast"
-	if targetType.Id == int32(types.T_char) || targetType.Id == int32(types.T_varchar) {
+	if useAssignmentStrictCast(targetType) {
 		funcName = "cast_strict"
 	}
 	return makePlan2CastExprWithName(ctx, expr, targetType, funcName)
@@ -592,6 +678,14 @@ func makePlan2CastExprWithName(ctx context.Context, expr *Expr, targetType Type,
 	var err error
 	if expr == nil {
 		return nil, moerr.NewInvalidInput(ctx, "nil expression in cast")
+	}
+	var rewritten bool
+	expr, rewritten, err = rewriteMySQLSpecialTypeDisplayCast(ctx, expr, targetType)
+	if err != nil {
+		return nil, err
+	}
+	if rewritten {
+		return expr, nil
 	}
 	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil

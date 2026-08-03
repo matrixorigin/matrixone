@@ -17,6 +17,7 @@ package lockop
 import (
 	"bytes"
 	"context"
+	"errors"
 	"math"
 	"testing"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -39,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -97,6 +100,7 @@ func TestLockWaitTimeoutUsesCurrentSessionValue(t *testing.T) {
 		nil,
 		nil,
 		nil)
+	proc.Base.IsFrontend = true
 	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 		require.Equal(t, "lock_wait_timeout", varName)
 		require.True(t, isSystemVar)
@@ -111,6 +115,26 @@ func TestLockWaitTimeoutUsesCurrentSessionValue(t *testing.T) {
 
 	proc.GetSessionInfo().LockWaitTimeout = 0
 	require.Equal(t, 60*time.Second, lockWaitTimeout(proc, txnOp))
+
+	proc.Base.IsFrontend = false
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return int64(2), nil
+	})
+	require.Equal(t, 60*time.Second, lockWaitTimeout(proc, txnOp),
+		"background per-execution txn option must override the default resolver")
+	proc.GetSessionInfo().LockWaitTimeout = 4
+	require.Equal(t, 4*time.Second, lockWaitTimeout(proc, txnOp),
+		"background process-level per-execution option must have highest priority")
+
+	proc.GetSessionInfo().LockWaitTimeout = 0
+	proc.GetSessionInfo().LockWaitTimeoutSet = true
+	require.Equal(t, 2*time.Second, lockWaitTimeout(proc, txnOp),
+		"clearing an existing transaction override must fall back to the resolver")
+	proc.SetResolveVariableFunc(nil)
+	require.Equal(t,
+		time.Duration(defines.DefaultLockWaitTimeoutSeconds)*time.Second,
+		lockWaitTimeout(proc, txnOp),
+		"clearing without a resolver must use the rolling-upgrade-safe fallback, not the existing transaction timeout")
 }
 
 func TestLockOpHelpers(t *testing.T) {
@@ -155,6 +179,10 @@ func TestRefreshLockWaitOptionsReturnsTimeoutAfterDeadline(t *testing.T) {
 
 	_, err := refreshLockWaitOptions(options)
 	require.ErrorIs(t, err, lockservice.ErrLockTimeout)
+}
+
+func TestLockWaitTimeoutIsNotRetryable(t *testing.T) {
+	require.False(t, isRetryLockError(lockservice.ErrLockTimeout))
 }
 
 func TestLockOpTargetHelpers(t *testing.T) {
@@ -1081,8 +1109,9 @@ func TestCallLockOpLocksTableAtEOFWhenNoRowsProduced(t *testing.T) {
 				IsFirst: false,
 				IsLast:  false,
 			}
-			arg.AddLockTarget(tableID, nil, 0, pkType, -1, -1, nil, true)
-			arg.LockTable(tableID, false)
+			arg.AddLockTargetWithMode(
+				tableID, nil, lock.LockMode_Shared, 0, pkType, -1, -1, nil, true)
+			arg.LockTableWithMode(tableID, lock.LockMode_Shared, false)
 			resetChildren(arg, nil)
 			defer arg.Free(proc, false, nil)
 
@@ -1090,6 +1119,16 @@ func TestCallLockOpLocksTableAtEOFWhenNoRowsProduced(t *testing.T) {
 			_, err := vm.Exec(arg, proc)
 			require.NoError(t, err)
 			require.True(t, proc.GetTxnOperator().HasLockTable(tableID))
+
+			sharedTxn, err := proc.Base.TxnClient.New(proc.Ctx, timestamp.Timestamp{})
+			require.NoError(t, err)
+			defer func() { require.NoError(t, sharedTxn.Rollback(proc.Ctx)) }()
+			sharedProc := process.NewTopProcess(proc.Ctx, mpool.MustNewZero(), proc.Base.TxnClient,
+				sharedTxn, nil, proc.GetLockService(), nil, nil, nil, nil, nil)
+			require.NoError(t, LockTableWithMode(
+				nil, sharedProc, tableID, pkType, lock.LockMode_Shared, false))
+			require.NoError(t, LockTable(nil, proc, tableID+1, pkType, false))
+			require.True(t, proc.GetTxnOperator().HasLockTable(tableID+1))
 		},
 	)
 }
@@ -1376,12 +1415,48 @@ func TestLockOpResetClearsLockCount(t *testing.T) {
 	arg.ctr.lockCount = 7
 	arg.ctr.defChanged = true
 	arg.ctr.retryError = moerr.NewTxnNeedRetryNoCtx()
+	arg.ctr.relations = []engine.Relation{nil}
 
 	arg.Reset(nil, false, nil)
 
 	require.Equal(t, int64(0), arg.ctr.lockCount)
 	require.False(t, arg.ctr.defChanged)
 	require.Nil(t, arg.ctr.retryError)
+	require.Len(t, arg.ctr.relations, 1)
+}
+
+func TestLockOpPrepareRecoversFromPartialRelationInitialization(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	database := mock_frontend.NewMockDatabase(ctrl)
+	relation1 := mock_frontend.NewMockRelation(ctrl)
+	relation2 := mock_frontend.NewMockRelation(ctrl)
+	lookupErr := errors.New("lookup t2")
+
+	eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil).AnyTimes()
+	database.EXPECT().Relation(gomock.Any(), "t1", gomock.Any()).Return(relation1, nil).Times(1)
+	database.EXPECT().Relation(gomock.Any(), "t2", gomock.Any()).Return(nil, lookupErr).Times(1)
+	database.EXPECT().Relation(gomock.Any(), "t2", gomock.Any()).Return(relation2, nil).Times(1)
+	relation1.EXPECT().Reset(gomock.Any()).Return(nil).Times(1)
+
+	arg := NewArgumentByEngine(eng)
+	arg.AddLockTarget(1, &plan.ObjectRef{SchemaName: "db", ObjName: "t1"}, 0, types.T_int64.ToType(), -1, -1, nil, false)
+	arg.AddLockTarget(2, &plan.ObjectRef{SchemaName: "db", ObjName: "t2"}, 0, types.T_int64.ToType(), -1, -1, nil, false)
+	proc := testutil.NewProc(t)
+
+	require.ErrorIs(t, arg.Prepare(proc), lookupErr)
+	require.Same(t, relation1, arg.ctr.relations[0])
+	require.Nil(t, arg.ctr.relations[1])
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Same(t, relation1, arg.ctr.relations[0])
+	require.Same(t, relation2, arg.ctr.relations[1])
+
+	arg.Free(proc, true, lookupErr)
+	arg.Release()
+	proc.Free()
 }
 
 func runLockNonBlockingOpTest(
@@ -1574,7 +1649,11 @@ func TestLockTableIfLockCountIsZeroWithLockRows(t *testing.T) {
 		require.NoError(t, arg.Prepare(proc))
 		arg.ctr.hasNewVersionInRange = testFunc
 
+		arg.OpAnalyzer.Start()
 		require.NoError(t, lockTalbeIfLockCountIsZero(proc, arg))
+		arg.OpAnalyzer.Stop()
+		require.Equal(t, 1, arg.OpAnalyzer.GetOpStats().CallNum)
+		require.Zero(t, arg.OpAnalyzer.GetOpStats().ResourceDelta().Quality)
 
 		arg.Free(proc, false, nil)
 	})
@@ -1648,4 +1727,116 @@ func TestDedupLockRows_Idempotent(t *testing.T) {
 	once := dedupLockRows(in)
 	twice := dedupLockRows(append([][]byte(nil), once...))
 	require.Equal(t, once, twice)
+}
+
+func TestLockOpMergeableTargetsRemainStreaming(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		pkType := types.T_int32.ToType()
+		makeBatch := func(left, right int32) *batch.Batch {
+			bat := batch.NewWithSize(2)
+			bat.Vecs[0] = testutil.MakeInt32Vector([]int32{left}, nil, proc.Mp())
+			bat.Vecs[1] = testutil.MakeInt32Vector([]int32{right}, nil, proc.Mp())
+			bat.SetRowCount(1)
+			return bat
+		}
+		first := makeBatch(2, 1)
+		second := makeBatch(1, 2)
+		defer first.Clean(proc.Mp())
+		defer second.Clean(proc.Mp())
+
+		arg := NewArgumentByEngine(nil)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 0, pkType, -1, -1, nil, false)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 1, pkType, -1, -1, nil, false)
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second}))
+		require.NoError(t, arg.Prepare(proc))
+		arg.ctr.hasNewVersionInRange = testFunc
+
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Same(t, first, result.Batch)
+		require.True(t, proc.GetTxnOperator().HasLockTable(uint64(1)))
+		result, err = vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Same(t, second, result.Batch)
+		result, err = vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Nil(t, result.Batch)
+		arg.Free(proc, false, nil)
+	})
+}
+
+func TestLockOpMergeableTargetsSkipLeadingAllNull(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		pkType := types.T_int32.ToType()
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{0}, []uint64{0}, proc.Mp())
+		bat.Vecs[1] = testutil.MakeInt32Vector([]int32{42}, nil, proc.Mp())
+		bat.SetRowCount(1)
+		defer bat.Clean(proc.Mp())
+
+		arg := NewArgumentByEngine(nil)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 0, pkType, -1, -1, nil, false)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 1, pkType, -1, -1, nil, false)
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
+		require.NoError(t, arg.Prepare(proc))
+		arg.ctr.hasNewVersionInRange = testFunc
+
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Same(t, bat, result.Batch)
+		require.True(t, proc.GetTxnOperator().HasLockTable(uint64(1)))
+		arg.Free(proc, false, nil)
+	})
+}
+
+func TestLockOpMergedTargetChecksEveryVersionRange(t *testing.T) {
+	arg := NewArgumentByEngine(nil)
+	pkType := types.T_int32.ToType()
+	arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 3, pkType, -1, -1, nil, false)
+	arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 7, pkType, -1, -1, nil, false)
+	arg.ctr.relations = make([]engine.Relation, len(arg.targets))
+	var checked []int32
+	arg.ctr.hasNewVersionInRange = func(
+		_ *process.Process,
+		_ engine.Relation,
+		_ process.Analyzer,
+		_ uint64,
+		_ engine.Engine,
+		_ *batch.Batch,
+		idx int32,
+		_ int32,
+		_, _ timestamp.Timestamp,
+	) (bool, error) {
+		checked = append(checked, idx)
+		return idx == 7, nil
+	}
+
+	changed, err := arg.hasNewVersionInRangeForTargets([]int{0, 1})(
+		nil, nil, nil, 1, nil, nil, -1, -1, timestamp.Timestamp{}, timestamp.Timestamp{})
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, []int32{3, 7}, checked)
+}
+
+func TestLockOpExclusiveTargetsStayRowLocked(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		pkType := types.T_int32.ToType()
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+		bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+		bat.SetRowCount(1)
+		defer bat.Clean(proc.Mp())
+
+		arg := NewArgumentByEngine(nil)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Exclusive, 0, pkType, -1, -1, nil, false)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Exclusive, 1, pkType, -1, -1, nil, false)
+		require.False(t, mergeableLockTargets(arg.targets[0], arg.targets[1]))
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
+		require.NoError(t, arg.Prepare(proc))
+		arg.ctr.hasNewVersionInRange = testFunc
+
+		_, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		arg.Free(proc, false, nil)
+	})
 }

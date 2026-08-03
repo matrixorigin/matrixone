@@ -21,13 +21,13 @@ SELECT UTC_TIME(6) AS utc_time_scale6;
 
 # Compare with CURRENT_TIME (should be different if not in UTC timezone)
 -- @ignore:0,1
-SELECT UTC_TIME() AS utc_time, CURRENT_TIME() AS local_time;
+SELECT UTC_TIME() AS utc_time_value, CURRENT_TIME() AS local_time_value;
 
 # Table usage
 CREATE TABLE t1(id INT);
 INSERT INTO t1 VALUES (1), (2), (3);
 -- @ignore:1
-SELECT id, UTC_TIME() AS utc_time FROM t1;
+SELECT id, UTC_TIME() AS utc_time_value FROM t1;
 DROP TABLE t1;
 
 # WHERE clause
@@ -65,3 +65,22 @@ SELECT UTC_TIME(5) AS five_digits;
 -- @ignore:0
 SELECT UTC_TIME(6) AS six_digits;
 
+-- UTC_TIME(fsp) truncates fractional seconds to the requested precision.
+SELECT MICROSECOND(UTC_TIME(3)) % 1000 AS utc_time_millisecond_precision;
+SELECT LENGTH(CAST(UTC_TIME(3) AS CHAR)) = 12 AS utc_time_fsp3_text_width;
+DROP VIEW IF EXISTS v_utc_time_fsp;
+CREATE VIEW v_utc_time_fsp AS
+SELECT UTC_TIME(0) AS value0, UTC_TIME(3) AS value3, UTC_TIME(6) AS value6;
+DESC v_utc_time_fsp;
+DROP VIEW v_utc_time_fsp;
+
+-- The optional FSP follows MySQL syntax: it must be an integer literal in [0, 6].
+DROP TABLE IF EXISTS utc_time_fsp_arg;
+CREATE TABLE utc_time_fsp_arg(fsp BIGINT);
+INSERT INTO utc_time_fsp_arg VALUES (0), (6);
+SELECT UTC_TIME(fsp) FROM utc_time_fsp_arg;
+SELECT UTC_TIME(1 + 2);
+SELECT UTC_TIME(NULL);
+SELECT UTC_TIME(-1);
+SELECT UTC_TIME(7);
+DROP TABLE utc_time_fsp_arg;

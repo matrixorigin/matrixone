@@ -32,6 +32,14 @@ type Merger interface {
 	merge(context.Context) error
 }
 
+type failedMerger struct {
+	err error
+}
+
+func (m failedMerger) merge(context.Context) error {
+	return m.err
+}
+
 type releasableBatch struct {
 	bat      *batch.Batch
 	releaseF func()
@@ -108,7 +116,12 @@ type merger[T comparable] struct {
 	blockActive  []bool
 }
 
-func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, df dataFetcher[T]) Merger {
+func newMerger[T comparable](
+	host MergeTaskHost,
+	lessFunc sort.LessFunc[T],
+	sortKeyPos int,
+	df dataFetcher[T],
+) Merger {
 	size := host.GetObjectCnt()
 	m := &merger[T]{
 		host:   host,
@@ -138,7 +151,11 @@ func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sort
 	if host.DoTransfer() {
 		slabSize := totalBlkCnt * int(m.rowPerBlk)
 		if slabSize > 0 {
-			m.transferSlab = getTransferSlab(slabSize)
+			var err error
+			m.transferSlab, err = getTransferSlab(slabSize)
+			if err != nil {
+				return failedMerger{err: err}
+			}
 			m.blockActive = make([]bool, totalBlkCnt)
 		}
 	}
@@ -504,6 +521,12 @@ func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int) err
 				cols:        make([][]types.Decimal128, size),
 			}
 			merger = newMerger(mergeHost, sort.Decimal128Less, sortKeyPos, df)
+		case types.T_decimal256:
+			df := &fixedDataFetcher[types.Decimal256]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Decimal256],
+				cols:        make([][]types.Decimal256, size),
+			}
+			merger = newMerger(mergeHost, sort.Decimal256Less, sortKeyPos, df)
 		case types.T_uuid:
 			df := &fixedDataFetcher[types.Uuid]{
 				mustColFunc: vector.MustFixedColNoTypeCheck[types.Uuid],

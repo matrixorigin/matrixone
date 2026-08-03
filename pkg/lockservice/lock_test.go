@@ -90,3 +90,16 @@ func TestHoldersGetTxnSlice(t *testing.T) {
 	assert.True(t, txnMap["2"])
 	assert.True(t, txnMap["3"])
 }
+
+func TestHoldersReplaceMigratesTxnKey(t *testing.T) {
+	h := newHolders()
+	from := pb.WaitTxn{TxnID: []byte("from")}
+	to := pb.WaitTxn{TxnID: []byte("to")}
+	h.add(from)
+
+	h.replace(from.TxnID, to)
+
+	assert.False(t, h.contains(from.TxnID))
+	assert.True(t, h.contains(to.TxnID))
+	assert.Equal(t, []pb.WaitTxn{to}, h.getTxnSlice())
+}

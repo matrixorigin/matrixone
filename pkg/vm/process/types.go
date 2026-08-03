@@ -17,11 +17,11 @@ package process
 import (
 	"context"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
 	"github.com/hayageek/threadsafe"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -54,6 +54,12 @@ import (
 var (
 	NormalEndRegisterMessage = NewRegMsg(nil)
 )
+
+// EmptySqlModeSentinel is used to distinguish an explicitly-empty (non-strict)
+// sql_mode from an unset field during serialization. When resolveSqlMode
+// successfully resolves sql_mode="" it stores this sentinel so the remote CN
+// can tell "explicitly non-strict" apart from "never captured".
+const EmptySqlModeSentinel = "\x00MO_EMPTY_SQL_MODE\x00"
 
 // RegisterMessage channel data
 // Err == nil means pipeline finish with error
@@ -96,34 +102,44 @@ type Limitation struct {
 	PartitionRows int64
 	// ReaderSize, memory threshold for storage's reader
 	ReaderSize int64
+	// SpillSize, query spill-disk byte cap. Zero selects the bounded default.
+	SpillSize int64
 	// MaxMessageSize max size for read messages from dn
 	MaxMsgSize uint64
 }
 
 // SessionInfo session information
 type SessionInfo struct {
-	Account              string
-	User                 string
-	Host                 string
-	Role                 string
-	ConnectionID         uint64
-	LastInsertID         uint64
-	Database             string
-	Version              string
-	TimeZone             *time.Location
-	LockWaitTimeout      int64
-	StorageEngine        engine.Engine
-	QueryId              []string
-	ResultColTypes       []types.Type
-	SeqCurValues         map[uint64]string
-	SeqDeleteKeys        []uint64
-	SeqAddValues         map[uint64]string
-	SeqLastValue         []string
-	SqlHelper            sqlHelper
-	Buf                  *buffer.Buffer
-	SourceInMemScanBatch []*kafka.Message
-	LogLevel             zapcore.Level
-	SessionId            uuid.UUID
+	Account             string
+	User                string
+	Host                string
+	Role                string
+	ConnectionID        uint64
+	LastInsertID        uint64
+	Database            string
+	Version             string
+	TimeZone            *time.Location
+	LockWaitTimeout     int64
+	LockWaitTimeoutSet  bool // distinguishes an explicit zero from an unset value
+	MatrixOneNativeMode bool
+	// ExplicitZeroTemporalCastReturnsNull is resolved on the initiating CN and
+	// carried in the remote process snapshot because remote CNs have no session
+	// variable resolver.
+	ExplicitZeroTemporalCastReturnsNull bool
+	// SqlMode is captured on the initiating CN and used when a remote process has
+	// no session variable resolver.
+	SqlMode        string
+	StorageEngine  engine.Engine
+	QueryId        []string
+	ResultColTypes []types.Type
+	SeqCurValues   map[uint64]string
+	SeqDeleteKeys  []uint64
+	SeqAddValues   map[uint64]string
+	SeqLastValue   []string
+	SqlHelper      sqlHelper
+	Buf            *buffer.Buffer
+	LogLevel       zapcore.Level
+	SessionId      uuid.UUID
 }
 
 type Session interface {
@@ -161,10 +177,11 @@ type StmtProfile struct {
 	//sqlOfStmt is the text part of one statement in the sql
 	sqlOfStmt string
 
-	//for div by zero, avoid contaminating session main stmt profiles like PREPARE,EXECUTE
-	divByZeroStmtType  string
-	divByZeroQueryType string
-	divByZeroIgnore    bool //ignore for insert
+	// statement runtime metadata avoids contaminating the session's main
+	// statement profile when PREPARE / EXECUTE runs an inner INSERT / UPDATE.
+	statementRuntimeStmtType  string
+	statementRuntimeQueryType string
+	statementRuntimeIgnore    bool
 }
 
 func NewStmtProfile(txnId, stmtId uuid.UUID) *StmtProfile {
@@ -183,6 +200,7 @@ func (sp *StmtProfile) Clear() {
 	sp.stmtType = ""
 	sp.queryType = ""
 	sp.sqlOfStmt = ""
+	sp.clearStatementRuntimeProfileLocked()
 }
 
 func (sp *StmtProfile) SetSqlOfStmt(sot string) {
@@ -243,32 +261,48 @@ func (sp *StmtProfile) GetStmtType() string {
 	return sp.stmtType
 }
 
-func (sp *StmtProfile) GetDivByZeroIgnore() bool {
+func (sp *StmtProfile) GetStatementIgnore() bool {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	return sp.divByZeroIgnore
+	return sp.statementRuntimeIgnore
+}
+
+func (sp *StmtProfile) SetStatementRuntimeProfile(stmtType, queryType string, ignore bool) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.statementRuntimeStmtType = stmtType
+	sp.statementRuntimeQueryType = queryType
+	sp.statementRuntimeIgnore = ignore
+}
+
+func (sp *StmtProfile) GetStatementRuntimeProfile() (stmtType, queryType string, ignore bool) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.statementRuntimeStmtType, sp.statementRuntimeQueryType, sp.statementRuntimeIgnore
+}
+
+func (sp *StmtProfile) clearStatementRuntimeProfileLocked() {
+	sp.statementRuntimeStmtType = ""
+	sp.statementRuntimeQueryType = ""
+	sp.statementRuntimeIgnore = false
+}
+
+func (sp *StmtProfile) clearStatementRuntimeProfile() {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.clearStatementRuntimeProfileLocked()
+}
+
+func (sp *StmtProfile) GetDivByZeroIgnore() bool {
+	return sp.GetStatementIgnore()
 }
 
 func (sp *StmtProfile) SetDivByZeroRuntimeProfile(stmtType, queryType string, ignore bool) {
-	sp.mu.Lock()
-	defer sp.mu.Unlock()
-	sp.divByZeroStmtType = stmtType
-	sp.divByZeroQueryType = queryType
-	sp.divByZeroIgnore = ignore
+	sp.SetStatementRuntimeProfile(stmtType, queryType, ignore)
 }
 
 func (sp *StmtProfile) GetDivByZeroRuntimeProfile() (stmtType, queryType string, ignore bool) {
-	sp.mu.Lock()
-	defer sp.mu.Unlock()
-	return sp.divByZeroStmtType, sp.divByZeroQueryType, sp.divByZeroIgnore
-}
-
-func (sp *StmtProfile) clearDivByZeroRuntimeProfile() {
-	sp.mu.Lock()
-	defer sp.mu.Unlock()
-	sp.divByZeroStmtType = ""
-	sp.divByZeroQueryType = ""
-	sp.divByZeroIgnore = false
+	return sp.GetStatementRuntimeProfile()
 }
 
 func (sp *StmtProfile) SetTxnId(id []byte) {
@@ -323,19 +357,45 @@ type BaseProcess struct {
 	PartitionService partitionservice.PartitionService
 	IncrService      incrservice.AutoIncrementService
 
-	LastInsertID        *uint64
-	LoadLocalReader     *io.PipeReader
-	Aicm                *defines.AutoIncrCacheManager
-	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
-	prepareParams       *vector.Vector
-	QueryClient         qclient.QueryClient
-	Hakeeper            logservice.CNHAKeeperClient
-	UdfService          udf.Service
-	WaitPolicy          lock.WaitPolicy
-	messageBoard        *message.MessageBoard
-	logger              *log.MOLogger
-	TxnOperator         client.TxnOperator
-	CloneTxnOperator    client.TxnOperator
+	LastInsertID *uint64
+	// AffectedRows carries the number of rows affected by the previous
+	// statement in the same session, used by the ROW_COUNT() builtin.
+	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
+	// 0 after DDL, and the affected row count after DML.
+	AffectedRows             *int64
+	LoadLocalReader          *io.PipeReader
+	Aicm                     *defines.AutoIncrCacheManager
+	resolveVariableFunc      func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	resolveVariableIsBinFunc func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+	prepareParams            *vector.Vector
+	prepareParamsIsBin       []bool
+	prepareParamsOwned       bool
+	QueryClient              qclient.QueryClient
+	Hakeeper                 logservice.CNHAKeeperClient
+	UdfService               udf.Service
+	WaitPolicy               lock.WaitPolicy
+	messageBoard             *message.MessageBoard
+	hashBuildBudgetMu        sync.Mutex
+	hashBuildBudget          *HashBuildBudgetGeneration
+	cteMemoryBudgetMu        sync.Mutex
+	cteMemoryBudget          *CTEMemoryBudget
+	logger                   *log.MOLogger
+	TxnOperator              client.TxnOperator
+	CloneTxnOperator         client.TxnOperator
+	// userLevelLockIdentity is session-scoped rather than statement-scoped.
+	// SessionInfo is rebuilt before every statement, so keeping this identity
+	// there would lose the synthetic transaction owner while locks are held.
+	userLevelLockIdentityMu sync.Mutex
+	userLevelLockOwner      string
+	userLevelLockConnID     uint64
+	userLevelLockGeneration string
+	// incrStatementDisabled marks a process that executes internal SQL on a
+	// caller-owned transaction without opening a statement of its own
+	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
+	// must not advance the workspace snapshot write offset: that is a
+	// statement-boundary action, and moving the boundary mid-statement breaks
+	// the positional visibility of the caller's workspace entries.
+	incrStatementDisabled bool
 
 	// post dml sqls run right after all pipelines finished.
 	PostDmlSqlList *threadsafe.Slice[string]
@@ -413,11 +473,25 @@ func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
 }
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
+	proc.Base.hashBuildBudgetMu.Lock()
+	if proc.Base.hashBuildBudget != nil {
+		proc.Base.hashBuildBudget.Close()
+		proc.Base.hashBuildBudget = nil
+	}
+	proc.Base.hashBuildBudgetMu.Unlock()
+	proc.Base.cteMemoryBudgetMu.Lock()
+	if proc.Base.cteMemoryBudget != nil {
+		proc.Base.cteMemoryBudget.Close()
+		proc.Base.cteMemoryBudget = nil
+	}
+	proc.Base.cteMemoryBudgetMu.Unlock()
 	proc.Base.StmtProfile = sp
 	// Reset division by zero cache for new statement
 	// Each statement must recompute based on its own type and sql_mode
 	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, -1)
-	sp.clearDivByZeroRuntimeProfile()
+	if sp != nil {
+		sp.clearStatementRuntimeProfile()
+	}
 }
 
 func (proc *Process) GetStmtProfile() *StmtProfile {
@@ -455,12 +529,37 @@ func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
 	}
 }
 
+func (proc *Process) GetPrepareParamIsBin(i int) bool {
+	return i >= 0 && i < len(proc.Base.prepareParamsIsBin) && proc.Base.prepareParamsIsBin[i]
+}
+
+// SetIncrStatementDisabled marks this process (and every child process
+// sharing its BaseProcess) as running internal SQL that must not advance the
+// workspace snapshot write offset. See BaseProcess.incrStatementDisabled.
+func (proc *Process) SetIncrStatementDisabled(disabled bool) {
+	proc.Base.incrStatementDisabled = disabled
+}
+
+// IncrStatementDisabled reports whether compiles on this process must skip
+// advancing the workspace snapshot write offset.
+func (proc *Process) IncrStatementDisabled() bool {
+	return proc.Base.incrStatementDisabled
+}
+
 func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)) {
 	proc.Base.resolveVariableFunc = f
 }
 
 func (proc *Process) GetResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 	return proc.Base.resolveVariableFunc
+}
+
+func (proc *Process) SetResolveVariableIsBinFunc(f func(varName string, isSystemVar, isGlobalVar bool) (bool, error)) {
+	proc.Base.resolveVariableIsBinFunc = f
+}
+
+func (proc *Process) GetResolveVariableIsBinFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
+	return proc.Base.resolveVariableIsBinFunc
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {
@@ -477,6 +576,19 @@ func (proc *Process) GetLastInsertID() uint64 {
 	if proc.Base.LastInsertID != nil {
 		num := atomic.LoadUint64(proc.Base.LastInsertID)
 		return num
+	}
+	return 0
+}
+
+func (proc *Process) SetAffectedRows(num int64) {
+	if proc.Base.AffectedRows != nil {
+		atomic.StoreInt64(proc.Base.AffectedRows, num)
+	}
+}
+
+func (proc *Process) GetAffectedRows() int64 {
+	if proc.Base.AffectedRows != nil {
+		return atomic.LoadInt64(proc.Base.AffectedRows)
 	}
 	return 0
 }
@@ -543,6 +655,41 @@ func (si *SessionInfo) GetCollation() string {
 
 func (si *SessionInfo) GetConnectionID() uint64 {
 	return si.ConnectionID
+}
+
+// GetUserLevelLockIdentity returns the immutable user-level lock identity
+// pinned to this top process. Child processes share BaseProcess and therefore
+// observe the same session identity.
+func (proc *Process) GetUserLevelLockIdentity() (string, uint64) {
+	if proc == nil || proc.Base == nil {
+		return "", 0
+	}
+	proc.Base.userLevelLockIdentityMu.Lock()
+	defer proc.Base.userLevelLockIdentityMu.Unlock()
+	return proc.Base.userLevelLockOwner, proc.Base.userLevelLockConnID
+}
+
+// PinUserLevelLockIdentity installs the user-level lock identity once for the
+// lifetime of this top process. It is intentionally not reset after the last
+// lock is released: a concurrent acquisition must not be assigned a different
+// synthetic transaction owner, and SET CONNECTION ID must not mutate it.
+func (proc *Process) PinUserLevelLockIdentity(owner string, connID uint64) (string, uint64) {
+	if proc == nil || proc.Base == nil {
+		return "", 0
+	}
+	proc.Base.userLevelLockIdentityMu.Lock()
+	defer proc.Base.userLevelLockIdentityMu.Unlock()
+	if proc.Base.userLevelLockOwner == "" {
+		if proc.Base.userLevelLockGeneration == "" {
+			proc.Base.userLevelLockGeneration = uuid.New().String()
+		}
+		if proc.Base.userLevelLockGeneration != "" && strings.Count(owner, ":") < 2 {
+			owner = owner + ":" + proc.Base.userLevelLockGeneration
+		}
+		proc.Base.userLevelLockOwner = owner
+		proc.Base.userLevelLockConnID = connID
+	}
+	return proc.Base.userLevelLockOwner, proc.Base.userLevelLockConnID
 }
 
 func (si *SessionInfo) GetDatabase() string {

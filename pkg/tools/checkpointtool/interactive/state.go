@@ -15,6 +15,8 @@
 package interactive
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/tools/checkpointtool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 )
@@ -42,11 +44,13 @@ type State struct {
 	filterAccountID int64 // -1 means no filter
 
 	// Cached data
-	entries     []*checkpoint.CheckpointEntry
-	tables      []*checkpointtool.TableInfo
-	info        *checkpointtool.CheckpointInfo
-	dataEntries []*checkpointtool.ObjectEntryInfo
-	tombEntries []*checkpointtool.ObjectEntryInfo
+	entries                 []*checkpoint.CheckpointEntry
+	tables                  []*checkpointtool.TableInfo
+	info                    *checkpointtool.CheckpointInfo
+	dataEntries             []*checkpointtool.ObjectEntryInfo
+	tombEntries             []*checkpointtool.ObjectEntryInfo
+	logicalView             *checkpointtool.LogicalTableView
+	buildLogicalViewForTest func(context.Context, int, uint64) (*checkpointtool.LogicalTableView, error)
 }
 
 // NewState creates a new state
@@ -66,6 +70,7 @@ func (s *State) Mode() ViewMode                                 { return s.mode 
 func (s *State) Entries() []*checkpoint.CheckpointEntry         { return s.entries }
 func (s *State) DataEntries() []*checkpointtool.ObjectEntryInfo { return s.dataEntries }
 func (s *State) TombEntries() []*checkpointtool.ObjectEntryInfo { return s.tombEntries }
+func (s *State) LogicalView() *checkpointtool.LogicalTableView  { return s.logicalView }
 func (s *State) HasAccountFilter() bool                         { return s.filterAccountID >= 0 }
 func (s *State) GetAccountFilter() int64                        { return s.filterAccountID }
 
@@ -129,6 +134,7 @@ func (s *State) SwitchToTables() error {
 		return err
 	}
 	s.tables = tables
+	s.logicalView = nil
 	s.mode = ViewModeTable
 	return nil
 }
@@ -140,9 +146,56 @@ func (s *State) SelectTable(tableID uint64) error {
 	if err != nil {
 		return err
 	}
+	for _, table := range s.tables {
+		if table.TableID != tableID {
+			continue
+		}
+		for i := range dataEntries {
+			if i < len(table.DataRanges) {
+				dataEntries[i].Range = table.DataRanges[i]
+			}
+		}
+		for i := range tombEntries {
+			if i < len(table.TombRanges) {
+				tombEntries[i].Range = table.TombRanges[i]
+			}
+		}
+		break
+	}
 	s.dataEntries = dataEntries
 	s.tombEntries = tombEntries
+	s.logicalView = nil
 	return nil
+}
+
+// LoadLogicalView materializes the tombstone-applied logical rows for the selected table.
+func (s *State) LoadLogicalView(ctx context.Context) error {
+	if s.logicalView != nil {
+		return nil
+	}
+	view, err := s.BuildLogicalView(ctx, s.selectedEntry, s.selectedTable)
+	if err != nil {
+		return err
+	}
+	s.logicalView = view
+	return nil
+}
+
+func (s *State) BuildLogicalView(ctx context.Context, entryIndex int, tableID uint64) (*checkpointtool.LogicalTableView, error) {
+	if s.buildLogicalViewForTest != nil {
+		return s.buildLogicalViewForTest(ctx, entryIndex, tableID)
+	}
+	if entryIndex < 0 || entryIndex >= len(s.entries) {
+		return nil, nil
+	}
+	snapshotTS := s.entries[entryIndex].GetEnd()
+	return s.reader.BuildLogicalTableViewComposedLimited(
+		ctx,
+		tableID,
+		snapshotTS,
+		checkpointtool.DefaultInteractiveLogicalViewMaxRows,
+		checkpointtool.DefaultInteractiveLogicalViewMaxBytes,
+	)
 }
 
 // SetAccountFilter sets account filter

@@ -17,13 +17,13 @@ package function
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -59,7 +59,7 @@ func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWr
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
+		if null1 || null2 || v1 == types.ZeroDate || v2 == types.ZeroDate {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -81,7 +81,7 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 		// Validate scale range [0, 6] for TIMESTAMP
 		if scale < 0 || scale > 6 {
-			return moerr.NewErrTooBigPrecision(proc.Ctx, scale, "now", 6)
+			return moerr.NewErrTooBigPrecision(proc.Ctx, int64(scale), "now", 6)
 		}
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
@@ -104,7 +104,7 @@ func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
 		// Validate scale range [0, 6] for TIMESTAMP
 		if scale < 0 || scale > 6 {
-			return moerr.NewErrTooBigPrecision(proc.Ctx, scale, "sysdate", 6)
+			return moerr.NewErrTooBigPrecision(proc.Ctx, int64(scale), "sysdate", 6)
 		}
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
@@ -157,16 +157,9 @@ func builtInCurrentTime(ivecs []*vector.Vector, result vector.FunctionResultWrap
 func builtInUtcTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Time](result)
 
-	// Get scale from optional parameter (default 0 for TIME type)
-	scale := int32(0)
-	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
-		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
-		// Clamp scale to valid range [0, 6]
-		if scale < 0 {
-			scale = 0
-		} else if scale > 6 {
-			scale = 6
-		}
+	scale, err := utcFunctionScale(ivecs, proc, "utc_time")
+	if err != nil {
+		return err
 	}
 	rs.TempSetType(types.New(types.T_time, 0, scale))
 
@@ -184,6 +177,87 @@ func builtInUtcTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	}
 
 	return nil
+}
+
+func utcFunctionScale(ivecs []*vector.Vector, proc *process.Process, name string) (int32, error) {
+	if len(ivecs) == 0 {
+		return 0, nil
+	}
+	if len(ivecs) != 1 || ivecs[0] == nil || ivecs[0].IsConstNull() || ivecs[0].Length() == 0 {
+		return 0, moerr.NewInvalidArg(proc.Ctx, name, "fractional seconds precision must be a constant integer between 0 and 6")
+	}
+
+	scale := vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0]
+	if scale < 0 {
+		return 0, moerr.NewInvalidArg(proc.Ctx, name, fmt.Sprintf("negative precision %d specified", scale))
+	}
+	if scale > 6 {
+		return 0, moerr.NewErrTooBigPrecision(proc.Ctx, scale, name, 6)
+	}
+	if !ivecs[0].IsConst() {
+		return 0, moerr.NewInvalidArg(proc.Ctx, name, "fractional seconds precision must be a constant integer between 0 and 6")
+	}
+	return int32(scale), nil
+}
+
+// parseLeadingInteger extracts and parses the longest leading integer prefix
+// from s. Leading whitespace must already be stripped by the caller.
+// Returns (0, false) when s has no leading digits, matching MySQL's
+// CHAR('abc') → 0x00 behavior.
+func parseLeadingInteger(s string) (int64, bool) {
+	if len(s) == 0 {
+		return 0, false
+	}
+	start := 0
+	// optional sign
+	if s[0] == '+' || s[0] == '-' {
+		start = 1
+	}
+	// scan digits
+	end := start
+	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+		end++
+	}
+	if end == start {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(s[:end], 10, 64)
+	if err != nil {
+		// overflow → clamp and let the caller's mod-256 wrap handle it
+		if s[0] == '-' {
+			return -1 << 63, true
+		}
+		return 1<<63 - 1, true
+	}
+	return v, true
+}
+
+// encodeCharBytes converts an int64 argument for MySQL CHAR() into big-endian
+// bytes. MySQL treats CHAR(N) values as unsigned 32-bit integers and expands
+// values > 255 into multiple big-endian bytes:
+//
+//	CHAR(256)   → 0x0100       (two bytes)
+//	CHAR(65536) → 0x010000     (three bytes)
+//	CHAR(-1)    → 0xFFFFFFFF   (four bytes, via two's complement uint32)
+//
+// See MySQL docs: https://dev.mysql.com/doc/refman/8.4/en/string-functions.html#function_char
+func encodeCharBytes(v int64) []byte {
+	uv := uint32(v)
+	if uv == 0 {
+		return []byte{0}
+	}
+	// Encode as big-endian 32-bit, then strip leading zero bytes.
+	var buf [4]byte
+	buf[0] = byte(uv >> 24)
+	buf[1] = byte(uv >> 16)
+	buf[2] = byte(uv >> 8)
+	buf[3] = byte(uv)
+
+	start := 0
+	for start < 3 && buf[start] == 0 {
+		start++
+	}
+	return buf[start:]
 }
 
 const (
@@ -326,6 +400,10 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			}
 			if strings.EqualFold(def.OriginString, "null") || len(def.OriginString) == 0 {
 				return nil, nil
+			}
+			trimmed := strings.TrimSpace(def.OriginString)
+			if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
+				return functionUtil.QuickStrToBytes(trimmed), nil
 			}
 
 			fStr := formatStr(def.OriginString)
@@ -522,8 +600,12 @@ func builtInInternalCharLength(parameters []*vector.Vector, result vector.Functi
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
 		if !null {
-			typ := types.Type{}
-			if err := types.Decode(v, &typ); err != nil {
+			var typ types.Type
+			// Call the concrete Unmarshal method rather than types.Decode:
+			// types.Decode takes an encoding.BinaryUnmarshaler interface, and the
+			// &typ interface conversion forces typ to escape to the heap on every
+			// row. The direct method call keeps typ on the stack.
+			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
 			if typ.Oid.IsMySQLString() {
@@ -546,8 +628,12 @@ func builtInInternalCharSize(parameters []*vector.Vector, result vector.Function
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
 		if !null {
-			typ := types.Type{}
-			if err := types.Decode(v, &typ); err != nil {
+			var typ types.Type
+			// Call the concrete Unmarshal method rather than types.Decode:
+			// types.Decode takes an encoding.BinaryUnmarshaler interface, and the
+			// &typ interface conversion forces typ to escape to the heap on every
+			// row. The direct method call keeps typ on the stack.
+			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
 			if typ.Oid.IsMySQLString() {
@@ -570,8 +656,12 @@ func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
 		if !null {
-			typ := types.Type{}
-			if err := types.Decode(v, &typ); err != nil {
+			var typ types.Type
+			// Call the concrete Unmarshal method rather than types.Decode:
+			// types.Decode takes an encoding.BinaryUnmarshaler interface, and the
+			// &typ interface conversion forces typ to escape to the heap on every
+			// row. The direct method call keeps typ on the stack.
+			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
 			if typ.Oid.IsDecimal() {
@@ -594,8 +684,12 @@ func builtInInternalNumericScale(parameters []*vector.Vector, result vector.Func
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
 		if !null {
-			typ := types.Type{}
-			if err := types.Decode(v, &typ); err != nil {
+			var typ types.Type
+			// Call the concrete Unmarshal method rather than types.Decode:
+			// types.Decode takes an encoding.BinaryUnmarshaler interface, and the
+			// &typ interface conversion forces typ to escape to the heap on every
+			// row. The direct method call keeps typ on the stack.
+			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
 			if typ.Oid.IsDecimal() {
@@ -618,8 +712,12 @@ func builtInInternalDatetimeScale(parameters []*vector.Vector, result vector.Fun
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
 		if !null {
-			typ := types.Type{}
-			if err := types.Decode(v, &typ); err != nil {
+			var typ types.Type
+			// Call the concrete Unmarshal method rather than types.Decode:
+			// types.Decode takes an encoding.BinaryUnmarshaler interface, and the
+			// &typ interface conversion forces typ to escape to the heap on every
+			// row. The direct method call keeps typ on the stack.
+			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
 			if typ.Oid == types.T_datetime {
@@ -642,8 +740,12 @@ func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.Func
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
 		if !null {
-			typ := types.Type{}
-			if err := types.Decode(v, &typ); err != nil {
+			var typ types.Type
+			// Call the concrete Unmarshal method rather than types.Decode:
+			// types.Decode takes an encoding.BinaryUnmarshaler interface, and the
+			// &typ interface conversion forces typ to escape to the heap on every
+			// row. The direct method call keeps typ on the stack.
+			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
 			if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
@@ -991,7 +1093,15 @@ func (p intervalParam) decimalScale() int32 {
 }
 
 func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
-	// CHAR accepts one or more integer arguments
+	// CHAR accepts one or more arguments, which MySQL interprets as integers.
+	// MySQL coerces arguments differently depending on their type:
+	//   - integer types  : used as-is
+	//   - numeric types (float/decimal/bool/bit/...) : rounded to nearest integer
+	//   - string types   : the leading numeric prefix is truncated to an integer
+	//     (e.g. '65.9' -> 65, not 66)
+	// To preserve this distinction we keep integers, cast string types to varchar
+	// (parsed & truncated in builtInChar), and cast every other numeric type to
+	// int64 (the numeric->int64 cast rounds, matching MySQL).
 	if len(inputs) < 1 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
@@ -999,19 +1109,23 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 	shouldCast := false
 	ret := make([]types.Type, len(inputs))
 	for i, source := range inputs {
-		// Check if it's an integer type
-		if !source.Oid.IsInteger() {
-			// Try to cast to int64
+		switch {
+		case source.Oid.IsInteger():
+			ret[i] = source
+		case source.Oid == types.T_varchar:
+			ret[i] = source
+		case source.Oid.IsMySQLString():
+			// char/text/blob/binary/varbinary -> varchar (truncated in builtInChar)
+			shouldCast = true
+			ret[i] = types.T_varchar.ToType()
+		default:
+			// float/decimal/bool/bit/... -> int64 (rounded by the cast, like MySQL)
 			c, _ := tryToMatch([]types.Type{source}, []types.T{types.T_int64})
 			if c == matchFailed {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
-			if c == matchByCast {
-				shouldCast = true
-				ret[i] = types.T_int64.ToType()
-			}
-		} else {
-			ret[i] = source
+			shouldCast = true
+			ret[i] = types.T_int64.ToType()
 		}
 	}
 	if shouldCast {
@@ -1023,8 +1137,11 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	// Create getter functions for each parameter that handle different integer types
-	getters := make([]func(uint64) (int64, bool), len(parameters))
+	// After builtInCharCheck, parameters are either integer types or varchar.
+	// (numeric types were cast to int64, string types to varchar).
+	// Each getter returns an int64 value and a null flag.
+	type intGetter func(uint64) (int64, bool)
+	getters := make([]intGetter, len(parameters))
 	for i, param := range parameters {
 		paramType := param.GetType().Oid
 		switch paramType {
@@ -1077,11 +1194,39 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				return int64(val), null
 			}
 		default:
-			// For non-integer types, try to cast to int64
-			p := vector.GenerateFunctionFixedTypeParameter[int64](param)
+			// varchar: parse the leading numeric prefix as an integer.
+			// MySQL parses the longest leading integer prefix
+			// (e.g. CHAR('65xyz') → 0x41, CHAR('77.3') → 77).
+			// Direct integer parsing avoids float64 precision loss
+			// for large values (e.g. '9007199254740993').
+			sp := vector.GenerateFunctionStrParameter(param)
+			isBin := param.GetIsBin()
 			getters[i] = func(idx uint64) (int64, bool) {
-				val, null := p.GetValue(idx)
-				return val, null
+				v, null := sp.GetStrValue(idx)
+				if null {
+					return 0, true
+				}
+				if isBin {
+					// hex/bit literals (e.g. 0x41, b'01000001') arrive as raw
+					// bytes with IsBin set; interpret them as a big-endian
+					// integer, mirroring the varchar->int64 cast path
+					// (strToSigned) that CHAR used before.
+					if len(v) > 8 {
+						// MySQL: truncated incorrect BINARY value -> 0
+						return 0, false
+					}
+					var num uint64
+					for _, b := range v {
+						num = num<<8 | uint64(b)
+					}
+					return int64(num), false
+				}
+				s := strings.TrimSpace(string(v))
+				if len(s) == 0 {
+					return 0, false
+				}
+				val, _ := parseLeadingInteger(s)
+				return val, false
 			}
 		}
 	}
@@ -1095,38 +1240,25 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}
 
 		var resultBytes []byte
-		hasNull := false
 
-		// Process all integer arguments
+		// Process all arguments
 		for _, getter := range getters {
 			v, null := getter(i)
 			if null {
-				hasNull = true
-				break
+				// MySQL skips NULL arguments instead of returning NULL
+				continue
 			}
-			// Convert integer to byte value (0-255)
-			// MySQL CHAR function interprets integers as byte values in UTF-8 encoding
-			// For example: CHAR(228, 184, 173) returns "中" (the UTF-8 bytes for U+4E2D)
-			if v < 0 {
-				// Negative values are treated as 0
-				resultBytes = append(resultBytes, 0)
-			} else if v > 255 {
-				// Values > 255 are treated modulo 256
-				resultBytes = append(resultBytes, byte(v&0xFF))
-			} else {
-				resultBytes = append(resultBytes, byte(v))
-			}
+			// Convert argument to big-endian multi-byte sequence.
+			// MySQL treats CHAR(N) as unsigned 32-bit ints and expands
+			// values > 255 into multiple big-endian bytes (CHAR(256) → 0x0100).
+			// Negative values use two's complement uint32 (CHAR(-1) → 0xFFFFFFFF).
+			resultBytes = append(resultBytes, encodeCharBytes(v)...)
 		}
 
-		if hasNull {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		} else {
-			// Convert byte slice to string (UTF-8 decoding happens automatically)
-			if err := rs.AppendBytes(resultBytes, false); err != nil {
-				return err
-			}
+		// resultBytes is empty only when every argument was NULL. MySQL returns
+		// an empty (non-NULL) string in that case, e.g. CHAR(NULL, NULL) -> ''.
+		if err := rs.AppendBytes(resultBytes, false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -1838,7 +1970,7 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		val := v1.Unix()
-		if val < 0 || null1 {
+		if v1 == types.ZeroTimestamp || val < 0 || null1 {
 			// XXX v1 < 0 need to raise error here.
 			if err := rs.Append(0, true); err != nil {
 				return err
@@ -1855,7 +1987,7 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 func mustTimestamp(loc *time.Location, s string) types.Timestamp {
 	ts, err := types.ParseTimestamp(loc, s, 6)
 	if err != nil {
-		ts = 0
+		ts = types.ZeroTimestamp
 	}
 	return ts
 }
@@ -1871,8 +2003,9 @@ func builtInUnixTimestampVarcharToInt64(parameters []*vector.Vector, result vect
 				return err
 			}
 		} else {
-			val := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1)).Unix()
-			if val < 0 {
+			timestamp := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
+			val := timestamp.Unix()
+			if timestamp == types.ZeroTimestamp || val < 0 {
 				if err := rs.Append(0, true); err != nil {
 					return err
 				}
@@ -1900,7 +2033,14 @@ func builtInUnixTimestampVarcharToFloat64(parameters []*vector.Vector, result ve
 			}
 		} else {
 			val := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
-			if err := rs.Append(val.UnixToFloat(), false); err != nil {
+			unix := val.UnixToFloat()
+			if val == types.ZeroTimestamp || unix < 0 {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := rs.Append(unix, false); err != nil {
 				return err
 			}
 		}
@@ -1920,7 +2060,14 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 				return err
 			}
 		} else {
-			val, err := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1)).UnixToDecimal128()
+			timestamp := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
+			if timestamp == types.ZeroTimestamp {
+				if err := rs.Append(d, true); err != nil {
+					return err
+				}
+				continue
+			}
+			val, err := timestamp.UnixToDecimal128()
 			if err != nil {
 				return err
 			}
@@ -1928,6 +2075,7 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 				if err := rs.Append(d, true); err != nil {
 					return err
 				}
+				continue
 			}
 			if err = rs.Append(val, false); err != nil {
 				return err
@@ -2363,7 +2511,9 @@ func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Pac
 		}, nil
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
 		types.T_geometry,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_datalink:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
 			val := v.GetBytesAt(idx)
 			ps.EncodeStringType(val)
@@ -2779,7 +2929,9 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 		}
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
 		types.T_geometry,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_datalink:
 		if hasNull {
 			fv := vector.GenerateFunctionStrParameter(v)
 			for i, j := uint64(0), uint64(v.Length()); i < j; i++ {
@@ -2868,9 +3020,15 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_uuid:
+		rs := vector.MustFunctionResult[types.Uuid](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 
 	case types.T_json, types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_geometry, types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_geometry,
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return serialExtractForString(p1, p2, rs, proc, length, selectList)
 	}
@@ -2888,7 +3046,7 @@ func getConstInt64(p vector.FunctionParameterWrapper[int64]) (int64, bool) {
 	return 0, false
 }
 
-func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datetime | types.Time | types.Timestamp](
+func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid](
 	p1 vector.FunctionParameterWrapper[types.Varlena],
 	p2 vector.FunctionParameterWrapper[int64],
 	result *vector.FunctionResult[T], proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -3081,7 +3239,13 @@ func builtInToDays(parameters []*vector.Vector, result vector.FunctionResultWrap
 			}
 			continue
 		}
-		rs.Append(DateTimeDiff(intervalUnitDAY, types.ZeroDatetime, datetimeValue)+ADZeroDays, false)
+		if datetimeValue == types.ZeroDatetime {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		rs.Append(DateTimeDiff(intervalUnitDAY, types.DatetimeEpoch, datetimeValue)+ADZeroDays, false)
 	}
 	return nil
 }
@@ -3100,12 +3264,12 @@ func builtInFromDays(parameters []*vector.Vector, result vector.FunctionResultWr
 			}
 			continue
 		}
-		// TO_DAYS(date) = DateTimeDiff(intervalUnitDAY, ZeroDatetime, date) + ADZeroDays
+		// TO_DAYS(date) = DateTimeDiff(intervalUnitDAY, DatetimeEpoch, date) + ADZeroDays
 		// So FROM_DAYS(N) should reverse this:
-		// DateTimeDiff(intervalUnitDAY, ZeroDatetime, date) = N - ADZeroDays
-		// date = ZeroDatetime + (N - ADZeroDays) days
+		// DateTimeDiff(intervalUnitDAY, DatetimeEpoch, date) = N - ADZeroDays
+		// date = DatetimeEpoch + (N - ADZeroDays) days
 		daysToAdd := dayNumber - ADZeroDays
-		dt, success := types.ZeroDatetime.AddInterval(daysToAdd, types.Day, types.DateTimeType)
+		dt, success := types.DatetimeEpoch.AddInterval(daysToAdd, types.Day, types.DateTimeType)
 		if !success {
 			if err := rs.Append(types.Date(0), true); err != nil {
 				return err
@@ -3275,7 +3439,13 @@ func builtInToSeconds(parameters []*vector.Vector, result vector.FunctionResultW
 			}
 			continue
 		}
-		rs.Append(DateTimeDiff(intervalUnitSECOND, types.ZeroDatetime, datetimeValue)+ADZeroSeconds, false)
+		if datetimeValue == types.ZeroDatetime {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		rs.Append(DateTimeDiff(intervalUnitSECOND, types.DatetimeEpoch, datetimeValue)+ADZeroSeconds, false)
 	}
 	return nil
 }
@@ -3287,7 +3457,7 @@ func CalcToSeconds(ctx context.Context, datetimes []types.Datetime, ns *nulls.Nu
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
 		}
-		res[idx] = DateTimeDiff(intervalUnitSECOND, types.ZeroDatetime, datetime) + ADZeroSeconds
+		res[idx] = DateTimeDiff(intervalUnitSECOND, types.DatetimeEpoch, datetime) + ADZeroSeconds
 	}
 	return res, nil
 }
@@ -3359,7 +3529,10 @@ func builtInCos(parameters []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func builtInCot(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+	return opUnaryFixedToFixedWithErrorCheck[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+		if v == 0 {
+			return 0, moerr.NewOutOfRangeNoCtxf("float64", "DOUBLE value is out of range in 'cot(0)'")
+		}
 		return momath.Cot(v)
 	}, selectList)
 }
@@ -3577,11 +3750,59 @@ func (op *opBuiltInRand) builtInRand(parameters []*vector.Vector, result vector.
 	return nil
 }
 
-func builtInConvertFake(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	// ignore the second parameter and just set result the same to the first parameter.
-	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
-		return v
-	}, selectList)
+func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
+	p2 := vector.OptGetBytesParamFromWrapper(rs, 1, parameters[1])
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		valueRow := i
+		if parameters[0].IsConst() {
+			valueRow = 0
+		}
+		charsetRow := i
+		if parameters[1].IsConst() {
+			charsetRow = 0
+		}
+
+		value, valueNull := p1.GetStrValue(valueRow)
+		charset, charsetNull := p2.GetStrValue(charsetRow)
+		if valueNull || charsetNull {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if isUTF8Charset(charset) && !utf8.Valid(value) {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.AppendMustBytesValue(value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isUTF8Charset(charset []byte) bool {
+	return strings.EqualFold(string(charset), "utf8") || strings.EqualFold(string(charset), "utf8mb4")
 }
 
 func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -3598,13 +3819,13 @@ func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWra
 
 // buildInMOCU extract cu or calculate cu from parameters
 // example:
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123)
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'total')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'cpu')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'mem')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'ioin')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'ioout')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'network')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123)
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'total')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'cpu')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'mem')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'ioin')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'ioout')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'network')
 func buildInMOCU(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return buildInMOCUWithCfg(parameters, result, proc, length, nil)
 }
@@ -3650,12 +3871,26 @@ func buildInMOCUWithCfg(parameters []*vector.Vector, result vector.FunctionResul
 			continue
 		}
 
-		if err := json.Unmarshal(statsJsonArrayStr, &stats); err != nil {
+		decoded, err := statistic.DecodeStatsArray(statsJsonArrayStr)
+		if err != nil {
 			rs.Append(float64(0), true)
-			//return moerr.NewInternalError(proc.Ctx, "failed to parse json arr: %v", err)
+			continue
+		}
+		stats = decoded
+
+		targetName := util.UnsafeBytesToString(target)
+		if stats.GetVersion() >= statistic.StatsArrayVersion6 {
+			if stats.IsAggregated() && (targetName != "total" || cfg != nil) {
+				rs.Append(float64(0), true)
+				continue
+			}
+			if targetName == "total" && cfg == nil {
+				rs.Append(stats.GetCU(), false)
+				continue
+			}
 		}
 
-		switch util.UnsafeBytesToString(target) {
+		switch targetName {
 		case "cpu":
 			cu = motrace.CalculateCUCpu(int64(stats.GetTimeConsumed()), cfg)
 		case "mem":

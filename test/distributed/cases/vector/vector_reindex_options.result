@@ -19,6 +19,12 @@ alter table ivf_t alter reindex idx ivfflat ef_construction=200;
 not supported: ALTER REINDEX option "ef_construction" on a ivfflat index
 alter table ivf_t alter reindex idx ivfflat graph_degree=64;
 not supported: ALTER REINDEX option "graph_degree" on a ivfflat index
+alter table ivf_t alter reindex idx ivfflat quantization 'Float16';
+show create table ivf_t;
+Table    Create Table
+ivf_t    CREATE TABLE `ivf_t` (\n  `a` int NOT NULL,\n  `b` vecf32(4) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx` USING ivfflat (`b`) lists = 4  op_type 'vector_l2_ops'  quantization 'float16'  kmeans_train_percent = 80  kmeans_max_iteration = 50 \n)
+alter table ivf_t alter reindex idx ivfflat quantization 'garbage';
+not supported: ivfflat quantization "garbage" (supported: float32, float16, bf16, int8, uint8)
 create table hnsw_t(a bigint primary key, b vecf32(4));
 insert into hnsw_t values(1,"[1,2,3,4]"),(2,"[5,6,7,8]"),(3,"[9,10,11,12]"),(4,"[2,1,4,3]");
 create index hidx using hnsw on hnsw_t(b) op_type "vector_l2_ops" m=48 ef_construction=64 ef_search=64;

@@ -401,29 +401,12 @@ func TestDbTableInfo_OnlyDiffinTblId(t *testing.T) {
 }
 
 func TestJsonDecode(t *testing.T) {
-	// TODO
-	//type args struct {
-	//	jbytes string
-	//	value  any
-	//}
-	//tests := []struct {
-	//	name      string
-	//	args      args
-	//	wantValue any
-	//	wantErr   assert.ErrorAssertionFunc
-	//}{
-	//	{
-	//		args:      args{jbytes: "7b2261223a317d"},
-	//		wantValue: map[string]int{"a": 1},
-	//		wantErr:   assert.NoError,
-	//	},
-	//}
-	//for _, tt := range tests {
-	//	t.Run(tt.name, func(t *testing.T) {
-	//		tt.wantErr(t, JsonDecode(tt.args.jbytes, tt.args.value), fmt.Sprintf("JsonDecode(%v, %v)", tt.args.jbytes, tt.args.value))
-	//		assert.Equal(t, tt.wantValue, tt.args.value)
-	//	})
-	//}
+	var got map[string]int
+	assert.NoError(t, JsonDecode("7b2261223a317d", &got))
+	assert.Equal(t, map[string]int{"a": 1}, got)
+
+	assert.Error(t, JsonDecode("not-hex", &got))
+	assert.Error(t, JsonDecode("7b", &got))
 }
 
 func TestJsonEncode(t *testing.T) {

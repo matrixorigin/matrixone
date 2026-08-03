@@ -122,6 +122,18 @@ func Compare(a, b []byte, t types.T, scale1, scale2 int32) int {
 		return compareArrayFromBytes[float32](a, b)
 	case types.T_array_float64:
 		return compareArrayFromBytes[float64](a, b)
+	// Narrow vector element types. compareArrayFromBytes is constrained to
+	// RealNumbers, so these use the shared element-generic comparator. Without
+	// them a bf16/f16/int8/uint8 vector reaching this switch hits the panic
+	// below, where the same value as vecf32 merely compares.
+	case types.T_array_bf16:
+		return types.CompareArrayElementFromBytes[types.BF16](a, b, false)
+	case types.T_array_float16:
+		return types.CompareArrayElementFromBytes[types.Float16](a, b, false)
+	case types.T_array_int8:
+		return types.CompareArrayElementFromBytes[int8](a, b, false)
+	case types.T_array_uint8:
+		return types.CompareArrayElementFromBytes[uint8](a, b, false)
 	case types.T_any:
 		return 0
 	default:
@@ -195,6 +207,15 @@ func CompareGeneric(a, b any, t types.T) int {
 		return compareArrayFromBytes[float32](a.([]byte), b.([]byte))
 	case types.T_array_float64:
 		return compareArrayFromBytes[float64](a.([]byte), b.([]byte))
+	// Narrow vector element types — see the note in Compare above.
+	case types.T_array_bf16:
+		return types.CompareArrayElementFromBytes[types.BF16](a.([]byte), b.([]byte), false)
+	case types.T_array_float16:
+		return types.CompareArrayElementFromBytes[types.Float16](a.([]byte), b.([]byte), false)
+	case types.T_array_int8:
+		return types.CompareArrayElementFromBytes[int8](a.([]byte), b.([]byte), false)
+	case types.T_array_uint8:
+		return types.CompareArrayElementFromBytes[uint8](a.([]byte), b.([]byte), false)
 	case types.T_any:
 		return 0
 	default:

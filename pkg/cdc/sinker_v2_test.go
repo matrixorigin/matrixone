@@ -303,6 +303,29 @@ func TestMysqlSinker2_CommandProcessing(t *testing.T) {
 
 		sinker.ClearError()
 	})
+
+	t.Run("InvalidBatchCommand_CleansUp", func(t *testing.T) {
+		mp, err := mpool.NewMPool("invalid-command-cleanup", 0, mpool.NoFixed)
+		require.NoError(t, err)
+		defer mpool.DeleteMPool(mp)
+
+		cmd := NewInsertBatchCommand(
+			&batch.Batch{Vecs: []*vector.Vector{vector.NewVec(types.T_int32.ToType())}},
+			mp,
+			types.BuildTS(100, 0),
+			types.BuildTS(200, 0),
+		)
+		require.NotNil(t, cmd.Mp)
+
+		sinker.processCommand(ctx, cmd)
+
+		require.Error(t, sinker.Error())
+		assert.Contains(t, sinker.Error().Error(), "InsertBatch has no rows")
+		assert.Nil(t, cmd.InsertBatch)
+		assert.Nil(t, cmd.Mp)
+
+		sinker.ClearError()
+	})
 }
 
 func TestMysqlSinker2_Reset(t *testing.T) {

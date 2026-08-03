@@ -20,6 +20,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common"
@@ -40,6 +42,47 @@ type ResHashRelated struct {
 	Hash     hashmap.HashMap
 	Itr      hashmap.Iterator
 	inserted []uint8
+}
+
+func (group *Group) configureH0OrderedAggSpill(proc *process.Process) {
+	if !group.NeedEval || group.ctr.mtyp != H0 {
+		return
+	}
+	group.configureOrderedAggSpill(proc, group.ctr.aggList)
+}
+
+func (group *Group) configureOrderedAggSpill(proc *process.Process, aggs []aggexec.AggFuncExec) {
+	group.ctr.configureOrderedAggSpill(proc, group.OpAnalyzer, aggs)
+}
+
+func (ctr *container) configureOrderedAggSpill(
+	proc *process.Process,
+	opAnalyzer process.Analyzer,
+	aggs []aggexec.AggFuncExec,
+) {
+	for _, agg := range aggs {
+		aggexec.ConfigureGroupConcatH0Spill(
+			agg,
+			ctr.spillMem,
+			proc.Ctx,
+			func() (*os.File, error) {
+				spillFS, err := proc.GetSpillFileService()
+				if err != nil {
+					return nil, err
+				}
+				id, _ := uuid.NewV7()
+				return spillFS.CreateAndRemoveFile(
+					proc.Ctx,
+					fmt.Sprintf("group_concat_run_%s", id.String()),
+				)
+			},
+			func(bytes, rows, retainedMemory int64) {
+				opAnalyzer.Spill(bytes)
+				opAnalyzer.SpillRows(rows)
+				opAnalyzer.SetMemUsed(max(ctr.memUsed(), retainedMemory))
+			},
+		)
+	}
 }
 
 func (hr *ResHashRelated) IsEmpty() bool {
@@ -190,7 +233,7 @@ func (ctr *container) computeBucketIndex(hashCodes []uint64, myLv uint64) {
 	}
 }
 
-func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBucket) (int64, int64, error) {
+func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.Analyzer, parentBkt *spillBucket) (int64, int64, error) {
 	var totalBytes, totalRows int64
 	var parentLv int
 	if parentBkt != nil {
@@ -232,9 +275,20 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 	if ctr.hr.IsEmpty() {
 		return 0, 0, nil
 	}
+	spillStart := time.Now()
+	opStats := opAnalyzer.GetOpStats()
+	opStats.AddExtraStat("GroupSpillWriteCalls", 1)
+	opStats.SetMaxExtraStat("GroupSpillMaxLevel", int64(myLv))
+	defer func() {
+		opStats.AddExtraStat("GroupSpillWriteNanos", time.Since(spillStart).Nanoseconds())
+	}()
 
 	// compute spill bucket.
 	n := int(ctr.hr.Hash.GroupCount())
+	opStats.SetMaxExtraStat("GroupSpillMaxGroups", int64(n))
+	if uint64(n) > ctr.spillHashPreAllocSize {
+		ctr.spillHashPreAllocSize = uint64(n)
+	}
 	if cap(ctr.spillHashCodes) < n {
 		ctr.spillHashCodes = make([]uint64, n)
 	}
@@ -264,8 +318,10 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 	// write one record per non-empty bucket.
 	//
 	// fullFlags is a [][]uint8 of length len(groupByBatches) passed to SaveIntermediateResult.
-	// All entries are empty (→ cnt=0, skipped by reader) except the current batch's index.
+	// All entries are empty (omitted from the serialized chunk list) except the
+	// current batch's index.
 	nBatches := len(ctr.groupByBatches)
+	var compactedAggChunks int64
 	if cap(ctr.spillChunkFlags) < nBatches {
 		ctr.spillChunkFlags = make([][]uint8, nBatches)
 	}
@@ -343,10 +399,13 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 			buf.Write(types.EncodeUint64(&magic))
 
 			// save aggs: pass full-length flags with only nthBatch populated.
-			// SaveIntermediateResult writes cnt=0 for nil entries (skipped on read).
+			// SaveIntermediateResult omits the nil entries from the chunk list.
 			nAggs := int32(len(ctr.aggList))
 			buf.Write(types.EncodeInt32(&nAggs))
 			fullFlags[nthBatch] = bktFlags
+			if nBatches > 1 {
+				compactedAggChunks += int64(nBatches-1) * int64(len(ctr.aggList))
+			}
 			for _, ag := range ctr.aggList {
 				if err := ag.SaveIntermediateResult(cnt, fullFlags, buf); err != nil {
 					return 0, 0, err
@@ -361,12 +420,14 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 			// Lazy file + buffered writer creation.
 			bkt := ctr.currentSpillBkt[i]
 			if bkt.file == nil {
+				opStats.AddExtraStat("GroupSpillBucketsCreated", 1)
 				if bkt.file, err = spillfs.CreateAndRemoveFile(
 					proc.Ctx, bkt.name); err != nil {
 					return 0, 0, err
 				}
 				bkt.writer = bufio.NewWriterSize(bkt.file, spillWrBufSize)
 			}
+			opStats.AddExtraStat("GroupSpillRecords", 1)
 			bkt.cnt += cnt
 			written, err := bkt.writer.Write(buf.Bytes())
 			totalBytes += int64(written)
@@ -381,6 +442,8 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 			}
 		}
 	}
+	opStats.AddExtraStat("GroupSpillSerializedBytes", totalBytes)
+	opStats.AddExtraStat("GroupSpillAggChunkHeadersOmitted", compactedAggChunks)
 
 	// reset ctr for next spill
 	ctr.resetForSpill()
@@ -422,6 +485,29 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		}
 		ctr.freeSpillAggList()
 	}()
+	opStats := opAnalyzer.GetOpStats()
+	var reloadRecords, reusedAggExecRecords int64
+	var readNanos, aggUnmarshalNanos, hashMergeNanos int64
+	defer func() {
+		opStats.AddExtraStat("GroupSpillReloadRecords", reloadRecords)
+		opStats.AddExtraStat("GroupSpillAggExecReuseRecords", reusedAggExecRecords)
+		opStats.AddExtraStat("GroupSpillReloadReadNanos", readNanos)
+		opStats.AddExtraStat("GroupSpillAggUnmarshalNanos", aggUnmarshalNanos)
+		opStats.AddExtraStat("GroupSpillHashMergeNanos", hashMergeNanos)
+	}()
+	opStats.AddExtraStat("GroupSpillReloadBuckets", 1)
+	opStats.AddExtraStat("GroupSpillReloadRows", bkt.cnt)
+	opStats.SetMaxExtraStat("GroupSpillMaxBucketRows", bkt.cnt)
+	opStats.SetMaxExtraStat("GroupSpillMaxLevel", int64(bkt.lv))
+	reloadStart := time.Now()
+	reloadRecorded := false
+	recordReloadTime := func() {
+		if !reloadRecorded {
+			opStats.AddExtraStat("GroupSpillReloadNanos", time.Since(reloadStart).Nanoseconds())
+			reloadRecorded = true
+		}
+	}
+	defer recordReloadTime()
 
 	// reposition to the start of the file.
 	if _, err := bkt.file.Seek(0, io.SeekStart); err != nil {
@@ -444,6 +530,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 
 	for {
 		// load next batch from the spill bucket.
+		readStart := time.Now()
 		cnt, err := types.ReadInt64(bufferedFile)
 		if err != nil {
 			if err == io.EOF {
@@ -455,11 +542,16 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		if cnt == 0 {
 			continue
 		}
+		reloadRecords++
 
+		reusingAggExec := len(ctr.spillAggList) == len(aggExprs) && len(ctr.spillAggList) > 0
 		if len(ctr.aggList) != len(aggExprs) {
 			ctr.aggList, err = ctr.makeAggList(aggExprs)
 			if err != nil {
 				return false, err
+			}
+			if bkt.lv >= spillMaxPass {
+				ctr.configureOrderedAggSpill(proc, opAnalyzer, ctr.aggList)
 			}
 		}
 		if len(ctr.spillAggList) != len(aggExprs) {
@@ -501,10 +593,18 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		if nAggs != int32(len(ctr.spillAggList)) {
 			return false, moerr.NewInternalError(proc.Ctx, "spill agg cnt mismatch")
 		}
+		readNanos += time.Since(readStart).Nanoseconds()
 
 		// load aggs from the spill bucket.
+		aggStart := time.Now()
 		for _, ag := range ctr.spillAggList {
-			ag.UnmarshalFromReader(bufferedFile, ctr.mp)
+			if err := ag.UnmarshalFromReader(bufferedFile, ctr.mp); err != nil {
+				return false, err
+			}
+		}
+		aggUnmarshalNanos += time.Since(aggStart).Nanoseconds()
+		if reusingAggExec {
+			reusedAggExecRecords++
 		}
 
 		checkMagic, err = types.ReadUint64(bufferedFile)
@@ -523,14 +623,26 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 			return false, moerr.NewInternalError(proc.Ctx, "spill agg magic number mismatch")
 		}
 
+		mergeStart := time.Now()
 		if ctr.hr.IsEmpty() {
-			if err = ctr.buildHashTable(proc.Ctx); err != nil {
+			// bkt.cnt is an upper bound: records from different spill waves can
+			// contain duplicate keys. Cap the reload allocation at a hash-table
+			// cardinality this operator has already held under the same spill
+			// limit, so skew cannot turn metadata into an unbounded allocation.
+			rawPreAllocated := min(uint64(bkt.cnt), ctr.spillHashPreAllocSize)
+			preAllocated := ctr.boundedSpillReloadPreAlloc(bkt.cnt)
+			opStats.SetMaxExtraStat("GroupSpillPreallocRows", int64(preAllocated))
+			if preAllocated < rawPreAllocated {
+				opStats.AddExtraStat("GroupSpillPreallocCapped", 1)
+			}
+			if err = ctr.buildHashTable(proc.Ctx, preAllocated); err != nil {
 				return false, err
 			}
 		}
 
 		// insert group by batch into the hash table.
 		rowCount := gbBatch.RowCount()
+		hashBytesBefore := ctr.hr.Hash.Size()
 		for i := 0; i < rowCount; i += hashmap.UnitLimit {
 			n := min(rowCount-i, hashmap.UnitLimit)
 			originGroupCount := ctr.hr.Hash.GroupCount()
@@ -561,12 +673,11 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 				}
 			}
 		}
-
-		// free spill agg list after merging.
-		ctr.freeSpillAggList()
+		observeHashGrowth(opStats, "GroupHashReload", hashBytesBefore, ctr.hr.Hash.Size())
+		hashMergeNanos += time.Since(mergeStart).Nanoseconds()
 
 		if ctr.needSpill(opAnalyzer) {
-			if bytes, rows, err := ctr.spillDataToDisk(proc, bkt); err != nil {
+			if bytes, rows, err := ctr.spillDataToDisk(proc, opAnalyzer, bkt); err != nil {
 				return false, err
 			} else {
 				opAnalyzer.Spill(bytes)
@@ -574,10 +685,12 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 			}
 		}
 	}
+	recordReloadTime()
 
 	// respilling happened, so we finish the last batch and recursive down
 	if ctr.isSpilling() {
-		if bytes, rows, err := ctr.spillDataToDisk(proc, bkt); err != nil {
+		opStats.AddExtraStat("GroupSpillRespills", 1)
+		if bytes, rows, err := ctr.spillDataToDisk(proc, opAnalyzer, bkt); err != nil {
 			return false, err
 		} else {
 			opAnalyzer.Spill(bytes)
@@ -606,7 +719,7 @@ func (ctr *container) getNextFinalResult(proc *process.Process) (vm.CallResult, 
 	if curr == 0 {
 		// flush aggs final result to vectors, all aggs follow groupby columns.
 		for _, ag := range ctr.aggList {
-			vecs, err := ag.Flush()
+			vecs, err := aggexec.FlushWithContext(proc.Ctx, ag)
 			if err != nil {
 				return vm.CancelResult, err
 			}
@@ -650,6 +763,11 @@ func (ctr *container) outputOneBatchFinal(proc *process.Process, opAnalyzer proc
 
 func (ctr *container) memUsed() int64 {
 	sz := ctr.mp.CurrNB()
+	for _, agg := range ctr.aggList {
+		if heapSized, ok := agg.(interface{ AdditionalMemorySize() int64 }); ok {
+			sz += heapSized.AdditionalMemorySize()
+		}
+	}
 	return sz
 }
 
@@ -684,7 +802,7 @@ func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]a
 			freeAggListPartial(aggList, i)
 			return nil, err
 		}
-		if config := agExpr.GetExtraConfig(); config != nil {
+		if config := agExpr.GetExtraInformation(); config != nil {
 			if err := aggList[i].SetExtraInformation(config, 0); err != nil {
 				freeAggListPartial(aggList, i+1)
 				return nil, err

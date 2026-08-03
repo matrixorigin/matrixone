@@ -828,6 +828,9 @@ func (l *store) cnAllocateID(ctx context.Context,
 		l.runtime.Logger().Error("propose get id failed", zap.Error(err))
 		return 0, err
 	}
+	if result.Value == 0 {
+		return 0, moerr.NewInternalError(ctx, "HAKeeper is not ready for ID allocation")
+	}
 	return result.Value, nil
 }
 
@@ -869,8 +872,13 @@ func (l *store) addScheduleCommands(ctx context.Context,
 	term uint64, cmds []pb.ScheduleCommand) error {
 	cmd := hakeeper.GetUpdateCommandsCmd(term, cmds)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
-	if _, err := l.propose(ctx, session, cmd); err != nil {
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
 		return handleNotHAKeeperError(ctx, err)
+	}
+	if len(result.Data) != 0 {
+		return moerr.NewInternalError(ctx,
+			"HAKeeper rejected schedule commands while recovery ID watermarks are pending")
 	}
 	return nil
 }
@@ -1156,14 +1164,20 @@ func (l *store) queryLogLsn(ctx context.Context, shardID uint64, ts time.Time) (
 	}
 }
 
-func (l *store) tickerForTaskSchedule(ctx context.Context, duration time.Duration) {
+type checkerStateGetter func() (*pb.CheckerState, uint64)
+
+func (l *store) tickerForTaskSchedule(
+	ctx context.Context,
+	duration time.Duration,
+	getCheckerState checkerStateGetter,
+) {
 	ticker := time.NewTicker(duration)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			state, _ := l.getCheckerStateFromLeader()
+			state, _ := getCheckerState()
 			if state != nil && state.State == pb.HAKeeperRunning {
 				l.taskSchedule(state)
 			}
@@ -1182,6 +1196,23 @@ func (l *store) tickerForTaskSchedule(ctx context.Context, duration time.Duratio
 		}
 	}
 
+}
+
+// startTaskScheduleTicker keeps task scheduling independent from the HAKeeper
+// tick loop while making tickerStopper own and join it before NodeHost.Close.
+func (l *store) startTaskScheduleTicker(
+	getCheckerState checkerStateGetter,
+) error {
+	return l.tickerStopper.RunNamedTask(
+		"hakeeper-task-scheduler",
+		func(ctx context.Context) {
+			l.tickerForTaskSchedule(
+				ctx,
+				l.cfg.HAKeeperCheckInterval.Duration,
+				getCheckerState,
+			)
+		},
+	)
 }
 
 func (l *store) ticker(ctx context.Context) {
@@ -1206,7 +1237,9 @@ func (l *store) ticker(ctx context.Context) {
 	// separate goroutine can avoid the hakeeper's health check and tick update
 	// operations being blocked by task schedule, or the tick will be skipped and
 	// can not correctly estimate the time passing.
-	go l.tickerForTaskSchedule(ctx, l.cfg.HAKeeperCheckInterval.Duration)
+	if err := l.startTaskScheduleTicker(l.getCheckerStateFromLeader); err != nil {
+		return
+	}
 
 	for {
 		select {

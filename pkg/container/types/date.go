@@ -63,6 +63,7 @@ const (
 	MinDateYear    = 1
 	MaxMonthInYear = 12
 	MinMonthInYear = 1
+	ZeroDate       = Date(-1)
 )
 
 type TimeType int32
@@ -86,20 +87,28 @@ func isAllDigit(s string) bool {
 	return true
 }
 
-// rewrite ParseDateCast, don't use regexp, that's too slow
-// the format we need to support:
-// 1.yyyy-mm-dd hh:mm:ss.ms or yyyy-mm-dd hh:mm: or yyyy-mm-dd hh:mm
-// 2.yyyy-mm-dd
-// 3.yyyymmdd
-func ParseDateCast(s string) (Date, error) {
+// ParseDateCastComponents parses the date portion of a string accepted by
+// ParseDateCast without validating the calendar components.
+//
+// It preserves ParseDateCast's input grammar so callers that need to inspect
+// incomplete dates can use the same normalization as normal date casts.
+func ParseDateCastComponents(s string) (int32, uint8, uint8, error) {
 	s = strings.TrimSpace(s)
+	year, month, day, _, err := parseDateCastComponents(s)
+	return year, month, day, err
+}
+
+// parseDateCastComponents parses an already-trimmed date string. Keeping the
+// normalization outside this helper lets ParseDateCast avoid repeating it.
+func parseDateCastComponents(s string) (int32, uint8, uint8, bool, error) {
+	if isZeroDatetimeString(s) {
+		return 0, 0, 0, true, nil
+	}
 	if len(s) < 7 && isAllDigit(s) {
-		return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+		return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 	}
 	var year, month, day int64
-	// for the third type, process here
 	if len(s) == 7 && isAllDigit(s) {
-		// "2220919" → treat as "02220919": year=222, month=09, day=19
 		year = int64(s[0]-'0')*100 + int64(s[1]-'0')*10 + int64(s[2]-'0')
 		month = int64(s[3]-'0')*10 + int64(s[4]-'0')
 		day = int64(s[5]-'0')*10 + int64(s[6]-'0')
@@ -119,125 +128,124 @@ func ParseDateCast(s string) (Date, error) {
 			msState
 			end
 		)
-		// state is used to flag the state of the DAG, we process 1,2 below
 		var state = start
-		// length accumulators replace strings.Builder to avoid heap allocations
 		var yearLen, monthLen, dayLen, hourLen, minuteLen, secondLen int
+		var hour, minute, second uint8
+		var hasTime bool
 		for i := 0; i < len(s); i++ {
 			switch state {
 			case start:
 				if !isDigit(s[i]) {
-					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 				}
 				state = yearState
 				year = int64(s[i] - '0')
 				yearLen = 1
-				if yearLen >= 5 {
-					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-				}
 			case yearState:
 				if isDigit(s[i]) {
+					if yearLen >= 4 {
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
 					year = year*10 + int64(s[i]-'0')
 					yearLen++
-				} else if s[i] == '-' {
+				} else if isDateDelimiter(s[i]) {
 					state = monthState
 					if yearLen == 0 {
-						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 				} else {
-					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 				}
 			case monthState:
 				if isDigit(s[i]) {
 					month = month*10 + int64(s[i]-'0')
 					monthLen++
 					if monthLen >= 3 {
-						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
-				} else if s[i] == '-' {
-					// Can't go into dayState, because the Month is empty
+				} else if isDateDelimiter(s[i]) {
 					if monthLen == 0 {
-						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-					} else {
-						state = dayState
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
+					state = dayState
+				} else {
+					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 				}
 			case dayState:
 				if isDigit(s[i]) {
 					day = day*10 + int64(s[i]-'0')
 					dayLen++
 					if dayLen >= 3 {
-						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
+				} else if s[i] == ' ' || s[i] == 'T' {
+					if dayLen == 0 {
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+					if i == len(s)-1 {
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+					state = hourState
+					hasTime = true
 				} else {
-					if s[i] == ' ' {
-						if dayLen == 0 {
-							return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-						}
-						state = hourState
-					} else {
-						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-					}
+					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 				}
 				if i == len(s)-1 {
 					state = end
 				}
 			case hourState:
-				// we need to support '2022-09-01                   23:11:12.3'
-				// not only '2022-09-01 23:11:12.3'
 				if s[i] == ' ' {
 					continue
-				} else {
-					if isDigit(s[i]) {
-						hourLen++
-						if hourLen >= 3 {
-							return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-						}
-					} else {
-						if s[i] == ':' {
-							if hourLen == 0 {
-								return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-							}
-							state = minuteState
-						} else {
-							return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-						}
+				}
+				if isDigit(s[i]) {
+					hourLen++
+					if hourLen >= 3 {
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
+					hour = hour*10 + uint8(s[i]-'0')
+				} else if isTimeDelimiter(s[i]) {
+					if hourLen == 0 {
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+					state = minuteState
+				} else {
+					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 				}
 			case minuteState:
 				if isDigit(s[i]) {
 					minuteLen++
 					if minuteLen >= 3 {
-						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
-					if i == len(s)-1 { // we need to support '2022-09-01 23:11'
-						s = s + ":00"
+					minute = minute*10 + uint8(s[i]-'0')
+					if i == len(s)-1 {
+						s += ":00"
 					}
-				} else if s[i] == ':' {
-					// Can't go into secondState, because the Minute is empty
+				} else if isTimeDelimiter(s[i]) {
 					if minuteLen == 0 {
-						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
-					if i == len(s)-1 { // we need to support '2022-09-01 23:11:'
-						s = s + "00"
+					if i == len(s)-1 {
+						s += "00"
 					}
 					state = secondState
+				} else {
+					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 				}
 			case secondState:
 				if isDigit(s[i]) {
 					secondLen++
 					if secondLen >= 3 {
-						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
+					second = second*10 + uint8(s[i]-'0')
+				} else if s[i] == '.' {
+					if secondLen == 0 {
+						return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+					state = msState
 				} else {
-					if s[i] == '.' {
-						if secondLen == 0 {
-							return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-						}
-						state = msState
-					} else {
-						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
-					}
+					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 				}
 				if i == len(s)-1 {
 					state = end
@@ -245,37 +253,136 @@ func ParseDateCast(s string) (Date, error) {
 			case msState:
 				if isAllDigit(s[i:]) {
 					state = end
-					// break out loop
 					i = len(s)
 				} else {
-					return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+					return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 				}
 			}
 		}
 		if state != end {
-			return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+			return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+		}
+		year = normalizeDateCastYear(year, yearLen)
+		if hasTime && !ValidTimeInDay(hour, minute, second) {
+			return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
 		}
 	}
-	if ValidDate(int32(year), uint8(month), uint8(day)) {
-		return DateFromCalendar(int32(year), uint8(month), uint8(day)), nil
+	if year > MaxDateYear || month > MaxMonthInYear || day > 31 {
+		return 0, 0, 0, false, moerr.NewInvalidArgNoCtx("parsedate", s)
+	}
+	return int32(year), uint8(month), uint8(day), false, nil
+}
+
+// isDateDelimiter matches MySQL's deprecated punctuation-delimited date forms.
+func isDateDelimiter(c byte) bool {
+	return c >= '!' && c <= '/' || c >= ':' && c <= '@' ||
+		c >= '[' && c <= '`' || c >= '{' && c <= '~'
+}
+
+// isTimeDelimiter matches MySQL's relaxed punctuation-delimited time fields.
+func isTimeDelimiter(c byte) bool {
+	return isDateDelimiter(c)
+}
+
+func normalizeDateCastYear(year int64, length int) int64 {
+	if length != 2 {
+		return year
+	}
+	if year <= 69 {
+		return year + 2000
+	}
+	return year + 1900
+}
+
+func parseFixedDateCast(s string) (Date, bool) {
+	if len(s) < 19 || s[4] != '-' || s[7] != '-' || (s[10] != ' ' && s[10] != 'T') ||
+		s[13] != ':' || s[16] != ':' || !isAllDigit(s[:4]) || !isAllDigit(s[5:7]) ||
+		!isAllDigit(s[8:10]) || !isAllDigit(s[11:13]) || !isAllDigit(s[14:16]) || !isAllDigit(s[17:19]) {
+		return 0, false
+	}
+	if len(s) > 19 && (s[19] != '.' || len(s) == 20 || !isAllDigit(s[20:])) {
+		return 0, false
+	}
+
+	year := int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
+	month := uint8(s[5]-'0')*10 + uint8(s[6]-'0')
+	day := uint8(s[8]-'0')*10 + uint8(s[9]-'0')
+	hour := uint8(s[11]-'0')*10 + uint8(s[12]-'0')
+	minute := uint8(s[14]-'0')*10 + uint8(s[15]-'0')
+	second := uint8(s[17]-'0')*10 + uint8(s[18]-'0')
+	if !ValidDate(year, month, day) || !ValidTimeInDay(hour, minute, second) {
+		return 0, false
+	}
+	return DateFromCalendar(year, month, day), true
+}
+
+// rewrite ParseDateCast, don't use regexp, that's too slow
+// the format we need to support:
+// 1.yyyy-mm-dd hh:mm:ss.ms or yyyy-mm-dd hh:mm: or yyyy-mm-dd hh:mm
+// 2.yyyy-mm-dd
+// 3.yyyymmdd
+func ParseDateCast(s string) (Date, error) {
+	s = strings.TrimSpace(s)
+	if len(s) > 0 && s[0] == '0' && isZeroDatetimeString(s) {
+		return ZeroDate, nil
+	}
+
+	if len(s) == 7 && isAllDigit(s) {
+		year := int32(s[0]-'0')*100 + int32(s[1]-'0')*10 + int32(s[2]-'0')
+		month := uint8(s[3]-'0')*10 + uint8(s[4]-'0')
+		day := uint8(s[5]-'0')*10 + uint8(s[6]-'0')
+		if ValidDate(year, month, day) {
+			return DateFromCalendar(year, month, day), nil
+		}
+	} else if len(s) == 8 && isAllDigit(s) {
+		year := int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
+		month := uint8(s[4]-'0')*10 + uint8(s[5]-'0')
+		day := uint8(s[6]-'0')*10 + uint8(s[7]-'0')
+		if ValidDate(year, month, day) {
+			return DateFromCalendar(year, month, day), nil
+		}
+	} else if len(s) == 10 && s[4] == '-' && s[7] == '-' &&
+		isAllDigit(s[:4]) && isAllDigit(s[5:7]) && isAllDigit(s[8:]) {
+		year := int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
+		month := uint8(s[5]-'0')*10 + uint8(s[6]-'0')
+		day := uint8(s[8]-'0')*10 + uint8(s[9]-'0')
+		if ValidDate(year, month, day) {
+			return DateFromCalendar(year, month, day), nil
+		}
+	}
+	if date, ok := parseFixedDateCast(s); ok {
+		return date, nil
+	}
+
+	year, month, day, isZero, err := parseDateCastComponents(s)
+	if err != nil {
+		return -1, err
+	}
+	if isZero {
+		return ZeroDate, nil
+	}
+	if ValidDate(year, month, day) {
+		return DateFromCalendar(year, month, day), nil
 	}
 	return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 }
 
 // date[0001-01-01 to 9999-12-31]
 func ValidDate(year int32, month, day uint8) bool {
-	if year >= MinDateYear && year <= MaxDateYear {
-		if MinMonthInYear <= month && month <= MaxMonthInYear {
-			if day > 0 {
-				if isLeap(year) {
-					return day <= leapYearMonthDays[month-1]
-				} else {
-					return day <= flatYearMonthDays[month-1]
-				}
-			}
-		}
+	return year >= MinDateYear && ValidCalendarDate(year, month, day)
+}
+
+// ValidCalendarDate validates a calendar value accepted by MySQL VARCHAR
+// temporal functions. It intentionally includes year 0, which is not a
+// storable DATE value in MatrixOne. MySQL treats year 0 as a non-leap year.
+func ValidCalendarDate(year int32, month, day uint8) bool {
+	if year < 0 || year > MaxDateYear || month < MinMonthInYear || month > MaxMonthInYear || day == 0 {
+		return false
 	}
-	return false
+	if year != 0 && isLeap(year) {
+		return day <= leapYearMonthDays[month-1]
+	}
+	return day <= flatYearMonthDays[month-1]
 }
 
 func (d Date) String() string {
@@ -443,6 +550,9 @@ func init() {
 
 // Year takes a date and returns an uint16 number as the year of this date
 func (d Date) Year() uint16 {
+	if d == ZeroDate {
+		return 0
+	}
 	dayNum := int32(d)
 	insideDayInfoTable := dayNum >= dayNumOfTableEpoch && dayNum < dayNumOfTableEpoch+dayInfoTableSize
 	if insideDayInfoTable {
@@ -518,6 +628,9 @@ func (d Date) Quarter() uint32 {
 }
 
 func (d Date) Calendar(full bool) (year int32, month, day uint8, yday uint16) {
+	if d == ZeroDate {
+		return 0, 0, 0, 0
+	}
 	// Account for 400 year cycles.
 	n := d / daysPer400Years
 	y := 400 * n
@@ -758,7 +871,21 @@ func (d Date) Week(mode int) int {
 	if d.Month() == 0 || d.Day() == 0 {
 		return 0
 	}
-	_, week := calcWeek(d, weekMode(mode))
+	_, week := calcWeekFromCalendar(int(d.Year()), int(d.Month()), int(d.Day()), weekMode(mode))
+	return week
+}
+
+// DayOfWeekFromCalendar returns the weekday for a validated calendar date,
+// including MySQL's year-0 date values.
+func DayOfWeekFromCalendar(year int32, month, day uint8) Weekday {
+	weekday := calcWeekday(calcDaynr(int(year), int(month), int(day)), false)
+	return Weekday((weekday + 1) % 7)
+}
+
+// WeekFromCalendar returns WEEK(year-month-day, mode) for a validated calendar
+// date, including MySQL's year-0 date values.
+func WeekFromCalendar(year int32, month, day uint8, mode int) int {
+	_, week := calcWeekFromCalendar(int(year), int(month), int(day), weekMode(mode))
 	return week
 }
 
@@ -770,8 +897,11 @@ func (d Date) YearWeek(mode int) (year int, week int) {
 
 // calcWeek calculates week and year for the date.
 func calcWeek(d Date, wb WeekBehaviour) (year int, week int) {
+	return calcWeekFromCalendar(int(d.Year()), int(d.Month()), int(d.Day()), wb)
+}
+
+func calcWeekFromCalendar(ty, tm, td int, wb WeekBehaviour) (year int, week int) {
 	var days int
-	ty, tm, td := int(d.Year()), int(d.Month()), int(d.Day())
 	daynr := calcDaynr(ty, tm, td)
 	firstDaynr := calcDaynr(ty, 1, 1)
 	mondayFirst := wb.bitAnd(WeekMondayFirst)
@@ -853,6 +983,9 @@ func isLeap(year int32) bool {
 }
 
 func (d Date) ToDatetime() Datetime {
+	if d == ZeroDate {
+		return ZeroDatetime
+	}
 	return Datetime(int64(d) * SecsPerDay * MicroSecsPerSec)
 }
 
@@ -861,6 +994,9 @@ func (d Date) ToTime() Time {
 }
 
 func (d Date) ToTimestamp(loc *time.Location) Timestamp {
+	if d == ZeroDate {
+		return ZeroTimestamp
+	}
 	year, mon, day, _ := d.Calendar(true)
 	t := time.Date(int(year), time.Month(mon), int(day), 0, 0, 0, 0, loc)
 	return Timestamp(t.UnixMicro() + unixEpochMicroSecs)

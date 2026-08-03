@@ -16,18 +16,25 @@ package table_function
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -58,6 +65,42 @@ func TestPrepare(t *testing.T) {
 	arg.FuncName = "not_exist"
 	err = arg.Prepare(testutil.NewProc(t))
 	require.Error(t, err)
+}
+
+func TestEvalLimitExpression(t *testing.T) {
+	proc := testutil.NewProc(t)
+	params := testutil.NewVector(1, types.T_text.ToType(), proc.Mp(), false, []string{"17"})
+	proc.SetPrepareParams(params)
+	t.Cleanup(func() { params.Free(proc.Mp()) })
+
+	param := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	targetType := plan.Type{Id: int32(types.T_uint64), NotNullable: true}
+	limitExpr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{
+		param,
+		{Typ: targetType, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+	})
+	require.NoError(t, err)
+
+	value, err := evalLimitExpression(proc, limitExpr, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(17), value)
+
+	value, err = evalLimitExpression(proc, nil, 3)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), value)
+
+	_, err = evalLimitExpression(proc, plan2.MakePlan2Int64ConstExprWithType(1), 0)
+	require.ErrorContains(t, err, "LIMIT must evaluate to uint64")
+
+	nullLimit := &plan.Expr{
+		Typ:  targetType,
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+	}
+	_, err = evalLimitExpression(proc, nullLimit, 0)
+	require.ErrorContains(t, err, "LIMIT cannot be NULL")
 }
 
 func TestParseTablePathWithAccount(t *testing.T) {
@@ -137,6 +180,46 @@ func TestParseTablePathWithAccount(t *testing.T) {
 			errorContains:    "invalid account_id",
 		},
 		{
+			name:             "three parts - account_id trailing junk",
+			path:             "mydb.mytable.1junk",
+			currentDatabase:  "otherdb",
+			currentAccountId: 1,
+			expectError:      true,
+			errorContains:    "invalid account_id",
+		},
+		{
+			name:             "three parts - account_id empty",
+			path:             "mydb.mytable.",
+			currentDatabase:  "otherdb",
+			currentAccountId: 1,
+			expectError:      true,
+			errorContains:    "invalid account_id",
+		},
+		{
+			name:             "three parts - account_id whitespace",
+			path:             "mydb.mytable. 1",
+			currentDatabase:  "otherdb",
+			currentAccountId: 1,
+			expectError:      true,
+			errorContains:    "invalid account_id",
+		},
+		{
+			name:             "three parts - account_id negative",
+			path:             "mydb.mytable.-1",
+			currentDatabase:  "otherdb",
+			currentAccountId: 1,
+			expectError:      true,
+			errorContains:    "invalid account_id",
+		},
+		{
+			name:             "three parts - account_id overflow",
+			path:             "mydb.mytable.4294967296",
+			currentDatabase:  "otherdb",
+			currentAccountId: 1,
+			expectError:      true,
+			errorContains:    "invalid account_id",
+		},
+		{
 			name:             "four parts - too many",
 			path:             "mydb.mytable.1.extra",
 			currentDatabase:  "otherdb",
@@ -169,6 +252,105 @@ func TestParseTablePathWithAccount(t *testing.T) {
 	}
 }
 
+func TestResolveTableStatsKeyUsesRequestedAccountContext(t *testing.T) {
+	tests := []struct {
+		name           string
+		currentAccount uint32
+		path           string
+		targetAccount  uint32
+		expectError    bool
+	}{
+		{
+			name:           "sys queries tenant",
+			currentAccount: 0,
+			path:           "tenant_db.tenant_table.42",
+			targetAccount:  42,
+		},
+		{
+			name:           "tenant queries own account",
+			currentAccount: 42,
+			path:           "tenant_db.tenant_table.42",
+			targetAccount:  42,
+		},
+		{
+			name:           "tenant cannot query another account",
+			currentAccount: 42,
+			path:           "tenant_db.tenant_table.7",
+			expectError:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			proc := testutil.NewProc(t)
+			proc.Ctx = defines.AttachAccountId(proc.Ctx, tt.currentAccount)
+			originalCtx := proc.Ctx
+
+			eng := mock_frontend.NewMockEngine(ctrl)
+			db := mock_frontend.NewMockDatabase(ctrl)
+			rel := mock_frontend.NewMockRelation(ctrl)
+			if tt.expectError {
+				// A non-system cross-account request must fail before any engine lookup.
+				key, targetCtx, err := resolveTableStatsKey(eng, proc, tt.path)
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "only sys account can query stats for other accounts")
+				require.Equal(t, pb.StatsInfoKey{}, key)
+				require.Nil(t, targetCtx)
+				return
+			}
+
+			eng.EXPECT().Database(gomock.Any(), "tenant_db", proc.GetTxnOperator()).
+				DoAndReturn(func(ctx context.Context, _ string, _ client.TxnOperator) (engine.Database, error) {
+					accountID, err := defines.GetAccountId(ctx)
+					require.NoError(t, err)
+					require.Equal(t, tt.targetAccount, accountID)
+					return db, nil
+				})
+			db.EXPECT().Relation(gomock.Any(), "tenant_table", nil).
+				DoAndReturn(func(ctx context.Context, _ string, _ any) (engine.Relation, error) {
+					accountID, err := defines.GetAccountId(ctx)
+					require.NoError(t, err)
+					require.Equal(t, tt.targetAccount, accountID)
+					return rel, nil
+				})
+			rel.EXPECT().GetDBID(gomock.Any()).
+				DoAndReturn(func(ctx context.Context) uint64 {
+					accountID, err := defines.GetAccountId(ctx)
+					require.NoError(t, err)
+					require.Equal(t, tt.targetAccount, accountID)
+					return 1001
+				})
+			rel.EXPECT().GetTableID(gomock.Any()).
+				DoAndReturn(func(ctx context.Context) uint64 {
+					accountID, err := defines.GetAccountId(ctx)
+					require.NoError(t, err)
+					require.Equal(t, tt.targetAccount, accountID)
+					return 2002
+				})
+
+			key, targetCtx, err := resolveTableStatsKey(eng, proc, tt.path)
+			require.NoError(t, err)
+			require.Equal(t, pb.StatsInfoKey{
+				AccId:      tt.targetAccount,
+				DatabaseID: 1001,
+				TableID:    2002,
+				TableName:  "tenant_table",
+				DbName:     "tenant_db",
+			}, key)
+			accountID, err := defines.GetAccountId(targetCtx)
+			require.NoError(t, err)
+			require.Equal(t, tt.targetAccount, accountID)
+			procAccountID, err := defines.GetAccountId(proc.Ctx)
+			require.NoError(t, err)
+			require.Equal(t, tt.currentAccount, procAccountID)
+			require.Same(t, originalCtx, proc.Ctx)
+		})
+	}
+}
+
 func TestResetAndFreeWithPartiallyInitializedExecutors(t *testing.T) {
 	proc := testutil.NewProc(t)
 	executor := &stubExpressionExecutor{}
@@ -186,6 +368,62 @@ func TestResetAndFreeWithPartiallyInitializedExecutors(t *testing.T) {
 	require.Equal(t, 1, executor.freeCount)
 	require.Nil(t, arg.ctr.argVecs)
 	require.Nil(t, arg.ctr.executorsForArgs)
+}
+
+func TestPrepareReleasesPreviousExecutorsAndState(t *testing.T) {
+	proc := testutil.NewProc(t)
+	executor := &stubExpressionExecutor{}
+	state := &stubTableFunctionState{}
+	arg := &TableFunction{FuncName: "unsupported"}
+	arg.ctr.executorsForArgs = []colexec.ExpressionExecutor{executor}
+	arg.ctr.state = state
+
+	require.Error(t, arg.Prepare(proc))
+	require.Equal(t, 1, executor.freeCount)
+	require.Equal(t, 1, state.freeCount)
+	require.Nil(t, arg.ctr.executorsForArgs)
+	require.Nil(t, arg.ctr.state)
+}
+
+func TestPreparePreservesOptimizedGenerateSeriesState(t *testing.T) {
+	proc := testutil.NewProc(t)
+	arg := &TableFunction{
+		FuncName: "generate_series",
+		CanOpt:   true,
+		Attrs:    []string{"result"},
+		Rets: []*plan.ColDef{{
+			Name: "result",
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+		}},
+	}
+	arg.GenerateSeriesCtrNumState(1, 3, 1, 1)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 3, result.Batch.RowCount())
+	arg.Free(proc, false, nil)
+}
+
+func TestSourceTableFunctionResetAfterStartError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	state := &startErrorState{startErr: moerr.NewInvalidInputNoCtx("invalid argument")}
+	arg := &TableFunction{}
+	arg.ctr.state = state
+
+	_, err := arg.Call(proc)
+	require.ErrorContains(t, err, "invalid argument")
+	require.True(t, arg.ctr.isDone)
+
+	arg.Reset(proc, true, err)
+	state.startErr = nil
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 1, result.Batch.RowCount())
+	require.Equal(t, 2, state.startCount)
 }
 
 func TestGenerateSeriesPrepareFaultLeavesPartialInitSafeToFree(t *testing.T) {
@@ -221,6 +459,53 @@ func TestGenerateSeriesPrepareFaultLeavesPartialInitSafeToFree(t *testing.T) {
 type stubExpressionExecutor struct {
 	resetCount int
 	freeCount  int
+}
+
+type startErrorState struct {
+	startErr   error
+	startCount int
+	called     bool
+}
+
+func (s *startErrorState) start(*TableFunction, *process.Process, int, process.Analyzer) error {
+	s.startCount++
+	return s.startErr
+}
+
+func (s *startErrorState) call(*TableFunction, *process.Process) (vm.CallResult, error) {
+	if s.called {
+		return vm.CancelResult, nil
+	}
+	s.called = true
+	bat := batch.NewWithSize(0)
+	bat.SetRowCount(1)
+	return vm.CallResult{Status: vm.ExecNext, Batch: bat}, nil
+}
+
+func (s *startErrorState) end(*TableFunction, *process.Process) error { return nil }
+
+func (s *startErrorState) reset(*TableFunction, *process.Process) { s.called = false }
+
+func (s *startErrorState) free(*TableFunction, *process.Process, bool, error) {}
+
+type stubTableFunctionState struct {
+	freeCount int
+}
+
+func (*stubTableFunctionState) start(*TableFunction, *process.Process, int, process.Analyzer) error {
+	return nil
+}
+
+func (*stubTableFunctionState) call(*TableFunction, *process.Process) (vm.CallResult, error) {
+	return vm.CancelResult, nil
+}
+
+func (*stubTableFunctionState) end(*TableFunction, *process.Process) error { return nil }
+
+func (*stubTableFunctionState) reset(*TableFunction, *process.Process) {}
+
+func (s *stubTableFunctionState) free(*TableFunction, *process.Process, bool, error) {
+	s.freeCount++
 }
 
 func (s *stubExpressionExecutor) Eval(*process.Process, []*batch.Batch, []bool) (*vector.Vector, error) {

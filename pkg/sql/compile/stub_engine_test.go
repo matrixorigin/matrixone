@@ -95,7 +95,10 @@ func (db *stubDatabase) GetDatabaseId(ctx context.Context) string {
 
 type stubRelation struct {
 	engine.Relation
-	name string
+	name                  string
+	tombstones            engine.Tombstoner
+	collectTombstonesErr  error
+	collectTombstonesCall int
 }
 
 func newStubRelation(name string) *stubRelation {
@@ -116,4 +119,16 @@ func (r *stubRelation) TableDefs(ctx context.Context) ([]engine.TableDef, error)
 
 func (r *stubRelation) GetTableDef(ctx context.Context) *plan.TableDef {
 	return &plan.TableDef{}
+}
+
+func (r *stubRelation) CollectTombstones(
+	ctx context.Context,
+	txnOffset int,
+	policy engine.TombstoneCollectPolicy,
+) (engine.Tombstoner, error) {
+	r.collectTombstonesCall++
+	if r.collectTombstonesErr != nil {
+		return nil, r.collectTombstonesErr
+	}
+	return r.tombstones, nil
 }

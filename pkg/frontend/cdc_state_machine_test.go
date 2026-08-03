@@ -224,6 +224,12 @@ func TestExecutorStateMachine_SetFailed(t *testing.T) {
 	require.NoError(t, sm.Transition(TransitionRestartBegin))
 	assert.Equal(t, StateStarting, sm.State())
 	assert.Equal(t, "", sm.GetErrorMessage())
+
+	require.NoError(t, sm.Transition(TransitionStartSuccess))
+	err = sm.SetFailed("runtime failed")
+	assert.NoError(t, err)
+	assert.Equal(t, StateFailed, sm.State())
+	assert.Equal(t, "runtime failed", sm.GetErrorMessage())
 }
 
 func TestExecutorStateMachine_Concurrency(t *testing.T) {
@@ -282,6 +288,19 @@ func TestExecutorStateMachine_String(t *testing.T) {
 	assert.Contains(t, sm.String(), "test error")
 }
 
+func TestExecutorStateMachine_HelperBranches(t *testing.T) {
+	sm := NewExecutorStateMachine()
+
+	assert.True(t, sm.IsState(StateIdle))
+	assert.NotPanics(t, func() {
+		sm.MustTransition(TransitionStart)
+	})
+	assert.True(t, sm.IsState(StateStarting))
+	assert.Panics(t, func() {
+		sm.MustTransition(TransitionResume)
+	})
+}
+
 func TestExecutorState_String(t *testing.T) {
 	tests := []struct {
 		state    ExecutorState
@@ -296,6 +315,7 @@ func TestExecutorState_String(t *testing.T) {
 		{StateCancelling, "Cancelling"},
 		{StateCancelled, "Cancelled"},
 		{StateFailed, "Failed"},
+		{ExecutorState(99), "Unknown(99)"},
 	}
 
 	for _, tt := range tests {
@@ -320,6 +340,7 @@ func TestTransition_String(t *testing.T) {
 		{TransitionRestartBegin, "RestartBegin"},
 		{TransitionCancel, "Cancel"},
 		{TransitionCancelComplete, "CancelComplete"},
+		{Transition(99), "Unknown(99)"},
 	}
 
 	for _, tt := range tests {

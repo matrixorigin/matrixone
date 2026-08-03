@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -51,6 +52,34 @@ import (
 const (
 	Rows = 10 // default rows
 )
+
+func TestFileLevelFilterRejectsNestedZeroArgumentFunction(t *testing.T) {
+	filter := &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: ">"},
+				Args: []*plan.Expr{
+					{
+						Expr: &plan.Expr_F{
+							F: &plan.Function{Func: &plan.ObjectRef{ObjName: "rand"}},
+						},
+					},
+					{
+						Expr: &plan.Expr_Lit{Lit: &plan.Literal{}},
+					},
+				},
+			},
+		},
+	}
+
+	require.False(t, isFileLevelFilter(nil, filter))
+}
+
+func TestCsvReaderRejectsZeroVectorBatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	_, err := (&CsvReader{}).makeBatchRows(proc, batch.NewWithSize(0))
+	require.ErrorContains(t, err, "external CSV reader requires at least one materialized column")
+}
 
 // add unit tests for cases
 type externalTestCase struct {
@@ -473,6 +502,622 @@ func TestGetColDataLoadDataYear(t *testing.T) {
 	require.Contains(t, err.Error(), "not Year type")
 }
 
+// TestGetColDataGeometry exercises the geometry/geography branch of the external
+// CSV loader: WKT fields are parsed and stored as bare WKB (float64 for GEOMETRY,
+// float32 for GEOMETRY32), an unconstrained GEOMETRY column accepts any subtype,
+// and a subtype-constrained column rejects a mismatching value the same way an
+// INSERT does.
+func TestGetColDataGeometry(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	load := func(colTyp plan.Type, val string) (*batch.Batch, error) {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.New(types.T(colTyp.Id), colTyp.Width, colTyp.Scale))
+		param := &ExternalParam{
+			ExParamConst: ExParamConst{
+				Ctx:  context.Background(),
+				Cols: []*plan.ColDef{{Name: "g", Typ: colTyp}},
+				Extern: &tree.ExternParam{
+					ExParam: tree.ExParam{ExternType: int32(plan.ExternType_EXTERNAL_TB)},
+				},
+			},
+			ExParam: ExParam{Fileparam: &ExFileparam{}},
+		}
+		attr := plan.ExternAttr{ColName: "g", ColIndex: 0, ColFieldIndex: 0}
+		err := getColData(bat, []csvparser.Field{{Val: val}}, 0, param, proc.Mp(), attr, proc)
+		return bat, err
+	}
+
+	// GEOMETRY column with a POINT subtype constraint: WKT -> float64 WKB.
+	geomPoint := plan.Type{Id: int32(types.T_geometry), Scale: int32(geo.POINT)}
+	bat, err := load(geomPoint, "POINT (1 2)")
+	require.NoError(t, err)
+	stored := bat.Vecs[0].GetBytesAt(0)
+	require.True(t, len(stored) > 0 && (stored[0] == 0 || stored[0] == 1), "geometry must be stored as WKB")
+	g, err := geo.ReadWKB(stored)
+	require.NoError(t, err)
+	require.Equal(t, "POINT(1 2)", geo.WriteWKT(g))
+	bat.Clean(proc.Mp())
+
+	// Unconstrained GEOMETRY column accepts a different subtype.
+	geomGeneric := plan.Type{Id: int32(types.T_geometry), Scale: int32(geo.GENERIC)}
+	bat, err = load(geomGeneric, "LINESTRING (0 0, 1 1)")
+	require.NoError(t, err)
+	bat.Clean(proc.Mp())
+
+	// GEOMETRY32 stores float32-coordinate WKB, distinct from the float64 form.
+	geom32 := plan.Type{Id: int32(types.T_geometry32), Scale: int32(geo.POINT)}
+	bat, err = load(geom32, "POINT (0.1 0.2)")
+	require.NoError(t, err)
+	stored32 := bat.Vecs[0].GetBytesAt(0)
+	_, err = geo.ReadWKBFloat32(stored32)
+	require.NoError(t, err)
+	bat.Clean(proc.Mp())
+
+	// Subtype constraint is enforced: a LINESTRING cannot land in a POINT column.
+	bat, err = load(geomPoint, "LINESTRING (0 0, 1 1)")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot store LINESTRING in POINT column")
+	bat.Clean(proc.Mp())
+
+	// Malformed WKT is rejected with a clear error, not stored silently.
+	bat, err = load(geomGeneric, "not-a-geometry")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not a valid geometry")
+	bat.Clean(proc.Mp())
+}
+
+func TestGetOneRowDataLoadDataNonStrictAdjustedValues(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	decType := types.New(types.T_decimal64, 5, 2)
+	varcharType := types.New(types.T_varchar, 4, 0)
+	cols := []*plan.ColDef{
+		{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+		{Name: "i", Typ: plan.Type{Id: int32(types.T_int32)}},
+		{Name: "d", Typ: plan.Type{Id: int32(types.T_decimal64), Width: 5, Scale: 2}},
+		{Name: "dt", Typ: plan.Type{Id: int32(types.T_date)}},
+		{Name: "vc", Typ: plan.Type{Id: int32(types.T_varchar), Width: 4}},
+	}
+	attrs := make([]plan.ExternAttr, len(cols))
+	for idx, col := range cols {
+		attrs[idx] = plan.ExternAttr{ColName: col.Name, ColIndex: int32(idx), ColFieldIndex: int32(idx)}
+	}
+
+	bat := batch.NewWithSize(len(cols))
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[2] = vector.NewVec(decType)
+	bat.Vecs[3] = vector.NewVec(types.T_date.ToType())
+	bat.Vecs[4] = vector.NewVec(varcharType)
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:           context.Background(),
+			ColumnListLen: int32(len(cols)),
+			StrictSqlMode: false,
+			Attrs:         attrs,
+			Cols:          cols,
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{Format: tree.CSV},
+				ExParam:      tree.ExParam{ExternType: int32(plan.ExternType_LOAD), Local: true},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{}},
+	}
+
+	lines := [][]csvparser.Field{
+		{{Val: "1"}, {Val: "12"}, {Val: "12.345"}, {Val: "20240102"}, {Val: "abcd"}},
+		{{Val: "2"}, {Val: "abc"}, {Val: "10.00x"}, {Val: "2024-02-31"}, {Val: "abcdef"}},
+		{{Val: "3"}, {Val: ""}, {Val: "bad"}, {Val: "0000-00-00"}, {Val: "xy"}},
+	}
+	for idx, line := range lines {
+		require.NoError(t, getOneRowData(proc, bat, line, idx, param))
+	}
+
+	require.Equal(t, []int32{1, 2, 3}, vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0]))
+	require.Equal(t, []int32{12, 0, 0}, vector.MustFixedColWithTypeCheck[int32](bat.Vecs[1]))
+
+	d0, err := types.ParseDecimal64("12.35", 5, 2)
+	require.NoError(t, err)
+	d1, err := types.ParseDecimal64("10.00", 5, 2)
+	require.NoError(t, err)
+	require.Equal(t, []types.Decimal64{d0, d1, 0}, vector.MustFixedColWithTypeCheck[types.Decimal64](bat.Vecs[2]))
+
+	date0, err := types.ParseDateCast("20240102")
+	require.NoError(t, err)
+	require.Equal(t, []types.Date{date0, types.ZeroDate, types.ZeroDate}, vector.MustFixedColWithTypeCheck[types.Date](bat.Vecs[3]))
+
+	require.Equal(t, "abcd", string(bat.Vecs[4].GetBytesAt(0)))
+	require.Equal(t, "abcd", string(bat.Vecs[4].GetBytesAt(1)))
+	require.Equal(t, "xy", string(bat.Vecs[4].GetBytesAt(2)))
+}
+
+func TestGetColDataLoadDataStrictRejectsInvalidInteger(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:           context.Background(),
+			StrictSqlMode: true,
+			Cols: []*plan.ColDef{{
+				Name: "i",
+				Typ:  plan.Type{Id: int32(types.T_int32)},
+			}},
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{Format: tree.CSV},
+				ExParam:      tree.ExParam{ExternType: int32(plan.ExternType_LOAD), Local: false},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{}},
+	}
+
+	err := getColData(
+		bat,
+		[]csvparser.Field{{Val: "abc"}},
+		0,
+		param,
+		proc.Mp(),
+		plan.ExternAttr{ColName: "i", ColIndex: 0, ColFieldIndex: 0},
+		proc,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not int32 type")
+}
+
+func TestGetColDataLoadDataAdjustmentsOnlyLocalCSVNonStrict(t *testing.T) {
+	cases := []struct {
+		name          string
+		local         bool
+		strictSQLMode bool
+		format        string
+		wantErr       bool
+	}{
+		{name: "local csv non-strict adjusts", local: true, strictSQLMode: false, format: tree.CSV},
+		{name: "local csv strict rejects", local: true, strictSQLMode: true, format: tree.CSV, wantErr: true},
+		{name: "non-local csv non-strict rejects", local: false, strictSQLMode: false, format: tree.CSV, wantErr: true},
+		{name: "local jsonline non-strict rejects", local: true, strictSQLMode: false, format: tree.JSONLINE, wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			defer bat.Clean(proc.Mp())
+
+			param := &ExternalParam{
+				ExParamConst: ExParamConst{
+					Ctx:           context.Background(),
+					StrictSqlMode: tc.strictSQLMode,
+					Cols: []*plan.ColDef{{
+						Name: "i",
+						Typ:  plan.Type{Id: int32(types.T_int32)},
+					}},
+					Extern: &tree.ExternParam{
+						ExParamConst: tree.ExParamConst{Format: tc.format},
+						ExParam: tree.ExParam{
+							ExternType: int32(plan.ExternType_LOAD),
+							Local:      tc.local,
+						},
+					},
+				},
+				ExParam: ExParam{Fileparam: &ExFileparam{}},
+			}
+
+			err := getColData(
+				bat,
+				[]csvparser.Field{{Val: "abc"}},
+				0,
+				param,
+				proc.Mp(),
+				plan.ExternAttr{ColName: "i", ColIndex: 0, ColFieldIndex: 0},
+				proc,
+			)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "not int32 type")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, []int32{0}, vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0]))
+		})
+	}
+}
+
+func TestGetColDataLoadDataNonStrictAdjustmentRejectsQuotedInvalidNumeric(t *testing.T) {
+	cases := []struct {
+		name        string
+		colName     string
+		vecType     types.Type
+		colType     plan.Type
+		fieldVal    string
+		wantErrText string
+	}{
+		{
+			name:        "quoted invalid int is not adjusted",
+			colName:     "i",
+			vecType:     types.T_int32.ToType(),
+			colType:     plan.Type{Id: int32(types.T_int32)},
+			fieldVal:    "abc",
+			wantErrText: "not int32 type",
+		},
+		{
+			name:        "quoted invalid decimal is not adjusted",
+			colName:     "d",
+			vecType:     types.New(types.T_decimal64, 5, 2),
+			colType:     plan.Type{Id: int32(types.T_decimal64), Width: 5, Scale: 2},
+			fieldVal:    "10x",
+			wantErrText: "invalid Decimal64 type",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(tc.vecType)
+			defer bat.Clean(proc.Mp())
+
+			param := &ExternalParam{
+				ExParamConst: ExParamConst{
+					Ctx:           context.Background(),
+					StrictSqlMode: false,
+					Cols: []*plan.ColDef{{
+						Name: tc.colName,
+						Typ:  tc.colType,
+					}},
+					Extern: &tree.ExternParam{
+						ExParamConst: tree.ExParamConst{Format: tree.CSV},
+						ExParam: tree.ExParam{
+							ExternType: int32(plan.ExternType_LOAD),
+							Local:      true,
+						},
+					},
+				},
+				ExParam: ExParam{Fileparam: &ExFileparam{}},
+			}
+
+			err := getColData(
+				bat,
+				[]csvparser.Field{{Val: tc.fieldVal, HasStringQuote: true}},
+				0,
+				param,
+				proc.Mp(),
+				plan.ExternAttr{ColName: tc.colName, ColIndex: 0, ColFieldIndex: 0},
+				proc,
+			)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.wantErrText)
+		})
+	}
+}
+
+func TestGetColDataLoadDataNonStrictTemporalNormalization(t *testing.T) {
+	utc8 := time.FixedZone("UTC+8", 8*3600)
+
+	testCases := []struct {
+		name              string
+		colType           plan.Type
+		vecType           types.Type
+		fieldVal          string
+		sessionTZ         *time.Location
+		wantDirect        any
+		wantParallelText  string
+		wantDirectErrText string
+		strict            bool
+		local             bool
+		format            string
+	}{
+		{
+			name:             "date malformed becomes zero date",
+			colType:          plan.Type{Id: int32(types.T_date)},
+			vecType:          types.T_date.ToType(),
+			fieldVal:         "2024-02-31",
+			wantDirect:       types.ZeroDate,
+			wantParallelText: "0000-00-00",
+			local:            true,
+			format:           tree.CSV,
+		},
+		{
+			name:             "date explicit zero remains zero date",
+			colType:          plan.Type{Id: int32(types.T_date)},
+			vecType:          types.T_date.ToType(),
+			fieldVal:         "0000-00-00",
+			wantDirect:       types.ZeroDate,
+			wantParallelText: "0000-00-00",
+			local:            true,
+			format:           tree.CSV,
+		},
+		{
+			name:             "date legal value unchanged",
+			colType:          plan.Type{Id: int32(types.T_date)},
+			vecType:          types.T_date.ToType(),
+			fieldVal:         "2024-01-02",
+			wantParallelText: "2024-01-02",
+			local:            true,
+			format:           tree.CSV,
+		},
+		{
+			name:             "datetime malformed becomes zero datetime",
+			colType:          plan.Type{Id: int32(types.T_datetime)},
+			vecType:          types.T_datetime.ToType(),
+			fieldVal:         "2024-02-31 25:61:61",
+			wantDirect:       types.ZeroDatetime,
+			wantParallelText: "0000-00-00 00:00:00",
+			local:            true,
+			format:           tree.CSV,
+		},
+		{
+			name:             "datetime explicit zero remains zero datetime",
+			colType:          plan.Type{Id: int32(types.T_datetime)},
+			vecType:          types.T_datetime.ToType(),
+			fieldVal:         "0000-00-00 00:00:00",
+			wantDirect:       types.ZeroDatetime,
+			wantParallelText: "0000-00-00 00:00:00",
+			local:            true,
+			format:           tree.CSV,
+		},
+		{
+			name:             "datetime legal value unchanged",
+			colType:          plan.Type{Id: int32(types.T_datetime)},
+			vecType:          types.T_datetime.ToType(),
+			fieldVal:         "2024-01-02 03:04:05",
+			wantParallelText: "2024-01-02 03:04:05",
+			local:            true,
+			format:           tree.CSV,
+		},
+		{
+			name:             "timestamp malformed becomes zero timestamp",
+			colType:          plan.Type{Id: int32(types.T_timestamp)},
+			vecType:          types.T_timestamp.ToType(),
+			fieldVal:         "not-a-timestamp",
+			sessionTZ:        utc8,
+			wantDirect:       types.ZeroTimestamp,
+			wantParallelText: "0000-00-00 00:00:00",
+			local:            true,
+			format:           tree.CSV,
+		},
+		{
+			name:             "timestamp explicit zero remains zero timestamp",
+			colType:          plan.Type{Id: int32(types.T_timestamp)},
+			vecType:          types.T_timestamp.ToType(),
+			fieldVal:         "0000-00-00 00:00:00",
+			sessionTZ:        utc8,
+			wantDirect:       types.ZeroTimestamp,
+			wantParallelText: "0000-00-00 00:00:00",
+			local:            true,
+			format:           tree.CSV,
+		},
+		{
+			name:             "timestamp lower bound in session timezone becomes zero timestamp",
+			colType:          plan.Type{Id: int32(types.T_timestamp)},
+			vecType:          types.T_timestamp.ToType(),
+			fieldVal:         "1970-01-01 00:00:01",
+			sessionTZ:        utc8,
+			wantDirect:       types.ZeroTimestamp,
+			wantParallelText: "0000-00-00 00:00:00",
+			local:            true,
+			format:           tree.CSV,
+		},
+		{
+			name:             "timestamp exact UTC lower bound remains valid",
+			colType:          plan.Type{Id: int32(types.T_timestamp)},
+			vecType:          types.T_timestamp.ToType(),
+			fieldVal:         "1970-01-01 00:00:01",
+			sessionTZ:        time.UTC,
+			wantParallelText: "1970-01-01 00:00:01",
+			local:            true,
+			format:           tree.CSV,
+		},
+		{
+			name:              "strict timestamp below UTC lower bound is rejected",
+			colType:           plan.Type{Id: int32(types.T_timestamp)},
+			vecType:           types.T_timestamp.ToType(),
+			fieldVal:          "1970-01-01 00:00:00",
+			sessionTZ:         time.UTC,
+			wantParallelText:  "1970-01-01 00:00:00",
+			wantDirectErrText: "not Timestamp type",
+			local:             true,
+			format:            tree.CSV,
+			strict:            true,
+		},
+		{
+			name:              "strict local date keeps existing error",
+			colType:           plan.Type{Id: int32(types.T_date)},
+			vecType:           types.T_date.ToType(),
+			fieldVal:          "2024-02-31",
+			wantParallelText:  "2024-02-31",
+			wantDirectErrText: "not Date type",
+			local:             true,
+			format:            tree.CSV,
+			strict:            true,
+		},
+		{
+			name:              "non-local datetime keeps existing error",
+			colType:           plan.Type{Id: int32(types.T_datetime)},
+			vecType:           types.T_datetime.ToType(),
+			fieldVal:          "2024-02-31 25:61:61",
+			wantParallelText:  "2024-02-31 25:61:61",
+			wantDirectErrText: "not Datetime type",
+			local:             false,
+			format:            tree.CSV,
+		},
+		{
+			name:              "non-csv timestamp keeps existing error",
+			colType:           plan.Type{Id: int32(types.T_timestamp)},
+			vecType:           types.T_timestamp.ToType(),
+			fieldVal:          "not-a-timestamp",
+			sessionTZ:         utc8,
+			wantParallelText:  "not-a-timestamp",
+			wantDirectErrText: "not Timestamp type",
+			local:             true,
+			format:            tree.JSONLINE,
+		},
+		{
+			name:             "timestamp legal value unchanged",
+			colType:          plan.Type{Id: int32(types.T_timestamp)},
+			vecType:          types.T_timestamp.ToType(),
+			fieldVal:         "2024-01-02 03:04:05",
+			sessionTZ:        utc8,
+			wantParallelText: "2024-01-02 03:04:05",
+			local:            true,
+			format:           tree.CSV,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			if tc.sessionTZ != nil {
+				proc.GetSessionInfo().TimeZone = tc.sessionTZ
+			}
+
+			directBat := batch.NewWithSize(1)
+			directBat.Vecs[0] = vector.NewVec(tc.vecType)
+			defer directBat.Clean(proc.Mp())
+
+			directParam := &ExternalParam{
+				ExParamConst: ExParamConst{
+					Ctx:           context.Background(),
+					StrictSqlMode: tc.strict,
+					Cols:          []*plan.ColDef{{Name: "temporal", Typ: tc.colType}},
+					Extern: &tree.ExternParam{
+						ExParamConst: tree.ExParamConst{Format: tc.format},
+						ExParam: tree.ExParam{
+							ExternType: int32(plan.ExternType_LOAD),
+							Local:      tc.local,
+						},
+					},
+				},
+				ExParam: ExParam{Fileparam: &ExFileparam{}},
+			}
+
+			attr := plan.ExternAttr{ColName: "temporal", ColIndex: 0, ColFieldIndex: 0}
+			err := getColData(directBat, []csvparser.Field{{Val: tc.fieldVal}}, 0, directParam, proc.Mp(), attr, proc)
+			if tc.wantDirectErrText != "" {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.wantDirectErrText)
+			} else {
+				require.NoError(t, err)
+			}
+
+			parallelBat := batch.NewWithSize(1)
+			parallelBat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+			defer parallelBat.Clean(proc.Mp())
+
+			parallelParam := &ExternalParam{
+				ExParamConst: ExParamConst{
+					Ctx:           context.Background(),
+					ParallelLoad:  true,
+					StrictSqlMode: tc.strict,
+					Cols:          []*plan.ColDef{{Name: "temporal", Typ: tc.colType}},
+					Extern: &tree.ExternParam{
+						ExParamConst: tree.ExParamConst{Format: tc.format},
+						ExParam: tree.ExParam{
+							ExternType: int32(plan.ExternType_LOAD),
+							Local:      tc.local,
+						},
+					},
+				},
+				ExParam: ExParam{Fileparam: &ExFileparam{}},
+			}
+
+			err = getColData(parallelBat, []csvparser.Field{{Val: tc.fieldVal}}, 0, parallelParam, proc.Mp(), attr, proc)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantParallelText, string(parallelBat.Vecs[0].GetBytesAt(0)))
+
+			if tc.wantDirectErrText != "" {
+				return
+			}
+
+			switch want := tc.wantDirect.(type) {
+			case nil:
+				switch types.T(tc.colType.Id) {
+				case types.T_date:
+					got := vector.MustFixedColWithTypeCheck[types.Date](directBat.Vecs[0])[0]
+					expected, parseErr := types.ParseDateCast(tc.fieldVal)
+					require.NoError(t, parseErr)
+					require.Equal(t, expected, got)
+				case types.T_datetime:
+					got := vector.MustFixedColWithTypeCheck[types.Datetime](directBat.Vecs[0])[0]
+					expected, parseErr := types.ParseDatetime(tc.fieldVal, tc.colType.Scale)
+					require.NoError(t, parseErr)
+					require.Equal(t, expected, got)
+				case types.T_timestamp:
+					got := vector.MustFixedColWithTypeCheck[types.Timestamp](directBat.Vecs[0])[0]
+					expected, parseErr := types.ParseTimestamp(proc.GetSessionInfo().TimeZone, tc.fieldVal, tc.colType.Scale)
+					require.NoError(t, parseErr)
+					require.Equal(t, expected, got)
+				default:
+					t.Fatalf("unexpected temporal type %v", types.T(tc.colType.Id))
+				}
+			case types.Date:
+				require.Equal(t, []types.Date{want}, vector.MustFixedColWithTypeCheck[types.Date](directBat.Vecs[0]))
+			case types.Datetime:
+				require.Equal(t, []types.Datetime{want}, vector.MustFixedColWithTypeCheck[types.Datetime](directBat.Vecs[0]))
+			case types.Timestamp:
+				require.Equal(t, []types.Timestamp{want}, vector.MustFixedColWithTypeCheck[types.Timestamp](directBat.Vecs[0]))
+			default:
+				t.Fatalf("unexpected direct expectation type %T", tc.wantDirect)
+			}
+		})
+	}
+}
+
+func TestGetColDataLoadDataNonStrictAdjustmentLeavesEmptyBoolNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:           context.Background(),
+			StrictSqlMode: false,
+			Cols: []*plan.ColDef{{
+				Name: "b",
+				Typ:  plan.Type{Id: int32(types.T_bool)},
+			}},
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{Format: tree.CSV},
+				ExParam: tree.ExParam{
+					ExternType: int32(plan.ExternType_LOAD),
+					Local:      true,
+				},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{}},
+	}
+
+	err := getColData(
+		bat,
+		[]csvparser.Field{{Val: ""}},
+		0,
+		param,
+		proc.Mp(),
+		plan.ExternAttr{ColName: "b", ColIndex: 0, ColFieldIndex: 0},
+		proc,
+	)
+	require.NoError(t, err)
+	require.True(t, bat.Vecs[0].GetNulls().Contains(0))
+}
+
 func TestIsLegalLineLoadDataYear(t *testing.T) {
 	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{Format: tree.CSV}}
 	cols := []*plan.ColDef{{
@@ -591,6 +1236,63 @@ func Test_Prepare(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestIcebergParquetProfileStats(t *testing.T) {
+	stats := icebergParquetProfileStats(&ExternalParam{
+		ExParamConst: ExParamConst{
+			Attrs: []plan.ExternAttr{
+				{ColName: "id", ColIndex: 0},
+				{ColName: "name", ColIndex: 1},
+			},
+			Cols: []*plan.ColDef{
+				{Name: "id"},
+				{Name: "name"},
+				{Name: "hidden", Hidden: true},
+			},
+			IcebergColumns: []*pipeline.IcebergColumnMapping{
+				{MoColIndex: 0, IcebergFieldId: 1, CurrentFieldName: "id"},
+				{MoColIndex: 1, IcebergFieldId: 2, CurrentFieldName: "name", DefaultNullFill: true},
+				{MoColIndex: 2, IcebergFieldId: 3, CurrentFieldName: "hidden", IsHidden: true},
+			},
+			IcebergDataTasks: []*pipeline.IcebergDataFileTask{
+				{FilePath: "warehouse/orders/part-0.parquet", FileSize: 100},
+				{FilePath: "warehouse/orders/part-1.parquet", FileSize: 200},
+			},
+			IcebergPlanningStats: process.ParquetProfileStats{
+				IcebergMetadataBytes:         10,
+				IcebergManifestListBytes:     20,
+				IcebergManifestBytes:         30,
+				IcebergManifestsSelected:     2,
+				IcebergManifestsPruned:       1,
+				IcebergDataFilesSelected:     2,
+				IcebergDataFilesPruned:       3,
+				IcebergDataFileBytesSelected: 300,
+				IcebergDataFileBytesPruned:   400,
+				IcebergPlanningCacheHits:     4,
+				IcebergPlanningCacheMiss:     5,
+			},
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{Format: tree.PARQUET},
+				ExParam:      tree.ExParam{ExternType: int32(plan.ExternType_ICEBERG_TB)},
+			},
+		},
+	})
+	require.Equal(t, int64(2), stats.TotalColumns)
+	require.Equal(t, int64(1), stats.ProjectedColumns)
+	require.Equal(t, int64(2), stats.SelectedFiles)
+	require.Equal(t, int64(300), stats.SelectedFileBytes)
+	require.Equal(t, int64(10), stats.IcebergMetadataBytes)
+	require.Equal(t, int64(20), stats.IcebergManifestListBytes)
+	require.Equal(t, int64(30), stats.IcebergManifestBytes)
+	require.Equal(t, int64(2), stats.IcebergManifestsSelected)
+	require.Equal(t, int64(1), stats.IcebergManifestsPruned)
+	require.Equal(t, int64(2), stats.IcebergDataFilesSelected)
+	require.Equal(t, int64(3), stats.IcebergDataFilesPruned)
+	require.Equal(t, int64(300), stats.IcebergDataFileBytesSelected)
+	require.Equal(t, int64(400), stats.IcebergDataFileBytesPruned)
+	require.Equal(t, int64(4), stats.IcebergPlanningCacheHits)
+	require.Equal(t, int64(5), stats.IcebergPlanningCacheMiss)
 }
 
 func TestReadFileOffsetCompressedUnsafe(t *testing.T) {
@@ -1127,6 +1829,9 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 		return &plan.Node{
 			NodeType: plan.Node_EXTERNAL_SCAN,
 			Stats:    &plan.Stats{},
+			ExternScan: &plan.ExternScan{
+				Type: int32(plan.ExternType_EXTERNAL_TB),
+			},
 			TableDef: &plan.TableDef{
 				TableType: "func_table",
 				TblFunc: &plan.TableFunction{
@@ -1134,7 +1839,8 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 				},
 				Cols: []*plan.ColDef{
 					{
-						Name: catalog.ExternalFilePath,
+						ColId: catalog.ExternalFilePathColId,
+						Name:  catalog.ExternalFilePath,
 						Typ: plan.Type{
 							Id:    int32(types.T_varchar),
 							Width: types.MaxVarcharLen,
@@ -1220,10 +1926,429 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, got1, err := filterByAccountAndFilename(context.TODO(), tt.args.node, tt.args.proc, tt.args.fileList, tt.args.fileSize)
+			got, got1, leftover, err := filterByAccountAndFilename(context.TODO(), tt.args.node, tt.args.proc, tt.args.fileList, tt.args.fileSize)
 			require.Nil(t, err)
 			require.Equal(t, tt.want, got)
 			require.Equal(t, tt.want1, got1)
+			require.Empty(t, leftover)
+		})
+	}
+}
+
+func filePruningTestNode(physicalCols ...string) *plan.Node {
+	cols := make([]*plan.ColDef, 0, len(physicalCols)+1)
+	physicalPositions := make(map[string]int32, len(physicalCols))
+	for i, name := range physicalCols {
+		cols = append(cols, &plan.ColDef{
+			ColId: uint64(i + 1),
+			Name:  name,
+			Typ:   plan.Type{Id: int32(types.T_varchar)},
+		})
+		physicalPositions[name] = int32(i)
+	}
+	cols = append(cols, &plan.ColDef{
+		ColId: catalog.ExternalFilePathColId,
+		Name:  catalog.ExternalFilePath,
+		Typ:   plan.Type{Id: int32(types.T_varchar)},
+	})
+	return &plan.Node{
+		NodeType: plan.Node_EXTERNAL_SCAN,
+		TableDef: &plan.TableDef{Cols: cols},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_EXTERNAL_TB),
+			TbColToDataCol: physicalPositions,
+		},
+	}
+}
+
+func filePruningColumn(pos int32, name string) *plan.Expr {
+	return &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos, Name: name}},
+	}
+}
+
+func filePruningStringLiteral(value string) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Sval{Sval: value},
+		}},
+	}
+}
+
+func filePruningBoolLiteral(value bool) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Bval{Bval: value},
+		}},
+	}
+}
+
+func filePruningFunction(name string, id int64, typ types.T, args ...*plan.Expr) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(typ)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: id, ObjName: name},
+			Args: args,
+		}},
+	}
+}
+
+func filePruningEqual(left, right *plan.Expr) *plan.Expr {
+	return filePruningFunction("=", function.EqualFunctionEncodedID, types.T_bool, left, right)
+}
+
+func TestFileLevelColumnUsesSchemaPosition(t *testing.T) {
+	node := filePruningTestNode("customer.account", "customer.__mo_filepath", "account", catalog.ExternalFilePath)
+	virtualPos := int32(len(node.TableDef.Cols) - 1)
+	physicalFilepathNode := &plan.Node{
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{{Name: catalog.ExternalFilePath}}},
+		ExternScan: &plan.ExternScan{TbColToDataCol: map[string]int32{
+			catalog.ExternalFilePath: 0,
+		}},
+	}
+	wrongLastColumnNode := &plan.Node{
+		TableDef:   &plan.TableDef{Cols: []*plan.ColDef{{Name: "account"}}},
+		ExternScan: &plan.ExternScan{},
+	}
+
+	tests := []struct {
+		name string
+		node *plan.Node
+		col  *plan.ColRef
+		want bool
+	}{
+		{name: "virtual filepath", node: node, col: &plan.ColRef{ColPos: virtualPos, Name: "ext.__mo_filepath"}, want: true},
+		{name: "dotted physical account", node: node, col: &plan.ColRef{ColPos: 0, Name: "customer.account"}},
+		{name: "dotted physical filepath", node: node, col: &plan.ColRef{ColPos: 1, Name: "customer.__mo_filepath"}},
+		{name: "physical account", node: node, col: &plan.ColRef{ColPos: 2, Name: "account"}},
+		{name: "physical exact filepath", node: node, col: &plan.ColRef{ColPos: 3, Name: catalog.ExternalFilePath}},
+		{name: "physical filepath in metadata", node: physicalFilepathNode, col: &plan.ColRef{ColPos: 0, Name: catalog.ExternalFilePath}},
+		{name: "last column has different name", node: wrongLastColumnNode, col: &plan.ColRef{ColPos: 0, Name: catalog.ExternalFilePath}},
+		{name: "out of range", node: node, col: &plan.ColRef{ColPos: 99, Name: catalog.ExternalFilePath}},
+		{name: "missing node", col: &plan.ColRef{ColPos: virtualPos, Name: catalog.ExternalFilePath}},
+		{name: "missing column", node: node},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isFileLevelColumn(tt.node, tt.col))
+		})
+	}
+}
+
+func TestFileLevelFilterClassifiesBoundaryExpressions(t *testing.T) {
+	require.False(t, isSafeFileLevelFunction(nil))
+	literal := func() *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{}}}
+	}
+	list := func(items ...*plan.Expr) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: items}}}
+	}
+
+	node := filePruningTestNode("account_id")
+	virtualColumn := filePruningColumn(1, "ext."+catalog.ExternalFilePath)
+	physicalColumn := filePruningColumn(0, "ext.account_id")
+	virtualFilter := filePruningEqual(virtualColumn, filePruningStringLiteral("/x"))
+	physicalFilter := filePruningEqual(physicalColumn, filePruningStringLiteral("x"))
+
+	classificationTests := []struct {
+		name           string
+		expr           *plan.Expr
+		hasFileLevel   bool
+		hasUnsupported bool
+	}{
+		{name: "nil expression", expr: nil},
+		{name: "empty expression", expr: &plan.Expr{}, hasUnsupported: true},
+		{name: "nil column", expr: &plan.Expr{Expr: &plan.Expr_Col{}}, hasUnsupported: true},
+		{name: "nil function", expr: &plan.Expr{Expr: &plan.Expr_F{}}, hasUnsupported: true},
+		{name: "nil list", expr: &plan.Expr{Expr: &plan.Expr_List{}}},
+		{name: "literal", expr: literal()},
+		{
+			name:         "virtual list",
+			expr:         list(virtualColumn, literal()),
+			hasFileLevel: true,
+		},
+		{
+			name:           "mixed function",
+			expr:           filePruningEqual(virtualColumn, physicalColumn),
+			hasFileLevel:   true,
+			hasUnsupported: true,
+		},
+		{
+			name:           "mixed list",
+			expr:           list(virtualColumn, physicalColumn),
+			hasFileLevel:   true,
+			hasUnsupported: true,
+		},
+		{
+			name:           "unsupported expression",
+			expr:           &plan.Expr{Expr: &plan.Expr_Raw{Raw: &plan.RawColRef{}}},
+			hasUnsupported: true,
+		},
+	}
+
+	for _, tt := range classificationTests {
+		t.Run("columns/"+tt.name, func(t *testing.T) {
+			hasFileLevel, hasUnsupported := classifyFileLevelColumns(node, tt.expr)
+			require.Equal(t, tt.hasFileLevel, hasFileLevel)
+			require.Equal(t, tt.hasUnsupported, hasUnsupported)
+		})
+	}
+
+	filterTests := []struct {
+		name string
+		expr *plan.Expr
+		want bool
+	}{
+		{name: "nil expression", expr: nil},
+		{name: "non function", expr: literal()},
+		{name: "nil function", expr: &plan.Expr{Expr: &plan.Expr_F{}}},
+		{name: "missing function metadata", expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{}}}},
+		{name: "unknown function", expr: filePruningFunction("unknown", -1, types.T_bool, virtualFilter)},
+		{name: "empty or", expr: filePruningFunction("or", int64(function.OR)<<32, types.T_bool)},
+		{name: "or with virtual branches", expr: filePruningFunction("or", int64(function.OR)<<32, types.T_bool, virtualFilter, virtualFilter), want: true},
+		{name: "or with physical branch", expr: filePruningFunction("or", int64(function.OR)<<32, types.T_bool, virtualFilter, physicalFilter)},
+	}
+
+	for _, tt := range filterTests {
+		t.Run("filter/"+tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isFileLevelFilter(node, tt.expr))
+		})
+	}
+
+	randFn, err := function.GetFunctionByName(context.Background(), "rand", nil)
+	require.NoError(t, err)
+	lessFn, err := function.GetFunctionByName(context.Background(), "<", []types.Type{types.T_float64.ToType(), types.T_float64.ToType()})
+	require.NoError(t, err)
+	randExpr := filePruningFunction("rand", randFn.GetEncodedOverloadID(), types.T_float64)
+	randFilter := filePruningFunction("<", lessFn.GetEncodedOverloadID(), types.T_bool, randExpr, &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: 0.5}}},
+	})
+	volatileFilter := filePruningFunction("and", function.AndFunctionEncodedID, types.T_bool, randFilter, virtualFilter)
+	require.False(t, isFileLevelFilter(node, volatileFilter), "volatile predicates must stay at row level")
+
+	currentDateFn, err := function.GetFunctionByName(context.Background(), "current_date", nil)
+	require.NoError(t, err)
+	realtimeFilter := filePruningFunction("and", function.AndFunctionEncodedID, types.T_bool,
+		filePruningFunction("current_date", currentDateFn.GetEncodedOverloadID(), types.T_date), virtualFilter)
+	require.False(t, isFileLevelFilter(node, realtimeFilter), "time-dependent predicates must stay at row level")
+}
+
+func TestFilterByAccountAndFilenameKeepsPhysicalColumnsAtRowLevel(t *testing.T) {
+	tests := []struct {
+		name       string
+		columnName string
+	}{
+		{name: "physical account", columnName: "account"},
+		{name: "dotted physical account", columnName: "customer.account"},
+		{name: "dotted physical filepath", columnName: "customer.__mo_filepath"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filter := filePruningEqual(filePruningColumn(0, tt.columnName), filePruningStringLiteral("row-account"))
+			node := filePruningTestNode(tt.columnName)
+			node.FilterList = []*plan.Expr{filter}
+
+			fileList := []string{"etl:/path-account/file.csv"}
+			fileSize := []int64{1}
+			gotFiles, gotSizes, leftover, err := filterByAccountAndFilename(
+				context.Background(), node, testutil.NewProc(t), fileList, fileSize,
+			)
+
+			require.NoError(t, err)
+			require.Equal(t, fileList, gotFiles)
+			require.Equal(t, fileSize, gotSizes)
+			require.Equal(t, []*plan.Expr{filter}, leftover,
+				"physical-column filter must remain a row-level filter")
+			require.Equal(t, []*plan.Expr{filter}, node.FilterList, "filtering must not mutate the reusable plan")
+		})
+	}
+}
+
+func TestFilterByAccountAndFilenamePrunesAfterColumnRemap(t *testing.T) {
+	likeFn, err := function.GetFunctionByName(context.Background(), "like", []types.Type{
+		types.T_varchar.ToType(), types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+
+	// Production shape after pruning (a, b, __mo_filepath) to
+	// (a, __mo_filepath): ColPos 1 is local, while the physical-column map
+	// intentionally keeps b's original file-field position 1.
+	node := &plan.Node{
+		NodeType: plan.Node_EXTERNAL_SCAN,
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+			{ColId: 1, Name: "a", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{
+				ColId: catalog.ExternalFilePathColId,
+				Name:  catalog.ExternalFilePath,
+				Typ:   plan.Type{Id: int32(types.T_varchar)},
+			},
+		}},
+		ExternScan: &plan.ExternScan{
+			Type: int32(plan.ExternType_EXTERNAL_TB),
+			TbColToDataCol: map[string]int32{
+				"a": 0,
+				"b": 1,
+			},
+		},
+	}
+	filter := filePruningFunction("like", likeFn.GetEncodedOverloadID(), types.T_bool,
+		filePruningColumn(1, catalog.ExternalFilePath),
+		filePruningStringLiteral("%/csv/%"))
+	node.FilterList = []*plan.Expr{filter}
+
+	fileList := []string{"etl:/logs/csv/a.csv", "etl:/logs/tae/a.blk"}
+	fileSize := []int64{10, 20}
+	gotFiles, gotSizes, leftover, err := filterByAccountAndFilename(
+		context.Background(), node, testutil.NewProc(t), fileList, fileSize,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, fileList[:1], gotFiles)
+	require.Equal(t, fileSize[:1], gotSizes)
+	require.Empty(t, leftover)
+	require.Equal(t, []*plan.Expr{filter}, node.FilterList)
+}
+
+func TestFilterByAccountAndFilenameKeepsMixedColumnFilterAtRowLevel(t *testing.T) {
+	const tableName = "ext"
+	varcharType := plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen, Table: tableName}
+	filter := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: function.EqualFunctionEncodedID, ObjName: "="},
+			Args: []*plan.Expr{
+				{
+					Typ: varcharType,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: 0,
+						Name:   tableName + ".account",
+					}},
+				},
+				{
+					Typ: varcharType,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: 1,
+						Name:   tableName + ".account_id",
+					}},
+				},
+			},
+		}},
+	}
+	node := &plan.Node{
+		NodeType: plan.Node_EXTERNAL_SCAN,
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+			{Name: "account", Typ: varcharType},
+			{Name: "account_id", Typ: varcharType},
+			{ColId: catalog.ExternalFilePathColId, Name: catalog.ExternalFilePath, Typ: varcharType},
+		}},
+		FilterList: []*plan.Expr{filter},
+		ExternScan: &plan.ExternScan{
+			Type: int32(plan.ExternType_EXTERNAL_TB),
+			TbColToDataCol: map[string]int32{
+				"account": 0, "account_id": 1,
+			},
+		},
+	}
+
+	fileList := []string{"etl:/tenant/file.csv"}
+	fileSize := []int64{1}
+	gotFiles, gotSizes, leftover, err := filterByAccountAndFilename(
+		context.Background(), node, testutil.NewProc(t), fileList, fileSize,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, fileList, gotFiles)
+	require.Equal(t, fileSize, gotSizes)
+	require.Equal(t, []*plan.Expr{filter}, leftover,
+		"a filter that also references a physical column must remain at row level")
+	require.Equal(t, []*plan.Expr{filter}, node.FilterList)
+}
+
+func TestFilterByAccountAndFilenameReusesPreparedFilter(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := filePruningTestNode()
+	filepathColumn := filePruningColumn(0, catalog.ExternalFilePath)
+	parameter := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	filter := filePruningEqual(filepathColumn, parameter)
+	node.FilterList = []*plan.Expr{filter}
+
+	params, err := proc.AllocVectorOfRows(types.T_varchar.ToType(), 1, nil)
+	require.NoError(t, err)
+	proc.SetPrepareParams(params)
+	t.Cleanup(func() {
+		proc.SetPrepareParams(nil)
+		params.Free(proc.Mp())
+	})
+
+	fileList := []string{"etl:/a.csv", "etl:/b.csv"}
+	fileSize := []int64{10, 20}
+	require.NoError(t, vector.SetStringAt(params, 0, fileList[0], proc.Mp()))
+	gotFiles, gotSizes, leftover, err := filterByAccountAndFilename(
+		context.Background(), node, proc, fileList, fileSize,
+	)
+	require.NoError(t, err)
+	require.Equal(t, fileList[:1], gotFiles)
+	require.Equal(t, fileSize[:1], gotSizes)
+	require.Empty(t, leftover)
+	require.Equal(t, []*plan.Expr{filter}, node.FilterList)
+
+	require.NoError(t, vector.SetStringAt(params, 0, fileList[1], proc.Mp()))
+	gotFiles, gotSizes, leftover, err = filterByAccountAndFilename(
+		context.Background(), node, proc, fileList, fileSize,
+	)
+	require.NoError(t, err)
+	require.Equal(t, fileList[1:], gotFiles)
+	require.Equal(t, fileSize[1:], gotSizes)
+	require.Empty(t, leftover)
+	require.Equal(t, []*plan.Expr{filter}, node.FilterList, "each EXECUTE must see the original predicate")
+}
+
+func TestFilterByAccountAndFilenameBroadcastsConstantResults(t *testing.T) {
+	ifFn, err := function.GetFunctionByName(context.Background(), "if", []types.Type{
+		types.T_bool.ToType(), types.T_bool.ToType(), types.T_bool.ToType(),
+	})
+	require.NoError(t, err)
+
+	fileList := []string{"etl:/a.csv", "etl:/b.csv"}
+	fileSize := []int64{10, 20}
+	for _, test := range []struct {
+		name      string
+		thenValue bool
+		wantFiles []string
+		wantSizes []int64
+	}{
+		{name: "constant true", thenValue: true, wantFiles: fileList, wantSizes: fileSize},
+		{name: "constant false", thenValue: false, wantFiles: []string{}, wantSizes: []int64{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			node := filePruningTestNode()
+			filepathFilter := filePruningEqual(
+				filePruningStringLiteral("never-selected"),
+				filePruningColumn(0, catalog.ExternalFilePath),
+			)
+			filter := filePruningFunction("if", ifFn.GetEncodedOverloadID(), types.T_bool,
+				filePruningBoolLiteral(true), filePruningBoolLiteral(test.thenValue), filepathFilter)
+			node.FilterList = []*plan.Expr{filter}
+
+			gotFiles, gotSizes, leftover, err := filterByAccountAndFilename(
+				context.Background(), node, testutil.NewProc(t), fileList, fileSize,
+			)
+			require.NoError(t, err)
+			require.Equal(t, test.wantFiles, gotFiles)
+			require.Equal(t, test.wantSizes, gotSizes)
+			require.Empty(t, leftover)
+			require.Equal(t, []*plan.Expr{filter}, node.FilterList)
 		})
 	}
 }
@@ -1259,6 +2384,71 @@ func Test_getMOCSVReader(t *testing.T) {
 	require.NoError(t, err)
 	_, err = r.Open(param, case1.proc)
 	require.Equal(t, nil, err)
+}
+
+func TestGetColDataYear(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_year.ToType())
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Cols: []*plan.ColDef{{
+				Name: "c_year",
+				Typ:  plan.Type{Id: int32(types.T_year)},
+			}},
+			Ctx:    context.Background(),
+			Extern: &tree.ExternParam{},
+		},
+	}
+
+	err := getColData(
+		bat,
+		[]csvparser.Field{{Val: "2024"}},
+		0,
+		param,
+		proc.Mp(),
+		plan.ExternAttr{ColName: "c_year", ColIndex: 0, ColFieldIndex: 0},
+		proc,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []types.MoYear{2024}, vector.MustFixedColWithTypeCheck[types.MoYear](bat.Vecs[0]))
+}
+
+func TestGetColDataUnsupportedTypeReportsColumnIndex(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+				{Name: "unsupported", Typ: plan.Type{Id: int32(types.T_TS)}},
+			},
+			Ctx:    context.Background(),
+			Extern: &tree.ExternParam{},
+		},
+	}
+
+	err := getColData(
+		bat,
+		[]csvparser.Field{{Val: "1"}},
+		0,
+		param,
+		proc.Mp(),
+		plan.ExternAttr{ColName: "unsupported", ColIndex: 1, ColFieldIndex: 0},
+		proc,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "the value type TRANSACTION TIMESTAMP is not support now")
 }
 
 // Test_getColData_VecDimensionCheck tests that getColData correctly validates
@@ -1347,4 +2537,31 @@ func Test_getColData_VecDimensionCheck(t *testing.T) {
 			bat.Vecs[0].Free(mp)
 		})
 	}
+}
+
+func TestGetColDataParallelLoadVectorIsDecodedDirectly(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	vecTyp := types.New(types.T_array_float32, 3, 0)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(vecTyp)
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{ExParamConst: ExParamConst{
+		ParallelLoad: true,
+		Cols:         []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_array_float32), Width: 3}}},
+		Ctx:          context.Background(),
+		Extern:       &tree.ExternParam{},
+	}}
+	attr := plan.ExternAttr{ColIndex: 0, ColName: "v", ColFieldIndex: 0}
+	require.NoError(t, getColData(bat, []csvparser.Field{{Val: "[1,2,3]"}}, 0, param, proc.Mp(), attr, proc))
+	require.Equal(t, []float32{1, 2, 3}, types.BytesToArray[float32](bat.Vecs[0].GetBytesAt(0)))
+}
+
+func TestMakeTypeParallelLoadKeepsVectorType(t *testing.T) {
+	vectorType := makeType(&plan.Type{Id: int32(types.T_array_float32), Width: 3}, true)
+	require.Equal(t, types.T_array_float32, vectorType.Oid)
+	require.Equal(t, int32(3), vectorType.Width)
+	require.Equal(t, types.T_varchar, makeType(&plan.Type{Id: int32(types.T_int64)}, true).Oid)
 }

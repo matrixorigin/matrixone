@@ -16,6 +16,7 @@ package morpc
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -24,6 +25,41 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func triggerCreateForTest(mgr *clientGCManager, c *client, backend string) bool {
+	c.mu.Lock()
+	generation := c.backendGenerationLocked(backend)
+	c.mu.Unlock()
+	return mgr.triggerCreateAtGeneration(c, backend, generation)
+}
+
+type cappedCreateFactory struct {
+	entered chan string
+	release chan struct{}
+	active  atomic.Int32
+	max     atomic.Int32
+	nextID  atomic.Int32
+}
+
+func (f *cappedCreateFactory) Create(
+	backend string,
+	_ ...BackendOption,
+) (Backend, error) {
+	active := f.active.Add(1)
+	for {
+		maxActive := f.max.Load()
+		if active <= maxActive || f.max.CompareAndSwap(maxActive, active) {
+			break
+		}
+	}
+	f.entered <- backend
+	<-f.release
+	f.active.Add(-1)
+	return &testBackend{
+		id:         int(f.nextID.Add(1)),
+		activeTime: time.Now(),
+	}, nil
+}
 
 // Helper function to get backend with retry for async creation
 func getBackendWithRetry(t *testing.T, client *client, backend string, lock bool) Backend {
@@ -200,7 +236,7 @@ func TestGlobalClientGC_CreateLoop(t *testing.T) {
 	assert.Equal(t, 0, len(backends))
 
 	// Trigger create
-	mgr.triggerCreate(client, "b1")
+	triggerCreateForTest(mgr, client, "b1")
 
 	// Wait for processing
 	time.Sleep(time.Millisecond * 100)
@@ -213,6 +249,328 @@ func TestGlobalClientGC_CreateLoop(t *testing.T) {
 
 	mgr.unregister(client)
 	mgr.stop()
+}
+
+func TestGlobalClientGC_CreateWorkersBoundFactoryConcurrency(t *testing.T) {
+	mgr := newClientGCManager()
+	factory := &cappedCreateFactory{
+		entered: make(chan string, 8),
+		release: make(chan struct{}),
+	}
+	rpcClient, err := NewClient(
+		"bounded-create-workers",
+		factory,
+		WithClientMaxBackendPerHost(1),
+		WithClientEnableAutoCreateBackend(),
+	)
+	require.NoError(t, err)
+	client := rpcClient.(*client)
+	released := false
+	defer func() {
+		if !released {
+			close(factory.release)
+		}
+		mgr.unregister(client)
+		mgr.stop()
+		require.NoError(t, rpcClient.Close())
+	}()
+	mgr.register(client)
+
+	backends := []string{
+		"create-0", "create-1", "create-2", "create-3",
+		"create-4", "create-5", "create-6", "create-7",
+	}
+	for _, backend := range backends {
+		require.True(t, triggerCreateForTest(mgr, client, backend))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for range backendCreateWorkerCount {
+		select {
+		case <-factory.entered:
+		case <-ctx.Done():
+			t.Fatalf("factory did not admit %d workers: %v",
+				backendCreateWorkerCount, context.Cause(ctx))
+		}
+	}
+
+	// All workers are now blocked inside Create, so these observations require
+	// no timing window: the remaining requests cannot enter until release.
+	require.Equal(t, int32(backendCreateWorkerCount), factory.active.Load())
+	require.Equal(t, int32(backendCreateWorkerCount), factory.max.Load())
+	require.Len(t, mgr.createC, len(backends)-backendCreateWorkerCount)
+	require.Empty(t, factory.entered)
+
+	close(factory.release)
+	released = true
+	require.Eventually(t, func() bool {
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		for _, backend := range backends {
+			if len(client.mu.backends[backend]) != 1 {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, time.Millisecond)
+	require.Equal(t, int32(backendCreateWorkerCount), factory.max.Load())
+}
+
+func TestGlobalClientGC_StopDrainsQueuedCreateState(t *testing.T) {
+	mgr := newClientGCManager()
+	rpcClient, err := NewClient(
+		"stop-drains-create",
+		newTestBackendFactory(),
+		WithClientMaxBackendPerHost(1),
+		WithClientEnableAutoCreateBackend(),
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, rpcClient.Close())
+	}()
+	client := rpcClient.(*client)
+
+	client.mu.Lock()
+	generation := client.backendGenerationLocked("queued")
+	client.mu.Unlock()
+	state, queued := mgr.triggerCreateAtGenerationState(
+		client,
+		"queued",
+		generation,
+	)
+	require.True(t, queued)
+	require.NotNil(t, state)
+	require.Len(t, mgr.createC, 1)
+
+	// The manager has no running workers. stop must still drain the request and
+	// close its exact completion state before replacing the channels.
+	mgr.stop()
+	require.True(t, backendCreateDone(state))
+	client.mu.Lock()
+	require.Nil(t, client.mu.creating["queued"])
+	client.mu.Unlock()
+}
+
+func TestGlobalClientGC_DropsCreateQueuedBeforeBackendReset(t *testing.T) {
+	mgr := newClientGCManager()
+	factory := &createNotifyFactory{
+		inner:   newTestBackendFactory(),
+		created: make(chan struct{}, 2),
+	}
+	rc, err := NewClient("test-stale-create",
+		factory,
+		WithClientMaxBackendPerHost(2),
+		WithClientEnableAutoCreateBackend())
+	require.NoError(t, err)
+	client := rc.(*client)
+	defer func() {
+		mgr.unregister(client)
+		mgr.stop()
+		require.NoError(t, client.Close())
+	}()
+	mgr.register(client)
+
+	client.mu.Lock()
+	staleGeneration := client.backendGenerationLocked("b1")
+	staleState := newBackendCreateState(staleGeneration)
+	client.mu.creating["b1"] = staleState
+	client.mu.Unlock()
+	// Reset removes the captured token. Inject a request that was admitted before
+	// reset directly into the worker queue, then use another remote as a FIFO barrier.
+	require.NoError(t, client.CloseBackendFor("b1"))
+	mgr.createC <- createRequest{
+		c:       client,
+		backend: "b1",
+		state:   staleState,
+	}
+	require.True(t, triggerCreateForTest(mgr, client, "barrier"))
+	select {
+	case <-factory.created:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for create-loop barrier")
+	}
+
+	require.Eventually(t, func() bool {
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		return len(client.mu.backends["b1"]) == 0 &&
+			len(client.mu.backends["barrier"]) == 1
+	}, 5*time.Second, 10*time.Millisecond)
+
+	// A request with a fresh generation is still admitted normally.
+	require.True(t, triggerCreateForTest(mgr, client, "b1"))
+	select {
+	case <-factory.created:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for current-epoch create")
+	}
+	require.Eventually(t, func() bool {
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		return len(client.mu.backends["b1"]) == 1
+	}, 5*time.Second, 10*time.Millisecond)
+}
+
+func TestGlobalClientGC_StopGateRejectsDequeuedRegisteredCreate(t *testing.T) {
+	mgr := newClientGCManager()
+	factory := &failingCreateFactory{}
+	rc, err := NewClient(
+		t.Name(),
+		factory,
+		WithClientMaxBackendPerHost(1),
+		WithClientDisableCircuitBreaker(),
+	)
+	require.NoError(t, err)
+	c := rc.(*client)
+	defer func() { require.NoError(t, c.Close()) }()
+
+	c.mu.Lock()
+	generation := c.backendGenerationLocked("remote")
+	state := newBackendCreateState(generation)
+	c.mu.creating["remote"] = state
+	c.mu.Unlock()
+	mgr.createC <- createRequest{
+		c:       c,
+		backend: "remote",
+		state:   state,
+	}
+
+	// Force the exact stop race deterministically: the worker dequeues while
+	// stopC is still open, then blocks on m.mu until stop publication closes
+	// stopC and sets stopping. registered remains true throughout.
+	mgr.mu.Lock()
+	mgr.clients[c] = struct{}{}
+	mgr.wg.Add(1)
+	go mgr.runCreateLoop(false)
+	dequeueDeadline := time.Now().Add(5 * time.Second)
+	for len(mgr.createC) != 0 && time.Now().Before(dequeueDeadline) {
+		runtime.Gosched()
+	}
+	if len(mgr.createC) != 0 {
+		mgr.mu.Unlock()
+		t.Fatal("create worker did not dequeue the registered request")
+	}
+	mgr.stopping = true
+	close(mgr.stopC)
+	mgr.mu.Unlock()
+
+	select {
+	case <-state.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stopped manager did not release the exact create state")
+	}
+	mgr.wg.Wait()
+	require.Zero(t, factory.attempts.Load(),
+		"factory work must not start after stop publication")
+	select {
+	case <-state.started:
+		t.Fatal("stopped queued create was marked as factory-admitted")
+	default:
+	}
+	c.mu.Lock()
+	pending := c.mu.creating["remote"]
+	c.mu.Unlock()
+	require.Nil(t, pending)
+}
+
+func TestGlobalClientGC_ResetDoesNotWaitForQueuedFactoryIO(t *testing.T) {
+	mgr := newClientGCManager()
+	factory := &blockingCreateFactory{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		backend: &testBackend{id: 1, activeTime: time.Now()},
+	}
+	rc, err := NewClient(
+		"test-reset-during-gc-create",
+		factory,
+		WithClientMaxBackendPerHost(1),
+	)
+	require.NoError(t, err)
+	client := rc.(*client)
+	defer func() {
+		select {
+		case <-factory.release:
+		default:
+			close(factory.release)
+		}
+		mgr.unregister(client)
+		mgr.stop()
+		require.NoError(t, client.Close())
+	}()
+	mgr.register(client)
+
+	require.True(t, triggerCreateForTest(mgr, client, "b1"))
+	select {
+	case <-factory.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("queued factory create did not start")
+	}
+
+	resetDone := make(chan error, 1)
+	go func() { resetDone <- client.CloseBackendFor("b1") }()
+	select {
+	case err := <-resetDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("targeted reset blocked behind queued factory I/O")
+	}
+
+	close(factory.release)
+	require.Eventually(t, func() bool {
+		factory.backend.RWMutex.RLock()
+		defer factory.backend.RWMutex.RUnlock()
+		return factory.backend.closed
+	}, 5*time.Second, 10*time.Millisecond)
+	client.mu.Lock()
+	backendCount := len(client.mu.backends["b1"])
+	client.mu.Unlock()
+	require.Zero(t, backendCount)
+}
+
+func TestGlobalClientGC_DeduplicatesQueuedAndInflightCreate(t *testing.T) {
+	mgr := newClientGCManager()
+	factory := &blockingCreateFactory{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		backend: &testBackend{id: 1, activeTime: time.Now()},
+	}
+	rc, err := NewClient(
+		"test-deduplicate-create",
+		factory,
+		WithClientMaxBackendPerHost(2),
+		WithClientEnableAutoCreateBackend(),
+	)
+	require.NoError(t, err)
+	client := rc.(*client)
+	defer func() {
+		select {
+		case <-factory.release:
+		default:
+			close(factory.release)
+		}
+		mgr.unregister(client)
+		mgr.stop()
+		require.NoError(t, client.Close())
+	}()
+	mgr.register(client)
+
+	require.True(t, triggerCreateForTest(mgr, client, "b1"))
+	select {
+	case <-factory.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("queued factory create did not start")
+	}
+	for i := 0; i < 100; i++ {
+		require.True(t, triggerCreateForTest(mgr, client, "b1"))
+	}
+	require.Empty(t, mgr.createC, "duplicate demand must not enqueue duplicate factory calls")
+
+	close(factory.release)
+	require.Eventually(t, func() bool {
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		return len(client.mu.backends["b1"]) == 1 && client.mu.creating["b1"] == nil
+	}, 5*time.Second, 10*time.Millisecond)
 }
 
 func TestGlobalClientGC_ConcurrentClients(t *testing.T) {
@@ -273,7 +631,7 @@ func TestGlobalClientGC_ChannelFull(t *testing.T) {
 	// Fill up the channels
 	for i := 0; i < 1025; i++ {
 		mgr.triggerGCInactive(client, "b1")
-		mgr.triggerCreate(client, "b1")
+		triggerCreateForTest(mgr, client, "b1")
 	}
 
 	// Should not block or panic
@@ -298,7 +656,7 @@ func TestGlobalClientGC_UnregisteredClientIgnored(t *testing.T) {
 
 	// Try to trigger GC on unregistered client
 	mgr.triggerGCInactive(client, "b1")
-	mgr.triggerCreate(client, "b1")
+	triggerCreateForTest(mgr, client, "b1")
 
 	// Wait a bit
 	time.Sleep(time.Millisecond * 100)
@@ -479,7 +837,7 @@ func TestGlobalClientGC_StressTest(t *testing.T) {
 			for j := 0; j < numOpsPerClient; j++ {
 				mgr.triggerGCInactive(client, "b1")
 				atomic.AddInt64(&opsCount, 1)
-				mgr.triggerCreate(client, "b1")
+				triggerCreateForTest(mgr, client, "b1")
 				atomic.AddInt64(&opsCount, 1)
 			}
 		}(i)
@@ -501,6 +859,8 @@ func TestGlobalClientGC_StressTest(t *testing.T) {
 
 func TestGlobalClientGC_TriggerCreateReturnValue(t *testing.T) {
 	mgr := newClientGCManager()
+	// Keep the manager stopped and use a tiny queue so admission is deterministic.
+	mgr.createC = make(chan createRequest, 1)
 
 	c, err := NewClient("test-client",
 		newTestBackendFactory(),
@@ -510,46 +870,47 @@ func TestGlobalClientGC_TriggerCreateReturnValue(t *testing.T) {
 	defer c.Close()
 
 	client := c.(*client)
-	mgr.register(client)
 
 	// First request should succeed (channel is empty)
-	ok := mgr.triggerCreate(client, "b1")
-	assert.True(t, ok, "first triggerCreate should succeed")
+	require.True(t, triggerCreateForTest(mgr, client, "b1"))
+	// Duplicate demand is coalesced and does not consume another queue slot.
+	require.True(t, triggerCreateForTest(mgr, client, "b1"))
+	require.Len(t, mgr.createC, 1)
 
-	// Fill up the channel to test failure case
-	channelCap := cap(mgr.createC)
-	for i := 0; i < channelCap-1; i++ {
-		mgr.triggerCreate(client, "b1")
-	}
+	// A distinct request observes the full queue and releases its admission slot.
+	require.False(t, triggerCreateForTest(mgr, client, "b2"))
+	client.mu.Lock()
+	pending := client.mu.creating["b2"]
+	client.mu.Unlock()
+	require.Nil(t, pending)
 
-	// Now channel should be full, next request should fail
-	// Note: we need to ensure the channel is full by filling it completely
-	for i := 0; i < channelCap; i++ {
-		mgr.triggerCreate(client, "b1")
-	}
-
-	// The last few should have returned false (channel full)
-	// We can't easily verify this without pausing the consumer goroutine
-	// So we just verify no panic and the function returns
-
-	mgr.unregister(client)
-	mgr.stop()
+	queued := <-mgr.createC
+	queued.c.releaseBackendCreate(queued.backend, queued.state)
+	require.True(t, triggerCreateForTest(mgr, client, "b2"))
 }
 
 func TestGlobalClientGC_InitGlobalGCManagerConcurrent(t *testing.T) {
-	// Test that InitGlobalGCManager can be called concurrently without issues
-	// Save original values (protected by mutex)
 	globalClientGCMu.Lock()
+	originalManager := globalClientGC
 	originalInterval := globalGCIdleCheckInterval
 	originalBufferSize := globalGCChannelBufferSize
+	globalGCIdleCheckInterval = DefaultGCIdleCheckInterval
+	globalGCChannelBufferSize = DefaultGCChannelBufferSize
+	testManager := newClientGCManager()
+	testManager.mu.Lock()
+	testManager.ensureStartedLocked()
+	testManager.mu.Unlock()
+	globalClientGC = testManager
 	globalClientGCMu.Unlock()
 
 	defer func() {
-		// Restore original values (protected by mutex)
 		globalClientGCMu.Lock()
+		currentManager := globalClientGC
+		globalClientGC = originalManager
 		globalGCIdleCheckInterval = originalInterval
 		globalGCChannelBufferSize = originalBufferSize
 		globalClientGCMu.Unlock()
+		currentManager.stop()
 	}()
 
 	var wg sync.WaitGroup
@@ -573,6 +934,55 @@ func TestGlobalClientGC_InitGlobalGCManagerConcurrent(t *testing.T) {
 	globalClientGCMu.RUnlock()
 	assert.True(t, intervalOK, "interval should be positive")
 	assert.True(t, bufferSizeOK, "buffer size should be positive")
+}
+
+func TestGlobalClientGC_FirstConfigReplacesPrestartedEmptyManager(t *testing.T) {
+	const (
+		configuredInterval = 17 * time.Millisecond
+		configuredCapacity = 7
+	)
+
+	globalClientGCMu.Lock()
+	originalManager := globalClientGC
+	originalInterval := globalGCIdleCheckInterval
+	originalBufferSize := globalGCChannelBufferSize
+	globalGCIdleCheckInterval = DefaultGCIdleCheckInterval
+	globalGCChannelBufferSize = DefaultGCChannelBufferSize
+	prestarted := newClientGCManager()
+	prestarted.mu.Lock()
+	prestarted.ensureStartedLocked()
+	prestarted.mu.Unlock()
+	globalClientGC = prestarted
+	globalClientGCMu.Unlock()
+	defer func() {
+		globalClientGCMu.Lock()
+		configuredManager := globalClientGC
+		globalClientGC = originalManager
+		globalGCIdleCheckInterval = originalInterval
+		globalGCChannelBufferSize = originalBufferSize
+		globalClientGCMu.Unlock()
+		configuredManager.stop()
+	}()
+
+	InitGlobalGCManager(configuredInterval, configuredCapacity)
+
+	globalClientGCMu.RLock()
+	configuredManager := globalClientGC
+	globalClientGCMu.RUnlock()
+	require.NotSame(t, prestarted, configuredManager)
+	require.Equal(t, configuredCapacity, cap(configuredManager.gcInactiveC))
+	require.Equal(t, configuredCapacity, cap(configuredManager.createC))
+	require.Equal(t, configuredInterval, configuredManager.gcIdleCheckInterval)
+	configuredManager.mu.RLock()
+	require.True(t, configuredManager.started)
+	require.Empty(t, configuredManager.clients)
+	configuredManager.mu.RUnlock()
+
+	rpcClient, err := NewClient("configured-manager-client", newTestBackendFactory())
+	require.NoError(t, err)
+	client := rpcClient.(*client)
+	require.Same(t, configuredManager, client.gcManager)
+	require.NoError(t, rpcClient.Close())
 }
 
 func TestGlobalClientGC_InitGlobalGCManagerAfterStart(t *testing.T) {
@@ -603,6 +1013,7 @@ func TestGlobalClientGC_InitGlobalGCManagerAfterStart(t *testing.T) {
 	// Manager should now be started
 	testMgr.mu.RLock()
 	started := testMgr.started
+	originalCapacity := cap(testMgr.createC)
 	testMgr.mu.RUnlock()
 	assert.True(t, started, "manager should be started after client creation")
 
@@ -616,6 +1027,11 @@ func TestGlobalClientGC_InitGlobalGCManagerAfterStart(t *testing.T) {
 	currentInterval := globalGCIdleCheckInterval
 	globalClientGCMu.RUnlock()
 	assert.Equal(t, newInterval, currentInterval, "interval should be updated")
+	testMgr.mu.RLock()
+	assert.Equal(t, newInterval, testMgr.gcIdleCheckInterval,
+		"active manager must receive the live interval update")
+	assert.Equal(t, originalCapacity, cap(testMgr.createC))
+	testMgr.mu.RUnlock()
 
 	// But channel buffer size cannot be changed after start
 	// (verified by warning log, not by value change)
@@ -645,7 +1061,9 @@ func TestGlobalClientGC_TryCreateReturnsCorrectValue(t *testing.T) {
 	cli1 := c1.(*client)
 
 	// tryCreate should return true when auto-create is enabled and channel has space
+	cli1.mu.Lock()
 	ok := cli1.tryCreate("b1")
+	cli1.mu.Unlock()
 	assert.True(t, ok, "tryCreate should return true when successful")
 
 	// Create a client with auto-create explicitly disabled
@@ -659,7 +1077,9 @@ func TestGlobalClientGC_TryCreateReturnsCorrectValue(t *testing.T) {
 	cli2 := c2.(*client)
 
 	// tryCreate should return false when auto-create is disabled
+	cli2.mu.Lock()
 	ok = cli2.tryCreate("b1")
+	cli2.mu.Unlock()
 	assert.False(t, ok, "tryCreate should return false when auto-create is disabled")
 }
 
@@ -838,7 +1258,7 @@ func TestGlobalClientGC_CreateOnClosedClient(t *testing.T) {
 	client.mu.Unlock()
 
 	// Trigger create - should be safely ignored
-	mgr.triggerCreate(client, "b1")
+	triggerCreateForTest(mgr, client, "b1")
 
 	// Give time for the create loop to process
 	time.Sleep(time.Millisecond * 50)

@@ -17,6 +17,7 @@ package compile
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -80,6 +81,11 @@ func TestHnswHandleReindex_DelegatesToCreate(t *testing.T) {
 
 func TestHnswHandleDropIndex_LogLine(t *testing.T) {
 	require.NoError(t, Hooks{}.HandleDropIndex(&stubCtx{}, map[string]*plan.IndexDef{}))
+}
+
+func TestHnswHiddenTableDropPriority(t *testing.T) {
+	require.Equal(t, 1, Hooks{}.HiddenTableDropPriority(catalog.Hnsw_TblType_Storage))
+	require.Equal(t, 0, Hooks{}.HiddenTableDropPriority(catalog.Hnsw_TblType_Metadata))
 }
 
 func TestHnswValidateReindexParams_Passthrough(t *testing.T) {

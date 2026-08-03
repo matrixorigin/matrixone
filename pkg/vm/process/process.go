@@ -151,8 +151,60 @@ func (proc *Process) GetPrepareParams() *vector.Vector {
 	return proc.Base.prepareParams
 }
 
+// SetPrepareParams borrows prepareParams. The caller remains responsible for releasing it.
 func (proc *Process) SetPrepareParams(prepareParams *vector.Vector) {
+	proc.setPrepareParams(prepareParams, nil, false)
+}
+
+// SetPrepareParamsWithIsBin borrows prepareParams. The caller remains responsible for releasing it.
+func (proc *Process) SetPrepareParamsWithIsBin(prepareParams *vector.Vector, isBin []bool) {
+	proc.setPrepareParams(prepareParams, isBin, false)
+}
+
+// SetOwnedPrepareParamsWithIsBin transfers prepareParams to proc. Replacing or freeing proc releases it.
+func (proc *Process) SetOwnedPrepareParamsWithIsBin(prepareParams *vector.Vector, isBin []bool) {
+	proc.setPrepareParams(prepareParams, isBin, true)
+}
+
+func (proc *Process) setPrepareParams(prepareParams *vector.Vector, isBin []bool, owned bool) {
+	if proc.Base.prepareParams == prepareParams && proc.Base.prepareParamsOwned {
+		owned = true
+	}
+	if proc.Base.prepareParamsOwned && proc.Base.prepareParams != nil && proc.Base.prepareParams != prepareParams {
+		proc.Base.prepareParams.Free(proc.Mp())
+	}
 	proc.Base.prepareParams = prepareParams
+	proc.Base.prepareParamsIsBin = isBin
+	proc.Base.prepareParamsOwned = owned && prepareParams != nil
+}
+
+// PrepareParamsState keeps the complete prepare-parameter state while a
+// Compile that shares the Process is being released.
+type PrepareParamsState struct {
+	prepareParams *vector.Vector
+	isBin         []bool
+	owned         bool
+}
+
+// DetachPrepareParams removes the prepare-parameter state without releasing
+// the owned vector. The caller must restore the returned state so a later
+// Process.Free can release it.
+func (proc *Process) DetachPrepareParams() PrepareParamsState {
+	state := PrepareParamsState{
+		prepareParams: proc.Base.prepareParams,
+		isBin:         proc.Base.prepareParamsIsBin,
+		owned:         proc.Base.prepareParamsOwned,
+	}
+	proc.Base.prepareParams = nil
+	proc.Base.prepareParamsIsBin = nil
+	proc.Base.prepareParamsOwned = false
+	return state
+}
+
+// RestorePrepareParams restores state previously returned by
+// DetachPrepareParams.
+func (proc *Process) RestorePrepareParams(state PrepareParamsState) {
+	proc.setPrepareParams(state.prepareParams, state.isBin, state.owned)
 }
 
 func (proc *Process) OperatorOutofMemory(size int64) bool {

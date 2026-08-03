@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -23,6 +24,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,8 +36,235 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+func TestGetFkDepsFromTableInfos(t *testing.T) {
+	tableInfos := []*tableInfo{
+		{
+			dbName:    "d",
+			tblName:   "parent",
+			typ:       "BASE TABLE",
+			createSql: "create table `d`.`parent` (`id` int primary key)",
+		},
+		{
+			dbName:  "d",
+			tblName: "child",
+			typ:     "BASE TABLE",
+			createSql: "create table `d`.`child` (" +
+				"`id` int primary key, `parent_id` int, " +
+				"constraint `fk_child` foreign key (`parent_id`) " +
+				"references `d`.`parent` (`id`))",
+		},
+		{
+			dbName:  "d",
+			tblName: "self_ref",
+			typ:     "BASE TABLE",
+			createSql: "create table `d`.`self_ref` (" +
+				"`id` int primary key, `parent_id` int, " +
+				"constraint `fk_self` foreign key (`parent_id`) " +
+				"references `self_ref` (`id`))",
+		},
+		{
+			dbName:    "d",
+			tblName:   "v",
+			typ:       view,
+			createSql: "create view `d`.`v` as select 1",
+		},
+	}
+
+	deps, err := getFkDepsFromTableInfos(context.Background(), tableInfos)
+	require.NoError(t, err)
+	require.Equal(t, []string{genKey("d", "parent")}, deps[genKey("d", "child")])
+	require.Equal(t, []string{genKey("d", "self_ref")}, deps[genKey("d", "self_ref")])
+	require.NotContains(t, deps, genKey("d", "v"))
+}
+
+func TestMergeFkDepsDeduplicatesSources(t *testing.T) {
+	child := genKey("d", "child")
+	parent := genKey("d", "parent")
+	otherParent := genKey("d", "other_parent")
+	dst := map[string][]string{child: {parent}}
+	src := map[string][]string{child: {parent, otherParent}}
+
+	mergeFkDeps(dst, src)
+
+	require.Equal(t, []string{parent, otherParent}, dst[child])
+}
+
+func TestFkTablesTopoSortUsesSchemaWhenCatalogRowsAreMissing(t *testing.T) {
+	const dbName = "legacy"
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result["select db_name, table_name, refer_db_name, refer_table_name "+
+		"from mo_catalog.mo_foreign_keys where db_name = 'legacy'"] = newMrsForPitrRecord(nil)
+
+	tableInfos := []*tableInfo{
+		{
+			dbName:    dbName,
+			tblName:   "parent",
+			typ:       "BASE TABLE",
+			createSql: "create table `legacy`.`parent` (`id` int primary key)",
+		},
+		{
+			dbName:  dbName,
+			tblName: "child",
+			typ:     "BASE TABLE",
+			createSql: "create table `legacy`.`child` (" +
+				"`id` int primary key, `parent_id` int, " +
+				"constraint `fk_legacy` foreign key (`parent_id`) " +
+				"references `legacy`.`parent` (`id`))",
+		},
+	}
+
+	sorted, err := fkTablesTopoSort(
+		context.Background(),
+		bh,
+		nil,
+		dbName,
+		"",
+		tableInfos,
+	)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		[]string{genKey(dbName, "parent"), genKey(dbName, "child")},
+		sorted,
+	)
+}
+
+func TestHistoricalRestoreTopoSortUsesSchemaWhenCatalogRowsAreMissing(t *testing.T) {
+	const (
+		dbName = "legacy"
+		ts     = int64(100)
+	)
+	tableInfos := []*tableInfo{
+		{
+			dbName:    dbName,
+			tblName:   "parent",
+			typ:       "BASE TABLE",
+			createSql: "create table `legacy`.`parent` (`id` int primary key)",
+		},
+		{
+			dbName:  dbName,
+			tblName: "child",
+			typ:     "BASE TABLE",
+			createSql: "create table `legacy`.`child` (" +
+				"`id` int primary key, `parent_id` int, " +
+				"constraint `fk_legacy` foreign key (`parent_id`) " +
+				"references `legacy`.`parent` (`id`))",
+		},
+	}
+	want := []string{genKey(dbName, "parent"), genKey(dbName, "child")}
+	catalogSQL := fmt.Sprintf(
+		"select db_name, table_name, refer_db_name, refer_table_name "+
+			"from mo_catalog.mo_foreign_keys {MO_TS = %d} where db_name = '%s'",
+		ts,
+		dbName,
+	)
+
+	t.Run("pitr", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[catalogSQL] = newMrsForPitrRecord(nil)
+
+		sorted, err := fkTablesTopoSortInPitrRestore(
+			context.Background(),
+			bh,
+			ts,
+			dbName,
+			"",
+			tableInfos,
+		)
+		require.NoError(t, err)
+		require.Equal(t, want, sorted)
+	})
+
+	t.Run("dropped account timestamp restore", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[catalogSQL] = newMrsForPitrRecord(nil)
+
+		sorted, err := fkTablesTopoSortWithTS(
+			context.Background(),
+			bh,
+			dbName,
+			"",
+			ts,
+			0,
+			0,
+			tableInfos,
+		)
+		require.NoError(t, err)
+		require.Equal(t, want, sorted)
+	})
+}
+
+func TestCollectRestoreSourceTableInfos(t *testing.T) {
+	t.Run("database restore reads only the selected table", func(t *testing.T) {
+		var listed bool
+		var requestedDB, requestedTable string
+		tableInfos, err := collectRestoreSourceTableInfos(
+			"db1",
+			"child",
+			func() ([]string, error) {
+				listed = true
+				return nil, nil
+			},
+			func(dbName string, tblName string) ([]*tableInfo, error) {
+				requestedDB, requestedTable = dbName, tblName
+				return []*tableInfo{{dbName: dbName, tblName: tblName}}, nil
+			},
+		)
+		require.NoError(t, err)
+		require.False(t, listed)
+		require.Equal(t, "db1", requestedDB)
+		require.Equal(t, "child", requestedTable)
+		require.Len(t, tableInfos, 1)
+	})
+
+	t.Run("account restore reads every user database", func(t *testing.T) {
+		var requested []string
+		tableInfos, err := collectRestoreSourceTableInfos(
+			"",
+			"",
+			func() ([]string, error) {
+				return []string{moCatalog, "db1", "db2"}, nil
+			},
+			func(dbName string, tblName string) ([]*tableInfo, error) {
+				require.Empty(t, tblName)
+				requested = append(requested, dbName)
+				return []*tableInfo{{dbName: dbName, tblName: "t"}}, nil
+			},
+		)
+		require.NoError(t, err)
+		require.Equal(t, []string{"db1", "db2"}, requested)
+		require.Len(t, tableInfos, 2)
+	})
+}
+
+func TestShowDatabasesAtTSDoesNotResolveSnapshotMetadata(t *testing.T) {
+	const (
+		snapshotTS = int64(100)
+		accountID  = uint32(42)
+	)
+	sql := fmt.Sprintf("show databases {MO_TS = %d}", snapshotTS)
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[sql] = newMrsForSqlForShowDatabases([][]interface{}{
+		{"db1"},
+		{"db2"},
+	})
+
+	dbNames, err := showDatabasesAtTS(context.Background(), "", bh, snapshotTS, accountID)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"db1", "db2"}, dbNames)
+	require.Equal(t, []string{sql}, bh.executedSQLs)
+}
 
 func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 	convey.Convey("snapshot bulk restore skips external table", t, func() {
@@ -50,10 +279,10 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 
 		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {snapshot = '%s'} where datname = '%s' and account_id = 0", snapshotName, dbName)] =
 			newMrsForRestoreStringRows([]string{"datname", "dat_createsql"}, [][]interface{}{{dbName, "create database db1"}})
-		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, dbName, dbName)] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
+		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral(dbName))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[fmt.Sprintf(getPubInfoSql, uint32(sysAccountID))+" and database_name = 'db1'"] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
 		bh.sql2result[buildTableInfoListSQL(dbName, "", snapshotTs, uint32(sysAccountID))] =
-			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{
+			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
 				{"base_t", "BASE TABLE", "r"},
 				{"hive_ext", "BASE TABLE", catalog.SystemExternalRel},
 			})
@@ -61,11 +290,11 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{"base_t", "create table base_t (id int)"}})
 		bh.sql2result[fmt.Sprintf("show create table `%s`.`hive_ext` {MO_TS = %d}", dbName, snapshotTs)] =
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{"hive_ext", "create external table hive_ext (id int)"}})
-		bh.sql2result[fmt.Sprintf(checkTableIsMasterFormat, dbName, "base_t")] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
+		bh.sql2result[fmt.Sprintf(checkTableIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral("base_t"))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 
 		err := restoreToDatabaseOrTable(ctx, "", bh, snapshotName, dbName, "", uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{}, snapshotTs, uint32(sysAccountID), false, nil)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(restoreTestExecutedSQLContains(bh, fmt.Sprintf(restoreTableDataByTsFmt, dbName, "base_t", dbName, "base_t", snapshotTs)), convey.ShouldBeTrue)
+		convey.So(restoreTestExecutedSQLContains(bh, restoreTableDataByTsSQL(dbName, "base_t", snapshotTs)), convey.ShouldBeTrue)
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
 	})
 
@@ -83,7 +312,7 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {snapshot = '%s'} where datname = '%s' and account_id = 0", snapshotName, dbName)] =
 			newMrsForRestoreStringRows([]string{"datname", "dat_createsql"}, [][]interface{}{{dbName, "create database db1"}})
 		bh.sql2result[buildTableInfoListSQL(dbName, tblName, snapshotTs, uint32(sysAccountID))] =
-			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{{tblName, "BASE TABLE", catalog.SystemExternalRel}})
+			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{{tblName, "BASE TABLE", catalog.SystemExternalRel}})
 		bh.sql2result[fmt.Sprintf("show create table `%s`.`%s` {MO_TS = %d}", dbName, tblName, snapshotTs)] =
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{tblName, "create external table hive_ext (id int)"}})
 
@@ -106,10 +335,10 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 
 		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d } where datname = '%s' and account_id = %d", snapshotTs, dbName, fromAccount)] =
 			newMrsForRestoreStringRows([]string{"datname", "dat_createsql"}, [][]interface{}{{dbName, "create database db1"}})
-		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, dbName, dbName)] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
+		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral(dbName))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[fmt.Sprintf(getPubInfoSql, toAccount)+" and database_name = 'db1'"] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
 		bh.sql2result[buildTableInfoListSQL(dbName, "", snapshotTs, fromAccount)] =
-			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{
+			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
 				{"base_t", "BASE TABLE", "r"},
 				{"hive_ext", "BASE TABLE", catalog.SystemExternalRel},
 			})
@@ -120,7 +349,7 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 
 		err := restoreDatabaseFromTS(ctx, "", bh, dbName, snapshotTs, fromAccount, toAccount, map[string]*tableInfo{}, map[string]*tableInfo{}, false, nil)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(restoreTestExecutedSQLContains(bh, fmt.Sprintf(restoreTableDataByTsFmt, dbName, "base_t", dbName, "base_t", snapshotTs)), convey.ShouldBeTrue)
+		convey.So(restoreTestExecutedSQLContains(bh, restoreTableDataByTsSQL(dbName, "base_t", snapshotTs)), convey.ShouldBeTrue)
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
 	})
 }
@@ -138,10 +367,10 @@ func TestRestorePitrExternalTable(t *testing.T) {
 
 		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", ts, dbName)] =
 			newMrsForRestoreStringRows([]string{"datname", "dat_createsql"}, [][]interface{}{{dbName, "create database db1"}})
-		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, dbName, dbName)] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
+		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral(dbName))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[fmt.Sprintf(getPubInfoSql, uint32(sysAccountID))+" and database_name = 'db1'"] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
 		bh.sql2result[buildTableInfoListSQL(dbName, "", ts, uint32(sysAccountID))] =
-			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{
+			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
 				{"base_t", "BASE TABLE", "r"},
 				{"hive_ext", "BASE TABLE", catalog.SystemExternalRel},
 			})
@@ -149,12 +378,12 @@ func TestRestorePitrExternalTable(t *testing.T) {
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{"base_t", "create table base_t (id int)"}})
 		bh.sql2result[fmt.Sprintf("show create table `%s`.`hive_ext` {MO_TS = %d}", dbName, ts)] =
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{"hive_ext", "create external table hive_ext (id int)"}})
-		bh.sql2result[fmt.Sprintf(checkTableIsMasterFormat, dbName, "base_t")] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
+		bh.sql2result[fmt.Sprintf(checkTableIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral("base_t"))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[getPubInfoWithPitr(ts, uint32(sysAccountID), dbName)] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
 
 		err := restoreToDatabaseOrTableWithPitr(ctx, "", bh, pitrName, ts, dbName, "", map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID))
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(restoreTestExecutedSQLContains(bh, fmt.Sprintf(restoreTableDataByTsFmt, dbName, "base_t", dbName, "base_t", ts)), convey.ShouldBeTrue)
+		convey.So(restoreTestExecutedSQLContains(bh, restoreTableDataByTsSQL(dbName, "base_t", ts)), convey.ShouldBeTrue)
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
 	})
 
@@ -172,7 +401,7 @@ func TestRestorePitrExternalTable(t *testing.T) {
 		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", ts, dbName)] =
 			newMrsForRestoreStringRows([]string{"datname", "dat_createsql"}, [][]interface{}{{dbName, "create database db1"}})
 		bh.sql2result[buildTableInfoListSQL(dbName, tblName, ts, uint32(sysAccountID))] =
-			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{{tblName, "BASE TABLE", catalog.SystemExternalRel}})
+			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{{tblName, "BASE TABLE", catalog.SystemExternalRel}})
 		bh.sql2result[fmt.Sprintf("show create table `%s`.`%s` {MO_TS = %d}", dbName, tblName, ts)] =
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{tblName, "create external table hive_ext (id int)"}})
 
@@ -212,12 +441,31 @@ func TestRestoreExternalTableDefensiveCloneGuards(t *testing.T) {
 }
 
 func TestBuildTableInfoListSQLEscapesLiterals(t *testing.T) {
-	sql := buildTableInfoListSQL("db'name", "tbl'name", 0, uint32(sysAccountID))
-	if !strings.Contains(sql, "reldatabase = 'db''name'") {
-		t.Fatalf("database name was not escaped in SQL: %s", sql)
-	}
-	if !strings.Contains(sql, "relname like 'tbl''name'") {
-		t.Fatalf("table name was not escaped in SQL: %s", sql)
+	for _, tableName := range []string{"tbl'name", "a_b", "a%b", `child\fk`} {
+		t.Run(tableName, func(t *testing.T) {
+			sql := buildTableInfoListSQL("db'name", tableName, 0, uint32(sysAccountID))
+			if !strings.Contains(sql, "reldatabase = 'db''name'") {
+				t.Fatalf("database name was not escaped in SQL: %s", sql)
+			}
+			if !strings.Contains(sql, "relname = "+quoteSQLStringLiteral(tableName)) {
+				t.Fatalf("table name was not matched exactly in SQL: %s", sql)
+			}
+			if strings.Contains(sql, "relname like "+quoteSQLStringLiteral(tableName)) {
+				t.Fatalf("table name was treated as a LIKE pattern in SQL: %s", sql)
+			}
+			if !strings.Contains(sql, "relkind = 'temporary_table'") {
+				t.Fatalf("temporary tables were not filtered by catalog marker: %s", sql)
+			}
+			if !strings.Contains(sql, "mo_is_legacy_temporary_table(coalesce(relkind, ''), coalesce(relname, ''), coalesce(reldatabase, ''), coalesce(rel_createsql, ''), coalesce(extra_info, ''))") {
+				t.Fatalf("legacy temporary base tables were not filtered by CREATE SQL: %s", sql)
+			}
+			if !strings.Contains(sql, "coalesce(relkind, '') not in ('r', 'v', 'e', 'm', 's', 'cluster', 'partition', 'S') and regexp_like(relname, '^__mo_tmp_[0-9a-f]{32}_')") {
+				t.Fatalf("legacy temporary derived objects were not filtered by exact physical name: %s", sql)
+			}
+			if strings.Contains(sql, "relname not like '__mo_tmp_%'") {
+				t.Fatalf("temporary tables were filtered by the broad legal name prefix: %s", sql)
+			}
+		})
 	}
 }
 
@@ -234,7 +482,7 @@ func TestGetTableInfosFromTSSkipsStaleTableMetadata(t *testing.T) {
 	)
 
 	bh.sql2result[buildTableInfoListSQL(dbName, "", snapshotTs, fromAccount)] =
-		newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{
+		newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
 			{"base_t", "BASE TABLE", "r"},
 			{"aff01", "BASE TABLE", "r"},
 		})
@@ -273,7 +521,7 @@ func TestGetTableInfosFromTSReturnsCreateTableErrors(t *testing.T) {
 	createTableSQL := fmt.Sprintf("show create table `%s`.`aff01` {MO_TS = %d}", dbName, snapshotTs)
 	createTableErr := moerr.NewInternalError(ctx, "failed to read create table")
 	bh.sql2result[buildTableInfoListSQL(dbName, "", snapshotTs, fromAccount)] =
-		newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind"}, [][]interface{}{
+		newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
 			{"aff01", "BASE TABLE", "r"},
 		})
 	bh.sql2err[createTableSQL] = createTableErr
@@ -293,9 +541,90 @@ func newMrsForRestoreStringRows(colNames []string, rows [][]interface{}) *MysqlR
 		mrs.AddColumn(col)
 	}
 	for _, row := range rows {
-		mrs.AddRow(row)
+		values := append([]interface{}(nil), row...)
+		for len(values) < len(colNames) {
+			values = append(values, "")
+		}
+		mrs.AddRow(values)
 	}
 	return mrs
+}
+
+func TestViewRestoreUsesPersistedParserSQLModeWithoutRewritingSQL(t *testing.T) {
+	pipesAsConcat := "PIPES_AS_CONCAT"
+	ansiQuotes := "ANSI_QUOTES"
+	noBackslashEscapes := "NO_BACKSLASH_ESCAPES"
+
+	tests := []struct {
+		name     string
+		sqlMode  *string
+		create   string
+		wantMode string
+		want     string
+		value    string
+	}{
+		{
+			name:     "pipes as concat",
+			sqlMode:  &pipesAsConcat,
+			create:   "create view v_pipe as select 'a'||'b' as c",
+			wantMode: pipesAsConcat,
+			want:     "concat(",
+		},
+		{
+			name:     "ansi quotes",
+			sqlMode:  &ansiQuotes,
+			create:   `create view v_ansi as select "a" as c from "t"`,
+			wantMode: ansiQuotes,
+			want:     "`a`",
+		},
+		{
+			name:     "legacy view defaults to pipes as concat",
+			create:   "create view v_legacy as select 'a'||'b' as c",
+			wantMode: legacyViewParserSQLModeForRestore,
+			want:     "concat(",
+		},
+		{
+			name:     "no backslash escapes",
+			sqlMode:  &noBackslashEscapes,
+			create:   `create view v_backslash as select 'a\b' as c`,
+			wantMode: noBackslashEscapes,
+			want:     `a\\b`,
+			value:    `a\b`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			viewDef, err := json.Marshal(plan.ViewData{Stmt: test.create, SQLMode: test.sqlMode})
+			require.NoError(t, err)
+
+			tblInfo := &tableInfo{viewDef: string(viewDef), createSql: test.create}
+			parserSQLMode, err := viewParserSQLModeForRestore(tblInfo.viewDef)
+			require.NoError(t, err)
+			require.Equal(t, test.wantMode, parserSQLMode)
+
+			stmts, err := parseViewCreateSQLForRestore(context.Background(), tblInfo, 1)
+			require.NoError(t, err)
+			canonical := tree.StringWithOpts(stmts[0], dialect.MYSQL, tree.WithSingleQuoteString(), tree.WithQuoteIdentifier())
+			require.Contains(t, strings.ToLower(canonical), test.want)
+			if test.value != "" {
+				viewStmt, ok := stmts[0].(*tree.CreateView)
+				require.True(t, ok)
+				selectClause, ok := viewStmt.AsSource.Select.(*tree.SelectClause)
+				require.True(t, ok)
+				value, ok := selectClause.Exprs[0].Expr.(*tree.NumVal)
+				require.True(t, ok)
+				require.Equal(t, test.value, value.String())
+			}
+			freeStatements(stmts)
+
+			bh := &backgroundExecTest{}
+			bh.init()
+			require.NoError(t, executeViewCreateSQLForRestore(context.Background(), bh, tblInfo))
+			require.Equal(t, test.create, bh.currentSql)
+			require.Equal(t, test.wantMode, bh.parserSQLMode)
+		})
+	}
 }
 
 func restoreTestExecutedSQLContains(bh *backgroundExecTest, needle string) bool {
@@ -305,6 +634,29 @@ func restoreTestExecutedSQLContains(bh *backgroundExecTest, needle string) bool 
 		}
 	}
 	return false
+}
+
+func TestRestoreSQLQuotesEmbeddedBackticks(t *testing.T) {
+	const (
+		dbName       = "db`name"
+		tableName    = "table`name"
+		viewName     = "view`name"
+		snapshotName = "snapshot'name"
+	)
+	qualifiedName := "`db``name`.`table``name`"
+
+	require.Equal(t, "show create table "+qualifiedName, showCreateTableSQL(dbName, tableName))
+	require.Equal(t, "use `db``name`", useDatabaseSQL(dbName))
+	require.Equal(t, "CREATE DATABASE IF NOT EXISTS `db``name`", createDatabaseIfNotExistsSQL(dbName))
+	require.Equal(t, "drop database if exists `db``name`", dropDatabaseIfExistsSQL(dbName))
+	require.Equal(t, "drop table if exists "+qualifiedName, dropTableIfExistsSQL(dbName, tableName))
+	require.Equal(t, "drop view if exists `view``name`", dropViewIfExistsSQL(viewName))
+	require.Equal(t,
+		"create table "+qualifiedName+" clone "+qualifiedName+" {MO_TS = 123 }",
+		restoreTableDataByTsSQL(dbName, tableName, 123))
+	require.Equal(t,
+		"create table "+qualifiedName+" clone "+qualifiedName+" {SNAPSHOT = 'snapshot\\'name'}",
+		restoreTableDataByNameSQL(dbName, tableName, snapshotName))
 }
 
 func Test_fkTablesTopoSortWithTS(t *testing.T) {
@@ -340,20 +692,20 @@ func Test_fkTablesTopoSortWithTS(t *testing.T) {
 
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 
-		_, err := fkTablesTopoSortWithTS(ctx, bh, "", "", 0, 0, 0)
+		_, err := fkTablesTopoSortWithTS(ctx, bh, "", "", 0, 0, 0, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		sql := "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
 		mrs := newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		_, err = fkTablesTopoSortWithTS(ctx, bh, "", "", 0, 0, 0)
+		_, err = fkTablesTopoSortWithTS(ctx, bh, "", "", 0, 0, 0, nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
 		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "table1", "db2", "table2"}})
 		bh.sql2result[sql] = mrs
-		_, err = fkTablesTopoSortWithTS(ctx, bh, "", "", 0, 0, 0)
+		_, err = fkTablesTopoSortWithTS(ctx, bh, "", "", 0, 0, 0, nil)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -1565,7 +1917,7 @@ func Test_handleInternalGetDdl_GoodPath(t *testing.T) {
 		mockTxnOp.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		mockTxnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		mockTxnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-		mockTxnOp.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+		mockTxnOp.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 		mockTxnOp.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		mockTxnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		mockTxnOp.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
@@ -1652,4 +2004,82 @@ func newDdlBatchForTest(mp *mpool.MPool, records [][]interface{}) *batch.Batch {
 	bat.SetRowCount(len(records))
 
 	return bat
+}
+
+// TestDataBranchAuditFkDepsEscapesQuotedNames verifies every FK dependency
+// lookup used by CLONE, snapshot restore, and PITR restore. Legal quoted
+// identifiers must survive the SQL literal boundary and still produce the
+// dependency order consumed by the restore path (issue #26144).
+func TestDataBranchAuditFkDepsEscapesQuotedNames(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	setPu("", pu)
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+	const (
+		dbName  = `db'name\part`
+		tblName = `child'name\part`
+		refDB   = `parent'db`
+		refTbl  = `parent'table`
+		baseSQL = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+		filters = ` where db_name = 'db''name\\part' and table_name = 'child''name\\part'`
+	)
+	wantOrder := []string{genKey(refDB, refTbl), genKey(dbName, tblName)}
+	result := newMrsForPitrRecord([][]interface{}{{dbName, tblName, refDB, refTbl}})
+
+	tests := []struct {
+		name string
+		sql  string
+		run  func(*backgroundExecTest) ([]string, error)
+	}{{
+		name: "clone and snapshot",
+		sql:  baseSQL + filters,
+		run: func(bh *backgroundExecTest) ([]string, error) {
+			return fkTablesTopoSort(ctx, bh, nil, dbName, tblName, nil)
+		},
+	}, {
+		name: "pitr restore",
+		sql:  baseSQL + " {MO_TS = 42}" + filters,
+		run: func(bh *backgroundExecTest) ([]string, error) {
+			return fkTablesTopoSortInPitrRestore(ctx, bh, 42, dbName, tblName, nil)
+		},
+	}, {
+		name: "cross-account snapshot restore",
+		sql:  baseSQL + " {MO_TS = 42}" + filters,
+		run: func(bh *backgroundExecTest) ([]string, error) {
+			return fkTablesTopoSortWithTS(ctx, bh, dbName, tblName, 42, 7, 8, nil)
+		},
+	}}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[tc.sql] = result
+
+			got, err := tc.run(bh)
+			require.NoError(t, err)
+			require.Equal(t, wantOrder, got)
+			require.Equal(t, []string{tc.sql}, bh.executedSQLs)
+		})
+	}
 }

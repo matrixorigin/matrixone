@@ -33,7 +33,7 @@ import (
 )
 
 func TestCreateAndDropPitr(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
 			defer cancel()
@@ -77,7 +77,7 @@ func TestCreateAndDropPitr(t *testing.T) {
 }
 
 func TestPitrCases(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
 			defer cancel()
@@ -198,7 +198,7 @@ func TestCDCCases(t *testing.T) {
 	})
 	defer stubOpenDbConn.Reset()
 
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
 			defer cancel()
@@ -421,7 +421,7 @@ func TestCDCCases(t *testing.T) {
 }
 
 func TestAlterRoleCases(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
 			defer cancel()

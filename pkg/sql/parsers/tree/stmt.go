@@ -130,7 +130,6 @@ var (
 	frontendStatusTyp = MakeStmtKind(OUTPUT_STATUS, RESP_STATUS, EXEC_IN_FRONTEND)
 
 	//like statements: they composite the result set themselves
-	//    ShowConnectors
 	//    ExplainStmt
 	//    ShowTableStatus
 	//    ShowErrors
@@ -345,15 +344,15 @@ func (node *Update) StmtKind() StmtKind {
 	return defaultStatusTyp
 }
 
+func (node *Merge) StmtKind() StmtKind {
+	return defaultStatusTyp
+}
+
 func (node *CreateDatabase) StmtKind() StmtKind {
 	return defaultStatusTyp
 }
 
 func (node *CreateTable) StmtKind() StmtKind {
-	return defaultStatusTyp
-}
-
-func (node *CreateSource) StmtKind() StmtKind {
 	return defaultStatusTyp
 }
 
@@ -478,10 +477,6 @@ func (node *ShowRolesStmt) StmtKind() StmtKind {
 	return defaultResRowTyp
 }
 
-func (node *ShowConnectors) StmtKind() StmtKind {
-	return compositeResRowType
-}
-
 func (node *ShowLogserviceReplicas) StmtKind() StmtKind {
 	return compositeResRowType
 }
@@ -512,10 +507,6 @@ func (node *AlterTable) StmtKind() StmtKind {
 
 func (node *RenameTable) StmtKind() StmtKind {
 	return defaultStatusTyp
-}
-
-func (node *CreateConnector) StmtKind() StmtKind {
-	return frontendStatusTyp
 }
 
 func (node *DropTable) StmtKind() StmtKind {
@@ -567,7 +558,7 @@ func (node *DropIndex) StmtKind() StmtKind {
 }
 
 func (node *AnalyzeStmt) StmtKind() StmtKind {
-	return frontendStatusTyp
+	return MakeStmtKind(OUTPUT_UNDEFINED, RESP_BY_SITUATION, EXEC_IN_FRONTEND)
 }
 
 func (node *SetRole) StmtKind() StmtKind {
@@ -607,10 +598,6 @@ func (node *AlterSequence) StmtKind() StmtKind {
 }
 
 func (node *Reset) StmtKind() StmtKind {
-	return frontendStatusTyp
-}
-
-func (node *DropConnector) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 

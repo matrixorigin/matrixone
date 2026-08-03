@@ -8,6 +8,7 @@ import (
 	bytes "bytes"
 	context "context"
 	reflect "reflect"
+	time "time"
 
 	gomock "github.com/golang/mock/gomock"
 	mpool "github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -23,6 +24,82 @@ import (
 	client "github.com/matrixorigin/matrixone/pkg/txn/client"
 	engine "github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+// MockQueryCandidateDiscoverer is a mock of QueryCandidateDiscoverer interface.
+type MockQueryCandidateDiscoverer struct {
+	ctrl     *gomock.Controller
+	recorder *MockQueryCandidateDiscovererMockRecorder
+}
+
+// MockQueryCandidateDiscovererMockRecorder is the mock recorder for MockQueryCandidateDiscoverer.
+type MockQueryCandidateDiscovererMockRecorder struct {
+	mock *MockQueryCandidateDiscoverer
+}
+
+// NewMockQueryCandidateDiscoverer creates a new mock instance.
+func NewMockQueryCandidateDiscoverer(ctrl *gomock.Controller) *MockQueryCandidateDiscoverer {
+	mock := &MockQueryCandidateDiscoverer{ctrl: ctrl}
+	mock.recorder = &MockQueryCandidateDiscovererMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockQueryCandidateDiscoverer) EXPECT() *MockQueryCandidateDiscovererMockRecorder {
+	return m.recorder
+}
+
+// DiscoverQueryCandidates mocks base method.
+func (m *MockQueryCandidateDiscoverer) DiscoverQueryCandidates(arg0 context.Context) (engine.QueryCandidates, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DiscoverQueryCandidates", arg0)
+	ret0, _ := ret[0].(engine.QueryCandidates)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DiscoverQueryCandidates indicates an expected call of DiscoverQueryCandidates.
+func (mr *MockQueryCandidateDiscovererMockRecorder) DiscoverQueryCandidates(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DiscoverQueryCandidates", reflect.TypeOf((*MockQueryCandidateDiscoverer)(nil).DiscoverQueryCandidates), arg0)
+}
+
+// MockQueryCandidatePoolResolver is a mock of QueryCandidatePoolResolver interface.
+type MockQueryCandidatePoolResolver struct {
+	ctrl     *gomock.Controller
+	recorder *MockQueryCandidatePoolResolverMockRecorder
+}
+
+// MockQueryCandidatePoolResolverMockRecorder is the mock recorder for MockQueryCandidatePoolResolver.
+type MockQueryCandidatePoolResolverMockRecorder struct {
+	mock *MockQueryCandidatePoolResolver
+}
+
+// NewMockQueryCandidatePoolResolver creates a new mock instance.
+func NewMockQueryCandidatePoolResolver(ctrl *gomock.Controller) *MockQueryCandidatePoolResolver {
+	mock := &MockQueryCandidatePoolResolver{ctrl: ctrl}
+	mock.recorder = &MockQueryCandidatePoolResolverMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockQueryCandidatePoolResolver) EXPECT() *MockQueryCandidatePoolResolverMockRecorder {
+	return m.recorder
+}
+
+// ResolveQueryCandidatePool mocks base method.
+func (m *MockQueryCandidatePoolResolver) ResolveQueryCandidatePool(arg0 context.Context, arg1 engine.QueryCandidates, arg2 engine.QueryCandidatePoolRequest) (engine.ResolvedQueryPool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ResolveQueryCandidatePool", arg0, arg1, arg2)
+	ret0, _ := ret[0].(engine.ResolvedQueryPool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ResolveQueryCandidatePool indicates an expected call of ResolveQueryCandidatePool.
+func (mr *MockQueryCandidatePoolResolverMockRecorder) ResolveQueryCandidatePool(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveQueryCandidatePool", reflect.TypeOf((*MockQueryCandidatePoolResolver)(nil).ResolveQueryCandidatePool), arg0, arg1, arg2)
+}
 
 // MockStatistics is a mock of Statistics interface.
 type MockStatistics struct {
@@ -440,18 +517,6 @@ func (mr *MockRelDataMockRecorder) AppendBlockInfoSlice(arg0 interface{}) *gomoc
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AppendBlockInfoSlice", reflect.TypeOf((*MockRelData)(nil).AppendBlockInfoSlice), arg0)
 }
 
-// AppendShardID mocks base method.
-func (m *MockRelData) AppendShardID(id uint64) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "AppendShardID", id)
-}
-
-// AppendShardID indicates an expected call of AppendShardID.
-func (mr *MockRelDataMockRecorder) AppendShardID(id interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AppendShardID", reflect.TypeOf((*MockRelData)(nil).AppendShardID), id)
-}
-
 // AttachTombstones mocks base method.
 func (m *MockRelData) AttachTombstones(tombstones engine.Tombstoner) error {
 	m.ctrl.T.Helper()
@@ -536,34 +601,6 @@ func (mr *MockRelDataMockRecorder) GetBlockInfoSlice() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBlockInfoSlice", reflect.TypeOf((*MockRelData)(nil).GetBlockInfoSlice))
 }
 
-// GetShardID mocks base method.
-func (m *MockRelData) GetShardID(i int) uint64 {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetShardID", i)
-	ret0, _ := ret[0].(uint64)
-	return ret0
-}
-
-// GetShardID indicates an expected call of GetShardID.
-func (mr *MockRelDataMockRecorder) GetShardID(i interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetShardID", reflect.TypeOf((*MockRelData)(nil).GetShardID), i)
-}
-
-// GetShardIDList mocks base method.
-func (m *MockRelData) GetShardIDList() []uint64 {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetShardIDList")
-	ret0, _ := ret[0].([]uint64)
-	return ret0
-}
-
-// GetShardIDList indicates an expected call of GetShardIDList.
-func (mr *MockRelDataMockRecorder) GetShardIDList() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetShardIDList", reflect.TypeOf((*MockRelData)(nil).GetShardIDList))
-}
-
 // GetTombstones mocks base method.
 func (m *MockRelData) GetTombstones() engine.Tombstoner {
 	m.ctrl.T.Helper()
@@ -617,18 +654,6 @@ func (m *MockRelData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
 func (mr *MockRelDataMockRecorder) SetBlockInfo(i, blk interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetBlockInfo", reflect.TypeOf((*MockRelData)(nil).SetBlockInfo), i, blk)
-}
-
-// SetShardID mocks base method.
-func (m *MockRelData) SetShardID(i int, id uint64) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetShardID", i, id)
-}
-
-// SetShardID indicates an expected call of SetShardID.
-func (mr *MockRelDataMockRecorder) SetShardID(i, id interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetShardID", reflect.TypeOf((*MockRelData)(nil).SetShardID), i, id)
 }
 
 // Split mocks base method.
@@ -1553,6 +1578,43 @@ func (mr *MockRelationMockRecorder) Write(arg0, arg1 interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Write", reflect.TypeOf((*MockRelation)(nil).Write), arg0, arg1)
 }
 
+// MockRelationHandleFactory is a mock of RelationHandleFactory interface.
+type MockRelationHandleFactory struct {
+	ctrl     *gomock.Controller
+	recorder *MockRelationHandleFactoryMockRecorder
+}
+
+// MockRelationHandleFactoryMockRecorder is the mock recorder for MockRelationHandleFactory.
+type MockRelationHandleFactoryMockRecorder struct {
+	mock *MockRelationHandleFactory
+}
+
+// NewMockRelationHandleFactory creates a new mock instance.
+func NewMockRelationHandleFactory(ctrl *gomock.Controller) *MockRelationHandleFactory {
+	mock := &MockRelationHandleFactory{ctrl: ctrl}
+	mock.recorder = &MockRelationHandleFactoryMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockRelationHandleFactory) EXPECT() *MockRelationHandleFactoryMockRecorder {
+	return m.recorder
+}
+
+// NewRelationHandle mocks base method.
+func (m *MockRelationHandleFactory) NewRelationHandle() engine.Relation {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "NewRelationHandle")
+	ret0, _ := ret[0].(engine.Relation)
+	return ret0
+}
+
+// NewRelationHandle indicates an expected call of NewRelationHandle.
+func (mr *MockRelationHandleFactoryMockRecorder) NewRelationHandle() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewRelationHandle", reflect.TypeOf((*MockRelationHandleFactory)(nil).NewRelationHandle))
+}
+
 // MockBaseReader is a mock of BaseReader interface.
 type MockBaseReader struct {
 	ctrl     *gomock.Controller
@@ -2228,4 +2290,132 @@ func (m *MockVectorPool) PutBatch(bat *batch.Batch) {
 func (mr *MockVectorPoolMockRecorder) PutBatch(bat interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PutBatch", reflect.TypeOf((*MockVectorPool)(nil).PutBatch), bat)
+}
+
+// MockCatalogCacheGCer is a mock of CatalogCacheGCer interface.
+type MockCatalogCacheGCer struct {
+	ctrl     *gomock.Controller
+	recorder *MockCatalogCacheGCerMockRecorder
+}
+
+// MockCatalogCacheGCerMockRecorder is the mock recorder for MockCatalogCacheGCer.
+type MockCatalogCacheGCerMockRecorder struct {
+	mock *MockCatalogCacheGCer
+}
+
+// NewMockCatalogCacheGCer creates a new mock instance.
+func NewMockCatalogCacheGCer(ctrl *gomock.Controller) *MockCatalogCacheGCer {
+	mock := &MockCatalogCacheGCer{ctrl: ctrl}
+	mock.recorder = &MockCatalogCacheGCerMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockCatalogCacheGCer) EXPECT() *MockCatalogCacheGCerMockRecorder {
+	return m.recorder
+}
+
+// GCCatalogCache mocks base method.
+func (m *MockCatalogCacheGCer) GCCatalogCache(ctx context.Context, ago time.Duration) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GCCatalogCache", ctx, ago)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// GCCatalogCache indicates an expected call of GCCatalogCache.
+func (mr *MockCatalogCacheGCerMockRecorder) GCCatalogCache(ctx, ago interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GCCatalogCache", reflect.TypeOf((*MockCatalogCacheGCer)(nil).GCCatalogCache), ctx, ago)
+}
+
+// MockMembershipFilter is a mock of MembershipFilter interface.
+type MockMembershipFilter struct {
+	ctrl     *gomock.Controller
+	recorder *MockMembershipFilterMockRecorder
+}
+
+// MockMembershipFilterMockRecorder is the mock recorder for MockMembershipFilter.
+type MockMembershipFilterMockRecorder struct {
+	mock *MockMembershipFilter
+}
+
+// NewMockMembershipFilter creates a new mock instance.
+func NewMockMembershipFilter(ctrl *gomock.Controller) *MockMembershipFilter {
+	mock := &MockMembershipFilter{ctrl: ctrl}
+	mock.recorder = &MockMembershipFilterMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockMembershipFilter) EXPECT() *MockMembershipFilterMockRecorder {
+	return m.recorder
+}
+
+// Exact mocks base method.
+func (m *MockMembershipFilter) Exact() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Exact")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// Exact indicates an expected call of Exact.
+func (mr *MockMembershipFilterMockRecorder) Exact() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Exact", reflect.TypeOf((*MockMembershipFilter)(nil).Exact))
+}
+
+// Free mocks base method.
+func (m *MockMembershipFilter) Free() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "Free")
+}
+
+// Free indicates an expected call of Free.
+func (mr *MockMembershipFilterMockRecorder) Free() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Free", reflect.TypeOf((*MockMembershipFilter)(nil).Free))
+}
+
+// Test mocks base method.
+func (m *MockMembershipFilter) Test(data []byte) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Test", data)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// Test indicates an expected call of Test.
+func (mr *MockMembershipFilterMockRecorder) Test(data interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Test", reflect.TypeOf((*MockMembershipFilter)(nil).Test), data)
+}
+
+// TestVector mocks base method.
+func (m *MockMembershipFilter) TestVector(v *vector.Vector, cb func(bool, bool, int)) []uint8 {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TestVector", v, cb)
+	ret0, _ := ret[0].([]uint8)
+	return ret0
+}
+
+// TestVector indicates an expected call of TestVector.
+func (mr *MockMembershipFilterMockRecorder) TestVector(v, cb interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TestVector", reflect.TypeOf((*MockMembershipFilter)(nil).TestVector), v, cb)
+}
+
+// Valid mocks base method.
+func (m *MockMembershipFilter) Valid() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Valid")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// Valid indicates an expected call of Valid.
+func (mr *MockMembershipFilterMockRecorder) Valid() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Valid", reflect.TypeOf((*MockMembershipFilter)(nil).Valid))
 }

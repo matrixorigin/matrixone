@@ -43,6 +43,7 @@ func SubPath(upstream FileService, path string) FileService {
 }
 
 var _ FileService = new(subPathFS)
+var _ ObjectCopier = new(subPathFS)
 
 func (s *subPathFS) Name() string {
 	return s.name
@@ -142,6 +143,23 @@ func (s *subPathFS) PrefetchFile(ctx context.Context, filePath string) error {
 
 func (s *subPathFS) Cost() *CostAttr {
 	return s.upstream.Cost()
+}
+
+func (s *subPathFS) CopyObject(
+	ctx context.Context,
+	srcFS FileService,
+	srcPath string,
+	dstPath string,
+) (bool, error) {
+	dst, err := s.toUpstreamPath(dstPath)
+	if err != nil {
+		return false, err
+	}
+	copier, ok := s.upstream.(ObjectCopier)
+	if !ok {
+		return false, nil
+	}
+	return copier.CopyObject(ctx, srcFS, srcPath, dst)
 }
 
 var _ MutableFileService = new(subPathFS)

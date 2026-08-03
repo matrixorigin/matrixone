@@ -24,6 +24,7 @@ const (
 	GiB = 1024 * MiB
 	TiB = 1024 * GiB
 	PiB = 1024 * TiB
+	EiB = 1024 * PiB
 
 	THOUSAND    = 1000
 	MILLION     = 1000 * THOUSAND
@@ -47,4 +48,26 @@ func ConvertBytesToHumanReadable(bytes int64) string {
 		return fmt.Sprintf("%.2f GiB", num/GiB)
 	}
 	return fmt.Sprintf("%.2f TiB", num/TiB)
+}
+
+// ConvertUint64BytesToHumanReadable formats resource counters without narrowing
+// them to int64. Explain output is presentation-only; persisted values remain
+// raw bytes.
+func ConvertUint64BytesToHumanReadable(bytes uint64) string {
+	switch {
+	case bytes < KiB:
+		return fmt.Sprintf("%d bytes", bytes)
+	case bytes < MiB:
+		return fmt.Sprintf("%.2f KiB", float64(bytes)/KiB)
+	case bytes < GiB:
+		return fmt.Sprintf("%.2f MiB", float64(bytes)/MiB)
+	case bytes < TiB:
+		return fmt.Sprintf("%.2f GiB", float64(bytes)/GiB)
+	case bytes < PiB:
+		return fmt.Sprintf("%.2f TiB", float64(bytes)/TiB)
+	case bytes < EiB:
+		return fmt.Sprintf("%.2f PiB", float64(bytes)/PiB)
+	default:
+		return fmt.Sprintf("%.2f EiB", float64(bytes)/EiB)
+	}
 }

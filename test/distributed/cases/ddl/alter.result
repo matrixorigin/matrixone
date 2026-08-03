@@ -403,7 +403,7 @@ count(*)
 drop table index03;
 drop table if exists t4;
 create table t4(col1 varchar(256) primary key, col2 int);
-insert into t4 select "matrixone " || "mo " || result, 1 from generate_series (1, 500000)g;
+insert into t4 select concat('matrixone ', 'mo ', result), 1 from generate_series (1, 500000)g;
 select count(*) from t4;
 count(*)
 500000
@@ -417,7 +417,7 @@ count(*)
 drop table t4;
 drop table if exists t5;
 create table t5(col1 varchar(256) primary key, col2 int);
-insert into t5 select "matrixone " || "mo " || result, 1 from generate_series (1, 500000)g;
+insert into t5 select concat('matrixone ', 'mo ', result), 1 from generate_series (1, 500000)g;
 select count(*) from t5;
 count(*)
 500000

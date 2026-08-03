@@ -512,6 +512,21 @@ drop table if exists mst_dml;
 
 -- MASTER table with no primary/unique key: ODKU and REPLACE behave like INSERT.
 drop table if exists mst_nopk;
+
+-- LIMIT/OFFSET must be applied once: the master-index intersection may fetch
+-- LIMIT+OFFSET candidates, while only the final result consumes OFFSET.
+drop table if exists mst_limit_offset;
+create table mst_limit_offset(id int primary key, a varchar(30), b varchar(30));
+create index idx_m_limit using master on mst_limit_offset(a,b);
+insert into mst_limit_offset values
+    (1,'same','group'),(2,'same','group'),(3,'same','group'),(4,'same','group'),(5,'same','group'),
+    (6,'same','group'),(7,'same','group'),(8,'same','group'),(9,'same','group'),(10,'same','group'),
+    (11,'same','group'),(12,'same','group'),(13,'same','group'),(14,'same','group'),(15,'same','group'),
+    (16,'same','group'),(17,'same','group'),(18,'same','group'),(19,'same','group'),(20,'same','group');
+select count(*) from (
+    select id from mst_limit_offset where a='same' and b='group' limit 10 offset 5
+) as page;
+drop table if exists mst_limit_offset;
 create table mst_nopk(a varchar(30), b varchar(30));
 create index idx_m2 using master on mst_nopk(a,b);
 insert into mst_nopk values("p","q") on duplicate key update b="r";

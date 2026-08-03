@@ -318,11 +318,25 @@ func (c *clientPool) Close() {
 
 func (c *clientPool) GetOnFly() (*wrappedClient, error) {
 	c.cond.L.Lock()
-	defer c.cond.L.Unlock()
 	if c.closed {
+		c.cond.L.Unlock()
 		return nil, ErrClientPoolClosed
 	}
-	return NewClient(c.cfg.ClientFactory, c.cfg.ClientBufSize, c.cfg.ClientRetryTimes, c.cfg.ClientRetryInterval, c.cfg.ClientRetryDuration)
+	c.cond.L.Unlock()
+
+	client, err := NewClient(c.cfg.ClientFactory, c.cfg.ClientBufSize, c.cfg.ClientRetryTimes, c.cfg.ClientRetryInterval, c.cfg.ClientRetryDuration)
+	if err != nil {
+		return nil, err
+	}
+
+	c.cond.L.Lock()
+	closed := c.closed
+	c.cond.L.Unlock()
+	if closed {
+		client.Close()
+		return nil, ErrClientPoolClosed
+	}
+	return client, nil
 }
 
 func (c *clientPool) Get() (client *wrappedClient, err error) {

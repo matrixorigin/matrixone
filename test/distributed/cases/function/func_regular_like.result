@@ -106,3 +106,19 @@ r
 select regexp_like('CAT','cat','iiiiiiic') r;
 r
 0
+select regexp_like('abc', '');
+Illegal argument to a regular expression.
+select regexp_like('abc', '', 'i');
+Illegal argument to a regular expression.
+select 'abc' regexp '';
+Illegal argument to a regular expression.
+select 'abc' rlike '';
+Illegal argument to a regular expression.
+select 'abc' not regexp '';
+Illegal argument to a regular expression.
+select 'abc' regexp 'a';
+abc reg_match a
+1
+select 'abc' rlike '^a';
+abc reg_match ^a
+1

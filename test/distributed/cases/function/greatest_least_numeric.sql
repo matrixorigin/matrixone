@@ -72,7 +72,170 @@ select least(cast(1.5 as decimal(10,1)), cast(2.25 as decimal(20,2))) as l_dec;
 select greatest(cast(1234567890123456789012345678901234567890.12 as decimal(60,2)), cast(2 as bigint)) as g_d256;
 select least(cast(1234567890123456789012345678901234567890.12 as decimal(60,2)), cast(2 as bigint)) as l_d256;
 
+-- same-Oid DECIMAL256 values whose common width exceeds DECIMAL256 must use
+-- the FLOAT64 fallback instead of comparing their different-scale raw values.
+-- SQL DECIMAL precision is limited to 65, but these types require 65 + 65 =
+-- 130 digits after scale alignment.
+select greatest(cast(0.9 as decimal(65,65)), cast(1 as decimal(65,0))) as g_d256_scale_overflow;
+select least(cast(0.9 as decimal(65,65)), cast(1 as decimal(65,0))) as l_d256_scale_overflow;
+
+-- issue #25215: mixed string and numeric arguments compare as strings.
+select greatest('10', 2) as greatest_str_num;
+select least('10', 2) as least_str_num;
+select greatest(2, '10') as greatest_num_str;
+select least(2, '10') as least_num_str;
+select greatest('10', 2, 11.0) as greatest_three_mixed;
+select least('10', 2, 11.0) as least_three_mixed;
+select greatest('B', binary 'A') as greatest_nonbinary_binary;
+select least('B', binary 'A') as least_nonbinary_binary;
+select greatest(cast('10' as text), 2) as greatest_text_num;
+select least(cast('10' as text), 2) as least_text_num;
+select hex(greatest(cast('61' as blob), 2)) as greatest_blob_num;
+select hex(least(cast('61' as blob), 2)) as least_blob_num;
+select hex(greatest(cast('61' as binary), 2)) as greatest_binary_num;
+select hex(least(cast('61' as binary), 2)) as least_binary_num;
+select greatest(cast(2020 as year), 1999) as greatest_year_num;
+select least(cast(2020 as year), 1999) as least_year_num;
+
+-- JSON and date-bearing temporal use the dedicated json-temporal overload.
+select greatest(json_extract('{"a":1}', '$'), '2') as greatest_json_varchar;
+select greatest(json_extract('{"a":1}', '$'), json_extract('{"b":2}', '$')) as greatest_json_json;
+select greatest(cast('2020-01-01' as date), json_extract('"2020-01-02"', '$')) as greatest_date_json;
+select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), cast(2021 as year)) as greatest_json_date_year;
+
+-- Date-bearing temporal values compare as packed datetime values. Invalid
+-- temporal text returns MatrixOne's invalid-input error. TIME uses the
+-- statement date, so assert that it wins instead of snapshotting that date.
+select greatest(cast('2020-01-01' as date), '2020-01-02') as greatest_date_varchar;
+select greatest(cast('2020-01-01' as date), 'not-a-date');
+select least(cast('2020-01-01' as date), 'not-a-date');
+select cast(greatest(cast('2020-01-01' as date), cast('12:00:00' as time)) as datetime) > cast('2020-01-01' as datetime) as greatest_date_time_uses_time;
+select greatest(cast(2020 as year), cast('2020-01-01' as date), 1) as greatest_year_date_num;
+select hex(greatest(cast('2020-01-01' as date), cast('2020-01-02' as blob))) as greatest_date_blob;
+select hex(greatest(cast('2020-01-01' as date), cast('2020-01-02' as varbinary))) as greatest_date_varbinary;
+
+-- TIME without a date-bearing peer remains in the text domain.
+select least(cast('10:00:00' as time), '09:00:00') as least_time_varchar;
+
+-- YEAR + numeric keeps the YEAR vector and uses the year-numeric overload.
+select greatest(cast(2020 as year), cast(2021.5 as decimal(10,1))) as greatest_year_decimal;
+select least(cast(2020 as year), cast(2019.5 as decimal(10,1))) as least_year_decimal;
+select greatest(cast(2020 as year), 2021.5) as greatest_year_double;
+select least(cast(2020 as year), cast(2021 as bit(16))) as least_year_bit;
+select greatest(1999, cast(2020 as year), cast(2021 as year)) as greatest_multi_year_numeric;
+select greatest(cast('10:00:00' as time), 2) as greatest_time_numeric;
+select greatest(cast('10:00:00' as time), cast(2 as bit(4))) as greatest_time_bit;
+
+-- Same-Oid temporal metadata aligns scale before comparison.
+select greatest(cast('10:00:00.1' as time(1)), cast('10:00:00.99' as time(2))) as greatest_time_scale;
+
+-- Mixed temporal comparisons derive a permutation-invariant common FSP from
+-- all temporal inputs before parsing string or JSON peers.
+select greatest(cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 00:00:00.24' as datetime(2)), '2020-01-01 00:00:00.25') as greatest_mixed_datetime_scale;
+select greatest(cast('2020-01-01 00:00:00.24' as datetime(2)), cast('2020-01-01 00:00:00.1' as datetime(1)), '2020-01-01 00:00:00.25') as greatest_mixed_datetime_scale_reordered;
+select least(cast('2020-01-01 00:00:00.3' as datetime(1)), cast('2020-01-01 00:00:00.26' as datetime(2)), '2020-01-01 00:00:00.25') as least_mixed_datetime_scale;
+select least(cast('2020-01-01 00:00:00.26' as datetime(2)), cast('2020-01-01 00:00:00.3' as datetime(1)), '2020-01-01 00:00:00.25') as least_mixed_datetime_scale_reordered;
+select greatest(cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 00:00:00.123456' as timestamp(6)), '2020-01-01 00:00:00.123457') as greatest_datetime_timestamp_scale;
+select greatest(cast('2020-01-01 00:00:00.123456' as timestamp(6)), cast('2020-01-01 00:00:00.1' as datetime(1)), '2020-01-01 00:00:00.123457') as greatest_datetime_timestamp_scale_reordered;
+select least(cast('2020-01-01 00:00:00.2' as datetime(1)), cast('2020-01-01 00:00:00.123456' as timestamp(6)), '2020-01-01 00:00:00.123455') as least_datetime_timestamp_scale;
+select least(cast('2020-01-01 00:00:00.123456' as timestamp(6)), cast('2020-01-01 00:00:00.2' as datetime(1)), '2020-01-01 00:00:00.123455') as least_datetime_timestamp_scale_reordered;
+select greatest(cast('2020-01-01' as date), cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 00:00:00.123456' as datetime(6))) as greatest_all_temporal_max_fsp;
+select greatest(cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 00:00:00.24' as datetime(2)), json_extract('"2020-01-01 00:00:00.25"', '$')) as greatest_json_mixed_datetime_scale;
+select least(cast('2020-01-01 00:00:00.3' as datetime(1)), cast('2020-01-01 00:00:00.26' as datetime(2)), json_extract('"2020-01-01 00:00:00.25"', '$')) as least_json_mixed_datetime_scale;
+
+-- DATE + TIME needs a DATETIME peer target so VARCHAR/JSON time components
+-- survive packed-date comparison and formatting. TIME uses the statement date.
+select cast(greatest(cast('2020-01-01' as date), cast('12:00:00.500000' as time(6)), concat(cast(current_date() as char), ' 13:00:00.250000')) as datetime) = cast(concat(cast(current_date() as char), ' 13:00:00.250000') as datetime) as greatest_date_time_varchar_preserves_time;
+select cast(least(cast('2999-01-01' as date), cast('12:00:00.500000' as time(6)), concat(cast(current_date() as char), ' 11:00:00.250000')) as datetime) = cast(concat(cast(current_date() as char), ' 11:00:00.250000') as datetime) as least_date_time_varchar_preserves_time;
+select cast(greatest(cast('2020-01-01' as date), cast('12:00:00.500000' as time(6)), json_extract(concat('"', cast(current_date() as char), ' 13:00:00.250000"'), '$')) as datetime) = cast(concat(cast(current_date() as char), ' 13:00:00.250000') as datetime) as greatest_json_date_time_preserves_time;
+
+-- All T_any arguments return a VARCHAR NULL result, and any NULL argument
+-- makes the strict function result NULL.
+select greatest(null, null) as greatest_all_null, least(null, null) as least_all_null;
+select greatest('10', null, 2) as greatest_mixed_null, least('10', null, 2) as least_mixed_null;
+
+-- Same-Oid normal executor paths and metadata alignment value semantics.
+select greatest(cast('a' as varchar), cast('b' as varchar)) as greatest_varchar_same_oid;
+select least(cast('a' as blob), cast('b' as blob)) as least_blob_same_oid;
+select greatest(cast(1.5 as decimal(10,1)), cast(1.49 as decimal(12,2))) as greatest_decimal_scale_align;
+select least(cast(1.5 as decimal(10,1)), cast(1.49 as decimal(12,2))) as least_decimal_scale_align;
+select greatest(cast('2020-01-01 00:00:00.1' as datetime(1)), cast('2020-01-01 00:00:00.99' as datetime(2))) as greatest_datetime_scale;
+select greatest(cast('2020-01-01 00:00:00.1' as timestamp(1)), cast('2020-01-01 00:00:00.99' as timestamp(2))) as greatest_timestamp_scale;
+
+-- JSON rules: pure JSON is text, allowed text peers choose TEXT/VARCHAR, and
+-- JSON is rejected before any binary or unsupported mixed-type rule.
+select least(json_extract('{"a":1}', '$'), json_extract('{"b":2}', '$')) as least_json_json;
+select greatest(json_extract('"b"', '$'), cast('a' as text)) as greatest_json_text;
+select greatest(json_extract('10', '$'), 2) as greatest_json_numeric;
+select greatest(json_extract('"10:00:00"', '$'), cast('09:00:00' as time)) as greatest_json_time;
+select greatest(json_extract('2020', '$'), cast(2019 as year)) as greatest_json_year;
+select greatest(json_extract('1', '$'), cast('1' as blob));
+select greatest(json_extract('1', '$'), cast('1' as binary));
+select greatest(json_extract('1', '$'), cast('1' as varbinary));
+select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), cast('x' as text));
+select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), cast('2020-01-03' as blob));
+select greatest(json_extract('"2020-01-02 12:00:00"', '$'), cast('2020-01-01 00:00:00' as datetime)) as greatest_json_datetime;
+select greatest(json_extract('"2020-01-02 12:00:00"', '$'), cast('2020-01-01 00:00:00' as timestamp)) as greatest_json_timestamp;
+select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), 20200103) as greatest_json_date_bigint;
+select cast(greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), cast('12:00:00' as time)) as date) > cast('2020-01-02' as date) as greatest_json_date_time_uses_time;
+select greatest(json_extract('"2020-01-02"', '$'), cast('2020-01-01' as date), interval 1 day);
+
+-- The date-bearing temporal matrix uses packed datetime comparison and chooses
+-- the documented result family from the non-temporal peer.
+select greatest(cast('2020-01-01' as datetime), '2020-01-02') as greatest_datetime_varchar;
+select greatest(cast('2020-01-01' as date), cast('2020-01-01 12:00:00' as datetime)) as greatest_date_datetime;
+select cast(greatest(cast('2020-01-01' as date), cast('12:00:00' as time)) as datetime) > cast('2020-01-01' as datetime) as greatest_date_time_format_uses_time;
+select greatest(cast('2020-01-01' as date), cast('2020-01-02' as text)) as greatest_date_text;
+select least(cast('10:00:00' as time), cast('09:00:00' as text)) as least_time_text;
+select greatest(cast('10:00:00' as time), cast('09:00:00' as blob)) as greatest_time_blob;
+select greatest(cast('2020-01-01' as date), 20200102) as greatest_date_numeric;
+select greatest(cast('2020-01-01' as date), cast(20200102 as bit(25))) as greatest_date_bit;
+select greatest(cast(2020 as year), cast('10:00:00' as time)) as greatest_year_time;
+select cast(greatest(cast('2020-01-01' as date), cast('12:00:00' as time), '2020-01-02') as date) > cast('2020-01-02' as date) as greatest_date_time_varchar_uses_time;
+select cast(greatest(cast('2020-01-01' as date), cast('12:00:00' as time), 20200102) as date) > cast('2020-01-02' as date) as greatest_date_time_bigint_uses_time;
+select cast(greatest(cast('2020-01-01' as date), cast('12:00:00' as time), cast('2020-01-02' as blob)) as date) > cast('2020-01-02' as date) as greatest_date_time_blob_uses_time;
+
+-- String-family precedence is TEXT > CHAR/VARCHAR > BLOB > BINARY/VARBINARY.
+select greatest(cast('b' as text), cast('a' as blob)) as greatest_text_blob;
+select greatest(cast('b' as char), cast('a' as varbinary)) as greatest_char_varbinary;
+select hex(greatest(cast('a' as blob), cast('b' as varbinary))) as greatest_blob_varbinary;
+select hex(greatest(cast('a' as binary), cast('b' as varbinary))) as greatest_binary_varbinary;
+
+-- Existing executor-supported Oids remain valid only for same-Oid calls;
+-- every corresponding mixed call is rejected before a normal executor runs.
+drop table if exists greatest_least_supported_oid;
+create table greatest_least_supported_oid (id int primary key, v32 vecf32(3), v64 vecf64(3));
+insert into greatest_least_supported_oid values (1, '[1,2,3]', '[1,2,3]');
+select greatest(cast('00000000-0000-0000-0000-000000000001' as uuid), cast('00000000-0000-0000-0000-000000000002' as uuid)) as greatest_uuid_same_oid;
+select greatest(cast('00000000-0000-0000-0000-000000000001' as uuid), 'x');
+-- __mo_rowid is regenerated for every table creation. Assert its self-comparison
+-- rather than snapshotting the physical value.
+select greatest(__mo_rowid, __mo_rowid) = __mo_rowid as greatest_rowid_same_oid from greatest_least_supported_oid;
+select greatest(__mo_rowid, 1) from greatest_least_supported_oid;
+select greatest(v32, v32) as greatest_vecf32_same_oid from greatest_least_supported_oid;
+select greatest(v64, v64) as greatest_vecf64_same_oid from greatest_least_supported_oid;
+select greatest(v32, v64) from greatest_least_supported_oid;
+select greatest(cast('file://greatest-least-a' as datalink), cast('file://greatest-least-b' as datalink)) as greatest_datalink_same_oid;
+select greatest(cast('file://greatest-least-a' as datalink), 'x');
+
+-- Unsupported Oids must fail both for same-Oid and mixed calls rather than
+-- reaching the normal executor's unreachable branch. ENUM is normalized to
+-- VARCHAR before function resolution, so it follows the string/temporal rules.
+select greatest(interval 1 day, interval 2 day);
+select greatest(interval 1 day, cast('2020-01-01' as date));
+select greatest(st_geomfromtext('POINT(1 1)'), st_geomfromtext('POINT(2 2)'));
+select greatest(st_geomfromtext('POINT(1 1)'), 'x');
+drop table if exists greatest_least_enum;
+create table greatest_least_enum (e enum('a', 'b'), d date);
+insert into greatest_least_enum values ('a', '2020-01-01');
+select greatest(e, e) from greatest_least_enum;
+select greatest(e, 'b') from greatest_least_enum;
+select least(e, 'b') from greatest_least_enum;
+select greatest(e, d) from greatest_least_enum;
+
 drop table if exists toll_transactions;
 drop table if exists mixed_num;
 drop table if exists uns;
 drop table if exists bt;
+drop table if exists greatest_least_supported_oid;
+drop table if exists greatest_least_enum;

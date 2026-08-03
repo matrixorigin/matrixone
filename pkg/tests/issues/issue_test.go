@@ -51,7 +51,7 @@ import (
 )
 
 func TestIssue23861FulltextSnapshotRestore(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*240)
 			defer cancel()
@@ -191,7 +191,7 @@ func execSQLMaybe(t *testing.T, ctx context.Context, db *sql.DB, statement strin
 }
 
 func TestWWConflict(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
@@ -362,7 +362,7 @@ func cleanDatabase(
 
 // #18754
 func TestBinarySearchBlkDataOnUnSortedFakePKCol(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -452,7 +452,7 @@ func TestBinarySearchBlkDataOnUnSortedFakePKCol(t *testing.T) {
 }
 
 func TestCNFlushS3Deletes(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -464,6 +464,12 @@ func TestCNFlushS3Deletes(t *testing.T) {
 
 			exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
 			require.NotNil(t, exec)
+			rowCount := 512 * 1024
+			if testing.Short() {
+				// A rowid plus its primary key still crosses the 1 MiB flush
+				// threshold at this size, without making PR CI process 512K rows.
+				rowCount = 64 * 1024
+			}
 
 			{
 				_, err := exec.Exec(ctx, "create database a;", executor.Options{})
@@ -477,7 +483,7 @@ func TestCNFlushS3Deletes(t *testing.T) {
 					executor.Options{}.WithDatabase("a"))
 				require.NoError(t, err)
 
-				_, err = exec.Exec(ctx, "insert into t1 select *,'yep' from generate_series(1,512*1024)g;",
+				_, err = exec.Exec(ctx, fmt.Sprintf("insert into t1 select *,'yep' from generate_series(1,%d)g;", rowCount),
 					executor.Options{}.WithDatabase("a"))
 				require.NoError(t, err)
 
@@ -487,13 +493,13 @@ func TestCNFlushS3Deletes(t *testing.T) {
 
 				resp.ReadRows(func(rows int, cols []*vector.Vector) bool {
 					cnt := vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
-					require.Equal(t, int64(512*1024), cnt)
+					require.Equal(t, int64(rowCount), cnt)
 					return true
 				})
 			}
 
 			deletion.SetCNFlushDeletesThreshold(1)
-			defer deletion.SetCNFlushDeletesThreshold(32)
+			defer deletion.SetCNFlushDeletesThreshold(5)
 
 			{
 				_, err := exec.Exec(ctx, "delete from t1 where a > 1;", executor.Options{}.WithDatabase("a"))
@@ -539,7 +545,7 @@ func TestCNFlushS3Deletes(t *testing.T) {
 There is no lock competition, but there is data modification
 */
 func TestDedupForAutoPk(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 			defer cancel()
@@ -630,7 +636,7 @@ func TestDedupForAutoPk(t *testing.T) {
 }
 
 func TestLockNeedUpgrade(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 			defer cancel()
@@ -755,7 +761,7 @@ func TestLockNeedUpgrade(t *testing.T) {
 }
 
 func TestIssue19551(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*1000)
 			defer cancel()
@@ -926,7 +932,7 @@ func TestIssue19551(t *testing.T) {
 }
 
 func TestSpeedupAbortAllTxn(t *testing.T) {
-	c, err := embed.NewCluster(
+	c, err := embed.StartTestCluster(
 		embed.WithPreStart(
 			func(so embed.ServiceOperator) {
 				if so.ServiceType() == metadata.ServiceType_CN {
@@ -939,11 +945,10 @@ func TestSpeedupAbortAllTxn(t *testing.T) {
 			},
 		),
 	)
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
 	require.NoError(t, err)
-	require.NoError(t, c.Start())
-	defer func() {
-		require.NoError(t, c.Close())
-	}()
 
 	op, err := c.GetCNService(0)
 	require.NoError(t, err)
@@ -1097,7 +1102,7 @@ func waitLogtailResume(ctx context.Context, cn cnservice.Service) error {
 
 // #15087
 func TestLikePatternPlus(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -1139,7 +1144,7 @@ func TestLikePatternPlus(t *testing.T) {
 }
 
 func TestFaultInjection(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)

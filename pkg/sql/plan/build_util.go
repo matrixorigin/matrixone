@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"regexp"
@@ -157,7 +158,7 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
 				if fstr == "char" || fstr == "binary" {
 					width = 1
-				} else if fstr == "vecf32" || fstr == "vecf64" {
+				} else if fstr == types.ArrayFloat32SQLName || fstr == types.ArrayFloat64SQLName || fstr == types.ArrayBF16SQLName || fstr == types.ArrayFloat16SQLName || fstr == types.ArrayInt8SQLName || fstr == types.ArrayUint8SQLName {
 					width = types.MaxArrayDimension
 				} else {
 					width = types.MaxVarcharLen
@@ -168,7 +169,7 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 				return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if (fstr == "varchar" || fstr == "varbinary") && width > types.MaxVarcharLen {
 				return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
-			} else if fstr == "vecf32" || fstr == "vecf64" {
+			} else if fstr == types.ArrayFloat32SQLName || fstr == types.ArrayFloat64SQLName || fstr == types.ArrayBF16SQLName || fstr == types.ArrayFloat16SQLName || fstr == types.ArrayInt8SQLName || fstr == types.ArrayUint8SQLName {
 				if width > types.MaxArrayDimension {
 					return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxVectorLen : %v", types.MaxArrayDimension)
 				}
@@ -183,10 +184,18 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 				return plan.Type{Id: int32(types.T_binary), Width: width}, nil
 			case "varchar":
 				return plan.Type{Id: int32(types.T_varchar), Width: width}, nil
-			case "vecf32":
+			case types.ArrayFloat32SQLName:
 				return plan.Type{Id: int32(types.T_array_float32), Width: width}, nil
-			case "vecf64":
+			case types.ArrayFloat64SQLName:
 				return plan.Type{Id: int32(types.T_array_float64), Width: width}, nil
+			case types.ArrayBF16SQLName:
+				return plan.Type{Id: int32(types.T_array_bf16), Width: width}, nil
+			case types.ArrayFloat16SQLName:
+				return plan.Type{Id: int32(types.T_array_float16), Width: width}, nil
+			case types.ArrayInt8SQLName:
+				return plan.Type{Id: int32(types.T_array_int8), Width: width}, nil
+			case types.ArrayUint8SQLName:
+				return plan.Type{Id: int32(types.T_array_uint8), Width: width}, nil
 			}
 			// varbinary
 			return plan.Type{Id: int32(types.T_varbinary), Width: width}, nil
@@ -373,7 +382,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 	// try to calculate default value, return err if fails
 	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)
 	if err != nil {
-		return nil, err
+		return nil, mapDDLAssignmentCastError(proc.Ctx, typ, colNameOrigin, err)
 	}
 
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
@@ -418,7 +427,7 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 	defer executor.Free()
 	_, err = executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
-		return nil, err
+		return nil, mapDDLAssignmentCastError(proc.Ctx, typ, col.Name.ColNameOrigin(), err)
 	}
 
 	ret := &plan.OnUpdate{
@@ -497,10 +506,9 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 		return nil, err
 	}
 
-	// A generated CHAR/VARCHAR column is materialized as a real column write, so
-	// use the strict assignment cast: an over-length value is rejected instead of
-	// being silently truncated, matching column DEFAULT / ON UPDATE and the DML
-	// assignment paths.
+	// Persist only stable function IDs in generated-column catalog metadata.
+	// DML plan construction rewrites this wrapper to cast_assign/cast_ignore
+	// when the active protocol supports those functions.
 	genExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
@@ -513,6 +521,14 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 		OriginString: fmtCtx.String(),
 		IsStored:     genAttr.Stored,
 	}, nil
+}
+
+func mapDDLAssignmentCastError(ctx context.Context, typ plan.Type, colName string, err error) error {
+	if (typ.Id == int32(types.T_char) || typ.Id == int32(types.T_varchar)) &&
+		moerr.IsMoErrCode(err, moerr.ErrInternal) {
+		return moerr.NewErrInvalidDefault(ctx, colName)
+	}
+	return err
 }
 
 // checkGeneratedExprReferences rejects variable references and auto-increment
@@ -651,6 +667,28 @@ func inlineGeneratedColExpr(expr *plan.Expr, colIdxToProjPos map[int32]int32, pr
 	}
 }
 
+// applyGeneratedColumnAssignmentCast upgrades persisted legacy cast_strict
+// wrappers to cast_assign and uses cast_ignore for INSERT/UPDATE IGNORE. This
+// keeps generated-column assignment semantics compatible across catalog
+// versions without rewriting catalog rows.
+func (builder *QueryBuilder) applyGeneratedColumnAssignmentCast(expr *plan.Expr, isIgnore bool) *plan.Expr {
+	if expr == nil {
+		return expr
+	}
+	f := expr.GetF()
+	if f == nil || f.Func == nil ||
+		(f.Func.ObjName != "cast_assign" && f.Func.ObjName != "cast_strict") ||
+		len(f.Args) == 0 {
+		return expr
+	}
+	funcName := assignmentCastFunctionName(expr.Typ, isIgnore, builder.compCtx.GetProcess())
+	assignmentCast, err := forceCastExprWithName(builder.GetContext(), f.Args[0], expr.Typ, funcName)
+	if err != nil {
+		return expr
+	}
+	return assignmentCast
+}
+
 // substituteColRefsInExpr replaces ColRef(0, colIdx) in a generated column expression
 // with the actual expressions from projList at offset+colIdx. This is used in UPDATE
 // to inline referenced column values into the generated expression.
@@ -676,8 +714,10 @@ func substituteColRefsInExpr(expr *plan.Expr, projList []*plan.Expr, offset int3
 			Typ: expr.Typ,
 			Expr: &plan.Expr_F{
 				F: &plan.Function{
-					Func: e.F.Func,
-					Args: newArgs,
+					Func:          e.F.Func,
+					Args:          newArgs,
+					AggConfig:     bytes.Clone(e.F.AggConfig),
+					AggConfigType: e.F.AggConfigType,
 				},
 			},
 		}
@@ -694,6 +734,36 @@ func substituteColRefsInExpr(expr *plan.Expr, projList []*plan.Expr, offset int3
 		}
 	default:
 		return expr
+	}
+}
+
+// collectRefColPos returns the ColPos of every base-table column reference
+// (RelPos == 0) inside expr, e.g. the source columns of a generated column's
+// definition expression.
+func collectRefColPos(expr *plan.Expr) []int32 {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.RelPos == 0 {
+			return []int32{e.Col.ColPos}
+		}
+		return nil
+	case *plan.Expr_F:
+		var res []int32
+		for _, arg := range e.F.Args {
+			res = append(res, collectRefColPos(arg)...)
+		}
+		return res
+	case *plan.Expr_List:
+		var res []int32
+		for _, item := range e.List.List {
+			res = append(res, collectRefColPos(item)...)
+		}
+		return res
+	default:
+		return nil
 	}
 }
 
@@ -978,7 +1048,7 @@ basic logic of fk constraint check.
 			select distinct S.b from S where S.b is not null
 			except
 			select distinct T.a from T
-		)
+		) as __mo_fk_check_source
 	if the result is true, then the fk constraint confirmed.
 */
 func genSqlForCheckFKConstraints(ctx context.Context,
@@ -1012,7 +1082,7 @@ func genSqlForCheckFKConstraints(ctx context.Context,
 	sql := strings.Join([]string{
 		"select count(*) = 0 from (",
 		except,
-		")",
+		") as __mo_fk_check_source",
 	}, " ")
 	return sql, nil
 }

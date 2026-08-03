@@ -17,12 +17,14 @@ package ioutil
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -38,6 +40,11 @@ const DefaultInMemoryStagedSize = mpool.MB * 16
 // Cap each sort-key pipeline submission so backfill can produce reasonably
 // sized objects without letting pending sorted batches grow without bound.
 const pipelineSortKeySubmitThreshold = mpool.MB * 128
+
+const (
+	unpublishedObjectDeleteBatchSize = 1000
+	unpublishedObjectDeleteTimeout   = 10 * time.Minute
+)
 
 type pipelineFlushKeyType struct{}
 
@@ -434,6 +441,85 @@ func (sinker *Sinker) fillDefaults() {
 
 func (sinker *Sinker) GetResult() ([]objectio.ObjectStats, []*batch.Batch) {
 	return sinker.result.persisted, sinker.result.tail
+}
+
+// DeleteUnpublishedObjects deletes object files that have not crossed their
+// caller's publication boundary. Object stores cap multi-delete requests at
+// 1000 keys, so each bounded unit gets the same timeout used by checkpoint GC.
+// The caller controls cancellation of the complete cleanup through ctx.
+func DeleteUnpublishedObjects(
+	ctx context.Context,
+	fs fileservice.FileService,
+	files ...string,
+) (int, error) {
+	seen := make(map[string]struct{}, len(files))
+	unique := make([]string, 0, len(files))
+	for _, file := range files {
+		if file == "" {
+			continue
+		}
+		if _, ok := seen[file]; ok {
+			continue
+		}
+		seen[file] = struct{}{}
+		unique = append(unique, file)
+	}
+	for start := 0; start < len(unique); start += unpublishedObjectDeleteBatchSize {
+		end := min(start+unpublishedObjectDeleteBatchSize, len(unique))
+		deleteCtx, cancel := context.WithTimeoutCause(
+			ctx, unpublishedObjectDeleteTimeout, moerr.CauseCleanUpUselessFiles,
+		)
+		err := fs.Delete(deleteCtx, unique[start:end]...)
+		cancel()
+		if err != nil {
+			return len(unique), errors.Join(
+				moerr.NewInternalErrorf(
+					ctx, "delete unpublished objects [%d:%d]", start, end),
+				err,
+			)
+		}
+	}
+	return len(unique), nil
+}
+
+// DeletePersisted deletes every object that this sinker has successfully
+// persisted but has not transferred out of its lifecycle yet. Callers use it
+// when a larger operation aborts after one or more spills. The tracked object
+// references are retained when deletion fails so the caller may retry.
+func (sinker *Sinker) DeletePersisted(ctx context.Context) (int, error) {
+	if sinker.pipe.enabled && sinker.pipe.result != nil {
+		// A failed pipeline may still have successful sibling writes. Wait for
+		// all of them before taking the ownership snapshot.
+		_ = sinker.drainPipeline()
+	}
+
+	files := make([]string, 0,
+		len(sinker.staged.persisted)+len(sinker.result.persisted))
+	appendStats := func(stats []objectio.ObjectStats) {
+		for i := range stats {
+			files = append(files, stats[i].ObjectName().String())
+		}
+	}
+	appendStats(sinker.staged.persisted)
+	appendStats(sinker.result.persisted)
+	if sinker.pipe.result != nil {
+		sinker.pipe.result.mu.RLock()
+		appendStats(sinker.pipe.result.persisted)
+		sinker.pipe.result.mu.RUnlock()
+	}
+	count, err := DeleteUnpublishedObjects(ctx, sinker.fs, files...)
+	if err != nil {
+		return count, err
+	}
+
+	sinker.staged.persisted = sinker.staged.persisted[:0]
+	sinker.result.persisted = sinker.result.persisted[:0]
+	if sinker.pipe.result != nil {
+		sinker.pipe.result.mu.Lock()
+		sinker.pipe.result.persisted = sinker.pipe.result.persisted[:0]
+		sinker.pipe.result.mu.Unlock()
+	}
+	return count, nil
 }
 
 func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {

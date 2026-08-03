@@ -55,6 +55,26 @@ var (
 )
 
 var (
+	taskCheckpointRetryCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "checkpoint_retry_total",
+			Help:      "Total number of forced checkpoint retries by reason.",
+		}, []string{"reason"})
+
+	TaskForceICKPPendingRetryCounter = taskCheckpointRetryCounter.WithLabelValues(
+		"force_ickp_pending",
+	)
+	TaskForceICKPNoProgressRetryCounter = taskCheckpointRetryCounter.WithLabelValues(
+		"force_ickp_no_progress",
+	)
+	TaskForceGCKPFreshICKPRetryCounter = taskCheckpointRetryCounter.WithLabelValues(
+		"force_gckp_fresh_ickp",
+	)
+)
+
+var (
 	taskDNMergeStuffCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -98,6 +118,22 @@ var (
 			Subsystem: "task",
 			Name:      "storage_usage_cache_size",
 			Help:      "Size of the storage usage cache used",
+		})
+
+	TaskMergeOOMPauseCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "merge_oom_pause_total",
+			Help:      "Total number of DN merge scheduler pauses caused by low available memory.",
+		})
+
+	TaskMergeAvailableMemoryGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "merge_available_memory_bytes",
+			Help:      "Available memory observed by the DN merge scheduler.",
 		})
 )
 

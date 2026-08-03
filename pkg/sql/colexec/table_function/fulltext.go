@@ -18,7 +18,6 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
-	"math"
 	"sync"
 
 	"github.com/bytedance/sonic"
@@ -66,6 +65,16 @@ type fulltextState struct {
 	resbuf           []*vectorindex.SearchResultAnyKey
 	ranking          bool
 
+	// Partition-ordered traversal of agghtab for the zero-LIMIT scoring path.
+	// Built ONCE per scoring phase (aggregation is complete before the first
+	// evaluate call) and drained across evaluate batches; rebuilding it per 8K
+	// output batch would cost O(N) workspace per batch and O(N^2/8192)
+	// traversal work overall (#25638 review). Consumed slots are nil'd so
+	// variable-width doc IDs can be reclaimed incrementally.
+	scoreKeys    []any
+	scorePos     int
+	scoreOrdered bool
+
 	// Serialized membership-filter (docfilter) bytes for reader-level doc_id filtering
 	fulltextMembershipFilter []byte
 
@@ -104,6 +113,9 @@ func (u *fulltextState) resetRowState(proc *process.Process) {
 	u.docIDMap = make(map[any]any)
 	u.minheap = nil
 	u.resbuf = nil
+	u.scoreKeys = nil
+	u.scorePos = 0
+	u.scoreOrdered = false
 }
 
 func (u *fulltextState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
@@ -137,6 +149,14 @@ func (u *fulltextState) normalizeDocID(docID any) any {
 		key := string(bytes)
 		if _, exists := u.docIDMap[key]; !exists {
 			u.docIDMap[key] = append([]byte(nil), bytes...)
+			// A varchar/composite doc ID retains a string key AND a []byte copy in
+			// the non-spillable side maps. Charge the actual retained size toward
+			// the pool's fast-path budget re-check: the item-count interval alone
+			// assumes small fixed-size IDs and would admit ~2 GiB of key bytes
+			// between checks at the 65,535-byte varchar maximum (#25638).
+			if u.mpool != nil {
+				u.mpool.ChargeSideBytes(2 * uint64(len(bytes)))
+			}
 		}
 		return key
 	}
@@ -196,7 +216,7 @@ func (u *fulltextState) returnResultFromBuffer(proc *process.Process, limit uint
 	blocksz := 8192
 	nres := len(u.resbuf)
 	n := nres
-	if n > int(limit) {
+	if uint64(n) > limit {
 		n = int(limit)
 	}
 	if n > blocksz {
@@ -254,11 +274,9 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 	var err error
 	u.batch.CleanOnlyData()
 	limit := u.limit
-	topk := limit
+	topk := fulltextTopKLimit(limit, u.ranking)
 
-	if u.ranking {
-		topk = 3 * limit
-	} else {
+	if !u.ranking {
 
 		// number of result more than pushdown limit and exit
 		if limit > 0 && u.n_result >= limit {
@@ -330,7 +348,13 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 	if v.GetType().Oid != types.T_varchar {
 		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("Third argument (pattern) must be string, but got %s", v.GetType().String()))
 	}
+	if v.IsConstNull() || v.GetNulls().Contains(uint64(nthRow)) {
+		return moerr.NewInvalidInput(proc.Ctx, "fulltext search pattern must not be NULL")
+	}
 	pattern := v.GetStringAt(nthRow)
+	if len(pattern) == 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "fulltext search pattern must not be empty")
+	}
 
 	v = tf.ctr.argVecs[3]
 	if v.GetType().Oid != types.T_int64 {
@@ -352,13 +376,13 @@ func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunctio
 	st := &fulltextState{}
 	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
 	tableFunction.ctr.argVecs = make([]*vector.Vector, len(tableFunction.Args))
+	if err != nil {
+		return nil, err
+	}
 
-	if tableFunction.Limit != nil {
-		if cExpr, ok := tableFunction.Limit.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-				st.limit = c.U64Val
-			}
-		}
+	st.limit, err = evalLimitExpression(proc, tableFunction.Limit, 0)
+	if err != nil {
+		return nil, err
 	}
 
 	// TODO: LIMIT BY RANK should set ranking to true
@@ -392,101 +416,140 @@ func runWordStats(
 	return
 }
 
-func runSqlWithFulltextFilter(proc *process.Process, fulltextMembershipFilter []byte, sql string) (executor.Result, error) {
-	sqlProc := sqlexec.NewSqlProcess(proc)
-	if len(fulltextMembershipFilter) > 0 {
-		sqlProc.FulltextMembershipFilter = fulltextMembershipFilter
-	}
-	return ft_runSql(sqlProc, sql)
+// traversalKeySize is the workspace cost per key of the partition-ordered
+// traversal: one interface header in the flat key buffer.
+const traversalKeySize = 16
+
+// scoreTraversalEstimate is the EXACT workspace partitionOrderedKeys allocates
+// for nkeys keys over npart partitions: one flat interface buffer plus one
+// per-partition offset array (reused between the counting and placement passes)
+// and slice headers. Kept as a function so the admission estimate and the
+// regression that measures the real allocation share one definition.
+func scoreTraversalEstimate(nkeys, npart int) uint64 {
+	return uint64(nkeys)*traversalKeySize + uint64(npart)*8 + 64
 }
 
-func runSingleKeywordTopK(
-	u *fulltextState,
+// partitionOrderedKeys returns agghtab's keys ordered by ascending pool-partition id.
+// Go map iteration order is randomized and has no relation to the partition an
+// address lives in; when partitions have spilled, scoring in map order makes GetItem
+// evict and re-materialize WHOLE partitions per document (a diagnostic showed one
+// partition reload per item read). Ordering by partition first guarantees each
+// spilled partition is unspilled at most once per scoring pass (#25638).
+//
+// Workspace shape: ONE flat []any of exactly len(agghtab) plus one per-partition
+// offset array — no append growth, no per-bucket slack — so the heap-budget
+// admission estimate (scoreTraversalEstimate) matches the peak allocation.
+// Construction is two O(n) map passes (count, then place), both honoring
+// cancellation. Callers must build the traversal at most once per scoring phase
+// and drain it incrementally, never rebuild it per output batch.
+func partitionOrderedKeys(
 	proc *process.Process,
-	s *fulltext.SearchAccum,
-) (bool, error) {
-	if u.limit == 0 || u.ranking {
-		return false, nil
+	agghtab map[any]uint64,
+	pool *fulltext.FixedBytePool,
+) ([]any, error) {
+	npart := pool.NumPartitions()
+	if npart < 1 {
+		npart = 1
 	}
-
-	var topKSQL string
-	var ok bool
-	var err error
-	switch s.ScoreAlgo {
-	case fulltext.ALGO_TFIDF:
-		topKSQL, ok, err = fulltext.SingleKeywordTopKSQL(s.Pattern, s.Mode, s.TblName, u.limit)
-	case fulltext.ALGO_BM25:
-		topKSQL, ok, err = fulltext.SingleKeywordTopKBM25SQL(s.Pattern, s.Mode, s.TblName, s.AvgDocLen, u.limit)
-	default:
-		return false, nil
+	if err := pool.CheckBudget(scoreTraversalEstimate(len(agghtab), npart)); err != nil {
+		return nil, err
 	}
-	if err != nil || !ok {
-		return false, err
+	pidOf := func(addr uint64) uint64 {
+		pid := fulltext.GetPartitionId(addr)
+		if pid >= uint64(npart) {
+			pid = uint64(npart - 1)
+		}
+		return pid
 	}
-
-	topKRes, err := runSqlWithFulltextFilter(proc, u.fulltextMembershipFilter, topKSQL)
-	if err != nil {
-		return false, err
-	}
-	defer topKRes.Close()
-
-	results := make([]*vectorindex.SearchResultAnyKey, 0, u.limit)
-	var nmatch int64
-	for _, bat := range topKRes.Batches {
-		if nmatch == 0 && bat.RowCount() > 0 {
-			nmatch = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[2], 0)
-			// Guard against zero nmatch (COUNT(*) OVER() on a non-empty
-			// result set should never be 0, but be defensive anyway).
-			if nmatch == 0 || s.Nrow == 0 {
-				return true, nil
+	offsets := make([]int, npart)
+	n := 0
+	for _, addr := range agghtab {
+		if n%cancelCheckInterval == 0 {
+			if err := proc.Ctx.Err(); err != nil {
+				return nil, moerr.NewInternalError(proc.Ctx, "fulltext scoring cancelled")
 			}
 		}
-		for i := 0; i < bat.RowCount(); i++ {
-			docID := u.normalizeDocID(vector.GetAny(bat.Vecs[0], i, false))
-			var score float64
-			switch s.ScoreAlgo {
-			case fulltext.ALGO_TFIDF:
-				tf := vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[1], i)
-				idf := math.Log10(float64(s.Nrow) / float64(nmatch))
-				score = float64(float32(tf) * float32(idf*idf))
-			case fulltext.ALGO_BM25:
-				idf := math.Log10(float64(s.Nrow) / float64(nmatch))
-				idfSq := idf * idf
-				score = vector.GetFixedAtWithTypeCheck[float64](bat.Vecs[1], i) * idfSq
-			default:
-				return false, nil
+		n++
+		offsets[pidOf(addr)]++
+	}
+	// per-partition counts -> start offsets
+	sum := 0
+	for i, c := range offsets {
+		offsets[i] = sum
+		sum += c
+	}
+	keys := make([]any, len(agghtab))
+	n = 0
+	for k, addr := range agghtab {
+		if n%cancelCheckInterval == 0 {
+			if err := proc.Ctx.Err(); err != nil {
+				return nil, moerr.NewInternalError(proc.Ctx, "fulltext scoring cancelled")
 			}
-			results = append(results, &vectorindex.SearchResultAnyKey{Id: docID, Distance: score})
 		}
+		n++
+		pid := pidOf(addr)
+		keys[offsets[pid]] = k
+		offsets[pid]++
 	}
-	if nmatch == 0 || s.Nrow == 0 {
-		return true, nil
-	}
-
-	for i := len(results) - 1; i >= 0; i-- {
-		u.resbuf = append(u.resbuf, results[i])
-	}
-	return true, nil
+	return keys, nil
 }
+
+// cancelCheckInterval: how many scored documents between context-cancellation checks in
+// the scoring loops. Scoring a large agghtab can involve partition-sized disk I/O, so a
+// KILL / timeout must be able to stop the loop promptly.
+const cancelCheckInterval = 1024
 
 // evaluate the score for all document vectors in Agg hashtable.
 // whenever there is 8192 results, return it immediately.
 func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (scoremap map[any]float32, err error) {
 
+	// Build the partition-ordered traversal ONCE: aggregation is complete before
+	// the first evaluate call, and the zero-LIMIT path re-enters evaluate for every
+	// 8K output batch, so the ordering must be drained across batches — not rebuilt
+	// per batch (#25638 review).
+	if !u.scoreOrdered {
+		if u.scoreKeys, err = partitionOrderedKeys(proc, u.agghtab, u.mpool); err != nil {
+			return nil, err
+		}
+		u.scorePos = 0
+		u.scoreOrdered = true
+	}
+
 	scoremap = make(map[any]float32, 8192)
-	keys := make([]any, 0, 8192)
 
 	aggcnt := u.aggcnt
 
-	for doc_id, addr := range u.agghtab {
+	// Consume the traversal in partition order so spilled partitions are
+	// materialized at most once across ALL batches, honoring cancellation between
+	// documents. Every candidate is freed and deleted from the side maps the
+	// moment it is scored: a sparse result (e.g. a boolean query whose required
+	// words filter most candidates) must not accumulate per-candidate state, so
+	// per-call memory is bounded by the returned scoremap, not by the number of
+	// candidates processed (#25638 review).
+	n := 0
+	for u.scorePos < len(u.scoreKeys) && len(scoremap) < 8192 {
+		if n%cancelCheckInterval == 0 {
+			if err := proc.Ctx.Err(); err != nil {
+				return nil, moerr.NewInternalError(proc.Ctx, "fulltext evaluate cancelled")
+			}
+		}
+		n++
+		doc_id := u.scoreKeys[u.scorePos]
+		u.scoreKeys[u.scorePos] = nil // let the (possibly wide) ID be reclaimed
+		u.scorePos++
+
+		addr, ok := u.agghtab[doc_id]
+		if !ok {
+			continue
+		}
 		docvec, err := u.mpool.GetItem(addr)
 		if err != nil {
 			return nil, err
 		}
 
 		docLen := int64(0)
-		if len, ok := u.docLenMap[doc_id]; ok {
-			docLen = int64(len)
+		if l, ok := u.docLenMap[doc_id]; ok {
+			docLen = int64(l)
 		}
 
 		score, err := s.Eval(docvec, docLen, aggcnt)
@@ -494,86 +557,108 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 			return nil, err
 		}
 
-		keys = append(keys, doc_id)
+		// consumed: release the pooled item and side-map entries immediately
+		if err := u.mpool.FreeItem(addr); err != nil {
+			return nil, err
+		}
+		delete(u.agghtab, doc_id)
+		delete(u.docLenMap, doc_id)
 
 		if len(score) > 0 {
 			scoremap[doc_id] = score[0]
-		}
-
-		if len(scoremap) >= 8192 {
-			break
+		} else {
+			delete(u.docIDMap, doc_id)
 		}
 	}
-
-	for _, k := range keys {
-		u.mpool.FreeItem(u.agghtab[k])
-		delete(u.agghtab, k)
-		delete(u.docLenMap, k)
-		if _, ok := scoremap[k]; !ok {
-			delete(u.docIDMap, k)
-		}
+	if u.scorePos >= len(u.scoreKeys) {
+		u.scoreKeys = nil // fully drained; release the flat buffer
 	}
 
 	return scoremap, nil
 }
 
 func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum, limit uint64) (err error) {
+	if limit == 0 {
+		return nil
+	}
 	aggcnt := u.aggcnt
 	if u.minheap == nil {
-		u.minheap = make(vectorindex.SearchResultHeap, 0, limit)
-		u.resbuf = make([]*vectorindex.SearchResultAnyKey, 0, limit)
+		capacity := vectorindex.SearchResultPreallocate(limit)
+		u.minheap = make(vectorindex.SearchResultHeap, 0, capacity)
+		u.resbuf = make([]*vectorindex.SearchResultAnyKey, 0, capacity)
 	}
 	heap.Init(&u.minheap)
 
-	for doc_id, addr := range u.agghtab {
-
-		docvec, err := u.mpool.GetItem(addr)
-		if err != nil {
-			return err
-		}
-
-		docLen := int64(0)
-		if len, ok := u.docLenMap[doc_id]; ok {
-			docLen = int64(len)
-		}
-
-		score, err := s.Eval(docvec, docLen, aggcnt)
-		if err != nil {
-			return err
-		}
-
-		if len(score) > 0 {
-			scoref64 := float64(score[0])
-			if len(u.minheap) >= int(limit) {
-				if u.minheap[0].GetDistance() < scoref64 {
-					if u.ranking {
-						// In ranking mode, free the evicted document's resources immediately
-						// so they are not orphaned in agghtab after sort_topk returns.
-						evictedID := u.minheap[0].(*vectorindex.SearchResultAnyKey).Id
-						if evictedAddr, exists := u.agghtab[evictedID]; exists {
-							err = u.mpool.FreeItem(evictedAddr)
-							if err != nil {
-								return err
-							}
-							delete(u.agghtab, evictedID)
-							delete(u.docLenMap, evictedID)
-							delete(u.docIDMap, evictedID)
-						}
-					}
-					u.minheap[0] = &vectorindex.SearchResultAnyKey{Id: doc_id, Distance: scoref64}
-					heap.Fix(&u.minheap, 0)
+	// score in partition order so spilled partitions are materialized at most once
+	// per pass (map order would thrash whole-partition I/O per document), and honor
+	// cancellation between documents so KILL/timeout can stop the I/O loop promptly.
+	// sort_topk runs as a single pass, so the traversal is local and released on return.
+	keys, err := partitionOrderedKeys(proc, u.agghtab, u.mpool)
+	if err != nil {
+		return err
+	}
+	n := 0
+	{
+		for i, doc_id := range keys {
+			keys[i] = nil // let the (possibly wide) ID be reclaimed
+			if n%cancelCheckInterval == 0 {
+				if err := proc.Ctx.Err(); err != nil {
+					return moerr.NewInternalError(proc.Ctx, "fulltext sort_topk cancelled")
 				}
-			} else {
-				heap.Push(&u.minheap, &vectorindex.SearchResultAnyKey{Id: doc_id, Distance: scoref64})
 			}
-		} else if u.ranking {
-			err = u.mpool.FreeItem(addr)
+			n++
+			addr, ok := u.agghtab[doc_id]
+			if !ok {
+				continue
+			}
+			docvec, err := u.mpool.GetItem(addr)
 			if err != nil {
 				return err
 			}
-			delete(u.agghtab, doc_id)
-			delete(u.docLenMap, doc_id)
-			delete(u.docIDMap, doc_id)
+
+			docLen := int64(0)
+			if len, ok := u.docLenMap[doc_id]; ok {
+				docLen = int64(len)
+			}
+
+			score, err := s.Eval(docvec, docLen, aggcnt)
+			if err != nil {
+				return err
+			}
+
+			if len(score) > 0 {
+				scoref64 := float64(score[0])
+				if uint64(len(u.minheap)) >= limit {
+					if u.minheap[0].GetDistance() < scoref64 {
+						if u.ranking {
+							// In ranking mode, free the evicted document's resources immediately
+							// so they are not orphaned in agghtab after sort_topk returns.
+							evictedID := u.minheap[0].(*vectorindex.SearchResultAnyKey).Id
+							if evictedAddr, exists := u.agghtab[evictedID]; exists {
+								err = u.mpool.FreeItem(evictedAddr)
+								if err != nil {
+									return err
+								}
+								delete(u.agghtab, evictedID)
+								delete(u.docLenMap, evictedID)
+								delete(u.docIDMap, evictedID)
+							}
+						}
+						u.minheap[0] = &vectorindex.SearchResultAnyKey{Id: doc_id, Distance: scoref64}
+						heap.Fix(&u.minheap, 0)
+					}
+				} else {
+					heap.Push(&u.minheap, &vectorindex.SearchResultAnyKey{Id: doc_id, Distance: scoref64})
+				}
+			} else if u.ranking {
+				err = u.mpool.FreeItem(addr)
+				if err != nil {
+					return err
+				}
+				delete(u.agghtab, doc_id)
+				delete(u.docLenMap, doc_id)
+				delete(u.docIDMap, doc_id)
+			}
 		}
 	}
 
@@ -606,6 +691,16 @@ func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum,
 	}
 
 	return nil
+}
+
+func fulltextTopKLimit(limit uint64, ranking bool) uint64 {
+	if !ranking {
+		return limit
+	}
+	if limit > ^uint64(0)/3 {
+		return ^uint64(0)
+	}
+	return 3 * limit
 }
 
 // result from SQL is (doc_id, index constant (refer to Pattern.Index))
@@ -802,14 +897,6 @@ func fulltextIndexMatch(
 		u.sacc = s
 
 		opStats.BackgroundQueries = append(opStats.BackgroundQueries, res.LogicalPlan)
-
-		ok, err := runSingleKeywordTopK(u, proc, s)
-		if err != nil {
-			return err
-		}
-		if ok {
-			return nil
-		}
 
 	}
 

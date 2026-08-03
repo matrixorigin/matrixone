@@ -32,7 +32,7 @@ func executeStatusStmtInBack(backSes *backSession,
 	}
 
 	runBegin := time.Now()
-	if _, err = execCtx.runner.Run(0); err != nil {
+	if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 		return
 	}
 

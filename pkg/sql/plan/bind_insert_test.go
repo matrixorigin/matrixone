@@ -22,6 +22,57 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestGetValidIndexesKeepsRegularIndexThatCoversPrimaryKey(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"user_id", "session_id", "id"},
+			PkeyColName: catalog.CPrimaryKeyColName,
+		},
+		Indexes: []*plan.IndexDef{
+			{
+				IndexName:  "idx_ret",
+				IndexAlgo:  catalog.MoIndexDefaultAlgo.ToString(),
+				TableExist: true,
+				Unique:     false,
+				Parts: []string{
+					"status",
+					"due",
+					"user_id",
+					"session_id",
+					"id",
+					catalog.CreateAlias(catalog.CPrimaryKeyColName),
+				},
+			},
+			{
+				IndexName:  "uq_token_pk",
+				IndexAlgo:  catalog.MoIndexDefaultAlgo.ToString(),
+				TableExist: true,
+				Unique:     true,
+				Parts: []string{
+					"token",
+					"user_id",
+					"session_id",
+					"id",
+				},
+			},
+			{
+				IndexName:  "idx_pending",
+				IndexAlgo:  catalog.MoIndexDefaultAlgo.ToString(),
+				TableExist: false,
+				Parts:      []string{"status"},
+			},
+		},
+	}
+
+	got, hasIrregular := getValidIndexes(tableDef)
+
+	assert.False(t, hasIrregular)
+	if assert.Len(t, got, 2) {
+		assert.Equal(t, "idx_ret", got[0].IndexName)
+		assert.Equal(t, "uq_token_pk", got[1].IndexName)
+	}
+}
+
 // TestGetIrregularIndexes verifies that existing IVF / fulltext / master indexes
 // (synchronously maintained) are returned, while regular indexes, indexes whose
 // hidden table has not been created, and HNSW/CAGRA/IVF-PQ indexes (cron-maintained)

@@ -48,16 +48,21 @@ type PreInsert struct {
 	// letter case: origin
 	Attrs []string
 
-	EstimatedRowCount int64
-	CompPkeyExpr      *plan.Expr
-	ClusterByExpr     *plan.Expr
-	ColOffset         int32
+	EstimatedRowCount  int64
+	CompPkeyExpr       *plan.Expr
+	ClusterByExpr      *plan.Expr
+	ColOffset          int32
+	RejectZeroTemporal bool
 
 	vm.OperatorBase
 }
 
 func (preInsert *PreInsert) GetOperatorBase() *vm.OperatorBase {
 	return &preInsert.OperatorBase
+}
+
+func (preInsert *PreInsert) SetRejectZeroTemporal(reject bool) {
+	preInsert.RejectZeroTemporal = reject
 }
 
 func init() {

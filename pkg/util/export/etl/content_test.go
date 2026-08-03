@@ -224,3 +224,25 @@ func TestSQLFlusher_ResetBackoffAfterSuccessfulFlush(t *testing.T) {
 	require.Equal(t, []bool{true, false, false}, forceNewConnFlags)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestSQLFlusher_EscapesInlineData(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	mock.ExpectExec(regexp.QuoteMeta(`LOAD DATA INLINE FORMAT='csv', DATA='a''b\\c' INTO TABLE testDB.testTable FIELDS TERMINATED BY ','`)).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	stubs := gostub.Stub(&db_holder.GetOrInitDBConn, func(forceNewConn bool, randomCN bool) (*sql.DB, error) {
+		return db, nil
+	})
+	defer stubs.Reset()
+
+	f := &SQLFlusher{
+		database: "testDB",
+		table:    "testTable",
+	}
+	_, err = f.FlushBuffer(bytes.NewBufferString(`a'b\c`))
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

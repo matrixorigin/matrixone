@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -44,9 +45,12 @@ const (
 type container struct {
 	sp *pSpool.PipelineSpool
 
+	server *colexec.Server
+
 	// the clientsession info for the channel you want to dispatch
 	remoteReceivers []*process.WrapCs
 	remoteInfo      process.RemotePipelineInformationChannel
+	remoteProc      *process.Process
 
 	// sendFunc is the rule you want to send batch
 	sendFunc func(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error)
@@ -74,6 +78,11 @@ type container struct {
 type Dispatch struct {
 	ctr          *container
 	cleanupSpool *pSpool.PipelineSpool
+
+	// MaterializedSource is used by a multi-reference CTE whose consumers can
+	// have execution dependencies on one another. It is local-only and bypasses
+	// the lock-step pipeline spool fan-out.
+	MaterializedSource *materialized.Source
 
 	// IsSink means this is a Sink Node
 	IsSink bool
@@ -217,7 +226,11 @@ func sendAbortSignalsToFailedLocalRegs(ctx context.Context, proc *process.Proces
 func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	terminalSignal := process.BuildCleanupSignal(pipelineFailed, err)
 	terminalErr := terminalSignal.TerminalErr()
-
+	if dispatch.MaterializedSource != nil {
+		dispatch.MaterializedSource.Finish(terminalErr)
+		dispatch.ctr = nil
+		return
+	}
 	if dispatch.ctr != nil {
 		if dispatch.ctr.isRemote {
 			for _, r := range dispatch.ctr.remoteReceivers {
@@ -248,7 +261,9 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 			for i := range dispatch.RemoteRegs {
 				uuids = append(uuids, dispatch.RemoteRegs[i].Uuid)
 			}
-			colexec.Get().DeleteUuids(uuids)
+			if dispatch.ctr.server != nil {
+				dispatch.ctr.server.DeleteUuids(uuids)
+			}
 		}
 	}
 
@@ -264,11 +279,13 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 		if terminalSignal.EventType == process.EventEnd && allTerminalSignalsDelivered(terminalDelivered) {
 			dispatch.cleanupSpool = sp
 		} else {
+			abortErr := terminalErr
 			if terminalSignal.EventType == process.EventEnd {
-				fallbackErr := process.ErrPipelineEndSignalDeliveryFailed
+				fallbackErr := process.ResolvePipelineSpoolAbortError(dispatch.LocalRegs...)
 				sendAbortSignalsToFailedLocalRegs(signalCtx, proc, dispatch.LocalRegs, terminalDelivered, fallbackErr)
+				abortErr = fallbackErr
 			}
-			sp.Abort()
+			sp.Abort(abortErr)
 			dispatch.cleanupSpool = nil
 		}
 		dispatch.ctr.sp = nil

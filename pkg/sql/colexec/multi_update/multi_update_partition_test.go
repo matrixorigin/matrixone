@@ -18,9 +18,28 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
+
+func TestResetMultiUpdateCtxsClassifiesTemporaryIndexTables(t *testing.T) {
+	uniqueName := "__mo_tmp_018f1f767b9d7f35b2d99b8d7774bde8_db_" +
+		catalog.UniqueIndexTableNamePrefix + "0198fa2b-7cc8-7ed1-b7ae-a3d9c29e75fd"
+	secondaryName := "__mo_tmp_018f1f767b9d7f35b2d99b8d7774bde8_db_" +
+		catalog.SecondaryIndexTableNamePrefix + "0198fa2b-7cc8-7ed1-b7ae-a3d9c29e75fd"
+	op := &MultiUpdate{MultiUpdateCtx: []*MultiUpdateCtx{
+		{TableDef: &plan.TableDef{Name: "main_table"}},
+		{TableDef: &plan.TableDef{Name: uniqueName}},
+		{TableDef: &plan.TableDef{Name: secondaryName}},
+	}}
+
+	op.resetMultiUpdateCtxs()
+
+	require.Equal(t, UpdateMainTable, op.ctr.updateCtxInfos["main_table"].tableType)
+	require.Equal(t, UpdateUniqueIndexTable, op.ctr.updateCtxInfos[uniqueName].tableType)
+	require.Equal(t, UpdateSecondaryIndexTable, op.ctr.updateCtxInfos[secondaryName].tableType)
+}
 
 func TestPartitionMultiUpdateString(t *testing.T) {
 	op := &PartitionMultiUpdate{}
@@ -31,7 +50,7 @@ func TestPartitionMultiUpdateString(t *testing.T) {
 
 func TestNewPartitionMultiUpdateFrom(t *testing.T) {
 	ps := &PartitionMultiUpdate{
-		raw:     &MultiUpdate{},
+		raw:     &MultiUpdate{RejectZeroTemporal: true},
 		tableID: 1,
 	}
 	op := NewPartitionMultiUpdateFrom(ps)
@@ -39,7 +58,23 @@ func TestNewPartitionMultiUpdateFrom(t *testing.T) {
 	require.Equal(t, ps.raw.Action, op.(*PartitionMultiUpdate).raw.Action)
 	require.Equal(t, ps.raw.IsOnduplicateKeyUpdate, op.(*PartitionMultiUpdate).raw.IsOnduplicateKeyUpdate)
 	require.Equal(t, ps.raw.Engine, op.(*PartitionMultiUpdate).raw.Engine)
+	require.Equal(t, ps.raw.RejectZeroTemporal, op.(*PartitionMultiUpdate).raw.RejectZeroTemporal)
 	require.Equal(t, ps.tableID, op.(*PartitionMultiUpdate).tableID)
+}
+
+func TestPartitionMultiUpdateSetRejectZeroTemporalUpdatesWriters(t *testing.T) {
+	active := &s3WriterDelegate{}
+	free := &s3WriterDelegate{}
+	op := &PartitionMultiUpdate{
+		raw:         &MultiUpdate{},
+		writers:     map[uint64]*s3WriterDelegate{1: active},
+		freeWriters: []*s3WriterDelegate{free},
+	}
+
+	op.SetRejectZeroTemporal(true)
+	require.True(t, op.raw.RejectZeroTemporal)
+	require.True(t, active.rejectZeroTemporal)
+	require.True(t, free.rejectZeroTemporal)
 }
 
 func TestAddInsertAffectRows(t *testing.T) {
@@ -164,25 +199,6 @@ func TestAddDeleteAffectRows(t *testing.T) {
 			require.Equal(t, tt.expectRows, update.ctr.affectedRows, "affected rows should match expected value")
 		})
 	}
-}
-
-func TestReplaceIntoAffectedRows(t *testing.T) {
-	// Test REPLACE INTO scenario: should only count INSERT rows, not DELETE rows
-	update := &MultiUpdate{
-		ctr: container{
-			action:       actionUpdate, // REPLACE INTO uses actionUpdate
-			affectedRows: 0,
-		},
-	}
-	update.addAffectedRowsFunc = update.doAddAffectedRows
-
-	// Simulate REPLACE INTO: DELETE 2 rows, INSERT 2 rows
-	// Should only count INSERT rows (2), not DELETE rows
-	update.addDeleteAffectRows(UpdateMainTable, 2) // Should not count
-	require.Equal(t, uint64(0), update.ctr.affectedRows, "DELETE rows should not be counted for REPLACE INTO")
-
-	update.addInsertAffectRows(UpdateMainTable, 2) // Should count
-	require.Equal(t, uint64(2), update.ctr.affectedRows, "INSERT rows should be counted for REPLACE INTO")
 }
 
 func TestUpdateAffectedRows(t *testing.T) {

@@ -211,6 +211,15 @@ select _wstart, _wend, avg(col2) from sliding_window05 where ts >= '1997-01-13 0
 select _wstart, _wend, sum(col2) from sliding_window05 where ts >= '1998-01-29 00:10:01.000' and ts <= '2022-07-17 00:04:12.000' interval(ts, 200, day) sliding(100, day) fill(linear);
 drop table sliding_window05;
 
+drop table if exists sliding_window_sum_decimal128;
+create table sliding_window_sum_decimal128(ts timestamp primary key, i64 bigint, u64 bigint unsigned, u16 smallint unsigned, u32 int unsigned);
+insert into sliding_window_sum_decimal128 values ('2024-01-01 00:00:00.000', 9223372036854775807, 18446744073709551615, 65535, 4294967295);
+insert into sliding_window_sum_decimal128 values ('2024-01-01 00:05:00.000', 1, 1, 1, 1);
+insert into sliding_window_sum_decimal128 values ('2024-01-01 00:20:00.000', -2, null, null, null);
+select _wstart, _wend, count(i64), sum(u16), avg(u32) from sliding_window_sum_decimal128 where ts >= '2024-01-01 00:00:00.000' and ts <= '2024-01-01 00:25:00.000' interval(ts, 10, minute) sliding(5, minute);
+select _wstart, _wend, sum(i64), sum(u64), sum(u16) from sliding_window_sum_decimal128 where ts >= '2024-01-01 00:00:00.000' and ts <= '2024-01-01 00:25:00.000' interval(ts, 10, minute) sliding(5, minute) fill(value, 100);
+drop table sliding_window_sum_decimal128;
+
 -- temporary table
 drop table if exists temporary01;
 create temporary table temporary01 (ts timestamp primary key, col2 bigint);

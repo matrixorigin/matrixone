@@ -20,18 +20,15 @@ import (
 )
 
 type templateArgs struct {
-	I           int
-	ID          uint64
-	DataDir     string
-	ServicePort int
-}
-
-var templateFuncs = map[string]any{
-	"NextBasePort": getNextBasePort,
+	I            int
+	ID           uint64
+	DataDir      string
+	ServicePort  int
+	NextBasePort func() (int, error)
 }
 
 var (
-	logConfig = template.Must(template.New("log").Funcs(templateFuncs).Parse(`
+	logConfig = template.Must(template.New("log").Parse(`
 service-type = "LOG"
 data-dir = "{{.DataDir}}"
 
@@ -46,7 +43,7 @@ service-addresses = [
 ]
 `))
 
-	tnConfig = template.Must(template.New("tn").Funcs(templateFuncs).Parse(`
+	tnConfig = template.Must(template.New("tn").Parse(`
 service-type = "TN"
 data-dir = "{{.DataDir}}"
 
@@ -82,7 +79,7 @@ backend = "DISK-ETL"
 
 [tn]
 uuid = "{{.ID}}-tn"
-port-base = {{NextBasePort}}
+port-base = {{call .NextBasePort}}
 
 [tn.Txn.Storage]
 backend = "TAE"
@@ -92,7 +89,7 @@ log-backend = "logservice"
 flush-interval = "60s"
 min-count = 100
 scan-interval = "5s"
-incremental-interval = "180s"
+incremental-interval = "300s"
 global-min-count = 60
 
 [tn.LogtailServer]
@@ -104,7 +101,7 @@ logtail-response-send-timeout = "10s"
 max-logtail-fetch-failure = 5
 `))
 
-	cnConfig = template.Must(template.New("cn").Funcs(templateFuncs).Parse(`
+	cnConfig = template.Must(template.New("cn").Parse(`
 service-type = "CN"
 data-dir = "{{.DataDir}}"
 
@@ -140,7 +137,7 @@ backend = "DISK-ETL"
 
 [cn]
 uuid = "{{.I}}-cn-{{.ID}}"
-port-base = {{NextBasePort}}
+port-base = {{call .NextBasePort}}
 auto-upgrade = false
 
 [cn.txn.trace]
@@ -150,15 +147,15 @@ dir = "trace{{.I}}"
 type = "distributed-tae"
 
 [cn.frontend]
-port = {{NextBasePort}}
+port = {{call .NextBasePort}}
 unix-socket = "{{.DataDir}}/mysql{{.I}}.sock"
 `))
 )
 
-func genConfigText(template *template.Template, args templateArgs) string {
+func genConfigText(template *template.Template, args templateArgs) (string, error) {
 	buf := new(strings.Builder)
 	if err := template.Execute(buf, args); err != nil {
-		panic(err)
+		return "", err
 	}
-	return buf.String()
+	return buf.String(), nil
 }

@@ -333,8 +333,8 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-	sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables %s WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relname not like '__mo_tmp_%%' and relname != '%s' and relkind != '%s' and (%s)",
-		subName, tableType, MO_CATALOG_DB_NAME, snapshotSpec, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel, accountClause)
+	sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables %s WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and %s and relname != '%s' and relkind != '%s' and (%s)",
+		subName, tableType, MO_CATALOG_DB_NAME, snapshotSpec, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel, accountClause)
 
 	// Do not show views in sub-db
 	if sub != nil {
@@ -396,8 +396,8 @@ func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Pla
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-	sql := fmt.Sprintf("SELECT count(relname) `Number of tables in %s` FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relname != '%s' and (%s)",
-		subName, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.MO_ACCOUNT_LOCK, accountClause)
+	sql := fmt.Sprintf("SELECT count(relname) `Number of tables in %s` FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and %s and relname != '%s' and (%s)",
+		subName, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, accountClause)
 
 	// Do not show views in sub-db
 	if sub != nil {
@@ -1097,7 +1097,7 @@ func buildShowCreatePublications(stmt *tree.ShowCreatePublications, ctx Compiler
 	if err != nil {
 		return nil, err
 	}
-	sql := fmt.Sprintf("SELECT pub_name AS Publication, 'CREATE PUBLICATION ' || pub_name || ' DATABASE ' || database_name || CASE table_list WHEN '*' THEN '' ELSE ' TABLE ' || table_list END || ' ACCOUNT ' || account_list AS 'Create Publication' FROM mo_catalog.mo_pubs WHERE account_id = %d AND pub_name='%s';", accountId, stmt.Name)
+	sql := fmt.Sprintf("SELECT pub_name AS Publication, concat('CREATE PUBLICATION ', pub_name, ' DATABASE ', database_name, CASE table_list WHEN '*' THEN '' ELSE concat(' TABLE ', table_list) END, ' ACCOUNT ', account_list) AS 'Create Publication' FROM mo_catalog.mo_pubs WHERE account_id = %d AND pub_name='%s';", accountId, stmt.Name)
 	ctx.SetContext(defines.AttachAccountId(ctx.GetContext(), catalog.System_Account))
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }

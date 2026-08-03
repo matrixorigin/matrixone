@@ -19,10 +19,34 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
+
+// isSyncMaintainedIrregularIndex reports whether idxDef is an irregular (full-text / vector)
+// index that is maintained SYNCHRONOUSLY — inline in the DML rather than asynchronously via CDC.
+// Such an index keys its hidden table(s) by the source primary key, so an in-place primary-key
+// change would strand those entries and go stale (#25617). Routed through the plugin registry so
+// no per-algo list is hardcoded here: an always-async algorithm (HNSW/CAGRA/IVFPQ) is never
+// synchronous; otherwise async-ness comes from the index's `async` param (IVFFLAT/FULLTEXT are
+// synchronous by default).
+func isSyncMaintainedIrregularIndex(idxDef *plan.IndexDef) bool {
+	if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+		return false
+	}
+	p, ok := indexplugin.Get(catalog.ToLower(idxDef.IndexAlgo))
+	if !ok {
+		return false
+	}
+	if p.Catalog().SyncDescriptor().AlwaysAsync {
+		return false
+	}
+	async, _ := catalog.IsIndexAsync(idxDef.IndexAlgoParams)
+	return !async
+}
 
 func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool) (p *Plan, err error) {
 	start := time.Now()
@@ -33,6 +57,38 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	if err != nil {
 		return nil, err
 	}
+	if err = validateUpdateTargetSubqueries(ctx, stmt, tblInfo.objRef, tblInfo.tableDefs); err != nil {
+		return nil, err
+	}
+
+	// A synchronously-maintained FULLTEXT/IVF index keys its hidden table(s) by the source
+	// primary key but is updated inline; an UPDATE that changes a primary key column would
+	// leave those entries stranded at the old key, so the index goes stale / exposes dead rows
+	// (#25617). HNSW and async IVF reconcile through CDC and are unaffected. Reject the PK
+	// update here in the table-update path (the only path that maintains irregular indexes;
+	// bindUpdate bails to it) rather than silently corrupting the index. Treat an index whose
+	// async-ness cannot be determined as synchronous (fail safe).
+	for i, tableDef := range tblInfo.tableDefs {
+		if tableDef.Pkey == nil || len(tblInfo.updateKeys[i]) == 0 {
+			continue
+		}
+		hasSyncIrregularIndex := false
+		for _, idxDef := range tableDef.Indexes {
+			if isSyncMaintainedIrregularIndex(idxDef) {
+				hasSyncIrregularIndex = true
+				break
+			}
+		}
+		if !hasSyncIrregularIndex {
+			continue
+		}
+		for _, pkColName := range tableDef.Pkey.Names {
+			if _, ok := tblInfo.updateKeys[i][pkColName]; ok {
+				return nil, moerr.NewUnsupportedDML(ctx.GetContext(), "update primary key on a table with a synchronous full-text/vector index")
+			}
+		}
+	}
+
 	// new logic
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	queryBindCtx := NewBindContext(builder, nil)
@@ -40,11 +96,11 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	if err != nil {
 		return nil, err
 	}
-	err = rewriteUpdateQueryLastNode(builder, updatePlanCtxs, lastNodeId)
+	err = rewriteUpdateQueryLastNode(builder, updatePlanCtxs, lastNodeId, stmt.Ignore)
 	if err != nil {
 		return nil, err
 	}
-	err = rewriteGeneratedColumnsForUpdate(builder, updatePlanCtxs, lastNodeId)
+	err = rewriteGeneratedColumnsForUpdate(builder, updatePlanCtxs, lastNodeId, stmt.Ignore)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +187,7 @@ func isDefaultValExpr(e *Expr) bool {
 	return false
 }
 
-func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, lastNodeId int32) error {
+func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, lastNodeId int32, isIgnore bool) error {
 	var err error
 
 	lastNode := builder.qry.Nodes[lastNodeId]
@@ -171,7 +227,8 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 						return err
 					}
 				} else {
-					lastNode.ProjectList[pos], err = forceAssignmentCastExpr(builder.GetContext(), posExpr, col.Typ)
+					lastNode.ProjectList[pos], err = builder.forceProjectedAssignmentCastExpr(
+						posExpr, posExpr, col.Typ, isIgnore)
 					if err != nil {
 						return err
 					}
@@ -204,7 +261,8 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 						return err
 					}
 				} else {
-					lastNode.ProjectList[pos], err = forceAssignmentCastExpr(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
+					lastNode.ProjectList[pos], err = builder.forceProjectedAssignmentCastExpr(
+						lastNode.ProjectList[pos], lastNode.ProjectList[pos], col.Typ, isIgnore)
 					if err != nil {
 						return err
 					}
@@ -216,7 +274,12 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 	return nil
 }
 
-func rewriteGeneratedColumnsForUpdate(builder *QueryBuilder, planCtxs []*dmlPlanCtx, lastNodeId int32) error {
+func rewriteGeneratedColumnsForUpdate(
+	builder *QueryBuilder,
+	planCtxs []*dmlPlanCtx,
+	lastNodeId int32,
+	isIgnore bool,
+) error {
 	selectNode := builder.qry.Nodes[lastNodeId]
 	tableBase := int32(0)
 	for _, upPlanCtx := range planCtxs {
@@ -246,7 +309,11 @@ func rewriteGeneratedColumnsForUpdate(builder *QueryBuilder, planCtxs []*dmlPlan
 					// (or dropped for SET = DEFAULT); should not happen here.
 					continue
 				}
-				genExpr := substituteColRefsInExpr(col.GeneratedCol.Expr, baseLookup, 0)
+				genExpr := builder.applyGeneratedColumnAssignmentCast(
+					DeepCopyExpr(col.GeneratedCol.Expr),
+					isIgnore,
+				)
+				genExpr = substituteColRefsInExpr(genExpr, baseLookup, 0)
 				insertPos := int(tableBase) + len(tableDef.Cols) + upPlanCtx.updateColLength
 				selectNode.ProjectList = append(selectNode.ProjectList, nil)
 				copy(selectNode.ProjectList[insertPos+1:], selectNode.ProjectList[insertPos:])
@@ -313,6 +380,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 	}
 	var err error
 	var selectList []tree.SelectExpr
+	legacyNumericTargets := make(map[int]Type)
 
 	var aliasList = make([]string, len(tableInfo.alias))
 	for alias, i := range tableInfo.alias {
@@ -364,10 +432,15 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		for _, colName := range updateColNames {
 			updateKey := updateKeys[colName]
 			for _, coldef := range tableDef.Cols {
-				if coldef.Name == colName && isEnumOrSetPlanType(&coldef.Typ) {
-					updateKey, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), coldef.Typ, updateKey)
-					if err != nil {
-						return 0, nil, err
+				if coldef.Name == colName {
+					if isNumericAssignmentTarget(coldef.Typ) {
+						legacyNumericTargets[len(selectList)] = coldef.Typ
+					}
+					if isEnumOrSetPlanType(&coldef.Typ) {
+						updateKey, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), coldef.Typ, updateKey)
+						if err != nil {
+							return 0, nil, err
+						}
 					}
 				}
 			}
@@ -411,6 +484,10 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		OrderBy: stmt.OrderBy,
 		Limit:   stmt.Limit,
 		With:    stmt.With,
+	}
+	bindCtx.numericProjectionTypes = make([]Type, len(selectList))
+	for pos, typ := range legacyNumericTargets {
+		bindCtx.numericProjectionTypes[pos] = typ
 	}
 
 	lastNodeId, err := builder.bindSelect(selectAst, bindCtx, false)

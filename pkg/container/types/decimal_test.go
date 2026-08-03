@@ -16,8 +16,11 @@ package types
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestParse64(t *testing.T) {
@@ -83,6 +86,45 @@ func TestParse256(t *testing.T) {
 	}
 	if got := x.Format(30); got != "12345678901234567890123456789012345.123456789012345678901234567890" {
 		t.Fatalf("unexpected decimal256 format: %s", got)
+	}
+}
+
+func TestParse256LargePositiveExponentReturnsErrorWithoutPanic(t *testing.T) {
+	var err error
+	require.NotPanics(t, func() {
+		_, _, err = Parse256("1e100")
+	})
+	require.Error(t, err)
+}
+
+func TestDecimal256ExtremeScaleDoesNotPanic(t *testing.T) {
+	value := Decimal256FromInt64(1)
+	require.NotPanics(t, func() {
+		_, _ = value.Scale(math.MinInt32)
+		_, _ = value.Scale(math.MaxInt32)
+	})
+}
+
+func TestDecimal256ScaleNegativeSeventySevenPreservesRounding(t *testing.T) {
+	maximum := Decimal256{math.MaxUint64, math.MaxUint64, math.MaxUint64, math.MaxInt64}
+	positive, err := maximum.Scale(-77)
+	require.NoError(t, err)
+	require.Equal(t, Decimal256FromInt64(1), positive)
+
+	negative, err := maximum.Minus().Scale(-77)
+	require.NoError(t, err)
+	require.Equal(t, Decimal256FromInt64(-1), negative)
+}
+
+func TestParse256ExponentOverflowReturnsErrorWithoutPanic(t *testing.T) {
+	for _, input := range []string{"1e2147483648", "1e-2147483648"} {
+		t.Run(input, func(t *testing.T) {
+			var err error
+			require.NotPanics(t, func() {
+				_, _, err = Parse256(input)
+			})
+			require.Error(t, err)
+		})
 	}
 }
 

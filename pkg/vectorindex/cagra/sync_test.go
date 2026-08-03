@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -143,7 +144,7 @@ func TestCagraSync_Update_AllInsert(t *testing.T) {
 	defer rec.install(t)()
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 	require.Equal(t, vectorindex.CdcTailId, s.activeIndexId)
 
@@ -164,7 +165,7 @@ func TestCagraSync_Update_AllInsert(t *testing.T) {
 
 	// Round-trip: replay the persisted chunks and expect 2 overflow rows, no
 	// deletes.
-	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 16, 0)
 	require.NoError(t, err)
 	require.Empty(t, state.Deleted)
 	require.Len(t, state.Overflow, 2)
@@ -185,7 +186,7 @@ func TestCagraSync_Update_DeleteAndInsert(t *testing.T) {
 	defer rec.install(t)()
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{
@@ -202,7 +203,7 @@ func TestCagraSync_Update_DeleteAndInsert(t *testing.T) {
 	// chunk_id == 7 (nextChunkId mock).
 	require.Contains(t, rec.statements[0], "'cdc_tail', 7,")
 
-	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 7), 4, 0)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 7), 16, 0)
 	require.NoError(t, err)
 	require.Equal(t, []int64{42}, state.Deleted)
 	require.Len(t, state.Overflow, 1)
@@ -223,7 +224,7 @@ func TestCagraSync_Update_DeleteInsertDelete(t *testing.T) {
 	defer rec.install(t)()
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{
@@ -239,7 +240,7 @@ func TestCagraSync_Update_DeleteInsertDelete(t *testing.T) {
 
 	require.NoError(t, s.Save(sqlproc))
 
-	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 16, 0)
 	require.NoError(t, err)
 	require.Equal(t, []int64{1}, state.Deleted,
 		"final state must have pkid=1 deleted (last event was DELETE)")
@@ -260,7 +261,7 @@ func TestCagraSync_Update_DeleteIdempotent(t *testing.T) {
 	defer rec.install(t)()
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{
@@ -275,7 +276,7 @@ func TestCagraSync_Update_DeleteIdempotent(t *testing.T) {
 
 	require.NoError(t, s.Save(sqlproc))
 
-	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 16, 0)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []int64{5, 7}, state.Deleted)
 }
@@ -292,7 +293,7 @@ func TestCagraSync_Update_Upsert(t *testing.T) {
 	defer rec.install(t)()
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{
@@ -306,13 +307,13 @@ func TestCagraSync_Update_Upsert(t *testing.T) {
 		"INSERT + UPSERT → 2 records (UPSERT is a single op, not DELETE+INSERT)")
 
 	require.NoError(t, s.Save(sqlproc))
-	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 0)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 16, 0)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []int64{100}, state.Deleted,
 		"UPSERT marks pkid in deleted (filters any pre-rebuild main-index entry)")
 	require.Len(t, state.Overflow, 1)
 	require.Equal(t, int64(100), state.Overflow[0].Pkid)
-	require.Equal(t, []float32{9, 9, 9, 9}, state.Overflow[0].Vec,
+	require.Equal(t, []float32{9, 9, 9, 9}, util.UnsafeSliceCast[float32](state.Overflow[0].Vec),
 		"UPSERT wrote the latest vec; replay surfaces it")
 }
 
@@ -324,7 +325,7 @@ func TestCagraSync_Update_DimMismatch(t *testing.T) {
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{
@@ -355,7 +356,7 @@ func TestCagraSync_Update_WithIncludeBytes(t *testing.T) {
 	require.Equal(t, 9, expectedIBPR)
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, colMetaJSON)
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, colMetaJSON)
 	require.NoError(t, err)
 	require.Equal(t, 9, s.includeBytesPerRow)
 
@@ -369,7 +370,7 @@ func TestCagraSync_Update_WithIncludeBytes(t *testing.T) {
 	require.NoError(t, s.Update(sqlproc, cdc))
 	require.NoError(t, s.Save(sqlproc))
 
-	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 4, 9)
+	state, err := cuvscdc.ReplayEventLog(chunksFromSql(t, rec.statements, 0), 16, 9)
 	require.NoError(t, err)
 	require.Len(t, state.Overflow, 1)
 	require.Equal(t, include, state.Overflow[0].Include)
@@ -401,7 +402,7 @@ func TestCagraSync_Update_NoOpSaveSkipsSql(t *testing.T) {
 	defer func() { runSql = origRun }()
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{}
@@ -428,7 +429,7 @@ func TestCagraSync_NewSync_Stateless(t *testing.T) {
 	defer func() { runSql = origRun }()
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 	require.Equal(t, vectorindex.CdcTailId, s.activeIndexId)
 	require.Equal(t, 0, called)
@@ -445,7 +446,7 @@ func TestCagraSync_RunOnce(t *testing.T) {
 	defer rec.install(t)()
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	cdc := &vectorindex.VectorIndexCdc[float32]{
@@ -488,7 +489,7 @@ func TestCagraSync_MultiFlush(t *testing.T) {
 	defer rec.install(t)()
 
 	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
-		idxdefs("__meta", "__storage"), 4, "")
+		idxdefs("__meta", "__storage"), 4, types.T_array_float32, "")
 	require.NoError(t, err)
 
 	flush1 := &vectorindex.VectorIndexCdc[float32]{

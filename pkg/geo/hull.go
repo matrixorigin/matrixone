@@ -14,7 +14,10 @@
 
 package geo
 
-import "sort"
+import (
+	"cmp"
+	"slices"
+)
 
 // ConvexHull returns the convex hull of every coordinate in g: a Polygon when
 // the points span an area, a LineString when they are collinear (2+ distinct
@@ -47,11 +50,11 @@ func monotoneChain(pts []Coord) []Coord {
 	}
 	sorted := make([]Coord, len(pts))
 	copy(sorted, pts)
-	sort.Slice(sorted, func(i, j int) bool {
-		if sorted[i].X != sorted[j].X {
-			return sorted[i].X < sorted[j].X
+	slices.SortFunc(sorted, func(a, b Coord) int {
+		if a.X != b.X {
+			return cmp.Compare(a.X, b.X)
 		}
-		return sorted[i].Y < sorted[j].Y
+		return cmp.Compare(a.Y, b.Y)
 	})
 	uniq := sorted[:1]
 	for _, p := range sorted[1:] {

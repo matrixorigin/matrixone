@@ -15,11 +15,15 @@
 package lockservice
 
 import (
-	"fmt"
+	"context"
+	"errors"
 	"os"
+	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -37,17 +41,28 @@ func RunLockServicesForTest(
 	opts ...Option,
 ) {
 	defaultLazyCheckDuration.Store(time.Millisecond * 50)
-	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
+	testSocketDir, err := createTestSocketDir()
+	if err != nil {
+		panic(err)
+	}
+	cleanup := testTopologyCleanup{socketDir: testSocketDir}
+	defer func() {
+		panicValue := recover()
+		cleanupErr := cleanup.close()
+		if panicValue != nil {
+			panic(panicValue)
+		}
+		if cleanupErr != nil {
+			panic(cleanupErr)
+		}
+	}()
+	testSockets := testSocketAddress(testSocketDir, "allocator.sock")
 	services := make([]LockService, 0, len(serviceIDs))
 	cns := make([]metadata.CNService, 0, len(serviceIDs))
 	configs := make([]Config, 0, len(serviceIDs))
-	for _, v := range serviceIDs {
+	for idx, v := range serviceIDs {
 		runtime.SetupServiceBasedRuntime(v, runtime.ServiceRuntime(""))
-		address := fmt.Sprintf("unix:///tmp/service-%d-%s.sock",
-			time.Now().Nanosecond(), v)
-		if err := os.RemoveAll(address[7:]); err != nil {
-			panic(err)
-		}
+		address := testSocketAddress(testSocketDir, "service-"+strconv.Itoa(idx)+".sock")
 		cns = append(cns, metadata.CNService{
 			ServiceID:          v,
 			LockServiceAddress: address,
@@ -68,7 +83,7 @@ func RunLockServicesForTest(
 				},
 			}))
 	runtime.ServiceRuntime("").SetGlobalVariables(runtime.ClusterService, cluster)
-	defer cluster.Close()
+	cleanup.clusterCloser = cluster.Close
 
 	var removeDisconnectDuration time.Duration
 	for _, cfg := range configs {
@@ -76,8 +91,9 @@ func RunLockServicesForTest(
 			adjustConfig(&cfg)
 			removeDisconnectDuration = cfg.removeDisconnectDuration
 		}
-		services = append(services,
-			NewLockService(cfg, opts...).(*service))
+		lockService := NewLockService(cfg, opts...)
+		services = append(services, lockService)
+		cleanup.serviceClosers = append(cleanup.serviceClosers, lockService.Close)
 	}
 
 	allocator := NewLockTableAllocator(
@@ -89,16 +105,44 @@ func RunLockServicesForTest(
 			lta.options.removeDisconnectDuration = removeDisconnectDuration
 		},
 	)
+	cleanup.allocatorCloser = allocator.Close
 	fn(allocator.(*lockTableAllocator), services)
+}
 
-	for _, s := range services {
-		if err := s.Close(); err != nil {
-			panic(err)
-		}
+type testTopologyCleanup struct {
+	serviceClosers  []func() error
+	allocatorCloser func() error
+	clusterCloser   func()
+	socketDir       string
+}
+
+func (c *testTopologyCleanup) close() error {
+	var cleanupErr error
+	for _, closeService := range c.serviceClosers {
+		cleanupErr = errors.Join(cleanupErr, closeService())
 	}
-	if err := allocator.Close(); err != nil {
-		panic(err)
+	if c.allocatorCloser != nil {
+		cleanupErr = errors.Join(cleanupErr, c.allocatorCloser())
 	}
+	if c.clusterCloser != nil {
+		c.clusterCloser()
+	}
+	if c.socketDir != "" {
+		cleanupErr = errors.Join(cleanupErr, removeTestSocketDir(c.socketDir))
+	}
+	return cleanupErr
+}
+
+func createTestSocketDir() (string, error) {
+	return os.MkdirTemp("/tmp", "mo-lockservice-")
+}
+
+func removeTestSocketDir(dir string) error {
+	return os.RemoveAll(dir)
+}
+
+func testSocketAddress(dir, name string) string {
+	return "unix://" + filepath.Join(dir, name)
 }
 
 // WaitWaiters wait waiters
@@ -109,7 +153,7 @@ func WaitWaiters(
 	key []byte,
 	waitersCount int) error {
 	s := ls.(*service)
-	v, err := s.getLockTable(group, table)
+	v, err := s.getLockTable(context.Background(), group, table)
 	if err != nil {
 		return err
 	}
@@ -121,6 +165,15 @@ func waitLocalWaiters(
 	lt *localLockTable,
 	key []byte,
 	waitersCount int) error {
+	return waitLocalWaitersWithTimeout(lt, key, waitersCount, 10*time.Second)
+}
+
+func waitLocalWaitersWithTimeout(
+	lt *localLockTable,
+	key []byte,
+	waitersCount int,
+	waitTimeout time.Duration) error {
+	observedWaiters := 0
 	fn := func() bool {
 		lt.mu.Lock()
 		defer lt.mu.Unlock()
@@ -131,22 +184,34 @@ func waitLocalWaiters(
 		}
 
 		if !ok {
+			observedWaiters = 0
 			return false
 		}
 
-		waiters := make([]*waiter, 0)
-		lock.waiters.iter(func(w *waiter) bool {
-			waiters = append(waiters, w)
+		observedWaiters = 0
+		lock.waiters.iter(func(*waiter) bool {
+			observedWaiters++
 			return true
 		})
-		return len(waiters) == waitersCount
+		return observedWaiters == waitersCount
 	}
 
+	timeout := time.NewTimer(waitTimeout)
+	defer timeout.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		if fn() {
 			return nil
 		}
-		time.Sleep(time.Millisecond * 10)
+		select {
+		case <-timeout.C:
+			return moerr.NewInternalErrorNoCtxf(
+				"timed out waiting for %d local lock waiters, observed %d",
+				waitersCount,
+				observedWaiters)
+		case <-ticker.C:
+		}
 	}
 }
 

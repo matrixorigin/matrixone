@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
 func Test_runSql(t *testing.T) {
@@ -55,6 +56,116 @@ func Test_runSql(t *testing.T) {
 
 	_, err := runSql(compilerContext, "")
 	require.Error(t, err, "internal error: no account id in context")
+}
+
+func TestGetSqlForFkReferredToEscapesStringLiterals(t *testing.T) {
+	sql := GetSqlForFkReferredTo("db\\name", "quote'src")
+	require.Contains(t, sql, "refer_db_name = 'db\\\\name'")
+	require.Contains(t, sql, "refer_table_name = 'quote\\'src'")
+	require.Contains(t, sql, "table_name != 'quote\\'src'")
+}
+
+func TestGetSqlForAddFkEscapesStringLiterals(t *testing.T) {
+	fkData := &FkData{
+		Def: &plan.ForeignKeyDef{
+			Name:     "fk'child",
+			OnDelete: plan.ForeignKeyDef_CASCADE,
+			OnUpdate: plan.ForeignKeyDef_RESTRICT,
+		},
+		Cols:            &plan.FkColName{Cols: []string{"child'col"}},
+		ColsReferred:    &plan.FkColName{Cols: []string{"parent'col"}},
+		ParentDbName:    "parent\\db",
+		ParentTableName: "parent'table",
+	}
+
+	sql := getSqlForAddFk("child'db", "child\\table", fkData)
+	require.Contains(t, sql, "'fk\\'child'")
+	require.Contains(t, sql, "'child\\'db'")
+	require.Contains(t, sql, "'child\\\\table'")
+	require.Contains(t, sql, "'child\\'col'")
+	require.Contains(t, sql, "'parent\\\\db'")
+	require.Contains(t, sql, "'parent\\'table'")
+	require.Contains(t, sql, "'parent\\'col'")
+}
+
+func TestGetSqlForCheckHasDBRefersToEscapesStringLiterals(t *testing.T) {
+	sql := getSqlForCheckHasDBRefersTo("db'name")
+	require.Contains(t, sql, "refer_db_name = 'db\\'name'")
+	require.Contains(t, sql, "db_name != 'db\\'name'")
+}
+
+func TestGetSqlForTransferAlterCopyFk(t *testing.T) {
+	prepare, finalize := GetSqlForTransferAlterCopyFk(
+		"db'1",
+		"source'child",
+		"copy'child",
+	)
+
+	require.Equal(t, []string{
+		"delete from `mo_catalog`.`mo_foreign_keys` where db_name = 'db\\'1' and table_name = 'copy\\'child'",
+		"update `mo_catalog`.`mo_foreign_keys` set table_name = 'copy\\'child' where db_name = 'db\\'1' and table_name = 'source\\'child'",
+	}, prepare)
+	require.Equal(t, []string{
+		"update `mo_catalog`.`mo_foreign_keys` set table_name = 'source\\'child' where db_name = 'db\\'1' and table_name = 'copy\\'child'",
+	}, finalize)
+}
+
+func TestGetSqlForAddFkEscapesCatalogValues(t *testing.T) {
+	fk := &FkData{
+		ParentDbName:    `parent\db'name`,
+		ParentTableName: `parent\table'name`,
+		Cols: &plan.FkColName{Cols: []string{
+			`child\col'name`,
+			`child_col_two`,
+		}},
+		ColsReferred: &plan.FkColName{Cols: []string{
+			`parent\col'name`,
+			`parent_col_two`,
+		}},
+		Def: &plan.ForeignKeyDef{
+			Name:     `fk\name'one`,
+			OnDelete: plan.ForeignKeyDef_CASCADE,
+			OnUpdate: plan.ForeignKeyDef_RESTRICT,
+		},
+	}
+
+	require.Equal(t,
+		"insert into `mo_catalog`.`mo_foreign_keys`   values "+
+			"('fk\\\\name\\'one','0','child\\'db\\\\part','0','child\\\\table\\'name','0','child\\\\col\\'name','0','parent\\\\db\\'name','0','parent\\\\table\\'name','0','parent\\\\col\\'name','0','CASCADE','RESTRICT'),"+
+			"('fk\\\\name\\'one','0','child\\'db\\\\part','0','child\\\\table\\'name','0','child_col_two','0','parent\\\\db\\'name','0','parent\\\\table\\'name','0','parent_col_two','0','CASCADE','RESTRICT')",
+		getSqlForAddFk(`child'db\part`, `child\table'name`, fk),
+	)
+}
+
+func TestFkCatalogMutationSqlEscapesIdentifiers(t *testing.T) {
+	const (
+		db         = `db'name\part`
+		table      = `table'name\part`
+		oldName    = `old'name\part`
+		newName    = `new'name\part`
+		constraint = `fk'name\part`
+	)
+
+	require.Equal(t,
+		"delete from `mo_catalog`.`mo_foreign_keys` where db_name = 'db\\'name\\\\part' and table_name = 'table\\'name\\\\part'",
+		getSqlForDeleteTable(db, table))
+	require.Equal(t,
+		"delete from `mo_catalog`.`mo_foreign_keys` where constraint_name = 'fk\\'name\\\\part' and db_name = 'db\\'name\\\\part' and table_name = 'table\\'name\\\\part'",
+		getSqlForDeleteConstraint(db, table, constraint))
+	require.Equal(t,
+		"delete from `mo_catalog`.`mo_foreign_keys` where db_name = 'db\\'name\\\\part'",
+		getSqlForDeleteDB(db))
+	require.Equal(t, []string{
+		"update `mo_catalog`.`mo_foreign_keys` set table_name = 'new\\'name\\\\part' where db_name = 'db\\'name\\\\part' and table_name = 'old\\'name\\\\part' ; ",
+		"update `mo_catalog`.`mo_foreign_keys` set refer_table_name = 'new\\'name\\\\part' where refer_db_name = 'db\\'name\\\\part' and refer_table_name = 'old\\'name\\\\part' ; ",
+	}, getSqlForRenameTable(db, oldName, newName))
+	require.Equal(t, []string{
+		"update `mo_catalog`.`mo_foreign_keys` set column_name = 'new\\'name\\\\part' where db_name = 'db\\'name\\\\part' and table_name = 'table\\'name\\\\part' and column_name = 'old\\'name\\\\part' ; ",
+		"update `mo_catalog`.`mo_foreign_keys` set refer_column_name = 'new\\'name\\\\part' where refer_db_name = 'db\\'name\\\\part' and refer_table_name = 'table\\'name\\\\part' and refer_column_name = 'old\\'name\\\\part' ; ",
+	}, getSqlForRenameColumn(db, table, oldName, newName))
+	require.Equal(t,
+		"select count(*) > 0 from `mo_catalog`.`mo_foreign_keys` where refer_db_name = 'db\\'name\\\\part' and db_name != 'db\\'name\\\\part';",
+		getSqlForCheckHasDBRefersTo(db))
 }
 
 func Test_buildPreDeleteFullTextIndexAsync(t *testing.T) {
@@ -109,7 +220,7 @@ func TestMakeInsertValueConstExprGeometry(t *testing.T) {
 	colType := types.T_geometry.ToType()
 	numVal := tree.NewNumVal("POINT(1 1)", "POINT(1 1)", false, tree.P_char)
 
-	expr, err := MakeInsertValueConstExpr(proc, numVal, &colType)
+	expr, err := MakeInsertValueConstExpr(proc, numVal, &colType, false)
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_geometry), expr.Typ.Id)
 
@@ -119,6 +230,56 @@ func TestMakeInsertValueConstExprGeometry(t *testing.T) {
 	require.Equal(t, int32(types.T_varchar), fn.Args[0].Typ.Id)
 	require.Equal(t, "POINT(1 1)", fn.Args[0].GetLit().GetSval())
 	require.Equal(t, int32(types.T_geometry), fn.Args[1].Typ.Id)
+}
+
+func TestMakeInsertValueConstExprBinaryHexPadding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	testCases := []struct {
+		name        string
+		literal     string
+		colType     types.Type
+		expected    []byte
+		expectError bool
+	}{
+		{
+			name:     "binary pads to declared width",
+			literal:  "0x4142",
+			colType:  types.New(types.T_binary, 4, 0),
+			expected: []byte{0x41, 0x42, 0x00, 0x00},
+		},
+		{
+			name:        "binary rejects decoded value over declared width",
+			literal:     "0x4142",
+			colType:     types.New(types.T_binary, 1, 0),
+			expectError: true,
+		},
+		{
+			name:        "varbinary counts decoded bytes instead of runes",
+			literal:     "0xC3A9",
+			colType:     types.New(types.T_varbinary, 1, 0),
+			expectError: true,
+		},
+		{
+			name:     "binary accepts odd digit hex literal",
+			literal:  "0x1",
+			colType:  types.New(types.T_binary, 2, 0),
+			expected: []byte{0x01, 0x00},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			numVal := tree.NewNumVal(tc.literal, tc.literal, false, tree.P_hexnum)
+			expr, err := MakeInsertValueConstExpr(proc, numVal, &tc.colType, false)
+			if tc.expectError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, string(tc.expected), expr.GetLit().GetSval())
+		})
+	}
 }
 
 func TestAppendIndexPrefixProjection(t *testing.T) {
@@ -546,4 +707,57 @@ func exprContainsColumn(expr *plan.Expr, colName string) bool {
 
 func columnNameMatches(got, want string) bool {
 	return got == want || strings.HasSuffix(got, "."+want)
+}
+
+func TestIndexNeedsRewriteForUpdateIvfColumns(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "embedding", Typ: plan.Type{Id: int32(types.T_array_float32)}},
+			{Name: "title", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "category", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "note", Typ: plan.Type{Id: int32(types.T_varchar)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Names:       []string{"id"},
+		},
+	}
+	posMap := map[string]int{
+		"id":        0,
+		"embedding": 1,
+		"title":     2,
+		"category":  3,
+		"note":      4,
+	}
+	colMap := make(map[string]*plan.ColDef, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		colMap[col.Name] = col
+	}
+	indexDef := &plan.IndexDef{
+		IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
+		Parts:           []string{"embedding"},
+		IndexAlgoParams: `{"lists":"2","op_type":"` + metric.DistFuncOpTypes["l2_distance"] + `"}`,
+		IncludedColumns: []string{"title", "category"},
+	}
+
+	tests := []struct {
+		name       string
+		updateCols map[string]int
+		want       bool
+	}{
+		{name: "unrelated column does not rewrite ivf", updateCols: map[string]int{"note": 4}, want: false},
+		{name: "vector key rewrites ivf", updateCols: map[string]int{"embedding": 1}, want: true},
+		{name: "primary key rewrites ivf", updateCols: map[string]int{"id": 0}, want: true},
+		{name: "first include column rewrites ivf", updateCols: map[string]int{"title": 2}, want: true},
+		{name: "second include column rewrites ivf", updateCols: map[string]int{"category": 3}, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := indexNeedsRewriteForUpdate(tableDef, indexDef, tt.updateCols, posMap, colMap)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
 }

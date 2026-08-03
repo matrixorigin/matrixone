@@ -36,12 +36,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -53,10 +55,6 @@ import (
 var (
 	OneBatchMaxRow   = int(options.DefaultBlockMaxRows)
 	S3ParallelMaxnum = 10
-)
-
-var (
-	STATEMENT_ACCOUNT = "account"
 )
 
 const opName = "external"
@@ -117,6 +115,7 @@ func (external *External) Prepare(proc *process.Process) error {
 		param.Fileparam.FileCnt = 1
 	}
 	param.Ctx = proc.Ctx
+	param.addParquetProfile(icebergParquetProfileStats(param))
 
 	// Filter public preprocessing
 	if param.Filter == nil {
@@ -158,6 +157,9 @@ func (external *External) Prepare(proc *process.Process) error {
 			return err
 		}
 		external.reader = r
+	}
+	if err := external.prepareIcebergDeleteApply(proc); err != nil {
+		return err
 	}
 
 	// Projection init
@@ -272,6 +274,14 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 		param.Fileparam.End = true
 		return result, err
 	}
+	if external.ctr.buf != nil && external.ctr.buf.RowCount() > 0 {
+		if err := external.applyIcebergDeletes(ctx, external.ctr.buf, proc); err != nil {
+			external.reader.Close()
+			external.fileOpened = false
+			param.Fileparam.End = true
+			return result, err
+		}
+	}
 
 	if fileFinished {
 		external.reader.Close()
@@ -299,40 +309,112 @@ func (external *External) finishCurrentFile(param *ExternalParam) {
 	}
 }
 
-func containColname(col string) bool {
-	return strings.Contains(col, STATEMENT_ACCOUNT) || strings.Contains(col, catalog.ExternalFilePath)
-}
-
-func judgeContainColname(expr *plan.Expr) bool {
-	expr_F, ok := expr.Expr.(*plan.Expr_F)
-	if !ok {
+func isFileLevelColumn(node *plan.Node, col *plan.ColRef) bool {
+	if node == nil || node.TableDef == nil || node.ExternScan == nil || col == nil {
 		return false
 	}
-	if expr_F.F.Func.ObjName == "or" {
-		flag := true
-		for i := 0; i < len(expr_F.F.Args); i++ {
-			flag = flag && judgeContainColname(expr_F.F.Args[i])
-		}
-		return flag
+
+	colPos := int(col.ColPos)
+	if colPos < 0 || colPos >= len(node.TableDef.Cols) || colPos != len(node.TableDef.Cols)-1 {
+		return false
 	}
-	expr_Col, ok := expr_F.F.Args[0].Expr.(*plan.Expr_Col)
-	if ok && containColname(expr_Col.Col.Name) {
-		return true
+	if node.TableDef.Cols[colPos].Name != catalog.ExternalFilePath {
+		return false
 	}
-	for _, arg := range expr_F.F.Args {
-		if judgeContainColname(arg) {
-			return true
-		}
-	}
-	return false
+	return node.TableDef.Cols[colPos].ColId == catalog.ExternalFilePathColId
 }
 
-func getAccountCol(filepath string) string {
-	pathDir := strings.Split(filepath, "/")
-	if len(pathDir) < 2 {
-		return ""
+func isSafeFileLevelFunction(ref *plan.ObjectRef) bool {
+	if ref == nil {
+		return false
 	}
-	return pathDir[1]
+	overload, exists := function.GetFunctionByIdWithoutError(ref.Obj)
+	if !exists || overload.IsRealTimeRelated() {
+		return false
+	}
+	if !overload.CannotFold() {
+		return true
+	}
+
+	// mo_log_date is marked volatile to prevent ordinary constant folding, but
+	// it is a deterministic transform of __mo_filepath and is the established
+	// file-pruning primitive. Other volatile functions (for example rand) are
+	// row-dependent and must remain at row level.
+	functionID, _ := function.DecodeOverloadID(ref.Obj)
+	return functionID == function.MO_LOG_DATE
+}
+
+func classifyFileLevelColumns(node *plan.Node, expr *plan.Expr) (hasFileLevelColumn, hasUnsupportedColumn bool) {
+	if expr == nil {
+		return false, false
+	}
+
+	switch typedExpr := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if typedExpr.Col == nil {
+			return false, true
+		}
+		if isFileLevelColumn(node, typedExpr.Col) {
+			return true, false
+		}
+		return false, true
+	case *plan.Expr_F:
+		if typedExpr.F == nil || typedExpr.F.Func == nil {
+			return false, true
+		}
+		if !isSafeFileLevelFunction(typedExpr.F.Func) {
+			return false, true
+		}
+		for _, arg := range typedExpr.F.Args {
+			hasFileLevel, hasUnsupported := classifyFileLevelColumns(node, arg)
+			hasFileLevelColumn = hasFileLevelColumn || hasFileLevel
+			hasUnsupportedColumn = hasUnsupportedColumn || hasUnsupported
+		}
+		return hasFileLevelColumn, hasUnsupportedColumn
+	case *plan.Expr_List:
+		if typedExpr.List == nil {
+			return false, false
+		}
+		for _, item := range typedExpr.List.List {
+			hasFileLevel, hasUnsupported := classifyFileLevelColumns(node, item)
+			hasFileLevelColumn = hasFileLevelColumn || hasFileLevel
+			hasUnsupportedColumn = hasUnsupportedColumn || hasUnsupported
+		}
+		return hasFileLevelColumn, hasUnsupportedColumn
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T,
+		*plan.Expr_Max, *plan.Expr_Vec, *plan.Expr_Fold:
+		return false, false
+	default:
+		return false, true
+	}
+}
+
+func isFileLevelFilter(node *plan.Node, expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+
+	functionExpr, ok := expr.Expr.(*plan.Expr_F)
+	if !ok || functionExpr.F == nil || functionExpr.F.Func == nil {
+		return false
+	}
+	if !isSafeFileLevelFunction(functionExpr.F.Func) {
+		return false
+	}
+	if functionExpr.F.Func.ObjName == "or" {
+		if len(functionExpr.F.Args) == 0 {
+			return false
+		}
+		for _, arg := range functionExpr.F.Args {
+			if !isFileLevelFilter(node, arg) {
+				return false
+			}
+		}
+		return true
+	}
+
+	hasFileLevelColumn, hasUnsupportedColumn := classifyFileLevelColumns(node, expr)
+	return hasFileLevelColumn && !hasUnsupportedColumn
 }
 
 func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string) (bat *batch.Batch, err error) {
@@ -345,21 +427,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 	mp := proc.GetMPool()
 	for i := 0; i < num; i++ {
 		bat.Attrs[i] = node.TableDef.Cols[i].Name
-		if bat.Attrs[i] == STATEMENT_ACCOUNT {
-			typ := types.New(types.T(node.TableDef.Cols[i].Typ.Id), node.TableDef.Cols[i].Typ.Width, node.TableDef.Cols[i].Typ.Scale)
-			bat.Vecs[i], err = proc.AllocVectorOfRows(typ, len(fileList), nil)
-			if err != nil {
-				bat.Clean(mp)
-				return nil, err
-			}
-
-			for j := 0; j < len(fileList); j++ {
-				if err = vector.SetStringAt(bat.Vecs[i], j, getAccountCol(fileList[j]), mp); err != nil {
-					bat.Clean(mp)
-					return nil, err
-				}
-			}
-		} else if bat.Attrs[i] == catalog.ExternalFilePath {
+		if i == num-1 && bat.Attrs[i] == catalog.ExternalFilePath {
 			typ := types.T_varchar.ToType()
 			bat.Vecs[i], err = proc.AllocVectorOfRows(typ, len(fileList), nil)
 			if err != nil {
@@ -379,53 +447,54 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 	return bat, nil
 }
 
-func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
+func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, []*plan.Expr, error) {
 	_, span := trace.Start(ctx, "filterByAccountAndFilename")
 	defer span.End()
 	filterList := make([]*plan.Expr, 0)
 	filterList2 := make([]*plan.Expr, 0)
 	for i := 0; i < len(node.FilterList); i++ {
-		if judgeContainColname(node.FilterList[i]) {
+		if isFileLevelFilter(node, node.FilterList[i]) {
 			filterList = append(filterList, node.FilterList[i])
 		} else {
 			filterList2 = append(filterList2, node.FilterList[i])
 		}
 	}
 	if len(filterList) == 0 {
-		return fileList, fileSize, nil
+		return fileList, fileSize, filterList2, nil
 	}
 	bat, err := makeFilepathBatch(node, proc, fileList)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	defer bat.Clean(proc.Mp())
 	filter := colexec.RewriteFilterExprList(filterList)
 
 	executor, err := colexec.NewExpressionExecutor(proc, filter)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
+	defer executor.Free()
 	vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
-		executor.Free()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	fileListTmp := make([]string, 0)
 	fileSizeTmp := make([]int64, 0)
-	bs := vector.MustFixedColWithTypeCheck[bool](vec)
-	for i := 0; i < len(bs); i++ {
-		if bs[i] {
+	for i := 0; i < len(fileList); i++ {
+		valuePos := i
+		if vec.IsConst() {
+			valuePos = 0
+		}
+		if !vec.GetNulls().Contains(uint64(valuePos)) && vector.GetFixedAtWithTypeCheck[bool](vec, i) {
 			fileListTmp = append(fileListTmp, fileList[i])
 			fileSizeTmp = append(fileSizeTmp, fileSize[i])
 		}
 	}
-	executor.Free()
-	node.FilterList = filterList2
-	return fileListTmp, fileSizeTmp, nil
+	return fileListTmp, fileSizeTmp, filterList2, nil
 }
 
-func FilterFileList(ctx context.Context, node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
+func FilterFileList(ctx context.Context, node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, []*plan.Expr, error) {
 	return filterByAccountAndFilename(ctx, node, proc, fileList, fileSize)
 }
 
@@ -736,6 +805,26 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 			if err != nil {
 				return false
 			}
+		case types.T_array_bf16:
+			_, err := types.StringToArrayToBytes[types.BF16](field.Val)
+			if err != nil {
+				return false
+			}
+		case types.T_array_float16:
+			_, err := types.StringToArrayToBytes[types.Float16](field.Val)
+			if err != nil {
+				return false
+			}
+		case types.T_array_int8:
+			_, err := types.StringToArrayToBytes[int8](field.Val)
+			if err != nil {
+				return false
+			}
+		case types.T_array_uint8:
+			_, err := types.StringToArrayToBytes[uint8](field.Val)
+			if err != nil {
+				return false
+			}
 		case types.T_json:
 			if param.Format == tree.CSV {
 				field.Val = fmt.Sprintf("%v", strings.Trim(field.Val, "\""))
@@ -823,10 +912,20 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 }
 
 func makeType(typ *plan.Type, flag bool) types.Type {
-	if flag {
+	if flag && !isDirectParallelLoadType(types.T(typ.Id)) {
 		return types.New(types.T_varchar, 0, 0)
 	}
 	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
+}
+
+// isDirectParallelLoadType identifies types that must be decoded by the
+// external scan even when LOAD DATA is parallel.  Decoding vector values as
+// varchar first retains both the CSV representation and the binary vector in
+// the pipeline while the project casts the value.  Vectors are already parsed
+// by getColData in the non-parallel path, so keeping their target type here
+// avoids that duplicate large allocation.
+func isDirectParallelLoadType(id types.T) bool {
+	return id == types.T_array_float32 || id == types.T_array_float64
 }
 
 func getRealAttrCnt(attrs []plan.ExternAttr) int {
@@ -891,9 +990,70 @@ func getNullFlag(nullMap map[string][]string, attr, field string) bool {
 func shouldLoadEmptyNumericAsZero(param *ExternalParam, id types.T) bool {
 	if param == nil || param.Extern == nil ||
 		param.Extern.ExternType != int32(plan.ExternType_LOAD) ||
-		(!param.ParallelLoad && !param.LoadEmptyNumericAsZero) {
+		(!param.ParallelLoad && !param.LoadEmptyNumericAsZero && !shouldApplyLoadDataNonStrictAdjustments(param)) {
 		return false
 	}
+	if !param.ParallelLoad && !param.LoadEmptyNumericAsZero {
+		return isLoadNumericAdjustedValueType(id)
+	}
+	return isLoadNumericZeroFillType(id)
+}
+
+func shouldApplyLoadDataNonStrictAdjustments(param *ExternalParam) bool {
+	return param != nil && param.Extern != nil &&
+		param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
+		param.Extern.Local &&
+		param.Extern.Format == tree.CSV &&
+		!param.StrictSqlMode
+}
+
+type loadDataTemporalValue struct {
+	date      types.Date
+	datetime  types.Datetime
+	timestamp types.Timestamp
+}
+
+func normalizeLoadDataNonStrictTemporalValue(
+	proc *process.Process,
+	id types.T,
+	scale int32,
+	val string,
+) (string, loadDataTemporalValue) {
+	var parsed loadDataTemporalValue
+	switch id {
+	case types.T_date:
+		var err error
+		parsed.date, err = types.ParseDateCast(val)
+		if err != nil {
+			parsed.date = types.ZeroDate
+			val = "0000-00-00"
+		}
+	case types.T_datetime:
+		var err error
+		parsed.datetime, err = types.ParseDatetime(val, scale)
+		if err != nil {
+			parsed.datetime = types.ZeroDatetime
+			val = "0000-00-00 00:00:00"
+		}
+	case types.T_timestamp:
+		tz := time.Local
+		if proc != nil {
+			tz = proc.GetSessionInfo().TimeZone
+			if tz == nil {
+				tz = time.Local
+			}
+		}
+		var err error
+		parsed.timestamp, err = types.ParseTimestamp(tz, val, scale)
+		if err != nil || !types.ValidTimestamp(parsed.timestamp) {
+			parsed.timestamp = types.ZeroTimestamp
+			val = "0000-00-00 00:00:00"
+		}
+	}
+	return val, parsed
+}
+
+func isLoadNumericZeroFillType(id types.T) bool {
 	switch id {
 	case types.T_bool,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -904,6 +1064,69 @@ func shouldLoadEmptyNumericAsZero(param *ExternalParam, id types.T) bool {
 	default:
 		return false
 	}
+}
+
+func isLoadNumericAdjustedValueType(id types.T) bool {
+	switch id {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128:
+		return true
+	default:
+		return false
+	}
+}
+
+func loadDataNonStrictNumericPrefix(val string) string {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return "0"
+	}
+
+	i := 0
+	if val[i] == '+' || val[i] == '-' {
+		i++
+	}
+	digitsStart := i
+	for i < len(val) && val[i] >= '0' && val[i] <= '9' {
+		i++
+	}
+	digits := i > digitsStart
+	if i < len(val) && val[i] == '.' {
+		i++
+		fracStart := i
+		for i < len(val) && val[i] >= '0' && val[i] <= '9' {
+			i++
+		}
+		digits = digits || i > fracStart
+	}
+	if !digits {
+		return "0"
+	}
+
+	end := i
+	if i < len(val) && (val[i] == 'e' || val[i] == 'E') {
+		exp := i + 1
+		if exp < len(val) && (val[exp] == '+' || val[exp] == '-') {
+			exp++
+		}
+		expDigits := exp
+		for exp < len(val) && val[exp] >= '0' && val[exp] <= '9' {
+			exp++
+		}
+		if exp > expDigits {
+			end = exp
+		}
+	}
+	return val[:end]
+}
+
+func truncateLoadDataStringValue(val string, width int32) string {
+	if width <= 0 || utf8.RuneCountInString(val) <= int(width) {
+		return val
+	}
+	return string([]rune(val)[:width])
 }
 
 func appendLoadEmptyNumericZero(vec *vector.Vector, id types.T, asBytes bool, mp *mpool.MPool) error {
@@ -995,6 +1218,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 
 	field := getFieldFromLine(line, colName, param, fieldIdx)
 	id := types.T(col.Typ.Id)
+	loadDataNonStrictAdjustments := shouldApplyLoadDataNonStrictAdjustments(param)
 	trimSpace := false
 	// T_bit carries raw bytes (parsed byte-by-byte, not as text), so whitespace
 	// bytes are data and must not be trimmed (a whitespace-only bit value would
@@ -1019,6 +1243,20 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		return nil
 	}
 
+	var temporalValue loadDataTemporalValue
+	if loadDataNonStrictAdjustments {
+		switch {
+		case isLoadNumericAdjustedValueType(id):
+			if !field.HasStringQuote {
+				field.Val = loadDataNonStrictNumericPrefix(field.Val)
+			}
+		case id == types.T_date || id == types.T_datetime || id == types.T_timestamp:
+			field.Val, temporalValue = normalizeLoadDataNonStrictTemporalValue(proc, id, col.Typ.Scale, field.Val)
+		case id == types.T_char || id == types.T_varchar:
+			field.Val = truncateLoadDataStringValue(field.Val, col.Typ.Width)
+		}
+	}
+
 	// In strict SQL mode (non-LOCAL load), an over-width CHAR/VARCHAR value is
 	// rejected instead of silently truncated, matching strict assignment casts
 	// (cast_strict) and MySQL's "Data too long" behavior. Uses rune count, like
@@ -1028,7 +1266,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		return moerr.NewInternalErrorf(param.Ctx, "Data too long for column '%s' at row %d", colName, rowIdx+1)
 	}
 
-	if param.ParallelLoad {
+	if param.ParallelLoad && !isDirectParallelLoadType(id) {
 		err := vector.AppendBytes(vec, []byte(field.Val), false, mp)
 		if err != nil {
 			return err
@@ -1304,6 +1542,50 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		if err = vector.AppendBytes(vec, types.ArrayToBytes[float64](arr), false, mp); err != nil {
 			return err
 		}
+	case types.T_array_bf16:
+		arr, err := types.StringToArray[types.BF16](field.Val)
+		if err != nil {
+			return err
+		}
+		if int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != len(arr) {
+			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
+		}
+		if err = vector.AppendBytes(vec, types.ArrayToBytes[types.BF16](arr), false, mp); err != nil {
+			return err
+		}
+	case types.T_array_float16:
+		arr, err := types.StringToArray[types.Float16](field.Val)
+		if err != nil {
+			return err
+		}
+		if int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != len(arr) {
+			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
+		}
+		if err = vector.AppendBytes(vec, types.ArrayToBytes[types.Float16](arr), false, mp); err != nil {
+			return err
+		}
+	case types.T_array_int8:
+		arr, err := types.StringToArray[int8](field.Val)
+		if err != nil {
+			return err
+		}
+		if int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != len(arr) {
+			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
+		}
+		if err = vector.AppendBytes(vec, types.ArrayToBytes[int8](arr), false, mp); err != nil {
+			return err
+		}
+	case types.T_array_uint8:
+		arr, err := types.StringToArray[uint8](field.Val)
+		if err != nil {
+			return err
+		}
+		if int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != len(arr) {
+			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
+		}
+		if err = vector.AppendBytes(vec, types.ArrayToBytes[uint8](arr), false, mp); err != nil {
+			return err
+		}
 	case types.T_json:
 		var jsonBytes []byte
 		if param.Extern.Format != tree.CSV {
@@ -1326,10 +1608,14 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return err
 		}
 	case types.T_date:
-		d, err := types.ParseDateCast(field.Val)
-		if err != nil {
-			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Date type for column %d", field.Val, colIdx)
+		d := temporalValue.date
+		if !loadDataNonStrictAdjustments {
+			var err error
+			d, err = types.ParseDateCast(field.Val)
+			if err != nil {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Date type for column %d", field.Val, colIdx)
+			}
 		}
 
 		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
@@ -1346,10 +1632,14 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return err
 		}
 	case types.T_datetime:
-		d, err := types.ParseDatetime(field.Val, vec.GetType().Scale)
-		if err != nil {
-			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Datetime type for column %d", field.Val, colIdx)
+		d := temporalValue.datetime
+		if !loadDataNonStrictAdjustments {
+			var err error
+			d, err = types.ParseDatetime(field.Val, vec.GetType().Scale)
+			if err != nil {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Datetime type for column %d", field.Val, colIdx)
+			}
 		}
 		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
 			return err
@@ -1417,17 +1707,24 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return err
 		}
 	case types.T_timestamp:
-		t := time.Local
-		if proc != nil {
-			t = proc.GetSessionInfo().TimeZone
-			if t == nil {
-				t = time.Local
+		d := temporalValue.timestamp
+		if !loadDataNonStrictAdjustments {
+			t := time.Local
+			if proc != nil {
+				t = proc.GetSessionInfo().TimeZone
+				if t == nil {
+					t = time.Local
+				}
 			}
-		}
-		d, err := types.ParseTimestamp(t, field.Val, vec.GetType().Scale)
-		if err != nil {
-			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Timestamp type for column %d", field.Val, colIdx)
+			var err error
+			d, err = types.ParseTimestamp(t, field.Val, vec.GetType().Scale)
+			if err != nil {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Timestamp type for column %d", field.Val, colIdx)
+			}
+			if !types.ValidTimestamp(d) {
+				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Timestamp type for column %d", field.Val, colIdx)
+			}
 		}
 		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
 			return err
@@ -1441,8 +1738,26 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
 			return err
 		}
+	case types.T_geometry, types.T_geometry32:
+		// The CSV field is (E)WKT text such as "POINT (-87.6 41.8)". Normalize it
+		// to the stored bare-WKB form (float32 for GEOMETRY32) and enforce the
+		// column's declared subtype, exactly like cast_geometry_to_subtype does
+		// for an INSERT, so an external read and an INSERT store identical bytes.
+		// The column subtype is carried in Typ.Scale as a geo.Subtype enum.
+		columnSubtype := ""
+		if s := geo.Subtype(col.Typ.Scale); s != geo.GENERIC {
+			columnSubtype = strings.ToUpper(s.String())
+		}
+		wkb, err := function.NormalizeGeometryForStorage(proc, []byte(field.Val), columnSubtype, id == types.T_geometry32)
+		if err != nil {
+			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not a valid geometry for column %d: %v", field.Val, colIdx, err)
+		}
+		if err := vector.AppendBytes(vec, wkb, false, mp); err != nil {
+			return err
+		}
 	default:
-		return moerr.NewInternalErrorf(param.Ctx, "the value type %d is not support now", param.Cols[rowIdx].Typ.Id)
+		return moerr.NewInternalErrorf(param.Ctx, "the value type %s is not support now", id.String())
 	}
 	return nil
 }

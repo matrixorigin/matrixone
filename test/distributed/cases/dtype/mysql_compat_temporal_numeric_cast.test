@@ -1,0 +1,47 @@
+-- @bvt:issue
+-- @bvt:parallel
+
+set time_zone = '+00:00';
+
+-- DATE uses MySQL packed numeric value YYYYMMDD.
+select cast(cast('2024-01-02' as date) as signed) as date_signed;
+select cast(cast('2024-01-02' as date) as decimal(20,0)) as date_decimal;
+select cast(cast('2006-08-10' as date) as decimal(20,6)) as date_decimal_scale;
+select cast('2024-01-02' as date) + 0 as date_plus_zero;
+select cast('2024-01-02' as date) = 20240102 as date_eq_compact_int;
+
+-- DATETIME uses MySQL packed numeric value YYYYMMDDHHMMSS[.fraction].
+select cast(cast('2024-01-02 03:04:05.123456' as datetime(6)) as signed) as datetime_signed;
+select cast(cast('2024-01-02 03:04:05.123456' as datetime(6)) as decimal(20,6)) as datetime_decimal;
+select cast(cast('2006-08-10 10:11:12.000014' as datetime(6)) as decimal(20,6)) as datetime_decimal_microsecond;
+select cast('2024-01-02 03:04:05.123456' as datetime(6)) + 0 as datetime_plus_zero;
+select cast('2024-01-02 03:04:05.123456' as datetime(6)) = cast(20240102030405.123456 as decimal(20,6)) as datetime_eq_compact_decimal;
+-- INT is int32 in MatrixOne; the packed DATETIME value cannot fit.
+select cast(cast('2024-01-02 03:04:05' as datetime) as int) as datetime_int32;
+
+-- TIMESTAMP uses session time_zone before converting to packed numeric value.
+select cast(cast('2024-01-02 03:04:05.123456' as timestamp(6)) as signed) as timestamp_signed;
+select cast(cast('2024-01-02 03:04:05.123456' as timestamp(6)) as decimal(20,6)) as timestamp_decimal;
+select cast(cast(20240102030405 as decimal(14,0)) as timestamp) as timestamp_from_decimal64;
+select cast('2024-01-02 03:04:05.123456' as timestamp(6)) + 0 as timestamp_plus_zero;
+select cast('2024-01-02 03:04:05.123456' as timestamp(6)) = cast(20240102030405.123456 as decimal(20,6)) as timestamp_eq_compact_decimal;
+-- INT is int32 in MatrixOne; the packed TIMESTAMP value cannot fit.
+select cast(cast('2024-01-02 03:04:05' as timestamp) as int) as timestamp_int32;
+
+-- TIMESTAMP numeric cast uses the session time zone at read time.
+drop table if exists temporal_numeric_cast_timestamp_tz;
+create table temporal_numeric_cast_timestamp_tz(ts timestamp(6));
+insert into temporal_numeric_cast_timestamp_tz values ('2024-01-02 03:04:05.123456');
+set time_zone = '+08:00';
+select cast(ts as decimal(20,6)) as timestamp_decimal_session_tz from temporal_numeric_cast_timestamp_tz;
+drop table temporal_numeric_cast_timestamp_tz;
+set time_zone = '+00:00';
+
+-- YEAR decimal cast uses the year value.
+select cast(cast('2024' as year) as signed) as year_signed;
+select cast(cast('2024' as year) as decimal(20,0)) as year_decimal;
+select cast('2024' as year) + 0 as year_plus_zero;
+select cast('2024' as year) = cast(2024 as decimal(20,0)) as year_eq_decimal;
+
+-- TIME numeric behavior already matches MySQL and should remain unchanged.
+select cast(cast('03:04:05.123456' as time(6)) as decimal(20,6)) as time_decimal;

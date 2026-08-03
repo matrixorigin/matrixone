@@ -16,7 +16,7 @@ package tnservice
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -98,9 +98,7 @@ func checkReportedState(
 
 	reported := rs.listShards()
 	// keep order of all shards deterministic
-	sort.Slice(reported, func(i, j int) bool {
-		return reported[i] < reported[j]
-	})
+	slices.Sort(reported)
 
 	for _, shardID := range reported {
 		shard, err := rs.getShard(shardID)

@@ -17,6 +17,7 @@ package tables
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	api "github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -29,6 +30,57 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestValidatePersistedCommitTSVectors(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	valid := containers.MakeVector(types.T_TS.ToType(), mp)
+	valid.Append(types.BuildTS(1, 0), false)
+	got, err := validatePersistedCommitTSVectors(
+		"valid",
+		[]containers.Vector{valid},
+	)
+	require.NoError(t, err)
+	require.Same(t, valid, got)
+	got.Close()
+	require.Zero(t, mp.CurrNB())
+
+	for _, test := range []struct {
+		name    string
+		vectors func() []containers.Vector
+	}{
+		{
+			name: "empty",
+			vectors: func() []containers.Vector {
+				return nil
+			},
+		},
+		{
+			name: "nil vector",
+			vectors: func() []containers.Vector {
+				return []containers.Vector{nil}
+			},
+		},
+		{
+			name: "wrong type is released",
+			vectors: func() []containers.Vector {
+				vec := containers.MakeVector(types.T_int64.ToType(), mp)
+				vec.Append(int64(1), false)
+				return []containers.Vector{vec}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := validatePersistedCommitTSVectors(
+				"bad",
+				test.vectors(),
+			)
+			require.ErrorContains(t, err, "bad commits layout")
+			require.Nil(t, got)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
 
 func TestGetActiveRow(t *testing.T) {
 	defer testutils.AfterTest(t)()

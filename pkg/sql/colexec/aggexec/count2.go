@@ -320,20 +320,20 @@ func (exec *countColumnExec) Flush() (_ []*vector.Vector, retErr error) {
 func makeCount(
 	mp *mpool.MPool, isStar bool,
 	aggID int64, isDistinct bool,
-	param types.Type) AggFuncExec {
+	params []types.Type) AggFuncExec {
 	if isStar {
-		return newCountStarExec(mp, aggID, isDistinct, param)
+		return newCountStarExec(mp, aggID, isDistinct, params)
 	}
-	return newCountColumnExec(mp, aggID, isDistinct, param)
+	return newCountColumnExec(mp, aggID, isDistinct, params)
 }
 
-func newCountStarExec(mp *mpool.MPool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
+func newCountStarExec(mp *mpool.MPool, aggID int64, isDistinct bool, params []types.Type) AggFuncExec {
 	var exec countStarExec
 	exec.mp = mp
 	exec.aggInfo = aggInfo{
 		aggId:      aggID,
 		isDistinct: false, // count(*) is does not need to know anything of distinct
-		argTypes:   []types.Type{param},
+		argTypes:   params,
 		retType:    types.T_int64.ToType(),
 		stateTypes: []types.Type{types.T_int64.ToType()},
 		emptyNull:  false,
@@ -342,13 +342,13 @@ func newCountStarExec(mp *mpool.MPool, aggID int64, isDistinct bool, param types
 	return &exec
 }
 
-func newCountColumnExec(mp *mpool.MPool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
+func newCountColumnExec(mp *mpool.MPool, aggID int64, isDistinct bool, params []types.Type) AggFuncExec {
 	var exec countColumnExec
 	exec.mp = mp
 	exec.aggInfo = aggInfo{
 		aggId:      aggID,
 		isDistinct: isDistinct,
-		argTypes:   []types.Type{param},
+		argTypes:   params,
 		retType:    types.T_int64.ToType(),
 		stateTypes: []types.Type{types.T_int64.ToType()},
 		emptyNull:  false,

@@ -16,6 +16,28 @@ drop table t1;
 
 select utc_timestamp()-utc_timestamp(),weekday(utc_timestamp())-weekday(utc_timestamp()),unix_timestamp()-unix_timestamp(utc_timestamp());
 
+-- UTC_TIMESTAMP supports fractional-second precision.
+-- @ignore:0
+select utc_timestamp(3) as utc_timestamp_milliseconds;
+select microsecond(utc_timestamp(3)) % 1000 as utc_timestamp_millisecond_precision;
+select length(cast(utc_timestamp(3) as char)) = 23 as utc_timestamp_fsp3_text_width;
+drop view if exists v_utc_timestamp_fsp;
+create view v_utc_timestamp_fsp as
+select utc_timestamp(0) as value0, utc_timestamp(3) as value3, utc_timestamp(6) as value6;
+desc v_utc_timestamp_fsp;
+drop view v_utc_timestamp_fsp;
+
+-- The optional FSP follows MySQL syntax: it must be an integer literal in [0, 6].
+drop table if exists utc_timestamp_fsp_arg;
+create table utc_timestamp_fsp_arg(fsp bigint);
+insert into utc_timestamp_fsp_arg values (0), (6);
+select utc_timestamp(fsp) from utc_timestamp_fsp_arg;
+select utc_timestamp(1 + 2);
+select utc_timestamp(null);
+select utc_timestamp(-1);
+select utc_timestamp(7);
+drop table utc_timestamp_fsp_arg;
+
 #0.5 not supported
 #select utc_timestamp()-curdate()*1000000-curtime();
 

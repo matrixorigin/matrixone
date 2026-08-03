@@ -62,6 +62,6 @@ func (Hooks) Run(c *iscppkg.IndexConsumer, ctx context.Context, errch chan error
 	iscppkg.RunCuvs(c, ctx, errch, r, func(sqlproc *sqlexec.SqlProcess) (iscppkg.CuvsSync, error) {
 		w := c.SqlWriter().(*iscppkg.CuvsCdcWriter)
 		return cagra.NewCagraSync(sqlproc, w.DbName(), w.TblName(), w.IndexName(),
-			w.IndexDef(), w.Dimension(), w.ColMetaJSON())
+			w.IndexDef(), w.Dimension(), w.BaseVectorType(), w.ColMetaJSON())
 	})
 }

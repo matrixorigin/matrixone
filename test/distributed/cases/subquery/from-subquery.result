@@ -182,11 +182,16 @@ SanFran	SanFransiscoPublic	1
 Berkeley	BerkeleyPublic1	1
 Berkeley	BerkeleyPublic2	1
 drop table if exists t1;
-create table t1(a int);
-insert into t1 values(1);
+create table t1(a int, b int);
+insert into t1 values(1, 2);
 select * from (select * from t1) tt, (select * from t1);
-a    a
-1    1
+Every derived table must have its own alias
 select * from (select * from t1), (select * from t1);
-a    a
-1    1
+Every derived table must have its own alias
+select * from (select * from t1) as d(x);
+In definition of view, derived table or common table expression, SELECT list and column names list have different column counts
+select * from (select * from t1) as d(x, y, z);
+In definition of view, derived table or common table expression, SELECT list and column names list have different column counts
+select * from (select * from t1) as d(x, y);
+x	y
+1	2

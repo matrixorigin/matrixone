@@ -17,7 +17,7 @@ package etl
 import (
 	"bytes"
 	"context"
-	"fmt"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -193,29 +193,40 @@ func (f *SQLFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
 		return 0, err
 	}
 
-	sqlCsv := bytes.NewBuffer(make([]byte, 0, table.DefaultWriterBufferSize))
-	for i := 0; i < buf.Len(); i++ {
-		c := buf.Bytes()[i]
-		if sqlCsv.Cap() == sqlCsv.Len() {
-			sqlCsv.Grow(mpool.MB)
+	src := buf.Bytes()
+	extraEscapes := 0
+	for _, c := range src {
+		if c == '\\' || c == '\'' {
+			extraEscapes++
 		}
+	}
+
+	var loadSQL strings.Builder
+	loadSQL.Grow(len("LOAD DATA INLINE FORMAT='csv', DATA='' INTO TABLE . FIELDS TERMINATED BY ','") +
+		len(src) + extraEscapes + len(f.database) + len(f.table))
+	loadSQL.WriteString("LOAD DATA INLINE FORMAT='csv', DATA='")
+	for i := 0; i < len(src); i++ {
+		c := src[i]
 		// case \: mo sql NEED quote '\'
-		// case ': sql (load data inline ... DATA='' ...) will quote {sqlCsv} with "'"
+		// case ': sql (load data inline ... DATA='' ...) quotes inline CSV with "'"
 		if c == '\\' || c == '\'' {
 			// \ -> \\
 			// ' -> ''
-			sqlCsv.WriteByte(c)
+			loadSQL.WriteByte(c)
 		}
-		sqlCsv.WriteByte(c)
+		loadSQL.WriteByte(c)
 	}
+	loadSQL.WriteString("' INTO TABLE ")
+	loadSQL.WriteString(f.database)
+	loadSQL.WriteByte('.')
+	loadSQL.WriteString(f.table)
+	loadSQL.WriteString(" FIELDS TERMINATED BY ','")
+	loadSQLStr := loadSQL.String()
+	v2.TraceMOLoggerExportSqlHistogram.Observe(float64(len(loadSQLStr)))
 
-	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s.%s FIELDS TERMINATED BY ','",
-		sqlCsv.Bytes(), f.database, f.table)
-	v2.TraceMOLoggerExportSqlHistogram.Observe(float64(len(loadSQL)))
-
-	_, err = conn.Exec(loadSQL)
-	if len(loadSQL) > 10*mpool.MB {
-		logutil.Info("generate req sql", zap.String("type", f.table), zap.Int("csv", buf.Len()), zap.Int("sql", len(loadSQL)))
+	_, err = conn.Exec(loadSQLStr)
+	if len(loadSQLStr) > 10*mpool.MB {
+		logutil.Info("generate req sql", zap.String("type", f.table), zap.Int("csv", buf.Len()), zap.Int("sql", len(loadSQLStr)))
 	}
 	if err != nil {
 		_ = db_holder.DBConnErrCount.Count()

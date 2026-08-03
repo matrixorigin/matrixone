@@ -37,10 +37,10 @@ func Test_writeFile(t *testing.T) {
 	tPath := tDir + "/" + "test"
 	err := os.RemoveAll(tPath)
 	assert.NoError(t, err)
-	etlFS, _, err := setupFilesystem(context.Background(), tPath, true)
+	etlFS, _, err := setupFilesystem(context.Background(), tPath, true, "DISK")
 	assert.NoError(t, err)
 
-	etlFS2, _, err := setupFilesystem(context.Background(), tPath, true)
+	etlFS2, _, err := setupFilesystem(context.Background(), tPath, true, "DISK")
 	assert.NoError(t, err)
 
 	data1 := []byte("abc")
@@ -95,7 +95,7 @@ func Test_writeFile(t *testing.T) {
 
 func getTestFs(t *testing.T, forEtl bool) fileservice.FileService {
 	tPath := getTempDir(t, "test")
-	etlFS, _, err := setupFilesystem(context.Background(), tPath, forEtl)
+	etlFS, _, err := setupFilesystem(context.Background(), tPath, forEtl, "DISK")
 	assert.NoError(t, err)
 	return etlFS
 }

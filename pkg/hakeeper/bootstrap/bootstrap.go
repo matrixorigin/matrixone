@@ -15,7 +15,8 @@
 package bootstrap
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -164,18 +165,18 @@ func logStoresSortedByTick(logStores map[string]pb.LogStoreInfo) []string {
 		uuidSlice = append(uuidSlice, uuid)
 	}
 
-	sort.Slice(uuidSlice, func(i, j int) bool {
+	slices.SortFunc(uuidSlice, func(a, b string) int {
 		// FIXME(volgariver6): currently, the locality of log stores should be empty,
 		// but it could not be empty actually.
-		if len(logStores[uuidSlice[i]].Locality.Value) == 0 &&
-			len(logStores[uuidSlice[j]].Locality.Value) > 0 {
-			return true
+		if len(logStores[a].Locality.Value) == 0 &&
+			len(logStores[b].Locality.Value) > 0 {
+			return -1
 		}
-		if len(logStores[uuidSlice[i]].Locality.Value) > 0 &&
-			len(logStores[uuidSlice[j]].Locality.Value) == 0 {
-			return false
+		if len(logStores[a].Locality.Value) > 0 &&
+			len(logStores[b].Locality.Value) == 0 {
+			return 1
 		}
-		return logStores[uuidSlice[i]].Tick > logStores[uuidSlice[j]].Tick
+		return cmp.Compare(logStores[b].Tick, logStores[a].Tick)
 	})
 
 	return uuidSlice
@@ -187,8 +188,8 @@ func tnStoresSortedByTick(tnStores map[string]pb.TNStoreInfo) []string {
 		uuidSlice = append(uuidSlice, uuid)
 	}
 
-	sort.Slice(uuidSlice, func(i, j int) bool {
-		return tnStores[uuidSlice[i]].Tick > tnStores[uuidSlice[j]].Tick
+	slices.SortFunc(uuidSlice, func(a, b string) int {
+		return cmp.Compare(tnStores[b].Tick, tnStores[a].Tick)
 	})
 
 	return uuidSlice

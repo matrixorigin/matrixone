@@ -60,6 +60,169 @@ func TestCloseLocalLockTable(t *testing.T) {
 	)
 }
 
+func TestCloseLocalLockTableNotifiesOutsideTableMutex(t *testing.T) {
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			reuse.RunReuseTests(func() {
+				logger := getLogger("")
+				events := newWaiterEvents(1, nil, nil, time.Hour, nil, logger)
+				// A one-element queue makes the old close -> eventC -> worker ->
+				// table mutex cycle deterministic with only three waiters.
+				events.eventC = make(chan *lockContext, 1)
+				events.start()
+
+				lt := newLocalLockTable(
+					pb.LockTable{Table: 1, ServiceID: "test"},
+					nil,
+					events,
+					rt.Clock(),
+					nil,
+					logger,
+				).(*localLockTable)
+
+				lock := newRowLock(logger, &lockContext{
+					waitTxn: pb.WaitTxn{TxnID: []byte("holder")},
+					opts: LockOptions{LockOptions: pb.LockOptions{
+						Mode: pb.LockMode_Exclusive,
+					}},
+				})
+				handled := make(chan struct{}, 3)
+				waiters := make([]*waiter, 0, 3)
+				for i := 0; i < 3; i++ {
+					w := acquireWaiter(
+						pb.WaitTxn{TxnID: []byte(fmt.Sprintf("waiter-%d", i))},
+						"test",
+						logger,
+					)
+					w.setStatus(blocking)
+					w.event = event{
+						c: &lockContext{
+							txn: &activeTxn{RWMutex: &sync.RWMutex{}},
+							lockFunc: func(_ *lockContext, _ bool) {
+								// The real terminal async path re-enters l.mu while
+								// removing the notified waiter.
+								lt.mu.Lock()
+								lt.mu.Unlock()
+								handled <- struct{}{}
+							},
+						},
+						eventC: events.eventC,
+					}
+					lock.addWaiter(logger, w)
+					waiters = append(waiters, w)
+				}
+				lt.mu.store.Add([]byte{1}, lock)
+
+				closed := make(chan struct{})
+				go func() {
+					lt.close(closeReasonServiceClose)
+					close(closed)
+				}()
+				select {
+				case <-closed:
+				case <-time.After(5 * time.Second):
+					t.Fatal("local lock table close deadlocked with a full waiter event queue")
+				}
+				for _, w := range waiters {
+					require.ErrorIs(t, w.mustRecvNotification(logger).err, ErrLockTableNotFound)
+					w.close("test", logger)
+				}
+
+				events.close()
+				require.Len(t, handled, 3)
+				lt.mu.RLock()
+				require.True(t, lt.mu.closed)
+				require.Zero(t, lt.mu.store.Len())
+				lt.mu.RUnlock()
+			})
+		},
+	)
+}
+
+func TestRemoveLocalLockTableClosesOutsideHolderMutex(t *testing.T) {
+	runtime.RunTest(
+		"",
+		func(rt runtime.Runtime) {
+			reuse.RunReuseTests(func() {
+				logger := getLogger("")
+				events := newWaiterEvents(1, nil, nil, time.Hour, nil, logger)
+				events.eventC = make(chan *lockContext, 1)
+				events.start()
+
+				lt := newLocalLockTable(
+					pb.LockTable{Table: 1, ServiceID: "test"},
+					nil,
+					events,
+					rt.Clock(),
+					nil,
+					logger,
+				).(*localLockTable)
+				holder := &lockTableHolder{
+					tables: map[uint64]lockTable{1: lt},
+				}
+				holders := &lockTableHolders{
+					holders: map[uint32]*lockTableHolder{0: holder},
+				}
+
+				lock := newRowLock(logger, &lockContext{
+					waitTxn: pb.WaitTxn{TxnID: []byte("holder")},
+					opts: LockOptions{LockOptions: pb.LockOptions{
+						Mode: pb.LockMode_Exclusive,
+					}},
+				})
+				handled := make(chan struct{}, 3)
+				waiters := make([]*waiter, 0, 3)
+				for i := 0; i < 3; i++ {
+					w := acquireWaiter(
+						pb.WaitTxn{TxnID: []byte(fmt.Sprintf("waiter-%d", i))},
+						"test",
+						logger,
+					)
+					w.setStatus(blocking)
+					w.event = event{
+						c: &lockContext{
+							txn: &activeTxn{RWMutex: &sync.RWMutex{}},
+							lockFunc: func(_ *lockContext, _ bool) {
+								// A real completion callback validates that its
+								// table is still current through this holder.
+								_ = holder.get(1)
+								handled <- struct{}{}
+							},
+						},
+						eventC: events.eventC,
+					}
+					lock.addWaiter(logger, w)
+					waiters = append(waiters, w)
+				}
+				lt.mu.store.Add([]byte{1}, lock)
+
+				removed := make(chan int, 1)
+				go func() {
+					removed <- holders.removeWithFilter(
+						func(_ uint64, _ lockTable) bool { return true },
+						closeReasonServiceClose,
+					)
+				}()
+				select {
+				case count := <-removed:
+					require.Equal(t, 1, count)
+				case <-time.After(5 * time.Second):
+					t.Fatal("table close retained the holder mutex while the waiter queue was full")
+				}
+				for _, w := range waiters {
+					require.ErrorIs(t, w.mustRecvNotification(logger).err, ErrLockTableNotFound)
+					w.close("test", logger)
+				}
+
+				events.close()
+				require.Len(t, handled, 3)
+				require.Nil(t, holder.get(1))
+			})
+		},
+	)
+}
+
 func TestCloseLocalLockTableWithBlockedWaiter(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -109,7 +272,7 @@ func TestCloseLocalLockTableWithBlockedWaiter(t *testing.T) {
 				require.Equal(t, ErrLockTableNotFound, err)
 			}()
 
-			v, err := l.getLockTable(0, tableID)
+			v, err := l.getLockTable(context.Background(), 0, tableID)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 			for {
@@ -126,6 +289,64 @@ func TestCloseLocalLockTableWithBlockedWaiter(t *testing.T) {
 			v.close(closeReasonServiceClose)
 			wg.Wait()
 		})
+}
+
+func TestSynchronousWaiterRemovedFromEventsBeforeAfterWait(t *testing.T) {
+	table := uint64(10)
+	getRunner(false)(
+		t,
+		table,
+		func(ctx context.Context, s *service, lt *localLockTable) {
+			rows := newTestRows(1, 2)
+			txn1 := newTestTxnID(1)
+			txn2 := newTestTxnID(2)
+
+			_, err := s.Lock(ctx, table, rows, txn1, newTestRangeExclusiveOptions())
+			require.NoError(t, err)
+
+			waiting := make(chan struct{})
+			removed := make(chan bool, 1)
+			lt.options.beforeWait = func(c *lockContext) func() {
+				if bytes.Equal(c.txn.txnID, txn2) {
+					return func() { close(waiting) }
+				}
+				return func() {}
+			}
+			lt.options.afterWait = func(c *lockContext) func() {
+				if !bytes.Equal(c.txn.txnID, txn2) {
+					return func() {}
+				}
+				return func() {
+					lt.events.mu.RLock()
+					defer lt.events.mu.RUnlock()
+					for _, w := range lt.events.mu.blockedWaiters {
+						if w == c.w {
+							removed <- false
+							return
+						}
+					}
+					removed <- true
+				}
+			}
+
+			done := make(chan error, 1)
+			go func() {
+				_, err := s.Lock(ctx, table, rows, txn2, newTestRangeExclusiveOptions())
+				done <- err
+			}()
+
+			select {
+			case <-waiting:
+			case <-time.After(time.Second):
+				t.Fatal("txn2 did not begin waiting for the range lock")
+			}
+
+			require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+			require.True(t, <-removed)
+			require.NoError(t, <-done)
+			require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+		},
+	)
 }
 
 func TestMergeRangeWithNoConflict(t *testing.T) {
@@ -350,7 +571,7 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 			table := uint64(10)
 			for _, c := range cases {
 				stopper := stopper.NewStopper("")
-				v, err := l.getLockTableWithCreate(0, table, nil, pb.Sharding_None)
+				v, err := l.getLockTableWithCreate(context.Background(), 0, table, nil, pb.Sharding_None)
 				require.NoError(t, err)
 				lt := v.(*localLockTable)
 
@@ -484,7 +705,7 @@ func TestLocalLockTableMultipleRowLocksCannotMissIfFoundSelfTxn(t *testing.T) {
 			require.NoError(t, l.Unlock(ctx, []byte{2}, timestamp.Timestamp{}))
 
 			wg.Wait()
-			v, err := l.getLockTable(0, tableID)
+			v, err := l.getLockTable(context.Background(), 0, tableID)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 			lt.mu.Lock()
@@ -558,7 +779,7 @@ func TestIssue9856(t *testing.T) {
 				json.MustUnmarshal([]byte(r), v)
 				_, err := l.Lock(ctx, tableID, [][]byte{[]byte(v.Start), []byte(v.End)}, []byte("txn1"), option)
 				require.NoError(t, err)
-				vv, err := l.getLockTable(0, tableID)
+				vv, err := l.getLockTable(context.Background(), 0, tableID)
 				require.NoError(t, err)
 				lt := vv.(*localLockTable)
 				lt.mu.Lock()
@@ -725,7 +946,7 @@ func TestLockedTSIsLastCommittedTS(t *testing.T) {
 			defer cancel()
 
 			tableID := uint64(10)
-			v, err := l.getLockTableWithCreate(0, tableID, nil, pb.Sharding_None)
+			v, err := l.getLockTableWithCreate(context.Background(), 0, tableID, nil, pb.Sharding_None)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 			lt.mu.Lock()
@@ -796,7 +1017,7 @@ func TestLockedTSIsLastCommittedTSWithRange(t *testing.T) {
 			defer cancel()
 
 			tableID := uint64(10)
-			v, err := l.getLockTableWithCreate(0, tableID, nil, pb.Sharding_None)
+			v, err := l.getLockTableWithCreate(context.Background(), 0, tableID, nil, pb.Sharding_None)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 			lt.mu.Lock()
@@ -877,7 +1098,7 @@ func Test15608(t *testing.T) {
 			_, err := s1.Lock(ctx, table, rows, txn1, option)
 			require.NoError(t, err, err)
 
-			v, err := s1.getLockTable(0, table)
+			v, err := s1.getLockTable(context.Background(), 0, table)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 			lt.options.beforeCloseFirstWaiter = func(c *lockContext) {
@@ -1037,7 +1258,7 @@ func TestCannotHungIfRangeConflictWithRowMultiTimes(t *testing.T) {
 			add(txn1, key4, pb.Granularity_Row)
 			close(startTxn3)
 
-			v, err := l.getLockTable(0, tableID)
+			v, err := l.getLockTable(context.Background(), 0, tableID)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 			txn3WaitTimes := 0
@@ -1365,7 +1586,7 @@ func TestRangeLockModeUpgradeUpdatesBothEnds(t *testing.T) {
 			require.NoError(t, err)
 
 			// Verify both ends are Shared
-			v, err := l.getLockTable(0, tableID)
+			v, err := l.getLockTable(context.Background(), 0, tableID)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 
@@ -1469,7 +1690,7 @@ func TestSetModePairedRangeLockDirect(t *testing.T) {
 			require.NoError(t, err)
 
 			// Get the lock table and directly test setModePairedRangeLock
-			v, err := l.getLockTable(0, tableID)
+			v, err := l.getLockTable(context.Background(), 0, tableID)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 
@@ -1527,7 +1748,7 @@ func TestSetModePairedRangeLockFromRangeEnd(t *testing.T) {
 			require.NoError(t, err)
 
 			// Get the lock table and directly test setModePairedRangeLock from range-end
-			v, err := l.getLockTable(0, tableID)
+			v, err := l.getLockTable(context.Background(), 0, tableID)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 
@@ -1579,7 +1800,7 @@ func TestSetModePairedRangeLockRowLockNoOp(t *testing.T) {
 			require.NoError(t, err)
 
 			// Get the lock table
-			v, err := l.getLockTable(0, tableID)
+			v, err := l.getLockTable(context.Background(), 0, tableID)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 
@@ -1640,7 +1861,7 @@ func TestRangeLockWithInterleavedRowLocks(t *testing.T) {
 			require.NoError(t, err)
 
 			// Verify btree structure: [0:row] [1:range-start] [10:range-end]
-			v, err := l.getLockTable(0, tableID)
+			v, err := l.getLockTable(context.Background(), 0, tableID)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 

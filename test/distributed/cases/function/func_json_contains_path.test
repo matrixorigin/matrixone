@@ -1,0 +1,58 @@
+-- JSON_CONTAINS_PATH MySQL compatibility cases from mysql-test/suite/json/t/json_no_table.test.
+
+-- arity and invalid input
+select json_contains_path();
+select json_contains_path('{"a":true}');
+select json_contains_path('{"a":true}', 'all');
+select json_contains_path('{"a":tru}', 'all', '$');
+select json_contains_path('{"a":true}', 'all', '$[');
+select json_contains_path('{"a":true}', 'all', '$a.***[3]');
+select json_contains_path('{"a":true}', 'invalid', '$.a');
+
+-- SQL NULL, JSON null, root, and scalar-array autowrap
+select json_contains_path(null, 'all', '$.a');
+select json_contains_path('{"a":true}', null, '$.a');
+select json_contains_path('{"a":true}', 'all', null);
+select json_contains_path('{"a":null}', 'all', '$.a');
+select json_contains_path('{"a":true}', 'all', '$');
+select json_contains_path('1', 'all', '$[0]');
+select json_contains_path('1', 'all', '$[1]');
+select json_contains_path('[1]', 'all', '$[1 to 2]');
+
+-- one/all, case-insensitive mode, and path ordering
+select json_contains_path('{"a":true}', 'all', '$.a', '$.b');
+select json_contains_path('{"a":true}', 'all', '$.b', '$.a');
+select json_contains_path('{"a":true}', 'ALL', '$.a', '$.b');
+select json_contains_path('{"a":true}', 'one', '$.a', '$.b');
+select json_contains_path('{"a":true}', 'oNe', '$.b', '$.a');
+select json_contains_path('{"a":true,"b":[1,2]}', 'all', '$**[1]', '$.b[0]', '$.c');
+select json_contains_path('{"a":true,"b":[1,2]}', 'one', '$.c', '$**[1]', '$.b[0]');
+
+-- wildcard and recursive descent cases from MySQL's json_no_table.test
+select json_contains_path('{"a":true,"b":[1,2,{"c":[4,5,{"d":[6,7,8,9,10]}]}]}', 'all', '$**[4]');
+select json_contains_path('{"a":true,"b":[1,2,{"c":[4,5,{"d":[6,7,8,9,10]}]}]}', 'all', '$**[4]', '$**[5]');
+select json_contains_path('{"a":true,"b":[1,2,{"c":[4,5,{"d":[6,7,8,9,10]}]}]}', 'all', '$**.c[2]');
+select json_contains_path('{"a":true,"b":[1,2,{"c":[4,5,{"d":[6,7,8,9,10]}]}]}', 'all', '$**.c[3]');
+select json_contains_path('{"a":1,"b":2}', 'one', '$.*');
+select json_contains_path('[1,2,3]', 'one', '$.*');
+select json_contains_path('{}', 'one', '$[*]');
+select json_contains_path('[1,[[{"x":[{"a":{"b":{"c":42}}}]}]]]', 'one', '$**.a.*');
+select json_contains_path('[1,[[{"x":[{"a":{"b":{"c":42}}}]}]]]', 'all', '$**.a.*');
+select json_contains_path('[1,2,3]', 'one', '$**[*]');
+select json_contains_path('[1,2,3]', 'all', '$**[*]');
+
+-- MySQL evaluates paths left to right and does not observe later arguments after short-circuiting.
+select json_contains_path('{"a":1}', 'one', '$.a', null);
+select json_contains_path('{"a":1}', 'all', '$.missing', null);
+select json_contains_path('{"a":1}', 'one', '$.a', '$[');
+select json_contains_path('{"a":1}', 'all', '$.missing', '$[');
+
+-- JSON and VARCHAR columns with dynamic mode/path values.
+drop table if exists t_json_contains_path;
+create table t_json_contains_path (id int, doc json, mode varchar(8), p1 varchar(64), p2 varchar(64));
+insert into t_json_contains_path values
+	(1, '{"a":1,"b":[1,2]}', 'all', '$.a', '$.b[1]'),
+	(2, '{"a":1,"b":[1,2]}', 'one', '$.missing', '$.b[0]'),
+	(3, '{"a":null}', 'all', '$.a', '$');
+select id, json_contains_path(doc, mode, p1, p2) from t_json_contains_path order by id;
+drop table t_json_contains_path;

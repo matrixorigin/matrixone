@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"math"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -33,6 +34,8 @@ import (
 type windowFuncExprBinder interface {
 	BindExpr(tree.Expr, int32, bool) (*plan.Expr, error)
 	bindFuncExprImplByAstExpr(string, []tree.Expr, int32) (*plan.Expr, error)
+	bindPreparedNumericAggregateFuncExpr(string, []tree.Expr, int32) (*plan.Expr, error)
+	bindPreparedRowsFrameBound(tree.Expr) (*plan.Expr, error)
 	makeFrameConstValue(tree.Expr, *plan.Type) (*plan.Expr, error)
 	GetContext() context.Context
 }
@@ -40,19 +43,205 @@ type windowFuncExprBinder interface {
 func windowExprAstKey(astExpr tree.Expr) string {
 	funcExpr, ok := astExpr.(*tree.FuncExpr)
 	if !ok || funcExpr.WindowSpec == nil || funcExpr.WindowSpec.Frame == nil || funcExpr.WindowSpec.HasFrame {
-		return tree.String(astExpr, dialect.MYSQL)
+		return semanticAstKey(astExpr)
 	}
 
 	funcExprCopy := *funcExpr
 	windowSpecCopy := *funcExpr.WindowSpec
 	windowSpecCopy.HasFrame = true
 	funcExprCopy.WindowSpec = &windowSpecCopy
-	return tree.String(&funcExprCopy, dialect.MYSQL)
+	return semanticAstKey(&funcExprCopy)
+}
+
+func semanticAstKey(astExpr tree.Expr) string {
+	display := tree.String(astExpr, dialect.MYSQL)
+	identity := tree.StringWithOpts(astExpr, dialect.MYSQL, tree.WithParamExprOffset())
+	if identity == display {
+		return display
+	}
+	return identity + "\x00" + display
+}
+
+func semanticAstDisplayName(key string) string {
+	if separator := strings.LastIndexByte(key, 0); separator >= 0 {
+		return key[separator+1:]
+	}
+	return key
+}
+
+func windowFuncAstName(astExpr *tree.FuncExpr) string {
+	if astExpr.FuncName != nil {
+		return astExpr.FuncName.Origin()
+	}
+	if funcRef, ok := astExpr.Func.FunctionReference.(*tree.UnresolvedName); ok {
+		return funcRef.ColName()
+	}
+	return "unknown"
+}
+
+func findNestedWindowFuncNameInExprs(exprs ...tree.Expr) (string, bool) {
+	for _, expr := range exprs {
+		if name, ok := findNestedWindowFuncName(expr); ok {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+func findNestedWindowFuncNameInOrderBy(orderBy tree.OrderBy) (string, bool) {
+	for _, order := range orderBy {
+		if order == nil {
+			continue
+		}
+		if name, ok := findNestedWindowFuncName(order.Expr); ok {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+func findNestedWindowFuncName(expr tree.Expr) (string, bool) {
+	switch e := expr.(type) {
+	case nil:
+		return "", false
+	case *tree.FuncExpr:
+		if e.WindowSpec != nil {
+			return windowFuncAstName(e), true
+		}
+		if name, ok := findNestedWindowFuncNameInExprs(e.Exprs...); ok {
+			return name, true
+		}
+		return findNestedWindowFuncNameInOrderBy(e.OrderBy)
+	case *tree.BinaryExpr:
+		return findNestedWindowFuncNameInExprs(e.Left, e.Right)
+	case *tree.UnaryExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.ComparisonExpr:
+		return findNestedWindowFuncNameInExprs(e.Left, e.Right, e.Escape)
+	case *tree.AndExpr:
+		return findNestedWindowFuncNameInExprs(e.Left, e.Right)
+	case *tree.XorExpr:
+		return findNestedWindowFuncNameInExprs(e.Left, e.Right)
+	case *tree.OrExpr:
+		return findNestedWindowFuncNameInExprs(e.Left, e.Right)
+	case *tree.NotExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.IsNullExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.IsNotNullExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.IsUnknownExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.IsNotUnknownExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.IsTrueExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.IsNotTrueExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.IsFalseExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.IsNotFalseExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.ParenExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.CastExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.BitCastExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.Tuple:
+		return findNestedWindowFuncNameInExprs(e.Exprs...)
+	case *tree.RangeCond:
+		return findNestedWindowFuncNameInExprs(e.Left, e.From, e.To)
+	case *tree.CaseExpr:
+		if name, ok := findNestedWindowFuncName(e.Expr); ok {
+			return name, true
+		}
+		for _, when := range e.Whens {
+			if when == nil {
+				continue
+			}
+			if name, ok := findNestedWindowFuncNameInExprs(when.Cond, when.Val); ok {
+				return name, true
+			}
+		}
+		return findNestedWindowFuncName(e.Else)
+	case *tree.IntervalExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.DefaultVal:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.SerialExtractExpr:
+		return findNestedWindowFuncNameInExprs(e.SerialExpr, e.IndexExpr)
+	case *tree.Subquery:
+		return "", false
+	default:
+		return "", false
+	}
+}
+
+func rejectNestedWindowFunc(ctx context.Context, expr tree.Expr) error {
+	if name, ok := findNestedWindowFuncName(expr); ok {
+		return moerr.NewSyntaxErrorf(ctx, "You cannot use the window function '%s' in this context", name)
+	}
+	return nil
+}
+
+func validateWindowFuncNoNested(ctx context.Context, astExpr *tree.FuncExpr) error {
+	for _, arg := range astExpr.Exprs {
+		if err := rejectNestedWindowFunc(ctx, arg); err != nil {
+			return err
+		}
+	}
+	if name, ok := findNestedWindowFuncNameInOrderBy(astExpr.OrderBy); ok {
+		return moerr.NewSyntaxErrorf(ctx, "You cannot use the window function '%s' in this context", name)
+	}
+
+	ws := astExpr.WindowSpec
+	if ws == nil {
+		return nil
+	}
+	for _, group := range ws.PartitionBy {
+		if err := rejectNestedWindowFunc(ctx, group); err != nil {
+			return err
+		}
+	}
+	if name, ok := findNestedWindowFuncNameInOrderBy(ws.OrderBy); ok {
+		return moerr.NewSyntaxErrorf(ctx, "You cannot use the window function '%s' in this context", name)
+	}
+	if ws.Frame != nil {
+		if ws.Frame.Start != nil {
+			if err := rejectNestedWindowFunc(ctx, ws.Frame.Start.Expr); err != nil {
+				return err
+			}
+		}
+		if ws.Frame.End != nil {
+			if err := rejectNestedWindowFunc(ctx, ws.Frame.End.Expr); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func rejectWindowResultDependency(ctx context.Context, expr *plan.Expr, windowTag int32) error {
+	if HasTag(expr, windowTag) {
+		return moerr.NewSyntaxError(ctx, "You cannot use a window function result in another window function in the same query block")
+	}
+	return nil
 }
 
 func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
 		return nil, moerr.NewNYI(b.GetContext(), "DISTINCT in window function")
+	}
+
+	if err := validateCountArgs(b.GetContext(), funcName, astExpr); err != nil {
+		return nil, err
+	}
+	if err := validateWindowFuncNoNested(b.GetContext(), astExpr); err != nil {
+		return nil, err
+	}
+	if len(astExpr.OrderBy) > 0 {
+		return nil, moerr.NewNYI(b.GetContext(), "function-local ORDER BY in window function")
 	}
 
 	astStr := windowExprAstKey(astExpr)
@@ -65,8 +254,11 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	}
 
 	// window function
-	windowFunc, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+	windowFunc, err := b.bindPreparedNumericAggregateFuncExpr(funcName, astExpr.Exprs, depth)
 	if err != nil {
+		return nil, err
+	}
+	if err = rejectWindowResultDependency(b.GetContext(), windowFunc, ctx.windowTag); err != nil {
 		return nil, err
 	}
 	w.WindowFunc = windowFunc
@@ -84,6 +276,9 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		if err != nil {
 			return nil, err
 		}
+		if err = rejectWindowResultDependency(b.GetContext(), expr, ctx.windowTag); err != nil {
+			return nil, err
+		}
 		w.PartitionBy = append(w.PartitionBy, expr)
 	}
 
@@ -92,6 +287,9 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		for _, order := range ws.OrderBy {
 			expr, err := b.BindExpr(order.Expr, depth, isRoot)
 			if err != nil {
+				return nil, err
+			}
+			if err = rejectWindowResultDependency(b.GetContext(), expr, ctx.windowTag); err != nil {
 				return nil, err
 			}
 
@@ -166,21 +364,42 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		}
 		typ = &w.OrderBy[0].Expr.Typ
 		t := types.Type{Oid: types.T(typ.Id)}
-		if !function.GetFunctionIsWinOrderFunByName(funcName) && !t.IsNumericOrTemporal() {
+		if !function.GetFunctionIsWinOrderFunByName(funcName) && isNRange(ws.Frame) && !t.IsNumericOrTemporal() {
 			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>' with RANGE frame requires ORDER BY expression of numeric or temporal type")
 		}
 	case tree.Groups:
 		return nil, moerr.NewNYI(b.GetContext(), "GROUPS in WINDOW FUNCTION condition")
 	}
+	if isPreparedWindowIntervalBound(ws.Frame.Start.Expr) || isPreparedWindowIntervalBound(ws.Frame.End.Expr) {
+		return nil, moerr.NewNotSupported(b.GetContext(), "prepared parameter markers in interval window frames")
+	}
+	if ws.Frame.Type == tree.Range &&
+		(isWindowFrameParam(ws.Frame.Start.Expr) || isWindowFrameParam(ws.Frame.End.Expr)) {
+		return nil, moerr.NewNotSupported(b.GetContext(), "prepared parameter markers in RANGE window frames")
+	}
 	if ws.Frame.Start.Expr != nil {
-		w.Frame.Start.Val, err = b.makeFrameConstValue(ws.Frame.Start.Expr, typ)
+		if isWindowFrameParam(ws.Frame.Start.Expr) {
+			w.Frame.Start.Val, err = b.bindPreparedRowsFrameBound(ws.Frame.Start.Expr)
+		} else {
+			w.Frame.Start.Val, err = b.makeFrameConstValue(ws.Frame.Start.Expr, typ)
+		}
 		if err != nil {
+			return nil, err
+		}
+		if err = rejectWindowResultDependency(b.GetContext(), w.Frame.Start.Val, ctx.windowTag); err != nil {
 			return nil, err
 		}
 	}
 	if ws.Frame.End.Expr != nil {
-		w.Frame.End.Val, err = b.makeFrameConstValue(ws.Frame.End.Expr, typ)
+		if isWindowFrameParam(ws.Frame.End.Expr) {
+			w.Frame.End.Val, err = b.bindPreparedRowsFrameBound(ws.Frame.End.Expr)
+		} else {
+			w.Frame.End.Val, err = b.makeFrameConstValue(ws.Frame.End.Expr, typ)
+		}
 		if err != nil {
+			return nil, err
+		}
+		if err = rejectWindowResultDependency(b.GetContext(), w.Frame.End.Val, ctx.windowTag); err != nil {
 			return nil, err
 		}
 	}
@@ -197,6 +416,127 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	ctx.windowByAst[astStr] = colPos
 
 	return buildWindowColRefExpr(ctx, w.WindowFunc.Typ, colPos), nil
+}
+
+func isWindowFrameParam(expr tree.Expr) bool {
+	_, ok := expr.(*tree.ParamExpr)
+	return ok
+}
+
+func isPreparedWindowIntervalBound(expr tree.Expr) bool {
+	interval, ok := expr.(*tree.FuncExpr)
+	if !ok {
+		return false
+	}
+	return hasWindowFrameParam(interval)
+}
+
+func hasWindowFrameParam(expr tree.Expr) bool {
+	switch expr := expr.(type) {
+	case *tree.ParamExpr:
+		return true
+	case *tree.BinaryExpr:
+		return hasWindowFrameParam(expr.Left) || hasWindowFrameParam(expr.Right)
+	case *tree.UnaryExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.ComparisonExpr:
+		return hasWindowFrameParam(expr.Left) ||
+			hasWindowFrameParam(expr.Right) ||
+			hasWindowFrameParam(expr.Escape)
+	case *tree.AndExpr:
+		return hasWindowFrameParam(expr.Left) || hasWindowFrameParam(expr.Right)
+	case *tree.XorExpr:
+		return hasWindowFrameParam(expr.Left) || hasWindowFrameParam(expr.Right)
+	case *tree.OrExpr:
+		return hasWindowFrameParam(expr.Left) || hasWindowFrameParam(expr.Right)
+	case *tree.NotExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.IsNullExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.IsNotNullExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.IsUnknownExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.IsNotUnknownExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.IsTrueExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.IsNotTrueExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.IsFalseExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.IsNotFalseExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.Subquery:
+		// A frame bound cannot be folded through a subquery safely.
+		return true
+	case *tree.FuncExpr:
+		return hasWindowFrameParamInExprs(expr.Exprs) || hasWindowFrameParamInOrderBy(expr.OrderBy)
+	case *tree.ExprList:
+		return hasWindowFrameParamInExprs(expr.Exprs)
+	case *tree.ParenExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.CastExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.BitCastExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.Tuple:
+		return hasWindowFrameParamInExprs(expr.Exprs)
+	case *tree.RangeCond:
+		return hasWindowFrameParam(expr.Left) ||
+			hasWindowFrameParam(expr.From) ||
+			hasWindowFrameParam(expr.To)
+	case *tree.CaseExpr:
+		if hasWindowFrameParam(expr.Expr) || hasWindowFrameParam(expr.Else) {
+			return true
+		}
+		for _, when := range expr.Whens {
+			if when != nil && (hasWindowFrameParam(when.Cond) || hasWindowFrameParam(when.Val)) {
+				return true
+			}
+		}
+	case *tree.IntervalExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.DefaultVal:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.VarExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.SerialExtractExpr:
+		return hasWindowFrameParam(expr.SerialExpr) || hasWindowFrameParam(expr.IndexExpr)
+	case *tree.FullTextMatchExpr:
+		return hasWindowFrameParam(expr.Pattern)
+	}
+	return false
+}
+
+func hasWindowFrameParamInExprs(exprs tree.Exprs) bool {
+	for _, expr := range exprs {
+		if hasWindowFrameParam(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasWindowFrameParamInOrderBy(orderBy tree.OrderBy) bool {
+	for _, order := range orderBy {
+		if order != nil && hasWindowFrameParam(order.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *baseBinder) bindPreparedRowsFrameBound(expr tree.Expr) (*plan.Expr, error) {
+	if b.builder == nil || !b.builder.isPrepareStatement {
+		return nil, moerr.NewInvalidInput(b.GetContext(), "only prepare statement can use ? expr")
+	}
+	bound, err := b.impl.BindExpr(expr, 0, true)
+	if err != nil {
+		return nil, err
+	}
+	typ := types.T_uint64.ToType()
+	return appendCastBeforeExpr(b.GetContext(), bound, makePlan2Type(&typ))
 }
 
 func buildWindowColRefExpr(ctx *BindContext, typ plan.Type, colPos int32) *plan.Expr {

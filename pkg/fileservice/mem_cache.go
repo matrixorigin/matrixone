@@ -375,7 +375,11 @@ func (m *MemCache) DeletePaths(
 	ctx context.Context,
 	paths []string,
 ) error {
-	m.cache.DeletePaths(ctx, paths)
+	canonical, err := canonicalFilePaths(paths)
+	if err != nil {
+		return err
+	}
+	m.cache.DeletePaths(ctx, canonical)
 	return nil
 }
 

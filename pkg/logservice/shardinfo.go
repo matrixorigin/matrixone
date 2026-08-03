@@ -20,9 +20,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lni/dragonboat/v4"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -33,6 +35,12 @@ type ShardInfo struct {
 	ReplicaID uint64
 	// Replicas is a map of replica ID to their service addresses
 	Replicas map[uint64]string
+}
+
+const getShardInfoCheckerStateTimeout = 100 * time.Millisecond
+
+var getCheckerStateForShardInfo = func(ctx context.Context, l *store) (*pb.CheckerState, error) {
+	return l.getCheckerStateWithContext(ctx)
 }
 
 // GetShardInfo is to be invoked when querying ShardInfo on a Log Service node.
@@ -50,14 +58,43 @@ func GetShardInfo(
 	sid string,
 	address string,
 	shardID uint64,
+	excludeHardDownReplicaAddresses ...bool,
 ) (ShardInfo, bool, error) {
-	si, ok, err := queryShardInfoRawFn(context.Background(), sid, address, shardID)
+	excludeHardDown := true
+	if len(excludeHardDownReplicaAddresses) > 0 {
+		excludeHardDown = excludeHardDownReplicaAddresses[0]
+	}
+	si, ok, err := queryShardInfoRawFn(context.Background(), sid, address, shardID, false, excludeHardDown)
 	if err != nil || !ok {
 		return ShardInfo{}, false, err
 	}
+	if si.LeaderID == 0 {
+		return ShardInfo{}, false, nil
+	}
 	leader, present := si.Replicas[si.LeaderID]
 	if !present || leader.ServiceAddress == "" {
-		// leader address is unknown
+		// When the leader entry is absent from Replicas because the
+		// server-side filter dropped it (hard-down / left), fall back to
+		// the surviving replica addresses so reverse-proxy callers can
+		// connect through a follower during the stale-leader window.
+		if !present {
+			result := ShardInfo{
+				Replicas: make(map[uint64]string),
+			}
+			for replicaID, info := range si.Replicas {
+				if info.ServiceAddress == "" {
+					continue
+				}
+				if result.ReplicaID == 0 {
+					result.ReplicaID = replicaID
+				}
+				result.Replicas[replicaID] = info.ServiceAddress
+			}
+			if result.ReplicaID != 0 {
+				return result, true, nil
+			}
+		}
+		// leader address is unknown, and no surviving replicas to fall back to
 		return ShardInfo{}, false, nil
 	}
 	result := ShardInfo{
@@ -88,7 +125,7 @@ func getShardMembership(
 	address string,
 	shardID uint64,
 ) (map[uint64]string, bool, error) {
-	si, ok, err := queryShardInfoRawFn(ctx, sid, address, shardID)
+	si, ok, err := queryShardInfoRawFn(ctx, sid, address, shardID, true, false)
 	if err != nil || !ok {
 		return nil, false, err
 	}
@@ -107,6 +144,8 @@ func queryShardInfoRaw(
 	sid string,
 	address string,
 	shardID uint64,
+	includeExpiredReplicaAddresses bool,
+	excludeHardDownReplicaAddresses bool,
 ) (pb.ShardInfoQueryResult, bool, error) {
 	respPool := &sync.Pool{}
 	respPool.New = func() interface{} {
@@ -137,7 +176,9 @@ func queryShardInfoRaw(
 	req := pb.Request{
 		Method: pb.GET_SHARD_INFO,
 		LogRequest: pb.LogRequest{
-			ShardID: shardID,
+			ShardID:                         shardID,
+			IncludeExpiredReplicaAddresses:  includeExpiredReplicaAddresses,
+			ExcludeHardDownReplicaAddresses: excludeHardDownReplicaAddresses,
 		},
 	}
 	rpcReq := &RPCRequest{
@@ -169,7 +210,12 @@ func queryShardInfoRaw(
 	return si, true, nil
 }
 
-func (s *Service) getShardInfo(shardID uint64) (pb.ShardInfoQueryResult, bool) {
+func (s *Service) getShardInfo(
+	ctx context.Context,
+	shardID uint64,
+	includeExpiredReplicaAddresses bool,
+	excludeHardDownReplicaAddresses bool,
+) (pb.ShardInfoQueryResult, bool) {
 	r, ok := s.store.nh.GetNodeHostRegistry()
 	if !ok {
 		panic(moerr.NewInvalidStateNoCtx("gossip registry not enabled"))
@@ -185,7 +231,15 @@ func (s *Service) getShardInfo(shardID uint64) (pb.ShardInfoQueryResult, bool) {
 		Term:     shard.Term,
 		Replicas: make(map[uint64]pb.ReplicaInfo),
 	}
+	expiredState := s.getExpiredLogStoreState(ctx, includeExpiredReplicaAddresses)
 	for nodeID, uuid := range shard.Nodes {
+		if excludeHardDownReplicaAddresses && isHardDownReplica(r, uuid) {
+			continue
+		}
+		if !includeExpiredReplicaAddresses &&
+			isExpiredLogStoreInState(s.cfg.GetHAKeeperConfig(), expiredState, uuid) {
+			continue
+		}
 		replica := pb.ReplicaInfo{UUID: uuid}
 		if data, ok := r.GetMeta(uuid); ok {
 			var md storeMeta
@@ -203,4 +257,44 @@ func (s *Service) getShardInfo(shardID uint64) (pb.ShardInfoQueryResult, bool) {
 		result.Replicas[nodeID] = replica
 	}
 	return result, true
+}
+
+func isHardDownReplica(r dragonboat.INodeHostRegistry, uuid string) bool {
+	state, _, ok := r.GetNodeHostState(uuid)
+	if !ok {
+		return false
+	}
+	return state == dragonboat.NodeHostStateDead ||
+		state == dragonboat.NodeHostStateLeft
+}
+
+func (s *Service) getExpiredLogStoreState(
+	ctx context.Context,
+	includeExpiredReplicaAddresses bool,
+) *pb.CheckerState {
+	if includeExpiredReplicaAddresses {
+		return nil
+	}
+	ctx, cancel := context.WithTimeoutCause(
+		ctx,
+		getShardInfoCheckerStateTimeout,
+		moerr.CauseGetCheckerState,
+	)
+	defer cancel()
+	state, err := getCheckerStateForShardInfo(ctx, s.store)
+	if err != nil {
+		return nil
+	}
+	return state
+}
+
+func isExpiredLogStoreInState(cfg hakeeper.Config, state *pb.CheckerState, uuid string) bool {
+	if state == nil || state.Tick == 0 {
+		return false
+	}
+	storeInfo, ok := state.LogState.Stores[uuid]
+	if !ok {
+		return false
+	}
+	return cfg.LogStoreExpired(storeInfo.Tick, state.Tick)
 }

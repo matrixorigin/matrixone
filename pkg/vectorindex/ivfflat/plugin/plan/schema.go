@@ -24,11 +24,58 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	ivfflatrt "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/runtime"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
 
 // ivfflatCatalogHooks is the shared (stateless) catalog-hooks instance used for
 // plugin-declared type validation (see pkg/indexplugin/catalog).
 var ivfflatCatalogHooks = ivfflatrt.CatalogHooks{}
+
+const maxIvfflatIncludeColumns = 10
+
+func ivfflatIncludeColumnNames(indexInfo *tree.Index) []string {
+	if indexInfo == nil || indexInfo.IndexOption == nil || len(indexInfo.IndexOption.IncludeColumns) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(indexInfo.IndexOption.IncludeColumns))
+	for _, col := range indexInfo.IndexOption.IncludeColumns {
+		names = append(names, col.ColName())
+	}
+	return names
+}
+
+func validateIvfflatIncludeColumns(ctx planplugin.CompilerContext, indexInfo *tree.Index, colMap map[string]*plan.ColDef, vecColName string, pkeyName string) error {
+	if indexInfo.IndexOption == nil || len(indexInfo.IndexOption.IncludeColumns) == 0 {
+		return nil
+	}
+	if len(indexInfo.IndexOption.IncludeColumns) > maxIvfflatIncludeColumns {
+		return moerr.NewInvalidInputf(ctx.GetContext(), "IVFFLAT INCLUDE supports at most %d columns", maxIvfflatIncludeColumns)
+	}
+
+	seen := make(map[string]struct{}, len(indexInfo.IndexOption.IncludeColumns))
+	for _, col := range indexInfo.IndexOption.IncludeColumns {
+		name := col.ColName()
+		origin := col.ColNameOrigin()
+		if _, ok := colMap[name]; !ok {
+			return moerr.NewInvalidInputf(ctx.GetContext(), "INCLUDE column '%s' is not exist", origin)
+		}
+		if name == vecColName {
+			return moerr.NewInvalidInputf(ctx.GetContext(), "INCLUDE column '%s' cannot be the indexed vector column", origin)
+		}
+		if pkeyName != "" && name == pkeyName {
+			return moerr.NewInvalidInputf(ctx.GetContext(), "primary key column '%s' cannot be in IVFFLAT INCLUDE", origin)
+		}
+		if _, ok := seen[name]; ok {
+			return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate INCLUDE column '%s'", origin)
+		}
+		seen[name] = struct{}{}
+
+		if !catalogplugin.SupportsIncludeColumnType(ivfflatCatalogHooks, types.T(colMap[name].Typ.Id)) {
+			return moerr.NewNotSupportedf(ctx.GetContext(), "INCLUDE column '%s' has unsupported type %s", origin, types.T(colMap[name].Typ.Id).String())
+		}
+	}
+	return nil
+}
 
 // BuildSecondaryIndexDefs builds the three hidden tables IVF-FLAT needs:
 // metadata (key/val for version + clustering timestamps), centroids
@@ -63,6 +110,9 @@ func (Hooks) BuildSecondaryIndexDefs(
 		if existedIndex.IndexAlgo == catalog.MoIndexIvfFlatAlgo.ToString() && existedIndex.Parts[0] == name {
 			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "Multiple IVFFLAT indexes are not allowed to use the same column")
 		}
+	}
+	if err := validateIvfflatIncludeColumns(ctx, indexInfo, colMap, name, pkeyName); err != nil {
+		return nil, nil, err
 	}
 
 	indexDefs := make([]*plan.IndexDef, 3)
@@ -146,14 +196,31 @@ func (Hooks) BuildSecondaryIndexDefs(
 			Typ:     plan.Type{Id: int32(types.T_int64)},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}
+		// Centroid type is decoupled from the entry type. Centroids are f32 whenever
+		// the entries are NOT a plain f32/f64 column: i.e. for a narrow base
+		// (bf16/f16/int8) or for ANY base under QUANTIZATION (incl. f64). f32 gives
+		// accurate assignment, fast f32 search, and tiny RAM for the few centroids;
+		// the entries carry the memory win. A plain f32/f64 column keeps its type.
+		centroidTyp := plan.Type{
+			Id:    colMap[colName].Typ.Id,
+			Width: colMap[colName].Typ.Width,
+			Scale: colMap[colName].Typ.Scale,
+		}
+		quantized := indexInfo.IndexOption != nil && indexInfo.IndexOption.Quantization != ""
+		switch types.T(centroidTyp.Id) {
+		case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+			centroidTyp.Id = int32(types.T_array_float32)
+			centroidTyp.Scale = 0
+		default:
+			if quantized {
+				centroidTyp.Id = int32(types.T_array_float32)
+				centroidTyp.Scale = 0
+			}
+		}
 		tableDefs[1].Cols[2] = &plan.ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				Id:    colMap[colName].Typ.Id,
-				Width: colMap[colName].Typ.Width,
-				Scale: colMap[colName].Typ.Scale,
-			},
+			Name:    catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+			Alg:     plan.CompressType_Lz4,
+			Typ:     centroidTyp,
 			Default: &plan.Default{NullAbility: true, Expr: nil, OriginString: ""},
 		}
 		tableDefs[1].Cols[3] = planplugin.MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
@@ -181,6 +248,10 @@ func (Hooks) BuildSecondaryIndexDefs(
 	// 3. entries table: ( version INT64, id INT64, origin_pk <pkType>,
 	//    entry VECFXX, PRIMARY KEY (version,id,origin_pk) )
 	{
+		includeColNames := ivfflatIncludeColumnNames(indexInfo)
+		nIncludeCols := len(includeColNames)
+		cpkeyPos := 4 + nIncludeCols
+
 		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
 		if err != nil {
 			return nil, nil, err
@@ -188,7 +259,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 		tableDefs[2] = &plan.TableDef{
 			Name:      indexTableName,
 			TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-			Cols:      make([]*plan.ColDef, 5),
+			Cols:      make([]*plan.ColDef, 5+nIncludeCols),
 		}
 		indexDefs[2], err = planplugin.CreateIndexDef(ctx, indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Entries, indexParts, false)
 		if err != nil {
@@ -218,19 +289,64 @@ func (Hooks) BuildSecondaryIndexDefs(
 			},
 			Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
 		}
+		// Entry type follows the QUANTIZATION option: CREATE INDEX ... USING
+		// ivfflat ... QUANTIZATION='int8' stores entries as vecint8 (quantized from
+		// the base vectors), while the base column and the f32 centroids are
+		// unchanged. Without QUANTIZATION the entries keep the base column type.
+		entryTyp := plan.Type{
+			Id:    colMap[colName].Typ.Id,
+			Width: colMap[colName].Typ.Width,
+			Scale: colMap[colName].Typ.Scale,
+		}
+		if indexInfo.IndexOption != nil && indexInfo.IndexOption.Quantization != "" {
+			// int8/uint8 quantization is L2-only (the affine quantizer breaks
+			// inner-product / cosine geometry). Gated by the per-algo catalog hook —
+			// the single home shared with REINDEX (compile/ValidateReindexParams) —
+			// so CREATE and REINDEX cannot drift.
+			if err := (ivfflatrt.CatalogHooks{}).ValidQuantization(
+				indexInfo.IndexOption.Quantization, indexInfo.IndexOption.AlgoParamVectorOpType); err != nil {
+				return nil, nil, err
+			}
+			if qt, ok := quantizer.ToVectorType(indexInfo.IndexOption.Quantization); ok {
+				// QUANTIZATION is downcast-only: the quantized entry element must be the
+				// same width or narrower than the base column. Upcasting (e.g. a bf16 or
+				// int8 base with QUANTIZATION='float32') is unsupported — it costs 2-4x the
+				// entry storage for no precision gain and forces the f32 distance kernel
+				// over narrow entries. Omit QUANTIZATION to keep the base-width entries.
+				baseSize := types.Type{Oid: types.T(colMap[colName].Typ.Id)}.GetArrayElementSize()
+				quantSize := types.Type{Oid: qt}.GetArrayElementSize()
+				if quantSize > baseSize {
+					return nil, nil, moerr.NewNotSupportedf(ctx.GetContext(),
+						"ivfflat QUANTIZATION '%s' (%d bytes/element) cannot upcast base column %s (%d bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type",
+						indexInfo.IndexOption.Quantization, quantSize,
+						types.T(colMap[colName].Typ.Id).String(), baseSize)
+				}
+				entryTyp.Id = int32(qt)
+				entryTyp.Scale = 0
+			}
+		}
 		tableDefs[2].Cols[3] = &plan.ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
-			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				Id:    colMap[colName].Typ.Id,
-				Width: colMap[colName].Typ.Width,
-				Scale: colMap[colName].Typ.Scale,
-			},
+			Name:    catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+			Alg:     plan.CompressType_Lz4,
+			Typ:     entryTyp,
 			Default: &plan.Default{NullAbility: true, Expr: nil, OriginString: ""},
 		}
-		tableDefs[2].Cols[4] = planplugin.MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
-		tableDefs[2].Cols[4].Alg = plan.CompressType_Lz4
-		tableDefs[2].Cols[4].Primary = true
+		for i, includeColName := range includeColNames {
+			srcCol := colMap[includeColName]
+			tableDefs[2].Cols[4+i] = &plan.ColDef{
+				Name: catalog.SystemSI_IVFFLAT_IncludeColPrefix + includeColName,
+				Alg:  plan.CompressType_Lz4,
+				Typ: plan.Type{
+					Id:    srcCol.Typ.Id,
+					Width: srcCol.Typ.Width,
+					Scale: srcCol.Typ.Scale,
+				},
+				Default: &plan.Default{NullAbility: true, Expr: nil, OriginString: ""},
+			}
+		}
+		tableDefs[2].Cols[cpkeyPos] = planplugin.MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+		tableDefs[2].Cols[cpkeyPos].Alg = plan.CompressType_Lz4
+		tableDefs[2].Cols[cpkeyPos].Primary = true
 
 		tableDefs[2].Pkey = &plan.PrimaryKeyDef{
 			Names: []string{
@@ -239,7 +355,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 				catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			},
 			PkeyColName: catalog.CPrimaryKeyColName,
-			CompPkeyCol: tableDefs[2].Cols[4],
+			CompPkeyCol: tableDefs[2].Cols[cpkeyPos],
 		}
 		properties := []*plan.Property{
 			{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemSI_IVFFLAT_TblType_Entries},

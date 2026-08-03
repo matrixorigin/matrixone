@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -265,6 +266,46 @@ func Test_exportDataToCSVFile(t *testing.T) {
 		convey.So(exportDataFromResultSetToCSVFile(ep), convey.ShouldBeNil)
 	})
 
+	// Guards the narrow-vector export path: bf16/f16/int8 are emitted as their
+	// distinct slice types and vecuint8 as its display string (see
+	// extractRowFromVector). Before the fix the VARCHAR branch only special-cased
+	// []float32/[]float64 and then did value.([]byte) — a panic for []types.BF16 /
+	// []types.Float16 / []int8 and raw-byte corruption for []uint8.
+	convey.Convey("exportDataFromResultSetToCSVFile narrow vectors", t, func() {
+		ep := &ExportConfig{
+			userConfig: &tree.ExportParam{
+				Lines:    &tree.Lines{TerminatedBy: &tree.Terminated{}},
+				Fields:   &tree.Fields{Terminated: &tree.Terminated{}, EnclosedBy: &tree.EnclosedBy{}, EscapedBy: &tree.EscapedBy{}},
+				Header:   true,
+				FilePath: "test/export_narrow.csv",
+			},
+			mrs: &MysqlResultSet{},
+		}
+		col := make([]MysqlColumn, 4)
+		for i := range col {
+			col[i].SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+			ep.mrs.AddColumn(&col[i])
+		}
+		f32 := []float32{1, 2, 3}
+		data := make([]interface{}, len(col))
+		data[0] = types.Float32ToBF16Slice(f32)                // bf16 slice
+		data[1] = types.Float32ToFloat16Slice(f32)             // f16 slice
+		data[2] = []int8{1, 2, 3}                              // int8 slice
+		data[3] = types.ArrayToString[uint8]([]uint8{1, 2, 3}) // uint8 display string
+		ep.mrs.AddRow(data)
+		ep.Symbol = make([][]byte, len(col))
+		ep.ColumnFlag = make([]bool, len(col))
+
+		stubs := gostub.StubFunc(&Close, nil)
+		defer stubs.Reset()
+		stubs = gostub.StubFunc(&openNewFile, nil)
+		defer stubs.Reset()
+		stubs = gostub.StubFunc(&writeDataToCSVFile, nil)
+		defer stubs.Reset()
+
+		convey.So(exportDataFromResultSetToCSVFile(ep), convey.ShouldBeNil)
+	})
+
 	convey.Convey("exportDataToCSVFile fail", t, func() {
 		ep := &ExportConfig{
 			userConfig: &tree.ExportParam{
@@ -302,6 +343,30 @@ func Test_exportDataToCSVFile(t *testing.T) {
 		stubs = gostub.StubFunc(&writeDataToCSVFile, nil)
 		defer stubs.Reset()
 		convey.So(exportDataFromResultSetToCSVFile(ep), convey.ShouldBeNil)
+	})
+}
+
+func TestConstructByteFormatsUnscaledFloat64WithFullPrecision(t *testing.T) {
+	convey.Convey("constructByte formats unscaled float64 with full precision", t, func() {
+		mp := mpool.MustNewZero()
+		vec := testutil.NewVector(1, types.T_float64.ToType(), mp, false, []float64{3.14159265358979})
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vec
+		bat.SetRowCount(1)
+
+		ep := &ExportConfig{
+			userConfig: &tree.ExportParam{
+				Fields: &tree.Fields{EnclosedBy: &tree.EnclosedBy{}},
+			},
+			Symbol:     [][]byte{{'\n'}},
+			ColumnFlag: []bool{false},
+		}
+		bytesChan := make(chan *BatchByte, 1)
+		constructByte(context.Background(), &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, bytesChan, ep)
+
+		result := <-bytesChan
+		convey.So(result.err, convey.ShouldBeNil)
+		convey.So(string(result.writeByte), convey.ShouldEqual, "3.14159265358979\n")
 	})
 }
 

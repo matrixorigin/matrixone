@@ -1,0 +1,38 @@
+drop database if exists br_output_geometry;
+create database br_output_geometry;
+use br_output_geometry;
+create table base(
+a int primary key,
+g point srid 4326,
+g32 point32 srid 4326
+);
+insert into base values (
+1,
+st_geomfromtext('POINT(1 1)', 4326),
+st_geomfromtext('POINT(1 1)', 4326)
+);
+data branch create table geometry_left from base;
+data branch create table geometry_right from base;
+update geometry_left set
+g = st_geomfromtext('POINT(2 2)', 4326),
+g32 = st_geomfromtext('POINT(3 3)', 4326)
+where a = 1;
+data branch diff geometry_left against geometry_right output as geometry_diff_output;
+➤ TABLE CREATED[12,0,0]  𝄀
+`br_output_geometry`.`geometry_diff_output`
+show create table geometry_diff_output;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+geometry_diff_output  ¦  CREATE TABLE `geometry_diff_output` (
+  `__mo_diff_source` varchar(255) DEFAULT NULL,
+  `__mo_diff_flag` varchar(16) DEFAULT NULL,
+  `a` int NOT NULL,
+  `g` point srid 4326 DEFAULT NULL,
+  `g32` point32 srid 4326 DEFAULT NULL
+)
+select __mo_diff_source, __mo_diff_flag,
+st_astext(g) as g_wkt, st_srid(g) as g_srid,
+st_astext(g32) as g32_wkt, st_srid(g32) as g32_srid
+from geometry_diff_output;
+➤ __mo_diff_source[12,-1,0]  ¦  __mo_diff_flag[12,-1,0]  ¦  g_wkt[12,-1,0]  ¦  g_srid[4,32,0]  ¦  g32_wkt[12,-1,0]  ¦  g32_srid[4,32,0]  𝄀
+geometry_left  ¦  UPDATE  ¦  POINT(2 2)  ¦  4326  ¦  POINT(3 3)  ¦  4326
+drop database br_output_geometry;

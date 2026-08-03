@@ -90,7 +90,7 @@ where table_id = (select rel_id from mo_catalog.mo_tables
 where relname='t' and reldatabase='ivfpq_sharded')
 and name='ix' and algo_table_type='ivfpq_index';
 ➤ algo[12,-1,0]  ¦  algo_table_type[12,-1,0]  ¦  algo_params[12,-1,0]  𝄀
-ivfpq  ¦  ivfpq_index  ¦  {"bits_per_code":"8","distribution_mode":"sharded","lists":"10","m":"8","op_type":"vector_l2_ops","quantization":"float32"}
+ivfpq  ¦  ivfpq_index  ¦  {"bits_per_code":"8","distribution_mode":"sharded","lists":"10","m":"8","op_type":"vector_l2_ops","quantization":"float32","session_vars":{"cfg":{"ivfpq_threads_build":{"t":"I","v":6},"lower_case_table_names":{"t":"I","v":1}}}}
 select id from t order by l2_distance(v, '[1,1,1,1,1,1,1,1]') limit 1;
 ➤ id[-5,64,0]  𝄀
 1

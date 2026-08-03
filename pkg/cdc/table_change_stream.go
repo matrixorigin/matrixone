@@ -587,6 +587,10 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 	)
 	defer s.wg.Done()
 	defer func() {
+		// Keep ownership until cleanup finishes so a replacement reader cannot
+		// start while this stream is still closing its sinker/watermark state.
+		s.runningReaders.CompareAndDelete(s.runningReaderKey, s)
+
 		// Decrement table stream state gauge on cleanup
 		if s.progressTracker != nil {
 			state, _ := s.progressTracker.GetState()
@@ -602,9 +606,6 @@ func (s *TableChangeStream) cleanup(ctx context.Context) {
 			zap.Duration("cost", time.Since(startTime)),
 		)
 	}()
-
-	// Remove from running readers
-	s.runningReaders.Delete(s.runningReaderKey)
 
 	// Remove watermark cache
 	removeStart := time.Now()
@@ -742,9 +743,14 @@ func (s *TableChangeStream) processOneRound(ctx context.Context, ar *ActiveRouti
 	if err != nil {
 		return err
 	}
-	defer FinishTxnOp(ctx, err, txnOp, s.cnEngine)
+	defer func() {
+		FinishTxnOp(ctx, err, txnOp, s.cnEngine)
+	}()
 
-	finishRunSQL := EnterRunSql(ctx, txnOp, "<cdc.table_change_stream>")
+	finishRunSQL, err := TryEnterRunSql(ctx, txnOp, "<cdc.table_change_stream>")
+	if err != nil {
+		return err
+	}
 	defer finishRunSQL()
 
 	if err = GetTxn(ctx, s.cnEngine, txnOp); err != nil {

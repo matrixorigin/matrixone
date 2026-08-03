@@ -57,6 +57,21 @@ func newObjectStorageMetrics(
 
 var _ ObjectStorage = new(objectStorageMetrics)
 var _ ParallelMultipartWriter = new(objectStorageMetrics)
+var _ objectStorageCopier = new(objectStorageMetrics)
+
+func (o *objectStorageMetrics) CopyObject(
+	ctx context.Context,
+	src ObjectStorage,
+	srcKey string,
+	dstKey string,
+) (bool, error) {
+	copier, ok := o.upstream.(objectStorageCopier)
+	if !ok {
+		return false, nil
+	}
+	o.numWrite.Inc()
+	return copier.CopyObject(ctx, src, srcKey, dstKey)
+}
 
 func (o *objectStorageMetrics) Delete(ctx context.Context, keys ...string) (err error) {
 	o.numDelete.Inc()

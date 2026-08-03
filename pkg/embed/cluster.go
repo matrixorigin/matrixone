@@ -15,7 +15,9 @@
 package embed
 
 import (
+	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -41,11 +43,27 @@ var (
 	minPort = uint64(10000)
 	maxPort = uint64(60000)
 
-	basePort     = getInitValue("mo-test.port")
-	basePortStep = uint64(20)
+	basePortStep  = uint64(20)
+	portLeaseSpan = uint64(1000)
 
 	clusterID = getInitValue("mo-test.cluster")
 )
+
+const (
+	clusterStartupLeaseFilename = "mo-test-cluster-start.lock"
+	clusterStartupLeaseTimeout  = 5 * time.Minute
+	clusterStartupLeaseRetry    = 50 * time.Millisecond
+
+	clusterInfrastructurePortBaseCount = uint64(3)
+	tnPortBaseCount                    = uint64(1)
+	cnPortBaseCount                    = uint64(2)
+)
+
+type clusterPortLease struct {
+	base uint64
+	next atomic.Uint64
+	lock *flock.Flock
+}
 
 type cluster struct {
 	sync.RWMutex
@@ -54,13 +72,22 @@ type cluster struct {
 	state    state
 	files    []string
 	services []*operator
+	startFn  func(*operator) error
+
+	pendingCleanup []*operator
+	portLease      *clusterPortLease
+	portLeaseBase  uint64
+	portLeaseNext  uint64
+	startupLease   *flock.Flock
 
 	options struct {
-		dataPath  string
-		cn        int
-		withProxy bool
-		preStart  func(ServiceOperator)
-		testing   bool
+		dataPath         string
+		cn               int
+		withProxy        bool
+		preStart         func(ServiceOperator)
+		testing          bool
+		heartbeatTimeout time.Duration
+		storeTimeout     time.Duration
 	}
 
 	ports struct {
@@ -74,38 +101,83 @@ func NewCluster(
 	opts ...Option,
 ) (Cluster, error) {
 	c := &cluster{
-		id:    atomic.AddUint64(&clusterID, 1),
-		state: stopped,
+		id:      atomic.AddUint64(&clusterID, 1),
+		state:   stopped,
+		startFn: func(op *operator) error { return op.Start() },
 	}
 	for _, opt := range opts {
 		opt(c)
 	}
-	c.adjust()
+	if err := c.adjust(); err != nil {
+		return nil, err
+	}
 
 	if err := c.initConfigs(); err != nil {
-		return nil, err
+		return cleanupClusterOnError(c, err)
 	}
 
 	if err := c.createServiceOperators(0); err != nil {
-		return nil, err
+		return cleanupClusterOnError(c, err)
 	}
 	return c, nil
+}
+
+// cleanupClusterOnError preserves the cleanup owner when rollback is not yet
+// complete. A non-nil cluster returned with an error is not usable, but its
+// caller must retain it and retry Close. Returning nil is safe only after Close
+// has proved that every service and both cluster leases were released.
+func cleanupClusterOnError(c Cluster, cause error) (Cluster, error) {
+	if c == nil {
+		return nil, cause
+	}
+	cleanupErr := c.Close()
+	if cleanupErr != nil {
+		return c, errors.Join(cause, cleanupErr)
+	}
+	return nil, cause
 }
 
 func (c *cluster) ID() uint64 {
 	return c.id
 }
 
-func (c *cluster) Start() error {
+func (c *cluster) Start() (err error) {
 	c.Lock()
 	defer c.Unlock()
 
 	if c.state == started {
 		return moerr.NewInvalidStateNoCtx("embed mo cluster already started")
 	}
-
-	if err := c.doStartLocked(0); err != nil {
+	if err = c.releaseStartupLeaseLocked(); err != nil {
 		return err
+	}
+	if err = c.ensurePortLeaseLocked(); err != nil {
+		return err
+	}
+
+	if c.options.testing {
+		// Starting several complete in-process Raft/HAKeeper control planes at
+		// the same time can starve leader election and heartbeat proposals on
+		// shared UT runners. Serialize only test bootstrap across processes;
+		// clusters run concurrently as soon as their services are ready.
+		leaseCtx, cancelLease := context.WithTimeoutCause(
+			context.Background(),
+			clusterStartupLeaseTimeout,
+			moerr.NewInternalErrorNoCtx("embedded-test startup lease timed out"),
+		)
+		startupLease, acquireErr := acquireClusterStartupLease(leaseCtx)
+		cancelLease()
+		if acquireErr != nil {
+			return acquireErr
+		}
+		c.startupLease = startupLease
+		defer func() {
+			err = errors.Join(err, c.releaseStartupLeaseLocked())
+		}()
+	}
+
+	if err = c.doStartLocked(0); err != nil {
+		return errors.Join(err, c.closeServicesFromLocked(0))
 	}
 	c.state = started
 	return nil
@@ -116,7 +188,7 @@ func (c *cluster) doStartLocked(from int) error {
 	var startErr atomic.Value
 	for _, s := range c.services[from:] {
 		if s.serviceType != metadata.ServiceType_CN {
-			if err := s.Start(); err != nil {
+			if err := c.startServiceLocked(s); err != nil {
 				return err
 			}
 			continue
@@ -125,7 +197,7 @@ func (c *cluster) doStartLocked(from int) error {
 		wg.Add(1)
 		go func(s *operator) {
 			defer wg.Done()
-			if err := s.Start(); err != nil {
+			if err := c.startServiceLocked(s); err != nil {
 				// Only the first error is captured; concurrent failures
 				// from other services are discarded since knowing that
 				// any service failed is sufficient to abort startup.
@@ -141,19 +213,42 @@ func (c *cluster) doStartLocked(from int) error {
 	return nil
 }
 
+func (c *cluster) startServiceLocked(op *operator) error {
+	if c.startFn != nil {
+		return c.startFn(op)
+	}
+	return op.Start()
+}
+
 func (c *cluster) Close() error {
 	c.Lock()
 	defer c.Unlock()
 
-	for i := len(c.services) - 1; i >= 0; i-- {
-		s := c.services[i]
-		if err := s.Close(); err != nil {
-			return err
-		}
+	err := errors.Join(
+		c.closeServicesLocked(),
+		c.releaseStartupLeaseLocked(),
+	)
+	if err == nil {
+		err = c.releasePortLeaseLocked()
 	}
+	return err
+}
 
+func (c *cluster) closeServicesLocked() error {
+	err := errors.Join(
+		c.closeServicesFromLocked(0),
+		c.retryPendingCleanupLocked(),
+	)
 	c.state = stopped
-	return nil
+	return err
+}
+
+func (c *cluster) closeServicesFromLocked(from int) error {
+	var err error
+	for i := len(c.services) - 1; i >= from; i-- {
+		err = errors.Join(err, c.services[i].Close())
+	}
+	return err
 }
 
 func (c *cluster) GetService(
@@ -223,37 +318,108 @@ func (c *cluster) StartNewCNService(n int) error {
 	if c.state != started {
 		panic("cannot start cn services in stopped cluster")
 	}
+	if err := c.retryPendingCleanupLocked(); err != nil {
+		return err
+	}
+	if err := c.validateAdditionalCNPortCapacityLocked(n); err != nil {
+		return err
+	}
 
 	serviceFrom := len(c.services)
 	cnFrom := c.options.cn
 	c.options.cn += n
 
 	if err := c.initCNConfigs(cnFrom); err != nil {
-		return err
+		return errors.Join(err, c.rollbackNewServicesLocked(serviceFrom, cnFrom))
 	}
 	if err := c.createServiceOperators(serviceFrom); err != nil {
-		return err
+		return errors.Join(err, c.rollbackNewServicesLocked(serviceFrom, cnFrom))
 	}
 
-	return c.doStartLocked(serviceFrom)
+	if err := c.doStartLocked(serviceFrom); err != nil {
+		return errors.Join(err, c.rollbackNewServicesLocked(serviceFrom, cnFrom))
+	}
+	return nil
 }
 
-func (c *cluster) adjust() {
+func (c *cluster) rollbackNewServicesLocked(serviceFrom, cnFrom int) error {
+	newServices := append([]*operator(nil), c.services[serviceFrom:]...)
+	err := c.closeServicesFromLocked(serviceFrom)
+	c.services = c.services[:serviceFrom]
+	c.files = c.files[:serviceFrom]
+	c.options.cn = cnFrom
+
+	if err != nil {
+		for _, op := range newServices {
+			if op.needsCleanup() {
+				c.pendingCleanup = append(c.pendingCleanup, op)
+			}
+		}
+	}
+	return err
+}
+
+func (c *cluster) retryPendingCleanupLocked() error {
+	pending := c.pendingCleanup
+	c.pendingCleanup = nil
+
+	var err error
+	for _, op := range pending {
+		closeErr := op.Close()
+		err = errors.Join(err, closeErr)
+		if closeErr != nil && op.needsCleanup() {
+			c.pendingCleanup = append(c.pendingCleanup, op)
+		}
+	}
+	return err
+}
+
+func (c *cluster) adjust() error {
 	if c.options.cn == 0 {
 		c.options.cn = 1
 	}
-	if c.options.dataPath == "" {
-		c.options.dataPath = filepath.Join(
-			os.TempDir(),
-			fmt.Sprintf("mo-cluster-test-%d", time.Now().Nanosecond()),
-		)
-		if err := os.MkdirAll(c.options.dataPath, 0755); err != nil {
-			panic(err)
-		}
+	if err := validateInitialCNPortCapacity(c.options.cn); err != nil {
+		return err
 	}
-	c.ports.servicePort = getNextBasePort()
-	c.ports.raftPort = getNextBasePort()
-	c.ports.gossipPort = getNextBasePort()
+
+	createdDataPath := false
+	if c.options.dataPath == "" {
+		dataPath, err := os.MkdirTemp(os.TempDir(), "mo-cluster-test-")
+		if err != nil {
+			return err
+		}
+		c.options.dataPath = dataPath
+		createdDataPath = true
+	}
+	lease, err := acquireClusterPortLease()
+	if err != nil {
+		if createdDataPath {
+			err = errors.Join(err, os.RemoveAll(c.options.dataPath))
+			c.options.dataPath = ""
+		}
+		return err
+	}
+	c.portLease = lease
+	c.portLeaseBase = lease.base
+	c.portLeaseNext = lease.base
+	cleanup := func(cause error) error {
+		cause = errors.Join(cause, c.releasePortLeaseLocked())
+		if createdDataPath {
+			cause = errors.Join(cause, os.RemoveAll(c.options.dataPath))
+			c.options.dataPath = ""
+		}
+		return cause
+	}
+	if c.ports.servicePort, err = c.nextBasePort(); err != nil {
+		return cleanup(err)
+	}
+	if c.ports.raftPort, err = c.nextBasePort(); err != nil {
+		return cleanup(err)
+	}
+	if c.ports.gossipPort, err = c.nextBasePort(); err != nil {
+		return cleanup(err)
+	}
+	return nil
 }
 
 func (c *cluster) createServiceOperators(from int) error {
@@ -278,6 +444,17 @@ func (c *cluster) createServiceOperators(from int) error {
 		if err != nil {
 			return err
 		}
+		if c.options.heartbeatTimeout > 0 {
+			s.Adjust(func(cfg *ServiceConfig) {
+				applyHAKeeperHeartbeatTimeout(cfg, s.serviceType, c.options.heartbeatTimeout)
+			})
+		}
+		if c.options.storeTimeout > 0 && s.serviceType == metadata.ServiceType_LOG {
+			s.Adjust(func(cfg *ServiceConfig) {
+				cfg.LogService.HAKeeperConfig.TNStoreTimeout.Duration = c.options.storeTimeout
+				cfg.LogService.HAKeeperConfig.CNStoreTimeout.Duration = c.options.storeTimeout
+			})
+		}
 
 		if c.options.preStart != nil {
 			c.options.preStart(s)
@@ -285,6 +462,28 @@ func (c *cluster) createServiceOperators(from int) error {
 		c.services = append(c.services, s)
 	}
 	return nil
+}
+
+func applyHAKeeperHeartbeatTimeout(
+	cfg *ServiceConfig,
+	serviceType metadata.ServiceType,
+	timeout time.Duration,
+) {
+	switch serviceType {
+	case metadata.ServiceType_CN:
+		cfg.CN.HAKeeper.HeatbeatTimeout.Duration = timeout
+	case metadata.ServiceType_TN:
+		// Keep the legacy [dn] alias effective for callers that still use it.
+		if cfg.TN_please_use_getTNServiceConfig == nil {
+			cfg.TN_please_use_getTNServiceConfig = cfg.TNCompatible
+		}
+		if cfg.TN_please_use_getTNServiceConfig != nil {
+			cfg.TN_please_use_getTNServiceConfig.HAKeeper.HeatbeatTimeout.Duration = timeout
+		}
+		if cfg.TNCompatible != nil && cfg.TNCompatible != cfg.TN_please_use_getTNServiceConfig {
+			cfg.TNCompatible.HAKeeper.HeatbeatTimeout.Duration = timeout
+		}
+	}
 }
 
 func (c *cluster) initConfigs() error {
@@ -303,18 +502,20 @@ func (c *cluster) initCNConfigs(from int) error {
 	for i := from; i < c.options.cn; i++ {
 		file := filepath.Join(c.options.dataPath, fmt.Sprintf("cn-%d.toml", i))
 		c.files = append(c.files, file)
-		err := genConfig(
-			file,
-			genConfigText(
-				cnConfig,
-				templateArgs{
-					I:           i,
-					ID:          c.id,
-					DataDir:     c.options.dataPath,
-					ServicePort: c.ports.servicePort,
-				},
-			),
+		text, err := genConfigText(
+			cnConfig,
+			templateArgs{
+				I:            i,
+				ID:           c.id,
+				DataDir:      c.options.dataPath,
+				ServicePort:  c.ports.servicePort,
+				NextBasePort: c.nextBasePort,
+			},
 		)
+		if err != nil {
+			return err
+		}
+		err = genConfig(file, text)
 		if err != nil {
 			return err
 		}
@@ -325,37 +526,231 @@ func (c *cluster) initCNConfigs(from int) error {
 func (c *cluster) initLogServiceConfig() error {
 	file := filepath.Join(c.options.dataPath, "log.toml")
 	c.files = append(c.files, file)
-	return genConfig(
-		file,
-		genConfigText(
-			logConfig,
-			templateArgs{
-				ID:          c.id,
-				DataDir:     c.options.dataPath,
-				ServicePort: c.ports.servicePort,
-			},
-		),
+	text, err := genConfigText(
+		logConfig,
+		templateArgs{
+			ID:           c.id,
+			DataDir:      c.options.dataPath,
+			ServicePort:  c.ports.servicePort,
+			NextBasePort: c.nextBasePort,
+		},
 	)
+	if err != nil {
+		return err
+	}
+	return genConfig(file, text)
 }
 
 func (c *cluster) initTNServiceConfig() error {
 	file := filepath.Join(c.options.dataPath, "tn.toml")
 	c.files = append(c.files, file)
-	return genConfig(
-		file,
-		genConfigText(
-			tnConfig,
-			templateArgs{
-				ID:          c.id,
-				DataDir:     c.options.dataPath,
-				ServicePort: c.ports.servicePort,
-			},
-		),
+	text, err := genConfigText(
+		tnConfig,
+		templateArgs{
+			ID:           c.id,
+			DataDir:      c.options.dataPath,
+			ServicePort:  c.ports.servicePort,
+			NextBasePort: c.nextBasePort,
+		},
 	)
+	if err != nil {
+		return err
+	}
+	return genConfig(file, text)
 }
 
-func getNextBasePort() int {
-	return int(atomic.AddUint64(&basePort, basePortStep))
+func acquireClusterPortLease() (*clusterPortLease, error) {
+	for base := minPort; base+portLeaseSpan <= maxPort; base += portLeaseSpan {
+		lease, locked, err := tryAcquireClusterPortLease(base)
+		if err != nil {
+			return nil, err
+		}
+		if locked {
+			return lease, nil
+		}
+	}
+	return nil, moerr.NewInternalErrorNoCtx("no embedded-test port range is available")
+}
+
+func tryAcquireClusterPortLease(base uint64) (*clusterPortLease, bool, error) {
+	dir := filepath.Join(os.TempDir(), "mo-test-port-leases")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, false, err
+	}
+	fl := flock.New(filepath.Join(dir, fmt.Sprintf("%d.lock", base)))
+	locked, err := fl.TryLock()
+	if err != nil {
+		return nil, false, err
+	}
+	if !locked {
+		return nil, false, fl.Close()
+	}
+	lease := &clusterPortLease{base: base, lock: fl}
+	lease.next.Store(base)
+	return lease, true, nil
+}
+
+func acquireClusterStartupLease(ctx context.Context) (*flock.Flock, error) {
+	fl := flock.New(filepath.Join(os.TempDir(), clusterStartupLeaseFilename))
+	locked, err := fl.TryLockContext(ctx, clusterStartupLeaseRetry)
+	if err != nil {
+		return nil, errors.Join(
+			moerr.NewInternalErrorNoCtxf(
+				"failed to acquire embedded-test startup lease %s",
+				fl.Path(),
+			),
+			err,
+			fl.Close(),
+		)
+	}
+	if !locked {
+		return nil, errors.Join(
+			moerr.NewInternalErrorNoCtx("embedded-test startup lease was not acquired"),
+			fl.Close(),
+		)
+	}
+	return fl, nil
+}
+
+func portBaseCapacity() (uint64, error) {
+	if basePortStep == 0 || portLeaseSpan == 0 {
+		return 0, moerr.NewInvalidStateNoCtxf(
+			"invalid embedded cluster port lease: step=%d span=%d",
+			basePortStep,
+			portLeaseSpan,
+		)
+	}
+	return (portLeaseSpan - 1) / basePortStep, nil
+}
+
+func validateInitialCNPortCapacity(cn int) error {
+	if cn < 0 {
+		return moerr.NewInvalidInputNoCtxf("CN count cannot be negative: %d", cn)
+	}
+	capacity, err := portBaseCapacity()
+	if err != nil {
+		return err
+	}
+	fixed := clusterInfrastructurePortBaseCount + tnPortBaseCount
+	if capacity < fixed {
+		return moerr.NewInvalidStateNoCtxf(
+			"embedded cluster port lease has %d slots, fewer than %d required infrastructure slots",
+			capacity,
+			fixed,
+		)
+	}
+	maxCN := (capacity - fixed) / cnPortBaseCount
+	if uint64(cn) > maxCN {
+		return moerr.NewInvalidInputNoCtxf(
+			"CN count %d exceeds embedded cluster port lease capacity %d",
+			cn,
+			maxCN,
+		)
+	}
+	return nil
+}
+
+func (c *cluster) validateAdditionalCNPortCapacityLocked(n int) error {
+	if n < 0 {
+		return moerr.NewInvalidInputNoCtxf("additional CN count cannot be negative: %d", n)
+	}
+	if c.portLease == nil {
+		return moerr.NewInvalidStateNoCtx("embedded cluster has no port lease")
+	}
+	if basePortStep == 0 || portLeaseSpan == 0 {
+		return moerr.NewInvalidStateNoCtxf(
+			"invalid embedded cluster port lease: step=%d span=%d",
+			basePortStep,
+			portLeaseSpan,
+		)
+	}
+	current := c.portLease.next.Load()
+	base := c.portLease.base
+	if current < base || current-base >= portLeaseSpan {
+		return moerr.NewInvalidStateNoCtxf(
+			"embedded cluster port allocator is outside its lease: base=%d current=%d span=%d",
+			base,
+			current,
+			portLeaseSpan,
+		)
+	}
+	remainingSlots := (portLeaseSpan - 1 - (current - base)) / basePortStep
+	maxAdditionalCN := remainingSlots / cnPortBaseCount
+	if uint64(n) > maxAdditionalCN {
+		return moerr.NewInvalidInputNoCtxf(
+			"cannot add %d CN services: embedded cluster port lease has capacity for %d",
+			n,
+			maxAdditionalCN,
+		)
+	}
+	return nil
+}
+
+func (c *cluster) nextBasePort() (int, error) {
+	if c.portLease == nil {
+		return 0, moerr.NewInvalidStateNoCtx("embedded cluster has no port lease")
+	}
+	base := c.portLease.base
+	for {
+		current := c.portLease.next.Load()
+		if current < base || basePortStep == 0 || portLeaseSpan == 0 ||
+			current-base >= portLeaseSpan ||
+			basePortStep >= portLeaseSpan-(current-base) {
+			return 0, moerr.NewInvalidStateNoCtxf(
+				"embedded cluster %d exhausted port range [%d, %d)",
+				c.id,
+				base,
+				base+portLeaseSpan,
+			)
+		}
+		next := current + basePortStep
+		if !c.portLease.next.CompareAndSwap(current, next) {
+			continue
+		}
+		c.portLeaseNext = next
+		return int(next), nil
+	}
+}
+
+func (c *cluster) ensurePortLeaseLocked() error {
+	if c.portLease != nil {
+		return nil
+	}
+	lease, locked, err := tryAcquireClusterPortLease(c.portLeaseBase)
+	if err != nil {
+		return err
+	}
+	if !locked {
+		return moerr.NewInvalidStateNoCtxf(
+			"embedded cluster port range [%d, %d) is in use",
+			c.portLeaseBase, c.portLeaseBase+portLeaseSpan)
+	}
+	lease.next.Store(c.portLeaseNext)
+	c.portLease = lease
+	return nil
+}
+
+func (c *cluster) releasePortLeaseLocked() error {
+	if c.portLease == nil {
+		return nil
+	}
+	c.portLeaseNext = c.portLease.next.Load()
+	err := c.portLease.lock.Close()
+	if err == nil {
+		c.portLease = nil
+	}
+	return err
+}
+
+func (c *cluster) releaseStartupLeaseLocked() error {
+	if c.startupLease == nil {
+		return nil
+	}
+	if err := c.startupLease.Close(); err != nil {
+		return err
+	}
+	c.startupLease = nil
+	return nil
 }
 
 func genConfig(

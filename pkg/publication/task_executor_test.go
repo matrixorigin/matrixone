@@ -17,6 +17,7 @@ package publication
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -75,6 +76,119 @@ func TestPublicationTaskExecutor_GetCandidateTasks_Mixed(t *testing.T) {
 	exec.setTask(TaskEntry{TaskID: "t4", SubscriptionState: SubscriptionStateRunning, State: IterationStateRunning})
 	candidates := exec.getCandidateTasks()
 	assert.Equal(t, 2, len(candidates))
+}
+
+func TestPublicationPublishRebuiltStateReplacesAbandonedGeneration(t *testing.T) {
+	exec := &PublicationTaskExecutor{tasks: newPublicationTaskTree()}
+	exec.setTask(TaskEntry{
+		TaskID:            "retained",
+		LSN:               6,
+		State:             IterationStatePending,
+		SubscriptionState: SubscriptionStateRunning,
+	})
+	exec.setTask(TaskEntry{TaskID: "stale-only"})
+
+	snapshot := &PublicationTaskExecutor{tasks: newPublicationTaskTree()}
+	snapshot.setTask(TaskEntry{
+		TaskID:            "retained",
+		LSN:               5,
+		State:             IterationStateCompleted,
+		SubscriptionState: SubscriptionStateRunning,
+	})
+	watermark := types.BuildTS(30, 0)
+	exec.publishRebuiltState(snapshot, watermark)
+
+	task, ok := exec.getTask("retained")
+	require.True(t, ok)
+	require.Equal(t, uint64(5), task.LSN)
+	require.Equal(t, IterationStateCompleted, task.State)
+	_, ok = exec.getTask("stale-only")
+	require.False(t, ok)
+	require.True(t, exec.ccprLogWm.EQ(&watermark))
+}
+
+func TestPublicationRecoveryNormalizesPreRepairSnapshot(t *testing.T) {
+	exec := &PublicationTaskExecutor{tasks: newPublicationTaskTree()}
+	require.NoError(t, exec.addOrUpdateRecoveredTask(
+		"running", 5, IterationStateRunning, SubscriptionStateRunning, nil,
+	))
+	require.NoError(t, exec.addOrUpdateRecoveredTask(
+		"error", 6, IterationStateError, SubscriptionStateError, nil,
+	))
+	require.NoError(t, exec.addOrUpdateRecoveredTask(
+		"canceled", 7, IterationStateCanceled, SubscriptionStateRunning, nil,
+	))
+	now := time.Now()
+	require.NoError(t, exec.addOrUpdateRecoveredTask(
+		"dropped", 8, IterationStateCanceled, SubscriptionStateDropped, &now,
+	))
+
+	running, _ := exec.getTask("running")
+	require.Equal(t, IterationStateCompleted, running.State)
+	errorTask, _ := exec.getTask("error")
+	require.Equal(t, IterationStateError, errorTask.State)
+	canceled, _ := exec.getTask("canceled")
+	require.Equal(t, IterationStateCompleted, canceled.State)
+	dropped, _ := exec.getTask("dropped")
+	require.Equal(t, IterationStateCanceled, dropped.State)
+}
+
+func TestPublicationLiveReplayPreservesAdmittedIteration(t *testing.T) {
+	exec := &PublicationTaskExecutor{tasks: newPublicationTaskTree()}
+	exec.setTask(TaskEntry{
+		TaskID:            "task",
+		LSN:               6,
+		State:             IterationStatePending,
+		SubscriptionState: SubscriptionStateRunning,
+	})
+
+	require.NoError(t, exec.mergeReplayedTask(
+		"task", 5, IterationStateCompleted, SubscriptionStateRunning, nil,
+	))
+	task, _ := exec.getTask("task")
+	require.Equal(t, uint64(6), task.LSN)
+	require.Equal(t, IterationStatePending, task.State)
+
+	require.NoError(t, exec.mergeReplayedTask(
+		"task", 6, IterationStateRunning, SubscriptionStateRunning, nil,
+	))
+	task, _ = exec.getTask("task")
+	require.Equal(t, uint64(6), task.LSN)
+	require.Equal(t, IterationStatePending, task.State)
+
+	require.NoError(t, exec.mergeReplayedTask(
+		"task", 7, IterationStateCompleted, SubscriptionStateRunning, nil,
+	))
+	task, _ = exec.getTask("task")
+	require.Equal(t, uint64(7), task.LSN)
+	require.Equal(t, IterationStateCompleted, task.State)
+}
+
+func TestPublicationLiveReplayAppliesEqualLSNTerminalState(t *testing.T) {
+	for _, localState := range []int8{IterationStatePending, IterationStateRunning} {
+		for _, durableState := range []int8{
+			IterationStateCompleted,
+			IterationStateError,
+			IterationStateCanceled,
+		} {
+			t.Run(fmt.Sprintf("local-%d/durable-%d", localState, durableState), func(t *testing.T) {
+				exec := &PublicationTaskExecutor{tasks: newPublicationTaskTree()}
+				exec.setTask(TaskEntry{
+					TaskID:            "task",
+					LSN:               6,
+					State:             localState,
+					SubscriptionState: SubscriptionStateRunning,
+				})
+
+				require.NoError(t, exec.mergeReplayedTask(
+					"task", 6, durableState, SubscriptionStateRunning, nil,
+				))
+				task, _ := exec.getTask("task")
+				require.Equal(t, uint64(6), task.LSN)
+				require.Equal(t, durableState, task.State)
+			})
+		}
+	}
 }
 
 // ==== iteration.go: IterationContext ====

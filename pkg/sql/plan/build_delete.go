@@ -35,6 +35,9 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 	if err != nil {
 		return nil, err
 	}
+	if err = validateDeleteTargetSubqueries(ctx, stmt, tblInfo.objRef, tblInfo.tableDefs); err != nil {
+		return nil, err
+	}
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 
 	queryBindCtx := NewBindContext(builder, nil)

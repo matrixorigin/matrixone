@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
 
@@ -110,4 +111,15 @@ func TestCbitmapNegativeInt32(t *testing.T) {
 	}
 	// TestVector (C decode) must agree with Test (Go decode) on the same data.
 	require.Equal(t, []uint8{1, 1, 1, 1}, f.TestVector(v, nil))
+}
+
+func TestCbitmapConstVector(t *testing.T) {
+	runConstVectorFilterTest(t, func(t *testing.T, v *vector.Vector) constProbeFilter {
+		data, ok, err := BuildCbitmapBytes(v)
+		require.NoError(t, err)
+		require.True(t, ok, "small ints should fit a dense cbitmap")
+		f, err := NewCbitmapFilter(data)
+		require.NoError(t, err)
+		return f
+	})
 }

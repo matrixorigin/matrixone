@@ -78,5 +78,18 @@ select count(*) from articles
 where match(title, body) against('machine learning')
   and category = 'tech';
 
+-- scenario 6: internal fulltext top-k must retain LIMIT+OFFSET candidates
+select count(*) from (
+    select id from articles
+    where match(title, body) against('machine learning')
+    limit 5 offset 3
+) as page;
+
+-- scenario 7: explicit ordering owns pagination; the relevance stream must not be truncated first
+select id from articles
+where match(title, body) against('machine learning')
+order by id
+limit 5 offset 3;
+
 set fulltext_bloom_filter_pushdown = 0;
 drop database ft_pushdown_test;

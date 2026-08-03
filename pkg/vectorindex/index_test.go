@@ -136,6 +136,42 @@ func TestSafeHeapAny(t *testing.T) {
 	}
 }
 
+// TestSafeHeapBounded covers #25637: many index shards each push up to `limit` candidates,
+// but the merge heap must retain only the global best `limit` (smallest distance) — not
+// shard_count * limit. Here 4 shards push 40 candidates concurrently into a heap bounded to
+// 10; it must keep exactly the 10 smallest distances (0..9).
+func TestSafeHeapBounded(t *testing.T) {
+	const limit = 10
+	h := NewSearchResultSafeHeap(limit)
+
+	var wg sync.WaitGroup
+	for j := 0; j < 4; j++ {
+		wg.Add(1)
+		go func(shard int) {
+			defer wg.Done()
+			for i := 0; i < 10; i++ {
+				d := float64(shard*10 + i) // distances 0..39 across the 4 shards
+				h.Push(&SearchResult{int64(shard*10 + i), d})
+			}
+		}(j)
+	}
+	wg.Wait()
+
+	// bounded: never retains more than `limit`, regardless of how many were pushed.
+	require.Equal(t, limit, h.Len())
+
+	// It is a max-heap, so Pop yields worst-first; draining must produce exactly the 10
+	// smallest distances 9,8,...,0. Getting these back proves the retained set is {0..9}.
+	got := make([]float64, 0, limit)
+	for h.Len() > 0 {
+		got = append(got, h.Pop().(*SearchResult).Distance)
+	}
+	require.Equal(t, limit, len(got))
+	for i, d := range got {
+		require.Equal(t, float64(limit-1-i), d, "retained set must be the %d smallest distances", limit)
+	}
+}
+
 func TestConcurrent(t *testing.T) {
 
 	// Create Index

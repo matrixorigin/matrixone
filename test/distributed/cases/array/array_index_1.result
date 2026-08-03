@@ -299,9 +299,11 @@ insert into tbl values(8, "[130,40,90]");
 create index idx16 using ivfflat on tbl(embedding) lists=2 op_type "vector_cosine_ops";
 update tbl set embedding="[1,2,3]" where id=8; -- update 8 to cluster 1 from cluster 2
 update tbl set id=9 where id=8; -- update 8 to 9
+unsupported DML: update primary key on a table with a synchronous full-text/vector index
 alter table tbl alter reindex idx16 ivfflat lists=2;
 update tbl set embedding="[1,2,3]" where id=7; -- update 7 to cluster 1 from cluster 2 for the latest versions
 update tbl set id=10 where id=7; -- update 7 to 10
+unsupported DML: update primary key on a table with a synchronous full-text/vector index
 drop table if exists tbl;
 create table tbl(id varchar(20), age varchar(20), embedding vecf32(3), primary key(id, age));
 insert into tbl values("1", "10", "[1,2,3]");
@@ -316,9 +318,11 @@ create index idx17 using ivfflat on tbl(embedding) lists=2 op_type "vector_cosin
 update tbl set embedding="[1,2,3]" where id="8";
 update tbl set embedding="[1,2,3]" where id="7" and age = "70";
 update tbl set id="70" where id="7";
+unsupported DML: update primary key on a table with a synchronous full-text/vector index
 alter table tbl alter reindex idx17 ivfflat lists=2;
 update tbl set embedding="[1,2,3]" where id="6";
 update tbl set id="60" where id="6";
+unsupported DML: update primary key on a table with a synchronous full-text/vector index
 drop table if exists tbl;
 create table tbl(id int, embedding vecf32(3));
 insert into tbl values(1, "[1,2,3]");

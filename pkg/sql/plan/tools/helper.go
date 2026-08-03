@@ -15,6 +15,8 @@
 package tools
 
 import (
+	"cmp"
+	"slices"
 	"sort"
 )
 
@@ -98,8 +100,8 @@ func VarRefsEqual(a, b []VarRef) bool {
 	if alen == 0 {
 		return true
 	}
-	sort.Slice(a, func(i, j int) bool { return a[i].Name < a[j].Name })
-	sort.Slice(b, func(i, j int) bool { return b[i].Name < b[j].Name })
+	slices.SortFunc(a, func(x, y VarRef) int { return cmp.Compare(x.Name, y.Name) })
+	slices.SortFunc(b, func(x, y VarRef) int { return cmp.Compare(x.Name, y.Name) })
 	for i := 0; i < alen; i++ {
 		if a[i].Name != b[i].Name {
 			return false

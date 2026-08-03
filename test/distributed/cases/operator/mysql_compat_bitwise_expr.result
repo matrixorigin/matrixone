@@ -1,0 +1,41 @@
+drop database if exists mysql_compat_bitwise_expr;
+create database mysql_compat_bitwise_expr;
+use mysql_compat_bitwise_expr;
+select null & 1 as null_bit_and,
+null | 1 as null_bit_or,
+null ^ 1 as null_bit_xor,
+null << 1 as null_left_shift,
+1 >> null as null_right_shift,
+~null as null_bit_not;
+null_bit_and    null_bit_or    null_bit_xor    null_left_shift    null_right_shift    null_bit_not
+null    null    null    null    null    null
+select '+7' & 3 as signed_str_and,
+'+7' | 8 as signed_str_or,
+'+7' ^ 3 as signed_str_xor,
+'+7' << 2 as signed_str_left_shift,
+'+7' >> 1 as signed_str_right_shift;
+signed_str_and    signed_str_or    signed_str_xor    signed_str_left_shift    signed_str_right_shift
+3    15    4    28    3
+drop table if exists t_bitwise_mixed;
+create table t_bitwise_mixed (
+id int primary key,
+s varchar(16),
+n int
+);
+insert into t_bitwise_mixed values
+(1, '7', 3),
+(2, '+7', 2),
+(3, null, 1);
+select id, s, n,
+s & n as s_bit_and_n,
+s | n as s_bit_or_n,
+s ^ n as s_bit_xor_n,
+s << n as s_left_shift_n,
+n >> s as n_right_shift_s
+from t_bitwise_mixed
+order by id;
+id    s    n    s_bit_and_n    s_bit_or_n    s_bit_xor_n    s_left_shift_n    n_right_shift_s
+1    7    3    3    7    4    56    0
+2    +7    2    2    7    5    28    0
+3    null    1    null    null    null    null    null
+drop database mysql_compat_bitwise_expr;

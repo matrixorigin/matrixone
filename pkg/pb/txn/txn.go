@@ -162,14 +162,6 @@ func (m TxnRequest) GetTargetTN() metadata.TNShard {
 		return m.Txn.TNShards[0]
 	case TxnMethod_Rollback:
 		return m.Txn.TNShards[0]
-	case TxnMethod_Prepare:
-		return m.PrepareRequest.TNShard
-	case TxnMethod_GetStatus:
-		return m.GetStatusRequest.TNShard
-	case TxnMethod_CommitTNShard:
-		return m.CommitTNShardRequest.TNShard
-	case TxnMethod_RollbackTNShard:
-		return m.RollbackTNShardRequest.TNShard
 	default:
 		panic(fmt.Sprintf("unknown txn request method: %v", m.Method))
 	}
@@ -183,14 +175,6 @@ func (m *TxnRequest) ResetTargetTN(shard metadata.TNShard) {
 		m.Txn.TNShards[0] = shard
 	case TxnMethod_Rollback:
 		m.Txn.TNShards[0] = shard
-	case TxnMethod_Prepare:
-		m.PrepareRequest.TNShard = shard
-	case TxnMethod_GetStatus:
-		m.GetStatusRequest.TNShard = shard
-	case TxnMethod_CommitTNShard:
-		m.CommitTNShardRequest.TNShard = shard
-	case TxnMethod_RollbackTNShard:
-		m.RollbackTNShardRequest.TNShard = shard
 	default:
 		panic(fmt.Sprintf("unknown txn request method: %v, shard: %v", m.Method, shard.String()))
 	}

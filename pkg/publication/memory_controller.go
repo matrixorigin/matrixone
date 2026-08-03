@@ -338,6 +338,7 @@ func ReleaseGetChunkJob(job *GetChunkJob) {
 	case <-job.result:
 	default:
 	}
+	job.completed.Store(false)
 	getChunkJobPool.Put(job)
 }
 
@@ -379,6 +380,7 @@ func ReleaseWriteObjectJob(job *WriteObjectJob) {
 	case <-job.result:
 	default:
 	}
+	job.completed.Store(false)
 	writeObjectJobPool.Put(job)
 }
 
@@ -415,6 +417,7 @@ func ReleaseGetMetaJob(job *GetMetaJob) {
 	case <-job.result:
 	default:
 	}
+	job.completed.Store(false)
 	getMetaJobPool.Put(job)
 }
 
@@ -468,6 +471,7 @@ func ReleaseFilterObjectJob(job *FilterObjectJob) {
 	case <-job.result:
 	default:
 	}
+	job.completed.Store(false)
 	filterObjectJobPool.Put(job)
 }
 

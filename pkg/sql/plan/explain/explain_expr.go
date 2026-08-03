@@ -17,6 +17,7 @@ package explain
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"strconv"
 	"strings"
@@ -261,6 +262,9 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 
 	switch layout {
 	case function.STANDARD_FUNCTION:
+		if funcExpr.AggConfigType == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
+			return explainOrderedGroupConcat(ctx, funcExpr, options, buf)
+		}
 		buf.WriteString(funcExpr.Func.GetObjName() + "(")
 		if needSpecialHandling(funcExpr) {
 			//contains invisible character, need special handling
@@ -318,6 +322,13 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 			err = describeExpr(ctx, funcExpr.Args[1], options, buf)
 			if err != nil {
 				return err
+			}
+			if len(funcExpr.Args) == 3 && (strings.EqualFold(funcName, "like") || strings.EqualFold(funcName, "ilike")) {
+				buf.WriteString(" ESCAPE ")
+				err = describeExpr(ctx, funcExpr.Args[2], options, buf)
+				if err != nil {
+					return err
+				}
 			}
 		}
 		buf.WriteString(")")
@@ -467,4 +478,111 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 		return moerr.NewInvalidInput(ctx, "explain contains UNKNOW_KIND_FUNCTION")
 	}
 	return nil
+}
+
+func explainOrderedGroupConcat(
+	ctx context.Context,
+	funcExpr *plan.Function,
+	options *ExplainOptions,
+	buf *bytes.Buffer,
+) error {
+	concatArgCount, orderArgIndexes, orderFlags, separator, err :=
+		decodeGroupConcatOrderConfig(funcExpr.AggConfig)
+	if err != nil {
+		return err
+	}
+	if concatArgCount < 1 || len(orderArgIndexes) != len(orderFlags) {
+		return moerr.NewInvalidInput(ctx, "invalid group_concat order config")
+	}
+	for _, index := range orderArgIndexes {
+		if int(index) >= len(funcExpr.Args) {
+			return moerr.NewInvalidInput(ctx, "invalid group_concat order argument index")
+		}
+	}
+
+	buf.WriteString(funcExpr.Func.GetObjName())
+	buf.WriteString("(")
+	if uint64(funcExpr.Func.Obj)&function.Distinct != 0 {
+		buf.WriteString("DISTINCT ")
+	}
+	for i := 0; i < concatArgCount; i++ {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		if err = describeExpr(ctx, funcExpr.Args[i], options, buf); err != nil {
+			return err
+		}
+	}
+	buf.WriteString(" ORDER BY ")
+	for i, flagByte := range orderFlags {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		if err = describeExpr(ctx, funcExpr.Args[orderArgIndexes[i]], options, buf); err != nil {
+			return err
+		}
+		flag := plan.OrderBySpec_OrderByFlag(flagByte)
+		if flag&plan.OrderBySpec_DESC != 0 {
+			buf.WriteString(" DESC")
+		} else {
+			buf.WriteString(" ASC")
+		}
+		if flag&plan.OrderBySpec_NULLS_FIRST != 0 {
+			buf.WriteString(" NULLS FIRST")
+		} else if flag&plan.OrderBySpec_NULLS_LAST != 0 {
+			buf.WriteString(" NULLS LAST")
+		}
+	}
+	buf.WriteString(" SEPARATOR '")
+	buf.WriteString(strings.ReplaceAll(separator, "'", "''"))
+	buf.WriteString("')")
+	return nil
+}
+
+func decodeGroupConcatOrderConfig(config []byte) (int, []uint32, []byte, string, error) {
+	const (
+		fixedFieldSize = 4
+	)
+	if len(config) < 1+3*fixedFieldSize || (config[0] != 1 && config[0] != 2) {
+		return 0, nil, nil, "", moerr.NewInvalidInputNoCtx("invalid group_concat order config")
+	}
+	offset := 1
+	concatArgCount := int(binary.BigEndian.Uint32(config[offset : offset+fixedFieldSize]))
+	offset += fixedFieldSize
+	orderArgCount := int(binary.BigEndian.Uint32(config[offset : offset+fixedFieldSize]))
+	offset += fixedFieldSize
+	if orderArgCount < 1 || orderArgCount > len(config)-offset-fixedFieldSize {
+		return 0, nil, nil, "", moerr.NewInvalidInputNoCtx("invalid group_concat order config")
+	}
+	orderFlags := config[offset : offset+orderArgCount]
+	const validFlags = byte(plan.OrderBySpec_ASC | plan.OrderBySpec_DESC |
+		plan.OrderBySpec_NULLS_FIRST | plan.OrderBySpec_NULLS_LAST)
+	for _, flag := range orderFlags {
+		if flag&^validFlags != 0 ||
+			flag&byte(plan.OrderBySpec_ASC) != 0 && flag&byte(plan.OrderBySpec_DESC) != 0 ||
+			flag&byte(plan.OrderBySpec_NULLS_FIRST) != 0 && flag&byte(plan.OrderBySpec_NULLS_LAST) != 0 {
+			return 0, nil, nil, "", moerr.NewInvalidInputNoCtx("invalid group_concat order flag")
+		}
+	}
+	offset += orderArgCount
+	orderArgIndexes := make([]uint32, orderArgCount)
+	if config[0] == 1 {
+		for i := range orderArgIndexes {
+			orderArgIndexes[i] = uint32(concatArgCount + i)
+		}
+	} else {
+		if orderArgCount > (len(config)-offset-fixedFieldSize)/fixedFieldSize {
+			return 0, nil, nil, "", moerr.NewInvalidInputNoCtx("invalid group_concat order config")
+		}
+		for i := range orderArgIndexes {
+			orderArgIndexes[i] = binary.BigEndian.Uint32(config[offset : offset+fixedFieldSize])
+			offset += fixedFieldSize
+		}
+	}
+	separatorLen := int(binary.BigEndian.Uint32(config[offset : offset+fixedFieldSize]))
+	offset += fixedFieldSize
+	if separatorLen != len(config)-offset {
+		return 0, nil, nil, "", moerr.NewInvalidInputNoCtx("invalid group_concat order config")
+	}
+	return concatArgCount, orderArgIndexes, orderFlags, string(config[offset:]), nil
 }

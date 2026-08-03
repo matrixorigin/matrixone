@@ -21,8 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -36,8 +34,6 @@ type OpType int8
 const (
 	OpCommit = iota
 	OpRollback
-	OpPrepare
-	OpCommitting
 	OpInvalid
 )
 
@@ -54,9 +50,8 @@ type OpTxn struct {
 }
 
 func (txn *OpTxn) IsReplay() bool { return txn.Txn.IsReplay() }
-func (txn *OpTxn) Is2PC() bool    { return txn.Txn.Is2PC() }
 func (txn *OpTxn) IsTryCommitting() bool {
-	return txn.Op == OpCommit || txn.Op == OpPrepare
+	return txn.Op == OpCommit
 }
 
 func (txn *OpTxn) Repr() string {
@@ -159,62 +154,13 @@ func (txn *Txn) GetDedupType() txnif.DedupPolicy                    { return txn
 func (txn *Txn) SetSyncProtectionJobID(jobID string) { txn.syncProtectionJobID = jobID }
 func (txn *Txn) GetSyncProtectionJobID() string      { return txn.syncProtectionJobID }
 
-//The state transition of transaction is as follows:
-// 1PC: TxnStateActive--->TxnStatePreparing--->TxnStateCommitted/TxnStateRollbacked
-//		TxnStateActive--->TxnStatePreparing--->TxnStateRollbacking--->TxnStateRollbacked
-//      TxnStateActive--->TxnStateRollbacking--->TxnStateRollbacked
-// 2PC running on Coordinator: TxnStateActive--->TxnStatePreparing-->TxnStatePrepared
-//								-->TxnStateCommittingFinished--->TxnStateCommitted or
-//								TxnStateActive--->TxnStatePreparing-->TxnStatePrepared-->TxnStateRollbacked or
-//                             TxnStateActive--->TxnStateRollbacking--->TxnStateRollbacked.
-// 2PC running on Participant: TxnStateActive--->TxnStatePreparing-->TxnStatePrepared-->TxnStateCommitted or
-//                             TxnStateActive--->TxnStatePreparing-->TxnStatePrepared-->
-//                             TxnStateRollbacking-->TxnStateRollbacked or
-//                             TxnStateActive--->TxnStateRollbacking-->TxnStateRollbacked.
-
-// Prepare is used to pre-commit a 2PC distributed transaction.
-// Notice that once any error happened, we should rollback the txn.
-// TODO:
-//  1. How to handle the case in which log service timed out?
-//  2. For a 2pc transaction, Rollback message may arrive before Prepare message,
-//     should handle this case by TxnStorage?
-func (txn *Txn) Prepare(ctx context.Context) (pts types.TS, err error) {
-	if txn.Mgr.GetTxn(txn.GetID()) == nil {
-		logutil.Warn("tae : txn is not found in TxnManager")
-		//txn.Err = ErrTxnNotFound
-		return types.TS{}, moerr.NewTxnNotFoundNoCtx()
-	}
-	state := txn.GetTxnState(false)
-	if state != txnif.TxnStateActive {
-		logutil.Warnf("unexpected txn status : %s", txnif.TxnStrState(state))
-		txn.Err = moerr.NewTxnNotActiveNoCtx(txnif.TxnStrState(state))
-		return types.TS{}, txn.Err
-	}
-	txn.Add(1)
-	err = txn.Mgr.OnOpTxn(&OpTxn{
-		ctx: ctx,
-		Txn: txn,
-		Op:  OpPrepare,
-	})
-	// TxnManager is closed
-	if err != nil {
-		txn.SetError(err)
-		txn.ToRollbacking(txn.GetStartTS())
-		_ = txn.PrepareRollback()
-		_ = txn.ApplyRollback()
-		txn.DoneWithErr(err, true)
-	}
-	txn.Wait()
-
-	if txn.Err != nil {
-		txn.Mgr.DeleteTxn(txn.GetID())
-	}
-	return txn.GetPrepareTS(), txn.GetError()
-}
-
-// Rollback is used to roll back a 1PC or 2PC transaction.
-// Notice that there may be a such scenario in which a 2PC distributed transaction in ACTIVE
-// will be rollbacked, since Rollback message may arrive before the Prepare message.
+// The state transition of a transaction is:
+// TxnStateActive--->TxnStatePreparing--->TxnStateCommitted/TxnStateRollbacked
+//
+//			TxnStateActive--->TxnStatePreparing--->TxnStateRollbacking--->TxnStateRollbacked
+//	     TxnStateActive--->TxnStateRollbacking--->TxnStateRollbacked
+//
+// Rollback rolls back a transaction.
 func (txn *Txn) Rollback(ctx context.Context) (err error) {
 	if txn.GetStore().IsOffline() {
 		return
@@ -230,70 +176,19 @@ func (txn *Txn) Rollback(ctx context.Context) (err error) {
 		return
 	}
 
-	if txn.Is2PC() {
-		return txn.rollback2PC(ctx)
-	}
-
 	return txn.rollback1PC(ctx)
 }
 
-// Committing is used to record a "committing" status for coordinator.
-// Notice that txn must commit successfully once committing message arrives, since Preparing
-// had already succeeded.
-func (txn *Txn) Committing() (err error) {
-	return txn.doCommitting(false)
-}
-
-func (txn *Txn) CommittingInRecovery() (err error) {
-	return txn.doCommitting(true)
-}
-
-func (txn *Txn) doCommitting(inRecovery bool) (err error) {
-	if txn.Mgr.GetTxn(txn.GetID()) == nil {
-		err = moerr.NewTxnNotFoundNoCtx()
-		return
-	}
-	state := txn.GetTxnState(false)
-	if state != txnif.TxnStatePrepared {
-		return moerr.NewInternalErrorNoCtxf(
-			"stat not prepared, unexpected txn status : %s",
-			txnif.TxnStrState(state),
-		)
-	}
-	if err = txn.ToCommittingFinished(); err != nil {
-		panic(err)
-	}
-
-	// Skip logging in recovery
-	if !inRecovery {
-		//Make a committing log entry, flush and wait it synced.
-		//A log entry's payload contains txn id , commit timestamp and txn's state.
-		_, err = txn.LogTxnState(true)
-		if err != nil {
-			panic(err)
-		}
-	}
-	err = txn.Err
-	return
-}
-
-// Commit is used to commit a 1PC or 2PC transaction running on Coordinator or running on Participant.
-// Notice that the Commit of a 2PC transaction must be success once the Commit message arrives,
-// since Preparing had already succeeded.
+// Commit commits a transaction.
 func (txn *Txn) Commit(ctx context.Context) (err error) {
 	probe := trace.StartRegion(context.Background(), "Commit")
 	defer probe.End()
 
-	err = txn.doCommit(ctx, false)
+	err = txn.doCommit(ctx)
 	return
 }
 
-// CommitInRecovery is called during recovery
-func (txn *Txn) CommitInRecovery(ctx context.Context) (err error) {
-	return txn.doCommit(ctx, true)
-}
-
-func (txn *Txn) doCommit(ctx context.Context, inRecovery bool) (err error) {
+func (txn *Txn) doCommit(ctx context.Context) (err error) {
 	if txn.GetStore().IsOffline() {
 		return
 	}
@@ -307,11 +202,7 @@ func (txn *Txn) doCommit(ctx context.Context, inRecovery bool) (err error) {
 		return nil
 	}
 
-	if txn.Is2PC() {
-		return txn.commit2PC(inRecovery)
-	}
-
-	return txn.commit1PC(ctx, inRecovery)
+	return txn.commit1PC(ctx)
 }
 
 func (txn *Txn) GetStore() txnif.TxnStore {
@@ -323,7 +214,7 @@ func (txn *Txn) GetLSN() uint64 {
 	return txn.LSN
 }
 
-func (txn *Txn) DoneWithErr(err error, isAbort bool) {
+func (txn *Txn) DoneWithErr(err error, _ bool) {
 	// Idempotent check
 	if moerr.IsMoErrCode(err, moerr.ErrTxnNotActive) {
 		// FIXME::??
@@ -331,10 +222,6 @@ func (txn *Txn) DoneWithErr(err error, isAbort bool) {
 		return
 	}
 
-	if txn.Is2PC() {
-		txn.done2PCWithErr(err, isAbort)
-		return
-	}
 	txn.done1PCWithErr(err)
 	txn.GetStore().EndTrace()
 }
@@ -494,9 +381,5 @@ func (txn *Txn) DatabaseNames() (names []string) {
 }
 
 func (txn *Txn) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntry, readedObject, readedTombstone []*common.ID) (err error) {
-	return
-}
-
-func (txn *Txn) LogTxnState(sync bool) (logEntry entry.Entry, err error) {
 	return
 }

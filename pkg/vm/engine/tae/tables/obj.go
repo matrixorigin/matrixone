@@ -94,6 +94,19 @@ func (obj *object) GetDuplicatedRows(
 				err)
 		}
 	}()
+	// A TN rewrite's CreatedAt is a physical flush/merge timestamp, not the
+	// logical commit timestamp of every row it carries. Inspect its hidden
+	// commit-TS column only after zonemap/BF and exact-PK matching. This keeps
+	// old rows out of the incremental window while preserving genuinely new
+	// conflicts that were flushed before pre-prepare.
+	//
+	// Legacy objects without that column are handled by policy in the row
+	// filter: incremental dedup remains best-effort, while strict policies stay
+	// conservative. CN-created objects and later TN rewrites that inherit null
+	// row timestamps follow those same policy rules; no lineage or upgrade
+	// protocol is added for this fallback path.
+	filterByCommitTS := !from.IsEmpty() &&
+		!obj.meta.Load().GetObjectStats().GetCNCreated()
 	return obj.persistedGetDuplicatedRows(
 		ctx,
 		txn,
@@ -101,7 +114,7 @@ func (obj *object) GetDuplicatedRows(
 		keys,
 		keysZM,
 		rowIDs,
-		false, /*is ablk*/
+		filterByCommitTS,
 		mp,
 	)
 }

@@ -123,14 +123,31 @@ func (h *SearchResultMaxHeap) Pop() any {
 }
 
 // Thread-safe Heap struct
+// maxHeapPrealloc caps the heap's INITIAL allocation so a very large limit does not
+// preallocate a huge slice up front; the heap still grows on demand up to its limit.
+const maxHeapPrealloc = 1 << 20
+
+// SearchResultSafeHeap is a concurrency-safe BOUNDED top-K heap: it retains only the
+// `limit` smallest-distance results, evicting the current worst once full. This bounds
+// peak merge memory to O(limit) even when many index shards each contribute up to `limit`
+// candidates, instead of O(shard_count * limit) (#25637). It is a max-heap internally, so
+// the root is the worst (largest distance) of the retained set and is evicted in O(log k).
 type SearchResultSafeHeap struct {
 	mutex   sync.Mutex
-	resheap SearchResultHeap
+	limit   int
+	resheap SearchResultMaxHeap
 }
 
-func NewSearchResultSafeHeap(size int) *SearchResultSafeHeap {
-	h := &SearchResultSafeHeap{}
-	h.resheap = make(SearchResultHeap, 0, size)
+func NewSearchResultSafeHeap(limit int) *SearchResultSafeHeap {
+	prealloc := limit
+	if prealloc > maxHeapPrealloc {
+		prealloc = maxHeapPrealloc
+	}
+	if prealloc < 0 {
+		prealloc = 0
+	}
+	h := &SearchResultSafeHeap{limit: limit}
+	h.resheap = make(SearchResultMaxHeap, 0, prealloc)
 	heap.Init(&h.resheap)
 	return h
 }
@@ -141,13 +158,29 @@ func (h *SearchResultSafeHeap) Len() int {
 	return h.resheap.Len()
 }
 
+// Push retains srif only if the heap is not yet full, or srif is closer (smaller distance)
+// than the current worst retained result — in which case it evicts that worst. Otherwise
+// srif is discarded. Safe for concurrent callers.
 func (h *SearchResultSafeHeap) Push(srif SearchResultIf) {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 
-	heap.Push(&h.resheap, srif)
+	if h.limit <= 0 {
+		return
+	}
+	if h.resheap.Len() < h.limit {
+		heap.Push(&h.resheap, srif)
+		return
+	}
+	// Full: replace the worst (root of the max-heap) iff srif is strictly better.
+	if srif.GetDistance() < h.resheap[0].GetDistance() {
+		h.resheap[0] = srif
+		heap.Fix(&h.resheap, 0)
+	}
 }
 
+// Pop removes and returns the current WORST (largest distance) retained result. Callers
+// draining for ascending (nearest-first) output should fill their result buffer back-to-front.
 func (h *SearchResultSafeHeap) Pop() SearchResultIf {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()

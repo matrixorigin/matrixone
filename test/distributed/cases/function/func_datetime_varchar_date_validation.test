@@ -1,0 +1,80 @@
+-- VARCHAR date extractors must accept the datetime forms accepted by the
+-- temporal parser and reject malformed date/time components.
+SELECT DAYOFMONTH('2024-01-01T12:34:56') AS dayofmonth,
+       DAYNAME('2024-01-01T12:34:56') AS dayname,
+       MONTHNAME('2024-01-01T12:34:56') AS monthname,
+       QUARTER('2024-01-01T12:34:56') AS quarter,
+       WEEKOFYEAR('2024-01-01T12:34:56') AS weekofyear;
+
+SELECT DAYOFMONTH('2024-01-01 24:00:00') AS invalid_hour_dayofmonth,
+       DAYNAME('2024-01-01 24:00:00') AS invalid_hour_dayname,
+       MONTHNAME('2024-01-01 24:00:00') AS invalid_hour_monthname,
+       QUARTER('2024-01-01 24:00:00') AS invalid_hour_quarter,
+       WEEKOFYEAR('2024-01-01 24:00:00') AS invalid_hour_weekofyear;
+
+SELECT DAYOFMONTH('2024-01-01 23:60:00') AS invalid_minute_dayofmonth,
+       DAYNAME('2024-01-01 23:60:00') AS invalid_minute_dayname,
+       MONTHNAME('2024-01-01 23:60:00') AS invalid_minute_monthname,
+       QUARTER('2024-01-01 23:60:00') AS invalid_minute_quarter,
+       WEEKOFYEAR('2024-01-01 23:60:00') AS invalid_minute_weekofyear;
+
+SELECT DAYOFMONTH('2024-0x-01') AS invalid_separator_dayofmonth,
+       DAYNAME('2024-0x-01') AS invalid_separator_dayname,
+       MONTHNAME('2024-0x-01') AS invalid_separator_monthname,
+       QUARTER('2024-0x-01') AS invalid_separator_quarter,
+       WEEKOFYEAR('2024-0x-01') AS invalid_separator_weekofyear;
+
+SELECT DAYOFMONTH('4294967297-01-01') AS oversized_year_dayofmonth,
+       DAYNAME('4294967297-01-01') AS oversized_year_dayname,
+       MONTHNAME('4294967297-01-01') AS oversized_year_monthname,
+       QUARTER('4294967297-01-01') AS oversized_year_quarter,
+       WEEKOFYEAR('4294967297-01-01') AS oversized_year_weekofyear;
+
+SELECT DAYOFMONTH('2024-01-01T') AS dangling_iso_dayofmonth,
+       DAYNAME('2024-01-01T') AS dangling_iso_dayname,
+       MONTHNAME('2024-01-01T') AS dangling_iso_monthname,
+       QUARTER('2024-01-01T') AS dangling_iso_quarter,
+       WEEKOFYEAR('2024-01-01T') AS dangling_iso_weekofyear;
+
+-- MySQL accepts year 0 calendar dates but does not treat year 0 as a leap year.
+SELECT DAYOFMONTH('0000-01-01') AS year_zero_dayofmonth,
+       DAYNAME('0000-01-01') AS year_zero_dayname,
+       MONTHNAME('0000-01-01') AS year_zero_monthname,
+       QUARTER('0000-01-01') AS year_zero_quarter,
+       WEEKOFYEAR('0000-01-01') AS year_zero_weekofyear;
+
+SELECT DAYOFMONTH('0000-02-29') AS invalid_year_zero_dayofmonth,
+       DAYNAME('0000-02-29') AS invalid_year_zero_dayname,
+       MONTHNAME('0000-02-29') AS invalid_year_zero_monthname,
+       QUARTER('0000-02-29') AS invalid_year_zero_quarter,
+       WEEKOFYEAR('0000-02-29') AS invalid_year_zero_weekofyear;
+
+-- Deprecated MySQL date delimiters are accepted for both date and datetime inputs.
+SELECT DAYOFMONTH('2024/01/15') AS slash_dayofmonth,
+       DAYNAME('2024/01/15') AS slash_dayname,
+       MONTHNAME('2024/01/15') AS slash_monthname,
+       QUARTER('2024/01/15') AS slash_quarter,
+       WEEKOFYEAR('2024/01/15') AS slash_weekofyear;
+
+SELECT DAYOFMONTH('2024:01:15T12:34:56') AS colon_dayofmonth,
+       DAYNAME('2024:01:15T12:34:56') AS colon_dayname,
+       MONTHNAME('2024:01:15T12:34:56') AS colon_monthname,
+       QUARTER('2024:01:15T12:34:56') AS colon_quarter,
+       WEEKOFYEAR('2024:01:15T12:34:56') AS colon_weekofyear;
+
+-- Two-digit years use MySQL's 00-69 / 70-99 mapping, including ':' dates.
+SELECT DAYOFMONTH('10:11:12') AS yy10_dayofmonth,
+       DAYNAME('10:11:12') AS yy10_dayname,
+       MONTHNAME('10:11:12') AS yy10_monthname,
+       QUARTER('10:11:12') AS yy10_quarter,
+       WEEKOFYEAR('10:11:12') AS yy10_weekofyear;
+
+SELECT DAYNAME('69:01:01') AS yy69_dayname,
+       DAYNAME('70:01:01') AS yy70_dayname;
+
+-- Time fields accept the same relaxed punctuation-delimiter category.
+SELECT DAYOFMONTH('2024/01/15 12*34*56') AS punct_time_dayofmonth,
+       DAYNAME('2024/01/15 12*34*56') AS punct_time_dayname,
+       MONTHNAME('2024/01/15 12*34*56') AS punct_time_monthname,
+       QUARTER('2024/01/15 12*34*56') AS punct_time_quarter,
+       WEEKOFYEAR('2024/01/15 12*34*56') AS punct_time_weekofyear;

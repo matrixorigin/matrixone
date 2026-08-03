@@ -21,6 +21,7 @@ import (
 	"io"
 	mrand "math/rand"
 	"os"
+	"sync"
 	"testing"
 	"testing/iotest"
 
@@ -323,6 +324,146 @@ func (f *FileWithChecksum[T]) readAtPerBlock(buf []byte, offset int64) (n int, e
 	return n, err
 }
 
+// TestFileWithoutChecksum exercises the passthrough (noChecksum) mode: the
+// on-disk bytes must be raw (no CRC32 framing, no size inflation) and the
+// positional read/write/seek semantics must round-trip.
+func TestFileWithoutChecksum(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+
+	// identity offset mapping
+	idf := NewFileWithoutChecksum[*os.File](ctx, nil, _BlockContentSize, nil)
+	for _, off := range []int64{0, 1, 2044, 2048, 1 << 20} {
+		blockOffset, offsetInBlock := idf.contentOffsetToBlockOffset(off)
+		assert.Equal(t, off, blockOffset)
+		assert.Equal(t, int64(0), offsetInBlock)
+	}
+
+	f, err := os.CreateTemp(tempDir, "*")
+	require.NoError(t, err)
+	t.Cleanup(func() { f.Close() })
+
+	fw := NewFileWithoutChecksum(ctx, f, _BlockContentSize, nil)
+
+	// write across many "blocks" worth of content
+	src := make([]byte, 5000)
+	_, err = rand.Read(src)
+	require.NoError(t, err)
+	n, err := fw.Write(src)
+	require.NoError(t, err)
+	require.Equal(t, len(src), n)
+
+	// raw invariant: underlying file size == bytes written (no CRC inflation)
+	info, err := f.Stat()
+	require.NoError(t, err)
+	require.Equal(t, int64(len(src)), info.Size())
+
+	// raw invariant: on-disk bytes are exactly what we wrote
+	onDisk, err := os.ReadFile(f.Name())
+	require.NoError(t, err)
+	require.True(t, bytes.Equal(src, onDisk))
+
+	// Seek(SeekEnd) reports the true file size in raw mode
+	end, err := fw.Seek(0, io.SeekEnd)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(src)), end)
+
+	// random ReadAt round-trips against the source
+	rng := mrand.New(mrand.NewSource(7))
+	for it := 0; it < 500; it++ {
+		off := rng.Intn(len(src))
+		length := rng.Intn(len(src)-off) + 1
+		got := make([]byte, length)
+		rn, rerr := fw.ReadAt(got, int64(off))
+		require.NoError(t, rerr)
+		require.Equal(t, length, rn)
+		require.True(t, bytes.Equal(src[off:off+length], got))
+	}
+
+	// WriteAt at an arbitrary offset overwrites in place (no framing)
+	patch := []byte("PATCHED-IN-PLACE")
+	_, err = fw.WriteAt(patch, 100)
+	require.NoError(t, err)
+	got := make([]byte, len(patch))
+	_, err = fw.ReadAt(got, 100)
+	require.NoError(t, err)
+	require.True(t, bytes.Equal(patch, got))
+	info, err = f.Stat()
+	require.NoError(t, err)
+	require.Equal(t, int64(len(src)), info.Size()) // overwrite, not append
+
+	// append: WriteAt at the current EOF extends the file (1:1, no framing) and
+	// Seek(SeekEnd) tracks the new size.
+	appended := []byte("APPENDED-AT-THE-END")
+	_, err = fw.WriteAt(appended, int64(len(src)))
+	require.NoError(t, err)
+	info, err = f.Stat()
+	require.NoError(t, err)
+	require.Equal(t, int64(len(src)+len(appended)), info.Size())
+	end, err = fw.Seek(0, io.SeekEnd)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(src)+len(appended)), end)
+	got = make([]byte, len(appended))
+	_, err = fw.ReadAt(got, int64(len(src)))
+	require.NoError(t, err)
+	require.True(t, bytes.Equal(appended, got))
+}
+
+// BenchmarkChecksumVsRaw measures the read/write throughput of the checksummed
+// (DISK) vs raw passthrough (DISK-V2) format at the production block size.
+func BenchmarkChecksumVsRaw(b *testing.B) {
+	ctx := context.Background()
+	const dataSize = 24 << 20 // 24 MiB ~ one column block
+
+	makeFW := func(b *testing.B, raw bool) *FileWithChecksum[*os.File] {
+		f, err := os.CreateTemp(b.TempDir(), "*")
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.Cleanup(func() { f.Close() })
+		if raw {
+			return NewFileWithoutChecksum(ctx, f, _BlockContentSize, nil)
+		}
+		return NewFileWithChecksum(ctx, f, _BlockContentSize, nil)
+	}
+
+	src := make([]byte, dataSize)
+	rand.Read(src)
+
+	for _, raw := range []bool{false, true} {
+		mode := "checksum"
+		if raw {
+			mode = "raw"
+		}
+
+		b.Run(mode+"/ReadAt", func(b *testing.B) {
+			fw := makeFW(b, raw)
+			if _, err := fw.WriteAt(src, 0); err != nil {
+				b.Fatal(err)
+			}
+			out := make([]byte, dataSize)
+			b.SetBytes(dataSize)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := fw.ReadAt(out, 0); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+
+		b.Run(mode+"/WriteAt", func(b *testing.B) {
+			fw := makeFW(b, raw)
+			b.SetBytes(dataSize)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := fw.WriteAt(src, 0); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkFileWithChecksumReadAt(b *testing.B) {
 	ctx := context.Background()
 	f, err := os.CreateTemp(b.TempDir(), "*")
@@ -351,4 +492,50 @@ func BenchmarkFileWithChecksumReadAt(b *testing.B) {
 			fw.readAtPerBlock(out, 0)
 		}
 	})
+}
+
+// TestFileWithoutChecksumConcurrentWriteAt confirms passthrough mode is safe for
+// concurrent WriteAt at distinct offsets through a single shared wrapper. In
+// passthrough mode WriteAt goes straight to the underlying pwrite and must NOT
+// touch the wrapper's contentOffset (only the sequential Read/Write path uses
+// it), so parallel writers at different offsets cannot corrupt each other.
+func TestFileWithoutChecksumConcurrentWriteAt(t *testing.T) {
+	ctx := context.Background()
+	f, err := os.CreateTemp(t.TempDir(), "*")
+	require.NoError(t, err)
+	t.Cleanup(func() { f.Close() })
+
+	fw := NewFileWithoutChecksum(ctx, f, _BlockContentSize, nil)
+
+	const nRegions = 32
+	const regionSize = 4096
+	want := make([][]byte, nRegions)
+	var wg sync.WaitGroup
+	for i := 0; i < nRegions; i++ {
+		buf := make([]byte, regionSize)
+		_, err := rand.Read(buf)
+		require.NoError(t, err)
+		want[i] = buf
+		wg.Add(1)
+		go func(i int, buf []byte) {
+			defer wg.Done()
+			n, werr := fw.WriteAt(buf, int64(i)*regionSize)
+			assert.NoError(t, werr)
+			assert.Equal(t, regionSize, n)
+		}(i, buf)
+	}
+	wg.Wait()
+
+	// Each region must read back exactly what was written to it.
+	for i := 0; i < nRegions; i++ {
+		got := make([]byte, regionSize)
+		n, rerr := fw.ReadAt(got, int64(i)*regionSize)
+		require.NoError(t, rerr)
+		require.Equal(t, regionSize, n)
+		require.Truef(t, bytes.Equal(want[i], got), "region %d mismatch", i)
+	}
+	// Raw invariant: file size == nRegions*regionSize (no CRC inflation, no gaps).
+	info, err := f.Stat()
+	require.NoError(t, err)
+	require.Equal(t, int64(nRegions*regionSize), info.Size())
 }

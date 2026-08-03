@@ -15,11 +15,12 @@
 package external
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -165,8 +166,8 @@ func collectHivePartitionListEntries(
 		}
 		entries = append(entries, *entry)
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Name < entries[j].Name
+	slices.SortFunc(entries, func(a, b fileservice.DirEntry) int {
+		return cmp.Compare(a.Name, b.Name)
 	})
 	return entries, nil
 }

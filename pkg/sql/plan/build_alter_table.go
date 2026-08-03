@@ -189,7 +189,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			affectedCols = append(affectedCols, option.NewColumn.Name.ColName())
 		case *tree.AlterTableChangeColumnClause:
 			pkAffected, err = ChangeColumn(cctx, alterTablePlan, option, alterTableCtx)
-			affectedCols = append(affectedCols, option.NewColumn.Name.ColName())
+			affectedCols = appendAffectedAlterColumnNames(
+				affectedCols,
+				option.OldColumnName.ColName(),
+				option.NewColumn.Name.ColName(),
+			)
 		case *tree.AlterTableRenameColumnClause:
 			err = RenameColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.OldColumnName.ColName())
@@ -201,10 +205,24 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			for _, order := range option.AlterOrderByList {
 				affectedCols = append(affectedCols, order.Column.ColName())
 			}
+		case *tree.AlterOptionAlgorithm:
+			// algorithm hint parsed for compatibility; the actual algorithm
+			// is resolved by ResolveAlterTableAlgorithm via the full options list
+		case *tree.AlterOptionLock:
+			// lock already validated by resolveAndValidateLock; no-op here
 		default:
 			return nil, moerr.NewInvalidInputf(ctx,
 				unsupportedErrorFmt, formatTreeNode(option))
 		}
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if pkAffected {
+		affectedAllIdxCols()
+	} else {
+		affectedCols, err = collectAffectedIndexNamesForAlter(tableDef.Indexes, affectedCols)
 		if err != nil {
 			return nil, err
 		}
@@ -216,11 +234,6 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	}
 
 	alterTablePlan.CreateTmpTableSql = createTmpDdl
-
-	if pkAffected {
-		affectedAllIdxCols()
-	}
-
 	alterTablePlan.AffectedCols = affectedCols
 
 	opt := &plan.AlterCopyOpt{
@@ -260,8 +273,6 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 
 	alterTablePlan.ChangeTblColIdMap = alterTableCtx.changColDefMap
 	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, alterTableCtx.UpdateSqls...)
-	//delete copy table records from mo_catalog.mo_foreign_keys
-	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, getSqlForDeleteTable(schemaName, alterTableCtx.copyTableName))
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -272,6 +283,14 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			},
 		},
 	}, nil
+}
+
+func appendAffectedAlterColumnNames(affectedCols []string, oldColName, newColName string) []string {
+	affectedCols = append(affectedCols, oldColName)
+	if newColName != oldColName {
+		affectedCols = append(affectedCols, newColName)
+	}
+	return affectedCols
 }
 
 var ID atomic.Int64
@@ -422,6 +441,14 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}
+	isMongoDB, err := IsMongoDBTableDef(ctx.GetContext(), tableDef)
+	if err != nil {
+		return nil, err
+	}
+	if isMongoDB {
+		return nil, moerr.NewNotSupported(ctx.GetContext(),
+			"ALTER TABLE on a MongoDB external table; drop and recreate the external table to change its schema")
+	}
 
 	if tableDef.IsTemporary {
 		// Only allow a safe subset of alter operations on temporary tables.
@@ -457,6 +484,11 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if err != nil {
 		return nil, err
 	}
+
+	if err := resolveAndValidateLock(ctx.GetContext(), stmt.Options, algorithm); err != nil {
+		return nil, err
+	}
+
 	if algorithm == plan.AlterTable_COPY {
 		return buildAlterTableCopy(stmt, ctx)
 	} else {
@@ -473,6 +505,8 @@ func allowTempTableAlterForIndex(stmt *tree.AlterTable) bool {
 	}
 	for _, opt := range stmt.Options {
 		switch o := opt.(type) {
+		case *tree.AlterOptionAlgorithm, *tree.AlterOptionLock:
+			// hints only; validated later by ResolveAlterTableAlgorithm / resolveAndValidateLock
 		case *tree.AlterOptionAdd:
 			switch o.Def.(type) {
 			case *tree.Index, *tree.UniqueIndex, *tree.FullTextIndex:
@@ -500,8 +534,13 @@ func ResolveAlterTableAlgorithm(
 	tableDef *TableDef,
 ) (algorithm plan.AlterTable_AlgorithmType, err error) {
 	algorithm = plan.AlterTable_COPY
+
+	// First pass: resolve algorithm based on operations, skipping ALGORITHM/LOCK hints.
+Loop:
 	for _, spec := range validAlterSpecs {
 		switch option := spec.(type) {
+		case *tree.AlterOptionAlgorithm, *tree.AlterOptionLock:
+			continue
 		case *tree.AlterOptionAdd:
 			switch option.Def.(type) {
 			case *tree.PrimaryKeyIndex:
@@ -555,7 +594,15 @@ func ResolveAlterTableAlgorithm(
 		case *tree.AlterTableChangeColumnClause:
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableRenameColumnClause:
-			algorithm = plan.AlterTable_INPLACE
+			requiresRebuild, err := renameColumnRequiresPluginIndexRebuild(tableDef, option.OldColumnName.ColName())
+			if err != nil {
+				return plan.AlterTable_DEFAULT, err
+			}
+			if requiresRebuild {
+				algorithm = plan.AlterTable_COPY
+			} else {
+				algorithm = plan.AlterTable_INPLACE
+			}
 		case *tree.AlterTableAlterColumnClause:
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableOrderByColumnClause:
@@ -566,10 +613,63 @@ func ResolveAlterTableAlgorithm(
 			algorithm = plan.AlterTable_INPLACE
 		}
 		if algorithm == plan.AlterTable_COPY {
-			return
+			break Loop
 		}
 	}
+
+	requiredAlgorithm := algorithm // stable baseline for hint validation; algorithm is mutated below
+
+	// Second pass: apply ALGORITHM hint (takes precedence over operation-based resolution).
+	for _, spec := range validAlterSpecs {
+		alg, ok := spec.(*tree.AlterOptionAlgorithm)
+		if !ok {
+			continue
+		}
+		userAlg := resolveAlgorithmHint(alg.Type)
+		if userAlg == plan.AlterTable_DEFAULT {
+			continue
+		}
+		if requiredAlgorithm == plan.AlterTable_COPY && userAlg != plan.AlterTable_COPY {
+			return algorithm, moerr.NewInvalidInputf(ctx,
+				"ALGORITHM=%s is not supported. Reason: this operation requires ALGORITHM=COPY. Try ALGORITHM=COPY.",
+				strings.ToUpper(alg.Type))
+		}
+		algorithm = userAlg
+	}
+
 	return
+}
+
+func resolveAlgorithmHint(algType string) plan.AlterTable_AlgorithmType {
+	switch strings.ToUpper(algType) {
+	case "INSTANT":
+		return plan.AlterTable_INSTANT
+	case "INPLACE":
+		return plan.AlterTable_INPLACE
+	case "COPY":
+		return plan.AlterTable_COPY
+	default:
+		return plan.AlterTable_DEFAULT
+	}
+}
+
+func resolveAndValidateLock(
+	ctx context.Context,
+	options []tree.AlterTableOption,
+	algorithm plan.AlterTable_AlgorithmType,
+) error {
+	// MySQL uses the last LOCK clause if multiple are specified.
+	lockType := ""
+	for _, opt := range options {
+		if lock, ok := opt.(*tree.AlterOptionLock); ok {
+			lockType = strings.ToUpper(lock.Type)
+		}
+	}
+	if lockType == "NONE" && algorithm == plan.AlterTable_COPY {
+		return moerr.NewInvalidInputf(ctx,
+			"LOCK=NONE is not supported. Reason: COPY algorithm requires an exclusive lock. Try LOCK=SHARED.")
+	}
+	return nil
 }
 
 func isInplaceModifyColumn(
@@ -764,7 +864,11 @@ func buildNotNullColumnVal(col *ColDef) string {
 	} else if isEnumPlanType(&col.Typ) {
 		enumvalues := strings.Split(col.Typ.Enumvalues, ",")
 		defaultValue = enumvalues[0]
-	} else if col.Typ.Id == int32(types.T_array_float32) || col.Typ.Id == int32(types.T_array_float64) {
+	} else if types.T(col.Typ.Id).IsArrayRelate() {
+		// IsArrayRelate covers all six vector types. Enumerating only f32/f64
+		// here made ALTER TABLE ... ADD v VECF16(n) NOT NULL fall through to
+		// "null" below — an invalid backfill for a NOT NULL column, where the
+		// same statement on vecf32 synthesized a zero vector.
 		if col.Typ.Width > 0 {
 			zerosWithCommas := strings.Repeat("0,", int(col.Typ.Width)-1)
 			arrayAsString := zerosWithCommas + "0" // final zero

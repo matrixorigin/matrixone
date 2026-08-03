@@ -29,6 +29,49 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestContextForForceICKP(t *testing.T) {
+	t.Run("add the default timeout when the caller has none", func(t *testing.T) {
+		ctx, cancel := contextForForceICKP(context.Background())
+		defer cancel()
+
+		deadline, hasDeadline := ctx.Deadline()
+		assert.True(t, hasDeadline)
+		assert.WithinDuration(t, time.Now().Add(defaultForceICKPTimeout), deadline, time.Second)
+	})
+
+	t.Run("preserve a longer caller deadline", func(t *testing.T) {
+		callerDeadline := time.Now().Add(10 * time.Minute)
+		parent, cancelParent := context.WithDeadline(context.Background(), callerDeadline)
+		defer cancelParent()
+
+		ctx, cancel := contextForForceICKP(parent)
+		defer cancel()
+
+		deadline, hasDeadline := ctx.Deadline()
+		assert.True(t, hasDeadline)
+		assert.Equal(t, callerDeadline, deadline)
+	})
+}
+
+func TestForceICKPRetryBackoffIsBoundedAndCancelable(t *testing.T) {
+	delay := time.Duration(0)
+	for i := 0; i < 32; i++ {
+		next := nextForceICKPRetryDelay(delay)
+		assert.Greater(t, next, time.Duration(0))
+		assert.LessOrEqual(t, next, forceICKPRetryMaximumDelay)
+		assert.GreaterOrEqual(t, next, delay)
+		delay = next
+	}
+	assert.Equal(t, forceICKPRetryMaximumDelay, delay)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	started := time.Now()
+	err := waitForCheckpointRetry(ctx, context.Background(), time.Hour)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Less(t, time.Since(started), time.Second)
+}
+
 func TestCkpCheck(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
@@ -736,6 +779,168 @@ func Test_RunnerStore7(t *testing.T) {
 	assert.NoError(t, err)
 
 }
+
+func TestRunnerStoreMaxCheckpoint(t *testing.T) {
+	store := newRunnerStore("", time.Second, time.Second*1000)
+
+	previousGlobalEnd := types.NextGlobalTsForTest()
+	previousGlobal := NewCheckpointEntry("", types.TS{}, previousGlobalEnd, ET_Global)
+	previousGlobal.SetState(ST_Finished)
+	assert.True(t, store.AddGCKPFinishedEntry(previousGlobal))
+	assert.Same(t, previousGlobal, store.MaxCheckpoint())
+
+	incrementalEnd := types.NextGlobalTsForTest()
+	incremental := NewCheckpointEntry("", previousGlobalEnd, incrementalEnd, ET_Incremental)
+	incremental.SetState(ST_Finished)
+	assert.True(t, store.AddICKPFinishedEntry(incremental))
+	assert.Same(t, incremental, store.MaxCheckpoint())
+	inFlightGlobal := gckpContext{end: incrementalEnd, predecessor: incremental}
+
+	globalEnd := incrementalEnd.Next()
+	global := NewCheckpointEntry("", types.TS{}, globalEnd, ET_Global)
+	assert.True(t, store.AddGCKPIntent(global))
+
+	// A pending GCKP must not advance the durable GC boundary or remove the
+	// predecessor it still needs to commit.
+	_, updated := store.UpdateGCIntent(&globalEnd)
+	assert.True(t, updated)
+	globalDeleted, incrementalDeleted := store.TryGC()
+	assert.Zero(t, globalDeleted)
+	assert.Zero(t, incrementalDeleted)
+	assert.Same(t, incremental, store.MaxIncrementalCheckpoint())
+	assert.Same(t, incremental, store.MaxCheckpoint())
+
+	// Once the GCKP is finished it durably replaces both the old global and its
+	// incremental predecessor, so the same GC intent can collect them.
+	global.SetState(ST_Finished)
+	globalDeleted, incrementalDeleted = store.TryGC()
+	assert.Equal(t, 1, globalDeleted)
+	assert.Equal(t, 1, incrementalDeleted)
+	assert.Nil(t, store.MaxIncrementalCheckpoint())
+	assert.Same(t, global, store.MaxCheckpoint())
+	assert.Same(t, incremental, inFlightGlobal.predecessor)
+	assert.True(t, inFlightGlobal.predecessor.IsFinished())
+	assert.Equal(t, incrementalEnd, inFlightGlobal.predecessor.GetEnd())
+
+	newIncrementalEnd := types.NextGlobalTsForTest()
+	newIncremental := NewCheckpointEntry("", globalEnd, newIncrementalEnd, ET_Incremental)
+	newIncremental.SetState(ST_Finished)
+	assert.True(t, store.AddICKPFinishedEntry(newIncremental))
+	assert.Same(t, newIncremental, store.MaxCheckpoint())
+}
+
+func TestResolveCheckpointLSNAfterIncrementalGC(t *testing.T) {
+	store := newRunnerStore("", time.Second, time.Second*1000)
+
+	global := NewCheckpointEntry("", types.TS{}, types.NextGlobalTsForTest(), ET_Global)
+	global.SetLSN(42, 42)
+	global.SetState(ST_Finished)
+	assert.True(t, store.AddGCKPFinishedEntry(global))
+	assert.Nil(t, store.MaxIncrementalCheckpoint())
+
+	assert.Equal(t, uint64(42), resolveCheckpointLSN(store, 0))
+	assert.Equal(t, uint64(43), resolveCheckpointLSN(store, 43))
+}
+
+func TestForceGCKPPreservesRequestedRetention(t *testing.T) {
+	r := NewRunner(context.Background(), nil, nil, nil, nil, nil)
+	defer r.StopExecutor(ErrStopRunner)
+
+	existingEnd := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	existing := NewCheckpointEntry("", types.TS{}, existingEnd, ET_Incremental)
+	existing.SetState(ST_Finished)
+	assert.True(t, r.store.AddICKPFinishedEntry(existing))
+
+	requestedRetention := 2 * time.Hour
+	executor := r.executor.Load()
+	var executed *gckpContext
+	executor.runGCKPFunc = func(_ context.Context, request *gckpContext, r *runner) error {
+		executed = request
+		entry := NewCheckpointEntry("", types.TS{}, request.end.Next(), ET_Global)
+		entry.SetState(ST_Finished)
+		r.store.AddGCKPFinishedEntry(entry)
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	assert.NoError(t, r.ForceGCKP(ctx, existingEnd, requestedRetention))
+	if assert.NotNil(t, executed) {
+		assert.Equal(t, requestedRetention, executed.histroyRetention)
+		assert.Same(t, existing, executed.predecessor)
+	}
+	assert.NotNil(t, r.store.MaxGlobalCheckpoint())
+}
+
+func TestForceGCKPRequiresFreshICKPAfterGlobal(t *testing.T) {
+	r := NewRunner(context.Background(), nil, nil, nil, nil, nil)
+	defer r.StopExecutor(ErrStopRunner)
+
+	existingEnd := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	existing := NewCheckpointEntry("", types.TS{}, existingEnd, ET_Global)
+	existing.SetState(ST_Finished)
+	assert.True(t, r.store.AddGCKPFinishedEntry(existing))
+
+	executed := false
+	r.executor.Load().runGCKPFunc = func(context.Context, *gckpContext, *runner) error {
+		executed = true
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	assert.ErrorIs(t, r.ForceGCKP(ctx, existingEnd, 2*time.Hour), ErrGCKPNeedsFreshICKP)
+	assert.False(t, executed)
+	assert.Same(t, existing, r.store.MaxGlobalCheckpoint())
+}
+
+func TestForceGCKPReportsGlobalRebuildFailure(t *testing.T) {
+	r := NewRunner(context.Background(), nil, nil, nil, nil, nil)
+	defer r.StopExecutor(ErrStopRunner)
+
+	existingEnd := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	existing := NewCheckpointEntry("", types.TS{}, existingEnd, ET_Incremental)
+	existing.SetState(ST_Finished)
+	assert.True(t, r.store.AddICKPFinishedEntry(existing))
+	r.executor.Load().runGCKPFunc = func(context.Context, *gckpContext, *runner) error {
+		return ErrBadIntent
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	assert.ErrorIs(t, r.ForceGCKP(ctx, existingEnd, 2*time.Hour), ErrBadIntent)
+	assert.Nil(t, r.store.MaxGlobalCheckpoint())
+}
+
+func TestReleaseForceGCKPReservationRetriggersUncoveredICKP(t *testing.T) {
+	r := NewRunner(context.Background(), nil, nil, nil, nil, nil)
+	defer r.StopExecutor(ErrStopRunner)
+
+	end := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	incremental := NewCheckpointEntry("", types.TS{}, end, ET_Incremental)
+	incremental.SetState(ST_Finished)
+	assert.True(t, r.store.AddICKPFinishedEntry(incremental))
+
+	executed := make(chan *gckpContext, 1)
+	executor := r.executor.Load()
+	executor.globalPolicy.minCount = 1
+	executor.runGCKPFunc = func(_ context.Context, request *gckpContext, _ *runner) error {
+		executed <- request
+		return nil
+	}
+
+	r.forceGCKPRequests.Add(1)
+	r.releaseForceGCKPReservation()
+	select {
+	case request := <-executed:
+		assert.Same(t, incremental, request.predecessor)
+		assert.Equal(t, end, request.end)
+	case <-time.After(time.Second):
+		t.Fatal("suppressed automatic GCKP was not handed back")
+	}
+	assert.Zero(t, r.forceGCKPRequests.Load())
+}
+
 func Test_Executor1(t *testing.T) {
 	var (
 		gctx1, gctx2 gckpContext
@@ -747,12 +952,14 @@ func Test_Executor1(t *testing.T) {
 	gctx2.histroyRetention = time.Duration(1)
 	gctx2.ckpLSN = 100
 	gctx2.truncateLSN = 10
+	gctx2.predecessor = NewCheckpointEntry("", gctx1.end, gctx2.end, ET_Incremental)
 	gctx1.Merge(&gctx2)
 	assert.True(t, gctx1.force)
 	assert.Equal(t, gctx2.end, gctx1.end)
-	assert.Equal(t, gctx2.histroyRetention, gctx1.histroyRetention)
+	assert.Equal(t, time.Duration(2), gctx1.histroyRetention)
 	assert.Equal(t, gctx2.ckpLSN, gctx1.ckpLSN)
 	assert.Equal(t, gctx2.truncateLSN, gctx1.truncateLSN)
+	assert.Same(t, gctx2.predecessor, gctx1.predecessor)
 
 	executor := newCheckpointExecutor(nil, nil)
 	assert.True(t, executor.active.Load())

@@ -1,0 +1,63 @@
+drop database if exists mysql_compat_null_predicate_matrix;
+create database mysql_compat_null_predicate_matrix;
+use mysql_compat_null_predicate_matrix;
+select null = null as null_eq_null,
+null <> null as null_ne_null,
+null <=> null as null_safe_null,
+null <=> 1 as null_safe_one,
+1 <=> null as one_null_safe,
+1 = null as one_eq_null,
+1 <> null as one_ne_null;
+null_eq_null    null_ne_null    null_safe_null    null_safe_one    one_null_safe    one_eq_null    one_ne_null
+null    null    1    0    0    null    null
+select 1 between null and 2 as one_between_null_two,
+3 between null and 2 as three_between_null_two,
+1 between 0 and null as one_between_zero_null,
+3 between 0 and null as three_between_zero_null,
+1 not between null and 2 as one_not_between_null_two,
+3 not between null and 2 as three_not_between_null_two,
+1 not between 0 and null as one_not_between_zero_null,
+3 not between 0 and null as three_not_between_zero_null;
+one_between_null_two    three_between_null_two    one_between_zero_null    three_between_zero_null    one_not_between_null_two    three_not_between_null_two    one_not_between_zero_null    three_not_between_zero_null
+null    0    null    null    null    1    null    null
+select 2 in (1, 2, null) as two_in_list_with_null,
+3 in (1, 2, null) as three_in_list_with_null,
+2 not in (1, 2, null) as two_not_in_list_with_null,
+3 not in (1, 2, null) as three_not_in_list_with_null;
+two_in_list_with_null    three_in_list_with_null    two_not_in_list_with_null    three_not_in_list_with_null
+1    null    0    null
+select (1, 2) in ((1, 2), (null, 2)) as row_match_in_with_null,
+(1, 3) in ((1, 2), (null, 3)) as row_unknown_in_with_null,
+(1, 2) not in ((1, 2), (null, 2)) as row_match_not_in_with_null,
+(1, 3) not in ((1, 2), (null, 3)) as row_unknown_not_in_with_null;
+row_match_in_with_null    row_unknown_in_with_null    row_match_not_in_with_null    row_unknown_not_in_with_null
+1    null    0    null
+drop table if exists t_null_pred;
+create table t_null_pred (
+id int primary key,
+a int,
+b int,
+s varchar(8)
+);
+insert into t_null_pred values
+(1, null, null, null),
+(2, 1, null, '1'),
+(3, 1, 2, '01'),
+(4, 3, 2, '3');
+select id,
+a = b as eq_ab,
+a <> b as ne_ab,
+a <=> b as nseq_ab,
+a between 1 and b as between_a_1_b,
+a not between 1 and b as not_between_a_1_b,
+a in (1, b) as in_a_1_b,
+a not in (1, b) as not_in_a_1_b,
+s <=> a as s_null_safe_a
+from t_null_pred
+order by id;
+id    eq_ab    ne_ab    nseq_ab    between_a_1_b    not_between_a_1_b    in_a_1_b    not_in_a_1_b    s_null_safe_a
+1    null    null    1    null    null    null    null    1
+2    null    null    0    null    null    1    0    1
+3    0    1    0    1    0    1    0    1
+4    0    1    0    0    1    0    1    1
+drop database mysql_compat_null_predicate_matrix;

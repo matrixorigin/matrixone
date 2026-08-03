@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -191,6 +192,37 @@ func TestAObjMergeContainsNull(t *testing.T) {
 	releaseF()
 }
 
+func TestAObjMergeDecimal256(t *testing.T) {
+	testPool := &testPool{pool: mocks.GetTestVectorPool()}
+	decimalTyp := types.New(types.T_decimal256, 39, 4)
+	batches := []*containers.Batch{
+		newDecimal256AObjBatch(t, decimalTyp, []string{
+			"-2.0000",
+			"1234567890123456789012345678901234.5678",
+			"9999999999999999999999999999999999.9999",
+		}),
+		newDecimal256AObjBatch(t, decimalTyp, []string{
+			"0.0001",
+			"1234567890123456789012345678901234.5677",
+		}),
+	}
+	for _, bat := range batches {
+		defer bat.Close()
+	}
+
+	ret, releaseF, mapping, err := MergeAObj(context.Background(), testPool, batches, 0, []uint32{3, 2})
+	require.NoError(t, err)
+	defer releaseF()
+	require.Equal(t, []int{0, 3, 4, 1, 2}, mapping)
+	require.Equal(t, []string{
+		"-2.0000",
+		"0.0001",
+		"1234567890123456789012345678901234.5677",
+		"1234567890123456789012345678901234.5678",
+		"9999999999999999999999999999999999.9999",
+	}, decimal256AObjResult(ret, decimalTyp.Scale))
+}
+
 func TestAObjMergeAllTypes(t *testing.T) {
 	vecTypes := types.MockColTypes()
 	testPool := &testPool{pool: mocks.GetTestVectorPool()}
@@ -208,6 +240,31 @@ func TestAObjMergeAllTypes(t *testing.T) {
 		t.Logf("%-20v takes %v", vecType, time.Since(t0))
 		releaseF()
 	}
+}
+
+func newDecimal256AObjBatch(t *testing.T, decimalTyp types.Type, values []string) *containers.Batch {
+	t.Helper()
+
+	bat := containers.NewBatch()
+	vec := containers.NewVector(decimalTyp)
+	for _, value := range values {
+		decimalValue, err := types.ParseDecimal256(value, decimalTyp.Width, decimalTyp.Scale)
+		require.NoError(t, err)
+		vec.Append(decimalValue, false)
+	}
+	bat.AddVector("", vec)
+	return bat
+}
+
+func decimal256AObjResult(batches []*batch.Batch, scale int32) []string {
+	var result []string
+	for _, bat := range batches {
+		values := vector.MustFixedColNoTypeCheck[types.Decimal256](bat.Vecs[0])
+		for i := 0; i < bat.Vecs[0].Length(); i++ {
+			result = append(result, values[i].Format(scale))
+		}
+	}
+	return result
 }
 
 func TestReshapeBatches1(t *testing.T) {

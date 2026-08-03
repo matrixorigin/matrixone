@@ -194,6 +194,7 @@ func (s *methodBasedServer[REQ, RESP]) onMessage(
 	resp := s.pool.AcquireResponse()
 	handlerCtx, ok := s.getHandleFunc(ctx, req, resp)
 	if !ok {
+		defer request.Cancel()
 		s.pool.ReleaseRequest(req)
 		return cs.Write(ctx, resp)
 	}

@@ -17,6 +17,7 @@ package cache
 import (
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -288,5 +289,26 @@ func (c *VectorIndexCache) Remove(key string) {
 		algo := value.(*VectorIndexSearch)
 		algo.Destroy()
 		algo = nil
+	}
+}
+
+// RemovePrefix removes every cached index whose key starts with prefix.
+//
+// Algorithms that qualify their cache key with mutable state cannot name the
+// live key from the DDL path: IVF-FLAT caches under "<indexTable>:<version>"
+// (plus "/<cnIdx>/<cnCnt>" when the read is split across CNs), and the version
+// comes from the meta table at search time, so a DROP that guessed ":0" evicted
+// nothing once the index had been rebuilt. Such callers pass "<indexTable>:"
+// and drop every generation at once.
+func (c *VectorIndexCache) RemovePrefix(prefix string) {
+	keys := make([]string, 0, 4)
+	c.IndexMap.Range(func(key, value any) bool {
+		if k, ok := key.(string); ok && strings.HasPrefix(k, prefix) {
+			keys = append(keys, k)
+		}
+		return true
+	})
+	for _, k := range keys {
+		c.Remove(k)
 	}
 }

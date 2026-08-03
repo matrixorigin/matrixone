@@ -26,7 +26,7 @@ import (
 func Test_GetInt64(t *testing.T) {
 	var ret int64
 	var err error
-	var colNum = 16
+	var colNum = 17
 	convey.Convey("GetInt64 succ", t, func() {
 		mrs := &MysqlResultSet{}
 		mrs.Data = make([][]interface{}, colNum)
@@ -122,8 +122,13 @@ func Test_GetInt64(t *testing.T) {
 		convey.So(ret, convey.ShouldEqual, 14)
 		convey.So(err, convey.ShouldBeNil)
 
-		mrs.Data[15][0] = types.Decimal64(15)
+		mrs.Data[15][0] = types.MoYear(2024)
 		ret, err = mrs.GetInt64(context.TODO(), 15, 0)
+		convey.So(ret, convey.ShouldEqual, 2024)
+		convey.So(err, convey.ShouldBeNil)
+
+		mrs.Data[16][0] = types.Decimal64(15)
+		ret, err = mrs.GetInt64(context.TODO(), 16, 0)
 		convey.So(ret, convey.ShouldEqual, 0)
 		convey.So(err, convey.ShouldNotBeNil)
 	})

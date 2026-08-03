@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -262,6 +263,694 @@ func Test_BasicS3InsertDelete(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, 5, ret.RowCount())
+	require.NoError(t, txn.Commit(ctx))
+}
+
+// Test_Issue25557MidTxnDumpKeepsWorkspaceVisibility drives the full
+// issue #25557 chain against a real engine:
+//
+//	relation.Write -> dumpBatch [txn.Lock()]
+//	  -> dumpInsertBatchLocked -> getTable
+//	    -> (fault-injected) internal SQL [locks the workspace]
+//
+// A tiny write-workspace threshold and an exhausted quota pool force the
+// dump in the middle of the statement, and the fault point makes getTable
+// run the internal-SQL leg exactly like a compile hitting the dump window.
+// The internal SQL must not advance the statement boundary, so the
+// statement keeps not seeing its own writes, and after the statement ends
+// the flushed rows are fully visible.
+func Test_Issue25557MidTxnDumpKeepsWorkspaceVisibility(t *testing.T) {
+	var (
+		err          error
+		mp           *mpool.MPool
+		txn          client.TxnOperator
+		accountId    = catalog.System_Account
+		tableName    = "test_table"
+		databaseName = "test_database"
+
+		primaryKeyIdx = 3
+
+		relation engine.Relation
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema.Name = tableName
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
+		ctx,
+		testutil.TestOptions{},
+		t,
+		// force the dump in the middle of the write statement
+		testutil.WithDisttaeEngineWriteWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
+		// an exhausted quota pool so the dump cannot be postponed
+		testutil.WithDisttaeEngineQuota(1),
+	)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	// Make getTable run the internal-SQL leg (iarg 1: keep the normal lookup
+	// working afterwards).
+	fault.Enable()
+	defer fault.Disable()
+	require.NoError(t, fault.AddFaultPoint(
+		ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable, ":::", "echo", 1, "", false))
+	defer func() {
+		_, err := fault.RemoveFaultPoint(
+			ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable)
+		require.NoError(t, err)
+	}()
+
+	rowsCount := 10
+	bat := catalog2.MockBatch(schema, rowsCount)
+	bat1 := containers.ToCNBatch(bat)
+
+	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+	require.NoError(t, err)
+
+	// Do NOT end the statement yet: the boundary must stay at the statement
+	// start even though the dump ran an internal SQL in between.
+	require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat1, false, false))
+
+	// the internal SQL must not advance the statement boundary, so the
+	// statement keeps not seeing its own writes
+	require.Equal(t, 0, txn.GetWorkspace().GetSnapshotWriteOffset(),
+		"internal SQL must not advance snapshotWriteOffset")
+	require.Equal(t, 0, issue25557ReadRowCount(
+		t, ctx, disttaeEngine, txn, relation, schema, primaryKeyIdx, mp),
+		"a statement must not see its own writes")
+
+	// the write workspace threshold guarantees the insert was flushed to S3
+	// during the statement; once the statement ends, the flushed rows must
+	// be visible to this transaction
+	require.NoError(t, testutil.EndThisStatement(ctx, txn))
+	require.Equal(t, rowsCount, issue25557ReadRowCount(
+		t, ctx, disttaeEngine, txn, relation, schema, primaryKeyIdx, mp),
+		"rows flushed by the mid-statement dump must stay visible "+
+			"to reads of the same transaction")
+	require.NoError(t, txn.Commit(ctx))
+
+	// the committed data must be complete
+	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+	require.NoError(t, err)
+	require.Equal(t, rowsCount, issue25557ReadRowCount(
+		t, ctx, disttaeEngine, txn, relation, schema, primaryKeyIdx, mp))
+	require.NoError(t, txn.Commit(ctx))
+}
+
+// issue25557ReadRowCount reads every row of the relation visible to txn and
+// returns the total row count.
+func issue25557ReadRowCount(
+	t *testing.T,
+	ctx context.Context,
+	e *testutil.TestDisttaeEngine,
+	txn client.TxnOperator,
+	relation engine.Relation,
+	schema *catalog2.Schema,
+	primaryKeyIdx int,
+	mp *mpool.MPool,
+) int {
+	reader, err := testutil.GetRelationReader(ctx, e, txn, relation, nil, mp, t)
+	require.NoError(t, err)
+	total := 0
+	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	for {
+		done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
+		require.NoError(t, err)
+		total += ret.RowCount()
+		if done {
+			break
+		}
+	}
+	reader.Close()
+	return total
+}
+
+// Test_Issue25557MultiEntryDumpCompaction covers the many-to-one workspace
+// compaction case: two raw INSERT entries of one table, written in the same
+// statement, are merged into a single S3 entry by a mid-statement dump. A
+// snapshot offset captured by the (fault-injected) internal SQL inside the
+// dump-resolution window must not exceed the compacted workspace: on the
+// broken code the captured offset is 2 while one entry remains, and the
+// same-transaction read panics with index out of range in
+// ForEachTableWrites.
+func Test_Issue25557MultiEntryDumpCompaction(t *testing.T) {
+	var (
+		err          error
+		mp           *mpool.MPool
+		txn          client.TxnOperator
+		accountId    = catalog.System_Account
+		tableName    = "test_table"
+		databaseName = "test_database"
+
+		primaryKeyIdx = 3
+
+		relation engine.Relation
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema.Name = tableName
+
+	totalRows := 210
+	bat := containers.ToCNBatch(catalog2.MockBatch(schema, totalRows))
+	bat1, err := bat.Window(0, 10)
+	require.NoError(t, err)
+	bat2, err := bat.Window(10, totalRows)
+	require.NoError(t, err)
+
+	// The first write must stay below the dump threshold and the second one
+	// must cross it, so that the dump sees two raw entries of one table. The
+	// in-memory entry of a write is its batch plus a generated rowid vector,
+	// so bat1's entry stays below bat1.Size()+bat2.Size() while both entries
+	// together always cross it.
+	dumpThreshold := uint64(bat1.Size() + bat2.Size())
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
+		ctx,
+		testutil.TestOptions{},
+		t,
+		testutil.WithDisttaeEngineWriteWorkspaceThreshold(dumpThreshold),
+		testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
+		// an exhausted quota pool so the dump cannot be postponed
+		testutil.WithDisttaeEngineQuota(1),
+	)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	// getTable runs three times: the write-time PK resolution of each write,
+	// then the dump-side table resolution. Only the last one must simulate
+	// the internal-SQL leg, exactly like a compile hitting the dump window.
+	fault.Enable()
+	defer fault.Disable()
+	require.NoError(t, fault.AddFaultPoint(
+		ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable, "3:3::", "echo", 1, "", false))
+	defer func() {
+		_, err := fault.RemoveFaultPoint(
+			ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable)
+		require.NoError(t, err)
+	}()
+
+	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+	require.NoError(t, err)
+
+	txn.GetWorkspace().StartStatement()
+	require.NoError(t, relation.Write(ctx, bat1))
+	// crosses the threshold: the dump compacts both raw entries into one S3
+	// entry while the fault-injected internal SQL runs in the resolution
+	// window
+	require.NoError(t, relation.Write(ctx, bat2))
+
+	// Reads inside the writing statement must not observe the statement's own
+	// writes; on the broken code this read panics with index out of range
+	// because the captured offset (2) exceeds the compacted workspace (1).
+	require.Equal(t, 0, issue25557ReadRowCount(
+		t, ctx, disttaeEngine, txn, relation, schema, primaryKeyIdx, mp),
+		"a statement must not see its own writes")
+
+	// the internal SQL must not advance the statement boundary
+	require.Equal(t, 0, txn.GetWorkspace().GetSnapshotWriteOffset(),
+		"internal SQL must not advance snapshotWriteOffset")
+
+	require.NoError(t, testutil.EndThisStatement(ctx, txn))
+	require.Equal(t, totalRows, issue25557ReadRowCount(
+		t, ctx, disttaeEngine, txn, relation, schema, primaryKeyIdx, mp),
+		"rows flushed by the mid-statement dump must be visible after the statement ends")
+	require.NoError(t, txn.Commit(ctx))
+
+	// the committed data must be complete
+	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+	require.NoError(t, err)
+	require.Equal(t, totalRows, issue25557ReadRowCount(
+		t, ctx, disttaeEngine, txn, relation, schema, primaryKeyIdx, mp))
+	require.NoError(t, txn.Commit(ctx))
+}
+
+// Test_Issue25557DumpWindowAppendKeepsPrefix orchestrates a workspace append
+// while the dump-resolution window is open: table A's dump parks inside the
+// window (WAIT fault), table B is written meanwhile, and the dump then
+// compacts A only. Any statement boundary captured around the window must
+// keep excluding both in-flight writes: on the broken code the reentrant
+// update inside the window sets the boundary to 1, and after compaction the
+// prefix [0, 1) is the raw entry of B instead of A — B becomes visible to
+// its own statement and A's rows disappear.
+func Test_Issue25557DumpWindowAppendKeepsPrefix(t *testing.T) {
+	var (
+		err          error
+		mp           *mpool.MPool
+		txn          client.TxnOperator
+		accountId    = catalog.System_Account
+		tableAName   = "test_table_a"
+		tableBName   = "test_table_b"
+		databaseName = "test_database"
+
+		primaryKeyIdx = 3
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	schemaA := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schemaA.Name = tableAName
+	schemaB := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schemaB.Name = tableBName
+
+	rowsA := 200
+	rowsB := 5
+	batA := containers.ToCNBatch(catalog2.MockBatch(schemaA, rowsA))
+	batB := containers.ToCNBatch(catalog2.MockBatch(schemaB, rowsB))
+
+	// table A's write crosses the threshold on its own (its entry includes
+	// the generated rowid vector on top of batA), while table B's small
+	// write alone stays below it
+	dumpThreshold := uint64(batA.Size())
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
+		ctx,
+		testutil.TestOptions{},
+		t,
+		testutil.WithDisttaeEngineWriteWorkspaceThreshold(dumpThreshold),
+		testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineQuota(1),
+	)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableAName, schemaA)
+	require.NoError(t, err)
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName+"_b", tableBName, schemaB)
+	require.NoError(t, err)
+
+	fault.Enable()
+	defer fault.Disable()
+	// every getTable simulates the internal-SQL leg
+	require.NoError(t, fault.AddFaultPoint(
+		ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable, ":::", "echo", 1, "", false))
+	defer func() {
+		_, err := fault.RemoveFaultPoint(
+			ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable)
+		require.NoError(t, err)
+	}()
+	// only the first dump (table A's) parks inside its resolution window
+	require.NoError(t, fault.AddFaultPoint(
+		ctx, objectio.FJ_CNDumpResolveWindowWait, "1:1::", "WAIT", 0, "", false))
+	defer func() {
+		_, _ = fault.RemoveFaultPoint(ctx, objectio.FJ_CNDumpResolveWindowWait)
+	}()
+	const waitersProbe = "issue25557_window_waiters"
+	const windowNotify = "issue25557_window_notify"
+	require.NoError(t, fault.AddFaultPoint(
+		ctx, waitersProbe, ":::", "GETWAITERS", 0, objectio.FJ_CNDumpResolveWindowWait, false))
+	defer func() {
+		_, _ = fault.RemoveFaultPoint(ctx, waitersProbe)
+	}()
+	require.NoError(t, fault.AddFaultPoint(
+		ctx, windowNotify, ":::", "NOTIFYALL", 0, objectio.FJ_CNDumpResolveWindowWait, false))
+	defer func() {
+		_, _ = fault.RemoveFaultPoint(ctx, windowNotify)
+	}()
+
+	_, relationA, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableAName)
+	require.NoError(t, err)
+	dbB, err := disttaeEngine.Engine.Database(ctx, databaseName+"_b", txn)
+	require.NoError(t, err)
+	relationB, err := dbB.Relation(ctx, tableBName, nil)
+	require.NoError(t, err)
+
+	txn.GetWorkspace().StartStatement()
+
+	// table A's write triggers the dump, which parks inside the resolution
+	// window with the transaction lock released
+	writeADone := make(chan error, 1)
+	go func() {
+		writeADone <- relationA.Write(ctx, batA)
+	}()
+
+	waitDeadline := time.Now().Add(10 * time.Second)
+	for {
+		n, _, ok := fault.TriggerFault(waitersProbe)
+		require.True(t, ok)
+		if n >= 1 {
+			break
+		}
+		require.True(t, time.Now().Before(waitDeadline),
+			"table A's dump never reached the resolution window")
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// append table B's write while the window is open
+	require.NoError(t, relationB.Write(ctx, batB))
+
+	// resume table A's dump
+	_, _, ok := fault.TriggerFault(windowNotify)
+	require.True(t, ok)
+
+	select {
+	case err = <-writeADone:
+		require.NoError(t, err)
+	case <-time.After(20 * time.Second):
+		t.Fatal("table A's write did not finish: dump deadlocked")
+	}
+
+	// the statement boundary must still be at the statement start: table B's
+	// raw entry must not have slipped into the visible prefix
+	require.Equal(t, 0, txn.GetWorkspace().GetSnapshotWriteOffset(),
+		"internal SQL must not advance snapshotWriteOffset")
+	require.Equal(t, 0, issue25557ReadRowCount(
+		t, ctx, disttaeEngine, txn, relationB, schemaB, primaryKeyIdx, mp),
+		"a statement must not see its own writes (table B)")
+	require.Equal(t, 0, issue25557ReadRowCount(
+		t, ctx, disttaeEngine, txn, relationA, schemaA, primaryKeyIdx, mp),
+		"a statement must not see its own writes (table A)")
+
+	require.NoError(t, testutil.EndThisStatement(ctx, txn))
+	require.Equal(t, rowsA, issue25557ReadRowCount(
+		t, ctx, disttaeEngine, txn, relationA, schemaA, primaryKeyIdx, mp))
+	require.Equal(t, rowsB, issue25557ReadRowCount(
+		t, ctx, disttaeEngine, txn, relationB, schemaB, primaryKeyIdx, mp))
+	require.NoError(t, txn.Commit(ctx))
+
+	// the committed data must be complete for both tables
+	_, relationA, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableAName)
+	require.NoError(t, err)
+	require.Equal(t, rowsA, issue25557ReadRowCount(
+		t, ctx, disttaeEngine, txn, relationA, schemaA, primaryKeyIdx, mp))
+	require.NoError(t, txn.Commit(ctx))
+
+	_, relationB, txn, err = disttaeEngine.GetTable(ctx, databaseName+"_b", tableBName)
+	require.NoError(t, err)
+	require.Equal(t, rowsB, issue25557ReadRowCount(
+		t, ctx, disttaeEngine, txn, relationB, schemaB, primaryKeyIdx, mp))
+	require.NoError(t, txn.Commit(ctx))
+}
+
+// Test_Issue25557ObjectCompactionNoDeadlock covers the object-deletion
+// compaction leg of issue #25557: a transaction dumps an insert to S3,
+// deletes a row of the uncommitted block, and commits. The commit runs
+// IncrStatementID -> mergeTxnWorkspaceLocked -> compactDeletionOnObjsLocked
+// while holding the transaction lock; on the broken code the compaction
+// workers call getTable, whose (fault-injected) internal SQL waits for the
+// same lock while the lock owner waits for the workers — a cross-goroutine
+// deadlock.
+func Test_Issue25557ObjectCompactionNoDeadlock(t *testing.T) {
+	var (
+		err          error
+		mp           *mpool.MPool
+		accountId    = catalog.System_Account
+		tableName    = "test_table"
+		databaseName = "test_database"
+
+		primaryKeyIdx = 3
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	_ = colexec.NewServer("")
+
+	schema := catalog2.MockSchemaEnhanced(4, primaryKeyIdx, 9)
+	schema.Name = tableName
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
+		ctx,
+		testutil.TestOptions{},
+		t,
+		testutil.WithDisttaeEngineInsertEntryMaxCount(1),
+		testutil.WithDisttaeEngineCommitWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineWriteWorkspaceThreshold(1),
+		testutil.WithDisttaeEngineQuota(1),
+	)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	fault.Enable()
+	defer fault.Disable()
+	require.NoError(t, fault.AddFaultPoint(
+		ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable, ":::", "echo", 1, "", false))
+	defer func() {
+		_, err := fault.RemoveFaultPoint(
+			ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable)
+		require.NoError(t, err)
+	}()
+
+	insertCnt := 150
+	deleteCnt := 1
+	var tombstoneBat *batch.Batch
+
+	_, table, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+	require.NoError(t, err)
+
+	// the tiny write threshold flushes the insert to S3 during the write
+	bat := catalog2.MockBatch(schema, insertCnt)
+	require.NoError(t, table.Write(ctx, containers.ToCNBatch(bat)))
+
+	entryCnt := 0
+	txn.GetWorkspace().(*disttae.Transaction).ForEachTableWrites(
+		table.GetDBID(ctx), table.GetTableID(ctx), 1, func(entry disttae.Entry) {
+			if entry.Bat() == nil ||
+				entry.Bat().RowCount() == 0 ||
+				entry.FileName() == "" {
+				return
+			}
+			entryCnt++
+
+			tombstoneBat = batch.NewWithSize(1)
+			tombstoneBat.Attrs = append(tombstoneBat.Attrs, catalog.Row_ID)
+			tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+
+			blk := objectio.DecodeBlockInfo(entry.Bat().GetVector(0).GetBytesAt(0))
+			for i := 0; i < deleteCnt; i++ {
+				rid := types.NewRowid(&blk.BlockID, uint32(i))
+				require.NoError(t, vector.AppendFixed[types.Rowid](
+					tombstoneBat.Vecs[0], rid, false, mp))
+			}
+			tombstoneBat.SetRowCount(deleteCnt)
+		})
+	require.Equal(t, 1, entryCnt)
+
+	// deleting rows of the uncommitted block feeds txn.deletedBlocks, so the
+	// commit must compact the dumped object
+	require.NoError(t, table.Delete(ctx, tombstoneBat, catalog.Row_ID))
+
+	commitDone := make(chan error, 1)
+	go func() {
+		commitDone <- txn.Commit(ctx)
+	}()
+	select {
+	case err = <-commitDone:
+		require.NoError(t, err)
+	case <-time.After(20 * time.Second):
+		t.Fatal("commit did not finish: object-deletion compaction deadlocked")
+	}
+
+	// the committed data must be complete
+	{
+		_, _, reader, err := testutil.GetTableTxnReader(
+			ctx,
+			disttaeEngine,
+			databaseName,
+			tableName,
+			nil,
+			mp,
+			t,
+		)
+		require.NoError(t, err)
+
+		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+		_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
+		require.NoError(t, err)
+		require.Equal(t, insertCnt-deleteCnt, ret.RowCount())
+	}
+}
+
+// Test_Issue25557MultiEntryDeleteDumpAtCommit covers the DELETE twin of the
+// many-to-one compaction case: two raw DELETE entries of one table are
+// merged into a single tombstone object by the commit-time dump, with the
+// fault-injected internal SQL running in the dump-resolution window.
+func Test_Issue25557MultiEntryDeleteDumpAtCommit(t *testing.T) {
+	var (
+		err          error
+		mp           *mpool.MPool
+		txn          client.TxnOperator
+		accountId    = catalog.System_Account
+		tableName    = "test_table"
+		databaseName = "test_database"
+
+		primaryKeyIdx = 3
+
+		relation engine.Relation
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema.Name = tableName
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
+		ctx,
+		testutil.TestOptions{},
+		t,
+		// force the commit-time dump of the delete entries
+		testutil.WithDisttaeEngineInsertEntryMaxCount(5),
+	)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	rowsCount := 20
+	bat := containers.ToCNBatch(catalog2.MockBatch(schema, rowsCount))
+
+	// insert and commit the rows the deletes will target
+	{
+		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat, false, true))
+		require.NoError(t, txn.Commit(ctx))
+	}
+
+	fault.Enable()
+	defer fault.Disable()
+	require.NoError(t, fault.AddFaultPoint(
+		ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable, ":::", "echo", 1, "", false))
+	defer func() {
+		_, err := fault.RemoveFaultPoint(
+			ctx, objectio.FJ_CNReenterSnapshotOffsetOnGetTable)
+		require.NoError(t, err)
+	}()
+
+	// collect the rowids and pks of the first 10 rows
+	deleteRows := 10
+	tombstoneBat := batch.NewWithSize(2)
+	tombstoneBat.Attrs = []string{catalog.Row_ID, schema.GetPrimaryKey().Name}
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	tombstoneBat.Vecs[1] = vector.NewVec(schema.GetPrimaryKey().Type)
+
+	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+	require.NoError(t, err)
+	{
+		reader, err := testutil.GetRelationReader(
+			ctx, disttaeEngine, txn, relation, nil, mp, t)
+		require.NoError(t, err)
+
+		ret := batch.NewWithSize(2)
+		ret.Attrs = []string{schema.GetPrimaryKey().Name, catalog.Row_ID}
+		ret.Vecs = []*vector.Vector{
+			vector.NewVec(schema.GetPrimaryKey().Type),
+			vector.NewVec(types.T_Rowid.ToType()),
+		}
+		for {
+			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
+			require.NoError(t, err)
+			if done {
+				break
+			}
+			for i := 0; i < ret.RowCount() && tombstoneBat.Vecs[0].Length() < deleteRows; i++ {
+				require.NoError(t, vector.AppendFixed[types.Rowid](
+					tombstoneBat.Vecs[0],
+					vector.GetFixedAtWithTypeCheck[types.Rowid](ret.Vecs[1], i),
+					false, mp))
+				require.NoError(t, vector.AppendFixed[int64](
+					tombstoneBat.Vecs[1],
+					vector.GetFixedAtWithTypeCheck[int64](ret.Vecs[0], i),
+					false, mp))
+			}
+		}
+		tombstoneBat.SetRowCount(tombstoneBat.Vecs[0].Length())
+		require.Equal(t, deleteRows, tombstoneBat.RowCount())
+	}
+
+	// two DELETE entries of one table in the same transaction
+	tb1, err := tombstoneBat.Window(0, deleteRows/2)
+	require.NoError(t, err)
+	tb2, err := tombstoneBat.Window(deleteRows/2, deleteRows)
+	require.NoError(t, err)
+	require.NoError(t, relation.Delete(ctx, tb1, catalog.Row_ID))
+	require.NoError(t, relation.Delete(ctx, tb2, catalog.Row_ID))
+
+	// the commit-time dump merges both entries into one tombstone object
+	commitDone := make(chan error, 1)
+	go func() {
+		commitDone <- txn.Commit(ctx)
+	}()
+	select {
+	case err = <-commitDone:
+		require.NoError(t, err)
+	case <-time.After(20 * time.Second):
+		t.Fatal("commit did not finish: delete dump deadlocked")
+	}
+
+	// the committed data must be complete
+	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+	require.NoError(t, err)
+	require.Equal(t, rowsCount-deleteRows, issue25557ReadRowCount(
+		t, ctx, disttaeEngine, txn, relation, schema, primaryKeyIdx, mp))
 	require.NoError(t, txn.Commit(ctx))
 }
 
@@ -1429,7 +2118,7 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 	defer cancel()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	// mock a schema with 4 columns and the 4th column as primary key
 	// the first column is the 9th column in the predefined columns in
@@ -1836,7 +2525,7 @@ func TestGCFiles(t *testing.T) {
 		for i := range files {
 			objectio.SetObjectStatsBlkCnt(&files[i], 1)
 			objectio.SetObjectStatsRowCnt(&files[i], 1)
-			bat := colexec.AllocCNS3ResultBat(false, false)
+			bat := colexec.AllocCNS3ResultBat(false)
 			colexec.ExpandObjectStatsToBatch(p.Mp, false, bat, true, files[i])
 			err = txn.WriteFile(
 				disttae.INSERT,

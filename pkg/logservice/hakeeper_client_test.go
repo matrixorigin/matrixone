@@ -50,6 +50,65 @@ func TestHAKeeperClientConfigIsValidated(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestHAKeeperClientConstructorsRejectContextWithoutDeadline(t *testing.T) {
+	original := newHAKeeperClientFunc
+	newHAKeeperClientFunc = func(
+		context.Context,
+		string,
+		HAKeeperClientConfig,
+	) (*hakeeperClient, error) {
+		t.Fatal("constructor must not dial without a context deadline")
+		return nil, nil
+	}
+	defer func() {
+		newHAKeeperClientFunc = original
+	}()
+
+	cfg := HAKeeperClientConfig{}
+	tests := []struct {
+		name string
+		fn   func(context.Context, string, HAKeeperClientConfig) (any, error)
+	}{
+		{
+			name: "cluster",
+			fn: func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (any, error) {
+				return NewClusterHAKeeperClient(ctx, sid, cfg)
+			},
+		},
+		{
+			name: "cn",
+			fn: func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (any, error) {
+				return NewCNHAKeeperClient(ctx, sid, cfg)
+			},
+		},
+		{
+			name: "tn",
+			fn: func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (any, error) {
+				return NewTNHAKeeperClient(ctx, sid, cfg)
+			},
+		},
+		{
+			name: "log",
+			fn: func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (any, error) {
+				return NewLogHAKeeperClient(ctx, sid, cfg)
+			},
+		},
+		{
+			name: "proxy",
+			fn: func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (any, error) {
+				return NewProxyHAKeeperClient(ctx, sid, cfg)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := tt.fn(context.TODO(), "", cfg)
+			require.Nil(t, c)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		})
+	}
+}
+
 func TestHAKeeperClientsCanBeCreated(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cfg := HAKeeperClientConfig{
@@ -66,6 +125,193 @@ func TestHAKeeperClientsCanBeCreated(t *testing.T) {
 		c3, err := NewLogHAKeeperClient(ctx, "", cfg)
 		assert.NoError(t, err)
 		assert.NoError(t, c3.Close())
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestAllocateIDByKeyWithRequestID(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		proceedHAKeeperToRunning(t, s.store)
+		cfg := HAKeeperClientConfig{
+			ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		client, err := NewCNHAKeeperClient(ctx, "", cfg)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, client.Close())
+		}()
+
+		managed := client.(*managedHAKeeperClient)
+		firstID, err := managed.AllocateIDByKeyWithRequestID(ctx, "bootstrap", 1, "cn-1")
+		require.NoError(t, err)
+		secondID, err := managed.AllocateIDByKeyWithRequestID(ctx, "bootstrap", 1, "cn-1")
+		require.NoError(t, err)
+		require.Equal(t, firstID, secondID)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestHAKeeperClientMethodsRejectContextWithoutDeadline(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		cfg := HAKeeperClientConfig{
+			ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		cnClient, err := NewCNHAKeeperClient(ctx, "", cfg)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, cnClient.Close())
+		}()
+		tnClient, err := NewTNHAKeeperClient(ctx, "", cfg)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, tnClient.Close())
+		}()
+		logClient, err := NewLogHAKeeperClient(ctx, "", cfg)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, logClient.Close())
+		}()
+		proxyClient, err := NewProxyHAKeeperClient(ctx, "", cfg)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, proxyClient.Close())
+		}()
+
+		tests := []struct {
+			name string
+			fn   func(context.Context) error
+		}{
+			{
+				name: "CheckLogServiceHealth",
+				fn:   cnClient.CheckLogServiceHealth,
+			},
+			{
+				name: "GetClusterDetails",
+				fn: func(ctx context.Context) error {
+					_, err := cnClient.GetClusterDetails(ctx)
+					return err
+				},
+			},
+			{
+				name: "GetClusterState",
+				fn: func(ctx context.Context) error {
+					_, err := cnClient.GetClusterState(ctx)
+					return err
+				},
+			},
+			{
+				name: "AllocateID",
+				fn: func(ctx context.Context) error {
+					_, err := cnClient.AllocateID(ctx)
+					return err
+				},
+			},
+			{
+				name: "AllocateIDByKey",
+				fn: func(ctx context.Context) error {
+					_, err := cnClient.AllocateIDByKey(ctx, "test-key")
+					return err
+				},
+			},
+			{
+				name: "AllocateIDByKeyWithBatch",
+				fn: func(ctx context.Context) error {
+					_, err := cnClient.AllocateIDByKeyWithBatch(ctx, "test-key-batch", 2)
+					return err
+				},
+			},
+			{
+				name: "SendCNHeartbeat",
+				fn: func(ctx context.Context) error {
+					_, err := cnClient.SendCNHeartbeat(ctx, pb.CNStoreHeartbeat{})
+					return err
+				},
+			},
+			{
+				name: "UpdateNonVotingReplicaNum",
+				fn: func(ctx context.Context) error {
+					return cnClient.UpdateNonVotingReplicaNum(ctx, 1)
+				},
+			},
+			{
+				name: "UpdateNonVotingLocality",
+				fn: func(ctx context.Context) error {
+					return cnClient.UpdateNonVotingLocality(ctx, pb.Locality{})
+				},
+			},
+			{
+				name: "GetBackupData",
+				fn: func(ctx context.Context) error {
+					_, err := cnClient.GetBackupData(ctx)
+					return err
+				},
+			},
+			{
+				name: "SendTNHeartbeat",
+				fn: func(ctx context.Context) error {
+					_, err := tnClient.SendTNHeartbeat(ctx, pb.TNStoreHeartbeat{})
+					return err
+				},
+			},
+			{
+				name: "SendLogHeartbeat",
+				fn: func(ctx context.Context) error {
+					_, err := logClient.SendLogHeartbeat(ctx, pb.LogStoreHeartbeat{})
+					return err
+				},
+			},
+			{
+				name: "GetCNState",
+				fn: func(ctx context.Context) error {
+					_, err := proxyClient.GetCNState(ctx)
+					return err
+				},
+			},
+			{
+				name: "UpdateCNLabel",
+				fn: func(ctx context.Context) error {
+					return proxyClient.UpdateCNLabel(ctx, pb.CNStoreLabel{})
+				},
+			},
+			{
+				name: "UpdateCNWorkState",
+				fn: func(ctx context.Context) error {
+					return proxyClient.UpdateCNWorkState(ctx, pb.CNWorkState{})
+				},
+			},
+			{
+				name: "PatchCNStore",
+				fn: func(ctx context.Context) error {
+					return proxyClient.PatchCNStore(ctx, pb.CNStateLabel{})
+				},
+			},
+			{
+				name: "DeleteCNStore",
+				fn: func(ctx context.Context) error {
+					return proxyClient.DeleteCNStore(ctx, pb.DeleteCNStore{})
+				},
+			},
+			{
+				name: "SendProxyHeartbeat",
+				fn: func(ctx context.Context) error {
+					_, err := proxyClient.SendProxyHeartbeat(ctx, pb.ProxyHeartbeat{})
+					return err
+				},
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				require.NotPanics(t, func() {
+					err := tt.fn(context.Background())
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+				})
+			})
+		}
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -656,7 +902,9 @@ func TestAllocateIDRetriesPrepareClientError(t *testing.T) {
 	c := &managedHAKeeperClient{
 		cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
 	}
-	firstID, err := c.AllocateID(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	firstID, err := c.AllocateID(ctx)
 	require.NoError(t, err)
 	require.Equal(t, uint64(42), firstID)
 	require.Equal(t, 2, attempts)
@@ -737,11 +985,186 @@ func TestAllocateIDRetriesEOFSendError(t *testing.T) {
 	c := &managedHAKeeperClient{
 		cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
 	}
-	firstID, err := c.AllocateID(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	firstID, err := c.AllocateID(ctx)
 	require.NoError(t, err)
 	require.Equal(t, uint64(42), firstID)
 	require.Equal(t, 2, attempts)
 	require.Equal(t, 2, sendCalls)
+}
+
+func TestAllocateIDByKeyWithRequestIDRetriesLostResponse(t *testing.T) {
+	originalNew := newHAKeeperClientFunc
+	originalSend := sendCNAllocateIDWithRequestIDFunc
+	originalRetryInterval := hakeeperClientRetryInterval
+	defer func() {
+		newHAKeeperClientFunc = originalNew
+		sendCNAllocateIDWithRequestIDFunc = originalSend
+		hakeeperClientRetryInterval = originalRetryInterval
+	}()
+
+	hakeeperClientRetryInterval = 0
+	newHAKeeperClientFunc = func(
+		context.Context,
+		string,
+		HAKeeperClientConfig,
+	) (*hakeeperClient, error) {
+		return &hakeeperClient{}, nil
+	}
+
+	attempts := 0
+	sendCNAllocateIDWithRequestIDFunc = func(
+		_ *hakeeperClient,
+		_ context.Context,
+		key string,
+		batch uint64,
+		requestID string,
+	) (uint64, error) {
+		attempts++
+		require.Equal(t, "bootstrap", key)
+		require.Equal(t, uint64(1), batch)
+		require.Equal(t, "cn-1", requestID)
+		if attempts == 1 {
+			// The allocation was committed, but the reply did not reach the CN.
+			return 0, io.ErrUnexpectedEOF
+		}
+		return 1, nil
+	}
+
+	c := &managedHAKeeperClient{cfg: HAKeeperClientConfig{}}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	id, err := c.AllocateIDByKeyWithRequestID(ctx, "bootstrap", 1, "cn-1")
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), id)
+	require.Equal(t, 2, attempts)
+}
+
+func TestAllocateIDByKeyWithRequestIDRejectsInvalidInputBeforeRPC(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	c := &managedHAKeeperClient{}
+
+	tests := []struct {
+		name      string
+		ctx       context.Context
+		key       string
+		batchSize uint64
+		requestID string
+		errCode   uint16
+	}{
+		{
+			name:      "context without deadline",
+			ctx:       context.Background(),
+			key:       "bootstrap",
+			batchSize: 1,
+			requestID: "cn-1",
+			errCode:   moerr.ErrInvalidInput,
+		},
+		{
+			name:      "empty key",
+			ctx:       ctx,
+			batchSize: 1,
+			requestID: "cn-1",
+			errCode:   moerr.ErrInternal,
+		},
+		{
+			name:      "batch is not one",
+			ctx:       ctx,
+			key:       "bootstrap",
+			batchSize: 2,
+			requestID: "cn-1",
+			errCode:   moerr.ErrInvalidInput,
+		},
+		{
+			name:      "empty request ID",
+			ctx:       ctx,
+			key:       "bootstrap",
+			batchSize: 1,
+			errCode:   moerr.ErrInvalidInput,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := c.AllocateIDByKeyWithRequestID(tt.ctx, tt.key, tt.batchSize, tt.requestID)
+			require.True(t, moerr.IsMoErrCode(err, tt.errCode))
+			require.Nil(t, c.mu.client)
+		})
+	}
+}
+
+func TestAllocateIDByKeyWithRequestIDRetriesPrepareClientError(t *testing.T) {
+	originalNew := newHAKeeperClientFunc
+	originalSend := sendCNAllocateIDWithRequestIDFunc
+	originalRetryInterval := hakeeperClientRetryInterval
+	defer func() {
+		newHAKeeperClientFunc = originalNew
+		sendCNAllocateIDWithRequestIDFunc = originalSend
+		hakeeperClientRetryInterval = originalRetryInterval
+	}()
+
+	hakeeperClientRetryInterval = 0
+	newCalls := 0
+	newHAKeeperClientFunc = func(
+		context.Context,
+		string,
+		HAKeeperClientConfig,
+	) (*hakeeperClient, error) {
+		newCalls++
+		if newCalls == 1 {
+			return nil, io.ErrUnexpectedEOF
+		}
+		return &hakeeperClient{}, nil
+	}
+
+	sendCalls := 0
+	sendCNAllocateIDWithRequestIDFunc = func(
+		_ *hakeeperClient,
+		_ context.Context,
+		_ string,
+		_ uint64,
+		_ string,
+	) (uint64, error) {
+		sendCalls++
+		return 42, nil
+	}
+
+	c := &managedHAKeeperClient{}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	id, err := c.AllocateIDByKeyWithRequestID(ctx, "bootstrap", 1, "cn-1")
+	require.NoError(t, err)
+	require.Equal(t, uint64(42), id)
+	require.Equal(t, 2, newCalls)
+	require.Equal(t, 1, sendCalls)
+}
+
+func TestAllocateIDByKeyWithRequestIDReturnsNonRetryableSendError(t *testing.T) {
+	originalSend := sendCNAllocateIDWithRequestIDFunc
+	defer func() {
+		sendCNAllocateIDWithRequestIDFunc = originalSend
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	sendErr := moerr.NewInternalError(ctx, "send failed")
+	sendCNAllocateIDWithRequestIDFunc = func(
+		_ *hakeeperClient,
+		_ context.Context,
+		_ string,
+		_ uint64,
+		_ string,
+	) (uint64, error) {
+		return 0, sendErr
+	}
+
+	c := &managedHAKeeperClient{}
+	c.mu.client = &hakeeperClient{}
+	_, err := c.AllocateIDByKeyWithRequestID(ctx, "bootstrap", 1, "cn-1")
+	require.ErrorIs(t, err, sendErr)
+	require.Nil(t, c.mu.client)
 }
 
 func TestAllocateBatchIDRetriesPrepareClientError(t *testing.T) {
@@ -782,7 +1205,9 @@ func TestAllocateBatchIDRetriesPrepareClientError(t *testing.T) {
 		cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
 	}
 	c.mu.allocIDByKey = make(map[string]*allocID)
-	firstID, err := c.AllocateIDByKeyWithBatch(context.Background(), "x", 2)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	firstID, err := c.AllocateIDByKeyWithBatch(ctx, "x", 2)
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), firstID)
 	require.Equal(t, 2, attempts)
@@ -865,11 +1290,212 @@ func TestAllocateBatchIDRetriesEOFSendError(t *testing.T) {
 		cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
 	}
 	c.mu.allocIDByKey = make(map[string]*allocID)
-	firstID, err := c.AllocateIDByKeyWithBatch(context.Background(), "x", 2)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	firstID, err := c.AllocateIDByKeyWithBatch(ctx, "x", 2)
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), firstID)
 	require.Equal(t, 2, attempts)
 	require.Equal(t, 2, sendCalls)
+}
+
+func TestAllocateBatchIDKeepsClientOnContextError(t *testing.T) {
+	originalSend := sendCNAllocateIDFunc
+	defer func() {
+		sendCNAllocateIDFunc = originalSend
+	}()
+
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "canceled", err: context.Canceled},
+		{name: "deadline exceeded", err: context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &hakeeperClient{}
+			sendCalls := 0
+			sendCNAllocateIDFunc = func(
+				actualClient *hakeeperClient,
+				_ context.Context,
+				key string,
+				batch uint64,
+			) (uint64, error) {
+				sendCalls++
+				require.Same(t, client, actualClient)
+				require.Equal(t, "x", key)
+				require.Equal(t, uint64(2), batch)
+				if sendCalls == 1 {
+					return 0, tt.err
+				}
+				return 100, nil
+			}
+
+			c := &managedHAKeeperClient{
+				cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
+			}
+			c.mu.client = client
+			c.mu.allocIDByKey = make(map[string]*allocID)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			_, err := c.AllocateIDByKeyWithBatch(ctx, "x", 2)
+			require.ErrorIs(t, err, tt.err)
+			require.Same(t, client, c.mu.client,
+				"a caller-scoped context error must not close the shared client")
+
+			firstID, err := c.AllocateIDByKeyWithBatch(ctx, "x", 2)
+			require.NoError(t, err)
+			require.Equal(t, uint64(100), firstID)
+			require.Equal(t, 2, sendCalls)
+		})
+	}
+}
+
+func TestAllocateIDConsumesEntireBatch(t *testing.T) {
+	originalSend := sendCNAllocateIDFunc
+	defer func() {
+		sendCNAllocateIDFunc = originalSend
+	}()
+
+	tests := []struct {
+		name        string
+		key         string
+		allocateIDs func(context.Context, *managedHAKeeperClient) ([]uint64, error)
+	}{
+		{
+			name: "shared",
+			allocateIDs: func(ctx context.Context, c *managedHAKeeperClient) ([]uint64, error) {
+				ids := make([]uint64, 0, 3)
+				for range 3 {
+					id, err := c.AllocateID(ctx)
+					if err != nil {
+						return nil, err
+					}
+					ids = append(ids, id)
+				}
+				return ids, nil
+			},
+		},
+		{
+			name: "keyed",
+			key:  "key",
+			allocateIDs: func(ctx context.Context, c *managedHAKeeperClient) ([]uint64, error) {
+				ids := make([]uint64, 0, 3)
+				for range 3 {
+					id, err := c.AllocateIDByKeyWithBatch(ctx, "key", 3)
+					if err != nil {
+						return nil, err
+					}
+					ids = append(ids, id)
+				}
+				return ids, nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sendCalls := 0
+			sendCNAllocateIDFunc = func(
+				_ *hakeeperClient,
+				_ context.Context,
+				key string,
+				batch uint64,
+			) (uint64, error) {
+				sendCalls++
+				require.Equal(t, tt.key, key)
+				require.Equal(t, uint64(3), batch)
+				return uint64((sendCalls-1)*3 + 1), nil
+			}
+
+			c := &managedHAKeeperClient{
+				cfg: HAKeeperClientConfig{AllocateIDBatch: 3},
+			}
+			c.mu.client = &hakeeperClient{}
+			c.mu.allocIDByKey = make(map[string]*allocID)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			ids, err := tt.allocateIDs(ctx, c)
+			require.NoError(t, err)
+			require.Equal(t, []uint64{1, 2, 3}, ids)
+			require.Equal(t, 1, sendCalls)
+		})
+	}
+}
+
+func TestAllocateBatchOneIDsRemainUniqueAcrossClients(t *testing.T) {
+	originalSend := sendCNAllocateIDFunc
+	defer func() {
+		sendCNAllocateIDFunc = originalSend
+	}()
+
+	nextID := uint64(1)
+	sendCalls := 0
+	sendCNAllocateIDFunc = func(
+		_ *hakeeperClient,
+		_ context.Context,
+		key string,
+		batch uint64,
+	) (uint64, error) {
+		require.Equal(t, "locker", key)
+		require.Equal(t, uint64(1), batch)
+		sendCalls++
+		firstID := nextID
+		nextID += batch
+		return firstID, nil
+	}
+
+	newClient := func() *managedHAKeeperClient {
+		c := &managedHAKeeperClient{}
+		c.mu.client = &hakeeperClient{}
+		c.mu.allocIDByKey = make(map[string]*allocID)
+		return c
+	}
+	clientA := newClient()
+	clientB := newClient()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	a1, err := clientA.AllocateIDByKeyWithBatch(ctx, "locker", 1)
+	require.NoError(t, err)
+	a2, err := clientA.AllocateIDByKeyWithBatch(ctx, "locker", 1)
+	require.NoError(t, err)
+	b1, err := clientB.AllocateIDByKeyWithBatch(ctx, "locker", 1)
+	require.NoError(t, err)
+
+	require.Equal(t, []uint64{1, 2, 3}, []uint64{a1, a2, b1})
+	require.Equal(t, 3, sendCalls)
+}
+
+func TestAllocateIDByKeyRejectsZeroBatchBeforeRPC(t *testing.T) {
+	originalSend := sendCNAllocateIDFunc
+	defer func() {
+		sendCNAllocateIDFunc = originalSend
+	}()
+
+	sendCalls := 0
+	sendCNAllocateIDFunc = func(
+		_ *hakeeperClient,
+		_ context.Context,
+		_ string,
+		_ uint64,
+	) (uint64, error) {
+		sendCalls++
+		return 1, nil
+	}
+
+	c := &managedHAKeeperClient{}
+	c.mu.client = &hakeeperClient{}
+	c.mu.allocIDByKey = make(map[string]*allocID)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, err := c.AllocateIDByKeyWithBatch(ctx, "key", 0)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Equal(t, 0, sendCalls)
 }
 
 func TestHAKeeperClientUpdateCNWorkState(t *testing.T) {
@@ -1188,10 +1814,42 @@ func TestHAKeeperClientCheckLogServiceHealth(t *testing.T) {
 }
 
 func Test_NewLogHAKeeperClientWithRetry(t *testing.T) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second, moerr.NewInternalErrorNoCtx("ut tester"))
-	defer cancel()
-	cfg := HAKeeperClientConfig{
-		DiscoveryAddress: "wrongaddress",
+	original := newHAKeeperClientFunc
+	attempted := make(chan struct{}, 2)
+	newHAKeeperClientFunc = func(
+		context.Context,
+		string,
+		HAKeeperClientConfig,
+	) (*hakeeperClient, error) {
+		attempted <- struct{}{}
+		return nil, moerr.NewInternalErrorNoCtx("injected creation failure")
 	}
-	NewLogHAKeeperClientWithRetry(ctx, "", cfg)
+	defer func() {
+		newHAKeeperClientFunc = original
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cfg := HAKeeperClientConfig{
+		DiscoveryAddress: "unused",
+	}
+	done := make(chan ClusterHAKeeperClient, 1)
+	go func() {
+		done <- NewLogHAKeeperClientWithRetry(ctx, "", cfg)
+	}()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-attempted:
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "HAKeeper client retry was not attempted")
+		}
+	}
+	cancel()
+
+	select {
+	case client := <-done:
+		require.Nil(t, client)
+	case <-time.After(time.Second):
+		require.FailNow(t, "retry backoff did not observe context cancellation")
+	}
 }

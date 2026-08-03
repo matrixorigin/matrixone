@@ -37,6 +37,7 @@ const (
 	P_decimal
 	P_bit
 	P_ScoreBinary
+	P_ScoreBinaryHexnum
 	P_nulltext
 	P_star // the * in count(*), not a string literal
 )
@@ -187,7 +188,22 @@ func NewNumVal[T bool | int64 | uint64 | float64 | string](val T, originString s
 }
 
 func (node *NumVal) Format(ctx *FmtCtx) {
-	if strings.Contains(node.origString, "\\") {
+	if ctx.ModeIndependentStringLiterals() {
+		switch node.ValType {
+		case P_char:
+			if strings.Contains(node.origString, "\\") {
+				fmt.Fprintf(ctx, "cast(0x%x as varchar)", []byte(node.origString))
+				return
+			}
+		case P_ScoreBinary:
+			fmt.Fprintf(ctx, "_binary 0x%x", []byte(node.origString))
+			return
+		case P_ScoreBinaryHexnum:
+			fmt.Fprintf(ctx, "_binary %s", node.origString)
+			return
+		}
+	}
+	if strings.Contains(node.origString, "\\") && !ctx.NoBackslashEscape() {
 		ctx.WriteValue(node.ValType, FormatString(node.origString))
 		return
 	}

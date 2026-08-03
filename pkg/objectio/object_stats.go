@@ -153,6 +153,14 @@ func (des *ObjectStats) GetAppendable() bool {
 	return des[reservedOffset]&ObjectFlag_Appendable != 0
 }
 
+func SetObjectStatsAppendable(des *ObjectStats, appendable bool) {
+	if appendable {
+		des[reservedOffset] |= ObjectFlag_Appendable
+	} else {
+		des[reservedOffset] &^= ObjectFlag_Appendable
+	}
+}
+
 func (des *ObjectStats) GetSorted() bool {
 	return des[reservedOffset]&ObjectFlag_Sorted != 0
 }

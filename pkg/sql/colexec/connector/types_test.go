@@ -60,10 +60,11 @@ func TestConnectorResetAbortsSpoolWhenTerminalSignalCannotBeDelivered(t *testing
 	reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(sp, 0)
 	conn := &Connector{Reg: reg}
 	conn.ctr.sp = sp
+	sourceErr := moerr.NewCheckRecursiveLevel(context.Background())
 
 	done := make(chan struct{})
 	go func() {
-		conn.Reset(nil, true, moerr.NewInternalErrorNoCtx("cleanup"))
+		conn.Reset(nil, true, sourceErr)
 		close(done)
 	}()
 
@@ -83,7 +84,41 @@ func TestConnectorResetAbortsSpoolWhenTerminalSignalCannotBeDelivered(t *testing
 	staleSignal := <-reg.Ch2
 	got, info := staleSignal.Action()
 	require.Nil(t, got)
-	require.ErrorIs(t, info, pSpool.ErrPipelineSpoolAborted)
+	require.Same(t, sourceErr, info)
+}
+
+func TestConnectorResetPreservesErrorAheadOfDeliveredTerminal(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newConnectorSpoolTestBatch(t, srcMP, 1)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := pSpool.InitMyPipelineSpool(mp, 1)
+	queryDone, err := sp.SendBatch(context.Background(), 0, src, nil)
+	require.NoError(t, err)
+	require.False(t, queryDone)
+
+	reg := process.NewPipelineEdge(2, 0)
+	reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(sp, 0)
+	conn := &Connector{Reg: reg}
+	conn.ctr.sp = sp
+	sourceErr := moerr.NewCheckRecursiveLevel(context.Background())
+
+	conn.Reset(nil, true, sourceErr)
+
+	receiver := process.InitPipelineSignalReceiver(context.Background(), []*process.WaitRegister{reg})
+	got, info := receiver.GetNextBatch(nil)
+	require.Nil(t, got)
+	require.Same(t, sourceErr, info)
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 func TestConnectorResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing.T) {
@@ -141,7 +176,85 @@ func TestConnectorResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing
 	staleSignal := <-reg.Ch2
 	got, info := staleSignal.Action()
 	require.Nil(t, got)
-	require.ErrorIs(t, info, pSpool.ErrPipelineSpoolAborted)
+	require.Same(t, process.ErrPipelineEndSignalDeliveryFailed, info)
+}
+
+func TestConnectorResetUndeliveredFallbackAbortWakesReceiver(t *testing.T) {
+	oldSignalSendTimeout := process.PipelineSignalSendTimeout
+	process.PipelineSignalSendTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		process.PipelineSignalSendTimeout = oldSignalSendTimeout
+	})
+
+	reg := process.NewPipelineEdge(1, 0)
+	reg.Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
+
+	conn := &Connector{Reg: reg}
+	conn.Reset(nil, false, nil)
+
+	receiverCtx, cancelReceiver := context.WithCancel(context.Background())
+	defer cancelReceiver()
+	receiver := process.InitPipelineSignalReceiver(receiverCtx, []*process.WaitRegister{reg})
+
+	got, err := receiver.GetNextBatch(nil)
+	require.NoError(t, err)
+	require.Same(t, batch.EmptyBatch, got)
+
+	type result struct {
+		bat *batch.Batch
+		err error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		got, err := receiver.GetNextBatch(nil)
+		resultCh <- result{bat: got, err: err}
+	}()
+
+	select {
+	case result := <-resultCh:
+		require.Nil(t, result.bat)
+		require.ErrorIs(t, result.err, process.ErrPipelineEndSignalDeliveryFailed)
+	case <-time.After(time.Second):
+		cancelReceiver()
+		<-resultCh
+		t.Fatal("receiver remained blocked after the fallback Abort failed to enter the full channel")
+	}
+}
+
+func TestConnectorResetPreservesRecordedTerminalError(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newConnectorSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := pSpool.InitMyPipelineSpool(mp, 1)
+	queryDone, err := sp.SendBatch(context.Background(), 0, src, nil)
+	require.NoError(t, err)
+	require.False(t, queryDone)
+
+	reg := process.NewPipelineEdge(1, 0)
+	reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(sp, 0)
+	originalErr := moerr.NewDuplicateEntryNoCtx("1000000", "")
+	require.False(t, reg.TrySendError(originalErr))
+	require.ErrorIs(t, reg.Err(), originalErr)
+
+	conn := &Connector{Reg: reg}
+	conn.ctr.sp = sp
+	conn.Reset(nil, false, nil)
+
+	staleSignal := <-reg.Ch2
+	got, info := staleSignal.Action()
+	require.Nil(t, got)
+	require.ErrorIs(t, info, originalErr)
+	require.NotErrorIs(t, info, process.ErrPipelineEndSignalDeliveryFailed)
 }
 
 func TestConnectorResetUsesSharedTerminalSendBudget(t *testing.T) {

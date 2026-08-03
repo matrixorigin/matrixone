@@ -343,6 +343,8 @@ func TestEncodeDecodeValue(t *testing.T) {
 	require.NoError(t, err)
 	d128, err := Decimal128FromFloat64(42.03, 38, 2)
 	require.NoError(t, err)
+	d256, err := ParseDecimal256("12345678901234567890123456789012344.1234", 39, 4)
+	require.NoError(t, err)
 
 	var uuidVal Uuid
 	copy(uuidVal[:], []byte("unique-identifier"))
@@ -373,6 +375,7 @@ func TestEncodeDecodeValue(t *testing.T) {
 		{"float64", T_float64, float64(18.75), func(v any) any { return v }},
 		{"decimal64", T_decimal64, d64, func(v any) any { return v }},
 		{"decimal128", T_decimal128, d128, func(v any) any { return v }},
+		{"decimal256", T_decimal256, d256, func(v any) any { return v }},
 		{"date", T_date, Date(202405), func(v any) any { return v }},
 		{"time", T_time, Time(1122334455), func(v any) any { return v }},
 		{"timestamp", T_timestamp, Timestamp(778899), func(v any) any { return v }},
@@ -413,6 +416,10 @@ func TestCompareValues(t *testing.T) {
 	d64b, _ := Decimal64FromFloat64(12, 18, 0)
 	d128a, _ := Decimal128FromFloat64(100, 38, 0)
 	d128b, _ := Decimal128FromFloat64(101, 38, 0)
+	d256a, err := ParseDecimal256("100", 65, 0)
+	require.NoError(t, err)
+	d256b, err := ParseDecimal256("101", 65, 0)
+	require.NoError(t, err)
 
 	var uuidA, uuidB Uuid
 	copy(uuidA[:], []byte("aaaaaaaaaaaaaaaa"))
@@ -438,18 +445,24 @@ func TestCompareValues(t *testing.T) {
 	float32a, float32b := float32(1.2), float32(3.4)
 	float64a, float64b := float64(1.2), float64(3.4)
 
-	require.Equal(t, int(int8a-int8b), CompareValue(int8a, int8b))
-	require.Equal(t, int(int16a-int16b), CompareValue(int16a, int16b))
-	require.Equal(t, int(int32a-int32b), CompareValue(int32a, int32b))
-	require.Equal(t, int(int64a-int64b), CompareValue(int64a, int64b))
-	require.Equal(t, int(uint8a-uint8b), CompareValue(uint8a, uint8b))
-	require.Equal(t, int(uint16a-uint16b), CompareValue(uint16a, uint16b))
-	require.Equal(t, int(uint32a-uint32b), CompareValue(uint32a, uint32b))
-	require.Equal(t, int(uint64a-uint64b), CompareValue(uint64a, uint64b))
-	require.Equal(t, int(float32a-float32b), CompareValue(float32a, float32b))
-	require.Equal(t, int(float64a-float64b), CompareValue(float64a, float64b))
+	require.Equal(t, -1, CompareValue(int8a, int8b))
+	require.Equal(t, -1, CompareValue(int16a, int16b))
+	require.Equal(t, -1, CompareValue(int32a, int32b))
+	require.Equal(t, -1, CompareValue(int64a, int64b))
+	require.Equal(t, -1, CompareValue(uint8a, uint8b))
+	require.Equal(t, -1, CompareValue(uint16a, uint16b))
+	require.Equal(t, -1, CompareValue(uint32a, uint32b))
+	require.Equal(t, -1, CompareValue(uint64a, uint64b))
+	require.Equal(t, -1, CompareValue(float32a, float32b))
+	require.Equal(t, -1, CompareValue(float64a, float64b))
+	require.Equal(t, 1, CompareValue(uint8b, uint8a))
+	require.Equal(t, 1, CompareValue(uint16b, uint16a))
+	require.Equal(t, 1, CompareValue(uint32b, uint32a))
+	require.Equal(t, -1, CompareValue(float32(1.1), float32(1.2)))
+	require.Equal(t, -1, CompareValue(1.1, 1.2))
 	require.Equal(t, -1, CompareValue(d64a, d64b))
 	require.Equal(t, -1, CompareValue(d128a, d128b))
+	require.Equal(t, -1, CompareValue(d256a, d256b))
 	require.Equal(t, -1, CompareValue(Date(1), Date(2)))
 	require.Equal(t, -1, CompareValue(Time(1), Time(2)))
 	require.Equal(t, -1, CompareValue(Timestamp(1), Timestamp(2)))
@@ -459,7 +472,7 @@ func TestCompareValues(t *testing.T) {
 	require.Equal(t, -1, CompareValue(rowA, rowB))
 	require.Equal(t, bytes.Compare([]byte("a"), []byte("b")), CompareValue([]byte("a"), []byte("b")))
 	enumA, enumB := Enum(1), Enum(2)
-	require.Equal(t, int(enumA-enumB), CompareValue(enumA, enumB))
+	require.Equal(t, -1, CompareValue(enumA, enumB))
 	require.Equal(t, 0, CompareValue(int32a, int32a))
 }
 
