@@ -460,7 +460,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if dynamicParamPos >= 0 && int(dynamicParamPos) < len(rule.params) {
 				param := rule.params[dynamicParamPos]
 				value := param.GetLit().GetSval()
-				switch types.T(param.Typ.Id) {
+				runtimeType := types.T(param.Typ.Id)
+				switch runtimeType {
 				case types.T_float32:
 					parsed, parseErr := strconv.ParseFloat(value, 32)
 					if parseErr != nil {
@@ -468,6 +469,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					}
 					return MakePlan2Float32ConstExprWithType(float32(parsed)), nil
 				case types.T_float64:
+					parsed, parseErr := strconv.ParseFloat(value, 64)
+					if parseErr != nil {
+						return nil, parseErr
+					}
+					return MakePlan2Float64ConstExprWithType(parsed), nil
+				}
+				if (runtimeType == types.T_any || runtimeType.IsMySQLString()) && isDecimalScientificNotation(value) {
 					parsed, parseErr := strconv.ParseFloat(value, 64)
 					if parseErr != nil {
 						return nil, parseErr
@@ -532,6 +540,41 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	default:
 		return e, nil
 	}
+}
+
+func isDecimalScientificNotation(value string) bool {
+	if value == "" {
+		return false
+	}
+	pos := 0
+	if value[pos] == '+' || value[pos] == '-' {
+		pos++
+	}
+	mantissaDigits := 0
+	dotSeen := false
+	for pos < len(value) && value[pos] != 'e' && value[pos] != 'E' {
+		switch {
+		case value[pos] >= '0' && value[pos] <= '9':
+			mantissaDigits++
+		case value[pos] == '.' && !dotSeen:
+			dotSeen = true
+		default:
+			return false
+		}
+		pos++
+	}
+	if mantissaDigits == 0 || pos == len(value) {
+		return false
+	}
+	pos++
+	if pos < len(value) && (value[pos] == '+' || value[pos] == '-') {
+		pos++
+	}
+	exponentStart := pos
+	for pos < len(value) && value[pos] >= '0' && value[pos] <= '9' {
+		pos++
+	}
+	return pos == len(value) && pos > exponentStart
 }
 
 func applyWindowExpr(e *plan.Expr, apply func(*plan.Expr) (*plan.Expr, error)) (*plan.Expr, error) {

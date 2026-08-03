@@ -27,6 +27,12 @@ SET @numeric_param = 1e100;
 EXECUTE numeric_reexecute USING @numeric_param;
 SET @numeric_param = -1e10;
 EXECUTE numeric_reexecute USING @numeric_param;
+SET @numeric_param = '1e10';
+EXECUTE numeric_reexecute USING @numeric_param;
+SET @numeric_param = '1e-10';
+EXECUTE numeric_reexecute USING @numeric_param;
+SET @numeric_param = '-1e10';
+EXECUTE numeric_reexecute USING @numeric_param;
 DEALLOCATE PREPARE numeric_reexecute;
 
 CREATE TABLE pagination_rows (id INT PRIMARY KEY);

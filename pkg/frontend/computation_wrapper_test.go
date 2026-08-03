@@ -339,6 +339,14 @@ func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
 		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
 		require.True(t, types.T(root.ProjectList[0].Typ.Id).IsFloat())
 	}
+	for _, value := range []string{"1e10", "1e-10", "-1e10"} {
+		require.NoError(t, ses.SetUserDefinedVar("numeric_param", value, ""))
+		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+		require.NoError(t, err)
+		require.Nil(t, comp)
+		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
+		require.True(t, types.T(root.ProjectList[0].Typ.Id).IsFloat())
+	}
 
 	for _, value := range []string{
 		"-12345678901234567890123456789012345678901234567890123456789012345",
@@ -372,6 +380,20 @@ func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
 		require.NoError(t, vector.AppendBytes(params, []byte(test.value), false, cw.proc.Mp()))
 		prepareStmt.params = params
 		prepareStmt.ParamTypes = []byte{byte(test.typ), 0}
+		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		require.Nil(t, comp)
+		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
+		require.True(t, types.T(root.ProjectList[0].Typ.Id).IsFloat())
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+		prepareStmt.params = nil
+	}
+	for _, value := range []string{"1e10", "1e-10", "-1e10"} {
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
+		prepareStmt.params = params
+		prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
 		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 		require.NoError(t, err)
 		require.Nil(t, comp)

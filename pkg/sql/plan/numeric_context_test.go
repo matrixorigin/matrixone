@@ -691,6 +691,24 @@ func TestPreparedDynamicNumericPlanSpecializesPerExecutionValue(t *testing.T) {
 
 	require.True(t, HasPreparedDynamicNumericParams(prepare.Plan), "specialization must not mutate the canonical plan")
 
+	for _, value := range []string{"1e10", "1e-10", "-1e10", "+1.5E+10", ".5e2", "1.e2"} {
+		t.Run("scientific string "+value, func(t *testing.T) {
+			specialized, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{value})
+			require.NoError(t, err)
+			root := specialized.GetQuery().Nodes[specialized.GetQuery().Steps[0]]
+			require.NotEmpty(t, root.ProjectList)
+			require.True(t, types.T(root.ProjectList[0].Typ.Id).IsFloat())
+		})
+	}
+	for _, value := range []string{"10", "1.25", "-0.5"} {
+		t.Run("exact decimal string "+value, func(t *testing.T) {
+			specialized, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{value})
+			require.NoError(t, err)
+			root := specialized.GetQuery().Nodes[specialized.GetQuery().Steps[0]]
+			require.NotEmpty(t, root.ProjectList)
+			require.True(t, types.T(root.ProjectList[0].Typ.Id).IsDecimal())
+		})
+	}
 	for _, test := range []struct {
 		name        string
 		value       string
@@ -717,6 +735,15 @@ func TestPreparedDynamicNumericPlanSpecializesPerExecutionValue(t *testing.T) {
 	explicitCast := buildPreparedAggregatePlan(t, "select cast(? as decimal(65, 30)) + 1")
 	require.False(t, HasPreparedDynamicNumericParams(explicitCast.Plan),
 		"an explicit DECIMAL(65,30) cast is a user contract, not a dynamic marker")
+}
+
+func TestDecimalScientificNotationRecognition(t *testing.T) {
+	for _, value := range []string{"1e10", "1e-10", "-1E10", "+1.5E+10", ".5e2", "1.e2"} {
+		require.True(t, isDecimalScientificNotation(value), value)
+	}
+	for _, value := range []string{"", "+", "10", "1.25", "e10", "1e", "1e+", "1e2x", "1e2e3", "NaN", "+Inf"} {
+		require.False(t, isDecimalScientificNotation(value), value)
+	}
 }
 
 func numericTestBinding(table, col string, typ types.Type) *Binding {
