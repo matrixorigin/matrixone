@@ -16,6 +16,7 @@ package v4_0_6
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -70,19 +71,42 @@ func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32,
 	return nil
 }
 
-const legacyForeignKeyTableDefinitionsSQL = "SELECT DISTINCT fk.db_name, fk.table_name, tbl.rel_createsql " +
+const legacyForeignKeyTableDefinitionsSQL = "SELECT fk.db_name, fk.table_name, tbl.rel_createsql, " +
+	"fk.constraint_name, fk.column_name, fk.refer_db_name, fk.refer_table_name, fk.refer_column_name, fk.on_delete, fk.on_update " +
 	"FROM mo_catalog.mo_foreign_keys fk " +
 	"JOIN mo_catalog.mo_tables tbl ON tbl.reldatabase = fk.db_name AND tbl.relname = fk.table_name " +
-	"WHERE fk.constraint_id = 0"
+	"WHERE fk.constraint_id = 0 " +
+	"ORDER BY fk.db_name, fk.table_name, fk.constraint_name, fk.column_name"
 
 type legacyForeignKeyTableDefinition struct {
-	database  string
-	table     string
-	createSQL string
+	database    string
+	table       string
+	createSQL   string
+	foreignKeys []legacyForeignKeyCatalogRow
 }
 
-// upgradeLegacyForeignKeyMetadata restores details that earlier catalog rows did
-// not persist: composite column order and whether a RESTRICT action was omitted.
+// legacyForeignKeyCatalogRow is the durable source for foreign keys that do
+// not occur in rel_createsql, such as constraints added by ALTER TABLE. It is
+// also the source of the generated name for an unnamed CREATE TABLE foreign
+// key, because rel_createsql precedes adjustConstraintName.
+type legacyForeignKeyCatalogRow struct {
+	constraintName  string
+	columnName      string
+	referDBName     string
+	referTableName  string
+	referColumnName string
+	onDelete        string
+	onUpdate        string
+}
+
+type legacyForeignKeyCatalogConstraint struct {
+	name string
+	rows []legacyForeignKeyCatalogRow
+}
+
+// upgradeLegacyForeignKeyMetadata restores zero-valued legacy FK ordinals. It
+// uses the original CREATE statement when available and catalog rows for FKs
+// added later with ALTER TABLE or named after the CREATE SQL was persisted.
 func upgradeLegacyForeignKeyMetadata(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
 	definitions, err := getLegacyForeignKeyTableDefinitions(tenantID, txn)
 	if err != nil {
@@ -113,12 +137,30 @@ func getLegacyForeignKeyTableDefinitions(tenantID int32, txn executor.TxnExecuto
 	defer res.Close()
 
 	definitions := make([]legacyForeignKeyTableDefinition, 0)
+	definitionByTable := make(map[string]int)
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		for i := 0; i < rows; i++ {
-			definitions = append(definitions, legacyForeignKeyTableDefinition{
-				database:  cols[0].GetStringAt(i),
-				table:     cols[1].GetStringAt(i),
-				createSQL: cols[2].GetStringAt(i),
+			database := cols[0].GetStringAt(i)
+			table := cols[1].GetStringAt(i)
+			key := database + "\x00" + table
+			definitionIndex, ok := definitionByTable[key]
+			if !ok {
+				definitionIndex = len(definitions)
+				definitionByTable[key] = definitionIndex
+				definitions = append(definitions, legacyForeignKeyTableDefinition{
+					database:  database,
+					table:     table,
+					createSQL: cols[2].GetStringAt(i),
+				})
+			}
+			definitions[definitionIndex].foreignKeys = append(definitions[definitionIndex].foreignKeys, legacyForeignKeyCatalogRow{
+				constraintName:  cols[3].GetStringAt(i),
+				columnName:      cols[4].GetStringAt(i),
+				referDBName:     cols[5].GetStringAt(i),
+				referTableName:  cols[6].GetStringAt(i),
+				referColumnName: cols[7].GetStringAt(i),
+				onDelete:        cols[8].GetStringAt(i),
+				onUpdate:        cols[9].GetStringAt(i),
 			})
 		}
 		return true
@@ -145,30 +187,169 @@ func legacyForeignKeyMetadataUpdates(definition legacyForeignKeyTableDefinition)
 		return nil, moerr.NewInternalErrorNoCtxf("legacy foreign-key table %s.%s does not have a CREATE TABLE definition", definition.database, definition.table)
 	}
 
+	constraints := legacyForeignKeyCatalogConstraints(definition.foreignKeys)
+	matchedConstraints := make(map[string]bool)
 	updates := make([]string, 0)
 	for _, tableDef := range createTable.Defs {
 		foreignKey, ok := tableDef.(*tree.ForeignKey)
 		if !ok {
 			continue
 		}
-		if foreignKey.ConstraintSymbol == "" || foreignKey.Refer == nil {
+		if foreignKey.Refer == nil {
 			return nil, moerr.NewInternalErrorNoCtxf("legacy foreign key in %s.%s has incomplete persisted definition", definition.database, definition.table)
 		}
-		for ordinal, keyPart := range foreignKey.KeyParts {
-			updates = append(updates, fmt.Sprintf(
-				"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = %d, on_delete = %s, on_update = %s "+
-					"WHERE constraint_id = 0 AND db_name = %s AND table_name = %s AND constraint_name = %s AND column_name = %s",
+
+		if foreignKey.ConstraintSymbol != "" {
+			matchedConstraints[foreignKey.ConstraintSymbol] = true
+			updates = appendLegacyForeignKeyASTUpdates(updates, definition, foreignKey.ConstraintSymbol, foreignKey)
+			continue
+		}
+
+		// An unnamed FK is assigned its UUID after rel_createsql is persisted.
+		// Match it to the catalog rows by its complete child/reference column set.
+		// If that signature is ambiguous, leave every candidate to the catalog
+		// fallback below rather than assigning one AST action to another FK.
+		matchedIndex := -1
+		for i, constraint := range constraints {
+			if matchedConstraints[constraint.name] || !sameLegacyForeignKeyColumns(definition.database, foreignKey, constraint.rows) {
+				continue
+			}
+			if matchedIndex >= 0 {
+				matchedIndex = -1
+				break
+			}
+			matchedIndex = i
+		}
+		if matchedIndex >= 0 {
+			constraint := constraints[matchedIndex]
+			matchedConstraints[constraint.name] = true
+			updates = appendLegacyForeignKeyASTUpdates(updates, definition, constraint.name, foreignKey)
+		}
+	}
+
+	// rel_createsql is the original CREATE snapshot, so it cannot describe FKs
+	// introduced by ALTER TABLE. The catalog rows remain authoritative for their
+	// generated name, actions, and column pairs; assign stable ordinals from the
+	// catalog order without rewriting the actions.
+	for _, constraint := range constraints {
+		if matchedConstraints[constraint.name] {
+			continue
+		}
+		for ordinal, row := range constraint.rows {
+			updates = append(updates, legacyForeignKeyUpdateSQL(
+				definition,
+				constraint.name,
+				row.columnName,
 				ordinal+1,
-				quoteSQLStringLiteral(referenceActionName(foreignKey.Refer.OnDelete)),
-				quoteSQLStringLiteral(referenceActionName(foreignKey.Refer.OnUpdate)),
-				quoteSQLStringLiteral(definition.database),
-				quoteSQLStringLiteral(definition.table),
-				quoteSQLStringLiteral(foreignKey.ConstraintSymbol),
-				quoteSQLStringLiteral(keyPart.ColName.ColName()),
+				legacyCatalogReferenceActionName(row.onDelete),
+				legacyCatalogReferenceActionName(row.onUpdate),
 			))
 		}
 	}
 	return updates, nil
+}
+
+func legacyForeignKeyCatalogConstraints(rows []legacyForeignKeyCatalogRow) []legacyForeignKeyCatalogConstraint {
+	byName := make(map[string][]legacyForeignKeyCatalogRow)
+	for _, row := range rows {
+		byName[row.constraintName] = append(byName[row.constraintName], row)
+	}
+	names := make([]string, 0, len(byName))
+	for name := range byName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	constraints := make([]legacyForeignKeyCatalogConstraint, 0, len(names))
+	for _, name := range names {
+		constraintRows := byName[name]
+		sort.Slice(constraintRows, func(i, j int) bool {
+			return constraintRows[i].columnName < constraintRows[j].columnName
+		})
+		constraints = append(constraints, legacyForeignKeyCatalogConstraint{name: name, rows: constraintRows})
+	}
+	return constraints
+}
+
+func sameLegacyForeignKeyColumns(database string, foreignKey *tree.ForeignKey, rows []legacyForeignKeyCatalogRow) bool {
+	if len(foreignKey.KeyParts) != len(rows) || foreignKey.Refer == nil || len(foreignKey.Refer.KeyParts) != len(rows) {
+		return false
+	}
+	referDatabase := database
+	if foreignKey.Refer.TableName != nil && foreignKey.Refer.TableName.SchemaName != "" {
+		referDatabase = string(foreignKey.Refer.TableName.SchemaName)
+	}
+	referTable := ""
+	if foreignKey.Refer.TableName != nil {
+		referTable = string(foreignKey.Refer.TableName.ObjectName)
+	}
+	columns := make([]string, len(foreignKey.KeyParts))
+	for i, keyPart := range foreignKey.KeyParts {
+		columns[i] = keyPart.ColName.ColName() + "\x00" + foreignKey.Refer.KeyParts[i].ColName.ColName()
+	}
+	sort.Strings(columns)
+	catalogColumns := make([]string, len(rows))
+	for i, row := range rows {
+		catalogReferDatabase := row.referDBName
+		if catalogReferDatabase == "" {
+			catalogReferDatabase = database
+		}
+		if catalogReferDatabase != referDatabase || row.referTableName != referTable {
+			return false
+		}
+		catalogColumns[i] = row.columnName + "\x00" + row.referColumnName
+	}
+	sort.Strings(catalogColumns)
+	return strings.Join(columns, "\x00") == strings.Join(catalogColumns, "\x00")
+}
+
+func appendLegacyForeignKeyASTUpdates(
+	updates []string,
+	definition legacyForeignKeyTableDefinition,
+	constraintName string,
+	foreignKey *tree.ForeignKey,
+) []string {
+	for ordinal, keyPart := range foreignKey.KeyParts {
+		updates = append(updates, legacyForeignKeyUpdateSQL(
+			definition,
+			constraintName,
+			keyPart.ColName.ColName(),
+			ordinal+1,
+			referenceActionName(foreignKey.Refer.OnDelete),
+			referenceActionName(foreignKey.Refer.OnUpdate),
+		))
+	}
+	return updates
+}
+
+func legacyForeignKeyUpdateSQL(
+	definition legacyForeignKeyTableDefinition,
+	constraintName, columnName string,
+	ordinal int,
+	onDelete, onUpdate string,
+) string {
+	return fmt.Sprintf(
+		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = %d, on_delete = %s, on_update = %s "+
+			"WHERE constraint_id = 0 AND db_name = %s AND table_name = %s AND constraint_name = %s AND column_name = %s",
+		ordinal,
+		quoteSQLStringLiteral(onDelete),
+		quoteSQLStringLiteral(onUpdate),
+		quoteSQLStringLiteral(definition.database),
+		quoteSQLStringLiteral(definition.table),
+		quoteSQLStringLiteral(constraintName),
+		quoteSQLStringLiteral(columnName),
+	)
+}
+
+// Legacy rows with constraint_id = 0 were written before omitted foreign-key
+// actions were represented as NO_ACTION. Without an ALTER statement snapshot,
+// an omitted action and explicit RESTRICT are indistinguishable; keep the same
+// MySQL-compatible NO_ACTION normalization used for CREATE-table backfill.
+func legacyCatalogReferenceActionName(action string) string {
+	if strings.EqualFold(strings.TrimSpace(action), "RESTRICT") || strings.TrimSpace(action) == "" {
+		return "NO_ACTION"
+	}
+	return action
 }
 
 func referenceActionName(action tree.ReferenceOptionType) string {
