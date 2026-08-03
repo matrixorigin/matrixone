@@ -179,7 +179,10 @@ func TestShuffleJoinHardBudgetRejectTransitionsToSpill(t *testing.T) {
 	// This cap admits one bounded scatter pass and per-bucket rebuild, but not
 	// the complete 8K-row retained build/map. The very high soft threshold
 	// proves that spill is entered from hard admission rejection, not policy.
-	tc.proc.Base.Lim.Size = 2168 << 10
+	// Lazy spill scratch no longer consumes resident headroom before spill.
+	// Keep this cap below the resident hashmap peak while leaving enough room
+	// for the bounded scatter pass after the rejected map is released.
+	tc.proc.Base.Lim.Size = 1536 << 10
 	tc.proc.Base.Lim.SpillSize = 64 << 20
 
 	const rows = 8192

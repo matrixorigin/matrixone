@@ -74,6 +74,25 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	selectNode := builder.qry.Nodes[lastNodeID]
 	selectTag := selectNode.BindingTags[0]
 
+	// Validate the final replacement-row image before looking up or deleting any
+	// conflicting old rows. appendNodesForReplaceStmt has already applied defaults,
+	// assignment casts, generated columns, and PRE_INSERT processing, so CHECK sees
+	// the same values that MULTI_UPDATE would write.
+	var err error
+	lastNodeID, err = appendCheckConstraintPlan(
+		builder,
+		bindCtx,
+		tableDef,
+		lastNodeID,
+		selectTag,
+		colName2Idx,
+		false,
+	)
+	if err != nil {
+		return 0, err
+	}
+	selectNode = builder.qry.Nodes[lastNodeID]
+
 	// Enforce child->parent foreign keys on the inserted image with the same
 	// row-scoped per-FK MARK-join assert the modern INSERT path uses. REPLACE always
 	// inserts the new row (after deleting any conflicting row), so asserting the new

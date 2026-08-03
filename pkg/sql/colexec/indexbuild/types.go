@@ -32,8 +32,10 @@ const (
 )
 
 type container struct {
-	state int
-	buf   *batch.Batch
+	state               int
+	buf                 *batch.Batch
+	runtimeFilterUsable bool
+	runtimeFilterDone   bool
 }
 
 type IndexBuild struct {
@@ -76,8 +78,19 @@ func (indexBuild *IndexBuild) Release() {
 func (indexBuild *IndexBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	runtimeSucceed := indexBuild.ctr.state > HandleRuntimeFilter
 
-	message.FinalizeRuntimeFilter(indexBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
+	if !indexBuild.ctr.runtimeFilterDone {
+		if !runtimeSucceed && (pipelineFailed || err != nil) {
+			message.FinalizeRuntimeFilterOnBuildError(
+				indexBuild.RuntimeFilterSpec, proc.GetMessageBoard())
+		} else {
+			message.FinalizeRuntimeFilter(
+				indexBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
+		}
+		indexBuild.ctr.runtimeFilterDone =
+			indexBuild.RuntimeFilterSpec != nil
+	}
 	indexBuild.ctr.state = ReceiveBatch
+	indexBuild.ctr.runtimeFilterUsable = false
 	if indexBuild.ctr.buf != nil {
 		indexBuild.ctr.buf.CleanOnlyData()
 	}

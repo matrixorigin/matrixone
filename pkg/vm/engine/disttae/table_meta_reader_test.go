@@ -615,7 +615,7 @@ func TestCloneTxnTablesInVainGCDeletesUnreferencedTxnLocalSharedObject(t *testin
 	require.NoError(t, writeObjectToFS(ctx, fs, name))
 	txn.engine.cloneTxnCache.AddTxnLocalSharedFile(txn.op.Txn().ID, name)
 
-	txn.writes = append(txn.writes, Entry{
+	txn.appendWorkspaceEntryLocked(Entry{
 		typ:      INSERT,
 		tableId:  42,
 		fileName: name,
@@ -663,20 +663,18 @@ func TestCloneTxnTablesInVainGCKeepsLiveTxnLocalSharedObject(t *testing.T) {
 	txn.engine.cloneTxnCache.AddTxnLocalSharedFile(txn.op.Txn().ID, name)
 
 	liveBat := cloneObjectStatsBatchForTest(t, proc.Mp(), stats...)
-	txn.writes = append(txn.writes,
-		Entry{
-			typ:      INSERT,
-			tableId:  42,
-			fileName: name,
-			bat:      cloneObjectStatsBatchForTest(t, proc.Mp(), stats...),
-		},
-		Entry{
-			typ:      INSERT,
-			tableId:  43,
-			fileName: name,
-			bat:      liveBat,
-		},
-	)
+	txn.appendWorkspaceEntryLocked(Entry{
+		typ:      INSERT,
+		tableId:  42,
+		fileName: name,
+		bat:      cloneObjectStatsBatchForTest(t, proc.Mp(), stats...),
+	})
+	txn.appendWorkspaceEntryLocked(Entry{
+		typ:      INSERT,
+		tableId:  43,
+		fileName: name,
+		bat:      liveBat,
+	})
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(ctx))
 	require.Nil(t, txn.writes[0].bat)
@@ -684,7 +682,7 @@ func TestCloneTxnTablesInVainGCKeepsLiveTxnLocalSharedObject(t *testing.T) {
 	require.True(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txn.op.Txn().ID, name))
 	require.True(t, objectExistsInFS(ctx, fs, name))
 
-	liveBat.Clean(proc.Mp())
+	txn.releaseWorkspaceEntryBatchLocked(1)
 }
 
 func TestCloneTxnUnknownCommitReleasesLocalStateWithoutObjectGC(t *testing.T) {
@@ -719,7 +717,7 @@ func TestCloneTxnUnknownCommitReleasesLocalStateWithoutObjectGC(t *testing.T) {
 	name := stats[0].ObjectName().String()
 	require.NoError(t, writeObjectToFS(ctx, fs, name))
 	txn.engine.cloneTxnCache.AddTxnLocalSharedFile(txn.op.Txn().ID, name)
-	txn.writes = append(txn.writes, Entry{
+	txn.appendWorkspaceEntryLocked(Entry{
 		typ:      INSERT,
 		tableId:  42,
 		fileName: name,

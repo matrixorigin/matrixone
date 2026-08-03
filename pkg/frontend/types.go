@@ -88,7 +88,6 @@ const (
 	FPUse
 	FPPrepareStmt
 	FPPrepareString
-	FPCreateConnector
 	FPPauseDaemonTask
 	FPCancelDaemonTask
 	FPResumeDaemonTask
@@ -98,8 +97,6 @@ const (
 	FPExecuteSQLTask
 	FPShowSQLTasks
 	FPShowSQLTaskRuns
-	FPDropConnector
-	FPShowConnectors
 	FPDeallocate
 	FPReset
 	FPSetVar

@@ -81,6 +81,24 @@ func (interpreter *Interpreter) GetStatementString(input tree.Statement) string 
 	return interpreter.fmtctx.String()
 }
 
+func (interpreter *Interpreter) executeSQL(sql string) (SpStatus, error) {
+	interpreter.bh.ClearExecResultSet()
+	interpreter.ctx = context.WithValue(interpreter.ctx, defines.VarScopeKey{}, interpreter.varScope)
+	interpreter.ctx = context.WithValue(interpreter.ctx, defines.InSp{}, true)
+	if err := interpreter.bh.Exec(interpreter.ctx, sql); err != nil {
+		return SpNotOk, err
+	}
+	interpreter.recordAffectedRows()
+	erArray, err := getResultSet(interpreter.ctx, interpreter.bh)
+	if err != nil {
+		return SpNotOk, err
+	}
+	if execResultArrayHasData(erArray) {
+		interpreter.result = append(interpreter.result, erArray...)
+	}
+	return SpOk, nil
+}
+
 func (interpreter *Interpreter) GetSpVar(varName string) (interface{}, error) {
 	for i := len(*interpreter.varScope) - 1; i >= 0; i-- {
 		curScope := (*interpreter.varScope)[i]
@@ -533,16 +551,16 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 		for _, assign := range st.Assignments {
 			name := assign.Name
 
-			// if this is a system set, ignore if it's not a INOUT/OUT arg
-			if strings.Contains(interpreter.GetExprString(st), "@") {
-				str := interpreter.GetExprString(st)
-				interpreter.bh.ClearExecResultSet()
-				// system setvar execution
-				err := interpreter.bh.Exec(interpreter.ctx, str)
+			if !assign.System {
+				value, err := interpreter.GetSimpleExprValueWithSpVar(assign.Value)
 				if err != nil {
 					return SpNotOk, err
 				}
-				interpreter.recordAffectedRows()
+				setSQL := "set @" + name + " = " + interpreter.GetExprString(assign.Value)
+				if err = interpreter.ses.SetUserDefinedVar(name, value, setSQL); err != nil {
+					return SpNotOk, err
+				}
+				interpreter.setAffectedRows(0)
 			} else {
 				// custom defined variable
 				var value interface{}
@@ -560,24 +578,7 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 			}
 		}
 	default: // normal sql. Since we don't support SELECT INTO for now, we don't have to worry about updating variables
-		str := interpreter.GetStatementString(st)
-		interpreter.bh.ClearExecResultSet()
-		// For sp variable replacement
-		interpreter.ctx = context.WithValue(interpreter.ctx, defines.VarScopeKey{}, interpreter.varScope)
-		interpreter.ctx = context.WithValue(interpreter.ctx, defines.InSp{}, true)
-		err := interpreter.bh.Exec(interpreter.ctx, str)
-		if err != nil {
-			return SpNotOk, err
-		}
-		interpreter.recordAffectedRows()
-		erArray, err := getResultSet(interpreter.ctx, interpreter.bh)
-		if err != nil {
-			return SpNotOk, err
-		}
-		if execResultArrayHasData(erArray) {
-			interpreter.result = append(interpreter.result, erArray...)
-		}
-		return SpOk, nil
+		return interpreter.executeSQL(interpreter.GetStatementString(st))
 	}
 	return SpOk, nil
 }

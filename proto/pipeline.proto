@@ -254,6 +254,7 @@ message FuzzyFilter {
   plan.Type PkTyp = 3 [(gogoproto.nullable) = false];
   int32 BuildIdx = 4;
   bool IfInsertFromUnique = 5;
+  plan.RuntimeFilterSpec runtime_filter_spec = 6;
 }
 
 message HashJoin {
@@ -474,12 +475,6 @@ message ExternalScan {
   bool iceberg_delete_spill_enabled = 23;
 }
 
-message StreamScan {
-  plan.TableDef tbl_def = 1;
-  int64 offset = 2;
-  int64 limit = 3;
-}
-
 message TableScan {
   repeated plan.Type types = 1 [(gogoproto.nullable) = false];
   repeated plan.Expr filter_exprs = 2;
@@ -568,7 +563,8 @@ message Instruction {
   LockOp lock_op = 33;
   Shuffle shuffle = 34;
   Merge merge = 35;
-  StreamScan stream_scan = 36;
+  reserved 36; // former stream_scan
+  reserved "stream_scan";
   PreInsertSecondaryIndex pre_insert_secondary_index = 37;
   SampleFunc sample_func = 38;
   FuzzyFilter fuzzy_filter = 39;

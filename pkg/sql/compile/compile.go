@@ -72,7 +72,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
@@ -84,7 +83,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -1254,15 +1252,6 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 			ss = c.compileLimit(node, ss)
 		}
 		return ss, nil
-	case plan.Node_SOURCE_SCAN:
-		c.setAnalyzeCurrent(nil, int(curNodeIdx))
-		ss, err = c.compileSourceScan(node)
-		if err != nil {
-			return nil, err
-		}
-		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
-		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
-		return ss, nil
 	case plan.Node_FILTER, plan.Node_PROJECT:
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
@@ -1681,62 +1670,6 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 
 	ds.setRootOperator(arg)
 	return ds
-}
-
-func (c *Compile) compileSourceScan(node *plan.Node) ([]*Scope, error) {
-	_, span := trace.Start(c.proc.Ctx, "compileSourceScan")
-	defer span.End()
-	configs := make(map[string]interface{})
-	for _, def := range node.TableDef.Defs {
-		switch v := def.Def.(type) {
-		case *plan.TableDef_DefType_Properties:
-			for _, p := range v.Properties.Properties {
-				configs[p.Key] = p.Value
-			}
-		}
-	}
-
-	end, err := mokafka.GetStreamCurrentSize(c.proc.Ctx, configs, mokafka.NewKafkaAdapter)
-	if err != nil {
-		return nil, err
-	}
-	ps := calculatePartitions(0, end, int64(c.ncpu))
-
-	ss := make([]*Scope, len(ps))
-
-	currentFirstFlag := c.anal.isFirst
-	for i := range ss {
-		ss[i] = newScope(Merge)
-		ss[i].NodeInfo = getEngineNode(c)
-		ss[i].Proc = c.proc.NewNoContextChildProc(0)
-		arg := constructStream(node, ps[i])
-		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-		ss[i].setRootOperator(arg)
-	}
-	c.anal.isFirst = false
-	return ss, nil
-}
-
-const StreamMaxInterval = 8192
-
-func calculatePartitions(start, end, n int64) [][2]int64 {
-	var ps [][2]int64
-	interval := (end - start) / n
-	if interval < StreamMaxInterval {
-		interval = StreamMaxInterval
-	}
-	var r int64
-	l := start
-	for i := int64(0); i < n; i++ {
-		r = l + interval
-		if r >= end {
-			ps = append(ps, [2]int64{l, end})
-			break
-		}
-		ps = append(ps, [2]int64{l, r})
-		l = r
-	}
-	return ps
 }
 
 func StrictSqlMode(proc *process.Process) (error, bool) {
@@ -3823,12 +3756,6 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 			} else {
 				c.setProjection(node, ss[i])
 			}
-		case *source.Source:
-			if op.ProjectList == nil {
-				op.ProjectList = node.ProjectList
-			} else {
-				c.setProjection(node, ss[i])
-			}
 		case *external.External:
 			if op.ProjectList == nil {
 				op.ProjectList = node.ProjectList
@@ -3974,7 +3901,9 @@ func orderBySpecsHaveUserLevelLockFunction(specs []*plan.OrderBySpec) bool {
 
 func runtimeFilterSpecsHaveUserLevelLockFunction(specs []*plan.RuntimeFilterSpec) bool {
 	for _, spec := range specs {
-		if spec != nil && exprHasUserLevelLockFunction(spec.Expr) {
+		if spec != nil &&
+			(exprHasUserLevelLockFunction(spec.Expr) ||
+				exprHasUserLevelLockFunction(spec.BuildExpr)) {
 			return true
 		}
 	}
@@ -5119,9 +5048,9 @@ func (c *Compile) supportsRemoteOrderedAggregates() bool {
 }
 
 func supportsRemoteOrderedAggregates(service string) bool {
-	// MOProtocolVersion is the cluster-wide negotiated floor. It reaches v6
-	// only after every pipeline receiver understands Aggregate.config_type,
-	// and is lowered again before a rollback introduces a v5 receiver.
+	// MOProtocolVersion is the service-local deployment rollout gate.
+	// Deployment orchestration raises it after participating receivers
+	// understand Aggregate.config_type and lowers it before rollback.
 	version, ok := moruntime.ServiceRuntime(service).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	if !ok {
@@ -5673,7 +5602,9 @@ func (c *Compile) compileRecursiveCte(node *plan.Node, curNodeIdx int32) ([]*Sco
 	rs.setRootOperator(mergeOp1)
 
 	currentFirstFlag := c.anal.isFirst
-	mergecteArg := mergecte.NewArgument().WithNodeCnt(len(node.SourceStep) - 1)
+	mergecteArg := mergecte.NewArgument().
+		WithNodeCnt(len(node.SourceStep) - 1).
+		WithDistinct(node.RecursiveUnionDistinct)
 	mergecteArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(mergecteArg)
 	c.anal.isFirst = false
@@ -6061,28 +5992,81 @@ func (c *Compile) mergeShuffleScopesIfNeeded(ss []*Scope, force bool) []*Scope {
 	return rs
 }
 
-// scopeTreeHasCrossCNDispatch reports whether the scope tree rooted at s contains a
-// dispatch operator that sends to remote (cross-CN) receivers. A non-empty RemoteRegs is
-// the signature of a cross-CN shuffle dispatch (see constructDispatchLocalAndRemote).
+// shuffleBucketsNeedPerCNGrouping reports whether a dispatch in one top-level
+// bucket tree targets a local receiver owned only by a sibling bucket tree on
+// the same CN. Such a tree is not independently executable by RemoteRun and
+// must travel together with the sibling that owns the receiver.
 //
-// Precondition: it only inspects each scope's RootOp, assuming a shuffle dispatch is always
-// the root operator of its scope (constructDispatch results are attached via setRootOperator
-// with IsEnd=true, so nothing is appended on top of them). A dispatch nested as a child of
-// another operator would be missed -- which does not happen for shuffle dispatches today.
-//
-// Scope of the check (intentionally narrower than checkPipelineStandaloneExecutableAtRemote,
-// which rejects out-of-tree dispatch *and* out-of-tree connector targets): this gate only
-// looks for a cross-CN dispatch, because per-CN grouping only reorganizes the same-CN shuffle
-// dispatch together with its dop buckets. A scope tree that crosses CNs solely via a connector
-// is not the shuffle-bucket pattern grouping addresses and is intentionally left untouched.
-func scopeTreeHasCrossCNDispatch(s *Scope) bool {
-	if d, ok := s.RootOp.(*dispatch.Dispatch); ok && len(d.RemoteRegs) > 0 {
-		return true
+// Do not use RemoteRegs as a proxy for this dependency. A shuffle source on a
+// remote CN can have only LocalRegs and still depend on sibling dop buckets.
+func shuffleBucketsNeedPerCNGrouping(ss []*Scope) bool {
+	receiverOwners := make(map[*process.WaitRegister]map[int]struct{})
+	for ownerIdx, root := range ss {
+		walkScopeTree(root, func(scope *Scope) bool {
+			if scope.Proc == nil {
+				return false
+			}
+			for _, reg := range scope.Proc.Reg.MergeReceivers {
+				if reg == nil {
+					continue
+				}
+				owners := receiverOwners[reg]
+				if owners == nil {
+					owners = make(map[int]struct{})
+					receiverOwners[reg] = owners
+				}
+				owners[ownerIdx] = struct{}{}
+			}
+			return false
+		})
 	}
-	for _, pre := range s.PreScopes {
-		if scopeTreeHasCrossCNDispatch(pre) {
+
+	for sourceIdx, root := range ss {
+		if walkScopeTree(root, func(scope *Scope) bool {
+			d, ok := scope.RootOp.(*dispatch.Dispatch)
+			if !ok {
+				return false
+			}
+			for _, reg := range d.LocalRegs {
+				if reg == nil {
+					continue
+				}
+				owners := receiverOwners[reg]
+				if _, ownedBySourceTree := owners[sourceIdx]; ownedBySourceTree {
+					continue
+				}
+				for ownerIdx := range owners {
+					if sameExecutionNode(ss[sourceIdx].NodeInfo, ss[ownerIdx].NodeInfo) {
+						return true
+					}
+				}
+			}
+			return false
+		}) {
 			return true
 		}
+	}
+	return false
+}
+
+func walkScopeTree(root *Scope, visit func(*Scope) bool) bool {
+	toVisit := []*Scope{root}
+	visited := make(map[*Scope]struct{})
+	for len(toVisit) > 0 {
+		last := len(toVisit) - 1
+		scope := toVisit[last]
+		toVisit = toVisit[:last]
+		if scope == nil {
+			continue
+		}
+		if _, ok := visited[scope]; ok {
+			continue
+		}
+		visited[scope] = struct{}{}
+		if visit(scope) {
+			return true
+		}
+		toVisit = append(toVisit, scope.PreScopes...)
 	}
 	return false
 }
@@ -6101,8 +6085,8 @@ func scopeTreeHasCrossCNDispatch(s *Scope) bool {
 // and the remote receiver/merge could wait forever. Regrouping by CN keeps all of a CN's
 // buckets in one tree, so the whole group executes at the intended remote CN.
 //
-// It is a no-op unless we are multi-CN and ss actually carries a cross-CN shuffle dispatch,
-// so single-CN and non-shuffle consumers are completely unaffected.
+// It is a no-op unless a dispatch has an out-of-tree local receiver dependency
+// that grouping by CN can close, so unrelated insert scopes are unaffected.
 //
 // Operator-chain note: callers attach their own root operator to each bucket first (e.g.
 // the insert / multiUpdate operator). mergeScopesByCN (via newMergeScopeByCN ->
@@ -6113,14 +6097,7 @@ func (c *Compile) groupShuffleBucketsByCNIfNeeded(ss []*Scope) []*Scope {
 	if len(stageNodes) <= 1 || len(ss) <= len(stageNodes) {
 		return ss
 	}
-	hasCrossCNDispatch := false
-	for _, s := range ss {
-		if scopeTreeHasCrossCNDispatch(s) {
-			hasCrossCNDispatch = true
-			break
-		}
-	}
-	if !hasCrossCNDispatch {
+	if !shuffleBucketsNeedPerCNGrouping(ss) {
 		return ss
 	}
 	return c.mergeScopesByStageNodes(ss, stageNodes)

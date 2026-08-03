@@ -560,7 +560,12 @@ func explainStep(ctx context.Context, step *plan.Node, nodes []*plan.Node, setti
 						sinkScan = childNode
 					}
 				}
-				if (tableScan.Stats.Cost / sinkScan.Stats.Cost) < 0.5 {
+				buildOnTable := step.FuzzyBuildSide ==
+					plan.Node_FUZZY_BUILD_SIDE_TABLE ||
+					(step.FuzzyBuildSide ==
+						plan.Node_FUZZY_BUILD_SIDE_UNSPECIFIED &&
+						(tableScan.Stats.Cost/sinkScan.Stats.Cost) < 0.3)
+				if buildOnTable {
 					buf.WriteString("TableScan")
 					if step.IfInsertFromUnique {
 						buf.WriteString(" (InsertFromUnique)")

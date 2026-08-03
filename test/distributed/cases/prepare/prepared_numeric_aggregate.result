@@ -1,0 +1,44 @@
+DROP DATABASE IF EXISTS prepared_numeric_aggregate;
+CREATE DATABASE prepared_numeric_aggregate;
+USE prepared_numeric_aggregate;
+PREPARE p_sum FROM 'SELECT CAST(SUM(?) AS SIGNED) AS got';
+SET @value = 2;
+EXECUTE p_sum USING @value;
+➤ got[-5,64,0]  𝄀
+2
+SET @value = '2';
+EXECUTE p_sum USING @value;
+➤ got[-5,64,0]  𝄀
+2
+SET @value = NULL;
+EXECUTE p_sum USING @value;
+➤ got[-5,64,0]  𝄀
+null
+SET @value = 'abc';
+EXECUTE p_sum USING @value;
+➤ got[-5,64,0]  𝄀
+0
+SET @value = 3;
+EXECUTE p_sum USING @value;
+➤ got[-5,64,0]  𝄀
+3
+DEALLOCATE PREPARE p_sum;
+PREPARE p_avg FROM 'SELECT CAST(AVG(?) AS SIGNED) AS got';
+SET @value = 4;
+EXECUTE p_avg USING @value;
+➤ got[-5,64,0]  𝄀
+4
+DEALLOCATE PREPARE p_avg;
+PREPARE p_window FROM 'SELECT CAST(SUM(?) OVER () AS SIGNED) AS got';
+SET @value = 5;
+EXECUTE p_window USING @value;
+➤ got[-5,64,0]  𝄀
+5
+DEALLOCATE PREPARE p_window;
+PREPARE p_recursive FROM 'WITH RECURSIVE r(n) AS (SELECT ? UNION ALL SELECT n + 1 FROM r WHERE n < 3) SELECT CAST(SUM(n) AS SIGNED) AS got FROM r';
+SET @value = 1;
+EXECUTE p_recursive USING @value;
+➤ got[-5,64,0]  𝄀
+6
+DEALLOCATE PREPARE p_recursive;
+DROP DATABASE prepared_numeric_aggregate;

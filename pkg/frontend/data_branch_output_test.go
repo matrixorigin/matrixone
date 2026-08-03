@@ -17,6 +17,8 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,6 +29,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/golang/mock/gomock"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -74,15 +77,64 @@ func TestDataBranchOutputMakeFileName(t *testing.T) {
 		tarRel:  tarRel,
 	}
 
-	got := makeFileName(nil, nil, tblStuff)
-	require.Regexp(t, regexp.MustCompile(`^diff_t2_t1_\d{8}_\d{6}$`), got)
+	got, err := makeFileName(nil, nil, tblStuff)
+	require.NoError(t, err)
+	require.Regexp(t, regexp.MustCompile(`^diff_t2_t1_\d{8}_\d{6}_[0-9a-f-]{36}$`), got)
 
-	got = makeFileName(
+	got, err = makeFileName(
 		&tree.AtTimeStamp{SnapshotName: "sp1"},
 		&tree.AtTimeStamp{SnapshotName: "sp2"},
 		tblStuff,
 	)
-	require.Regexp(t, regexp.MustCompile(`^diff_t2_sp2_t1_sp1_\d{8}_\d{6}$`), got)
+	require.NoError(t, err)
+	require.Regexp(t, regexp.MustCompile(`^diff_t2_sp2_t1_sp1_\d{8}_\d{6}_[0-9a-f-]{36}$`), got)
+}
+
+func TestDataBranchOutputMakeFileNameUUIDError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	tarRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableName().Return("base")
+	tarRel.EXPECT().GetTableName().Return("target")
+
+	_, err := makeFileNameWithUUID(nil, nil, tableStuff{baseRel: baseRel, tarRel: tarRel}, func() (uuid.UUID, error) {
+		return uuid.Nil, errors.New("entropy unavailable")
+	})
+	require.ErrorContains(t, err, "generate data branch output file name: entropy unavailable")
+}
+
+func TestDataBranchOutputMakeFileNameConcurrent(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	tarRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableName().Return("base").AnyTimes()
+	tarRel.EXPECT().GetTableName().Return("target").AnyTimes()
+	tblStuff := tableStuff{baseRel: baseRel, tarRel: tarRel}
+
+	const concurrency = 128
+	type result struct {
+		name string
+		err  error
+	}
+	results := make(chan result, concurrency)
+	var wg sync.WaitGroup
+	wg.Add(concurrency)
+	for range concurrency {
+		go func() {
+			defer wg.Done()
+			name, err := makeFileName(nil, nil, tblStuff)
+			results <- result{name: name, err: err}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	unique := make(map[string]struct{}, concurrency)
+	for result := range results {
+		require.NoError(t, result.err)
+		unique[result.name] = struct{}{}
+	}
+	require.Len(t, unique, concurrency)
 }
 
 func TestDataBranchOutputFileNameAndHintQuotePathSeparators(t *testing.T) {
@@ -115,12 +167,14 @@ func TestDataBranchOutputFileNameAndHintQuotePathSeparators(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, release)
 	require.NotNil(t, cleanup)
-	t.Cleanup(release)
-	t.Cleanup(cleanup)
+	t.Cleanup(func() {
+		require.NoError(t, release())
+		cleanup()
+	})
 
 	require.Equal(t, outputDir, filepath.Dir(filePath))
 	require.Regexp(t, regexp.MustCompile(
-		`^diff_child@5Cname@3Aquoted_target@5Csnapshot@251_base@2Fname@60quoted_base@2Fsnapshot@201_\d{8}_\d{6}\.sql$`,
+		`^diff_child@5Cname@3Aquoted_target@5Csnapshot@251_base@2Fname@60quoted_base@2Fsnapshot@201_\d{8}_\d{6}_[0-9a-f-]{36}\.sql$`,
 	), filepath.Base(filePath))
 	require.Equal(t,
 		"DELETE FROM `db/name``quoted`.`base/name``quoted`, INSERT INTO `db/name``quoted`.`base/name``quoted`",
@@ -144,7 +198,9 @@ func TestDataBranchOutputFileNameSurvivesCSVFormattingAndLengthLimit(t *testing.
 				baseRel.EXPECT().GetTableName().Return("base").AnyTimes()
 				tarRel.EXPECT().GetTableName().Return(name).AnyTimes()
 
-				fileName := makeFileName(nil, nil, tableStuff{baseRel: baseRel, tarRel: tarRel}) + ".csv"
+				fileName, err := makeFileName(nil, nil, tableStuff{baseRel: baseRel, tarRel: tarRel})
+				require.NoError(t, err)
+				fileName += ".csv"
 				require.Equal(t, fileName, getExportFilePath(fileName, 0))
 			})
 		}
@@ -172,13 +228,15 @@ func TestDataBranchOutputFileNameSurvivesCSVFormattingAndLengthLimit(t *testing.
 		require.NoError(t, err)
 		require.NotNil(t, release)
 		require.NotNil(t, cleanup)
-		t.Cleanup(release)
-		t.Cleanup(cleanup)
+		t.Cleanup(func() {
+			require.NoError(t, release())
+			cleanup()
+		})
 
 		baseName := filepath.Base(filePath)
 		require.LessOrEqual(t, len(baseName), maxDiffFileNameStemBytes+len(".sql"))
 		require.True(t, utf8.ValidString(baseName))
-		require.Regexp(t, regexp.MustCompile(`_[0-9a-f]{32}_\d{8}_\d{6}\.sql$`), baseName)
+		require.Regexp(t, regexp.MustCompile(`_[0-9a-f]{32}_\d{8}_\d{6}_[0-9a-f-]{36}\.sql$`), baseName)
 		require.Equal(t, outputDir, filepath.Dir(filePath))
 	})
 }
@@ -607,6 +665,43 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 		require.Equal(t, uint32(types.MaxVarcharLen), col.Length())
 	})
 
+	t.Run("default output preserves binary charset metadata", func(t *testing.T) {
+		binaryTblStuff := tblStuff
+		binaryTblStuff.def.colNames = []string{"b", "bn", "vb", "s"}
+		binaryTblStuff.def.colTypes = []types.Type{
+			types.New(types.T_bit, 10, 0),
+			types.New(types.T_binary, 8, 0),
+			types.New(types.T_varbinary, 32, 0),
+			types.New(types.T_varchar, 32, 0),
+		}
+		binaryTblStuff.def.visibleIdxes = []int{0, 1, 2, 3}
+
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		stmt := &tree.DataBranchDiff{
+			TargetTable: *target,
+			BaseTable:   *base,
+			OutputOpt:   nil,
+		}
+		require.NoError(t, buildOutputSchema(ctx, ses, stmt, binaryTblStuff))
+
+		mrs := ses.GetMysqlResultSet()
+		for idx, expectedType := range []defines.MysqlType{
+			defines.MYSQL_TYPE_BIT,
+			defines.MYSQL_TYPE_VARCHAR,
+			defines.MYSQL_TYPE_VARCHAR,
+			defines.MYSQL_TYPE_VAR_STRING,
+		} {
+			col, err := mrs.GetColumn(ctx, uint64(idx+2))
+			require.NoError(t, err)
+			require.Equal(t, expectedType, col.ColumnType())
+			expectedCharset := uint16(charsetBinary)
+			if idx == 3 {
+				expectedCharset = charsetVarchar
+			}
+			require.Equal(t, expectedCharset, col.(*MysqlColumn).Charset())
+		}
+	})
+
 	t.Run("summary output", func(t *testing.T) {
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := &tree.DataBranchDiff{
@@ -739,6 +834,188 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 		require.Contains(t, err.Error(), "nonexistent")
 		require.Contains(t, err.Error(), "t2")
 	})
+}
+
+func TestDataBranchOutputLimitBoundaries(t *testing.T) {
+	tests := []struct {
+		name      string
+		limit     int64
+		wantRows  uint64
+		wantStops int
+	}{
+		{name: "zero", limit: 0, wantRows: 0, wantStops: 1},
+		{name: "one", limit: 1, wantRows: 1, wantStops: 0},
+		{name: "exact row count", limit: 2, wantRows: 2, wantStops: 0},
+		{name: "above row count", limit: 3, wantRows: 2, wantStops: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			ses := newValidateSession(t)
+			ses.SetMysqlResultSet(&MysqlResultSet{})
+
+			ctrl := gomock.NewController(t)
+			tblStuff := newTestBranchTableStuff(ctrl)
+			bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+			t.Cleanup(func() {
+				tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
+			})
+			for i, name := range []string{"one", "two"} {
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i+1), false, ses.proc.Mp()))
+				require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(name), false, ses.proc.Mp()))
+				require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte("hidden"), false, ses.proc.Mp()))
+			}
+			bat.SetRowCount(2)
+
+			retCh := make(chan batchWithKind, 1)
+			retCh <- batchWithKind{name: "child", kind: diffUpdate, batch: bat}
+			close(retCh)
+
+			stopCalls := 0
+			stmt := &tree.DataBranchDiff{OutputOpt: &tree.DiffOutputOpt{Limit: &tt.limit}}
+			require.NoError(t, satisfyDiffOutputOpt(
+				ctx,
+				cancel,
+				func() { stopCalls++ },
+				ses,
+				nil,
+				stmt,
+				branchMetaInfo{},
+				tblStuff,
+				retCh,
+			))
+			require.Equal(t, tt.wantRows, ses.GetMysqlResultSet().GetRowCount())
+			require.Equal(t, tt.wantStops, stopCalls)
+		})
+	}
+}
+
+func TestDataBranchOutputLimitUsesFinalPKOrder(t *testing.T) {
+	tests := []struct {
+		name    string
+		limit   int64
+		ids     []int64
+		wantIDs []int64
+	}{
+		{name: "one row", limit: 1, ids: []int64{100, 1}, wantIDs: []int64{1}},
+		{name: "multiple rows", limit: 2, ids: []int64{100, 1, 50}, wantIDs: []int64{1, 50}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			ses := newValidateSession(t)
+			ses.SetMysqlResultSet(&MysqlResultSet{})
+
+			ctrl := gomock.NewController(t)
+			tblStuff := newTestBranchTableStuff(ctrl)
+			t.Cleanup(func() {
+				tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
+			})
+
+			retCh := make(chan batchWithKind, len(tt.ids))
+			for _, id := range tt.ids {
+				bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], id, false, ses.proc.Mp()))
+				require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte{byte(id)}, false, ses.proc.Mp()))
+				require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte("hidden"), false, ses.proc.Mp()))
+				bat.SetRowCount(1)
+				retCh <- batchWithKind{name: "side", kind: diffInsert, batch: bat}
+			}
+			close(retCh)
+
+			stopCalls := 0
+			stmt := &tree.DataBranchDiff{OutputOpt: &tree.DiffOutputOpt{Limit: &tt.limit}}
+			require.NoError(t, satisfyDiffOutputOpt(
+				ctx,
+				cancel,
+				func() { stopCalls++ },
+				ses,
+				nil,
+				stmt,
+				branchMetaInfo{},
+				tblStuff,
+				retCh,
+			))
+
+			require.Equal(t, uint64(len(tt.wantIDs)), ses.GetMysqlResultSet().GetRowCount())
+			for i, wantID := range tt.wantIDs {
+				row, err := ses.GetMysqlResultSet().GetRow(ctx, uint64(i))
+				require.NoError(t, err)
+				require.Equal(t, wantID, row[2])
+				require.Equal(t, []byte{byte(wantID)}, row[3])
+			}
+			require.Zero(t, stopCalls, "positive limits must consume every producer row before selecting the sorted prefix")
+		})
+	}
+}
+
+func BenchmarkDataBranchOutputLimitWideRows(b *testing.B) {
+	const (
+		rowCount    = 64
+		payloadSize = 64 << 10
+	)
+
+	ses := newValidateSession(b)
+	ctrl := gomock.NewController(b)
+	tblStuff := newTestBranchTableStuff(ctrl)
+	b.Cleanup(func() {
+		tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
+	})
+
+	payload := bytes.Repeat([]byte{'x'}, payloadSize)
+	limit := int64(1)
+	stmt := &tree.DataBranchDiff{OutputOpt: &tree.DiffOutputOpt{Limit: &limit}}
+	b.SetBytes(rowCount * payloadSize)
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for range b.N {
+		b.StopTimer()
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+		// The first row is the final LIMIT 1 winner. The remaining ascending
+		// keys isolate the cost of rejecting wide payloads.
+		for id := range rowCount {
+			if err := vector.AppendFixed(bat.Vecs[0], int64(id), false, ses.proc.Mp()); err != nil {
+				b.Fatal(err)
+			}
+			if err := vector.AppendBytes(bat.Vecs[1], payload, false, ses.proc.Mp()); err != nil {
+				b.Fatal(err)
+			}
+			if err := vector.AppendBytes(bat.Vecs[2], []byte("hidden"), false, ses.proc.Mp()); err != nil {
+				b.Fatal(err)
+			}
+		}
+		bat.SetRowCount(rowCount)
+
+		retCh := make(chan batchWithKind, 1)
+		retCh <- batchWithKind{name: "child", kind: diffInsert, batch: bat}
+		close(retCh)
+		ctx, cancel := context.WithCancel(context.Background())
+		b.StartTimer()
+
+		err := satisfyDiffOutputOpt(
+			ctx,
+			cancel,
+			func() {},
+			ses,
+			nil,
+			stmt,
+			branchMetaInfo{},
+			tblStuff,
+			retCh,
+		)
+
+		b.StopTimer()
+		if err != nil {
+			b.Fatal(err)
+		}
+		if got := ses.GetMysqlResultSet().GetRowCount(); got != 1 {
+			b.Fatalf("expected one retained row, got %d", got)
+		}
+	}
 }
 
 func TestDataBranchOutputResolveProjectedIdxes(t *testing.T) {
@@ -1065,7 +1342,8 @@ func TestDataBranchOutputWriteDeleteRowSQLFull(t *testing.T) {
 	tblStuff := tableStuff{
 		baseRel: baseRel,
 	}
-	tblStuff.def.colNames = []string{"id", "name"}
+	tblStuff.def.colNames = []string{"id", "name_new"}
+	tblStuff.def.baseColNames = []string{"id", "name"}
 	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}
 	tblStuff.def.visibleIdxes = []int{0, 1}
 
@@ -1101,7 +1379,7 @@ func TestDataBranchOutputInitAndDropApplyTablesWithWriteFile(t *testing.T) {
 		insertTable:      "__mo_diff_ins_x",
 		deleteKeyNames:   []string{"id"},
 		deleteStageNames: []string{"branch_apply_key_0"},
-		visibleNames:     []string{"id", "name"},
+		writableNames:    []string{"id", "name"},
 	}
 
 	var out bytes.Buffer
@@ -1133,8 +1411,10 @@ func TestDataBranchOutputFlushSqlValuesWithWriteFile(t *testing.T) {
 	tblStuff := tableStuff{
 		baseRel: baseRel,
 	}
-	tblStuff.def.colNames = []string{"id", "name"}
+	tblStuff.def.colNames = []string{"id", "name_new"}
+	tblStuff.def.baseColNames = []string{"id", "name"}
 	tblStuff.def.visibleIdxes = []int{0, 1}
+	tblStuff.def.writableIdxes = []int{0, 1}
 	tblStuff.def.pkColIdx = 0
 	tblStuff.def.pkColIdxes = []int{0, 1}
 
@@ -1145,7 +1425,7 @@ func TestDataBranchOutputFlushSqlValuesWithWriteFile(t *testing.T) {
 		insertTable:      "__mo_diff_ins_x",
 		deleteKeyNames:   []string{"id", "name"},
 		deleteStageNames: []string{"branch_apply_key_0", "branch_apply_key_1"},
-		visibleNames:     []string{"id", "name"},
+		writableNames:    []string{"id", "name"},
 	}
 
 	var out bytes.Buffer
@@ -1204,7 +1484,7 @@ func TestDataBranchOutputTryFlushDeletesOrInserts(t *testing.T) {
 		deleteTable:    "__mo_diff_del_x",
 		insertTable:    "__mo_diff_ins_x",
 		deleteKeyNames: []string{"id"},
-		visibleNames:   []string{"id", "name"},
+		writableNames:  []string{"id", "name"},
 	}
 
 	t.Run("force flush both buffers", func(t *testing.T) {
@@ -1330,8 +1610,10 @@ func TestDataBranchOutputBuildDataBranchApplyLayout(t *testing.T) {
 		baseRel: baseRel,
 	}
 	tblStuff.def.colNames = []string{"id", "name", "age"}
+	tblStuff.def.baseColNames = []string{"id", "name", "age"}
 	tblStuff.def.pkColIdxes = []int{0, 2}
 	tblStuff.def.visibleIdxes = []int{0, 1, 2}
+	tblStuff.def.writableIdxes = []int{0, 1, 2}
 	tblStuff.def.pkKind = normalKind
 
 	deleteByFullRow, deleteKeyColIdxes, info := buildDataBranchApplyLayout(
@@ -1344,7 +1626,7 @@ func TestDataBranchOutputBuildDataBranchApplyLayout(t *testing.T) {
 	require.Equal(t, "t1", info.baseTable)
 	require.Equal(t, []string{"id", "age"}, info.deleteKeyNames)
 	require.Equal(t, []string{"branch_apply_key_0", "branch_apply_key_1"}, info.deleteStageNames)
-	require.Equal(t, []string{"id", "name", "age"}, info.visibleNames)
+	require.Equal(t, []string{"id", "name", "age"}, info.writableNames)
 	require.False(t, info.disableInsertStage)
 	require.True(t, strings.HasPrefix(info.deleteTable, "__mo_diff_del_"))
 	require.True(t, strings.HasPrefix(info.insertTable, "__mo_diff_ins_"))
@@ -1358,7 +1640,7 @@ func TestDataBranchOutputBuildDataBranchApplyLayout(t *testing.T) {
 	require.NotNil(t, info)
 	require.Equal(t, []string{"__mo_fake_pk_col"}, info.deleteKeyNames)
 	require.Equal(t, []string{"branch_apply_key_0"}, info.deleteStageNames)
-	require.Equal(t, []string{"id", "name"}, info.visibleNames)
+	require.Equal(t, []string{"id", "name"}, info.writableNames)
 	require.True(t, info.disableInsertStage)
 
 	deleteByFullRow, deleteKeyColIdxes, info = buildDataBranchApplyLayout(
@@ -1377,6 +1659,45 @@ func TestDataBranchOutputBuildDataBranchApplyLayout(t *testing.T) {
 	require.Nil(t, info)
 }
 
+func TestDataBranchApplyLayoutUsesDestinationColumnNames(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		DbName: "db1",
+		Name:   "base",
+	}).AnyTimes()
+	baseRel.EXPECT().GetTableName().Return("base").AnyTimes()
+
+	for _, tc := range []struct {
+		name            string
+		sourceName      string
+		destinationName string
+	}{
+		{name: "source renamed", sourceName: "payload_new", destinationName: "payload"},
+		{name: "destination renamed", sourceName: "payload", destinationName: "payload_new"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tblStuff := tableStuff{baseRel: baseRel}
+			tblStuff.def.colNames = []string{"id", tc.sourceName}
+			tblStuff.def.baseColNames = []string{"id", tc.destinationName}
+			tblStuff.def.pkColIdxes = []int{0}
+			tblStuff.def.visibleIdxes = []int{0, 1}
+			tblStuff.def.writableIdxes = []int{0, 1}
+			tblStuff.def.pkKind = normalKind
+
+			_, _, info := buildDataBranchApplyLayout(
+				ctx, &Session{}, tblStuff, dataBranchApplyModeOnlineMerge,
+			)
+			require.NotNil(t, info)
+			require.Equal(t, []string{"id"}, info.deleteKeyNames)
+			require.Equal(t, []string{"id", tc.destinationName}, info.writableNames)
+		})
+	}
+}
+
 func TestDataBranchOutputAppenderAppendRowAndFlushAll(t *testing.T) {
 	batchInfo := &applyBatchInfo{
 		dbName:         "db1",
@@ -1384,7 +1705,7 @@ func TestDataBranchOutputAppenderAppendRowAndFlushAll(t *testing.T) {
 		deleteTable:    "__mo_diff_del_x",
 		insertTable:    "__mo_diff_ins_x",
 		deleteKeyNames: []string{"id"},
-		visibleNames:   []string{"id", "name"},
+		writableNames:  []string{"id", "name"},
 	}
 
 	t.Run("append delete in full-row mode", func(t *testing.T) {
@@ -1464,7 +1785,7 @@ func TestDataBranchOutputAppenderAppendRowAndFlushAll(t *testing.T) {
 }
 
 func TestDataBranchOutputNewSingleWriteAppenderNilWorker(t *testing.T) {
-	_, _, err := newSingleWriteAppender(context.Background(), nil, nil, "unused", nil)
+	_, _, err := newSingleWriteAppender(context.Background(), nil, nil, "unused")
 	require.Error(t, err)
 }
 
@@ -1480,16 +1801,12 @@ func TestDataBranchOutputNewSingleWriteAppenderSuccess(t *testing.T) {
 	require.NoError(t, err)
 	defer pool.Release()
 
-	called := false
-	writeFile, release, err := newSingleWriteAppender(ctx, pool, etlFS, targetPath, func() {
-		called = true
-	})
+	writeFile, release, err := newSingleWriteAppender(ctx, pool, etlFS, targetPath)
 	require.NoError(t, err)
 
 	require.NoError(t, writeFile([]byte("BEGIN;\n")))
 	require.NoError(t, writeFile([]byte("COMMIT;\n")))
-	release()
-	require.False(t, called)
+	require.NoError(t, release())
 
 	content, err := os.ReadFile(filePath)
 	require.NoError(t, err)
@@ -1504,6 +1821,162 @@ func (fs *failingWriteFS) Write(ctx context.Context, vector fileservice.IOVector
 	return moerr.NewInternalErrorNoCtx("mock write failure")
 }
 
+type lateFailingWriteFS struct {
+	fileservice.FileService
+	deleteCalls int
+}
+
+func (fs *lateFailingWriteFS) Write(ctx context.Context, vector fileservice.IOVector) error {
+	for _, entry := range vector.Entries {
+		if entry.ReaderForWrite != nil {
+			if _, err := io.Copy(io.Discard, entry.ReaderForWrite); err != nil {
+				return err
+			}
+		}
+	}
+	return moerr.NewInternalErrorNoCtx("mock late write failure")
+}
+
+func (fs *lateFailingWriteFS) Delete(ctx context.Context, filePaths ...string) error {
+	fs.deleteCalls++
+	return fs.FileService.Delete(ctx, filePaths...)
+}
+
+type closeFailingMutator struct {
+	closeCalls int
+}
+
+func (m *closeFailingMutator) Mutate(context.Context, ...fileservice.IOEntry) error {
+	return nil
+}
+
+func (m *closeFailingMutator) Append(context.Context, ...fileservice.IOEntry) error {
+	return nil
+}
+
+func (m *closeFailingMutator) Close() error {
+	m.closeCalls++
+	return moerr.NewInternalErrorNoCtx("mock mutator close failure")
+}
+
+type closeFailingMutableFS struct {
+	fileservice.MutableFileService
+	mutator fileservice.Mutator
+}
+
+func (fs *closeFailingMutableFS) NewMutator(
+	context.Context,
+	string,
+) (fileservice.Mutator, error) {
+	return fs.mutator, nil
+}
+
+func installDataBranchTestFileService(
+	t *testing.T,
+	ses *Session,
+	fileService fileservice.FileService,
+) {
+	t.Helper()
+	pu := getPu(ses.GetService())
+	originalFS := pu.FileService
+	pu.FileService = fileService
+	t.Cleanup(func() {
+		pu.FileService = originalFS
+	})
+}
+
+func TestDataBranchOutputNewSingleWriteAppenderReturnsLateWriteFailure(t *testing.T) {
+	ctx := context.Background()
+	etlFS, _, err := fileservice.GetForETL(ctx, nil, filepath.Join(t.TempDir(), "diff.sql"))
+	require.NoError(t, err)
+
+	pool, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer pool.Release()
+
+	writeFile, release, err := newSingleWriteAppender(
+		ctx,
+		pool,
+		&lateFailingWriteFS{FileService: etlFS},
+		"diff.sql",
+	)
+	require.NoError(t, err)
+	require.NoError(t, writeFile([]byte("BEGIN;\n")))
+	require.NoError(t, writeFile([]byte("COMMIT;\n")))
+	require.EqualError(t, release(), "internal error: mock late write failure")
+}
+
+func TestDataBranchOutputReturnsLateFileWriteFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ses := newValidateSession(t)
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+
+	localFS, err := fileservice.NewLocalETLFS(defines.SharedFileServiceName, t.TempDir())
+	require.NoError(t, err)
+	targetFS := &lateFailingWriteFS{FileService: localFS}
+	installDataBranchTestFileService(t, ses, targetFS)
+
+	pool, err := ants.NewPool(1)
+	require.NoError(t, err)
+	defer pool.Release()
+
+	ctrl := gomock.NewController(t)
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.pkKind = fakeKind
+	tblStuff.worker = pool
+
+	retCh := make(chan batchWithKind)
+	close(retCh)
+	stmt := &tree.DataBranchDiff{
+		OutputOpt: &tree.DiffOutputOpt{DirPath: defines.SharedFileServiceName + ":/diff"},
+	}
+
+	err = satisfyDiffOutputOpt(
+		ctx,
+		cancel,
+		func() {},
+		ses,
+		nil,
+		stmt,
+		branchMetaInfo{},
+		tblStuff,
+		retCh,
+	)
+	require.EqualError(t, err, "internal error: mock late write failure")
+	require.Zero(t, ses.GetMysqlResultSet().GetRowCount())
+	require.Equal(t, 2, targetFS.deleteCalls, "prepare and failed-output cleanup must both delete")
+}
+
+func TestDataBranchOutputMutableAppenderReturnsCloseFailure(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+
+	localFS, err := fileservice.NewLocalETLFS(defines.SharedFileServiceName, t.TempDir())
+	require.NoError(t, err)
+	mutator := &closeFailingMutator{}
+	targetFS := &closeFailingMutableFS{
+		MutableFileService: localFS,
+		mutator:            mutator,
+	}
+	installDataBranchTestFileService(t, ses, targetFS)
+
+	ctrl := gomock.NewController(t)
+	stmt := &tree.DataBranchDiff{
+		OutputOpt: &tree.DiffOutputOpt{DirPath: defines.SharedFileServiceName + ":/diff"},
+	}
+	_, _, writeFile, release, cleanup, err := prepareFSForDiffAsFile(
+		ctx,
+		ses,
+		stmt,
+		newTestBranchTableStuff(ctrl),
+	)
+	require.NoError(t, err)
+	require.NoError(t, writeFile([]byte("BEGIN;\nCOMMIT;\n")))
+	require.EqualError(t, release(), "internal error: mock mutator close failure")
+	require.Equal(t, 1, mutator.closeCalls)
+	cleanup()
+}
+
 func TestDataBranchOutputNewSingleWriteAppenderWriteFail(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -1516,19 +1989,16 @@ func TestDataBranchOutputNewSingleWriteAppenderWriteFail(t *testing.T) {
 	require.NoError(t, err)
 	defer pool.Release()
 
-	called := false
 	writeFile, release, err := newSingleWriteAppender(
 		ctx,
 		pool,
 		&failingWriteFS{FileService: etlFS},
 		"diff.sql",
-		func() { called = true },
 	)
 	require.NoError(t, err)
 
 	_ = writeFile([]byte("SOME SQL;\n"))
-	release()
-	require.True(t, called)
+	require.EqualError(t, release(), "internal error: mock write failure")
 }
 
 func TestDataBranchOutputNewSingleWriteAppenderSubmitFail(t *testing.T) {
@@ -1543,7 +2013,7 @@ func TestDataBranchOutputNewSingleWriteAppenderSubmitFail(t *testing.T) {
 	require.NoError(t, err)
 	pool.Release()
 
-	_, _, err = newSingleWriteAppender(ctx, pool, etlFS, "diff.sql", nil)
+	_, _, err = newSingleWriteAppender(ctx, pool, etlFS, "diff.sql")
 	require.Error(t, err)
 }
 
@@ -1562,14 +2032,42 @@ func TestNewApplyBatchInfoUsesCommonVisibleColumnsForEvolvedSchema(t *testing.T)
 		types.T_int64.ToType(),
 	}
 	tblStuff.def.visibleIdxes = []int{0, 2, 3}
+	tblStuff.def.writableIdxes = []int{0, 2, 3}
 	tblStuff.def.commonIdxes = []int{0, 1, 3}
 	tblStuff.def.commonVisibleIdxes = []int{0, 3}
+	tblStuff.def.commonWritableIdxes = []int{0, 3}
 	tblStuff.def.tarOnlyIdxes = []int{2}
+	tblStuff.def.baseColNames = []string{"a", "", "", "b"}
 
 	info := newApplyBatchInfo(ctx, ses, tblStuff, []int{0}, false)
 	require.NotNil(t, info)
 	require.Equal(t, []string{"a"}, info.deleteKeyNames)
-	require.Equal(t, []string{"a", "b"}, info.visibleNames)
+	require.Equal(t, []string{"a", "b"}, info.writableNames)
+}
+
+func TestNewApplyBatchInfoExcludesGeneratedColumns(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.colNames = []string{"id", "value", "generated_value"}
+	tblStuff.def.baseColNames = []string{"id", "value", "generated_value"}
+	tblStuff.def.visibleIdxes = []int{0, 1, 2}
+	tblStuff.def.writableIdxes = []int{0, 1}
+	tblStuff.def.commonVisibleIdxes = []int{0, 1, 2}
+	tblStuff.def.commonWritableIdxes = []int{0, 1}
+
+	projected, err := resolveProjectedIdxes(
+		tree.IdentifierList{tree.Identifier("generated_value")}, tblStuff,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int{2}, projected)
+
+	info := newApplyBatchInfo(ctx, ses, tblStuff, []int{0}, false)
+	require.NotNil(t, info)
+	require.Equal(t, []string{"id", "value"}, info.writableNames)
 }
 
 func TestDataBranchOutputRemoveFileIgnoreError(t *testing.T) {
@@ -1688,6 +2186,9 @@ func TestDataBranchOutputNoPKDeleteModes(t *testing.T) {
 	defer ctrl.Finish()
 
 	tblStuff := newFakePKBranchTableStuff(ctrl)
+	// Exercise the direct no-PK SQL paths with a source-side rename. The row
+	// layout keeps the source name while destination SQL must use baseColNames.
+	tblStuff.def.colNames[1] = "name_new"
 
 	t.Run("online merge deletes by fake pk", func(t *testing.T) {
 		var out bytes.Buffer
@@ -1844,12 +2345,14 @@ func newFakePKBranchTableStuff(ctrl *gomock.Controller) tableStuff {
 	var tblStuff tableStuff
 	tblStuff.baseRel = baseRel
 	tblStuff.def.colNames = []string{"id", "name", "__mo_fake_pk_col"}
+	tblStuff.def.baseColNames = []string{"id", "name", "__mo_fake_pk_col"}
 	tblStuff.def.colTypes = []types.Type{
 		types.T_int64.ToType(),
 		types.T_varchar.ToType(),
 		types.T_uint64.ToType(),
 	}
 	tblStuff.def.visibleIdxes = []int{0, 1}
+	tblStuff.def.writableIdxes = []int{0, 1}
 	tblStuff.def.pkColIdx = 2
 	tblStuff.def.pkColIdxes = []int{0, 1}
 	tblStuff.def.pkKind = fakeKind

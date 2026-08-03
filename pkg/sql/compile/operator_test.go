@@ -91,6 +91,64 @@ func TestJoinHashBuildTopologyPinsSpillToSingleConsumer(t *testing.T) {
 	}
 }
 
+func TestConstructFuzzyFilterUsesFinalizedBuildSide(t *testing.T) {
+	newNodes := func(side plan.Node_FuzzyBuildSide, tableCost, sinkCost float64) (
+		*plan.Node, *plan.Node, *plan.Node, *plan.RuntimeFilterSpec,
+	) {
+		typ := plan.Type{Id: int32(types.T_int64)}
+		spec := &plan.RuntimeFilterSpec{
+			Tag:         1,
+			BuildExpr:   &plan.Expr{Typ: typ},
+			KeyEncoding: plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
+		}
+		node := &plan.Node{
+			NodeType:       plan.Node_FUZZY_FILTER,
+			FuzzyBuildSide: side,
+			TableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{Name: "id", Typ: typ}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+			},
+			RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{spec},
+		}
+		tableScan := &plan.Node{
+			NodeType: plan.Node_TABLE_SCAN,
+			Stats:    &plan.Stats{Cost: tableCost},
+			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{{
+				Tag: 1, Expr: &plan.Expr{Typ: typ},
+			}},
+		}
+		sinkScan := &plan.Node{
+			NodeType: plan.Node_SINK_SCAN,
+			Stats:    &plan.Stats{Cost: sinkCost},
+		}
+		return node, tableScan, sinkScan, spec
+	}
+
+	t.Run("sink decision survives rewritten cost ratio", func(t *testing.T) {
+		node, tableScan, sinkScan, spec := newNodes(
+			plan.Node_FUZZY_BUILD_SIDE_SINK, 8_192, 1_000_000)
+		op := constructFuzzyFilter(node, tableScan, sinkScan)
+		defer op.Release()
+
+		require.Equal(t, 1, op.BuildIdx)
+		require.Same(t, spec, op.RuntimeFilterSpec)
+		require.Len(t, node.RuntimeFilterBuildList, 1)
+		require.Len(t, tableScan.RuntimeFilterProbeList, 1)
+	})
+
+	t.Run("table decision overrides later cost drift", func(t *testing.T) {
+		node, tableScan, sinkScan, _ := newNodes(
+			plan.Node_FUZZY_BUILD_SIDE_TABLE, 1_000_000, 1)
+		op := constructFuzzyFilter(node, tableScan, sinkScan)
+		defer op.Release()
+
+		require.Equal(t, 0, op.BuildIdx)
+		require.Nil(t, op.RuntimeFilterSpec)
+		require.Empty(t, node.RuntimeFilterBuildList)
+		require.Empty(t, tableScan.RuntimeFilterProbeList)
+	})
+}
+
 func TestConstructAggregateConfigIncludesGroupConcatMaxLen(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {

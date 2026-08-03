@@ -257,8 +257,6 @@ var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
 
 type IsMoLogger struct{}
 
-type SourceScanResKey struct{}
-
 type IgnoreForeignKey struct{}
 
 type AlterCopyOpt struct{}
