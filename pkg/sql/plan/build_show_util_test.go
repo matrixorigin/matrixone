@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -664,8 +665,9 @@ func TestShowCreateIcebergExternalTable(t *testing.T) {
 func TestShowCreateMongoDBExternalTable(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	tableDef := &plan.TableDef{
-		Name:      "events",
-		TableType: catalog.SystemExternalRel,
+		Name:        "events",
+		TableType:   catalog.SystemExternalRel,
+		FeatureFlag: features.MongoDBExternal,
 		Createsql: sqlmongodb.BuildCreateSQLEnvelope(sqlmongodb.TableMapping{
 			Connection:     "telemetry_source",
 			Database:       "telemetry",

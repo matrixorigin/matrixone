@@ -1140,6 +1140,10 @@ func buildCreateTable(
 		if err != nil {
 			return nil, err
 		}
+		// FeatureFlag is durable, planner-owned catalog metadata. Unlike the
+		// user-controlled rel_createsql payload of a generic external table, it
+		// is a typed discriminator that cannot be injected through filepath JSON.
+		createTable.TableDef.FeatureFlag |= features.MongoDBExternal
 		properties := []*plan.Property{
 			{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemExternalRel},
 			{Key: catalog.SystemRelAttr_CreateSQL, Value: sqlmongodb.BuildCreateSQLEnvelope(spec.Mapping)},
