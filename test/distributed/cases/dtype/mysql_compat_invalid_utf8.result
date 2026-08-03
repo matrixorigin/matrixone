@@ -2,7 +2,7 @@ drop database if exists mysql_compat_invalid_utf8;
 create database mysql_compat_invalid_utf8;
 use mysql_compat_invalid_utf8;
 set @old_sql_mode = @@session.sql_mode;
-set session sql_mode = '';
+set session sql_mode = 'STRICT_TRANS_TABLES';
 create table t_invalid_utf8 (
 id int primary key,
 c char(10) character set utf8mb4,
@@ -17,9 +17,10 @@ Incorrect string value: '\xC3('
 insert into t_invalid_utf8 (id, v) values (2, unhex('C328'));
 Incorrect string value: '\xC3('
 insert into t_invalid_utf8 (id, t) values (3, unhex('C328'));
+Incorrect string value: '\xC3('
 select count(*) as rejected_text_rows from t_invalid_utf8;
 ➤ rejected_text_rows[-5,64,0]  𝄀
-1
+0
 insert into t_invalid_utf8 (id, c, v, t, b, vb, bl)
 values (10, 'ok', 'ok', 'ok', unhex('C328'), unhex('C328'), unhex('C328'));
 select id, hex(b) as b_hex, hex(vb) as vb_hex, hex(bl) as bl_hex
@@ -32,9 +33,10 @@ Incorrect string value: '\xC3('
 update t_invalid_utf8 set v = unhex('C328') where id = 11;
 Incorrect string value: '\xC3('
 update t_invalid_utf8 set t = unhex('C328') where id = 11;
+Incorrect string value: '\xC3('
 select id, c, v, t from t_invalid_utf8 where id = 11;
 ➤ id[4,32,0]  ¦  c[1,10,0]  ¦  v[12,-1,0]  ¦  t[12,0,0]  𝄀
-11  ¦  old  ¦  old  ¦  �(
+11  ¦  old  ¦  old  ¦  old
 set session sql_mode = 'MATRIXONE_NATIVE';
 insert into t_invalid_utf8 (id, c, v, t, b, vb, bl)
 values (20, unhex('C328'), unhex('C328'), unhex('C328'),
