@@ -599,18 +599,12 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 		})
 	}
 
-	t.Run("non unique referenced prefix", func(t *testing.T) {
+	t.Run("non unique referenced prefix uses runtime ambiguity guard", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareEmpDept(mock, planpb.ForeignKeyDef_CASCADE)
 		dept := mock.ctxt.tables["dept"]
-		dept.Cols = append(dept.Cols, &planpb.ColDef{
-			Name: catalog.CPrimaryKeyColName, ColId: 100, Hidden: true,
-			Typ: planpb.Type{Id: int32(types.T_varchar), Width: 65535},
-		})
-		ensureName2ColIndexForReplace(dept)
-		dept.Name2ColIndex[catalog.CPrimaryKeyColName] = int32(len(dept.Cols) - 1)
 		dept.Pkey = &planpb.PrimaryKeyDef{
-			Names: []string{"deptno", "dname"}, PkeyColName: catalog.CPrimaryKeyColName,
+			Names: []string{"deptno", "dname"}, PkeyColName: "deptno",
 		}
 
 		stmt, err := parsers.ParseOne(
@@ -621,10 +615,9 @@ func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
 
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
 		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
-		require.ErrorContains(t, err, "non-unique referenced columns")
-		route, reason, _ := classifyUpdatePlannerError(err)
-		require.Equal(t, updatePlannerRejected, route)
-		require.Equal(t, updateRouteReasonForeignKey, reason)
+		require.NoError(t, err)
+		require.True(t, updateFkPlanContainsTypedAssert(
+			builder.qry, foreignKeyAmbiguousMappingAssert))
 	})
 }
 

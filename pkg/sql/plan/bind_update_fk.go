@@ -27,8 +27,9 @@ import (
 )
 
 const (
-	foreignKeyNoReferencedRowAssert = "fk_no_referenced_row"
-	foreignKeyRowIsReferencedAssert = "fk_row_is_referenced"
+	foreignKeyNoReferencedRowAssert  = "fk_no_referenced_row"
+	foreignKeyRowIsReferencedAssert  = "fk_row_is_referenced"
+	foreignKeyAmbiguousMappingAssert = "fk_ambiguous_parent_mapping"
 )
 
 func (builder *QueryBuilder) updateInputProjectNode(nodeID int32) *plan.Node {
@@ -651,21 +652,6 @@ func (builder *QueryBuilder) validateModernUpdateParentMutation(
 ) error {
 	childTableDef := affectedFK.childTableDef
 	ensureName2ColIndexForReplace(childTableDef)
-	uniqueReference, err := updateParentReferenceIsUnique(
-		builder.GetContext(), parentTableDef, affectedFK.fk.ForeignCols)
-	if err != nil {
-		return err
-	}
-	if !uniqueReference {
-		return newUpdatePlannerRouteError(
-			updatePlannerRejected,
-			updateRouteReasonForeignKey,
-			moerr.NewNotSupported(
-				builder.GetContext(),
-				"parent foreign key action on non-unique referenced columns",
-			),
-		)
-	}
 	parentColByID := make(map[uint64]*plan.ColDef, len(parentTableDef.Cols))
 	for _, col := range parentTableDef.Cols {
 		parentColByID[col.ColId] = col
@@ -887,6 +873,37 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 			FilterList: []*plan.Expr{changed},
 		}, bindCtx)
 	}
+	parentColIDToName := make(map[uint64]string, len(parentTableDef.Cols))
+	for _, col := range parentTableDef.Cols {
+		parentColIDToName[col.ColId] = col.Name
+	}
+
+	uniqueReference, err := updateParentReferenceIsUnique(
+		builder.GetContext(), parentTableDef, affectedFK.fk.ForeignCols)
+	if err != nil {
+		return err
+	}
+	if !uniqueReference {
+		partitionPositions := make([]int32, 0, len(affectedFK.fk.ForeignCols))
+		for _, parentColID := range affectedFK.fk.ForeignCols {
+			partitionPositions = append(
+				partitionPositions,
+				oldColName2Idx[parentAlias+"."+parentColIDToName[parentColID]],
+			)
+		}
+		parentNodeID, parentNode, sourceTag, err = builder.appendRowNumberGuardNode(
+			bindCtx,
+			parentNodeID,
+			parentNode,
+			sourceTag,
+			partitionPositions,
+			"parent foreign key action has an ambiguous non-unique referenced-key mapping",
+			foreignKeyAmbiguousMappingAssert,
+		)
+		if err != nil {
+			return err
+		}
+	}
 
 	childTableDef := affectedFK.childTableDef
 	childTag := builder.genNewBindTag()
@@ -899,10 +916,6 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 		ScanSnapshot: bindCtx.snapshot,
 	}, bindCtx)
 
-	parentColIDToName := make(map[uint64]string, len(parentTableDef.Cols))
-	for _, col := range parentTableDef.Cols {
-		parentColIDToName[col.ColId] = col.Name
-	}
 	childColIDToPos := make(map[uint64]int32, len(childTableDef.Cols))
 	for i, col := range childTableDef.Cols {
 		childColIDToPos[col.ColId] = int32(i)

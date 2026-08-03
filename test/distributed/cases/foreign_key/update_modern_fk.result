@@ -336,7 +336,7 @@ references parent_nonunique_prefix(a) on update cascade
 insert into parent_nonunique_prefix values (1, 1), (1, 2);
 insert into child_nonunique_prefix values (10, 1);
 update parent_nonunique_prefix set a = b + 1 where a = 1;
-not supported: parent foreign key action on non-unique referenced columns
+not supported: parent foreign key action has an ambiguous non-unique referenced-key mapping
 select * from parent_nonunique_prefix order by a, b;
 ➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  1  𝄀
