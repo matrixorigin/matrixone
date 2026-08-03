@@ -1,0 +1,260 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package sidecar
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"unicode"
+)
+
+const artifactMetadataName = "failure.json"
+
+var (
+	artifactURLPattern           = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>]+`)
+	artifactAuthorizationPattern = regexp.MustCompile(`(?i)\bauthorization\b(\s*[:=]\s*)[^\r\n]+`)
+	artifactSecretPattern        = regexp.MustCompile(`(?i)\b(username|user|password|passwd|pwd|token|secret|read_ref|access_key|secret_key|aws_key_id|aws_secret_key|session_token)\b(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)`)
+)
+
+type artifactObservation struct {
+	Schema     []Column          `json:"schema,omitempty"`
+	RowCount   int               `json:"row_count"`
+	RowsSHA256 string            `json:"rows_sha256"`
+	Error      *artifactSQLError `json:"error,omitempty"`
+	Evidence   artifactEvidence  `json:"evidence"`
+}
+
+type artifactSQLError struct {
+	Code     uint16 `json:"code,omitempty"`
+	SQLState string `json:"sql_state,omitempty"`
+	Class    string `json:"class,omitempty"`
+	Message  string `json:"message,omitempty"`
+}
+
+type artifactEvidence struct {
+	Backend  string `json:"backend"`
+	Outcome  string `json:"outcome"`
+	Fallback bool   `json:"fallback"`
+}
+
+type artifactMetadata struct {
+	CaseID               string              `json:"case_id"`
+	SQL                  string              `json:"sql"`
+	Comparison           string              `json:"comparison"`
+	Seed                 uint64              `json:"seed"`
+	CapabilitySetHash    string              `json:"capability_set_hash,omitempty"`
+	ReadDigest           string              `json:"read_digest,omitempty"`
+	SyntheticPlanSHA256  string              `json:"synthetic_plan_sha256,omitempty"`
+	Failure              string              `json:"failure"`
+	NativeExpectation    artifactEvidence    `json:"native_expectation"`
+	OffloadedExpectation artifactEvidence    `json:"offloaded_expectation"`
+	Native               artifactObservation `json:"native"`
+	Offloaded            artifactObservation `json:"offloaded"`
+}
+
+// WriteFailureArtifact writes deterministic, data-minimized diagnostics for a
+// failed comparison. Raw rows are fingerprinted, never emitted. A raw plan is
+// emitted only when the case explicitly supplied SyntheticPlan.
+func WriteFailureArtifact(root string, report Report, failure error) (string, error) {
+	if root == "" {
+		return "", errors.New("sidecar failure artifact root is empty")
+	}
+	if failure == nil {
+		return "", errors.New("sidecar failure artifact requires a failure")
+	}
+	if err := validateCase(report.Case); err != nil {
+		return "", err
+	}
+
+	caseDir := filepath.Join(root, artifactCaseDirectory(report.Case.ID))
+	if err := os.MkdirAll(caseDir, 0o700); err != nil {
+		return "", fmt.Errorf("create sidecar failure artifact directory: %w", err)
+	}
+	if err := os.Chmod(caseDir, 0o700); err != nil {
+		return "", fmt.Errorf("secure sidecar failure artifact directory: %w", err)
+	}
+
+	redact := func(value string) string {
+		return redactArtifactText(value, report.Case.ArtifactRedactValues)
+	}
+	native, err := makeArtifactObservation(report.Native, report.Case.Comparison, redact)
+	if err != nil {
+		return "", fmt.Errorf("encode native failure artifact: %w", err)
+	}
+	offloaded, err := makeArtifactObservation(report.Offloaded, report.Case.Comparison, redact)
+	if err != nil {
+		return "", fmt.Errorf("encode offloaded failure artifact: %w", err)
+	}
+
+	metadata := artifactMetadata{
+		CaseID:               redact(report.Case.ID),
+		SQL:                  redact(report.Case.SQL),
+		Comparison:           report.Case.Comparison.String(),
+		Seed:                 report.Case.Seed,
+		CapabilitySetHash:    redact(report.Case.CapabilitySetHash),
+		ReadDigest:           redact(report.Case.ReadDigest),
+		Failure:              redact(failure.Error()),
+		NativeExpectation:    makeArtifactEvidence(ExecutionEvidence(report.Case.NativeExpectation)),
+		OffloadedExpectation: makeArtifactEvidence(ExecutionEvidence(report.Case.OffloadedExpectation)),
+		Native:               native,
+		Offloaded:            offloaded,
+	}
+	if len(report.Case.SyntheticPlan) != 0 {
+		metadata.SyntheticPlanSHA256 = sha256Hex(report.Case.SyntheticPlan)
+		planPath := filepath.Join(caseDir, "plan.substrait.bin")
+		if err := os.WriteFile(planPath, report.Case.SyntheticPlan, 0o600); err != nil {
+			return "", fmt.Errorf("write synthetic sidecar plan artifact: %w", err)
+		}
+	} else {
+		planPath := filepath.Join(caseDir, "plan.substrait.bin")
+		if err := os.Remove(planPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("remove stale synthetic sidecar plan artifact: %w", err)
+		}
+	}
+
+	var data bytes.Buffer
+	encoder := json.NewEncoder(&data)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(metadata); err != nil {
+		return "", fmt.Errorf("marshal sidecar failure artifact: %w", err)
+	}
+	metadataPath := filepath.Join(caseDir, artifactMetadataName)
+	if err := os.WriteFile(metadataPath, data.Bytes(), 0o600); err != nil {
+		return "", fmt.Errorf("write sidecar failure artifact: %w", err)
+	}
+	return metadataPath, nil
+}
+
+func makeArtifactObservation(observation Observation, mode ComparisonMode, redact func(string) string) (artifactObservation, error) {
+	rowsFingerprint, err := fingerprintRows(mode, observation.Rows)
+	if err != nil {
+		return artifactObservation{}, err
+	}
+	result := artifactObservation{
+		Schema:     observation.Schema,
+		RowCount:   len(observation.Rows),
+		RowsSHA256: rowsFingerprint,
+		Evidence:   makeArtifactEvidence(observation.Evidence),
+	}
+	if observation.Error != nil {
+		result.Error = &artifactSQLError{
+			Code:     observation.Error.Code,
+			SQLState: observation.Error.SQLState,
+			Class:    observation.Error.Class,
+			Message:  redact(observation.Error.Message),
+		}
+	}
+	return result, nil
+}
+
+func fingerprintRows(mode ComparisonMode, rows []Row) (string, error) {
+	hash := sha256.New()
+	_, _ = hash.Write([]byte{byte(mode)})
+	var rowCount [8]byte
+	binary.BigEndian.PutUint64(rowCount[:], uint64(len(rows)))
+	_, _ = hash.Write(rowCount[:])
+
+	if mode == ComparisonOrdered {
+		for i, row := range rows {
+			encoded, err := encodeRow(row)
+			if err != nil {
+				return "", fmt.Errorf("row %d: %w", i, err)
+			}
+			_, _ = hash.Write(encoded)
+		}
+		return hex.EncodeToString(hash.Sum(nil)), nil
+	}
+
+	// Combine fixed-size row digests instead of sorting copied row bodies. Sum
+	// preserves multiplicity, XOR strengthens the diagnostic fingerprint, and
+	// memory remains constant even when a failed test returned many rows.
+	var sum, xor [sha256.Size]byte
+	for i, row := range rows {
+		encoded, err := encodeRow(row)
+		if err != nil {
+			return "", fmt.Errorf("row %d: %w", i, err)
+		}
+		rowDigest := sha256.Sum256(encoded)
+		carry := uint16(0)
+		for j := sha256.Size - 1; j >= 0; j-- {
+			value := uint16(sum[j]) + uint16(rowDigest[j]) + carry
+			sum[j] = byte(value)
+			carry = value >> 8
+			xor[j] ^= rowDigest[j]
+		}
+	}
+	_, _ = hash.Write(sum[:])
+	_, _ = hash.Write(xor[:])
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func makeArtifactEvidence(evidence ExecutionEvidence) artifactEvidence {
+	return artifactEvidence{
+		Backend:  evidence.Backend.String(),
+		Outcome:  evidence.Outcome.String(),
+		Fallback: evidence.Fallback,
+	}
+}
+
+func artifactCaseDirectory(caseID string) string {
+	var name strings.Builder
+	for _, r := range caseID {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' {
+			name.WriteRune(r)
+		} else {
+			name.WriteByte('_')
+		}
+	}
+	if name.Len() == 0 {
+		name.WriteString("case")
+	}
+	if name.String() != caseID {
+		digest := sha256.Sum256([]byte(caseID))
+		name.WriteByte('-')
+		name.WriteString(hex.EncodeToString(digest[:4]))
+	}
+	return name.String()
+}
+
+func redactArtifactText(value string, explicit []string) string {
+	redacted := value
+	values := append([]string(nil), explicit...)
+	sort.Slice(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
+	for _, secret := range values {
+		if secret != "" {
+			redacted = strings.ReplaceAll(redacted, secret, "<redacted>")
+		}
+	}
+	redacted = artifactURLPattern.ReplaceAllString(redacted, "<redacted-url>")
+	redacted = artifactAuthorizationPattern.ReplaceAllString(redacted, "authorization$1<redacted>")
+	redacted = artifactSecretPattern.ReplaceAllString(redacted, "$1$2<redacted>")
+	return redacted
+}
+
+func sha256Hex(data []byte) string {
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:])
+}
