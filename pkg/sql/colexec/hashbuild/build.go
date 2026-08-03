@@ -243,23 +243,6 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		}
 		return ctr.ensureRetainedSpillRecovery(projection, analyzer)
 	}
-	ensureDirectRecoveryWithReclaim := func(bat *batch.Batch) error {
-		err := ensureDirectRecovery(bat)
-		if !spillMode || !errors.Is(err, process.ErrHashBuildBudgetAdmission) {
-			return err
-		}
-		reclaimed, reclaimErr := ctr.reclaimOptionalSpillCoalesce(
-			proc, spillFiles, analyzer)
-		if reclaimErr != nil {
-			return reclaimErr
-		}
-		if !reclaimed {
-			// The rejection came from mandatory owners or sibling pressure. A
-			// second identical admission cannot make progress.
-			return err
-		}
-		return ensureDirectRecovery(bat)
-	}
 	spillBatch := func(bat *batch.Batch, sourceAlreadyCharged bool) error {
 		return ctr.spillBatchBounded(
 			proc,
@@ -353,7 +336,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			return err
 		}
 		if hashBuild.IsShuffle {
-			if err := ensureDirectRecoveryWithReclaim(bat); err != nil {
+			if err := ensureDirectRecovery(bat); err != nil {
 				return err
 			}
 		}
@@ -427,8 +410,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 				// The source batch is still owned by the upstream operator.  Do
 				// not retry CopyIntoBatches (or increment row count again). Every
 				// direct transition drains older retained copies under their existing
-				// guarantee, then gives mandatory recovery priority over optional
-				// write coalescing before writing this upstream-owned batch.
+				// guarantee before writing this upstream-owned batch.
 				if err := spillDirect(result.Batch); err != nil {
 					return err
 				}
@@ -537,9 +519,9 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 	}
 
 	// spillBatchBounded flushes each selected bucket immediately; no persistent
-	// 32-bucket vectors remain here. Flush serialized records accumulated across
-	// source batches before rewinding every file and publishing the
-	// complete set, including a spill entered after hard map-budget rejection.
+	// 32-bucket vectors remain here. Flush any records retained by a legacy
+	// unbudgeted caller before rewinding every file and publishing the complete
+	// set, including a spill entered after hard map-budget rejection.
 	if spillMode {
 		if err := checkHashBuildCanceled(proc); err != nil {
 			return err

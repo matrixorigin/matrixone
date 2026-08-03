@@ -16,7 +16,6 @@ package hashbuild
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -35,9 +34,8 @@ import (
 const (
 	spillNumBuckets = 32
 	spillMagic      = 0x12345678DEADBEEF
-	// Serialized records are accumulated per bucket across source batches.
-	// Allocation is admitted lazily against the lifecycle scratch lease and
-	// falls back to direct writes when the hard budget has no headroom.
+	// Legacy unbudgeted callers may accumulate serialized records per bucket
+	// across source batches. Hard-budgeted execution always writes through.
 	spillWriteCoalesceSize = 64 << 10
 )
 
@@ -449,31 +447,6 @@ func (ctr *container) growSpillScratchTransient(
 	return oldSize, true, nil
 }
 
-// growSpillScratchTransientWithReclaim gives a mandatory replacement overlap
-// one deterministic retry after returning optional coalesce ownership. Callers
-// invoke it before mutating the allocation being replaced; flushing previously
-// buffered records is therefore safe and the current allocation is never
-// replayed.
-func (ctr *container) growSpillScratchTransientWithReclaim(
-	proc *process.Process,
-	files []*os.File,
-	required uint64,
-	analyzer process.Analyzer,
-) (uint64, bool, error) {
-	oldSize, grew, err := ctr.growSpillScratchTransient(required, analyzer)
-	if !errors.Is(err, process.ErrHashBuildBudgetAdmission) {
-		return oldSize, grew, err
-	}
-	reclaimed, reclaimErr := ctr.reclaimOptionalSpillCoalesce(proc, files, analyzer)
-	if reclaimErr != nil {
-		return 0, false, reclaimErr
-	}
-	if !reclaimed {
-		return 0, false, err
-	}
-	return ctr.growSpillScratchTransient(required, analyzer)
-}
-
 func (ctr *container) restoreSpillScratchTransient(oldSize uint64, grew bool) error {
 	if !grew {
 		return nil
@@ -506,42 +479,6 @@ func (ctr *container) dropSpillScratchBuffers() {
 	ctr.spillSelection = nil
 	ctr.spillKeyVecs = nil
 	ctr.spillWriteBuf = bytes.Buffer{}
-}
-
-// reclaimOptionalSpillCoalesce gives mandatory recovery reservations priority
-// over the write-coalescing cache. It is called only at a quiescent mandatory
-// allocation boundary: between spill batches or before the current bucket's
-// replacement allocation. Transient scratch has been restored there, so every
-// byte above spillScratchBase is owned by optional per-bucket caches. Flush
-// their pending records, drop their backing, and return that charge to the
-// recovery floor before retrying mandatory admission once.
-func (ctr *container) reclaimOptionalSpillCoalesce(
-	proc *process.Process,
-	files []*os.File,
-	analyzer process.Analyzer,
-) (bool, error) {
-	if ctr.spillScratchReservation == nil {
-		if ctr.spillScratchBase != 0 {
-			return false, process.ErrHashBuildBudgetInvalid
-		}
-		return false, nil
-	}
-	current := ctr.spillScratchReservation.Size()
-	if current < ctr.spillScratchBase {
-		return false, process.ErrHashBuildBudgetInvalid
-	}
-	if current == ctr.spillScratchBase {
-		return false, nil
-	}
-	if err := ctr.flushSpillBuffers(proc, files, analyzer); err != nil {
-		return false, err
-	}
-	for bucket := range ctr.spillBucketWriteBufs {
-		ctr.spillBucketWriteBufs[bucket] = bytes.Buffer{}
-		ctr.spillBucketWriteRows[bucket] = 0
-	}
-	_, err := ctr.spillScratchReservation.ReconcileDown(ctr.spillScratchBase)
-	return err == nil, err
 }
 
 func spillMarshalGrowBytes(bat *batch.Batch) (uint64, error) {
@@ -707,8 +644,9 @@ func (ctr *container) ensureSpillFile(proc *process.Process, files []*os.File, b
 // vectors. Hash values are classified with two linear passes (count, then
 // scatter after prefix offsets), and a single row-id array describes every
 // bucket. One selected batch is reused as each bucket is materialized and
-// marshaled before advancing; serialized records are coalesced until the
-// bounded buffers or final handoff flush.
+// marshaled before advancing. Hard-budgeted records are written through;
+// legacy unbudgeted callers may coalesce them until the bounded buffers or
+// final handoff flush.
 func (ctr *container) spillBatchBounded(
 	proc *process.Process,
 	bat *batch.Batch,
@@ -781,8 +719,8 @@ func (ctr *container) spillBatchBounded(
 	if err != nil {
 		return err
 	}
-	oldScratchSize, grewScratch, err := ctr.growSpillScratchTransientWithReclaim(
-		proc, files, replacementPeak, analyzer)
+	oldScratchSize, grewScratch, err := ctr.growSpillScratchTransient(
+		replacementPeak, analyzer)
 	if err != nil {
 		return err
 	}
@@ -862,11 +800,6 @@ func (ctr *container) spillBatchBounded(
 		writePos[bucket] = pos + 1
 	}
 
-	// Coalescing is optional. Once one bucket cannot admit a new cache in this
-	// batch, later buckets without an already-owned cache write through instead
-	// of repeating the same fanout-sized budget rejection. The next ingress
-	// batch probes again, so released sibling headroom is still discoverable.
-	allowNewCoalesce := true
 	for bucket := 0; bucket < spillNumBuckets; bucket++ {
 		if err := checkHashBuildCanceled(proc); err != nil {
 			return err
@@ -907,7 +840,7 @@ func (ctr *container) spillBatchBounded(
 			file, spillErr = ctr.ensureSpillFile(proc, files, int(bucket))
 			if spillErr == nil {
 				spillErr = ctr.appendSpillRecord(
-					proc, files, file, int(bucket), selected, need, analyzer, &allowNewCoalesce)
+					proc, file, int(bucket), selected, need, analyzer)
 			}
 		}
 		selected.CleanOnlyData()
@@ -918,19 +851,17 @@ func (ctr *container) spillBatchBounded(
 	return nil
 }
 
-// appendSpillRecord appends one framed record to the bucket's bounded write
-// buffer. Full buffers are written before accepting the next record. A record
-// larger than the coalescing target is written directly, so no unbounded
-// temporary copy can be retained.
+// appendSpillRecord writes one framed record immediately for hard-budgeted
+// execution. Legacy unbudgeted callers may append it to a bounded bucket
+// buffer; full buffers are written before accepting the next record and an
+// oversized record is always written directly.
 func (ctr *container) appendSpillRecord(
 	proc *process.Process,
-	files []*os.File,
 	file *os.File,
 	bucket int,
 	bat *batch.Batch,
 	scratchNeed uint64,
 	analyzer process.Analyzer,
-	allowNewCoalesce *bool,
 ) error {
 	if bucket < 0 || bucket >= spillNumBuckets {
 		return process.ErrHashBuildBudgetInvalid
@@ -946,8 +877,8 @@ func (ctr *container) appendSpillRecord(
 		if addErr != nil {
 			return addErr
 		}
-		oldScratchSize, grewScratch, err = ctr.growSpillScratchTransientWithReclaim(
-			proc, files, peak, analyzer)
+		oldScratchSize, grewScratch, err = ctr.growSpillScratchTransient(
+			peak, analyzer)
 		if err != nil {
 			return err
 		}
@@ -960,6 +891,15 @@ func (ctr *container) appendSpillRecord(
 		return err
 	}
 	payload := ctr.spillWriteBuf.Bytes()
+	// A hard-budgeted HashBuild writes through. Pending coalesce data is an
+	// optional owner that cannot be reclaimed safely by a sibling worker: the
+	// sibling neither owns its file nor can wait for it without adding a
+	// shuffle wait-for edge. Keeping optional bytes out of budgeted executions
+	// therefore preserves every worker's already-admitted recovery ownership.
+	// Unbudgeted callers may retain the legacy bounded cache.
+	if ctr.hashmapBuilder.budget != nil {
+		return ctr.writeSpillPayload(proc, file, payload, cnt, analyzer)
+	}
 	buf := &ctr.spillBucketWriteBufs[bucket]
 	if buf.Len() > 0 && buf.Len()+len(payload) > spillWriteCoalesceSize {
 		if err := ctr.flushPendingSpillBucket(proc, file, bucket, analyzer); err != nil {
@@ -970,16 +910,6 @@ func (ctr *container) appendSpillRecord(
 		return ctr.writeSpillPayload(proc, file, payload, cnt, analyzer)
 	}
 	if buf.Len() == 0 {
-		if buf.Cap() < spillWriteCoalesceSize &&
-			allowNewCoalesce != nil && !*allowNewCoalesce {
-			return ctr.writeSpillPayload(proc, file, payload, cnt, analyzer)
-		}
-		if !ctr.ensureSpillCoalesceCapacity(buf, analyzer) {
-			if allowNewCoalesce != nil {
-				*allowNewCoalesce = false
-			}
-			return ctr.writeSpillPayload(proc, file, payload, cnt, analyzer)
-		}
 		if buf.Cap() < spillWriteCoalesceSize {
 			*buf = *bytes.NewBuffer(make([]byte, 0, spillWriteCoalesceSize))
 		}
@@ -990,27 +920,6 @@ func (ctr *container) appendSpillRecord(
 		return ctr.flushPendingSpillBucket(proc, file, bucket, analyzer)
 	}
 	return nil
-}
-
-func (ctr *container) ensureSpillCoalesceCapacity(buf *bytes.Buffer, analyzer process.Analyzer) bool {
-	if buf == nil || buf.Cap() >= spillWriteCoalesceSize {
-		return true
-	}
-	if ctr.hashmapBuilder.budget == nil || ctr.spillScratchReservation == nil {
-		return ctr.hashmapBuilder.budget == nil
-	}
-	additional := uint64(spillWriteCoalesceSize - buf.Cap())
-	if err := ctr.spillScratchReservation.Grow(additional); err != nil {
-		analyzer.GetOpStats().AddExtraStat("HashBuildCoalesceGrowRejects", 1)
-		return false
-	}
-	analyzer.GetOpStats().AddExtraStat("HashBuildCoalesceGrowCount", 1)
-	analyzer.GetOpStats().AddExtraStat("HashBuildCoalesceGrowBytes", hashBuildStatInt64(additional))
-	analyzer.GetOpStats().SetMaxExtraStat(
-		"HashBuildSpillScratchPeakBytes",
-		hashBuildStatInt64(ctr.spillScratchReservation.Size()),
-	)
-	return true
 }
 
 func (ctr *container) flushPendingSpillBucket(

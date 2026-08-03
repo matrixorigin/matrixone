@@ -2655,9 +2655,8 @@ func TestShuffleHashBuildSpillsBeforeRetainingThresholdCrossingBatch(t *testing.
 	// Admit the first recovery lease and its retained-copy allocation together.
 	// The second batch crosses the local threshold and must be spilled directly,
 	// without a second retained copy or any failed shared-budget admission.
-	coalesceSlack := uint64(spillNumBuckets * spillWriteCoalesceSize)
 	capBytes := max(directRecovery, retainedRecovery) +
-		projection.admissionBytes + coalesceSlack
+		projection.admissionBytes
 	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
@@ -3142,7 +3141,7 @@ func TestShuffleHashBuildRecoveryAdmissionFailsBeforeRetain(t *testing.T) {
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
-func TestShuffleHashBuildSpillModeReclaimsOptionalCacheForRecoveryGrowth(t *testing.T) {
+func TestShuffleHashBuildSpillModePreservesRecoveryGrowthHeadroom(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
 	tc.arg.IsShuffle = true
 	tc.arg.ShuffleIdx = 0
@@ -3162,8 +3161,8 @@ func TestShuffleHashBuildSpillModeReclaimsOptionalCacheForRecoveryGrowth(t *test
 	require.NoError(t, err)
 	secondNeed, err = spillRecoveryReservationBytes(secondNeed)
 	require.NoError(t, err)
-	require.Equal(t, firstNeed+uint64(spillWriteCoalesceSize), secondNeed,
-		"fixture needs one optional-cache quantum between recovery high waters")
+	require.Equal(t, firstNeed+spillRecoveryReservationQuantum, secondNeed,
+		"fixture needs one mandatory recovery quantum between high waters")
 
 	budget := process.MustNewHashBuildBudget(secondNeed, secondNeed)
 	generation, err := budget.OpenGeneration(1)
@@ -3192,13 +3191,11 @@ func TestShuffleHashBuildSpillModeReclaimsOptionalCacheForRecoveryGrowth(t *test
 
 	extra := tc.arg.OpAnalyzer.GetOpStats().ExtraStats
 	require.Equal(t, int64(1), extra["HashBuildSpillStarts"])
-	require.Equal(t, int64(1), extra["HashBuildSpillRecoveryGrowRejects"])
+	require.Zero(t, extra["HashBuildSpillRecoveryGrowRejects"])
 	require.Equal(t, int64(1), extra["HashBuildSpillRecoveryGrowCount"])
 	require.Equal(t, int64(secondNeed-firstNeed),
 		extra["HashBuildSpillRecoveryGrowBytes"])
-	require.Equal(t, int64(1), extra["HashBuildCoalesceGrowRejects"],
-		"one failed optional probe switches the rest of this batch to write-through")
-	require.Equal(t, int64(2), extra["QueryHashBudgetRejects"])
+	require.Zero(t, extra["QueryHashBudgetRejects"])
 	require.Zero(t, generation.Used())
 	require.Zero(t, generation.SpillDiskUsed())
 	require.Zero(t, generation.SpillFDUsed())
@@ -3233,7 +3230,7 @@ func TestShuffleHashBuildSpillModeGrowthRejectReleasesRecoveryLease(t *testing.T
 	require.NoError(t, err)
 	secondNeed, err = spillRecoveryReservationBytes(secondNeed)
 	require.NoError(t, err)
-	capBytes := firstNeed + uint64(spillWriteCoalesceSize)
+	capBytes := firstNeed + spillRecoveryReservationQuantum
 	require.Greater(t, secondNeed, capBytes)
 
 	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
@@ -3250,10 +3247,9 @@ func TestShuffleHashBuildSpillModeGrowthRejectReleasesRecoveryLease(t *testing.T
 
 	extra := tc.arg.OpAnalyzer.GetOpStats().ExtraStats
 	require.Equal(t, int64(1), extra["HashBuildSpillStarts"])
-	require.Equal(t, int64(2), extra["HashBuildSpillRecoveryGrowRejects"],
-		"reclaim retries once, then preserves a genuine over-cap failure")
-	require.Zero(t, extra["HashBuildCoalesceGrowRejects"])
-	require.Equal(t, int64(2), extra["QueryHashBudgetRejects"])
+	require.Equal(t, int64(1), extra["HashBuildSpillRecoveryGrowRejects"],
+		"a genuine over-cap recovery request fails once without a futile retry")
+	require.Equal(t, int64(1), extra["QueryHashBudgetRejects"])
 	require.Nil(t, tc.arg.ctr.spillScratchReservation)
 	require.Zero(t, tc.arg.ctr.spillScratchBase)
 	require.Zero(t, generation.Used())

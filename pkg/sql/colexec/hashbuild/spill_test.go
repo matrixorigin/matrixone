@@ -785,20 +785,15 @@ func TestSpillExpressionLeaseRetainsLargeBatchHighWater(t *testing.T) {
 	require.LessOrEqual(t, retained, ctr.hashmapBuilder.expressionLease.Reserved())
 }
 
-func TestSpillWriteCoalescesAcrossBatches(t *testing.T) {
+func TestUnbudgetedSpillWriteCoalescesAcrossBatches(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
-	budget := process.MustNewHashBuildBudget(8<<20, 8<<20)
-	generation, err := budget.OpenGeneration(8 << 20)
-	require.NoError(t, err)
-	defer generation.Close()
 	files := make([]*os.File, spillNumBuckets)
 	conditions := []*plan.Expr{{
 		Typ:  plan.Type{Id: int32(types.T_int32)},
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
 	}}
 	ctr := &container{spillUUID: t.Name()}
-	ctr.hashmapBuilder.setBudget(generation)
 	cleanup := func() {
 		for i, file := range files {
 			if file != nil {
@@ -815,7 +810,7 @@ func TestSpillWriteCoalescesAcrossBatches(t *testing.T) {
 		ctr.releaseSpillScratchReservation()
 	}
 	defer cleanup()
-	err = initSpillExprExecsForTest(ctr, proc, conditions)
+	err := initSpillExprExecsForTest(ctr, proc, conditions)
 	require.NoError(t, err)
 	analyzer := process.NewAnalyzer(0, false, false, "test")
 	bat := batch.NewWithSize(1)
@@ -872,78 +867,69 @@ func TestSpillWriteCoalescesAcrossBatches(t *testing.T) {
 		totalRows += cnt
 	}
 	require.Equal(t, int64(6), totalRows)
-	scratchPeak := analyzer.GetOpStats().ExtraStats["HashBuildSpillScratchPeakBytes"]
-	require.GreaterOrEqual(t, scratchPeak, hashBuildStatInt64(ctr.spillScratchReservation.Size()))
-	require.Greater(t, scratchPeak, hashBuildStatInt64(ctr.spillScratchBase),
-		"scratch peak must include retained coalesce buffers above the base lease")
 	cleanup()
-	require.Zero(t, generation.Used())
 }
 
-func TestReclaimOptionalSpillCoalesceReleasesRecoveryHeadroom(t *testing.T) {
+func TestBudgetedSpillWriteThroughPreservesSiblingRecoveryHeadroom(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
-	budget := process.MustNewHashBuildBudget(8<<20, 8<<20)
+
+	const floor = uint64(spillWriteCoalesceSize)
+	budget := process.MustNewHashBuildBudget(3*floor, 3*floor)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	defer generation.Close()
 
-	files := make([]*os.File, spillNumBuckets)
-	ctr := &container{spillUUID: t.Name()}
-	ctr.hashmapBuilder.setBudget(generation)
-	cleanup := func() {
-		for i, file := range files {
-			if file != nil {
-				_ = file.Close()
-				files[i] = nil
-			}
+	newOwner := func() *container {
+		reservation, reserveErr := generation.Reserve(floor)
+		require.NoError(t, reserveErr)
+		return &container{
+			spillUUID:               t.Name(),
+			hashmapBuilder:          HashmapBuilder{budget: generation},
+			spillScratchReservation: reservation,
+			spillScratchBase:        floor,
 		}
-		if ctr.spillBundle != nil {
-			ctr.spillBundle.release()
-			ctr.spillBundle = nil
-		}
-		ctr.hashmapBuilder.FreeExecutors()
-		ctr.dropSpillScratchBuffers()
-		ctr.releaseSpillScratchReservation()
 	}
-	defer cleanup()
-	conditions := []*plan.Expr{{
-		Typ:  plan.Type{Id: int32(types.T_int32)},
-		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
-	}}
-	err = initSpillExprExecsForTest(ctr, proc, conditions)
+	writer := newOwner()
+	recovery := newOwner()
+	defer func() {
+		if writer.spillBundle != nil {
+			writer.spillBundle.release()
+			writer.spillBundle = nil
+		}
+		writer.dropSpillScratchBuffers()
+		writer.releaseSpillScratchReservation()
+		recovery.dropSpillScratchBuffers()
+		recovery.releaseSpillScratchReservation()
+		require.Zero(t, generation.Used())
+		require.Zero(t, generation.SpillDiskUsed())
+		require.Zero(t, generation.SpillFDUsed())
+	}()
+
+	files := make([]*os.File, spillNumBuckets)
+	file, err := writer.ensureSpillFile(proc, files, 0)
 	require.NoError(t, err)
-	analyzer := process.NewAnalyzer(0, false, false, "recovery priority")
+	defer file.Close()
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1}, nil, proc.Mp())
-	bat.SetRowCount(3)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{7}, nil, proc.Mp())
+	bat.SetRowCount(1)
 	defer bat.Clean(proc.Mp())
-	require.NoError(t, ctr.spillBatchBounded(proc, bat, files, analyzer, false))
-	require.NotNil(t, ctr.spillScratchReservation)
-	base := ctr.spillScratchBase
-	beforeSize := ctr.spillScratchReservation.Size()
-	beforeUsed := generation.Used()
-	require.Greater(t, beforeSize, base)
 
-	reclaimed, err := ctr.reclaimOptionalSpillCoalesce(proc, files, analyzer)
-	require.NoError(t, err)
-	require.True(t, reclaimed)
-	require.Equal(t, base, ctr.spillScratchReservation.Size())
-	require.Equal(t, beforeUsed-(beforeSize-base), generation.Used())
-	for bucket := range ctr.spillBucketWriteBufs {
-		require.Zero(t, ctr.spillBucketWriteBufs[bucket].Len())
-		require.Zero(t, ctr.spillBucketWriteBufs[bucket].Cap())
-		require.Zero(t, ctr.spillBucketWriteRows[bucket])
-	}
-	// The transition is idempotent and must not shrink the mandatory floor.
-	reclaimed, err = ctr.reclaimOptionalSpillCoalesce(proc, files, analyzer)
-	require.NoError(t, err)
-	require.False(t, reclaimed)
-	require.Equal(t, base, ctr.spillScratchReservation.Size())
+	analyzer := process.NewAnalyzer(0, false, false, "shared recovery ownership")
+	require.NoError(t, writer.appendSpillRecord(
+		proc, file, 0, bat, floor, analyzer))
+	require.Equal(t, floor, writer.spillScratchReservation.Size(),
+		"optional write caching must not enlarge a budgeted owner's mandatory lease")
+	require.Equal(t, 2*floor, generation.Used())
+	require.Zero(t, writer.spillBucketWriteBufs[0].Len())
 
-	cleanup()
-	require.Zero(t, generation.Used())
+	require.NoError(t, recovery.ensureSpillRecoveryReservationBytes(2*floor, analyzer),
+		"one owner's optional I/O cache must not strand a sibling mandatory recovery grow")
+	require.Equal(t, 3*floor, generation.Used())
+	stat, err := file.Stat()
+	require.NoError(t, err)
+	require.Positive(t, stat.Size(), "budgeted records are written through before the next owner admission")
 }
 
 func TestSpillScratchBudgetDoesNotDoubleChargeRetainedSource(t *testing.T) {
@@ -1346,60 +1332,6 @@ func TestSpillReplacementPeakReusesHighWaterLease(t *testing.T) {
 
 	token.Release()
 	require.Zero(t, generation.Used())
-}
-
-func TestSpillReplacementPeakReclaimsOptionalBeforeRetry(t *testing.T) {
-	const (
-		base     = uint64(spillWriteCoalesceSize)
-		capBytes = 2 * base
-	)
-	for _, test := range []struct {
-		name        string
-		required    uint64
-		wantRejects uint64
-		wantError   bool
-	}{
-		{name: "reclaimed overlap fits", required: capBytes, wantRejects: 1},
-		{name: "mandatory overlap exceeds cap", required: capBytes + 1, wantRejects: 2, wantError: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			budget := process.MustNewHashBuildBudget(capBytes, capBytes)
-			generation, err := budget.OpenGeneration(1)
-			require.NoError(t, err)
-			defer generation.Close()
-			token, err := generation.Reserve(capBytes)
-			require.NoError(t, err)
-
-			ctr := container{
-				hashmapBuilder:          HashmapBuilder{budget: generation},
-				spillScratchReservation: token,
-				spillScratchBase:        base,
-			}
-			ctr.spillBucketWriteBufs[0] = *bytes.NewBuffer(
-				make([]byte, 0, spillWriteCoalesceSize))
-			analyzer := process.NewAnalyzer(0, false, false, "replacement reclaim")
-
-			oldSize, grew, err := ctr.growSpillScratchTransientWithReclaim(
-				nil, nil, test.required, analyzer)
-			if test.wantError {
-				require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
-				require.False(t, grew)
-				require.Zero(t, oldSize)
-				require.Equal(t, base, token.Size())
-			} else {
-				require.NoError(t, err)
-				require.True(t, grew)
-				require.Equal(t, base, oldSize)
-				require.Equal(t, test.required, token.Size())
-				require.NoError(t, ctr.restoreSpillScratchTransient(oldSize, grew))
-				require.Equal(t, base, token.Size())
-			}
-			require.Equal(t, test.wantRejects, generation.RejectCount())
-			require.Zero(t, ctr.spillBucketWriteBufs[0].Cap())
-			token.Release()
-			require.Zero(t, generation.Used())
-		})
-	}
 }
 
 func TestSpillPeakChargesSerializedPayloadOnce(t *testing.T) {

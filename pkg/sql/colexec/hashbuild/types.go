@@ -77,9 +77,9 @@ type container struct {
 	spillBucketOffsets [spillNumBuckets + 1]int32
 	spillSelection     []int32
 	spillWriteBuf      bytes.Buffer
-	// spillBucketWriteBufs coalesce serialized records across source batches.
-	// Each buffer is bounded by spillWriteCoalesceSize (plus bytes.Buffer's
-	// bounded growth slack), so fanout does not imply fanout-sized vectors.
+	// spillBucketWriteBufs coalesce serialized records for legacy unbudgeted
+	// callers. Hard-budgeted executions write through so optional buffers cannot
+	// strand a sibling worker's mandatory recovery ownership.
 	spillBucketWriteBufs [spillNumBuckets]bytes.Buffer
 	spillBucketWriteRows [spillNumBuckets]int64
 	spillKeyVecs         []*vector.Vector
@@ -89,8 +89,7 @@ type container struct {
 	// Direct spill callers may still establish it lazily. Reset, Free, and the
 	// build terminal cleanup all release it idempotently.
 	spillScratchReservation *process.HashBuildReservation
-	// spillScratchBase is the retained scratch floor. Coalesce-buffer growth is
-	// charged on top and must never be mistaken for this floor.
+	// spillScratchBase is the retained mandatory scratch floor.
 	spillScratchBase uint64
 }
 
