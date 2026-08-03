@@ -243,13 +243,19 @@ from mysql_compat_special_ignore order by id;
 -- including string/numeric YEAR input, BIT truncation, and all-invalid SET.
 insert ignore into mysql_compat_special_ignore values
     (2, '2156', b'10000', 9, 'bad'),
-    (3, 2024, b'0011', 'a', 'x,z');
+    (3, 2024, b'0011', 'a', 'x,z'),
+    (4, 2024, b'0000', '', '');
 select id, y + 0, bin(b + 0), e, e + 0, s, s + 0
+from mysql_compat_special_ignore order by id;
+
+-- The ENUM error member (index 0) and an explicit empty member both display
+-- as '', but retain distinct numeric values (0 and 3 respectively).
+select id, e, e + 0, e = '', length(e)
 from mysql_compat_special_ignore order by id;
 
 -- IGNORE is the adjustment boundary: the equivalent strict insert still fails
 -- and must not add a row.
-insert into mysql_compat_special_ignore values (4, 2156, b'11111', 'bad', 'x,bad');
+insert into mysql_compat_special_ignore values (5, 2156, b'11111', 'bad', 'x,bad');
 select count(*) from mysql_compat_special_ignore;
 set session sql_mode = '';
 drop table mysql_compat_special_ignore;

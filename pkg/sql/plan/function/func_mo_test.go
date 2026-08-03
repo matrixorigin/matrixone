@@ -23,6 +23,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCastIndexToValueDisplaysEnumErrorMemberAsEmptyString(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"a,b,"}, nil),
+			NewFunctionTestInput(types.T_enum.ToType(), []types.Enum{0, 1, 3}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", "a", ""}, nil),
+		CastIndexToValue,
+	)
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
+}
+
 func TestCastGeometryToSubtype(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

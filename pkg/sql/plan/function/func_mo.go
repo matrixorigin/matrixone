@@ -989,6 +989,14 @@ func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 				return err
 			}
 		} else {
+			// MySQL stores an invalid ENUM value as index 0. It is distinct from
+			// NULL and displays as the empty string.
+			if indexVal == 0 {
+				if err := rs.AppendBytes([]byte{}, false); err != nil {
+					return err
+				}
+				continue
+			}
 			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
 			var enumVlaue string
 
