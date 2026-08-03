@@ -292,6 +292,22 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 	if len(affected) == 0 {
 		return lastNodeID, selectNodeTag, nil
 	}
+	// PREPARE may happen before the execution transaction exists. Keep a marker
+	// in the serialized plan so compile/run can enforce the actual transaction
+	// mode even when the binder could not observe it.
+	builder.qry.DetectSqls = append(builder.qry.DetectSqls, "UPDATE_PARENT_PLAN:")
+	if proc := builder.compCtx.GetProcess(); proc != nil {
+		if txnOp := proc.GetTxnOperator(); txnOp != nil && !txnOp.Txn().IsPessimistic() {
+			return 0, 0, newUpdatePlannerRouteError(
+				updatePlannerRejected,
+				updateRouteReasonForeignKey,
+				moerr.NewNotSupported(
+					builder.GetContext(),
+					"updating a referenced parent key in an optimistic transaction",
+				),
+			)
+		}
+	}
 
 	lastNodeID, selectNodeTag, err := builder.appendUpdateParentKeyLocks(
 		bindCtx,
@@ -518,22 +534,7 @@ func (builder *QueryBuilder) appendUpdateParentKeyLocks(
 			}
 		}
 	}
-	sort.SliceStable(lockTargets, func(i, j int) bool {
-		leftName, rightName := "", ""
-		if lockTargets[i].ObjRef != nil {
-			leftName = lockTargets[i].ObjRef.ObjName
-		}
-		if lockTargets[j].ObjRef != nil {
-			rightName = lockTargets[j].ObjRef.ObjName
-		}
-		if leftName != rightName {
-			return leftName < rightName
-		}
-		if lockTargets[i].TableId != lockTargets[j].TableId {
-			return lockTargets[i].TableId < lockTargets[j].TableId
-		}
-		return lockTargets[i].PrimaryColIdxInBat < lockTargets[j].PrimaryColIdxInBat
-	})
+	sortForeignKeyLockTargets(lockTargets, map[uint64]struct{}{parentTableDef.TblId: {}})
 
 	lockInputID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_PROJECT, Children: []int32{lastNodeID},
@@ -586,6 +587,63 @@ func updateForeignKeyPartsEqual(left, right []string) bool {
 	return true
 }
 
+func sortForeignKeyLockTargets(lockTargets []*plan.LockTarget, baseTableIDs map[uint64]struct{}) {
+	sort.SliceStable(lockTargets, func(i, j int) bool {
+		_, leftBase := baseTableIDs[lockTargets[i].TableId]
+		_, rightBase := baseTableIDs[lockTargets[j].TableId]
+		if leftBase != rightBase {
+			return leftBase
+		}
+		leftName, rightName := "", ""
+		if lockTargets[i].ObjRef != nil {
+			leftName = lockTargets[i].ObjRef.ObjName
+		}
+		if lockTargets[j].ObjRef != nil {
+			rightName = lockTargets[j].ObjRef.ObjName
+		}
+		if leftName != rightName {
+			return leftName < rightName
+		}
+		if lockTargets[i].TableId != lockTargets[j].TableId {
+			return lockTargets[i].TableId < lockTargets[j].TableId
+		}
+		if lockTargets[i].LockTable != lockTargets[j].LockTable {
+			return !lockTargets[i].LockTable
+		}
+		if lockTargets[i].PrimaryColIdxInBat != lockTargets[j].PrimaryColIdxInBat {
+			return lockTargets[i].PrimaryColIdxInBat < lockTargets[j].PrimaryColIdxInBat
+		}
+		return lockTargets[i].PrimaryColRelPos < lockTargets[j].PrimaryColRelPos
+	})
+}
+
+func updateParentReferenceIsUnique(
+	ctx context.Context,
+	parentTableDef *plan.TableDef,
+	foreignCols []uint64,
+) (bool, error) {
+	referencedNames, err := updateParentColNames(ctx, parentTableDef, foreignCols)
+	if err != nil {
+		return false, err
+	}
+	if parentTableDef.Pkey != nil {
+		pkeyNames := parentTableDef.Pkey.Names
+		if len(pkeyNames) == 0 && parentTableDef.Pkey.PkeyColName != "" {
+			pkeyNames = []string{parentTableDef.Pkey.PkeyColName}
+		}
+		if updateForeignKeyPartsEqual(pkeyNames, referencedNames) {
+			return true, nil
+		}
+	}
+	validIndexes, _ := getValidIndexes(parentTableDef)
+	for _, idxDef := range validIndexes {
+		if idxDef.Unique && updateForeignKeyPartsEqual(idxDef.Parts, referencedNames) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (builder *QueryBuilder) validateModernUpdateParentMutation(
 	bindCtx *BindContext,
 	parentTableDef *plan.TableDef,
@@ -593,6 +651,21 @@ func (builder *QueryBuilder) validateModernUpdateParentMutation(
 ) error {
 	childTableDef := affectedFK.childTableDef
 	ensureName2ColIndexForReplace(childTableDef)
+	uniqueReference, err := updateParentReferenceIsUnique(
+		builder.GetContext(), parentTableDef, affectedFK.fk.ForeignCols)
+	if err != nil {
+		return err
+	}
+	if !uniqueReference {
+		return newUpdatePlannerRouteError(
+			updatePlannerRejected,
+			updateRouteReasonForeignKey,
+			moerr.NewNotSupported(
+				builder.GetContext(),
+				"parent foreign key action on non-unique referenced columns",
+			),
+		)
+	}
 	parentColByID := make(map[uint64]*plan.ColDef, len(parentTableDef.Cols))
 	for _, col := range parentTableDef.Cols {
 		parentColByID[col.ColId] = col
@@ -908,6 +981,19 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 	validIndexes, _ := getValidIndexes(childTableDef)
 	indexes := make([]mutationIndex, 0, len(validIndexes))
 	for _, idxDef := range validIndexes {
+		indexAffected := false
+		for _, part := range idxDef.Parts {
+			colPos, ok := childTableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+			if ok {
+				_, indexAffected = newChildExprs[colPos]
+			}
+			if indexAffected {
+				break
+			}
+		}
+		if !indexAffected {
+			continue
+		}
 		idxObjRef, idxTableDef, resolveErr := builder.compCtx.ResolveIndexTableByRef(
 			affectedFK.childObjRef,
 			idxDef.IndexTableName,
@@ -1096,15 +1182,7 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 			)
 		}
 	}
-	sort.SliceStable(lockTargets, func(i, j int) bool {
-		if lockTargets[i].TableId != lockTargets[j].TableId {
-			return lockTargets[i].TableId < lockTargets[j].TableId
-		}
-		if lockTargets[i].PrimaryColIdxInBat != lockTargets[j].PrimaryColIdxInBat {
-			return lockTargets[i].PrimaryColIdxInBat < lockTargets[j].PrimaryColIdxInBat
-		}
-		return lockTargets[i].PrimaryColRelPos < lockTargets[j].PrimaryColRelPos
-	})
+	sortForeignKeyLockTargets(lockTargets, map[uint64]struct{}{childTableDef.TblId: {}})
 	actionNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_LOCK_OP,
 		Children:    []int32{actionNodeID},

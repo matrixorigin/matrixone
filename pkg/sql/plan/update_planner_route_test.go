@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -401,15 +402,17 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 			require.Equal(t, 2, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
 			require.True(t, query.HasForeignKeyAction)
 			require.True(t, updateFkPlanContainsFunc(query, "<=>"))
-			hasIndexedChildAction := false
+			hasIndexedParentUpdate := false
 			for _, node := range query.Nodes {
 				if node.NodeType == planpb.Node_MULTI_UPDATE && len(node.UpdateCtxList) > 1 {
-					hasIndexedChildAction = true
+					hasIndexedParentUpdate = true
 				}
 				if node.NodeType != planpb.Node_MULTI_UPDATE {
 					continue
 				}
 				if len(node.UpdateCtxList) > 0 && node.UpdateCtxList[0].ObjRef.ObjName == "emp" {
+					require.Len(t, node.UpdateCtxList, 1,
+						"cascade must not rewrite child indexes whose key parts are unchanged")
 					for _, updateCtx := range node.UpdateCtxList {
 						require.True(t, updateCtx.IgnoreAffectedRows)
 					}
@@ -420,7 +423,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 					}
 				}
 			}
-			require.True(t, hasIndexedChildAction)
+			require.True(t, hasIndexedParentUpdate)
 		})
 	}
 
@@ -566,6 +569,95 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 	})
 }
 
+func TestBindUpdateParentForeignKeySafetyGates(t *testing.T) {
+	prepareEmpDept := func(mock *MockOptimizer, action planpb.ForeignKeyDef_RefAction) {
+		setMockEmpDeptForeignKeyAction(t, mock, planpb.ForeignKeyDef_RESTRICT, action)
+	}
+
+	for _, action := range []planpb.ForeignKeyDef_RefAction{
+		planpb.ForeignKeyDef_RESTRICT,
+		planpb.ForeignKeyDef_CASCADE,
+		planpb.ForeignKeyDef_SET_NULL,
+	} {
+		t.Run("optimistic "+action.String(), func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			prepareEmpDept(mock, action)
+			setMockTxnMode(mock, txnpb.TxnMode_Optimistic)
+
+			stmt, err := parsers.ParseOne(
+				mock.CurrentContext().GetContext(), dialect.MYSQL,
+				"UPDATE dept SET deptno = 2", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
+			_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+			require.ErrorContains(t, err, "optimistic transaction")
+			route, reason, _ := classifyUpdatePlannerError(err)
+			require.Equal(t, updatePlannerRejected, route)
+			require.Equal(t, updateRouteReasonForeignKey, reason)
+		})
+	}
+
+	t.Run("non unique referenced prefix", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock, planpb.ForeignKeyDef_CASCADE)
+		dept := mock.ctxt.tables["dept"]
+		dept.Cols = append(dept.Cols, &planpb.ColDef{
+			Name: catalog.CPrimaryKeyColName, ColId: 100, Hidden: true,
+			Typ: planpb.Type{Id: int32(types.T_varchar), Width: 65535},
+		})
+		ensureName2ColIndexForReplace(dept)
+		dept.Name2ColIndex[catalog.CPrimaryKeyColName] = int32(len(dept.Cols) - 1)
+		dept.Pkey = &planpb.PrimaryKeyDef{
+			Names: []string{"deptno", "dname"}, PkeyColName: catalog.CPrimaryKeyColName,
+		}
+
+		stmt, err := parsers.ParseOne(
+			mock.CurrentContext().GetContext(), dialect.MYSQL,
+			"UPDATE dept SET deptno = 2", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
+		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		require.ErrorContains(t, err, "non-unique referenced columns")
+		route, reason, _ := classifyUpdatePlannerError(err)
+		require.Equal(t, updatePlannerRejected, route)
+		require.Equal(t, updateRouteReasonForeignKey, reason)
+	})
+}
+
+func TestBindUpdateForeignKeySensitivityIncludesImplicitFinalRowChanges(t *testing.T) {
+	for _, checksDisabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "checks enabled", true: "checks disabled"}[checksDisabled], func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			setMockEmpDeptForeignKeyAction(
+				t, mock, planpb.ForeignKeyDef_RESTRICT, planpb.ForeignKeyDef_RESTRICT)
+			setMockOnUpdateExpr(t, mock, "emp", "deptno", "2")
+			if checksDisabled {
+				mock.ctxt.SetContext(context.WithValue(
+					mock.ctxt.GetContext(), defines.DisableFkCheck{}, true))
+			}
+
+			logicPlan, err := runOneStmt(mock, t, "UPDATE emp SET sal = sal + 1")
+			require.NoError(t, err)
+			require.True(t, logicPlan.GetQuery().HasForeignKeyAction,
+				"implicit ON UPDATE FK column must make prepared plans cache-sensitive")
+		})
+	}
+}
+
+func TestSortForeignKeyLockTargetsUsesBaseBeforeHiddenTables(t *testing.T) {
+	base := &planpb.LockTarget{TableId: 20, ObjRef: &planpb.ObjectRef{ObjName: "z_parent"}}
+	hidden := &planpb.LockTarget{TableId: 10, ObjRef: &planpb.ObjectRef{ObjName: "__mo_index_a"}}
+	targets := []*planpb.LockTarget{hidden, base}
+
+	sortForeignKeyLockTargets(targets, map[uint64]struct{}{base.TableId: {}})
+	require.Same(t, base, targets[0])
+	require.Same(t, hidden, targets[1])
+}
+
 func TestUpdateParentForeignKeyLocksPrecedeChildConsumers(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	setMockEmpDeptForeignKeyAction(t, mock, planpb.ForeignKeyDef_RESTRICT, planpb.ForeignKeyDef_CASCADE)
@@ -579,6 +671,7 @@ func TestUpdateParentForeignKeyLocksPrecedeChildConsumers(t *testing.T) {
 	logicPlan, err := runOneStmt(mock, t, "update dept set deptno = deptno + 10 where deptno = 1")
 	require.NoError(t, err)
 	query := logicPlan.GetQuery()
+	require.Contains(t, query.DetectSqls, "UPDATE_PARENT_PLAN:")
 	parentID := mock.ctxt.tables["dept"].TblId
 	childID := child.TblId
 

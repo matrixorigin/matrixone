@@ -562,21 +562,7 @@ func appendRecursiveCascadeLockNode(
 		}
 	}
 
-	slices.SortStableFunc(lockTargets, func(left, right *plan.LockTarget) int {
-		if left.TableId < right.TableId {
-			return -1
-		}
-		if left.TableId > right.TableId {
-			return 1
-		}
-		if !left.LockTable && right.LockTable {
-			return -1
-		}
-		if left.LockTable && !right.LockTable {
-			return 1
-		}
-		return 0
-	})
+	sortForeignKeyLockTargets(lockTargets, map[uint64]struct{}{delCtx.tableDef.TblId: {}})
 	if len(lockProject) > len(rowProject) {
 		sourceNodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_PROJECT, Children: []int32{sourceNodeID},

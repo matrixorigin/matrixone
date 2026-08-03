@@ -1304,6 +1304,11 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 				PrimaryColTyp: fkLock.typ, Mode: lockpb.LockMode_Shared, LockTable: fkLock.lockTable,
 			})
 		}
+		baseTableIDs := make(map[uint64]struct{}, len(nonSelfFks))
+		for _, fk := range nonSelfFks {
+			baseTableIDs[fk.ForeignTbl] = struct{}{}
+		}
+		sortForeignKeyLockTargets(lockTargets, baseTableIDs)
 		lockInputID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_PROJECT, Children: []int32{lastNodeID},
 			ProjectList: lockProject, BindingTags: []int32{lockTag},

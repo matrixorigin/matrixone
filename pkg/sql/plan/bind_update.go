@@ -1219,13 +1219,25 @@ func (builder *QueryBuilder) updateActuallyAffectsForeignKey(
 	if tableDef == nil || len(updatedCols) == 0 {
 		return false, nil
 	}
+	// Keep this sensitivity set aligned with the final UPDATE row image. The
+	// binder applies every ON UPDATE expression and recomputes generated columns
+	// after explicit assignments, so either can make an otherwise unrelated SET
+	// clause FK-sensitive. This must be computed before foreign_key_checks is
+	// consulted so prepared plans are rebuilt when that variable changes.
+	affectedCols := make(map[string]struct{}, len(updatedCols)+len(tableDef.Cols))
+	for colName := range updatedCols {
+		affectedCols[colName] = struct{}{}
+	}
 	colIDToName := make(map[uint64]string, len(tableDef.Cols))
 	for _, col := range tableDef.Cols {
 		colIDToName[col.ColId] = col.Name
+		if col.OnUpdate != nil || col.GeneratedCol != nil {
+			affectedCols[col.Name] = struct{}{}
+		}
 	}
 	for _, fk := range tableDef.Fkeys {
 		for _, colID := range fk.Cols {
-			if _, ok := updatedCols[colIDToName[colID]]; ok {
+			if _, ok := affectedCols[colIDToName[colID]]; ok {
 				return true, nil
 			}
 		}
@@ -1253,7 +1265,7 @@ func (builder *QueryBuilder) updateActuallyAffectsForeignKey(
 				continue
 			}
 			for _, parentColID := range fk.ForeignCols {
-				if _, ok := updatedCols[colIDToName[parentColID]]; ok {
+				if _, ok := affectedCols[colIDToName[parentColID]]; ok {
 					return true, nil
 				}
 			}

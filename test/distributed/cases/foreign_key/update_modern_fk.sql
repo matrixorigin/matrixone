@@ -260,6 +260,25 @@ select * from child_lock_order;
 drop table child_lock_order;
 drop table parent_lock_order;
 
+create table parent_nonunique_prefix (
+    a int,
+    b int,
+    primary key (a, b)
+);
+create table child_nonunique_prefix (
+    id int primary key,
+    parent_a int,
+    constraint fk_nonunique_prefix foreign key (parent_a)
+        references parent_nonunique_prefix(a) on update cascade
+);
+insert into parent_nonunique_prefix values (1, 1), (1, 2);
+insert into child_nonunique_prefix values (10, 1);
+update parent_nonunique_prefix set a = b + 1 where a = 1;
+select * from parent_nonunique_prefix order by a, b;
+select * from child_nonunique_prefix order by id;
+drop table child_nonunique_prefix;
+drop table parent_nonunique_prefix;
+
 drop table child_generated_unique;
 drop table parent_generated_unique;
 drop table child_dual_fk;
