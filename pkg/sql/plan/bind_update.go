@@ -143,34 +143,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		validIndexes, _ := getValidIndexes(tableDef)
 		tableDef.Indexes = validIndexes
 
-		var pkAndUkCols = make(map[string]bool)
-
-		if tableDef.Name == catalog.MO_PUBS || tableDef.Name == catalog.MO_SUBS {
-			for _, colName := range tableDef.Pkey.Names {
-				pkAndUkCols[colName] = true
-			}
-		}
-
-		for _, idxDef := range tableDef.Indexes {
-			if !idxDef.Unique {
-				continue
-			}
-
-			if tableDef.Name == catalog.MO_PUBS || tableDef.Name == catalog.MO_SUBS {
-				for _, colName := range idxDef.Parts {
-					pkAndUkCols[catalog.ResolveAlias(colName)] = true
-				}
-			}
-		}
-
 		for colName, updateExpr := range dmlCtx.updateCol2Expr[i] {
-			if pkAndUkCols[colName] {
-				return 0, newLegacyUpdatePlannerRouteError(
-					updateRouteReasonPubSubKey,
-					moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update pk/uk on pub/sub table"),
-				)
-			}
-
 			// Check: cannot update a generated column (unless SET gen_col = DEFAULT)
 			isGenCol := false
 			for _, colDef := range tableDef.Cols {
@@ -197,13 +170,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			for _, colDef := range tableDef.Cols {
 				if colDef.Name == colName {
 					if isEnumOrSetPlanType(&colDef.Typ) {
-						if colDef.Typ.AutoIncr {
-							return 0, newLegacyUpdatePlannerRouteError(
-								updateRouteReasonAutoIncrement,
-								moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value"),
-							)
-						}
-
 						updateExpr, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), colDef.Typ, updateExpr)
 						if err != nil {
 							return 0, err
@@ -422,7 +388,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if updateAutoIncrCols[i] &&
 				len(affectedUpdateChildFks(tableDef, dmlCtx.aliases[i], newColName2Idx)) > 0 {
 				return 0, newLegacyUpdatePlannerRouteError(
-					updateRouteReasonAutoIncrement,
+					updateRouteReasonAutoIncrementFK,
 					moerr.NewUnsupportedDML(
 						builder.compCtx.GetContext(),
 						"auto_increment foreign key update",
