@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -34,9 +33,9 @@ import (
 )
 
 var (
-	ErrArchiveRowTooLarge    = errors.New("Lifecycle archive row exceeds certified restore chunk limit")
-	ErrCleanupRootNotDurable = errors.New("Lifecycle cleanup root is not durable")
-	ErrArchiveWriterClosed   = errors.New("Lifecycle archive writer is closed")
+	ErrArchiveRowTooLarge    = moerr.NewInternalErrorNoCtx("Lifecycle archive row exceeds certified restore chunk limit")
+	ErrCleanupRootNotDurable = moerr.NewInternalErrorNoCtx("Lifecycle cleanup root is not durable")
+	ErrArchiveWriterClosed   = moerr.NewInternalErrorNoCtx("Lifecycle archive writer is closed")
 )
 
 type ArchiveStore interface {
@@ -269,7 +268,7 @@ func (writer *ArchiveWriter) Close(
 		return nil, "", err
 	}
 	if verified.VerificationStatus != "FULL_READBACK_VERIFIED" {
-		return nil, "", fmt.Errorf(
+		return nil, "", moerr.NewInternalErrorNoCtxf(
 			"Lifecycle persisted Manifest is not full-readback verified",
 		)
 	}
@@ -284,7 +283,7 @@ func (writer *ArchiveWriter) flushChunk(ctx context.Context) error {
 		return nil
 	}
 	if len(writer.files) >= maxArchiveChunksPerDataset {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"RESOURCE_BLOCKED: Lifecycle Dataset exceeds the certified chunk limit %d",
 			maxArchiveChunksPerDataset,
 		)
@@ -322,7 +321,7 @@ func (writer *ArchiveWriter) flushChunk(ctx context.Context) error {
 	)
 	payload := output.Bytes()
 	if uint64(len(payload)) > maxArchivePayloadPhysicalBytes {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"RESOURCE_BLOCKED: Lifecycle Archive payload exceeds the certified physical limit",
 		)
 	}
@@ -363,7 +362,7 @@ func (writer *ArchiveWriter) put(
 	bytes := uint64(len(value))
 	if bytes > writer.config.MaxPhysicalBytes ||
 		writer.physicalBytes > writer.config.MaxPhysicalBytes-bytes {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"RESOURCE_BLOCKED: Lifecycle Archive exceeds its reserved physical bytes",
 		)
 	}
@@ -497,7 +496,7 @@ func archiveParquetNode(column SchemaColumn) (parquet.Node, error) {
 	case types.T_enum:
 		return parquet.Uint(32), nil
 	default:
-		return nil, fmt.Errorf("unsupported Lifecycle Parquet type %s", types.T(column.TypeID))
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported Lifecycle Parquet type %s", types.T(column.TypeID))
 	}
 }
 
@@ -550,13 +549,13 @@ func canonicalCellToParquet(column SchemaColumn, cell CanonicalCell) (any, error
 	case types.T_enum:
 		return uint32(cell.Value.(types.Enum)), nil
 	default:
-		return nil, fmt.Errorf("unsupported Lifecycle Parquet value type %s", types.T(column.TypeID))
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported Lifecycle Parquet value type %s", types.T(column.TypeID))
 	}
 }
 
 func checkedInt64(value uint64) (int64, error) {
 	if value > math.MaxInt64 {
-		return 0, fmt.Errorf("value %d exceeds int64", value)
+		return 0, moerr.NewInternalErrorNoCtxf("value %d exceeds int64", value)
 	}
 	return int64(value), nil
 }
@@ -567,7 +566,7 @@ func accumulateAutoIncrementMaxima(
 	maxima map[uint32]*big.Int,
 ) error {
 	if len(cells) != len(schema.Columns) {
-		return fmt.Errorf("Lifecycle auto-increment row width mismatch")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle auto-increment row width mismatch")
 	}
 	for ordinal, column := range schema.Columns {
 		if !column.AutoIncrement || cells[ordinal].Null {
@@ -575,8 +574,8 @@ func accumulateAutoIncrementMaxima(
 		}
 		value, err := autoIncrementBigInt(cells[ordinal])
 		if err != nil {
-			return fmt.Errorf(
-				"Lifecycle auto-increment column %s: %w",
+			return moerr.NewInternalErrorNoCtxf(
+				"Lifecycle auto-increment column %s: %v",
 				column.Name,
 				err,
 			)
@@ -616,7 +615,7 @@ func autoIncrementBigInt(cell CanonicalCell) (*big.Int, error) {
 	case uint64:
 		value.SetUint64(typed)
 	default:
-		return nil, fmt.Errorf("unsupported value type %T", cell.Value)
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported value type %T", cell.Value)
 	}
 	return value, nil
 }

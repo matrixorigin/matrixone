@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -73,7 +74,7 @@ func (committer TxnLifecycleFinalCommitter) Finalize(
 		request.FinalTxnID == "" ||
 		request.Cutoff.IsZero() ||
 		request.EvaluationTime.IsZero() {
-		return fmt.Errorf("Lifecycle final committer input is incomplete")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle final committer input is incomplete")
 	}
 	archive := request.Control.DatasetId != ""
 	ttl := request.Control.ReceiptId != ""
@@ -81,7 +82,7 @@ func (committer TxnLifecycleFinalCommitter) Finalize(
 		(archive && (request.Manifest == nil ||
 			request.PurgeEligibleAt.IsZero())) ||
 		(ttl && (request.Manifest != nil || request.ExpiredRows == 0)) {
-		return fmt.Errorf("Lifecycle final committer mode is incomplete")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle final committer mode is incomplete")
 	}
 	if err := validateLifecycleFinalizeRequest(request); err != nil {
 		return err
@@ -139,11 +140,11 @@ func (committer TxnLifecycleFinalCommitter) Finalize(
 			hex.EncodeToString(currentSchemaDigest[:]),
 			request.Binding.SchemaDigest,
 		) {
-		return fmt.Errorf("Lifecycle final table/schema fence changed")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle final table/schema fence changed")
 	}
 	storeProvider, ok := relation.(lifecycleCommitStoreProvider)
 	if !ok {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"table %d does not expose Lifecycle commit routing",
 			request.Binding.PhysicalTableID,
 		)
@@ -154,7 +155,7 @@ func (committer TxnLifecycleFinalCommitter) Finalize(
 	}
 	workspace, ok := operator.GetWorkspace().(*Transaction)
 	if !ok || workspace == nil {
-		return fmt.Errorf("Lifecycle finalizer does not own a disttae workspace")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle finalizer does not own a disttae workspace")
 	}
 	workspace.SetSyncProtectionJobID(request.SyncProtectionJobID)
 	ownedByFinalizer = true
@@ -185,19 +186,19 @@ func (committer TxnLifecycleFinalCommitter) Finalize(
 
 func validateLifecycleFinalizeRequest(request LifecycleFinalizeRequest) error {
 	if request.Control == nil {
-		return fmt.Errorf("Lifecycle final commit control is nil")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle final commit control is nil")
 	}
 	control := request.Control
 	if control.DatabaseId != request.Binding.DatabaseID ||
 		control.LogicalTableId != request.Binding.LogicalTableID ||
 		control.PhysicalTableId != request.Binding.PhysicalTableID ||
 		control.BindingGeneration != request.Binding.Generation {
-		return fmt.Errorf("Lifecycle final Binding identity mismatch")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle final Binding identity mismatch")
 	}
 	archive := control.DatasetId != ""
 	ttl := control.ReceiptId != ""
 	if archive == ttl {
-		return fmt.Errorf("Lifecycle final mode identity mismatch")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle final mode identity mismatch")
 	}
 	if archive {
 		if request.Root.State != lifecyclepkg.CleanupRootFinalizing ||
@@ -205,7 +206,7 @@ func validateLifecycleFinalizeRequest(request LifecycleFinalizeRequest) error {
 				request.Root.Mode != lifecyclepkg.CleanupModeArchiveRewrite) ||
 			request.Manifest == nil ||
 			request.Manifest.VerificationStatus != "FULL_READBACK_VERIFIED" {
-			return fmt.Errorf(
+			return moerr.NewInternalErrorNoCtxf(
 				"Lifecycle Archive is not full-readback verified and FINALIZING",
 			)
 		}
@@ -213,11 +214,11 @@ func validateLifecycleFinalizeRequest(request LifecycleFinalizeRequest) error {
 			request.Root.AttemptID != control.AttemptId ||
 			request.Manifest.RootID != control.RootId ||
 			request.Manifest.AttemptID != control.AttemptId {
-			return fmt.Errorf("Lifecycle Archive Root/attempt identity mismatch")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Archive Root/attempt identity mismatch")
 		}
 		if request.Root.ManifestKey != request.ManifestKey ||
 			request.Root.ManifestDigest != request.ManifestDigest {
-			return fmt.Errorf("Lifecycle Archive persisted Manifest identity mismatch")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Archive persisted Manifest identity mismatch")
 		}
 		_, digest, err := lifecyclepkg.MarshalArchiveManifest(request.Manifest)
 		if err != nil {
@@ -232,18 +233,18 @@ func validateLifecycleFinalizeRequest(request LifecycleFinalizeRequest) error {
 				request.ManifestKey,
 				"manifest-"+hex.EncodeToString(digest[:])+".json",
 			) {
-			return fmt.Errorf("Lifecycle Archive Manifest digest/key mismatch")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Archive Manifest digest/key mismatch")
 		}
 		if !bytes.Equal(control.SchemaDigest, request.Manifest.SchemaDigest[:]) ||
 			!bytes.Equal(control.SourceSetDigest, request.Root.SourceSetDigest[:]) {
-			return fmt.Errorf("Lifecycle Archive source/schema identity mismatch")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Archive source/schema identity mismatch")
 		}
 		return nil
 	}
 
 	if request.Manifest != nil || request.ManifestKey != "" ||
 		request.ManifestDigest != ([32]byte{}) {
-		return fmt.Errorf("Lifecycle TTL finalization contains Archive state")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle TTL finalization contains Archive state")
 	}
 	if control.RetireMode == api.LifecycleCommitEntry_Rewrite {
 		if request.Root.State != lifecyclepkg.CleanupRootFinalizing ||
@@ -251,7 +252,7 @@ func validateLifecycleFinalizeRequest(request LifecycleFinalizeRequest) error {
 			request.Root.RootID != control.RootId ||
 			request.Root.AttemptID != control.AttemptId ||
 			!bytes.Equal(control.SourceSetDigest, request.Root.SourceSetDigest[:]) {
-			return fmt.Errorf("Lifecycle TTL Rewrite Root identity mismatch")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle TTL Rewrite Root identity mismatch")
 		}
 	} else if request.Root.RootID != "" || control.RootId != "" {
 		// A Mixed Rewrite can discover that every visible row is expired only
@@ -264,7 +265,7 @@ func validateLifecycleFinalizeRequest(request LifecycleFinalizeRequest) error {
 			request.Root.RootID != control.RootId ||
 			request.Root.AttemptID != control.AttemptId ||
 			!bytes.Equal(control.SourceSetDigest, request.Root.SourceSetDigest[:]) {
-			return fmt.Errorf(
+			return moerr.NewInternalErrorNoCtxf(
 				"Lifecycle Whole-degraded TTL Root identity mismatch",
 			)
 		}
@@ -341,7 +342,7 @@ and state='ACTIVE'`,
 	affected := result.AffectedRows
 	result.Close()
 	if affected != 1 {
-		return fmt.Errorf("Lifecycle Binding final fence CAS failed")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Binding final fence CAS failed")
 	}
 	return nil
 }
@@ -417,7 +418,7 @@ utc_timestamp(),utc_timestamp())`,
 	}
 	defer result.Close()
 	if result.AffectedRows != 1 {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Dataset insert affected %d rows",
 			result.AffectedRows,
 		)
@@ -454,7 +455,7 @@ func (committer TxnLifecycleFinalCommitter) writeTTLCatalog(
 	}
 	if request.Control.SourceSnapshotTs == nil ||
 		len(request.Control.SourceSetDigest) != 32 {
-		return fmt.Errorf("Lifecycle TTL Receipt source identity is incomplete")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle TTL Receipt source identity is incomplete")
 	}
 	sourceSnapshot := types.TimestampToTS(*request.Control.SourceSnapshotTs)
 	result, err := committer.SQLExecutor.Exec(
@@ -490,7 +491,7 @@ values(unhex('%s'),%d,unhex('%s'),%d,%d,unhex('%s'),%s,%s,unhex('%s'),
 	}
 	defer result.Close()
 	if result.AffectedRows != 1 {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"Lifecycle TTL Receipt insert affected %d rows",
 			result.AffectedRows,
 		)
@@ -501,7 +502,7 @@ values(unhex('%s'),%d,unhex('%s'),%d,%d,unhex('%s'),%s,%s,unhex('%s'),
 func (tbl *txnTable) LifecycleCommitStore() (DNStore, error) {
 	transaction := tbl.getTxn()
 	if transaction == nil || len(transaction.tnStores) == 0 {
-		return DNStore{}, fmt.Errorf("Lifecycle table has no TN route")
+		return DNStore{}, moerr.NewInternalErrorNoCtxf("Lifecycle table has no TN route")
 	}
 	return transaction.tnStores[0], nil
 }
@@ -513,7 +514,7 @@ func (tbl *txnTableDelegate) LifecycleCommitStore() (DNStore, error) {
 func lifecycleCatalogUUID(value string) (string, error) {
 	parsed, err := uuid.Parse(value)
 	if err != nil {
-		return "", fmt.Errorf("invalid Lifecycle Catalog UUID %q: %w", value, err)
+		return "", moerr.NewInternalErrorNoCtxf("invalid Lifecycle Catalog UUID %q: %v", value, err)
 	}
 	return hex.EncodeToString(parsed[:]), nil
 }

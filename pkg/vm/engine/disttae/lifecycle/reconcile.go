@@ -16,8 +16,9 @@ package lifecycle
 
 import (
 	"context"
-	"fmt"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type CleanupPublicationState uint8
@@ -53,7 +54,7 @@ func (reconciler CleanupReconciler) ReconcileOne(
 	now time.Time,
 ) (CleanupRoot, error) {
 	if reconciler.Roots == nil || reconciler.Catalog == nil || now.IsZero() {
-		return root, fmt.Errorf("Lifecycle Cleanup reconciler is incomplete")
+		return root, moerr.NewInternalErrorNoCtxf("Lifecycle Cleanup reconciler is incomplete")
 	}
 
 	switch root.State {

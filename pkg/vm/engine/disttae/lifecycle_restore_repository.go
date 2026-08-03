@@ -26,6 +26,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -117,7 +118,7 @@ func (repository SQLRestoreRepository) Initialize(
 					existing.LeaseID != request.Attempt.LeaseID ||
 					existing.HiddenName != request.Attempt.HiddenName ||
 					existing.TargetName != request.Attempt.TargetName {
-					return fmt.Errorf("Lifecycle Restore initialization identity mismatch")
+					return moerr.NewInternalErrorNoCtxf("Lifecycle Restore initialization identity mismatch")
 				}
 				attempt = existing
 				return nil
@@ -192,7 +193,7 @@ values(unhex('%s'),unhex('%s'),unhex('%s'),%s,%d,%d,%s,%d,%s,
 			}
 			defer result.Close()
 			if result.AffectedRows != 1 {
-				return fmt.Errorf("Lifecycle Restore Attempt insert failed")
+				return moerr.NewInternalErrorNoCtxf("Lifecycle Restore Attempt insert failed")
 			}
 			attempt = request.Attempt
 			attempt.State = "IMPORTING"
@@ -210,7 +211,7 @@ func (repository SQLRestoreRepository) validateRestoreAdmission(
 ) error {
 	if requestedBytes == 0 ||
 		repository.MaxRestoreStagingBytesPerAccount == 0 {
-		return fmt.Errorf("Lifecycle Restore staging limits are invalid")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore staging limits are invalid")
 	}
 	return nil
 }
@@ -240,7 +241,7 @@ where account_id=%d for update`,
 		return err
 	}
 	if accountID != uint64(repository.AccountID) {
-		return fmt.Errorf("Lifecycle Restore owner account no longer exists")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore owner account no longer exists")
 	}
 	return nil
 }
@@ -258,7 +259,7 @@ func (repository SQLRestoreRepository) checkRestoreAccountAdmission(
 		metricv2.LifecycleResourceRejectionCounter.WithLabelValues(
 			"restore_account_bytes",
 		).Inc()
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"RESOURCE_BLOCKED: account Restore staging bytes exhausted",
 		)
 	}
@@ -292,7 +293,7 @@ func decodeLifecycleRestoreUint64(
 	var decodeErr error
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
 		if len(columns) != 1 || rowsRead+rows != 1 {
-			decodeErr = fmt.Errorf("Lifecycle Restore %s row is invalid", name)
+			decodeErr = moerr.NewInternalErrorNoCtxf("Lifecycle Restore %s row is invalid", name)
 			return false
 		}
 		value = vector.GetFixedAtNoTypeCheck[uint64](columns[0], 0)
@@ -303,7 +304,7 @@ func decodeLifecycleRestoreUint64(
 		return 0, decodeErr
 	}
 	if rowsRead != 1 {
-		return 0, fmt.Errorf("Lifecycle Restore %s row is missing", name)
+		return 0, moerr.NewInternalErrorNoCtxf("Lifecycle Restore %s row is missing", name)
 	}
 	return value, nil
 }
@@ -330,7 +331,7 @@ func (repository SQLRestoreRepository) GetAttempt(
 		return lifecyclepkg.RestoreAttempt{}, err
 	}
 	if !found {
-		return lifecyclepkg.RestoreAttempt{}, fmt.Errorf(
+		return lifecyclepkg.RestoreAttempt{}, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Restore Attempt %s does not exist",
 			restoreID,
 		)
@@ -352,7 +353,7 @@ func (repository SQLRestoreRepository) FindResumable(
 		return lifecyclepkg.RestoreAttempt{}, false, err
 	}
 	if targetDatabaseID == 0 || targetName == "" {
-		return lifecyclepkg.RestoreAttempt{}, false, fmt.Errorf(
+		return lifecyclepkg.RestoreAttempt{}, false, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Restore resume target is incomplete",
 		)
 	}
@@ -425,7 +426,7 @@ func (repository SQLRestoreRepository) ImportChunk(
 			}
 			if found {
 				if existing.ChunkDigest != receipt.ChunkDigest {
-					return fmt.Errorf("Lifecycle Restore Chunk digest corruption")
+					return moerr.NewInternalErrorNoCtxf("Lifecycle Restore Chunk digest corruption")
 				}
 				current, ok, getErr := repository.getAttempt(
 					ctx,
@@ -441,7 +442,7 @@ func (repository SQLRestoreRepository) ImportChunk(
 					return getErr
 				}
 				if !ok {
-					return fmt.Errorf("Lifecycle Restore Attempt disappeared")
+					return moerr.NewInternalErrorNoCtxf("Lifecycle Restore Attempt disappeared")
 				}
 				updated = current
 				return nil
@@ -464,7 +465,7 @@ func (repository SQLRestoreRepository) ImportChunk(
 				current.LeaseID != attempt.LeaseID ||
 				current.NextChunkOrdinal != receipt.ChunkOrdinal ||
 				!current.Deadline.After(time.Now()) {
-				return fmt.Errorf("Lifecycle Restore Chunk lease or ordinal CAS failed")
+				return moerr.NewInternalErrorNoCtxf("Lifecycle Restore Chunk lease or ordinal CAS failed")
 			}
 			_, _, relation, getErr := repository.Engine.GetRelationById(
 				ctx,
@@ -553,7 +554,7 @@ and state='IMPORTING' and next_chunk_ordinal=%d and deadline>utc_timestamp()`,
 			}
 			defer result.Close()
 			if result.AffectedRows != 1 {
-				return fmt.Errorf("Lifecycle Restore Chunk progress CAS failed")
+				return moerr.NewInternalErrorNoCtxf("Lifecycle Restore Chunk progress CAS failed")
 			}
 			current.NextChunkOrdinal++
 			current.RestoredRows += receipt.RowCount
@@ -578,14 +579,14 @@ func prepareLifecycleRestoreWriteBatch(
 	mp *mpool.MPool,
 ) error {
 	if value == nil || tableDef == nil || autoIncrement == nil || mp == nil {
-		return fmt.Errorf("Lifecycle Restore write preparation is incomplete")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore write preparation is incomplete")
 	}
 	if tableDef.Pkey == nil ||
 		tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
-		return fmt.Errorf("Lifecycle Restore staging table has no MO fake primary key")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore staging table has no MO fake primary key")
 	}
 	if len(value.Attrs) != len(value.Vecs) {
-		return fmt.Errorf("Lifecycle Restore staging schema does not match Archive columns")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore staging schema does not match Archive columns")
 	}
 	writableColumns := 0
 	rowIDSeen := false
@@ -593,7 +594,7 @@ func prepareLifecycleRestoreWriteBatch(
 		if column.Name == catalog.Row_ID {
 			if rowIDSeen || !column.Hidden ||
 				types.T(column.Typ.Id) != types.T_Rowid {
-				return fmt.Errorf("Lifecycle Restore staging row ID definition is invalid")
+				return moerr.NewInternalErrorNoCtxf("Lifecycle Restore staging row ID definition is invalid")
 			}
 			rowIDSeen = true
 			continue
@@ -601,14 +602,14 @@ func prepareLifecycleRestoreWriteBatch(
 		writableColumns++
 	}
 	if !rowIDSeen || writableColumns != len(value.Vecs)+1 {
-		return fmt.Errorf("Lifecycle Restore staging schema does not match Archive columns")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore staging schema does not match Archive columns")
 	}
 
 	logical := make(map[string]int, len(value.Attrs))
 	for index, attribute := range value.Attrs {
 		key := strings.ToLower(attribute)
 		if _, exists := logical[key]; exists {
-			return fmt.Errorf("Lifecycle Restore Batch has duplicate column %s", attribute)
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Restore Batch has duplicate column %s", attribute)
 		}
 		logical[key] = index
 	}
@@ -623,32 +624,32 @@ func prepareLifecycleRestoreWriteBatch(
 		if column.Name == catalog.FakePrimaryKeyColName {
 			if fakeIndex != -1 || !column.Hidden || !column.Typ.AutoIncr ||
 				types.T(column.Typ.Id) != types.T_uint64 {
-				return fmt.Errorf("Lifecycle Restore fake primary key definition is invalid")
+				return moerr.NewInternalErrorNoCtxf("Lifecycle Restore fake primary key definition is invalid")
 			}
 			fakeIndex = writeIndex
 			writeIndex++
 			continue
 		}
 		if column.Hidden {
-			return fmt.Errorf(
+			return moerr.NewInternalErrorNoCtxf(
 				"Lifecycle Restore staging table has unexpected hidden column %s",
 				column.Name,
 			)
 		}
 		logicalIndex, exists := logical[strings.ToLower(column.Name)]
 		if !exists || value.Vecs[logicalIndex] == nil {
-			return fmt.Errorf("Lifecycle Restore staging column %s is missing", column.Name)
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Restore staging column %s is missing", column.Name)
 		}
 		actualType := value.Vecs[logicalIndex].GetType()
 		if !actualType.Eq(vector.ProtoTypeToType(column.Typ)) {
-			return fmt.Errorf("Lifecycle Restore staging column %s type changed", column.Name)
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Restore staging column %s type changed", column.Name)
 		}
 		fullAttributes[writeIndex] = column.Name
 		fullVectors[writeIndex] = value.Vecs[logicalIndex]
 		writeIndex++
 	}
 	if fakeIndex == -1 {
-		return fmt.Errorf("Lifecycle Restore staging fake primary key is missing")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore staging fake primary key is missing")
 	}
 
 	fakeVector := vector.NewVec(types.T_uint64.ToType())
@@ -683,7 +684,7 @@ func prepareLifecycleRestoreWriteBatch(
 		return err
 	}
 	if fakeVector.Length() != rows || fakeVector.GetNulls().Any() {
-		return fmt.Errorf("Lifecycle Restore fake primary key generation is incomplete")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore fake primary key generation is incomplete")
 	}
 	return nil
 }
@@ -715,7 +716,7 @@ where restore_id=unhex('%s') order by chunk_ordinal`,
 	var decodeErr error
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
 		if len(columns) != 7 {
-			decodeErr = fmt.Errorf("Lifecycle Restore Chunk query is invalid")
+			decodeErr = moerr.NewInternalErrorNoCtxf("Lifecycle Restore Chunk query is invalid")
 			return false
 		}
 		for row := 0; row < rows; row++ {
@@ -782,7 +783,7 @@ func (repository SQLRestoreRepository) Publish(
 				return readErr
 			}
 			if !found {
-				return fmt.Errorf("Lifecycle Restore Attempt disappeared")
+				return moerr.NewInternalErrorNoCtxf("Lifecycle Restore Attempt disappeared")
 			}
 			if current.State == "DONE" &&
 				current.VerifiedHash == verifiedHash {
@@ -797,7 +798,7 @@ func (repository SQLRestoreRepository) Publish(
 				current.TargetName != attempt.TargetName ||
 				current.NextChunkOrdinal != attempt.NextChunkOrdinal ||
 				current.RestoredRows != attempt.RestoredRows {
-				return fmt.Errorf("Lifecycle Restore publish identity changed")
+				return moerr.NewInternalErrorNoCtxf("Lifecycle Restore publish identity changed")
 			}
 			databaseID, name, tableID, identityErr :=
 				repository.lookupTableIdentity(
@@ -851,7 +852,7 @@ and next_chunk_ordinal=%d and restored_rows=%d`,
 					current.VerifiedHash == verifiedHash {
 					return nil
 				}
-				return fmt.Errorf("Lifecycle Restore publish CAS failed")
+				return moerr.NewInternalErrorNoCtxf("Lifecycle Restore publish CAS failed")
 			}
 			if repository.AutoIncrement != nil {
 				for _, maximum := range autoIncrementMaxima {
@@ -871,7 +872,7 @@ and next_chunk_ordinal=%d and restored_rows=%d`,
 					}
 				}
 			} else if len(autoIncrementMaxima) > 0 {
-				return fmt.Errorf("Lifecycle auto-increment service is unavailable")
+				return moerr.NewInternalErrorNoCtxf("Lifecycle auto-increment service is unavailable")
 			}
 			result, execErr = txn.Exec(
 				fmt.Sprintf(
@@ -904,7 +905,7 @@ and state='PUBLISHING' and staging_table_id=%d`,
 			}
 			if result.AffectedRows != 1 {
 				result.Close()
-				return fmt.Errorf("Lifecycle Restore DONE CAS failed")
+				return moerr.NewInternalErrorNoCtxf("Lifecycle Restore DONE CAS failed")
 			}
 			result.Close()
 			result, execErr = txn.Exec(
@@ -925,7 +926,7 @@ and restore_lease_id=unhex('%s')`,
 			}
 			defer result.Close()
 			if result.AffectedRows != 1 {
-				return fmt.Errorf("Lifecycle Restore Dataset lease release failed")
+				return moerr.NewInternalErrorNoCtxf("Lifecycle Restore Dataset lease release failed")
 			}
 			return nil
 		},
@@ -940,7 +941,7 @@ func lifecycleRestoreAutoIncrementOffset(
 ) (string, uint64, error) {
 	if int(maximum.ColumnOrdinal) >= len(schema.Columns) ||
 		!schema.Columns[maximum.ColumnOrdinal].AutoIncrement {
-		return "", 0, fmt.Errorf("Lifecycle auto-increment maximum is corrupt")
+		return "", 0, moerr.NewInternalErrorNoCtxf("Lifecycle auto-increment maximum is corrupt")
 	}
 	offset, err := strconv.ParseUint(maximum.Value, 10, 64)
 	if err != nil {
@@ -998,7 +999,7 @@ func (repository SQLRestoreRepository) CleanupHidden(
 				return readErr
 			}
 			if !found {
-				return fmt.Errorf("Lifecycle Restore Attempt disappeared")
+				return moerr.NewInternalErrorNoCtxf("Lifecycle Restore Attempt disappeared")
 			}
 			if current.State == "DONE" {
 				return nil
@@ -1044,7 +1045,7 @@ and staging_table_id=%d and hidden_name=%s`,
 			}
 			if result.AffectedRows != 1 {
 				result.Close()
-				return fmt.Errorf("Lifecycle Restore cleanup CAS failed")
+				return moerr.NewInternalErrorNoCtxf("Lifecycle Restore cleanup CAS failed")
 			}
 			result.Close()
 			result, execErr = txn.Exec(
@@ -1096,7 +1097,7 @@ and staging_table_id=%d and hidden_name=%s`,
 	affected := result.AffectedRows
 	result.Close()
 	if affected != 1 {
-		return fmt.Errorf("Lifecycle Restore cleanup CAS failed")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore cleanup CAS failed")
 	}
 	return repository.releaseRestoreDatasetLease(txn, datasetID, leaseID)
 }
@@ -1124,7 +1125,7 @@ and restore_lease_id=unhex('%s')`,
 	}
 	defer result.Close()
 	if result.AffectedRows != 1 {
-		return fmt.Errorf("Lifecycle Restore Dataset lease cleanup failed")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore Dataset lease cleanup failed")
 	}
 	return nil
 }
@@ -1163,7 +1164,7 @@ and restore_lease_id is null`,
 			return lifecyclepkg.ErrRestoreInProgress
 		}
 	} else if dataset.State != "DELETE_PENDING" {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Dataset state %s cannot be purged",
 			dataset.State,
 		)
@@ -1197,14 +1198,14 @@ func (repository SQLRestoreRepository) validate() error {
 		repository.Executor == nil ||
 		repository.Engine == nil ||
 		repository.MPool == nil {
-		return fmt.Errorf("Lifecycle SQL Restore repository is incomplete")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle SQL Restore repository is incomplete")
 	}
 	return nil
 }
 
 func (repository SQLRestoreRepository) validateReader() error {
 	if repository.AccountID == 0 || repository.Executor == nil {
-		return fmt.Errorf("Lifecycle SQL Restore reader is incomplete")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle SQL Restore reader is incomplete")
 	}
 	return nil
 }
@@ -1238,7 +1239,7 @@ where reldatabase_id=%d and relname=%s`,
 		return true
 	})
 	if rows != 1 || tableID == 0 {
-		return 0, fmt.Errorf("Lifecycle hidden Restore table was not created")
+		return 0, moerr.NewInternalErrorNoCtxf("Lifecycle hidden Restore table was not created")
 	}
 	return tableID, nil
 }
@@ -1274,7 +1275,7 @@ from mo_catalog.mo_tables where rel_id=%d`,
 		return true
 	})
 	if rows != 1 {
-		return 0, "", 0, fmt.Errorf(
+		return 0, "", 0, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Restore table identity is unknown",
 		)
 	}
@@ -1290,7 +1291,7 @@ func validateLifecycleRestoreHiddenIdentity(
 	if databaseID != attempt.StagingDatabaseID ||
 		tableName != attempt.HiddenName ||
 		tableID != attempt.StagingTableID {
-		return fmt.Errorf("Lifecycle Restore hidden table identity changed")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore hidden table identity changed")
 	}
 	return nil
 }
@@ -1329,7 +1330,7 @@ func (repository SQLRestoreRepository) decodeAttemptResult(
 	var decodeErr error
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
 		if len(columns) != 13 || rowsRead+rows != 1 {
-			decodeErr = fmt.Errorf("Lifecycle Restore Attempt row is invalid")
+			decodeErr = moerr.NewInternalErrorNoCtxf("Lifecycle Restore Attempt row is invalid")
 			return false
 		}
 		deadline, err := time.ParseInLocation(
@@ -1399,7 +1400,7 @@ where restore_id=unhex('%s') and chunk_ordinal=%d`,
 	var decodeErr error
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
 		if len(columns) != 1 || rowsRead+rows != 1 {
-			decodeErr = fmt.Errorf("Lifecycle Restore Chunk row is invalid")
+			decodeErr = moerr.NewInternalErrorNoCtxf("Lifecycle Restore Chunk row is invalid")
 			return false
 		}
 		receipt.RestoreID = restoreID
@@ -1417,7 +1418,7 @@ func lifecycleRestoreDigest(value string) ([sha256.Size]byte, error) {
 	var digest [sha256.Size]byte
 	decoded, err := hex.DecodeString(value)
 	if err != nil || len(decoded) != len(digest) {
-		return digest, fmt.Errorf("invalid Lifecycle digest")
+		return digest, moerr.NewInternalErrorNoCtxf("invalid Lifecycle digest")
 	}
 	copy(digest[:], decoded)
 	return digest, nil

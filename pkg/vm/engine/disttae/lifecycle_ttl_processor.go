@@ -68,7 +68,7 @@ func (processor *LifecycleProcessor) ProcessTTLObject(
 			return lifecyclepkg.CleanupRoot{}, checkErr
 		}
 		if unresolved {
-			return lifecyclepkg.CleanupRoot{}, fmt.Errorf(
+			return lifecyclepkg.CleanupRoot{}, moerr.NewInternalErrorNoCtxf(
 				"Lifecycle table has an unresolved final transaction",
 			)
 		}
@@ -92,7 +92,7 @@ func (processor *LifecycleProcessor) ProcessTTLObject(
 		return lifecyclepkg.CleanupRoot{}, err
 	}
 	if !bytes.Equal(protection.SourceSetDigest[:], sourceSetDigest[:]) {
-		return lifecyclepkg.CleanupRoot{}, fmt.Errorf(
+		return lifecyclepkg.CleanupRoot{}, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle protected source set changed",
 		)
 	}
@@ -308,7 +308,7 @@ func (processor *LifecycleProcessor) ProcessTTLObject(
 		return processor.abandon(
 			ctx,
 			root,
-			fmt.Errorf(
+			moerr.NewInternalErrorNoCtxf(
 				"Lifecycle TTL measured %d of %d expired rows",
 				encoder.RowCount(),
 				rewrite.ScanReport.ExpiredRows,
@@ -459,7 +459,7 @@ func (processor *LifecycleProcessor) measureWholeTTL(
 					}
 				}
 				if uint64(expired.Count()) != visible {
-					return fmt.Errorf(
+					return moerr.NewInternalErrorNoCtxf(
 						"Lifecycle Whole TTL source contains live rows",
 					)
 				}

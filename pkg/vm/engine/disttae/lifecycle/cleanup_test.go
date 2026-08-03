@@ -334,7 +334,7 @@ func TestCleanupFaultBeforeDeleteRetainsRootOwnedFilesForRetry(t *testing.T) {
 		Faults:           faults,
 	}
 
-	require.EqualError(t, sweeper.SweepOne(ctx, root.RootID, now), "cleanup-delete-crash")
+	require.ErrorContains(t, sweeper.SweepOne(ctx, root.RootID, now), "cleanup-delete-crash")
 	current, err := repository.Get(ctx, root.RootID)
 	require.NoError(t, err)
 	require.Equal(t, CleanupRootDeleting, current.State)
@@ -365,7 +365,7 @@ func TestCleanupFaultBeforeListRetainsRootOwnedFilesForRetry(t *testing.T) {
 		Faults:           faults,
 	}
 
-	require.EqualError(t, sweeper.SweepOne(ctx, root.RootID, now), "cleanup-list-crash")
+	require.ErrorContains(t, sweeper.SweepOne(ctx, root.RootID, now), "cleanup-list-crash")
 	current, err := repository.Get(ctx, root.RootID)
 	require.NoError(t, err)
 	require.Equal(t, CleanupRootDeleting, current.State)
@@ -393,7 +393,7 @@ func TestCleanupFaultBeforeRootCASLeavesDeletePendingForRetry(t *testing.T) {
 		Faults:           faults,
 	}
 
-	require.EqualError(t, sweeper.SweepOne(ctx, root.RootID, now), "cleanup-cas-crash")
+	require.ErrorContains(t, sweeper.SweepOne(ctx, root.RootID, now), "cleanup-cas-crash")
 	current, err := repository.Get(ctx, root.RootID)
 	require.NoError(t, err)
 	require.Equal(t, CleanupRootDeletePending, current.State)
@@ -425,7 +425,7 @@ func TestCleanupFaultAfterDeleteReconcilesFromProviderState(t *testing.T) {
 		Faults:           faults,
 	}
 
-	require.EqualError(
+	require.ErrorContains(
 		t,
 		sweeper.SweepOne(ctx, root.RootID, now),
 		"cleanup-delete-response-lost",

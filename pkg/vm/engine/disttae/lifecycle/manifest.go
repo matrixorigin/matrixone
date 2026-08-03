@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"unicode/utf8"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -169,7 +170,7 @@ func MarshalArchiveManifest(manifest *ArchiveManifest) ([]byte, [32]byte, error)
 		return nil, [32]byte{}, err
 	}
 	if len(encoded) > maxArchiveManifestBytes {
-		return nil, [32]byte{}, fmt.Errorf(
+		return nil, [32]byte{}, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle archive manifest exceeds the certified byte limit %d",
 			maxArchiveManifestBytes,
 		)
@@ -179,7 +180,7 @@ func MarshalArchiveManifest(manifest *ArchiveManifest) ([]byte, [32]byte, error)
 
 func ParseArchiveManifest(encoded []byte) (*ArchiveManifest, error) {
 	if len(encoded) == 0 || len(encoded) > maxArchiveManifestBytes {
-		return nil, fmt.Errorf(
+		return nil, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle archive manifest size %d is outside the certified range",
 			len(encoded),
 		)
@@ -211,36 +212,36 @@ func ParseArchiveManifest(encoded []byte) (*ArchiveManifest, error) {
 		return nil, err
 	}
 	if !bytes.Equal(encoded, canonical) {
-		return nil, fmt.Errorf("Lifecycle archive manifest is not canonical V1 JSON")
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest is not canonical V1 JSON")
 	}
 	return manifest, nil
 }
 
 func validateArchiveManifestShape(manifest *ArchiveManifest) error {
 	if manifest == nil {
-		return fmt.Errorf("nil Lifecycle archive manifest")
+		return moerr.NewInternalErrorNoCtxf("nil Lifecycle archive manifest")
 	}
 	if manifest.ManifestFormatVersion != archiveManifestFormatVersion {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"unsupported Lifecycle manifest version %d",
 			manifest.ManifestFormatVersion,
 		)
 	}
 	if manifest.HashFormulaVersion != archiveHashFormulaVersion {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"unsupported Lifecycle archive hash formula %d",
 			manifest.HashFormulaVersion,
 		)
 	}
 	if manifest.CanonicalEncoder != canonicalEncoderVersion {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"unsupported Lifecycle canonical encoder %d",
 			manifest.CanonicalEncoder,
 		)
 	}
 	if !validArchiveManifestString(manifest.RootID, maxArchiveIdentityBytes, true) ||
 		!validArchiveManifestString(manifest.AttemptID, maxArchiveIdentityBytes, true) {
-		return fmt.Errorf("Lifecycle archive manifest identity is invalid")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest identity is invalid")
 	}
 	if err := validateArchiveSchemaShape(manifest.Schema); err != nil {
 		return err
@@ -248,16 +249,16 @@ func validateArchiveManifestShape(manifest *ArchiveManifest) error {
 	switch manifest.VerificationStatus {
 	case "SOURCE_ENCODED", "FULL_READBACK_VERIFIED":
 	default:
-		return fmt.Errorf("Lifecycle archive verification status is invalid")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle archive verification status is invalid")
 	}
 	if len(manifest.Files) > maxArchiveChunksPerDataset {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"Lifecycle manifest exceeds the certified chunk limit %d",
 			maxArchiveChunksPerDataset,
 		)
 	}
 	if manifest.TotalChunkCount != uint64(len(manifest.Files)) {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"Lifecycle manifest chunk count %d does not match file count %d",
 			manifest.TotalChunkCount,
 			len(manifest.Files),
@@ -268,56 +269,56 @@ func validateArchiveManifestShape(manifest *ArchiveManifest) error {
 	fileKeys := make(map[string]struct{}, len(manifest.Files))
 	for fileIndex, file := range manifest.Files {
 		if file.FileOrdinal != uint32(fileIndex) {
-			return fmt.Errorf("Lifecycle archive file ordinals are not continuous")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle archive file ordinals are not continuous")
 		}
 		if !validArchiveManifestString(file.Key, maxArchiveObjectKeyBytes, true) ||
 			file.Size == 0 || file.Size > maxArchivePayloadPhysicalBytes {
-			return fmt.Errorf("Lifecycle archive file identity is invalid")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle archive file identity is invalid")
 		}
 		if _, exists := fileKeys[file.Key]; exists {
-			return fmt.Errorf("Lifecycle archive file keys are not unique")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle archive file keys are not unique")
 		}
 		fileKeys[file.Key] = struct{}{}
 		if len(file.Chunks) != 1 {
-			return fmt.Errorf("Lifecycle Phase 1 requires exactly one row group per payload file")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Phase 1 requires exactly one row group per payload file")
 		}
 		chunk := file.Chunks[0]
 		if chunk.ChunkOrdinal != uint64(fileIndex) ||
 			chunk.FileOrdinal != uint32(fileIndex) ||
 			chunk.RowGroupOrdinal != 0 {
-			return fmt.Errorf("Lifecycle archive chunk ordinals are not canonical")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle archive chunk ordinals are not canonical")
 		}
 		if chunk.RowCount == 0 || chunk.LogicalBytes == 0 {
-			return fmt.Errorf("Lifecycle archive chunk size is invalid")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle archive chunk size is invalid")
 		}
 		if ^uint64(0)-rows < chunk.RowCount ||
 			^uint64(0)-logicalBytes < chunk.LogicalBytes {
-			return fmt.Errorf("Lifecycle archive manifest totals overflow uint64")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest totals overflow uint64")
 		}
 		rows += chunk.RowCount
 		logicalBytes += chunk.LogicalBytes
 	}
 	if rows != manifest.RowCount || logicalBytes != manifest.LogicalBytes {
-		return fmt.Errorf("Lifecycle archive manifest totals do not match chunks")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest totals do not match chunks")
 	}
 	if len(manifest.AutoIncrementMaxima) > maxArchiveSchemaColumns {
-		return fmt.Errorf("Lifecycle archive auto-increment collection exceeds limit")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle archive auto-increment collection exceeds limit")
 	}
 	var previous uint32
 	for index, maximum := range manifest.AutoIncrementMaxima {
 		if int(maximum.ColumnOrdinal) >= len(manifest.Schema.Columns) ||
 			!manifest.Schema.Columns[maximum.ColumnOrdinal].AutoIncrement {
-			return fmt.Errorf("Lifecycle archive auto-increment ordinal is invalid")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle archive auto-increment ordinal is invalid")
 		}
 		if index > 0 && maximum.ColumnOrdinal <= previous {
-			return fmt.Errorf("Lifecycle archive auto-increment ordinals are not canonical")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle archive auto-increment ordinals are not canonical")
 		}
 		if !validArchiveManifestString(maximum.Value, maxArchiveManifestString, true) {
-			return fmt.Errorf("Lifecycle archive auto-increment maximum is too large")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle archive auto-increment maximum is too large")
 		}
 		parsed, ok := new(big.Int).SetString(maximum.Value, 10)
 		if !ok || parsed.Sign() <= 0 {
-			return fmt.Errorf("Lifecycle archive auto-increment maximum is invalid")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle archive auto-increment maximum is invalid")
 		}
 		previous = maximum.ColumnOrdinal
 	}
@@ -326,31 +327,31 @@ func validateArchiveManifestShape(manifest *ArchiveManifest) error {
 
 func validateArchiveSchemaShape(schema SchemaDescriptor) error {
 	if schema.FormatVersion != schemaDescriptorFormatVersion || schema.SourceTableID == 0 {
-		return fmt.Errorf("Lifecycle archive schema identity is invalid")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle archive schema identity is invalid")
 	}
 	if !validArchiveManifestString(schema.SourceDatabaseName, maxArchiveSQLNameBytes, true) ||
 		!validArchiveManifestString(schema.SourceTableName, maxArchiveSQLNameBytes, true) {
-		return fmt.Errorf("Lifecycle archive schema name is invalid")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle archive schema name is invalid")
 	}
 	if len(schema.Columns) == 0 || len(schema.Columns) > maxArchiveSchemaColumns {
-		return fmt.Errorf("Lifecycle archive schema column count is invalid")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle archive schema column count is invalid")
 	}
 	for index, column := range schema.Columns {
 		// MO user column IDs legitimately start at zero. The ordinal/name pair
 		// must be present; SourceColumnID is lineage and zero is not a sentinel.
 		if column.Ordinal != uint32(index) ||
 			!validArchiveManifestString(column.Name, maxArchiveSQLNameBytes, true) {
-			return fmt.Errorf("Lifecycle archive schema column identity is invalid")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle archive schema column identity is invalid")
 		}
 		if !validArchiveManifestString(column.EnumValues, maxArchiveManifestString, false) ||
 			!validArchiveManifestString(column.DefaultExpression, maxArchiveManifestString, false) {
-			return fmt.Errorf("Lifecycle archive schema column metadata exceeds limit")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle archive schema column metadata exceeds limit")
 		}
 		if !isPhase1ArchiveColumnSupported(
 			types.T(column.TypeID),
 			column.EnumValues,
 		) {
-			return fmt.Errorf(
+			return moerr.NewInternalErrorNoCtxf(
 				"Lifecycle archive schema column %s uses an unsupported encoded SQL type",
 				column.Name,
 			)
@@ -587,16 +588,16 @@ func archiveSchemaFromV1Wire(wire archiveSchemaDescriptorV1Wire) (SchemaDescript
 
 func archiveUint64FromV1Wire(field, value string) (uint64, error) {
 	if value == "" || (len(value) > 1 && value[0] == '0') {
-		return 0, fmt.Errorf("Lifecycle archive manifest %s is not a canonical uint64", field)
+		return 0, moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest %s is not a canonical uint64", field)
 	}
 	for _, digit := range value {
 		if digit < '0' || digit > '9' {
-			return 0, fmt.Errorf("Lifecycle archive manifest %s is not a canonical uint64", field)
+			return 0, moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest %s is not a canonical uint64", field)
 		}
 	}
 	parsed, err := strconv.ParseUint(value, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("Lifecycle archive manifest %s is not a uint64: %w", field, err)
+		return 0, moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest %s is not a uint64: %v", field, err)
 	}
 	return parsed, nil
 }
@@ -607,15 +608,15 @@ func archiveDigestToV1Wire(digest [sha256.Size]byte) string {
 
 func archiveDigestFromV1Wire(field, value string) ([sha256.Size]byte, error) {
 	if len(value) != sha256.Size*2 {
-		return [sha256.Size]byte{}, fmt.Errorf(
+		return [sha256.Size]byte{}, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle archive manifest %s is not a SHA-256 digest",
 			field,
 		)
 	}
 	decoded, err := hex.DecodeString(value)
 	if err != nil {
-		return [sha256.Size]byte{}, fmt.Errorf(
-			"Lifecycle archive manifest %s is not a SHA-256 digest: %w",
+		return [sha256.Size]byte{}, moerr.NewInternalErrorNoCtxf(
+			"Lifecycle archive manifest %s is not a SHA-256 digest: %v",
 			field,
 			err,
 		)
@@ -633,14 +634,14 @@ func validateArchiveManifestVersionPrefix(encoded []byte) error {
 		return err
 	}
 	if opening != json.Delim('{') || !decoder.More() {
-		return fmt.Errorf("Lifecycle archive manifest must be a non-empty JSON object")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest must be a non-empty JSON object")
 	}
 	field, err := decoder.Token()
 	if err != nil {
 		return err
 	}
 	if field != "manifest_format_version" {
-		return fmt.Errorf("Lifecycle archive manifest version must be the first field")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest version must be the first field")
 	}
 	version, err := decoder.Token()
 	if err != nil {
@@ -648,7 +649,7 @@ func validateArchiveManifestVersionPrefix(encoded []byte) error {
 	}
 	number, ok := version.(json.Number)
 	if !ok || number.String() != strconv.FormatUint(uint64(archiveManifestFormatVersion), 10) {
-		return fmt.Errorf("unsupported Lifecycle archive manifest version %v", version)
+		return moerr.NewInternalErrorNoCtxf("unsupported Lifecycle archive manifest version %v", version)
 	}
 	return nil
 }
@@ -664,7 +665,7 @@ func validateArchiveManifestJSON(encoded []byte) error {
 
 func scanArchiveManifestJSONValue(decoder *json.Decoder, depth int) error {
 	if depth > maxArchiveJSONDepth {
-		return fmt.Errorf("Lifecycle archive manifest exceeds JSON depth limit")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest exceeds JSON depth limit")
 	}
 	token, err := decoder.Token()
 	if err != nil {
@@ -679,7 +680,7 @@ func scanArchiveManifestJSONValue(decoder *json.Decoder, depth int) error {
 			for decoder.More() {
 				fields++
 				if fields > maxArchiveJSONObjectFields {
-					return fmt.Errorf("Lifecycle archive manifest object exceeds field limit")
+					return moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest object exceeds field limit")
 				}
 				keyToken, err := decoder.Token()
 				if err != nil {
@@ -687,10 +688,10 @@ func scanArchiveManifestJSONValue(decoder *json.Decoder, depth int) error {
 				}
 				key, ok := keyToken.(string)
 				if !ok || len(key) == 0 || len(key) > maxArchiveSQLNameBytes {
-					return fmt.Errorf("Lifecycle archive manifest object key is invalid")
+					return moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest object key is invalid")
 				}
 				if _, exists := seen[key]; exists {
-					return fmt.Errorf("Lifecycle archive manifest has duplicate field %q", key)
+					return moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest has duplicate field %q", key)
 				}
 				seen[key] = struct{}{}
 				if err := scanArchiveManifestJSONValue(decoder, depth+1); err != nil {
@@ -702,14 +703,14 @@ func scanArchiveManifestJSONValue(decoder *json.Decoder, depth int) error {
 				return err
 			}
 			if closing != json.Delim('}') {
-				return fmt.Errorf("Lifecycle archive manifest object is not closed")
+				return moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest object is not closed")
 			}
 		case '[':
 			elements := 0
 			for decoder.More() {
 				elements++
 				if elements > maxArchiveJSONArrayElements {
-					return fmt.Errorf("Lifecycle archive manifest array exceeds element limit")
+					return moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest array exceeds element limit")
 				}
 				if err := scanArchiveManifestJSONValue(decoder, depth+1); err != nil {
 					return err
@@ -720,22 +721,22 @@ func scanArchiveManifestJSONValue(decoder *json.Decoder, depth int) error {
 				return err
 			}
 			if closing != json.Delim(']') {
-				return fmt.Errorf("Lifecycle archive manifest array is not closed")
+				return moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest array is not closed")
 			}
 		default:
-			return fmt.Errorf("Lifecycle archive manifest contains invalid delimiter")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest contains invalid delimiter")
 		}
 	case string:
 		if len(value) > maxArchiveManifestString {
-			return fmt.Errorf("Lifecycle archive manifest string exceeds byte limit")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest string exceeds byte limit")
 		}
 	case json.Number:
 		if len(value.String()) > 32 {
-			return fmt.Errorf("Lifecycle archive manifest number exceeds byte limit")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest number exceeds byte limit")
 		}
 	case bool, nil:
 	default:
-		return fmt.Errorf("Lifecycle archive manifest contains unsupported JSON token")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest contains unsupported JSON token")
 	}
 	return nil
 }
@@ -743,7 +744,7 @@ func scanArchiveManifestJSONValue(decoder *json.Decoder, depth int) error {
 func requireArchiveManifestJSONEOF(decoder *json.Decoder) error {
 	if _, err := decoder.Token(); err != io.EOF {
 		if err == nil {
-			return fmt.Errorf("Lifecycle archive manifest contains trailing JSON")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest contains trailing JSON")
 		}
 		return err
 	}

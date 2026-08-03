@@ -253,11 +253,11 @@ func lifecycleColumnTypeSQL(column SchemaColumn) (string, error) {
 		return "UUID", nil
 	case types.T_enum:
 		if column.EnumValues == "" {
-			return "", fmt.Errorf("enum column %s has no values", column.Name)
+			return "", moerr.NewInternalErrorNoCtxf("enum column %s has no values", column.Name)
 		}
 		return "ENUM(" + column.EnumValues + ")", nil
 	default:
-		return "", fmt.Errorf("unsupported Lifecycle restore type %s", oid)
+		return "", moerr.NewInternalErrorNoCtxf("unsupported Lifecycle restore type %s", oid)
 	}
 }
 

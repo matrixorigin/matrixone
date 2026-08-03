@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -65,19 +66,19 @@ func (client SQLSyncProtectionClient) StatExact(
 	objects []objectio.ObjectStats,
 ) error {
 	if client.FileService == nil {
-		return fmt.Errorf("Lifecycle SyncProtection FileService is nil")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle SyncProtection FileService is nil")
 	}
 	for _, object := range objects {
 		location := object.ObjectLocation()
 		if location.IsEmpty() {
-			return fmt.Errorf("Lifecycle protected Object has no exact location")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle protected Object has no exact location")
 		}
 		entry, err := client.FileService.StatFile(ctx, location.Name().String())
 		if err != nil {
 			return err
 		}
 		if entry.Size != int64(object.Size()) {
-			return fmt.Errorf(
+			return moerr.NewInternalErrorNoCtxf(
 				"Lifecycle protected Object %s size changed",
 				location.Name().String(),
 			)
@@ -112,7 +113,7 @@ func (client SQLSyncProtectionClient) exec(
 	request map[string]any,
 ) error {
 	if client.Executor == nil {
-		return fmt.Errorf("Lifecycle SyncProtection SQL executor is nil")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle SyncProtection SQL executor is nil")
 	}
 	encoded, err := json.Marshal(request)
 	if err != nil {
@@ -136,7 +137,7 @@ func (client SQLSyncProtectionClient) exec(
 	var responseErr error
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
 		if len(columns) != 1 {
-			responseErr = fmt.Errorf("Lifecycle SyncProtection response has %d columns", len(columns))
+			responseErr = moerr.NewInternalErrorNoCtxf("Lifecycle SyncProtection response has %d columns", len(columns))
 			return false
 		}
 		for row := 0; row < rows; row++ {
@@ -152,7 +153,7 @@ func (client SQLSyncProtectionClient) exec(
 		return responseErr
 	}
 	if responses == 0 {
-		return fmt.Errorf("Lifecycle SyncProtection command returned no TN response")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle SyncProtection command returned no TN response")
 	}
 	return nil
 }
@@ -161,7 +162,7 @@ func buildLifecycleSyncProtectionFilter(
 	objects []objectio.ObjectStats,
 ) (string, error) {
 	if len(objects) == 0 {
-		return "", fmt.Errorf("Lifecycle SyncProtection Object set is empty")
+		return "", moerr.NewInternalErrorNoCtxf("Lifecycle SyncProtection Object set is empty")
 	}
 	// SyncProtectionManager decodes pkg/vm/engine/tae/index.BloomFilter.
 	// Produce that exact existing wire format rather than introducing a
@@ -173,7 +174,7 @@ func buildLifecycleSyncProtectionFilter(
 	defer values.Close()
 	for _, object := range objects {
 		if object.IsZero() {
-			return "", fmt.Errorf("Lifecycle SyncProtection Object identity is empty")
+			return "", moerr.NewInternalErrorNoCtxf("Lifecycle SyncProtection Object identity is empty")
 		}
 		values.Append([]byte(object.ObjectName().String()), false)
 	}
@@ -198,7 +199,7 @@ func validateLifecycleMoCtlResponse(encoded string) error {
 		return err
 	}
 	if len(outer.Result) == 0 {
-		return fmt.Errorf("Lifecycle SyncProtection response has no result")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle SyncProtection response has no result")
 	}
 	for _, item := range outer.Result {
 		var inner struct {
@@ -210,7 +211,7 @@ func validateLifecycleMoCtlResponse(encoded string) error {
 			return err
 		}
 		if inner.Status != "ok" {
-			return fmt.Errorf(
+			return moerr.NewInternalErrorNoCtxf(
 				"Lifecycle SyncProtection failed: %s: %s",
 				inner.Code,
 				inner.Message,

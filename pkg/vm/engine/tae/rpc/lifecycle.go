@@ -50,10 +50,10 @@ func validateLifecycleCommitControl(
 	now time.Time,
 ) error {
 	if entry == nil {
-		return fmt.Errorf("nil Lifecycle commit control")
+		return moerr.NewInternalErrorNoCtxf("nil Lifecycle commit control")
 	}
 	if entry.ProtocolVersion != lifecycleCommitProtocolVersion {
-		return fmt.Errorf("unsupported Lifecycle protocol version %d", entry.ProtocolVersion)
+		return moerr.NewInternalErrorNoCtxf("unsupported Lifecycle protocol version %d", entry.ProtocolVersion)
 	}
 	if entry.AttemptId == "" ||
 		entry.DatabaseId == 0 ||
@@ -63,19 +63,19 @@ func validateLifecycleCommitControl(
 		entry.SourceSnapshotTs.PhysicalTime == 0 ||
 		len(entry.SchemaDigest) != sha256.Size ||
 		len(entry.SourceSetDigest) != sha256.Size {
-		return fmt.Errorf("Lifecycle commit identity is incomplete")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle commit identity is incomplete")
 	}
 	if entry.FinalPrepareDeadlineUnixNano <= now.UnixNano() {
-		return fmt.Errorf("Lifecycle final prepare deadline has expired")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle final prepare deadline has expired")
 	}
 	isArchive := entry.DatasetId != ""
 	isTTL := entry.ReceiptId != ""
 	if isArchive == isTTL {
-		return fmt.Errorf("Lifecycle commit must contain exactly one Dataset or TTL Receipt")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle commit must contain exactly one Dataset or TTL Receipt")
 	}
 	if (isArchive || entry.RetireMode == api.LifecycleCommitEntry_Rewrite) &&
 		entry.RootId == "" {
-		return fmt.Errorf("Lifecycle commit with external state has no Cleanup Root")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle commit with external state has no Cleanup Root")
 	}
 	sourceLimit := lifecycleWholeMaxSources
 	if entry.RetireMode == api.LifecycleCommitEntry_Rewrite {
@@ -91,10 +91,10 @@ func validateLifecycleCommitControl(
 			entry.MaxDeltaBlocks == 0 ||
 			entry.MergeLevel < 0 ||
 			entry.MergeLevel > 7 {
-			return fmt.Errorf("Lifecycle Rewrite control is incomplete")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Rewrite control is incomplete")
 		}
 	} else if entry.RetireMode != api.LifecycleCommitEntry_Whole {
-		return fmt.Errorf("unknown Lifecycle retire mode %d", entry.RetireMode)
+		return moerr.NewInternalErrorNoCtxf("unknown Lifecycle retire mode %d", entry.RetireMode)
 	} else if len(entry.CreatedObjectStats) != 0 ||
 		len(entry.TransferBookingLocations) != 0 ||
 		len(entry.TransferMappingDigest) != 0 ||
@@ -102,49 +102,49 @@ func validateLifecycleCommitControl(
 		entry.MaxDeltaBytes != 0 ||
 		entry.MaxDeltaBlocks != 0 ||
 		entry.MergeLevel != 0 {
-		return fmt.Errorf("Lifecycle Whole control contains Rewrite state")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Whole control contains Rewrite state")
 	}
 	if len(entry.DataSourceObjectStats) == 0 ||
 		len(entry.DataSourceObjectStats) > sourceLimit {
-		return fmt.Errorf("Lifecycle source Object count is outside the certified limit")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle source Object count is outside the certified limit")
 	}
 	seen := make(map[objectio.ObjectId]struct{}, len(entry.DataSourceObjectStats))
 	var sourceBlockCount uint32
 	var sourceBytes uint64
 	for _, raw := range entry.DataSourceObjectStats {
 		if len(raw) != objectio.ObjectStatsLen {
-			return fmt.Errorf("Lifecycle source ObjectStats has invalid length %d", len(raw))
+			return moerr.NewInternalErrorNoCtxf("Lifecycle source ObjectStats has invalid length %d", len(raw))
 		}
 		var stats objectio.ObjectStats
 		copy(stats[:], raw)
 		if stats.GetAppendable() {
-			return fmt.Errorf("Lifecycle cannot retire an appendable Object")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle cannot retire an appendable Object")
 		}
 		objectID := *stats.ObjectName().ObjectId()
 		if _, exists := seen[objectID]; exists {
-			return fmt.Errorf("Lifecycle source Object is duplicated")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle source Object is duplicated")
 		}
 		seen[objectID] = struct{}{}
 		sourceBlockCount += uint32(stats.BlkCnt())
 		objectBytes := uint64(max(stats.OriginSize(), stats.Size(), 1))
 		sourceBytes += objectBytes
 		if sourceBytes > lifecycleWholeMaxSourceBytes {
-			return fmt.Errorf("Lifecycle source bytes exceed the certified limit")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle source bytes exceed the certified limit")
 		}
 	}
 	if entry.RetireMode == api.LifecycleCommitEntry_Rewrite &&
 		entry.MaxDeltaBlocks > sourceBlockCount {
-		return fmt.Errorf("Lifecycle delta block limit exceeds source layout")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle delta block limit exceeds source layout")
 	}
 	if !bytes.Equal(
 		entry.SourceSetDigest,
 		lifecycleSourceSetDigest(entry.DataSourceObjectStats),
 	) {
-		return fmt.Errorf("Lifecycle source set digest mismatch")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle source set digest mismatch")
 	}
 	for _, raw := range entry.CreatedObjectStats {
 		if len(raw) != objectio.ObjectStatsLen {
-			return fmt.Errorf("Lifecycle created ObjectStats has invalid length %d", len(raw))
+			return moerr.NewInternalErrorNoCtxf("Lifecycle created ObjectStats has invalid length %d", len(raw))
 		}
 	}
 	return nil
@@ -152,12 +152,12 @@ func validateLifecycleCommitControl(
 
 func validateLifecycleProtectionJobID(attemptID, jobID string) error {
 	if attemptID == "" || jobID == "" {
-		return fmt.Errorf("Lifecycle SyncProtection identity is incomplete")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle SyncProtection identity is incomplete")
 	}
 	// Production jobs are named <attempt-id>-<digest>. A job from another
 	// attempt must be rejected before Booking I/O or any TAE mutation.
 	if !strings.HasPrefix(jobID, attemptID+"-") {
-		return fmt.Errorf("Lifecycle SyncProtection does not belong to the attempt")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle SyncProtection does not belong to the attempt")
 	}
 	return nil
 }
@@ -365,21 +365,21 @@ func validateLifecycleBookingHeader(
 	blockMaxRows uint32,
 ) error {
 	if len(locations) == 0 || len(locations[0]) != 4 {
-		return fmt.Errorf("Lifecycle Rewrite booking header is missing")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Rewrite booking header is missing")
 	}
 	blockCount := int(types.DecodeInt32([]byte(locations[0])))
 	if blockCount <= 0 ||
 		blockCount != expectedBlockCount ||
 		len(locations) <= blockCount+1 {
-		return fmt.Errorf("Lifecycle Rewrite booking block layout is invalid")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Rewrite booking block layout is invalid")
 	}
 	for block := 0; block < blockCount; block++ {
 		if len(locations[block+1]) != 4 {
-			return fmt.Errorf("Lifecycle Rewrite booking row header is invalid")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Rewrite booking row header is invalid")
 		}
 		rows := types.DecodeInt32([]byte(locations[block+1]))
 		if rows < 0 || uint32(rows) > blockMaxRows {
-			return fmt.Errorf("Lifecycle Rewrite booking row count is outside schema limits")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Rewrite booking row count is outside schema limits")
 		}
 	}
 	return nil
@@ -391,13 +391,13 @@ func validateLifecycleTransferTable(
 	blockMaxRows uint32,
 ) error {
 	if table == nil || blockMaxRows == 0 {
-		return fmt.Errorf("Lifecycle Rewrite transfer layout is empty")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Rewrite transfer layout is empty")
 	}
 	created := make([]objectio.ObjectStats, len(createdValues))
 	var expectedDestinations uint64
 	for index, raw := range createdValues {
 		if len(raw) != objectio.ObjectStatsLen {
-			return fmt.Errorf("Lifecycle Rewrite created ObjectStats is malformed")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Rewrite created ObjectStats is malformed")
 		}
 		copy(created[index][:], raw)
 		expectedDestinations += uint64(created[index].Rows())
@@ -411,13 +411,13 @@ func validateLifecycleTransferTable(
 			if int(value.ObjIdx) >= len(created) ||
 				uint32(value.BlkIdx) >= created[value.ObjIdx].BlkCnt() ||
 				value.RowIdx >= blockMaxRows {
-				return fmt.Errorf("Lifecycle Rewrite destination is out of bounds")
+				return moerr.NewInternalErrorNoCtxf("Lifecycle Rewrite destination is out of bounds")
 			}
 			mappedDestinations++
 		}
 	}
 	if mappedDestinations != expectedDestinations {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Rewrite destination count %d does not match created rows %d",
 			mappedDestinations,
 			expectedDestinations,

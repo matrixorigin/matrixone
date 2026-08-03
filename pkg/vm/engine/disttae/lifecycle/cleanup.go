@@ -16,11 +16,11 @@ package lifecycle
 
 import (
 	"context"
-	"fmt"
 	"path"
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
@@ -87,11 +87,11 @@ type CleanupRoot struct {
 
 func ValidateCleanupRoot(root CleanupRoot) error {
 	if root.RootID == "" || root.AttemptID == "" {
-		return fmt.Errorf("Lifecycle cleanup root identity is incomplete")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle cleanup root identity is incomplete")
 	}
 	if root.StateVersion == 0 || root.CleanupAfter.IsZero() ||
 		root.ReservedCleanupBytes == 0 {
-		return fmt.Errorf("Lifecycle cleanup root state identity is incomplete")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle cleanup root state identity is incomplete")
 	}
 	switch root.Mode {
 	case CleanupModeArchiveWhole:
@@ -100,7 +100,7 @@ func ValidateCleanupRoot(root CleanupRoot) error {
 			root.RootID,
 			root.AttemptID,
 		) {
-			return fmt.Errorf("Lifecycle Archive prefix is not Root scoped")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Archive prefix is not Root scoped")
 		}
 	case CleanupModeArchiveRewrite:
 		if !lifecycleRootScopedPrefix(
@@ -108,13 +108,13 @@ func ValidateCleanupRoot(root CleanupRoot) error {
 			root.RootID,
 			root.AttemptID,
 		) {
-			return fmt.Errorf("Lifecycle Rewrite namespaces are not Root scoped")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Rewrite namespaces are not Root scoped")
 		}
 		if root.TemporaryCleanupDone {
 			if root.BookingPrefix != "" ||
 				root.SegmentID != "" ||
 				root.OrdinalUpperBound != 0 {
-				return fmt.Errorf(
+				return moerr.NewInternalErrorNoCtxf(
 					"Lifecycle completed temporary cleanup still owns TAE files",
 				)
 			}
@@ -123,14 +123,14 @@ func ValidateCleanupRoot(root CleanupRoot) error {
 			root.RootID,
 			root.AttemptID,
 		) {
-			return fmt.Errorf("Lifecycle Rewrite Booking prefix is not Root scoped")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Rewrite Booking prefix is not Root scoped")
 		}
 	case CleanupModeTTLRewrite:
 		if root.TemporaryCleanupDone {
 			if root.BookingPrefix != "" ||
 				root.SegmentID != "" ||
 				root.OrdinalUpperBound != 0 {
-				return fmt.Errorf(
+				return moerr.NewInternalErrorNoCtxf(
 					"Lifecycle completed temporary cleanup still owns TAE files",
 				)
 			}
@@ -139,10 +139,10 @@ func ValidateCleanupRoot(root CleanupRoot) error {
 			root.RootID,
 			root.AttemptID,
 		) {
-			return fmt.Errorf("Lifecycle TTL Rewrite namespace is not Root scoped")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle TTL Rewrite namespace is not Root scoped")
 		}
 	default:
-		return fmt.Errorf("unknown Lifecycle cleanup mode %s", root.Mode)
+		return moerr.NewInternalErrorNoCtxf("unknown Lifecycle cleanup mode %s", root.Mode)
 	}
 	return nil
 }
@@ -283,13 +283,13 @@ func CleanupPublishedTemporary(
 	root CleanupRoot,
 ) (CleanupRoot, error) {
 	if roots == nil {
-		return root, fmt.Errorf("Lifecycle Cleanup Root repository is nil")
+		return root, moerr.NewInternalErrorNoCtxf("Lifecycle Cleanup Root repository is nil")
 	}
 	if err := ValidateCleanupRoot(root); err != nil {
 		return root, err
 	}
 	if root.State != CleanupRootPublished {
-		return root, fmt.Errorf(
+		return root, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle temporary cleanup requires PUBLISHED Root, got %s",
 			root.State,
 		)
@@ -298,13 +298,13 @@ func CleanupPublishedTemporary(
 		return root, nil
 	}
 	if root.SegmentID != "" || root.OrdinalUpperBound != 0 {
-		return root, fmt.Errorf(
+		return root, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle live Object ownership was not transferred to TAE",
 		)
 	}
 	if root.BookingPrefix != "" {
 		if store == nil {
-			return root, fmt.Errorf("Lifecycle temporary cleanup store is nil")
+			return root, moerr.NewInternalErrorNoCtxf("Lifecycle temporary cleanup store is nil")
 		}
 		keys, err := listCleanupKeys(ctx, store, root.BookingPrefix)
 		if err != nil {
@@ -320,7 +320,7 @@ func CleanupPublishedTemporary(
 			return root, err
 		}
 		if len(remaining) != 0 {
-			return root, fmt.Errorf(
+			return root, moerr.NewInternalErrorNoCtxf(
 				"Lifecycle temporary cleanup still has %d Booking files",
 				len(remaining),
 			)
@@ -358,7 +358,7 @@ func DeferCleanupRoot(
 	cause error,
 ) (CleanupRoot, error) {
 	if roots == nil || rootID == "" || now.IsZero() || cause == nil {
-		return CleanupRoot{}, fmt.Errorf("Lifecycle cleanup deferral is incomplete")
+		return CleanupRoot{}, moerr.NewInternalErrorNoCtxf("Lifecycle cleanup deferral is incomplete")
 	}
 	root, err := roots.Get(ctx, rootID)
 	if err != nil {
@@ -384,7 +384,7 @@ func (sweeper CleanupSweeper) SweepOne(
 	now time.Time,
 ) error {
 	if sweeper.Roots == nil || sweeper.QuiescenceWindow <= 0 {
-		return fmt.Errorf("Lifecycle cleanup sweeper is not configured")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle cleanup sweeper is not configured")
 	}
 	root, err := sweeper.Roots.Get(ctx, rootID)
 	if err != nil {
@@ -444,7 +444,7 @@ func (sweeper CleanupSweeper) SweepOne(
 				store = tae
 			}
 			if store == nil {
-				return fmt.Errorf("Lifecycle cleanup store is unavailable for %s", key)
+				return moerr.NewInternalErrorNoCtxf("Lifecycle cleanup store is unavailable for %s", key)
 			}
 			if err := store.Delete(ctx, key); err != nil {
 				return err
@@ -528,7 +528,7 @@ func (sweeper CleanupSweeper) archiveStore(
 		return nil, nil
 	}
 	if sweeper.Archive == nil {
-		return nil, fmt.Errorf("Lifecycle Archive cleanup store is nil")
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle Archive cleanup store is nil")
 	}
 	return sweeper.Archive, nil
 }
@@ -544,7 +544,7 @@ func (sweeper CleanupSweeper) taeStore(
 		return nil, nil
 	}
 	if sweeper.TAE == nil {
-		return nil, fmt.Errorf("Lifecycle TAE cleanup store is nil")
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle TAE cleanup store is nil")
 	}
 	return sweeper.TAE, nil
 }
@@ -558,7 +558,7 @@ func listCleanupKeys(
 		return nil, nil
 	}
 	if store == nil {
-		return nil, fmt.Errorf("Lifecycle cleanup store is nil")
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle cleanup store is nil")
 	}
 	keys, err := store.List(ctx, prefix)
 	if err != nil {
@@ -566,7 +566,7 @@ func listCleanupKeys(
 	}
 	for _, key := range keys {
 		if !cleanupKeyWithinPrefix(key, prefix) {
-			return nil, fmt.Errorf(
+			return nil, moerr.NewInternalErrorNoCtxf(
 				"Lifecycle cleanup key %q is outside prefix %q",
 				key,
 				prefix,
@@ -585,15 +585,15 @@ func deleteLifecycleLiveStaging(
 		return nil
 	}
 	if store == nil {
-		return fmt.Errorf("Lifecycle TAE staging cleanup store is nil")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle TAE staging cleanup store is nil")
 	}
 	segmentID, err := types.ParseUuid(root.SegmentID)
 	if err != nil {
-		return fmt.Errorf("invalid Lifecycle staging Segment ID: %w", err)
+		return moerr.NewInternalErrorNoCtxf("invalid Lifecycle staging Segment ID: %v", err)
 	}
 	for ordinal := uint32(0); ordinal < root.OrdinalUpperBound; ordinal++ {
 		if ordinal > uint32(^uint16(0)) {
-			return fmt.Errorf("Lifecycle staging Object ordinal overflows uint16")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle staging Object ordinal overflows uint16")
 		}
 		name := objectio.BuildObjectName(&segmentID, uint16(ordinal)).String()
 		if err := store.Delete(ctx, name); err != nil {

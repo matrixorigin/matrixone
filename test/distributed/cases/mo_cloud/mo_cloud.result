@@ -819,6 +819,12 @@ mo_catalog  ¦  mo_iceberg_residency_policy  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_iceberg_tables  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_increment_columns  ¦    ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_indexes  ¦  r  ¦  accountadmin  𝄀
+mo_catalog  ¦  mo_lifecycle_bindings  ¦  r  ¦  accountadmin  𝄀
+mo_catalog  ¦  mo_lifecycle_cleanup_roots  ¦  cluster  ¦  -  𝄀
+mo_catalog  ¦  mo_lifecycle_datasets  ¦  r  ¦  accountadmin  𝄀
+mo_catalog  ¦  mo_lifecycle_restore_attempts  ¦  r  ¦  accountadmin  𝄀
+mo_catalog  ¦  mo_lifecycle_restore_chunks  ¦  r  ¦  accountadmin  𝄀
+mo_catalog  ¦  mo_lifecycle_ttl_receipts  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_locks  ¦  v  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_mongodb_connections  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_mongodb_tables  ¦  r  ¦  accountadmin  𝄀

@@ -936,7 +936,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		pitrExist                bool
 		sortedFkTbls             []string
 		fkTableMap               map[string]*tableInfo
-		accountRecord            *accountRecord
+		sourceAccountRecord      *accountRecord
 		retiredMongoDBAccountIDs []uint32
 	)
 	// resolve timestamp
@@ -993,6 +993,22 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	if err = checkPitrInValidDurtion(ts, pitr); err != nil {
 		return stats, err
 	}
+	rejectSourceAccountLifecycle := func(record *accountRecord) error {
+		if record == nil {
+			return moerr.NewInternalError(ctx, "PITR source account record is missing")
+		}
+		return rejectLifecycleArchiveRestoreScope(
+			ctx,
+			bh,
+			lifecycleArchiveRestoreScope{
+				level:             tree.RESTORELEVELACCOUNT,
+				accountID:         uint32(record.accountId),
+				snapshotTS:        ts,
+				rejectTTLBindings: true,
+			},
+			"RESTORE PITR",
+		)
+	}
 
 	if stmt.Level == tree.RESTORELEVELACCOUNT && len(accountName) > 0 {
 		restoreOtherAccount := func() (rtnErr error) {
@@ -1004,8 +1020,11 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 			if len(fromAccount) == 0 {
 				// using account level pitr
 				fromAccount = pitr.accountName
-				accountRecord, rtnErr = getAccountRecordByTs(ctx, ses, bh, pitrName, ts, fromAccount)
+				sourceAccountRecord, rtnErr = getAccountRecordByTs(ctx, ses, bh, pitrName, ts, fromAccount)
 				if rtnErr != nil {
+					return
+				}
+				if rtnErr = rejectSourceAccountLifecycle(sourceAccountRecord); rtnErr != nil {
 					return
 				}
 				if fromAccount == accountName {
@@ -1014,11 +1033,11 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 					toAccountId, rtnErr = getAccountId(ctx, bh, accountName)
 					if rtnErr != nil {
 						// need create a new account
-						if rtnErr = createDroppedAccount(ctx, ses, bh, pitrName, *accountRecord); rtnErr != nil {
+						if rtnErr = createDroppedAccount(ctx, ses, bh, pitrName, *sourceAccountRecord); rtnErr != nil {
 							return
 						}
 
-						if toAccountId, rtnErr = getAccountId(ctx, bh, accountRecord.accountName); rtnErr != nil {
+						if toAccountId, rtnErr = getAccountId(ctx, bh, sourceAccountRecord.accountName); rtnErr != nil {
 							return
 						}
 					}
@@ -1032,8 +1051,11 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 				}
 			} else {
 				// using cluster level pitr
-				accountRecord, rtnErr = getAccountRecordByTs(ctx, ses, bh, pitrName, ts, fromAccount)
+				sourceAccountRecord, rtnErr = getAccountRecordByTs(ctx, ses, bh, pitrName, ts, fromAccount)
 				if rtnErr != nil {
+					return
+				}
+				if rtnErr = rejectSourceAccountLifecycle(sourceAccountRecord); rtnErr != nil {
 					return
 				}
 				if fromAccount == accountName {
@@ -1042,11 +1064,11 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 					toAccountId, rtnErr = getAccountId(ctx, bh, fromAccount)
 					if rtnErr != nil {
 						// need create a new account
-						if rtnErr = createDroppedAccount(ctx, ses, bh, pitrName, *accountRecord); rtnErr != nil {
+						if rtnErr = createDroppedAccount(ctx, ses, bh, pitrName, *sourceAccountRecord); rtnErr != nil {
 							return
 						}
 
-						if toAccountId, rtnErr = getAccountId(ctx, bh, accountRecord.accountName); rtnErr != nil {
+						if toAccountId, rtnErr = getAccountId(ctx, bh, sourceAccountRecord.accountName); rtnErr != nil {
 							return
 						}
 					}
@@ -1060,19 +1082,6 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 				}
 			}
 
-			if rtnErr = rejectLifecycleArchiveRestoreScope(
-				ctx,
-				bh,
-				lifecycleArchiveRestoreScope{
-					level:             tree.RESTORELEVELACCOUNT,
-					accountID:         uint32(accountRecord.accountId),
-					snapshotTS:        ts,
-					rejectTTLBindings: true,
-				},
-				"RESTORE PITR",
-			); rtnErr != nil {
-				return rtnErr
-			}
 			if rtnErr = rejectLifecycleArchiveRestoreScope(
 				ctx,
 				bh,
@@ -1094,7 +1103,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 				bh,
 				pitrName,
 				ts,
-				*accountRecord,
+				*sourceAccountRecord,
 				uint64(toAccountId),
 				nil,
 				isClusterRestore,

@@ -87,7 +87,7 @@ where binding_id=unhex('%s') and state='ACTIVE' and version=%d`,
 	}
 	defer result.Close()
 	if result.AffectedRows != 1 {
-		return binding, fmt.Errorf("Lifecycle cursor CAS failed")
+		return binding, moerr.NewInternalErrorNoCtxf("Lifecycle cursor CAS failed")
 	}
 	binding.ScanSnapshotHex = hex.EncodeToString(cursor.Snapshot[:])
 	binding.ScanLastObjectNameHex = ""
@@ -222,14 +222,14 @@ func readLifecycleAccountIDs(result executor.Result) ([]uint32, error) {
 	var decodeErr error
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
 		if len(columns) != 1 {
-			decodeErr = fmt.Errorf("Lifecycle account query returned %d columns", len(columns))
+			decodeErr = moerr.NewInternalErrorNoCtxf("Lifecycle account query returned %d columns", len(columns))
 			return false
 		}
 		for row := 0; row < rows; row++ {
 			value, err := lifecycleUint64At(columns[0], row)
 			if err != nil || value > uint64(^uint32(0)) {
 				if err == nil {
-					err = fmt.Errorf("Lifecycle account ID %d overflows uint32", value)
+					err = moerr.NewInternalErrorNoCtxf("Lifecycle account ID %d overflows uint32", value)
 				}
 				decodeErr = err
 				return false
@@ -249,7 +249,7 @@ func decodeLifecycleBindings(
 	var decodeErr error
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
 		if len(columns) != 20 {
-			decodeErr = fmt.Errorf("Lifecycle Binding query returned %d columns", len(columns))
+			decodeErr = moerr.NewInternalErrorNoCtxf("Lifecycle Binding query returned %d columns", len(columns))
 			return false
 		}
 		for row := 0; row < rows; row++ {
@@ -296,7 +296,7 @@ func decodeLifecycleBindings(
 			if len(binding.ID) != 32 ||
 				len(binding.SchemaDigest) != 64 ||
 				(binding.Action == "ARCHIVE" && len(binding.StageIdentityDigest) != 64) {
-				decodeErr = fmt.Errorf("Lifecycle Binding persistent identity is corrupt")
+				decodeErr = moerr.NewInternalErrorNoCtxf("Lifecycle Binding persistent identity is corrupt")
 				return false
 			}
 			bindings = append(bindings, binding)
@@ -337,7 +337,7 @@ func lifecycleUint64At(value *vector.Vector, row int) (uint64, error) {
 			return uint64(typed), nil
 		}
 	}
-	return 0, fmt.Errorf(
+	return 0, moerr.NewInternalErrorNoCtxf(
 		"Lifecycle expected non-negative integer, got %s",
 		value.GetType().Oid,
 	)

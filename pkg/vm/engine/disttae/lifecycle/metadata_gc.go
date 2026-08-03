@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -48,7 +49,7 @@ func (compactor SQLMetadataCompactor) CompactPage(
 		retention <= 0 ||
 		maxAccounts <= 0 ||
 		maxRows <= 0 {
-		return afterAccountID, false, fmt.Errorf(
+		return afterAccountID, false, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle metadata compactor is incomplete",
 		)
 	}
@@ -70,7 +71,7 @@ func (compactor SQLMetadataCompactor) CompactPage(
 	terminalCutoff := lifecycleSQLTime(now.Add(-retention))
 	datasetRetention := retention * 3
 	if datasetRetention <= 0 {
-		return afterAccountID, false, fmt.Errorf(
+		return afterAccountID, false, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Dataset metadata retention overflow",
 		)
 	}
@@ -148,7 +149,7 @@ and state='COMMIT_UNKNOWN' order by root_id limit %d`,
 	var decodeErr error
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
 		if len(columns) != 1 {
-			decodeErr = fmt.Errorf(
+			decodeErr = moerr.NewInternalErrorNoCtxf(
 				"Lifecycle unknown TTL Root query is invalid",
 			)
 			return false
@@ -157,14 +158,14 @@ and state='COMMIT_UNKNOWN' order by root_id limit %d`,
 			identity := strings.ToLower(columns[0].GetStringAt(row))
 			decoded, decodeIdentityErr := hex.DecodeString(identity)
 			if decodeIdentityErr != nil || len(decoded) != 32 {
-				decodeErr = fmt.Errorf(
+				decodeErr = moerr.NewInternalErrorNoCtxf(
 					"Lifecycle unknown TTL Root identity is invalid",
 				)
 				return false
 			}
 			protected = append(protected, identity)
 			if len(protected) > maxUnknownTTLRewriteRoots {
-				decodeErr = fmt.Errorf(
+				decodeErr = moerr.NewInternalErrorNoCtxf(
 					"RESOURCE_BLOCKED: Lifecycle unknown TTL Root limit exceeded",
 				)
 				return false

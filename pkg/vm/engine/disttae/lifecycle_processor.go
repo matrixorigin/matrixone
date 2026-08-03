@@ -217,7 +217,7 @@ func (processor *LifecycleProcessor) ProcessArchiveObject(
 		return lifecyclepkg.CleanupRoot{}, err
 	}
 	if unresolved {
-		return lifecyclepkg.CleanupRoot{}, fmt.Errorf(
+		return lifecyclepkg.CleanupRoot{}, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle table has an unresolved final transaction",
 		)
 	}
@@ -294,7 +294,7 @@ func (processor *LifecycleProcessor) ProcessArchiveObject(
 		return processor.abandon(
 			ctx,
 			root,
-			fmt.Errorf("Lifecycle protected source set changed"),
+			moerr.NewInternalErrorNoCtxf("Lifecycle protected source set changed"),
 		)
 	}
 	lease, err := lifecyclepkg.AcquireProtection(
@@ -427,7 +427,7 @@ func (processor *LifecycleProcessor) ProcessArchiveObject(
 		return processor.abandon(
 			ctx,
 			root,
-			fmt.Errorf(
+			moerr.NewInternalErrorNoCtxf(
 				"Lifecycle Archive row count %d does not cover %d expired rows",
 				manifest.RowCount,
 				scanReport.ExpiredRows,
@@ -462,7 +462,7 @@ func (processor *LifecycleProcessor) ProcessArchiveObject(
 		return processor.abandon(
 			ctx,
 			root,
-			fmt.Errorf("Lifecycle verified Manifest is empty"),
+			moerr.NewInternalErrorNoCtxf("Lifecycle verified Manifest is empty"),
 		)
 	}
 	root.ManifestKey = manifestKey
@@ -642,7 +642,7 @@ func lifecycleCleanupReservation(
 		return reservedBytes, archivePhysicalBytes, nil
 	}
 	if task.MaxCreatedObjects == 0 || task.TargetObjectSize == 0 {
-		return 0, 0, fmt.Errorf(
+		return 0, 0, moerr.NewInternalErrorNoCtxf(
 			"RESOURCE_BLOCKED: Lifecycle Rewrite output bound is incomplete",
 		)
 	}
@@ -676,7 +676,7 @@ func lifecycleCleanupReservation(
 func lifecycleCheckedAdd(left uint64, right uint64) (uint64, error) {
 	value := left + right
 	if value < left {
-		return 0, fmt.Errorf("RESOURCE_BLOCKED: Lifecycle cleanup byte bound overflow")
+		return 0, moerr.NewInternalErrorNoCtxf("RESOURCE_BLOCKED: Lifecycle cleanup byte bound overflow")
 	}
 	return value, nil
 }

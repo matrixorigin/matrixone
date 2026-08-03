@@ -20,7 +20,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -188,10 +187,10 @@ func (lease *ProtectionLease) Renew(
 	lease.mu.Lock()
 	defer lease.mu.Unlock()
 	if lease.released {
-		return fmt.Errorf("Lifecycle SyncProtection %s is already released", lease.jobID)
+		return moerr.NewInternalErrorNoCtxf("Lifecycle SyncProtection %s is already released", lease.jobID)
 	}
 	if !validUntil.After(time.Now()) {
-		return fmt.Errorf("Lifecycle SyncProtection renewal deadline has expired")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle SyncProtection renewal deadline has expired")
 	}
 	return lease.client.Renew(ctx, lease.jobID, validUntil)
 }
@@ -243,7 +242,7 @@ func (report *ObjectScanReport) ObservePhysicalBlock(
 	snapshotDeleted *nulls.Nulls,
 ) error {
 	if report == nil || rowCount < 0 {
-		return fmt.Errorf("Lifecycle Object scan report input is invalid")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Object scan report input is invalid")
 	}
 	deletedRows, err := lifecycleBitmapRowCount(rowCount, snapshotDeleted)
 	if err != nil {
@@ -264,7 +263,7 @@ func (report *ObjectScanReport) ObserveClassifiedBlock(
 	expired *nulls.Nulls,
 ) error {
 	if report == nil || rowCount < 0 {
-		return fmt.Errorf("Lifecycle Object scan report input is invalid")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Object scan report input is invalid")
 	}
 	deletedRows, err := lifecycleBitmapRowCount(rowCount, snapshotDeleted)
 	if err != nil {
@@ -277,7 +276,7 @@ func (report *ObjectScanReport) ObserveClassifiedBlock(
 	if snapshotDeleted != nil && expired != nil {
 		for _, row := range expired.GetBitmap().ToArray() {
 			if snapshotDeleted.Contains(row) {
-				return fmt.Errorf(
+				return moerr.NewInternalErrorNoCtxf(
 					"Lifecycle row cannot be both snapshot-deleted and expired",
 				)
 			}
@@ -285,7 +284,7 @@ func (report *ObjectScanReport) ObserveClassifiedBlock(
 	}
 	visibleRows := uint64(rowCount) - deletedRows
 	if expiredRows > visibleRows {
-		return fmt.Errorf("Lifecycle expired rows exceed visible rows")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle expired rows exceed visible rows")
 	}
 	report.ScannedBlocks++
 	report.ScannedRows += uint64(rowCount)
@@ -304,11 +303,11 @@ func (report *ObjectScanReport) SetVisibleClassification(
 	liveRows uint64,
 ) error {
 	if report == nil || report.classified {
-		return fmt.Errorf("Lifecycle Object scan classification is duplicated")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Object scan classification is duplicated")
 	}
 	visibleRows := report.ScannedRows - report.SnapshotDeletedRows
 	if expiredRows > visibleRows || liveRows != visibleRows-expiredRows {
-		return fmt.Errorf("Lifecycle Object scan classification is incomplete")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Object scan classification is incomplete")
 	}
 	report.ExpiredRows = expiredRows
 	report.LiveRows = liveRows
@@ -321,7 +320,7 @@ func (report ObjectScanReport) ValidatePhysicalComplete() error {
 		report.ScannedBlocks != report.ExpectedBlocks ||
 		report.ScannedRows != report.ExpectedRows ||
 		report.SnapshotDeletedRows > report.ScannedRows {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Object scan is incomplete: blocks=%d/%d rows=%d/%d deleted=%d",
 			report.ScannedBlocks,
 			report.ExpectedBlocks,
@@ -339,7 +338,7 @@ func (report ObjectScanReport) ValidateComplete() error {
 	}
 	if !report.classified ||
 		report.SnapshotDeletedRows+report.ExpiredRows+report.LiveRows != report.ScannedRows {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Object scan D/E/L conservation failed: D=%d E=%d L=%d rows=%d",
 			report.SnapshotDeletedRows,
 			report.ExpiredRows,
@@ -352,7 +351,7 @@ func (report ObjectScanReport) ValidateComplete() error {
 
 func (report *ObjectScanReport) Add(other ObjectScanReport) error {
 	if report == nil {
-		return fmt.Errorf("Lifecycle Object scan aggregate is incomplete")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Object scan aggregate is incomplete")
 	}
 	if err := other.ValidateComplete(); err != nil {
 		return err
@@ -374,7 +373,7 @@ func lifecycleBitmapRowCount(rowCount int, bitmap *nulls.Nulls) (uint64, error) 
 	}
 	for _, row := range bitmap.GetBitmap().ToArray() {
 		if row >= uint64(rowCount) {
-			return 0, fmt.Errorf("Lifecycle row bitmap contains an out-of-range row")
+			return 0, moerr.NewInternalErrorNoCtxf("Lifecycle row bitmap contains an out-of-range row")
 		}
 	}
 	return uint64(bitmap.Count()), nil
