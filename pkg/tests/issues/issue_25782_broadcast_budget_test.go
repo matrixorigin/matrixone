@@ -41,13 +41,15 @@ const (
 // TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget proves the
 // resident-only topology contract through the SQL protocol:
 //
-//   - a low-NDV LEFT JOIN selects broadcast rather than shuffle;
+//   - a #25782-like grouped child feeds a parallel low-NDV LEFT JOIN;
+//   - the low-NDV join selects broadcast rather than shuffle;
 //   - an admitted control returns all joined rows;
 //   - a larger build is rejected before it can exceed the hard query budget;
 //   - the rejected broadcast build never enters spill and leaves the CN usable.
 //
-// The low-NDV key is intentional. It keeps the physical topology independent
-// of SQL predicate ordering and avoids turning this into a shuffle-spill test.
+// The grouped child preserves the incident's build-side Aggregate. The low-NDV
+// key keeps the physical topology independent of SQL predicate ordering and
+// avoids turning this into a shuffle-spill test.
 func TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget(t *testing.T) {
 	cluster, err := embed.StartTestCluster(
 		embed.WithCNCount(1),
@@ -92,7 +94,7 @@ func TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget(t *testing.T) {
 		_, _ = conn.ExecContext(cleanupCtx, "drop database if exists `"+dbName+"`")
 	}()
 	execJoinSpillSQL(t, ctx, conn, "use `"+dbName+"`")
-	execJoinSpillSQL(t, ctx, conn, "set @@max_dop = 1")
+	execJoinSpillSQL(t, ctx, conn, "set @@max_dop = 2")
 	defer resetOptimizerHintsOnCN(t, port)
 	execJoinSpillSQL(t, ctx, conn, `set session optimizer_hints = "forceOneCN=1,joinOrdering=1"`)
 	// A minimal soft threshold must not turn a shared/broadcast JoinMap into a
@@ -106,7 +108,12 @@ func TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget(t *testing.T) {
 	execJoinSpillSQL(t, ctx, conn, "insert into broadcast_probe values (1)")
 
 	query := `select b.payload
-		from broadcast_probe p left join broadcast_build b on p.k = b.k`
+		from broadcast_probe p
+		left join (
+			select k, payload
+			from broadcast_build
+			group by k, payload
+		) b on p.k = b.k`
 
 	// The control changes only the build cardinality. It establishes the SQL
 	// result oracle under the same broadcast topology and hard budget.
@@ -115,6 +122,7 @@ func TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget(t *testing.T) {
 	patchJoinSpillStats(t, ctx, conn, dbName, "broadcast_probe", 1)
 	patchJoinSpillStatsWithNDV(t, ctx, conn, dbName, "broadcast_build", 64, 64)
 	controlPlan := queryJoinSpillText(t, ctx, conn, "explain "+query)
+	require.Contains(t, controlPlan, "Aggregate", "the public witness must retain the grouped build child:\n%s", controlPlan)
 	require.NotContains(t, controlPlan, "shuffle:", "low-NDV join must remain broadcast:\n%s", controlPlan)
 	controlPayloads, err := func() (_ []int64, err error) {
 		controlResult, err := conn.QueryContext(ctx, query)
@@ -148,6 +156,7 @@ func TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget(t *testing.T) {
 	))
 	patchJoinSpillStatsWithNDV(t, ctx, conn, dbName, "broadcast_build", issue25782BuildRows, 64)
 	plan := queryJoinSpillText(t, ctx, conn, "explain "+query)
+	require.Contains(t, plan, "Aggregate", "the rejected plan must retain the grouped build child:\n%s", plan)
 	require.NotContains(t, plan, "shuffle:", "low-NDV join must remain broadcast:\n%s", plan)
 
 	spillBefore := promtestutil.ToFloat64(
