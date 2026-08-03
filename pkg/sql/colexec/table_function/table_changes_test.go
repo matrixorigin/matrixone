@@ -17,7 +17,9 @@ package table_function
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,4 +49,12 @@ func TestParseTableChangesTS(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestValidateRuntimeTableChangesSourceTemporaryTable(t *testing.T) {
+	err := validateRuntimeTableChangesSource(&plan.TableDef{
+		TableType:   catalog.SystemTemporaryTable,
+		IsTemporary: true,
+	})
+	require.EqualError(t, err, "not supported: table_changes does not support temporary tables")
 }

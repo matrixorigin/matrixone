@@ -129,6 +129,9 @@ func validateTableChangesSource(objectRef *plan.ObjectRef, tableDef *plan.TableD
 	if objectRef != nil && objectRef.PubInfo != nil {
 		return moerr.NewNotSupportedNoCtx("table_changes does not support subscription tables")
 	}
+	if tableDef.IsTemporary {
+		return moerr.NewNotSupportedNoCtx("table_changes does not support temporary tables")
+	}
 	switch tableDef.TableType {
 	case catalog.SystemOrdinaryRel:
 	case catalog.SystemClusterRel:
@@ -139,9 +142,6 @@ func validateTableChangesSource(objectRef *plan.ObjectRef, tableDef *plan.TableD
 			"table_changes does not support table type %q",
 			tableDef.TableType,
 		)
-	}
-	if tableDef.IsTemporary {
-		return moerr.NewNotSupportedNoCtx("table_changes does not support temporary tables")
 	}
 	if tableDef.Partition != nil {
 		return moerr.NewNotSupportedNoCtx("table_changes does not support partitioned tables")

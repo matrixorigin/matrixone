@@ -246,6 +246,9 @@ func validateRuntimeTableChangesSource(tableDef *plan.TableDef) error {
 	if tableDef == nil {
 		return moerr.NewInvalidInputNoCtx("table_changes source table does not exist")
 	}
+	if tableDef.IsTemporary {
+		return moerr.NewNotSupportedNoCtx("table_changes does not support temporary tables")
+	}
 	switch tableDef.TableType {
 	case catalog.SystemOrdinaryRel, catalog.SystemClusterRel:
 	default:
@@ -253,9 +256,6 @@ func validateRuntimeTableChangesSource(tableDef *plan.TableDef) error {
 			"table_changes does not support table type %q",
 			tableDef.TableType,
 		)
-	}
-	if tableDef.IsTemporary {
-		return moerr.NewNotSupportedNoCtx("table_changes does not support temporary tables")
 	}
 	if tableDef.Partition != nil {
 		return moerr.NewNotSupportedNoCtx("table_changes does not support partitioned tables")
