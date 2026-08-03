@@ -1279,7 +1279,10 @@ func TestExpressionHashKeyAcceptsCastTargetType(t *testing.T) {
 
 	peak, err := expressionVectorPeak(proc, expr, 1024, false)
 	require.NoError(t, err)
-	require.Equal(t, uint64(204800), peak, "charge the target-type and cast result vectors")
+	outputPeak, err := expressionFixedWidthPeak(uint64(types.T_int32.TypeLen()), 1024)
+	require.NoError(t, err)
+	require.Equal(t, 2*outputPeak, peak,
+		"charge the target-type and cast result vectors")
 }
 
 func TestPreparedParamExpressionPeakUsesConstCardinality(t *testing.T) {

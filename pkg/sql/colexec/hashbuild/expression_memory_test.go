@@ -17,6 +17,7 @@ package hashbuild
 import (
 	"context"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 
@@ -75,6 +76,7 @@ func makeSerialExpressionLeaseTestBatch(
 	t *testing.T,
 	proc *process.Process,
 	rows int,
+	typ types.Type,
 	value string,
 ) *batch.Batch {
 	t.Helper()
@@ -83,8 +85,10 @@ func makeSerialExpressionLeaseTestBatch(
 		values[i] = value
 	}
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = testutil.MakeVarcharVector(values, nil, proc.Mp())
-	bat.Vecs[1] = testutil.MakeVarcharVector(values, nil, proc.Mp())
+	bat.Vecs[0] = testutil.NewStringVector(rows, typ, proc.Mp(), false, nil, values)
+	bat.Vecs[1] = testutil.NewStringVector(rows, typ, proc.Mp(), false, nil, values)
+	require.NotNil(t, bat.Vecs[0])
+	require.NotNil(t, bat.Vecs[1])
 	bat.SetRowCount(rows)
 	return bat
 }
@@ -389,7 +393,7 @@ func TestExpressionSerialResultPeakUsesEncodingContract(t *testing.T) {
 				t, proc, name, types.T_int32.ToType(), types.T_int32.ToType())
 			peak, err := expressionVectorPeak(proc, expr, rows, false)
 			require.NoError(t, err)
-			want, err := expressionWidthPeak(12, rows)
+			want, err := expressionVarlenaWidthPeak(12, rows)
 			require.NoError(t, err)
 			require.Equal(t, want, peak)
 
@@ -402,6 +406,128 @@ func TestExpressionSerialResultPeakUsesEncodingContract(t *testing.T) {
 			require.Less(t, 2*peak, uint64(1<<30),
 				"a normal serial key must fit an otherwise empty 1 GiB budget")
 		})
+	}
+}
+
+func TestExpressionSerialPhysicalCapacityBoundAndReuse(t *testing.T) {
+	const rows = colexec.DefaultBatchSize
+	for _, name := range []string{"serial", "serial_full"} {
+		for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
+			t.Run(name+"/"+oid.String(), func(t *testing.T) {
+				proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+				typ := types.New(oid, 128, 0)
+				expr := makeSerialExpressionLeaseTestExpr(t, proc, name, typ, typ)
+				peak, err := expressionVectorPeak(proc, expr, rows, false)
+				require.NoError(t, err)
+				require.LessOrEqual(t, peak, uint64(math.MaxUint64/2))
+				budgetCap := 2 * peak
+				budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
+				generation, err := budget.OpenGeneration(1)
+				require.NoError(t, err)
+				executors, lease, err := NewBudgetedExpressionExecutors(
+					proc, generation, []*plan.Expr{expr}, false)
+				require.NoError(t, err)
+				defer func() {
+					freeExpressionLeaseTestExecutors(executors)
+					lease.Release()
+					require.Zero(t, generation.Used())
+					generation.Close()
+					proc.Free()
+					require.Zero(t, proc.Mp().CurrNB())
+				}()
+
+				input := makeSerialExpressionLeaseTestBatch(
+					t, proc, rows, typ, string(make([]byte, 128)))
+				defer input.Clean(proc.Mp())
+				eval := func() error {
+					return lease.Eval(
+						proc,
+						[]*batch.Batch{input},
+						rows,
+						func(_ int, _ *vector.Vector) error { return nil },
+					)
+				}
+
+				require.NoError(t, eval())
+				retained, ok := lease.Retained()
+				require.True(t, ok)
+				require.LessOrEqual(t, retained, peak,
+					"the pre-admitted peak must cover the executor's physical capacities")
+				require.NoError(t, eval(),
+					"a second batch within the same row/type bound must not fail the ownership audit")
+			})
+		}
+	}
+}
+
+func TestExpressionSerialPhysicalCapacityRecoveryBoundary(t *testing.T) {
+	const rows = colexec.DefaultBatchSize
+	for _, name := range []string{"serial", "serial_full"} {
+		for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
+			for _, delta := range []int64{-1, 0, 1} {
+				t.Run(name+"/"+oid.String()+"/"+
+					map[int64]string{-1: "N-1", 0: "N", 1: "N+1"}[delta], func(t *testing.T) {
+					proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+					typ := types.New(oid, 128, 0)
+					expr := makeSerialExpressionLeaseTestExpr(t, proc, name, typ, typ)
+					peak, err := expressionVectorPeak(proc, expr, rows, false)
+					require.NoError(t, err)
+					require.LessOrEqual(t, peak, uint64(math.MaxUint64/2))
+					required := 2 * peak
+					require.Positive(t, required)
+					capBytes := required
+					if delta < 0 {
+						capBytes--
+					} else {
+						capBytes += uint64(delta)
+					}
+					budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+					generation, err := budget.OpenGeneration(1)
+					require.NoError(t, err)
+					executors, lease, err := NewBudgetedExpressionExecutors(
+						proc, generation, []*plan.Expr{expr}, false)
+					require.NoError(t, err)
+					defer func() {
+						freeExpressionLeaseTestExecutors(executors)
+						lease.Release()
+						require.Zero(t, generation.Used())
+						generation.Close()
+						proc.Free()
+						require.Zero(t, proc.Mp().CurrNB())
+					}()
+
+					err = lease.EnsureRunRecovery(proc, rows)
+					if delta < 0 {
+						require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+						require.Zero(t, generation.Used())
+						return
+					}
+					require.NoError(t, err)
+					require.Equal(t, required, lease.Reserved())
+					blocker, err := generation.Reserve(capBytes - generation.Used())
+					require.NoError(t, err)
+					defer blocker.Release()
+					reservesAtSaturation := generation.ReserveCount()
+
+					input := makeSerialExpressionLeaseTestBatch(
+						t, proc, rows, typ, string(make([]byte, 128)))
+					defer input.Clean(proc.Mp())
+					for range 2 {
+						require.NoError(t, lease.Eval(
+							proc,
+							[]*batch.Batch{input},
+							rows,
+							func(_ int, _ *vector.Vector) error { return nil },
+						))
+					}
+					require.Equal(t, reservesAtSaturation, generation.ReserveCount(),
+						"prepared first evaluation and reuse must not reserve under sibling pressure")
+					retained, ok := lease.Retained()
+					require.True(t, ok)
+					require.LessOrEqual(t, retained, peak)
+				})
+			}
+		}
 	}
 }
 
@@ -441,9 +567,10 @@ func TestExpressionSerialRecoveryAdmissionAndReplacementMatrix(t *testing.T) {
 						require.NoError(t, reserveErr)
 						reservesAtSaturation := generation.ReserveCount()
 
-						short := makeSerialExpressionLeaseTestBatch(t, proc, rows, "a")
+						short := makeSerialExpressionLeaseTestBatch(
+							t, proc, rows, types.New(types.T_varchar, 32, 0), "a")
 						wide := makeSerialExpressionLeaseTestBatch(
-							t, proc, rows, strings.Repeat("x", 32))
+							t, proc, rows, types.New(types.T_varchar, 32, 0), strings.Repeat("x", 32))
 						for _, input := range []*batch.Batch{short, wide, short} {
 							require.NoError(t, lease.Eval(
 								proc,
@@ -636,11 +763,10 @@ func TestExpressionTypePeakUsesArrayElementWidth(t *testing.T) {
 				Width: types.MaxArrayDimension,
 			}, 1)
 			require.NoError(t, err)
-			require.Equal(
-				t,
-				uint64(types.MaxArrayDimension)*tc.elementWidth+32+(64<<10),
-				peak,
-			)
+			want, err := expressionVarlenaWidthPeak(
+				uint64(types.MaxArrayDimension)*tc.elementWidth, 1)
+			require.NoError(t, err)
+			require.Equal(t, want, peak)
 		})
 	}
 }

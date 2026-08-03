@@ -523,7 +523,7 @@ func expressionResultPeak(expr *plan.Expr, rows uint64) (uint64, error) {
 		}
 		payloadPerRow += component
 	}
-	return expressionWidthPeak(payloadPerRow, rows)
+	return expressionVarlenaWidthPeak(payloadPerRow, rows)
 }
 
 func nodeFunctionArgs(expr *plan.Expr) []*plan.Expr {
@@ -568,42 +568,128 @@ func expressionParamPeak(proc *process.Process, pos int32) (uint64, error) {
 func expressionTypePeak(typ plan.Type, rows uint64) (uint64, error) {
 	oid := types.T(typ.Id)
 	width := int64(oid.FixedLength())
-	if width < 0 {
-		width = int64(typ.Width)
-		hardMax := int64(types.MaxVarcharLen)
-		if oid.IsArrayRelate() {
-			elementWidth := int64(oid.ToType().GetArrayElementSize())
-			width *= elementWidth
-			hardMax = int64(types.MaxArrayDimension) * elementWidth
-		} else {
-			switch oid {
-			case types.T_blob, types.T_text, types.T_json, types.T_datalink,
-				types.T_geometry, types.T_geometry32:
-				hardMax = int64(types.MaxBlobLen)
-			}
+	if width >= 0 {
+		if width < 1 {
+			width = 1
 		}
-		if width > hardMax {
-			// Never clamp a declared bound downward. Array width is declared
-			// in elements, while every other varlena width is in bytes.
-			hardMax = width
-		}
-		width = hardMax
+		return expressionFixedWidthPeak(uint64(width), rows)
 	}
+
+	width = int64(typ.Width)
+	hardMax := int64(types.MaxVarcharLen)
+	if oid.IsArrayRelate() {
+		elementWidth := int64(oid.ToType().GetArrayElementSize())
+		width *= elementWidth
+		hardMax = int64(types.MaxArrayDimension) * elementWidth
+	} else {
+		switch oid {
+		case types.T_blob, types.T_text, types.T_json, types.T_datalink,
+			types.T_geometry, types.T_geometry32:
+			hardMax = int64(types.MaxBlobLen)
+		}
+	}
+	if width > hardMax {
+		// Never clamp a declared bound downward. Array width is declared
+		// in elements, while every other varlena width is in bytes.
+		hardMax = width
+	}
+	width = hardMax
 	if width < 1 {
 		width = 1
 	}
-	return expressionWidthPeak(uint64(width), rows)
+	return expressionVarlenaWidthPeak(uint64(width), rows)
 }
 
-func expressionWidthPeak(width, rows uint64) (uint64, error) {
-	if width > math.MaxUint64-32 {
+const (
+	expressionPerRowAllowance = uint64(32)
+	expressionAllocationSlack = uint64(64 << 10)
+)
+
+// expressionAllocationCapacityUpperBound bounds the capacity retained after
+// any sequence of GrowCapacity calls whose logical requirement never exceeds
+// required. The last growth either allocates required directly or starts from
+// a capacity below required. GrowCapacity's single-step growth is monotonic in
+// that starting capacity, so required-1 covers every incremental append
+// history without replaying an O(rows) growth sequence during HashBuild.
+func expressionAllocationCapacityUpperBound(required uint64) (uint64, error) {
+	if required == 0 {
+		return 0, nil
+	}
+	if mpool.CapLimit <= 0 {
 		return 0, process.ErrHashBuildBudgetInvalid
 	}
-	perRow := width + 32
-	if rows > (math.MaxUint64-(64<<10))/perRow {
+	limit := uint64(mpool.CapLimit)
+	if required >= limit {
+		// A successful mpool allocation cannot retain more than CapLimit.
+		// Values which exceed the allocator's own limit still fail in Eval.
+		return limit, nil
+	}
+	capacity, ok := mpool.GrowCapacity(int64(required-1), int64(required))
+	if !ok || capacity < 0 {
 		return 0, process.ErrHashBuildBudgetInvalid
 	}
-	return rows*perRow + (64 << 10), nil
+	return uint64(capacity), nil
+}
+
+func expressionFixedWidthPeak(width, rows uint64) (uint64, error) {
+	if width == 0 {
+		width = 1
+	}
+	if rows != 0 && width > math.MaxUint64/rows {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	dataCapacity, err := expressionAllocationCapacityUpperBound(width * rows)
+	if err != nil || rows > math.MaxUint64/expressionPerRowAllowance {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	allowance := rows * expressionPerRowAllowance
+	if dataCapacity > math.MaxUint64-allowance ||
+		dataCapacity+allowance > math.MaxUint64-expressionAllocationSlack {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	return dataCapacity + allowance + expressionAllocationSlack, nil
+}
+
+func expressionVarlenaWidthPeak(width, rows uint64) (uint64, error) {
+	if width == 0 {
+		width = 1
+	}
+	descriptorWidth := uint64(types.VarlenaSize)
+	if descriptorWidth > expressionPerRowAllowance ||
+		(rows != 0 && descriptorWidth > math.MaxUint64/rows) {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	dataCapacity, err := expressionAllocationCapacityUpperBound(
+		rows * descriptorWidth)
+	if err != nil {
+		return 0, err
+	}
+
+	var areaCapacity uint64
+	if width > uint64(types.VarlenaInlineSize) {
+		if rows != 0 && width > math.MaxUint64/rows {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		areaCapacity, err = expressionAllocationCapacityUpperBound(width * rows)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	// The historical per-row allowance included the varlena descriptor. Its
+	// physical capacity is now charged above, leaving the non-mpool metadata
+	// allowance unchanged instead of double-counting the descriptor.
+	metadataPerRow := expressionPerRowAllowance - descriptorWidth
+	if rows != 0 && metadataPerRow > math.MaxUint64/rows {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	metadata := rows * metadataPerRow
+	if dataCapacity > math.MaxUint64-areaCapacity ||
+		dataCapacity+areaCapacity > math.MaxUint64-metadata ||
+		dataCapacity+areaCapacity+metadata > math.MaxUint64-expressionAllocationSlack {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	return dataCapacity + areaCapacity + metadata + expressionAllocationSlack, nil
 }
 
 func (hb *HashmapBuilder) releaseExpressionLease() {
