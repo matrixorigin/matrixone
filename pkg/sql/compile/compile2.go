@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"encoding/hex"
-	"errors"
 	"math"
 	gotrace "runtime/trace"
 	"strings"
@@ -356,7 +355,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		coordinatorPhaseStart = time.Time{}
 		coordinatorPhaseBase = 0
 		if terminalErr := finishAllocationAttempt(); terminalErr != nil {
-			err = errors.Join(err, terminalErr)
+			err = joinAllocationLifecycleErrors(err, terminalErr)
 			resourceRecorder.finishAttempt(
 				uint64(retryTimes), attemptStart, preRunWall, attemptRemoteWait, stats,
 				attemptScopes, attemptAnal, c.addr, false,
@@ -500,7 +499,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	// this call returns.
 	c.AnalyzeExecPlan(runC, queryResult, stats, isExplainPhyPlan, option)
 	if terminalErr := finishAllocationAttempt(); terminalErr != nil {
-		err = errors.Join(err, terminalErr)
+		err = joinAllocationLifecycleErrors(err, terminalErr)
 		resourceRecorder.finishAttempt(
 			uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
 			attemptScopes, attemptAnal, c.addr, false,

@@ -16,6 +16,7 @@ package compile
 
 import (
 	"errors"
+	"reflect"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -38,6 +39,23 @@ func allocationLifecycleCall(call func() error) (err error) {
 		}
 	}()
 	return call()
+}
+
+// joinAllocationLifecycleErrors keeps a lone failure's concrete type intact
+// and avoids rejoining the same terminal failure. errors.Join wraps even one
+// non-nil error, which would turn a statement *moerr.Error into a generic Go
+// error before it crosses the pipeline wire.
+func joinAllocationLifecycleErrors(primary, secondary error) error {
+	if primary == nil {
+		return secondary
+	}
+	if secondary == nil {
+		return primary
+	}
+	if reflect.TypeOf(primary).Comparable() && primary == secondary {
+		return primary
+	}
+	return errors.Join(primary, secondary)
 }
 
 type executionAllocationAccountOwner interface {
@@ -130,7 +148,7 @@ func (c *Compile) beginAllocationAccountAttempt() (
 			return terminalErr
 		})
 		if first {
-			finalizeErr = errors.Join(
+			finalizeErr = joinAllocationLifecycleErrors(
 				finalizeErr,
 				allocationLifecycleCall(func() error {
 					c.allocationTerminalExporter(snapshot)
@@ -139,7 +157,7 @@ func (c *Compile) beginAllocationAccountAttempt() (
 			)
 		}
 		if finalizeErr != nil {
-			return nil, errors.Join(err, finalizeErr)
+			return nil, joinAllocationLifecycleErrors(err, finalizeErr)
 		}
 		return nil, err
 	}
@@ -216,7 +234,7 @@ func configureAllocationAccountOwners(
 	configured := make([]executionAllocationAccountOwner, 0, len(owners))
 	rollback := func(cause error) error {
 		for i := len(configured) - 1; i >= 0; i-- {
-			cause = errors.Join(
+			cause = joinAllocationLifecycleErrors(
 				cause,
 				allocationLifecycleCall(func() error {
 					return configured[i].ClearAllocationAccount(account)
@@ -347,7 +365,7 @@ func (a *statementAllocationAttempt) prepareTerminal(closeBoard bool) error {
 	}
 	a.prepareOnce.Do(func() {
 		if closeBoard {
-			a.prepareErr = errors.Join(
+			a.prepareErr = joinAllocationLifecycleErrors(
 				a.prepareErr,
 				allocationLifecycleCall(func() error {
 					a.board.CloseAndDrain()
@@ -362,7 +380,7 @@ func (a *statementAllocationAttempt) prepareTerminal(closeBoard bool) error {
 		a.ownerSet = nil
 		a.ownersMu.Unlock()
 		for i := len(owners) - 1; i >= 0; i-- {
-			a.prepareErr = errors.Join(
+			a.prepareErr = joinAllocationLifecycleErrors(
 				a.prepareErr,
 				allocationLifecycleCall(func() error {
 					return owners[i].ClearAllocationAccount(a.account)
@@ -393,7 +411,7 @@ func (a *statementAllocationAttempt) completeTerminal() (
 			return terminalErr
 		})
 		if first && a.exporter != nil {
-			a.completeErr = errors.Join(
+			a.completeErr = joinAllocationLifecycleErrors(
 				a.completeErr,
 				allocationLifecycleCall(func() error {
 					a.exporter(a.snapshot)

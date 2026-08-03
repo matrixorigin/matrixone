@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -219,6 +221,23 @@ func TestRemoteAllocationStatementGroupDefersSharedBoardTerminal(t *testing.T) {
 	require.False(t, registry.AdmissionSuspended())
 	require.Zero(t, registry.LiveAllocationMetadata())
 	require.False(t, remoteAllocationStatementGroupRegistered(board))
+}
+
+func TestRemoteAllocationStatementGroupPreservesStatementError(t *testing.T) {
+	board := message.NewMessageBoard()
+	participant, err := acquireRemoteAllocationStatementTestParticipant(
+		t,
+		board,
+		1,
+		nil,
+	)
+	require.NoError(t, err)
+
+	primary := moerr.NewDuplicateEntryNoCtx("duplicate", "primary")
+	terminal, err := participant.finish(primary)
+	require.True(t, terminal.complete)
+	require.Same(t, primary, err)
+	require.Same(t, primary, moerr.ConvertGoError(context.Background(), err))
 }
 
 func TestRemoteAllocationStatementGroupRejectsTopologyMismatch(t *testing.T) {

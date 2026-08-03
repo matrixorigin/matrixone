@@ -289,13 +289,16 @@ func (p *remoteAllocationStatementParticipant) finish(cause error) (
 		if group.finalized ||
 			(!group.expired && group.finished >= group.expected) ||
 			(group.expired && group.finished >= group.registered) {
-			p.err = errors.Join(p.err, mpool.ErrAllocationAccountInvariant)
+			p.err = joinAllocationLifecycleErrors(
+				p.err,
+				mpool.ErrAllocationAccountInvariant,
+			)
 			remoteAllocationStatementGroups.Unlock()
 			return
 		}
 		abort := cause != nil && !group.expired
 		if cause != nil {
-			group.err = errors.Join(group.err, cause)
+			group.err = joinAllocationLifecycleErrors(group.err, cause)
 			group.expired = true
 			if group.timer != nil {
 				group.timer.Stop()
@@ -323,15 +326,15 @@ func (p *remoteAllocationStatementParticipant) finish(cause error) (
 					group.board.Close()
 					return nil
 				})
-				abortErr = errors.Join(
+				abortErr = joinAllocationLifecycleErrors(
 					abortErr,
 					cancelRemoteAllocationStatementParticipants(cancels, cause),
 				)
 				if abortErr != nil {
 					remoteAllocationStatementGroups.Lock()
-					group.err = errors.Join(group.err, abortErr)
+					group.err = joinAllocationLifecycleErrors(group.err, abortErr)
 					remoteAllocationStatementGroups.Unlock()
-					p.err = errors.Join(p.err, abortErr)
+					p.err = joinAllocationLifecycleErrors(p.err, abortErr)
 				}
 			}
 		} else {
@@ -345,7 +348,7 @@ func (p *remoteAllocationStatementParticipant) finish(cause error) (
 				pools,
 				terminalErr,
 			)
-			p.err = errors.Join(p.err, terminalErr)
+			p.err = joinAllocationLifecycleErrors(p.err, terminalErr)
 		}
 	})
 	return p.terminal, p.err
@@ -369,7 +372,7 @@ func cancelRemoteAllocationStatementParticipants(
 	var err error
 	for _, cancel := range cancels {
 		if cancel != nil {
-			err = errors.Join(err, allocationLifecycleCall(func() error {
+			err = joinAllocationLifecycleErrors(err, allocationLifecycleCall(func() error {
 				cancel(cause)
 				return nil
 			}))
@@ -435,7 +438,7 @@ func completeRemoteAllocationStatementGroup(
 	remoteAllocationStatementTerminal,
 	error,
 ) {
-	terminalErr = errors.Join(
+	terminalErr = joinAllocationLifecycleErrors(
 		terminalErr,
 		allocationLifecycleCall(func() error {
 			group.board.CloseAndDrain()
@@ -453,10 +456,10 @@ func completeRemoteAllocationStatementGroup(
 	for _, attempt := range attempts {
 		snapshot, err := attempt.completeTerminal()
 		terminal.allocation = append(terminal.allocation, snapshot)
-		terminalErr = errors.Join(terminalErr, err)
+		terminalErr = joinAllocationLifecycleErrors(terminalErr, err)
 	}
 	for _, pool := range pools {
-		terminalErr = errors.Join(
+		terminalErr = joinAllocationLifecycleErrors(
 			terminalErr,
 			allocationLifecycleCall(func() error {
 				domain, quality := pool.ResourceSnapshot()
@@ -481,7 +484,7 @@ func expireRemoteAllocationStatementGroup(
 	timeoutErr := moerr.NewInternalErrorNoCtx(
 		"remote allocation statement group registration timed out",
 	)
-	group.err = errors.Join(group.err, timeoutErr)
+	group.err = joinAllocationLifecycleErrors(group.err, timeoutErr)
 	expected, registered, finished := group.expected, group.registered, group.finished
 	cancels := activeRemoteAllocationStatementCancelsLocked(group)
 	var attempts []*statementAllocationAttempt
@@ -502,7 +505,7 @@ func expireRemoteAllocationStatementGroup(
 			terminalErr,
 		)
 	} else {
-		terminalErr = errors.Join(
+		terminalErr = joinAllocationLifecycleErrors(
 			terminalErr,
 			allocationLifecycleCall(func() error {
 				group.board.Close()
@@ -511,11 +514,11 @@ func expireRemoteAllocationStatementGroup(
 		)
 	}
 	cancelErr := cancelRemoteAllocationStatementParticipants(cancels, timeoutErr)
-	terminalErr = errors.Join(terminalErr, cancelErr)
+	terminalErr = joinAllocationLifecycleErrors(terminalErr, cancelErr)
 	if !complete && cancelErr != nil {
 		remoteAllocationStatementGroups.Lock()
 		if !group.finalized {
-			group.err = errors.Join(group.err, cancelErr)
+			group.err = joinAllocationLifecycleErrors(group.err, cancelErr)
 		}
 		remoteAllocationStatementGroups.Unlock()
 	}

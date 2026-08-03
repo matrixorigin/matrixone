@@ -277,13 +277,13 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 				allocationParticipant.stage(allocationAttempt, memoryPool)
 				cause := err
 				if recovered != nil {
-					cause = errors.Join(
+					cause = joinAllocationLifecycleErrors(
 						cause,
 						moerr.ConvertPanicError(receiver.messageCtx, recovered),
 					)
 				}
 				_, terminalErr := allocationParticipant.finish(cause)
-				err = errors.Join(err, terminalErr)
+				err = joinAllocationLifecycleErrors(err, terminalErr)
 				participantFinished = true
 			}
 			if recovered != nil {
@@ -292,7 +292,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		}()
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				err = errors.Join(
+				err = joinAllocationLifecycleErrors(
 					err,
 					moerr.ConvertPanicError(receiver.messageCtx, recovered),
 				)
@@ -305,7 +305,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			var localDelta resource.Delta
 			var descendant remoteResourceSnapshot
 			var expectedDirect uint64
-			err = errors.Join(err, allocationLifecycleCall(func() error {
+			err = joinAllocationLifecycleErrors(err, allocationLifecycleCall(func() error {
 				localDelta = collectScopeResourceDelta(
 					runCompile.scopes,
 					receiver.cnInformation.cnAddr,
@@ -322,7 +322,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 				runCompile.allocationAttempt = nil
 			}
 			allocationParticipant.stage(allocationAttempt, memoryPool)
-			err = errors.Join(err, allocationLifecycleCall(func() error {
+			err = joinAllocationLifecycleErrors(err, allocationLifecycleCall(func() error {
 				if statementGroupEnabled {
 					// The remote statement group, rather than any one fragment Compile,
 					// owns the shared multi-CN board. Detach it before clear resets the
@@ -339,7 +339,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			}))
 			terminal, terminalErr := allocationParticipant.finish(err)
 			participantFinished = true
-			err = errors.Join(err, terminalErr)
+			err = joinAllocationLifecycleErrors(err, terminalErr)
 			for _, snapshot := range terminal.allocation {
 				localAllocationQuality |= localAllocation.AddGeneration(
 					snapshot.Peak,
@@ -350,7 +350,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			var localMemory resource.MemoryDomainSummary
 			var localMemoryQuality resource.QualityFlags
 			if !statementGroupEnabled {
-				err = errors.Join(err, allocationLifecycleCall(func() error {
+				err = joinAllocationLifecycleErrors(err, allocationLifecycleCall(func() error {
 					localMemory, localMemoryQuality = memoryPool.ResourceSnapshot()
 					return nil
 				}))

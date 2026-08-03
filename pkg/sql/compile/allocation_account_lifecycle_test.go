@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -39,6 +40,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestJoinAllocationLifecycleErrorsPreservesSingle(t *testing.T) {
+	primary := moerr.NewDuplicateEntryNoCtx("duplicate", "primary")
+	secondary := errors.New("cleanup failed")
+
+	require.Same(t, primary, joinAllocationLifecycleErrors(primary, nil))
+	require.Same(t, secondary, joinAllocationLifecycleErrors(nil, secondary))
+	require.Same(t, primary, joinAllocationLifecycleErrors(primary, primary))
+
+	joined := joinAllocationLifecycleErrors(primary, secondary)
+	require.ErrorIs(t, joined, primary)
+	require.ErrorIs(t, joined, secondary)
+}
 
 type allocationLifecycleErrorOperator struct {
 	*colexec.MockOperator
