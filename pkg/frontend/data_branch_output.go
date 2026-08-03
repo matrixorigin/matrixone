@@ -220,7 +220,7 @@ func newApplyBatchInfo(
 	deleteKeyNames := make([]string, len(deleteKeyColIdxes))
 	deleteStageNames := make([]string, len(deleteKeyColIdxes))
 	for i, idx := range deleteKeyColIdxes {
-		deleteKeyNames[i] = tblStuff.def.colNames[idx]
+		deleteKeyNames[i] = tblStuff.def.baseColNames[idx]
 		deleteStageNames[i] = fmt.Sprintf("branch_apply_key_%d", i)
 	}
 
@@ -230,7 +230,7 @@ func newApplyBatchInfo(
 	}
 	writableNames := make([]string, len(writableIdxes))
 	for i, idx := range writableIdxes {
-		writableNames[i] = tblStuff.def.colNames[idx]
+		writableNames[i] = tblStuff.def.baseColNames[idx]
 	}
 
 	seq := atomic.AddUint64(&diffTempTableSeq, 1)
@@ -1738,7 +1738,7 @@ func writeDeleteRowSQLFull(
 		if i > 0 {
 			buf.WriteString(" and ")
 		}
-		colName := quoteIdentifierForSQL(tblStuff.def.colNames[idx])
+		colName := quoteIdentifierForSQL(tblStuff.def.baseColNames[idx])
 		if row[idx] == nil {
 			buf.WriteString(colName)
 			buf.WriteString(" is null")
@@ -2219,10 +2219,10 @@ func writeInsertRowValues(
 	return nil
 }
 
-func quotedColumnNamesByIdxes(tblStuff tableStuff, idxes []int) []string {
+func quotedBaseColumnNamesByIdxes(tblStuff tableStuff, idxes []int) []string {
 	names := make([]string, len(idxes))
 	for i, idx := range idxes {
-		names[i] = quoteIdentifierForSQL(tblStuff.def.colNames[idx])
+		names[i] = quoteIdentifierForSQL(tblStuff.def.baseColNames[idx])
 	}
 	return names
 }
@@ -2513,7 +2513,7 @@ func flushSqlValues(
 				tblStuff.baseRel.GetTableDef(ctx).DbName,
 				tblStuff.baseRel.GetTableDef(ctx).Name,
 			),
-			strings.Join(quotedColumnNamesByIdxes(tblStuff, insertIdxes), ","),
+			strings.Join(quotedBaseColumnNamesByIdxes(tblStuff, insertIdxes), ","),
 		))
 	}
 
@@ -2525,10 +2525,10 @@ func flushSqlValues(
 					tblStuff.baseRel.GetTableDef(ctx).DbName,
 					tblStuff.baseRel.GetTableDef(ctx).Name,
 				),
-				quoteIdentifierForSQL(tblStuff.def.colNames[tblStuff.def.pkColIdx]),
+				quoteIdentifierForSQL(tblStuff.def.baseColNames[tblStuff.def.pkColIdx]),
 			))
 		} else {
-			pkNames := quotedColumnNamesByIdxes(tblStuff, tblStuff.def.pkColIdxes)
+			pkNames := quotedBaseColumnNamesByIdxes(tblStuff, tblStuff.def.pkColIdxes)
 			sqlBuffer.WriteString(fmt.Sprintf(
 				"delete from %s where (%s) in (",
 				qualifiedTableName(
