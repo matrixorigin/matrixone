@@ -255,8 +255,13 @@ func returningExprForbidden(expr *planpb.Expr) string {
 	case *planpb.Expr_V:
 		return "variable in RETURNING expression"
 	case *planpb.Expr_F:
-		if e.F != nil && e.F.Func != nil && function.GetFunctionIsVolatileOrRealTimeRelatedByName(e.F.Func.ObjName) {
-			return "volatile function in RETURNING expression"
+		if e.F != nil && e.F.Func != nil {
+			if strings.EqualFold(e.F.Func.ObjName, "python_user_defined_function") {
+				return "external UDF in RETURNING expression"
+			}
+			if function.GetFunctionIsVolatileOrRealTimeRelatedByName(e.F.Func.ObjName) {
+				return "volatile function in RETURNING expression"
+			}
 		}
 		for _, arg := range e.F.Args {
 			if feature := returningExprForbidden(arg); feature != "" {

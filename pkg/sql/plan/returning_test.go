@@ -21,8 +21,29 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
+
+type returningPythonUdfCompilerContext struct {
+	*MockCompilerContext
+}
+
+func (c *returningPythonUdfCompilerContext) ResolveUdf(name string, _ []*planpb.Expr) (*function.Udf, error) {
+	if name != "external_udf" {
+		return nil, nil
+	}
+	return &function.Udf{
+		Language: string(tree.PYTHON),
+		RetType:  "varchar",
+		Args:     []*function.Arg{{Name: "value", Type: "varchar"}},
+		ArgsType: []types.Type{types.T_varchar.ToType()},
+	}, nil
+}
 
 func TestDMLReturningPlansUseDedicatedStep(t *testing.T) {
 	tests := []struct {
@@ -72,6 +93,21 @@ func TestDMLReturningPlansUseDedicatedStep(t *testing.T) {
 			require.True(t, hasMutation, "RETURNING must not replace the base-table mutation")
 		})
 	}
+}
+
+func TestDMLReturningRejectsPythonUdf(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.Background(),
+		dialect.MYSQL,
+		"update nation set n_name = 'x' returning external_udf(n_name)",
+		1,
+	)
+	require.NoError(t, err)
+	defer stmts[0].Free()
+
+	ctx := &returningPythonUdfCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+	_, err = BuildPlan(ctx, stmts[0], false)
+	require.ErrorContains(t, err, "DML RETURNING does not support external UDF in RETURNING expression")
 }
 
 func TestDeleteReturningSinkScanPositionsSurvivePruning(t *testing.T) {
@@ -211,11 +247,13 @@ func TestDMLReturningForeignKeyRoutesFailClosed(t *testing.T) {
 		require.Equal(t, 1, countUpdateFkPlanNodes(logicPlan.GetQuery(), planpb.Node_MULTI_UPDATE))
 	})
 
-	t.Run("referenced parent update rejects legacy path", func(t *testing.T) {
+	t.Run("referenced parent update uses modern path", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareEmpDept(t, mock)
-		_, err := runOneStmt(mock, t, "update dept set deptno = 2 returning deptno")
-		require.ErrorContains(t, err, "DML RETURNING does not support legacy UPDATE path")
+		logicPlan, err := runOneStmt(mock, t, "update dept set deptno = 2 returning deptno")
+		require.NoError(t, err)
+		require.True(t, logicPlan.GetQuery().HasReturning)
+		require.True(t, logicPlan.GetQuery().HasForeignKeyAction)
 	})
 
 	t.Run("referenced parent delete rejects legacy path", func(t *testing.T) {
