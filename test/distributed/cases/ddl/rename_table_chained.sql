@@ -17,6 +17,12 @@ rename table t_live to t_tmp, t_shadow to t_live, t_tmp to t_shadow;
 select * from t_live;
 select * from t_shadow;
 
+-- #24499: a destination can be the source of the next rename pair
+create table t1 (a int, b int);
+insert into t1 values (24499, 3);
+rename table t1 to t2, t2 to t3;
+select * from t3;
+
 -- 2-pair rename (non-conflicting)
 drop table t_live, t_shadow;
 create table a (id int);
