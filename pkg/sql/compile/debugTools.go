@@ -58,7 +58,6 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.PreInsertSecondaryIndex: "pre insert 2nd",
 	vm.External:                "external",
 	vm.MongoScan:               "mongodb scan",
-	vm.Source:                  "source",
 	vm.Minus:                   "minus",
 	vm.Intersect:               "intersect",
 	vm.IntersectAll:            "intersect all",

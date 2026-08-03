@@ -844,6 +844,62 @@ func TestCompileShuffleJoinKeepsReusableLocalShuffle(t *testing.T) {
 		"reusing an existing probe partition must keep the single local fast path")
 }
 
+func TestCompileLocalShuffleJoinOnlySkipsProvenProbeShuffle(t *testing.T) {
+	const dop = int32(4)
+	tests := []struct {
+		name             string
+		method           plan.ShuffleMethod
+		shuffleType      plan.ShuffleType
+		wantProbeShuffle bool
+	}{
+		{
+			name:             "normal strategy repartitions probe",
+			method:           plan.ShuffleMethod_Normal,
+			wantProbeShuffle: true,
+		},
+		{
+			name:             "normal range strategy repartitions probe",
+			method:           plan.ShuffleMethod_Normal,
+			shuffleType:      plan.ShuffleType_Range,
+			wantProbeShuffle: true,
+		},
+		{
+			name:   "proved reuse keeps probe partition",
+			method: plan.ShuffleMethod_Reuse,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cn := engine.Node{Addr: "cn1:6001", Mcpu: int(dop)}
+			c := newCompileForShuffleJoinTest(t, engine.Nodes{cn})
+			node := newShuffleJoinTestNode(dop)
+			node.Stats.HashmapStats.ShuffleMethod = tt.method
+			node.Stats.HashmapStats.ShuffleType = tt.shuffleType
+			left := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+			right := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+			probe := newShuffleJoinTestScope(t, cn, int(dop))
+			build := newShuffleJoinTestScope(t, cn, int(dop))
+			originalProbeRoot := probe.RootOp
+
+			result := c.compileLocalShuffleJoin(
+				node, left, right, []*Scope{probe}, []*Scope{build},
+			)
+
+			require.Len(t, result, 1)
+			probeInput := result[0].RootOp.GetOperatorBase().GetChildren(0)
+			if tt.wantProbeShuffle {
+				require.IsType(t, &shuffle.Shuffle{}, probeInput)
+				probeShuffle := probeInput.(*shuffle.Shuffle)
+				require.Equal(t, int32(tt.shuffleType), probeShuffle.ShuffleType)
+				require.Same(t, originalProbeRoot, probeInput.GetOperatorBase().GetChildren(0))
+			} else {
+				require.Same(t, originalProbeRoot, probeInput)
+			}
+		})
+	}
+}
+
 func TestCompileShuffleJoinDistributesSinkScanHashbuild(t *testing.T) {
 	const dop = int32(2)
 	tests := []struct {

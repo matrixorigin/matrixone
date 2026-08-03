@@ -23,13 +23,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type expressionMemoryLeaseSlot struct {
-	tokens       []*process.HashBuildReservation
-	admittedPeak uint64
-	variableSize bool
+	tokens                   []*process.HashBuildReservation
+	admittedPeak             uint64
+	mayReplaceWithinBound    bool
+	recoveryPeak             uint64
+	recoveryMayReplace       bool
+	recoveryCandidate        uint64
+	recoveryCandidateReplace bool
 }
 
 // ExpressionMemoryLease couples one stable expression-executor set to the
@@ -46,12 +51,16 @@ type expressionMemoryLeaseSlot struct {
 // The owner must Free every executor and duplicate vector covered by the lease
 // before calling Release. A lease cannot cross statement budget generations.
 type ExpressionMemoryLease struct {
-	budget    *process.HashBuildBudgetGeneration
-	exprs     []*plan.Expr
-	executors []colexec.ExpressionExecutor
-	duplicate bool
-	slots     []expressionMemoryLeaseSlot
-	released  bool
+	budget              *process.HashBuildBudgetGeneration
+	exprs               []*plan.Expr
+	executors           []colexec.ExpressionExecutor
+	duplicate           bool
+	slots               []expressionMemoryLeaseSlot
+	recoveryReservation *process.HashBuildReservation
+	recoveryRows        int
+	recoveryReady       bool
+	recoveryReconcile   bool
+	released            bool
 }
 
 // NewBudgetedExpressionExecutors admits the mpool-backed capacity owned by
@@ -125,7 +134,7 @@ func NewBudgetedExpressionExecutors(
 			return nil, nil, process.ErrHashBuildBudgetInvalid
 		}
 		slot := &lease.slots[i]
-		slot.variableSize = expressionExecutorMayGrowWithinBound(expr)
+		slot.mayReplaceWithinBound = expressionExecutorMayGrowWithinBound(expr)
 		if len(slot.tokens) > 0 {
 			token := slot.tokens[0]
 			if retained == 0 {
@@ -168,7 +177,7 @@ func NewExpressionMemoryLease(
 			return nil, process.ErrHashBuildBudgetInvalid
 		}
 		lease.slots[i].admittedPeak = retained
-		lease.slots[i].variableSize = expressionExecutorMayGrowWithinBound(exprs[i])
+		lease.slots[i].mayReplaceWithinBound = expressionExecutorMayGrowWithinBound(exprs[i])
 		if retained == 0 {
 			continue
 		}
@@ -195,10 +204,29 @@ func expressionInitialOwnedBytes(expr *plan.Expr) (uint64, error) {
 	case *plan.Expr_List:
 		return expressionListInitialOwnedBytes(typed.List.GetList())
 	case *plan.Expr_F:
-		return expressionListInitialOwnedBytes(typed.F.GetArgs())
+		children, err := expressionListInitialOwnedBytes(typed.F.GetArgs())
+		if err != nil {
+			return 0, err
+		}
+		own := expressionFunctionInitialOwnedBytes(typed.F)
+		if children > math.MaxUint64-own {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		return children + own, nil
 	default:
 		return 0, nil
 	}
+}
+
+func expressionFunctionInitialOwnedBytes(fn *plan.Function) uint64 {
+	if fn == nil || fn.Func == nil {
+		return 0
+	}
+	fid, _ := function.DecodeOverloadID(fn.Func.Obj)
+	if fid == function.SERIAL || fid == function.SERIAL_FULL {
+		return types.DefaultPackerCapacity()
+	}
+	return 0
 }
 
 func expressionListInitialOwnedBytes(exprs []*plan.Expr) (uint64, error) {
@@ -214,6 +242,18 @@ func expressionListInitialOwnedBytes(exprs []*plan.Expr) (uint64, error) {
 }
 
 func expressionExecutorMayGrowWithinBound(expr *plan.Expr) bool {
+	return expressionExecutorMayGrowWithinSelection(expr, false)
+}
+
+// expressionExecutorMayGrowWithinSelection reports whether an executor tree
+// can replace retained mpool capacity without increasing its input row bound.
+// Varlena values can change size at the same row count. A function evaluated
+// through a partial flow-control mask can likewise grow its cached compacted
+// parameters and selected result when only the mask distribution changes.
+func expressionExecutorMayGrowWithinSelection(
+	expr *plan.Expr,
+	mayReceivePartialSelection bool,
+) bool {
 	if expr == nil {
 		return true
 	}
@@ -221,11 +261,20 @@ func expressionExecutorMayGrowWithinBound(expr *plan.Expr) bool {
 	case *plan.Expr_Col, *plan.Expr_Lit, *plan.Expr_T, *plan.Expr_Vec:
 		return false
 	case *plan.Expr_F:
-		if types.T(expr.Typ.Id).FixedLength() < 0 {
+		if typed.F == nil || types.T(expr.Typ.Id).FixedLength() < 0 ||
+			mayReceivePartialSelection {
 			return true
 		}
-		for _, arg := range typed.F.GetArgs() {
-			if expressionExecutorMayGrowWithinBound(arg) {
+		fid := int32(-1)
+		if typed.F.Func != nil {
+			fid, _ = function.DecodeOverloadID(typed.F.Func.Obj)
+		}
+		for i, arg := range typed.F.GetArgs() {
+			if expressionExecutorMayGrowWithinSelection(
+				arg,
+				expressionChildMayReceivePartialSelection(
+					fid, i, mayReceivePartialSelection),
+			) {
 				return true
 			}
 		}
@@ -235,7 +284,8 @@ func expressionExecutorMayGrowWithinBound(expr *plan.Expr) bool {
 			return true
 		}
 		for _, item := range typed.List.GetList() {
-			if expressionExecutorMayGrowWithinBound(item) {
+			if expressionExecutorMayGrowWithinSelection(
+				item, mayReceivePartialSelection) {
 				return true
 			}
 		}
@@ -244,6 +294,21 @@ func expressionExecutorMayGrowWithinBound(expr *plan.Expr) bool {
 		return types.T(expr.Typ.Id).FixedLength() < 0
 	default:
 		return true
+	}
+}
+
+func expressionChildMayReceivePartialSelection(
+	fid int32,
+	argument int,
+	parentMayReceivePartialSelection bool,
+) bool {
+	switch fid {
+	case function.IFF, function.CASE, function.COALESCE:
+		// The first argument inherits the caller's mask. Every later argument
+		// can receive a mask narrowed by an earlier condition/value.
+		return parentMayReceivePartialSelection || argument > 0
+	default:
+		return parentMayReceivePartialSelection
 	}
 }
 
@@ -319,6 +384,160 @@ func initialAllocationCapacity(required uint64) (uint64, error) {
 	return uint64(capacity), nil
 }
 
+// EnsureRunRecovery admits the complete expression-executor peak needed to
+// evaluate batches up to rows without another budget reservation. HashBuild
+// calls it before retaining a spillable batch, so spill can always evaluate a
+// key and release the first retained batch even when sibling workers consume
+// all remaining query headroom.
+//
+// Root executors run sequentially but retain their result capacities. The
+// first-run bound therefore replaces each root's old admitted capacity with
+// its target peak in evaluation order. Executors whose capacity can still
+// vary inside the same row bound (varlena values or flow-control selected
+// scratch) may always overlap one old result with one replacement. A stable
+// fixed-width root needs the same protection only until it has successfully
+// reached this row high water. One aggregate standby token covers the largest
+// such overlap instead of pessimistically reserving two copies for every root.
+func (l *ExpressionMemoryLease) EnsureRunRecovery(
+	proc *process.Process,
+	rows int,
+) error {
+	if l == nil {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	if l.released {
+		return process.ErrHashBuildReservationInactive
+	}
+	if rows < 0 || len(l.exprs) != len(l.executors) || len(l.slots) != len(l.executors) {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	if l.budget == nil || (l.recoveryReady && rows <= l.recoveryRows) {
+		return nil
+	}
+
+	var running uint64
+	for i := range l.slots {
+		retained, ok := colexec.ExpressionExecutorRetainedBytes(l.executors[i])
+		if !ok || retained > l.slots[i].admittedPeak {
+			return process.ErrHashBuildBudgetInvalid
+		}
+		if running > math.MaxUint64-l.slots[i].admittedPeak {
+			return process.ErrHashBuildBudgetInvalid
+		}
+		running += l.slots[i].admittedPeak
+	}
+
+	target := running
+	var replacementOverlap uint64
+	for i, expr := range l.exprs {
+		peak, err := expressionVectorPeak(proc, expr, rows, l.duplicate)
+		if err != nil {
+			return err
+		}
+		slot := &l.slots[i]
+		slot.recoveryCandidate = peak
+		slot.recoveryCandidateReplace = slot.mayReplaceWithinBound
+
+		allocation := peak
+		nextRetained := peak
+		if slot.admittedPeak > nextRetained {
+			// Executors retain reusable high-water capacity; evaluating a
+			// smaller variable-width value does not prove that old capacity was
+			// returned to mpool.
+			nextRetained = slot.admittedPeak
+		}
+		if !slot.mayReplaceWithinBound && peak <= slot.admittedPeak {
+			// A fixed-width executor whose high water already covers this row
+			// bound reuses its vectors and retains the existing capacity.
+			allocation = 0
+			nextRetained = slot.admittedPeak
+		} else if !slot.mayReplaceWithinBound {
+			// Until this exact high water has executed successfully, a smaller
+			// fixed-width result can still overlap its later replacement.
+			slot.recoveryCandidateReplace = true
+		}
+		if running > math.MaxUint64-allocation {
+			return process.ErrHashBuildBudgetInvalid
+		}
+		if candidate := running + allocation; candidate > target {
+			target = candidate
+		}
+		if running < slot.admittedPeak ||
+			running-slot.admittedPeak > math.MaxUint64-nextRetained {
+			return process.ErrHashBuildBudgetInvalid
+		}
+		running = running - slot.admittedPeak + nextRetained
+		if slot.recoveryCandidateReplace && peak > replacementOverlap {
+			replacementOverlap = peak
+		}
+	}
+	if running > math.MaxUint64-replacementOverlap {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	if repeated := running + replacementOverlap; repeated > target {
+		target = repeated
+	}
+
+	reserved := l.Reserved()
+	if target > reserved {
+		growth := target - reserved
+		if l.recoveryReservation == nil {
+			reservation, err := l.budget.Reserve(growth)
+			if err != nil {
+				return err
+			}
+			l.recoveryReservation = reservation
+		} else if err := l.recoveryReservation.Grow(growth); err != nil {
+			return err
+		}
+	}
+
+	for i := range l.slots {
+		l.slots[i].recoveryPeak = l.slots[i].recoveryCandidate
+		l.slots[i].recoveryMayReplace = l.slots[i].recoveryCandidateReplace
+	}
+	l.recoveryRows = rows
+	l.recoveryReady = true
+	return nil
+}
+
+func (l *ExpressionMemoryLease) reconcileRecoveryAfterRun() error {
+	if l == nil || l.recoveryReservation == nil {
+		return nil
+	}
+	var steady uint64
+	var replacementOverlap uint64
+	for i := range l.slots {
+		slot := &l.slots[i]
+		retained := slot.admittedPeak
+		if slot.recoveryPeak > retained {
+			retained = slot.recoveryPeak
+		}
+		if steady > math.MaxUint64-retained {
+			return process.ErrHashBuildBudgetInvalid
+		}
+		steady += retained
+		if slot.recoveryMayReplace && slot.recoveryPeak > replacementOverlap {
+			replacementOverlap = slot.recoveryPeak
+		}
+	}
+	if steady > math.MaxUint64-replacementOverlap {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	steady += replacementOverlap
+	reserved := l.Reserved()
+	if reserved <= steady {
+		return nil
+	}
+	release := reserved - steady
+	recoverySize := l.recoveryReservation.Size()
+	if release > recoverySize {
+		release = recoverySize
+	}
+	_, err := l.recoveryReservation.ReconcileDown(recoverySize - release)
+	return err
+}
+
 // Run admits and evaluates each root in index order. Growth keeps the root's
 // old retained charge live, reserves only the uncovered allocate-copy-free
 // overlap, and reconciles that overlap into the new high-water charge.
@@ -339,6 +558,49 @@ func (l *ExpressionMemoryLease) Run(
 	if rows < 0 {
 		return process.ErrHashBuildBudgetInvalid
 	}
+	if l.budget != nil && l.recoveryReady && rows <= l.recoveryRows {
+		for i, expr := range l.exprs {
+			peak := l.slots[i].recoveryPeak
+			if rows < l.recoveryRows {
+				var peakErr error
+				peak, peakErr = expressionVectorPeak(proc, expr, rows, l.duplicate)
+				if peakErr != nil {
+					return peakErr
+				}
+			}
+			evalErr := fn(i)
+			if l.released {
+				return evalErr
+			}
+			if peak > l.slots[i].admittedPeak {
+				l.slots[i].admittedPeak = peak
+			}
+			if evalErr == nil && !l.slots[i].mayReplaceWithinBound && rows == l.recoveryRows &&
+				l.slots[i].recoveryMayReplace {
+				l.slots[i].recoveryMayReplace = false
+				l.recoveryReconcile = true
+			}
+			if evalErr != nil {
+				return evalErr
+			}
+		}
+		if l.recoveryReconcile {
+			// Return only replacement headroom whose fixed-width root has reached
+			// the prepared row high water. Keep every retained capacity, every root
+			// still growing toward that high water, and variable replacement owned.
+			if err := l.reconcileRecoveryAfterRun(); err != nil {
+				return err
+			}
+			l.recoveryReconcile = false
+		}
+		return nil
+	}
+	if l.recoveryReady && rows > l.recoveryRows {
+		// A larger unprepared evaluation can change the retained-capacity
+		// state. Keep the standby token owned, but require the next recovery
+		// preflight to recompute its guarantee from that new state.
+		l.recoveryReady = false
+	}
 
 	for i, expr := range l.exprs {
 		if l.budget == nil {
@@ -353,7 +615,7 @@ func (l *ExpressionMemoryLease) Run(
 			return peakErr
 		}
 		slot := &l.slots[i]
-		if peak <= slot.admittedPeak && !slot.variableSize {
+		if peak <= slot.admittedPeak && !slot.mayReplaceWithinBound {
 			if err := fn(i); err != nil {
 				return err
 			}
@@ -445,6 +707,13 @@ func (l *ExpressionMemoryLease) Reserved() uint64 {
 			total += size
 		}
 	}
+	if l.recoveryReservation != nil {
+		size := l.recoveryReservation.Size()
+		if total > math.MaxUint64-size {
+			return math.MaxUint64
+		}
+		total += size
+	}
 	return total
 }
 
@@ -479,7 +748,18 @@ func (l *ExpressionMemoryLease) Release() {
 		}
 		l.slots[i].tokens = nil
 		l.slots[i].admittedPeak = 0
+		l.slots[i].recoveryPeak = 0
+		l.slots[i].recoveryMayReplace = false
+		l.slots[i].recoveryCandidate = 0
+		l.slots[i].recoveryCandidateReplace = false
 	}
+	if l.recoveryReservation != nil {
+		l.recoveryReservation.Release()
+		l.recoveryReservation = nil
+	}
+	l.recoveryRows = 0
+	l.recoveryReady = false
+	l.recoveryReconcile = false
 	l.slots = nil
 	l.exprs = nil
 	l.executors = nil

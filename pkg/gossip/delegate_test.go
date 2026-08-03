@@ -17,7 +17,6 @@ package gossip
 import (
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/hashicorp/memberlist"
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
@@ -221,114 +220,62 @@ func TestDelegateNotifyLeaveRemovesRoutesOwnedByDepartedNode(t *testing.T) {
 	assert.Equal(t, survivingAddr, receiver.getStatsInfoKey().Target(survivingStatsKey))
 }
 
-func TestDelegateStatsInfoStateDoesNotUseDataCacheMutex(t *testing.T) {
-	d := newDelegate(&zap.Logger{}, "127.0.0.1:8889")
-	d.dataCacheKey.mu.Lock()
-	d.statsInfoKey.mu.Lock()
+func TestDelegatePushPullStateDisabled(t *testing.T) {
+	const senderAddr = "127.0.0.1:8888"
+	sender := newDelegate(zap.NewNop(), senderAddr)
+	receiver := newDelegate(zap.NewNop(), "127.0.0.1:8889")
+	dataKey := query.CacheKey{Path: "data", Offset: 10, Sz: 20}
+	statsKey := statsinfo.StatsInfoKey{DatabaseID: 30, TableID: 40}
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		d.statsInfoState()
-	}()
-
-	d.statsInfoKey.mu.Unlock()
-	timer := time.NewTimer(10 * time.Second)
-	defer timer.Stop()
-	select {
-	case <-done:
-		d.dataCacheKey.mu.Unlock()
-	case <-timer.C:
-		d.dataCacheKey.mu.Unlock()
-		<-done
-		t.Fatal("statsInfoState blocked on dataCacheKey")
-	}
-}
-
-func TestDelegate_DataCache_LocalStateAndMergeRemoteState(t *testing.T) {
-	l, err := zap.NewDevelopment()
-	assert.NoError(t, err)
-	d1 := newDelegate(l, "127.0.0.1:8888")
-	d2 := newDelegate(l, "127.0.0.1:8889")
-
-	for i := 0; i < 10; i++ {
-		ck := query.CacheKey{
-			Path:   fmt.Sprintf("p%d", i),
-			Offset: int64(10 * i),
-			Sz:     int64(10 * i),
-		}
-		d1.getDataCacheKey().AddItem(gossip.CommonItem{
-			Operation: gossip.Operation_Set,
-			Key: &gossip.CommonItem_CacheKey{
-				CacheKey: &ck,
-			},
-		})
-		assert.Equal(t, i+1, len(d1.dataCacheKey.queueMu.itemQueue))
+	sender.getDataCacheKey().AddItem(gossip.CommonItem{
+		Operation: gossip.Operation_Set,
+		Key: &gossip.CommonItem_CacheKey{
+			CacheKey: &dataKey,
+		},
+	})
+	sender.getStatsInfoKey().AddItem(gossip.CommonItem{
+		Operation: gossip.Operation_Set,
+		Key: &gossip.CommonItem_StatsInfoKey{
+			StatsInfoKey: &statsKey,
+		},
+	})
+	for _, data := range sender.GetBroadcasts(4, 32*1024) {
+		receiver.NotifyMsg(data)
 	}
 
-	data := d1.GetBroadcasts(4, 32*1024)
-	assert.NotNil(t, data)
-
-	for _, single := range data {
-		d2.NotifyMsg(single)
+	assertRoutesUnchanged := func(t *testing.T) {
+		t.Helper()
+		receiver.dataCacheKey.mu.Lock()
+		assert.Equal(t, map[query.CacheKey]string{dataKey: senderAddr}, receiver.dataCacheKey.mu.keyTarget)
+		receiver.dataCacheKey.mu.Unlock()
+		receiver.statsInfoKey.mu.Lock()
+		assert.Equal(t, map[statsinfo.StatsInfoKey]string{statsKey: senderAddr}, receiver.statsInfoKey.mu.keyTarget)
+		receiver.statsInfoKey.mu.Unlock()
 	}
-	assert.Equal(t, 10, len(d2.dataCacheKey.mu.keyTarget))
+	assertRoutesUnchanged(t)
+	assert.Nil(t, receiver.LocalState(false))
+	assert.Nil(t, receiver.LocalState(true))
 
-	buf := d2.LocalState(false)
-	d2.MergeRemoteState(buf, true)
-	for i := 0; i < 15; i++ {
-		target := d2.getDataCacheKey().Target(query.CacheKey{
-			Path:   fmt.Sprintf("p%d", i),
-			Offset: int64(10 * i),
-			Sz:     int64(10 * i),
-		})
-		if i < 10 {
-			assert.Equal(t, "127.0.0.1:8888", target)
-		} else {
-			assert.Equal(t, "", target)
-		}
+	testCases := []struct {
+		name string
+		buf  []byte
+	}{
+		{name: "empty", buf: nil},
+		{name: "one-byte", buf: []byte{0x01}},
+		{name: "two-bytes", buf: []byte{0x01, 0x02}},
+		{name: "three-bytes", buf: []byte{0x01, 0x02, 0x03}},
+		{name: "four-bytes", buf: []byte{0x00, 0x00, 0x00, 0x00}},
+		{name: "random-bytes", buf: []byte{0x7a, 0x31, 0xf4, 0x09, 0x88, 0x42, 0xce}},
+		{name: "maximum-size-header", buf: []byte{0xff, 0xff, 0xff, 0xff}},
 	}
-}
-
-func TestDelegate_StatsInfo_LocalStateAndMergeRemoteState(t *testing.T) {
-	l, err := zap.NewDevelopment()
-	assert.NoError(t, err)
-	d1 := newDelegate(l, "127.0.0.1:8888")
-	d2 := newDelegate(l, "127.0.0.1:8889")
-
-	for i := 0; i < 10; i++ {
-		si := statsinfo.StatsInfoKey{
-			DatabaseID: uint64(i),
-			TableID:    uint64(10 * i),
-		}
-		d1.getStatsInfoKey().AddItem(gossip.CommonItem{
-			Operation: gossip.Operation_Set,
-			Key: &gossip.CommonItem_StatsInfoKey{
-				StatsInfoKey: &si,
-			},
-		})
-		assert.Equal(t, i+1, len(d1.statsInfoKey.queueMu.itemQueue))
-	}
-
-	data := d1.GetBroadcasts(4, 32*1024)
-	assert.NotNil(t, data)
-
-	for _, single := range data {
-		d2.NotifyMsg(single)
-	}
-	assert.Equal(t, 10, len(d2.statsInfoKey.mu.keyTarget))
-
-	buf := d2.LocalState(false)
-	d2.MergeRemoteState(buf, true)
-	for i := 0; i < 15; i++ {
-		target := d2.getStatsInfoKey().Target(statsinfo.StatsInfoKey{
-			DatabaseID: uint64(i),
-			TableID:    uint64(10 * i),
-		})
-		if i < 10 {
-			assert.Equal(t, "127.0.0.1:8888", target)
-		} else {
-			assert.Equal(t, "", target)
+	for _, join := range []bool{false, true} {
+		for _, testCase := range testCases {
+			t.Run(fmt.Sprintf("join=%t/%s", join, testCase.name), func(t *testing.T) {
+				assert.NotPanics(t, func() {
+					receiver.MergeRemoteState(testCase.buf, join)
+				})
+				assertRoutesUnchanged(t)
+			})
 		}
 	}
 }

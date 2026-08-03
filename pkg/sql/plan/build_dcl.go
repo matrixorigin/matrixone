@@ -268,11 +268,6 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 				addForeignKey(fk)
 			}
 		}
-		if ddl.IsDynamicTable {
-			if err := addQuerySchemas(ddl.AsSource); err != nil {
-				return nil, err
-			}
-		}
 	case *tree.CloneTable:
 		if clone := preparePlan.GetDdl().GetCloneTable(); clone != nil {
 			schemas = appendPrepareSchemas(schemas, prepareSchemaRefWithSnapshot(
@@ -283,10 +278,6 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 	switch ddl := stmt.(type) {
 	case *tree.CreateSequence:
 		if err := addDatabaseSchema(string(ddl.Name.SchemaName)); err != nil {
-			return nil, err
-		}
-	case *tree.CreateSource:
-		if err := addDatabaseSchema(string(ddl.SourceName.SchemaName)); err != nil {
 			return nil, err
 		}
 	case *tree.CloneTable:

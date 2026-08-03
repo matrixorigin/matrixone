@@ -366,6 +366,13 @@ func (m *blockStream) CreateCache(
 	panic("not implement")
 }
 
+func (m *blockStream) CreateCacheWithCancel(
+	context.Context,
+	uint64,
+	context.CancelFunc) (morpc.MessageCache, error) {
+	panic("not implement")
+}
+
 func (m *blockStream) DeleteCache(cacheID uint64) {
 	panic("not implement")
 }
@@ -403,6 +410,13 @@ func (m *brokenStream) Close() error {
 func (m *brokenStream) CreateCache(
 	ctx context.Context,
 	cacheID uint64) (morpc.MessageCache, error) {
+	panic("not implement")
+}
+
+func (m *brokenStream) CreateCacheWithCancel(
+	context.Context,
+	uint64,
+	context.CancelFunc) (morpc.MessageCache, error) {
 	panic("not implement")
 }
 
@@ -451,6 +465,13 @@ func (m *normalStream) Close() error {
 func (m *normalStream) CreateCache(
 	ctx context.Context,
 	cacheID uint64) (morpc.MessageCache, error) {
+	panic("not implement")
+}
+
+func (m *normalStream) CreateCacheWithCancel(
+	context.Context,
+	uint64,
+	context.CancelFunc) (morpc.MessageCache, error) {
 	panic("not implement")
 }
 

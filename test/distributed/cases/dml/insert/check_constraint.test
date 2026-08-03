@@ -1,0 +1,50 @@
+drop database if exists check_constraint_test;
+create database check_constraint_test;
+use check_constraint_test;
+
+create table t(
+    a int,
+    b varchar(10),
+    constraint positive_a check(a > 0),
+    constraint short_b check(length(b) < 5)
+);
+
+insert into t values (1, 'ok'), (null, null);
+insert into t values (-1, 'bad');
+insert into t values (2, 'too long');
+select * from t order by a, b;
+
+insert ignore into t values (-1, 'bad'), (3, 'yes');
+select * from t order by a, b;
+
+insert into t select * from (values row(4, 'four'), row(-2, 'bad')) as src;
+select * from t order by a, b;
+
+create table ctas_check(
+    a int constraint ctas_positive_a check(a > 0)
+) as select 5 as a;
+insert into ctas_check values (-1);
+select * from ctas_check;
+
+create table no_key_odku(
+    a int check(a > 0),
+    b varchar(10)
+);
+insert into no_key_odku(a, b) values (-1, 'bad')
+    on duplicate key update b = 'updated';
+select * from no_key_odku;
+
+create table replace_check(
+    id int primary key,
+    v int constraint positive_v check(v > 0)
+);
+insert into replace_check values (1, 10);
+replace into replace_check values (1, -1);
+select * from replace_check order by id;
+replace into replace_check values (2, -2);
+select * from replace_check order by id;
+replace into replace_check values (1, 20);
+replace into replace_check values (2, null);
+select * from replace_check order by id;
+
+drop database check_constraint_test;

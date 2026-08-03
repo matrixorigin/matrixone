@@ -16,6 +16,10 @@ package embed
 
 import "time"
 
+const (
+	testHAKeeperStoreTimeout = 60 * time.Second
+)
+
 func WithConfigs(
 	configs []string,
 ) Option {
@@ -43,12 +47,16 @@ func WithCNCount(
 func WithTesting() Option {
 	return func(c *cluster) {
 		c.options.testing = true
+		if c.options.storeTimeout == 0 {
+			c.options.storeTimeout = testHAKeeperStoreTimeout
+		}
 	}
 }
 
 // WithHAKeeperHeartbeatTimeout overrides the CN and TN HAKeeper heartbeat RPC
-// deadline for this embedded cluster. It is intended for integration tests that
-// run several services in one process under constrained CI resources.
+// deadline for this embedded cluster. Heartbeats are issued serially, so a
+// larger deadline also delays retries and command delivery after a failed RPC.
+// Use it only when the RPC response itself requires a longer deadline.
 func WithHAKeeperHeartbeatTimeout(timeout time.Duration) Option {
 	return func(c *cluster) {
 		c.options.heartbeatTimeout = timeout

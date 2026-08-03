@@ -52,6 +52,16 @@ var (
 	eventCDCRestartRequestStateUpdated   = logutil.Event{Name: "taskservice.cdc.restart.request-state-updated", Message: "CDC restart request state was updated"}
 )
 
+const (
+	// retiredKafkaSinkTaskCode is the reserved wire value formerly assigned to
+	// TaskCode_ConnectorKafkaSink. It is used only to fail closed persisted rows
+	// written by an older CN during a rolling upgrade; no business executor is
+	// registered for it.
+	retiredKafkaSinkTaskCode = task.TaskCode(4)
+	// Bound compatibility work so it cannot starve normal daemon dispatch.
+	retiredDaemonTaskBatchSize = 16
+)
+
 func cdcRestartEventFields(t task.DaemonTask, fields ...zap.Field) []zap.Field {
 	out := logutil.StringFingerprintFields("task-name", taskNameFromDetails(t))
 	out = append(out, logutil.StringFingerprintFields("task-id", strconv.FormatUint(t.ID, 10))...)
@@ -152,7 +162,12 @@ func (t *startTask) Handle(_ context.Context) error {
 					}, logutil.ErrorFingerprintFields("error", err)...)...)
 				})
 			} else {
-				t.runner.setDaemonTaskError(ctx, t.task, err)
+				// The admission update did not establish ownership. Do not write
+				// the pre-claim snapshot back as an executor error: the update may
+				// have failed after another runner or control request won.
+				t.runner.logger.Error("failed to claim daemon task",
+					zap.Uint64("task ID", t.task.task.ID),
+					zap.Error(err))
 			}
 			return
 		}
@@ -190,7 +205,7 @@ func (t *startTask) Handle(_ context.Context) error {
 }
 
 func taskNameFromDetails(t task.DaemonTask) string {
-	if t.Details.Details == nil {
+	if t.Details == nil || t.Details.Details == nil {
 		return ""
 	}
 	if d, ok := t.Details.Details.(*task.Details_CreateCdc); ok && d != nil && d.CreateCdc != nil {
@@ -558,20 +573,20 @@ func (r *taskRunner) filterUncompletedPauseTasks(tasks []task.DaemonTask) []task
 
 type cancelTask struct {
 	runner *taskRunner
-	task   *daemonTask
+	taskID uint64
 }
 
-func newCancelTask(r *taskRunner, t *daemonTask) *cancelTask {
+func newCancelTask(r *taskRunner, taskID uint64) *cancelTask {
 	return &cancelTask{
 		runner: r,
-		task:   t,
+		taskID: taskID,
 	}
 }
 
 func (t *cancelTask) Handle(ctx context.Context) error {
 	handleCtx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseCancelTaskHandle)
 	defer cancel()
-	tasks, err := t.runner.service.QueryDaemonTask(handleCtx, WithTaskIDCond(EQ, t.task.task.ID))
+	tasks, err := t.runner.service.QueryDaemonTask(handleCtx, WithTaskIDCond(EQ, t.taskID))
 	if err != nil {
 		return moerr.AttachCause(handleCtx, err)
 	}
@@ -595,19 +610,64 @@ func (t *cancelTask) Handle(ctx context.Context) error {
 			zap.String("current-status", tk.TaskStatus.String()))
 		return nil
 	}
-	tk.TaskStatus = task.TaskStatus_Canceled
-	tk.EndAt = time.Now()
-	_, err = t.runner.service.UpdateDaemonTask(handleCtx, []task.DaemonTask{tk})
+
+	// Revalidate dispatch eligibility against the current storage row. A queued
+	// handler must not retire a task that has since acquired a fresh foreign
+	// owner; that owner's runner is responsible for stopping its local routine.
+	now := time.Now()
+	heartbeatCutoff := now.Add(-t.runner.options.heartbeatTimeout)
+	localOwner := strings.EqualFold(tk.TaskRunner, t.runner.runnerID)
+	heartbeatExpired := tk.LastHeartbeat.IsZero() ||
+		!tk.LastHeartbeat.After(heartbeatCutoff)
+	if tk.TaskRunner != "" && !localOwner && !heartbeatExpired {
+		return nil
+	}
+
+	// Resolve the local generation at handling time, not at dispatch time. The
+	// task map is published before an executor attaches its ActiveRoutine, so a
+	// missing routine is an in-progress admission and must remain
+	// CancelRequested for the next poll. Likewise, a freshly claimed local task
+	// can be between the storage CAS and map publication. A removed executor can
+	// never complete such an admission and is safe to retire immediately.
+	localTask, hasLocalTask := t.runner.getDaemonTask(tk.ID)
+	var activeRoutine ActiveRoutine
+	if hasLocalTask {
+		ar := localTask.activeRoutine.Load()
+		if ar == nil || *ar == nil {
+			return nil
+		}
+		activeRoutine = *ar
+	} else if localOwner && !heartbeatExpired &&
+		t.runner.GetExecutor(tk.Metadata.Executor) != nil {
+		return nil
+	}
+
+	conditions := []Condition{
+		WithTaskStatusCond(task.TaskStatus_CancelRequested),
+		WithTaskRunnerCond(EQ, tk.TaskRunner),
+	}
+	if !localOwner {
+		// Reading an expired foreign lease is not authority to terminate it: the
+		// owner may renew between this handler's read and write. Fence that race
+		// in the same storage statement that makes the task terminal.
+		conditions = append(conditions, WithLastHeartbeat(LE, heartbeatCutoff.UnixNano()))
+	}
+	updated, err := t.runner.service.UpdateDaemonTaskStatus(
+		handleCtx,
+		tk.ID,
+		task.TaskStatus_Canceled,
+		now,
+		now,
+		conditions...,
+	)
 	if err != nil {
 		return moerr.AttachCause(handleCtx, err)
 	}
-	if t.runner.exists(tk.ID) {
-		ar := t.task.activeRoutine.Load()
-		if ar == nil || *ar == nil {
-			return moerr.NewInternalErrorf(handleCtx, "cannot handle cancel operation, "+
-				"active routine not set for task %d", t.task.task.ID)
-		}
-		return (*ar).Cancel()
+	if updated != 1 {
+		return nil
+	}
+	if activeRoutine != nil {
+		return activeRoutine.Cancel()
 	}
 	return nil
 }
@@ -701,6 +761,12 @@ func (r *taskRunner) newStartTask(t task.DaemonTask) {
 }
 
 func (r *taskRunner) dispatchTaskHandle(ctx context.Context) {
+	// The version upgrade performs the initial bulk retirement, while this
+	// reconciliation closes the supported rolling-upgrade window: an old CN may
+	// still insert code-4 tasks or write an unfenced pre-upgrade snapshot after
+	// that one-time migration commits.
+	r.reconcileRetiredDaemonTasks(ctx)
+
 	// Build handlers first, then enqueue outside daemonTasks lock usage
 	// to avoid lock + channel send blocking cycles.
 	handlers := make([]TaskHandler, 0, 16)
@@ -770,21 +836,55 @@ func (r *taskRunner) dispatchTaskHandle(ctx context.Context) {
 		}
 	}
 	for _, t := range r.cancelTasks(ctx) {
-		dt, ok := r.getDaemonTask(t.ID)
-		if ok {
-			handlers = append(handlers, newCancelTask(r, dt))
-		} else {
-			dt, err := r.newDaemonTask(t)
-			if err != nil {
-				r.logger.Error("failed to dispatch daemon task",
-					zap.Uint64("task ID", t.ID), zap.Error(err))
-				continue
-			}
-			handlers = append(handlers, newCancelTask(r, dt))
-		}
+		// Cancellation resolves the current local generation in Handle. Carrying
+		// a daemonTask snapshot across the dispatch queue would make an old
+		// generation look authoritative.
+		handlers = append(handlers, newCancelTask(r, t.ID))
 	}
 	for _, h := range handlers {
 		r.enqueue(h)
+	}
+}
+
+func (r *taskRunner) reconcileRetiredDaemonTasks(ctx context.Context) {
+	tasks := r.queryDaemonTasks(
+		ctx,
+		WithTaskExecutorCond(EQ, retiredKafkaSinkTaskCode),
+		WithTaskStatusCond(
+			task.TaskStatus_Created,
+			task.TaskStatus_Running,
+			task.TaskStatus_Paused,
+			task.TaskStatus_ResumeRequested,
+			task.TaskStatus_PauseRequested,
+			task.TaskStatus_RestartRequested,
+		),
+		WithLimitCond(retiredDaemonTaskBatchSize),
+	)
+	retiredAt := time.Now()
+	for _, observed := range tasks {
+		updateCtx, cancel := context.WithTimeout(ctx, r.options.fetchTimeout)
+		updated, err := r.service.UpdateDaemonTaskStatus(
+			updateCtx,
+			observed.ID,
+			task.TaskStatus_CancelRequested,
+			retiredAt,
+			time.Time{},
+			WithTaskExecutorCond(EQ, retiredKafkaSinkTaskCode),
+			WithTaskStatusCond(observed.TaskStatus),
+			WithTaskRunnerCond(EQ, observed.TaskRunner),
+		)
+		cancel()
+		if err != nil {
+			r.logger.Error("failed to retire removed daemon task",
+				zap.Uint64("task ID", observed.ID),
+				zap.Error(err))
+			continue
+		}
+		if updated == 1 {
+			r.logger.Info("retired removed daemon task",
+				zap.Uint64("task ID", observed.ID),
+				zap.String("previous status", observed.TaskStatus.String()))
+		}
 	}
 }
 
@@ -1049,6 +1149,10 @@ func (r *taskRunner) doSendHeartbeat(ctx context.Context) {
 
 func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask, restartClaim bool) (bool, error) {
 	t := dt.task
+	expectedStatus := t.TaskStatus
+	if restartClaim {
+		expectedStatus = task.TaskStatus_RestartRequested
+	}
 	t.TaskRunner = r.runnerID
 	t.TaskStatus = task.TaskStatus_Running
 	nowTime := time.Now()
@@ -1065,14 +1169,12 @@ func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask, restar
 	t.Details = cloneDaemonTaskDetails(t.Details)
 	t.Details.Error = ""
 
-	// When update the daemon task, add the condition that last heartbeat of
-	// the task must be timeout or be null, which means that other runners does
-	// NOT try to start this task.
+	// Claim only the state that was observed by the dispatcher, with a stale or
+	// null heartbeat. The status fence prevents an old start snapshot from
+	// overwriting a concurrent pause, cancel, or restart request.
 	conditions := []Condition{
+		WithTaskStatusCond(expectedStatus),
 		WithLastHeartbeat(LE, nowTime.UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
-	}
-	if restartClaim {
-		conditions = append(conditions, WithTaskStatusCond(task.TaskStatus_RestartRequested))
 	}
 	c, err := r.service.UpdateDaemonTask(ctx, []task.DaemonTask{t}, conditions...)
 	if err != nil {
@@ -1084,6 +1186,10 @@ func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask, restar
 		return false, nil
 	}
 
+	// Publish the claimed snapshot. All later heartbeat, error, and lifecycle
+	// writes must carry the generation's actual Running status and owner rather
+	// than the stale pre-claim dispatcher snapshot.
+	dt.task = t
 	r.addDaemonTask(dt)
 	return true, nil
 }
@@ -1098,12 +1204,23 @@ func (r *taskRunner) setDaemonTaskError(ctx context.Context, dt *daemonTask, err
 	t.Details.Error = errMsg.Error()
 	// TODO(volgariver6): if it is a retryable error, do not update the status,
 	// otherwise, set the status to Error.
-	_, err := r.service.UpdateDaemonTask(ctx, []task.DaemonTask{t})
+	updated, err := r.service.UpdateDaemonTask(
+		ctx,
+		[]task.DaemonTask{t},
+		WithTaskStatusCond(task.TaskStatus_Running),
+		WithTaskRunnerCond(EQ, r.runnerID),
+	)
 	if err != nil {
 		r.logger.Error("failed to set error message to task",
 			zap.Uint64("task ID", t.ID),
 			zap.String("error message", errMsg.Error()),
 			zap.Error(err))
+		return
+	}
+	if updated == 0 {
+		r.logger.Debug("skip stale daemon task error update",
+			zap.Uint64("task ID", t.ID),
+			zap.String("error message", errMsg.Error()))
 	}
 }
 

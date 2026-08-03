@@ -2497,8 +2497,14 @@ func TestCheckTxnTimeout(t *testing.T) {
 				}
 			}
 
-			l2.checkTxnTimeout(ctx)
-			require.True(t, l2.activeTxnHolder.empty())
+			// A recovery RPC timeout is deliberately indeterminate: the current
+			// scan must retain the transaction and a later scan retries it. Assert
+			// the scanner's eventual contract instead of requiring a cold recovery
+			// connection to be created within one 500ms attempt.
+			require.Eventually(t, func() bool {
+				l2.checkTxnTimeout(ctx)
+				return l2.activeTxnHolder.empty()
+			}, time.Second*10, time.Millisecond*10)
 		},
 		nil,
 	)
@@ -5709,8 +5715,28 @@ func TestLockWaitTimeoutExpiresDuringLockTableBindRPC(t *testing.T) {
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, services []*service) {
 			s := services[0]
+			const (
+				warmupTableID = uint64(24915)
+				targetTableID = uint64(24916)
+			)
+			// Establish allocator reachability and the normal-client backend before
+			// starting the lock-wait budget. The behavior under test is expiry while
+			// GetBind is in flight, not cold transport creation or service startup.
+			warmupCtx, cancelWarmup := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancelWarmup()
+			warmupTxnID := []byte("bind-rpc-warmup")
+			_, err := s.Lock(
+				warmupCtx,
+				warmupTableID,
+				[][]byte{{1}},
+				warmupTxnID,
+				newTestRowExclusiveOptions())
+			require.NoError(t, err)
+			require.NoError(t, s.Unlock(context.Background(), warmupTxnID, timestamp.Timestamp{}))
+
 			entered := make(chan struct{})
 			release := make(chan struct{})
+			var enteredOnce sync.Once
 			var releaseOnce sync.Once
 			releaseHandler := func() {
 				releaseOnce.Do(func() { close(release) })
@@ -5719,26 +5745,29 @@ func TestLockWaitTimeoutExpiresDuringLockTableBindRPC(t *testing.T) {
 			alloc.server.RegisterMethodHandler(
 				pb.Method_GetBind,
 				func(
-					context.Context,
-					context.CancelFunc,
-					*pb.Request,
-					*pb.Response,
-					morpc.ClientSession,
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession,
 				) {
-					close(entered)
+					if req.GetBind.Table != targetTableID {
+						alloc.handleGetBind(ctx, cancel, req, resp, cs)
+						return
+					}
+					enteredOnce.Do(func() { close(entered) })
 					<-release
 				})
 
 			options := newTestRowExclusiveOptions()
 			options.LockWaitTimeout = 60
-			options.LockWaitDeadline = time.Now().Add(100 * time.Millisecond).UnixNano()
+			options.LockWaitDeadline = time.Now().Add(time.Second).UnixNano()
 			txnID := []byte("bind-rpc-waiter")
 			resultC := make(chan error, 1)
-			start := time.Now()
 			go func() {
 				_, err := s.Lock(
 					context.Background(),
-					24916,
+					targetTableID,
 					[][]byte{{1}},
 					txnID,
 					options)
@@ -5747,16 +5776,21 @@ func TestLockWaitTimeoutExpiresDuringLockTableBindRPC(t *testing.T) {
 
 			select {
 			case <-entered:
-			case <-time.After(time.Second):
-				require.Fail(t, "lock request did not reach the allocator")
+			case err := <-resultC:
+				require.FailNowf(
+					t,
+					"lock request returned before entering allocator RPC",
+					"error=%v",
+					err)
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "lock request did not reach the allocator")
 			}
 			select {
 			case err := <-resultC:
 				require.ErrorIs(t, err, ErrLockTimeout)
-				require.Less(t, time.Since(start), time.Second)
-			case <-time.After(2 * time.Second):
+			case <-time.After(5 * time.Second):
 				releaseHandler()
-				require.Fail(t, "lock budget did not cancel the allocator RPC")
+				require.FailNow(t, "lock budget did not cancel the allocator RPC")
 			}
 			releaseHandler()
 			require.NoError(t, s.Unlock(context.Background(), txnID, timestamp.Timestamp{}))

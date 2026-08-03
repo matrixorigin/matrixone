@@ -680,7 +680,7 @@ func makePlan2CastExprWithName(ctx context.Context, expr *Expr, targetType Type,
 		return nil, moerr.NewInvalidInput(ctx, "nil expression in cast")
 	}
 	var rewritten bool
-	expr, rewritten, err = rewriteEnumDisplayValueToJSONCast(ctx, expr, targetType)
+	expr, rewritten, err = rewriteMySQLSpecialTypeDisplayCast(ctx, expr, targetType)
 	if err != nil {
 		return nil, err
 	}

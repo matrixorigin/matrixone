@@ -660,6 +660,37 @@ func TestSetDisplayValueToJSONUsesJSONQuoteInPlannerCasts(t *testing.T) {
 	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
 }
 
+func TestSetDisplayValueNumericCastUsesStoredBitmap(t *testing.T) {
+	raw := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_uint64), Enumvalues: ",a"},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 1,
+			ColPos: 2,
+		}},
+	}
+	displayExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: moSetCastIndexToValueFun},
+			Args: []*plan.Expr{{}, raw},
+		}},
+	}
+
+	for _, target := range []plan.Type{
+		{Id: int32(types.T_int64)},
+		{Id: int32(types.T_uint64)},
+	} {
+		got, rewritten, err := rewriteMySQLSpecialTypeDisplayCast(
+			NewMockCompilerContext(true).GetContext(), displayExpr, target,
+		)
+		require.NoError(t, err)
+		require.False(t, rewritten)
+		require.Equal(t, raw.GetCol(), got.GetCol())
+		require.Empty(t, got.Typ.Enumvalues)
+		require.NotSame(t, raw, got)
+	}
+}
+
 func TestJSONSourceCastsAreNotSkipped(t *testing.T) {
 	ctx := NewMockCompilerContext(true).GetContext()
 	jsonExpr := &plan.Expr{
