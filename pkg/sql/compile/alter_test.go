@@ -303,19 +303,6 @@ func TestCheckViewMetadataCandidateLimit(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 }
 
-func TestCheckViewMetadataRefreshLimit(t *testing.T) {
-	require.NoError(t, checkViewMetadataRefreshLimit(
-		context.Background(),
-		maxViewsPerMetadataRefresh,
-	))
-	err := checkViewMetadataRefreshLimit(
-		context.Background(),
-		maxViewsPerMetadataRefresh+1,
-	)
-	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
-}
-
 func TestViewColumnsEqual(t *testing.T) {
 	col := func(name string, typ plan2.Type) *plan2.ColDef {
 		return &plan2.ColDef{Name: name, Typ: typ}

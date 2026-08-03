@@ -48,6 +48,15 @@ create table recreated_pending_source (b decimal(11, 2));
 -- @ignore:5,6
 desc recreated_pending_view;
 
+create table recreated_view_source (b int);
+create view recreated_view_base as select b from recreated_view_source;
+create view recreated_view_dependent as select b from recreated_view_base;
+drop view recreated_view_base;
+alter table recreated_view_source modify column b decimal(12, 4);
+create view recreated_view_base as select b from recreated_view_source;
+-- @ignore:5,6
+desc recreated_view_dependent;
+
 create table ambiguity_left (a int);
 create table ambiguity_right (b int);
 create view ambiguity_view as

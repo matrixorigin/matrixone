@@ -115,6 +115,42 @@ func Test_doCreatePublication(t *testing.T) {
 	})
 }
 
+func TestDoCreatePublicationRetriesPendingViewMetadataInTransaction(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	})
+	bh := &backgroundExecTest{}
+	bh.init()
+	backgroundStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer backgroundStub.Reset()
+	createStub := gostub.Stub(&createPublicationFunc, func(context.Context, BackgroundExec, *tree.CreatePublication) error {
+		return nil
+	})
+	defer createStub.Reset()
+	retryErr := moerr.NewInternalErrorNoCtx("pending view refresh failed")
+	retried := false
+	retryStub := gostub.Stub(&retryPendingViewMetadataFunc, func(context.Context, *Session, BackgroundExec) error {
+		retried = true
+		return retryErr
+	})
+	defer retryStub.Reset()
+
+	err := doCreatePublication(ctx, ses, &tree.CreatePublication{})
+	require.ErrorIs(t, err, retryErr)
+	require.True(t, retried)
+	require.Contains(t, bh.executedSQLs, "rollback;")
+	require.NotContains(t, bh.executedSQLs, "commit;")
+}
+
 func Test_showTablesFromDbQuotesDatabaseName(t *testing.T) {
 	testCases := []struct {
 		name        string

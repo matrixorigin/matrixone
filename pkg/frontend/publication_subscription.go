@@ -225,6 +225,8 @@ var (
 	}
 )
 
+var createPublicationFunc = createPublication
+
 func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePublication) (err error) {
 	start := time.Now()
 	defer func() {
@@ -247,7 +249,10 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 	}()
 
 	ctx = defines.AttachAccount(ctx, tenantInfo.TenantID, tenantInfo.GetUserID(), tenantInfo.GetDefaultRoleID())
-	return createPublication(ctx, bh, cp)
+	if err = createPublicationFunc(ctx, bh, cp); err != nil {
+		return err
+	}
+	return retryPendingViewMetadataFunc(ctx, ses, bh)
 }
 
 // createPublication creates a publication, bh should be in a transaction

@@ -114,7 +114,6 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 	eng.relationsByID[1] = stubRelationByID{database: "db", table: "source", relation: source}
 
 	proc := testutil.NewProcess(t)
-	dependentViews := 0
 	proc.Ctx = context.WithValue(
 		context.Background(),
 		defines.ViewMetadataRefreshKey{},
@@ -122,7 +121,6 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 			sourceAccountID:      7,
 			sourceLogicalID:      9,
 			currentSourceTableID: 1,
-			dependentViews:       &dependentViews,
 			targetViewID:         1,
 			targetViewVersion:    oldDef.GetVersion(),
 			targetViewDefinition: oldDef.GetViewSql().GetView(),
@@ -140,7 +138,6 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 	}}}}
 
 	require.NoError(t, s.AlterView(c))
-	require.Equal(t, 1, dependentViews)
 	require.Len(t, rel.alterReqs, 1)
 	require.Equal(t, api.AlterKind_ReplaceDef, rel.alterReqs[0].GetKind())
 	replaced := rel.alterReqs[0].GetReplaceDef().GetDef()
@@ -162,16 +159,18 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 	refresh.targetViewDefinition = replaced.GetViewSql().GetView()
 	proc.Ctx = context.WithValue(proc.Ctx, defines.ViewMetadataRefreshKey{}, refresh)
 	require.NoError(t, s.AlterView(c))
-	require.Equal(t, 2, dependentViews)
 	require.Empty(t, rel.alterReqs, "unchanged refresh must not advance the view schema")
 	require.Equal(t, 2, tableLockCalls)
 	require.Zero(t, dependencyLockCalls, "automatic refresh must not invert source-table lock order")
+	for i := 0; i < 1025; i++ {
+		require.NoError(t, s.AlterView(c), "catalog size must not impose a semantic dependent-view limit")
+	}
+	expectedTableLockCalls := 2 + 1025
 
 	refreshedViewSQL := newDef.GetViewSql().GetView()
 	newDef.ViewSql.View = `{"Stmt":"alter view v as select a from unrelated","dependencies":[{"account_id":8,"account_id_set":true,"table_id":2,"logical_id":2,"version":1}]}`
 	require.NoError(t, s.AlterView(c))
-	require.Equal(t, 2, dependentViews, "false text candidates must not consume the dependent-view limit")
-	require.Equal(t, 2, tableLockCalls, "false text candidates must not acquire a view lock")
+	require.Equal(t, expectedTableLockCalls, tableLockCalls, "false text candidates must not acquire a view lock")
 	newDef.ViewSql.View = refreshedViewSQL
 
 	rel.tableDef.ViewSql.View = `{"Stmt":"alter view v as select a from concurrently_changed"}`

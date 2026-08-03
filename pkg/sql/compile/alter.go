@@ -1928,7 +1928,6 @@ type viewMetadataRefreshContext struct {
 	sourceAccountID      uint32
 	sourceLogicalID      uint64
 	currentSourceTableID uint64
-	dependentViews       *int
 	confirmed            *bool
 	targetViewID         uint64
 	targetViewVersion    uint32
@@ -2014,7 +2013,6 @@ func wrapViewMetadataRefreshPlanError(ctx context.Context, err error) error {
 }
 
 const (
-	maxViewsPerMetadataRefresh            = 1024
 	maxLegacyCandidatesPerMetadataRefresh = 16 * 1024
 )
 
@@ -2064,7 +2062,6 @@ func refreshViewMetadataAfterAlter(
 	sourceTable string,
 	onlyPending bool,
 ) error {
-	var dependentViews int
 	var examinedCandidates int
 	subscriptionsByAccount := make(map[uint32]currentViewSubscriptionResolver)
 	sources := []viewMetadataRefreshSource{{
@@ -2177,10 +2174,10 @@ func refreshViewMetadataAfterAlter(
 					refreshCtx,
 					defines.ViewMetadataRefreshKey{},
 					viewMetadataRefreshContext{
+						retry:                onlyPending,
 						sourceAccountID:      source.accountID,
 						sourceLogicalID:      source.logicalID,
 						currentSourceTableID: source.currentID,
-						dependentViews:       &dependentViews,
 						confirmed:            &confirmed,
 						targetViewID:         view.id,
 						targetViewVersion:    view.version,
@@ -2466,17 +2463,6 @@ func loadSnapshotViewSubscription(
 		return nil, nil
 	}
 	return subscriptions[0], nil
-}
-
-func checkViewMetadataRefreshLimit(ctx context.Context, count int) error {
-	if count <= maxViewsPerMetadataRefresh {
-		return nil
-	}
-	return moerr.NewInvalidInputf(
-		ctx,
-		"alter table affects more than %d dependent views",
-		maxViewsPerMetadataRefresh,
-	)
 }
 
 func loadViewMetadataRefreshPage(

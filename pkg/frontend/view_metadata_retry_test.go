@@ -243,6 +243,26 @@ func TestHandleCreateFunctionRetriesPendingViewMetadata(t *testing.T) {
 	require.True(t, retried)
 }
 
+func TestHandleCreateFunctionIgnoresPostCommitMetadataRetryError(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	bh := &backgroundExecTest{}
+	bh.init()
+	backgroundStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer backgroundStub.Reset()
+	initStub := gostub.StubFunc(&initFunctionFunc, nil)
+	defer initStub.Reset()
+	retryErr := moerr.NewInternalErrorNoCtx("catalog refresh failed after commit")
+	retryStub := gostub.Stub(&retryPendingViewMetadataFunc, func(context.Context, *Session, BackgroundExec) error {
+		return retryErr
+	})
+	defer retryStub.Reset()
+
+	require.NoError(t, handleCreateFunction(ses, &ExecCtx{reqCtx: ctx}, &tree.CreateFunction{}))
+}
+
 func resetPendingViewMetadataCursor(t *testing.T) {
 	pendingViewMetadataCursor.Lock()
 	oldAccountID := pendingViewMetadataCursor.accountID

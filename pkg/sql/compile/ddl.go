@@ -480,15 +480,6 @@ func (s *Scope) AlterView(c *Compile) error {
 		if !viewMetadataRefreshGenerationMatches(c.proc.Ctx, rel, refresh) {
 			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 		}
-		if refresh.dependentViews != nil {
-			*refresh.dependentViews = *refresh.dependentViews + 1
-			if err := checkViewMetadataRefreshLimit(
-				c.proc.Ctx,
-				*refresh.dependentViews,
-			); err != nil {
-				return err
-			}
-		}
 		if refresh.confirmed != nil {
 			*refresh.confirmed = true
 		}
@@ -2620,7 +2611,29 @@ func (s *Scope) CreateView(c *Compile) error {
 		)
 		return err
 	}
-	return nil
+	createdView, err := dbSource.Relation(c.proc.Ctx, viewName, nil)
+	if err != nil {
+		return err
+	}
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	createdDef := createdView.GetTableDef(c.proc.Ctx)
+	logicalID := createdDef.GetLogicalId()
+	if logicalID == 0 {
+		logicalID = createdView.GetTableID(c.proc.Ctx)
+	}
+	return refreshViewMetadataAfterAlter(
+		c,
+		accountID,
+		logicalID,
+		createdView.GetTableID(c.proc.Ctx),
+		createdView.GetTableID(c.proc.Ctx),
+		dbName,
+		viewName,
+		true,
+	)
 }
 
 func lockAndValidateViewDependencies(c *Compile, viewDef *plan.ViewDef) error {

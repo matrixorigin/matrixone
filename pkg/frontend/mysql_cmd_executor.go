@@ -2407,7 +2407,12 @@ func handleCreateFunction(ses FeSession, execCtx *ExecCtx, cf *tree.CreateFuncti
 	}
 	bh := ses.GetBackgroundExec(execCtx.reqCtx)
 	defer bh.Close()
-	return retryPendingViewMetadataFunc(execCtx.reqCtx, ses.(*Session), bh)
+	if err := retryPendingViewMetadataFunc(execCtx.reqCtx, ses.(*Session), bh); err != nil {
+		// InitFunction commits its own transaction before returning. Metadata
+		// recovery must not turn a committed CREATE FUNCTION into a failure.
+		logutil.Warn("failed to retry pending view metadata after create function", zap.Error(err))
+	}
+	return nil
 }
 
 func handleDropFunction(ses FeSession, execCtx *ExecCtx, df *tree.DropFunction, proc *process.Process) error {

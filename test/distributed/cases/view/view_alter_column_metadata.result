@@ -46,6 +46,15 @@ desc recreated_pending_view;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  DECIMAL(11,2)  ¦  YES  ¦    ¦  null  ¦    ¦
+create table recreated_view_source (b int);
+create view recreated_view_base as select b from recreated_view_source;
+create view recreated_view_dependent as select b from recreated_view_base;
+drop view recreated_view_base;
+alter table recreated_view_source modify column b decimal(12, 4);
+create view recreated_view_base as select b from recreated_view_source;
+desc recreated_view_dependent;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+b  ¦  DECIMAL(12,4)  ¦  YES  ¦    ¦  null  ¦    ¦
 create table ambiguity_left (a int);
 create table ambiguity_right (b int);
 create view ambiguity_view as
