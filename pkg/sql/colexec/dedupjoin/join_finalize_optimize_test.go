@@ -40,6 +40,7 @@ func runFinalizeFixture(
 	buildBat, probeBat *batch.Batch,
 ) []*batch.Batch {
 	t.Helper()
+	installTestAllocation(t, dedupArg, buildArg)
 
 	buildArg.Children = nil
 	buildArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBat}))

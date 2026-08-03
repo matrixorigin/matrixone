@@ -1080,6 +1080,74 @@ func TestMergeOrderResetAndOpType(t *testing.T) {
 	arg.Free(proc, false, nil)
 }
 
+func TestMergeOrderResetReleasesAccountedResult(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	result := batch.NewOffHeapWithSize(1)
+	result.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	require.NoError(t, result.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(result.Vecs[0], int64(1), false, proc.Mp()))
+	result.SetRowCount(1)
+	require.Positive(t, account.Snapshot().Used)
+
+	arg := &MergeOrder{}
+	arg.ctr.buf = result
+	arg.Reset(proc, false, nil)
+	require.Nil(t, arg.ctr.buf)
+	require.Zero(t, account.Snapshot().Used)
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestRemoveInMemoryBatchReleasesAccountedBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	input := batch.NewOffHeapWithSize(2)
+	for i := range input.Vecs {
+		input.Vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	}
+	require.NoError(t, input.SetAllocationAccount(selection))
+	for i := range 17 {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(i), false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(i), false, proc.Mp()))
+	}
+	input.SetRowCount(17)
+	require.Positive(t, account.Snapshot().Used)
+
+	ctr := container{
+		batchList:     []*batch.Batch{input},
+		orderCols:     [][]*vector.Vector{{input.Vecs[0]}},
+		indexList:     []int64{17},
+		spillMemUsage: int64(input.Size()),
+	}
+	require.NoError(t, ctr.removeInMemoryBatch(proc, 0))
+	require.Nil(t, ctr.batchList[0])
+	require.Nil(t, ctr.orderCols[0])
+	require.Zero(t, ctr.spillMemUsage)
+	require.Zero(t, account.Snapshot().Used)
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestSpillHelperBranches(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer func() {

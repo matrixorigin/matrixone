@@ -18,8 +18,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,12 +35,20 @@ const (
 )
 
 type container struct {
-	state    int
-	probeIdx int
-	bat      *batch.Batch
-	rbat     *batch.Batch
-	inBat    *batch.Batch
+	state       int
+	buildBatIdx int
+	buildRowIdx int
+	rbat        *batch.Batch
+	inBat       *batch.Batch
+	mp          *message.JoinMap
 }
+
+const (
+	productAllocationSiteResultData mpool.AllocationSite = iota + 94
+	productAllocationSiteResultArea
+	productAllocationSiteResultNulls
+	productAllocationSiteResultGrouping
+)
 
 type Product struct {
 	ctr        container
@@ -45,11 +56,60 @@ type Product struct {
 	IsShuffle  bool
 	JoinMapTag int32
 
+	allocationAccount *mpool.AllocationAccount
+	resultAllocation  *vector.AllocationAccountSelection
+
 	vm.OperatorBase
 }
 
 func (product *Product) GetOperatorBase() *vm.OperatorBase {
 	return &product.OperatorBase
+}
+
+func (product *Product) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if account == nil || account.Handle() == 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if product.allocationAccount != nil &&
+		product.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if product.allocationAccount == account {
+		return nil
+	}
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		hashbuild.HashBuildAllocationOwner,
+		productAllocationSiteResultData,
+		productAllocationSiteResultArea,
+		productAllocationSiteResultNulls,
+		productAllocationSiteResultGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	product.allocationAccount = account
+	product.resultAllocation = selection
+	return nil
+}
+
+func (product *Product) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if product.allocationAccount == nil {
+		return nil
+	}
+	if product.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if product.ctr.mp != nil || product.ctr.rbat != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	product.allocationAccount = nil
+	product.resultAllocation = nil
+	return nil
 }
 
 func init() {
@@ -80,15 +140,8 @@ func (product *Product) Release() {
 }
 
 func (product *Product) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	if product.ctr.bat != nil {
-		product.ctr.bat.CleanOnlyData()
-	}
-	if product.ctr.rbat != nil {
-		product.ctr.rbat.CleanOnlyData()
-	}
-	product.ctr.inBat = nil
+	product.ctr.cleanBatch(proc.Mp())
 	product.ctr.state = Build
-	product.ctr.probeIdx = 0
 }
 
 func (product *Product) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -100,13 +153,15 @@ func (product *Product) ExecProjection(proc *process.Process, input *batch.Batch
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
-	}
 	if ctr.rbat != nil {
 		ctr.rbat.Clean(mp)
 		ctr.rbat = nil
 	}
+	if ctr.mp != nil {
+		ctr.mp.Free()
+		ctr.mp = nil
+	}
 	ctr.inBat = nil
+	ctr.buildBatIdx = 0
+	ctr.buildRowIdx = 0
 }
