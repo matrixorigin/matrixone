@@ -8,31 +8,31 @@ set @suffix = 'b';
 set @id = 1;
 execute s1 using @suffix, @id;
 select length(txt) from t1;
-length(txt)
+➤ length(txt)[-5,64,0]  𝄀
 261
 update t1 set txt = null where id = 1;
 execute s1 using @suffix, @id;
 select txt from t1;
-txt
+➤ txt[12,0,0]  𝄀
 b
 update t1 set txt = repeat('c', 260) where id = 1;
 update t1 set txt = case when id = 1 then concat(txt, 'd') else '' end where id = 1;
 select length(txt) from t1;
-length(txt)
+➤ length(txt)[-5,64,0]  𝄀
 261
 update t1 set txt = repeat('e', 260) where id = 1;
 update t1 set txt = if(id = 1, concat(txt, 'f'), '') where id = 1;
 select length(txt) from t1;
-length(txt)
+➤ length(txt)[-5,64,0]  𝄀
 261
 update t1 set txt = repeat('g', 260), vc = null where id = 1;
 update t1 set txt = concat(coalesce(vc, txt, ''), 'h') where id = 1;
 select length(txt) from t1;
-length(txt)
+➤ length(txt)[-5,64,0]  𝄀
 261
 update t1 set txt = repeat('i', 260) where id = 1;
 select length(cast(txt as varchar(255))) from t1;
-length(cast(txt as varchar(255)))
+➤ length(cast(txt as varchar(255)))[-5,64,0]  𝄀
 255
 update t1 set txt = repeat('j', 260), vc = null where id = 1;
 insert into t1(id, vc) select 2, txt from t1 where id = 1;
@@ -48,24 +48,24 @@ create table t_multi(id int primary key, txt text);
 insert into t_multi values(1, repeat('a', 260)), (2, 'short');
 update t_multi set txt = concat(coalesce(txt, ''), 'x');
 select length(txt) from t_multi order by id;
-length(txt)
-261
+➤ length(txt)[-5,64,0]  𝄀
+261  𝄀
 6
 drop table t_multi;
 drop table if exists t_gen;
 create table t_gen(id int primary key, t text, g varchar(1) generated always as (coalesce(t, '')) stored);
 insert into t_gen(id, t) values (1, 'x');
 select length(g) from t_gen order by id;
-length(g)
+➤ length(g)[-5,64,0]  𝄀
 1
 insert into t_gen(id, t) values (2, 'ab');
 Data truncation: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 2 is larger than Dest length 1
 update t_gen set t = 'cd' where id = 1;
-Data truncation: Can't cast 'cd' to VARCHAR type. Src length 2 is larger than Dest length 1
+Data truncation: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 2 is larger than Dest length 1
 replace into t_gen(id, t) values (1, 'ef');
 Data truncation: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 2 is larger than Dest length 1
 select length(g) from t_gen order by id;
-length(g)
+➤ length(g)[-5,64,0]  𝄀
 1
 drop table t_gen;
 drop table t1;
