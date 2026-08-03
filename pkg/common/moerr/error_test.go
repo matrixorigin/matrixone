@@ -116,6 +116,14 @@ func TestWindowInvalidUseMySQLError(t *testing.T) {
 	require.Equal(t, "You cannot use the window function 'row_number' in this context", err.Error())
 }
 
+func TestViewSelectTmpTableMySQLError(t *testing.T) {
+	err := NewViewSelectTmpTable(context.Background(), "temp_for_view")
+	require.Equal(t, ErrViewSelectTmpTable, err.ErrorCode())
+	require.Equal(t, ER_VIEW_SELECT_TMPTABLE, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t, "View's SELECT refers to a temporary table 'temp_for_view'", err.Error())
+}
+
 func TestLockWaitTimeoutMySQLError(t *testing.T) {
 	err := NewLockWaitTimeout(context.Background())
 	require.Equal(t, ErrLockWaitTimeout, err.ErrorCode())
