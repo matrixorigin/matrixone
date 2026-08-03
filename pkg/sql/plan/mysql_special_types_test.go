@@ -23,6 +23,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestFuncCastForEnumTypeKeepsMatchingErrorMember(t *testing.T) {
+	target := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"}
+	expr := &plan.Expr{
+		Typ: target,
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_EnumVal{EnumVal: 0},
+		}},
+	}
+
+	got, err := funcCastForEnumType(context.Background(), expr, target)
+	require.NoError(t, err)
+	require.Same(t, expr, got)
+	require.Equal(t, uint32(0), got.GetLit().GetEnumVal())
+}
+
 // TestGeomFromTextSRIDInResultType verifies that a constant SRID argument to
 // ST_GeomFromText lands in the result type's Width (since geometry cells store
 // bare WKB and SRID lives in the type).

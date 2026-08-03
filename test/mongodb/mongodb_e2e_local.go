@@ -11,13 +11,14 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	mysqldriver "github.com/go-sql-driver/mysql"
 )
 
 type report struct {
@@ -46,7 +47,7 @@ func main() {
 		err = waitForMO(ctx, db)
 	}
 	if err == nil {
-		err = run(ctx, db, host, &r)
+		err = runWithDSN(ctx, db, dsn, host, &r)
 	}
 	if err == nil {
 		r.Status = "passed"
@@ -78,6 +79,10 @@ func waitForMO(ctx context.Context, db *sql.DB) error {
 }
 
 func run(ctx context.Context, db *sql.DB, host string, r *report) error {
+	return runWithDSN(ctx, db, "", host, r)
+}
+
+func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) error {
 	manifest, err := loadFixtureManifest("test/mongodb/fixture_manifest.json")
 	if err != nil {
 		return err
@@ -87,6 +92,8 @@ func run(ctx context.Context, db *sql.DB, host string, r *report) error {
 		"create database mongodb_ci",
 		"create mongodb connection if not exists mongodb_ci with ('hosts'='" + host + "','replica_set'='rs0','auth_source'='mongodb_source','auth_mechanism'='SCRAM-SHA-256','credential_secret_ref'='secret://env/MO_MONGODB_E2E_CREDENTIAL','tls_mode'='disabled','read_preference'='primary','read_concern'='majority','options_json'='{\"direct\":true}')",
 		"create external table mongodb_ci.events(mongo_id char(24) mongodb_path '_id', device_id varchar(20), site_id varchar(10), ts datetime(3) mongodb_convert 'try_null', measurement double mongodb_convert 'try_null', source_batch varchar(50)) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='events','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
+		"create external table mongodb_ci.temporal_edges(ts datetime(0) mongodb_convert 'try_null') engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='temporal_edges','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
+		"create external table mongodb_ci.decoded_budget(payload_1 text mongodb_path 'payload', payload_2 text mongodb_path 'payload', payload_3 text mongodb_path 'payload', payload_4 text mongodb_path 'payload', payload_5 text mongodb_path 'payload', payload_6 text mongodb_path 'payload', payload_7 text mongodb_path 'payload', payload_8 text mongodb_path 'payload') engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='decoded_budget','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')",
 	}
 	for _, statement := range statements {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
@@ -98,6 +105,12 @@ func run(ctx context.Context, db *sql.DB, host string, r *report) error {
 		return err
 	}
 	r.Cases = append(r.Cases, "show-create-redaction-roundtrip")
+	if dsn != "" {
+		if err := verifyAuthorizationBoundary(ctx, db, dsn); err != nil {
+			return err
+		}
+		r.Cases = append(r.Cases, "non-admin-marker-injection-boundary")
+	}
 
 	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.events", "5"); err != nil {
 		return err
@@ -114,6 +127,24 @@ func run(ctx context.Context, db *sql.DB, host string, r *report) error {
 		return err
 	}
 	r.Cases = append(r.Cases, "scan-projection-pushdown-null-conversion")
+
+	// BSON DateTime preserves milliseconds, while DATETIME(0) truncates them.
+	// The source predicate must therefore remain residual-only: an exact MongoDB
+	// equality on 10:00:05.000 would incorrectly exclude this .100 source row.
+	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.temporal_edges where ts = '2026-07-27 10:00:05'", "1"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "low-precision-temporal-residual")
+
+	// One BSON string is below max-value-bytes and the raw document is below
+	// max-batch-bytes, but projecting it into eight vectors exceeds the decoded
+	// batch budget. This guards the allocation amplification fixed by #26485.
+	if err := expectQueryFailure(ctx, db,
+		"select payload_1,payload_2,payload_3,payload_4,payload_5,payload_6,payload_7,payload_8 from mongodb_ci.decoded_budget",
+		"decoded batch byte limit exceeded"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "decoded-vector-budget-enforced")
 
 	cancelCtx, cancel := context.WithCancel(ctx)
 	cancel()
@@ -235,6 +266,75 @@ func run(ctx context.Context, db *sql.DB, host string, r *report) error {
 		return fmt.Errorf("scan after connection re-enable: %w", err)
 	}
 	r.Cases = append(r.Cases, "connection-disable-enable")
+	return nil
+}
+
+func verifyAuthorizationBoundary(ctx context.Context, adminDB *sql.DB, dsn string) error {
+	const (
+		roleName = "mongodb_ci_creator"
+		userName = "mongodb_ci_user"
+		password = "mongodb_ci_password"
+	)
+	for _, statement := range []string{
+		"drop user if exists " + userName,
+		"drop role if exists " + roleName,
+		"create role " + roleName,
+		"create user " + userName + " identified by '" + password + "' default role " + roleName,
+		"grant connect on account * to " + roleName,
+		"grant create table on database mongodb_ci to " + roleName,
+	} {
+		if _, err := adminDB.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("authorization boundary setup %s: %w", statement, err)
+		}
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = adminDB.ExecContext(cleanupCtx, "drop user if exists "+userName)
+		_, _ = adminDB.ExecContext(cleanupCtx, "drop role if exists "+roleName)
+	}()
+
+	config, err := mysqldriver.ParseDSN(dsn)
+	if err != nil {
+		return fmt.Errorf("parse MatrixOne DSN: %w", err)
+	}
+	config.User = userName
+	config.Passwd = password
+	config.DBName = "mongodb_ci"
+	userDB, err := sql.Open("mysql", config.FormatDSN())
+	if err != nil {
+		return fmt.Errorf("open non-admin MatrixOne session: %w", err)
+	}
+	defer userDB.Close()
+	if err := userDB.PingContext(ctx); err != nil {
+		return fmt.Errorf("connect non-admin MatrixOne session: %w", err)
+	}
+
+	if _, err := userDB.ExecContext(ctx,
+		"create external table mongodb_ci.denied_mongodb(value bigint) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='events','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')"); err == nil {
+		return fmt.Errorf("non-admin MongoDB table creation unexpectedly succeeded")
+	}
+
+	// Keep the E2E runner independent from MatrixOne's kernel packages: importing
+	// the production envelope builder here pulls the kernel CGo dependency graph
+	// into a runtime `go run`. This valid legacy envelope is deliberately local
+	// test data; type_id 23 is BIGINT in the version-1 catalog encoding.
+	const columnsJSON = `[{"name":"value","path":"measurement","type_id":23,"conversion":"strict"}]`
+	marker := "/* MO_MONGODB: version=1; connection=mongodb_ci; database=mongodb_source; collection=events; " +
+		"schema_mode=explicit; conversion_mode=strict; split_key=; max_parallelism=1; columns=" +
+		url.QueryEscape(columnsJSON) + " */"
+	// Before the parser boundary was anchored, a generic external-table filepath
+	// containing this valid marker was mistaken for planner-owned MongoDB DDL.
+	injectionSQL := "create external table mongodb_ci.marker_injection(value bigint) infile{\"filepath\"='" +
+		strings.ReplaceAll(marker, "'", "''") + "'} fields terminated by ',' lines terminated by '\\n'"
+	if _, err := userDB.ExecContext(ctx, injectionSQL); err != nil {
+		return fmt.Errorf("generic marker-injection control table must remain creatable: %w", err)
+	}
+	if err := expectScalar(ctx, adminDB,
+		"select count(*) from mo_catalog.mo_mongodb_tables m join mo_catalog.mo_tables t on m.account_id=t.account_id and m.table_id=t.rel_id where t.account_id=0 and t.reldatabase='mongodb_ci' and t.relname='marker_injection'",
+		"0"); err != nil {
+		return fmt.Errorf("generic marker injection created a MongoDB mapping: %w", err)
+	}
 	return nil
 }
 

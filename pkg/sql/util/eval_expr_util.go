@@ -1042,10 +1042,17 @@ func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *type
 			}
 			err = moerr.NewInvalidInputf(proc.Ctx, "unsupported negative value %v", val)
 			return
-		} else if adjustOverflow(uint64(math.Round(num))) {
+		}
+		rounded := math.Round(num)
+		if math.IsNaN(rounded) || bitFloatOutOfRange(rounded, width) {
+			if isIgnore {
+				val = max
+				return
+			}
+			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %v", width, num)
 			return
 		}
-		val = uint64(math.Round(num))
+		val = uint64(rounded)
 
 	case tree.P_int64:
 		var tempVal int64
@@ -1107,4 +1114,14 @@ func bitMaxValue(width int32) uint64 {
 		return 0
 	}
 	return uint64(1)<<width - 1
+}
+
+func bitFloatOutOfRange(value float64, width int32) bool {
+	if math.IsInf(value, 0) {
+		return true
+	}
+	if width >= 64 {
+		return value >= math.Exp2(64)
+	}
+	return value > float64(bitMaxValue(width))
 }

@@ -760,6 +760,10 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 	if targetType.Id != int32(types.T_enum) {
 		return expr, nil
 	}
+	if isEnumPlanType(&expr.Typ) && expr.Typ.Enumvalues == targetType.Enumvalues {
+		expr.Typ = targetType
+		return expr, nil
+	}
 	sourceExpr := expr
 
 	astArgs := []tree.Expr{

@@ -131,16 +131,15 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: sum(lineitem.l_extendedprice)  𝄀
         ->  Filter  𝄀
-              Filter Cond: (cast(lineitem.l_quantity AS DECIMAL128(38, 2)) < 0.2 * avg(lineitem.l_quantity))
+              Filter Cond: (cast(lineitem.l_quantity AS DECIMAL128(38, 2)) < (0.2 * avg(lineitem.l_quantity)))
               -- HINT: Cast expression may prevent index usage  𝄀
               ->  Join  𝄀
                     Join Type: RIGHT  𝄀
                     Join Cond: (lineitem.l_partkey = part.p_partkey)  𝄀
-                    ->  Project  𝄀
-                          ->  Aggregate  𝄀
-                                Group Key: lineitem.l_partkey shuffle: range(lineitem.l_partkey)  𝄀
-                                Aggregate Functions: avg(lineitem.l_quantity)  𝄀
-                                ->  Table Scan on associative.lineitem  𝄀
+                    ->  Aggregate  𝄀
+                          Group Key: lineitem.l_partkey shuffle: range(lineitem.l_partkey)  𝄀
+                          Aggregate Functions: avg(lineitem.l_quantity)  𝄀
+                          ->  Table Scan on associative.lineitem  𝄀
                     ->  Join  𝄀
                           Join Type: INNER   hashOnPK  𝄀
                           Join Cond: (lineitem.l_partkey = part.p_partkey)  𝄀
@@ -174,16 +173,15 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: sum(lineitem.l_extendedprice)  𝄀
         ->  Filter  𝄀
-              Filter Cond: (cast(lineitem.l_quantity AS DECIMAL128(38, 2)) < 0.2 * avg(lineitem.l_quantity))
+              Filter Cond: (cast(lineitem.l_quantity AS DECIMAL128(38, 2)) < (0.2 * avg(lineitem.l_quantity)))
               -- HINT: Cast expression may prevent index usage  𝄀
               ->  Join  𝄀
                     Join Type: RIGHT  𝄀
                     Join Cond: (lineitem.l_partkey = part.p_partkey)  𝄀
-                    ->  Project  𝄀
-                          ->  Aggregate  𝄀
-                                Group Key: lineitem.l_partkey  𝄀
-                                Aggregate Functions: avg(lineitem.l_quantity)  𝄀
-                                ->  Table Scan on associative.lineitem  𝄀
+                    ->  Aggregate  𝄀
+                          Group Key: lineitem.l_partkey  𝄀
+                          Aggregate Functions: avg(lineitem.l_quantity)  𝄀
+                          ->  Table Scan on associative.lineitem  𝄀
                     ->  Join  𝄀
                           Join Type: INNER   hashOnPK  𝄀
                           Join Cond: (lineitem.l_partkey = part.p_partkey)  𝄀

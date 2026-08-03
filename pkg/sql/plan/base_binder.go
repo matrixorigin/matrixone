@@ -152,7 +152,11 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		}
 		parentParamType := b.numericParamType
 		b.numericParamType = nil
-		if isNumericArithmeticRoot(exprImpl.Expr) ||
+		if b.mysqlSpecialTypeInAst(exprImpl.Expr) && makeTypeByPlan2Type(typ).IsNumeric() {
+			expr, err = b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
+				return b.impl.BindExpr(exprImpl.Expr, depth, false)
+			})
+		} else if isNumericArithmeticRoot(exprImpl.Expr) ||
 			b.isGenericNumericFunctionRoot(exprImpl.Expr, depth, &typ) {
 			expr, err = b.bindNumericExprWithContext(exprImpl.Expr, depth, &typ)
 		} else {
@@ -706,20 +710,28 @@ func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32, isRoot bo
 }
 
 func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot bool) (*Expr, error) {
-	if astExpr.Not {
-		// rewrite 'col not between 1, 20' to 'col < 1 or col > 20'
-		newLeftExpr := tree.NewComparisonExpr(tree.LESS_THAN, astExpr.Left, astExpr.From)
-		newRightExpr := tree.NewComparisonExpr(tree.GREAT_THAN, astExpr.Left, astExpr.To)
-		return b.bindFuncExprImplByAstExpr("or", []tree.Expr{newLeftExpr, newRightExpr}, depth)
-	} else {
-		if _, ok := astExpr.Left.(*tree.Tuple); ok {
-			newLeftExpr := tree.NewComparisonExpr(tree.GREAT_THAN_EQUAL, astExpr.Left, astExpr.From)
-			newRightExpr := tree.NewComparisonExpr(tree.LESS_THAN_EQUAL, astExpr.Left, astExpr.To)
-			return b.bindFuncExprImplByAstExpr("and", []tree.Expr{newLeftExpr, newRightExpr}, depth)
-		}
+	bind := func() (*Expr, error) {
+		if astExpr.Not {
+			// rewrite 'col not between 1, 20' to 'col < 1 or col > 20'
+			newLeftExpr := tree.NewComparisonExpr(tree.LESS_THAN, astExpr.Left, astExpr.From)
+			newRightExpr := tree.NewComparisonExpr(tree.GREAT_THAN, astExpr.Left, astExpr.To)
+			return b.bindFuncExprImplByAstExpr("or", []tree.Expr{newLeftExpr, newRightExpr}, depth)
+		} else {
+			if _, ok := astExpr.Left.(*tree.Tuple); ok {
+				newLeftExpr := tree.NewComparisonExpr(tree.GREAT_THAN_EQUAL, astExpr.Left, astExpr.From)
+				newRightExpr := tree.NewComparisonExpr(tree.LESS_THAN_EQUAL, astExpr.Left, astExpr.To)
+				return b.bindFuncExprImplByAstExpr("and", []tree.Expr{newLeftExpr, newRightExpr}, depth)
+			}
 
-		return b.bindFuncExprImplByAstExpr("between", []tree.Expr{astExpr.Left, astExpr.From, astExpr.To}, depth)
+			return b.bindFuncExprImplByAstExpr("between", []tree.Expr{astExpr.Left, astExpr.From, astExpr.To}, depth)
+		}
 	}
+	if b.mysqlSpecialTypeInAst(astExpr.Left) &&
+		b.mysqlSpecialTypeNumericContext(astExpr.From) &&
+		b.mysqlSpecialTypeNumericContext(astExpr.To) {
+		return b.bindWithRawMySQLSpecialTypes(bind)
+	}
+	return bind()
 }
 
 func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot bool) (*Expr, error) {
@@ -2266,8 +2278,51 @@ func (b *baseBinder) bindWithRawMySQLSpecialTypes(bind func() (*Expr, error)) (*
 }
 
 func (b *baseBinder) mysqlSpecialTypeNumericComparison(left, right tree.Expr) bool {
-	return (b.mysqlSpecialTypeAst(left) && mysqlSpecialTypeNumericLiteral(right)) ||
-		(b.mysqlSpecialTypeAst(right) && mysqlSpecialTypeNumericLiteral(left))
+	return (b.mysqlSpecialTypeAst(left) && b.mysqlSpecialTypeNumericContext(right)) ||
+		(b.mysqlSpecialTypeAst(right) && b.mysqlSpecialTypeNumericContext(left))
+}
+
+// mysqlSpecialTypeNumericContext reports AST expressions whose bound contract
+// is numeric. ENUM and SET are normally exposed as display strings, but MySQL
+// uses their stored ordinal/bitmap when compared with a numeric operand.
+func (b *baseBinder) mysqlSpecialTypeNumericContext(expr tree.Expr) bool {
+	switch value := unwrapParenExpr(expr).(type) {
+	case *tree.NumVal:
+		return mysqlSpecialTypeNumericLiteral(value)
+	case *tree.UnresolvedName:
+		typ, ok := b.numericColumnType(value)
+		return ok && makeTypeByPlan2Type(typ).IsNumeric()
+	case *tree.UnaryExpr:
+		return (value.Op == tree.UNARY_PLUS || value.Op == tree.UNARY_MINUS) &&
+			b.mysqlSpecialTypeNumericContext(value.Expr)
+	case *tree.BinaryExpr:
+		return isNumericBinaryOp(value.Op) || isBitwiseBinaryOp(value.Op)
+	case *tree.CastExpr:
+		typ, err := getTypeFromAst(b.GetContext(), value.Type)
+		return err == nil && makeTypeByPlan2Type(typ).IsNumeric()
+	case *tree.FuncExpr:
+		return supportsGenericNumericFunctionContext(strings.ToLower(numericAstFunctionName(value)))
+	case *tree.Tuple:
+		if len(value.Exprs) == 0 {
+			return false
+		}
+		for _, item := range value.Exprs {
+			if !b.mysqlSpecialTypeNumericContext(item) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func mysqlSpecialTypeInExprs(b *baseBinder, exprs []tree.Expr) bool {
+	for _, expr := range exprs {
+		if b.mysqlSpecialTypeInAst(expr) {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *baseBinder) mysqlSpecialTypeAst(expr tree.Expr) bool {
@@ -2288,6 +2343,12 @@ func (b *baseBinder) mysqlSpecialTypeInAst(expr tree.Expr) bool {
 		return b.mysqlSpecialTypeInAst(value.Expr)
 	case *tree.BinaryExpr:
 		return b.mysqlSpecialTypeInAst(value.Left) || b.mysqlSpecialTypeInAst(value.Right)
+	case *tree.CastExpr:
+		return b.mysqlSpecialTypeInAst(value.Expr)
+	case *tree.FuncExpr:
+		return mysqlSpecialTypeInExprs(b, value.Exprs)
+	case *tree.Tuple:
+		return mysqlSpecialTypeInExprs(b, value.Exprs)
 	}
 	return false
 }
@@ -2389,6 +2450,12 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	funcName := funcRef.ColName()
 	if strings.EqualFold(funcName, "mod") && b.numericParamType == nil {
 		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
+	}
+	if supportsGenericNumericFunctionContext(strings.ToLower(funcName)) &&
+		mysqlSpecialTypeInExprs(b, astExpr.Exprs) {
+		return b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
+			return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+		})
 	}
 
 	if function.GetFunctionIsAggregateByName(funcName) && astExpr.WindowSpec == nil {

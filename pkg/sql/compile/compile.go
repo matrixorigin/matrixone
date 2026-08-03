@@ -652,11 +652,13 @@ func (c *Compile) runOnce() (err error) {
 
 	// REPLACE parent checks and actions run before the main pipeline.
 	query := c.pn.GetQuery()
-	if query != nil && query.StmtType == plan.Query_INSERT && len(query.GetDetectSqls()) != 0 {
-		if err = validateReplaceParentTxnMode(
+	if query != nil && len(query.GetDetectSqls()) != 0 {
+		if err = validateForeignKeyParentTxnMode(
 			c.proc.Ctx, query, c.proc.GetTxnOperator().Txn().IsPessimistic()); err != nil {
 			return err
 		}
+	}
+	if query != nil && query.StmtType == plan.Query_INSERT && len(query.GetDetectSqls()) != 0 {
 		for _, sql := range query.DetectSqls {
 			if strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") {
 				continue
@@ -782,7 +784,8 @@ func (c *Compile) runOnce() (err error) {
 			if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") ||
 				strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") ||
 				strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") ||
-				strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
+				strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") ||
+				strings.HasPrefix(sql, "UPDATE_PARENT_PLAN:") {
 				continue
 			}
 			postCheckSqls = append(postCheckSqls, sql)
@@ -799,7 +802,7 @@ func (c *Compile) runOnce() (err error) {
 	return err
 }
 
-func validateReplaceParentTxnMode(ctx context.Context, query *plan.Query, pessimistic bool) error {
+func validateForeignKeyParentTxnMode(ctx context.Context, query *plan.Query, pessimistic bool) error {
 	if pessimistic || query == nil {
 		return nil
 	}
@@ -808,6 +811,10 @@ func validateReplaceParentTxnMode(ctx context.Context, query *plan.Query, pessim
 			strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") {
 			return moerr.NewNotSupported(ctx,
 				"REPLACE on a referenced parent table in optimistic transaction mode")
+		}
+		if strings.HasPrefix(sql, "UPDATE_PARENT_PLAN:") {
+			return moerr.NewNotSupported(ctx,
+				"UPDATE on a referenced parent table in optimistic transaction mode")
 		}
 	}
 	return nil
@@ -5754,6 +5761,7 @@ func (c *Compile) newEmptyMergeScope() *Scope {
 
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs := c.newEmptyMergeScope()
+	ss = c.groupRemoteRunDependenciesByCNIfNeeded(ss, rs.NodeInfo)
 	rs.PreScopes = ss
 
 	rs.Proc = c.proc.NewNoContextChildProc(len(ss))
@@ -5990,6 +5998,32 @@ func (c *Compile) mergeShuffleScopesIfNeeded(ss []*Scope, force bool) []*Scope {
 		}
 	}
 	return rs
+}
+
+// groupRemoteRunDependenciesByCNIfNeeded preserves the ownership boundary of
+// in-process dispatch and connector receivers when a local merge makes its
+// inputs separate RemoteRun units. A scope that targets a receiver owned by a
+// sibling scope cannot execute remotely on its own; wrapping all inputs from
+// the same CN in one merge scope keeps those dependencies in one serialized
+// tree. Only a non-local invalid input triggers regrouping; once triggered, the
+// whole input stage is grouped consistently by CN. Independent input stages
+// retain the direct fast path.
+func (c *Compile) groupRemoteRunDependenciesByCNIfNeeded(
+	ss []*Scope,
+	mergeNode engine.Node,
+) []*Scope {
+	stageNodes := shuffleBucketStageNodes(ss)
+	if len(ss) <= len(stageNodes) {
+		return ss
+	}
+
+	for _, scope := range ss {
+		if !sameExecutionNode(scope.NodeInfo, mergeNode) &&
+			findPipelineExternalLocalReceiver(scope) != nil {
+			return c.mergeScopesByStageNodes(ss, stageNodes)
+		}
+	}
+	return ss
 }
 
 // shuffleBucketsNeedPerCNGrouping reports whether a dispatch in one top-level
