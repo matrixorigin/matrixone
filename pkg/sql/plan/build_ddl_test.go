@@ -447,6 +447,51 @@ func TestCompareViewDependenciesIsTotal(t *testing.T) {
 		{AccountID: 1, LogicalID: 2, TableID: 3, Snapshot: true},
 		{AccountID: 1, LogicalID: 2, TableID: 4},
 	}, dependencies)
+
+	base := ViewDependency{
+		AccountID:             1,
+		LogicalID:             2,
+		TableID:               3,
+		PublisherAccountID:    4,
+		SubscriptionDB:        "sub-db",
+		SubscriptionTable:     "sub-table",
+		PublisherDB:           "pub-db",
+		PublisherTable:        "pub-table",
+		DatabaseName:          "db",
+		TableName:             "table",
+		PublisherAccountIDSet: false,
+	}
+	tests := []struct {
+		name  string
+		left  ViewDependency
+		right ViewDependency
+	}{
+		{name: "account", left: withViewDependency(base, func(d *ViewDependency) { d.AccountID = 0 }), right: base},
+		{name: "logical id", left: withViewDependency(base, func(d *ViewDependency) { d.LogicalID = 1 }), right: base},
+		{name: "table id", left: withViewDependency(base, func(d *ViewDependency) { d.TableID = 2 }), right: base},
+		{name: "snapshot", left: base, right: withViewDependency(base, func(d *ViewDependency) { d.Snapshot = true })},
+		{name: "subscription", left: base, right: withViewDependency(base, func(d *ViewDependency) { d.Subscription = true })},
+		{name: "publisher account", left: withViewDependency(base, func(d *ViewDependency) { d.PublisherAccountID = 3 }), right: base},
+		{name: "publisher account set", left: base, right: withViewDependency(base, func(d *ViewDependency) { d.PublisherAccountIDSet = true })},
+		{name: "subscription database", left: withViewDependency(base, func(d *ViewDependency) { d.SubscriptionDB = "a" }), right: base},
+		{name: "subscription table", left: withViewDependency(base, func(d *ViewDependency) { d.SubscriptionTable = "a" }), right: base},
+		{name: "publisher database", left: withViewDependency(base, func(d *ViewDependency) { d.PublisherDB = "a" }), right: base},
+		{name: "publisher table", left: withViewDependency(base, func(d *ViewDependency) { d.PublisherTable = "a" }), right: base},
+		{name: "database", left: withViewDependency(base, func(d *ViewDependency) { d.DatabaseName = "a" }), right: base},
+		{name: "table", left: withViewDependency(base, func(d *ViewDependency) { d.TableName = "a" }), right: base},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Negative(t, compareViewDependencies(test.left, test.right))
+			require.Positive(t, compareViewDependencies(test.right, test.left))
+		})
+	}
+	require.Zero(t, compareViewDependencies(base, base))
+}
+
+func withViewDependency(base ViewDependency, update func(*ViewDependency)) ViewDependency {
+	update(&base)
+	return base
 }
 
 func TestBuildCreateViewExplicitColumnList(t *testing.T) {

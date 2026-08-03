@@ -22,6 +22,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/prashantv/gostub"
@@ -81,6 +82,144 @@ func TestRetryPendingViewMetadataSkipsMissingDefaultDatabase(t *testing.T) {
 	require.NoError(t, retryPendingViewMetadata(ctx, ses, bh))
 }
 
+func TestRetryPendingViewMetadataPropagatesMalformedCatalogRows(t *testing.T) {
+	valid := []interface{}{uint64(7), uint64(42), uint64(1), "db", "v", "{}"}
+	for column := range valid {
+		t.Run([]string{"account", "view", "version", "database", "name", "definition"}[column], func(t *testing.T) {
+			resetPendingViewMetadataCursor(t)
+			ctx := context.Background()
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			bh := &backgroundExecTest{}
+			bh.init()
+			row := append([]interface{}(nil), valid...)
+			row[column] = struct{}{}
+			bh.sql2result[buildPendingViewMetadataRetryQuery(0, 0)] =
+				newPendingViewMetadataRetryResult([][]interface{}{row})
+
+			require.Error(t, retryPendingViewMetadata(ctx, ses, bh))
+		})
+	}
+}
+
+func TestRetryPendingViewMetadataSQLModeAndErrors(t *testing.T) {
+	tests := []struct {
+		name        string
+		viewData    plan2.ViewData
+		execError   error
+		wantError   bool
+		wantSQLMode string
+	}{
+		{
+			name:        "legacy sql mode",
+			viewData:    plan2.ViewData{Stmt: "create view db.v as select 1"},
+			wantSQLMode: plan2.LegacyViewParserSQLMode(),
+		},
+		{
+			name: "saved sql mode",
+			viewData: plan2.ViewData{
+				Stmt:    "create view db.v as select 1",
+				SQLMode: viewMetadataPtr("ANSI_QUOTES"),
+			},
+			wantSQLMode: "ANSI_QUOTES",
+		},
+		{
+			name:      "skippable refresh error",
+			viewData:  plan2.ViewData{Stmt: "create view db.v as select 1"},
+			execError: moerr.NewNoSuchTable(context.Background(), "db", "t"),
+		},
+		{
+			name:      "catalog refresh error",
+			viewData:  plan2.ViewData{Stmt: "create view db.v as select 1"},
+			execError: moerr.NewInternalErrorNoCtx("catalog write failed"),
+			wantError: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			resetPendingViewMetadataCursor(t)
+			ctx := context.Background()
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			bh := &backgroundExecTest{}
+			bh.init()
+			definition, err := json.Marshal(test.viewData)
+			require.NoError(t, err)
+			bh.sql2result[buildPendingViewMetadataRetryQuery(0, 0)] =
+				newPendingViewMetadataRetryResult([][]interface{}{
+					{uint64(7), uint64(42), uint64(1), "db", "v", string(definition)},
+				})
+			refreshSQL, err := compile.BuildViewMetadataRefreshSQL(ctx, 1, "db", "v", test.viewData)
+			require.NoError(t, err)
+			bh.sql2err[refreshSQL] = test.execError
+
+			err = retryPendingViewMetadata(ctx, ses, bh)
+			if test.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			if test.wantSQLMode != "" {
+				require.Equal(t, test.wantSQLMode, bh.parserSQLMode)
+			}
+		})
+	}
+}
+
+func TestLoadPendingViewMetadataRetryPageErrorPaths(t *testing.T) {
+	t.Run("query error", func(t *testing.T) {
+		resetPendingViewMetadataCursor(t)
+		ctx := context.Background()
+		bh := &backgroundExecTest{}
+		bh.init()
+		query := buildPendingViewMetadataRetryQuery(0, 0)
+		bh.sql2err[query] = moerr.NewInternalErrorNoCtx("query failed")
+
+		_, err := loadPendingViewMetadataRetryPage(ctx, bh)
+		require.Error(t, err)
+	})
+
+	t.Run("malformed cursor columns", func(t *testing.T) {
+		for _, row := range [][]interface{}{
+			{nil, uint64(42), uint64(1), "db", "v", "{}"},
+			{uint64(7), nil, uint64(1), "db", "v", "{}"},
+		} {
+			resetPendingViewMetadataCursor(t)
+			ctx := context.Background()
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[buildPendingViewMetadataRetryQuery(0, 0)] =
+				newPendingViewMetadataRetryResult([][]interface{}{row})
+
+			_, err := loadPendingViewMetadataRetryPage(ctx, bh)
+			require.Error(t, err)
+		}
+	})
+
+	t.Run("empty page resets cursor", func(t *testing.T) {
+		resetPendingViewMetadataCursor(t)
+		pendingViewMetadataCursor.Lock()
+		pendingViewMetadataCursor.accountID = 7
+		pendingViewMetadataCursor.viewID = 42
+		pendingViewMetadataCursor.Unlock()
+		ctx := context.Background()
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[buildPendingViewMetadataRetryQuery(7, 42)] = newPendingViewMetadataRetryResult(nil)
+		bh.sql2result[buildPendingViewMetadataRetryQuery(0, 0)] = newPendingViewMetadataRetryResult(nil)
+
+		results, err := loadPendingViewMetadataRetryPage(ctx, bh)
+		require.NoError(t, err)
+		require.False(t, execResultArrayHasData(results))
+		pendingViewMetadataCursor.Lock()
+		require.Zero(t, pendingViewMetadataCursor.accountID)
+		require.Zero(t, pendingViewMetadataCursor.viewID)
+		pendingViewMetadataCursor.Unlock()
+	})
+}
+
 func TestHandleCreateFunctionRetriesPendingViewMetadata(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -135,4 +274,8 @@ func newPendingViewMetadataRetryResult(rows [][]interface{}) *MysqlResultSet {
 		result.AddRow(row)
 	}
 	return result
+}
+
+func viewMetadataPtr[T any](value T) *T {
+	return &value
 }

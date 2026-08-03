@@ -78,10 +78,52 @@ func TestCompilerContextUnsupportedResolversReturnErrors(t *testing.T) {
 	_, err = c.ResolveSnapshotWithSnapshotName("sn")
 	require.Error(t, err)
 	require.Error(t, c.CheckSubscriptionValid("sub", "acc", "pub"))
+	_, _, err = c.ResolveSubscriptionTableById(1, nil)
+	require.Error(t, err)
 	_, err = c.IsPublishing("db")
+	require.Error(t, err)
+	_, err = c.CheckTimeStampValid(1)
 	require.Error(t, err)
 	_, _, err = c.GetQueryResultMeta("uuid")
 	require.Error(t, err)
+}
+
+func TestCompilerContextDelegatesViewMetadataResolvers(t *testing.T) {
+	oldCtx := context.WithValue(context.Background(), struct{ name string }{"old"}, "old")
+	delegate := plan.NewMockCompilerContext(false)
+	delegate.SetContext(oldCtx)
+	delegate.ResolveAccountIdsFunc = func(names []string) ([]uint32, error) {
+		require.Equal(t, []string{"acc"}, names)
+		return []uint32{7}, nil
+	}
+	refreshCtx := context.WithValue(context.Background(), struct{ name string }{"new"}, "new")
+	refreshCtx = context.WithValue(refreshCtx, viewMetadataCompilerContextKey{}, delegate)
+	c := &compilerContext{
+		ctx:       refreshCtx,
+		defaultDB: "db",
+		proc:      testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+	}
+
+	obj, def, err := c.ResolveSubscriptionTableById(1, &plan.SubscriptionMeta{})
+	require.NoError(t, err)
+	require.Nil(t, obj)
+	require.Nil(t, def)
+	publishing, err := c.IsPublishing("db")
+	require.NoError(t, err)
+	require.False(t, publishing)
+	snapshot, err := c.ResolveSnapshotWithSnapshotName("sn")
+	require.NoError(t, err)
+	require.Nil(t, snapshot)
+	valid, err := c.CheckTimeStampValid(1)
+	require.NoError(t, err)
+	require.False(t, valid)
+	udf, err := c.ResolveUdf("f", nil)
+	require.NoError(t, err)
+	require.Nil(t, udf)
+	accountIDs, err := c.ResolveAccountIds([]string{"acc"})
+	require.NoError(t, err)
+	require.Equal(t, []uint32{7}, accountIDs)
+	require.Same(t, oldCtx, delegate.GetContext(), "delegate context must be restored after every call")
 }
 
 func TestCompilerContextQueryingSubscription(t *testing.T) {
