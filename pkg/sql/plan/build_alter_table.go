@@ -798,8 +798,9 @@ func storageAgnosticType(
 
 	scaleMatch := oTy.Scale == nTy.Scale
 	enumMatch := oTy.Enumvalues == nTy.Enumvalues
+	charsetMatch := oTy.Charset == nTy.Charset
 
-	if !scaleMatch || !enumMatch {
+	if !scaleMatch || !enumMatch || !charsetMatch {
 		return
 	}
 

@@ -598,7 +598,9 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	mrs := &MysqlResultSet{}
 	typs := make([]types.Type, columnCount)
 	for i, c := range columnDefs.ResultCols {
-		typs[i] = types.New(types.T(c.Typ.Id), c.Typ.Width, c.Typ.Scale)
+		typs[i] = types.NewWithCharset(
+			types.T(c.Typ.Id), c.Typ.Width, c.Typ.Scale, uint8(c.Typ.Charset),
+		)
 		mcol := &MysqlColumn{}
 		mcol.SetName(c.GetName())
 		err = convertEngineTypeToMysqlType(ctx, typs[i].Oid, mcol)

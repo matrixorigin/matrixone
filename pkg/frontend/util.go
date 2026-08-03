@@ -1643,7 +1643,7 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 	}
 	setMysqlColumnTypeMetadata(col, typ)
 	setCharacter(col)
-	if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
+	if typ.Charset == types.CharsetBinary {
 		col.SetCharset(charsetBinary)
 		col.SetFlag(col.Flag() | uint16(defines.BINARY_FLAG))
 	}
@@ -2133,7 +2133,9 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	c.SetOrgTable(col.TblName)
 	c.SetAutoIncr(col.Typ.AutoIncr)
 	c.SetSchema(col.DbName)
-	typ := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+	typ := types.NewWithCharset(
+		types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset),
+	)
 	if err = setMysqlColumnTypeInfo(ctx, typ, c); err != nil {
 		return nil, err
 	}
@@ -2365,6 +2367,7 @@ func extractTableDefColumns(erArray []ExecResult, ctx context.Context, dbName, t
 					Id:          int32(typ.Oid),
 					Width:       typ.Width,
 					Scale:       typ.Scale,
+					Charset:     uint32(typ.Charset),
 					Table:       table,
 					NotNullable: !def.NullAbility,
 				},

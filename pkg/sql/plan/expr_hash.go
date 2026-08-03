@@ -92,6 +92,7 @@ func hashExprInto(h writeByter, expr *plan.Expr) {
 	writeUint32(h, uint32(expr.Typ.Id))
 	writeUint32(h, uint32(expr.Typ.Width))
 	writeUint32(h, uint32(expr.Typ.Scale))
+	writeUint32(h, expr.Typ.Charset)
 
 	switch v := expr.Expr.(type) {
 	case *plan.Expr_Lit:
@@ -233,7 +234,8 @@ func exprStructuralEqual(a, b *plan.Expr) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	if a.Typ.Id != b.Typ.Id || a.Typ.Width != b.Typ.Width || a.Typ.Scale != b.Typ.Scale {
+	if a.Typ.Id != b.Typ.Id || a.Typ.Width != b.Typ.Width ||
+		a.Typ.Scale != b.Typ.Scale || a.Typ.Charset != b.Typ.Charset {
 		return false
 	}
 	switch av := a.Expr.(type) {

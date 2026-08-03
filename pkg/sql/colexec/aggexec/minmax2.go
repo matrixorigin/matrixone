@@ -365,6 +365,9 @@ func makeMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type) 
 	case types.T_enum:
 		return newGenericMinMaxExec[types.Enum](mp, aggID, isMin, param)
 	case types.T_char, types.T_varchar, types.T_text:
+		if param.Charset == types.CharsetBinary {
+			return newStrMinMaxExec(mp, aggID, isMin, param)
+		}
 		return newTextMinMaxExec(mp, aggID, isMin, param)
 	case types.T_blob, types.T_binary, types.T_varbinary, types.T_json, types.T_datalink:
 		return newStrMinMaxExec(mp, aggID, isMin, param)

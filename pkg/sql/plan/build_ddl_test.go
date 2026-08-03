@@ -94,6 +94,51 @@ func TestBuildRenameTableUsesPriorDestinationAsNextSource(t *testing.T) {
 	require.Equal(t, "t3", renames[1].GetActions()[0].GetAlterName().GetNewName())
 }
 
+func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
+	testCases := []struct {
+		name string
+		sql  string
+		want uint32
+	}{
+		{
+			name: "default text collation",
+			sql:  "create table t(name varchar(10))",
+			want: uint32(types.CharsetUTF8),
+		},
+		{
+			name: "table binary collation",
+			sql: "create table t(name varchar(10)) character set utf8mb4 " +
+				"collate utf8mb4_bin",
+			want: uint32(types.CharsetBinary),
+		},
+		{
+			name: "column binary collation",
+			sql:  "create table t(name varchar(10) collate utf8mb4_bin)",
+			want: uint32(types.CharsetBinary),
+		},
+		{
+			name: "column collation overrides table",
+			sql: "create table t(name varchar(10) collate utf8mb4_general_ci) " +
+				"collate utf8mb4_bin",
+			want: uint32(types.CharsetUTF8),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+			require.NoError(t, err)
+			cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			require.NotEmpty(t, cols)
+			require.Equal(t, tc.want, cols[0].Typ.Charset)
+		})
+	}
+}
+
 func TestBuildDropTemporaryTableOnlyTargetsTemporaryTable(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "drop temporary table nation", 1)
 	require.NoError(t, err)

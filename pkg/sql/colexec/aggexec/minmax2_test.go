@@ -26,10 +26,11 @@ import (
 func TestTextMinMaxUsesGeneralCICollation(t *testing.T) {
 	values := []string{"a", "b", "c", "E", "C", "D"}
 	testCases := []struct {
-		name   string
-		oid    types.T
-		aggID  int64
-		expect string
+		name    string
+		oid     types.T
+		charset uint8
+		aggID   int64
+		expect  string
 	}{
 		{name: "char min", oid: types.T_char, aggID: AggIdOfMin, expect: "a"},
 		{name: "char max", oid: types.T_char, aggID: AggIdOfMax, expect: "E"},
@@ -37,6 +38,8 @@ func TestTextMinMaxUsesGeneralCICollation(t *testing.T) {
 		{name: "varchar max", oid: types.T_varchar, aggID: AggIdOfMax, expect: "E"},
 		{name: "text min", oid: types.T_text, aggID: AggIdOfMin, expect: "a"},
 		{name: "text max", oid: types.T_text, aggID: AggIdOfMax, expect: "E"},
+		{name: "varchar binary collation min", oid: types.T_varchar, charset: types.CharsetBinary, aggID: AggIdOfMin, expect: "C"},
+		{name: "varchar binary collation max", oid: types.T_varchar, charset: types.CharsetBinary, aggID: AggIdOfMax, expect: "c"},
 		{name: "binary min", oid: types.T_binary, aggID: AggIdOfMin, expect: "C"},
 		{name: "binary max", oid: types.T_binary, aggID: AggIdOfMax, expect: "c"},
 	}
@@ -44,7 +47,7 @@ func TestTextMinMaxUsesGeneralCICollation(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			typ := types.New(tc.oid, 10, 0)
+			typ := types.NewWithCharset(tc.oid, 10, 0, tc.charset)
 			vec := vector.NewVec(typ)
 			for _, value := range values {
 				require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
