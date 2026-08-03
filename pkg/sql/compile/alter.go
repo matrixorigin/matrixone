@@ -2303,6 +2303,9 @@ func refreshViewMetadataAfterAlter(
 				}
 				if confirmed {
 					processedViews[viewKey] = struct{}{}
+					if len(view.viewData.Dependencies) > 0 {
+						continue
+					}
 					logicalID := view.logicalID
 					if logicalID == 0 {
 						logicalID = view.id
@@ -2531,7 +2534,7 @@ func refreshPendingViewMetadataAfterSubscriptionCreate(c *Compile, subscriptionD
 				}
 			} else {
 				for _, tableName := range strings.Split(meta.Tables, pubsub.Sep) {
-					if tableName = strings.TrimSpace(tableName); tableName != "" {
+					if tableName != "" {
 						tableNames = append(tableNames, tableName)
 					}
 				}

@@ -289,7 +289,8 @@ create database pubdb;
 use pubdb;
 create table source_t (a int, b int);
 create table excluded_t (a int);
-create publication pub database pubdb table source_t, excluded_t account view_alter_sub;
+create table `edge_source ` (c int);
+create publication pub database pubdb table source_t, excluded_t, `edge_source ` account view_alter_sub;
 create publication account_pub database * account view_alter_sub;
 create database subdb from view_alter_pub publication pub;
 create database account_subdb from view_alter_pub publication account_pub;
@@ -322,13 +323,18 @@ a  ¦  DECIMAL(9,1)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 frozen_a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 drop snapshot view_alter_retry_sn;
 create view localdb.subscription_recreate_v as select b from subdb.source_t;
+create view localdb.subscription_edge_recreate_v as select c from subdb.`edge_source `;
 drop database subdb;
 alter table pubdb.source_t modify column a bigint;
 alter table pubdb.source_t modify column b decimal(13, 5);
+alter table pubdb.`edge_source ` modify column c bigint;
 create database subdb from view_alter_pub publication pub;
 desc localdb.subscription_recreate_v;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 b  ¦  DECIMAL(13,5)  ¦  YES  ¦    ¦  null  ¦    ¦
+desc localdb.subscription_edge_recreate_v;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+c  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc localdb.v;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦

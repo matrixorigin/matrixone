@@ -239,7 +239,8 @@ create database pubdb;
 use pubdb;
 create table source_t (a int, b int);
 create table excluded_t (a int);
-create publication pub database pubdb table source_t, excluded_t account view_alter_sub;
+create table `edge_source ` (c int);
+create publication pub database pubdb table source_t, excluded_t, `edge_source ` account view_alter_sub;
 create publication account_pub database * account view_alter_sub;
 -- @session
 
@@ -271,18 +272,22 @@ create snapshot view_alter_retry_sn for account view_alter_sub;
 desc localdb.snapshot_retry_v;
 drop snapshot view_alter_retry_sn;
 create view localdb.subscription_recreate_v as select b from subdb.source_t;
+create view localdb.subscription_edge_recreate_v as select c from subdb.`edge_source `;
 drop database subdb;
 -- @session
 
 -- @session:id=1&user=view_alter_pub:admin&password=111
 alter table pubdb.source_t modify column a bigint;
 alter table pubdb.source_t modify column b decimal(13, 5);
+alter table pubdb.`edge_source ` modify column c bigint;
 -- @session
 
 -- @session:id=2&user=view_alter_sub:admin&password=111
 create database subdb from view_alter_pub publication pub;
 -- @ignore:5,6
 desc localdb.subscription_recreate_v;
+-- @ignore:5,6
+desc localdb.subscription_edge_recreate_v;
 -- @ignore:5,6
 desc localdb.v;
 -- @session
