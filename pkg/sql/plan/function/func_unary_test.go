@@ -4491,6 +4491,61 @@ func TestStringTimeExtractAmbiguousPrefixOwnership(t *testing.T) {
 	}
 }
 
+func TestStringTimeExtractReviewerGrammarBoundaries(t *testing.T) {
+	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			input := NewFunctionTestInput(typ.ToType(), []string{
+				// A bare one-digit post-space field remains a compact prefix. A
+				// following clock separator transfers ownership to day-TIME.
+				"1 2", "1 2:3", "1 2:3:4",
+				"12 3", "12 3:4", "12 3:4:5",
+				// Separated DATETIME accepts two through four year digits. One
+				// digit remains compact TIME, and five digits remain invalid.
+				"1-2-3 4:5:6", "12-2-3 4:5:6", "123-2-3 4:5:6",
+				"1234-2-3 4:5:6", "12345-2-3 4:5:6",
+				// An unconsumed trailing sign after a complete clock terminates
+				// DATETIME ownership and leaves the DATE-prefix fallback.
+				"2024-12-20 12:34:56+", "2024-12-20 12:34:56-",
+			}, nil)
+
+			for _, tc := range []struct {
+				name   string
+				fn     fEvalFn
+				expect FunctionTestResult
+			}{
+				{
+					name: "hour",
+					fn:   StringToHour,
+					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+						[]uint32{0, 26, 26, 0, 291, 291, 0, 4, 4, 4, 0, 0, 0},
+						[]bool{false, false, false, false, false, false, false, false, false, false, true, false, false}),
+				},
+				{
+					name: "minute",
+					fn:   StringToMinute,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{0, 3, 3, 0, 4, 4, 0, 5, 5, 5, 0, 20, 20},
+						[]bool{false, false, false, false, false, false, false, false, false, false, true, false, false}),
+				},
+				{
+					name: "second",
+					fn:   StringToSecond,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{1, 0, 4, 12, 0, 5, 1, 6, 6, 6, 0, 24, 24},
+						[]bool{false, false, false, false, false, false, false, false, false, false, true, false, false}),
+				},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
+					success, info := ftc.Run()
+					require.True(t, success, info)
+				})
+			}
+		})
+	}
+}
+
 func TestStringTimeExtractWhitespace(t *testing.T) {
 	for _, typ := range []types.T{types.T_char, types.T_varchar, types.T_text} {
 		t.Run(typ.String(), func(t *testing.T) {

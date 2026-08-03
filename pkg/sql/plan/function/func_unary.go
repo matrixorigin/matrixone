@@ -4887,7 +4887,7 @@ type timeExtractParseResult struct {
 func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 	pos := 0
 	year, yearDigits, ok := mysqlVariableDigitsForExtract(str, &pos)
-	if !ok || (yearDigits != 2 && yearDigits != 4) || pos >= len(str) || !mysqlDatetimePunctuationForExtract(str[pos]) {
+	if !ok || yearDigits < 2 || yearDigits > 4 || pos >= len(str) || !mysqlDatetimePunctuationForExtract(str[pos]) {
 		return timeExtractParseResult{}
 	}
 	dateSeparator := str[pos]
@@ -4957,9 +4957,9 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 			}
 		}
 	}
-	// Whitespace after a clock prefix or a sign followed by text terminates
-	// DATETIME ownership. The DATE-prefix fallback then applies its own compact
-	// TIME coercion. A bare suffix sign remains a valid consumed clock prefix.
+	// Whitespace or an unconsumed sign after a clock prefix terminates DATETIME
+	// ownership. The DATE-prefix fallback then applies its own compact TIME
+	// coercion.
 	if !mysqlDatetimeClockSuffixForExtract(str, pos) {
 		return timeExtractParseResult{}
 	}
@@ -4989,7 +4989,7 @@ func mysqlDatetimeClockSuffixForExtract(str string, pos int) bool {
 	if mysqlWhitespaceForExtract(str[pos]) {
 		return false
 	}
-	if (str[pos] == '+' || str[pos] == '-') && pos+1 < len(str) {
+	if str[pos] == '+' || str[pos] == '-' {
 		return false
 	}
 	return true
@@ -5131,7 +5131,10 @@ func mysqlDayTimeClockCandidateForExtract(str string) bool {
 	for digits < len(str) && str[digits] >= '0' && str[digits] <= '9' {
 		digits++
 	}
-	return digits >= 2
+	// A zero-padded/multi-digit field owns day-TIME even without a separator.
+	// A one-digit field owns it only when ':' proves that the field is an hour;
+	// otherwise inputs such as "1 2" retain the already consumed compact prefix.
+	return digits >= 2 || (digits == 1 && digits < len(str) && str[digits] == ':')
 }
 
 func mysqlClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
