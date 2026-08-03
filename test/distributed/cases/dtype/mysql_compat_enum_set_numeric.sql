@@ -23,6 +23,15 @@ select e in (select i from mysql_compat_enum_set_numeric),
        s not in (select i from mysql_compat_enum_set_numeric)
 from mysql_compat_enum_set_numeric order by i;
 
+-- Numeric left operands and row constructors also use subquery ordinals/bitmaps.
+select i in (select e from mysql_compat_enum_set_numeric),
+       i = any (select e from mysql_compat_enum_set_numeric),
+       i in (select s from mysql_compat_enum_set_numeric),
+       (e, i) in (select i, i from mysql_compat_enum_set_numeric),
+       (e, i) not in (select i, i from mysql_compat_enum_set_numeric),
+       (e, i) = any (select i, i from mysql_compat_enum_set_numeric)
+from mysql_compat_enum_set_numeric order by i;
+
 -- String-typed subqueries retain label comparison semantics.
 select e in (select cast(i as char) from mysql_compat_enum_set_numeric),
        s in (select cast(i as char) from mysql_compat_enum_set_numeric)

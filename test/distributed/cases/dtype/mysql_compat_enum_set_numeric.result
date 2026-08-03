@@ -26,6 +26,16 @@ from mysql_compat_enum_set_numeric order by i;
 e in (select i from mysql_compat_enum_set_numeric)    e not in (select i from mysql_compat_enum_set_numeric)    e = any (select i from mysql_compat_enum_set_numeric)    s in (select i from mysql_compat_enum_set_numeric)    s not in (select i from mysql_compat_enum_set_numeric)
 1    0    1    1    0
 1    0    1    0    1
+select i in (select e from mysql_compat_enum_set_numeric),
+i = any (select e from mysql_compat_enum_set_numeric),
+i in (select s from mysql_compat_enum_set_numeric),
+(e, i) in (select i, i from mysql_compat_enum_set_numeric),
+(e, i) not in (select i, i from mysql_compat_enum_set_numeric),
+(e, i) = any (select i, i from mysql_compat_enum_set_numeric)
+from mysql_compat_enum_set_numeric order by i;
+i in (select e from mysql_compat_enum_set_numeric)    i = any (select e from mysql_compat_enum_set_numeric)    i in (select s from mysql_compat_enum_set_numeric)    (e, i) in (select i, i from mysql_compat_enum_set_numeric)    (e, i) not in (select i, i from mysql_compat_enum_set_numeric)    (e, i) = any (select i, i from mysql_compat_enum_set_numeric)
+1    1    1    1    0    1
+1    1    0    1    0    1
 select e in (select cast(i as char) from mysql_compat_enum_set_numeric),
 s in (select cast(i as char) from mysql_compat_enum_set_numeric)
 from mysql_compat_enum_set_numeric order by i;

@@ -1043,7 +1043,7 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = boolToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_bit:
 		s := vector.GenerateFunctionFixedTypeParameter[uint64](from)
-		err = bitToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		err = bitToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_int8:
 		s := vector.GenerateFunctionFixedTypeParameter[int8](from)
 		err = int8ToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
@@ -1070,10 +1070,10 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = uint64ToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_float32:
 		s := vector.GenerateFunctionFixedTypeParameter[float32](from)
-		err = float32ToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		err = float32ToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_float64:
 		s := vector.GenerateFunctionFixedTypeParameter[float64](from)
-		err = float64ToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		err = float64ToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_decimal64:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from)
 		err = decimal64ToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
@@ -1294,16 +1294,17 @@ func boolToOthers(ctx context.Context,
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from bool to %s", toType))
 }
 
-func bitToOthers(ctx context.Context,
+func bitToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[uint64],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	ctx := proc.Ctx
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
 		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
+		return numericToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return numericToNumeric(ctx, source, rs, length, selectList)
@@ -1858,7 +1859,7 @@ func uint64ToOthers(proc *process.Process,
 		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
+		return numericToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return numericToNumeric(ctx, source, rs, length, selectList)
@@ -1915,16 +1916,17 @@ func uint64ToOthers(proc *process.Process,
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint64 to %s", toType))
 }
 
-func float32ToOthers(ctx context.Context,
+func float32ToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[float32],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	ctx := proc.Ctx
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
 		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
+		return numericToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return floatToInteger(ctx, source, rs, length, selectList)
@@ -1985,16 +1987,17 @@ func float32ToOthers(ctx context.Context,
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from float32 to %s", toType))
 }
 
-func float64ToOthers(ctx context.Context,
+func float64ToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[float64],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	ctx := proc.Ctx
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
 		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
+		return numericToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return floatToInteger(ctx, source, rs, length, selectList)
@@ -2233,7 +2236,7 @@ func decimal64ToOthers(proc *process.Process,
 	switch toType.Oid {
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return decimal64ToBit(ctx, source, rs, int(toType.Width), length, selectList)
+		return decimal64ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
 		return decimal64ToFloat(ctx, source, rs, length, 32)
@@ -2312,7 +2315,7 @@ func decimal128ToOthers(proc *process.Process,
 	switch toType.Oid {
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return decimal128ToBit(ctx, source, rs, int(toType.Width), length, selectList)
+		return decimal128ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return decimal128ToSigned(ctx, source, rs, 8, length, selectList)
@@ -2402,7 +2405,7 @@ func decimal256ToOthersWithContext(
 	switch toType.Oid {
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return decimal256ToBit(ctx, source, rs, int(toType.Width), length, selectList)
+		return decimal256ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return decimal256ToSigned(ctx, source, rs, 8, length, selectList)
@@ -3153,7 +3156,8 @@ func numericToBitWithIgnore[T constraints.Integer | constraints.Float](
 				return err
 			}
 		} else {
-			if float64(v) < 0 {
+			floatValue := float64(v)
+			if floatValue < 0 {
 				if !statementIgnore(proc) {
 					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("int%d", bitSize), "value %v", v)
 				}
@@ -3165,7 +3169,17 @@ func numericToBitWithIgnore[T constraints.Integer | constraints.Float](
 			var val uint64
 			switch any(v).(type) {
 			case float32, float64:
-				val = uint64(math.Round(float64(v)))
+				rounded := math.Round(floatValue)
+				if math.IsNaN(rounded) || floatExceedsBitRange(rounded, bitSize) {
+					if statementIgnore(proc) {
+						if err := to.Append(max, false); err != nil {
+							return err
+						}
+						continue
+					}
+					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("int%d", bitSize), "value %v", v)
+				}
+				val = uint64(rounded)
 			default:
 				val = uint64(v)
 			}
@@ -3195,6 +3209,18 @@ func maxBitValue(bitSize int) uint64 {
 		return 0
 	}
 	return uint64(1)<<bitSize - 1
+}
+
+func floatExceedsBitRange(value float64, bitSize int) bool {
+	if math.IsInf(value, 0) {
+		return true
+	}
+	if bitSize >= 64 {
+		// math.MaxUint64 rounds to 2^64 as float64, so use the exclusive
+		// upper bound rather than comparing with float64(maxBitValue(64)).
+		return value >= math.Exp2(64)
+	}
+	return value > float64(maxBitValue(bitSize))
 }
 
 // XXX do not use it to cast float to integer, please use floatToInteger
@@ -5982,6 +6008,13 @@ func decimal64ToBit(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[uint64], bitSize int, length int, selectList *FunctionSelectList) error {
+	return decimal64ToBitWithIgnore(ctx, nil, from, to, bitSize, length, selectList)
+}
+
+func decimal64ToBitWithIgnore(
+	ctx context.Context, proc *process.Process,
+	from vector.FunctionParameterWrapper[types.Decimal64],
+	to *vector.FunctionResult[uint64], bitSize int, length int, selectList *FunctionSelectList) error {
 	for i := 0; i < length; i++ {
 		v, null := from.GetValue(uint64(i))
 		if null {
@@ -5989,12 +6022,11 @@ func decimal64ToBit(
 				return err
 			}
 		} else {
-			var result uint64
-			var err error
 			xStr := v.Format(from.GetType().Scale)
 			xStr = strings.Split(xStr, ".")[0]
-			if result, err = strconv.ParseUint(xStr, 10, bitSize); err != nil {
-				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", xStr)
+			result, err := decimalStringToBit(ctx, proc, xStr, bitSize)
+			if err != nil {
+				return err
 			}
 			if err = to.Append(result, false); err != nil {
 				return err
@@ -6008,6 +6040,13 @@ func decimal128ToBit(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal128],
 	to *vector.FunctionResult[uint64], bitSize int, length int, selectList *FunctionSelectList) error {
+	return decimal128ToBitWithIgnore(ctx, nil, from, to, bitSize, length, selectList)
+}
+
+func decimal128ToBitWithIgnore(
+	ctx context.Context, proc *process.Process,
+	from vector.FunctionParameterWrapper[types.Decimal128],
+	to *vector.FunctionResult[uint64], bitSize int, length int, selectList *FunctionSelectList) error {
 	for i := 0; i < length; i++ {
 		v, null := from.GetValue(uint64(i))
 		if null {
@@ -6015,12 +6054,11 @@ func decimal128ToBit(
 				return err
 			}
 		} else {
-			var result uint64
-			var err error
 			xStr := v.Format(from.GetType().Scale)
 			xStr = strings.Split(xStr, ".")[0]
-			if result, err = strconv.ParseUint(xStr, 10, bitSize); err != nil {
-				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", xStr)
+			result, err := decimalStringToBit(ctx, proc, xStr, bitSize)
+			if err != nil {
+				return err
 			}
 			if err = to.Append(result, false); err != nil {
 				return err
@@ -6034,6 +6072,13 @@ func decimal256ToBit(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal256],
 	to *vector.FunctionResult[uint64], bitSize int, length int, selectList *FunctionSelectList) error {
+	return decimal256ToBitWithIgnore(ctx, nil, from, to, bitSize, length, selectList)
+}
+
+func decimal256ToBitWithIgnore(
+	ctx context.Context, proc *process.Process,
+	from vector.FunctionParameterWrapper[types.Decimal256],
+	to *vector.FunctionResult[uint64], bitSize int, length int, selectList *FunctionSelectList) error {
 	for i := 0; i < length; i++ {
 		v, null := from.GetValue(uint64(i))
 		if null {
@@ -6043,9 +6088,9 @@ func decimal256ToBit(
 		} else {
 			xStr := v.Format(from.GetType().Scale)
 			xStr = strings.Split(xStr, ".")[0]
-			result, err := strconv.ParseUint(xStr, 10, bitSize)
+			result, err := decimalStringToBit(ctx, proc, xStr, bitSize)
 			if err != nil {
-				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", xStr)
+				return err
 			}
 			if err = to.Append(result, false); err != nil {
 				return err
@@ -6053,6 +6098,20 @@ func decimal256ToBit(
 		}
 	}
 	return nil
+}
+
+func decimalStringToBit(ctx context.Context, proc *process.Process, value string, bitSize int) (uint64, error) {
+	result, err := strconv.ParseUint(value, 10, bitSize)
+	if err == nil {
+		return result, nil
+	}
+	if statementIgnore(proc) {
+		if strings.HasPrefix(strings.TrimSpace(value), "-") {
+			return 0, nil
+		}
+		return maxBitValue(bitSize), nil
+	}
+	return 0, moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", value)
 }
 
 func strToSigned[T constraints.Signed](

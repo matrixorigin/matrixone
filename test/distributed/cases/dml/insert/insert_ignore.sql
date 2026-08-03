@@ -146,14 +146,36 @@ create table insert_ignore_special_types (
 insert ignore into insert_ignore_special_types values
     (1, '2156', b'11111', 'bad', 'x,bad'),
     (2, '2156', 31, 9, 99);
-create table insert_ignore_special_source (v int, d decimal(10, 0), d256 decimal(40, 0));
-insert into insert_ignore_special_source values (31, 2156, 2156);
+create table insert_ignore_special_source (
+    v int,
+    u bigint unsigned,
+    f double,
+	 f64 double,
+    d decimal(10, 0),
+    d256 decimal(40, 0),
+    b bit(5)
+);
+insert into insert_ignore_special_source values (31, 31, 31, 18446744073709551616, 2156, 2156, b'11111');
 insert ignore into insert_ignore_special_types
 select 3, '2156', v, 9, 99 from insert_ignore_special_source;
 insert ignore into insert_ignore_special_types
 select 4, d, 0, 9, 99 from insert_ignore_special_source;
 insert ignore into insert_ignore_special_types
 select 5, d256, 0, 9, 99 from insert_ignore_special_source;
+insert ignore into insert_ignore_special_types
+select 6, 0, u, 1, 1 from insert_ignore_special_source;
+insert ignore into insert_ignore_special_types
+select 7, 0, f, 1, 1 from insert_ignore_special_source;
+insert ignore into insert_ignore_special_types
+select 8, 0, d, 1, 1 from insert_ignore_special_source;
+insert ignore into insert_ignore_special_types
+select 9, 0, b, 1, 1 from insert_ignore_special_source;
+drop table if exists insert_ignore_special_bit64;
+create table insert_ignore_special_bit64 (b bit(64));
+insert ignore into insert_ignore_special_bit64
+select f64 from insert_ignore_special_source;
+select hex(b) from insert_ignore_special_bit64;
+drop table insert_ignore_special_bit64;
 select id, y + 0, bin(b + 0), e, e + 0, s, s + 0
 from insert_ignore_special_types order by id;
 drop table insert_ignore_special_source;

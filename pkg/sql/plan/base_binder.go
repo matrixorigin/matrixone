@@ -2118,7 +2118,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			}
 
 			if subquery := rightArg.GetSub(); subquery != nil {
-				leftArg = useStoredMySQLSpecialTypeForNumericSubquery(leftArg, rightArg)
+				leftArg = b.useStoredMySQLSpecialTypesForNumericSubquery(leftArg, rightArg)
 				if list := leftArg.GetList(); list != nil {
 					if len(list.List) != int(subquery.RowSize) {
 						return nil, moerr.NewNYIf(b.GetContext(), "subquery should return %d columns", len(list.List))
@@ -2165,7 +2165,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			}
 
 			if subquery := rightArg.GetSub(); subquery != nil {
-				leftArg = useStoredMySQLSpecialTypeForNumericSubquery(leftArg, rightArg)
+				leftArg = b.useStoredMySQLSpecialTypesForNumericSubquery(leftArg, rightArg)
 				if list := leftArg.GetList(); list != nil {
 					if len(list.List) != int(subquery.RowSize) {
 						return nil, moerr.NewInvalidInputf(b.GetContext(), "subquery should return %d columns", len(list.List))
@@ -2214,7 +2214,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		}
 
 		if subquery := expr.GetSub(); subquery != nil {
-			child = useStoredMySQLSpecialTypeForNumericSubquery(child, expr)
+			child = b.useStoredMySQLSpecialTypesForNumericSubquery(child, expr)
 			if list := child.GetList(); list != nil {
 				if len(list.List) != int(subquery.RowSize) {
 					return nil, moerr.NewInvalidInputf(b.GetContext(), "subquery should return %d columns", len(list.List))
@@ -4739,14 +4739,82 @@ func useStoredMySQLSpecialTypesForNumericInList(name string, args, rawArgs []*Ex
 	return result
 }
 
-func useStoredMySQLSpecialTypeForNumericSubquery(left, subquery *Expr) *Expr {
-	if subquery == nil || !makeTypeByPlan2Expr(subquery).IsNumeric() {
+// useStoredMySQLSpecialTypesForNumericSubquery applies the numeric operand
+// contract in both directions.  Subquery references expose only one scalar
+// type for single-column results, so tuple comparisons must inspect the
+// subquery projection position-by-position rather than the tuple type itself.
+func (b *baseBinder) useStoredMySQLSpecialTypesForNumericSubquery(left, subqueryExpr *Expr) *Expr {
+	projectList := b.subqueryProjectList(subqueryExpr)
+	if len(projectList) == 0 {
 		return left
 	}
-	if raw, ok := storedMySQLSpecialTypeExpr(left); ok {
-		return raw
+
+	left = useStoredMySQLSpecialTypeForNumericProjection(left, projectList)
+	for i, project := range projectList {
+		if !numericSubqueryOperandAt(left, i) {
+			continue
+		}
+		if raw, ok := storedMySQLSpecialTypeExpr(project); ok {
+			projectList[i] = raw
+		}
 	}
 	return left
+}
+
+func (b *baseBinder) subqueryProjectList(expr *Expr) []*Expr {
+	if b.builder == nil || expr == nil || expr.GetSub() == nil {
+		return nil
+	}
+	nodeID := expr.GetSub().NodeId
+	if nodeID < 0 || int(nodeID) >= len(b.builder.qry.Nodes) {
+		return nil
+	}
+	return b.builder.qry.Nodes[nodeID].ProjectList
+}
+
+func useStoredMySQLSpecialTypeForNumericProjection(left *Expr, projects []*Expr) *Expr {
+	if left == nil || len(projects) == 0 {
+		return left
+	}
+	if list := left.GetList(); list != nil {
+		if len(list.List) != len(projects) {
+			return left
+		}
+		var result []*Expr
+		for i, item := range list.List {
+			if !makeTypeByPlan2Expr(projects[i]).IsNumeric() {
+				continue
+			}
+			raw, ok := storedMySQLSpecialTypeExpr(item)
+			if !ok {
+				continue
+			}
+			if result == nil {
+				result = append([]*Expr(nil), list.List...)
+			}
+			result[i] = raw
+		}
+		if result == nil {
+			return left
+		}
+		return &Expr{Typ: left.Typ, Expr: &plan.Expr_List{List: &plan.ExprList{List: result}}}
+	}
+	if len(projects) == 1 && makeTypeByPlan2Expr(projects[0]).IsNumeric() {
+		if raw, ok := storedMySQLSpecialTypeExpr(left); ok {
+			return raw
+		}
+	}
+	return left
+}
+
+func numericSubqueryOperandAt(left *Expr, index int) bool {
+	if left == nil {
+		return false
+	}
+	if list := left.GetList(); list != nil {
+		return index < len(list.List) && makeTypeByPlan2Expr(list.List[index]).IsNumeric()
+	}
+	return index == 0 && makeTypeByPlan2Expr(left).IsNumeric()
 }
 
 func isSetDisplayValueExpr(expr *Expr) bool {
