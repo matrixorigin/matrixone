@@ -5561,6 +5561,15 @@ func TestSubQuery(t *testing.T) {
 				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY < n1.N_NATIONKEY
 			)
 		)`, // two-level correlated ALL subquery
+		`SELECT n1.N_NATIONKEY,
+			(SELECT MAX(n2.N_REGIONKEY)
+			 FROM NATION n2
+			 WHERE n2.N_REGIONKEY = (
+				 SELECT MAX(n3.N_REGIONKEY)
+				 FROM NATION n3
+				 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY
+			 ))
+		 FROM NATION n1`, // two-level correlated scalar aggregate subquery
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 

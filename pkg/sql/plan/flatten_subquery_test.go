@@ -72,6 +72,212 @@ func TestHasInnerColumnInDeepCorrelatedFilters(t *testing.T) {
 	}))
 }
 
+func TestScalarAggregatePlanSupportsDeepCorrelation(t *testing.T) {
+	const (
+		groupTag     int32 = 10
+		aggregateTag int32 = 11
+	)
+
+	tests := []struct {
+		name      string
+		wrapper   plan.Node_NodeType
+		configure func(*plan.Node)
+		directAgg bool
+		wrongTag  bool
+		want      bool
+	}{
+		{name: "direct aggregate", directAgg: true, want: true},
+		{name: "projection", wrapper: plan.Node_PROJECT, want: true},
+		{
+			name:    "limit",
+			wrapper: plan.Node_PROJECT,
+			configure: func(node *plan.Node) {
+				node.Limit = makePlan2Uint64ConstExprWithType(1)
+			},
+		},
+		{
+			name:    "offset",
+			wrapper: plan.Node_PROJECT,
+			configure: func(node *plan.Node) {
+				node.Offset = makePlan2Uint64ConstExprWithType(1)
+			},
+		},
+		{
+			name:    "rank",
+			wrapper: plan.Node_PROJECT,
+			configure: func(node *plan.Node) {
+				node.RankOption = &plan.RankOption{Mode: "rank"}
+			},
+		},
+		{name: "sort", wrapper: plan.Node_SORT},
+		{name: "distinct", wrapper: plan.Node_DISTINCT},
+		{name: "filter", wrapper: plan.Node_FILTER},
+		{name: "wrong aggregate", directAgg: true, wrongTag: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tag := aggregateTag
+			if test.wrongTag {
+				tag++
+			}
+			nodes := []*plan.Node{{
+				NodeType:    plan.Node_AGG,
+				BindingTags: []int32{groupTag, tag},
+			}}
+			rootID := int32(0)
+			if !test.directAgg {
+				wrapper := &plan.Node{
+					NodeType: test.wrapper,
+					Children: []int32{0},
+				}
+				if test.configure != nil {
+					test.configure(wrapper)
+				}
+				nodes = append(nodes, wrapper)
+				rootID = 1
+			}
+
+			builder := &QueryBuilder{qry: &plan.Query{Nodes: nodes}}
+			require.Equal(t, test.want,
+				builder.scalarAggregatePlanSupportsDeepCorrelation(rootID, aggregateTag))
+		})
+	}
+}
+
+func TestNestedCorrelatedScalarAggregatePullsUpGroupingKey(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+		SELECT n1.N_NATIONKEY,
+		       (SELECT MAX(n2.N_REGIONKEY)
+		          FROM NATION n2
+		         WHERE n2.N_REGIONKEY = (
+		               SELECT MAX(n3.N_REGIONKEY)
+		                 FROM NATION n3
+		                WHERE n3.N_NATIONKEY = n1.N_NATIONKEY))
+		  FROM NATION n1`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.NotEmpty(t, query.Steps)
+
+	visited := make(map[int32]bool)
+	var visit func(int32)
+	visit = func(nodeID int32) {
+		require.GreaterOrEqual(t, nodeID, int32(0))
+		require.Less(t, int(nodeID), len(query.Nodes))
+		if visited[nodeID] {
+			return
+		}
+		visited[nodeID] = true
+
+		node := query.Nodes[nodeID]
+		require.NotNil(t, node)
+		for _, exprs := range [][]*plan.Expr{
+			node.ProjectList,
+			node.OnList,
+			node.FilterList,
+			node.GroupBy,
+			node.AggList,
+		} {
+			for _, expr := range exprs {
+				require.False(t, hasCorrCol(expr), "reachable %s node contains a correlated expression", node.NodeType)
+			}
+		}
+		for _, orderBy := range node.OrderBy {
+			require.False(t, hasCorrCol(orderBy.Expr), "reachable SORT contains a correlated expression")
+		}
+		for _, childID := range node.Children {
+			visit(childID)
+		}
+	}
+
+	for _, rootID := range query.Steps {
+		visit(rootID)
+	}
+}
+
+func TestNestedCorrelatedScalarStillRejectsUnsafeShapes(t *testing.T) {
+	for _, sql := range []string{
+		`SELECT n1.N_NATIONKEY,
+		        (SELECT MAX(n2.N_REGIONKEY)
+		           FROM NATION n2
+		          WHERE n2.N_REGIONKEY = (
+		                SELECT n3.N_REGIONKEY
+		                  FROM NATION n3
+		                 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY))
+		   FROM NATION n1`,
+		`SELECT n1.N_NATIONKEY,
+		        (SELECT MAX(n2.N_REGIONKEY)
+		           FROM NATION n2
+		          WHERE n2.N_REGIONKEY = (
+		                SELECT COUNT(*)
+		                  FROM NATION n3
+		                 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY))
+		   FROM NATION n1`,
+		`SELECT n1.N_NATIONKEY,
+		        (SELECT MAX(n2.N_REGIONKEY)
+		           FROM NATION n2
+		          WHERE n2.N_REGIONKEY = (
+		                SELECT APPROX_COUNT(n3.N_REGIONKEY)
+		                  FROM NATION n3
+		                 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY))
+		   FROM NATION n1`,
+		`SELECT n1.N_NATIONKEY,
+		        (SELECT MAX(n2.N_REGIONKEY)
+		           FROM NATION n2
+		          WHERE n2.N_REGIONKEY = (
+		                SELECT APPROX_COUNT_DISTINCT(n3.N_REGIONKEY)
+		                  FROM NATION n3
+		                 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY))
+		   FROM NATION n1`,
+		`SELECT n1.N_NATIONKEY,
+		        (SELECT COUNT(COALESCE((
+		                SELECT MAX(n3.N_REGIONKEY)
+		                  FROM NATION n3
+		                 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY), 0))
+		           FROM NATION n2)
+		   FROM NATION n1`,
+		`SELECT n1.N_NATIONKEY,
+		        (SELECT MAX(n2.N_REGIONKEY)
+		           FROM NATION n2
+		          WHERE n2.N_REGIONKEY = COALESCE((
+		                SELECT MAX(n3.N_REGIONKEY)
+		                  FROM NATION n3
+		                 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY), 0))
+		   FROM NATION n1`,
+		`SELECT n1.N_NATIONKEY,
+		        (SELECT MAX(n2.N_REGIONKEY)
+		           FROM NATION n2
+		          WHERE n2.N_REGIONKEY = (
+		                SELECT COALESCE(MAX(n3.N_REGIONKEY), 0)
+		                  FROM NATION n3
+		                 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY))
+		   FROM NATION n1`,
+		`SELECT n1.N_NATIONKEY,
+		        (SELECT MAX(n2.N_REGIONKEY)
+		           FROM NATION n2
+		          WHERE n2.N_REGIONKEY = (
+		                SELECT MAX(n3.N_REGIONKEY)
+		                  FROM NATION n3
+		                 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY
+		                 LIMIT 1))
+		   FROM NATION n1`,
+		`SELECT n1.N_NATIONKEY,
+		        (SELECT MAX(n2.N_REGIONKEY)
+		           FROM NATION n2
+		          WHERE n2.N_REGIONKEY = (
+		                SELECT MAX(n3.N_REGIONKEY)
+		                  FROM NATION n3
+		                 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY
+		                 LIMIT 1 OFFSET 1))
+		   FROM NATION n1`,
+	} {
+		_, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		require.ErrorContains(t, err, "correlated columns in SCALAR subquery deeper than 1 level")
+	}
+}
+
 func TestInSubqueryJoinShapePreservesThreeValuedSemantics(t *testing.T) {
 	tests := []struct {
 		name       string
