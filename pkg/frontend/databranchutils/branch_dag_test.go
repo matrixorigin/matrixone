@@ -272,6 +272,71 @@ func TestComputeAlterLineageCompactionPlan(t *testing.T) {
 	)
 }
 
+func TestComponentHasLiveLogicalBranch(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		start uint64
+		rows  []DataBranchMetadata
+		want  bool
+	}{
+		{
+			name:  "historical ALTER generations only",
+			start: 3,
+			rows: []DataBranchMetadata{
+				{TableID: 2, PTableID: 1, Level: AlterLineageLevel},
+				{TableID: 3, PTableID: 2, Level: AlterLineageLevel},
+			},
+		},
+		{
+			name:  "live logical branch",
+			start: 2,
+			rows: []DataBranchMetadata{
+				{TableID: 2, PTableID: 1, Level: "table"},
+			},
+			want: true,
+		},
+		{
+			name:  "logical ownership inherited through ALTER",
+			start: 3,
+			rows: []DataBranchMetadata{
+				{TableID: 2, PTableID: 1, Level: "table", TableDeleted: true},
+				{TableID: 3, PTableID: 2, Level: "alter:table"},
+			},
+			want: true,
+		},
+		{
+			name:  "live logical sibling across ancestor",
+			start: 3,
+			rows: []DataBranchMetadata{
+				{TableID: 2, PTableID: 1, Level: "table"},
+				{TableID: 3, PTableID: 1, Level: AlterLineageLevel},
+			},
+			want: true,
+		},
+		{
+			name:  "deleted logical sibling",
+			start: 3,
+			rows: []DataBranchMetadata{
+				{TableID: 2, PTableID: 1, Level: "table", TableDeleted: true},
+				{TableID: 3, PTableID: 1, Level: AlterLineageLevel},
+			},
+		},
+		{
+			name:  "historical ALTER cycle",
+			start: 1,
+			rows: []DataBranchMetadata{
+				{TableID: 1, PTableID: 2, Level: AlterLineageLevel},
+				{TableID: 2, PTableID: 1, Level: AlterLineageLevel},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dag := NewBranchReclaimDag(tc.rows)
+			require.Equal(t, tc.want, dag.ComponentHasLiveLogicalBranch(tc.start))
+		})
+	}
+}
+
 func TestComputeAlterLineageCompactionPlanReclaimsDeletedAlterGenerations(t *testing.T) {
 	rows := []DataBranchMetadata{
 		{TableID: 2, PTableID: 1, CloneTS: 100, Level: "alter", TableDeleted: true},
