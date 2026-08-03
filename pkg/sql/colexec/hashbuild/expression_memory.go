@@ -15,6 +15,7 @@
 package hashbuild
 
 import (
+	"errors"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -61,6 +62,110 @@ type ExpressionMemoryLease struct {
 	recoveryReady       bool
 	recoveryReconcile   bool
 	released            bool
+}
+
+type expressionRecoveryCheckpoint struct {
+	reservation              *process.HashBuildReservation
+	reservationSize          uint64
+	recoveryRows             int
+	recoveryReady            bool
+	recoveryReconcile        bool
+	recoveryPeak             []uint64
+	recoveryMayReplace       []bool
+	recoveryCandidate        []uint64
+	recoveryCandidateReplace []bool
+}
+
+func (l *ExpressionMemoryLease) checkpointRecovery(rows int) expressionRecoveryCheckpoint {
+	if l == nil || l.budget == nil || (l.recoveryReady && rows <= l.recoveryRows) {
+		return expressionRecoveryCheckpoint{}
+	}
+	checkpoint := expressionRecoveryCheckpoint{
+		reservation:              l.recoveryReservation,
+		recoveryRows:             l.recoveryRows,
+		recoveryReady:            l.recoveryReady,
+		recoveryReconcile:        l.recoveryReconcile,
+		recoveryPeak:             make([]uint64, len(l.slots)),
+		recoveryMayReplace:       make([]bool, len(l.slots)),
+		recoveryCandidate:        make([]uint64, len(l.slots)),
+		recoveryCandidateReplace: make([]bool, len(l.slots)),
+	}
+	if checkpoint.reservation != nil {
+		checkpoint.reservationSize = checkpoint.reservation.Size()
+	}
+	for i := range l.slots {
+		checkpoint.recoveryPeak[i] = l.slots[i].recoveryPeak
+		checkpoint.recoveryMayReplace[i] = l.slots[i].recoveryMayReplace
+		checkpoint.recoveryCandidate[i] = l.slots[i].recoveryCandidate
+		checkpoint.recoveryCandidateReplace[i] = l.slots[i].recoveryCandidateReplace
+	}
+	return checkpoint
+}
+
+func (l *ExpressionMemoryLease) rollbackRecovery(checkpoint expressionRecoveryCheckpoint) error {
+	if l == nil || checkpoint.recoveryPeak == nil {
+		return nil
+	}
+	if len(l.slots) != len(checkpoint.recoveryPeak) ||
+		len(l.slots) != len(checkpoint.recoveryMayReplace) ||
+		len(l.slots) != len(checkpoint.recoveryCandidate) ||
+		len(l.slots) != len(checkpoint.recoveryCandidateReplace) {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	if checkpoint.reservation == nil {
+		if l.recoveryReservation != nil {
+			if !l.recoveryReservation.Release() {
+				return process.ErrHashBuildReservationInactive
+			}
+			l.recoveryReservation = nil
+		}
+	} else {
+		if l.recoveryReservation != checkpoint.reservation {
+			return process.ErrHashBuildBudgetInvalid
+		}
+		if _, err := l.recoveryReservation.ReconcileDown(checkpoint.reservationSize); err != nil {
+			return err
+		}
+	}
+	for i := range l.slots {
+		l.slots[i].recoveryPeak = checkpoint.recoveryPeak[i]
+		l.slots[i].recoveryMayReplace = checkpoint.recoveryMayReplace[i]
+		l.slots[i].recoveryCandidate = checkpoint.recoveryCandidate[i]
+		l.slots[i].recoveryCandidateReplace = checkpoint.recoveryCandidateReplace[i]
+	}
+	l.recoveryRows = checkpoint.recoveryRows
+	l.recoveryReady = checkpoint.recoveryReady
+	l.recoveryReconcile = checkpoint.recoveryReconcile
+	return nil
+}
+
+// EnsureRunRecoveryWith admits expression recovery and one dependent recovery
+// owner as a transaction. The dependent admission must either succeed without
+// a partial state change or return an error. On failure, the expression lease
+// restores its prior reservation and prepared row high water before the caller
+// can fall back to a smaller recovery window.
+func (l *ExpressionMemoryLease) EnsureRunRecoveryWith(
+	proc *process.Process,
+	rows int,
+	ensureDependent func() error,
+) error {
+	if ensureDependent == nil {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	checkpoint := l.checkpointRecovery(rows)
+	if err := l.EnsureRunRecovery(proc, rows); err != nil {
+		if rollbackErr := l.rollbackRecovery(checkpoint); rollbackErr != nil {
+			return errors.Join(err, rollbackErr)
+		}
+		return err
+	}
+	if err := ensureDependent(); err != nil {
+		if rollbackErr := l.rollbackRecovery(checkpoint); rollbackErr != nil {
+			return errors.Join(err, rollbackErr)
+		}
+		return err
+	}
+	return nil
 }
 
 // NewBudgetedExpressionExecutors admits the mpool-backed capacity owned by

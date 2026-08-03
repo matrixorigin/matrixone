@@ -32,15 +32,16 @@ import (
 )
 
 const (
-	hashBuildRecoveryQueryCap = int64(28 << 20)
+	hashBuildRecoveryQueryCap = int64(64 << 20)
 	hashBuildRecoveryRows     = 1_000_000
 )
 
 // TestHashBuildSharedBudgetRecoverySQL is the SQL-protocol counterexample for
-// late spill admission. join_spill_mem remains at its automatic threshold: a
-// lower finite query budget must force a parallel shuffle HashBuild to
-// transition from retained data to spill without losing rows or surfacing a
-// terminal memory error.
+// late spill admission. join_spill_mem remains at its automatic threshold so a
+// finite query budget makes the parallel shuffle HashBuild transition from
+// retained data to spill. A one-shot fault fixes the first recovery window at
+// 1024 rows, making the public fallback path observable without depending on
+// worker scheduling.
 //
 // The physical input is intentionally narrow and bounded. Patched statistics
 // select the same shuffle topology as a large analytical join, while the CN's
@@ -94,13 +95,14 @@ func TestHashBuildSharedBudgetRecoverySQL(t *testing.T) {
 	execJoinSpillSQL(t, ctx, conn, "set @@join_spill_mem = 0")
 
 	execJoinSpillSQL(t, ctx, conn,
-		"create table recovery_probe (k bigint not null, payload bigint not null) cluster by k")
+		"create table recovery_probe (k bigint not null, payload varchar(32) not null) cluster by k")
 	execJoinSpillSQL(t, ctx, conn,
-		"create table recovery_build (k bigint not null, payload bigint not null, payload2 bigint not null) cluster by k")
+		"create table recovery_build (k bigint not null, payload varchar(32) not null, payload2 bigint not null) cluster by k")
 	execJoinSpillSQL(t, ctx, conn,
-		"insert into recovery_probe select result, result from generate_series(1, 4096) g")
+		"insert into recovery_probe select result, 'x' from generate_series(1, 4096) g")
 	execJoinSpillSQL(t, ctx, conn, fmt.Sprintf(
-		"insert into recovery_build select result, result, -result from generate_series(1, %d) g",
+		"insert into recovery_build select result, case when result <= 900000 then 'x' else repeat('x', 32) end, -result "+
+			"from generate_series(1, %d) g",
 		hashBuildRecoveryRows))
 
 	patchJoinSpillStats(t, ctx, conn, dbName, "recovery_probe", 20_000_000)
@@ -121,12 +123,28 @@ func TestHashBuildSharedBudgetRecoverySQL(t *testing.T) {
 
 	spillBefore := promtestutil.ToFloat64(
 		metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1"))
+	chunkFallbackBefore := promtestutil.ToFloat64(
+		metricv2.HashBuildBudgetEventCounter.WithLabelValues(
+			"spill_recovery", "chunk_fallback", "query"))
+	execJoinSpillSQL(t, ctx, conn, "select enable_fault_injection()")
+	execJoinSpillSQL(t, ctx, conn,
+		"select add_fault_point('hashbuild-spill-recovery-chunk-fallback', '1:1:1:', 'echo', 1024, '')")
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		_, _ = conn.ExecContext(cleanupCtx,
+			"select remove_fault_point('hashbuild-spill-recovery-chunk-fallback')")
+	})
 	var count int64
 	require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&count))
 	require.Equal(t, int64(4096), count)
 	require.Greater(t, promtestutil.ToFloat64(
 		metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1")), spillBefore,
 		"the automatic-threshold query must spill because of the shared hard budget")
+	require.Greater(t, promtestutil.ToFloat64(
+		metricv2.HashBuildBudgetEventCounter.WithLabelValues(
+			"spill_recovery", "chunk_fallback", "query")), chunkFallbackBefore,
+		"the SQL counterexample must enter direct-spill chunk recovery")
 
 	// A terminal recovery bug often leaves the service reachable but the query
 	// dependency graph poisoned. Verify both the result and a fresh statement.

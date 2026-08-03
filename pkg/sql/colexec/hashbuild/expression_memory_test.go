@@ -337,6 +337,95 @@ func TestExpressionMemoryLeaseRecoveryGrowFailureKeepsPriorGuarantee(t *testing.
 	require.Zero(t, generation.Used())
 }
 
+func TestExpressionMemoryLeaseRecoveryRollbackRestoresPriorGuarantee(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	expr := makeExpressionLeaseTestExpr(t, proc)
+	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	executors, lease, err := NewBudgetedExpressionExecutors(
+		proc, generation, []*plan.Expr{expr}, false)
+	require.NoError(t, err)
+
+	small := makeExpressionLeaseTestBatch(proc, 1)
+	defer small.Clean(proc.Mp())
+	require.NoError(t, lease.EnsureRunRecovery(proc, small.RowCount()))
+	oldReserved := lease.Reserved()
+	oldUsed := generation.Used()
+	checkpoint := lease.checkpointRecovery(colexec.DefaultBatchSize)
+	require.NoError(t, lease.EnsureRunRecovery(proc, colexec.DefaultBatchSize))
+	require.Greater(t, lease.Reserved(), oldReserved)
+	require.Greater(t, generation.Used(), oldUsed)
+
+	require.NoError(t, lease.rollbackRecovery(checkpoint))
+	require.Equal(t, oldReserved, lease.Reserved())
+	require.Equal(t, oldUsed, generation.Used())
+	require.True(t, lease.recoveryReady)
+	require.Equal(t, small.RowCount(), lease.recoveryRows)
+	require.NoError(t, lease.Eval(
+		proc,
+		[]*batch.Batch{small},
+		small.RowCount(),
+		func(_ int, _ *vector.Vector) error { return nil },
+	))
+
+	freeExpressionLeaseTestExecutors(executors)
+	lease.Release()
+	require.Zero(t, generation.Used())
+}
+
+func TestExpressionMemoryLeaseRecoveryTransactionDoesNotStarveSibling(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	const budgetCap = uint64(64 << 20)
+	budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	newWorker := func() ([]colexec.ExpressionExecutor, *ExpressionMemoryLease) {
+		expr := makeExpressionLeaseTestExpr(t, proc)
+		executors, lease, newErr := NewBudgetedExpressionExecutors(
+			proc, generation, []*plan.Expr{expr}, false)
+		require.NoError(t, newErr)
+		require.NoError(t, lease.EnsureRunRecovery(proc, 1))
+		return executors, lease
+	}
+	executorsA, leaseA := newWorker()
+	executorsB, leaseB := newWorker()
+	usedBeforeGrowth := generation.Used()
+	reservedBeforeA := leaseA.Reserved()
+
+	checkpoint := leaseA.checkpointRecovery(colexec.DefaultBatchSize)
+	require.NoError(t, leaseA.EnsureRunRecovery(proc, colexec.DefaultBatchSize))
+	expressionGrowth := leaseA.Reserved() - reservedBeforeA
+	require.Positive(t, expressionGrowth)
+	require.NoError(t, leaseA.rollbackRecovery(checkpoint))
+	require.Equal(t, usedBeforeGrowth, generation.Used())
+
+	blocker, err := generation.Reserve(budgetCap - usedBeforeGrowth - expressionGrowth)
+	require.NoError(t, err)
+	err = leaseA.EnsureRunRecoveryWith(proc, colexec.DefaultBatchSize, func() error {
+		_, reserveErr := generation.Reserve(1)
+		return reserveErr
+	})
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.Equal(t, reservedBeforeA, leaseA.Reserved())
+	require.Equal(t, budgetCap-expressionGrowth, generation.Used(),
+		"the failed worker must return its unused expression growth")
+
+	require.NoError(t, leaseB.EnsureRunRecovery(proc, colexec.DefaultBatchSize),
+		"the sibling worker must admit from the budget returned by worker A")
+	require.Equal(t, budgetCap, generation.Used())
+
+	require.True(t, blocker.Release())
+	freeExpressionLeaseTestExecutors(executorsA)
+	freeExpressionLeaseTestExecutors(executorsB)
+	leaseA.Release()
+	leaseB.Release()
+	require.Zero(t, generation.Used())
+}
+
 func TestExpressionMemoryLeasePreAdmitsVariableReplacement(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

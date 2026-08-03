@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -220,28 +221,26 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 	var spillFiles []*os.File
 	bundleTransferred := false
 
-	ensureExpressionRecovery := func(rows int) error {
+	ensureRecovery := func(rows int, ensureScratch func() error) error {
 		lease := ctr.hashmapBuilder.expressionLease
 		if lease == nil || lease.Len() != len(ctr.hashmapBuilder.executors) ||
 			len(ctr.hashmapBuilder.executors) != len(hashBuild.Conditions) {
 			return process.ErrHashBuildBudgetInvalid
 		}
-		return lease.EnsureRunRecovery(proc, rows)
+		return lease.EnsureRunRecoveryWith(proc, rows, ensureScratch)
 	}
 	ensureDirectRecovery := func(bat *batch.Batch) error {
 		if bat == nil {
 			return nil
 		}
-		if err := ensureExpressionRecovery(bat.RowCount()); err != nil {
-			return err
-		}
-		return ctr.ensureDirectSpillRecovery(bat, analyzer)
+		return ensureRecovery(bat.RowCount(), func() error {
+			return ctr.ensureDirectSpillRecovery(bat, analyzer)
+		})
 	}
 	ensureRetainedRecovery := func(projection batchCopyProjection) error {
-		if err := ensureExpressionRecovery(projection.maxRetainedRows); err != nil {
-			return err
-		}
-		return ctr.ensureRetainedSpillRecovery(projection, analyzer)
+		return ensureRecovery(projection.maxRetainedRows, func() error {
+			return ctr.ensureRetainedSpillRecovery(projection, analyzer)
+		})
 	}
 	ensureDirectRecoveryWithReclaim := func(bat *batch.Batch) error {
 		err := ensureDirectRecovery(bat)
@@ -269,7 +268,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			sourceAlreadyCharged,
 		)
 	}
-	spillDirectInRecoveryChunks := func(bat *batch.Batch, admissionErr error) error {
+	spillDirectInRecoveryChunks := func(bat *batch.Batch, admissionErr error, injectedCeiling int) error {
 		lease := ctr.hashmapBuilder.expressionLease
 		if bat == nil || lease == nil || !lease.recoveryReady || lease.recoveryRows <= 0 {
 			return admissionErr
@@ -283,6 +282,9 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		chunks := int64(0)
 		probes := int64(0)
 		chunkCeiling := min(bat.RowCount(), lease.recoveryRows)
+		if injectedCeiling > 0 {
+			chunkCeiling = min(chunkCeiling, injectedCeiling)
+		}
 		for start := 0; start < bat.RowCount(); {
 			remaining := bat.RowCount() - start
 			chunkRows := min(remaining, chunkCeiling)
@@ -334,6 +336,8 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		analyzer.GetOpStats().AddExtraStat("HashBuildSpillRecoveryChunkFallbacks", 1)
 		analyzer.GetOpStats().AddExtraStat("HashBuildSpillRecoveryChunks", chunks)
 		analyzer.GetOpStats().AddExtraStat("HashBuildSpillRecoveryChunkProbes", probes)
+		v2.HashBuildBudgetEventCounter.WithLabelValues(
+			"spill_recovery", "chunk_fallback", "query").Inc()
 		return nil
 	}
 
@@ -420,11 +424,15 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			return err
 		}
 		if hashBuild.IsShuffle {
+			if ceiling, _, injected := fault.TriggerFault("hashbuild-spill-recovery-chunk-fallback"); injected && ceiling > 0 {
+				return spillDirectInRecoveryChunks(
+					bat, process.ErrHashBuildBudgetAdmission, int(ceiling))
+			}
 			if err := ensureDirectRecoveryWithReclaim(bat); err != nil {
 				if !isHashBuildMemoryAdmission(err) {
 					return err
 				}
-				return spillDirectInRecoveryChunks(bat, err)
+				return spillDirectInRecoveryChunks(bat, err, 0)
 			}
 		}
 		return spillBatch(bat, false)
