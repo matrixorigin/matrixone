@@ -204,10 +204,29 @@ func expressionInitialOwnedBytes(expr *plan.Expr) (uint64, error) {
 	case *plan.Expr_List:
 		return expressionListInitialOwnedBytes(typed.List.GetList())
 	case *plan.Expr_F:
-		return expressionListInitialOwnedBytes(typed.F.GetArgs())
+		children, err := expressionListInitialOwnedBytes(typed.F.GetArgs())
+		if err != nil {
+			return 0, err
+		}
+		own := expressionFunctionInitialOwnedBytes(typed.F)
+		if children > math.MaxUint64-own {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		return children + own, nil
 	default:
 		return 0, nil
 	}
+}
+
+func expressionFunctionInitialOwnedBytes(fn *plan.Function) uint64 {
+	if fn == nil || fn.Func == nil {
+		return 0
+	}
+	fid, _ := function.DecodeOverloadID(fn.Func.Obj)
+	if fid == function.SERIAL || fid == function.SERIAL_FULL {
+		return types.DefaultPackerCapacity()
+	}
+	return 0
 }
 
 func expressionListInitialOwnedBytes(exprs []*plan.Expr) (uint64, error) {

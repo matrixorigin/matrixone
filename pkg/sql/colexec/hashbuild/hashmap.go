@@ -463,6 +463,11 @@ func expressionTreePeakWithSelection(
 		return 0, 0, process.ErrHashBuildBudgetInvalid
 	}
 	total += output
+	private, privateErr := expressionFunctionPrivatePeak(expr)
+	if privateErr != nil || total > math.MaxUint64-private {
+		return 0, 0, process.ErrHashBuildBudgetInvalid
+	}
+	total += private
 
 	if _, isFunction := expr.Expr.(*plan.Expr_F); mayReceivePartialSelection && isFunction {
 		// A partially selected function retains both its ordinary full-row
@@ -489,9 +494,11 @@ func expressionTreePeakWithSelection(
 
 // expressionResultPeak keeps the generic SQL-type bound for ordinary
 // functions, but lets functions with a stronger allocation contract provide a
-// tighter result bound. serial and serial_full are the first such functions:
-// their packer output is the sum of the component encodings, not an arbitrary
-// VARCHAR(max) value.
+// tighter result-vector bound. serial and serial_full are the first such
+// functions: their encoded result is the sum of the component encodings, not
+// an arbitrary VARCHAR(max) value. Their retained Packer is charged separately
+// by expressionFunctionPrivatePeak so duplicate-result ownership does not
+// duplicate the sole function operator.
 func expressionResultPeak(expr *plan.Expr, rows uint64) (uint64, error) {
 	if expr == nil {
 		return 0, process.ErrHashBuildBudgetInvalid
@@ -505,25 +512,76 @@ func expressionResultPeak(expr *plan.Expr, rows uint64) (uint64, error) {
 		return expressionTypePeak(expr.Typ, rows)
 	}
 
-	var payloadPerRow uint64
-	for _, arg := range fn.F.Args {
-		if arg == nil {
-			return 0, process.ErrHashBuildBudgetInvalid
-		}
-		component, supported := function.SerialEncodedTypeSizeBound(types.New(
-			types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale,
-		))
-		if !supported {
-			// Keep the pre-existing representation-independent bound if the
-			// encoder contract does not recognize a planner type.
-			return expressionTypePeak(expr.Typ, rows)
-		}
-		if payloadPerRow > math.MaxUint64-component {
-			return 0, process.ErrHashBuildBudgetInvalid
-		}
-		payloadPerRow += component
+	payloadPerRow, _, supported, err := serialExpressionPackerBounds(fn.F)
+	if err != nil {
+		return 0, err
+	}
+	if !supported {
+		// Keep the pre-existing representation-independent bound if the
+		// encoder contract does not recognize a planner type.
+		return expressionTypePeak(expr.Typ, rows)
 	}
 	return expressionVarlenaWidthPeak(payloadPerRow, rows)
+}
+
+func expressionFunctionPrivatePeak(expr *plan.Expr) (uint64, error) {
+	fn, ok := expr.Expr.(*plan.Expr_F)
+	if !ok || fn.F == nil || fn.F.Func == nil {
+		return 0, nil
+	}
+	fid, _ := function.DecodeOverloadID(fn.F.Func.Obj)
+	if fid != function.SERIAL && fid != function.SERIAL_FULL {
+		return 0, nil
+	}
+	payload, maxAppend, supported, err := serialExpressionPackerBounds(fn.F)
+	if err != nil {
+		return 0, err
+	}
+	if !supported {
+		// getPackFun resolves every component before encoding the first row.
+		// An unsupported component can therefore retain only the constructor's
+		// initial Packer allocation before Eval fails.
+		return types.DefaultPackerCapacity(), nil
+	}
+	capacity, ok := types.PackerCapacityUpperBound(payload, maxAppend)
+	if !ok {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	return capacity, nil
+}
+
+// serialExpressionPackerBounds returns both the maximum encoded row length and
+// the largest single append issued by its component encoders. A component
+// cannot append more in one call than its complete encoded-size bound, so the
+// maximum component bound is also a representation-independent append bound.
+func serialExpressionPackerBounds(fn *plan.Function) (
+	payload uint64,
+	maxAppend uint64,
+	supported bool,
+	err error,
+) {
+	if fn == nil {
+		return 0, 0, false, process.ErrHashBuildBudgetInvalid
+	}
+	for _, arg := range fn.Args {
+		if arg == nil {
+			return 0, 0, false, process.ErrHashBuildBudgetInvalid
+		}
+		component, ok := function.SerialEncodedTypeSizeBound(types.New(
+			types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale,
+		))
+		if !ok {
+			return 0, 0, false, nil
+		}
+		if payload > math.MaxUint64-component {
+			return 0, 0, false, process.ErrHashBuildBudgetInvalid
+		}
+		payload += component
+		if component > maxAppend {
+			maxAppend = component
+		}
+	}
+	return payload, maxAppend, true, nil
 }
 
 func nodeFunctionArgs(expr *plan.Expr) []*plan.Expr {

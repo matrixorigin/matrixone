@@ -20,9 +20,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-// ExpressionExecutorRetainedBytes returns the mpool-backed vector capacity
-// owned by an executor tree. Borrowed evaluation results are deliberately not
-// counted: every owned vector is reached through exactly one executor field.
+// ExpressionExecutorRetainedBytes returns the backing capacity owned by an
+// executor tree. Borrowed evaluation results are deliberately not counted:
+// every owned vector is reached through exactly one executor field. Stateful
+// functions may additionally expose retained non-vector backing allocations.
 //
 // Go-managed executor metadata is not included here. HashBuild's expression
 // admission bound retains a separate per-vector allowance for that metadata.
@@ -62,6 +63,13 @@ func ExpressionExecutorRetainedBytes(executor ExpressionExecutor) (uint64, bool)
 		)
 		if !ok {
 			return 0, false
+		}
+		if expr.retainedBytesFn != nil {
+			retained := expr.retainedBytesFn()
+			if total > math.MaxUint64-retained {
+				return 0, false
+			}
+			total += retained
 		}
 		for _, parameter := range expr.selectedParameterVectors {
 			bytes, valid := expressionVectorRetainedBytes(parameter)
