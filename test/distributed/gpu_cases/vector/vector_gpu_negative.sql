@@ -58,6 +58,11 @@ create index ixq using ivfpq on t (v) op_type 'vector_l2_ops' lists=2 m=8 bits_p
 create index ixd using cagra on t (v) op_type 'vector_l2_ops' DISTRIBUTION_MODE 'bogus';
 create index ixd using ivfpq on t (v) op_type 'vector_l2_ops' lists=2 m=8 bits_per_code=8 DISTRIBUTION_MODE 'bogus';
 
+-- Invalid IVF-PQ options must not leave metadata: the same index name remains
+-- available for a valid create, and DROP proves the created index is usable.
+create index ix using ivfpq on t (v) op_type 'vector_l2_ops' lists=2 m=8 bits_per_code=8;
+drop index ix on t;
+
 -- QUANTIZATION 'bf16' has no GPU bfloat16 storage (cuvs has no bfloat16 index or
 -- quantizer). It passes the downcast width guard (bf16 is 2 bytes <= f32's 4),
 -- so it must be rejected explicitly rather than silently building f32 storage.

@@ -155,7 +155,7 @@ func TestCagraParamsFromTree_InvalidQuantization(t *testing.T) {
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
-	require.Contains(t, err.Error(), "cagra quantization")
+	require.Equal(t, "not supported: invalid quantization. quantization is invalid. f32, f16, int8, uint8", err.Error())
 }
 
 func TestCagraParamsFromTree_InvalidDistributionMode(t *testing.T) {

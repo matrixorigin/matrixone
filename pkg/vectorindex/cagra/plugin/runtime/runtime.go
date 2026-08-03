@@ -233,7 +233,7 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	if len(idx.IndexOption.Quantization) > 0 {
 		quantize := catalog.ToLower(idx.IndexOption.Quantization)
 		if err := (CatalogHooks{}).ValidQuantization(quantize, ""); err != nil {
-			return nil, err
+			return nil, moerr.NewNotSupportedNoCtx("invalid quantization. quantization is invalid. f32, f16, int8, uint8")
 		}
 		res[catalog.Quantization] = quantize
 	} else {

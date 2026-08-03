@@ -294,11 +294,12 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	// so the entries build (compile) and the search can read it back. Only the
 	// predefined names that map to a MO narrow vector type are accepted.
 	if q := idx.IndexOption.Quantization; q != "" {
-		q = catalog.ToLower(q)
-		if err := (CatalogHooks{}).ValidQuantization(q, ""); err != nil {
-			return nil, err
+		normalized := catalog.ToLower(q)
+		if err := (CatalogHooks{}).ValidQuantization(normalized, ""); err != nil {
+			return nil, moerr.NewNotSupportedNoCtxf(
+				"ivfflat: unsupported quantization '%s' (supported: 'float32', 'float16', 'bf16', 'int8', 'uint8')", q)
 		}
-		res[catalog.Quantization] = q
+		res[catalog.Quantization] = normalized
 	}
 
 	if len(idx.IndexOption.IncludeColumns) > 0 {

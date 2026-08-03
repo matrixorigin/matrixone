@@ -8,7 +8,7 @@ insert into ivf_t values(1,"[1,2,3,4]"),(2,"[5,6,7,8]"),(3,"[9,10,11,12]"),(4,"[
 create index idx using ivfflat on ivf_t(b) lists=2 op_type "vector_bogus_ops";
 invalid input: invalid op_type: 'vector_bogus_ops'
 create index idx using ivfflat on ivf_t(b) lists=2 quantization 'garbage';
-not supported: ivfflat quantization "garbage" (supported: float32, float16, bf16, int8, uint8)
+not supported: ivfflat: unsupported quantization 'garbage' (supported: 'float32', 'float16', 'bf16', 'int8', 'uint8')
 create index idx using ivfflat on ivf_t(b) lists=2 op_type "vector_l2_ops";
 show create table ivf_t;
 Table    Create Table

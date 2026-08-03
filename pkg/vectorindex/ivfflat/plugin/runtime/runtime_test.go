@@ -201,7 +201,9 @@ func TestIvfflatParamsFromTree_InvalidQuantization(t *testing.T) {
 		_, err := CatalogHooks{}.ParamsFromTree(idx)
 		require.Errorf(t, err, "quantization %q should be rejected", q)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
-		require.Contains(t, err.Error(), "ivfflat quantization")
+		require.Equalf(t,
+			"not supported: ivfflat: unsupported quantization '"+q+"' (supported: 'float32', 'float16', 'bf16', 'int8', 'uint8')",
+			err.Error(), "quantization %q error text", q)
 	}
 }
 
