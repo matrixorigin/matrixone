@@ -8739,7 +8739,10 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return
 	}
-	restoreViewMySQLSpecialTypeProjects(viewCtx)
+	nodeID, err = builder.appendViewMySQLSpecialTypeBoundary(nodeID, viewCtx)
+	if err != nil {
+		return
+	}
 	if len(viewStmt.ColNames) > 0 {
 		if len(viewStmt.ColNames) != len(viewCtx.headings) {
 			return 0, moerr.NewViewWrongList(builder.GetContext())
@@ -8753,28 +8756,49 @@ func (builder *QueryBuilder) bindView(
 	return
 }
 
-// restoreViewMySQLSpecialTypeProjects exposes the stored ENUM/SET index at the
-// view boundary. The outer query binder then treats it like an ordinary special
-// type column and adds the display wrapper required by its own projection.
-func restoreViewMySQLSpecialTypeProjects(ctx *BindContext) {
-	visibleProjects := min(len(ctx.headings), len(ctx.projects))
+// appendViewMySQLSpecialTypeBoundary restores ENUM/SET only after the complete
+// view plan. Semantic operators inside the view must continue to consume the
+// SQL-visible value because index-to-value conversion is not always injective.
+func (builder *QueryBuilder) appendViewMySQLSpecialTypeBoundary(nodeID int32, ctx *BindContext) (int32, error) {
+	visibleProjects := min(len(ctx.headings), len(ctx.projects), len(ctx.results))
+	sourceTag := ctx.rootTag()
+	projects := make([]*plan.Expr, len(ctx.results))
+	for i := range ctx.results {
+		projects[i] = GetColExpr(ctx.results[i].Typ, sourceTag, int32(i))
+	}
+	needsBoundary := false
+
 	for i := 0; i < visibleProjects; i++ {
-		sourceExpr, ok := mysqlSpecialTypeSourceExpr(ctx.projects[i])
+		targetType, ok := mysqlSpecialTypeSourceType(ctx.projects[i])
 		if !ok {
 			continue
 		}
 
-		oldProject := ctx.projects[i]
-		restored := DeepCopyExpr(sourceExpr)
-		ctx.projects[i] = restored
-		if i < len(ctx.results) {
-			if ctx.results[i] == oldProject {
-				ctx.results[i] = restored
-			} else {
-				ctx.results[i].Typ = restored.Typ
-			}
+		needsBoundary = true
+		var err error
+		if isEnumPlanType(targetType) {
+			projects[i], err = funcCastForEnumType(builder.GetContext(), projects[i], *targetType)
+		} else {
+			projects[i], err = funcCastForSetType(builder.GetContext(), projects[i], *targetType)
+		}
+		if err != nil {
+			return 0, err
 		}
 	}
+	if !needsBoundary {
+		return nodeID, nil
+	}
+
+	ctx.projectTag = builder.genNewBindTag()
+	ctx.resultTag = 0
+	ctx.projects = projects
+	ctx.results = projects
+	return builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: projects,
+		Children:    []int32{nodeID},
+		BindingTags: []int32{ctx.projectTag},
+	}, ctx), nil
 }
 
 // ViewData persisted before parser SQL mode was recorded used MatrixOne's
