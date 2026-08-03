@@ -183,3 +183,23 @@ insert ignore into t_insert_ignore_panic (pk, col1) values
 select count(*) from t_insert_ignore_panic;
 count(*)
 23
+set @insert_ignore_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+drop table if exists insert_ignore_special_types;
+create table insert_ignore_special_types (
+id int primary key,
+y year,
+b bit(4),
+e enum('a', 'b', ''),
+s set('x', 'y', 'z')
+);
+insert ignore into insert_ignore_special_types values
+(1, '2156', b'11111', 'bad', 'x,bad'),
+(2, '2156', 31, 9, 99);
+select id, y + 0, bin(b + 0), e, e + 0, s, s + 0
+from insert_ignore_special_types order by id;
+id    y + 0    bin(b + 0)    e    e + 0    s    s + 0
+1    0    1111        0    x    1
+2    0    1111        0    x,y    3
+drop table insert_ignore_special_types;
+set session sql_mode = @insert_ignore_sql_mode;

@@ -993,10 +993,22 @@ func floatNumToFixFloat[T constraints.Float | constraints.Integer](
 	return T(v), nil
 }
 
-func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *types.Type) (canInsert bool, val uint64, err error) {
+func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *types.Type, isIgnore bool) (canInsert bool, val uint64, err error) {
 	var ok bool
 	canInsert = true
 	width := colType.Width
+	max := bitMaxValue(width)
+	adjustOverflow := func(value uint64) bool {
+		if value <= max {
+			return false
+		}
+		if isIgnore {
+			val = max
+			return true
+		}
+		err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, value)
+		return true
+	}
 
 	switch numVal.ValType {
 	case tree.P_bool:
@@ -1014,8 +1026,7 @@ func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *type
 		for i := 0; i < len(s); i++ {
 			val = (val << 8) | uint64(s[i])
 		}
-		if val > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+		if adjustOverflow(val) {
 			return
 		}
 
@@ -1025,10 +1036,13 @@ func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *type
 			err = moerr.NewInvalidInputf(proc.Ctx, "invalid float value '%s'", numVal.String())
 			return
 		} else if num < 0 {
+			if isIgnore {
+				val = 0
+				return
+			}
 			err = moerr.NewInvalidInputf(proc.Ctx, "unsupported negative value %v", val)
 			return
-		} else if uint64(math.Round(num)) > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+		} else if adjustOverflow(uint64(math.Round(num))) {
 			return
 		}
 		val = uint64(math.Round(num))
@@ -1039,10 +1053,13 @@ func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *type
 			err = moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 			return
 		} else if tempVal < 0 {
+			if isIgnore {
+				val = 0
+				return
+			}
 			err = moerr.NewInvalidInputf(proc.Ctx, "unsupported negative value %d", tempVal)
 			return
-		} else if uint64(tempVal) > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, tempVal)
+		} else if adjustOverflow(uint64(tempVal)) {
 			return
 		}
 		val = uint64(tempVal)
@@ -1051,32 +1068,28 @@ func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *type
 		if val, ok = numVal.Uint64(); !ok {
 			err = moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 			return
-		} else if val > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+		} else if adjustOverflow(val) {
 			return
 		}
 
 	case tree.P_hexnum:
 		if val, err = HexToInt(numVal.String()); err != nil {
 			return
-		} else if val > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+		} else if adjustOverflow(val) {
 			return
 		}
 
 	case tree.P_bit:
 		if val, err = BinaryToInt(numVal.String()); err != nil {
 			return
-		} else if val > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+		} else if adjustOverflow(val) {
 			return
 		}
 
 	case tree.P_ScoreBinary:
 		if val, err = ScoreBinaryToInt(numVal.String()); err != nil {
 			return
-		} else if val > uint64(1<<width-1) {
-			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+		} else if adjustOverflow(val) {
 			return
 		}
 
@@ -1084,4 +1097,14 @@ func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *type
 		canInsert = false
 	}
 	return
+}
+
+func bitMaxValue(width int32) uint64 {
+	if width >= 64 {
+		return math.MaxUint64
+	}
+	if width <= 0 {
+		return 0
+	}
+	return uint64(1)<<width - 1
 }

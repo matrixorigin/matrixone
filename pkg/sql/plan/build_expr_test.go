@@ -605,6 +605,80 @@ func TestEnumAndSetKeepStoredValuesInExpressionContexts(t *testing.T) {
 	}
 }
 
+func TestEnumAndSetNumericContractsUseStoredValues(t *testing.T) {
+	tests := []struct {
+		name        string
+		typ         plan.Type
+		sql         string
+		wantDisplay bool
+	}{
+		{
+			name: "enum explicit numeric cast",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select cast(n_name as signed) from nation",
+		},
+		{
+			name: "enum numeric function",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select abs(n_name) from nation",
+		},
+		{
+			name: "enum numeric column comparison",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name = n_nationkey from nation",
+		},
+		{
+			name: "enum between numeric bounds",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name between 1 and 2 from nation",
+		},
+		{
+			name: "enum in numeric column list",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name in (n_nationkey) from nation",
+		},
+		{
+			name: "enum comparison unary numeric literal",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name = +1 from nation",
+		},
+		{
+			name:        "enum explicit string cast control",
+			typ:         plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:         "select cast(n_name as char) from nation",
+			wantDisplay: true,
+		},
+		{
+			name:        "enum string comparison control",
+			typ:         plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:         "select n_name = 'a' from nation",
+			wantDisplay: true,
+		},
+		{
+			name: "set numeric function",
+			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:  "select abs(n_name) from nation",
+		},
+		{
+			name:        "set string function control",
+			typ:         plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:         "select length(n_name) from nation",
+			wantDisplay: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.tables["nation"].Cols[1].Typ = tc.typ
+
+			pl, err := runOneExprStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantDisplay, containsEnumOrSetDisplayValue(pl.GetQuery().Nodes[1].ProjectList[0]))
+		})
+	}
+}
+
 func TestIsBitwiseBinaryOp(t *testing.T) {
 	for _, op := range []tree.BinaryOp{
 		tree.BIT_XOR,

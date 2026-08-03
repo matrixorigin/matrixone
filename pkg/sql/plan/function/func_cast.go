@@ -1045,28 +1045,28 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = bitToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_int8:
 		s := vector.GenerateFunctionFixedTypeParameter[int8](from)
-		err = int8ToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		err = int8ToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_int16:
 		s := vector.GenerateFunctionFixedTypeParameter[int16](from)
-		err = int16ToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		err = int16ToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_int32:
 		s := vector.GenerateFunctionFixedTypeParameter[int32](from)
-		err = int32ToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		err = int32ToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_int64:
 		s := vector.GenerateFunctionFixedTypeParameter[int64](from)
-		err = int64ToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		err = int64ToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_uint8:
 		s := vector.GenerateFunctionFixedTypeParameter[uint8](from)
-		err = uint8ToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		err = uint8ToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_uint16:
 		s := vector.GenerateFunctionFixedTypeParameter[uint16](from)
-		err = uint16ToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		err = uint16ToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_uint32:
 		s := vector.GenerateFunctionFixedTypeParameter[uint32](from)
-		err = uint32ToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		err = uint32ToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_uint64:
 		s := vector.GenerateFunctionFixedTypeParameter[uint64](from)
-		err = uint64ToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		err = uint64ToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_float32:
 		s := vector.GenerateFunctionFixedTypeParameter[float32](from)
 		err = float32ToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
@@ -1362,9 +1362,10 @@ func bitToOthers(ctx context.Context,
 // although we can merge the int8ToOthers / int16ToOthers ... into intToOthers (use the generic).
 // but for extensibility, we didn't do that.
 // uint and float are the same.
-func int8ToOthers(ctx context.Context,
+func int8ToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[int8],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	ctx := proc.Ctx
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
@@ -1424,14 +1425,15 @@ func int8ToOthers(ctx context.Context,
 		return integerToTimestamp(source, rs, length, selectList)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
-		return integerToYear(ctx, source, rs, length, selectList)
+		return integerToYear(ctx, proc, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int8 to %s", toType))
 }
 
-func int16ToOthers(ctx context.Context,
+func int16ToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[int16],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	ctx := proc.Ctx
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
@@ -1491,14 +1493,15 @@ func int16ToOthers(ctx context.Context,
 		return integerToTimestamp(source, rs, length, selectList)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
-		return integerToYear(ctx, source, rs, length, selectList)
+		return integerToYear(ctx, proc, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int16 to %s", toType))
 }
 
-func int32ToOthers(ctx context.Context,
+func int32ToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[int32],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	ctx := proc.Ctx
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
@@ -1558,14 +1561,15 @@ func int32ToOthers(ctx context.Context,
 		return integerToTimestamp(source, rs, length, selectList)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
-		return integerToYear(ctx, source, rs, length, selectList)
+		return integerToYear(ctx, proc, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int32 to %s", toType))
 }
 
-func int64ToOthers(ctx context.Context,
+func int64ToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[int64],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	ctx := proc.Ctx
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
@@ -1628,14 +1632,15 @@ func int64ToOthers(ctx context.Context,
 		return integerToEnum(ctx, source, rs, length, selectList)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
-		return integerToYear(ctx, source, rs, length, selectList)
+		return integerToYear(ctx, proc, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from int64 to %s", toType))
 }
 
-func uint8ToOthers(ctx context.Context,
+func uint8ToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[uint8],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	ctx := proc.Ctx
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
@@ -1697,14 +1702,15 @@ func uint8ToOthers(ctx context.Context,
 		return integerToEnum(ctx, source, rs, length, selectList)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
-		return integerToYear(ctx, source, rs, length, selectList)
+		return integerToYear(ctx, proc, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint8 to %s", toType))
 }
 
-func uint16ToOthers(ctx context.Context,
+func uint16ToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[uint16],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	ctx := proc.Ctx
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
@@ -1766,14 +1772,15 @@ func uint16ToOthers(ctx context.Context,
 		return integerToEnum(ctx, source, rs, length, selectList)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
-		return integerToYear(ctx, source, rs, length, selectList)
+		return integerToYear(ctx, proc, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint16 to %s", toType))
 }
 
-func uint32ToOthers(ctx context.Context,
+func uint32ToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[uint32],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	ctx := proc.Ctx
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
@@ -1835,14 +1842,15 @@ func uint32ToOthers(ctx context.Context,
 		return integerToEnum(ctx, source, rs, length, selectList)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
-		return integerToYear(ctx, source, rs, length, selectList)
+		return integerToYear(ctx, proc, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uint32 to %s", toType))
 }
 
-func uint64ToOthers(ctx context.Context,
+func uint64ToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[uint64],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	ctx := proc.Ctx
 	switch toType.Oid {
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
@@ -2650,7 +2658,7 @@ func strTypeToOthers(proc *process.Process,
 		return strToArray[uint8](ctx, source, rs, length, toType)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
-		return strToYear(ctx, source, rs, length, selectList)
+		return strToYear(ctx, proc, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from %s to %s", source.GetType(), toType))
 }
@@ -8542,7 +8550,7 @@ func yearToNull[T types.FixedSizeT](
 }
 
 // integerToYear converts integer types to YEAR
-func integerToYear[T constraints.Integer](ctx context.Context,
+func integerToYear[T constraints.Integer](ctx context.Context, proc *process.Process,
 	source vector.FunctionParameterWrapper[T],
 	rs *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList) error {
 	for i := 0; i < length; i++ {
@@ -8554,8 +8562,9 @@ func integerToYear[T constraints.Integer](ctx context.Context,
 		} else {
 			year, err := types.ParseMoYearFromInt(int64(v))
 			if err != nil {
-				// MySQL returns NULL for invalid year values
-				if err := rs.Append(0, true); err != nil {
+				// INSERT IGNORE adjusts an invalid YEAR to 0000. Ordinary casts
+				// retain their established NULL-on-invalid behavior.
+				if err := rs.Append(0, !statementIgnore(proc)); err != nil {
 					return err
 				}
 			} else {
@@ -8569,7 +8578,7 @@ func integerToYear[T constraints.Integer](ctx context.Context,
 }
 
 // strToYear converts string to YEAR type
-func strToYear(ctx context.Context,
+func strToYear(ctx context.Context, proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Varlena],
 	rs *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList) error {
 	for i := 0; i < length; i++ {
@@ -8581,8 +8590,9 @@ func strToYear(ctx context.Context,
 		} else {
 			year, err := types.ParseMoYear(string(v))
 			if err != nil {
-				// MySQL returns NULL for invalid year values
-				if err := rs.Append(0, true); err != nil {
+				// INSERT IGNORE adjusts an invalid YEAR to 0000. Ordinary casts
+				// retain their established NULL-on-invalid behavior.
+				if err := rs.Append(0, !statementIgnore(proc)); err != nil {
 					return err
 				}
 			} else {

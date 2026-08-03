@@ -1519,7 +1519,7 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		return MakePlan2BoolConstExprWithType(num), err
 
 	case types.T_bit:
-		canInsert, num, err := util.SetInsertValueBit(proc, numVal, colType)
+		canInsert, num, err := util.SetInsertValueBit(proc, numVal, colType, isIgnore)
 		if err != nil || !canInsert {
 			return nil, err
 		}

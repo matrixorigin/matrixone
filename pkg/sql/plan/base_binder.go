@@ -162,6 +162,12 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		if err != nil {
 			return
 		}
+		// ENUM and SET normally bind as their display strings.  An explicit
+		// numeric cast is, however, a numeric operand contract in MySQL and
+		// must start from the stored ordinal/bitmap instead of that string.
+		if makeTypeByPlan2Type(typ).IsNumeric() {
+			expr, _ = storedMySQLSpecialTypeExpr(expr)
+		}
 		if b.builder != nil {
 			var rewritten bool
 			expr, rewritten, err = b.builder.rewriteProjectedMySQLSpecialTypeDisplayCast(expr, expr, typ)
@@ -2626,6 +2632,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, err
 		}
 	}
+	args = useStoredMySQLSpecialTypesForNumericContract(b.GetContext(), name, args)
 	//promote interval expr rewrite here
 	if name == "interval" {
 		if len(astArgs) == 2 {
@@ -4636,6 +4643,97 @@ func storedSetBitmapExpr(expr *Expr) (*Expr, bool) {
 	// as an ordinary bitmap and does not convert it back through SET semantics.
 	bitmap.Typ.Enumvalues = ""
 	return bitmap, true
+}
+
+// storedMySQLSpecialTypeExpr removes the presentation wrapper that column
+// binding adds for ENUM and SET.  The wrapper is appropriate for ordinary
+// string contexts, but numeric contracts must consume the stored ENUM ordinal
+// or SET bitmap.  Keep this narrowly structural: only the wrappers made by
+// makeEnumOrSetDisplayValue are unwrapped.
+func storedMySQLSpecialTypeExpr(expr *Expr) (*Expr, bool) {
+	if isSetDisplayValueExpr(expr) {
+		return storedSetBitmapExpr(expr)
+	}
+	if expr == nil {
+		return expr, false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != moEnumCastIndexToValueFun || len(fn.Args) != 2 || fn.Args[1] == nil {
+		return expr, false
+	}
+	return DeepCopyExpr(fn.Args[1]), true
+}
+
+// useStoredMySQLSpecialTypesForNumericContract chooses ENUM/SET storage from
+// the function overload's bound operand contract, rather than from a small
+// collection of AST shapes.  This preserves display labels for string
+// functions such as LENGTH while allowing numeric consumers such as ABS,
+// comparisons against numeric columns, and IN lists to use MySQL ordinals.
+func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name string, args []*Expr) []*Expr {
+	rawArgs := make([]*Expr, len(args))
+	hasSpecialArg := false
+	for i, arg := range args {
+		raw, unwrapped := storedMySQLSpecialTypeExpr(arg)
+		rawArgs[i] = raw
+		if !unwrapped {
+			continue
+		}
+		hasSpecialArg = true
+	}
+	if !hasSpecialArg {
+		return args
+	}
+
+	// The display-bound operands describe the contract selected for this SQL
+	// expression.  In particular, resolving a raw ENUM against a string can
+	// itself select a numeric comparison rule, so do not use the raw overload
+	// to decide whether the caller asked for numeric semantics.
+	displayTypes := make([]types.Type, len(args))
+	for i, arg := range args {
+		displayTypes[i] = makeTypeByPlan2Expr(arg)
+	}
+	resolved, err := function.GetFunctionByName(ctx, name, displayTypes)
+	if err != nil {
+		return useStoredMySQLSpecialTypesForNumericInList(name, args, rawArgs)
+	}
+	targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+	if !shouldCast || len(targets) != len(rawArgs) {
+		return useStoredMySQLSpecialTypesForNumericInList(name, args, rawArgs)
+	}
+	result := args
+	changed := false
+	for i, arg := range args {
+		if _, unwrapped := storedMySQLSpecialTypeExpr(arg); unwrapped && targets[i].IsNumeric() {
+			if !changed {
+				result = append([]*Expr(nil), args...)
+				changed = true
+			}
+			result[i] = rawArgs[i]
+		}
+	}
+	return result
+}
+
+// An IN list is represented as a plan.ExprList and is not assigned one scalar
+// cast target by the function registry.  Its already-bound member types are
+// therefore the operand contract: use the stored value only when every member
+// is numeric.  Mixed lists retain normal string semantics.
+func useStoredMySQLSpecialTypesForNumericInList(name string, args, rawArgs []*Expr) []*Expr {
+	if name != "in" || len(args) != 2 || args[1].GetList() == nil || len(args[1].GetList().List) == 0 {
+		return args
+	}
+	for _, member := range args[1].GetList().List {
+		if !makeTypeByPlan2Expr(member).IsNumeric() {
+			return args
+		}
+	}
+	result := append([]*Expr(nil), args...)
+	for i, arg := range args {
+		if _, unwrapped := storedMySQLSpecialTypeExpr(arg); unwrapped {
+			result[i] = rawArgs[i]
+		}
+	}
+	return result
 }
 
 func isSetDisplayValueExpr(expr *Expr) bool {
