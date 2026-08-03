@@ -1918,12 +1918,13 @@ func appendBatchRowsAsSQLValues(
 	tmpValsBuffer *bytes.Buffer,
 	appender sqlValuesAppender,
 ) (err error) {
-	if wrapped.fromUpdate && appender.batchInfo != nil && appender.batchInfo.deleteNeedsExactFloatKeyMatch() {
+	exactFloatKeyUpdate, err := dataBranchExactFloatKeyUpdateBatch(wrapped, appender.batchInfo)
+	if err != nil {
+		return err
+	}
+	if exactFloatKeyUpdate {
 		if wrapped.kind == diffDelete {
 			return nil
-		}
-		if wrapped.kind != diffInsert {
-			return moerr.NewInternalErrorNoCtxf("unexpected Data Branch update batch kind %q", wrapped.kind)
 		}
 	}
 
@@ -1941,25 +1942,51 @@ func appendBatchRowsAsSQLValues(
 		); err != nil {
 			return
 		}
-		if wrapped.fromUpdate && appender.batchInfo != nil && appender.batchInfo.deleteNeedsExactFloatKeyMatch() {
-			tmpValsBuffer.Reset()
-			if err = writeExactFloatKeyUpdateSQL(ctx, ses, tblStuff, row, tmpValsBuffer); err != nil {
-				return err
-			}
-			statement := strings.TrimSuffix(tmpValsBuffer.String(), ";\n")
-			if err = execSQLStatements(ctx, ses, appender.bh, appender.writeFile, []string{statement}); err != nil {
-				return err
-			}
-			continue
-		}
-		if err = appendDataBranchApplyRowAsSQLValues(
-			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender,
+		if err = appendOrExecuteDataBranchApplyRow(
+			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender, exactFloatKeyUpdate,
 		); err != nil {
 			return
 		}
 	}
 
 	return nil
+}
+
+func dataBranchExactFloatKeyUpdateBatch(
+	wrapped batchWithKind,
+	batchInfo *applyBatchInfo,
+) (bool, error) {
+	if !wrapped.fromUpdate || batchInfo == nil || !batchInfo.deleteNeedsExactFloatKeyMatch() {
+		return false, nil
+	}
+	if wrapped.kind != diffDelete && wrapped.kind != diffInsert {
+		return false, moerr.NewInternalErrorNoCtxf("unexpected Data Branch update batch kind %q", wrapped.kind)
+	}
+	return true, nil
+}
+
+func appendOrExecuteDataBranchApplyRow(
+	ctx context.Context,
+	ses *Session,
+	tblStuff tableStuff,
+	kind string,
+	row []any,
+	tmpValsBuffer *bytes.Buffer,
+	appender sqlValuesAppender,
+	exactFloatKeyUpdate bool,
+) error {
+	if !exactFloatKeyUpdate {
+		return appendDataBranchApplyRowAsSQLValues(
+			ctx, ses, tblStuff, kind, row, tmpValsBuffer, appender,
+		)
+	}
+
+	tmpValsBuffer.Reset()
+	if err := writeExactFloatKeyUpdateSQL(ctx, ses, tblStuff, row, tmpValsBuffer); err != nil {
+		return err
+	}
+	statement := strings.TrimSuffix(tmpValsBuffer.String(), ";\n")
+	return execSQLStatements(ctx, ses, appender.bh, appender.writeFile, []string{statement})
 }
 
 func writeExactFloatKeyUpdateSQL(

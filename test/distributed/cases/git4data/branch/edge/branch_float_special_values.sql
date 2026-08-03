@@ -186,6 +186,21 @@ where serial(k) = serial(bit_cast(unhex('0000000000000080') as double));
 data branch merge bit_double_src into bit_double_dst;
 select note, hex(serial(k)) from bit_double_dst order by note;
 
+-- PICK applies accepted same-key changes through the same exact-key UPDATE
+-- path as MERGE. The destination must retain the unpicked NaN payload and
+-- positive-zero rows rather than deleting/reinserting equivalent scalar keys.
+data branch create table bit_float_pick_dst from bit_float_base;
+data branch pick bit_float_src into bit_float_pick_dst
+keys(select k from bit_float_src where note in ('nan1_updated', 'negzero_updated'))
+when conflict accept;
+select note, hex(serial(k)) from bit_float_pick_dst order by note;
+
+data branch create table bit_double_pick_dst from bit_double_base;
+data branch pick bit_double_src into bit_double_pick_dst
+keys(select k from bit_double_src where note in ('nan1_updated', 'negzero_updated'))
+when conflict accept;
+select note, hex(serial(k)) from bit_double_pick_dst order by note;
+
 -- Composite keys apply exact identity independently to both float widths;
 -- paired rows differ only in the selected float representation.
 create table bit_composite_base(
@@ -222,6 +237,14 @@ where serial(f32, f64, tag) = serial(
 data branch merge bit_composite_src into bit_composite_dst;
 select note, hex(serial(f32)), hex(serial(f64)), tag
 from bit_composite_dst order by note;
+
+data branch create table bit_composite_pick_dst from bit_composite_base;
+data branch pick bit_composite_src into bit_composite_pick_dst
+keys(select f32, f64, tag from bit_composite_src
+    where note in ('updated_f32_nan1', 'updated_f64_nan1', 'updated_negzero'))
+when conflict accept;
+select note, hex(serial(f32)), hex(serial(f64)), tag
+from bit_composite_pick_dst order by note;
 
 -- Portable real-key SQL updates rows through exact serial-key predicates, so
 -- storage-level key bits never pass through a delete/reinsert cycle.

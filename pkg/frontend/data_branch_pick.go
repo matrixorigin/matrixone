@@ -279,6 +279,10 @@ func appendPickedBatchRows(
 	if wrapped.side == diffSideBase && wrapped.kind != diffDelete {
 		return nil
 	}
+	exactFloatKeyUpdate, err := dataBranchExactFloatKeyUpdateBatch(wrapped, appender.batchInfo)
+	if err != nil {
+		return err
+	}
 
 	row := make([]any, len(tblStuff.def.colNames))
 
@@ -321,6 +325,9 @@ func appendPickedBatchRows(
 				continue
 			}
 		}
+		if exactFloatKeyUpdate && wrapped.kind == diffDelete {
+			continue
+		}
 
 		if err = extractDataBranchApplyRow(
 			ctx, ses, tblStuff, wrapped.batch, rowIdx, appender.extraColIdxesForRow(wrapped.kind), row,
@@ -328,8 +335,8 @@ func appendPickedBatchRows(
 		); err != nil {
 			return
 		}
-		if err = appendDataBranchApplyRowAsSQLValues(
-			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender,
+		if err = appendOrExecuteDataBranchApplyRow(
+			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender, exactFloatKeyUpdate,
 		); err != nil {
 			return
 		}

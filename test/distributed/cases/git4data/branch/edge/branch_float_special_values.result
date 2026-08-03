@@ -193,6 +193,26 @@ nan0  ¦  21FFF8000000000000  𝄀
 nan1_updated  ¦  21FFF8000000000001  𝄀
 negzero_updated  ¦  217FFFFFFFFFFFFFFF  𝄀
 poszero  ¦  218000000000000000
+data branch create table bit_float_pick_dst from bit_float_base;
+data branch pick bit_float_src into bit_float_pick_dst
+keys(select k from bit_float_src where note in ('nan1_updated', 'negzero_updated'))
+when conflict accept;
+select note, hex(serial(k)) from bit_float_pick_dst order by note;
+➤ note[12,-1,0]  ¦  hex(serial(k))[12,-1,0]  𝄀
+nan0  ¦  20FFC00000  𝄀
+nan1_updated  ¦  20FFC00001  𝄀
+negzero_updated  ¦  207FFFFFFF  𝄀
+poszero  ¦  2080000000
+data branch create table bit_double_pick_dst from bit_double_base;
+data branch pick bit_double_src into bit_double_pick_dst
+keys(select k from bit_double_src where note in ('nan1_updated', 'negzero_updated'))
+when conflict accept;
+select note, hex(serial(k)) from bit_double_pick_dst order by note;
+➤ note[12,-1,0]  ¦  hex(serial(k))[12,-1,0]  𝄀
+nan0  ¦  21FFF8000000000000  𝄀
+nan1_updated  ¦  21FFF8000000000001  𝄀
+negzero_updated  ¦  217FFFFFFFFFFFFFFF  𝄀
+poszero  ¦  218000000000000000
 create table bit_composite_base(
 f32 float,
 f64 double,
@@ -227,6 +247,20 @@ bit_cast(unhex('0000000000000080') as double), 3);
 data branch merge bit_composite_src into bit_composite_dst;
 select note, hex(serial(f32)), hex(serial(f64)), tag
 from bit_composite_dst order by note;
+➤ note[12,-1,0]  ¦  hex(serial(f32))[12,-1,0]  ¦  hex(serial(f64))[12,-1,0]  ¦  tag[4,32,0]  𝄀
+keep_f32_nan0  ¦  20FFC00000  ¦  21C000000000000000  ¦  1  𝄀
+keep_f64_nan0  ¦  20C0400000  ¦  21FFF8000000000000  ¦  2  𝄀
+keep_poszero  ¦  2080000000  ¦  218000000000000000  ¦  3  𝄀
+update_f32_nan1  ¦  20FFC00001  ¦  21C000000000000000  ¦  1  𝄀
+update_f64_nan1  ¦  20C0400000  ¦  21FFF8000000000001  ¦  2  𝄀
+update_negzero  ¦  207FFFFFFF  ¦  217FFFFFFFFFFFFFFF  ¦  3
+data branch create table bit_composite_pick_dst from bit_composite_base;
+data branch pick bit_composite_src into bit_composite_pick_dst
+keys(select f32, f64, tag from bit_composite_src
+where note in ('updated_f32_nan1', 'updated_f64_nan1', 'updated_negzero'))
+when conflict accept;
+select note, hex(serial(f32)), hex(serial(f64)), tag
+from bit_composite_pick_dst order by note;
 ➤ note[12,-1,0]  ¦  hex(serial(f32))[12,-1,0]  ¦  hex(serial(f64))[12,-1,0]  ¦  tag[4,32,0]  𝄀
 keep_f32_nan0  ¦  20FFC00000  ¦  21C000000000000000  ¦  1  𝄀
 keep_f64_nan0  ¦  20C0400000  ¦  21FFF8000000000000  ¦  2  𝄀
