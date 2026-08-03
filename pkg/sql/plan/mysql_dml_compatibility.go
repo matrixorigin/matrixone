@@ -280,15 +280,6 @@ func findMySQLDMLTargetInExprWithOuterTargets(
 	return found, found != ""
 }
 
-func findMySQLDMLTargetInSelect(
-	ctx CompilerContext,
-	stmt tree.SelectStatement,
-	targets []mysqlDMLTarget,
-	visibleCTEs map[string]struct{},
-) (string, bool) {
-	return findMySQLDMLTargetInSelectWithOuterTargets(ctx, stmt, targets, visibleCTEs, nil)
-}
-
 func findMySQLDMLTargetInSelectWithOuterTargets(
 	ctx CompilerContext,
 	stmt tree.SelectStatement,
