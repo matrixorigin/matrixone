@@ -2383,6 +2383,10 @@ func getProjectionByLastNodeWithTag(builder *QueryBuilder, lastNodeId, tag int32
 	if projLength == 0 {
 		return getProjectionByLastNodeWithTag(builder, lastNode.Children[0], tag)
 	}
+	projectionTag := tag
+	if len(lastNode.BindingTags) > 0 {
+		projectionTag = lastNode.BindingTags[0]
+	}
 	projection := make([]*Expr, len(lastNode.ProjectList))
 	for i, expr := range lastNode.ProjectList {
 		name := ""
@@ -2393,7 +2397,7 @@ func getProjectionByLastNodeWithTag(builder *QueryBuilder, lastNodeId, tag int32
 			Typ: expr.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: lastNode.BindingTags[0],
+					RelPos: projectionTag,
 					ColPos: int32(i),
 					Name:   name,
 				},

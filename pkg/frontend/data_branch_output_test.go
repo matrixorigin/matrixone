@@ -1342,7 +1342,8 @@ func TestDataBranchOutputWriteDeleteRowSQLFull(t *testing.T) {
 	tblStuff := tableStuff{
 		baseRel: baseRel,
 	}
-	tblStuff.def.colNames = []string{"id", "name"}
+	tblStuff.def.colNames = []string{"id", "name_new"}
+	tblStuff.def.baseColNames = []string{"id", "name"}
 	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}
 	tblStuff.def.visibleIdxes = []int{0, 1}
 
@@ -1378,7 +1379,7 @@ func TestDataBranchOutputInitAndDropApplyTablesWithWriteFile(t *testing.T) {
 		insertTable:      "__mo_diff_ins_x",
 		deleteKeyNames:   []string{"id"},
 		deleteStageNames: []string{"branch_apply_key_0"},
-		visibleNames:     []string{"id", "name"},
+		writableNames:    []string{"id", "name"},
 	}
 
 	var out bytes.Buffer
@@ -1410,8 +1411,10 @@ func TestDataBranchOutputFlushSqlValuesWithWriteFile(t *testing.T) {
 	tblStuff := tableStuff{
 		baseRel: baseRel,
 	}
-	tblStuff.def.colNames = []string{"id", "name"}
+	tblStuff.def.colNames = []string{"id", "name_new"}
+	tblStuff.def.baseColNames = []string{"id", "name"}
 	tblStuff.def.visibleIdxes = []int{0, 1}
+	tblStuff.def.writableIdxes = []int{0, 1}
 	tblStuff.def.pkColIdx = 0
 	tblStuff.def.pkColIdxes = []int{0, 1}
 
@@ -1422,7 +1425,7 @@ func TestDataBranchOutputFlushSqlValuesWithWriteFile(t *testing.T) {
 		insertTable:      "__mo_diff_ins_x",
 		deleteKeyNames:   []string{"id", "name"},
 		deleteStageNames: []string{"branch_apply_key_0", "branch_apply_key_1"},
-		visibleNames:     []string{"id", "name"},
+		writableNames:    []string{"id", "name"},
 	}
 
 	var out bytes.Buffer
@@ -1481,7 +1484,7 @@ func TestDataBranchOutputTryFlushDeletesOrInserts(t *testing.T) {
 		deleteTable:    "__mo_diff_del_x",
 		insertTable:    "__mo_diff_ins_x",
 		deleteKeyNames: []string{"id"},
-		visibleNames:   []string{"id", "name"},
+		writableNames:  []string{"id", "name"},
 	}
 
 	t.Run("force flush both buffers", func(t *testing.T) {
@@ -1607,8 +1610,10 @@ func TestDataBranchOutputBuildDataBranchApplyLayout(t *testing.T) {
 		baseRel: baseRel,
 	}
 	tblStuff.def.colNames = []string{"id", "name", "age"}
+	tblStuff.def.baseColNames = []string{"id", "name", "age"}
 	tblStuff.def.pkColIdxes = []int{0, 2}
 	tblStuff.def.visibleIdxes = []int{0, 1, 2}
+	tblStuff.def.writableIdxes = []int{0, 1, 2}
 	tblStuff.def.pkKind = normalKind
 
 	deleteByFullRow, deleteKeyColIdxes, info := buildDataBranchApplyLayout(
@@ -1621,7 +1626,7 @@ func TestDataBranchOutputBuildDataBranchApplyLayout(t *testing.T) {
 	require.Equal(t, "t1", info.baseTable)
 	require.Equal(t, []string{"id", "age"}, info.deleteKeyNames)
 	require.Equal(t, []string{"branch_apply_key_0", "branch_apply_key_1"}, info.deleteStageNames)
-	require.Equal(t, []string{"id", "name", "age"}, info.visibleNames)
+	require.Equal(t, []string{"id", "name", "age"}, info.writableNames)
 	require.False(t, info.disableInsertStage)
 	require.True(t, strings.HasPrefix(info.deleteTable, "__mo_diff_del_"))
 	require.True(t, strings.HasPrefix(info.insertTable, "__mo_diff_ins_"))
@@ -1635,7 +1640,7 @@ func TestDataBranchOutputBuildDataBranchApplyLayout(t *testing.T) {
 	require.NotNil(t, info)
 	require.Equal(t, []string{"__mo_fake_pk_col"}, info.deleteKeyNames)
 	require.Equal(t, []string{"branch_apply_key_0"}, info.deleteStageNames)
-	require.Equal(t, []string{"id", "name"}, info.visibleNames)
+	require.Equal(t, []string{"id", "name"}, info.writableNames)
 	require.True(t, info.disableInsertStage)
 
 	deleteByFullRow, deleteKeyColIdxes, info = buildDataBranchApplyLayout(
@@ -1654,6 +1659,45 @@ func TestDataBranchOutputBuildDataBranchApplyLayout(t *testing.T) {
 	require.Nil(t, info)
 }
 
+func TestDataBranchApplyLayoutUsesDestinationColumnNames(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		DbName: "db1",
+		Name:   "base",
+	}).AnyTimes()
+	baseRel.EXPECT().GetTableName().Return("base").AnyTimes()
+
+	for _, tc := range []struct {
+		name            string
+		sourceName      string
+		destinationName string
+	}{
+		{name: "source renamed", sourceName: "payload_new", destinationName: "payload"},
+		{name: "destination renamed", sourceName: "payload", destinationName: "payload_new"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tblStuff := tableStuff{baseRel: baseRel}
+			tblStuff.def.colNames = []string{"id", tc.sourceName}
+			tblStuff.def.baseColNames = []string{"id", tc.destinationName}
+			tblStuff.def.pkColIdxes = []int{0}
+			tblStuff.def.visibleIdxes = []int{0, 1}
+			tblStuff.def.writableIdxes = []int{0, 1}
+			tblStuff.def.pkKind = normalKind
+
+			_, _, info := buildDataBranchApplyLayout(
+				ctx, &Session{}, tblStuff, dataBranchApplyModeOnlineMerge,
+			)
+			require.NotNil(t, info)
+			require.Equal(t, []string{"id"}, info.deleteKeyNames)
+			require.Equal(t, []string{"id", tc.destinationName}, info.writableNames)
+		})
+	}
+}
+
 func TestDataBranchOutputAppenderAppendRowAndFlushAll(t *testing.T) {
 	batchInfo := &applyBatchInfo{
 		dbName:         "db1",
@@ -1661,7 +1705,7 @@ func TestDataBranchOutputAppenderAppendRowAndFlushAll(t *testing.T) {
 		deleteTable:    "__mo_diff_del_x",
 		insertTable:    "__mo_diff_ins_x",
 		deleteKeyNames: []string{"id"},
-		visibleNames:   []string{"id", "name"},
+		writableNames:  []string{"id", "name"},
 	}
 
 	t.Run("append delete in full-row mode", func(t *testing.T) {
@@ -1988,14 +2032,42 @@ func TestNewApplyBatchInfoUsesCommonVisibleColumnsForEvolvedSchema(t *testing.T)
 		types.T_int64.ToType(),
 	}
 	tblStuff.def.visibleIdxes = []int{0, 2, 3}
+	tblStuff.def.writableIdxes = []int{0, 2, 3}
 	tblStuff.def.commonIdxes = []int{0, 1, 3}
 	tblStuff.def.commonVisibleIdxes = []int{0, 3}
+	tblStuff.def.commonWritableIdxes = []int{0, 3}
 	tblStuff.def.tarOnlyIdxes = []int{2}
+	tblStuff.def.baseColNames = []string{"a", "", "", "b"}
 
 	info := newApplyBatchInfo(ctx, ses, tblStuff, []int{0}, false)
 	require.NotNil(t, info)
 	require.Equal(t, []string{"a"}, info.deleteKeyNames)
-	require.Equal(t, []string{"a", "b"}, info.visibleNames)
+	require.Equal(t, []string{"a", "b"}, info.writableNames)
+}
+
+func TestNewApplyBatchInfoExcludesGeneratedColumns(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.colNames = []string{"id", "value", "generated_value"}
+	tblStuff.def.baseColNames = []string{"id", "value", "generated_value"}
+	tblStuff.def.visibleIdxes = []int{0, 1, 2}
+	tblStuff.def.writableIdxes = []int{0, 1}
+	tblStuff.def.commonVisibleIdxes = []int{0, 1, 2}
+	tblStuff.def.commonWritableIdxes = []int{0, 1}
+
+	projected, err := resolveProjectedIdxes(
+		tree.IdentifierList{tree.Identifier("generated_value")}, tblStuff,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int{2}, projected)
+
+	info := newApplyBatchInfo(ctx, ses, tblStuff, []int{0}, false)
+	require.NotNil(t, info)
+	require.Equal(t, []string{"id", "value"}, info.writableNames)
 }
 
 func TestDataBranchOutputRemoveFileIgnoreError(t *testing.T) {
@@ -2114,6 +2186,9 @@ func TestDataBranchOutputNoPKDeleteModes(t *testing.T) {
 	defer ctrl.Finish()
 
 	tblStuff := newFakePKBranchTableStuff(ctrl)
+	// Exercise the direct no-PK SQL paths with a source-side rename. The row
+	// layout keeps the source name while destination SQL must use baseColNames.
+	tblStuff.def.colNames[1] = "name_new"
 
 	t.Run("online merge deletes by fake pk", func(t *testing.T) {
 		var out bytes.Buffer
@@ -2270,12 +2345,14 @@ func newFakePKBranchTableStuff(ctrl *gomock.Controller) tableStuff {
 	var tblStuff tableStuff
 	tblStuff.baseRel = baseRel
 	tblStuff.def.colNames = []string{"id", "name", "__mo_fake_pk_col"}
+	tblStuff.def.baseColNames = []string{"id", "name", "__mo_fake_pk_col"}
 	tblStuff.def.colTypes = []types.Type{
 		types.T_int64.ToType(),
 		types.T_varchar.ToType(),
 		types.T_uint64.ToType(),
 	}
 	tblStuff.def.visibleIdxes = []int{0, 1}
+	tblStuff.def.writableIdxes = []int{0, 1}
 	tblStuff.def.pkColIdx = 2
 	tblStuff.def.pkColIdxes = []int{0, 1}
 	tblStuff.def.pkKind = fakeKind
