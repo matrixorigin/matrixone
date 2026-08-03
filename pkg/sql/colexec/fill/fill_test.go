@@ -1226,6 +1226,36 @@ func TestConsumeNextStabilizesSelfAliasedVarlenSources(t *testing.T) {
 	}
 }
 
+func TestConsumeNextReleasesSnapshotOnAllocationFailure(t *testing.T) {
+	mp, err := mpool.NewMPool("fill-next-snapshot-oom", mpool.MB, mpool.NoFixed)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer proc.Free()
+
+	vec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, vec.PreExtend(2, mp))
+	vec.SetLength(2)
+	vec.SetNull(0)
+	require.NoError(t, vector.SetBytesAt(vec, 1, bytes.Repeat([]byte("b"), 256), mp))
+
+	bat := batch.NewWithSize(1)
+	bat.SetVector(0, vec)
+	bat.SetRowCount(2)
+	defer bat.Clean(mp)
+
+	reserved, err := mp.Alloc(int(mp.Cap()-mp.CurrNB()), true)
+	require.NoError(t, err)
+	defer mp.Free(reserved)
+
+	ctr := &container{
+		bats:    []*batch.Batch{bat},
+		nextRun: make([][]fillCoord, 1),
+	}
+	err = ctr.consumeNext(&Fill{ColLen: 1}, bat, 0, proc)
+	require.ErrorContains(t, err, "mpool out of space")
+	require.Equal(t, mp.Cap(), mp.CurrNB())
+}
+
 func (s *fillStubExpressionExecutor) TypeName() string {
 	return "fillStubExpressionExecutor"
 }
