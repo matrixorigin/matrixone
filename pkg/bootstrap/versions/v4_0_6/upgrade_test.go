@@ -217,6 +217,43 @@ func TestLegacyForeignKeyMetadataUpgradeReadsAndUpdatesDefinitions(t *testing.T)
 	}
 }
 
+func TestLegacyForeignKeyMetadataUpgradeBackfillsAlterAndUnnamedForeignKeys(t *testing.T) {
+	definitionResult := newLegacyForeignKeyDefinitionResultForDefinitions(t, []legacyForeignKeyTableDefinition{
+		{
+			database:  "db",
+			table:     "alter_child",
+			createSQL: "create table alter_child (a int, b int)",
+			foreignKeys: []legacyForeignKeyCatalogRow{
+				{constraintName: "fk_added_by_alter", columnName: "a", referDBName: "db", referTableName: "parent", referColumnName: "a", onDelete: "CASCADE", onUpdate: "SET_NULL"},
+				{constraintName: "fk_added_by_alter", columnName: "b", referDBName: "db", referTableName: "parent", referColumnName: "b", onDelete: "CASCADE", onUpdate: "SET_NULL"},
+			},
+		},
+		{
+			database:  "db",
+			table:     "unnamed_child",
+			createSQL: "create table unnamed_child (parent_id int, foreign key (parent_id) references parent (id))",
+			foreignKeys: []legacyForeignKeyCatalogRow{
+				{constraintName: "catalog-generated-name", columnName: "parent_id", referDBName: "db", referTableName: "parent", referColumnName: "id", onDelete: "RESTRICT", onUpdate: "RESTRICT"},
+			},
+		},
+	})
+	var updates []string
+	txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+		if sql == legacyForeignKeyTableDefinitionsSQL {
+			return definitionResult, nil
+		}
+		updates = append(updates, sql)
+		return executor.Result{}, nil
+	})
+
+	require.NoError(t, upgradeLegacyForeignKeyMetadata(context.Background(), 9, txnExecutor))
+	require.Equal(t, []string{
+		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'CASCADE', on_update = 'SET_NULL' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'alter_child' AND constraint_name = 'fk_added_by_alter' AND column_name = 'a'",
+		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 2, on_delete = 'CASCADE', on_update = 'SET_NULL' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'alter_child' AND constraint_name = 'fk_added_by_alter' AND column_name = 'b'",
+		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'NO_ACTION', on_update = 'NO_ACTION' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'unnamed_child' AND constraint_name = 'catalog-generated-name' AND column_name = 'parent_id'",
+	}, updates)
+}
+
 func TestLegacyForeignKeyMetadataUpdatesRejectInvalidDefinitions(t *testing.T) {
 	for _, createSQL := range []string{
 		"select 1",
@@ -310,7 +347,32 @@ func newVersionTxnExecutor(t *testing.T, mocker func(string) (executor.Result, e
 }
 
 func newLegacyForeignKeyDefinitionResult(t *testing.T) executor.Result {
+	return newLegacyForeignKeyDefinitionResultForDefinitions(t, []legacyForeignKeyTableDefinition{
+		{
+			database:  "db",
+			table:     "child",
+			createSQL: "create table child (parent_id int, child_id int, constraint fk_child_parent foreign key (child_id, parent_id) references parent (child_id, parent_id) on delete cascade on update set null)",
+			foreignKeys: []legacyForeignKeyCatalogRow{
+				{constraintName: "fk_child_parent", columnName: "child_id", referDBName: "db", referTableName: "parent", referColumnName: "child_id", onDelete: "CASCADE", onUpdate: "SET_NULL"},
+				{constraintName: "fk_child_parent", columnName: "parent_id", referDBName: "db", referTableName: "parent", referColumnName: "parent_id", onDelete: "CASCADE", onUpdate: "SET_NULL"},
+			},
+		},
+	})
+}
+
+func newLegacyForeignKeyDefinitionResultForDefinitions(t *testing.T, definitions []legacyForeignKeyTableDefinition) executor.Result {
 	t.Helper()
+	rows := make([]legacyForeignKeyTableDefinition, 0)
+	for _, definition := range definitions {
+		for _, foreignKey := range definition.foreignKeys {
+			rows = append(rows, legacyForeignKeyTableDefinition{
+				database:    definition.database,
+				table:       definition.table,
+				createSQL:   definition.createSQL,
+				foreignKeys: []legacyForeignKeyCatalogRow{foreignKey},
+			})
+		}
+	}
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 	result := executor.NewMemResult([]types.Type{
@@ -325,22 +387,22 @@ func newLegacyForeignKeyDefinitionResult(t *testing.T) executor.Result {
 		types.T_varchar.ToType(),
 		types.T_varchar.ToType(),
 	}, mp)
-	result.NewBatchWithRowCount(2)
-	for column, values := range [][]string{
-		{"db", "db"},
-		{"child", "child"},
-		{
-			"create table child (parent_id int, child_id int, constraint fk_child_parent foreign key (child_id, parent_id) references parent (child_id, parent_id) on delete cascade on update set null)",
-			"create table child (parent_id int, child_id int, constraint fk_child_parent foreign key (child_id, parent_id) references parent (child_id, parent_id) on delete cascade on update set null)",
-		},
-		{"fk_child_parent", "fk_child_parent"},
-		{"child_id", "parent_id"},
-		{"db", "db"},
-		{"parent", "parent"},
-		{"child_id", "parent_id"},
-		{"CASCADE", "CASCADE"},
-		{"SET_NULL", "SET_NULL"},
-	} {
+	result.NewBatchWithRowCount(len(rows))
+	values := make([][]string, 10)
+	for _, row := range rows {
+		foreignKey := row.foreignKeys[0]
+		values[0] = append(values[0], row.database)
+		values[1] = append(values[1], row.table)
+		values[2] = append(values[2], row.createSQL)
+		values[3] = append(values[3], foreignKey.constraintName)
+		values[4] = append(values[4], foreignKey.columnName)
+		values[5] = append(values[5], foreignKey.referDBName)
+		values[6] = append(values[6], foreignKey.referTableName)
+		values[7] = append(values[7], foreignKey.referColumnName)
+		values[8] = append(values[8], foreignKey.onDelete)
+		values[9] = append(values[9], foreignKey.onUpdate)
+	}
+	for column, values := range values {
 		if err := executor.AppendStringRows(result, column, values); err != nil {
 			t.Fatalf("append legacy definition column %d: %v", column, err)
 		}

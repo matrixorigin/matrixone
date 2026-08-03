@@ -26,13 +26,15 @@ create table unnamed_child (
     parent_code int,
     foreign key (parent_id, parent_code) references parent(id, code)
 );
+create table restrict_alter_child (id int primary key, parent_id int, parent_code int);
+alter table restrict_alter_child add constraint fk_metadata_alter_restrict foreign key (parent_id, parent_code) references parent(id, code) on delete restrict on update restrict;
 select TABLE_NAME as table_name, COLUMN_NAME as column_name, REFERENCED_TABLE_NAME as referenced_table_name, REFERENCED_COLUMN_NAME as referenced_column_name, ORDINAL_POSITION as ordinal_position
 from information_schema.KEY_COLUMN_USAGE
-where TABLE_SCHEMA = database() and TABLE_NAME in ('alter_child', 'unnamed_child')
+where TABLE_SCHEMA = database() and TABLE_NAME in ('alter_child', 'restrict_alter_child', 'unnamed_child')
 order by TABLE_NAME, ORDINAL_POSITION;
 select TABLE_NAME as table_name, UPDATE_RULE as update_rule, DELETE_RULE as delete_rule
 from information_schema.REFERENTIAL_CONSTRAINTS
-where CONSTRAINT_SCHEMA = database() and TABLE_NAME in ('alter_child', 'unnamed_child')
+where CONSTRAINT_SCHEMA = database() and TABLE_NAME in ('alter_child', 'restrict_alter_child', 'unnamed_child')
 order by TABLE_NAME;
 desc information_schema.KEY_COLUMN_USAGE;
 show create table information_schema.KEY_COLUMN_USAGE;

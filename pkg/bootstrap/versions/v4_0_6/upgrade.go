@@ -112,7 +112,9 @@ func upgradeLegacyForeignKeyMetadata(ctx context.Context, tenantID int32, txn ex
 	if err != nil {
 		return err
 	}
-
+	if len(definitions) == 0 {
+		return nil
+	}
 	for _, definition := range definitions {
 		updates, err := legacyForeignKeyMetadataUpdates(definition)
 		if err != nil {
