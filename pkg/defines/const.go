@@ -44,7 +44,8 @@ const (
 	MORPCVersion6      int64 = 6 // ordered aggregate pipeline configuration
 	MORPCVersion7      int64 = 7 // structured CHECK constraint metadata and enforcement
 	MORPCVersion8      int64 = 8 // versioned exact runtime-filter key contract
-	MORPCLatestVersion       = MORPCVersion8
+	MORPCVersion9      int64 = 9 // persisted appendable-object abort metadata
+	MORPCLatestVersion       = MORPCVersion9
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

@@ -162,24 +162,47 @@ func (node *memoryNode) getDataWindowOnWriteSchema(
 		return nil
 	}
 	dest, ok := batches[node.writeSchema.Version]
+	persistAbort := node.object.rt.PersistedAObjectAbortSupported()
 	if ok {
-		dest.Extend(node.data.Window(int(from), int(to-from)))
-		dest.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).Extend(commitTSVec)
-		dest.GetVectorByName(objectio.TombstoneAttr_Abort_Attr).Extend(abort)
-		commitTSVec.Close() // TODO no copy
-		abort.Close()
+		// One range collection may visit multiple objects while the rollout gate
+		// changes. Keep the schema chosen by the first batch internally stable.
+		_, persistAbort = dest.Nameidx[objectio.TombstoneAttr_Abort_Attr]
+	}
+	inner := node.data.CloneWindowWithPool(
+		int(from), int(to-from), node.object.rt.VectorPool.Transient)
+	inner.AddVector(objectio.TombstoneAttr_CommitTs_Attr, commitTSVec)
+	if persistAbort {
+		inner.AddVector(objectio.TombstoneAttr_Abort_Attr, abort)
 	} else {
-		inner := node.data.CloneWindowWithPool(int(from), int(to-from), node.object.rt.VectorPool.Transient)
+		// Old readers interpret every non-rowid/non-TS physical column as user
+		// data. Keep their commitTS-only layout and remove rollback holes before
+		// the batch can be flushed or published through logtail.
+		aborts := vector.MustFixedColWithTypeCheck[bool](abort.GetDownstreamVector())
+		for row, aborted := range aborts {
+			if aborted {
+				inner.Delete(row)
+			}
+		}
+		inner.Compact()
+		abort.Close()
+	}
+	if inner.Length() == 0 {
+		inner.Close()
+		return nil
+	}
+	if ok {
+		dest.Extend(inner)
+	} else {
 		batWithVer := &containers.BatchWithVersion{
 			Version:    node.writeSchema.Version,
 			NextSeqnum: uint16(node.writeSchema.Extra.NextColSeqnum),
 			Seqnums:    node.writeSchema.AllSeqnums(),
 			Batch:      inner,
 		}
-		inner.AddVector(objectio.TombstoneAttr_CommitTs_Attr, commitTSVec)
-		inner.AddVector(objectio.TombstoneAttr_Abort_Attr, abort)
 		batWithVer.Seqnums = append(batWithVer.Seqnums, objectio.SEQNUM_COMMITTS)
-		batWithVer.Seqnums = append(batWithVer.Seqnums, objectio.SEQNUM_ABORT)
+		if persistAbort {
+			batWithVer.Seqnums = append(batWithVer.Seqnums, objectio.SEQNUM_ABORT)
+		}
 		batches[node.writeSchema.Version] = batWithVer
 	}
 	return

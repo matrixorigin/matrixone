@@ -20,7 +20,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
@@ -194,10 +196,28 @@ func (r *Runtime) fillDefaults() {
 }
 
 func (r *Runtime) SID() string {
-	if r == nil {
+	if r == nil || r.Options == nil {
 		return ""
 	}
 	return r.Options.SID
+}
+
+// PersistedAObjectAbortSupported reports whether every reader in the current
+// rollout understands appendable objects with the persisted abort column.
+// Deployment keeps MOProtocolVersion at the oldest live service during a
+// rolling upgrade, so writers must retain the legacy layout until version 9 is
+// active.
+func (r *Runtime) PersistedAObjectAbortSupported() bool {
+	serviceRuntime := runtime.ServiceRuntime(r.SID())
+	if serviceRuntime == nil {
+		return false
+	}
+	value, ok := serviceRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion9
 }
 
 func (r *Runtime) PoolUsageReport() {

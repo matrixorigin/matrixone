@@ -19,8 +19,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	api "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -198,8 +200,16 @@ func TestApplyAppendLockedPadsMissingColumnsForUpgradedSchema(t *testing.T) {
 	})
 }
 
-func TestMemoryNodeScanMarksRollbackHoleDeleted(t *testing.T) {
+func TestMemoryNodeRollbackHoleVisibilityAndWriteLayout(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	rt := moruntime.ServiceRuntime("")
+	originalVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion9)
+	defer func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, originalVersion)
+		}
+	}()
 	schema := catalog.MockSchema(1, 0)
 	c := catalog.MockCatalog(nil)
 	defer c.Close()
@@ -259,6 +269,26 @@ func TestMemoryNodeScanMarksRollbackHoleDeleted(t *testing.T) {
 		flushBatch.GetVectorByName(objectio.TombstoneAttr_Abort_Attr).GetDownstreamVector(),
 	)
 	require.Equal(t, []bool{false, true, false}, aborts)
+
+	// During a rolling upgrade, the TN keeps the legacy layout and physically
+	// removes rollback holes so an old CN cannot expose them as user rows.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion8)
+	legacyBatches := make(map[uint32]*containers.BatchWithVersion)
+	err = mnode.getDataWindowOnWriteSchema(
+		context.Background(),
+		legacyBatches,
+		types.TS{},
+		types.BuildTS(3, 0),
+		common.DefaultAllocator,
+	)
+	require.NoError(t, err)
+	legacyBatch := legacyBatches[schema.Version]
+	require.NotNil(t, legacyBatch)
+	defer legacyBatch.Close()
+	require.NotContains(t, legacyBatch.Seqnums, uint16(objectio.SEQNUM_ABORT))
+	require.NotContains(t, legacyBatch.Nameidx, objectio.TombstoneAttr_Abort_Attr)
+	require.Contains(t, legacyBatch.Seqnums, uint16(objectio.SEQNUM_COMMITTS))
+	require.Equal(t, 2, legacyBatch.Length())
 
 	var output *containers.Batch
 	err = mnode.Scan(
