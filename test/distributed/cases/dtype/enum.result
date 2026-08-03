@@ -135,12 +135,12 @@ create table enum05 (a int,b enum('4','3','2','1'));
 insert into enum05 values(1,1);
 select * from enum05;
 ➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
-1  ¦  1
+1  ¦  4
 insert into enum05 values(2,'1');
 select * from enum05;
 ➤ a[4,32,0]  ¦  b[12,-1,0]  𝄀
-1  ¦  1  𝄀
-2  ¦  4
+1  ¦  4  𝄀
+2  ¦  1
 drop table enum05;
 drop table if exists pri01;
 create table pri01 (col1 enum('qy4iujd3wi4fu4h3f', '323242r34df432432', '32e3ewfdewrew'));
@@ -394,10 +394,20 @@ s set('x', 'y', 'z')
 );
 set session sql_mode = 'STRICT_TRANS_TABLES';
 insert ignore into mysql_compat_special_ignore values (1, 2156, b'11111', 'bad', 'x,bad');
-internal error: convert to MySQL enum failed: number 0 overflow enum boundary [1, 3]
 select id, y, y + 0, bin(b + 0), e, e + 0, s, s + 0
 from mysql_compat_special_ignore order by id;
-➤ id[4,32,0]  ¦  y[91,65535,0]  ¦  y + 0[-5,64,0]  ¦  bin(b + 0)[12,-1,0]  ¦  e[12,-1,0]  ¦  e + 0[-5,64,0]  ¦  s[12,-1,0]  ¦  s + 0[3,38,0]
+internal error: parse MySQL enum failed: index 0 overflow enum boundary [1, 3]
+insert ignore into mysql_compat_special_ignore values
+(2, '2156', b'10000', 9, 'bad'),
+(3, 2024, b'0011', 'a', 'x,z');
+select id, y + 0, bin(b + 0), e, e + 0, s, s + 0
+from mysql_compat_special_ignore order by id;
+internal error: parse MySQL enum failed: index 0 overflow enum boundary [1, 3]
+insert into mysql_compat_special_ignore values (4, 2156, b'11111', 'bad', 'x,bad');
+invalid input: data too long, type width = 4, val = 11111
+select count(*) from mysql_compat_special_ignore;
+➤ count(*)[-5,64,0]  𝄀
+3
 set session sql_mode = '';
 drop table mysql_compat_special_ignore;
 drop table if exists default01;
