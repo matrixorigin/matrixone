@@ -1,6 +1,13 @@
 name: Object Storage Integration
 
 on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    branches: [main, 4.2-dev, '[0-9]+.[0-9]+*']
+    paths:
+      - "pkg/fileservice/**"
+      - "go.mod"
+      - "go.sum"
   workflow_dispatch:
   schedule:
     - cron: "30 18 * * *"
@@ -10,5 +17,17 @@ permissions:
 
 jobs:
   object-storage-integration:
+    if: >-
+      github.event_name != 'pull_request_target' ||
+      (
+        github.event.pull_request.draft == false &&
+        (
+          contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) ||
+          contains(github.event.pull_request.labels.*.name, 'safe-to-test')
+        )
+      )
     uses: matrixorigin/CI/.github/workflows/object-storage-integration.yaml@main
+    with:
+      checkout_repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+      checkout_ref: ${{ github.event.pull_request.head.sha || github.sha }}
     secrets: inherit
