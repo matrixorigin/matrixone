@@ -687,20 +687,20 @@ func convertDBEOBToNoSuchTable(ctx context.Context, e error, dbName, tblName str
 	return e
 }
 
-type alterCopyAutoIncrementCleanup struct {
+type alterAutoIncrementResetCleanup struct {
 	c        *Compile
 	tableIDs []uint64
 	tracked  map[uint64]struct{}
 }
 
-func newAlterCopyAutoIncrementCleanup(c *Compile) *alterCopyAutoIncrementCleanup {
-	return &alterCopyAutoIncrementCleanup{
+func newAlterAutoIncrementResetCleanup(c *Compile) *alterAutoIncrementResetCleanup {
+	return &alterAutoIncrementResetCleanup{
 		c:       c,
 		tracked: make(map[uint64]struct{}),
 	}
 }
 
-func (cleanup *alterCopyAutoIncrementCleanup) track(tableID uint64) {
+func (cleanup *alterAutoIncrementResetCleanup) track(tableID uint64) {
 	if _, ok := cleanup.tracked[tableID]; ok {
 		return
 	}
@@ -708,7 +708,7 @@ func (cleanup *alterCopyAutoIncrementCleanup) track(tableID uint64) {
 	cleanup.tableIDs = append(cleanup.tableIDs, tableID)
 }
 
-func (cleanup *alterCopyAutoIncrementCleanup) finish(statementErr *error) {
+func (cleanup *alterAutoIncrementResetCleanup) finish(statementErr *error) {
 	if *statementErr == nil && cleanup.c.proc.Ctx != nil {
 		*statementErr = cleanup.c.proc.Ctx.Err()
 	}
@@ -736,7 +736,7 @@ func (cleanup *alterCopyAutoIncrementCleanup) finish(statementErr *error) {
 	if _, ok := (*statementErr).(*moerr.Error); ok {
 		cleanup.c.proc.Error(
 			ctx,
-			"alter.table.copy.discard.auto.increment.reset",
+			"alter.table.discard.auto.increment.reset",
 			zap.Error(cleanupErr),
 		)
 		return
@@ -1034,9 +1034,12 @@ func (c *Compile) precheckAlterCopyPkDedup(dbName, tblName string, qry *plan.Alt
 }
 
 func (s *Scope) AlterTableCopy(c *Compile) (err error) {
-	cleanup := newAlterCopyAutoIncrementCleanup(c)
+	cleanup := newAlterAutoIncrementResetCleanup(c)
 	defer cleanup.finish(&err)
+	return s.alterTableCopy(c, cleanup)
+}
 
+func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetCleanup) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := qry.Database
 
@@ -1605,7 +1608,7 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 	srcDef *plan.TableDef,
 	copyDef *plan.TableDef,
 	newRel engine.Relation,
-	cleanup *alterCopyAutoIncrementCleanup,
+	cleanup *alterAutoIncrementResetCleanup,
 ) error {
 	if err := c.proc.Ctx.Err(); err != nil {
 		return err
@@ -1868,16 +1871,17 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	return moerr.NewInternalError(c.proc.Ctx, "unsupported alter partition type")
 }
 
-func (s *Scope) doAlterTable(c *Compile) error {
+func (s *Scope) doAlterTable(c *Compile) (err error) {
 	qry := s.Plan.GetDdl().GetAlterTable()
+	cleanup := newAlterAutoIncrementResetCleanup(c)
+	defer cleanup.finish(&err)
 
-	var err error
 	if qry.AlgorithmType == plan.AlterTable_COPY {
 		// COPY ALTER transfers mo_foreign_keys around the source-table drop,
 		// so its catalog statements are executed inside AlterTableCopy.
-		return s.AlterTableCopy(c)
+		return s.alterTableCopy(c, cleanup)
 	} else {
-		err = s.AlterTableInplace(c)
+		err = s.alterTableInplace(c, cleanup)
 	}
 	if err != nil {
 		return err

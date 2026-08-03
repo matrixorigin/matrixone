@@ -79,6 +79,22 @@ func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
 	return skip
 }
 
+func tableHasAutoIncrementColumn(tableDef *TableDef) bool {
+	for _, col := range tableDef.Cols {
+		if col.Typ.AutoIncr && !col.Hidden {
+			return true
+		}
+	}
+	return false
+}
+
+func autoIncrementValueToOffset(value uint64) uint64 {
+	if value > 0 {
+		return value - 1
+	}
+	return 0
+}
+
 func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, error) {
 	ctx := cctx.GetContext()
 	// 1. get origin table name and Schema name
@@ -110,6 +126,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	if err != nil {
 		return nil, err
 	}
+	// The copied definition contains the source allocator's cached offset. It
+	// is not a user request and can be far ahead of the actual rows. The copy
+	// executor reconciles the explicit request, copied maximum, and source
+	// allocator state after the rows are visible in this transaction.
+	copyTableDef.AutoIncrOffset = 0
 	alterTableCtx := initAlterTableContext(tableDef, copyTableDef, schemaName)
 
 	// 3. check alter_option list
@@ -134,7 +155,8 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	}
 
 	var (
-		pkAffected bool
+		pkAffected             bool
+		hasAutoIncrementOption bool
 
 		affectedCols        = make([]string, 0, len(tableDef.Cols))
 		affectedIndexes     = make([]string, 0, len(tableDef.Indexes))
@@ -200,6 +222,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		case *tree.AlterTableAlterColumnClause:
 			pkAffected, err = AlterColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.ColumnName.String())
+		case *tree.TableOptionAutoIncrement:
+			hasAutoIncrementOption = true
+			copyTableDef.AutoIncrOffset = autoIncrementValueToOffset(option.Value)
 		case *tree.AlterTableOrderByColumnClause:
 			err = OrderByColumn(cctx, alterTablePlan, option, alterTableCtx)
 			for _, order := range option.AlterOrderByList {
@@ -217,6 +242,10 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		if err != nil {
 			return nil, err
 		}
+	}
+	if hasAutoIncrementOption && !tableHasAutoIncrementColumn(copyTableDef) {
+		return nil, moerr.NewInvalidInputf(ctx,
+			"Table '%s' does not have an AUTO_INCREMENT column", tableDef.Name)
 	}
 
 	if pkAffected {

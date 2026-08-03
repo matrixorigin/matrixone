@@ -1068,9 +1068,7 @@ func buildCreateTable(
 				},
 			})
 		case *tree.TableOptionAutoIncrement:
-			if opt.Value != 0 {
-				createTable.TableDef.AutoIncrOffset = opt.Value - 1
-			}
+			createTable.TableDef.AutoIncrOffset = autoIncrementValueToOffset(opt.Value)
 
 		// these table options is not support in plan
 		// case *tree.TableOptionEngine, *tree.TableOptionSecondaryEngine, *tree.TableOptionCharset,
@@ -4357,6 +4355,19 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				updateSqls,
 				getSqlForRenameTable(databaseName, oldName, newName)...,
 			)
+		case *tree.TableOptionAutoIncrement:
+			if !tableHasAutoIncrementColumn(tableDef) {
+				return nil, moerr.NewInvalidInputf(
+					ctx.GetContext(),
+					"Table '%s' does not have an AUTO_INCREMENT column", tableDef.Name)
+			}
+			alterTable.Actions[i] = &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AlterAutoIncrement{
+					AlterAutoIncrement: &plan.AlterTableAutoIncrement{
+						NewOffset: autoIncrementValueToOffset(opt.Value),
+					},
+				},
+			}
 		case *tree.AlterOptionAlgorithm:
 			// algorithm hint already consumed by ResolveAlterTableAlgorithm
 			alterTable.Actions[i] = nil

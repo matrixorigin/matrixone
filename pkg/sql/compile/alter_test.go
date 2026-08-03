@@ -544,7 +544,7 @@ func TestAlterCopyAutoIncrementCleanupDiscardsTrackedReset(t *testing.T) {
 	autoSvc.EXPECT().DiscardOffsetReset(gomock.Any(), uint64(12), txnOp).Return(nil)
 	incrservice.SetAutoIncrementServiceByID(proc.GetService(), autoSvc)
 
-	cleanup := newAlterCopyAutoIncrementCleanup(&Compile{proc: proc})
+	cleanup := newAlterAutoIncrementResetCleanup(&Compile{proc: proc})
 	cleanup.track(11)
 	cleanup.track(11)
 	cleanup.track(12)
@@ -617,7 +617,7 @@ func TestReconcileAlterCopyAutoIncrementUsesStableIdentityAndSafeBounds(t *testi
 	)
 	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
 
-	cleanup := newAlterCopyAutoIncrementCleanup(c)
+	cleanup := newAlterAutoIncrementResetCleanup(c)
 	require.NoError(t, c.reconcileAlterCopyAutoIncrement(
 		"test", srcDef, copyDef, copyRel, cleanup,
 	))
@@ -649,10 +649,148 @@ func TestReconcileAlterCopyAutoIncrementRejectsLegacyTN(t *testing.T) {
 		&plan.TableDef{},
 		copyDef,
 		mock_frontend.NewMockRelation(ctrl),
-		newAlterCopyAutoIncrementCleanup(c),
+		newAlterAutoIncrementResetCleanup(c),
 	)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
 	require.Empty(t, spyExec.executedSQLs)
+}
+
+func TestAppendAlterAutoIncrementReqsUsesResolvedDatabaseAndSafeOffset(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	maxSQL := "select cast(coalesce(max(case when `id` > 0 then `id` else 0 end), 0) as unsigned) from `resolved_db`.`dept`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		maxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{140}),
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	tableDef := &plan.TableDef{
+		TblId: 7,
+		Name:  "dept",
+		Cols: []*plan.ColDef{{
+			Name: "id",
+			Typ:  plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+		}},
+	}
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(
+		c.proc.Ctx,
+		tableDef.TblId,
+		"id",
+		uint64(140),
+		c.proc.GetTxnOperator(),
+	).Return(nil)
+	autoSvc.EXPECT().DiscardOffsetReset(
+		gomock.Any(),
+		tableDef.TblId,
+		c.proc.GetTxnOperator(),
+	).Return(nil)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	cleanup := newAlterAutoIncrementResetCleanup(c)
+	var reqs []*api.AlterTableReq
+	require.NoError(t, c.appendAlterAutoIncrementReqs(
+		"resolved_db", tableDef, 6, tableDef.TblId, 99, cleanup, &reqs,
+	))
+	require.Equal(t, []string{maxSQL}, spyExec.executedSQLs)
+	require.Len(t, reqs, 1)
+	require.Equal(t, uint64(6), reqs[0].GetDbId())
+	require.Equal(t, tableDef.TblId, reqs[0].GetTableId())
+	require.Equal(t, uint64(140), reqs[0].GetUpdateAutoIncrement().GetOffset())
+	require.Zero(t, reqs[0].GetUpdateAutoIncrement().GetEpoch(),
+		"disttae must assign the actual next catalog epoch when applying the request")
+	require.Zero(t, resultMP.CurrNB(), "the internal MAX result must be closed")
+
+	statementErr := errors.New("later ALTER step failed")
+	cleanup.finish(&statementErr)
+	require.ErrorContains(t, statementErr, "later ALTER step failed")
+}
+
+func TestAppendAlterAutoIncrementReqsRejectsLegacyTNBeforeQuery(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	spyExec := &alterCopyInsertSpyExecutor{}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	legacyTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	legacyTxn.EXPECT().GetWorkspace().Return(alterCopyAutoIncrEpochWorkspace{})
+	c.proc.Base.TxnOperator = legacyTxn
+	tableDef := &plan.TableDef{Name: "dept", Cols: []*plan.ColDef{{
+		Name: "id",
+		Typ:  plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+	}}}
+
+	var reqs []*api.AlterTableReq
+	err := c.appendAlterAutoIncrementReqs(
+		"test", tableDef, 6, 7, 99, newAlterAutoIncrementResetCleanup(c), &reqs,
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+	require.Empty(t, spyExec.executedSQLs)
+	require.Empty(t, reqs)
+}
+
+func TestAppendAlterAutoIncrementReqsDiscardsResetAfterCancellation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	maxSQL := "select cast(coalesce(max(case when `id` > 0 then `id` else 0 end), 0) as unsigned) from `test`.`dept`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		maxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{40}),
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	ctx, cancel := context.WithCancel(c.proc.Ctx)
+	c.proc.Ctx = ctx
+	c.proc.ReplaceTopCtx(ctx)
+	tableDef := &plan.TableDef{TblId: 7, Name: "dept", Cols: []*plan.ColDef{{
+		Name: "id",
+		Typ:  plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+	}}}
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(
+		ctx, tableDef.TblId, "id", uint64(99), c.proc.GetTxnOperator(),
+	).DoAndReturn(func(context.Context, uint64, string, uint64, client.TxnOperator) error {
+		cancel()
+		return nil
+	})
+	autoSvc.EXPECT().DiscardOffsetReset(
+		gomock.Any(), tableDef.TblId, c.proc.GetTxnOperator(),
+	).Return(nil)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	cleanup := newAlterAutoIncrementResetCleanup(c)
+	var reqs []*api.AlterTableReq
+	err := c.appendAlterAutoIncrementReqs(
+		"test", tableDef, 6, tableDef.TblId, 99, cleanup, &reqs,
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, reqs)
+	cleanup.finish(&err)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, resultMP.CurrNB())
+}
+
+func TestAppendAlterAutoIncrementReqsRejectsNarrowedOverflow(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	maxSQL := "select cast(coalesce(max(case when `id` > 0 then `id` else 0 end), 0) as unsigned) from `test`.`dept`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		maxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{0}),
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	tableDef := &plan.TableDef{TblId: 7, Name: "dept", Cols: []*plan.ColDef{{
+		Name: "id",
+		Typ:  plan.Type{Id: int32(types.T_uint8), AutoIncr: true},
+	}}}
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(
+		gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(),
+	).Times(0)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	var reqs []*api.AlterTableReq
+	err := c.appendAlterAutoIncrementReqs(
+		"test", tableDef, 6, tableDef.TblId, 300,
+		newAlterAutoIncrementResetCleanup(c), &reqs,
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+	require.Empty(t, reqs)
+	require.Zero(t, resultMP.CurrNB())
 }
 
 func TestReconcileAlterCopyAutoIncrementSkipsHiddenAndRejectsNarrowedOverflow(t *testing.T) {
@@ -674,7 +812,7 @@ func TestReconcileAlterCopyAutoIncrementSkipsHiddenAndRejectsNarrowedOverflow(t 
 		incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
 
 		require.NoError(t, c.reconcileAlterCopyAutoIncrement(
-			"test", &plan.TableDef{}, copyDef, copyRel, newAlterCopyAutoIncrementCleanup(c),
+			"test", &plan.TableDef{}, copyDef, copyRel, newAlterAutoIncrementResetCleanup(c),
 		))
 		require.Empty(t, spyExec.executedSQLs)
 	})
@@ -702,7 +840,7 @@ func TestReconcileAlterCopyAutoIncrementSkipsHiddenAndRejectsNarrowedOverflow(t 
 		incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
 
 		err := c.reconcileAlterCopyAutoIncrement(
-			"test", srcDef, copyDef, copyRel, newAlterCopyAutoIncrementCleanup(c),
+			"test", srcDef, copyDef, copyRel, newAlterAutoIncrementResetCleanup(c),
 		)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
 		require.Zero(t, resultMP.CurrNB(), "all internal SQL results must be closed")
@@ -742,7 +880,7 @@ func TestReconcileAlterCopyAutoIncrementStopsAfterCancellation(t *testing.T) {
 	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
 
 	err := c.reconcileAlterCopyAutoIncrement(
-		"test", &plan.TableDef{}, copyDef, copyRel, newAlterCopyAutoIncrementCleanup(c),
+		"test", &plan.TableDef{}, copyDef, copyRel, newAlterAutoIncrementResetCleanup(c),
 	)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, []string{firstMaxSQL}, spyExec.executedSQLs)

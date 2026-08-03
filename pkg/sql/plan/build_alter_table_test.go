@@ -19,7 +19,9 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -27,6 +29,79 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+func newAutoIncrementAlterOptimizer() *MockOptimizer {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.objects["auto_incr_t"] = &ObjectRef{
+		SchemaName: "constraint_test",
+		ObjName:    "auto_incr_t",
+	}
+	mock.ctxt.tables["auto_incr_t"] = &TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		TblId:     24532,
+		Name:      "auto_incr_t",
+		Cols: []*ColDef{
+			{
+				ColId:   0,
+				Name:    "id",
+				Primary: true,
+				Typ: plan.Type{
+					Id:       int32(types.T_uint64),
+					AutoIncr: true,
+				},
+				Default: &plan.Default{},
+			},
+			{
+				ColId:   1,
+				Name:    "v",
+				Typ:     plan.Type{Id: int32(types.T_int32)},
+				Default: &plan.Default{},
+			},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Cols:        []uint64{0},
+			Names:       []string{"id"},
+		},
+	}
+	return mock
+}
+
+func TestAlterTableAutoIncrementPlan(t *testing.T) {
+	for _, tc := range []struct {
+		sql        string
+		wantOffset uint64
+		wantCopy   bool
+	}{
+		{sql: `ALTER TABLE constraint_test.auto_incr_t AUTO_INCREMENT = 100;`, wantOffset: 99},
+		{sql: `ALTER TABLE constraint_test.auto_incr_t AUTO_INCREMENT = 0;`, wantOffset: 0},
+		{sql: `ALTER TABLE constraint_test.auto_incr_t AUTO_INCREMENT = 100, ALGORITHM = COPY;`, wantOffset: 99, wantCopy: true},
+		{sql: `ALTER TABLE constraint_test.auto_incr_t ADD COLUMN c int, AUTO_INCREMENT = 100;`, wantOffset: 99, wantCopy: true},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			p, err := buildSingleStmt(newAutoIncrementAlterOptimizer(), t, tc.sql)
+			require.NoError(t, err)
+			alter := p.GetDdl().GetAlterTable()
+			if tc.wantCopy {
+				require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+				require.Equal(t, tc.wantOffset, alter.CopyTableDef.AutoIncrOffset)
+				return
+			}
+			require.Equal(t, plan.AlterTable_INPLACE, alter.AlgorithmType)
+			require.Len(t, alter.Actions, 1)
+			require.Equal(t, tc.wantOffset, alter.Actions[0].GetAlterAutoIncrement().NewOffset)
+			copied := DeepCopyPlan(p)
+			require.Equal(t, tc.wantOffset,
+				copied.GetDdl().GetAlterTable().Actions[0].GetAlterAutoIncrement().NewOffset)
+		})
+	}
+}
+
+func TestAlterTableAutoIncrementRejectsTableWithoutUserAutoColumn(t *testing.T) {
+	_, err := buildSingleStmt(NewMockOptimizer(false), t,
+		`ALTER TABLE constraint_test.t1 AUTO_INCREMENT = 100;`)
+	require.ErrorContains(t, err, "does not have an AUTO_INCREMENT column")
+}
 
 func TestAlterTable1(t *testing.T) {
 	//sql := "ALTER TABLE t1 ADD (d TIMESTAMP, e INT not null);"

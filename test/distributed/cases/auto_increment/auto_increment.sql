@@ -440,3 +440,43 @@ select * from auto_increment17;
 drop table auto_increment17;
 # reset to 1
 set auto_increment_offset = 1;
+
+-- ALTER TABLE AUTO_INCREMENT through the production SQL path.
+drop table if exists auto_increment_alter;
+create table auto_increment_alter(col1 int auto_increment primary key, col2 int);
+insert into auto_increment_alter values(),();
+alter table auto_increment_alter auto_increment = 100;
+insert into auto_increment_alter values();
+select * from auto_increment_alter order by col1;
+drop table auto_increment_alter;
+
+-- A request below the stored maximum must allocate MAX(id) + 1.
+drop table if exists auto_increment_alter_max;
+create table auto_increment_alter_max(col1 int auto_increment primary key, col2 int);
+insert into auto_increment_alter_max values (1, 1), (200, 200);
+alter table auto_increment_alter_max auto_increment = 100;
+insert into auto_increment_alter_max(col2) values (201);
+select * from auto_increment_alter_max order by col1;
+drop table auto_increment_alter_max;
+
+-- Quoted AUTO_INCREMENT column names must remain safe in the MAX query.
+drop table if exists auto_increment_alter_quoted;
+create table auto_increment_alter_quoted(`1id` int auto_increment primary key, col2 int);
+insert into auto_increment_alter_quoted(col2) values (1);
+alter table auto_increment_alter_quoted auto_increment = 10;
+insert into auto_increment_alter_quoted(col2) values (10);
+select * from auto_increment_alter_quoted order by `1id`;
+drop table auto_increment_alter_quoted;
+
+-- COPY reconciles the explicit request, copied maximum, and source allocator.
+drop table if exists auto_increment_alter_copy;
+create table auto_increment_alter_copy(id bigint primary key auto_increment, v int) auto_increment = 10;
+insert into auto_increment_alter_copy(v) values (1);
+delete from auto_increment_alter_copy;
+alter table auto_increment_alter_copy auto_increment = 100, algorithm = copy;
+insert into auto_increment_alter_copy(v) values (2);
+insert into auto_increment_alter_copy(id, v) values (500, 3);
+alter table auto_increment_alter_copy add column extra int, auto_increment = 100, algorithm = copy;
+insert into auto_increment_alter_copy(v) values (4);
+select id from auto_increment_alter_copy order by id;
+drop table auto_increment_alter_copy;
