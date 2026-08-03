@@ -17,6 +17,7 @@ package plan
 import (
 	"bytes"
 	"context"
+	"errors"
 	"sort"
 	"strconv"
 
@@ -463,20 +464,21 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				runtimeType := types.T(param.Typ.Id)
 				switch runtimeType {
 				case types.T_float32:
-					parsed, parseErr := strconv.ParseFloat(value, 32)
+					parsed, parseErr := parsePreparedFloat(value, 32)
 					if parseErr != nil {
 						return nil, parseErr
 					}
 					return MakePlan2Float32ConstExprWithType(float32(parsed)), nil
 				case types.T_float64:
-					parsed, parseErr := strconv.ParseFloat(value, 64)
+					parsed, parseErr := parsePreparedFloat(value, 64)
 					if parseErr != nil {
 						return nil, parseErr
 					}
 					return MakePlan2Float64ConstExprWithType(parsed), nil
 				}
-				if (runtimeType == types.T_any || runtimeType.IsMySQLString()) && isDecimalScientificNotation(value) {
-					parsed, parseErr := strconv.ParseFloat(value, 64)
+				trimmed := trimASCIISpace(value)
+				if (runtimeType == types.T_any || runtimeType.IsMySQLString()) && isDecimalScientificNotation(trimmed) {
+					parsed, parseErr := parsePreparedFloat(trimmed, 64)
 					if parseErr != nil {
 						return nil, parseErr
 					}
@@ -575,6 +577,35 @@ func isDecimalScientificNotation(value string) bool {
 		pos++
 	}
 	return pos == len(value) && pos > exponentStart
+}
+
+func trimASCIISpace(value string) string {
+	start := 0
+	for start < len(value) && isPreparedASCIISpace(value[start]) {
+		start++
+	}
+	end := len(value)
+	for end > start && isPreparedASCIISpace(value[end-1]) {
+		end--
+	}
+	return value[start:end]
+}
+
+func isPreparedASCIISpace(value byte) bool {
+	switch value {
+	case ' ', '\t', '\n', '\v', '\f', '\r':
+		return true
+	default:
+		return false
+	}
+}
+
+func parsePreparedFloat(value string, bitSize int) (float64, error) {
+	parsed, err := strconv.ParseFloat(value, bitSize)
+	if err == nil || (errors.Is(err, strconv.ErrRange) && parsed == 0) {
+		return parsed, nil
+	}
+	return 0, err
 }
 
 func applyWindowExpr(e *plan.Expr, apply func(*plan.Expr) (*plan.Expr, error)) (*plan.Expr, error) {

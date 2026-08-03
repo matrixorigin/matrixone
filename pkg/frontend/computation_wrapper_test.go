@@ -339,7 +339,7 @@ func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
 		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
 		require.True(t, types.T(root.ProjectList[0].Typ.Id).IsFloat())
 	}
-	for _, value := range []string{"1e10", "1e-10", "-1e10"} {
+	for _, value := range []string{"1e10", "1e-10", "-1e10", " 1e10 ", "\t-1e10", "1e-10 ", "1e-10000", "-1e-10000"} {
 		require.NoError(t, ses.SetUserDefinedVar("numeric_param", value, ""))
 		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 		require.NoError(t, err)
@@ -389,7 +389,7 @@ func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
 		params.Free(cw.proc.Mp())
 		prepareStmt.params = nil
 	}
-	for _, value := range []string{"1e10", "1e-10", "-1e10"} {
+	for _, value := range []string{"1e10", "1e-10", "-1e10", " 1e10 ", "\t-1e10", "1e-10 ", "1e-10000", "-1e-10000"} {
 		params := vector.NewVec(types.T_text.ToType())
 		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
 		prepareStmt.params = params

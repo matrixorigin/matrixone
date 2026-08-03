@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -691,7 +692,10 @@ func TestPreparedDynamicNumericPlanSpecializesPerExecutionValue(t *testing.T) {
 
 	require.True(t, HasPreparedDynamicNumericParams(prepare.Plan), "specialization must not mutate the canonical plan")
 
-	for _, value := range []string{"1e10", "1e-10", "-1e10", "+1.5E+10", ".5e2", "1.e2"} {
+	for _, value := range []string{
+		"1e10", "1e-10", "-1e10", "+1.5E+10", ".5e2", "1.e2",
+		" 1e10 ", "\t-1e10", "1e-10 ", "1e-10000", "-1e-10000",
+	} {
 		t.Run("scientific string "+value, func(t *testing.T) {
 			specialized, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{value})
 			require.NoError(t, err)
@@ -744,6 +748,28 @@ func TestDecimalScientificNotationRecognition(t *testing.T) {
 	for _, value := range []string{"", "+", "10", "1.25", "e10", "1e", "1e+", "1e2x", "1e2e3", "NaN", "+Inf"} {
 		require.False(t, isDecimalScientificNotation(value), value)
 	}
+	for _, test := range []struct {
+		value string
+		want  string
+	}{
+		{value: " \t\n\v\f\r1e10 \t\n\v\f\r", want: "1e10"},
+		{value: "\t-1e10", want: "-1e10"},
+		{value: "\u00a01e10\u00a0", want: "\u00a01e10\u00a0"},
+	} {
+		require.Equal(t, test.want, trimASCIISpace(test.value))
+	}
+
+	positiveZero, err := parsePreparedFloat("1e-10000", 64)
+	require.NoError(t, err)
+	require.Zero(t, positiveZero)
+	require.False(t, math.Signbit(positiveZero))
+	negativeZero, err := parsePreparedFloat("-1e-10000", 64)
+	require.NoError(t, err)
+	require.Zero(t, negativeZero)
+	require.True(t, math.Signbit(negativeZero))
+	require.True(t, math.Signbit(MakePlan2Float64ConstExprWithType(negativeZero).GetLit().GetDval()))
+	_, err = parsePreparedFloat("1e10000", 64)
+	require.Error(t, err)
 }
 
 func numericTestBinding(table, col string, typ types.Type) *Binding {
