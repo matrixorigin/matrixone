@@ -85,7 +85,15 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if err != nil {
 		return 0, err
 	}
-	if err = validateUpdateTargetSubqueries(builder.compCtx, stmt, dmlCtx.objRefs, dmlCtx.tableDefs); err != nil {
+	targetAliases := make([]string, len(dmlCtx.tableDefs))
+	for i, updateCol2Expr := range dmlCtx.updateCol2Expr {
+		if len(updateCol2Expr) > 0 {
+			targetAliases[i] = dmlCtx.aliases[i]
+		}
+	}
+	if err = validateUpdateTargetSubqueries(
+		builder.compCtx, stmt, dmlCtx.objRefs, dmlCtx.tableDefs, targetAliases,
+	); err != nil {
 		return 0, err
 	}
 	onDuplicateAction := plan.Node_FAIL
@@ -135,34 +143,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		validIndexes, _ := getValidIndexes(tableDef)
 		tableDef.Indexes = validIndexes
 
-		var pkAndUkCols = make(map[string]bool)
-
-		if tableDef.Name == catalog.MO_PUBS || tableDef.Name == catalog.MO_SUBS {
-			for _, colName := range tableDef.Pkey.Names {
-				pkAndUkCols[colName] = true
-			}
-		}
-
-		for _, idxDef := range tableDef.Indexes {
-			if !idxDef.Unique {
-				continue
-			}
-
-			if tableDef.Name == catalog.MO_PUBS || tableDef.Name == catalog.MO_SUBS {
-				for _, colName := range idxDef.Parts {
-					pkAndUkCols[catalog.ResolveAlias(colName)] = true
-				}
-			}
-		}
-
 		for colName, updateExpr := range dmlCtx.updateCol2Expr[i] {
-			if pkAndUkCols[colName] {
-				return 0, newLegacyUpdatePlannerRouteError(
-					updateRouteReasonPubSubKey,
-					moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update pk/uk on pub/sub table"),
-				)
-			}
-
 			// Check: cannot update a generated column (unless SET gen_col = DEFAULT)
 			isGenCol := false
 			for _, colDef := range tableDef.Cols {
@@ -189,13 +170,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			for _, colDef := range tableDef.Cols {
 				if colDef.Name == colName {
 					if isEnumOrSetPlanType(&colDef.Typ) {
-						if colDef.Typ.AutoIncr {
-							return 0, newLegacyUpdatePlannerRouteError(
-								updateRouteReasonAutoIncrement,
-								moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value"),
-							)
-						}
-
 						updateExpr, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), colDef.Typ, updateExpr)
 						if err != nil {
 							return 0, err
@@ -403,7 +377,12 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if err != nil {
 		return 0, err
 	}
-	if updateMayDependOnForeignKeys(dmlCtx, newColName2Idx) {
+	mayDependOnForeignKeys, err := builder.updateMayDependOnForeignKeys(
+		bindCtx, dmlCtx, newColName2Idx)
+	if err != nil {
+		return 0, err
+	}
+	if mayDependOnForeignKeys {
 		// The plan shape and planner route depend on foreign_key_checks.
 		// Preserve that dependency even while checks are disabled so prepared
 		// and generic plan caches rebuild after either session-state transition.
@@ -414,7 +393,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if updateAutoIncrCols[i] &&
 				len(affectedUpdateChildFks(tableDef, dmlCtx.aliases[i], newColName2Idx)) > 0 {
 				return 0, newLegacyUpdatePlannerRouteError(
-					updateRouteReasonAutoIncrement,
+					updateRouteReasonAutoIncrementFK,
 					moerr.NewUnsupportedDML(
 						builder.compCtx.GetContext(),
 						"auto_increment foreign key update",
@@ -422,19 +401,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				)
 			}
 		}
-	}
-
-	lastNodeID, selectNodeTag, selectNode, err = builder.appendUpdateForeignKeyChecks(
-		bindCtx,
-		dmlCtx,
-		lastNodeID,
-		selectNodeTag,
-		oldColName2Idx,
-		newColName2Idx,
-		fkChecksEnabled,
-	)
-	if err != nil {
-		return 0, err
 	}
 
 	for i, tableDef := range dmlCtx.tableDefs {
@@ -451,6 +417,19 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				},
 			}, bindCtx)
 		}
+	}
+
+	lastNodeID, selectNodeTag, selectNode, err = builder.appendUpdateForeignKeyChecks(
+		bindCtx,
+		dmlCtx,
+		lastNodeID,
+		selectNodeTag,
+		selectNode,
+		oldColName2Idx,
+		newColName2Idx,
+	)
+	if err != nil {
+		return 0, err
 	}
 
 	idxScanNodes := make([][]*plan.Node, len(dmlCtx.tableDefs))
@@ -1402,6 +1381,19 @@ func (builder *QueryBuilder) appendRowNumberDedupNode(
 	selectNodeTag int32,
 	partitionColPositions []int32,
 ) (int32, *plan.Node, int32, error) {
+	return builder.appendRowNumberGuardNode(
+		bindCtx, lastNodeID, selectNode, selectNodeTag, partitionColPositions, "", "")
+}
+
+func (builder *QueryBuilder) appendRowNumberGuardNode(
+	bindCtx *BindContext,
+	lastNodeID int32,
+	selectNode *plan.Node,
+	selectNodeTag int32,
+	partitionColPositions []int32,
+	duplicateErrorMessage string,
+	duplicateErrorType string,
+) (int32, *plan.Node, int32, error) {
 	partitionByExprs := make([]*plan.Expr, 0, len(partitionColPositions))
 	childColExpr := func(pos int32) *plan.Expr {
 		e := selectNode.ProjectList[pos]
@@ -1514,10 +1506,25 @@ func (builder *QueryBuilder) appendRowNumberDedupNode(
 	if err != nil {
 		return 0, nil, 0, err
 	}
+	guardExpr := keepFirstRowExpr
+	if duplicateErrorType != "" {
+		guardExpr, err = BindFuncExprImplByPlanExpr(
+			builder.GetContext(),
+			"assert",
+			[]*plan.Expr{
+				keepFirstRowExpr,
+				makePlan2StringConstExprWithType(duplicateErrorMessage),
+				makePlan2StringConstExprWithType(duplicateErrorType),
+			},
+		)
+		if err != nil {
+			return 0, nil, 0, err
+		}
+	}
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:   plan.Node_FILTER,
 		Children:   []int32{lastNodeID},
-		FilterList: []*plan.Expr{keepFirstRowExpr},
+		FilterList: []*plan.Expr{guardExpr},
 	}, bindCtx)
 
 	projectList := make([]*plan.Expr, len(selectNode.ProjectList))

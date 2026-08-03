@@ -95,6 +95,14 @@ func alterCopySQLAtLineageSnapshot(sql string, plan alterDataBranchLineagePlan) 
 	return sql + fmt.Sprintf(" {MO_TS = %d}", plan.cloneTS)
 }
 
+func isExplicitAlterTxn(byBegin, autocommit bool) bool {
+	return byBegin || !autocommit
+}
+
+func shouldUseFixedAlterCopySnapshot(snapshotAdvanced, txnHasWorkspaceHistory bool) bool {
+	return snapshotAdvanced && !txnHasWorkspaceHistory
+}
+
 func alterDataBranchParticipationSQL(oldTableID uint64) string {
 	return fmt.Sprintf(
 		"select 1 from %s.%s where table_id = %d or p_table_id = %d limit 1",
@@ -281,12 +289,22 @@ func (c *Compile) prepareAlterDataBranchLineage(
 	}
 	hasLiveLineage := false
 	if participates {
-		op := c.proc.GetTxnOperator()
-		opts := op.TxnOptions()
-		if err = validateAlterDataBranchLineageTxn(
-			opts.GetByBegin(), opts.GetAutocommit(), op.Txn().IsPessimistic(),
-		); err != nil {
-			return alterDataBranchLineagePlan{}, err
+		// ALTER-only rows preserve physical history for a snapshot or PITR but
+		// are not logical data branches. Inspect the complete connected
+		// component so an ALTER generation neither triggers a false transaction
+		// restriction nor hides a live logical sibling behind an ancestor.
+		ownershipDAG, dagErr := c.loadAlterDataBranchDAG(false)
+		if dagErr != nil {
+			return alterDataBranchLineagePlan{}, dagErr
+		}
+		if ownershipDAG.ComponentHasLiveLogicalBranch(oldTableID) {
+			op := c.proc.GetTxnOperator()
+			opts := op.TxnOptions()
+			if err = validateAlterDataBranchLineageTxn(
+				opts.GetByBegin(), opts.GetAutocommit(), op.Txn().IsPessimistic(),
+			); err != nil {
+				return alterDataBranchLineagePlan{}, err
+			}
 		}
 		if err = c.compactExpiredAlterDataBranchLineage(time.Time{}); err != nil {
 			return alterDataBranchLineagePlan{}, err
@@ -316,7 +334,7 @@ func (c *Compile) prepareAlterDataBranchLineage(
 }
 
 func validateAlterDataBranchLineageTxn(byBegin, autocommit, _ bool) error {
-	if byBegin || !autocommit {
+	if isExplicitAlterTxn(byBegin, autocommit) {
 		return moerr.NewNotSupportedNoCtx(
 			"ALTER on a data-branch lineage is not supported inside an explicit transaction",
 		)
@@ -1165,7 +1183,19 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 	if lineagePlan.enabled {
 		if lineageSnapshotAdvanced {
 			lineagePlan.cloneTS = lineageCloneTS
-			lineagePlan.fixedCopyTS = true
+			// A snapshot hint cannot see this transaction's workspace: it would
+			// lose earlier DML and cannot resolve a generation created by earlier
+			// DDL. The current operator already has the lock-held advanced snapshot
+			// and overlays that workspace, so explicit transactions copy from it.
+			lineageTxnOpts := lineageTxnOp.TxnOptions()
+			txnHasWorkspaceHistory := isExplicitAlterTxn(
+				lineageTxnOpts.GetByBegin(),
+				lineageTxnOpts.GetAutocommit(),
+			) || c.getHaveDDL()
+			lineagePlan.fixedCopyTS = shouldUseFixedAlterCopySnapshot(
+				lineageSnapshotAdvanced,
+				txnHasWorkspaceHistory,
+			)
 		} else {
 			// Optimistic mode has no row-lock snapshot barrier. Its statement
 			// snapshot is nevertheless the exact source view copied by ALTER, so
