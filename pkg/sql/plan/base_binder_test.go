@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -30,6 +31,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestStoredProcedureNumericVariablesKeepNumericComparison(t *testing.T) {
+	scopes := []map[string]interface{}{{
+		"p1": int64(10),
+		"v1": int64(6),
+	}}
+	ctx := context.WithValue(context.Background(), defines.VarScopeKey{}, &scopes)
+	ctx = context.WithValue(ctx, defines.InSp{}, true)
+
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select v1 > p1", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	comparison := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+	binder := NewDefaultBinder(ctx, nil, nil, plan.Type{}, nil)
+	bound, err := binder.BindExpr(comparison, 0, false)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_bool), bound.Typ.Id)
+
+	args := bound.GetF().Args
+	require.Len(t, args, 2)
+	for _, arg := range args {
+		require.Equal(t, int32(types.T_int64), arg.Typ.Id)
+		require.Equal(t, "cast", arg.GetF().GetFunc().GetObjName())
+		require.NotNil(t, arg.GetF().Args[0].GetV())
+	}
+}
 
 // TestBindFuncExprImplByPlanExpr_PowAlias tests that "pow" is correctly
 // remapped to "power" (line ~1781 in base_binder.go:

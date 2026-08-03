@@ -21,11 +21,44 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
+
+func TestStoredProcedureNumericVariableComparison(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	scopes := []map[string]interface{}{{
+		"p1": int64(10),
+		"v1": int64(6),
+	}}
+	ctx := context.WithValue(context.Background(), defines.VarScopeKey{}, &scopes)
+	ctx = context.WithValue(ctx, defines.InSp{}, true)
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	execCtx := &ExecCtx{
+		reqCtx: ctx,
+		proc:   testutil.NewProcess(t),
+		ses:    ses,
+	}
+	ses.GetTxnCompileCtx().execCtx = execCtx
+	execCtx.proc.SetResolveVariableFunc(ses.GetTxnCompileCtx().ResolveVariable)
+	execCtx.proc.SetResolveVariableIsBinFunc(ses.GetTxnCompileCtx().ResolveVariableIsBin)
+
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select v1 > p1", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	expr := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+
+	value, err := GetSimpleExprValue(ctx, expr, ses)
+	require.NoError(t, err)
+	require.Equal(t, false, value)
+}
 
 func TestInterpreterSetUserVariable(t *testing.T) {
 	ctrl := gomock.NewController(t)

@@ -122,7 +122,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			tmpScope := b.GetContext().Value(defines.VarScopeKey{}).(*[]map[string]interface{})
 			for i := len(*tmpScope) - 1; i >= 0; i-- {
 				curScope := (*tmpScope)[i]
-				if _, ok := curScope[exprImpl.ColName()]; ok {
+				if value, ok := curScope[exprImpl.ColName()]; ok {
 					typ := types.T_text.ToType()
 					expr = &Expr{
 						Typ: makePlan2Type(&typ),
@@ -133,6 +133,12 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 								Global: false,
 							},
 						},
+					}
+					if targetType, ok := storedProcedureVariableCastType(value); ok {
+						expr, err = appendCastBeforeExpr(b.GetContext(), expr, makePlan2Type(&targetType))
+						if err != nil {
+							return nil, err
+						}
 					}
 					err = nil
 					return
@@ -327,6 +333,44 @@ func unwrapParenExpr(astExpr tree.Expr) tree.Expr {
 			return astExpr
 		}
 		astExpr = paren.Expr
+	}
+}
+
+// Stored procedure variables are transported through VarExpressionExecutor as
+// text, but their Go values retain the type produced by the expression that
+// assigned them. Cast numeric values back to that type before binding the
+// surrounding expression. Without the cast, a comparison between two integer
+// procedure variables uses lexical TEXT ordering (for example, "6" > "10").
+func storedProcedureVariableCastType(value any) (types.Type, bool) {
+	switch value.(type) {
+	case bool:
+		return types.T_bool.ToType(), true
+	case int, int64:
+		return types.T_int64.ToType(), true
+	case int8:
+		return types.T_int8.ToType(), true
+	case int16:
+		return types.T_int16.ToType(), true
+	case int32:
+		return types.T_int32.ToType(), true
+	case uint, uint64:
+		return types.T_uint64.ToType(), true
+	case uint8:
+		return types.T_uint8.ToType(), true
+	case uint16:
+		return types.T_uint16.ToType(), true
+	case uint32:
+		return types.T_uint32.ToType(), true
+	case float32:
+		return types.T_float32.ToType(), true
+	case float64:
+		return types.T_float64.ToType(), true
+	case types.Enum:
+		return types.T_enum.ToType(), true
+	case types.MoYear:
+		return types.T_year.ToType(), true
+	default:
+		return types.Type{}, false
 	}
 }
 

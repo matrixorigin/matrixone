@@ -62,9 +62,7 @@ drop procedure test_while;
 -- @label:bvt
 drop procedure if exists test_repeat;
 create procedure test_repeat() 'begin declare p1 int default 10; declare v1 int default 5; repeat set v1 = v1 + 1; until v1 > p1 end repeat; select v1; end';
--- @bvt:issue#10477
 call test_repeat();
--- @bvt:issue
 drop procedure test_repeat;
 
 -- @case
