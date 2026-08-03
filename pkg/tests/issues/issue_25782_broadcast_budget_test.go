@@ -164,16 +164,16 @@ func TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget(t *testing.T) {
 	// The frontend returns this terminal build failure before creating a result
 	// set, which is stronger than checking that a partially read result set is
 	// empty: no probe row can have escaped the failed dependency.
-	err = func() (err error) {
-		failedResult, err := conn.QueryContext(ctx, query)
-		if failedResult == nil {
-			return err
-		}
-		defer func() {
-			err = errors.Join(err, failedResult.Close(), failedResult.Err())
-		}()
-		return err
-	}()
+	failedResult, err := conn.QueryContext(ctx, query)
+	var failedResultCloseErr error
+	if failedResult != nil {
+		// Preserve cleanup without allowing a terminal error observed while
+		// draining Rows.Close to satisfy the QueryContext error oracle below.
+		failedResultCloseErr = errors.Join(failedResult.Close(), failedResult.Err())
+	}
+	require.Nilf(t, failedResult,
+		"failed broadcast build exposed a result set before its terminal error; close error: %v",
+		failedResultCloseErr)
 	require.Error(t, err)
 	var mysqlErr *mysqlDriver.MySQLError
 	require.True(t, errors.As(err, &mysqlErr), "expected MySQL protocol error, got %T: %v", err, err)
