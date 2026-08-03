@@ -116,10 +116,11 @@ func validateUpdateTargetSubqueries(
 	stmt *tree.Update,
 	objRefs []*ObjectRef,
 	tableDefs []*TableDef,
+	targetAliases []string,
 ) error {
 	targets := makeMySQLDMLTargets(objRefs, tableDefs)
 	visibleCTEs := mysqlCTENames(stmt.With, nil)
-	outerTargetQualifiers := mysqlUpdateTargetQualifiers(ctx, stmt.Tables, targets)
+	outerTargetQualifiers := mysqlUpdateTargetQualifiers(targets, targetAliases)
 
 	for _, updateExpr := range stmt.Exprs {
 		if target, ok := findMySQLDMLTargetInExprWithOuterTargets(
@@ -426,74 +427,16 @@ func findMySQLDMLTargetInSelectWithQueryTargets(
 }
 
 func mysqlUpdateTargetQualifiers(
-	ctx CompilerContext,
-	tableExprs tree.TableExprs,
 	targets []mysqlDMLTarget,
+	targetAliases []string,
 ) map[mysqlDMLTarget]map[string]struct{} {
 	result := make(map[mysqlDMLTarget]map[string]struct{}, len(targets))
-	var collect func(tree.TableExpr)
-	collect = func(expr tree.TableExpr) {
-		switch tableExpr := expr.(type) {
-		case *tree.TableName:
-			if target, ok := mysqlDMLTargetForTableName(ctx, tableExpr, targets); ok {
-				mysqlAddTargetQualifier(result, target, string(tableExpr.ObjectName))
-			}
-		case *tree.AliasedTableExpr:
-			if tableExpr.As.Alias != "" {
-				if tableName, ok := mysqlUnwrapTableName(tableExpr.Expr); ok {
-					if target, matched := mysqlDMLTargetForTableName(ctx, tableName, targets); matched {
-						mysqlAddTargetQualifier(result, target, string(tableExpr.As.Alias))
-					}
-				}
-				return
-			}
-			collect(tableExpr.Expr)
-		case *tree.ParenTableExpr:
-			collect(tableExpr.Expr)
-		case *tree.JoinTableExpr:
-			collect(tableExpr.Left)
-			collect(tableExpr.Right)
-		case *tree.ApplyTableExpr:
-			collect(tableExpr.Left)
-			collect(tableExpr.Right)
+	for i, target := range targets {
+		if i < len(targetAliases) && targetAliases[i] != "" {
+			mysqlAddTargetQualifier(result, target, targetAliases[i])
 		}
-	}
-	for _, tableExpr := range tableExprs {
-		collect(tableExpr)
 	}
 	return result
-}
-
-func mysqlUnwrapTableName(expr tree.TableExpr) (*tree.TableName, bool) {
-	switch tableExpr := expr.(type) {
-	case *tree.TableName:
-		return tableExpr, true
-	case *tree.ParenTableExpr:
-		return mysqlUnwrapTableName(tableExpr.Expr)
-	default:
-		return nil, false
-	}
-}
-
-func mysqlDMLTargetForTableName(
-	ctx CompilerContext,
-	tableName *tree.TableName,
-	targets []mysqlDMLTarget,
-) (mysqlDMLTarget, bool) {
-	dbName := string(tableName.SchemaName)
-	if dbName == "" {
-		dbName = ctx.DefaultDatabase()
-	}
-	objRef, tableDef, err := ctx.Resolve(dbName, string(tableName.ObjectName), nil)
-	if err != nil || tableDef == nil {
-		return mysqlDMLTarget{}, false
-	}
-	for _, target := range targets {
-		if target.matches(objRef, tableDef, dbName, string(tableName.ObjectName)) {
-			return target, true
-		}
-	}
-	return mysqlDMLTarget{}, false
 }
 
 func mysqlAddTargetQualifier(
@@ -733,8 +676,14 @@ func mysqlTableExprReferencesOuterQualifier(
 			return mysqlExprReferencesOuterQualifier(condition.Expr, qualifiers, onShadowed)
 		}
 	case *tree.ApplyTableExpr:
-		return mysqlTableExprReferencesOuterQualifier(tableExpr.Left, qualifiers, shadowed) ||
-			mysqlTableExprReferencesOuterQualifier(tableExpr.Right, qualifiers, shadowed)
+		if mysqlTableExprReferencesOuterQualifier(tableExpr.Left, qualifiers, shadowed) {
+			return true
+		}
+		rightShadowed := mysqlCloneNames(shadowed)
+		mysqlCollectLocalTableQualifiers(tableExpr.Left, rightShadowed)
+		return mysqlTableExprReferencesOuterQualifier(tableExpr.Right, qualifiers, rightShadowed)
+	case *tree.TableFunction:
+		return tableExpr.Func != nil && mysqlExprReferencesOuterQualifier(tableExpr.Func, qualifiers, shadowed)
 	}
 	return false
 }

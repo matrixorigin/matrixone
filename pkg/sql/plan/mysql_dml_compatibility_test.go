@@ -64,7 +64,13 @@ func requireMySQLUpdateTargetSubqueryCompatible(t *testing.T, sql string) {
 	require.True(t, ok)
 	tblInfo, err := getUpdateTableInfo(ctx, updateStmt)
 	require.NoError(t, err)
-	require.NoError(t, validateUpdateTargetSubqueries(ctx, updateStmt, tblInfo.objRef, tblInfo.tableDefs))
+	targetAliases := make([]string, len(tblInfo.tableDefs))
+	for alias, idx := range tblInfo.alias {
+		targetAliases[idx] = alias
+	}
+	require.NoError(t, validateUpdateTargetSubqueries(
+		ctx, updateStmt, tblInfo.objRef, tblInfo.tableDefs, targetAliases,
+	))
 }
 
 func TestMultiTableUpdateRejectsOrderByAndLimit(t *testing.T) {
@@ -125,6 +131,8 @@ func TestUpdateRejectsDirectTargetTableSubqueries(t *testing.T) {
 		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src WHERE EXISTS (SELECT 1 FROM nation AS dst ORDER BY dst.n_nationkey))",
 		"UPDATE nation AS dst SET n_name = ((SELECT max(src.n_name) FROM nation AS src WHERE src.n_nationkey <= dst.n_nationkey) UNION ALL (SELECT max(other.n_name) FROM nation AS other))",
 		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src JOIN nation2 AS dst ON dst.n_nationkey = src.n_nationkey)",
+		"UPDATE nation AS dst JOIN nation AS src ON dst.n_nationkey = src.n_nationkey SET dst.n_name = (SELECT max(inner_n.n_name) FROM nation AS inner_n WHERE inner_n.n_regionkey = src.n_regionkey)",
+		"UPDATE nation AS src SET n_name = (SELECT max(inner_n.n_name) FROM nation AS inner_n, region AS src CROSS APPLY generate_series(src.r_regionkey, src.r_regionkey) AS g)",
 	}
 	for _, sql := range tests {
 		requireMySQLDMLCompatibilityError(
@@ -249,6 +257,7 @@ func TestMySQLDMLCompatibilityAllowsLegalShapes(t *testing.T) {
 		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src WHERE EXISTS (SELECT 1 FROM region WHERE src.n_regionkey = dst.n_regionkey))",
 		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src ORDER BY dst.n_nationkey LIMIT 1)",
 		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src JOIN region AS r ON r.r_regionkey = dst.n_regionkey, nation2 AS dst)",
+		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src CROSS APPLY generate_series(dst.n_nationkey, dst.n_nationkey) AS g)",
 		"DELETE FROM nation WHERE n_nationkey IN (SELECT n_nationkey FROM (SELECT n_nationkey FROM nation) AS materialized_nation)",
 	}
 	for _, sql := range tests {

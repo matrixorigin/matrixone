@@ -85,7 +85,15 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if err != nil {
 		return 0, err
 	}
-	if err = validateUpdateTargetSubqueries(builder.compCtx, stmt, dmlCtx.objRefs, dmlCtx.tableDefs); err != nil {
+	targetAliases := make([]string, len(dmlCtx.tableDefs))
+	for i, updateCol2Expr := range dmlCtx.updateCol2Expr {
+		if len(updateCol2Expr) > 0 {
+			targetAliases[i] = dmlCtx.aliases[i]
+		}
+	}
+	if err = validateUpdateTargetSubqueries(
+		builder.compCtx, stmt, dmlCtx.objRefs, dmlCtx.tableDefs, targetAliases,
+	); err != nil {
 		return 0, err
 	}
 	onDuplicateAction := plan.Node_FAIL
