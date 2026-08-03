@@ -67,7 +67,10 @@ func TestGroupConcatOrderKeyUsesEnumAndSetStorageValue(t *testing.T) {
 				}},
 			}
 
-			require.Same(t, raw, groupConcatOrderKey(display))
+			binder := &HavingBinder{baseBinder: baseBinder{sysCtx: context.Background()}}
+			orderKey, err := binder.groupConcatOrderKey(display)
+			require.NoError(t, err)
+			require.Same(t, raw, orderKey)
 		})
 	}
 }
