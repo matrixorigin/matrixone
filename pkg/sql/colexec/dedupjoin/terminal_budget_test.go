@@ -42,7 +42,7 @@ func TestDedupJoinCallConvertsTerminalBudgetAdmission(t *testing.T) {
 
 	admission := &process.HashBuildBudgetError{
 		Kind:      process.HashBuildBudgetErrorAdmission,
-		Resource:  process.HashBuildBudgetResourceMemory,
+		Component: process.HashBuildBudgetComponentMemory,
 		Requested: 2,
 		Used:      1,
 		Cap:       1,

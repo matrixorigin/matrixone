@@ -301,6 +301,73 @@ func TestStartWriteLoopCompletesBatchOnWriteFailure(t *testing.T) {
 	require.Equal(t, int32(2), released.Load())
 }
 
+func TestStartWriteLoopFlushFailureOnlyCompletesWrittenFutures(t *testing.T) {
+	s := &server{
+		name:     "test",
+		metrics:  newServerMetrics("test"),
+		logger:   logutil.GetPanicLoggerWithLevel(zap.FatalLevel),
+		stopper:  stopper.NewStopper("test"),
+		sessions: &sync.Map{},
+	}
+	s.adjust()
+	s.options.batchSendSize = 2
+	defer s.stopper.Stop()
+
+	var filterMu sync.Mutex
+	filterCalls := make(map[uint64]int)
+	lateAccess := false
+	s.options.filter = func(message Message) bool {
+		filterMu.Lock()
+		defer filterMu.Unlock()
+		if message == nil {
+			lateAccess = true
+			return false
+		}
+		id := message.GetID()
+		filterCalls[id]++
+		return id != 1
+	}
+
+	conn := newTestIOSession(nil, io.ErrClosedPipe)
+	cs := newClientSession(
+		s.metrics,
+		conn,
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+		nil,
+	)
+	released := make(chan uint64, 2)
+	newResponse := func(id uint64) *Future {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		t.Cleanup(cancel)
+		f := newFuture(func(f *Future) {
+			f.reset()
+			released <- id
+		})
+		f.init(RPCMessage{Ctx: ctx, Message: newTestMessage(id)})
+		f.ref()
+		f.Close()
+		return f
+	}
+	cs.c <- newResponse(1)
+	cs.c <- newResponse(2)
+
+	require.NoError(t, s.startWriteLoop(cs))
+	for range 2 {
+		select {
+		case <-released:
+		case <-time.After(time.Second):
+			t.Fatal("future was not released after batch flush failure")
+		}
+	}
+	s.stopper.Stop()
+
+	filterMu.Lock()
+	defer filterMu.Unlock()
+	require.False(t, lateAccess, "flush failure accessed a future after it was released")
+	require.Equal(t, map[uint64]int{1: 1, 2: 1}, filterCalls)
+}
+
 func TestStartWriteLoopUsesEarliestBatchDeadline(t *testing.T) {
 	s := &server{
 		name:     "test",
