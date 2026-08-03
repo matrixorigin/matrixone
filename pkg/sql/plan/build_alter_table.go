@@ -225,6 +225,13 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		case *tree.TableOptionAutoIncrement:
 			hasAutoIncrementOption = true
 			copyTableDef.AutoIncrOffset = autoIncrementValueToOffset(option.Value)
+			alterTablePlan.Actions = append(alterTablePlan.Actions, &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AlterAutoIncrement{
+					AlterAutoIncrement: &plan.AlterTableAutoIncrement{
+						NewOffset: copyTableDef.AutoIncrOffset,
+					},
+				},
+			})
 		case *tree.AlterTableOrderByColumnClause:
 			err = OrderByColumn(cctx, alterTablePlan, option, alterTableCtx)
 			for _, order := range option.AlterOrderByList {

@@ -85,6 +85,11 @@ func TestAlterTableAutoIncrementPlan(t *testing.T) {
 			if tc.wantCopy {
 				require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
 				require.Equal(t, tc.wantOffset, alter.CopyTableDef.AutoIncrOffset)
+				require.Len(t, alter.Actions, 1)
+				require.Equal(t, tc.wantOffset, alter.Actions[0].GetAlterAutoIncrement().NewOffset)
+				copied := DeepCopyPlan(p)
+				require.Equal(t, tc.wantOffset,
+					copied.GetDdl().GetAlterTable().Actions[0].GetAlterAutoIncrement().NewOffset)
 				return
 			}
 			require.Equal(t, plan.AlterTable_INPLACE, alter.AlgorithmType)

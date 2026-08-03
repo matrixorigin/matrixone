@@ -619,13 +619,46 @@ func TestReconcileAlterCopyAutoIncrementUsesStableIdentityAndSafeBounds(t *testi
 
 	cleanup := newAlterAutoIncrementResetCleanup(c)
 	require.NoError(t, c.reconcileAlterCopyAutoIncrement(
-		"test", srcDef, copyDef, copyRel, cleanup,
+		"test", srcDef, copyDef, copyRel, false, cleanup,
 	))
 	require.Equal(t, []string{sourceOffsetSQL, reusedMaxSQL, renamedMaxSQL}, spyExec.executedSQLs)
 	require.Zero(t, resultMP.CurrNB(), "all internal SQL results must be closed")
 	laterErr := errors.New("later ALTER COPY step failed")
 	cleanup.finish(&laterErr)
 	require.ErrorContains(t, laterErr, "later ALTER COPY step failed")
+}
+
+func TestReconcileAlterCopyAutoIncrementExplicitResetIgnoresReservedSourceRange(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	sourceOffsetSQL := "select col_index, offset from mo_catalog.mo_increment_columns where table_id = 1"
+	maxSQL := "select cast(coalesce(max(case when `id` > 0 then `id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		maxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{500}),
+	}, errs: map[string]error{sourceOffsetSQL: errors.New("source offset must not be read")}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	autoType := plan.Type{Id: int32(types.T_uint64), AutoIncr: true}
+	srcDef := &plan.TableDef{TblId: 1, Cols: []*plan.ColDef{{
+		ColId: 10, Name: "id", Typ: autoType,
+	}}}
+	copyDef := &plan.TableDef{
+		TblId: 2, Name: "dept_copy", AutoIncrOffset: 99,
+		Cols: []*plan.ColDef{{ColId: 10, Name: "id", Typ: autoType}},
+	}
+	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(
+		c.proc.Ctx, copyDef.TblId, "id", uint64(500), c.proc.GetTxnOperator(),
+	)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	require.NoError(t, c.reconcileAlterCopyAutoIncrement(
+		"test", srcDef, copyDef, copyRel, true, newAlterAutoIncrementResetCleanup(c),
+	))
+	require.Equal(t, []string{maxSQL}, spyExec.executedSQLs,
+		"an explicit epoch-fenced reset must not inherit the source allocator's reserved high-water mark")
+	require.Zero(t, resultMP.CurrNB())
 }
 
 func TestReconcileAlterCopyAutoIncrementRejectsLegacyTN(t *testing.T) {
@@ -649,6 +682,7 @@ func TestReconcileAlterCopyAutoIncrementRejectsLegacyTN(t *testing.T) {
 		&plan.TableDef{},
 		copyDef,
 		mock_frontend.NewMockRelation(ctrl),
+		false,
 		newAlterAutoIncrementResetCleanup(c),
 	)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
@@ -812,7 +846,7 @@ func TestReconcileAlterCopyAutoIncrementSkipsHiddenAndRejectsNarrowedOverflow(t 
 		incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
 
 		require.NoError(t, c.reconcileAlterCopyAutoIncrement(
-			"test", &plan.TableDef{}, copyDef, copyRel, newAlterAutoIncrementResetCleanup(c),
+			"test", &plan.TableDef{}, copyDef, copyRel, false, newAlterAutoIncrementResetCleanup(c),
 		))
 		require.Empty(t, spyExec.executedSQLs)
 	})
@@ -840,7 +874,7 @@ func TestReconcileAlterCopyAutoIncrementSkipsHiddenAndRejectsNarrowedOverflow(t 
 		incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
 
 		err := c.reconcileAlterCopyAutoIncrement(
-			"test", srcDef, copyDef, copyRel, newAlterAutoIncrementResetCleanup(c),
+			"test", srcDef, copyDef, copyRel, false, newAlterAutoIncrementResetCleanup(c),
 		)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
 		require.Zero(t, resultMP.CurrNB(), "all internal SQL results must be closed")
@@ -880,7 +914,7 @@ func TestReconcileAlterCopyAutoIncrementStopsAfterCancellation(t *testing.T) {
 	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
 
 	err := c.reconcileAlterCopyAutoIncrement(
-		"test", &plan.TableDef{}, copyDef, copyRel, newAlterAutoIncrementResetCleanup(c),
+		"test", &plan.TableDef{}, copyDef, copyRel, false, newAlterAutoIncrementResetCleanup(c),
 	)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, []string{firstMaxSQL}, spyExec.executedSQLs)

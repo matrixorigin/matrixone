@@ -1309,6 +1309,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		qry.TableDef,
 		qry.CopyTableDef,
 		newRel,
+		hasAlterAutoIncrementReset(qry.Actions),
 		cleanup,
 	); err != nil {
 		return err
@@ -1599,6 +1600,15 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	return nil
 }
 
+func hasAlterAutoIncrementReset(actions []*plan.AlterTable_Action) bool {
+	for _, action := range actions {
+		if action != nil && action.GetAlterAutoIncrement() != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // reconcileAlterCopyAutoIncrement publishes allocator state for the temporary
 // table only after copied rows are visible in the ALTER transaction. Retained
 // source columns are matched by stable planner column ID, never by position or
@@ -1608,6 +1618,7 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 	srcDef *plan.TableDef,
 	copyDef *plan.TableDef,
 	newRel engine.Relation,
+	explicitReset bool,
 	cleanup *alterAutoIncrementResetCleanup,
 ) error {
 	if err := c.proc.Ctx.Err(); err != nil {
@@ -1626,7 +1637,10 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 
 	sourceOffsets := make(map[string]uint64)
 	sourceNames := mapCloneAutoIncrColumns(srcDef, copyDef, true)
-	if len(sourceNames) > 0 {
+	// Ordinary COPY preserves the source allocator high-water mark because old
+	// CN caches can still own reserved values. An explicit AUTO_INCREMENT reset
+	// is epoch-fenced, so its contract intentionally replaces those reservations.
+	if !explicitReset && len(sourceNames) > 0 {
 		sql := fmt.Sprintf(
 			"select col_index, offset from mo_catalog.mo_increment_columns where table_id = %d",
 			srcDef.TblId,
@@ -1689,7 +1703,10 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 		}()
 
 		name := strings.ToLower(col.ColName)
-		effectiveOffset := max(copyDef.AutoIncrOffset, copiedMax, sourceOffsets[name])
+		effectiveOffset := max(copyDef.AutoIncrOffset, copiedMax)
+		if !explicitReset {
+			effectiveOffset = max(effectiveOffset, sourceOffsets[name])
+		}
 		if err := incrservice.ValidateAutoColumnOffset(
 			c.proc.Ctx,
 			types.T(copyDef.Cols[col.ColIndex].Typ.Id),
