@@ -49,6 +49,10 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 			"create table " + db + ".copied as select flags from " + db + ".v_raw",
 			"create table " + db + ".inserted (flags set('', 'a'))",
 			"insert into " + db + ".inserted select flags from " + db + ".v_raw",
+			"create table " + db + ".expr_src (flags set('a', 'b'))",
+			"insert into " + db + ".expr_src values ('a')",
+			"create table " + db + ".expr_dst (flags set('a', 'b'))",
+			"insert into " + db + ".expr_dst select concat(flags, ',b') from " + db + ".expr_src",
 		} {
 			execSQLRequire(t, ctx, dbConn, stmt)
 		}
@@ -76,5 +80,10 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 			require.NoError(t, dbConn.QueryRowContext(ctx, query).Scan(&bitmap))
 			require.Equal(t, uint64(1), bitmap, query)
 		}
+
+		var nestedBitmap uint64
+		require.NoError(t, dbConn.QueryRowContext(ctx,
+			"select cast(flags as unsigned) from "+db+".expr_dst").Scan(&nestedBitmap))
+		require.Equal(t, uint64(3), nestedBitmap)
 	})
 }

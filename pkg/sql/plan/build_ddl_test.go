@@ -472,6 +472,26 @@ func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {
 			}
 		}
 	}
+
+	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"insert into copied_from_view (priority, flags, n_name) "+
+			"select priority, concat(flags, ',green'), n_name from v_enum_set", 1)
+	require.NoError(t, err)
+	nestedPlan, err := BuildPlan(ctx, stmt, false)
+	stmt.Free()
+	require.NoError(t, err)
+	nestedDisplayFound := false
+	for _, node := range nestedPlan.GetQuery().GetNodes() {
+		for _, project := range node.GetProjectList() {
+			walkPlanExpr(project, func(expr *plan.Expr) {
+				if fn := expr.GetF(); fn != nil && fn.GetFunc().GetObjName() == moSetCastIndexToValueFun {
+					nestedDisplayFound = true
+				}
+			})
+		}
+	}
+	require.True(t, nestedDisplayFound,
+		"a SET column nested in CONCAT must keep its SQL-visible string semantics")
 }
 
 func TestViewSpecialTypeBoundaryPreservesDistinctVisibleValues(t *testing.T) {
