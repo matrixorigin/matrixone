@@ -96,6 +96,46 @@ func TestStringToFloat32DefaultCompatibilityRange(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestCastEnumToNumericTypes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	source := []types.Enum{1, 3, 0}
+	nulls := []bool{false, false, true}
+
+	for _, tc := range []struct {
+		name   string
+		target types.Type
+		zero   any
+		want   any
+	}{
+		{"int8", types.T_int8.ToType(), []int8{}, []int8{1, 3, 0}},
+		{"int16", types.T_int16.ToType(), []int16{}, []int16{1, 3, 0}},
+		{"int32", types.T_int32.ToType(), []int32{}, []int32{1, 3, 0}},
+		{"int64", types.T_int64.ToType(), []int64{}, []int64{1, 3, 0}},
+		{"uint8", types.T_uint8.ToType(), []uint8{}, []uint8{1, 3, 0}},
+		{"uint16", types.T_uint16.ToType(), []uint16{}, []uint16{1, 3, 0}},
+		{"uint32", types.T_uint32.ToType(), []uint32{}, []uint32{1, 3, 0}},
+		{"uint64", types.T_uint64.ToType(), []uint64{}, []uint64{1, 3, 0}},
+		{"float32", types.T_float32.ToType(), []float32{}, []float32{1, 3, 0}},
+		{"float64", types.T_float64.ToType(), []float64{}, []float64{1, 3, 0}},
+		{"decimal64", types.New(types.T_decimal64, 18, 0), []types.Decimal64{}, []types.Decimal64{1, 3, 0}},
+		{"decimal128", types.New(types.T_decimal128, 38, 0), []types.Decimal128{}, []types.Decimal128{{B0_63: 1}, {B0_63: 3}, {}}},
+		{"decimal256", types.New(types.T_decimal256, 65, 0), []types.Decimal256{}, []types.Decimal256{{B0_63: 1}, {B0_63: 3}, {}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_enum.ToType(), source, nulls),
+					NewFunctionTestInput(tc.target, tc.zero, nil),
+				},
+				NewFunctionTestResult(tc.target, false, tc.want, nulls),
+				NewCast,
+			)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
 func TestStringToFixedFloat32PreservesSourcePrecision(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	targetType := types.New(types.T_float32, 5, 2)

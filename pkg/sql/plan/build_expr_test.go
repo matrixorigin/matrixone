@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -531,6 +532,16 @@ func TestEnumAndSetKeepStoredValuesInExpressionContexts(t *testing.T) {
 			sql:  "select n_name + 0 from nation",
 		},
 		{
+			name: "enum numeric unary minus",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select -n_name from nation",
+		},
+		{
+			name: "set bitwise unary complement",
+			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:  "select ~n_name from nation",
+		},
+		{
 			name: "enum numeric comparison",
 			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
 			sql:  "select n_name = 1 from nation",
@@ -594,6 +605,19 @@ func TestEnumAndSetKeepStoredValuesInExpressionContexts(t *testing.T) {
 	}
 }
 
+func TestIsBitwiseBinaryOp(t *testing.T) {
+	for _, op := range []tree.BinaryOp{
+		tree.BIT_XOR,
+		tree.BIT_OR,
+		tree.BIT_AND,
+		tree.LEFT_SHIFT,
+		tree.RIGHT_SHIFT,
+	} {
+		require.True(t, isBitwiseBinaryOp(op))
+	}
+	require.False(t, isBitwiseBinaryOp(tree.PLUS))
+}
+
 func containsEnumOrSetDisplayValue(expr *plan.Expr) bool {
 	if expr == nil {
 		return false
@@ -635,6 +659,32 @@ func TestEnumDisplayValueToJSONUsesJSONQuoteInPlannerCasts(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_json), expr.Typ.Id)
 	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
+}
+
+func TestRawMySQLSpecialTypeToJSONUsesDisplayValue(t *testing.T) {
+	ctx := NewMockCompilerContext(true).GetContext()
+	for _, typ := range []plan.Type{
+		{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+		{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+	} {
+		raw := &plan.Expr{
+			Typ: typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: 1,
+				ColPos: 2,
+				Name:   "special",
+			}},
+		}
+
+		got, rewritten, err := rewriteMySQLSpecialTypeDisplayCast(
+			ctx, raw, plan.Type{Id: int32(types.T_json)},
+		)
+		require.NoError(t, err)
+		require.True(t, rewritten)
+		require.Equal(t, "json_quote", got.GetF().Func.ObjName)
+		require.Len(t, got.GetF().Args, 1)
+		require.True(t, isEnumOrSetDisplayValueExpr(got.GetF().Args[0]))
+	}
 }
 
 func TestSetDisplayValueToJSONUsesJSONQuoteInPlannerCasts(t *testing.T) {

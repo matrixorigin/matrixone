@@ -1164,6 +1164,9 @@ func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.T
 	case types.T_uint64:
 		s := vector.GenerateFunctionFixedTypeParameter[uint64](from)
 		return unsignedToDecimal256(s, rs, length, selectList)
+	case types.T_enum:
+		s := vector.GenerateFunctionFixedTypeParameter[types.Enum](from)
+		return enumToOthers(proc.Ctx, s, toType, result, length, selectList)
 	case types.T_float32:
 		s := vector.GenerateFunctionFixedTypeParameter[float32](from)
 		return floatToDecimal256(s, rs, length, selectList)
