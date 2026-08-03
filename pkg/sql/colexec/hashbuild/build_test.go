@@ -208,6 +208,8 @@ func TestHashBuildRepeatedResetFinalizesRuntimeFilterOnce(t *testing.T) {
 func TestBroadcastBudgetFailureUnblocksAllConsumers(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
 	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	budget, err := tc.proc.GetHashBuildBudget()
+	require.NoError(t, err)
 	require.NoError(t, tc.marg.Prepare(tc.proc))
 	require.NoError(t, tc.arg.Prepare(tc.proc))
 
@@ -247,6 +249,9 @@ func TestBroadcastBudgetFailureUnblocksAllConsumers(t *testing.T) {
 		require.Equal(t, results[0].BuildError().Error(), results[i].BuildError().Error())
 	}
 	tc.arg.Reset(tc.proc, true, buildErr)
+	require.Zero(t, budget.Used())
+	require.Zero(t, budget.SpillDiskUsed())
+	require.Zero(t, budget.SpillFDUsed())
 
 	bat.Clean(tc.proc.Mp())
 	tc.marg.Reset(tc.proc, true, buildErr)
