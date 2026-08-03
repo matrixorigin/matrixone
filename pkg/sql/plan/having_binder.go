@@ -475,7 +475,10 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 		}
 		// ENUM/SET values are exposed through display conversion functions, but
 		// ORDER BY must use their internal ordinal/bitmap representation.
-		orderKey := groupConcatOrderKey(boundExpr)
+		orderKey, err := b.groupConcatOrderKey(boundExpr)
+		if err != nil {
+			return err
+		}
 		if orderKey != boundExpr {
 			// ENUM/SET display arguments cannot be reused because their ORDER
 			// BY semantics use the internal index/bitmap value.
@@ -533,12 +536,17 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 	return nil
 }
 
-func groupConcatOrderKey(expr *plan.Expr) *plan.Expr {
-	if fn := expr.GetF(); fn != nil && len(fn.Args) > 1 &&
-		(fn.Func.ObjName == moEnumCastIndexToValueFun || fn.Func.ObjName == moSetCastIndexToValueFun) {
-		return fn.Args[1]
+func (b *HavingBinder) groupConcatOrderKey(expr *plan.Expr) (*plan.Expr, error) {
+	if isEnumOrSetDisplayValueExpr(expr) {
+		fn := expr.GetF()
+		if len(fn.Args) > 1 {
+			return fn.Args[1], nil
+		}
 	}
-	return expr
+	if storageType := b.ctx.mysqlSpecialOrderTypeForExpr(expr); storageType != nil {
+		return makeMySQLSpecialOrderKey(b.GetContext(), expr, storageType)
+	}
+	return expr, nil
 }
 
 func encodeGroupConcatOrderConfig(
