@@ -1,3 +1,4 @@
+set session sql_mode = default;
 select cast('0000-01-01' as date),cast('0000-01-01' as date)-1;
 ➤ cast(0000-01-01 as date)[91,64,0]  ¦  cast(0000-01-01 as date) - 1[-5,64,0]  𝄀
 null  ¦  null
