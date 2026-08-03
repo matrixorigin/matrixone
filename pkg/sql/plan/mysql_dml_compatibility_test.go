@@ -108,6 +108,8 @@ func TestUpdateRejectsDirectTargetTableSubqueries(t *testing.T) {
 		"UPDATE nation SET n_name = 'x' WHERE EXISTS (SELECT 1 FROM region ORDER BY (SELECT max(n_nationkey) FROM nation))",
 		"UPDATE nation SET n_name = 'x' WHERE EXISTS (SELECT 1 FROM region GROUP BY r_regionkey HAVING EXISTS (SELECT 1 FROM nation))",
 		"UPDATE nation SET n_name = 'x' WHERE EXISTS (SELECT 1 FROM region JOIN nation ON region.r_regionkey = nation.n_regionkey)",
+		"UPDATE nation AS dst SET n_name = (SELECT max(dst.n_name) FROM nation AS dst)",
+		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src WHERE EXISTS (SELECT 1 FROM nation AS dst ORDER BY dst.n_nationkey))",
 	}
 	for _, sql := range tests {
 		requireMySQLDMLCompatibilityError(
@@ -154,6 +156,14 @@ func TestMySQLDMLCompatibilityHelpers(t *testing.T) {
 	require.True(t, (mysqlDMLTarget{schema: "tpch", name: "nation"}).matches(nil, nil, "TPCH", "NATION"))
 	require.False(t, (mysqlDMLTarget{schema: "tpch", name: "nation"}).matches(nil, nil, "tpch", "region"))
 
+	qualifiedTargets := make(map[mysqlDMLTarget]map[string]struct{})
+	firstSameNameTarget := mysqlDMLTarget{objID: 1, schema: "db1", name: "same_name"}
+	secondSameNameTarget := mysqlDMLTarget{objID: 2, schema: "db2", name: "same_name"}
+	mysqlAddTargetQualifier(qualifiedTargets, firstSameNameTarget, "first_alias")
+	mysqlAddTargetQualifier(qualifiedTargets, secondSameNameTarget, "second_alias")
+	require.Equal(t, map[string]struct{}{"first_alias": {}}, qualifiedTargets[firstSameNameTarget])
+	require.Equal(t, map[string]struct{}{"second_alias": {}}, qualifiedTargets[secondSameNameTarget])
+
 	inherited := map[string]struct{}{"outer": {}}
 	visibleCTEs := mysqlCTENames(&tree.With{CTEs: []*tree.CTE{
 		nil,
@@ -196,6 +206,9 @@ func TestMySQLDMLCompatibilityAllowsLegalShapes(t *testing.T) {
 		"UPDATE nation SET n_name = 'x' WHERE n_regionkey IN (SELECT r_regionkey FROM region)",
 		"UPDATE nation SET n_name = 'x' WHERE n_nationkey IN (SELECT n_nationkey FROM (SELECT n_nationkey FROM nation) AS materialized_nation)",
 		"UPDATE nation AS dst JOIN nation AS src ON dst.n_nationkey = src.n_nationkey SET dst.n_name = src.n_name",
+		"UPDATE nation SET n_name = (SELECT max(src.n_name) FROM nation AS src WHERE src.n_nationkey <= nation.n_nationkey)",
+		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src WHERE src.n_nationkey <= dst.n_nationkey)",
+		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src WHERE EXISTS (SELECT 1 FROM region WHERE src.n_regionkey = dst.n_regionkey))",
 		"DELETE FROM nation WHERE n_nationkey IN (SELECT n_nationkey FROM (SELECT n_nationkey FROM nation) AS materialized_nation)",
 	}
 	for _, sql := range tests {

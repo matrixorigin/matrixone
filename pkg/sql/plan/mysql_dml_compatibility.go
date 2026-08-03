@@ -119,23 +119,32 @@ func validateUpdateTargetSubqueries(
 ) error {
 	targets := makeMySQLDMLTargets(objRefs, tableDefs)
 	visibleCTEs := mysqlCTENames(stmt.With, nil)
+	outerTargetQualifiers := mysqlUpdateTargetQualifiers(ctx, stmt.Tables, targets)
 
 	for _, updateExpr := range stmt.Exprs {
-		if target, ok := findMySQLDMLTargetInExpr(ctx, updateExpr.Expr, targets, visibleCTEs); ok {
+		if target, ok := findMySQLDMLTargetInExprWithOuterTargets(
+			ctx, updateExpr.Expr, targets, visibleCTEs, outerTargetQualifiers,
+		); ok {
 			return moerr.NewUpdateTableUsed(ctx.GetContext(), target)
 		}
 	}
 	if stmt.Where != nil {
-		if target, ok := findMySQLDMLTargetInExpr(ctx, stmt.Where.Expr, targets, visibleCTEs); ok {
+		if target, ok := findMySQLDMLTargetInExprWithOuterTargets(
+			ctx, stmt.Where.Expr, targets, visibleCTEs, outerTargetQualifiers,
+		); ok {
 			return moerr.NewUpdateTableUsed(ctx.GetContext(), target)
 		}
 	}
 	for _, order := range stmt.OrderBy {
-		if target, ok := findMySQLDMLTargetInExpr(ctx, order.Expr, targets, visibleCTEs); ok {
+		if target, ok := findMySQLDMLTargetInExprWithOuterTargets(
+			ctx, order.Expr, targets, visibleCTEs, outerTargetQualifiers,
+		); ok {
 			return moerr.NewUpdateTableUsed(ctx.GetContext(), target)
 		}
 	}
-	if target, ok := findMySQLDMLTargetInLimit(ctx, stmt.Limit, targets, visibleCTEs); ok {
+	if target, ok := findMySQLDMLTargetInLimitWithOuterTargets(
+		ctx, stmt.Limit, targets, visibleCTEs, outerTargetQualifiers,
+	); ok {
 		return moerr.NewUpdateTableUsed(ctx.GetContext(), target)
 	}
 	for _, tableExpr := range stmt.Tables {
@@ -210,13 +219,27 @@ func findMySQLDMLTargetInLimit(
 	targets []mysqlDMLTarget,
 	visibleCTEs map[string]struct{},
 ) (string, bool) {
+	return findMySQLDMLTargetInLimitWithOuterTargets(ctx, limit, targets, visibleCTEs, nil)
+}
+
+func findMySQLDMLTargetInLimitWithOuterTargets(
+	ctx CompilerContext,
+	limit *tree.Limit,
+	targets []mysqlDMLTarget,
+	visibleCTEs map[string]struct{},
+	outerTargetQualifiers map[mysqlDMLTarget]map[string]struct{},
+) (string, bool) {
 	if limit == nil {
 		return "", false
 	}
-	if target, ok := findMySQLDMLTargetInExpr(ctx, limit.Count, targets, visibleCTEs); ok {
+	if target, ok := findMySQLDMLTargetInExprWithOuterTargets(
+		ctx, limit.Count, targets, visibleCTEs, outerTargetQualifiers,
+	); ok {
 		return target, true
 	}
-	return findMySQLDMLTargetInExpr(ctx, limit.Offset, targets, visibleCTEs)
+	return findMySQLDMLTargetInExprWithOuterTargets(
+		ctx, limit.Offset, targets, visibleCTEs, outerTargetQualifiers,
+	)
 }
 
 func findMySQLDMLTargetInExpr(
@@ -224,6 +247,16 @@ func findMySQLDMLTargetInExpr(
 	expr tree.Expr,
 	targets []mysqlDMLTarget,
 	visibleCTEs map[string]struct{},
+) (string, bool) {
+	return findMySQLDMLTargetInExprWithOuterTargets(ctx, expr, targets, visibleCTEs, nil)
+}
+
+func findMySQLDMLTargetInExprWithOuterTargets(
+	ctx CompilerContext,
+	expr tree.Expr,
+	targets []mysqlDMLTarget,
+	visibleCTEs map[string]struct{},
+	outerTargetQualifiers map[mysqlDMLTarget]map[string]struct{},
 ) (string, bool) {
 	if expr == nil || len(targets) == 0 {
 		return "", false
@@ -237,7 +270,9 @@ func findMySQLDMLTargetInExpr(
 		if !ok {
 			return true
 		}
-		found, _ = findMySQLDMLTargetInSelect(ctx, subquery.Select, targets, visibleCTEs)
+		found, _ = findMySQLDMLTargetInSelectWithOuterTargets(
+			ctx, subquery.Select, targets, visibleCTEs, outerTargetQualifiers,
+		)
 		// findMySQLDMLTargetInSelect owns traversal below this subquery. Do not
 		// let the reflection walker enter it a second time.
 		return false
@@ -251,18 +286,34 @@ func findMySQLDMLTargetInSelect(
 	targets []mysqlDMLTarget,
 	visibleCTEs map[string]struct{},
 ) (string, bool) {
+	return findMySQLDMLTargetInSelectWithOuterTargets(ctx, stmt, targets, visibleCTEs, nil)
+}
+
+func findMySQLDMLTargetInSelectWithOuterTargets(
+	ctx CompilerContext,
+	stmt tree.SelectStatement,
+	targets []mysqlDMLTarget,
+	visibleCTEs map[string]struct{},
+	outerTargetQualifiers map[mysqlDMLTarget]map[string]struct{},
+) (string, bool) {
 	switch selectStmt := stmt.(type) {
 	case *tree.Select:
 		visibleCTEs = mysqlCTENames(selectStmt.With, visibleCTEs)
-		if target, ok := findMySQLDMLTargetInSelect(ctx, selectStmt.Select, targets, visibleCTEs); ok {
+		if target, ok := findMySQLDMLTargetInSelectWithOuterTargets(
+			ctx, selectStmt.Select, targets, visibleCTEs, outerTargetQualifiers,
+		); ok {
 			return target, true
 		}
 		for _, order := range selectStmt.OrderBy {
-			if target, ok := findMySQLDMLTargetInExpr(ctx, order.Expr, targets, visibleCTEs); ok {
+			if target, ok := findMySQLDMLTargetInExprWithOuterTargets(
+				ctx, order.Expr, targets, visibleCTEs, outerTargetQualifiers,
+			); ok {
 				return target, true
 			}
 		}
-		if target, ok := findMySQLDMLTargetInLimit(ctx, selectStmt.Limit, targets, visibleCTEs); ok {
+		if target, ok := findMySQLDMLTargetInLimitWithOuterTargets(
+			ctx, selectStmt.Limit, targets, visibleCTEs, outerTargetQualifiers,
+		); ok {
 			return target, true
 		}
 		if selectStmt.TimeWindow != nil {
@@ -283,51 +334,72 @@ func findMySQLDMLTargetInSelect(
 			}
 		}
 	case *tree.ParenSelect:
-		return findMySQLDMLTargetInSelect(ctx, selectStmt.Select, targets, visibleCTEs)
+		return findMySQLDMLTargetInSelectWithOuterTargets(
+			ctx, selectStmt.Select, targets, visibleCTEs, outerTargetQualifiers,
+		)
 	case *tree.UnionClause:
-		if target, ok := findMySQLDMLTargetInSelect(ctx, selectStmt.Left, targets, visibleCTEs); ok {
+		if target, ok := findMySQLDMLTargetInSelectWithOuterTargets(
+			ctx, selectStmt.Left, targets, visibleCTEs, outerTargetQualifiers,
+		); ok {
 			return target, true
 		}
-		return findMySQLDMLTargetInSelect(ctx, selectStmt.Right, targets, visibleCTEs)
+		return findMySQLDMLTargetInSelectWithOuterTargets(
+			ctx, selectStmt.Right, targets, visibleCTEs, outerTargetQualifiers,
+		)
 	case *tree.SelectClause:
+		correlatedTargets := mysqlCorrelatedUpdateTargets(selectStmt, outerTargetQualifiers)
 		if selectStmt.From != nil {
 			for _, tableExpr := range selectStmt.From.Tables {
-				if target, ok := findMySQLDMLTargetInDirectTableExpr(ctx, tableExpr, targets, visibleCTEs); ok {
+				if target, ok := findMySQLDMLTargetInDirectTableExprExcept(
+					ctx, tableExpr, targets, visibleCTEs, correlatedTargets,
+				); ok {
 					return target, true
 				}
 			}
 		}
 		for _, selectExpr := range selectStmt.Exprs {
-			if target, ok := findMySQLDMLTargetInExpr(ctx, selectExpr.Expr, targets, visibleCTEs); ok {
+			if target, ok := findMySQLDMLTargetInExprWithOuterTargets(
+				ctx, selectExpr.Expr, targets, visibleCTEs, outerTargetQualifiers,
+			); ok {
 				return target, true
 			}
 		}
 		if selectStmt.Where != nil {
-			if target, ok := findMySQLDMLTargetInExpr(ctx, selectStmt.Where.Expr, targets, visibleCTEs); ok {
+			if target, ok := findMySQLDMLTargetInExprWithOuterTargets(
+				ctx, selectStmt.Where.Expr, targets, visibleCTEs, outerTargetQualifiers,
+			); ok {
 				return target, true
 			}
 		}
 		if selectStmt.GroupBy != nil {
 			for _, exprs := range selectStmt.GroupBy.GroupByExprsList {
 				for _, expr := range exprs {
-					if target, ok := findMySQLDMLTargetInExpr(ctx, expr, targets, visibleCTEs); ok {
+					if target, ok := findMySQLDMLTargetInExprWithOuterTargets(
+						ctx, expr, targets, visibleCTEs, outerTargetQualifiers,
+					); ok {
 						return target, true
 					}
 				}
 			}
 			for _, expr := range selectStmt.GroupBy.GroupingSet {
-				if target, ok := findMySQLDMLTargetInExpr(ctx, expr, targets, visibleCTEs); ok {
+				if target, ok := findMySQLDMLTargetInExprWithOuterTargets(
+					ctx, expr, targets, visibleCTEs, outerTargetQualifiers,
+				); ok {
 					return target, true
 				}
 			}
 		}
 		if selectStmt.Having != nil {
-			return findMySQLDMLTargetInExpr(ctx, selectStmt.Having.Expr, targets, visibleCTEs)
+			return findMySQLDMLTargetInExprWithOuterTargets(
+				ctx, selectStmt.Having.Expr, targets, visibleCTEs, outerTargetQualifiers,
+			)
 		}
 	case *tree.ValuesClause:
 		for _, row := range selectStmt.Rows {
 			for _, expr := range row {
-				if target, ok := findMySQLDMLTargetInExpr(ctx, expr, targets, visibleCTEs); ok {
+				if target, ok := findMySQLDMLTargetInExprWithOuterTargets(
+					ctx, expr, targets, visibleCTEs, outerTargetQualifiers,
+				); ok {
 					return target, true
 				}
 			}
@@ -336,11 +408,314 @@ func findMySQLDMLTargetInSelect(
 	return "", false
 }
 
+func mysqlUpdateTargetQualifiers(
+	ctx CompilerContext,
+	tableExprs tree.TableExprs,
+	targets []mysqlDMLTarget,
+) map[mysqlDMLTarget]map[string]struct{} {
+	result := make(map[mysqlDMLTarget]map[string]struct{}, len(targets))
+	var collect func(tree.TableExpr)
+	collect = func(expr tree.TableExpr) {
+		switch tableExpr := expr.(type) {
+		case *tree.TableName:
+			if target, ok := mysqlDMLTargetForTableName(ctx, tableExpr, targets); ok {
+				mysqlAddTargetQualifier(result, target, string(tableExpr.ObjectName))
+			}
+		case *tree.AliasedTableExpr:
+			if tableExpr.As.Alias != "" {
+				if tableName, ok := mysqlUnwrapTableName(tableExpr.Expr); ok {
+					if target, matched := mysqlDMLTargetForTableName(ctx, tableName, targets); matched {
+						mysqlAddTargetQualifier(result, target, string(tableExpr.As.Alias))
+					}
+				}
+				return
+			}
+			collect(tableExpr.Expr)
+		case *tree.ParenTableExpr:
+			collect(tableExpr.Expr)
+		case *tree.JoinTableExpr:
+			collect(tableExpr.Left)
+			collect(tableExpr.Right)
+		case *tree.ApplyTableExpr:
+			collect(tableExpr.Left)
+			collect(tableExpr.Right)
+		}
+	}
+	for _, tableExpr := range tableExprs {
+		collect(tableExpr)
+	}
+	return result
+}
+
+func mysqlUnwrapTableName(expr tree.TableExpr) (*tree.TableName, bool) {
+	switch tableExpr := expr.(type) {
+	case *tree.TableName:
+		return tableExpr, true
+	case *tree.ParenTableExpr:
+		return mysqlUnwrapTableName(tableExpr.Expr)
+	default:
+		return nil, false
+	}
+}
+
+func mysqlDMLTargetForTableName(
+	ctx CompilerContext,
+	tableName *tree.TableName,
+	targets []mysqlDMLTarget,
+) (mysqlDMLTarget, bool) {
+	dbName := string(tableName.SchemaName)
+	if dbName == "" {
+		dbName = ctx.DefaultDatabase()
+	}
+	objRef, tableDef, err := ctx.Resolve(dbName, string(tableName.ObjectName), nil)
+	if err != nil || tableDef == nil {
+		return mysqlDMLTarget{}, false
+	}
+	for _, target := range targets {
+		if target.matches(objRef, tableDef, dbName, string(tableName.ObjectName)) {
+			return target, true
+		}
+	}
+	return mysqlDMLTarget{}, false
+}
+
+func mysqlAddTargetQualifier(
+	targets map[mysqlDMLTarget]map[string]struct{},
+	target mysqlDMLTarget,
+	qualifier string,
+) {
+	qualifiers := targets[target]
+	if qualifiers == nil {
+		qualifiers = make(map[string]struct{})
+		targets[target] = qualifiers
+	}
+	qualifiers[strings.ToLower(qualifier)] = struct{}{}
+}
+
+func mysqlCorrelatedUpdateTargets(
+	selectStmt *tree.SelectClause,
+	outerTargetQualifiers map[mysqlDMLTarget]map[string]struct{},
+) map[mysqlDMLTarget]struct{} {
+	if len(outerTargetQualifiers) == 0 {
+		return nil
+	}
+	result := make(map[mysqlDMLTarget]struct{})
+	for target, qualifiers := range outerTargetQualifiers {
+		if mysqlSelectClauseReferencesOuterQualifier(selectStmt, qualifiers, nil) {
+			result[target] = struct{}{}
+		}
+	}
+	return result
+}
+
+func mysqlSelectReferencesOuterQualifier(
+	stmt tree.SelectStatement,
+	qualifiers map[string]struct{},
+	shadowed map[string]struct{},
+) bool {
+	switch selectStmt := stmt.(type) {
+	case *tree.Select:
+		if mysqlSelectReferencesOuterQualifier(selectStmt.Select, qualifiers, shadowed) {
+			return true
+		}
+		localShadowed := mysqlCloneNames(shadowed)
+		mysqlCollectSelectLocalQualifiers(selectStmt.Select, localShadowed)
+		for _, order := range selectStmt.OrderBy {
+			if mysqlExprReferencesOuterQualifier(order.Expr, qualifiers, localShadowed) {
+				return true
+			}
+		}
+		return mysqlLimitReferencesOuterQualifier(selectStmt.Limit, qualifiers, localShadowed)
+	case *tree.ParenSelect:
+		return mysqlSelectReferencesOuterQualifier(selectStmt.Select, qualifiers, shadowed)
+	case *tree.UnionClause:
+		return mysqlSelectReferencesOuterQualifier(selectStmt.Left, qualifiers, shadowed) ||
+			mysqlSelectReferencesOuterQualifier(selectStmt.Right, qualifiers, shadowed)
+	case *tree.SelectClause:
+		return mysqlSelectClauseReferencesOuterQualifier(selectStmt, qualifiers, shadowed)
+	case *tree.ValuesClause:
+		for _, row := range selectStmt.Rows {
+			for _, expr := range row {
+				if mysqlExprReferencesOuterQualifier(expr, qualifiers, shadowed) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func mysqlSelectClauseReferencesOuterQualifier(
+	selectStmt *tree.SelectClause,
+	qualifiers map[string]struct{},
+	shadowed map[string]struct{},
+) bool {
+	localShadowed := mysqlCloneNames(shadowed)
+	if selectStmt.From != nil {
+		for _, tableExpr := range selectStmt.From.Tables {
+			mysqlCollectLocalTableQualifiers(tableExpr, localShadowed)
+		}
+	}
+	for _, selectExpr := range selectStmt.Exprs {
+		if mysqlExprReferencesOuterQualifier(selectExpr.Expr, qualifiers, localShadowed) {
+			return true
+		}
+	}
+	if selectStmt.Where != nil && mysqlExprReferencesOuterQualifier(selectStmt.Where.Expr, qualifiers, localShadowed) {
+		return true
+	}
+	if selectStmt.GroupBy != nil {
+		for _, exprs := range selectStmt.GroupBy.GroupByExprsList {
+			for _, expr := range exprs {
+				if mysqlExprReferencesOuterQualifier(expr, qualifiers, localShadowed) {
+					return true
+				}
+			}
+		}
+		for _, expr := range selectStmt.GroupBy.GroupingSet {
+			if mysqlExprReferencesOuterQualifier(expr, qualifiers, localShadowed) {
+				return true
+			}
+		}
+	}
+	if selectStmt.Having != nil && mysqlExprReferencesOuterQualifier(selectStmt.Having.Expr, qualifiers, localShadowed) {
+		return true
+	}
+	if selectStmt.From != nil {
+		for _, tableExpr := range selectStmt.From.Tables {
+			if mysqlTableExprReferencesOuterQualifier(tableExpr, qualifiers, localShadowed) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func mysqlExprReferencesOuterQualifier(
+	expr tree.Expr,
+	qualifiers map[string]struct{},
+	shadowed map[string]struct{},
+) bool {
+	if expr == nil {
+		return false
+	}
+	found := false
+	walkGroupingSetOrderByExpr(expr, func(node tree.Expr) bool {
+		if found {
+			return false
+		}
+		switch typedExpr := node.(type) {
+		case *tree.UnresolvedName:
+			qualifier := strings.ToLower(typedExpr.TblName())
+			_, isOuterTarget := qualifiers[qualifier]
+			_, isShadowed := shadowed[qualifier]
+			found = qualifier != "" && isOuterTarget && !isShadowed
+			return !found
+		case *tree.Subquery:
+			found = mysqlSelectReferencesOuterQualifier(typedExpr.Select, qualifiers, shadowed)
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func mysqlLimitReferencesOuterQualifier(
+	limit *tree.Limit,
+	qualifiers map[string]struct{},
+	shadowed map[string]struct{},
+) bool {
+	if limit == nil {
+		return false
+	}
+	return mysqlExprReferencesOuterQualifier(limit.Count, qualifiers, shadowed) ||
+		mysqlExprReferencesOuterQualifier(limit.Offset, qualifiers, shadowed)
+}
+
+func mysqlTableExprReferencesOuterQualifier(
+	expr tree.TableExpr,
+	qualifiers map[string]struct{},
+	shadowed map[string]struct{},
+) bool {
+	switch tableExpr := expr.(type) {
+	case *tree.AliasedTableExpr:
+		return mysqlTableExprReferencesOuterQualifier(tableExpr.Expr, qualifiers, shadowed)
+	case *tree.ParenTableExpr:
+		return mysqlTableExprReferencesOuterQualifier(tableExpr.Expr, qualifiers, shadowed)
+	case *tree.JoinTableExpr:
+		if mysqlTableExprReferencesOuterQualifier(tableExpr.Left, qualifiers, shadowed) ||
+			mysqlTableExprReferencesOuterQualifier(tableExpr.Right, qualifiers, shadowed) {
+			return true
+		}
+		if condition, ok := tableExpr.Cond.(*tree.OnJoinCond); ok {
+			return mysqlExprReferencesOuterQualifier(condition.Expr, qualifiers, shadowed)
+		}
+	case *tree.ApplyTableExpr:
+		return mysqlTableExprReferencesOuterQualifier(tableExpr.Left, qualifiers, shadowed) ||
+			mysqlTableExprReferencesOuterQualifier(tableExpr.Right, qualifiers, shadowed)
+	}
+	return false
+}
+
+func mysqlCollectLocalTableQualifiers(expr tree.TableExpr, names map[string]struct{}) {
+	switch tableExpr := expr.(type) {
+	case *tree.TableName:
+		names[strings.ToLower(string(tableExpr.ObjectName))] = struct{}{}
+	case *tree.AliasedTableExpr:
+		if tableExpr.As.Alias != "" {
+			names[strings.ToLower(string(tableExpr.As.Alias))] = struct{}{}
+			return
+		}
+		mysqlCollectLocalTableQualifiers(tableExpr.Expr, names)
+	case *tree.ParenTableExpr:
+		mysqlCollectLocalTableQualifiers(tableExpr.Expr, names)
+	case *tree.JoinTableExpr:
+		mysqlCollectLocalTableQualifiers(tableExpr.Left, names)
+		mysqlCollectLocalTableQualifiers(tableExpr.Right, names)
+	case *tree.ApplyTableExpr:
+		mysqlCollectLocalTableQualifiers(tableExpr.Left, names)
+		mysqlCollectLocalTableQualifiers(tableExpr.Right, names)
+	}
+}
+
+func mysqlCollectSelectLocalQualifiers(stmt tree.SelectStatement, names map[string]struct{}) {
+	switch selectStmt := stmt.(type) {
+	case *tree.Select:
+		mysqlCollectSelectLocalQualifiers(selectStmt.Select, names)
+	case *tree.ParenSelect:
+		mysqlCollectSelectLocalQualifiers(selectStmt.Select, names)
+	case *tree.SelectClause:
+		if selectStmt.From != nil {
+			for _, tableExpr := range selectStmt.From.Tables {
+				mysqlCollectLocalTableQualifiers(tableExpr, names)
+			}
+		}
+	}
+}
+
+func mysqlCloneNames(names map[string]struct{}) map[string]struct{} {
+	result := make(map[string]struct{}, len(names))
+	for name := range names {
+		result[name] = struct{}{}
+	}
+	return result
+}
+
 func findMySQLDMLTargetInDirectTableExpr(
 	ctx CompilerContext,
 	expr tree.TableExpr,
 	targets []mysqlDMLTarget,
 	visibleCTEs map[string]struct{},
+) (string, bool) {
+	return findMySQLDMLTargetInDirectTableExprExcept(ctx, expr, targets, visibleCTEs, nil)
+}
+
+func findMySQLDMLTargetInDirectTableExprExcept(
+	ctx CompilerContext,
+	expr tree.TableExpr,
+	targets []mysqlDMLTarget,
+	visibleCTEs map[string]struct{},
+	ignoredTargets map[mysqlDMLTarget]struct{},
 ) (string, bool) {
 	switch tableExpr := expr.(type) {
 	case *tree.TableName:
@@ -359,28 +734,31 @@ func findMySQLDMLTargetInDirectTableExpr(
 		}
 		for _, target := range targets {
 			if target.matches(objRef, tableDef, dbName, string(tableExpr.ObjectName)) {
+				if _, ignored := ignoredTargets[target]; ignored {
+					return "", false
+				}
 				return target.name, true
 			}
 		}
 	case *tree.AliasedTableExpr:
-		return findMySQLDMLTargetInDirectTableExpr(ctx, tableExpr.Expr, targets, visibleCTEs)
+		return findMySQLDMLTargetInDirectTableExprExcept(ctx, tableExpr.Expr, targets, visibleCTEs, ignoredTargets)
 	case *tree.ParenTableExpr:
-		return findMySQLDMLTargetInDirectTableExpr(ctx, tableExpr.Expr, targets, visibleCTEs)
+		return findMySQLDMLTargetInDirectTableExprExcept(ctx, tableExpr.Expr, targets, visibleCTEs, ignoredTargets)
 	case *tree.JoinTableExpr:
-		if target, ok := findMySQLDMLTargetInDirectTableExpr(ctx, tableExpr.Left, targets, visibleCTEs); ok {
+		if target, ok := findMySQLDMLTargetInDirectTableExprExcept(ctx, tableExpr.Left, targets, visibleCTEs, ignoredTargets); ok {
 			return target, true
 		}
-		if target, ok := findMySQLDMLTargetInDirectTableExpr(ctx, tableExpr.Right, targets, visibleCTEs); ok {
+		if target, ok := findMySQLDMLTargetInDirectTableExprExcept(ctx, tableExpr.Right, targets, visibleCTEs, ignoredTargets); ok {
 			return target, true
 		}
 		if condition, ok := tableExpr.Cond.(*tree.OnJoinCond); ok {
 			return findMySQLDMLTargetInExpr(ctx, condition.Expr, targets, visibleCTEs)
 		}
 	case *tree.ApplyTableExpr:
-		if target, ok := findMySQLDMLTargetInDirectTableExpr(ctx, tableExpr.Left, targets, visibleCTEs); ok {
+		if target, ok := findMySQLDMLTargetInDirectTableExprExcept(ctx, tableExpr.Left, targets, visibleCTEs, ignoredTargets); ok {
 			return target, true
 		}
-		return findMySQLDMLTargetInDirectTableExpr(ctx, tableExpr.Right, targets, visibleCTEs)
+		return findMySQLDMLTargetInDirectTableExprExcept(ctx, tableExpr.Right, targets, visibleCTEs, ignoredTargets)
 	case *tree.Subquery, *tree.StatementSource:
 		// A FROM-subquery is a derived-table boundary. Its target-table read is
 		// allowed because that result can be materialized before the DML write.
