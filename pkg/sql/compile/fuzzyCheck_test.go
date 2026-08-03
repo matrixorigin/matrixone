@@ -24,11 +24,14 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -112,6 +115,57 @@ func TestFuzzyCheckDuplicateSQLModes(t *testing.T) {
 	require.Equal(t,
 		"select k from `db`.`hidden` where k in (1, 2) group by k having count(*) > 1 limit 1;",
 		hidden.duplicateCheckSQL())
+}
+
+func TestExactFloatBackgroundSQLCheckFormatsDuplicateIdentity(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	compile := &Compile{
+		proc: proc,
+		pn:   &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}},
+	}
+	f := &fuzzyCheck{
+		db:            "db",
+		tbl:           "t",
+		attr:          "k",
+		exactFloatKey: true,
+		col: &plan.ColDef{
+			Name: "k",
+			Typ:  plan.Type{Id: int32(types.T_float64)},
+		},
+	}
+
+	check := func(t *testing.T, key []byte) error {
+		memResult := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, proc.Mp())
+		memResult.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendBytesRows(memResult, 0, [][]byte{key}))
+		rt := moruntime.ServiceRuntime(proc.GetService())
+		oldExecutor, hadOldExecutor := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+		newExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			require.Equal(t, f.duplicateCheckSQL(), sql)
+			return memResult.GetResult(), nil
+		})
+		rt.SetGlobalVariables(moruntime.InternalSQLExecutor, newExecutor)
+		t.Cleanup(func() {
+			if hadOldExecutor {
+				rt.SetGlobalVariables(moruntime.InternalSQLExecutor, oldExecutor)
+			} else {
+				rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, newExecutor)
+			}
+		})
+		return f.backgroundSQLCheck(compile)
+	}
+
+	t.Run("decoded duplicate", func(t *testing.T) {
+		packer := types.NewPacker()
+		defer packer.Close()
+		packer.EncodeFloat64(math.Copysign(0, -1))
+		err := check(t, append([]byte(nil), packer.GetBuf()...))
+		require.ErrorContains(t, err, "Duplicate entry '-0'")
+	})
+
+	t.Run("malformed identity", func(t *testing.T) {
+		require.Error(t, check(t, []byte{0xff}))
+	})
 }
 
 func TestVectorToStringNullHandling(t *testing.T) {
