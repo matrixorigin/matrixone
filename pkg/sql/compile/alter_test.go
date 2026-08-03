@@ -567,6 +567,15 @@ type alterCopyInsertSpyExecutor struct {
 	executedSQLs    []string
 }
 
+type alterCopyAutoIncrEpochWorkspace struct {
+	client.Workspace
+	supported bool
+}
+
+func (w alterCopyAutoIncrEpochWorkspace) SupportsAutoIncrEpochFence() bool {
+	return w.supported
+}
+
 func TestReconcileAlterCopyAutoIncrementUsesStableIdentityAndSafeBounds(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	resultMP := mpool.MustNewZero()
@@ -617,6 +626,33 @@ func TestReconcileAlterCopyAutoIncrementUsesStableIdentityAndSafeBounds(t *testi
 	laterErr := errors.New("later ALTER COPY step failed")
 	cleanup.finish(&laterErr)
 	require.ErrorContains(t, laterErr, "later ALTER COPY step failed")
+}
+
+func TestReconcileAlterCopyAutoIncrementRejectsLegacyTN(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	spyExec := &alterCopyInsertSpyExecutor{}
+	c := newAlterCopyPrecheckCompile(
+		t,
+		ctrl,
+		spyExec,
+	)
+	legacyTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	legacyTxn.EXPECT().GetWorkspace().Return(alterCopyAutoIncrEpochWorkspace{})
+	c.proc.Base.TxnOperator = legacyTxn
+	copyDef := &plan.TableDef{Cols: []*plan.ColDef{{
+		Name: "id",
+		Typ:  plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+	}}}
+
+	err := c.reconcileAlterCopyAutoIncrement(
+		"test",
+		&plan.TableDef{},
+		copyDef,
+		mock_frontend.NewMockRelation(ctrl),
+		newAlterCopyAutoIncrementCleanup(c),
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+	require.Empty(t, spyExec.executedSQLs)
 }
 
 func TestReconcileAlterCopyAutoIncrementSkipsHiddenAndRejectsNarrowedOverflow(t *testing.T) {
@@ -1222,7 +1258,11 @@ func testAlterCopyAddPrimaryKeyPlan() *plan2.AlterTable {
 	}
 }
 
-func newAlterCopyPrecheckCompile(t *testing.T, ctrl *gomock.Controller, exec executor.SQLExecutor) *Compile {
+func newAlterCopyPrecheckCompile(
+	t *testing.T,
+	ctrl *gomock.Controller,
+	exec executor.SQLExecutor,
+) *Compile {
 	proc := testutil.NewProcess(t)
 	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Base.SessionInfo.TimeZone = time.Local
@@ -1236,7 +1276,13 @@ func newAlterCopyPrecheckCompile(t *testing.T, ctrl *gomock.Controller, exec exe
 	proc.Ctx = ctx
 	proc.ReplaceTopCtx(ctx)
 
-	txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+	txnCli, txnOp := newTestTxnClientAndOp(
+		ctrl,
+		alterCopyAutoIncrEpochWorkspace{
+			Workspace: &Ws{},
+			supported: true,
+		},
+	)
 	proc.Base.TxnClient = txnCli
 	proc.Base.TxnOperator = txnOp
 

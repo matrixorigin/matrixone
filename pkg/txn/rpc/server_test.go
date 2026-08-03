@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -36,6 +37,55 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+func TestAutoIncrEpochFenceCommitRequiresV9(t *testing.T) {
+	rt := newTestRuntime(newTestClock(), zap.NewNop())
+	req := &txn.TxnRequest{Method: txn.TxnMethod_CommitAutoIncrEpochFence}
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion8)
+	require.Error(t, checkMethodVersion(context.Background(), rt, req))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion9)
+	require.NoError(t, checkMethodVersion(context.Background(), rt, req))
+
+	legacyMethods := map[txn.TxnMethod]int64{txn.TxnMethod_Commit: defines.MORPCVersion1}
+	require.Error(t, runtime.CheckMethodVersionWithRuntime(context.Background(), rt, legacyMethods, req))
+}
+
+func TestAutoIncrEpochFenceCommitNetworkDispatchRequiresV9(t *testing.T) {
+	runTestTxnServer(t, testTN1Addr, func(s *server) {
+		var calls atomic.Int32
+		s.RegisterMethodHandler(txn.TxnMethod_CommitAutoIncrEpochFence, func(
+			context.Context,
+			*txn.TxnRequest,
+			*txn.TxnResponse,
+		) error {
+			calls.Add(1)
+			return nil
+		})
+
+		s.rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion8)
+		v8Message := newMessage(&txn.TxnRequest{Method: txn.TxnMethod_CommitAutoIncrEpochFence})
+		require.Error(t, s.onMessage(
+			context.Background(),
+			v8Message,
+			1,
+			newTestClientSession(make(chan morpc.Message, 1)),
+		))
+		require.Zero(t, calls.Load(), "V8 must reject before invoking the handler")
+
+		s.rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion9)
+		v9Message := newMessage(&txn.TxnRequest{Method: txn.TxnMethod_CommitAutoIncrEpochFence})
+		defer v9Message.Cancel()
+		require.NoError(t, s.onMessage(
+			context.Background(),
+			v9Message,
+			2,
+			newTestClientSession(make(chan morpc.Message, 1)),
+		))
+		require.Eventually(t, func() bool { return calls.Load() == 1 }, time.Second, time.Millisecond)
+	})
+}
 
 func TestHandleMessageWithSender(t *testing.T) {
 	runTestTxnServer(t, testTN1Addr, func(s *server) {

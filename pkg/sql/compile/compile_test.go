@@ -548,18 +548,26 @@ func TestLockTableLocksAllPrePipelineTargets(t *testing.T) {
 		},
 	)
 }
-func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.TxnOperator) {
-	return newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_SI)
+func newTestTxnClientAndOp(
+	ctrl *gomock.Controller,
+	workspaces ...client.Workspace,
+) (client.TxnClient, client.TxnOperator) {
+	return newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_SI, workspaces...)
 }
 
 func newTestTxnClientAndOpWithIsolation(
 	ctrl *gomock.Controller,
 	isolation txn.TxnIsolation,
+	workspaces ...client.Workspace,
 ) (client.TxnClient, client.TxnOperator) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	workspace := client.Workspace(&Ws{})
+	if len(workspaces) > 0 {
+		workspace = workspaces[0]
+	}
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
-	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	txnOperator.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{Isolation: isolation}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
