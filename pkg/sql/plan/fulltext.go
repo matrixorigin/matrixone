@@ -182,7 +182,13 @@ func (builder *QueryBuilder) getFullTextIndexScanSql(params string, idxtbl strin
 //
 // for composite key, use hex string X'abcd' as input of primary key and skip serial()
 // select unhex(hex(serial(cast(0 as smallint), cast(1 as int))));
-func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+func (builder *QueryBuilder) buildFullTextIndexTokenize(
+	tbl *tree.TableFunction,
+	ctx *BindContext,
+	exprs []*plan.Expr,
+	children []int32,
+	inputNodeID int32,
+) (int32, error) {
 
 	if len(exprs) < 3 {
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 3).")
@@ -194,7 +200,13 @@ func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction,
 		return 0, err
 	}
 
-	scanNode := builder.qry.Nodes[children[0]]
+	if inputNodeID < 0 || int(inputNodeID) >= len(builder.qry.Nodes) {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "fulltext_index_tokenize requires a left input relation")
+	}
+	// inputNodeID supplies planning metadata such as the primary-key type. It
+	// does not by itself make the relation an execution child; buildTableFunction
+	// derives that dependency independently from the normalized arguments.
+	scanNode := builder.qry.Nodes[inputNodeID]
 	if scanNode.NodeType == plan.Node_TABLE_SCAN {
 		if len(exprs) < 3 {
 			return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS < 3).")
