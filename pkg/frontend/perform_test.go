@@ -82,7 +82,8 @@ func TestExecutePerformPropagatesResultFinalizationError(t *testing.T) {
 	wantErr := errors.New("save perform metadata failed")
 	saver := &performTestBinaryWriter{err: wantErr}
 	resper := &MysqlResp{mysqlRrWr: &testMysqlWriter{}, binWr: saver}
-	ses := &Session{feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}, respr: resper}}
+	ses := newDirtyPerformResultSession()
+	ses.respr = resper
 	execCtx := &ExecCtx{
 		reqCtx: context.Background(),
 		stmt:   stmt,
@@ -94,13 +95,14 @@ func TestExecutePerformPropagatesResultFinalizationError(t *testing.T) {
 
 	require.ErrorIs(t, executeStatusStmt(ses, execCtx), wantErr)
 	require.Equal(t, 1, saver.calls)
+	requirePerformResultStateReset(t, ses)
 }
 
 func TestExecutePerformPropagatesRunnerError(t *testing.T) {
 	testPlan := newResultColumnTestPlan(1)
 	stmt := &tree.Select{IsPerform: true}
 	wantErr := errors.New("perform failed")
-	ses := &Session{feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}}}
+	ses := newDirtyPerformResultSession()
 	execCtx := &ExecCtx{
 		reqCtx: context.Background(),
 		stmt:   stmt,
@@ -110,12 +112,13 @@ func TestExecutePerformPropagatesRunnerError(t *testing.T) {
 
 	require.ErrorIs(t, executeStatusStmt(ses, execCtx), wantErr)
 	require.Nil(t, execCtx.runResult)
+	requirePerformResultStateReset(t, ses)
 }
 
 func TestExecutePerformPropagatesCancellation(t *testing.T) {
 	testPlan := newResultColumnTestPlan(1)
 	stmt := &tree.Select{IsPerform: true}
-	ses := &Session{feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}}}
+	ses := newDirtyPerformResultSession()
 	execCtx := &ExecCtx{
 		reqCtx: context.Background(),
 		stmt:   stmt,
@@ -125,6 +128,27 @@ func TestExecutePerformPropagatesCancellation(t *testing.T) {
 
 	require.ErrorIs(t, executeStatusStmt(ses, execCtx), context.Canceled)
 	require.Nil(t, execCtx.runResult)
+	requirePerformResultStateReset(t, ses)
+}
+
+func newDirtyPerformResultSession() *Session {
+	return &Session{
+		feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}},
+		blockIdx:      2,
+		p:             &plan.Plan{},
+		curResultSize: 3,
+		savedRowCount: 4,
+		queryRowCount: 5,
+	}
+}
+
+func requirePerformResultStateReset(t *testing.T, ses *Session) {
+	t.Helper()
+	require.Zero(t, ses.blockIdx)
+	require.Nil(t, ses.p)
+	require.Zero(t, ses.curResultSize)
+	require.Zero(t, ses.savedRowCount)
+	require.Zero(t, ses.queryRowCount)
 }
 
 func TestPerformResultIsSavedButNotWrittenToClient(t *testing.T) {

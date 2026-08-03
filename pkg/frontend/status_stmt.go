@@ -42,6 +42,12 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	switch st := execCtx.stmt.(type) {
 	case *tree.Select:
 		if st.IsPerform {
+			queryResultFinalized := false
+			defer func() {
+				if !queryResultFinalized {
+					resetQueryResultState(ses)
+				}
+			}()
 			ses.rs = &plan.ResultColDef{
 				ResultCols: plan2.GetResultColumnsFromPlan(execCtx.cw.Plan()),
 			}
@@ -52,6 +58,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			if err = finalizePerformQueryResult(execCtx); err != nil {
 				return
 			}
+			queryResultFinalized = true
 			if execCtx.runResult != nil {
 				execCtx.runResult.AffectRows = 0
 			}

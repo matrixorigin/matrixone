@@ -4942,22 +4942,26 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// fall through to normal MO execution.
 		if isSidecar, useGPU := isSidecarQuery(query); isSidecar {
 			ses.addSqlCount(1)
-			err = handleSidecarOffload(ses, execCtx, query, useGPU)
-			if err == nil {
-				ses.resetDiagnostics()
-				setRowCount(ses, ses.GetProc(), -1)
-				mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-				resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, true)
-				return resp, nil
+			if sidecarQueryMustRunLocally(execCtx.reqCtx, ses, query) {
+				query = stripSidecarHint(query)
+			} else {
+				err = handleSidecarOffload(ses, execCtx, query, useGPU)
+				if err == nil {
+					ses.resetDiagnostics()
+					setRowCount(ses, ses.GetProc(), -1)
+					mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+					resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, true)
+					return resp, nil
+				}
+				if err != errSidecarNotConfigured {
+					ses.resetDiagnostics()
+					markRowCountFailed(ses, ses.GetProc())
+					resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
+					return resp, nil
+				}
+				// errSidecarNotConfigured: strip hint and fall through to normal execution
+				query = stripSidecarHint(query)
 			}
-			if err != errSidecarNotConfigured {
-				ses.resetDiagnostics()
-				markRowCountFailed(ses, ses.GetProc())
-				resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
-				return resp, nil
-			}
-			// errSidecarNotConfigured: strip hint and fall through to normal execution
-			query = stripSidecarHint(query)
 		} else {
 			ses.addSqlCount(1)
 		}
