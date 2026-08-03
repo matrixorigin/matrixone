@@ -2836,7 +2836,7 @@ var supportedOperators = []FuncNew{
 	},
 
 	// operator `cast_assign`
-	// Used by DML assignment paths (INSERT/UPDATE projection) for CHAR/VARCHAR
+	// Used by DML assignment paths (INSERT/UPDATE projection) for character
 	// targets. Unlike `cast_strict` (which always rejects over-length writes),
 	// `cast_assign` honors `sql_mode` at runtime: strict mode rejects (1406),
 	// non-strict mode truncates. Over-length that is only trailing spaces is
@@ -3364,7 +3364,7 @@ var supportedOperators = []FuncNew{
 
 func isStrictAssignmentCastTarget(target types.T) bool {
 	switch target {
-	case types.T_char, types.T_varchar, types.T_date, types.T_datetime, types.T_timestamp:
+	case types.T_char, types.T_varchar, types.T_text, types.T_date, types.T_datetime, types.T_timestamp:
 		return true
 	default:
 		return false

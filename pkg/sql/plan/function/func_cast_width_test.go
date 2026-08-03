@@ -86,6 +86,74 @@ func TestStrToStrWidthEnforcement(t *testing.T) {
 	}
 }
 
+func TestAssignCastInvalidUTF8BinarySource(t *testing.T) {
+	type castFunc func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+	run := func(t *testing.T, native bool, sourceType, targetType types.Type, cast castFunc) (string, error) {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		proc.GetSessionInfo().MatrixOneNativeMode = native
+
+		src := vector.NewVec(sourceType)
+		require.NoError(t, vector.AppendBytes(src, []byte{0xc3, 0x28}, false, proc.Mp()))
+		defer src.Free(proc.Mp())
+
+		dst := vector.NewVec(targetType)
+		defer dst.Free(proc.Mp())
+		result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+
+		if err := cast([]*vector.Vector{src, dst}, result, proc, 1, nil); err != nil {
+			return "", err
+		}
+		value, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+		require.False(t, null)
+		return string(value), nil
+	}
+
+	for _, target := range []types.Type{
+		types.New(types.T_char, 10, 0),
+		types.New(types.T_varchar, 10, 0),
+		types.T_text.ToType(),
+	} {
+		t.Run(target.String()+"/mysql_compatible", func(t *testing.T) {
+			_, err := run(t, false, types.T_blob.ToType(), target, NewAssignCast)
+			require.Error(t, err)
+			moErr := err.(*moerr.Error)
+			require.Equal(t, moerr.ErrIncorrectStringValue, moErr.ErrorCode())
+			require.Equal(t, uint16(moerr.ER_TRUNCATED_WRONG_VALUE_FOR_FIELD), moErr.MySQLCode())
+			require.Equal(t, "Incorrect string value: '\\xC3('", moErr.Error())
+		})
+
+		t.Run(target.String()+"/matrixone_native", func(t *testing.T) {
+			got, err := run(t, true, types.T_blob.ToType(), target, NewAssignCast)
+			require.NoError(t, err)
+			require.Equal(t, string([]byte{0xc3, 0x28}), got)
+		})
+	}
+
+	got, err := run(t, false, types.T_blob.ToType(), types.New(types.T_varbinary, 10, 0), NewAssignCast)
+	require.NoError(t, err)
+	require.Equal(t, string([]byte{0xc3, 0x28}), got)
+
+	// Text-to-text assignments stay on the existing fast path. This matters for
+	// values written in MATRIXONE_NATIVE mode and read again later.
+	got, err = run(t, false, types.T_varchar.ToType(), types.New(types.T_varchar, 10, 0), NewAssignCast)
+	require.NoError(t, err)
+	require.Equal(t, string([]byte{0xc3, 0x28}), got)
+
+	// Pre-v5 clients use cast_strict for DML assignment. Keep that fallback on
+	// the same binary-to-text validation boundary.
+	_, err = run(t, false, types.T_blob.ToType(), types.T_text.ToType(), NewStrictCast)
+	require.Error(t, err)
+	require.Equal(t, moerr.ErrIncorrectStringValue, err.(*moerr.Error).ErrorCode())
+}
+
+func TestFormatInvalidUTF8BytesIsBounded(t *testing.T) {
+	value := []byte(strings.Repeat("\xff", maxInvalidUTF8DiagnosticBytes+1))
+	require.Equal(t, strings.Repeat("\\xFF", maxInvalidUTF8DiagnosticBytes)+"...", formatInvalidUTF8Bytes(value))
+}
+
 func TestZeroWidthCharVarcharAssignment(t *testing.T) {
 	type castFunc func(
 		[]*vector.Vector,

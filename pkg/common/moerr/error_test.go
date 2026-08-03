@@ -348,3 +348,12 @@ func TestNewErrCastWidthExceeded(t *testing.T) {
 		"Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3",
 		err.Error())
 }
+
+func TestNewIncorrectStringValue(t *testing.T) {
+	err := NewIncorrectStringValue(context.Background(), "\\xC3(")
+
+	require.Equal(t, ErrIncorrectStringValue, err.ErrorCode())
+	require.Equal(t, uint16(ER_TRUNCATED_WRONG_VALUE_FOR_FIELD), err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t, "Incorrect string value: '\\xC3('", err.Error())
+}

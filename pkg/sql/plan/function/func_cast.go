@@ -903,7 +903,7 @@ func NewStrictCast(parameters []*vector.Vector, result vector.FunctionResultWrap
 }
 
 // NewAssignCast is used by DML assignment paths (INSERT/UPDATE projection) for
-// CHAR/VARCHAR targets. It honors sql_mode at runtime: strict mode rejects
+// character targets. It honors sql_mode at runtime: strict mode rejects
 // over-length writes (1406), non-strict mode truncates. Over-length values
 // whose excess is only trailing spaces are accepted (truncated) even in strict
 // mode, matching MySQL.
@@ -7225,6 +7225,7 @@ func strToStr(
 	strictStringWidth bool, allowTrailingSpaceTrim bool, reportDataTooLong bool) error {
 	totype := to.GetType()
 	destLen := int(totype.Width)
+	validateUTF8 := requiresUTF8ValidationForAssignment(proc, from.GetType(), toType, allowTrailingSpaceTrim || strictStringWidth)
 	var i uint64
 	var l = uint64(length)
 	// Here cast using cast(data_type as binary[(n)]).
@@ -7287,6 +7288,9 @@ func strToStr(
 				}
 				continue
 			}
+			if validateUTF8 && !utf8.Valid(v) {
+				return moerr.NewIncorrectStringValue(ctx, formatInvalidUTF8Bytes(v))
+			}
 			// check the length.
 			s := convertByteSliceToString(v)
 			if (toType.Oid == types.T_char || toType.Oid == types.T_varchar) && utf8.RuneCountInString(s) > destLen {
@@ -7339,12 +7343,53 @@ func strToStr(
 				}
 				continue
 			}
+			if validateUTF8 && !utf8.Valid(v) {
+				return moerr.NewIncorrectStringValue(ctx, formatInvalidUTF8Bytes(v))
+			}
 			if err := to.AppendBytes(v, false); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+// requiresUTF8ValidationForAssignment keeps the compatibility check on the
+// binary-to-text boundary.  Ordinary text-to-text assignments are not scanned
+// again, while raw-byte expressions such as UNHEX cannot enter a UTF-8 column
+// with invalid encoding in MySQL-compatible mode.
+func requiresUTF8ValidationForAssignment(proc *process.Process, fromType, toType types.Type, assignment bool) bool {
+	if !assignment || (proc != nil && proc.GetSessionInfo().MatrixOneNativeMode) ||
+		types.CharsetType(fromType.Oid) != 1 {
+		return false
+	}
+	switch toType.Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+		return true
+	default:
+		return false
+	}
+}
+
+const maxInvalidUTF8DiagnosticBytes = 64
+
+// formatInvalidUTF8Bytes renders a bounded prefix safely for a
+// MySQL-compatible diagnostic without treating an invalid sequence as a Go
+// string. Error reporting must not allocate proportionally to a rejected BLOB.
+func formatInvalidUTF8Bytes(value []byte) string {
+	var b strings.Builder
+	for i, c := range value {
+		if i == maxInvalidUTF8DiagnosticBytes {
+			b.WriteString("...")
+			break
+		}
+		if c >= 0x20 && c <= 0x7e && c != '\\' && c != '\'' {
+			b.WriteByte(c)
+			continue
+		}
+		fmt.Fprintf(&b, "\\x%02X", c)
+	}
+	return b.String()
 }
 
 func strToBit(

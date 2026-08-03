@@ -1220,7 +1220,7 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 }
 
 func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Process) string {
-	if targetType.Id != int32(types.T_char) && targetType.Id != int32(types.T_varchar) {
+	if targetType.Id != int32(types.T_char) && targetType.Id != int32(types.T_varchar) && targetType.Id != int32(types.T_text) {
 		if useAssignmentStrictCast(targetType) {
 			return "cast_strict"
 		}
@@ -1243,7 +1243,7 @@ func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Pr
 }
 
 // forceAssignmentCastExprWithIgnore builds the assignment cast for a DML write.
-// For CHAR/VARCHAR targets it normally uses cast_assign (sql_mode-gated width
+// For character targets it normally uses cast_assign (sql_mode-gated width
 // check). When isIgnore is true (INSERT IGNORE or UPDATE IGNORE), over-length
 // writes are downgraded to truncation regardless of sql_mode and warning 1265
 // is recorded.

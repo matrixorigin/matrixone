@@ -672,7 +672,6 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	target := plan.Type{Id: int32(types.T_varchar), Width: 3}
 
 	tests := []struct {
 		version int64
@@ -684,25 +683,30 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 		{version: defines.MORPCVersion5, want: "cast_assign"},
 		{version: defines.MORPCVersion5, ignore: true, want: "cast_ignore"},
 	}
-	for _, test := range tests {
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.version)
-		require.Equal(t, test.want, assignmentCastFunctionName(target, test.ignore, proc))
+	for _, target := range []plan.Type{
+		{Id: int32(types.T_varchar), Width: 3},
+		{Id: int32(types.T_text)},
+	} {
+		for _, test := range tests {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.version)
+			require.Equal(t, test.want, assignmentCastFunctionName(target, test.ignore, proc))
 
-		source := makePlan2Int64ConstExprWithType(1)
-		targetType := &plan.Expr{
-			Typ:  target,
-			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+			source := makePlan2Int64ConstExprWithType(1)
+			targetType := &plan.Expr{
+				Typ:  target,
+				Expr: &plan.Expr_T{T: &plan.TargetType{}},
+			}
+			casted, err := forceCastExpr2WithProcess(
+				t.Context(),
+				source,
+				makeTypeByPlan2Type(target),
+				targetType,
+				test.ignore,
+				proc,
+			)
+			require.NoError(t, err)
+			require.Equal(t, test.want, casted.GetF().GetFunc().GetObjName())
 		}
-		casted, err := forceCastExpr2WithProcess(
-			t.Context(),
-			source,
-			makeTypeByPlan2Type(target),
-			targetType,
-			test.ignore,
-			proc,
-		)
-		require.NoError(t, err)
-		require.Equal(t, test.want, casted.GetF().GetFunc().GetObjName())
 	}
 	require.Equal(t, "cast", assignmentCastFunctionName(plan.Type{Id: int32(types.T_int64)}, false, proc))
 }

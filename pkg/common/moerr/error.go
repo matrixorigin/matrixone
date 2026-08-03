@@ -339,6 +339,11 @@ const (
 	// truncation: " to the message), which the BVT result files reflect.
 	ErrCastWidthExceeded uint16 = 20907
 
+	// ErrIncorrectStringValue is returned when raw binary bytes are assigned to
+	// a UTF-8 text column in MySQL-compatible mode.  It maps to MySQL's
+	// ER_TRUNCATED_WRONG_VALUE_FOR_FIELD (1366).
+	ErrIncorrectStringValue uint16 = 20908
+
 	// Group 10: skip list
 	ErrKeyAlreadyExists uint16 = 21001
 	ErrArenaFull        uint16 = 21002
@@ -398,6 +403,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrOutOfRange:                  {ER_DATA_OUT_OF_RANGE, []string{MySQLDefaultSqlState}, "data out of range: data type %s, %s"},
 	ErrDataTruncated:               {ER_DATA_TOO_LONG, []string{MySQLDefaultSqlState}, "data truncated: data type %s, %s"},
 	ErrCastWidthExceeded:           {ER_DATA_TOO_LONG, []string{"22001"}, "%s"},
+	ErrIncorrectStringValue:        {ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, []string{MySQLDefaultSqlState}, "Incorrect string value: '%s'"},
 	ErrInvalidArg:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid argument %s, bad value %s"},
 	ErrTruncatedWrongValueForField: {ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, []string{MySQLDefaultSqlState}, "truncated type %s value %s for column %s, %d"},
 	ErrTooBigPrecision:             {ER_TOO_BIG_PRECISION, []string{"42000", "S1009"}, "Too-big precision %d specified for '%-.192s'. Maximum is %d."},
@@ -1738,6 +1744,10 @@ func NewErrInvalidDefault(ctx context.Context, k any) *Error {
 
 func NewErrCastWidthExceeded(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrCastWidthExceeded, msg)
+}
+
+func NewIncorrectStringValue(ctx context.Context, value string) *Error {
+	return newError(ctx, ErrIncorrectStringValue, value)
 }
 
 func NewErrDropIndexNeededInForeignKey(ctx context.Context, args1 any) *Error {

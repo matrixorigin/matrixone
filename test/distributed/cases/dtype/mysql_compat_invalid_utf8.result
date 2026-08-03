@@ -1,0 +1,56 @@
+drop database if exists mysql_compat_invalid_utf8;
+create database mysql_compat_invalid_utf8;
+use mysql_compat_invalid_utf8;
+set @old_sql_mode = @@session.sql_mode;
+set session sql_mode = '';
+create table t_invalid_utf8 (
+id int primary key,
+c char(10) character set utf8mb4,
+v varchar(10) character set utf8mb4,
+t text character set utf8mb4,
+b binary(2),
+vb varbinary(10),
+bl blob
+);
+insert into t_invalid_utf8 (id, c) values (1, unhex('C328'));
+Incorrect string value: '\xC3('
+insert into t_invalid_utf8 (id, v) values (2, unhex('C328'));
+Incorrect string value: '\xC3('
+insert into t_invalid_utf8 (id, t) values (3, unhex('C328'));
+select count(*) as rejected_text_rows from t_invalid_utf8;
+➤ rejected_text_rows[-5,64,0]  𝄀
+1
+insert into t_invalid_utf8 (id, c, v, t, b, vb, bl)
+values (10, 'ok', 'ok', 'ok', unhex('C328'), unhex('C328'), unhex('C328'));
+select id, hex(b) as b_hex, hex(vb) as vb_hex, hex(bl) as bl_hex
+from t_invalid_utf8 where id = 10;
+➤ id[4,32,0]  ¦  b_hex[12,-1,0]  ¦  vb_hex[12,-1,0]  ¦  bl_hex[12,-1,0]  𝄀
+10  ¦  C328  ¦  C328  ¦  C328
+insert into t_invalid_utf8 (id, c, v, t) values (11, 'old', 'old', 'old');
+update t_invalid_utf8 set c = unhex('C328') where id = 11;
+Incorrect string value: '\xC3('
+update t_invalid_utf8 set v = unhex('C328') where id = 11;
+Incorrect string value: '\xC3('
+update t_invalid_utf8 set t = unhex('C328') where id = 11;
+select id, c, v, t from t_invalid_utf8 where id = 11;
+➤ id[4,32,0]  ¦  c[1,10,0]  ¦  v[12,-1,0]  ¦  t[12,0,0]  𝄀
+11  ¦  old  ¦  old  ¦  �(
+set session sql_mode = 'MATRIXONE_NATIVE';
+insert into t_invalid_utf8 (id, c, v, t, b, vb, bl)
+values (20, unhex('C328'), unhex('C328'), unhex('C328'),
+unhex('C328'), unhex('C328'), unhex('C328'));
+select id, hex(c) as c_hex, hex(v) as v_hex, hex(t) as t_hex,
+hex(b) as b_hex, hex(vb) as vb_hex, hex(bl) as bl_hex
+from t_invalid_utf8 where id = 20;
+➤ id[4,32,0]  ¦  c_hex[12,-1,0]  ¦  v_hex[12,-1,0]  ¦  t_hex[12,-1,0]  ¦  b_hex[12,-1,0]  ¦  vb_hex[12,-1,0]  ¦  bl_hex[12,-1,0]  𝄀
+20  ¦  C328  ¦  C328  ¦  C328  ¦  C328  ¦  C328  ¦  C328
+update t_invalid_utf8
+set c = unhex('C328'), v = unhex('C328'), t = unhex('C328')
+where id = 11;
+select id, hex(c) as c_hex, hex(v) as v_hex, hex(t) as t_hex
+from t_invalid_utf8 where id = 11;
+➤ id[4,32,0]  ¦  c_hex[12,-1,0]  ¦  v_hex[12,-1,0]  ¦  t_hex[12,-1,0]  𝄀
+11  ¦  C328  ¦  C328  ¦  C328
+drop table t_invalid_utf8;
+set session sql_mode = @old_sql_mode;
+drop database mysql_compat_invalid_utf8;
