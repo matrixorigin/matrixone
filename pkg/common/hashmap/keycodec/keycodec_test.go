@@ -178,3 +178,83 @@ func TestComputeXXHashCompositeScaledFloat32Contract(t *testing.T) {
 	require.NotEqual(t, hashes[0], hashes[2], "the FLOAT32 codec must preserve prior column hash state")
 	require.NotEqual(t, hashes[0], hashes[3], "a distinct canonical FLOAT32 value must change the composite hash")
 }
+
+func TestComputeXXHashCanonicalizesGroupingRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+
+	for _, test := range []struct {
+		name   string
+		left   any
+		right  any
+		newVec func(any) *vector.Vector
+	}{
+		{
+			name:  "fixed",
+			left:  []int64{11, 22, 33},
+			right: []int64{101, 22, 303},
+			newVec: func(values any) *vector.Vector {
+				vec := vector.NewVec(types.T_int64.ToType())
+				require.NoError(t, vector.AppendFixedList(
+					vec, values.([]int64), nil, mp,
+				))
+				return vec
+			},
+		},
+		{
+			name:  "float64",
+			left:  []float64{11, 22, 33},
+			right: []float64{101, 22, 303},
+			newVec: func(values any) *vector.Vector {
+				vec := vector.NewVec(types.T_float64.ToType())
+				require.NoError(t, vector.AppendFixedList(
+					vec, values.([]float64), nil, mp,
+				))
+				return vec
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			left := test.newVec(test.left)
+			right := test.newVec(test.right)
+			ordinary := test.newVec(test.left)
+			defer left.Free(mp)
+			defer right.Free(mp)
+			defer ordinary.Free(mp)
+			left.GetGrouping().AddRange(0, 3)
+			right.GetGrouping().AddRange(0, 3)
+
+			leftHashes := make([]uint64, 3)
+			rightHashes := make([]uint64, 3)
+			ComputeXXHash([]*vector.Vector{left}, leftHashes, 17)
+			ComputeXXHash([]*vector.Vector{right}, rightHashes, 17)
+
+			require.Equal(t, leftHashes, rightHashes)
+
+			left.GetGrouping().Reset()
+			left.GetGrouping().Add(0)
+			ComputeXXHash([]*vector.Vector{left}, leftHashes, 17)
+			ComputeXXHash([]*vector.Vector{ordinary}, rightHashes, 17)
+			require.NotEqual(t, rightHashes[0], leftHashes[0])
+			require.Equal(t, rightHashes[1:], leftHashes[1:])
+		})
+	}
+}
+
+func TestComputeXXHashDoesNotTreatStaleGroupingAsFull(t *testing.T) {
+	mp := mpool.MustNewZero()
+	left := vector.NewVec(types.T_int64.ToType())
+	right := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(left, int64(11), false, mp))
+	require.NoError(t, vector.AppendFixed(right, int64(22), false, mp))
+	left.GetGrouping().Add(5)
+	right.GetGrouping().Add(5)
+	leftHash := []uint64{0}
+	rightHash := []uint64{0}
+	ComputeXXHash([]*vector.Vector{left}, leftHash, 17)
+	ComputeXXHash([]*vector.Vector{right}, rightHash, 17)
+	require.NotEqual(t, leftHash, rightHash)
+	left.Free(mp)
+	right.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
