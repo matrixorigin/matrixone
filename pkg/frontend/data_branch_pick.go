@@ -1247,13 +1247,15 @@ func normalizePickTimeZone(loc *time.Location) *time.Location {
 
 // appendExprToVec appends a literal AST expression value to a typed vector.
 func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
+	expr = unwrapPickKeyParens(expr)
 	switch e := expr.(type) {
 	case *tree.NumVal:
 		return appendNumValToVec(vec, e, pkType, tz, mp)
 	case *tree.UnaryExpr:
-		num, ok := e.Expr.(*tree.NumVal)
+		operand := unwrapPickKeyParens(e.Expr)
+		num, ok := operand.(*tree.NumVal)
 		if !ok {
-			return moerr.NewInvalidInputNoCtxf("unsupported unary expression type for PK filter: %T", e.Expr)
+			return moerr.NewInvalidInputNoCtxf("unsupported unary expression type for PK filter: %T", operand)
 		}
 		negative := false
 		s := num.String()
@@ -1275,6 +1277,16 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *
 	default:
 		// For complex expressions, skip ZoneMap pruning in CollectChanges.
 		return moerr.NewInvalidInputNoCtxf("unsupported expression type for PK filter: %T", expr)
+	}
+}
+
+func unwrapPickKeyParens(expr tree.Expr) tree.Expr {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			return expr
+		}
+		expr = paren.Expr
 	}
 }
 
@@ -1320,13 +1332,16 @@ func appendIntegerNumValToVec(
 		}
 	case tree.P_bit:
 		s := val.String()
-		if len(s) < 3 || (s[:2] != "0b" && s[:2] != "0B") {
+		if len(s) < 2 || (s[:2] != "0b" && s[:2] != "0B") {
 			return moerr.NewInvalidInputNoCtxf("invalid bit literal %q", s)
 		}
-		var ok bool
-		n, ok = new(big.Int).SetString(s[2:], 2)
-		if !ok {
-			return moerr.NewInvalidInputNoCtxf("invalid bit literal %q", s)
+		n = new(big.Int)
+		if len(s) > 2 {
+			var ok bool
+			n, ok = n.SetString(s[2:], 2)
+			if !ok {
+				return moerr.NewInvalidInputNoCtxf("invalid bit literal %q", s)
+			}
 		}
 	case tree.P_float64:
 		r, ok := new(big.Rat).SetString(val.String())

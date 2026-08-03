@@ -596,6 +596,7 @@ func TestAppendExprToVec_BitLiteral(t *testing.T) {
 		want    uint64
 		wantErr string
 	}{
+		{name: "bit8 empty", literal: "b''", pkType: types.New(types.T_bit, 8, 0), want: 0},
 		{name: "bit8 zero", literal: "b'00000000'", pkType: types.New(types.T_bit, 8, 0), want: 0},
 		{name: "bit8 one", literal: "b'00000001'", pkType: types.New(types.T_bit, 8, 0), want: 1},
 		{name: "bit8 uppercase prefix", literal: "B'10000000'", pkType: types.New(types.T_bit, 8, 0), want: 128},
@@ -686,9 +687,57 @@ func TestAppendExprToVec_UnaryBitLiteral(t *testing.T) {
 	}
 }
 
+func TestAppendExprToVec_ParenthesizedBitLiteral(t *testing.T) {
+	tests := []struct {
+		name    string
+		literal string
+		want    uint64
+		wantErr string
+	}{
+		{name: "direct", literal: "(b'1')", want: 1},
+		{name: "parenthesized unary operand", literal: "+(b'1')", want: 1},
+		{name: "parenthesized unary expression", literal: "(+b'1')", want: 1},
+		{name: "nested", literal: "((+((b'1'))))", want: 1},
+		{name: "negative", literal: "(-(b'1'))", wantErr: "out of range"},
+		{name: "non literal", literal: "(b'1' + 0)", wantErr: "unsupported expression type"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stmtNode, err := parsers.ParseOne(
+				context.Background(),
+				dialect.MYSQL,
+				"data branch pick src into dst keys("+tc.literal+")",
+				1,
+			)
+			require.NoError(t, err)
+			stmt := stmtNode.(*tree.DataBranchPick)
+			require.Len(t, stmt.Keys.KeyExprs, 1)
+
+			mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+			require.NoError(t, err)
+			defer mp.Free(nil)
+			pkType := types.New(types.T_bit, 8, 0)
+			vec := vector.NewVec(pkType)
+			defer vec.Free(mp)
+
+			err = appendExprToVec(vec, stmt.Keys.KeyExprs[0], pkType, time.UTC, mp)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				require.Zero(t, vec.Length())
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, 1, vec.Length())
+			require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[uint64](vec, 0))
+		})
+	}
+}
+
 func TestAppendExprToVec_InvalidBitLiteralAST(t *testing.T) {
 	tests := []string{
-		"0b",
+		"",
+		"0",
 		"0x1",
 		"0b102",
 	}

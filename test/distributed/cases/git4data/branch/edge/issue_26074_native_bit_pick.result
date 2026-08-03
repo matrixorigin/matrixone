@@ -80,6 +80,14 @@ select hex(k), payload from bit8_dst order by k;
 0  ¦  zero-src  𝄀
 7F  ¦  one-two-seven-src  𝄀
 FF  ¦  two-five-five-src
+data branch create table bit8_empty_dst from bit8_base;
+data branch pick bit8_src into bit8_empty_dst keys(b'');
+select hex(k), payload from bit8_empty_dst order by k;
+➤ hex(k)[12,-1,0]  ¦  payload[12,-1,0]  𝄀
+0  ¦  zero-src  𝄀
+1  ¦  one  𝄀
+7F  ¦  one-two-seven  𝄀
+FF  ¦  two-five-five
 create table mixed_base(
 flag bool,
 k bit(8),
@@ -96,7 +104,7 @@ data branch create table mixed_dst from mixed_base;
 update mixed_src set payload = concat(payload, '-src');
 delete from mixed_src where flag = false and hex(k) = '2';
 data branch pick mixed_src into mixed_dst
-keys((false, b'00000001'), (false, B'00000010'), (true, b'11111111'));
+keys((false, (b'00000001')), (false, (B'00000010')), (true, (+b'11111111')));
 select flag, hex(k), payload from mixed_dst order by flag, k;
 ➤ flag[-7,1,0]  ¦  hex(k)[12,-1,0]  ¦  payload[12,-1,0]  𝄀
 0  ¦  1  ¦  false-one-src  𝄀
@@ -126,6 +134,22 @@ update bit8_bad_src set payload = 'changed' where hex(k) in ('1', 'FF');
 data branch create table bit8_unary_dst from bit8_base;
 data branch pick bit8_bad_src into bit8_unary_dst keys(+b'1');
 select hex(k), payload from bit8_unary_dst order by k;
+➤ hex(k)[12,-1,0]  ¦  payload[12,-1,0]  𝄀
+0  ¦  zero  𝄀
+1  ¦  changed  𝄀
+7F  ¦  one-two-seven  𝄀
+FF  ¦  two-five-five
+data branch create table bit8_unary_operand_paren_dst from bit8_base;
+data branch pick bit8_bad_src into bit8_unary_operand_paren_dst keys(+(b'1'));
+select hex(k), payload from bit8_unary_operand_paren_dst order by k;
+➤ hex(k)[12,-1,0]  ¦  payload[12,-1,0]  𝄀
+0  ¦  zero  𝄀
+1  ¦  changed  𝄀
+7F  ¦  one-two-seven  𝄀
+FF  ¦  two-five-five
+data branch create table bit8_unary_expr_paren_dst from bit8_base;
+data branch pick bit8_bad_src into bit8_unary_expr_paren_dst keys((+b'1'));
+select hex(k), payload from bit8_unary_expr_paren_dst order by k;
 ➤ hex(k)[12,-1,0]  ¦  payload[12,-1,0]  𝄀
 0  ¦  zero  𝄀
 1  ¦  changed  𝄀

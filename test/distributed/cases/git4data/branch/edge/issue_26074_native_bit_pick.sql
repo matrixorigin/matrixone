@@ -67,6 +67,11 @@ data branch pick bit8_src into bit8_dst
     keys(b'00000000', b'00000001', b'00000011', B'01111111', b'11111111');
 select hex(k), payload from bit8_dst order by k;
 
+-- The parser's valid empty BIT literal denotes zero.
+data branch create table bit8_empty_dst from bit8_base;
+data branch pick bit8_src into bit8_empty_dst keys(b'');
+select hex(k), payload from bit8_empty_dst order by k;
+
 -- BOOL and native BIT literals work together in composite primary keys.
 create table mixed_base(
     flag bool,
@@ -84,7 +89,7 @@ data branch create table mixed_dst from mixed_base;
 update mixed_src set payload = concat(payload, '-src');
 delete from mixed_src where flag = false and hex(k) = '2';
 data branch pick mixed_src into mixed_dst
-    keys((false, b'00000001'), (false, B'00000010'), (true, b'11111111'));
+    keys((false, (b'00000001')), (false, (B'00000010')), (true, (+b'11111111')));
 select flag, hex(k), payload from mixed_dst order by flag, k;
 
 -- BIT(64) accepts native literals across the signed boundary and at uint64 max.
@@ -112,6 +117,14 @@ update bit8_bad_src set payload = 'changed' where hex(k) in ('1', 'FF');
 data branch create table bit8_unary_dst from bit8_base;
 data branch pick bit8_bad_src into bit8_unary_dst keys(+b'1');
 select hex(k), payload from bit8_unary_dst order by k;
+
+-- Transparent parentheses do not change direct or unary BIT literal keys.
+data branch create table bit8_unary_operand_paren_dst from bit8_base;
+data branch pick bit8_bad_src into bit8_unary_operand_paren_dst keys(+(b'1'));
+select hex(k), payload from bit8_unary_operand_paren_dst order by k;
+data branch create table bit8_unary_expr_paren_dst from bit8_base;
+data branch pick bit8_bad_src into bit8_unary_expr_paren_dst keys((+b'1'));
+select hex(k), payload from bit8_unary_expr_paren_dst order by k;
 
 -- Unary minus remains invalid for unsigned BIT and fails before the preceding key is applied.
 data branch create table bit8_unary_atomic_dst from bit8_base;
