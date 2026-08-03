@@ -262,7 +262,7 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
 		opType := catalog.ToLower(idx.IndexOption.AlgoParamVectorOpType)
 		if _, ok := metric.OpTypeToIvfMetric[opType]; !ok {
-			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type: '%s'", opType))
+			return nil, moerr.NewInvalidInputNoCtxf("invalid op_type: '%s'", opType)
 		}
 		res[catalog.IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
 	} else {
@@ -294,11 +294,12 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	// so the entries build (compile) and the search can read it back. Only the
 	// predefined names that map to a MO narrow vector type are accepted.
 	if q := idx.IndexOption.Quantization; q != "" {
-		if _, ok := quantizer.ToVectorType(q); !ok {
-			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
-				"ivfflat: unsupported quantization '%s' (supported: 'float32', 'float16', 'bf16', 'int8', 'uint8')", q))
+		normalized := catalog.ToLower(q)
+		if err := (CatalogHooks{}).ValidQuantization(normalized, ""); err != nil {
+			return nil, moerr.NewNotSupportedNoCtxf(
+				"ivfflat: unsupported quantization '%s' (supported: 'float32', 'float16', 'bf16', 'int8', 'uint8')", q)
 		}
-		res[catalog.Quantization] = catalog.ToLower(q)
+		res[catalog.Quantization] = normalized
 	}
 
 	if len(idx.IndexOption.IncludeColumns) > 0 {
