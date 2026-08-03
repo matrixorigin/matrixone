@@ -1,4 +1,3 @@
--- Regression for #26558: FILL(next) must not crash CN when materializing wide VARCHAR gaps
 DROP DATABASE IF EXISTS fill_next_crash_26558;
 CREATE DATABASE fill_next_crash_26558;
 USE fill_next_crash_26558;
