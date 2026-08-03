@@ -153,7 +153,7 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
 		opType := catalog.ToLower(idx.IndexOption.AlgoParamVectorOpType)
 		if _, ok := metric.OpTypeToUsearchMetric[opType]; !ok {
-			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid op_type. '%s'", opType))
+			return nil, moerr.NewInvalidInputNoCtxf("invalid op_type. '%s'", opType)
 		}
 		res[catalog.IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
 	} else {
