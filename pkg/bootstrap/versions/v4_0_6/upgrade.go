@@ -71,24 +71,20 @@ func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32,
 	return nil
 }
 
-const legacyForeignKeyTableDefinitionsSQL = "SELECT fk.db_name, fk.table_name, tbl.rel_createsql, " +
+const legacyForeignKeyTableDefinitionsSQL = "SELECT fk.db_name, fk.table_name, " +
 	"fk.constraint_name, fk.column_name, fk.refer_db_name, fk.refer_table_name, fk.refer_column_name, fk.on_delete, fk.on_update " +
 	"FROM mo_catalog.mo_foreign_keys fk " +
-	"JOIN mo_catalog.mo_tables tbl ON tbl.reldatabase = fk.db_name AND tbl.relname = fk.table_name " +
 	"WHERE fk.constraint_id = 0 " +
 	"ORDER BY fk.db_name, fk.table_name, fk.constraint_name, fk.column_name"
 
 type legacyForeignKeyTableDefinition struct {
 	database    string
 	table       string
-	createSQL   string
 	foreignKeys []legacyForeignKeyCatalogRow
 }
 
-// legacyForeignKeyCatalogRow is the durable source for foreign keys that do
-// not occur in rel_createsql, such as constraints added by ALTER TABLE. It is
-// also the source of the generated name for an unnamed CREATE TABLE foreign
-// key, because rel_createsql precedes adjustConstraintName.
+// legacyForeignKeyCatalogRow is the authoritative catalog source for the
+// legacy foreign keys whose constraint_id has not yet been populated.
 type legacyForeignKeyCatalogRow struct {
 	constraintName  string
 	columnName      string
@@ -104,9 +100,10 @@ type legacyForeignKeyCatalogConstraint struct {
 	rows []legacyForeignKeyCatalogRow
 }
 
-// upgradeLegacyForeignKeyMetadata restores zero-valued legacy FK ordinals. It
-// uses the original CREATE statement when available and catalog rows for FKs
-// added later with ALTER TABLE or named after the CREATE SQL was persisted.
+// upgradeLegacyForeignKeyMetadata restores zero-valued legacy FK ordinals. The
+// catalog identifies the rows to migrate, and SHOW CREATE TABLE supplies the
+// current foreign-key declaration order and actions. In particular, do not use
+// mo_tables.rel_createsql: it is a CREATE-time snapshot and omits later ALTERs.
 func upgradeLegacyForeignKeyMetadata(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
 	definitions, err := getLegacyForeignKeyTableDefinitions(tenantID, txn)
 	if err != nil {
@@ -116,7 +113,11 @@ func upgradeLegacyForeignKeyMetadata(ctx context.Context, tenantID int32, txn ex
 		return nil
 	}
 	for _, definition := range definitions {
-		updates, err := legacyForeignKeyMetadataUpdates(definition)
+		createSQL, err := getLegacyForeignKeyShowCreateSQL(tenantID, txn, definition)
+		if err != nil {
+			return err
+		}
+		updates, err := legacyForeignKeyMetadataUpdates(definition, createSQL)
 		if err != nil {
 			return err
 		}
@@ -150,19 +151,18 @@ func getLegacyForeignKeyTableDefinitions(tenantID int32, txn executor.TxnExecuto
 				definitionIndex = len(definitions)
 				definitionByTable[key] = definitionIndex
 				definitions = append(definitions, legacyForeignKeyTableDefinition{
-					database:  database,
-					table:     table,
-					createSQL: cols[2].GetStringAt(i),
+					database: database,
+					table:    table,
 				})
 			}
 			definitions[definitionIndex].foreignKeys = append(definitions[definitionIndex].foreignKeys, legacyForeignKeyCatalogRow{
-				constraintName:  cols[3].GetStringAt(i),
-				columnName:      cols[4].GetStringAt(i),
-				referDBName:     cols[5].GetStringAt(i),
-				referTableName:  cols[6].GetStringAt(i),
-				referColumnName: cols[7].GetStringAt(i),
-				onDelete:        cols[8].GetStringAt(i),
-				onUpdate:        cols[9].GetStringAt(i),
+				constraintName:  cols[2].GetStringAt(i),
+				columnName:      cols[3].GetStringAt(i),
+				referDBName:     cols[4].GetStringAt(i),
+				referTableName:  cols[5].GetStringAt(i),
+				referColumnName: cols[6].GetStringAt(i),
+				onDelete:        cols[7].GetStringAt(i),
+				onUpdate:        cols[8].GetStringAt(i),
 			})
 		}
 		return true
@@ -170,8 +170,42 @@ func getLegacyForeignKeyTableDefinitions(tenantID int32, txn executor.TxnExecuto
 	return definitions, nil
 }
 
-func legacyForeignKeyMetadataUpdates(definition legacyForeignKeyTableDefinition) ([]string, error) {
-	statements, err := mysql.Parse(context.Background(), definition.createSQL, 1)
+func getLegacyForeignKeyShowCreateSQL(tenantID int32, txn executor.TxnExecutor, definition legacyForeignKeyTableDefinition) (string, error) {
+	res, err := txn.Exec(
+		fmt.Sprintf("SHOW CREATE TABLE %s.%s", quoteSQLIdentifier(definition.database), quoteSQLIdentifier(definition.table)),
+		executor.StatementOption{}.WithAccountID(uint32(tenantID)),
+	)
+	if err != nil {
+		return "", err
+	}
+	defer res.Close()
+
+	var createSQL string
+	rowCount := 0
+	validResult := true
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if len(cols) < 2 {
+			validResult = false
+			return false
+		}
+		for i := 0; i < rows; i++ {
+			rowCount++
+			if rowCount != 1 {
+				validResult = false
+				return false
+			}
+			createSQL = cols[1].GetStringAt(i)
+		}
+		return true
+	})
+	if !validResult || rowCount != 1 || createSQL == "" {
+		return "", moerr.NewInternalErrorNoCtxf("SHOW CREATE TABLE for legacy foreign-key table %s.%s returned an invalid result", definition.database, definition.table)
+	}
+	return createSQL, nil
+}
+
+func legacyForeignKeyMetadataUpdates(definition legacyForeignKeyTableDefinition, createSQL string) ([]string, error) {
+	statements, err := mysql.Parse(context.Background(), createSQL, 1)
 	if err != nil {
 		return nil, moerr.NewInternalErrorNoCtxf("parse legacy foreign-key table %s.%s: %v", definition.database, definition.table, err)
 	}
@@ -201,14 +235,24 @@ func legacyForeignKeyMetadataUpdates(definition legacyForeignKeyTableDefinition)
 			return nil, moerr.NewInternalErrorNoCtxf("legacy foreign key in %s.%s has incomplete persisted definition", definition.database, definition.table)
 		}
 
+		// Match the current SHOW CREATE TABLE declaration to the catalog by both
+		// name and complete child/reference column set. The latter prevents a
+		// dropped and re-added constraint that reused its name from being matched
+		// to the old definition.
 		if foreignKey.ConstraintSymbol != "" {
-			matchedConstraints[foreignKey.ConstraintSymbol] = true
-			updates = appendLegacyForeignKeyASTUpdates(updates, definition, foreignKey.ConstraintSymbol, foreignKey)
+			for _, constraint := range constraints {
+				if constraint.name == foreignKey.ConstraintSymbol &&
+					sameLegacyForeignKeyColumns(definition.database, foreignKey, constraint.rows) {
+					matchedConstraints[constraint.name] = true
+					updates = appendLegacyForeignKeyASTUpdates(updates, definition, constraint.name, foreignKey)
+					break
+				}
+			}
 			continue
 		}
 
-		// An unnamed FK is assigned its UUID after rel_createsql is persisted.
-		// Match it to the catalog rows by its complete child/reference column set.
+		// An unnamed FK is assigned a generated name in the catalog. Match it to
+		// the catalog rows by its complete child/reference column set.
 		// If that signature is ambiguous, leave every candidate to the catalog
 		// fallback below rather than assigning one AST action to another FK.
 		matchedIndex := -1
@@ -229,10 +273,9 @@ func legacyForeignKeyMetadataUpdates(definition legacyForeignKeyTableDefinition)
 		}
 	}
 
-	// rel_createsql is the original CREATE snapshot, so it cannot describe FKs
-	// introduced by ALTER TABLE. The catalog rows remain authoritative for their
-	// generated name, actions, and column pairs; assign stable ordinals from the
-	// catalog order without rewriting the actions.
+	// The catalog remains authoritative when SHOW CREATE TABLE cannot be
+	// reconciled to an FK row. This is a defensive fallback for catalog drift;
+	// normal CREATE and ALTER paths are covered by the current SHOW output above.
 	for _, constraint := range constraints {
 		if matchedConstraints[constraint.name] {
 			continue
@@ -373,6 +416,10 @@ func referenceActionName(action tree.ReferenceOptionType) string {
 
 func quoteSQLStringLiteral(s string) string {
 	return "'" + strings.NewReplacer(`\\`, `\\\\`, `'`, `''`).Replace(s) + "'"
+}
+
+func quoteSQLIdentifier(s string) string {
+	return "`" + strings.ReplaceAll(s, "`", "``") + "`"
 }
 
 func (v *versionHandle) HandleClusterUpgrade(_ context.Context, txn executor.TxnExecutor) error {
