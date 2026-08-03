@@ -59,6 +59,43 @@ func TestStoredProcedureNumericVariablesKeepNumericComparison(t *testing.T) {
 	}
 }
 
+func TestStoredProcedureVariableCastType(t *testing.T) {
+	tests := []struct {
+		name   string
+		value  any
+		want   types.T
+		wantOK bool
+	}{
+		{name: "bool", value: true, want: types.T_bool, wantOK: true},
+		{name: "int", value: int(1), want: types.T_int64, wantOK: true},
+		{name: "int64", value: int64(1), want: types.T_int64, wantOK: true},
+		{name: "int8", value: int8(1), want: types.T_int8, wantOK: true},
+		{name: "int16", value: int16(1), want: types.T_int16, wantOK: true},
+		{name: "int32", value: int32(1), want: types.T_int32, wantOK: true},
+		{name: "uint", value: uint(1), want: types.T_uint64, wantOK: true},
+		{name: "uint64", value: uint64(1), want: types.T_uint64, wantOK: true},
+		{name: "uint8", value: uint8(1), want: types.T_uint8, wantOK: true},
+		{name: "uint16", value: uint16(1), want: types.T_uint16, wantOK: true},
+		{name: "uint32", value: uint32(1), want: types.T_uint32, wantOK: true},
+		{name: "float32", value: float32(1), want: types.T_float32, wantOK: true},
+		{name: "float64", value: float64(1), want: types.T_float64, wantOK: true},
+		{name: "enum", value: types.Enum(1), want: types.T_enum, wantOK: true},
+		{name: "year", value: types.MoYear(2026), want: types.T_year, wantOK: true},
+		{name: "string", value: "1"},
+		{name: "nil", value: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := storedProcedureVariableCastType(tt.value)
+			require.Equal(t, tt.wantOK, ok)
+			if tt.wantOK {
+				require.Equal(t, tt.want, got.Oid)
+			}
+		})
+	}
+}
+
 // TestBindFuncExprImplByPlanExpr_PowAlias tests that "pow" is correctly
 // remapped to "power" (line ~1781 in base_binder.go:
 // case "pow": name = "power").
