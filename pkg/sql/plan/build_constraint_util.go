@@ -1872,6 +1872,7 @@ func appendForeignConstrantPlan(
 	objRef *ObjectRef,
 	sourceStep int32,
 	isFkRecursionCall bool,
+	isUpdate bool,
 ) error {
 	enabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
 	if err != nil {
@@ -1910,7 +1911,11 @@ func appendForeignConstrantPlan(
 				if err != nil {
 					return err
 				}
-				filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{nullCheckExpr, errExpr})
+				assertArgs := []*Expr{nullCheckExpr, errExpr}
+				if isUpdate {
+					assertArgs = append(assertArgs, makePlan2StringConstExprWithType(foreignKeyNoReferencedRowAssert))
+				}
+				filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", assertArgs)
 				if err != nil {
 					return err
 				}

@@ -2146,6 +2146,45 @@ func Test_HandlePrepareStringUsesSessionSQLMode(t *testing.T) {
 	})
 }
 
+func Test_HandlePrepareStringSupportsPipesAsConcatLikePattern(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ec := newTestExecCtx(ctx, ctrl)
+
+	runTestHandle("handlePrepareStringSupportsPipesAsConcatLikePattern", t, func(ses *Session) error {
+		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "PIPES_AS_CONCAT"))
+		ec.resper = ses.respr
+		prepareString := tree.NewPrepareString("stmt_like_concat", `select 'Jack' like '%'||?||'%'`)
+		defer prepareString.Free()
+		preStmt, err := handlePrepareString(
+			ses,
+			ec,
+			prepareString,
+		)
+		if err != nil {
+			return err
+		}
+		defer preStmt.Close()
+
+		selectStmt, ok := preStmt.PrepareStmt.(*tree.Select)
+		require.True(t, ok)
+		selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+		require.True(t, ok)
+		require.Len(t, selectClause.Exprs, 1)
+		likeExpr, ok := selectClause.Exprs[0].Expr.(*tree.ComparisonExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.LIKE, likeExpr.Op)
+		outerConcat, ok := likeExpr.Right.(*tree.FuncExpr)
+		require.True(t, ok)
+		name, ok := outerConcat.Func.FunctionReference.(*tree.UnresolvedName)
+		require.True(t, ok)
+		require.Equal(t, "concat", name.ColName())
+		return nil
+	})
+}
+
 func Test_HandlePrepareVarUsesSessionSQLMode(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	setSessionAlloc("", NewLeakCheckAllocator())

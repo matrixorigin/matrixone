@@ -166,6 +166,9 @@ var (
 	CauseBuildInsertIndexMetaBatch2 = NewInternalError(context.Background(), "buildInsertIndexMetaBatch 2")
 	//pkg/sql/colexec/dispatch
 	CauseWaitRemoteRegsReady = NewInternalError(context.Background(), "waitRemoteRegsReady")
+	//pkg/sql/mongodb
+	CauseMongoDBClientCleanup    = NewInternalError(context.Background(), "mongodb client cleanup")
+	CauseMongoDBClientRetirement = NewInternalError(context.Background(), "mongodb client retirement")
 	//pkg/sql/compile
 	CauseIsAvailable              = NewInternalError(context.Background(), "isAvailable")
 	CauseNewMessageSenderOnClient = NewInternalError(context.Background(), "newMessageSenderOnClient")
