@@ -2775,8 +2775,7 @@ func buildViewMetadataRefreshQuery(
 				"and exists (select 1 from %s.%s where sub_account_id = account_id "+
 				"and pub_account_id = %d and sub_name is not null and status = %d "+
 				"and (lower(pub_database) = lower(%s) or pub_database = %s) "+
-				"and (pub_tables = %s or find_in_set(lower(%s), "+
-				"lower(replace(pub_tables, ' ', ''))) > 0) "+
+				"and (pub_tables = %s or find_in_set(lower(%s), lower(pub_tables)) > 0) "+
 				"and instr(lower(viewdef), lower(sub_name)) > 0))) "+
 				"order by rel_id limit %d",
 			catalog.MO_CATALOG,

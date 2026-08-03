@@ -176,6 +176,24 @@ func TestBuildViewMetadataRefreshQueryEscapesLegacyTableName(t *testing.T) {
 	}()
 }
 
+func TestBuildPendingViewMetadataRefreshQueryPreservesPublishedTableSpaces(t *testing.T) {
+	query := buildViewMetadataRefreshQuery(
+		7, 24, 42, "db", "odd name", 0, 128, true,
+	)
+	require.Contains(t, query,
+		"find_in_set(lower('odd name'), lower(pub_tables)) > 0")
+	require.NotContains(t, query, "replace(pub_tables")
+	require.Contains(t, query, "pub_tables = '*'")
+	stmts, err := mysql.Parse(context.Background(), query, 1)
+	require.NoError(t, err)
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
+	require.Len(t, stmts, 1)
+}
+
 func TestCurrentViewSubscriptionResolver(t *testing.T) {
 	resolver := currentViewSubscriptionResolver{byDatabase: map[string]*plan.SubscriptionMeta{
 		"subdb": {
