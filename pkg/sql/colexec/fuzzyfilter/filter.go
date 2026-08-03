@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -148,9 +149,19 @@ func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
 		) != keycodec.ExactRuntimeFilterUnsupported
 	}
 	if ctr.runtimeFilterUsable {
+		if fuzzyFilter.allocationAccount == nil ||
+			fuzzyFilter.runtimeFilterAllocation == nil {
+			return mpool.ErrAllocationAccountInvalid
+		}
 		if ctr.pass2RuntimeFilter == nil {
-			ctr.pass2RuntimeFilter = vector.NewOffHeapVecWithType(
-				plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp))
+			ctr.pass2RuntimeFilter, err =
+				vector.NewOffHeapVecWithTypeAndAllocation(
+					plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp),
+					fuzzyFilter.runtimeFilterAllocation,
+				)
+			if err != nil {
+				return err
+			}
 		}
 	} else if ctr.pass2RuntimeFilter != nil {
 		// FuzzyFilter must still execute its uniqueness check, but an
@@ -391,7 +402,7 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 	}
 	if encoding == keycodec.ExactRuntimeFilterFloatZeroClosed {
 		if err := runtimefilter.CloseFloatSignedZero(
-			ctr.pass2RuntimeFilter, proc.Mp(), nil); err != nil {
+			ctr.pass2RuntimeFilter, proc.Mp()); err != nil {
 			if fuzzyFilter.fallbackRuntimeFilter(proc, err) {
 				return nil
 			}
@@ -410,16 +421,13 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 	// Reset bitmap before sort to avoid corruption.
 	ctr.pass2RuntimeFilter.GetNulls().Reset()
 	ctr.pass2RuntimeFilter.InplaceSort()
-	budget, err := proc.GetHashBuildBudget()
-	if err != nil {
-		if fuzzyFilter.fallbackRuntimeFilter(proc, err) {
-			return nil
-		}
-		fuzzyFilter.abandonRuntimeFilter(proc)
-		return err
-	}
 	data, release, err := runtimefilter.MarshalExactFilterVector(
-		ctr.pass2RuntimeFilter, budget)
+		ctr.pass2RuntimeFilter,
+		proc.Mp(),
+		fuzzyFilter.allocationAccount,
+		fuzzyFilterAllocationOwner,
+		fuzzyFilterAllocationSiteRuntimeFilterPayload,
+	)
 	if err != nil {
 		if fuzzyFilter.fallbackRuntimeFilter(proc, err) {
 			return nil
@@ -536,11 +544,6 @@ func (fuzzyFilter *FuzzyFilter) generate() error {
 	ctr := &fuzzyFilter.ctr
 	rbat := batch.NewWithSize(1)
 	rbat.SetVector(0, vector.NewVec(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp)))
-	// Runtime-filter retention is optional and can grow to the configured IN
-	// cardinality. Keep it off-heap so the process pool can reject growth
-	// recoverably; appendPassToRuntimeFilter then abandons it and sends PASS.
-	ctr.pass2RuntimeFilter = vector.NewOffHeapVecWithType(
-		plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp))
 	ctr.rbat = rbat
 	return nil
 }

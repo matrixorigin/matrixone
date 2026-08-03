@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -41,6 +42,23 @@ const (
 	Probe
 	Finalize
 	End
+)
+
+const (
+	dedupJoinAllocationSiteMatched mpool.AllocationSite = iota + 82
+	dedupJoinAllocationSiteCaptured
+	dedupJoinAllocationSiteCaptureData
+	dedupJoinAllocationSiteCaptureArea
+	dedupJoinAllocationSiteCaptureNulls
+	dedupJoinAllocationSiteCaptureGrouping
+	dedupJoinAllocationSiteFinalizeSelections
+)
+
+const (
+	dedupJoinAllocationSiteResultData mpool.AllocationSite = iota + 110
+	dedupJoinAllocationSiteResultArea
+	dedupJoinAllocationSiteResultNulls
+	dedupJoinAllocationSiteResultGrouping
 )
 
 // WorkerJoinMsg carries per-worker state from non-merger workers to the
@@ -199,6 +217,8 @@ func freeCapturedVecs(vecs []*vector.Vector, proc *process.Process) {
 
 func freeWorkerJoinMsg(msg *WorkerJoinMsg, proc *process.Process) {
 	if msg != nil {
+		colexec.FreeAccountedBitmap(msg.matched, proc.Mp())
+		colexec.FreeAccountedBitmap(msg.captured, proc.Mp())
 		freeCapturedVecs(msg.capturedVecs, proc)
 	}
 }
@@ -257,10 +277,6 @@ type container struct {
 	// Spill support for large build sides.
 	spillEngine    *spillutil.SpillEngine
 	spillThreshold int64
-	// Non-nil only for spilled joins, where probe expressions are part of the
-	// shared HashBuild/spill working set. Resident probe expressions remain
-	// under normal process/mpool accounting; this is not a general query budget.
-	probeExpressionLease *hashbuild.ExpressionMemoryLease
 }
 
 type DedupJoin struct {
@@ -298,8 +314,74 @@ type DedupJoin struct {
 	// main-table scan path; empty for regular INSERT/UPDATE.
 	OldColCapturePlaceholderIdxList []int32
 	OldColCaptureProbeIdxList       []int32
+	allocationAccount               *mpool.AllocationAccount
+	stateAllocation                 *vector.AllocationAccountSelection
+	resultAllocation                *vector.AllocationAccountSelection
 
 	vm.OperatorBase
+}
+
+func (dedupJoin *DedupJoin) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if account == nil || account.Handle() == 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if dedupJoin.allocationAccount != nil &&
+		dedupJoin.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if dedupJoin.allocationAccount == account {
+		return nil
+	}
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		hashbuild.HashBuildAllocationOwner,
+		dedupJoinAllocationSiteCaptureData,
+		dedupJoinAllocationSiteCaptureArea,
+		dedupJoinAllocationSiteCaptureNulls,
+		dedupJoinAllocationSiteCaptureGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	resultSelection, err := vector.NewAllocationAccountSelection(
+		account,
+		hashbuild.HashBuildAllocationOwner,
+		dedupJoinAllocationSiteResultData,
+		dedupJoinAllocationSiteResultArea,
+		dedupJoinAllocationSiteResultNulls,
+		dedupJoinAllocationSiteResultGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	dedupJoin.allocationAccount = account
+	dedupJoin.stateAllocation = selection
+	dedupJoin.resultAllocation = resultSelection
+	return nil
+}
+
+func (dedupJoin *DedupJoin) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if dedupJoin.allocationAccount == nil {
+		return nil
+	}
+	if dedupJoin.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if dedupJoin.ctr.mp != nil || dedupJoin.ctr.spillEngine != nil ||
+		len(dedupJoin.ctr.evecs) != 0 || len(dedupJoin.ctr.exprExecs) != 0 ||
+		dedupJoin.ctr.matched != nil || dedupJoin.ctr.captured != nil ||
+		len(dedupJoin.ctr.capturedVecs) != 0 || dedupJoin.ctr.rbat != nil ||
+		len(dedupJoin.ctr.buf) != 0 {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	dedupJoin.allocationAccount = nil
+	dedupJoin.stateAllocation = nil
+	dedupJoin.resultAllocation = nil
+	return nil
 }
 
 func (dedupJoin *DedupJoin) GetOperatorBase() *vm.OperatorBase {
@@ -370,19 +452,14 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	}
 	ctr.maxAllocSize = 0
 
-	ctr.cleanBuf(proc)
+	ctr.cleanResultBatches(proc)
 	ctr.cleanBucketState(proc)
-	ctr.resetExprExecutor()
+	ctr.cleanExprExecutor()
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
 		ctr.spillEngine = nil
 	}
-	if ctr.probeExpressionLease != nil {
-		ctr.cleanEvalVectors()
-		ctr.releaseProbeExpressionLease()
-	} else {
-		ctr.resetEvalVectors()
-	}
+	ctr.cleanEvalVectors()
 	ctr.roundStatusPublished = false
 	ctr.state = Build
 	ctr.lastPos = 0
@@ -395,7 +472,7 @@ func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err
 		// reopened prepared-pipeline generation stopped from Free.
 		dedupJoin.Mailbox.drain(proc)
 	}
-	ctr.cleanBuf(proc)
+	ctr.cleanResultBatches(proc)
 	ctr.cleanBucketState(proc)
 	ctr.cleanBatch(proc)
 	ctr.cleanExprExecutor()
@@ -404,24 +481,19 @@ func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err
 		ctr.spillEngine = nil
 	}
 	ctr.cleanEvalVectors()
-	ctr.releaseProbeExpressionLease()
 }
 
 func (dedupJoin *DedupJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
 	return input, nil
 }
 
-func (ctr *container) resetExprExecutor() {
-	for i := range ctr.exprExecs {
-		ctr.exprExecs[i].ResetForNextQuery()
-	}
-}
-
 func (ctr *container) cleanExprExecutor() {
 	for i := range ctr.exprExecs {
-		ctr.exprExecs[i].Free()
-		ctr.exprExecs[i] = nil
+		if ctr.exprExecs[i] != nil {
+			ctr.exprExecs[i].Free()
+		}
 	}
+	ctr.exprExecs = nil
 }
 
 func (ctr *container) cleanBuf(proc *process.Process) {
@@ -433,6 +505,14 @@ func (ctr *container) cleanBuf(proc *process.Process) {
 	ctr.buf = nil
 }
 
+func (ctr *container) cleanResultBatches(proc *process.Process) {
+	ctr.cleanBuf(proc)
+	if ctr.rbat != nil {
+		ctr.rbat.Clean(proc.GetMPool())
+		ctr.rbat = nil
+	}
+}
+
 func (ctr *container) cleanCaptured(proc *process.Process) {
 	for _, v := range ctr.capturedVecs {
 		if v != nil {
@@ -440,6 +520,7 @@ func (ctr *container) cleanCaptured(proc *process.Process) {
 		}
 	}
 	ctr.capturedVecs = nil
+	colexec.FreeAccountedBitmap(ctr.captured, proc.Mp())
 	ctr.captured = nil
 	ctr.captureResultIdx = nil
 }
@@ -471,10 +552,12 @@ func (ctr *container) cleanBucketState(proc *process.Process) {
 	ctr.cleanHashMap()
 	ctr.batches = nil
 	ctr.batchRowCount = 0
+	colexec.FreeAccountedBitmap(ctr.matched, proc.Mp())
 	ctr.matched = nil
 }
 
 func (ctr *container) cleanHashMap() {
+	hashmap.IteratorClearOwner(ctr.cachedItr)
 	ctr.cachedItr = nil
 	if ctr.mp != nil {
 		ctr.mp.Free()
@@ -491,19 +574,4 @@ func (ctr *container) cleanEvalVectors() {
 	}
 	ctr.evecs = nil
 	ctr.vecs = nil
-}
-
-func (ctr *container) resetEvalVectors() {
-	for i := range ctr.evecs {
-		if ctr.evecs[i].executor != nil {
-			ctr.evecs[i].executor.ResetForNextQuery()
-		}
-	}
-}
-
-func (ctr *container) releaseProbeExpressionLease() {
-	if ctr.probeExpressionLease != nil {
-		ctr.probeExpressionLease.Release()
-		ctr.probeExpressionLease = nil
-	}
 }

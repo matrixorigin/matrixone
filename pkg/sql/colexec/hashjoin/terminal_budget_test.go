@@ -77,7 +77,7 @@ func TestHashJoinCallConvertsTerminalBudgetAdmission(t *testing.T) {
 
 	admission := &process.HashBuildBudgetError{
 		Kind:      process.HashBuildBudgetErrorAdmission,
-		Resource:  process.HashBuildBudgetResourceMemory,
+		Component: process.HashBuildBudgetComponentMemory,
 		Requested: 2,
 		Used:      1,
 		Cap:       1,
@@ -129,7 +129,14 @@ func TestBroadcastBudgetFailureUnblocksParallelHashJoinConsumers(t *testing.T) {
 	rootProc.BuildPipelineContext(ctx)
 	budget, err := rootProc.GetHashBuildBudget()
 	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 4_096)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(1<<60, budget)
+	require.NoError(t, err)
 	t.Cleanup(func() {
+		require.Zero(t, account.Snapshot().Used)
+		_, _, completeErr := registry.CompleteTerminal(account)
+		require.NoError(t, completeErr)
 		require.Zero(t, budget.Used())
 		require.Zero(t, budget.SpillDiskUsed())
 		require.Zero(t, budget.SpillFDUsed())
@@ -159,6 +166,7 @@ func TestBroadcastBudgetFailureUnblocksParallelHashJoinConsumers(t *testing.T) {
 		NeedHashMap:    true,
 		SpillThreshold: 1,
 	}
+	require.NoError(t, buildArg.SetAllocationAccount(account))
 	buildArg.AppendChild(buildChild)
 	var buildErr error
 	t.Cleanup(func() {
@@ -166,6 +174,7 @@ func TestBroadcastBudgetFailureUnblocksParallelHashJoinConsumers(t *testing.T) {
 		buildChild.Reset(buildProc, buildErr != nil, buildErr)
 		buildArg.Free(buildProc, buildErr != nil, buildErr)
 		buildChild.Free(buildProc, buildErr != nil, buildErr)
+		require.NoError(t, buildArg.ClearAllocationAccount(account))
 		if buildProc.Cancel != nil {
 			buildProc.Cancel(buildErr)
 		}
@@ -196,6 +205,7 @@ func TestBroadcastBudgetFailureUnblocksParallelHashJoinConsumers(t *testing.T) {
 			IsMerger:   true,
 			JoinMapTag: joinMapTag,
 		}
+		require.NoError(t, join.SetAllocationAccount(account))
 		join.AppendChild(probe)
 		consumers[i] = consumerState{join: join, probe: probe, proc: consumerProc}
 		t.Cleanup(func() {
@@ -204,6 +214,7 @@ func TestBroadcastBudgetFailureUnblocksParallelHashJoinConsumers(t *testing.T) {
 			state.probe.Reset(state.proc, state.err != nil, state.err)
 			state.join.Free(state.proc, state.err != nil, state.err)
 			state.probe.Free(state.proc, state.err != nil, state.err)
+			require.NoError(t, state.join.ClearAllocationAccount(account))
 			if state.proc.Cancel != nil {
 				state.proc.Cancel(state.err)
 			}
@@ -217,8 +228,12 @@ func TestBroadcastBudgetFailureUnblocksParallelHashJoinConsumers(t *testing.T) {
 		result vm.CallResult
 		err    error
 	}
+	var workers sync.WaitGroup
+	t.Cleanup(workers.Wait)
 	buildOutcome := make(chan execOutcome, 1)
+	workers.Add(1)
 	go func() {
+		defer workers.Done()
 		result, err := vm.Exec(buildArg, buildProc)
 		buildOutcome <- execOutcome{result: result, err: err}
 	}()
@@ -232,7 +247,9 @@ func TestBroadcastBudgetFailureUnblocksParallelHashJoinConsumers(t *testing.T) {
 	consumerStarted := make(chan struct{}, consumerCount)
 	consumerOutcomes := make(chan execOutcome, consumerCount)
 	for i := range consumers {
+		workers.Add(1)
 		go func(i int) {
+			defer workers.Done()
 			<-startConsumers
 			consumerStarted <- struct{}{}
 			result, err := vm.Exec(consumers[i].join, consumers[i].proc)

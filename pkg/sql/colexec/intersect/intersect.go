@@ -172,7 +172,10 @@ func (intersect *Intersect) probeHashTable(proc *process.Process, analyzer proce
 			copy(needInsert, resetsNeedInsert)
 			insertcnt := 0
 
-			vs, zs := itr.Find(i, n, input.Batch.Vecs)
+			vs, zs, err := itr.Find(i, n, input.Batch.Vecs)
+			if err != nil {
+				return false, err
+			}
 
 			for j, v := range vs {
 

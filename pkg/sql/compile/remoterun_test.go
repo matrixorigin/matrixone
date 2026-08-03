@@ -145,8 +145,41 @@ func Test_EncodeProcessInfo(t *testing.T) {
 		SqlHelper:      nil,
 	}
 
-	_, err := encodeProcessInfo(proc, "")
+	remoteExecutionID := uuid.New()
+	data, err := encodeProcessInfo(proc, "", map[string]uint32{
+		"cn-a:6001": 2,
+		"cn-b:6001": 1,
+	}, remoteExecutionID)
 	require.Nil(t, err)
+	restored := new(pipeline.ProcessInfo)
+	require.NoError(t, restored.Unmarshal(data))
+	require.Equal(t, map[string]uint32{
+		"cn-a:6001": 2,
+		"cn-b:6001": 1,
+	}, restored.RemoteFragmentCounts)
+	restoredExecutionID, err := uuid.FromBytes(restored.RemoteExecutionId)
+	require.NoError(t, err)
+	require.Equal(t, remoteExecutionID, restoredExecutionID)
+}
+
+func TestGenerateProcessHelperRejectsIncompleteRemoteLifecycleMetadata(t *testing.T) {
+	tests := []pipeline.ProcessInfo{
+		{RemoteFragmentCounts: map[string]uint32{"cn-a:6001": 1}},
+		{RemoteExecutionId: func() []byte {
+			id := uuid.New()
+			return id[:]
+		}()},
+		{
+			RemoteFragmentCounts: map[string]uint32{"cn-a:6001": 1},
+			RemoteExecutionId:    []byte{1},
+		},
+	}
+	for i := range tests {
+		data, err := tests[i].Marshal()
+		require.NoError(t, err)
+		_, err = generateProcessHelper(context.Background(), data, nil)
+		require.Error(t, err)
+	}
 }
 
 func Test_refactorScope(t *testing.T) {
@@ -2758,7 +2791,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 		Proc:   proc,
 		RootOp: connector.NewArgument(),
 	}
-	_, withoutOut, _, _, err := prepareRemoteRunSendingData("", s1, proc)
+	_, withoutOut, _, _, err := prepareRemoteRunSendingData("", s1, proc, nil, uuid.Nil)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
 	require.NotNil(t, s1.RootOp)
@@ -2772,7 +2805,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 	}
 	s2.RootOp.AppendChild(value_scan.NewArgument())
 	originChild := s2.RootOp.GetOperatorBase().GetChildren(0)
-	_, withoutOut, _, _, err = prepareRemoteRunSendingData("", s2, proc)
+	_, withoutOut, _, _, err = prepareRemoteRunSendingData("", s2, proc, nil, uuid.Nil)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
 	require.Equal(t, 1, s2.RootOp.GetOperatorBase().NumChildren())
@@ -2785,7 +2818,7 @@ func Test_prepareRemoteRunSendingData(t *testing.T) {
 		RootOp: value_scan.NewArgument(),
 	}
 	s3.RootOp.AppendChild(value_scan.NewArgument())
-	_, withoutOut, _, _, err = prepareRemoteRunSendingData("", s3, proc)
+	_, withoutOut, _, _, err = prepareRemoteRunSendingData("", s3, proc, nil, uuid.Nil)
 	require.NoError(t, err)
 	require.True(t, withoutOut)
 }
@@ -2813,7 +2846,7 @@ func TestPrepareRemoteRunSendingDataKeepsConnectorChildTableFunctionParams(t *te
 		RootOp: conn,
 	}
 
-	scopeData, withoutOut, _, _, err := prepareRemoteRunSendingData("", s, proc)
+	scopeData, withoutOut, _, _, err := prepareRemoteRunSendingData("", s, proc, nil, uuid.Nil)
 	require.NoError(t, err)
 	require.False(t, withoutOut)
 
