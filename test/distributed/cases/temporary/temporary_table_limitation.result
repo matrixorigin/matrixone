@@ -144,6 +144,7 @@ select * from temp_for_view;
 View's SELECT refers to a temporary table 'temp_for_view'
 drop view if exists view_on_temp;
 drop table temp_for_view;
+drop database temp_view;
 delimiter //
 create procedure test_temp_in_proc()
 begin

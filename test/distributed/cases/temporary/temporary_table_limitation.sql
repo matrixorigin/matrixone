@@ -259,6 +259,7 @@ select * from temp_for_view;
 -- 清理
 drop view if exists view_on_temp;
 drop table temp_for_view;
+drop database temp_view;
 
 -- ============================================================================
 -- 测试分类 11: 存储过程和函数限制
