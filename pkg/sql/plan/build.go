@@ -28,6 +28,17 @@ import (
 )
 
 func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool, skipStats bool) (*Plan, error) {
+	return bindAndOptimizeSelectQueryWithValidator(stmtType, ctx, stmt, isPrepareStmt, skipStats, nil)
+}
+
+func bindAndOptimizeSelectQueryWithValidator(
+	stmtType plan.Query_StatementType,
+	ctx CompilerContext,
+	stmt *tree.Select,
+	isPrepareStmt bool,
+	skipStats bool,
+	validate func(*Query) error,
+) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
@@ -48,6 +59,11 @@ func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerC
 	ctx.SetViews(bindCtx.views)
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	if validate != nil {
+		if err = validate(builder.qry); err != nil {
+			return nil, err
+		}
+	}
 	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
@@ -362,6 +378,42 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	}
 	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
 		return nil, err
+	}
+
+	enabled, err := IsForeignKeyChecksEnabled(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if enabled && query.HasForeignKeyAction {
+		tblInfo, resolveErr := getUpdateTableInfo(ctx, stmt)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		for i, tableDef := range tblInfo.tableDefs {
+			if len(tblInfo.updateKeys[i]) == 0 {
+				continue
+			}
+			selfFkeys := make([]*plan.ForeignKeyDef, 0, len(tableDef.Fkeys))
+			for _, fk := range tableDef.Fkeys {
+				if fk.ForeignTbl == 0 {
+					selfFkeys = append(selfFkeys, fk)
+				}
+			}
+			if len(selfFkeys) == 0 {
+				continue
+			}
+			sqls, genErr := genSqlsForCheckFKSelfRefer(
+				ctx.GetContext(),
+				tblInfo.objRef[i].SchemaName,
+				tableDef.Name,
+				tableDef.Cols,
+				selfFkeys,
+			)
+			if genErr != nil {
+				return nil, genErr
+			}
+			query.DetectSqls = append(query.DetectSqls, sqls...)
+		}
 	}
 	recordUpdatePlannerRoute(updatePlannerModern, updateRouteReasonNone, "selected")
 	return &Plan{

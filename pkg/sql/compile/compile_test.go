@@ -328,20 +328,24 @@ func TestConstructLockOpPreservesSharedTableMode(t *testing.T) {
 	}
 }
 
-func TestValidateReplaceParentTxnMode(t *testing.T) {
+func TestValidateForeignKeyParentTxnMode(t *testing.T) {
 	ctx := context.Background()
 	query := &plan.Query{DetectSqls: []string{"REPLACE_PARENT_LOCK:select 1 for update"}}
 
-	require.NoError(t, validateReplaceParentTxnMode(ctx, query, true))
-	require.ErrorContains(t, validateReplaceParentTxnMode(ctx, query, false),
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx, query, true))
+	require.ErrorContains(t, validateForeignKeyParentTxnMode(ctx, query, false),
 		"optimistic transaction mode")
 	query.DetectSqls = []string{"REPLACE_PARENT_PLAN:"}
-	require.NoError(t, validateReplaceParentTxnMode(ctx, query, true))
-	require.ErrorContains(t, validateReplaceParentTxnMode(ctx, query, false),
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx, query, true))
+	require.ErrorContains(t, validateForeignKeyParentTxnMode(ctx, query, false),
 		"optimistic transaction mode")
-	require.NoError(t, validateReplaceParentTxnMode(ctx,
+	query.DetectSqls = []string{"UPDATE_PARENT_PLAN:"}
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx, query, true))
+	require.ErrorContains(t, validateForeignKeyParentTxnMode(ctx, query, false),
+		"UPDATE on a referenced parent table")
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx,
 		&plan.Query{DetectSqls: []string{"select true"}}, false))
-	require.NoError(t, validateReplaceParentTxnMode(ctx, nil, false))
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx, nil, false))
 }
 
 func TestLockTableLocksAllPrePipelineTargets(t *testing.T) {
