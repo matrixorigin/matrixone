@@ -74,6 +74,14 @@ func (e *stubEngine) Database(ctx context.Context, name string, op client.TxnOpe
 	return nil, moerr.NewBadDB(ctx, name)
 }
 
+func (e *stubEngine) Databases(context.Context, client.TxnOperator) ([]string, error) {
+	names := make([]string, 0, len(e.dbs))
+	for name := range e.dbs {
+		names = append(names, name)
+	}
+	return names, nil
+}
+
 func (e *stubEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
 	return 1, nil
 }
@@ -103,6 +111,14 @@ func (db *stubDatabase) RelationExists(ctx context.Context, name string, op any)
 	}
 	_, ok := db.rels[name]
 	return ok, nil
+}
+
+func (db *stubDatabase) Relations(context.Context) ([]string, error) {
+	names := make([]string, 0, len(db.rels))
+	for name := range db.rels {
+		names = append(names, name)
+	}
+	return names, nil
 }
 
 func (db *stubDatabase) Create(ctx context.Context, name string, defs []engine.TableDef) error {

@@ -523,7 +523,7 @@ func (s *Scope) AlterView(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	return rel.AlterTable(
+	err = rel.AlterTable(
 		context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql),
 		nil,
 		[]*api.AlterTableReq{
@@ -533,6 +533,27 @@ func (s *Scope) AlterView(c *Compile) error {
 				replaceDef,
 			),
 		},
+	)
+	if err != nil || isViewMetadataRefresh(c.proc.Ctx) {
+		return err
+	}
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	logicalID := replaceDef.GetLogicalId()
+	if logicalID == 0 {
+		logicalID = rel.GetTableID(c.proc.Ctx)
+	}
+	return refreshViewMetadataAfterAlter(
+		c,
+		accountID,
+		logicalID,
+		rel.GetTableID(c.proc.Ctx),
+		rel.GetTableID(c.proc.Ctx),
+		dbName,
+		tblName,
+		true,
 	)
 }
 

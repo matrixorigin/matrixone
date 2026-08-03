@@ -1840,6 +1840,12 @@ func (s *Scope) doAlterTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
 	refreshViewMetadata := !features.IsPartition(qry.GetTableDef().GetFeatureFlag()) &&
 		(qry.AlgorithmType == plan.AlterTable_COPY || qry.GetCopyTableDef() != nil)
+	pendingRecoveryName := ""
+	for _, action := range qry.GetActions() {
+		if rename, ok := action.GetAction().(*plan.AlterTable_Action_AlterName); ok {
+			pendingRecoveryName = rename.AlterName.GetNewName()
+		}
+	}
 	sourceAccountID, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
 		return err
@@ -1894,6 +1900,28 @@ func (s *Scope) doAlterTable(c *Compile) error {
 			if err != nil {
 				return err
 			}
+		}
+	}
+	if pendingRecoveryName != "" {
+		database, err := c.e.Database(c.proc.Ctx, qry.GetDatabase(), c.proc.GetTxnOperator())
+		if err != nil {
+			return err
+		}
+		relation, err := database.Relation(c.proc.Ctx, pendingRecoveryName, nil)
+		if err != nil {
+			return err
+		}
+		if err = refreshViewMetadataAfterAlter(
+			c,
+			sourceAccountID,
+			sourceLogicalID,
+			relation.GetTableID(c.proc.Ctx),
+			relation.GetTableID(c.proc.Ctx),
+			qry.GetDatabase(),
+			pendingRecoveryName,
+			true,
+		); err != nil {
+			return err
 		}
 	}
 	if !refreshViewMetadata {
@@ -2393,67 +2421,84 @@ func refreshPendingViewMetadataAfterSubscriptionCreate(c *Compile, subscriptionD
 		)
 	}
 
-	var sources []viewMetadataRefreshSource
-	err = func() error {
-		oldCtx := c.proc.Ctx
-		c.proc.Ctx = defines.AttachAccountId(oldCtx, uint32(meta.AccountId))
-		defer func() { c.proc.Ctx = oldCtx }()
-
-		publisherDatabase, err := c.e.Database(c.proc.Ctx, meta.DbName, c.proc.GetTxnOperator())
+	databaseNames := []string{meta.DbName}
+	if strings.EqualFold(meta.DbName, pubsub.TableAll) {
+		err = func() error {
+			oldCtx := c.proc.Ctx
+			c.proc.Ctx = defines.AttachAccountId(oldCtx, uint32(meta.AccountId))
+			defer func() { c.proc.Ctx = oldCtx }()
+			databaseNames, err = c.e.Databases(c.proc.Ctx, c.proc.GetTxnOperator())
+			return err
+		}()
 		if err != nil {
 			return err
 		}
-		var tableNames []string
-		if strings.EqualFold(meta.Tables, pubsub.TableAll) {
-			tableNames, err = publisherDatabase.Relations(c.proc.Ctx)
+	}
+	slices.Sort(databaseNames)
+	databaseNames = slices.Compact(databaseNames)
+	for _, databaseName := range databaseNames {
+		var sources []viewMetadataRefreshSource
+		err = func() error {
+			oldCtx := c.proc.Ctx
+			c.proc.Ctx = defines.AttachAccountId(oldCtx, uint32(meta.AccountId))
+			defer func() { c.proc.Ctx = oldCtx }()
+
+			publisherDatabase, err := c.e.Database(c.proc.Ctx, databaseName, c.proc.GetTxnOperator())
 			if err != nil {
 				return err
 			}
-		} else {
-			for _, tableName := range strings.Split(meta.Tables, pubsub.Sep) {
-				if tableName = strings.TrimSpace(tableName); tableName != "" {
-					tableNames = append(tableNames, tableName)
+			var tableNames []string
+			if strings.EqualFold(meta.Tables, pubsub.TableAll) {
+				tableNames, err = publisherDatabase.Relations(c.proc.Ctx)
+				if err != nil {
+					return err
+				}
+			} else {
+				for _, tableName := range strings.Split(meta.Tables, pubsub.Sep) {
+					if tableName = strings.TrimSpace(tableName); tableName != "" {
+						tableNames = append(tableNames, tableName)
+					}
 				}
 			}
+			slices.Sort(tableNames)
+			tableNames = slices.Compact(tableNames)
+			for _, tableName := range tableNames {
+				relation, err := publisherDatabase.Relation(c.proc.Ctx, tableName, nil)
+				if err != nil {
+					return err
+				}
+				tableID := relation.GetTableID(c.proc.Ctx)
+				logicalID := relation.GetTableDef(c.proc.Ctx).GetLogicalId()
+				if logicalID == 0 {
+					logicalID = tableID
+				}
+				sources = append(sources, viewMetadataRefreshSource{
+					accountID:  uint32(meta.AccountId),
+					logicalID:  logicalID,
+					previousID: tableID,
+					currentID:  tableID,
+					database:   databaseName,
+					tableName:  tableName,
+				})
+			}
+			return nil
+		}()
+		if err != nil {
+			return err
 		}
-		slices.Sort(tableNames)
-		tableNames = slices.Compact(tableNames)
-		for _, tableName := range tableNames {
-			relation, err := publisherDatabase.Relation(c.proc.Ctx, tableName, nil)
-			if err != nil {
+		for _, source := range sources {
+			if err = refreshViewMetadataAfterAlter(
+				c,
+				source.accountID,
+				source.logicalID,
+				source.previousID,
+				source.currentID,
+				source.database,
+				source.tableName,
+				true,
+			); err != nil {
 				return err
 			}
-			tableID := relation.GetTableID(c.proc.Ctx)
-			logicalID := relation.GetTableDef(c.proc.Ctx).GetLogicalId()
-			if logicalID == 0 {
-				logicalID = tableID
-			}
-			sources = append(sources, viewMetadataRefreshSource{
-				accountID:  uint32(meta.AccountId),
-				logicalID:  logicalID,
-				previousID: tableID,
-				currentID:  tableID,
-				database:   meta.DbName,
-				tableName:  tableName,
-			})
-		}
-		return nil
-	}()
-	if err != nil {
-		return err
-	}
-	for _, source := range sources {
-		if err = refreshViewMetadataAfterAlter(
-			c,
-			source.accountID,
-			source.logicalID,
-			source.previousID,
-			source.currentID,
-			source.database,
-			source.tableName,
-			true,
-		); err != nil {
-			return err
 		}
 	}
 	return nil

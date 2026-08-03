@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -294,6 +295,54 @@ func TestRefreshPendingViewMetadataAfterSubscriptionCreate(t *testing.T) {
 	accountID, err := defines.GetAccountId(c.proc.Ctx)
 	require.NoError(t, err)
 	require.Equal(t, uint32(7), accountID, "publisher lookup must restore the subscriber context")
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestRefreshPendingViewMetadataAfterAccountPublicationSubscriptionCreate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mp := mpool.MustNewZero()
+	subscriptionQuery := "select sub_name, pub_account_id, pub_account_name, pub_name, " +
+		"pub_database, pub_tables from mo_catalog.mo_subs " +
+		"where sub_account_id = 7 and sub_name is not null and status = 0"
+	result := executor.NewMemResult([]types.Type{
+		types.T_varchar.ToType(), types.T_int32.ToType(), types.T_varchar.ToType(),
+		types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+	}, mp)
+	result.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(result, 0, []string{"subdb"}))
+	require.NoError(t, executor.AppendFixedRows(result, 1, []int32{0}))
+	require.NoError(t, executor.AppendStringRows(result, 2, []string{"sys"}))
+	require.NoError(t, executor.AppendStringRows(result, 3, []string{"account_pub"}))
+	require.NoError(t, executor.AppendStringRows(result, 4, []string{pubsub.TableAll}))
+	require.NoError(t, executor.AppendStringRows(result, 5, []string{pubsub.TableAll}))
+	pendingDB1 := buildViewMetadataRefreshQuery(0, 24, 1, "db1", "source_t", 0, 128, true)
+	pendingDB2 := buildViewMetadataRefreshQuery(0, 25, 1, "db2", "other_t", 0, 128, true)
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		subscriptionQuery: result.GetResult(),
+		pendingDB1:        {},
+		pendingDB2:        {},
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, 7)
+	eng := newStubEngine()
+	eng.dbs = map[string]*stubDatabase{}
+	db2 := newStubDatabase("db2")
+	db2Source := newStubRelation("other_t")
+	db2Source.tableDef = &plan.TableDef{TblId: 1, LogicalId: 25}
+	db2.rels["other_t"] = db2Source
+	eng.dbs["db2"] = db2
+	db1 := newStubDatabase("db1")
+	db1Source := newStubRelation("source_t")
+	db1Source.tableDef = &plan.TableDef{TblId: 1, LogicalId: 24}
+	db1.rels["source_t"] = db1Source
+	eng.dbs["db1"] = db1
+	c.e = eng
+
+	require.NoError(t, refreshPendingViewMetadataAfterSubscriptionCreate(c, "subdb"))
+	require.Equal(t, []string{subscriptionQuery, pendingDB1, pendingDB2}, spyExec.executedSQLs)
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(7), accountID)
 	require.Zero(t, mp.CurrNB())
 }
 

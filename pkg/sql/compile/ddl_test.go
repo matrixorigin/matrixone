@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -47,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	hnswruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -127,6 +129,10 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 		},
 	)
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+	spyExec := &alterCopyInsertSpyExecutor{}
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.SQLExecutor(spyExec))
+	moruntime.SetupServiceBasedRuntime(proc.GetService(), rt)
 	c := NewCompile("test", "default_db", "alter view other_db.v as select a from t", "", "", eng, proc, nil, false, nil, time.Now())
 	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
 		Definition: &plan2.DataDefinition_AlterView{
@@ -136,6 +142,7 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 			},
 		},
 	}}}}
+	c.pn = s.Plan
 
 	require.NoError(t, s.AlterView(c))
 	require.Len(t, rel.alterReqs, 1)
@@ -190,6 +197,9 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 		"an explicit ALTER VIEW must replace the stored view definition",
 	)
 	require.Equal(t, 1, dependencyLockCalls, "explicit ALTER VIEW must still validate dependency generations")
+	require.Equal(t, []string{
+		buildViewMetadataRefreshQuery(7, 1, 1, "other_db", "v", 0, 128, true),
+	}, spyExec.executedSQLs, "explicit ALTER VIEW must retry pending dependents")
 
 	delete(db.rels, "v")
 	require.Error(t, s.AlterView(c))

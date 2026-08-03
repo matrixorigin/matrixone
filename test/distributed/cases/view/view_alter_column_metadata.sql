@@ -57,6 +57,28 @@ create view recreated_view_base as select b from recreated_view_source;
 -- @ignore:5,6
 desc recreated_view_dependent;
 
+create table altered_view_live (a int);
+create table altered_view_missing (b int);
+create view altered_view_base as
+select live.a, missing.b from altered_view_live live, altered_view_missing missing;
+create view altered_view_dependent as select a from altered_view_base;
+drop table altered_view_missing;
+alter table altered_view_live modify column a bigint;
+alter view altered_view_base as select a from altered_view_live;
+-- @ignore:5,6
+desc altered_view_dependent;
+
+create table renamed_live (a int);
+create table renamed_missing (b int);
+create view renamed_dependent as
+select live.a, missing.b from renamed_live live, renamed_missing missing;
+drop table renamed_missing;
+alter table renamed_live modify column a bigint;
+create table renamed_replacement (b decimal(13, 4));
+rename table renamed_replacement to renamed_missing;
+-- @ignore:5,6
+desc renamed_dependent;
+
 create table ambiguity_left (a int);
 create table ambiguity_right (b int);
 create view ambiguity_view as
@@ -205,10 +227,13 @@ use pubdb;
 create table source_t (a int, b int);
 create table excluded_t (a int);
 create publication pub database pubdb table source_t, excluded_t account view_alter_sub;
+create publication account_pub database * account view_alter_sub;
 -- @session
 
 -- @session:id=2&user=view_alter_sub:admin&password=111
 create database subdb from view_alter_pub publication pub;
+create database account_subdb from view_alter_pub publication account_pub;
+drop database account_subdb;
 create database localdb;
 use localdb;
 create table local_source_t (a int);
@@ -313,6 +338,7 @@ drop database subdb;
 -- @session:id=1&user=view_alter_pub:admin&password=111
 drop publication pub2;
 drop database pubdb2;
+drop publication account_pub;
 drop publication pub;
 drop database pubdb;
 -- @session
