@@ -6593,6 +6593,18 @@ select_lock_opt:
             LockType:tree.SelectLockForUpdate,
         }
     }
+|   FOR SHARE
+    {
+        $$ = &tree.SelectLockInfo{
+            LockType:tree.SelectLockForShare,
+        }
+    }
+|   LOCK IN SHARE MODE
+    {
+        $$ = &tree.SelectLockInfo{
+            LockType:tree.SelectLockForShare,
+        }
+    }
 
 select_with_parens:
     '(' select_no_parens ')'
