@@ -662,7 +662,7 @@ func mysqlSelectClauseReferencesOuterQualifier(
 	}
 	if selectStmt.From != nil {
 		for _, tableExpr := range selectStmt.From.Tables {
-			if mysqlTableExprReferencesOuterQualifier(tableExpr, qualifiers, localShadowed) {
+			if mysqlTableExprReferencesOuterQualifier(tableExpr, qualifiers, shadowed) {
 				return true
 			}
 		}
@@ -727,7 +727,10 @@ func mysqlTableExprReferencesOuterQualifier(
 			return true
 		}
 		if condition, ok := tableExpr.Cond.(*tree.OnJoinCond); ok {
-			return mysqlExprReferencesOuterQualifier(condition.Expr, qualifiers, shadowed)
+			onShadowed := mysqlCloneNames(shadowed)
+			mysqlCollectLocalTableQualifiers(tableExpr.Left, onShadowed)
+			mysqlCollectLocalTableQualifiers(tableExpr.Right, onShadowed)
+			return mysqlExprReferencesOuterQualifier(condition.Expr, qualifiers, onShadowed)
 		}
 	case *tree.ApplyTableExpr:
 		return mysqlTableExprReferencesOuterQualifier(tableExpr.Left, qualifiers, shadowed) ||

@@ -124,6 +124,7 @@ func TestUpdateRejectsDirectTargetTableSubqueries(t *testing.T) {
 		"UPDATE nation AS dst SET n_name = (SELECT max(dst.n_name) FROM nation AS dst)",
 		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src WHERE EXISTS (SELECT 1 FROM nation AS dst ORDER BY dst.n_nationkey))",
 		"UPDATE nation AS dst SET n_name = ((SELECT max(src.n_name) FROM nation AS src WHERE src.n_nationkey <= dst.n_nationkey) UNION ALL (SELECT max(other.n_name) FROM nation AS other))",
+		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src JOIN nation2 AS dst ON dst.n_nationkey = src.n_nationkey)",
 	}
 	for _, sql := range tests {
 		requireMySQLDMLCompatibilityError(
@@ -247,6 +248,7 @@ func TestMySQLDMLCompatibilityAllowsLegalShapes(t *testing.T) {
 		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src WHERE src.n_nationkey <= dst.n_nationkey)",
 		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src WHERE EXISTS (SELECT 1 FROM region WHERE src.n_regionkey = dst.n_regionkey))",
 		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src ORDER BY dst.n_nationkey LIMIT 1)",
+		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src JOIN region AS r ON r.r_regionkey = dst.n_regionkey, nation2 AS dst)",
 		"DELETE FROM nation WHERE n_nationkey IN (SELECT n_nationkey FROM (SELECT n_nationkey FROM nation) AS materialized_nation)",
 	}
 	for _, sql := range tests {
