@@ -54,6 +54,19 @@ func requireMySQLDMLCompatibilityError(t *testing.T, sql string, code uint16, me
 	require.Equal(t, message, moErr.Error())
 }
 
+func requireMySQLUpdateTargetSubqueryCompatible(t *testing.T, sql string) {
+	t.Helper()
+	ctx := NewMockCompilerContext(true)
+	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	updateStmt, ok := stmt.(*tree.Update)
+	require.True(t, ok)
+	tblInfo, err := getUpdateTableInfo(ctx, updateStmt)
+	require.NoError(t, err)
+	require.NoError(t, validateUpdateTargetSubqueries(ctx, updateStmt, tblInfo.objRef, tblInfo.tableDefs))
+}
+
 func TestMultiTableUpdateRejectsOrderByAndLimit(t *testing.T) {
 	requireMySQLDMLCompatibilityError(
 		t,
@@ -110,6 +123,7 @@ func TestUpdateRejectsDirectTargetTableSubqueries(t *testing.T) {
 		"UPDATE nation SET n_name = 'x' WHERE EXISTS (SELECT 1 FROM region JOIN nation ON region.r_regionkey = nation.n_regionkey)",
 		"UPDATE nation AS dst SET n_name = (SELECT max(dst.n_name) FROM nation AS dst)",
 		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src WHERE EXISTS (SELECT 1 FROM nation AS dst ORDER BY dst.n_nationkey))",
+		"UPDATE nation AS dst SET n_name = ((SELECT max(src.n_name) FROM nation AS src WHERE src.n_nationkey <= dst.n_nationkey) UNION ALL (SELECT max(other.n_name) FROM nation AS other))",
 	}
 	for _, sql := range tests {
 		requireMySQLDMLCompatibilityError(
@@ -164,6 +178,29 @@ func TestMySQLDMLCompatibilityHelpers(t *testing.T) {
 	require.Equal(t, map[string]struct{}{"first_alias": {}}, qualifiedTargets[firstSameNameTarget])
 	require.Equal(t, map[string]struct{}{"second_alias": {}}, qualifiedTargets[secondSameNameTarget])
 
+	outerQualifiers := map[string]struct{}{"dst": {}}
+	outerColumn := func() tree.Expr {
+		return tree.NewUnresolvedName(tree.NewCStr("dst", 1), tree.NewCStr("n_nationkey", 1))
+	}
+	otherColumn := func() tree.Expr {
+		return tree.NewUnresolvedName(tree.NewCStr("src", 1), tree.NewCStr("n_nationkey", 1))
+	}
+	selectWrapper := &tree.Select{Select: &tree.SelectClause{}}
+	require.False(t, mysqlSelectWrapperReferencesOuterQualifier(selectWrapper, outerQualifiers, nil))
+	selectWrapper.TimeWindow = &tree.TimeWindow{Interval: &tree.Interval{Val: outerColumn()}}
+	require.True(t, mysqlSelectWrapperReferencesOuterQualifier(selectWrapper, outerQualifiers, nil))
+	selectWrapper.TimeWindow = &tree.TimeWindow{
+		Interval: &tree.Interval{Val: otherColumn()},
+		Sliding:  &tree.Sliding{Val: outerColumn()},
+	}
+	require.True(t, mysqlSelectWrapperReferencesOuterQualifier(selectWrapper, outerQualifiers, nil))
+	selectWrapper.TimeWindow = &tree.TimeWindow{
+		Interval: &tree.Interval{Val: otherColumn()},
+		Sliding:  &tree.Sliding{Val: otherColumn()},
+		Fill:     &tree.Fill{Val: outerColumn()},
+	}
+	require.True(t, mysqlSelectWrapperReferencesOuterQualifier(selectWrapper, outerQualifiers, nil))
+
 	inherited := map[string]struct{}{"outer": {}}
 	visibleCTEs := mysqlCTENames(&tree.With{CTEs: []*tree.CTE{
 		nil,
@@ -209,10 +246,27 @@ func TestMySQLDMLCompatibilityAllowsLegalShapes(t *testing.T) {
 		"UPDATE nation SET n_name = (SELECT max(src.n_name) FROM nation AS src WHERE src.n_nationkey <= nation.n_nationkey)",
 		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src WHERE src.n_nationkey <= dst.n_nationkey)",
 		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src WHERE EXISTS (SELECT 1 FROM region WHERE src.n_regionkey = dst.n_regionkey))",
+		"UPDATE nation AS dst SET n_name = (SELECT max(src.n_name) FROM nation AS src ORDER BY dst.n_nationkey LIMIT 1)",
 		"DELETE FROM nation WHERE n_nationkey IN (SELECT n_nationkey FROM (SELECT n_nationkey FROM nation) AS materialized_nation)",
 	}
 	for _, sql := range tests {
 		_, err := buildMySQLDMLCompatibilityPlan(t, sql)
 		require.NoError(t, err, sql)
 	}
+}
+
+func TestUpdateTargetCompatibilityAllowsNestedJoinCorrelation(t *testing.T) {
+	requireMySQLUpdateTargetSubqueryCompatible(t, `
+		UPDATE nation AS dst
+		SET n_name = (
+			SELECT max(src.n_name)
+			FROM nation AS src
+			JOIN region AS r
+				ON EXISTS (
+					SELECT 1
+					FROM nation AS nested_src
+					WHERE nested_src.n_regionkey = dst.n_regionkey
+				)
+		)`,
+	)
 }
