@@ -398,6 +398,14 @@ func (bc *BindContext) mysqlSpecialColumnTypeForProject(colPos int32) *plan.Type
 	return bc.mysqlSpecialColumnTypeForExpr(bc.projects[colPos])
 }
 
+func (bc *BindContext) mysqlSpecialColumnTypesForBoundary() []*plan.Type {
+	typesByColumn := make([]*plan.Type, min(len(bc.headings), len(bc.projects)))
+	for i := range typesByColumn {
+		typesByColumn[i] = bc.mysqlSpecialColumnTypeForProject(int32(i))
+	}
+	return typesByColumn
+}
+
 func mysqlSpecialOrderTypesCompatible(left, right *plan.Type) bool {
 	return left != nil && right != nil && left.Id == right.Id && left.Enumvalues == right.Enumvalues
 }

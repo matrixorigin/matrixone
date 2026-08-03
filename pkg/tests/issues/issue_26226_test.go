@@ -49,10 +49,13 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 			"create view " + db + ".v as select distinct flags from " + db + ".t",
 			"create view " + db + ".v_order as select flags from " + db + ".t order by flags",
 			"create view " + db + ".v_group as select flags from " + db + ".t group by flags",
-			"create view " + db + ".v_derived as select flags from (select flags from " + db + ".t) d",
-			"create view " + db + ".v_cte as with d as (select flags from " + db + ".t) select flags from d",
+			"create view " + db + ".v_derived as select flags from (select id, flags from " + db + ".t) d where id = 2",
+			"create view " + db + ".v_cte as with d as (select id, flags from " + db + ".t) select flags from d where id = 2",
 			"create view " + db + ".v_union as select flags from " + db + ".t union all select flags from " + db + ".t",
 			"create table " + db + ".copied as select flags from " + db + ".v_raw",
+			"create table " + db + ".copied_derived as select flags from " + db + ".v_derived",
+			"create table " + db + ".copied_cte as select flags from " + db + ".v_cte",
+			"create table " + db + ".copied_union as select flags from " + db + ".v_union",
 			"create table " + db + ".inserted (flags set('', 'a'))",
 			"insert into " + db + ".inserted select flags from " + db + ".v_raw",
 			"create table " + db + ".expr_src (flags set('a', 'b'))",
@@ -76,34 +79,49 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 		require.Equal(t, 1, baseCount)
 		require.Equal(t, baseCount, viewCount)
 		for _, test := range []struct {
-			viewName string
-			dataType string
+			tableName string
+			dataType  string
 		}{
-			{viewName: "v_raw", dataType: "set"},
-			{viewName: "v", dataType: "set"},
-			{viewName: "v_order", dataType: "set"},
-			{viewName: "v_group", dataType: "set"},
-			{viewName: "v_derived", dataType: "set"},
-			{viewName: "v_cte", dataType: "set"},
-			{viewName: "v_union", dataType: "varchar"},
+			{tableName: "v_raw", dataType: "set"},
+			{tableName: "v", dataType: "set"},
+			{tableName: "v_order", dataType: "set"},
+			{tableName: "v_group", dataType: "set"},
+			{tableName: "v_derived", dataType: "set"},
+			{tableName: "v_cte", dataType: "set"},
+			{tableName: "v_union", dataType: "varchar"},
+			{tableName: "copied_derived", dataType: "set"},
+			{tableName: "copied_cte", dataType: "set"},
+			{tableName: "copied_union", dataType: "varchar"},
 		} {
 			var dataType string
 			require.NoError(t, dbConn.QueryRowContext(ctx,
 				"select data_type from information_schema.columns "+
 					"where table_schema = ? and table_name = ? and column_name = 'flags'",
-				db, test.viewName).Scan(&dataType))
-			require.Equal(t, test.dataType, strings.ToLower(dataType), test.viewName)
+				db, test.tableName).Scan(&dataType))
+			require.Equal(t, test.dataType, strings.ToLower(dataType), test.tableName)
 		}
 
 		for _, query := range []string{
 			"select cast(flags as unsigned) from " + db + ".t where id = 2",
 			"select cast(flags as unsigned) from " + db + ".v_raw",
+			"select cast(flags as unsigned) from " + db + ".v_derived",
+			"select cast(flags as unsigned) from " + db + ".v_cte",
 			"select cast(flags as unsigned) from " + db + ".copied",
+			"select cast(flags as unsigned) from " + db + ".copied_derived",
+			"select cast(flags as unsigned) from " + db + ".copied_cte",
 			"select cast(flags as unsigned) from " + db + ".inserted",
 		} {
 			var bitmap uint64
 			require.NoError(t, dbConn.QueryRowContext(ctx, query).Scan(&bitmap))
 			require.Equal(t, uint64(1), bitmap, query)
+		}
+		for _, query := range []string{
+			"select concat(flags, 'x') from " + db + ".v_derived",
+			"select concat(flags, 'x') from " + db + ".v_cte",
+		} {
+			var visibleValue string
+			require.NoError(t, dbConn.QueryRowContext(ctx, query).Scan(&visibleValue))
+			require.Equal(t, "x", visibleValue, query)
 		}
 
 		var nestedBitmap uint64

@@ -408,6 +408,10 @@ type BindContext struct {
 	// The generated plan consumes the provenance by materializing an ordinary
 	// numeric sort expression, so this metadata never crosses the plan wire.
 	mysqlSpecialOrderTypes map[int32]*plan.Type
+	// restoreViewMySQLSpecialTypes is inherited only while rebinding a persisted
+	// View. It lets transparent derived/CTE query boundaries expose their raw
+	// ENUM/SET values without changing ordinary query-boundary behavior.
+	restoreViewMySQLSpecialTypes bool
 
 	//cteByName saves all cte definitions in the current stmt
 	cteByName map[string]*CTERef

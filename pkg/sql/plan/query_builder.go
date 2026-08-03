@@ -3975,6 +3975,13 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	if err != nil {
 		return
 	}
+	if subCtx.restoreViewMySQLSpecialTypes {
+		nodeID, err = builder.appendMySQLSpecialTypeBoundary(
+			nodeID, subCtx, subCtx.mysqlSpecialColumnTypesForBoundary())
+		if err != nil {
+			return
+		}
+	}
 
 	if subCtx.hasSingleRow {
 		ctx.hasSingleRow = true
@@ -8792,6 +8799,7 @@ func (builder *QueryBuilder) bindView(
 		return 0, nil
 	}
 	viewCtx := NewBindContext(builder, nil)
+	viewCtx.restoreViewMySQLSpecialTypes = true
 	viewCtx.snapshot = snapshot
 	viewCtx.lower = ctx.lower
 
@@ -8872,7 +8880,13 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return
 	}
-	nodeID, err = builder.appendViewMySQLSpecialTypeBoundary(nodeID, viewCtx)
+	viewTypes := make([]*plan.Type, len(viewCtx.headings))
+	for i := range viewTypes {
+		if i < len(tableDef.Cols) && tableDef.Cols[i] != nil && isEnumOrSetPlanType(&tableDef.Cols[i].Typ) {
+			viewTypes[i] = &tableDef.Cols[i].Typ
+		}
+	}
+	nodeID, err = builder.appendMySQLSpecialTypeBoundary(nodeID, viewCtx, viewTypes)
 	if err != nil {
 		return
 	}
@@ -8889,19 +8903,26 @@ func (builder *QueryBuilder) bindView(
 	return
 }
 
-// appendViewMySQLSpecialTypeBoundary restores ENUM/SET only after the complete
-// view plan. Semantic operators inside the view must continue to consume the
-// SQL-visible value because index-to-value conversion is not always injective.
-func (builder *QueryBuilder) appendViewMySQLSpecialTypeBoundary(nodeID int32, ctx *BindContext) (int32, error) {
+// appendMySQLSpecialTypeBoundary restores transparent ENUM/SET outputs only
+// after a complete query boundary. Semantic operators inside the query must
+// continue to consume the SQL-visible value because index-to-value conversion
+// is not always injective.
+func (builder *QueryBuilder) appendMySQLSpecialTypeBoundary(
+	nodeID int32, ctx *BindContext, targetTypes []*plan.Type,
+) (int32, error) {
 	visibleProjects := min(len(ctx.headings), len(ctx.projects), len(ctx.results))
 	rootNode := builder.qry.Nodes[nodeID]
 	canExposeRaw := rootNode.NodeType == plan.Node_PROJECT &&
 		len(rootNode.BindingTags) == 1 && rootNode.BindingTags[0] == ctx.projectTag && ctx.resultTag == 0
 	if canExposeRaw {
 		rootVisibleProjects := min(len(ctx.headings), len(rootNode.ProjectList))
+		allSpecialTypesRestored := true
 		for i := 0; i < rootVisibleProjects; i++ {
 			sourceExpr, ok := mysqlSpecialTypeSourceExpr(rootNode.ProjectList[i])
 			if !ok {
+				if i < len(targetTypes) && isEnumOrSetPlanType(targetTypes[i]) {
+					allSpecialTypesRestored = false
+				}
 				continue
 			}
 			restored := DeepCopyExpr(sourceExpr)
@@ -8913,7 +8934,9 @@ func (builder *QueryBuilder) appendViewMySQLSpecialTypeBoundary(nodeID int32, ct
 				ctx.results[i] = restored
 			}
 		}
-		return nodeID, nil
+		if allSpecialTypesRestored {
+			return nodeID, nil
+		}
 	}
 
 	sourceTag := ctx.rootTag()
@@ -8924,8 +8947,11 @@ func (builder *QueryBuilder) appendViewMySQLSpecialTypeBoundary(nodeID int32, ct
 	needsBoundary := false
 
 	for i := 0; i < visibleProjects; i++ {
-		targetType, ok := mysqlSpecialTypeSourceType(ctx.projects[i])
-		if !ok {
+		targetType := ctx.mysqlSpecialColumnTypeForProject(int32(i))
+		if targetType == nil && i < len(targetTypes) && isEnumOrSetPlanType(targetTypes[i]) {
+			targetType = DeepCopyType(targetTypes[i])
+		}
+		if targetType == nil {
 			continue
 		}
 
@@ -8977,6 +9003,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		builder.isForUpdate = false
 		nodeID, err = builder.bindSelect(tbl, subCtx, false)
 		builder.isForUpdate = savedIsForUpdate
+		if err == nil && subCtx.restoreViewMySQLSpecialTypes {
+			nodeID, err = builder.appendMySQLSpecialTypeBoundary(
+				nodeID, subCtx, subCtx.mysqlSpecialColumnTypesForBoundary())
+		}
 		if subCtx.isCorrelated {
 			return 0, moerr.NewNYI(builder.GetContext(), "correlated subquery in FROM clause")
 		}

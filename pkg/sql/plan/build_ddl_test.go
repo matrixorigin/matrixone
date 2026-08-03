@@ -569,6 +569,63 @@ func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {
 		"a SET column nested in CONCAT must keep its SQL-visible string semantics")
 }
 
+func TestViewRebindPreservesTransparentMySQLSpecialColumnTypes(t *testing.T) {
+	tests := []struct {
+		name            string
+		selectSQL       string
+		wantSpecialType bool
+	}{
+		{name: "derived table", selectSQL: "select priority, flags from (select priority, flags from nation) d", wantSpecialType: true},
+		{name: "cte", selectSQL: "with d as (select priority, flags from nation) select priority, flags from d", wantSpecialType: true},
+		{name: "union all", selectSQL: "select priority, flags from nation union all select priority, flags from nation"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			createViewSQL := "create view v as " + test.selectSQL
+			ctx := NewMockCompilerContext(false)
+			addMySQLSpecialTypeColumns(ctx)
+			createCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createViewSQL}
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createViewSQL, 1)
+			require.NoError(t, err)
+			createPlan, err := BuildPlan(createCtx, stmt, false)
+			stmt.Free()
+			require.NoError(t, err)
+
+			viewDef := DeepCopyTableDef(createPlan.GetDdl().GetCreateView().GetTableDef(), true)
+			viewDef.Name = "v"
+			viewDef.DbName = "tpch"
+			viewDef.TableType = catalog.SystemViewRel
+			ctx.tables[viewDef.Name] = viewDef
+			ctx.objects[viewDef.Name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: viewDef.Name}
+
+			stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
+				"create table copied as select priority, flags from v", 1)
+			require.NoError(t, err)
+			ctasPlan, err := BuildPlan(ctx, stmt, false)
+			stmt.Free()
+			require.NoError(t, err)
+			cols := ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			require.GreaterOrEqual(t, len(cols), 2)
+			if test.wantSpecialType {
+				require.True(t, isEnumPlanType(&cols[0].Typ))
+				require.True(t, isSetPlanType(&cols[1].Typ))
+				for _, node := range ctasPlan.GetQuery().GetNodes() {
+					for _, project := range node.GetProjectList() {
+						if fn := project.GetF(); fn != nil {
+							require.NotEqual(t, moSetCastValueToIndexFun, fn.GetFunc().GetObjName(),
+								"transparent View CTAS must not round-trip a SET bitmap")
+						}
+					}
+				}
+			} else {
+				require.Equal(t, int32(types.T_varchar), cols[0].Typ.GetId())
+				require.Equal(t, int32(types.T_varchar), cols[1].Typ.GetId())
+			}
+		})
+	}
+}
+
 func TestViewSpecialTypeBoundaryPreservesDistinctVisibleValues(t *testing.T) {
 	const createViewSQL = "create view v_distinct_set as select distinct flags from nation"
 	ctx := NewMockCompilerContext(false)

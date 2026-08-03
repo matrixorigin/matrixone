@@ -66,6 +66,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 			bc.viewChain = append([]string{}, parent.viewChain...)
 		}
 		bc.directView = parent.directView
+		bc.restoreViewMySQLSpecialTypes = parent.restoreViewMySQLSpecialTypes
 	}
 
 	return bc
