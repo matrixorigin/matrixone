@@ -3649,7 +3649,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
-	adjustControlFlowStringMetadata(name, args, argsType, &returnType)
+	adjustControlFlowMetadata(name, args, argsType, &returnType, argsCastType)
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage
 	switch name {
@@ -3998,38 +3998,63 @@ func utcFunctionFSPFromPlanExpr(ctx context.Context, name string, expr *Expr) (i
 	return int32(fsp.I64Val), nil
 }
 
-func adjustControlFlowStringMetadata(name string, args []*Expr, argTypes []types.Type, returnType *types.Type) {
-	if returnType.Oid != types.T_varchar {
+// adjustControlFlowMetadata keeps MySQL-visible metadata for conditional
+// expressions precise after overload selection.  The overload resolver only
+// sees types, whereas a literal branch has a narrower domain than its default
+// INT64 representation.  Keep this adjustment here, rather than in the
+// shared type-check helpers, so column/parameter expressions retain their
+// conservative runtime capacity and unrelated functions are unaffected.
+func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type, returnType *types.Type, argsCastType []types.Type) {
+	valueIndexes := controlFlowValueIndexes(name, len(args))
+	if len(valueIndexes) == 0 {
 		return
 	}
 
-	valueIndexes := make([]int, 0, len(args))
+	changed := false
+	switch {
+	case returnType.Oid == types.T_varchar:
+		changed = adjustControlFlowStringNumericMetadata(args, argTypes, valueIndexes, returnType)
+		changed = adjustControlFlowTemporalStringMetadata(argTypes, valueIndexes, returnType) || changed
+	case returnType.Oid.IsDecimal():
+		changed = adjustControlFlowDecimalLiteralMetadata(args, argTypes, valueIndexes, returnType)
+	}
+
+	if changed && len(argsCastType) == len(args) {
+		for _, idx := range valueIndexes {
+			argsCastType[idx] = *returnType
+		}
+	}
+}
+
+func controlFlowValueIndexes(name string, argsLength int) []int {
+	valueIndexes := make([]int, 0, argsLength)
 	switch name {
 	case "if", "iff":
-		if len(args) == 3 {
+		if argsLength == 3 {
 			valueIndexes = append(valueIndexes, 1, 2)
 		}
 	case "case":
-		for i := 1; i < len(args); i += 2 {
+		for i := 1; i < argsLength; i += 2 {
 			valueIndexes = append(valueIndexes, i)
 		}
-		if len(args)%2 == 1 {
-			valueIndexes = append(valueIndexes, len(args)-1)
+		if argsLength%2 == 1 {
+			valueIndexes = append(valueIndexes, argsLength-1)
 		}
 	case "coalesce":
-		for i := range args {
+		for i := 0; i < argsLength; i++ {
 			valueIndexes = append(valueIndexes, i)
 		}
-	default:
-		return
 	}
+	return valueIndexes
+}
 
+func adjustControlFlowStringNumericMetadata(args []*Expr, argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
 	hasString := false
 	hasNumeric := false
 	width := int32(0)
 	for _, idx := range valueIndexes {
 		if idx >= len(argTypes) {
-			return
+			return false
 		}
 		typ := argTypes[idx]
 		if typ.Oid.IsMySQLString() {
@@ -4044,7 +4069,134 @@ func adjustControlFlowStringMetadata(name string, args []*Expr, argTypes []types
 		}
 	}
 	if hasString && hasNumeric && width > 0 {
+		changed := returnType.Width != width
 		returnType.Width = width
+		return changed
+	}
+	return false
+}
+
+func adjustControlFlowTemporalStringMetadata(argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
+	hasString := false
+	hasTemporal := false
+	width := int32(0)
+	for _, idx := range valueIndexes {
+		if idx >= len(argTypes) {
+			return false
+		}
+		typ := argTypes[idx]
+		if typ.Oid.IsMySQLString() {
+			hasString = true
+			if typ.Width > width {
+				width = typ.Width
+			}
+			continue
+		}
+		if temporalWidth, ok := temporalDisplayWidthForVarchar(typ); ok {
+			hasTemporal = true
+			if temporalWidth > width {
+				width = temporalWidth
+			}
+		}
+	}
+	if hasString && hasTemporal && width > 0 {
+		changed := returnType.Width != width
+		returnType.Width = width
+		return changed
+	}
+	return false
+}
+
+func temporalDisplayWidthForVarchar(typ types.Type) (int32, bool) {
+	switch typ.Oid {
+	case types.T_date:
+		return 10, true
+	case types.T_datetime, types.T_timestamp:
+		if typ.Scale > 0 {
+			return 20 + typ.Scale, true
+		}
+		return 19, true
+	default:
+		return 0, false
+	}
+}
+
+func adjustControlFlowDecimalLiteralMetadata(args []*Expr, argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
+	hasDecimal := false
+	hasIntegerLiteral := false
+	maxIntegral := int32(0)
+	maxScale := int32(0)
+
+	for _, idx := range valueIndexes {
+		if idx >= len(argTypes) {
+			return false
+		}
+		typ := argTypes[idx]
+		switch {
+		case typ.Oid.IsDecimal():
+			hasDecimal = true
+			integral := typ.Width - typ.Scale
+			if integral > maxIntegral {
+				maxIntegral = integral
+			}
+			if typ.Scale > maxScale {
+				maxScale = typ.Scale
+			}
+		case typ.Oid.IsInteger():
+			integral, literal := decimalIntegerWidth(args[idx], typ)
+			if integral > maxIntegral {
+				maxIntegral = integral
+			}
+			hasIntegerLiteral = hasIntegerLiteral || literal
+		}
+	}
+
+	if !hasDecimal || !hasIntegerLiteral {
+		return false
+	}
+	precision := maxIntegral + maxScale
+	// This is a metadata narrowing pass.  If another branch needs more room
+	// than the overload already selected, leave its conservative type intact.
+	if precision <= 0 || precision > returnType.Width {
+		return false
+	}
+	changed := returnType.Width != precision || returnType.Scale != maxScale
+	returnType.Width = precision
+	returnType.Scale = maxScale
+	return changed
+}
+
+func decimalIntegerWidth(expr *Expr, typ types.Type) (int32, bool) {
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull {
+		return integerMetadataWidth(typ.Oid), false
+	}
+
+	decimalDigits := func(value string) int32 {
+		if strings.HasPrefix(value, "-") {
+			value = value[1:]
+		}
+		return int32(len(value))
+	}
+	switch value := lit.Value.(type) {
+	case *plan.Literal_I8Val:
+		return decimalDigits(strconv.FormatInt(int64(value.I8Val), 10)), true
+	case *plan.Literal_I16Val:
+		return decimalDigits(strconv.FormatInt(int64(value.I16Val), 10)), true
+	case *plan.Literal_I32Val:
+		return decimalDigits(strconv.FormatInt(int64(value.I32Val), 10)), true
+	case *plan.Literal_I64Val:
+		return decimalDigits(strconv.FormatInt(value.I64Val, 10)), true
+	case *plan.Literal_U8Val:
+		return int32(len(strconv.FormatUint(uint64(value.U8Val), 10))), true
+	case *plan.Literal_U16Val:
+		return int32(len(strconv.FormatUint(uint64(value.U16Val), 10))), true
+	case *plan.Literal_U32Val:
+		return int32(len(strconv.FormatUint(uint64(value.U32Val), 10))), true
+	case *plan.Literal_U64Val:
+		return int32(len(strconv.FormatUint(value.U64Val, 10))), true
+	default:
+		return integerMetadataWidth(typ.Oid), false
 	}
 }
 

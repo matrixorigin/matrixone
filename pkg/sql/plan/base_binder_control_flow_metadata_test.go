@@ -65,6 +65,104 @@ func TestBindControlFlowMetadata(t *testing.T) {
 		require.True(t, expr.Typ.NotNullable)
 	})
 
+	for _, test := range []struct {
+		name     string
+		function string
+		args     func(*planpb.Expr) []*planpb.Expr
+	}{
+		{
+			name:     "if decimal and integer literal keeps decimal precision",
+			function: "if",
+			args: func(decimal *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{makePlan2BoolConstExprWithType(true), decimal, makePlan2Int64ConstExprWithType(0)}
+			},
+		},
+		{
+			name:     "case decimal and integer literal keeps decimal precision",
+			function: "case",
+			args: func(decimal *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{makePlan2BoolConstExprWithType(true), decimal, makePlan2Int64ConstExprWithType(0)}
+			},
+		},
+		{
+			name:     "coalesce decimal and integer literal keeps decimal precision",
+			function: "coalesce",
+			args: func(decimal *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{decimal, makePlan2Int64ConstExprWithType(0)}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			decimal, err := makePlan2DecimalExprWithType(ctx, "12.50")
+			require.NoError(t, err)
+			decimal.Typ.Width = 8
+			decimal.Typ.Scale = 2
+
+			expr, err := BindFuncExprImplByPlanExpr(ctx, test.function, test.args(decimal))
+			require.NoError(t, err)
+			require.True(t, types.T(expr.Typ.Id).IsDecimal())
+			require.Equal(t, int32(8), expr.Typ.Width)
+			require.Equal(t, int32(2), expr.Typ.Scale)
+			for _, arg := range expr.GetF().Args {
+				if types.T(arg.Typ.Id).IsDecimal() {
+					require.Equal(t, int32(8), arg.Typ.Width)
+					require.Equal(t, int32(2), arg.Typ.Scale)
+				}
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name  string
+		args  func(*planpb.Expr) []*planpb.Expr
+		width int32
+	}{
+		{
+			name: "coalesce date and string uses date display width",
+			args: func(temporal *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{temporal, makePlan2StringConstExprWithType("fallback")}
+			},
+			width: 10,
+		},
+		{
+			name: "coalesce datetime and string uses datetime display width",
+			args: func(temporal *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{temporal, makePlan2StringConstExprWithType("fallback")}
+			},
+			width: 19,
+		},
+		{
+			name: "coalesce timestamp fsp and string uses timestamp display width",
+			args: func(temporal *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{temporal, makePlan2StringConstExprWithType("fallback")}
+			},
+			width: 26,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var temporal *planpb.Expr
+			switch test.width {
+			case 10:
+				temporal = makePlan2DateConstExprWithType(0)
+			case 19:
+				temporal = makePlan2DateTimeConstExprWithType(0)
+			default:
+				temporal = makePlan2TimestampConstExprWithType(0)
+				temporal.Typ.Scale = 6
+			}
+
+			expr, err := BindFuncExprImplByPlanExpr(ctx, "coalesce", test.args(temporal))
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
+			require.Equal(t, test.width, expr.Typ.Width)
+			for _, arg := range expr.GetF().Args {
+				if types.T(arg.Typ.Id) == types.T_varchar {
+					require.Equal(t, test.width, arg.Typ.Width)
+				}
+			}
+		})
+	}
+
 	t.Run("greatest remains nullable in metadata", func(t *testing.T) {
 		expr, err := BindFuncExprImplByPlanExpr(ctx, "greatest", []*planpb.Expr{
 			makePlan2DateConstExprWithType(0),

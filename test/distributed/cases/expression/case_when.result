@@ -531,3 +531,39 @@ var_trailing_null  ¦  VARBINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 var_middle_null  ¦  VARBINARY(4)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop view v_case_binary_null;
 drop table t_flow_metadata;
+drop table if exists t_conditional_literal_temporal;
+create table t_conditional_literal_temporal (
+id int primary key,
+d decimal(8,2),
+dte date,
+dt datetime,
+ts timestamp(6)
+);
+insert into t_conditional_literal_temporal values
+(1, 12.50, '2024-01-01', '2024-01-01 01:02:03', '2024-01-01 01:02:03.123456');
+drop view if exists v_conditional_literal_temporal;
+create view v_conditional_literal_temporal as
+select case when id = 1 then d else 0 end as d_case_literal,
+coalesce(dte, '2024-01-01') as dte_coalesce,
+coalesce(dt, '2024-01-01') as dt_coalesce,
+coalesce(ts, '2024-01-01') as ts_coalesce
+from t_conditional_literal_temporal;
+desc v_conditional_literal_temporal;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+d_case_literal  ¦  DECIMAL(8,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+dte_coalesce  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+dt_coalesce  ¦  VARCHAR(19)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+ts_coalesce  ¦  VARCHAR(26)  ¦  NO  ¦    ¦  null  ¦    ¦
+drop view if exists v_conditional_literal_temporal_nested;
+create view v_conditional_literal_temporal_nested as
+select d_case_literal, dte_coalesce, dt_coalesce, ts_coalesce
+from v_conditional_literal_temporal;
+desc v_conditional_literal_temporal_nested;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+d_case_literal  ¦  DECIMAL(8,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+dte_coalesce  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+dt_coalesce  ¦  VARCHAR(19)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+ts_coalesce  ¦  VARCHAR(26)  ¦  NO  ¦    ¦  null  ¦    ¦
+drop view v_conditional_literal_temporal_nested;
+drop view v_conditional_literal_temporal;
+drop table t_conditional_literal_temporal;

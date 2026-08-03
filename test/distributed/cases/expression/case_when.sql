@@ -416,3 +416,36 @@ desc v_case_binary_null;
 drop view v_case_binary_null;
 
 drop table t_flow_metadata;
+
+-- @case
+-- @desc:test conditional decimal literal and temporal string view metadata, including nested views
+-- @label:bvt
+drop table if exists t_conditional_literal_temporal;
+create table t_conditional_literal_temporal (
+    id int primary key,
+    d decimal(8,2),
+    dte date,
+    dt datetime,
+    ts timestamp(6)
+);
+insert into t_conditional_literal_temporal values
+    (1, 12.50, '2024-01-01', '2024-01-01 01:02:03', '2024-01-01 01:02:03.123456');
+
+drop view if exists v_conditional_literal_temporal;
+create view v_conditional_literal_temporal as
+select case when id = 1 then d else 0 end as d_case_literal,
+       coalesce(dte, '2024-01-01') as dte_coalesce,
+       coalesce(dt, '2024-01-01') as dt_coalesce,
+       coalesce(ts, '2024-01-01') as ts_coalesce
+from t_conditional_literal_temporal;
+desc v_conditional_literal_temporal;
+
+drop view if exists v_conditional_literal_temporal_nested;
+create view v_conditional_literal_temporal_nested as
+select d_case_literal, dte_coalesce, dt_coalesce, ts_coalesce
+from v_conditional_literal_temporal;
+desc v_conditional_literal_temporal_nested;
+
+drop view v_conditional_literal_temporal_nested;
+drop view v_conditional_literal_temporal;
+drop table t_conditional_literal_temporal;
