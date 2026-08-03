@@ -271,33 +271,39 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 	}
 	spillDirectInRecoveryChunks := func(bat *batch.Batch, admissionErr error) error {
 		lease := ctr.hashmapBuilder.expressionLease
-		if bat == nil || lease == nil || !lease.recoveryReady || lease.recoveryRows <= 0 ||
-			bat.RowCount() <= lease.recoveryRows {
+		if bat == nil || lease == nil || !lease.recoveryReady || lease.recoveryRows <= 0 {
 			return admissionErr
 		}
+		allocated := bat.Allocated()
+		if allocated < 0 {
+			return process.ErrHashBuildBudgetInvalid
+		}
+		sourceBytes := uint64(allocated)
 
 		chunks := int64(0)
+		probes := int64(0)
+		chunkCeiling := min(bat.RowCount(), lease.recoveryRows)
 		for start := 0; start < bat.RowCount(); {
 			remaining := bat.RowCount() - start
-			chunkRows := min(remaining, lease.recoveryRows)
-			advanced := false
+			chunkRows := min(remaining, chunkCeiling)
+			var window *batch.Batch
 			for chunkRows > 0 {
 				if err := checkHashBuildCanceled(proc); err != nil {
 					return err
 				}
-				window, err := bat.Window(start, start+chunkRows)
+				var err error
+				window, err = bat.Window(start, start+chunkRows)
 				if err != nil {
 					return err
 				}
-				need, err := spillBudgetBytes(window)
-				if err == nil {
-					need, err = spillRecoveryReservationBytes(need)
-				}
+				probes++
+				fits, err := ctr.directSpillWindowFitsRecovery(
+					window, sourceBytes, lease.Len())
 				if err != nil {
 					window.Clean(proc.Mp())
 					return err
 				}
-				if need > ctr.spillScratchBase {
+				if !fits {
 					window.Clean(proc.Mp())
 					if chunkRows == 1 {
 						return admissionErr
@@ -305,31 +311,29 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 					chunkRows = max(1, chunkRows/2)
 					continue
 				}
-				err = ensureDirectRecovery(window)
-				if err == nil {
-					err = spillBatch(window, false)
-				}
-				window.Clean(proc.Mp())
-				if err == nil {
-					start += chunkRows
-					chunks++
-					advanced = true
-					break
-				}
-				if !isHashBuildMemoryAdmission(err) {
-					return err
-				}
-				if chunkRows == 1 {
-					return err
-				}
-				chunkRows = max(1, chunkRows/2)
+				break
 			}
-			if !advanced {
+			if window == nil {
 				return admissionErr
 			}
+			chunkCeiling = chunkRows
+			err := ensureDirectRecovery(window)
+			if err == nil {
+				err = spillBatch(window, false)
+			}
+			window.Clean(proc.Mp())
+			// spillBatchBounded commits buckets incrementally. Once it starts,
+			// every error is terminal for this input window: retrying the same
+			// start would duplicate buckets already written before the error.
+			if err != nil {
+				return err
+			}
+			start += chunkRows
+			chunks++
 		}
 		analyzer.GetOpStats().AddExtraStat("HashBuildSpillRecoveryChunkFallbacks", 1)
 		analyzer.GetOpStats().AddExtraStat("HashBuildSpillRecoveryChunks", chunks)
+		analyzer.GetOpStats().AddExtraStat("HashBuildSpillRecoveryChunkProbes", probes)
 		return nil
 	}
 

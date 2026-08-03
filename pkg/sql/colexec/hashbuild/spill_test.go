@@ -118,6 +118,72 @@ func TestMarshalSpillRecordBuild(t *testing.T) {
 	})
 }
 
+func TestDirectSpillWindowRecoveryProof(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	need, err := spillBudgetBytes(nil)
+	require.NoError(t, err)
+	require.Zero(t, need)
+
+	empty := batch.NewWithSize(0)
+	need, err = spillBudgetBytes(empty)
+	require.NoError(t, err)
+	require.Zero(t, need)
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
+	bat.SetRowCount(3)
+	defer bat.Clean(proc.Mp())
+
+	fits, err := (*container)(nil).directSpillWindowFitsRecovery(bat, uint64(bat.Allocated()), 1)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	require.False(t, fits)
+
+	ctr := &container{}
+	fits, err = ctr.directSpillWindowFitsRecovery(bat, math.MaxUint64, 1)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	require.False(t, fits)
+
+	ctr.spillWriteBuf.Grow(1)
+	ctr.spillScratchBase = math.MaxUint64
+	fits, err = ctr.directSpillWindowFitsRecovery(bat, uint64(bat.Allocated()), 1)
+	require.NoError(t, err)
+	require.True(t, fits)
+
+	ctr.spillScratchBase = 0
+	fits, err = ctr.directSpillWindowFitsRecovery(bat, uint64(bat.Allocated()), 1)
+	require.NoError(t, err)
+	require.False(t, fits)
+
+	wide := batch.NewWithSize(1)
+	values := make([]int32, 20_000)
+	wide.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	wide.SetRowCount(len(values))
+	defer wide.Clean(proc.Mp())
+	ctr.spillHashValues = make([]uint64, 0, 10_000)
+	ctr.spillBucketRowIds = make([]int32, 0, 10_000)
+	ctr.spillKeyVecs = make([]*vector.Vector, 0, 1)
+	ctr.spillScratchBase = math.MaxUint64
+	fits, err = ctr.directSpillWindowFitsRecovery(wide, uint64(wide.Allocated()), 2)
+	require.NoError(t, err)
+	require.True(t, fits)
+
+	largeValue := strings.Repeat("x", 256<<10)
+	varlen := batch.NewWithSize(1)
+	varlen.Vecs[0] = testutil.MakeVarcharVector([]string{largeValue}, nil, proc.Mp())
+	varlen.SetRowCount(1)
+	defer varlen.Clean(proc.Mp())
+	ctr.spillHashValues = nil
+	ctr.spillBucketRowIds = nil
+	ctr.spillKeyVecs = nil
+	ctr.spillWriteBuf.Reset()
+	ctr.spillWriteBuf.Grow(64 << 10)
+	fits, err = ctr.directSpillWindowFitsRecovery(varlen, uint64(varlen.Allocated()), 1)
+	require.NoError(t, err)
+	require.True(t, fits)
+}
+
 func TestShouldSpillBatches(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

@@ -205,6 +205,21 @@ func spillBudgetBytes(bat *batch.Batch) (uint64, error) {
 	if bat == nil || bat.RowCount() <= 0 {
 		return 0, nil
 	}
+	allocated := bat.Allocated()
+	if allocated < 0 {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	return spillBudgetBytesWithInput(bat, uint64(allocated))
+}
+
+// spillBudgetBytesWithInput keeps the complete upstream allocation charged
+// while a read-only window is spilled. Batch.Window narrows vector capacities
+// after the first offset, but the original batch remains live until every
+// window finishes.
+func spillBudgetBytesWithInput(bat *batch.Batch, inputBytes uint64) (uint64, error) {
+	if bat == nil || bat.RowCount() <= 0 {
+		return 0, nil
+	}
 	rows := uint64(bat.RowCount())
 	selected, err := spillMaterializedBytes(bat)
 	if err != nil {
@@ -217,7 +232,60 @@ func spillBudgetBytes(bat *batch.Batch) (uint64, error) {
 	if selected, err = spillCheckedAdd(selected, materializationSlack); err != nil {
 		return 0, err
 	}
-	return spillPeakBudgetFor(rows, uint64(bat.Allocated()), selected, uint64(len(bat.Vecs)))
+	return spillPeakBudgetFor(rows, inputBytes, selected, uint64(len(bat.Vecs)))
+}
+
+// directSpillWindowFitsRecovery proves that spillBatchBounded can enter its
+// bucket loop without another memory admission. In addition to the steady
+// scratch need, cover allocate-copy-free overlaps for reusable classification
+// arrays and the marshal buffer that may still retain its previous capacity.
+func (ctr *container) directSpillWindowFitsRecovery(
+	bat *batch.Batch,
+	inputBytes uint64,
+	keyCount int,
+) (bool, error) {
+	if ctr == nil || bat == nil || bat.RowCount() <= 0 || keyCount <= 0 {
+		return false, process.ErrHashBuildBudgetInvalid
+	}
+	need, err := spillBudgetBytesWithInput(bat, inputBytes)
+	if err != nil {
+		return false, err
+	}
+	required, err := spillRecoveryReservationBytes(need)
+	if err != nil {
+		return false, err
+	}
+	overlap, err := spillCapacityReplacementOverlap(
+		bat.RowCount(),
+		keyCount,
+		cap(ctr.spillHashValues),
+		cap(ctr.spillBucketRowIds),
+		cap(ctr.spillKeyVecs),
+	)
+	if err != nil {
+		return false, err
+	}
+	peak, err := spillCheckedAdd(need, overlap)
+	if err != nil {
+		return false, err
+	}
+	if peak > required {
+		required = peak
+	}
+	marshalGrow, err := spillMarshalGrowBytes(bat)
+	if err != nil {
+		return false, err
+	}
+	if old := uint64(ctr.spillWriteBuf.Cap()); old > 0 && old < marshalGrow {
+		peak, err = spillCheckedAdd(need, old)
+		if err != nil {
+			return false, err
+		}
+		if peak > required {
+			required = peak
+		}
+	}
+	return required <= ctr.spillScratchBase, nil
 }
 
 // spillScratchBudgetBytes returns the incremental spill charge. A copied
