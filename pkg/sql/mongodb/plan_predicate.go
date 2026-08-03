@@ -137,8 +137,17 @@ func eligibleComparisonColumn(column *plan.MongoColumnMapping) bool {
 	switch types.T(column.MoType.Id) {
 	case types.T_bool,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_datetime, types.T_timestamp:
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		return true
+	case types.T_datetime, types.T_timestamp:
+		// BSON DateTime has millisecond precision. DATETIME/TIMESTAMP(0..2)
+		// normalize several distinct BSON instants to the same MO value, so a
+		// raw equality/comparison/IN predicate can be narrower than the residual.
+		// Keep those mappings residual-only until a preimage-range translation is
+		// implemented.
+		if column.MoType.Scale < 3 {
+			return false
+		}
 		return true
 	default:
 		// BSON int64/double values can collapse to the same FLOAT after
