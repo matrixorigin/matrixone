@@ -2236,14 +2236,6 @@ func (c *Compile) maybeDeleteMongoDBTableMapping(dbSource engine.Database, rel e
 	if err != nil || !isMongoDB {
 		return err
 	}
-	createSQL := icebergCreateSQLFromPlanTableDef(tableDef)
-	_, found, err := sqlmongodb.ParseCreateSQLEnvelope(c.proc.Ctx, createSQL)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return moerr.NewInternalError(c.proc.Ctx, "MongoDB external table is missing its catalog envelope")
-	}
 	accountID, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
 		return err

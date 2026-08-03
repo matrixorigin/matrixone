@@ -376,10 +376,12 @@ func TestMongoScanBatchAndStatementLimits(t *testing.T) {
 	})
 
 	t.Run("decoded duplicated projection exceeds batch", func(t *testing.T) {
+		smallDoc, err := bson.Marshal(bson.D{{Key: "payload", Value: bson.Binary{Data: []byte("fits")}}})
+		require.NoError(t, err)
 		payload := make([]byte, 256<<10)
 		doc, err := bson.Marshal(bson.D{{Key: "payload", Value: bson.Binary{Data: payload}}})
 		require.NoError(t, err)
-		cursor := &testCursor{docs: [][]byte{doc}}
+		cursor := &testCursor{docs: [][]byte{smallDoc, doc}}
 		deps, _ := testScanDependencies(cursor)
 		deps.Config.BatchRows = 10
 		deps.Config.MaxBatchBytes = 1 << 20
@@ -402,6 +404,10 @@ func TestMongoScanBatchAndStatementLimits(t *testing.T) {
 		scan := NewArgument().WithScan(spec)
 		scan.Dependencies = deps
 		require.NoError(t, scan.Prepare(proc))
+		first, err := scan.Call(proc)
+		require.NoError(t, err)
+		require.Equal(t, 1, first.Batch.RowCount())
+		require.NotEmpty(t, scan.ctr.pendingRaw)
 		_, err = scan.Call(proc)
 		require.True(t, mongodb.IsDecodedBatchBudgetExceeded(err))
 		require.Equal(t, 1, cursor.closed)
