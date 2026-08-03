@@ -1256,6 +1256,41 @@ func TestConsumeNextReleasesSnapshotOnAllocationFailure(t *testing.T) {
 	require.Equal(t, mp.Cap(), mp.CurrNB())
 }
 
+func TestConsumeNextReleasesSnapshotOnWriteFailure(t *testing.T) {
+	mp, err := mpool.NewMPool("fill-next-write-error", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer proc.Free()
+
+	payload := bytes.Repeat([]byte("b"), types.VarlenaInlineSize+1)
+	previousVec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, previousVec.PreExtend(1, mp))
+	previousVec.SetLength(1)
+	previousVec.SetNull(0)
+	previous := batch.NewWithSize(1)
+	previous.SetVector(0, previousVec)
+	previous.SetRowCount(1)
+
+	currentVec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, currentVec.PreExtend(2, mp))
+	currentVec.SetLength(2)
+	currentVec.SetNull(0)
+	require.NoError(t, vector.SetBytesAt(currentVec, 1, payload, mp))
+	current := batch.NewWithSize(1)
+	current.SetVector(0, currentVec)
+	current.SetRowCount(2)
+
+	ctr := &container{
+		bats:    []*batch.Batch{previous, current},
+		nextRun: [][]fillCoord{{{seq: 0, row: 1}}},
+	}
+	err = ctr.consumeNext(&Fill{ColLen: 1}, current, 1, proc)
+	require.ErrorContains(t, err, "vector idx out of range")
+	previous.Clean(mp)
+	current.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func (s *fillStubExpressionExecutor) TypeName() string {
 	return "fillStubExpressionExecutor"
 }
