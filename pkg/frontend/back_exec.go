@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1328,6 +1329,15 @@ func (backSes *backSession) SetUserDefinedVar(name string, value interface{}, sq
 		return moerr.NewInternalError(context.Background(), "do not support set user defined var in background exec")
 	}
 	return backSes.upstream.SetUserDefinedVar(name, value, sql)
+}
+
+func (backSes *backSession) setUserDefinedVarWithType(
+	name string, value interface{}, sql string, isBin bool, runtimeType types.T,
+) error {
+	if backSes.upstream == nil {
+		return moerr.NewInternalError(context.Background(), "do not support set user defined var in background exec")
+	}
+	return backSes.upstream.setUserDefinedVarWithType(name, value, sql, isBin, runtimeType)
 }
 
 func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {

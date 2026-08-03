@@ -3116,9 +3116,13 @@ func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matc
 
 // FillValuesOfParamsInPlan replaces the params by their values
 func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals []any) (*Plan, error) {
-	switch preparePlan.Plan.(type) {
-	case *plan.Plan_Tcl, *plan.Plan_Dcl:
-		return nil, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
+	switch pp := preparePlan.Plan.(type) {
+	case *plan.Plan_Tcl:
+		return nil, moerr.NewInvalidInput(ctx, "cannot prepare TCL statement")
+	case *plan.Plan_Dcl:
+		if pp.Dcl.GetSetVariables() == nil {
+			return nil, moerr.NewInvalidInput(ctx, "cannot prepare this DCL statement")
+		}
 	}
 	if err := ValidatePreparedPaginationParams(ctx, preparePlan, paramVals); err != nil {
 		return nil, err
@@ -3138,6 +3142,10 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 	case *plan.Plan_Query:
 		err := replaceParamVals(ctx, copied, paramVals)
 		if err != nil {
+			return nil, err
+		}
+	case *plan.Plan_Dcl:
+		if err := replaceParamVals(ctx, copied, paramVals); err != nil {
 			return nil, err
 		}
 	}
@@ -3170,7 +3178,11 @@ func ValidatePreparedPaginationParams(ctx context.Context, preparePlan *Plan, pa
 		if pos < 0 || int(pos) >= len(paramVals) {
 			continue
 		}
-		if !isIntegerPaginationParam(paramVals[pos]) {
+		valid, negative := validateIntegerPaginationParam(paramVals[pos])
+		if negative {
+			return moerr.NewOutOfRange(ctx, "unsigned integer", "value is out of range in 'EXECUTE'")
+		}
+		if !valid {
 			return moerr.NewWrongArguments(ctx, "EXECUTE")
 		}
 	}
@@ -3226,6 +3238,29 @@ func containsPreparedDynamicNumericParam(expr *Expr) bool {
 			}
 		}
 	}
+	if w := expr.GetW(); w != nil {
+		if containsPreparedDynamicNumericParam(w.WindowFunc) {
+			return true
+		}
+		for _, item := range w.PartitionBy {
+			if containsPreparedDynamicNumericParam(item) {
+				return true
+			}
+		}
+		for _, item := range w.OrderBy {
+			if item != nil && containsPreparedDynamicNumericParam(item.Expr) {
+				return true
+			}
+		}
+		if w.Frame != nil {
+			if w.Frame.Start != nil && containsPreparedDynamicNumericParam(w.Frame.Start.Val) {
+				return true
+			}
+			if w.Frame.End != nil && containsPreparedDynamicNumericParam(w.Frame.End.Val) {
+				return true
+			}
+		}
+	}
 	return false
 }
 
@@ -3247,25 +3282,51 @@ func collectParamRefPositions(expr *Expr, positions map[int32]struct{}) {
 	}
 }
 
-func isIntegerPaginationParam(value any) bool {
+func validateIntegerPaginationParam(value any) (bool, bool) {
 	if param, ok := value.(ParamValue); ok {
 		if param.Value == nil {
-			return true
+			return true, false
 		}
 		if param.RuntimeType != types.T_any {
-			return param.RuntimeType.IsInteger() || param.RuntimeType == types.T_bit
+			if !param.RuntimeType.IsInteger() && param.RuntimeType != types.T_bit {
+				return false, false
+			}
+			return paginationValueSign(param.Value)
 		}
 		value = param.Value
 	}
 	if value == nil {
-		return true
+		return true, false
 	}
 	switch value.(type) {
 	case int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64:
-		return true
+		return paginationValueSign(value)
 	default:
-		return false
+		return false, false
+	}
+}
+
+func paginationValueSign(value any) (bool, bool) {
+	switch v := value.(type) {
+	case int:
+		return true, v < 0
+	case int8:
+		return true, v < 0
+	case int16:
+		return true, v < 0
+	case int32:
+		return true, v < 0
+	case int64:
+		return true, v < 0
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if !strings.HasPrefix(trimmed, "-") {
+			return true, false
+		}
+		return true, strings.TrimLeft(strings.TrimPrefix(trimmed, "-"), "0") != ""
+	default:
+		return true, false
 	}
 }
 

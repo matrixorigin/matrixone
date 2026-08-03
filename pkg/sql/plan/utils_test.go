@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -258,17 +259,26 @@ func TestFillValuesOfParamsInPlanValidatesPaginationParamTypes(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "signed integer", value: int64(2)},
+		{name: "negative signed integer", value: int64(-1), wantErr: true},
 		{name: "unsigned integer", value: uint64(2)},
 		{name: "null", value: nil},
 		{name: "string", value: "3", wantErr: true},
 		{name: "float", value: float64(3), wantErr: true},
 		{name: "decimal", value: types.Decimal64(3), wantErr: true},
 		{name: "binary integer", value: ParamValue{Value: "2", RuntimeType: types.T_int64}},
+		{name: "negative binary integer", value: ParamValue{Value: "-1", RuntimeType: types.T_int64}, wantErr: true},
 		{name: "binary string", value: ParamValue{Value: "2", RuntimeType: types.T_varchar}, wantErr: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			filled, err := FillValuesOfParamsInPlan(context.Background(), limitPlan, []any{test.value})
 			if test.wantErr {
+				if strings.Contains(test.name, "negative") {
+					require.Error(t, err)
+					moErr, ok := err.(*moerr.Error)
+					require.True(t, ok)
+					require.Equal(t, uint16(1690), moErr.MySQLCode())
+					return
+				}
 				assertWrongExecuteArgs(t, err)
 				return
 			}

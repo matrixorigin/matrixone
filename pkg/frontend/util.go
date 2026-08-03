@@ -299,7 +299,28 @@ func getExprValueWithPrepareMode(
 		*isBin[0] = resultVec.GetIsBin()
 	}
 	value, err := getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
-	return value, oid, err
+	if err != nil {
+		return nil, types.T_any, err
+	}
+	return value, oid, nil
+}
+
+func normalizeUserVariableValue(value any, oid types.T) (any, types.T, error) {
+	if value == nil {
+		return nil, types.T_any, nil
+	}
+	if oid == types.T_bool {
+		if v, ok := value.(bool); ok {
+			if v {
+				return int64(1), types.T_int64, nil
+			}
+			return int64(0), types.T_int64, nil
+		}
+	}
+	if oid.IsInteger() || oid.IsFloat() || oid.IsDecimal() || oid.IsMySQLString() {
+		return value, oid, nil
+	}
+	return fmt.Sprint(value), types.T_varchar, nil
 }
 
 func bindSetVariableResultExpr(

@@ -21,6 +21,8 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -95,4 +97,23 @@ func TestBackgroundPreparedStatementUsesClientRegistry(t *testing.T) {
 	require.True(t, backSes.RemovePrepareStmt(prepared.Name))
 	_, err = owner.GetPrepareStmt(ctx, prepared.Name)
 	require.Error(t, err)
+}
+
+func TestInterpreterOutputDecimalPreservesDeclaredRuntimeType(t *testing.T) {
+	require.Equal(t, types.T_decimal256, procedureOutputRuntimeType(&tree.T{
+		InternalType: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_NEWDECIMAL)},
+	}))
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	interpreter := &Interpreter{
+		ses:             ses,
+		argsRuntimeType: map[string]types.T{"amount": types.T_decimal256},
+	}
+	require.NoError(t, interpreter.setOutputUserVariable("out_amount", "amount", "9007199254740993.25"))
+	userVar, err := ses.GetUserDefinedVar("out_amount")
+	require.NoError(t, err)
+	require.Equal(t, types.T_decimal256, userVar.RuntimeType)
+	require.Equal(t, "9007199254740993.25", userVar.Value)
 }

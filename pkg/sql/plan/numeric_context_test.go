@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strconv"
 	"testing"
@@ -689,7 +690,9 @@ func TestPreparedDynamicNumericPlanSpecializesPerExecutionValue(t *testing.T) {
 			}})
 			require.NoError(t, err)
 			require.False(t, HasPreparedDynamicNumericParams(specialized))
-			require.Empty(t, collectPlanParamTypes(specialized))
+			paramTypes := collectPlanParamTypes(specialized)
+			require.Len(t, paramTypes, 1)
+			require.True(t, paramTypes[0].IsDecimal())
 		})
 	}
 
@@ -766,6 +769,31 @@ func TestPreparedDynamicNumericPlanSpecializesPerExecutionValue(t *testing.T) {
 	explicitCast := buildPreparedAggregatePlan(t, "select cast(? as decimal(65, 30)) + 1")
 	require.False(t, HasPreparedDynamicNumericParams(explicitCast.Plan),
 		"an explicit DECIMAL(65,30) cast is a user contract, not a dynamic marker")
+}
+
+func TestPreparedDynamicNumericDiscoveryCoversWindowDCLAndDDL(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "window", sql: "select sum(? + 1) over () from nation"},
+		{name: "set", sql: "set @out = ? + 1"},
+		{name: "ctas", sql: "create table prepared_dynamic_ctas as select ? + 1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
+				fmt.Sprintf("prepare stmt1 from '%s'", test.sql))
+			require.NoError(t, err)
+			prepare := logicPlan.GetDcl().GetPrepare()
+			require.NotNil(t, prepare)
+			require.True(t, HasPreparedDynamicNumericParams(prepare.Plan))
+			specialized, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{ParamValue{
+				Value: strconv.FormatInt(math.MaxInt64, 10), RuntimeType: types.T_int64,
+			}})
+			require.NoError(t, err)
+			require.False(t, HasPreparedDynamicNumericParams(specialized))
+		})
+	}
 }
 
 func TestPreparedFloatRangeHandling(t *testing.T) {

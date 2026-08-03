@@ -11533,6 +11533,7 @@ func doInterpretCall(
 	var varScope [](map[string]interface{})
 	var argsMap map[string]tree.Expr
 	var argsAttr map[string]tree.InOutArgType
+	var argsRuntimeType map[string]types.T
 
 	// a database must be selected or specified as qualifier when create a function
 	if call.Name.HasNoNameQualifier() {
@@ -11603,6 +11604,7 @@ func doInterpretCall(
 
 	fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 	argsAttr = make(map[string]tree.InOutArgType)
+	argsRuntimeType = make(map[string]types.T)
 	argsMap = make(map[string]tree.Expr) // map arg to param
 
 	// build argsAttr and argsMap
@@ -11611,6 +11613,7 @@ func doInterpretCall(
 	for _, v := range argList {
 		argsAttr[v.ArgName] = v.InOutType
 		argsMap[v.ArgName] = call.Args[i]
+		argsRuntimeType[v.ArgName] = procedureOutputRuntimeType(v.Type)
 		i++
 	}
 
@@ -11623,6 +11626,7 @@ func doInterpretCall(
 	interpreter.result = nil
 	interpreter.argsMap = argsMap
 	interpreter.argsAttr = argsAttr
+	interpreter.argsRuntimeType = argsRuntimeType
 	interpreter.outParamMap = make(map[string]interface{})
 	interpreter.initialAffectedRows = callerAffectedRows
 
@@ -11651,6 +11655,19 @@ func doInterpretCall(
 
 	default:
 		return nil, moerr.NewInternalError(ctx, "unknown language")
+	}
+}
+
+func procedureOutputRuntimeType(ref tree.ResolvableTypeReference) types.T {
+	typ, ok := ref.(*tree.T)
+	if !ok {
+		return types.T_any
+	}
+	switch defines.MysqlType(typ.InternalType.Oid) {
+	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+		return types.T_decimal256
+	default:
+		return types.T_any
 	}
 }
 

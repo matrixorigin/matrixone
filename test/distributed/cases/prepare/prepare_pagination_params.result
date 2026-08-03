@@ -102,6 +102,12 @@ EXECUTE numeric_reexecute USING @numeric_param;
 ➤ plus_one[-5,64,0]  𝄀
 3
 DEALLOCATE PREPARE numeric_reexecute;
+PREPARE bool_numeric FROM 'SELECT ? + 1 AS plus_one';
+SET @bool_param = TRUE;
+EXECUTE bool_numeric USING @bool_param;
+➤ plus_one[-5,64,0]  𝄀
+2
+DEALLOCATE PREPARE bool_numeric;
 CREATE TABLE pagination_rows (id INT PRIMARY KEY);
 INSERT INTO pagination_rows VALUES (1), (2), (3), (4);
 PREPARE limit_param FROM 'SELECT id FROM pagination_rows ORDER BY id LIMIT ?';
@@ -122,6 +128,13 @@ EXECUTE limit_param USING @page_size;
 1  𝄀
 2  𝄀
 3
+SET @page_size = TRUE;
+EXECUTE limit_param USING @page_size;
+➤ id[4,32,0]  𝄀
+1
+SET @page_size = -1;
+EXECUTE limit_param USING @page_size;
+Data truncation: data out of range: unsigned integer value is out of range in 'EXECUTE'
 DEALLOCATE PREPARE limit_param;
 PREPARE offset_param FROM 'SELECT id FROM pagination_rows ORDER BY id LIMIT 2 OFFSET ?';
 SET @page_offset = '1';

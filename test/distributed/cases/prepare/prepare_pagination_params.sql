@@ -55,6 +55,11 @@ SET @numeric_param = 2;
 EXECUTE numeric_reexecute USING @numeric_param;
 DEALLOCATE PREPARE numeric_reexecute;
 
+PREPARE bool_numeric FROM 'SELECT ? + 1 AS plus_one';
+SET @bool_param = TRUE;
+EXECUTE bool_numeric USING @bool_param;
+DEALLOCATE PREPARE bool_numeric;
+
 CREATE TABLE pagination_rows (id INT PRIMARY KEY);
 INSERT INTO pagination_rows VALUES (1), (2), (3), (4);
 
@@ -66,6 +71,10 @@ EXECUTE limit_param USING @page_size;
 SET @page_size = 3.0;
 EXECUTE limit_param USING @page_size;
 SET @page_size = 3;
+EXECUTE limit_param USING @page_size;
+SET @page_size = TRUE;
+EXECUTE limit_param USING @page_size;
+SET @page_size = -1;
 EXECUTE limit_param USING @page_size;
 DEALLOCATE PREPARE limit_param;
 

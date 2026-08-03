@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"maps"
 	"sync/atomic"
 	"time"
@@ -811,6 +812,8 @@ func initExecuteStmtParamWithResolverInSession(
 		preparePlan = newPreparePlan
 		prepareStmt.PreparePlan = newPlan
 		prepareStmt.dynamicNumericParams = plan2.HasPreparedDynamicNumericParams(newPreparePlan.Plan)
+		prepareStmt.dynamicNumericSignature = ""
+		prepareStmt.dynamicNumericPlan = nil
 		prepareStmt.ColDefData = newColDefData
 		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
 			execCtx.prepareColDef = newColDefData
@@ -883,7 +886,7 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, err
 		}
 		if needsNumericSpecialization {
-			executionPlan, err = plan2.FillValuesOfParamsInPlan(reqCtx, preparePlan.Plan, cwft.paramVals)
+			executionPlan, err = specializePreparedNumericPlan(reqCtx, prepareStmt, preparePlan.Plan, cwft.paramVals)
 			if err != nil {
 				cwft.proc.SetPrepareParams(nil)
 				cwft.paramVals = nil
@@ -903,7 +906,7 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, err
 		}
 		if needsNumericSpecialization {
-			executionPlan, err = plan2.FillValuesOfParamsInPlan(reqCtx, preparePlan.Plan, paramVals)
+			executionPlan, err = specializePreparedNumericPlan(reqCtx, prepareStmt, preparePlan.Plan, paramVals)
 			if err != nil {
 				params.Free(cwft.proc.Mp())
 				return nil, nil, nil, originSQL, false, err
@@ -937,8 +940,25 @@ func initExecuteStmtParamWithResolverInSession(
 	cwft.hasPreparedSchedulingSQLMode = true
 	cwft.preparedSchedulingSQL = originSQL
 	retComp := prepareStmt.compile
-	if needsNumericSpecialization {
-		retComp = nil
+	if needsNumericSpecialization && retComp == nil && !executionSes.IsBackgroundSession() {
+		executionIntent := querySchedulingIntentForStatementWithSQLMode(
+			owner, originSQL, prepareStmt.schedulingSQLMode)
+		if _, ok := executionPlan.Plan.(*plan.Plan_Query); ok &&
+			shouldCachePrepareCompile(executionPlan) && !executionIntent.Explicit {
+			comp, compileErr := createCompile(execCtx, executionSes, cwft.proc, originSQL, originSQL,
+				&prepareStmt.schedulingSQLMode, prepareStmt.PrepareStmt, executionPlan,
+				owner.GetOutputCallback(execCtx), true, nil)
+			if compileErr != nil && !moerr.IsMoErrCode(compileErr, moerr.ErrCantCompileForPrepare) {
+				return nil, nil, nil, "", false, compileErr
+			}
+			if comp != nil && !comp.IsTpQuery() {
+				comp.SetIsPrepare(false)
+				comp.Release()
+				comp = nil
+			}
+			prepareStmt.compile = comp
+			retComp = comp
+		}
 	}
 	if executionSes.IsBackgroundSession() {
 		// A cached compile owns pipelines tied to the client process used at
@@ -954,6 +974,50 @@ func initExecuteStmtParamWithResolverInSession(
 		return nil, nil, nil, "", false, err
 	}
 	return retComp, executionPlan, executionStmt, originSQL, owned, nil
+}
+
+func specializePreparedNumericPlan(
+	ctx context.Context,
+	prepareStmt *PrepareStmt,
+	preparePlan *plan.Plan,
+	paramVals []any,
+) (*plan.Plan, error) {
+	signature := preparedNumericParamSignature(paramVals)
+	if prepareStmt.dynamicNumericSignature == signature && prepareStmt.dynamicNumericPlan != nil {
+		return prepareStmt.dynamicNumericPlan, nil
+	}
+	if prepareStmt.compile != nil {
+		prepareStmt.compile.FreeOperator()
+		prepareStmt.compile.SetIsPrepare(false)
+		prepareStmt.compile.Release()
+		prepareStmt.compile = nil
+	}
+	specialized, err := plan2.FillValuesOfParamsInPlan(ctx, preparePlan, paramVals)
+	if err != nil {
+		return nil, err
+	}
+	prepareStmt.dynamicNumericSignature = signature
+	prepareStmt.dynamicNumericPlan = specialized
+	return specialized, nil
+}
+
+func preparedNumericParamSignature(paramVals []any) string {
+	var signature bytes.Buffer
+	for i, raw := range paramVals {
+		if i > 0 {
+			signature.WriteByte(';')
+		}
+		param, ok := raw.(plan2.ParamValue)
+		if !ok {
+			fmt.Fprintf(&signature, "%T", raw)
+			continue
+		}
+		fmt.Fprintf(&signature, "%d", param.RuntimeType)
+		if param.RuntimeType.IsDecimal() || param.RuntimeType == types.T_any {
+			fmt.Fprintf(&signature, ":%v", param.Value)
+		}
+	}
+	return signature.String()
 }
 
 func prepareSchemaAccountID(currentAccountID uint32, obj *plan.ObjectRef) uint32 {

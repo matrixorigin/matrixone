@@ -442,11 +442,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	case *plan.Expr_F:
 		needResetFunction := false
 		dynamicParamPos := int32(-1)
+		var dynamicParamExpr *plan.Expr
 		dynamicNumericArgs := make([]bool, len(exprImpl.F.Args))
 		coercedNumericArgs := make([]bool, len(exprImpl.F.Args))
 		if exprImpl.F.Func.GetObjName() == "cast" && isPreparedDynamicNumericType(e.Typ) &&
 			len(exprImpl.F.Args) > 0 && exprImpl.F.Args[0].GetP() != nil {
 			dynamicParamPos = exprImpl.F.Args[0].GetP().Pos
+			dynamicParamExpr = exprImpl.F.Args[0]
 		}
 		for i, arg := range exprImpl.F.Args {
 			_, directParam := arg.Expr.(*plan.Expr_P)
@@ -493,23 +495,30 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					if parseErr != nil {
 						return nil, parseErr
 					}
-					return MakePlan2Float32ConstExprWithType(float32(parsed)), nil
+					return makePlan2CastExpr(rule.ctx, dynamicParamExpr,
+						MakePlan2Float32ConstExprWithType(float32(parsed)).Typ)
 				case types.T_float64:
 					parsed, parseErr := parsePreparedFloat(value, 64)
 					if parseErr != nil {
 						return nil, parseErr
 					}
-					return MakePlan2Float64ConstExprWithType(parsed), nil
+					return makePlan2CastExpr(rule.ctx, dynamicParamExpr,
+						MakePlan2Float64ConstExprWithType(parsed).Typ)
 				}
 				if runtimeType.IsMySQLString() {
 					parsed, parseErr := planfunction.ParseStringToFloatForNumericExpression(value)
 					if parseErr != nil {
 						return nil, parseErr
 					}
-					return MakePlan2Float64ConstExprWithType(parsed), nil
+					return makePlan2CastExpr(rule.ctx, dynamicParamExpr,
+						MakePlan2Float64ConstExprWithType(parsed).Typ)
 				}
 				if runtimeType.IsInteger() || runtimeType == types.T_bit {
-					return makePreparedIntegerExpr(value, runtimeType)
+					typed, makeErr := makePreparedIntegerExpr(value, runtimeType)
+					if makeErr != nil {
+						return nil, makeErr
+					}
+					return makePlan2CastExpr(rule.ctx, dynamicParamExpr, typed.Typ)
 				}
 			}
 			if dynamicParamPos < 0 {
@@ -530,7 +539,11 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					decimal = strconv.FormatUint(literalValue.U64Val, 10)
 				}
 				if decimal != "" {
-					return makePlan2DecimalExprWithType(rule.ctx, decimal, literal.GetIsBin())
+					typed, makeErr := makePlan2DecimalExprWithType(rule.ctx, decimal, literal.GetIsBin())
+					if makeErr != nil {
+						return nil, makeErr
+					}
+					return makePlan2CastExpr(rule.ctx, dynamicParamExpr, typed.Typ)
 				}
 			}
 			return value, nil

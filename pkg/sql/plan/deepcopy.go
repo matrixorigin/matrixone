@@ -708,6 +708,9 @@ func DeepCopyPlan(pl *Plan) *Plan {
 			TryRunTimes: pl.TryRunTimes,
 		}
 
+	case *plan.Plan_Dcl:
+		return proto.Clone(pl).(*Plan)
+
 	default:
 		// only support query/insert plan now
 		return nil

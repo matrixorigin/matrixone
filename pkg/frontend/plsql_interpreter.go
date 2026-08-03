@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -38,15 +39,16 @@ const (
 )
 
 type Interpreter struct {
-	ctx         context.Context
-	ses         FeSession
-	bh          BackgroundExec
-	varScope    *[]map[string]interface{}
-	fmtctx      *tree.FmtCtx
-	result      []ExecResult
-	argsAttr    map[string]tree.InOutArgType // used for IN, OUT, IN/OUT check
-	argsMap     map[string]tree.Expr         // used for argument to parameter mapping
-	outParamMap map[string]interface{}       // used for storing and updating OUT type arg
+	ctx             context.Context
+	ses             FeSession
+	bh              BackgroundExec
+	varScope        *[]map[string]interface{}
+	fmtctx          *tree.FmtCtx
+	result          []ExecResult
+	argsAttr        map[string]tree.InOutArgType // used for IN, OUT, IN/OUT check
+	argsMap         map[string]tree.Expr         // used for argument to parameter mapping
+	outParamMap     map[string]interface{}       // used for storing and updating OUT type arg
+	argsRuntimeType map[string]types.T
 
 	lastAffectedRows    int64
 	initialAffectedRows int64
@@ -134,7 +136,7 @@ func (interpreter *Interpreter) FlushParam() error {
 			// save INOUT at session
 			interpreter.bh.ClearExecResultSet()
 			// system setvar execution
-			err := interpreter.ses.SetUserDefinedVar(interpreter.argsMap[k].(*tree.VarExpr).Name, v, "")
+			err := interpreter.setOutputUserVariable(interpreter.argsMap[k].(*tree.VarExpr).Name, k, v)
 			if err != nil {
 				return err
 			}
@@ -145,13 +147,24 @@ func (interpreter *Interpreter) FlushParam() error {
 		// save at session
 		interpreter.bh.ClearExecResultSet()
 		// system setvar execution
-		err := interpreter.ses.SetUserDefinedVar(interpreter.argsMap[k].(*tree.VarExpr).Name, v, "")
+		err := interpreter.setOutputUserVariable(interpreter.argsMap[k].(*tree.VarExpr).Name, k, v)
 		if err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func (interpreter *Interpreter) setOutputUserVariable(name, argName string, value any) error {
+	if typ := interpreter.argsRuntimeType[argName]; typ != types.T_any {
+		if ses, ok := interpreter.ses.(interface {
+			setUserDefinedVarWithType(string, interface{}, string, bool, types.T) error
+		}); ok {
+			return ses.setUserDefinedVarWithType(name, value, "", false, typ)
+		}
+	}
+	return interpreter.ses.SetUserDefinedVar(name, value, "")
 }
 
 func (interpreter *Interpreter) GetSimpleExprValueWithSpVar(e tree.Expr) (interface{}, error) {

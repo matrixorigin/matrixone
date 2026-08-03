@@ -956,6 +956,10 @@ func doSetVar(
 				}
 			}
 		} else {
+			value, userVarRuntimeType, err = normalizeUserVariableValue(value, userVarRuntimeType)
+			if err != nil {
+				return err
+			}
 			err = ses.setUserDefinedVarWithType(name, value, sql, userVarIsBin, userVarRuntimeType)
 			if err != nil {
 				return err

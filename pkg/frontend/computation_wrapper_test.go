@@ -346,7 +346,7 @@ func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
 		require.NoError(t, ses.setUserDefinedVarWithType("numeric_param", value, "", false, types.T_decimal256))
 		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 		require.NoError(t, err)
-		require.Nil(t, comp)
+		require.Same(t, prepareStmt.compile, comp)
 		require.False(t, plan2.HasPreparedDynamicNumericParams(executionPlan))
 	}
 
@@ -354,7 +354,7 @@ func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
 		require.NoError(t, ses.SetUserDefinedVar("numeric_param", value, ""))
 		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 		require.NoError(t, err)
-		require.Nil(t, comp)
+		require.Same(t, prepareStmt.compile, comp)
 		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
 		require.True(t, types.T(root.ProjectList[0].Typ.Id).IsFloat())
 	}
@@ -365,15 +365,24 @@ func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
 		require.NoError(t, ses.SetUserDefinedVar("numeric_param", value, ""))
 		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 		require.NoError(t, err)
-		require.Nil(t, comp)
+		require.Same(t, prepareStmt.compile, comp)
 		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
 		require.True(t, types.T(root.ProjectList[0].Typ.Id).IsFloat())
 	}
 
+	var cachedIntegerPlan *plan.Plan
+	var cachedIntegerCompile *compile.Compile
 	for _, value := range []int64{2, 3} {
 		require.NoError(t, ses.SetUserDefinedVar("numeric_param", value, ""))
-		_, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 		require.NoError(t, err)
+		if cachedIntegerPlan == nil {
+			cachedIntegerPlan = executionPlan
+			cachedIntegerCompile = comp
+		} else {
+			require.Same(t, cachedIntegerPlan, executionPlan)
+			require.Same(t, cachedIntegerCompile, comp)
+		}
 		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
 		resultType := types.T(root.ProjectList[0].Typ.Id)
 		require.True(t, resultType.IsInteger(), resultType.String())
@@ -394,7 +403,7 @@ func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
 		prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
 		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 		require.NoError(t, err)
-		require.Nil(t, comp)
+		require.Same(t, prepareStmt.compile, comp)
 		require.False(t, plan2.HasPreparedDynamicNumericParams(executionPlan))
 		cw.proc.SetPrepareParams(nil)
 		params.Free(cw.proc.Mp())
@@ -418,7 +427,7 @@ func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
 		prepareStmt.ParamTypes = []byte{byte(test.typ), 0}
 		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 		require.NoError(t, err)
-		require.Nil(t, comp)
+		require.Same(t, prepareStmt.compile, comp)
 		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
 		require.True(t, types.T(root.ProjectList[0].Typ.Id).IsFloat())
 		cw.proc.SetPrepareParams(nil)
@@ -435,7 +444,7 @@ func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
 		prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
 		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 		require.NoError(t, err)
-		require.Nil(t, comp)
+		require.Same(t, prepareStmt.compile, comp)
 		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
 		require.True(t, types.T(root.ProjectList[0].Typ.Id).IsFloat())
 		cw.proc.SetPrepareParams(nil)
@@ -1283,4 +1292,18 @@ func TestTxnComputationWrapperDoesNotPersistNormalLocalTraceOnCompileError(t *te
 	cwft.recordSchedulingTraceOnCompileError(context.Background())
 	assert.Nil(t, stmt.ExecPlan)
 	assert.True(t, motrace.StatementInfoFilter(stmt))
+}
+
+func TestNormalizeUserVariableBoolAndDynamicNumericSignature(t *testing.T) {
+	value, typ, err := normalizeUserVariableValue(true, types.T_bool)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), value)
+	require.Equal(t, types.T_int64, typ)
+
+	first := preparedNumericParamSignature([]any{plan2.ParamValue{Value: "2", RuntimeType: types.T_int64}})
+	second := preparedNumericParamSignature([]any{plan2.ParamValue{Value: "3", RuntimeType: types.T_int64}})
+	require.Equal(t, first, second, "same integer runtime type must reuse specialization")
+	decimalA := preparedNumericParamSignature([]any{plan2.ParamValue{Value: "1.2", RuntimeType: types.T_decimal128}})
+	decimalB := preparedNumericParamSignature([]any{plan2.ParamValue{Value: "1.20", RuntimeType: types.T_decimal128}})
+	require.NotEqual(t, decimalA, decimalB, "decimal precision and scale may change the specialized plan")
 }
