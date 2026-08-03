@@ -1125,6 +1125,25 @@ func TestScope_CreateView(t *testing.T) {
 
 }
 
+func TestCreateViewRefreshOnlyPending(t *testing.T) {
+	tests := []struct {
+		name        string
+		existed     bool
+		replace     bool
+		wantPending bool
+	}{
+		{name: "new view", wantPending: true},
+		{name: "new view with replace syntax", replace: true, wantPending: true},
+		{name: "replace existing view", existed: true, replace: true, wantPending: false},
+		{name: "existing view without replace", existed: true, wantPending: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.wantPending, createViewRefreshOnlyPending(test.existed, test.replace))
+		})
+	}
+}
+
 func TestScope_CreateTableIfNotExistsAsSelectWhenTableExists(t *testing.T) {
 	stubs := gostub.New()
 	defer stubs.Reset()

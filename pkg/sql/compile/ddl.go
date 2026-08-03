@@ -2587,6 +2587,7 @@ func (s *Scope) CreateView(c *Compile) error {
 		)
 		return err
 	}
+	refreshOnlyPending := createViewRefreshOnlyPending(exists, qry.GetReplace())
 
 	if exists {
 		if qry.GetIfNotExists() {
@@ -2647,8 +2648,12 @@ func (s *Scope) CreateView(c *Compile) error {
 		createdView.GetTableID(c.proc.Ctx),
 		dbName,
 		viewName,
-		true,
+		refreshOnlyPending,
 	)
+}
+
+func createViewRefreshOnlyPending(relationExisted bool, replace bool) bool {
+	return !relationExisted || !replace
 }
 
 func lockAndValidateViewDependencies(c *Compile, viewDef *plan.ViewDef) error {

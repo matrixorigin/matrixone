@@ -3045,6 +3045,7 @@ func runViewMetadataRefreshSQL(
 			accountID:       accountID,
 			defaultDatabase: viewData.DefaultDatabase,
 			subscriptions:   subscriptions,
+			dependencies:    viewData.Dependencies,
 		},
 	)
 	c.proc.Ctx = context.WithValue(c.proc.Ctx, viewMetadataSQLModeKey{}, sqlMode)

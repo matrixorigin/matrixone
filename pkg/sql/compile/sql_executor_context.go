@@ -550,6 +550,17 @@ func (c *compilerContext) getRelation(
 	if sub != nil {
 		ctx = defines.AttachAccountId(ctx, uint32(sub.GetAccountId()))
 		dbName = sub.GetDbName()
+	} else if !plan.IsSnapshotValid(snapshot) {
+		resolverCtx := ctx
+		if _, ok := resolverCtx.Value(viewMetadataResolverKey{}).(viewMetadataRefreshResolver); !ok &&
+			c.ctx != nil {
+			resolverCtx = c.ctx
+		}
+		if resolver, ok := resolverCtx.Value(viewMetadataResolverKey{}).(viewMetadataRefreshResolver); ok {
+			if accountID, found := resolver.relationAccountID(dbName, tableName); found {
+				ctx = defines.AttachAccountId(ctx, accountID)
+			}
+		}
 	}
 
 	db, err := c.engine.Database(ctx, dbName, txnOpt)

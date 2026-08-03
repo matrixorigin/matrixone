@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -52,6 +53,22 @@ type viewMetadataRefreshResolver struct {
 	accountID       uint32
 	defaultDatabase string
 	subscriptions   currentViewSubscriptionResolver
+	dependencies    []plan2.ViewDependency
+}
+
+func (r viewMetadataRefreshResolver) relationAccountID(
+	database string,
+	table string,
+) (uint32, bool) {
+	for _, dependency := range r.dependencies {
+		if dependency.Snapshot || dependency.Subscription ||
+			!dependency.AccountIDSet ||
+			dependency.DatabaseName != database || dependency.TableName != table {
+			continue
+		}
+		return dependency.AccountID, true
+	}
+	return 0, false
 }
 
 type viewMetadataUDFNotFoundError struct {
