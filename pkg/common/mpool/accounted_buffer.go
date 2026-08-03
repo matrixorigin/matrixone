@@ -25,9 +25,10 @@ type AccountedBuffer struct {
 	data []byte
 	mp   *MPool
 
-	account *AllocationAccount
-	owner   AllocationOwner
-	site    AllocationSite
+	account       *AllocationAccount
+	owner         AllocationOwner
+	site          AllocationSite
+	capacityClass AllocationCapacityClass
 }
 
 func NewAccountedBuffer(
@@ -36,22 +37,42 @@ func NewAccountedBuffer(
 	owner AllocationOwner,
 	site AllocationSite,
 ) (*AccountedBuffer, error) {
+	return NewAccountedBufferWithCapacityClass(
+		mp,
+		account,
+		owner,
+		site,
+		AllocationCapacityClassDefault,
+	)
+}
+
+// NewAccountedBufferWithCapacityClass creates a reusable buffer whose physical
+// allocations borrow the selected execution-local capacity.
+func NewAccountedBufferWithCapacityClass(
+	mp *MPool,
+	account *AllocationAccount,
+	owner AllocationOwner,
+	site AllocationSite,
+	capacityClass AllocationCapacityClass,
+) (*AccountedBuffer, error) {
 	if mp == nil {
 		return nil, ErrAllocationAccountInvalid
 	}
 	request := allocationAccountRequest{
-		account: account,
-		owner:   owner,
-		site:    site,
+		account:       account,
+		owner:         owner,
+		site:          site,
+		capacityClass: capacityClass,
 	}
 	if err := request.validate(); err != nil {
 		return nil, err
 	}
 	return &AccountedBuffer{
-		mp:      mp,
-		account: account,
-		owner:   owner,
-		site:    site,
+		mp:            mp,
+		account:       account,
+		owner:         owner,
+		site:          site,
+		capacityClass: capacityClass,
 	}, nil
 }
 
@@ -94,11 +115,12 @@ func (b *AccountedBuffer) EnsureCapacity(required int) error {
 		if !ok || capacity > int64(math.MaxInt) {
 			return ErrAllocationAllocatorLimit
 		}
-		data, err := b.mp.AllocAccounted(
+		data, err := b.mp.AllocAccountedWithCapacityClass(
 			int(capacity),
 			b.account,
 			b.owner,
 			b.site,
+			b.capacityClass,
 		)
 		if err != nil {
 			return err

@@ -56,7 +56,7 @@ func finalizeTestAllocationAccount(
 func TestMPoolAccountedAllocGrowFree(t *testing.T) {
 	require.Equal(t, uintptr(kMemHdrSz), unsafe.Sizeof(memHdr{}))
 	require.Equal(t, uintptr(16), unsafe.Sizeof(allocationLease{}))
-	require.Equal(t, uintptr(64), unsafe.Sizeof(AllocationAccount{}))
+	require.LessOrEqual(t, unsafe.Sizeof(AllocationAccount{}), uintptr(96))
 	require.LessOrEqual(t, unsafe.Sizeof(allocationAccountRegistrySlot{}), uintptr(32))
 
 	registry, account := newTestAllocationAccount(t, 1024, 8)

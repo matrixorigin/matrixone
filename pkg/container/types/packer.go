@@ -33,6 +33,8 @@ type Packer struct {
 	overflow          bool
 }
 
+const defaultPackerSize = uint64(4096)
+
 var ErrPackerCapacity = moerr.NewInternalErrorNoCtx(
 	"packer fixed buffer capacity exceeded",
 )
@@ -47,7 +49,43 @@ var packerAllocator = malloc.NewShardedAllocator(
 )
 
 func NewPacker() *Packer {
-	return NewPackerWithSize(4096)
+	return NewPackerWithSize(defaultPackerSize)
+}
+
+// PackerAllocationSize returns the backing size-class allocation made by a
+// packer request of size bytes.
+func PackerAllocationSize(size uint64) (uint64, bool) {
+	return malloc.ClassAllocationSize(size)
+}
+
+// DefaultPackerCapacity returns the backing capacity retained by NewPacker.
+func DefaultPackerCapacity() uint64 {
+	size, ok := PackerAllocationSize(defaultPackerSize)
+	if !ok {
+		panic("invalid default packer size")
+	}
+	return size
+}
+
+// PackerCapacityUpperBound bounds the backing capacity retained after any
+// sequence of Reset and append operations whose logical buffer length never
+// exceeds maxLength and whose individual append never exceeds maxAppend.
+func PackerCapacityUpperBound(maxLength, maxAppend uint64) (uint64, bool) {
+	initial := DefaultPackerCapacity()
+	if maxLength <= initial {
+		return initial, true
+	}
+	if maxAppend == 0 || maxLength > math.MaxUint64-maxAppend+1 {
+		return 0, false
+	}
+	capacity, ok := PackerAllocationSize(maxLength + maxAppend - 1)
+	if !ok {
+		return 0, false
+	}
+	if capacity < initial {
+		return initial, true
+	}
+	return capacity, true
 }
 
 func NewPackerWithSize(size uint64) *Packer {
@@ -71,7 +109,7 @@ func NewPackerWithFixedBuffer(buffer []byte) *Packer {
 }
 
 func NewPackerArray(length int) []*Packer {
-	return NewPackerArrayWithSize(length, 4096)
+	return NewPackerArrayWithSize(length, defaultPackerSize)
 }
 
 func NewPackerArrayWithSize(length int, size uint64) []*Packer {
@@ -92,6 +130,14 @@ func (p *Packer) Close() {
 func (p *Packer) Reset() {
 	p.buffer = p.buffer[:0]
 	p.overflow = false
+}
+
+// Allocated returns the size-class capacity retained by the packer.
+func (p *Packer) Allocated() uint64 {
+	if p == nil {
+		return 0
+	}
+	return uint64(cap(p.buffer))
 }
 
 func (p *Packer) ensureSizeSlow(n int) {

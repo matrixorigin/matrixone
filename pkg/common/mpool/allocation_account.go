@@ -220,6 +220,15 @@ type AllocationCapacityController interface {
 	ReleaseAllocationCapacity(uint64)
 }
 
+// AllocationCapacityClass selects a capacity controller for one physical
+// allocation. Class zero uses the account's statement controller. Non-zero
+// classes are registered by execution owners whose future recovery storage
+// must borrow pre-admitted headroom without charging that headroom twice.
+type AllocationCapacityClass uint8
+
+// AllocationCapacityClassDefault uses the statement's ordinary controller.
+const AllocationCapacityClassDefault AllocationCapacityClass = 0
+
 // AllocationAccount owns physical allocation capacity for one execution
 // generation. state packs the sealed bit and used bytes into one atomic word,
 // so Acquire and Seal have one unambiguous linearization point.
@@ -232,6 +241,15 @@ type AllocationAccount struct {
 	state    atomic.Uint64
 	peak     atomic.Uint64
 	inflight atomic.Int64
+
+	capacityMu          sync.Mutex
+	capacityControllers map[AllocationCapacityClass]*allocationCapacityRegistration
+	nextCapacityClass   AllocationCapacityClass
+}
+
+type allocationCapacityRegistration struct {
+	control AllocationCapacityController
+	used    uint64
 }
 
 func (a *AllocationAccount) Handle() AllocationAccountHandle {
@@ -255,7 +273,90 @@ func (a *AllocationAccount) Snapshot() AllocationAccountSnapshot {
 	}
 }
 
+// RegisterCapacityController installs one execution-local capacity class. The
+// owner must unregister it only after every allocation in the class is freed.
+func (a *AllocationAccount) RegisterCapacityController(
+	control AllocationCapacityController,
+) (AllocationCapacityClass, error) {
+	if a == nil || control == nil || a.registry == nil || a.handle == 0 {
+		return AllocationCapacityClassDefault, ErrAllocationAccountInvalid
+	}
+	a.inflight.Add(1)
+	defer a.inflight.Add(-1)
+	if a.state.Load()&allocationAccountSealedBit != 0 {
+		return AllocationCapacityClassDefault, ErrAllocationAccountSealed
+	}
+	a.capacityMu.Lock()
+	defer a.capacityMu.Unlock()
+	if a.state.Load()&allocationAccountSealedBit != 0 {
+		return AllocationCapacityClassDefault, ErrAllocationAccountSealed
+	}
+	if a.capacityControllers == nil {
+		a.capacityControllers = make(
+			map[AllocationCapacityClass]*allocationCapacityRegistration,
+		)
+	}
+	for range uint16(math.MaxUint8) {
+		a.nextCapacityClass++
+		if a.nextCapacityClass == AllocationCapacityClassDefault {
+			a.nextCapacityClass++
+		}
+		if _, exists := a.capacityControllers[a.nextCapacityClass]; !exists {
+			a.capacityControllers[a.nextCapacityClass] =
+				&allocationCapacityRegistration{control: control}
+			return a.nextCapacityClass, nil
+		}
+	}
+	return AllocationCapacityClassDefault, ErrAllocationAccountInvariant
+}
+
+// UnregisterCapacityController removes a quiescent execution-local class.
+func (a *AllocationAccount) UnregisterCapacityController(
+	class AllocationCapacityClass,
+	control AllocationCapacityController,
+) error {
+	if a == nil || class == AllocationCapacityClassDefault || control == nil {
+		return ErrAllocationAccountInvalid
+	}
+	a.capacityMu.Lock()
+	defer a.capacityMu.Unlock()
+	registration := a.capacityControllers[class]
+	if registration == nil || registration.control != control {
+		return ErrAllocationAccountMismatch
+	}
+	if registration.used != 0 {
+		return ErrAllocationAccountLive
+	}
+	delete(a.capacityControllers, class)
+	if len(a.capacityControllers) == 0 {
+		a.capacityControllers = nil
+	}
+	return nil
+}
+
+// capacityControllerLocked requires capacityMu to be held, keeping a
+// non-default registration stable through the complete acquire/release.
+func (a *AllocationAccount) capacityControllerLocked(
+	class AllocationCapacityClass,
+) (*allocationCapacityRegistration, error) {
+	if class == AllocationCapacityClassDefault {
+		return nil, ErrAllocationAccountInvalid
+	}
+	registration := a.capacityControllers[class]
+	if registration == nil {
+		return nil, ErrAllocationAccountInvalid
+	}
+	return registration, nil
+}
+
 func (a *AllocationAccount) acquire(capacity uint64) error {
+	return a.acquireWithCapacityClass(capacity, AllocationCapacityClassDefault)
+}
+
+func (a *AllocationAccount) acquireWithCapacityClass(
+	capacity uint64,
+	class AllocationCapacityClass,
+) error {
 	if a == nil || a.registry == nil || a.handle == 0 {
 		return ErrAllocationAccountInvalid
 	}
@@ -284,15 +385,28 @@ func (a *AllocationAccount) acquire(capacity uint64) error {
 	if used > a.limit || capacity > a.limit-used {
 		return newAllocationAccountCapacityError(used, capacity, a.limit)
 	}
-	if a.control != nil {
-		if err := a.control.AcquireAllocationCapacity(capacity); err != nil {
+	control := a.control
+	var registration *allocationCapacityRegistration
+	if class != AllocationCapacityClassDefault {
+		a.capacityMu.Lock()
+		var err error
+		registration, err = a.capacityControllerLocked(class)
+		if err != nil {
+			a.capacityMu.Unlock()
+			return err
+		}
+		control = registration.control
+		defer a.capacityMu.Unlock()
+	}
+	if control != nil {
+		if err := control.AcquireAllocationCapacity(capacity); err != nil {
 			return err
 		}
 	}
 	acquired := false
 	defer func() {
-		if !acquired && a.control != nil {
-			a.control.ReleaseAllocationCapacity(capacity)
+		if !acquired && control != nil {
+			control.ReleaseAllocationCapacity(capacity)
 		}
 	}()
 
@@ -307,6 +421,9 @@ func (a *AllocationAccount) acquire(capacity uint64) error {
 		}
 		next := used + capacity
 		if a.state.CompareAndSwap(state, next) {
+			if registration != nil {
+				registration.used += capacity
+			}
 			for {
 				peak := a.peak.Load()
 				if next <= peak || a.peak.CompareAndSwap(peak, next) {
@@ -333,18 +450,38 @@ func newAllocationAccountCapacityError(
 }
 
 func (a *AllocationAccount) release(capacity uint64) {
+	a.releaseWithCapacityClass(capacity, AllocationCapacityClassDefault)
+}
+
+func (a *AllocationAccount) releaseWithCapacityClass(
+	capacity uint64,
+	class AllocationCapacityClass,
+) {
 	if capacity == 0 {
 		return
 	}
 	// Keep the local charge until the higher-level policy charge is gone. With
 	// metadata released by allocationLease first, exact local zero is therefore
 	// also a complete-release boundary.
-	if a.control != nil {
+	control := a.control
+	var registration *allocationCapacityRegistration
+	if class != AllocationCapacityClassDefault {
+		a.capacityMu.Lock()
+		var err error
+		registration, err = a.capacityControllerLocked(class)
+		if err != nil {
+			a.capacityMu.Unlock()
+			panic(err)
+		}
+		control = registration.control
+		defer a.capacityMu.Unlock()
+	}
+	if control != nil {
 		state := a.state.Load()
 		if capacity > state&allocationAccountUsedMask {
 			panic("allocation account release underflow")
 		}
-		a.control.ReleaseAllocationCapacity(capacity)
+		control.ReleaseAllocationCapacity(capacity)
 	}
 	for {
 		state := a.state.Load()
@@ -354,6 +491,12 @@ func (a *AllocationAccount) release(capacity uint64) {
 		}
 		next := state - capacity
 		if a.state.CompareAndSwap(state, next) {
+			if registration != nil {
+				if capacity > registration.used {
+					panic("allocation capacity class release underflow")
+				}
+				registration.used -= capacity
+			}
 			if next&allocationAccountUsedMask == 0 {
 				a.registry.tryDrainTombstone(a)
 			}
@@ -517,6 +660,19 @@ func (r *AllocationAccountRegistry) CompleteTerminalWithError(
 				ErrAllocationAccountInvariant,
 				"terminal account is not quiescent",
 			)
+	}
+	account.capacityMu.Lock()
+	liveCapacityControllers := len(account.capacityControllers)
+	account.capacityMu.Unlock()
+	if liveCapacityControllers != 0 {
+		terminalCause = errors.Join(
+			terminalCause,
+			wrapAllocationAccountError(
+				ErrAllocationAccountInvariant,
+				"terminal account retains %d capacity controllers",
+				liveCapacityControllers,
+			),
+		)
 	}
 	snapshot = AllocationAccountTerminalSnapshot{
 		AllocationAccountSnapshot: current,
@@ -790,9 +946,10 @@ func (r *AllocationAccountRegistry) GenerationCapacity() uint32 {
 }
 
 type allocationAccountRequest struct {
-	account *AllocationAccount
-	owner   AllocationOwner
-	site    AllocationSite
+	account       *AllocationAccount
+	owner         AllocationOwner
+	site          AllocationSite
+	capacityClass AllocationCapacityClass
 }
 
 func (r allocationAccountRequest) validate() error {
@@ -809,11 +966,12 @@ func (r allocationAccountRequest) validate() error {
 }
 
 type allocationLease struct {
-	account  *AllocationAccount
-	owner    AllocationOwner
-	site     AllocationSite
-	profiled bool
-	_        [5]byte
+	account       *AllocationAccount
+	owner         AllocationOwner
+	site          AllocationSite
+	profiled      bool
+	capacityClass AllocationCapacityClass
+	_             [4]byte
 }
 
 func (l allocationLease) release(capacity uint64) {
@@ -824,5 +982,5 @@ func (l allocationLease) release(capacity uint64) {
 	// until controller cleanup completes, so exact zero is a complete-release
 	// boundary.
 	l.account.registry.releaseMetadata()
-	l.account.release(capacity)
+	l.account.releaseWithCapacityClass(capacity, l.capacityClass)
 }

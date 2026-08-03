@@ -80,6 +80,7 @@ func growHashBuildSpillSlice[T any](
 	mp *mpool.MPool,
 	account *mpool.AllocationAccount,
 	site mpool.AllocationSite,
+	capacityClass mpool.AllocationCapacityClass,
 ) ([]T, error) {
 	if length < 0 || account == nil {
 		return nil, mpool.ErrAllocationAccountInvalid
@@ -98,12 +99,13 @@ func growHashBuildSpillSlice[T any](
 		}
 		capacity *= 2
 	}
-	next, err := mpool.MakeSliceAccounted[T](
+	next, err := mpool.MakeSliceAccountedWithCapacityClass[T](
 		capacity,
 		mp,
 		account,
 		HashBuildAllocationOwner,
 		site,
+		capacityClass,
 	)
 	if err != nil {
 		return nil, err
@@ -299,6 +301,7 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 		proc.Mp(),
 		ctr.hashmapBuilder.mapAllocationAccount,
 		HashBuildSpillAllocationSiteHashValues,
+		ctr.recoveryCapacityClass,
 	)
 	if err != nil {
 		return err
@@ -309,6 +312,7 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 		proc.Mp(),
 		ctr.hashmapBuilder.mapAllocationAccount,
 		HashBuildSpillAllocationSiteRowIDs,
+		ctr.recoveryCapacityClass,
 	)
 	if err != nil {
 		return err
@@ -586,6 +590,14 @@ func (ctr *container) spillBatchWithPressure(
 		OptionalDisabled: ctr.spillCoalesceDisabled,
 	}, 64)
 	for start := 0; start < rows; {
+		if len(ctr.hashmapBuilder.executors) == 0 {
+			var err error
+			executors, err = ctr.initSpillExprExecs(
+				proc, ctr.spillConditions)
+			if err != nil {
+				return err
+			}
+		}
 		end := rows
 		if chunk < rows-start {
 			end = start + chunk
@@ -699,11 +711,12 @@ func (ctr *container) appendSpillRecord(
 	}
 	if ctr.spillAccountedWrite == nil {
 		var err error
-		ctr.spillAccountedWrite, err = mpool.NewAccountedBuffer(
+		ctr.spillAccountedWrite, err = mpool.NewAccountedBufferWithCapacityClass(
 			proc.Mp(),
 			ctr.hashmapBuilder.mapAllocationAccount,
 			HashBuildAllocationOwner,
 			HashBuildSpillAllocationSiteMarshalBuffer,
+			ctr.recoveryCapacityClass,
 		)
 		if err != nil {
 			return err
@@ -843,37 +856,38 @@ func (ctr *container) flushSpillBuffers(proc *process.Process, files []*os.File,
 	return firstErr
 }
 
-// initSpillExprExecs initializes or validates spill expression executors.
-// Returns the executors slice ready for use. Called once when entering spill mode.
+// initSpillExprExecs reuses the HashmapBuilder key executors. Spill and normal
+// build are mutually exclusive after the transition, so a second executor
+// tree would only duplicate retained capacity and its lifecycle.
 func (ctr *container) initSpillExprExecs(proc *process.Process, conditions []*plan.Expr) ([]colexec.ExpressionExecutor, error) {
 	for _, condition := range conditions {
 		if condition == nil {
 			return nil, &process.HashBuildBudgetError{Kind: process.HashBuildBudgetErrorInvalid, Message: "nil shuffle spill key"}
 		}
 	}
-	if len(ctr.spillExprExecs) != len(conditions) {
-		execs, err := NewExpressionExecutors(
+	ctr.spillConditions = conditions
+	if len(ctr.hashmapBuilder.executors) != len(conditions) {
+		ctr.hashmapBuilder.FreeExecutors()
+		execs, err := newExpressionExecutorsWithCapacityClass(
 			proc,
 			conditions,
 			ctr.hashmapBuilder.mapAllocationAccount,
+			ctr.recoveryCapacityClass,
 		)
 		if err != nil {
 			return nil, err
 		}
-		ctr.freeSpillExprExecs()
-		ctr.spillExprExecs = execs
+		ctr.hashmapBuilder.executors = execs
+		ctr.hashmapBuilder.keyExprs = conditions
 	}
+	ctr.spillExprExecs = ctr.hashmapBuilder.executors
 	return ctr.spillExprExecs, nil
 }
 
-// freeSpillExprExecs frees all cached spill expression executors.
+// freeSpillExprExecs clears the spill alias and releases its builder-owned tree.
 func (ctr *container) freeSpillExprExecs() {
-	for _, exec := range ctr.spillExprExecs {
-		if exec != nil {
-			exec.Free()
-		}
-	}
 	ctr.spillExprExecs = nil
+	ctr.hashmapBuilder.FreeExecutors()
 }
 
 func (ctr *container) memUsed() int64 {

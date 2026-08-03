@@ -771,11 +771,30 @@ func (mp *MPool) AllocAccounted(
 	owner AllocationOwner,
 	site AllocationSite,
 ) ([]byte, error) {
+	return mp.AllocAccountedWithCapacityClass(
+		sz,
+		account,
+		owner,
+		site,
+		AllocationCapacityClassDefault,
+	)
+}
+
+// AllocAccountedWithCapacityClass allocates with an execution-local capacity
+// controller while preserving the same physical allocation provenance.
+func (mp *MPool) AllocAccountedWithCapacityClass(
+	sz int,
+	account *AllocationAccount,
+	owner AllocationOwner,
+	site AllocationSite,
+	capacityClass AllocationCapacityClass,
+) ([]byte, error) {
 	detailk := mp.getDetailK()
 	request := allocationAccountRequest{
-		account: account,
-		owner:   owner,
-		site:    site,
+		account:       account,
+		owner:         owner,
+		site:          site,
+		capacityClass: capacityClass,
 	}
 	return mp.allocAccountedWithDetailK(detailk, int64(sz), request)
 }
@@ -934,11 +953,14 @@ func (mp *MPool) allocAccounted(
 			request.account.registry.releaseMetadata()
 		}
 		if accountHeld {
-			request.account.release(uint64(sz))
+			request.account.releaseWithCapacityClass(uint64(sz), request.capacityClass)
 		}
 	}()
 
-	if err = request.account.acquire(uint64(sz)); err != nil {
+	if err = request.account.acquireWithCapacityClass(
+		uint64(sz),
+		request.capacityClass,
+	); err != nil {
 		return nil, err
 	}
 	accountHeld = true
@@ -954,10 +976,11 @@ func (mp *MPool) allocAccounted(
 	}
 	hdr.SetGuard()
 	lease := allocationLease{
-		account:  request.account,
-		owner:    request.owner,
-		site:     request.site,
-		profiled: ProfilingEnabled(),
+		account:       request.account,
+		owner:         request.owner,
+		site:          request.site,
+		profiled:      ProfilingEnabled(),
+		capacityClass: request.capacityClass,
 	}
 
 	gcurr := globalStats.RecordAlloc("global", sz)
@@ -1120,9 +1143,10 @@ func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int64, offHea
 				return nil, ErrAllocationAccountMismatch
 			}
 			accounted := allocationAccountRequest{
-				account: lease.account,
-				owner:   lease.owner,
-				site:    lease.site,
+				account:       lease.account,
+				owner:         lease.owner,
+				site:          lease.site,
+				capacityClass: lease.capacityClass,
 			}
 			request = &accounted
 		}
@@ -1239,9 +1263,10 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 			return nil, ErrAllocationAccountMismatch
 		}
 		request := allocationAccountRequest{
-			account: lease.account,
-			owner:   lease.owner,
-			site:    lease.site,
+			account:       lease.account,
+			owner:         lease.owner,
+			site:          lease.site,
+			capacityClass: lease.capacityClass,
 		}
 		replacement, err := mp.allocAccountedWithDetailK(
 			detailk,
@@ -1353,6 +1378,26 @@ func MakeSliceAccounted[T any](
 	owner AllocationOwner,
 	site AllocationSite,
 ) ([]T, error) {
+	return MakeSliceAccountedWithCapacityClass[T](
+		n,
+		mp,
+		account,
+		owner,
+		site,
+		AllocationCapacityClassDefault,
+	)
+}
+
+// MakeSliceAccountedWithCapacityClass is the typed-slice form of
+// AllocAccountedWithCapacityClass.
+func MakeSliceAccountedWithCapacityClass[T any](
+	n int,
+	mp *MPool,
+	account *AllocationAccount,
+	owner AllocationOwner,
+	site AllocationSite,
+	capacityClass AllocationCapacityClass,
+) ([]T, error) {
 	if n < 0 {
 		return nil, ErrAllocationAccountInvalid
 	}
@@ -1374,7 +1419,13 @@ func MakeSliceAccounted[T any](
 		)
 	}
 	size := int(uint64(n) * uint64(elementSize))
-	bs, err := mp.AllocAccounted(size, account, owner, site)
+	bs, err := mp.AllocAccountedWithCapacityClass(
+		size,
+		account,
+		owner,
+		site,
+		capacityClass,
+	)
 	if err != nil {
 		return nil, err
 	}

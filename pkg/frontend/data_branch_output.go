@@ -144,7 +144,7 @@ type applyBatchInfo struct {
 	insertTable        string
 	deleteKeyNames     []string
 	deleteStageNames   []string
-	visibleNames       []string
+	writableNames      []string
 	disableInsertStage bool
 }
 
@@ -220,17 +220,17 @@ func newApplyBatchInfo(
 	deleteKeyNames := make([]string, len(deleteKeyColIdxes))
 	deleteStageNames := make([]string, len(deleteKeyColIdxes))
 	for i, idx := range deleteKeyColIdxes {
-		deleteKeyNames[i] = tblStuff.def.colNames[idx]
+		deleteKeyNames[i] = tblStuff.def.baseColNames[idx]
 		deleteStageNames[i] = fmt.Sprintf("branch_apply_key_%d", i)
 	}
 
-	visibleIdxes := tblStuff.def.visibleIdxes
+	writableIdxes := tblStuff.def.writableIdxes
 	if len(tblStuff.def.tarOnlyIdxes) > 0 {
-		visibleIdxes = tblStuff.def.commonVisibleIdxes
+		writableIdxes = tblStuff.def.commonWritableIdxes
 	}
-	visibleNames := make([]string, len(visibleIdxes))
-	for i, idx := range visibleIdxes {
-		visibleNames[i] = tblStuff.def.colNames[idx]
+	writableNames := make([]string, len(writableIdxes))
+	for i, idx := range writableIdxes {
+		writableNames[i] = tblStuff.def.baseColNames[idx]
 	}
 
 	seq := atomic.AddUint64(&diffTempTableSeq, 1)
@@ -242,7 +242,7 @@ func newApplyBatchInfo(
 		insertTable:        fmt.Sprintf("__mo_diff_ins_%s_%d", sessionTag, seq),
 		deleteKeyNames:     deleteKeyNames,
 		deleteStageNames:   deleteStageNames,
-		visibleNames:       visibleNames,
+		writableNames:      writableNames,
 		disableInsertStage: disableInsertStage,
 	}
 }
@@ -1738,7 +1738,7 @@ func writeDeleteRowSQLFull(
 		if i > 0 {
 			buf.WriteString(" and ")
 		}
-		colName := quoteIdentifierForSQL(tblStuff.def.colNames[idx])
+		colName := quoteIdentifierForSQL(tblStuff.def.baseColNames[idx])
 		if row[idx] == nil {
 			buf.WriteString(colName)
 			buf.WriteString(" is null")
@@ -1839,9 +1839,9 @@ func appendDataBranchApplyRowAsSQLValues(
 			}
 		}
 	} else {
-		insertIdxes := tblStuff.def.visibleIdxes
+		insertIdxes := tblStuff.def.writableIdxes
 		if len(tblStuff.def.tarOnlyIdxes) > 0 {
-			insertIdxes = tblStuff.def.commonVisibleIdxes
+			insertIdxes = tblStuff.def.commonWritableIdxes
 		}
 		if err = writeInsertRowValues(ses, tblStuff, row, tmpValsBuffer, insertIdxes); err != nil {
 			return err
@@ -2219,10 +2219,10 @@ func writeInsertRowValues(
 	return nil
 }
 
-func quotedColumnNamesByIdxes(tblStuff tableStuff, idxes []int) []string {
+func quotedBaseColumnNamesByIdxes(tblStuff tableStuff, idxes []int) []string {
 	names := make([]string, len(idxes))
 	for i, idx := range idxes {
-		names[i] = quoteIdentifierForSQL(tblStuff.def.colNames[idx])
+		names[i] = quoteIdentifierForSQL(tblStuff.def.baseColNames[idx])
 	}
 	return names
 }
@@ -2389,7 +2389,7 @@ func initApplyTables(
 		)
 	}
 	deleteCols := strings.Join(deleteSelectExprs, ",")
-	insertCols := joinQuotedColumnNames(batchInfo.visibleNames)
+	insertCols := joinQuotedColumnNames(batchInfo.writableNames)
 
 	stmts := []string{
 		fmt.Sprintf("drop table if exists %s", deleteTable),
@@ -2489,7 +2489,7 @@ func flushSqlValues(
 
 		if !batchInfo.disableInsertStage {
 			insertStmt := fmt.Sprintf("insert into %s values %s", insertTable, buf.String())
-			cols := joinQuotedColumnNames(batchInfo.visibleNames)
+			cols := joinQuotedColumnNames(batchInfo.writableNames)
 			applyStmt := fmt.Sprintf(
 				"insert into %s (%s) select %s from %s",
 				baseTable, cols, cols, insertTable,
@@ -2503,9 +2503,9 @@ func flushSqlValues(
 	defer releaseBuffer(tblStuff.bufPool, sqlBuffer)
 
 	initInsertIntoBuf := func() {
-		insertIdxes := tblStuff.def.visibleIdxes
+		insertIdxes := tblStuff.def.writableIdxes
 		if len(tblStuff.def.tarOnlyIdxes) > 0 {
-			insertIdxes = tblStuff.def.commonVisibleIdxes
+			insertIdxes = tblStuff.def.commonWritableIdxes
 		}
 		sqlBuffer.WriteString(fmt.Sprintf(
 			"insert into %s (%s) values ",
@@ -2513,7 +2513,7 @@ func flushSqlValues(
 				tblStuff.baseRel.GetTableDef(ctx).DbName,
 				tblStuff.baseRel.GetTableDef(ctx).Name,
 			),
-			strings.Join(quotedColumnNamesByIdxes(tblStuff, insertIdxes), ","),
+			strings.Join(quotedBaseColumnNamesByIdxes(tblStuff, insertIdxes), ","),
 		))
 	}
 
@@ -2525,10 +2525,10 @@ func flushSqlValues(
 					tblStuff.baseRel.GetTableDef(ctx).DbName,
 					tblStuff.baseRel.GetTableDef(ctx).Name,
 				),
-				quoteIdentifierForSQL(tblStuff.def.colNames[tblStuff.def.pkColIdx]),
+				quoteIdentifierForSQL(tblStuff.def.baseColNames[tblStuff.def.pkColIdx]),
 			))
 		} else {
-			pkNames := quotedColumnNamesByIdxes(tblStuff, tblStuff.def.pkColIdxes)
+			pkNames := quotedBaseColumnNamesByIdxes(tblStuff, tblStuff.def.pkColIdxes)
 			sqlBuffer.WriteString(fmt.Sprintf(
 				"delete from %s where (%s) in (",
 				qualifiedTableName(

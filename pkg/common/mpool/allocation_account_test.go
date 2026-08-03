@@ -151,6 +151,51 @@ func TestAllocationAccountControllerRollback(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestAllocationAccountCapacityClassLifecycle(t *testing.T) {
+	registry, err := NewAllocationAccountRegistry(1, 1)
+	require.NoError(t, err)
+	account, err := registry.Open(8)
+	require.NoError(t, err)
+	controller := &testAllocationCapacityController{}
+	class, err := account.RegisterCapacityController(controller)
+	require.NoError(t, err)
+	require.NotEqual(t, AllocationCapacityClassDefault, class)
+
+	require.NoError(t, account.acquireWithCapacityClass(4, class))
+	require.Equal(t, uint64(4), controller.used.Load())
+	require.ErrorIs(
+		t, account.UnregisterCapacityController(class, controller),
+		ErrAllocationAccountLive,
+	)
+	account.releaseWithCapacityClass(4, class)
+	require.Zero(t, controller.used.Load())
+	require.NoError(t, account.UnregisterCapacityController(class, controller))
+	require.ErrorIs(
+		t, account.acquireWithCapacityClass(1, class),
+		ErrAllocationAccountInvalid,
+	)
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+}
+
+func TestAllocationAccountTerminalRejectsRegisteredCapacityClass(t *testing.T) {
+	registry, err := NewAllocationAccountRegistry(1, 1)
+	require.NoError(t, err)
+	account, err := registry.Open(1)
+	require.NoError(t, err)
+	controller := &testAllocationCapacityController{}
+	_, err = account.RegisterCapacityController(controller)
+	require.NoError(t, err)
+
+	snapshot, first, err := registry.CompleteTerminal(account)
+	require.True(t, first)
+	require.ErrorIs(t, err, ErrAllocationAccountInvariant)
+	require.Contains(t, err.Error(), "retains 1 capacity controllers")
+	require.Equal(t, AllocationAccountTerminalInvariantFailure, snapshot.State)
+	require.Zero(t, snapshot.Used)
+	require.False(t, registry.AdmissionSuspended())
+}
+
 func TestAllocationAccountFinalizeWaitsForRelease(t *testing.T) {
 	registry, err := NewAllocationAccountRegistry(1, 1)
 	require.NoError(t, err)

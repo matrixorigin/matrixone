@@ -37,6 +37,20 @@ func NewExpressionExecutors(
 	exprs []*plan.Expr,
 	account *mpool.AllocationAccount,
 ) ([]colexec.ExpressionExecutor, error) {
+	return newExpressionExecutorsWithCapacityClass(
+		proc,
+		exprs,
+		account,
+		mpool.AllocationCapacityClassDefault,
+	)
+}
+
+func newExpressionExecutorsWithCapacityClass(
+	proc *process.Process,
+	exprs []*plan.Expr,
+	account *mpool.AllocationAccount,
+	capacityClass mpool.AllocationCapacityClass,
+) ([]colexec.ExpressionExecutor, error) {
 	if len(exprs) == 0 {
 		return nil, process.ErrHashBuildBudgetInvalid
 	}
@@ -45,13 +59,14 @@ func NewExpressionExecutors(
 			return nil, process.ErrHashBuildBudgetInvalid
 		}
 	}
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := vector.NewAllocationAccountSelectionWithCapacityClass(
 		account,
 		HashBuildAllocationOwner,
 		hashBuildAllocationSiteExpressionData,
 		hashBuildAllocationSiteExpressionArea,
 		hashBuildAllocationSiteExpressionNulls,
 		hashBuildAllocationSiteExpressionGrouping,
+		capacityClass,
 	)
 	if err != nil {
 		return nil, err

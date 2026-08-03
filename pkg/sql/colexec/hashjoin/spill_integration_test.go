@@ -369,7 +369,10 @@ func TestShuffleJoinHardBudgetRejectTransitionsToSpill(t *testing.T) {
 	// This cap admits one bounded scatter pass and per-bucket rebuild, but not
 	// the complete 8K-row retained build/map. The very high soft threshold
 	// proves that spill is entered from hard admission rejection, not policy.
-	tc.proc.Base.Lim.Size = 200 << 10
+	// Leave enough capacity for the mandatory bounded recovery pass itself.
+	// The retained 8K-row build/map still cannot fit, so ordinary allocation
+	// admission is what drives the operator into spill mode.
+	tc.proc.Base.Lim.Size = 512 << 10
 	tc.proc.Base.Lim.SpillSize = 64 << 20
 
 	const rows = 8192

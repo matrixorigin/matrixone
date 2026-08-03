@@ -39,12 +39,13 @@ func allocationAccountInvalid(message string) error {
 // A selection may be shared by all vectors owned by one Batch. Views do not
 // copy it: they share storage and therefore must not create a second charge.
 type AllocationAccountSelection struct {
-	account      *mpool.AllocationAccount
-	owner        mpool.AllocationOwner
-	dataSite     mpool.AllocationSite
-	areaSite     mpool.AllocationSite
-	nullsSite    mpool.AllocationSite
-	groupingSite mpool.AllocationSite
+	account       *mpool.AllocationAccount
+	owner         mpool.AllocationOwner
+	dataSite      mpool.AllocationSite
+	areaSite      mpool.AllocationSite
+	nullsSite     mpool.AllocationSite
+	groupingSite  mpool.AllocationSite
+	capacityClass mpool.AllocationCapacityClass
 }
 
 // AllocationAccountSelectionsEqual reports whether two immutable selections
@@ -63,7 +64,8 @@ func AllocationAccountSelectionsEqual(
 		left.dataSite == right.dataSite &&
 		left.areaSite == right.areaSite &&
 		left.nullsSite == right.nullsSite &&
-		left.groupingSite == right.groupingSite
+		left.groupingSite == right.groupingSite &&
+		left.capacityClass == right.capacityClass
 }
 
 func NewAllocationAccountSelection(
@@ -74,13 +76,36 @@ func NewAllocationAccountSelection(
 	nullsSite mpool.AllocationSite,
 	groupingSite mpool.AllocationSite,
 ) (*AllocationAccountSelection, error) {
+	return NewAllocationAccountSelectionWithCapacityClass(
+		account,
+		owner,
+		dataSite,
+		areaSite,
+		nullsSite,
+		groupingSite,
+		mpool.AllocationCapacityClassDefault,
+	)
+}
+
+// NewAllocationAccountSelectionWithCapacityClass applies one execution-local
+// capacity class to every physical vector backing allocation.
+func NewAllocationAccountSelectionWithCapacityClass(
+	account *mpool.AllocationAccount,
+	owner mpool.AllocationOwner,
+	dataSite mpool.AllocationSite,
+	areaSite mpool.AllocationSite,
+	nullsSite mpool.AllocationSite,
+	groupingSite mpool.AllocationSite,
+	capacityClass mpool.AllocationCapacityClass,
+) (*AllocationAccountSelection, error) {
 	selection := &AllocationAccountSelection{
-		account:      account,
-		owner:        owner,
-		dataSite:     dataSite,
-		areaSite:     areaSite,
-		nullsSite:    nullsSite,
-		groupingSite: groupingSite,
+		account:       account,
+		owner:         owner,
+		dataSite:      dataSite,
+		areaSite:      areaSite,
+		nullsSite:     nullsSite,
+		groupingSite:  groupingSite,
+		capacityClass: capacityClass,
 	}
 	if err := selection.validate(); err != nil {
 		return nil, err
@@ -392,12 +417,13 @@ func (v *Vector) allocateBitmapGrowth(
 	if !ok || newBytes > int64(math.MaxInt) || newBytes%8 != 0 {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
-	next, err := mpool.MakeSliceAccounted[uint64](
+	next, err := mpool.MakeSliceAccountedWithCapacityClass[uint64](
 		int(newBytes/8),
 		mp,
 		v.allocationAccount.account,
 		v.allocationAccount.owner,
 		site,
+		v.allocationAccount.capacityClass,
 	)
 	if err != nil {
 		return nil, err
@@ -449,11 +475,12 @@ func (v *Vector) allocOwned(
 	if data {
 		site = v.allocationAccount.dataSite
 	}
-	return mp.AllocAccounted(
+	return mp.AllocAccountedWithCapacityClass(
 		size,
 		v.allocationAccount.account,
 		v.allocationAccount.owner,
 		site,
+		v.allocationAccount.capacityClass,
 	)
 }
 

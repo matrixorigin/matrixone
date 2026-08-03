@@ -121,16 +121,21 @@ type container struct {
 	// input batch.  spillBucketOffsets identifies each bucket's sub-slice;
 	// keeping one array avoids the 32 independent append/growth paths used by
 	// the old scatter implementation.
-	spillBucketRowIds     []int32
-	spillBucketCounts     [spillNumBuckets]int32
-	spillBucketOffsets    [spillNumBuckets + 1]int32
-	spillBucketWriteRows  [spillNumBuckets]int64
-	spillKeyVecs          []*vector.Vector
-	spillBatchAllocation  *vector.AllocationAccountSelection
-	spillAllocationMP     *mpool.MPool
-	spillAccountedWrite   *mpool.AccountedBuffer
-	spillAccountedBuckets [spillNumBuckets]*mpool.AccountedBuffer
-	spillCoalesceDisabled bool
+	spillBucketRowIds      []int32
+	spillBucketCounts      [spillNumBuckets]int32
+	spillBucketOffsets     [spillNumBuckets + 1]int32
+	spillBucketWriteRows   [spillNumBuckets]int64
+	spillKeyVecs           []*vector.Vector
+	spillBatchAllocation   *vector.AllocationAccountSelection
+	spillAllocationMP      *mpool.MPool
+	spillAccountedWrite    *mpool.AccountedBuffer
+	spillAccountedBuckets  [spillNumBuckets]*mpool.AccountedBuffer
+	spillCoalesceDisabled  bool
+	recoveryCapacity       *process.HashBuildRecoveryCapacity
+	recoveryCapacityClass  mpool.AllocationCapacityClass
+	expressionRecoveryPeak uint64
+	expressionRecoveryRows int
+	spillRecoveryPeak      uint64
 	// cached expression executors for spill (reused across batches)
 	spillExprExecs  []colexec.ExpressionExecutor
 	spillConditions []*plan.Expr
@@ -324,10 +329,109 @@ func (hashBuild *HashBuild) SetAllocationAccount(
 	if err != nil {
 		return err
 	}
-	if err = hashBuild.ctr.hashmapBuilder.SetAllocationAccount(account); err != nil {
+	if err := hashBuild.ctr.hashmapBuilder.SetAllocationAccount(account); err != nil {
 		return err
 	}
 	hashBuild.ctr.spillBatchAllocation = selection
+	return nil
+}
+
+func (hashBuild *HashBuild) installRecoveryCapacity(
+	budget *process.HashBuildBudgetGeneration,
+) error {
+	ctr := &hashBuild.ctr
+	account := ctr.hashmapBuilder.mapAllocationAccount
+	if account == nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	if ctr.recoveryCapacity != nil {
+		if ctr.recoveryCapacityClass == mpool.AllocationCapacityClassDefault ||
+			ctr.hashmapBuilder.recoveryCapacityClass != ctr.recoveryCapacityClass {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		return nil
+	}
+	if ctr.recoveryCapacityClass != mpool.AllocationCapacityClassDefault {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	capacity, err := process.NewHashBuildRecoveryCapacity(budget)
+	if err != nil {
+		return err
+	}
+	class, err := account.RegisterCapacityController(capacity)
+	if err != nil {
+		_ = capacity.Close()
+		return err
+	}
+	selection, err := vector.NewAllocationAccountSelectionWithCapacityClass(
+		account,
+		HashBuildAllocationOwner,
+		HashBuildSpillAllocationSiteSelectedData,
+		HashBuildSpillAllocationSiteSelectedArea,
+		HashBuildSpillAllocationSiteSelectedNulls,
+		HashBuildSpillAllocationSiteSelectedGrouping,
+		class,
+	)
+	if err != nil {
+		_ = account.UnregisterCapacityController(class, capacity)
+		_ = capacity.Close()
+		return err
+	}
+	ctr.recoveryCapacity = capacity
+	ctr.recoveryCapacityClass = class
+	ctr.spillBatchAllocation = selection
+	ctr.hashmapBuilder.recoveryCapacityClass = class
+	return nil
+}
+
+// releaseRecoveryCapacity returns unused recovery headroom as soon as build
+// reaches a terminal result. restoreDefault keeps direct test/reuse spill
+// allocations on the statement's ordinary controller; statement teardown
+// passes false and drops the selection immediately afterward.
+func (hashBuild *HashBuild) releaseRecoveryCapacity(
+	account *mpool.AllocationAccount,
+	restoreDefault bool,
+) error {
+	ctr := &hashBuild.ctr
+	if ctr.recoveryCapacity == nil {
+		return nil
+	}
+	if account == nil || ctr.recoveryCapacityClass ==
+		mpool.AllocationCapacityClassDefault {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	capacity := ctr.recoveryCapacity
+	class := ctr.recoveryCapacityClass
+	if err := capacity.Close(); err != nil {
+		return err
+	}
+	if err := account.UnregisterCapacityController(class, capacity); err != nil {
+		return err
+	}
+	ctr.recoveryCapacity = nil
+	ctr.recoveryCapacityClass = mpool.AllocationCapacityClassDefault
+	ctr.expressionRecoveryPeak = 0
+	ctr.expressionRecoveryRows = 0
+	ctr.spillRecoveryPeak = 0
+	ctr.hashmapBuilder.recoveryCapacityClass =
+		mpool.AllocationCapacityClassDefault
+	if !restoreDefault {
+		ctr.spillBatchAllocation = nil
+		return nil
+	}
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		HashBuildAllocationOwner,
+		HashBuildSpillAllocationSiteSelectedData,
+		HashBuildSpillAllocationSiteSelectedArea,
+		HashBuildSpillAllocationSiteSelectedNulls,
+		HashBuildSpillAllocationSiteSelectedGrouping,
+	)
+	if err != nil {
+		ctr.spillBatchAllocation = nil
+		return err
+	}
+	ctr.spillBatchAllocation = selection
 	return nil
 }
 
@@ -408,6 +512,11 @@ func (hashBuild *HashBuild) ClearAllocationAccount(
 			return mpool.ErrAllocationAccountInvariant
 		}
 	}
+	if hashBuild.ctr.recoveryCapacity != nil {
+		if err := hashBuild.releaseRecoveryCapacity(account, false); err != nil {
+			return err
+		}
+	}
 	if err := builder.ClearAllocationAccount(account); err != nil {
 		return err
 	}
@@ -439,6 +548,7 @@ func (hb *HashmapBuilder) ClearAllocationAccount(
 	builder.iteratorAllocation = nil
 	builder.batchAllocation = nil
 	builder.uniqueKeyAllocation = nil
+	builder.recoveryCapacityClass = mpool.AllocationCapacityClassDefault
 	return nil
 }
 
@@ -571,7 +681,8 @@ func hasHashBuildDiagnosticStats(extra map[string]int64) bool {
 		extra["QueryHashBudgetRejects"] != 0 ||
 		extra["HashBuildRuntimeFilterCollectionFallbacks"] != 0 ||
 		extra["HashBuildRuntimeFilterBudgetFallbacks"] != 0 ||
-		extra["HashBuildRuntimeFilterAllocationFallbacks"] != 0
+		extra["HashBuildRuntimeFilterAllocationFallbacks"] != 0 ||
+		extra["HashBuildSpillRecoveryReserveRejects"] != 0
 }
 
 func (hashBuild *HashBuild) publishJoinMap(proc *process.Process, jm *message.JoinMap) bool {
@@ -641,6 +752,9 @@ func (hb *HashmapBuilder) CleanCopiedBatchAt(idx int, proc *process.Process) err
 			hb.Batches.MemSize += int64(bat.Size())
 		}
 	}
+	if len(hb.Batches.Buf) == 0 {
+		hb.retainedSpillTailSelected = 0
+	}
 	return nil
 }
 
@@ -674,6 +788,7 @@ func (hb *HashmapBuilder) DrainCopiedBatches(
 	}
 	hb.Batches.Buf = nil
 	hb.Batches.MemSize = 0
+	hb.retainedSpillTailSelected = 0
 	return nil
 }
 

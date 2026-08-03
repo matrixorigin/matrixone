@@ -73,6 +73,11 @@ type Vector struct {
 	// allocationAccount selects the account for this vector's first owned
 	// off-heap data and area allocations. Physical MPool metadata owns release.
 	allocationAccount *AllocationAccountSelection
+
+	// areaDisjoint proves that every live non-inline varlena descriptor owns a
+	// distinct range in area. Spill projections use it to avoid scanning normal
+	// append-built vectors; operations that can introduce aliases clear it.
+	areaDisjoint bool
 }
 
 func toSliceOfLengthNoTypeCheck[T any](vec *Vector, length int) []T {
@@ -136,6 +141,7 @@ func (v *Vector) Reset(typ types.Type) {
 	v.nsp.Clear()
 	v.gsp.Clear()
 	v.sorted = false
+	v.areaDisjoint = true
 }
 
 func (v *Vector) ResetWithSameType() {
@@ -147,10 +153,12 @@ func (v *Vector) ResetWithSameType() {
 	v.nsp.Reset()
 	v.gsp.Reset()
 	v.sorted = false
+	v.areaDisjoint = true
 }
 
 func (v *Vector) ResetArea() {
 	v.area = v.area[:0]
+	v.areaDisjoint = v.length == 0
 }
 
 // TODO: It is semantically same as Reset, need to merge them later.
@@ -164,6 +172,7 @@ func (v *Vector) ResetWithNewType(t *types.Type) {
 	v.gsp.Clear()
 	v.length = 0
 	v.sorted = false
+	v.areaDisjoint = true
 }
 
 func (v *Vector) UnsafeGetRawData() []byte {
@@ -196,6 +205,9 @@ func (v *Vector) Allocated() int {
 }
 
 func (v *Vector) SetLength(n int) {
+	if v.typ.IsVarlen() && n != v.length {
+		v.areaDisjoint = false
+	}
 	v.length = n
 }
 
@@ -248,6 +260,11 @@ func (v *Vector) GetType() *types.Type {
 // but did not change the underlying data.   So the length
 // and capacity are all messed up.
 func (v *Vector) SetType(typ types.Type) {
+	if v.typ.IsVarlen() || typ.IsVarlen() {
+		// An empty logical range has no descriptors, even if reusable backing
+		// storage still contains stale bytes.
+		v.areaDisjoint = v.length == 0
+	}
 	v.typ = typ
 }
 
@@ -414,6 +431,7 @@ func (v *Vector) CleanOnlyData() {
 	v.nsp.Clear()
 	v.gsp.Clear()
 	v.sorted = false
+	v.areaDisjoint = v.length == 0
 }
 
 // no copy. it is unsafe if the user cannot determine the vector's life
@@ -528,6 +546,7 @@ func NewVec(typ types.Type) *Vector {
 	vec := NewVecFromReuse()
 	vec.typ = typ
 	vec.class = FLAT
+	vec.areaDisjoint = true
 	return vec
 }
 
@@ -542,12 +561,14 @@ func NewOffHeapVecWithTypeAndData(typ types.Type, data []byte, length, cap int) 
 	vec.offHeap = true
 	vec.data = data
 	vec.length = length
+	vec.areaDisjoint = !typ.IsVarlen() || length == 0
 	return vec
 }
 
 func NewOffHeapVec() *Vector {
 	vec := NewVecFromReuse()
 	vec.offHeap = true
+	vec.areaDisjoint = true
 	return vec
 }
 
@@ -561,6 +582,7 @@ func NewVecWithData(
 	vec.length = length
 	vec.data = data
 	vec.area = area
+	vec.areaDisjoint = !typ.IsVarlen() || length == 0
 	return vec
 }
 
@@ -574,6 +596,7 @@ func NewVecWithDataCopy(
 ) (*Vector, error) {
 	vec := NewVec(typ)
 	vec.length = length
+	vec.areaDisjoint = !typ.IsVarlen() || length == 0
 	var err error
 	if len(data) > 0 {
 		vec.data, err = vec.allocData(mp, len(data))
@@ -659,6 +682,9 @@ func (v *Vector) IsGrouping() bool {
 }
 
 func (v *Vector) SetClass(class int) {
+	if v.typ.IsVarlen() && class != v.class {
+		v.areaDisjoint = v.length == 0
+	}
 	v.class = class
 }
 
@@ -682,6 +708,10 @@ func (v *Vector) UnsetNull(i uint64) {
 
 // call this function if type already checked
 func SetFixedAtNoTypeCheck[T types.FixedSizeT](v *Vector, idx int, t T) error {
+	if v.typ.IsVarlen() {
+		// A caller-provided varlena descriptor can alias an existing area range.
+		v.areaDisjoint = false
+	}
 	vacol := MustFixedColNoTypeCheck[T](v)
 	if idx < 0 {
 		idx = len(vacol) + idx
@@ -696,6 +726,10 @@ func SetFixedAtNoTypeCheck[T types.FixedSizeT](v *Vector, idx int, t T) error {
 // Note:
 // it is 10x slower than SetFixedAtNoTypeCheck
 func SetFixedAtWithTypeCheck[T types.FixedSizeT](v *Vector, idx int, t T) error {
+	if v.typ.IsVarlen() {
+		// A caller-provided varlena descriptor can alias an existing area range.
+		v.areaDisjoint = false
+	}
 	// Let it panic if v is not a varlena vec
 	vacol := MustFixedColWithTypeCheck[T](v)
 
@@ -710,12 +744,21 @@ func SetFixedAtWithTypeCheck[T types.FixedSizeT](v *Vector, idx int, t T) error 
 }
 
 func SetBytesAt(v *Vector, idx int, bs []byte, mp *mpool.MPool) error {
+	disjoint := v.areaDisjoint
 	var va types.Varlena
 	err := BuildVarlenaFromByteSlice(v, &va, &bs, mp)
 	if err != nil {
 		return err
 	}
-	return SetFixedAtWithTypeCheck(v, idx, va)
+	if err = SetFixedAtWithTypeCheck(v, idx, va); err != nil {
+		return err
+	}
+	// SetBytesAt appends a fresh area range before replacing the descriptor;
+	// it cannot introduce an alias into a previously disjoint vector.
+	if disjoint {
+		v.areaDisjoint = true
+	}
+	return nil
 }
 
 func SetStringAt(v *Vector, idx int, bs string, mp *mpool.MPool) error {
@@ -748,6 +791,14 @@ func (v *Vector) IsConstNull() bool {
 
 func (v *Vector) GetArea() []byte {
 	return v.area
+}
+
+// VarlenaAreaIsDisjoint reports whether logical non-inline payload is bounded
+// by the vector's physical area without inspecting its descriptors. Const
+// vectors intentionally do not expose this proof because broadcasting one
+// descriptor changes logical materialization multiplicity.
+func (v *Vector) VarlenaAreaIsDisjoint() bool {
+	return v != nil && v.typ.IsVarlen() && !v.IsConst() && v.areaDisjoint
 }
 
 func (v *Vector) GetData() []byte {
@@ -787,6 +838,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.sorted = false
 	v.isBin = false
 	v.allocationAccount = nil
+	v.areaDisjoint = true
 
 	// if !v.OnUsed || v.OnPut {
 	// 	panic("free vector which unalloc or in put list")
@@ -1120,6 +1172,7 @@ func decodeVectorBinaryLayout(
 }
 
 func (v *Vector) unmarshalBinary(data []byte, validateValues bool) error {
+	v.areaDisjoint = false
 	if v == nil {
 		return io.ErrClosedPipe
 	}
@@ -1277,6 +1330,7 @@ func canonicalVectorTypeSize(typ types.Type) (int, error) {
 }
 
 func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
+	v.areaDisjoint = false
 	if v == nil || mp == nil {
 		return io.ErrClosedPipe
 	}
@@ -1339,6 +1393,7 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 }
 
 func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
+	v.areaDisjoint = false
 	if v == nil || r == nil {
 		return io.ErrClosedPipe
 	}
@@ -1534,6 +1589,10 @@ func (v *Vector) UnmarshalGroupingFromReader(
 }
 
 func (v *Vector) ToConst() {
+	if v.typ.IsVarlen() {
+		// A constant's single physical descriptor is logically broadcast.
+		v.areaDisjoint = false
+	}
 	v.class = CONSTANT
 }
 
@@ -1702,6 +1761,7 @@ func (v *Vector) dup(
 		}
 		copy(w.area, v.area)
 	}
+	w.areaDisjoint = v.areaDisjoint
 	return w, nil
 }
 
@@ -1807,6 +1867,7 @@ func (v *Vector) cloneToFlatCompact(
 		dst[i].SetOffsetLen(uint32(offset), uint32(len(value)))
 		offset += len(value)
 	}
+	w.areaDisjoint = true
 	return w, nil
 }
 
@@ -1826,6 +1887,9 @@ func copyBitmapWithinLength(dst, src *nulls.Nulls, length int) {
 
 // Shrink use to shrink vectors, sels must be guaranteed to be ordered
 func (v *Vector) Shrink(sels []int64, negate bool) {
+	if v.typ.IsVarlen() {
+		v.areaDisjoint = false
+	}
 
 	shrinkSortedCheckIfRaceDetectorEnabled(sels)
 
@@ -1901,6 +1965,9 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 }
 
 func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
+	if v.typ.IsVarlen() {
+		v.areaDisjoint = false
+	}
 	if v.IsConst() {
 		if negate {
 			v.length -= sels.Count()
@@ -1974,6 +2041,9 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 
 // Shuffle use to shrink vectors, sels can be disordered
 func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
+	if v.typ.IsVarlen() {
+		v.areaDisjoint = false
+	}
 	if v.IsConst() {
 		return nil
 	}
@@ -2043,6 +2113,9 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 // alloc/free churn when the permutation preserves the element count.
 // buf is grown as needed and retained across calls.
 func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err error) {
+	if v.typ.IsVarlen() {
+		v.areaDisjoint = false
+	}
 	if v.IsConst() {
 		return nil
 	}
@@ -2121,6 +2194,7 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 
 // Copy simply does v[vi] = w[wi]
 func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
+	disjoint := v.areaDisjoint
 	sourceGrouping := w.GetGrouping().Contains(uint64(wi))
 	if sourceGrouping && v.allocationAccount != nil {
 		if err := v.ensureGroupingCapacity(int(vi)+1, mp); err != nil {
@@ -2180,6 +2254,11 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	}
 
 	v.GetNulls().Unset(uint64(vi))
+	// Copy either installs an inline value or appends a fresh area range. The
+	// overwritten descriptor becomes dead, so a valid disjoint proof survives.
+	if v.typ.IsVarlen() && disjoint {
+		v.areaDisjoint = true
+	}
 	return nil
 }
 
@@ -2973,6 +3052,7 @@ func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			if bm != nil && !bm.EmptyByFlag() {
 				for i := range ws {
 					if bm.Contains(uint64(i)) {
+						vs[v.length] = types.Varlena{}
 						nulls.Add(&v.nsp, uint64(v.length))
 					} else {
 						err = BuildVarlenaFromVarlena(v, &vs[v.length], &ws[i], &w.area, mp)
@@ -3398,6 +3478,9 @@ func (v *Vector) UnionNull(mp *mpool.MPool) error {
 
 // It is simply append. the purpose of retention is ease of use
 func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
+	if v.typ.IsVarlen() {
+		v.areaDisjoint = false
+	}
 	sourceGrouping := nulls.Contains(&w.gsp, uint64(sel))
 	sourceNull := w.IsConstNull() ||
 		(!w.IsConst() && nulls.Contains(&w.nsp, uint64(sel)))
@@ -3477,6 +3560,9 @@ func appendSelectedGrouping[T int32 | int64](
 
 // It is simply append. the purpose of retention is ease of use
 func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) error {
+	if v.typ.IsVarlen() {
+		v.areaDisjoint = false
+	}
 	if cnt == 0 {
 		return nil
 	}
@@ -3569,6 +3655,9 @@ func (v *Vector) UnionInt32(w *Vector, sels []int32, mp *mpool.MPool) error {
 }
 
 func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
+	if v.typ.IsVarlen() {
+		v.areaDisjoint = false
+	}
 	if len(sels) == 0 {
 		return nil
 	}
@@ -3703,6 +3792,9 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 }
 
 func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp *mpool.MPool) error {
+	if v.typ.IsVarlen() {
+		v.areaDisjoint = false
+	}
 	addCnt := 0
 	if flags == nil {
 		addCnt = cnt
@@ -4299,6 +4391,9 @@ func (v *Vector) RowToString(idx int) string {
 }
 
 func SetConstNull(vec *Vector, length int, mp *mpool.MPool) error {
+	if vec.typ.IsVarlen() {
+		vec.areaDisjoint = false
+	}
 	if len(vec.data) > 0 {
 		vec.data = vec.data[:0]
 	}
@@ -4308,6 +4403,9 @@ func SetConstNull(vec *Vector, length int, mp *mpool.MPool) error {
 }
 
 func SetConstFixed[T any](vec *Vector, val T, length int, mp *mpool.MPool) error {
+	if vec.typ.IsVarlen() {
+		vec.areaDisjoint = false
+	}
 	if err := extend(vec, 1, mp); err != nil {
 		return err
 	}
@@ -4320,6 +4418,7 @@ func SetConstFixed[T any](vec *Vector, val T, length int, mp *mpool.MPool) error
 }
 
 func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
+	vec.areaDisjoint = false
 	if err := extend(vec, 1, mp); err != nil {
 		return err
 	}
@@ -4333,6 +4432,7 @@ func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 }
 
 func SetConstByteJson(vec *Vector, bj bytejson.ByteJson, length int, mp *mpool.MPool) error {
+	vec.areaDisjoint = false
 	if err := extend(vec, 1, mp); err != nil {
 		return err
 	}
@@ -4351,6 +4451,7 @@ func SetConstByteJsonEncoded(
 	length int,
 	mp *mpool.MPool,
 ) error {
+	vec.areaDisjoint = false
 	oldAreaLen := len(vec.area)
 	var value types.Varlena
 	if err := BuildVarlenaFromByteJsonEncoded(vec, &value, enc, mp); err != nil {
@@ -4369,6 +4470,7 @@ func SetConstByteJsonEncoded(
 
 // SetConstArray set current vector as Constant_Array vector of given length.
 func SetConstArray[T types.ArrayElement](vec *Vector, val []T, length int, mp *mpool.MPool) error {
+	vec.areaDisjoint = false
 	var err error
 
 	if err := extend(vec, 1, mp); err != nil {
@@ -4611,6 +4713,10 @@ func AppendArrayList[T types.ArrayElement](vec *Vector, ws [][]T, isNulls []bool
 }
 
 func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) error {
+	if vec.typ.IsVarlen() && !isNull {
+		// Generic fixed appends can install an arbitrary varlena descriptor.
+		vec.areaDisjoint = false
+	}
 	if vec.IsConst() {
 		return moerr.NewInternalErrorNoCtx("append to const vector")
 	}
@@ -4621,6 +4727,12 @@ func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) err
 	length := vec.length
 	vec.length++
 	if isNull {
+		if vec.typ.IsVarlen() {
+			// Reused data capacity can contain a stale descriptor. Keep null rows
+			// inside the area-disjoint invariant by making the new slot inline.
+			toSliceOfLengthNoTypeCheck[types.Varlena](vec, vec.length)[length] =
+				types.Varlena{}
+		}
 		nulls.Add(&vec.nsp, uint64(length))
 	} else {
 		var col []T
@@ -4633,21 +4745,30 @@ func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) err
 func appendOneBytes(vec *Vector, val []byte, isNull bool, mp *mpool.MPool) error {
 	var err error
 	var va types.Varlena
+	if vec.IsConst() {
+		return moerr.NewInternalErrorNoCtx("append to const vector")
+	}
 
 	if isNull {
+		// AppendBytes is also the generic null append used by expression
+		// evaluation. Let appendOneFixed size the slot from vec.typ instead of
+		// treating every null as a varlena descriptor.
 		return appendOneFixed(vec, va, true, mp)
 	} else {
 		err = BuildVarlenaFromByteSlice(vec, &va, &val, mp)
 		if err != nil {
 			return err
 		}
-		return appendOneFixed(vec, va, false, mp)
+		return appendOneOwnedVarlena(vec, va, mp)
 	}
 }
 
 func appendOneByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool.MPool) error {
 	var err error
 	var va types.Varlena
+	if vec.IsConst() {
+		return moerr.NewInternalErrorNoCtx("append to const vector")
+	}
 
 	if isNull {
 		return appendOneFixed(vec, va, true, mp)
@@ -4656,7 +4777,7 @@ func appendOneByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool
 		if err != nil {
 			return err
 		}
-		return appendOneFixed(vec, va, false, mp)
+		return appendOneOwnedVarlena(vec, va, mp)
 	}
 }
 
@@ -4664,6 +4785,9 @@ func appendOneByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool
 func appendOneArray[T types.ArrayElement](vec *Vector, val []T, isNull bool, mp *mpool.MPool) error {
 	var err error
 	var va types.Varlena
+	if vec.IsConst() {
+		return moerr.NewInternalErrorNoCtx("append to const vector")
+	}
 
 	if isNull {
 		return appendOneFixed(vec, va, true, mp)
@@ -4672,17 +4796,40 @@ func appendOneArray[T types.ArrayElement](vec *Vector, val []T, isNull bool, mp 
 		if err != nil {
 			return err
 		}
-		return appendOneFixed(vec, va, false, mp)
+		return appendOneOwnedVarlena(vec, va, mp)
 	}
 }
 
+// appendOneOwnedVarlena installs a descriptor built against vec.area. The
+// value is either inline or references a freshly appended area range, so this
+// preserves an existing disjoint-area proof.
+func appendOneOwnedVarlena(
+	vec *Vector,
+	value types.Varlena,
+	mp *mpool.MPool,
+) error {
+	if err := extend(vec, 1, mp); err != nil {
+		return err
+	}
+	index := vec.length
+	vec.length++
+	toSliceOfLengthNoTypeCheck[types.Varlena](vec, vec.length)[index] = value
+	return nil
+}
+
 func appendMultiFixed[T any](vec *Vector, val T, isNull bool, cnt int, mp *mpool.MPool) error {
+	if vec.typ.IsVarlen() && !isNull {
+		vec.areaDisjoint = false
+	}
 	if err := extendWithBitmaps(vec, cnt, mp, isNull, false); err != nil {
 		return err
 	}
 	length := vec.length
 	vec.length += cnt
 	if isNull {
+		if vec.typ.IsVarlen() && cnt > 0 {
+			clear(toSliceOfLengthNoTypeCheck[types.Varlena](vec, vec.length)[length:])
+		}
 		nulls.AddRange(&vec.nsp, uint64(length), uint64(length+cnt))
 	} else if cnt > 0 {
 		// XXX check cnt > 0 to avoid issue #23295
@@ -4694,6 +4841,8 @@ func appendMultiFixed[T any](vec *Vector, val T, isNull bool, cnt int, mp *mpool
 }
 
 func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.MPool) error {
+	// A non-inline value is materialized once and its descriptor is broadcast.
+	vec.areaDisjoint = false
 	var err error
 	var va types.Varlena
 	if err = extendWithBitmaps(vec, cnt, mp, isNull, false); err != nil {
@@ -4718,6 +4867,9 @@ func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.M
 }
 
 func appendList[T any](vec *Vector, vals []T, isNulls []bool, mp *mpool.MPool) error {
+	if vec.typ.IsVarlen() {
+		vec.areaDisjoint = false
+	}
 	if err := extendWithBitmaps(
 		vec,
 		len(vals),
@@ -4742,6 +4894,8 @@ func appendList[T any](vec *Vector, vals []T, isNulls []bool, mp *mpool.MPool) e
 
 func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool) error {
 	var err error
+	disjoint := vec.areaDisjoint
+	vec.areaDisjoint = false
 	if err = extendWithBitmaps(
 		vec,
 		len(vals),
@@ -4756,6 +4910,7 @@ func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool
 	col := MustFixedColNoTypeCheck[types.Varlena](vec)
 	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
+			col[length+i] = types.Varlena{}
 			nulls.Add(&vec.nsp, uint64(length+i))
 		} else {
 			err = BuildVarlenaFromByteSlice(vec, &col[length+i], &w, mp)
@@ -4764,11 +4919,16 @@ func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool
 			}
 		}
 	}
+	if disjoint {
+		vec.areaDisjoint = true
+	}
 	return nil
 }
 
 func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPool) error {
 	var err error
+	disjoint := vec.areaDisjoint
+	vec.areaDisjoint = false
 
 	if err = extendWithBitmaps(
 		vec,
@@ -4784,6 +4944,7 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 	col := MustFixedColNoTypeCheck[types.Varlena](vec)
 	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
+			col[length+i] = types.Varlena{}
 			nulls.Add(&vec.nsp, uint64(length+i))
 		} else {
 			bs := []byte(w)
@@ -4793,12 +4954,17 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 			}
 		}
 	}
+	if disjoint {
+		vec.areaDisjoint = true
+	}
 	return nil
 }
 
 // appendArrayList mainly used for unit tests
 func appendArrayList[T types.ArrayElement](vec *Vector, vals [][]T, isNulls []bool, mp *mpool.MPool) error {
 	var err error
+	disjoint := vec.areaDisjoint
+	vec.areaDisjoint = false
 
 	if err = extendWithBitmaps(
 		vec,
@@ -4814,6 +4980,7 @@ func appendArrayList[T types.ArrayElement](vec *Vector, vals [][]T, isNulls []bo
 	col := MustFixedColNoTypeCheck[types.Varlena](vec)
 	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
+			col[length+i] = types.Varlena{}
 			nulls.Add(&vec.nsp, uint64(length+i))
 		} else {
 			bs := w
@@ -4822,6 +4989,9 @@ func appendArrayList[T types.ArrayElement](vec *Vector, vals [][]T, isNulls []bo
 				return err
 			}
 		}
+	}
+	if disjoint {
+		vec.areaDisjoint = true
 	}
 	return nil
 }
@@ -5101,6 +5271,9 @@ func (v *Vector) window(
 		return nil, err
 	}
 	if v.IsConst() {
+		if v.typ.IsVarlen() {
+			w.areaDisjoint = false
+		}
 		w.data = v.data
 		w.area = v.area
 		w.cantFreeArea = true
@@ -5112,6 +5285,7 @@ func (v *Vector) window(
 	}
 	if v.typ.IsVarlen() {
 		w.area = v.area
+		w.areaDisjoint = v.areaDisjoint
 	}
 	w.cantFreeData = true
 	w.cantFreeArea = true
@@ -5191,6 +5365,9 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 	}
 	if v.IsConstNull() {
 		w.class = CONSTANT
+		if v.typ.IsVarlen() {
+			w.areaDisjoint = false
+		}
 		w.length = end - start
 		w.data = nil
 		return nil
@@ -5232,6 +5409,7 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 		if v.typ.IsVarlen() {
 			w.area = make([]byte, len(v.area))
 			copy(w.area, v.area)
+			w.areaDisjoint = v.areaDisjoint
 		}
 		w.cantFreeData = true
 		w.cantFreeArea = true
@@ -5242,18 +5420,25 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 		}
 		w.length = end - start
 		if v.GetType().IsVarlen() {
+			// Expose the proof only after every destination descriptor has been
+			// independently materialized. An allocation failure can leave a
+			// partially initialized logical range.
+			w.areaDisjoint = false
 			var vCol, wCol []types.Varlena
 			ToSliceNoTypeCheck(v, &vCol)
 			ToSliceNoTypeCheck(w, &wCol)
 			for i := start; i < end; i++ {
-				if !nulls.Contains(&v.nsp, uint64(i)) {
-					bs := vCol[i].GetByteSlice(v.area)
-					err = BuildVarlenaFromByteSlice(w, &wCol[i-start], &bs, mp)
-					if err != nil {
-						return err
-					}
+				if nulls.Contains(&v.nsp, uint64(i)) {
+					wCol[i-start] = types.Varlena{}
+					continue
+				}
+				bs := vCol[i].GetByteSlice(v.area)
+				err = BuildVarlenaFromByteSlice(w, &wCol[i-start], &bs, mp)
+				if err != nil {
+					return err
 				}
 			}
+			w.areaDisjoint = true
 		} else {
 			tlen := v.typ.TypeSize()
 			copy(w.data[:length], v.data[start*tlen:end*tlen])

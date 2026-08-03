@@ -74,6 +74,9 @@ type HashmapBuilder struct {
 	DelRows                   *bitmap.Bitmap
 	budget                    *process.HashBuildBudgetGeneration
 	keyExprs                  []*plan.Expr
+	// retainedSpillTailSelected is the logical spill materialization of the
+	// one partial CopyIntoBatches tail. It avoids rescanning that growing tail.
+	retainedSpillTailSelected uint64
 	// Exact runtime-filter keys are an optional owner inside the mandatory
 	// JoinMap build. The fallback bit is observed by HashBuild for diagnostics.
 	//
@@ -89,6 +92,7 @@ type HashmapBuilder struct {
 	iteratorAllocation              *hashmap.IteratorAllocation
 	batchAllocation                 *vector.AllocationAccountSelection
 	uniqueKeyAllocation             *vector.AllocationAccountSelection
+	recoveryCapacityClass           mpool.AllocationCapacityClass
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
@@ -126,6 +130,7 @@ func (hb *HashmapBuilder) GetJoinMap(mp *mpool.MPool) *message.JoinMap {
 	hb.StrHashMap = nil
 	hb.DelRows = nil
 	hb.Batches.Reset()
+	hb.retainedSpillTailSelected = 0
 	// Iterators are producer scratch and are not part of JoinMap ownership.
 	hb.detachAndPruneCachedIterators()
 	hb.freeIgnoreRows(mp)
@@ -193,10 +198,11 @@ func (hb *HashmapBuilder) Prepare(
 			}
 			keyWidth += width
 		}
-		executors, err := NewExpressionExecutors(
+		executors, err := newExpressionExecutorsWithCapacityClass(
 			proc,
 			keyCols,
 			hb.mapAllocationAccount,
+			hb.recoveryCapacityClass,
 		)
 		if err != nil {
 			return err
@@ -235,6 +241,7 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 	hb.hashMapRowCountSet = false
 	hb.HasNullKey = false
 	hb.Batches.Reset()
+	hb.retainedSpillTailSelected = 0
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
 	hb.freeIgnoreRows(proc.Mp())
@@ -263,6 +270,7 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.needDupVec = false
 	hb.HasNullKey = false
 	hb.Batches.Reset()
+	hb.retainedSpillTailSelected = 0
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
 	hb.FreeExecutors()
@@ -309,6 +317,7 @@ func (hb *HashmapBuilder) FreeHashMapAndBatches(proc *process.Process) {
 	}
 	hb.Sels.Free(proc.Mp())
 	hb.Batches.Clean(proc.Mp())
+	hb.retainedSpillTailSelected = 0
 	hb.freeIgnoreRows(proc.Mp())
 	hb.freeDelRows(proc.Mp())
 }

@@ -1599,6 +1599,10 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 		return err
 	}
 	setMysqlColumnTypeMetadata(col, typ)
+	setCharacter(col)
+	if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
+		col.SetCharset(charsetBinary)
+	}
 	return nil
 }
 
@@ -2056,12 +2060,6 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 		return nil, err
 	}
 	setColFlag(c)
-	setCharacter(c)
-
-	// For binary/varbinary with mysql_type_varchar.Change the charset.
-	if types.T(col.Typ.Id) == types.T_binary || types.T(col.Typ.Id) == types.T_varbinary {
-		c.SetCharset(0x3f)
-	}
 
 	c.SetDecimal(col.Typ.Scale)
 
