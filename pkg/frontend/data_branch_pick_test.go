@@ -638,6 +638,31 @@ func TestAppendExprToVec_BitLiteral(t *testing.T) {
 	}
 }
 
+func TestAppendExprToVec_InvalidBitLiteralAST(t *testing.T) {
+	tests := []string{
+		"0b",
+		"0x1",
+		"0b102",
+	}
+
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	pkType := types.New(types.T_bit, 8, 0)
+	for _, literal := range tests {
+		t.Run(literal, func(t *testing.T) {
+			vec := vector.NewVec(pkType)
+			defer vec.Free(mp)
+
+			num := tree.NewNumVal(literal, literal, false, tree.P_bit)
+			err := appendExprToVec(vec, num, pkType, time.UTC, mp)
+			require.ErrorContains(t, err, "invalid bit literal")
+			require.Zero(t, vec.Length())
+		})
+	}
+}
+
 func TestAppendExprToVec_IntegerPKNumericLiteralForms(t *testing.T) {
 	stmtNode, err := parsers.ParseOne(
 		context.Background(),
