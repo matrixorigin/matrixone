@@ -5490,6 +5490,7 @@ func TestHandleBindChangedConcurrently(t *testing.T) {
 				s.handleBindChanged(bind)
 			}
 			wg.Wait()
+			require.Same(t, lt, s.tableGroups.get(bind.Group, bind.Table))
 		},
 	)
 }
