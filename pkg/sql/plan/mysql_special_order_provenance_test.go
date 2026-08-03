@@ -60,6 +60,15 @@ func newMySQLSpecialOrderMock() *MockOptimizer {
 			{Name: "e", Typ: planpb.Type{Id: int32(types.T_enum), Enumvalues: "low,high,mid"}},
 		},
 	}
+	mock.ctxt.objects["set_empty_member_t"] = &planpb.ObjectRef{Obj: 9005, ObjName: "set_empty_member_t"}
+	mock.ctxt.tables["set_empty_member_t"] = &planpb.TableDef{
+		TblId: 9005,
+		Name:  "set_empty_member_t",
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "s", Typ: planpb.Type{Id: int32(types.T_uint64), Enumvalues: ",a"}},
+		},
+	}
 	return mock
 }
 
@@ -238,6 +247,18 @@ func TestMySQLSpecialOrderProvenanceRejectsNonReversibleEnum(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestMySQLSpecialOrderProvenanceRejectsSetWithEmptyMember(t *testing.T) {
+	logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+		"select id, s from set_empty_member_t order by s")
+	require.NoError(t, err)
+	requireSingleSortKeyType(t, logicPlan, types.T_uint64)
+
+	_, err = runOneStmt(newMySQLSpecialOrderMock(), t,
+		"select id, s from (select id, s from set_empty_member_t) d order by s, id")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ambiguous SET display values")
 }
 
 func TestMySQLSpecialOrderProvenanceInGroupConcat(t *testing.T) {

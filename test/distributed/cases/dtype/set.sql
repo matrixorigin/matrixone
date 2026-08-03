@@ -33,6 +33,16 @@ with c as (select colors from set01)
 select group_concat(colors order by colors separator '|') as ordered_values
 from c where colors is not null and colors <> '';
 
+-- SET('', 'a') maps bitmap 0 and bitmap 1 to the same display value. Direct
+-- sorting can use the raw bitmap, but a projected value must fail instead of
+-- silently collapsing the two definition-order keys.
+drop table if exists set_empty_member_order;
+create table set_empty_member_order (id int primary key, tags set('', 'a'));
+insert into set_empty_member_order values (2, 0), (1, 1), (3, 2);
+select id, tags from set_empty_member_order order by tags, id;
+select id, tags from (select id, tags from set_empty_member_order) d order by tags, id;
+drop table set_empty_member_order;
+
 drop table if exists set_idx;
 create table set_idx (
     id int primary key,

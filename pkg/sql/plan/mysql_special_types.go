@@ -335,8 +335,16 @@ func enumFoldKey(value string) string {
 func mysqlSpecialOrderTypeReversible(typ *plan.Type) bool {
 	switch {
 	case isSetPlanType(typ):
-		_, err := types.NormalizeSetValues(strings.Split(typ.Enumvalues, ","))
-		return err == nil
+		values, err := types.NormalizeSetValues(strings.Split(typ.Enumvalues, ","))
+		if err != nil {
+			return false
+		}
+		for _, value := range values {
+			if value == "" {
+				return false
+			}
+		}
+		return true
 	case isEnumPlanType(typ):
 		seen := make(map[string]struct{})
 		for _, value := range strings.Split(typ.Enumvalues, ",") {
@@ -354,13 +362,13 @@ func mysqlSpecialOrderTypeReversible(typ *plan.Type) bool {
 
 func newNonReversibleMySQLSpecialOrderError(ctx context.Context) error {
 	return moerr.NewNotSupported(ctx,
-		"definition-order sorting of projected ENUM/SET values with non-unique display labels")
+		"definition-order sorting of projected ENUM/SET values with non-unique display labels or ambiguous SET display values")
 }
 
 // makeMySQLSpecialOrderKey restores definition-order comparison after a query
 // boundary. The display-to-index conversion is allowed only when it is a true
-// inverse; ambiguous ENUM definitions must never silently choose the first
-// case-insensitive label.
+// inverse; ambiguous ENUM/SET definitions must never silently collapse storage
+// values that have the same display value.
 func makeMySQLSpecialOrderKey(ctx context.Context, displayExpr *plan.Expr, storageType *plan.Type) (*plan.Expr, error) {
 	if !mysqlSpecialOrderTypeReversible(storageType) {
 		return nil, newNonReversibleMySQLSpecialOrderError(ctx)
