@@ -221,3 +221,36 @@ SELECT SECOND(v), SECOND(c), SECOND(t) FROM time_extract_prefix_boundaries;
 24  ¦  24  ¦  24  𝄀
 24  ¦  24  ¦  24
 DROP TABLE time_extract_prefix_boundaries;
+CREATE TABLE time_extract_ambiguous_prefix_ownership(v VARCHAR(40), c CHAR(40), t TEXT);
+INSERT INTO time_extract_ambiguous_prefix_ownership VALUES
+('1 2', '1 2', '1 2'),
+('1 02', '1 02', '1 02'),
+('12:34:56', '12:34:56', '12:34:56'),
+('12:34:56 78', '12:34:56 78', '12:34:56 78'),
+('1-2-3 4:5:6', '1-2-3 4:5:6', '1-2-3 4:5:6'),
+('12345:', '12345:', '12345:'),
+('12345-1-1 1:2:3', '12345-1-1 1:2:3', '12345-1-1 1:2:3'),
+('-12:34', '-12:34', '-12:34'),
+('--12:34', '--12:34', '--12:34'),
+('2024-12-20 +12:34', '2024-12-20 +12:34', '2024-12-20 +12:34'),
+('2024-12-20 ++12:34', '2024-12-20 ++12:34', '2024-12-20 ++12:34'),
+('2024-12-20 12:34:56abc', '2024-12-20 12:34:56abc', '2024-12-20 12:34:56abc'),
+('2024-12-20 12:34:56+abc', '2024-12-20 12:34:56+abc', '2024-12-20 12:34:56+abc'),
+('2024-12-20 12:34:56-abc', '2024-12-20 12:34:56-abc', '2024-12-20 12:34:56-abc');
+SELECT SECOND(v), SECOND(c), SECOND(t) FROM time_extract_ambiguous_prefix_ownership;
+➤ SECOND(v)[-6,8,0]  ¦  SECOND(c)[-6,8,0]  ¦  SECOND(t)[-6,8,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+0  ¦  0  ¦  0  𝄀
+56  ¦  56  ¦  56  𝄀
+56  ¦  56  ¦  56  𝄀
+1  ¦  1  ¦  1  𝄀
+45  ¦  45  ¦  45  𝄀
+null  ¦  null  ¦  null  𝄀
+0  ¦  0  ¦  0  𝄀
+null  ¦  null  ¦  null  𝄀
+0  ¦  0  ¦  0  𝄀
+0  ¦  0  ¦  0  𝄀
+56  ¦  56  ¦  56  𝄀
+24  ¦  24  ¦  24  𝄀
+24  ¦  24  ¦  24
+DROP TABLE time_extract_ambiguous_prefix_ownership;
