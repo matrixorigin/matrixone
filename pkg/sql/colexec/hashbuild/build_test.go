@@ -227,6 +227,9 @@ func TestBroadcastBudgetFailureUnblocksAllConsumers(t *testing.T) {
 	require.Contains(t, buildErr.Error(), "requested=")
 	require.Contains(t, buildErr.Error(), "processLimitationSize")
 	require.NotErrorIs(t, buildErr, process.ErrHashBuildBudgetAdmission)
+	require.Zero(t, tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillStarts"])
+	require.Empty(t, tc.arg.ctr.spilledFds)
+	require.Nil(t, tc.arg.ctr.spillBundle)
 
 	const consumers = 4
 	results := make([]message.JoinMapResult, consumers)

@@ -17,12 +17,14 @@ package issues
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	mysqlDriver "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
@@ -111,25 +113,38 @@ func TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget(t *testing.T) {
 	execJoinSpillSQL(t, ctx, conn,
 		"insert into broadcast_build select mod(result, 64), result from generate_series(1, 64) g")
 	patchJoinSpillStats(t, ctx, conn, dbName, "broadcast_probe", 1)
-	patchJoinSpillStats(t, ctx, conn, dbName, "broadcast_build", 64)
+	patchJoinSpillStatsWithNDV(t, ctx, conn, dbName, "broadcast_build", 64, 64)
 	controlPlan := queryJoinSpillText(t, ctx, conn, "explain "+query)
 	require.NotContains(t, controlPlan, "shuffle:", "low-NDV join must remain broadcast:\n%s", controlPlan)
-	var controlRows int
 	controlResult, err := conn.QueryContext(ctx, query)
 	require.NoError(t, err)
+	controlPayloads := make([]int64, 0, 1)
+	var controlErr error
 	for controlResult.Next() {
-		controlRows++
+		var payload sql.NullInt64
+		if controlErr = controlResult.Scan(&payload); controlErr != nil {
+			break
+		}
+		if !payload.Valid {
+			controlErr = errors.New("admitted broadcast join returned an unmatched NULL payload")
+			break
+		}
+		controlPayloads = append(controlPayloads, payload.Int64)
 	}
-	require.NoError(t, controlResult.Err())
-	require.NoError(t, controlResult.Close())
-	require.Equal(t, 1, controlRows)
+	if controlErr == nil {
+		controlErr = controlResult.Err()
+	}
+	controlCloseErr := controlResult.Close()
+	require.NoError(t, controlErr)
+	require.NoError(t, controlCloseErr)
+	require.Equal(t, []int64{1}, controlPayloads)
 
 	execJoinSpillSQL(t, ctx, conn, "truncate table broadcast_build")
 	execJoinSpillSQL(t, ctx, conn, fmt.Sprintf(
 		"insert into broadcast_build select mod(result, 64), result from generate_series(1, %d) g",
 		issue25782BuildRows,
 	))
-	patchJoinSpillStats(t, ctx, conn, dbName, "broadcast_build", issue25782BuildRows)
+	patchJoinSpillStatsWithNDV(t, ctx, conn, dbName, "broadcast_build", issue25782BuildRows, 64)
 	plan := queryJoinSpillText(t, ctx, conn, "explain "+query)
 	require.NotContains(t, plan, "shuffle:", "low-NDV join must remain broadcast:\n%s", plan)
 
@@ -138,7 +153,17 @@ func TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget(t *testing.T) {
 	// The frontend returns this terminal build failure before creating a result
 	// set, which is stronger than checking that a partially read result set is
 	// empty: no probe row can have escaped the failed dependency.
-	_, err = conn.QueryContext(ctx, query)
+	failedResult, err := conn.QueryContext(ctx, query)
+	var failedCloseErr error
+	if failedResult != nil {
+		failedCloseErr = failedResult.Close()
+	}
+	require.NoError(t, failedCloseErr)
+	require.Error(t, err)
+	var mysqlErr *mysqlDriver.MySQLError
+	require.True(t, errors.As(err, &mysqlErr), "expected MySQL protocol error, got %T: %v", err, err)
+	require.Equal(t, uint16(moerr.ER_ENGINE_OUT_OF_MEMORY), mysqlErr.Number)
+	require.Equal(t, [5]byte{'H', 'Y', '0', '0', '0'}, mysqlErr.SQLState)
 	require.ErrorContains(t, err, "resource exhausted: hash build memory budget exceeded")
 	require.Equal(t, spillBefore, promtestutil.ToFloat64(
 		metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1")),
