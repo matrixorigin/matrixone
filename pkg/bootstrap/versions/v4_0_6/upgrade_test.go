@@ -87,7 +87,7 @@ func TestLegacyForeignKeyMetadataUpdatesPreserveOrderAndActions(t *testing.T) {
 		"constraint_name = 'fk_default' AND column_name = 'b'",
 		"constraint_id = 2, on_delete = 'NO_ACTION', on_update = 'NO_ACTION'",
 		"constraint_name = 'fk_default' AND column_name = 'a'",
-		"constraint_id = 1, on_delete = 'NO_ACTION', on_update = 'NO_ACTION'",
+		"constraint_id = 1, on_delete = 'RESTRICT', on_update = 'RESTRICT'",
 		"constraint_name = 'fk_restrict' AND column_name = 'a'",
 		"db_name = 'db''one'",
 	} {
@@ -266,7 +266,7 @@ func TestLegacyForeignKeyMetadataUpgradeBackfillsAlterAndUnnamedForeignKeys(t *t
 	require.Equal(t, []string{
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'CASCADE', on_update = 'SET_NULL' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'alter_child' AND constraint_name = 'fk_added_by_alter' AND column_name = 'b'",
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 2, on_delete = 'CASCADE', on_update = 'SET_NULL' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'alter_child' AND constraint_name = 'fk_added_by_alter' AND column_name = 'a'",
-		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'NO_ACTION', on_update = 'NO_ACTION' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'unnamed_child' AND constraint_name = 'catalog_generated_name' AND column_name = 'parent_id'",
+		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'RESTRICT', on_update = 'RESTRICT' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'unnamed_child' AND constraint_name = 'catalog_generated_name' AND column_name = 'parent_id'",
 	}, updates)
 }
 
@@ -300,6 +300,20 @@ func TestLegacyForeignKeyMetadataUpdatesBackfillAlterTableForeignKey(t *testing.
 	require.Equal(t, []string{
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'CASCADE', on_update = 'SET_NULL' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'fk_added_by_alter' AND column_name = 'b'",
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 2, on_delete = 'CASCADE', on_update = 'SET_NULL' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'fk_added_by_alter' AND column_name = 'a'",
+	}, updates)
+}
+
+func TestLegacyForeignKeyMetadataUpdatesPreservesRestrictForAlterFallback(t *testing.T) {
+	updates, err := legacyForeignKeyMetadataUpdates(legacyForeignKeyTableDefinition{
+		database: "db",
+		table:    "child",
+		foreignKeys: []legacyForeignKeyCatalogRow{
+			{constraintName: "fk_added_by_alter", columnName: "parent_id", referDBName: "db", referTableName: "parent", referColumnName: "id", onDelete: "RESTRICT", onUpdate: "RESTRICT"},
+		},
+	}, "create table child (parent_id int)")
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'RESTRICT', on_update = 'RESTRICT' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'fk_added_by_alter' AND column_name = 'parent_id'",
 	}, updates)
 }
 
@@ -399,7 +413,7 @@ func TestLegacyForeignKeyMetadataUpdatesBackfillUnnamedForeignKey(t *testing.T) 
 	}, "create table child (parent_id int, foreign key (parent_id) references parent (id))")
 	require.NoError(t, err)
 	require.Equal(t, []string{
-		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'NO_ACTION', on_update = 'NO_ACTION' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'catalog-generated-name' AND column_name = 'parent_id'",
+		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'RESTRICT', on_update = 'RESTRICT' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'catalog-generated-name' AND column_name = 'parent_id'",
 	}, updates)
 }
 
@@ -415,7 +429,7 @@ func TestLegacyForeignKeyMetadataUpdatesLeaveAmbiguousUnnamedForeignKeysToCatalo
 	require.NoError(t, err)
 	require.Equal(t, []string{
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'CASCADE', on_update = 'CASCADE' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'catalog-fk-a' AND column_name = 'parent_id'",
-		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'NO_ACTION', on_update = 'NO_ACTION' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'catalog-fk-b' AND column_name = 'parent_id'",
+		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'RESTRICT', on_update = 'RESTRICT' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'catalog-fk-b' AND column_name = 'parent_id'",
 	}, updates)
 }
 

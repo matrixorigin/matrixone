@@ -102,10 +102,8 @@ type legacyForeignKeyCatalogConstraint struct {
 }
 
 // upgradeLegacyForeignKeyMetadata restores zero-valued legacy FK ordinals. The
-// catalog identifies the rows and actions to migrate, and SHOW CREATE TABLE
-// supplies the current foreign-key declaration name and column order. In
-// particular, do not use mo_tables.rel_createsql: it is a CREATE-time snapshot
-// and omits later ALTERs.
+// catalog identifies the rows and actions to migrate, while SHOW CREATE TABLE
+// supplies the current foreign-key declaration name and column order.
 func upgradeLegacyForeignKeyMetadata(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
 	definitions, err := getLegacyForeignKeyTableDefinitions(tenantID, txn)
 	if err != nil {
@@ -421,12 +419,15 @@ func legacyForeignKeyUpdateSQL(
 	)
 }
 
-// Legacy rows with constraint_id = 0 were written before omitted foreign-key
-// actions were represented as NO_ACTION. SHOW CREATE TABLE renders an omitted
-// action as RESTRICT, so it cannot recover that distinction either. Preserve
-// the established legacy migration policy: normalize RESTRICT to NO_ACTION.
+// The catalog is the authoritative action source. SHOW CREATE TABLE is used
+// only to reconcile the current constraint declaration and its column order:
+// it can render an omitted action and an explicit RESTRICT identically. Keep a
+// catalog RESTRICT unchanged, which preserves explicit legacy actions and is
+// the conservative policy when an ALTER-added or unnamed constraint cannot be
+// distinguished from an omitted action.
 func legacyCatalogReferenceActionName(action string) string {
-	if strings.EqualFold(strings.TrimSpace(action), "RESTRICT") || strings.TrimSpace(action) == "" {
+	action = strings.TrimSpace(action)
+	if action == "" {
 		return "NO_ACTION"
 	}
 	return action

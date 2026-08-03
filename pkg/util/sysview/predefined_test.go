@@ -15,12 +15,14 @@
 package sysview
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 )
 
 func TestInformationSchemaMetadataViewsHideTemporaryTables(t *testing.T) {
@@ -80,6 +82,22 @@ func TestInformationSchemaReferentialConstraintsDDL_UsesMySQLDefaultAction(t *te
 	assert.Contains(t, InformationSchemaReferentialConstraintsDDL,
 		"tbl.reldatabase = fk.refer_db_name AND tbl.relname = fk.refer_table_name")
 	assert.Contains(t, InformationSchemaReferentialConstraintsDDL,
-		"idx.table_id = tbl.rel_id AND idx.column_name = fk.refer_column_name")
-	assert.Contains(t, InformationSchemaReferentialConstraintsDDL, "GROUP BY fk.db_name, fk.constraint_name")
+		"idx.table_id = tbl.rel_id AND idx.indexed_columns = fk.referenced_columns")
+	assert.Contains(t, InformationSchemaReferentialConstraintsDDL,
+		"group_concat(concat(constraint_id, ':', length(refer_column_name), ':', refer_column_name) order by constraint_id) AS referenced_columns")
+	assert.Contains(t, InformationSchemaReferentialConstraintsDDL,
+		"group_concat(concat(ordinal_position, ':', length(column_name), ':', column_name) order by ordinal_position) AS indexed_columns")
+	assert.Contains(t, InformationSchemaReferentialConstraintsDDL,
+		"WHERE type = 'PRIMARY' OR type = 'UNIQUE'")
+	assert.Contains(t, InformationSchemaReferentialConstraintsDDL,
+		"idx.name AS UNIQUE_CONSTRAINT_NAME")
+	assert.NotContains(t, InformationSchemaReferentialConstraintsDDL, "min(idx.type)")
+}
+
+func TestInformationSchemaReferentialConstraintsDDL_Parses(t *testing.T) {
+	statements, err := mysql.Parse(context.Background(), InformationSchemaReferentialConstraintsDDL, 1)
+	assert.NoError(t, err)
+	for _, statement := range statements {
+		statement.Free()
+	}
 }

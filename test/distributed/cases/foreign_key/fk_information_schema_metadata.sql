@@ -3,8 +3,8 @@ drop database if exists mysql_compat_model11_min2;
 create database mysql_compat_model11_min2;
 use mysql_compat_model11_min2;
 
-create table p (id int primary key);
-create table p_compound (id int, code int, primary key (id, code));
+create table p (id int primary key, key p_secondary (id));
+create table p_compound (id int, code int, unique key uq_p_compound (id, code), key p_compound_secondary (id, code));
 create table unrelated (id int, unique key unrelated_id (id));
 create table c (
   id int primary key,
@@ -17,7 +17,7 @@ create table c (
   constraint fk_c_p_restrict foreign key (restrict_parent_id) references p(id) on delete restrict on update restrict
 );
 
-select constraint_name, delete_rule, update_rule
+select constraint_name, unique_constraint_name, delete_rule, update_rule
 from information_schema.referential_constraints
 where constraint_schema = database()
 order by constraint_name;
