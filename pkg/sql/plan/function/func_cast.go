@@ -655,6 +655,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_year,
 	},
 
 	types.T_char: {
@@ -1081,7 +1082,7 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = decimal128ToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_decimal256:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from)
-		err = decimal256ToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		err = decimal256ToOthersWithProc(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_date:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Date](from)
 		err = dateToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
@@ -1372,7 +1373,7 @@ func int8ToOthers(proc *process.Process,
 		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
+		return numericToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return rs.DupFromParameter(source, length)
@@ -1440,7 +1441,7 @@ func int16ToOthers(proc *process.Process,
 		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
+		return numericToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return numericToNumeric(ctx, source, rs, length, selectList)
@@ -1508,7 +1509,7 @@ func int32ToOthers(proc *process.Process,
 		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
+		return numericToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return numericToNumeric(ctx, source, rs, length, selectList)
@@ -1576,7 +1577,7 @@ func int64ToOthers(proc *process.Process,
 		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
+		return numericToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return numericToNumeric(ctx, source, rs, length, selectList)
@@ -1647,7 +1648,7 @@ func uint8ToOthers(proc *process.Process,
 		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
+		return numericToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return numericToNumeric(ctx, source, rs, length, selectList)
@@ -1717,7 +1718,7 @@ func uint16ToOthers(proc *process.Process,
 		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
+		return numericToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return numericToNumeric(ctx, source, rs, length, selectList)
@@ -1787,7 +1788,7 @@ func uint32ToOthers(proc *process.Process,
 		return numericToBool(source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return numericToBit(ctx, source, rs, int(toType.Width), length, selectList)
+		return numericToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return numericToNumeric(ctx, source, rs, length, selectList)
@@ -2299,7 +2300,7 @@ func decimal64ToOthers(proc *process.Process,
 		return decimal64ToStr(ctx, source, rs, length, toType, strictStringWidth...)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
-		return decimal64ToYear(ctx, source, rs, length, selectList)
+		return decimal64ToYear(ctx, proc, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from decimal64 to %s", toType))
 }
@@ -2375,12 +2376,27 @@ func decimal128ToOthers(proc *process.Process,
 		return decimal128ToStr(ctx, source, rs, length, toType, strictStringWidth...)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
-		return decimal128ToYear(ctx, source, rs, length, selectList)
+		return decimal128ToYear(ctx, proc, source, rs, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from decimal128 to %s", toType))
 }
 
-func decimal256ToOthers(ctx context.Context,
+func decimal256ToOthers(
+	ctx context.Context,
+	source vector.FunctionParameterWrapper[types.Decimal256],
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	return decimal256ToOthersWithContext(ctx, nil, source, toType, result, length, selectList, strictStringWidth...)
+}
+
+func decimal256ToOthersWithProc(
+	proc *process.Process,
+	source vector.FunctionParameterWrapper[types.Decimal256],
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	return decimal256ToOthersWithContext(proc.Ctx, proc, source, toType, result, length, selectList, strictStringWidth...)
+}
+
+func decimal256ToOthersWithContext(
+	ctx context.Context, proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Decimal256],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
 	switch toType.Oid {
@@ -2428,6 +2444,9 @@ func decimal256ToOthers(ctx context.Context,
 			return nil
 		}
 		return decimal256ToDecimal256(source, rs, length, selectList)
+	case types.T_year:
+		rs := vector.MustFunctionResult[types.MoYear](result)
+		return decimal256ToYear(ctx, proc, source, rs, length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
 		return decimal256ToFloat(source, rs, length)
@@ -3118,6 +3137,15 @@ func numericToBit[T constraints.Integer | constraints.Float](
 	from vector.FunctionParameterWrapper[T],
 	to *vector.FunctionResult[uint64], bitSize int,
 	length int, selectList *FunctionSelectList) error {
+	return numericToBitWithIgnore(ctx, nil, from, to, bitSize, length, selectList)
+}
+
+func numericToBitWithIgnore[T constraints.Integer | constraints.Float](
+	ctx context.Context, proc *process.Process,
+	from vector.FunctionParameterWrapper[T],
+	to *vector.FunctionResult[uint64], bitSize int,
+	length int, selectList *FunctionSelectList) error {
+	max := maxBitValue(bitSize)
 	for i := 0; i < length; i++ {
 		v, null := from.GetValue(uint64(i))
 		if null {
@@ -3125,6 +3153,15 @@ func numericToBit[T constraints.Integer | constraints.Float](
 				return err
 			}
 		} else {
+			if float64(v) < 0 {
+				if !statementIgnore(proc) {
+					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("int%d", bitSize), "value %v", v)
+				}
+				if err := to.Append(0, false); err != nil {
+					return err
+				}
+				continue
+			}
 			var val uint64
 			switch any(v).(type) {
 			case float32, float64:
@@ -3133,7 +3170,13 @@ func numericToBit[T constraints.Integer | constraints.Float](
 				val = uint64(v)
 			}
 
-			if val > uint64(1<<bitSize-1) {
+			if val > max {
+				if statementIgnore(proc) {
+					if err := to.Append(max, false); err != nil {
+						return err
+					}
+					continue
+				}
 				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("int%d", bitSize), "value %d", val)
 			}
 			if err := to.Append(val, false); err != nil {
@@ -3142,6 +3185,16 @@ func numericToBit[T constraints.Integer | constraints.Float](
 		}
 	}
 	return nil
+}
+
+func maxBitValue(bitSize int) uint64 {
+	if bitSize >= 64 {
+		return math.MaxUint64
+	}
+	if bitSize <= 0 {
+		return 0
+	}
+	return uint64(1)<<bitSize - 1
 }
 
 // XXX do not use it to cast float to integer, please use floatToInteger
@@ -4821,7 +4874,7 @@ func decimal128ToSigned[T constraints.Signed](
 
 // decimal64ToYear converts decimal64 to YEAR type
 func decimal64ToYear(
-	ctx context.Context,
+	ctx context.Context, proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList) error {
 	var i uint64
@@ -4841,10 +4894,22 @@ func decimal64ToYear(
 			xStr := x.Format(0)
 			result, err := strconv.ParseInt(xStr, 10, 16)
 			if err != nil {
+				if statementIgnore(proc) {
+					if err = to.Append(0, false); err != nil {
+						return err
+					}
+					continue
+				}
 				return moerr.NewOutOfRangef(ctx, "year", "value '%v'", xStr)
 			}
 			year, err := types.ParseMoYearFromInt(result)
 			if err != nil {
+				if statementIgnore(proc) {
+					if err = to.Append(0, false); err != nil {
+						return err
+					}
+					continue
+				}
 				return err
 			}
 			if err = to.Append(year, false); err != nil {
@@ -4857,7 +4922,7 @@ func decimal64ToYear(
 
 // decimal128ToYear converts decimal128 to YEAR type
 func decimal128ToYear(
-	ctx context.Context,
+	ctx context.Context, proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Decimal128],
 	to *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList) error {
 	var i uint64
@@ -4877,16 +4942,70 @@ func decimal128ToYear(
 			xStr := x.Format(0)
 			result, err := strconv.ParseInt(xStr, 10, 16)
 			if err != nil {
+				if statementIgnore(proc) {
+					if err = to.Append(0, false); err != nil {
+						return err
+					}
+					continue
+				}
 				return moerr.NewOutOfRangef(ctx, "year", "value '%v'", xStr)
 			}
 			year, err := types.ParseMoYearFromInt(result)
 			if err != nil {
+				if statementIgnore(proc) {
+					if err = to.Append(0, false); err != nil {
+						return err
+					}
+					continue
+				}
 				return err
 			}
 			if err = to.Append(year, false); err != nil {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+// decimal256ToYear converts decimal256 to YEAR type.
+func decimal256ToYear(
+	ctx context.Context, proc *process.Process,
+	from vector.FunctionParameterWrapper[types.Decimal256],
+	to *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList) error {
+	fromTyp := from.GetType()
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		x, err := v.Scale(-fromTyp.Scale)
+		if err != nil {
+			return err
+		}
+		xStr := x.Format(0)
+		result, err := strconv.ParseInt(xStr, 10, 16)
+		if err == nil {
+			var year types.MoYear
+			year, err = types.ParseMoYearFromInt(result)
+			if err == nil {
+				err = to.Append(year, false)
+			}
+		}
+		if err == nil {
+			continue
+		}
+		if statementIgnore(proc) {
+			if err = to.Append(0, false); err != nil {
+				return err
+			}
+			continue
+		}
+		return moerr.NewOutOfRangef(ctx, "year", "value '%v'", xStr)
 	}
 	return nil
 }

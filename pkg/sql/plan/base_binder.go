@@ -2118,6 +2118,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			}
 
 			if subquery := rightArg.GetSub(); subquery != nil {
+				leftArg = useStoredMySQLSpecialTypeForNumericSubquery(leftArg, rightArg)
 				if list := leftArg.GetList(); list != nil {
 					if len(list.List) != int(subquery.RowSize) {
 						return nil, moerr.NewNYIf(b.GetContext(), "subquery should return %d columns", len(list.List))
@@ -2164,6 +2165,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			}
 
 			if subquery := rightArg.GetSub(); subquery != nil {
+				leftArg = useStoredMySQLSpecialTypeForNumericSubquery(leftArg, rightArg)
 				if list := leftArg.GetList(); list != nil {
 					if len(list.List) != int(subquery.RowSize) {
 						return nil, moerr.NewInvalidInputf(b.GetContext(), "subquery should return %d columns", len(list.List))
@@ -2212,6 +2214,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		}
 
 		if subquery := expr.GetSub(); subquery != nil {
+			child = useStoredMySQLSpecialTypeForNumericSubquery(child, expr)
 			if list := child.GetList(); list != nil {
 				if len(list.List) != int(subquery.RowSize) {
 					return nil, moerr.NewInvalidInputf(b.GetContext(), "subquery should return %d columns", len(list.List))
@@ -4719,7 +4722,7 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 // therefore the operand contract: use the stored value only when every member
 // is numeric.  Mixed lists retain normal string semantics.
 func useStoredMySQLSpecialTypesForNumericInList(name string, args, rawArgs []*Expr) []*Expr {
-	if name != "in" || len(args) != 2 || args[1].GetList() == nil || len(args[1].GetList().List) == 0 {
+	if (name != "in" && name != "not_in" && name != "partition_in") || len(args) != 2 || args[1].GetList() == nil || len(args[1].GetList().List) == 0 {
 		return args
 	}
 	for _, member := range args[1].GetList().List {
@@ -4734,6 +4737,16 @@ func useStoredMySQLSpecialTypesForNumericInList(name string, args, rawArgs []*Ex
 		}
 	}
 	return result
+}
+
+func useStoredMySQLSpecialTypeForNumericSubquery(left, subquery *Expr) *Expr {
+	if subquery == nil || !makeTypeByPlan2Expr(subquery).IsNumeric() {
+		return left
+	}
+	if raw, ok := storedMySQLSpecialTypeExpr(left); ok {
+		return raw
+	}
+	return left
 }
 
 func isSetDisplayValueExpr(expr *Expr) bool {

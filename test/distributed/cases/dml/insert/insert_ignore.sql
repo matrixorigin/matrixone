@@ -146,7 +146,16 @@ create table insert_ignore_special_types (
 insert ignore into insert_ignore_special_types values
     (1, '2156', b'11111', 'bad', 'x,bad'),
     (2, '2156', 31, 9, 99);
+create table insert_ignore_special_source (v int, d decimal(10, 0), d256 decimal(40, 0));
+insert into insert_ignore_special_source values (31, 2156, 2156);
+insert ignore into insert_ignore_special_types
+select 3, '2156', v, 9, 99 from insert_ignore_special_source;
+insert ignore into insert_ignore_special_types
+select 4, d, 0, 9, 99 from insert_ignore_special_source;
+insert ignore into insert_ignore_special_types
+select 5, d256, 0, 9, 99 from insert_ignore_special_source;
 select id, y + 0, bin(b + 0), e, e + 0, s, s + 0
 from insert_ignore_special_types order by id;
+drop table insert_ignore_special_source;
 drop table insert_ignore_special_types;
 set session sql_mode = @insert_ignore_sql_mode;

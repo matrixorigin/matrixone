@@ -16,4 +16,16 @@ select cast(s as signed), abs(s), s = i, s between 1 and 2, s in (i), s = +1,
        length(s), s = 'x'
 from mysql_compat_enum_set_numeric order by i;
 
+select e in (select i from mysql_compat_enum_set_numeric),
+       e not in (select i from mysql_compat_enum_set_numeric),
+       e = any (select i from mysql_compat_enum_set_numeric),
+       s in (select i from mysql_compat_enum_set_numeric),
+       s not in (select i from mysql_compat_enum_set_numeric)
+from mysql_compat_enum_set_numeric order by i;
+
+-- String-typed subqueries retain label comparison semantics.
+select e in (select cast(i as char) from mysql_compat_enum_set_numeric),
+       s in (select cast(i as char) from mysql_compat_enum_set_numeric)
+from mysql_compat_enum_set_numeric order by i;
+
 drop table mysql_compat_enum_set_numeric;
