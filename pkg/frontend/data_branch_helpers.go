@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"reflect"
 	"regexp"
@@ -41,6 +42,24 @@ import (
 )
 
 var snapConditionRegex = regexp.MustCompile(`\{[^}]+}`)
+
+func isDataBranchFloatType(typ types.Type) bool {
+	return typ.Oid == types.T_float32 || typ.Oid == types.T_float64
+}
+
+// dataBranchSQLKeyEqual returns the SQL predicate for Data Branch key
+// identity. Data Branch must treat two NaN key components as the same value,
+// even though ordinary SQL float equality follows IEEE-754 and reports false.
+func dataBranchSQLKeyEqual(left, right string, typ types.Type) string {
+	if !isDataBranchFloatType(typ) {
+		return fmt.Sprintf("%s = %s", left, right)
+	}
+	return fmt.Sprintf(
+		"((%s != %s) = (%s != %s) AND "+
+			"(CASE WHEN %s != %s THEN 0 ELSE %s END = CASE WHEN %s != %s THEN 0 ELSE %s END))",
+		left, left, right, right, left, left, left, right, right, right,
+	)
+}
 
 func containsDataBranchTempTableName(sqlLower string) bool {
 	return containsTempTableMarker(sqlLower, "__mo_diff_del_") ||
@@ -513,6 +532,20 @@ func scanSnapshotRelationByIDWithFallback(
 }
 
 func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer) error {
+	return formatValIntoStringWithFloatCast(ses, val, t, buf, false)
+}
+
+// formatValIntoStringWithFloatCast can force finite FLOAT/DOUBLE values to
+// carry an explicit SQL type. This is needed by VALUES probes: without a cast
+// on every row, VALUES type inference can convert a NaN cell to its integer bit
+// pattern before the caller casts the resulting column back to FLOAT/DOUBLE.
+func formatValIntoStringWithFloatCast(
+	ses *Session,
+	val any,
+	t types.Type,
+	buf *bytes.Buffer,
+	castFiniteFloat bool,
+) error {
 	if val == nil {
 		buf.WriteString("NULL")
 		return nil
@@ -537,7 +570,15 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 			buf.WriteByte(')')
 			return
 		}
+		if castFiniteFloat {
+			buf.WriteString("cast(")
+		}
 		buf.Write(strconv.AppendFloat(scratch[:0], v, 'g', -1, bitSize))
+		if castFiniteFloat {
+			buf.WriteString(" as ")
+			buf.WriteString(sqlType)
+			buf.WriteByte(')')
+		}
 	}
 
 	writeBool := func(v bool) {

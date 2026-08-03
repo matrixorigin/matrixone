@@ -145,6 +145,7 @@ type applyBatchInfo struct {
 	insertTable        string
 	deleteKeyNames     []string
 	deleteStageNames   []string
+	deleteKeyTypes     []types.Type
 	writableNames      []string
 	disableInsertStage bool
 }
@@ -220,9 +221,11 @@ func newApplyBatchInfo(
 
 	deleteKeyNames := make([]string, len(deleteKeyColIdxes))
 	deleteStageNames := make([]string, len(deleteKeyColIdxes))
+	deleteKeyTypes := make([]types.Type, len(deleteKeyColIdxes))
 	for i, idx := range deleteKeyColIdxes {
 		deleteKeyNames[i] = tblStuff.def.baseColNames[idx]
 		deleteStageNames[i] = fmt.Sprintf("branch_apply_key_%d", i)
+		deleteKeyTypes[i] = tblStuff.def.colTypes[idx]
 	}
 
 	writableIdxes := tblStuff.def.writableIdxes
@@ -243,19 +246,58 @@ func newApplyBatchInfo(
 		insertTable:        fmt.Sprintf("__mo_diff_ins_%s_%d", sessionTag, seq),
 		deleteKeyNames:     deleteKeyNames,
 		deleteStageNames:   deleteStageNames,
+		deleteKeyTypes:     deleteKeyTypes,
 		writableNames:      writableNames,
 		disableInsertStage: disableInsertStage,
 	}
 }
 
-func (batchInfo *applyBatchInfo) effectiveDeleteStageNames() []string {
-	if batchInfo == nil {
-		return nil
+func (batchInfo *applyBatchInfo) validateDeleteKeyLayout() error {
+	if batchInfo == nil || len(batchInfo.deleteKeyNames) == 0 ||
+		len(batchInfo.deleteStageNames) != len(batchInfo.deleteKeyNames) ||
+		len(batchInfo.deleteKeyTypes) != len(batchInfo.deleteKeyNames) {
+		return moerr.NewInternalErrorNoCtx("invalid Data Branch staged delete key layout")
 	}
-	if len(batchInfo.deleteStageNames) == len(batchInfo.deleteKeyNames) && len(batchInfo.deleteStageNames) > 0 {
-		return batchInfo.deleteStageNames
+	return nil
+}
+
+func (batchInfo *applyBatchInfo) deleteNeedsNaNAwareKeyMatch() bool {
+	for _, typ := range batchInfo.deleteKeyTypes {
+		if isDataBranchFloatType(typ) {
+			return true
+		}
 	}
-	return batchInfo.deleteKeyNames
+	return false
+}
+
+func (batchInfo *applyBatchInfo) stagedDeleteSQL(baseTable, deleteTable string) (string, error) {
+	if err := batchInfo.validateDeleteKeyLayout(); err != nil {
+		return "", err
+	}
+	deleteStageNames := batchInfo.deleteStageNames
+	if !batchInfo.deleteNeedsNaNAwareKeyMatch() {
+		pkExpr := quoteIdentifierForSQL(batchInfo.deleteKeyNames[0])
+		if len(batchInfo.deleteKeyNames) > 1 {
+			pkExpr = fmt.Sprintf("(%s)", joinQuotedColumnNames(batchInfo.deleteKeyNames))
+		}
+		return fmt.Sprintf(
+			"delete from %s where %s in (select %s from %s)",
+			baseTable, pkExpr, joinQuotedColumnNames(deleteStageNames), deleteTable,
+		), nil
+	}
+
+	const baseAlias = "branch_apply_base"
+	const stageAlias = "branch_apply_stage"
+	predicates := make([]string, len(batchInfo.deleteKeyNames))
+	for i := range batchInfo.deleteKeyNames {
+		left := fmt.Sprintf("%s.%s", baseAlias, quoteIdentifierForSQL(batchInfo.deleteKeyNames[i]))
+		right := fmt.Sprintf("%s.%s", stageAlias, quoteIdentifierForSQL(deleteStageNames[i]))
+		predicates[i] = dataBranchSQLKeyEqual(left, right, batchInfo.deleteKeyTypes[i])
+	}
+	return fmt.Sprintf(
+		"delete %s from %s as %s join %s as %s on %s",
+		baseAlias, baseTable, baseAlias, deleteTable, stageAlias, strings.Join(predicates, " AND "),
+	), nil
 }
 
 func mergeDiffs(
@@ -2393,12 +2435,15 @@ func initApplyTables(
 	if batchInfo == nil {
 		return nil
 	}
+	if err := batchInfo.validateDeleteKeyLayout(); err != nil {
+		return err
+	}
 
 	baseTable := qualifiedTableName(batchInfo.dbName, batchInfo.baseTable)
 	deleteTable := qualifiedTableName(batchInfo.dbName, batchInfo.deleteTable)
 	insertTable := qualifiedTableName(batchInfo.dbName, batchInfo.insertTable)
 
-	deleteStageNames := batchInfo.effectiveDeleteStageNames()
+	deleteStageNames := batchInfo.deleteStageNames
 	deleteSelectExprs := make([]string, len(batchInfo.deleteKeyNames))
 	for i := range batchInfo.deleteKeyNames {
 		deleteSelectExprs[i] = fmt.Sprintf(
@@ -2490,18 +2535,13 @@ func flushSqlValues(
 		baseTable := qualifiedTableName(batchInfo.dbName, batchInfo.baseTable)
 		deleteTable := qualifiedTableName(batchInfo.dbName, batchInfo.deleteTable)
 		insertTable := qualifiedTableName(batchInfo.dbName, batchInfo.insertTable)
-		deleteStageNames := batchInfo.effectiveDeleteStageNames()
 
 		if isDeleteFrom {
 			insertStmt := fmt.Sprintf("insert into %s values %s", deleteTable, buf.String())
-			pkExpr := quoteIdentifierForSQL(batchInfo.deleteKeyNames[0])
-			if len(batchInfo.deleteKeyNames) > 1 {
-				pkExpr = fmt.Sprintf("(%s)", joinQuotedColumnNames(batchInfo.deleteKeyNames))
+			deleteStmt, err := batchInfo.stagedDeleteSQL(baseTable, deleteTable)
+			if err != nil {
+				return err
 			}
-			deleteStmt := fmt.Sprintf(
-				"delete from %s where %s in (select %s from %s)",
-				baseTable, pkExpr, joinQuotedColumnNames(deleteStageNames), deleteTable,
-			)
 			clearStmt := fmt.Sprintf("delete from %s", deleteTable)
 			return execSQLStatements(ctx, ses, bh, writeFile, []string{insertStmt, deleteStmt, clearStmt})
 		}

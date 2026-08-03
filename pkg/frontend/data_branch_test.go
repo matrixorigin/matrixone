@@ -334,6 +334,31 @@ func TestFormatValIntoString_FloatLiterals(t *testing.T) {
 	}
 }
 
+func TestFormatValIntoStringWithFloatCast(t *testing.T) {
+	tests := []struct {
+		name string
+		val  any
+		typ  types.Type
+		want string
+	}{
+		{"float32 finite", float32(1.25), types.T_float32.ToType(), "cast(1.25 as float)"},
+		{"float32 NaN", float32(math.NaN()), types.T_float32.ToType(), "cast('NaN' as float)"},
+		{"float64 finite", 1.25, types.T_float64.ToType(), "cast(1.25 as double)"},
+		{"float64 infinity", math.Inf(1), types.T_float64.ToType(), "cast('+Inf' as double)"},
+		{"non-float unchanged", int64(7), types.T_int64.ToType(), "7"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			require.NoError(t, formatValIntoStringWithFloatCast(
+				&Session{}, tt.val, tt.typ, &buf, true,
+			))
+			require.Equal(t, tt.want, buf.String())
+		})
+	}
+}
+
 func TestFormatValIntoString_DataBranchSpecialTypes(t *testing.T) {
 	tests := []struct {
 		name string

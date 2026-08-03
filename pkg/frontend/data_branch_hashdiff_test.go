@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1509,6 +1510,48 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 			bh,
 			tBat,
 			tblStuff,
+			types.BuildTS(10, 0).ToTimestamp(),
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("float primary key join matches NaN explicitly", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tblStuff := newTestBranchTableStuff(ctrl)
+		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+		tblStuff.def.colTypes[0] = types.T_float64.ToType()
+		targetDef := tblStuff.tarRel.GetTableDef(context.Background())
+		targetDef.Cols[0].Typ = plan.Type{Id: int32(types.T_float64)}
+		baseDef := tblStuff.baseRel.GetTableDef(context.Background())
+		baseDef.Cols[0].Typ = plan.Type{Id: int32(types.T_float64)}
+		lcaDef := newTestBranchTableDef("lca_tbl", "name")
+		lcaDef.Cols[0].Typ = plan.Type{Id: int32(types.T_float64)}
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(76)).AnyTimes()
+
+		wantErr := moerr.NewInternalErrorNoCtx("stop after sql capture")
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, sql string) error {
+				require.Contains(t, sql,
+					"values row(0,cast('NaN' as double)),row(1,cast(1.25 as double))")
+				right := "cast(pks.`__mo_data_branch_pk_0` as DOUBLE)"
+				require.Contains(t, sql, dataBranchSQLKeyEqual("lca.`id`", right, types.T_float64.ToType()))
+				return wantErr
+			}).
+			Times(1)
+
+		tBat := batch.NewWithSize(1)
+		tBat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], math.NaN(), false, ses.proc.Mp()))
+		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], 1.25, false, ses.proc.Mp()))
+		tBat.SetRowCount(2)
+		defer tBat.Clean(ses.proc.Mp())
+
+		_, err := handleDelsOnLCA(
+			context.Background(), ses, bh, tBat, tblStuff,
 			types.BuildTS(10, 0).ToTimestamp(),
 		)
 		require.ErrorIs(t, err, wantErr)

@@ -1354,6 +1354,7 @@ func TestDataBranchOutputWriteDeleteRowSQLFull(t *testing.T) {
 	require.Equal(t, "delete from `db1`.`t1` where `id` = 9 and `name` is null limit 1;\n", buf.String())
 
 	tblStuff.def.colNames = []string{"f32", "f64", "nullable", "pos_inf", "neg_inf"}
+	tblStuff.def.baseColNames = []string{"f32", "f64", "nullable", "pos_inf", "neg_inf"}
 	tblStuff.def.colTypes = []types.Type{
 		types.T_float32.ToType(),
 		types.T_float64.ToType(),
@@ -1405,6 +1406,7 @@ func TestDataBranchOutputInitAndDropApplyTablesWithWriteFile(t *testing.T) {
 		insertTable:      "__mo_diff_ins_x",
 		deleteKeyNames:   []string{"id"},
 		deleteStageNames: []string{"branch_apply_key_0"},
+		deleteKeyTypes:   []types.Type{types.T_int64.ToType()},
 		writableNames:    []string{"id", "name"},
 	}
 
@@ -1451,6 +1453,7 @@ func TestDataBranchOutputFlushSqlValuesWithWriteFile(t *testing.T) {
 		insertTable:      "__mo_diff_ins_x",
 		deleteKeyNames:   []string{"id", "name"},
 		deleteStageNames: []string{"branch_apply_key_0", "branch_apply_key_1"},
+		deleteKeyTypes:   []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
 		writableNames:    []string{"id", "name"},
 	}
 
@@ -1503,14 +1506,58 @@ func TestDataBranchOutputFlushSqlValuesWithWriteFile(t *testing.T) {
 	require.Contains(t, got, "insert into `db1`.`t1` (`id`,`name`) values (2,'b');\n")
 }
 
+func TestDataBranchOutputFlushSqlValuesUsesNaNAwareFloatKeyMatch(t *testing.T) {
+	batchInfo := &applyBatchInfo{
+		dbName:           "db1",
+		baseTable:        "t1",
+		deleteTable:      "__mo_diff_del_x",
+		deleteKeyNames:   []string{"float_key", "double_key", "int_key"},
+		deleteStageNames: []string{"branch_apply_key_0", "branch_apply_key_1", "branch_apply_key_2"},
+		deleteKeyTypes: []types.Type{
+			types.T_float32.ToType(),
+			types.T_float64.ToType(),
+			types.T_int64.ToType(),
+		},
+	}
+
+	var out bytes.Buffer
+	require.NoError(t, flushSqlValues(
+		context.Background(), nil, nil, tableStuff{}, bytes.NewBufferString("(1,2,3)"),
+		true, false, batchInfo, func(b []byte) error {
+			_, err := out.Write(b)
+			return err
+		},
+	))
+
+	got := out.String()
+	require.Contains(t, got, "insert into `db1`.`__mo_diff_del_x` values (1,2,3);\n")
+	require.Contains(t, got,
+		"delete branch_apply_base from `db1`.`t1` as branch_apply_base join `db1`.`__mo_diff_del_x` as branch_apply_stage on "+
+			"((branch_apply_base.`float_key` != branch_apply_base.`float_key`) = (branch_apply_stage.`branch_apply_key_0` != branch_apply_stage.`branch_apply_key_0`) AND (CASE WHEN branch_apply_base.`float_key` != branch_apply_base.`float_key` THEN 0 ELSE branch_apply_base.`float_key` END = CASE WHEN branch_apply_stage.`branch_apply_key_0` != branch_apply_stage.`branch_apply_key_0` THEN 0 ELSE branch_apply_stage.`branch_apply_key_0` END)) AND "+
+			"((branch_apply_base.`double_key` != branch_apply_base.`double_key`) = (branch_apply_stage.`branch_apply_key_1` != branch_apply_stage.`branch_apply_key_1`) AND (CASE WHEN branch_apply_base.`double_key` != branch_apply_base.`double_key` THEN 0 ELSE branch_apply_base.`double_key` END = CASE WHEN branch_apply_stage.`branch_apply_key_1` != branch_apply_stage.`branch_apply_key_1` THEN 0 ELSE branch_apply_stage.`branch_apply_key_1` END)) AND "+
+			"branch_apply_base.`int_key` = branch_apply_stage.`branch_apply_key_2`;\n")
+	require.Contains(t, got, "delete from `db1`.`__mo_diff_del_x`;\n")
+}
+
+func TestDataBranchOutputStagedDeleteRejectsIncompleteKeyLayout(t *testing.T) {
+	_, err := (&applyBatchInfo{
+		deleteKeyNames:   []string{"id"},
+		deleteStageNames: []string{"branch_apply_key_0"},
+	}).stagedDeleteSQL("`db1`.`t1`", "`db1`.`delete_stage`")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid Data Branch staged delete key layout")
+}
+
 func TestDataBranchOutputTryFlushDeletesOrInserts(t *testing.T) {
 	batchInfo := &applyBatchInfo{
-		dbName:         "db1",
-		baseTable:      "t1",
-		deleteTable:    "__mo_diff_del_x",
-		insertTable:    "__mo_diff_ins_x",
-		deleteKeyNames: []string{"id"},
-		writableNames:  []string{"id", "name"},
+		dbName:           "db1",
+		baseTable:        "t1",
+		deleteTable:      "__mo_diff_del_x",
+		insertTable:      "__mo_diff_ins_x",
+		deleteKeyNames:   []string{"id"},
+		deleteStageNames: []string{"branch_apply_key_0"},
+		deleteKeyTypes:   []types.Type{types.T_int64.ToType()},
+		writableNames:    []string{"id", "name"},
 	}
 
 	t.Run("force flush both buffers", func(t *testing.T) {
@@ -1546,7 +1593,7 @@ func TestDataBranchOutputTryFlushDeletesOrInserts(t *testing.T) {
 		require.Equal(t, 0, insertCnt)
 		require.Equal(t, 0, deleteBuf.Len())
 		require.Equal(t, 0, insertBuf.Len())
-		require.Contains(t, out.String(), "delete from `db1`.`t1` where `id` in (select `id` from `db1`.`__mo_diff_del_x`);\n")
+		require.Contains(t, out.String(), "delete from `db1`.`t1` where `id` in (select `branch_apply_key_0` from `db1`.`__mo_diff_del_x`);\n")
 		require.Contains(t, out.String(), "insert into `db1`.`t1` (`id`,`name`) select `id`,`name` from `db1`.`__mo_diff_ins_x`;\n")
 	})
 
@@ -1637,6 +1684,11 @@ func TestDataBranchOutputBuildDataBranchApplyLayout(t *testing.T) {
 	}
 	tblStuff.def.colNames = []string{"id", "name", "age"}
 	tblStuff.def.baseColNames = []string{"id", "name", "age"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_float32.ToType(),
+		types.T_varchar.ToType(),
+		types.T_float64.ToType(),
+	}
 	tblStuff.def.pkColIdxes = []int{0, 2}
 	tblStuff.def.visibleIdxes = []int{0, 1, 2}
 	tblStuff.def.writableIdxes = []int{0, 1, 2}
@@ -1651,6 +1703,7 @@ func TestDataBranchOutputBuildDataBranchApplyLayout(t *testing.T) {
 	require.Equal(t, "db1", info.dbName)
 	require.Equal(t, "t1", info.baseTable)
 	require.Equal(t, []string{"id", "age"}, info.deleteKeyNames)
+	require.Equal(t, []types.Type{types.T_float32.ToType(), types.T_float64.ToType()}, info.deleteKeyTypes)
 	require.Equal(t, []string{"branch_apply_key_0", "branch_apply_key_1"}, info.deleteStageNames)
 	require.Equal(t, []string{"id", "name", "age"}, info.writableNames)
 	require.False(t, info.disableInsertStage)
@@ -1709,6 +1762,7 @@ func TestDataBranchApplyLayoutUsesDestinationColumnNames(t *testing.T) {
 			tblStuff := tableStuff{baseRel: baseRel}
 			tblStuff.def.colNames = []string{"id", tc.sourceName}
 			tblStuff.def.baseColNames = []string{"id", tc.destinationName}
+			tblStuff.def.colTypes = []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}
 			tblStuff.def.pkColIdxes = []int{0}
 			tblStuff.def.visibleIdxes = []int{0, 1}
 			tblStuff.def.writableIdxes = []int{0, 1}
@@ -1726,12 +1780,14 @@ func TestDataBranchApplyLayoutUsesDestinationColumnNames(t *testing.T) {
 
 func TestDataBranchOutputAppenderAppendRowAndFlushAll(t *testing.T) {
 	batchInfo := &applyBatchInfo{
-		dbName:         "db1",
-		baseTable:      "t1",
-		deleteTable:    "__mo_diff_del_x",
-		insertTable:    "__mo_diff_ins_x",
-		deleteKeyNames: []string{"id"},
-		writableNames:  []string{"id", "name"},
+		dbName:           "db1",
+		baseTable:        "t1",
+		deleteTable:      "__mo_diff_del_x",
+		insertTable:      "__mo_diff_ins_x",
+		deleteKeyNames:   []string{"id"},
+		deleteStageNames: []string{"branch_apply_key_0"},
+		deleteKeyTypes:   []types.Type{types.T_int64.ToType()},
+		writableNames:    []string{"id", "name"},
 	}
 
 	t.Run("append delete in full-row mode", func(t *testing.T) {

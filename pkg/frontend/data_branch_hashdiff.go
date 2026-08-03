@@ -289,8 +289,8 @@ func handleDelsOnLCA(
 
 				valsBuf.WriteString(fmt.Sprintf("row(%d,", i))
 				for j := range tuple {
-					if err = formatValIntoString(
-						ses, tuple[j], colTypes[expandedPKColIdxes[j]], valsBuf,
+					if err = formatValIntoStringWithFloatCast(
+						ses, tuple[j], colTypes[expandedPKColIdxes[j]], valsBuf, true,
 					); err != nil {
 						return nil, err
 					}
@@ -320,7 +320,7 @@ func handleDelsOnLCA(
 				valsBuf.WriteString(fmt.Sprintf("row(%d,", i))
 				b := tBat.Vecs[0].GetRawBytesAt(i)
 				val := types.DecodeValue(b, tBat.Vecs[0].GetType().Oid)
-				if err = formatValIntoString(ses, val, pkType, valsBuf); err != nil {
+				if err = formatValIntoStringWithFloatCast(ses, val, pkType, valsBuf, true); err != nil {
 					return nil, err
 				}
 				valsBuf.WriteString(")")
@@ -357,12 +357,14 @@ func handleDelsOnLCA(
 		)
 
 		for i := range quotedPKNames {
-			sqlBuf.WriteString(fmt.Sprintf("lca.%s = ", quotedPKNames[i]))
+			left := fmt.Sprintf("lca.%s", quotedPKNames[i])
+			right := fmt.Sprintf("pks.%s", quotedPKValueAliases[i])
 			if castType, ok := lcaProbeJoinCastType(colTypes[expandedPKColIdxes[i]]); ok {
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as %s)", quotedPKValueAliases[i], castType))
-			} else {
-				sqlBuf.WriteString(fmt.Sprintf("pks.%s", quotedPKValueAliases[i]))
+				right = fmt.Sprintf("cast(%s as %s)", right, castType)
 			}
+			sqlBuf.WriteString(dataBranchSQLKeyEqual(
+				left, right, colTypes[expandedPKColIdxes[i]],
+			))
 			if i != len(quotedPKNames)-1 {
 				sqlBuf.WriteString(" AND ")
 			}
