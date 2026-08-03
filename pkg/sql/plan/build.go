@@ -379,6 +379,42 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
 		return nil, err
 	}
+
+	enabled, err := IsForeignKeyChecksEnabled(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if enabled && query.HasForeignKeyAction {
+		tblInfo, resolveErr := getUpdateTableInfo(ctx, stmt)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		for i, tableDef := range tblInfo.tableDefs {
+			if len(tblInfo.updateKeys[i]) == 0 {
+				continue
+			}
+			selfFkeys := make([]*plan.ForeignKeyDef, 0, len(tableDef.Fkeys))
+			for _, fk := range tableDef.Fkeys {
+				if fk.ForeignTbl == 0 {
+					selfFkeys = append(selfFkeys, fk)
+				}
+			}
+			if len(selfFkeys) == 0 {
+				continue
+			}
+			sqls, genErr := genSqlsForCheckFKSelfRefer(
+				ctx.GetContext(),
+				tblInfo.objRef[i].SchemaName,
+				tableDef.Name,
+				tableDef.Cols,
+				selfFkeys,
+			)
+			if genErr != nil {
+				return nil, genErr
+			}
+			query.DetectSqls = append(query.DetectSqls, sqls...)
+		}
+	}
 	recordUpdatePlannerRoute(updatePlannerModern, updateRouteReasonNone, "selected")
 	return &Plan{
 		Plan: &plan.Plan_Query{

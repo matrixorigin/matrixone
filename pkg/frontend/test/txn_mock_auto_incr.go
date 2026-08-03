@@ -1,10 +1,10 @@
-// Copyright 2021-2025 Matrix Origin
+// Copyright 2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,27 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package features
+package mock_frontend
 
-const (
-	Partitioned     = 1 << iota
-	IndexTable      = 1 << iota
-	Partition       = 1 << iota
-	MongoDBExternal = 1 << iota
-)
-
-func IsPartitioned(f uint64) bool {
-	return f&Partitioned != 0
-}
-
-func IsIndexTable(f uint64) bool {
-	return f&IndexTable != 0
-}
-
-func IsPartition(f uint64) bool {
-	return f&Partition != 0
-}
-
-func IsMongoDBExternal(f uint64) bool {
-	return f&MongoDBExternal != 0
-}
+// RequireAutoIncrEpochFenceCommit lets the shared transaction mock satisfy the
+// additive client capability without changing the generated mock interface.
+func (m *MockTxnOperator) RequireAutoIncrEpochFenceCommit() {}
