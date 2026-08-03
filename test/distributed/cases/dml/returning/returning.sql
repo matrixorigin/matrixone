@@ -16,6 +16,12 @@ select row_count();
 delete from t where note = 'select' returning id, v, g, note;
 select row_count();
 
+create table delete_projection_t(pk int primary key, skipped varchar(20), middle_col int, tail_col varchar(20));
+insert into delete_projection_t values (1, 'skip-1', 101, 'tail-1'), (2, 'skip-2', 202, 'tail-2');
+delete from delete_projection_t where pk = 1 returning middle_col;
+delete from delete_projection_t where pk = 2 returning tail_col;
+drop table delete_projection_t;
+
 begin;
 insert into t(v, note) values (21, 'rolled-back') returning id, v, g, note;
 rollback;

@@ -14,6 +14,8 @@
 
 package tree
 
+import "strings"
+
 // Delete statement
 type Delete struct {
 	statementImpl
@@ -35,7 +37,18 @@ func (node *Delete) Format(ctx *FmtCtx) {
 		node.With.Format(ctx)
 		ctx.WriteByte(' ')
 	}
-	ctx.WriteString("delete from ")
+	ctx.WriteString("delete")
+	if node.Priority != "" {
+		ctx.WriteByte(' ')
+		ctx.WriteString(strings.ToLower(node.Priority))
+	}
+	if node.Quick {
+		ctx.WriteString(" quick")
+	}
+	if node.Ignore {
+		ctx.WriteString(" ignore")
+	}
+	ctx.WriteString(" from ")
 
 	prefix := ""
 	for _, a := range node.Tables {

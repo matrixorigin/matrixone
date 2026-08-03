@@ -45,6 +45,9 @@ func TestDMLReturningPlansUseDedicatedStep(t *testing.T) {
 			returningScan := query.Nodes[root.Children[0]]
 			require.Equal(t, planpb.Node_SINK_SCAN, returningScan.NodeType)
 			require.Len(t, returningScan.SourceStep, 1)
+			sourceSink := query.Nodes[query.Steps[returningScan.SourceStep[0]]]
+			require.Len(t, sourceSink.Children, 1)
+			require.Len(t, sourceSink.ProjectList, len(query.Nodes[sourceSink.Children[0]].ProjectList))
 			for _, col := range returningScan.TableDef.Cols {
 				require.False(t, col.Hidden)
 				require.NotEqual(t, "__mo_rowid", col.Name)
@@ -63,6 +66,82 @@ func TestDMLReturningPlansUseDedicatedStep(t *testing.T) {
 			require.True(t, hasMutation, "RETURNING must not replace the base-table mutation")
 		})
 	}
+}
+
+func TestDeleteReturningSinkScanPositionsSurvivePruning(t *testing.T) {
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"delete from nation where n_nationkey = 1 returning n_regionkey",
+	)
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.True(t, query.HasReturning)
+
+	returningRoot := query.Nodes[query.Steps[query.ReturningStep]]
+	require.Len(t, returningRoot.Children, 1)
+	returningScan := query.Nodes[returningRoot.Children[0]]
+	require.Equal(t, planpb.Node_SINK_SCAN, returningScan.NodeType)
+	require.Len(t, returningScan.SourceStep, 1)
+
+	sourceStep := returningScan.SourceStep[0]
+	sourceSink := query.Nodes[query.Steps[sourceStep]]
+	require.Len(t, sourceSink.Children, 1)
+	sourceChild := query.Nodes[sourceSink.Children[0]]
+	require.Len(t, sourceSink.ProjectList, len(sourceChild.ProjectList))
+	for pos, expr := range sourceSink.ProjectList {
+		col := expr.GetCol()
+		require.NotNil(t, col)
+		require.Equal(t, int32(pos), col.ColPos)
+		require.Equal(t, expr.Typ.Id, sourceChild.ProjectList[pos].Typ.Id)
+	}
+
+	checked := 0
+	for _, node := range query.Nodes {
+		if node.NodeType != planpb.Node_SINK_SCAN || len(node.SourceStep) != 1 || node.SourceStep[0] != sourceStep {
+			continue
+		}
+		for _, expr := range node.ProjectList {
+			col := expr.GetCol()
+			require.NotNil(t, col)
+			require.GreaterOrEqual(t, col.ColPos, int32(0))
+			require.Less(t, int(col.ColPos), len(sourceSink.ProjectList))
+			require.Equal(t, expr.Typ.Id, sourceSink.ProjectList[col.ColPos].Typ.Id)
+			checked++
+		}
+	}
+	require.Positive(t, checked)
+}
+
+func TestRecordReturningIrregularMaintenance(t *testing.T) {
+	indexes := []*planpb.IndexDef{{IndexName: "idx"}}
+	objRef := &planpb.ObjectRef{ObjName: "t"}
+	tableDef := &planpb.TableDef{
+		Name:          "t",
+		Cols:          []*planpb.ColDef{{Name: "id"}},
+		Name2ColIndex: map[string]int32{"id": 0},
+		Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id"},
+	}
+	builder := NewQueryBuilder(planpb.Query_DELETE, NewMockCompilerContext(true), false, true)
+	builder.returningSourceStep = 7
+
+	require.NoError(t, builder.recordReturningIrregularMaintenance(nil, tableDef, objRef, 3, false))
+	require.NoError(t, builder.recordReturningIrregularMaintenance(indexes, tableDef, objRef, 3, true))
+	require.Equal(t, int32(7), builder.irregularMaintSourceStep)
+	require.Equal(t, int32(7), builder.irregularMaintDeleteStep)
+	require.Equal(t, int32(3), builder.irregularMaintDeletePkPos)
+	require.Equal(t, indexes, builder.irregularMaintIndexes)
+	require.Equal(t, objRef, builder.irregularMaintObjRef)
+	require.True(t, builder.irregularMaintSkipInsert)
+	require.Equal(t, indexes, builder.irregularMaintTableDef.Indexes)
+
+	missingPkey := *tableDef
+	missingPkey.Pkey = nil
+	require.Error(t, builder.recordReturningIrregularMaintenance(indexes, &missingPkey, objRef, 3, false))
+
+	missingPkColumn := *tableDef
+	missingPkColumn.Name2ColIndex = map[string]int32{}
+	require.Error(t, builder.recordReturningIrregularMaintenance(indexes, &missingPkColumn, objRef, 3, false))
 }
 
 func TestDMLReturningRejectsV1NonGoals(t *testing.T) {

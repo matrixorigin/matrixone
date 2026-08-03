@@ -40,8 +40,11 @@ func (node *Insert) Format(ctx *FmtCtx) {
 		node.With.Format(ctx)
 		ctx.WriteByte(' ')
 	}
+	ignore := len(node.OnDuplicateUpdate) == 1 && node.OnDuplicateUpdate[0] == nil
 	if node.Overwrite {
 		ctx.WriteString("insert overwrite ")
+	} else if ignore {
+		ctx.WriteString("insert ignore into ")
 	} else {
 		ctx.WriteString("insert into ")
 	}
@@ -71,7 +74,7 @@ func (node *Insert) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.Rows.Format(ctx)
 	}
-	if len(node.OnDuplicateUpdate) > 0 {
+	if len(node.OnDuplicateUpdate) > 0 && !ignore {
 		ctx.WriteString(" on duplicate key update ")
 		node.OnDuplicateUpdate.Format(ctx)
 	}

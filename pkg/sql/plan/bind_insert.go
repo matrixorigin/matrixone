@@ -296,6 +296,9 @@ func (builder *QueryBuilder) appendIrregularMaintSource(
 
 	sinkTag := builder.genNewBindTag()
 	sinkID := appendSinkNodeWithTag(builder, bindCtx, newRowImageID, sinkTag)
+	if forceMaterialize {
+		builder.preserveReturningSinkProjection(sinkID)
+	}
 	maintStep := builder.appendStep(sinkID)
 
 	scanID := builder.appendImageSinkScanNode(bindCtx, maintStep, sinkTag, tableDef)

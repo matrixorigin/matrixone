@@ -51,6 +51,10 @@ func (node *Update) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 	}
 	ctx.WriteString("update")
+	if node.Priority != "" {
+		ctx.WriteByte(' ')
+		ctx.WriteString(strings.ToLower(node.Priority))
+	}
 	if node.Ignore {
 		ctx.WriteString(" ignore")
 	}

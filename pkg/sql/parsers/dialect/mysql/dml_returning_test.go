@@ -81,14 +81,35 @@ func TestDMLReturningPreservesRejectedSyntaxShape(t *testing.T) {
 
 func TestRejectedDMLReturningSyntaxRoundTrips(t *testing.T) {
 	for _, sql := range []string{
+		"insert ignore into t values (1) returning *",
+		"update low_priority t set a = 1 returning a",
+		"update high_priority ignore t set a = 1 returning a",
+		"delete low_priority quick ignore from t returning a",
 		"replace into t values (1) returning *",
 		"merge into t using s on t.a = s.a when matched then delete returning *",
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err, sql)
 		formatted := tree.String(stmt, dialect.MYSQL)
-		_, err = ParseOne(context.Background(), formatted, 1)
+		roundTrip, err := ParseOne(context.Background(), formatted, 1)
 		require.NoError(t, err, formatted)
+		require.Equal(t, formatted, tree.String(roundTrip, dialect.MYSQL))
+		switch original := stmt.(type) {
+		case *tree.Insert:
+			reparsed := roundTrip.(*tree.Insert)
+			require.Equal(t, len(original.OnDuplicateUpdate), len(reparsed.OnDuplicateUpdate))
+			require.Equal(t, original.OnDuplicateUpdate[0] == nil, reparsed.OnDuplicateUpdate[0] == nil)
+		case *tree.Update:
+			reparsed := roundTrip.(*tree.Update)
+			require.Equal(t, original.Priority, reparsed.Priority)
+			require.Equal(t, original.Ignore, reparsed.Ignore)
+		case *tree.Delete:
+			reparsed := roundTrip.(*tree.Delete)
+			require.Equal(t, original.Priority, reparsed.Priority)
+			require.Equal(t, original.Quick, reparsed.Quick)
+			require.Equal(t, original.Ignore, reparsed.Ignore)
+		}
+		roundTrip.Free()
 		stmt.Free()
 	}
 }

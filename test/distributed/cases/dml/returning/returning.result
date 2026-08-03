@@ -31,6 +31,15 @@ id    v    g    note
 select row_count();
 row_count()
 1
+create table delete_projection_t(pk int primary key, skipped varchar(20), middle_col int, tail_col varchar(20));
+insert into delete_projection_t values (1, 'skip-1', 101, 'tail-1'), (2, 'skip-2', 202, 'tail-2');
+delete from delete_projection_t where pk = 1 returning middle_col;
+middle_col
+101
+delete from delete_projection_t where pk = 2 returning tail_col;
+tail_col
+tail-2
+drop table delete_projection_t;
 begin;
 insert into t(v, note) values (21, 'rolled-back') returning id, v, g, note;
 id    v    g    note

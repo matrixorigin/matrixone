@@ -5666,7 +5666,7 @@ wild_opt:
     {}
 
 priority_opt:
-    {}
+    { $$ = "" }
 |    priority
 
 priority:
@@ -5675,7 +5675,7 @@ priority:
 |    DELAYED
 
 quick_opt:
-    {}
+    { $$ = "" }
 |    QUICK
 
 ignore_opt:
