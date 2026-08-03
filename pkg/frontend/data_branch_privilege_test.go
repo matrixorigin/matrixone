@@ -117,6 +117,7 @@ func TestBuildTableInfoListWhereClauseUsesRelationKindForInternalObjects(t *test
 	require.Contains(t, got, "relkind = 'temporary_table'")
 	require.Contains(t, got, "mo_is_legacy_temporary_table(coalesce(relkind, ''), coalesce(relname, ''), coalesce(reldatabase, ''), coalesce(rel_createsql, ''), coalesce(extra_info, ''))")
 	require.Contains(t, got, "coalesce(relkind, '') not in ('r', 'v', 'e', 'm', 's', 'cluster', 'partition', 'S') and regexp_like(relname, '^__mo_tmp_[0-9a-f]{32}_')")
+	require.Contains(t, got, "not regexp_like(lower(relname), '"+catalog.LifecycleRestoreTableSQLRegexpPattern+"')")
 	require.NotContains(t, got, catalog.MOAutoIncrTable)
 	require.NotContains(t, got, catalog.MO_ACCOUNT_LOCK)
 	require.NotContains(t, got, "relname not like '__mo_tmp_%'")

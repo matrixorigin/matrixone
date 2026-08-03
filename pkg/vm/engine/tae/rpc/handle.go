@@ -308,6 +308,8 @@ func (h *Handle) handleRequests(
 					return
 				}
 			}
+		case *api.LifecycleCommitEntry:
+			err = h.HandleLifecycleCommit(ctx, txn, req)
 
 		case *cmd_util.WriteReq, *api.Entry:
 			var wr *cmd_util.WriteReq

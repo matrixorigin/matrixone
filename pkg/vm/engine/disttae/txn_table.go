@@ -3380,7 +3380,21 @@ func (tbl *txnTable) getSortKeyPosAndSortKeyIsPK() (int, bool) {
 	return sortKeyPos, sortKeyIsPK
 }
 
+type lifecycleTransferBookingWriteOptions struct {
+	forceExternal                bool
+	preservePhysicalFilesOnError bool
+	pathAllocator                func(pageOrdinal uint32) (string, error)
+}
+
 func dumpTransferInfo(ctx context.Context, mergeTask *cnMergeTask) (*api.MergeCommitEntry, error) {
+	return dumpTransferInfoWithOptions(ctx, mergeTask, nil)
+}
+
+func dumpTransferInfoWithOptions(
+	ctx context.Context,
+	mergeTask *cnMergeTask,
+	options *lifecycleTransferBookingWriteOptions,
+) (*api.MergeCommitEntry, error) {
 	// Count only non-deleted (non-sentinel) rows for the size threshold check.
 	rowCnt := 0
 	tt := mergeTask.transferTable
@@ -3398,7 +3412,7 @@ func dumpTransferInfo(ctx context.Context, mergeTask *cnMergeTask) (*api.MergeCo
 	// transfer info size is only related to row count.
 	// For api.TransDestPos, 5*10^5 rows is 52*5*10^5 ~= 26MB
 	// For api.TransferDestPos, 5*10^5 rows is 12*5*10^5 ~= 6MB
-	if rowCnt < 500000 {
+	if rowCnt < 500000 && (options == nil || !options.forceExternal) {
 		avgPerBlk := rowCnt / nblks
 		mappings := make([]api.BlkTransMap, nblks)
 		for i := 0; i < nblks; i++ {
@@ -3423,7 +3437,7 @@ func dumpTransferInfo(ctx context.Context, mergeTask *cnMergeTask) (*api.MergeCo
 	}
 
 	// if transfer info is too large, write it down to s3
-	if err := writeTransferInfoToS3(ctx, mergeTask); err != nil {
+	if err := writeTransferInfoToS3(ctx, mergeTask, options); err != nil {
 		return mergeTask.commitEntry, err
 	}
 	var locStr strings.Builder
@@ -3439,9 +3453,14 @@ func dumpTransferInfo(ctx context.Context, mergeTask *cnMergeTask) (*api.MergeCo
 	return mergeTask.commitEntry, nil
 }
 
-func writeTransferInfoToS3(ctx context.Context, taskHost *cnMergeTask) (err error) {
+func writeTransferInfoToS3(
+	ctx context.Context,
+	taskHost *cnMergeTask,
+	options *lifecycleTransferBookingWriteOptions,
+) (err error) {
 	defer func() {
-		if err != nil {
+		if err != nil &&
+			(options == nil || !options.preservePhysicalFilesOnError) {
 			locations := taskHost.commitEntry.BookingLoc
 			for _, filepath := range locations {
 				_ = taskHost.fs.Delete(ctx, filepath)
@@ -3449,10 +3468,14 @@ func writeTransferInfoToS3(ctx context.Context, taskHost *cnMergeTask) (err erro
 		}
 	}()
 
-	return writeTransferMapsToS3(ctx, taskHost)
+	return writeTransferMapsToS3(ctx, taskHost, options)
 }
 
-func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err error) {
+func writeTransferMapsToS3(
+	ctx context.Context,
+	taskHost *cnMergeTask,
+	options *lifecycleTransferBookingWriteOptions,
+) (err error) {
 	tt := taskHost.transferTable
 
 	nblks := tt.Len()
@@ -3494,6 +3517,24 @@ func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err erro
 		}
 	}()
 	objRowCnt := 0
+	var bookingOrdinal uint32
+	allocatePath := func() (string, error) {
+		if options != nil && options.pathAllocator != nil {
+			path, err := options.pathAllocator(bookingOrdinal)
+			if err != nil {
+				return "", err
+			}
+			bookingOrdinal++
+			return path, nil
+		}
+		path := ioutil.EncodeTmpFileName(
+			"tmp",
+			"merge_"+uuid.NewString(),
+			time.Now().UTC().Unix(),
+		)
+		bookingOrdinal++
+		return path, nil
+	}
 	for blkIdx := 0; blkIdx < nblks; blkIdx++ {
 		transMap := tt.GetBlockMap(blkIdx)
 		for rowIdx, destPos := range transMap {
@@ -3520,7 +3561,10 @@ func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err erro
 			objRowCnt++
 
 			if objRowCnt*len(columns)*int(unsafe.Sizeof(int32(0))) > 200*mpool.MB {
-				filename := ioutil.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
+				filename, err := allocatePath()
+				if err != nil {
+					return err
+				}
 				writer, err := objectio.NewObjectWriterSpecial(objectio.WriterTmp, filename, taskHost.fs)
 				if err != nil {
 					return err
@@ -3544,7 +3588,10 @@ func writeTransferMapsToS3(ctx context.Context, taskHost *cnMergeTask) (err erro
 
 	// write remaining data
 	if buffer.RowCount() != 0 {
-		filename := ioutil.EncodeTmpFileName("tmp", "merge_"+uuid.NewString(), time.Now().UTC().Unix())
+		filename, err := allocatePath()
+		if err != nil {
+			return err
+		}
 		writer, err := objectio.NewObjectWriterSpecial(objectio.WriterTmp, filename, taskHost.fs)
 		if err != nil {
 			return err

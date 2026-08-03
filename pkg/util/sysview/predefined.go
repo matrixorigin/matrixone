@@ -312,8 +312,8 @@ var (
 		"if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS,"+
 		"cast(rel_comment as text) AS TABLE_COMMENT "+
 		"FROM mo_catalog.mo_tables tbl "+
-		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and %s and tbl.relname != '%s' and tbl.relkind != '%s'",
-		catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate("tbl"), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel)
+		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and not regexp_like(lower(tbl.relname), '%s') and %s and tbl.relname != '%s' and tbl.relkind != '%s'",
+		catalog.IndexTableNamePrefix+"%", catalog.LifecycleRestoreTableSQLRegexpPattern, catalog.NonTemporaryTableSQLPredicate("tbl"), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel)
 
 	InformationSchemaPartitionsDDL = "CREATE VIEW information_schema.`PARTITIONS` AS " +
 		"SELECT " +

@@ -420,6 +420,11 @@ var (
 		('BRANCH', '{"allowed_scope":[]}')
 		on duplicate key update scope_spec = values(scope_spec);`, catalog.MO_FEATURE_REGISTRY)
 
+	MoCatalogLifecycleFeatureRegistryInitData = fmt.Sprintf(`insert into mo_catalog.%s(
+		feature_code, description, scope_spec, enabled)
+		values ('LIFECYCLE', 'TAE object lifecycle retirement', '{"archive_stages":[]}', false)
+		on duplicate key update description = description;`, catalog.MO_FEATURE_REGISTRY)
+
 	MoCatalogMoRoleRuleDDL = fmt.Sprintf("create table %s.%s ("+
 		"role_id int signed,"+
 		"rule_name varchar(200),"+
