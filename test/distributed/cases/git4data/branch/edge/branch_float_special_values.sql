@@ -257,17 +257,86 @@ where serial(k) = serial(bit_cast(unhex('0000000000000080') as double));
 data branch diff bit_portable_src against bit_portable_dst output file '/tmp/';
 update bit_portable_dst set note = 'nan1_updated'
 where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double)) limit 1;
-insert into bit_portable_dst(k, note)
-select bit_cast(unhex('010000000000f87f') as double), 'nan1_updated'
-where not exists (select 1 from bit_portable_dst
-                  where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double)));
 update bit_portable_dst set note = 'negzero_updated'
 where serial(k) = serial(bit_cast(unhex('0000000000000080') as double)) limit 1;
-insert into bit_portable_dst(k, note)
-select bit_cast(unhex('0000000000000080') as double), 'negzero_updated'
-where not exists (select 1 from bit_portable_dst
-                  where serial(k) = serial(bit_cast(unhex('0000000000000080') as double)));
 select note, hex(serial(k)) from bit_portable_dst order by note;
+
+-- A missing updated key can still have a bit-distinct scalar peer in snapshot
+-- storage. MERGE, PICK, and portable SQL must materialize that peer class and
+-- then restore each accepted row with an independent INSERT ... VALUES.
+create table bit_missing_zero_base(k double primary key, note varchar(32));
+insert into bit_missing_zero_base values(0.0, 'poszero');
+insert into bit_missing_zero_base values(
+    bit_cast(unhex('0000000000000080') as double), 'negzero');
+create table bit_missing_nan_base(k double primary key, note varchar(32));
+insert into bit_missing_nan_base values(
+    bit_cast(unhex('000000000000f87f') as double), 'nan0');
+insert into bit_missing_nan_base values(
+    bit_cast(unhex('010000000000f87f') as double), 'nan1');
+
+data branch create table bit_zero_merge_src from bit_missing_zero_base;
+data branch create table bit_zero_merge_dst from bit_missing_zero_base;
+update bit_zero_merge_src set note = 'negzero_restored'
+where serial(k) = serial(bit_cast(unhex('0000000000000080') as double));
+delete from bit_zero_merge_dst
+where serial(k) = serial(bit_cast(unhex('0000000000000080') as double));
+data branch merge bit_zero_merge_src into bit_zero_merge_dst when conflict accept;
+select note, hex(serial(k)) from bit_zero_merge_dst order by note;
+
+data branch create table bit_nan_merge_src from bit_missing_nan_base;
+data branch create table bit_nan_merge_dst from bit_missing_nan_base;
+update bit_nan_merge_src set note = 'nan1_restored'
+where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double));
+delete from bit_nan_merge_dst
+where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double));
+data branch merge bit_nan_merge_src into bit_nan_merge_dst when conflict accept;
+select note, hex(serial(k)) from bit_nan_merge_dst order by note;
+
+data branch create table bit_zero_pick_src from bit_missing_zero_base;
+data branch create table bit_zero_pick_dst from bit_missing_zero_base;
+update bit_zero_pick_src set note = 'negzero_restored'
+where serial(k) = serial(bit_cast(unhex('0000000000000080') as double));
+delete from bit_zero_pick_dst
+where serial(k) = serial(bit_cast(unhex('0000000000000080') as double));
+data branch pick bit_zero_pick_src into bit_zero_pick_dst
+keys(select k from bit_zero_pick_src where note = 'negzero_restored')
+when conflict accept;
+select note, hex(serial(k)) from bit_zero_pick_dst order by note;
+
+data branch create table bit_nan_pick_src from bit_missing_nan_base;
+data branch create table bit_nan_pick_dst from bit_missing_nan_base;
+update bit_nan_pick_src set note = 'nan1_restored'
+where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double));
+delete from bit_nan_pick_dst
+where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double));
+data branch pick bit_nan_pick_src into bit_nan_pick_dst
+keys(select k from bit_nan_pick_src where note = 'nan1_restored')
+when conflict accept;
+select note, hex(serial(k)) from bit_nan_pick_dst order by note;
+
+data branch create table bit_zero_portable_src from bit_missing_zero_base;
+data branch create table bit_zero_portable_dst from bit_missing_zero_base;
+update bit_zero_portable_src set note = 'negzero_restored'
+where serial(k) = serial(bit_cast(unhex('0000000000000080') as double));
+delete from bit_zero_portable_dst
+where serial(k) = serial(bit_cast(unhex('0000000000000080') as double));
+-- @ignore:0,1
+data branch diff bit_zero_portable_src against bit_zero_portable_dst output file '/tmp/';
+insert into bit_zero_portable_dst(k, note) values
+    (bit_cast(unhex('0000000000000080') as double), 'negzero_restored');
+select note, hex(serial(k)) from bit_zero_portable_dst order by note;
+
+data branch create table bit_nan_portable_src from bit_missing_nan_base;
+data branch create table bit_nan_portable_dst from bit_missing_nan_base;
+update bit_nan_portable_src set note = 'nan1_restored'
+where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double));
+delete from bit_nan_portable_dst
+where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double));
+-- @ignore:0,1
+data branch diff bit_nan_portable_src against bit_nan_portable_dst output file '/tmp/';
+insert into bit_nan_portable_dst(k, note) values
+    (bit_cast(unhex('010000000000f87f') as double), 'nan1_restored');
+select note, hex(serial(k)) from bit_nan_portable_dst order by note;
 
 -- A source update conflicts with an independent destination delete. ACCEPT
 -- must restore the source row; FAIL and SKIP must retain the destination delete.
@@ -335,12 +404,8 @@ update missing_portable_src set note = 'source_updated' where k = 1.5;
 delete from missing_portable_dst where k = 1.5;
 -- @ignore:0,1
 data branch diff missing_portable_src against missing_portable_dst output file '/tmp/';
-update missing_portable_dst set note = 'source_updated'
-where serial(k) = serial(cast(1.5 as double)) limit 1;
-insert into missing_portable_dst(k, note)
-select cast(1.5 as double), 'source_updated'
-where not exists (select 1 from missing_portable_dst
-                  where serial(k) = serial(cast(1.5 as double)));
+insert into missing_portable_dst(k, note) values
+    (cast(1.5 as double), 'source_updated');
 select note, hex(serial(k)) from missing_portable_dst order by note;
 
 drop database br_float_special_values;

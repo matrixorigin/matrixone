@@ -197,8 +197,6 @@ func pickMergeDiffs(
 		ctx, ses, bh, tblStuff, dataBranchApplyModeOnlinePKOnly,
 		&deleteCnt, deleteFromVals, &insertCnt, insertIntoVals, nil,
 	)
-	appender.restoreMissingExactUpdates = stmt.ConflictOpt != nil &&
-		stmt.ConflictOpt.Opt == tree.CONFLICT_ACCEPT
 	var acceptedExactFloatKeys map[string]struct{}
 	if appender.batchInfo.deleteNeedsExactFloatKeyMatch() &&
 		stmt.ConflictOpt != nil && stmt.ConflictOpt.Opt == tree.CONFLICT_ACCEPT {
@@ -360,7 +358,8 @@ func appendPickedBatchRows(
 			return
 		}
 		if err = appendOrExecuteDataBranchApplyRow(
-			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender, exactFloatKeyUpdate,
+			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender,
+			exactFloatKeyUpdate, wrapped.restoreMissing,
 		); err != nil {
 			return
 		}

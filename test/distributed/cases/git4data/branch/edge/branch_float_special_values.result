@@ -279,22 +279,101 @@ data branch diff bit_portable_src against bit_portable_dst output file '/tmp/';
 /tmp/diff_bit_portable_src_bit_portable_dst_20260803_132725_357651cf-fbc1-4705-812b-17e7514ce0bf.sql  ¦  DELETE FROM `br_float_special_values`.`bit_portable_dst`, INSERT INTO `br_float_special_values`.`bit_portable_dst`
 update bit_portable_dst set note = 'nan1_updated'
 where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double)) limit 1;
-insert into bit_portable_dst(k, note)
-select bit_cast(unhex('010000000000f87f') as double), 'nan1_updated'
-where not exists (select 1 from bit_portable_dst
-where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double)));
 update bit_portable_dst set note = 'negzero_updated'
 where serial(k) = serial(bit_cast(unhex('0000000000000080') as double)) limit 1;
-insert into bit_portable_dst(k, note)
-select bit_cast(unhex('0000000000000080') as double), 'negzero_updated'
-where not exists (select 1 from bit_portable_dst
-where serial(k) = serial(bit_cast(unhex('0000000000000080') as double)));
 select note, hex(serial(k)) from bit_portable_dst order by note;
 ➤ note[12,-1,0]  ¦  hex(serial(k))[12,-1,0]  𝄀
 nan0  ¦  21FFF8000000000000  𝄀
 nan1_updated  ¦  21FFF8000000000001  𝄀
 negzero_updated  ¦  217FFFFFFFFFFFFFFF  𝄀
 poszero  ¦  218000000000000000
+create table bit_missing_zero_base(k double primary key, note varchar(32));
+insert into bit_missing_zero_base values(0.0, 'poszero');
+insert into bit_missing_zero_base values(
+bit_cast(unhex('0000000000000080') as double), 'negzero');
+create table bit_missing_nan_base(k double primary key, note varchar(32));
+insert into bit_missing_nan_base values(
+bit_cast(unhex('000000000000f87f') as double), 'nan0');
+insert into bit_missing_nan_base values(
+bit_cast(unhex('010000000000f87f') as double), 'nan1');
+data branch create table bit_zero_merge_src from bit_missing_zero_base;
+data branch create table bit_zero_merge_dst from bit_missing_zero_base;
+update bit_zero_merge_src set note = 'negzero_restored'
+where serial(k) = serial(bit_cast(unhex('0000000000000080') as double));
+delete from bit_zero_merge_dst
+where serial(k) = serial(bit_cast(unhex('0000000000000080') as double));
+data branch merge bit_zero_merge_src into bit_zero_merge_dst when conflict accept;
+select note, hex(serial(k)) from bit_zero_merge_dst order by note;
+➤ note[12,-1,0]  ¦  hex(serial(k))[12,-1,0]  𝄀
+negzero_restored  ¦  217FFFFFFFFFFFFFFF  𝄀
+poszero  ¦  218000000000000000
+data branch create table bit_nan_merge_src from bit_missing_nan_base;
+data branch create table bit_nan_merge_dst from bit_missing_nan_base;
+update bit_nan_merge_src set note = 'nan1_restored'
+where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double));
+delete from bit_nan_merge_dst
+where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double));
+data branch merge bit_nan_merge_src into bit_nan_merge_dst when conflict accept;
+select note, hex(serial(k)) from bit_nan_merge_dst order by note;
+➤ note[12,-1,0]  ¦  hex(serial(k))[12,-1,0]  𝄀
+nan0  ¦  21FFF8000000000000  𝄀
+nan1_restored  ¦  21FFF8000000000001
+data branch create table bit_zero_pick_src from bit_missing_zero_base;
+data branch create table bit_zero_pick_dst from bit_missing_zero_base;
+update bit_zero_pick_src set note = 'negzero_restored'
+where serial(k) = serial(bit_cast(unhex('0000000000000080') as double));
+delete from bit_zero_pick_dst
+where serial(k) = serial(bit_cast(unhex('0000000000000080') as double));
+data branch pick bit_zero_pick_src into bit_zero_pick_dst
+keys(select k from bit_zero_pick_src where note = 'negzero_restored')
+when conflict accept;
+select note, hex(serial(k)) from bit_zero_pick_dst order by note;
+➤ note[12,-1,0]  ¦  hex(serial(k))[12,-1,0]  𝄀
+negzero_restored  ¦  217FFFFFFFFFFFFFFF  𝄀
+poszero  ¦  218000000000000000
+data branch create table bit_nan_pick_src from bit_missing_nan_base;
+data branch create table bit_nan_pick_dst from bit_missing_nan_base;
+update bit_nan_pick_src set note = 'nan1_restored'
+where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double));
+delete from bit_nan_pick_dst
+where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double));
+data branch pick bit_nan_pick_src into bit_nan_pick_dst
+keys(select k from bit_nan_pick_src where note = 'nan1_restored')
+when conflict accept;
+select note, hex(serial(k)) from bit_nan_pick_dst order by note;
+➤ note[12,-1,0]  ¦  hex(serial(k))[12,-1,0]  𝄀
+nan0  ¦  21FFF8000000000000  𝄀
+nan1_restored  ¦  21FFF8000000000001
+data branch create table bit_zero_portable_src from bit_missing_zero_base;
+data branch create table bit_zero_portable_dst from bit_missing_zero_base;
+update bit_zero_portable_src set note = 'negzero_restored'
+where serial(k) = serial(bit_cast(unhex('0000000000000080') as double));
+delete from bit_zero_portable_dst
+where serial(k) = serial(bit_cast(unhex('0000000000000080') as double));
+data branch diff bit_zero_portable_src against bit_zero_portable_dst output file '/tmp/';
+➤ FILE SAVED TO[12,0,0]  ¦  HINT[12,0,0]  𝄀
+/tmp/diff_bit_zero_portable_src_bit_zero_portable_dst_20260803_151923_48b7be14-bb7d-48c4-a7c4-98a4aa54ee4d.sql  ¦  DELETE FROM `br_float_special_values`.`bit_zero_portable_dst`, INSERT INTO `br_float_special_values`.`bit_zero_portable_dst`
+insert into bit_zero_portable_dst(k, note) values
+(bit_cast(unhex('0000000000000080') as double), 'negzero_restored');
+select note, hex(serial(k)) from bit_zero_portable_dst order by note;
+➤ note[12,-1,0]  ¦  hex(serial(k))[12,-1,0]  𝄀
+negzero_restored  ¦  217FFFFFFFFFFFFFFF  𝄀
+poszero  ¦  218000000000000000
+data branch create table bit_nan_portable_src from bit_missing_nan_base;
+data branch create table bit_nan_portable_dst from bit_missing_nan_base;
+update bit_nan_portable_src set note = 'nan1_restored'
+where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double));
+delete from bit_nan_portable_dst
+where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double));
+data branch diff bit_nan_portable_src against bit_nan_portable_dst output file '/tmp/';
+➤ FILE SAVED TO[12,0,0]  ¦  HINT[12,0,0]  𝄀
+/tmp/diff_bit_nan_portable_src_bit_nan_portable_dst_20260803_151923_cb57436e-4e70-41fc-980d-2eb94a016f39.sql  ¦  DELETE FROM `br_float_special_values`.`bit_nan_portable_dst`, INSERT INTO `br_float_special_values`.`bit_nan_portable_dst`
+insert into bit_nan_portable_dst(k, note) values
+(bit_cast(unhex('010000000000f87f') as double), 'nan1_restored');
+select note, hex(serial(k)) from bit_nan_portable_dst order by note;
+➤ note[12,-1,0]  ¦  hex(serial(k))[12,-1,0]  𝄀
+nan0  ¦  21FFF8000000000000  𝄀
+nan1_restored  ¦  21FFF8000000000001
 create table missing_float_base(k float primary key, note varchar(32));
 insert into missing_float_base values
 (1.5, 'base'), (9.5, 'keep');
@@ -375,12 +454,8 @@ delete from missing_portable_dst where k = 1.5;
 data branch diff missing_portable_src against missing_portable_dst output file '/tmp/';
 ➤ FILE SAVED TO[12,0,0]  ¦  HINT[12,0,0]  𝄀
 /tmp/diff_missing_portable_src_missing_portable_dst_20260803_132726_1435dfcc-41c4-4f79-80e5-55a523637d81.sql  ¦  DELETE FROM `br_float_special_values`.`missing_portable_dst`, INSERT INTO `br_float_special_values`.`missing_portable_dst`
-update missing_portable_dst set note = 'source_updated'
-where serial(k) = serial(cast(1.5 as double)) limit 1;
-insert into missing_portable_dst(k, note)
-select cast(1.5 as double), 'source_updated'
-where not exists (select 1 from missing_portable_dst
-where serial(k) = serial(cast(1.5 as double)));
+insert into missing_portable_dst(k, note) values
+(cast(1.5 as double), 'source_updated');
 select note, hex(serial(k)) from missing_portable_dst order by note;
 ➤ note[12,-1,0]  ¦  hex(serial(k))[12,-1,0]  𝄀
 keep  ¦  21C023000000000000  𝄀

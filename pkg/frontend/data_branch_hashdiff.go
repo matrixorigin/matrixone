@@ -1055,8 +1055,9 @@ func hashDiffIfHasLCA(
 		wg        sync.WaitGroup
 		atomicErr atomic.Value
 
-		baseDeleteBatches []batchWithKind
-		baseUpdateBatches []batchWithKind
+		baseDeleteBatches  []batchWithKind
+		baseUpdateBatches  []batchWithKind
+		restoreMissingKeys = make(map[string]struct{})
 	)
 
 	handleBaseDeleteAndUpdates := func(wrapped batchWithKind) error {
@@ -1078,6 +1079,50 @@ func hashDiffIfHasLCA(
 	handleTarDeleteAndUpdates := func(wrapped batchWithKind) (err2 error) {
 		wrapped.side = diffSideTarget
 		var pickConflictBat *batch.Batch
+		if wrapped.kind == diffInsert && wrapped.fromUpdate && len(restoreMissingKeys) > 0 {
+			var keep []int64
+			restoreBat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+			for rowIdx := range wrapped.batch.RowCount() {
+				key, keyErr := extractPKAsString(ses, tblStuff, wrapped.batch, rowIdx)
+				if keyErr != nil {
+					tblStuff.retPool.releaseRetBatch(restoreBat, false)
+					return keyErr
+				}
+				if _, restore := restoreMissingKeys[key]; !restore {
+					keep = append(keep, int64(rowIdx))
+					continue
+				}
+				if err2 = restoreBat.UnionOne(wrapped.batch, int64(rowIdx), ses.proc.Mp()); err2 != nil {
+					tblStuff.retPool.releaseRetBatch(restoreBat, false)
+					return err2
+				}
+				delete(restoreMissingKeys, key)
+			}
+			if restoreBat.Vecs[0].Length() > 0 {
+				restoreBat.SetRowCount(restoreBat.Vecs[0].Length())
+				if stop, e := emitBatch(emit, batchWithKind{
+					batch:          restoreBat,
+					kind:           diffInsert,
+					name:           wrapped.name,
+					side:           wrapped.side,
+					fromUpdate:     true,
+					restoreMissing: true,
+				}, false, tblStuff.retPool); e != nil {
+					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+					return e
+				} else if stop {
+					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+					return nil
+				}
+			} else {
+				tblStuff.retPool.releaseRetBatch(restoreBat, false)
+			}
+			if len(keep) == 0 {
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				return nil
+			}
+			wrapped.batch.Shrink(keep, true)
+		}
 		if len(baseUpdateBatches) == 0 && len(baseDeleteBatches) == 0 {
 			// no need to check conflict
 			if stop, e := emitBatch(emit, wrapped, false, tblStuff.retPool); e != nil {
@@ -1141,6 +1186,15 @@ func hashDiffIfHasLCA(
 						i++
 						j++
 					} else if copt.conflictOpt.Opt == tree.CONFLICT_ACCEPT {
+						if tarWrapped.kind == diffDelete && tarWrapped.fromUpdate &&
+							baseWrapped.kind == diffDelete && !baseWrapped.fromUpdate {
+							key, keyErr := extractPKAsString(ses, tblStuff, tarWrapped.batch, i)
+							if keyErr != nil {
+								err3 = keyErr
+								return
+							}
+							restoreMissingKeys[key] = struct{}{}
+						}
 						if tarWrapped.kind == diffDelete &&
 							baseWrapped.kind == diffDelete &&
 							!tarWrapped.fromUpdate && !baseWrapped.fromUpdate {
@@ -1256,11 +1310,6 @@ func hashDiffIfHasLCA(
 			return false
 		})
 
-		if wrapped.batch.RowCount() == 0 {
-			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-			return
-		}
-
 		if pickConflictBat != nil {
 			if stop, e := emitBatch(emit, batchWithKind{
 				batch: pickConflictBat,
@@ -1272,6 +1321,10 @@ func hashDiffIfHasLCA(
 			} else if stop {
 				return nil
 			}
+		}
+		if wrapped.batch.RowCount() == 0 {
+			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+			return nil
 		}
 
 		stop, e := emitBatch(emit, wrapped, false, tblStuff.retPool)
@@ -1391,6 +1444,12 @@ func hashDiffIfHasLCA(
 	// phase2: handle tar dels and updates on lca
 	if err = stepHandler(false); err != nil {
 		return
+	}
+	if len(restoreMissingKeys) != 0 {
+		return moerr.NewInternalErrorNoCtxf(
+			"data branch source update is missing %d replacement row(s)",
+			len(restoreMissingKeys),
+		)
 	}
 
 	// what can I do with these left base updates/inserts ?

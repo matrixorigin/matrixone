@@ -344,8 +344,6 @@ func mergeDiffs(
 		ctx, ses, bh, tblStuff, dataBranchApplyModeOnlineMerge,
 		&deleteCnt, deleteFromVals, &insertCnt, insertIntoVals, nil,
 	)
-	appender.restoreMissingExactUpdates = stmt.ConflictOpt != nil &&
-		stmt.ConflictOpt.Opt == tree.CONFLICT_ACCEPT
 	if err = initApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err != nil {
 		return err
 	}
@@ -1232,8 +1230,6 @@ func satisfyDiffOutputOpt(
 			ctx, ses, bh, tblStuff, dataBranchApplyModePortableSQL,
 			&deleteCnt, deleteFromValsBuffer, &insertCnt, insertIntoValsBuffer, writeFile,
 		)
-		// Portable output materializes the source side of every accepted diff.
-		appender.restoreMissingExactUpdates = true
 		if writeFile != nil {
 			// Make generated SQL runnable in one transaction.
 			if err = writeFile([]byte("BEGIN;\n")); err != nil {
@@ -1947,7 +1943,8 @@ func appendBatchRowsAsSQLValues(
 			return
 		}
 		if err = appendOrExecuteDataBranchApplyRow(
-			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender, exactFloatKeyUpdate,
+			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender,
+			exactFloatKeyUpdate, wrapped.restoreMissing,
 		); err != nil {
 			return
 		}
@@ -1978,6 +1975,7 @@ func appendOrExecuteDataBranchApplyRow(
 	tmpValsBuffer *bytes.Buffer,
 	appender sqlValuesAppender,
 	exactFloatKeyUpdate bool,
+	restoreMissing bool,
 ) error {
 	if !exactFloatKeyUpdate {
 		return appendDataBranchApplyRowAsSQLValues(
@@ -1986,7 +1984,7 @@ func appendOrExecuteDataBranchApplyRow(
 	}
 
 	statements, err := exactFloatKeyUpdateSQL(
-		ctx, ses, tblStuff, row, tmpValsBuffer, appender.restoreMissingExactUpdates,
+		ctx, ses, tblStuff, row, tmpValsBuffer, restoreMissing,
 	)
 	if err != nil {
 		return err
@@ -1995,9 +1993,10 @@ func appendOrExecuteDataBranchApplyRow(
 }
 
 // exactFloatKeyUpdateSQL applies a source update without passing FLOAT/DOUBLE
-// identity through scalar equality. ACCEPT and portable output also request the
-// conditional INSERT needed when the destination independently deleted the row;
-// SKIP deliberately leaves that destination deletion intact.
+// identity through scalar equality. A row marked restoreMissing is known by the
+// diff to have been independently deleted from the destination and is restored
+// with one direct INSERT ... VALUES. The primary-key constraint plan compares
+// FLOAT/DOUBLE serial encodings, so this path retains bit-distinct peers.
 func exactFloatKeyUpdateSQL(
 	ctx context.Context,
 	ses *Session,
@@ -2052,18 +2051,11 @@ func exactFloatKeyUpdateSQL(
 	buf.WriteString(qualifiedName)
 	buf.WriteString(" (")
 	buf.WriteString(strings.Join(quotedBaseColumnNamesByIdxes(tblStuff, writableIdxes), ","))
-	buf.WriteString(") select ")
-	if err := writeRowValueList(ses, tblStuff, row, buf, writableIdxes); err != nil {
+	buf.WriteString(") values ")
+	if err := writeInsertRowValues(ses, tblStuff, row, buf, writableIdxes); err != nil {
 		return nil, err
 	}
-	buf.WriteString(" where not exists (select 1 from ")
-	buf.WriteString(qualifiedName)
-	buf.WriteString(" where ")
-	if err := writeExactDataBranchKeyPredicate(ses, tblStuff, row, buf); err != nil {
-		return nil, err
-	}
-	buf.WriteString(")")
-	return []string{updateSQL, buf.String()}, nil
+	return []string{buf.String()}, nil
 }
 
 func writeExactDataBranchKeyPredicate(
@@ -2393,9 +2385,6 @@ type sqlValuesAppender struct {
 	insertCnt         *int
 	insertBuf         *bytes.Buffer
 	writeFile         func([]byte) error
-	// restoreMissingExactUpdates is enabled only for source-winning conflict
-	// policies. It closes source-update/destination-delete without changing SKIP.
-	restoreMissingExactUpdates bool
 }
 
 func (sva sqlValuesAppender) flushAll() error {

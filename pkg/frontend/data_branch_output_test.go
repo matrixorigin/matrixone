@@ -1434,17 +1434,9 @@ func TestDataBranchOutputExactFloatKeyUpdateSQL(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t,
 		[]string{
-			"update `db1`.`t1` set `note` = 'updated' where " +
-				"serial(`f32`) = serial(bit_cast(unhex('0100c07f') as float)) and " +
-				"serial(`f64`) = serial(bit_cast(unhex('0000000000000080') as double)) and " +
-				"`tag` = 7 limit 1",
-			"insert into `db1`.`t1` (`f32`,`f64`,`tag`,`note`) select " +
+			"insert into `db1`.`t1` (`f32`,`f64`,`tag`,`note`) values (" +
 				"bit_cast(unhex('0100c07f') as float)," +
-				"bit_cast(unhex('0000000000000080') as double),7,'updated' " +
-				"where not exists (select 1 from `db1`.`t1` where " +
-				"serial(`f32`) = serial(bit_cast(unhex('0100c07f') as float)) and " +
-				"serial(`f64`) = serial(bit_cast(unhex('0000000000000080') as double)) and " +
-				"`tag` = 7)",
+				"bit_cast(unhex('0000000000000080') as double),7,'updated')",
 		},
 		statements,
 	)
