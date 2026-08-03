@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -255,6 +256,54 @@ func TestMarkIterationPendingIsAtomic(t *testing.T) {
 	require.Equal(t, ISCPJobState_Pending, table.jobs[JobKey{JobName: "job-1", JobID: 1}].state)
 	require.Equal(t, uint64(7), table.jobs[JobKey{JobName: "job-2", JobID: 2}].currentLSN)
 	require.Equal(t, ISCPJobState_Pending, table.jobs[JobKey{JobName: "job-2", JobID: 2}].state)
+}
+
+func TestTryFlushWatermarkSerializesWithReaders(t *testing.T) {
+	table := NewTableEntry(nil, 1, 2, 3, "db", "table")
+	table.mu.RLock()
+
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(started)
+		table.tryFlushWatermark(context.Background(), nil, time.Hour)
+		close(done)
+	}()
+	<-started
+
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case <-done:
+			table.mu.RUnlock()
+			t.Fatal("watermark flush completed while a reader held the table lock")
+		case <-deadline.C:
+			table.mu.RUnlock()
+			t.Fatal("watermark flush did not wait as an exclusive writer")
+		default:
+			if table.mu.TryRLock() {
+				table.mu.RUnlock()
+				runtime.Gosched()
+				continue
+			}
+		}
+		break
+	}
+
+	select {
+	case <-done:
+		table.mu.RUnlock()
+		t.Fatal("watermark flush completed before the existing reader released the table lock")
+	default:
+	}
+
+	table.mu.RUnlock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watermark flush did not complete after the reader released the table lock")
+	}
 }
 
 func TestISCPRecoveryNormalizesPreRepairSnapshot(t *testing.T) {
