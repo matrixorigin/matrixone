@@ -98,7 +98,8 @@ count(*)
 delete from parent_t where id = 1 returning id;
 not supported: DML RETURNING does not support legacy DELETE path
 update parent_t set id = 2 where id = 1 returning id;
-not supported: DML RETURNING does not support legacy UPDATE path
+id
+2
 insert ignore into t(v, note) values (1, 'ignored') returning id;
 not supported: DML RETURNING does not support INSERT IGNORE
 insert into t(v, note) values (1, 'values') on duplicate key update v = values(v) returning id;
