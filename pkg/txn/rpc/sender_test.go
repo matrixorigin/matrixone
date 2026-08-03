@@ -822,21 +822,28 @@ func TestSendCommitDeadlineReturnsTxnUnknown(t *testing.T) {
 		assert.NoError(t, sd.Close())
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	txnMeta := txn.TxnMeta{
-		ID: []byte("commit-deadline"),
-		TNShards: []metadata.TNShard{{
-			Address: testTN2Addr,
-		}},
+	for _, method := range []txn.TxnMethod{
+		txn.TxnMethod_Commit,
+		txn.TxnMethod_CommitAutoIncrEpochFence,
+	} {
+		t.Run(method.String(), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			txnMeta := txn.TxnMeta{
+				ID: []byte("commit-deadline"),
+				TNShards: []metadata.TNShard{{
+					Address: testTN2Addr,
+				}},
+			}
+			result, err := sd.Send(ctx, []txn.TxnRequest{{
+				Method:        method,
+				Txn:           txnMeta,
+				CommitRequest: &txn.TxnCommitRequest{},
+			}})
+			assert.Nil(t, result)
+			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+		})
 	}
-	result, err := sd.Send(ctx, []txn.TxnRequest{{
-		Method:        txn.TxnMethod_Commit,
-		Txn:           txnMeta,
-		CommitRequest: &txn.TxnCommitRequest{},
-	}})
-	assert.Nil(t, result)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
 }
 
 func TestSendMultiRequestCommitResponseLossReturnsTxnUnknown(t *testing.T) {

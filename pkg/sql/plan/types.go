@@ -400,6 +400,15 @@ type aliasItem struct {
 type BindContext struct {
 	binder Binder
 
+	// mysqlSpecialOrderTypes records the storage type behind a visible ENUM/SET
+	// display value.  It is planner-local semantic provenance: only a pure
+	// display projection (or a pure column passthrough of one) may populate it.
+	// A present key with a nil value explicitly suppresses provenance when a
+	// multi-input construct proves the originating display contract unsafe.
+	// The generated plan consumes the provenance by materializing an ordinary
+	// numeric sort expression, so this metadata never crosses the plan wire.
+	mysqlSpecialOrderTypes map[int32]*plan.Type
+
 	//cteByName saves all cte definitions in the current stmt
 	cteByName map[string]*CTERef
 	//cteState records state of binding cte
@@ -660,7 +669,11 @@ type Binding struct {
 	originCols  []string
 	colIsHidden []bool
 	types       []*plan.Type
-	refCnts     []uint
+	// mysqlSpecialOrderTypes is aligned with cols. A non-nil entry means that
+	// the string column is a pure display of the recorded ENUM/SET storage
+	// type, and may therefore use definition-order semantics when ordered.
+	mysqlSpecialOrderTypes []*plan.Type
+	refCnts                []uint
 	// lower case
 	colIdByName    map[string]int32
 	isClusterTable bool

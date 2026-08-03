@@ -34,6 +34,7 @@ import (
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -132,6 +133,13 @@ var (
 
 		catalog.MOPartitionMetadata: 1,
 		catalog.MOPartitionTables:   1,
+
+		// MongoDB external tables are deliberately skipped by bulk restore.
+		// Their table-ID keyed mappings must follow the same policy; cloning a
+		// historical row without its external table creates an orphan that can
+		// permanently block DROP MONGODB CONNECTION. Snapshot and PITR share this
+		// system-table policy.
+		sqlmongodb.TableMappings: 1,
 	}
 )
 

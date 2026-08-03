@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/stretchr/testify/require"
@@ -109,6 +110,7 @@ func TestHnswParamsFromTree_NegativeM(t *testing.T) {
 	idx := &tree.Index{IndexOption: &tree.IndexOption{AlgoParamM: -1}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 	require.Contains(t, err.Error(), "M")
 }
 
@@ -116,6 +118,7 @@ func TestHnswParamsFromTree_NegativeEfConstruction(t *testing.T) {
 	idx := &tree.Index{IndexOption: &tree.IndexOption{HnswEfConstruction: -1}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 	require.Contains(t, err.Error(), "ef_construction")
 }
 
@@ -123,6 +126,7 @@ func TestHnswParamsFromTree_NegativeEfSearch(t *testing.T) {
 	idx := &tree.Index{IndexOption: &tree.IndexOption{HnswEfSearch: -1}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 	require.Contains(t, err.Error(), "ef_search")
 }
 
@@ -130,5 +134,6 @@ func TestHnswParamsFromTree_InvalidOpType(t *testing.T) {
 	idx := &tree.Index{IndexOption: &tree.IndexOption{AlgoParamVectorOpType: "not_real"}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	require.Contains(t, err.Error(), "invalid op_type")
 }

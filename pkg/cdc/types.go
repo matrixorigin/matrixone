@@ -73,6 +73,7 @@ const (
 	CDCDefaultRetryDuration                  = 10 * time.Minute
 	CDCDefaultTaskExtra_InitSnapshotSplitTxn = true
 	CDCDefaultTaskExtra_MaxSQLLen            = 4 * 1024 * 1024
+	CDCDefaultInitialSnapshotConcurrency     = 2
 )
 
 const (

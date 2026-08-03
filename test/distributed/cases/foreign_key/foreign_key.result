@@ -21,7 +21,7 @@ internal error: Cannot add or update a child row: a foreign key constraint fails
 update fk_02 set col2='80' where col2='90';
 Cannot add or update a child row: a foreign key constraint fails
 update fk_01 set col1=5 where col2=734;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 delete from fk_01 where col1='90';
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 delete from fk_01 where col1='190';
@@ -143,9 +143,9 @@ Cannot add or update a child row: a foreign key constraint fails
 delete from fk_01 where col1=2 and col2='apple';
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 update fk_01 set col1=3 where col1=2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update fk_01 set col1=1 where col1=2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select * from fk_01;
 col1    col2    col3
 2    yellow    20
@@ -278,7 +278,7 @@ select * from fk_02;
 col1    col2    col3    col4
 1    aa    bb    2
 update fk_01 set col1=8 where col1=2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select * from fk_01;
 col1    col2    col3
 2    safer    prow
@@ -327,7 +327,7 @@ col1    col2    col3
 3    ultra    strong
 4    aaa    bbb
 update fk_01 set col1=8 where col1=2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update fk_02 set col4=5 where col3='ff';
 select * from fk_01;
 col1    col2    col3
