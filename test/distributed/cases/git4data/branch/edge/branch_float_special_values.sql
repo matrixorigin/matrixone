@@ -50,4 +50,32 @@ update no_pk_src set note = 'updated' where note = 'update';
 data branch merge no_pk_src into no_pk_dst;
 select f, note from no_pk_dst order by note;
 
+-- Portable SQL cannot use the hidden fake PK, so it deletes by full row.
+-- Generate the portable script, then apply its exact NaN/NULL/infinity predicate
+-- forms to the destination. Delete plus insert models the generated update and
+-- proves that the old NaN row does not survive beside the new row.
+create table portable_base(f32 float, f64 double, marker double, note varchar(16));
+insert into portable_base values
+    (cast('NaN' as float), cast('NaN' as double), null, 'remove'),
+    (cast('NaN' as float), cast('NaN' as double), cast('Inf' as double), 'update'),
+    (cast('Inf' as float), cast('-Inf' as double), null, 'keep');
+data branch create table portable_src from portable_base;
+data branch create table portable_dst from portable_base;
+delete from portable_src where note = 'remove';
+update portable_src set marker = cast('-Inf' as double), note = 'updated' where note = 'update';
+
+-- @ignore:0,1
+data branch diff portable_src against portable_dst output file '/tmp/';
+
+delete from portable_dst
+where f32 != f32 and f64 != f64 and marker is null and note = 'remove'
+limit 1;
+delete from portable_dst
+where f32 != f32 and f64 != f64 and marker = cast('Inf' as double) and note = 'update'
+limit 1;
+insert into portable_dst values
+    (cast('NaN' as float), cast('NaN' as double), cast('-Inf' as double), 'updated');
+
+select f32, f64, marker, note from portable_dst order by note;
+
 drop database br_float_special_values;

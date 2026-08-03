@@ -55,4 +55,28 @@ select f, note from no_pk_dst order by note;
 ➤ f[8,54,0]  ¦  note[12,-1,0]  𝄀
 -Infinity  ¦  keep  𝄀
 Infinity  ¦  updated
+create table portable_base(f32 float, f64 double, marker double, note varchar(16));
+insert into portable_base values
+(cast('NaN' as float), cast('NaN' as double), null, 'remove'),
+(cast('NaN' as float), cast('NaN' as double), cast('Inf' as double), 'update'),
+(cast('Inf' as float), cast('-Inf' as double), null, 'keep');
+data branch create table portable_src from portable_base;
+data branch create table portable_dst from portable_base;
+delete from portable_src where note = 'remove';
+update portable_src set marker = cast('-Inf' as double), note = 'updated' where note = 'update';
+data branch diff portable_src against portable_dst output file '/tmp/';
+➤ FILE SAVED TO[12,0,0]  ¦  HINT[12,0,0]  𝄀
+/tmp/diff_portable_src_portable_dst_20260803_020539_9045ebc2-f2d8-42be-8855-8404c91492b6.sql  ¦  DELETE FROM `br_float_special_values`.`portable_dst`, INSERT INTO `br_float_special_values`.`portable_dst`
+delete from portable_dst
+where f32 != f32 and f64 != f64 and marker is null and note = 'remove'
+limit 1;
+delete from portable_dst
+where f32 != f32 and f64 != f64 and marker = cast('Inf' as double) and note = 'update'
+limit 1;
+insert into portable_dst values
+(cast('NaN' as float), cast('NaN' as double), cast('-Inf' as double), 'updated');
+select f32, f64, marker, note from portable_dst order by note;
+➤ f32[7,24,0]  ¦  f64[8,54,0]  ¦  marker[8,54,0]  ¦  note[12,-1,0]  𝄀
+Infinity  ¦  -Infinity  ¦  null  ¦  keep  𝄀
+NaN  ¦  NaN  ¦  -Infinity  ¦  updated
 drop database br_float_special_values;

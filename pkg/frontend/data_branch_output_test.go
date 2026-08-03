@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1351,6 +1352,31 @@ func TestDataBranchOutputWriteDeleteRowSQLFull(t *testing.T) {
 	buf := &bytes.Buffer{}
 	require.NoError(t, writeDeleteRowSQLFull(context.Background(), nil, tblStuff, row, buf))
 	require.Equal(t, "delete from `db1`.`t1` where `id` = 9 and `name` is null limit 1;\n", buf.String())
+
+	tblStuff.def.colNames = []string{"f32", "f64", "nullable", "pos_inf", "neg_inf"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_float32.ToType(),
+		types.T_float64.ToType(),
+		types.T_float64.ToType(),
+		types.T_float32.ToType(),
+		types.T_float64.ToType(),
+	}
+	tblStuff.def.visibleIdxes = []int{0, 1, 2, 3, 4}
+
+	row = []any{
+		float32(math.NaN()),
+		math.NaN(),
+		nil,
+		float32(math.Inf(1)),
+		math.Inf(-1),
+	}
+	buf.Reset()
+	require.NoError(t, writeDeleteRowSQLFull(context.Background(), nil, tblStuff, row, buf))
+	require.Equal(t,
+		"delete from `db1`.`t1` where `f32` != `f32` and `f64` != `f64` and `nullable` is null and "+
+			"`pos_inf` = cast('+Inf' as float) and `neg_inf` = cast('-Inf' as double) limit 1;\n",
+		buf.String(),
+	)
 }
 
 func TestDataBranchOutputExecSQLStatementsWithWriteFile(t *testing.T) {

@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -1742,6 +1743,13 @@ func writeDeleteRowSQLFull(
 		if row[idx] == nil {
 			buf.WriteString(colName)
 			buf.WriteString(" is null")
+		} else if isNaNDataBranchFloat(row[idx], tblStuff.def.colTypes[idx]) {
+			// SQL equality follows IEEE-754 semantics, so NaN never equals the
+			// formatted NaN literal. Self-inequality identifies exactly NaN while
+			// remaining false for finite values and both infinities.
+			buf.WriteString(colName)
+			buf.WriteString(" != ")
+			buf.WriteString(colName)
 		} else {
 			buf.WriteString(colName)
 			buf.WriteString(" = ")
@@ -1752,6 +1760,17 @@ func writeDeleteRowSQLFull(
 	}
 	buf.WriteString(" limit 1;\n")
 	return nil
+}
+
+func isNaNDataBranchFloat(value any, typ types.Type) bool {
+	switch typ.Oid {
+	case types.T_float32:
+		return math.IsNaN(float64(value.(float32)))
+	case types.T_float64:
+		return math.IsNaN(value.(float64))
+	default:
+		return false
+	}
 }
 
 func extractDataBranchApplyRow(
