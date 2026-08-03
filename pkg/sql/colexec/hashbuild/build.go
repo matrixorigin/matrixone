@@ -518,15 +518,12 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		}
 	}
 
-	// spillBatchBounded flushes each selected bucket immediately; no persistent
-	// 32-bucket vectors remain here. Flush any records retained by a legacy
-	// unbudgeted caller before rewinding every file and publishing the complete
-	// set, including a spill entered after hard map-budget rejection.
+	// spillBatchBounded writes each selected bucket immediately; no persistent
+	// 32-bucket vectors or pending records remain here. Rewind every file before
+	// publishing the complete set, including a spill entered after hard
+	// map-budget rejection.
 	if spillMode {
 		if err := checkHashBuildCanceled(proc); err != nil {
-			return err
-		}
-		if err := ctr.flushSpillBuffers(proc, spillFiles, analyzer); err != nil {
 			return err
 		}
 		for _, f := range spillFiles {

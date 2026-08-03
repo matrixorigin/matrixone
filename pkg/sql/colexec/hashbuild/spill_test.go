@@ -15,10 +15,8 @@
 package hashbuild
 
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"io"
 	"math"
 	"os"
 	"strings"
@@ -373,8 +371,6 @@ func TestSpillBatchPartitioning(t *testing.T) {
 	defer ctr.hashmapBuilder.FreeExecutors()
 	err = ctr.spillBatchBounded(proc, bat, files, analyzer, false)
 	require.NoError(t, err)
-	require.NoError(t, ctr.flushSpillBuffers(proc, files, analyzer))
-
 	hashes := make([]uint64, bat.RowCount())
 	computeXXHash(bat.Vecs, hashes)
 	expectedBuckets := make(map[int]struct{})
@@ -470,7 +466,6 @@ func TestSpillBatchLargeInputPreservesRows(t *testing.T) {
 	defer ctr.hashmapBuilder.FreeExecutors()
 	err = ctr.spillBatchBounded(proc, bat, files, analyzer, false)
 	require.NoError(t, err)
-	require.NoError(t, ctr.flushSpillBuffers(proc, files, analyzer))
 	require.Equal(t, int64(bat.RowCount()), analyzer.GetOpStats().SpillRows)
 }
 
@@ -509,7 +504,6 @@ func TestSpillBatchNullKeyPreservesRows(t *testing.T) {
 	defer ctr.hashmapBuilder.FreeExecutors()
 	err = ctr.spillBatchBounded(proc, bat, files, analyzer, false)
 	require.NoError(t, err)
-	require.NoError(t, ctr.flushSpillBuffers(proc, files, analyzer))
 	require.Equal(t, int64(bat.RowCount()), analyzer.GetOpStats().SpillRows)
 }
 
@@ -555,7 +549,6 @@ func TestSpillBatchMultiColumnPreservesRows(t *testing.T) {
 	defer ctr.hashmapBuilder.FreeExecutors()
 	err = ctr.spillBatchBounded(proc, bat, files, analyzer, false)
 	require.NoError(t, err)
-	require.NoError(t, ctr.flushSpillBuffers(proc, files, analyzer))
 	require.Equal(t, int64(bat.RowCount()), analyzer.GetOpStats().SpillRows)
 }
 
@@ -682,7 +675,6 @@ func TestSpillBatchSingleRowUsesOneBucket(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, nonEmptyBuckets)
-	require.NoError(t, ctr.flushSpillBuffers(proc, files, analyzer))
 	require.Equal(t, int64(1), analyzer.GetOpStats().SpillRows)
 }
 
@@ -738,7 +730,6 @@ func TestSpillScratchSlicesReuseAcrossEqualBatches(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, firstHashStorage, &ctr.spillHashValues[0])
 	require.Same(t, firstRowIDStorage, &ctr.spillBucketRowIds[0])
-	require.NoError(t, ctr.flushSpillBuffers(proc, files, analyzer))
 	require.Equal(t, int64(4), analyzer.GetOpStats().SpillRows)
 }
 
@@ -785,96 +776,11 @@ func TestSpillExpressionLeaseRetainsLargeBatchHighWater(t *testing.T) {
 	require.LessOrEqual(t, retained, ctr.hashmapBuilder.expressionLease.Reserved())
 }
 
-func TestUnbudgetedSpillWriteCoalescesAcrossBatches(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-	files := make([]*os.File, spillNumBuckets)
-	conditions := []*plan.Expr{{
-		Typ:  plan.Type{Id: int32(types.T_int32)},
-		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
-	}}
-	ctr := &container{spillUUID: t.Name()}
-	cleanup := func() {
-		for i, file := range files {
-			if file != nil {
-				_ = file.Close()
-				files[i] = nil
-			}
-		}
-		if ctr.spillBundle != nil {
-			ctr.spillBundle.release()
-			ctr.spillBundle = nil
-		}
-		ctr.hashmapBuilder.FreeExecutors()
-		ctr.dropSpillScratchBuffers()
-		ctr.releaseSpillScratchReservation()
-	}
-	defer cleanup()
-	err := initSpillExprExecsForTest(ctr, proc, conditions)
-	require.NoError(t, err)
-	analyzer := process.NewAnalyzer(0, false, false, "test")
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1}, nil, proc.Mp())
-	bat.SetRowCount(3)
-	defer bat.Clean(proc.Mp())
-	for i := 0; i < 2; i++ {
-		require.NoError(t, ctr.spillBatchBounded(proc, bat, files, analyzer, false))
-	}
-	var pending int
-	for i := range ctr.spillBucketWriteBufs {
-		pending += ctr.spillBucketWriteBufs[i].Len()
-	}
-	require.Positive(t, pending)
-	var file *os.File
-	for _, f := range files {
-		if f != nil {
-			file = f
-			break
-		}
-	}
-	require.NotNil(t, file)
-	stat, err := file.Stat()
-	require.NoError(t, err)
-	require.Zero(t, stat.Size(), "records stay pending until the handoff flush")
-	require.NoError(t, ctr.flushSpillBuffers(proc, files, analyzer))
-	stat, err = file.Stat()
-	require.NoError(t, err)
-	require.Positive(t, stat.Size())
-	for i := range ctr.spillBucketWriteBufs {
-		require.Zero(t, ctr.spillBucketWriteBufs[i].Len())
-	}
-	_, err = file.Seek(0, io.SeekStart)
-	require.NoError(t, err)
-	reader := bufio.NewReader(file)
-	var totalRows int64
-	for {
-		var header [16]byte
-		_, err = io.ReadFull(reader, header[:])
-		if err == io.EOF {
-			break
-		}
-		require.NoError(t, err)
-		cnt := types.DecodeInt64(header[:8])
-		payload := types.DecodeInt64(header[8:])
-		require.GreaterOrEqual(t, cnt, int64(0))
-		require.GreaterOrEqual(t, payload, int64(0))
-		_, err = io.CopyN(io.Discard, reader, payload)
-		require.NoError(t, err)
-		var magic [8]byte
-		_, err = io.ReadFull(reader, magic[:])
-		require.NoError(t, err)
-		require.Equal(t, uint64(spillMagic), types.DecodeUint64(magic[:]))
-		totalRows += cnt
-	}
-	require.Equal(t, int64(6), totalRows)
-	cleanup()
-}
-
 func TestBudgetedSpillWriteThroughPreservesSiblingRecoveryHeadroom(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
-	const floor = uint64(spillWriteCoalesceSize)
+	const floor = spillRecoveryReservationQuantum
 	budget := process.MustNewHashBuildBudget(3*floor, 3*floor)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
@@ -922,8 +828,6 @@ func TestBudgetedSpillWriteThroughPreservesSiblingRecoveryHeadroom(t *testing.T)
 	require.Equal(t, floor, writer.spillScratchReservation.Size(),
 		"optional write caching must not enlarge a budgeted owner's mandatory lease")
 	require.Equal(t, 2*floor, generation.Used())
-	require.Zero(t, writer.spillBucketWriteBufs[0].Len())
-
 	require.NoError(t, recovery.ensureSpillRecoveryReservationBytes(2*floor, analyzer),
 		"one owner's optional I/O cache must not strand a sibling mandatory recovery grow")
 	require.Equal(t, 3*floor, generation.Used())
@@ -1029,7 +933,6 @@ func TestSpillScratchLazyGrowSucceeds(t *testing.T) {
 	require.GreaterOrEqual(t, scratchToken.Size(), need)
 	require.Equal(t, int64(1), analyzer.GetOpStats().ExtraStats["HashBuildSpillScratchGrowCount"])
 	require.Equal(t, int64(1), analyzer.GetOpStats().ExtraStats["HashBuildSpillScratchGrowBytes"])
-	require.NoError(t, ctr.flushSpillBuffers(proc, files, analyzer))
 }
 
 func TestSpillScratchLazyGrowRejectPreservesRetainedSource(t *testing.T) {
@@ -1086,28 +989,6 @@ func TestSpillScratchLazyGrowRejectPreservesRetainedSource(t *testing.T) {
 	ctr.releaseSpillScratchReservation()
 	sourceToken.Release()
 	require.Zero(t, generation.Used())
-}
-
-func TestFlushSpillBuffersCancellationDiscardsPendingWrites(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-	ctx, cancel := context.WithCancelCause(proc.Ctx)
-	process.ReplacePipelineCtx(proc, ctx, cancel)
-
-	ctr := &container{}
-	for _, bucket := range []int{0, spillNumBuckets - 1} {
-		_, err := ctr.spillBucketWriteBufs[bucket].Write([]byte("pending"))
-		require.NoError(t, err)
-		ctr.spillBucketWriteRows[bucket] = 1
-	}
-	proc.Cancel(context.Canceled)
-
-	err := ctr.flushSpillBuffers(proc, nil, process.NewAnalyzer(0, false, false, "test"))
-	require.ErrorIs(t, err, context.Canceled)
-	for bucket := 0; bucket < spillNumBuckets; bucket++ {
-		require.Zero(t, ctr.spillBucketWriteBufs[bucket].Len())
-		require.Zero(t, ctr.spillBucketWriteRows[bucket])
-	}
 }
 
 func TestSpillMaterializedBytesDoesNotScaleShuffledConstVector(t *testing.T) {

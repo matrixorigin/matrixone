@@ -77,12 +77,7 @@ type container struct {
 	spillBucketOffsets [spillNumBuckets + 1]int32
 	spillSelection     []int32
 	spillWriteBuf      bytes.Buffer
-	// spillBucketWriteBufs coalesce serialized records for legacy unbudgeted
-	// callers. Hard-budgeted executions write through so optional buffers cannot
-	// strand a sibling worker's mandatory recovery ownership.
-	spillBucketWriteBufs [spillNumBuckets]bytes.Buffer
-	spillBucketWriteRows [spillNumBuckets]int64
-	spillKeyVecs         []*vector.Vector
+	spillKeyVecs       []*vector.Vector
 	// spillScratchReservation is the query/CN-charged recovery lease for this
 	// execution. Shuffle HashBuild establishes it before retaining spillable
 	// data; spill then reuses the same lease for its bounded scratch buffers.

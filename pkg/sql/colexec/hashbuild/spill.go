@@ -34,9 +34,6 @@ import (
 const (
 	spillNumBuckets = 32
 	spillMagic      = 0x12345678DEADBEEF
-	// Legacy unbudgeted callers may accumulate serialized records per bucket
-	// across source batches. Hard-budgeted execution always writes through.
-	spillWriteCoalesceSize = 64 << 10
 )
 
 func spillCheckedAdd(total, value uint64) (uint64, error) {
@@ -464,10 +461,6 @@ func (ctr *container) releaseSpillScratchReservation() {
 }
 
 func (ctr *container) dropSpillScratchBuffers() {
-	for bucket := range ctr.spillBucketWriteBufs {
-		ctr.spillBucketWriteBufs[bucket] = bytes.Buffer{}
-		ctr.spillBucketWriteRows[bucket] = 0
-	}
 	ctr.spillHashValues = nil
 	ctr.spillBucketRowIds = nil
 	for i := range ctr.spillBucketCounts {
@@ -644,9 +637,7 @@ func (ctr *container) ensureSpillFile(proc *process.Process, files []*os.File, b
 // vectors. Hash values are classified with two linear passes (count, then
 // scatter after prefix offsets), and a single row-id array describes every
 // bucket. One selected batch is reused as each bucket is materialized and
-// marshaled before advancing. Hard-budgeted records are written through;
-// legacy unbudgeted callers may coalesce them until the bounded buffers or
-// final handoff flush.
+// marshaled and written before advancing.
 func (ctr *container) spillBatchBounded(
 	proc *process.Process,
 	bat *batch.Batch,
@@ -851,10 +842,9 @@ func (ctr *container) spillBatchBounded(
 	return nil
 }
 
-// appendSpillRecord writes one framed record immediately for hard-budgeted
-// execution. Legacy unbudgeted callers may append it to a bounded bucket
-// buffer; full buffers are written before accepting the next record and an
-// oversized record is always written directly.
+// appendSpillRecord writes one framed record immediately. HashBuild workers do
+// not retain optional file-bound data that could consume a sibling worker's
+// mandatory recovery headroom.
 func (ctr *container) appendSpillRecord(
 	proc *process.Process,
 	file *os.File,
@@ -891,96 +881,7 @@ func (ctr *container) appendSpillRecord(
 		return err
 	}
 	payload := ctr.spillWriteBuf.Bytes()
-	// A hard-budgeted HashBuild writes through. Pending coalesce data is an
-	// optional owner that cannot be reclaimed safely by a sibling worker: the
-	// sibling neither owns its file nor can wait for it without adding a
-	// shuffle wait-for edge. Keeping optional bytes out of budgeted executions
-	// therefore preserves every worker's already-admitted recovery ownership.
-	// Unbudgeted callers may retain the legacy bounded cache.
-	if ctr.hashmapBuilder.budget != nil {
-		return ctr.writeSpillPayload(proc, file, payload, cnt, analyzer)
-	}
-	buf := &ctr.spillBucketWriteBufs[bucket]
-	if buf.Len() > 0 && buf.Len()+len(payload) > spillWriteCoalesceSize {
-		if err := ctr.flushPendingSpillBucket(proc, file, bucket, analyzer); err != nil {
-			return err
-		}
-	}
-	if len(payload) > spillWriteCoalesceSize {
-		return ctr.writeSpillPayload(proc, file, payload, cnt, analyzer)
-	}
-	if buf.Len() == 0 {
-		if buf.Cap() < spillWriteCoalesceSize {
-			*buf = *bytes.NewBuffer(make([]byte, 0, spillWriteCoalesceSize))
-		}
-	}
-	_, _ = buf.Write(payload)
-	ctr.spillBucketWriteRows[bucket] += cnt
-	if buf.Len() >= spillWriteCoalesceSize {
-		return ctr.flushPendingSpillBucket(proc, file, bucket, analyzer)
-	}
-	return nil
-}
-
-func (ctr *container) flushPendingSpillBucket(
-	proc *process.Process,
-	file *os.File,
-	bucket int,
-	analyzer process.Analyzer,
-) error {
-	if bucket < 0 || bucket >= spillNumBuckets {
-		return process.ErrHashBuildBudgetInvalid
-	}
-	buf := &ctr.spillBucketWriteBufs[bucket]
-	if buf.Len() == 0 {
-		return nil
-	}
-	rows := ctr.spillBucketWriteRows[bucket]
-	payload := buf.Bytes()
-	err := ctr.writeSpillPayload(proc, file, payload, rows, analyzer)
-	// Clear even on a failed/partial write. A caller's enclosing failure path
-	// owns cleanup, and retrying the same bytes could duplicate records.
-	buf.Reset()
-	ctr.spillBucketWriteRows[bucket] = 0
-	return err
-}
-
-// flushSpillBuffers writes all pending bucket records before files are rewound
-// or handed to JoinMap. Cancellation is checked between physical writes. After
-// the first error, the remaining buffers are discarded rather than written, so
-// every buffer still reaches a terminal state without doing doomed I/O.
-func (ctr *container) flushSpillBuffers(proc *process.Process, files []*os.File, analyzer process.Analyzer) error {
-	var firstErr error
-	for bucket := 0; bucket < spillNumBuckets; bucket++ {
-		if ctr.spillBucketWriteBufs[bucket].Len() == 0 {
-			continue
-		}
-		if firstErr != nil {
-			ctr.spillBucketWriteBufs[bucket].Reset()
-			ctr.spillBucketWriteRows[bucket] = 0
-			continue
-		}
-		if err := checkHashBuildCanceled(proc); err != nil {
-			firstErr = err
-			ctr.spillBucketWriteBufs[bucket].Reset()
-			ctr.spillBucketWriteRows[bucket] = 0
-			continue
-		}
-		var file *os.File
-		if bucket < len(files) {
-			file = files[bucket]
-		}
-		if file == nil {
-			firstErr = process.ErrHashBuildBudgetInvalid
-			ctr.spillBucketWriteBufs[bucket].Reset()
-			ctr.spillBucketWriteRows[bucket] = 0
-			continue
-		}
-		if err := ctr.flushPendingSpillBucket(proc, file, bucket, analyzer); err != nil {
-			firstErr = err
-		}
-	}
-	return firstErr
+	return ctr.writeSpillPayload(proc, file, payload, cnt, analyzer)
 }
 
 func (ctr *container) memUsed() int64 {
