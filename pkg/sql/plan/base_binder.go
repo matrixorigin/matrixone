@@ -489,7 +489,11 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		return
 	}
 
-	if isEnumOrSetPlanType(typ) {
+	preserveSpecialValue := b.mysqlSpecialTargetType != nil &&
+		typ.Enumvalues == b.mysqlSpecialTargetType.Enumvalues &&
+		((isEnumPlanType(typ) && isEnumPlanType(b.mysqlSpecialTargetType)) ||
+			(isSetPlanType(typ) && isSetPlanType(b.mysqlSpecialTargetType)))
+	if isEnumOrSetPlanType(typ) && !preserveSpecialValue {
 		if err != nil {
 			errutil.ReportError(b.GetContext(), err)
 			return

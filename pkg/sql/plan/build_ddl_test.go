@@ -415,6 +415,30 @@ func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {
 	require.Equal(t, int32(types.T_varchar), resultType.GetId())
 
 	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"select flags from v_enum_set", 1)
+	require.NoError(t, err)
+	rawSetPlan, err := BuildPlan(ctx, stmt, false)
+	stmt.Free()
+	require.NoError(t, err)
+	setDisplayFound := false
+	for _, node := range rawSetPlan.GetQuery().GetNodes() {
+		for _, project := range node.GetProjectList() {
+			fn := project.GetF()
+			if fn == nil {
+				continue
+			}
+			require.NotEqual(t, moSetCastValueToIndexFun, fn.GetFunc().GetObjName(),
+				"a direct view projection must not round-trip a SET bitmap through its display string")
+			if fn.GetFunc().GetObjName() == moSetCastIndexToValueFun {
+				setDisplayFound = true
+				require.Len(t, fn.GetArgs(), 2)
+				require.True(t, isSetPlanType(&fn.GetArgs()[1].Typ))
+			}
+		}
+	}
+	require.True(t, setDisplayFound)
+
+	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
 		"create table copied_from_view as select priority, flags, n_name from v_enum_set", 1)
 	require.NoError(t, err)
 	ctasPlan, err := BuildPlan(ctx, stmt, false)
@@ -427,6 +451,27 @@ func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {
 	require.True(t, isSetPlanType(&cols[1].Typ))
 	require.Equal(t, "red,green,blue", cols[1].Typ.GetEnumvalues())
 	require.Equal(t, int32(types.T_varchar), cols[2].Typ.GetId())
+
+	ctasDef := DeepCopyTableDef(ctasPlan.GetDdl().GetCreateTable().GetTableDef(), true)
+	ctasDef.Name = "copied_from_view"
+	ctasDef.DbName = "tpch"
+	ctx.tables[ctasDef.Name] = ctasDef
+	ctx.objects[ctasDef.Name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: ctasDef.Name}
+	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
+		ctasPlan.GetDdl().GetCreateTable().GetCreateAsSelectSql(), 1)
+	require.NoError(t, err)
+	insertPlan, err := BuildPlan(ctx, stmt, false)
+	stmt.Free()
+	require.NoError(t, err)
+	for _, node := range insertPlan.GetQuery().GetNodes() {
+		for _, project := range node.GetProjectList() {
+			if fn := project.GetF(); fn != nil {
+				require.NotEqual(t, moSetCastValueToIndexFun, fn.GetFunc().GetObjName(),
+					"CTAS INSERT must retain the projected SET bitmap: node=%d type=%s expr=%s",
+					node.GetNodeId(), node.GetNodeType().String(), project.String())
+			}
+		}
+	}
 }
 
 func TestViewSpecialTypeBoundaryPreservesDistinctVisibleValues(t *testing.T) {

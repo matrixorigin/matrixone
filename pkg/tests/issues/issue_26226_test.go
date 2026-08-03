@@ -44,7 +44,11 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 			"create database " + db,
 			"create table " + db + ".t (id int primary key, flags set('', 'a'))",
 			"insert into " + db + ".t values (1, ''), (2, 1)",
+			"create view " + db + ".v_raw as select flags from " + db + ".t where id = 2",
 			"create view " + db + ".v as select distinct flags from " + db + ".t",
+			"create table " + db + ".copied as select flags from " + db + ".v_raw",
+			"create table " + db + ".inserted (flags set('', 'a'))",
+			"insert into " + db + ".inserted select flags from " + db + ".v_raw",
 		} {
 			execSQLRequire(t, ctx, dbConn, stmt)
 		}
@@ -61,5 +65,16 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 			"select count(*) from "+db+".v").Scan(&viewCount))
 		require.Equal(t, 1, baseCount)
 		require.Equal(t, baseCount, viewCount)
+
+		for _, query := range []string{
+			"select cast(flags as unsigned) from " + db + ".t where id = 2",
+			"select cast(flags as unsigned) from " + db + ".v_raw",
+			"select cast(flags as unsigned) from " + db + ".copied",
+			"select cast(flags as unsigned) from " + db + ".inserted",
+		} {
+			var bitmap uint64
+			require.NoError(t, dbConn.QueryRowContext(ctx, query).Scan(&bitmap))
+			require.Equal(t, uint64(1), bitmap, query)
+		}
 	})
 }

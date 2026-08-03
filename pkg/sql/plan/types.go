@@ -547,6 +547,7 @@ type baseBinder struct {
 	numericParamType                 *Type
 	numericSubqueryTarget            *Type
 	numericFunctionTarget            bool
+	mysqlSpecialTargetType           *Type
 	allowCanonicalNameConstValueCast bool
 }
 

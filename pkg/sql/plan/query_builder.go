@@ -8761,6 +8761,28 @@ func (builder *QueryBuilder) bindView(
 // SQL-visible value because index-to-value conversion is not always injective.
 func (builder *QueryBuilder) appendViewMySQLSpecialTypeBoundary(nodeID int32, ctx *BindContext) (int32, error) {
 	visibleProjects := min(len(ctx.headings), len(ctx.projects), len(ctx.results))
+	rootNode := builder.qry.Nodes[nodeID]
+	canExposeRaw := rootNode.NodeType == plan.Node_PROJECT &&
+		len(rootNode.BindingTags) == 1 && rootNode.BindingTags[0] == ctx.projectTag && ctx.resultTag == 0
+	if canExposeRaw {
+		rootVisibleProjects := min(len(ctx.headings), len(rootNode.ProjectList))
+		for i := 0; i < rootVisibleProjects; i++ {
+			sourceExpr, ok := mysqlSpecialTypeSourceExpr(rootNode.ProjectList[i])
+			if !ok {
+				continue
+			}
+			restored := DeepCopyExpr(sourceExpr)
+			rootNode.ProjectList[i] = restored
+			if i < len(ctx.projects) {
+				ctx.projects[i] = restored
+			}
+			if i < len(ctx.results) {
+				ctx.results[i] = restored
+			}
+		}
+		return nodeID, nil
+	}
+
 	sourceTag := ctx.rootTag()
 	projects := make([]*plan.Expr, len(ctx.results))
 	for i := range ctx.results {
