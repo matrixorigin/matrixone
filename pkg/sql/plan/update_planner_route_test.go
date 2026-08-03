@@ -183,22 +183,40 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 			sql:  "UPDATE nation SET n_comment = 'x'",
 			prepare: func(mock *MockOptimizer) {
 				mock.ctxt.tables["nation"].Indexes = []*planpb.IndexDef{{
-					IndexName: "idx",
-					IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(),
-					Parts:     []string{"n_comment"},
+					IndexName:          "idx",
+					IndexTableName:     "idx_entries",
+					IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+					IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+					Parts:              []string{"n_comment"},
+					TableExist:         true,
 				}}
 			},
-			wantRoute:  updatePlannerLegacy,
-			wantReason: updateRouteReasonIrregularIndex,
+			wantRoute:  updatePlannerModern,
+			wantReason: updateRouteReasonNone,
 		},
 		{
-			name: "pub sub key",
+			name: "pub primary key",
 			sql:  "UPDATE nation SET n_nationkey = 2",
 			prepare: func(mock *MockOptimizer) {
 				mock.ctxt.tables["nation"].Name = catalog.MO_PUBS
 			},
-			wantRoute:  updatePlannerLegacy,
-			wantReason: updateRouteReasonPubSubKey,
+			wantRoute:  updatePlannerModern,
+			wantReason: updateRouteReasonNone,
+		},
+		{
+			name: "sub unique key",
+			sql:  "UPDATE nation SET n_name = 'x'",
+			prepare: func(mock *MockOptimizer) {
+				tableDef := mock.ctxt.tables["nation"]
+				tableDef.Name = catalog.MO_SUBS
+				tableDef.Indexes = []*planpb.IndexDef{{
+					IndexName: "uk_name",
+					Unique:    true,
+					Parts:     []string{"n_name"},
+				}}
+			},
+			wantRoute:  updatePlannerModern,
+			wantReason: updateRouteReasonNone,
 		},
 		{
 			name: "set auto increment",
@@ -209,8 +227,8 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 				col.Typ.Enumvalues = "one,two"
 				col.Typ.AutoIncr = true
 			},
-			wantRoute:  updatePlannerLegacy,
-			wantReason: updateRouteReasonAutoIncrement,
+			wantRoute:  updatePlannerModern,
+			wantReason: updateRouteReasonNone,
 		},
 	}
 
@@ -233,6 +251,10 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 			builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
 			bindCtx := NewBindContext(builder, nil)
 			_, err = builder.bindUpdate(stmt.(*tree.Update), bindCtx)
+			if test.wantRoute == updatePlannerModern {
+				require.NoError(t, err)
+				return
+			}
 			require.Error(t, err)
 
 			route, reason, _ := classifyUpdatePlannerError(err)
@@ -240,6 +262,32 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 			require.Equal(t, test.wantReason, reason, "bind error: %v", err)
 		})
 	}
+}
+
+func TestRemainingUpdateSpecialCasesUseModernPlan(t *testing.T) {
+	t.Run("pub primary key uses multi update", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		mock.ctxt.tables["nation"].Name = catalog.MO_PUBS
+
+		logicPlan, err := runOneStmt(mock, t, "UPDATE nation SET n_nationkey = 2")
+		require.NoError(t, err)
+		require.Equal(t, 1, countUpdateFkPlanNodes(logicPlan.GetQuery(), planpb.Node_MULTI_UPDATE))
+	})
+
+	t.Run("set auto increment keeps type conversion and pre insert", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		col := mock.ctxt.tables["nation"].Cols[0]
+		col.Typ.Id = int32(types.T_uint64)
+		col.Typ.Enumvalues = "one,two"
+		col.Typ.AutoIncr = true
+
+		logicPlan, err := runOneStmt(mock, t, "UPDATE nation SET n_nationkey = 'two'")
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
+		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_PRE_INSERT))
+		require.True(t, updateFkPlanContainsFunc(query, moSetCastValueToIndexFun))
+	})
 }
 
 func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
@@ -369,7 +417,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		require.Error(t, err)
 		route, reason, _ := classifyUpdatePlannerError(err)
 		require.Equal(t, updatePlannerLegacy, route)
-		require.Equal(t, updateRouteReasonAutoIncrement, reason)
+		require.Equal(t, updateRouteReasonAutoIncrementFK, reason)
 	})
 
 	t.Run("disabled checks keep auto increment child key on modern route", func(t *testing.T) {

@@ -178,8 +178,6 @@ var causeArray = []error{
 	CauseTransferRequest2OtherCNs,
 	CauseDoUnsubscribeTable,
 
-	CauseKafkaSinkConnectorExecutor,
-
 	CauseResumeTaskHandle,
 	CauseRestartTaskHandle,
 	CausePauseTaskHandle,

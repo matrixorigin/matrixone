@@ -15,12 +15,15 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -73,6 +76,10 @@ func (builder *QueryBuilder) makeUpdatedClusterByExpr(
 }
 
 func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext) (int32, error) {
+	if err := validateUpdateWindowFunctions(builder.compCtx, stmt); err != nil {
+		return 0, err
+	}
+
 	dmlCtx := NewDMLContext()
 	err := dmlCtx.ResolveUpdateTables(builder.compCtx, stmt)
 	if err != nil {
@@ -92,6 +99,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	updateAutoIncrCols := make([]bool, len(dmlCtx.aliases))
 	colOffsets := make([]int32, len(dmlCtx.aliases))
 	updateNumericTargets := make(map[int32]Type)
+	inlineIrregularIndexes := make([][]*plan.IndexDef, len(dmlCtx.aliases))
 
 	for i, alias := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
@@ -111,83 +119,23 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			})
 		}
 
-		// Check if any irregular index (vector/full-text) columns are being updated.
-		hasIrregularIndex, irregularIndexCols := collectIrregularIndexUpdateCols(tableDef)
-
-		// The MULTI_UPDATE fast path below maintains regular index tables itself.
-		// It cannot rebuild irregular hidden tables when the base-table PK changes
-		// (for example IVF entries store the origin PK), so ask the caller to use
-		// the fallback update planner that runs the delete+insert rebuild path.
-		if hasIrregularIndex && primaryKeyUpdated(tableDef, dmlCtx.updateCol2Expr[i]) {
+		var legacyIrregularRoute bool
+		inlineIrregularIndexes[i], legacyIrregularRoute, err = classifyIrregularIndexesForUpdate(
+			builder.GetContext(), tableDef, dmlCtx.updateCol2Expr[i])
+		if err != nil {
+			return 0, err
+		}
+		if legacyIrregularRoute {
 			return 0, newLegacyUpdatePlannerRouteError(
 				updateRouteReasonIrregularIndex,
 				moerr.NewUnsupportedDML(builder.GetContext(), "update vector/full-text index"),
 			)
 		}
 
-		// Only block if irregular index exists AND indexed columns are being updated.
-		// bindAndOptimizeUpdateQuery catches this UnsupportedDML and falls back to
-		// buildTableUpdate, where irregular indexes are rebuilt by the old path.
-		if hasIrregularIndex {
-			for colName := range dmlCtx.updateCol2Expr[i] {
-				if irregularIndexCols[colName] {
-					return 0, newLegacyUpdatePlannerRouteError(
-						updateRouteReasonIrregularIndex,
-						moerr.NewUnsupportedDML(builder.GetContext(), "update vector/full-text index"),
-					)
-				}
-			}
-			// An UPDATE that changes a primary key column of an irregular-index table must go
-			// through the table-update path: for a synchronous FULLTEXT/IVF index that path
-			// rejects it (its hidden table is keyed by the old PK and would go stale, #25617),
-			// and for async indexes it maintains them via CDC. This binder cannot maintain
-			// either, so bail out to it (ErrUnsupportedDML triggers the fallback).
-			if tableDef.Pkey != nil {
-				for _, pkColName := range tableDef.Pkey.Names {
-					if _, ok := dmlCtx.updateCol2Expr[i][pkColName]; ok {
-						return 0, newLegacyUpdatePlannerRouteError(
-							updateRouteReasonIrregularIndex,
-							moerr.NewUnsupportedDML(
-								builder.GetContext(),
-								"update primary key with vector/full-text index",
-							),
-						)
-					}
-				}
-			}
-		}
-
 		validIndexes, _ := getValidIndexes(tableDef)
 		tableDef.Indexes = validIndexes
 
-		var pkAndUkCols = make(map[string]bool)
-
-		if tableDef.Name == catalog.MO_PUBS || tableDef.Name == catalog.MO_SUBS {
-			for _, colName := range tableDef.Pkey.Names {
-				pkAndUkCols[colName] = true
-			}
-		}
-
-		for _, idxDef := range tableDef.Indexes {
-			if !idxDef.Unique {
-				continue
-			}
-
-			if tableDef.Name == catalog.MO_PUBS || tableDef.Name == catalog.MO_SUBS {
-				for _, colName := range idxDef.Parts {
-					pkAndUkCols[catalog.ResolveAlias(colName)] = true
-				}
-			}
-		}
-
 		for colName, updateExpr := range dmlCtx.updateCol2Expr[i] {
-			if pkAndUkCols[colName] {
-				return 0, newLegacyUpdatePlannerRouteError(
-					updateRouteReasonPubSubKey,
-					moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update pk/uk on pub/sub table"),
-				)
-			}
-
 			// Check: cannot update a generated column (unless SET gen_col = DEFAULT)
 			isGenCol := false
 			for _, colDef := range tableDef.Cols {
@@ -214,13 +162,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			for _, colDef := range tableDef.Cols {
 				if colDef.Name == colName {
 					if isEnumOrSetPlanType(&colDef.Typ) {
-						if colDef.Typ.AutoIncr {
-							return 0, newLegacyUpdatePlannerRouteError(
-								updateRouteReasonAutoIncrement,
-								moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value"),
-							)
-						}
-
 						updateExpr, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), colDef.Typ, updateExpr)
 						if err != nil {
 							return 0, err
@@ -439,7 +380,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if updateAutoIncrCols[i] &&
 				len(affectedUpdateChildFks(tableDef, dmlCtx.aliases[i], newColName2Idx)) > 0 {
 				return 0, newLegacyUpdatePlannerRouteError(
-					updateRouteReasonAutoIncrement,
+					updateRouteReasonAutoIncrementFK,
 					moerr.NewUnsupportedDML(
 						builder.compCtx.GetContext(),
 						"auto_increment foreign key update",
@@ -1200,6 +1141,31 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 	finalProjNode.ProjectList = finalProjList
 
+	// Synchronous irregular indexes share the exact final row image with the
+	// base-table MULTI_UPDATE. Their stale entries are deleted by the immutable
+	// old PK and rebuilt after createQuery from this materialized step. Async
+	// indexes are deliberately absent and remain CDC-only.
+	for i, indexes := range inlineIrregularIndexes {
+		if len(indexes) == 0 {
+			continue
+		}
+		alias := dmlCtx.aliases[i]
+		pkPos := finalColName2Idx[alias+"."+dmlCtx.tableDefs[i].Pkey.PkeyColName]
+		lastNodeID = builder.appendOnDupIrregularMaintSource(
+			bindCtx,
+			lastNodeID,
+			finalProjTag,
+			pkPos,
+			finalProjList[pkPos].Typ,
+			indexes,
+			dmlCtx.tableDefs[i],
+			dmlCtx.objRefs[i],
+		)
+		// Multi-target UPDATE is routed to the legacy planner before this point,
+		// so at most one target can require inline irregular maintenance here.
+		break
+	}
+
 	dmlNode := &plan.Node{
 		NodeType:      plan.Node_MULTI_UPDATE,
 		BindingTags:   []int32{builder.genNewBindTag()},
@@ -1221,26 +1187,130 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	return lastNodeID, err
 }
 
-func collectIrregularIndexUpdateCols(tableDef *plan.TableDef) (bool, map[string]bool) {
-	irregularIndexCols := make(map[string]bool)
-	if tableDef == nil {
-		return false, irregularIndexCols
+func irregularIndexAffectedByUpdate(
+	tableDef *plan.TableDef,
+	idxDef *plan.IndexDef,
+	updateCols map[string]tree.Expr,
+) (bool, error) {
+	columnUpdated := func(colName string) bool {
+		colName = catalog.ResolveAlias(colName)
+		if _, ok := updateCols[colName]; ok {
+			return true
+		}
+		if tableDef == nil {
+			return false
+		}
+		colPos, ok := tableDef.Name2ColIndex[colName]
+		return ok && colPos >= 0 && int(colPos) < len(tableDef.Cols) && tableDef.Cols[colPos].OnUpdate != nil
 	}
 
-	hasIrregularIndex := false
+	for _, part := range idxDef.Parts {
+		if columnUpdated(part) {
+			return true, nil
+		}
+	}
+
+	p, ok := indexplugin.Get(idxDef.IndexAlgo)
+	if !ok {
+		for _, colName := range indexDefIncludedColumnsBestEffort(idxDef) {
+			if columnUpdated(colName) {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	rewriteHook, ok := p.Plan().(planplugin.UpdateColumnRewriteHook)
+	if !ok {
+		return false, nil
+	}
+	affectedCols := make(map[string]struct{}, len(updateCols))
+	for colName := range updateCols {
+		affectedCols[colName] = struct{}{}
+	}
+	if tableDef != nil {
+		for _, col := range tableDef.Cols {
+			if col.OnUpdate != nil {
+				affectedCols[col.Name] = struct{}{}
+			}
+		}
+	}
+	for colName := range affectedCols {
+		affected, err := rewriteHook.UpdateColumnRequiresIndexRewrite(tableDef, idxDef, colName)
+		if err != nil {
+			return false, err
+		}
+		if affected {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// classifyIrregularIndexesForUpdate separates synchronous inline maintenance
+// from CDC-only indexes using plugin metadata. The bool return preserves the
+// legacy route only for an affected irregular algorithm that has not migrated to
+// the plugin contract (currently MASTER); supported plugin indexes never fall
+// back. A synchronous-index PK update is rejected here, before lock/mutation
+// nodes are built, because its hidden rows are keyed by the old source PK.
+func classifyIrregularIndexesForUpdate(
+	ctx context.Context,
+	tableDef *plan.TableDef,
+	updateCols map[string]tree.Expr,
+) (inline []*plan.IndexDef, legacyRoute bool, err error) {
+	if tableDef == nil || len(updateCols) == 0 {
+		return nil, false, nil
+	}
+
+	pkUpdated := primaryKeyUpdated(tableDef, updateCols)
+	affectedSyncGroups := make(map[string]bool)
 	for _, idxDef := range tableDef.Indexes {
 		if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
 			continue
 		}
-		hasIrregularIndex = true
-		for _, part := range idxDef.Parts {
-			irregularIndexCols[catalog.ResolveAlias(part)] = true
+		affected, err := irregularIndexAffectedByUpdate(tableDef, idxDef, updateCols)
+		if err != nil {
+			return nil, false, err
 		}
-		for _, colName := range indexDefIncludedColumnsBestEffort(idxDef) {
-			irregularIndexCols[catalog.ResolveAlias(colName)] = true
+
+		p, ok := indexplugin.Get(idxDef.IndexAlgo)
+		if !ok {
+			if affected || pkUpdated {
+				return nil, true, nil
+			}
+			continue
+		}
+		desc := p.Catalog().SyncDescriptor()
+		if desc.AlwaysAsync {
+			continue
+		}
+		async, err := catalog.IsIndexAsync(idxDef.IndexAlgoParams)
+		if err != nil {
+			return nil, false, err
+		}
+		if async {
+			continue
+		}
+		if pkUpdated {
+			return nil, false, newUpdatePlannerRouteError(
+				updatePlannerRejected,
+				updateRouteReasonIrregularIndex,
+				moerr.NewUnsupportedDML(
+					ctx,
+					"update primary key on a table with a synchronous full-text/vector index"),
+			)
+		}
+		if affected {
+			affectedSyncGroups[idxDef.IndexName+"\x00"+idxDef.IndexTableName] = true
 		}
 	}
-	return hasIrregularIndex, irregularIndexCols
+
+	for _, idxDef := range tableDef.Indexes {
+		if !idxDef.TableExist || !affectedSyncGroups[idxDef.IndexName+"\x00"+idxDef.IndexTableName] {
+			continue
+		}
+		inline = append(inline, idxDef)
+	}
+	return inline, false, nil
 }
 
 func primaryKeyUpdated(tableDef *plan.TableDef, updateCols map[string]tree.Expr) bool {

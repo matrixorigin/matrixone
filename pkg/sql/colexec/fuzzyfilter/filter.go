@@ -18,9 +18,11 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -89,6 +91,10 @@ func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
 	}
 
 	ctr := &fuzzyFilter.ctr
+	// Prepare starts a new execution generation. Reset deliberately keeps the
+	// previous generation's terminal gate closed so repeated cleanup is
+	// idempotent.
+	ctr.runtimeFilterDone = false
 	if ctr.rbat == nil {
 		rowCount := int64(fuzzyFilter.N)
 		if rowCount < 1000 {
@@ -121,6 +127,37 @@ func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
 			}
 			ctr.bloomFilter = bloomfilter.New(rowCount, probability)
 		}
+	}
+
+	ctr.runtimeFilterUsable = false
+	if fuzzyFilter.RuntimeFilterSpec != nil {
+		buildExpr := runtimefilter.BuildKeyExpr(
+			fuzzyFilter.RuntimeFilterSpec)
+		if buildExpr == nil || buildExpr.GetCol() == nil ||
+			buildExpr.GetCol().ColPos != 0 {
+			if ctr.pass2RuntimeFilter != nil {
+				ctr.pass2RuntimeFilter.Free(proc.Mp())
+				ctr.pass2RuntimeFilter = nil
+			}
+			return nil
+		}
+		pkType := plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp)
+		ctr.runtimeFilterUsable = runtimefilter.ExactKeyEncoding(
+			fuzzyFilter.RuntimeFilterSpec,
+			pkType,
+		) != keycodec.ExactRuntimeFilterUnsupported
+	}
+	if ctr.runtimeFilterUsable {
+		if ctr.pass2RuntimeFilter == nil {
+			ctr.pass2RuntimeFilter = vector.NewOffHeapVecWithType(
+				plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp))
+		}
+	} else if ctr.pass2RuntimeFilter != nil {
+		// FuzzyFilter must still execute its uniqueness check, but an
+		// unprovable optional runtime filter must not retain a second copy of
+		// every build key.
+		ctr.pass2RuntimeFilter.Free(proc.Mp())
+		ctr.pass2RuntimeFilter = nil
 	}
 
 	return nil
@@ -162,6 +199,7 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 
 			input, err := vm.ChildrenCall(fuzzyFilter.GetChildren(buildIdx), proc, analyzer)
 			if err != nil {
+				fuzzyFilter.finalizeBuildFailure(proc)
 				return result, err
 			}
 			bat := input.Batch
@@ -180,10 +218,14 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			}
 
 			pkCol := bat.GetVector(0)
-			fuzzyFilter.appendPassToRuntimeFilter(pkCol, proc)
+			if err := fuzzyFilter.appendPassToRuntimeFilter(pkCol, proc); err != nil {
+				fuzzyFilter.finalizeBuildFailure(proc)
+				return result, err
+			}
 
 			err = fuzzyFilter.handleBuild(proc, pkCol)
 			if err != nil {
+				fuzzyFilter.finalizeBuildFailure(proc)
 				return result, err
 			}
 
@@ -191,6 +233,7 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 
 		case HandleRuntimeFilter:
 			if err := fuzzyFilter.handleRuntimeFilter(proc); err != nil {
+				fuzzyFilter.finalizeBuildFailure(proc)
 				return result, err
 			}
 			ctr.state = Probe
@@ -200,6 +243,7 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 
 			input, err := vm.ChildrenCall(fuzzyFilter.GetChildren(probeIdx), proc, analyzer)
 			if err != nil {
+				fuzzyFilter.finalizeBuildFailure(proc)
 				return result, err
 			}
 			bat := input.Batch
@@ -208,6 +252,7 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 				// fmt.Println("probe cnt = ", arg.probeCnt)
 				// this will happen in such case:create unique index from a table that unique col have no data
 				if ctr.rbat == nil || ctr.collisionCnt == 0 {
+					fuzzyFilter.ensureRuntimeFilterTerminal(proc)
 					result.Status = vm.ExecStop
 					return result, nil
 				}
@@ -218,8 +263,10 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 				result.Status = vm.ExecStop
 				ctr.state = End
 				if err := fuzzyFilter.Callback(ctr.rbat); err != nil {
+					fuzzyFilter.finalizeBuildFailure(proc)
 					return result, err
 				} else {
+					fuzzyFilter.ensureRuntimeFilterTerminal(proc)
 					return result, nil
 				}
 			}
@@ -233,6 +280,7 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			// arg.probeCnt += pkCol.Length()
 			err = fuzzyFilter.handleProbe(proc, pkCol)
 			if err != nil {
+				fuzzyFilter.finalizeBuildFailure(proc)
 				return result, err
 			}
 
@@ -242,6 +290,23 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			return result, nil
 		}
 	}
+}
+
+func (fuzzyFilter *FuzzyFilter) finalizeBuildFailure(proc *process.Process) {
+	if fuzzyFilter.RuntimeFilterSpec == nil ||
+		fuzzyFilter.ctr.runtimeFilterDone {
+		return
+	}
+	message.FinalizeRuntimeFilterOnBuildError(
+		fuzzyFilter.RuntimeFilterSpec, proc.GetMessageBoard())
+	fuzzyFilter.ctr.runtimeFilterDone = true
+}
+
+// A valid planner attaches a runtime filter only when the fuzzy build side can
+// publish it. Keep malformed/stale plans live too: successful completion
+// without a producer phase must fail open rather than strand a scan receiver.
+func (fuzzyFilter *FuzzyFilter) ensureRuntimeFilterTerminal(proc *process.Process) {
+	fuzzyFilter.finalizeBuildFailure(proc)
 }
 
 // =========================================================================
@@ -303,38 +368,141 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 	runtimeFilter.Tag = fuzzyFilter.RuntimeFilterSpec.Tag
 
 	//                                                 the number of data insert is greater than inFilterCardLimit
-	if fuzzyFilter.RuntimeFilterSpec.Expr == nil || ctr.pass2RuntimeFilter == nil {
-		runtimeFilter.Typ = message.RuntimeFilter_PASS
-		message.SendRuntimeFilter(runtimeFilter, fuzzyFilter.RuntimeFilterSpec, proc.GetMessageBoard())
+	if !ctr.runtimeFilterUsable || ctr.pass2RuntimeFilter == nil {
+		fuzzyFilter.sendRuntimeFilterPass(proc)
 		return nil
 	}
 
-	//bloomFilterCardLimit := int64(plan.BloomFilterCardLimit)
-	//v, ok = runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_bloom_filter")
-	//if ok {
-	//	bloomFilterCardLimit = v.(int64)
-	//}
+	encoding := runtimefilter.ExactKeyEncoding(
+		fuzzyFilter.RuntimeFilterSpec,
+		*ctr.pass2RuntimeFilter.GetType(),
+	)
+	if encoding == keycodec.ExactRuntimeFilterUnsupported {
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		message.SendRuntimeFilter(runtimeFilter, fuzzyFilter.RuntimeFilterSpec, proc.GetMessageBoard())
+		ctr.runtimeFilterDone = true
+		return nil
+	}
+	if ctr.pass2RuntimeFilter.Length() == 0 {
+		runtimeFilter.Typ = message.RuntimeFilter_DROP
+		message.SendRuntimeFilter(runtimeFilter, fuzzyFilter.RuntimeFilterSpec, proc.GetMessageBoard())
+		ctr.runtimeFilterDone = true
+		return nil
+	}
+	if encoding == keycodec.ExactRuntimeFilterFloatZeroClosed {
+		if err := runtimefilter.CloseFloatSignedZero(
+			ctr.pass2RuntimeFilter, proc.Mp(), nil); err != nil {
+			if fuzzyFilter.fallbackRuntimeFilter(proc, err) {
+				return nil
+			}
+			fuzzyFilter.abandonRuntimeFilter(proc)
+			return err
+		}
+	}
+	if ctr.pass2RuntimeFilter.Length() > int(fuzzyFilter.RuntimeFilterSpec.UpperLimit) {
+		runtimeFilter.Typ = message.RuntimeFilter_PASS
+		message.SendRuntimeFilter(runtimeFilter, fuzzyFilter.RuntimeFilterSpec, proc.GetMessageBoard())
+		ctr.runtimeFilterDone = true
+		return nil
+	}
 
 	// InplaceSort reorders data but NOT the null bitmap.
 	// Reset bitmap before sort to avoid corruption.
 	ctr.pass2RuntimeFilter.GetNulls().Reset()
 	ctr.pass2RuntimeFilter.InplaceSort()
-	data, err := ctr.pass2RuntimeFilter.MarshalBinary()
+	budget, err := proc.GetHashBuildBudget()
 	if err != nil {
+		if fuzzyFilter.fallbackRuntimeFilter(proc, err) {
+			return nil
+		}
+		fuzzyFilter.abandonRuntimeFilter(proc)
+		return err
+	}
+	data, release, err := runtimefilter.MarshalExactFilterVector(
+		ctr.pass2RuntimeFilter, budget)
+	if err != nil {
+		if fuzzyFilter.fallbackRuntimeFilter(proc, err) {
+			return nil
+		}
+		fuzzyFilter.abandonRuntimeFilter(proc)
 		return err
 	}
 
 	runtimeFilter.Typ = message.RuntimeFilter_IN
+	runtimeFilter.Card = int32(ctr.pass2RuntimeFilter.Length())
 	runtimeFilter.Data = data
+	runtimeFilter.SetMemoryRelease(release)
 	message.SendRuntimeFilter(runtimeFilter, fuzzyFilter.RuntimeFilterSpec, proc.GetMessageBoard())
+	ctr.runtimeFilterDone = true
 	return nil
+}
+
+func (fuzzyFilter *FuzzyFilter) sendRuntimeFilterPass(
+	proc *process.Process,
+) {
+	if fuzzyFilter.RuntimeFilterSpec == nil ||
+		fuzzyFilter.ctr.runtimeFilterDone {
+		return
+	}
+	message.SendRuntimeFilter(
+		message.RuntimeFilterMessage{
+			Tag: fuzzyFilter.RuntimeFilterSpec.Tag,
+			Typ: message.RuntimeFilter_PASS,
+		},
+		fuzzyFilter.RuntimeFilterSpec,
+		proc.GetMessageBoard(),
+	)
+	fuzzyFilter.ctr.runtimeFilterDone = true
+}
+
+func (fuzzyFilter *FuzzyFilter) fallbackRuntimeFilter(
+	proc *process.Process,
+	err error,
+) bool {
+	kind := runtimefilter.ClassifyOptionalFallback(err)
+	if kind == runtimefilter.OptionalFallbackNone {
+		return false
+	}
+	if fuzzyFilter.OpAnalyzer != nil {
+		stats := fuzzyFilter.OpAnalyzer.GetOpStats()
+		if kind == runtimefilter.OptionalFallbackBudgetAdmission {
+			stats.AddExtraStat(
+				"FuzzyFilterRuntimeFilterBudgetFallbacks", 1)
+		} else {
+			stats.AddExtraStat(
+				"FuzzyFilterRuntimeFilterAllocationFallbacks", 1)
+		}
+	}
+	fuzzyFilter.abandonRuntimeFilter(proc)
+	fuzzyFilter.sendRuntimeFilterPass(proc)
+	return true
+}
+
+func (fuzzyFilter *FuzzyFilter) abandonRuntimeFilter(
+	proc *process.Process,
+) {
+	ctr := &fuzzyFilter.ctr
+	ctr.runtimeFilterUsable = false
+	if ctr.pass2RuntimeFilter != nil {
+		ctr.pass2RuntimeFilter.Free(proc.Mp())
+		ctr.pass2RuntimeFilter = nil
+	}
 }
 
 func (fuzzyFilter *FuzzyFilter) appendPassToRuntimeFilter(
 	v *vector.Vector, proc *process.Process,
 ) (err error) {
 	ctr := &fuzzyFilter.ctr
-	if ctr.pass2RuntimeFilter != nil && fuzzyFilter.RuntimeFilterSpec != nil {
+	if ctr.runtimeFilterUsable &&
+		ctr.pass2RuntimeFilter != nil &&
+		fuzzyFilter.RuntimeFilterSpec != nil {
+		if runtimefilter.ExactKeyEncoding(
+			fuzzyFilter.RuntimeFilterSpec,
+			*v.GetType(),
+		) == keycodec.ExactRuntimeFilterUnsupported {
+			fuzzyFilter.abandonRuntimeFilter(proc)
+			return nil
+		}
 		el := ctr.pass2RuntimeFilter.Length()
 		al := v.Length()
 
@@ -342,11 +510,15 @@ func (fuzzyFilter *FuzzyFilter) appendPassToRuntimeFilter(
 			if err = ctr.pass2RuntimeFilter.UnionBatch(
 				v, 0, al, nil, proc.Mp(),
 			); err != nil {
-				return
+				err = runtimefilter.MarkOptionalAllocationError(err)
+				if fuzzyFilter.fallbackRuntimeFilter(proc, err) {
+					return nil
+				}
+				fuzzyFilter.abandonRuntimeFilter(proc)
+				return err
 			}
 		} else {
-			ctr.pass2RuntimeFilter.Free(proc.Mp())
-			ctr.pass2RuntimeFilter = nil
+			fuzzyFilter.abandonRuntimeFilter(proc)
 		}
 	}
 	return
@@ -364,7 +536,11 @@ func (fuzzyFilter *FuzzyFilter) generate() error {
 	ctr := &fuzzyFilter.ctr
 	rbat := batch.NewWithSize(1)
 	rbat.SetVector(0, vector.NewVec(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp)))
-	ctr.pass2RuntimeFilter = vector.NewVec(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp))
+	// Runtime-filter retention is optional and can grow to the configured IN
+	// cardinality. Keep it off-heap so the process pool can reject growth
+	// recoverably; appendPassToRuntimeFilter then abandons it and sends PASS.
+	ctr.pass2RuntimeFilter = vector.NewOffHeapVecWithType(
+		plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp))
 	ctr.rbat = rbat
 	return nil
 }

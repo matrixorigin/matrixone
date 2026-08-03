@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -762,7 +761,12 @@ func runValidBenchmark(b *testing.B, name string, tables int) {
 					return time.Now().UTC().UnixNano()
 				}, 0))),
 		)
-		testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
+		testSocketDir, err := createTestSocketDir()
+		require.NoError(b, err)
+		defer func() {
+			require.NoError(b, removeTestSocketDir(testSocketDir))
+		}()
+		testSockets := testSocketAddress(testSocketDir, "allocator.sock")
 		a := NewLockTableAllocator("", testSockets, time.Hour, morpc.Config{})
 		defer func() {
 			assert.NoError(b, a.Close())
@@ -798,8 +802,12 @@ func runLockTableAllocatorTest(
 		func(rt runtime.Runtime) {
 			reuse.RunReuseTests(func() {
 				defer leaktest.AfterTest(t)()
-				testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
-				require.NoError(t, os.RemoveAll(testSockets[7:]))
+				testSocketDir, err := createTestSocketDir()
+				require.NoError(t, err)
+				defer func() {
+					require.NoError(t, removeTestSocketDir(testSocketDir))
+				}()
+				testSockets := testSocketAddress(testSocketDir, "allocator.sock")
 				cluster := clusterservice.NewMOCluster(
 					sid,
 					nil,
