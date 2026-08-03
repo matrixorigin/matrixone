@@ -904,6 +904,7 @@ func constructMultiUpdate(
 			PartitionCols:      partitionCols,
 			SkipInsertOnNullPk: updateCtx.SkipInsertOnNullPk,
 			InsertPkColIdx:     int(updateCtx.InsertPkColIdx),
+			IgnoreAffectedRows: updateCtx.IgnoreAffectedRows,
 		}
 	}
 	arg.Action = action

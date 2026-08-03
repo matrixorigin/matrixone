@@ -116,12 +116,117 @@ func TestCompactMaxByStateVectorPreservesAllocationOwner(t *testing.T) {
 	before := account.Snapshot()
 	require.Greater(t, before.Used, uint64(maxByVarlenaCompactionSlack))
 
-	require.NoError(t, compactMaxByStateVector(vec, mp))
+	usage := &maxByVarlenaUsage{
+		liveBytes:  maxByAreaBytes(vec.GetRawBytesAt(0)),
+		staleBytes: len(vec.GetArea()) - maxByAreaBytes(vec.GetRawBytesAt(0)),
+	}
+	require.NoError(t, compactMaxByStateVector(vec, usage, mp))
 	require.Same(t, selection, vec.AllocationAccountSelection())
 	require.Equal(t, value, vec.GetBytesAt(0))
 	after := account.Snapshot()
 	require.Less(t, after.Used, before.Used)
 	require.GreaterOrEqual(t, after.Peak, before.Used)
+}
+
+func TestMaxByTracksManyGroupVarlenaUsageIncrementally(t *testing.T) {
+	mp := mpool.MustNewZero()
+	params := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_int64.ToType()}
+	exec := makeMaxByExec(mp, 7012, false, params).(*maxByExec)
+	require.NoError(t, exec.GroupGrow(AggBatchSize))
+
+	valueVec := vector.NewVec(types.T_varchar.ToType())
+	orderVec := vector.NewVec(types.T_int64.ToType())
+	tieVec := vector.NewVec(types.T_int64.ToType())
+	groups := make([]uint64, AggBatchSize)
+	initialValue := []byte(strings.Repeat("i", 128))
+	for i := range groups {
+		groups[i] = uint64(i + 1)
+		require.NoError(t, vector.AppendBytes(valueVec, initialValue, false, mp))
+		require.NoError(t, vector.AppendFixed(orderVec, int64(0), false, mp))
+		require.NoError(t, vector.AppendFixed(tieVec, int64(i), false, mp))
+	}
+	require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{valueVec, orderVec, tieVec}))
+	require.Equal(t, AggBatchSize*len(initialValue), exec.varlenaUsage[0][0].liveBytes)
+
+	candidateValue := vector.NewVec(types.T_varchar.ToType())
+	candidateOrder := vector.NewVec(types.T_int64.ToType())
+	candidateTie := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendBytes(candidateValue, []byte(strings.Repeat("w", 64<<10)), false, mp))
+	require.NoError(t, vector.AppendFixed(candidateOrder, int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(candidateTie, int64(0), false, mp))
+	for winner := int64(1); winner <= 64; winner++ {
+		require.NoError(t, vector.SetFixedAtNoTypeCheck(candidateOrder, 0, winner))
+		require.NoError(t, exec.Fill(0, 0, []*vector.Vector{candidateValue, candidateOrder, candidateTie}))
+	}
+
+	usage := exec.varlenaUsage[0][0]
+	require.Equal(t, (AggBatchSize-1)*len(initialValue)+(64<<10), usage.liveBytes)
+	require.LessOrEqual(t, usage.staleBytes, usage.liveBytes+maxByVarlenaCompactionSlack,
+		"compaction should reset stale accounting without rescanning all groups per winner")
+	require.Less(t, exec.state[0].vecs[0].Allocated(), 5<<20)
+
+	for _, vec := range []*vector.Vector{valueVec, orderVec, tieVec, candidateValue, candidateOrder, candidateTie} {
+		vec.Free(mp)
+	}
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func BenchmarkMaxByManyGroupsRepeatedWinners(b *testing.B) {
+	mp := mpool.MustNewZero()
+	params := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_int64.ToType()}
+	exec := makeMaxByExec(mp, 7013, false, params).(*maxByExec)
+	if err := exec.GroupGrow(AggBatchSize); err != nil {
+		b.Fatal(err)
+	}
+	valueVec := vector.NewVec(types.T_varchar.ToType())
+	orderVec := vector.NewVec(types.T_int64.ToType())
+	tieVec := vector.NewVec(types.T_int64.ToType())
+	groups := make([]uint64, AggBatchSize)
+	initialValue := []byte(strings.Repeat("i", 128))
+	for i := range groups {
+		groups[i] = uint64(i + 1)
+		if err := vector.AppendBytes(valueVec, initialValue, false, mp); err != nil {
+			b.Fatal(err)
+		}
+		if err := vector.AppendFixed(orderVec, int64(0), false, mp); err != nil {
+			b.Fatal(err)
+		}
+		if err := vector.AppendFixed(tieVec, int64(i), false, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := exec.BatchFill(0, groups, []*vector.Vector{valueVec, orderVec, tieVec}); err != nil {
+		b.Fatal(err)
+	}
+	candidateValue := vector.NewVec(types.T_varchar.ToType())
+	candidateOrder := vector.NewVec(types.T_int64.ToType())
+	candidateTie := vector.NewVec(types.T_int64.ToType())
+	if err := vector.AppendBytes(candidateValue, []byte(strings.Repeat("w", 64<<10)), false, mp); err != nil {
+		b.Fatal(err)
+	}
+	if err := vector.AppendFixed(candidateOrder, int64(1), false, mp); err != nil {
+		b.Fatal(err)
+	}
+	if err := vector.AppendFixed(candidateTie, int64(0), false, mp); err != nil {
+		b.Fatal(err)
+	}
+	candidate := []*vector.Vector{candidateValue, candidateOrder, candidateTie}
+	defer func() {
+		for _, vec := range append([]*vector.Vector{valueVec, orderVec, tieVec}, candidate...) {
+			vec.Free(mp)
+		}
+		exec.Free()
+	}()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := vector.SetFixedAtNoTypeCheck(candidate[1], 0, int64(i+1)); err != nil {
+			b.Fatal(err)
+		}
+		if err := exec.Fill(0, 0, candidate); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
 
 func TestMaxByNullContractAndDeterministicMerge(t *testing.T) {

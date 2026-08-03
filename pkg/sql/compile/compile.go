@@ -665,11 +665,13 @@ func (c *Compile) runOnce() (err error) {
 
 	// REPLACE parent checks and actions run before the main pipeline.
 	query := c.pn.GetQuery()
-	if query != nil && query.StmtType == plan.Query_INSERT && len(query.GetDetectSqls()) != 0 {
-		if err = validateReplaceParentTxnMode(
+	if query != nil && len(query.GetDetectSqls()) != 0 {
+		if err = validateForeignKeyParentTxnMode(
 			c.proc.Ctx, query, c.proc.GetTxnOperator().Txn().IsPessimistic()); err != nil {
 			return err
 		}
+	}
+	if query != nil && query.StmtType == plan.Query_INSERT && len(query.GetDetectSqls()) != 0 {
 		for _, sql := range query.DetectSqls {
 			if strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") {
 				continue
@@ -795,7 +797,8 @@ func (c *Compile) runOnce() (err error) {
 			if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") ||
 				strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") ||
 				strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") ||
-				strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
+				strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") ||
+				strings.HasPrefix(sql, "UPDATE_PARENT_PLAN:") {
 				continue
 			}
 			postCheckSqls = append(postCheckSqls, sql)
@@ -812,7 +815,7 @@ func (c *Compile) runOnce() (err error) {
 	return err
 }
 
-func validateReplaceParentTxnMode(ctx context.Context, query *plan.Query, pessimistic bool) error {
+func validateForeignKeyParentTxnMode(ctx context.Context, query *plan.Query, pessimistic bool) error {
 	if pessimistic || query == nil {
 		return nil
 	}
@@ -821,6 +824,10 @@ func validateReplaceParentTxnMode(ctx context.Context, query *plan.Query, pessim
 			strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") {
 			return moerr.NewNotSupported(ctx,
 				"REPLACE on a referenced parent table in optimistic transaction mode")
+		}
+		if strings.HasPrefix(sql, "UPDATE_PARENT_PLAN:") {
+			return moerr.NewNotSupported(ctx,
+				"UPDATE on a referenced parent table in optimistic transaction mode")
 		}
 	}
 	return nil

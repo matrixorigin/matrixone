@@ -62,14 +62,15 @@ func (s *store) heartbeat(ctx context.Context) {
 	defer cancel()
 
 	hb := logservicepb.TNStoreHeartbeat{
-		UUID:                 s.cfg.UUID,
-		ServiceAddress:       s.txnServiceServiceAddr(),
-		Shards:               s.getTNShardInfo(),
-		TaskServiceCreated:   s.taskServiceCreated(),
-		LogtailServerAddress: s.logtailServiceServiceAddr(),
-		LockServiceAddress:   s.lockServiceServiceAddr(),
-		ShardServiceAddress:  s.shardServiceServiceAddr(),
-		ConfigData:           s.config.GetData(),
+		UUID:                        s.cfg.UUID,
+		ServiceAddress:              s.txnServiceServiceAddr(),
+		Shards:                      s.getTNShardInfo(),
+		TaskServiceCreated:          s.taskServiceCreated(),
+		LogtailServerAddress:        s.logtailServiceServiceAddr(),
+		LockServiceAddress:          s.lockServiceServiceAddr(),
+		ShardServiceAddress:         s.shardServiceServiceAddr(),
+		ConfigData:                  s.config.GetData(),
+		AutoIncrEpochFenceSupported: true,
 		// if the replayed LSN is 0, then it is the master TN.
 		ReplayedLsn: 0,
 	}

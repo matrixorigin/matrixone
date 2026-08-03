@@ -327,20 +327,24 @@ func TestConstructLockOpPreservesSharedTableMode(t *testing.T) {
 	}
 }
 
-func TestValidateReplaceParentTxnMode(t *testing.T) {
+func TestValidateForeignKeyParentTxnMode(t *testing.T) {
 	ctx := context.Background()
 	query := &plan.Query{DetectSqls: []string{"REPLACE_PARENT_LOCK:select 1 for update"}}
 
-	require.NoError(t, validateReplaceParentTxnMode(ctx, query, true))
-	require.ErrorContains(t, validateReplaceParentTxnMode(ctx, query, false),
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx, query, true))
+	require.ErrorContains(t, validateForeignKeyParentTxnMode(ctx, query, false),
 		"optimistic transaction mode")
 	query.DetectSqls = []string{"REPLACE_PARENT_PLAN:"}
-	require.NoError(t, validateReplaceParentTxnMode(ctx, query, true))
-	require.ErrorContains(t, validateReplaceParentTxnMode(ctx, query, false),
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx, query, true))
+	require.ErrorContains(t, validateForeignKeyParentTxnMode(ctx, query, false),
 		"optimistic transaction mode")
-	require.NoError(t, validateReplaceParentTxnMode(ctx,
+	query.DetectSqls = []string{"UPDATE_PARENT_PLAN:"}
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx, query, true))
+	require.ErrorContains(t, validateForeignKeyParentTxnMode(ctx, query, false),
+		"UPDATE on a referenced parent table")
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx,
 		&plan.Query{DetectSqls: []string{"select true"}}, false))
-	require.NoError(t, validateReplaceParentTxnMode(ctx, nil, false))
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx, nil, false))
 }
 
 func TestLockTableLocksAllPrePipelineTargets(t *testing.T) {
@@ -411,18 +415,26 @@ func TestLockTableLocksAllPrePipelineTargets(t *testing.T) {
 		},
 	)
 }
-func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.TxnOperator) {
-	return newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_SI)
+func newTestTxnClientAndOp(
+	ctrl *gomock.Controller,
+	workspaces ...client.Workspace,
+) (client.TxnClient, client.TxnOperator) {
+	return newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_SI, workspaces...)
 }
 
 func newTestTxnClientAndOpWithIsolation(
 	ctrl *gomock.Controller,
 	isolation txn.TxnIsolation,
+	workspaces ...client.Workspace,
 ) (client.TxnClient, client.TxnOperator) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	workspace := client.Workspace(&Ws{})
+	if len(workspaces) > 0 {
+		workspace = workspaces[0]
+	}
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
-	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	txnOperator.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{Isolation: isolation}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()

@@ -396,7 +396,9 @@ endif
 ###############################################################################
 UT_PARALLEL ?= 1
 ENABLE_UT ?= "false"
-GOPROXY ?= https://proxy.golang.com.cn,https://goproxy.cn,https://proxy.golang.org
+# These are public mirrors, not policy gatekeepers. Fall through on transient
+# errors as well as 404/410 responses so one unhealthy mirror cannot block CI.
+GOPROXY ?= https://proxy.golang.com.cn|https://goproxy.cn|https://proxy.golang.org
 export GOPROXY
 LAUNCH ?= "launch"
 
@@ -404,7 +406,7 @@ LAUNCH ?= "launch"
 ci:
 	@rm -rf $(ROOT_DIR)/tester-log
 	@docker image prune -f
-	@docker build -f optools/bvt_ut/Dockerfile . -t matrixorigin/matrixone:local-ci --build-arg GOPROXY=$(GOPROXY)
+	@docker build -f optools/bvt_ut/Dockerfile . -t matrixorigin/matrixone:local-ci --build-arg GOPROXY="$(GOPROXY)"
 	@docker run --name tester -it \
 			-e LAUNCH=$(LAUNCH) \
 			-e UT_PARALLEL=$(UT_PARALLEL) \

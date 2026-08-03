@@ -897,8 +897,9 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		op := &multi_update.MultiUpdate{
 			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
 				{
-					ObjRef:   &plan.ObjectRef{ObjName: "t1"},
-					TableDef: &plan.TableDef{Name: "t1"},
+					ObjRef:             &plan.ObjectRef{ObjName: "t1"},
+					TableDef:           &plan.TableDef{Name: "t1"},
+					IgnoreAffectedRows: true,
 				},
 			},
 			Action:                multi_update.UpdateWriteTable,
@@ -908,12 +909,16 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, pipeInstr.MultiUpdate.UpdateCtxList[0].CountDeleteAffectRows,
 			"serialized UpdateCtx must carry CountDeleteAffectRows")
+		require.True(t, pipeInstr.MultiUpdate.UpdateCtxList[0].IgnoreAffectedRows,
+			"serialized UpdateCtx must carry IgnoreAffectedRows")
 
 		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
 		require.NoError(t, err)
 		restoredOp := restored.(*multi_update.MultiUpdate)
 		require.True(t, restoredOp.CountDeleteAffectRows,
 			"CountDeleteAffectRows must survive the remote pipeline round-trip")
+		require.True(t, restoredOp.MultiUpdateCtx[0].IgnoreAffectedRows,
+			"IgnoreAffectedRows must survive the remote pipeline round-trip")
 	})
 
 	t.Run("MultiUpdate_RejectZeroTemporal", func(t *testing.T) {

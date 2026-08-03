@@ -1665,7 +1665,6 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	if err := validateAutoIncrEpochAdvance(tbl.extraInfo.AutoIncrEpoch, autoIncrResetCount); err != nil {
 		return err
 	}
-
 	var err error
 	var checkCstr []byte
 	oldTableName := tbl.tableName

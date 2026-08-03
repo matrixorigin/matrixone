@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"bytes"
+	"io"
 	"math"
 	"slices"
 
@@ -34,6 +35,12 @@ const maxByVarlenaCompactionSlack = 1 << 20
 type maxByExec struct {
 	aggExec
 	nonNullValue bool
+	varlenaUsage [][]maxByVarlenaUsage
+}
+
+type maxByVarlenaUsage struct {
+	liveBytes  int
+	staleBytes int
 }
 
 func makeMaxByExec(mp *mpool.MPool, id int64, nonNullValue bool, params []types.Type) AggFuncExec {
@@ -84,7 +91,7 @@ func (exec *maxByExec) BatchFill(offset int, groups []uint64, vectors []*vector.
 		x, y := exec.getXY(group - 1)
 		state := &exec.state[x]
 		if state.vecs[1].IsNull(uint64(y)) || candidateWins(vectors, rows, state.vecs, int(y), exec.argTypes) {
-			if err := exec.copyWinner(state.vecs, int(y), vectors, rows); err != nil {
+			if err := exec.copyWinner(x, state.vecs, int(y), vectors, rows); err != nil {
 				return err
 			}
 		}
@@ -114,7 +121,7 @@ func (exec *maxByExec) BatchMerge(next AggFuncExec, offset int, groups []uint64)
 		current := exec.state[x1].vecs
 		rows := [3]int{int(y2), int(y2), int(y2)}
 		if current[1].IsNull(uint64(y1)) || candidateWins(candidate, rows, current, int(y1), exec.argTypes) {
-			if err := exec.copyWinner(current, int(y1), candidate, rows); err != nil {
+			if err := exec.copyWinner(x1, current, int(y1), candidate, rows); err != nil {
 				return err
 			}
 		}
@@ -228,18 +235,34 @@ func compareFloat64(a, b float64) int {
 	return types.GenericAscCompare(a, b)
 }
 
-func (exec *maxByExec) copyWinner(dst []*vector.Vector, dstRow int, src []*vector.Vector, srcRows [3]int) error {
+func (exec *maxByExec) copyWinner(
+	chunk int,
+	dst []*vector.Vector,
+	dstRow int,
+	src []*vector.Vector,
+	srcRows [3]int,
+) error {
+	usage := exec.ensureVarlenaUsage(chunk)
+	oldLive := make([]int, len(dst))
+	newLive := make([]int, len(dst))
 	// Reserve every fallible varlen allocation before mutating any of the three
 	// correlated state vectors. Without this preflight, an OOM after copying the
 	// value but before copying order/tie would publish a mixed winner. Growing
 	// capacity is harmless if a later reservation fails; the logical state stays
 	// byte-for-byte unchanged and remains safe to serialize or free.
 	for i := range dst {
-		if src[i].IsNull(uint64(srcRows[i])) || !dst[i].GetType().IsVarlen() {
+		if !dst[i].GetType().IsVarlen() {
+			continue
+		}
+		if !dst[i].IsNull(uint64(dstRow)) {
+			oldLive[i] = maxByAreaBytes(dst[i].GetRawBytesAt(dstRow))
+		}
+		if src[i].IsNull(uint64(srcRows[i])) {
 			continue
 		}
 		valueBytes := len(src[i].GetRawBytesAt(srcRows[i]))
-		if valueBytes <= types.VarlenaInlineSize {
+		newLive[i] = maxByAreaBytes(src[i].GetRawBytesAt(srcRows[i]))
+		if newLive[i] == 0 {
 			continue
 		}
 		if err := dst[i].PreExtendWithArea(0, valueBytes, exec.mp); err != nil {
@@ -256,34 +279,57 @@ func (exec *maxByExec) copyWinner(dst []*vector.Vector, dstRow int, src []*vecto
 		}
 		dst[i].UnsetNull(uint64(dstRow))
 	}
-	for _, vec := range dst {
+	for i, vec := range dst {
+		if vec.GetType().IsVarlen() {
+			usage[i].liveBytes += newLive[i] - oldLive[i]
+			usage[i].staleBytes += oldLive[i]
+		}
 		// Compaction is an optional bound on stale varlen area. A failed compact
 		// clone leaves the valid original untouched, so memory pressure must not
 		// turn a fully copied winner into an aggregate error with ambiguous state.
-		_ = compactMaxByStateVector(vec, exec.mp)
+		_ = compactMaxByStateVector(vec, &usage[i], exec.mp)
 	}
 	return nil
 }
 
-func compactMaxByStateVector(vec *vector.Vector, mp *mpool.MPool) error {
+func maxByAreaBytes(value []byte) int {
+	if len(value) <= types.VarlenaInlineSize {
+		return 0
+	}
+	return len(value)
+}
+
+func (exec *maxByExec) ensureVarlenaUsage(chunk int) []maxByVarlenaUsage {
+	for len(exec.varlenaUsage) < len(exec.state) {
+		exec.varlenaUsage = append(exec.varlenaUsage, nil)
+	}
+	if exec.varlenaUsage[chunk] != nil {
+		return exec.varlenaUsage[chunk]
+	}
+	usage := make([]maxByVarlenaUsage, len(exec.state[chunk].vecs))
+	for i, vec := range exec.state[chunk].vecs {
+		if vec == nil || !vec.GetType().IsVarlen() {
+			continue
+		}
+		for row := 0; row < vec.Length(); row++ {
+			if !vec.IsNull(uint64(row)) {
+				usage[i].liveBytes += maxByAreaBytes(vec.GetRawBytesAt(row))
+			}
+		}
+		usage[i].staleBytes = max(0, len(vec.GetArea())-usage[i].liveBytes)
+	}
+	exec.varlenaUsage[chunk] = usage
+	return usage
+}
+
+func compactMaxByStateVector(vec *vector.Vector, usage *maxByVarlenaUsage, mp *mpool.MPool) error {
 	if vec == nil || !vec.GetType().IsVarlen() {
 		return nil
 	}
-	areaCapacity := cap(vec.GetArea())
-	if areaCapacity <= maxByVarlenaCompactionSlack {
-		return nil
-	}
-	liveBytes := 0
-	for row := 0; row < vec.Length(); row++ {
-		if vec.IsNull(uint64(row)) {
-			continue
-		}
-		valueBytes := len(vec.GetRawBytesAt(row))
-		if valueBytes > types.VarlenaInlineSize {
-			liveBytes += valueBytes
-		}
-	}
-	if areaCapacity <= 2*liveBytes+maxByVarlenaCompactionSlack {
+	fixedCapacity := vec.Capacity() * vec.GetType().TypeSize()
+	areaCapacity := vec.Allocated() - fixedCapacity
+	if areaCapacity <= maxByVarlenaCompactionSlack ||
+		usage.staleBytes <= usage.liveBytes+maxByVarlenaCompactionSlack {
 		return nil
 	}
 	var (
@@ -300,7 +346,34 @@ func compactMaxByStateVector(vec *vector.Vector, mp *mpool.MPool) error {
 	}
 	vec.Free(mp)
 	*vec = *compact
+	usage.staleBytes = 0
 	return nil
+}
+
+func (exec *maxByExec) GroupGrow(more int) error {
+	oldChunks := len(exec.state)
+	if err := exec.aggExec.GroupGrow(more); err != nil {
+		return err
+	}
+	if exec.chunkSize == 1 {
+		// The single-group fast path replaces state[0] instead of appending a
+		// chunk, so any accounting derived from the prior vector is invalid.
+		exec.varlenaUsage = nil
+		oldChunks = 0
+	}
+	for len(exec.varlenaUsage) < len(exec.state) {
+		exec.varlenaUsage = append(exec.varlenaUsage, nil)
+	}
+	for chunk := oldChunks; chunk < len(exec.state); chunk++ {
+		exec.varlenaUsage[chunk] = make([]maxByVarlenaUsage, len(exec.state[chunk].vecs))
+	}
+	return nil
+}
+
+func (exec *maxByExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	err := exec.aggExec.UnmarshalFromReader(reader, mp)
+	exec.varlenaUsage = nil
+	return err
 }
 
 func (exec *maxByExec) SetExtraInformation(any, int) error { return nil }
@@ -317,5 +390,6 @@ func (exec *maxByExec) Flush() ([]*vector.Vector, error) {
 		exec.state[i].length = 0
 		exec.state[i].capacity = 0
 	}
+	exec.varlenaUsage = nil
 	return result, nil
 }

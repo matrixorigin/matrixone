@@ -15,9 +15,10 @@
 package features
 
 const (
-	Partitioned = 1 << iota
-	IndexTable  = 1 << iota
-	Partition   = 1 << iota
+	Partitioned     = 1 << iota
+	IndexTable      = 1 << iota
+	Partition       = 1 << iota
+	MongoDBExternal = 1 << iota
 )
 
 func IsPartitioned(f uint64) bool {
@@ -30,4 +31,8 @@ func IsIndexTable(f uint64) bool {
 
 func IsPartition(f uint64) bool {
 	return f&Partition != 0
+}
+
+func IsMongoDBExternal(f uint64) bool {
+	return f&MongoDBExternal != 0
 }
