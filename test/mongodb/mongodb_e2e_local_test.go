@@ -18,9 +18,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +31,23 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMongoDBLocalE2ERunnerDoesNotImportKernelPackages(t *testing.T) {
+	repoRoot := mongoDBTestRepoRoot(t)
+	file, err := parser.ParseFile(
+		token.NewFileSet(),
+		filepath.Join(repoRoot, "test/mongodb/mongodb_e2e_local.go"),
+		nil,
+		parser.ImportsOnly,
+	)
+	require.NoError(t, err)
+	for _, imported := range file.Imports {
+		path, err := strconv.Unquote(imported.Path.Value)
+		require.NoError(t, err)
+		require.Falsef(t, strings.HasPrefix(path, "github.com/matrixorigin/matrixone/"),
+			"standalone E2E runner must not import kernel package %s", path)
+	}
+}
 
 func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	repoRoot := mongoDBTestRepoRoot(t)
@@ -40,7 +60,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	require.NoError(t, err)
 	db, mock := newMongoDBE2ESQLMock(t)
 
-	for range 4 {
+	for range 6 {
 		mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 	mock.ExpectQuery("show create table").WillReturnRows(sqlmock.NewRows([]string{"table", "ddl"}).AddRow(
@@ -54,6 +74,8 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectQuery("select mongo_id").WillReturnRows(fixtureRows)
 	expectMongoDBE2EScalar(mock, "3")
 	expectMongoDBE2EScalar(mock, "3")
+	expectMongoDBE2EScalar(mock, "1")
+	mock.ExpectQuery("select payload_1").WillReturnError(errors.New("MongoDB decoded batch byte limit exceeded"))
 	// A pre-canceled context is rejected by database/sql before it reaches the
 	// driver, so no sqlmock expectation is consumed here.
 	expectMongoDBE2EScalar(mock, "5")
@@ -92,6 +114,8 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"secret-backed-ddl",
 		"show-create-redaction-roundtrip",
 		"scan-projection-pushdown-null-conversion",
+		"low-precision-temporal-residual",
+		"decoded-vector-budget-enforced",
 		"multi-batch-cancel-recovery",
 		"mongoscan-timewin-gapfill",
 		"atomic-aggregate-watermark",

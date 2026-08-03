@@ -1106,16 +1106,17 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			state = pb.TimeoutState
 		}
 		n := pb.TNStore{
-			UUID:                 uuid,
-			Tick:                 info.Tick,
-			State:                state,
-			ServiceAddress:       info.ServiceAddress,
-			Shards:               info.Shards,
-			LogtailServerAddress: info.LogtailServerAddress,
-			LockServiceAddress:   info.LockServiceAddress,
-			ShardServiceAddress:  info.ShardServiceAddress,
-			ConfigData:           info.ConfigData,
-			QueryAddress:         info.QueryAddress,
+			UUID:                        uuid,
+			Tick:                        info.Tick,
+			State:                       state,
+			ServiceAddress:              info.ServiceAddress,
+			Shards:                      info.Shards,
+			LogtailServerAddress:        info.LogtailServerAddress,
+			LockServiceAddress:          info.LockServiceAddress,
+			ShardServiceAddress:         info.ShardServiceAddress,
+			ConfigData:                  info.ConfigData,
+			QueryAddress:                info.QueryAddress,
+			AutoIncrEpochFenceSupported: info.AutoIncrEpochFenceSupported,
 		}
 		cd.TNStores = append(cd.TNStores, n)
 	}

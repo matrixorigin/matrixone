@@ -784,6 +784,24 @@ func TestSerializedExactRuntimeFilterPairContract(t *testing.T) {
 }
 
 func TestFinalizeFuzzyRuntimeFilterKeepsDecisionAtomic(t *testing.T) {
+	protocolProbe := newRuntimeFilterSingleTestBuilder(true)
+	rt := moruntime.ServiceRuntime(
+		protocolProbe.compCtx.GetProcess().GetService())
+	original, hadOriginal := rt.GetGlobalVariables(
+		moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(
+		moruntime.MOProtocolVersion, defines.MORPCVersion8)
+	t.Cleanup(func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(
+				moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(
+				moruntime.MOProtocolVersion,
+				defines.MORPCLatestVersion)
+		}
+	})
+
 	newBuilder := func(tableCost, sinkCost float64) (*QueryBuilder, *planpb.Node, *planpb.Node, *planpb.Node) {
 		builder := newRuntimeFilterSingleTestBuilder(true)
 		tableScan := builder.qry.Nodes[0]

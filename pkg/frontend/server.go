@@ -112,7 +112,11 @@ func (mo *MOServer) GetRoutineManager() *RoutineManager {
 }
 
 func (mo *MOServer) Start() error {
-	logutil.Infof("Server Listening on : %s ", mo.addr)
+	address := mo.addr
+	if len(mo.listeners) > 0 && mo.listeners[0] != nil {
+		address = mo.listeners[0].Addr().String()
+	}
+	logutil.Infof("Server Listening on : %s ", address)
 	mo.running = true
 	mo.startTempTableGC(24 * time.Hour)
 	mo.startConnectionLivenessMonitor()

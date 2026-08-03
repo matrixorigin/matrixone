@@ -17,15 +17,49 @@ package plan
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/stretchr/testify/require"
 )
 
 func TestMongoDBTableSurfaceFailsClosedWithoutRuntimeConfig(t *testing.T) {
 	require.Error(t, ensureMongoDBTableSurfaceEnabled(context.Background()))
+}
+
+func TestMongoDBTableDefinitionRequiresTypedDiscriminator(t *testing.T) {
+	mapping := sqlmongodb.TableMapping{
+		Connection: "source", Database: "db", Collection: "events",
+		Columns: []sqlmongodb.ColumnMapping{{
+			Name: "value", Path: "value", TypeID: int32(types.T_int64), Conversion: sqlmongodb.ConversionStrict,
+		}},
+	}
+	tableDef := &pb.TableDef{
+		TableType: catalog.SystemExternalRel,
+		Createsql: sqlmongodb.BuildCreateSQLEnvelope(mapping),
+	}
+	found, err := IsMongoDBTableDef(t.Context(), tableDef)
+	require.NoError(t, err)
+	require.False(t, found, "a v2 text marker alone is not trusted catalog metadata")
+
+	tableDef.FeatureFlag = features.MongoDBExternal
+	found, err = IsMongoDBTableDef(t.Context(), tableDef)
+	require.NoError(t, err)
+	require.True(t, found)
+
+	// Existing v1 tables predate FeatureFlag and remain readable, while their
+	// envelope is still required to occupy the complete leading catalog value.
+	tableDef.FeatureFlag = 0
+	tableDef.Createsql = strings.Replace(tableDef.Createsql, "version=2; kind=mongodb_table;", "version=1;", 1)
+	found, err = IsMongoDBTableDef(t.Context(), tableDef)
+	require.NoError(t, err)
+	require.True(t, found)
 }
 
 func TestMongoScanDeepCopyAndCredentialFreeProto(t *testing.T) {

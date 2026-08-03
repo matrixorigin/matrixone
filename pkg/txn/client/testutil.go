@@ -92,7 +92,7 @@ func (ts *testTxnSender) Send(ctx context.Context, requests []txn.TxnRequest) (*
 			resp.CNOpResponse = &txn.CNOpResponse{Payload: req.CNRequest.Payload}
 		case txn.TxnMethod_Rollback:
 			resp.Txn.Status = txn.TxnStatus_Aborted
-		case txn.TxnMethod_Commit:
+		case txn.TxnMethod_Commit, txn.TxnMethod_CommitAutoIncrEpochFence:
 			resp.Txn.CommitTS = resp.Txn.SnapshotTS.Next()
 			resp.Txn.Status = txn.TxnStatus_Committed
 		}
