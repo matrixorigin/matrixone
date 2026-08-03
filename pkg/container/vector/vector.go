@@ -1172,10 +1172,10 @@ func decodeVectorBinaryLayout(
 }
 
 func (v *Vector) unmarshalBinary(data []byte, validateValues bool) error {
-	v.areaDisjoint = false
 	if v == nil {
 		return io.ErrClosedPipe
 	}
+	v.areaDisjoint = false
 	if v.allocationAccount != nil {
 		return allocationAccountInvalid(
 			"cannot install aliases in an accounted vector",
@@ -1330,10 +1330,10 @@ func canonicalVectorTypeSize(typ types.Type) (int, error) {
 }
 
 func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
-	v.areaDisjoint = false
 	if v == nil || mp == nil {
 		return io.ErrClosedPipe
 	}
+	v.areaDisjoint = false
 	if v.hasBackingStorage() {
 		return allocationAccountInvalid(
 			"cannot replace vector storage without Free",
@@ -1393,10 +1393,10 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 }
 
 func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
-	v.areaDisjoint = false
 	if v == nil || r == nil {
 		return io.ErrClosedPipe
 	}
+	v.areaDisjoint = false
 	v.ResetWithSameType()
 	var err error
 
