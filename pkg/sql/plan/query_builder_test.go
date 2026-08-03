@@ -28,7 +28,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -171,7 +173,8 @@ func TestMongoDBExternalScanPruningKeepsResidualColumnsAndPlansPushdown(t *testi
 	}
 	mock.ctxt.tables["events_external"] = &plan.TableDef{
 		Name: "events_external", TableType: catalog.SystemExternalRel,
-		Createsql: sqlmongodb.BuildCreateSQLEnvelope(mapping),
+		FeatureFlag: features.MongoDBExternal,
+		Createsql:   sqlmongodb.BuildCreateSQLEnvelope(mapping),
 		Cols: []*plan.ColDef{
 			{Name: "device_id", Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
 			{Name: "ts", Typ: plan.Type{Id: int32(types.T_datetime), Scale: 3}},
@@ -195,6 +198,47 @@ func TestMongoDBExternalScanPruningKeepsResidualColumnsAndPlansPushdown(t *testi
 	require.NotNil(t, scanNode.ExternScan.MongodbScan.PushedPredicate)
 	require.Equal(t, plan.MongoPredicateOp_MONGO_PREDICATE_AND, scanNode.ExternScan.MongodbScan.PushedPredicate.Op)
 	require.Equal(t, "mo-residual:ff", scanNode.ExternScan.MongodbScan.ResidualFilterDigest)
+}
+
+func TestMongoDBExternalScanRejectsInvalidCatalogState(t *testing.T) {
+	newMock := func(createSQL string) *MockOptimizer {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.dbs["telemetry_source"] = true
+		mock.ctxt.objects["events_external"] = &plan.ObjectRef{
+			DbName: "telemetry_source", ObjName: "events_external", Obj: 42,
+		}
+		mock.ctxt.tables["events_external"] = &plan.TableDef{
+			Name: "events_external", TableType: catalog.SystemExternalRel,
+			FeatureFlag: features.MongoDBExternal,
+			Createsql:   createSQL,
+			Cols: []*plan.ColDef{{
+				Name: "value", Typ: plan.Type{Id: int32(types.T_int64)},
+			}},
+		}
+		return mock
+	}
+	mapping := sqlmongodb.TableMapping{
+		Connection: "telemetry_source", Database: "telemetry", Collection: "events",
+		SchemaMode: sqlmongodb.SchemaExplicit, Conversion: sqlmongodb.ConversionStrict,
+		Columns: []sqlmongodb.ColumnMapping{{
+			Name: "value", Path: "value", TypeID: int32(types.T_int64), Conversion: sqlmongodb.ConversionStrict,
+		}},
+	}
+
+	t.Run("malformed envelope", func(t *testing.T) {
+		mock := newMock("/* MO_MONGODB: version=2")
+		_, err := runOneStmt(mock, t, "select value from telemetry_source.events_external")
+		require.ErrorContains(t, err, "envelope is not closed")
+	})
+
+	t.Run("prepared scan", func(t *testing.T) {
+		mock := newMock(sqlmongodb.BuildCreateSQLEnvelope(mapping))
+		stmts, err := parsers.Parse(mock.ctxt.GetContext(), dialect.MYSQL,
+			"select value from telemetry_source.events_external", 1)
+		require.NoError(t, err)
+		_, err = BuildPlan(&mock.ctxt, stmts[0], true)
+		require.ErrorContains(t, err, "prepared MongoDB external scans")
+	})
 }
 
 func TestCanPruneSampleExprs(t *testing.T) {
@@ -3248,7 +3292,7 @@ func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a, lag(a) over (order by a) as prev_a from select_test.bind_select group by a having prev_a > 0", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
-	nodeID, selectList, _, notCacheable, _, havingBinder, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, true)
+	nodeID, selectList, _, notCacheable, _, havingBinder, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, lockpb.LockMode_Exclusive, true)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(boundHavingList))
 	require.Len(t, bindCtx.windows, 1)
@@ -3301,7 +3345,7 @@ func TestSplitWindowDependentHavingFilters_WithSubqueryChild(t *testing.T) {
 	require.NoError(t, err)
 
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
-	_, _, _, _, _, _, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, true)
+	_, _, _, _, _, _, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, lockpb.LockMode_Exclusive, true)
 	require.NoError(t, err)
 	require.Len(t, boundHavingList, 1)
 	require.IsType(t, &plan.Expr_Sub{}, boundHavingList[0].Expr)
@@ -3319,7 +3363,7 @@ func TestQueryBuilder_appendProjectionNode(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
-	nodeID, selectList, _, notCacheable, _, _, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, true)
+	nodeID, selectList, _, notCacheable, _, _, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, lockpb.LockMode_Exclusive, true)
 
 	havingBinder := NewHavingBinder(builder, bindCtx)
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
@@ -3386,7 +3430,7 @@ func TestQueryBuilder_appendResultProjectionNode(t *testing.T) {
 	orderList := stmts[0].(*tree.Select).OrderBy
 
 	// bind select clause
-	nodeID, selectList, _, notCacheable, _, havingBinder, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, true)
+	nodeID, selectList, _, notCacheable, _, havingBinder, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, lockpb.LockMode_Exclusive, true)
 	// bind projection
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 	resultLen, notCacheable, _ := builder.bindProjection(bindCtx, projectionBinder, selectList, notCacheable)

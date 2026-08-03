@@ -345,4 +345,29 @@ select id, val from test_enum_order order by val desc;
 select val, cume_dist() over (order by val) as cd from test_enum_order order by val;
 select val, percent_rank() over (order by val) as pr from test_enum_order order by val;
 select val, rank() over (order by val) as rnk from test_enum_order order by val;
+
+-- ENUM definition-order provenance must survive query boundaries.
+with c as (select id, val from test_enum_order) select id, val from c order by val;
+select id, val from (select id, val from test_enum_order) d order by val desc;
+select id, val from (select id, val from (select id, val from test_enum_order) d1) d2 order by val;
+select id, val from test_enum_order where id <= 2
+union all
+select id, val from test_enum_order where id > 2
+order by val;
+with c as (select id, val from test_enum_order)
+select id, val, row_number() over (order by val desc) as rn from c order by rn;
+
+-- GROUP BY materializes the visible value; definition-order provenance must
+-- still drive same-block, boundary, and window ordering.
+select val from test_enum_order group by val order by val;
+select val from (select val from test_enum_order group by val) d order by val;
+select val, row_number() over (order by val) as rn
+from test_enum_order group by val order by rn;
+select group_concat(val order by val separator '|') as ordered_values
+from (select val from test_enum_order) d;
+
+-- An explicit character cast intentionally requests lexical order.
+select id, cast(val as char) as lexical_val
+from (select id, val from test_enum_order) d
+order by lexical_val, id;
 drop table test_enum_order;

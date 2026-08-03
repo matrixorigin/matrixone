@@ -221,8 +221,15 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 			break
 		}
 		decodeStarted := time.Now()
-		if err = scan.ctr.converter.AppendDocument(proc.Ctx, bat, raw, proc.Mp()); err != nil {
+		if err = scan.ctr.converter.AppendDocumentWithBudget(proc.Ctx, bat, raw, proc.Mp(), maxBatchBytes); err != nil {
 			metric.MongoDBPhaseDurationHistogram.WithLabelValues("decode_append").Observe(time.Since(decodeStarted).Seconds())
+			if mongodb.IsDecodedBatchBudgetExceeded(err) && bat.RowCount() > 0 {
+				// The current document did not fit the decoded/vector budget. Keep
+				// it for the next Call just like a raw-byte boundary; the converter
+				// rolled every vector back to the last committed row.
+				scan.ctr.pendingRaw = append(scan.ctr.pendingRaw[:0], raw...)
+				break
+			}
 			bat.Clean(proc.Mp())
 			scan.ctr.done = true
 			scan.closeResources(proc.Ctx)

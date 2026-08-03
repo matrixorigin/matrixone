@@ -160,7 +160,7 @@ func TestRuntimeFilterContract(t *testing.T) {
 		spec := newRuntimeFilterSpec(101, probeType, payloadType)
 		arg, proc := newRuntimeFilterTest(t, spec, payloadType)
 
-		require.NoError(t, arg.Prepare(proc))
+		prepareFuzzyFilter(t, arg, proc)
 		require.False(t, arg.ctr.runtimeFilterUsable)
 		require.Nil(t, arg.ctr.pass2RuntimeFilter)
 
@@ -187,7 +187,7 @@ func TestRuntimeFilterContract(t *testing.T) {
 		spec := newRuntimeFilterSpec(102, typ, typ)
 		arg, proc := newRuntimeFilterTest(t, spec, typ)
 
-		require.NoError(t, arg.Prepare(proc))
+		prepareFuzzyFilter(t, arg, proc)
 		require.True(t, arg.ctr.runtimeFilterUsable)
 		require.NotNil(t, arg.ctr.pass2RuntimeFilter)
 		require.Zero(t, arg.ctr.pass2RuntimeFilter.Length())
@@ -206,7 +206,7 @@ func TestRuntimeFilterContract(t *testing.T) {
 		spec := newRuntimeFilterSpec(103, typ, typ)
 		arg, proc := newRuntimeFilterTest(t, spec, typ)
 
-		require.NoError(t, arg.Prepare(proc))
+		prepareFuzzyFilter(t, arg, proc)
 		require.True(t, arg.ctr.runtimeFilterUsable)
 		payload := testutil.MakeInt64Vector([]int64{7}, nil, proc.Mp())
 		require.NoError(t, arg.appendPassToRuntimeFilter(payload, proc))
@@ -225,7 +225,7 @@ func TestRuntimeFilterContract(t *testing.T) {
 		spec := newRuntimeFilterSpec(104, typ, typ)
 		arg, proc := newRuntimeFilterTest(t, spec, typ)
 
-		require.NoError(t, arg.Prepare(proc))
+		prepareFuzzyFilter(t, arg, proc)
 		payload := testutil.MakeInt32Vector([]int32{7, 3}, nil, proc.Mp())
 		require.NoError(t, arg.appendPassToRuntimeFilter(payload, proc))
 
@@ -275,7 +275,7 @@ func TestFuzzyRuntimeFilterCopyFailureFailsOpen(t *testing.T) {
 	arg := newArgument(typ)
 	arg.N = 1
 	arg.RuntimeFilterSpec = spec
-	require.NoError(t, arg.Prepare(proc))
+	prepareFuzzyFilter(t, arg, proc)
 
 	sourceMP := mpool.MustNewZero()
 	payload := vector.NewVec(typ)
@@ -338,7 +338,7 @@ func TestFuzzyRuntimeFilterClosureFailureFailsOpen(t *testing.T) {
 	arg := newArgument(typ)
 	arg.N = 1
 	arg.RuntimeFilterSpec = spec
-	require.NoError(t, arg.Prepare(proc))
+	prepareFuzzyFilter(t, arg, proc)
 	require.NoError(t, vector.AppendFixed(
 		arg.ctr.pass2RuntimeFilter, float64(0), false, limited))
 	for arg.ctr.pass2RuntimeFilter.Length() <
@@ -381,17 +381,26 @@ func TestFuzzyRuntimeFilterBudgetErrorPolicy(t *testing.T) {
 			typ := types.T_int32.ToType()
 			spec := newRuntimeFilterSpec(109, typ, typ)
 			arg, proc := newRuntimeFilterTest(t, spec, typ)
-			require.NoError(t, arg.Prepare(proc))
+			budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+			require.NoError(t, err)
+			account, err := registry.OpenWithController(
+				2*generation.Cap(), generation)
+			require.NoError(t, err)
+			require.NoError(t, arg.SetAllocationAccount(account))
+			prepareFuzzyFilter(t, arg, proc)
 			require.NoError(t, vector.AppendFixed(
 				arg.ctr.pass2RuntimeFilter, int32(1), false, proc.Mp()))
 
-			generation, err := proc.GetHashBuildBudget()
-			require.NoError(t, err)
-			var held *process.HashBuildReservation
+			var filler []byte
 			if test.closed {
 				generation.Close()
 			} else {
-				held, err = generation.Reserve(generation.Cap())
+				remaining := generation.Cap() - generation.Used()
+				filler, err = proc.Mp().AllocAccounted(
+					int(remaining), account, 63, 255)
 				require.NoError(t, err)
 			}
 
@@ -410,7 +419,8 @@ func TestFuzzyRuntimeFilterBudgetErrorPolicy(t *testing.T) {
 				require.True(t, arg.ctr.runtimeFilterDone)
 				require.Equal(t, int64(1),
 					stats["FuzzyFilterRuntimeFilterBudgetFallbacks"])
-				require.True(t, held.Release())
+				proc.Mp().Free(filler)
+				generation.Close()
 			}
 			require.False(t, arg.ctr.runtimeFilterUsable)
 			require.Nil(t, arg.ctr.pass2RuntimeFilter)
@@ -447,7 +457,7 @@ func TestFuzzyCallErrorUnblocksRuntimeFilterBeforeReset(t *testing.T) {
 
 	require.NoError(t, buildChild.Prepare(proc))
 	require.NoError(t, probeChild.Prepare(proc))
-	require.NoError(t, arg.Prepare(proc))
+	prepareFuzzyFilter(t, arg, proc)
 	_, err := vm.Exec(arg, proc)
 	require.ErrorIs(t, err, buildErr)
 
@@ -473,7 +483,7 @@ func TestFuzzyCallErrorUnblocksRuntimeFilterBeforeReset(t *testing.T) {
 	require.True(t, arg.ctr.runtimeFilterDone)
 
 	proc.GetMessageBoard().Reset()
-	require.NoError(t, arg.Prepare(proc))
+	prepareFuzzyFilter(t, arg, proc)
 	require.False(t, arg.ctr.runtimeFilterDone,
 		"Prepare must open the terminal gate for the next generation")
 	arg.finalizeBuildFailure(proc)
@@ -579,6 +589,22 @@ func newRuntimeFilterTest(
 	arg.N = 1
 	arg.RuntimeFilterSpec = spec
 	return arg, proc
+}
+
+func prepareFuzzyFilter(
+	t *testing.T,
+	arg *FuzzyFilter,
+	proc *process.Process,
+) {
+	t.Helper()
+	if arg.allocationAccount == nil {
+		registry, err := mpool.NewAllocationAccountRegistry(1, 4_096)
+		require.NoError(t, err)
+		account, err := registry.Open(1 << 60)
+		require.NoError(t, err)
+		require.NoError(t, arg.SetAllocationAccount(account))
+	}
+	require.NoError(t, arg.Prepare(proc))
 }
 
 func receiveRuntimeFilter(
