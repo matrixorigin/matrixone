@@ -7,8 +7,10 @@
 -- regression in the validators is caught:
 --   * op_type 'vector_l1_ops'      — not in the cuvs op-type allow-list
 --   * op_type 'vector_bogus_ops'   — unknown op_type
+--   * IVF-PQ without LISTS         — required structural option
 --   * vecf64 column                — cuvs has no float64; only VECF32 allowed
 --   * QUANTIZATION 'float64'       — cuvs quantization is f32/f16/int8/uint8 only
+--   * DISTRIBUTION_MODE 'bogus'    — not a supported placement mode
 --   * QUANTIZATION 'bf16'          — no GPU bfloat16 storage; must not silent-fallback to f32
 --   * int8/uint8 + ip/cosine       — affine quantizer breaks dot-product/angle (L2-only) at CREATE
 --   * REINDEX QUANTIZATION          — the (quantization, op_type) pair is gated via the per-algo
@@ -39,6 +41,10 @@ create index ix using ivfpq on t (v) op_type 'vector_l1_ops' lists=2 m=8 bits_pe
 
 -- Unknown op_type.
 create index ix using cagra on t (v) op_type 'vector_bogus_ops';
+create index ix using ivfpq on t (v) op_type 'vector_bogus_ops' lists=2 m=8 bits_per_code=8;
+
+-- IVF-PQ requires LISTS.
+create index ix using ivfpq on t (v) op_type 'vector_l2_ops' m=8 bits_per_code=8;
 
 -- cuvs has no float64 — a vecf64 column cannot host a CAGRA / IVF-PQ index.
 create index ixf using cagra on tf (v) op_type 'vector_l2_ops';
@@ -46,6 +52,11 @@ create index ixf using ivfpq on tf (v) op_type 'vector_l2_ops' lists=2 m=8 bits_
 
 -- Unsupported QUANTIZATION value.
 create index ixq using cagra on t (v) op_type 'vector_l2_ops' QUANTIZATION 'float64';
+create index ixq using ivfpq on t (v) op_type 'vector_l2_ops' lists=2 m=8 bits_per_code=8 QUANTIZATION 'float64';
+
+-- Unsupported distribution mode.
+create index ixd using cagra on t (v) op_type 'vector_l2_ops' DISTRIBUTION_MODE 'bogus';
+create index ixd using ivfpq on t (v) op_type 'vector_l2_ops' lists=2 m=8 bits_per_code=8 DISTRIBUTION_MODE 'bogus';
 
 -- QUANTIZATION 'bf16' has no GPU bfloat16 storage (cuvs has no bfloat16 index or
 -- quantizer). It passes the downcast width guard (bf16 is 2 bytes <= f32's 4),

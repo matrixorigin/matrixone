@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -109,6 +110,7 @@ func TestIvfpqParamsFromTree_RequiresLists(t *testing.T) {
 	idx := &tree.Index{IndexOption: &tree.IndexOption{}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	require.Contains(t, err.Error(), "lists must be > 0")
 }
 
@@ -143,6 +145,7 @@ func TestIvfpqParamsFromTree_InvalidOpType(t *testing.T) {
 	}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	require.Contains(t, err.Error(), "invalid op_type")
 }
 
@@ -153,7 +156,8 @@ func TestIvfpqParamsFromTree_InvalidQuantization(t *testing.T) {
 	}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "quantization is invalid")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+	require.Contains(t, err.Error(), "ivfpq quantization")
 }
 
 func TestIvfpqParamsFromTree_InvalidDistributionMode(t *testing.T) {
@@ -163,6 +167,7 @@ func TestIvfpqParamsFromTree_InvalidDistributionMode(t *testing.T) {
 	}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 	require.Contains(t, err.Error(), "distribution_mode is invalid")
 }
 

@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -167,6 +168,7 @@ func TestIvfflatParamsFromTree_NegativeList(t *testing.T) {
 	idx := &tree.Index{IndexOption: &tree.IndexOption{AlgoParamList: -1}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 	require.Contains(t, err.Error(), "list")
 }
 
@@ -174,6 +176,7 @@ func TestIvfflatParamsFromTree_InvalidOpType(t *testing.T) {
 	idx := &tree.Index{IndexOption: &tree.IndexOption{AlgoParamVectorOpType: "not_real"}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	require.Contains(t, err.Error(), "invalid op_type")
 }
 
@@ -197,7 +200,8 @@ func TestIvfflatParamsFromTree_InvalidQuantization(t *testing.T) {
 		idx := &tree.Index{IndexOption: &tree.IndexOption{Quantization: q}}
 		_, err := CatalogHooks{}.ParamsFromTree(idx)
 		require.Errorf(t, err, "quantization %q should be rejected", q)
-		require.Contains(t, err.Error(), "unsupported quantization")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		require.Contains(t, err.Error(), "ivfflat quantization")
 	}
 }
 
