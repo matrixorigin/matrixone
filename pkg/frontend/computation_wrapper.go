@@ -863,8 +863,13 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 		cwft.proc.SetPrepareParams(prepareStmt.params)
-		cwft.paramVals, err = preparedParamValues(cwft.proc)
+		cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes)
 		if err != nil {
+			return nil, nil, nil, originSQL, false, err
+		}
+		if err = plan2.ValidatePreparedPaginationParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
+			cwft.proc.SetPrepareParams(nil)
+			cwft.paramVals = nil
 			return nil, nil, nil, originSQL, false, err
 		}
 	} else if execPlan != nil && len(execPlan.Args) > 0 {
@@ -873,6 +878,10 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		params, paramVals, paramIsBin, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
 		if err != nil {
+			return nil, nil, nil, originSQL, false, err
+		}
+		if err = plan2.ValidatePreparedPaginationParams(reqCtx, preparePlan.Plan, paramVals); err != nil {
+			params.Free(cwft.proc.Mp())
 			return nil, nil, nil, originSQL, false, err
 		}
 		cwft.proc.SetOwnedPrepareParamsWithIsBin(params, paramIsBin)
@@ -1015,7 +1024,7 @@ func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
 	}
 }
 
-func preparedParamValues(proc *process.Process) ([]any, error) {
+func preparedParamValues(proc *process.Process, mysqlTypes []byte) ([]any, error) {
 	params := proc.GetPrepareParams()
 	if params == nil || params.Length() == 0 {
 		return nil, nil
@@ -1029,9 +1038,42 @@ func preparedParamValues(proc *process.Process) ([]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		values[i] = plan2.ParamValue{Value: string(raw), IsBin: proc.GetPrepareParamIsBin(i)}
+		values[i] = plan2.ParamValue{
+			Value:       string(raw),
+			IsBin:       proc.GetPrepareParamIsBin(i),
+			RuntimeType: preparedBinaryParamRuntimeType(mysqlTypes, i),
+		}
 	}
 	return values, nil
+}
+
+func preparedBinaryParamRuntimeType(mysqlTypes []byte, paramPos int) types.T {
+	typePos := paramPos << 1
+	if typePos < 0 || typePos >= len(mysqlTypes) {
+		return types.T_any
+	}
+	switch defines.MysqlType(mysqlTypes[typePos]) {
+	case defines.MYSQL_TYPE_BIT:
+		return types.T_bit
+	case defines.MYSQL_TYPE_TINY:
+		return types.T_int8
+	case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_YEAR:
+		return types.T_int16
+	case defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG:
+		return types.T_int32
+	case defines.MYSQL_TYPE_LONGLONG:
+		return types.T_int64
+	case defines.MYSQL_TYPE_FLOAT:
+		return types.T_float32
+	case defines.MYSQL_TYPE_DOUBLE:
+		return types.T_float64
+	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+		return types.T_decimal128
+	case defines.MYSQL_TYPE_NULL:
+		return types.T_any
+	default:
+		return types.T_varchar
+	}
 }
 
 func buildExecuteUserParams(

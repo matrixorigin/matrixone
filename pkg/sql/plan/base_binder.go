@@ -64,7 +64,15 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 
 	switch exprImpl := astExpr.(type) {
 	case *tree.NumVal:
-		expr, err = b.bindNumVal(exprImpl, b.defaultValueBindType())
+		bindType := b.defaultValueBindType()
+		if b.numericParamType != nil && types.T(b.numericParamType.Id) == types.T_decimal256 {
+			bindType = *b.numericParamType
+		}
+		expr, err = b.bindNumVal(exprImpl, bindType)
+		if err == nil && b.numericParamType != nil && types.T(b.numericParamType.Id) == types.T_decimal256 &&
+			(exprImpl.ValType == tree.P_int64 || exprImpl.ValType == tree.P_uint64) {
+			expr, err = appendCastBeforeExpr(b.GetContext(), expr, *b.numericParamType)
+		}
 	case *tree.TimeUnitExpr:
 		numVal := tree.NewNumVal(exprImpl.Unit, exprImpl.Unit, false, tree.P_char)
 		expr, err = b.bindNumVal(numVal, b.defaultValueBindType())
@@ -906,15 +914,17 @@ func (b *baseBinder) bindNumericExprWithCurrentContext(astExpr tree.Expr, depth 
 }
 
 type numericAstTypeScan struct {
-	strong       []Type
-	weakDecimals []Type
-	hasParam     bool
-	hasUnknown   bool
-	incompatible bool
+	strong          []Type
+	literalIntegers []Type
+	weakDecimals    []Type
+	hasParam        bool
+	hasUnknown      bool
+	incompatible    bool
 }
 
 func (s numericAstTypeScan) merge(other numericAstTypeScan) numericAstTypeScan {
 	s.strong = append(s.strong, other.strong...)
+	s.literalIntegers = append(s.literalIntegers, other.literalIntegers...)
 	s.weakDecimals = append(s.weakDecimals, other.weakDecimals...)
 	s.hasParam = s.hasParam || other.hasParam
 	s.hasUnknown = s.hasUnknown || other.hasUnknown
@@ -1021,6 +1031,9 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 		if types.T(bound.Typ.Id).IsDecimal() {
 			return numericAstTypeScan{weakDecimals: []Type{bound.Typ}}, nil
 		}
+		if types.T(bound.Typ.Id).IsInteger() {
+			return numericAstTypeScan{literalIntegers: []Type{bound.Typ}}, nil
+		}
 		return numericAstTypedOperand(bound.Typ), nil
 	case *tree.FuncExpr:
 		name := numericAstFunctionName(expr)
@@ -1034,6 +1047,12 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 				}
 				scan = scan.merge(value)
 			}
+			// Integer literals remain a strong part of a function's overload
+			// contract. Only plain arithmetic directly combining a parameter
+			// marker with an uncast integer literal gets the dynamic DECIMAL
+			// fallback below.
+			scan.strong = append(scan.strong, scan.literalIntegers...)
+			scan.literalIntegers = nil
 			return scan, nil
 		}
 		typ, known, err := b.numericAstStaticType(expr, depth, resolveColumn)
@@ -1199,7 +1218,7 @@ func (b *baseBinder) numericAstStaticType(
 }
 
 func numericTypeFromAstScan(scan numericAstTypeScan, outer *Type) (Type, bool) {
-	typesKnown := make([]types.Type, 0, len(scan.strong)+len(scan.weakDecimals))
+	typesKnown := make([]types.Type, 0, len(scan.strong)+len(scan.literalIntegers)+len(scan.weakDecimals))
 	for i := range scan.strong {
 		typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.strong[i]))
 	}
@@ -1207,6 +1226,18 @@ func numericTypeFromAstScan(scan numericAstTypeScan, outer *Type) (Type, bool) {
 	if outer != nil {
 		typ := makeTypeByPlan2Type(*outer)
 		outerType = &typ
+	}
+	if len(scan.strong) == 0 && len(scan.weakDecimals) == 0 &&
+		len(scan.literalIntegers) > 0 && outerType == nil {
+		// MySQL resolves a parameter marker next to an uncast integer literal
+		// from the value supplied by each EXECUTE. MatrixOne plans one static
+		// computation type, so use MySQL's maximum DECIMAL parameter domain to
+		// preserve both integral precision and later fractional executions.
+		typ := types.New(types.T_decimal256, 65, 30)
+		return makePlan2Type(&typ), true
+	}
+	for i := range scan.literalIntegers {
+		typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.literalIntegers[i]))
 	}
 	if len(scan.weakDecimals) > 0 && shouldActivateWeakDecimal(typesKnown, outerType) {
 		for i := range scan.weakDecimals {

@@ -23,6 +23,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -226,6 +227,78 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.False(t, cw.proc.GetPrepareParamIsBin(0), "binary metadata must not leak into the next execution")
 	cw.proc.GetPrepareParams().Free(cw.proc.Mp())
 	cw.proc.SetPrepareParams(nil)
+}
+
+func TestPreparedPaginationUsesRuntimeParamType(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 109, "select 1 limit ?")
+	defer prepareStmt.Close()
+
+	execPlan := &plan.Execute{
+		Name: prepareStmt.Name,
+		Args: []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "limit_param"}}}},
+	}
+	execute := func(value any) error {
+		require.NoError(t, ses.SetUserDefinedVar("limit_param", value, ""))
+		_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+		return err
+	}
+
+	err := execute("3")
+	require.ErrorContains(t, err, "Incorrect arguments to EXECUTE")
+	moErr, ok := err.(*moerr.Error)
+	require.True(t, ok)
+	require.Equal(t, moerr.ER_WRONG_ARGUMENTS, moErr.MySQLCode())
+	require.NoError(t, execute(int64(2)), "a rejected execution must not poison the prepared plan")
+}
+
+func TestPreparedBinaryParamRuntimeType(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  defines.MysqlType
+		want types.T
+	}{
+		{name: "bit", typ: defines.MYSQL_TYPE_BIT, want: types.T_bit},
+		{name: "tiny integer", typ: defines.MYSQL_TYPE_TINY, want: types.T_int8},
+		{name: "short integer", typ: defines.MYSQL_TYPE_SHORT, want: types.T_int16},
+		{name: "year", typ: defines.MYSQL_TYPE_YEAR, want: types.T_int16},
+		{name: "medium integer", typ: defines.MYSQL_TYPE_INT24, want: types.T_int32},
+		{name: "long integer", typ: defines.MYSQL_TYPE_LONG, want: types.T_int32},
+		{name: "signed integer", typ: defines.MYSQL_TYPE_LONGLONG, want: types.T_int64},
+		{name: "float", typ: defines.MYSQL_TYPE_FLOAT, want: types.T_float32},
+		{name: "double", typ: defines.MYSQL_TYPE_DOUBLE, want: types.T_float64},
+		{name: "legacy decimal", typ: defines.MYSQL_TYPE_DECIMAL, want: types.T_decimal128},
+		{name: "decimal", typ: defines.MYSQL_TYPE_NEWDECIMAL, want: types.T_decimal128},
+		{name: "string", typ: defines.MYSQL_TYPE_VAR_STRING, want: types.T_varchar},
+		{name: "null", typ: defines.MYSQL_TYPE_NULL, want: types.T_any},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, preparedBinaryParamRuntimeType([]byte{byte(test.typ), 0}, 0))
+		})
+	}
+	require.Equal(t, types.T_any, preparedBinaryParamRuntimeType(nil, 0))
+	require.Equal(t, types.T_any, preparedBinaryParamRuntimeType([]byte{byte(defines.MYSQL_TYPE_LONG)}, -1))
+	require.Equal(t, types.T_any, preparedBinaryParamRuntimeType([]byte{byte(defines.MYSQL_TYPE_LONG)}, 1))
+}
+
+func TestPreparedBinaryPaginationUsesProtocolParamType(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 110, "select 1 limit ?")
+	defer prepareStmt.Close()
+	defer cw.proc.SetPrepareParams(nil)
+
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("2"), false, cw.proc.Mp()))
+	prepareStmt.params = params
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
+
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.ErrorContains(t, err, "Incorrect arguments to EXECUTE")
+	require.Nil(t, cw.proc.GetPrepareParams(), "a rejected borrowed binary parameter must not remain on the process")
+
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0}
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, params, cw.proc.GetPrepareParams())
 }
 
 func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {

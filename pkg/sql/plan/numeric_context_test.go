@@ -568,7 +568,20 @@ func TestPreparedNumericLiteralStrength(t *testing.T) {
 	}{
 		{name: "decimal literal is weak", sql: "select 0.0 + ?", want: types.T_float64},
 		{name: "approximate literal is strong", sql: "select 0e0 + ?", want: types.T_float64},
-		{name: "integer literal is strong", sql: "select 0 + ?", want: types.T_int64},
+		{
+			name:      "integer literal preserves dynamic execute values",
+			sql:       "select 0 + ?",
+			want:      types.T_decimal256,
+			wantWidth: 65,
+			wantScale: 30,
+		},
+		{
+			name:      "parameter before integer literal preserves dynamic execute values",
+			sql:       "select ? + 1",
+			want:      types.T_decimal256,
+			wantWidth: 65,
+			wantScale: 30,
+		},
 		{name: "null literal remains unknown", sql: "select null + ?", want: types.T_float64},
 		{
 			name: "explicit decimal cast is strong",
@@ -643,6 +656,17 @@ func TestPreparedNumericLiteralStrength(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPrepareStatementKeepsDynamicNumericLiteralDomain(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select ? + 1")
+	paramTypes := collectPlanParamTypes(prepare.Plan)
+	require.Equal(t, []types.T{types.T_decimal256}, paramTypes)
+	require.Equal(t, []int32{int32(types.T_any)}, prepare.ParamTypes)
+	require.NotEmpty(t, prepare.Plan.GetQuery().Nodes)
+	root := prepare.Plan.GetQuery().Nodes[prepare.Plan.GetQuery().Steps[0]]
+	require.NotEmpty(t, root.ProjectList)
+	require.Equal(t, int32(types.T_decimal256), root.ProjectList[0].Typ.Id)
 }
 
 func numericTestBinding(table, col string, typ types.Type) *Binding {

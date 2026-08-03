@@ -3120,6 +3120,9 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 	case *plan.Plan_Tcl, *plan.Plan_Dcl:
 		return nil, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
 	}
+	if err := ValidatePreparedPaginationParams(ctx, preparePlan, paramVals); err != nil {
+		return nil, err
+	}
 
 	copied := DeepCopyPlan(preparePlan)
 	switch pp := copied.Plan.(type) {
@@ -3142,8 +3145,76 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 }
 
 type ParamValue struct {
-	Value any
-	IsBin bool
+	Value       any
+	IsBin       bool
+	RuntimeType types.T
+}
+
+// ValidatePreparedPaginationParams enforces the runtime type contract of
+// parameter markers used by LIMIT and OFFSET before their values are
+// stringified for expression execution.
+func ValidatePreparedPaginationParams(ctx context.Context, preparePlan *Plan, paramVals []any) error {
+	query := preparePlan.GetQuery()
+	if query == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	for _, node := range query.GetNodes() {
+		if node == nil {
+			continue
+		}
+		collectParamRefPositions(node.GetLimit(), positions)
+		collectParamRefPositions(node.GetOffset(), positions)
+	}
+	for pos := range positions {
+		if pos < 0 || int(pos) >= len(paramVals) {
+			continue
+		}
+		if !isIntegerPaginationParam(paramVals[pos]) {
+			return moerr.NewWrongArguments(ctx, "EXECUTE")
+		}
+	}
+	return nil
+}
+
+func collectParamRefPositions(expr *Expr, positions map[int32]struct{}) {
+	if expr == nil {
+		return
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_P:
+		positions[exprImpl.P.Pos] = struct{}{}
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			collectParamRefPositions(arg, positions)
+		}
+	case *plan.Expr_List:
+		for _, item := range exprImpl.List.List {
+			collectParamRefPositions(item, positions)
+		}
+	}
+}
+
+func isIntegerPaginationParam(value any) bool {
+	if param, ok := value.(ParamValue); ok {
+		if param.Value == nil {
+			return true
+		}
+		if param.RuntimeType != types.T_any {
+			return param.RuntimeType.IsInteger() || param.RuntimeType == types.T_bit
+		}
+		value = param.Value
+	}
+	if value == nil {
+		return true
+	}
+	switch value.(type) {
+	case int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64:
+		return true
+	default:
+		return false
+	}
 }
 
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
