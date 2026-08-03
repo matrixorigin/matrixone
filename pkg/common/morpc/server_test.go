@@ -737,6 +737,12 @@ func TestFinishStreamRacesWithSessionClose(t *testing.T) {
 }
 
 func TestServerTimeoutCacheWillRemoved(t *testing.T) {
+	type cacheObservation struct {
+		cache   MessageCache
+		session ClientSession
+	}
+
+	scanDone := make(chan struct{}, 1)
 	testRPCServer(t, func(rs *server) {
 		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 		defer cancel()
@@ -746,40 +752,135 @@ func TestServerTimeoutCacheWillRemoved(t *testing.T) {
 			assert.NoError(t, c.Close())
 		}()
 
-		cc := make(chan MessageCache, 1)
+		cacheCreated := make(chan cacheObservation, 1)
 		rs.RegisterRequestHandler(func(ctx context.Context, msg RPCMessage, seq uint64, cs ClientSession) error {
 			request := msg.Message
 			cache, err := cs.CreateCache(ctx, request.GetID())
 			if err != nil {
 				return err
 			}
-			cc <- cache
-			return cache.Add(request)
+			if err := cache.Add(request); err != nil {
+				return err
+			}
+			select {
+			case cacheCreated <- cacheObservation{
+				cache:   cache,
+				session: cs,
+			}:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		})
 
 		st, err := c.NewStream(context.Background(), testAddr, false)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		defer func() {
 			assert.NoError(t, st.Close(false))
 		}()
 
 		// Stream.Send requires request.GetID() == stream.ID(); stream id is assigned by backend at NewStream().
-		assert.NoError(t, st.Send(ctx, newTestMessage(st.ID())))
-		cache := <-cc
-		v, ok := rs.sessions.Load(uint64(1))
-		if ok {
-			cs := v.(*clientSession)
-			for {
-				cs.mu.RLock()
-				if len(cs.mu.caches) == 0 {
-					cs.mu.RUnlock()
-					_, err := cache.Len()
-					require.Error(t, err, "expired cache must be closed before removal")
-					return
+		require.NoError(t, st.Send(ctx, newTestMessage(st.ID())))
+		var observation cacheObservation
+		select {
+		case observation = <-cacheCreated:
+		case <-ctx.Done():
+			t.Fatal("server handler did not create the message cache")
+		}
+	waitForRetirement:
+		for {
+			select {
+			case <-scanDone:
+				cached, err := observation.session.GetCache(st.ID())
+				require.NoError(t, err)
+				if cached == nil {
+					break waitForRetirement
 				}
-				cs.mu.RUnlock()
+			case <-ctx.Done():
+				t.Fatal("message cache was not retired by timeout scans")
 			}
 		}
+		_, err = observation.cache.Len()
+		require.Error(t, err, "expired cache must be closed before removal")
+	}, WithServerMessageCacheScanHookForTesting(func() {
+		select {
+		case scanDone <- struct{}{}:
+		default:
+		}
+	}))
+}
+
+type cacheRetirementObserver struct {
+	session           *clientSession
+	cacheID           uint64
+	registeredAtClose chan bool
+}
+
+func (c *cacheRetirementObserver) Add(Message) error           { return nil }
+func (c *cacheRetirementObserver) Len() (int, error)           { return 0, nil }
+func (c *cacheRetirementObserver) Pop() (Message, bool, error) { return nil, false, nil }
+
+func (c *cacheRetirementObserver) Close() {
+	_, registered := c.session.mu.caches[c.cacheID]
+	c.registeredAtClose <- registered
+}
+
+func TestMessageCacheRetirementLinearizesBeforeRemoval(t *testing.T) {
+	newSessionWithCache := func(t *testing.T, ctx context.Context) (*clientSession, *cacheRetirementObserver) {
+		t.Helper()
+		cs := newClientSession(nil, newTestIOSession(nil, nil), nil, nil, nil)
+		t.Cleanup(func() { require.NoError(t, cs.Close()) })
+		cache := &cacheRetirementObserver{
+			session:           cs,
+			cacheID:           1,
+			registeredAtClose: make(chan bool, 1),
+		}
+		cs.mu.caches[1] = cacheWithContext{ctx: ctx, cache: cache}
+		return cs, cache
+	}
+	assertLinearized := func(t *testing.T, cache *cacheRetirementObserver) {
+		t.Helper()
+		select {
+		case registered := <-cache.registeredAtClose:
+			require.True(t, registered, "cache was removed before MessageCache.Close ran")
+		case <-time.After(time.Second):
+			t.Fatal("cache retirement did not close the cache")
+		}
+	}
+
+	t.Run("explicit delete", func(t *testing.T) {
+		cs, cache := newSessionWithCache(t, context.Background())
+		cs.DeleteCache(1)
+		assertLinearized(t, cache)
+		cached, err := cs.GetCache(1)
+		require.NoError(t, err)
+		require.Nil(t, cached)
+		require.NoError(t, cs.Close())
+	})
+
+	t.Run("session close", func(t *testing.T) {
+		cs, cache := newSessionWithCache(t, context.Background())
+		require.NoError(t, cs.Close())
+		assertLinearized(t, cache)
+	})
+
+	t.Run("request timeout", func(t *testing.T) {
+		ctx, expire := context.WithCancel(context.Background())
+		cs, cache := newSessionWithCache(t, ctx)
+		scanDone := make(chan struct{}, 1)
+		cs.messageCacheScanHook = func() { scanDone <- struct{}{} }
+		cs.startCheckCacheTimeout()
+		expire()
+		select {
+		case <-scanDone:
+		case <-time.After(2500 * time.Millisecond):
+			t.Fatal("message cache timeout scan did not complete")
+		}
+		assertLinearized(t, cache)
+		cached, err := cs.GetCache(1)
+		require.NoError(t, err)
+		require.Nil(t, cached)
+		require.NoError(t, cs.Close())
 	})
 }
 
@@ -796,6 +897,8 @@ func TestCancelableMessageCacheLifecycle(t *testing.T) {
 		require.NoError(t, cache.Add(newTestMessage(1)))
 		cs.DeleteCache(1)
 		require.Equal(t, int32(1), canceled.Load())
+		_, err = cache.Len()
+		require.Error(t, err)
 		require.NoError(t, cs.Close())
 		require.Equal(t, int32(1), canceled.Load())
 	})
@@ -803,7 +906,7 @@ func TestCancelableMessageCacheLifecycle(t *testing.T) {
 	t.Run("session close", func(t *testing.T) {
 		cs := newClientSession(nil, newTestIOSession(nil, nil), nil, nil, nil)
 		var canceled atomic.Int32
-		_, err := cs.CreateCacheWithCancel(
+		cache, err := cs.CreateCacheWithCancel(
 			context.Background(),
 			1,
 			func() { canceled.Add(1) },
@@ -811,6 +914,8 @@ func TestCancelableMessageCacheLifecycle(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, cs.Close())
 		require.Equal(t, int32(1), canceled.Load())
+		_, err = cache.Len()
+		require.Error(t, err)
 	})
 
 	t.Run("all fragments", func(t *testing.T) {
@@ -832,6 +937,8 @@ func TestCancelableMessageCacheLifecycle(t *testing.T) {
 	t.Run("request timeout", func(t *testing.T) {
 		cs := newClientSession(nil, newTestIOSession(nil, nil), nil, nil, nil)
 		ctx, expire := context.WithCancel(context.Background())
+		scanDone := make(chan struct{}, 1)
+		cs.messageCacheScanHook = func() { scanDone <- struct{}{} }
 		var canceled atomic.Int32
 		cache, err := cs.CreateCacheWithCancel(
 			ctx,
@@ -840,9 +947,12 @@ func TestCancelableMessageCacheLifecycle(t *testing.T) {
 		)
 		require.NoError(t, err)
 		expire()
-		require.Eventually(t, func() bool {
-			return canceled.Load() == 1
-		}, 2500*time.Millisecond, 10*time.Millisecond)
+		select {
+		case <-scanDone:
+		case <-time.After(2500 * time.Millisecond):
+			t.Fatal("message cache timeout scan did not complete")
+		}
+		require.Equal(t, int32(1), canceled.Load())
 		_, err = cache.Len()
 		require.Error(t, err)
 		require.NoError(t, cs.Close())
@@ -858,10 +968,14 @@ func TestCancelableMessageCacheCallbacksCanReenterSession(t *testing.T) {
 	) {
 		t.Helper()
 		callbackDone := make(chan struct{})
-		_, err := cs.CreateCacheWithCancel(
+		cacheClosed := make(chan error, 1)
+		var cache MessageCache
+		cache, err := cs.CreateCacheWithCancel(
 			context.Background(),
 			1,
 			func() {
+				_, err := cache.Len()
+				cacheClosed <- err
 				_, _ = cs.GetCache(1)
 				close(callbackDone)
 			},
@@ -877,6 +991,7 @@ func TestCancelableMessageCacheCallbacksCanReenterSession(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("cache cancel callback deadlocked while re-entering the session")
 		}
+		require.Error(t, <-cacheClosed, "cache must be closed before cancellation callbacks run")
 		select {
 		case <-triggerDone:
 		case <-time.After(time.Second):
@@ -900,7 +1015,11 @@ func TestCancelableMessageCacheCallbacksCanReenterSession(t *testing.T) {
 		cs := newClientSession(nil, newTestIOSession(nil, nil), nil, nil, nil)
 		ctx, expire := context.WithCancel(context.Background())
 		callbackDone := make(chan struct{})
-		_, err := cs.CreateCacheWithCancel(ctx, 1, func() {
+		cacheClosed := make(chan error, 1)
+		var cache MessageCache
+		cache, err := cs.CreateCacheWithCancel(ctx, 1, func() {
+			_, err := cache.Len()
+			cacheClosed <- err
 			_, _ = cs.GetCache(1)
 			close(callbackDone)
 		})
@@ -911,6 +1030,7 @@ func TestCancelableMessageCacheCallbacksCanReenterSession(t *testing.T) {
 		case <-time.After(2500 * time.Millisecond):
 			t.Fatal("timeout cancel callback deadlocked while re-entering the session")
 		}
+		require.Error(t, <-cacheClosed, "cache must be closed before cancellation callbacks run")
 		require.NoError(t, cs.Close())
 	})
 }
