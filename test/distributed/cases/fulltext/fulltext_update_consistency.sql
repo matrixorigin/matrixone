@@ -62,4 +62,75 @@ update ft_async_composite set tenant = 'b', id = 2 where tenant = 'a' and id = 1
 -- @wait_expect(2, 30)
 select tenant, id from ft_async_composite where match(body) against('composite') order by tenant, id;
 
+-- A NULL in one indexed content column skips only that column. Cover index
+-- creation for every parser accepted by fulltext_index_tokenize.
+create table ft_null_default(id int primary key, left_text text, right_text text);
+insert into ft_null_default values
+    (1, null, 'defaultrighttoken'),
+    (2, 'defaultlefttoken', null),
+    (3, null, null);
+create fulltext index ft_body on ft_null_default(left_text, right_text);
+select id from ft_null_default where match(left_text, right_text) against('defaultrighttoken') order by id;
+select id from ft_null_default where match(left_text, right_text) against('defaultlefttoken') order by id;
+
+create table ft_null_ngram(id int primary key, left_text text, right_text text);
+insert into ft_null_ngram values (1, null, '風月無情'), (2, '神雕俠侶', null), (3, null, null);
+create fulltext index ft_body on ft_null_ngram(left_text, right_text) with parser ngram;
+select id from ft_null_ngram where match(left_text, right_text) against('風月無情') order by id;
+select id from ft_null_ngram where match(left_text, right_text) against('神雕俠侶') order by id;
+
+create table ft_null_gojieba(id int primary key, left_text text, right_text text);
+insert into ft_null_gojieba values (1, null, '清华大学'), (2, '北京', null), (3, null, null);
+create fulltext index ft_body on ft_null_gojieba(left_text, right_text) with parser gojieba;
+select id from ft_null_gojieba where match(left_text, right_text) against('清华大学') order by id;
+select id from ft_null_gojieba where match(left_text, right_text) against('北京') order by id;
+
+create table ft_null_json(id int primary key, left_doc json, right_doc json);
+insert into ft_null_json values
+    (1, null, '{"k":"jsonrighttoken"}'),
+    (2, '{"k":"jsonlefttoken"}', null),
+    (3, null, null);
+create fulltext index ft_body on ft_null_json(left_doc, right_doc) with parser json;
+select id from ft_null_json where match(left_doc, right_doc) against('jsonrighttoken') order by id;
+select id from ft_null_json where match(left_doc, right_doc) against('jsonlefttoken') order by id;
+
+create table ft_null_json_value(id int primary key, left_doc json, right_doc json);
+insert into ft_null_json_value values
+    (1, null, '{"k":"jsonvaluerighttoken"}'),
+    (2, '{"k":"jsonvaluelefttoken"}', null),
+    (3, null, null);
+create fulltext index ft_body on ft_null_json_value(left_doc, right_doc) with parser json_value;
+select id from ft_null_json_value where match(left_doc, right_doc) against('jsonvaluerighttoken') order by id;
+select id from ft_null_json_value where match(left_doc, right_doc) against('jsonvaluelefttoken') order by id;
+
+-- Synchronous DML maintenance must add, replace, remove, and revive documents
+-- when indexed columns move between NULL and non-NULL.
+create table ft_null_dml(
+    id int primary key,
+    left_text text,
+    right_text text,
+    fulltext ft_body(left_text, right_text)
+);
+insert into ft_null_dml(id, right_text) values (1, 'insertrighttoken');
+select id from ft_null_dml where match(left_text, right_text) against('insertrighttoken') order by id;
+update ft_null_dml set left_text = 'updatelefttoken', right_text = null where id = 1;
+select id from ft_null_dml where match(left_text, right_text) against('insertrighttoken') order by id;
+select id from ft_null_dml where match(left_text, right_text) against('updatelefttoken') order by id;
+update ft_null_dml set left_text = null, right_text = null where id = 1;
+select id from ft_null_dml where match(left_text, right_text) against('updatelefttoken') order by id;
+update ft_null_dml set right_text = 'reviverighttoken' where id = 1;
+select id from ft_null_dml where match(left_text, right_text) against('reviverighttoken') order by id;
+delete from ft_null_dml where id = 1;
+select id from ft_null_dml where match(left_text, right_text) against('reviverighttoken') order by id;
+
+create table ft_null_async(
+    id int primary key,
+    left_text text,
+    right_text text,
+    fulltext ft_body(left_text, right_text) async
+);
+insert into ft_null_async(id, right_text) values (1, 'asyncrighttoken');
+-- @wait_expect(2, 30)
+select id from ft_null_async where match(left_text, right_text) against('asyncrighttoken') order by id;
+
 drop database fulltext_update_consistency;
