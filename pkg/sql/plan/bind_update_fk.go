@@ -193,20 +193,60 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 	return lastNodeID, selectNodeTag, selectNode, nil
 }
 
-func updateMayDependOnForeignKeys(
+func (builder *QueryBuilder) updateMayDependOnForeignKeys(
+	bindCtx *BindContext,
 	dmlCtx *DMLContext,
 	newColName2Idx map[string]int32,
-) bool {
+) (bool, error) {
 	for i, tableDef := range dmlCtx.tableDefs {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
 			continue
 		}
-		if len(affectedUpdateChildFks(tableDef, dmlCtx.aliases[i], newColName2Idx)) > 0 ||
-			len(tableDef.RefChildTbls) > 0 {
-			return true
+		alias := dmlCtx.aliases[i]
+		if len(affectedUpdateChildFks(tableDef, alias, newColName2Idx)) > 0 {
+			return true, nil
+		}
+		if tableDef == nil || len(tableDef.RefChildTbls) == 0 {
+			continue
+		}
+
+		parentColIDToName := make(map[uint64]string, len(tableDef.Cols))
+		for _, col := range tableDef.Cols {
+			parentColIDToName[col.ColId] = col.Name
+		}
+		visited := make(map[uint64]struct{}, len(tableDef.RefChildTbls))
+		for _, childTableID := range tableDef.RefChildTbls {
+			if childTableID == 0 {
+				childTableID = tableDef.TblId
+			}
+			if _, ok := visited[childTableID]; ok {
+				continue
+			}
+			visited[childTableID] = struct{}{}
+
+			_, childTableDef, err := builder.compCtx.ResolveById(childTableID, bindCtx.snapshot)
+			if err != nil {
+				return false, err
+			}
+			if childTableDef == nil {
+				return false, moerr.NewInternalErrorf(
+					builder.GetContext(), "foreign-key child table %d not found", childTableID)
+			}
+			for _, fk := range childTableDef.Fkeys {
+				referencesCurrentTable := fk.ForeignTbl == tableDef.TblId ||
+					(fk.ForeignTbl == 0 && childTableDef.TblId == tableDef.TblId)
+				if !referencesCurrentTable {
+					continue
+				}
+				for _, parentColID := range fk.ForeignCols {
+					if _, ok := newColName2Idx[alias+"."+parentColIDToName[parentColID]]; ok {
+						return true, nil
+					}
+				}
+			}
 		}
 	}
-	return false
+	return false, nil
 }
 
 func affectedUpdateChildFks(

@@ -369,7 +369,12 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if err != nil {
 		return 0, err
 	}
-	if updateMayDependOnForeignKeys(dmlCtx, newColName2Idx) {
+	mayDependOnForeignKeys, err := builder.updateMayDependOnForeignKeys(
+		bindCtx, dmlCtx, newColName2Idx)
+	if err != nil {
+		return 0, err
+	}
+	if mayDependOnForeignKeys {
 		// The plan shape and planner route depend on foreign_key_checks.
 		// Preserve that dependency even while checks are disabled so prepared
 		// and generic plan caches rebuild after either session-state transition.

@@ -2728,6 +2728,14 @@ func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
 		require.True(t, query.GetHasForeignKeyAction())
 	})
 
+	t.Run("unrelated parent update remains cacheable", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_RESTRICT, plan.ForeignKeyDef_CASCADE)
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from update dept set loc = ? where deptno = ?")
+		require.False(t, query.GetHasForeignKeyAction())
+	})
+
 	t.Run("child update remains uncacheable with checks disabled", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_CASCADE)
