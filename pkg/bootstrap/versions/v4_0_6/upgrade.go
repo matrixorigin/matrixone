@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -101,9 +102,10 @@ type legacyForeignKeyCatalogConstraint struct {
 }
 
 // upgradeLegacyForeignKeyMetadata restores zero-valued legacy FK ordinals. The
-// catalog identifies the rows to migrate, and SHOW CREATE TABLE supplies the
-// current foreign-key declaration order and actions. In particular, do not use
-// mo_tables.rel_createsql: it is a CREATE-time snapshot and omits later ALTERs.
+// catalog identifies the rows and actions to migrate, and SHOW CREATE TABLE
+// supplies the current foreign-key declaration name and column order. In
+// particular, do not use mo_tables.rel_createsql: it is a CREATE-time snapshot
+// and omits later ALTERs.
 func upgradeLegacyForeignKeyMetadata(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
 	definitions, err := getLegacyForeignKeyTableDefinitions(tenantID, txn)
 	if err != nil {
@@ -172,7 +174,7 @@ func getLegacyForeignKeyTableDefinitions(tenantID int32, txn executor.TxnExecuto
 
 func getLegacyForeignKeyShowCreateSQL(tenantID int32, txn executor.TxnExecutor, definition legacyForeignKeyTableDefinition) (string, error) {
 	res, err := txn.Exec(
-		fmt.Sprintf("SHOW CREATE TABLE %s.%s", quoteSQLIdentifier(definition.database), quoteSQLIdentifier(definition.table)),
+		fmt.Sprintf("SHOW CREATE TABLE %s", sqlquote.QualifiedIdent(definition.database, definition.table)),
 		executor.StatementOption{}.WithAccountID(uint32(tenantID)),
 	)
 	if err != nil {
@@ -281,27 +283,33 @@ func legacyForeignKeyMetadataUpdates(definition legacyForeignKeyTableDefinition,
 		}
 	}
 
-	// The catalog remains authoritative when SHOW CREATE TABLE cannot be
-	// reconciled to an FK row. This is a defensive fallback for catalog drift;
-	// normal CREATE and ALTER paths are covered by the current SHOW output above.
+	// A one-column FK needs no declaration-order recovery. For a composite FK,
+	// constraint_id is the only stored order and legacy rows have it zero; never
+	// fabricate an ordinal by sorting catalog column names when SHOW CREATE TABLE
+	// cannot be reconciled.
 	for _, constraint := range constraints {
 		if matchedConstraints[constraint.name] {
 			continue
+		}
+		if len(constraint.rows) != 1 {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"cannot reconcile column order for legacy composite foreign key %s in %s.%s",
+				constraint.name, definition.database, definition.table,
+			)
 		}
 		onDelete, onUpdate, err := legacyForeignKeyCatalogConstraintActions(constraint)
 		if err != nil {
 			return nil, err
 		}
-		for ordinal, row := range constraint.rows {
-			updates = append(updates, legacyForeignKeyUpdateSQL(
-				definition,
-				constraint.name,
-				row.columnName,
-				ordinal+1,
-				onDelete,
-				onUpdate,
-			))
-		}
+		row := constraint.rows[0]
+		updates = append(updates, legacyForeignKeyUpdateSQL(
+			definition,
+			constraint.name,
+			row.columnName,
+			1,
+			onDelete,
+			onUpdate,
+		))
 	}
 	return updates, nil
 }
@@ -404,12 +412,12 @@ func legacyForeignKeyUpdateSQL(
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = %d, on_delete = %s, on_update = %s "+
 			"WHERE constraint_id = 0 AND db_name = %s AND table_name = %s AND constraint_name = %s AND column_name = %s",
 		ordinal,
-		quoteSQLStringLiteral(onDelete),
-		quoteSQLStringLiteral(onUpdate),
-		quoteSQLStringLiteral(definition.database),
-		quoteSQLStringLiteral(definition.table),
-		quoteSQLStringLiteral(constraintName),
-		quoteSQLStringLiteral(columnName),
+		sqlquote.String(onDelete),
+		sqlquote.String(onUpdate),
+		sqlquote.String(definition.database),
+		sqlquote.String(definition.table),
+		sqlquote.String(constraintName),
+		sqlquote.String(columnName),
 	)
 }
 
@@ -422,14 +430,6 @@ func legacyCatalogReferenceActionName(action string) string {
 		return "NO_ACTION"
 	}
 	return action
-}
-
-func quoteSQLStringLiteral(s string) string {
-	return "'" + strings.NewReplacer(`\\`, `\\\\`, `'`, `''`).Replace(s) + "'"
-}
-
-func quoteSQLIdentifier(s string) string {
-	return "`" + strings.ReplaceAll(s, "`", "``") + "`"
 }
 
 func (v *versionHandle) HandleClusterUpgrade(_ context.Context, txn executor.TxnExecutor) error {

@@ -328,6 +328,66 @@ func TestLegacyForeignKeyMetadataUpdatesDoNotMatchReusedConstraintName(t *testin
 	}, updates)
 }
 
+func TestLegacyForeignKeyMetadataUpdatesEscapeCatalogIdentifiers(t *testing.T) {
+	updates, err := legacyForeignKeyMetadataUpdates(legacyForeignKeyTableDefinition{
+		database: `db\name`,
+		table:    `child\name`,
+		foreignKeys: []legacyForeignKeyCatalogRow{
+			{
+				constraintName:  `fk\' OR 1=1 -- `,
+				columnName:      `child\column`,
+				referDBName:     `db\name`,
+				referTableName:  `parent\name`,
+				referColumnName: `id\column`,
+				onDelete:        "CASCADE",
+				onUpdate:        "SET_NULL",
+			},
+		},
+	}, "create table `child\\name` (`child\\column` int, constraint `fk\\' OR 1=1 -- ` foreign key (`child\\column`) references `parent\\name` (`id\\column`))")
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'CASCADE', on_update = 'SET_NULL' " +
+			"WHERE constraint_id = 0 AND db_name = 'db\\\\name' AND table_name = 'child\\\\name' " +
+			"AND constraint_name = 'fk\\\\'' OR 1=1 -- ' AND column_name = 'child\\\\column'",
+	}, updates)
+}
+
+func TestLegacyForeignKeyMetadataUpdatesEscapeTrailingBackslashIdentifiers(t *testing.T) {
+	updates, err := legacyForeignKeyMetadataUpdates(legacyForeignKeyTableDefinition{
+		database: "db\\",
+		table:    "child\\",
+		foreignKeys: []legacyForeignKeyCatalogRow{
+			{
+				constraintName:  "fk\\",
+				columnName:      "child\\",
+				referDBName:     "db\\",
+				referTableName:  "parent\\",
+				referColumnName: "id\\",
+				onDelete:        "CASCADE",
+				onUpdate:        "SET_NULL",
+			},
+		},
+	}, "create table `child\\` (`child\\` int, constraint `fk\\` foreign key (`child\\`) references `parent\\` (`id\\`))")
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'CASCADE', on_update = 'SET_NULL' " +
+			"WHERE constraint_id = 0 AND db_name = 'db\\\\' AND table_name = 'child\\\\' " +
+			"AND constraint_name = 'fk\\\\' AND column_name = 'child\\\\'",
+	}, updates)
+}
+
+func TestLegacyForeignKeyMetadataUpdatesRejectUnmatchedCompositeForeignKey(t *testing.T) {
+	_, err := legacyForeignKeyMetadataUpdates(legacyForeignKeyTableDefinition{
+		database: "db",
+		table:    "child",
+		foreignKeys: []legacyForeignKeyCatalogRow{
+			{constraintName: "fk_legacy", columnName: "a", referDBName: "db", referTableName: "parent", referColumnName: "a", onDelete: "CASCADE", onUpdate: "SET_NULL"},
+			{constraintName: "fk_legacy", columnName: "z", referDBName: "db", referTableName: "parent", referColumnName: "z", onDelete: "CASCADE", onUpdate: "SET_NULL"},
+		},
+	}, "create table child (a int, z int, constraint fk_legacy foreign key (a, z) references parent (z, a))")
+	require.ErrorContains(t, err, "cannot reconcile column order")
+}
+
 func TestLegacyForeignKeyMetadataUpdatesBackfillUnnamedForeignKey(t *testing.T) {
 	updates, err := legacyForeignKeyMetadataUpdates(legacyForeignKeyTableDefinition{
 		database: "db",
@@ -356,6 +416,20 @@ func TestLegacyForeignKeyMetadataUpdatesLeaveAmbiguousUnnamedForeignKeysToCatalo
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'CASCADE', on_update = 'CASCADE' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'catalog-fk-a' AND column_name = 'parent_id'",
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'NO_ACTION', on_update = 'NO_ACTION' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'catalog-fk-b' AND column_name = 'parent_id'",
 	}, updates)
+}
+
+func TestLegacyForeignKeyMetadataUpdatesRejectAmbiguousUnnamedCompositeForeignKeys(t *testing.T) {
+	_, err := legacyForeignKeyMetadataUpdates(legacyForeignKeyTableDefinition{
+		database: "db",
+		table:    "child",
+		foreignKeys: []legacyForeignKeyCatalogRow{
+			{constraintName: "catalog-fk-a", columnName: "a", referDBName: "db", referTableName: "parent", referColumnName: "a", onDelete: "CASCADE", onUpdate: "CASCADE"},
+			{constraintName: "catalog-fk-a", columnName: "z", referDBName: "db", referTableName: "parent", referColumnName: "z", onDelete: "CASCADE", onUpdate: "CASCADE"},
+			{constraintName: "catalog-fk-b", columnName: "a", referDBName: "db", referTableName: "parent", referColumnName: "a", onDelete: "CASCADE", onUpdate: "CASCADE"},
+			{constraintName: "catalog-fk-b", columnName: "z", referDBName: "db", referTableName: "parent", referColumnName: "z", onDelete: "CASCADE", onUpdate: "CASCADE"},
+		},
+	}, "create table child (a int, z int, foreign key (z, a) references parent (z, a))")
+	require.ErrorContains(t, err, "cannot reconcile column order")
 }
 
 func TestLegacyForeignKeyShowCreateSQLQuotesIdentifiers(t *testing.T) {
