@@ -244,6 +244,10 @@ INSERT INTO time_extract_ambiguous_prefix_ownership VALUES
 ('12-2-3 4:5:6', '12-2-3 4:5:6', '12-2-3 4:5:6'),
 ('123-2-3 4:5:6', '123-2-3 4:5:6', '123-2-3 4:5:6'),
 ('1234-2-3 4:5:6', '1234-2-3 4:5:6', '1234-2-3 4:5:6'),
+('1-1-1 1:2:3', '1-1-1 1:2:3', '1-1-1 1:2:3'),
+('1-1-1 01:02:03', '1-1-1 01:02:03', '1-1-1 01:02:03'),
+('1-2-3 12:34:56', '1-2-3 12:34:56', '1-2-3 12:34:56'),
+('0-1-1 12:34:56', '0-1-1 12:34:56', '0-1-1 12:34:56'),
 ('2024-12-20 12:34:56+', '2024-12-20 12:34:56+', '2024-12-20 12:34:56+'),
 ('2024-12-20 12:34:56-', '2024-12-20 12:34:56-', '2024-12-20 12:34:56-');
 SELECT MINUTE(v), MINUTE(c), MINUTE(t) FROM time_extract_ambiguous_prefix_ownership;
@@ -270,6 +274,18 @@ null  ¦  null  ¦  null  𝄀
 5  ¦  5  ¦  5  𝄀
 5  ¦  5  ¦  5  𝄀
 5  ¦  5  ¦  5  𝄀
+0  ¦  0  ¦  0  𝄀
+2  ¦  2  ¦  2  𝄀
+34  ¦  34  ¦  34  𝄀
+34  ¦  34  ¦  34  𝄀
 20  ¦  20  ¦  20  𝄀
 20  ¦  20  ¦  20
 DROP TABLE time_extract_ambiguous_prefix_ownership;
+SELECT MINUTE('123:34:56 78') AS unpadded_123_minute,
+MINUTE('123:34:56 78 ') AS padded_123_minute,
+MINUTE('\t123:34:56 78\t') AS tab_padded_123_minute,
+MINUTE('838:59:59 78') AS unpadded_838_minute,
+MINUTE('838:59:59 78 ') AS padded_838_minute,
+MINUTE('\t838:59:59 78\t') AS tab_padded_838_minute;
+➤ unpadded_123_minute[-6,8,0]  ¦  padded_123_minute[-6,8,0]  ¦  tab_padded_123_minute[-6,8,0]  ¦  unpadded_838_minute[-6,8,0]  ¦  padded_838_minute[-6,8,0]  ¦  tab_padded_838_minute[-6,8,0]  𝄀
+null  ¦  34  ¦  34  ¦  null  ¦  59  ¦  59

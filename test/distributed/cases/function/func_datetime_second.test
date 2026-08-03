@@ -208,7 +208,19 @@ INSERT INTO time_extract_ambiguous_prefix_ownership VALUES
   ('12-2-3 4:5:6', '12-2-3 4:5:6', '12-2-3 4:5:6'),
   ('123-2-3 4:5:6', '123-2-3 4:5:6', '123-2-3 4:5:6'),
   ('1234-2-3 4:5:6', '1234-2-3 4:5:6', '1234-2-3 4:5:6'),
+  ('1-1-1 1:2:3', '1-1-1 1:2:3', '1-1-1 1:2:3'),
+  ('1-1-1 01:02:03', '1-1-1 01:02:03', '1-1-1 01:02:03'),
+  ('1-2-3 12:34:56', '1-2-3 12:34:56', '1-2-3 12:34:56'),
+  ('0-1-1 12:34:56', '0-1-1 12:34:56', '0-1-1 12:34:56'),
   ('2024-12-20 12:34:56+', '2024-12-20 12:34:56+', '2024-12-20 12:34:56+'),
   ('2024-12-20 12:34:56-', '2024-12-20 12:34:56-', '2024-12-20 12:34:56-');
 SELECT SECOND(v), SECOND(c), SECOND(t) FROM time_extract_ambiguous_prefix_ownership;
 DROP TABLE time_extract_ambiguous_prefix_ownership;
+
+-- Preserve nonempty trailing whitespace until the ordered parser assigns its owner.
+SELECT SECOND('123:34:56 78') AS unpadded_123_second,
+       SECOND('123:34:56 78 ') AS padded_123_second,
+       SECOND('\t123:34:56 78\t') AS tab_padded_123_second,
+       SECOND('838:59:59 78') AS unpadded_838_second,
+       SECOND('838:59:59 78 ') AS padded_838_second,
+       SECOND('\t838:59:59 78\t') AS tab_padded_838_second;

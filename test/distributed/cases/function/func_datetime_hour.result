@@ -256,6 +256,10 @@ INSERT INTO time_extract_ambiguous_prefix_ownership VALUES
 ('12-2-3 4:5:6', '12-2-3 4:5:6', '12-2-3 4:5:6'),
 ('123-2-3 4:5:6', '123-2-3 4:5:6', '123-2-3 4:5:6'),
 ('1234-2-3 4:5:6', '1234-2-3 4:5:6', '1234-2-3 4:5:6'),
+('1-1-1 1:2:3', '1-1-1 1:2:3', '1-1-1 1:2:3'),
+('1-1-1 01:02:03', '1-1-1 01:02:03', '1-1-1 01:02:03'),
+('1-2-3 12:34:56', '1-2-3 12:34:56', '1-2-3 12:34:56'),
+('0-1-1 12:34:56', '0-1-1 12:34:56', '0-1-1 12:34:56'),
 ('2024-12-20 12:34:56+', '2024-12-20 12:34:56+', '2024-12-20 12:34:56+'),
 ('2024-12-20 12:34:56-', '2024-12-20 12:34:56-', '2024-12-20 12:34:56-');
 SELECT HOUR(v), HOUR(c), HOUR(t) FROM time_extract_ambiguous_prefix_ownership;
@@ -283,5 +287,17 @@ null  ¦  null  ¦  null  𝄀
 4  ¦  4  ¦  4  𝄀
 4  ¦  4  ¦  4  𝄀
 0  ¦  0  ¦  0  𝄀
+1  ¦  1  ¦  1  𝄀
+12  ¦  12  ¦  12  𝄀
+12  ¦  12  ¦  12  𝄀
+0  ¦  0  ¦  0  𝄀
 0  ¦  0  ¦  0
 DROP TABLE time_extract_ambiguous_prefix_ownership;
+SELECT HOUR('123:34:56 78') AS unpadded_123_hour,
+HOUR('123:34:56 78 ') AS padded_123_hour,
+HOUR('\t123:34:56 78\t') AS tab_padded_123_hour,
+HOUR('838:59:59 78') AS unpadded_838_hour,
+HOUR('838:59:59 78 ') AS padded_838_hour,
+HOUR('\t838:59:59 78\t') AS tab_padded_838_hour;
+➤ unpadded_123_hour[4,32,0]  ¦  padded_123_hour[4,32,0]  ¦  tab_padded_123_hour[4,32,0]  ¦  unpadded_838_hour[4,32,0]  ¦  padded_838_hour[4,32,0]  ¦  tab_padded_838_hour[4,32,0]  𝄀
+null  ¦  123  ¦  123  ¦  null  ¦  838  ¦  838

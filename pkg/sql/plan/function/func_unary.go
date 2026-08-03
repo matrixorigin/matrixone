@@ -4774,8 +4774,8 @@ func timeStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](
 		}
 
 		strVal, null := strParam.GetStrValue(i)
-		str := strings.TrimSpace(functionUtil.QuickBytesToStr(strVal))
-		if null || len(str) == 0 {
+		str := functionUtil.QuickBytesToStr(strVal)
+		if null || mysqlAllWhitespaceForExtract(str) {
 			if err := rs.Append(zero, true); err != nil {
 				return err
 			}
@@ -4809,6 +4809,12 @@ func timeStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](
 // The general temporal parsers accept different grammars and must not receive
 // arbitrary TIME-shaped user input here.
 func timeStringToClockForExtract(str string) (uint64, uint8, uint8, bool) {
+	// Leading whitespace belongs to the TIME scanner. Keep trailing whitespace:
+	// it can decide whether an otherwise ambiguous prefix is DATETIME or TIME.
+	str = mysqlTrimLeftWhitespaceForExtract(str)
+	if len(str) == 0 {
+		return 0, 0, 0, false
+	}
 	if str[0] == '-' {
 		str = str[1:]
 		if len(str) == 0 {
@@ -4887,7 +4893,13 @@ type timeExtractParseResult struct {
 func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 	pos := 0
 	year, yearDigits, ok := mysqlVariableDigitsForExtract(str, &pos)
-	if !ok || yearDigits < 2 || yearDigits > 4 || pos >= len(str) || !mysqlDatetimePunctuationForExtract(str[pos]) {
+	if !ok || yearDigits > 4 || pos >= len(str) || !mysqlDatetimePunctuationForExtract(str[pos]) {
+		return timeExtractParseResult{}
+	}
+	// A one-digit year shares a prefix with compact TIME. It belongs to
+	// separated DATETIME only when the complete following clock is an
+	// unambiguous HH:MM:SS spelling; otherwise the TIME scanner owns it.
+	if yearDigits == 1 && !mysqlOneDigitYearDatetimeClockShapeForExtract(str, pos) {
 		return timeExtractParseResult{}
 	}
 	dateSeparator := str[pos]
@@ -4916,6 +4928,11 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 	}
 	result := timeExtractParseResult{matched: true}
 	if !mysqlDatetimeDateForExtract(year, month, day) {
+		// A padded three-digit date-shaped prefix is a TIME prefix in MySQL.
+		// Do not let the DATETIME classifier discard its consumed clock fields.
+		if yearDigits == 3 && mysqlEndsWithWhitespaceForExtract(str) {
+			return timeExtractParseResult{}
+		}
 		return result
 	}
 	for pos < len(str) && mysqlWhitespaceForExtract(str[pos]) {
@@ -4976,6 +4993,44 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 	return result
 }
 
+func mysqlOneDigitYearDatetimeClockShapeForExtract(str string, pos int) bool {
+	// pos points at the separator immediately after the one-digit year.
+	for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
+		pos++
+	}
+	if _, _, ok := mysqlVariableDigitsForExtract(str, &pos); !ok ||
+		pos >= len(str) || !mysqlDatetimePunctuationForExtract(str[pos]) {
+		return false
+	}
+	for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
+		pos++
+	}
+	if _, _, ok := mysqlVariableDigitsForExtract(str, &pos); !ok ||
+		pos >= len(str) || !mysqlWhitespaceForExtract(str[pos]) {
+		return false
+	}
+	for pos < len(str) && mysqlWhitespaceForExtract(str[pos]) {
+		pos++
+	}
+	mysqlConsumeDatetimeClockSignsForExtract(str, &pos)
+	if _, digits, ok := mysqlVariableDigitsForExtract(str, &pos); !ok || digits != 2 ||
+		pos >= len(str) || !mysqlDatetimePunctuationForExtract(str[pos]) {
+		return false
+	}
+	for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
+		pos++
+	}
+	if _, digits, ok := mysqlVariableDigitsForExtract(str, &pos); !ok || digits != 2 ||
+		pos >= len(str) || !mysqlDatetimePunctuationForExtract(str[pos]) {
+		return false
+	}
+	for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
+		pos++
+	}
+	_, digits, ok := mysqlVariableDigitsForExtract(str, &pos)
+	return ok && digits == 2
+}
+
 func mysqlConsumeDatetimeClockSignsForExtract(str string, pos *int) {
 	for *pos < len(str) && (str[*pos] == '+' || str[*pos] == '-') {
 		*pos = *pos + 1
@@ -4987,7 +5042,13 @@ func mysqlDatetimeClockSuffixForExtract(str string, pos int) bool {
 		return true
 	}
 	if mysqlWhitespaceForExtract(str[pos]) {
-		return false
+		// A trailing whitespace-only suffix terminates a complete DATETIME
+		// clock. Whitespace followed by another token transfers ownership back
+		// to the TIME/date-prefix grammar.
+		for pos < len(str) && mysqlWhitespaceForExtract(str[pos]) {
+			pos++
+		}
+		return pos == len(str)
 	}
 	if str[pos] == '+' || str[pos] == '-' {
 		return false
@@ -5046,6 +5107,22 @@ func mysqlWhitespaceForExtract(c byte) bool {
 	default:
 		return false
 	}
+}
+
+func mysqlAllWhitespaceForExtract(str string) bool {
+	if len(str) == 0 {
+		return true
+	}
+	for i := 0; i < len(str); i++ {
+		if !mysqlWhitespaceForExtract(str[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func mysqlEndsWithWhitespaceForExtract(str string) bool {
+	return len(str) > 0 && mysqlWhitespaceForExtract(str[len(str)-1])
 }
 
 func mysqlTrimLeftWhitespaceForExtract(str string) string {
