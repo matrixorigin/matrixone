@@ -44,6 +44,7 @@ select p.id, (select coalesce(sum(c.v), 100) + count(*) from child_agg c where c
 select p.id, (select case when count(*) = 0 then 42 else coalesce(sum(c.v), 0) end from child_agg c where c.corr_key = p.corr_key) as case_value from parent_agg p order by p.id;
 select p.id, (select coalesce(json_arrayagg(c.v), convert('[]', json)) from child_agg c where c.corr_key = p.corr_key) as json_value from parent_agg p order by p.id;
 with correlated_input as (select corr_key, v from child_agg) select p.id, (select coalesce(sum(c.v), 0) from correlated_input c where c.corr_key = p.corr_key) as cte_sum from parent_agg p order by p.id;
+select p.id, (with correlated_input as (select c.v from child_agg c where c.corr_key = p.corr_key) select coalesce(sum(v), 0) from correlated_input) as cte_correlated_sum from parent_agg p order by p.id;
 select p.id, (select sum(c.v) from child_agg c where c.corr_key = p.corr_key group by c.corr_key) as grouped_sum from parent_agg p order by p.id;
 select p.id, (select sum(c.v) from child_agg c where c.corr_key = p.corr_key having sum(c.v) > 100) as having_sum from parent_agg p order by p.id;
 

@@ -107,6 +107,12 @@ with correlated_input as (select corr_key, v from child_agg) select p.id, (selec
 2  ¦  0  𝄀
 3  ¦  0  𝄀
 4  ¦  0
+select p.id, (with correlated_input as (select c.v from child_agg c where c.corr_key = p.corr_key) select coalesce(sum(v), 0) from correlated_input) as cte_correlated_sum from parent_agg p order by p.id;
+➤ id[4,32,0]  ¦  cte_correlated_sum[-5,64,0]  𝄀
+1  ¦  12  𝄀
+2  ¦  0  𝄀
+3  ¦  0  𝄀
+4  ¦  0
 select p.id, (select sum(c.v) from child_agg c where c.corr_key = p.corr_key group by c.corr_key) as grouped_sum from parent_agg p order by p.id;
 ➤ id[4,32,0]  ¦  grouped_sum[-5,64,0]  𝄀
 1  ¦  12  𝄀
