@@ -172,6 +172,54 @@ select * from table_changes('table_changes_db', 'ordinary_single_pk', '2-0', '1-
 set @database_name = 'table_changes_db';
 select * from table_changes(@database_name, 'ordinary_single_pk', '', '1-0') c;
 
+-- table_changes requires the source table's SELECT privilege just like a scan.
+drop user if exists table_changes_priv_user;
+drop role if exists table_changes_priv_role;
+create role table_changes_priv_role;
+create user table_changes_priv_user identified by '123456'
+default role table_changes_priv_role;
+grant connect on account * to table_changes_priv_role;
+-- @session:id=3&user=sys:table_changes_priv_user:table_changes_priv_role&password=123456
+set @privilege_until = (select watermark from change_watermark() w);
+select payload from table_changes(
+    'table_changes_db', 'ordinary_single_pk', '', @privilege_until
+) c where id = 3;
+-- @session
+grant select on table table_changes_db.ordinary_single_pk
+to table_changes_priv_role;
+-- @session:id=3&user=sys:table_changes_priv_user:table_changes_priv_role&password=123456
+set @privilege_until = (select watermark from change_watermark() w);
+select cast(payload as varchar) as payload from table_changes(
+    'table_changes_db', 'ordinary_single_pk', '', @privilege_until
+) c where id = 3;
+-- @session
+drop user table_changes_priv_user;
+drop role table_changes_priv_role;
+
+-- Read failures leave the caller's fixed window replayable.
+select enable_fault_injection();
+select add_fault_point('fj/table-changes/read', ':::', 'echo', 0, 'collect');
+select count(*) as change_count
+from table_changes(
+    'table_changes_db', 'ordinary_single_pk', @ordinary_after, @ordinary_until
+) c;
+select remove_fault_point('fj/table-changes/read');
+select count(*) as change_count
+from table_changes(
+    'table_changes_db', 'ordinary_single_pk', @ordinary_after, @ordinary_until
+) c;
+select add_fault_point('fj/table-changes/read', ':::', 'echo', 0, 'next');
+select count(*) as change_count
+from table_changes(
+    'table_changes_db', 'ordinary_single_pk', @ordinary_after, @ordinary_until
+) c;
+select remove_fault_point('fj/table-changes/read');
+select count(*) as change_count
+from table_changes(
+    'table_changes_db', 'ordinary_single_pk', @ordinary_after, @ordinary_until
+) c;
+select disable_fault_injection();
+
 drop database table_changes_catalog_marker;
 drop database table_changes_db;
 drop account table_changes_acc;

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -169,6 +170,9 @@ func (s *tableChangesState) call(tf *TableFunction, proc *process.Process) (vm.C
 		return vm.CancelResult, nil
 	}
 	if s.handle == nil {
+		if err := tableChangesReadFailpoint("collect"); err != nil {
+			return vm.CancelResult, err
+		}
 		ctx := engine.WithSnapshotReadPolicy(proc.Ctx, engine.SnapshotReadPolicyVisibleState)
 		if s.isAccountFiltered {
 			// Cluster and shared catalog tables are physically owned by the
@@ -183,6 +187,9 @@ func (s *tableChangesState) call(tf *TableFunction, proc *process.Process) (vm.C
 		s.handle = handle
 	}
 	for {
+		if err := tableChangesReadFailpoint("next"); err != nil {
+			return vm.CancelResult, err
+		}
 		data, tombstone, _, err := s.handle.Next(proc.Ctx, proc.Mp())
 		if err != nil {
 			return vm.CancelResult, err
@@ -209,6 +216,14 @@ func (s *tableChangesState) call(tf *TableFunction, proc *process.Process) (vm.C
 			return vm.CallResult{Status: vm.ExecNext, Batch: s.batch}, nil
 		}
 	}
+}
+
+func tableChangesReadFailpoint(point string) error {
+	injectedPoint, injected := objectio.TableChangesReadInjected()
+	if !injected || injectedPoint != point {
+		return nil
+	}
+	return moerr.NewInternalErrorNoCtxf("table_changes injected %s failure", point)
 }
 
 func (s *tableChangesState) end(_ *TableFunction, _ *process.Process) error {

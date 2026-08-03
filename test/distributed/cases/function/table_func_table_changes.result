@@ -170,6 +170,67 @@ invalid input: table_changes until must be greater than after
 set @database_name = 'table_changes_db';
 select * from table_changes(@database_name, 'ordinary_single_pk', '', '1-0') c;
 invalid input: table_changes database name must be a non-empty string literal
+drop user if exists table_changes_priv_user;
+drop role if exists table_changes_priv_role;
+create role table_changes_priv_role;
+create user table_changes_priv_user identified by '123456'
+default role table_changes_priv_role;
+grant connect on account * to table_changes_priv_role;
+set @privilege_until = (select watermark from change_watermark() w);
+select payload from table_changes(
+'table_changes_db', 'ordinary_single_pk', '', @privilege_until
+) c where id = 3;
+internal error: do not have privilege to execute the statement
+grant select on table table_changes_db.ordinary_single_pk
+to table_changes_priv_role;
+set @privilege_until = (select watermark from change_watermark() w);
+select cast(payload as varchar) as payload from table_changes(
+'table_changes_db', 'ordinary_single_pk', '', @privilege_until
+) c where id = 3;
+payload
+{"phase": "after"}
+drop user table_changes_priv_user;
+drop role table_changes_priv_role;
+select enable_fault_injection();
+enable_fault_injection()
+1
+select add_fault_point('fj/table-changes/read', ':::', 'echo', 0, 'collect');
+add_fault_point(fj/table-changes/read, :::, echo, 0, collect)
+1
+select count(*) as change_count
+from table_changes(
+'table_changes_db', 'ordinary_single_pk', @ordinary_after, @ordinary_until
+) c;
+internal error: table_changes injected collect failure
+select remove_fault_point('fj/table-changes/read');
+remove_fault_point(fj/table-changes/read)
+1
+select count(*) as change_count
+from table_changes(
+'table_changes_db', 'ordinary_single_pk', @ordinary_after, @ordinary_until
+) c;
+change_count
+4
+select add_fault_point('fj/table-changes/read', ':::', 'echo', 0, 'next');
+add_fault_point(fj/table-changes/read, :::, echo, 0, next)
+1
+select count(*) as change_count
+from table_changes(
+'table_changes_db', 'ordinary_single_pk', @ordinary_after, @ordinary_until
+) c;
+internal error: table_changes injected next failure
+select remove_fault_point('fj/table-changes/read');
+remove_fault_point(fj/table-changes/read)
+1
+select count(*) as change_count
+from table_changes(
+'table_changes_db', 'ordinary_single_pk', @ordinary_after, @ordinary_until
+) c;
+change_count
+4
+select disable_fault_injection();
+disable_fault_injection()
+1
 drop database table_changes_catalog_marker;
 drop database table_changes_db;
 drop account table_changes_acc;

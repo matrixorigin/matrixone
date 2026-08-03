@@ -110,6 +110,11 @@ func (builder *QueryBuilder) buildTableChanges(
 		exprs,
 		cols,
 	)
+	// Keep the resolved source on the function scan so authorization can apply
+	// the same SELECT privilege check as a normal table scan. The executor opens
+	// the relation directly, so tenant filtering alone is not an authorization
+	// boundary.
+	node.ObjRef = objectRef
 	if sourceDef.TableType == catalog.SystemClusterRel ||
 		(strings.EqualFold(databaseName, catalog.MO_CATALOG) &&
 			(strings.EqualFold(tableName, catalog.MO_DATABASE) ||

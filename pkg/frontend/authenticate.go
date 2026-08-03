@@ -6931,7 +6931,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 		}
 
 		for _, node := range q.Nodes {
-			if node.NodeType == plan.Node_TABLE_SCAN {
+			if isPrivilegeBearingTableScan(node) {
 				if node.ObjRef != nil {
 					if node.TableDef != nil && node.TableDef.TableType == catalog.SystemClusterRel {
 						clusterTable = true
@@ -7205,6 +7205,17 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 		}
 	}
 	return pts
+}
+
+func isPrivilegeBearingTableScan(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		return true
+	}
+	return node.NodeType == plan.Node_FUNCTION_SCAN &&
+		node.GetTableDef().GetTblFunc().GetName() == "table_changes"
 }
 
 func addReplaceDeletePrivilegeTips(arr privilegeTipsArray, p *plan2.Plan) privilegeTipsArray {

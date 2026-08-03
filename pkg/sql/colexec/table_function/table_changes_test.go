@@ -19,7 +19,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 )
 
@@ -57,4 +59,26 @@ func TestValidateRuntimeTableChangesSourceTemporaryTable(t *testing.T) {
 		IsTemporary: true,
 	})
 	require.EqualError(t, err, "not supported: table_changes does not support temporary tables")
+}
+
+func TestTableChangesReadFailpoints(t *testing.T) {
+	require.True(t, fault.Enable())
+	t.Cleanup(func() { fault.Disable() })
+
+	for _, point := range []string{"collect", "next"} {
+		t.Run(point, func(t *testing.T) {
+			remove, err := objectio.InjectTableChangesRead(point)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				_, _ = remove()
+			})
+
+			require.NoError(t, tableChangesReadFailpoint("other"))
+			require.EqualError(t, tableChangesReadFailpoint(point),
+				"internal error: table_changes injected "+point+" failure")
+			_, err = remove()
+			require.NoError(t, err)
+			require.NoError(t, tableChangesReadFailpoint(point))
+		})
+	}
 }

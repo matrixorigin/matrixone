@@ -5772,6 +5772,54 @@ func Test_extractPrivilegeTipsFromPlan_Subscription(t *testing.T) {
 	assert.Equal(t, "t1", arr[0].tableName)
 }
 
+func TestExtractPrivilegeTipsFromTableChanges(t *testing.T) {
+	tests := []struct {
+		name           string
+		databaseName   string
+		tableName      string
+		isClusterTable bool
+	}{
+		{
+			name:         "ordinary table",
+			databaseName: "db1",
+			tableName:    "secret",
+		},
+		{
+			name:           "cluster table",
+			databaseName:   moCatalog,
+			tableName:      "tenant_secret",
+			isClusterTable: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan2.Query{
+				StmtType: plan.Query_SELECT,
+				Nodes: []*plan2.Node{{
+					NodeType: plan.Node_FUNCTION_SCAN,
+					ObjRef: &plan2.ObjectRef{
+						SchemaName: tt.databaseName,
+						ObjName:    tt.tableName,
+					},
+					TableDef: &plan2.TableDef{
+						TableType: "func_table",
+						TblFunc:   &plan.TableFunction{Name: "table_changes"},
+					},
+				}},
+			}}}
+
+			arr := extractPrivilegeTipsFromPlan(p)
+			require.Len(t, arr, 1)
+			assert.Equal(t, PrivilegeTypeSelect, arr[0].typ)
+			assert.Equal(t, tt.databaseName, arr[0].databaseName)
+			assert.Equal(t, tt.tableName, arr[0].tableName)
+			assert.Equal(t, tt.isClusterTable, arr[0].isClusterTable)
+			assert.Equal(t, clusterTableSelect, arr[0].clusterTableOperation)
+		})
+	}
+}
+
 func Test_determineDML(t *testing.T) {
 	type arg struct {
 		stmt tree.Statement
