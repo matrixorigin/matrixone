@@ -32,6 +32,7 @@ type Insert struct {
 	IsRestoreByTs     bool
 	FromDataTenantID  uint32
 	With              *With
+	Returning         SelectExprs
 }
 
 func (node *Insert) Format(ctx *FmtCtx) {
@@ -74,7 +75,13 @@ func (node *Insert) Format(ctx *FmtCtx) {
 		ctx.WriteString(" on duplicate key update ")
 		node.OnDuplicateUpdate.Format(ctx)
 	}
+	if node.HasReturning() {
+		ctx.WriteString(" returning ")
+		node.Returning.Format(ctx)
+	}
 }
+
+func (node *Insert) HasReturning() bool { return len(node.Returning) > 0 }
 
 func (node *Insert) GetStatementType() string { return "Insert" }
 func (node *Insert) GetQueryType() string     { return QueryTypeDML }

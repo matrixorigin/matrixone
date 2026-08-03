@@ -76,6 +76,11 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// createQuery from the materialized new-row image. HNSW/CAGRA/IVF-PQ are cron-
 	// maintained and ride the modern path with no inline sub-plan.
 	tableDef := dmlCtx.tableDefs[0]
+	if stmt.HasReturning() {
+		if err := validateReturningTarget(builder, tableDef, dmlCtx.objRefs[0]); err != nil {
+			return 0, err
+		}
+	}
 
 	irregularIndexes := getIrregularIndexes(tableDef)
 
@@ -283,8 +288,8 @@ func (builder *QueryBuilder) appendIrregularMaintSource(
 	forceMaterialize bool,
 ) int32 {
 	// forceMaterialize materializes the image even with no irregular indexes, so
-	// the row-scoped FK check can read the same new-row image (irregularMaintIndexes
-	// is empty, so finishIrregularIndexMaintenance stays a no-op).
+	// DML RETURNING can read the same final new-row image (irregularMaintIndexes is
+	// empty, so finishIrregularIndexMaintenance stays a no-op).
 	if len(irregularIndexes) == 0 && !forceMaterialize {
 		return newRowImageID
 	}
@@ -311,6 +316,18 @@ func (builder *QueryBuilder) appendIrregularMaintSource(
 	builder.irregularMaintIndexes = irregularIndexes
 	builder.irregularMaintTableDef = &maintTableDef
 	builder.irregularMaintObjRef = objRef
+	if forceMaterialize {
+		colPos := make(map[string]int32, len(tableDef.Cols))
+		var imagePos int32
+		for _, col := range tableDef.Cols {
+			if col.Name == catalog.Row_ID {
+				continue
+			}
+			colPos[strings.ToLower(col.Name)] = imagePos
+			imagePos++
+		}
+		builder.recordReturningSource(maintStep, tableDef, objRef, tableDef.Name, tableDef.Name, colPos)
+	}
 
 	return projID
 }
@@ -428,6 +445,9 @@ func (builder *QueryBuilder) buildIrregularIndexMaintenance(bindCtx *BindContext
 		if err := builder.buildIrregularIndexDeleteMaintenance(bindCtx); err != nil {
 			return err
 		}
+	}
+	if builder.irregularMaintSkipInsert {
+		return nil
 	}
 
 	// During a copy-based ALTER TABLE, an irregular index whose columns are not
@@ -1748,8 +1768,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			selectNode = builder.qry.Nodes[lastNodeID]
 		}
 	}
-	if onDupAction != plan.Node_UPDATE && len(irregularIndexes) > 0 {
-		lastNodeID = builder.appendIrregularMaintSource(bindCtx, lastNodeID, irregularIndexes, tableDef, dmlCtx.objRefs[0], false)
+	if onDupAction != plan.Node_UPDATE && (len(irregularIndexes) > 0 || builder.returningRequested) {
+		lastNodeID = builder.appendIrregularMaintSource(bindCtx, lastNodeID, irregularIndexes, tableDef, dmlCtx.objRefs[0], builder.returningRequested)
 		selectNode = builder.qry.Nodes[lastNodeID]
 		selectTag = selectNode.BindingTags[0]
 	}

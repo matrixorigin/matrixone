@@ -31,6 +31,7 @@ type Replace struct {
 	PartitionNames IdentifierList
 	Columns        IdentifierList
 	Rows           *Select
+	Returning      SelectExprs
 	// IsSetFormat marks the `REPLACE ... SET col = expr` form. The parser
 	// lowers it to the same Columns + ValuesClause shape as the VALUES form,
 	// so this flag is needed to keep the SET-only semantics where an RHS
@@ -57,7 +58,13 @@ func (node *Replace) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.Rows.Format(ctx)
 	}
+	if len(node.Returning) > 0 {
+		ctx.WriteString(" returning ")
+		node.Returning.Format(ctx)
+	}
 }
+
+func (node *Replace) HasReturning() bool { return len(node.Returning) > 0 }
 
 func (node *Replace) GetStatementType() string { return "Replace" }
 func (node *Replace) GetQueryType() string     { return QueryTypeDML }

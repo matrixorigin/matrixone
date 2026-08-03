@@ -1,0 +1,121 @@
+drop database if exists dml_returning;
+create database dml_returning;
+use dml_returning;
+create table t (id bigint auto_increment primary key, v int default 7, g int generated always as (v + 1), note varchar(30), unique key uk_note(note), key idx_v(v));
+insert into t(note) values ('values') returning id, v, g, note;
+id    v    g    note
+1    7    8    values
+select row_count();
+row_count()
+1
+insert into t(v, note) select 11, 'select' returning t.*, v * 2 as twice;
+id    v    g    note    twice
+2    11    12    select    22
+select row_count();
+row_count()
+1
+update t as x set v = v + 10 where note = 'values' returning x.id, x.v, x.g, x.note;
+id    v    g    note
+1    17    18    values
+select row_count();
+row_count()
+1
+update t set v = 99 where id = -1 returning id, v;
+id    v
+select row_count();
+row_count()
+0
+delete from t where note = 'select' returning id, v, g, note;
+id    v    g    note
+2    11    12    select
+select row_count();
+row_count()
+1
+begin;
+insert into t(v, note) values (21, 'rolled-back') returning id, v, g, note;
+id    v    g    note
+3    21    22    rolled-back
+rollback;
+select count(*) from t where note = 'rolled-back';
+count(*)
+0
+create table indexed_t(id int primary key, email varchar(30) unique, body text, key idx_body_prefix(body(8)));
+create fulltext index ft_body on indexed_t(body);
+insert into indexed_t values (1, 'a@example.com', 'only the base row is returned') returning *;
+id    email    body
+1    a@example.com    only the base row is returned
+update indexed_t set body = 'updated base row' where id = 1 returning id, email, body;
+id    email    body
+1    a@example.com    updated base row
+select count(*) from indexed_t where match(body) against('only');
+count(*)
+0
+select count(*) from indexed_t where match(body) against('updated');
+count(*)
+1
+update indexed_t set id = 2 where id = 1 returning id;
+not supported: DML RETURNING does not support primary-key UPDATE on synchronous full-text/vector index
+delete from indexed_t where id = 1 returning id, email, body;
+id    email    body
+1    a@example.com    updated base row
+select count(*) from indexed_t where match(body) against('updated');
+count(*)
+0
+set experimental_ivf_index = 1;
+create table vector_t(id bigint primary key, embedding vecf32(3));
+create index ivf_idx using ivfflat on vector_t(embedding) lists=1 op_type 'vector_l2_ops';
+insert into vector_t values (1, '[1,2,3]') returning id, embedding;
+id    embedding
+1    [1, 2, 3]
+update vector_t set embedding = '[3,2,1]' where id = 1 returning id, embedding;
+id    embedding
+1    [3, 2, 1]
+delete from vector_t where id = 1 returning id, embedding;
+id    embedding
+1    [3, 2, 1]
+drop table vector_t;
+set experimental_ivf_index = 0;
+create table parent_t(id int primary key);
+create table child_t(id int primary key, parent_id int, constraint fk_parent foreign key(parent_id) references parent_t(id) on delete cascade on update cascade);
+insert into parent_t values (1);
+insert into child_t values (1, 1) returning id, parent_id;
+id    parent_id
+1    1
+insert into child_t values (2, 999) returning id, parent_id;
+internal error: Cannot add or update a child row: a foreign key constraint fails
+select count(*) from child_t where id = 2;
+count(*)
+0
+delete from parent_t where id = 1 returning id;
+not supported: DML RETURNING does not support legacy DELETE path
+update parent_t set id = 2 where id = 1 returning id;
+not supported: DML RETURNING does not support legacy UPDATE path
+insert ignore into t(v, note) values (1, 'ignored') returning id;
+not supported: DML RETURNING does not support INSERT IGNORE
+insert into t(v, note) values (1, 'values') on duplicate key update v = values(v) returning id;
+not supported: DML RETURNING does not support INSERT ON DUPLICATE KEY UPDATE
+update low_priority t set v = 1 returning id;
+not supported: DML RETURNING does not support LOW_PRIORITY UPDATE
+update t, parent_t set t.v = 1 returning t.id;
+not supported: DML RETURNING does not support multi-table UPDATE
+update t join parent_t on t.id = parent_t.id set t.v = 1 returning t.id;
+not supported: DML RETURNING does not support joined UPDATE
+update t set v = 1 returning count(*);
+not supported: DML RETURNING does not support aggregate in RETURNING expression
+update t set v = 1 returning rand();
+not supported: DML RETURNING does not support volatile function in RETURNING expression
+delete from t returning (select 1);
+not supported: DML RETURNING does not support subquery in RETURNING expression
+delete quick from t returning id;
+not supported: DML RETURNING does not support DELETE QUICK
+delete from t partition(p0) returning id;
+not supported: DML RETURNING does not support explicit PARTITION DML
+update t set v = 1 returning old.v;
+not supported: DML RETURNING does not support old/new pseudo namespace
+replace into t(v, note) values (2, 'replace') returning id;
+not supported: DML RETURNING does not support REPLACE
+create temporary table temp_t(id int);
+insert into temp_t values (1) returning id;
+not supported: DML RETURNING does not support temporary table
+drop table temp_t;
+drop database dml_returning;

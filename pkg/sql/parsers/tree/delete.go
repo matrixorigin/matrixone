@@ -19,11 +19,15 @@ type Delete struct {
 	statementImpl
 	Tables         TableExprs
 	TableRefs      TableExprs
+	Priority       string
+	Quick          bool
+	Ignore         bool
 	PartitionNames IdentifierList
 	Where          *Where
 	OrderBy        OrderBy
 	Limit          *Limit
 	With           *With
+	Returning      SelectExprs
 }
 
 func (node *Delete) Format(ctx *FmtCtx) {
@@ -63,7 +67,13 @@ func (node *Delete) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.Limit.Format(ctx)
 	}
+	if node.HasReturning() {
+		ctx.WriteString(" returning ")
+		node.Returning.Format(ctx)
+	}
 }
+
+func (node *Delete) HasReturning() bool { return len(node.Returning) > 0 }
 
 func (node *Delete) GetStatementType() string { return "Delete" }
 func (node *Delete) GetQueryType() string     { return QueryTypeDML }

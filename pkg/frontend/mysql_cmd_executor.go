@@ -3961,6 +3961,18 @@ func executeStmtWithResponse(ses *Session,
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "executeStmtWithResponse",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(ses.GetTxnId(), ses.GetStmtId(), ses.GetSqlOfStmt()))
+	defer func() {
+		if execCtx.returning != nil {
+			if closeErr := execCtx.returning.Close(); closeErr != nil {
+				if err != nil {
+					err = errors.Join(err, closeErr)
+				} else {
+					ses.Warn(execCtx.reqCtx, "failed to close committed DML RETURNING spool", zap.Error(closeErr))
+				}
+			}
+			execCtx.returning = nil
+		}
+	}()
 
 	ses.SetQueryInProgress(true)
 	ses.SetQueryStart(time.Now())
@@ -3970,7 +3982,7 @@ func executeStmtWithResponse(ses *Session,
 
 	err = executeStmtWithTxn(ses, nil, execCtx)
 	if err != nil {
-		return err
+		return abortStagedReturning(execCtx, err)
 	}
 
 	// Record the rows affected by this statement so the ROW_COUNT() builtin in a
@@ -3984,6 +3996,13 @@ func executeStmtWithResponse(ses *Session,
 	}
 
 	return
+}
+
+func abortStagedReturning(execCtx *ExecCtx, cause error) error {
+	if cause == nil || execCtx == nil || execCtx.returning == nil || execCtx.returning.stagedSaver == nil {
+		return cause
+	}
+	return errors.Join(cause, execCtx.returning.stagedSaver.Abort(execCtx))
 }
 
 func executeStmtWithTxn(ses FeSession,
@@ -4382,6 +4401,18 @@ func executeStmt(ses *Session,
 		return err
 	case tree.EXEC_IN_ENGINE:
 
+	}
+
+	if execCtx.stmt.StmtKind().RespType() == tree.RESP_DEFERRED_RESULT_ROW {
+		if ses.GetIsInternal() || ses.IsBackgroundSession() {
+			return moerr.NewNotSupported(execCtx.reqCtx, "DML RETURNING does not support internal executor")
+		}
+		compiled, ok := ret.(*compile.Compile)
+		if !ok {
+			return moerr.NewInternalError(execCtx.reqCtx, "DML RETURNING requires engine compile")
+		}
+		execCtx.returning = &returningState{spool: &returningSpool{}}
+		compiled.SetResultSink(execCtx.returning.spool)
 	}
 
 	execCtx.runner = ret.(ComputationRunner)

@@ -271,7 +271,9 @@ type Compile struct {
 
 	// fill is a result writer runs a callback function.
 	// fill will be called when result data is ready.
-	fill func(*batch.Batch, *perfcounter.CounterSet) error
+	fill                func(*batch.Batch, *perfcounter.CounterSet) error
+	resultSink          ResultSink
+	executionGeneration uint64
 	// affectRows stores the number of rows affected while insert / update / delete
 	affectRows *atomic.Uint64
 	// cn address

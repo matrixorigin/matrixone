@@ -268,7 +268,7 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 
 	if err = vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
 		if op.OpType() == vm.Output {
-			op.(*output.Output).Func = c.fill
+			op.(*output.Output).Func = c.resultWriter()
 		}
 		return nil
 	}); err != nil {

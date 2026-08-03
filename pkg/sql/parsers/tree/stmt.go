@@ -96,6 +96,7 @@ const (
 	RESP_BY_SITUATION        RespType = 0x3
 	RESP_STATUS              RespType = 0x4
 	RESP_MIXED_RESULT_ROW    RespType = 0x5
+	RESP_DEFERRED_RESULT_ROW RespType = 0x6
 
 	//
 	EXEC_IN_ENGINE   ExecLocation = 0x0
@@ -341,6 +342,9 @@ func (node *Deallocate) StmtKind() StmtKind {
 }
 
 func (node *Update) StmtKind() StmtKind {
+	if node.HasReturning() {
+		return MakeStmtKind(OUTPUT_RESULT_ROW, RESP_DEFERRED_RESULT_ROW, EXEC_IN_ENGINE)
+	}
 	return defaultStatusTyp
 }
 
@@ -377,6 +381,9 @@ func (node *ShowCreateTable) StmtKind() StmtKind {
 }
 
 func (node *Insert) StmtKind() StmtKind {
+	if node.HasReturning() {
+		return MakeStmtKind(OUTPUT_RESULT_ROW, RESP_DEFERRED_RESULT_ROW, EXEC_IN_ENGINE)
+	}
 	return defaultStatusTyp
 }
 
@@ -526,6 +533,9 @@ func (node *TruncateTable) StmtKind() StmtKind {
 }
 
 func (node *Delete) StmtKind() StmtKind {
+	if node.HasReturning() {
+		return MakeStmtKind(OUTPUT_RESULT_ROW, RESP_DEFERRED_RESULT_ROW, EXEC_IN_ENGINE)
+	}
 	return defaultStatusTyp
 }
 

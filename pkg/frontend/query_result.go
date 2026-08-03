@@ -787,7 +787,97 @@ func getFileSize(files []fileservice.DirEntry, fileName string) int64 {
 
 var defResultSaver BinaryWriter = &QueryResult{}
 
+const returningQueryResultCleanupTimeout = 30 * time.Second
+
 type QueryResult struct {
+	stagedBlocks int
+	stagedID     string
+	stagedTenant string
+	sawRows      bool
+	published    bool
+	aborted      bool
+}
+
+func (result *QueryResult) Stage(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
+	newCtx := perfcounter.AttachS3RequestKey(execCtx.reqCtx, crs)
+	ses := execCtx.ses.(*Session)
+	if bat != nil && bat.RowCount() > 0 {
+		result.sawRows = true
+	}
+	err := saveBatch(newCtx, ses, bat)
+	// saveBatch increments blockIdx before opening the object writer. Capture
+	// the path even when the write fails so Abort can remove a partial object.
+	result.captureStage(ses)
+	return err
+}
+
+func (result *QueryResult) FinishStage(execCtx *ExecCtx) error {
+	if result.stagedBlocks > 0 || result.sawRows {
+		return nil
+	}
+	ses := execCtx.ses.(*Session)
+	if ses.rs == nil || len(ses.rs.ResultCols) == 0 {
+		return moerr.NewInternalError(execCtx.reqCtx, "DML RETURNING result metadata is missing")
+	}
+	empty := batch.NewWithSize(len(ses.rs.ResultCols))
+	for i, col := range ses.rs.ResultCols {
+		empty.Vecs[i] = vector.NewVec(types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale))
+	}
+	defer empty.Clean(ses.proc.Mp())
+	empty.SetRowCount(0)
+	return result.Stage(execCtx, new(perfcounter.CounterSet), empty)
+}
+
+func (result *QueryResult) Publish(execCtx *ExecCtx) error {
+	if result.aborted {
+		return moerr.NewInternalError(execCtx.reqCtx, "cannot publish an aborted DML RETURNING result")
+	}
+	if result.published {
+		return nil
+	}
+	ses := execCtx.ses.(*Session)
+	result.captureStage(ses)
+	if err := saveMeta(execCtx.reqCtx, ses); err != nil {
+		return err
+	}
+	result.published = true
+	return nil
+}
+
+func (result *QueryResult) captureStage(ses *Session) {
+	result.stagedBlocks = ses.blockIdx
+	result.stagedID = uuid.UUID(ses.GetStmtId()).String()
+	result.stagedTenant = ses.GetTenantInfo().GetTenant()
+}
+
+func (result *QueryResult) Abort(execCtx *ExecCtx) error {
+	if result.published || result.aborted {
+		return nil
+	}
+	ses := execCtx.ses.(*Session)
+	fs := getPu(ses.GetService()).FileService
+	if result.stagedID == "" {
+		result.captureStage(ses)
+	}
+	paths := make([]string, 0, result.stagedBlocks+1)
+	for i := 1; i <= result.stagedBlocks; i++ {
+		paths = append(paths, catalog.BuildQueryResultPath(result.stagedTenant, result.stagedID, i))
+	}
+	paths = append(paths, catalog.BuildQueryResultMetaPath(result.stagedTenant, result.stagedID))
+	cleanupCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(execCtx.reqCtx), returningQueryResultCleanupTimeout,
+	)
+	defer cancel()
+	err := fs.Delete(cleanupCtx, paths...)
+	ses.ResetBlockIdx()
+	ses.p = nil
+	ses.curResultSize = 0
+	ses.savedRowCount = 0
+	ses.queryRowCount = 0
+	if err == nil {
+		result.aborted = true
+	}
+	return err
 }
 
 func (result *QueryResult) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {

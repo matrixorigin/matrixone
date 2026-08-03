@@ -928,6 +928,7 @@ type ExecCtx struct {
 	resper            Responser
 	results           []ExecResult
 	prepareColDef     [][]byte
+	returning         *returningState
 	isIssue3482       bool
 	// remapDb is the effective database remap (role/session/inline merged) for
 	// this statement. It is applied at the AST level to qualified references by
@@ -972,6 +973,10 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.resper = nil
 	execCtx.results = nil
 	execCtx.prepareColDef = nil
+	if execCtx.returning != nil {
+		_ = execCtx.returning.Close()
+		execCtx.returning = nil
+	}
 	execCtx.rewriteEnabled = false
 }
 
@@ -1797,6 +1802,16 @@ type MysqlPayloadWriter interface {
 // BinaryWriter write batch into fileservice
 type BinaryWriter interface {
 	MediaWriter
+}
+
+// StagedBinaryWriter keeps query-result data invisible until Publish writes
+// the metadata marker. DML RETURNING stages before database commit and
+// publishes only after commit succeeds.
+type StagedBinaryWriter interface {
+	Stage(*ExecCtx, *perfcounter.CounterSet, *batch.Batch) error
+	FinishStage(*ExecCtx) error
+	Publish(*ExecCtx) error
+	Abort(*ExecCtx) error
 }
 
 // CsvWriter write batch into csv file

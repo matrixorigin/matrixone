@@ -142,6 +142,93 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	proc.GetSessionInfo().Buf.Free()
 }
 
+type retryRecordingResultSink struct {
+	events []string
+	rows   map[uint64]int
+}
+
+func (s *retryRecordingResultSink) BeginAttempt(_ context.Context, generation uint64, _ *process.Process) error {
+	s.events = append(s.events, fmt.Sprintf("begin:%d", generation))
+	if s.rows == nil {
+		s.rows = make(map[uint64]int)
+	}
+	return nil
+}
+
+func (s *retryRecordingResultSink) Write(generation uint64, bat *batch.Batch, _ *perfcounter.CounterSet) error {
+	if bat == nil {
+		return nil
+	}
+	s.events = append(s.events, fmt.Sprintf("write:%d", generation))
+	s.rows[generation] += bat.RowCount()
+	if generation < 2 {
+		return moerr.NewTxnNeedRetryNoCtx()
+	}
+	return nil
+}
+
+func (s *retryRecordingResultSink) SealAttempt(generation uint64) error {
+	s.events = append(s.events, fmt.Sprintf("seal:%d", generation))
+	return nil
+}
+
+func (s *retryRecordingResultSink) AbortAttempt(generation uint64, _ error) error {
+	s.events = append(s.events, fmt.Sprintf("abort:%d", generation))
+	delete(s.rows, generation)
+	return nil
+}
+
+func TestResultWriterCapturesExecutionGeneration(t *testing.T) {
+	sink := &retryRecordingResultSink{rows: make(map[uint64]int)}
+	c := &Compile{resultSink: sink, executionGeneration: 3}
+	writer := c.resultWriter()
+	c.executionGeneration = 4
+	require.NoError(t, writer(batch.EmptyBatch, nil))
+	require.Equal(t, []string{"write:3"}, sink.events)
+}
+
+func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().Buf = buffer.New()
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return "STRICT_TRANS_TABLES", nil
+	})
+	compilerCtx := plan2.NewEmptyCompilerContext()
+	compilerCtx.SetContext(ctx)
+	stmts, err := mysql.Parse(ctx, "select 1", 1)
+	require.NoError(t, err)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+	require.NoError(t, err)
+	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+
+	ctrl := gomock.NewController(t)
+	txnCli, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+	proc.Base.TxnClient = txnCli
+	proc.Base.TxnOperator = txnOp
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	c := NewCompile("test", "test", "select 1", "", "", newStubEngine(), proc, stmts[0], false, nil, time.Now())
+	require.NoError(t, c.Compile(ctx, pn, func(*batch.Batch, *perfcounter.CounterSet) error {
+		return errors.New("streaming callback must not be used when ResultSink is installed")
+	}))
+	sink := &retryRecordingResultSink{}
+	c.SetResultSink(sink)
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"begin:0", "write:0", "abort:0",
+		"begin:1", "write:1", "abort:1",
+		"begin:2", "write:2", "seal:2",
+	}, sink.events)
+	require.Equal(t, map[uint64]int{2: 1}, sink.rows)
+
+	c.Release()
+	proc.Free()
+	proc.GetSessionInfo().Buf.Free()
+}
+
 func TestApplyExecutorLockWaitTimeout(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
