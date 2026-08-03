@@ -8486,7 +8486,7 @@ func (builder *QueryBuilder) rewriteRightJoinToLeftJoin(nodeID int32) {
 
 func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext, isRoot bool) (int32, error) {
 	if len(stmt) == 1 {
-		return builder.buildTable(stmt[0], ctx, -1, nil)
+		return builder.buildTable(stmt[0], ctx, nil)
 	}
 	return 0, moerr.NewInternalError(ctx.binder.GetContext(), "stmt's length should be zero")
 	// for now, stmt'length always be zero. if someday that change in parser, you should uncomment these codes
@@ -8760,7 +8760,13 @@ func LegacyViewParserSQLMode() string {
 	return legacyViewParserSQLMode
 }
 
-func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (nodeID int32, err error) {
+type tableFunctionInput struct {
+	nodeID               int32
+	argCtx               *BindContext
+	attachExecutionChild bool
+}
+
+func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, tableInput *tableFunctionInput) (nodeID int32, err error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
 		subCtx := NewBindContext(builder, ctx)
@@ -8877,7 +8883,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 						Rewrites: map[string][]*tree.Rewrite{key: chain[:len(chain)-1]},
 					}
 				}
-				nodeID, err = builder.buildTable(top.Stmt, ctx, preNodeId, leftCtx)
+				nodeID, err = builder.buildTable(top.Stmt, ctx, tableInput)
 				if err != nil {
 					return
 				}
@@ -9054,7 +9060,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 	case *tree.JoinTableExpr:
 		if tbl.Right == nil {
-			return builder.buildTable(tbl.Left, ctx, preNodeId, leftCtx)
+			return builder.buildTable(tbl.Left, ctx, tableInput)
 		}
 		return builder.buildJoinTable(tbl, ctx)
 
@@ -9075,10 +9081,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		if tbl.Id() == "result_scan" {
 			return builder.buildResultScan(tbl, ctx)
 		}
-		return builder.buildTableFunction(tbl, ctx, preNodeId, leftCtx)
+		return builder.buildTableFunction(tbl, ctx, tableInput)
 
 	case *tree.ParenTableExpr:
-		return builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx)
+		return builder.buildTable(tbl.Expr, ctx, tableInput)
 
 	case *tree.AliasedTableExpr: //allways AliasedTableExpr first
 		derivedSelect := numericProjectionTableSelect(tbl.Expr)
@@ -9100,7 +9106,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				ctx.hasSingleRow = true
 			}
 		} else {
-			nodeID, err = builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx)
+			nodeID, err = builder.buildTable(tbl.Expr, ctx, tableInput)
 		}
 		if err != nil {
 			return
@@ -9448,7 +9454,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	leftCtx.numericTableProjectionAmbiguous = ctx.numericTableProjectionAmbiguous
 	rightCtx.numericTableProjectionAmbiguous = ctx.numericTableProjectionAmbiguous
 
-	leftChildID, err := builder.buildTable(tbl.Left, leftCtx, -1, leftCtx)
+	leftChildID, err := builder.buildTable(tbl.Left, leftCtx, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -9456,7 +9462,11 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	if _, ok := tbl.Right.(*tree.TableFunction); ok {
 		return 0, moerr.NewSyntaxError(builder.GetContext(), "Every table function must have an alias")
 	}
-	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, leftChildID, leftCtx)
+	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, &tableFunctionInput{
+		nodeID:               leftChildID,
+		argCtx:               leftCtx,
+		attachExecutionChild: true,
+	})
 	if err != nil {
 		return 0, err
 	}
@@ -9588,16 +9598,23 @@ func (builder *QueryBuilder) buildApplyTable(tbl *tree.ApplyTableExpr, ctx *Bind
 	leftCtx := NewBindContext(builder, ctx)
 	rightCtx := NewBindContext(builder, ctx)
 
-	leftChildID, err := builder.buildTable(tbl.Left, leftCtx, -1, leftCtx)
+	leftChildID, err := builder.buildTable(tbl.Left, leftCtx, nil)
 	if err != nil {
 		return 0, err
 	}
 
-	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, leftChildID, leftCtx)
+	// APPLY owns the left input at execution time.  The right-hand builder still
+	// needs the input node for planning metadata and its bindings for argument
+	// resolution, but must not attach a copy to the FUNCTION_SCAN tree.  The
+	// apply operator evaluates the arguments and invokes the function once for
+	// each left row itself.
+	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, &tableFunctionInput{
+		nodeID: leftChildID,
+		argCtx: leftCtx,
+	})
 	if err != nil {
 		return 0, err
 	}
-	builder.qry.Nodes[rightChildID].Children = nil //ignore the child of table_function in apply
 
 	err = ctx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 	if err != nil {
@@ -9611,21 +9628,21 @@ func (builder *QueryBuilder) buildApplyTable(tbl *tree.ApplyTableExpr, ctx *Bind
 	return nodeID, nil
 }
 
-func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (int32, error) {
+func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *BindContext, input *tableFunctionInput) (int32, error) {
 	var (
-		childId int32
-		err     error
-		nodeId  int32
+		err    error
+		nodeId int32
 	)
 
-	var children []int32
-	if preNodeId == -1 {
-		ctx.binder = NewTableBinder(builder, ctx)
-	} else {
-		ctx.binder = NewTableBinder(builder, leftCtx)
-		childId = builder.copyNode(ctx, preNodeId)
-		children = []int32{childId}
+	// Argument visibility, planning metadata, and execution input are distinct
+	// concepts.  JOIN and APPLY expose the same left bindings and node to their
+	// right table-function builder, but only JOIN may make that node an execution
+	// child.  APPLY supplies the left rows through its own operator.
+	argCtx := ctx
+	if input != nil && input.argCtx != nil {
+		argCtx = input.argCtx
 	}
+	ctx.binder = NewTableBinder(builder, argCtx)
 
 	exprs := make([]*plan.Expr, 0, len(tbl.Func.Exprs))
 	for _, v := range tbl.Func.Exprs {
@@ -9635,6 +9652,7 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		}
 		exprs = append(exprs, curExpr)
 	}
+
 	id := tbl.Id()
 
 	// Plugin-registered table functions (hnsw_create / hnsw_search /
@@ -9645,54 +9663,91 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 	// time; this lookup routes the parser-side dispatch through that
 	// registry before the hardcoded switch below.
 	if b, ok := planplugin.TableFunc(id); ok {
-		return b(builder, tbl, ctx, exprs, children)
+		nodeId, err = b(builder, tbl, ctx, exprs, nil)
+	} else {
+		switch id {
+		case "unnest":
+			nodeId, err = builder.buildUnnest(tbl, ctx, exprs, nil)
+		case "generate_series":
+			nodeId, err = builder.buildGenerateSeries(tbl, ctx, exprs, nil)
+		case "generate_random_int64":
+			nodeId = builder.buildGenerateRandomInt64(tbl, ctx, exprs, nil)
+		case "generate_random_float64":
+			nodeId = builder.buildGenerateRandomFloat64(tbl, ctx, exprs, nil)
+		case "meta_scan":
+			nodeId, err = builder.buildMetaScan(tbl, ctx, exprs, nil)
+		case "current_account":
+			nodeId, err = builder.buildCurrentAccount(tbl, ctx, exprs, nil)
+		case "metadata_scan":
+			nodeId = builder.buildMetadataScan(tbl, ctx, exprs, nil)
+		case "processlist", "mo_sessions":
+			nodeId, err = builder.buildProcesslist(tbl, ctx, exprs, nil)
+		case "mo_configurations":
+			nodeId, err = builder.buildMoConfigurations(tbl, ctx, exprs, nil)
+		case "mo_locks":
+			nodeId, err = builder.buildMoLocks(tbl, ctx, exprs, nil)
+		case "mo_transactions":
+			nodeId, err = builder.buildMoTransactions(tbl, ctx, exprs, nil)
+		case "mo_cache":
+			nodeId, err = builder.buildMoCache(tbl, ctx, exprs, nil)
+		case "fulltext_index_scan":
+			nodeId, err = builder.buildFullTextIndexScan(tbl, ctx, exprs, nil)
+		case "fulltext_index_tokenize":
+			inputNodeID := int32(-1)
+			if input != nil {
+				inputNodeID = input.nodeID
+			}
+			nodeId, err = builder.buildFullTextIndexTokenize(tbl, ctx, exprs, nil, inputNodeID)
+		case "stage_list":
+			nodeId, err = builder.buildStageList(tbl, ctx, exprs, nil)
+		case "moplugin_table":
+			nodeId, err = builder.buildPluginExec(tbl, ctx, exprs, nil)
+		case "parse_jsonl_data":
+			nodeId, err = builder.buildParseJsonlData(tbl, ctx, exprs, nil)
+		case "parse_jsonl_file":
+			nodeId, err = builder.buildParseJsonlFile(tbl, ctx, exprs, nil)
+		case "table_stats":
+			nodeId = builder.buildTableStats(tbl, ctx, exprs, nil)
+		case "load_file_chunks":
+			nodeId = builder.buildLoadFileChunks(tbl, ctx, exprs, nil)
+		default:
+			err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
+		}
+	}
+	if err != nil {
+		return nodeId, err
 	}
 
-	switch id {
-	case "unnest":
-		nodeId, err = builder.buildUnnest(tbl, ctx, exprs, children)
-	case "generate_series":
-		nodeId, err = builder.buildGenerateSeries(tbl, ctx, exprs, children)
-	case "generate_random_int64":
-		nodeId = builder.buildGenerateRandomInt64(tbl, ctx, exprs, children)
-	case "generate_random_float64":
-		nodeId = builder.buildGenerateRandomFloat64(tbl, ctx, exprs, children)
-	case "meta_scan":
-		nodeId, err = builder.buildMetaScan(tbl, ctx, exprs, children)
-	case "current_account":
-		nodeId, err = builder.buildCurrentAccount(tbl, ctx, exprs, children)
-	case "metadata_scan":
-		nodeId = builder.buildMetadataScan(tbl, ctx, exprs, children)
-	case "processlist", "mo_sessions":
-		nodeId, err = builder.buildProcesslist(tbl, ctx, exprs, children)
-	case "mo_configurations":
-		nodeId, err = builder.buildMoConfigurations(tbl, ctx, exprs, children)
-	case "mo_locks":
-		nodeId, err = builder.buildMoLocks(tbl, ctx, exprs, children)
-	case "mo_transactions":
-		nodeId, err = builder.buildMoTransactions(tbl, ctx, exprs, children)
-	case "mo_cache":
-		nodeId, err = builder.buildMoCache(tbl, ctx, exprs, children)
-	case "fulltext_index_scan":
-		nodeId, err = builder.buildFullTextIndexScan(tbl, ctx, exprs, children)
-	case "fulltext_index_tokenize":
-		nodeId, err = builder.buildFullTextIndexTokenize(tbl, ctx, exprs, children)
-	case "stage_list":
-		nodeId, err = builder.buildStageList(tbl, ctx, exprs, children)
-	case "moplugin_table":
-		nodeId, err = builder.buildPluginExec(tbl, ctx, exprs, children)
-	case "parse_jsonl_data":
-		nodeId, err = builder.buildParseJsonlData(tbl, ctx, exprs, children)
-	case "parse_jsonl_file":
-		nodeId, err = builder.buildParseJsonlFile(tbl, ctx, exprs, children)
-	case "table_stats":
-		nodeId = builder.buildTableStats(tbl, ctx, exprs, children)
-	case "load_file_chunks":
-		nodeId = builder.buildLoadFileChunks(tbl, ctx, exprs, children)
-	default:
-		err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
+	// Builders may normalize or remove protocol-only arguments.  Inspect the
+	// expressions the executor will actually evaluate, not the pre-builder
+	// argument slice, before deciding whether the JOIN input is an execution
+	// dependency.
+	if input != nil && input.attachExecutionChild &&
+		builder.tableFunctionDependsOnInput(builder.qry.Nodes[nodeId].TblFuncExprList, input.nodeID) {
+		builder.qry.Nodes[nodeId].Children = []int32{builder.copyNode(ctx, input.nodeID)}
 	}
-	return nodeId, err
+	return nodeId, nil
+}
+
+// tableFunctionDependsOnInput reports whether any table-function argument
+// reads a binding produced by inputNodeID.  FUNCTION_SCAN.Children is an
+// execution dependency: the executor evaluates a function with a child once
+// per child row, while a childless function is evaluated once as a source.
+// Syntactic placement on a JOIN right side must not create that dependency.
+func (builder *QueryBuilder) tableFunctionDependsOnInput(exprs []*plan.Expr, inputNodeID int32) bool {
+	inputTags := make(map[int32]struct{})
+	for _, tag := range builder.enumerateTags(inputNodeID) {
+		inputTags[tag] = struct{}{}
+	}
+
+	for _, expr := range exprs {
+		for tag := range inputTags {
+			if containsTag(expr, tag) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (builder *QueryBuilder) GetContext() context.Context {

@@ -221,20 +221,22 @@ type tableStuff struct {
 	lcaHasZeroHistory bool
 
 	def struct {
-		colNames     []string     // all columns
-		colTypes     []types.Type // all columns
-		visibleIdxes []int
-		pkColIdx     int
-		pkSeqnum     int   // physical column seqnum for PK (for ZoneMap lookup)
-		pkColIdxes   []int // expanded pk columns
-		pkKind       int
+		colNames      []string     // all columns
+		colTypes      []types.Type // all columns
+		visibleIdxes  []int
+		writableIdxes []int
+		pkColIdx      int
+		pkSeqnum      int   // physical column seqnum for PK (for ZoneMap lookup)
+		pkColIdxes    []int // expanded pk columns
+		pkKind        int
 
-		commonIdxes        []int    // indices of common columns (target data-batch ordering)
-		commonVisibleIdxes []int    // visible subset of commonIdxes for SQL/output/apply
-		tarOnlyIdxes       []int    // indices of target-only columns (target data-batch ordering)
-		baseColToTarIdx    []int    // for base batch Vec[i+1], the target column index, or -1
-		baseColNames       []string // target data column index to lineage-resolved base name
-		lcaColNames        []string // target data column index to lineage-resolved LCA name
+		commonIdxes         []int    // indices of common columns (target data-batch ordering)
+		commonVisibleIdxes  []int    // user-visible subset of commonIdxes for DIFF and row identity
+		commonWritableIdxes []int    // destination-writable subset of commonVisibleIdxes for apply
+		tarOnlyIdxes        []int    // indices of target-only columns (target data-batch ordering)
+		baseColToTarIdx     []int    // for base batch Vec[i+1], the target column index, or -1
+		baseColNames        []string // target data column index to lineage-resolved base name
+		lcaColNames         []string // target data column index to lineage-resolved LCA name
 	}
 
 	worker               *ants.Pool
