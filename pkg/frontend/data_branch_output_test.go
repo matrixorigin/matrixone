@@ -1365,8 +1365,8 @@ func TestDataBranchOutputWriteDeleteRowSQLFull(t *testing.T) {
 	tblStuff.def.visibleIdxes = []int{0, 1, 2, 3, 4}
 
 	row = []any{
-		float32(math.NaN()),
-		math.NaN(),
+		math.Float32frombits(0x7fc00001),
+		math.Float64frombits(0x7ff8000000000001),
 		nil,
 		float32(math.Inf(1)),
 		math.Inf(-1),
@@ -1374,8 +1374,10 @@ func TestDataBranchOutputWriteDeleteRowSQLFull(t *testing.T) {
 	buf.Reset()
 	require.NoError(t, writeDeleteRowSQLFull(context.Background(), nil, tblStuff, row, buf))
 	require.Equal(t,
-		"delete from `db1`.`t1` where `f32` != `f32` and `f64` != `f64` and `nullable` is null and "+
-			"`pos_inf` = cast('+Inf' as float) and `neg_inf` = cast('-Inf' as double) limit 1;\n",
+		"delete from `db1`.`t1` where serial(`f32`) = serial(bit_cast(unhex('0100c07f') as float)) and "+
+			"serial(`f64`) = serial(bit_cast(unhex('010000000000f87f') as double)) and `nullable` is null and "+
+			"serial(`pos_inf`) = serial(cast('+Inf' as float)) and "+
+			"serial(`neg_inf`) = serial(cast('-Inf' as double)) limit 1;\n",
 		buf.String(),
 	)
 }
@@ -1396,6 +1398,46 @@ func TestDataBranchOutputExecSQLStatementsWithWriteFile(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, "select 1;\ninsert into t values (1);\n", out.String())
+}
+
+func TestDataBranchOutputWriteExactFloatKeyUpdateSQL(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		DbName: "db1",
+		Name:   "t1",
+	}).AnyTimes()
+
+	tblStuff := tableStuff{baseRel: baseRel}
+	tblStuff.def.baseColNames = []string{"f32", "f64", "tag", "note"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_float32.ToType(),
+		types.T_float64.ToType(),
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	}
+	tblStuff.def.pkColIdxes = []int{0, 1, 2}
+	tblStuff.def.writableIdxes = []int{0, 1, 2, 3}
+
+	row := []any{
+		math.Float32frombits(0x7fc00001),
+		math.Float64frombits(0x8000000000000000),
+		int64(7),
+		"updated",
+	}
+	var buf bytes.Buffer
+	require.NoError(t, writeExactFloatKeyUpdateSQL(
+		context.Background(), nil, tblStuff, row, &buf,
+	))
+	require.Equal(t,
+		"update `db1`.`t1` set `note` = 'updated' where "+
+			"serial(`f32`) = serial(bit_cast(unhex('0100c07f') as float)) and "+
+			"serial(`f64`) = serial(bit_cast(unhex('0000000000000080') as double)) and "+
+			"`tag` = 7 limit 1;\n",
+		buf.String(),
+	)
 }
 
 func TestDataBranchOutputInitAndDropApplyTablesWithWriteFile(t *testing.T) {
@@ -1504,9 +1546,27 @@ func TestDataBranchOutputFlushSqlValuesWithWriteFile(t *testing.T) {
 	require.Contains(t, got, "insert into `db1`.`__mo_diff_del_x` values (1,'a');\n")
 	require.Contains(t, got, "delete from `db1`.`t1` where (`id`,`name`) in (select `branch_apply_key_0`,`branch_apply_key_1` from `db1`.`__mo_diff_del_x`);\n")
 	require.Contains(t, got, "insert into `db1`.`t1` (`id`,`name`) values (2,'b');\n")
+
+	out.Reset()
+	floatBatchInfo := *batchInfo
+	floatBatchInfo.disableInsertStage = true
+	floatBatchInfo.insertRowsIndividually = true
+	deleteCnt, insertCnt := 0, 0
+	deleteBuf, insertBuf := &bytes.Buffer{}, &bytes.Buffer{}
+	appender := sqlValuesAppender{
+		ctx: context.Background(), tblStuff: tblStuff, batchInfo: &floatBatchInfo,
+		deleteCnt: &deleteCnt, deleteBuf: deleteBuf, insertCnt: &insertCnt,
+		insertBuf: insertBuf, writeFile: writeFile,
+	}
+	require.NoError(t, appender.appendRow(diffInsert, []byte("(1,'first')")))
+	require.NoError(t, appender.appendRow(diffInsert, []byte("(2,'second')")))
+	require.NoError(t, appender.flushAll())
+	require.Equal(t, 2, strings.Count(out.String(), "insert into `db1`.`t1` (`id`,`name`) values "))
+	require.NotContains(t, out.String(), "(1,'first'),(2,'second')")
+	require.NotContains(t, out.String(), "__mo_diff_ins_x")
 }
 
-func TestDataBranchOutputFlushSqlValuesUsesNaNAwareFloatKeyMatch(t *testing.T) {
+func TestDataBranchOutputFlushSqlValuesUsesExactFloatKeyMatch(t *testing.T) {
 	batchInfo := &applyBatchInfo{
 		dbName:           "db1",
 		baseTable:        "t1",
@@ -1533,8 +1593,8 @@ func TestDataBranchOutputFlushSqlValuesUsesNaNAwareFloatKeyMatch(t *testing.T) {
 	require.Contains(t, got, "insert into `db1`.`__mo_diff_del_x` values (1,2,3);\n")
 	require.Contains(t, got,
 		"delete branch_apply_base from `db1`.`t1` as branch_apply_base join `db1`.`__mo_diff_del_x` as branch_apply_stage on "+
-			"((branch_apply_base.`float_key` != branch_apply_base.`float_key`) = (branch_apply_stage.`branch_apply_key_0` != branch_apply_stage.`branch_apply_key_0`) AND (CASE WHEN branch_apply_base.`float_key` != branch_apply_base.`float_key` THEN 0 ELSE branch_apply_base.`float_key` END = CASE WHEN branch_apply_stage.`branch_apply_key_0` != branch_apply_stage.`branch_apply_key_0` THEN 0 ELSE branch_apply_stage.`branch_apply_key_0` END)) AND "+
-			"((branch_apply_base.`double_key` != branch_apply_base.`double_key`) = (branch_apply_stage.`branch_apply_key_1` != branch_apply_stage.`branch_apply_key_1`) AND (CASE WHEN branch_apply_base.`double_key` != branch_apply_base.`double_key` THEN 0 ELSE branch_apply_base.`double_key` END = CASE WHEN branch_apply_stage.`branch_apply_key_1` != branch_apply_stage.`branch_apply_key_1` THEN 0 ELSE branch_apply_stage.`branch_apply_key_1` END)) AND "+
+			"serial(branch_apply_base.`float_key`) = serial(branch_apply_stage.`branch_apply_key_0`) AND "+
+			"serial(branch_apply_base.`double_key`) = serial(branch_apply_stage.`branch_apply_key_1`) AND "+
 			"branch_apply_base.`int_key` = branch_apply_stage.`branch_apply_key_2`;\n")
 	require.Contains(t, got, "delete from `db1`.`__mo_diff_del_x`;\n")
 }
@@ -1706,7 +1766,8 @@ func TestDataBranchOutputBuildDataBranchApplyLayout(t *testing.T) {
 	require.Equal(t, []types.Type{types.T_float32.ToType(), types.T_float64.ToType()}, info.deleteKeyTypes)
 	require.Equal(t, []string{"branch_apply_key_0", "branch_apply_key_1"}, info.deleteStageNames)
 	require.Equal(t, []string{"id", "name", "age"}, info.writableNames)
-	require.False(t, info.disableInsertStage)
+	require.True(t, info.disableInsertStage)
+	require.True(t, info.insertRowsIndividually)
 	require.True(t, strings.HasPrefix(info.deleteTable, "__mo_diff_del_"))
 	require.True(t, strings.HasPrefix(info.insertTable, "__mo_diff_ins_"))
 
@@ -1721,6 +1782,7 @@ func TestDataBranchOutputBuildDataBranchApplyLayout(t *testing.T) {
 	require.Equal(t, []string{"branch_apply_key_0"}, info.deleteStageNames)
 	require.Equal(t, []string{"id", "name"}, info.writableNames)
 	require.True(t, info.disableInsertStage)
+	require.False(t, info.insertRowsIndividually)
 
 	deleteByFullRow, deleteKeyColIdxes, info = buildDataBranchApplyLayout(
 		context.Background(), &Session{}, fakeTblStuff, dataBranchApplyModeOnlinePKOnly,
@@ -1729,6 +1791,7 @@ func TestDataBranchOutputBuildDataBranchApplyLayout(t *testing.T) {
 	require.Equal(t, []int{0, 1}, deleteKeyColIdxes)
 	require.NotNil(t, info)
 	require.False(t, info.disableInsertStage)
+	require.False(t, info.insertRowsIndividually)
 
 	deleteByFullRow, deleteKeyColIdxes, info = buildDataBranchApplyLayout(
 		context.Background(), &Session{}, fakeTblStuff, dataBranchApplyModePortableSQL,

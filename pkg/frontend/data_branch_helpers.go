@@ -17,6 +17,8 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -48,17 +50,14 @@ func isDataBranchFloatType(typ types.Type) bool {
 }
 
 // dataBranchSQLKeyEqual returns the SQL predicate for Data Branch key
-// identity. Data Branch must treat two NaN key components as the same value,
-// even though ordinary SQL float equality follows IEEE-754 and reports false.
+// identity. MatrixOne primary keys preserve FLOAT/DOUBLE bits, so scalar
+// equality is insufficient: it collapses signed zero and cannot distinguish
+// NaN payloads. serial() is the same bit-preserving encoding used by key paths.
 func dataBranchSQLKeyEqual(left, right string, typ types.Type) string {
 	if !isDataBranchFloatType(typ) {
 		return fmt.Sprintf("%s = %s", left, right)
 	}
-	return fmt.Sprintf(
-		"((%s != %s) = (%s != %s) AND "+
-			"(CASE WHEN %s != %s THEN 0 ELSE %s END = CASE WHEN %s != %s THEN 0 ELSE %s END))",
-		left, left, right, right, left, left, left, right, right, right,
-	)
+	return fmt.Sprintf("serial(%s) = serial(%s)", left, right)
 }
 
 func containsDataBranchTempTableName(sqlLower string) bool {
@@ -561,8 +560,23 @@ func formatValIntoStringWithFloatCast(
 		buf.Write(strconv.AppendUint(scratch[:0], v, 10))
 	}
 
-	writeFloat := func(v float64, bitSize int, sqlType string) {
-		if math.IsNaN(v) || math.IsInf(v, 0) {
+	writeFloat := func(v float64, bits uint64, bitSize int, sqlType string) {
+		if math.IsNaN(v) || (v == 0 && math.Signbit(v)) {
+			var raw [8]byte
+			if bitSize == 32 {
+				binary.LittleEndian.PutUint32(raw[:4], uint32(bits))
+			} else {
+				binary.LittleEndian.PutUint64(raw[:], bits)
+			}
+			buf.WriteString("bit_cast(unhex('")
+			buf.WriteString(hex.EncodeToString(raw[:bitSize/8]))
+			buf.WriteString("')")
+			buf.WriteString(" as ")
+			buf.WriteString(sqlType)
+			buf.WriteByte(')')
+			return
+		}
+		if math.IsInf(v, 0) {
 			buf.WriteString("cast('")
 			buf.Write(strconv.AppendFloat(scratch[:0], v, 'g', -1, bitSize))
 			buf.WriteString("' as ")
@@ -714,9 +728,11 @@ func formatValIntoStringWithFloatCast(
 	case types.T_int64:
 		writeInt(val.(int64))
 	case types.T_float32:
-		writeFloat(float64(val.(float32)), 32, "float")
+		v := val.(float32)
+		writeFloat(float64(v), uint64(math.Float32bits(v)), 32, "float")
 	case types.T_float64:
-		writeFloat(val.(float64), 64, "double")
+		v := val.(float64)
+		writeFloat(v, math.Float64bits(v), 64, "double")
 	case types.T_array_float32:
 		buf.WriteString("'")
 		buf.WriteString(types.ArrayToString[float32](val.([]float32)))

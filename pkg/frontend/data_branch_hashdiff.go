@@ -1723,10 +1723,11 @@ func findDeleteAndUpdateBat(
 							return err2
 						}
 						if err2 = send(batchWithKind{
-							name:  tblName,
-							side:  side,
-							batch: updateBat,
-							kind:  diffInsert,
+							name:       tblName,
+							side:       side,
+							batch:      updateBat,
+							kind:       diffInsert,
+							fromUpdate: tblStuff.def.pkKind != fakeKind,
 						}); err2 != nil {
 							return err2
 						}
@@ -2094,6 +2095,7 @@ func diffDataHelper(
 			tarBat        *batch.Batch
 			baseBat       *batch.Batch
 			baseDeleteBat *batch.Batch
+			tarUpdateBat  *batch.Batch
 			tarTuple      types.Tuple
 			baseTuple     types.Tuple
 			checkRet      databranchutils.GetResult
@@ -2101,6 +2103,11 @@ func diffDataHelper(
 
 		tarBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 		baseBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+		defer func() {
+			if tarUpdateBat != nil {
+				tblStuff.retPool.releaseRetBatch(tarUpdateBat, false)
+			}
+		}()
 
 		if err2 = cursor.ForEach(func(key []byte, row []byte) error {
 			select {
@@ -2176,10 +2183,13 @@ func diffDataHelper(
 							if baseDeleteBat == nil {
 								baseDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 							}
+							if tarUpdateBat == nil {
+								tarUpdateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+							}
 							if err2 = appendTupleToBat(ses, baseDeleteBat, baseTuple, tblStuff); err2 != nil {
 								return err2
 							}
-							if err2 = appendTupleToBat(ses, tarBat, tarTuple, tblStuff); err2 != nil {
+							if err2 = appendTupleToBat(ses, tarUpdateBat, tarTuple, tblStuff); err2 != nil {
 								return err2
 							}
 						} else {
@@ -2206,11 +2216,28 @@ func diffDataHelper(
 
 		if baseDeleteBat != nil {
 			if stop, err3 := emitBatch(emit, batchWithKind{
-				batch: baseDeleteBat,
-				kind:  diffDelete,
-				name:  tblStuff.baseRel.GetTableName(),
-				side:  diffSideBase,
+				batch:      baseDeleteBat,
+				kind:       diffDelete,
+				name:       tblStuff.baseRel.GetTableName(),
+				side:       diffSideBase,
+				fromUpdate: true,
 			}, false, tblStuff.retPool); err3 != nil {
+				return err3
+			} else if stop {
+				return nil
+			}
+		}
+
+		if tarUpdateBat != nil {
+			stop, err3 := emitBatch(emit, batchWithKind{
+				batch:      tarUpdateBat,
+				kind:       diffInsert,
+				name:       tblStuff.tarRel.GetTableName(),
+				side:       diffSideTarget,
+				fromUpdate: true,
+			}, false, tblStuff.retPool)
+			tarUpdateBat = nil
+			if err3 != nil {
 				return err3
 			} else if stop {
 				return nil

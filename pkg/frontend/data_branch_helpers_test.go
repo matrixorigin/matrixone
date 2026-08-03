@@ -61,10 +61,7 @@ func TestDataBranchSQLKeyEqual(t *testing.T) {
 		dataBranchSQLKeyEqual("left_key", "right_key", types.T_int64.ToType()))
 
 	for _, typ := range []types.Type{types.T_float32.ToType(), types.T_float64.ToType()} {
-		require.Equal(t,
-			"((left_key != left_key) = (right_key != right_key) AND "+
-				"(CASE WHEN left_key != left_key THEN 0 ELSE left_key END = "+
-				"CASE WHEN right_key != right_key THEN 0 ELSE right_key END))",
+		require.Equal(t, "serial(left_key) = serial(right_key)",
 			dataBranchSQLKeyEqual("left_key", "right_key", typ),
 		)
 	}

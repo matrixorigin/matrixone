@@ -909,9 +909,10 @@ func (h *closeTrackingBranchHashmap) Close() error {
 }
 
 type capturedBatch struct {
-	kind string
-	side int
-	rows [][]any
+	kind       string
+	side       int
+	rows       [][]any
+	fromUpdate bool
 }
 
 func TestRunLCAProbeWithReaderFallback_EarlyReturns(t *testing.T) {
@@ -1536,7 +1537,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).
 			DoAndReturn(func(_ context.Context, sql string) error {
 				require.Contains(t, sql,
-					"values row(0,cast('NaN' as double)),row(1,cast(1.25 as double))")
+					"values row(0,bit_cast(unhex('010000000000f87f') as double)),row(1,cast(1.25 as double))")
 				right := "cast(pks.`__mo_data_branch_pk_0` as DOUBLE)"
 				require.Contains(t, sql, dataBranchSQLKeyEqual("lca.`id`", right, types.T_float64.ToType()))
 				return wantErr
@@ -2027,7 +2028,9 @@ func TestHashDiff_NoLCABoundedUpdateKeepsLatestRow(t *testing.T) {
 			rows := decodeCapturedRows(t, w.batch, tblStuff.def.colTypes)
 			mu.Lock()
 			if len(rows) > 0 {
-				got = append(got, capturedBatch{kind: w.kind, side: w.side, rows: rows})
+				got = append(got, capturedBatch{
+					kind: w.kind, side: w.side, rows: rows, fromUpdate: w.fromUpdate,
+				})
 			}
 			mu.Unlock()
 			tblStuff.retPool.releaseRetBatch(w.batch, false)
@@ -2045,9 +2048,11 @@ func TestHashDiff_NoLCABoundedUpdateKeepsLatestRow(t *testing.T) {
 	require.Len(t, got, 2)
 	require.Equal(t, diffDelete, got[0].kind)
 	require.Equal(t, diffSideBase, got[0].side)
+	require.True(t, got[0].fromUpdate)
 	require.Equal(t, [][]any{{int64(1), "destination", "h1"}}, got[0].rows)
 	require.Equal(t, diffInsert, got[1].kind)
 	require.Equal(t, diffSideTarget, got[1].side)
+	require.True(t, got[1].fromUpdate)
 	require.Equal(t, [][]any{{int64(1), "bounded", "h1"}}, got[1].rows)
 }
 
