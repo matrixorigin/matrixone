@@ -105,12 +105,12 @@ func readColumnsData(
 	readColumns := columns
 	readTypes := typs
 	if extraTSColumn != nil {
-		readColumns = make([]uint16, len(columns), len(columns)+1)
+		readColumns = make([]uint16, len(columns), len(columns)+2)
 		copy(readColumns, columns)
-		readColumns = append(readColumns, *extraTSColumn)
-		readTypes = make([]types.Type, len(typs), len(typs)+1)
+		readColumns = append(readColumns, *extraTSColumn, objectio.SEQNUM_ABORT)
+		readTypes = make([]types.Type, len(typs), len(typs)+2)
 		copy(readTypes, typs)
-		readTypes = append(readTypes, objectio.TSType)
+		readTypes = append(readTypes, objectio.TSType, types.T_bool.ToType())
 	}
 
 	name := location.Name().UnsafeString()
@@ -231,6 +231,19 @@ func LoadColumnsDataInto(
 			err = moerr.NewInvalidInputNoCtx("object commit-ts column is unavailable")
 			return
 		}
+		var aborts vector.Vector
+		if err = objectio.MustVectorToCached(
+			&aborts,
+			ioVectors.Entries[len(columns)+1].CachedData,
+		); err != nil {
+			return
+		}
+		defer aborts.Free(nil)
+		hasAborts := !aborts.IsConstNull()
+		if hasAborts && (aborts.GetType().Oid != types.T_bool || aborts.Length() != commits.Length()) {
+			err = moerr.NewInvalidInputNoCtx("object abort column is unavailable")
+			return
+		}
 
 		deleteMask = objectio.GetReusableBitmap()
 		for i := 0; i < commits.Length(); i++ {
@@ -238,8 +251,13 @@ func LoadColumnsDataInto(
 				err = moerr.NewInvalidInputNoCtxf("object commit-ts row %d is null", i)
 				return
 			}
+			if hasAborts && aborts.IsNull(uint64(i)) {
+				err = moerr.NewInvalidInputNoCtxf("object abort row %d is null", i)
+				return
+			}
 			commit := vector.GetFixedAtNoTypeCheck[types.TS](&commits, i)
-			if commit.GT(visibilityTS) {
+			if commit.GT(visibilityTS) ||
+				(hasAborts && vector.GetFixedAtNoTypeCheck[bool](&aborts, i)) {
 				deleteMask.Add(uint64(i))
 			}
 		}
@@ -314,8 +332,9 @@ func LoadColumnDataBySearch(
 		return nil, false, err
 	}
 	if visibilityTS != nil {
-		sels, err = objectio.FilterCachedRowsByCommitTS(
+		sels, err = objectio.FilterCachedRowsByCommitTSAndAbort(
 			ioVectors.Entries[1].CachedData,
+			ioVectors.Entries[2].CachedData,
 			sels,
 			*visibilityTS,
 		)

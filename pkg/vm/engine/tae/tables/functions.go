@@ -467,25 +467,31 @@ func containsABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args 
 						return err
 					}
 				}
-				rowIDs.Update(rowOffset, nil, true)
-				if isAborted(abortVec, row) {
-					return nil
+				first := row
+				for first > 0 && comp(vs[first-1], v1) == 0 {
+					first--
 				}
-				commitTS := tsVec.Get(row).(types.TS)
-				startTS := txn.GetStartTS()
-				if commitTS.GT(&startTS) {
-					ts, err := delsFn(v1, commitTS)
-					if err != nil {
-						return err
+				for row = first; row < len(vs) && comp(vs[row], v1) == 0; row++ {
+					if isAborted(abortVec, row) {
+						continue
 					}
-					if ts.GT(&startTS) {
-						logutil.Info("Dedup-WW",
-							zap.String("txn", txn.Repr()),
-							zap.Int("row offset", row),
-							zap.String("commit ts", commitTS.ToString()),
-							zap.String("original commit ts", ts.ToString()),
-						)
-						return txnif.ErrTxnWWConflict
+					rowIDs.Update(rowOffset, nil, true)
+					commitTS := tsVec.Get(row).(types.TS)
+					startTS := txn.GetStartTS()
+					if commitTS.GT(&startTS) {
+						ts, err := delsFn(v1, commitTS)
+						if err != nil {
+							return err
+						}
+						if ts.GT(&startTS) {
+							logutil.Info("Dedup-WW",
+								zap.String("txn", txn.Repr()),
+								zap.Int("row offset", row),
+								zap.String("commit ts", commitTS.ToString()),
+								zap.String("original commit ts", ts.ToString()),
+							)
+							return txnif.ErrTxnWWConflict
+						}
 					}
 				}
 			}

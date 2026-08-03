@@ -109,6 +109,47 @@ func TestPersistedAppendableDedupSkipsAbortedRow(t *testing.T) {
 	require.True(t, rowIDs.IsNull(0))
 }
 
+func TestPersistedTombstoneContainsSkipsAbortedMatches(t *testing.T) {
+	var blk types.Blockid
+	target := types.NewRowid(&blk, 7)
+	txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(10, 0))
+
+	check := func(aborts []bool) bool {
+		persisted := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+		defer persisted.Close()
+		commitTS := containers.MakeVector(types.T_TS.ToType(), common.DefaultAllocator)
+		abortVec := containers.MakeVector(types.T_bool.ToType(), common.DefaultAllocator)
+		for _, aborted := range aborts {
+			persisted.Append(target, false)
+			commitTS.Append(types.BuildTS(5, 0), false)
+			abortVec.Append(aborted, false)
+		}
+		keys := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+		defer keys.Close()
+		keys.Append(target, false)
+
+		op := containers.MakeForeachVectorOp(
+			types.T_Rowid,
+			containsAlkFunctions,
+			persisted,
+			keys,
+			func(uint16) (containers.Vector, containers.Vector, error) {
+				return commitTS, abortVec, nil
+			},
+			txn,
+			func(any, types.TS) (types.TS, error) {
+				t.Fatal("old committed tombstone must not invoke WW lookup")
+				return types.TS{}, nil
+			},
+		)
+		require.NoError(t, containers.ForeachVector(keys, op, nil))
+		return keys.IsNull(0)
+	}
+
+	require.True(t, check([]bool{true, false}), "a live physical match must delete the data row")
+	require.False(t, check([]bool{true, true}), "all-aborted physical matches must not delete the data row")
+}
+
 func TestMissingCommitTSFollowsDedupPolicy(t *testing.T) {
 	for _, typ := range []types.Type{
 		types.T_int64.ToType(),

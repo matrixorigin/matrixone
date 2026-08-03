@@ -246,17 +246,19 @@ func (idx *MutIndex) Contains(
 		if err == index.ErrNotFound {
 			return nil
 		}
-		if len(rows) != 1 {
-			panic("logic err: tombstones doesn't have duplicate rows")
-		}
-		err = skipFn(rows[0])
-		if err == index.ErrNotFound {
+		for i := len(rows) - 1; i >= 0; i-- {
+			if skipFn != nil {
+				err = skipFn(rows[i])
+				if err == index.ErrNotFound {
+					continue
+				}
+				if err != nil {
+					return err
+				}
+			}
+			containers.UpdateValue(keys, uint32(offset), nil, true, mp)
 			return nil
 		}
-		if err != nil {
-			return err
-		}
-		containers.UpdateValue(keys, uint32(offset), nil, true, mp)
 		return nil
 	}
 	if err = containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil); err != nil {

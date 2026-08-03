@@ -595,6 +595,17 @@ func FilterCachedRowsByCommitTS(
 	sels []int64,
 	snapshot types.TS,
 ) ([]int64, error) {
+	return FilterCachedRowsByCommitTSAndAbort(data, nil, sels, snapshot)
+}
+
+// FilterCachedRowsByCommitTSAndAbort removes rows newer than snapshot and rows
+// marked aborted. A nil or const-null abort vector is the legacy object format.
+func FilterCachedRowsByCommitTSAndAbort(
+	data fscache.Data,
+	abortData fscache.Data,
+	sels []int64,
+	snapshot types.TS,
+) ([]int64, error) {
 	var commits vector.Vector
 	if err := bindCachedVectorForScope(&commits, data); err != nil {
 		return nil, err
@@ -602,6 +613,19 @@ func FilterCachedRowsByCommitTS(
 	defer commits.Free(nil)
 	if commits.GetType().Oid != types.T_TS || commits.IsConstNull() {
 		return nil, moerr.NewInvalidInputNoCtx("object commit-ts column is unavailable")
+	}
+	var aborts vector.Vector
+	hasAborts := abortData != nil
+	if hasAborts {
+		if err := bindCachedVectorForScope(&aborts, abortData); err != nil {
+			return nil, err
+		}
+		defer aborts.Free(nil)
+		if aborts.IsConstNull() {
+			hasAborts = false
+		} else if aborts.GetType().Oid != types.T_bool || aborts.Length() != commits.Length() {
+			return nil, moerr.NewInvalidInputNoCtx("object abort column is unavailable")
+		}
 	}
 
 	filtered := sels[:0]
@@ -615,6 +639,14 @@ func FilterCachedRowsByCommitTS(
 		}
 		if commits.IsNull(uint64(sel)) {
 			return nil, moerr.NewInvalidInputNoCtxf("object commit-ts row %d is null", sel)
+		}
+		if hasAborts {
+			if aborts.IsNull(uint64(sel)) {
+				return nil, moerr.NewInvalidInputNoCtxf("object abort row %d is null", sel)
+			}
+			if vector.GetFixedAtNoTypeCheck[bool](&aborts, int(sel)) {
+				continue
+			}
 		}
 		commit := vector.GetFixedAtNoTypeCheck[types.TS](&commits, int(sel))
 		if !commit.GT(&snapshot) {
