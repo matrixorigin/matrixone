@@ -384,10 +384,10 @@ func (hashBuild *HashBuild) installRecoveryCapacity(
 	return nil
 }
 
-// releaseRecoveryCapacity returns unused recovery headroom as soon as build
-// reaches a terminal result. restoreDefault keeps direct test/reuse spill
-// allocations on the statement's ordinary controller; statement teardown
-// passes false and drops the selection immediately afterward.
+// releaseRecoveryCapacity returns recovery headroom after retained spill state
+// has been drained or build reaches a terminal result. restoreDefault keeps
+// later direct/test/reuse allocations on the statement's ordinary controller;
+// statement teardown passes false and drops the selection immediately afterward.
 func (hashBuild *HashBuild) releaseRecoveryCapacity(
 	account *mpool.AllocationAccount,
 	restoreDefault bool,

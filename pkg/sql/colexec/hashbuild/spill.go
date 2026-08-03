@@ -558,6 +558,18 @@ func (ctr *container) releaseSpillComputeScratch() {
 	ctr.spillBucketRowIds = nil
 }
 
+// dropMandatorySpillRecoveryScratch releases only allocations that borrow the
+// retained-state recovery floor. Optional coalescing buffers use ordinary
+// admission and may keep their already-produced records across the transition.
+func (ctr *container) dropMandatorySpillRecoveryScratch() {
+	ctr.freeSpillExprExecs()
+	ctr.releaseSpillComputeScratch()
+	if ctr.spillAccountedWrite != nil {
+		ctr.spillAccountedWrite.Free()
+		ctr.spillAccountedWrite = nil
+	}
+}
+
 // spillBatchWithPressure retries only the unpublished prefix of an exact
 // spill operation. Hash/expression capacity failures happen before any bucket
 // write; selected/codec failures are handled transactionally inside

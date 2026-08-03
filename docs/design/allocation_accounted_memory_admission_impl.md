@@ -17,9 +17,15 @@ The implementation has one production path:
 3. the account charges the query generation and the CN aggregate controller;
 4. the same allocation releases the charge when MPool frees it.
 
-There is no feature switch, activation gate, estimated-memory reservation, or
-parallel compatibility ledger. Cardinality estimates may still select a hash
-table capacity, but they never create a separately releasable memory charge.
+There is no feature switch, activation gate, or parallel compatibility ledger.
+Physical storage is charged only by its allocation. A shuffle HashBuild may
+additionally reserve a conservative recovery floor before accepting spillable
+retained state; that floor proves the retained state can be drained under a
+shared budget. A capacity failure while growing the floor changes the decision
+from retain to direct spill; lifecycle and invariant failures remain terminal.
+The projection is never reapplied to an upstream-owned direct source as a
+query-fatal estimate. Cardinality estimates may likewise select a hash-table
+capacity without creating a separately releasable physical allocation charge.
 
 ## Scope
 
@@ -216,7 +222,8 @@ one iterator allocation per row.
 
 The implementation is complete only when:
 
-- production has no estimated HashBuild memory reservation or activation gate;
+- no estimated HashBuild value is a query-fatal admission gate for unretained
+  work; the recovery projection is limited to the retain-versus-spill decision;
 - every retained HashBuild/join allocation in the controlled domain has
   immutable provenance;
 - runtime parallel clones join the current attempt before `Prepare`;

@@ -7,7 +7,8 @@ are not retained as validation dimensions.
 ## Static closure checks
 
 - no production allocation-account enable switch;
-- no HashBuild logical-size memory reservation token;
+- no logical-size estimate is a query-fatal gate for unretained HashBuild work;
+  the shuffle recovery floor is used only before retaining spillable state;
 - every join/HashBuild expression-owned MPool vector is constructed with the
   attempt account, while opaque library Go heap remains an explicit boundary;
 - SpillEngine construction rejects a missing or closed budget generation;
@@ -174,7 +175,8 @@ one is not presented as a substitute for the other.
 | #26174 | HashBuild build/hashmap/spill regressions introduced by #26178, plus exact physical batch/vector allocation boundaries in this PR | #26178 TKE BVT: all three 3,840,001-row fulltext inserts succeeded with zero HashBuild rejection | full fulltext workload has not been rerun at the final head |
 | #26192 | exact accounted runtime-filter payload, one-byte-short PASS degradation, varlena/null coverage, and spill decode/reuse lifecycle tests | historical LOAD failure shape is covered by #26231/#26318; the current TPCH fixture LOAD path succeeds | the original `ca_comprehensive_dataset` workload has not been rerun at the final head |
 | #26413 | segmented `CopyIntoBatches` and accounted hash-map growth/rollback regressions, including large external-batch shapes | #26438 verified the real Parquet self-join with both expected 50,000-row results | the Hive fixture has not been rerun at the final head |
-| #26454 | `TestIssue26454ExpressionKeyBuildUsesActualCapacity` exercises the CONCAT/CAST and CASE key shapes under a 16 MiB physical account and validates terminal zero | the exact jinpan SQL/data is not available in this repository | full jinpan workload remains external evidence |
+| #26454 | `TestIssue26454ExpressionKeyBuildUsesActualCapacity` exercises the CONCAT/CAST and CASE key shapes under a 16 MiB physical account and validates terminal zero; `TestShuffleHashBuildDirectSpillUsesActualAllocation` proves the conservative recovery projection cannot reject an upstream-owned direct source | the exact jinpan SQL/data is not available in this repository | full jinpan workload remains external evidence |
+| #26586 | retained shuffle batches reserve recovery ownership before copy, while direct spill uses allocation-led admission; the focused direct-spill regression and full HashBuild race suite pass | `TestHashBuildSharedBudgetRecoverySQL` passes locally with the 28 MiB shared-budget reproducer | the external TPCH Q9 workload is not rerun for this control-flow-only correction |
 | #25782 | `TestShuffleHashBuildAccountedSpillLifecycle`, `TestHashTableAccountedHighCardinalityResizeReturnsToZero`, broadcast error propagation, recursive spill, and terminal-zero tests | the two-CN 132,096-row harness at `f5cc97efe7` returned the exact count with positive spill and zero OOM; current-head TPCH 1T also completed without OOM/query failure | the private original high-cardinality SQL harness has not been rerun at the final head |
 
 Accordingly, the current TKE TPCH acceptance is complete, while the unavailable

@@ -2673,6 +2673,93 @@ func TestShuffleHashBuildAccountedSpillLifecycle(t *testing.T) {
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
+func TestShuffleHashBuildDirectSpillUsesActualAllocation(t *testing.T) {
+	tc := newTestCase(
+		t,
+		[]bool{false, false},
+		[]types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
+		nil,
+	)
+	tc.arg.Conditions = []*plan.Expr{makeIssue26454ConcatKey(t, tc.proc)}
+	tc.arg.IsShuffle = true
+	tc.arg.ShuffleIdx = 0
+	tc.arg.SpillThreshold = 1
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{
+		Tag: tc.arg.JoinMapTag + 4_501,
+	}
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+
+	const (
+		limit = uint64(8 << 20)
+		rows  = 128
+	)
+	estimated, err := expressionRecoveryBytes(
+		tc.proc,
+		tc.arg.Conditions,
+		rows,
+		false,
+	)
+	require.NoError(t, err)
+	require.Greater(t, estimated, limit,
+		"fixture must exceed the conservative retained-recovery projection")
+
+	budget := process.MustNewHashBuildBudget(limit, limit)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 256)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(limit, generation)
+	require.NoError(t, err)
+	replaceTestHashBuildAllocation(t, tc.arg, account)
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+
+	build := newBatch(tc.types, tc.proc, rows)
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(
+		build,
+		nil,
+		tc.proc.Mp(),
+	)
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(
+		nil,
+		nil,
+		tc.proc.Mp(),
+	)
+	_, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Zero(t, generation.RejectCount(),
+		"an unretained direct source must not hit the recovery projection gate")
+	require.Less(t, generation.Peak(), limit)
+
+	result, err := message.ReceiveJoinMapResult(
+		tc.arg.JoinMapTag,
+		true,
+		tc.arg.ShuffleIdx,
+		tc.proc.GetMessageBoard(),
+		tc.proc.Ctx,
+	)
+	require.NoError(t, err)
+	require.True(t, result.IsSuccess())
+	jm := result.JoinMap()
+	require.NotNil(t, jm)
+	require.True(t, jm.IsSpilled())
+	require.Equal(t, int64(rows), jm.GetRowCount())
+	payload, err := jm.TakeSpillBuildPayload()
+	require.NoError(t, err)
+	require.NoError(t, payload.Close())
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, generation.Used())
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.marg.Reset(tc.proc, false, nil)
+	require.NoError(t, tc.arg.ClearAllocationAccount(account))
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
 func TestObserveHashBuildBudgetUsesGenerationSnapshot(t *testing.T) {
 	budget := process.MustNewHashBuildBudget(1024, 1024)
 	generation, err := budget.OpenGeneration(1)

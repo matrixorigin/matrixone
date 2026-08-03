@@ -256,20 +256,6 @@ func (hashBuild *HashBuild) build(
 			analyzer,
 		)
 	}
-	ensureDirectRecovery := func(bat *batch.Batch) error {
-		if bat == nil || bat.RowCount() <= 0 {
-			return nil
-		}
-		selected, err := projectedSelectedRange(bat, 0, bat.RowCount())
-		if err != nil {
-			return err
-		}
-		return ensureRecovery(recoveryBatchProjection{
-			maxRows:     bat.RowCount(),
-			maxSelected: selected,
-			columns:     len(bat.Vecs),
-		})
-	}
 
 	defer func() {
 		observeHashBuildBudget(analyzer, ctr.hashmapBuilder.budget)
@@ -316,10 +302,6 @@ func (hashBuild *HashBuild) build(
 				hashBuild.JoinMapRefCnt,
 			)
 		}
-		execs, err := ctr.initSpillExprExecs(proc, hashBuild.Conditions)
-		if err != nil {
-			return err
-		}
 		if spillFiles == nil {
 			spillFiles = make([]*os.File, spillNumBuckets)
 		}
@@ -328,6 +310,14 @@ func (hashBuild *HashBuild) build(
 		// Drain retained copies oldest-first.  Each successful partition is
 		// followed immediately by reservation and mpool release, so the source
 		// batch and one partition scratch are the only simultaneous peaks.
+		execs := ctr.spillExprExecs
+		if len(ctr.hashmapBuilder.Batches.Buf) > 0 {
+			var err error
+			execs, err = ctr.initSpillExprExecs(proc, hashBuild.Conditions)
+			if err != nil {
+				return err
+			}
+		}
 		for len(ctr.hashmapBuilder.Batches.Buf) > 0 {
 			if err := checkHashBuildCanceled(proc); err != nil {
 				return err
@@ -346,6 +336,16 @@ func (hashBuild *HashBuild) build(
 				return err
 			}
 		}
+		// No retained state remains after the drain. Drop every mandatory
+		// recovery-class borrower before returning the conservative floor, then
+		// let direct sources use ordinary allocation-led admission.
+		ctr.dropMandatorySpillRecoveryScratch()
+		if err := hashBuild.releaseRecoveryCapacity(
+			ctr.hashmapBuilder.mapAllocationAccount,
+			true,
+		); err != nil {
+			return err
+		}
 		v2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1").Inc()
 		return nil
 	}
@@ -353,9 +353,10 @@ func (hashBuild *HashBuild) build(
 		if err := startSpill(); err != nil {
 			return err
 		}
-		if err := ensureDirectRecovery(bat); err != nil {
-			return err
-		}
+		// Recovery headroom proves that already-retained batches can be drained;
+		// an upstream-owned direct source cannot strand retained state. Admit its
+		// scratch at the physical allocation sites instead of applying the
+		// conservative retained-batch projection as a query-fatal gate.
 		return ctr.spillBatchWithPressure(
 			proc, bat, spillFiles, ctr.spillExprExecs, analyzer, false)
 	}
