@@ -497,6 +497,67 @@ func TestCopyBuildBatchBudgetsWideVarcharPartialTailReplacement(t *testing.T) {
 	require.Equal(t, colexec.DefaultBatchSize, hb.Batches.Buf[0].RowCount())
 }
 
+func TestCopyBuildBatchProjectedWithoutBudgetTracksPartialTail(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	input := testutil.NewBatch(
+		[]types.Type{types.T_int32.ToType()}, true, 3, proc.Mp())
+	defer input.Clean(proc.Mp())
+
+	var hb HashmapBuilder
+	projection, err := hb.projectedBatchCopy(input)
+	require.NoError(t, err)
+	require.Positive(t, projection.nextTailSelected)
+	require.NoError(t, hb.copyBuildBatchProjected(input, proc, projection))
+	defer hb.cleanBatches(proc)
+
+	require.Len(t, hb.Batches.Buf, 1)
+	require.Equal(t, input.RowCount(), hb.Batches.Buf[0].RowCount())
+	require.Equal(t, projection.nextTailSelected, hb.retainedSpillTailSelected)
+	require.Empty(t, hb.batchReservations)
+}
+
+func TestCopyBuildBatchProjectedWithoutBudgetFailureClearsTailProjection(t *testing.T) {
+	mp, err := mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	first := testutil.NewBatch(
+		[]types.Type{types.T_int32.ToType()}, true, 1, proc.Mp())
+	second := testutil.NewBatch(
+		[]types.Type{types.T_int32.ToType()}, true,
+		colexec.DefaultBatchSize-1, proc.Mp())
+	var filler []byte
+	defer func() {
+		if filler != nil {
+			mp.Free(filler)
+		}
+		first.Clean(proc.Mp())
+		second.Clean(proc.Mp())
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	var hb HashmapBuilder
+	projection, err := hb.projectedBatchCopy(first)
+	require.NoError(t, err)
+	require.NoError(t, hb.copyBuildBatchProjected(first, proc, projection))
+	require.Positive(t, hb.retainedSpillTailSelected)
+
+	projection, err = hb.projectedBatchCopy(second)
+	require.NoError(t, err)
+	filler, err = mp.Alloc(int(mp.Cap()-mp.CurrNB()), true)
+	require.NoError(t, err)
+	require.Equal(t, mp.Cap(), mp.CurrNB())
+
+	err = hb.copyBuildBatchProjected(second, proc, projection)
+	require.Error(t, err)
+	require.Empty(t, hb.Batches.Buf)
+	require.Zero(t, hb.retainedSpillTailSelected)
+	require.Empty(t, hb.batchReservations)
+}
+
 func TestProjectedPartialTailReplacementMatchesUnionBatch(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -980,6 +1041,73 @@ func TestUniqueAppendBudgetIncludesDeadAreaCopiedByUnionBatch(t *testing.T) {
 	generation.Close()
 }
 
+func TestUnionBatchAreaProjectionBoundaries(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	inline := testutil.MakeVarcharVector([]string{"inline"}, nil, proc.Mp())
+	defer inline.Free(proc.Mp())
+	require.Empty(t, inline.GetArea())
+
+	physical, selected, err := unionBatchAreaProjection(inline, 0, 0)
+	require.NoError(t, err)
+	require.Zero(t, physical)
+	require.Zero(t, selected)
+
+	physical, selected, err = unionBatchAreaProjection(inline, 0, 1)
+	require.NoError(t, err)
+	require.Zero(t, physical)
+	require.Zero(t, selected)
+
+	_, _, err = unionBatchAreaProjection(inline, -1, 1)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+
+	selected, err = logicalAppendAreaBytes(inline, 0, 0)
+	require.NoError(t, err)
+	require.Zero(t, selected)
+}
+
+func TestUnionBatchAreaProjectionWideFlatAndSharedRepresentations(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	typ := types.New(types.T_varchar, 128, 0)
+	const rows = 128
+	payload := make([]byte, 128)
+
+	flat := vector.NewVec(typ)
+	for range rows {
+		require.NoError(t, vector.AppendBytes(flat, payload, false, proc.Mp()))
+	}
+	defer flat.Free(proc.Mp())
+	require.True(t, flat.VarlenaAreaIsDisjoint())
+	physical, selected, err := unionBatchAreaProjection(flat, 0, rows)
+	require.NoError(t, err)
+	require.Equal(t, rows*len(payload), physical)
+	require.Equal(t, uint64(physical), selected)
+
+	constant, err := vector.NewConstBytes(typ, payload, rows, proc.Mp())
+	require.NoError(t, err)
+	defer constant.Free(proc.Mp())
+	shared := vector.NewVec(typ)
+	require.NoError(t, shared.UnionBatch(constant, 0, rows, nil, proc.Mp()))
+	defer shared.Free(proc.Mp())
+	require.False(t, shared.IsConst())
+	require.False(t, shared.VarlenaAreaIsDisjoint())
+	require.Equal(t, len(payload), len(shared.GetArea()))
+
+	physical, selected, err = unionBatchAreaProjection(shared, 0, rows)
+	require.NoError(t, err)
+	require.Equal(t, len(payload), physical)
+	require.Equal(t, uint64(rows*len(payload)), selected,
+		"a shared flat representation must retain the descriptor-scan fallback")
+
+	physical, selected, err = unionBatchAreaProjection(flat, 1, rows-1)
+	require.NoError(t, err)
+	require.Equal(t, (rows-1)*len(payload), physical)
+	require.Equal(t, uint64(physical), selected,
+		"a partial range must retain its exact-copy path")
+}
+
 func TestCleanCopiedBatchReleasesCoalescedIngressReservations(t *testing.T) {
 	const budgetCap = uint64(4 << 20)
 	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
@@ -1102,12 +1230,12 @@ func TestSpillExpressionHashKeyUsesBoundedAdmission(t *testing.T) {
 	require.NoError(t, err)
 	ctr.hashmapBuilder.setBudget(generation)
 	expr := makeExpressionLeaseTestExpr(t, proc)
-	_, err = ctr.initSpillExprExecs(proc, []*plan.Expr{expr})
+	err = initSpillExprExecsForTest(&ctr, proc, []*plan.Expr{expr})
 	require.NoError(t, err)
-	require.NoError(t, ctr.spillExprLease.Run(proc, 8192, func(_ int) error { return nil }))
-	require.Positive(t, ctr.spillExprLease.Reserved())
-	require.Equal(t, ctr.spillExprLease.Reserved(), generation.Used())
-	ctr.freeSpillExprExecs()
+	require.NoError(t, ctr.hashmapBuilder.expressionLease.Run(proc, 8192, func(_ int) error { return nil }))
+	require.Positive(t, ctr.hashmapBuilder.expressionLease.Reserved())
+	require.Equal(t, ctr.hashmapBuilder.expressionLease.Reserved(), generation.Used())
+	ctr.hashmapBuilder.FreeExecutors()
 	require.Zero(t, generation.Used())
 }
 
@@ -1151,7 +1279,10 @@ func TestExpressionHashKeyAcceptsCastTargetType(t *testing.T) {
 
 	peak, err := expressionVectorPeak(proc, expr, 1024, false)
 	require.NoError(t, err)
-	require.Equal(t, uint64(204800), peak, "charge the target-type and cast result vectors")
+	outputPeak, err := expressionFixedWidthPeak(uint64(types.T_int32.TypeLen()), 1024)
+	require.NoError(t, err)
+	require.Equal(t, 2*outputPeak, peak,
+		"charge the target-type and cast result vectors")
 }
 
 func TestPreparedParamExpressionPeakUsesConstCardinality(t *testing.T) {
