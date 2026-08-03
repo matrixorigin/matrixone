@@ -173,3 +173,134 @@ func TestBuildGenerateSeriesOwnsStableResultSchema(t *testing.T) {
 	require.Equal(t, types.T_varchar, types.T(first.TableDef.Cols[0].Typ.Id))
 	require.NotSame(t, first.TableDef.Cols[0], second.TableDef.Cols[0])
 }
+
+func TestTableFunctionInputDependency(t *testing.T) {
+	findFunctionScan := func(query *planpb.Query, name string) *planpb.Node {
+		for _, node := range query.Nodes {
+			if node.NodeType == planpb.Node_FUNCTION_SCAN &&
+				node.GetTableDef().GetTblFunc().GetName() == name {
+				return node
+			}
+		}
+		return nil
+	}
+
+	findNode := func(query *planpb.Query, nodeType planpb.Node_NodeType) *planpb.Node {
+		for _, node := range query.Nodes {
+			if node.NodeType == nodeType {
+				return node
+			}
+		}
+		return nil
+	}
+	countNodes := func(query *planpb.Query, nodeType planpb.Node_NodeType) int {
+		count := 0
+		for _, node := range query.Nodes {
+			if node.NodeType == nodeType {
+				count++
+			}
+		}
+		return count
+	}
+
+	tests := []struct {
+		name           string
+		sql            string
+		functionName   string
+		dependsOnInput bool
+		apply          bool
+		tableScans     int
+	}{
+		{
+			name:           "JOIN right function with literal arguments is a source",
+			sql:            "select * from nation n join generate_series(1, 5) g on n.n_nationkey = g.result",
+			functionName:   "generate_series",
+			dependsOnInput: false,
+			tableScans:     1,
+		},
+		{
+			name:           "JOIN right function with scalar-only arguments is a source",
+			sql:            "select * from nation n join generate_series(abs(1), 5) g on n.n_nationkey = g.result",
+			functionName:   "generate_series",
+			dependsOnInput: false,
+			tableScans:     1,
+		},
+		{
+			name:           "JOIN right function with left expression is row dependent",
+			sql:            "select * from nation n join generate_series(n.n_nationkey, n.n_nationkey + 1) g on n.n_nationkey = g.result",
+			functionName:   "generate_series",
+			dependsOnInput: true,
+			tableScans:     2,
+		},
+		{
+			name: "JOIN chain discovers dependencies in the complete left subtree",
+			sql: "select * from nation n join region r on n.n_regionkey = r.r_regionkey " +
+				"join generate_series(r.r_regionkey, r.r_regionkey) g on r.r_regionkey = g.result",
+			functionName:   "generate_series",
+			dependsOnInput: true,
+			tableScans:     4,
+		},
+		{
+			name:           "generic table function shares the source rule",
+			sql:            "select * from nation n join generate_random_int64(5, 42) g on n.n_nationkey = g.nth",
+			functionName:   "generate_random_int64",
+			dependsOnInput: false,
+			tableScans:     1,
+		},
+		{
+			name:           "unnest with literal input is a source",
+			sql:            "select * from nation n join unnest('[1, 2, 3]') u on true",
+			functionName:   "unnest",
+			dependsOnInput: false,
+			tableScans:     1,
+		},
+		{
+			name:           "fulltext JOIN uses input metadata without forcing execution dependency",
+			sql:            "select * from nation n join fulltext_index_tokenize('', 1, 'body') f on true",
+			functionName:   "fulltext_index_tokenize",
+			dependsOnInput: false,
+			tableScans:     1,
+		},
+		{
+			name:           "APPLY owns row dependency instead of FUNCTION_SCAN",
+			sql:            "select * from nation n cross apply generate_series(n.n_nationkey, n.n_nationkey + 1) g",
+			functionName:   "generate_series",
+			dependsOnInput: false,
+			apply:          true,
+			tableScans:     1,
+		},
+		{
+			name:           "APPLY keeps planning input separate from execution child",
+			sql:            "select * from nation n cross apply fulltext_index_tokenize('', n.n_nationkey, n.n_name) f",
+			functionName:   "fulltext_index_tokenize",
+			dependsOnInput: false,
+			apply:          true,
+			tableScans:     1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+
+			query := resolveQueryPlan(logicPlan).GetQuery()
+			functionScan := findFunctionScan(query, test.functionName)
+			require.NotNil(t, functionScan)
+			require.Equal(t, test.dependsOnInput, len(functionScan.Children) > 0)
+			require.Equal(t, test.tableScans, countNodes(query, planpb.Node_TABLE_SCAN))
+			if test.apply {
+				require.NotNil(t, findNode(query, planpb.Node_APPLY))
+			}
+		})
+	}
+}
+
+func TestFullTextIndexTokenizeRequiresInputRelation(t *testing.T) {
+	_, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"select * from fulltext_index_tokenize('', 1, 'body') f",
+	)
+	require.ErrorContains(t, err, "fulltext_index_tokenize requires a left input relation")
+}
