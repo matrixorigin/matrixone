@@ -66,12 +66,16 @@ func constructCreateTableSQL(
 	var mongoEnvelope sqlmongodb.CreateSQLEnvelope
 	mongoColumns := make(map[string]sqlmongodb.ColumnMapping)
 	if tableDef.TableType == catalog.SystemExternalRel {
-		var found bool
-		mongoEnvelope, found, err = sqlmongodb.ParseCreateSQLEnvelope(ctx.GetContext(), tableDef.Createsql)
+		var isMongoDB bool
+		isMongoDB, err = IsMongoDBTableDef(ctx.GetContext(), tableDef)
 		if err != nil {
 			return "", nil, err
 		}
-		if found {
+		if isMongoDB {
+			mongoEnvelope, _, err = sqlmongodb.ParseCreateSQLEnvelope(ctx.GetContext(), tableDef.Createsql)
+			if err != nil {
+				return "", nil, err
+			}
 			for _, column := range mongoEnvelope.Columns {
 				mongoColumns[strings.ToLower(column.Name)] = column
 			}
