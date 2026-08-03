@@ -888,7 +888,7 @@ func initExecuteStmtParamWithResolverInSession(
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		params, paramVals, paramIsBin, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
+		params, paramVals, paramIsBin, err := buildExecuteUserParams(executionSes, cwft.proc, execPlan.Args)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
@@ -1082,19 +1082,32 @@ func preparedParamValues(proc *process.Process, mysqlTypes []byte) ([]any, error
 
 func preparedBinaryParamRuntimeType(mysqlTypes []byte, paramPos int) types.T {
 	typePos := paramPos << 1
-	if typePos < 0 || typePos >= len(mysqlTypes) {
+	if typePos < 0 || typePos+1 >= len(mysqlTypes) {
 		return types.T_any
 	}
+	unsigned := mysqlTypes[typePos+1]&0x80 != 0
 	switch defines.MysqlType(mysqlTypes[typePos]) {
 	case defines.MYSQL_TYPE_BIT:
 		return types.T_bit
 	case defines.MYSQL_TYPE_TINY:
+		if unsigned {
+			return types.T_uint8
+		}
 		return types.T_int8
 	case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_YEAR:
+		if unsigned {
+			return types.T_uint16
+		}
 		return types.T_int16
 	case defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG:
+		if unsigned {
+			return types.T_uint32
+		}
 		return types.T_int32
 	case defines.MYSQL_TYPE_LONGLONG:
+		if unsigned {
+			return types.T_uint64
+		}
 		return types.T_int64
 	case defines.MYSQL_TYPE_FLOAT:
 		return types.T_float32
@@ -1110,6 +1123,7 @@ func preparedBinaryParamRuntimeType(mysqlTypes []byte, paramPos int) types.T {
 }
 
 func buildExecuteUserParams(
+	ses FeSession,
 	proc *process.Process,
 	args []*plan.Expr,
 ) (params *vector.Vector, paramVals []any, paramIsBin []bool, err error) {
@@ -1142,7 +1156,7 @@ func buildExecuteUserParams(
 		paramVals[i] = plan2.ParamValue{
 			Value:       param,
 			IsBin:       paramIsBin[i],
-			RuntimeType: preparedTextParamRuntimeType(param),
+			RuntimeType: preparedExecuteParamRuntimeType(ses, exprImpl.V, param),
 		}
 	}
 	return
@@ -1150,13 +1164,40 @@ func buildExecuteUserParams(
 
 func preparedTextParamRuntimeType(value any) types.T {
 	switch value.(type) {
+	case int8:
+		return types.T_int8
+	case int16:
+		return types.T_int16
+	case int32:
+		return types.T_int32
+	case int, int64:
+		return types.T_int64
+	case uint8:
+		return types.T_uint8
+	case uint16:
+		return types.T_uint16
+	case uint32:
+		return types.T_uint32
+	case uint, uint64:
+		return types.T_uint64
 	case float32:
 		return types.T_float32
 	case float64:
 		return types.T_float64
+	case string, []byte:
+		return types.T_varchar
 	default:
 		return types.T_any
 	}
+}
+
+func preparedExecuteParamRuntimeType(ses FeSession, ref *plan.VarRef, value any) types.T {
+	if ref != nil && !ref.System {
+		if userVar, err := ses.GetUserDefinedVar(ref.Name); err == nil && userVar != nil {
+			return userVar.RuntimeType
+		}
+	}
+	return preparedTextParamRuntimeType(value)
 }
 
 func shouldCachePrepareCompile(p *plan.Plan) bool {

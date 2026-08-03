@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
+	"strconv"
 	"testing"
 	"time"
 
@@ -254,9 +256,10 @@ func TestPreparedPaginationUsesRuntimeParamType(t *testing.T) {
 
 func TestPreparedBinaryParamRuntimeType(t *testing.T) {
 	tests := []struct {
-		name string
-		typ  defines.MysqlType
-		want types.T
+		name     string
+		typ      defines.MysqlType
+		unsigned bool
+		want     types.T
 	}{
 		{name: "bit", typ: defines.MYSQL_TYPE_BIT, want: types.T_bit},
 		{name: "tiny integer", typ: defines.MYSQL_TYPE_TINY, want: types.T_int8},
@@ -265,6 +268,10 @@ func TestPreparedBinaryParamRuntimeType(t *testing.T) {
 		{name: "medium integer", typ: defines.MYSQL_TYPE_INT24, want: types.T_int32},
 		{name: "long integer", typ: defines.MYSQL_TYPE_LONG, want: types.T_int32},
 		{name: "signed integer", typ: defines.MYSQL_TYPE_LONGLONG, want: types.T_int64},
+		{name: "unsigned tiny integer", typ: defines.MYSQL_TYPE_TINY, unsigned: true, want: types.T_uint8},
+		{name: "unsigned short integer", typ: defines.MYSQL_TYPE_SHORT, unsigned: true, want: types.T_uint16},
+		{name: "unsigned long integer", typ: defines.MYSQL_TYPE_LONG, unsigned: true, want: types.T_uint32},
+		{name: "unsigned longlong integer", typ: defines.MYSQL_TYPE_LONGLONG, unsigned: true, want: types.T_uint64},
 		{name: "float", typ: defines.MYSQL_TYPE_FLOAT, want: types.T_float32},
 		{name: "double", typ: defines.MYSQL_TYPE_DOUBLE, want: types.T_float64},
 		{name: "legacy decimal", typ: defines.MYSQL_TYPE_DECIMAL, want: types.T_decimal128},
@@ -274,7 +281,11 @@ func TestPreparedBinaryParamRuntimeType(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			require.Equal(t, test.want, preparedBinaryParamRuntimeType([]byte{byte(test.typ), 0}, 0))
+			flag := byte(0)
+			if test.unsigned {
+				flag = 0x80
+			}
+			require.Equal(t, test.want, preparedBinaryParamRuntimeType([]byte{byte(test.typ), flag}, 0))
 		})
 	}
 	require.Equal(t, types.T_any, preparedBinaryParamRuntimeType(nil, 0))
@@ -283,10 +294,18 @@ func TestPreparedBinaryParamRuntimeType(t *testing.T) {
 }
 
 func TestPreparedTextParamRuntimeType(t *testing.T) {
+	require.Equal(t, types.T_int8, preparedTextParamRuntimeType(int8(1)))
+	require.Equal(t, types.T_int16, preparedTextParamRuntimeType(int16(1)))
+	require.Equal(t, types.T_int32, preparedTextParamRuntimeType(int32(1)))
+	require.Equal(t, types.T_int64, preparedTextParamRuntimeType(int64(1)))
+	require.Equal(t, types.T_uint8, preparedTextParamRuntimeType(uint8(1)))
+	require.Equal(t, types.T_uint16, preparedTextParamRuntimeType(uint16(1)))
+	require.Equal(t, types.T_uint32, preparedTextParamRuntimeType(uint32(1)))
+	require.Equal(t, types.T_uint64, preparedTextParamRuntimeType(uint64(1)))
 	require.Equal(t, types.T_float32, preparedTextParamRuntimeType(float32(1e10)))
 	require.Equal(t, types.T_float64, preparedTextParamRuntimeType(float64(1e100)))
-	require.Equal(t, types.T_any, preparedTextParamRuntimeType(int64(1)))
-	require.Equal(t, types.T_any, preparedTextParamRuntimeType("1e10"))
+	require.Equal(t, types.T_varchar, preparedTextParamRuntimeType("1e10"))
+	require.Equal(t, types.T_varchar, preparedTextParamRuntimeType([]byte("2.5")))
 }
 
 func TestPreparedBinaryPaginationUsesProtocolParamType(t *testing.T) {
@@ -324,7 +343,7 @@ func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
 		"12345678901234567890123456789012345678901234567890123456789012345",
 		"0.123456789012345678901234567890",
 	} {
-		require.NoError(t, ses.SetUserDefinedVar("numeric_param", value, ""))
+		require.NoError(t, ses.setUserDefinedVarWithType("numeric_param", value, "", false, types.T_decimal256))
 		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 		require.NoError(t, err)
 		require.Nil(t, comp)
@@ -339,7 +358,10 @@ func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
 		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
 		require.True(t, types.T(root.ProjectList[0].Typ.Id).IsFloat())
 	}
-	for _, value := range []string{"1e10", "1e-10", "-1e10", " 1e10 ", "\t-1e10", "1e-10 ", "1e-10000", "-1e-10000"} {
+	for _, value := range []string{
+		"2.5", "9007199254740993", "1e10", "1e-10", "-1e10",
+		" 1e10 ", "\t-1e10", "1e-10 ", "1e-10000", "-1e-10000",
+	} {
 		require.NoError(t, ses.SetUserDefinedVar("numeric_param", value, ""))
 		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 		require.NoError(t, err)
@@ -347,6 +369,20 @@ func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
 		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
 		require.True(t, types.T(root.ProjectList[0].Typ.Id).IsFloat())
 	}
+
+	for _, value := range []int64{2, 3} {
+		require.NoError(t, ses.SetUserDefinedVar("numeric_param", value, ""))
+		_, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+		require.NoError(t, err)
+		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
+		resultType := types.T(root.ProjectList[0].Typ.Id)
+		require.True(t, resultType.IsInteger(), resultType.String())
+	}
+	require.NoError(t, ses.SetUserDefinedVar("numeric_param", int64(math.MaxInt64), ""))
+	_, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+	require.NoError(t, err)
+	root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
+	require.Equal(t, int32(types.T_int64), root.ProjectList[0].Typ.Id)
 
 	for _, value := range []string{
 		"-12345678901234567890123456789012345678901234567890123456789012345",
@@ -389,7 +425,10 @@ func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
 		params.Free(cw.proc.Mp())
 		prepareStmt.params = nil
 	}
-	for _, value := range []string{"1e10", "1e-10", "-1e10", " 1e10 ", "\t-1e10", "1e-10 ", "1e-10000", "-1e-10000"} {
+	for _, value := range []string{
+		"2.5", "9007199254740993", "1e10", "1e-10", "-1e10",
+		" 1e10 ", "\t-1e10", "1e-10 ", "1e-10000", "-1e-10000",
+	} {
 		params := vector.NewVec(types.T_text.ToType())
 		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
 		prepareStmt.params = params
@@ -399,6 +438,31 @@ func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
 		require.Nil(t, comp)
 		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
 		require.True(t, types.T(root.ProjectList[0].Typ.Id).IsFloat())
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+		prepareStmt.params = nil
+	}
+
+	for _, test := range []struct {
+		value    string
+		unsigned bool
+		wantType types.T
+	}{
+		{value: strconv.FormatInt(math.MaxInt64, 10), wantType: types.T_int64},
+		{value: strconv.FormatUint(math.MaxUint64, 10), unsigned: true, wantType: types.T_uint64},
+	} {
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(test.value), false, cw.proc.Mp()))
+		prepareStmt.params = params
+		flag := byte(0)
+		if test.unsigned {
+			flag = 0x80
+		}
+		prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), flag}
+		_, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
+		require.Equal(t, int32(test.wantType), root.ProjectList[0].Typ.Id)
 		cw.proc.SetPrepareParams(nil)
 		params.Free(cw.proc.Mp())
 		prepareStmt.params = nil
@@ -453,7 +517,7 @@ func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {
 			{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "second"}}},
 		},
 	}
-	params, _, _, err := buildExecuteUserParams(cw.proc, execPlan.Args)
+	params, _, _, err := buildExecuteUserParams(ses, cw.proc, execPlan.Args)
 	require.ErrorIs(t, err, assert.AnError)
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
@@ -503,7 +567,7 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "local_shadow"}}},
 		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "session_only"}}},
 	}
-	params, paramVals, paramIsBin, err := buildExecuteUserParams(cw.proc, args)
+	params, paramVals, paramIsBin, err := buildExecuteUserParams(ses, cw.proc, args)
 	require.NoError(t, err)
 	defer params.Free(cw.proc.Mp())
 

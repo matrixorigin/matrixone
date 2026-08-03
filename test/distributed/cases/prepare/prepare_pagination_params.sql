@@ -43,6 +43,16 @@ SET @numeric_param = '1e-10000';
 EXECUTE numeric_reexecute USING @numeric_param;
 SET @numeric_param = '-1e-10000';
 EXECUTE numeric_reexecute USING @numeric_param;
+SET @numeric_param = '2.5';
+EXECUTE numeric_reexecute USING @numeric_param;
+SET @numeric_param = '9007199254740993';
+EXECUTE numeric_reexecute USING @numeric_param;
+SET @numeric_param = 9223372036854775807;
+EXECUTE numeric_reexecute USING @numeric_param;
+SET @numeric_param = 2.5;
+EXECUTE numeric_reexecute USING @numeric_param;
+SET @numeric_param = 2;
+EXECUTE numeric_reexecute USING @numeric_param;
 DEALLOCATE PREPARE numeric_reexecute;
 
 CREATE TABLE pagination_rows (id INT PRIMARY KEY);

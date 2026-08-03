@@ -6054,6 +6054,12 @@ func parseStringToFloat(s string, mode SQLCompatibilityMode) (float64, error) {
 	return parseStringToFloatWithBitSize(s, 64, mode)
 }
 
+// ParseStringToFloatForNumericExpression applies MySQL's string-to-DOUBLE
+// conversion used when a string participates in a numeric expression.
+func ParseStringToFloatForNumericExpression(s string) (float64, error) {
+	return parseStringToFloat(s, SQLCompatibilityMySQL)
+}
+
 func parseStringToFloatWithBitSize(s string, bitSize int, mode SQLCompatibilityMode) (float64, error) {
 	if isExtensionFloatCandidate(s) || mode == SQLCompatibilityMatrixOne {
 		return parseStrictFloatStringWithBitSize(s, bitSize)

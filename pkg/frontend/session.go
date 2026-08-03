@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -367,9 +368,21 @@ func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string
 }
 
 func (ses *Session) setUserDefinedVar(name string, value interface{}, sql string, isBin bool) error {
+	return ses.setUserDefinedVarWithType(name, value, sql, isBin, preparedTextParamRuntimeType(value))
+}
+
+func (ses *Session) setUserDefinedVarWithType(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	runtimeType types.T,
+) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{Value: value, Sql: sql, IsBin: isBin}
+	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{
+		Value: value, Sql: sql, IsBin: isBin, RuntimeType: runtimeType,
+	}
 	return nil
 }
 

@@ -4265,9 +4265,10 @@ func valueIsBoolTrue(value interface{}) (bool, error) {
 }
 
 type UserDefinedVar struct {
-	Value interface{}
-	Sql   string
-	IsBin bool
+	Value       interface{}
+	Sql         string
+	IsBin       bool
+	RuntimeType types.T
 }
 
 func autocommitValue(ses FeSession) (bool, error) {

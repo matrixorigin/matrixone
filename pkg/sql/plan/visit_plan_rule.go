@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 var (
@@ -441,6 +442,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	case *plan.Expr_F:
 		needResetFunction := false
 		dynamicParamPos := int32(-1)
+		dynamicNumericArgs := make([]bool, len(exprImpl.F.Args))
+		coercedNumericArgs := make([]bool, len(exprImpl.F.Args))
 		if exprImpl.F.Func.GetObjName() == "cast" && isPreparedDynamicNumericType(e.Typ) &&
 			len(exprImpl.F.Args) > 0 && exprImpl.F.Args[0].GetP() != nil {
 			dynamicParamPos = exprImpl.F.Args[0].GetP().Pos
@@ -448,6 +451,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		for i, arg := range exprImpl.F.Args {
 			_, directParam := arg.Expr.(*plan.Expr_P)
 			dynamicNumericParam := containsPreparedDynamicNumericParam(arg)
+			dynamicNumericArgs[i] = dynamicNumericParam
+			coercedNumericArgs[i] = isPreparedDynamicNumericType(arg.Typ)
 			rewrittenArg, rewriteErr := rule.ApplyExpr(arg)
 			if rewriteErr != nil {
 				return nil, rewriteErr
@@ -456,6 +461,26 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				needResetFunction = true
 			}
 			exprImpl.F.Args[i] = rewrittenArg
+		}
+		for i, arg := range exprImpl.F.Args {
+			if !dynamicNumericArgs[i] || !types.T(arg.Typ.Id).IsUnsignedInt() {
+				continue
+			}
+			for j, sibling := range exprImpl.F.Args {
+				if i == j || !coercedNumericArgs[j] || !types.T(sibling.Typ.Id).IsSignedInt() {
+					continue
+				}
+				if lit := sibling.GetLit(); lit != nil && lit.GetI64Val() >= 0 {
+					if _, ok := lit.Value.(*plan.Literal_I64Val); !ok {
+						continue
+					}
+					exprImpl.F.Args[j], err = makePreparedIntegerExpr(
+						strconv.FormatInt(lit.GetI64Val(), 10), types.T(arg.Typ.Id))
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
 		}
 		if exprImpl.F.Func.GetObjName() == "cast" && isPreparedDynamicNumericType(e.Typ) {
 			if dynamicParamPos >= 0 && int(dynamicParamPos) < len(rule.params) {
@@ -476,14 +501,22 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					}
 					return MakePlan2Float64ConstExprWithType(parsed), nil
 				}
-				trimmed := trimASCIISpace(value)
-				if (runtimeType == types.T_any || runtimeType.IsMySQLString()) && isDecimalScientificNotation(trimmed) {
-					parsed, parseErr := parsePreparedFloat(trimmed, 64)
+				if runtimeType.IsMySQLString() {
+					parsed, parseErr := planfunction.ParseStringToFloatForNumericExpression(value)
 					if parseErr != nil {
 						return nil, parseErr
 					}
 					return MakePlan2Float64ConstExprWithType(parsed), nil
 				}
+				if runtimeType.IsInteger() || runtimeType == types.T_bit {
+					return makePreparedIntegerExpr(value, runtimeType)
+				}
+			}
+			if dynamicParamPos < 0 {
+				// The prepare-time dynamic DECIMAL domain also coerces the
+				// parameter's sibling operands. Restore those operands before
+				// rebinding the enclosing function for the current runtime type.
+				return exprImpl.F.Args[0], nil
 			}
 			value := exprImpl.F.Args[0]
 			if literal := value.GetLit(); literal != nil {
@@ -544,68 +577,43 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	}
 }
 
-func isDecimalScientificNotation(value string) bool {
-	if value == "" {
-		return false
-	}
-	pos := 0
-	if value[pos] == '+' || value[pos] == '-' {
-		pos++
-	}
-	mantissaDigits := 0
-	dotSeen := false
-	for pos < len(value) && value[pos] != 'e' && value[pos] != 'E' {
-		switch {
-		case value[pos] >= '0' && value[pos] <= '9':
-			mantissaDigits++
-		case value[pos] == '.' && !dotSeen:
-			dotSeen = true
-		default:
-			return false
-		}
-		pos++
-	}
-	if mantissaDigits == 0 || pos == len(value) {
-		return false
-	}
-	pos++
-	if pos < len(value) && (value[pos] == '+' || value[pos] == '-') {
-		pos++
-	}
-	exponentStart := pos
-	for pos < len(value) && value[pos] >= '0' && value[pos] <= '9' {
-		pos++
-	}
-	return pos == len(value) && pos > exponentStart
-}
-
-func trimASCIISpace(value string) string {
-	start := 0
-	for start < len(value) && isPreparedASCIISpace(value[start]) {
-		start++
-	}
-	end := len(value)
-	for end > start && isPreparedASCIISpace(value[end-1]) {
-		end--
-	}
-	return value[start:end]
-}
-
-func isPreparedASCIISpace(value byte) bool {
-	switch value {
-	case ' ', '\t', '\n', '\v', '\f', '\r':
-		return true
-	default:
-		return false
-	}
-}
-
 func parsePreparedFloat(value string, bitSize int) (float64, error) {
 	parsed, err := strconv.ParseFloat(value, bitSize)
 	if err == nil || (errors.Is(err, strconv.ErrRange) && parsed == 0) {
 		return parsed, nil
 	}
 	return 0, err
+}
+
+func makePreparedIntegerExpr(value string, typ types.T) (*plan.Expr, error) {
+	switch typ {
+	case types.T_int8:
+		parsed, err := strconv.ParseInt(value, 10, 8)
+		return MakePlan2Int8ConstExprWithType(int8(parsed)), err
+	case types.T_int16:
+		parsed, err := strconv.ParseInt(value, 10, 16)
+		return MakePlan2Int16ConstExprWithType(int16(parsed)), err
+	case types.T_int32:
+		parsed, err := strconv.ParseInt(value, 10, 32)
+		return MakePlan2Int32ConstExprWithType(int32(parsed)), err
+	case types.T_int64:
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		return MakePlan2Int64ConstExprWithType(parsed), err
+	case types.T_uint8:
+		parsed, err := strconv.ParseUint(value, 10, 8)
+		return MakePlan2Uint8ConstExprWithType(uint8(parsed)), err
+	case types.T_uint16:
+		parsed, err := strconv.ParseUint(value, 10, 16)
+		return MakePlan2Uint16ConstExprWithType(uint16(parsed)), err
+	case types.T_uint32:
+		parsed, err := strconv.ParseUint(value, 10, 32)
+		return MakePlan2Uint32ConstExprWithType(uint32(parsed)), err
+	case types.T_uint64, types.T_bit:
+		parsed, err := strconv.ParseUint(value, 10, 64)
+		return MakePlan2Uint64ConstExprWithType(parsed), err
+	default:
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported prepared integer type %s", typ)
+	}
 }
 
 func applyWindowExpr(e *plan.Expr, apply func(*plan.Expr) (*plan.Expr, error)) (*plan.Expr, error) {

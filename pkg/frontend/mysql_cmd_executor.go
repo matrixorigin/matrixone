@@ -919,6 +919,7 @@ func doSetVar(
 	var err error = nil
 	var ok bool
 	var userVarIsBin bool
+	var userVarRuntimeType types.T
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
 		var oldValueRaw interface{}
 		if system {
@@ -955,7 +956,7 @@ func doSetVar(
 				}
 			}
 		} else {
-			err = ses.setUserDefinedVar(name, value, sql, userVarIsBin)
+			err = ses.setUserDefinedVarWithType(name, value, sql, userVarIsBin, userVarRuntimeType)
 			if err != nil {
 				return err
 			}
@@ -968,7 +969,7 @@ func doSetVar(
 		var value interface{}
 		userVarIsBin = false
 
-		value, err = getExprValueWithPrepareMode(
+		value, userVarRuntimeType, err = getExprValueWithPrepareMode(
 			assign.Value, ses, execCtx, preparedExpression, &userVarIsBin)
 		if err != nil {
 			return err

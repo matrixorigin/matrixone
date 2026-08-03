@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"math"
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -683,7 +684,9 @@ func TestPreparedDynamicNumericPlanSpecializesPerExecutionValue(t *testing.T) {
 	}
 	for _, value := range values {
 		t.Run(value, func(t *testing.T) {
-			specialized, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{value})
+			specialized, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{ParamValue{
+				Value: value, RuntimeType: types.T_decimal256,
+			}})
 			require.NoError(t, err)
 			require.False(t, HasPreparedDynamicNumericParams(specialized))
 			require.Empty(t, collectPlanParamTypes(specialized))
@@ -693,11 +696,13 @@ func TestPreparedDynamicNumericPlanSpecializesPerExecutionValue(t *testing.T) {
 	require.True(t, HasPreparedDynamicNumericParams(prepare.Plan), "specialization must not mutate the canonical plan")
 
 	for _, value := range []string{
-		"1e10", "1e-10", "-1e10", "+1.5E+10", ".5e2", "1.e2",
+		"2.5", "9007199254740993", "1e10", "1e-10", "-1e10", "+1.5E+10", ".5e2", "1.e2",
 		" 1e10 ", "\t-1e10", "1e-10 ", "1e-10000", "-1e-10000",
 	} {
 		t.Run("scientific string "+value, func(t *testing.T) {
-			specialized, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{value})
+			specialized, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{ParamValue{
+				Value: value, RuntimeType: types.T_varchar,
+			}})
 			require.NoError(t, err)
 			root := specialized.GetQuery().Nodes[specialized.GetQuery().Steps[0]]
 			require.NotEmpty(t, root.ProjectList)
@@ -705,12 +710,34 @@ func TestPreparedDynamicNumericPlanSpecializesPerExecutionValue(t *testing.T) {
 		})
 	}
 	for _, value := range []string{"10", "1.25", "-0.5"} {
-		t.Run("exact decimal string "+value, func(t *testing.T) {
-			specialized, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{value})
+		t.Run("exact decimal "+value, func(t *testing.T) {
+			specialized, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{ParamValue{
+				Value: value, RuntimeType: types.T_decimal128,
+			}})
 			require.NoError(t, err)
 			root := specialized.GetQuery().Nodes[specialized.GetQuery().Steps[0]]
 			require.NotEmpty(t, root.ProjectList)
 			require.True(t, types.T(root.ProjectList[0].Typ.Id).IsDecimal())
+		})
+	}
+
+	for _, test := range []struct {
+		name        string
+		value       string
+		runtimeType types.T
+	}{
+		{name: "signed integer", value: "41", runtimeType: types.T_int64},
+		{name: "signed max integer", value: strconv.FormatInt(math.MaxInt64, 10), runtimeType: types.T_int64},
+		{name: "unsigned max integer", value: strconv.FormatUint(math.MaxUint64, 10), runtimeType: types.T_uint64},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			specialized, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{ParamValue{
+				Value: test.value, RuntimeType: test.runtimeType,
+			}})
+			require.NoError(t, err)
+			root := specialized.GetQuery().Nodes[specialized.GetQuery().Steps[0]]
+			resultType := types.T(root.ProjectList[0].Typ.Id)
+			require.True(t, resultType.IsInteger(), resultType.String())
 		})
 	}
 	for _, test := range []struct {
@@ -741,24 +768,7 @@ func TestPreparedDynamicNumericPlanSpecializesPerExecutionValue(t *testing.T) {
 		"an explicit DECIMAL(65,30) cast is a user contract, not a dynamic marker")
 }
 
-func TestDecimalScientificNotationRecognition(t *testing.T) {
-	for _, value := range []string{"1e10", "1e-10", "-1E10", "+1.5E+10", ".5e2", "1.e2"} {
-		require.True(t, isDecimalScientificNotation(value), value)
-	}
-	for _, value := range []string{"", "+", "10", "1.25", "e10", "1e", "1e+", "1e2x", "1e2e3", "NaN", "+Inf"} {
-		require.False(t, isDecimalScientificNotation(value), value)
-	}
-	for _, test := range []struct {
-		value string
-		want  string
-	}{
-		{value: " \t\n\v\f\r1e10 \t\n\v\f\r", want: "1e10"},
-		{value: "\t-1e10", want: "-1e10"},
-		{value: "\u00a01e10\u00a0", want: "\u00a01e10\u00a0"},
-	} {
-		require.Equal(t, test.want, trimASCIISpace(test.value))
-	}
-
+func TestPreparedFloatRangeHandling(t *testing.T) {
 	positiveZero, err := parsePreparedFloat("1e-10000", 64)
 	require.NoError(t, err)
 	require.Zero(t, positiveZero)
