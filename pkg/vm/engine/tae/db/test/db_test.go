@@ -9305,6 +9305,10 @@ func Test_CheckpointChaos1(t *testing.T) {
 	defer cancel()
 	err = tae.DB.ForceCheckpoint(ctx, now)
 	assert.Error(t, err)
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), testutil.TestCheckpointTimeout)
+	t.Cleanup(waitCancel)
+	require.NoError(t, tae.BGCheckpointRunner.WaitRunningCKPDoneForTest(waitCtx, false))
+	waitCancel()
 	require.Equal(t, filesBeforeFailure, snapshotFileService(t, tae.Runtime.Fs),
 		"failed ICKP publication must roll back its data and table-ID objects")
 
@@ -9391,6 +9395,10 @@ func Test_CheckpointChaos2(t *testing.T) {
 	filesBeforeFailure := snapshotFileService(t, tae.Runtime.Fs)
 	err = tae.DB.ForceGlobalCheckpoint(ctx, maxICKP.GetEnd(), 0)
 	assert.Error(t, err)
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), testutil.TestCheckpointTimeout)
+	t.Cleanup(waitCancel)
+	require.NoError(t, tae.BGCheckpointRunner.WaitRunningCKPDoneForTest(waitCtx, true))
+	waitCancel()
 	require.Equal(t, filesBeforeFailure, snapshotFileService(t, tae.Runtime.Fs),
 		"failed GCKP publication must roll back its data and table-ID objects")
 	maxGCKP := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
