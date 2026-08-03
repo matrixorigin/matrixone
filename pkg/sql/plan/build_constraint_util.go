@@ -2009,13 +2009,25 @@ func appendPrimaryConstraintPlan(
 			if err != nil {
 				return err
 			}
-			varcharType := types.T_varchar.ToType()
-			varcharExpr, err := makePlan2CastExpr(builder.GetContext(), &Expr{
-				Typ: tableDef.Cols[pkPos].Typ,
+			// The group key is the exact identity expression. FLOAT/DOUBLE keys
+			// therefore arrive here as serial(...) bytes; recover the original
+			// value for the user-facing duplicate-entry message without changing
+			// the bit-preserving grouping semantics.
+			displayExpr := &Expr{
+				Typ: pkColExpr.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{ColPos: 1, Name: tableDef.Cols[pkPos].Name},
 				},
-			}, makePlan2Type(&varcharType))
+			}
+			pkType := types.T(pkTyp.Id)
+			if pkType == types.T_float32 || pkType == types.T_float64 {
+				displayExpr, err = MakeSerialExtractExpr(builder.GetContext(), displayExpr, pkTyp, 0)
+				if err != nil {
+					return err
+				}
+			}
+			varcharType := types.T_varchar.ToType()
+			varcharExpr, err := makePlan2CastExpr(builder.GetContext(), displayExpr, makePlan2Type(&varcharType))
 			if err != nil {
 				return err
 			}
