@@ -473,6 +473,81 @@ func TestRemoteAllocationStatementGroupExpiryRejectsLateFragment(t *testing.T) {
 	require.True(t, terminal.complete)
 }
 
+func TestRemoteAllocationStatementGenerationCapacity(t *testing.T) {
+	activeKey := remoteAllocationStatementGroupKey(newRemoteExecutionID(), "cn-a:6001")
+	activeBoard := message.NewMessageBoard()
+	first, err := acquireRemoteAllocationStatementParticipant(
+		activeKey,
+		activeBoard,
+		3,
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		remoteAllocationStatementGroups.Lock()
+		if group := remoteAllocationStatementGroups.byKey[activeKey]; group != nil {
+			if group.timer != nil {
+				group.timer.Stop()
+			}
+			delete(remoteAllocationStatementGroups.byBoard, group.board)
+			delete(remoteAllocationStatementGroups.byKey, activeKey)
+		}
+		if tombstone := remoteAllocationStatementGroups.tombstones[activeKey]; tombstone != nil {
+			if tombstone.timer != nil {
+				tombstone.timer.Stop()
+			}
+			delete(remoteAllocationStatementGroups.tombstones, activeKey)
+		}
+		remoteAllocationStatementGroups.Unlock()
+		activeBoard.CloseAndDrain()
+	})
+
+	remoteAllocationStatementGroups.Lock()
+	for i := 1; i < remoteAllocationStatementGenerationLimit; i++ {
+		key := fmt.Sprintf("capacity-tombstone-%d", i)
+		remoteAllocationStatementGroups.tombstones[key] =
+			&remoteAllocationStatementTombstone{}
+	}
+	remoteAllocationStatementGroups.Unlock()
+	t.Cleanup(func() {
+		remoteAllocationStatementGroups.Lock()
+		for i := 1; i < remoteAllocationStatementGenerationLimit; i++ {
+			delete(
+				remoteAllocationStatementGroups.tombstones,
+				fmt.Sprintf("capacity-tombstone-%d", i),
+			)
+		}
+		remoteAllocationStatementGroups.Unlock()
+	})
+
+	// The reservation belongs to the generation, not each fragment.
+	second, err := acquireRemoteAllocationStatementParticipant(
+		activeKey,
+		activeBoard,
+		3,
+		nil,
+	)
+	require.NoError(t, err)
+
+	newKey := remoteAllocationStatementGroupKey(newRemoteExecutionID(), "cn-a:6001")
+	newBoard := message.NewMessageBoard()
+	_, err = acquireRemoteAllocationStatementParticipant(newKey, newBoard, 1, nil)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	newBoard.CloseAndDrain()
+
+	terminal, err := first.finish(errors.New("partial dispatch failed"))
+	require.NoError(t, err)
+	require.False(t, terminal.complete)
+	terminal, err = second.finish(errors.New("sibling canceled"))
+	require.Error(t, err)
+	require.True(t, terminal.complete)
+
+	remoteAllocationStatementGroups.Lock()
+	tombstoneCount := len(remoteAllocationStatementGroups.tombstones)
+	remoteAllocationStatementGroups.Unlock()
+	require.Equal(t, remoteAllocationStatementGenerationLimit, tombstoneCount)
+}
+
 func TestRemoteAllocationStatementGroupFailureCancelsActiveSibling(t *testing.T) {
 	board := message.NewMessageBoard()
 	canceled := make(chan error, 2)

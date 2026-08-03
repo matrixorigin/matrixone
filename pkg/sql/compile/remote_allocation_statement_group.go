@@ -66,6 +66,12 @@ var remoteAllocationStatementRegistrationTimeout = 5 * time.Minute
 // contains no statement resources.
 const remoteAllocationStatementTombstoneTimeout = MaxRpcTime
 
+// Reserve tombstone capacity when a remote execution is first admitted. An
+// active group can become a tombstone after a partial dispatch, so bounding
+// only the tombstone map would admit more generations than can later be
+// retained safely. Existing fragments do not consume another reservation.
+const remoteAllocationStatementGenerationLimit = 4096
+
 // collectRemoteFragmentCounts computes the number of pipeline RPCs that the
 // complete physical scope graph will send to each CN. The execution address
 // changes when traversal crosses a Remote scope: nested scopes targeting that
@@ -194,6 +200,16 @@ func acquireRemoteAllocationStatementParticipant(
 			return nil, errors.Join(
 				mpool.ErrAllocationAccountInvariant,
 				moerr.NewInternalErrorNoCtx("remote allocation statement group key already registered"),
+			)
+		}
+		if len(remoteAllocationStatementGroups.byKey)+
+			len(remoteAllocationStatementGroups.tombstones) >=
+			remoteAllocationStatementGenerationLimit {
+			return nil, errors.Join(
+				mpool.ErrAllocationAccountInvariant,
+				moerr.NewInternalErrorNoCtx(
+					"remote allocation statement generation capacity reached",
+				),
 			)
 		}
 		group = &remoteAllocationStatementGroup{
