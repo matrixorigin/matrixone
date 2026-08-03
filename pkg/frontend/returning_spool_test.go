@@ -32,12 +32,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 )
 
 type returningProtocolRecorder struct {
 	testMysqlWriter
-	events   *[]string
-	writeErr error
+	events     *[]string
+	writeErr   error
+	outputConn *Conn
 }
 
 func (r *returningProtocolRecorder) WriteLengthEncodedNumber(value uint64) error {
@@ -55,9 +57,31 @@ func (r *returningProtocolRecorder) WriteEOFIFAndNoFlush(uint16, uint16) error {
 	return nil
 }
 
-func (r *returningProtocolRecorder) Write(*ExecCtx, *perfcounter.CounterSet, *batch.Batch) error {
+func (r *returningProtocolRecorder) Write(_ *ExecCtx, counter *perfcounter.CounterSet, _ *batch.Batch) error {
 	*r.events = append(*r.events, "rows")
+	if r.outputConn != nil {
+		return r.outputConn.withOutputCounter(counter, func() error {
+			tracker := r.outputConn.responseOutputWait.Load()
+			operatorCounter := r.outputConn.outputCounter.Load()
+			if tracker != nil {
+				tracker.totalNS.Add(19)
+			}
+			if operatorCounter != nil {
+				operatorCounter.ProtocolOutputWaitNS.Add(19)
+				if tracker != nil {
+					tracker.operatorNS.Add(19)
+				}
+			}
+			return r.writeErr
+		})
+	}
 	return r.writeErr
+}
+
+func (r *returningProtocolRecorder) setResponseOutputWaitTracker(tracker *responseOutputWaitTracker) {
+	if r.outputConn != nil {
+		r.outputConn.setResponseOutputWaitTracker(tracker)
+	}
 }
 
 func (r *returningProtocolRecorder) WriteEOFOrOKWithAffectedRows(affectedRows uint64, _ uint16, _ uint16) error {
@@ -183,6 +207,49 @@ func TestDeferredReturningResponseStartsAfterPublish(t *testing.T) {
 		"rows",
 		"result-eof:3",
 	}, events)
+}
+
+func TestDeferredReturningReplayOutputWaitStaysRootOwned(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	ses.txnHandler = &TxnHandler{}
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+
+	spool := &returningSpool{}
+	defer func() { require.NoError(t, spool.Close()) }()
+	bat := returningTestBatch(t, ses, 7)
+	defer bat.Clean(ses.proc.Mp())
+	require.NoError(t, spool.BeginAttempt(ctx, 0, ses.proc))
+	require.NoError(t, spool.Write(0, bat, nil))
+	require.NoError(t, spool.SealAttempt(0))
+
+	column := &MysqlColumn{}
+	column.SetName("v")
+	column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	var events []string
+	writer := &returningProtocolRecorder{events: &events, outputConn: &Conn{}}
+	resper := NewMysqlResp(writer)
+	ses.respr = resper
+	root := resource.NewRoot(resource.ConnExternal)
+	ctx = resource.ContextWithRoot(ctx, root)
+	execCtx := &ExecCtx{
+		reqCtx:     ctx,
+		ses:        ses,
+		proc:       ses.proc,
+		isLastStmt: true,
+		returning: &returningState{
+			spool:        spool,
+			columns:      []any{column},
+			affectedRows: 1,
+		},
+	}
+
+	ses.beginResponseAccounting()
+	require.NoError(t, resper.respDeferredResultRow(ses, execCtx))
+	ses.finishResponseAccounting(ctx, nil, false)
+
+	require.Equal(t, uint64(19), root.PreResponseSummary().Usage.WaitNS[resource.WaitOutput])
+	require.Nil(t, writer.outputConn.outputCounter.Load())
 }
 
 func TestDeferredReturningZeroRowsStillSendsMetadata(t *testing.T) {

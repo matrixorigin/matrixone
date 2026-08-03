@@ -249,7 +249,9 @@ func (s *returningSpool) Replay(ctx context.Context, consume func(*batch.Batch, 
 			return moerr.NewInternalError(ctx, "DML RETURNING spool replay row count overflow")
 		}
 		rows += recordRows
-		if err = consume(readBatch, new(perfcounter.CounterSet)); err != nil {
+		// Replay runs after compile analysis has finished, so its protocol output
+		// wait belongs to the statement root rather than an operator counter.
+		if err = consume(readBatch, nil); err != nil {
 			return err
 		}
 	}
