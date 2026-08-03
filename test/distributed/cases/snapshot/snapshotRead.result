@@ -605,7 +605,8 @@ col1    col2    account_id
 2    3    0
 drop snapshot if exists sp06;
 create snapshot sp06 for account;
-select count(*) from mo_catalog.mo_tables{snapshot = sp06} where reldatabase = 'mo_catalog';
+select count(*) from mo_catalog.mo_tables{snapshot = sp06}
+where reldatabase = 'mo_catalog' and relname not like 'mo_lifecycle_%';
 count(*)
 78
 select * from mo_catalog.mo_database{snapshot = sp06} where datname = 'mo_catalog';

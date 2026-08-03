@@ -545,7 +545,7 @@ func TestLifecycleCommandFailsClosedBeforeCatalogUpgrade(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
 }
 
-func TestEnsureLifecycleBindingCapacityUsesSystemAccountAndExcludesCurrentTable(t *testing.T) {
+func TestEnsureLifecycleBindingCapacityUsesTenantAccountAndExcludesCurrentTable(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), 17)
 	sql := lifecycleBindingCapacitySQL(17, 42)
 	statements, err := mysql.Parse(context.Background(), sql, 1)
@@ -556,7 +556,7 @@ func TestEnsureLifecycleBindingCapacityUsesSystemAccountAndExcludesCurrentTable(
 	base.init()
 	background := &lifecycleRestoreContextExec{backgroundExecTest: base}
 	base.sql2result[sql] = newMrsForPasswordOfUser(
-		[][]interface{}{{uint64(lifecycleMaxCertifiedBindings - 1)}},
+		[][]interface{}{{uint64(lifecycleMaxCertifiedBindingsPerAccount - 1)}},
 	)
 	require.NoError(t, ensureLifecycleBindingCapacity(
 		ctx,
@@ -564,18 +564,18 @@ func TestEnsureLifecycleBindingCapacityUsesSystemAccountAndExcludesCurrentTable(
 		17,
 		42,
 	))
-	require.Equal(t, []uint32{catalog.System_Account}, background.accountIDs)
+	require.Equal(t, []uint32{17}, background.accountIDs)
 	require.Contains(t, sql, "not (account_id=17 and physical_table_id=42)")
 
 	base = &backgroundExecTest{}
 	base.init()
 	background = &lifecycleRestoreContextExec{backgroundExecTest: base}
 	base.sql2result[sql] = newMrsForPasswordOfUser(
-		[][]interface{}{{uint64(lifecycleMaxCertifiedBindings)}},
+		[][]interface{}{{uint64(lifecycleMaxCertifiedBindingsPerAccount)}},
 	)
 	err = ensureLifecycleBindingCapacity(ctx, background, 17, 42)
-	require.ErrorContains(t, err, "certified limit")
-	require.Equal(t, []uint32{catalog.System_Account}, background.accountIDs)
+	require.ErrorContains(t, err, "certified per-account limit")
+	require.Equal(t, []uint32{17}, background.accountIDs)
 }
 
 func TestRejectReferencedLifecycleStageMutation(t *testing.T) {

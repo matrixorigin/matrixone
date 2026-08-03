@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -31,11 +30,11 @@ import (
 	taeoptions "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
-var ErrLifecycleRewriteHasNoLiveRows = errors.New(
+var ErrLifecycleRewriteHasNoLiveRows = moerr.NewInternalErrorNoCtx(
 	"Lifecycle Rewrite has no live rows; finalize as Whole retirement",
 )
 
-var ErrLifecycleNoExpiredRows = errors.New(
+var ErrLifecycleNoExpiredRows = moerr.NewInternalErrorNoCtx(
 	"Lifecycle source Object has no expired visible rows",
 )
 
@@ -81,7 +80,7 @@ func lifecycleEstimatedExpiredPressureBytes(
 ) (uint64, error) {
 	visibleRows := report.ExpiredRows + report.LiveRows
 	if sourceBytes == 0 || report.ExpiredRows == 0 || visibleRows == 0 {
-		return 0, fmt.Errorf("MIXED_LAYOUT_BLOCKED: expired Rewrite pressure is zero")
+		return 0, moerr.NewInternalErrorNoCtxf("MIXED_LAYOUT_BLOCKED: expired Rewrite pressure is zero")
 	}
 	// Mixed is strictly one Object, so both factors are bounded by uint32 and
 	// their product fits uint64. Round up so a tiny expired tail is not charged
@@ -115,29 +114,29 @@ func validateLifecycleRewriteOwnership(
 		root.OrdinalUpperBound == 0 ||
 		len(result.CreatedObjectStats) == 0 ||
 		uint32(len(result.CreatedObjectStats)) > root.OrdinalUpperBound {
-		return fmt.Errorf("Lifecycle Rewrite Root ownership is incomplete")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Rewrite Root ownership is incomplete")
 	}
 	segmentID, err := types.ParseUuid(root.SegmentID)
 	if err != nil {
-		return fmt.Errorf("Lifecycle Rewrite Root segment is invalid: %w", err)
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Rewrite Root segment is invalid: %v", err)
 	}
 	seenOrdinals := make(map[uint16]struct{}, len(result.CreatedObjectStats))
 	for _, raw := range result.CreatedObjectStats {
 		if len(raw) != objectio.ObjectStatsLen {
-			return fmt.Errorf("Lifecycle Rewrite created ObjectStats is malformed")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Rewrite created ObjectStats is malformed")
 		}
 		var stats objectio.ObjectStats
 		copy(stats[:], raw)
 		name := stats.ObjectName()
 		if name.SegmentId() != segmentID {
-			return fmt.Errorf("Lifecycle Rewrite created Object escaped Root segment")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Rewrite created Object escaped Root segment")
 		}
 		ordinal := name.Num()
 		if uint32(ordinal) >= root.OrdinalUpperBound {
-			return fmt.Errorf("Lifecycle Rewrite created Object escaped Root ordinal range")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Rewrite created Object escaped Root ordinal range")
 		}
 		if _, exists := seenOrdinals[ordinal]; exists {
-			return fmt.Errorf("Lifecycle Rewrite created Object ordinal is duplicated")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Rewrite created Object ordinal is duplicated")
 		}
 		seenOrdinals[ordinal] = struct{}{}
 	}
@@ -151,11 +150,11 @@ func validateLifecycleRewriteOwnership(
 		}
 		bookingFiles++
 		if !strings.HasPrefix(location, prefix) {
-			return fmt.Errorf("Lifecycle Rewrite Booking escaped Root prefix")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Rewrite Booking escaped Root prefix")
 		}
 	}
 	if bookingFiles == 0 {
-		return fmt.Errorf("Lifecycle Rewrite has no Root-owned Booking file")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Rewrite has no Root-owned Booking file")
 	}
 	return nil
 }
@@ -194,7 +193,7 @@ func validateLifecycleRewriteLayout(extra *api.SchemaExtra) error {
 	if extra == nil ||
 		extra.BlockMaxRows != taeoptions.DefaultBlockMaxRows ||
 		extra.ObjectMaxBlocks != uint32(taeoptions.DefaultBlocksPerObject) {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"RESOURCE_BLOCKED: Lifecycle Rewrite supports only the certified default Object layout",
 		)
 	}
@@ -340,7 +339,7 @@ func lifecycleBlockReadPeakBytes(sourceLogicalBytes uint64) (uint64, error) {
 	maxUint64 := ^uint64(0)
 	if sourceLogicalBytes == 0 ||
 		sourceLogicalBytes > (maxUint64-lifecycleBlockReadFixedOverhead)/2 {
-		return 0, fmt.Errorf(
+		return 0, moerr.NewInternalErrorNoCtxf(
 			"RESOURCE_BLOCKED: Lifecycle Block read cannot be estimated safely",
 		)
 	}
@@ -352,7 +351,7 @@ func validateLifecycleBlockReadPeak(
 	maxCertifiedBytes uint64,
 ) error {
 	if maxCertifiedBytes == 0 {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"RESOURCE_BLOCKED: Lifecycle certified Block read limit is zero",
 		)
 	}
@@ -361,7 +360,7 @@ func validateLifecycleBlockReadPeak(
 		return err
 	}
 	if peak > maxCertifiedBytes {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"RESOURCE_BLOCKED: Lifecycle Block read peak %d exceeds certified limit %d",
 			peak,
 			maxCertifiedBytes,

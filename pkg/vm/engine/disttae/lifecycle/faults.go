@@ -16,9 +16,9 @@ package lifecycle
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
 
@@ -94,7 +94,7 @@ func (MOFaultInjector) Inject(
 	if message == "" {
 		message = "injected Lifecycle fault"
 	}
-	return fmt.Errorf(
+	return moerr.NewInternalErrorNoCtxf(
 		"%s at %s (code=%d)",
 		message,
 		point,
@@ -156,7 +156,7 @@ func (injector *ProgrammableFaultInjector) Hits(point FaultPoint) uint64 {
 func FailOnHit(want uint64, message string) FaultAction {
 	return func(_ context.Context, hit uint64) error {
 		if hit == want {
-			return fmt.Errorf("%s", message)
+			return moerr.NewInternalErrorNoCtxf("%s", message)
 		}
 		return nil
 	}

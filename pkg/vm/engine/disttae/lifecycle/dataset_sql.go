@@ -23,6 +23,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -37,11 +38,11 @@ func (reader SQLDatasetReader) GetRestoreDataset(
 	datasetID string,
 ) (RestoreDataset, error) {
 	if reader.Executor == nil || accountID == 0 {
-		return RestoreDataset{}, fmt.Errorf("Lifecycle Dataset reader is incomplete")
+		return RestoreDataset{}, moerr.NewInternalErrorNoCtxf("Lifecycle Dataset reader is incomplete")
 	}
 	parsed, err := uuid.Parse(datasetID)
 	if err != nil {
-		return RestoreDataset{}, fmt.Errorf("invalid Lifecycle Dataset ID")
+		return RestoreDataset{}, moerr.NewInternalErrorNoCtxf("invalid Lifecycle Dataset ID")
 	}
 	result, err := reader.Executor.Exec(
 		ctx,
@@ -66,7 +67,7 @@ from mo_catalog.mo_lifecycle_datasets where dataset_id=unhex('%s')`,
 	var decodeErr error
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
 		if len(columns) != 16 || rowsRead+rows != 1 {
-			decodeErr = fmt.Errorf("Lifecycle Dataset row is invalid")
+			decodeErr = moerr.NewInternalErrorNoCtxf("Lifecycle Dataset row is invalid")
 			return false
 		}
 		manifestDigest, err := decodeDatasetDigest(columns[4].GetStringAt(0))
@@ -126,7 +127,7 @@ from mo_catalog.mo_lifecycle_datasets where dataset_id=unhex('%s')`,
 			dataset.AttemptID == "" ||
 			dataset.StageID == 0 ||
 			len(dataset.StageIdentity) == 0 {
-			decodeErr = fmt.Errorf("Lifecycle Dataset identity is corrupt")
+			decodeErr = moerr.NewInternalErrorNoCtxf("Lifecycle Dataset identity is corrupt")
 			return false
 		}
 		rowsRead += rows
@@ -136,7 +137,7 @@ from mo_catalog.mo_lifecycle_datasets where dataset_id=unhex('%s')`,
 		return RestoreDataset{}, decodeErr
 	}
 	if rowsRead != 1 {
-		return RestoreDataset{}, fmt.Errorf(
+		return RestoreDataset{}, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Dataset %s does not exist",
 			datasetID,
 		)
@@ -148,7 +149,7 @@ func decodeDatasetDigest(value string) ([sha256.Size]byte, error) {
 	var digest [sha256.Size]byte
 	decoded, err := hex.DecodeString(value)
 	if err != nil || len(decoded) != len(digest) {
-		return digest, fmt.Errorf("invalid Lifecycle Dataset digest")
+		return digest, moerr.NewInternalErrorNoCtxf("invalid Lifecycle Dataset digest")
 	}
 	copy(digest[:], decoded)
 	return digest, nil

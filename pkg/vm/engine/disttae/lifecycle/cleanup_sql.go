@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -44,7 +45,7 @@ func (repository SQLCleanupRootRepository) Register(
 	root CleanupRoot,
 ) error {
 	if repository.Executor == nil {
-		return fmt.Errorf("Lifecycle Cleanup Root SQL executor is nil")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Cleanup Root SQL executor is nil")
 	}
 	if err := ValidateCleanupRoot(root); err != nil {
 		return err
@@ -104,7 +105,7 @@ unhex('%s'),%s,%s,%d,%s,%t,%s,%s,%s,utc_timestamp(),utc_timestamp())`,
 	}
 	defer result.Close()
 	if result.AffectedRows != 1 {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Cleanup Root insert affected %d rows",
 			result.AffectedRows,
 		)
@@ -117,7 +118,7 @@ func (repository SQLCleanupRootRepository) Get(
 	rootID string,
 ) (CleanupRoot, error) {
 	if repository.Executor == nil {
-		return CleanupRoot{}, fmt.Errorf("Lifecycle Cleanup Root SQL executor is nil")
+		return CleanupRoot{}, moerr.NewInternalErrorNoCtxf("Lifecycle Cleanup Root SQL executor is nil")
 	}
 	encodedID, err := lifecycleSQLUUID(rootID)
 	if err != nil {
@@ -138,7 +139,7 @@ func (repository SQLCleanupRootRepository) Get(
 		return CleanupRoot{}, err
 	}
 	if len(roots) != 1 {
-		return CleanupRoot{}, fmt.Errorf(
+		return CleanupRoot{}, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Cleanup Root %s returned %d rows",
 			rootID,
 			len(roots),
@@ -156,7 +157,7 @@ func (repository SQLCleanupRootRepository) HasUnresolvedSource(
 	if repository.Executor == nil ||
 		ownerAccountID == 0 ||
 		physicalTableID == 0 {
-		return false, fmt.Errorf(
+		return false, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle unresolved source query is incomplete",
 		)
 	}
@@ -186,7 +187,7 @@ func (repository SQLCleanupRootRepository) CheckCreateCapacity(
 ) error {
 	if repository.Executor == nil || maxActiveRoots <= 0 ||
 		maxReservedBytes == 0 || requestedBytes == 0 {
-		return fmt.Errorf("Lifecycle Cleanup Root capacity check is incomplete")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Cleanup Root capacity check is incomplete")
 	}
 	result, err := repository.Executor.Exec(
 		ctx,
@@ -214,7 +215,7 @@ or (state='PUBLISHED' and temporary_cleanup_done=false)`,
 		metricv2.LifecycleResourceRejectionCounter.WithLabelValues(
 			"cleanup_roots",
 		).Inc()
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"RESOURCE_BLOCKED: Lifecycle Cleanup Root capacity exhausted",
 		)
 	}
@@ -228,7 +229,7 @@ func decodeCleanupCapacity(result executor.Result) (uint64, uint64, error) {
 	var decodeErr error
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
 		if len(columns) != 2 || rowsRead+rows != 1 {
-			decodeErr = fmt.Errorf("Lifecycle Cleanup Root capacity query is invalid")
+			decodeErr = moerr.NewInternalErrorNoCtxf("Lifecycle Cleanup Root capacity query is invalid")
 			return false
 		}
 		activeRoots, decodeErr = lifecycleUint64At(columns[0], 0)
@@ -242,7 +243,7 @@ func decodeCleanupCapacity(result executor.Result) (uint64, uint64, error) {
 		return 0, 0, decodeErr
 	}
 	if rowsRead != 1 {
-		return 0, 0, fmt.Errorf(
+		return 0, 0, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Cleanup Root capacity query returned %d rows",
 			rowsRead,
 		)
@@ -260,7 +261,7 @@ func (repository SQLCleanupRootRepository) Transition(
 	to CleanupRootState,
 ) (CleanupRoot, error) {
 	if !validateCleanupRootTransition(from, to) {
-		return CleanupRoot{}, fmt.Errorf(
+		return CleanupRoot{}, moerr.NewInternalErrorNoCtxf(
 			"invalid Lifecycle Cleanup Root transition %s -> %s",
 			from,
 			to,
@@ -274,7 +275,7 @@ func (repository SQLCleanupRootRepository) Transition(
 		current.ExecutorEpoch != executorEpoch ||
 		current.State != from ||
 		current.StateVersion != expectedVersion {
-		return CleanupRoot{}, fmt.Errorf("Lifecycle Cleanup Root transition CAS failed")
+		return CleanupRoot{}, moerr.NewInternalErrorNoCtxf("Lifecycle Cleanup Root transition CAS failed")
 	}
 	rootHex, _ := lifecycleSQLUUID(rootID)
 	attemptHex, err := lifecycleSQLUUID(attemptID)
@@ -302,7 +303,7 @@ and state=%s and state_version=%d`,
 	}
 	defer result.Close()
 	if result.AffectedRows != 1 {
-		return CleanupRoot{}, fmt.Errorf("Lifecycle Cleanup Root transition CAS failed")
+		return CleanupRoot{}, moerr.NewInternalErrorNoCtxf("Lifecycle Cleanup Root transition CAS failed")
 	}
 	current.State = to
 	current.StateVersion++
@@ -319,7 +320,7 @@ func (repository SQLCleanupRootRepository) UpdateCleanup(
 	expectedVersion uint64,
 ) (CleanupRoot, error) {
 	if repository.Executor == nil {
-		return CleanupRoot{}, fmt.Errorf("Lifecycle Cleanup Root SQL executor is nil")
+		return CleanupRoot{}, moerr.NewInternalErrorNoCtxf("Lifecycle Cleanup Root SQL executor is nil")
 	}
 	rootHex, err := lifecycleSQLUUID(root.RootID)
 	if err != nil {
@@ -363,7 +364,7 @@ and state_version=%d`,
 	}
 	defer result.Close()
 	if result.AffectedRows != 1 {
-		return CleanupRoot{}, fmt.Errorf("Lifecycle Cleanup Root update CAS failed")
+		return CleanupRoot{}, moerr.NewInternalErrorNoCtxf("Lifecycle Cleanup Root update CAS failed")
 	}
 	root.StateVersion++
 	return root, nil
@@ -375,7 +376,7 @@ func (repository SQLCleanupRootRepository) ListSweepable(
 	limit int,
 ) ([]CleanupRoot, error) {
 	if repository.Executor == nil || now.IsZero() || limit <= 0 {
-		return nil, fmt.Errorf("Lifecycle Cleanup Root sweep query is incomplete")
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle Cleanup Root sweep query is incomplete")
 	}
 	result, err := repository.Executor.Exec(
 		ctx,
@@ -399,7 +400,7 @@ func (repository SQLCleanupRootRepository) ListPublishedTemporary(
 	limit int,
 ) ([]CleanupRoot, error) {
 	if repository.Executor == nil || limit <= 0 {
-		return nil, fmt.Errorf(
+		return nil, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle published temporary cleanup query is incomplete",
 		)
 	}
@@ -425,7 +426,7 @@ func (repository SQLCleanupRootRepository) ListReconcileable(
 	limit int,
 ) ([]CleanupRoot, string, bool, error) {
 	if repository.Executor == nil || limit <= 0 {
-		return nil, afterRootID, false, fmt.Errorf(
+		return nil, afterRootID, false, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Cleanup Root reconcile query is incomplete",
 		)
 	}
@@ -487,7 +488,7 @@ func decodeLifecycleCleanupRoots(
 	var decodeErr error
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
 		if len(columns) != 27 {
-			decodeErr = fmt.Errorf(
+			decodeErr = moerr.NewInternalErrorNoCtxf(
 				"Lifecycle Cleanup Root query returned %d columns",
 				len(columns),
 			)
@@ -600,7 +601,7 @@ func decodeLifecycleCleanupRoots(
 
 func lifecycleBoolAt(value *vector.Vector, row int) (bool, error) {
 	if value.GetType().Oid != types.T_bool {
-		return false, fmt.Errorf(
+		return false, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle expected bool, got %s",
 			value.GetType().Oid,
 		)
@@ -611,7 +612,7 @@ func lifecycleBoolAt(value *vector.Vector, row int) (bool, error) {
 func lifecycleSQLUUID(value string) (string, error) {
 	parsed, err := uuid.Parse(value)
 	if err != nil {
-		return "", fmt.Errorf("invalid Lifecycle UUID %q: %w", value, err)
+		return "", moerr.NewInternalErrorNoCtxf("invalid Lifecycle UUID %q: %v", value, err)
 	}
 	return hex.EncodeToString(parsed[:]), nil
 }
@@ -619,7 +620,7 @@ func lifecycleSQLUUID(value string) (string, error) {
 func lifecycleUUIDFromHex(value string) (string, error) {
 	decoded, err := hex.DecodeString(value)
 	if err != nil || len(decoded) != 16 {
-		return "", fmt.Errorf("invalid persisted Lifecycle UUID %q", value)
+		return "", moerr.NewInternalErrorNoCtxf("invalid persisted Lifecycle UUID %q", value)
 	}
 	parsed, err := uuid.FromBytes(decoded)
 	if err != nil {
@@ -669,7 +670,7 @@ func lifecycleParseSQLTime(value string) (time.Time, error) {
 			return parsed, nil
 		}
 	}
-	return time.Time{}, fmt.Errorf("invalid Lifecycle SQL timestamp %q", value)
+	return time.Time{}, moerr.NewInternalErrorNoCtxf("invalid Lifecycle SQL timestamp %q", value)
 }
 
 func lifecycleNullableString(value *vector.Vector, row int) string {
@@ -692,7 +693,7 @@ func (catalogAdapter SQLCleanupReconcileCatalog) MatchingPublication(
 	_ time.Time,
 ) (CleanupPublicationState, error) {
 	if catalogAdapter.Executor == nil {
-		return CleanupPublicationMissing, fmt.Errorf(
+		return CleanupPublicationMissing, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Cleanup reconcile SQL executor is nil",
 		)
 	}
@@ -721,7 +722,7 @@ where root_id=unhex('%s') and attempt_id=unhex('%s') limit 1`,
 			attemptID,
 		)
 	default:
-		return CleanupPublicationMissing, fmt.Errorf(
+		return CleanupPublicationMissing, moerr.NewInternalErrorNoCtxf(
 			"unknown Lifecycle Cleanup Root mode %s",
 			root.Mode,
 		)
@@ -741,8 +742,8 @@ where root_id=unhex('%s') and attempt_id=unhex('%s') limit 1`,
 			root.OwnerAccountID,
 		)
 		if accountErr != nil {
-			return CleanupPublicationMissing, fmt.Errorf(
-				"Lifecycle publication query failed: %w; account lookup failed: %v",
+			return CleanupPublicationMissing, moerr.NewInternalErrorNoCtxf(
+				"Lifecycle publication query failed: %v; account lookup failed: %v",
 				err,
 				accountErr,
 			)
@@ -774,7 +775,7 @@ where root_id=unhex('%s') and attempt_id=unhex('%s') limit 1`,
 	case "DELETE_PENDING", "DELETING", "PURGED":
 		return CleanupPublicationDeletePending, nil
 	default:
-		return CleanupPublicationMissing, fmt.Errorf(
+		return CleanupPublicationMissing, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle matching publication has invalid state %q",
 			state,
 		)
@@ -786,7 +787,7 @@ func (catalogAdapter SQLCleanupReconcileCatalog) OwnerExists(
 	root CleanupRoot,
 ) (bool, error) {
 	if catalogAdapter.Executor == nil {
-		return false, fmt.Errorf("Lifecycle Cleanup reconcile SQL executor is nil")
+		return false, moerr.NewInternalErrorNoCtxf("Lifecycle Cleanup reconcile SQL executor is nil")
 	}
 	result, err := catalogAdapter.Executor.Exec(
 		ctx,
@@ -811,7 +812,7 @@ func (catalogAdapter SQLCleanupReconcileCatalog) RequestCleanup(
 	now time.Time,
 ) (bool, error) {
 	if catalogAdapter.Executor == nil || now.IsZero() {
-		return false, fmt.Errorf("Lifecycle Cleanup reconcile request is incomplete")
+		return false, moerr.NewInternalErrorNoCtxf("Lifecycle Cleanup reconcile request is incomplete")
 	}
 	if root.Mode == CleanupModeTTLRewrite {
 		return true, nil
@@ -863,7 +864,7 @@ and restore_lease_id is null%s`,
 		return true, nil
 	}
 	if affected > 1 {
-		return false, fmt.Errorf(
+		return false, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Dataset cleanup updated %d rows",
 			affected,
 		)
@@ -890,7 +891,7 @@ func (catalogAdapter SQLCleanupReconcileCatalog) FinalizeCleanup(
 	root CleanupRoot,
 ) error {
 	if catalogAdapter.Executor == nil {
-		return fmt.Errorf("Lifecycle Cleanup finalize SQL executor is nil")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Cleanup finalize SQL executor is nil")
 	}
 	if root.Mode == CleanupModeTTLRewrite {
 		return nil
@@ -933,7 +934,7 @@ and state in ('DELETE_PENDING','DELETING')`,
 		return nil
 	}
 	if affected > 1 {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Dataset cleanup finalized %d rows",
 			affected,
 		)
@@ -974,7 +975,7 @@ where root_id=unhex('%s') and attempt_id=unhex('%s') limit 1`,
 	if state == "PURGED" {
 		return nil
 	}
-	return fmt.Errorf(
+	return moerr.NewInternalErrorNoCtxf(
 		"Lifecycle Dataset cleanup is not final, state %q",
 		state,
 	)
@@ -1019,7 +1020,7 @@ func lifecycleDecodeDigest(
 	}
 	decoded, err := hex.DecodeString(value)
 	if err != nil || len(decoded) != len(target) {
-		return fmt.Errorf("invalid Lifecycle digest %q", value)
+		return moerr.NewInternalErrorNoCtxf("invalid Lifecycle digest %q", value)
 	}
 	copy(target[:], decoded)
 	return nil

@@ -279,6 +279,12 @@ mo_iceberg_tables  𝄀
 mo_index_update  𝄀
 mo_indexes  𝄀
 mo_iscp_log  𝄀
+mo_lifecycle_bindings  𝄀
+mo_lifecycle_cleanup_roots  𝄀
+mo_lifecycle_datasets  𝄀
+mo_lifecycle_restore_attempts  𝄀
+mo_lifecycle_restore_chunks  𝄀
+mo_lifecycle_ttl_receipts  𝄀
 mo_locks  𝄀
 mo_merge_settings  𝄀
 mo_mongodb_connections  𝄀
@@ -312,7 +318,7 @@ mo_variables  𝄀
 mo_version
 show table_number from mo_catalog;
 ➤ Number of tables in mo_catalog[-5,64,0]  𝄀
-57
+63
 show column_number from mo_database;
 ➤ Number of columns in mo_database[-5,64,0]  𝄀
 9

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -51,7 +52,7 @@ func (pager SQLExpiredRestorePager) Next(
 		now.IsZero() ||
 		maxAccounts <= 0 ||
 		maxAttempts <= 0 {
-		return nil, cursor, fmt.Errorf(
+		return nil, cursor, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle expired Restore pager is incomplete",
 		)
 	}
@@ -165,7 +166,7 @@ order by a.restore_id limit %d`,
 	var decodeErr error
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
 		if len(columns) != 2 {
-			decodeErr = fmt.Errorf("Lifecycle expired Restore query is invalid")
+			decodeErr = moerr.NewInternalErrorNoCtxf("Lifecycle expired Restore query is invalid")
 			return false
 		}
 		for row := 0; row < rows; row++ {

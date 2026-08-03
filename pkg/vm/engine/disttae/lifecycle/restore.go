@@ -17,15 +17,14 @@ package lifecycle
 import (
 	"context"
 	"crypto/sha256"
-	"errors"
-	"fmt"
 	"path"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
-var ErrRestoreInProgress = errors.New("Lifecycle Archive Restore is in progress")
+var ErrRestoreInProgress = moerr.NewInternalErrorNoCtx("Lifecycle Archive Restore is in progress")
 
 type RestoreDataset struct {
 	DatasetID       string
@@ -154,7 +153,7 @@ func (coordinator RestoreCoordinator) Restore(
 		attempt.RestoreID == "" ||
 		attempt.HiddenName == "" ||
 		attempt.TargetName == "" {
-		return fmt.Errorf("Lifecycle Restore input is incomplete")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore input is incomplete")
 	}
 	if attempt.Deadline.IsZero() {
 		attempt.Deadline = time.Now().Add(coordinator.Config.Deadline)
@@ -175,7 +174,7 @@ func (coordinator RestoreCoordinator) Restore(
 	if manifest.ContentHash != dataset.ContentHash ||
 		manifest.RowCount != dataset.RowCount ||
 		manifest.LogicalBytes != dataset.LogicalBytes {
-		return fmt.Errorf("Lifecycle Dataset and Manifest identity mismatch")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Dataset and Manifest identity mismatch")
 	}
 	createSQL, err := manifest.Schema.BuildRestoreCreateTableSQL(
 		ctx,
@@ -213,7 +212,7 @@ func (coordinator RestoreCoordinator) Restore(
 			return err
 		}
 		if !attempt.Deadline.After(time.Now()) {
-			return fmt.Errorf("Lifecycle Restore deadline expired")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Restore deadline expired")
 		}
 		ordinal := attempt.NextChunkOrdinal
 		if err := faults.Inject(ctx, FaultBeforeRestoreChunk); err != nil {
@@ -275,7 +274,7 @@ func (coordinator RestoreCoordinator) Restore(
 				LogicalBytes:         receipt.LogicalBytes,
 				CanonicalContentHash: receipt.CanonicalContentHash,
 			}) {
-			return fmt.Errorf("Lifecycle Restore Chunk Receipt sequence is corrupt")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Restore Chunk Receipt sequence is corrupt")
 		}
 		chunks[ordinal] = ArchiveChunk{
 			ChunkOrdinal:         receipt.ChunkOrdinal,
@@ -289,11 +288,11 @@ func (coordinator RestoreCoordinator) Restore(
 	}
 	if uint64(len(chunks)) != manifest.TotalChunkCount ||
 		restoredRows != manifest.RowCount {
-		return fmt.Errorf("Lifecycle Restore Chunk Receipts are incomplete")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore Chunk Receipts are incomplete")
 	}
 	verifiedHash := computeArchiveDatasetHash(manifest.SchemaDigest, chunks)
 	if verifiedHash != manifest.ContentHash {
-		return fmt.Errorf("Lifecycle Restore aggregate content hash mismatch")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore aggregate content hash mismatch")
 	}
 	attempt, err = coordinator.Repository.GetAttempt(ctx, attempt.RestoreID)
 	if err != nil {
@@ -325,11 +324,11 @@ func validateRestoreDatasetManifestIdentity(
 		manifest.AttemptID != dataset.AttemptID ||
 		manifest.SchemaDigest != dataset.SchemaDigest ||
 		manifest.VerificationStatus != "FULL_READBACK_VERIFIED" {
-		return fmt.Errorf("Lifecycle Dataset and Manifest identity mismatch")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Dataset and Manifest identity mismatch")
 	}
 	manifestDigest, err := manifestDigestFromKey(dataset.ManifestKey)
 	if err != nil || manifestDigest != dataset.ManifestDigest {
-		return fmt.Errorf("Lifecycle Dataset Manifest digest mismatch")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Dataset Manifest digest mismatch")
 	}
 	prefix := path.Dir(dataset.ManifestKey)
 	if !lifecycleRootScopedPrefix(
@@ -337,11 +336,11 @@ func validateRestoreDatasetManifestIdentity(
 		dataset.RootID,
 		dataset.AttemptID,
 	) || !cleanupKeyWithinPrefix(dataset.ManifestKey, prefix) {
-		return fmt.Errorf("Lifecycle Dataset Manifest namespace mismatch")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Dataset Manifest namespace mismatch")
 	}
 	for _, file := range manifest.Files {
 		if !cleanupKeyWithinPrefix(file.Key, prefix) {
-			return fmt.Errorf("Lifecycle Dataset Payload namespace mismatch")
+			return moerr.NewInternalErrorNoCtxf("Lifecycle Dataset Payload namespace mismatch")
 		}
 	}
 	return nil
@@ -363,7 +362,7 @@ func (coordinator RestoreCoordinator) Purge(
 		).Inc()
 	}()
 	if coordinator.Repository == nil || dataset.DatasetID == "" || now.IsZero() {
-		return fmt.Errorf("Lifecycle Purge input is incomplete")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Purge input is incomplete")
 	}
 	if dataset.RestoreLeaseID != "" {
 		return ErrRestoreInProgress

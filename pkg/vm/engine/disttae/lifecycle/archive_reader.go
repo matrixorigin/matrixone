@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/parquet-go/parquet-go"
 )
@@ -54,7 +55,7 @@ func ReadAndVerifyArchive(
 			return nil, err
 		}
 		if uint64(len(payload)) != file.Size || sha256.Sum256(payload) != file.SHA256 {
-			return nil, fmt.Errorf("Lifecycle archive payload %s digest mismatch", file.Key)
+			return nil, moerr.NewInternalErrorNoCtxf("Lifecycle archive payload %s digest mismatch", file.Key)
 		}
 		decodedRows, chunk, err := decodeArchivePayload(
 			ctx,
@@ -82,17 +83,17 @@ func ReadAndVerifyArchive(
 		logicalBytes += chunk.LogicalBytes
 	}
 	if rows != manifest.RowCount || logicalBytes != manifest.LogicalBytes {
-		return nil, fmt.Errorf("Lifecycle archive readback totals mismatch")
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle archive readback totals mismatch")
 	}
 	if computeArchiveDatasetHash(manifest.SchemaDigest, verifiedChunks) !=
 		manifest.ContentHash {
-		return nil, fmt.Errorf("Lifecycle archive content hash mismatch")
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle archive content hash mismatch")
 	}
 	if !slices.Equal(
 		encodeAutoIncrementMaxima(autoMaxima),
 		manifest.AutoIncrementMaxima,
 	) {
-		return nil, fmt.Errorf("Lifecycle archive auto-increment maxima mismatch")
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle archive auto-increment maxima mismatch")
 	}
 	result := *manifest
 	result.VerificationStatus = "FULL_READBACK_VERIFIED"
@@ -106,7 +107,7 @@ func ReadArchiveManifest(
 ) (*ArchiveManifest, error) {
 	manifestStore, ok := store.(archiveManifestReadStore)
 	if !ok {
-		return nil, fmt.Errorf(
+		return nil, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Archive Store does not support bounded Manifest reads",
 		)
 	}
@@ -115,7 +116,7 @@ func ReadArchiveManifest(
 		return nil, err
 	}
 	if manifestSize <= 0 || manifestSize > int64(maxArchiveManifestBytes) {
-		return nil, fmt.Errorf(
+		return nil, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle archive manifest size %d is outside the certified range",
 			manifestSize,
 		)
@@ -129,7 +130,7 @@ func ReadArchiveManifest(
 		return nil, err
 	}
 	if manifestSizeAfterRead != manifestSize || int64(len(encoded)) != manifestSize {
-		return nil, fmt.Errorf("Lifecycle archive manifest changed during bounded read")
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest changed during bounded read")
 	}
 	manifestDigest := sha256.Sum256(encoded)
 	expectedManifestDigest, err := manifestDigestFromKey(manifestKey)
@@ -137,7 +138,7 @@ func ReadArchiveManifest(
 		return nil, err
 	}
 	if manifestDigest != expectedManifestDigest {
-		return nil, fmt.Errorf("Lifecycle archive manifest digest mismatch")
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle archive manifest digest mismatch")
 	}
 	manifest, err := ParseArchiveManifest(encoded)
 	if err != nil {
@@ -148,7 +149,7 @@ func ReadArchiveManifest(
 		return nil, err
 	}
 	if schemaDigest != manifest.SchemaDigest {
-		return nil, fmt.Errorf("Lifecycle archive schema digest mismatch")
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle archive schema digest mismatch")
 	}
 	return manifest, nil
 }
@@ -165,12 +166,12 @@ func ReadArchiveChunk(
 		chunkOrdinal >= uint64(len(manifest.Files)) ||
 		maxRows == 0 ||
 		maxLogicalBytes == 0 {
-		return nil, ArchiveChunk{}, fmt.Errorf("Lifecycle Restore chunk input is invalid")
+		return nil, ArchiveChunk{}, moerr.NewInternalErrorNoCtxf("Lifecycle Restore chunk input is invalid")
 	}
 	file := manifest.Files[chunkOrdinal]
 	expected := file.Chunks[0]
 	if expected.RowCount > maxRows || expected.LogicalBytes > maxLogicalBytes {
-		return nil, ArchiveChunk{}, fmt.Errorf(
+		return nil, ArchiveChunk{}, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Restore chunk exceeds the certified limit",
 		)
 	}
@@ -179,7 +180,7 @@ func ReadArchiveChunk(
 		return nil, ArchiveChunk{}, err
 	}
 	if uint64(len(payload)) != file.Size || sha256.Sum256(payload) != file.SHA256 {
-		return nil, ArchiveChunk{}, fmt.Errorf(
+		return nil, ArchiveChunk{}, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle archive payload %s digest mismatch",
 			file.Key,
 		)
@@ -205,7 +206,7 @@ func readArchivePayload(
 	file ArchiveFile,
 ) ([]byte, error) {
 	if file.Size == 0 || file.Size > maxArchivePayloadPhysicalBytes {
-		return nil, fmt.Errorf(
+		return nil, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle archive payload %s size %d is outside the certified range",
 			file.Key,
 			file.Size,
@@ -213,7 +214,7 @@ func readArchivePayload(
 	}
 	bounded, ok := store.(archiveManifestReadStore)
 	if !ok {
-		return nil, fmt.Errorf(
+		return nil, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Archive Store does not support bounded payload reads",
 		)
 	}
@@ -222,7 +223,7 @@ func readArchivePayload(
 		return nil, err
 	}
 	if before != int64(file.Size) {
-		return nil, fmt.Errorf(
+		return nil, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle archive payload %s size changed from %d to %d",
 			file.Key,
 			file.Size,
@@ -238,7 +239,7 @@ func readArchivePayload(
 		return nil, err
 	}
 	if after != before {
-		return nil, fmt.Errorf(
+		return nil, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle archive payload %s changed during bounded read",
 			file.Key,
 		)
@@ -279,7 +280,7 @@ func decodeArchivePayload(
 		return nil, ArchiveChunk{}, err
 	}
 	if len(file.RowGroups()) != 1 {
-		return nil, ArchiveChunk{}, fmt.Errorf("Lifecycle payload must contain exactly one row group")
+		return nil, ArchiveChunk{}, moerr.NewInternalErrorNoCtxf("Lifecycle payload must contain exactly one row group")
 	}
 	reader := parquet.NewGenericReader[any](file)
 	defer reader.Close()
@@ -301,7 +302,7 @@ func decodeArchivePayload(
 			}
 			if encoder.RowCount() > maxRows ||
 				encoder.LogicalBytes() > maxLogicalBytes {
-				return nil, ArchiveChunk{}, fmt.Errorf(
+				return nil, ArchiveChunk{}, moerr.NewInternalErrorNoCtxf(
 					"Lifecycle Restore decoded chunk exceeds the certified limit",
 				)
 			}
@@ -321,7 +322,7 @@ func decodeArchivePayload(
 	if actual.RowCount != expected.RowCount ||
 		actual.LogicalBytes != expected.LogicalBytes ||
 		actual.CanonicalContentHash != expected.CanonicalContentHash {
-		return nil, ArchiveChunk{}, fmt.Errorf(
+		return nil, ArchiveChunk{}, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle archive row group %d content mismatch",
 			expected.ChunkOrdinal,
 		)
@@ -335,13 +336,13 @@ func archiveParquetRowToCanonical(
 ) ([]CanonicalCell, error) {
 	row, ok := value.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("unexpected Lifecycle Parquet row %T", value)
+		return nil, moerr.NewInternalErrorNoCtxf("unexpected Lifecycle Parquet row %T", value)
 	}
 	cells := make([]CanonicalCell, len(schema.Columns))
 	for index, column := range schema.Columns {
 		raw, ok := row[archiveParquetColumnName(column)]
 		if !ok {
-			return nil, fmt.Errorf("Lifecycle Parquet row misses column %s", column.Name)
+			return nil, moerr.NewInternalErrorNoCtxf("Lifecycle Parquet row misses column %s", column.Name)
 		}
 		cell := CanonicalCell{
 			Type: types.Type{
@@ -404,7 +405,7 @@ func parquetValueToCanonical(column SchemaColumn, raw any) (any, error) {
 		case string:
 			return []byte(value), nil
 		default:
-			return nil, fmt.Errorf("unexpected binary Parquet value %T", raw)
+			return nil, moerr.NewInternalErrorNoCtxf("unexpected binary Parquet value %T", raw)
 		}
 	case types.T_json:
 		return []byte(parquetString(raw)), nil
@@ -431,7 +432,7 @@ func parquetValueToCanonical(column SchemaColumn, raw any) (any, error) {
 		}
 		return types.Enum(value), nil
 	default:
-		return nil, fmt.Errorf("unsupported Lifecycle Parquet type %s", oid)
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported Lifecycle Parquet type %s", oid)
 	}
 }
 
@@ -449,7 +450,7 @@ func parquetString(value any) string {
 func parquetBool(value any) (bool, error) {
 	typed, ok := value.(bool)
 	if !ok {
-		return false, fmt.Errorf("unexpected bool Parquet value %T", value)
+		return false, moerr.NewInternalErrorNoCtxf("unexpected bool Parquet value %T", value)
 	}
 	return typed, nil
 }
@@ -467,7 +468,7 @@ func parquetInt64(value any) (int64, error) {
 	case uint64:
 		return checkedInt64(typed)
 	default:
-		return 0, fmt.Errorf("unexpected integer Parquet value %T", value)
+		return 0, moerr.NewInternalErrorNoCtxf("unexpected integer Parquet value %T", value)
 	}
 }
 
@@ -475,17 +476,17 @@ func parquetUint64(value any) (uint64, error) {
 	switch typed := value.(type) {
 	case int:
 		if typed < 0 {
-			return 0, fmt.Errorf("negative unsigned Parquet value")
+			return 0, moerr.NewInternalErrorNoCtxf("negative unsigned Parquet value")
 		}
 		return uint64(typed), nil
 	case int32:
 		if typed < 0 {
-			return 0, fmt.Errorf("negative unsigned Parquet value")
+			return 0, moerr.NewInternalErrorNoCtxf("negative unsigned Parquet value")
 		}
 		return uint64(typed), nil
 	case int64:
 		if typed < 0 {
-			return 0, fmt.Errorf("negative unsigned Parquet value")
+			return 0, moerr.NewInternalErrorNoCtxf("negative unsigned Parquet value")
 		}
 		return uint64(typed), nil
 	case uint32:
@@ -493,7 +494,7 @@ func parquetUint64(value any) (uint64, error) {
 	case uint64:
 		return typed, nil
 	default:
-		return 0, fmt.Errorf("unexpected unsigned Parquet value %T", value)
+		return 0, moerr.NewInternalErrorNoCtxf("unexpected unsigned Parquet value %T", value)
 	}
 }
 
@@ -504,18 +505,18 @@ func parquetFloat64(value any) (float64, error) {
 	case float64:
 		return typed, nil
 	default:
-		return 0, fmt.Errorf("unexpected float Parquet value %T", value)
+		return 0, moerr.NewInternalErrorNoCtxf("unexpected float Parquet value %T", value)
 	}
 }
 
 func manifestDigestFromKey(key string) ([32]byte, error) {
 	base := path.Base(key)
 	if !strings.HasPrefix(base, "manifest-") || !strings.HasSuffix(base, ".json") {
-		return [32]byte{}, fmt.Errorf("invalid Lifecycle manifest key %s", key)
+		return [32]byte{}, moerr.NewInternalErrorNoCtxf("invalid Lifecycle manifest key %s", key)
 	}
 	value := strings.TrimSuffix(strings.TrimPrefix(base, "manifest-"), ".json")
 	if len(value) != sha256.Size*2 {
-		return [32]byte{}, fmt.Errorf("invalid Lifecycle manifest digest %s", value)
+		return [32]byte{}, moerr.NewInternalErrorNoCtxf("invalid Lifecycle manifest digest %s", value)
 	}
 	decoded, err := hex.DecodeString(value)
 	if err != nil {

@@ -31,7 +31,7 @@ func TestProgrammableFaultInjectorFailsOnlySelectedHit(t *testing.T) {
 	})
 
 	require.NoError(t, faults.Inject(context.Background(), FaultAfterPayloadPut))
-	require.EqualError(t,
+	require.ErrorContains(t,
 		faults.Inject(context.Background(), FaultAfterPayloadPut),
 		injected.Error(),
 	)

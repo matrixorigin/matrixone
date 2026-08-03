@@ -38,8 +38,8 @@ import (
 )
 
 const (
-	featureCodeLifecycle          = "LIFECYCLE"
-	lifecycleMaxCertifiedBindings = uint64(1000)
+	featureCodeLifecycle                    = "LIFECYCLE"
+	lifecycleMaxCertifiedBindingsPerAccount = uint64(1000)
 )
 
 // Purge eligibility is evaluated with time.Duration in the worker. Keep every
@@ -175,8 +175,10 @@ func handleAlterTableLifecycle(ctx context.Context, ses *Session, alter *tree.Al
 	}
 	if option.Operation == tree.LifecycleOperationSet {
 		// SET operations are serialized by the Lifecycle feature row above.
-		// Enforce the certified population here rather than confusing the
-		// scheduler's per-run page limit with a durable admission limit.
+		// The Binding table is tenant-scoped, so enforce the limit that this
+		// transaction can prove exactly: one certified population per account.
+		// The cluster-wide 1000-table coexistence target remains an operational
+		// release profile, not a distributed Catalog invariant.
 		if err = ensureLifecycleBindingCapacity(
 			ctx,
 			background,
@@ -387,15 +389,14 @@ func ensureLifecycleBindingCapacity(
 	accountID uint32,
 	physicalTableID uint64,
 ) error {
-	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
 	background.ClearExecResultSet()
 	if err := background.Exec(
-		systemCtx,
+		ctx,
 		lifecycleBindingCapacitySQL(accountID, physicalTableID),
 	); err != nil {
 		return err
 	}
-	results, err := getResultSet(systemCtx, background)
+	results, err := getResultSet(ctx, background)
 	if err != nil {
 		return err
 	}
@@ -405,15 +406,15 @@ func ensureLifecycleBindingCapacity(
 			"Lifecycle Binding capacity query returned no row",
 		)
 	}
-	count, err := results[0].GetUint64(systemCtx, 0, 0)
+	count, err := results[0].GetUint64(ctx, 0, 0)
 	if err != nil {
 		return err
 	}
-	if count >= lifecycleMaxCertifiedBindings {
+	if count >= lifecycleMaxCertifiedBindingsPerAccount {
 		return moerr.NewNotSupportedf(
 			ctx,
-			"Lifecycle Binding certified limit of %d tables has been reached",
-			lifecycleMaxCertifiedBindings,
+			"Lifecycle Binding certified per-account limit of %d tables has been reached",
+			lifecycleMaxCertifiedBindingsPerAccount,
 		)
 	}
 	return nil

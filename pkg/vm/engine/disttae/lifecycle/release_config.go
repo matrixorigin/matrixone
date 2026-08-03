@@ -229,7 +229,7 @@ func (config SQLReleaseConfig) load(
 	var decodeErr error
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
 		if len(columns) != 2 || rowsRead+rows != 1 {
-			decodeErr = fmt.Errorf("Lifecycle feature registry row is invalid")
+			decodeErr = moerr.NewInternalErrorNoCtxf("Lifecycle feature registry row is invalid")
 			return false
 		}
 		enabled = vector.GetFixedAtNoTypeCheck[bool](columns[0], 0)
@@ -278,7 +278,7 @@ func (config SQLReleaseConfig) loadStage(
 	var decodeErr error
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
 		if len(columns) != len(values) || rowsRead+rows != 1 {
-			decodeErr = fmt.Errorf("Lifecycle Stage row is invalid")
+			decodeErr = moerr.NewInternalErrorNoCtxf("Lifecycle Stage row is invalid")
 			return false
 		}
 		for column := range values {

@@ -15,11 +15,11 @@
 package lifecycle
 
 import (
-	"fmt"
 	"math"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
@@ -44,7 +44,7 @@ func NewRewriteAdmission(profile RewriteReleaseProfile) (*RewriteAdmission, erro
 		profile.MaxAmplification <= 0 ||
 		profile.MaxSourceBytesPerAccount == 0 ||
 		profile.MaxSourceBytesPerCluster == 0 {
-		return nil, fmt.Errorf("Lifecycle Rewrite release profile is incomplete")
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle Rewrite release profile is incomplete")
 	}
 	return &RewriteAdmission{
 		profile:      profile,
@@ -57,7 +57,7 @@ func (admission *RewriteAdmission) CheckAmplification(
 	retiredPressureBytes uint64,
 ) error {
 	if sourcePressureBytes == 0 || retiredPressureBytes == 0 {
-		return fmt.Errorf("MIXED_LAYOUT_BLOCKED: expired Rewrite bytes are zero")
+		return moerr.NewInternalErrorNoCtxf("MIXED_LAYOUT_BLOCKED: expired Rewrite bytes are zero")
 	}
 	amplification := float64(sourcePressureBytes) /
 		float64(retiredPressureBytes)
@@ -67,7 +67,7 @@ func (admission *RewriteAdmission) CheckAmplification(
 		metricv2.LifecycleResourceRejectionCounter.WithLabelValues(
 			"rewrite_amplification",
 		).Inc()
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"MIXED_LAYOUT_BLOCKED: rewrite amplification %.2f exceeds %.2f",
 			amplification,
 			admission.profile.MaxAmplification,
@@ -85,7 +85,7 @@ func (admission *RewriteAdmission) ReserveSource(
 	now time.Time,
 ) error {
 	if accountID == 0 || sourceBytes == 0 || now.IsZero() {
-		return fmt.Errorf("RESOURCE_BLOCKED: Rewrite reservation is incomplete")
+		return moerr.NewInternalErrorNoCtxf("RESOURCE_BLOCKED: Rewrite reservation is incomplete")
 	}
 	admission.mu.Lock()
 	defer admission.mu.Unlock()
@@ -103,7 +103,7 @@ func (admission *RewriteAdmission) ReserveSource(
 		metricv2.LifecycleResourceRejectionCounter.WithLabelValues(
 			"rewrite_account_bytes",
 		).Inc()
-		return fmt.Errorf("RESOURCE_BLOCKED: account Rewrite byte window exhausted")
+		return moerr.NewInternalErrorNoCtxf("RESOURCE_BLOCKED: account Rewrite byte window exhausted")
 	}
 	clusterBytes, overflow := addUint64(
 		admission.clusterBytes,
@@ -113,7 +113,7 @@ func (admission *RewriteAdmission) ReserveSource(
 		metricv2.LifecycleResourceRejectionCounter.WithLabelValues(
 			"rewrite_cluster_bytes",
 		).Inc()
-		return fmt.Errorf("RESOURCE_BLOCKED: cluster Rewrite byte window exhausted")
+		return moerr.NewInternalErrorNoCtxf("RESOURCE_BLOCKED: cluster Rewrite byte window exhausted")
 	}
 	admission.accountBytes[accountID] = accountBytes
 	admission.clusterBytes = clusterBytes

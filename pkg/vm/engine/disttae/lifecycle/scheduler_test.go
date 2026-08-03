@@ -229,6 +229,31 @@ func TestCoordinatorBindingFailureDoesNotCancelIndependentBindings(t *testing.T)
 	require.Equal(t, map[string]bool{"a1": true, "b1": true}, seen)
 }
 
+func TestCoordinatorTreatsDeferredChildAsNonSuccessAndNonFailure(t *testing.T) {
+	pager := &sliceBindingPager{pages: [][]Binding{{{
+		ID:              "a1",
+		AccountID:       1,
+		DatabaseID:      1,
+		PhysicalTableID: 1,
+		State:           BindingStateActive,
+	}}}}
+	coordinator := NewCoordinator(CoordinatorConfig{
+		Enabled:             true,
+		PageSize:            1,
+		MaxPagesPerRun:      1,
+		MaxBindingsPerRun:   1,
+		MaxClusterChildren:  1,
+		MaxAccountChildren:  1,
+		MaxDatabaseChildren: 1,
+		MaxTableChildren:    1,
+	}, pager, func(context.Context, Binding) error {
+		return MarkLifecycleDeferred(errors.New("RESOURCE_BLOCKED: retry later"))
+	})
+
+	require.NoError(t, coordinator.Run(context.Background()))
+	require.True(t, IsLifecycleDeferred(MarkLifecycleDeferred(nil)))
+}
+
 func TestCoordinatorContinuesBindingCursorAcrossRunsAndWrapsAtEnd(t *testing.T) {
 	const bindingCount = 1001
 	bindings := make([]Binding, 0, bindingCount)

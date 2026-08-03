@@ -520,6 +520,39 @@ func TestLifecycleCleanupRootTimeoutUsesRemainingSweepBudget(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestLifecycleCleanupPhasesReserveTimeForLaterWork(t *testing.T) {
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	deadline := now.Add(time.Minute)
+	require.Equal(
+		t,
+		now.Add(20*time.Second),
+		lifecycleCleanupPhaseDeadline(now, deadline, 3),
+	)
+	require.Equal(
+		t,
+		now.Add(30*time.Second),
+		lifecycleCleanupPhaseDeadline(now, deadline, 2),
+	)
+	require.Equal(t, deadline, lifecycleCleanupPhaseDeadline(now, deadline, 1))
+}
+
+func TestLifecycleReconcileCursorAdvancesPastAttemptedRoots(t *testing.T) {
+	roots := []lifecyclepkg.CleanupRoot{
+		{RootID: "01"},
+		{RootID: "02"},
+		{RootID: "03"},
+	}
+	require.Equal(t, "old", lifecycleNextReconcileCursor(
+		"old", "03", roots, 0,
+	))
+	require.Equal(t, "02", lifecycleNextReconcileCursor(
+		"old", "03", roots, 2,
+	))
+	require.Equal(t, "03", lifecycleNextReconcileCursor(
+		"old", "03", roots, 3,
+	))
+}
+
 func TestLifecycleMetadataCompactionRunsOnBoundedMaintenanceCadence(t *testing.T) {
 	now := time.Date(2026, 8, 1, 0, 5, 0, 0, time.UTC)
 	require.True(t, lifecycleMetadataCompactionDue(time.Time{}, now))

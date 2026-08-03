@@ -438,7 +438,7 @@ func TestArchiveWriterFaultAfterPayloadPutLeavesOnlyRootOwnedImmutableFile(
 	require.NoError(t, writer.WriteBatch(ctx, value, nil))
 
 	_, _, err = writer.Close(ctx)
-	require.EqualError(t, err, "payload-put-response-lost")
+	require.ErrorContains(t, err, "payload-put-response-lost")
 	require.Equal(t, []string{
 		"archive/root-payload-fault/attempt-payload-fault/" +
 			"payload-000000-write-payload-fault.parquet",

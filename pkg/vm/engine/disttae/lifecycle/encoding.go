@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
-	"fmt"
 	"hash"
 	"math"
 
@@ -414,7 +413,7 @@ func encodeCanonicalValue(typ types.Type, value any) ([]byte, error) {
 			return typed[:], nil
 		}
 	}
-	return nil, fmt.Errorf("unexpected Go value %T for %s", value, typ.Oid)
+	return nil, moerr.NewInternalErrorNoCtxf("unexpected Go value %T for %s", value, typ.Oid)
 }
 
 func encodeUint16(value uint16) []byte {

@@ -157,7 +157,7 @@ func TestLifecycleArchiveRestoreScopeIsArchiveOnlyAndFailsClosed(t *testing.T) {
 	require.ErrorIs(t, err, wantErr)
 }
 
-func TestLifecycleAccountRestoreRejectsTTLBindingWithoutChangingClusterGuard(t *testing.T) {
+func TestLifecycleAccountRestoreCanRejectAnyBinding(t *testing.T) {
 	direct, err := lifecycleArchiveRestoreProbes(lifecycleArchiveRestoreScope{
 		level:             tree.RESTORELEVELACCOUNT,
 		accountID:         17,
@@ -165,15 +165,6 @@ func TestLifecycleAccountRestoreRejectsTTLBindingWithoutChangingClusterGuard(t *
 	})
 	require.NoError(t, err)
 	require.NotContains(t, direct[0].sql, "action='ARCHIVE'")
-
-	clusterExpanded, err := lifecycleArchiveRestoreProbes(
-		lifecycleArchiveRestoreScope{
-			level:     tree.RESTORELEVELACCOUNT,
-			accountID: 17,
-		},
-	)
-	require.NoError(t, err)
-	require.Contains(t, clusterExpanded[0].sql, "action='ARCHIVE'")
 }
 
 type lifecycleRestoreContextExec struct {

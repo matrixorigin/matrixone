@@ -71,17 +71,17 @@ func (target FrozenArchiveTarget) Validate() error {
 		target.Region == "" ||
 		target.BucketOrContainer == "" ||
 		target.CredentialHandle == "" {
-		return fmt.Errorf("Lifecycle frozen Archive target is incomplete")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle frozen Archive target is incomplete")
 	}
 	if err := ValidateArchiveCredentialHandle(target.CredentialHandle); err != nil {
 		return err
 	}
 	if strings.Contains(target.ImmutablePrefix, "..") {
-		return fmt.Errorf("Lifecycle frozen Archive prefix is invalid")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle frozen Archive prefix is invalid")
 	}
 	if target.StorageClass != "" &&
 		!strings.EqualFold(target.StorageClass, "STANDARD") {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Phase 1 supports only the STANDARD storage class",
 		)
 	}
@@ -105,7 +105,7 @@ func ValidateArchiveCredentialHandle(handle string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf(
+	return moerr.NewInternalErrorNoCtxf(
 		"unsupported Lifecycle deployment credential handle %q",
 		handle,
 	)
@@ -134,7 +134,7 @@ func NewArchiveFileService(
 	case strings.HasPrefix(target.CredentialHandle, "role-arn:"):
 		arguments.RoleARN = strings.TrimPrefix(target.CredentialHandle, "role-arn:")
 		if arguments.RoleARN == "" {
-			return nil, fmt.Errorf("Lifecycle Archive role ARN is empty")
+			return nil, moerr.NewInternalErrorNoCtxf("Lifecycle Archive role ARN is empty")
 		}
 	case strings.HasPrefix(target.CredentialHandle, "shared-profile:"):
 		arguments.SharedConfigProfile = strings.TrimPrefix(
@@ -176,7 +176,7 @@ func (store FileServiceArchiveStore) Put(
 	value []byte,
 ) error {
 	if store.FileService == nil {
-		return fmt.Errorf("Lifecycle Archive FileService is nil")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Archive FileService is nil")
 	}
 	err := store.FileService.Write(ctx, fileservice.IOVector{
 		FilePath: key,
@@ -201,14 +201,14 @@ func (store FileServiceArchiveStore) Put(
 		return statErr
 	}
 	if existingSize != int64(len(value)) {
-		return fmt.Errorf("Lifecycle immutable Archive key %s already has different size", key)
+		return moerr.NewInternalErrorNoCtxf("Lifecycle immutable Archive key %s already has different size", key)
 	}
 	existing, readErr := store.GetExact(ctx, key, existingSize)
 	if readErr != nil {
 		return readErr
 	}
 	if !bytes.Equal(existing, value) {
-		return fmt.Errorf("Lifecycle immutable Archive key %s already has different content", key)
+		return moerr.NewInternalErrorNoCtxf("Lifecycle immutable Archive key %s already has different content", key)
 	}
 	return nil
 }
@@ -225,7 +225,7 @@ func (store FileServiceArchiveStore) Stat(
 	key string,
 ) (int64, error) {
 	if store.FileService == nil {
-		return 0, fmt.Errorf("Lifecycle Archive FileService is nil")
+		return 0, moerr.NewInternalErrorNoCtxf("Lifecycle Archive FileService is nil")
 	}
 	entry, err := store.FileService.StatFile(ctx, key)
 	if err != nil {
@@ -233,7 +233,7 @@ func (store FileServiceArchiveStore) Stat(
 		return 0, err
 	}
 	if entry == nil || entry.IsDir || entry.Size < 0 {
-		return 0, fmt.Errorf("Lifecycle Archive object %s has invalid metadata", key)
+		return 0, moerr.NewInternalErrorNoCtxf("Lifecycle Archive object %s has invalid metadata", key)
 	}
 	return entry.Size, nil
 }
@@ -244,14 +244,14 @@ func (store FileServiceArchiveStore) GetExact(
 	size int64,
 ) ([]byte, error) {
 	if size <= 0 {
-		return nil, fmt.Errorf("Lifecycle Archive exact read size must be positive")
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle Archive exact read size must be positive")
 	}
 	value, err := store.read(ctx, key, size)
 	if err != nil {
 		return nil, err
 	}
 	if int64(len(value)) != size {
-		return nil, fmt.Errorf(
+		return nil, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Archive object %s size changed from %d to %d",
 			key,
 			size,
@@ -267,7 +267,7 @@ func (store FileServiceArchiveStore) read(
 	size int64,
 ) ([]byte, error) {
 	if store.FileService == nil {
-		return nil, fmt.Errorf("Lifecycle Archive FileService is nil")
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle Archive FileService is nil")
 	}
 	vector := fileservice.IOVector{
 		FilePath: key,
@@ -295,7 +295,7 @@ func (store FileServiceArchiveStore) List(
 	prefix string,
 ) ([]string, error) {
 	if store.FileService == nil {
-		return nil, fmt.Errorf("Lifecycle Archive FileService is nil")
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle Archive FileService is nil")
 	}
 	limit := store.MaxListEntries
 	if limit <= 0 {
@@ -318,7 +318,7 @@ func (store FileServiceArchiveStore) List(
 				keys = append(keys, fullPath)
 			}
 			if len(keys)+len(directories) > limit {
-				return nil, fmt.Errorf("Lifecycle cleanup prefix exceeds list limit %d", limit)
+				return nil, moerr.NewInternalErrorNoCtxf("Lifecycle cleanup prefix exceeds list limit %d", limit)
 			}
 		}
 	}
@@ -330,7 +330,7 @@ func (store FileServiceArchiveStore) Delete(
 	key string,
 ) error {
 	if store.FileService == nil {
-		return fmt.Errorf("Lifecycle Archive FileService is nil")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Archive FileService is nil")
 	}
 	err := store.FileService.Delete(ctx, key)
 	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {

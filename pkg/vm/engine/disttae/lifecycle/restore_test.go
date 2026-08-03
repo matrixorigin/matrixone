@@ -339,7 +339,7 @@ func TestRestorePreSideEffectFaultsResumeWithoutDuplicateRows(t *testing.T) {
 				manifest,
 			)
 
-			require.EqualError(
+			require.ErrorContains(
 				t,
 				coordinator.Restore(
 					context.Background(),
@@ -472,7 +472,7 @@ func TestRestoreFaultAfterPublishReconcilesWithoutDuplicatePublish(t *testing.T)
 		manifestKey,
 		manifest,
 	)
-	require.EqualError(t,
+	require.ErrorContains(t,
 		coordinator.Restore(context.Background(), dataset, attempt),
 		"publish-response-lost",
 	)

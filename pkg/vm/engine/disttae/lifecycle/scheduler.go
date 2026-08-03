@@ -34,6 +34,25 @@ const (
 	BindingStatePaused = "PAUSED"
 )
 
+// ErrLifecycleDeferred is an in-process scheduling outcome, not a failed
+// retirement transaction. It lets the coordinator expose bounded resource or
+// layout deferral without counting the child as success or poisoning the
+// periodic TaskService run.
+var ErrLifecycleDeferred = moerr.NewInternalErrorNoCtx(
+	"Lifecycle child deferred",
+)
+
+func MarkLifecycleDeferred(cause error) error {
+	if cause == nil {
+		return ErrLifecycleDeferred
+	}
+	return errors.Join(ErrLifecycleDeferred, cause)
+}
+
+func IsLifecycleDeferred(err error) bool {
+	return errors.Is(err, ErrLifecycleDeferred)
+}
+
 func CoordinatorTaskMetadata() task.TaskMetadata {
 	return task.TaskMetadata{
 		ID:       CoordinatorTaskID,
@@ -203,7 +222,9 @@ func (c *Coordinator) Run(ctx context.Context) error {
 			activeJobs := metricv2.LifecycleActiveJobGauge.WithLabelValues(mode)
 			activeJobs.Inc()
 			defer activeJobs.Dec()
-			if childErr := c.child(runCtx, binding); childErr != nil {
+			if childErr := c.child(runCtx, binding); IsLifecycleDeferred(childErr) {
+				metricv2.LifecycleJobCounter.WithLabelValues(mode, "deferred").Inc()
+			} else if childErr != nil {
 				metricv2.LifecycleJobCounter.WithLabelValues(mode, "error").Inc()
 				errs <- childErr
 			} else {

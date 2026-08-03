@@ -17,8 +17,8 @@ package lifecycle
 import (
 	"context"
 	"crypto/sha256"
-	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -37,7 +37,7 @@ func VerifyRestoreBatch(
 	expectedHash [sha256.Size]byte,
 ) error {
 	if value == nil {
-		return fmt.Errorf("Lifecycle Restore verification Batch is nil")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore verification Batch is nil")
 	}
 	encoder := NewCanonicalBatchEncoder(schemaDigest)
 	if err := encoder.WriteBatch(ctx, value, nil); err != nil {
@@ -46,7 +46,7 @@ func VerifyRestoreBatch(
 	if encoder.RowCount() != expectedRows ||
 		encoder.LogicalBytes() != expectedLogicalBytes ||
 		encoder.Sum() != expectedHash {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Restore final MO vectors do not match the Archive Chunk",
 		)
 	}
@@ -62,13 +62,13 @@ func CanonicalRowsToBatch(
 	mp *mpool.MPool,
 ) (*batch.Batch, error) {
 	if mp == nil || len(schema.Columns) == 0 {
-		return nil, fmt.Errorf("Lifecycle Restore Batch input is incomplete")
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle Restore Batch input is incomplete")
 	}
 	value := batch.NewWithSize(len(schema.Columns))
 	attributes := make([]string, len(schema.Columns))
 	for ordinal, column := range schema.Columns {
 		if column.Ordinal != uint32(ordinal) {
-			return nil, fmt.Errorf("Lifecycle Restore schema ordinals are corrupt")
+			return nil, moerr.NewInternalErrorNoCtxf("Lifecycle Restore schema ordinals are corrupt")
 		}
 		attributes[ordinal] = column.Name
 		value.Vecs[ordinal] = vector.NewVec(types.New(
@@ -89,7 +89,7 @@ func CanonicalRowsToBatch(
 			return nil, err
 		}
 		if len(row) != len(schema.Columns) {
-			return nil, fmt.Errorf(
+			return nil, moerr.NewInternalErrorNoCtxf(
 				"Lifecycle Restore row %d has %d columns, expected %d",
 				rowOrdinal,
 				len(row),
@@ -101,7 +101,7 @@ func CanonicalRowsToBatch(
 			if cell.Type.Oid != expected.Oid ||
 				cell.Type.Width != expected.Width ||
 				cell.Type.Scale != expected.Scale {
-				return nil, fmt.Errorf(
+				return nil, moerr.NewInternalErrorNoCtxf(
 					"Lifecycle Restore row %d column %d type changed",
 					rowOrdinal,
 					columnOrdinal,
@@ -137,7 +137,7 @@ func restoreVectorValue(cell CanonicalCell) (any, error) {
 	case string:
 		encoded = []byte(value)
 	default:
-		return nil, fmt.Errorf(
+		return nil, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Restore JSON has unexpected type %T",
 			cell.Value,
 		)

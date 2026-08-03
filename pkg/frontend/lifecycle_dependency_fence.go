@@ -305,8 +305,9 @@ func rejectLifecycleArchiveClusterRestore(
 			ctx,
 			background,
 			lifecycleArchiveRestoreScope{
-				level:     tree.RESTORELEVELACCOUNT,
-				accountID: uint32(account.accountId),
+				level:             tree.RESTORELEVELACCOUNT,
+				accountID:         uint32(account.accountId),
+				rejectTTLBindings: true,
 			},
 			operation,
 		); err != nil {
@@ -318,9 +319,10 @@ func rejectLifecycleArchiveClusterRestore(
 			ctx,
 			background,
 			lifecycleArchiveRestoreScope{
-				level:      tree.RESTORELEVELACCOUNT,
-				accountID:  uint32(account.accountId),
-				snapshotTS: snapshotTS,
+				level:             tree.RESTORELEVELACCOUNT,
+				accountID:         uint32(account.accountId),
+				snapshotTS:        snapshotTS,
+				rejectTTLBindings: true,
 			},
 			operation,
 		); err != nil {

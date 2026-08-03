@@ -52,7 +52,7 @@ func handleRestoreArchiveDataset(
 	statement *tree.RestoreArchiveDataset,
 ) error {
 	if statement == nil || statement.Target == nil {
-		return fmt.Errorf("Lifecycle Restore target is required")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore target is required")
 	}
 	releaseRestore, acquired := tryAcquireLifecycleRestoreSlot(
 		lifecycleRestoreSlots,
@@ -94,7 +94,7 @@ func handleRestoreArchiveDataset(
 	}
 	tableName := string(statement.Target.Name())
 	if databaseName == "" || tableName == "" {
-		return fmt.Errorf("Lifecycle Restore target database and table are required")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore target database and table are required")
 	}
 	if err := validateLifecycleRestoreTargetName(tableName); err != nil {
 		return err
@@ -153,7 +153,7 @@ func handleRestoreArchiveDataset(
 		return err
 	}
 	if target.StageID != dataset.StageID {
-		return fmt.Errorf("Lifecycle Dataset Stage identity mismatch")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Dataset Stage identity mismatch")
 	}
 	archiveFS, err := lifecyclepkg.NewArchiveFileService(ctx, target)
 	if err != nil {
@@ -218,7 +218,7 @@ func newLifecycleRestoreCoordinator(
 
 func validateLifecycleRestoreTargetName(tableName string) error {
 	if catalog.IsLifecycleRestoreStagingTable(tableName) {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Restore target cannot use the reserved canonical staging name %s",
 			tableName,
 		)
@@ -236,7 +236,7 @@ func handlePurgeArchiveDataset(
 	statement *tree.PurgeArchiveDataset,
 ) error {
 	if statement == nil {
-		return fmt.Errorf("Lifecycle Purge input is required")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Purge input is required")
 	}
 	sqlExecutor, err := lifecycleSQLExecutor(ses.GetService())
 	if err != nil {
@@ -266,11 +266,11 @@ func lifecycleSQLExecutor(service string) (executor.SQLExecutor, error) {
 		moruntime.InternalSQLExecutor,
 	)
 	if !ok {
-		return nil, fmt.Errorf("Lifecycle internal SQL executor is unavailable")
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle internal SQL executor is unavailable")
 	}
 	sqlExecutor, ok := value.(executor.SQLExecutor)
 	if !ok || sqlExecutor == nil {
-		return nil, fmt.Errorf("Lifecycle internal SQL executor has invalid type")
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle internal SQL executor has invalid type")
 	}
 	return sqlExecutor, nil
 }
@@ -304,7 +304,7 @@ func lifecycleDatabaseID(
 		return true
 	})
 	if rowsRead != 1 || databaseID == 0 {
-		return 0, fmt.Errorf(
+		return 0, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Restore target database %s does not exist",
 			databaseName,
 		)

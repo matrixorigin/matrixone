@@ -30,6 +30,12 @@ mo_increment_columns
 mo_index_update    r
 mo_indexes    r
 mo_iscp_log    r
+mo_lifecycle_bindings    r
+mo_lifecycle_cleanup_roots    cluster
+mo_lifecycle_datasets    r
+mo_lifecycle_restore_attempts    r
+mo_lifecycle_restore_chunks    r
+mo_lifecycle_ttl_receipts    r
 mo_locks    v
 mo_merge_settings    r
 mo_mongodb_connections    r

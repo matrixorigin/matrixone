@@ -19,7 +19,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"math"
 	"strings"
 	"sync"
@@ -28,6 +27,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -198,7 +198,7 @@ func LifecycleTaskExecutorFactory(
 			// tick has completed. The Coordinator itself is retained so its
 			// in-process Binding cursor survives across TaskService ticks.
 			if activeRunner == nil {
-				return fmt.Errorf("Lifecycle coordinator runner is not installed")
+				return moerr.NewInternalErrorNoCtxf("Lifecycle coordinator runner is not installed")
 			}
 			return activeRunner.run(ctx, binding)
 		},
@@ -223,7 +223,7 @@ func LifecycleTaskExecutorFactory(
 			return admissionErr
 		}
 		if taeFSErr != nil {
-			return fmt.Errorf("resolve Lifecycle SHARED FileService: %w", taeFSErr)
+			return moerr.NewInternalErrorNoCtxf("resolve Lifecycle SHARED FileService: %v", taeFSErr)
 		}
 		var cleanupErr error
 		var cleanupScanComplete bool
@@ -369,6 +369,11 @@ func sweepLifecycleCleanupRoots(
 	// later reconciliation or Restore cleanup. An unfinished idempotent page is
 	// replayed on the next tick.
 	sweepDeadline := time.Now().Add(lifecycleCleanupSweepBudget)
+	temporaryDeadline := lifecycleCleanupPhaseDeadline(
+		time.Now(),
+		sweepDeadline,
+		3,
+	)
 	taeStore := lifecyclepkg.FileServiceArchiveStore{
 		FileService:    taeFS,
 		MaxListEntries: 100_000,
@@ -377,7 +382,7 @@ func sweepLifecycleCleanupRoots(
 	for _, root := range temporary {
 		rootTimeout, ok := lifecycleCleanupRootTimeout(
 			time.Now(),
-			sweepDeadline,
+			temporaryDeadline,
 		)
 		if !ok {
 			break
@@ -421,12 +426,17 @@ func sweepLifecycleCleanupRoots(
 		Roots:   roots,
 		Catalog: reconcileCatalog,
 	}
+	reconcileDeadline := lifecycleCleanupPhaseDeadline(
+		time.Now(),
+		sweepDeadline,
+		2,
+	)
 	now := time.Now()
 	processedReconcileable := 0
 	for _, root := range reconcileable {
 		rootTimeout, ok := lifecycleCleanupRootTimeout(
 			time.Now(),
-			sweepDeadline,
+			reconcileDeadline,
 		)
 		if !ok {
 			break
@@ -512,13 +522,39 @@ func sweepLifecycleCleanupRoots(
 			sweepErr = errors.Join(sweepErr, rootErr, deferErr)
 		}
 	}
-	if processedReconcileable != len(reconcileable) {
-		// Do not advance past Roots that were not visited before the pass
-		// budget expired. Reconciliation is idempotent, so replaying already
-		// processed rows is safe and keeps the cursor contract simple.
-		nextCursor = reconcileCursor
-	}
+	nextCursor = lifecycleNextReconcileCursor(
+		reconcileCursor,
+		nextCursor,
+		reconcileable,
+		processedReconcileable,
+	)
 	return nextCursor, true, sweepErr
+}
+
+func lifecycleCleanupPhaseDeadline(
+	now time.Time,
+	sweepDeadline time.Time,
+	remainingPhases int,
+) time.Time {
+	if remainingPhases <= 1 || !now.Before(sweepDeadline) {
+		return sweepDeadline
+	}
+	return now.Add(sweepDeadline.Sub(now) / time.Duration(remainingPhases))
+}
+
+func lifecycleNextReconcileCursor(
+	current string,
+	pageNext string,
+	roots []lifecyclepkg.CleanupRoot,
+	processed int,
+) string {
+	if processed <= 0 || len(roots) == 0 {
+		return current
+	}
+	if processed < len(roots) {
+		return roots[processed-1].RootID
+	}
+	return pageNext
 }
 
 func lifecycleCleanupRootTimeout(
@@ -550,7 +586,7 @@ func (runner *lifecycleBindingExecutor) run(
 		runner.sqlExecutor == nil ||
 		runner.taeFS == nil ||
 		runner.now == nil {
-		return fmt.Errorf("Lifecycle binding executor dependencies are incomplete")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle binding executor dependencies are incomplete")
 	}
 	enabled, err := runner.release.Enabled(ctx)
 	if err != nil {
@@ -565,13 +601,13 @@ func (runner *lifecycleBindingExecutor) run(
 	archiveAction := strings.EqualFold(binding.Action, "ARCHIVE")
 	deleteAction := strings.EqualFold(binding.Action, "DELETE")
 	if !archiveAction && !deleteAction {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"Lifecycle action %q is not enabled",
 			binding.Action,
 		)
 	}
 	if archiveAction && binding.PurgeAfterDays <= binding.ExpireAfterDays {
-		return fmt.Errorf("Lifecycle Archive retention window is invalid")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Archive retention window is invalid")
 	}
 	var target lifecyclepkg.FrozenArchiveTarget
 	var archiveFS fileservice.FileService
@@ -639,21 +675,21 @@ func (runner *lifecycleBindingExecutor) run(
 	}
 	table, ok := relation.(LifecycleTable)
 	if !ok {
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"table %d does not expose Lifecycle capabilities",
 			binding.PhysicalTableID,
 		)
 	}
 	tableDef := relation.GetTableDef(accountCtx)
 	if tableDef == nil || tableDef.TblId != binding.PhysicalTableID {
-		return fmt.Errorf("Lifecycle table definition identity changed")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle table definition identity changed")
 	}
 	bindingSchemaDigest := lifecyclepkg.BindingSchemaDigest(tableDef)
 	if !strings.EqualFold(
 		binding.SchemaDigest,
 		hex.EncodeToString(bindingSchemaDigest[:]),
 	) {
-		return fmt.Errorf("Lifecycle Binding schema fence changed")
+		return moerr.NewInternalErrorNoCtxf("Lifecycle Binding schema fence changed")
 	}
 	schema, schemaDigest, err := lifecyclepkg.BuildSchemaDescriptor(
 		accountCtx,
@@ -778,6 +814,7 @@ func (runner *lifecycleBindingExecutor) run(
 		},
 		Faults: runner.faults,
 	}
+	var firstDeferred error
 	for _, objectPlan := range planLifecycleObjectTasks(planInputs) {
 		enabled, gateErr := runner.release.Enabled(accountCtx)
 		if gateErr != nil {
@@ -869,6 +906,9 @@ func (runner *lifecycleBindingExecutor) run(
 		}()
 		if processErr != nil {
 			if isLifecycleDeferredObjectError(processErr) {
+				if firstDeferred == nil {
+					firstDeferred = processErr
+				}
 				continue
 			}
 			return processErr
@@ -893,6 +933,9 @@ func (runner *lifecycleBindingExecutor) run(
 		metricv2.LifecycleBytesCounter.WithLabelValues(
 			"retired_source",
 		).Add(float64(objectPlan.SourceBytes))
+	}
+	if firstDeferred != nil {
+		return lifecyclepkg.MarkLifecycleDeferred(firstDeferred)
 	}
 	return nil
 }
@@ -932,7 +975,7 @@ func tryAcquireLifecycleRewriteSlot(
 		return nil, err
 	}
 	if slots == nil || cap(slots) == 0 {
-		return nil, fmt.Errorf(
+		return nil, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle Rewrite concurrency is not configured",
 		)
 	}
@@ -948,7 +991,7 @@ func tryAcquireLifecycleRewriteSlot(
 		metricv2.LifecycleResourceRejectionCounter.WithLabelValues(
 			"rewrite_concurrency",
 		).Inc()
-		return nil, fmt.Errorf(
+		return nil, moerr.NewInternalErrorNoCtxf(
 			"RESOURCE_BLOCKED: Lifecycle Rewrite concurrency is exhausted",
 		)
 	}
@@ -965,7 +1008,7 @@ func lifecycleColumn(
 		}
 		if column.ColId == columnID {
 			if column.Seqnum > math.MaxUint16 {
-				return 0, 0, 0, fmt.Errorf(
+				return 0, 0, 0, moerr.NewInternalErrorNoCtxf(
 					"Lifecycle column seqnum %d exceeds Object metadata encoding",
 					column.Seqnum,
 				)
@@ -975,7 +1018,7 @@ func lifecycleColumn(
 			case types.T_date, types.T_datetime, types.T_timestamp:
 				return ordinal, uint16(column.Seqnum), oid, nil
 			default:
-				return 0, 0, 0, fmt.Errorf(
+				return 0, 0, 0, moerr.NewInternalErrorNoCtxf(
 					"Lifecycle column type %s is no longer supported",
 					oid,
 				)
@@ -983,7 +1026,7 @@ func lifecycleColumn(
 		}
 		ordinal++
 	}
-	return 0, 0, 0, fmt.Errorf("Lifecycle column %d no longer exists", columnID)
+	return 0, 0, 0, moerr.NewInternalErrorNoCtxf("Lifecycle column %d no longer exists", columnID)
 }
 
 func lifecycleCutoff(
@@ -994,7 +1037,7 @@ func lifecycleCutoff(
 	columnType types.T,
 ) (time.Time, int64, error) {
 	if evaluation.IsZero() || expireDays == 0 {
-		return time.Time{}, 0, fmt.Errorf("Lifecycle cutoff input is incomplete")
+		return time.Time{}, 0, moerr.NewInternalErrorNoCtxf("Lifecycle cutoff input is incomplete")
 	}
 	location, err := time.LoadLocation(timezone)
 	if err != nil {
@@ -1030,7 +1073,7 @@ func lifecycleCutoff(
 			localCutoff.UTC().UnixNano(),
 		)), nil
 	default:
-		return time.Time{}, 0, fmt.Errorf(
+		return time.Time{}, 0, moerr.NewInternalErrorNoCtxf(
 			"unsupported Lifecycle column type %s",
 			columnType,
 		)
@@ -1105,7 +1148,7 @@ func classifyLifecycleDiscoveryPage(
 	error,
 ) {
 	if maxMetaBytes == 0 || page.MetaBytes > maxMetaBytes {
-		return nil, lifecyclepkg.DiscoveryCursor{}, time.Time{}, fmt.Errorf(
+		return nil, lifecyclepkg.DiscoveryCursor{}, time.Time{}, moerr.NewInternalErrorNoCtxf(
 			"RESOURCE_BLOCKED: Lifecycle discovery metadata budget is exhausted",
 		)
 	}
@@ -1118,7 +1161,7 @@ func classifyLifecycleDiscoveryPage(
 	usedMetaBytes := page.MetaBytes
 	if sortKeyOrdinal != columnOrdinal {
 		if load == nil {
-			return nil, lifecyclepkg.DiscoveryCursor{}, time.Time{}, fmt.Errorf(
+			return nil, lifecyclepkg.DiscoveryCursor{}, time.Time{}, moerr.NewInternalErrorNoCtxf(
 				"Lifecycle non-sort-key metadata loader is unavailable",
 			)
 		}
@@ -1133,7 +1176,7 @@ func classifyLifecycleDiscoveryPage(
 			}
 			if charge > maxMetaBytes-usedMetaBytes {
 				if consumed == 0 {
-					return nil, lifecyclepkg.DiscoveryCursor{}, time.Time{}, fmt.Errorf(
+					return nil, lifecyclepkg.DiscoveryCursor{}, time.Time{}, moerr.NewInternalErrorNoCtxf(
 						"RESOURCE_BLOCKED: Lifecycle Object metadata exceeds the certified page budget",
 					)
 				}
@@ -1198,7 +1241,7 @@ func lifecycleObjectMetaCharge(stats objectio.ObjectStats) (uint64, error) {
 	compressed := uint64(extent.Length())
 	decoded := uint64(extent.OriginSize())
 	if compressed == 0 || decoded == 0 || decoded > (math.MaxUint64-compressed)/2 {
-		return 0, fmt.Errorf(
+		return 0, moerr.NewInternalErrorNoCtxf(
 			"RESOURCE_BLOCKED: Lifecycle Object metadata size is not certified",
 		)
 	}
@@ -1218,7 +1261,7 @@ func loadLifecycleObjectColumnZoneMap(
 	}
 	data, ok := meta.DataMeta()
 	if !ok {
-		return nil, fmt.Errorf("Lifecycle source Object has no data metadata")
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle source Object has no data metadata")
 	}
 	return data.MustGetColumn(seqnum).ZoneMap().Clone(), nil
 }

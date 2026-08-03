@@ -16,8 +16,8 @@ package lifecycle
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -38,11 +38,11 @@ func (classifier ExpirationClassifier) Classify(
 	if value == nil ||
 		classifier.ColumnOrdinal < 0 ||
 		classifier.ColumnOrdinal >= len(value.Vecs) {
-		return nil, fmt.Errorf("Lifecycle expiration classifier input is incomplete")
+		return nil, moerr.NewInternalErrorNoCtxf("Lifecycle expiration classifier input is incomplete")
 	}
 	column := value.Vecs[classifier.ColumnOrdinal]
 	if column.GetType().Oid != classifier.ColumnType {
-		return nil, fmt.Errorf(
+		return nil, moerr.NewInternalErrorNoCtxf(
 			"Lifecycle column type changed from %s to %s",
 			classifier.ColumnType,
 			column.GetType().Oid,
@@ -54,7 +54,7 @@ func (classifier ExpirationClassifier) Classify(
 			continue
 		}
 		if column.GetNulls().Contains(uint64(row)) {
-			return nil, fmt.Errorf("Lifecycle column contains NULL")
+			return nil, moerr.NewInternalErrorNoCtxf("Lifecycle column contains NULL")
 		}
 		var encoded int64
 		switch classifier.ColumnType {
@@ -65,7 +65,7 @@ func (classifier ExpirationClassifier) Classify(
 		case types.T_timestamp:
 			encoded = int64(vector.GetFixedAtNoTypeCheck[types.Timestamp](column, row))
 		default:
-			return nil, fmt.Errorf(
+			return nil, moerr.NewInternalErrorNoCtxf(
 				"unsupported Lifecycle column type %s",
 				classifier.ColumnType,
 			)
