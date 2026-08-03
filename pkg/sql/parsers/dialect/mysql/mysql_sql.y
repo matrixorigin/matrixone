@@ -110,8 +110,6 @@ func sqlTaskInt64(v any) int64 {
     attributeReference *tree.AttributeReference
     loadParam *tree.ExternParam
     tailParam *tree.TailParameter
-    connectorOption *tree.ConnectorOption
-    connectorOptions []*tree.ConnectorOption
     icebergOption *tree.IcebergOption
     icebergOptions tree.IcebergOptions
     icebergTableParam *tree.IcebergTableParam
@@ -241,7 +239,7 @@ func sqlTaskInt64(v any) int64 {
     ifNotExists bool
     defaultOptional bool
     sourceOptional bool
-    connectorOptional bool
+
     fullOpt bool
     boolVal bool
     int64Val int64
@@ -507,8 +505,7 @@ func sqlTaskInt64(v any) int64 {
 // With
 %token <str> RECURSIVE CONFIG DRAINER
 
-// Source
-%token <str> SOURCE STREAM HEADERS CONNECTOR CONNECTORS DAEMON PAUSE CANCEL RESUME SCHEDULE TIMEZONE TIMEOUT
+%token <str> DAEMON PAUSE CANCEL RESUME SCHEDULE TIMEZONE TIMEOUT
 %nonassoc <str> TASK
 
 // Match
@@ -597,17 +594,17 @@ func sqlTaskInt64(v any) int64 {
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt insert_no_with_stmt delete_stmt merge_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
-%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_connector_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt drop_iceberg_catalog_stmt drop_mongodb_connection_stmt
+%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt drop_iceberg_catalog_stmt drop_mongodb_connection_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt create_iceberg_catalog_stmt create_mongodb_connection_stmt
-%type <statement> create_source_stmt create_connector_stmt pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt create_sql_task_stmt drop_sql_task_stmt alter_sql_task_stmt show_sql_tasks_stmt show_sql_task_runs_stmt
+%type <statement> pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt create_sql_task_stmt drop_sql_task_stmt alter_sql_task_stmt show_sql_tasks_stmt show_sql_task_runs_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt show_snapshots_stmt show_upgrade_stmt show_rules_on_role_stmt show_iceberg_stmt show_mongodb_connections_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
-%type <statement> show_servers_stmt show_connectors_stmt show_logservice_replicas_stmt show_logservice_stores_stmt show_logservice_settings_stmt
+%type <statement> show_servers_stmt show_logservice_replicas_stmt show_logservice_stores_stmt show_logservice_settings_stmt
 %type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt alter_role_stmt rename_stmt alter_iceberg_catalog_stmt alter_mongodb_connection_stmt
 %type <merge> merge_no_with_stmt
 %type <mergeClauses> merge_when_list
@@ -674,7 +671,7 @@ func sqlTaskInt64(v any) int64 {
 %type <diffOutputOpt> diff_output_opt
 
 %type <select> select_stmt select_no_parens replace_table_source
-%type <selectStatement> simple_select select_with_parens simple_select_clause
+%type <selectStatement> simple_select select_with_parens simple_select_clause table_query_subquery table_query_expr table_query_term table_query_primary values_query_subquery values_query_expr values_query_term values_query_primary
 %type <selectExprs> select_expression_list
 %type <selectExpr> select_expression
 %type <selectOptions> select_options_opt select_option_list
@@ -728,7 +725,7 @@ func sqlTaskInt64(v any) int64 {
 %type <str> integer_opt spatial_type_name
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
-%type <tableOptions> table_option_list_opt table_option_list source_option_list_opt source_option_list
+%type <tableOptions> table_option_list_opt table_option_list
 %type <icebergTableParam> iceberg_table_param
 %type <icebergOptions> iceberg_option_list_opt iceberg_option_list
 %type <icebergOption> iceberg_option
@@ -757,9 +754,7 @@ func sqlTaskInt64(v any) int64 {
 %type <boolVal> auto_update
 %type <PartitionNames> AllOrPartitionNameList PartitionNameList
 
-%type <tableOption> table_option source_option
-%type <connectorOption> connector_option
-%type <connectorOptions> connector_option_list
+%type <tableOption> table_option
 %type <from> from_clause from_opt
 %type <where> where_expression_opt having_opt
 %type <groupBy> group_by_opt
@@ -4686,7 +4681,6 @@ show_stmt:
 |   show_ccpr_subscriptions_stmt
 |   show_servers_stmt
 |   show_stages_stmt
-|   show_connectors_stmt
 |   show_snapshots_stmt
 |   show_pitr_stmt
 |   show_recovery_window_stmt
@@ -5406,7 +5400,6 @@ drop_ddl_stmt:
 |   drop_ccpr_subscription_stmt
 |   drop_procedure_stmt
 |   drop_stage_stmt
-|   drop_connector_stmt
 |   drop_snapshot_stmt
 |   drop_pitr_stmt
 |   drop_cdc_stmt
@@ -5513,20 +5506,6 @@ drop_table_stmt:
         var stmt = tree.NewDropTable(ifExists, names)
         stmt.Temporary = $2
         $$ = stmt
-    }
-|   DROP SOURCE exists_opt table_name_list
-    {
-        var ifExists = $3
-        var names = $4
-        $$ = tree.NewDropTable(ifExists, names)
-    }
-
-drop_connector_stmt:
-    DROP CONNECTOR exists_opt table_name_list
-    {
-        var ifExists = $3
-        var names = $4
-        $$ = tree.NewDropConnector(ifExists, names)
     }
 
 drop_view_stmt:
@@ -6624,19 +6603,14 @@ select_with_parens:
     {
         $$ = &tree.ParenSelect{Select: &tree.Select{Select: $2}}
     }
-|   '(' values_stmt ')'
+|   values_query_subquery
     {
-        valuesStmt := $2.(*tree.ValuesStatement);
-        $$ = &tree.ParenSelect{Select: &tree.Select {
-            Select: &tree.ValuesClause {
-                Rows: valuesStmt.Rows,
-                RowWord: true,
-            },
-            OrderBy: valuesStmt.OrderBy,
-            Limit:   valuesStmt.Limit,
-        }}
+        $$ = $1
     }
-
+|   table_query_subquery
+    {
+        $$ = $1
+    }
 simple_select:
     simple_select_clause
     {
@@ -6681,6 +6655,102 @@ simple_select:
             All: $2.All,
             Distinct: $2.Distinct,
         }
+    }
+|   simple_select union_op table_query_primary
+    {
+        $$ = &tree.UnionClause{Type: $2.Type, Left: $1, Right: $3, All: $2.All, Distinct: $2.Distinct}
+    }
+|   select_with_parens union_op table_query_primary
+    {
+        $$ = &tree.UnionClause{Type: $2.Type, Left: $1, Right: $3, All: $2.All, Distinct: $2.Distinct}
+    }
+|   simple_select union_op values_query_primary
+    {
+        $$ = &tree.UnionClause{Type: $2.Type, Left: $1, Right: $3, All: $2.All, Distinct: $2.Distinct}
+    }
+|   select_with_parens union_op values_query_primary
+    {
+        $$ = &tree.UnionClause{Type: $2.Type, Left: $1, Right: $3, All: $2.All, Distinct: $2.Distinct}
+    }
+// TABLE is a query term in MySQL. Keep it separate from replace_table_source,
+// and preserve top-level VALUES as the existing ValuesStatement AST.
+table_query_subquery:
+    '(' table_query_expr order_by_opt limit_opt ')'
+    {
+        $$ = &tree.ParenSelect{Select: tree.NewSelect($2, $3, $4)}
+    }
+
+table_query_expr:
+    table_query_primary
+    {
+        $$ = $1
+    }
+|   table_query_expr union_op table_query_term
+    {
+        $$ = &tree.UnionClause{Type: $2.Type, Left: $1, Right: $3, All: $2.All, Distinct: $2.Distinct}
+    }
+
+table_query_primary:
+    TABLE table_name
+    {
+        $$ = makeSelectStarFromTable($2)
+    }
+table_query_term:
+    simple_select_clause
+    {
+        $$ = $1
+    }
+|   table_query_primary
+    {
+        $$ = $1
+    }
+|   select_with_parens
+    {
+        $$ = $1
+    }
+|   VALUES row_constructor_list
+    {
+        $$ = &tree.ValuesClause{Rows: $2, RowWord: true}
+    }
+
+values_query_subquery:
+    '(' values_query_expr order_by_opt limit_opt ')'
+    {
+        $$ = &tree.ParenSelect{Select: tree.NewSelect($2, $3, $4)}
+    }
+
+values_query_expr:
+    values_query_primary
+    {
+        $$ = $1
+    }
+|   values_query_expr union_op values_query_term
+    {
+        $$ = &tree.UnionClause{Type: $2.Type, Left: $1, Right: $3, All: $2.All, Distinct: $2.Distinct}
+    }
+
+values_query_primary:
+    VALUES row_constructor_list
+    {
+        $$ = &tree.ValuesClause{Rows: $2, RowWord: true}
+    }
+
+values_query_term:
+    simple_select_clause
+    {
+        $$ = $1
+    }
+|   values_query_primary
+    {
+        $$ = $1
+    }
+|   table_query_primary
+    {
+        $$ = $1
+    }
+|   select_with_parens
+    {
+        $$ = $1
     }
 
 union_op:
@@ -7488,8 +7558,6 @@ create_ddl_stmt:
 |   create_extension_stmt
 |   create_sequence_stmt
 |   create_procedure_stmt
-|   create_source_stmt
-|   create_connector_stmt
 |   create_iceberg_catalog_stmt
 |   create_mongodb_connection_stmt
 |   pause_daemon_task_stmt
@@ -9273,23 +9341,6 @@ default_opt:
         $$ = true
     }
 
-create_connector_stmt:
-    CREATE CONNECTOR FOR table_name WITH '(' connector_option_list ')'
-    {
-        var TableName = $4
-        var Options = $7
-        $$ = tree.NewCreateConnector(
-            TableName,
-            Options,
-        )
-    }
-
-show_connectors_stmt:
-    SHOW CONNECTORS
-    {
-	$$ = &tree.ShowConnectors{}
-    }
-
 pause_daemon_task_stmt:
     PAUSE DAEMON TASK INTEGRAL
     {
@@ -9342,23 +9393,6 @@ resume_daemon_task_stmt:
         $$ = &tree.ResumeDaemonTask{
             TaskID: taskID,
         }
-    }
-
-create_source_stmt:
-    CREATE replace_opt SOURCE not_exists_opt table_name '(' table_elem_list_opt ')' source_option_list_opt
-    {
-        var Replace = $2
-        var IfNotExists = $4
-        var SourceName = $5
-        var Defs = $7
-        var Options = $9
-        $$ = tree.NewCreateSource(
-            Replace,
-            IfNotExists,
-            SourceName,
-            Defs,
-            Options,
-        )
     }
 
 replace_opt:
@@ -9498,7 +9532,7 @@ diff_output_opt:
     }
     | OUTPUT LIMIT INTEGRAL
     {
-    	x := $3.(int64)
+        x, errStr := util.GetInt64($3); if errStr != "" { yylex.Error("OUTPUT LIMIT is out of range"); goto ret1 }
     	$$ = &tree.DiffOutputOpt {
            Limit: &x,
         }
@@ -9636,16 +9670,6 @@ create_table_stmt:
         t.Options = $9
         t.PartitionOption = $10
         t.ClusterByOption = $11
-        $$ = t
-    }
-|   CREATE DYNAMIC TABLE not_exists_opt table_name AS select_stmt source_option_list_opt
-    {
-        t := tree.NewCreateTable()
-        t.IsDynamicTable = true
-        t.IfNotExists = $4
-        t.Table = *$5
-        t.AsSource = $7
-        t.DTOptions = $8
         $$ = t
     }
 |   CREATE temporary_opt TABLE not_exists_opt table_name select_stmt
@@ -10339,75 +10363,6 @@ linear_opt:
         $$ = true
     }
 
-connector_option_list:
-	connector_option
-	{
-		$$ = []*tree.ConnectorOption{$1}
-	}
-|	connector_option_list ',' connector_option
-	{
-		$$ = append($1, $3)
-	}
-
-connector_option:
-	ident equal_opt literal
-    {
-        var Key = tree.Identifier($1.Compare())
-        var Val = $3
-        $$ = tree.NewConnectorOption(
-            Key, 
-            Val,
-        )
-    }
-    |   STRING equal_opt literal
-        {
-            var Key = tree.Identifier($1)
-            var Val = $3
-            $$ = tree.NewConnectorOption(
-                Key, 
-                Val,
-            )
-        }
-
-source_option_list_opt:
-    {
-        $$ = nil
-    }
-|	WITH '(' source_option_list ')'
-	{
-		$$ = $3
-	}
-
-source_option_list:
-	source_option
-	{
-		$$ = []tree.TableOption{$1}
-	}
-|	source_option_list ',' source_option
-	{
-		$$ = append($1, $3)
-	}
-
-source_option:
-	ident equal_opt literal
-    {
-        var Key = tree.Identifier($1.Compare())
-        var Val = $3
-        $$ = tree.NewCreateSourceWithOption(
-            Key,
-            Val,
-        )
-    }
-|   STRING equal_opt literal
-    {
-        var Key = tree.Identifier($1)
-        var Val = $3
-        $$ = tree.NewCreateSourceWithOption(
-            Key,
-            Val,
-        )
-    }
-
 iceberg_table_param:
     ENGINE equal_opt ICEBERG iceberg_option_list_opt
     {
@@ -11027,7 +10982,6 @@ index_def:
             IndexOption,
         )
     }
-
 constaint_def:
     constraint_keyword constraint_elem
     {
@@ -11039,6 +10993,7 @@ constaint_def:
                 v.ConstraintSymbol = $1
             case *tree.UniqueIndex:
                 v.ConstraintSymbol = $1
+            case *tree.CheckIndex: v.ConstraintSymbol = $1
             }
         }
         $$ = $2
@@ -11128,9 +11083,9 @@ constraint_elem:
 
 enforce_opt:
     {
-        $$ = false
+        $$ = true
     }
-|    enforce
+|   enforce
 
 key_or_index_opt:
     {
@@ -11338,7 +11293,7 @@ column_attribute_elem:
     }
 |   constraint_keyword_opt CHECK '(' expression ')'
     {
-        $$ = tree.NewAttributeCheckConstraint($4, false, $1)
+        $$ = tree.NewAttributeCheckConstraint($4, true, $1)
     }
 |   constraint_keyword_opt CHECK '(' expression ')' enforce
     {
@@ -11387,14 +11342,6 @@ column_attribute_elem:
     {
         $$ = nil
     }
-|	HEADER '(' STRING ')'
-	{
-		$$ = tree.NewAttributeHeader($3)
-	}
-|	HEADERS
-	{
-		$$ = tree.NewAttributeHeaders()
-	}
 |   GENERATED ALWAYS AS '(' expression ')' generated_column_type_opt
     {
         $$ = tree.NewAttributeGeneratedAlways($5, $7)
@@ -14880,11 +14827,8 @@ non_reserved_keyword:
 |   COMPRESSED
 |   COMPACT
 |   COLUMN_FORMAT
-|   CONNECTOR
-|   CONNECTORS
 |	COLLATION
 |   SECONDARY_ENGINE_ATTRIBUTE
-|   STREAM
 |   ENGINE_ATTRIBUTE
 |   INSERT_METHOD
 |   CASCADE
@@ -15059,7 +15003,6 @@ non_reserved_keyword:
 |   STATS_AUTO_RECALC
 |   STATS_PERSISTENT
 |   STATS_SAMPLE_PAGES
-|	SOURCE
 |   SUBPARTITIONS
 |   SUBPARTITION
 |   SIMPLE
@@ -15336,7 +15279,6 @@ not_keyword:
 |   SETVAL
 |   CURRVAL
 |   LASTVAL
-|   HEADERS
 |   SERIAL_EXTRACT
 |   BIT_CAST
 |   BITMAP_BIT_POSITION

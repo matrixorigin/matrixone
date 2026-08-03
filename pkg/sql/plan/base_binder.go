@@ -164,7 +164,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		}
 		if b.builder != nil {
 			var rewritten bool
-			expr, rewritten, err = b.builder.rewriteProjectedEnumOrSetDisplayValueToJSONCast(expr, expr, typ)
+			expr, rewritten, err = b.builder.rewriteProjectedMySQLSpecialTypeDisplayCast(expr, expr, typ)
 			if err != nil {
 				return
 			}
@@ -276,7 +276,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.baseBindVar(exprImpl, depth, isRoot)
 
 	case *tree.ParamExpr:
-		if !b.builder.isPrepareStatement {
+		if b.builder == nil || !b.builder.isPrepareStatement {
 			err = moerr.NewInvalidInput(b.GetContext(), "only prepare statement can use ? expr")
 		} else {
 			expr, err = b.baseBindParam(exprImpl, depth, isRoot)
@@ -2312,6 +2312,34 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 }
 
+func isPreparedNumericAggregate(name string, argCount int) bool {
+	return argCount == 1 && (strings.EqualFold(name, "sum") || strings.EqualFold(name, "avg"))
+}
+
+// bindPreparedNumericAggregateFuncExpr gives prepared SUM/AVG arguments the
+// same static numeric context as prepared arithmetic. ParamRef remains TEXT for
+// transport and an explicit cast materializes the inferred computation type.
+// Non-parameter expressions stay on their original binding path, so ordinary
+// SUM/AVG over string columns continues to be rejected by aggregate overload
+// resolution.
+func (b *baseBinder) bindPreparedNumericAggregateFuncExpr(
+	name string,
+	astArgs []tree.Expr,
+	depth int32,
+) (*plan.Expr, error) {
+	if b.builder == nil || !b.builder.isPrepareStatement || !isPreparedNumericAggregate(name, len(astArgs)) {
+		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
+	}
+
+	arg, err := b.bindNumericExprWithContext(astArgs[0], depth, nil)
+	if err != nil {
+		return nil, err
+	}
+	return bindFuncExprAndConstFold(
+		b.GetContext(), b.builder.compCtx.GetProcess(), name, []*plan.Expr{arg},
+	)
+}
+
 func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, depth int32, isRoot bool) (*Expr, error) {
 
 	args := make([]*Expr, 2+len(astExpr.KeyParts))
@@ -2532,10 +2560,15 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 	if name == "name_const" {
-		if !validNameConstNameAst(astArgs) || !validNameConstValueAst(astArgs) {
+		if !validNameConstNameAst(astArgs) ||
+			!validNameConstValueAst(astArgs, b.allowCanonicalNameConstValueCast) {
 			return nil, moerr.NewInvalidArg(b.GetContext(), "NAME_CONST", "")
 		}
-		if err := validateNameConstArgs(b.GetContext(), args); err != nil {
+		if err := validateNameConstArgs(
+			b.GetContext(),
+			args,
+			b.allowCanonicalNameConstValueCast,
+		); err != nil {
 			return nil, err
 		}
 	}
@@ -2567,6 +2600,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	// not a builtin func, look to resolve udf
+	if b.builder == nil {
+		return nil, moerr.NewInvalidInputf(
+			b.GetContext(),
+			"function '%s' is not allowed in this expression",
+			name,
+		)
+	}
 	cmpCtx := b.builder.compCtx
 	udf, err := cmpCtx.ResolveUdf(name, args)
 	if err != nil {
@@ -4414,7 +4454,7 @@ func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) 
 func appendCastBeforeExprWithOverload(
 	ctx context.Context, expr *Expr, toType Type, overloadID int32, isBin ...bool,
 ) (*Expr, error) {
-	expr, rewritten, err := rewriteEnumDisplayValueToJSONCast(ctx, expr, toType)
+	expr, rewritten, err := rewriteMySQLSpecialTypeDisplayCast(ctx, expr, toType)
 	if err != nil {
 		return nil, err
 	}
@@ -4454,7 +4494,16 @@ func appendCastBeforeExprWithOverload(
 	}, nil
 }
 
-func rewriteEnumDisplayValueToJSONCast(ctx context.Context, expr *Expr, toType Type) (*Expr, bool, error) {
+func rewriteMySQLSpecialTypeDisplayCast(ctx context.Context, expr *Expr, toType Type) (*Expr, bool, error) {
+	if isSetDisplayValueExpr(expr) && types.T(toType.Id).IsInteger() && !isSetPlanType(&toType) {
+		// SET columns are wrapped with cast_set_index_to_value during column
+		// binding so ordinary projections expose their labels. Integer casts
+		// require the stored bitmap instead; casting the label is both incorrect
+		// and lossy for SET definitions that contain an empty member.
+		if bitmap, ok := storedSetBitmapExpr(expr); ok {
+			return bitmap, false, nil
+		}
+	}
 	if toType.Id != int32(types.T_json) {
 		return expr, false, nil
 	}
@@ -4468,13 +4517,39 @@ func rewriteEnumDisplayValueToJSONCast(ctx context.Context, expr *Expr, toType T
 	return expr, false, nil
 }
 
-func isEnumOrSetDisplayValueExpr(expr *Expr) bool {
+func storedSetBitmapExpr(expr *Expr) (*Expr, bool) {
+	if !isSetDisplayValueExpr(expr) {
+		return expr, false
+	}
+	fn := expr.GetF()
+	if len(fn.Args) != 2 || fn.Args[1] == nil {
+		return expr, false
+	}
+	bitmap := DeepCopyExpr(fn.Args[1])
+	// The hidden projection is the physical uint64 representation, not a SQL
+	// SET value. Clear the member metadata so downstream assignment treats it
+	// as an ordinary bitmap and does not convert it back through SET semantics.
+	bitmap.Typ.Enumvalues = ""
+	return bitmap, true
+}
+
+func isSetDisplayValueExpr(expr *Expr) bool {
 	if expr == nil {
 		return false
 	}
 	fn := expr.GetF()
-	return fn != nil && fn.Func != nil &&
-		(fn.Func.ObjName == moEnumCastIndexToValueFun || fn.Func.ObjName == moSetCastIndexToValueFun)
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == moSetCastIndexToValueFun
+}
+
+func isEnumOrSetDisplayValueExpr(expr *Expr) bool {
+	if isSetDisplayValueExpr(expr) {
+		return true
+	}
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == moEnumCastIndexToValueFun
 }
 
 func quoteEnumOrSetDisplayValueAsJSON(ctx context.Context, expr *Expr) (*Expr, error) {
@@ -4875,7 +4950,7 @@ func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, r
 }
 
 func foldNameConstArgs(ctx context.Context, proc *process.Process, args []*plan.Expr) error {
-	if err := validateNameConstArgs(ctx, args); err != nil {
+	if err := validateNameConstArgs(ctx, args, false); err != nil {
 		return err
 	}
 
@@ -4891,19 +4966,24 @@ func foldNameConstArgs(ctx context.Context, proc *process.Process, args []*plan.
 	return nil
 }
 
-func validateNameConstArgs(ctx context.Context, args []*plan.Expr) error {
+func validateNameConstArgs(
+	ctx context.Context,
+	args []*plan.Expr,
+	allowCanonicalStringCast bool,
+) error {
 	if len(args) != 2 {
 		return moerr.NewInvalidArg(ctx, "NAME_CONST", len(args))
 	}
 
 	nameLit := args[0].GetLit()
-	if nameLit == nil || nameLit.Isnull || !validNameConstValueExpr(args[1]) {
+	if nameLit == nil || nameLit.Isnull ||
+		!validNameConstValueExpr(args[1], allowCanonicalStringCast) {
 		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
 	}
 	return nil
 }
 
-func validNameConstValueExpr(arg *plan.Expr) bool {
+func validNameConstValueExpr(arg *plan.Expr, allowCanonicalStringCast bool) bool {
 	if arg == nil {
 		return false
 	}
@@ -4911,6 +4991,9 @@ func validNameConstValueExpr(arg *plan.Expr) bool {
 		return true
 	}
 	if isDecimalLiteralCast(arg) {
+		return true
+	}
+	if allowCanonicalStringCast && isCanonicalStringLiteralCast(arg) {
 		return true
 	}
 	fn := arg.GetF()
@@ -4928,22 +5011,26 @@ func validNameConstNameAst(args []tree.Expr) bool {
 		return false
 	}
 	name := stripNameConstParens(args[0])
-	nameLit, ok := name.(*tree.NumVal)
-	return ok && validNameConstNameLiteral(nameLit)
+	if nameLit, ok := name.(*tree.NumVal); ok {
+		return validNameConstNameLiteral(nameLit)
+	}
+	return false
 }
 
-func validNameConstValueAst(args []tree.Expr) bool {
+func validNameConstValueAst(args []tree.Expr, allowCanonicalStringCast bool) bool {
 	if len(args) != 2 {
 		return false
 	}
-	return validNameConstLiteralValueAst(args[1])
+	return validNameConstLiteralValueAst(args[1], allowCanonicalStringCast)
 }
 
-func validNameConstLiteralValueAst(expr tree.Expr) bool {
+func validNameConstLiteralValueAst(expr tree.Expr, allowCanonicalStringCast bool) bool {
 	expr = stripNameConstParens(expr)
 	switch value := expr.(type) {
 	case *tree.NumVal:
 		return true
+	case *tree.CastExpr:
+		return allowCanonicalStringCast && isCanonicalStringLiteralCastAst(value)
 	case *tree.UnaryExpr:
 		if value.Op != tree.UNARY_PLUS && value.Op != tree.UNARY_MINUS {
 			return false
@@ -4953,6 +5040,32 @@ func validNameConstLiteralValueAst(expr tree.Expr) bool {
 	default:
 		return false
 	}
+}
+
+func isCanonicalStringLiteralCastAst(expr tree.Expr) bool {
+	castExpr, ok := stripNameConstParens(expr).(*tree.CastExpr)
+	if !ok {
+		return false
+	}
+	lit, ok := stripNameConstParens(castExpr.Expr).(*tree.NumVal)
+	if !ok || lit.ValType != tree.P_hexnum {
+		return false
+	}
+	target, ok := castExpr.Type.(*tree.T)
+	return ok && target.InternalType.Family == tree.StringFamily
+}
+
+func isCanonicalStringLiteralCast(expr *plan.Expr) bool {
+	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		return false
+	}
+	return fn.Args[0].GetLit() != nil &&
+		fn.Args[0].GetLit().IsBin &&
+		types.T(expr.Typ.Id) == types.T_varchar
 }
 
 func stripNameConstParens(expr tree.Expr) tree.Expr {

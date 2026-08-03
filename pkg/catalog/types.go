@@ -328,7 +328,9 @@ const (
 	SystemViewRel         = "v"
 	SystemMaterializedRel = "m"
 	SystemExternalRel     = plan.SystemExternalRel
-	SystemSourceRel       = "s"
+	// Keep the former source relation kind as a catalog tombstone so legacy
+	// objects fail closed and can still be dropped after the feature is removed.
+	SystemSourceRel = "s"
 	//the cluster table created by the sys account
 	//and read only by the general account
 	SystemClusterRel = "cluster"

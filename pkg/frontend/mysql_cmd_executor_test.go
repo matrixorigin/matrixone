@@ -6778,7 +6778,7 @@ func TestRecordSessionDDL(t *testing.T) {
 	}, assert.AnError)
 	require.Equal(t, uint64(0), ses.getDDLVersion())
 
-	record(&tree.CreateSource{}, &plan0.Plan{
+	record(&tree.CreateTable{}, &plan0.Plan{
 		Plan: &plan0.Plan_Ddl{Ddl: &plan0.DataDefinition{DdlType: plan0.DataDefinition_CREATE_TABLE}},
 	}, nil)
 	require.Equal(t, uint64(1), ses.getDDLVersion())
@@ -6807,7 +6807,7 @@ func TestRecordSessionDDLPropagatesToUpstreamSession(t *testing.T) {
 	backSes.upstream = ses
 
 	recordSessionDDL(backSes, &ExecCtx{
-		stmt: &tree.CreateSource{},
+		stmt: &tree.CreateTable{},
 		cw: &TxnComputationWrapper{plan: &plan0.Plan{
 			Plan: &plan0.Plan_Ddl{Ddl: &plan0.DataDefinition{
 				DdlType: plan0.DataDefinition_CREATE_TABLE,

@@ -5367,6 +5367,30 @@ func TestLengthUTF8(t *testing.T) {
 	}
 }
 
+func TestLengthBinary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, typ := range []types.Type{
+		types.T_binary.ToType(),
+		types.T_varbinary.ToType(),
+		types.T_blob.ToType(),
+	} {
+		input := NewFunctionTestInput(
+			typ,
+			[]string{"你好", "", string([]byte{0xff, 0xfe, 0xfd}), "ignored"},
+			[]bool{false, false, false, true},
+		)
+		expected := NewFunctionTestResult(
+			types.T_uint64.ToType(),
+			false,
+			[]uint64{6, 0, 3, 0},
+			[]bool{false, false, false, true},
+		)
+		testCase := NewFunctionTestCase(proc, []FunctionTestInput{input}, expected, LengthBinary)
+		success, info := testCase.Run()
+		require.True(t, success, fmt.Sprintf("type is '%s', err info is '%s'", typ, info))
+	}
+}
+
 // Ltrim
 
 func initLtrimTestCase() []tcTemp {

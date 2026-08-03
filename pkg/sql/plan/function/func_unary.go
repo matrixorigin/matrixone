@@ -6684,6 +6684,20 @@ func strLengthUTF8(xs []byte) uint64 {
 	return lengthutf8.CountUTF8CodePoints(xs)
 }
 
+func LengthBinary(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, strLengthBinary, selectList)
+}
+
+func strLengthBinary(xs []byte) uint64 {
+	return uint64(len(xs))
+}
+
 func Ltrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryStrToStr(ivecs, result, proc, length, ltrim, selectList)
 }

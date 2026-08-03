@@ -70,6 +70,7 @@ func (v *Vector) MarshalBinaryWithBufferV1(buf *bytes.Buffer) error {
 }
 
 func (v *Vector) UnmarshalBinaryV1(data []byte) error {
+	v.areaDisjoint = false
 	// read class
 	v.class = int(data[0])
 	data = data[1:]

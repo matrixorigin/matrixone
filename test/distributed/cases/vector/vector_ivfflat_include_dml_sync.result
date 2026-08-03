@@ -69,9 +69,9 @@ set id = 20
 where id = 2;
 unsupported DML: update primary key on a table with a synchronous full-text/vector index
 select id from vector_ivfflat_include_phase3 order by id;
-id
-1
-2
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
 3
 execute s1;
 ➤ __mo_index_pri_col[4,32,0]  ¦  __mo_index_centroid_fk_entry[12,3,0]  ¦  __mo_index_include_title[12,-1,0]  ¦  __mo_index_include_category[4,32,0]  𝄀
@@ -84,5 +84,111 @@ execute s1;
 2  ¦  [4, 5, 7]  ¦  beta2  ¦  200  𝄀
 3  ¦  [7, 8, 9]  ¦  gamma  ¦  30
 deallocate prepare s1;
+create table vector_ivfflat_fake_pk(
+k int unique,
+embedding vecf32(3),
+title varchar(20)
+);
+create index idx_ivf_fake_pk using ivfflat on vector_ivfflat_fake_pk(embedding)
+lists=1 op_type "vector_l2_ops" include(title);
+insert into vector_ivfflat_fake_pk values
+(1, "[1,1,1]", "before"),
+(2, "[9,9,9]", "peer");
+set @fake_entries = (
+select index_table_name
+from mo_catalog.mo_indexes
+where name = 'idx_ivf_fake_pk'
+and algo = 'ivfflat'
+and algo_table_type = 'entries'
+and table_id in (
+select rel_id
+from mo_catalog.mo_tables
+where reldatabase = database()
+and relname = 'vector_ivfflat_fake_pk'
+)
+limit 1
+);
+set @fake_q = concat(
+'select count(*) as entry_count, group_concat(`__mo_index_include_title` order by `__mo_index_include_title`) as titles ',
+'from `', database(), '`.`', @fake_entries, '`'
+);
+prepare s2 from @fake_q;
+execute s2;
+➤ entry_count[-5,64,0]  ¦  titles[12,0,0]  𝄀
+2  ¦  before,peer
+update vector_ivfflat_fake_pk
+set embedding = "[2,2,2]", title = "after"
+where k = 1;
+execute s2;
+➤ entry_count[-5,64,0]  ¦  titles[12,0,0]  𝄀
+2  ¦  after,peer
+begin;
+update vector_ivfflat_fake_pk
+set embedding = "[3,3,3]", title = "rollback"
+where k = 1;
+rollback;
+execute s2;
+➤ entry_count[-5,64,0]  ¦  titles[12,0,0]  𝄀
+2  ¦  after,peer
+deallocate prepare s2;
+drop table vector_ivfflat_fake_pk;
+create table vector_ivfflat_async_pk(
+id bigint primary key,
+embedding vecf32(3)
+);
+insert into vector_ivfflat_async_pk values
+(10, "[1,2,3]"),
+(30, "[7,8,9]");
+create index idx_ivf_async_pk using ivfflat on vector_ivfflat_async_pk(embedding)
+lists=1 op_type "vector_l2_ops" async;
+set @async_entries = (
+select index_table_name
+from mo_catalog.mo_indexes
+where name = 'idx_ivf_async_pk'
+and algo = 'ivfflat'
+and algo_table_type = 'entries'
+and table_id in (
+select rel_id
+from mo_catalog.mo_tables
+where reldatabase = database()
+and relname = 'vector_ivfflat_async_pk'
+)
+limit 1
+);
+set @async_metadata = (
+select index_table_name
+from mo_catalog.mo_indexes
+where name = 'idx_ivf_async_pk'
+and algo = 'ivfflat'
+and algo_table_type = 'metadata'
+and table_id in (
+select rel_id
+from mo_catalog.mo_tables
+where reldatabase = database()
+and relname = 'vector_ivfflat_async_pk'
+)
+limit 1
+);
+set @async_q = concat(
+'select count(*) as entry_count, group_concat(`__mo_index_pri_col` order by `__mo_index_pri_col`) as identities ',
+'from `', database(), '`.`', @async_entries, '` ',
+'where `__mo_index_centroid_fk_version` = (',
+'select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @async_metadata, '` ',
+'where `__mo_index_key` = ''version'')'
+);
+prepare s3 from @async_q;
+execute s3;
+➤ entry_count[-5,64,0]  ¦  identities[12,0,0]  𝄀
+2  ¦  10,30
+update vector_ivfflat_async_pk set id = 20 where id = 10;
+execute s3;
+➤ entry_count[-5,64,0]  ¦  identities[12,0,0]  𝄀
+2  ¦  20,30
+select id from vector_ivfflat_async_pk order by id;
+➤ id[-5,64,0]  𝄀
+20  𝄀
+30
+deallocate prepare s3;
+drop table vector_ivfflat_async_pk;
 drop table vector_ivfflat_include_phase3;
 drop database vector_ivfflat_include_phase3;

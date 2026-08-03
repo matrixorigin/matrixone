@@ -295,10 +295,11 @@ func TestOnnxRunRegistration(t *testing.T) {
 		require.Equal(t, types.T_json,
 			ov.retType([]types.Type{types.T_varbinary.ToType()}).Oid)
 
-		evalFn, resetFn, freeFn := ov.GetExecuteMethod()
+		evalFn, resetFn, freeFn, retainedBytesFn := ov.GetExecuteMethod()
 		require.NotNil(t, evalFn)
 		require.NotNil(t, resetFn)
 		require.NotNil(t, freeFn)
+		require.Nil(t, retainedBytesFn)
 
 		// Drive one evaluation through the registered closure (the model is
 		// varbinary bytes; the datalink overload accepts them too via the

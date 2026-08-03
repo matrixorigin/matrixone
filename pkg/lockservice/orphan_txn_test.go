@@ -1005,7 +1005,7 @@ func TestValidTxnCheckErrorThenConfirmedInactive(t *testing.T) {
 		},
 		func(pb.WaitTxn) (bool, error) {
 			if checks.Add(1) == 1 {
-				return false, moerr.NewBackendClosedNoCtx()
+				return false, morpc.ErrBackendCreateTimeout
 			}
 			return false, nil
 		},
