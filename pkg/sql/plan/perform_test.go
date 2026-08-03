@@ -22,7 +22,6 @@ import (
 
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func TestBuildPerformUsesSelectPlan(t *testing.T) {
@@ -35,10 +34,20 @@ func TestBuildPerformUsesSelectPlan(t *testing.T) {
 }
 
 func TestBuildPerformRejectsSelectIntoOutfile(t *testing.T) {
-	stmt := &tree.Select{
-		IsPerform: true,
-		Ep:        &tree.ExportParam{},
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{name: "outer select", sql: "perform select 1 into outfile 'result.csv'"},
+		{name: "left union branch", sql: "perform (select 1 into outfile 'result.csv') union select 2"},
+		{name: "right union branch", sql: "perform select 1 union (select 2 into outfile 'result.csv')"},
 	}
-	_, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
-	require.EqualError(t, err, "not supported: PERFORM SELECT INTO OUTFILE")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			_, err = BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.EqualError(t, err, "not supported: PERFORM SELECT INTO OUTFILE")
+		})
+	}
 }

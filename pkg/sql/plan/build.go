@@ -426,6 +426,28 @@ func buildExplainPhyPlan(ctx CompilerContext, stmt *tree.ExplainPhyPlan, isPrepa
 	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
 }
 
+func selectHasExportParam(stmt tree.SelectStatement) bool {
+	switch s := stmt.(type) {
+	case *tree.Select:
+		if s == nil {
+			return false
+		}
+		return s.Ep != nil || selectHasExportParam(s.Select)
+	case *tree.ParenSelect:
+		if s == nil {
+			return false
+		}
+		return selectHasExportParam(s.Select)
+	case *tree.UnionClause:
+		if s == nil {
+			return false
+		}
+		return selectHasExportParam(s.Left) || selectHasExportParam(s.Right)
+	default:
+		return false
+	}
+}
+
 func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -435,7 +457,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	defer task.End()
 	switch stmt := stmt.(type) {
 	case *tree.Select:
-		if stmt.IsPerform && stmt.Ep != nil {
+		if stmt.IsPerform && selectHasExportParam(stmt) {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "PERFORM SELECT INTO OUTFILE")
 		}
 		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false)
