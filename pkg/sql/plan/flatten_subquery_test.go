@@ -15,10 +15,12 @@
 package plan
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -326,8 +328,19 @@ func TestCorrelatedScalarAggregatePostJoinProjectionEligibility(t *testing.T) {
 			sql:  "select n.n_nationkey, (select coalesce(sum(r.r_regionkey), 0) from tpch.region r where r.r_regionkey = n.n_regionkey having sum(r.r_regionkey) > 100) from tpch.nation n",
 		},
 		{
-			name: "unsupported aggregate",
+			name: "neutral aggregate",
 			sql:  "select n.n_nationkey, (select coalesce(bit_or(r.r_regionkey), 0) from tpch.region r where r.r_regionkey = n.n_regionkey) from tpch.nation n",
+			want: true,
+		},
+		{
+			name: "raw neutral aggregate",
+			sql:  "select n.n_nationkey, (select bit_and(r.r_regionkey) from tpch.region r where r.r_regionkey = n.n_regionkey) from tpch.nation n",
+			want: true,
+		},
+		{
+			name: "raw approximate count aggregate",
+			sql:  "select n.n_nationkey, (select approx_count_distinct(r.r_regionkey) from tpch.region r where r.r_regionkey = n.n_regionkey) from tpch.nation n",
+			want: true,
 		},
 		{
 			name: "limited aggregate",
@@ -442,6 +455,40 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjection(t *testing.T) {
 	require.Equal(t, int32(3), postJoinArgs[7].GetCol().ColPos)
 }
 
+func TestMakeAggregateEmptyResultExpr(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		kind aggexec.EmptyResultKind
+		typ  plan.Type
+		want any
+	}{
+		{name: "uint64 zero", kind: aggexec.EmptyResultZero, typ: plan.Type{Id: int32(types.T_uint64)}, want: uint64(0)},
+		{name: "uint64 all bits set", kind: aggexec.EmptyResultAllBitsSet, typ: plan.Type{Id: int32(types.T_uint64)}, want: uint64(math.MaxUint64)},
+		{name: "binary zero", kind: aggexec.EmptyResultZero, typ: plan.Type{Id: int32(types.T_binary), Width: 3}, want: string([]byte{0, 0, 0})},
+		{name: "varbinary all bits set", kind: aggexec.EmptyResultAllBitsSet, typ: plan.Type{Id: int32(types.T_varbinary), Width: 3}, want: string([]byte{0xff, 0xff, 0xff})},
+		{name: "int64 zero", kind: aggexec.EmptyResultZero, typ: plan.Type{Id: int32(types.T_int64)}, want: int64(0)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			expr, err := makeAggregateEmptyResultExpr(tt.kind, tt.typ)
+			require.NoError(t, err)
+			require.Equal(t, tt.typ.Id, expr.Typ.Id)
+			require.Equal(t, tt.typ.Width, expr.Typ.Width)
+			require.True(t, expr.Typ.NotNullable)
+			switch want := tt.want.(type) {
+			case uint64:
+				require.Equal(t, want, expr.GetLit().GetU64Val())
+			case int64:
+				require.Equal(t, want, expr.GetLit().GetI64Val())
+			case string:
+				require.Equal(t, want, expr.GetLit().GetSval())
+			}
+		})
+	}
+
+	_, err := makeAggregateEmptyResultExpr(aggexec.EmptyResultAllBitsSet, plan.Type{Id: int32(types.T_int64)})
+	require.Error(t, err)
+}
+
 func TestPrepareCorrelatedScalarAggregatePostJoinProjectionRejectsUnsupportedShapes(t *testing.T) {
 	const (
 		aggregateTag int32 = 21
@@ -451,9 +498,10 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjectionRejectsUnsupportedSha
 	for _, tt := range []struct {
 		name      string
 		aggregate string
+		wantErr   bool
 		mutate    func(*BindContext, []*plan.Node)
 	}{
-		{name: "unknown aggregate", aggregate: "bit_or"},
+		{name: "unsupported aggregate", aggregate: "hll_add_agg", wantErr: true},
 		{
 			name:      "explicit group",
 			aggregate: "sum",
@@ -513,12 +561,37 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjectionRejectsUnsupportedSha
 			builder.qry.Nodes = nodes
 
 			postJoinProjection, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{constTrue})
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
 			require.NoError(t, err)
 			require.False(t, ok)
 			require.Nil(t, postJoinProjection)
 			require.Len(t, builder.qry.Nodes[1].ProjectList, 1)
 		})
 	}
+}
+
+func TestPrepareCorrelatedScalarAggregatePostJoinProjectionRejectsUnsupportedDirectAggregate(t *testing.T) {
+	aggregate := newFlattenSubqueryTestAggregate("hll_add_agg", plan.Type{Id: int32(types.T_varbinary)})
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder.qry.Nodes = []*plan.Node{{
+		NodeType:    plan.Node_AGG,
+		AggList:     []*plan.Expr{aggregate},
+		BindingTags: []int32{20, 21},
+	}}
+	ctx := &BindContext{
+		hasSingleRow: true,
+		aggregateTag: 21,
+		aggregates:   []*plan.Expr{aggregate},
+		results:      []*plan.Expr{GetColExpr(aggregate.Typ, 21, 0)},
+	}
+
+	postJoinProjection, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(0, ctx, []*plan.Expr{constTrue})
+	require.Error(t, err)
+	require.False(t, ok)
+	require.Nil(t, postJoinProjection)
 }
 
 func hasCorrelatedAggregatePostJoinProjection(query *plan.Query) bool {
@@ -549,10 +622,21 @@ func hasCorrelatedAggregatePostJoinProjection(query *plan.Query) bool {
 }
 
 func newFlattenSubqueryTestAggregate(name string, typ plan.Type) *plan.Expr {
+	ids := map[string]int64{
+		"sum":           aggexec.AggIdOfSum,
+		"avg":           aggexec.AggIdOfAvg,
+		"min":           aggexec.AggIdOfMin,
+		"max":           aggexec.AggIdOfMax,
+		"json_arrayagg": aggexec.AggIdOfJsonArrayAgg,
+		"count":         aggexec.AggIdOfCountColumn,
+		"starcount":     aggexec.AggIdOfCountStar,
+		"bit_or":        aggexec.AggIdOfBitOr,
+		"hll_add_agg":   aggexec.AggIdOfHllAdd,
+	}
 	return &plan.Expr{
 		Typ: typ,
 		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{ObjName: name},
+			Func: &plan.ObjectRef{ObjName: name, Obj: ids[name]},
 		}},
 	}
 }

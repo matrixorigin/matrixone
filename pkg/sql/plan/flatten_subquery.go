@@ -15,10 +15,14 @@
 package plan
 
 import (
+	"bytes"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -613,14 +617,14 @@ func (builder *QueryBuilder) generateRowComparison(op string, child *plan.Expr, 
 // below the join would therefore skip the expression for that outer row.
 //
 // The right projection is rewritten to expose only raw aggregate outputs and
-// the correlation keys that pullupThroughProj already appended. COUNT outputs
-// are restored to zero after null extension; other supported aggregates keep
-// NULL as their empty-input value. The saved final expression is then evaluated
-// against those post-join values.
+// the correlation keys that pullupThroughProj already appended. Aggregate
+// outputs are restored from aggexec's canonical empty-input contract after null
+// extension. The saved final expression is then evaluated against those
+// post-join values.
 //
-// This is intentionally limited to the ordinary PROJECT -> AGG shape. Wrappers
-// that can remove or reorder the aggregate row (for example HAVING, DISTINCT,
-// SORT, or LIMIT) keep the legacy path.
+// This is intentionally limited to a direct AGG or the ordinary PROJECT -> AGG
+// shape. Wrappers that can remove or reorder the aggregate row (for example
+// HAVING, DISTINCT, SORT, or LIMIT) keep the legacy path.
 func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 	subID int32,
 	subCtx *BindContext,
@@ -631,6 +635,21 @@ func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 	}
 
 	project := builder.qry.Nodes[subID]
+	if project.NodeType == plan.Node_AGG {
+		if len(project.BindingTags) < 2 || project.BindingTags[1] != subCtx.aggregateTag ||
+			len(project.AggList) != 1 || len(subCtx.aggregates) != 1 || len(subCtx.results) != 1 {
+			return nil, false, nil
+		}
+		aggregate := project.AggList[0]
+		fn := aggregate.GetF()
+		if fn == nil || fn.Func == nil {
+			return nil, false, nil
+		}
+		projected := GetColExpr(aggregate.Typ, subCtx.aggregateTag, 0)
+		projected.Typ.NotNullable = false
+		postJoinProjection, err := builder.restoreAggregateEmptyResult(projected, aggregate, fn.Func.ObjName)
+		return postJoinProjection, err == nil, err
+	}
 	if project.NodeType != plan.Node_PROJECT || len(project.Children) != 1 || len(project.BindingTags) != 1 ||
 		len(project.ProjectList) == 0 || project.Limit != nil || project.Offset != nil || project.RankOption != nil {
 		return nil, false, nil
@@ -660,17 +679,10 @@ func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 		projected := GetColExpr(aggregate.Typ, projectTag, projectPos)
 		projected.Typ.NotNullable = false
 
-		switch fn.Func.ObjName {
-		case "sum", "avg", "min", "max", "json_arrayagg":
-			projectedAggregates[i] = projected
-		case "count", "starcount":
-			var err error
-			projectedAggregates[i], err = builder.restoreEmptyCount(projected, aggregate.Typ)
-			if err != nil {
-				return nil, false, err
-			}
-		default:
-			return nil, false, nil
+		var err error
+		projectedAggregates[i], err = builder.restoreAggregateEmptyResult(projected, aggregate, fn.Func.ObjName)
+		if err != nil {
+			return nil, false, err
 		}
 	}
 
@@ -692,19 +704,59 @@ func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 	return postJoinProjection, true, nil
 }
 
-func (builder *QueryBuilder) restoreEmptyCount(countExpr *plan.Expr, aggregateType plan.Type) (*plan.Expr, error) {
-	isNullExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{countExpr})
+func (builder *QueryBuilder) restoreAggregateEmptyResult(
+	aggregateExpr *plan.Expr,
+	aggregate *plan.Expr,
+	aggregateName string,
+) (*plan.Expr, error) {
+	kind := aggexec.GetEmptyResultKind(aggregate.GetF().Func.Obj)
+	if kind == aggexec.EmptyResultNull {
+		return aggregateExpr, nil
+	}
+	if kind == aggexec.EmptyResultUnsupported {
+		return nil, moerr.NewNYIf(builder.GetContext(),
+			"aggregate %s in a correlated scalar projection will be supported in a future version", aggregateName)
+	}
+
+	isNullExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{aggregateExpr})
 	if err != nil {
 		return nil, err
 	}
-	zeroExpr := makePlan2Int64ConstExprWithType(0)
-	zeroExpr.Typ = aggregateType
-	zeroExpr.Typ.NotNullable = true
+	emptyExpr, err := makeAggregateEmptyResultExpr(kind, aggregate.Typ)
+	if err != nil {
+		return nil, err
+	}
 	return BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
 		isNullExpr,
-		zeroExpr,
-		DeepCopyExpr(countExpr),
+		emptyExpr,
+		DeepCopyExpr(aggregateExpr),
 	})
+}
+
+func makeAggregateEmptyResultExpr(kind aggexec.EmptyResultKind, aggregateType plan.Type) (*plan.Expr, error) {
+	var expr *plan.Expr
+	switch types.T(aggregateType.Id) {
+	case types.T_binary, types.T_varbinary:
+		fill := byte(0)
+		if kind == aggexec.EmptyResultAllBitsSet {
+			fill = 0xff
+		}
+		expr = makePlan2VarBinaryConstExprWithType(string(bytes.Repeat([]byte{fill}, int(aggregateType.Width))))
+	case types.T_uint64:
+		value := uint64(0)
+		if kind == aggexec.EmptyResultAllBitsSet {
+			value = math.MaxUint64
+		}
+		expr = makePlan2Uint64ConstExprWithType(value)
+	default:
+		if kind == aggexec.EmptyResultAllBitsSet {
+			return nil, moerr.NewInternalErrorNoCtxf("all-bits-set empty aggregate result has unsupported type %s", makeTypeByPlan2Expr(&plan.Expr{Typ: aggregateType}))
+		}
+		expr = makePlan2Int64ConstExprWithType(0)
+	}
+	expr.Typ = aggregateType
+	expr.Typ.NotNullable = true
+	return expr, nil
 }
 
 func replaceAggregateRefsForPostJoin(

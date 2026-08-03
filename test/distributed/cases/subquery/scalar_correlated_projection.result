@@ -95,6 +95,9 @@ select p.id, (select case when count(*) = 0 then 42 else coalesce(sum(c.v), 0) e
 2  ¦  0  𝄀
 3  ¦  42  𝄀
 4  ¦  42
+select p.id, (select bit_and(c.v) from child_agg c where c.corr_key = p.corr_key) <=> (select bit_and(c.v) from child_agg c where false) as bit_and_matches, (select bit_or(c.v) from child_agg c where c.corr_key = p.corr_key) <=> (select bit_or(c.v) from child_agg c where false) as bit_or_matches, (select bit_xor(c.v) from child_agg c where c.corr_key = p.corr_key) <=> (select bit_xor(c.v) from child_agg c where false) as bit_xor_matches, (select approx_count_distinct(c.v) from child_agg c where c.corr_key = p.corr_key) <=> (select approx_count_distinct(c.v) from child_agg c where false) as approx_count_matches, (select sum(c.v) from child_agg c where c.corr_key = p.corr_key) <=> (select sum(c.v) from child_agg c where false) as sum_matches from parent_agg p where p.id = 3;
+➤ id[4,32,0]  ¦  bit_and_matches[-7,1,0]  ¦  bit_or_matches[-7,1,0]  ¦  bit_xor_matches[-7,1,0]  ¦  approx_count_matches[-7,1,0]  ¦  sum_matches[-7,1,0]  𝄀
+3  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1
 select p.id, (select coalesce(json_arrayagg(c.v), convert('[]', json)) from child_agg c where c.corr_key = p.corr_key) as json_value from parent_agg p order by p.id;
 ➤ id[4,32,0]  ¦  json_value[-1,2147483647,0]  𝄀
 1  ¦  [5, 7]  𝄀
