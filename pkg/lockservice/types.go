@@ -289,6 +289,11 @@ type LockOptions struct {
 	pb.LockOptions
 	async                      bool
 	remoteLockOwnerWaitTimeout time.Duration
+	// lockWaitTimeoutCeiling is the unmaterialized service safety net. Keeping
+	// it internal avoids time.Now and deadline work on an already-ready,
+	// cached, uncontended local lock. Blocking paths materialize it once and
+	// keep the resulting absolute deadline for the rest of the operation.
+	lockWaitTimeoutCeiling time.Duration
 }
 
 // Lock stores specific lock information. Since there are a large number of lock objects

@@ -54,3 +54,11 @@ const (
 	MORPCVersion4      int64 = 4 // start from 2.0.1
 	MORPCLatestVersion       = MORPCVersion4
 )
+
+// DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
+// distributed-pipeline compatibility code. Keeping one value is important for
+// rolling upgrades: an older receiver ignores LockWaitTimeoutSet, so a newer
+// sender represents an explicit clear with this positive fallback in the
+// legacy LockWaitTimeout field instead of sending zero and reviving a stale
+// transaction override on the receiver.
+const DefaultLockWaitTimeoutSeconds int64 = 120

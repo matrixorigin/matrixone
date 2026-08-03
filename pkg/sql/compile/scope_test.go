@@ -1918,6 +1918,81 @@ func TestRemoteRunMalformedAddressTerminatesReceiver(t *testing.T) {
 	}
 }
 
+func TestRemoteRunNonStandalonePipelineFailsInsteadOfExecutingOnWrongCN(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc.Ctx = ctx
+	proc.BuildPipelineContext(ctx)
+	proc.Base.TxnOperator = fakeTxnOperator{}
+	reg := process.NewPipelineEdge(1, 0)
+	rootProc := proc.NewContextChildProc(1)
+	preProc := proc.NewContextChildProc(0)
+	preDispatch := dispatch.NewArgument()
+	preDispatch.LocalRegs = []*process.WaitRegister{reg}
+	pre := &Scope{Magic: Remote, NodeInfo: engine.Node{Addr: "remote:6001"}, Proc: preProc, RootOp: preDispatch}
+	s := &Scope{
+		Magic:     Remote,
+		NodeInfo:  engine.Node{Addr: "remote:6001"},
+		Proc:      rootProc,
+		RootOp:    dispatch.NewArgument(),
+		PreScopes: []*Scope{pre},
+	}
+	c := &Compile{proc: proc, addr: "local:6001"}
+
+	done := make(chan error, 1)
+	go func() { done <- s.RemoteRun(c) }()
+	select {
+	case err := <-done:
+		require.ErrorContains(t, err, "not standalone executable")
+		require.ErrorIs(t, context.Cause(proc.Ctx), err)
+	case <-time.After(time.Second):
+		proc.Cancel(moerr.NewInternalErrorNoCtx("test timeout"))
+		t.Fatal("non-standalone remote pipeline did not fail promptly")
+	}
+}
+
+func TestMergeRunReturnsWhenRemotePreScopeIsNotStandalone(t *testing.T) {
+	c := NewMockCompile(t)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.hasMergeOp = true
+	c.proc.Base.TxnOperator = fakeTxnOperator{}
+
+	parent := &Scope{
+		Magic:  Merge,
+		Proc:   c.proc.NewContextChildProc(1),
+		RootOp: merge.NewArgument(),
+	}
+	outsideReg := process.NewPipelineEdge(1, 0)
+	invalidDispatch := dispatch.NewArgument()
+	invalidDispatch.LocalRegs = []*process.WaitRegister{outsideReg}
+	invalidPreScope := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Addr: "remote:6001"},
+		Proc:     c.proc.NewContextChildProc(0),
+		RootOp:   invalidDispatch,
+	}
+	child := &Scope{
+		Magic:     Remote,
+		NodeInfo:  engine.Node{Addr: "remote:6001"},
+		Proc:      c.proc.NewContextChildProc(0),
+		RootOp:    connector.NewArgument().WithReg(parent.Proc.Reg.MergeReceivers[0]),
+		PreScopes: []*Scope{invalidPreScope},
+	}
+	parent.PreScopes = []*Scope{child}
+	require.False(t, checkPipelineStandaloneExecutableAtRemote(child))
+
+	done := make(chan error, 1)
+	go func() { done <- parent.MergeRun(c) }()
+	select {
+	case err := <-done:
+		require.ErrorContains(t, err, "not standalone executable")
+		require.ErrorIs(t, context.Cause(parent.Proc.Ctx), err)
+	case <-time.After(2 * time.Second):
+		parent.Proc.Cancel(moerr.NewInternalErrorNoCtx("test timeout"))
+		t.Fatal("merge run hung after a non-standalone remote pre-scope failed")
+	}
+}
+
 func TestMergeRunReturnsWhenRemotePreScopeAddressIsMalformed(t *testing.T) {
 	c := NewMockCompile(t)
 	c.execType = plan2.ExecTypeAP_MULTICN

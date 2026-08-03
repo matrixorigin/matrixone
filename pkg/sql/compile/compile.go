@@ -5170,6 +5170,13 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Deletion, ss []*Scope, node 
 		arg.Nbucket = uint32(len(rs))
 		rs[i].setRootOperator(dupOperator(arg, 0, len(rs)))
 	}
+	// Every source dispatch targets all delete receivers on its CN through
+	// LocalRegs. Put those receivers in one RemoteRun tree so the encoded tree
+	// owns every local channel its dispatches reference.
+	stageNodes := shuffleBucketStageNodes(rs)
+	if len(rs) > len(stageNodes) {
+		rs = c.mergeScopesByStageNodes(rs, stageNodes)
+	}
 	return c.newMergeScope(rs)
 }
 
@@ -5470,12 +5477,6 @@ func shuffleBucketsNeedPerCNGrouping(ss []*Scope) bool {
 			}
 			return false
 		}) {
-			return true
-		}
-	}
-	return false
-}
-
 func walkScopeTree(root *Scope, visit func(*Scope) bool) bool {
 	toVisit := []*Scope{root}
 	visited := make(map[*Scope]struct{})
@@ -5506,8 +5507,8 @@ func walkScopeTree(root *Scope, visit func(*Scope) bool) bool {
 // separate RemoteRun trees while the shuffle dispatch only attaches to the first bucket.
 // When the consumer (here compileInsert) sends each bucket individually, RemoteRun ->
 // checkPipelineStandaloneExecutableAtRemote sees the dispatch.LocalRegs pointing to the
-// sibling out-of-tree buckets, converts the pipeline to local on the coordinator, and the
-// dispatch then runs on the coordinator instead of its compile-time CN -- mispaired with
+// sibling out-of-tree buckets. The legacy fallback ran the dispatch on the coordinator
+// instead of its compile-time CN, mispairing it with
 // the cross-CN receiver's FromAddr -> the remote receiver's GetProcByUuid spins / merge
 // WaitingEnd waits forever -> hang. Regrouping by CN keeps all of a CN's buckets in one
 // tree, so the whole group is really executed at the remote CN and the pairing is correct.

@@ -265,8 +265,6 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 
 	alterTablePlan.ChangeTblColIdMap = alterTableCtx.changColDefMap
 	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, alterTableCtx.UpdateSqls...)
-	//delete copy table records from mo_catalog.mo_foreign_keys
-	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, getSqlForDeleteTable(schemaName, alterTableCtx.copyTableName))
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{

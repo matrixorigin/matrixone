@@ -2752,21 +2752,101 @@ func AddChildTblIdToParentTable(ctx context.Context, fkRelation engine.Relation,
 	if err != nil {
 		return err
 	}
-	var oldRefChildDef *engine.RefChildTableDef
-	for _, ct := range oldCt.Cts {
-		if old, ok := ct.(*engine.RefChildTableDef); ok {
-			oldRefChildDef = old
+	addRefChildTableIDs(oldCt, []uint64{tblId})
+	return fkRelation.UpdateConstraint(ctx, oldCt)
+}
+
+func canonicalRefChildTableIDs(constraintDef *engine.ConstraintDef) []uint64 {
+	var tableIDs []uint64
+	seen := make(map[uint64]struct{})
+	for _, constraint := range constraintDef.Cts {
+		refChildDef, ok := constraint.(*engine.RefChildTableDef)
+		if !ok {
+			continue
+		}
+		for _, tableID := range refChildDef.Tables {
+			if _, exists := seen[tableID]; exists {
+				continue
+			}
+			seen[tableID] = struct{}{}
+			tableIDs = append(tableIDs, tableID)
 		}
 	}
-	if oldRefChildDef == nil {
-		oldRefChildDef = &engine.RefChildTableDef{}
+	return tableIDs
+}
+
+func setRefChildTableIDs(constraintDef *engine.ConstraintDef, tableIDs []uint64) {
+	canonical := make([]uint64, 0, len(tableIDs))
+	seen := make(map[uint64]struct{}, len(tableIDs))
+	for _, tableID := range tableIDs {
+		if _, exists := seen[tableID]; exists {
+			continue
+		}
+		seen[tableID] = struct{}{}
+		canonical = append(canonical, tableID)
 	}
-	oldRefChildDef.Tables = append(oldRefChildDef.Tables, tblId)
-	newCt, err := MakeNewCreateConstraint(oldCt, oldRefChildDef)
-	if err != nil {
-		return err
+	constraintDef.Cts = plan2.RemoveIf(
+		constraintDef.Cts,
+		func(constraint engine.Constraint) bool {
+			_, ok := constraint.(*engine.RefChildTableDef)
+			return ok
+		},
+	)
+	constraintDef.Cts = append(
+		constraintDef.Cts,
+		&engine.RefChildTableDef{Tables: canonical},
+	)
+}
+
+func addRefChildTableIDs(constraintDef *engine.ConstraintDef, added []uint64) {
+	tableIDs := canonicalRefChildTableIDs(constraintDef)
+	seen := make(map[uint64]struct{}, len(tableIDs)+len(added))
+	for _, tableID := range tableIDs {
+		seen[tableID] = struct{}{}
 	}
-	return fkRelation.UpdateConstraint(ctx, newCt)
+	for _, tableID := range added {
+		if _, exists := seen[tableID]; exists {
+			continue
+		}
+		seen[tableID] = struct{}{}
+		tableIDs = append(tableIDs, tableID)
+	}
+	setRefChildTableIDs(constraintDef, tableIDs)
+}
+
+func removeRefChildTableID(constraintDef *engine.ConstraintDef, removed uint64) {
+	tableIDs := canonicalRefChildTableIDs(constraintDef)
+	tableIDs = plan2.RemoveIf(tableIDs, func(tableID uint64) bool {
+		return tableID == removed
+	})
+	setRefChildTableIDs(constraintDef, tableIDs)
+}
+
+func replaceRefChildTableID(
+	constraintDef *engine.ConstraintDef,
+	oldTableID uint64,
+	newTableID uint64,
+) bool {
+	tableIDs := canonicalRefChildTableIDs(constraintDef)
+	replaced := false
+	for i, tableID := range tableIDs {
+		if tableID == oldTableID {
+			tableIDs[i] = newTableID
+			replaced = true
+		}
+	}
+	setRefChildTableIDs(constraintDef, tableIDs)
+	return replaced
+}
+
+func reconcileRefChildTableID(
+	constraintDef *engine.ConstraintDef,
+	oldTableID uint64,
+	newTableID uint64,
+) {
+	if !replaceRefChildTableID(constraintDef, oldTableID, newTableID) {
+		addRefChildTableIDs(constraintDef, []uint64{newTableID})
+	}
 }
 
 func AddFkeyToRelation(ctx context.Context, fkRelation engine.Relation, fkey *plan.ForeignKeyDef) error {
@@ -2799,14 +2879,7 @@ func (s *Scope) removeChildTblIdFromParentTable(c *Compile, fkRelation engine.Re
 	if err != nil {
 		return err
 	}
-	for _, ct := range oldCt.Cts {
-		if def, ok := ct.(*engine.RefChildTableDef); ok {
-			def.Tables = plan2.RemoveIf[uint64](def.Tables, func(id uint64) bool {
-				return id == tblId
-			})
-			break
-		}
-	}
+	removeRefChildTableID(oldCt, tblId)
 	return fkRelation.UpdateConstraint(c.proc.Ctx, oldCt)
 }
 
@@ -2991,11 +3064,10 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		if updateRefChildTableConstraintIDs(oldCt, oldID, newID) {
-			err = fkRelation.UpdateConstraint(c.proc.Ctx, oldCt)
-			if err != nil {
-				return err
-			}
+		replaceRefChildTableID(oldCt, oldID, newID)
+		err = fkRelation.UpdateConstraint(c.proc.Ctx, oldCt)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -3024,23 +3096,6 @@ func cloneCreateIndexForPartition(
 		def.IndexTableName = fmt.Sprintf("%s_%s", def.IndexTableName, partitionName)
 	}
 	return cloned
-}
-
-func updateRefChildTableConstraintIDs(ct *engine.ConstraintDef, oldID, newID uint64) bool {
-	updated := false
-	for _, c := range ct.Cts {
-		def, ok := c.(*engine.RefChildTableDef)
-		if !ok {
-			continue
-		}
-		for idx, refTable := range def.Tables {
-			if refTable == oldID {
-				def.Tables[idx] = newID
-				updated = true
-			}
-		}
-	}
-	return updated
 }
 
 func (s *Scope) DropSequence(c *Compile) error {

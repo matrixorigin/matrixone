@@ -78,7 +78,7 @@ func collectCloneDatabaseSource(
 	if err != nil {
 		return source, err
 	}
-	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, snapshot, srcDBName, "")
+	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, snapshot, srcDBName, "", srcTblInfos)
 	if err != nil {
 		return source, err
 	}

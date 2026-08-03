@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -532,6 +533,95 @@ func TestHandleForwardLockDoesNotHoldBindChangeLockWhileWaitingForBind(t *testin
 			require.NoError(t, resp.UnwrapError())
 		},
 	)
+}
+
+func TestRemoteLockHandlersDeadlineCancelsLockTableAllocationWait(t *testing.T) {
+	tests := []struct {
+		name   string
+		method pb.Method
+		handle func(*service, context.Context, *pb.Request, *pb.Response, morpc.ClientSession)
+	}{
+		{
+			name:   "remote lock",
+			method: pb.Method_Lock,
+			handle: func(s *service, ctx context.Context, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+				s.handleRemoteLock(ctx, nil, req, resp, cs)
+			},
+		},
+		{
+			name:   "forward lock",
+			method: pb.Method_ForwardLock,
+			handle: func(s *service, ctx context.Context, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+				s.handleForwardLock(ctx, nil, req, resp, cs)
+			},
+		},
+	}
+
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runLockServiceTests(
+				t,
+				[]string{"s1"},
+				func(alloc *lockTableAllocator, services []*service) {
+					s := services[0]
+					group := uint32(0)
+					tableID := uint64(24918 + i)
+					waitC := make(chan struct{})
+					s.mu.Lock()
+					if s.mu.allocating[group] == nil {
+						s.mu.allocating[group] = make(map[uint64]chan struct{})
+					}
+					s.mu.allocating[group][tableID] = waitC
+					s.mu.Unlock()
+					defer func() {
+						s.mu.Lock()
+						delete(s.mu.allocating[group], tableID)
+						s.mu.Unlock()
+						close(waitC)
+					}()
+
+					options := newTestRowExclusiveOptions()
+					options.LockWaitTimeout = 60
+					options.LockWaitDeadline = time.Now().Add(100 * time.Millisecond).UnixNano()
+					req := &pb.Request{
+						RequestID: 1,
+						Method:    tc.method,
+						LockTable: pb.LockTable{
+							Group:       group,
+							Table:       tableID,
+							OriginTable: tableID,
+							ServiceID:   s.serviceID,
+							Valid:       true,
+							Version:     alloc.version,
+							AllocatorID: alloc.allocatorID,
+						},
+						Lock: pb.LockRequest{
+							TxnID:     []byte("owner-bind-waiter"),
+							ServiceID: "remote-service",
+							Rows:      [][]byte{{1}},
+							Options:   options,
+						},
+					}
+					resp := acquireResponse()
+					defer releaseResponse(resp)
+					cs := &testClientSession{ctx: context.Background()}
+					done := make(chan struct{})
+					go func() {
+						defer close(done)
+						tc.handle(s, context.Background(), req, resp, cs)
+					}()
+
+					select {
+					case <-done:
+						require.True(t, cs.writeCalled)
+						require.True(t, moerr.IsMoErrCode(resp.UnwrapError(), moerr.ErrLockWaitTimeout))
+					case <-time.After(2 * time.Second):
+						require.Fail(t, "owner lock budget did not cancel the allocation wait")
+					}
+				},
+			)
+		})
+	}
 }
 
 func TestGetActiveTxnWithRemote(t *testing.T) {
@@ -1547,6 +1637,100 @@ func TestRemoteLockWaitTimeout_PrecisionIndependentOfLazyCheck(t *testing.T) {
 	)
 }
 
+func TestRemoteLockWaitTimeoutDoesNotRestartLateAbsoluteDeadline(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(_ *lockTableAllocator, services []*service) {
+			owner := services[0]
+			origin := services[1]
+			const tableID = uint64(10)
+			row := []byte{1}
+			holderTxn := []byte("holder")
+			waiterTxn := []byte("late-waiter")
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			mustAddTestLock(t, ctx, owner, tableID, holderTxn, [][]byte{row}, pb.Granularity_Row)
+
+			ownerEntered := make(chan struct{})
+			releaseOwner := make(chan struct{})
+			var once sync.Once
+			var releaseOnce sync.Once
+			releaseOwnerRequest := func() {
+				releaseOnce.Do(func() { close(releaseOwner) })
+			}
+			owner.option.beforeRemoteLockBindCheck = func() {
+				once.Do(func() { close(ownerEntered) })
+				<-releaseOwner
+			}
+			resultC := make(chan error, 1)
+			waiterDone := false
+			defer func() {
+				owner.option.beforeRemoteLockBindCheck = nil
+				releaseOwnerRequest()
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cleanupCancel()
+				if err := owner.unlockWithContext(cleanupCtx, holderTxn, timestamp.Timestamp{}); err != nil {
+					t.Errorf("release holder during cleanup: %v", err)
+				}
+				if !waiterDone {
+					select {
+					case <-resultC:
+					case <-cleanupCtx.Done():
+						t.Errorf("remote waiter did not exit during cleanup: %v", cleanupCtx.Err())
+					}
+				}
+				if err := origin.unlockWithContext(cleanupCtx, waiterTxn, timestamp.Timestamp{}); err != nil {
+					t.Errorf("release waiter during cleanup: %v", err)
+				}
+			}()
+
+			deadline := time.Now().Add(time.Second)
+			go func() {
+				_, err := origin.Lock(ctx, tableID, [][]byte{row}, waiterTxn, pb.LockOptions{
+					Granularity:      pb.Granularity_Row,
+					Mode:             pb.LockMode_Exclusive,
+					Policy:           pb.WaitPolicy_Wait,
+					LockWaitTimeout:  1,
+					LockWaitDeadline: deadline.UnixNano(),
+				})
+				resultC <- err
+			}()
+
+			select {
+			case <-ownerEntered:
+			case <-ctx.Done():
+				t.Fatalf("remote request did not reach owner: %v", ctx.Err())
+			}
+			// Admission at the owner has already preserved the caller's absolute
+			// deadline. Release only after that budget expires; the async waiter
+			// must not turn the rounded one-second field into a fresh budget.
+			if wait := time.Until(deadline.Add(20 * time.Millisecond)); wait > 0 {
+				timer := time.NewTimer(wait)
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					timer.Stop()
+					t.Fatalf("test context expired before releasing owner: %v", ctx.Err())
+				}
+			}
+			releaseOwnerRequest()
+			releasedAt := time.Now()
+
+			var err error
+			select {
+			case err = <-resultC:
+				waiterDone = true
+			case <-time.After(750 * time.Millisecond):
+				t.Fatalf("remote async waiter restarted an expired absolute deadline")
+			}
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout), "unexpected error: %v", err)
+			require.Less(t, time.Since(releasedAt), 750*time.Millisecond)
+		},
+	)
+}
+
 func TestRemoteOwnerLocalDeadlockFastPathBreaksPartialLockRing(t *testing.T) {
 	txn1 := []byte("txn1")
 	txn2 := []byte("txn2")
@@ -1628,6 +1812,175 @@ func TestRemoteLockOwnerWaitTimeoutReturnsDedicatedError(t *testing.T) {
 			cfg.RemoteLockOwnerWaitTimeout = &toml.Duration{Duration: 100 * time.Millisecond}
 		},
 	)
+}
+
+func TestRemoteAsyncWaiterStopsAtEarlierRequestDeadline(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			owner := services[0]
+			origin := services[1]
+			const tableID = uint64(24919)
+			row := []byte{1}
+			holderTxn := []byte("request-deadline-holder")
+			waiterTxn := []byte("request-deadline-waiter")
+
+			setupCtx, cancelSetup := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancelSetup()
+			mustAddTestLock(t, setupCtx, owner, tableID, holderTxn, [][]byte{row}, pb.Granularity_Row)
+
+			requestCtx, cancelRequest := context.WithTimeout(context.Background(), time.Second)
+			defer cancelRequest()
+			resultC := make(chan error, 1)
+			go func() {
+				_, err := origin.Lock(
+					requestCtx,
+					tableID,
+					[][]byte{row},
+					waiterTxn,
+					pb.LockOptions{
+						Granularity:     pb.Granularity_Row,
+						Mode:            pb.LockMode_Exclusive,
+						Policy:          pb.WaitPolicy_Wait,
+						LockWaitTimeout: 5,
+					})
+				resultC <- err
+			}()
+
+			require.NoError(t, WaitWaiters(owner, 0, tableID, row, 1))
+			select {
+			case err := <-resultC:
+				require.Error(t, err)
+			case <-time.After(2 * time.Second):
+				require.FailNow(t, "origin request deadline was not enforced")
+			}
+			require.Eventually(t, func() bool {
+				l, err := owner.getLockTable(0, tableID)
+				if err != nil {
+					return false
+				}
+				local := l.(*localLockTable)
+				local.mu.RLock()
+				defer local.mu.RUnlock()
+				lock, ok := local.mu.store.Get(row)
+				return ok && lock.waiters.size() == 0
+			}, time.Second, 10*time.Millisecond,
+				"owner retained an async waiter after the earlier request deadline")
+
+			require.NoError(t, owner.Unlock(setupCtx, holderTxn, timestamp.Timestamp{}))
+			require.NoError(t, origin.Unlock(setupCtx, waiterTxn, timestamp.Timestamp{}))
+		},
+		func(c *Config) {
+			c.MaxLockWaitDuration.Duration = 5 * time.Second
+		},
+	)
+}
+
+func TestNotifiedWaiterDeadlineDetachesAsync(t *testing.T) {
+	testCases := []struct {
+		name        string
+		rows        [][]byte
+		granularity pb.Granularity
+	}{
+		{name: "row", rows: [][]byte{{1}}, granularity: pb.Granularity_Row},
+		{name: "range", rows: [][]byte{{1}, {10}}, granularity: pb.Granularity_Range},
+	}
+
+	for idx, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			runLockServiceTests(
+				t,
+				[]string{"s1", "s2"},
+				func(_ *lockTableAllocator, services []*service) {
+					owner := services[0]
+					origin := services[1]
+					tableID := uint64(24922 + idx)
+					holderTxn := []byte("post-notify-async-holder")
+					waiterTxn := []byte("post-notify-async-waiter")
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+
+					options := newTestRowExclusiveOptions()
+					if testCase.granularity == pb.Granularity_Range {
+						options = newTestRangeExclusiveOptions()
+					}
+					_, err := owner.Lock(ctx, tableID, testCase.rows, holderTxn, options)
+					require.NoError(t, err)
+					local := owner.tableGroups.get(0, tableID).(*localLockTable)
+
+					var attempts atomic.Int32
+					reacquireEntered := make(chan struct{})
+					resumeReacquire := make(chan struct{})
+					var resumeOnce sync.Once
+					defer resumeOnce.Do(func() { close(resumeReacquire) })
+					local.options.beforeAcquire = func(c *lockContext) {
+						if !bytes.Equal(c.txn.txnID, waiterTxn) || attempts.Add(1) != 2 {
+							return
+						}
+						close(reacquireEntered)
+						<-resumeReacquire
+					}
+					defer func() { local.options.beforeAcquire = nil }()
+
+					deadline := time.Now().Add(700 * time.Millisecond)
+					waitOptions := options
+					waitOptions.LockWaitTimeout = 60
+					waitOptions.LockWaitDeadline = deadline.UnixNano()
+					resultC := make(chan error, 1)
+					go func() {
+						_, err := origin.Lock(ctx, tableID, testCase.rows, waiterTxn, waitOptions)
+						resultC <- err
+					}()
+
+					require.Eventually(t, func() bool {
+						txn := owner.activeTxnHolder.getActiveTxn(waiterTxn, false, "")
+						if txn == nil {
+							return false
+						}
+						txn.Lock()
+						defer txn.Unlock()
+						return len(txn.blockedWaiters) == 1
+					}, time.Second, time.Millisecond)
+					require.NoError(t, owner.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+
+					select {
+					case <-reacquireEntered:
+					case <-ctx.Done():
+						require.NoError(t, ctx.Err())
+					}
+					if wait := time.Until(deadline.Add(20 * time.Millisecond)); wait > 0 {
+						timer := time.NewTimer(wait)
+						<-timer.C
+					}
+					resumeOnce.Do(func() { close(resumeReacquire) })
+
+					select {
+					case err := <-resultC:
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout), err)
+					case <-ctx.Done():
+						require.NoError(t, ctx.Err())
+					}
+
+					waiter := owner.activeTxnHolder.getActiveTxn(waiterTxn, false, "")
+					require.NotNil(t, waiter)
+					waiter.Lock()
+					require.Empty(t, waiter.blockedWaiters)
+					waiter.Unlock()
+					local.mu.RLock()
+					require.Zero(t, local.mu.store.Len())
+					require.Empty(t, local.mu.ownerLocalWaits)
+					local.mu.RUnlock()
+					nextTxn := []byte("post-notify-async-next")
+					_, err = owner.Lock(ctx, tableID, testCase.rows, nextTxn, options)
+					require.NoError(t, err)
+					require.NoError(t, owner.Unlock(ctx, nextTxn, timestamp.Timestamp{}))
+					require.NoError(t, origin.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+				},
+			)
+		})
+	}
 }
 
 // TestRemoteLockWaitTimeout_ReturnsLockTimeout ensures that in a multi-CN

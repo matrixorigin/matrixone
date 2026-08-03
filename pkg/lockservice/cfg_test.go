@@ -32,6 +32,7 @@ func TestAdjustConfig(t *testing.T) {
 	assert.NotEmpty(t, c.KeepRemoteLockDuration)
 	assert.NotNil(t, c.RemoteLockOwnerWaitTimeout)
 	assert.NotEmpty(t, c.RemoteLockOwnerWaitTimeout.Duration)
+	assert.Equal(t, defaultMaxLockWaitDuration, c.MaxLockWaitDuration.Duration)
 	assert.NotEmpty(t, c.MaxFixedSliceSize)
 }
 
@@ -43,4 +44,10 @@ func TestRemoteLockOwnerWaitTimeoutCanBeDisabled(t *testing.T) {
 	c.Validate()
 	require.NotNil(t, c.RemoteLockOwnerWaitTimeout)
 	assert.Equal(t, time.Duration(0), c.RemoteLockOwnerWaitTimeout.Duration)
+}
+
+func TestAdjustConfigRejectsNegativeMaxLockWaitDuration(t *testing.T) {
+	c := Config{ServiceID: "s1"}
+	c.MaxLockWaitDuration.Duration = -1
+	assert.Panics(t, c.Validate)
 }

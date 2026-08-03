@@ -91,6 +91,10 @@ var (
 	TxnLockTotalCounter       = txnLockCounter.WithLabelValues("total")
 	TxnLocalLockTotalCounter  = txnLockCounter.WithLabelValues("local")
 	TxnRemoteLockTotalCounter = txnLockCounter.WithLabelValues("remote")
+	// TxnLockWaitTimeoutCeilingClampedCounter counts positive caller budgets
+	// reduced by the lockservice safety ceiling; zero-value injection is normal
+	// fallback behavior and is intentionally excluded.
+	TxnLockWaitTimeoutCeilingClampedCounter = txnLockCounter.WithLabelValues("wait-timeout-ceiling-clamped")
 
 	TxnDeadlockDetectorEnqueueCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{

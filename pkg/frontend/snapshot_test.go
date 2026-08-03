@@ -42,6 +42,230 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
+func TestGetFkDepsFromTableInfos(t *testing.T) {
+	tableInfos := []*tableInfo{
+		{
+			dbName:    "d",
+			tblName:   "parent",
+			typ:       "BASE TABLE",
+			createSql: "create table `d`.`parent` (`id` int primary key)",
+		},
+		{
+			dbName:  "d",
+			tblName: "child",
+			typ:     "BASE TABLE",
+			createSql: "create table `d`.`child` (" +
+				"`id` int primary key, `parent_id` int, " +
+				"constraint `fk_child` foreign key (`parent_id`) " +
+				"references `d`.`parent` (`id`))",
+		},
+		{
+			dbName:  "d",
+			tblName: "self_ref",
+			typ:     "BASE TABLE",
+			createSql: "create table `d`.`self_ref` (" +
+				"`id` int primary key, `parent_id` int, " +
+				"constraint `fk_self` foreign key (`parent_id`) " +
+				"references `self_ref` (`id`))",
+		},
+		{
+			dbName:    "d",
+			tblName:   "v",
+			typ:       view,
+			createSql: "create view `d`.`v` as select 1",
+		},
+	}
+
+	deps, err := getFkDepsFromTableInfos(context.Background(), tableInfos)
+	require.NoError(t, err)
+	require.Equal(t, []string{genKey("d", "parent")}, deps[genKey("d", "child")])
+	require.Equal(t, []string{genKey("d", "self_ref")}, deps[genKey("d", "self_ref")])
+	require.NotContains(t, deps, genKey("d", "v"))
+}
+
+func TestMergeFkDepsDeduplicatesSources(t *testing.T) {
+	child := genKey("d", "child")
+	parent := genKey("d", "parent")
+	otherParent := genKey("d", "other_parent")
+	dst := map[string][]string{child: {parent}}
+	src := map[string][]string{child: {parent, otherParent}}
+
+	mergeFkDeps(dst, src)
+
+	require.Equal(t, []string{parent, otherParent}, dst[child])
+}
+
+func TestFkTablesTopoSortUsesSchemaWhenCatalogRowsAreMissing(t *testing.T) {
+	const dbName = "legacy"
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result["select db_name, table_name, refer_db_name, refer_table_name "+
+		"from mo_catalog.mo_foreign_keys where db_name = 'legacy'"] = newMrsForPitrRecord(nil)
+
+	tableInfos := []*tableInfo{
+		{
+			dbName:    dbName,
+			tblName:   "parent",
+			typ:       "BASE TABLE",
+			createSql: "create table `legacy`.`parent` (`id` int primary key)",
+		},
+		{
+			dbName:  dbName,
+			tblName: "child",
+			typ:     "BASE TABLE",
+			createSql: "create table `legacy`.`child` (" +
+				"`id` int primary key, `parent_id` int, " +
+				"constraint `fk_legacy` foreign key (`parent_id`) " +
+				"references `legacy`.`parent` (`id`))",
+		},
+	}
+
+	sorted, err := fkTablesTopoSort(
+		context.Background(),
+		bh,
+		nil,
+		dbName,
+		"",
+		tableInfos,
+	)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		[]string{genKey(dbName, "parent"), genKey(dbName, "child")},
+		sorted,
+	)
+}
+
+func TestHistoricalRestoreTopoSortUsesSchemaWhenCatalogRowsAreMissing(t *testing.T) {
+	const (
+		dbName = "legacy"
+		ts     = int64(100)
+	)
+	tableInfos := []*tableInfo{
+		{
+			dbName:    dbName,
+			tblName:   "parent",
+			typ:       "BASE TABLE",
+			createSql: "create table `legacy`.`parent` (`id` int primary key)",
+		},
+		{
+			dbName:  dbName,
+			tblName: "child",
+			typ:     "BASE TABLE",
+			createSql: "create table `legacy`.`child` (" +
+				"`id` int primary key, `parent_id` int, " +
+				"constraint `fk_legacy` foreign key (`parent_id`) " +
+				"references `legacy`.`parent` (`id`))",
+		},
+	}
+	want := []string{genKey(dbName, "parent"), genKey(dbName, "child")}
+	catalogSQL := fmt.Sprintf(
+		"select db_name, table_name, refer_db_name, refer_table_name "+
+			"from mo_catalog.mo_foreign_keys {MO_TS = %d} where db_name = '%s'",
+		ts,
+		dbName,
+	)
+
+	t.Run("pitr", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[catalogSQL] = newMrsForPitrRecord(nil)
+
+		sorted, err := fkTablesTopoSortInPitrRestore(
+			context.Background(),
+			bh,
+			ts,
+			dbName,
+			"",
+			tableInfos,
+		)
+		require.NoError(t, err)
+		require.Equal(t, want, sorted)
+	})
+
+	t.Run("dropped account timestamp restore", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[catalogSQL] = newMrsForPitrRecord(nil)
+
+		sorted, err := fkTablesTopoSortWithTS(
+			context.Background(),
+			bh,
+			dbName,
+			"",
+			ts,
+			0,
+			0,
+			tableInfos,
+		)
+		require.NoError(t, err)
+		require.Equal(t, want, sorted)
+	})
+}
+
+func TestCollectRestoreSourceTableInfos(t *testing.T) {
+	t.Run("database restore reads only the selected table", func(t *testing.T) {
+		var listed bool
+		var requestedDB, requestedTable string
+		tableInfos, err := collectRestoreSourceTableInfos(
+			"db1",
+			"child",
+			func() ([]string, error) {
+				listed = true
+				return nil, nil
+			},
+			func(dbName string, tblName string) ([]*tableInfo, error) {
+				requestedDB, requestedTable = dbName, tblName
+				return []*tableInfo{{dbName: dbName, tblName: tblName}}, nil
+			},
+		)
+		require.NoError(t, err)
+		require.False(t, listed)
+		require.Equal(t, "db1", requestedDB)
+		require.Equal(t, "child", requestedTable)
+		require.Len(t, tableInfos, 1)
+	})
+
+	t.Run("account restore reads every user database", func(t *testing.T) {
+		var requested []string
+		tableInfos, err := collectRestoreSourceTableInfos(
+			"",
+			"",
+			func() ([]string, error) {
+				return []string{moCatalog, "db1", "db2"}, nil
+			},
+			func(dbName string, tblName string) ([]*tableInfo, error) {
+				require.Empty(t, tblName)
+				requested = append(requested, dbName)
+				return []*tableInfo{{dbName: dbName, tblName: "t"}}, nil
+			},
+		)
+		require.NoError(t, err)
+		require.Equal(t, []string{"db1", "db2"}, requested)
+		require.Len(t, tableInfos, 2)
+	})
+}
+
+func TestShowDatabasesAtTSDoesNotResolveSnapshotMetadata(t *testing.T) {
+	const (
+		snapshotTS = int64(100)
+		accountID  = uint32(42)
+	)
+	sql := fmt.Sprintf("show databases {MO_TS = %d}", snapshotTS)
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[sql] = newMrsForSqlForShowDatabases([][]interface{}{
+		{"db1"},
+		{"db2"},
+	})
+
+	dbNames, err := showDatabasesAtTS(context.Background(), "", bh, snapshotTS, accountID)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"db1", "db2"}, dbNames)
+	require.Equal(t, []string{sql}, bh.executedSQLs)
+}
+
 func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 	convey.Convey("snapshot bulk restore skips external table", t, func() {
 		ctx := context.WithValue(context.TODO(), defines.TenantIDKey{}, uint32(sysAccountID))
@@ -426,20 +650,20 @@ func Test_fkTablesTopoSortWithTS(t *testing.T) {
 
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 
-		_, err := fkTablesTopoSortWithTS(ctx, bh, "", "", 0, 0, 0)
+		_, err := fkTablesTopoSortWithTS(ctx, bh, "", "", 0, 0, 0, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 
 		sql := "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
 		mrs := newMrsForPitrRecord([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		_, err = fkTablesTopoSortWithTS(ctx, bh, "", "", 0, 0, 0)
+		_, err = fkTablesTopoSortWithTS(ctx, bh, "", "", 0, 0, 0, nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		sql = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
 		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "table1", "db2", "table2"}})
 		bh.sql2result[sql] = mrs
-		_, err = fkTablesTopoSortWithTS(ctx, bh, "", "", 0, 0, 0)
+		_, err = fkTablesTopoSortWithTS(ctx, bh, "", "", 0, 0, 0, nil)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

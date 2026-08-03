@@ -455,6 +455,27 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
+	if !plan2.IsFkBannedDatabase(qry.Database) {
+		// Apply ALTER actions to the source rows first, then make those rows
+		// follow the replacement relation. This preserves catalog-only forward
+		// references and avoids exposing a half-renamed self reference.
+		for _, sql := range qry.UpdateFkSqls {
+			if err = c.runSql(sql); err != nil {
+				return err
+			}
+		}
+		prepareFkSqls, _ := plan2.GetSqlForTransferAlterCopyFk(
+			qry.Database,
+			qry.TableDef.Name,
+			qry.CopyTableDef.Name,
+		)
+		for _, sql := range prepareFkSqls {
+			if err = c.runSql(sql); err != nil {
+				return err
+			}
+		}
+	}
+
 	// 7. drop original table.
 	// ISCP: That will also drop ISCP related jobs and pitr of the original table.
 	dropSql := fmt.Sprintf("drop table `%s`.`%s`", dbName, tblName)
@@ -494,6 +515,19 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			zap.String("copy table name", qry.CopyTableDef.Name),
 			zap.Error(err))
 		return err
+	}
+
+	if !plan2.IsFkBannedDatabase(qry.Database) {
+		_, finalizeFkSqls := plan2.GetSqlForTransferAlterCopyFk(
+			qry.Database,
+			qry.TableDef.Name,
+			qry.CopyTableDef.Name,
+		)
+		for _, sql := range finalizeFkSqls {
+			if err = c.runSql(sql); err != nil {
+				return err
+			}
+		}
 	}
 
 	newTableDef := newRel.CopyTableDef(c.proc.Ctx)
@@ -677,6 +711,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 				c,
 				fkey,
 				originRel.GetTableID(c.proc.Ctx),
+				newRel.GetTableID(c.proc.Ctx),
 			)
 			if err != nil {
 				c.proc.Error(c.proc.Ctx, "notify parent table foreign key TableId Change for alter table",
@@ -868,7 +903,9 @@ func (s *Scope) doAlterTable(c *Compile) error {
 
 	var err error
 	if qry.AlgorithmType == plan.AlterTable_COPY {
-		err = s.AlterTableCopy(c)
+		// COPY ALTER transfers mo_foreign_keys around the source-table drop,
+		// so its catalog statements are executed inside AlterTableCopy.
+		return s.AlterTableCopy(c)
 	} else {
 		err = s.AlterTableInplace(c)
 	}
@@ -982,15 +1019,32 @@ func restoreNewTableRefChildTbls(c *Compile, copyRel engine.Relation, refChildTb
 	if err != nil {
 		return err
 	}
-	oldCt.Cts = append(oldCt.Cts, &engine.RefChildTableDef{
-		Tables: refChildTbls,
-	})
+	addRefChildTableIDs(oldCt, refChildTbls)
 	return copyRel.UpdateConstraint(c.proc.Ctx, oldCt)
 }
 
 // notifyParentTableFkTableIdChange Notify the parent table of changes in the tableid of the foreign key table
-func notifyParentTableFkTableIdChange(c *Compile, fkey *plan.ForeignKeyDef, oldTableId uint64) error {
+func reconcileParentRefChildTableID(
+	constraintDef *engine.ConstraintDef,
+	oldTableID uint64,
+	newTableID uint64,
+) {
+	reconcileRefChildTableID(constraintDef, oldTableID, newTableID)
+}
+
+func notifyParentTableFkTableIdChange(
+	c *Compile,
+	fkey *plan.ForeignKeyDef,
+	oldTableID uint64,
+	newTableID uint64,
+) error {
 	foreignTblId := fkey.ForeignTbl
+	if foreignTblId == 0 {
+		// Self-referencing foreign keys use 0 as the parent-table sentinel.
+		// The ALTER copy is already carrying that constraint on newRel, and
+		// there is no separate parent relation to update.
+		return nil
+	}
 	_, _, fatherRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), foreignTblId)
 	if err != nil {
 		return err
@@ -999,13 +1053,7 @@ func notifyParentTableFkTableIdChange(c *Compile, fkey *plan.ForeignKeyDef, oldT
 	if err != nil {
 		return err
 	}
-	for _, ct := range oldCt.Cts {
-		if def, ok1 := ct.(*engine.RefChildTableDef); ok1 {
-			def.Tables = plan2.RemoveIf(def.Tables, func(id uint64) bool {
-				return id == oldTableId
-			})
-		}
-	}
+	reconcileParentRefChildTableID(oldCt, oldTableID, newTableID)
 	return fatherRelation.UpdateConstraint(c.proc.Ctx, oldCt)
 }
 

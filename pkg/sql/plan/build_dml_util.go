@@ -3575,6 +3575,53 @@ func getSqlForRenameTable(db, oldName, newName string) (ret []string) {
 	return
 }
 
+// GetSqlForTransferAlterCopyFk returns the catalog statements that transfer
+// child-side foreign-key metadata from the source relation to its COPY
+// replacement. The source rows are authoritative because UpdateFkSqls has
+// already applied the ALTER actions to them; rows created while creating the
+// temporary relation are discarded before the transfer.
+//
+// Parent-side names intentionally remain unchanged. The replacement ultimately
+// takes the source name, so changing refer_table_name would expose an
+// intermediate reference to a non-existent temporary parent.
+func GetSqlForTransferAlterCopyFk(db, sourceTable, copyTable string) (
+	prepare []string,
+	finalize []string,
+) {
+	prepare = append(prepare, getSqlForDeleteFkChildTable(db, copyTable))
+	prepare = append(prepare, getSqlForRenameFkChildTable(db, sourceTable, copyTable))
+	finalize = append(finalize, getSqlForRenameFkChildTable(db, copyTable, sourceTable))
+	return
+}
+
+// quoteSQLStringLiteral escapes and wraps a value for use as a SQL string literal.
+func quoteSQLStringLiteral(s string) string {
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`'`, `''`,
+	)
+	return "'" + replacer.Replace(s) + "'"
+}
+
+func getSqlForDeleteFkChildTable(db, table string) string {
+	return fmt.Sprintf(
+		"delete from `mo_catalog`.`mo_foreign_keys` "+
+			"where db_name = %s and table_name = %s",
+		quoteSQLStringLiteral(db),
+		quoteSQLStringLiteral(table),
+	)
+}
+
+func getSqlForRenameFkChildTable(db, oldName, newName string) string {
+	return fmt.Sprintf(
+		"update `mo_catalog`.`mo_foreign_keys` set table_name = %s "+
+			"where db_name = %s and table_name = %s",
+		quoteSQLStringLiteral(newName),
+		quoteSQLStringLiteral(db),
+		quoteSQLStringLiteral(oldName),
+	)
+}
+
 // getSqlForRenameColumn returns the sqls that rename the column of all fk relationships in mo_foreign_keys
 func getSqlForRenameColumn(db, table, oldName, newName string) (ret []string) {
 	sb := strings.Builder{}

@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -788,6 +789,24 @@ type lockRetryState struct {
 }
 
 func lockWaitTimeout(proc *process.Process, txnOp client.TxnOperator) time.Duration {
+	txnTimeout := client.LockWaitTimeoutFromTxn(txnOp)
+	var explicitProcessTimeout bool
+	// Background/internal execution may carry a per-execution value in the
+	// process or txn options while its resolver only exposes compiled global
+	// defaults. Prefer the caller-owned budget in that case. Frontend execution
+	// keeps resolver-first semantics so SET SESSION and statement overrides are
+	// observed even after a transaction has started.
+	if proc != nil && proc.Base != nil && !proc.Base.IsFrontend {
+		if proc.GetSessionInfo() != nil {
+			explicitProcessTimeout = proc.GetSessionInfo().LockWaitTimeoutSet
+			if seconds := proc.GetSessionInfo().LockWaitTimeout; seconds > 0 {
+				return time.Duration(seconds) * time.Second
+			}
+		}
+		if !explicitProcessTimeout && txnTimeout > 0 {
+			return txnTimeout
+		}
+	}
 	if proc != nil && proc.GetResolveVariableFunc() != nil {
 		if v, err := proc.GetResolveVariableFunc()("lock_wait_timeout", true, false); err == nil {
 			switch n := v.(type) {
@@ -811,7 +830,14 @@ func lockWaitTimeout(proc *process.Process, txnOp client.TxnOperator) time.Durat
 			return time.Duration(seconds) * time.Second
 		}
 	}
-	return client.LockWaitTimeoutFromTxn(txnOp)
+	if explicitProcessTimeout {
+		// Explicit zero means "clear this execution's override", not
+		// "wait forever". Use the shared product fallback when no resolver is
+		// installed. This also matches the positive legacy value serialized for
+		// old pipeline peers that do not understand LockWaitTimeoutSet.
+		return time.Duration(defines.DefaultLockWaitTimeoutSeconds) * time.Second
+	}
+	return txnTimeout
 }
 
 func refreshLockWaitOptions(options lock.LockOptions) (lock.LockOptions, error) {
@@ -827,6 +853,28 @@ func refreshLockWaitOptions(options lock.LockOptions) (lock.LockOptions, error) 
 		options.LockWaitTimeout = 1
 	}
 	return options, nil
+}
+
+// materializeLockWaitDeadline turns the caller's relative timeout and the
+// lockservice safety ceiling into one caller-owned absolute budget. The
+// service also applies the ceiling defensively, but Lock takes options by
+// value, so only the caller can preserve that budget across bind retries.
+func materializeLockWaitDeadline(
+	options lock.LockOptions,
+	ceiling time.Duration,
+) lock.LockOptions {
+	if options.LockWaitDeadline > 0 {
+		return options
+	}
+
+	d := time.Duration(options.LockWaitTimeout) * time.Second
+	if ceiling > 0 && (d <= 0 || ceiling < d) {
+		d = ceiling
+	}
+	if d > 0 {
+		options.LockWaitDeadline = time.Now().Add(d).UnixNano()
+	}
+	return options
 }
 
 func lockWithRetry(
@@ -846,13 +894,18 @@ func lockWithRetry(
 	var err error
 	retryState := lockRetryState{}
 
+	if options.LockWaitDeadline <= 0 {
+		options = materializeLockWaitDeadline(
+			options,
+			lockService.GetConfig().MaxLockWaitDuration.Duration)
+	}
 	options, err = refreshLockWaitOptions(options)
 	if err != nil {
 		return result, err
 	}
 	result, err = LockWithMayUpgrade(ctx, lockService, tableID, rows, txnID, options, fetchFunc, vec, opts, pkType)
-	if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
-		return result, getLockRetryExitError(ctx, err)
+	if !canRetryLock(ctx, tableID, txnOp, err, &retryState, options.LockWaitDeadline) {
+		return result, getLockRetryExitError(ctx, err, options.LockWaitDeadline)
 	}
 
 	for {
@@ -861,8 +914,8 @@ func lockWithRetry(
 			return result, err
 		}
 		result, err = lockService.Lock(ctx, tableID, rows, txnID, options)
-		if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
-			return result, getLockRetryExitError(ctx, err)
+		if !canRetryLock(ctx, tableID, txnOp, err, &retryState, options.LockWaitDeadline) {
+			return result, getLockRetryExitError(ctx, err, options.LockWaitDeadline)
 		}
 	}
 }
@@ -915,8 +968,13 @@ func canRetryLock(
 	txn client.TxnOperator,
 	err error,
 	retryState *lockRetryState,
+	lockWaitDeadline int64,
 ) bool {
 	if ctx.Err() != nil || !isRetryLockError(err) {
+		return false
+	}
+	if lockWaitDeadline > 0 &&
+		!time.Now().Before(time.Unix(0, lockWaitDeadline)) {
 		return false
 	}
 	if !shouldBypassHeldLockTableCheck(err) &&
@@ -933,7 +991,21 @@ func canRetryLock(
 		logLockRetryBudgetStop(err, table, txn, *retryState)
 		return false
 	}
-	return waitToRetryLock(ctx, wait, retryState)
+
+	// Retry backoff and high-memory admission are part of the same lock-wait
+	// budget as the Lock calls around them. Derive this context only on the slow
+	// retry path so the uncontended hot path remains allocation-free.
+	retryCtx := ctx
+	var cancel context.CancelFunc
+	if lockWaitDeadline > 0 {
+		deadline := time.Unix(0, lockWaitDeadline)
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		retryCtx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	}
+	return waitToRetryLock(retryCtx, wait, retryState)
 }
 
 func waitToRetryLock(ctx context.Context, wait time.Duration, retryState *lockRetryState) bool {
@@ -1019,7 +1091,11 @@ func getRetryWaitDuration(err error, retryState *lockRetryState) (time.Duration,
 	return defaultWaitTimeOnRetryLock, true
 }
 
-func getLockRetryExitError(ctx context.Context, err error) error {
+func getLockRetryExitError(
+	ctx context.Context,
+	err error,
+	lockWaitDeadline int64,
+) error {
 	if ctxErr := ctx.Err(); ctxErr != nil && isRetryLockError(err) {
 		if isBoundedRetryLockError(err) {
 			// Preserve the backend failure so explicit txns do not survive on a raw
@@ -1027,6 +1103,10 @@ func getLockRetryExitError(ctx context.Context, err error) error {
 			return err
 		}
 		return ctxErr
+	}
+	if isRetryLockError(err) && lockWaitDeadline > 0 &&
+		!time.Now().Before(time.Unix(0, lockWaitDeadline)) {
+		return lockservice.ErrLockTimeout
 	}
 	return err
 }

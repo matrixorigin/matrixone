@@ -327,23 +327,10 @@ func TestUnknownCommitFenceFrontierCollapsesAtBound(t *testing.T) {
 
 func TestUnknownCommitFenceOverflowReleasesSourceTxn(t *testing.T) {
 	runLockServiceTests(t, []string{"s1"}, func(allocator *lockTableAllocator, services []*service) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		service := services[0]
-		now := time.Now()
-		for i := 0; i < maxPersistentFenceFrontierEntries; i++ {
-			// Increasing sequence and decreasing expiry intentionally build the
-			// largest exact non-dominated frontier.
-			_, _, ok := service.canUnlockUnknownCommits(
-				ctx,
-				[][]byte{[]byte(fmt.Sprintf("seed-%d", i))},
-				now.Add(time.Duration(maxPersistentFenceFrontierEntries-i+3)*time.Second),
-				uint64(i+1),
-			)
-			require.True(t, ok)
-		}
-
 		overflowTxn := []byte("overflow")
 		_, err := service.Lock(
 			ctx,
@@ -353,9 +340,29 @@ func TestUnknownCommitFenceOverflowReleasesSourceTxn(t *testing.T) {
 			newTestRowExclusiveOptions(),
 		)
 		require.NoError(t, err)
+
+		// Keep every synthetic fence alive throughout the assertion. The old
+		// one-second overflow deadline started before the initial bind lookup,
+		// so a slow CI worker could legitimately expire it before the resolver
+		// installed it and leave the original 1024-entry frontier unchanged.
+		overflowDeadline := time.Now().Add(time.Minute)
+		for i := 0; i < maxPersistentFenceFrontierEntries; i++ {
+			// Increasing sequence and decreasing expiry intentionally build the
+			// largest exact non-dominated frontier.
+			_, _, ok := service.canUnlockUnknownCommits(
+				ctx,
+				[][]byte{[]byte(fmt.Sprintf("seed-%d", i))},
+				overflowDeadline.Add(
+					time.Duration(maxPersistentFenceFrontierEntries-i+1)*time.Second,
+				),
+				uint64(i+1),
+			)
+			require.True(t, ok)
+		}
+
 		require.NoError(t, service.ResolveCommitUnknown(
 			overflowTxn,
-			now.Add(time.Second),
+			overflowDeadline,
 			maxPersistentFenceFrontierEntries+1,
 			nil,
 		))

@@ -8,6 +8,7 @@ RUN go env -w GOPROXY=${GOPROXY}
 # Typecheck: enable type checking for ToSliceNoTypeCheck and ToSliceNoTypeCheck2
 # Default: 0 (disabled), set to 1 to enable
 ARG TYPECHECK=0
+ARG GOBUILD_OPT=""
 
 RUN mkdir -p /go/src/github.com/matrixorigin/matrixone
 
@@ -28,9 +29,9 @@ RUN module_files="$(sha256sum go.mod go.sum)" && \
 COPY . .
 
 RUN if [ "$TYPECHECK" = "1" ]; then \
-        make clean && make build TYPECHECK=1; \
+        make clean && make build TYPECHECK=1 GOBUILD_OPT="${GOBUILD_OPT}"; \
     else \
-        make clean && make build; \
+        make clean && make build GOBUILD_OPT="${GOBUILD_OPT}"; \
     fi
 
 FROM matrixorigin/ubuntu:22.04
@@ -42,8 +43,9 @@ COPY --from=builder /go/src/github.com/matrixorigin/matrixone/cgo/*.so /usr/loca
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/pkg/monlp/tokenizer/dict /usr/local/share/jieba
 ENV MO_JIEBA_DICT_DIR=/usr/local/share/jieba
 
-# ldconfig and run mo-service to check if the shared library is found
-RUN ldconfig && /mo-service -h
+# ldconfig and run mo-service to check if the shared library is found. A
+# coverage-instrumented binary requires a writable GOCOVERDIR even for -h.
+RUN mkdir -p /tmp/coverage && ldconfig && GOCOVERDIR=/tmp/coverage /mo-service -h
 
 WORKDIR /
 
