@@ -79,6 +79,11 @@ func (s *service) ResolveCommitUnknown(
 	commitSequence uint64,
 	onResolved func(),
 ) error {
+	if !s.beginResolverAdmission() {
+		return moerr.NewInternalErrorNoCtx("lock service is closing")
+	}
+	defer s.endResolverAdmission()
+
 	if s.unknownCommitResolver == nil {
 		return moerr.NewInternalErrorNoCtx("unknown commit resolver is not initialized")
 	}
@@ -214,7 +219,7 @@ func (r *unknownCommitResolver) pendingActiveTxns() []unknownCommitTxn {
 	r.mu.Unlock()
 
 	for _, fn := range resolved {
-		fn()
+		dispatchUnknownCommitResolved(fn)
 	}
 	return values
 }
@@ -227,8 +232,20 @@ func (r *unknownCommitResolver) remove(txnID []byte) {
 	}
 	r.mu.Unlock()
 	if ok && txn.onResolved != nil {
-		txn.onResolved()
+		dispatchUnknownCommitResolved(txn.onResolved)
 	}
+}
+
+// dispatchUnknownCommitResolved runs external completion code outside the
+// resolver's service-stopper task. The pending entry is removed under r.mu
+// before dispatch, which is the exactly-once ownership transfer. In
+// particular, a callback may re-enter service.Close: Close can cancel and join
+// the resolver task without waiting for the callback that initiated it.
+func dispatchUnknownCommitResolved(callback func()) {
+	if callback == nil {
+		return
+	}
+	go callback()
 }
 
 func (r *unknownCommitResolver) isPending(txnID []byte) bool {
@@ -255,6 +272,24 @@ func (r *unknownCommitResolver) wake() {
 	case r.wakeC <- struct{}{}:
 	default:
 	}
+}
+
+// takeResolvedCallbacks transfers every pending completion callback to the
+// service Close owner after the resolver task and active transaction holder
+// have stopped. The Close owner invokes external code only after sync.Once has
+// completed, so a callback may safely re-enter Close.
+func (r *unknownCommitResolver) takeResolvedCallbacks() []func() {
+	r.mu.Lock()
+	callbacks := make([]func(), 0, len(r.mu.pending))
+	for key, txn := range r.mu.pending {
+		delete(r.mu.pending, key)
+		if txn.onResolved != nil {
+			callbacks = append(callbacks, txn.onResolved)
+		}
+	}
+	r.mu.running = false
+	r.mu.Unlock()
+	return callbacks
 }
 
 func (s *service) canUnlockUnknownCommits(

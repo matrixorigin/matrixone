@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -41,14 +42,41 @@ func ConstructCreateTableSQL(
 	useDbName bool,
 	cloneStmt *tree.CloneTable,
 ) (string, tree.Statement, error) {
+	return constructCreateTableSQL(ctx, tableDef, snapshot, useDbName, cloneStmt, true)
+}
 
+func constructCreateTableSQL(
+	ctx CompilerContext,
+	tableDef *plan.TableDef,
+	snapshot *Snapshot,
+	useDbName bool,
+	cloneStmt *tree.CloneTable,
+	includeChecks bool,
+) (string, tree.Statement, error) {
 	var err error
 	var createStr string
 	rewritePairs := make([]struct {
 		display string
 		rewrite string
 	}, 0)
-	checkDefs := extractTopLevelCheckDefs(tableDef)
+	var checkDefs []string
+	if includeChecks {
+		checkDefs = constructCheckDefs(tableDef)
+	}
+	var mongoEnvelope sqlmongodb.CreateSQLEnvelope
+	mongoColumns := make(map[string]sqlmongodb.ColumnMapping)
+	if tableDef.TableType == catalog.SystemExternalRel {
+		var found bool
+		mongoEnvelope, found, err = sqlmongodb.ParseCreateSQLEnvelope(ctx.GetContext(), tableDef.Createsql)
+		if err != nil {
+			return "", nil, err
+		}
+		if found {
+			for _, column := range mongoEnvelope.Columns {
+				mongoColumns[strings.ToLower(column.Name)] = column
+			}
+		}
+	}
 
 	tblName := tableDef.Name
 	schemaName := tableDef.DbName
@@ -153,6 +181,13 @@ func ConstructCreateTableSQL(
 
 		if col.Comment != "" {
 			buf.WriteString(" COMMENT '" + col.Comment + "'")
+		}
+		if mapping, ok := mongoColumns[strings.ToLower(col.Name)]; ok {
+			buf.WriteString(" MONGODB_PATH '")
+			buf.WriteString(formatStrInSingleQuotes(mapping.Path))
+			buf.WriteString("' MONGODB_CONVERT '")
+			buf.WriteString(formatStrInSingleQuotes(mapping.Conversion))
+			buf.WriteString("'")
 		}
 
 		createStr += buf.String()
@@ -609,6 +644,14 @@ func ConstructCreateTableSQL(
 			}
 			return createStr, stmt, err
 		}
+		if len(mongoColumns) > 0 {
+			createStr += formatMongoDBTableOptionsForShowCreate(mongoEnvelope)
+			var stmt tree.Statement
+			if ctx != nil {
+				stmt, err = getRewriteSQLStmt(ctx, createStr)
+			}
+			return createStr, stmt, err
+		}
 
 		param := &tree.ExternParam{}
 		if err = json.Unmarshal([]byte(tableDef.Createsql), param); err != nil {
@@ -730,6 +773,34 @@ func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
 		if isTopLevelCheckDef(segment) {
 			checks = append(checks, segment)
 		}
+	}
+	return checks
+}
+
+func constructCheckDefs(tableDef *plan.TableDef) []string {
+	if tableDef == nil || tableDef.TableType == catalog.SystemExternalRel {
+		return nil
+	}
+	if len(tableDef.Checks) == 0 {
+		return extractTopLevelCheckDefs(tableDef)
+	}
+
+	checks := make([]string, 0, len(tableDef.Checks))
+	for _, check := range tableDef.Checks {
+		if check == nil || check.OriginSql == "" {
+			continue
+		}
+		checks = append(
+			checks,
+			fmt.Sprintf(
+				"CONSTRAINT `%s` CHECK (%s)",
+				formatStr(check.Name),
+				check.OriginSql,
+			),
+		)
+	}
+	if len(checks) == 0 {
+		return extractTopLevelCheckDefs(tableDef)
 	}
 	return checks
 }
@@ -1053,6 +1124,40 @@ func formatIcebergTableOptionsForShowCreate(env sqliceberg.CreateSQLEnvelope) st
 	}
 	var builder strings.Builder
 	builder.WriteString(" ENGINE = ICEBERG WITH (")
+	for i, option := range options {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString("\"")
+		builder.WriteString(option.key)
+		builder.WriteString("\" = '")
+		builder.WriteString(formatStrInSingleQuotes(option.value))
+		builder.WriteString("'")
+	}
+	builder.WriteString(")")
+	return builder.String()
+}
+
+func formatMongoDBTableOptionsForShowCreate(env sqlmongodb.CreateSQLEnvelope) string {
+	options := []struct {
+		key   string
+		value string
+	}{
+		{key: "connection", value: env.Connection},
+		{key: "database", value: env.Database},
+		{key: "collection", value: env.Collection},
+		{key: "schema_mode", value: env.SchemaMode},
+		{key: "conversion_mode", value: env.ConversionMode},
+		{key: "max_parallelism", value: fmt.Sprintf("%d", env.MaxParallelism)},
+	}
+	if env.SplitKey != "" {
+		options = append(options, struct {
+			key   string
+			value string
+		}{key: "split_key", value: env.SplitKey})
+	}
+	var builder strings.Builder
+	builder.WriteString(" ENGINE = MONGODB WITH (")
 	for i, option := range options {
 		if i > 0 {
 			builder.WriteString(", ")

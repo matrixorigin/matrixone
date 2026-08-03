@@ -108,6 +108,14 @@ func TestWrongArgumentsMySQLError(t *testing.T) {
 	require.Equal(t, "Incorrect arguments to nth_value", err.Error())
 }
 
+func TestWindowInvalidUseMySQLError(t *testing.T) {
+	err := NewWindowInvalidUse(context.Background(), "row_number")
+	require.Equal(t, ErrWindowInvalidUse, err.ErrorCode())
+	require.Equal(t, ER_WINDOW_INVALID_WINDOW_FUNC_USE, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t, "You cannot use the window function 'row_number' in this context", err.Error())
+}
+
 func TestLockWaitTimeoutMySQLError(t *testing.T) {
 	err := NewLockWaitTimeout(context.Background())
 	require.Equal(t, ErrLockWaitTimeout, err.ErrorCode())
@@ -148,6 +156,21 @@ func TestEncoding(t *testing.T) {
 	err = e2.UnmarshalBinary(data)
 	require.Nil(t, err)
 	require.Equal(t, e, e2)
+}
+
+func TestResourceExhaustedWithDetailsEncoding(t *testing.T) {
+	err := NewResourceExhaustedf(context.Background(), "requested=%d used=%d limit=%d", 3, 5, 7)
+	require.Equal(t, ErrOOM, err.ErrorCode())
+	require.Equal(t, ER_ENGINE_OUT_OF_MEMORY, err.MySQLCode())
+	require.Equal(t,
+		"error: resource exhausted: requested=3 used=5 limit=7",
+		err.Error())
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
 }
 
 func TestErrSubqueryNo1RowContract(t *testing.T) {

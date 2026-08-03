@@ -187,6 +187,60 @@ func TestReplayOnePCRebuildsAutoIncrementDMLWatermark(t *testing.T) {
 	assert.Equal(t, commitTS, tableEntry.GetLatestKnownDMLPrepare())
 }
 
+func TestReplaySkipsCheckpointGCedDirtyTables(t *testing.T) {
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	mgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(c), catalog.MockTxnFactory(c), types.NewMockHLCClock(1))
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+
+	setupTxn, err := mgr.StartTxn(nil)
+	assert.NoError(t, err)
+	dbEntry, err := c.CreateDBEntry("replay_checkpoint_gc", "", "", setupTxn)
+	assert.NoError(t, err)
+	tableEntry, err := dbEntry.CreateTableEntry(catalog.MockSchemaAll(3, 1), setupTxn, nil)
+	assert.NoError(t, err)
+	assert.NoError(t, setupTxn.Commit(context.Background()))
+
+	startTS := types.BuildTS(10, 0)
+	commitTS := types.BuildTS(12, 0)
+	replayTxn := newPreparingEpochTestTxn(t, "replay-checkpoint-gc", startTS, types.BuildTS(11, 0))
+	replayTxn.GetMemo().AddTable(dbEntry.ID, tableEntry.ID)
+	replayTxn.GetMemo().AddTable(dbEntry.ID, tableEntry.ID+1)
+	replayTxn.GetMemo().AddTable(dbEntry.ID+1, tableEntry.ID+2)
+	assert.NoError(t, replayTxn.SetCommitTS(commitTS))
+	store := &replayTxnStore{Cmd: &txnbase.TxnCmd{ComposedCmd: txnbase.NewComposedCmd()}, Observer: noopReplayObserver{}, catalog: c}
+
+	assert.NoError(t, store.prepareCommit(replayTxn))
+	assert.True(t, tableEntry.ShouldRetryAutoIncrementAlter(startTS))
+	assert.NoError(t, store.applyCommit(replayTxn))
+	assert.Equal(t, commitTS, tableEntry.GetLatestKnownDMLPrepare())
+}
+
+func TestReplayTxnStoreLifecycle(t *testing.T) {
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	mgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(c), catalog.MockTxnFactory(c), types.NewMockHLCClock(1))
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+
+	ctx := context.WithValue(context.Background(), struct{}{}, "replay")
+	txnCtx := txnbase.NewTxnCtx([]byte("replay-lifecycle"), types.BuildTS(10, 0), types.TS{})
+	cmd := &txnbase.TxnCmd{ComposedCmd: txnbase.NewComposedCmd()}
+	replayTxn := MakeReplayTxn(ctx, mgr, txnCtx, 42, cmd, noopReplayObserver{}, c)
+	store := replayTxn.GetStore().(*replayTxnStore)
+
+	assert.Same(t, ctx, store.GetContext())
+	assert.False(t, store.IsOffline())
+	assert.False(t, store.IsReadonly())
+	assert.Equal(t, uint64(42), replayTxn.GetLsn())
+	assert.NoError(t, store.prepareCommit(replayTxn))
+	assert.NoError(t, store.applyRollback(replayTxn))
+	assert.Panics(t, func() {
+		_ = store.prepareRollback(replayTxn)
+	})
+}
+
 type waitingSchemaTxn struct {
 	txnif.TxnReader
 	prepareTS types.TS

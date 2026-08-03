@@ -55,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
@@ -69,7 +70,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
@@ -523,6 +523,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			PkTyp:              t.PkTyp,
 			BuildIdx:           int32(t.BuildIdx),
 			IfInsertFromUnique: t.IfInsertFromUnique,
+			RuntimeFilterSpec:  t.RuntimeFilterSpec,
 		}
 	case *preinsert.PreInsert:
 		in.PreInsert = &pipeline.PreInsert{
@@ -743,12 +744,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IcebergDeleteSpillEnabled:   t.Es.IcebergDeleteSpillEnabled,
 		}
 		in.ProjectList = t.ProjectList
-	case *source.Source:
-		in.StreamScan = &pipeline.StreamScan{
-			TblDef: t.TblDef,
-			Limit:  t.Limit,
-			Offset: t.Offset,
-		}
+	case *mongoscan.MongoScan:
+		in.MongodbScan = t.Scan
 		in.ProjectList = t.ProjectList
 	case *table_scan.TableScan:
 		in.TableScan = &pipeline.TableScan{}
@@ -1025,6 +1022,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.PkTyp = t.PkTyp
 		arg.BuildIdx = int(t.BuildIdx)
 		arg.IfInsertFromUnique = t.IfInsertFromUnique
+		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
 		op = arg
 	case vm.Shuffle:
 		t := opr.GetShuffle()
@@ -1251,14 +1249,9 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			},
 		)
 		op.(*external.External).ProjectList = opr.ProjectList
-	case vm.Source:
-		t := opr.GetStreamScan()
-		arg := source.NewArgument()
-		arg.TblDef = t.TblDef
-		arg.Limit = t.Limit
-		arg.Offset = t.Offset
-		arg.ProjectList = opr.ProjectList
-		op = arg
+	case vm.MongoScan:
+		op = mongoscan.NewArgument().WithScan(opr.GetMongodbScan())
+		op.(*mongoscan.MongoScan).ProjectList = opr.ProjectList
 	case vm.TableScan:
 		ts := table_scan.NewArgument().WithTypes(opr.TableScan.Types)
 		ts.FilterExprs = opr.TableScan.FilterExprs

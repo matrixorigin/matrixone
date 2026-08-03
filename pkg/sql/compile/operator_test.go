@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -88,6 +89,64 @@ func TestJoinHashBuildTopologyPinsSpillToSingleConsumer(t *testing.T) {
 			shuffle.Release()
 		})
 	}
+}
+
+func TestConstructFuzzyFilterUsesFinalizedBuildSide(t *testing.T) {
+	newNodes := func(side plan.Node_FuzzyBuildSide, tableCost, sinkCost float64) (
+		*plan.Node, *plan.Node, *plan.Node, *plan.RuntimeFilterSpec,
+	) {
+		typ := plan.Type{Id: int32(types.T_int64)}
+		spec := &plan.RuntimeFilterSpec{
+			Tag:         1,
+			BuildExpr:   &plan.Expr{Typ: typ},
+			KeyEncoding: plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
+		}
+		node := &plan.Node{
+			NodeType:       plan.Node_FUZZY_FILTER,
+			FuzzyBuildSide: side,
+			TableDef: &plan.TableDef{
+				Cols: []*plan.ColDef{{Name: "id", Typ: typ}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+			},
+			RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{spec},
+		}
+		tableScan := &plan.Node{
+			NodeType: plan.Node_TABLE_SCAN,
+			Stats:    &plan.Stats{Cost: tableCost},
+			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{{
+				Tag: 1, Expr: &plan.Expr{Typ: typ},
+			}},
+		}
+		sinkScan := &plan.Node{
+			NodeType: plan.Node_SINK_SCAN,
+			Stats:    &plan.Stats{Cost: sinkCost},
+		}
+		return node, tableScan, sinkScan, spec
+	}
+
+	t.Run("sink decision survives rewritten cost ratio", func(t *testing.T) {
+		node, tableScan, sinkScan, spec := newNodes(
+			plan.Node_FUZZY_BUILD_SIDE_SINK, 8_192, 1_000_000)
+		op := constructFuzzyFilter(node, tableScan, sinkScan)
+		defer op.Release()
+
+		require.Equal(t, 1, op.BuildIdx)
+		require.Same(t, spec, op.RuntimeFilterSpec)
+		require.Len(t, node.RuntimeFilterBuildList, 1)
+		require.Len(t, tableScan.RuntimeFilterProbeList, 1)
+	})
+
+	t.Run("table decision overrides later cost drift", func(t *testing.T) {
+		node, tableScan, sinkScan, _ := newNodes(
+			plan.Node_FUZZY_BUILD_SIDE_TABLE, 1_000_000, 1)
+		op := constructFuzzyFilter(node, tableScan, sinkScan)
+		defer op.Release()
+
+		require.Equal(t, 0, op.BuildIdx)
+		require.Nil(t, op.RuntimeFilterSpec)
+		require.Empty(t, node.RuntimeFilterBuildList)
+		require.Empty(t, tableScan.RuntimeFilterProbeList)
+	})
 }
 
 func TestConstructAggregateConfigIncludesGroupConcatMaxLen(t *testing.T) {
@@ -451,6 +510,48 @@ func makeTimeWindowAggNode(functionID int64, name string, config *plan.Expr) *pl
 		Timestamp: ts,
 		Interval:  makeTimeWindowIntervalExpr(1, "second"),
 	}
+}
+
+func TestConstructGapFillDisablesTumblingFastPath(t *testing.T) {
+	node := &plan.Node{
+		NodeType:    plan.Node_TIME_WINDOW,
+		Interval:    makeTimeWindowIntervalExpr(1, "minute"),
+		GroupBy:     []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_datetime)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}},
+		Timestamp:   &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}},
+		WEnd:        &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+		GapFillMode: plan.Node_GAP_FILL_PARTITION,
+		ProjectList: []*plan.Expr{},
+		BindingTags: []int32{},
+		AggList:     []*plan.Expr{},
+	}
+	arg := constructTimeWindow(context.Background(), node, nil)
+	require.True(t, arg.GapFill)
+	require.Equal(t, arg.Interval, arg.Sliding)
+	require.Nil(t, arg.EndExpr, "GAPFILL must not use the existing-window-only interval fast path")
+	arg.Release()
+}
+
+func TestProjectedMongoColumnsUsesExternalScanLayout(t *testing.T) {
+	columns := []sqlmongodb.ColumnMapping{
+		{Name: "id", Path: "_id"},
+		{Name: "pump", Path: "pump"},
+		{Name: "value", Path: "value"},
+	}
+	tableDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "value"},
+		{Name: "pump"},
+		{Name: "__mo_hidden", Hidden: true},
+	}}
+	projected, err := projectedMongoColumns(t.Context(), columns, tableDef)
+	require.NoError(t, err)
+	require.Equal(t, []sqlmongodb.ColumnMapping{columns[2], columns[1]}, projected)
+
+	_, err = projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "missing"}}})
+	require.Error(t, err)
+	_, err = projectedMongoColumns(t.Context(), columns, nil)
+	require.Error(t, err)
+	_, err = projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "hidden", Hidden: true}}})
+	require.Error(t, err)
 }
 
 func TestDupOperatorLoopJoinMarkPos(t *testing.T) {

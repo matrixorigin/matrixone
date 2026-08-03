@@ -57,6 +57,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -1771,6 +1772,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 		)
 		return err
 	}
+	if err := c.maybeInsertMongoDBTableMapping(dbSource, main, qry); err != nil {
+		return err
+	}
 
 	var indexExtra *api.SchemaExtra
 	for i, def := range qry.IndexTables {
@@ -2154,6 +2158,92 @@ func icebergCreateSQLFromPlanTableDef(tableDef *plan.TableDef) string {
 		}
 	}
 	return ""
+}
+
+func (c *Compile) maybeInsertMongoDBTableMapping(dbSource engine.Database, rel engine.Relation, qry *plan.CreateTable) error {
+	createSQL := icebergCreateSQLFromPlanTableDef(qry.GetTableDef())
+	env, found, err := sqlmongodb.ParseCreateSQLEnvelope(c.proc.Ctx, createSQL)
+	if err != nil || !found {
+		return err
+	}
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	dbIDText := dbSource.GetDatabaseId(c.proc.Ctx)
+	dbID, err := strconv.ParseUint(dbIDText, 10, 64)
+	if err != nil || dbID == 0 {
+		return moerr.NewInternalErrorf(c.proc.Ctx, "invalid database id for MongoDB mapping: %s", dbIDText)
+	}
+	connectionID, err := c.lookupMongoDBConnectionID(accountID, env.Connection)
+	if err != nil {
+		return err
+	}
+	mapping := sqlmongodb.TableMapping{
+		AccountID: accountID, DatabaseID: dbID, TableID: rel.GetTableID(c.proc.Ctx),
+		ConnectionID: connectionID, Connection: env.Connection,
+		Database: env.Database, Collection: env.Collection,
+		SchemaMode: env.SchemaMode, Conversion: env.ConversionMode,
+		SplitKey: env.SplitKey, MaxParallelism: env.MaxParallelism,
+		Columns: env.Columns, Version: 1,
+	}
+	return c.runSqlWithOptions(
+		sqlmongodb.InsertTableMappingSQL(mapping),
+		executor.StatementOption{}.WithDisableLog(),
+	)
+}
+
+func (c *Compile) lookupMongoDBConnectionID(accountID uint32, name string) (uint64, error) {
+	res, err := c.runSqlWithResultAndOptions(
+		sqlmongodb.GetConnectionByNameForUpdateSQL(accountID, name),
+		NoAccountId,
+		executor.StatementOption{}.WithDisableLog(),
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer res.Close()
+	var connectionID uint64
+	var disabled bool
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 || len(cols) < 18 {
+			return true
+		}
+		ids := executor.GetFixedRows[uint64](cols[1])
+		disabledValues := executor.GetFixedRows[uint64](cols[17])
+		if len(ids) > 0 {
+			connectionID = ids[0]
+		}
+		if len(disabledValues) > 0 {
+			disabled = disabledValues[0] != 0
+		}
+		return false
+	})
+	if connectionID == 0 || disabled {
+		return 0, moerr.NewInvalidInputf(c.proc.Ctx, "MongoDB connection %s does not exist or is disabled", name)
+	}
+	return connectionID, nil
+}
+
+func (c *Compile) maybeDeleteMongoDBTableMapping(dbSource engine.Database, rel engine.Relation, tableDef *plan.TableDef) error {
+	createSQL := icebergCreateSQLFromPlanTableDef(tableDef)
+	_, found, err := sqlmongodb.ParseCreateSQLEnvelope(c.proc.Ctx, createSQL)
+	if err != nil || !found {
+		return err
+	}
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	dbIDText := dbSource.GetDatabaseId(c.proc.Ctx)
+	dbID, err := strconv.ParseUint(dbIDText, 10, 64)
+	if err != nil || dbID == 0 {
+		return moerr.NewInternalErrorf(c.proc.Ctx, "invalid database id for MongoDB mapping delete: %s", dbIDText)
+	}
+	return c.runSqlWithOptions(
+		sqlmongodb.DeleteTableMappingSQL(accountID, dbID, rel.GetTableID(c.proc.Ctx)),
+		executor.StatementOption{}.WithDisableLog(),
+	)
 }
 
 func (c *Compile) runSqlWithSystemTenant(sql string) error {
@@ -3558,6 +3648,9 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	}
 
 	if err := c.maybeDeleteIcebergTableMapping(dbSource, rel, qry.GetTableDef()); err != nil {
+		return err
+	}
+	if err := c.maybeDeleteMongoDBTableMapping(dbSource, rel, qry.GetTableDef()); err != nil {
 		return err
 	}
 
@@ -5506,8 +5599,8 @@ func deleteManyWatermark(
 }
 
 const (
-	defaultConnectorTaskMaxRetryTimes = 10
-	defaultConnectorTaskRetryInterval = int64(time.Second * 10)
+	defaultCDCTaskMaxRetryTimes = 10
+	defaultCDCTaskRetryInterval = int64(time.Second * 10)
 )
 
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
@@ -5515,8 +5608,8 @@ func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
 		ID:       opts.TaskId,
 		Executor: task.TaskCode_InitCdc,
 		Options: task.TaskOptions{
-			MaxRetryTimes: defaultConnectorTaskMaxRetryTimes,
-			RetryInterval: defaultConnectorTaskRetryInterval,
+			MaxRetryTimes: defaultCDCTaskMaxRetryTimes,
+			RetryInterval: defaultCDCTaskRetryInterval,
 			DelayDuration: 0,
 			Concurrency:   0,
 		},

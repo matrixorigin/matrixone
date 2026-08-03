@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
@@ -32,6 +34,15 @@ import (
 const (
 	Rows = 10
 )
+
+func TestGetTableDefRestoresChecksFromSchemaExtra(t *testing.T) {
+	check := &plan.CheckDef{Name: "t_chk_1", Check: &plan.Expr{}}
+	tableDef, _ := getTableDef(&TableItem{
+		Name:      "t",
+		ExtraInfo: &api.SchemaExtra{Checks: []*plan.CheckDef{check}},
+	}, nil)
+	require.Equal(t, []*plan.CheckDef{check}, tableDef.Checks)
+}
 
 func TestGetTableDefKeepsTemporarySessionStateContextual(t *testing.T) {
 	tableDef, _ := getTableDef(&TableItem{Kind: catalog.SystemTemporaryTable}, nil)

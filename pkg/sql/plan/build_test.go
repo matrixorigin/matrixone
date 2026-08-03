@@ -760,6 +760,187 @@ func TestSetDisplayValueToJSONQuotesAcrossPlannerPaths(t *testing.T) {
 	}
 }
 
+func TestProjectedSetNumericCastUsesStoredBitmap(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	mock.ctxt.tables["nation"].Cols[1].Typ = plan.Type{Id: int32(types.T_uint64), Enumvalues: ",a"}
+
+	for _, tc := range []struct {
+		name            string
+		sql             string
+		wantStringCast  bool
+		wantBitmapCarry bool
+	}{
+		{
+			name:            "derived table",
+			sql:             "select cast(name as unsigned) from (select n_name as name from nation) src",
+			wantBitmapCarry: true,
+		},
+		{
+			name:            "pure set union all",
+			sql:             "select cast(name as unsigned) from (select n_name as name from nation union all select n_name from nation) src",
+			wantBitmapCarry: true,
+		},
+		{
+			name:            "three-way pure set union all",
+			sql:             "select cast(name as unsigned) from (select n_name as name from nation union all select n_name from nation union all select n_name from nation) src",
+			wantBitmapCarry: true,
+		},
+		{
+			name:            "pure set intersect",
+			sql:             "select cast(name as unsigned) from (select n_name as name from nation intersect select n_name from nation) src",
+			wantBitmapCarry: true,
+		},
+		{
+			name:            "pure set minus",
+			sql:             "select cast(name as unsigned) from (select n_name as name from nation minus select n_name from nation) src",
+			wantBitmapCarry: true,
+		},
+		{
+			name:           "mixed set and varchar union all",
+			sql:            "select cast(name as unsigned) from (select n_name as name from nation union all select n_comment from nation) src",
+			wantStringCast: true,
+		},
+		{
+			name:           "three-way mixed set and varchar union all",
+			sql:            "select cast(name as unsigned) from (select n_name as name from nation union all select n_comment from nation union all select n_name from nation) src",
+			wantStringCast: true,
+		},
+		{
+			name:            "nested intersect precedence",
+			sql:             "select cast(name as unsigned) from (select n_name as name from nation union all select n_name from nation intersect select n_name from nation) src",
+			wantBitmapCarry: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantStringCast, planHasVarcharToIntegerCast(logicPlan))
+			require.Equal(t, tc.wantBitmapCarry, planHasPlainUint64ColRef(logicPlan))
+			requireSetOperationProjectionWidths(t, logicPlan)
+		})
+	}
+}
+
+func requireSetOperationProjectionWidths(t *testing.T, p *Plan) {
+	t.Helper()
+	p = resolveQueryPlan(p)
+	require.NotNil(t, p)
+	query := p.GetQuery()
+	require.NotNil(t, query)
+	for nodeID, node := range query.Nodes {
+		switch node.NodeType {
+		case plan.Node_UNION, plan.Node_UNION_ALL,
+			plan.Node_MINUS, plan.Node_MINUS_ALL,
+			plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+			for _, childID := range node.Children {
+				require.GreaterOrEqual(t, childID, int32(0), "set node %d has invalid child", nodeID)
+				require.Less(t, int(childID), len(query.Nodes), "set node %d has invalid child", nodeID)
+				require.Len(t, query.Nodes[childID].ProjectList, len(node.ProjectList),
+					"set node %d child %d projection width", nodeID, childID)
+			}
+		}
+	}
+}
+
+func TestInsertSelectProjectedSetUsesStoredBitmap(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	mock.ctxt.tables["nation"].Cols[1].Typ = plan.Type{Id: int32(types.T_uint64), Enumvalues: ",a"}
+	addSetBitmapDestinationForTest(mock)
+
+	logicPlan, err := runOneStmt(
+		mock,
+		t,
+		"insert into set_bitmap_destination(id, bitmap) select n_nationkey, n_name from nation",
+	)
+	require.NoError(t, err)
+	require.False(t, planHasVarcharToIntegerCast(logicPlan))
+	require.True(t, planHasPlainUint64ColRef(logicPlan))
+}
+
+func addSetBitmapDestinationForTest(mock *MockOptimizer) {
+	const tableName = "set_bitmap_destination"
+	idType := plan.Type{Id: int32(types.T_int32), NotNullable: true}
+	bitmapType := plan.Type{Id: int32(types.T_uint64)}
+	rowIDType := plan.Type{Id: int32(types.T_Rowid), NotNullable: true, Width: 16}
+	cols := []*ColDef{
+		{ColId: 0, Name: "id", OriginName: "id", Typ: idType, Primary: true, Pkidx: 1, Default: &plan.Default{}},
+		{ColId: 1, Name: "bitmap", OriginName: "bitmap", Typ: bitmapType, Default: &plan.Default{NullAbility: true}},
+		{ColId: 2, Name: catalog.Row_ID, OriginName: catalog.Row_ID, Typ: rowIDType, Hidden: true, Default: &plan.Default{}},
+	}
+	mock.ctxt.objects[tableName] = &ObjectRef{SchemaName: "tpch", ObjName: tableName, Obj: 23179}
+	mock.ctxt.tables[tableName] = &TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		TblId:     23179,
+		Name:      tableName,
+		Cols:      cols,
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Cols:        []uint64{0},
+			Names:       []string{"id"},
+			CompPkeyCol: cols[0],
+		},
+	}
+	mock.ctxt.id2name[23179] = tableName
+	mock.ctxt.pks[tableName] = []int{0}
+}
+
+func planHasVarcharToIntegerCast(p *Plan) bool {
+	return planHasExpr(p, func(expr *plan.Expr) bool {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
+			return false
+		}
+		name := fn.Func.ObjName
+		return (name == "cast" || name == "cast_strict" || name == "cast_assign") &&
+			fn.Args[0].Typ.Id == int32(types.T_varchar) && types.T(expr.Typ.Id).IsInteger()
+	})
+}
+
+func planHasPlainUint64ColRef(p *Plan) bool {
+	return planHasExpr(p, func(expr *plan.Expr) bool {
+		return expr.GetCol() != nil && expr.Typ.Id == int32(types.T_uint64) && expr.Typ.Enumvalues == ""
+	})
+}
+
+func planHasExpr(p *Plan, match func(*plan.Expr) bool) bool {
+	p = resolveQueryPlan(p)
+	if p == nil || p.GetQuery() == nil {
+		return false
+	}
+	var visit func(*plan.Expr) bool
+	visit = func(expr *plan.Expr) bool {
+		if expr == nil {
+			return false
+		}
+		if match(expr) {
+			return true
+		}
+		if fn := expr.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				if visit(arg) {
+					return true
+				}
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				if visit(item) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, node := range p.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			if visit(expr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestOnDuplicateUpdateVarcharFromTextUsesAssignmentCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addTextCastTableForTest(mock)
@@ -2208,21 +2389,21 @@ func TestUpdatePgStyleFromDedupPicksWholeSourceRow(t *testing.T) {
 	}
 }
 
-func TestUpdateFallbackPgStyleFromDedupPicksWholeSourceRow(t *testing.T) {
+func TestUpdatePgStyleFromDedupFKTablePicksWholeSourceRow(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp SET sal = dept.deptno, comm = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
 	if err != nil {
-		t.Fatalf("build fallback UPDATE FROM plan: %v", err)
+		t.Fatalf("build UPDATE FROM plan: %v", err)
 	}
 
 	query := logicPlan.GetQuery()
 	if hasUpdateFromDedupAnyValueAgg(query, len(mock.ctxt.tables["emp"].Cols)) {
-		t.Fatalf("fallback UPDATE FROM dedup must pick a whole source row, not aggregate each update column with any_value")
+		t.Fatalf("UPDATE FROM dedup must pick a whole source row, not aggregate each update column with any_value")
 	}
 	if !hasUpdateFromDedupWindow(query, 1) {
-		t.Fatalf("fallback UPDATE FROM dedup should use row_number window partitioned by target row_id")
+		t.Fatalf("UPDATE FROM dedup should use row_number window partitioned by target row_id")
 	}
 }
 
@@ -2251,11 +2432,10 @@ func TestUpdatePgStyleFromDedupPartitionsByRowIDNotGeometry32(t *testing.T) {
 	}
 }
 
-// TestUpdateFallbackPgStyleFromDedupPartitionsByRowIDNotGeometry32 guards the
-// fallback (buildTableUpdate) path against the same GEOMETRY32 partition-key
-// crash. emp has a foreign key, so UPDATE ... FROM routes through the fallback
-// planner.
-func TestUpdateFallbackPgStyleFromDedupPartitionsByRowIDNotGeometry32(t *testing.T) {
+// TestUpdatePgStyleFromDedupFKTablePartitionsByRowIDNotGeometry32 guards the
+// modern path for an FK-bearing target against the same GEOMETRY32
+// partition-key crash.
+func TestUpdatePgStyleFromDedupFKTablePartitionsByRowIDNotGeometry32(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	geoTyp := plan.Type{Id: int32(types.T_geometry32)}
 	setMockColumnType(t, mock, "emp", "hiredate", geoTyp)
@@ -2263,39 +2443,35 @@ func TestUpdateFallbackPgStyleFromDedupPartitionsByRowIDNotGeometry32(t *testing
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp SET sal = dept.deptno, comm = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
 	if err != nil {
-		t.Fatalf("build fallback UPDATE FROM with GEOMETRY32 column: %v", err)
+		t.Fatalf("build FK-table UPDATE FROM with GEOMETRY32 column: %v", err)
 	}
 
 	query := logicPlan.GetQuery()
 	if !hasUpdateFromDedupWindow(query, 1) {
-		t.Fatalf("fallback UPDATE FROM dedup must partition by row_id, not by a GEOMETRY32 target column")
+		t.Fatalf("FK-table UPDATE FROM dedup must partition by row_id, not by a GEOMETRY32 target column")
 	}
 	if updateFromDedupPartitionsColName(query, "hiredate") {
-		t.Fatalf("fallback UPDATE FROM dedup must not include the GEOMETRY32 column in the partition key")
+		t.Fatalf("FK-table UPDATE FROM dedup must not include the GEOMETRY32 column in the partition key")
 	}
 }
 
-// TestUpdateFallbackPgStyleFromKeepsRowIdNullFilter guards the fallback path
-// against losing the join-target NULL-row safeguard. The fallback path's
-// needAggFilter drives both the any_value dedup AND an isnotnull(row_id) filter
-// that drops NULL rows from left/right-join targets. Replacing the dedup with a
-// row_number() window must still keep that NULL filter, otherwise a joined-target
-// NULL row could leak into the update pipeline.
-func TestUpdateFallbackPgStyleFromKeepsRowIdNullFilter(t *testing.T) {
+// TestUpdatePgStyleFromFKTableUsesModernDedup guards the new FK-table route:
+// unrelated child columns stay on the modern row_number dedup path.
+func TestUpdatePgStyleFromFKTableUsesModernDedup(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp SET sal = dept.deptno, comm = dept.deptno FROM dept WHERE emp.deptno = dept.deptno")
 	if err != nil {
-		t.Fatalf("build fallback UPDATE FROM plan: %v", err)
+		t.Fatalf("build FK-table UPDATE FROM plan: %v", err)
 	}
 
 	query := logicPlan.GetQuery()
 	if hasAnyValueAgg(query) {
-		t.Fatalf("fallback UPDATE FROM dedup must not use any_value aggregation")
+		t.Fatalf("modern FK-table UPDATE FROM dedup must not use any_value aggregation")
 	}
-	if !hasRowIdIsNotNullFilter(query) {
-		t.Fatalf("fallback UPDATE FROM must keep the isnotnull(row_id) join-target NULL-row filter")
+	if !hasUpdateFromDedupWindow(query, 1) {
+		t.Fatalf("modern FK-table UPDATE FROM must use row_number partitioned by target row_id")
 	}
 }
 
@@ -2528,11 +2704,19 @@ func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
 }
 
 func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
-	t.Run("ordinary child update keeps prepare cacheable", func(t *testing.T) {
+	t.Run("affected child key marks prepare uncacheable", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_CASCADE)
 
 		query := buildPreparedQuery(t, mock, "prepare stmt1 from update emp set deptno = ? where empno = ?")
+		require.True(t, query.GetHasForeignKeyAction())
+	})
+
+	t.Run("unrelated child column keeps prepare cacheable", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_CASCADE)
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from update emp set sal = ? where empno = ?")
 		require.False(t, query.GetHasForeignKeyAction())
 	})
 
@@ -2659,29 +2843,29 @@ func TestUpdateFallbackGeneratedColumnChainAfterOptimize(t *testing.T) {
 	// but we verify the expression exists at the expected position.
 }
 
-func TestUpdateFallbackGeneratedColumnDerivedTableSource(t *testing.T) {
+func TestUpdateGeneratedColumnDerivedTableSourceOnFKTable(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	setMockGeneratedColumn(t, mock, "emp", "sal", "comm")
 
 	logicPlan, err := runOneStmt(mock, t,
 		"UPDATE emp SET comm = 1, ename = 'derived-src-marker' FROM (SELECT deptno, loc FROM dept) AS d WHERE emp.deptno = d.deptno")
 	if err != nil {
-		t.Fatalf("build fallback update with derived table source and generated column: %v", err)
+		t.Fatalf("build modern FK-table update with derived source and generated column: %v", err)
 	}
 
 	query := logicPlan.GetQuery()
-	empCols := len(mock.ctxt.tables["emp"].Cols)
-	expectedLen := empCols + 3
-	node := requireFallbackSourceProjectNode(t, query, expectedLen, "derived-src-marker")
-	if node == nil {
-		t.Fatalf("missing source PROJECT with length %d and derived-src-marker", expectedLen)
+	hasMultiUpdate := false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			hasMultiUpdate = true
+			break
+		}
 	}
-	generatedPos := empCols + 2
-	if generatedPos >= len(node.ProjectList) {
-		t.Fatalf("generated column position %d out of range (ProjectList length %d)", generatedPos, len(node.ProjectList))
+	if !hasMultiUpdate {
+		t.Fatal("FK-table UPDATE with an unrelated child key must use MULTI_UPDATE")
 	}
-	if node.ProjectList[generatedPos] == nil {
-		t.Fatalf("generated column expression at position %d should not be nil", generatedPos)
+	if !queryContainsStringLiteral(query, "derived-src-marker") {
+		t.Fatal("modern UPDATE must retain the derived-source assignment")
 	}
 }
 
@@ -2838,27 +3022,6 @@ func hasAnyValueAgg(query *Query) bool {
 		}
 		for _, aggExpr := range node.AggList {
 			if fn := aggExpr.GetF(); fn != nil && fn.Func.ObjName == "any_value" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// hasRowIdIsNotNullFilter reports whether the plan filters out joined-target
-// NULL rows via isnotnull(row_id). This safeguard must survive on the fallback
-// UPDATE ... FROM path even after duplicate matches are deduped by row_number().
-func hasRowIdIsNotNullFilter(query *Query) bool {
-	for _, node := range query.Nodes {
-		if node.NodeType != plan.Node_FILTER {
-			continue
-		}
-		for _, f := range node.FilterList {
-			fn := f.GetF()
-			if fn == nil || fn.Func.ObjName != "isnotnull" || len(fn.Args) != 1 {
-				continue
-			}
-			if exprContainsColName(fn.Args[0], catalog.Row_ID) {
 				return true
 			}
 		}
@@ -3232,6 +3395,160 @@ func TestAssignmentCastRollingUpgradePlanGate(t *testing.T) {
 	require.Contains(t, upgradedPlan, `"obj_name":"cast_assign"`)
 }
 
+func TestInsertAddsCheckConstraintFilter(t *testing.T) {
+	addDeptCheck := func(mock *MockOptimizer) {
+		tableDef := mock.ctxt.tables["dept"]
+		colPos := tableDef.Name2ColIndex["deptno"]
+		colExpr := &plan.Expr{
+			Typ: tableDef.Cols[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: 0, ColPos: colPos},
+			},
+		}
+		checkExpr, err := BindFuncExprImplByPlanExpr(
+			t.Context(),
+			">",
+			[]*plan.Expr{colExpr, MakePlan2Int64ConstExprWithType(0)},
+		)
+		require.NoError(t, err)
+		tableDef.Checks = []*plan.CheckDef{{
+			Name:  "dept_chk_1",
+			Check: checkExpr,
+		}}
+	}
+
+	build := func(sql string) *plan.Query {
+		mock := NewMockOptimizer(true)
+		addDeptCheck(mock)
+
+		stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+		require.NoError(t, err)
+		built, err := mock.Optimize(stmt)
+		require.NoError(t, err)
+		return built
+	}
+
+	t.Run("regular insert asserts", func(t *testing.T) {
+		query := build("insert into dept values (1, 'Sales', 'NY')")
+		found := false
+		for _, node := range query.Nodes {
+			if node.NodeType != plan.Node_FILTER {
+				continue
+			}
+			for _, expr := range node.FilterList {
+				if expr.GetF() != nil &&
+					expr.GetF().GetFunc().GetObjName() == "_check_constraint_assert" {
+					found = true
+				}
+			}
+		}
+		require.True(t, found)
+	})
+
+	t.Run("replace rejects mixed-version cluster", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		addDeptCheck(mock)
+		proc := testutil.NewProc(nil)
+		rt := moruntime.ServiceRuntime(proc.GetService())
+		defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion6)
+		mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+
+		stmt, err := mysql.ParseOne(
+			t.Context(),
+			"replace into dept values (1, 'Sales', 'NY')",
+			1,
+		)
+		require.NoError(t, err)
+		_, err = mock.Optimize(stmt)
+		require.ErrorContains(t, err, "CHECK constraints require all CNs to support protocol version 7")
+	})
+
+	t.Run("insert ignore filters invalid rows", func(t *testing.T) {
+		query := build("insert ignore into dept values (1, 'Sales', 'NY')")
+		found := false
+		for _, node := range query.Nodes {
+			if node.NodeType != plan.Node_FILTER {
+				continue
+			}
+			for _, expr := range node.FilterList {
+				if expr.GetF() != nil && expr.GetF().GetFunc().GetObjName() == "coalesce" {
+					found = true
+				}
+			}
+		}
+		require.True(t, found)
+	})
+
+	for _, sql := range []string{
+		"replace into dept values (1, 'Sales', 'NY')",
+		"replace into dept set deptno = 1, dname = 'Sales', loc = 'NY'",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			query := build(sql)
+			found := false
+			for _, node := range query.Nodes {
+				if node.NodeType != plan.Node_FILTER {
+					continue
+				}
+				for _, expr := range node.FilterList {
+					if expr.GetF() != nil &&
+						expr.GetF().GetFunc().GetObjName() == "_check_constraint_assert" {
+						found = true
+					}
+				}
+			}
+			require.True(t, found)
+		})
+	}
+
+	t.Run("ODKU without unique key asserts on legacy fallback", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		tableDef := mock.ctxt.tables["fake_pk_t"]
+		tableDef.Indexes = nil
+		colPos := tableDef.Name2ColIndex["a"]
+		colExpr := &plan.Expr{
+			Typ: tableDef.Cols[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: 0, ColPos: colPos},
+			},
+		}
+		checkExpr, err := BindFuncExprImplByPlanExpr(
+			t.Context(),
+			">",
+			[]*plan.Expr{colExpr, MakePlan2Int64ConstExprWithType(0)},
+		)
+		require.NoError(t, err)
+		tableDef.Checks = []*plan.CheckDef{{
+			Name:  "fake_pk_t_chk_1",
+			Check: checkExpr,
+		}}
+
+		stmt, err := mysql.ParseOne(
+			t.Context(),
+			"insert into fake_pk_t(a, b) values (-1, 'x') on duplicate key update b = 'y'",
+			1,
+		)
+		require.NoError(t, err)
+		query, err := mock.Optimize(stmt)
+		require.NoError(t, err)
+
+		found := false
+		for _, node := range query.Nodes {
+			if node.NodeType != plan.Node_FILTER {
+				continue
+			}
+			for _, expr := range node.FilterList {
+				if expr.GetF() != nil &&
+					expr.GetF().GetFunc().GetObjName() == "_check_constraint_assert" {
+					found = true
+				}
+			}
+		}
+		require.True(t, found)
+	})
+}
+
 func TestReplaceSetColRefAsDefault(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	// REPLACE ... SET col = <expr referencing columns> must bind the RHS column
@@ -3555,6 +3872,69 @@ func TestInsertIgnoreChildParentFKDropsRows(t *testing.T) {
 	assert.True(t, hasMultiUpdate, "INSERT IGNORE FK should stay on the modern MULTI_UPDATE path")
 }
 
+func TestCheckConstraintWithChildForeignKey(t *testing.T) {
+	build := func(sql string) *plan.Query {
+		mock := NewMockOptimizer(true)
+		tableDef := mock.ctxt.tables["emp"]
+		colPos := tableDef.Name2ColIndex["empno"]
+		colExpr := &plan.Expr{
+			Typ: tableDef.Cols[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: 0, ColPos: colPos},
+			},
+		}
+		checkExpr, err := BindFuncExprImplByPlanExpr(
+			t.Context(),
+			">",
+			[]*plan.Expr{colExpr, MakePlan2Int64ConstExprWithType(0)},
+		)
+		require.NoError(t, err)
+		tableDef.Checks = []*plan.CheckDef{{
+			Name:  "positive_empno",
+			Check: checkExpr,
+		}}
+
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err)
+		query := logicPlan.GetQuery()
+		require.NotNil(t, query)
+		return query
+	}
+
+	assertPlanShape := func(t *testing.T, query *plan.Query, checkFunc string) {
+		t.Helper()
+		hasCheck, hasParentJoin, hasMultiUpdate := false, false, false
+		for _, node := range query.Nodes {
+			if node.NodeType == plan.Node_FILTER {
+				for _, expr := range node.FilterList {
+					if expr.GetF() != nil && expr.GetF().GetFunc().GetObjName() == checkFunc {
+						hasCheck = true
+					}
+				}
+			}
+			if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+				hasParentJoin = true
+			}
+			if node.NodeType == plan.Node_MULTI_UPDATE {
+				hasMultiUpdate = true
+			}
+		}
+		require.True(t, hasCheck)
+		require.True(t, hasParentJoin)
+		require.True(t, hasMultiUpdate)
+	}
+
+	t.Run("replace", func(t *testing.T) {
+		query := build("REPLACE INTO emp (empno, deptno) VALUES (1, 10)")
+		assertPlanShape(t, query, "_check_constraint_assert")
+	})
+
+	t.Run("insert ignore", func(t *testing.T) {
+		query := build("INSERT IGNORE INTO emp (empno, deptno) VALUES (1, 10)")
+		assertPlanShape(t, query, "coalesce")
+	})
+}
+
 func TestInsertOnDupSelfReferFKUsesModernPath(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
@@ -3826,6 +4206,60 @@ func TestReplaceSelfRefPlanStructure(t *testing.T) {
 		}
 	}
 	assert.True(t, hasMultiUpdate, "self-ref FK REPLACE should contain MULTI_UPDATE node")
+}
+
+func TestDeleteSelfReferSetNull(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tableDef := mock.ctxt.tables["self_ref_cascade"]
+	tableDef.Fkeys[0].OnDelete = plan.ForeignKeyDef_SET_NULL
+	tableDef.Fkeys[0].OnUpdate = plan.ForeignKeyDef_SET_NULL
+
+	logicPlan, err := runOneStmt(mock, t, "DELETE FROM self_ref_cascade WHERE id = 2")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	assert.True(t, query.GetHasForeignKeyAction())
+	assert.True(t, queryUpdatesTable(query, "self_ref_cascade"))
+	requireQueryStepDependenciesAcyclic(t, query)
+}
+
+func requireQueryStepDependenciesAcyclic(t *testing.T, query *plan.Query) {
+	t.Helper()
+	state := make([]uint8, len(query.Steps))
+	var visitStep func(int)
+	visitStep = func(step int) {
+		require.GreaterOrEqual(t, step, 0)
+		require.Less(t, step, len(query.Steps))
+		if state[step] == 1 {
+			t.Fatalf("query step dependency cycle contains step %d", step)
+		}
+		if state[step] == 2 {
+			return
+		}
+		state[step] = 1
+		seenNodes := make(map[int32]struct{})
+		var visitNode func(int32)
+		visitNode = func(nodeID int32) {
+			require.GreaterOrEqual(t, nodeID, int32(0))
+			require.Less(t, int(nodeID), len(query.Nodes))
+			if _, ok := seenNodes[nodeID]; ok {
+				return
+			}
+			seenNodes[nodeID] = struct{}{}
+			node := query.Nodes[nodeID]
+			for _, sourceStep := range node.SourceStep {
+				visitStep(int(sourceStep))
+			}
+			for _, childID := range node.Children {
+				visitNode(childID)
+			}
+		}
+		visitNode(query.Steps[step])
+		state[step] = 2
+	}
+	for step := range query.Steps {
+		visitStep(step)
+	}
 }
 
 func TestReplaceSelfRefCascade(t *testing.T) {
@@ -5129,6 +5563,55 @@ func TestAggregateArgumentScalarSubqueryFlattened(t *testing.T) {
 		}
 		require.True(t, foundAgg, sql)
 	}
+}
+
+func TestIssue23154VectorScalarSubqueryFlattenedEverywhere(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	vectorCol := mock.ctxt.tables["nation"].Cols[3]
+	vectorCol.Typ = plan.Type{Id: int32(types.T_array_float64), Width: 1024}
+
+	sql := `SELECT COUNT(*) AS count,
+	               AVG(cosine_similarity(
+	                   n_comment,
+	                   (SELECT n_comment FROM nation WHERE n_name = 'ref'))) AS avg_similarity,
+	               MAX(cosine_similarity(
+	                   n_comment,
+	                   (SELECT n_comment FROM nation WHERE n_name = 'ref'))) AS max_similarity,
+	               MIN(cosine_similarity(
+	                   n_comment,
+	                   (SELECT n_comment FROM nation WHERE n_name = 'ref'))) AS min_similarity
+	          FROM nation
+	         WHERE n_comment IS NOT NULL
+	           AND n_name != 'ref'
+	           AND cosine_similarity(
+	                   n_comment,
+	                   (SELECT n_comment FROM nation WHERE n_name = 'ref')) >= 0.9`
+	logicPlan, err := runOneStmt(mock, t, sql)
+	require.NoError(t, err)
+
+	foundAgg := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG {
+			foundAgg = true
+		}
+		for _, exprs := range [][]*plan.Expr{
+			node.AggList,
+			node.FilterList,
+			node.ProjectList,
+			node.OnList,
+			node.GroupBy,
+		} {
+			for _, expr := range exprs {
+				require.False(t, hasSubquery(expr),
+					"executable plan expression contains Expr_Sub: %s", sql)
+			}
+		}
+		for _, orderBy := range node.OrderBy {
+			require.False(t, hasSubquery(orderBy.Expr),
+				"executable ORDER BY expression contains Expr_Sub: %s", sql)
+		}
+	}
+	require.True(t, foundAgg)
 }
 
 func TestIssue23157VectorScoreScalarSubqueryFlattened(t *testing.T) {

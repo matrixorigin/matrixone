@@ -51,6 +51,30 @@ type lcaProbeLayout struct {
 	enumValues  []string
 }
 
+func (layout lcaProbeLayout) columnNameForTargetIndex(targetIdx int) (string, bool) {
+	for i, candidateIdx := range layout.targetIdxes {
+		if candidateIdx == targetIdx {
+			return layout.attrs[i], true
+		}
+	}
+	return "", false
+}
+
+func (layout lcaProbeLayout) columnNamesForTargetIndexes(targetIdxes []int) ([]string, error) {
+	names := make([]string, len(targetIdxes))
+	for i, targetIdx := range targetIdxes {
+		name, ok := layout.columnNameForTargetIndex(targetIdx)
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"data branch: target column index %d is absent from LCA probe layout",
+				targetIdx,
+			)
+		}
+		names[i] = name
+	}
+	return names, nil
+}
+
 func lcaProbeResultTargetIndexes(
 	layout lcaProbeLayout,
 	targetColumnCount int,
@@ -123,9 +147,26 @@ func lcaProbeColumnLayout(
 				"DATA BRANCH target column %q is unavailable", name,
 			)
 		}
-		var lcaCol *plan2.ColDef
+		var (
+			lcaCol      *plan2.ColDef
+			lcaAttrName string
+		)
 		if targetIdx < len(lcaColNames) && lcaColNames[targetIdx] != "" {
-			lcaCol = dataBranchColumnDefByName(lcaDef, lcaColNames[targetIdx])
+			lcaAttrName = lcaColNames[targetIdx]
+			lcaCol = dataBranchColumnDefByName(lcaDef, lcaAttrName)
+			if lcaCol == nil {
+				// The LCA relation may also be a current endpoint whose visible
+				// name changed after the LCA snapshot. Keep the validated
+				// historical name for time-travel SQL while taking compatible
+				// type metadata from the same stable endpoint identity.
+				lcaCol = dataBranchEndpointColumnDef(lcaDef, targetCol)
+			}
+			if lcaCol == nil {
+				return lcaProbeLayout{}, moerr.NewInternalErrorNoCtxf(
+					"LCA data branch column %q cannot be resolved at the current endpoint",
+					lcaAttrName,
+				)
+			}
 		}
 		if lcaCol == nil {
 			lcaCol = dataBranchColumnDefByLogicalName(lcaDef, targetCol)
@@ -141,6 +182,9 @@ func lcaProbeColumnLayout(
 		if lcaCol == nil {
 			continue
 		}
+		if lcaAttrName == "" {
+			lcaAttrName = lcaCol.Name
+		}
 		derivedCompositePK := isDataBranchDerivedCompositePKColumn(
 			lcaDef, targetDef, lcaCol, targetCol,
 		)
@@ -152,7 +196,7 @@ func lcaProbeColumnLayout(
 				targetCol.Name,
 			)
 		}
-		layout.attrs = append(layout.attrs, lcaCol.Name)
+		layout.attrs = append(layout.attrs, lcaAttrName)
 		layout.types = append(layout.types, types.New(types.T(lcaCol.Typ.Id), lcaCol.Typ.Width, lcaCol.Typ.Scale))
 		layout.targetIdxes = append(layout.targetIdxes, targetIdx)
 		layout.enumValues = append(layout.enumValues, lcaCol.Typ.Enumvalues)
@@ -179,7 +223,6 @@ func handleDelsOnLCA(
 		fullTargetLayout bool
 
 		lcaTblDef    = tblStuff.lcaRel.GetTableDef(ctx)
-		baseTblDef   = tblStuff.baseRel.GetTableDef(ctx)
 		targetTblDef = tblStuff.tarRel.GetTableDef(ctx)
 
 		colTypes           = tblStuff.def.colTypes
@@ -216,14 +259,26 @@ func handleDelsOnLCA(
 		// timestamp may fail with unknown db/table even though the caller already
 		// knows the stable table ID.
 		mots := fmt.Sprintf("{MO_TS=%d} ", snapshot.PhysicalTime)
-		pkNames := lcaTblDef.Pkey.Names
+		var pkNames []string
+		if tblStuff.def.pkKind == fakeKind {
+			// The synthetic hash column is internal and cannot be renamed.
+			pkNames = []string{catalog.FakePrimaryKeyColName}
+		} else {
+			pkNames, err = lcaLayout.columnNamesForTargetIndexes(expandedPKColIdxes)
+			if err != nil {
+				return nil, err
+			}
+		}
 		quotedPKNames := make([]string, len(pkNames))
+		quotedPKValueAliases := make([]string, len(pkNames))
 		for i, name := range pkNames {
 			quotedPKNames[i] = quoteIdentifierForSQL(name)
+			quotedPKValueAliases[i] = quoteIdentifierForSQL(fmt.Sprintf("__mo_data_branch_pk_%d", i))
 		}
+		quotedOrdinalAlias := quoteIdentifierForSQL("__mo_data_branch_ordinal")
 
 		// composite pk
-		if baseTblDef.Pkey.CompPkeyCol != nil {
+		if tblStuff.def.pkKind == compositeKind {
 			var tuple types.Tuple
 			cols, area := vector.MustVarlenaRawData(tBat.Vecs[0])
 			for i := range cols {
@@ -248,7 +303,7 @@ func handleDelsOnLCA(
 					valsBuf.WriteString(", ")
 				}
 			}
-		} else if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		} else if tblStuff.def.pkKind == fakeKind {
 			// fake pk
 			pks := vector.MustFixedColNoTypeCheck[uint64](tBat.Vecs[0])
 			for i := range pks {
@@ -276,9 +331,16 @@ func handleDelsOnLCA(
 		}
 
 		selectCols := make([]string, len(lcaLayout.attrs)+1)
-		selectCols[0] = "pks.__idx_"
+		selectCols[0] = fmt.Sprintf("pks.%s", quotedOrdinalAlias)
 		for i, colName := range lcaLayout.attrs {
-			selectCols[i+1] = fmt.Sprintf("lca.%s", quoteIdentifierForSQL(colName))
+			colExpr := fmt.Sprintf("lca.%s", quoteIdentifierForSQL(colName))
+			if lcaLayout.types[i].Oid == types.T_uint64 && lcaLayout.enumValues[i] != "" {
+				// SET is stored as uint64 but ordinary SQL projection exposes its
+				// display label. Request the physical bitmap explicitly so the
+				// probe remains lossless even when the SET has an empty member.
+				colExpr = fmt.Sprintf("cast(%s as unsigned)", colExpr)
+			}
+			selectCols[i+1] = colExpr
 		}
 
 		sqlBuf.Reset()
@@ -290,22 +352,22 @@ func handleDelsOnLCA(
 			mots),
 		)
 		sqlBuf.WriteString(fmt.Sprintf(
-			"right join (values %s) as pks(__idx_,%s) on ",
-			valsBuf.String(), strings.Join(quotedPKNames, ",")),
+			"right join (values %s) as pks(%s,%s) on ",
+			valsBuf.String(), quotedOrdinalAlias, strings.Join(quotedPKValueAliases, ",")),
 		)
 
 		for i := range quotedPKNames {
 			sqlBuf.WriteString(fmt.Sprintf("lca.%s = ", quotedPKNames[i]))
 			if castType, ok := lcaProbeJoinCastType(colTypes[expandedPKColIdxes[i]]); ok {
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as %s)", quotedPKNames[i], castType))
+				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as %s)", quotedPKValueAliases[i], castType))
 			} else {
-				sqlBuf.WriteString(fmt.Sprintf("pks.%s", quotedPKNames[i]))
+				sqlBuf.WriteString(fmt.Sprintf("pks.%s", quotedPKValueAliases[i]))
 			}
 			if i != len(quotedPKNames)-1 {
 				sqlBuf.WriteString(" AND ")
 			}
 		}
-		sqlBuf.WriteString(" order by pks.__idx_")
+		sqlBuf.WriteString(fmt.Sprintf(" order by pks.%s", quotedOrdinalAlias))
 
 		sqlPreview := sqlBuf.String()
 		if len(sqlPreview) > 512 {
@@ -504,8 +566,10 @@ func handleDelsOnLCA(
 // appendLCAProbeValue appends a column returned by the LCA SQL probe to the
 // corresponding physical table vector. A RIGHT JOIN exposes ENUM columns as
 // VARCHAR labels, so they need to be restored to their physical enum codes
-// before the batch enters the diff pipeline. Other columns must retain their
-// physical type; copying mismatched vector storage would silently corrupt data.
+// before the batch enters the diff pipeline. SET columns are projected as
+// unsigned bitmaps by the SQL probe and therefore arrive with their physical
+// type. Other columns must retain their physical type; copying mismatched vector
+// storage would silently corrupt data.
 func appendLCAProbeValue(
 	dst, src *vector.Vector,
 	row int,
@@ -618,15 +682,14 @@ func runLCAProbeWithReaderFallback(
 	if err != nil {
 		return executor.Result{}, err
 	}
-	lcaPKIdx := slices.IndexFunc(lcaLayout.attrs, func(name string) bool {
-		return strings.EqualFold(name, lcaTblDef.Pkey.PkeyColName)
-	})
-	if lcaPKIdx < 0 {
+	lcaPKName, ok := lcaLayout.columnNameForTargetIndex(tblStuff.def.pkColIdx)
+	if !ok {
 		return executor.Result{}, moerr.NewInternalErrorNoCtxf(
-			"data branch: LCA primary key column %q is absent from probe layout",
-			lcaTblDef.Pkey.PkeyColName,
+			"data branch: target primary key column index %d is absent from LCA probe layout",
+			tblStuff.def.pkColIdx,
 		)
 	}
+	lcaPKIdx := slices.Index(lcaLayout.attrs, lcaPKName)
 	// Build a sorted IN vector for reader-side PK filtering.
 	// The sorted-search path uses binary search over the IN value array and
 	// assumes the array is ordered; an unsorted IN vector can drop valid hits.
@@ -636,7 +699,7 @@ func runLCAProbeWithReaderFallback(
 		return executor.Result{}, err
 	}
 	filterVec.InplaceSort()
-	pkFilterExpr := readutil.ConstructInExpr(ctx, lcaTblDef.Pkey.PkeyColName, filterVec)
+	pkFilterExpr := readutil.ConstructInExpr(ctx, lcaPKName, filterVec)
 	prepareCost = time.Since(start)
 
 	tmp := batch.NewWithSize(len(lcaLayout.attrs))
@@ -2697,7 +2760,13 @@ func dataBranchSourceColToTargetIdx(
 	if sourceDef == nil || targetDef == nil {
 		return nil, moerr.NewInternalErrorNoCtx("missing schema for historical data branch projection")
 	}
-	if err := checkDataBranchPrimaryKeyCompatibility(targetDef, sourceDef); err != nil {
+	if err := checkDataBranchPrimaryKeyCompatibilityWithResolver(
+		targetDef,
+		sourceDef,
+		func(targetCol *plan2.ColDef) *plan2.ColDef {
+			return dataBranchEndpointColumnDef(sourceDef, targetCol)
+		},
+	); err != nil {
 		return nil, moerr.NewNotSupportedNoCtxf(
 			"historical data branch primary key is incompatible with the endpoint schema: %s",
 			err.Error(),
@@ -2738,7 +2807,7 @@ func dataBranchSourceColToTargetIdx(
 		if col.Name == catalog.Row_ID {
 			continue
 		}
-		targetCol := dataBranchColumnDefByLogicalName(targetDef, col)
+		targetCol := dataBranchEndpointColumnDef(targetDef, col)
 		targetIdx := -1
 		if targetCol != nil {
 			targetIdx = dataBranchColumnIndexByName(targetColNames, targetCol.Name)
@@ -2772,8 +2841,8 @@ func dataBranchSourceColToTargetIdx(
 // isDataBranchDerivedCompositePKColumn reports whether the two columns are the
 // hidden serialization of the same logical composite primary key. COPY ALTER
 // rebuilds this derived column and may assign it a new Seqnum even though the
-// component-column identities, which checkDataBranchPrimaryKeyCompatibility
-// has already validated, remain unchanged.
+// component-column identities, which schema reconciliation has already
+// validated, remain unchanged.
 func isDataBranchDerivedCompositePKColumn(
 	sourceDef, targetDef *plan2.TableDef,
 	sourceCol, targetCol *plan2.ColDef,
@@ -2923,14 +2992,22 @@ func dataBranchHistoricalProbeStuff(
 ) tableStuff {
 	probeStuff := tblStuff
 	probeStuff.lcaRel = endpointRel
-	if endpointRel.GetTableID(ctx) == tblStuff.tarRel.GetTableID(ctx) {
+	endpointTableID := endpointRel.GetTableID(ctx)
+	if endpointTableID == tblStuff.tarRel.GetTableID(ctx) {
 		// Target-side hydration restores the current values of columns that
 		// were absent or incompatible in an older physical generation.
 		probeStuff.tarRel = endpointRel
 		probeStuff.def.tarOnlyIdxes = nil
 		probeStuff.def.lcaColNames = nil
-	} else {
+	} else if endpointTableID == tblStuff.baseRel.GetTableID(ctx) {
+		// Base-side hydration emits SQL against the base endpoint, so map the
+		// target batch layout to the base endpoint's visible column names.
 		probeStuff.def.lcaColNames = probeStuff.def.baseColNames
+	} else {
+		// A bounded target-side PICK can hydrate from an older physical target
+		// generation. Its relation definition already carries that generation's
+		// exact names; base endpoint names are neither valid nor needed here.
+		probeStuff.def.lcaColNames = nil
 	}
 	return probeStuff
 }

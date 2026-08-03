@@ -52,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -1007,6 +1008,8 @@ var (
 		icebergsql.TablePublishJobs:     0,
 		icebergsql.TableOrphanFiles:     0,
 		icebergsql.TableMaintenanceJobs: 0,
+		mongodb.TableConnections:        0,
+		mongodb.TableMappings:           0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1065,6 +1068,8 @@ var (
 		icebergsql.PublishJobsDDL,
 		icebergsql.OrphanFilesDDL,
 		icebergsql.MaintenanceJobsDDL,
+		mongodb.ConnectionsDDL,
+		mongodb.MappingsDDL,
 	}
 
 	// drop tables for the tenant
@@ -1095,6 +1100,10 @@ var (
 		`drop table if exists mo_catalog.mo_iceberg_residency_policy;`,
 		`drop table if exists mo_catalog.mo_iceberg_principal_map;`,
 		`drop table if exists mo_catalog.mo_iceberg_catalogs;`,
+	}
+	dropMongoDBSqls = []string{
+		`drop table if exists mo_catalog.mo_mongodb_tables;`,
+		`drop table if exists mo_catalog.mo_mongodb_connections;`,
 	}
 	dropMoMysqlCompatibilityModeSql = `drop table if exists mo_catalog.mo_mysql_compatibility_mode;`
 	dropAutoIcrColSql               = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
@@ -4235,6 +4244,14 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			}
 		}
 
+		for _, sql = range dropMongoDBSqls {
+			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
+			rtnErr = bh.Exec(deleteCtx, sql)
+			if rtnErr != nil {
+				return rtnErr
+			}
+		}
+
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getSubsSql)
 		// alter sub_account field in mo_pubs which contains accountName
 		subInfos, rtnErr := getSubInfosFromSub(deleteCtx, bh, "")
@@ -4386,6 +4403,9 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 
 	if !hasAccount {
 		return err
+	}
+	if !inTxn {
+		retireMongoDBClients(ctx, ses.GetService(), mongodb.ClientRetirement{AccountID: uint32(accountId)})
 	}
 	// if drop the account, add the account to kill queue
 	ses.getRoutineManager().accountRoutine.EnKillQueue(accountId, version)
@@ -6344,7 +6364,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		writeDatabaseAndTableDirectly = true
 		dbName = string(st.Name)
 		writeDatabaseTargets = append(writeDatabaseTargets, string(st.Name))
-	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog:
+	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog,
+		*tree.CreateMongoDBConnection, *tree.AlterMongoDBConnection, *tree.DropMongoDBConnection:
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
@@ -6380,22 +6401,6 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		appendWriteTableNameDatabaseName(st.Name)
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
-		}
-	case *tree.CreateSource:
-		objType = objectTypeDatabase
-		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
-		writeDatabaseAndTableDirectly = true
-		appendWriteTableNameDatabaseName(st.SourceName)
-		if st.SourceName != nil {
-			dbName = string(st.SourceName.SchemaName)
-		}
-	case *tree.CreateConnector:
-		objType = objectTypeDatabase
-		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
-		writeDatabaseAndTableDirectly = true
-		appendWriteTableNameDatabaseName(st.TableName)
-		if st.TableName != nil {
-			dbName = string(st.TableName.SchemaName)
 		}
 	case *tree.CreateSequence:
 		objType = objectTypeDatabase
@@ -6605,7 +6610,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
 		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions, *tree.ShowCcprSubscriptions, *tree.ShowPublicationCoverage,
-		*tree.ShowBackendServers, *tree.ShowStages, *tree.ShowConnectors, *tree.DropConnector,
+		*tree.ShowBackendServers, *tree.ShowStages,
 		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow,
 		*tree.ShowSQLTasks, *tree.ShowSQLTaskRuns,
 		*tree.ShowRules, *tree.CheckTableStmt, *tree.ShowProfileStmt,
@@ -9908,6 +9913,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			*tree.ShowIcebergCatalogs, *tree.ShowIcebergNamespaces, *tree.ShowIcebergTables:
 			yes, err := checkIcebergCatalogPrivilege()
 			return yes, stats, err
+		case *tree.CreateMongoDBConnection, *tree.AlterMongoDBConnection, *tree.DropMongoDBConnection,
+			*tree.ShowMongoDBConnections:
+			return tenant.IsAdminRole(), stats, nil
 		}
 	}
 

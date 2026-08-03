@@ -40,6 +40,10 @@ const (
 	// DefaultGCChannelBufferSize is the default buffer size for GC task channels.
 	// Increased from 1024 to 4096 to reduce request drops in high-load scenarios.
 	DefaultGCChannelBufferSize = 4096
+
+	// backendCreateWorkerCount is a process-wide hard bound on concurrent
+	// factory.Create calls admitted through automatic backend creation.
+	backendCreateWorkerCount = 4
 )
 
 var (
@@ -89,46 +93,67 @@ func getGCChannelBufferSize() int {
 // This should be called before creating any clients if you want to use config values.
 // If not called, environment variables or defaults will be used.
 //
-// Note: This function should be called before any clients are created. If called
-// after the GC manager has started, it will only update the interval (if manager
-// hasn't started yet), but channel buffer size cannot be changed after initialization.
+// Before the first client registers, this replaces the package-prestarted empty
+// manager so both values take effect. With active clients, the idle interval is
+// updated live; channel capacity remains fixed for that manager incarnation.
 //
 // Thread-safety: This function is safe to call concurrently. It uses a separate mutex
 // to protect the global manager initialization to avoid lock issues when replacing
 // the manager instance.
 func InitGlobalGCManager(checkInterval time.Duration, channelBufferSize int) {
-	// Use global mutex to protect manager replacement
 	globalClientGCMu.Lock()
 	defer globalClientGCMu.Unlock()
 
-	// Check if manager has started (need to lock manager's mutex for this check)
-	globalClientGC.mu.RLock()
-	started := globalClientGC.started
-	globalClientGC.mu.RUnlock()
+	manager := globalClientGC
+	manager.mu.RLock()
+	clientCount := len(manager.clients)
+	started := manager.started
+	currentInterval := manager.gcIdleCheckInterval
+	currentCapacity := cap(manager.gcInactiveC)
+	manager.mu.RUnlock()
 
+	// Package initialization pre-starts the manager for leak-test stability.
+	// Before the first client registers, it is safe to replace that empty
+	// incarnation when (and only when) Config requests a different channel
+	// capacity. Avoid churn when repeated clients use the same configuration.
+	if checkInterval > 0 {
+		globalGCIdleCheckInterval = checkInterval
+	}
+	if clientCount == 0 && channelBufferSize > 0 {
+		globalGCChannelBufferSize = channelBufferSize
+	}
+	if clientCount == 0 &&
+		channelBufferSize > 0 &&
+		channelBufferSize != currentCapacity {
+		manager.stop()
+		replacement := newClientGCManager()
+		replacement.mu.Lock()
+		replacement.ensureStartedLocked()
+		replacement.mu.Unlock()
+		globalClientGC = replacement
+		return
+	}
+
+	// Idle-check interval changes are applied live by resetting the loop's
+	// ticker rather than merely mutating a global for future managers.
+	if checkInterval > 0 && checkInterval != currentInterval {
+		manager.updateGCIdleCheckInterval(checkInterval)
+		manager.logger.Info("GC idle check interval updated",
+			zap.Duration("new-interval", checkInterval))
+	}
 	if !started {
-		// Manager not started yet, safe to reconfigure
-		if checkInterval > 0 {
-			globalGCIdleCheckInterval = checkInterval
-		}
-		if channelBufferSize > 0 {
-			globalGCChannelBufferSize = channelBufferSize
-			// Recreate manager with new channel buffer size
-			// Safe because manager is not started (no goroutines running)
-			globalClientGC = newClientGCManager()
-		}
-	} else {
-		// Manager already started, can only update interval (channels already created)
-		if checkInterval > 0 {
-			globalGCIdleCheckInterval = checkInterval
-			globalClientGC.logger.Info("GC idle check interval updated",
-				zap.Duration("new-interval", checkInterval))
-		}
-		if channelBufferSize > 0 {
-			globalClientGC.logger.Warn("InitGlobalGCManager: channel buffer size cannot be changed after GC manager started",
-				zap.Int("requested-size", channelBufferSize),
-				zap.Int("current-size", cap(globalClientGC.gcInactiveC)))
-		}
+		manager.mu.Lock()
+		manager.ensureStartedLocked()
+		manager.mu.Unlock()
+	}
+	// Active clients pin this manager incarnation, so its channels cannot be
+	// resized until the manager becomes empty.
+	if clientCount > 0 &&
+		channelBufferSize > 0 &&
+		channelBufferSize != currentCapacity {
+		manager.logger.Warn("InitGlobalGCManager: channel buffer size cannot be changed while clients are registered",
+			zap.Int("requested-size", channelBufferSize),
+			zap.Int("current-size", currentCapacity))
 	}
 }
 
@@ -143,12 +168,14 @@ func InitGlobalGCManager(checkInterval time.Duration, channelBufferSize int) {
 // unregistration. This works correctly even in single-process multi-service scenarios
 // (e.g., multiple CN/TN/Proxy nodes in integration tests).
 type clientGCManager struct {
-	mu      sync.RWMutex
-	clients map[*client]struct{}
-	started bool
-	stopC   chan struct{}
-	wg      sync.WaitGroup
-	logger  *zap.Logger
+	mu       sync.RWMutex
+	clients  map[*client]struct{}
+	started  bool
+	stopping bool
+	stopC    chan struct{}
+	stopDone chan struct{}
+	wg       sync.WaitGroup
+	logger   *zap.Logger
 
 	// Config values captured at creation time to avoid race conditions
 	gcIdleCheckInterval     time.Duration
@@ -158,6 +185,9 @@ type clientGCManager struct {
 	// Channels for coordinating GC tasks
 	gcInactiveC chan gcInactiveRequest
 	createC     chan createRequest
+	// gcIdleIntervalC carries live ticker resets for an active manager. Capacity
+	// one coalesces rapid config updates to the newest interval.
+	gcIdleIntervalC chan time.Duration
 
 	// Metrics for monitoring channel drops
 	gcInactiveDropCounter prometheus.Counter
@@ -178,9 +208,9 @@ type gcInactiveRequest struct {
 }
 
 type createRequest struct {
-	c          *client
-	backend    string
-	generation *backendGeneration
+	c       *client
+	backend string
+	state   *backendCreateState
 }
 
 func newClientGCManager() *clientGCManager {
@@ -214,11 +244,13 @@ func newClientGCManager() *clientGCManager {
 	return &clientGCManager{
 		clients:                    make(map[*client]struct{}),
 		stopC:                      make(chan struct{}),
+		stopDone:                   make(chan struct{}),
 		gcIdleCheckInterval:        interval,
 		gcInactiveCheckInterval:    DefaultGCInactiveCheckInterval,
 		channelBufferSize:          bufferSize,
 		gcInactiveC:                make(chan gcInactiveRequest, bufferSize),
 		createC:                    make(chan createRequest, bufferSize),
+		gcIdleIntervalC:            make(chan time.Duration, 1),
 		logger:                     logutil.GetPanicLoggerWithLevel(zap.ErrorLevel).Named("morpc-gc"),
 		gcInactiveDropCounter:      gcInactiveDropCounter,
 		createDropCounter:          createDropCounter,
@@ -233,12 +265,19 @@ func newClientGCManager() *clientGCManager {
 
 // register registers a client with the global GC manager and starts the GC loop if needed.
 func (m *clientGCManager) register(c *client) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.clients[c] = struct{}{}
-	m.registeredClientsGauge.Set(float64(len(m.clients)))
-	m.ensureStartedLocked()
+	for {
+		m.mu.Lock()
+		if !m.stopping {
+			m.clients[c] = struct{}{}
+			m.registeredClientsGauge.Set(float64(len(m.clients)))
+			m.ensureStartedLocked()
+			m.mu.Unlock()
+			return
+		}
+		stopDone := m.stopDone
+		m.mu.Unlock()
+		<-stopDone
+	}
 }
 
 // ensureStartedLocked starts the GC goroutines if not already started.
@@ -246,10 +285,32 @@ func (m *clientGCManager) register(c *client) {
 func (m *clientGCManager) ensureStartedLocked() {
 	if !m.started {
 		m.started = true
-		m.wg.Add(3)
-		go m.runGCIdleLoop()
-		go m.runGCInactiveLoop()
-		go m.runCreateLoop()
+		workerCount := 2 + backendCreateWorkerCount
+		m.wg.Add(workerCount)
+		// "started" is also a readiness contract for callers such as package
+		// initialization. Do not return while a newly launched loop is still
+		// only runnable: leak snapshots taken immediately after initialization
+		// could otherwise observe an arbitrary subset of these process-lifetime
+		// goroutines and report the late starters as test leaks.
+		startedC := make(chan struct{}, workerCount)
+		initialIdleInterval := m.gcIdleCheckInterval
+		go func() {
+			startedC <- struct{}{}
+			m.runGCIdleLoop(initialIdleInterval)
+		}()
+		go func() {
+			startedC <- struct{}{}
+			m.runGCInactiveLoop()
+		}()
+		for worker := range backendCreateWorkerCount {
+			go func() {
+				startedC <- struct{}{}
+				m.runCreateLoop(worker == 0)
+			}()
+		}
+		for range workerCount {
+			<-startedC
+		}
 	}
 }
 
@@ -274,20 +335,25 @@ func init() {
 // WARNING: Only use this in tests!
 func ResetGlobalClientGCManagerForTest() {
 	globalClientGCMu.Lock()
-	mgr := globalClientGC
-	globalClientGCMu.Unlock()
-
-	// Stop outside of lock to avoid deadlock
-	mgr.stop()
-
-	globalClientGCMu.Lock()
 	defer globalClientGCMu.Unlock()
-	globalClientGC = newClientGCManager()
+	mgr := globalClientGC
+	mgr.stop()
+	replacement := newClientGCManager()
+	replacement.mu.Lock()
+	replacement.ensureStartedLocked()
+	replacement.mu.Unlock()
+	globalClientGC = replacement
 }
 
 // triggerGCInactive triggers GC inactive task for a specific client and backend.
 // If channel is full, the request is dropped to avoid blocking.
 func (m *clientGCManager) triggerGCInactive(c *client, remote string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.stopping {
+		m.gcInactiveDropCounter.Inc()
+		return
+	}
 	select {
 	case m.gcInactiveC <- gcInactiveRequest{c: c, remote: remote}:
 	default:
@@ -301,8 +367,8 @@ func (m *clientGCManager) triggerGCInactive(c *client, remote string) {
 
 // triggerCreateAtGeneration records demand for a client/backend generation.
 // It returns true when creation is already pending or newly queued. It returns
-// false when admission is invalid or the queue is full; a caller may then retry
-// or use the synchronous fallback.
+// false when admission is invalid or the queue is full. Queue saturation never
+// bypasses the process-wide factory concurrency bound.
 func (m *clientGCManager) triggerCreateAtGeneration(
 	c *client,
 	backend string,
@@ -341,13 +407,23 @@ func (m *clientGCManager) triggerCreateAtGenerationLocked(
 	}
 	pending := newBackendCreateState(generation)
 	c.mu.creating[backend] = pending
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.stopping {
+		c.releaseBackendCreateLocked(backend, pending)
+		return nil, false
+	}
 	select {
-	case m.createC <- createRequest{c: c, backend: backend, generation: generation}:
+	case m.createC <- createRequest{
+		c:       c,
+		backend: backend,
+		state:   pending,
+	}:
 		return pending, true
 	default:
-		c.releaseBackendCreateLocked(backend, generation)
-		// Channel is full, skip to avoid blocking
-		// This is acceptable because create will be retried when needed
+		c.releaseBackendCreateLocked(backend, pending)
+		// Channel is full: release the exact claim so the caller can surface
+		// local backpressure and a later operation can retry admission.
 		m.createDropCounter.Inc()
 		m.logger.Debug("create channel full, skipping",
 			zap.String("backend", backend),
@@ -366,14 +442,14 @@ func (m *clientGCManager) triggerCreateAtGenerationLocked(
 // - Backends are checked more frequently (every 1s by default vs every maxIdleDuration)
 // - But GC decision still respects each client's maxIdleDuration setting
 // - This provides more timely cleanup without changing the GC semantics
-func (m *clientGCManager) runGCIdleLoop() {
+func (m *clientGCManager) runGCIdleLoop(initialInterval time.Duration) {
 	defer m.wg.Done()
 	m.logger.Debug("global GC idle loop started",
-		zap.Duration("idle-check", m.gcIdleCheckInterval),
+		zap.Duration("idle-check", initialInterval),
 		zap.Duration("inactive-check", m.gcInactiveCheckInterval))
 	defer m.logger.Debug("global GC idle loop stopped")
 
-	idleTicker := time.NewTicker(m.gcIdleCheckInterval)
+	idleTicker := time.NewTicker(initialInterval)
 	inactiveTicker := time.NewTicker(m.gcInactiveCheckInterval)
 	defer idleTicker.Stop()
 	defer inactiveTicker.Stop()
@@ -382,6 +458,8 @@ func (m *clientGCManager) runGCIdleLoop() {
 		select {
 		case <-m.stopC:
 			return
+		case interval := <-m.gcIdleIntervalC:
+			idleTicker.Reset(interval)
 		case <-idleTicker.C:
 			m.doGCIdle()
 		case <-inactiveTicker.C:
@@ -444,20 +522,27 @@ func (m *clientGCManager) runGCInactiveLoop() {
 }
 
 // runCreateLoop handles backend creation requests.
-func (m *clientGCManager) runCreateLoop() {
+func (m *clientGCManager) runCreateLoop(updateQueueGauge bool) {
 	defer m.wg.Done()
 	m.logger.Debug("global create loop started")
 	defer m.logger.Debug("global create loop stopped")
 
-	// Update queue length periodically
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	// Only one of the fixed workers periodically samples queue length. Giving
+	// every worker its own ticker would create redundant wakeups and four
+	// concurrent writes to the same Prometheus gauge cache line.
+	var ticker *time.Ticker
+	var tickerC <-chan time.Time
+	if updateQueueGauge {
+		ticker = time.NewTicker(time.Second)
+		tickerC = ticker.C
+		defer ticker.Stop()
+	}
 
 	for {
 		select {
 		case <-m.stopC:
 			return
-		case <-ticker.C:
+		case <-tickerC:
 			// Update queue length gauge
 			m.createQueueLengthGauge.Set(float64(len(m.createC)))
 		case req, ok := <-m.createC:
@@ -465,23 +550,31 @@ func (m *clientGCManager) runCreateLoop() {
 				// Channel closed, exit
 				return
 			}
-			// Update queue length after receiving
-			m.createQueueLengthGauge.Set(float64(len(m.createC)))
-			// Check if client is still registered
+			// stop() publishes stopping before closing stopC. Since a select may
+			// still choose a queued request when stopC is also ready, re-check
+			// that publication after dequeue. No factory I/O may start beyond
+			// this gate.
 			m.mu.RLock()
 			_, registered := m.clients[req.c]
+			stopping := m.stopping
 			m.mu.RUnlock()
+			if stopping {
+				req.c.releaseBackendCreate(req.backend, req.state)
+				return
+			}
 			if registered {
 				// Factory.Create may perform DNS and network I/O. The bookkeeping
 				// path validates the captured generation both before and after that
 				// I/O without holding c.mu, so targeted reset remains responsive.
-				if _, err := req.c.createBackendForClaimedGeneration(
+				if _, err := req.c.createBackendForClaimedState(
 					req.backend,
 					false,
-					req.generation,
+					req.state,
+					true,
 				); err != nil {
 					if !moerr.IsMoErrCode(err, moerr.ErrBackendClosed) &&
-						!moerr.IsMoErrCode(err, moerr.ErrClientClosed) {
+						!moerr.IsMoErrCode(err, moerr.ErrClientClosed) &&
+						!isBackendCreateQueueCongestion(err) {
 						req.c.logger.Error("create backend failed",
 							zap.String("backend", req.backend),
 							zap.Error(err))
@@ -490,7 +583,7 @@ func (m *clientGCManager) runCreateLoop() {
 					m.createProcessedCounter.Inc()
 				}
 			} else {
-				req.c.releaseBackendCreate(req.backend, req.generation)
+				req.c.releaseBackendCreate(req.backend, req.state)
 			}
 		}
 	}
@@ -530,24 +623,89 @@ func (m *clientGCManager) doGCIdle() {
 // stop stops the global GC manager. This is mainly for testing purposes.
 func (m *clientGCManager) stop() {
 	m.mu.Lock()
-	if !m.started {
+	if m.stopping {
+		stopDone := m.stopDone
 		m.mu.Unlock()
+		<-stopDone
 		return
 	}
-	close(m.stopC)
+	m.stopping = true
+	started := m.started
+	if started {
+		close(m.stopC)
+	}
 	m.mu.Unlock()
 
-	m.wg.Wait()
+	if started {
+		m.wg.Wait()
+	}
+
+	// Trigger functions hold m.mu.RLock while sending and observe stopping
+	// before admission. Once stopping is set, no sender can race this drain or
+	// the channel replacement below. Every unprocessed exact state is
+	// terminated so waiters cannot remain blocked on done forever.
+	m.drainGCInactiveQueue()
+	m.drainCreateQueue()
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	close(m.gcInactiveC)
-	close(m.createC)
-
 	m.started = false
 	m.clients = make(map[*client]struct{})
 	m.stopC = make(chan struct{})
 	m.gcInactiveC = make(chan gcInactiveRequest, m.channelBufferSize)
 	m.createC = make(chan createRequest, m.channelBufferSize)
+	m.gcIdleIntervalC = make(chan time.Duration, 1)
+	m.registeredClientsGauge.Set(0)
+	m.gcInactiveQueueLengthGauge.Set(0)
+	m.createQueueLengthGauge.Set(0)
+	stopDone := m.stopDone
+	m.stopDone = make(chan struct{})
+	m.stopping = false
+	close(stopDone)
+	m.mu.Unlock()
+}
+
+func (m *clientGCManager) updateGCIdleCheckInterval(interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stopping {
+		return
+	}
+	m.gcIdleCheckInterval = interval
+	if !m.started {
+		return
+	}
+	select {
+	case m.gcIdleIntervalC <- interval:
+	default:
+		// Preserve only the newest requested interval.
+		select {
+		case <-m.gcIdleIntervalC:
+		default:
+		}
+		m.gcIdleIntervalC <- interval
+	}
+}
+
+func (m *clientGCManager) drainGCInactiveQueue() {
+	for {
+		select {
+		case <-m.gcInactiveC:
+		default:
+			return
+		}
+	}
+}
+
+func (m *clientGCManager) drainCreateQueue() {
+	for {
+		select {
+		case req := <-m.createC:
+			req.c.releaseBackendCreate(req.backend, req.state)
+		default:
+			return
+		}
+	}
 }

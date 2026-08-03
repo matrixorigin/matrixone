@@ -473,6 +473,34 @@ func (s *memTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []task.Daem
 	return n, nil
 }
 
+func (s *memTaskStorage) UpdateDaemonTaskStatus(
+	ctx context.Context,
+	taskID uint64,
+	status task.TaskStatus,
+	updateAt time.Time,
+	endAt time.Time,
+	conds ...Condition,
+) (int, error) {
+	if s.preUpdate != nil {
+		s.preUpdate()
+	}
+
+	c := newConditions(conds...)
+
+	s.Lock()
+	defer s.Unlock()
+
+	t, ok := s.daemonTasks[taskID]
+	if !ok || !s.filterDaemonTask(c, t) {
+		return 0, nil
+	}
+	t.TaskStatus = status
+	t.UpdateAt = updateAt
+	t.EndAt = endAt
+	s.daemonTasks[taskID] = t
+	return 1, nil
+}
+
 func (s *memTaskStorage) DeleteDaemonTask(ctx context.Context, conds ...Condition) (int, error) {
 	c := newConditions(conds...)
 
@@ -527,9 +555,10 @@ func (s *memTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task.D
 
 	n := 0
 	for _, t := range tasks {
-		if _, ok := s.daemonTasks[t.ID]; ok {
+		if current, ok := s.daemonTasks[t.ID]; ok {
 			n++
-			s.daemonTasks[t.ID] = t
+			current.LastHeartbeat = t.LastHeartbeat
+			s.daemonTasks[t.ID] = current
 		}
 	}
 	return n, nil
@@ -605,6 +634,13 @@ func (s *memTaskStorage) filterDaemonTask(c *conditions, task task.DaemonTask) b
 
 	if cond, e := (*c)[CondTaskStatus]; e {
 		ok = cond.eval(task.TaskStatus)
+	}
+	if !ok {
+		return false
+	}
+
+	if cond, e := (*c)[CondTaskExecutor]; e {
+		ok = cond.eval(task.Metadata.Executor)
 	}
 	if !ok {
 		return false

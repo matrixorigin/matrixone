@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -112,6 +113,10 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindRangeCond(exprImpl, depth, isRoot)
 
 	case *tree.UnresolvedName:
+		if udfArg, ok := b.bindSQLUdfArgument(exprImpl); ok {
+			expr = udfArg
+			break
+		}
 		// check existence
 		if b.GetContext() != nil && b.GetContext().Value(defines.InSp{}) != nil && b.GetContext().Value(defines.InSp{}).(bool) {
 			tmpScope := b.GetContext().Value(defines.VarScopeKey{}).(*[]map[string]interface{})
@@ -159,7 +164,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		}
 		if b.builder != nil {
 			var rewritten bool
-			expr, rewritten, err = b.builder.rewriteProjectedEnumOrSetDisplayValueToJSONCast(expr, expr, typ)
+			expr, rewritten, err = b.builder.rewriteProjectedMySQLSpecialTypeDisplayCast(expr, expr, typ)
 			if err != nil {
 				return
 			}
@@ -271,7 +276,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.baseBindVar(exprImpl, depth, isRoot)
 
 	case *tree.ParamExpr:
-		if !b.builder.isPrepareStatement {
+		if b.builder == nil || !b.builder.isPrepareStatement {
 			err = moerr.NewInvalidInput(b.GetContext(), "only prepare statement can use ? expr")
 		} else {
 			expr, err = b.baseBindParam(exprImpl, depth, isRoot)
@@ -2307,6 +2312,34 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 }
 
+func isPreparedNumericAggregate(name string, argCount int) bool {
+	return argCount == 1 && (strings.EqualFold(name, "sum") || strings.EqualFold(name, "avg"))
+}
+
+// bindPreparedNumericAggregateFuncExpr gives prepared SUM/AVG arguments the
+// same static numeric context as prepared arithmetic. ParamRef remains TEXT for
+// transport and an explicit cast materializes the inferred computation type.
+// Non-parameter expressions stay on their original binding path, so ordinary
+// SUM/AVG over string columns continues to be rejected by aggregate overload
+// resolution.
+func (b *baseBinder) bindPreparedNumericAggregateFuncExpr(
+	name string,
+	astArgs []tree.Expr,
+	depth int32,
+) (*plan.Expr, error) {
+	if b.builder == nil || !b.builder.isPrepareStatement || !isPreparedNumericAggregate(name, len(astArgs)) {
+		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
+	}
+
+	arg, err := b.bindNumericExprWithContext(astArgs[0], depth, nil)
+	if err != nil {
+		return nil, err
+	}
+	return bindFuncExprAndConstFold(
+		b.GetContext(), b.builder.compCtx.GetProcess(), name, []*plan.Expr{arg},
+	)
+}
+
 func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, depth int32, isRoot bool) (*Expr, error) {
 
 	args := make([]*Expr, 2+len(astExpr.KeyParts))
@@ -2527,10 +2560,15 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 	if name == "name_const" {
-		if !validNameConstNameAst(astArgs) || !validNameConstValueAst(astArgs) {
+		if !validNameConstNameAst(astArgs) ||
+			!validNameConstValueAst(astArgs, b.allowCanonicalNameConstValueCast) {
 			return nil, moerr.NewInvalidArg(b.GetContext(), "NAME_CONST", "")
 		}
-		if err := validateNameConstArgs(b.GetContext(), args); err != nil {
+		if err := validateNameConstArgs(
+			b.GetContext(),
+			args,
+			b.allowCanonicalNameConstValueCast,
+		); err != nil {
 			return nil, err
 		}
 	}
@@ -2562,13 +2600,20 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	// not a builtin func, look to resolve udf
+	if b.builder == nil {
+		return nil, moerr.NewInvalidInputf(
+			b.GetContext(),
+			"function '%s' is not allowed in this expression",
+			name,
+		)
+	}
 	cmpCtx := b.builder.compCtx
 	udf, err := cmpCtx.ResolveUdf(name, args)
 	if err != nil {
 		return nil, err
 	}
 
-	return bindFuncExprImplUdf(b, name, udf, astArgs, depth)
+	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
 }
 
 func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*Expr, error) {
@@ -2600,26 +2645,27 @@ func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*E
 	return args, nil
 }
 
-func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []tree.Expr, depth int32) (*plan.Expr, error) {
+func bindFuncExprImplUdf(
+	b *baseBinder,
+	name string,
+	udf *function.Udf,
+	astArgs []tree.Expr,
+	boundArgs []*plan.Expr,
+	depth int32,
+) (*plan.Expr, error) {
 	if udf == nil {
 		return nil, moerr.NewNotSupportedf(b.GetContext(), "function '%s'", name)
 	}
 
 	switch udf.Language {
 	case string(tree.SQL):
-		sql := udf.Body
 		parserSQLMode := "PIPES_AS_CONCAT"
 		if udf.SQLMode != nil {
 			parserSQLMode = *udf.SQLMode
 		}
-		// replace sql with actual arg value
-		fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-		for i := 0; i < len(args); i++ {
-			args[i].Format(fmtctx)
-			sql = strings.Replace(sql, "$"+strconv.Itoa(i+1), fmtctx.String(), 1)
-			fmtctx.Reset()
-		}
-
+		sql, udfArgs := b.expandSQLUdfArguments(udf.Body, boundArgs, parserSQLMode)
+		restoreUdfArgs := b.pushSQLUdfArguments(udfArgs)
+		defer restoreUdfArgs()
 		// if does not contain SELECT, an expression. In order to pass the parser,
 		// make it start with a 'SELECT'.
 
@@ -2658,7 +2704,7 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 		}
 		return expr, nil
 	case string(tree.PYTHON):
-		expr, err := b.bindPythonUdf(udf, args, depth)
+		expr, err := b.bindPythonUdf(udf, astArgs, depth)
 		if err != nil {
 			return nil, err
 		}
@@ -2666,6 +2712,176 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 	default:
 		return nil, moerr.NewInvalidArg(b.GetContext(), "function language", udf.Language)
 	}
+}
+
+// expandSQLUdfArguments replaces each $n parameter with an identifier that is
+// provably absent from the original UDF body. The identifier is resolved from
+// sqlUdfArgs while the parsed body is bound, so a column argument keeps its
+// outer-query identity even when an inner table exposes a column with the same
+// name. Checking the entire body (including quotes and comments) is deliberately
+// conservative: absence from the raw text guarantees that no user-authored
+// identifier in the parsed tree can be captured by the marker.
+func (b *baseBinder) expandSQLUdfArguments(sql string, args []*plan.Expr, sqlMode string) (string, map[string]*plan.Expr) {
+	if len(args) == 0 {
+		return sql, nil
+	}
+
+	var callID uint64
+	if b.builder != nil {
+		b.builder.nextSQLUdfCallID++
+		callID = b.builder.nextSQLUdfCallID
+	}
+
+	markers := make(map[string]*plan.Expr, len(args))
+	markerByOrdinal := make(map[int]string, len(args))
+	foldedBody := strings.ToLower(sql)
+	markerForOrdinal := func(ordinal int) string {
+		if name, ok := markerByOrdinal[ordinal]; ok {
+			return "`" + name + "`"
+		}
+
+		baseName := fmt.Sprintf("__mo_sql_udf_%d_arg_%d", callID, ordinal)
+		name := baseName
+		for collisionID := uint64(1); strings.Contains(foldedBody, name); collisionID++ {
+			name = fmt.Sprintf("%s_%d", baseName, collisionID)
+		}
+		markerByOrdinal[ordinal] = name
+		markers[name] = args[ordinal-1]
+		return "`" + name + "`"
+	}
+	rewritten := replaceSQLUdfArgMarkers(sql, len(args), sqlMode, markerForOrdinal)
+	return rewritten, markers
+}
+
+func replaceSQLUdfArgMarkers(sql string, argCount int, sqlMode string, markerForOrdinal func(int) string) string {
+	scanner := mysqlparser.NewScannerWithSQLMode(
+		dialect.MYSQL,
+		sql,
+		mysqlparser.ParseSQLModeFlags(sqlMode),
+	)
+	defer mysqlparser.PutScanner(scanner)
+
+	var result strings.Builder
+	result.Grow(len(sql))
+	written := 0
+	for {
+		token, value := scanner.Scan()
+		if token == 0 || token == mysqlparser.LEX_ERROR {
+			break
+		}
+		if token != mysqlparser.ID || len(value) < 2 || value[0] != '$' {
+			continue
+		}
+
+		ordinal, err := strconv.Atoi(value[1:])
+		if err != nil || ordinal < 1 || ordinal > argCount {
+			continue
+		}
+
+		// ID tokens are returned byte-for-byte from the source, so their start is
+		// the scanner's current byte offset minus the token length.
+		start := scanner.Pos - len(value)
+		result.WriteString(sql[written:start])
+		result.WriteString(markerForOrdinal(ordinal))
+		written = scanner.Pos
+	}
+
+	result.WriteString(sql[written:])
+	return result.String()
+}
+
+func (b *baseBinder) pushSQLUdfArguments(args map[string]*plan.Expr) func() {
+	if b.ctx == nil || len(args) == 0 {
+		return func() {}
+	}
+
+	previous := b.ctx.sqlUdfArgs
+	b.ctx.sqlUdfArgs = args
+	return func() {
+		b.ctx.sqlUdfArgs = previous
+	}
+}
+
+func (b *baseBinder) bindSQLUdfArgument(name *tree.UnresolvedName) (*plan.Expr, bool) {
+	if b.ctx == nil || name.NumParts != 1 {
+		return nil, false
+	}
+
+	argName := name.ColName()
+	depth := int32(0)
+	for ctx := b.ctx; ctx != nil; ctx = ctx.parent {
+		if arg, ok := ctx.sqlUdfArgs[argName]; ok {
+			expr, correlated := correlateSQLUdfArgument(arg, depth)
+			if correlated {
+				for inner := b.ctx; inner != nil && inner != ctx; inner = inner.parent {
+					inner.isCorrelated = true
+				}
+			}
+			return expr, true
+		}
+		depth++
+	}
+	return nil, false
+}
+
+func correlateSQLUdfArgument(arg *plan.Expr, depth int32) (*plan.Expr, bool) {
+	expr := DeepCopyExpr(arg)
+	correlated := false
+
+	var rewrite func(*plan.Expr)
+	rewrite = func(current *plan.Expr) {
+		if current == nil {
+			return
+		}
+
+		switch item := current.Expr.(type) {
+		case *plan.Expr_Col:
+			if depth > 0 {
+				current.Expr = &plan.Expr_Corr{Corr: &plan.CorrColRef{
+					RelPos: item.Col.RelPos,
+					ColPos: item.Col.ColPos,
+					Depth:  depth,
+				}}
+				correlated = true
+			}
+		case *plan.Expr_Corr:
+			item.Corr.Depth += depth
+			correlated = true
+		case *plan.Expr_Lit:
+			rewrite(item.Lit.Src)
+		case *plan.Expr_F:
+			for _, child := range item.F.Args {
+				rewrite(child)
+			}
+		case *plan.Expr_W:
+			rewrite(item.W.WindowFunc)
+			for _, child := range item.W.PartitionBy {
+				rewrite(child)
+			}
+			for _, orderBy := range item.W.OrderBy {
+				if orderBy != nil {
+					rewrite(orderBy.Expr)
+				}
+			}
+			if item.W.Frame != nil {
+				if item.W.Frame.Start != nil {
+					rewrite(item.W.Frame.Start.Val)
+				}
+				if item.W.Frame.End != nil {
+					rewrite(item.W.Frame.End.Val)
+				}
+			}
+		case *plan.Expr_Sub:
+			rewrite(item.Sub.Child)
+		case *plan.Expr_List:
+			for _, child := range item.List.List {
+				rewrite(child)
+			}
+		}
+	}
+
+	rewrite(expr)
+	return expr, correlated
 }
 
 func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
@@ -4238,7 +4454,7 @@ func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) 
 func appendCastBeforeExprWithOverload(
 	ctx context.Context, expr *Expr, toType Type, overloadID int32, isBin ...bool,
 ) (*Expr, error) {
-	expr, rewritten, err := rewriteEnumDisplayValueToJSONCast(ctx, expr, toType)
+	expr, rewritten, err := rewriteMySQLSpecialTypeDisplayCast(ctx, expr, toType)
 	if err != nil {
 		return nil, err
 	}
@@ -4278,7 +4494,16 @@ func appendCastBeforeExprWithOverload(
 	}, nil
 }
 
-func rewriteEnumDisplayValueToJSONCast(ctx context.Context, expr *Expr, toType Type) (*Expr, bool, error) {
+func rewriteMySQLSpecialTypeDisplayCast(ctx context.Context, expr *Expr, toType Type) (*Expr, bool, error) {
+	if isSetDisplayValueExpr(expr) && types.T(toType.Id).IsInteger() && !isSetPlanType(&toType) {
+		// SET columns are wrapped with cast_set_index_to_value during column
+		// binding so ordinary projections expose their labels. Integer casts
+		// require the stored bitmap instead; casting the label is both incorrect
+		// and lossy for SET definitions that contain an empty member.
+		if bitmap, ok := storedSetBitmapExpr(expr); ok {
+			return bitmap, false, nil
+		}
+	}
 	if toType.Id != int32(types.T_json) {
 		return expr, false, nil
 	}
@@ -4292,13 +4517,39 @@ func rewriteEnumDisplayValueToJSONCast(ctx context.Context, expr *Expr, toType T
 	return expr, false, nil
 }
 
-func isEnumOrSetDisplayValueExpr(expr *Expr) bool {
+func storedSetBitmapExpr(expr *Expr) (*Expr, bool) {
+	if !isSetDisplayValueExpr(expr) {
+		return expr, false
+	}
+	fn := expr.GetF()
+	if len(fn.Args) != 2 || fn.Args[1] == nil {
+		return expr, false
+	}
+	bitmap := DeepCopyExpr(fn.Args[1])
+	// The hidden projection is the physical uint64 representation, not a SQL
+	// SET value. Clear the member metadata so downstream assignment treats it
+	// as an ordinary bitmap and does not convert it back through SET semantics.
+	bitmap.Typ.Enumvalues = ""
+	return bitmap, true
+}
+
+func isSetDisplayValueExpr(expr *Expr) bool {
 	if expr == nil {
 		return false
 	}
 	fn := expr.GetF()
-	return fn != nil && fn.Func != nil &&
-		(fn.Func.ObjName == moEnumCastIndexToValueFun || fn.Func.ObjName == moSetCastIndexToValueFun)
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == moSetCastIndexToValueFun
+}
+
+func isEnumOrSetDisplayValueExpr(expr *Expr) bool {
+	if isSetDisplayValueExpr(expr) {
+		return true
+	}
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == moEnumCastIndexToValueFun
 }
 
 func quoteEnumOrSetDisplayValueAsJSON(ctx context.Context, expr *Expr) (*Expr, error) {
@@ -4699,7 +4950,7 @@ func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, r
 }
 
 func foldNameConstArgs(ctx context.Context, proc *process.Process, args []*plan.Expr) error {
-	if err := validateNameConstArgs(ctx, args); err != nil {
+	if err := validateNameConstArgs(ctx, args, false); err != nil {
 		return err
 	}
 
@@ -4715,19 +4966,24 @@ func foldNameConstArgs(ctx context.Context, proc *process.Process, args []*plan.
 	return nil
 }
 
-func validateNameConstArgs(ctx context.Context, args []*plan.Expr) error {
+func validateNameConstArgs(
+	ctx context.Context,
+	args []*plan.Expr,
+	allowCanonicalStringCast bool,
+) error {
 	if len(args) != 2 {
 		return moerr.NewInvalidArg(ctx, "NAME_CONST", len(args))
 	}
 
 	nameLit := args[0].GetLit()
-	if nameLit == nil || nameLit.Isnull || !validNameConstValueExpr(args[1]) {
+	if nameLit == nil || nameLit.Isnull ||
+		!validNameConstValueExpr(args[1], allowCanonicalStringCast) {
 		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
 	}
 	return nil
 }
 
-func validNameConstValueExpr(arg *plan.Expr) bool {
+func validNameConstValueExpr(arg *plan.Expr, allowCanonicalStringCast bool) bool {
 	if arg == nil {
 		return false
 	}
@@ -4735,6 +4991,9 @@ func validNameConstValueExpr(arg *plan.Expr) bool {
 		return true
 	}
 	if isDecimalLiteralCast(arg) {
+		return true
+	}
+	if allowCanonicalStringCast && isCanonicalStringLiteralCast(arg) {
 		return true
 	}
 	fn := arg.GetF()
@@ -4752,22 +5011,26 @@ func validNameConstNameAst(args []tree.Expr) bool {
 		return false
 	}
 	name := stripNameConstParens(args[0])
-	nameLit, ok := name.(*tree.NumVal)
-	return ok && validNameConstNameLiteral(nameLit)
+	if nameLit, ok := name.(*tree.NumVal); ok {
+		return validNameConstNameLiteral(nameLit)
+	}
+	return false
 }
 
-func validNameConstValueAst(args []tree.Expr) bool {
+func validNameConstValueAst(args []tree.Expr, allowCanonicalStringCast bool) bool {
 	if len(args) != 2 {
 		return false
 	}
-	return validNameConstLiteralValueAst(args[1])
+	return validNameConstLiteralValueAst(args[1], allowCanonicalStringCast)
 }
 
-func validNameConstLiteralValueAst(expr tree.Expr) bool {
+func validNameConstLiteralValueAst(expr tree.Expr, allowCanonicalStringCast bool) bool {
 	expr = stripNameConstParens(expr)
 	switch value := expr.(type) {
 	case *tree.NumVal:
 		return true
+	case *tree.CastExpr:
+		return allowCanonicalStringCast && isCanonicalStringLiteralCastAst(value)
 	case *tree.UnaryExpr:
 		if value.Op != tree.UNARY_PLUS && value.Op != tree.UNARY_MINUS {
 			return false
@@ -4777,6 +5040,32 @@ func validNameConstLiteralValueAst(expr tree.Expr) bool {
 	default:
 		return false
 	}
+}
+
+func isCanonicalStringLiteralCastAst(expr tree.Expr) bool {
+	castExpr, ok := stripNameConstParens(expr).(*tree.CastExpr)
+	if !ok {
+		return false
+	}
+	lit, ok := stripNameConstParens(castExpr.Expr).(*tree.NumVal)
+	if !ok || lit.ValType != tree.P_hexnum {
+		return false
+	}
+	target, ok := castExpr.Type.(*tree.T)
+	return ok && target.InternalType.Family == tree.StringFamily
+}
+
+func isCanonicalStringLiteralCast(expr *plan.Expr) bool {
+	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		return false
+	}
+	return fn.Args[0].GetLit() != nil &&
+		fn.Args[0].GetLit().IsBin &&
+		types.T(expr.Typ.Id) == types.T_varchar
 }
 
 func stripNameConstParens(expr tree.Expr) tree.Expr {

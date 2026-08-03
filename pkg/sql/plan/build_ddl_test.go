@@ -28,8 +28,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -71,6 +74,149 @@ func TestBuildDropTemporaryTableIfExistsDoesNotTargetPermanentTable(t *testing.T
 func (c *rootSQLCompilerContext) GetRootSql() string {
 	c.calls++
 	return c.rootSQL
+}
+
+func TestBuildCreateTableCheckConstraints(t *testing.T) {
+	build := func(sql string, prepare bool) (*plan.TableDef, error) {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		p, err := BuildPlan(NewMockCompilerContext(false), stmt, prepare)
+		if err != nil {
+			return nil, err
+		}
+		return p.GetDdl().GetCreateTable().GetTableDef(), nil
+	}
+
+	t.Run("table check binds after all columns", func(t *testing.T) {
+		tableDef, err := build("create table t(a int, check (b > a), b int)", false)
+		require.NoError(t, err)
+		require.Len(t, tableDef.Checks, 1)
+		require.Equal(t, "__mo_chk_1", tableDef.Checks[0].Name)
+		require.Equal(t, int32(types.T_bool), tableDef.Checks[0].Check.Typ.Id)
+	})
+
+	t.Run("table check preserves explicit name", func(t *testing.T) {
+		tableDef, err := build(
+			"create table t(a int, constraint positive_a check (a > 0))",
+			false,
+		)
+		require.NoError(t, err)
+		require.Len(t, tableDef.Checks, 1)
+		require.Equal(t, "positive_a", tableDef.Checks[0].Name)
+	})
+
+	t.Run("column check only references its column", func(t *testing.T) {
+		_, err := build("create table t(a int, b int check (a > b))", false)
+		require.ErrorContains(t, err, "column check constraint cannot refer to column")
+	})
+
+	t.Run("ctas explicit column preserves column check", func(t *testing.T) {
+		tableDef, err := build(
+			"create table t(a int constraint positive_a check (a > 0)) as select 1 as a",
+			false,
+		)
+		require.NoError(t, err)
+		require.Len(t, tableDef.Checks, 1)
+		require.Equal(t, "positive_a", tableDef.Checks[0].Name)
+		require.Equal(t, "`a` > 0", tableDef.Checks[0].OriginSql)
+	})
+
+	t.Run("check origin sql uses replay-safe string quoting", func(t *testing.T) {
+		tableDef, err := build(
+			"create table t(s varchar(10) check (s = 'ok'))",
+			false,
+		)
+		require.NoError(t, err)
+		require.Len(t, tableDef.Checks, 1)
+		require.Equal(t, "`s` = 'ok'", tableDef.Checks[0].OriginSql)
+	})
+
+	t.Run("name const cast name remains invalid", func(t *testing.T) {
+		_, err := build(
+			"create table t(a int, "+
+				"check (name_const(cast(0x61 as varchar), 1) = 1))",
+			false,
+		)
+		require.ErrorContains(t, err, "invalid argument NAME_CONST")
+	})
+
+	t.Run("non boolean root is converted", func(t *testing.T) {
+		tableDef, err := build("create table t(a int, check (a))", false)
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_bool), tableDef.Checks[0].Check.Typ.Id)
+		require.Equal(t, "cast", tableDef.Checks[0].Check.GetF().GetFunc().GetObjName())
+	})
+
+	t.Run("auto increment references are rejected", func(t *testing.T) {
+		_, err := build("create table t(a int auto_increment primary key, check (a > 0))", false)
+		require.ErrorContains(t, err, "cannot refer to auto-increment column")
+	})
+
+	t.Run("session dependent functions are rejected", func(t *testing.T) {
+		_, err := build("create table t(a int, check (current_user_id() = a))", false)
+		require.ErrorContains(t, err, "session-dependent function")
+	})
+
+	t.Run("not enforced is explicit and unsupported", func(t *testing.T) {
+		_, err := build("create table t(a int check (a > 0) not enforced)", false)
+		require.ErrorContains(t, err, "NOT ENFORCED CHECK constraints")
+	})
+
+	t.Run("external table column check is unsupported", func(t *testing.T) {
+		_, err := build(
+			"create external table t(a int check (a > 0)) "+
+				"infile{'filepath'='/tmp/t.csv'}",
+			false,
+		)
+		require.ErrorContains(t, err, "CHECK constraints on external tables")
+	})
+
+	t.Run("external table table check is unsupported", func(t *testing.T) {
+		_, err := build(
+			"create external table t(a int, check (a > 0)) "+
+				"infile{'filepath'='/tmp/t.csv'}",
+			false,
+		)
+		require.ErrorContains(t, err, "CHECK constraints on external tables")
+	})
+
+	t.Run("invalid function and marker do not panic", func(t *testing.T) {
+		require.NotPanics(t, func() {
+			_, err := build("create table t(a int, check (no_such_func(a) > 0))", false)
+			require.Error(t, err)
+		})
+		require.NotPanics(t, func() {
+			_, err := build("create table t(a int, check (? > 0))", true)
+			require.Error(t, err)
+		})
+	})
+
+	t.Run("mixed version cluster rejects check ddl", func(t *testing.T) {
+		ctx := NewMockCompilerContext(false)
+		proc := ctx.GetProcess()
+		rt := moruntime.ServiceRuntime(proc.GetService())
+		old, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion6)
+		defer func() {
+			if ok {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+			} else {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+
+		stmt, err := parsers.ParseOne(
+			t.Context(),
+			dialect.MYSQL,
+			"create table t(a int, check (a > 0))",
+			1,
+		)
+		require.NoError(t, err)
+		defer stmt.Free()
+		_, err = BuildPlan(ctx, stmt, false)
+		require.ErrorContains(t, err, "protocol version 7")
+	})
 }
 
 func tableDefCreateSQL(tableDef *plan.TableDef) string {
@@ -779,6 +925,100 @@ func TestBuildCreateIndexOnExternalTableError(t *testing.T) {
 	}
 }
 
+func TestBuildAlterTableRejectsMongoDBExternalTable(t *testing.T) {
+	mock := NewEmptyMockOptimizer()
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.objects["mongo_ext"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "mongo_ext"}
+	ctx.tables["mongo_ext"] = &plan.TableDef{
+		Name:      "mongo_ext",
+		TableType: catalog.SystemExternalRel,
+		Cols: []*plan.ColDef{
+			{Name: "device_id", Typ: plan.Type{Id: int32(types.T_varchar), Width: 64}},
+			{Name: "measurement", Typ: plan.Type{Id: int32(types.T_float64)}},
+		},
+		Createsql: sqlmongodb.BuildCreateSQLEnvelope(sqlmongodb.TableMapping{
+			Connection: "source", Database: "telemetry", Collection: "samples",
+			SchemaMode: sqlmongodb.SchemaExplicit, Conversion: sqlmongodb.ConversionStrict,
+			MaxParallelism: 1,
+			Columns: []sqlmongodb.ColumnMapping{
+				{Name: "device_id", Path: "metadata.device_id", TypeID: int32(types.T_varchar), Width: 64},
+				{Name: "measurement", Path: "reading.measurement", TypeID: int32(types.T_float64)},
+			},
+		}),
+	}
+
+	for _, sql := range []string{
+		"ALTER TABLE mongo_ext RENAME COLUMN device_id TO device_key",
+		"ALTER TABLE mongo_ext MODIFY COLUMN measurement DECIMAL(18, 6)",
+		"ALTER TABLE mongo_ext ADD COLUMN site_id VARCHAR(32)",
+		"ALTER TABLE mongo_ext DROP COLUMN measurement",
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.ErrorContains(t, err, "ALTER TABLE on a MongoDB external table", sql)
+	}
+}
+
+func TestBuildMongoDBExternalTableRejectsCheckConstraints(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
+	}))
+
+	for _, sql := range []string{
+		`CREATE EXTERNAL TABLE tpch.mongo_check (
+			v BIGINT CHECK (v > 0)
+		) ENGINE=MONGODB WITH (
+			"connection"='source', "database"='telemetry', "collection"='samples'
+		)`,
+		`CREATE EXTERNAL TABLE tpch.mongo_check (
+			v BIGINT,
+			CHECK (v > 0)
+		) ENGINE=MONGODB WITH (
+			"connection"='source', "database"='telemetry', "collection"='samples'
+		)`,
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.ErrorContains(t, err, "CHECK constraints on external tables", sql)
+	}
+}
+
+func TestBuildMongoDBExternalTablePreservesNotNullMapping(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
+	}))
+
+	logicPlan, err := runOneStmt(mock, t, `
+		CREATE EXTERNAL TABLE tpch.mongo_not_null (
+			v BIGINT NOT NULL MONGODB_PATH 'payload.value' MONGODB_CONVERT 'try_null'
+		) ENGINE=MONGODB WITH (
+			"connection"='source', "database"='telemetry', "collection"='samples'
+		)`)
+	require.NoError(t, err)
+	tableDef := logicPlan.GetDdl().GetCreateTable().GetTableDef()
+	require.NotEmpty(t, tableDef.Cols)
+	require.Equal(t, "v", tableDef.Cols[0].Name)
+	require.False(t, tableDef.Cols[0].Default.NullAbility)
+
+	var createSQL string
+	for _, def := range tableDef.Defs {
+		for _, property := range def.GetProperties().GetProperties() {
+			if property.Key == catalog.SystemRelAttr_CreateSQL {
+				createSQL = property.Value
+			}
+		}
+	}
+	require.NotEmpty(t, createSQL)
+	envelope, found, err := sqlmongodb.ParseCreateSQLEnvelope(t.Context(), createSQL)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, envelope.Columns, 1)
+	require.True(t, envelope.Columns[0].NotNullable)
+	require.True(t, sqlmongodb.ColumnsToPlan(envelope.Columns)[0].MoType.NotNullable)
+}
+
 func TestBuildCreateExternalTableInlineIndexError(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{
@@ -1214,8 +1454,6 @@ func Test_buildTableDefs(t *testing.T) {
 		ClusterByOption:    nil,
 		Param:              nil,
 		AsSource:           &tree.Select{Select: &tree.SelectClause{From: &tree.From{}}},
-		IsDynamicTable:     false,
-		DTOptions:          nil,
 		IsAsSelect:         true,
 		IsAsLike:           false,
 		LikeTableName:      tree.TableName{},

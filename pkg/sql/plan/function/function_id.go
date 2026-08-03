@@ -797,10 +797,16 @@ const (
 	// onnx_run: evaluate an ONNX model. Renumbered as main merges claim ids
 	// (549->554->556); referenced by name only, so renumbering is safe.
 	ONNX_RUN = 556
+	// Internal CHECK constraint assertion. This is protocol-gated because older
+	// CNs do not have this function ID.
+	CHECK_CONSTRAINT_ASSERT = 561
+
+	MAX_BY          = 559
+	MAX_BY_NON_NULL = 560
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 559
+	FUNCTION_END_NUMBER = 562
 )
 
 // functionIdRegister is what function we have registered already.
@@ -899,6 +905,8 @@ var functionIdRegister = map[string]int32{
 	"median":                       MEDIAN,
 	"approx_percentile":            APPROX_PERCENTILE,
 	"mo_is_legacy_temporary_table": MO_IS_LEGACY_TEMPORARY_TABLE,
+	"max_by":                       MAX_BY,
+	"max_by_non_null":              MAX_BY_NON_NULL,
 	// count window
 	"rank":         RANK,
 	"row_number":   ROW_NUMBER,
@@ -982,6 +990,7 @@ var functionIdRegister = map[string]int32{
 	"is_ipv4_mapped":                 IS_IPV4_MAPPED,
 	"asin":                           ASIN,
 	"assert":                         ASSERT,
+	"_check_constraint_assert":       CHECK_CONSTRAINT_ASSERT,
 	"bit_length":                     BIT_LENGTH,
 	"date":                           DATE,
 	"time":                           TIME,
@@ -1007,6 +1016,7 @@ var functionIdRegister = map[string]int32{
 	"octet_length":                   LENGTH,
 	"lengthutf8":                     LENGTH_UTF8,
 	"char_length":                    LENGTH_UTF8,
+	"character_length":               LENGTH_UTF8,
 	"ln":                             LN,
 	"log":                            LOG,
 	"log2":                           LOG2,

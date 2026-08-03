@@ -400,6 +400,9 @@ message SchemaExtra {
     uint64 auto_incr_offset = 16;
     // Advances only when AUTO_INCREMENT allocation is reset.
     uint32 auto_incr_epoch = 17;
+    // CHECK metadata uses this length-delimited protobuf field so older CNs
+    // safely skip it instead of misreading the legacy constraint byte stream.
+    repeated plan.CheckDef checks = 18;
 }
 
 // Int64Map mainly used in unit test
