@@ -4382,16 +4382,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		}
 	}
 
-	selectLockMode := lockpb.LockMode_Exclusive
-	if stmt.SelectLockInfo != nil {
-		switch stmt.SelectLockInfo.LockType {
-		case tree.SelectLockForUpdate:
-			builder.isForUpdate = true
-		case tree.SelectLockForShare:
-			builder.isForUpdate = true
-			selectLockMode = lockpb.LockMode_Shared
-		}
-	}
+	effectiveSelectLockInfo := stmt.SelectLockInfo
 
 	// strip parentheses
 	// ((select a from t1)) order by b  [ is equal ] select a from t1 order by b
@@ -4420,6 +4411,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				astRankOption = selectClause.Select.RankOption
 			}
 			stmt = selectClause.Select
+			if stmt.SelectLockInfo != nil {
+				effectiveSelectLockInfo = stmt.SelectLockInfo
+			}
 
 			//stmt may be replaced above.
 			//do preprocess CTEs again
@@ -4429,6 +4423,17 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			}
 		} else {
 			break
+		}
+	}
+
+	selectLockMode := lockpb.LockMode_Exclusive
+	if effectiveSelectLockInfo != nil {
+		switch effectiveSelectLockInfo.LockType {
+		case tree.SelectLockForUpdate:
+			builder.isForUpdate = true
+		case tree.SelectLockForShare:
+			builder.isForUpdate = true
+			selectLockMode = lockpb.LockMode_Shared
 		}
 	}
 
@@ -4484,6 +4489,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					if rewrittenSelect == nil {
 						return 0, moerr.NewNotSupported(builder.GetContext(), "window functions with ROLLUP or CUBE for this expression")
 					}
+					rewrittenSelect.SelectLockInfo = effectiveSelectLockInfo
 					return builder.bindSelect(rewrittenSelect, ctx, isRoot)
 				}
 
