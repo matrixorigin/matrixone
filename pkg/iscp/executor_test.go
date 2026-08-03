@@ -260,6 +260,16 @@ func TestMarkIterationPendingIsAtomic(t *testing.T) {
 
 func TestTryFlushWatermarkSerializesWithReaders(t *testing.T) {
 	table := NewTableEntry(nil, 1, 2, 3, "db", "table")
+	jobKey := JobKey{JobName: "job", JobID: 1}
+	table.jobs[jobKey] = NewJobEntry(
+		table,
+		jobKey.JobName,
+		&JobSpec{},
+		jobKey.JobID,
+		types.BuildTS(1, 0),
+		ISCPJobState_Pending,
+		0,
+	)
 	table.mu.RLock()
 
 	started := make(chan struct{})
