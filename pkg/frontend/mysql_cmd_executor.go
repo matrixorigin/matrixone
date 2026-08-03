@@ -1972,6 +1972,8 @@ func createPrepareStmt(
 		PreparePlan:         preparePlan,
 		PrepareStmt:         saveStmt,
 		NativeMode:          ses.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:     ses.sqlModeHasOnlyFullGroupBy(),
+		onlyFullGroupBySet:  true,
 		remapDb:             maps.Clone(execCtx.remapDb),
 		defaultDatabase:     ses.GetTxnCompileCtx().GetDatabase(),
 		tempTableVersion:    ses.GetTempTableVersion(),

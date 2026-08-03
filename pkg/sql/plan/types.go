@@ -544,10 +544,16 @@ type baseBinder struct {
 	builder               *QueryBuilder
 	ctx                   *BindContext
 	impl                  Binder
-	boundCols             []string
+	boundCols             []boundColumn
 	numericParamType      *Type
 	numericSubqueryTarget *Type
 	numericFunctionTarget bool
+}
+
+type boundColumn struct {
+	name      string
+	relation  int32
+	columnPos int32
 }
 
 type DefaultBinder struct {

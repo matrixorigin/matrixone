@@ -301,12 +301,16 @@ type PrepareStmt struct {
 	PreparePlan     *plan.Plan
 	PrepareStmt     tree.Statement
 	NativeMode      bool
-	ParamTypes      []byte
-	ColDefData      [][]byte
-	IsCloudNonuser  bool
-	proc            *process.Process
-	remapDb         map[string]string
-	defaultDatabase string
+	OnlyFullGroupBy bool
+	// onlyFullGroupBySet distinguishes a captured disabled mode from legacy or
+	// minimal in-memory fixtures that predate this plan dependency.
+	onlyFullGroupBySet bool
+	ParamTypes         []byte
+	ColDefData         [][]byte
+	IsCloudNonuser     bool
+	proc               *process.Process
+	remapDb            map[string]string
+	defaultDatabase    string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -1487,8 +1491,10 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {
 	name = strings.ToLower(name)
 	oldMatrixOneNative := false
+	oldOnlyFullGroupBy := false
 	if name == "sql_mode" {
 		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
+		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
 	}
 
 	def, ok := gSysVarsDefs[name]
@@ -1539,7 +1545,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars.Set(name, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeCaches(oldMatrixOneNative, val)
+		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, val)
 	}
 
 	// Update rewriteEnabled cache when enable_remap_hint is changed

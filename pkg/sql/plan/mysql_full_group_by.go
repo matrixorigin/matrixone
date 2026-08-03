@@ -22,40 +22,51 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-// mysqlFullGroupByAllowsColumns implements the MySQL ONLY_FULL_GROUP_BY
+// mysqlFullGroupByRejectedColumn implements the MySQL ONLY_FULL_GROUP_BY
 // exceptions that are local to one query block: a projected column is valid
 // when it is constrained to one statement-stable value by WHERE, or when its
-// table's complete declared primary key is present in GROUP BY.
-func (builder *QueryBuilder) mysqlFullGroupByAllowsColumns(ctx *BindContext, columns []string) bool {
-	for _, name := range columns {
-		separator := strings.LastIndex(name, ".")
-		if separator < 1 || separator == len(name)-1 {
-			return false
-		}
-		table, column := name[:separator], name[separator+1:]
-		binding := ctx.bindingByTable[table]
-		if binding == nil {
-			return false
-		}
-		columnPos := binding.FindColumn(column)
-		if columnPos == NotFound || columnPos == AmbiguousName {
-			return false
-		}
-		if builder.mysqlFullGroupByAllowsColumn(ctx, binding, columnPos) {
+// table's complete declared primary key is present in the active grouping set.
+// It returns the first column that does not satisfy either exception.
+func (builder *QueryBuilder) mysqlFullGroupByRejectedColumn(ctx *BindContext, columns []boundColumn) (string, bool) {
+	for _, column := range columns {
+		binding := ctx.bindingByTag[column.relation]
+		if binding != nil && column.columnPos >= 0 && int(column.columnPos) < len(binding.cols) &&
+			builder.mysqlFullGroupByAllowsColumn(ctx, binding, column.columnPos) {
 			continue
 		}
-		return false
+		return column.name, true
 	}
-	return true
+	return "", false
 }
 
 func (builder *QueryBuilder) mysqlFullGroupByAllowsColRef(ctx *BindContext, expr *Expr) bool {
-	col := expr.GetCol()
-	if col == nil {
-		return false
+	allowed, found := builder.mysqlFullGroupByAllowsExprColumns(ctx, expr)
+	return found && allowed
+}
+
+// mysqlFullGroupByAllowsExprColumns handles wrappers introduced while binding
+// a column, notably ENUM/SET index-to-value conversion. Every source column in
+// the wrapper must independently satisfy an ONLY_FULL_GROUP_BY exception.
+func (builder *QueryBuilder) mysqlFullGroupByAllowsExprColumns(ctx *BindContext, expr *Expr) (allowed, found bool) {
+	if col := expr.GetCol(); col != nil {
+		binding := ctx.bindingByTag[col.RelPos]
+		return binding != nil && builder.mysqlFullGroupByAllowsColumn(ctx, binding, col.ColPos), true
 	}
-	binding := ctx.bindingByTag[col.RelPos]
-	return binding != nil && builder.mysqlFullGroupByAllowsColumn(ctx, binding, col.ColPos)
+
+	fn := expr.GetF()
+	if fn == nil {
+		return true, false
+	}
+	for _, arg := range fn.Args {
+		argAllowed, argFound := builder.mysqlFullGroupByAllowsExprColumns(ctx, arg)
+		if argFound {
+			found = true
+			if !argAllowed {
+				return false, true
+			}
+		}
+	}
+	return true, found
 }
 
 func (builder *QueryBuilder) mysqlFullGroupByAllowsColumn(ctx *BindContext, binding *Binding, columnPos int32) bool {
@@ -76,27 +87,21 @@ func (builder *QueryBuilder) groupByIncludesPrimaryKey(ctx *BindContext, binding
 	if len(primaryKeyNames) > 0 {
 		for _, name := range primaryKeyNames {
 			colPos := binding.FindColumn(strings.ToLower(name))
-			if colPos == NotFound || colPos == AmbiguousName || !groupByContainsColumn(ctx.groups, binding.tag, colPos) {
+			if colPos == NotFound || colPos == AmbiguousName || !groupByContainsColumn(ctx, binding.tag, colPos) {
 				return false
 			}
 		}
 		return len(primaryKeyNames) > 0
 	}
 
-	primaryKeyCols := tableDef.Pkey.Cols
-	if len(primaryKeyCols) == 0 && tableDef.Pkey.PkeyColName != "" {
+	// Names is the planner's current source of the user-visible components of a
+	// composite primary key. PkeyColName is sufficient only for a single key;
+	// a composite key without Names cannot be proven safe from its hidden column.
+	if tableDef.Pkey.PkeyColName != "" && tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
 		colPos := binding.FindColumn(strings.ToLower(tableDef.Pkey.PkeyColName))
-		return colPos != NotFound && colPos != AmbiguousName && groupByContainsColumn(ctx.groups, binding.tag, colPos)
+		return colPos != NotFound && colPos != AmbiguousName && groupByContainsColumn(ctx, binding.tag, colPos)
 	}
-	if len(primaryKeyCols) == 0 {
-		return false
-	}
-	for _, colPos := range primaryKeyCols {
-		if colPos >= uint64(len(binding.cols)) || !groupByContainsColumn(ctx.groups, binding.tag, int32(colPos)) {
-			return false
-		}
-	}
-	return true
+	return false
 }
 
 func filterListHasSingleValueEqualityOnCol(filters []*Expr, tag, columnPos int32) bool {
@@ -142,10 +147,13 @@ func isMySQLFullGroupBySingleValueExpr(expr *Expr) bool {
 	}
 }
 
-func groupByContainsColumn(groups []*Expr, tag, columnPos int32) bool {
-	for _, group := range groups {
+func groupByContainsColumn(ctx *BindContext, tag, columnPos int32) bool {
+	for pos, group := range ctx.groups {
 		if col := group.GetCol(); col != nil && col.RelPos == tag && col.ColPos == columnPos {
-			return true
+			// ROLLUP and CUBE share the complete group expression list across
+			// their grouping-set branches. A key column only establishes a
+			// functional dependency in branches where that group is active.
+			return len(ctx.groupingFlag) == 0 || pos < len(ctx.groupingFlag) && ctx.groupingFlag[pos]
 		}
 	}
 	return false

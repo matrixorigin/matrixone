@@ -489,6 +489,14 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		return
 	}
 
+	if colPos != NotFound {
+		b.boundCols = append(b.boundCols, boundColumn{
+			name:      table + "." + col,
+			relation:  relPos,
+			columnPos: colPos,
+		})
+	}
+
 	if isEnumOrSetPlanType(typ) {
 		if err != nil {
 			errutil.ReportError(b.GetContext(), err)
@@ -529,8 +537,6 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	}
 
 	if colPos != NotFound {
-		b.boundCols = append(b.boundCols, table+"."+col)
-
 		expr = &plan.Expr{
 			Typ: *typ,
 		}

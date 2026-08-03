@@ -665,6 +665,7 @@ func initExecuteStmtParamWithResolver(
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
 	currentNativeMode := ses.sqlModeHasMatrixOneNative()
+	currentOnlyFullGroupBy := ses.sqlModeHasOnlyFullGroupBy()
 
 	// TODO check if schema change, obj.Obj is zero all the time in 0.6
 	eng := ses.proc.Base.SessionInfo.StorageEngine
@@ -735,7 +736,8 @@ func initExecuteStmtParamWithResolver(
 	// every EXECUTE so both enabled->disabled and disabled->enabled transitions
 	// observe the current setting.
 	fkSensitive := shouldRebuildPreparePlan(false, preparePlan.Plan)
-	modeMismatch := prepareStmt.NativeMode != currentNativeMode
+	modeMismatch := prepareStmt.NativeMode != currentNativeMode ||
+		prepareStmt.onlyFullGroupBySet && prepareStmt.OnlyFullGroupBy != currentOnlyFullGroupBy
 	protocolVersion := currentProtocolVersion(ses.proc)
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
@@ -763,6 +765,8 @@ func initExecuteStmtParamWithResolver(
 			execCtx.prepareColDef = newColDefData
 		}
 		prepareStmt.NativeMode = currentNativeMode
+		prepareStmt.OnlyFullGroupBy = currentOnlyFullGroupBy
+		prepareStmt.onlyFullGroupBySet = true
 		prepareStmt.Ts = prepareTs
 		prepareStmt.tempTableVersion = currentTempTableVersion
 		prepareStmt.ddlVersion = currentDDLVersion
