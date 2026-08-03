@@ -278,6 +278,35 @@ Project  𝄀
 select count(*) from t1 full outer join t2 on t1.c2=t2.c2;
 ➤ count(*)[-5,64,0]  𝄀
 5000000
+with
+l as (
+    select c2 as k from t1 where c2 % 100 = 0
+),
+r as (
+    select c2 as k from t2 where c2 % 100 = 0
+),
+joined as (
+    select case
+             when l.k is not null and r.k is not null then 'both'
+             when l.k is not null then 'left_only'
+             else 'right_only'
+           end as join_side,
+           coalesce(l.k, r.k) as k
+    from l full outer join r on l.k = r.k
+),
+ranked as (
+    select join_side,
+           row_number() over (partition by join_side order by k) as rn
+    from joined
+)
+select join_side, count(*) as cnt
+from ranked
+where rn <= 2
+group by join_side
+order by join_side;
+➤ join_side[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
+both  2
+left_only  2
 create table t3(c1 int not null, c2 int not null)cluster by c1;
 insert into t3 select *,* from generate_series(1,1000000)g;
 select mo_ctl('dn', 'flush', 'd1.t3');
