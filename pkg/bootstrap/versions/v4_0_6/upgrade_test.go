@@ -29,7 +29,6 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/stretchr/testify/require"
@@ -72,9 +71,9 @@ func TestLegacyForeignKeyMetadataUpdatesPreserveOrderAndActions(t *testing.T) {
 		database: "db'one",
 		table:    "child",
 		foreignKeys: []legacyForeignKeyCatalogRow{
-			{constraintName: "fk_default", columnName: "a", referDBName: "db'one", referTableName: "parent", referColumnName: "a"},
-			{constraintName: "fk_default", columnName: "b", referDBName: "db'one", referTableName: "parent", referColumnName: "b"},
-			{constraintName: "fk_restrict", columnName: "a", referDBName: "db'one", referTableName: "parent", referColumnName: "a"},
+			{constraintName: "fk_default", columnName: "a", referDBName: "db'one", referTableName: "parent", referColumnName: "a", onDelete: "NO_ACTION", onUpdate: "NO_ACTION"},
+			{constraintName: "fk_default", columnName: "b", referDBName: "db'one", referTableName: "parent", referColumnName: "b", onDelete: "NO_ACTION", onUpdate: "NO_ACTION"},
+			{constraintName: "fk_restrict", columnName: "a", referDBName: "db'one", referTableName: "parent", referColumnName: "a", onDelete: "RESTRICT", onUpdate: "RESTRICT"},
 		},
 	}, "create table child (a int, b int, constraint fk_default foreign key (b, a) references parent (b, a), "+
 		"constraint fk_restrict foreign key (a) references parent (a) on delete restrict on update restrict)")
@@ -86,7 +85,7 @@ func TestLegacyForeignKeyMetadataUpdatesPreserveOrderAndActions(t *testing.T) {
 		"constraint_name = 'fk_default' AND column_name = 'b'",
 		"constraint_id = 2, on_delete = 'NO_ACTION', on_update = 'NO_ACTION'",
 		"constraint_name = 'fk_default' AND column_name = 'a'",
-		"constraint_id = 1, on_delete = 'RESTRICT', on_update = 'RESTRICT'",
+		"constraint_id = 1, on_delete = 'NO_ACTION', on_update = 'NO_ACTION'",
 		"constraint_name = 'fk_restrict' AND column_name = 'a'",
 		"db_name = 'db''one'",
 	} {
@@ -243,7 +242,7 @@ func TestLegacyForeignKeyMetadataUpgradeBackfillsAlterAndUnnamedForeignKeys(t *t
 			database: "db",
 			table:    "unnamed_child",
 			foreignKeys: []legacyForeignKeyCatalogRow{
-				{constraintName: "catalog_generated_name", columnName: "parent_id", referDBName: "db", referTableName: "parent", referColumnName: "id", onDelete: "NO_ACTION", onUpdate: "NO_ACTION"},
+				{constraintName: "catalog_generated_name", columnName: "parent_id", referDBName: "db", referTableName: "parent", referColumnName: "id", onDelete: "RESTRICT", onUpdate: "RESTRICT"},
 			},
 		},
 	})
@@ -256,7 +255,7 @@ func TestLegacyForeignKeyMetadataUpgradeBackfillsAlterAndUnnamedForeignKeys(t *t
 		case "SHOW CREATE TABLE `db`.`alter_child`":
 			return newShowCreateTableResult(t, "alter_child", "create table alter_child (a int, b int, constraint fk_added_by_alter foreign key (b, a) references parent (b, a) on delete cascade on update set null)"), nil
 		case "SHOW CREATE TABLE `db`.`unnamed_child`":
-			return newShowCreateTableResult(t, "unnamed_child", "create table unnamed_child (parent_id int, constraint catalog_generated_name foreign key (parent_id) references parent (id))"), nil
+			return newShowCreateTableResult(t, "unnamed_child", "create table unnamed_child (parent_id int, constraint catalog_generated_name foreign key (parent_id) references parent (id) on delete restrict on update restrict)"), nil
 		}
 		updates = append(updates, sql)
 		return executor.Result{}, nil
@@ -303,6 +302,18 @@ func TestLegacyForeignKeyMetadataUpdatesBackfillAlterTableForeignKey(t *testing.
 	}, updates)
 }
 
+func TestLegacyForeignKeyMetadataUpdatesRejectInconsistentCatalogActions(t *testing.T) {
+	_, err := legacyForeignKeyMetadataUpdates(legacyForeignKeyTableDefinition{
+		database: "db",
+		table:    "child",
+		foreignKeys: []legacyForeignKeyCatalogRow{
+			{constraintName: "fk_child_parent", columnName: "a", referDBName: "db", referTableName: "parent", referColumnName: "a", onDelete: "CASCADE", onUpdate: "CASCADE"},
+			{constraintName: "fk_child_parent", columnName: "b", referDBName: "db", referTableName: "parent", referColumnName: "b", onDelete: "SET_NULL", onUpdate: "CASCADE"},
+		},
+	}, "create table child (a int, b int, constraint fk_child_parent foreign key (a, b) references parent (a, b))")
+	require.ErrorContains(t, err, "inconsistent catalog actions")
+}
+
 func TestLegacyForeignKeyMetadataUpdatesDoNotMatchReusedConstraintName(t *testing.T) {
 	updates, err := legacyForeignKeyMetadataUpdates(legacyForeignKeyTableDefinition{
 		database: "db",
@@ -345,24 +356,6 @@ func TestLegacyForeignKeyMetadataUpdatesLeaveAmbiguousUnnamedForeignKeysToCatalo
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'CASCADE', on_update = 'CASCADE' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'catalog-fk-a' AND column_name = 'parent_id'",
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'NO_ACTION', on_update = 'NO_ACTION' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'catalog-fk-b' AND column_name = 'parent_id'",
 	}, updates)
-}
-
-func TestReferenceActionName(t *testing.T) {
-	for _, test := range []struct {
-		action tree.ReferenceOptionType
-		want   string
-	}{
-		{tree.REFERENCE_OPTION_CASCADE, "CASCADE"},
-		{tree.REFERENCE_OPTION_SET_NULL, "SET_NULL"},
-		{tree.REFERENCE_OPTION_NO_ACTION, "NO_ACTION"},
-		{tree.REFERENCE_OPTION_SET_DEFAULT, "SET_DEFAULT"},
-		{tree.REFERENCE_OPTION_RESTRICT, "RESTRICT"},
-		{tree.ReferenceOptionType(-1), "NO_ACTION"},
-	} {
-		if got := referenceActionName(test.action); got != test.want {
-			t.Fatalf("referenceActionName(%d) = %q, want %q", test.action, got, test.want)
-		}
-	}
 }
 
 func TestLegacyForeignKeyShowCreateSQLQuotesIdentifiers(t *testing.T) {

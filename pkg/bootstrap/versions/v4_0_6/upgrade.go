@@ -243,8 +243,12 @@ func legacyForeignKeyMetadataUpdates(definition legacyForeignKeyTableDefinition,
 			for _, constraint := range constraints {
 				if constraint.name == foreignKey.ConstraintSymbol &&
 					sameLegacyForeignKeyColumns(definition.database, foreignKey, constraint.rows) {
+					onDelete, onUpdate, err := legacyForeignKeyCatalogConstraintActions(constraint)
+					if err != nil {
+						return nil, err
+					}
 					matchedConstraints[constraint.name] = true
-					updates = appendLegacyForeignKeyASTUpdates(updates, definition, constraint.name, foreignKey)
+					updates = appendLegacyForeignKeyASTUpdates(updates, definition, constraint.name, foreignKey, onDelete, onUpdate)
 					break
 				}
 			}
@@ -268,8 +272,12 @@ func legacyForeignKeyMetadataUpdates(definition legacyForeignKeyTableDefinition,
 		}
 		if matchedIndex >= 0 {
 			constraint := constraints[matchedIndex]
+			onDelete, onUpdate, err := legacyForeignKeyCatalogConstraintActions(constraint)
+			if err != nil {
+				return nil, err
+			}
 			matchedConstraints[constraint.name] = true
-			updates = appendLegacyForeignKeyASTUpdates(updates, definition, constraint.name, foreignKey)
+			updates = appendLegacyForeignKeyASTUpdates(updates, definition, constraint.name, foreignKey, onDelete, onUpdate)
 		}
 	}
 
@@ -280,14 +288,18 @@ func legacyForeignKeyMetadataUpdates(definition legacyForeignKeyTableDefinition,
 		if matchedConstraints[constraint.name] {
 			continue
 		}
+		onDelete, onUpdate, err := legacyForeignKeyCatalogConstraintActions(constraint)
+		if err != nil {
+			return nil, err
+		}
 		for ordinal, row := range constraint.rows {
 			updates = append(updates, legacyForeignKeyUpdateSQL(
 				definition,
 				constraint.name,
 				row.columnName,
 				ordinal+1,
-				legacyCatalogReferenceActionName(row.onDelete),
-				legacyCatalogReferenceActionName(row.onUpdate),
+				onDelete,
+				onUpdate,
 			))
 		}
 	}
@@ -353,6 +365,7 @@ func appendLegacyForeignKeyASTUpdates(
 	definition legacyForeignKeyTableDefinition,
 	constraintName string,
 	foreignKey *tree.ForeignKey,
+	onDelete, onUpdate string,
 ) []string {
 	for ordinal, keyPart := range foreignKey.KeyParts {
 		updates = append(updates, legacyForeignKeyUpdateSQL(
@@ -360,11 +373,25 @@ func appendLegacyForeignKeyASTUpdates(
 			constraintName,
 			keyPart.ColName.ColName(),
 			ordinal+1,
-			referenceActionName(foreignKey.Refer.OnDelete),
-			referenceActionName(foreignKey.Refer.OnUpdate),
+			onDelete,
+			onUpdate,
 		))
 	}
 	return updates
+}
+
+func legacyForeignKeyCatalogConstraintActions(constraint legacyForeignKeyCatalogConstraint) (string, string, error) {
+	if len(constraint.rows) == 0 {
+		return "", "", moerr.NewInternalErrorNoCtxf("legacy foreign key %s has no catalog rows", constraint.name)
+	}
+	onDelete := legacyCatalogReferenceActionName(constraint.rows[0].onDelete)
+	onUpdate := legacyCatalogReferenceActionName(constraint.rows[0].onUpdate)
+	for _, row := range constraint.rows[1:] {
+		if legacyCatalogReferenceActionName(row.onDelete) != onDelete || legacyCatalogReferenceActionName(row.onUpdate) != onUpdate {
+			return "", "", moerr.NewInternalErrorNoCtxf("legacy foreign key %s has inconsistent catalog actions", constraint.name)
+		}
+	}
+	return onDelete, onUpdate, nil
 }
 
 func legacyForeignKeyUpdateSQL(
@@ -387,31 +414,14 @@ func legacyForeignKeyUpdateSQL(
 }
 
 // Legacy rows with constraint_id = 0 were written before omitted foreign-key
-// actions were represented as NO_ACTION. Without an ALTER statement snapshot,
-// an omitted action and explicit RESTRICT are indistinguishable; keep the same
-// MySQL-compatible NO_ACTION normalization used for CREATE-table backfill.
+// actions were represented as NO_ACTION. SHOW CREATE TABLE renders an omitted
+// action as RESTRICT, so it cannot recover that distinction either. Preserve
+// the established legacy migration policy: normalize RESTRICT to NO_ACTION.
 func legacyCatalogReferenceActionName(action string) string {
 	if strings.EqualFold(strings.TrimSpace(action), "RESTRICT") || strings.TrimSpace(action) == "" {
 		return "NO_ACTION"
 	}
 	return action
-}
-
-func referenceActionName(action tree.ReferenceOptionType) string {
-	switch action {
-	case tree.REFERENCE_OPTION_CASCADE:
-		return "CASCADE"
-	case tree.REFERENCE_OPTION_SET_NULL:
-		return "SET_NULL"
-	case tree.REFERENCE_OPTION_NO_ACTION:
-		return "NO_ACTION"
-	case tree.REFERENCE_OPTION_SET_DEFAULT:
-		return "SET_DEFAULT"
-	case tree.REFERENCE_OPTION_RESTRICT:
-		return "RESTRICT"
-	default:
-		return "NO_ACTION"
-	}
 }
 
 func quoteSQLStringLiteral(s string) string {
