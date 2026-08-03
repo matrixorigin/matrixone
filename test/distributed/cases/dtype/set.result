@@ -141,7 +141,7 @@ drop table if exists set_modify;
 create table set_modify (id int primary key, tags set('a','b','c'));
 insert into set_modify values (1, 'a,c'), (2, 'b');
 alter table set_modify modify column tags set('a','b');
-internal error: convert to MySQL set failed: value 5 overflow set boundary 3
+internal error: convert to MySQL set failed: item a,c is not in set [a,b]
 drop table set_modify;
 drop table if exists set_modify2;
 create table set_modify2 (id int primary key, tags set('a','b'));

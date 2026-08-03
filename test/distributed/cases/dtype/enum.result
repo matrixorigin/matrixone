@@ -341,7 +341,8 @@ select id from insert01 where status in (1, 4) order by id;
 1  𝄀
 4
 select id from insert01 where status in ('Pending', 4) order by id;
-invalid argument cast to uint16, bad value Pending
+➤ id[4,32,0]  𝄀
+1
 delete from insert01 where status=3;
 update insert01 set status='Pending' where status=2;
 select * from insert01;
@@ -353,7 +354,9 @@ select * from insert01 where status=4;
 ➤ id[4,32,0]  ¦  order_number[12,-1,0]  ¦  status[12,-1,0]  𝄀
 4  ¦  444  ¦  Cancelled
 select * from insert01 where status in ('Pending',4);
-invalid argument cast to uint16, bad value Pending
+➤ id[4,32,0]  ¦  order_number[12,-1,0]  ¦  status[12,-1,0]  𝄀
+1  ¦  111  ¦  Pending  𝄀
+2  ¦  222  ¦  Pending
 drop table insert01;
 drop table if exists default01;
 create table default01 (`col1` enum('T', 'E') not null default 'T');
@@ -446,17 +449,20 @@ select * from enum04 where col2 not between '38921384' and '矩阵起源';
 ➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
 2  ¦  
 select * from enum04 where col2 in('38921384','');
-Data truncation: data out of range: data type uint16, value '38921384'
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
+1  ¦  38921384  𝄀
+2  ¦  
 select * from enum04 where col2 not in('38921384','');
-Data truncation: data out of range: data type uint16, value '38921384'
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
+3  ¦  矩阵起源
 select * from enum04 where col2 like '%921384';
 ➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
 1  ¦  38921384
 select coalesce(null,null,col2) from enum04;
-➤ coalesce(null, null, col2)[5,16,0]  𝄀
-1  𝄀
-3  𝄀
-5
+➤ coalesce(null, null, col2)[12,-1,0]  𝄀
+38921384  𝄀
+  𝄀
+矩阵起源
 drop table enum04;
 drop table if exists builtin01;
 create table builtin01(col1 enum('  云原生数据库  ','存储引擎 TAE', 'database system') not null,col2 enum(' database','engine ','index meta data'));
@@ -480,24 +486,24 @@ select find_in_set('  云原生数据库  ',col1) from builtin01;
 0
 select length(col1) as length_col1, length(col2) as length_col2 from builtin01;
 ➤ length_col1[-5,64,0]  ¦  length_col2[-5,64,0]  𝄀
-1  ¦  1  𝄀
-1  ¦  1  𝄀
-1  ¦  1
+22  ¦  9  𝄀
+16  ¦  7  𝄀
+15  ¦  7
 select char_length(col1),char_length(col2) from builtin01;
 ➤ char_length(col1)[-5,64,0]  ¦  char_length(col2)[-5,64,0]  𝄀
-1  ¦  1  𝄀
-1  ¦  1  𝄀
-1  ¦  1
+10  ¦  9  𝄀
+8  ¦  7  𝄀
+15  ¦  7
 select ltrim(col1) from builtin01;
 ➤ ltrim(col1)[12,-1,0]  𝄀
-1  𝄀
-2  𝄀
-3
+云原生数据库    𝄀
+存储引擎 TAE  𝄀
+database system
 select rtrim(col2) from builtin01;
 ➤ rtrim(col2)[12,-1,0]  𝄀
-1  𝄀
-2  𝄀
-2
+ database  𝄀
+engine  𝄀
+engine
 select lpad(col1,20,'-') from builtin01;
 ➤ lpad(col1, 20, -)[12,-1,0]  𝄀
 ----------  云原生数据库    𝄀
@@ -520,21 +526,21 @@ select endswith(col1,'数据表') from builtin01;
 0
 select reverse(col1),reverse(col2) from builtin01;
 ➤ reverse(col1)[12,-1,0]  ¦  reverse(col2)[12,-1,0]  𝄀
-1  ¦  1  𝄀
-2  ¦  2  𝄀
-3  ¦  2
+  库据数生原云    ¦  esabatad   𝄀
+EAT 擎引储存  ¦   enigne  𝄀
+metsys esabatad  ¦   enigne
 select substring(col1,4,6),substring(col2,1,6) from builtin01;
 ➤ substring(col1, 4, 6)[12,-1,0]  ¦  substring(col2, 1, 6)[12,-1,0]  𝄀
-  ¦  1  𝄀
-  ¦  2  𝄀
-  ¦  2
+原生数据库   ¦   datab  𝄀
+擎 TAE  ¦  engine  𝄀
+abase   ¦  engine
 select * from builtin01 where col1 = space(5);
 ➤ col1[12,-1,0]  ¦  col2[12,-1,0]
 select bit_length(col2) from builtin01;
 ➤ bit_length(col2)[-5,64,0]  𝄀
-8  𝄀
-8  𝄀
-8
+72  𝄀
+56  𝄀
+56
 select empty(col2) from builtin01;
 ➤ empty(col2)[-7,1,0]  𝄀
 0  𝄀
@@ -544,9 +550,11 @@ select count(col1) as count_col1 from builtin01;
 ➤ count_col1[-5,64,0]  𝄀
 3
 select max(col1), max(col2) from builtin01;
-invalid argument aggregate function max, bad value [ENUM]
+➤ max(col1)[12,-1,0]  ¦  max(col2)[12,-1,0]  𝄀
+存储引擎 TAE  ¦  engine 
 select min(col1), min(col2) from builtin01;
-invalid argument aggregate function min, bad value [ENUM]
+➤ min(col1)[12,-1,0]  ¦  min(col2)[12,-1,0]  𝄀
+  云原生数据库    ¦   database
 select group_concat(col1,col2) from builtin01;
 ➤ group_concat(col1, col2 separator ,)[12,0,0]  𝄀
   云原生数据库   database,存储引擎 TAEengine ,database systemengine 
@@ -558,9 +566,11 @@ insert into agg01 values (2, 'weueiwqeowqehwgqjhenw');
 insert into agg01 values (3, 'qwewqewqeqewq');
 insert into agg01 values (4, null);
 select max(col2) from agg01;
-invalid argument aggregate function max, bad value [ENUM]
+➤ max(col2)[12,-1,0]  𝄀
+weueiwqeowqehwgqjhenw
 select min(col2) from agg01;
-invalid argument aggregate function min, bad value [ENUM]
+➤ min(col2)[12,-1,0]  𝄀
+egwjqebwq
 select * from agg01;
 ➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
 1  ¦  egwjqebwq  𝄀
