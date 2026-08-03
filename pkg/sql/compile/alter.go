@@ -2125,12 +2125,6 @@ type viewMetadataRefreshSource struct {
 	tableName  string
 }
 
-type legacySubscriptionViewCandidate struct {
-	accountID            uint32
-	subscriptionDatabase string
-	tableName            string
-}
-
 func isViewMetadataRefresh(ctx context.Context) bool {
 	if ctx == nil {
 		return false
@@ -2167,7 +2161,6 @@ func refreshViewMetadataAfterAlter(
 	sourceDatabase string,
 	sourceTable string,
 	onlyPending bool,
-	legacySubscriptionCandidates ...legacySubscriptionViewCandidate,
 ) error {
 	subscriptionsByAccount := make(map[uint32]currentViewSubscriptionResolver)
 	sources := []viewMetadataRefreshSource{{
@@ -2193,7 +2186,6 @@ func refreshViewMetadataAfterAlter(
 				source.tableName,
 				afterViewID,
 				onlyPending,
-				legacySubscriptionCandidates...,
 			)
 			if err != nil {
 				return err
@@ -2326,7 +2318,6 @@ func refreshViewMetadataAfterAlter(
 				}
 			}
 		}
-		legacySubscriptionCandidates = nil
 	}
 	return nil
 }
@@ -2581,11 +2572,6 @@ func refreshPendingViewMetadataAfterSubscriptionCreate(c *Compile, subscriptionD
 				source.database,
 				source.tableName,
 				true,
-				legacySubscriptionViewCandidate{
-					accountID:            subscriberAccountID,
-					subscriptionDatabase: subscriptionDatabase,
-					tableName:            source.tableName,
-				},
 			); err != nil {
 				return err
 			}
@@ -2673,10 +2659,9 @@ func loadViewMetadataRefreshPage(
 	sourceTable string,
 	afterViewID uint64,
 	onlyPending bool,
-	legacySubscriptionCandidates ...legacySubscriptionViewCandidate,
 ) ([]viewMetadataRefresh, error) {
 	const pageSize = 128
-	sql := buildViewMetadataRefreshQueryWithLegacySubscriptions(
+	sql := buildViewMetadataRefreshQuery(
 		sourceAccountID,
 		sourceLogicalID,
 		sourceTableID,
@@ -2685,7 +2670,6 @@ func loadViewMetadataRefreshPage(
 		afterViewID,
 		pageSize,
 		onlyPending,
-		legacySubscriptionCandidates,
 	)
 	result, err := c.runSqlWithResultAndOptions(
 		sql,
@@ -2752,26 +2736,8 @@ func buildViewMetadataRefreshQuery(
 	pageSize int,
 	onlyPending ...bool,
 ) string {
-	pending := len(onlyPending) > 0 && onlyPending[0]
-	return buildViewMetadataRefreshQueryWithLegacySubscriptions(
-		sourceAccountID, sourceLogicalID, sourceTableID, sourceDatabase, sourceTable,
-		afterViewID, pageSize, pending, nil,
-	)
-}
-
-func buildViewMetadataRefreshQueryWithLegacySubscriptions(
-	sourceAccountID uint32,
-	sourceLogicalID uint64,
-	sourceTableID uint64,
-	sourceDatabase string,
-	sourceTable string,
-	afterViewID uint64,
-	pageSize int,
-	onlyPending bool,
-	legacySubscriptionCandidates []legacySubscriptionViewCandidate,
-) string {
 	pendingFilter := ""
-	if onlyPending {
+	if len(onlyPending) > 0 && onlyPending[0] {
 		pendingFilter = "and json_unquote(json_extract(viewdef, '$.metadata_refresh_pending')) = 'true' "
 	}
 	legacyCandidate := sqlquote.String(sourceTable)
@@ -2790,16 +2756,6 @@ func buildViewMetadataRefreshQueryWithLegacySubscriptions(
 		",\"subscription_table\":" + string(tableNameJSON),
 	)
 	if pendingFilter != "" {
-		legacySubscriptionFilter := ""
-		for _, candidate := range legacySubscriptionCandidates {
-			legacySubscriptionFilter += fmt.Sprintf(
-				"or (account_id = %d and json_extract(viewdef, '$.dependencies') is null "+
-					"and instr(lower(viewdef), lower(%s)) > 0 and instr(lower(viewdef), lower(%s)) > 0) ",
-				candidate.accountID,
-				sqlquote.String(candidate.subscriptionDatabase),
-				sqlquote.String(candidate.tableName),
-			)
-		}
 		return fmt.Sprintf(
 			"select account_id, rel_id, rel_logical_id, rel_version, reldatabase, relname, viewdef from %s.mo_tables "+
 				"where relkind = '%s' %s"+
@@ -2813,7 +2769,15 @@ func buildViewMetadataRefreshQueryWithLegacySubscriptions(
 				"and viewdef not like '%%\\\"logical_id\\\":%%') "+
 				"or (json_extract(viewdef, '$.dependencies') is not null "+
 				"and ((account_id = %d and instr(viewdef, %s) > 0) "+
-				"or instr(viewdef, %s) > 0)) %s) "+
+				"or instr(viewdef, %s) > 0)) "+
+				"or (json_extract(viewdef, '$.dependencies') is null "+
+				"and instr(lower(viewdef), lower(%s)) > 0 "+
+				"and exists (select 1 from %s.%s where sub_account_id = account_id "+
+				"and pub_account_id = %d and sub_name is not null and status = %d "+
+				"and (lower(pub_database) = lower(%s) or pub_database = %s) "+
+				"and (pub_tables = %s or find_in_set(lower(%s), "+
+				"lower(replace(pub_tables, ' ', ''))) > 0) "+
+				"and instr(lower(viewdef), lower(sub_name)) > 0))) "+
 				"order by rel_id limit %d",
 			catalog.MO_CATALOG,
 			catalog.SystemViewRel,
@@ -2831,7 +2795,15 @@ func buildViewMetadataRefreshQueryWithLegacySubscriptions(
 			sourceAccountID,
 			qualifiedNameCandidate,
 			publisherQualifiedNameCandidate,
-			legacySubscriptionFilter,
+			legacyCandidate,
+			catalog.MO_CATALOG,
+			catalog.MO_SUBS,
+			sourceAccountID,
+			pubsub.SubStatusNormal,
+			sqlquote.String(sourceDatabase),
+			sqlquote.String(pubsub.TableAll),
+			sqlquote.String(pubsub.TableAll),
+			legacyCandidate,
 			pageSize,
 		)
 	}

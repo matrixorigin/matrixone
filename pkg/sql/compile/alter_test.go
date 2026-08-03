@@ -161,7 +161,12 @@ func TestBuildViewMetadataRefreshQueryEscapesLegacyTableName(t *testing.T) {
 	require.NotContains(t, query, "viewdef like '\\%")
 	pendingQuery := buildViewMetadataRefreshQuery(7, 24, 42, "db", "source", 0, 128, true)
 	require.Contains(t, pendingQuery, "json_extract(viewdef, '$.metadata_refresh_pending')")
-	require.NotContains(t, pendingQuery, "mo_catalog.mo_subs")
+	require.Contains(t, pendingQuery, "mo_catalog.mo_subs")
+	require.Contains(t, pendingQuery, "sub_account_id = account_id")
+	require.Contains(t, pendingQuery, "sub_name is not null")
+	require.Contains(t, pendingQuery, "pub_database = '*'")
+	require.Contains(t, pendingQuery, "pub_tables = '*'")
+	require.Contains(t, pendingQuery, "find_in_set")
 	pendingStmts, err := mysql.Parse(context.Background(), pendingQuery, 1)
 	require.NoError(t, err)
 	defer func() {
@@ -275,15 +280,9 @@ func TestRefreshPendingViewMetadataAfterSubscriptionCreate(t *testing.T) {
 	require.NoError(t, executor.AppendStringRows(result, 3, []string{"pub"}))
 	require.NoError(t, executor.AppendStringRows(result, 4, []string{"pubdb"}))
 	require.NoError(t, executor.AppendStringRows(result, 5, []string{"source_t"}))
-	pendingQuery := buildViewMetadataRefreshQueryWithLegacySubscriptions(
-		0, 24, 1, "pubdb", "source_t", 0, 128, true,
-		[]legacySubscriptionViewCandidate{{
-			accountID: 7, subscriptionDatabase: "SUBDB", tableName: "source_t",
-		}},
-	)
-	require.Contains(t, pendingQuery,
-		"account_id = 7 and json_extract(viewdef, '$.dependencies') is null")
-	require.Contains(t, pendingQuery, "instr(lower(viewdef), lower('SUBDB')) > 0")
+	pendingQuery := buildViewMetadataRefreshQuery(0, 24, 1, "pubdb", "source_t", 0, 128, true)
+	require.Contains(t, pendingQuery, "pub_account_id = 0")
+	require.Contains(t, pendingQuery, "lower(pub_database) = lower('pubdb')")
 	stmts, err := mysql.Parse(context.Background(), pendingQuery, 1)
 	require.NoError(t, err)
 	defer func() {
@@ -332,18 +331,6 @@ func TestRefreshPendingViewMetadataAfterAccountPublicationSubscriptionCreate(t *
 	require.NoError(t, executor.AppendStringRows(result, 5, []string{pubsub.TableAll}))
 	pendingDB1 := buildViewMetadataRefreshQuery(0, 24, 1, "db1", "source_t", 0, 128, true)
 	pendingDB2 := buildViewMetadataRefreshQuery(0, 25, 1, "db2", "other_t", 0, 128, true)
-	pendingDB1 = buildViewMetadataRefreshQueryWithLegacySubscriptions(
-		0, 24, 1, "db1", "source_t", 0, 128, true,
-		[]legacySubscriptionViewCandidate{{
-			accountID: 7, subscriptionDatabase: "subdb", tableName: "source_t",
-		}},
-	)
-	pendingDB2 = buildViewMetadataRefreshQueryWithLegacySubscriptions(
-		0, 25, 1, "db2", "other_t", 0, 128, true,
-		[]legacySubscriptionViewCandidate{{
-			accountID: 7, subscriptionDatabase: "subdb", tableName: "other_t",
-		}},
-	)
 	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
 		subscriptionQuery: result.GetResult(),
 		pendingDB1:        {},
@@ -595,16 +582,10 @@ func TestRefreshViewMetadataAfterAlter(t *testing.T) {
 	))
 }
 
-func TestRefreshPendingLegacySubscriptionView(t *testing.T) {
+func TestRefreshPendingLegacySubscriptionViewWhenPublishedSourceCreated(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	mp := mpool.MustNewZero()
-	candidate := legacySubscriptionViewCandidate{
-		accountID: 7, subscriptionDatabase: "subdb", tableName: "source_t",
-	}
-	query := buildViewMetadataRefreshQueryWithLegacySubscriptions(
-		0, 24, 42, "pubdb", "source_t", 0, 128, true,
-		[]legacySubscriptionViewCandidate{candidate},
-	)
+	query := buildViewMetadataRefreshQuery(0, 24, 42, "pubdb", "source_t", 0, 128, true)
 	nextQuery := strings.Replace(query, "rel_id > 0", "rel_id > 9", 1)
 	subscriptionQuery := "select sub_name, pub_account_id, pub_account_name, pub_name, " +
 		"pub_database, pub_tables from mo_catalog.mo_subs " +
@@ -641,7 +622,7 @@ func TestRefreshPendingLegacySubscriptionView(t *testing.T) {
 	c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, 7)
 
 	require.NoError(t, refreshViewMetadataAfterAlter(
-		c, 0, 24, 42, 42, "pubdb", "source_t", true, candidate,
+		c, 0, 24, 42, 42, "pubdb", "source_t", true,
 	))
 	require.Equal(t, []string{
 		query,
