@@ -361,10 +361,31 @@ func (ctr *container) consumeNext(ap *Fill, bat *batch.Batch, seq int, proc *pro
 				ctr.nextRun[c] = append(ctr.nextRun[c], fillCoord{seq: seq, row: r})
 				continue
 			}
-			for _, cd := range ctr.nextRun[c] {
-				if err := setValue(ctr.batAt(cd.seq).Vecs[c], vec, cd.row, r, proc); err != nil {
+			run := ctr.nextRun[c]
+			src, srcRow := vec, r
+			var snapshot *vector.Vector
+			// A run ending in the current batch writes back into vec itself. Keep
+			// one stable, mpool-accounted copy of the non-inline source while the
+			// destination area grows; all rows in this run share that source.
+			if len(run) > 0 && run[len(run)-1].seq == seq && vec.GetType().IsVarlen() &&
+				len(vec.GetBytesAt(r)) > types.VarlenaInlineSize {
+				snapshot = vector.NewOffHeapVecWithType(*vec.GetType())
+				if err := appendValue(snapshot, vec, r, proc); err != nil {
+					snapshot.Free(proc.Mp())
 					return err
 				}
+				src, srcRow = snapshot, 0
+			}
+			for _, cd := range run {
+				if err := setValue(ctr.batAt(cd.seq).Vecs[c], src, cd.row, srcRow, proc); err != nil {
+					if snapshot != nil {
+						snapshot.Free(proc.Mp())
+					}
+					return err
+				}
+			}
+			if snapshot != nil {
+				snapshot.Free(proc.Mp())
 			}
 			ctr.nextRun[c] = ctr.nextRun[c][:0]
 		}
@@ -826,17 +847,7 @@ func setValue(v, w *vector.Vector, i, j int, proc *process.Process) error {
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16,
 		types.T_array_int8, types.T_array_uint8, types.T_datalink:
-		// Handle self-aliasing: if v == w, BuildVarlenaNoInline may grow v.area
-		// before copying, invalidating the slice from w.GetBytesAt(j).
-		// Copy to a temporary buffer first to avoid use-after-free.
-		if v == w {
-			src := w.GetBytesAt(j)
-			tmp := make([]byte, len(src))
-			copy(tmp, src)
-			err = vector.SetBytesAt(v, i, tmp, proc.Mp())
-		} else {
-			err = vector.SetBytesAt(v, i, w.GetBytesAt(j), proc.Mp())
-		}
+		err = vector.SetBytesAt(v, i, w.GetBytesAt(j), proc.Mp())
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function set value in fill query", v.GetType()))
 	}

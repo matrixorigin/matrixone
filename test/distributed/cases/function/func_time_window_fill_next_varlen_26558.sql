@@ -16,7 +16,9 @@ INSERT INTO t VALUES
 
 -- This query used to terminate the CN with SIGSEGV in BuildVarlenaNoInline.
 -- Expected: 1001 rows with materialized VARCHAR values for each filled window.
-SELECT COUNT(*) AS n, SUM(LENGTH(v)) AS bytes
+SELECT COUNT(*) AS n, SUM(LENGTH(v)) AS bytes, SUM(CRC32(v)) AS checksum,
+       COUNT(CASE WHEN v = REPEAT('a', 256) THEN 1 END) AS a_rows,
+       COUNT(CASE WHEN v = REPEAT('b', 256) THEN 1 END) AS b_rows
 FROM (
   SELECT tenant, _wstart, MAX(v) AS v
   FROM t
@@ -24,7 +26,8 @@ FROM (
   INTERVAL(ts, 1, minute) GAPFILL(PARTITION) FILL(next)
 ) AS x;
 
--- Expected output: (1001, 256256)
+-- Expected output proves both materialization and FILL(next) direction:
+-- one original a-value followed by 1000 b-values.
 
 -- Cleanup
 DROP DATABASE fill_next_crash_26558;

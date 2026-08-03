@@ -1177,56 +1177,53 @@ func (s *fillStubExpressionExecutor) IsColumnExpr() bool {
 	return false
 }
 
-// TestSetValueSelfAliasVarlen verifies that setValue handles self-aliasing for
-// variable-length types without crashing, preventing the SIGSEGV reported in #26558.
-func TestSetValueSelfAliasVarlen(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
+func TestConsumeNextStabilizesSelfAliasedVarlenSources(t *testing.T) {
+	mpool.EnableDebugPoisonOnFree()
+	defer mpool.DisableDebugPoisonOnFree()
 
-	// Create a VARCHAR vector that will experience area growth during self-alias copy
-	vec := vector.NewVec(types.T_varchar.ToType())
-	require.NoError(t, vec.PreExtend(100, proc.Mp()))
-	vec.SetLength(100)
-
-	// Fill with small values to establish initial area layout
-	for i := 0; i < 50; i++ {
-		require.NoError(t, vector.SetBytesAt(vec, i, []byte("x"), proc.Mp()))
+	varlenTypes := []types.Type{
+		types.T_char.ToType(), types.T_varchar.ToType(),
+		types.T_binary.ToType(), types.T_varbinary.ToType(),
+		types.T_json.ToType(), types.T_blob.ToType(), types.T_text.ToType(),
+		types.T_array_float32.ToType(), types.T_array_float64.ToType(),
+		types.T_array_bf16.ToType(), types.T_array_float16.ToType(),
+		types.T_array_int8.ToType(), types.T_array_uint8.ToType(),
+		types.T_datalink.ToType(),
 	}
+	for _, typ := range varlenTypes {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
 
-	// Place a large value at index 50 that will be copied within the same vector
-	largeValue := bytes.Repeat([]byte("a"), 250)
-	require.NoError(t, vector.SetBytesAt(vec, 50, largeValue, proc.Mp()))
+			const rows = 1001
+			payload := bytes.Repeat([]byte("b"), 256)
+			vec := vector.NewOffHeapVecWithType(typ)
+			require.NoError(t, vec.PreExtend(rows, proc.Mp()))
+			vec.SetLength(rows)
+			for i := 0; i < rows-1; i++ {
+				vec.SetNull(uint64(i))
+			}
+			require.NoError(t, vector.SetBytesAt(vec, rows-1, payload, proc.Mp()))
 
-	// Self-alias copy: destination and source are the same vector.
-	// This used to crash when BuildVarlenaNoInline grew the area, invalidating
-	// the source slice from GetBytesAt(50).
-	require.NoError(t, setValue(vec, vec, 51, 50, proc))
+			bat := batch.NewWithSize(1)
+			bat.SetVector(0, vec)
+			bat.SetRowCount(rows)
+			defer bat.Clean(proc.Mp())
 
-	// Verify the value was copied correctly
-	require.Equal(t, largeValue, vec.GetBytesAt(51))
-}
+			ctr := &container{
+				bats:    []*batch.Batch{bat},
+				nextRun: make([][]fillCoord, 1),
+			}
+			ap := &Fill{ColLen: 1}
 
-// TestSetValueSelfAliasCrossArea verifies self-alias copy across area reallocation boundary.
-func TestSetValueSelfAliasCrossArea(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-
-	vec := vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vec.PreExtend(10, proc.Mp()))
-	vec.SetLength(10)
-
-	// Create a payload large enough to force area growth on next append
-	payload := bytes.Repeat([]byte("b"), 256)
-	require.NoError(t, vector.SetBytesAt(vec, 0, payload, proc.Mp()))
-
-	// Fill several more slots to consume area capacity
-	for i := 1; i < 5; i++ {
-		require.NoError(t, vector.SetBytesAt(vec, i, payload, proc.Mp()))
+			require.NoError(t, ctr.consumeNext(ap, bat, 0, proc))
+			require.Empty(t, ctr.nextRun[0])
+			for i := 0; i < rows; i++ {
+				require.False(t, vec.IsNull(uint64(i)))
+				require.Equal(t, payload, vec.GetBytesAt(i))
+			}
+		})
 	}
-
-	// Self-alias copy that crosses the reallocation boundary
-	require.NoError(t, setValue(vec, vec, 5, 0, proc))
-	require.Equal(t, payload, vec.GetBytesAt(5))
 }
 
 func (s *fillStubExpressionExecutor) TypeName() string {
