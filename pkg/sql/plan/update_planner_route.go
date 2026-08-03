@@ -37,18 +37,17 @@ const (
 type updatePlannerRouteReason string
 
 const (
-	updateRouteReasonNone           updatePlannerRouteReason = "none"
-	updateRouteReasonMultiTarget    updatePlannerRouteReason = "multi_target"
-	updateRouteReasonForeignKey     updatePlannerRouteReason = "foreign_key"
-	updateRouteReasonIrregularIndex updatePlannerRouteReason = "irregular_index"
-	updateRouteReasonPubSubKey      updatePlannerRouteReason = "pub_sub_key"
-	updateRouteReasonAutoIncrement  updatePlannerRouteReason = "enum_set_auto_increment"
-	updateRouteReasonIceberg        updatePlannerRouteReason = "iceberg"
-	updateRouteReasonExternalTable  updatePlannerRouteReason = "external_table"
-	updateRouteReasonTableForm      updatePlannerRouteReason = "unsupported_table_form"
-	updateRouteReasonEmptyTableName updatePlannerRouteReason = "empty_table_name"
-	updateRouteReasonBinderError    updatePlannerRouteReason = "binder_error"
-	updateRouteReasonUnknown        updatePlannerRouteReason = "unknown"
+	updateRouteReasonNone            updatePlannerRouteReason = "none"
+	updateRouteReasonMultiTarget     updatePlannerRouteReason = "multi_target"
+	updateRouteReasonForeignKey      updatePlannerRouteReason = "foreign_key"
+	updateRouteReasonIrregularIndex  updatePlannerRouteReason = "irregular_index"
+	updateRouteReasonAutoIncrementFK updatePlannerRouteReason = "auto_increment_foreign_key"
+	updateRouteReasonIceberg         updatePlannerRouteReason = "iceberg"
+	updateRouteReasonExternalTable   updatePlannerRouteReason = "external_table"
+	updateRouteReasonTableForm       updatePlannerRouteReason = "unsupported_table_form"
+	updateRouteReasonEmptyTableName  updatePlannerRouteReason = "empty_table_name"
+	updateRouteReasonBinderError     updatePlannerRouteReason = "binder_error"
+	updateRouteReasonUnknown         updatePlannerRouteReason = "unknown"
 )
 
 type updatePlannerRouteError struct {
