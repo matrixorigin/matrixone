@@ -102,6 +102,18 @@ func TestBuildRefreshViewSQL(t *testing.T) {
 			expected: "alter view `db`.`v` as select * from `source_t`",
 		},
 		{
+			name: "ansi quoted identifier with embedded quote",
+			view: viewMetadataRefresh{
+				database: "db",
+				name:     "v",
+				viewData: plan.ViewData{
+					Stmt:    `create view "old" as select * from "src""table"`,
+					SQLMode: &sqlMode,
+				},
+			},
+			expected: "alter view `db`.`v` as select * from `src\"table`",
+		},
+		{
 			name: "legacy pipes as concat",
 			view: viewMetadataRefresh{
 				database: "db",
@@ -199,15 +211,19 @@ func TestBuildPendingViewMetadataRefreshQueryPreservesPublishedTableSpaces(t *te
 
 func TestBuildViewMetadataRefreshQueryMatchesQuotedLegacyIdentifier(t *testing.T) {
 	const tableName = "source`table\\\""
-	rawCandidate, quotedCandidate := viewMetadataLegacyNameCandidates(tableName)
+	rawCandidate, quotedCandidate, ansiQuotedCandidate := viewMetadataLegacyNameCandidates(tableName)
 	require.Equal(t, sqlquote.String(tableName), rawCandidate)
 	quotedJSON, err := json.Marshal(sqlquote.Ident(tableName))
 	require.NoError(t, err)
 	require.Equal(t, sqlquote.String(string(quotedJSON[1:len(quotedJSON)-1])), quotedCandidate)
+	ansiQuotedJSON, err := json.Marshal(`"` + strings.ReplaceAll(tableName, `"`, `""`) + `"`)
+	require.NoError(t, err)
+	require.Equal(t, sqlquote.String(string(ansiQuotedJSON[1:len(ansiQuotedJSON)-1])), ansiQuotedCandidate)
 
 	query := buildViewMetadataRefreshQuery(7, 24, 42, "db", tableName, 0, 128)
 	require.Contains(t, query, "instr(viewdef, "+rawCandidate+")")
 	require.Contains(t, query, "instr(viewdef, "+quotedCandidate+")")
+	require.Contains(t, query, "instr(viewdef, "+ansiQuotedCandidate+")")
 	stmts, err := mysql.Parse(context.Background(), query, 1)
 	require.NoError(t, err)
 	defer func() {
@@ -226,10 +242,11 @@ func TestBuildViewMetadataRefreshQueryBatchesLegacyCandidates(t *testing.T) {
 		7, 24, 42, "db", "source_t", 0, 128, false, candidates,
 	)
 	for _, candidate := range candidates {
-		rawName, quotedName := viewMetadataLegacyNameCandidates(candidate.tableName)
+		rawName, quotedName, ansiQuotedName := viewMetadataLegacyNameCandidates(candidate.tableName)
 		require.Contains(t, query, fmt.Sprintf("account_id = %d", candidate.accountID))
 		require.Contains(t, query, "instr(viewdef, "+rawName+")")
 		require.Contains(t, query, "instr(viewdef, "+quotedName+")")
+		require.Contains(t, query, "instr(viewdef, "+ansiQuotedName+")")
 	}
 	require.NotContains(t, query, "source_t")
 	stmts, err := mysql.Parse(context.Background(), query, 1)

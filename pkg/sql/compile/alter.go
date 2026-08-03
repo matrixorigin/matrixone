@@ -1989,6 +1989,16 @@ func refreshPendingViewMetadataForRelation(
 	name string,
 	relation engine.Relation,
 ) error {
+	return refreshViewMetadataForRelation(c, database, name, relation, true)
+}
+
+func refreshViewMetadataForRelation(
+	c *Compile,
+	database string,
+	name string,
+	relation engine.Relation,
+	onlyPending bool,
+) error {
 	accountID, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
 		return err
@@ -1999,7 +2009,7 @@ func refreshPendingViewMetadataForRelation(
 		logicalID = tableID
 	}
 	return refreshViewMetadataAfterAlter(
-		c, accountID, logicalID, tableID, tableID, database, name, true,
+		c, accountID, logicalID, tableID, tableID, database, name, onlyPending,
 	)
 }
 
@@ -2840,7 +2850,8 @@ func buildViewMetadataRefreshQueryWithLegacyCandidates(
 			pageSize,
 		)
 	}
-	legacyCandidate, quotedLegacyCandidate := viewMetadataLegacyNameCandidates(sourceTable)
+	legacyCandidate, quotedLegacyCandidate, ansiQuotedLegacyCandidate :=
+		viewMetadataLegacyNameCandidates(sourceTable)
 	databaseNameJSON, _ := json.Marshal(sourceDatabase)
 	tableNameJSON, _ := json.Marshal(sourceTable)
 	qualifiedNameCandidate := sqlquote.String(
@@ -2861,7 +2872,7 @@ func buildViewMetadataRefreshQueryWithLegacyCandidates(
 				"where relkind = '%s' %s"+
 				"and reldatabase not in ('%s', '%s') and rel_id > %d "+
 				"and ((account_id = %d and json_extract(viewdef, '$.dependencies') is null "+
-				"and (instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0)) "+
+				"and (instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0)) "+
 				"or (viewdef like '%%\\\"account_id\\\":%d,%%' "+
 				"and (viewdef like '%%\\\"logical_id\\\":%d,%%' "+
 				"or viewdef like '%%\\\"table_id\\\":%d,%%')) "+
@@ -2871,7 +2882,8 @@ func buildViewMetadataRefreshQueryWithLegacyCandidates(
 				"and ((account_id = %d and instr(viewdef, %s) > 0) "+
 				"or instr(viewdef, %s) > 0)) "+
 				"or (json_extract(viewdef, '$.dependencies') is null "+
-				"and (instr(lower(viewdef), lower(%s)) > 0 or instr(lower(viewdef), lower(%s)) > 0) "+
+				"and (instr(lower(viewdef), lower(%s)) > 0 or instr(lower(viewdef), lower(%s)) > 0 "+
+				"or instr(lower(viewdef), lower(%s)) > 0) "+
 				"and exists (select 1 from %s.%s where sub_account_id = account_id "+
 				"and pub_account_id = %d and sub_name is not null and status = %d "+
 				"and (lower(pub_database) = lower(%s) or pub_database = %s) "+
@@ -2887,6 +2899,7 @@ func buildViewMetadataRefreshQueryWithLegacyCandidates(
 			sourceAccountID,
 			legacyCandidate,
 			quotedLegacyCandidate,
+			ansiQuotedLegacyCandidate,
 			sourceAccountID,
 			sourceLogicalID,
 			sourceTableID,
@@ -2897,6 +2910,7 @@ func buildViewMetadataRefreshQueryWithLegacyCandidates(
 			publisherQualifiedNameCandidate,
 			legacyCandidate,
 			quotedLegacyCandidate,
+			ansiQuotedLegacyCandidate,
 			catalog.MO_CATALOG,
 			catalog.MO_SUBS,
 			sourceAccountID,
@@ -2916,7 +2930,7 @@ func buildViewMetadataRefreshQueryWithLegacyCandidates(
 			"and ((((account_id = %d) or account_id in "+
 			"(select sub_account_id from %s.%s where pub_account_id = %d and status = %d)) "+
 			"and json_extract(viewdef, '$.dependencies') is null "+
-			"and (instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0)) "+
+			"and (instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0)) "+
 			"or (viewdef like '%%\\\"account_id\\\":%d,%%' "+
 			"and (viewdef like '%%\\\"logical_id\\\":%d,%%' "+
 			"or viewdef like '%%\\\"table_id\\\":%d,%%')) "+
@@ -2946,6 +2960,7 @@ func buildViewMetadataRefreshQueryWithLegacyCandidates(
 		pubsub.SubStatusNormal,
 		legacyCandidate,
 		quotedLegacyCandidate,
+		ansiQuotedLegacyCandidate,
 		sourceAccountID,
 		sourceLogicalID,
 		sourceTableID,
@@ -2973,22 +2988,27 @@ func buildViewMetadataRefreshQueryWithLegacyCandidates(
 func buildViewMetadataLegacyBatchPredicate(candidates []viewMetadataRefreshSource) string {
 	var predicate strings.Builder
 	for _, candidate := range candidates {
-		rawName, quotedName := viewMetadataLegacyNameCandidates(candidate.tableName)
+		rawName, quotedName, ansiQuotedName := viewMetadataLegacyNameCandidates(candidate.tableName)
 		fmt.Fprintf(
 			&predicate,
 			" or (account_id = %d and json_extract(viewdef, '$.dependencies') is null "+
-				"and (instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0))",
+				"and (instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0))",
 			candidate.accountID,
 			rawName,
 			quotedName,
+			ansiQuotedName,
 		)
 	}
 	return predicate.String()
 }
 
-func viewMetadataLegacyNameCandidates(name string) (string, string) {
+func viewMetadataLegacyNameCandidates(name string) (string, string, string) {
 	quotedNameJSON, _ := json.Marshal(sqlquote.Ident(name))
-	return sqlquote.String(name), sqlquote.String(string(quotedNameJSON[1 : len(quotedNameJSON)-1]))
+	ansiQuotedName := `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+	ansiQuotedNameJSON, _ := json.Marshal(ansiQuotedName)
+	return sqlquote.String(name),
+		sqlquote.String(string(quotedNameJSON[1 : len(quotedNameJSON)-1])),
+		sqlquote.String(string(ansiQuotedNameJSON[1 : len(ansiQuotedNameJSON)-1]))
 }
 
 func runViewMetadataRefreshSQL(

@@ -537,7 +537,7 @@ func (s *Scope) AlterView(c *Compile) error {
 	if err != nil || isViewMetadataRefresh(c.proc.Ctx) {
 		return err
 	}
-	return refreshPendingViewMetadataForRelation(c, dbName, tblName, rel)
+	return refreshViewMetadataForRelation(c, dbName, tblName, rel, false)
 }
 
 func viewMetadataRefreshGenerationMatches(

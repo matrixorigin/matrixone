@@ -322,8 +322,8 @@ func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
 	)
 	require.Equal(t, 1, dependencyLockCalls, "explicit ALTER VIEW must still validate dependency generations")
 	require.Equal(t, []string{
-		buildViewMetadataRefreshQuery(7, 1, 1, "other_db", "v", 0, 128, true),
-	}, spyExec.executedSQLs, "explicit ALTER VIEW must retry pending dependents")
+		buildViewMetadataRefreshQuery(7, 1, 1, "other_db", "v", 0, 128, false),
+	}, spyExec.executedSQLs, "explicit ALTER VIEW must refresh healthy and pending dependents")
 
 	delete(db.rels, "v")
 	require.Error(t, s.AlterView(c))

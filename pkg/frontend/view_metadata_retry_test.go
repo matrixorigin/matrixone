@@ -38,63 +38,7 @@ func TestBuildPendingViewMetadataRetryQueryIsBounded(t *testing.T) {
 	require.NotContains(t, query, "limit 1025")
 }
 
-func TestLoadPendingViewMetadataRetryPageRotatesAfterFailures(t *testing.T) {
-	resetPendingViewMetadataCursor(t)
-	ctx := context.Background()
-	bh := &backgroundExecTest{}
-	bh.init()
-	firstQuery := buildPendingViewMetadataRetryQuery(0, 0)
-	secondQuery := buildPendingViewMetadataRetryQuery(7, 42)
-	bh.sql2result[firstQuery] = newPendingViewMetadataRetryResult([][]interface{}{
-		{uint64(7), uint64(41), uint64(1), "db", "v1", "{}"},
-		{uint64(7), uint64(42), uint64(1), "db", "v2", "{}"},
-	})
-	bh.sql2result[secondQuery] = newPendingViewMetadataRetryResult(nil)
-
-	results, err := loadPendingViewMetadataRetryPage(ctx, bh)
-	require.NoError(t, err)
-	require.Equal(t, uint64(2), results[0].GetRowCount())
-	results, err = loadPendingViewMetadataRetryPage(ctx, bh)
-	require.NoError(t, err)
-	require.Equal(t, uint64(2), results[0].GetRowCount())
-	require.Equal(t, []string{firstQuery, secondQuery, firstQuery}, bh.executedSQLs)
-}
-
-func TestLoadPendingViewMetadataRetryPageDoesNotOverwriteNewerCursor(t *testing.T) {
-	resetPendingViewMetadataCursor(t)
-	ctx := context.Background()
-	base := &backgroundExecTest{}
-	base.init()
-	query := buildPendingViewMetadataRetryQuery(0, 0)
-	base.sql2result[query] = newPendingViewMetadataRetryResult([][]interface{}{
-		{uint64(7), uint64(42), uint64(1), "db", "v", "{}"},
-	})
-	bh := &hookedBackgroundExec{
-		backgroundExecTest: base,
-		hook: func(sql string) {
-			if sql != query {
-				return
-			}
-			pendingViewMetadataCursor.Lock()
-			pendingViewMetadataCursor.accountID = 9
-			pendingViewMetadataCursor.viewID = 99
-			pendingViewMetadataCursor.generation++
-			pendingViewMetadataCursor.Unlock()
-		},
-	}
-
-	_, err := loadPendingViewMetadataRetryPage(ctx, bh)
-	require.NoError(t, err)
-	pendingViewMetadataCursor.Lock()
-	accountID := pendingViewMetadataCursor.accountID
-	viewID := pendingViewMetadataCursor.viewID
-	pendingViewMetadataCursor.Unlock()
-	require.Equal(t, uint64(9), accountID)
-	require.Equal(t, uint64(99), viewID)
-}
-
 func TestRetryPendingViewMetadataSkipsMissingDefaultDatabase(t *testing.T) {
-	resetPendingViewMetadataCursor(t)
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
@@ -115,8 +59,7 @@ func TestRetryPendingViewMetadataSkipsMissingDefaultDatabase(t *testing.T) {
 	require.NoError(t, retryPendingViewMetadata(ctx, ses, bh))
 }
 
-func TestRetryPendingViewMetadataIsBoundedAndAdvancesCursor(t *testing.T) {
-	resetPendingViewMetadataCursor(t)
+func TestRetryPendingViewMetadataAdvancesBeyondFirstPage(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
@@ -137,8 +80,6 @@ func TestRetryPendingViewMetadataIsBoundedAndAdvancesCursor(t *testing.T) {
 	})
 
 	require.NoError(t, retryPendingViewMetadata(ctx, ses, bh))
-	require.Equal(t, []string{firstQuery}, bh.executedSQLs)
-	require.NoError(t, retryPendingViewMetadata(ctx, ses, bh))
 	require.Equal(t, []string{firstQuery, secondQuery}, bh.executedSQLs)
 }
 
@@ -146,7 +87,6 @@ func TestRetryPendingViewMetadataPropagatesMalformedCatalogRows(t *testing.T) {
 	valid := []interface{}{uint64(7), uint64(42), uint64(1), "db", "v", "{}"}
 	for column := range valid {
 		t.Run([]string{"account", "view", "version", "database", "name", "definition"}[column], func(t *testing.T) {
-			resetPendingViewMetadataCursor(t)
 			ctx := context.Background()
 			ctrl := gomock.NewController(t)
 			ses := newTestSession(t, ctrl)
@@ -198,7 +138,6 @@ func TestRetryPendingViewMetadataSQLModeAndErrors(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			resetPendingViewMetadataCursor(t)
 			ctx := context.Background()
 			ctrl := gomock.NewController(t)
 			ses := newTestSession(t, ctrl)
@@ -228,57 +167,16 @@ func TestRetryPendingViewMetadataSQLModeAndErrors(t *testing.T) {
 	}
 }
 
-func TestLoadPendingViewMetadataRetryPageErrorPaths(t *testing.T) {
+func TestLoadPendingViewMetadataRetryPageAfterErrorPaths(t *testing.T) {
 	t.Run("query error", func(t *testing.T) {
-		resetPendingViewMetadataCursor(t)
 		ctx := context.Background()
 		bh := &backgroundExecTest{}
 		bh.init()
 		query := buildPendingViewMetadataRetryQuery(0, 0)
 		bh.sql2err[query] = moerr.NewInternalErrorNoCtx("query failed")
 
-		_, err := loadPendingViewMetadataRetryPage(ctx, bh)
+		_, err := loadPendingViewMetadataRetryPageAfter(ctx, bh, 0, 0)
 		require.Error(t, err)
-	})
-
-	t.Run("malformed cursor columns", func(t *testing.T) {
-		for _, row := range [][]interface{}{
-			{nil, uint64(42), uint64(1), "db", "v", "{}"},
-			{uint64(7), nil, uint64(1), "db", "v", "{}"},
-		} {
-			resetPendingViewMetadataCursor(t)
-			ctx := context.Background()
-			bh := &backgroundExecTest{}
-			bh.init()
-			bh.sql2result[buildPendingViewMetadataRetryQuery(0, 0)] =
-				newPendingViewMetadataRetryResult([][]interface{}{row})
-
-			_, err := loadPendingViewMetadataRetryPage(ctx, bh)
-			require.Error(t, err)
-		}
-	})
-
-	t.Run("empty page resets cursor", func(t *testing.T) {
-		resetPendingViewMetadataCursor(t)
-		pendingViewMetadataCursor.Lock()
-		pendingViewMetadataCursor.accountID = 7
-		pendingViewMetadataCursor.viewID = 42
-		pendingViewMetadataCursor.Unlock()
-		ctx := context.Background()
-		bh := &backgroundExecTest{}
-		bh.init()
-		bh.sql2result[buildPendingViewMetadataRetryQuery(7, 42)] = newPendingViewMetadataRetryResult(nil)
-		bh.sql2result[buildPendingViewMetadataRetryQuery(0, 0)] = newPendingViewMetadataRetryResult(nil)
-
-		results, err := loadPendingViewMetadataRetryPage(ctx, bh)
-		require.NoError(t, err)
-		require.False(t, execResultArrayHasData(results))
-		pendingViewMetadataCursor.Lock()
-		accountID := pendingViewMetadataCursor.accountID
-		viewID := pendingViewMetadataCursor.viewID
-		pendingViewMetadataCursor.Unlock()
-		require.Zero(t, accountID)
-		require.Zero(t, viewID)
 	})
 }
 
@@ -340,27 +238,6 @@ func newPendingViewMetadataRetryResult(rows [][]interface{}) *MysqlResultSet {
 	return result
 }
 
-type hookedBackgroundExec struct {
-	*backgroundExecTest
-	hook func(string)
-}
-
-func (bh *hookedBackgroundExec) Exec(ctx context.Context, sql string) error {
-	if bh.hook != nil {
-		bh.hook(sql)
-	}
-	return bh.backgroundExecTest.Exec(ctx, sql)
-}
-
 func viewMetadataPtr[T any](value T) *T {
 	return &value
-}
-
-func resetPendingViewMetadataCursor(t *testing.T) {
-	t.Helper()
-	pendingViewMetadataCursor.Lock()
-	pendingViewMetadataCursor.accountID = 0
-	pendingViewMetadataCursor.viewID = 0
-	pendingViewMetadataCursor.generation++
-	pendingViewMetadataCursor.Unlock()
 }
