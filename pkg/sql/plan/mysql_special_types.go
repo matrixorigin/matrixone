@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -249,6 +250,143 @@ func mysqlSpecialTypeFuncNames(typ *plan.Type) (string, string, string, error) {
 	default:
 		return "", "", "", moerr.NewInternalErrorNoCtx("not enum/set type")
 	}
+}
+
+// mysqlSpecialOrderTypeForExpr returns the storage type whose definition order
+// belongs to a visible string expression. Provenance is deliberately narrow:
+// an exact ENUM/SET display call originates it, and an exact ColRef may carry it
+// through a query boundary. Any cast or other string expression clears it.
+func (bc *BindContext) mysqlSpecialOrderTypeForExpr(expr *plan.Expr) *plan.Type {
+	if expr == nil || !types.T(expr.Typ.Id).IsMySQLString() {
+		return nil
+	}
+
+	if isEnumOrSetDisplayValueExpr(expr) {
+		fn := expr.GetF()
+		if len(fn.Args) == 2 && isEnumOrSetPlanType(&fn.Args[1].Typ) {
+			return DeepCopyType(&fn.Args[1].Typ)
+		}
+		return nil
+	}
+
+	col := expr.GetCol()
+	if col == nil {
+		return nil
+	}
+	if col.RelPos == bc.projectTag {
+		if typ, recorded := bc.mysqlSpecialOrderTypes[col.ColPos]; recorded {
+			return DeepCopyType(typ)
+		}
+	}
+	if bc.groupTag > 0 && col.RelPos == bc.groupTag && col.ColPos >= 0 && int(col.ColPos) < len(bc.groups) {
+		groupExpr := bc.groups[col.ColPos]
+		if groupExpr == nil {
+			return nil
+		}
+		if groupCol := groupExpr.GetCol(); groupCol != nil && groupCol.RelPos == bc.groupTag {
+			return nil
+		}
+		return bc.mysqlSpecialOrderTypeForExpr(groupExpr)
+	}
+	binding := bc.bindingByTag[col.RelPos]
+	if binding == nil || col.ColPos < 0 || int(col.ColPos) >= len(binding.mysqlSpecialOrderTypes) {
+		return nil
+	}
+	return DeepCopyType(binding.mysqlSpecialOrderTypes[col.ColPos])
+}
+
+func (bc *BindContext) setMySQLSpecialOrderType(colPos int32, typ *plan.Type) {
+	if bc.mysqlSpecialOrderTypes == nil {
+		bc.mysqlSpecialOrderTypes = make(map[int32]*plan.Type)
+	}
+	bc.mysqlSpecialOrderTypes[colPos] = typ
+}
+
+func (bc *BindContext) mysqlSpecialOrderTypeForProject(colPos int32) *plan.Type {
+	if typ, recorded := bc.mysqlSpecialOrderTypes[colPos]; recorded {
+		return DeepCopyType(typ)
+	}
+	if colPos < 0 || int(colPos) >= len(bc.projects) {
+		return nil
+	}
+	return bc.mysqlSpecialOrderTypeForExpr(bc.projects[colPos])
+}
+
+func mysqlSpecialOrderTypesCompatible(left, right *plan.Type) bool {
+	return left != nil && right != nil && left.Id == right.Id && left.Enumvalues == right.Enumvalues
+}
+
+// enumFoldKey produces the same equivalence classes used by strings.EqualFold
+// without an O(n^2) comparison across the maximum 65,535 ENUM members.
+func enumFoldKey(value string) string {
+	var folded strings.Builder
+	for _, r := range value {
+		min := r
+		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
+			if next < min {
+				min = next
+			}
+		}
+		folded.WriteRune(min)
+	}
+	return folded.String()
+}
+
+func mysqlSpecialOrderTypeReversible(typ *plan.Type) bool {
+	switch {
+	case isSetPlanType(typ):
+		values, err := types.NormalizeSetValues(strings.Split(typ.Enumvalues, ","))
+		if err != nil {
+			return false
+		}
+		for _, value := range values {
+			if value == "" {
+				return false
+			}
+		}
+		return true
+	case isEnumPlanType(typ):
+		seen := make(map[string]struct{})
+		for _, value := range strings.Split(typ.Enumvalues, ",") {
+			key := enumFoldKey(value)
+			if _, exists := seen[key]; exists {
+				return false
+			}
+			seen[key] = struct{}{}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func newNonReversibleMySQLSpecialOrderError(ctx context.Context) error {
+	return moerr.NewNotSupported(ctx,
+		"definition-order sorting of projected ENUM/SET values with non-unique display labels or ambiguous SET display values")
+}
+
+// makeMySQLSpecialOrderKey restores definition-order comparison after a query
+// boundary. The display-to-index conversion is allowed only when it is a true
+// inverse; ambiguous ENUM/SET definitions must never silently collapse storage
+// values that have the same display value.
+func makeMySQLSpecialOrderKey(ctx context.Context, displayExpr *plan.Expr, storageType *plan.Type) (*plan.Expr, error) {
+	if !mysqlSpecialOrderTypeReversible(storageType) {
+		return nil, newNonReversibleMySQLSpecialOrderError(ctx)
+	}
+	_, valueToIndex, _, err := mysqlSpecialTypeFuncNames(storageType)
+	if err != nil {
+		return nil, err
+	}
+	orderKey, err := BindFuncExprImplByPlanExpr(ctx, valueToIndex, []*plan.Expr{
+		makePlan2StringConstExprWithType(storageType.Enumvalues),
+		DeepCopyExpr(displayExpr),
+	})
+	if err != nil {
+		return nil, err
+	}
+	orderKey.Typ.NotNullable = displayExpr.Typ.NotNullable
+	orderKey.Typ.Enumvalues = storageType.Enumvalues
+	return orderKey, nil
 }
 
 func wrapAstExprForMySQLSpecialType(ctx context.Context, targetType plan.Type, astExpr tree.Expr) (tree.Expr, error) {
