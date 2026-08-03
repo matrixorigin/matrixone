@@ -3501,52 +3501,72 @@ func newDispatchSrcScopeForTest(proc *process.Process, addr string, localBuckets
 //	send unit, so checkPipelineStandaloneExecutableAtRemote returns true and the whole
 //	group is really executed at the remote CN.
 func TestGroupShuffleBucketsByCNIfNeeded(t *testing.T) {
-	c := NewMockCompile(t)
-	c.cnList = engine.Nodes{
-		engine.Node{Addr: "cn1:6001", Mcpu: 2},
-		engine.Node{Addr: "cn2:6001", Mcpu: 2},
-	}
-	c.addr = "cn1:6001"
-	c.anal = &AnalyzeModule{qry: &plan.Query{}}
-	c.proc.Base.TxnOperator = fakeTxnOperator{}
-	proc := c.proc
+	for _, test := range []struct {
+		name      string
+		localOnly bool
+	}{
+		{name: "mixed local and remote shuffle targets"},
+		{name: "local-only shuffle targets", localOnly: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.cnList = engine.Nodes{
+				engine.Node{Addr: "cn1:6001", Mcpu: 2},
+				engine.Node{Addr: "cn2:6001", Mcpu: 2},
+			}
+			c.addr = "cn1:6001"
+			c.anal = &AnalyzeModule{qry: &plan.Query{}}
+			c.proc.Base.TxnOperator = fakeTxnOperator{}
+			proc := c.proc
 
-	// dop=2, 2 CN -> bucketNum=4. buckets[0,1] on cn1, buckets[2,3] on cn2.
-	addrs := []string{"cn1:6001", "cn1:6001", "cn2:6001", "cn2:6001"}
-	buckets := make([]*Scope, 4)
-	for i := range buckets {
-		buckets[i] = &Scope{
-			Magic:    Remote,
-			NodeInfo: engine.Node{Addr: addrs[i], Mcpu: 1},
-			Proc:     proc.NewContextChildProc(1),
-		}
-		buckets[i].setRootOperator(merge.NewArgument())
-	}
+			// dop=2, 2 CN -> bucketNum=4. buckets[0,1] on cn1, buckets[2,3] on cn2.
+			addrs := []string{"cn1:6001", "cn1:6001", "cn2:6001", "cn2:6001"}
+			buckets := make([]*Scope, 4)
+			for i := range buckets {
+				buckets[i] = &Scope{
+					Magic:    Remote,
+					NodeInfo: engine.Node{Addr: addrs[i], Mcpu: 1},
+					Proc:     proc.NewContextChildProc(1),
+				}
+				buckets[i].setRootOperator(merge.NewArgument())
+			}
 
-	// each CN's dispatch source is attached to that CN's first bucket (like compile.go:4500).
-	srcCN1 := newDispatchSrcScopeForTest(proc, "cn1:6001",
-		[]*Scope{buckets[0], buckets[1]}, []*Scope{buckets[2], buckets[3]})
-	buckets[0].PreScopes = append(buckets[0].PreScopes, srcCN1)
-	srcCN2 := newDispatchSrcScopeForTest(proc, "cn2:6001",
-		[]*Scope{buckets[2], buckets[3]}, []*Scope{buckets[0], buckets[1]})
-	buckets[2].PreScopes = append(buckets[2].PreScopes, srcCN2)
+			// each CN's dispatch source is attached to that CN's first bucket (like compile.go:4500).
+			srcCN1 := newDispatchSrcScopeForTest(proc, "cn1:6001",
+				[]*Scope{buckets[0], buckets[1]}, []*Scope{buckets[2], buckets[3]})
+			buckets[0].PreScopes = append(buckets[0].PreScopes, srcCN1)
+			srcCN2 := newDispatchSrcScopeForTest(proc, "cn2:6001",
+				[]*Scope{buckets[2], buckets[3]}, []*Scope{buckets[0], buckets[1]})
+			buckets[2].PreScopes = append(buckets[2].PreScopes, srcCN2)
 
-	// before regrouping: the dispatch-carrying buckets are wrongly judged not standalone.
-	require.False(t, checkPipelineStandaloneExecutableAtRemote(buckets[0]))
-	require.False(t, checkPipelineStandaloneExecutableAtRemote(buckets[2]))
+			if test.localOnly {
+				// A remote CN can own a shuffle source whose targets are all local
+				// receiver buckets on that CN. RemoteRegs is empty, but the source
+				// still cannot be sent as a separate tree because its LocalRegs
+				// belong to sibling bucket trees.
+				for _, source := range []*Scope{srcCN1, srcCN2} {
+					source.RootOp.(*dispatch.Dispatch).RemoteRegs = nil
+				}
+			}
 
-	// after regrouping: one per-CN container each, all standalone-executable at remote.
-	grouped := c.groupShuffleBucketsByCNIfNeeded(buckets)
-	require.Equal(t, 2, len(grouped))
-	for _, container := range grouped {
-		require.Equal(t, Remote, container.Magic)
-		require.True(t, checkPipelineStandaloneExecutableAtRemote(container))
+			// before regrouping: the dispatch-carrying buckets are wrongly judged not standalone.
+			require.False(t, checkPipelineStandaloneExecutableAtRemote(buckets[0]))
+			require.False(t, checkPipelineStandaloneExecutableAtRemote(buckets[2]))
+
+			// after regrouping: one per-CN container each, all standalone-executable at remote.
+			grouped := c.groupShuffleBucketsByCNIfNeeded(buckets)
+			require.Equal(t, 2, len(grouped))
+			for _, container := range grouped {
+				require.Equal(t, Remote, container.Magic)
+				require.True(t, checkPipelineStandaloneExecutableAtRemote(container))
+			}
+		})
 	}
 }
 
 // TestGroupShuffleBucketsByCNIfNeeded_Gating verifies the regrouping is a no-op when
-// there is no cross-CN shuffle dispatch (single CN, or no dispatch), so non-shuffle /
-// single-CN inserts are completely unaffected.
+// there is no out-of-tree local receiver dependency, so non-shuffle inserts are
+// completely unaffected.
 func TestGroupShuffleBucketsByCNIfNeeded_Gating(t *testing.T) {
 	c := NewMockCompile(t)
 	c.cnList = engine.Nodes{
