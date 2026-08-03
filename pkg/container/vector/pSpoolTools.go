@@ -14,27 +14,119 @@
 
 package vector
 
-// SetVecData is dangerous and should be used with caution.
-func SetVecData(v *Vector, data []byte) {
-	data = data[:cap(data)]
-	v.data = data
+import "github.com/matrixorigin/matrixone/pkg/common/mpool"
+
+// DetachedBuffer transfers one owned Vector backing allocation through the
+// pipeline spool without losing its immutable allocation provenance.
+// A non-empty value must be attached or freed exactly once.
+type DetachedBuffer struct {
+	data      []byte
+	selection *AllocationAccountSelection
+	kind      DetachedBufferKind
 }
 
-// SetVecArea is dangerous and should be used with caution.
-func SetVecArea(v *Vector, area []byte) {
-	v.area = area
-}
+type DetachedBufferKind uint8
 
-// GetAndClearVecData is a dangerous function that may cause data leakage.
-func GetAndClearVecData(v *Vector) []byte {
-	s := v.data
+const (
+	DetachedDataBuffer DetachedBufferKind = iota
+	DetachedAreaBuffer
+)
+
+func DetachVectorData(v *Vector) DetachedBuffer {
+	if v == nil {
+		return DetachedBuffer{}
+	}
+	buffer := DetachedBuffer{
+		data:      v.data,
+		selection: v.allocationAccount,
+	}
+	if v.typ.IsVarlen() {
+		v.areaDisjoint = false
+	}
 	v.data = nil
-	return s
+	return buffer
 }
 
-// GetAndClearVecArea is a dangerous function that may cause data leakage.
-func GetAndClearVecArea(v *Vector) []byte {
-	s := v.area
+func DetachVectorArea(v *Vector) DetachedBuffer {
+	if v == nil {
+		return DetachedBuffer{}
+	}
+	buffer := DetachedBuffer{
+		data:      v.area,
+		selection: v.allocationAccount,
+		kind:      DetachedAreaBuffer,
+	}
+	v.areaDisjoint = false
 	v.area = nil
-	return s
+	return buffer
+}
+
+func (b *DetachedBuffer) Capacity() int {
+	if b == nil {
+		return 0
+	}
+	return cap(b.data)
+}
+
+// CanAttachTo preserves data/area site provenance when an allocation has an
+// account. Unaccounted storage has no site identity and can serve either
+// backing without losing ownership information.
+func (b *DetachedBuffer) CanAttachTo(
+	v *Vector,
+	kind DetachedBufferKind,
+) bool {
+	if b == nil || v == nil || cap(b.data) == 0 ||
+		!AllocationAccountSelectionsEqual(b.selection, v.allocationAccount) ||
+		kind > DetachedAreaBuffer {
+		return false
+	}
+	return b.selection == nil || b.kind == kind
+}
+
+func (b *DetachedBuffer) AttachTo(
+	v *Vector,
+	kind DetachedBufferKind,
+) error {
+	if !b.CanAttachTo(v, kind) {
+		return allocationAccountInvalid(
+			"detached vector buffer provenance mismatch",
+		)
+	}
+	if kind == DetachedAreaBuffer {
+		if cap(v.area) != 0 {
+			return allocationAccountInvalid(
+				"vector area already has backing storage",
+			)
+		}
+		v.area = b.data
+		v.areaDisjoint = false
+	} else {
+		if cap(v.data) != 0 {
+			return allocationAccountInvalid(
+				"vector data already has backing storage",
+			)
+		}
+		v.data = b.data[:cap(b.data)]
+		if v.typ.IsVarlen() {
+			v.areaDisjoint = false
+		}
+	}
+	b.clear()
+	return nil
+}
+
+func (b *DetachedBuffer) Free(mp *mpool.MPool) {
+	if b == nil {
+		return
+	}
+	if cap(b.data) != 0 {
+		mp.Free(b.data)
+	}
+	b.clear()
+}
+
+func (b *DetachedBuffer) clear() {
+	b.data = nil
+	b.selection = nil
+	b.kind = DetachedDataBuffer
 }

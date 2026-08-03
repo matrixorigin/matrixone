@@ -245,7 +245,7 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 		result.Free()
 		return nil, err
 	}
-	exec, _, execFree := f.GetExecuteMethod()
+	exec, _, execFree, _ := f.GetExecuteMethod()
 	if err = exec(inputs, result, proc, evaluateLength, nil); err != nil {
 		result.Free()
 		if execFree != nil {
@@ -459,6 +459,11 @@ type executeFreeOfOverload func() error
 // in case we need it in the future.
 type executeResetOfOverload func() error
 
+// executeRetainedBytesOfOverload reports non-vector backing allocations kept
+// alive by a stateful function operator. It is optional: ordinary functions
+// whose complete retained state is represented by executor vectors omit it.
+type executeRetainedBytesOfOverload func() uint64
+
 // an overload of a function.
 // stores all information about execution logic.
 type overload struct {
@@ -482,7 +487,12 @@ type overload struct {
 
 	// the execution logic and free logic.
 	// NOTE: use either newOp or newOpWithFree.
-	newOpWithFree func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload)
+	newOpWithFree func() (
+		executeLogicOfOverload,
+		executeResetOfOverload,
+		executeFreeOfOverload,
+		executeRetainedBytesOfOverload,
+	)
 
 	// in fact, the function framework does not directly run aggregate functions and window functions.
 	// we use two flags to mark whether function is one of them.
@@ -521,14 +531,18 @@ func (ov *overload) CannotExecuteInParallel() bool {
 	return ov.cannotParallel
 }
 
-func (ov *overload) GetExecuteMethod() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload) {
+func (ov *overload) GetExecuteMethod() (
+	executeLogicOfOverload,
+	executeResetOfOverload,
+	executeFreeOfOverload,
+	executeRetainedBytesOfOverload,
+) {
 	if ov.newOpWithFree != nil {
-		fn, fnReset, fnFree := ov.newOpWithFree()
-		return fn, fnReset, fnFree
+		return ov.newOpWithFree()
 	}
 
 	fn := ov.newOp()
-	return fn, nil, nil
+	return fn, nil, nil, nil
 }
 
 func (ov *overload) GetReturnTypeMethod() func(parameters []types.Type) types.Type {

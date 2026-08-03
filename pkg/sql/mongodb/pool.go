@@ -50,6 +50,12 @@ type retirementState struct {
 	dropped      bool
 }
 
+type connectFlight struct {
+	done    chan struct{}
+	err     error
+	waiters int
+}
+
 // ClientPool keeps authentication state tenant- and generation-local. A
 // rotated connection creates a new key and drains prior generations only
 // after their last cursor lease is released.
@@ -67,6 +73,7 @@ type ClientPool struct {
 	// a late client starts draining instead of republishing an old idle pool.
 	retirements map[connectionKey]retirementState
 	connecting  map[connectionKey]int
+	flights     map[poolKey]*connectFlight
 	closed      bool
 	clock       uint64
 	maxIdle     int
@@ -91,6 +98,7 @@ func newClientPool(factory ClientFactory, validator ConnectionResolver, maxCache
 		entries:     make(map[poolKey]*poolEntry),
 		retirements: make(map[connectionKey]retirementState),
 		connecting:  make(map[connectionKey]int),
+		flights:     make(map[poolKey]*connectFlight),
 		maxIdle:     maxIdle,
 	}
 }
@@ -117,20 +125,43 @@ func (p *ClientPool) Acquire(ctx context.Context, connection Connection, credent
 		version:      connection.Version,
 		identity:     credentialIdentity(credentials),
 	}
-	p.mu.Lock()
-	if p.closed {
-		p.mu.Unlock()
-		return nil, moerr.NewInternalError(ctx, "MongoDB client pool is closed")
-	}
-	if entry := p.entries[key]; entry != nil {
-		// Exact-key reuse is safe even while the generation is draining: only
-		// statements whose catalog plan already carries this old version can
-		// ask for it. New statements resolve the newer version and cannot land
-		// here.
-		entry.refs++
-		client := entry.client
-		p.mu.Unlock()
-		return &ClientLease{pool: p, key: key, client: client}, nil
+	var flight *connectFlight
+	for {
+		p.mu.Lock()
+		if p.closed {
+			p.mu.Unlock()
+			return nil, moerr.NewInternalError(ctx, "MongoDB client pool is closed")
+		}
+		if entry := p.entries[key]; entry != nil {
+			// Exact-key reuse is safe even while the generation is draining: only
+			// statements whose catalog plan already carries this old version can
+			// ask for it. New statements resolve the newer version and cannot land
+			// here.
+			entry.refs++
+			client := entry.client
+			p.mu.Unlock()
+			return &ClientLease{pool: p, key: key, client: client}, nil
+		}
+		if existing := p.flights[key]; existing != nil {
+			existing.waiters++
+			done := existing.done
+			p.mu.Unlock()
+			select {
+			case <-done:
+				if err := context.Cause(ctx); err != nil {
+					return nil, err
+				}
+				if existing.err != nil {
+					return nil, existing.err
+				}
+				continue
+			case <-ctx.Done():
+				return nil, context.Cause(ctx)
+			}
+		}
+		flight = &connectFlight{done: make(chan struct{})}
+		p.flights[key] = flight
+		break
 	}
 	sourceKey := connectionKey{accountID: key.accountID, connectionID: key.connectionID}
 	p.connecting[sourceKey]++
@@ -142,7 +173,7 @@ func (p *ClientPool) Acquire(ctx context.Context, connection Connection, credent
 			ctx, connection.AccountID, connection.ConnectionID, connection.Version)
 		if validateErr != nil {
 			p.mu.Lock()
-			p.finishConnectLocked(sourceKey)
+			p.finishConnectLocked(sourceKey, key, flight, validateErr)
 			p.pruneRetirementLocked(sourceKey)
 			p.mu.Unlock()
 			return nil, validateErr
@@ -156,11 +187,12 @@ func (p *ClientPool) Acquire(ctx context.Context, connection Connection, credent
 			validated.Version != connection.Version ||
 			validated.CredentialSecretRef != connection.CredentialSecretRef ||
 			validated.TLSCASecretRef != connection.TLSCASecretRef {
+			changedErr := moerr.NewInvalidInput(ctx, "MongoDB connection changed during client acquisition")
 			p.mu.Lock()
-			p.finishConnectLocked(sourceKey)
+			p.finishConnectLocked(sourceKey, key, flight, changedErr)
 			p.pruneRetirementLocked(sourceKey)
 			p.mu.Unlock()
-			return nil, moerr.NewInvalidInput(ctx, "MongoDB connection changed during client acquisition")
+			return nil, changedErr
 		}
 		connection = validated
 	}
@@ -168,14 +200,14 @@ func (p *ClientPool) Acquire(ctx context.Context, connection Connection, credent
 	client, err := p.factory.Connect(ctx, connection, credentials, cfg)
 	if err != nil {
 		p.mu.Lock()
-		p.finishConnectLocked(sourceKey)
+		p.finishConnectLocked(sourceKey, key, flight, err)
 		p.pruneRetirementLocked(sourceKey)
 		p.mu.Unlock()
 		return nil, err
 	}
 
 	p.mu.Lock()
-	p.finishConnectLocked(sourceKey)
+	p.finishConnectLocked(sourceKey, key, flight, nil)
 	if p.closed {
 		p.mu.Unlock()
 		_ = disconnectClients([]Client{client})
@@ -355,11 +387,16 @@ func (p *ClientPool) isRetiredLocked(key poolKey) bool {
 	return retirement.dropped || key.version < retirement.versionFloor
 }
 
-func (p *ClientPool) finishConnectLocked(connection connectionKey) {
+func (p *ClientPool) finishConnectLocked(connection connectionKey, key poolKey, flight *connectFlight, err error) {
 	if p.connecting[connection] <= 1 {
 		delete(p.connecting, connection)
 	} else {
 		p.connecting[connection]--
+	}
+	if p.flights[key] == flight {
+		flight.err = err
+		delete(p.flights, key)
+		close(flight.done)
 	}
 }
 
@@ -420,6 +457,10 @@ func (p *ClientPool) Close(_ context.Context) error {
 	p.entries = make(map[poolKey]*poolEntry)
 	p.retirements = make(map[connectionKey]retirementState)
 	p.connecting = make(map[connectionKey]int)
+	for key, flight := range p.flights {
+		delete(p.flights, key)
+		close(flight.done)
+	}
 	p.mu.Unlock()
 	return disconnectClients(clients)
 }
@@ -428,7 +469,8 @@ func disconnectClients(clients []Client) error {
 	if len(clients) == 0 {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), clientCleanupTimeout)
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(), clientCleanupTimeout, moerr.CauseMongoDBClientCleanup)
 	defer cancel()
 	var first error
 	for _, client := range clients {
@@ -464,6 +506,7 @@ type RuntimeDependencies struct {
 	Secrets     SecretResolver
 	Pool        *ClientPool
 	Limiter     *SourceLimiter
+	Retirements *ClientRetirementQueue
 }
 
 const (

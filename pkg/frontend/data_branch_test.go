@@ -1663,6 +1663,35 @@ func TestCheckSchemaCompatibility_RejectsChangedPrimaryKeyWithCommonColumns(t *t
 	require.ErrorContains(t, err, "primary key columns")
 }
 
+func TestCheckSchemaCompatibilityWithResolver_AcceptsRenamedPrimaryKey(t *testing.T) {
+	tarDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"id_new"}, PkeyColName: "id_new"},
+		Cols: []*plan.ColDef{
+			{ColId: 1, Seqnum: 0, Name: "id_new", Primary: true, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 2, Seqnum: 1, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	baseDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols: []*plan.ColDef{
+			{ColId: 1, Seqnum: 0, Name: "id", Primary: true, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 2, Seqnum: 1, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err := checkSchemaCompatibilityWithResolver(
+		tarDef,
+		baseDef,
+		func(tarCol *plan.ColDef) *plan.ColDef {
+			return dataBranchEndpointColumnDef(baseDef, tarCol)
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1}, commonIdxes)
+	require.Equal(t, []int{0, 1}, commonVisibleIdxes)
+	require.Empty(t, tarOnlyIdxes)
+}
+
 func TestCheckSchemaCompatibility_TypeMismatch(t *testing.T) {
 	tarDef := &plan.TableDef{
 		Name: "target",
@@ -1805,6 +1834,33 @@ func TestValidateDataBranchColumnLineage(t *testing.T) {
 		require.NoError(t, validateDataBranchColumnLineage(
 			tarDefs, []bool{false, false}, baseDefs, []bool{false, false},
 		))
+	})
+
+	t.Run("rename on LCA endpoint after fork preserves identity", func(t *testing.T) {
+		lcaAtFork := tableDef(col("a", 1, 0), col("b", 2, 1))
+		tarEndpoint := tableDef(col("a", 1, 0), col("b", 2, 1))
+		baseEndpoint := tableDef(col("a", 1, 0), col("bb", 2, 1))
+
+		endpointColumns, err := dataBranchLineageEndpointColumns(
+			[]*plan.TableDef{lcaAtFork, tarEndpoint}, []bool{false, false},
+			[]*plan.TableDef{baseEndpoint}, []bool{false},
+		)
+		require.NoError(t, err)
+		require.Same(t, baseEndpoint.Cols[1], endpointColumns["b"])
+	})
+
+	t.Run("replacement on LCA endpoint after fork remains discontinuous", func(t *testing.T) {
+		lcaAtFork := tableDef(col("a", 1, 0), col("b", 2, 1))
+		tarEndpoint := tableDef(col("a", 1, 0), col("b", 2, 1))
+		baseWithoutColumn := tableDef(col("a", 10, 0))
+		baseReplacement := tableDef(col("a", 20, 0), col("bb", 2, 1))
+
+		endpointColumns, err := dataBranchLineageEndpointColumns(
+			[]*plan.TableDef{lcaAtFork, tarEndpoint}, []bool{false, false},
+			[]*plan.TableDef{lcaAtFork, baseWithoutColumn, baseReplacement}, []bool{false, true, true},
+		)
+		require.NoError(t, err)
+		require.NotContains(t, endpointColumns, "b")
 	})
 
 	t.Run("rename preserves stable identity across edge kinds", func(t *testing.T) {

@@ -1991,9 +1991,9 @@ var supportedStringBuiltIns = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_json.ToType()
 				},
-				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload) {
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
 					op := newOpOnnxRun()
-					return op.onnxRun, op.Reset, op.Close
+					return op.onnxRun, op.Reset, op.Close, nil
 				},
 			},
 			{
@@ -2004,9 +2004,9 @@ var supportedStringBuiltIns = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_json.ToType()
 				},
-				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload) {
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
 					op := newOpOnnxRun()
-					return op.onnxRun, op.Reset, op.Close
+					return op.onnxRun, op.Reset, op.Close, nil
 				},
 			},
 		},
@@ -2948,9 +2948,9 @@ var supportedStringBuiltIns = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload) {
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
 					opSerial := newOpSerial()
-					return opSerial.BuiltInSerial, opSerial.Reset, opSerial.Close
+					return opSerial.BuiltInSerial, opSerial.Reset, opSerial.Close, opSerial.RetainedBytes
 				},
 			},
 		},
@@ -2974,9 +2974,9 @@ var supportedStringBuiltIns = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload) {
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
 					opSerial := newOpSerial()
-					return opSerial.BuiltInSerialFull, opSerial.Reset, opSerial.Close
+					return opSerial.BuiltInSerialFull, opSerial.Reset, opSerial.Close, opSerial.RetainedBytes
 				},
 			},
 		},
@@ -14364,6 +14364,12 @@ var supportedOthersBuiltIns = []FuncNew{
 							if isNull || !flag {
 								if errType == "fk_no_referenced_row" {
 									return moerr.NewErrFKNoReferencedRow2(proc.Ctx)
+								}
+								if errType == "fk_row_is_referenced" {
+									return moerr.NewErrFKRowIsReferenced(proc.Ctx)
+								}
+								if errType == "fk_ambiguous_parent_mapping" {
+									return moerr.NewNotSupported(proc.Ctx, errMsg)
 								}
 								return moerr.NewInternalError(proc.Ctx, errMsg)
 							}

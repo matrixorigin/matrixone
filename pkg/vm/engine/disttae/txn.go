@@ -79,6 +79,178 @@ func (txn *Transaction) ReadOnly() bool {
 	return txn.readOnly.Load()
 }
 
+func (txn *Transaction) accountWorkspaceEntryLocked(entry *Entry) {
+	if entry.accountedSize != 0 {
+		panic("BUG: workspace entry is already accounted")
+	}
+	if entry.bat == nil {
+		return
+	}
+
+	entry.accountedSize = uint64(entry.bat.Size())
+	txn.workspaceSize += entry.accountedSize
+	if entry.fileName != "" || catalog.IsSystemTable(entry.tableId) {
+		return
+	}
+
+	switch entry.typ {
+	case INSERT:
+		txn.approximateInMemInsertSize += entry.accountedSize
+		txn.approximateInMemInsertCnt += entry.bat.RowCount()
+	case DELETE:
+		txn.approximateInMemDeleteCnt += entry.bat.RowCount()
+	}
+}
+
+func (txn *Transaction) unaccountWorkspaceEntryLocked(entry *Entry) {
+	if entry.bat == nil {
+		if entry.accountedSize != 0 {
+			panic("BUG: nil workspace entry has accounted bytes")
+		}
+		return
+	}
+	if entry.accountedSize != uint64(entry.bat.Size()) {
+		panic("BUG: workspace entry changed outside accounting helpers")
+	}
+	if txn.workspaceSize < entry.accountedSize {
+		panic("BUG: workspace size accounting underflow")
+	}
+
+	txn.workspaceSize -= entry.accountedSize
+	if entry.fileName == "" && !catalog.IsSystemTable(entry.tableId) {
+		switch entry.typ {
+		case INSERT:
+			if txn.approximateInMemInsertSize < entry.accountedSize ||
+				txn.approximateInMemInsertCnt < entry.bat.RowCount() {
+				panic("BUG: in-memory insert accounting underflow")
+			}
+			txn.approximateInMemInsertSize -= entry.accountedSize
+			txn.approximateInMemInsertCnt -= entry.bat.RowCount()
+		case DELETE:
+			if txn.approximateInMemDeleteCnt < entry.bat.RowCount() {
+				panic("BUG: in-memory delete accounting underflow")
+			}
+			txn.approximateInMemDeleteCnt -= entry.bat.RowCount()
+		}
+	}
+	entry.accountedSize = 0
+}
+
+func (txn *Transaction) appendWorkspaceEntryLocked(entry Entry) {
+	txn.accountWorkspaceEntryLocked(&entry)
+	txn.writes = append(txn.writes, entry)
+}
+
+func (txn *Transaction) releaseWorkspaceEntryBatchLocked(idx int) {
+	entry := &txn.writes[idx]
+	if entry.bat == nil {
+		return
+	}
+
+	bat := entry.bat
+	txn.unaccountWorkspaceEntryLocked(entry)
+	delete(txn.batchSelectList, bat)
+	bat.Clean(txn.proc.GetMPool())
+	entry.bat = nil
+}
+
+func (txn *Transaction) shrinkWorkspaceEntryBatchLocked(idx int, sels []int64) {
+	entry := &txn.writes[idx]
+	if entry.bat == nil {
+		return
+	}
+	bat := entry.bat
+	if len(sels) == 0 {
+		delete(txn.batchSelectList, bat)
+		return
+	}
+
+	slices.Sort(sels)
+	sels = slices.Compact(sels)
+	txn.unaccountWorkspaceEntryLocked(entry)
+	shrinkBatchWithRowids(bat, sels)
+	txn.accountWorkspaceEntryLocked(entry)
+	delete(txn.batchSelectList, bat)
+}
+
+func (txn *Transaction) mergeWorkspaceEntryBatchesLocked(
+	ctx context.Context,
+	dstIdx int64,
+	srcIdx int64,
+) error {
+	dst := &txn.writes[dstIdx]
+	src := &txn.writes[srcIdx]
+	txn.unaccountWorkspaceEntryLocked(dst)
+	txn.unaccountWorkspaceEntryLocked(src)
+
+	if _, err := dst.bat.Append(ctx, txn.proc.Mp(), src.bat); err != nil {
+		// Append may have mutated some destination vectors before failing.
+		// Restore accounting from the two batches' actual states.
+		txn.accountWorkspaceEntryLocked(dst)
+		txn.accountWorkspaceEntryLocked(src)
+		return err
+	}
+
+	txn.accountWorkspaceEntryLocked(dst)
+	delete(txn.batchSelectList, src.bat)
+	src.bat.Clean(txn.proc.GetMPool())
+	src.bat = nil
+	return nil
+}
+
+func (txn *Transaction) checkWorkspaceAccountingLocked() error {
+	var workspaceSize uint64
+	var insertSize uint64
+	var insertCnt int
+	var deleteCnt int
+	for i := range txn.writes {
+		entry := &txn.writes[i]
+		if entry.bat == nil {
+			if entry.accountedSize != 0 {
+				return moerr.NewInternalErrorNoCtxf("entry %d: nil batch accounts %d bytes", i, entry.accountedSize)
+			}
+			continue
+		}
+		size := uint64(entry.bat.Size())
+		if entry.accountedSize != size {
+			return moerr.NewInternalErrorNoCtxf("entry %d: accounted size %d, batch size %d", i, entry.accountedSize, size)
+		}
+		workspaceSize += size
+		if entry.fileName != "" || catalog.IsSystemTable(entry.tableId) {
+			continue
+		}
+		switch entry.typ {
+		case INSERT:
+			insertSize += size
+			insertCnt += entry.bat.RowCount()
+		case DELETE:
+			deleteCnt += entry.bat.RowCount()
+		}
+	}
+
+	if txn.workspaceSize != workspaceSize ||
+		txn.approximateInMemInsertSize != insertSize ||
+		txn.approximateInMemInsertCnt != insertCnt ||
+		txn.approximateInMemDeleteCnt != deleteCnt {
+		return moerr.NewInternalErrorNoCtxf(
+			"workspace accounting mismatch: workspace %d/%d, insert bytes %d/%d, insert rows %d/%d, delete rows %d/%d",
+			txn.workspaceSize, workspaceSize,
+			txn.approximateInMemInsertSize, insertSize,
+			txn.approximateInMemInsertCnt, insertCnt,
+			txn.approximateInMemDeleteCnt, deleteCnt,
+		)
+	}
+	return nil
+}
+
+func (txn *Transaction) assertWorkspaceAccountingLocked() {
+	common.DoIfDebugEnabled(func() {
+		if err := txn.checkWorkspaceAccountingLocked(); err != nil {
+			panic(err)
+		}
+	})
+}
+
 // WriteBatch used to write data to the transaction buffer
 // insert/delete/update all use this api
 // truncate : it denotes the batch with typ DELETE on mo_tables is generated when Truncating
@@ -126,6 +298,9 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 	autoIncrEpoch uint32,
 	autoIncrEpochKnown bool,
 ) (genRowidVec *vector.Vector, err error) {
+	if err := txn.requireAutoIncrEpochFenceCommit(autoIncrEpoch, autoIncrEpochKnown); err != nil {
+		return nil, err
+	}
 	start := time.Now()
 	seq := txn.op.NextSequence()
 	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
@@ -206,14 +381,6 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 		}
 		bat.InsertVector(0, objectio.PhysicalAddr_Attr, genRowidVec)
 
-		if !catalog.IsSystemTable(tableId) {
-			txn.approximateInMemInsertSize += uint64(bat.Size())
-			txn.approximateInMemInsertCnt += bat.RowCount()
-		}
-	}
-
-	if typ == DELETE && !catalog.IsSystemTable(tableId) {
-		txn.approximateInMemDeleteCnt += bat.RowCount()
 	}
 
 	if injected, logLevel := objectio.LogWorkspaceInjected(
@@ -281,9 +448,8 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 		pkCheckPos:         pkCheckPos,
 		pkCheckReady:       pkCheckReady,
 	}
-	txn.writes = append(txn.writes, e)
+	txn.appendWorkspaceEntryLocked(e)
 	txn.pkCount += bat.RowCount()
-	txn.workspaceSize += uint64(bat.Size())
 
 	trace.GetService(txn.proc.GetService()).TxnWrite(txn.op, tableId, typesNames[typ], bat)
 	return
@@ -773,7 +939,6 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 				return nil
 			}
 		}
-		size = 0
 	}
 	if offset < txn.adjustWriteOffset {
 		txn.adjustWriteOffset = offset
@@ -789,7 +954,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 		return err
 	}
 
-	if err := txn.dumpInsertBatchLocked(ctx, fs, offset, &size, &pkCount); err != nil {
+	if err := txn.dumpInsertBatchLocked(ctx, fs, offset, &pkCount); err != nil {
 		return err
 	}
 	// release the extra quota
@@ -807,7 +972,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 
 	if dumpAll {
 		if txn.approximateInMemDeleteCnt >= txn.engine.config.insertEntryMaxCount {
-			if err := txn.dumpDeleteBatchLocked(ctx, fs, offset, &size); err != nil {
+			if err := txn.dumpDeleteBatchLocked(ctx, fs, offset); err != nil {
 				return err
 			}
 			//After flushing inserts/deletes in memory into S3, the entries in txn.writes will be unordered,
@@ -816,8 +981,6 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 				return err
 			}
 		}
-		txn.approximateInMemDeleteCnt = 0
-		txn.approximateInMemInsertSize = 0
 		txn.pkCount -= pkCount
 		// modifies txn.writes.
 		writes := txn.writes[:0]
@@ -828,11 +991,9 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 		}
 		txn.writes = writes
 	} else {
-		txn.approximateInMemInsertSize -= size
 		txn.pkCount -= pkCount
 	}
-
-	txn.workspaceSize -= size
+	txn.assertWorkspaceAccountingLocked()
 	return nil
 }
 
@@ -840,7 +1001,6 @@ func (txn *Transaction) dumpInsertBatchLocked(
 	ctx context.Context,
 	fs fileservice.FileService,
 	offset int,
-	size *uint64,
 	pkCount *int,
 ) error {
 
@@ -936,8 +1096,8 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			// the lock held.
 			if _, ok := tables[tbKey.tableKey]; ok {
 				bat := txn.writes[i].bat
-				*size += uint64(bat.Size())
 				*pkCount += bat.RowCount()
+				txn.unaccountWorkspaceEntryLocked(&txn.writes[i])
 				// skip rowid
 				newBatch := batch.NewWithSize(len(bat.Vecs) - 1)
 				newBatch.SetAttributes(bat.Attrs[1:])
@@ -1030,7 +1190,6 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 	ctx context.Context,
 	fs fileservice.FileService,
 	offset int,
-	size *uint64,
 ) error {
 
 	// See the comment in dumpInsertBatchLocked: tables must be resolved
@@ -1078,7 +1237,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			if _, ok := tables[tbKey.tableKey]; ok {
 				bat := txn.writes[i].bat
 				deleteCnt += bat.RowCount()
-				*size += uint64(bat.Size())
+				txn.unaccountWorkspaceEntryLocked(&txn.writes[i])
 
 				newBat := batch.NewWithSize(len(bat.Vecs))
 				newBat.SetAttributes(bat.Attrs)
@@ -1433,6 +1592,9 @@ func (txn *Transaction) writeFileLockedWithAutoIncrEpochKnown(
 	autoIncrEpoch uint32,
 	autoIncrEpochKnown bool,
 ) (err error) {
+	if err := txn.requireAutoIncrEpochFenceCommit(autoIncrEpoch, autoIncrEpochKnown); err != nil {
+		return err
+	}
 
 	txn.hasS3Op.Store(true)
 
@@ -1458,7 +1620,6 @@ func (txn *Transaction) writeFileLockedWithAutoIncrEpochKnown(
 	}
 
 	txn.readOnly.Store(false)
-	txn.workspaceSize += uint64(copied.Size())
 
 	if typ == DELETE {
 		col, area := vector.MustVarlenaRawData(copied.Vecs[0])
@@ -1484,9 +1645,19 @@ func (txn *Transaction) writeFileLockedWithAutoIncrEpochKnown(
 		autoIncrEpochKnown: autoIncrEpochKnown,
 	}
 
-	txn.writes = append(txn.writes, entry)
+	txn.appendWorkspaceEntryLocked(entry)
 
 	return nil
+}
+
+func (txn *Transaction) requireAutoIncrEpochFenceCommit(autoIncrEpoch uint32, autoIncrEpochKnown bool) error {
+	if !autoIncrEpochKnown || autoIncrEpoch == 0 {
+		return nil
+	}
+	if client.RequireAutoIncrEpochFenceCommit(txn.op) {
+		return nil
+	}
+	return moerr.NewNotSupported(txn.proc.Ctx, "transaction operator cannot enforce AUTO_INCREMENT epochs")
 }
 
 // WriteFileLockedSkipTransfer is similar to WriteFileLocked but marks the entry
@@ -1535,6 +1706,9 @@ func (txn *Transaction) writeFileLockedSkipTransferWithAutoIncrEpochKnown(
 	autoIncrEpoch uint32,
 	autoIncrEpochKnown bool,
 ) (err error) {
+	if err := txn.requireAutoIncrEpochFenceCommit(autoIncrEpoch, autoIncrEpochKnown); err != nil {
+		return err
+	}
 
 	txn.hasS3Op.Store(true)
 
@@ -1560,7 +1734,6 @@ func (txn *Transaction) writeFileLockedSkipTransferWithAutoIncrEpochKnown(
 	}
 
 	txn.readOnly.Store(false)
-	txn.workspaceSize += uint64(copied.Size())
 
 	if typ == DELETE {
 		col, area := vector.MustVarlenaRawData(copied.Vecs[0])
@@ -1585,7 +1758,7 @@ func (txn *Transaction) writeFileLockedSkipTransferWithAutoIncrEpochKnown(
 		autoIncrEpochKnown: autoIncrEpochKnown,
 	}
 
-	txn.writes = append(txn.writes, entry)
+	txn.appendWorkspaceEntryLocked(entry)
 
 	return nil
 }
@@ -1868,14 +2041,9 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	txn.restoreTxnTableFunc = txn.restoreTxnTableFunc[:0]
 
 	if len(txn.batchSelectList) > 0 {
-		for _, e := range txn.writes {
-			if sels, ok := txn.batchSelectList[e.bat]; ok {
-				// Repeated internal deletes can select the same workspace row more than once.
-				slices.Sort(sels)
-				sels = slices.Compact(sels)
-				txn.approximateInMemInsertCnt -= len(sels)
-				shrinkBatchWithRowids(e.bat, sels)
-				delete(txn.batchSelectList, e.bat)
+		for i := range txn.writes {
+			if sels, ok := txn.batchSelectList[txn.writes[i].bat]; ok {
+				txn.shrinkWorkspaceEntryBatchLocked(i, sels)
 			}
 		}
 	}
@@ -1896,10 +2064,10 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 					)
 					_ = txn.GCObjsByIdxRange(i, i)
 				}
-				e.bat.Clean(txn.proc.GetMPool())
-				txn.writes[i].bat = nil
+				txn.releaseWorkspaceEntryBatchLocked(i)
 			}
 		}
+		txn.assertWorkspaceAccountingLocked()
 	}
 
 	if err := txn.compactDeletionOnObjsLocked(ctx); err != nil {
@@ -1949,12 +2117,9 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 				if b.bat != nil && a.tableId == b.tableId && a.databaseId == b.databaseId &&
 					a.bat.RowCount()+b.bat.RowCount() <= objectio.BlockMaxRows {
 					merged = true
-					if _, err = a.bat.Append(ctx, txn.proc.Mp(), b.bat); err != nil {
+					if err = txn.mergeWorkspaceEntryBatchesLocked(ctx, idxes[i], idxes[j]); err != nil {
 						return err
 					}
-
-					b.bat.Clean(txn.proc.GetMPool())
-					b.bat = nil
 				}
 
 				if a.bat.RowCount() == objectio.BlockMaxRows {
@@ -2028,6 +2193,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 		}
 	}
 
+	txn.assertWorkspaceAccountingLocked()
 	return nil
 }
 
@@ -2269,8 +2435,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			offset += int(stats.BlkCnt())
 		}
 
-		txn.writes[i].bat.Clean(txn.proc.GetMPool())
-		txn.writes[i].bat = nil
+		txn.releaseWorkspaceEntryBatchLocked(i)
 	}
 
 	if txn.compactWorker == nil {
@@ -2695,8 +2860,10 @@ func (txn *Transaction) delTransaction() {
 		if txn.writes[i].bat == nil {
 			continue
 		}
+		txn.unaccountWorkspaceEntryLocked(&txn.writes[i])
 		txn.writes[i].bat.Clean(txn.proc.Mp())
 	}
+	txn.assertWorkspaceAccountingLocked()
 
 	txn.tableCache = nil
 	txn.tableOps = nil

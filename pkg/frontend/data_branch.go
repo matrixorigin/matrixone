@@ -1150,10 +1150,7 @@ func getTableStuff(
 	dstTable tree.TableName,
 ) (tblStuff tableStuff, err error) {
 
-	var (
-		tarTblDef  *plan.TableDef
-		baseTblDef *plan.TableDef
-	)
+	var tarTblDef *plan.TableDef
 
 	if tblStuff.tarRel, tblStuff.baseRel, tblStuff.tarSnap, tblStuff.baseSnap, err = getRelations(
 		ctx, ses, bh, srcTable, dstTable,
@@ -1162,10 +1159,6 @@ func getTableStuff(
 	}
 
 	tarTblDef = tblStuff.tarRel.GetTableDef(ctx)
-	baseTblDef = tblStuff.baseRel.GetTableDef(ctx)
-	if err = checkDataBranchPrimaryKeyCompatibility(tarTblDef, baseTblDef); err != nil {
-		return
-	}
 
 	for _, col := range tarTblDef.Cols {
 		if col.Name == catalog.Row_ID {
@@ -1185,12 +1178,12 @@ func getTableStuff(
 		}
 	}
 
-	if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+	if tarTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		tblStuff.def.pkKind = fakeKind
-	} else if baseTblDef.Pkey.CompPkeyCol != nil {
+	} else if tarTblDef.Pkey.CompPkeyCol != nil {
 		// case 2: composite pk, combined all pks columns as the PK
 		tblStuff.def.pkKind = compositeKind
-		pkNames := baseTblDef.Pkey.Names
+		pkNames := tarTblDef.Pkey.Names
 		for _, name := range pkNames {
 			idx := dataBranchColumnIndexByName(tblStuff.def.colNames, name)
 			if idx < 0 {
@@ -1202,7 +1195,7 @@ func getTableStuff(
 	} else {
 		// normal pk
 		tblStuff.def.pkKind = normalKind
-		pkName := baseTblDef.Pkey.PkeyColName
+		pkName := tarTblDef.Pkey.PkeyColName
 		idx := dataBranchColumnIndexByName(tblStuff.def.colNames, pkName)
 		if idx < 0 {
 			err = moerr.NewInternalErrorNoCtxf("primary key column %q is not present in target data columns", pkName)
@@ -1211,14 +1204,14 @@ func getTableStuff(
 		tblStuff.def.pkColIdxes = append(tblStuff.def.pkColIdxes, idx)
 	}
 
-	tblStuff.def.pkColIdx = dataBranchColumnIndexByName(tblStuff.def.colNames, baseTblDef.Pkey.PkeyColName)
+	tblStuff.def.pkColIdx = dataBranchColumnIndexByName(tblStuff.def.colNames, tarTblDef.Pkey.PkeyColName)
 	if tblStuff.def.pkColIdx < 0 {
-		err = moerr.NewInternalErrorNoCtxf("primary key column %q is not present in target data columns", baseTblDef.Pkey.PkeyColName)
+		err = moerr.NewInternalErrorNoCtxf("primary key column %q is not present in target data columns", tarTblDef.Pkey.PkeyColName)
 		return
 	}
-	tblStuff.def.pkSeqnum = int(baseTblDef.Cols[baseTblDef.Name2ColIndex[baseTblDef.Pkey.PkeyColName]].Seqnum)
+	tblStuff.def.pkSeqnum = int(tarTblDef.Cols[tarTblDef.Name2ColIndex[tarTblDef.Pkey.PkeyColName]].Seqnum)
 	if tblStuff.def.pkKind == fakeKind {
-		tblStuff.def.pkColIdxes = dataBranchFakePKColIdxes(baseTblDef)
+		tblStuff.def.pkColIdxes = dataBranchFakePKColIdxes(tarTblDef)
 	}
 
 	tblStuff.retPool = &retBatchList{}
@@ -1529,13 +1522,22 @@ func dataBranchPrimaryKeyColumns(tblDef *plan.TableDef) (kind int, names []strin
 	return normalKind, []string{tblDef.Pkey.PkeyColName}
 }
 
-func checkDataBranchPrimaryKeyCompatibility(tarDef, baseDef *plan.TableDef) error {
+func checkDataBranchPrimaryKeyCompatibilityWithResolver(
+	tarDef, baseDef *plan.TableDef,
+	resolveBaseColumn dataBranchEndpointColumnResolver,
+) error {
 	tarKind, tarNames := dataBranchPrimaryKeyColumns(tarDef)
 	baseKind, baseNames := dataBranchPrimaryKeyColumns(baseDef)
 	compatible := tarKind == baseKind && len(tarNames) == len(baseNames)
-	if compatible {
+	if compatible && tarKind != fakeKind {
 		for i := range tarNames {
-			if !strings.EqualFold(tarNames[i], baseNames[i]) {
+			tarCol := dataBranchColumnDefByName(tarDef, tarNames[i])
+			if tarCol == nil {
+				compatible = false
+				break
+			}
+			baseCol := resolveBaseColumn(tarCol)
+			if baseCol == nil || !strings.EqualFold(baseCol.Name, baseNames[i]) {
 				compatible = false
 				break
 			}
@@ -1573,7 +1575,9 @@ func checkSchemaCompatibilityWithResolver(
 	tarDef, baseDef *plan.TableDef,
 	resolveBaseColumn dataBranchEndpointColumnResolver,
 ) (commonIdxes, commonVisibleIdxes, tarOnlyIdxes []int, err error) {
-	if err = checkDataBranchPrimaryKeyCompatibility(tarDef, baseDef); err != nil {
+	if err = checkDataBranchPrimaryKeyCompatibilityWithResolver(
+		tarDef, baseDef, resolveBaseColumn,
+	); err != nil {
 		return
 	}
 
@@ -2333,7 +2337,7 @@ func dataBranchLineageEndpointColumns(
 				candidateReachesLCA, candidateLCACol, candidateRedefined :=
 					dataBranchColumnReachesLCA(baseDefs, baseLineageOnly, candidate)
 				if candidateRedefined || !candidateReachesLCA ||
-					dataBranchColumnDefByLogicalName(baseDefs[0], tarLCACol) != candidateLCACol {
+					dataBranchEndpointColumnDef(baseDefs[0], tarLCACol) != candidateLCACol {
 					continue
 				}
 				if baseCol != nil {
@@ -2353,7 +2357,7 @@ func dataBranchLineageEndpointColumns(
 		)
 		identityMismatch := tarRedefined || baseRedefined || tarReachesLCA != baseReachesLCA
 		if tarReachesLCA && baseReachesLCA {
-			identityMismatch = dataBranchColumnDefByLogicalName(baseDefs[0], tarLCACol) != baseLCACol
+			identityMismatch = dataBranchEndpointColumnDef(baseDefs[0], tarLCACol) != baseLCACol
 		}
 		if !tarReachesLCA && !baseReachesLCA {
 			// Independently added same-name columns are compatible when the
