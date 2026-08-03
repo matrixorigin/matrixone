@@ -647,6 +647,48 @@ func TestBindScoreBinaryStringUsesBinaryStringSemantics(t *testing.T) {
 	require.False(t, castFunc.Args[0].GetLit().GetIsBin())
 }
 
+func TestBinaryLiteralComparisonKeepsVarbinaryColumnUncast(t *testing.T) {
+	testCases := []struct {
+		name   string
+		filter string
+		colArg int
+	}{
+		{name: "column on left", filter: "a = binary x'41'", colArg: 0},
+		{name: "column on right", filter: "binary x'41' = a", colArg: 1},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			mock.ctxt.tables["bind_select"].Cols[0].Typ = plan.Type{
+				Id:      int32(types.T_varbinary),
+				Width:   8,
+				Charset: uint32(types.CharsetBinary),
+			}
+
+			p, err := runOneStmt(mock, t,
+				"select a from select_test.bind_select where "+tc.filter)
+			require.NoError(t, err)
+
+			var filter *plan.Expr
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef.Name == "bind_select" {
+					require.Len(t, node.FilterList, 1)
+					filter = node.FilterList[0]
+					break
+				}
+			}
+			require.NotNil(t, filter)
+			eq := filter.GetF()
+			require.NotNil(t, eq)
+			require.Equal(t, "=", eq.Func.ObjName)
+			require.Len(t, eq.Args, 2)
+			require.NotNil(t, eq.Args[tc.colArg].GetCol(),
+				"the indexed VARBINARY column must not be wrapped in a cast")
+		})
+	}
+}
+
 func TestBindSerialFunctionOverEmptyExprListDoesNotPanic(t *testing.T) {
 	ctx := context.Background()
 

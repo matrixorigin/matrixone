@@ -673,9 +673,12 @@ func (t Type) Eq(b Type) bool {
 	// XXX need to find out why these types have different size/width
 	case T_bool, T_uint8, T_uint16, T_uint32, T_uint64, T_uint128, T_int8, T_int16, T_int32, T_int64, T_int128:
 		return t.Oid == b.Oid
-	default:
+	case T_char, T_varchar, T_text:
 		return t.Oid == b.Oid && t.Charset == b.Charset &&
 			t.Size == b.Size && t.Width == b.Width && t.Scale == b.Scale
+	default:
+		return t.Oid == b.Oid && t.Size == b.Size &&
+			t.Width == b.Width && t.Scale == b.Scale
 	}
 }
 
