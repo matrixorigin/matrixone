@@ -52,6 +52,10 @@ perform insert into perform_db.perform values (4);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 14 near " insert into perform_db.perform values (4);";
 perform select 1 into outfile 'perform.csv';
 not supported: PERFORM SELECT INTO OUTFILE
+perform with outfile_cte as (select 1 into outfile 'perform-cte.csv') select * from outfile_cte;
+not supported: PERFORM SELECT INTO OUTFILE
+perform select (select 1 into outfile 'perform-subquery.csv');
+not supported: PERFORM SELECT INTO OUTFILE
 perform select * from perform_db.perform_missing;
 SQL parser error: table "perform_missing" does not exist
 create role perform_role;

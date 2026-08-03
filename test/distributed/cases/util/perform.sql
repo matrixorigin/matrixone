@@ -39,6 +39,8 @@ perfrom select 1;
 perform values row(1);
 perform insert into perform_db.perform values (4);
 perform select 1 into outfile 'perform.csv';
+perform with outfile_cte as (select 1 into outfile 'perform-cte.csv') select * from outfile_cte;
+perform select (select 1 into outfile 'perform-subquery.csv');
 perform select * from perform_db.perform_missing;
 
 create role perform_role;
