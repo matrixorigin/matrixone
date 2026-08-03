@@ -10,9 +10,7 @@ WORKDIR /go/src/github.com/matrixorigin/matrixone
 FROM build-base AS native
 
 COPY thirdparties thirdparties
-# This branch image is only used for non-ONNX regression validation. Build the
-# native dependencies those workloads need without fetching ONNX Runtime.
-RUN make -C thirdparties init usearch xxhash croaring
+RUN make -C thirdparties
 
 COPY cgo cgo
 RUN make -C cgo
