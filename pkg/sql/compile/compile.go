@@ -5761,6 +5761,7 @@ func (c *Compile) newEmptyMergeScope() *Scope {
 
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs := c.newEmptyMergeScope()
+	ss = c.groupRemoteRunDependenciesByCNIfNeeded(ss, rs.NodeInfo)
 	rs.PreScopes = ss
 
 	rs.Proc = c.proc.NewNoContextChildProc(len(ss))
@@ -5997,6 +5998,32 @@ func (c *Compile) mergeShuffleScopesIfNeeded(ss []*Scope, force bool) []*Scope {
 		}
 	}
 	return rs
+}
+
+// groupRemoteRunDependenciesByCNIfNeeded preserves the ownership boundary of
+// in-process dispatch and connector receivers when a local merge makes its
+// inputs separate RemoteRun units. A scope that targets a receiver owned by a
+// sibling scope cannot execute remotely on its own; wrapping all inputs from
+// the same CN in one merge scope keeps those dependencies in one serialized
+// tree. Only a non-local invalid input triggers regrouping; once triggered, the
+// whole input stage is grouped consistently by CN. Independent input stages
+// retain the direct fast path.
+func (c *Compile) groupRemoteRunDependenciesByCNIfNeeded(
+	ss []*Scope,
+	mergeNode engine.Node,
+) []*Scope {
+	stageNodes := shuffleBucketStageNodes(ss)
+	if len(ss) <= len(stageNodes) {
+		return ss
+	}
+
+	for _, scope := range ss {
+		if !sameExecutionNode(scope.NodeInfo, mergeNode) &&
+			findPipelineExternalLocalReceiver(scope) != nil {
+			return c.mergeScopesByStageNodes(ss, stageNodes)
+		}
+	}
+	return ss
 }
 
 // shuffleBucketsNeedPerCNGrouping reports whether a dispatch in one top-level

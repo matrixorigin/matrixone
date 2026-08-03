@@ -2018,6 +2018,65 @@ func countLockOpNodes(logicPlan *Plan) int {
 	return count
 }
 
+func TestSelectSharedLockMode(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name            string
+		sql             string
+		mode            lockpb.LockMode
+		lockTargetCount int
+	}{
+		{
+			name:            "for share",
+			sql:             "select n_nationkey from nation where n_nationkey = 1 for share",
+			mode:            lockpb.LockMode_Shared,
+			lockTargetCount: 1,
+		},
+		{
+			name:            "lock in share mode",
+			sql:             "select n_nationkey from nation where n_nationkey = 1 lock in share mode",
+			mode:            lockpb.LockMode_Shared,
+			lockTargetCount: 1,
+		},
+		{
+			name:            "for share inside nested parentheses",
+			sql:             "((select n_nationkey from nation for share))",
+			mode:            lockpb.LockMode_Shared,
+			lockTargetCount: 1,
+		},
+		{
+			name:            "for share across rollup window rewrite",
+			sql:             "select n_regionkey, row_number() over (order by n_regionkey) from nation group by n_regionkey with rollup for share",
+			mode:            lockpb.LockMode_Shared,
+			lockTargetCount: 2,
+		},
+		{
+			name:            "for update remains exclusive",
+			sql:             "select n_nationkey from nation where n_nationkey = 1 for update",
+			mode:            lockpb.LockMode_Exclusive,
+			lockTargetCount: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+
+			var lockTargets []*plan.LockTarget
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_LOCK_OP {
+					lockTargets = append(lockTargets, node.LockTargets...)
+				}
+			}
+			require.Len(t, lockTargets, test.lockTargetCount)
+			for _, target := range lockTargets {
+				require.Equal(t, test.mode, target.Mode)
+			}
+		})
+	}
+}
+
 // test CTE plan building
 func TestCTESqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer(false)
@@ -5528,6 +5587,15 @@ func TestSubQuery(t *testing.T) {
 				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY < n1.N_NATIONKEY
 			)
 		)`, // two-level correlated ALL subquery
+		`SELECT n1.N_NATIONKEY,
+			(SELECT MAX(n2.N_REGIONKEY)
+			 FROM NATION n2
+			 WHERE n2.N_REGIONKEY = (
+				 SELECT MAX(n3.N_REGIONKEY)
+				 FROM NATION n3
+				 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY
+			 ))
+		 FROM NATION n1`, // two-level correlated scalar aggregate subquery
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 

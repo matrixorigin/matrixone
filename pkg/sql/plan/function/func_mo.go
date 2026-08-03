@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"go.uber.org/zap"
@@ -1011,6 +1012,13 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	rs := vector.MustFunctionResult[types.Enum](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	enumValues := vector.GenerateFunctionStrParameter(ivecs[1])
+	var valueIndex *enumValueIndex
+	if length >= enumValueIndexMinRows && ivecs[0].IsConst() && !ivecs[0].IsConstNull() {
+		typeEnum, typeEnumNull := typeEnums.GetStrValue(0)
+		if !typeEnumNull {
+			valueIndex = buildEnumValueIndexForBatch(functionUtil.QuickBytesToStr(typeEnum), length)
+		}
+	}
 
 	for i := uint64(0); i < uint64(length); i++ {
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
@@ -1023,18 +1031,114 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
 			enumStr := functionUtil.QuickBytesToStr(enumValue)
 
-			var index types.Enum
-			index, err := types.ParseEnum(typeEnumVal, enumStr)
+			var (
+				index types.Enum
+				err   error
+			)
+			if valueIndex != nil {
+				index, err = valueIndex.parse(enumStr)
+			} else {
+				index, err = types.ParseEnum(typeEnumVal, enumStr)
+			}
 			if err != nil {
 				return err
 			}
 
-			if err = rs.Append(index, false); err != nil {
+			if err := rs.Append(index, false); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+const (
+	enumValueIndexMinRows   = 64
+	enumValueIndexMinLabels = 8
+)
+
+// Small batches and short definitions stay on ParseEnum's existing linear
+// path: benchmarks show that hash/fold overhead does not amortize for fewer
+// than eight labels, especially for numeric and case-insensitive inputs. The
+// index is reserved for batches large enough to amortize both maps.
+func buildEnumValueIndexForBatch(enumValues string, length int) *enumValueIndex {
+	if length < enumValueIndexMinRows {
+		return nil
+	}
+	labelCount := strings.Count(enumValues, ",") + 1
+	if labelCount < enumValueIndexMinLabels {
+		return nil
+	}
+	return buildEnumValueIndex(enumValues)
+}
+
+// enumValueIndex makes every label lookup O(1) after Unicode case folding. The
+// exact map keeps the planner-generated display-to-index path allocation-free
+// per row, while foldedIndexes preserves ParseEnum's case-insensitive behavior.
+type enumValueIndex struct {
+	values        []string
+	exactIndexes  map[string]types.Enum
+	foldedIndexes map[string]types.Enum
+}
+
+func buildEnumValueIndex(enumValues string) *enumValueIndex {
+	if enumValues == "" {
+		return nil
+	}
+
+	values := strings.Split(enumValues, ",")
+	index := &enumValueIndex{
+		values:        values,
+		exactIndexes:  make(map[string]types.Enum, len(values)),
+		foldedIndexes: make(map[string]types.Enum, len(values)),
+	}
+	for i, value := range values {
+		foldKey := enumEqualFoldKey(value)
+		firstIndex, ok := index.foldedIndexes[foldKey]
+		if !ok {
+			firstIndex = types.Enum(i + 1)
+			index.foldedIndexes[foldKey] = firstIndex
+		}
+		index.exactIndexes[value] = firstIndex
+	}
+	return index
+}
+
+func (index *enumValueIndex) parse(value string) (types.Enum, error) {
+	if enumIndex := index.exactIndexes[value]; enumIndex != 0 {
+		return enumIndex, nil
+	}
+	if enumIndex := index.foldedIndexes[enumEqualFoldKey(value)]; enumIndex != 0 {
+		return enumIndex, nil
+	}
+
+	num, err := strconv.ParseUint(value, 0, 64)
+	if err == nil {
+		number := uint16(num)
+		if number == 0 || int(number) > len(index.values) {
+			return 0, moerr.NewInternalErrorNoCtxf(
+				"convert to MySQL enum failed: number %d overflow enum boundary [1, %d]",
+				number, len(index.values))
+		}
+		return types.Enum(number), nil
+	}
+
+	return 0, moerr.NewInternalErrorNoCtxf(
+		"convert to MySQL enum failed: item %s is not in enum %v", value, index.values)
+}
+
+func enumEqualFoldKey(value string) string {
+	var folded strings.Builder
+	for _, r := range value {
+		min := r
+		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
+			if next < min {
+				min = next
+			}
+		}
+		folded.WriteRune(min)
+	}
+	return folded.String()
 }
 
 // enum("a","b","c") -> CastIndexValueToIndex(1) -> 1
