@@ -4892,12 +4892,16 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 	if yearDigits == 2 {
 		year = uint64(adjustYear(int(year)))
 	}
-	pos++
+	for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
+		pos++
+	}
 	month, _, ok := mysqlVariableDigitsForExtract(str, &pos)
 	if !ok || pos >= len(str) || !mysqlDatetimePunctuationForExtract(str[pos]) {
 		return timeExtractParseResult{}
 	}
-	pos++
+	for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
+		pos++
+	}
 	day, _, ok := mysqlVariableDigitsForExtract(str, &pos)
 	if !ok || pos >= len(str) || !mysqlWhitespaceForExtract(str[pos]) {
 		// A complete date without a clock is still handled by the TIME path.
@@ -4905,6 +4909,9 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 	}
 	result := timeExtractParseResult{matched: true}
 	for pos < len(str) && mysqlWhitespaceForExtract(str[pos]) {
+		pos++
+	}
+	if pos < len(str) && (str[pos] == '+' || str[pos] == '-') {
 		pos++
 	}
 	hour, _, ok := mysqlVariableDigitsForExtract(str, &pos)
@@ -4941,6 +4948,13 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 				}
 			}
 		}
+	}
+	// Whitespace after the clock has started terminates the separated
+	// DATETIME interpretation. MySQL then applies its date-prefix TIME
+	// coercion instead (for example, "2024-12-20 12:34 56" becomes
+	// 00:20:24). Outer whitespace has already been trimmed by the caller.
+	if pos < len(str) && mysqlWhitespaceForExtract(str[pos]) {
+		return timeExtractParseResult{}
 	}
 	// A complete date followed by an hour or a trailing field separator is a
 	// valid DATETIME prefix. Do not fall back to compact TIME coercion after
@@ -5052,14 +5066,21 @@ func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
 	day := uint64(0)
 	hasDay := false
 	if space := mysqlFirstWhitespaceForExtract(prefix); space >= 0 {
-		if space == 0 || !asciiDigits(prefix[:space]) {
-			return 0, 0, 0, false
-		}
-		day = mysqlClampedDigitsForExtract(prefix[:space], 35)
-		hasDay = true
-		prefix = mysqlTrimLeftWhitespaceForExtract(prefix[space:])
-		if len(prefix) == 0 || mysqlFirstWhitespaceForExtract(prefix) >= 0 {
-			return 0, 0, 0, false
+		if space > 0 && asciiDigits(prefix[:space]) {
+			day = mysqlClampedDigitsForExtract(prefix[:space], 35)
+			hasDay = true
+			prefix = mysqlTrimLeftWhitespaceForExtract(prefix[space:])
+			if len(prefix) == 0 {
+				return 0, 0, 0, false
+			}
+			if clockEnd := mysqlFirstWhitespaceForExtract(prefix); clockEnd >= 0 {
+				prefix = prefix[:clockEnd]
+			}
+		} else {
+			// A clock prefix followed by whitespace keeps the fields consumed
+			// before that whitespace. It is not a day separator unless every
+			// byte before it is a digit.
+			prefix = prefix[:space]
 		}
 	}
 
@@ -5287,7 +5308,14 @@ func mysqlCompactDatetimeSuffixForExtract(suffix string) bool {
 	// MySQL consumes a compact DATETIME through the fractional separator. The
 	// fraction may be empty or may stop before trailing non-numeric text, but a
 	// suffix without a decimal separator is not part of this coercion.
-	return suffix[0] == '.' && (len(suffix) == 1 || (suffix[1] != '+' && suffix[1] != '-'))
+	if suffix[0] != '.' {
+		return false
+	}
+	pos := 1
+	for pos < len(suffix) && suffix[pos] >= '0' && suffix[pos] <= '9' {
+		pos++
+	}
+	return pos == len(suffix) || (suffix[pos] != '+' && suffix[pos] != '-')
 }
 
 func compactDatetimeClockForExtract(str string, twoDigitYear bool) (uint64, uint8, uint8, bool) {

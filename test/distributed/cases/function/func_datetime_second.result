@@ -142,9 +142,15 @@ SECOND('241220153045.') AS compact_12_empty_fraction_second,
 SECOND('20241220153045.-') AS compact_14_negative_fraction_second,
 SECOND('20241220153045.+') AS compact_14_positive_fraction_second,
 SECOND('241220153045.-') AS compact_12_negative_fraction_second,
-SECOND('241220153045.+') AS compact_12_positive_fraction_second;
-➤ compact_14_fraction_text_second[-6,8,0]  ¦  compact_14_empty_fraction_second[-6,8,0]  ¦  compact_12_fraction_text_second[-6,8,0]  ¦  compact_12_empty_fraction_second[-6,8,0]  ¦  compact_14_negative_fraction_second[-6,8,0]  ¦  compact_14_positive_fraction_second[-6,8,0]  ¦  compact_12_negative_fraction_second[-6,8,0]  ¦  compact_12_positive_fraction_second[-6,8,0]  𝄀
-45  ¦  45  ¦  45  ¦  45  ¦  null  ¦  null  ¦  null  ¦  null
+SECOND('241220153045.+') AS compact_12_positive_fraction_second,
+SECOND('20241220153045.123-') AS compact_14_fraction_negative_suffix_second,
+SECOND('20241220153045.123+') AS compact_14_fraction_positive_suffix_second,
+SECOND('241220153045.123-') AS compact_12_fraction_negative_suffix_second,
+SECOND('241220153045.123+') AS compact_12_fraction_positive_suffix_second,
+SECOND('20241220153045.123abc-') AS compact_14_fraction_text_negative_suffix_second,
+SECOND('241220153045.123abc+') AS compact_12_fraction_text_positive_suffix_second;
+➤ compact_14_fraction_text_second[-6,8,0]  ¦  compact_14_empty_fraction_second[-6,8,0]  ¦  compact_12_fraction_text_second[-6,8,0]  ¦  compact_12_empty_fraction_second[-6,8,0]  ¦  compact_14_negative_fraction_second[-6,8,0]  ¦  compact_14_positive_fraction_second[-6,8,0]  ¦  compact_12_negative_fraction_second[-6,8,0]  ¦  compact_12_positive_fraction_second[-6,8,0]  ¦  compact_14_fraction_negative_suffix_second[-6,8,0]  ¦  compact_14_fraction_positive_suffix_second[-6,8,0]  ¦  compact_12_fraction_negative_suffix_second[-6,8,0]  ¦  compact_12_fraction_positive_suffix_second[-6,8,0]  ¦  compact_14_fraction_text_negative_suffix_second[-6,8,0]  ¦  compact_12_fraction_text_positive_suffix_second[-6,8,0]  𝄀
+45  ¦  45  ¦  45  ¦  45  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  45  ¦  45
 SELECT SECOND('12:') AS trailing_colon_second,
 SECOND(':34') AS leading_colon_second,
 SECOND('12:34:56-') AS trailing_dash_second,
@@ -178,7 +184,16 @@ INSERT INTO time_extract_prefix_boundaries VALUES
 ('2024-12-20 12/34/56', '2024-12-20 12/34/56', '2024-12-20 12/34/56'),
 ('2024@12@20 12@34@56', '2024@12@20 12@34@56', '2024@12@20 12@34@56'),
 ('2024-12-20\t12:34:56', '2024-12-20\t12:34:56', '2024-12-20\t12:34:56'),
-('1\t02:34:56', '1\t02:34:56', '1\t02:34:56');
+('1\t02:34:56', '1\t02:34:56', '1\t02:34:56'),
+('12:34 56', '12:34 56', '12:34 56'),
+('1 02:34 56', '1 02:34 56', '1 02:34 56'),
+('1 02 34', '1 02 34', '1 02 34'),
+('2024--12--20 12:34:56', '2024--12--20 12:34:56', '2024--12--20 12:34:56'),
+('2024/-12/-20 12:34:56', '2024/-12/-20 12:34:56', '2024/-12/-20 12:34:56'),
+('2024-12-20 -12:34:56', '2024-12-20 -12:34:56', '2024-12-20 -12:34:56'),
+('2024-12-20 +12:34:56', '2024-12-20 +12:34:56', '2024-12-20 +12:34:56'),
+('2024-12-20 12:34 56', '2024-12-20 12:34 56', '2024-12-20 12:34 56'),
+('2024-12-20 12 34', '2024-12-20 12 34', '2024-12-20 12 34');
 SELECT SECOND(v), SECOND(c), SECOND(t) FROM time_extract_prefix_boundaries;
 ➤ SECOND(v)[-6,8,0]  ¦  SECOND(c)[-6,8,0]  ¦  SECOND(t)[-6,8,0]  𝄀
 12  ¦  12  ¦  12  𝄀
@@ -195,5 +210,14 @@ SELECT SECOND(v), SECOND(c), SECOND(t) FROM time_extract_prefix_boundaries;
 56  ¦  56  ¦  56  𝄀
 56  ¦  56  ¦  56  𝄀
 56  ¦  56  ¦  56  𝄀
-56  ¦  56  ¦  56
+56  ¦  56  ¦  56  𝄀
+0  ¦  0  ¦  0  𝄀
+0  ¦  0  ¦  0  𝄀
+0  ¦  0  ¦  0  𝄀
+56  ¦  56  ¦  56  𝄀
+56  ¦  56  ¦  56  𝄀
+56  ¦  56  ¦  56  𝄀
+56  ¦  56  ¦  56  𝄀
+24  ¦  24  ¦  24  𝄀
+24  ¦  24  ¦  24
 DROP TABLE time_extract_prefix_boundaries;

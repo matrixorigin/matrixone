@@ -4290,6 +4290,8 @@ func TestStringTimeExtractCompactDatetimeSuffix(t *testing.T) {
 					"202412201530451", "2412201530451",
 					"20241220153045abc", "241220153045abc",
 					"20241220153045.-", "20241220153045.+", "241220153045.-", "241220153045.+",
+					"20241220153045.123-", "20241220153045.123+", "241220153045.123-", "241220153045.123+",
+					"20241220153045.123abc-", "241220153045.123abc+",
 				}, nil),
 			}
 
@@ -4298,9 +4300,9 @@ func TestStringTimeExtractCompactDatetimeSuffix(t *testing.T) {
 				expect FunctionTestResult
 				fn     fEvalFn
 			}{
-				{"hour", NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{15, 15, 15, 15, 15, 15, 15, 15, 0, 0, 0, 0, 0, 0, 0, 0}, []bool{false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true}), StringToHour},
-				{"minute", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{30, 30, 30, 30, 30, 30, 30, 30, 0, 0, 0, 0, 0, 0, 0, 0}, []bool{false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true}), StringToMinute},
-				{"second", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{45, 45, 45, 45, 45, 45, 45, 45, 0, 0, 0, 0, 0, 0, 0, 0}, []bool{false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true}), StringToSecond},
+				{"hour", NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{15, 15, 15, 15, 15, 15, 15, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 15, 15}, []bool{false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, false, false}), StringToHour},
+				{"minute", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{30, 30, 30, 30, 30, 30, 30, 30, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30, 30}, []bool{false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, false, false}), StringToMinute},
+				{"second", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{45, 45, 45, 45, 45, 45, 45, 45, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 45, 45}, []bool{false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, false, false}), StringToSecond},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
@@ -4389,6 +4391,10 @@ func TestStringTimeExtractContextAwarePrefixBoundaries(t *testing.T) {
 				"2024-12-20 12", "2024-12-20 12:", "2024-12-20 12::56",
 				"2024-12-20foo", "2024-12-20 12:34::56", "2024-12-20 12-34",
 				"2024-12-20 12/34/56", "2024@12@20 12@34@56", "2024-12-20\t12:34:56", "1\t02:34:56",
+				"12:34 56", "1 02:34 56", "1 02 34",
+				"2024--12--20 12:34:56", "2024/-12/-20 12:34:56",
+				"2024-12-20 -12:34:56", "2024-12-20 +12:34:56",
+				"2024-12-20 12:34 56", "2024-12-20 12 34",
 			}, nil)
 
 			for _, tc := range []struct {
@@ -4400,19 +4406,19 @@ func TestStringTimeExtractContextAwarePrefixBoundaries(t *testing.T) {
 					name: "hour",
 					fn:   StringToHour,
 					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-						[]uint32{0, 0, 26, 26, 26, 12, 12, 12, 0, 12, 12, 12, 12, 12, 26}, nil),
+						[]uint32{0, 0, 26, 26, 26, 12, 12, 12, 0, 12, 12, 12, 12, 12, 26, 12, 26, 26, 12, 12, 12, 12, 0, 0}, nil),
 				},
 				{
 					name: "minute",
 					fn:   StringToMinute,
 					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{0, 12, 0, 0, 0, 0, 0, 56, 20, 34, 34, 34, 34, 34, 34}, nil),
+						[]uint8{0, 12, 0, 0, 0, 0, 0, 56, 20, 34, 34, 34, 34, 34, 34, 34, 34, 0, 34, 34, 34, 34, 20, 20}, nil),
 				},
 				{
 					name: "second",
 					fn:   StringToSecond,
 					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{12, 34, 0, 0, 0, 0, 0, 0, 24, 56, 0, 56, 56, 56, 56}, nil),
+						[]uint8{12, 34, 0, 0, 0, 0, 0, 0, 24, 56, 0, 56, 56, 56, 56, 0, 0, 0, 56, 56, 56, 56, 24, 24}, nil),
 				},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
