@@ -993,10 +993,20 @@ func floatNumToFixFloat[T constraints.Float | constraints.Integer](
 	return T(v), nil
 }
 
-func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *types.Type) (canInsert bool, val uint64, err error) {
+func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *types.Type, isIgnore bool) (canInsert bool, val uint64, err error) {
 	var ok bool
 	canInsert = true
 	width := colType.Width
+	defer func() {
+		if err == nil || !isIgnore {
+			return
+		}
+		if width < 64 {
+			val &= (uint64(1) << uint(width)) - 1
+		}
+		canInsert = true
+		err = nil
+	}()
 
 	switch numVal.ValType {
 	case tree.P_bool:
@@ -1027,11 +1037,12 @@ func SetInsertValueBit(proc *process.Process, numVal *tree.NumVal, colType *type
 		} else if num < 0 {
 			err = moerr.NewInvalidInputf(proc.Ctx, "unsupported negative value %v", val)
 			return
-		} else if uint64(math.Round(num)) > uint64(1<<width-1) {
+		}
+		val = uint64(math.Round(num))
+		if val > uint64(1<<width-1) {
 			err = moerr.NewInvalidInputf(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
 			return
 		}
-		val = uint64(math.Round(num))
 
 	case tree.P_int64:
 		var tempVal int64

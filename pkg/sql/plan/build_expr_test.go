@@ -552,6 +552,36 @@ func TestEnumAndSetKeepStoredValuesInExpressionContexts(t *testing.T) {
 			sql:  "select n_name in (1, 2) from nation",
 		},
 		{
+			name: "enum explicit numeric cast",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select cast(n_name as signed) from nation",
+		},
+		{
+			name: "enum numeric function",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select abs(n_name) from nation",
+		},
+		{
+			name: "enum numeric column comparison",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name = n_regionkey from nation",
+		},
+		{
+			name: "enum numeric between",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name between n_regionkey and 2 from nation",
+		},
+		{
+			name: "enum non-literal numeric in list",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name in (n_regionkey) from nation",
+		},
+		{
+			name: "enum unary numeric comparison",
+			typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			sql:  "select n_name = +1 from nation",
+		},
+		{
 			name:        "enum mixed string and numeric in list",
 			typ:         plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
 			sql:         "select n_name in ('a', 2) from nation",
@@ -578,6 +608,36 @@ func TestEnumAndSetKeepStoredValuesInExpressionContexts(t *testing.T) {
 			name: "set bitwise operation",
 			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
 			sql:  "select n_name & 1 from nation",
+		},
+		{
+			name: "set explicit numeric cast",
+			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:  "select cast(n_name as signed) from nation",
+		},
+		{
+			name: "set numeric function",
+			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:  "select abs(n_name) from nation",
+		},
+		{
+			name: "set numeric column comparison",
+			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:  "select n_name = n_regionkey from nation",
+		},
+		{
+			name: "set numeric between",
+			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:  "select n_name between n_regionkey and 5 from nation",
+		},
+		{
+			name: "set non-literal numeric in list",
+			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:  "select n_name in (n_regionkey) from nation",
+		},
+		{
+			name: "set unary numeric comparison",
+			typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			sql:  "select n_name = +1 from nation",
 		},
 		{
 			name:        "enum string comparison",

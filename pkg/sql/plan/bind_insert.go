@@ -3424,6 +3424,16 @@ func (builder *QueryBuilder) buildValueScan(
 				funcBinder = defaultFuncBinder
 			}
 			for _, r := range stmt.Rows {
+				if nv, ok := r[i].(*tree.NumVal); ok && builder.isInsertIgnore {
+					expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(builder.GetContext(), nv, col.Typ)
+					if err != nil {
+						return 0, err
+					}
+					if handled {
+						rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{Expr: expr})
+						continue
+					}
+				}
 				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
 					if err != nil {

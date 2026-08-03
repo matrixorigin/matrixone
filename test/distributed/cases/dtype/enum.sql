@@ -204,6 +204,43 @@ select * from insert01 where status=4;
 select * from insert01 where status in ('Pending',4);
 drop table insert01;
 
+-- MySQL evaluates ENUM/SET from their stored ordinal/bitmap in every numeric
+-- context, while string operands still use their display labels.
+drop table if exists mysql_compat_special_numeric_context;
+create table mysql_compat_special_numeric_context (
+    id int primary key,
+    e enum('a', 'b', ''),
+    s set('x', 'y', 'z'),
+    i int
+);
+insert into mysql_compat_special_numeric_context values
+    (1, 'a', 'x,z', 1),
+    (2, 'b', 'y', 2),
+    (3, '', '', 3);
+select id, cast(e as signed), abs(e), e = i, e between 1 and 2,
+       e in (i), e = +1, e = 'a'
+from mysql_compat_special_numeric_context order by id;
+select id, cast(s as signed), abs(s), s = i, s between 1 and 5,
+       s in (i), s = +5, s = 'x,z'
+from mysql_compat_special_numeric_context order by id;
+drop table mysql_compat_special_numeric_context;
+
+-- INSERT IGNORE adjusts invalid special-type literals and writes the row.
+drop table if exists mysql_compat_special_ignore;
+create table mysql_compat_special_ignore (
+    id int primary key,
+    y year,
+    b bit(4),
+    e enum('a', 'b', ''),
+    s set('x', 'y', 'z')
+);
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert ignore into mysql_compat_special_ignore values (1, 2156, b'11111', 'bad', 'x,bad');
+select id, y, y + 0, bin(b + 0), e, e + 0, s, s + 0
+from mysql_compat_special_ignore order by id;
+set session sql_mode = '';
+drop table mysql_compat_special_ignore;
+
 
 -- default
 drop table if exists default01;
