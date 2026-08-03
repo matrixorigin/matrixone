@@ -2833,9 +2833,9 @@ func TestShuffleHashBuildSerialFullRecoverySurvivesSharedBudgetPressure(t *testi
 	tc.arg.SpillThreshold = 2 * colexec.DefaultBatchSize
 	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 3505}
 
-	makeBuildBatch := func(base int32) *batch.Batch {
-		leftValues := make([]int32, colexec.DefaultBatchSize)
-		rightValues := make([]int32, colexec.DefaultBatchSize)
+	makeBuildBatch := func(base int32, rows, capacityRows int) *batch.Batch {
+		leftValues := make([]int32, capacityRows)
+		rightValues := make([]int32, capacityRows)
 		for i := range leftValues {
 			leftValues[i] = base + int32(i)
 			rightValues[i] = int32(i%97 + 1)
@@ -2843,12 +2843,24 @@ func TestShuffleHashBuildSerialFullRecoverySurvivesSharedBudgetPressure(t *testi
 		bat := batch.NewWithSize(2)
 		bat.Vecs[0] = testutil.MakeInt32Vector(leftValues, nil, tc.proc.Mp())
 		bat.Vecs[1] = testutil.MakeInt32Vector(rightValues, nil, tc.proc.Mp())
-		bat.SetRowCount(len(leftValues))
+		batch.SetLength(bat, rows)
 		return bat
 	}
-	first := makeBuildBatch(0)
-	second := makeBuildBatch(colexec.DefaultBatchSize)
-	input := newGatedHashBuildInput(first, second)
+	first := makeBuildBatch(0, colexec.DefaultBatchSize, colexec.DefaultBatchSize)
+	// A shuffle receiver can emit a later direct-spill batch above the retained
+	// recovery high water. Saturating the shared generation after the first
+	// batch proves that recovery must make progress without a late lease grow.
+	second := makeBuildBatch(
+		colexec.DefaultBatchSize,
+		colexec.DefaultBatchSize,
+		2*colexec.DefaultBatchSize,
+	)
+	third := makeBuildBatch(
+		2*colexec.DefaultBatchSize,
+		2*colexec.DefaultBatchSize,
+		2*colexec.DefaultBatchSize,
+	)
+	input := newGatedHashBuildInput(first, second, third)
 	tc.arg.SetChildren([]vm.Operator{input})
 
 	// Initialize the Process-owned generation before Prepare so both the build
@@ -2884,9 +2896,16 @@ func TestShuffleHashBuildSerialFullRecoverySurvivesSharedBudgetPressure(t *testi
 
 	usedAfterFirst := generation.Used()
 	require.Less(t, usedAfterFirst, capBytes)
-	blocker, err := generation.Reserve(capBytes - usedAfterFirst)
+	directNeed, err := spillBudgetBytes(second)
 	require.NoError(t, err)
-	require.Equal(t, capBytes, generation.Used())
+	directNeed, err = spillRecoveryReservationBytes(directNeed)
+	require.NoError(t, err)
+	require.Greater(t, directNeed, tc.arg.ctr.spillScratchBase)
+	directGrowth := directNeed - tc.arg.ctr.spillScratchBase
+	require.Less(t, usedAfterFirst+directGrowth, capBytes)
+	blocker, err := generation.Reserve(capBytes - usedAfterFirst - directGrowth)
+	require.NoError(t, err)
+	require.Equal(t, capBytes-directGrowth, generation.Used())
 
 	close(input.continueInput)
 	continued = true
@@ -2902,12 +2921,16 @@ func TestShuffleHashBuildSerialFullRecoverySurvivesSharedBudgetPressure(t *testi
 	jm := result.JoinMap()
 	require.NotNil(t, jm)
 	require.True(t, jm.IsSpilled())
-	require.Equal(t, int64(2*colexec.DefaultBatchSize), jm.GetRowCount())
+	require.Equal(t, int64(4*colexec.DefaultBatchSize), jm.GetRowCount())
 	payload, err := jm.TakeSpillBuildPayload()
 	require.NoError(t, err)
 	require.NoError(t, payload.Close())
 	require.Equal(t, int64(1),
 		tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillStarts"])
+	require.Equal(t, int64(1),
+		tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillRecoveryChunkFallbacks"])
+	require.Equal(t, int64(2),
+		tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillRecoveryChunks"])
 
 	require.True(t, blocker.Release())
 	require.Zero(t, generation.Used())
@@ -2917,6 +2940,7 @@ func TestShuffleHashBuildSerialFullRecoverySurvivesSharedBudgetPressure(t *testi
 	input.Free(tc.proc, false, nil)
 	first.Clean(tc.proc.Mp())
 	second.Clean(tc.proc.Mp())
+	third.Clean(tc.proc.Mp())
 	tc.proc.Free()
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }

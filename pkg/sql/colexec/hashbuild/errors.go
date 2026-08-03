@@ -23,6 +23,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func isHashBuildMemoryAdmission(err error) bool {
+	var budgetErr *process.HashBuildBudgetError
+	return errors.As(err, &budgetErr) &&
+		budgetErr.Kind == process.HashBuildBudgetErrorAdmission &&
+		budgetErr.Resource == process.HashBuildBudgetResourceMemory
+}
+
 // TerminalBudgetError converts only an unrecoverable capacity admission at an
 // operator's public Call boundary. Spill and other recovery paths must keep the
 // typed admission error until they have exhausted every recovery option.

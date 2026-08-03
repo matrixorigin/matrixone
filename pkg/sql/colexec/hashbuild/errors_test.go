@@ -102,3 +102,31 @@ func TestTerminalBudgetError(t *testing.T) {
 		})
 	}
 }
+
+func TestIsHashBuildMemoryAdmission(t *testing.T) {
+	memory := &process.HashBuildBudgetError{
+		Kind:     process.HashBuildBudgetErrorAdmission,
+		Resource: process.HashBuildBudgetResourceMemory,
+	}
+	require.True(t, isHashBuildMemoryAdmission(memory))
+	require.True(t, isHashBuildMemoryAdmission(errors.Join(errors.New("context"), memory)))
+
+	for _, err := range []error{
+		nil,
+		process.ErrHashBuildBudgetAdmission,
+		&process.HashBuildBudgetError{
+			Kind:     process.HashBuildBudgetErrorAdmission,
+			Resource: process.HashBuildBudgetResourceSpillDisk,
+		},
+		&process.HashBuildBudgetError{
+			Kind:     process.HashBuildBudgetErrorAdmission,
+			Resource: process.HashBuildBudgetResourceSpillFD,
+		},
+		&process.HashBuildBudgetError{
+			Kind:     process.HashBuildBudgetErrorClosed,
+			Resource: process.HashBuildBudgetResourceMemory,
+		},
+	} {
+		require.False(t, isHashBuildMemoryAdmission(err))
+	}
+}

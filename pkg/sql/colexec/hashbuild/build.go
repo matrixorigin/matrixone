@@ -269,6 +269,69 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			sourceAlreadyCharged,
 		)
 	}
+	spillDirectInRecoveryChunks := func(bat *batch.Batch, admissionErr error) error {
+		lease := ctr.hashmapBuilder.expressionLease
+		if bat == nil || lease == nil || !lease.recoveryReady || lease.recoveryRows <= 0 ||
+			bat.RowCount() <= lease.recoveryRows {
+			return admissionErr
+		}
+
+		chunks := int64(0)
+		for start := 0; start < bat.RowCount(); {
+			remaining := bat.RowCount() - start
+			chunkRows := min(remaining, lease.recoveryRows)
+			advanced := false
+			for chunkRows > 0 {
+				if err := checkHashBuildCanceled(proc); err != nil {
+					return err
+				}
+				window, err := bat.Window(start, start+chunkRows)
+				if err != nil {
+					return err
+				}
+				need, err := spillBudgetBytes(window)
+				if err == nil {
+					need, err = spillRecoveryReservationBytes(need)
+				}
+				if err != nil {
+					window.Clean(proc.Mp())
+					return err
+				}
+				if need > ctr.spillScratchBase {
+					window.Clean(proc.Mp())
+					if chunkRows == 1 {
+						return admissionErr
+					}
+					chunkRows = max(1, chunkRows/2)
+					continue
+				}
+				err = ensureDirectRecovery(window)
+				if err == nil {
+					err = spillBatch(window, false)
+				}
+				window.Clean(proc.Mp())
+				if err == nil {
+					start += chunkRows
+					chunks++
+					advanced = true
+					break
+				}
+				if !isHashBuildMemoryAdmission(err) {
+					return err
+				}
+				if chunkRows == 1 {
+					return err
+				}
+				chunkRows = max(1, chunkRows/2)
+			}
+			if !advanced {
+				return admissionErr
+			}
+		}
+		analyzer.GetOpStats().AddExtraStat("HashBuildSpillRecoveryChunkFallbacks", 1)
+		analyzer.GetOpStats().AddExtraStat("HashBuildSpillRecoveryChunks", chunks)
+		return nil
+	}
 
 	defer func() {
 		observeHashBuildBudget(analyzer, ctr.hashmapBuilder.budget)
@@ -354,7 +417,10 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		}
 		if hashBuild.IsShuffle {
 			if err := ensureDirectRecoveryWithReclaim(bat); err != nil {
-				return err
+				if !isHashBuildMemoryAdmission(err) {
+					return err
+				}
+				return spillDirectInRecoveryChunks(bat, err)
 			}
 		}
 		return spillBatch(bat, false)
