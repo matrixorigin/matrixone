@@ -819,7 +819,8 @@ func storageAgnosticType(
 	if oTy.Id != nTy.Id ||
 		oTy.Scale != nTy.Scale ||
 		oTy.Enumvalues != nTy.Enumvalues ||
-		oTy.AutoIncr != nTy.AutoIncr {
+		oTy.AutoIncr != nTy.AutoIncr ||
+		oTy.Charset != nTy.Charset {
 		return
 	}
 

@@ -310,25 +310,42 @@ func GetTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 }
 
 func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs []tree.ColumnAttribute) error {
-	if !isGeometryPlanType(colType) {
-		for _, attr := range attrs {
-			if _, ok := attr.(*tree.AttributeSRID); ok {
-				return moerr.NewInvalidInputf(ctx, "SRID is only supported for GEOMETRY columns")
-			}
-		}
-		return nil
-	}
-	// Scale (subtype) is already set by getTypeFromAst; an SRID column attribute
-	// only overrides the SRID, which lives in Width.
+	isGeometry := isGeometryPlanType(colType)
 	srid, sridDefined := geometrySRIDValue(colType)
 	for _, attr := range attrs {
-		if sridAttr, ok := attr.(*tree.AttributeSRID); ok {
+		switch attribute := attr.(type) {
+		case *tree.AttributeCollate:
+			applyTextCharsetToPlanType(colType, charsetForName(attribute.Collate))
+		case *tree.AttributeSRID:
+			if !isGeometry {
+				return moerr.NewInvalidInputf(ctx, "SRID is only supported for GEOMETRY columns")
+			}
+			sridAttr := attribute
 			srid = sridAttr.Value
 			sridDefined = true
 		}
 	}
-	colType.Width = encodeGeometrySRIDWidth(srid, sridDefined)
+	if isGeometry {
+		// Scale (subtype) is already set by getTypeFromAst; an SRID column
+		// attribute only overrides the SRID, which lives in Width.
+		colType.Width = encodeGeometrySRIDWidth(srid, sridDefined)
+	}
 	return nil
+}
+
+func applyTextCharsetToPlanType(typ *plan.Type, charset uint32) {
+	switch types.T(typ.Id) {
+	case types.T_char, types.T_varchar, types.T_text:
+		typ.Charset = charset
+	}
+}
+
+func charsetForName(name string) uint32 {
+	name = strings.ToLower(name)
+	if name == "binary" || strings.HasSuffix(name, "_bin") {
+		return uint32(types.CharsetBinary)
+	}
+	return uint32(types.CharsetUTF8)
 }
 
 func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {

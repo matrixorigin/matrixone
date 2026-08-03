@@ -1395,6 +1395,15 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		enforced   bool
 	}
 	pendingChecks := make([]pendingCheckDef, 0)
+	tableCharset := uint32(types.CharsetUTF8)
+	for _, option := range stmt.Options {
+		switch opt := option.(type) {
+		case *tree.TableOptionCharset:
+			tableCharset = charsetForName(opt.Charset)
+		case *tree.TableOptionCollate:
+			tableCharset = charsetForName(opt.Collate)
+		}
+	}
 
 	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
@@ -1410,6 +1419,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		if def, ok := item.(*tree.ColumnTableDef); ok {
 			cType, err := getTypeFromAst(ctx.GetContext(), def.Type)
 			if err != nil {
+				return err
+			}
+			cType.Charset = uint32(types.CharsetType(types.T(cType.Id)))
+			applyTextCharsetToPlanType(&cType, tableCharset)
+			if err = applyColumnAttributesToType(ctx.GetContext(), &cType, def.Attributes); err != nil {
 				return err
 			}
 			isGen := false
@@ -1434,6 +1448,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if err != nil {
 				return err
 			}
+			colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
+			applyTextCharsetToPlanType(&colType, tableCharset)
 			if err = applyColumnAttributesToType(ctx.GetContext(), &colType, def.Attributes); err != nil {
 				return err
 			}
@@ -5868,6 +5884,7 @@ func validateAndSetHivePartitionOptions(ctx context.Context, stmt *tree.CreateTa
 			Width:       col.Typ.Width,
 			Scale:       col.Typ.Scale,
 			Enumvalues:  col.Typ.Enumvalues,
+			Charset:     col.Typ.Charset,
 			NullAbility: nullable,
 		})
 	}

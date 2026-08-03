@@ -165,6 +165,11 @@ type Type struct {
 	Scale int32
 }
 
+const (
+	CharsetUTF8   uint8 = 0
+	CharsetBinary uint8 = 1
+)
+
 // ProtoSize is used by gogoproto.
 func (t *Type) ProtoSize() int {
 	return 2*4 + 4*3
@@ -489,14 +494,25 @@ func New(oid T, width, scale int32) Type {
 	return typ
 }
 
+// NewWithCharset restores charset metadata carried by a plan type. CharsetUTF8
+// is also the protobuf zero value, so keep the OID-derived charset for old plans
+// that did not carry this field (notably binary and geometry types).
+func NewWithCharset(oid T, width, scale int32, charset uint8) Type {
+	typ := New(oid, width, scale)
+	if charset != CharsetUTF8 {
+		typ.Charset = charset
+	}
+	return typ
+}
+
 func CharsetType(oid T) uint8 {
 	switch oid {
 	case T_blob, T_varbinary, T_binary, T_geometry, T_geometry32:
 		// binary charset
-		return 1
+		return CharsetBinary
 	default:
 		// utf8 charset
-		return 0
+		return CharsetUTF8
 	}
 }
 
@@ -658,7 +674,8 @@ func (t Type) Eq(b Type) bool {
 	case T_bool, T_uint8, T_uint16, T_uint32, T_uint64, T_uint128, T_int8, T_int16, T_int32, T_int64, T_int128:
 		return t.Oid == b.Oid
 	default:
-		return t.Oid == b.Oid && t.Size == b.Size && t.Width == b.Width && t.Scale == b.Scale
+		return t.Oid == b.Oid && t.Charset == b.Charset &&
+			t.Size == b.Size && t.Width == b.Width && t.Scale == b.Scale
 	}
 }
 

@@ -43,6 +43,22 @@ func Test_rewriteDecimalTypeIfNecessary(t *testing.T) {
 	require.Equal(t, []int32{t4.Scale, t4.Width}, []int32{0, 18})
 }
 
+func TestPlanTypeCharsetRoundTrip(t *testing.T) {
+	original := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetBinary)
+	planType := makePlan2Type(&original)
+	require.Equal(t, uint32(types.CharsetBinary), planType.Charset)
+	require.Equal(t, original, makeTypeByPlan2Type(planType))
+	encoded, err := planType.Marshal()
+	require.NoError(t, err)
+	var decoded plan.Type
+	require.NoError(t, decoded.Unmarshal(encoded))
+	require.Equal(t, planType, decoded)
+
+	// Charset was absent from older plans. Keep the OID-derived binary default.
+	legacyBinary := makeTypeByPlan2Type(plan.Type{Id: int32(types.T_binary), Width: 8})
+	require.Equal(t, types.CharsetBinary, legacyBinary.Charset)
+}
+
 func Test_MakePlan2Vecf32ConstExprWithType(t *testing.T) {
 	t1 := MakePlan2Vecf32ConstExprWithType("[1,2,3]", 3)
 	actual := t1.Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_Sval).Sval
@@ -97,6 +113,11 @@ func Test_isSameColumnType(t *testing.T) {
 	require.False(t, isSameColumnType(
 		plan.Type{Id: int32(types.T_uint64), Enumvalues: "a,b"},
 		plan.Type{Id: int32(types.T_uint64), Enumvalues: "a,c"},
+	))
+
+	require.False(t, isSameColumnType(
+		plan.Type{Id: int32(types.T_varchar), Width: 32, Charset: uint32(types.CharsetUTF8)},
+		plan.Type{Id: int32(types.T_varchar), Width: 32, Charset: uint32(types.CharsetBinary)},
 	))
 
 	require.False(t, isSameColumnType(

@@ -123,6 +123,10 @@ func TestType_Eq(t *testing.T) {
 	myType := T_int64.ToType()
 	myType1 := T_int64.ToType()
 	require.True(t, myType.Eq(myType1))
+
+	utf8 := New(T_varchar, 32, 0)
+	binary := NewWithCharset(T_varchar, 32, 0, CharsetBinary)
+	require.False(t, utf8.Eq(binary))
 }
 
 func TestT_ToType(t *testing.T) {
