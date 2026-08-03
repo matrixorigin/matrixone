@@ -344,6 +344,8 @@ func mergeDiffs(
 		ctx, ses, bh, tblStuff, dataBranchApplyModeOnlineMerge,
 		&deleteCnt, deleteFromVals, &insertCnt, insertIntoVals, nil,
 	)
+	appender.restoreMissingExactUpdates = stmt.ConflictOpt != nil &&
+		stmt.ConflictOpt.Opt == tree.CONFLICT_ACCEPT
 	if err = initApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err != nil {
 		return err
 	}
@@ -1230,6 +1232,8 @@ func satisfyDiffOutputOpt(
 			ctx, ses, bh, tblStuff, dataBranchApplyModePortableSQL,
 			&deleteCnt, deleteFromValsBuffer, &insertCnt, insertIntoValsBuffer, writeFile,
 		)
+		// Portable output materializes the source side of every accepted diff.
+		appender.restoreMissingExactUpdates = true
 		if writeFile != nil {
 			// Make generated SQL runnable in one transaction.
 			if err = writeFile([]byte("BEGIN;\n")); err != nil {
@@ -1981,31 +1985,39 @@ func appendOrExecuteDataBranchApplyRow(
 		)
 	}
 
-	tmpValsBuffer.Reset()
-	if err := writeExactFloatKeyUpdateSQL(ctx, ses, tblStuff, row, tmpValsBuffer); err != nil {
+	statements, err := exactFloatKeyUpdateSQL(
+		ctx, ses, tblStuff, row, tmpValsBuffer, appender.restoreMissingExactUpdates,
+	)
+	if err != nil {
 		return err
 	}
-	statement := strings.TrimSuffix(tmpValsBuffer.String(), ";\n")
-	return execSQLStatements(ctx, ses, appender.bh, appender.writeFile, []string{statement})
+	return execSQLStatements(ctx, ses, appender.bh, appender.writeFile, statements)
 }
 
-func writeExactFloatKeyUpdateSQL(
+// exactFloatKeyUpdateSQL applies a source update without passing FLOAT/DOUBLE
+// identity through scalar equality. ACCEPT and portable output also request the
+// conditional INSERT needed when the destination independently deleted the row;
+// SKIP deliberately leaves that destination deletion intact.
+func exactFloatKeyUpdateSQL(
 	ctx context.Context,
 	ses *Session,
 	tblStuff tableStuff,
 	row []any,
 	buf *bytes.Buffer,
-) error {
+	restoreMissing bool,
+) ([]string, error) {
 	writableIdxes := tblStuff.def.writableIdxes
 	if len(tblStuff.def.tarOnlyIdxes) > 0 {
 		writableIdxes = tblStuff.def.commonWritableIdxes
 	}
-
-	buf.WriteString("update ")
-	buf.WriteString(qualifiedTableName(
+	qualifiedName := qualifiedTableName(
 		tblStuff.baseRel.GetTableDef(ctx).DbName,
 		tblStuff.baseRel.GetTableDef(ctx).Name,
-	))
+	)
+
+	buf.Reset()
+	buf.WriteString("update ")
+	buf.WriteString(qualifiedName)
 	buf.WriteString(" set ")
 	written := 0
 	for _, idx := range writableIdxes {
@@ -2018,15 +2030,48 @@ func writeExactFloatKeyUpdateSQL(
 		buf.WriteString(quoteIdentifierForSQL(tblStuff.def.baseColNames[idx]))
 		buf.WriteString(" = ")
 		if err := formatValIntoString(ses, row[idx], tblStuff.def.colTypes[idx], buf); err != nil {
-			return err
+			return nil, err
 		}
 		written++
 	}
 	if written == 0 {
-		return moerr.NewInternalErrorNoCtx("Data Branch update has no writable non-key columns")
+		return nil, moerr.NewInternalErrorNoCtx("Data Branch update has no writable non-key columns")
+	}
+	buf.WriteString(" where ")
+	if err := writeExactDataBranchKeyPredicate(ses, tblStuff, row, buf); err != nil {
+		return nil, err
+	}
+	buf.WriteString(" limit 1")
+	updateSQL := buf.String()
+	if !restoreMissing {
+		return []string{updateSQL}, nil
 	}
 
+	buf.Reset()
+	buf.WriteString("insert into ")
+	buf.WriteString(qualifiedName)
+	buf.WriteString(" (")
+	buf.WriteString(strings.Join(quotedBaseColumnNamesByIdxes(tblStuff, writableIdxes), ","))
+	buf.WriteString(") select ")
+	if err := writeRowValueList(ses, tblStuff, row, buf, writableIdxes); err != nil {
+		return nil, err
+	}
+	buf.WriteString(" where not exists (select 1 from ")
+	buf.WriteString(qualifiedName)
 	buf.WriteString(" where ")
+	if err := writeExactDataBranchKeyPredicate(ses, tblStuff, row, buf); err != nil {
+		return nil, err
+	}
+	buf.WriteString(")")
+	return []string{updateSQL, buf.String()}, nil
+}
+
+func writeExactDataBranchKeyPredicate(
+	ses *Session,
+	tblStuff tableStuff,
+	row []any,
+	buf *bytes.Buffer,
+) error {
 	var literal bytes.Buffer
 	for i, idx := range tblStuff.def.pkColIdxes {
 		if i > 0 {
@@ -2042,7 +2087,6 @@ func writeExactFloatKeyUpdateSQL(
 			tblStuff.def.colTypes[idx],
 		))
 	}
-	buf.WriteString(" limit 1;\n")
 	return nil
 }
 
@@ -2349,6 +2393,9 @@ type sqlValuesAppender struct {
 	insertCnt         *int
 	insertBuf         *bytes.Buffer
 	writeFile         func([]byte) error
+	// restoreMissingExactUpdates is enabled only for source-winning conflict
+	// policies. It closes source-update/destination-delete without changing SKIP.
+	restoreMissingExactUpdates bool
 }
 
 func (sva sqlValuesAppender) flushAll() error {
@@ -2366,6 +2413,20 @@ func writeInsertRowValues(
 	idxes []int,
 ) error {
 	buf.WriteString("(")
+	if err := writeRowValueList(ses, tblStuff, row, buf, idxes); err != nil {
+		return err
+	}
+	buf.WriteString(")")
+	return nil
+}
+
+func writeRowValueList(
+	ses *Session,
+	tblStuff tableStuff,
+	row []any,
+	buf *bytes.Buffer,
+	idxes []int,
+) error {
 	for i, idx := range idxes {
 		if err := formatValIntoString(ses, row[idx], tblStuff.def.colTypes[idx], buf); err != nil {
 			return err
@@ -2374,8 +2435,6 @@ func writeInsertRowValues(
 			buf.WriteString(",")
 		}
 	}
-	buf.WriteString(")")
-
 	return nil
 }
 

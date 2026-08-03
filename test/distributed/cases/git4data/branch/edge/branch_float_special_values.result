@@ -68,7 +68,7 @@ delete from portable_src where note = 'remove';
 update portable_src set marker = cast('-Inf' as double), note = 'updated' where note = 'update';
 data branch diff portable_src against portable_dst output file '/tmp/';
 ➤ FILE SAVED TO[12,0,0]  ¦  HINT[12,0,0]  𝄀
-/tmp/diff_portable_src_portable_dst_20260803_072425_476595c1-1336-40fc-8b4e-6ea969f49151.sql  ¦  DELETE FROM `br_float_special_values`.`portable_dst`, INSERT INTO `br_float_special_values`.`portable_dst`
+/tmp/diff_portable_src_portable_dst_20260803_132724_19045738-30c4-40e5-88e8-bca47f2f792f.sql  ¦  DELETE FROM `br_float_special_values`.`portable_dst`, INSERT INTO `br_float_special_values`.`portable_dst`
 delete from portable_dst
 where serial(f32) = serial(cast('NaN' as float))
 and serial(f64) = serial(cast('NaN' as double))
@@ -133,7 +133,7 @@ update real_portable_src set note = 'updated_f64' where f64 != f64;
 delete from real_portable_src where tag = 3;
 data branch diff real_portable_src against real_portable_dst output file '/tmp/';
 ➤ FILE SAVED TO[12,0,0]  ¦  HINT[12,0,0]  𝄀
-/tmp/diff_real_portable_src_real_portable_dst_20260803_072425_9d5a246d-bdde-4452-a8d9-8cd7c1b768e8.sql  ¦  DELETE FROM `br_float_special_values`.`real_portable_dst`, INSERT INTO `br_float_special_values`.`real_portable_dst`
+/tmp/diff_real_portable_src_real_portable_dst_20260803_132724_280baa78-31f9-48d9-b8bd-1c002226ae5f.sql  ¦  DELETE FROM `br_float_special_values`.`real_portable_dst`, INSERT INTO `br_float_special_values`.`real_portable_dst`
 create table real_portable_delete_stage as
 select f32 as branch_apply_key_0, f64 as branch_apply_key_1, tag as branch_apply_key_2
 from real_portable_dst where 1 = 0;
@@ -276,15 +276,113 @@ update bit_portable_src set note = 'negzero_updated'
 where serial(k) = serial(bit_cast(unhex('0000000000000080') as double));
 data branch diff bit_portable_src against bit_portable_dst output file '/tmp/';
 ➤ FILE SAVED TO[12,0,0]  ¦  HINT[12,0,0]  𝄀
-/tmp/diff_bit_portable_src_bit_portable_dst_20260803_072426_6442b1d8-2a5d-48e5-8e0b-2ed22d3e2d37.sql  ¦  DELETE FROM `br_float_special_values`.`bit_portable_dst`, INSERT INTO `br_float_special_values`.`bit_portable_dst`
+/tmp/diff_bit_portable_src_bit_portable_dst_20260803_132725_357651cf-fbc1-4705-812b-17e7514ce0bf.sql  ¦  DELETE FROM `br_float_special_values`.`bit_portable_dst`, INSERT INTO `br_float_special_values`.`bit_portable_dst`
 update bit_portable_dst set note = 'nan1_updated'
 where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double)) limit 1;
+insert into bit_portable_dst(k, note)
+select bit_cast(unhex('010000000000f87f') as double), 'nan1_updated'
+where not exists (select 1 from bit_portable_dst
+where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double)));
 update bit_portable_dst set note = 'negzero_updated'
 where serial(k) = serial(bit_cast(unhex('0000000000000080') as double)) limit 1;
+insert into bit_portable_dst(k, note)
+select bit_cast(unhex('0000000000000080') as double), 'negzero_updated'
+where not exists (select 1 from bit_portable_dst
+where serial(k) = serial(bit_cast(unhex('0000000000000080') as double)));
 select note, hex(serial(k)) from bit_portable_dst order by note;
 ➤ note[12,-1,0]  ¦  hex(serial(k))[12,-1,0]  𝄀
 nan0  ¦  21FFF8000000000000  𝄀
 nan1_updated  ¦  21FFF8000000000001  𝄀
 negzero_updated  ¦  217FFFFFFFFFFFFFFF  𝄀
 poszero  ¦  218000000000000000
+create table missing_float_base(k float primary key, note varchar(32));
+insert into missing_float_base values
+(1.5, 'base'), (9.5, 'keep');
+data branch create table missing_float_src from missing_float_base;
+data branch create table missing_float_fail_dst from missing_float_base;
+data branch create table missing_float_skip_dst from missing_float_base;
+data branch create table missing_float_accept_dst from missing_float_base;
+update missing_float_src set note = 'source_updated' where k = 1.5;
+delete from missing_float_fail_dst where k = 1.5;
+delete from missing_float_skip_dst where k = 1.5;
+delete from missing_float_accept_dst where k = 1.5;
+data branch pick missing_float_src into missing_float_fail_dst
+keys(select k from missing_float_src where note = 'source_updated') when conflict fail;
+internal error: conflict: missing_float_src INSERT and missing_float_fail_dst INSERT on pk(1.5) with different values
+select count(*) from missing_float_fail_dst;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch pick missing_float_src into missing_float_skip_dst
+keys(select k from missing_float_src where note = 'source_updated') when conflict skip;
+select count(*) from missing_float_skip_dst;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch pick missing_float_src into missing_float_accept_dst
+keys(select k from missing_float_src where note = 'source_updated') when conflict accept;
+select note, hex(serial(k)) from missing_float_accept_dst order by note;
+➤ note[12,-1,0]  ¦  hex(serial(k))[12,-1,0]  𝄀
+keep  ¦  20C1180000  𝄀
+source_updated  ¦  20BFC00000
+create table missing_double_base(k double primary key, note varchar(32));
+insert into missing_double_base values
+(1.5, 'base'), (9.5, 'keep');
+data branch create table missing_double_src from missing_double_base;
+data branch create table missing_double_fail_dst from missing_double_base;
+data branch create table missing_double_skip_dst from missing_double_base;
+data branch create table missing_double_accept_dst from missing_double_base;
+update missing_double_src set note = 'source_updated' where k = 1.5;
+delete from missing_double_fail_dst where k = 1.5;
+delete from missing_double_skip_dst where k = 1.5;
+delete from missing_double_accept_dst where k = 1.5;
+data branch merge missing_double_src into missing_double_fail_dst when conflict fail;
+internal error: conflict: missing_double_src DELETE and missing_double_fail_dst DELETE on pk(1.5) with different values
+select count(*) from missing_double_fail_dst;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge missing_double_src into missing_double_skip_dst when conflict skip;
+select count(*) from missing_double_skip_dst;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge missing_double_src into missing_double_accept_dst when conflict accept;
+select note, hex(serial(k)) from missing_double_accept_dst order by note;
+➤ note[12,-1,0]  ¦  hex(serial(k))[12,-1,0]  𝄀
+keep  ¦  21C023000000000000  𝄀
+source_updated  ¦  21BFF8000000000000
+create table missing_composite_base(
+f32 float,
+tag int,
+note varchar(32),
+primary key(f32, tag)
+);
+insert into missing_composite_base values
+(2.5, 7, 'base'), (9.5, 9, 'keep');
+data branch create table missing_composite_src from missing_composite_base;
+data branch create table missing_composite_dst from missing_composite_base;
+update missing_composite_src set note = 'source_updated' where tag = 7;
+delete from missing_composite_dst where tag = 7;
+data branch merge missing_composite_src into missing_composite_dst when conflict accept;
+select note, hex(serial(f32)), tag from missing_composite_dst order by tag;
+➤ note[12,-1,0]  ¦  hex(serial(f32))[12,-1,0]  ¦  tag[4,32,0]  𝄀
+source_updated  ¦  20C0200000  ¦  7  𝄀
+keep  ¦  20C1180000  ¦  9
+create table missing_portable_base(k double primary key, note varchar(32));
+insert into missing_portable_base values
+(1.5, 'base'), (9.5, 'keep');
+data branch create table missing_portable_src from missing_portable_base;
+data branch create table missing_portable_dst from missing_portable_base;
+update missing_portable_src set note = 'source_updated' where k = 1.5;
+delete from missing_portable_dst where k = 1.5;
+data branch diff missing_portable_src against missing_portable_dst output file '/tmp/';
+➤ FILE SAVED TO[12,0,0]  ¦  HINT[12,0,0]  𝄀
+/tmp/diff_missing_portable_src_missing_portable_dst_20260803_132726_1435dfcc-41c4-4f79-80e5-55a523637d81.sql  ¦  DELETE FROM `br_float_special_values`.`missing_portable_dst`, INSERT INTO `br_float_special_values`.`missing_portable_dst`
+update missing_portable_dst set note = 'source_updated'
+where serial(k) = serial(cast(1.5 as double)) limit 1;
+insert into missing_portable_dst(k, note)
+select cast(1.5 as double), 'source_updated'
+where not exists (select 1 from missing_portable_dst
+where serial(k) = serial(cast(1.5 as double)));
+select note, hex(serial(k)) from missing_portable_dst order by note;
+➤ note[12,-1,0]  ¦  hex(serial(k))[12,-1,0]  𝄀
+keep  ¦  21C023000000000000  𝄀
+source_updated  ¦  21BFF8000000000000
 drop database br_float_special_values;

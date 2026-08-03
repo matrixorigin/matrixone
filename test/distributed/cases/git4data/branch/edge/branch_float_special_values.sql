@@ -186,7 +186,7 @@ where serial(k) = serial(bit_cast(unhex('0000000000000080') as double));
 data branch merge bit_double_src into bit_double_dst;
 select note, hex(serial(k)) from bit_double_dst order by note;
 
--- PICK applies accepted same-key changes through the same exact-key UPDATE
+-- PICK applies accepted same-key changes through the same exact-key upsert
 -- path as MERGE. The destination must retain the unpicked NaN payload and
 -- positive-zero rows rather than deleting/reinserting equivalent scalar keys.
 data branch create table bit_float_pick_dst from bit_float_base;
@@ -246,8 +246,7 @@ when conflict accept;
 select note, hex(serial(f32)), hex(serial(f64)), tag
 from bit_composite_pick_dst order by note;
 
--- Portable real-key SQL updates rows through exact serial-key predicates, so
--- storage-level key bits never pass through a delete/reinsert cycle.
+-- Portable real-key SQL upserts rows with exact bit-preserving literals.
 data branch create table bit_portable_src from bit_double_base;
 data branch create table bit_portable_dst from bit_double_base;
 update bit_portable_src set note = 'nan1_updated'
@@ -258,8 +257,90 @@ where serial(k) = serial(bit_cast(unhex('0000000000000080') as double));
 data branch diff bit_portable_src against bit_portable_dst output file '/tmp/';
 update bit_portable_dst set note = 'nan1_updated'
 where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double)) limit 1;
+insert into bit_portable_dst(k, note)
+select bit_cast(unhex('010000000000f87f') as double), 'nan1_updated'
+where not exists (select 1 from bit_portable_dst
+                  where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double)));
 update bit_portable_dst set note = 'negzero_updated'
 where serial(k) = serial(bit_cast(unhex('0000000000000080') as double)) limit 1;
+insert into bit_portable_dst(k, note)
+select bit_cast(unhex('0000000000000080') as double), 'negzero_updated'
+where not exists (select 1 from bit_portable_dst
+                  where serial(k) = serial(bit_cast(unhex('0000000000000080') as double)));
 select note, hex(serial(k)) from bit_portable_dst order by note;
+
+-- A source update conflicts with an independent destination delete. ACCEPT
+-- must restore the source row; FAIL and SKIP must retain the destination delete.
+create table missing_float_base(k float primary key, note varchar(32));
+insert into missing_float_base values
+    (1.5, 'base'), (9.5, 'keep');
+data branch create table missing_float_src from missing_float_base;
+data branch create table missing_float_fail_dst from missing_float_base;
+data branch create table missing_float_skip_dst from missing_float_base;
+data branch create table missing_float_accept_dst from missing_float_base;
+update missing_float_src set note = 'source_updated' where k = 1.5;
+delete from missing_float_fail_dst where k = 1.5;
+delete from missing_float_skip_dst where k = 1.5;
+delete from missing_float_accept_dst where k = 1.5;
+data branch pick missing_float_src into missing_float_fail_dst
+    keys(select k from missing_float_src where note = 'source_updated') when conflict fail;
+select count(*) from missing_float_fail_dst;
+data branch pick missing_float_src into missing_float_skip_dst
+    keys(select k from missing_float_src where note = 'source_updated') when conflict skip;
+select count(*) from missing_float_skip_dst;
+data branch pick missing_float_src into missing_float_accept_dst
+    keys(select k from missing_float_src where note = 'source_updated') when conflict accept;
+select note, hex(serial(k)) from missing_float_accept_dst order by note;
+
+create table missing_double_base(k double primary key, note varchar(32));
+insert into missing_double_base values
+    (1.5, 'base'), (9.5, 'keep');
+data branch create table missing_double_src from missing_double_base;
+data branch create table missing_double_fail_dst from missing_double_base;
+data branch create table missing_double_skip_dst from missing_double_base;
+data branch create table missing_double_accept_dst from missing_double_base;
+update missing_double_src set note = 'source_updated' where k = 1.5;
+delete from missing_double_fail_dst where k = 1.5;
+delete from missing_double_skip_dst where k = 1.5;
+delete from missing_double_accept_dst where k = 1.5;
+data branch merge missing_double_src into missing_double_fail_dst when conflict fail;
+select count(*) from missing_double_fail_dst;
+data branch merge missing_double_src into missing_double_skip_dst when conflict skip;
+select count(*) from missing_double_skip_dst;
+data branch merge missing_double_src into missing_double_accept_dst when conflict accept;
+select note, hex(serial(k)) from missing_double_accept_dst order by note;
+
+create table missing_composite_base(
+    f32 float,
+    tag int,
+    note varchar(32),
+    primary key(f32, tag)
+);
+insert into missing_composite_base values
+    (2.5, 7, 'base'), (9.5, 9, 'keep');
+data branch create table missing_composite_src from missing_composite_base;
+data branch create table missing_composite_dst from missing_composite_base;
+update missing_composite_src set note = 'source_updated' where tag = 7;
+delete from missing_composite_dst where tag = 7;
+data branch merge missing_composite_src into missing_composite_dst when conflict accept;
+select note, hex(serial(f32)), tag from missing_composite_dst order by tag;
+
+-- Round-trip the portable statement shape for a destination-delete conflict.
+create table missing_portable_base(k double primary key, note varchar(32));
+insert into missing_portable_base values
+    (1.5, 'base'), (9.5, 'keep');
+data branch create table missing_portable_src from missing_portable_base;
+data branch create table missing_portable_dst from missing_portable_base;
+update missing_portable_src set note = 'source_updated' where k = 1.5;
+delete from missing_portable_dst where k = 1.5;
+-- @ignore:0,1
+data branch diff missing_portable_src against missing_portable_dst output file '/tmp/';
+update missing_portable_dst set note = 'source_updated'
+where serial(k) = serial(cast(1.5 as double)) limit 1;
+insert into missing_portable_dst(k, note)
+select cast(1.5 as double), 'source_updated'
+where not exists (select 1 from missing_portable_dst
+                  where serial(k) = serial(cast(1.5 as double)));
+select note, hex(serial(k)) from missing_portable_dst order by note;
 
 drop database br_float_special_values;
