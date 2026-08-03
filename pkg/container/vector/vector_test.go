@@ -394,6 +394,30 @@ func TestAppendBytes(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestAppendBytesNullUsesVectorPhysicalType(t *testing.T) {
+	for _, typ := range []types.Type{
+		types.T_bool.ToType(),
+		types.T_decimal128.ToType(),
+		types.T_varchar.ToType(),
+	} {
+		t.Run(typ.String(), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			vec := NewVec(typ)
+
+			// AppendBytes is the generic null path used by expression
+			// evaluation, including for fixed-width result vectors.
+			for i := range 17 {
+				require.NoError(t, AppendBytes(vec, nil, true, mp))
+				require.True(t, vec.IsNull(uint64(i)))
+			}
+			require.Equal(t, 17, vec.Length())
+
+			vec.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
 func TestAppendArray(t *testing.T) {
 	{
 		// Array Float32
@@ -1607,6 +1631,20 @@ func TestCloneWindow(t *testing.T) {
 	require.Equal(t, 2, v4.Length())
 	require.Equal(t, int32(10), GetFixedAtWithTypeCheck[int32](v4, 0))
 	require.Equal(t, int32(10), GetFixedAtWithTypeCheck[int32](v4, 1))
+
+	payload := []byte(strings.Repeat("x", 128))
+	v5, err := NewConstBytes(types.T_varchar.ToType(), payload, 10, mp)
+	require.NoError(t, err)
+	defer v5.Free(mp)
+	v6 := NewOffHeapVecWithType(types.T_varchar.ToType())
+	defer v6.Free(mp)
+	require.NoError(t, v5.CloneWindowTo(v6, 3, 5, mp))
+	require.True(t, v6.IsConst())
+	require.Equal(t, 2, v6.Length())
+	require.Equal(t, payload, v6.GetBytesAt(0))
+	require.Equal(t, payload, v6.GetBytesAt(1))
+	require.Equal(t, 10, v5.Length(), "cloning must not mutate the source")
+	require.Equal(t, payload, v5.GetBytesAt(0))
 }
 
 func TestCloneWindowWithMpNil(t *testing.T) {
@@ -3710,4 +3748,84 @@ func TestInplaceSortAndCompactMarksUniqueVectorsSorted(t *testing.T) {
 	unsupported := NewVec(types.T_any.ToType())
 	unsupported.InplaceSortAndCompact()
 	require.False(t, unsupported.GetSorted())
+}
+
+func TestVarlenaAreaDisjointLifecycle(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	typ := types.T_varchar.ToType()
+	payload := []byte(strings.Repeat("x", 128))
+
+	flat := NewVec(typ)
+	require.True(t, flat.VarlenaAreaIsDisjoint())
+	for range 2 {
+		require.NoError(t, AppendBytes(flat, payload, false, mp))
+	}
+	require.True(t, flat.VarlenaAreaIsDisjoint(),
+		"ordinary appends own disjoint area ranges")
+
+	values, _ := MustVarlenaRawData(flat)
+	require.True(t, flat.VarlenaAreaIsDisjoint(),
+		"read access must not mutate vector metadata")
+	require.NoError(t, SetFixedAtNoTypeCheck(flat, 1, values[0]))
+	require.False(t, flat.VarlenaAreaIsDisjoint(),
+		"installing an arbitrary descriptor must invalidate the proof")
+
+	flat.ResetWithSameType()
+	require.True(t, flat.VarlenaAreaIsDisjoint())
+	require.NoError(t, AppendBytes(flat, payload, false, mp))
+	flat.ResetWithSameType()
+	require.NoError(t, AppendBytes(flat, nil, true, mp))
+	values, _ = MustVarlenaRawData(flat)
+	require.True(t, values[0].IsSmall(),
+		"a null append must clear a stale descriptor from reused capacity")
+	flat.GetNulls().Del(0)
+	require.True(t, flat.VarlenaAreaIsDisjoint(),
+		"null-bitmap changes cannot invalidate a descriptor-level proof")
+
+	flat.ResetWithSameType()
+	for range 2 {
+		require.NoError(t, AppendBytes(flat, payload, false, mp))
+	}
+	flat.Shrink([]int64{0, 0}, false)
+	require.False(t, flat.VarlenaAreaIsDisjoint(),
+		"selection can duplicate a descriptor")
+	flat.Free(mp)
+
+	constant, err := NewConstBytes(typ, payload, 2, mp)
+	require.NoError(t, err)
+	shared := NewVec(typ)
+	require.NoError(t, shared.UnionBatch(constant, 0, 2, nil, mp))
+	require.False(t, shared.VarlenaAreaIsDisjoint(),
+		"const broadcast shares one non-inline descriptor")
+	compact, err := shared.CloneToFlatCompact(mp)
+	require.NoError(t, err)
+	require.True(t, compact.VarlenaAreaIsDisjoint(),
+		"compaction materializes independent payload ranges")
+
+	compact.Free(mp)
+	shared.Free(mp)
+	constant.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestVarlenaAreaDisjointAppendFailureFailsClosed(t *testing.T) {
+	mp, err := mpool.NewMPool("varlena-disjoint-failure", 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	vec := NewVec(types.T_varchar.ToType())
+	vec.SetOffHeap(true)
+	err = AppendBytesList(
+		vec,
+		[][]byte{make([]byte, 128), make([]byte, 2<<20)},
+		nil,
+		mp,
+	)
+	require.Error(t, err)
+	require.False(t, vec.VarlenaAreaIsDisjoint(),
+		"a partially initialized logical range must never retain the fast proof")
+
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
 }

@@ -14,7 +14,12 @@
 
 package types
 
-import "testing"
+import (
+	"math"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestPacker(t *testing.T) {
 	packer := NewPacker()
@@ -39,6 +44,42 @@ func TestClosedPackerIsOK(t *testing.T) {
 		t.Fatalf("got %v", len(bs))
 	}
 	packer.Close()
+}
+
+func TestPackerCapacityUpperBoundCoversGrowthAndReuse(t *testing.T) {
+	const (
+		columns = 4
+		width   = 65535
+	)
+	component := uint64(2*width + 3)
+	maxLength := uint64(columns) * component
+	bound, ok := PackerCapacityUpperBound(maxLength, component)
+	require.True(t, ok)
+	require.Equal(t, uint64(1<<20), bound)
+
+	packer := NewPacker()
+	require.Equal(t, DefaultPackerCapacity(), packer.Allocated())
+	value := make([]byte, width)
+	for range 2 {
+		packer.Reset()
+		for range columns {
+			packer.EncodeStringType(value)
+		}
+		require.Equal(t, int(maxLength), len(packer.GetBuf()))
+		require.LessOrEqual(t, packer.Allocated(), bound)
+	}
+	packer.Close()
+	require.Zero(t, packer.Allocated())
+
+	initial := DefaultPackerCapacity()
+	got, ok := PackerCapacityUpperBound(initial, initial)
+	require.True(t, ok)
+	require.Equal(t, initial, got)
+	got, ok = PackerCapacityUpperBound(initial+1, 1)
+	require.True(t, ok)
+	require.Equal(t, 2*initial, got)
+	_, ok = PackerCapacityUpperBound(math.MaxUint64, 2)
+	require.False(t, ok)
 }
 
 func BenchmarkPacker(b *testing.B) {
