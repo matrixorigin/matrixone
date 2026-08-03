@@ -147,6 +147,38 @@ type retryRecordingResultSink struct {
 	rows   map[uint64]int
 }
 
+type generationCheckingResultSink struct {
+	activeGeneration uint64
+	events           []string
+}
+
+func (s *generationCheckingResultSink) BeginAttempt(_ context.Context, generation uint64, _ *process.Process) error {
+	s.activeGeneration = generation
+	s.events = append(s.events, fmt.Sprintf("begin:%d", generation))
+	return nil
+}
+
+func (s *generationCheckingResultSink) Write(generation uint64, bat *batch.Batch, _ *perfcounter.CounterSet) error {
+	if bat == nil {
+		return nil
+	}
+	s.events = append(s.events, fmt.Sprintf("write:%d", generation))
+	if generation != s.activeGeneration {
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("result sink generation mismatch: active=%d write=%d", s.activeGeneration, generation))
+	}
+	return nil
+}
+
+func (s *generationCheckingResultSink) SealAttempt(generation uint64) error {
+	s.events = append(s.events, fmt.Sprintf("seal:%d", generation))
+	return nil
+}
+
+func (s *generationCheckingResultSink) AbortAttempt(generation uint64, _ error) error {
+	s.events = append(s.events, fmt.Sprintf("abort:%d", generation))
+	return nil
+}
+
 func (s *retryRecordingResultSink) BeginAttempt(_ context.Context, generation uint64, _ *process.Process) error {
 	s.events = append(s.events, fmt.Sprintf("begin:%d", generation))
 	if s.rows == nil {
@@ -223,6 +255,19 @@ func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
 		"begin:2", "write:2", "seal:2",
 	}, sink.events)
 	require.Equal(t, map[uint64]int{2: 1}, sink.rows)
+	require.Equal(t, uint64(2), c.executionGeneration)
+
+	// Compile.Reset is the prepared-statement reuse boundary. The next execution
+	// must rebuild its output callback for generation zero even when the previous
+	// execution succeeded after retries on a later generation.
+	nextSink := &generationCheckingResultSink{}
+	c.SetResultSink(nextSink)
+	require.NoError(t, c.Reset(proc, time.Now(), func(*batch.Batch, *perfcounter.CounterSet) error {
+		return errors.New("streaming callback must not be used when ResultSink is installed")
+	}, "select 1"))
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.Equal(t, []string{"begin:0", "write:0", "seal:0"}, nextSink.events)
 
 	c.Release()
 	proc.Free()
