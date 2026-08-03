@@ -396,18 +396,31 @@ set session sql_mode = 'STRICT_TRANS_TABLES';
 insert ignore into mysql_compat_special_ignore values (1, 2156, b'11111', 'bad', 'x,bad');
 select id, y, y + 0, bin(b + 0), e, e + 0, s, s + 0
 from mysql_compat_special_ignore order by id;
-internal error: parse MySQL enum failed: index 0 overflow enum boundary [1, 3]
+➤ id[4,32,0]  ¦  y[91,65535,0]  ¦  y + 0[-5,64,0]  ¦  bin(b + 0)[12,-1,0]  ¦  e[12,-1,0]  ¦  e + 0[-5,64,0]  ¦  s[12,-1,0]  ¦  s + 0[3,38,0]  𝄀
+1  ¦  2000-01-01  ¦  0  ¦  1111  ¦    ¦  0  ¦  x  ¦  1
 insert ignore into mysql_compat_special_ignore values
 (2, '2156', b'10000', 9, 'bad'),
-(3, 2024, b'0011', 'a', 'x,z');
+(3, 2024, b'0011', 'a', 'x,z'),
+(4, 2024, b'0000', '', '');
 select id, y + 0, bin(b + 0), e, e + 0, s, s + 0
 from mysql_compat_special_ignore order by id;
-internal error: parse MySQL enum failed: index 0 overflow enum boundary [1, 3]
-insert into mysql_compat_special_ignore values (4, 2156, b'11111', 'bad', 'x,bad');
+➤ id[4,32,0]  ¦  y + 0[-5,64,0]  ¦  bin(b + 0)[12,-1,0]  ¦  e[12,-1,0]  ¦  e + 0[-5,64,0]  ¦  s[12,-1,0]  ¦  s + 0[3,38,0]  𝄀
+1  ¦  0  ¦  1111  ¦    ¦  0  ¦  x  ¦  1  𝄀
+2  ¦  0  ¦  0  ¦    ¦  0  ¦    ¦  0  𝄀
+3  ¦  2024  ¦  11  ¦  a  ¦  1  ¦  x,z  ¦  5  𝄀
+4  ¦  2024  ¦  0  ¦    ¦  3  ¦    ¦  0
+select id, e, e + 0, e = '', length(e)
+from mysql_compat_special_ignore order by id;
+➤ id[4,32,0]  ¦  e[12,-1,0]  ¦  e + 0[-5,64,0]  ¦  e = [-7,1,0]  ¦  length(e)[-5,64,0]  𝄀
+1  ¦    ¦  0  ¦  1  ¦  0  𝄀
+2  ¦    ¦  0  ¦  1  ¦  0  𝄀
+3  ¦  a  ¦  1  ¦  0  ¦  1  𝄀
+4  ¦    ¦  3  ¦  1  ¦  0
+insert into mysql_compat_special_ignore values (5, 2156, b'11111', 'bad', 'x,bad');
 invalid input: data too long, type width = 4, val = 11111
 select count(*) from mysql_compat_special_ignore;
 ➤ count(*)[-5,64,0]  𝄀
-3
+4
 set session sql_mode = '';
 drop table mysql_compat_special_ignore;
 drop table if exists default01;
