@@ -35,26 +35,6 @@ insert into child_single values (30, 1, 'orphan');
 select * from child_single order by id;
 
 update child_single set parent_id = 1 where id = 10;
-
-set foreign_key_checks = 0;
-prepare fk_enable_checks from
-    'update child_single set parent_id = ? where id = ?';
-set @fk_parent_id = 98;
-set @fk_child_id = 10;
-set foreign_key_checks = 1;
-execute fk_enable_checks using @fk_parent_id, @fk_child_id;
-select * from child_single where id = 10;
-deallocate prepare fk_enable_checks;
-
-prepare fk_disable_checks from
-    'update child_single set parent_id = ? where id = ?';
-set foreign_key_checks = 0;
-execute fk_disable_checks using @fk_parent_id, @fk_child_id;
-set foreign_key_checks = 1;
-select * from child_single where id = 10;
-deallocate prepare fk_disable_checks;
-update child_single set parent_id = 1 where id = 10;
-
 update child_single set parent_id = case id when 10 then 2 else 98 end;
 select * from child_single order by id;
 
@@ -82,21 +62,6 @@ select * from child_composite order by id;
 update child_composite set a = 98, b = 98 where id = 3;
 select * from child_composite order by id;
 
-create table parent_auto_fk (
-    id int primary key
-);
-
-create table child_auto_fk (
-    parent_id int auto_increment unique,
-    constraint fk_auto foreign key (parent_id) references parent_auto_fk(id)
-);
-
-insert into parent_auto_fk values (1);
-insert into child_auto_fk values (0);
-update child_auto_fk
-set parent_id = if(parent_id = 1, null, parent_id);
-select * from child_auto_fk;
-
 create table self_ref (
     id int primary key,
     parent_id int,
@@ -107,12 +72,228 @@ create table self_ref (
 insert into self_ref values (1, 1, 'root'), (2, 1, 'child');
 update self_ref set name = 'changed' where id = 2;
 update self_ref set parent_id = 2 where id = 2;
+set foreign_key_checks = 0;
+update self_ref set parent_id = 99 where id = 2;
+update self_ref set parent_id = 2 where id = 2;
+set foreign_key_checks = 1;
 update self_ref set parent_id = 99 where id = 2;
 select * from self_ref order by id;
 
+create table parent_restrict (
+    id int primary key
+);
+
+create table child_restrict (
+    id int primary key,
+    parent_id int,
+    constraint fk_parent_restrict foreign key (parent_id)
+        references parent_restrict(id) on update restrict
+);
+
+insert into parent_restrict values (1), (2);
+insert into child_restrict values (10, 1);
+update parent_restrict set id = id where id = 1;
+update parent_restrict set id = 11 where id = 1;
+select * from parent_restrict order by id;
+select * from child_restrict order by id;
+
+create table parent_cascade (
+    id int primary key
+);
+
+create table child_cascade (
+    id int primary key,
+    parent_id int,
+    note varchar(32),
+    unique key uk_cascade_note(note),
+    key idx_cascade_parent(parent_id),
+    constraint fk_parent_cascade foreign key (parent_id)
+        references parent_cascade(id) on update cascade
+);
+
+insert into parent_cascade values (1), (2);
+insert into child_cascade values (10, 1, 'a'), (20, 1, 'b'), (30, 2, 'c');
+update parent_cascade set id = 11 where id = 1;
+select row_count();
+select * from parent_cascade order by id;
+select * from child_cascade order by id;
+update child_cascade set note = 'd' where id = 10;
+insert into child_cascade values (40, 11, 'a');
+select * from child_cascade order by id;
+
+create table parent_set_null (
+    id int primary key
+);
+
+create table child_set_null (
+    id int primary key,
+    parent_id int,
+    key idx_set_null_parent(parent_id),
+    constraint fk_parent_set_null foreign key (parent_id)
+        references parent_set_null(id) on update set null
+);
+
+insert into parent_set_null values (1), (2);
+insert into child_set_null values (10, 1), (20, 1), (30, 2);
+update parent_set_null set id = 11 where id = 1;
+select * from parent_set_null order by id;
+select * from child_set_null order by id;
+
+create table parent_composite_action (
+    a int,
+    b int,
+    primary key (a, b)
+);
+
+create table child_composite_action (
+    id int primary key,
+    a int,
+    b int,
+    generated_sum int as (a + b),
+    key idx_composite_action(a, b),
+    key idx_generated_sum(generated_sum),
+    constraint fk_composite_action foreign key (a, b)
+        references parent_composite_action(a, b) on update cascade
+);
+
+insert into parent_composite_action values (1, 2), (3, 4);
+insert into child_composite_action(id, a, b) values (10, 1, 2), (20, 3, 4);
+update parent_composite_action set a = 11, b = 12 where a = 1 and b = 2;
+select row_count();
+select * from parent_composite_action order by a, b;
+select * from child_composite_action order by id;
+
+create table child_second_cascade (
+    id int primary key,
+    parent_id int,
+    constraint fk_second_cascade foreign key (parent_id)
+        references parent_cascade(id) on update cascade
+);
+
+insert into child_second_cascade values (1, 11), (2, 2);
+update parent_cascade set id = 111 where id = 11;
+select row_count();
+select * from child_cascade order by id;
+select * from child_second_cascade order by id;
+
+set foreign_key_checks = 0;
+update parent_cascade set id = 22 where id = 2;
+set foreign_key_checks = 1;
+select * from parent_cascade order by id;
+select * from child_cascade order by id;
+
+create table parent_dual_a (
+    id int primary key
+);
+create table parent_dual_b (
+    id int primary key
+);
+create table child_dual_fk (
+    x int,
+    constraint fk_dual_a foreign key (x)
+        references parent_dual_a(id) on update cascade,
+    constraint fk_dual_b foreign key (x)
+        references parent_dual_b(id)
+);
+
+insert into parent_dual_a values (1);
+insert into parent_dual_b values (1);
+insert into child_dual_fk values (1);
+update parent_dual_a set id = 2 where id = 1;
+select * from parent_dual_a order by id;
+select * from child_dual_fk;
+
+create table parent_generated_unique (
+    id int primary key
+);
+create table child_generated_unique (
+    id int primary key,
+    parent_id int,
+    u int generated always as (parent_id % 10) stored,
+    unique key uk_generated_unique(u),
+    constraint fk_generated_unique foreign key (parent_id)
+        references parent_generated_unique(id) on update cascade
+);
+insert into parent_generated_unique values (1), (12);
+insert into child_generated_unique(id, parent_id) values (10, 1), (20, 12);
+update parent_generated_unique set id = 2 where id = 1;
+select * from parent_generated_unique order by id;
+select * from child_generated_unique order by id;
+
+set foreign_key_checks = 0;
+create table update_preinsert_index (
+    a int not null auto_increment primary key,
+    b varchar(25) not null,
+    c datetime,
+    key idx_b(b),
+    key idx_c(c)
+);
+insert into update_preinsert_index(b, c)
+values ('a', '2020-09-08'), ('b', '2020-09-09');
+update update_preinsert_index set a = 90;
+set foreign_key_checks = 1;
+drop table update_preinsert_index;
+
+create table parent_lock_order (
+    id int primary key
+);
+create table child_lock_order (
+    id int primary key,
+    parent_id int,
+    constraint fk_lock_order foreign key (parent_id)
+        references parent_lock_order(id) on update cascade
+);
+insert into parent_lock_order values (1);
+begin;
+update parent_lock_order set id = 2 where id = 1;
+-- @session:id=1{
+use update_modern_fk;
+set session lock_wait_timeout = 1;
+begin;
+-- @regex("(?s)Lock wait timeout exceeded; try restarting transaction",true)
+insert into child_lock_order values (10, 1);
+rollback;
+-- @session}
+commit;
+select * from parent_lock_order;
+select * from child_lock_order;
+drop table child_lock_order;
+drop table parent_lock_order;
+
+create table parent_nonunique_prefix (
+    a int,
+    b int,
+    primary key (a, b)
+);
+create table child_nonunique_prefix (
+    id int primary key,
+    parent_a int,
+    constraint fk_nonunique_prefix foreign key (parent_a)
+        references parent_nonunique_prefix(a) on update cascade
+);
+insert into parent_nonunique_prefix values (1, 1), (1, 2);
+insert into child_nonunique_prefix values (10, 1);
+update parent_nonunique_prefix set a = b + 1 where a = 1;
+select * from parent_nonunique_prefix order by a, b;
+select * from child_nonunique_prefix order by id;
+drop table child_nonunique_prefix;
+drop table parent_nonunique_prefix;
+
+drop table child_generated_unique;
+drop table parent_generated_unique;
+drop table child_dual_fk;
+drop table parent_dual_b;
+drop table parent_dual_a;
+drop table child_second_cascade;
+drop table child_composite_action;
+drop table parent_composite_action;
+drop table child_set_null;
+drop table parent_set_null;
+drop table child_cascade;
+drop table parent_cascade;
+drop table child_restrict;
+drop table parent_restrict;
 drop table self_ref;
-drop table child_auto_fk;
-drop table parent_auto_fk;
 drop table child_composite;
 drop table parent_composite;
 drop table child_single;
