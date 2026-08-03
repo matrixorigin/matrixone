@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -49,10 +51,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -193,6 +195,50 @@ func TestBuildPendingViewMetadataRefreshQueryPreservesPublishedTableSpaces(t *te
 		}
 	}()
 	require.Len(t, stmts, 1)
+}
+
+func TestBuildViewMetadataRefreshQueryMatchesQuotedLegacyIdentifier(t *testing.T) {
+	const tableName = "source`table\\\""
+	rawCandidate, quotedCandidate := viewMetadataLegacyNameCandidates(tableName)
+	require.Equal(t, sqlquote.String(tableName), rawCandidate)
+	quotedJSON, err := json.Marshal(sqlquote.Ident(tableName))
+	require.NoError(t, err)
+	require.Equal(t, sqlquote.String(string(quotedJSON[1:len(quotedJSON)-1])), quotedCandidate)
+
+	query := buildViewMetadataRefreshQuery(7, 24, 42, "db", tableName, 0, 128)
+	require.Contains(t, query, "instr(viewdef, "+rawCandidate+")")
+	require.Contains(t, query, "instr(viewdef, "+quotedCandidate+")")
+	stmts, err := mysql.Parse(context.Background(), query, 1)
+	require.NoError(t, err)
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
+}
+
+func TestBuildViewMetadataRefreshQueryBatchesLegacyCandidates(t *testing.T) {
+	candidates := []viewMetadataRefreshSource{
+		{accountID: 7, tableName: "v1"},
+		{accountID: 8, tableName: "v`2"},
+	}
+	query := buildViewMetadataRefreshQueryWithLegacyCandidates(
+		7, 24, 42, "db", "source_t", 0, 128, false, candidates,
+	)
+	for _, candidate := range candidates {
+		rawName, quotedName := viewMetadataLegacyNameCandidates(candidate.tableName)
+		require.Contains(t, query, fmt.Sprintf("account_id = %d", candidate.accountID))
+		require.Contains(t, query, "instr(viewdef, "+rawName+")")
+		require.Contains(t, query, "instr(viewdef, "+quotedName+")")
+	}
+	require.NotContains(t, query, "source_t")
+	stmts, err := mysql.Parse(context.Background(), query, 1)
+	require.NoError(t, err)
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
 }
 
 func TestCurrentViewSubscriptionResolver(t *testing.T) {
@@ -668,6 +714,89 @@ func TestRefreshStructuredLeafFanoutDoesNotTraverseEachView(t *testing.T) {
 		"alter view `db`.`v2` as select `a` from `source_t`",
 		nextQuery,
 	}, spyExec.executedSQLs)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestRefreshLegacyLeafFanoutUsesBoundedBatchQueries(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mp := mpool.MustNewZero()
+	const candidateCount = viewMetadataRefreshPageSize + 1
+	source := viewMetadataRefreshSource{
+		accountID: 7, logicalID: 24, previousID: 42, currentID: 42,
+		database: "db", tableName: "source_t",
+	}
+	query := buildViewMetadataRefreshQuery(7, 24, 42, "db", "source_t", 0, 128)
+	nextQuery := strings.Replace(query, "rel_id > 0", fmt.Sprintf("rel_id > %d", candidateCount), 1)
+	legacyCandidates := make([]viewMetadataRefreshSource, 0, candidateCount)
+	for i := 1; i <= candidateCount; i++ {
+		legacyCandidates = append(legacyCandidates, viewMetadataRefreshSource{
+			accountID: 7, logicalID: uint64(i), previousID: uint64(i), currentID: uint64(i),
+			database: "db", tableName: fmt.Sprintf("v%d", i),
+		})
+	}
+	firstBatchQuery := buildViewMetadataRefreshQueryWithLegacyCandidates(
+		source.accountID, source.logicalID, source.previousID, source.database, source.tableName,
+		0, viewMetadataRefreshPageSize, false, legacyCandidates[:viewMetadataRefreshPageSize],
+	)
+	secondBatchQuery := buildViewMetadataRefreshQueryWithLegacyCandidates(
+		source.accountID, source.logicalID, source.previousID, source.database, source.tableName,
+		0, viewMetadataRefreshPageSize, false, legacyCandidates[viewMetadataRefreshPageSize:],
+	)
+	subscriptionQuery := "select sub_name, pub_account_id, pub_account_name, pub_name, " +
+		"pub_database, pub_tables from mo_catalog.mo_subs " +
+		"where sub_account_id = 7 and sub_name is not null and status = 0"
+
+	bat := batch.NewWithSize(7)
+	bat.SetRowCount(candidateCount)
+	bat.Vecs[0] = vector.NewVec(types.T_uint32.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_uint64.ToType())
+	bat.Vecs[3] = vector.NewVec(types.T_uint32.ToType())
+	for i := 4; i < len(bat.Vecs); i++ {
+		bat.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
+	}
+	for i := 1; i <= candidateCount; i++ {
+		name := fmt.Sprintf("v%d", i)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], uint32(7), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], uint64(i), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[2], uint64(i), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[3], uint32(1), false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[4], []byte("db"), false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[5], []byte(name), false, mp))
+		definition := fmt.Sprintf(
+			`{"Stmt":"create view %s as select a from source_t","DefaultDatabase":"db"}`,
+			name,
+		)
+		require.NoError(t, vector.AppendBytes(bat.Vecs[6], []byte(definition), false, mp))
+	}
+
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		query:             {Mp: mp, Batches: []*batch.Batch{bat}},
+		subscriptionQuery: {},
+		nextQuery:         {},
+		firstBatchQuery:   {},
+		secondBatchQuery:  {},
+	}}
+	spyExec.onExec = func(ctx context.Context, sql string) {
+		if refresh, ok := viewMetadataRefreshContextFromContext(ctx); ok &&
+			strings.HasPrefix(sql, "alter view ") && refresh.confirmed != nil {
+			*refresh.confirmed = true
+		}
+	}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, 7)
+
+	require.NoError(t, refreshViewMetadataAfterAlter(
+		c, 7, 24, 42, 42, "db", "source_t", false,
+	))
+	var candidateQueries []string
+	for _, sql := range spyExec.executedSQLs {
+		if strings.HasPrefix(sql, "select account_id, rel_id") {
+			candidateQueries = append(candidateQueries, sql)
+		}
+	}
+	require.Equal(t, []string{query, nextQuery, firstBatchQuery, secondBatchQuery}, candidateQueries)
+	require.Len(t, spyExec.executedSQLs, candidateCount+5)
 	require.Zero(t, mp.CurrNB())
 }
 

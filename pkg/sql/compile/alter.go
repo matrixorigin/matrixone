@@ -2155,6 +2155,11 @@ type viewMetadataRefreshSource struct {
 	tableName  string
 }
 
+type viewMetadataRefreshWork struct {
+	source           viewMetadataRefreshSource
+	legacyCandidates []viewMetadataRefreshSource
+}
+
 func isViewMetadataRefresh(ctx context.Context) bool {
 	if ctx == nil {
 		return false
@@ -2193,18 +2198,20 @@ func refreshViewMetadataAfterAlter(
 	onlyPending bool,
 ) error {
 	subscriptionsByAccount := make(map[uint32]currentViewSubscriptionResolver)
-	sources := []viewMetadataRefreshSource{{
+	work := []viewMetadataRefreshWork{{source: viewMetadataRefreshSource{
 		accountID:  sourceAccountID,
 		logicalID:  sourceLogicalID,
 		previousID: previousSourceTableID,
 		currentID:  currentSourceTableID,
 		database:   sourceDatabase,
 		tableName:  sourceTable,
-	}}
+	}}}
 	processedViews := make(map[[2]uint64]struct{})
-	for len(sources) > 0 {
-		source := sources[0]
-		sources = sources[1:]
+	for len(work) > 0 {
+		currentWork := work[0]
+		work = work[1:]
+		source := currentWork.source
+		var nextLegacyCandidates []viewMetadataRefreshSource
 		var afterViewID uint64
 		for {
 			views, err := loadViewMetadataRefreshPage(
@@ -2216,6 +2223,7 @@ func refreshViewMetadataAfterAlter(
 				source.tableName,
 				afterViewID,
 				onlyPending,
+				currentWork.legacyCandidates,
 			)
 			if err != nil {
 				return err
@@ -2340,7 +2348,7 @@ func refreshViewMetadataAfterAlter(
 					if logicalID == 0 {
 						logicalID = view.id
 					}
-					sources = append(sources, viewMetadataRefreshSource{
+					nextLegacyCandidates = append(nextLegacyCandidates, viewMetadataRefreshSource{
 						accountID:  view.accountID,
 						logicalID:  logicalID,
 						previousID: view.id,
@@ -2350,6 +2358,14 @@ func refreshViewMetadataAfterAlter(
 					})
 				}
 			}
+		}
+		for len(nextLegacyCandidates) > 0 {
+			count := min(len(nextLegacyCandidates), viewMetadataRefreshPageSize)
+			work = append(work, viewMetadataRefreshWork{
+				source:           source,
+				legacyCandidates: nextLegacyCandidates[:count],
+			})
+			nextLegacyCandidates = nextLegacyCandidates[count:]
 		}
 	}
 	return nil
@@ -2683,6 +2699,8 @@ func loadSnapshotViewSubscription(
 	return subscriptions[0], nil
 }
 
+const viewMetadataRefreshPageSize = 128
+
 func loadViewMetadataRefreshPage(
 	c *Compile,
 	sourceAccountID uint32,
@@ -2692,17 +2710,18 @@ func loadViewMetadataRefreshPage(
 	sourceTable string,
 	afterViewID uint64,
 	onlyPending bool,
+	legacyCandidates []viewMetadataRefreshSource,
 ) ([]viewMetadataRefresh, error) {
-	const pageSize = 128
-	sql := buildViewMetadataRefreshQuery(
+	sql := buildViewMetadataRefreshQueryWithLegacyCandidates(
 		sourceAccountID,
 		sourceLogicalID,
 		sourceTableID,
 		sourceDatabase,
 		sourceTable,
 		afterViewID,
-		pageSize,
+		viewMetadataRefreshPageSize,
 		onlyPending,
+		legacyCandidates,
 	)
 	result, err := c.runSqlWithResultAndOptions(
 		sql,
@@ -2715,7 +2734,7 @@ func loadViewMetadataRefreshPage(
 	}
 	defer result.Close()
 
-	views := make([]viewMetadataRefresh, 0, pageSize)
+	views := make([]viewMetadataRefresh, 0, viewMetadataRefreshPageSize)
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		accountIDs := executor.GetFixedRows[uint32](cols[0])
 		ids := executor.GetFixedRows[uint64](cols[1])
@@ -2769,11 +2788,53 @@ func buildViewMetadataRefreshQuery(
 	pageSize int,
 	onlyPending ...bool,
 ) string {
+	pending := len(onlyPending) > 0 && onlyPending[0]
+	return buildViewMetadataRefreshQueryWithLegacyCandidates(
+		sourceAccountID,
+		sourceLogicalID,
+		sourceTableID,
+		sourceDatabase,
+		sourceTable,
+		afterViewID,
+		pageSize,
+		pending,
+		nil,
+	)
+}
+
+func buildViewMetadataRefreshQueryWithLegacyCandidates(
+	sourceAccountID uint32,
+	sourceLogicalID uint64,
+	sourceTableID uint64,
+	sourceDatabase string,
+	sourceTable string,
+	afterViewID uint64,
+	pageSize int,
+	onlyPending bool,
+	legacyCandidates []viewMetadataRefreshSource,
+) string {
 	pendingFilter := ""
-	if len(onlyPending) > 0 && onlyPending[0] {
+	if onlyPending {
 		pendingFilter = "and json_unquote(json_extract(viewdef, '$.metadata_refresh_pending')) = 'true' "
 	}
-	legacyCandidate := sqlquote.String(sourceTable)
+	legacyBatchPredicate := buildViewMetadataLegacyBatchPredicate(legacyCandidates)
+	if legacyBatchPredicate != "" {
+		return fmt.Sprintf(
+			"select account_id, rel_id, rel_logical_id, rel_version, reldatabase, relname, viewdef from %s.mo_tables "+
+				"where relkind = '%s' %s"+
+				"and reldatabase not in ('%s', '%s') and rel_id > %d "+
+				"and (%s) order by rel_id limit %d",
+			catalog.MO_CATALOG,
+			catalog.SystemViewRel,
+			pendingFilter,
+			catalog.MO_CATALOG,
+			"information_schema",
+			afterViewID,
+			strings.TrimPrefix(legacyBatchPredicate, " or "),
+			pageSize,
+		)
+	}
+	legacyCandidate, quotedLegacyCandidate := viewMetadataLegacyNameCandidates(sourceTable)
 	databaseNameJSON, _ := json.Marshal(sourceDatabase)
 	tableNameJSON, _ := json.Marshal(sourceTable)
 	qualifiedNameCandidate := sqlquote.String(
@@ -2794,7 +2855,7 @@ func buildViewMetadataRefreshQuery(
 				"where relkind = '%s' %s"+
 				"and reldatabase not in ('%s', '%s') and rel_id > %d "+
 				"and ((account_id = %d and json_extract(viewdef, '$.dependencies') is null "+
-				"and instr(viewdef, %s) > 0) "+
+				"and (instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0)) "+
 				"or (viewdef like '%%\\\"account_id\\\":%d,%%' "+
 				"and (viewdef like '%%\\\"logical_id\\\":%d,%%' "+
 				"or viewdef like '%%\\\"table_id\\\":%d,%%')) "+
@@ -2804,12 +2865,12 @@ func buildViewMetadataRefreshQuery(
 				"and ((account_id = %d and instr(viewdef, %s) > 0) "+
 				"or instr(viewdef, %s) > 0)) "+
 				"or (json_extract(viewdef, '$.dependencies') is null "+
-				"and instr(lower(viewdef), lower(%s)) > 0 "+
+				"and (instr(lower(viewdef), lower(%s)) > 0 or instr(lower(viewdef), lower(%s)) > 0) "+
 				"and exists (select 1 from %s.%s where sub_account_id = account_id "+
 				"and pub_account_id = %d and sub_name is not null and status = %d "+
 				"and (lower(pub_database) = lower(%s) or pub_database = %s) "+
 				"and (pub_tables = %s or find_in_set(lower(%s), lower(pub_tables)) > 0) "+
-				"and instr(lower(viewdef), lower(sub_name)) > 0))) "+
+				"and instr(lower(viewdef), lower(sub_name)) > 0))%s) "+
 				"order by rel_id limit %d",
 			catalog.MO_CATALOG,
 			catalog.SystemViewRel,
@@ -2819,6 +2880,7 @@ func buildViewMetadataRefreshQuery(
 			afterViewID,
 			sourceAccountID,
 			legacyCandidate,
+			quotedLegacyCandidate,
 			sourceAccountID,
 			sourceLogicalID,
 			sourceTableID,
@@ -2828,6 +2890,7 @@ func buildViewMetadataRefreshQuery(
 			qualifiedNameCandidate,
 			publisherQualifiedNameCandidate,
 			legacyCandidate,
+			quotedLegacyCandidate,
 			catalog.MO_CATALOG,
 			catalog.MO_SUBS,
 			sourceAccountID,
@@ -2836,6 +2899,7 @@ func buildViewMetadataRefreshQuery(
 			sqlquote.String(pubsub.TableAll),
 			sqlquote.String(pubsub.TableAll),
 			legacyCandidate,
+			legacyBatchPredicate,
 			pageSize,
 		)
 	}
@@ -2846,7 +2910,7 @@ func buildViewMetadataRefreshQuery(
 			"and ((((account_id = %d) or account_id in "+
 			"(select sub_account_id from %s.%s where pub_account_id = %d and status = %d)) "+
 			"and json_extract(viewdef, '$.dependencies') is null "+
-			"and instr(viewdef, %s) > 0) "+
+			"and (instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0)) "+
 			"or (viewdef like '%%\\\"account_id\\\":%d,%%' "+
 			"and (viewdef like '%%\\\"logical_id\\\":%d,%%' "+
 			"or viewdef like '%%\\\"table_id\\\":%d,%%')) "+
@@ -2861,7 +2925,7 @@ func buildViewMetadataRefreshQuery(
 			"and pub_account_id = %d and lower(pub_database) = lower(%s) and status = %d "+
 			"and instr(viewdef, concat(%s, char(34), "+
 			"replace(replace(sub_name, char(92), concat(char(92), char(92))), "+
-			"char(34), concat(char(92), char(34))), char(34), %s)) > 0))) "+
+			"char(34), concat(char(92), char(34))), char(34), %s)) > 0))%s) "+
 			"order by rel_id limit %d",
 		catalog.MO_CATALOG,
 		catalog.SystemViewRel,
@@ -2875,6 +2939,7 @@ func buildViewMetadataRefreshQuery(
 		sourceAccountID,
 		pubsub.SubStatusNormal,
 		legacyCandidate,
+		quotedLegacyCandidate,
 		sourceAccountID,
 		sourceLogicalID,
 		sourceTableID,
@@ -2894,8 +2959,30 @@ func buildViewMetadataRefreshQuery(
 		pubsub.SubStatusNormal,
 		subscriptionNamePrefix,
 		subscriptionTableSuffix,
+		legacyBatchPredicate,
 		pageSize,
 	)
+}
+
+func buildViewMetadataLegacyBatchPredicate(candidates []viewMetadataRefreshSource) string {
+	var predicate strings.Builder
+	for _, candidate := range candidates {
+		rawName, quotedName := viewMetadataLegacyNameCandidates(candidate.tableName)
+		fmt.Fprintf(
+			&predicate,
+			" or (account_id = %d and json_extract(viewdef, '$.dependencies') is null "+
+				"and (instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0))",
+			candidate.accountID,
+			rawName,
+			quotedName,
+		)
+	}
+	return predicate.String()
+}
+
+func viewMetadataLegacyNameCandidates(name string) (string, string) {
+	quotedNameJSON, _ := json.Marshal(sqlquote.Ident(name))
+	return sqlquote.String(name), sqlquote.String(string(quotedNameJSON[1 : len(quotedNameJSON)-1]))
 }
 
 func runViewMetadataRefreshSQL(

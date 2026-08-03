@@ -38,30 +38,7 @@ func TestBuildPendingViewMetadataRetryQueryIsBounded(t *testing.T) {
 	require.NotContains(t, query, "limit 1025")
 }
 
-func TestLoadPendingViewMetadataRetryPageRotatesAfterFailures(t *testing.T) {
-	resetPendingViewMetadataCursor(t)
-	ctx := context.Background()
-	bh := &backgroundExecTest{}
-	bh.init()
-	firstQuery := buildPendingViewMetadataRetryQuery(0, 0)
-	secondQuery := buildPendingViewMetadataRetryQuery(7, 42)
-	bh.sql2result[firstQuery] = newPendingViewMetadataRetryResult([][]interface{}{
-		{uint64(7), uint64(41), uint64(1), "db", "v1", "{}"},
-		{uint64(7), uint64(42), uint64(1), "db", "v2", "{}"},
-	})
-	bh.sql2result[secondQuery] = newPendingViewMetadataRetryResult(nil)
-
-	results, err := loadPendingViewMetadataRetryPage(ctx, bh)
-	require.NoError(t, err)
-	require.Equal(t, uint64(2), results[0].GetRowCount())
-	results, err = loadPendingViewMetadataRetryPage(ctx, bh)
-	require.NoError(t, err)
-	require.Equal(t, uint64(2), results[0].GetRowCount())
-	require.Equal(t, []string{firstQuery, secondQuery, firstQuery}, bh.executedSQLs)
-}
-
 func TestRetryPendingViewMetadataSkipsMissingDefaultDatabase(t *testing.T) {
-	resetPendingViewMetadataCursor(t)
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
@@ -82,11 +59,34 @@ func TestRetryPendingViewMetadataSkipsMissingDefaultDatabase(t *testing.T) {
 	require.NoError(t, retryPendingViewMetadata(ctx, ses, bh))
 }
 
+func TestRetryPendingViewMetadataAdvancesBeyondFirstPage(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	bh := &backgroundExecTest{}
+	bh.init()
+	firstPage := make([][]interface{}, maxPendingViewMetadataRetries)
+	for i := range firstPage {
+		firstPage[i] = []interface{}{
+			uint64(7), uint64(i + 1), uint64(1), "db", "v", "not-json",
+		}
+	}
+	firstQuery := buildPendingViewMetadataRetryQuery(0, 0)
+	secondQuery := buildPendingViewMetadataRetryQuery(7, maxPendingViewMetadataRetries)
+	bh.sql2result[firstQuery] = newPendingViewMetadataRetryResult(firstPage)
+	bh.sql2result[secondQuery] = newPendingViewMetadataRetryResult([][]interface{}{
+		{uint64(7), uint64(maxPendingViewMetadataRetries + 1), uint64(1), "db", "last", "not-json"},
+	})
+
+	require.NoError(t, retryPendingViewMetadata(ctx, ses, bh))
+	require.Equal(t, []string{firstQuery, secondQuery}, bh.executedSQLs)
+}
+
 func TestRetryPendingViewMetadataPropagatesMalformedCatalogRows(t *testing.T) {
 	valid := []interface{}{uint64(7), uint64(42), uint64(1), "db", "v", "{}"}
 	for column := range valid {
 		t.Run([]string{"account", "view", "version", "database", "name", "definition"}[column], func(t *testing.T) {
-			resetPendingViewMetadataCursor(t)
 			ctx := context.Background()
 			ctrl := gomock.NewController(t)
 			ses := newTestSession(t, ctrl)
@@ -138,7 +138,6 @@ func TestRetryPendingViewMetadataSQLModeAndErrors(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			resetPendingViewMetadataCursor(t)
 			ctx := context.Background()
 			ctrl := gomock.NewController(t)
 			ses := newTestSession(t, ctrl)
@@ -168,56 +167,18 @@ func TestRetryPendingViewMetadataSQLModeAndErrors(t *testing.T) {
 	}
 }
 
-func TestLoadPendingViewMetadataRetryPageErrorPaths(t *testing.T) {
+func TestLoadPendingViewMetadataRetryPageAfterErrorPaths(t *testing.T) {
 	t.Run("query error", func(t *testing.T) {
-		resetPendingViewMetadataCursor(t)
 		ctx := context.Background()
 		bh := &backgroundExecTest{}
 		bh.init()
 		query := buildPendingViewMetadataRetryQuery(0, 0)
 		bh.sql2err[query] = moerr.NewInternalErrorNoCtx("query failed")
 
-		_, err := loadPendingViewMetadataRetryPage(ctx, bh)
+		_, err := loadPendingViewMetadataRetryPageAfter(ctx, bh, 0, 0)
 		require.Error(t, err)
 	})
 
-	t.Run("malformed cursor columns", func(t *testing.T) {
-		for _, row := range [][]interface{}{
-			{nil, uint64(42), uint64(1), "db", "v", "{}"},
-			{uint64(7), nil, uint64(1), "db", "v", "{}"},
-		} {
-			resetPendingViewMetadataCursor(t)
-			ctx := context.Background()
-			bh := &backgroundExecTest{}
-			bh.init()
-			bh.sql2result[buildPendingViewMetadataRetryQuery(0, 0)] =
-				newPendingViewMetadataRetryResult([][]interface{}{row})
-
-			_, err := loadPendingViewMetadataRetryPage(ctx, bh)
-			require.Error(t, err)
-		}
-	})
-
-	t.Run("empty page resets cursor", func(t *testing.T) {
-		resetPendingViewMetadataCursor(t)
-		pendingViewMetadataCursor.Lock()
-		pendingViewMetadataCursor.accountID = 7
-		pendingViewMetadataCursor.viewID = 42
-		pendingViewMetadataCursor.Unlock()
-		ctx := context.Background()
-		bh := &backgroundExecTest{}
-		bh.init()
-		bh.sql2result[buildPendingViewMetadataRetryQuery(7, 42)] = newPendingViewMetadataRetryResult(nil)
-		bh.sql2result[buildPendingViewMetadataRetryQuery(0, 0)] = newPendingViewMetadataRetryResult(nil)
-
-		results, err := loadPendingViewMetadataRetryPage(ctx, bh)
-		require.NoError(t, err)
-		require.False(t, execResultArrayHasData(results))
-		pendingViewMetadataCursor.Lock()
-		require.Zero(t, pendingViewMetadataCursor.accountID)
-		require.Zero(t, pendingViewMetadataCursor.viewID)
-		pendingViewMetadataCursor.Unlock()
-	})
 }
 
 func TestHandleCreateFunctionRetriesPendingViewMetadata(t *testing.T) {
@@ -261,24 +222,6 @@ func TestHandleCreateFunctionIgnoresPostCommitMetadataRetryError(t *testing.T) {
 	defer retryStub.Reset()
 
 	require.NoError(t, handleCreateFunction(ses, &ExecCtx{reqCtx: ctx}, &tree.CreateFunction{}))
-}
-
-func resetPendingViewMetadataCursor(t *testing.T) {
-	pendingViewMetadataCursor.Lock()
-	oldAccountID := pendingViewMetadataCursor.accountID
-	oldViewID := pendingViewMetadataCursor.viewID
-	oldGeneration := pendingViewMetadataCursor.generation
-	pendingViewMetadataCursor.accountID = 0
-	pendingViewMetadataCursor.viewID = 0
-	pendingViewMetadataCursor.generation = 0
-	pendingViewMetadataCursor.Unlock()
-	t.Cleanup(func() {
-		pendingViewMetadataCursor.Lock()
-		pendingViewMetadataCursor.accountID = oldAccountID
-		pendingViewMetadataCursor.viewID = oldViewID
-		pendingViewMetadataCursor.generation = oldGeneration
-		pendingViewMetadataCursor.Unlock()
-	})
 }
 
 func newPendingViewMetadataRetryResult(rows [][]interface{}) *MysqlResultSet {
