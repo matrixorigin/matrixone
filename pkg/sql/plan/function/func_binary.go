@@ -6790,6 +6790,20 @@ func extractFromVarchar(unit string, t string, scale int32) (string, error) {
 	var result string
 	if len(t) == 0 {
 		result = t
+	} else if extractUnitPrefersTime(unit) {
+		if value, err := types.ParseTime(t, scale); err == nil {
+			result, err = extractFromTime(unit, value)
+			if err != nil {
+				return "", err
+			}
+		} else if value, err := types.ParseDatetime(t, scale); err == nil {
+			result, err = extractFromDatetime(unit, value)
+			if err != nil {
+				return "", err
+			}
+		} else {
+			return "", moerr.NewInternalErrorNoCtx("invalid input")
+		}
 	} else if value, err := types.ParseDatetime(t, scale); err == nil {
 		result, err = extractFromDatetime(unit, value)
 		if err != nil {
@@ -6805,6 +6819,19 @@ func extractFromVarchar(unit string, t string, scale int32) (string, error) {
 	}
 
 	return result, nil
+}
+
+// Time-only EXTRACT units must interpret ambiguous strings such as "10:11:12"
+// as TIME, even though relaxed DATE parsing also accepts them as a date.
+func extractUnitPrefersTime(unit string) bool {
+	switch unit {
+	case "microsecond", "second", "minute", "hour",
+		"second_microsecond", "minute_microsecond", "minute_second",
+		"hour_microsecond", "hour_second", "hour_minute":
+		return true
+	default:
+		return false
+	}
 }
 
 func FindInSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {

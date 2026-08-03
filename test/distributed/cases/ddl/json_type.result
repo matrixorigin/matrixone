@@ -103,7 +103,7 @@ invalid input: json text [1, 2,
 insert into json_table_4 values('{"key1": NULL, "": "value2"}');
 invalid input: json text {"key1": NULL, "": "value2"}
 insert into json_table_4 values('');
-invalid input: json text
+invalid input: json text is empty
 create table json_table_5(j1 json primary key,j2 json default '{"x": 17, "x": "red"}',j3 json not null );
 not supported: JSON column 'j1' cannot be in primary key
 create table json_table_5(j1 json) partition by hash(j1);

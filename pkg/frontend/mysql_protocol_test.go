@@ -93,6 +93,17 @@ func TestMysqlProtocolReceiveExtraInfoLogLevel(t *testing.T) {
 		entries := logs.FilterMessage("cannot get salt, maybe not use proxy").All()
 		require.Len(t, entries, 1)
 		require.Equal(t, zap.DebugLevel, entries[0].Level)
+
+		writeErr := make(chan error, 1)
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			_, err := clientConn.Write([]byte{1})
+			writeErr <- err
+		}()
+		var buf [1]byte
+		_, err := serverConn.Read(buf[:])
+		require.NoError(t, err, "ExtraInfo timeout must not leak into the MySQL handshake")
+		require.NoError(t, <-writeErr)
 	})
 
 	t.Run("malformed extra info is error", func(t *testing.T) {
@@ -2573,6 +2584,92 @@ func TestSendPrepareResponse(t *testing.T) {
 	})
 }
 
+func TestPreparedNumericAggregateBinaryProtocolMetadata(t *testing.T) {
+	ctx := context.TODO()
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{name: "sum", sql: "select sum(?) as result"},
+		{name: "avg", sql: "select avg(?) as result"},
+		{name: "window sum", sql: "select sum(?) over () as result"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			conn := &prepareResponseCaptureConn{}
+			proto, proc, prepareStmt := newBinaryPrepareProtocolTestCaseWithConn(t, test.sql, conn)
+			proto.capability &^= CLIENT_DEPRECATE_EOF
+			defer func() {
+				proc.SetPrepareParams(nil)
+				prepareStmt.clearBinaryParamState(proc)
+			}()
+
+			prepare := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+			require.Equal(t, []int32{int32(types.T_any)}, prepare.ParamTypes)
+			require.NoError(t, proto.SendPrepareResponse(ctx, prepareStmt))
+
+			packets := splitProtocolPackets(t, conn.writes)
+			require.Len(t, packets, 5)
+			require.Equal(t, uint16(1), binary.LittleEndian.Uint16(packets[0][5:]))
+			require.Equal(t, uint16(1), binary.LittleEndian.Uint16(packets[0][7:]))
+
+			parameter := parsePrepareColumnDefinition(t, packets[1])
+			require.Equal(t, "?", parameter.name)
+			require.Equal(t, defines.MYSQL_TYPE_NULL, parameter.typ)
+			require.Equal(t, byte(defines.EOFHeader), packets[2][0])
+
+			result := parsePrepareColumnDefinition(t, packets[3])
+			require.Equal(t, "result", result.name)
+			require.Equal(t, defines.MYSQL_TYPE_DOUBLE, result.typ)
+			require.Equal(t, byte(defines.EOFHeader), packets[4][0])
+		})
+	}
+}
+
+func TestPreparedSetBinaryProtocolReportsAndReplacesParameters(t *testing.T) {
+	ctx := context.TODO()
+	conn := &prepareResponseCaptureConn{}
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCaseWithConn(
+		t, "set @first = ? + 1, @second = ?", conn)
+	proto.capability &^= CLIENT_DEPRECATE_EOF
+	defer func() {
+		proc.SetPrepareParams(nil)
+		prepareStmt.clearBinaryParamState(proc)
+	}()
+
+	prepare := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+	require.Len(t, prepare.ParamTypes, 2)
+	require.NoError(t, proto.SendPrepareResponse(ctx, prepareStmt))
+
+	packets := splitProtocolPackets(t, conn.writes)
+	require.Len(t, packets, 4)
+	require.Equal(t, uint16(0), binary.LittleEndian.Uint16(packets[0][5:]))
+	require.Equal(t, uint16(2), binary.LittleEndian.Uint16(packets[0][7:]))
+	for _, payload := range packets[1:3] {
+		column := parsePrepareColumnDefinition(t, payload)
+		require.Equal(t, "?", column.name)
+	}
+	require.Equal(t, byte(defines.EOFHeader), packets[3][0])
+
+	// The first execution supplies a numeric value and text value. The second
+	// supplies a different numeric value and NULL, proving that no old text
+	// parameter is appended to or reused by the prepared SET statement.
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt,
+		buildPreparedSetExecutePacket(proto, 0, 41, "first"), 0))
+	proc.SetPrepareParams(prepareStmt.params)
+	require.Equal(t, 2, proc.GetPrepareParams().Length())
+	require.Equal(t, "41", proc.GetPrepareParams().GetStringAt(0))
+	require.Equal(t, "first", proc.GetPrepareParams().GetStringAt(1))
+	require.False(t, proc.GetPrepareParams().GetNulls().Contains(1))
+
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt,
+		buildPreparedSetExecutePacket(proto, 1<<1, 9, ""), 0))
+	proc.SetPrepareParams(prepareStmt.params)
+	require.Equal(t, 2, proc.GetPrepareParams().Length())
+	require.Equal(t, "9", proc.GetPrepareParams().GetStringAt(0))
+	require.True(t, proc.GetPrepareParams().GetNulls().Contains(1))
+}
+
 func FuzzParseExecuteData(f *testing.F) {
 	ctx := context.TODO()
 	proc := testutil.NewProcess(f)
@@ -2643,6 +2740,10 @@ func FuzzParseExecuteData(f *testing.F) {
 }
 
 func newBinaryPrepareProtocolTestCase(t *testing.T, sql string) (*MysqlProtocolImpl, *process.Process, *PrepareStmt) {
+	return newBinaryPrepareProtocolTestCaseWithConn(t, sql, &testConn{})
+}
+
+func newBinaryPrepareProtocolTestCaseWithConn(t *testing.T, sql string, conn net.Conn) (*MysqlProtocolImpl, *process.Process, *PrepareStmt) {
 	t.Helper()
 	ctx := context.TODO()
 	sv, err := getSystemVariables("test/system_vars_config.toml")
@@ -2654,10 +2755,11 @@ func newBinaryPrepareProtocolTestCase(t *testing.T, sql string) (*MysqlProtocolI
 	setSessionAlloc("", NewLeakCheckAllocator())
 	setPu("", pu)
 
-	ioses, err := NewIOSession(&testConn{}, pu, "")
+	ioses, err := NewIOSession(conn, pu, "")
 	require.NoError(t, err)
 
 	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+	proto.SetSession(&Session{feSessionImpl: feSessionImpl{txnHandler: &TxnHandler{}}})
 	proc := testutil.NewProcess(t)
 
 	st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), sql)
@@ -2813,6 +2915,25 @@ func buildLongLongExecutePacket(value uint64, unsigned bool) []byte {
 
 func buildNullExecutePacket(tp defines.MysqlType) []byte {
 	data := []byte{0, 0, 0, 0, 0, 1, 1, byte(tp), 0}
+	return data
+}
+
+func buildPreparedSetExecutePacket(proto *MysqlProtocolImpl, nullBitmap byte, first uint32, second string) []byte {
+	data := []byte{
+		0, 0, 0, 0, 0, // cursor flags and iteration count
+		nullBitmap,
+		1, // new parameters bound
+		byte(defines.MYSQL_TYPE_LONG), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+	}
+	firstValue := make([]byte, 4)
+	binary.LittleEndian.PutUint32(firstValue, first)
+	data = append(data, firstValue...)
+	if nullBitmap&(1<<1) == 0 {
+		pos := len(data)
+		data = append(data, make([]byte, len(second)+9)...)
+		data = data[:proto.writeStringLenEnc(data, pos, second)]
+	}
 	return data
 }
 

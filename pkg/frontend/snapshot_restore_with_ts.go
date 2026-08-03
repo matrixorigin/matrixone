@@ -26,27 +26,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
-func fkTablesTopoSortWithTS(ctx context.Context, bh BackgroundExec, dbName string, tblName string, ts int64, from, to uint32) (sortedTbls []string, err error) {
+func fkTablesTopoSortWithTS(
+	ctx context.Context,
+	bh BackgroundExec,
+	dbName string,
+	tblName string,
+	ts int64,
+	from,
+	to uint32,
+	tableInfos []*tableInfo,
+) (sortedTbls []string, err error) {
 	newCtx := defines.AttachAccountId(ctx, from)
 	getLogger("").Info(fmt.Sprintf("[%d:%d] start to get fk tables topo sort from account %d", from, ts, from))
-	// get foreign key deps from mo_catalog.mo_foreign_keys
 	fkDeps, err := getFkDepsWithTS(newCtx, bh, dbName, tblName, ts, from, to)
 	if err != nil {
 		return
 	}
-
-	g := toposort{next: make(map[string][]string)}
-	for key, deps := range fkDeps {
-		g.addVertex(key)
-		for _, depTbl := range deps {
-			// exclude self dep
-			if key != depTbl {
-				g.addEdge(depTbl, key)
-			}
-		}
-	}
-	sortedTbls, err = g.sort()
-	return
+	return topoSortRestoreFkDeps(ctx, fkDeps, tableInfos)
 }
 
 func getFkDepsWithTS(ctx context.Context, bh BackgroundExec, db string, tbl string, ts int64, from, to uint32) (ans map[string][]string, err error) {
@@ -56,9 +52,9 @@ func getFkDepsWithTS(ctx context.Context, bh BackgroundExec, db string, tbl stri
 	}
 
 	if len(db) > 0 {
-		sql += fmt.Sprintf(" where db_name = '%s'", db)
+		sql += fmt.Sprintf(" where db_name = %s", quoteSQLStringLiteral(db))
 		if len(tbl) > 0 {
-			sql += fmt.Sprintf(" and table_name = '%s'", tbl)
+			sql += fmt.Sprintf(" and table_name = %s", quoteSQLStringLiteral(tbl))
 		}
 	}
 
@@ -250,7 +246,7 @@ func getStringColsListFromTS(ctx context.Context, bh BackgroundExec, sql string,
 func getCreateTableSqlFromTS(ctx context.Context, bh BackgroundExec, dbName string, tblName string, ts int64, from, to uint32) (string, error) {
 	getLogger("").Info(fmt.Sprintf("[%d:%d] start to get create table sql: datatabse `%s`, table `%s`", from, ts, dbName, tblName))
 	newCtx := defines.AttachAccountId(ctx, from)
-	sql := fmt.Sprintf("show create table `%s`.`%s`", dbName, tblName)
+	sql := showCreateTableSQL(dbName, tblName)
 	if ts > 0 {
 		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
 	}
@@ -438,7 +434,7 @@ func restoreDatabaseFromTS(
 
 		return
 	} else {
-		createDbSql = fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbName)
+		createDbSql = createDatabaseIfNotExistsSQL(dbName)
 		// create db
 		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to create db: %v, create db sql: %s", restoreAccount, snapshotTs, dbName, createDbSql))
 		if err = bh.Exec(toCtx, createDbSql); err != nil {
@@ -532,12 +528,12 @@ func recreateTableFromTS(
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to restore table: %v, restore timestamp: %d", restoreAccount, snapshotTs, tblInfo.tblName, snapshotTs))
 
 	ctx = defines.AttachAccountId(ctx, toAccountId)
-	if err = bh.Exec(ctx, fmt.Sprintf("use `%s`", tblInfo.dbName)); err != nil {
+	if err = bh.Exec(ctx, useDatabaseSQL(tblInfo.dbName)); err != nil {
 		return
 	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to drop table: %v,", restoreAccount, snapshotTs, tblInfo.tblName))
-	if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`", tblInfo.tblName)); err != nil {
+	if err = bh.Exec(ctx, dropTableIfExistsSQL("", tblInfo.tblName)); err != nil {
 		return
 	}
 
@@ -549,7 +545,7 @@ func recreateTableFromTS(
 		}
 	}
 
-	insertIntoSql := fmt.Sprintf(restoreTableDataByTsFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, snapshotTs)
+	insertIntoSql := restoreTableDataByTsSQL(tblInfo.dbName, tblInfo.tblName, snapshotTs)
 	beginTime := time.Now()
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to insert select table: %v, insert sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, insertIntoSql))
 	if err = bh.ExecRestore(ctx, insertIntoSql, restoreAccount, toAccountId); err != nil {
@@ -710,11 +706,11 @@ func restoreViewsFromTS(
 		if tblInfo, ok := viewMap[key]; ok {
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%d:%d] start to restore view: %v, restore timestamp: %d", restoreAccount, snapshotTs, tblInfo.tblName, snapshot.TS.PhysicalTime))
 
-			if err = bh.Exec(toCtx, "use `"+tblInfo.dbName+"`"); err != nil {
+			if err = bh.Exec(toCtx, useDatabaseSQL(tblInfo.dbName)); err != nil {
 				return err
 			}
 
-			if err = bh.Exec(toCtx, "drop view if exists "+tblInfo.tblName); err != nil {
+			if err = bh.Exec(toCtx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
 				return err
 			}
 

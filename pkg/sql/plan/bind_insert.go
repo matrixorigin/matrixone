@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -1060,23 +1062,275 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 	childColPos func(colName string) int32,
 ) (int32, []*plan.Expr, error) {
 	selectNode := builder.qry.Nodes[lastNodeID]
+	inputTypes := make([]plan.Type, len(selectNode.ProjectList))
+	for i, expr := range selectNode.ProjectList {
+		inputTypes[i] = expr.Typ
+	}
 
 	id2name := make(map[uint64]string, len(tableDef.Cols))
 	for _, col := range tableDef.Cols {
 		id2name[col.ColId] = col.Name
 	}
 
-	oks := make([]*plan.Expr, 0, len(tableDef.Fkeys))
+	nonSelfFks := make([]*plan.ForeignKeyDef, 0, len(tableDef.Fkeys))
 	for _, fk := range tableDef.Fkeys {
-		if fk.ForeignTbl == 0 {
-			continue // self-referencing FK handled post-execution via DetectSql
+		if fk.ForeignTbl != 0 {
+			nonSelfFks = append(nonSelfFks, fk)
 		}
+	}
+	if len(nonSelfFks) == 0 {
+		return lastNodeID, nil, nil
+	}
+	lockForeignKeys := true
+	if proc := builder.compCtx.GetProcess(); proc != nil {
+		if txnOp := proc.GetTxnOperator(); txnOp != nil {
+			lockForeignKeys = txnOp.Txn().IsPessimistic()
+		}
+	}
+
+	parentColNames := func(parent *plan.TableDef, colIDs []uint64) ([]string, error) {
+		idToName := make(map[uint64]string, len(parent.Cols))
+		for _, col := range parent.Cols {
+			idToName[col.ColId] = col.Name
+		}
+		names := make([]string, len(colIDs))
+		for i, id := range colIDs {
+			var ok bool
+			if names[i], ok = idToName[id]; !ok {
+				return nil, moerr.NewInternalErrorf(builder.GetContext(),
+					"foreign-key parent column %d not found", id)
+			}
+		}
+		return names, nil
+	}
+	partsEqual := func(parts, names []string) bool {
+		if len(parts) != len(names) {
+			return false
+		}
+		for i := range parts {
+			if catalog.ResolveAlias(parts[i]) != names[i] {
+				return false
+			}
+		}
+		return true
+	}
+	validationFks := nonSelfFks
+	type foreignKeyLock struct {
+		tableDef  *plan.TableDef
+		objRef    *plan.ObjectRef
+		expr      *plan.Expr
+		typ       plan.Type
+		lockTable bool
+	}
+	foreignKeyLocks := make([]foreignKeyLock, 0, len(nonSelfFks))
+	if lockForeignKeys {
+		type orderedFK struct {
+			fk  *plan.ForeignKeyDef
+			key string
+		}
+		ordered := make([]orderedFK, 0, len(nonSelfFks))
+		for _, fk := range nonSelfFks {
+			_, parentTableDef, err := builder.compCtx.ResolveById(fk.ForeignTbl, bindCtx.snapshot)
+			if err != nil {
+				return 0, nil, err
+			}
+			if parentTableDef == nil {
+				return 0, nil, moerr.NewInternalErrorf(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
+			}
+			referencedNames, err := parentColNames(parentTableDef, fk.ForeignCols)
+			if err != nil {
+				return 0, nil, err
+			}
+			pkeyNames := []string(nil)
+			if parentTableDef.Pkey != nil {
+				pkeyNames = parentTableDef.Pkey.Names
+				if len(pkeyNames) == 0 && parentTableDef.Pkey.PkeyColName != "" {
+					pkeyNames = []string{parentTableDef.Pkey.PkeyColName}
+				}
+			}
+			// Base-table locks sort before hidden-index locks, matching the parent
+			// REPLACE pre-phase. Hidden targets then use the physical index-table
+			// name as the stable order shared by both sides.
+			targetKey := "0:"
+			if !partsEqual(pkeyNames, referencedNames) {
+				for _, idxDef := range parentTableDef.Indexes {
+					if idxDef.Unique && partsEqual(idxDef.Parts, referencedNames) {
+						targetKey = "1:" + idxDef.IndexTableName
+						break
+					}
+				}
+			}
+			ordered = append(ordered, orderedFK{
+				fk:  fk,
+				key: fmt.Sprintf("%020d:%s", fk.ForeignTbl, targetKey),
+			})
+		}
+		slices.SortStableFunc(ordered, func(left, right orderedFK) int {
+			return strings.Compare(left.key, right.key)
+		})
+		nonSelfFks = make([]*plan.ForeignKeyDef, len(ordered))
+		for i := range ordered {
+			nonSelfFks[i] = ordered[i].fk
+		}
+	}
+
+	if lockForeignKeys {
+		for _, fk := range nonSelfFks {
+			parentObjRef, parentTableDef, err := builder.compCtx.ResolveById(fk.ForeignTbl, bindCtx.snapshot)
+			if err != nil {
+				return 0, nil, err
+			}
+			if parentTableDef == nil {
+				return 0, nil, moerr.NewInternalErrorf(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
+			}
+			referencedNames, err := parentColNames(parentTableDef, fk.ForeignCols)
+			if err != nil {
+				return 0, nil, err
+			}
+			childExprs := make([]*plan.Expr, len(fk.Cols))
+			for i, childColID := range fk.Cols {
+				pos := childColPos(id2name[childColID])
+				childExpr := &plan.Expr{Typ: inputTypes[pos], Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: selectTag, ColPos: int32(pos),
+				}}}
+				var parentCol *plan.ColDef
+				for _, col := range parentTableDef.Cols {
+					if col.ColId == fk.ForeignCols[i] {
+						parentCol = col
+						break
+					}
+				}
+				if parentCol == nil {
+					return 0, nil, moerr.NewInternalErrorf(builder.GetContext(),
+						"foreign-key parent column %s not found", referencedNames[i])
+				}
+				childExprs[i], err = makePlan2AssignmentCastExpr(
+					builder.GetContext(), childExpr, parentCol.Typ)
+				if err != nil {
+					return 0, nil, err
+				}
+			}
+
+			var lockExpr *plan.Expr
+			var lockTableDef *plan.TableDef
+			var lockObjRef *plan.ObjectRef
+			lockTable := false
+			var pkeyNames []string
+			if parentTableDef.Pkey != nil {
+				pkeyNames = parentTableDef.Pkey.Names
+				if len(pkeyNames) == 0 && parentTableDef.Pkey.PkeyColName != "" {
+					pkeyNames = []string{parentTableDef.Pkey.PkeyColName}
+				}
+			}
+			if partsEqual(pkeyNames, referencedNames) {
+				lockTableDef = parentTableDef
+				lockObjRef = parentObjRef
+				if len(childExprs) == 1 {
+					lockExpr = childExprs[0]
+				} else {
+					lockExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", childExprs)
+					if err != nil {
+						return 0, nil, err
+					}
+				}
+			} else {
+				var matchedIndex *plan.IndexDef
+				for _, idxDef := range parentTableDef.Indexes {
+					if idxDef.Unique && partsEqual(idxDef.Parts, referencedNames) {
+						matchedIndex = idxDef
+						break
+					}
+				}
+				if matchedIndex == nil {
+					// Legacy schemas may reference a non-unique prefix of a composite key.
+					// Such a reference has no physical point-lock key, so serialize it with
+					// parent mutations before the validation scan using a shared table lock.
+					lockTableDef = parentTableDef
+					lockObjRef = parentObjRef
+					lockExpr = childExprs[0]
+					lockTable = true
+				} else {
+					lockObjRef, lockTableDef, err = builder.compCtx.ResolveIndexTableByRef(
+						parentObjRef, matchedIndex.IndexTableName, bindCtx.snapshot)
+					if err != nil {
+						return 0, nil, err
+					}
+					prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(matchedIndex.IndexAlgoParams)
+					if err != nil {
+						return 0, nil, err
+					}
+					keyParts := make([]*plan.Expr, len(childExprs))
+					for i, expr := range childExprs {
+						keyParts[i], err = builder.makeIndexPartExprFromInputExpr(expr, referencedNames[i], prefixLengths)
+						if err != nil {
+							return 0, nil, err
+						}
+					}
+					if indexTableStoresSerializedKey(matchedIndex) {
+						lockExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", keyParts)
+						if err != nil {
+							return 0, nil, err
+						}
+					} else {
+						lockExpr = keyParts[0]
+					}
+				}
+			}
+			lockPkPos, lockTyp := getPkPos(lockTableDef, false)
+			if lockPkPos < 0 {
+				return 0, nil, moerr.NewInternalErrorf(builder.GetContext(),
+					"foreign-key lock table %s has no primary key", lockTableDef.Name)
+			}
+			foreignKeyLocks = append(foreignKeyLocks, foreignKeyLock{
+				tableDef:  lockTableDef,
+				objRef:    lockObjRef,
+				expr:      lockExpr,
+				typ:       lockTyp,
+				lockTable: lockTable,
+			})
+		}
+	}
+
+	if lockForeignKeys {
+		rowProject := getProjectionByLastNodeWithTag(builder, lastNodeID, selectTag)
+		lockTag := builder.genNewBindTag()
+		lockProject := slices.Clone(rowProject)
+		lockTargets := make([]*plan.LockTarget, 0, len(foreignKeyLocks))
+		for _, fkLock := range foreignKeyLocks {
+			lockProject = append(lockProject, fkLock.expr)
+			lockTargets = append(lockTargets, &plan.LockTarget{
+				TableId: fkLock.tableDef.TblId, ObjRef: fkLock.objRef,
+				PrimaryColIdxInBat: int32(len(lockProject) - 1), PrimaryColRelPos: lockTag,
+				PrimaryColTyp: fkLock.typ, Mode: lockpb.LockMode_Shared, LockTable: fkLock.lockTable,
+			})
+		}
+		lockInputID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_PROJECT, Children: []int32{lastNodeID},
+			ProjectList: lockProject, BindingTags: []int32{lockTag},
+		}, bindCtx)
+		lockOutput := getProjectionByLastNodeWithTag(builder, lockInputID, lockTag)
+		lockNodeID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_LOCK_OP, Children: []int32{lockInputID},
+			TableDef: foreignKeyLocks[0].tableDef, LockTargets: lockTargets,
+		}, bindCtx)
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_PROJECT, Children: []int32{lockNodeID},
+			ProjectList: slices.Clone(lockOutput[:len(rowProject)]), BindingTags: []int32{selectTag},
+		}, bindCtx)
+
+		// Materialize the row image only after every referenced key has been locked.
+		// The final validation/DML step consumes this single sink dependency, avoiding
+		// unsupported multi-hop sink chains while preserving lock-before-scan ordering.
+		lockSinkID := appendSinkNodeWithTag(builder, bindCtx, lastNodeID, selectTag)
+		lockStep := builder.appendStep(lockSinkID)
+		lastNodeID = builder.appendTaggedSinkScan(bindCtx, lockStep, selectTag)
+		selectNode = builder.qry.Nodes[lastNodeID]
+	}
+	oks := make([]*plan.Expr, 0, len(nonSelfFks))
+	for _, fk := range validationFks {
 		parentObjRef, parentTableDef, err := builder.compCtx.ResolveById(fk.ForeignTbl, bindCtx.snapshot)
 		if err != nil {
 			return 0, nil, err
-		}
-		if parentTableDef == nil {
-			return 0, nil, moerr.NewInternalErrorf(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
 		}
 
 		parentTag := builder.genNewBindTag()
@@ -1284,11 +1538,17 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	// legacy ODKU operator used to handle. The legacy ODKU operator has been removed,
 	// so let such an ODKU through to the modern dedup+multi-update path: the metadata
 	// table is a normal real-PK table that the modern path handles correctly.
+	// Temporary tables are ordinary user DML targets even though their durable
+	// relkind is distinct; accept either the catalog marker or the session-scoped
+	// resolution bit without admitting any of the internal index table types.
 	isOnDupUpdate := len(astUpdateExprs) > 0 &&
 		!(len(astUpdateExprs) == 1 && astUpdateExprs[0] == nil)
+	isRegularDMLTarget := tableDef.TableType == catalog.SystemOrdinaryRel ||
+		tableDef.TableType == catalog.SystemIndexRel ||
+		tableDef.TableType == catalog.SystemTemporaryTable ||
+		tableDef.IsTemporary
 	if !isOnDupUpdate &&
-		tableDef.TableType != catalog.SystemOrdinaryRel &&
-		tableDef.TableType != catalog.SystemIndexRel {
+		!isRegularDMLTarget {
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "insert into vector/text index table")
 	}
 
@@ -1458,6 +1718,20 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			selectNode = builder.qry.Nodes[lastNodeID]
 		}
 	} else if onDupAction == plan.Node_IGNORE {
+		lastNodeID, err = appendCheckConstraintPlan(
+			builder,
+			bindCtx,
+			tableDef,
+			lastNodeID,
+			selectTag,
+			colName2Idx,
+			true,
+		)
+		if err != nil {
+			return 0, err
+		}
+		selectNode = builder.qry.Nodes[lastNodeID]
+
 		fkEnabled, err := builder.modernInsertFkCheckEnabled(tableDef)
 		if err != nil {
 			return 0, err
@@ -2552,6 +2826,21 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, updateCtx)
 	}
 
+	if onDupAction != plan.Node_IGNORE {
+		lastNodeID, err = appendCheckConstraintPlan(
+			builder,
+			bindCtx,
+			tableDef,
+			lastNodeID,
+			selectTag,
+			colName2Idx,
+			false,
+		)
+		if err != nil {
+			return 0, err
+		}
+	}
+
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
 
@@ -2794,7 +3083,8 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 				return 0, nil, nil, err
 			}
 		} else {
-			projExpr, err = builder.forceAssignmentCastExpr(projExpr, tableDef.Cols[colIdx].Typ, builder.isInsertIgnore)
+			projExpr, err = builder.forceProjectedAssignmentCastExpr(
+				projExpr, lastNode.ProjectList[i], tableDef.Cols[colIdx].Typ, builder.isInsertIgnore)
 			if err != nil {
 				return 0, nil, nil, err
 			}
@@ -2876,6 +3166,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				},
 			})
 			projList1 = append(projList1, oldExpr)
+			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else if col.Name == catalog.Row_ID {
 			continue
 		} else if col.Name == catalog.CPrimaryKeyColName {
@@ -2896,6 +3187,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 					},
 				},
 			})
+			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else if hasCompClusterBy && col.Name == tableDef.ClusterBy.Name {
 			//names := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
 			//args := make([]*plan.Expr, len(names))
@@ -2915,6 +3207,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 					},
 				},
 			})
+			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else if col.GeneratedCol != nil {
 			// MatrixOne currently materializes both STORED and VIRTUAL generated columns on write.
 			// Defer them until base/default columns are in projList1 so forward references resolve.
@@ -2923,6 +3216,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			generatedColIdxs = append(generatedColIdxs, i)
 			projList1 = append(projList1, nil)
 			projList2 = append(projList2, nil)
+			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else {
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
@@ -2948,9 +3242,8 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				},
 			})
 			projList1 = append(projList1, defExpr)
+			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		}
-
-		colName2Idx[tableDef.Name+"."+col.Name] = int32(i)
 	}
 
 	for _, i := range generatedColIdxs {

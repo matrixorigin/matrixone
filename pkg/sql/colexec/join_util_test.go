@@ -37,6 +37,11 @@ func TestBatches(t *testing.T) {
 	require.Equal(t, 8192, batches.Buf[8].RowCount())
 	require.Equal(t, 8192, batches.Buf[11].RowCount())
 	require.Equal(t, 1696, batches.Buf[12].RowCount())
+	for _, bat := range batches.Buf {
+		for _, vec := range bat.Vecs {
+			require.LessOrEqual(t, vec.Capacity(), DefaultBatchSize)
+		}
+	}
 	batches.Clean(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 

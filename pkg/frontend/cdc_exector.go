@@ -112,6 +112,13 @@ func CDCTaskExecutorFactory(
 		// publishing the ActiveRoutine. Resume/Restart can then never detach a
 		// replacement Start from runner/CN shutdown.
 		exec.bindLifecycleContext(ctx)
+		// Attach publishes the executor to taskservice cancellation. Enter a
+		// cancelable state first so Cancel can always fence a Start that has not
+		// entered the factory call below yet.
+		if err = exec.stateMachine.Transition(TransitionStart); err != nil {
+			exec.cancelLifecycleContext()
+			return err
+		}
 		if err = attachToTask(ctx, spec.GetID(), exec); err != nil {
 			exec.cancelLifecycleContext()
 			return err
@@ -179,6 +186,10 @@ type CDCTaskExecutor struct {
 	// restartStartupTimeout is test-only when non-zero. Production keeps the
 	// historical four-second admission bound.
 	restartStartupTimeout time.Duration
+	// restartStartupTimeoutSignal lets tests deterministically choose when the
+	// replacement-startup wait times out. Production leaves it nil and uses
+	// restartStartupTimeout through a real timer.
+	restartStartupTimeoutSignal <-chan time.Time
 
 	// start wrapper, for ut
 	startFunc func(ctx context.Context) error
@@ -382,6 +393,16 @@ func (exec *CDCTaskExecutor) restartTimeout() time.Duration {
 	return 4 * time.Second
 }
 
+func (exec *CDCTaskExecutor) waitForRestartStartup(
+	completion <-chan error,
+	timeout time.Duration,
+) (error, bool) {
+	if exec.restartStartupTimeoutSignal != nil {
+		return selectCDCCompletion(completion, exec.restartStartupTimeoutSignal)
+	}
+	return waitForCDCCompletion(completion, timeout)
+}
+
 func waitForCDCCompletion[T any](
 	completion <-chan T,
 	timeout time.Duration,
@@ -568,6 +589,10 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	defer exec.finishStartAttempt(attempt)
 	if !exec.isCurrentStartAttempt(attempt) {
 		return moerr.NewInternalErrorNoCtx("CDC start was superseded by a newer lifecycle generation")
+	}
+	state := exec.stateMachine.State()
+	if state == StateCancelling || state == StateCancelled {
+		return moerr.NewInternalErrorNoCtx("CDC start was canceled before execution")
 	}
 
 	taskId := exec.spec.TaskId
@@ -1085,7 +1110,7 @@ func (exec *CDCTaskExecutor) Restart() error {
 		return moerr.NewInternalErrorf(context.Background(), "cannot schedule CDC restart replacement: %v", err)
 	}
 
-	if err, timedOut := waitForCDCCompletion(ready, timeout); !timedOut {
+	if err, timedOut := exec.waitForRestartStartup(ready, timeout); !timedOut {
 		return err
 	}
 	// Completion and timeout race on the attempt token, not on which select arm
@@ -1237,7 +1262,8 @@ func (exec *CDCTaskExecutor) Pause() error {
 func (exec *CDCTaskExecutor) Cancel() error {
 	// Check if running before state transition
 	stateBeforeCancel := exec.stateMachine.State()
-	wasRunning := stateBeforeCancel == StateRunning || stateBeforeCancel == StateStarting
+	wasRunning := stateBeforeCancel == StateRunning
+	wasActive := wasRunning || stateBeforeCancel == StateStarting
 
 	// Transition to Cancelling state
 	if err := exec.stateMachine.Transition(TransitionCancel); err != nil {
@@ -1289,7 +1315,7 @@ func (exec *CDCTaskExecutor) Cancel() error {
 	if attempt := exec.activeStart(); attempt != nil {
 		attempt.cancel()
 	}
-	if wasRunning {
+	if wasActive {
 		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 		exec.closeActiveRoutineCancel()
 

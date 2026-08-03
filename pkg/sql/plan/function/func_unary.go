@@ -852,6 +852,122 @@ func TimestampToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	}, selectList)
 }
 
+type dateExtractParts struct {
+	year  int32
+	month uint8
+	day   uint8
+	date  types.Date
+	valid bool
+}
+
+func parseDateExtractParts(value string) (dateExtractParts, bool) {
+	year, month, day, err := types.ParseDateCastComponents(value)
+	if err != nil {
+		return dateExtractParts{}, false
+	}
+
+	parts := dateExtractParts{year: year, month: month, day: day}
+	if types.ValidDate(year, month, day) {
+		parts.date = types.DateFromCalendar(year, month, day)
+		parts.valid = true
+		return parts, true
+	}
+	if types.ValidCalendarDate(year, month, day) {
+		parts.valid = true
+		return parts, true
+	}
+
+	// Preserve invalid-date behavior while allowing MySQL's incomplete dates.
+	if year > types.MaxDateYear || month > types.MaxMonthInYear || day > 31 ||
+		(year != 0 && month != 0 && day != 0) {
+		return dateExtractParts{}, false
+	}
+	if month != 0 && day != 0 {
+		if !types.ValidCalendarDate(year, month, day) {
+			return dateExtractParts{}, false
+		}
+	}
+	return parts, true
+}
+
+func dateStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList, fn func(dateExtractParts) (T, bool)) error {
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[T](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.Append(*new(T), true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, null := source.GetStrValue(i)
+		if null {
+			if err := rs.Append(*new(T), true); err != nil {
+				return err
+			}
+			continue
+		}
+		parts, ok := parseDateExtractParts(functionUtil.QuickBytesToStr(value))
+		if !ok {
+			if err := rs.Append(*new(T), true); err != nil {
+				return err
+			}
+			continue
+		}
+		valueToAppend, valid := fn(parts)
+		if err := rs.Append(valueToAppend, !valid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func dateStringToStringWithNullOnError(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList, fn func(dateExtractParts) (string, bool)) error {
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, null := source.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		parts, ok := parseDateExtractParts(functionUtil.QuickBytesToStr(value))
+		if !ok {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		name, valid := fn(parts)
+		if !valid {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(name), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func DateStringToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (uint8, bool) {
+		return parts.day, true
+	})
+}
+
 func DayOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixedWithNullOnError[types.Date, uint16](ivecs, result, proc, length, func(v types.Date) (uint16, error) {
 		if v == types.ZeroDate {
@@ -978,13 +1094,15 @@ func StAsWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 // StAsGeoJSON renders a geometry as an RFC 7946 GeoJSON geometry object
 // (full coordinate precision).
 func StAsGeoJSON(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
-		g, err := decodeGeoGeometry(v)
-		if err != nil {
-			return nil, err
-		}
-		return functionUtil.QuickStrToBytes(geo.WriteGeoJSON(g, -1)), nil
-	}, selectList)
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, geometryToGeoJSONBytes, selectList)
+}
+
+func geometryToGeoJSONBytes(payload []byte) ([]byte, error) {
+	g, err := decodeGeoGeometry(payload)
+	if err != nil {
+		return nil, err
+	}
+	return functionUtil.QuickStrToBytes(geo.WriteGeoJSON(g, -1)), nil
 }
 
 // StGeomFromGeoJSON builds a geometry from a GeoJSON geometry object. Per
@@ -5946,6 +6064,20 @@ func strLengthUTF8(xs []byte) uint64 {
 	return lengthutf8.CountUTF8CodePoints(xs)
 }
 
+func LengthBinary(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, strLengthBinary, selectList)
+}
+
+func strLengthBinary(xs []byte) uint64 {
+	return uint64(len(xs))
+}
+
 func Ltrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryStrToStr(ivecs, result, proc, length, ltrim, selectList)
 }
@@ -6435,6 +6567,28 @@ func DatetimeToQuarter(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	}, selectList)
 }
 
+func TimestampToQuarter(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Timestamp, uint8](ivecs, result, proc, length, func(v types.Timestamp) uint8 {
+		loc := proc.GetSessionInfo().TimeZone
+		if loc == nil {
+			loc = time.Local
+		}
+		return uint8(v.ToDatetime(loc).ToDate().Quarter())
+	}, selectList)
+}
+
+func DateStringToQuarter(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (uint8, bool) {
+		if parts.month == 0 {
+			return 0, true
+		}
+		if parts.month > types.MaxMonthInYear {
+			return 0, false
+		}
+		return (parts.month-1)/3 + 1, true
+	})
+}
+
 // TODO: I will support template soon.
 func DateStringToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	//return opUnaryStrToFixedWithErrorCheck[uint8](ivecs, result, proc, length, func(v string) (uint8, error) {
@@ -6563,61 +6717,14 @@ func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	return nil
 }
 
-// weekOfYearHelper calculates the week of year for a given date.
-// WEEKOFYEAR always returns the week number for the year that the date belongs to.
-func weekOfYearHelper(d types.Date) int64 {
-	// Get the year of the input date
-	dateYear := int32(d.Year())
-
-	// Find the Thursday of the calendar week containing this date
-	delta := 4 - int32(d.DayOfWeek())
-	if delta == 4 {
-		delta = -3 // Sunday
-	}
-	thursdayDate := types.Date(int32(d) + delta)
-	thursdayYear, _, _, thursdayYday := thursdayDate.Calendar(false)
-
-	// If Thursday is in a different year than the date, we need special handling
-	if thursdayYear != dateYear {
-		if thursdayYear > dateYear {
-			// Thursday is in the next year, so this date is at the end of the current year
-			// Count how many days of this week are in the current year
-			daysInCurrentYear := 0
-			weekStart := types.Date(int32(d) - delta) // Monday of the week
-			for i := int32(0); i < 7; i++ {
-				checkDate := types.Date(int32(weekStart) + i)
-				if checkDate.Year() == uint16(dateYear) {
-					daysInCurrentYear++
-				}
-			}
-			// If at least 4 days are in the current year, it's week 53 of current year
-			// Otherwise, it's week 1 of next year, but WEEKOFYEAR returns week for date's year
-			if daysInCurrentYear >= 4 {
-				return 53
-			}
-			// If less than 4 days, it's actually week 1 of next year,
-			// but WEEKOFYEAR should return week 53 for the date's year
-			return 53
-		} else {
-			// Thursday is in the previous year, so this date is at the start of the current year
-			// This should be week 1 of current year
-			return 1
-		}
-	}
-
-	// Thursday is in the same year as the date, calculate week normally
-	return int64((thursdayYday-1)/7 + 1)
-}
-
 // DateToWeekOfYear returns the calendar week of the date as a number in the range from 1 to 53.
 // WEEKOFYEAR(date) is equivalent to WEEK(date, 3) which uses ISO 8601 week calculation.
-// WEEKOFYEAR always returns the week number for the year that the date belongs to.
 func DateToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixedWithNullOnError[types.Date, int64](ivecs, result, proc, length, func(v types.Date) (int64, error) {
 		if v == types.ZeroDate {
 			return 0, moerr.NewInvalidInputNoCtx("zero date")
 		}
-		return weekOfYearHelper(v), nil
+		return int64(v.Week(3)), nil
 	}, selectList)
 }
 
@@ -6627,7 +6734,7 @@ func DatetimeToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultWr
 		if v == types.ZeroDatetime {
 			return 0, moerr.NewInvalidInputNoCtx("zero datetime")
 		}
-		return weekOfYearHelper(v.ToDate()), nil
+		return int64(v.ToDate().Week(3)), nil
 	}, selectList)
 }
 
@@ -6642,8 +6749,20 @@ func TimestampToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultW
 			loc = time.Local
 		}
 		dt := v.ToDatetime(loc)
-		return weekOfYearHelper(dt.ToDate()), nil
+		return int64(dt.ToDate().Week(3)), nil
 	}, selectList)
+}
+
+func DateStringToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (int64, bool) {
+		if !parts.valid {
+			return 0, false
+		}
+		if parts.year == 0 {
+			return int64(types.WeekFromCalendar(parts.year, parts.month, parts.day, 3)), true
+		}
+		return int64(parts.date.Week(3)), true
+	})
 }
 
 func DateToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -6746,6 +6865,18 @@ func TimestampToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	}, selectList)
 }
 
+func DateStringToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (string, bool) {
+		if !parts.valid {
+			return "", false
+		}
+		if parts.year == 0 {
+			return types.DayOfWeekFromCalendar(parts.year, parts.month, parts.day).String(), true
+		}
+		return parts.date.DayOfWeek().String(), true
+	})
+}
+
 // DateToMonthName returns the month name for date (e.g., "January", "February", ...)
 func DateToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToStrWithNullOnError[types.Date](ivecs, result, proc, length, func(v types.Date) (string, error) {
@@ -6794,6 +6925,16 @@ func TimestampToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWr
 		}
 		return "", nil
 	}, selectList)
+}
+
+func DateStringToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (string, bool) {
+		month := parts.month
+		if month < 1 || month > 12 {
+			return "", false
+		}
+		return MonthNames[month-1], true
+	})
 }
 
 func FoundRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -7013,21 +7154,13 @@ func TriggerFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 func UTCTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Datetime](result)
 
-	// Get scale from parameter, default to 0 if not provided (matching MySQL behavior)
-	scale := int32(0)
-	if len(ivecs) == 1 && !ivecs[0].IsConstNull() && ivecs[0].Length() > 0 {
-		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
-		// Validate scale range: 0-6 (matching MySQL behavior)
-		if scale < 0 {
-			return moerr.NewInvalidArg(proc.Ctx, "utc_timestamp", fmt.Sprintf("negative precision %d specified", scale))
-		}
-		if scale > 6 {
-			return moerr.NewErrTooBigPrecision(proc.Ctx, scale, "utc_timestamp", 6)
-		}
+	scale, err := utcFunctionScale(ivecs, proc, "utc_timestamp")
+	if err != nil {
+		return err
 	}
 	rs.TempSetType(types.New(types.T_datetime, 0, scale))
 
-	resultValue := types.UTC().TruncateToScale(scale)
+	resultValue := types.UnixNanoToTimestamp(proc.GetUnixTime()).ToDatetime(time.UTC).TruncateToScale(scale)
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(resultValue, false); err != nil {
 			return err

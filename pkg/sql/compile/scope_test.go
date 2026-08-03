@@ -86,8 +86,20 @@ func TestRefreshGroupConcatMaxLenForPreparedCompileReuse(t *testing.T) {
 			nil,
 			aggexec.EncodeGroupConcatConfig(separator, 1024))
 	}
+	orderConfig := []byte{1, 2, 3}
+	newOrderedGroupConcatExpr := func() aggexec.AggFuncExecExpression {
+		return aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfGroupConcat,
+			false,
+			nil,
+			aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 1024),
+			plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER)
+	}
 	groupArg := group.NewArgument()
-	groupArg.Aggs = []aggexec.AggFuncExecExpression{newGroupConcatExpr("")}
+	groupArg.Aggs = []aggexec.AggFuncExecExpression{
+		newGroupConcatExpr(""),
+		newOrderedGroupConcatExpr(),
+	}
 	mergeGroupArg := group.NewArgumentMergeGroup()
 	mergeGroupArg.Aggs = []aggexec.AggFuncExecExpression{newGroupConcatExpr("|")}
 	windowArg := window.NewArgument()
@@ -100,12 +112,14 @@ func TestRefreshGroupConcatMaxLenForPreparedCompileReuse(t *testing.T) {
 
 	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc))
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 5), groupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 5), groupArg.Aggs[1].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("|", 5), mergeGroupArg.Aggs[0].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatConfig(",", 5), windowArg.Aggs[0].GetExtraConfig())
 
 	sessionMaxLen = 1024
 	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc))
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), groupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 1024), groupArg.Aggs[1].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("|", 1024), mergeGroupArg.Aggs[0].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatConfig(",", 1024), windowArg.Aggs[0].GetExtraConfig())
 
@@ -732,6 +746,37 @@ func TestNewParallelScope(t *testing.T) {
 		require.NotSame(t, firstPool, nextPool)
 		require.Nil(t, templateShuffle.GetShufflePool())
 	}
+}
+
+func TestParallelScopeGenerationsReleasedAtCompileResetBoundary(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.isPrepare = true
+	testCompile.proc.Reg.MergeReceivers = []*process.WaitRegister{{}}
+	scopeToParallel := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.HashJoin, vm.Projection, vm.Limit, vm.Connector},
+	)
+	scopeToParallel.NodeInfo.Mcpu = 2
+
+	first, firstWorkers := newParallelScope(scopeToParallel)
+	require.Len(t, firstWorkers, 2)
+	require.Contains(t, scopeToParallel.PreScopes, first)
+	require.Equal(t, []*Scope{first}, scopeToParallel.parallelGenerations)
+
+	require.NoError(t, scopeToParallel.reset(testCompile, false))
+	require.NotContains(t, scopeToParallel.PreScopes, first)
+	require.Empty(t, scopeToParallel.parallelGenerations)
+
+	second, secondWorkers := newParallelScope(scopeToParallel)
+	require.Len(t, secondWorkers, 2)
+	require.Contains(t, scopeToParallel.PreScopes, second)
+	require.Equal(t, []*Scope{second}, scopeToParallel.parallelGenerations)
+	require.Len(t, scopeToParallel.PreScopes, 1,
+		"reused execution must retain only its current physical generation")
+
+	// The final generation remains attached for post-run physical-plan
+	// analysis and is released with the owning template.
+	scopeToParallel.release()
 }
 
 func TestCompileExternValueScan(t *testing.T) {
@@ -2234,6 +2279,84 @@ func TestMergeRunReturnsWhenRemotePreScopeAddressIsMalformed(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		parent.Proc.Cancel(moerr.NewInternalErrorNoCtx("test timeout"))
 		t.Fatal("merge run hung after malformed remote pre-scope failed")
+	}
+}
+
+func TestCollectMergeRunResultsPrefersProducerError(t *testing.T) {
+	cleanupErr := process.ErrPipelineEndSignalDeliveryFailed
+	producerErr := moerr.NewDuplicateEntryNoCtx("1000000", "")
+	notifyErr := moerr.NewInternalErrorNoCtx("remote producer failed")
+	internalCancelCtx, cancelInternal := context.WithCancelCause(context.Background())
+	cancelInternal(producerErr)
+	externalCancelCtx, cancelExternal := context.WithCancel(context.Background())
+	cancelExternal()
+
+	tests := []struct {
+		name     string
+		current  scopeRunResult
+		preScope []scopeRunResult
+		notify   []error
+		want     error
+	}{
+		{
+			name:     "producer error replaces cleanup fallback",
+			current:  scopeRunResult{err: cleanupErr},
+			preScope: []scopeRunResult{{err: context.Canceled}, {err: producerErr}},
+			want:     producerErr,
+		},
+		{
+			name:    "remote notifier error replaces cleanup fallback",
+			current: scopeRunResult{err: cleanupErr},
+			notify:  []error{notifyErr},
+			want:    notifyErr,
+		},
+		{
+			name:     "cleanup fallback does not replace producer error",
+			current:  scopeRunResult{err: producerErr},
+			preScope: []scopeRunResult{{err: cleanupErr}},
+			want:     producerErr,
+		},
+		{
+			name:     "internally canceled merge resolves to producer error",
+			current:  scopeRunResult{err: context.Canceled, ctx: internalCancelCtx},
+			preScope: []scopeRunResult{{err: producerErr}},
+			want:     producerErr,
+		},
+		{
+			name:     "internally interrupted merge resolves to producer error",
+			current:  scopeRunResult{err: moerr.NewQueryInterrupted(context.Background()), ctx: internalCancelCtx},
+			preScope: []scopeRunResult{{err: producerErr}},
+			want:     producerErr,
+		},
+		{
+			name:     "externally canceled merge remains canceled",
+			current:  scopeRunResult{err: context.Canceled, ctx: externalCancelCtx},
+			preScope: []scopeRunResult{{err: producerErr}},
+			want:     context.Canceled,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			preScopeResults := make(chan scopeRunResult, len(tt.preScope))
+			for _, result := range tt.preScope {
+				preScopeResults <- result
+			}
+			notifyResults := make(chan notifyMessageResult, len(tt.notify))
+			for _, err := range tt.notify {
+				notifyResults <- notifyMessageResult{err: err}
+			}
+
+			got := collectMergeRunResults(
+				testutil.NewProcess(t),
+				tt.current,
+				preScopeResults,
+				notifyResults)
+
+			require.Same(t, tt.want, got)
+			require.Empty(t, preScopeResults)
+			require.Empty(t, notifyResults)
+		})
 	}
 }
 

@@ -141,6 +141,15 @@ func TestJSONOverlapComparatorDecimalAndDouble(t *testing.T) {
 	}
 }
 
+func TestJSONOverlapComparatorBinaryUsesRawPayloadAndSubtype(t *testing.T) {
+	legacyBlob := newTypedByteJson(bytejson.TpCodeBlob, "AA==")
+	rawBlob := newTypedByteJson(bytejson.TpCodeOpaque, string([]byte{0x00}))
+	bit := newTypedByteJson(bytejson.TpCodeBit, string([]byte{0x00}))
+
+	require.Zero(t, compareJSONOverlapExact(legacyBlob, rawBlob))
+	require.Less(t, compareJSONOverlapExact(bit, rawBlob), 0)
+}
+
 func TestJSONOverlapComparatorLargeInternalDecimalsDoNotPanicOrEqualZero(t *testing.T) {
 	zero := mustParseJSONOverlap(t, `0`)
 	positive := newTypedByteJson(bytejson.TpCodeDecimal, "1e100")

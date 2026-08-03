@@ -706,3 +706,29 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 	}
 	require.Equal(t, "cast", assignmentCastFunctionName(plan.Type{Id: int32(types.T_int64)}, false, proc))
 }
+
+func TestSubstituteColRefsInExprPreservesAggregateConfig(t *testing.T) {
+	source := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: NameGroupConcat},
+			Args: []*plan.Expr{{
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+			}},
+			AggConfig:     []byte{1, 2, 3},
+			AggConfigType: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+		}},
+	}
+
+	rewritten := substituteColRefsInExpr(
+		source,
+		[]*plan.Expr{makePlan2Int64ConstExprWithType(7)},
+		0,
+	)
+	require.Equal(t, int64(7), rewritten.GetF().Args[0].GetLit().GetI64Val())
+	require.Equal(t, source.GetF().AggConfig, rewritten.GetF().AggConfig)
+	require.Equal(t, source.GetF().AggConfigType, rewritten.GetF().AggConfigType)
+
+	rewritten.GetF().AggConfig[0] = 9
+	require.Equal(t, byte(1), source.GetF().AggConfig[0])
+}

@@ -17,6 +17,7 @@ package function
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -212,4 +213,15 @@ func TestCastJsonToArrayRejectsIncompatibleElement(t *testing.T) {
 			require.Contains(t, info, "cannot store JSON value with incompatible element type in "+tc.arrayType+" column")
 		})
 	}
+}
+
+func TestTypedArrayBinaryCompatibilityUsesRawPayloadLength(t *testing.T) {
+	spec := typedArrayElementSpec{name: "varbinary", width: 1}
+
+	require.True(t, typedArrayElementCompatible(
+		spec, newTypedByteJson(bytejson.TpCodeOpaque, string([]byte{0x00}))))
+	require.True(t, typedArrayElementCompatible(
+		spec, newTypedByteJson(bytejson.TpCodeBit, string([]byte{0x01}))))
+	require.True(t, typedArrayElementCompatible(
+		spec, newTypedByteJson(bytejson.TpCodeBlob, "AA==")))
 }

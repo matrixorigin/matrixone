@@ -19,9 +19,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -67,6 +70,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
@@ -81,7 +85,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
@@ -126,11 +129,17 @@ func mergeReceiverChannelBufferSize(s *Scope) int {
 }
 
 type operatorDupContext struct {
-	shufflePools map[*shuffle.Shuffle]*shuffle.ShufflePool
+	shufflePools       map[*shuffle.Shuffle]*shuffle.ShufflePool
+	hashJoinChannels   map[*hashjoin.HashJoin]chan *bitmap.Bitmap
+	dedupJoinMailboxes map[*dedupjoin.DedupJoin]*dedupjoin.WorkerJoinMailbox
 }
 
 func newOperatorDupContext() *operatorDupContext {
-	return &operatorDupContext{shufflePools: make(map[*shuffle.Shuffle]*shuffle.ShufflePool)}
+	return &operatorDupContext{
+		shufflePools:       make(map[*shuffle.Shuffle]*shuffle.ShufflePool),
+		hashJoinChannels:   make(map[*hashjoin.HashJoin]chan *bitmap.Bitmap),
+		dedupJoinMailboxes: make(map[*dedupjoin.DedupJoin]*dedupjoin.WorkerJoinMailbox),
+	}
 }
 
 func dupOperatorRecursivelyWithContext(sourceOp vm.Operator, index int, maxParallel int, dupCtx *operatorDupContext) vm.Operator {
@@ -221,10 +230,12 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.CanSkipProbe = t.CanSkipProbe
 		op.IsShuffle = t.IsShuffle
 		if !t.IsShuffle {
-			if t.Channel == nil {
-				t.Channel = make(chan *bitmap.Bitmap, maxParallel)
+			channel := dupCtx.hashJoinChannels[t]
+			if channel == nil {
+				channel = make(chan *bitmap.Bitmap, maxParallel)
+				dupCtx.hashJoinChannels[t] = channel
 			}
-			op.Channel = t.Channel
+			op.Channel = channel
 			op.NumCPU = uint64(maxParallel)
 			op.IsMerger = (index == 0)
 		}
@@ -348,6 +359,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Partial = t.Partial
 		op.StartIDX = t.StartIDX
 		op.EndIDX = t.EndIDX
+		op.MaterializedSource = t.MaterializedSource
+		op.MaterializedReaderID = t.MaterializedReaderID
 		op.SetInfo(&info)
 		return op
 	case vm.MergeRecursive:
@@ -412,14 +425,9 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
-	case vm.Source:
-		t := sourceOp.(*source.Source)
-		op := source.NewArgument()
-		op.TblDef = t.TblDef
-		op.Limit = t.Limit
-		op.Offset = t.Offset
-		op.Configs = t.Configs
-		op.ProjectList = t.ProjectList
+	case vm.MongoScan:
+		t := sourceOp.(*mongoscan.MongoScan)
+		op := mongoscan.NewArgument().WithScan(proto.Clone(t.Scan).(*plan.MongoScan))
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
@@ -460,6 +468,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ShuffleRegIdxLocal = sourceArg.ShuffleRegIdxLocal
 		op.ShuffleRegIdxRemote = sourceArg.ShuffleRegIdxRemote
 		op.FuncId = sourceArg.FuncId
+		op.MaterializedSource = sourceArg.MaterializedSource
 		op.LocalRegs = make([]*process.WaitRegister, len(sourceArg.LocalRegs))
 		op.RemoteRegs = make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs))
 		for j := range op.LocalRegs {
@@ -546,6 +555,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.PkName = t.PkName
 		op.PkTyp = t.PkTyp
 		op.BuildIdx = t.BuildIdx
+		op.IfInsertFromUnique = t.IfInsertFromUnique
+		op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(t.RuntimeFilterSpec)
 		op.SetInfo(&info)
 		return op
 	case vm.TableScan:
@@ -596,10 +607,12 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 	case vm.DedupJoin:
 		t := sourceOp.(*dedupjoin.DedupJoin)
 		op := dedupjoin.NewArgument()
-		if t.Channel == nil {
-			t.Channel = make(chan *dedupjoin.WorkerJoinMsg, maxParallel)
+		mailbox := dupCtx.dedupJoinMailboxes[t]
+		if mailbox == nil {
+			mailbox = dedupjoin.NewWorkerJoinMailbox(maxParallel)
+			dupCtx.dedupJoinMailboxes[t] = mailbox
 		}
-		op.Channel = t.Channel
+		op.Mailbox = mailbox
 		op.NumCPU = uint64(maxParallel)
 		op.IsMerger = (index == 0)
 		op.Result = t.Result
@@ -710,7 +723,14 @@ func constructFuzzyFilter(node, tableScan, sinkScan *plan.Node) *fuzzyfilter.Fuz
 	op.PkTyp = pkTyp
 	op.IfInsertFromUnique = node.IfInsertFromUnique
 
-	if (tableScan.Stats.Cost / sinkScan.Stats.Cost) < 0.3 {
+	costRatio := tableScan.Stats.Cost / sinkScan.Stats.Cost
+	buildOnTable := node.FuzzyBuildSide ==
+		plan.Node_FUZZY_BUILD_SIDE_TABLE ||
+		(node.FuzzyBuildSide ==
+			plan.Node_FUZZY_BUILD_SIDE_UNSPECIFIED &&
+			!math.IsNaN(costRatio) &&
+			costRatio < 0.3)
+	if buildOnTable {
 		// build on tableScan, because the existing data is significantly less than the data to be inserted
 		// this will happend
 		op.BuildIdx = 0
@@ -827,11 +847,11 @@ func constructLockOp(node *plan.Node, eng engine.Engine) (*lockop.LockOp, error)
 			partitionColPos = target.PartitionColIdxInBat
 		}
 		typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-		arg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, partitionColPos, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
+		arg.AddLockTargetWithMode(target.GetTableId(), target.GetObjRef(), target.GetMode(), target.GetPrimaryColIdxInBat(), typ, partitionColPos, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 	}
 	for _, target := range node.LockTargets {
 		if target.LockTable {
-			arg.LockTable(target.TableId, false)
+			arg.LockTableWithMode(target.TableId, target.Mode, false)
 		}
 	}
 	return arg, nil
@@ -1294,14 +1314,6 @@ func externalColumnListLen(node *plan.Node) int32 {
 	return int32(len(node.ExternScan.TbColToDataCol))
 }
 
-func constructStream(node *plan.Node, p [2]int64) *source.Source {
-	arg := source.NewArgument()
-	arg.TblDef = node.TableDef
-	arg.Offset = p[0]
-	arg.Limit = p[1]
-	return arg
-}
-
 func constructTableFunction(node *plan.Node, qry *plan.Query) *table_function.TableFunction {
 	attrs := make([]string, len(node.TableDef.Cols))
 	for j, col := range node.TableDef.Cols {
@@ -1554,9 +1566,10 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 		// Every slot the layout hands out must get an aggregate, or the
 		// operator's columns stop matching the positions the planner projects.
 		e := f.F.Args[0]
+		args, cfg := constructAggregateConfig(f.F, proc)
 		aggregationExpressions = append(
 			aggregationExpressions,
-			aggexec.MakeAggFunctionExpression(functionID, isDistinct, f.F.Args, nil))
+			aggexec.MakeAggFunctionExpression(functionID, isDistinct, args, cfg))
 		typs = append(typs, types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale))
 	}
 	wStart := layout.WStartSlot != plan2.TimeWindowSlotNone
@@ -1571,6 +1584,15 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 	arg.Aggs = aggregationExpressions
 	arg.Ts = node.GroupBy[0]
 	arg.PartitionBy = node.TimeWindowPartitionBy
+	arg.GapFill = node.GapFillMode == plan.Node_GAP_FILL_PARTITION
+	// A tumbling window normally uses the interval fast path (EndExpr != nil),
+	// which forwards only groups already produced by the child aggregate. That
+	// path cannot synthesize absent buckets. GAPFILL therefore uses the general
+	// sliding-window state machine with a slide equal to the interval; its
+	// explicit left/right bounds still produce the same tumbling windows.
+	if arg.GapFill && node.Sliding == nil {
+		arg.Sliding = arg.Interval
+	}
 	arg.WStart = wStart
 	arg.WEnd = wEnd
 	// The operator evaluates the window-end expression against a batch holding
@@ -1578,7 +1600,7 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 	// planner leaves it pointing at the timestamp's GROUP BY position, which is
 	// 0 only while the window key is the sole grouping key. Copy before
 	// rewriting: the plan may be reused.
-	if node.WEnd != nil {
+	if node.WEnd != nil && !arg.GapFill {
 		endExpr := plan2.DeepCopyExpr(node.WEnd)
 		resetTimeWindowTsColRef(endExpr)
 		arg.EndExpr = endExpr
@@ -1615,9 +1637,10 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 		isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 		functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
+		configType := f.F.AggConfigType
 		args, cfg := constructAggregateConfig(f.F, proc)
 		aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
-			functionID, isDistinct, args, cfg)
+			functionID, isDistinct, args, cfg, configType)
 	}
 	arg := window.NewArgument()
 	arg.Aggs = aggregationExpressions
@@ -1652,10 +1675,11 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 			isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 			functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
+			configType := f.F.AggConfigType
 			args, cfg := constructAggregateConfig(f.F, proc)
 
 			aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
-				functionID, isDistinct, args, cfg)
+				functionID, isDistinct, args, cfg, configType)
 		}
 	}
 
@@ -1677,11 +1701,6 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 	args := f.Args
 	switch f.Func.ObjName {
 	case plan2.NameGroupConcat:
-		separator := ","
-		if len(args) > 1 {
-			separator = evaluateAggregateConfigString(proc, args[len(args)-1])
-			args = args[:len(args)-1]
-		}
 		value, err := resolveVariableOrDefault(proc, "group_concat_max_len", true, false)
 		if err != nil {
 			panic(err)
@@ -1691,12 +1710,38 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 			panic(moerr.NewInternalErrorNoCtxf(
 				"group_concat_max_len has invalid value %v", value))
 		}
+		if f.AggConfigType == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
+			return args, aggexec.EncodeGroupConcatOrderedConfig(f.AggConfig, uint64(maxLen))
+		}
+		separator := ","
+		if len(args) > 1 {
+			separator = evaluateAggregateConfigString(proc, args[len(args)-1])
+			args = args[:len(args)-1]
+		}
 		return args, aggexec.EncodeGroupConcatConfig(separator, uint64(maxLen))
 
 	case plan2.NameClusterCenters:
 		if len(args) > 1 {
 			config := evaluateAggregateConfigString(proc, args[len(args)-1])
 			return args[:len(args)-1], []byte(config)
+		}
+
+	case plan2.NameApproxPercentile:
+		if len(args) > 1 {
+			configExpr := args[len(args)-1]
+			if err := validateApproxPercentileExpr(configExpr); err != nil {
+				panic(err)
+			}
+			vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+			if err != nil {
+				panic(err)
+			}
+			defer free()
+			config, err := getPercentileConfig(vec)
+			if err != nil {
+				panic(err)
+			}
+			return args[:len(args)-1], config
 		}
 	}
 	return args, nil
@@ -2548,6 +2593,66 @@ func constructTableClone(
 	}
 	success = true
 	return metaCopy, nil
+}
+
+func validateApproxPercentileExpr(expr *plan.Expr) error {
+	if expr == nil || !rule.IsConstant(expr, false) {
+		return moerr.NewInvalidInputNoCtx(
+			"percentile argument of approx_percentile must be a constant")
+	}
+	return nil
+}
+
+// getPercentileConfig extracts the percentile value from a vector for approx_percentile.
+func getPercentileConfig(vec *vector.Vector) ([]byte, error) {
+	if vec == nil || !vec.IsConst() {
+		return nil, moerr.NewInvalidInputNoCtx(
+			"percentile argument of approx_percentile must be a constant")
+	}
+	if vec.Length() == 0 || vec.IsConstNull() {
+		return nil, moerr.NewInvalidInputNoCtx(
+			"percentile argument of approx_percentile cannot be NULL")
+	}
+
+	var p float64
+	var config string
+	switch vec.GetType().Oid {
+	case types.T_float64:
+		p = vector.MustFixedColWithTypeCheck[float64](vec)[0]
+		config = strconv.FormatFloat(p, 'f', -1, 64)
+	case types.T_float32:
+		p = float64(vector.MustFixedColWithTypeCheck[float32](vec)[0])
+		config = strconv.FormatFloat(p, 'f', -1, 32)
+	case types.T_int64:
+		v := vector.MustFixedColWithTypeCheck[int64](vec)[0]
+		p = float64(v)
+		config = strconv.FormatInt(v, 10)
+	case types.T_int32:
+		v := vector.MustFixedColWithTypeCheck[int32](vec)[0]
+		p = float64(v)
+		config = strconv.FormatInt(int64(v), 10)
+	case types.T_decimal64:
+		d := vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[0]
+		p = types.Decimal64ToFloat64(d, vec.GetType().Scale)
+		config = d.Format(vec.GetType().Scale)
+	case types.T_decimal128:
+		d := vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[0]
+		p = types.Decimal128ToFloat64(d, vec.GetType().Scale)
+		config = d.Format(vec.GetType().Scale)
+	default:
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"unsupported percentile type %s for approx_percentile", vec.GetType().String())
+	}
+	if math.IsNaN(p) || math.IsInf(p, 0) || p < 0 || p > 1 {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"percentile argument of approx_percentile must be finite and in [0,1], got %v", p)
+	}
+	exact, ok := new(big.Rat).SetString(config)
+	if !ok || exact.Sign() < 0 || exact.Cmp(big.NewRat(1, 1)) > 0 {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"percentile argument of approx_percentile must be in [0,1], got %s", config)
+	}
+	return []byte(config), nil
 }
 
 type cloneIndexAutoIncrementTable struct {

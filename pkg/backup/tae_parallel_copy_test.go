@@ -43,6 +43,99 @@ func newBackupObject(idByte byte) (string, *objectio.BackupObject) {
 	}
 }
 
+type cancelBlockingReadFS struct {
+	fileservice.FileService
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (f *cancelBlockingReadFS) Read(ctx context.Context, _ *fileservice.IOVector) error {
+	f.once.Do(func() {
+		close(f.entered)
+	})
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestParallelCopyDataHonorsCallerCancellation(t *testing.T) {
+	srcMemory, err := fileservice.NewMemoryFS("src", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	src := &cancelBlockingReadFS{
+		FileService: srcMemory,
+		entered:     make(chan struct{}),
+	}
+	dst, err := fileservice.NewMemoryFS("dst", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	name, backupObject := newBackupObject(1)
+	files := map[string]*objectio.BackupObject{name: backupObject}
+	ctx, cancel := context.WithCancel(t.Context())
+	result := make(chan error, 1)
+	go func() {
+		_, err := parallelCopyData(ctx, src, dst, files, 1, nil)
+		result <- err
+	}()
+
+	select {
+	case <-src.entered:
+	case <-time.After(time.Second):
+		t.Fatal("copy did not reach the source read")
+	}
+	cancel()
+
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("parallelCopyData did not return after caller cancellation")
+	}
+}
+
+type retryingReadFS struct {
+	fileservice.FileService
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (f *retryingReadFS) Read(context.Context, *fileservice.IOVector) error {
+	f.once.Do(func() {
+		close(f.entered)
+	})
+	return errors.New("connection reset by peer")
+}
+
+func TestCopyFileWithRetryStopsDuringBackoff(t *testing.T) {
+	srcMemory, err := fileservice.NewMemoryFS("src", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	src := &retryingReadFS{
+		FileService: srcMemory,
+		entered:     make(chan struct{}),
+	}
+	dst, err := fileservice.NewMemoryFS("dst", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	result := make(chan error, 1)
+	go func() {
+		_, err := CopyFileWithRetry(ctx, src, dst, "object", "")
+		result <- err
+	}()
+
+	select {
+	case <-src.entered:
+	case <-time.After(time.Second):
+		t.Fatal("copy did not make its first attempt")
+	}
+	cancel()
+
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("CopyFileWithRetry did not stop during retry backoff")
+	}
+}
+
 func TestParallelCopyDataReturnsMissingSourceObject(t *testing.T) {
 	src, err := fileservice.NewMemoryFS("src", fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
@@ -54,7 +147,7 @@ func TestParallelCopyDataReturnsMissingSourceObject(t *testing.T) {
 		name: backupObject,
 	}
 
-	copied, err := parallelCopyData(src, dst, files, 1, nil)
+	copied, err := parallelCopyData(t.Context(), src, dst, files, 1, nil)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), err)
 	require.Empty(t, copied)
@@ -104,7 +197,7 @@ func TestParallelCopyDataStopsAdmissionAfterFailure(t *testing.T) {
 
 	result := make(chan error, 1)
 	go func() {
-		_, err := parallelCopyData(src, dst, files, 1, nil)
+		_, err := parallelCopyData(t.Context(), src, dst, files, 1, nil)
 		result <- err
 	}()
 
@@ -167,7 +260,7 @@ func TestParallelCopyDataWaitsForScheduledSiblingAfterFailure(t *testing.T) {
 
 	result := make(chan error, 1)
 	go func() {
-		_, err := parallelCopyData(src, dst, files, 2, nil)
+		_, err := parallelCopyData(t.Context(), src, dst, files, 2, nil)
 		result <- err
 	}()
 	<-src.allEntered

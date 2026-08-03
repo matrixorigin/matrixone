@@ -187,8 +187,6 @@ var (
 	CauseTransferTaskToCN               = NewInternalError(context.Background(), "transferTaskToCN")
 	CauseTransferRequest2OtherCNs       = NewInternalError(context.Background(), "transferRequest2OtherCNs")
 	CauseDoUnsubscribeTable             = NewInternalError(context.Background(), "doUnsubscribeTable")
-	//pkg/stream/connector
-	CauseKafkaSinkConnectorExecutor = NewInternalError(context.Background(), "kafkaSinkConnectorExecutor")
 	//pkg/taskservice
 	CauseResumeTaskHandle  = NewInternalError(context.Background(), "resume task handle")
 	CauseRestartTaskHandle = NewInternalError(context.Background(), "restart task handle")

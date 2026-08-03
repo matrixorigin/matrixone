@@ -779,6 +779,13 @@ func (e *blockingRestartPublicationExecutor) getState() string {
 func TestRestartTimeoutWinsInFlightCatalogPublication(t *testing.T) {
 	catalog := newBlockingRestartPublicationExecutor()
 	t.Cleanup(catalog.unblock)
+	restartTimeout := make(chan time.Time, 1)
+	t.Cleanup(func() {
+		select {
+		case restartTimeout <- time.Now():
+		default:
+		}
+	})
 	detector := createMockTableDetector()
 	stubs := gostub.Stub(&cdc.GetTableDetector, func(string) *cdc.TableDetector {
 		return detector
@@ -792,11 +799,12 @@ func TestRestartTimeoutWinsInFlightCatalogPublication(t *testing.T) {
 			TaskName: "restart-publication-timeout",
 			Accounts: []*task.Account{{Id: 1}},
 		},
-		ie:                    catalog,
-		cnUUID:                "restart-publication-timeout-cn",
-		stateMachine:          NewExecutorStateMachine(),
-		holdCh:                make(chan int, 1),
-		restartStartupTimeout: 25 * time.Millisecond,
+		ie:                          catalog,
+		cnUUID:                      "restart-publication-timeout-cn",
+		stateMachine:                NewExecutorStateMachine(),
+		holdCh:                      make(chan int, 1),
+		restartStartupTimeout:       25 * time.Millisecond,
+		restartStartupTimeoutSignal: restartTimeout,
 		restartCatalogExecutorFactory: func() ie.InternalExecutor {
 			return catalog
 		},
@@ -809,15 +817,16 @@ func TestRestartTimeoutWinsInFlightCatalogPublication(t *testing.T) {
 	go func() { restartDone <- exec.Restart() }()
 	select {
 	case <-catalog.started:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("replacement did not enter restarting-to-running publication")
 	}
 	require.True(t, detector.IsTaskRegistered(exec.spec.TaskId))
+	restartTimeout <- time.Now()
 
 	select {
 	case err := <-restartDone:
 		require.ErrorContains(t, err, "CDC restart startup timed out")
-	case <-time.After(150 * time.Millisecond):
+	case <-time.After(time.Second):
 		t.Fatal("Restart waited for the in-flight catalog publication")
 	}
 
@@ -1205,6 +1214,29 @@ func TestStartSupersededBeforeSchedulingDoesNotPublishOrCleanNewGeneration(t *te
 	err := exec.Start(startCtx)
 	require.ErrorContains(t, err, "superseded by a newer lifecycle generation")
 	require.Equal(t, StateIdle, exec.stateMachine.State())
+	require.Nil(t, exec.activeStart())
+}
+
+func TestCancelBeforeFactoryStartFencesExecutor(t *testing.T) {
+	exec := &CDCTaskExecutor{
+		stateMachine: NewExecutorStateMachine(),
+		spec: &task.CreateCdcDetails{
+			TaskId:   "cancel-before-start",
+			TaskName: "cancel-before-start",
+		},
+		holdCh: make(chan int, 1),
+	}
+	exec.bindLifecycleContext(context.Background())
+	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+
+	require.NoError(t, exec.Cancel())
+	require.Equal(t, StateCancelled, exec.stateMachine.State())
+	select {
+	case <-exec.holdCh:
+	default:
+		t.Fatal("cancel did not release a start waiting to enter execution")
+	}
+	require.ErrorContains(t, exec.Start(context.Background()), "canceled before execution")
 	require.Nil(t, exec.activeStart())
 }
 

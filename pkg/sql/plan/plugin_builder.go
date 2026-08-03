@@ -70,31 +70,57 @@ func (builder *QueryBuilder) AppendNode(node *plan.Node, ctx planplugin.BindCont
 // exported types back to internal and invokes the real
 // `applyIndicesForSortUsing<Algo>` body in pkg/sql/plan.
 //
-// All bodies share the same shape: convert vctx + mti, call internal
-// method (which returns (int32, error)), report applied=(nodeID != newID).
+// The internal methods preserve the root node ID and rewrite the project child
+// in place. Detect both forms so the central dispatcher stops after the first
+// successful plugin instead of treating the rewrite as a no-op.
+
+func vectorSortProjectChild(vctx *vectorSortContext) (int32, bool) {
+	if vctx == nil || vctx.projNode == nil || len(vctx.projNode.Children) == 0 {
+		return 0, false
+	}
+	return vctx.projNode.Children[0], true
+}
+
+func vectorSortApplyResult(
+	nodeID, newNodeID int32,
+	vctx *vectorSortContext,
+	childBefore int32,
+	hadChildBefore bool,
+	err error,
+) (int32, bool, error) {
+	childAfter, hasChildAfter := vectorSortProjectChild(vctx)
+	applied := err == nil && (newNodeID != nodeID ||
+		hadChildBefore != hasChildAfter ||
+		(hadChildBefore && childBefore != childAfter))
+	return newNodeID, applied, err
+}
 
 func (builder *QueryBuilder) ApplyIndicesForSortUsingHnsw(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, _ planplugin.ApplyForSortOpts) (int32, bool, error) {
 	vc, m := fromPlanplugin(vctx, mti)
+	childBefore, hadChildBefore := vectorSortProjectChild(vc)
 	newID, err := builder.applyIndicesForSortUsingHnsw(nodeID, vc, m)
-	return newID, newID != nodeID, err
+	return vectorSortApplyResult(nodeID, newID, vc, childBefore, hadChildBefore, err)
 }
 
 func (builder *QueryBuilder) ApplyIndicesForSortUsingCagra(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, _ planplugin.ApplyForSortOpts) (int32, bool, error) {
 	vc, m := fromPlanplugin(vctx, mti)
+	childBefore, hadChildBefore := vectorSortProjectChild(vc)
 	newID, err := builder.applyIndicesForSortUsingCagra(nodeID, vc, m)
-	return newID, newID != nodeID, err
+	return vectorSortApplyResult(nodeID, newID, vc, childBefore, hadChildBefore, err)
 }
 
 func (builder *QueryBuilder) ApplyIndicesForSortUsingIvfpq(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, _ planplugin.ApplyForSortOpts) (int32, bool, error) {
 	vc, m := fromPlanplugin(vctx, mti)
+	childBefore, hadChildBefore := vectorSortProjectChild(vc)
 	newID, err := builder.applyIndicesForSortUsingIvfpq(nodeID, vc, m)
-	return newID, newID != nodeID, err
+	return vectorSortApplyResult(nodeID, newID, vc, childBefore, hadChildBefore, err)
 }
 
 func (builder *QueryBuilder) ApplyIndicesForSortUsingIvfflat(vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, opts planplugin.ApplyForSortOpts) (int32, bool, error) {
 	vc, m := fromPlanplugin(vctx, mti)
+	childBefore, hadChildBefore := vectorSortProjectChild(vc)
 	newID, err := builder.applyIndicesForSortUsingIvfflat(nodeID, vc, m, opts.ColRefCnt, opts.IdxColMap)
-	return newID, newID != nodeID, err
+	return vectorSortApplyResult(nodeID, newID, vc, childBefore, hadChildBefore, err)
 }
 
 // CanApply<Algo> — non-destructive probe used by detectVectorGuard. We

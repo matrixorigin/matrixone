@@ -273,8 +273,6 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 
 	alterTablePlan.ChangeTblColIdMap = alterTableCtx.changColDefMap
 	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, alterTableCtx.UpdateSqls...)
-	//delete copy table records from mo_catalog.mo_foreign_keys
-	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, getSqlForDeleteTable(schemaName, alterTableCtx.copyTableName))
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -442,6 +440,14 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
+	}
+	isMongoDB, err := IsMongoDBTableDef(ctx.GetContext(), tableDef)
+	if err != nil {
+		return nil, err
+	}
+	if isMongoDB {
+		return nil, moerr.NewNotSupported(ctx.GetContext(),
+			"ALTER TABLE on a MongoDB external table; drop and recreate the external table to change its schema")
 	}
 
 	if tableDef.IsTemporary {

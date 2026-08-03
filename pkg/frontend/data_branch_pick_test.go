@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -38,6 +40,71 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
+
+func TestValidateBetweenSnapshotRange(t *testing.T) {
+	tests := []struct {
+		name    string
+		from    *types.TS
+		to      *types.TS
+		wantErr string
+	}{
+		{
+			name: "forward physical range",
+			from: types.BuildTSForTest(1, 0),
+			to:   types.BuildTSForTest(2, 0),
+		},
+		{
+			name: "equal range",
+			from: types.BuildTSForTest(1, 1),
+			to:   types.BuildTSForTest(1, 1),
+		},
+		{
+			name:    "reversed physical range",
+			from:    types.BuildTSForTest(2, 0),
+			to:      types.BuildTSForTest(1, 0),
+			wantErr: "start snapshot 'from' is later than end snapshot 'to'",
+		},
+		{
+			name:    "reversed logical range",
+			from:    types.BuildTSForTest(1, 2),
+			to:      types.BuildTSForTest(1, 1),
+			wantErr: "start snapshot 'from' is later than end snapshot 'to'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateBetweenSnapshotRange("from", "to", tt.from, tt.to)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestResolveBetweenSnapshotsReversedRange(t *testing.T) {
+	earlyTS := types.BuildTSForTest(1, 0).ToTimestamp()
+	lateTS := types.BuildTSForTest(2, 0).ToTimestamp()
+	snapshots := map[string]*pbplan.Snapshot{
+		"early": {TS: &earlyTS},
+		"late":  {TS: &lateTS},
+	}
+	originalResolver := resolveSnapshotForBetween
+	resolveSnapshotForBetween = func(_ *Session, atTs *tree.AtTimeStamp) (*pbplan.Snapshot, error) {
+		return snapshots[atTs.SnapshotName], nil
+	}
+	t.Cleanup(func() {
+		resolveSnapshotForBetween = originalResolver
+	})
+
+	from, to, err := resolveBetweenSnapshots(nil, "late", "early")
+
+	require.Nil(t, from)
+	require.Nil(t, to)
+	require.ErrorContains(t, err, "start snapshot 'late' is later than end snapshot 'early'")
+}
 
 func TestSegmentBuilder_SingleValue(t *testing.T) {
 	pkType := types.T_int32.ToType()
@@ -364,6 +431,15 @@ func TestAppendNumericStringToVec_AllTypes(t *testing.T) {
 		input  string
 		verify func(*vector.Vector)
 	}{
+		{"bool_true", types.Type{}, types.T_bool, "true", func(v *vector.Vector) {
+			require.True(t, vector.GetFixedAtNoTypeCheck[bool](v, 0))
+		}},
+		{"bool_numeric_false", types.Type{}, types.T_bool, "0", func(v *vector.Vector) {
+			require.False(t, vector.GetFixedAtNoTypeCheck[bool](v, 0))
+		}},
+		{"bit", types.New(types.T_bit, 8, 0), types.T_bit, "255", func(v *vector.Vector) {
+			require.Equal(t, uint64(255), vector.GetFixedAtNoTypeCheck[uint64](v, 0))
+		}},
 		{"int8", types.Type{}, types.T_int8, "42", func(v *vector.Vector) {
 			require.Equal(t, int8(42), vector.GetFixedAtNoTypeCheck[int8](v, 0))
 		}},
@@ -440,6 +516,20 @@ func TestAppendNumericStringToVec_AllTypes(t *testing.T) {
 	}
 }
 
+func TestAppendNumericStringToVec_BitOutOfRange(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	pkType := types.New(types.T_bit, 8, 0)
+	vec := vector.NewVec(pkType)
+	defer vec.Free(mp)
+
+	err = appendNumericStringToVec(vec, "256", pkType, time.UTC, mp)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bit(8)")
+}
+
 func TestAppendNumericStringToVec_UnsupportedType(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)
@@ -481,6 +571,125 @@ func TestAppendExprToVec_StrVal(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, vec.Length())
 	require.Equal(t, []byte("test_value"), vec.GetBytesAt(0))
+}
+
+func TestAppendExprToVec_BoolLiteral(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	pkType := types.T_bool.ToType()
+	vec := vector.NewVec(pkType)
+	defer vec.Free(mp)
+
+	expr := tree.NewNumVal(true, "true", false, tree.P_bool)
+	err = appendExprToVec(vec, expr, pkType, time.UTC, mp)
+	require.NoError(t, err)
+	require.True(t, vector.GetFixedAtNoTypeCheck[bool](vec, 0))
+}
+
+func TestAppendExprToVec_IntegerPKNumericLiteralForms(t *testing.T) {
+	stmtNode, err := parsers.ParseOne(
+		context.Background(),
+		dialect.MYSQL,
+		"data branch pick src into dst keys(0x2, 3e0, -4e0, +5e0, -0x6)",
+		1,
+	)
+	require.NoError(t, err)
+
+	stmt, ok := stmtNode.(*tree.DataBranchPick)
+	require.True(t, ok)
+	require.Len(t, stmt.Keys.KeyExprs, 5)
+
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	vec := vector.NewVec(types.T_int32.ToType())
+	defer vec.Free(mp)
+	for _, expr := range stmt.Keys.KeyExprs {
+		require.NoError(t, appendExprToVec(vec, expr, *vec.GetType(), time.UTC, mp))
+	}
+	require.Equal(t, []int32{2, 3, -4, 5, -6}, vector.MustFixedColNoTypeCheck[int32](vec))
+}
+
+func TestAppendExprToVec_IntegerPKNumericLiteralBoundaries(t *testing.T) {
+	tests := []struct {
+		name    string
+		literal string
+		pkType  types.Type
+		want    any
+		wantErr string
+	}{
+		{name: "signed minimum", literal: "-1.28e2", pkType: types.T_int8.ToType(), want: int8(-128)},
+		{name: "signed maximum", literal: "+1.27e2", pkType: types.T_int8.ToType(), want: int8(127)},
+		{name: "unsigned negative zero", literal: "-0x0", pkType: types.T_uint8.ToType(), want: uint8(0)},
+		{name: "unsigned maximum", literal: "0xffffffffffffffff", pkType: types.T_uint64.ToType(), want: uint64(math.MaxUint64)},
+		{name: "fractional scientific", literal: "1.1e0", pkType: types.T_int32.ToType(), wantErr: "is not an integer"},
+		{name: "signed underflow", literal: "-1.29e2", pkType: types.T_int8.ToType(), wantErr: "out of range"},
+		{name: "signed overflow", literal: "1.28e2", pkType: types.T_int8.ToType(), wantErr: "out of range"},
+		{name: "unsigned negative", literal: "-1e0", pkType: types.T_uint8.ToType(), wantErr: "invalid syntax"},
+		{name: "unsigned overflow", literal: "0x100", pkType: types.T_uint8.ToType(), wantErr: "out of range"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stmtNode, err := parsers.ParseOne(
+				context.Background(),
+				dialect.MYSQL,
+				"data branch pick src into dst keys("+tc.literal+")",
+				1,
+			)
+			require.NoError(t, err)
+			stmt := stmtNode.(*tree.DataBranchPick)
+
+			mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+			require.NoError(t, err)
+			defer mp.Free(nil)
+			vec := vector.NewVec(tc.pkType)
+			defer vec.Free(mp)
+
+			err = appendExprToVec(vec, stmt.Keys.KeyExprs[0], tc.pkType, time.UTC, mp)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				require.Zero(t, vec.Length())
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, 1, vec.Length())
+			switch want := tc.want.(type) {
+			case int8:
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int8](vec, 0))
+			case uint8:
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[uint8](vec, 0))
+			case uint64:
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[uint64](vec, 0))
+			default:
+				t.Fatalf("unsupported expected type %T", want)
+			}
+		})
+	}
+}
+
+func TestAppendExprToVec_PreservesUnarySignForFloatPK(t *testing.T) {
+	stmtNode, err := parsers.ParseOne(
+		context.Background(),
+		dialect.MYSQL,
+		"data branch pick src into dst keys(-3e0)",
+		1,
+	)
+	require.NoError(t, err)
+	stmt := stmtNode.(*tree.DataBranchPick)
+
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+	pkType := types.T_float64.ToType()
+	vec := vector.NewVec(pkType)
+	defer vec.Free(mp)
+
+	require.NoError(t, appendExprToVec(vec, stmt.Keys.KeyExprs[0], pkType, time.UTC, mp))
+	require.Equal(t, float64(-3), vector.GetFixedAtNoTypeCheck[float64](vec, 0))
 }
 
 func TestAppendExprToVec_UnaryMinus(t *testing.T) {
@@ -1195,6 +1404,16 @@ func TestMaterializeSubqueryUnified_RejectsNilSelect(t *testing.T) {
 	require.Nil(t, pkFilter)
 }
 
+func newPickSubqueryPlanForTest(cols ...string) *plan2.Plan {
+	return &plan2.Plan{
+		Plan: &plan2.Plan_Query{
+			Query: &plan2.Query{
+				Headings: cols,
+			},
+		},
+	}
+}
+
 func TestMaterializeSubqueryUnified_SinglePKSuccessBuildsFilterAndHashmap(t *testing.T) {
 	ses := newValidateSession(t)
 	stmtNode, err := parsers.ParseOne(
@@ -1218,7 +1437,7 @@ func TestMaterializeSubqueryUnified_SinglePKSuccessBuildsFilterAndHashmap(t *tes
 		ctx plan2.CompilerContext,
 		stmt tree.Statement,
 	) (*plan2.Plan, error) {
-		return nil, nil
+		return newPickSubqueryPlanForTest("k"), nil
 	}
 
 	tblStuff := tableStuff{}
@@ -1295,7 +1514,7 @@ func TestMaterializeSubqueryUnified_PreservesStringLiteralQuotes(t *testing.T) {
 		ctx plan2.CompilerContext,
 		stmt tree.Statement,
 	) (*plan2.Plan, error) {
-		return nil, nil
+		return newPickSubqueryPlanForTest("order_id"), nil
 	}
 
 	tblStuff := tableStuff{}
@@ -1360,7 +1579,7 @@ func TestMaterializeSubqueryUnified_CompositePKOrdersAllColumns(t *testing.T) {
 		ctx plan2.CompilerContext,
 		stmt tree.Statement,
 	) (*plan2.Plan, error) {
-		return nil, nil
+		return newPickSubqueryPlanForTest("k1", "k2"), nil
 	}
 
 	tblStuff := tableStuff{}
@@ -1425,7 +1644,7 @@ func TestMaterializeSubqueryUnified_PropagatesStreamingError(t *testing.T) {
 		ctx plan2.CompilerContext,
 		stmt tree.Statement,
 	) (*plan2.Plan, error) {
-		return nil, nil
+		return newPickSubqueryPlanForTest("k"), nil
 	}
 	wantErr := moerr.NewInternalErrorNoCtx("subquery failed")
 	bh := newPickStreamingBackExecForTest(t, ses, &pickStreamingExecutor{err: wantErr})
@@ -1471,10 +1690,12 @@ func TestFormatPickKeyVectorValueAsString_AllSupportedKinds(t *testing.T) {
 	dec128Type := types.New(types.T_decimal128, 20, 3)
 	dec128Val, err := types.ParseDecimal128("200.125", dec128Type.Width, dec128Type.Scale)
 	require.NoError(t, err)
-	dec256Type := types.New(types.T_decimal256, 39, 4)
-	dec256Val, err := types.ParseDecimal256("1234567890123456789012345678901234.5678", dec256Type.Width, dec256Type.Scale)
+	dec256Type := types.New(types.T_decimal256, 65, 30)
+	dec256Val, err := types.ParseDecimal256("300.125000000000000000000000000000", dec256Type.Width, dec256Type.Scale)
 	require.NoError(t, err)
 	dateVal, err := types.ParseDateCast("2025-01-03")
+	require.NoError(t, err)
+	yearVal, err := types.ParseMoYear("2025")
 	require.NoError(t, err)
 	datetimeType := types.New(types.T_datetime, 0, 0)
 	datetimeVal, err := types.ParseDatetime("2025-01-03 12:30:45", datetimeType.Scale)
@@ -1485,7 +1706,6 @@ func TestFormatPickKeyVectorValueAsString_AllSupportedKinds(t *testing.T) {
 	timeType := types.New(types.T_time, 0, 0)
 	timeVal, err := types.ParseTime("12:30:45", timeType.Scale)
 	require.NoError(t, err)
-	yearVal := types.MoYear(2024)
 	uuidVal := types.Uuid([16]byte{0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x12, 0x34, 0x12, 0x34, 0x12, 0x34, 0x56, 0x78, 0x90, 0x12})
 
 	tests := []struct {
@@ -1640,6 +1860,14 @@ func TestFormatPickKeyVectorValueAsString_AllSupportedKinds(t *testing.T) {
 			want: dateVal.String(),
 		},
 		{
+			name: "year",
+			typ:  types.T_year.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, yearVal, false, mp))
+			},
+			want: yearVal.String(),
+		},
+		{
 			name: "datetime",
 			typ:  datetimeType,
 			append: func(vec *vector.Vector) {
@@ -1715,6 +1943,45 @@ func TestFormatPickKeyVectorValueAsString_AllSupportedKinds(t *testing.T) {
 	}
 }
 
+func TestPickKeyDecimal256AndYearPaths(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	ses := newValidateSession(t)
+	decType := types.New(types.T_decimal256, 65, 30)
+	decVal, err := types.ParseDecimal256("42.000000000000000000000000000000", decType.Width, decType.Scale)
+	require.NoError(t, err)
+	yearVal, err := types.ParseMoYear("2025")
+	require.NoError(t, err)
+
+	decVec := vector.NewVec(decType)
+	defer decVec.Free(mp)
+	require.NoError(t, appendNumericStringToVec(decVec, decVal.Format(decType.Scale), decType, time.UTC, mp))
+	require.Equal(t, decVal, extractPKVal(decVec, 0))
+	decString, err := formatPickKeyVectorValueAsString(ses, decVec, 0)
+	require.NoError(t, err)
+	require.Equal(t, decVal.Format(decType.Scale), decString)
+
+	decStrVec := vector.NewVec(decType)
+	defer decStrVec.Free(mp)
+	require.NoError(t, appendStrValToVec(decStrVec, decVal.Format(decType.Scale), decType, time.UTC, mp))
+	require.Equal(t, decVal, extractPKVal(decStrVec, 0))
+
+	yearVec := vector.NewVec(types.T_year.ToType())
+	defer yearVec.Free(mp)
+	require.NoError(t, appendNumericStringToVec(yearVec, yearVal.String(), types.T_year.ToType(), time.UTC, mp))
+	require.Equal(t, yearVal, extractPKVal(yearVec, 0))
+	yearString, err := formatPickKeyVectorValueAsString(ses, yearVec, 0)
+	require.NoError(t, err)
+	require.Equal(t, yearVal.String(), yearString)
+
+	yearStrVec := vector.NewVec(types.T_year.ToType())
+	defer yearStrVec.Free(mp)
+	require.NoError(t, appendStrValToVec(yearStrVec, "2025", types.T_year.ToType(), time.UTC, mp))
+	require.Equal(t, yearVal, extractPKVal(yearStrVec, 0))
+}
+
 type pickStreamingExecutor struct {
 	result executor.Result
 	err    error
@@ -1776,6 +2043,10 @@ func buildPickStreamingBatch(t *testing.T, mp *mpool.MPool, colTypes []types.Typ
 		for colIdx, val := range row {
 			switch typed := val.(type) {
 			case int64:
+				require.NoError(t, vector.AppendFixed(bat.Vecs[colIdx], typed, false, mp))
+			case types.Decimal256:
+				require.NoError(t, vector.AppendFixed(bat.Vecs[colIdx], typed, false, mp))
+			case types.MoYear:
 				require.NoError(t, vector.AppendFixed(bat.Vecs[colIdx], typed, false, mp))
 			case string:
 				require.NoError(t, vector.AppendBytes(bat.Vecs[colIdx], []byte(typed), false, mp))

@@ -15,7 +15,9 @@
 package hashbuild
 
 import (
+	"context"
 	"errors"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -30,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -54,6 +57,194 @@ func TestBuildHashMap(t *testing.T) {
 	hb.Reset(proc, true)
 	hb.Free(proc)
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBuildHashmapOptionalAuxClosedBudgetRemainsFatal(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	generation.Close()
+
+	hb := HashmapBuilder{InputBatchRowCount: 1}
+	hb.setBudget(generation)
+	err = hb.BuildHashmap(false, false, true, proc)
+	require.Error(t, err)
+	var budgetErr *process.HashBuildBudgetError
+	require.ErrorAs(t, err, &budgetErr)
+	require.Equal(t, process.HashBuildBudgetErrorClosed, budgetErr.Kind)
+	fallback, _ := hb.runtimeFilterFallbackState()
+	require.False(t, fallback)
+	require.Nil(t, hb.UniqueJoinKeys)
+	require.Zero(t, generation.Used())
+	hb.Free(proc)
+}
+
+func TestBuildHashmapMandatoryAuxRetryFailureDoesNotRecordFallback(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	budget := process.MustNewHashBuildBudget(1, 1)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+
+	hb := HashmapBuilder{InputBatchRowCount: 1}
+	hb.setBudget(generation)
+	err = hb.BuildHashmap(false, false, true, proc)
+	require.Error(t, err)
+	var budgetErr *process.HashBuildBudgetError
+	require.ErrorAs(t, err, &budgetErr)
+	require.Equal(t, process.HashBuildBudgetErrorAdmission, budgetErr.Kind)
+	fallback, _ := hb.runtimeFilterFallbackState()
+	require.False(t, fallback,
+		"fatal mandatory retry must not be counted as an optional fallback")
+	require.Equal(t, uint64(2), generation.RejectCount())
+	require.Zero(t, generation.Used())
+	hb.Free(proc)
+}
+
+func TestPrepareCanonicalRuntimeFilterCollectionClosedBudgetRemainsFatal(
+	t *testing.T,
+) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	input := testutil.NewBatch(
+		[]types.Type{types.T_int32.ToType()}, true, 16, proc.Mp())
+	defer input.Clean(proc.Mp())
+	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	hb := HashmapBuilder{
+		Batches:            colexec.Batches{Buf: []*batch.Batch{input}},
+		InputBatchRowCount: input.RowCount(),
+	}
+	hb.setBudget(generation)
+	require.NoError(t, hb.reserveBuildAux(false))
+	generation.Close()
+
+	collect, err := hb.prepareCanonicalRuntimeFilterCollection(true)
+	require.Error(t, err)
+	require.False(t, collect)
+	var budgetErr *process.HashBuildBudgetError
+	require.ErrorAs(t, err, &budgetErr)
+	require.Equal(t, process.HashBuildBudgetErrorClosed, budgetErr.Kind)
+	fallback, _ := hb.runtimeFilterFallbackState()
+	require.False(t, fallback)
+	hb.Batches.Buf = nil
+	hb.releaseReservations()
+	require.Zero(t, generation.Used())
+}
+
+func TestOptionalRuntimeFilterCollectionCleanupFailureRemainsFatal(
+	t *testing.T,
+) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	key := testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+
+	hb := HashmapBuilder{
+		InputBatchRowCount: 1,
+		UniqueJoinKeys:     []*vector.Vector{key},
+	}
+	hb.setBudget(generation)
+	require.NoError(t, hb.reserveBuildAux(true))
+	require.True(t, hb.auxReservation.Release())
+
+	err = hb.fallbackOptionalRuntimeFilterCollection(
+		proc,
+		runtimefilter.MarkOptionalAllocationError(
+			errors.New("mpool allocation failed")),
+	)
+	require.ErrorIs(t, err, process.ErrHashBuildReservationInactive)
+	fallback, _ := hb.runtimeFilterFallbackState()
+	require.False(t, fallback)
+	require.Nil(t, hb.UniqueJoinKeys)
+	require.Zero(t, generation.Used())
+	hb.releaseReservations()
+}
+
+func TestBuildHashmapUniqueUnionAllocationFailureFallsBack(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		hashOnPK bool
+	}{
+		{name: "union"},
+		{name: "union-batch", hashOnPK: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testBuildHashmapUniqueUnionAllocationFailureFallsBack(
+				t, test.hashOnPK)
+		})
+	}
+}
+
+func testBuildHashmapUniqueUnionAllocationFailureFallsBack(
+	t *testing.T,
+	hashOnPK bool,
+) {
+	mp, err := mpool.NewMPool(t.Name(), 8<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	var hb HashmapBuilder
+	require.NoError(t, hb.Prepare(
+		[]*plan.Expr{newExpr(0, types.T_int32.ToType())},
+		-1, -1, nil, proc))
+	input := testutil.NewBatch(
+		[]types.Type{types.T_int32.ToType()}, true, 16, mp)
+	hb.Batches.Buf = []*batch.Batch{input}
+	hb.InputBatchRowCount = input.RowCount()
+
+	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	hb.setBudget(generation)
+
+	var filler []byte
+	defer func() {
+		hb.Free(proc)
+		require.Zero(t, generation.Used())
+		if filler != nil {
+			mp.Free(filler)
+		}
+		generation.Close()
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	// Calibrate the deterministic mandatory map footprint, then leave exactly
+	// that much headroom. The second build can recreate its required map, while
+	// the first optional-key Union allocation must fail at the mpool boundary.
+	retainedBytes := mp.CurrNB()
+	require.NoError(t, hb.BuildHashmap(hashOnPK, false, false, proc))
+	mapBytes := mp.CurrNB() - retainedBytes
+	require.Greater(t, mapBytes, int64(0))
+	hb.FreeHashMapOnly(proc)
+	require.Equal(t, retainedBytes, mp.CurrNB())
+
+	fillerBytes := mp.Cap() - mp.CurrNB() - mapBytes
+	require.Greater(t, fillerBytes, int64(0))
+	filler, err = mp.Alloc(int(fillerBytes), true)
+	require.NoError(t, err)
+
+	require.NoError(t, hb.BuildHashmap(hashOnPK, false, true, proc))
+	fallback, rebuildSafe := hb.runtimeFilterFallbackState()
+	require.True(t, fallback)
+	require.True(t, rebuildSafe)
+	require.Nil(t, hb.UniqueJoinKeys)
+	require.Greater(t, hb.GetGroupCount(), uint64(0))
+	require.Zero(t, generation.RejectCount(),
+		"mpool failure must not be misclassified as budget admission")
 }
 
 func TestBuildHashMapBudgetRejectsResizeAndReleasesOnReset(t *testing.T) {
@@ -81,6 +272,41 @@ func TestBuildHashMapBudgetRejectsResizeAndReleasesOnReset(t *testing.T) {
 
 	hb.Reset(proc, true)
 	require.Zero(t, generation.Used())
+}
+
+func TestBuildHashMapCancellationReleasesRetainedBudgetOnReset(t *testing.T) {
+	const budgetCap = uint64(16 << 20)
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	ctx, cancel := context.WithCancelCause(proc.Ctx)
+	process.ReplacePipelineCtx(proc, ctx, cancel)
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
+
+	input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, 10_000, proc.Mp())
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	hb.InputBatchRowCount = input.RowCount()
+	input.Clean(proc.Mp())
+	require.Positive(t, generation.Used(), "retained build input must own budget before cancellation")
+
+	proc.Cancel(context.Canceled)
+	err = hb.BuildHashmap(false, false, false, proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, hb.IntHashMap)
+	require.Nil(t, hb.StrHashMap)
+
+	hb.Reset(proc, true)
+	hb.Free(proc)
+	require.Zero(t, generation.Used())
+	require.Zero(t, generation.SpillDiskUsed())
+	require.Zero(t, generation.SpillFDUsed())
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestPublishedJoinMapResizeKeepsReservationWithConsumer(t *testing.T) {
@@ -143,7 +369,50 @@ func TestHashMapReservationOwnerRetainsSegmentedGrowthTokens(t *testing.T) {
 	require.Zero(t, generation.Used())
 }
 
-func TestCopyBuildBatchBudgetsFixedSizeTailPreallocation(t *testing.T) {
+func TestBudgetedEmptyJoinMapRejectsUnadmittedAllocationAndResize(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		keyWidth     int
+		initialBytes uint64
+	}{
+		{name: "int", keyWidth: 4, initialBytes: hashtable.Int64HashMapInitialAllocationBytes()},
+		{name: "string", keyWidth: 128, initialBytes: hashtable.StringHashMapInitialAllocationBytes()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+
+			tooSmall := process.MustNewHashBuildBudget(tc.initialBytes-1, tc.initialBytes-1)
+			tooSmallGeneration, err := tooSmall.OpenGeneration(1)
+			require.NoError(t, err)
+			jm, err := NewBudgetedEmptyJoinMap(tc.keyWidth, tooSmallGeneration, mp)
+			require.Nil(t, jm)
+			require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+			require.Zero(t, tooSmallGeneration.Used())
+			require.Zero(t, mp.CurrNB())
+
+			exact := process.MustNewHashBuildBudget(tc.initialBytes, tc.initialBytes)
+			generation, err := exact.OpenGeneration(2)
+			require.NoError(t, err)
+			jm, err = NewBudgetedEmptyJoinMap(tc.keyWidth, generation, mp)
+			require.NoError(t, err)
+			require.Equal(t, tc.initialBytes, generation.Used())
+			require.Equal(t, int64(tc.initialBytes), mp.CurrNB())
+
+			err = jm.PreAlloc(10_000)
+			require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+			require.Equal(t, tc.initialBytes, generation.Used(),
+				"rejected growth must roll back its temporary reservation")
+
+			jm.Free()
+			require.Zero(t, generation.Used())
+			require.Zero(t, generation.SpillDiskUsed())
+			require.Zero(t, generation.SpillFDUsed())
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestCopyBuildBatchBudgetsSmallIngressAfterFullBatches(t *testing.T) {
 	const budgetCap = uint64(32 << 20)
 	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
 	require.NoError(t, err)
@@ -154,11 +423,23 @@ func TestCopyBuildBatchBudgetsFixedSizeTailPreallocation(t *testing.T) {
 	hb.setBudget(generation)
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
-	for _, rows := range []int{colexec.DefaultBatchSize, colexec.DefaultBatchSize, 100} {
+	for _, rows := range []int{colexec.DefaultBatchSize, colexec.DefaultBatchSize} {
 		input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, rows, proc.Mp())
 		require.NoError(t, hb.copyBuildBatch(input, proc))
 		input.Clean(proc.Mp())
 	}
+	input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, 100, proc.Mp())
+	projected, err := hb.projectedBatchCopyBytes(input)
+	require.NoError(t, err)
+	destination, err := projectedNewDestinationBytes(input, 0, input.RowCount())
+	require.NoError(t, err)
+	metadata, ok := retainedMetadataAllowance(input)
+	require.True(t, ok)
+	require.Equal(t, destination+metadata+uint64(64<<10), projected,
+		"a small ingress must not be projected as a full 8192-row allocation")
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	input.Clean(proc.Mp())
+
 	require.Len(t, hb.Batches.Buf, 3)
 	require.Equal(t, 100, hb.Batches.Buf[2].RowCount())
 	hb.FreeHashMapAndBatches(proc)
@@ -189,6 +470,516 @@ func TestCopyBuildBatchBudgetsPartialTailGrowth(t *testing.T) {
 	require.Zero(t, generation.Used())
 }
 
+func TestCopyBuildBatchBudgetsWideVarcharPartialTailReplacement(t *testing.T) {
+	const budgetCap = uint64(128 << 20)
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	values := make([]string, colexec.DefaultBatchSize/2)
+	for i := range values {
+		values[i] = strings.Repeat("x", 1024)
+	}
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeVarcharVector(values, nil, proc.Mp())
+	input.SetRowCount(len(values))
+	defer input.Clean(proc.Mp())
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	defer hb.FreeHashMapAndBatches(proc)
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	require.Len(t, hb.Batches.Buf, 1)
+	require.Equal(t, colexec.DefaultBatchSize, hb.Batches.Buf[0].RowCount())
+}
+
+func TestProjectedPartialTailReplacementMatchesUnionBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	tail := batch.NewWithSize(2)
+	tail.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	tail.Vecs[1] = testutil.MakeVarcharVector([]string{strings.Repeat("a", 1024)}, nil, proc.Mp())
+	tail.SetRowCount(1)
+	defer tail.Clean(proc.Mp())
+
+	src := batch.NewWithSize(2)
+	src.Vecs[0] = testutil.MakeInt32Vector([]int32{2, 3}, nil, proc.Mp())
+	constVec, err := vector.NewConstBytes(
+		types.T_varchar.ToType(),
+		[]byte(strings.Repeat("b", 1024)),
+		2,
+		proc.Mp(),
+	)
+	require.NoError(t, err)
+	src.Vecs[1] = constVec
+	src.SetRowCount(2)
+	defer src.Clean(proc.Mp())
+
+	peak, retained, err := projectedPartialTailReplacementBytes(tail, src, src.RowCount())
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, peak, retained)
+	before := tail.Allocated()
+	for i := range tail.Vecs {
+		require.NoError(t, tail.Vecs[i].UnionBatch(src.Vecs[i], 0, src.RowCount(), nil, proc.Mp()))
+	}
+	tail.AddRowCount(src.RowCount())
+	require.Equal(t, uint64(tail.Allocated()-before), retained)
+
+	inline := batch.NewWithSize(1)
+	inline.Vecs[0] = testutil.MakeVarcharVector([]string{"small"}, nil, proc.Mp())
+	inline.SetRowCount(1)
+	defer inline.Clean(proc.Mp())
+	preallocated, err := proc.NewBatchFromSrc(inline, colexec.DefaultBatchSize)
+	require.NoError(t, err)
+	defer preallocated.Clean(proc.Mp())
+	require.NoError(t, preallocated.Vecs[0].UnionBatch(inline.Vecs[0], 0, 1, nil, proc.Mp()))
+	preallocated.AddRowCount(1)
+	peak, retained, err = projectedPartialTailReplacementBytes(preallocated, inline, 1)
+	require.NoError(t, err)
+	require.Zero(t, peak)
+	require.Zero(t, retained)
+}
+
+func TestCopyBuildBatchBudgetsPartialTailWithRemainder(t *testing.T) {
+	const budgetCap = uint64(16 << 20)
+	budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	defer hb.FreeHashMapAndBatches(proc)
+	for _, rows := range []int{
+		colexec.DefaultBatchSize,
+		colexec.DefaultBatchSize,
+		colexec.DefaultBatchSize - 1,
+		2,
+	} {
+		input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, rows, proc.Mp())
+		require.NoError(t, hb.copyBuildBatch(input, proc))
+		input.Clean(proc.Mp())
+	}
+	require.Len(t, hb.Batches.Buf, 4)
+	require.Equal(t, 1, hb.Batches.Buf[3].RowCount())
+}
+
+func TestBatchCopyAllocatedDeltaTracksOnlyChangedSuffix(t *testing.T) {
+	tests := []struct {
+		name         string
+		retainedRows int
+		ingressRows  int
+	}{
+		{name: "empty/multiple-destinations", ingressRows: 2*colexec.DefaultBatchSize + 7},
+		{name: "full-tail/append", retainedRows: colexec.DefaultBatchSize, ingressRows: colexec.DefaultBatchSize},
+		{name: "partial-tail/grow-and-append", retainedRows: 7000, ingressRows: 2000},
+		{name: "partial-tail/full-ingress-swap", retainedRows: 7, ingressRows: colexec.DefaultBatchSize},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+
+			var batches colexec.Batches
+			defer batches.Clean(proc.Mp())
+			if tc.retainedRows > 0 {
+				retained := testutil.NewBatch(
+					[]types.Type{types.T_int32.ToType()}, true, tc.retainedRows, proc.Mp())
+				defer retained.Clean(proc.Mp())
+				require.NoError(t, batches.CopyIntoBatches(retained, proc))
+			}
+			before := batchesAllocated(batches.Buf)
+			snapshot, err := snapshotBatchCopyAllocation(batches.Buf)
+			require.NoError(t, err)
+
+			ingress := testutil.NewBatch(
+				[]types.Type{types.T_int32.ToType()}, true, tc.ingressRows, proc.Mp())
+			defer ingress.Clean(proc.Mp())
+			require.NoError(t, batches.CopyIntoBatches(ingress, proc))
+
+			after := batchesAllocated(batches.Buf)
+			require.GreaterOrEqual(t, after, before)
+			delta, err := batchCopyAllocatedDelta(batches.Buf, snapshot)
+			require.NoError(t, err)
+			require.Equal(t, after-before, delta)
+		})
+	}
+}
+
+func TestBatchCopyAllocatedDeltaRejectsLostTail(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	retained := testutil.NewBatch(
+		[]types.Type{types.T_int32.ToType()}, true, 7, proc.Mp())
+	defer retained.Clean(proc.Mp())
+	snapshot, err := snapshotBatchCopyAllocation([]*batch.Batch{retained})
+	require.NoError(t, err)
+
+	replacement := testutil.NewBatch(
+		[]types.Type{types.T_int32.ToType()}, true, 7, proc.Mp())
+	defer replacement.Clean(proc.Mp())
+	_, err = batchCopyAllocatedDelta([]*batch.Batch{replacement}, snapshot)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+}
+
+func TestProjectedPartialTailReplacementRejectsInvalidInputs(t *testing.T) {
+	_, _, err := projectedPartialTailReplacementBytes(nil, nil, -1)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	_, err = (&HashmapBuilder{}).projectedBatchCopyBytes(nil)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+
+	tail := batch.NewOffHeapWithSize(1)
+	src := batch.NewOffHeapWithSize(1)
+	_, _, err = projectedPartialTailReplacementBytes(tail, src, 1)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	src.Vecs[0] = testutil.MakeVarcharVector([]string{strings.Repeat("x", 32)}, nil, proc.Mp())
+	src.SetRowCount(1)
+	defer src.Clean(proc.Mp())
+	tail.Vecs[0] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	defer tail.Clean(proc.Mp())
+	_, _, err = projectedPartialTailReplacementBytes(tail, src, 2)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+
+	invalidTail := batch.NewOffHeapWithSize(1)
+	invalidTail.SetRowCount(-1)
+	hb := HashmapBuilder{}
+	hb.Batches.Buf = []*batch.Batch{invalidTail}
+	_, err = hb.projectedBatchCopyBytes(src)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+
+	mismatchedTail := batch.NewOffHeapWithSize(0)
+	hb.Batches.Buf = []*batch.Batch{mismatchedTail}
+	_, err = hb.projectedBatchCopyBytes(src)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+}
+
+func TestCopyBuildBatchUsesProjectedDestinationCapacity(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	values := make([]string, 4096)
+	for i := range values {
+		values[i] = strings.Repeat("x", 1024)
+	}
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeVarcharVector(values, nil, proc.Mp())
+	input.SetRowCount(len(values))
+	defer input.Clean(proc.Mp())
+
+	var hb HashmapBuilder
+	projected, err := hb.projectedBatchCopyBytes(input)
+	require.NoError(t, err)
+	destination, err := projectedNewDestinationBytes(input, 0, input.RowCount())
+	require.NoError(t, err)
+	metadata, ok := retainedMetadataAllowance(input)
+	require.True(t, ok)
+	const wantSlack = uint64(64 << 10)
+	require.Equal(t, destination+metadata+wantSlack, projected)
+
+	budget := process.MustNewHashBuildBudget(projected, projected)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	hb.setBudget(generation)
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	require.Equal(t, projected, generation.Peak())
+	hb.FreeHashMapAndBatches(proc)
+	require.Zero(t, generation.Used())
+}
+
+func TestCopyBuildBatchSplitsLargeIngressWithinProjection(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	const rows = 50_000
+	input := testutil.NewBatch([]types.Type{types.T_uuid.ToType()}, true, rows, proc.Mp())
+	part, err := vector.NewConstFixed[int32](types.T_int32.ToType(), 1, rows, proc.Mp())
+	require.NoError(t, err)
+	input.Vecs = append(input.Vecs, part)
+	defer input.Clean(proc.Mp())
+
+	budget := process.MustNewHashBuildBudget(1<<30, 1<<30)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	require.Equal(t, 2*rows, hb.Batches.RowCount())
+	require.Len(t, hb.Batches.Buf, 13)
+	hb.FreeHashMapAndBatches(proc)
+	require.Zero(t, generation.Used())
+}
+
+func TestCopyBuildBatchSplitsLargeConstVarcharIngressWithinProjection(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	const rows = 50_000
+	input := batch.NewWithSize(1)
+	value := make([]byte, 1<<20)
+	vec, err := vector.NewConstBytes(types.T_varchar.ToType(), value, rows, proc.Mp())
+	require.NoError(t, err)
+	input.Vecs[0] = vec
+	input.SetRowCount(rows)
+	defer input.Clean(proc.Mp())
+
+	budget := process.MustNewHashBuildBudget(1<<30, 1<<30)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	require.Equal(t, 2*rows, hb.Batches.RowCount())
+	require.Len(t, hb.Batches.Buf, 13)
+	hb.FreeHashMapAndBatches(proc)
+	require.Zero(t, generation.Used())
+}
+
+func TestCopyBuildBatchManyExactSegmentsAvoidsFalseAdmission(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	const rows = 64 * colexec.DefaultBatchSize
+	input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, rows, proc.Mp())
+	defer input.Clean(proc.Mp())
+
+	destination, err := projectedNewDestinationBytes(input, 0, input.RowCount())
+	require.NoError(t, err)
+	metadata, ok := retainedMetadataAllowance(input)
+	require.True(t, ok)
+	budgetCap := 2*(destination+metadata) + uint64(512<<10)
+	budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	require.LessOrEqual(t, generation.Used(), budgetCap)
+	hb.FreeHashMapAndBatches(proc)
+	require.Zero(t, generation.Used())
+}
+
+func TestCopyBuildBatchSharedVarlenaRejectsBeforeAllocation(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	const rows = 50_000
+	value := make([]byte, 1<<10)
+	constVec, err := vector.NewConstBytes(types.T_varchar.ToType(), value, rows, proc.Mp())
+	require.NoError(t, err)
+	defer constVec.Free(proc.Mp())
+
+	flat := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, flat.UnionBatch(constVec, 0, rows, nil, proc.Mp()))
+	require.False(t, flat.IsConst())
+	require.Equal(t, len(value), len(flat.GetArea()))
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = flat
+	input.SetRowCount(rows)
+	defer input.Clean(proc.Mp())
+
+	const budgetCap = uint64(10 << 20)
+	budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	projected, err := hb.projectedBatchCopyBytes(input)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, projected, uint64(rows*len(value)))
+	err = hb.copyBuildBatch(input, proc)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.Empty(t, hb.Batches.Buf)
+	require.Zero(t, generation.Used())
+}
+
+func TestCopyBuildBatchWholeSharedVarlenaAvoidsFalseAdmission(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	const rows = colexec.DefaultBatchSize
+	value := make([]byte, 1<<10)
+	constVec, err := vector.NewConstBytes(types.T_varchar.ToType(), value, rows, proc.Mp())
+	require.NoError(t, err)
+	defer constVec.Free(proc.Mp())
+
+	flat := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, flat.UnionBatch(constVec, 0, rows, nil, proc.Mp()))
+	require.False(t, flat.IsConst())
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = flat
+	input.SetRowCount(rows)
+	defer input.Clean(proc.Mp())
+
+	const budgetCap = uint64(2 << 20)
+	budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	require.LessOrEqual(t, generation.Used(), budgetCap)
+	hb.FreeHashMapAndBatches(proc)
+	require.Zero(t, generation.Used())
+}
+
+func TestReserveBuildAuxChargesOneRetainedCopy(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, colexec.DefaultBatchSize, proc.Mp())
+	defer input.Clean(proc.Mp())
+
+	var hb HashmapBuilder
+	hb.Batches.Buf = []*batch.Batch{input}
+	hb.InputBatchRowCount = input.RowCount()
+	retained := batchesAllocated(hb.Batches.Buf)
+	const iteratorScratch = uint64(640 << 10)
+	want := retained + (retained+3)/4 + uint64(input.RowCount())*64 + iteratorScratch
+
+	budget := process.MustNewHashBuildBudget(want, want)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	hb.setBudget(generation)
+	require.NoError(t, hb.reserveBuildAux(true))
+	require.Equal(t, want, generation.Used())
+	hb.releaseReservations()
+	require.Zero(t, generation.Used())
+	// The batch belongs to the test rather than batchReservations.
+	hb.Batches.Buf = nil
+}
+
+func TestReserveUniqueAppendOverlapChargesReplacedCapacity(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	values := make([]string, 4_096)
+	for i := range values {
+		values[i] = strings.Repeat("x", 1_024)
+	}
+	dst := testutil.MakeVarcharVector(values, nil, proc.Mp())
+	defer dst.Free(proc.Mp())
+	extraArea := cap(dst.GetArea()) - len(dst.GetArea()) + 1
+	src := testutil.MakeVarcharVector([]string{strings.Repeat("y", extraArea)}, nil, proc.Mp())
+	defer src.Free(proc.Mp())
+
+	want := uint64(cap(dst.GetData()) + cap(dst.GetArea()))
+	const budgetCap = uint64(64 << 20)
+	budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	hb := HashmapBuilder{
+		budget:         generation,
+		UniqueJoinKeys: []*vector.Vector{dst},
+	}
+	require.NoError(t, hb.reserveBuildAux(true))
+	areaBytes, err := uniqueAppendAreaBytes(src, 0, 1, nil)
+	require.NoError(t, err)
+	token, err := hb.reserveUniqueAppendOverlap(dst, 1, areaBytes)
+	require.NoError(t, err)
+	require.NotNil(t, token)
+	require.Equal(t, want, token.Size())
+	token.Release()
+	require.Equal(t, hb.auxReservation.Size(), generation.Used())
+	hb.releaseReservations()
+	require.Zero(t, generation.Used())
+
+	largeValue := strings.Repeat("z", 100)
+	selected := testutil.MakeVarcharVector([]string{"a", largeValue}, nil, proc.Mp())
+	defer selected.Free(proc.Mp())
+	selectedArea, err := uniqueAppendAreaBytes(selected, 0, 1, []int64{0})
+	require.NoError(t, err)
+	require.Zero(t, selectedArea)
+	selectedArea, err = uniqueAppendAreaBytes(selected, 0, 1, []int64{1})
+	require.NoError(t, err)
+	require.Equal(t, len(largeValue), selectedArea)
+	_, err = uniqueAppendAreaBytes(selected, -1, 1, nil)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	_, err = uniqueAppendAreaBytes(selected, 0, 1, []int64{int64(selected.Length())})
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	_, err = uniqueAppendAreaBytes(selected, 0, 2, []int64{0})
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+
+	fixed := testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	defer fixed.Free(proc.Mp())
+	selectedArea, err = uniqueAppendAreaBytes(fixed, math.MaxInt, math.MaxInt, nil)
+	require.NoError(t, err)
+	require.Zero(t, selectedArea)
+
+	constValue, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(largeValue), 2, proc.Mp())
+	require.NoError(t, err)
+	defer constValue.Free(proc.Mp())
+	selectedArea, err = uniqueAppendAreaBytes(constValue, 0, 2, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2*len(largeValue), selectedArea)
+
+	noBudget := HashmapBuilder{}
+	token, err = noBudget.reserveUniqueAppendOverlap(dst, 1, 1)
+	require.NoError(t, err)
+	require.Nil(t, token)
+	token, err = hb.reserveUniqueAppendOverlap(nil, 1, 1)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	token, err = hb.reserveUniqueAppendOverlap(dst, -1, 1)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	token, err = hb.reserveUniqueAppendOverlap(dst, 1, -1)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+}
+
+func TestUniqueAppendBudgetIncludesDeadAreaCopiedByUnionBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	src := testutil.MakeVarcharVector(
+		[]string{"inline", strings.Repeat("d", 128<<10)}, nil, proc.Mp())
+	defer src.Free(proc.Mp())
+	// SetLength leaves the second value's area allocation behind. The sole live
+	// row is inline, but UnionBatch's whole-vector fast path copies all of area.
+	src.SetLength(1)
+	liveArea, err := uniqueAppendAreaBytes(src, 0, 1, nil)
+	require.NoError(t, err)
+	require.Zero(t, liveArea)
+	unionArea, err := unionBatchAreaBytes(src, 0, 1)
+	require.NoError(t, err)
+	require.Equal(t, len(src.GetArea()), unionArea)
+	require.Greater(t, unionArea, 0)
+
+	dst := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	defer dst.Free(proc.Mp())
+	const mandatoryAux = uint64(640 << 10)
+	budget := process.MustNewHashBuildBudget(mandatoryAux, mandatoryAux)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	hb := HashmapBuilder{
+		budget:         generation,
+		UniqueJoinKeys: []*vector.Vector{dst},
+	}
+	require.NoError(t, hb.reserveBuildAux(true))
+
+	_, err = hb.reserveUniqueAppendOverlap(dst, 1, unionArea)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.Zero(t, dst.Length())
+	require.Zero(t, dst.Allocated(),
+		"admission must fail before UnionBatch allocates copied dead area")
+
+	hb.releaseReservations()
+	require.Zero(t, generation.Used())
+	generation.Close()
+}
+
 func TestCleanCopiedBatchReleasesCoalescedIngressReservations(t *testing.T) {
 	const budgetCap = uint64(4 << 20)
 	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
@@ -200,23 +991,14 @@ func TestCleanCopiedBatchReleasesCoalescedIngressReservations(t *testing.T) {
 	hb.setBudget(generation)
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
-	var emergencyNeed uint64
 	for range 2 {
 		input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, colexec.DefaultBatchSize/2, proc.Mp())
-		if emergencyNeed == 0 {
-			emergencyNeed, err = spillRetainedBudgetBytes(input)
-			require.NoError(t, err)
-		}
 		require.NoError(t, hb.copyBuildBatch(input, proc))
 		input.Clean(proc.Mp())
 	}
 	require.Len(t, hb.Batches.Buf, 1, "small ingress batches should coalesce")
 	require.Len(t, hb.batchReservations, 2, "reservations follow ingress, not physical batches")
 	require.Greater(t, generation.Used(), uint64(0))
-	physicalNeed, err := spillScratchBudgetBytes(hb.Batches.Buf[0], true)
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, emergencyNeed, physicalNeed)
-
 	require.NoError(t, hb.CleanCopiedBatchAt(0, proc))
 	require.Empty(t, hb.Batches.Buf)
 	require.Empty(t, hb.batchReservations)
@@ -319,20 +1101,13 @@ func TestSpillExpressionHashKeyUsesBoundedAdmission(t *testing.T) {
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	ctr.hashmapBuilder.setBudget(generation)
-	expr := &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_int32)},
-		Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
-			newExpr(0, types.T_int32.ToType()),
-			{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 2}}}},
-		}}},
-	}
-	ctr.hashmapBuilder.keyExprs = []*plan.Expr{expr}
-	token, err := ctr.reserveSpillExpressionPeak(proc, 8192)
+	expr := makeExpressionLeaseTestExpr(t, proc)
+	_, err = ctr.initSpillExprExecs(proc, []*plan.Expr{expr})
 	require.NoError(t, err)
-	require.NotNil(t, token)
-	require.Positive(t, token.Size())
-	require.Equal(t, token.Size(), generation.Used())
-	token.Release()
+	require.NoError(t, ctr.spillExprLease.Run(proc, 8192, func(_ int) error { return nil }))
+	require.Positive(t, ctr.spillExprLease.Reserved())
+	require.Equal(t, ctr.spillExprLease.Reserved(), generation.Used())
+	ctr.freeSpillExprExecs()
 	require.Zero(t, generation.Used())
 }
 
@@ -547,6 +1322,48 @@ func TestGetJoinMapTransfersGroupSels(t *testing.T) {
 	hb.Free(proc)
 	jm.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestDedupUpdateBuildGroupsNullKeysSeparately(t *testing.T) {
+	var hb HashmapBuilder
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	hb.IsDedup = true
+	hb.OnDuplicateAction = plan.Node_UPDATE
+	defer func() {
+		hb.Reset(proc, true)
+		hb.Free(proc)
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
+
+	rows := hashmap.UnitLimit * 2
+	keys := make([]int32, rows)
+	nulls := make([]uint64, hashmap.UnitLimit)
+	for i := 0; i < hashmap.UnitLimit; i++ {
+		keys[i] = int32(i + 1)
+		nulls[i] = uint64(hashmap.UnitLimit + i)
+	}
+	keyVec := testutil.MakeInt32Vector(keys, nulls, proc.Mp())
+	bat := batch.New([]string{"id"})
+	bat.SetVector(0, keyVec)
+	bat.SetRowCount(rows)
+	require.NoError(t, hb.Batches.CopyIntoBatches(bat, proc))
+	hb.InputBatchRowCount = bat.RowCount()
+	bat.Clean(proc.Mp())
+
+	require.NoError(t, hb.BuildHashmap(false, true, false, proc))
+	require.Equal(t, uint64(hashmap.UnitLimit), hb.GetGroupCount())
+
+	nullRows := hb.Sels.Get(0)
+	require.Len(t, nullRows, hashmap.UnitLimit)
+	for i, row := range nullRows {
+		require.Equal(t, int32(hashmap.UnitLimit+i), row)
+	}
+	for group := 1; group <= hashmap.UnitLimit; group++ {
+		require.Equal(t, []int32{int32(group - 1)}, hb.Sels.Get(int32(group)))
+	}
 }
 
 func TestHashMapAllocAndFree(t *testing.T) {

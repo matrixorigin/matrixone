@@ -57,6 +57,9 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	if err != nil {
 		return nil, err
 	}
+	if err = validateUpdateTargetSubqueries(ctx, stmt, tblInfo.objRef, tblInfo.tableDefs); err != nil {
+		return nil, err
+	}
 
 	// A synchronously-maintained FULLTEXT/IVF index keys its hidden table(s) by the source
 	// primary key but is updated inline; an UPDATE that changes a primary key column would
@@ -224,8 +227,8 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 						return err
 					}
 				} else {
-					lastNode.ProjectList[pos], err = builder.forceAssignmentCastExpr(
-						posExpr, col.Typ, isIgnore)
+					lastNode.ProjectList[pos], err = builder.forceProjectedAssignmentCastExpr(
+						posExpr, posExpr, col.Typ, isIgnore)
 					if err != nil {
 						return err
 					}
@@ -258,8 +261,8 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 						return err
 					}
 				} else {
-					lastNode.ProjectList[pos], err = builder.forceAssignmentCastExpr(
-						lastNode.ProjectList[pos], col.Typ, isIgnore)
+					lastNode.ProjectList[pos], err = builder.forceProjectedAssignmentCastExpr(
+						lastNode.ProjectList[pos], lastNode.ProjectList[pos], col.Typ, isIgnore)
 					if err != nil {
 						return err
 					}

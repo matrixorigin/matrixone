@@ -150,10 +150,6 @@ var (
 	updateMoMergeSettings                        = `update mo_catalog.mo_merge_settings set tid = %v where account_id = %v and tid = %v;`
 )
 
-var (
-	dropTableBeforeDropDatabase = "drop table if exists `%v`.`%v`;"
-)
-
 // genInsertIndexTableSql: Generate an insert statement for inserting data into the index table
 func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string, isUnique bool) (string, error) {
 	// insert data into index table

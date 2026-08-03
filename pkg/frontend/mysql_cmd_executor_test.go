@@ -85,6 +85,88 @@ func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
 	return ctx, stubs
 }
 
+func TestDoComQueryParseErrorReplacesPreviousDiagnostics(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	ses.appendErrorDiagnostic(1000, "stale diagnostic marker")
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+
+	err := doComQuery(ses, execCtx, &UserInput{sql: "select from"})
+	require.Error(t, err)
+	// sendErrPacket records the final client-facing error after doComQuery
+	// returns. Mirror that protocol step here so this test exercises the same
+	// diagnostics lifecycle without opening a network connection.
+	ses.appendErrorDiagnostic(1064, err.Error())
+
+	info := ses.diagnosticsSnapshot()
+	require.Equal(t, 1, info.length())
+	require.Equal(t, []uint16{1064}, info.codes)
+	require.NotContains(t, info.msgs, "stale diagnostic marker")
+}
+
+func TestDoComQueryPrepareMultiReplacesPreviousDiagnostics(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	ses.SetCmd(COM_STMT_PREPARE)
+	ses.appendErrorDiagnostic(1000, "stale diagnostic marker")
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+
+	err := doComQuery(ses, execCtx, &UserInput{sql: "prepare __mo_stmt_1 from select 1; select 2"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "prepare multi statements")
+	ses.appendErrorDiagnostic(1235, err.Error())
+
+	info := ses.diagnosticsSnapshot()
+	require.Equal(t, 1, info.length())
+	require.Equal(t, []uint16{1235}, info.codes)
+	require.NotContains(t, info.msgs, "stale diagnostic marker")
+}
+
+func TestResetDiagnosticsForStatementLifecycle(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	execCtx := &ExecCtx{}
+	input := &UserInput{}
+
+	ses.appendErrorDiagnostic(1000, "previous error")
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.ShowWarnings{})
+	require.Equal(t, 1, ses.diagnosticsSnapshot().length())
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.ShowErrors{})
+	require.Equal(t, 1, ses.diagnosticsSnapshot().length())
+
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.Select{})
+	require.Zero(t, ses.diagnosticsSnapshot().length())
+
+	ses.appendErrorDiagnostic(1001, "internal error")
+	input.isInternalInput = true
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.ShowWarnings{})
+	require.Equal(t, 1, ses.diagnosticsSnapshot().length())
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.Select{})
+	require.Equal(t, 1, ses.diagnosticsSnapshot().length())
+	input.isInternalInput = false
+
+	execCtx.inMigration = true
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.Select{})
+	require.Equal(t, 1, ses.diagnosticsSnapshot().length())
+	execCtx.inMigration = false
+
+	ses.ReplaceDerivedStmt(true)
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.Select{})
+	require.Equal(t, 1, ses.diagnosticsSnapshot().length())
+	ses.ReplaceDerivedStmt(false)
+
+	snapshot := ses.diagnosticsSnapshot()
+	snapshot.codes[0] = 2000
+	require.Equal(t, uint16(1001), ses.diagnosticsSnapshot().codes[0])
+}
+
 func TestRecordStatementResetsDivByZeroErrorMode(t *testing.T) {
 	ctx := context.Background()
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
@@ -1201,6 +1283,41 @@ func Test_GetComputationWrapper(t *testing.T) {
 	})
 }
 
+func TestGetComputationWrapperBypassesCacheForSetExpression(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sysVars := make(map[string]interface{})
+	for name, sysVar := range gSysVarsDefs {
+		sysVars[name] = sysVar.Default
+	}
+	ses := &Session{
+		planCache: newPlanCache(1),
+		feSessionImpl: feSessionImpl{
+			gSysVars: &SystemVariables{mp: sysVars},
+		},
+	}
+	cachedStmt := &tree.Select{}
+	inputStmt := &tree.Select{}
+	input := &UserInput{
+		stmt:            inputStmt,
+		isInternalInput: true,
+		isSetExpression: true,
+	}
+	input.genHash()
+	ses.cachePlan(input.getHash(), []tree.Statement{cachedStmt}, []*plan0.Plan{{}})
+
+	ctrl := gomock.NewController(t)
+	execCtx := newTestExecCtx(context.Background(), ctrl)
+	execCtx.ses = ses
+	execCtx.input = input
+
+	cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+	require.NoError(t, err)
+	require.Len(t, cws, 1)
+	require.Same(t, inputStmt, cws[0].GetAst())
+	require.Nil(t, cws[0].Plan())
+	require.True(t, ses.isCached(input.getHash()), "bypass must not disturb unrelated cache state")
+}
+
 func TestGetComputationWrapperKeepsSchedulingSQLPerStatement(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -1742,6 +1859,107 @@ func Test_HandlePrepareStmt(t *testing.T) {
 		_, err := handlePrepareStmt(ses, ec, stmt, "Prepare stmt1 from select 1, 2")
 		return err
 	})
+}
+
+func TestFailedPrepareReplacementRemovesPreviousStatement(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+
+	testCases := []struct {
+		name      string
+		stmt      tree.Statement
+		sqlOfStmt string
+	}{
+		{
+			name:      "statement",
+			stmt:      tree.NewPrepareStmt("stmt1", &tree.Select{}),
+			sqlOfStmt: "select 1",
+		},
+		{
+			name: "string",
+			stmt: tree.NewPrepareString("stmt1", "select from"),
+		},
+		{
+			name: "variable",
+			stmt: tree.NewPrepareVar(
+				"stmt1",
+				tree.NewVarExpr("missing_prepare_sql", false, false, nil),
+			),
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			previous := &PrepareStmt{ParamTypes: []byte{1}}
+			require.NoError(t, ses.SetPrepareStmt(ctx, "stmt1", previous))
+			execCtx := &ExecCtx{
+				reqCtx:    ctx,
+				ses:       ses,
+				stmt:      testCase.stmt,
+				sqlOfStmt: testCase.sqlOfStmt,
+			}
+			removePrepareStmtForReplacement(ses, testCase.stmt)
+			_, err := execInFrontend(ses, execCtx)
+			require.Error(t, err)
+			require.Nil(t, previous.ParamTypes)
+
+			_, err = ses.GetPrepareStmt(ctx, "stmt1")
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestPrepareReplacementRemovesPreviousStatementBeforeTxnCheck(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+
+	testCases := []struct {
+		name        string
+		stmt        tree.Statement
+		txnCheckErr bool
+	}{
+		{
+			name: "statement",
+			stmt: tree.NewPrepareStmt(
+				"StMt1",
+				&tree.Select{},
+			),
+		},
+		{
+			name:        "string",
+			stmt:        tree.NewPrepareString("StMt1", "select from"),
+			txnCheckErr: true,
+		},
+		{
+			name: "variable",
+			stmt: tree.NewPrepareVar(
+				"StMt1",
+				tree.NewVarExpr("missing_prepare_sql", false, false, nil),
+			),
+			txnCheckErr: true,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			previous := &PrepareStmt{ParamTypes: []byte{1}}
+			require.NoError(t, ses.SetPrepareStmt(ctx, "stmt1", previous))
+
+			removePrepareStmtForReplacement(ses, testCase.stmt)
+			err := canExecuteStatementInUncommittedTransaction(ctx, ses, testCase.stmt)
+			if testCase.txnCheckErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			require.Nil(t, previous.ParamTypes)
+			_, err = ses.GetPrepareStmt(ctx, "stmt1")
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestHandlePrepareStmtNameContainingFrom(t *testing.T) {
@@ -2379,6 +2597,7 @@ func Test_ExecRequestStmtExecuteErrorClearsPreparedBinaryState(t *testing.T) {
 
 	ses := newTestSession(t, ctrl)
 	ec := newTestExecCtx(ctx, ctrl)
+	ses.appendErrorDiagnostic(1000, "stale diagnostic marker")
 	stmtID := uint32(321)
 	stmtName := getPrepareStmtName(stmtID)
 	st := tree.NewPrepareString(tree.Identifier(stmtName), "select ?, ?")
@@ -2420,6 +2639,7 @@ func Test_ExecRequestStmtExecuteErrorClearsPreparedBinaryState(t *testing.T) {
 	require.Equal(t, ErrorResponse, resp.category)
 	require.Nil(t, prepareStmt.params)
 	require.Empty(t, prepareStmt.getFromSendLongData)
+	require.Zero(t, ses.diagnosticsSnapshot().length())
 }
 
 func Test_CMD_FIELD_LIST(t *testing.T) {
@@ -3454,6 +3674,151 @@ func TestSerializePlanToJson(t *testing.T) {
 		require.Equal(t, int64(0), stats.BytesScan)
 		t.Logf("SQL plan to json : %s\n", string(json))
 	}
+}
+
+func TestPreparedSetExpressionPlanModeIsExplicit(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select ? + 1 from dual", 1)
+	require.NoError(t, err)
+
+	_, err = buildPlanWithPrepareMode(
+		ctx, nil, plan.NewEmptyCompilerContext(), stmt, false)
+	require.ErrorContains(t, err, "only prepare statement can use ? expr")
+
+	preparedPlan, err := buildPlanWithPrepareMode(
+		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true)
+	require.NoError(t, err)
+	require.True(t, preparedPlan.GetIsPrepare())
+	require.Equal(t, []int32{0}, queryParamPositions(preparedPlan.GetQuery()))
+}
+
+func TestPreparedSetExpressionPlanKeepsGlobalParserOrdinal(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select ?, ? from dual", 1)
+	require.NoError(t, err)
+	selectStmt := stmt.(*tree.Select)
+	clause := selectStmt.Select.(*tree.SelectClause)
+	secondParam := clause.Exprs[1].Expr.(*tree.ParamExpr)
+	require.Equal(t, 2, secondParam.Offset)
+	clause.Exprs = clause.Exprs[1:]
+
+	preparedPlan, err := buildPlanWithPrepareMode(
+		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true)
+	require.NoError(t, err)
+	require.Equal(t, []int32{1}, queryParamPositions(preparedPlan.GetQuery()))
+	require.Equal(t, 2, secondParam.Offset, "planning must not mutate the retained SET AST")
+}
+
+func TestPreparedSetExpressionPlanNormalizesAggregateAndWindowParams(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	for _, tc := range []struct {
+		sql  string
+		want []int32
+	}{
+		{
+			sql:  "select sum(cast(? as signed)) from dual",
+			want: []int32{0},
+		},
+		{
+			sql:  "select max(1) from dual group by cast(? as signed)",
+			want: []int32{0},
+		},
+		{
+			sql: "select sum(cast(? as signed)) over (" +
+				"partition by cast(? as signed) order by cast(? as signed)) from dual",
+			want: []int32{0, 1, 2},
+		},
+	} {
+		stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, tc.sql, 1)
+		require.NoError(t, err)
+		preparedPlan, err := buildPlanWithPrepareMode(
+			ctx, nil, plan.NewEmptyCompilerContext(), stmt, true)
+		require.NoError(t, err)
+		require.ElementsMatch(t, tc.want, queryParamPositions(preparedPlan.GetQuery()))
+	}
+}
+
+func TestPreparedSetExpressionRetryKeepsGlobalParserOrdinal(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select ?, ? from dual", 1)
+	require.NoError(t, err)
+	selectStmt := stmt.(*tree.Select)
+	clause := selectStmt.Select.(*tree.SelectClause)
+	secondParam := clause.Exprs[1].Expr.(*tree.ParamExpr)
+	clause.Exprs = clause.Exprs[1:]
+
+	retryPlan, err := buildPlanForCompileRetry(
+		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true)
+	require.NoError(t, err)
+	require.Equal(t, []int32{1}, queryParamPositions(retryPlan.GetQuery()))
+	require.Equal(t, 2, secondParam.Offset)
+}
+
+func queryParamPositions(query *plan0.Query) []int32 {
+	var positions []int32
+	var visitExpr func(*plan0.Expr)
+	visitExpr = func(expr *plan0.Expr) {
+		if expr == nil {
+			return
+		}
+		if param := expr.GetP(); param != nil {
+			positions = append(positions, param.Pos)
+		}
+		if fn := expr.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				visitExpr(arg)
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				visitExpr(item)
+			}
+		}
+		if window := expr.GetW(); window != nil {
+			visitExpr(window.WindowFunc)
+			for _, item := range window.PartitionBy {
+				visitExpr(item)
+			}
+			for _, order := range window.OrderBy {
+				visitExpr(order.Expr)
+			}
+			if frame := window.Frame; frame != nil {
+				if frame.Start != nil {
+					visitExpr(frame.Start.Val)
+				}
+				if frame.End != nil {
+					visitExpr(frame.End.Val)
+				}
+			}
+		}
+	}
+	for _, node := range query.GetNodes() {
+		for _, expr := range node.GetProjectList() {
+			visitExpr(expr)
+		}
+		for _, expr := range node.GetFilterList() {
+			visitExpr(expr)
+		}
+		for _, expr := range node.GetGroupBy() {
+			visitExpr(expr)
+		}
+		for _, expr := range node.GetAggList() {
+			visitExpr(expr)
+		}
+		for _, expr := range node.GetWinSpecList() {
+			visitExpr(expr)
+		}
+	}
+	return positions
+}
+
+func TestPreparedSetExpressionDispatchIsExplicit(t *testing.T) {
+	direct := &ExecCtx{cw: &TxnComputationWrapper{}}
+	prepared := &ExecCtx{cw: &TxnComputationWrapper{ifIsExeccute: true}}
+
+	require.False(t, preparedSetExpression(direct))
+	require.True(t, preparedSetExpression(prepared))
+	require.False(t, preparedSetExpression(&ExecCtx{}))
 }
 
 func TestMarshalPlanHandlerSanitizesNonFinitePlanStats(t *testing.T) {
@@ -4833,6 +5198,23 @@ func Test_StatementClassify(t *testing.T) {
 	}
 }
 
+func TestDataBranchDiffAndMergeAllowExplicitTransaction(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			txnHandler: &TxnHandler{optionBits: OPTION_BEGIN},
+		},
+	}
+
+	for _, stmt := range []tree.Statement{
+		&tree.DataBranchDiff{},
+		&tree.DataBranchMerge{},
+	} {
+		allowed, err := statementCanBeExecutedInUncommittedTransaction(context.Background(), ses, stmt)
+		require.NoError(t, err)
+		require.True(t, allowed)
+	}
+}
+
 func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 	sid := ""
 	runtime.RunTest(
@@ -5256,6 +5638,7 @@ func Test_ExecRequest_SidecarSuccess(t *testing.T) {
 	require.NoError(t, err)
 	ses.SetDatabaseName("testdb")
 	setRowCount(ses, ses.GetProc(), 7)
+	ses.appendErrorDiagnostic(1000, "stale diagnostic marker")
 
 	ec := newTestExecCtx(ctx, ctrl)
 	req := &Request{
@@ -5269,6 +5652,7 @@ func Test_ExecRequest_SidecarSuccess(t *testing.T) {
 	assert.Equal(t, ResultResponse, resp.category)
 	assert.Equal(t, int64(-1), ses.GetLastAffectedRows())
 	assert.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+	assert.Zero(t, ses.diagnosticsSnapshot().length())
 }
 
 func Test_ExecRequest_SidecarError(t *testing.T) {
@@ -5293,6 +5677,7 @@ func Test_ExecRequest_SidecarError(t *testing.T) {
 	require.NoError(t, err)
 	ses.SetDatabaseName("testdb")
 	setRowCount(ses, ses.GetProc(), 7)
+	ses.appendErrorDiagnostic(1000, "stale diagnostic marker")
 
 	ec := newTestExecCtx(ctx, ctrl)
 	req := &Request{
@@ -5307,6 +5692,9 @@ func Test_ExecRequest_SidecarError(t *testing.T) {
 	assert.Equal(t, ErrorResponse, resp.category)
 	assert.Equal(t, int64(-1), ses.GetLastAffectedRows())
 	assert.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+	// Sending the response records the current sidecar error later; ExecRequest
+	// must first discard diagnostics from the preceding statement.
+	assert.Zero(t, ses.diagnosticsSnapshot().length())
 }
 
 func TestExecRequestRewriteFailureMarksRowCountFailed(t *testing.T) {
@@ -5321,6 +5709,7 @@ func TestExecRequestRewriteFailureMarksRowCountFailed(t *testing.T) {
 			ses.rewriteEnabled.Store(true)
 			ses.ruleCache = map[string]string{}
 			setRowCount(ses, ses.GetProc(), 7)
+			ses.appendErrorDiagnostic(1000, "stale diagnostic marker")
 
 			ec := newTestExecCtx(ctx, ctrl)
 			req := &Request{
@@ -5333,6 +5722,7 @@ func TestExecRequestRewriteFailureMarksRowCountFailed(t *testing.T) {
 			assert.Equal(t, ErrorResponse, resp.category)
 			assert.Equal(t, int64(-1), ses.GetLastAffectedRows())
 			assert.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+			assert.Zero(t, ses.diagnosticsSnapshot().length())
 		})
 	}
 }
@@ -6388,7 +6778,7 @@ func TestRecordSessionDDL(t *testing.T) {
 	}, assert.AnError)
 	require.Equal(t, uint64(0), ses.getDDLVersion())
 
-	record(&tree.CreateSource{}, &plan0.Plan{
+	record(&tree.CreateTable{}, &plan0.Plan{
 		Plan: &plan0.Plan_Ddl{Ddl: &plan0.DataDefinition{DdlType: plan0.DataDefinition_CREATE_TABLE}},
 	}, nil)
 	require.Equal(t, uint64(1), ses.getDDLVersion())
@@ -6417,7 +6807,7 @@ func TestRecordSessionDDLPropagatesToUpstreamSession(t *testing.T) {
 	backSes.upstream = ses
 
 	recordSessionDDL(backSes, &ExecCtx{
-		stmt: &tree.CreateSource{},
+		stmt: &tree.CreateTable{},
 		cw: &TxnComputationWrapper{plan: &plan0.Plan{
 			Plan: &plan0.Plan_Ddl{Ddl: &plan0.DataDefinition{
 				DdlType: plan0.DataDefinition_CREATE_TABLE,

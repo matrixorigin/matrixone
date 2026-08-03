@@ -94,6 +94,119 @@ func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, alia
 	}
 }
 
+func appendCheckConstraintPlan(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	tableDef *TableDef,
+	lastNodeID int32,
+	inputTag int32,
+	colName2Idx map[string]int32,
+	ignoreMode bool,
+) (int32, error) {
+	if len(tableDef.Checks) == 0 {
+		return lastNodeID, nil
+	}
+	if err := requireCheckConstraintProtocol(builder.GetContext(), builder.compCtx.GetProcess()); err != nil {
+		return 0, err
+	}
+
+	tableColProjList := make([]*plan.Expr, len(tableDef.Cols))
+	for i, col := range tableDef.Cols {
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+		colPos, ok := colName2Idx[tableDef.Name+"."+col.Name]
+		if !ok {
+			return 0, moerr.NewInternalErrorf(
+				builder.GetContext(),
+				"cannot find column %s.%s for check constraint",
+				tableDef.Name,
+				col.Name,
+			)
+		}
+		tableColProjList[i] = &plan.Expr{
+			Typ: col.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: inputTag,
+					ColPos: colPos,
+					Name:   col.Name,
+				},
+			},
+		}
+	}
+
+	filterList := make([]*plan.Expr, 0, len(tableDef.Checks))
+	for _, check := range tableDef.Checks {
+		checkExpr := substituteColRefsInExpr(check.Check, tableColProjList, 0)
+		passExpr, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(),
+			"coalesce",
+			[]*plan.Expr{checkExpr, makePlan2BoolConstExprWithType(true)},
+		)
+		if err != nil {
+			return 0, err
+		}
+		if ignoreMode {
+			filterList = append(filterList, passExpr)
+			continue
+		}
+		errMsg := makePlan2StringConstExprWithType(
+			fmt.Sprintf("Check constraint '%s' is violated", check.Name),
+		)
+		assertExpr, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(),
+			"_check_constraint_assert",
+			[]*plan.Expr{passExpr, errMsg},
+		)
+		if err != nil {
+			return 0, err
+		}
+		filterList = append(filterList, assertExpr)
+	}
+
+	return builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_FILTER,
+		Children:    []int32{lastNodeID},
+		FilterList:  filterList,
+		ProjectList: getProjectionByLastNodeIfAvailable(builder, lastNodeID),
+	}, bindCtx), nil
+}
+
+func requireCheckConstraintProtocol(ctx context.Context, proc *process.Process) error {
+	if proc == nil {
+		return nil
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	if !ok || !valid || version < defines.MORPCVersion7 {
+		return moerr.NewNotSupported(
+			ctx,
+			"CHECK constraints require all CNs to support protocol version 7",
+		)
+	}
+	return nil
+}
+
+func getProjectionByLastNodeIfAvailable(builder *QueryBuilder, lastNodeID int32) []*Expr {
+	visited := make(map[int32]struct{})
+	for {
+		if _, ok := visited[lastNodeID]; ok {
+			return nil
+		}
+		visited[lastNodeID] = struct{}{}
+		lastNode := builder.qry.Nodes[lastNodeID]
+		if len(lastNode.ProjectList) > 0 {
+			return getProjectionByLastNode(builder, lastNodeID)
+		}
+		if len(lastNode.Children) == 0 {
+			return nil
+		}
+		lastNodeID = lastNode.Children[0]
+	}
+}
+
 func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, error) {
 	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, stmt.With, nil, "update")
 	if err != nil {
@@ -623,7 +736,8 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				return false, nil, nil, err
 			}
 		} else {
-			projExpr, err = builder.forceAssignmentCastExpr(projExpr, tableDef.Cols[colIdx].Typ, builder.isInsertIgnore)
+			projExpr, err = builder.forceProjectedAssignmentCastExpr(
+				projExpr, oldProject[i], tableDef.Cols[colIdx].Typ, builder.isInsertIgnore)
 			if err != nil {
 				return false, nil, nil, err
 			}
@@ -1044,6 +1158,15 @@ func forceCastExpr2WithProcess(
 	if targetType.Typ.Id == 0 {
 		return expr, nil
 	}
+	var err error
+	var rewritten bool
+	expr, rewritten, err = rewriteMySQLSpecialTypeDisplayCast(ctx, expr, targetType.Typ)
+	if err != nil {
+		return nil, err
+	}
+	if rewritten {
+		return expr, nil
+	}
 	if isTypedArrayPlanType(&targetType.Typ) {
 		return funcCastForTypedArrayType(ctx, expr, targetType.Typ)
 	}
@@ -1148,8 +1271,209 @@ func (builder *QueryBuilder) forceAssignmentCastExpr(expr *Expr, targetType Type
 	)
 }
 
+func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
+	expr, sourceExpr *Expr,
+	targetType Type,
+	isIgnore bool,
+) (*Expr, error) {
+	var err error
+	var rewritten bool
+	expr, rewritten, err = builder.rewriteProjectedMySQLSpecialTypeDisplayCast(expr, sourceExpr, targetType)
+	if err != nil || rewritten {
+		return expr, err
+	}
+	return builder.forceAssignmentCastExpr(expr, targetType, isIgnore)
+}
+
+func (builder *QueryBuilder) rewriteProjectedMySQLSpecialTypeDisplayCast(expr, sourceExpr *Expr, targetType Type) (*Expr, bool, error) {
+	if builder == nil || expr == nil || sourceExpr == nil {
+		return expr, false, nil
+	}
+	if types.T(targetType.Id).IsInteger() && !isSetPlanType(&targetType) &&
+		builder.isProjectedDisplayValueExpr(expr, isSetDisplayValueExpr, true, nil) {
+		bitmap, ok := builder.materializeProjectedSetBitmap(expr, nil)
+		if !ok {
+			return nil, false, moerr.NewInternalError(builder.GetContext(), "failed to materialize proven SET bitmap projection")
+		}
+		return bitmap, false, nil
+	}
+	if targetType.Id != int32(types.T_json) || sourceExpr.Typ.Id == int32(types.T_enum) {
+		return expr, false, nil
+	}
+	if builder.isProjectedEnumOrSetDisplayValueExpr(sourceExpr, nil) {
+		quoted, err := quoteEnumOrSetDisplayValueAsJSON(builder.GetContext(), expr)
+		return quoted, err == nil, err
+	}
+	return expr, false, nil
+}
+
+func (builder *QueryBuilder) isProjectedEnumOrSetDisplayValueExpr(expr *Expr, visited map[[2]int32]struct{}) bool {
+	return builder.isProjectedDisplayValueExpr(expr, isEnumOrSetDisplayValueExpr, false, visited)
+}
+
+func (builder *QueryBuilder) isProjectedDisplayValueExpr(
+	expr *Expr,
+	isDisplayValue func(*Expr) bool,
+	requireAllSetInputs bool,
+	visited map[[2]int32]struct{},
+) bool {
+	if isDisplayValue(expr) {
+		return true
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return false
+	}
+	nodeID, ok := builder.tag2NodeID[col.RelPos]
+	if !ok {
+		return false
+	}
+	return builder.isProjectedDisplayValueAtNode(nodeID, col.ColPos, isDisplayValue, requireAllSetInputs, visited)
+}
+
+func (builder *QueryBuilder) isProjectedDisplayValueAtNode(
+	nodeID, colPos int32,
+	isDisplayValue func(*Expr) bool,
+	requireAllSetInputs bool,
+	visited map[[2]int32]struct{},
+) bool {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	key := [2]int32{nodeID, colPos}
+	if visited == nil {
+		visited = make(map[[2]int32]struct{})
+	}
+	if _, ok := visited[key]; ok {
+		return false
+	}
+	visited[key] = struct{}{}
+	defer delete(visited, key)
+
+	node := builder.qry.Nodes[nodeID]
+	if colPos < 0 || int(colPos) >= len(node.ProjectList) {
+		return false
+	}
+	switch node.NodeType {
+	case plan.Node_UNION, plan.Node_UNION_ALL,
+		plan.Node_MINUS, plan.Node_MINUS_ALL,
+		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+		if !requireAllSetInputs && node.NodeType != plan.Node_UNION && node.NodeType != plan.Node_UNION_ALL {
+			if len(node.Children) == 0 || node.Children[0] < 0 || int(node.Children[0]) >= len(builder.qry.Nodes) {
+				return false
+			}
+			return builder.isProjectedDisplayValueAtNode(node.Children[0], colPos, isDisplayValue, requireAllSetInputs, visited)
+		}
+		if len(node.Children) == 0 {
+			return false
+		}
+		for _, childID := range node.Children {
+			if !builder.isProjectedDisplayValueAtNode(childID, colPos, isDisplayValue, requireAllSetInputs, visited) {
+				return false
+			}
+		}
+		return true
+	}
+
+	return builder.isProjectedDisplayValueExpr(node.ProjectList[colPos], isDisplayValue, requireAllSetInputs, visited)
+}
+
+// materializeProjectedSetBitmap carries a proven SET bitmap through projection
+// boundaries. Set-operation inputs are materialized at the same hidden position
+// so the node can expose one physical uint64 output. The proof phase above runs
+// first, therefore mixed SET/VARCHAR operations are never mutated here.
+func (builder *QueryBuilder) materializeProjectedSetBitmap(
+	expr *Expr,
+	visited map[[2]int32]struct{},
+) (*Expr, bool) {
+	if bitmap, ok := storedSetBitmapExpr(expr); ok {
+		return bitmap, true
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return expr, false
+	}
+	nodeID, ok := builder.tag2NodeID[col.RelPos]
+	if !ok {
+		return expr, false
+	}
+	return builder.materializeProjectedSetBitmapAtNode(nodeID, col.ColPos, col.RelPos, visited)
+}
+
+func (builder *QueryBuilder) materializeProjectedSetBitmapAtNode(
+	nodeID, colPos, outputTag int32,
+	visited map[[2]int32]struct{},
+) (*Expr, bool) {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return nil, false
+	}
+	key := [2]int32{nodeID, colPos}
+	node := builder.qry.Nodes[nodeID]
+	if colPos < 0 || int(colPos) >= len(node.ProjectList) {
+		return nil, false
+	}
+	bitmapType := plan.Type{Id: int32(types.T_uint64), NotNullable: node.ProjectList[colPos].Typ.NotNullable}
+	if pos, ok := builder.setBitmapByDisplayNode[key]; ok {
+		return GetColExpr(bitmapType, outputTag, pos), true
+	}
+	if visited == nil {
+		visited = make(map[[2]int32]struct{})
+	}
+	if _, ok := visited[key]; ok {
+		return nil, false
+	}
+	visited[key] = struct{}{}
+	defer delete(visited, key)
+
+	if node.NodeType == plan.Node_UNION || node.NodeType == plan.Node_UNION_ALL ||
+		node.NodeType == plan.Node_MINUS || node.NodeType == plan.Node_MINUS_ALL ||
+		node.NodeType == plan.Node_INTERSECT || node.NodeType == plan.Node_INTERSECT_ALL {
+		if len(node.Children) == 0 {
+			return nil, false
+		}
+		pos := int32(len(node.ProjectList))
+		for _, childID := range node.Children {
+			if childID < 0 || int(childID) >= len(builder.qry.Nodes) {
+				return nil, false
+			}
+			child := builder.qry.Nodes[childID]
+			if len(child.BindingTags) == 0 {
+				return nil, false
+			}
+			bitmap, found := builder.materializeProjectedSetBitmapAtNode(childID, colPos, child.BindingTags[0], visited)
+			if !found || bitmap.GetCol() == nil || bitmap.GetCol().ColPos != pos {
+				return nil, false
+			}
+		}
+		leftTag := builder.qry.Nodes[node.Children[0]].BindingTags[0]
+		node.ProjectList = append(node.ProjectList, GetColExpr(bitmapType, leftTag, pos))
+		builder.setBitmapByDisplayNode[key] = pos
+		return GetColExpr(bitmapType, outputTag, pos), true
+	}
+
+	bitmap, found := builder.materializeProjectedSetBitmap(node.ProjectList[colPos], visited)
+	if !found {
+		return nil, false
+	}
+	pos := int32(len(node.ProjectList))
+	node.ProjectList = append(node.ProjectList, bitmap)
+	bitmapType = bitmap.Typ
+	bitmapType.Enumvalues = ""
+	builder.setBitmapByDisplayNode[key] = pos
+	return GetColExpr(bitmapType, outputTag, pos), true
+}
+
 func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
 	if targetType.Id == 0 {
+		return expr, nil
+	}
+	var err error
+	var rewritten bool
+	expr, rewritten, err = rewriteMySQLSpecialTypeDisplayCast(ctx, expr, targetType)
+	if err != nil {
+		return nil, err
+	}
+	if rewritten {
 		return expr, nil
 	}
 	if isTypedArrayPlanType(&targetType) {
@@ -1771,7 +2095,6 @@ func appendPrimaryConstraintPlan(
 						},
 					},
 				}},
-				RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)},
 			}
 
 			if builder.isRestore {
@@ -1792,7 +2115,6 @@ func appendPrimaryConstraintPlan(
 				scanNode.RuntimeFilterProbeList = nil // can not use both
 			} else {
 				tableScanId = builder.appendNode(scanNode, bindCtx)
-				scanNode.Stats.ForceOneCN = true
 			}
 
 			// fuzzy_filter
@@ -1821,8 +2143,18 @@ func appendPrimaryConstraintPlan(
 						},
 					},
 				}
-				fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, scanNode.Stats.TableCnt), buildExpr, false)}
-				recalcStatsByRuntimeFilter(scanNode, fuzzyFilterNode, builder)
+				probeSpec, buildSpec, ok := builder.makeExactRuntimeFilterPair(
+					rfTag,
+					false,
+					GetInFilterCardLimitOnPK(sid, scanNode.Stats.TableCnt),
+					probeExpr,
+					buildExpr,
+					false,
+				)
+				if ok {
+					scanNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
+					fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{buildSpec}
+				}
 			}
 
 			lastNodeId = builder.appendNode(fuzzyFilterNode, bindCtx)
@@ -1874,12 +2206,11 @@ func appendPrimaryConstraintPlan(
 					},
 				}
 				scanNode := &Node{
-					NodeType:               plan.Node_TABLE_SCAN,
-					Stats:                  &plan.Stats{},
-					ObjRef:                 objRef,
-					TableDef:               scanTableDef,
-					ProjectList:            []*Expr{scanPkExpr, scanRowIdExpr},
-					RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)},
+					NodeType:    plan.Node_TABLE_SCAN,
+					Stats:       &plan.Stats{},
+					ObjRef:      objRef,
+					TableDef:    scanTableDef,
+					ProjectList: []*Expr{scanPkExpr, scanRowIdExpr},
 				}
 				rightId := builder.appendNode(scanNode, bindCtx)
 
@@ -1934,17 +2265,32 @@ func appendPrimaryConstraintPlan(
 						},
 					},
 				}
+				probeSpec, buildSpec, hasRuntimeFilter := builder.makeExactRuntimeFilterPair(
+					rfTag,
+					false,
+					GetInFilterCardLimitOnPK(sid, scanNode.Stats.TableCnt),
+					probeExpr,
+					buildExpr,
+					false,
+				)
+				if hasRuntimeFilter {
+					scanNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
+				}
 				joinNode := &plan.Node{
-					NodeType:               plan.Node_JOIN,
-					Children:               []int32{rightId, lastNodeId},
-					JoinType:               plan.Node_RIGHT,
-					IsRightJoin:            true,
-					OnList:                 []*Expr{condExpr},
-					ProjectList:            []*Expr{rowIdExpr, rightRowIdExpr, pkColExpr},
-					RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, scanNode.Stats.TableCnt), buildExpr, false)},
+					NodeType:    plan.Node_JOIN,
+					Children:    []int32{rightId, lastNodeId},
+					JoinType:    plan.Node_RIGHT,
+					IsRightJoin: true,
+					OnList:      []*Expr{condExpr},
+					ProjectList: []*Expr{rowIdExpr, rightRowIdExpr, pkColExpr},
+				}
+				if hasRuntimeFilter {
+					joinNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{buildSpec}
 				}
 				lastNodeId = builder.appendNode(joinNode, bindCtx)
-				recalcStatsByRuntimeFilter(scanNode, joinNode, builder)
+				if hasRuntimeFilter {
+					recalcStatsByRuntimeFilter(scanNode, joinNode, builder)
+				}
 
 				// append agg node.
 				aggGroupBy := []*Expr{

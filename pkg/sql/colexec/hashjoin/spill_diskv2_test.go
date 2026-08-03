@@ -86,8 +86,9 @@ func TestHashJoinSpillDiskV2(t *testing.T) {
 
 	// rebuild via SpillEngine
 	engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
-		BuildKeyExprs: makeKeyExpr(),
-		NeedBatches:   true,
+		BuildKeyExprs:           makeKeyExpr(),
+		NeedsBuildForEmptyProbe: true,
+		NeedBatches:             true,
 	})
 	engine.InitFromSpilledMap([]*os.File{buildFd})
 

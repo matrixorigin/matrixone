@@ -29,6 +29,80 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var errWindowParameterVisit = errors.New("window parameter visit failed")
+
+type failWindowParameterVisitRule struct {
+	failOn int
+	calls  int
+}
+
+func (*failWindowParameterVisitRule) MatchNode(*planpb.Node) bool  { return false }
+func (*failWindowParameterVisitRule) IsApplyExpr() bool            { return true }
+func (*failWindowParameterVisitRule) ApplyNode(*planpb.Node) error { return nil }
+func (r *failWindowParameterVisitRule) ApplyExpr(expr *planpb.Expr) (*planpb.Expr, error) {
+	r.calls++
+	if r.calls == r.failOn {
+		return nil, errWindowParameterVisit
+	}
+	return expr, nil
+}
+
+func TestPrepareRulesTraverseEveryWindowSpecParameter(t *testing.T) {
+	param := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}}}
+	}
+	window := &planpb.Expr{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
+		WindowFunc:  param(5),
+		PartitionBy: []*planpb.Expr{param(3), nil},
+		OrderBy:     []*planpb.OrderBySpec{{Expr: param(4)}, nil},
+		Frame: &planpb.FrameClause{
+			Start: &planpb.FrameBound{Val: param(2)},
+			End:   &planpb.FrameBound{Val: param(1)},
+		},
+	}}}
+
+	get := NewGetParamRule()
+	require.NoError(t, applyRuleToWindowSpec(get, nil))
+	_, err := get.ApplyExpr(window)
+	require.NoError(t, err)
+	require.Equal(t, map[int]int{1: 0, 2: 0, 3: 0, 4: 0, 5: 0}, get.params)
+	get.SetParamOrder()
+
+	_, err = NewResetParamOrderRule(get.params).ApplyExpr(window)
+	require.NoError(t, err)
+	require.Equal(t, []int32{4, 2, 3, 1, 0}, []int32{
+		window.GetW().WindowFunc.GetP().Pos,
+		window.GetW().PartitionBy[0].GetP().Pos,
+		window.GetW().OrderBy[0].Expr.GetP().Pos,
+		window.GetW().Frame.Start.Val.GetP().Pos,
+		window.GetW().Frame.End.Val.GetP().Pos,
+	})
+}
+
+func TestApplyRuleToWindowSpecPropagatesFieldErrors(t *testing.T) {
+	newWindow := func() *planpb.WindowSpec {
+		param := func() *planpb.Expr {
+			return &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{}}}
+		}
+		return &planpb.WindowSpec{
+			WindowFunc:  param(),
+			PartitionBy: []*planpb.Expr{param()},
+			OrderBy:     []*planpb.OrderBySpec{{Expr: param()}},
+			Frame: &planpb.FrameClause{
+				Start: &planpb.FrameBound{Val: param()},
+				End:   &planpb.FrameBound{Val: param()},
+			},
+		}
+	}
+
+	for failOn := 1; failOn <= 5; failOn++ {
+		t.Run("field", func(t *testing.T) {
+			rule := &failWindowParameterVisitRule{failOn: failOn}
+			require.ErrorIs(t, applyRuleToWindowSpec(rule, newWindow()), errWindowParameterVisit)
+		})
+	}
+}
+
 type resolveErrorCompilerContext struct {
 	*MockCompilerContext
 	err error
@@ -217,7 +291,6 @@ func TestCollectPrepareDdlSchemasUsesCloneSourceMetadata(t *testing.T) {
 func TestCollectPrepareDdlSchemasTracksCreateTargetDatabase(t *testing.T) {
 	testCases := []string{
 		"create sequence db1.seq as bigint",
-		"create source db1.src (i int) with (type='kafka')",
 	}
 	for _, sql := range testCases {
 		t.Run(sql, func(t *testing.T) {
@@ -322,23 +395,6 @@ func TestCollectPrepareDdlSchemasCollectsViewQuery(t *testing.T) {
 	require.Equal(t, "v", schemas[1].ObjName)
 }
 
-func TestCollectPrepareDdlSchemasCollectsDynamicTableQuery(t *testing.T) {
-	statements, err := mysql.Parse(
-		context.Background(),
-		"create dynamic table dt as select n_name from nation with (\"type\"='kafka')",
-		1,
-	)
-	require.NoError(t, err)
-
-	schemas, err := collectPrepareDdlSchemas(NewMockCompilerContext(false), statements[0], &planpb.Plan{
-		Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{}},
-	})
-	require.NoError(t, err)
-	require.Len(t, schemas, 2)
-	require.Equal(t, "nation", schemas[0].ObjName)
-	require.Equal(t, "dt", schemas[1].ObjName)
-}
-
 func TestAppendPrepareSchemasDeduplicatesByNameWithoutObjectID(t *testing.T) {
 	schemas := appendPrepareSchemas(nil,
 		&planpb.ObjectRef{SchemaName: "db", ObjName: "tbl"},
@@ -403,10 +459,9 @@ func TestResetPreparePlanCollectsDdlQuerySchemas(t *testing.T) {
 	require.Equal(t, int64(30), schemas[0].Server)
 }
 
-func TestResetPreparePlanCollectsExternalAndSourceScans(t *testing.T) {
+func TestResetPreparePlanCollectsExternalScans(t *testing.T) {
 	for _, nodeType := range []planpb.Node_NodeType{
 		planpb.Node_EXTERNAL_SCAN,
-		planpb.Node_SOURCE_SCAN,
 	} {
 		t.Run(nodeType.String(), func(t *testing.T) {
 			queryPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
@@ -713,6 +768,38 @@ func TestResetPreparePlanPreservesSubscriptionIdentity(t *testing.T) {
 	require.Equal(t, int32(11), schemas[0].GetPubInfo().GetTenantId())
 }
 
+func TestDecrementParamOrdinalRuleTraversesFunctionsAndLists(t *testing.T) {
+	param := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}}}
+	}
+	first := param(1)
+	second := param(3)
+	expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Args: []*planpb.Expr{{
+			Expr: &planpb.Expr_List{List: &planpb.ExprList{
+				List: []*planpb.Expr{first, second},
+			}},
+		}},
+	}}}
+	rule := &decrementParamOrdinalRule{seen: make(map[*planpb.ParamRef]struct{})}
+
+	_, err := rule.ApplyExpr(expr)
+	require.NoError(t, err)
+	require.Equal(t, int32(0), first.GetP().Pos)
+	require.Equal(t, int32(2), second.GetP().Pos)
+
+	_, err = rule.ApplyExpr(first)
+	require.NoError(t, err)
+	require.Equal(t, int32(0), first.GetP().Pos)
+
+	expr.GetF().Args[0].GetList().List = append(
+		expr.GetF().Args[0].GetList().List,
+		param(0),
+	)
+	_, err = rule.ApplyExpr(expr)
+	require.ErrorContains(t, err, "prepared parameter ordinal is not one-based")
+}
+
 func TestResetPreparePlanCollectsHiddenIndexSchemas(t *testing.T) {
 	const hiddenTable = "__mo_index_hidden"
 	mock := NewMockCompilerContext(false)
@@ -758,6 +845,123 @@ func TestResetPreparePlanCollectsHiddenIndexSchemas(t *testing.T) {
 	require.Equal(t, int64(30), schemas[1].Server)
 	require.Equal(t, int64(10), schemas[1].Db)
 	require.Equal(t, int64(20), schemas[1].Obj)
+}
+
+func TestRecordPreparedPluginDependenciesSurvivesScanRemoval(t *testing.T) {
+	const hiddenTable = "__mo_index_hidden"
+	snapshot := &planpb.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
+	}
+	mock := NewMockCompilerContext(false)
+	mock.objects[hiddenTable] = &planpb.ObjectRef{
+		Db:         10,
+		Obj:        20,
+		SchemaName: "db",
+		ObjName:    hiddenTable,
+	}
+	mock.tables[hiddenTable] = &planpb.TableDef{
+		Name: hiddenTable, DbId: 10, TblId: 20, Version: 30,
+	}
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, mock, true, true)
+	scanNode := &planpb.Node{
+		NodeType: planpb.Node_TABLE_SCAN,
+		ObjRef: &planpb.ObjectRef{
+			Db: 1, Obj: 2, SchemaName: "db", ObjName: "src",
+		},
+		TableDef: &planpb.TableDef{
+			Name: "src", DbId: 1, TblId: 2, Version: 3,
+			Indexes: []*planpb.IndexDef{{
+				IndexAlgo:      catalog.MOIndexFullTextAlgo.ToString(),
+				IndexTableName: hiddenTable,
+			}},
+		},
+		ScanSnapshot: snapshot,
+	}
+
+	require.NoError(t, builder.recordPreparedPluginDependencies(scanNode))
+	require.NoError(t, builder.recordPreparedPluginDependencies(scanNode))
+	require.Len(t, builder.qry.GetCatalogDependencies(), 2)
+	require.Equal(t, "src", builder.qry.CatalogDependencies[0].ObjName)
+	require.Equal(t, int64(3), builder.qry.CatalogDependencies[0].Server)
+	require.Equal(t, hiddenTable, builder.qry.CatalogDependencies[1].ObjName)
+	require.Equal(t, int64(30), builder.qry.CatalogDependencies[1].Server)
+
+	encoded, err := builder.qry.Marshal()
+	require.NoError(t, err)
+	var decoded planpb.Query
+	require.NoError(t, decoded.Unmarshal(encoded))
+	require.Equal(t, builder.qry.CatalogDependencies, decoded.CatalogDependencies)
+
+	builder.qry.Steps = []int32{0}
+	builder.qry.Nodes = []*planpb.Node{scanNode}
+	schemas, _, err := ResetPreparePlan(mock, &planpb.Plan{
+		Plan: &planpb.Plan_Query{Query: builder.qry},
+	})
+	require.NoError(t, err)
+	require.Len(t, schemas, 2)
+	require.Equal(t, snapshot, schemas[0].GetSnapshot())
+	require.Equal(t, snapshot, schemas[1].GetSnapshot())
+
+	builder.qry.Nodes = []*planpb.Node{{
+		NodeType: planpb.Node_FUNCTION_SCAN,
+		TableDef: &planpb.TableDef{
+			TblFunc: &planpb.TableFunction{Name: "plugin_search"},
+		},
+	}}
+	schemas, _, err = ResetPreparePlan(mock, &planpb.Plan{
+		Plan: &planpb.Plan_Query{Query: builder.qry},
+	})
+	require.NoError(t, err)
+	require.Len(t, schemas, 2)
+	require.Equal(t, "src", schemas[0].ObjName)
+	require.Equal(t, hiddenTable, schemas[1].ObjName)
+
+	cloned := DeepCopyQuery(builder.qry)
+	require.Equal(t, builder.qry.CatalogDependencies, cloned.CatalogDependencies)
+	require.NotSame(t, builder.qry.CatalogDependencies[0], cloned.CatalogDependencies[0])
+}
+
+func TestResetPreparedSetMergesTransientCatalogDependencies(t *testing.T) {
+	dependency := &planpb.ObjectRef{
+		Db: 10, Obj: 20, SchemaName: "db", ObjName: "__mo_index_hidden", Server: 30,
+	}
+	preparePlan := &planpb.Plan{
+		Plan: &planpb.Plan_Dcl{Dcl: &planpb.DataControl{
+			DclType: planpb.DataControl_SET_VARIABLES,
+			Control: &planpb.DataControl_SetVariables{
+				SetVariables: &planpb.SetVariables{},
+			},
+		}},
+	}
+	transientQuery := &planpb.Query{
+		CatalogDependencies: []*planpb.ObjectRef{dependency},
+	}
+
+	schemas, _, err := resetPreparePlan(
+		NewMockCompilerContext(false), preparePlan, transientQuery)
+	require.NoError(t, err)
+	require.Equal(t, []*planpb.ObjectRef{dependency}, schemas)
+}
+
+func TestRecordPreparedPluginDependenciesIsAtomicOnResolutionFailure(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), true, true)
+	scanNode := &planpb.Node{
+		NodeType: planpb.Node_TABLE_SCAN,
+		ObjRef: &planpb.ObjectRef{
+			Db: 1, Obj: 2, SchemaName: "db", ObjName: "src",
+		},
+		TableDef: &planpb.TableDef{
+			Name: "src", DbId: 1, TblId: 2, Version: 3,
+			Indexes: []*planpb.IndexDef{{
+				IndexAlgo:      catalog.MOIndexFullTextAlgo.ToString(),
+				IndexTableName: "__missing_hidden",
+			}},
+		},
+	}
+
+	require.Error(t, builder.recordPreparedPluginDependencies(scanNode))
+	require.Empty(t, builder.qry.GetCatalogDependencies())
 }
 
 func TestResetPreparePlanResetsWindowParameterOrder(t *testing.T) {
@@ -836,6 +1040,33 @@ func TestResetParamRefRuleReplacesWindowParameters(t *testing.T) {
 	require.Equal(t, int64(12), window.OrderBy[0].Expr.GetLit().GetI64Val())
 	require.Equal(t, int64(13), window.Frame.Start.Val.GetLit().GetI64Val())
 	require.Equal(t, int64(14), window.Frame.End.Val.GetLit().GetI64Val())
+}
+
+func TestResetParamRefRulePreservesAggregateConfig(t *testing.T) {
+	param := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_int64)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	expr, err := BindFuncExprImplByPlanExpr(context.Background(), "abs", []*planpb.Expr{param})
+	require.NoError(t, err)
+	expr.GetF().AggConfig = []byte{1, 2, 3}
+	expr.GetF().AggConfigType = planpb.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER
+
+	rule := NewResetParamRefRule(context.Background(), []*planpb.Expr{
+		makePlan2Int64ConstExprWithType(7),
+	})
+	rewritten, err := rule.ApplyExpr(expr)
+	require.NoError(t, err)
+	require.Equal(t, int64(7), rewritten.GetF().Args[0].GetLit().GetI64Val())
+	require.Equal(t, []byte{1, 2, 3}, rewritten.GetF().AggConfig)
+	require.Equal(
+		t,
+		planpb.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+		rewritten.GetF().AggConfigType,
+	)
+
+	rewritten.GetF().AggConfig[0] = 9
+	require.Equal(t, byte(1), expr.GetF().AggConfig[0])
 }
 
 func TestVisitPlanDeduplicatesAliasedWindowPartitionExpr(t *testing.T) {

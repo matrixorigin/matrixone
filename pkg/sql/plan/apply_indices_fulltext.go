@@ -562,9 +562,6 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 				},
 			},
 		}
-		probeSpec2 := MakeRuntimeFilter(rfTag2, false, 0, DeepCopyExpr(probeExpr2), false)
-		scanNode.RuntimeFilterProbeList = append(scanNode.RuntimeFilterProbeList, probeSpec2)
-
 		buildExpr2 := &plan.Expr{
 			Typ: pkType,
 			Expr: &plan.Expr_Col{
@@ -575,10 +572,21 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			},
 		}
 		const unlimitedInFilterCard = int32(1<<31 - 1)
-		buildSpec2 := MakeRuntimeFilter(rfTag2, false, unlimitedInFilterCard, buildExpr2, false)
-
 		outerJoinNode := builder.qry.Nodes[outerJoinNodeID]
-		outerJoinNode.RuntimeFilterBuildList = append(outerJoinNode.RuntimeFilterBuildList, buildSpec2)
+		probeSpec2, buildSpec2, hasRuntimeFilter := builder.makeExactRuntimeFilterPair(
+			rfTag2,
+			false,
+			unlimitedInFilterCard,
+			probeExpr2,
+			buildExpr2,
+			false,
+		)
+		if hasRuntimeFilter {
+			scanNode.RuntimeFilterProbeList = append(
+				scanNode.RuntimeFilterProbeList, probeSpec2)
+			outerJoinNode.RuntimeFilterBuildList = append(
+				outerJoinNode.RuntimeFilterBuildList, buildSpec2)
+		}
 
 		joinnodeID = outerJoinNodeID
 	} else {
@@ -618,6 +626,9 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	// scanNode.Limit to set up the SORT node, so we don't clear it here.
 	// The caller is responsible for clearing scanNode.Limit/Offset after using it.
 
+	if err := builder.recordPreparedPluginDependencies(scanNode); err != nil {
+		return -1, nil, nil, err
+	}
 	return joinnodeID, ret_filter_node_ids, ret_proj_node_ids, nil
 }
 

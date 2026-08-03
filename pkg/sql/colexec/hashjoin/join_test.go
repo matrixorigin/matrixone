@@ -226,6 +226,51 @@ func TestJoin(t *testing.T) {
 	}
 }
 
+func TestHashJoinPropagatesUnmatchedOutputOOM(t *testing.T) {
+	limited, err := mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	typ := types.T_int32.ToType()
+	tc := newTestCaseWithMPool(
+		t,
+		limited,
+		[]bool{false},
+		[]types.Type{typ},
+		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
+		[][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}},
+	)
+	tc.arg.JoinType = plan.Node_LEFT
+	tc.arg.NonEqCond = nil
+
+	probe := batch.NewWithSize(1)
+	probe.Vecs[0] = testutil.MakeInt32Vector([]int32{2}, nil, limited)
+	probe.SetRowCount(1)
+	resetChildrenWithBatch(tc.arg, probe)
+	build := batch.NewWithSize(1)
+	build.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, limited)
+	build.SetRowCount(1)
+	resetHashBuildChildrenWithBatch(tc.barg, build)
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	_, err = vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+
+	remaining := limited.Cap() - limited.CurrNB()
+	require.Positive(t, remaining)
+	filler, err := limited.Alloc(int(remaining), true)
+	require.NoError(t, err)
+	_, err = vm.Exec(tc.arg, tc.proc)
+	require.ErrorContains(t, err, "mpool out of space")
+	limited.Free(filler)
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.barg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Zero(t, limited.CurrNB())
+}
+
 func TestHashJoinResetAfterEmptyProbe(t *testing.T) {
 	tc := newTestCase(t, []bool{true}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),
@@ -947,7 +992,18 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 }
 
 func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*plan.Expr) joinTestCase {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	return newTestCaseWithMPool(t, mpool.MustNewZero(), flgs, ts, rp, cs)
+}
+
+func newTestCaseWithMPool(
+	t *testing.T,
+	m *mpool.MPool,
+	flgs []bool,
+	ts []types.Type,
+	rp []colexec.ResultPos,
+	cs [][]*plan.Expr,
+) joinTestCase {
+	proc := testutil.NewProcessWithMPool(t, "", m)
 	proc.SetMessageBoard(message.NewMessageBoard())
 	ctx, cancel := context.WithCancel(context.Background())
 	fr, _ := function.GetFunctionByName(ctx, "=", ts)

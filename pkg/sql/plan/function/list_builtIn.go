@@ -783,6 +783,10 @@ var supportedStringBuiltIns = []FuncNew{
 				if inputs[0].Oid.IsMySQLString() && inputs[1].Oid.IsMySQLString() {
 					return newCheckResultWithSuccess(0)
 				}
+			} else if len(inputs) == 3 {
+				if inputs[0].Oid.IsMySQLString() && inputs[1].Oid.IsMySQLString() && inputs[2].Oid.IsMySQLString() {
+					return newCheckResultWithSuccess(1)
+				}
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		},
@@ -790,6 +794,15 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().iLikeFn
+				},
+			},
+			{
+				overloadId: 1,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1960,6 +1973,45 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `onnx_run`
+	{
+		functionId: ONNX_RUN,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				// model as raw varbinary bytes. volatile like load_file: the
+				// model argument may be a datalink URL (see the scheme
+				// coercion note in func_builtin_onnx.go) whose target file can
+				// change, so calls must not be constant-folded at plan time.
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varbinary, types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload) {
+					op := newOpOnnxRun()
+					return op.onnxRun, op.Reset, op.Close
+				},
+			},
+			{
+				// model as a datalink to a file in a stage
+				overloadId: 1,
+				volatile:   true,
+				args:       []types.T{types.T_datalink, types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload) {
+					op := newOpOnnxRun()
+					return op.onnxRun, op.Reset, op.Close
+				},
+			},
+		},
+	},
+
 	// function `starlark`
 	{
 		functionId: STARLARK,
@@ -2377,6 +2429,36 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return LengthUTF8
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_binary},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LengthBinary
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_varbinary},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LengthBinary
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_blob},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LengthBinary
 				},
 			},
 		},
@@ -9819,6 +9901,26 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DatetimeToQuarter
 				},
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_timestamp},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return TimestampToQuarter
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToQuarter
+				},
+			},
 		},
 	},
 
@@ -9901,6 +10003,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return TimestampToDayName
 				},
 			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToDayName
+				},
+			},
 		},
 	},
 
@@ -9942,6 +10054,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return TimestampToMonthName
 				},
 			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToMonthName
+				},
+			},
 		},
 	},
 
@@ -9981,6 +10103,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampToDay
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToDay
 				},
 			},
 		},
@@ -10805,6 +10937,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampToWeekOfYear
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringToWeekOfYear
 				},
 			},
 		},
@@ -12935,6 +13077,29 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `mo_is_legacy_temporary_table`
+	// Used by catalog metadata predicates while pre-marker temporary rows can
+	// remain alive across an asynchronous tenant upgrade.
+	{
+		functionId: MO_IS_LEGACY_TEMPORARY_TABLE,
+		class:      plan.Function_INTERNAL | plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInIsLegacyTemporaryTable
+				},
+			},
+		},
+	},
+
 	// function `internal_char_length`
 	{
 		functionId: INTERNAL_CHAR_LENGTH,
@@ -14061,6 +14226,13 @@ var supportedOthersBuiltIns = []FuncNew{
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 3 {
+				if inputs[0].Oid != types.T_bool || !inputs[1].Oid.IsMySQLString() || !inputs[2].Oid.IsMySQLString() {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
+				return newCheckResultWithSuccess(2)
+			}
+
 			if len(inputs) == 4 {
 				if inputs[0].Oid != types.T_bool || !inputs[1].Oid.IsMySQLString() || !inputs[2].Oid.IsMySQLString() || !inputs[3].Oid.IsMySQLString() {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -14165,7 +14337,87 @@ var supportedOthersBuiltIns = []FuncNew{
 					}
 				},
 			},
+			{
+				overloadId: 2,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
+						checkFlags := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
+						errMsgs := vector.GenerateFunctionStrParameter(parameters[1])
+						errTypes := vector.GenerateFunctionStrParameter(parameters[2])
+						value2, null := errMsgs.GetStrValue(0)
+						if null {
+							return moerr.NewInternalError(proc.Ctx, "the second parameter of assert() should not be null")
+						}
+						errMsg := functionUtil.QuickBytesToStr(value2)
+						value3, null := errTypes.GetStrValue(0)
+						if null {
+							return moerr.NewInternalError(proc.Ctx, "the third parameter of assert() should not be null")
+						}
+						errType := functionUtil.QuickBytesToStr(value3)
+
+						res := vector.MustFunctionResult[bool](result)
+						for i := uint64(0); i < uint64(length); i++ {
+							flag, isNull := checkFlags.GetValue(i)
+							if isNull || !flag {
+								if errType == "fk_no_referenced_row" {
+									return moerr.NewErrFKNoReferencedRow2(proc.Ctx)
+								}
+								return moerr.NewInternalError(proc.Ctx, errMsg)
+							}
+							res.AppendMustValue(true)
+						}
+						return nil
+					}
+				},
+			},
 		},
+	},
+
+	// function `_check_constraint_assert`
+	{
+		functionId: CHECK_CONSTRAINT_ASSERT,
+		class:      plan.Function_INTERNAL | plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{{
+			overloadId: 0,
+			args:       []types.T{types.T_bool, types.T_varchar},
+			retType: func(parameters []types.Type) types.Type {
+				return types.T_bool.ToType()
+			},
+			newOp: func() executeLogicOfOverload {
+				return func(
+					parameters []*vector.Vector,
+					result vector.FunctionResultWrapper,
+					proc *process.Process,
+					length int,
+					_ *FunctionSelectList,
+				) error {
+					checkFlags := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
+					errMsgs := vector.GenerateFunctionStrParameter(parameters[1])
+					value, null := errMsgs.GetStrValue(0)
+					if null {
+						return moerr.NewInternalError(
+							proc.Ctx,
+							"the CHECK constraint error message should not be null",
+						)
+					}
+					errMsg := functionUtil.QuickBytesToStr(value)
+					res := vector.MustFunctionResult[bool](result)
+					for i := uint64(0); i < uint64(length); i++ {
+						flag, isNull := checkFlags.GetValue(i)
+						if isNull || !flag {
+							return moerr.NewConstraintViolation(proc.Ctx, errMsg)
+						}
+						res.AppendMustValue(true)
+					}
+					return nil
+				}
+			},
+		}},
 	},
 
 	// function `isempty`

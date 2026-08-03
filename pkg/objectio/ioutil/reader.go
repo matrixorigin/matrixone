@@ -113,7 +113,7 @@ func (r *BlockReader) LoadColumns(
 	bat = batch.NewWithSize(len(cols))
 	var obj any
 	for i := range cols {
-		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
+		obj, err = objectio.DecodeCached(ioVectors.Entries[i].CachedData)
 		if err != nil {
 			return
 		}
@@ -150,7 +150,7 @@ func (r *BlockReader) LoadSubColumns(
 		bat := batch.NewWithSize(len(cols))
 		var obj any
 		for i := range cols {
-			obj, err = objectio.Decode(ioVectors[idx].Entries[i].CachedData.Bytes())
+			obj, err = objectio.DecodeCached(ioVectors[idx].Entries[i].CachedData)
 			if err != nil {
 				return
 			}
@@ -185,7 +185,7 @@ func (r *BlockReader) LoadOneSubColumns(
 	bat = batch.NewWithSize(len(cols))
 	var obj any
 	for i := range cols {
-		obj, err = objectio.Decode(ioVector.Entries[i].CachedData.Bytes())
+		obj, err = objectio.DecodeCached(ioVector.Entries[i].CachedData)
 		if err != nil {
 			return
 		}
@@ -231,7 +231,7 @@ func (r *BlockReader) LoadAllColumns(
 		bat := batch.NewWithSize(len(idxs))
 		var obj any
 		for i := range idxs {
-			obj, err = objectio.Decode(ioVectors.Entries[y*len(idxs)+i].CachedData.Bytes())
+			obj, err = objectio.DecodeCached(ioVectors.Entries[y*len(idxs)+i].CachedData)
 			if err != nil {
 				return nil, nil, err
 			}

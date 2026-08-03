@@ -1369,9 +1369,9 @@ func typedArrayElementCompatible(spec typedArrayElementSpec, elem bytejson.ByteJ
 	case "text":
 		return elem.Type == bytejson.TpCodeString
 	case "binary", "varbinary":
-		return (elem.Type == bytejson.TpCodeString || elem.Type == bytejson.TpCodeBlob) && jsonBinaryStringFitsWidth(elem, spec.width)
+		return (elem.Type == bytejson.TpCodeString || elem.Type == bytejson.TpCodeBlob || elem.Type == bytejson.TpCodeOpaque || elem.Type == bytejson.TpCodeBit) && jsonBinaryStringFitsWidth(elem, spec.width)
 	case "blob":
-		return elem.Type == bytejson.TpCodeString || elem.Type == bytejson.TpCodeBlob
+		return elem.Type == bytejson.TpCodeString || elem.Type == bytejson.TpCodeBlob || elem.Type == bytejson.TpCodeOpaque || elem.Type == bytejson.TpCodeBit
 	case "date":
 		return elem.Type == bytejson.TpCodeDate || jsonStringParses(elem, func(s string) bool {
 			_, err := types.ParseDateCast(s)
@@ -1442,6 +1442,9 @@ func jsonStringFitsWidth(elem bytejson.ByteJson, width int) bool {
 func jsonBinaryStringFitsWidth(elem bytejson.ByteJson, width int) bool {
 	if width < 0 {
 		return true
+	}
+	if length, ok := bytejson.BinaryJSONPayloadLen(elem); ok {
+		return length <= width
 	}
 	s, err := elem.Unquote()
 	if err != nil {

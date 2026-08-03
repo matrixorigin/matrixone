@@ -727,7 +727,20 @@ func (e *errInfo) push(code uint16, msg string) {
 	e.msgs = append(e.msgs, msg)
 }
 
-func (e *errInfo) length() int {
+func (e *errInfo) reset() {
+	e.codes = e.codes[:0]
+	e.msgs = e.msgs[:0]
+}
+
+func (e *errInfo) snapshot() errInfo {
+	return errInfo{
+		codes:  append([]uint16(nil), e.codes...),
+		msgs:   append([]string(nil), e.msgs...),
+		maxCnt: e.maxCnt,
+	}
+}
+
+func (e errInfo) length() int {
 	return len(e.codes)
 }
 
@@ -1207,10 +1220,29 @@ func (ses *Session) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch, *perf
 	}
 }
 
-func (ses *Session) GetErrInfo() *errInfo {
+func (ses *Session) resetDiagnostics() {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.errInfo
+	if ses.errInfo != nil {
+		ses.errInfo.reset()
+	}
+}
+
+func (ses *Session) appendErrorDiagnostic(code uint16, msg string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo != nil {
+		ses.errInfo.push(code, msg)
+	}
+}
+
+func (ses *Session) diagnosticsSnapshot() errInfo {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo == nil {
+		return errInfo{}
+	}
+	return ses.errInfo.snapshot()
 }
 
 func (ses *Session) GenNewStmtId() uint32 {
@@ -1284,6 +1316,7 @@ func (ses *Session) GetTenantName() string {
 }
 
 func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt *PrepareStmt) error {
+	name = strings.ToLower(name)
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; !ok {
@@ -1315,9 +1348,10 @@ func (ses *Session) getMaxPrepareStmtCountLocked() uint64 {
 }
 
 func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareStmt, error) {
+	normalizedName := strings.ToLower(name)
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	if prepareStmt, ok := ses.prepareStmts[name]; ok {
+	if prepareStmt, ok := ses.prepareStmts[normalizedName]; ok {
 		return prepareStmt, nil
 	}
 	var connID uint32
@@ -1339,6 +1373,7 @@ func (ses *Session) GetPrepareStmts() []*PrepareStmt {
 }
 
 func (ses *Session) RemovePrepareStmt(name string) bool {
+	name = strings.ToLower(name)
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	stmt, ok := ses.prepareStmts[name]

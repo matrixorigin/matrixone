@@ -66,18 +66,19 @@ func MakePlan2Decimal128ExprWithType(v types.Decimal128, typ *Type) *plan.Expr {
 
 func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) (*plan.Expr, error) {
 	var typ plan.Type
+	width := decimalLiteralPrecision(v)
 	_, scale, err := types.Parse128(v)
 	if err == nil && scale < 18 && len(v) < 18 {
 		typ = plan.Type{
 			Id:          int32(types.T_decimal64),
-			Width:       18,
+			Width:       width,
 			Scale:       scale,
 			NotNullable: true,
 		}
 	} else if err == nil {
 		typ = plan.Type{
 			Id:          int32(types.T_decimal128),
-			Width:       38,
+			Width:       width,
 			Scale:       scale,
 			NotNullable: true,
 		}
@@ -88,12 +89,25 @@ func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) 
 		}
 		typ = plan.Type{
 			Id:          int32(types.T_decimal256),
-			Width:       65,
+			Width:       width,
 			Scale:       scale,
 			NotNullable: true,
 		}
 	}
 	return appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType(v, isBin...), typ)
+}
+
+func decimalLiteralPrecision(v string) int32 {
+	var width int32
+	for i := 0; i < len(v); i++ {
+		if v[i] >= '0' && v[i] <= '9' {
+			width++
+		}
+	}
+	if width == 0 {
+		return 1
+	}
+	return width
 }
 
 func makePlan2DateConstNullExpr(t types.T) *plan.Expr {
@@ -664,6 +678,14 @@ func makePlan2CastExprWithName(ctx context.Context, expr *Expr, targetType Type,
 	var err error
 	if expr == nil {
 		return nil, moerr.NewInvalidInput(ctx, "nil expression in cast")
+	}
+	var rewritten bool
+	expr, rewritten, err = rewriteMySQLSpecialTypeDisplayCast(ctx, expr, targetType)
+	if err != nil {
+		return nil, err
+	}
+	if rewritten {
+		return expr, nil
 	}
 	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -77,6 +78,11 @@ type container struct {
 type Dispatch struct {
 	ctr          *container
 	cleanupSpool *pSpool.PipelineSpool
+
+	// MaterializedSource is used by a multi-reference CTE whose consumers can
+	// have execution dependencies on one another. It is local-only and bypasses
+	// the lock-step pipeline spool fan-out.
+	MaterializedSource *materialized.Source
 
 	// IsSink means this is a Sink Node
 	IsSink bool
@@ -220,7 +226,11 @@ func sendAbortSignalsToFailedLocalRegs(ctx context.Context, proc *process.Proces
 func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	terminalSignal := process.BuildCleanupSignal(pipelineFailed, err)
 	terminalErr := terminalSignal.TerminalErr()
-
+	if dispatch.MaterializedSource != nil {
+		dispatch.MaterializedSource.Finish(terminalErr)
+		dispatch.ctr = nil
+		return
+	}
 	if dispatch.ctr != nil {
 		if dispatch.ctr.isRemote {
 			for _, r := range dispatch.ctr.remoteReceivers {
@@ -271,7 +281,7 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 		} else {
 			abortErr := terminalErr
 			if terminalSignal.EventType == process.EventEnd {
-				fallbackErr := process.ErrPipelineEndSignalDeliveryFailed
+				fallbackErr := process.ResolvePipelineSpoolAbortError(dispatch.LocalRegs...)
 				sendAbortSignalsToFailedLocalRegs(signalCtx, proc, dispatch.LocalRegs, terminalDelivered, fallbackErr)
 				abortErr = fallbackErr
 			}

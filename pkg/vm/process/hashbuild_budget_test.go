@@ -17,6 +17,10 @@ package process
 import (
 	"errors"
 	"math"
+	"os"
+	"os/exec"
+	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -56,6 +60,58 @@ func TestHashBuildBudgetExactLimitAndOverflow(t *testing.T) {
 	}
 	if b.AggregateUsed() != 0 || g.Used() != 0 {
 		t.Fatalf("released reservation remains: cn=%d query=%d", b.AggregateUsed(), g.Used())
+	}
+}
+
+func TestHashBuildBudgetAdmissionIdentifiesResource(t *testing.T) {
+	b := MustNewHashBuildBudget(10, 10)
+	g, err := b.OpenGenerationWithSpillCaps(1, 10, 5, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(g.Close)
+
+	tests := []struct {
+		name string
+		want HashBuildBudgetResource
+		call func() error
+	}{
+		{
+			name: "memory",
+			want: HashBuildBudgetResourceMemory,
+			call: func() error {
+				_, reserveErr := g.Reserve(11)
+				return reserveErr
+			},
+		},
+		{
+			name: "spill disk",
+			want: HashBuildBudgetResourceSpillDisk,
+			call: func() error {
+				_, reserveErr := g.ReserveSpillDisk(6)
+				return reserveErr
+			},
+		},
+		{
+			name: "spill fd",
+			want: HashBuildBudgetResourceSpillFD,
+			call: func() error {
+				_, reserveErr := g.ReserveSpillFD(2)
+				return reserveErr
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var budgetErr *HashBuildBudgetError
+			if err := test.call(); !errors.As(err, &budgetErr) {
+				t.Fatalf("error=%v, want typed admission", err)
+			}
+			if budgetErr.Kind != HashBuildBudgetErrorAdmission || budgetErr.Resource != test.want {
+				t.Fatalf("admission kind/resource=(%d,%d), want=(%d,%d)",
+					budgetErr.Kind, budgetErr.Resource, HashBuildBudgetErrorAdmission, test.want)
+			}
+		})
 	}
 }
 
@@ -341,11 +397,132 @@ func TestHashBuildSpillLedgersTransferReconcile(t *testing.T) {
 	}
 }
 
-func TestDefaultSpillFDCapAdmitsNormalShuffleRepartitionPeak(t *testing.T) {
-	const normalPeak = uint64(16 * (32 + 64))
+func TestConfiguredSpillFDCapCushionsFirstShuffleRepartitionPeak(t *testing.T) {
+	const firstRepartitionPeak = uint64(16 * (64 + 64))
+	if got := configuredSpillFDCap(192 << 20); got < firstRepartitionPeak {
+		t.Fatalf("configured spill fd cap=%d, want at least first 16-way repartition peak=%d", got, firstRepartitionPeak)
+	}
+}
+
+func TestClampSpillFDCapBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name                     string
+		configured, processLimit uint64
+		limitKnown               bool
+		want                     uint64
+	}{
+		{name: "unknown fails closed", configured: 2048, processLimit: 1 << 20, want: 0},
+		{name: "zero configured", configured: 0, processLimit: 1024, limitKnown: true, want: 0},
+		{name: "below absolute headroom", configured: 2048, processLimit: 63, limitKnown: true, want: 0},
+		{name: "at absolute headroom", configured: 2048, processLimit: 64, limitKnown: true, want: 0},
+		{name: "one fd above headroom", configured: 2048, processLimit: 65, limitKnown: true, want: 1},
+		{name: "absolute headroom dominates", configured: 2048, processLimit: 128, limitKnown: true, want: 64},
+		{name: "quarter headroom dominates", configured: 2048, processLimit: 1024, limitKnown: true, want: 768},
+		{name: "explicit finite cap retained", configured: 10, processLimit: 1024, limitKnown: true, want: 10},
+		{name: "unlimited retains configured", configured: 2048, processLimit: math.MaxUint64, limitKnown: true, want: 2048},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := clampSpillFDCap(tc.configured, tc.processLimit, tc.limitKnown); got != tc.want {
+				t.Fatalf("clampSpillFDCap(%d, %d, %v)=%d, want %d",
+					tc.configured, tc.processLimit, tc.limitKnown, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDefaultSpillFDCapMatchesProcessLimit(t *testing.T) {
+	limit, ok := processOpenFileLimit()
+	want := clampSpillFDCap(configuredSpillFDCap(192<<20), limit, ok)
 	b := MustNewHashBuildBudget(192<<20, 192<<20)
-	if b.SpillFDCap() < normalPeak {
-		t.Fatalf("spill fd cap=%d, want at least normal 16-way peak=%d", b.SpillFDCap(), normalPeak)
+	if got := b.SpillFDCap(); got != want {
+		t.Fatalf("spill fd cap=%d, want process-clamped cap=%d (limit=%d known=%v)", got, want, limit, ok)
+	}
+}
+
+func TestHashBuildSpillFDCapUnderRLIMIT(t *testing.T) {
+	const (
+		childEnv = "MO_HASHBUILD_RLIMIT_CHILD"
+		limitEnv = "MO_HASHBUILD_RLIMIT_NOFILE"
+	)
+	if os.Getenv(childEnv) == "1" {
+		limit, ok := processOpenFileLimit()
+		if !ok {
+			t.Fatal("RLIMIT_NOFILE unavailable in RLIMIT child")
+		}
+		rawTarget := os.Getenv(limitEnv)
+		target, err := strconv.ParseUint(rawTarget, 10, 64)
+		if err != nil {
+			t.Fatalf("parse target %q: %v", rawTarget, err)
+		}
+		if limit != target {
+			t.Fatalf("child RLIMIT_NOFILE=%d, want %d", limit, target)
+		}
+
+		configured := configuredSpillFDCap(192 << 20)
+		want := clampSpillFDCap(configured, limit, true)
+		b := MustNewHashBuildBudget(192<<20, 192<<20)
+		if got := b.SpillFDCap(); got != want {
+			t.Fatalf("child spill fd cap=%d, want %d", got, want)
+		}
+		g, err := b.OpenGeneration(1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Simulate a budget/generation opened while the process limit was
+		// higher. ReserveSpillFD must sample the current RLIMIT again instead
+		// of trusting these stale effective caps.
+		b.mu.Lock()
+		b.spillFDCap = configured
+		g.spillFDCap = configured
+		b.mu.Unlock()
+		if _, err = g.ReserveSpillFD(want + 1); !errors.Is(err, ErrHashBuildBudgetAdmission) {
+			t.Fatalf("RLIMIT+headroom overflow error=%v, want admission rejection", err)
+		}
+		if got := b.SpillFDCap(); got != want {
+			t.Fatalf("runtime preflight refreshed spill fd cap=%d, want %d", got, want)
+		}
+		token, err := g.ReserveSpillFD(want)
+		if err != nil {
+			t.Fatalf("exact safe FD cap rejected: %v", err)
+		}
+		if !token.Release() {
+			t.Fatal("exact safe FD reservation did not release")
+		}
+
+		if err = b.SetSpillCaps(0, 10); err != nil {
+			t.Fatal(err)
+		}
+		wantExplicit := clampSpillFDCap(10, limit, true)
+		if got := b.SpillFDCap(); got != wantExplicit {
+			t.Fatalf("explicit finite FD cap=%d, want process-clamped %d", got, wantExplicit)
+		}
+		return
+	}
+
+	switch runtime.GOOS {
+	case "darwin", "linux":
+	default:
+		t.Skip("RLIMIT_NOFILE subprocess is only supported on Darwin and Linux")
+	}
+	parentLimit, ok := processOpenFileLimit()
+	if !ok || parentLimit < hashBuildNonSpillFDHeadroom+1 {
+		t.Skipf("parent RLIMIT_NOFILE=%d known=%v is too small for isolated child test", parentLimit, ok)
+	}
+	target := uint64(128)
+	if parentLimit < target {
+		target = parentLimit
+	}
+	targetText := strconv.FormatUint(target, 10)
+	cmd := exec.Command(
+		"/bin/sh", "-c",
+		`ulimit -S -n "$MO_HASHBUILD_RLIMIT_NOFILE" &&
+ulimit -H -n "$MO_HASHBUILD_RLIMIT_NOFILE" &&
+exec "$@"`,
+		"sh", os.Args[0], "-test.run=^TestHashBuildSpillFDCapUnderRLIMIT$", "-test.count=1",
+	)
+	cmd.Env = append(os.Environ(), childEnv+"=1", limitEnv+"="+targetText)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("RLIMIT child failed: %v\n%s", err, output)
 	}
 }
 
@@ -857,17 +1034,23 @@ func TestHashBuildBudgetCompatibilityAndObservabilitySurface(t *testing.T) {
 		target error
 	}{
 		{HashBuildBudgetErrorAdmission, ErrHashBuildBudgetAdmission},
-		{HashBuildBudgetErrorClosed, ErrHashBuildBudgetAdmission},
 		{HashBuildBudgetErrorClosed, ErrHashBuildBudgetClosed},
 		{HashBuildBudgetErrorInvalid, ErrHashBuildBudgetInvalid},
 		{HashBuildBudgetErrorCeilingMissing, ErrHashBuildCeilingMissing},
 	} {
-		if !(&HashBuildBudgetError{Kind: tc.kind}).Is(tc.target) {
+		if !errors.Is(&HashBuildBudgetError{Kind: tc.kind}, tc.target) {
 			t.Fatalf("kind %d did not match %v", tc.kind, tc.target)
 		}
 	}
-	if (&HashBuildBudgetError{Kind: HashBuildBudgetErrorKind(255)}).Is(ErrHashBuildBudgetInvalid) {
-		t.Fatal("unknown error kind matched a sentinel")
+	if errors.Is(&HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed},
+		ErrHashBuildBudgetAdmission,
+	) {
+		t.Fatal("closed budget must not match a recoverable capacity admission")
+	}
+	unknown := &HashBuildBudgetError{Kind: HashBuildBudgetErrorKind(255)}
+	if errors.Is(unknown, ErrHashBuildBudgetAdmission) ||
+		!errors.Is(unknown, ErrHashBuildBudgetInvalid) {
+		t.Fatal("unknown error kind must remain a fatal invalid error")
 	}
 	message := &HashBuildBudgetError{Message: "explicit"}
 	if message.Error() != "explicit" {
@@ -1179,9 +1362,119 @@ func TestGetHashBuildBudgetInitializesAndReusesCNAggregate(t *testing.T) {
 	}
 
 	aggregate := firstGeneration.budget
+	defaultAggregateSpillCap := aggregate.SpillDiskCap()
+	raisedSpillCap := defaultAggregateSpillCap + 1<<20
+	third := &Process{Base: &BaseProcess{Lim: Limitation{
+		Size:      1 << 20,
+		SpillSize: int64(raisedSpillCap),
+	}}}
+	thirdGeneration, err := third.GetHashBuildBudget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if thirdGeneration.SpillDiskCap() != raisedSpillCap ||
+		aggregate.SpillDiskCap() != raisedSpillCap {
+		t.Fatalf("explicit spill cap was not raised at the shared ledger: generation=%d aggregate=%d want=%d",
+			thirdGeneration.SpillDiskCap(), aggregate.SpillDiskCap(), raisedSpillCap)
+	}
+
+	lower := &Process{Base: &BaseProcess{Lim: Limitation{
+		Size:      1 << 20,
+		SpillSize: 2 << 20,
+	}}}
+	lowerGeneration, err := lower.GetHashBuildBudget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lowerGeneration.SpillDiskCap() != 2<<20 ||
+		aggregate.SpillDiskCap() != raisedSpillCap {
+		t.Fatalf("lower per-query spill cap changed the shared ceiling: generation=%d aggregate=%d want aggregate=%d",
+			lowerGeneration.SpillDiskCap(), aggregate.SpillDiskCap(), raisedSpillCap)
+	}
+
 	firstGeneration.Close()
 	secondGeneration.Close()
+	thirdGeneration.Close()
+	lowerGeneration.Close()
 	aggregate.Close()
+}
+
+func TestHashBuildBudgetExplicitSpillCapConcurrentRaise(t *testing.T) {
+	budget := MustNewHashBuildBudget(100, 100)
+	t.Cleanup(budget.Close)
+	generation, err := budget.OpenGenerationWithSpillCaps(1, 100, 800, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(generation.Close)
+	reservation, err := generation.ReserveSpillDisk(700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reservation.Release() })
+
+	caps := []uint64{801, 900, 1200, 1100}
+	start := make(chan struct{})
+	errs := make(chan error, len(caps))
+	var wg sync.WaitGroup
+	for _, cap := range caps {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- budget.raiseSpillDiskCapToExplicitLimit(cap)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for raiseErr := range errs {
+		if raiseErr != nil {
+			t.Fatal(raiseErr)
+		}
+	}
+	if got := budget.SpillDiskCap(); got != 1200 {
+		t.Fatalf("concurrent raised spill cap = %d, want 1200", got)
+	}
+	if !reservation.Release() || budget.SpillDiskUsed() != 0 {
+		t.Fatalf("live reservation did not release after cap growth: %+v", budget.Snapshot())
+	}
+
+	budget.Close()
+	if err = budget.raiseSpillDiskCapToExplicitLimit(1300); !errors.Is(err, ErrHashBuildBudgetClosed) {
+		t.Fatalf("closed budget raise error = %v, want %v", err, ErrHashBuildBudgetClosed)
+	}
+	if got := budget.SpillDiskCap(); got != 1200 {
+		t.Fatalf("closed budget changed spill cap to %d", got)
+	}
+}
+
+func TestOpenProcessGenerationClampsStaleResolvedCapAtomically(t *testing.T) {
+	budget := MustNewHashBuildBudget(100, 100)
+	if err := budget.UpdateAggregateCap(40); err != nil {
+		t.Fatal(err)
+	}
+
+	generation, err := budget.openProcessGeneration(1, 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generation.Cap() != 40 {
+		t.Fatalf("generation cap = %d, want current aggregate cap 40",
+			generation.Cap())
+	}
+	if generation.SpillDiskCap() != defaultSpillCap(40) {
+		t.Fatalf("spill disk cap = %d, want %d",
+			generation.SpillDiskCap(), defaultSpillCap(40))
+	}
+
+	// Explicit public configuration remains strict. Only the process path may
+	// clamp a ceiling sample that became stale between resolution and opening.
+	if _, err = budget.OpenGenerationWithCap(2, 100); !errors.Is(err, ErrHashBuildBudgetInvalid) {
+		t.Fatalf("explicit oversized generation cap returned %v", err)
+	}
+	generation.Close()
+	budget.Close()
 }
 
 func TestHashBuildBudgetDefensiveAndProviderFailurePaths(t *testing.T) {

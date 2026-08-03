@@ -186,6 +186,16 @@ func WildcardMatch(pattern, target string) bool {
 
 // getExprValue executes the expression and returns the value.
 func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (interface{}, error) {
+	return getExprValueWithPrepareMode(e, ses, execCtx, false, isBin...)
+}
+
+func getExprValueWithPrepareMode(
+	e tree.Expr,
+	ses *Session,
+	execCtx *ExecCtx,
+	preparedExpression bool,
+	isBin ...*bool,
+) (interface{}, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -237,7 +247,8 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (
 		ses:    ses,
 	}
 	defer tempExecCtx.Close()
-	err = executeStmtInSameSession(tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect)
+	err = executeStmtInSameSession(
+		tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect, preparedExpression)
 	if err != nil {
 		return nil, err
 	}
@@ -276,10 +287,8 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (
 	var planExpr *plan.Expr
 	oid := resultVec.GetType().Oid
 	if oid == types.T_decimal64 || oid == types.T_decimal128 || oid == types.T_decimal256 {
-		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false, false)
-		bindContext := plan2.NewBindContext(builder, nil)
-		binder := plan2.NewSetVarBinder(builder, bindContext)
-		planExpr, err = binder.BindExpr(e, 0, false)
+		planExpr, err = bindSetVariableResultExpr(
+			e, ses.GetTxnCompileCtx(), preparedExpression)
 		if err != nil {
 			return nil, err
 		}
@@ -289,6 +298,18 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (
 		*isBin[0] = resultVec.GetIsBin()
 	}
 	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
+}
+
+func bindSetVariableResultExpr(
+	e tree.Expr,
+	compilerContext plan2.CompilerContext,
+	preparedExpression bool,
+) (*plan.Expr, error) {
+	builder := plan2.NewQueryBuilder(
+		plan.Query_SELECT, compilerContext, preparedExpression, false)
+	bindContext := plan2.NewBindContext(builder, nil)
+	binder := plan2.NewSetVarBinder(builder, bindContext)
+	return binder.BindExpr(e, 0, false)
 }
 
 // only support single value and unary minus
@@ -1578,6 +1599,10 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 		return err
 	}
 	setMysqlColumnTypeMetadata(col, typ)
+	setCharacter(col)
+	if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
+		col.SetCharset(charsetBinary)
+	}
 	return nil
 }
 
@@ -1693,6 +1718,12 @@ type UserInput struct {
 	sqlSourceType             []string
 	isRestore                 bool
 	isBinaryProtExecute       bool
+	// isSetExpression marks an AST-only SELECT synthesized to evaluate a SET
+	// assignment. Such statements have no stable SQL cache key.
+	isSetExpression bool
+	// isPreparedExpression marks a nested SET-derived expression that is being
+	// evaluated as part of prepared-statement execution.
+	isPreparedExpression bool
 	// isInternalInput mark this UserInput is come from mo internal.
 	// replace old logic: (stmt != nil)
 	// cc isInternal()
@@ -1738,6 +1769,14 @@ func (ui *UserInput) getSqlSourceTypes() []string {
 // currently, we use it to handle the 'set_var' statement.
 func (ui *UserInput) isInternal() bool {
 	return ui.isInternalInput
+}
+
+func (ui *UserInput) isPreparedExpr() bool {
+	return ui != nil && ui.isPreparedExpression
+}
+
+func (ui *UserInput) canUsePlanCache() bool {
+	return ui != nil && !ui.isSetExpression
 }
 
 func (ui *UserInput) genSqlSourceType(ses FeSession) {
@@ -2021,12 +2060,6 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 		return nil, err
 	}
 	setColFlag(c)
-	setCharacter(c)
-
-	// For binary/varbinary with mysql_type_varchar.Change the charset.
-	if types.T(col.Typ.Id) == types.T_binary || types.T(col.Typ.Id) == types.T_varbinary {
-		c.SetCharset(0x3f)
-	}
 
 	c.SetDecimal(col.Typ.Scale)
 

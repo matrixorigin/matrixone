@@ -290,9 +290,15 @@ func (s *serverConn) readInitialHandshake() error {
 }
 
 // writeHandshakeResp writes the auth packet to CN server.
-func (s *serverConn) writeHandshakeResp(handshakeResp *frontend.Packet) (*frontend.Packet, error) {
+func (s *serverConn) writeHandshakeResp(
+	handshakeResp *frontend.Packet,
+	tracker *backendHandshakeTracker,
+) (*frontend.Packet, error) {
 	if err := s.mysqlProto.WritePacket(handshakeResp.Payload); err != nil {
 		return nil, err
+	}
+	if tracker != nil {
+		tracker.enter(backendHandshakeStageReadAuthResponse)
 	}
 	// The CN server send a response back to indicate if the auth packet
 	// is OK to login.

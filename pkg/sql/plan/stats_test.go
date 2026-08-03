@@ -29,6 +29,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCalcBlockSelectivityUsingShuffleRangeBareColumn(t *testing.T) {
+	t.Run("bare column uses the generic overlap estimate", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Selectivity: 0.5,
+			Expr: &planpb.Expr_Col{
+				Col: &planpb.ColRef{Name: "enabled"},
+			},
+		}
+
+		require.Equal(t, 1.0, calcBlockSelectivityUsingShuffleRange(nil, "enabled", expr))
+	})
+
+	t.Run("special function keeps its direct estimate", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Selectivity: 0.25,
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "prefix_eq"}},
+			},
+		}
+
+		require.Equal(t, 0.25, calcBlockSelectivityUsingShuffleRange(nil, "enabled", expr))
+	})
+}
+
 func TestSafeStatsRatiosAvoidNonFiniteSelectivity(t *testing.T) {
 	t.Run("limit never increases cardinality", func(t *testing.T) {
 		builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)

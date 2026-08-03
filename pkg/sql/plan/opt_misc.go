@@ -120,6 +120,15 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 			}
 		}
 
+	case plan.Node_LOCK_OP:
+		for i, childID := range node.Children {
+			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, true, colRefCnt)
+			node.Children[i] = newChildID
+			for ref, expr := range childProjMap {
+				projMap[ref] = expr
+			}
+		}
+
 	default:
 		for i, childID := range node.Children {
 			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, flag, colRefCnt)
@@ -207,6 +216,12 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	}
 
 	childType := builder.qry.Nodes[node.Children[0]].NodeType
+	// A PROJECT is also the rewrite boundary for a fulltext-filtered scan.
+	// Removing it can expose the scan directly under a WINDOW or an outer JOIN,
+	// neither of which can safely perform the scan-local fulltext rewrite.
+	if childType == plan.Node_TABLE_SCAN && builder.scanHasMatchedFullTextFilter(builder.qry.Nodes[node.Children[0]]) {
+		return false
+	}
 	if childType == plan.Node_VALUE_SCAN || childType == plan.Node_EXTERNAL_SCAN {
 		return parentType == plan.Node_PROJECT
 	}
@@ -231,6 +246,16 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 func exprCanRemoveProject(expr *Expr) bool {
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_F:
+		// fulltext_match is a planner placeholder: applyIndices replaces it
+		// with the score column produced by fulltext_index_scan.  Inlining a
+		// projection that contains it can move the placeholder into a WINDOW
+		// (for example through a multi-CTE query) where the fulltext rewrite
+		// cannot associate it with the source scan anymore.  Keep that PROJECT
+		// until applyIndices has performed the replacement; the second
+		// removeSimpleProjections pass can remove it afterwards.
+		if ne.F.Func.ObjName == "fulltext_match" {
+			return false
+		}
 		overload, exists := function.GetFunctionByIdWithoutError(ne.F.Func.Obj)
 		if !exists || overload.CannotFold() || overload.IsRealTimeRelated() {
 			return false
@@ -1045,6 +1070,12 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 		expr := node.FilterList[i]
 		fun := expr.GetF()
 		if fun != nil && fun.Func.ObjName == "like" {
+			// Explicit ESCAPE changes how wildcard bytes are interpreted. Keep
+			// the original predicate intact instead of applying the two-argument
+			// prefix rewrite with its hard-coded default escape semantics.
+			if len(fun.Args) != 2 {
+				continue
+			}
 			col := fun.Args[0].GetCol()
 			if col == nil {
 				continue

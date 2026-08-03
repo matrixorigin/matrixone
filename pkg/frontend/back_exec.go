@@ -517,6 +517,9 @@ func doComQueryInBack(
 		)
 
 		tenant := backSes.GetTenantNameWithStmt(stmt)
+		if backSes.upstream != nil {
+			removePrepareStmtForReplacement(backSes.upstream, stmt)
+		}
 
 		/*
 				if it is in an active or multi-statement transaction, we check the type of the statement.
@@ -867,7 +870,13 @@ func executeSQLInBackgroundSession(reqCtx context.Context, bh BackgroundExec, sq
 // executeStmtInSameSession executes the statement in the same session.
 // To be clear, only for the select statement derived from the set_var statement
 // in an independent transaction
-func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCtx, stmt tree.Statement) error {
+func executeStmtInSameSession(
+	ctx context.Context,
+	ses *Session,
+	execCtx *ExecCtx,
+	stmt tree.Statement,
+	preparedExpression bool,
+) error {
 	ses.EnterFPrint(FPExecStmtInSameSession)
 	defer ses.ExitFPrint(FPExecStmtInSameSession)
 	switch stmt.(type) {
@@ -916,7 +925,12 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCt
 	ses.Debug(ctx, "query trace(ExecStmtInSameSession)",
 		logutil.ConnectionIdField(ses.GetConnectionID()))
 	//3. execute the statement
-	return doComQuery(ses, execCtx, &UserInput{stmt: stmt, isInternalInput: true})
+	return doComQuery(ses, execCtx, &UserInput{
+		stmt:                 stmt,
+		isInternalInput:      true,
+		isSetExpression:      true,
+		isPreparedExpression: preparedExpression,
+	})
 }
 
 // fakeDataSetFetcher2 gets the result set from the pipeline and save it in the session.
@@ -1228,7 +1242,7 @@ func (backSes *backSession) SetShowStmtType(statement ShowStatementType) {
 }
 
 func (backSes *backSession) RemovePrepareStmt(name string) bool {
-	return false
+	return backSes.upstream != nil && backSes.upstream.RemovePrepareStmt(name)
 }
 
 func (backSes *backSession) CountPayload(i int) {
@@ -1236,7 +1250,10 @@ func (backSes *backSession) CountPayload(i int) {
 }
 
 func (backSes *backSession) GetPrepareStmt(ctx context.Context, name string) (*PrepareStmt, error) {
-	return nil, moerr.NewInternalError(ctx, "do not support prepare in background exec")
+	if backSes.upstream == nil {
+		return nil, moerr.NewInternalError(ctx, "do not support prepare in background exec without upstream session")
+	}
+	return backSes.upstream.GetPrepareStmt(ctx, name)
 }
 
 func (backSes *backSession) IsBackgroundSession() bool {
@@ -1324,7 +1341,7 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 		return int64(1), nil
 	case "sql_mode":
 		return "", nil
-	case "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
+	case "foreign_key_checks", "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
 		return backSes.upstream.GetSessionSysVar(name)
 	}
 	return nil, nil

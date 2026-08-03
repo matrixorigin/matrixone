@@ -30,13 +30,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type HashmapBuilder struct {
-	needDupVec         bool
+	needDupVec bool
+	// InputBatchRowCount is the physical retained row count published with the
+	// JoinMap. hashMapRowCount is the number of those rows that participate in
+	// the current hashmap and its auxiliary-memory projection. REPLACE may
+	// append delete-only rows which belong to the first count but not the
+	// second.
 	InputBatchRowCount int
+	hashMapRowCount    int
+	hashMapRowCountSet bool
 	TrackNullKeys      bool
 	HasNullKey         bool
 	curVecs            []*vector.Vector // evaluated key vecs for the current batch
@@ -47,6 +56,7 @@ type HashmapBuilder struct {
 	Batches            colexec.Batches
 	executors          []colexec.ExpressionExecutor
 	UniqueJoinKeys     []*vector.Vector
+	uniqueKeySlots     []bool
 	uniqueSels         []int64
 	cachedIntIterator  hashmap.Iterator
 	cachedStrIterator  hashmap.Iterator
@@ -68,7 +78,18 @@ type HashmapBuilder struct {
 	batchReservations         []*process.HashBuildReservation
 	auxReservation            *process.HashBuildReservation
 	keyExprs                  []*plan.Expr
-	expressionReservations    []*process.HashBuildReservation
+	expressionLease           *ExpressionMemoryLease
+
+	// Exact runtime-filter keys are an optional owner inside the mandatory
+	// JoinMap build. The fallback bit is observed by HashBuild for diagnostics.
+	//
+	// retainedBatchRecoverySafe is an ownership contract for every caller that
+	// may replay or repartition Batches after BuildHashmap returns an admission
+	// error. It becomes false before a destructive Dedup rewrite starts. From
+	// that point, Batches are no longer equivalent to the original ingress and
+	// must not be retried or re-spilled.
+	runtimeFilterCollectionFallback bool
+	retainedBatchRecoverySafe       bool
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
@@ -162,16 +183,23 @@ func (hb *HashmapBuilder) Prepare(
 			}
 			keyWidth += width
 		}
-		executors, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, keyCols)
+		executors, expressionLease, err := NewBudgetedExpressionExecutors(
+			proc,
+			hb.budget,
+			keyCols,
+			needDupVec,
+		)
 		if err != nil {
 			return err
 		}
 		hb.needDupVec = needDupVec
 		hb.executors = executors
 		hb.keyExprs = keyCols
-		hb.expressionReservations = make([]*process.HashBuildReservation, len(keyCols))
+		hb.expressionLease = expressionLease
 		hb.keyWidth = keyWidth
 		hb.InputBatchRowCount = 0
+		hb.hashMapRowCount = 0
+		hb.hashMapRowCountSet = false
 	}
 
 	if hb.IsDedup {
@@ -195,6 +223,8 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 
 	hb.FreeTemporaryVectors(proc)
 	hb.InputBatchRowCount = 0
+	hb.hashMapRowCount = 0
+	hb.hashMapRowCountSet = false
 	hb.HasNullKey = false
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
@@ -207,6 +237,7 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 		}
 	}
 	hb.UniqueJoinKeys = nil
+	hb.uniqueKeySlots = nil
 	// Function executors retain result-vector capacity across ResetForNextQuery.
 	// Free them before releasing expression reservations; Prepare recreates the
 	// executor set for the next generation.
@@ -231,6 +262,7 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 		}
 	}
 	hb.UniqueJoinKeys = nil
+	hb.uniqueKeySlots = nil
 }
 
 func (hb *HashmapBuilder) FreeExecutors() {
@@ -241,7 +273,7 @@ func (hb *HashmapBuilder) FreeExecutors() {
 	}
 	hb.executors = nil
 	hb.keyExprs = nil
-	hb.releaseExpressionReservations()
+	hb.releaseExpressionLease()
 }
 
 func (hb *HashmapBuilder) FreeTemporaryVectors(proc *process.Process) {
@@ -283,54 +315,43 @@ func (hb *HashmapBuilder) evalBatch(batchIdx int, proc *process.Process) error {
 			}
 		}
 	}
-	for idx2 := range hb.executors {
-		var candidate *process.HashBuildReservation
-		if _, isColumn := hb.keyExprs[idx2].Expr.(*plan.Expr_Col); !isColumn && hb.budget != nil {
-			peak, err := expressionVectorPeak(proc, hb.keyExprs[idx2], bat.RowCount(), hb.needDupVec)
-			if err != nil {
-				return err
-			}
-			candidate, err = hb.budget.Reserve(peak)
-			if err != nil {
-				return err
-			}
-		}
-		vec, err := hb.executors[idx2].Eval(proc, []*batch.Batch{bat}, nil)
-		if err != nil {
-			hb.abortExpressionEval(proc, candidate)
-			return err
+	evalOne := func(idx int) error {
+		vec, evalErr := hb.executors[idx].Eval(proc, []*batch.Batch{bat}, nil)
+		if evalErr != nil {
+			return evalErr
 		}
 		if hb.needDupVec {
-			hb.curVecs[idx2], err = vec.DupOffHeap(proc.Mp())
-			if err != nil {
-				hb.abortExpressionEval(proc, candidate)
-				return err
+			hb.curVecs[idx], evalErr = vec.DupOffHeap(proc.Mp())
+			if evalErr != nil {
+				return evalErr
 			}
 		} else {
-			hb.curVecs[idx2] = vec
+			hb.curVecs[idx] = vec
 		}
-		if candidate != nil {
-			// Child function executors retain their result vectors but do not
-			// expose each capacity. Keep the recursive type bound charged until
-			// the complete executor tree is freed on Reset/Free.
-			if old := hb.expressionReservations[idx2]; old != nil {
-				old.Release()
+		return nil
+	}
+	var err error
+	if hb.expressionLease != nil {
+		err = hb.expressionLease.Run(proc, bat.RowCount(), evalOne)
+	} else {
+		for idx := range hb.executors {
+			if err = evalOne(idx); err != nil {
+				break
 			}
-			hb.expressionReservations[idx2] = candidate
 		}
+	}
+	if err != nil {
+		hb.abortExpressionEval(proc)
+		return err
 	}
 	return nil
 }
 
-func (hb *HashmapBuilder) abortExpressionEval(proc *process.Process, candidate *process.HashBuildReservation) {
+func (hb *HashmapBuilder) abortExpressionEval(proc *process.Process) {
 	// Eval may allocate cached child/result vectors before returning an error.
-	// Destroy the complete executor tree while both the previous tokens and the
-	// current candidate are still charged, then release admission ownership.
+	// Destroy the complete executor tree before releasing its retained lease.
 	hb.FreeTemporaryVectors(proc)
 	hb.FreeExecutors()
-	if candidate != nil {
-		candidate.Release()
-	}
 }
 
 // expressionVectorPeak is an execution-before-allocation upper bound based on
@@ -364,6 +385,15 @@ func ExpressionVectorPeak(proc *process.Process, expr *plan.Expr, rows int, dupl
 }
 
 func expressionTreePeak(proc *process.Process, expr *plan.Expr, rows uint64) (total uint64, output uint64, err error) {
+	return expressionTreePeakWithSelection(proc, expr, rows, false)
+}
+
+func expressionTreePeakWithSelection(
+	proc *process.Process,
+	expr *plan.Expr,
+	rows uint64,
+	mayReceivePartialSelection bool,
+) (total uint64, output uint64, err error) {
 	if expr == nil {
 		return 0, 0, process.ErrHashBuildBudgetInvalid
 	}
@@ -374,8 +404,26 @@ func expressionTreePeak(proc *process.Process, expr *plan.Expr, rows uint64) (to
 		if node.F == nil {
 			return 0, 0, process.ErrHashBuildBudgetInvalid
 		}
-		for _, arg := range node.F.Args {
-			child, _, childErr := expressionTreePeak(proc, arg, rows)
+		var fid int32 = -1
+		if node.F.Func != nil {
+			fid, _ = function.DecodeOverloadID(node.F.Func.Obj)
+		}
+		for i, arg := range node.F.Args {
+			childMayReceivePartialSelection := mayReceivePartialSelection
+			switch fid {
+			case function.IFF:
+				// IFF evaluates only its value branches through generated
+				// selection masks. Its condition inherits the caller mask.
+				childMayReceivePartialSelection = mayReceivePartialSelection || i > 0
+			case function.CASE, function.COALESCE:
+				childMayReceivePartialSelection = true
+			}
+			child, _, childErr := expressionTreePeakWithSelection(
+				proc,
+				arg,
+				rows,
+				childMayReceivePartialSelection,
+			)
 			if childErr != nil || total > math.MaxUint64-child {
 				return 0, 0, process.ErrHashBuildBudgetInvalid
 			}
@@ -412,7 +460,36 @@ func expressionTreePeak(proc *process.Process, expr *plan.Expr, rows uint64) (to
 	if err != nil || total > math.MaxUint64-output {
 		return 0, 0, process.ErrHashBuildBudgetInvalid
 	}
-	return total + output, output, nil
+	total += output
+
+	if _, isFunction := expr.Expr.(*plan.Expr_F); mayReceivePartialSelection && isFunction {
+		// A partially selected function retains both its ordinary full-row
+		// result and a selected-result scratch vector. Row-aligned column and
+		// non-folded function parameters are also copied into retained selected
+		// parameter vectors before the function executes.
+		if total > math.MaxUint64-output {
+			return 0, 0, process.ErrHashBuildBudgetInvalid
+		}
+		total += output
+		for _, arg := range nodeFunctionArgs(expr) {
+			switch arg.Expr.(type) {
+			case *plan.Expr_Col, *plan.Expr_F:
+				selectedParameter, selectedErr := expressionTypePeak(arg.Typ, rows)
+				if selectedErr != nil || total > math.MaxUint64-selectedParameter {
+					return 0, 0, process.ErrHashBuildBudgetInvalid
+				}
+				total += selectedParameter
+			}
+		}
+	}
+	return total, output, nil
+}
+
+func nodeFunctionArgs(expr *plan.Expr) []*plan.Expr {
+	if node, ok := expr.Expr.(*plan.Expr_F); ok && node.F != nil {
+		return node.F.Args
+	}
+	return nil
 }
 
 // expressionParamPeak returns an upper bound for the allocations made by a
@@ -448,17 +525,25 @@ func expressionParamPeak(proc *process.Process, pos int32) (uint64, error) {
 }
 
 func expressionTypePeak(typ plan.Type, rows uint64) (uint64, error) {
-	width := int64(types.T(typ.Id).FixedLength())
+	oid := types.T(typ.Id)
+	width := int64(oid.FixedLength())
 	if width < 0 {
 		width = int64(typ.Width)
 		hardMax := int64(types.MaxVarcharLen)
-		switch types.T(typ.Id) {
-		case types.T_blob, types.T_text, types.T_json, types.T_datalink,
-			types.T_geometry, types.T_geometry32, types.T_array_float32, types.T_array_float64:
-			hardMax = int64(types.MaxBlobLen)
+		if oid.IsArrayRelate() {
+			elementWidth := int64(oid.ToType().GetArrayElementSize())
+			width *= elementWidth
+			hardMax = int64(types.MaxArrayDimension) * elementWidth
+		} else {
+			switch oid {
+			case types.T_blob, types.T_text, types.T_json, types.T_datalink,
+				types.T_geometry, types.T_geometry32:
+				hardMax = int64(types.MaxBlobLen)
+			}
 		}
 		if width > hardMax {
-			// Never clamp a declared bound downward.
+			// Never clamp a declared bound downward. Array width is declared
+			// in elements, while every other varlena width is in bytes.
 			hardMax = width
 		}
 		width = hardMax
@@ -473,18 +558,38 @@ func expressionTypePeak(typ plan.Type, rows uint64) (uint64, error) {
 	return rows*perRow + (64 << 10), nil
 }
 
-func (hb *HashmapBuilder) releaseExpressionReservations() {
-	for i, token := range hb.expressionReservations {
-		if token != nil {
-			token.Release()
-			hb.expressionReservations[i] = nil
-		}
+func (hb *HashmapBuilder) releaseExpressionLease() {
+	if hb.expressionLease != nil {
+		hb.expressionLease.Release()
+		hb.expressionLease = nil
 	}
-	hb.expressionReservations = nil
 }
 
 func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, needUniqueVec bool, proc *process.Process) (retErr error) {
+	hb.runtimeFilterCollectionFallback = false
+	hb.retainedBatchRecoverySafe = true
 	return hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, hb.DedupBuildKeepLast, proc)
+}
+
+func (hb *HashmapBuilder) runtimeFilterFallbackState() (bool, bool) {
+	return hb.runtimeFilterCollectionFallback,
+		hb.retainedBatchRecoverySafe
+}
+
+func (hb *HashmapBuilder) collectUniqueKeySlot(slot int) bool {
+	return len(hb.uniqueKeySlots) == 0 ||
+		(slot >= 0 && slot < len(hb.uniqueKeySlots) &&
+			hb.uniqueKeySlots[slot])
+}
+
+// RetainedBatchRecoverySafe reports whether the batches retained by this
+// builder are still semantically equivalent to its original ingress and may be
+// replayed or repartitioned after BuildHashmap fails.
+//
+// Callers must read this before freeing partial hashmap state. A false result
+// is sticky for the current BuildHashmap generation.
+func (hb *HashmapBuilder) RetainedBatchRecoverySafe() bool {
+	return hb.retainedBatchRecoverySafe
 }
 
 func (hb *HashmapBuilder) buildHashmap(
@@ -494,11 +599,36 @@ func (hb *HashmapBuilder) buildHashmap(
 	dedupBuildKeepLast bool,
 	proc *process.Process,
 ) (retErr error) {
+	runtimeFilterRequested := needUniqueVec
+	if err := checkHashBuildCanceled(proc); err != nil {
+		return err
+	}
+	// Every ordinary build starts with all retained rows participating in the
+	// map. Canonical Dedup rewrites below update this count before resizing the
+	// auxiliary owner and rebuilding.
+	hb.hashMapRowCount = hb.InputBatchRowCount
+	hb.hashMapRowCountSet = true
 	if hb.InputBatchRowCount == 0 {
 		return nil
 	}
-	if err := hb.reserveBuildAux(); err != nil {
-		return err
+	if err := hb.reserveBuildAux(needUniqueVec); err != nil {
+		if !needUniqueVec {
+			return err
+		}
+		if runtimefilter.ClassifyOptionalFallback(err) !=
+			runtimefilter.OptionalFallbackBudgetAdmission {
+			return err
+		}
+		// The extra auxiliary charge exists only for optional exact-filter key
+		// retention. Retry the admission in place without that owner before
+		// allocating or mutating the mandatory map.
+		needUniqueVec = false
+		if err = hb.reserveBuildAux(false); err != nil {
+			return err
+		}
+		// Linearize the fallback only after mandatory admission succeeds. A
+		// failed retry is a fatal build, not a successful optional downgrade.
+		hb.runtimeFilterCollectionFallback = true
 	}
 	dedupBuildKeepLast = dedupBuildKeepLast && hb.IsDedup && hb.OnDuplicateAction == plan.Node_FAIL
 	defer func() {
@@ -615,6 +745,9 @@ func (hb *HashmapBuilder) buildHashmap(
 
 	for i := 0; i < hb.InputBatchRowCount; i += hashmap.UnitLimit {
 		if i%(hashmap.UnitLimit*32) == 0 {
+			if err := checkHashBuildCanceled(proc); err != nil {
+				return err
+			}
 			runtime.Gosched()
 		}
 		n := hb.InputBatchRowCount - i
@@ -677,7 +810,11 @@ func (hb *HashmapBuilder) buildHashmap(
 		}
 		for k, v := range vals[:n] {
 			if hb.IsDedup && hb.OnDuplicateAction == plan.Node_UPDATE {
-				hb.Sels.Insert(int32(v), int32(i+k))
+				group := int32(v)
+				if zvals[k] == 0 || v == 0 {
+					group = 0
+				}
+				hb.Sels.Insert(group, int32(i+k))
 				continue
 			}
 
@@ -753,15 +890,51 @@ func (hb *HashmapBuilder) buildHashmap(
 			if len(hb.UniqueJoinKeys) == 0 {
 				hb.UniqueJoinKeys = make([]*vector.Vector, len(hb.executors))
 				for j, vec := range hb.curVecs {
-					hb.UniqueJoinKeys[j] = vector.NewOffHeapVecWithType(*vec.GetType())
+					if hb.collectUniqueKeySlot(j) {
+						hb.UniqueJoinKeys[j] =
+							vector.NewOffHeapVecWithType(*vec.GetType())
+					}
 				}
 			}
 
 			if hashOnPK {
 				for j, vec := range hb.curVecs {
+					if !hb.collectUniqueKeySlot(j) {
+						continue
+					}
+					areaBytes, reserveErr :=
+						unionBatchAreaBytes(vec, vecIdx2, n)
+					if reserveErr != nil {
+						// Range and overflow failures contradict the collection
+						// oracle; they are never optional allocation failures.
+						return reserveErr
+					}
+					overlap, reserveErr := hb.reserveUniqueAppendOverlap(hb.UniqueJoinKeys[j], n, areaBytes)
+					if reserveErr != nil {
+						if fatalErr :=
+							hb.fallbackOptionalRuntimeFilterCollection(
+								proc, reserveErr); fatalErr != nil {
+							return fatalErr
+						}
+						needUniqueVec = false
+						break
+					}
 					err = hb.UniqueJoinKeys[j].UnionBatch(vec, int64(vecIdx2), n, nil, proc.Mp())
+					if overlap != nil {
+						overlap.Release()
+					}
 					if err != nil {
-						return err
+						// With the range and capacity oracle above satisfied,
+						// UnionBatch error returns are only mpool growth failures.
+						allocationErr :=
+							runtimefilter.MarkOptionalAllocationError(err)
+						if fatalErr :=
+							hb.fallbackOptionalRuntimeFilterCollection(
+								proc, allocationErr); fatalErr != nil {
+							return fatalErr
+						}
+						needUniqueVec = false
+						break
 					}
 				}
 			} else {
@@ -778,9 +951,41 @@ func (hb *HashmapBuilder) buildHashmap(
 				hb.uniqueSels = newSels
 
 				for j, vec := range hb.curVecs {
+					if !hb.collectUniqueKeySlot(j) {
+						continue
+					}
+					areaBytes, reserveErr := uniqueAppendAreaBytes(vec, 0, len(newSels), newSels)
+					if reserveErr != nil {
+						// Selector/range/overflow failures are collection
+						// contract errors and remain fatal.
+						return reserveErr
+					}
+					overlap, reserveErr := hb.reserveUniqueAppendOverlap(hb.UniqueJoinKeys[j], len(newSels), areaBytes)
+					if reserveErr != nil {
+						if fatalErr :=
+							hb.fallbackOptionalRuntimeFilterCollection(
+								proc, reserveErr); fatalErr != nil {
+							return fatalErr
+						}
+						needUniqueVec = false
+						break
+					}
 					err = hb.UniqueJoinKeys[j].Union(vec, newSels, proc.Mp())
+					if overlap != nil {
+						overlap.Release()
+					}
 					if err != nil {
-						return err
+						// With generated selectors and the capacity oracle above
+						// satisfied, Union error returns are mpool growth failures.
+						allocationErr :=
+							runtimefilter.MarkOptionalAllocationError(err)
+						if fatalErr :=
+							hb.fallbackOptionalRuntimeFilterCollection(
+								proc, allocationErr); fatalErr != nil {
+							return fatalErr
+						}
+						needUniqueVec = false
+						break
 					}
 				}
 			}
@@ -788,6 +993,15 @@ func (hb *HashmapBuilder) buildHashmap(
 	}
 
 	if dedupBuildKeepLast && hb.IgnoreRows.Count() > 0 {
+		if needUniqueVec {
+			if err := hb.releaseOptionalRuntimeFilterKeys(proc); err != nil {
+				return err
+			}
+		}
+		// keepDiscardedRowsForDelete rewrites Batches in place before copying
+		// delete-only rows. An admission failure after that boundary cannot be
+		// recovered by replaying the original BuildHashmap call.
+		hb.retainedBatchRecoverySafe = false
 		if err := hb.keepDiscardedRowsForDelete(proc); err != nil {
 			return err
 		}
@@ -797,7 +1011,13 @@ func (hb *HashmapBuilder) buildHashmap(
 		} else {
 			hb.InputBatchRowCount = totalRowCount
 		}
+		hb.hashMapRowCount = hb.InputBatchRowCount
 		hb.resetHashStateForRebuild(proc)
+		needUniqueVec, err = hb.prepareCanonicalRuntimeFilterCollection(
+			runtimeFilterRequested)
+		if err != nil {
+			return err
+		}
 		if err := hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, false, proc); err != nil {
 			return err
 		}
@@ -805,6 +1025,12 @@ func (hb *HashmapBuilder) buildHashmap(
 		return nil
 	}
 	if hb.IsDedup && hb.OnDuplicateAction == plan.Node_IGNORE && hb.IgnoreRows.Count() > 0 {
+		if needUniqueVec {
+			if err := hb.releaseOptionalRuntimeFilterKeys(proc); err != nil {
+				return err
+			}
+		}
+		hb.retainedBatchRecoverySafe = false
 		// Shrinking changes physical row indexes. Rebuild before producing
 		// DelRows and GroupSels so bucket-to-row mappings address the compacted
 		// batches, including when a later unchanged-key owner replaced an earlier
@@ -813,8 +1039,14 @@ func (hb *HashmapBuilder) buildHashmap(
 			return err
 		}
 		hb.InputBatchRowCount = hb.Batches.RowCount()
+		hb.hashMapRowCount = hb.InputBatchRowCount
 		hb.DelRows = nil
 		hb.resetHashStateForRebuild(proc)
+		needUniqueVec, err = hb.prepareCanonicalRuntimeFilterCollection(
+			runtimeFilterRequested)
+		if err != nil {
+			return err
+		}
 		return hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, false, proc)
 	}
 
@@ -838,6 +1070,9 @@ func (hb *HashmapBuilder) buildHashmap(
 		}
 		for i := 0; i < delScanRowCount; i += hashmap.UnitLimit {
 			if i%(hashmap.UnitLimit*32) == 0 {
+				if err := checkHashBuildCanceled(proc); err != nil {
+					return err
+				}
 				runtime.Gosched()
 			}
 			n := delScanRowCount - i
@@ -925,8 +1160,9 @@ func (hb *HashmapBuilder) resetHashStateForRebuild(proc *process.Process) {
 }
 
 // FreeHashMapOnly discards a partial hash build while preserving the copied
-// build batches and their reservations for bounded spill recovery. It is the
-// only supported transition from a failed BuildHashmap attempt to re-spill.
+// build batches and their reservations. It is the supported transition from a
+// failed BuildHashmap attempt to either a less memory-intensive rebuild or
+// bounded spill recovery.
 func (hb *HashmapBuilder) FreeHashMapOnly(proc *process.Process) {
 	hb.resetHashStateForRebuild(proc)
 	hb.DelRows = nil

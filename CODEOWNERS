@@ -226,8 +226,6 @@
 # proxy
 /pkg/proxy @XuPeng-SH @gouhongshen
 
-/pkg/stream @fengttt
-
 /pkg/udf @gouhongshen @fengttt
 
 /pkg/version @aptend

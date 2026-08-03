@@ -2087,7 +2087,7 @@ Error information includes several elements: an error code, SQLSTATE value, and 
 */
 func (mp *MysqlProtocolImpl) sendErrPacket(errorCode uint16, sqlState, errorMessage string) error {
 	if mp.ses != nil {
-		mp.ses.GetErrInfo().push(errorCode, errorMessage)
+		mp.ses.appendErrorDiagnostic(errorCode, errorMessage)
 	}
 	errPkt := mp.makeErrPayload(errorCode, sqlState, errorMessage)
 	return mp.writePackets(errPkt)
@@ -3856,6 +3856,11 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs *Conn) {
 		mp.ses.Debugf(mp.ctx, "failed to set deadline for salt updating: %v", err)
 		return
 	}
+	defer func() {
+		if err := rs.RawConn().SetReadDeadline(time.Time{}); err != nil {
+			mp.ses.Debugf(mp.ctx, "failed to clear deadline for salt updating: %v", err)
+		}
+	}()
 	var i proxy.ExtraInfo
 	reader := bufio.NewReader(rs.RawConn())
 	if err := i.Decode(reader); err != nil {

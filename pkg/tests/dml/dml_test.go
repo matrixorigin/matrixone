@@ -38,7 +38,7 @@ import (
 )
 
 func TestDeleteAndSelect(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
 			defer cancel()
@@ -113,7 +113,7 @@ func TestDeleteAndSelect(t *testing.T) {
 }
 
 func TestDataBranchDiffAsFile(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*240)
 			defer cancel()
@@ -191,7 +191,7 @@ func dataBranchScaleRows(full, short int) int {
 }
 
 func TestCloneCommitFailureRollbackKeepsSourceFiles(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*240)
 			defer cancel()

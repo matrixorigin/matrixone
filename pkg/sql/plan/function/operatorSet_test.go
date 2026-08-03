@@ -16,6 +16,7 @@ package function
 
 import (
 	"testing"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -507,6 +508,18 @@ func TestIffCheck_PreservesBinaryResultTypes(t *testing.T) {
 	}
 }
 
+func TestIffCheckDifferentFixedBinaryPromotesToVarbinary(t *testing.T) {
+	result := iffCheck(nil, []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_binary, 4, 0),
+		types.New(types.T_binary, 8, 0),
+	})
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, types.T_varbinary, result.finalType[1].Oid)
+	require.Equal(t, int32(8), result.finalType[1].Width)
+	require.Equal(t, result.finalType[1], result.finalType[2])
+}
+
 func TestIffCheck_VectorCommonType(t *testing.T) {
 	vecf32 := types.New(types.T_array_float32, 2, 0)
 	vecf64 := types.New(types.T_array_float64, 2, 0)
@@ -792,6 +805,235 @@ func Test_CaseCheck_MixedStringNumeric(t *testing.T) {
 	require.True(t, result.finalType[2].Oid.IsMySQLString())
 	require.Equal(t, int32(types.MaxVarBinaryLen), result.finalType[1].Width)
 	require.Equal(t, int32(types.MaxVarBinaryLen), result.finalType[2].Width)
+}
+
+func TestSignedUnsignedIntegerCommonTypeWithNull(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source []types.Type
+		wantOK bool
+	}{
+		{
+			name:   "leading null",
+			source: []types.Type{types.T_any.ToType(), types.T_uint64.ToType(), types.T_int64.ToType()},
+			wantOK: true,
+		},
+		{
+			name:   "middle null",
+			source: []types.Type{types.T_uint64.ToType(), types.T_any.ToType(), types.T_int64.ToType()},
+			wantOK: true,
+		},
+		{
+			name:   "trailing null",
+			source: []types.Type{types.T_uint64.ToType(), types.T_int64.ToType(), types.T_any.ToType()},
+			wantOK: true,
+		},
+		{
+			name:   "null and signed only",
+			source: []types.Type{types.T_any.ToType(), types.T_int64.ToType()},
+			wantOK: false,
+		},
+		{
+			name:   "null and unsigned only",
+			source: []types.Type{types.T_uint64.ToType(), types.T_any.ToType()},
+			wantOK: false,
+		},
+		{
+			name:   "only null",
+			source: []types.Type{types.T_any.ToType()},
+			wantOK: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, ok := signedUnsignedIntegerCommonType(test.source)
+			require.Equal(t, test.wantOK, ok)
+			if !test.wantOK {
+				return
+			}
+			require.Equal(t, types.T_decimal128, result.Oid)
+			require.Equal(t, int32(21), result.Width)
+			require.Zero(t, result.Scale)
+		})
+	}
+}
+
+func TestCaseCheckSignedUnsignedIntegerWithNull(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		inputs []types.Type
+	}{
+		{
+			name: "leading null",
+			inputs: []types.Type{
+				types.T_bool.ToType(), types.T_any.ToType(),
+				types.T_bool.ToType(), types.T_uint64.ToType(),
+				types.T_int64.ToType(),
+			},
+		},
+		{
+			name: "middle null",
+			inputs: []types.Type{
+				types.T_bool.ToType(), types.T_uint64.ToType(),
+				types.T_bool.ToType(), types.T_any.ToType(),
+				types.T_int64.ToType(),
+			},
+		},
+		{
+			name: "trailing null",
+			inputs: []types.Type{
+				types.T_bool.ToType(), types.T_uint64.ToType(),
+				types.T_bool.ToType(), types.T_int64.ToType(),
+				types.T_any.ToType(),
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := caseCheck(nil, test.inputs)
+			require.Equal(t, succeedWithCast, result.status)
+			require.Len(t, result.finalType, len(test.inputs))
+			for i, typ := range result.finalType {
+				if i%2 == 0 && i != len(result.finalType)-1 {
+					require.Equal(t, types.T_bool, typ.Oid)
+					continue
+				}
+				require.Equal(t, types.T_decimal128, typ.Oid)
+				require.Equal(t, int32(21), typ.Width)
+				require.Zero(t, typ.Scale)
+			}
+		})
+	}
+}
+
+func TestBinaryStringCommonTypeCapsUTF8MB4Width(t *testing.T) {
+	tests := []struct {
+		name         string
+		varcharWidth int32
+		wantWidth    int32
+	}{
+		{name: "one character", varcharWidth: 1, wantWidth: utf8.UTFMax},
+		{name: "maximum varchar", varcharWidth: types.MaxVarcharLen, wantWidth: types.MaxVarBinaryLen},
+		{name: "unknown varchar", varcharWidth: -1, wantWidth: types.MaxVarBinaryLen},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, ok := binaryStringCommonType([]types.Type{
+				types.New(types.T_varbinary, 1, 0),
+				types.New(types.T_varchar, test.varcharWidth, 0),
+			})
+			require.True(t, ok)
+			require.Equal(t, types.T_varbinary, result.Oid)
+			require.Equal(t, test.wantWidth, result.Width)
+		})
+	}
+}
+
+func TestBinaryStringCommonTypePreservesSameFixedBinary(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		source    []types.Type
+		wantOK    bool
+		wantOid   types.T
+		wantWidth int32
+	}{
+		{
+			name: "same fixed binary",
+			source: []types.Type{
+				types.New(types.T_binary, 4, 0),
+				types.New(types.T_binary, 4, 0),
+			},
+			wantOK:    true,
+			wantOid:   types.T_binary,
+			wantWidth: 4,
+		},
+		{
+			name: "different fixed binary widths",
+			source: []types.Type{
+				types.New(types.T_binary, 4, 0),
+				types.New(types.T_binary, 8, 0),
+			},
+			wantOK:    true,
+			wantOid:   types.T_varbinary,
+			wantWidth: 8,
+		},
+		{
+			name: "leading null fixed binary",
+			source: []types.Type{
+				types.T_any.ToType(),
+				types.New(types.T_binary, 4, 0),
+			},
+			wantOK:    true,
+			wantOid:   types.T_binary,
+			wantWidth: 4,
+		},
+		{
+			name: "trailing null fixed binary",
+			source: []types.Type{
+				types.New(types.T_binary, 4, 0),
+				types.T_any.ToType(),
+			},
+			wantOK:    true,
+			wantOid:   types.T_binary,
+			wantWidth: 4,
+		},
+		{
+			name: "middle null fixed binary",
+			source: []types.Type{
+				types.New(types.T_binary, 4, 0),
+				types.T_any.ToType(),
+				types.New(types.T_binary, 4, 0),
+			},
+			wantOK:    true,
+			wantOid:   types.T_binary,
+			wantWidth: 4,
+		},
+		{
+			name: "leading null varbinary",
+			source: []types.Type{
+				types.T_any.ToType(),
+				types.New(types.T_varbinary, 4, 0),
+			},
+			wantOK:    true,
+			wantOid:   types.T_varbinary,
+			wantWidth: 4,
+		},
+		{
+			name: "trailing null varbinary",
+			source: []types.Type{
+				types.New(types.T_varbinary, 4, 0),
+				types.T_any.ToType(),
+			},
+			wantOK:    true,
+			wantOid:   types.T_varbinary,
+			wantWidth: 4,
+		},
+		{
+			name: "middle null varbinary",
+			source: []types.Type{
+				types.New(types.T_varbinary, 4, 0),
+				types.T_any.ToType(),
+				types.New(types.T_varbinary, 4, 0),
+			},
+			wantOK:    true,
+			wantOid:   types.T_varbinary,
+			wantWidth: 4,
+		},
+		{
+			name:   "only null is not binary",
+			source: []types.Type{types.T_any.ToType()},
+			wantOK: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, ok := binaryStringCommonType(test.source)
+			require.Equal(t, test.wantOK, ok)
+			if !test.wantOK {
+				return
+			}
+			require.Equal(t, test.wantOid, result.Oid)
+			require.Equal(t, test.wantWidth, result.Width)
+		})
+	}
 }
 
 func Test_CaseCheck_DifferentDecimalScale(t *testing.T) {
@@ -1229,6 +1471,23 @@ func Test_CaseFn_Decimal256Execution(t *testing.T) {
 		},
 		expect: NewFunctionTestResult(retType, false,
 			[]types.Decimal256{d1, d2}, nil),
+	}
+	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, caseFn)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, tc.info, info)
+}
+
+func Test_CaseFn_VarBinaryExecution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	retType := types.New(types.T_varbinary, 6, 0)
+	tc := tcTemp{
+		info: "caseFn varbinary: CASE WHEN c THEN a ELSE bc",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil),
+			NewFunctionTestInput(retType, []string{"a", "a"}, nil),
+			NewFunctionTestInput(retType, []string{"bc", "bc"}, nil),
+		},
+		expect: NewFunctionTestResult(retType, false, []string{"a", "bc"}, nil),
 	}
 	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, caseFn)
 	succeed, info := tcc.Run()

@@ -16,6 +16,7 @@ package hashmap
 
 import (
 	"io"
+	"math"
 	"math/rand"
 	"strconv"
 	"testing"
@@ -30,6 +31,384 @@ import (
 const (
 	Rows = 10
 )
+
+type floatHashMapShape struct {
+	name        string
+	vectorKind  string
+	hasNull     bool
+	start       int
+	count       int
+	wantValues  []uint64
+	wantZValues []int64
+	wantGroups  uint64
+}
+
+type floatHashMapVectorFactory func(
+	t *testing.T,
+	m *mpool.MPool,
+	vectorKind string,
+) (*vector.Vector, *vector.Vector)
+
+func TestHashMapsFloat64SignedZeroContract(t *testing.T) {
+	// Vector representation and NULL policy must not change the signed-zero
+	// equality contract. Exercise both the single-key IntHashMap and a
+	// composite-key StrHashMap through their public iterator API.
+	runFloatHashMapContract(t, makeFloat64HashMapShapeVectors)
+}
+
+func TestHashMapsScaledFloat32Contract(t *testing.T) {
+	// Scaled FLOAT32 keys must use the same normalization in every hashmap
+	// representation and NULL policy.
+	runFloatHashMapContract(t, makeFloat32HashMapShapeVectors)
+}
+
+func TestIntHashMapFloat32NullableOffset(t *testing.T) {
+	for _, hasNull := range []bool{false, true} {
+		shape := floatHashMapShape{
+			name:        "flat-null-offset-unscaled",
+			vectorKind:  "flat-null-offset-unscaled",
+			hasNull:     hasNull,
+			start:       1,
+			count:       2,
+			wantValues:  []uint64{1, 0},
+			wantZValues: []int64{1, 0},
+			wantGroups:  1,
+		}
+		if hasNull {
+			shape.wantValues = []uint64{1, 2}
+			shape.wantZValues = []int64{1, 1}
+			shape.wantGroups = 2
+		}
+		t.Run("has-null-"+strconv.FormatBool(hasNull), func(t *testing.T) {
+			runFloatHashMapShape(t, false, shape, makeFloat32HashMapShapeVectors)
+		})
+	}
+}
+
+func TestIntHashMapFloat32CompositeFloatLast(t *testing.T) {
+	negativeZero := float32(math.Copysign(0, -1))
+	for _, scaleCase := range []struct {
+		name       string
+		scale      int32
+		buildValue float32
+		probeValue float32
+	}{
+		{name: "unscaled", buildValue: 0, probeValue: negativeZero},
+		{name: "scaled", scale: 2, buildValue: 1.234, probeValue: 1.23},
+	} {
+		t.Run(scaleCase.name, func(t *testing.T) {
+			runIntHashMapFloat32CompositeFloatLastCase(
+				t,
+				scaleCase.scale,
+				scaleCase.buildValue,
+				scaleCase.probeValue,
+			)
+		})
+	}
+}
+
+func runIntHashMapFloat32CompositeFloatLastCase(
+	t *testing.T,
+	scale int32,
+	buildValue, probeValue float32,
+) {
+	m := mpool.MustNewZero()
+	floatType := types.T_float32.ToType()
+	floatType.Scale = scale
+	buildFloat := vector.NewVec(floatType)
+	probeFloat := vector.NewVec(floatType)
+	buildDiscriminator := vector.NewVec(types.T_int32.ToType())
+	probeDiscriminator := vector.NewVec(types.T_int32.ToType())
+	vectors := []*vector.Vector{buildFloat, probeFloat, buildDiscriminator, probeDiscriminator}
+	defer func() {
+		for _, vec := range vectors {
+			vec.Free(m)
+		}
+		require.Zero(t, m.Stats().NumCurrBytes.Load())
+	}()
+	require.NoError(t, vector.AppendFixed(buildFloat, buildValue, false, m))
+	require.NoError(t, vector.AppendFixed(probeFloat, probeValue, false, m))
+	require.NoError(t, vector.AppendFixed(buildDiscriminator, int32(7), false, m))
+	require.NoError(t, vector.AppendFixed(probeDiscriminator, int32(7), false, m))
+
+	buildKeys := []*vector.Vector{buildDiscriminator, buildFloat}
+	probeKeys := []*vector.Vector{probeDiscriminator, probeFloat}
+	hashMap, err := NewIntHashMap(false, m)
+	require.NoError(t, err)
+	defer hashMap.Free()
+	itr := hashMap.NewIterator()
+	values, zValues, err := itr.Insert(0, 1, buildKeys)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1}, values)
+	require.Equal(t, []int64{1}, zValues)
+	values, zValues = itr.Find(0, 1, probeKeys)
+	require.Equal(t, []uint64{1}, values)
+	require.Equal(t, []int64{1}, zValues)
+}
+
+func runFloatHashMapContract(t *testing.T, makeVectors floatHashMapVectorFactory) {
+	mapKinds := []struct {
+		name      string
+		composite bool
+	}{
+		{name: "int"},
+		{name: "composite-str", composite: true},
+	}
+	shapes := []floatHashMapShape{
+		{
+			name:        "flat",
+			vectorKind:  "flat",
+			start:       1,
+			count:       1,
+			wantValues:  []uint64{1},
+			wantZValues: []int64{1},
+			wantGroups:  1,
+		},
+		{
+			name:        "flat-nullable-map",
+			vectorKind:  "flat",
+			hasNull:     true,
+			start:       1,
+			count:       1,
+			wantValues:  []uint64{1},
+			wantZValues: []int64{1},
+			wantGroups:  1,
+		},
+		{
+			name:        "flat-null-filter",
+			vectorKind:  "flat-null",
+			count:       2,
+			wantValues:  []uint64{1, 0},
+			wantZValues: []int64{1, 0},
+			wantGroups:  1,
+		},
+		{
+			name:        "flat-null-key",
+			vectorKind:  "flat-null",
+			hasNull:     true,
+			count:       2,
+			wantValues:  []uint64{1, 2},
+			wantZValues: []int64{1, 1},
+			wantGroups:  2,
+		},
+		{
+			name:        "const",
+			vectorKind:  "const",
+			count:       2,
+			wantValues:  []uint64{1, 1},
+			wantZValues: []int64{1, 1},
+			wantGroups:  1,
+		},
+		{
+			name:        "const-nullable-map",
+			vectorKind:  "const",
+			hasNull:     true,
+			count:       2,
+			wantValues:  []uint64{1, 1},
+			wantZValues: []int64{1, 1},
+			wantGroups:  1,
+		},
+		{
+			name:        "const-null-filter",
+			vectorKind:  "const-null",
+			count:       2,
+			wantValues:  []uint64{0, 0},
+			wantZValues: []int64{0, 0},
+			wantGroups:  0,
+		},
+		{
+			name:        "const-null-key",
+			vectorKind:  "const-null",
+			hasNull:     true,
+			count:       2,
+			wantValues:  []uint64{1, 1},
+			wantZValues: []int64{1, 1},
+			wantGroups:  1,
+		},
+	}
+
+	for _, mapKind := range mapKinds {
+		for _, shape := range shapes {
+			t.Run(mapKind.name+"/"+shape.name, func(t *testing.T) {
+				runFloatHashMapShape(t, mapKind.composite, shape, makeVectors)
+			})
+		}
+	}
+}
+
+func runFloatHashMapShape(
+	t *testing.T,
+	composite bool,
+	shape floatHashMapShape,
+	makeVectors floatHashMapVectorFactory,
+) {
+	m := mpool.MustNewZero()
+	var (
+		hashMap HashMap
+		itr     Iterator
+		build   []*vector.Vector
+		probe   []*vector.Vector
+	)
+	if composite {
+		mp, err := NewStrHashMap(shape.hasNull, m)
+		require.NoError(t, err)
+		hashMap = mp
+		itr = mp.NewIterator()
+	} else {
+		mp, err := NewIntHashMap(shape.hasNull, m)
+		require.NoError(t, err)
+		hashMap = mp
+		itr = mp.NewIterator()
+	}
+	defer func() {
+		hashMap.Free()
+		for _, vec := range build {
+			vec.Free(m)
+		}
+		for _, vec := range probe {
+			vec.Free(m)
+		}
+		require.Zero(t, m.Stats().NumCurrBytes.Load())
+	}()
+	buildFloat, probeFloat := makeVectors(t, m, shape.vectorKind)
+	build = makeFloatHashMapKeys(t, m, buildFloat, composite)
+	probe = makeFloatHashMapKeys(t, m, probeFloat, composite)
+
+	values, zValues, err := itr.Insert(shape.start, shape.count, build)
+	require.NoError(t, err)
+	require.Equal(t, shape.wantZValues, zValues)
+	require.Equal(t, shape.wantValues, liveHashMapValues(values, zValues))
+	require.Equal(t, shape.wantGroups, hashMap.GroupCount())
+
+	values, zValues = itr.Find(shape.start, shape.count, probe)
+	require.Equal(t, shape.wantZValues, zValues)
+	require.Equal(t, shape.wantValues, liveHashMapValues(values, zValues))
+	require.Equal(t, shape.wantGroups, hashMap.GroupCount())
+}
+
+func liveHashMapValues(values []uint64, zValues []int64) []uint64 {
+	live := append([]uint64(nil), values...)
+	for row := range live {
+		// Iterator values are unspecified when zValues marks the row filtered.
+		if zValues[row] == 0 {
+			live[row] = 0
+		}
+	}
+	return live
+}
+
+func makeFloat64HashMapShapeVectors(
+	t *testing.T,
+	m *mpool.MPool,
+	vectorKind string,
+) (*vector.Vector, *vector.Vector) {
+	floatType := types.T_float64.ToType()
+	switch vectorKind {
+	case "flat":
+		build := vector.NewVec(floatType)
+		probe := vector.NewVec(floatType)
+		require.NoError(t, vector.AppendFixed(build, float64(123), false, m))
+		require.NoError(t, vector.AppendFixed(build, float64(0), false, m))
+		require.NoError(t, vector.AppendFixed(probe, float64(456), false, m))
+		require.NoError(t, vector.AppendFixed(probe, math.Copysign(0, -1), false, m))
+		return build, probe
+	case "flat-null":
+		build := vector.NewVec(floatType)
+		probe := vector.NewVec(floatType)
+		require.NoError(t, vector.AppendFixed(build, float64(0), false, m))
+		require.NoError(t, vector.AppendFixed(build, float64(99), true, m))
+		require.NoError(t, vector.AppendFixed(probe, math.Copysign(0, -1), false, m))
+		require.NoError(t, vector.AppendFixed(probe, float64(77), true, m))
+		return build, probe
+	case "const":
+		build, err := vector.NewConstFixed(floatType, float64(0), 2, m)
+		require.NoError(t, err)
+		probe, err := vector.NewConstFixed(floatType, math.Copysign(0, -1), 2, m)
+		require.NoError(t, err)
+		return build, probe
+	case "const-null":
+		return vector.NewConstNull(floatType, 2, m), vector.NewConstNull(floatType, 2, m)
+	default:
+		t.Fatalf("unknown float64 hashmap vector kind %q", vectorKind)
+		return nil, nil
+	}
+}
+
+func makeFloat32HashMapShapeVectors(
+	t *testing.T,
+	m *mpool.MPool,
+	vectorKind string,
+) (*vector.Vector, *vector.Vector) {
+	floatType := types.T_float32.ToType()
+	floatType.Scale = 2
+	switch vectorKind {
+	case "flat":
+		build := vector.NewVec(floatType)
+		probe := vector.NewVec(floatType)
+		require.NoError(t, vector.AppendFixed(build, float32(123), false, m))
+		require.NoError(t, vector.AppendFixed(build, float32(1.234), false, m))
+		require.NoError(t, vector.AppendFixed(probe, float32(456), false, m))
+		require.NoError(t, vector.AppendFixed(probe, float32(1.23), false, m))
+		return build, probe
+	case "flat-null":
+		build := vector.NewVec(floatType)
+		probe := vector.NewVec(floatType)
+		require.NoError(t, vector.AppendFixed(build, float32(1.234), false, m))
+		require.NoError(t, vector.AppendFixed(build, float32(99), true, m))
+		require.NoError(t, vector.AppendFixed(probe, float32(1.23), false, m))
+		require.NoError(t, vector.AppendFixed(probe, float32(77), true, m))
+		return build, probe
+	case "flat-null-offset-unscaled":
+		floatType.Scale = 0
+		build := vector.NewVec(floatType)
+		probe := vector.NewVec(floatType)
+		require.NoError(t, vector.AppendFixed(build, float32(123), false, m))
+		require.NoError(t, vector.AppendFixed(build, float32(1.25), false, m))
+		require.NoError(t, vector.AppendFixed(build, float32(99), true, m))
+		require.NoError(t, vector.AppendFixed(probe, float32(456), false, m))
+		require.NoError(t, vector.AppendFixed(probe, float32(1.25), false, m))
+		require.NoError(t, vector.AppendFixed(probe, float32(77), true, m))
+		return build, probe
+	case "const":
+		build, err := vector.NewConstFixed(floatType, float32(1.234), 2, m)
+		require.NoError(t, err)
+		probe, err := vector.NewConstFixed(floatType, float32(1.23), 2, m)
+		require.NoError(t, err)
+		return build, probe
+	case "const-null":
+		return vector.NewConstNull(floatType, 2, m), vector.NewConstNull(floatType, 2, m)
+	default:
+		t.Fatalf("unknown float32 hashmap vector kind %q", vectorKind)
+		return nil, nil
+	}
+}
+
+func makeFloatHashMapKeys(
+	t *testing.T,
+	m *mpool.MPool,
+	floatVec *vector.Vector,
+	composite bool,
+) []*vector.Vector {
+	if !composite {
+		return []*vector.Vector{floatVec}
+	}
+
+	// FLOAT32 plus INT64 is wider than eight bytes, matching production's
+	// composite StrHashMap selection.
+	intType := types.T_int64.ToType()
+	var discriminator *vector.Vector
+	if floatVec.IsConst() {
+		var err error
+		discriminator, err = vector.NewConstFixed(intType, int64(7), floatVec.Length(), m)
+		require.NoError(t, err)
+	} else {
+		discriminator = vector.NewVec(intType)
+		for row := 0; row < floatVec.Length(); row++ {
+			require.NoError(t, vector.AppendFixed(discriminator, int64(7), false, m))
+		}
+	}
+	return []*vector.Vector{floatVec, discriminator}
+}
 
 func TestInsert(t *testing.T) {
 	m := mpool.MustNewZero()

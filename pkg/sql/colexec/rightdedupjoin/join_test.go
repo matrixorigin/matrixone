@@ -22,8 +22,10 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -184,9 +186,10 @@ func runRightDedupSpilledEmptyBuild(t *testing.T, pessimistic, duplicateAcrossBa
 	arg.AppendChild(colexec.NewMockOperator().WithBatchs(probeBatches))
 
 	jm := message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, proc.Mp())
-	jm.Spilled = true
-	jm.SpillBuildFds = make([]*os.File, spillutil.SpillNumBuckets)
 	jm.IncRef(1)
+	require.NoError(t, jm.SetSpillBuildPayload(message.SpillBuildPayload{
+		LegacyFds: make([]*os.File, spillutil.SpillNumBuckets),
+	}))
 	message.SendMessage(message.JoinMapMsg{
 		JoinMapPtr: jm,
 		IsShuffle:  true,
@@ -275,6 +278,68 @@ func TestRightDedupEmptyMapUsesEvaluatedKeyType(t *testing.T) {
 	jm.Free()
 	keys.Free(proc.Mp())
 	proc.Free()
+}
+
+func TestRightDedupEmptyBuildProbeMapHonorsHashBuildBudget(t *testing.T) {
+	proc, ctrl := newRightDedupTestProcess(t, false)
+	defer ctrl.Finish()
+
+	initialBytes := hashtable.Int64HashMapInitialAllocationBytes()
+	proc.Base.Lim.Size = int64(initialBytes)
+	budget, err := proc.GetHashBuildBudget()
+	require.NoError(t, err)
+
+	const rows = 2_048
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	probe := batch.NewWithSize(1)
+	probe.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	probe.SetRowCount(rows)
+	probeSource := colexec.NewMockOperator().WithBatchs([]*batch.Batch{probe})
+
+	typ := types.T_int32.ToType()
+	tag++
+	arg := &RightDedupJoin{
+		LeftTypes:         []types.Type{typ},
+		RightTypes:        []types.Type{typ},
+		Conditions:        [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}},
+		Result:            []colexec.ResultPos{{Rel: 0, Pos: 0}},
+		OnDuplicateAction: plan.Node_FAIL,
+		DedupColName:      "pk",
+		DedupColTypes:     []plan.Type{{Id: int32(types.T_int32)}},
+		JoinMapTag:        tag,
+	}
+	arg.AppendChild(probeSource)
+	var callErr error
+	t.Cleanup(func() {
+		arg.Free(proc, true, callErr)
+		require.Zero(t, budget.Used())
+		require.Zero(t, budget.SpillDiskUsed())
+		require.Zero(t, budget.SpillFDUsed())
+		probeSource.Free(proc, true, callErr)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	message.SendJoinMapResult(
+		message.NewJoinMapResult(nil),
+		arg.JoinMapTag,
+		false,
+		0,
+		proc.GetMessageBoard(),
+	)
+
+	require.NoError(t, arg.Prepare(proc))
+	_, callErr = arg.Call(proc)
+	require.Error(t, callErr)
+	require.True(t, moerr.IsMoErrCode(callErr, moerr.ErrOOM), callErr)
+	require.NotErrorIs(t, callErr, process.ErrHashBuildBudgetAdmission)
+	require.NotContains(t, callErr.Error(), "convert go error")
+	require.NotContains(t, callErr.Error(), process.ErrHashBuildBudgetAdmission.Error())
+	require.Contains(t, callErr.Error(), "hash build memory budget exceeded")
+	require.Equal(t, initialBytes, budget.Used(),
+		"the admitted initial table remains owned until operator cleanup")
 }
 
 var (

@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -69,6 +70,39 @@ func TestJsonOrderingOperatorsUseExactComparison(t *testing.T) {
 		ok, info := testCase.Run()
 		require.True(t, ok, info)
 	})
+}
+
+func TestJSONBinaryEqualityUsesSubtypeAndRawPayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	encode := func(t *testing.T, value bytejson.ByteJson) string {
+		t.Helper()
+		encoded, err := types.EncodeJson(value)
+		require.NoError(t, err)
+		return string(encoded)
+	}
+	run := func(t *testing.T, fn fEvalFn, left, right bytejson.ByteJson, want bool) {
+		t.Helper()
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), []string{encode(t, left)}, []bool{false}),
+			NewFunctionTestInput(types.T_json.ToType(), []string{encode(t, right)}, []bool{false}),
+		}
+		expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{want}, []bool{false})
+		testCase := NewFunctionTestCase(proc, inputs, expect, fn)
+		ok, info := testCase.Run()
+		require.True(t, ok, info)
+	}
+
+	legacyBlob := newTypedByteJson(bytejson.TpCodeBlob, "AA==")
+	rawBlob := newTypedByteJson(bytejson.TpCodeOpaque, string([]byte{0x00}))
+	bit := newTypedByteJson(bytejson.TpCodeBit, string([]byte{0x00}))
+
+	run(t, equalFn, legacyBlob, rawBlob, true)
+	run(t, nullSafeEqualFn, legacyBlob, rawBlob, true)
+	run(t, notEqualFn, legacyBlob, rawBlob, false)
+	run(t, equalFn, bit, rawBlob, false)
+	run(t, lessThanFn, bit, rawBlob, true)
 }
 
 func TestOperatorOpBitAndUint64Fn(t *testing.T) {

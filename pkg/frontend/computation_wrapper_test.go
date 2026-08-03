@@ -228,6 +228,31 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	cw.proc.SetPrepareParams(nil)
 }
 
+func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 108, "set @prepared_set_value = ? + 1")
+	defer prepareStmt.Close()
+
+	install := func(value string) *vector.Vector {
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
+		prepareStmt.params = params
+
+		_, _, stmt, _, _, err := initExecuteStmtParam(
+			execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		require.IsType(t, &tree.SetVar{}, stmt)
+		require.Equal(t, value, cw.proc.GetPrepareParams().GetStringAt(0))
+		return params
+	}
+
+	first := install("41")
+	second := install("9")
+	first.Free(cw.proc.Mp())
+	require.Equal(t, "9", cw.proc.GetPrepareParams().GetStringAt(0))
+	require.Same(t, second, prepareStmt.params)
+}
+
 func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {
 	ses, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 103, "select ?, ?")
 	defer prepareStmt.Close()
@@ -763,8 +788,10 @@ func TestInitExecuteStmtParamRebuildsWhenProtocolVersionChanges(t *testing.T) {
 		from int64
 		to   int64
 	}{
-		{name: "upgrade", from: defines.MORPCVersion4, to: defines.MORPCVersion5},
-		{name: "rollback", from: defines.MORPCVersion5, to: defines.MORPCVersion4},
+		{name: "existing upgrade", from: defines.MORPCVersion4, to: defines.MORPCVersion5},
+		{name: "existing rollback", from: defines.MORPCVersion5, to: defines.MORPCVersion4},
+		{name: "upgrade", from: defines.MORPCVersion7, to: defines.MORPCVersion8},
+		{name: "rollback", from: defines.MORPCVersion8, to: defines.MORPCVersion7},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.from)

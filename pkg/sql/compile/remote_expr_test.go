@@ -18,7 +18,9 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
@@ -42,6 +44,62 @@ func TestScopeContainsVarExpr(t *testing.T) {
 	scope.setRootOperator(f)
 
 	require.True(t, scopeContainsVarExpr(scope))
+}
+
+func TestAggregateConfigTypeRemoteRoundTrip(t *testing.T) {
+	expected := aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfGroupConcat,
+		true,
+		[]*plan.Expr{makeTestVarExpr("value")},
+		[]byte{1, 2, 3},
+		plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+	)
+
+	wire := convertToPipelineAggregates([]aggexec.AggFuncExecExpression{expected})
+	require.Len(t, wire, 1)
+	require.Equal(
+		t,
+		plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+		wire[0].ConfigType,
+	)
+
+	actual := convertToAggregates(wire)
+	require.Len(t, actual, 1)
+	require.Equal(t, expected.GetExtraConfig(), actual[0].GetExtraConfig())
+	require.Equal(t, expected.GetConfigType(), actual[0].GetConfigType())
+}
+
+func TestOrderedAggregateRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	ordered := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfGroupConcat,
+		false,
+		[]*plan.Expr{makeTestVarExpr("value")},
+		[]byte{1, 2, 3},
+		plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+	)}
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion5)
+	require.ErrorContains(
+		t,
+		validateRemoteAggregateProtocol(proc, ordered),
+		"requires MORPC protocol version 6",
+	)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion6)
+	require.NoError(t, validateRemoteAggregateProtocol(proc, ordered))
+
+	require.NoError(t, validateRemoteAggregateProtocol(proc, []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfGroupConcat,
+			false,
+			[]*plan.Expr{makeTestVarExpr("value")},
+			[]byte(","),
+			plan.AggregateConfigType_AGG_CONFIG_NONE,
+		),
+	}))
 }
 
 func TestScopeContainsVarExprInAggArguments(t *testing.T) {

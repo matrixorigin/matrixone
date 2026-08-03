@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -96,7 +97,14 @@ func (m *StrHashMap) Size() int64 {
 func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 	for _, vec := range vecs {
 		if vec.GetType().IsFixedLen() {
-			fillGroupStr(itr, vec, count, vec.GetType().TypeSize(), start, 0, len(vecs))
+			switch vec.GetType().Oid {
+			case types.T_float32:
+				fillFloat32GroupStr(itr, vec, count, start)
+			case types.T_float64:
+				fillFloat64GroupStr(itr, vec, count, start)
+			default:
+				fillGroupStr(itr, vec, count, vec.GetType().TypeSize(), start, 0, len(vecs))
+			}
 		} else {
 			fillStringGroupStr(itr, vec, count, start, len(vecs))
 		}
@@ -105,6 +113,151 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 	for i := 0; i < count; i++ {
 		if l := len(keys[i]); l < 16 {
 			keys[i] = append(keys[i], hashtable.StrKeyPadding[l:]...)
+		}
+	}
+}
+
+func fillFloat32GroupStr(itr *strHashmapIterator, vec *vector.Vector, n, start int) {
+	keys := itr.keys
+	if vec.IsGrouping() {
+		for i := 0; i < n; i++ {
+			keys[i] = append(keys[i], byte(2))
+		}
+		return
+	}
+	if vec.IsConstNull() {
+		if itr.mp.hasNull {
+			for i := 0; i < n; i++ {
+				keys[i] = append(keys[i], byte(1))
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				itr.zValues[i] = 0
+			}
+		}
+		return
+	}
+
+	values := vector.MustFixedColNoTypeCheck[float32](vec)
+	codec := keycodec.NewFloat32Codec(vec.GetType().Scale)
+	if vec.IsConst() {
+		value := codec.CanonicalBytes(values[0])
+		for i := 0; i < n; i++ {
+			if itr.mp.hasNull {
+				keys[i] = append(keys[i], byte(0))
+			}
+			keys[i] = append(keys[i], value[:]...)
+		}
+		return
+	}
+
+	if !vec.GetNulls().Any() {
+		if itr.mp.hasNull {
+			for i := 0; i < n; i++ {
+				keys[i] = append(keys[i], byte(0))
+				value := codec.CanonicalBytes(values[i+start])
+				keys[i] = append(keys[i], value[:]...)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				value := codec.CanonicalBytes(values[i+start])
+				keys[i] = append(keys[i], value[:]...)
+			}
+		}
+		return
+	}
+
+	nsp := vec.GetNulls()
+	gsp := vec.GetGrouping()
+	for i := 0; i < n; i++ {
+		row := i + start
+		if itr.mp.hasNull {
+			if gsp.Contains(uint64(row)) {
+				keys[i] = append(keys[i], byte(2))
+			} else if nsp.Contains(uint64(row)) {
+				keys[i] = append(keys[i], byte(1))
+			} else {
+				keys[i] = append(keys[i], byte(0))
+				value := codec.CanonicalBytes(values[row])
+				keys[i] = append(keys[i], value[:]...)
+			}
+		} else if nsp.Contains(uint64(row)) {
+			itr.zValues[i] = 0
+		} else {
+			value := codec.CanonicalBytes(values[row])
+			keys[i] = append(keys[i], value[:]...)
+		}
+	}
+}
+
+func fillFloat64GroupStr(itr *strHashmapIterator, vec *vector.Vector, n, start int) {
+	keys := itr.keys
+	if vec.IsGrouping() {
+		for i := 0; i < n; i++ {
+			keys[i] = append(keys[i], byte(2))
+		}
+		return
+	}
+	if vec.IsConstNull() {
+		if itr.mp.hasNull {
+			for i := 0; i < n; i++ {
+				keys[i] = append(keys[i], byte(1))
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				itr.zValues[i] = 0
+			}
+		}
+		return
+	}
+	if vec.IsConst() {
+		values := vector.MustFixedColNoTypeCheck[float64](vec)
+		value := keycodec.CanonicalFloat64Bytes(values[0])
+		for i := 0; i < n; i++ {
+			if itr.mp.hasNull {
+				keys[i] = append(keys[i], byte(0))
+			}
+			keys[i] = append(keys[i], value[:]...)
+		}
+		return
+	}
+
+	values := vector.MustFixedColNoTypeCheck[float64](vec)
+	if !vec.GetNulls().Any() {
+		if itr.mp.hasNull {
+			for i := 0; i < n; i++ {
+				keys[i] = append(keys[i], byte(0))
+				value := keycodec.CanonicalFloat64Bytes(values[i+start])
+				keys[i] = append(keys[i], value[:]...)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				value := keycodec.CanonicalFloat64Bytes(values[i+start])
+				keys[i] = append(keys[i], value[:]...)
+			}
+		}
+		return
+	}
+
+	nsp := vec.GetNulls()
+	gsp := vec.GetGrouping()
+	for i := 0; i < n; i++ {
+		row := i + start
+		if itr.mp.hasNull {
+			if gsp.Contains(uint64(row)) {
+				keys[i] = append(keys[i], byte(2))
+			} else if nsp.Contains(uint64(row)) {
+				keys[i] = append(keys[i], byte(1))
+			} else {
+				keys[i] = append(keys[i], byte(0))
+				value := keycodec.CanonicalFloat64Bytes(values[row])
+				keys[i] = append(keys[i], value[:]...)
+			}
+		} else if nsp.Contains(uint64(row)) {
+			itr.zValues[i] = 0
+		} else {
+			value := keycodec.CanonicalFloat64Bytes(values[row])
+			keys[i] = append(keys[i], value[:]...)
 		}
 	}
 }

@@ -94,6 +94,12 @@ const (
 	ErrSubqueryNo1Row       uint16 = 20315
 	ErrInvalidTypeForJSON   uint16 = 20316
 	ErrUnknownStmtHandler   uint16 = 20317
+	ErrViewWrongList        uint16 = 20318
+	ErrWrongArguments       uint16 = 20319
+	ErrDerivedMustHaveAlias uint16 = 20320
+	ErrWrongUsage           uint16 = 20321
+	ErrUpdateTableUsed      uint16 = 20322
+	ErrWindowInvalidUse     uint16 = 20323
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -315,6 +321,7 @@ const (
 	ErrRowSinglePartitionField             uint16 = 20822
 	ErrTooManyPartitionFuncFields          uint16 = 20823
 	ErrTooManyParameter                    uint16 = 20824
+	ErrCteMemoryQuotaExceeded              uint16 = 20825
 
 	// Group 9: streaming
 	ErrUnsupportedOption   uint16 = 20901
@@ -414,6 +421,12 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrSubqueryNo1Row:       {ER_SUBQUERY_NO_1_ROW, []string{"21000"}, "Subquery returns more than 1 row"},
 	ErrInvalidTypeForJSON:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "Invalid data type for JSON data in argument %d to function %s; a JSON string or JSON type is required."},
 	ErrUnknownStmtHandler:   {ER_UNKNOWN_STMT_HANDLER, []string{MySQLDefaultSqlState}, "Unknown prepared statement handler (%s) given to %s"},
+	ErrViewWrongList:        {ER_VIEW_WRONG_LIST, []string{MySQLDefaultSqlState}, "In definition of view, derived table or common table expression, SELECT list and column names list have different column counts"},
+	ErrWrongArguments:       {ER_WRONG_ARGUMENTS, []string{MySQLDefaultSqlState}, "Incorrect arguments to %s"},
+	ErrDerivedMustHaveAlias: {ER_DERIVED_MUST_HAVE_ALIAS, []string{"42000"}, "Every derived table must have its own alias"},
+	ErrWrongUsage:           {ER_WRONG_USAGE, []string{MySQLDefaultSqlState}, "Incorrect usage of %s and %s"},
+	ErrUpdateTableUsed:      {ER_UPDATE_TABLE_USED, []string{MySQLDefaultSqlState}, "You can't specify target table '%-.192s' for update in FROM clause"},
+	ErrWindowInvalidUse:     {ER_WINDOW_INVALID_WINDOW_FUNC_USE, []string{"HY000"}, "You cannot use the window function '%s' in this context"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -594,6 +607,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrRowSinglePartitionField:             {ER_ROW_SINGLE_PARTITION_FIELD_ERROR, []string{MySQLDefaultSqlState}, "Row expressions in VALUES IN only allowed for multi-field column partitioning"},
 	ErrTooManyPartitionFuncFields:          {ER_TOO_MANY_PARTITION_FUNC_FIELDS_ERROR, []string{MySQLDefaultSqlState}, "Too many fields in '%-.192s'"},
 	ErrTooManyParameter:                    {ER_PS_MANY_PARAM, []string{MySQLDefaultSqlState}, "Prepared statement contains too many placeholders"},
+	ErrCteMemoryQuotaExceeded:              {ErrCteMemoryQuotaExceeded, []string{MySQLDefaultSqlState}, "recursive CTE memory quota exceeded on this CN: projected %d bytes, query limit %d bytes; increase @@cte_max_memory_bytes or rewrite the query to converge"},
 
 	// Group 9: streaming
 	ErrUnsupportedOption:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported option %s"},
@@ -937,6 +951,17 @@ func NewOOM(ctx context.Context) *Error {
 	return newError(ctx, ErrOOM)
 }
 
+// NewResourceExhaustedf preserves the existing resource-exhaustion wire code
+// while adding bounded, actionable context for guards that reject before the
+// allocator or operating system itself fails. The formatted message is
+// serialized with the error, so remote execution does not collapse the
+// diagnostic back to a generic internal error.
+func NewResourceExhaustedf(ctx context.Context, format string, args ...any) *Error {
+	err := newError(ctx, ErrOOM)
+	err.message = fmt.Sprintf("error: resource exhausted: %s", fmt.Sprintf(format, args...))
+	return err
+}
+
 func NewQueryInterrupted(ctx context.Context) *Error {
 	return newError(ctx, ErrQueryInterrupted)
 }
@@ -988,6 +1013,22 @@ func NewInvalidInputf(ctx context.Context, format string, args ...any) *Error {
 
 func NewInvalidInput(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrInvalidInput, msg)
+}
+
+func NewWrongArguments(ctx context.Context, function string) *Error {
+	return newError(ctx, ErrWrongArguments, function)
+}
+
+func NewWrongUsage(ctx context.Context, first, second string) *Error {
+	return newError(ctx, ErrWrongUsage, first, second)
+}
+
+func NewUpdateTableUsed(ctx context.Context, table string) *Error {
+	return newError(ctx, ErrUpdateTableUsed, table)
+}
+
+func NewWindowInvalidUse(ctx context.Context, function string) *Error {
+	return newError(ctx, ErrWindowInvalidUse, function)
 }
 
 func NewInvalidTypeForJSON(ctx context.Context, argument int, function string) *Error {
@@ -1453,12 +1494,20 @@ func NewWrongValueCountOnRow(ctx context.Context, row int) *Error {
 	return newError(ctx, ErrWrongValueCountOnRow, row)
 }
 
+func NewViewWrongList(ctx context.Context) *Error {
+	return newError(ctx, ErrViewWrongList)
+}
+
 func NewOperandColumns(ctx context.Context, columns int) *Error {
 	return newError(ctx, ErrOperandColumns, columns)
 }
 
 func NewErrSubqueryNo1Row(ctx context.Context) *Error {
 	return newError(ctx, ErrSubqueryNo1Row)
+}
+
+func NewDerivedMustHaveAlias(ctx context.Context) *Error {
+	return newError(ctx, ErrDerivedMustHaveAlias)
 }
 
 func NewBadFieldError(ctx context.Context, column, table string) *Error {
@@ -1639,6 +1688,10 @@ func NewCheckRecursiveLevel(ctx context.Context) *Error {
 	return newError(ctx, ErrCheckRecursiveLevel)
 }
 
+func NewCteMemoryQuotaExceeded(ctx context.Context, projected, limit uint64) *Error {
+	return newError(ctx, ErrCteMemoryQuotaExceeded, projected, limit)
+}
+
 func NewErrTooManyFields(ctx context.Context) *Error {
 	return newError(ctx, ErrTooManyFields)
 }
@@ -1799,7 +1852,7 @@ func NewErrExecutorRunning(ctx context.Context, executor string) *Error {
 	return newError(ctx, ErrExecutorRunning, executor)
 }
 
-func NewErrTooBigPrecision(ctx context.Context, precision int32, funcName string, maxPrecision uint64) *Error {
+func NewErrTooBigPrecision(ctx context.Context, precision int64, funcName string, maxPrecision uint64) *Error {
 	return newError(ctx, ErrTooBigPrecision, precision, funcName, maxPrecision)
 }
 

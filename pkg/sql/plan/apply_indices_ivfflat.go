@@ -1662,13 +1662,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		//   2) UpperLimit is set to avoid all filters being degraded to PASS due to 0.
 		rfTag2 := builder.genNewMsgTag()
 
-		outerHasProbeRuntimeFilter := false
 		outerProbeNodeID := builder.findScanNodeByTag(outerScanNodeID, outerPkExpr.GetCol().RelPos)
-		if outerProbeNodeID >= 0 {
-			probeSpec2 := MakeRuntimeFilter(rfTag2, false, 0, DeepCopyExpr(outerPkExpr), false)
-			builder.qry.Nodes[outerProbeNodeID].RuntimeFilterProbeList = append(builder.qry.Nodes[outerProbeNodeID].RuntimeFilterProbeList, probeSpec2)
-			outerHasProbeRuntimeFilter = true
-		}
 
 		// build: placeholder column, HashBuild will generate IN-list based on build side join key's UniqueJoinKeys[0]
 		buildExpr2 := &plan.Expr{
@@ -1684,11 +1678,23 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		// Set inLimit to "unlimited" to ensure this runtime filter won't be disabled due to upper limit.
 		// Use int32 max value directly here.
 		const unlimitedInFilterCard = int32(1<<31 - 1)
-		buildSpec2 := MakeRuntimeFilter(rfTag2, false, unlimitedInFilterCard, buildExpr2, false)
-
-		if outerHasProbeRuntimeFilter {
-			outerJoinNode := builder.qry.Nodes[outerJoinNodeID]
-			outerJoinNode.RuntimeFilterBuildList = append(outerJoinNode.RuntimeFilterBuildList, buildSpec2)
+		if outerProbeNodeID >= 0 {
+			probeSpec2, buildSpec2, hasRuntimeFilter := builder.makeExactRuntimeFilterPair(
+				rfTag2,
+				false,
+				unlimitedInFilterCard,
+				outerPkExpr,
+				buildExpr2,
+				false,
+			)
+			if hasRuntimeFilter {
+				probeNode := builder.qry.Nodes[outerProbeNodeID]
+				probeNode.RuntimeFilterProbeList = append(
+					probeNode.RuntimeFilterProbeList, probeSpec2)
+				outerJoinNode := builder.qry.Nodes[outerJoinNodeID]
+				outerJoinNode.RuntimeFilterBuildList = append(
+					outerJoinNode.RuntimeFilterBuildList, buildSpec2)
+			}
 		}
 
 		// Outer join doesn't add extra project, let global column pruning optimizer handle it
