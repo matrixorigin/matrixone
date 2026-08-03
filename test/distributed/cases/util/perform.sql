@@ -40,7 +40,6 @@ perform values row(1);
 perform insert into perform_db.perform values (4);
 perform select 1 into outfile 'perform.csv';
 perform select * from perform_db.perform_missing;
-select row_count();
 
 create role perform_role;
 grant connect on account * to perform_role;

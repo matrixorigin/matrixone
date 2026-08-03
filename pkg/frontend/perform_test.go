@@ -19,6 +19,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -56,18 +57,43 @@ func TestExecutePerformAsStatusStatement(t *testing.T) {
 	testPlan := newResultColumnTestPlan(1)
 	stmt := &tree.Select{IsPerform: true}
 	runner := &performTestRunner{result: &util.RunResult{AffectRows: 9}}
-	ses := &Session{feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}}}
+	saver := &performTestBinaryWriter{}
+	resper := &MysqlResp{mysqlRrWr: &testMysqlWriter{}, binWr: saver}
+	ses := &Session{feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}, respr: resper}}
 	execCtx := &ExecCtx{
 		reqCtx: context.Background(),
 		stmt:   stmt,
 		cw:     &TxnComputationWrapper{stmt: stmt, plan: testPlan},
 		runner: runner,
+		resper: resper,
+		ses:    ses,
 	}
 
 	require.NoError(t, executeStatusStmt(ses, execCtx))
 	require.NotNil(t, ses.rs)
 	require.Len(t, ses.rs.ResultCols, 1)
 	require.Equal(t, uint64(0), execCtx.runResult.AffectRows)
+	require.Equal(t, 1, saver.calls)
+}
+
+func TestExecutePerformPropagatesResultFinalizationError(t *testing.T) {
+	testPlan := newResultColumnTestPlan(1)
+	stmt := &tree.Select{IsPerform: true}
+	wantErr := errors.New("save perform metadata failed")
+	saver := &performTestBinaryWriter{err: wantErr}
+	resper := &MysqlResp{mysqlRrWr: &testMysqlWriter{}, binWr: saver}
+	ses := &Session{feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}, respr: resper}}
+	execCtx := &ExecCtx{
+		reqCtx: context.Background(),
+		stmt:   stmt,
+		cw:     &TxnComputationWrapper{stmt: stmt, plan: testPlan},
+		runner: &performTestRunner{result: &util.RunResult{AffectRows: 9}},
+		resper: resper,
+		ses:    ses,
+	}
+
+	require.ErrorIs(t, executeStatusStmt(ses, execCtx), wantErr)
+	require.Equal(t, 1, saver.calls)
 }
 
 func TestExecutePerformPropagatesRunnerError(t *testing.T) {
@@ -113,7 +139,7 @@ func TestPerformResultIsSavedButNotWrittenToClient(t *testing.T) {
 		ses:    &Session{},
 	}
 
-	require.NoError(t, resper.RespResult(execCtx, nil, nil))
+	require.NoError(t, resper.RespResult(execCtx, nil, batch.NewWithSize(0)))
 	require.Equal(t, 1, saver.calls)
 }
 
@@ -130,8 +156,21 @@ func TestPerformPropagatesResultSaverError(t *testing.T) {
 		ses:    &Session{},
 	}
 
-	require.ErrorIs(t, resper.RespResult(execCtx, nil, nil), wantErr)
+	require.ErrorIs(t, resper.RespResult(execCtx, nil, batch.NewWithSize(0)), wantErr)
 	require.Equal(t, 1, saver.calls)
+}
+
+func TestPerformTerminalCallbackDoesNotFinalizeResult(t *testing.T) {
+	saver := &performTestBinaryWriter{}
+	resper := &MysqlResp{mysqlRrWr: &testMysqlWriter{}, binWr: saver}
+	execCtx := &ExecCtx{
+		reqCtx: context.Background(),
+		stmt:   &tree.Select{IsPerform: true},
+		ses:    &Session{},
+	}
+
+	require.NoError(t, resper.RespResult(execCtx, nil, nil))
+	require.Zero(t, saver.calls)
 }
 
 func TestPerformDoesNotCountSentRows(t *testing.T) {
@@ -214,6 +253,28 @@ func TestRecordLastAffectedRowsForPerform(t *testing.T) {
 	recordLastAffectedRows(ses, execCtx)
 	require.Equal(t, int64(0), ses.GetLastAffectedRows())
 	require.Equal(t, int64(0), proc.GetAffectedRows())
+}
+
+func TestFailedPerformRequestMarksRowCount(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	ses.txnHandler = &TxnHandler{}
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	setRowCount(ses, ses.GetProc(), 7)
+
+	resp, err := ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_QUERY,
+		data: []byte("perform 1"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+	require.Equal(t, int64(-1), ses.GetLastAffectedRows())
+	require.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
 }
 
 func TestPerformStatusResponseMoreResults(t *testing.T) {

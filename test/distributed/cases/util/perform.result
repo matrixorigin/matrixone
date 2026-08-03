@@ -54,9 +54,6 @@ perform select 1 into outfile 'perform.csv';
 not supported: PERFORM SELECT INTO OUTFILE
 perform select * from perform_db.perform_missing;
 SQL parser error: table "perform_missing" does not exist
-select row_count();
-➤ row_count()[-5,64,0]  𝄀
-0
 create role perform_role;
 grant connect on account * to perform_role;
 create user perform_user identified by '111';

@@ -1441,6 +1441,7 @@ type analyzeDerivedResponder struct {
 }
 
 var _ Responser = (*analyzeDerivedResponder)(nil)
+var _ queryResultFinalizer = (*analyzeDerivedResponder)(nil)
 
 func (r *analyzeDerivedResponder) GetStr(id PropertyID) string { return r.live.GetStr(id) }
 func (r *analyzeDerivedResponder) GetU32(id PropertyID) uint32 { return r.live.GetU32(id) }
