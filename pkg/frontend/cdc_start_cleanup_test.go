@@ -1280,6 +1280,37 @@ func TestResumeWaitsForPreviousStartAttemptBeforeReplacingRoutine(t *testing.T) 
 	}
 }
 
+func TestResumeRunningTaskClearsTableErrorsWithoutReplacingExecution(t *testing.T) {
+	internalExecutor := &captureCDCExecutor{}
+	startCalls := 0
+	exec := &CDCTaskExecutor{
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		spec: &task.CreateCdcDetails{
+			TaskId:   "resume-running-recovery",
+			TaskName: "resume-running-recovery",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		ie:           internalExecutor,
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       make(chan int, 1),
+		startFunc: func(context.Context) error {
+			startCalls++
+			return nil
+		},
+	}
+	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+	generation := exec.callbackGeneration.Load()
+	routine := exec.currentActiveRoutine()
+
+	require.NoError(t, exec.Resume())
+	require.Equal(t, StateRunning, exec.stateMachine.State())
+	require.Equal(t, generation, exec.callbackGeneration.Load())
+	require.Same(t, routine, exec.currentActiveRoutine())
+	require.Zero(t, startCalls)
+	require.True(t, internalExecutor.tableErrorsAreCleared())
+}
+
 func TestCancelFencesResumeWaitingForPreviousStartAttempt(t *testing.T) {
 	started := make(chan struct{}, 1)
 	exec := &CDCTaskExecutor{

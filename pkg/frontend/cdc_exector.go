@@ -854,6 +854,25 @@ func (exec *CDCTaskExecutor) Resume() error {
 	exec.callbackMu.Lock()
 	defer exec.callbackMu.Unlock()
 
+	// A table-level error does not stop the task, so the daemon task and the
+	// executor both remain Running. In that state RESUME is a recovery signal:
+	// clear the persisted table errors and let the table detector rebuild the
+	// failed pipelines from their recorded watermarks. Replacing the whole
+	// execution would turn ordinary resume into restart semantics.
+	if exec.stateMachine.State() == StateRunning {
+		ctx := defines.AttachAccountId(context.Background(), uint32(exec.spec.Accounts[0].GetId()))
+		if err := exec.clearAllTableErrors(ctx); err != nil {
+			return moerr.NewInternalErrorf(context.Background(), "cannot clear CDC table errors: %v", err)
+		}
+		logutil.Info(
+			"cdc.frontend.task.resume_running_recovery",
+			zap.String("task-id", exec.spec.TaskId),
+			zap.String("task-name", exec.spec.TaskName),
+			zap.String("state", exec.stateMachine.State().String()),
+		)
+		return nil
+	}
+
 	// Transition to Starting state (via Resume transition)
 	if err := exec.stateMachine.Transition(TransitionResume); err != nil {
 		return moerr.NewInternalErrorf(context.Background(), "cannot resume: %v", err)
