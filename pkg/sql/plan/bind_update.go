@@ -377,7 +377,12 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if err != nil {
 		return 0, err
 	}
-	if updateMayDependOnForeignKeys(dmlCtx, newColName2Idx) {
+	mayDependOnForeignKeys, err := builder.updateMayDependOnForeignKeys(
+		bindCtx, dmlCtx, newColName2Idx)
+	if err != nil {
+		return 0, err
+	}
+	if mayDependOnForeignKeys {
 		// The plan shape and planner route depend on foreign_key_checks.
 		// Preserve that dependency even while checks are disabled so prepared
 		// and generic plan caches rebuild after either session-state transition.
@@ -398,19 +403,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 	}
 
-	lastNodeID, selectNodeTag, selectNode, err = builder.appendUpdateForeignKeyChecks(
-		bindCtx,
-		dmlCtx,
-		lastNodeID,
-		selectNodeTag,
-		oldColName2Idx,
-		newColName2Idx,
-		fkChecksEnabled,
-	)
-	if err != nil {
-		return 0, err
-	}
-
 	for i, tableDef := range dmlCtx.tableDefs {
 		if updateAutoIncrCols[i] {
 			lastNodeID = builder.appendNode(&plan.Node{
@@ -425,6 +417,19 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				},
 			}, bindCtx)
 		}
+	}
+
+	lastNodeID, selectNodeTag, selectNode, err = builder.appendUpdateForeignKeyChecks(
+		bindCtx,
+		dmlCtx,
+		lastNodeID,
+		selectNodeTag,
+		selectNode,
+		oldColName2Idx,
+		newColName2Idx,
+	)
+	if err != nil {
+		return 0, err
 	}
 
 	idxScanNodes := make([][]*plan.Node, len(dmlCtx.tableDefs))
@@ -1376,6 +1381,19 @@ func (builder *QueryBuilder) appendRowNumberDedupNode(
 	selectNodeTag int32,
 	partitionColPositions []int32,
 ) (int32, *plan.Node, int32, error) {
+	return builder.appendRowNumberGuardNode(
+		bindCtx, lastNodeID, selectNode, selectNodeTag, partitionColPositions, "", "")
+}
+
+func (builder *QueryBuilder) appendRowNumberGuardNode(
+	bindCtx *BindContext,
+	lastNodeID int32,
+	selectNode *plan.Node,
+	selectNodeTag int32,
+	partitionColPositions []int32,
+	duplicateErrorMessage string,
+	duplicateErrorType string,
+) (int32, *plan.Node, int32, error) {
 	partitionByExprs := make([]*plan.Expr, 0, len(partitionColPositions))
 	childColExpr := func(pos int32) *plan.Expr {
 		e := selectNode.ProjectList[pos]
@@ -1488,10 +1506,25 @@ func (builder *QueryBuilder) appendRowNumberDedupNode(
 	if err != nil {
 		return 0, nil, 0, err
 	}
+	guardExpr := keepFirstRowExpr
+	if duplicateErrorType != "" {
+		guardExpr, err = BindFuncExprImplByPlanExpr(
+			builder.GetContext(),
+			"assert",
+			[]*plan.Expr{
+				keepFirstRowExpr,
+				makePlan2StringConstExprWithType(duplicateErrorMessage),
+				makePlan2StringConstExprWithType(duplicateErrorType),
+			},
+		)
+		if err != nil {
+			return 0, nil, 0, err
+		}
+	}
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:   plan.Node_FILTER,
 		Children:   []int32{lastNodeID},
-		FilterList: []*plan.Expr{keepFirstRowExpr},
+		FilterList: []*plan.Expr{guardExpr},
 	}, bindCtx)
 
 	projectList := make([]*plan.Expr, len(selectNode.ProjectList))

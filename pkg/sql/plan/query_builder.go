@@ -9106,13 +9106,20 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			} else if found {
 				icebergEnv = env
 				externType = plan.ExternType_ICEBERG_TB
-			} else if env, found, err := sqlmongodb.ParseCreateSQLEnvelope(builder.GetContext(), tableDef.Createsql); err != nil {
-				return 0, err
-			} else if found {
-				mongoEnv = env
-				externType = plan.ExternType_MONGODB_TB
-				if builder.isPrepareStatement {
-					return 0, moerr.NewNotSupported(builder.GetContext(), "prepared MongoDB external scans")
+			} else {
+				isMongoDB, err := IsMongoDBTableDef(builder.GetContext(), tableDef)
+				if err != nil {
+					return 0, err
+				}
+				if isMongoDB {
+					mongoEnv, _, err = sqlmongodb.ParseCreateSQLEnvelope(builder.GetContext(), tableDef.Createsql)
+					if err != nil {
+						return 0, err
+					}
+					externType = plan.ExternType_MONGODB_TB
+					if builder.isPrepareStatement {
+						return 0, moerr.NewNotSupported(builder.GetContext(), "prepared MongoDB external scans")
+					}
 				}
 			}
 			externScan = &plan.ExternScan{
