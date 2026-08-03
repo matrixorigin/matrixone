@@ -58,12 +58,14 @@ type returningSpool struct {
 	rows       uint64
 	file       *os.File
 	writer     *bufio.Writer
-	buf        bytes.Buffer
-	mp         *mpool.MPool
+	// bytes.Buffer is Go-heap storage. The exact HashBuild allocation account
+	// covers allocator-visible MPool capacity only, so this bounded buffer must
+	// not create an estimated charge in that ledger.
+	buf bytes.Buffer
+	mp  *mpool.MPool
 
-	memoryReservation *process.HashBuildReservation
-	diskReservation   *process.HashBuildSpillDiskReservation
-	fdReservation     *process.HashBuildSpillFDReservation
+	diskReservation *process.HashBuildSpillDiskReservation
+	fdReservation   *process.HashBuildSpillFDReservation
 }
 
 func (s *returningSpool) BeginAttempt(ctx context.Context, generation uint64, proc *process.Process) error {
@@ -79,38 +81,29 @@ func (s *returningSpool) BeginAttempt(ctx context.Context, generation uint64, pr
 	if err != nil {
 		return err
 	}
-	memory, err := budget.Reserve(returningSpoolBufferSize)
-	if err != nil {
-		return err
-	}
 	disk, err := budget.ReserveSpillDisk(0)
 	if err != nil {
-		memory.Release()
 		return err
 	}
 	fd, err := budget.ReserveSpillFD(1)
 	if err != nil {
 		disk.Release()
-		memory.Release()
 		return err
 	}
 	spillFS, err := proc.GetSpillFileService()
 	if err != nil {
 		fd.Release()
 		disk.Release()
-		memory.Release()
 		return err
 	}
 	file, err := spillFS.CreateAndRemoveFile(ctx, fmt.Sprintf("dml_returning_%s", uuid.NewString()))
 	if err != nil {
 		fd.Release()
 		disk.Release()
-		memory.Release()
 		return err
 	}
 	s.file = file
 	s.writer = bufio.NewWriterSize(file, returningSpoolBufferSize)
-	s.memoryReservation = memory
 	s.diskReservation = disk
 	s.fdReservation = fd
 	s.mp = proc.Mp()
@@ -133,11 +126,6 @@ func (s *returningSpool) Write(generation uint64, bat *batch.Batch, _ *perfcount
 	if err != nil {
 		return err
 	}
-	if estimated > s.memoryReservation.Size() {
-		if err = s.memoryReservation.Grow(estimated - s.memoryReservation.Size()); err != nil {
-			return err
-		}
-	}
 	s.buf.Reset()
 	s.buf.Grow(int(estimated))
 	var size uint64
@@ -145,11 +133,6 @@ func (s *returningSpool) Write(generation uint64, bat *batch.Batch, _ *perfcount
 	payloadStart := s.buf.Len()
 	if _, err = bat.MarshalBinaryWithBuffer(&s.buf, false); err != nil {
 		return err
-	}
-	if actual := uint64(s.buf.Cap()); actual > s.memoryReservation.Size() {
-		if err = s.memoryReservation.Grow(actual - s.memoryReservation.Size()); err != nil {
-			return err
-		}
 	}
 	payloadSize := s.buf.Len() - payloadStart
 	if payloadSize > returningSpoolMaxBatch {
@@ -190,9 +173,6 @@ func (s *returningSpool) SealAttempt(generation uint64) error {
 		return err
 	}
 	s.buf = bytes.Buffer{}
-	if _, err := s.memoryReservation.ReconcileDown(returningSpoolBufferSize); err != nil {
-		return err
-	}
 	s.writer = nil
 	s.state = returningSpoolSealed
 	return nil
@@ -226,11 +206,7 @@ func (s *returningSpool) Replay(ctx context.Context, consume func(*batch.Batch, 
 	}
 	reader := bufio.NewReaderSize(s.file, returningSpoolBufferSize)
 	readBatch := batch.NewWithSize(0)
-	defer func() {
-		readBatch.Clean(s.mp)
-		_, reconcileErr := s.memoryReservation.ReconcileDown(returningSpoolBufferSize)
-		err = errors.Join(err, reconcileErr)
-	}()
+	defer readBatch.Clean(s.mp)
 	var rows uint64
 	for {
 		if err = ctx.Err(); err != nil {
@@ -246,18 +222,6 @@ func (s *returningSpool) Replay(ctx context.Context, consume func(*batch.Batch, 
 		}
 		if size > returningSpoolMaxBatch {
 			return moerr.NewInternalErrorf(ctx, "DML RETURNING spool batch is too large: %d", size)
-		}
-		// Admit the transient decode peak before UnmarshalFromReader allocates.
-		// The serialized payload bounds retained vector data; the second payload
-		// allowance covers allocator rounding and replacement of reused buffers.
-		if size > (math.MaxUint64-returningSpoolBufferSize)/2 {
-			return moerr.NewInternalError(ctx, "DML RETURNING spool decode size overflow")
-		}
-		decodeBudget := size*2 + returningSpoolBufferSize
-		if decodeBudget > s.memoryReservation.Size() {
-			if err = s.memoryReservation.Grow(decodeBudget - s.memoryReservation.Size()); err != nil {
-				return err
-			}
 		}
 		readBatch.CleanOnlyData()
 		limited := &io.LimitedReader{R: reader, N: int64(size)}
@@ -311,10 +275,6 @@ func (s *returningSpool) releaseAttemptLocked() error {
 	if s.diskReservation != nil {
 		s.diskReservation.Release()
 		s.diskReservation = nil
-	}
-	if s.memoryReservation != nil {
-		s.memoryReservation.Release()
-		s.memoryReservation = nil
 	}
 	if s.fdReservation != nil {
 		s.fdReservation.Release()

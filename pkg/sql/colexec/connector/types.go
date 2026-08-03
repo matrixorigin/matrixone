@@ -17,6 +17,7 @@ package connector
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
@@ -30,8 +31,9 @@ var _ vm.Operator = new(Connector)
 type Connector struct {
 	ctr container
 
-	Reg          *process.WaitRegister
-	cleanupSpool *pSpool.PipelineSpool
+	Reg               *process.WaitRegister
+	cleanupSpool      *pSpool.PipelineSpool
+	allocationAccount *mpool.AllocationAccount
 	vm.OperatorBase
 }
 
@@ -73,6 +75,45 @@ func (connector *Connector) WithReg(reg *process.WaitRegister) *Connector {
 	return connector
 }
 
+func (connector *Connector) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if account == nil || account.Handle() == 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if connector.allocationAccount != nil && connector.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	connector.allocationAccount = account
+	return nil
+}
+
+// ActivatesAllocationAccountLifecycle reports that Connector only participates
+// in an account already required by an allocation-producing operator.
+func (connector *Connector) ActivatesAllocationAccountLifecycle() bool {
+	return false
+}
+
+func (connector *Connector) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if connector.allocationAccount == nil {
+		return nil
+	}
+	if connector.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if connector.ctr.sp != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	if connector.cleanupSpool != nil {
+		connector.cleanupSpool.FinalizeAfterConsumersQuiesced()
+		connector.cleanupSpool = nil
+	}
+	connector.allocationAccount = nil
+	return nil
+}
+
 func (connector *Connector) Release() {
 	if connector != nil {
 		reuse.Free[Connector](connector, nil)
@@ -100,7 +141,11 @@ func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, er
 				abortErr = fallbackErr
 			}
 			sp.Abort(abortErr)
-			connector.cleanupSpool = nil
+			if connector.allocationAccount != nil {
+				connector.cleanupSpool = sp
+			} else {
+				connector.cleanupSpool = nil
+			}
 		}
 		connector.ctr.sp = nil
 	} else if terminalSignal.EventType == process.EventEnd && !terminalDelivered {
@@ -144,6 +189,10 @@ func (connector *Connector) sendTerminalWithLog(ctx context.Context, proc *proce
 // and leaves no receiver goroutine that can read pending signals later.
 func (connector *Connector) CleanupDeferredSpool() {
 	if connector.cleanupSpool == nil {
+		return
+	}
+	if connector.allocationAccount != nil {
+		connector.cleanupSpool.ReleaseReusableCacheAfterProducerQuiesced()
 		return
 	}
 	connector.cleanupSpool.ForceCleanupAfterTerminalSignal()

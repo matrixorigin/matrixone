@@ -158,16 +158,7 @@ func saveBatches(ctx context.Context, ses *Session, data []*batch.Batch) error {
 }
 
 func saveMeta(ctx context.Context, ses *Session) error {
-	defer func() {
-		ses.ResetBlockIdx()
-		ses.p = nil
-		// TIPs: Session.SetTStmt() do reset the tStmt while query is DONE.
-		// Be careful, if you want to do async op.
-		// ses.tStmt = nil /* #16028: QueryResult independent of ses.tStmt */
-		ses.curResultSize = 0
-		ses.savedRowCount = 0
-		ses.queryRowCount = 0
-	}()
+	defer resetQueryResultState(ses)
 	fs := getPu(ses.GetService()).FileService
 	// write query result meta
 	colMap, err := buildColumnMap(ctx, ses.rs)
@@ -244,6 +235,17 @@ func saveMeta(ctx context.Context, ses *Session) error {
 		return err
 	}
 	return err
+}
+
+func resetQueryResultState(ses *Session) {
+	ses.ResetBlockIdx()
+	ses.p = nil
+	// TIPs: Session.SetTStmt() do reset the tStmt while query is DONE.
+	// Be careful, if you want to do async op.
+	// ses.tStmt = nil /* #16028: QueryResult independent of ses.tStmt */
+	ses.curResultSize = 0
+	ses.savedRowCount = 0
+	ses.queryRowCount = 0
 }
 
 // saveQueryResult saves the data composited by hand

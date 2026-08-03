@@ -751,6 +751,10 @@ func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			return nil, err
 		}
 	}
+	if err := c.attachRuntimeAllocationOwners(ss); err != nil {
+		s.discardParallelGeneration(ms)
+		return nil, err
+	}
 	return ms, nil
 }
 
@@ -801,6 +805,10 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			node:         s.DataSource.node,
 			RecvMsgList:  recvMsgList,
 		}
+	}
+	if err := c.attachRuntimeAllocationOwners(ss); err != nil {
+		s.discardParallelGeneration(ms)
+		return nil, err
 	}
 
 	return ms, nil

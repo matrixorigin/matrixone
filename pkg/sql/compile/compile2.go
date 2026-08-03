@@ -23,7 +23,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -260,6 +262,19 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	sinkAttemptOpen := false
 	var coordinatorPhaseStart time.Time
 	var coordinatorPhaseBase time.Duration
+	var allocationAttempt *statementAllocationAttempt
+	finishAllocationAttempt := func() error {
+		if allocationAttempt == nil {
+			return nil
+		}
+		attempt := allocationAttempt
+		allocationAttempt = nil
+		if runC != nil && runC.allocationAttempt == attempt {
+			runC.allocationAttempt = nil
+		}
+		_, finishErr := attempt.finish()
+		return finishErr
+	}
 	finishCurrentAttempt := func(retried bool) {
 		if !attemptOpen {
 			return
@@ -297,6 +312,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			if c.resultSink != nil {
 				panicErr = errors.Join(panicErr, c.cancelAndWaitRunningSQL(&attemptRemoteWait))
 			}
+			panicErr = joinAllocationLifecycleErrors(panicErr, finishAllocationAttempt())
 			err = abortSinkAttempt(panicErr)
 			finishCurrentAttempt(false)
 			panic(recovered)
@@ -315,7 +331,30 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// Before compile.runOnce, Reset the 'StatsInfo' execution related resources in context
 
 		// running.
-		if err = runC.prePipelineInitializer(); err == nil {
+		if runC.remoteFragmentCounts == nil {
+			runC.remoteFragmentCounts = collectRemoteFragmentCounts(runC.scopes, runC.addr)
+		}
+		// A retry is a new physical execution generation. Reusing the previous
+		// ID could attach late RPCs from the failed generation to the new
+		// generation's shared board and terminal-account group.
+		if len(runC.remoteFragmentCounts) > 0 {
+			runC.remoteExecutionID = newRemoteExecutionID()
+		} else {
+			runC.remoteExecutionID = uuid.Nil
+		}
+		exporter := func(snapshot mpool.AllocationAccountTerminalSnapshot) {
+			if resourceRecorder != nil {
+				resourceRecorder.recordAllocationAccountTerminal(snapshot)
+			}
+		}
+		err = runC.ensureAllocationAccountLifecycle(exporter)
+		if err == nil {
+			allocationAttempt, err = runC.beginAllocationAccountAttempt()
+		}
+		if err == nil {
+			err = runC.prePipelineInitializer()
+		}
+		if err == nil {
 			preRunWall = carriedPreRunWall + time.Since(preRunOnceStart)
 			attemptPreRunWall = preRunWall
 			runC.MessageBoard.BeforeRunonce()
@@ -342,6 +381,16 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		attemptPreRunWall = preRunWall
 		coordinatorPhaseStart = time.Time{}
 		coordinatorPhaseBase = 0
+		if terminalErr := finishAllocationAttempt(); terminalErr != nil {
+			err = joinAllocationLifecycleErrors(err, terminalErr)
+			err = abortSinkAttempt(err)
+			resourceRecorder.finishAttempt(
+				uint64(retryTimes), attemptStart, preRunWall, attemptRemoteWait, stats,
+				attemptScopes, attemptAnal, c.addr, false,
+			)
+			attemptOpen = false
+			return nil, err
+		}
 
 		c.fatalLog(retryTimes, err)
 		if !c.canRetry(err) {
@@ -497,6 +546,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	if txnOperator != nil {
 		err = txnOperator.GetWorkspace().Adjust(writeOffset)
 		if err != nil {
+			err = joinAllocationLifecycleErrors(err, finishAllocationAttempt())
 			err = abortSinkAttempt(err)
 			finishCurrentAttempt(false)
 			return nil, err
@@ -508,6 +558,12 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	// outcome. The panic defer above remains the single terminal owner until
 	// this call returns.
 	c.AnalyzeExecPlan(runC, queryResult, stats, isExplainPhyPlan, option)
+	if terminalErr := finishAllocationAttempt(); terminalErr != nil {
+		err = joinAllocationLifecycleErrors(err, terminalErr)
+		err = abortSinkAttempt(err)
+		finishCurrentAttempt(false)
+		return nil, err
+	}
 	if c.resultSink != nil {
 		if err = c.resultSink.SealAttempt(c.executionGeneration); err != nil {
 			err = abortSinkAttempt(err)
@@ -807,6 +863,7 @@ func (c *Compile) buildRetryCompile(defChanged bool) (*Compile, error) {
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
 	runC.resultSink = c.resultSink
 	runC.executionGeneration = c.executionGeneration
+	c.copyAllocationAccountLifecycleTo(runC)
 	runC.SetQuerySchedulingIntent(c.querySchedulingIntent)
 	runC.SetSchedulingTraceRecorder(c.schedulingTrace)
 	runC.SetOriginSQL(c.originSQL)

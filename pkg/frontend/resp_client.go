@@ -214,6 +214,13 @@ func (resper *MysqlResp) RespPreMeta(execCtx *ExecCtx, meta any) (err error) {
 }
 
 func (resper *MysqlResp) RespResult(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) (err error) {
+	// Output.Reset cannot propagate errors from its terminal nil callback. PERFORM
+	// finalizes saved-result metadata explicitly after runner.Run succeeds, where
+	// the error can still prevent the OK response.
+	if isPerformStatement(execCtx.stmt) && bat == nil {
+		return nil
+	}
+
 	if resper.binWr != nil {
 		//write batch into fileservice
 		err = resper.binWr.Write(execCtx, crs, bat)
@@ -226,6 +233,9 @@ func (resper *MysqlResp) RespResult(execCtx *ExecCtx, crs *perfcounter.CounterSe
 }
 
 func (resper *MysqlResp) writeClientBatch(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) (err error) {
+	if isPerformStatement(execCtx.stmt) {
+		return nil
+	}
 	if bat == nil {
 		return nil
 	}
@@ -267,6 +277,25 @@ func (resper *MysqlResp) respDeferredResultRow(ses *Session, execCtx *ExecCtx) e
 		return writer.WriteEOFOrOKWithAffectedRows(state.affectedRows, 0, status)
 	}
 	return resper.mysqlRrWr.WriteEOFOrOK(0, status)
+}
+
+type queryResultFinalizer interface {
+	finalizeQueryResult(*ExecCtx) error
+}
+
+func (resper *MysqlResp) finalizeQueryResult(execCtx *ExecCtx) error {
+	if resper.binWr == nil {
+		return nil
+	}
+	return resper.binWr.Write(execCtx, nil, nil)
+}
+
+func finalizePerformQueryResult(execCtx *ExecCtx) error {
+	finalizer, ok := execCtx.resper.(queryResultFinalizer)
+	if !ok {
+		return nil
+	}
+	return finalizer.finalizeQueryResult(execCtx)
 }
 
 func (resper *MysqlResp) RespPostMeta(execCtx *ExecCtx, meta any) (err error) {

@@ -59,6 +59,13 @@ func getPreparedResultColumns(stmt *PrepareStmt, txnHaveDDL bool) []*plan2.ColDe
 
 func getPreparedResultColumnsFromPlan(stmt tree.Statement, preparedPlan *plan2.Plan, txnHaveDDL bool) []*plan2.ColDef {
 	plan := preparedPlan.GetDcl().GetPrepare().GetPlan()
+	return getPreparedResultColumnsFor(stmt, plan, txnHaveDDL)
+}
+
+func getPreparedResultColumnsFor(stmt tree.Statement, plan *plan.Plan, txnHaveDDL bool) []*plan2.ColDef {
+	if isPerformStatement(stmt) {
+		return nil
+	}
 	if query := plan.GetQuery(); query != nil {
 		var title string
 		switch stmt.(type) {

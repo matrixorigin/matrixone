@@ -172,6 +172,7 @@ func init() {
 		"directory":                  DIRECTORY,
 		"double":                     DOUBLE,
 		"do":                         DO,
+		"perform":                    PERFORM,
 		"drop":                       DROP,
 		"dynamic":                    DYNAMIC,
 		"duplicate":                  DUPLICATE,

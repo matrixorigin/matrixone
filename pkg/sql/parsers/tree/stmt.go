@@ -146,6 +146,9 @@ var (
 )
 
 func (node *Select) StmtKind() StmtKind {
+	if node.IsPerform {
+		return defaultStatusTyp
+	}
 	if node.Ep != nil {
 		return defaultStatusTyp
 	}

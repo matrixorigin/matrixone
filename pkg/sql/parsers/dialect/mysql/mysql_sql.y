@@ -543,6 +543,9 @@ func sqlTaskInt64(v any) int64 {
 // Do
 %token <str> DO
 
+// Perform
+%token <str> PERFORM
+
 // Declare
 %token <str> DECLARE
 
@@ -620,7 +623,7 @@ func sqlTaskInt64(v any) int64 {
 %type <statement> analyze_stmt check_table_stmt show_profile_stmt
 %type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt reset_stmt
 %type <statement> replace_stmt
-%type <statement> do_stmt
+%type <statement> do_stmt perform_stmt
 %type <statement> declare_stmt
 %type <statement> values_stmt
 %type <statement> call_stmt
@@ -670,7 +673,7 @@ func sqlTaskInt64(v any) int64 {
 %type <pickKeys> pick_keys_clause
 %type <diffOutputOpt> diff_output_opt
 
-%type <select> select_stmt select_no_parens replace_table_source
+%type <select> select_stmt select_no_parens perform_select replace_table_source
 %type <selectStatement> simple_select select_with_parens simple_select_clause table_query_subquery table_query_expr table_query_term table_query_primary values_query_subquery values_query_expr values_query_term values_query_primary
 %type <selectExprs> select_expression_list returning_clause_opt
 %type <selectExpr> select_expression
@@ -1076,6 +1079,7 @@ normal_stmt:
 |   load_table_stmt
 |   load_extension_stmt
 |   do_stmt
+|   perform_stmt
 |   values_stmt
 |   select_stmt
     {
@@ -3380,6 +3384,7 @@ prepareable_stmt:
 |   drop_stmt
 |   show_stmt
 |   update_stmt
+|   perform_stmt
 |   select_stmt
     {
         $$ = $1
@@ -14481,6 +14486,23 @@ do_stmt:
         }
     }
 
+perform_stmt:
+    PERFORM perform_select
+    {
+        $2.IsPerform = true
+        $$ = $2
+    }
+
+perform_select:
+    simple_select time_window_opt order_by_opt limit_opt rank_opt export_data_param_opt select_lock_opt
+    {
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6, SelectLockInfo: $7}
+    }
+|   with_clause simple_select time_window_opt order_by_opt limit_opt rank_opt export_data_param_opt select_lock_opt
+    {
+        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: $7, SelectLockInfo: $8, With: $1}
+    }
+
 declare_stmt:
     DECLARE var_name_list column_type
     {
@@ -14901,6 +14923,7 @@ non_reserved_keyword:
 |   DISK
 |   DUMP
 |   DO
+|   PERFORM
 |   DOUBLE
 |   DIRECTORY
 |   DISTRIBUTION_MODE

@@ -126,7 +126,7 @@ func TestReturningSpoolGenerationAndReplay(t *testing.T) {
 	require.NoError(t, spool.Write(1, final, nil))
 	require.NoError(t, spool.SealAttempt(1))
 	require.Equal(t, uint64(3), spool.RowCount())
-	require.Equal(t, uint64(returningSpoolBufferSize), budget.Used(), "sealed spool retains only the replay buffer budget")
+	require.Zero(t, budget.Used(), "RETURNING Go buffers are outside the exact MPool allocation ledger")
 	require.Positive(t, budget.SpillDiskUsed())
 	require.Equal(t, uint64(1), budget.SpillFDUsed())
 
@@ -138,7 +138,7 @@ func TestReturningSpoolGenerationAndReplay(t *testing.T) {
 			return nil
 		}))
 		require.Equal(t, []int64{7, 8, 9}, got)
-		require.Equal(t, uint64(returningSpoolBufferSize), budget.Used(), "decode peak must be reconciled after replay")
+		require.Zero(t, budget.Used(), "replay must not create an estimated HashBuild charge")
 	}
 }
 
@@ -391,7 +391,7 @@ func TestReturningSpoolReplayCancellationReleasesDecodeBudget(t *testing.T) {
 	require.NoError(t, spool.SealAttempt(0))
 	cancel()
 	require.ErrorIs(t, spool.Replay(ctx, func(*batch.Batch, *perfcounter.CounterSet) error { return nil }), context.Canceled)
-	require.Equal(t, uint64(returningSpoolBufferSize), budget.Used())
+	require.Zero(t, budget.Used())
 	require.NoError(t, spool.Close())
 	require.Zero(t, budget.Used())
 	require.Zero(t, budget.SpillDiskUsed())

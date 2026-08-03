@@ -762,7 +762,7 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch, crs 
 	}
 	tTime := time.Since(begin)
 	n := 0
-	if bat != nil && bat.Vecs[0] != nil {
+	if !isPerformStatement(execCtx.stmt) && bat != nil && bat.Vecs[0] != nil {
 		n = bat.Vecs[0].Length()
 		ses.sentRows.Add(int64(n))
 	}
@@ -1441,6 +1441,7 @@ type analyzeDerivedResponder struct {
 }
 
 var _ Responser = (*analyzeDerivedResponder)(nil)
+var _ queryResultFinalizer = (*analyzeDerivedResponder)(nil)
 
 func (r *analyzeDerivedResponder) GetStr(id PropertyID) string { return r.live.GetStr(id) }
 func (r *analyzeDerivedResponder) GetU32(id PropertyID) uint32 { return r.live.GetU32(id) }
@@ -4972,22 +4973,26 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// fall through to normal MO execution.
 		if isSidecar, useGPU := isSidecarQuery(query); isSidecar {
 			ses.addSqlCount(1)
-			err = handleSidecarOffload(ses, execCtx, query, useGPU)
-			if err == nil {
-				ses.resetDiagnostics()
-				setRowCount(ses, ses.GetProc(), -1)
-				mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-				resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, true)
-				return resp, nil
+			if sidecarQueryMustRunLocally(execCtx.reqCtx, ses, query) {
+				query = stripSidecarHint(query)
+			} else {
+				err = handleSidecarOffload(ses, execCtx, query, useGPU)
+				if err == nil {
+					ses.resetDiagnostics()
+					setRowCount(ses, ses.GetProc(), -1)
+					mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+					resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, true)
+					return resp, nil
+				}
+				if err != errSidecarNotConfigured {
+					ses.resetDiagnostics()
+					markRowCountFailed(ses, ses.GetProc())
+					resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
+					return resp, nil
+				}
+				// errSidecarNotConfigured: strip hint and fall through to normal execution
+				query = stripSidecarHint(query)
 			}
-			if err != errSidecarNotConfigured {
-				ses.resetDiagnostics()
-				markRowCountFailed(ses, ses.GetProc())
-				resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
-				return resp, nil
-			}
-			// errSidecarNotConfigured: strip hint and fall through to normal execution
-			query = stripSidecarHint(query)
 		} else {
 			ses.addSqlCount(1)
 		}
