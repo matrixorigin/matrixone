@@ -87,5 +87,37 @@ SELECT a.id,
   FROM j_dim a
  WHERE a.id = 3;
 
+-- LIMIT 1 is redundant for an implicit scalar aggregate when evaluated once
+-- per outer row. After decorrelation adds dim_id to GROUP BY, however, leaving
+-- the limit on the grouped plan would keep only one correlation key globally.
+-- Reject the shape until LIMIT can be rewritten per key. This query spans two
+-- matching outer keys and one missing key so a global limit cannot hide.
+-- @pattern
+SELECT a.id,
+       (SELECT MAX(x.val)
+          FROM j_fact x
+         WHERE x.ts = (
+               SELECT MAX(y.ts)
+                 FROM j_fact y
+                WHERE y.dim_id = a.id
+                LIMIT 1)) AS latest
+  FROM j_dim a
+ ORDER BY a.id;
+
+-- OFFSET 1 removes the sole implicit aggregate row independently for every
+-- outer key. A global offset after grouping would instead skip only one key
+-- and expose another, so this topology must remain NYI too.
+-- @pattern
+SELECT a.id,
+       (SELECT MAX(x.val)
+          FROM j_fact x
+         WHERE x.ts = (
+               SELECT MAX(y.ts)
+                 FROM j_fact y
+                WHERE y.dim_id = a.id
+                LIMIT 1 OFFSET 1)) AS latest
+  FROM j_dim a
+ ORDER BY a.id;
+
 -- @teardown
 drop database test_nested_correlated_scalar;

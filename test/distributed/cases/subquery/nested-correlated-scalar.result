@@ -64,4 +64,26 @@ WHERE y.dim_id = a.id)) AS latest
 FROM j_dim a
 WHERE a.id = 3;
 (correlated columns in SCALAR subquery deeper than 1 level.*)
+SELECT a.id,
+(SELECT MAX(x.val)
+FROM j_fact x
+WHERE x.ts = (
+SELECT MAX(y.ts)
+FROM j_fact y
+WHERE y.dim_id = a.id
+LIMIT 1)) AS latest
+FROM j_dim a
+ORDER BY a.id;
+(correlated columns in SCALAR subquery deeper than 1 level.*)
+SELECT a.id,
+(SELECT MAX(x.val)
+FROM j_fact x
+WHERE x.ts = (
+SELECT MAX(y.ts)
+FROM j_fact y
+WHERE y.dim_id = a.id
+LIMIT 1 OFFSET 1)) AS latest
+FROM j_dim a
+ORDER BY a.id;
+(correlated columns in SCALAR subquery deeper than 1 level.*)
 drop database test_nested_correlated_scalar;

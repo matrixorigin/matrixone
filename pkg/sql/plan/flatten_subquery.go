@@ -169,7 +169,8 @@ func (builder *QueryBuilder) flattenSubquery(
 	if len(filterPreds) > 0 {
 		deepScalarAggregate := subquery.Typ == plan.SubqueryRef_SCALAR &&
 			subCtx.hasSingleRow && len(subCtx.groups) == 0 && len(subCtx.aggregates) > 0 &&
-			scalarAggregateResultReturnsNullOnEmpty(subCtx) && nullResultRejected
+			scalarAggregateResultReturnsNullOnEmpty(subCtx) && nullResultRejected &&
+			builder.scalarAggregatePlanSupportsDeepCorrelation(subID, subCtx.aggregateTag)
 		if !deepScalarAggregate && !canPullupDeepCorrelatedPredicates(subquery.Typ) {
 			return 0, nil, moerr.NewNYIf(builder.GetContext(), "correlated columns in %s subquery deeper than 1 level will be supported in future version", subquery.Typ.String())
 		}
@@ -673,6 +674,43 @@ func scalarAggregateResultReturnsNullOnEmpty(ctx *BindContext) bool {
 	return len(ctx.projects) > 0 &&
 		allAggregatesReturnNullOnEmpty(ctx.aggregates) &&
 		nullPropagatesFromAggregate(ctx.projects[0], ctx.aggregateTag)
+}
+
+// scalarAggregatePlanSupportsDeepCorrelation verifies the complete path from
+// the scalar root to its implicit aggregate. pullupThroughAgg adds the deep
+// correlation key to GROUP BY, so row limiting that was once evaluated inside
+// each scalar invocation would otherwise become global across all keys.
+//
+// PROJECT is the only wrapper proven to remain per-key after that rewrite.
+// LIMIT, OFFSET, rank, and every other operator stay on the NYI path until they
+// are explicitly rewritten or proven partition-local.
+func (builder *QueryBuilder) scalarAggregatePlanSupportsDeepCorrelation(nodeID, aggregateTag int32) bool {
+	for range builder.qry.Nodes {
+		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+			return false
+		}
+
+		node := builder.qry.Nodes[nodeID]
+		if node == nil || node.Limit != nil || node.Offset != nil || node.RankOption != nil {
+			return false
+		}
+
+		switch node.NodeType {
+		case plan.Node_PROJECT:
+			if len(node.Children) != 1 {
+				return false
+			}
+			nodeID = node.Children[0]
+
+		case plan.Node_AGG:
+			return len(node.BindingTags) > 1 && node.BindingTags[1] == aggregateTag
+
+		default:
+			return false
+		}
+	}
+
+	return false
 }
 
 func nullPropagatesFromAggregate(expr *plan.Expr, aggregateTag int32) bool {
