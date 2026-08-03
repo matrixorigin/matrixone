@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/parquet-go/parquet-go"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -240,6 +241,8 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 
 	c.MessageBoard = c.MessageBoard.Reset()
 	proc.SetMessageBoard(c.MessageBoard)
+	c.remoteFragmentCounts = nil
+	c.remoteExecutionID = uuid.Nil
 	c.counterSet.Reset()
 
 	for _, f := range c.fuzzys {
@@ -276,6 +279,12 @@ func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
 func (c *Compile) clear() {
 	if c.anal != nil {
 		c.anal.release()
+	}
+	// The attempt owns references to allocation-aware operators. Finalize it
+	// before Scope.release returns those operators to reuse pools; otherwise a
+	// defensive cleanup path could clear an already-reset or reused owner.
+	if err := c.finishAllocationAccountAttempt(); err != nil {
+		logutil.Errorf("allocation account terminal cleanup failed: %v", err)
 	}
 	for i := range c.scopes {
 		c.scopes[i].release()
@@ -317,6 +326,14 @@ func (c *Compile) clear() {
 	c.needLockMeta = false
 	c.isInternal = false
 	c.resourceAttemptOwnerEligible = false
+	c.allocationAccountRegistry = nil
+	c.allocationAccountLimit = 0
+	c.allocationControllerProvider = nil
+	c.allocationTerminalExporter = nil
+	c.allocationAccountOwners = nil
+	c.allocationAttempt = nil
+	c.remoteFragmentCounts = nil
+	c.remoteExecutionID = uuid.Nil
 	c.isPrepare = false
 	c.hasMergeOp = false
 	c.needBlock = false
@@ -616,11 +633,7 @@ func (c *Compile) prePipelineInitializer() (err error) {
 func newMaterializedSpillBudget(proc *process.Process) materialized.SpillBudget {
 	return materialized.SpillBudget{
 		ReserveMemory: func(size uint64) (materialized.Reservation, error) {
-			budget, err := proc.GetHashBuildBudget()
-			if err != nil {
-				return nil, err
-			}
-			return budget.Reserve(size)
+			return proc.GetCTEMemoryBudget().Reserve(proc.Ctx, size)
 		},
 		ReserveDisk: func(size uint64) (materialized.GrowingReservation, error) {
 			budget, err := proc.GetHashBuildBudget()

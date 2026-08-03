@@ -174,7 +174,14 @@ func (mergeOrder *MergeOrder) Reset(proc *process.Process, pipelineFailed bool, 
 		}
 	}
 	if ctr.buf != nil {
-		ctr.buf.CleanOnlyData()
+		if ctr.buf.HasAllocationAccount() {
+			// The final merge batch may directly own a child execution's result.
+			// Accounted storage cannot survive that execution's Reset boundary.
+			ctr.buf.Clean(proc.Mp())
+			ctr.buf = nil
+		} else {
+			ctr.buf.CleanOnlyData()
+		}
 	}
 }
 
@@ -208,13 +215,11 @@ func (mergeOrder *MergeOrder) cleanBatchAndCol(proc *process.Process) {
 	mp := proc.Mp()
 	ctr := &mergeOrder.ctr
 	for i := range ctr.batchList {
+		if ctr.batchList[i] != nil && i < len(ctr.orderCols) && ctr.orderCols[i] != nil {
+			freeOrderColumns(mp, ctr.batchList[i], ctr.orderCols[i])
+		}
 		if ctr.batchList[i] != nil {
 			ctr.batchList[i].Clean(mp)
-		}
-	}
-	for i := range ctr.orderCols {
-		if ctr.orderCols[i] != nil {
-			freeOrderColumns(mp, ctr.batchList[i], ctr.orderCols[i])
 		}
 	}
 }

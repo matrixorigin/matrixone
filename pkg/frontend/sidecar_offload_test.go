@@ -76,6 +76,20 @@ func TestStripSidecarHint(t *testing.T) {
 	assert.Equal(t, "SELECT * FROM t", stripSidecarHint("SELECT * FROM t"))
 }
 
+func TestSidecarPerformRunsLocally(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ctx := context.Background()
+
+	require.True(t, sidecarQueryMustRunLocally(ctx, ses, "/*+ SIDECAR */ PERFORM SELECT 1"))
+	require.True(t, sidecarQueryMustRunLocally(ctx, ses, "/*+ SIDECAR GPU */ PERFORM SELECT 1"))
+	require.False(t, sidecarQueryMustRunLocally(ctx, ses, "/*+ SIDECAR */ SELECT 1"))
+	require.False(t, sidecarQueryMustRunLocally(ctx, ses, "/*+ SIDECAR */ invalid"))
+}
+
 func TestWrapForGPUExecution(t *testing.T) {
 	// Simple query
 	assert.Equal(t,
