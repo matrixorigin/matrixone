@@ -1199,6 +1199,11 @@ func preparedTextParamRuntimeType(value any) types.T {
 
 func preparedExecuteParamRuntimeType(ses FeSession, ref *plan.VarRef, value any) types.T {
 	if ref != nil && !ref.System {
+		if compileCtx := ses.GetTxnCompileCtx(); compileCtx != nil && compileCtx.execCtx != nil {
+			if _, ok := resolveStoredProcedureVariable(compileCtx.execCtx.reqCtx, ref.Name); ok {
+				return preparedTextParamRuntimeType(value)
+			}
+		}
 		if userVar, err := ses.GetUserDefinedVar(ref.Name); err == nil && userVar != nil {
 			return userVar.RuntimeType
 		}
