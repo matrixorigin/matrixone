@@ -123,6 +123,24 @@ FFFFFFFFFFFFFFFF  ¦  max-src
 data branch create table bit8_bad_src from bit8_base;
 data branch create table bit8_bad_dst from bit8_base;
 update bit8_bad_src set payload = 'changed' where hex(k) in ('1', 'FF');
+data branch create table bit8_unary_dst from bit8_base;
+data branch pick bit8_bad_src into bit8_unary_dst keys(+b'1');
+select hex(k), payload from bit8_unary_dst order by k;
+➤ hex(k)[12,-1,0]  ¦  payload[12,-1,0]  𝄀
+0  ¦  zero  𝄀
+1  ¦  changed  𝄀
+7F  ¦  one-two-seven  𝄀
+FF  ¦  two-five-five
+data branch create table bit8_unary_atomic_dst from bit8_base;
+data branch pick bit8_bad_src into bit8_unary_atomic_dst keys(+b'11111111', -b'1');
+-- @regex("data type bit\(8\), value '-1'", true)
+Data truncation: data out of range: data type bit(8), value '-1'
+select hex(k), payload from bit8_unary_atomic_dst order by k;
+➤ hex(k)[12,-1,0]  ¦  payload[12,-1,0]  𝄀
+0  ¦  zero  𝄀
+1  ¦  one  𝄀
+7F  ¦  one-two-seven  𝄀
+FF  ¦  two-five-five
 data branch pick bit8_bad_src into bit8_bad_dst keys(255, 256);
 -- @regex("data type bit\(8\), value '256'", true)
 Data truncation: data out of range: data type bit(8), value '256'

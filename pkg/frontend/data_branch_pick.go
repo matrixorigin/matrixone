@@ -1266,7 +1266,7 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *
 		default:
 			return moerr.NewInvalidInputNoCtxf("unsupported unary operator for PK filter: %v", e.Op)
 		}
-		if pkType.Oid.IsInteger() && (num.ValType == tree.P_hexnum || num.ValType == tree.P_float64) {
+		if shouldNormalizeIntegerNumVal(num, pkType) {
 			return appendIntegerNumValToVec(vec, num, negative, pkType, tz, mp)
 		}
 		return appendNumericStringToVec(vec, s, pkType, tz, mp)
@@ -1281,13 +1281,21 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *
 // appendNumValToVec converts a numeric literal to the correct typed value
 // and appends it to the vector.
 func appendNumValToVec(vec *vector.Vector, val *tree.NumVal, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
-	if pkType.Oid == types.T_bit && val.ValType == tree.P_bit {
-		return appendIntegerNumValToVec(vec, val, false, pkType, tz, mp)
-	}
-	if pkType.Oid.IsInteger() && (val.ValType == tree.P_hexnum || val.ValType == tree.P_float64) {
+	if shouldNormalizeIntegerNumVal(val, pkType) {
 		return appendIntegerNumValToVec(vec, val, false, pkType, tz, mp)
 	}
 	return appendNumericStringToVec(vec, val.String(), pkType, tz, mp)
+}
+
+func shouldNormalizeIntegerNumVal(val *tree.NumVal, pkType types.Type) bool {
+	switch val.ValType {
+	case tree.P_bit:
+		return pkType.Oid == types.T_bit
+	case tree.P_hexnum, tree.P_float64:
+		return pkType.Oid.IsInteger()
+	default:
+		return false
+	}
 }
 
 func appendIntegerNumValToVec(

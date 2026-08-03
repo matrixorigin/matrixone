@@ -107,6 +107,18 @@ select hex(k), payload from bit64_dst order by k;
 data branch create table bit8_bad_src from bit8_base;
 data branch create table bit8_bad_dst from bit8_base;
 update bit8_bad_src set payload = 'changed' where hex(k) in ('1', 'FF');
+
+-- Unary plus preserves the native BIT value through the public PICK path.
+data branch create table bit8_unary_dst from bit8_base;
+data branch pick bit8_bad_src into bit8_unary_dst keys(+b'1');
+select hex(k), payload from bit8_unary_dst order by k;
+
+-- Unary minus remains invalid for unsigned BIT and fails before the preceding key is applied.
+data branch create table bit8_unary_atomic_dst from bit8_base;
+-- @regex("data type bit\(8\), value '-1'",true)
+data branch pick bit8_bad_src into bit8_unary_atomic_dst keys(+b'11111111', -b'1');
+select hex(k), payload from bit8_unary_atomic_dst order by k;
+
 -- @regex("data type bit\(8\), value '256'",true)
 data branch pick bit8_bad_src into bit8_bad_dst keys(255, 256);
 select hex(k), payload from bit8_bad_dst order by k;

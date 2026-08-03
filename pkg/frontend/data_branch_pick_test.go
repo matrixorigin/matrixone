@@ -638,6 +638,54 @@ func TestAppendExprToVec_BitLiteral(t *testing.T) {
 	}
 }
 
+func TestAppendExprToVec_UnaryBitLiteral(t *testing.T) {
+	tests := []struct {
+		name    string
+		literal string
+		want    uint64
+		wantErr string
+	}{
+		{name: "unary plus", literal: "+b'1'", want: 1},
+		{name: "unary minus", literal: "-b'1'", wantErr: "out of range"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stmtNode, err := parsers.ParseOne(
+				context.Background(),
+				dialect.MYSQL,
+				"data branch pick src into dst keys("+tc.literal+")",
+				1,
+			)
+			require.NoError(t, err)
+			stmt := stmtNode.(*tree.DataBranchPick)
+			require.Len(t, stmt.Keys.KeyExprs, 1)
+			unary, ok := stmt.Keys.KeyExprs[0].(*tree.UnaryExpr)
+			require.True(t, ok)
+			num, ok := unary.Expr.(*tree.NumVal)
+			require.True(t, ok)
+			require.Equal(t, tree.P_bit, num.ValType)
+
+			mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+			require.NoError(t, err)
+			defer mp.Free(nil)
+			pkType := types.New(types.T_bit, 8, 0)
+			vec := vector.NewVec(pkType)
+			defer vec.Free(mp)
+
+			err = appendExprToVec(vec, unary, pkType, time.UTC, mp)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				require.Zero(t, vec.Length())
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, 1, vec.Length())
+			require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[uint64](vec, 0))
+		})
+	}
+}
+
 func TestAppendExprToVec_InvalidBitLiteralAST(t *testing.T) {
 	tests := []string{
 		"0b",
