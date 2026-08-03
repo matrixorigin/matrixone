@@ -370,7 +370,7 @@ func TestBuildTable_AlterView(t *testing.T) {
 	tb.SchemaName = "db"
 	tb.ObjectName = "v"
 	bc := NewBindContext(qb, nil)
-	_, err = qb.buildTable(tb, bc, -1, nil)
+	_, err = qb.buildTable(tb, bc, nil)
 	assert.Error(t, err)
 }
 
@@ -476,7 +476,7 @@ func buildViewForSQLModeTest(t *testing.T, viewName string, viewData ViewData) (
 	tableName := &tree.TableName{}
 	tableName.SchemaName = "db"
 	tableName.ObjectName = tree.Identifier(viewName)
-	nodeID, err := builder.buildTable(tableName, bindCtx, -1, nil)
+	nodeID, err := builder.buildTable(tableName, bindCtx, nil)
 	require.NoError(t, err)
 	require.Equal(t, plan.Node_PROJECT, builder.qry.Nodes[nodeID].NodeType)
 	require.Len(t, builder.qry.Nodes[nodeID].ProjectList, 1)
@@ -549,7 +549,7 @@ func TestTempTableAliasBindingUsesOriginName(t *testing.T) {
 	tb := &tree.TableName{}
 	tb.SchemaName = "db"
 	tb.ObjectName = "t1"
-	nodeID, err := qb.buildTable(&tree.AliasedTableExpr{Expr: tb}, bc, -1, nil)
+	nodeID, err := qb.buildTable(&tree.AliasedTableExpr{Expr: tb}, bc, nil)
 	require.NoError(t, err)
 
 	_, ok := bc.bindingByTable["t1"]
