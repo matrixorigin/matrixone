@@ -16,12 +16,31 @@ package logtailreplay
 
 import (
 	"bytes"
+	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/tidwall/btree"
 )
+
+const lifecycleObjectEntryMetaBytes = uint64(objectio.ObjectStatsLen + 24)
+
+// VisibleDataObjectPage is a bounded view over the current data Object index.
+// LastObjectName is an opaque resume hint. Callers must never use a page as a
+// retirement proof; the final TAE transaction has to validate exact identity.
+type VisibleDataObjectPage struct {
+	Objects        []objectio.ObjectEntry
+	LastObjectName *objectio.ObjectNameShort
+	End            bool
+	MetaBytes      uint64
+}
+
+type LifecycleTombstoneSelectionLimits struct {
+	MaxScannedObjects  int
+	MaxSelectedObjects int
+	MaxMetaBytes       uint64
+}
 
 type objectsIter struct {
 	onlyVisible bool
@@ -135,6 +154,160 @@ func (p *PartitionState) NewObjectsIter(
 	} else {
 		return p.newDataObjectIter(snapshot, onlyVisible)
 	}
+}
+
+// ScanVisibleDataObjectsPage seeks directly in the existing Object-name B-tree
+// and returns at most maxObjects/maxMetaBytes of visible, non-appendable data
+// Objects. It deliberately does not build a table-wide intermediate slice.
+func (p *PartitionState) ScanVisibleDataObjectsPage(
+	ctx context.Context,
+	snapshot types.TS,
+	after *objectio.ObjectNameShort,
+	maxObjects int,
+	maxMetaBytes uint64,
+) (VisibleDataObjectPage, error) {
+	if maxObjects <= 0 {
+		return VisibleDataObjectPage{}, moerr.NewInvalidInput(ctx, "Lifecycle maxObjects must be positive")
+	}
+	if maxMetaBytes < lifecycleObjectEntryMetaBytes {
+		return VisibleDataObjectPage{}, moerr.NewInvalidInput(
+			ctx,
+			"Lifecycle maxMetaBytes cannot hold one Object entry",
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return VisibleDataObjectPage{}, err
+	}
+	if !p.IsEmpty() && snapshot.LT(&p.start) {
+		return VisibleDataObjectPage{}, moerr.NewTxnStaleNoCtxf(
+			"(%s<%s)",
+			snapshot.ToString(), p.start.ToString(),
+		)
+	}
+
+	page := VisibleDataObjectPage{
+		Objects: make([]objectio.ObjectEntry, 0, maxObjects),
+	}
+	iter := p.dataObjectsNameIndex.Iter()
+	defer iter.Release()
+
+	var ok bool
+	if after == nil {
+		ok = iter.First()
+	} else {
+		pivotStats := objectio.NewObjectStats()
+		if err := objectio.SetObjectStatsShortName(pivotStats, after); err != nil {
+			return VisibleDataObjectPage{}, err
+		}
+		ok = iter.Seek(objectio.ObjectEntry{ObjectStats: *pivotStats})
+		if ok {
+			item := iter.Item()
+			if bytes.Equal(item.ObjectShortName()[:], after[:]) {
+				ok = iter.Next()
+			}
+		}
+	}
+
+	for ; ok; ok = iter.Next() {
+		if err := ctx.Err(); err != nil {
+			return VisibleDataObjectPage{}, err
+		}
+		entry := iter.Item()
+		if !entry.Visible(snapshot) || entry.GetAppendable() {
+			continue
+		}
+		if len(page.Objects) == maxObjects ||
+			page.MetaBytes+lifecycleObjectEntryMetaBytes > maxMetaBytes {
+			page.End = false
+			return page, nil
+		}
+		page.Objects = append(page.Objects, entry)
+		page.MetaBytes += lifecycleObjectEntryMetaBytes
+		last := *entry.ObjectShortName()
+		page.LastObjectName = &last
+	}
+	page.End = true
+	return page, nil
+}
+
+// SelectLifecycleTombstoneObjects returns a conservative physical superset for
+// SyncProtection. The existing snapshot reader remains the authority for
+// visibility and may consume any Tombstone Object in this protected superset.
+// A Tombstone Object is excluded only when a valid RowID ZoneMap proves that it
+// cannot reference any source Data Object. Missing, legacy, malformed, or
+// unexpected ZoneMaps are conservatively selected instead of being treated as
+// unrelated.
+func (p *PartitionState) SelectLifecycleTombstoneObjects(
+	ctx context.Context,
+	snapshot types.TS,
+	sourceObjectIDs []objectio.ObjectId,
+	limits LifecycleTombstoneSelectionLimits,
+) ([]objectio.ObjectEntry, int, error) {
+	if len(sourceObjectIDs) == 0 {
+		return nil, 0, moerr.NewInvalidInput(ctx, "Lifecycle tombstone selection requires Data Objects")
+	}
+	if limits.MaxScannedObjects <= 0 ||
+		limits.MaxSelectedObjects <= 0 ||
+		limits.MaxMetaBytes < lifecycleObjectEntryMetaBytes {
+		return nil, 0, moerr.NewInvalidInput(ctx, "Lifecycle tombstone selection limits are invalid")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
+	if !p.IsEmpty() && snapshot.LT(&p.start) {
+		return nil, 0, moerr.NewTxnStaleNoCtxf(
+			"(%s<%s)",
+			snapshot.ToString(), p.start.ToString(),
+		)
+	}
+
+	selected := make([]objectio.ObjectEntry, 0)
+	scanned := 0
+	metaBytes := uint64(0)
+	iter, err := p.NewObjectsIter(snapshot, true, true)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer iter.Close()
+	for iter.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, scanned, err
+		}
+		scanned++
+		if scanned > limits.MaxScannedObjects {
+			return nil, scanned, moerr.NewInvalidInput(
+				ctx,
+				"Lifecycle tombstone scan exceeds the certified Object limit",
+			)
+		}
+		entry := iter.Entry()
+		zoneMap := entry.SortKeyZoneMap()
+		include := !zoneMap.Valid() ||
+			zoneMap.GetType() != types.T_Rowid ||
+			len(zoneMap.GetMinBuf()) != types.RowidSize ||
+			len(zoneMap.GetMaxBuf()) != types.RowidSize
+		if !include {
+			for index := range sourceObjectIDs {
+				if zoneMap.RowidPrefixEq(sourceObjectIDs[index][:]) {
+					include = true
+					break
+				}
+			}
+		}
+		if !include {
+			continue
+		}
+		if len(selected) == limits.MaxSelectedObjects ||
+			metaBytes+lifecycleObjectEntryMetaBytes > limits.MaxMetaBytes {
+			return nil, scanned, moerr.NewInvalidInput(
+				ctx,
+				"Lifecycle tombstone protection set exceeds its certified limit",
+			)
+		}
+		selected = append(selected, entry)
+		metaBytes += lifecycleObjectEntryMetaBytes
+	}
+	return selected, scanned, nil
 }
 
 func (p *PartitionState) NewDirtyBlocksIter() BlocksIter {

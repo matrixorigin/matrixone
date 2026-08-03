@@ -320,6 +320,13 @@ func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName st
 }
 
 func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	if err := plan.ValidateLifecycleRestoreTableAccess(
+		c.GetContext(),
+		c.proc != nil && c.proc.Base != nil && c.proc.Base.IsFrontend,
+		tableName,
+	); err != nil {
+		return nil, nil, err
+	}
 	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
 	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
 		dbName = strings.ToLower(dbName)

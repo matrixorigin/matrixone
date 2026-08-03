@@ -35,6 +35,21 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaView("TABLE_CONSTRAINTS", sysview.InformationSchemaTableConstraintsDDL),
 }
 
+func init() {
+	for _, def := range catalog.LifecycleTenantTableDefinitions {
+		table := def
+		tenantUpgEntries = append(tenantUpgEntries, versions.UpgradeEntry{
+			Schema:    table.Schema,
+			TableName: table.Name,
+			UpgType:   versions.CREATE_NEW_TABLE,
+			UpgSql:    table.DDL,
+			CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+				return versions.CheckTableDefinition(txn, accountID, table.Schema, table.Name)
+			},
+		})
+	}
+}
+
 func upgradeInformationSchemaView(viewName, viewDDL string) versions.UpgradeEntry {
 	return versions.UpgradeEntry{
 		Schema:    sysview.InformationDBConst,

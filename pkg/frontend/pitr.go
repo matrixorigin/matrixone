@@ -307,9 +307,9 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err
 		return err
 	}
 
-	// Hold the stable owner-publication write barrier through PITR creation.
-	// COPY ALTER crosses the same barrier before probing historical owners, so
-	// an empty probe cannot race a PITR whose create time was already chosen.
+	// Hold the existing Data Branch lineage publication lock through PITR
+	// creation. COPY ALTER crosses the same lock before publishing a new table
+	// generation. Lifecycle does not add another cross-feature barrier here.
 	if err = lockDataBranchLineageOwnerPublication(ctx, bh); err != nil {
 		return err
 	}
@@ -1060,6 +1060,32 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 				}
 			}
 
+			if rtnErr = rejectLifecycleArchiveRestoreScope(
+				ctx,
+				bh,
+				lifecycleArchiveRestoreScope{
+					level:             tree.RESTORELEVELACCOUNT,
+					accountID:         uint32(accountRecord.accountId),
+					snapshotTS:        ts,
+					rejectTTLBindings: true,
+				},
+				"RESTORE PITR",
+			); rtnErr != nil {
+				return rtnErr
+			}
+			if rtnErr = rejectLifecycleArchiveRestoreScope(
+				ctx,
+				bh,
+				lifecycleArchiveRestoreScope{
+					level:             tree.RESTORELEVELACCOUNT,
+					accountID:         toAccountId,
+					rejectTTLBindings: true,
+				},
+				"RESTORE PITR",
+			); rtnErr != nil {
+				return rtnErr
+			}
+
 			// check account exists or not
 			ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelAccount)
 			rtnErr = restoreAccountUsingClusterSnapshotToNew(
@@ -1102,6 +1128,48 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	}
 	if !accountExist {
 		return stats, moerr.NewInternalErrorf(ctx, "account `%s` does not exists at timestamp: %v", tenantInfo.GetTenant(), nanoTimeFormat(ts))
+	}
+	if restoreLevel == tree.RESTORELEVELCLUSTER {
+		if err = rejectLifecycleArchiveClusterRestore(
+			ctx,
+			ses,
+			bh,
+			pitrName,
+			ts,
+			"RESTORE PITR",
+		); err != nil {
+			return stats, err
+		}
+	} else {
+		if err = rejectLifecycleArchiveRestoreScope(
+			ctx,
+			bh,
+			lifecycleArchiveRestoreScope{
+				level:             restoreLevel,
+				accountID:         tenantInfo.GetTenantID(),
+				databaseName:      dbName,
+				tableName:         tblName,
+				snapshotTS:        ts,
+				rejectTTLBindings: restoreLevel == tree.RESTORELEVELACCOUNT,
+			},
+			"RESTORE PITR",
+		); err != nil {
+			return stats, err
+		}
+		if err = rejectLifecycleArchiveRestoreScope(
+			ctx,
+			bh,
+			lifecycleArchiveRestoreScope{
+				level:             restoreLevel,
+				accountID:         tenantInfo.GetTenantID(),
+				databaseName:      dbName,
+				tableName:         tblName,
+				rejectTTLBindings: restoreLevel == tree.RESTORELEVELACCOUNT,
+			},
+			"RESTORE PITR",
+		); err != nil {
+			return stats, err
+		}
 	}
 
 	//drop foreign key related tables first

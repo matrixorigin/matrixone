@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -59,7 +60,23 @@ type mergeObjectsEntry struct {
 	isTombstone          bool
 	delTbls              map[objectio.ObjectId]map[uint16]struct{}
 	collectTs            types.TS
+	sourceSnapshot       types.TS
 	transCntBeforeCommit int
+
+	// lifecycleWholeArchive is a narrow mode used by Lifecycle Whole Object
+	// retirement. It reuses the normal Merge WAL command and Catalog/GC path,
+	// but has no created Object or transfer table. At Prepare it must reject
+	// every Tombstone committed after the source snapshot: otherwise a row
+	// deleted while the Archive was being written could be restored later.
+	lifecycleWholeArchive bool
+	lifecycleRewrite      bool
+	finalPrepareDeadline  time.Time
+	maxDeltaRows          uint64
+	maxDeltaBytes         uint64
+	maxDeltaBlocks        uint32
+	deltaRows             uint64
+	deltaBytes            uint64
+	deltaBlocks           map[types.Blockid]struct{}
 }
 
 func NewMergeObjectsEntry(
@@ -113,6 +130,145 @@ func NewMergeObjectsEntry(
 		if err = entry.prepareTransferPage(ctx); err != nil {
 			return nil, err
 		}
+	}
+	return entry, nil
+}
+
+// NewLifecycleWholeObjectsEntry creates the transaction entry for an exact
+// Whole Object retirement. The caller must already have installed the source
+// Object DropIntent through Relation.SoftDeleteObject.
+//
+// This deliberately remains a thin specialization of mergeObjectsEntry:
+// MakeCommand, WAL replay and physical reclamation stay on the ordinary Merge
+// path, while Lifecycle adds only its source-snapshot validation contract.
+func NewLifecycleWholeObjectsEntry(
+	txn txnif.AsyncTxn,
+	taskName string,
+	relation handle.Relation,
+	droppedObjs []*catalog.ObjectEntry,
+	sourceSnapshot types.TS,
+	finalPrepareDeadline time.Time,
+	rt *dbutils.Runtime,
+) (*mergeObjectsEntry, error) {
+	if len(droppedObjs) == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("Lifecycle Whole retirement has no source Object")
+	}
+	if sourceSnapshot.IsEmpty() {
+		return nil, moerr.NewInvalidInputNoCtx("Lifecycle Whole retirement has an empty source snapshot")
+	}
+	if finalPrepareDeadline.IsZero() {
+		return nil, moerr.NewInvalidInputNoCtx("Lifecycle Whole retirement has no prepare deadline")
+	}
+	return &mergeObjectsEntry{
+		txn:                   txn,
+		taskName:              taskName,
+		relation:              relation,
+		droppedObjs:           droppedObjs,
+		skipTransfer:          true,
+		rt:                    rt,
+		collectTs:             sourceSnapshot,
+		sourceSnapshot:        sourceSnapshot,
+		lifecycleWholeArchive: true,
+		finalPrepareDeadline:  finalPrepareDeadline,
+	}, nil
+}
+
+// NewLifecycleRewriteObjectsEntry prepares the existing Merge transfer entry
+// from an immutable external booking. Lifecycle differs from ordinary Merge in
+// only three ways: its delete window starts at the source snapshot, every
+// missing destination aborts, and Root-owned created files are not deleted by
+// transaction rollback.
+func NewLifecycleRewriteObjectsEntry(
+	ctx context.Context,
+	txn txnif.AsyncTxn,
+	taskName string,
+	relation handle.Relation,
+	droppedObjs, createdObjs []*catalog.ObjectEntry,
+	transferTable *mergesort.TransferTable,
+	sourceSnapshot types.TS,
+	finalPrepareDeadline time.Time,
+	maxDeltaRows, maxDeltaBytes uint64,
+	maxDeltaBlocks uint32,
+	rt *dbutils.Runtime,
+) (_ *mergeObjectsEntry, err error) {
+	var entry *mergeObjectsEntry
+	defer func() {
+		if err == nil {
+			return
+		}
+		if entry != nil {
+			entry.RollbackTransferState()
+		} else if transferTable != nil {
+			// Once passed to this constructor, the decoded TransferTable has
+			// exactly one owner even when validation rejects the entry before
+			// its runtime state can be built.
+			transferTable.Release()
+		}
+	}()
+	if len(droppedObjs) != 1 ||
+		len(createdObjs) == 0 ||
+		transferTable == nil ||
+		sourceSnapshot.IsEmpty() ||
+		!finalPrepareDeadline.After(time.Now()) ||
+		maxDeltaRows == 0 ||
+		maxDeltaBytes == 0 ||
+		maxDeltaBlocks == 0 {
+		return nil, moerr.NewInvalidInputNoCtx(
+			"Lifecycle Rewrite entry is outside the certified contract",
+		)
+	}
+	totalCreatedBlkCnt := 0
+	for index, object := range createdObjs {
+		createdObjs[index] = object.GetLatestNode()
+		totalCreatedBlkCnt += createdObjs[index].BlockCnt()
+	}
+	if totalCreatedBlkCnt == 0 {
+		return nil, moerr.NewInvalidInputNoCtx(
+			"Lifecycle Rewrite created no live blocks",
+		)
+	}
+	entry = &mergeObjectsEntry{
+		txn:                  txn,
+		taskName:             taskName,
+		relation:             relation,
+		droppedObjs:          droppedObjs,
+		createdObjs:          createdObjs,
+		transferTable:        transferTable,
+		rt:                   rt,
+		collectTs:            rt.Now(),
+		sourceSnapshot:       sourceSnapshot,
+		lifecycleRewrite:     true,
+		finalPrepareDeadline: finalPrepareDeadline,
+		maxDeltaRows:         maxDeltaRows,
+		maxDeltaBytes:        maxDeltaBytes,
+		maxDeltaBlocks:       maxDeltaBlocks,
+		deltaBlocks:          make(map[types.Blockid]struct{}),
+		delTbls:              make(map[types.Objectid]map[uint16]struct{}),
+	}
+	if entry.rt.BigDeleteHinter.HasBigDelAfter(
+		entry.relation.ID(),
+		&sourceSnapshot,
+	) {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"Lifecycle Rewrite gives up after a BigDelete: %v",
+			entry.taskName,
+		)
+	}
+	phaseOneContext, cancel := context.WithDeadline(
+		ctx,
+		finalPrepareDeadline,
+	)
+	defer cancel()
+	entry.transCntBeforeCommit, _, err = entry.collectDelsAndTransfer(
+		phaseOneContext,
+		sourceSnapshot,
+		entry.collectTs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err = entry.prepareTransferPage(phaseOneContext); err != nil {
+		return nil, err
 	}
 	return entry, nil
 }
@@ -232,6 +388,11 @@ func (entry *mergeObjectsEntry) RollbackTransferState() {
 func (entry *mergeObjectsEntry) PrepareRollback() (err error) {
 	entry.RollbackTransferState()
 
+	if entry.lifecycleRewrite {
+		// Lifecycle output files belong to Cleanup Root until commit succeeds.
+		// A definitive abort is reclaimed by the Root sweeper.
+		return nil
+	}
 	fs := entry.rt.Fs
 	// for io task, dispatch by round robin, scope can be nil
 	entry.rt.Scheduler.ScheduleScopedFn(&tasks.Context{}, tasks.IOTask, nil, func() error {
@@ -283,15 +444,32 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 	from, to types.TS,
 	blkOffsetBase int,
 ) (transCnt int, collect, transfer time.Duration, err error) {
+	first := from.Next()
+	if to.LT(&first) {
+		return
+	}
 	inst := time.Now()
-	bat, err := tables.TombstoneRangeScanByObject(
+	maxRows := uint64(0)
+	if entry.lifecycleRewrite {
+		if entry.deltaRows >= entry.maxDeltaRows {
+			return 0, 0, 0, moerr.NewInternalErrorNoCtx(
+				"Lifecycle Rewrite post-snapshot Tombstone budget exceeded",
+			)
+		}
+		remaining := entry.maxDeltaRows - entry.deltaRows
+		if remaining < math.MaxUint64 {
+			maxRows = remaining + 1
+		}
+	}
+	bat, err := tables.TombstoneRangeScanByObjectWithMaxRows(
 		ctx,
 		dropped.GetTable(),
 		*dropped.ID(),
-		from.Next(),
+		first,
 		to,
 		common.MergeAllocator,
 		entry.rt.VectorPool.Small,
+		maxRows,
 	)
 	if err != nil {
 		return
@@ -301,6 +479,17 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 		return
 	}
 	defer bat.Close()
+	if entry.lifecycleRewrite {
+		entry.deltaRows += uint64(bat.Length())
+		entry.deltaBytes += uint64(bat.Allocated())
+		if entry.deltaRows > entry.maxDeltaRows ||
+			entry.deltaBytes > entry.maxDeltaBytes {
+			err = moerr.NewInternalErrorNoCtx(
+				"Lifecycle Rewrite post-snapshot Tombstone budget exceeded",
+			)
+			return
+		}
+	}
 	inst = time.Now()
 	defer func() { transfer = time.Since(inst) }()
 
@@ -309,6 +498,17 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 	deletesPK := bat.GetVectorByName(objectio.TombstoneAttr_PK_Attr)
 
 	count := len(rowid)
+	if entry.lifecycleRewrite {
+		for _, value := range rowid {
+			entry.deltaBlocks[*value.BorrowBlockID()] = struct{}{}
+		}
+		if len(entry.deltaBlocks) > int(entry.maxDeltaBlocks) {
+			err = moerr.NewInternalErrorNoCtx(
+				"Lifecycle Rewrite post-snapshot block budget exceeded",
+			)
+			return
+		}
+	}
 	transCnt += count
 	var rowIDVec, pkVec containers.Vector
 	defer func() {
@@ -325,11 +525,25 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 		blkOffset := blkOffsetBase + blkOffsetInObj
 		mapping := entry.transferTable.GetBlockMap(blkOffset)
 		if mapping == nil {
+			if entry.lifecycleRewrite {
+				err = moerr.NewTxnWWConflictNoCtx(
+					entry.relation.ID(),
+					"Lifecycle Rewrite post-snapshot DELETE has no destination",
+				)
+				return
+			}
 			// this block had been all deleted, skip
 			// Note: it is possible that the block is empty, but not the object
 			continue
 		}
 		if uint32(len(mapping)) <= row || mapping[row].ObjIdx == api.NoTransfer {
+			if entry.lifecycleRewrite {
+				err = moerr.NewTxnWWConflictNoCtx(
+					entry.relation.ID(),
+					"Lifecycle Rewrite post-snapshot DELETE targets a retired row",
+				)
+				return
+			}
 			err = moerr.NewInternalErrorNoCtxf("%s-%d find no transfer mapping for row %d (mapping len %d)",
 				dropped.ID().String(), blkOffsetInObj, row, len(mapping))
 			return
@@ -406,7 +620,7 @@ func (entry *mergeObjectsEntry) collectDelsAndTransfer(
 				break
 			}
 		}
-		if !hasMappingInThisObj {
+		if !hasMappingInThisObj && !entry.lifecycleRewrite {
 			// this object had been all deleted, skip
 			blksOffsetBase += blkCnt
 			continue
@@ -461,6 +675,9 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 			v2.TaskCommitDataMergeDurationHistogram.Observe(time.Since(inst).Seconds())
 		}
 	}()
+	if entry.lifecycleWholeArchive {
+		return entry.validateLifecycleWholePostSnapshotDeletes()
+	}
 	if len(entry.createdObjs) == 0 || entry.skipTransfer {
 		logutil.Info(
 			"[MERGE-PREPARE-COMMIT]",
@@ -474,12 +691,20 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 	}
 
 	startTS := entry.txn.GetStartTS()
+	if entry.lifecycleRewrite {
+		startTS = entry.sourceSnapshot
+	}
 	if entry.rt.BigDeleteHinter.HasBigDelAfter(entry.relation.ID(), &startTS) {
 		return moerr.NewInternalErrorNoCtxf("LockMerge give up in queue %v", entry.taskName)
 	}
 
 	// phase 2 transfer
 	ctx := context.Background()
+	var cancel context.CancelFunc
+	if entry.lifecycleRewrite {
+		ctx, cancel = context.WithDeadline(ctx, entry.finalPrepareDeadline)
+		defer cancel()
+	}
 	transCnt, stat, err := entry.collectDelsAndTransfer(ctx, entry.collectTs, entry.txn.GetPrepareTS().Prev())
 	if err != nil {
 		return err
@@ -513,4 +738,42 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 	}
 
 	return
+}
+
+func (entry *mergeObjectsEntry) validateLifecycleWholePostSnapshotDeletes() error {
+	prepareTS := entry.txn.GetPrepareTS()
+	if prepareTS.LE(&entry.collectTs) {
+		return moerr.NewTxnWWConflictNoCtx(
+			entry.relation.ID(),
+			"Lifecycle prepare timestamp does not follow source snapshot",
+		)
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), entry.finalPrepareDeadline)
+	defer cancel()
+	from := entry.collectTs.Next()
+	to := prepareTS.Prev()
+	if to.LT(&from) {
+		return nil
+	}
+	for _, dropped := range entry.droppedObjs {
+		hasPostSnapshotDelete, err := tables.HasTombstoneInRangeByObject(
+			ctx,
+			dropped.GetTable(),
+			*dropped.ID(),
+			from,
+			to,
+			common.MergeAllocator,
+			entry.rt.VectorPool.Small,
+		)
+		if err != nil {
+			return err
+		}
+		if hasPostSnapshotDelete {
+			return moerr.NewTxnWWConflictNoCtx(
+				entry.relation.ID(),
+				"Lifecycle Whole source has a post-snapshot delete",
+			)
+		}
+	}
+	return nil
 }

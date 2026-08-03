@@ -15,16 +15,19 @@
 package logtailreplay
 
 import (
+	"context"
+	"math/rand"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/assert"
-	"math/rand"
-	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
 
@@ -247,6 +250,165 @@ func TestPartitionState_NewBlocksIter(t *testing.T) {
 	pState.start = types.BuildTS(100, 0)
 	_, err := pState.NewObjectsIter(types.BuildTS(99, 0), false, true)
 	require.Error(t, err)
+}
+
+func TestPartitionStateScanVisibleDataObjectsPage(t *testing.T) {
+	state := NewPartitionState("", false, 42, false)
+	snapshot := types.BuildTS(100, 0)
+	state.start = types.BuildTS(1, 0)
+
+	entries := make([]objectio.ObjectEntry, 5)
+	segmentID := objectio.NewSegmentid()
+	for i := range entries {
+		stats := objectio.NewObjectStats()
+		name := objectio.BuildObjectName(segmentID, uint16(i))
+		require.NoError(t, objectio.SetObjectStatsObjectName(stats, name))
+		require.NoError(t, objectio.SetObjectStatsRowCnt(stats, uint32(i+1)))
+		entries[i] = objectio.ObjectEntry{
+			ObjectStats: *stats,
+			CreateTime:  types.BuildTS(int64(i+1), 0),
+		}
+		state.dataObjectsNameIndex.Set(entries[i])
+	}
+
+	// Deleted before the snapshot is not visible.
+	deleted := entries[1]
+	deleted.DeleteTime = types.BuildTS(50, 0)
+	state.dataObjectsNameIndex.Set(deleted)
+
+	// Appendable objects are not lifecycle retirement candidates.
+	appendable := entries[3]
+	objectio.SetObjectStatsAppendable(&appendable.ObjectStats, true)
+	state.dataObjectsNameIndex.Set(appendable)
+
+	first, err := state.ScanVisibleDataObjectsPage(
+		context.Background(), snapshot, nil, 2, 1<<20)
+	require.NoError(t, err)
+	require.Len(t, first.Objects, 2)
+	require.False(t, first.End)
+	require.Equal(t, *first.Objects[1].ObjectShortName(), *first.LastObjectName)
+
+	second, err := state.ScanVisibleDataObjectsPage(
+		context.Background(), snapshot, first.LastObjectName, 2, 1<<20)
+	require.NoError(t, err)
+	require.Len(t, second.Objects, 1)
+	require.True(t, second.End)
+	require.Equal(t, *entries[4].ObjectShortName(), *second.Objects[0].ObjectShortName())
+
+	// The byte limit is also hard. One entry is allowed so forward progress is
+	// possible, then the page stops before adding another.
+	limited, err := state.ScanVisibleDataObjectsPage(
+		context.Background(), snapshot, nil, 100, lifecycleObjectEntryMetaBytes)
+	require.NoError(t, err)
+	require.Len(t, limited.Objects, 1)
+	require.False(t, limited.End)
+}
+
+func TestPartitionStateScanVisibleDataObjectsPageLimitsAndCancellation(t *testing.T) {
+	state := NewPartitionState("", false, 42, false)
+	state.start = types.BuildTS(1, 0)
+
+	_, err := state.ScanVisibleDataObjectsPage(
+		context.Background(), types.BuildTS(2, 0), nil, 0, 1)
+	require.Error(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = state.ScanVisibleDataObjectsPage(
+		ctx, types.BuildTS(2, 0), nil, 1, lifecycleObjectEntryMetaBytes)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestPartitionStateSelectLifecycleTombstonesFailClosed(t *testing.T) {
+	state := NewPartitionState("", false, 42, false)
+	state.start = types.BuildTS(1, 0)
+	snapshot := types.BuildTS(100, 0)
+	sourceID := objectio.NewObjectid()
+	otherID := objectio.NewObjectid()
+
+	related := makeLifecycleTombstoneEntry(t, sourceID, 1)
+	unrelated := makeLifecycleTombstoneEntry(t, otherID, 2)
+	unknown := makeLifecycleTombstoneEntry(t, otherID, 3)
+	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(
+		&unknown.ObjectStats,
+		index.NewZM(types.T_Rowid, 0),
+	))
+	malformed := makeLifecycleTombstoneEntry(t, otherID, 4)
+	malformedZoneMap := index.BuildZM(
+		types.T_Rowid,
+		make([]byte, types.RowidSize),
+	)
+	// Keep the ZoneMap initialized but corrupt its physical min/max lengths.
+	// Lifecycle must conservatively protect this Object without invoking the
+	// unsafe RowidPrefixEq decoder.
+	malformedZoneMap[30] = 0
+	malformedZoneMap[61] = 0
+	require.True(t, malformedZoneMap.Valid())
+	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(
+		&malformed.ObjectStats,
+		malformedZoneMap,
+	))
+	state.tombstoneObjectsNameIndex.Set(related)
+	state.tombstoneObjectsNameIndex.Set(unrelated)
+	state.tombstoneObjectsNameIndex.Set(unknown)
+	state.tombstoneObjectsNameIndex.Set(malformed)
+	state.tombstoneObjectDTSIndex.Set(related)
+	state.tombstoneObjectDTSIndex.Set(unrelated)
+	state.tombstoneObjectDTSIndex.Set(unknown)
+	state.tombstoneObjectDTSIndex.Set(malformed)
+
+	selected, scanned, err := state.SelectLifecycleTombstoneObjects(
+		context.Background(),
+		snapshot,
+		[]objectio.ObjectId{sourceID},
+		LifecycleTombstoneSelectionLimits{
+			MaxScannedObjects:  10,
+			MaxSelectedObjects: 10,
+			MaxMetaBytes:       1 << 20,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 4, scanned)
+	require.Len(t, selected, 3)
+	require.Equal(t, *related.ObjectShortName(), *selected[0].ObjectShortName())
+	require.Equal(t, *unknown.ObjectShortName(), *selected[1].ObjectShortName())
+	require.Equal(t, *malformed.ObjectShortName(), *selected[2].ObjectShortName())
+
+	_, _, err = state.SelectLifecycleTombstoneObjects(
+		context.Background(),
+		snapshot,
+		[]objectio.ObjectId{sourceID},
+		LifecycleTombstoneSelectionLimits{
+			MaxScannedObjects:  2,
+			MaxSelectedObjects: 10,
+			MaxMetaBytes:       1 << 20,
+		},
+	)
+	require.Error(t, err)
+}
+
+func makeLifecycleTombstoneEntry(
+	t *testing.T,
+	dataObjectID objectio.ObjectId,
+	number uint16,
+) objectio.ObjectEntry {
+	t.Helper()
+	tombstoneID := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&tombstoneID, false, true, false)
+	blockID := objectio.NewBlockidWithObjectID(&dataObjectID, 0)
+	first := types.NewRowid(&blockID, 0)
+	last := types.NewRowid(&blockID, 100)
+	zoneMap := index.NewZM(types.T_Rowid, 0)
+	index.UpdateZM(zoneMap, first[:])
+	index.UpdateZM(zoneMap, last[:])
+	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, zoneMap))
+	segmentID := stats.ObjectName().SegmentId()
+	name := objectio.BuildObjectName(&segmentID, number)
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, name))
+	return objectio.ObjectEntry{
+		ObjectStats: *stats,
+		CreateTime:  types.BuildTS(2, 0),
+	}
 }
 
 func TestFilterBatchCase2InsertThenDelete(t *testing.T) {

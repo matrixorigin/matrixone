@@ -27,8 +27,8 @@ import (
 )
 
 func TestIcebergOrphanCleanupTenantUpgradeEntries(t *testing.T) {
-	if len(tenantUpgEntries) != 8 {
-		t.Fatalf("expected 8 tenant upgrades, got %d", len(tenantUpgEntries))
+	if len(tenantUpgEntries) < 8 {
+		t.Fatalf("expected at least 8 tenant upgrades, got %d", len(tenantUpgEntries))
 	}
 	allocator := tenantUpgEntries[0]
 	if allocator.UpgType != versions.MODIFY_COLUMN || allocator.TableName != "mo_iceberg_catalogs" {
@@ -56,6 +56,112 @@ func TestIcebergOrphanCleanupTenantUpgradeEntries(t *testing.T) {
 		if strings.Contains(lower, "drop ") {
 			t.Fatalf("orphan cleanup upgrade SQL must not drop objects: %s", entry.UpgSql)
 		}
+	}
+}
+
+func TestLifecycleCatalogUpgradeEntries(t *testing.T) {
+	const existingTenantEntries = 8
+	wantTenantTables := []string{
+		"mo_lifecycle_bindings",
+		"mo_lifecycle_datasets",
+		"mo_lifecycle_ttl_receipts",
+		"mo_lifecycle_restore_attempts",
+		"mo_lifecycle_restore_chunks",
+	}
+	if got, want := len(tenantUpgEntries), existingTenantEntries+len(wantTenantTables); got != want {
+		t.Fatalf("expected %d tenant upgrades, got %d", want, got)
+	}
+	for i, name := range wantTenantTables {
+		entry := tenantUpgEntries[existingTenantEntries+i]
+		if entry.Schema != "mo_catalog" || entry.TableName != name || entry.UpgType != versions.CREATE_NEW_TABLE {
+			t.Fatalf("unexpected lifecycle tenant upgrade for %s: %+v", name, entry)
+		}
+		lower := strings.ToLower(entry.UpgSql)
+		for _, required := range []string{"create table", "primary key"} {
+			if !strings.Contains(lower, required) {
+				t.Fatalf("%s DDL missing %q: %s", name, required, entry.UpgSql)
+			}
+		}
+		for _, forbidden := range []string{"alter table mo_catalog.mo_tables", "alter table mo_catalog.mo_columns", "alter table mo_catalog.mo_stages"} {
+			if strings.Contains(lower, forbidden) {
+				t.Fatalf("%s DDL must not change an existing catalog table: %s", name, entry.UpgSql)
+			}
+		}
+	}
+
+	if len(clusterUpgEntries) != 3 {
+		t.Fatalf("expected three lifecycle cluster upgrades, got %d", len(clusterUpgEntries))
+	}
+	root := clusterUpgEntries[0]
+	if root.Schema != "mo_catalog" || root.TableName != "mo_lifecycle_cleanup_roots" || root.UpgType != versions.CREATE_NEW_TABLE {
+		t.Fatalf("unexpected lifecycle cleanup-root upgrade: %+v", root)
+	}
+	rootDDL := strings.ToLower(root.UpgSql)
+	for _, required := range []string{"create cluster table", "primary key", "root_id", "attempt_id", "state_version"} {
+		if !strings.Contains(rootDDL, required) {
+			t.Fatalf("cleanup-root DDL missing %q: %s", required, root.UpgSql)
+		}
+	}
+	activation := clusterUpgEntries[1]
+	if activation.TableName != "mo_feature_registry" || activation.UpgType != versions.MODIFY_METADATA {
+		t.Fatalf("unexpected lifecycle activation upgrade: %+v", activation)
+	}
+	for _, required := range []string{
+		"lifecycle",
+		"false",
+		"archive_stages",
+		"on duplicate key",
+	} {
+		if !strings.Contains(strings.ToLower(activation.UpgSql), required) {
+			t.Fatalf("lifecycle activation SQL missing %q: %s", required, activation.UpgSql)
+		}
+	}
+	coordinator := clusterUpgEntries[2]
+	if coordinator.Schema != "mo_task" ||
+		coordinator.TableName != "sys_cron_task" ||
+		coordinator.UpgType != versions.MODIFY_METADATA {
+		t.Fatalf("unexpected lifecycle coordinator upgrade: %+v", coordinator)
+	}
+	for _, required := range []string{
+		"tae_object_lifecycle",
+		"sys_cron_task",
+		"on duplicate key",
+	} {
+		if !strings.Contains(strings.ToLower(coordinator.UpgSql), required) {
+			t.Fatalf("lifecycle coordinator SQL missing %q: %s", required, coordinator.UpgSql)
+		}
+	}
+}
+
+func TestLifecycleCatalogRollingUpgradeCompatibility(t *testing.T) {
+	for _, tableName := range []string{
+		"mo_lifecycle_restore_attempts",
+		"mo_lifecycle_restore_chunks",
+	} {
+		var ddl string
+		for _, entry := range tenantUpgEntries {
+			if entry.TableName == tableName {
+				ddl = strings.ToLower(entry.UpgSql)
+				break
+			}
+		}
+		if ddl == "" {
+			t.Fatalf("missing Lifecycle tenant upgrade for %s", tableName)
+		}
+		if !strings.Contains(ddl, "account_id int unsigned not null default 0") {
+			t.Fatalf("%s must keep the old-CN DROP ACCOUNT compatibility column: %s", tableName, ddl)
+		}
+	}
+
+	var cleanupDDL string
+	for _, entry := range clusterUpgEntries {
+		if entry.TableName == "mo_lifecycle_cleanup_roots" {
+			cleanupDDL = strings.ToLower(entry.UpgSql)
+			break
+		}
+	}
+	if !strings.Contains(cleanupDDL, "create cluster table") {
+		t.Fatalf("Cleanup Root must use the existing Cluster Table tenant filter during rolling upgrade: %s", cleanupDDL)
 	}
 }
 

@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -452,10 +453,51 @@ type Transaction struct {
 	isCCPRTxn           bool
 	ccprTaskID          string
 	syncProtectionJobID string
+	// lifecycleCommitControl is a commit-only tagged entry. It is deliberately
+	// outside txn.writes so workspace dump/merge/statement rollback cannot
+	// filter or rewrite it as an empty Batch.
+	lifecycleCommitControl *LifecycleCommitControl
 
 	writeWorkspaceThreshold      uint64
 	commitWorkspaceThreshold     uint64
 	extraWriteWorkspaceThreshold uint64 // acquired from engine quota
+}
+
+type LifecycleCommitControl struct {
+	TNStore DNStore
+	Entry   *api.LifecycleCommitEntry
+}
+
+// SetLifecycleCommitControl installs the single immutable Lifecycle retire
+// control for a private finalizer transaction. The finalizer must call Commit
+// immediately after ordinary Dataset/Receipt writes; this API is not exposed
+// through SQL statements.
+func (txn *Transaction) SetLifecycleCommitControl(
+	store DNStore,
+	entry *api.LifecycleCommitEntry,
+) error {
+	if entry == nil {
+		return moerr.NewInvalidInputNoCtx("nil Lifecycle commit control")
+	}
+	encoded, err := entry.Marshal()
+	if err != nil {
+		return err
+	}
+	cloned := new(api.LifecycleCommitEntry)
+	if err = cloned.Unmarshal(encoded); err != nil {
+		return err
+	}
+	txn.Lock()
+	defer txn.Unlock()
+	if txn.lifecycleCommitControl != nil {
+		return moerr.NewInvalidInputNoCtx("Lifecycle commit control is already installed")
+	}
+	txn.lifecycleCommitControl = &LifecycleCommitControl{
+		TNStore: store,
+		Entry:   cloned,
+	}
+	txn.readOnly.Store(false)
+	return nil
 }
 
 func (txn *Transaction) SetCloneTxn(snapshot int64) {

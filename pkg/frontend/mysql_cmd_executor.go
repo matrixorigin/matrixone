@@ -3840,6 +3840,12 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 			// an administrator's connection against an arbitrary collection.
 			return stats, moerr.NewInternalError(reqCtx, "MongoDB external table creation requires account admin until connection USAGE privileges are available")
 		}
+		if !lifecycleAccountAdminMayExecute(ses.GetTenantInfo(), stmt) {
+			return stats, moerr.NewInternalError(
+				reqCtx,
+				"do not have privilege to execute the statement",
+			)
+		}
 
 		// can or not execute in retricted status
 		if ses.getRoutine() != nil && ses.getRoutine().isRestricted() && !ses.GetPrivilege().canExecInRestricted {

@@ -512,7 +512,24 @@ func (node *AlterRoleDropRule) StmtKind() StmtKind {
 }
 
 func (node *AlterTable) StmtKind() StmtKind {
+	if len(node.Options) == 1 {
+		if _, ok := node.Options[0].(*AlterOptionLifecycle); ok {
+			return frontendStatusTyp
+		}
+	}
 	return defaultStatusTyp
+}
+
+func (node *ShowLifecycle) StmtKind() StmtKind {
+	return compositeResRowType
+}
+
+func (node *RestoreArchiveDataset) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *PurgeArchiveDataset) StmtKind() StmtKind {
+	return frontendStatusTyp
 }
 
 func (node *RenameTable) StmtKind() StmtKind {

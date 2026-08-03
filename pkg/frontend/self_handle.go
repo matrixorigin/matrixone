@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -366,6 +367,26 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		}
 	case *tree.ShowCcprSubscriptions:
 		if err = handleShowCcprSubscriptions(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.AlterTable:
+		if _, ok := lifecycleOptionFromAlterTable(st); !ok {
+			err = moerr.NewInternalError(execCtx.reqCtx, "non-Lifecycle ALTER TABLE routed to frontend")
+			return
+		}
+		if err = handleAlterTableLifecycle(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.ShowLifecycle:
+		if err = handleShowLifecycle(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.RestoreArchiveDataset:
+		if err = handleRestoreArchiveDataset(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.PurgeArchiveDataset:
+		if err = handlePurgeArchiveDataset(execCtx.reqCtx, ses, st); err != nil {
 			return
 		}
 	case *tree.CreateStage:
