@@ -1177,6 +1177,58 @@ func (s *fillStubExpressionExecutor) IsColumnExpr() bool {
 	return false
 }
 
+// TestSetValueSelfAliasVarlen verifies that setValue handles self-aliasing for
+// variable-length types without crashing, preventing the SIGSEGV reported in #26558.
+func TestSetValueSelfAliasVarlen(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	// Create a VARCHAR vector that will experience area growth during self-alias copy
+	vec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vec.PreExtend(100, proc.Mp()))
+	vec.SetLength(100)
+
+	// Fill with small values to establish initial area layout
+	for i := 0; i < 50; i++ {
+		require.NoError(t, vector.SetBytesAt(vec, i, []byte("x"), proc.Mp()))
+	}
+
+	// Place a large value at index 50 that will be copied within the same vector
+	largeValue := bytes.Repeat([]byte("a"), 250)
+	require.NoError(t, vector.SetBytesAt(vec, 50, largeValue, proc.Mp()))
+
+	// Self-alias copy: destination and source are the same vector.
+	// This used to crash when BuildVarlenaNoInline grew the area, invalidating
+	// the source slice from GetBytesAt(50).
+	require.NoError(t, setValue(vec, vec, 51, 50, proc))
+
+	// Verify the value was copied correctly
+	require.Equal(t, largeValue, vec.GetBytesAt(51))
+}
+
+// TestSetValueSelfAliasCrossArea verifies self-alias copy across area reallocation boundary.
+func TestSetValueSelfAliasCrossArea(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	vec := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vec.PreExtend(10, proc.Mp()))
+	vec.SetLength(10)
+
+	// Create a payload large enough to force area growth on next append
+	payload := bytes.Repeat([]byte("b"), 256)
+	require.NoError(t, vector.SetBytesAt(vec, 0, payload, proc.Mp()))
+
+	// Fill several more slots to consume area capacity
+	for i := 1; i < 5; i++ {
+		require.NoError(t, vector.SetBytesAt(vec, i, payload, proc.Mp()))
+	}
+
+	// Self-alias copy that crosses the reallocation boundary
+	require.NoError(t, setValue(vec, vec, 5, 0, proc))
+	require.Equal(t, payload, vec.GetBytesAt(5))
+}
+
 func (s *fillStubExpressionExecutor) TypeName() string {
 	return "fillStubExpressionExecutor"
 }

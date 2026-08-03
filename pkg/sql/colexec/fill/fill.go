@@ -826,7 +826,17 @@ func setValue(v, w *vector.Vector, i, j int, proc *process.Process) error {
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16,
 		types.T_array_int8, types.T_array_uint8, types.T_datalink:
-		err = vector.SetBytesAt(v, i, w.GetBytesAt(j), proc.Mp())
+		// Handle self-aliasing: if v == w, BuildVarlenaNoInline may grow v.area
+		// before copying, invalidating the slice from w.GetBytesAt(j).
+		// Copy to a temporary buffer first to avoid use-after-free.
+		if v == w {
+			src := w.GetBytesAt(j)
+			tmp := make([]byte, len(src))
+			copy(tmp, src)
+			err = vector.SetBytesAt(v, i, tmp, proc.Mp())
+		} else {
+			err = vector.SetBytesAt(v, i, w.GetBytesAt(j), proc.Mp())
+		}
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function set value in fill query", v.GetType()))
 	}
