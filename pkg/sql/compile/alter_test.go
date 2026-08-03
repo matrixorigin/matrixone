@@ -257,6 +257,46 @@ func TestLoadSnapshotViewSubscriptionKeepsSystemPublisher(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestRefreshPendingViewMetadataAfterSubscriptionCreate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mp := mpool.MustNewZero()
+	subscriptionQuery := "select sub_name, pub_account_id, pub_account_name, pub_name, " +
+		"pub_database, pub_tables from mo_catalog.mo_subs " +
+		"where sub_account_id = 7 and sub_name is not null and status = 0"
+	result := executor.NewMemResult([]types.Type{
+		types.T_varchar.ToType(), types.T_int32.ToType(), types.T_varchar.ToType(),
+		types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+	}, mp)
+	result.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(result, 0, []string{"subdb"}))
+	require.NoError(t, executor.AppendFixedRows(result, 1, []int32{0}))
+	require.NoError(t, executor.AppendStringRows(result, 2, []string{"sys"}))
+	require.NoError(t, executor.AppendStringRows(result, 3, []string{"pub"}))
+	require.NoError(t, executor.AppendStringRows(result, 4, []string{"pubdb"}))
+	require.NoError(t, executor.AppendStringRows(result, 5, []string{"source_t"}))
+	pendingQuery := buildViewMetadataRefreshQuery(0, 24, 1, "pubdb", "source_t", 0, 128, true)
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		subscriptionQuery: result.GetResult(),
+		pendingQuery:      {},
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, 7)
+	eng := newStubEngine()
+	pubDB := newStubDatabase("pubdb")
+	source := newStubRelation("source_t")
+	source.tableDef = &plan.TableDef{TblId: 1, LogicalId: 24}
+	pubDB.rels["source_t"] = source
+	eng.dbs["pubdb"] = pubDB
+	c.e = eng
+
+	require.NoError(t, refreshPendingViewMetadataAfterSubscriptionCreate(c, "SUBDB"))
+	require.Equal(t, []string{subscriptionQuery, pendingQuery}, spyExec.executedSQLs)
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(7), accountID, "publisher lookup must restore the subscriber context")
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestViewDependenciesContainLiveSource(t *testing.T) {
 	source := viewMetadataRefreshSource{
 		accountID: 7, logicalID: 24, previousID: 41, currentID: 42,
@@ -290,17 +330,6 @@ func TestViewDependenciesContainLiveSource(t *testing.T) {
 		map[string]*plan.SubscriptionMeta{
 			"subdb": {AccountId: 11, DbName: "new_db", Tables: "t"},
 		}))
-}
-
-func TestCheckViewMetadataCandidateLimit(t *testing.T) {
-	require.NoError(t, checkViewMetadataCandidateLimit(
-		context.Background(), maxLegacyCandidatesPerMetadataRefresh,
-	))
-	err := checkViewMetadataCandidateLimit(
-		context.Background(), maxLegacyCandidatesPerMetadataRefresh+1,
-	)
-	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 }
 
 func TestViewColumnsEqual(t *testing.T) {
@@ -444,6 +473,66 @@ func TestRefreshViewMetadataAfterAlter(t *testing.T) {
 			viewMetadataRefreshContext{sourceLogicalID: sourceLogicalID},
 		),
 	))
+}
+
+func TestRefreshViewMetadataTraversesBeyondLegacyCandidateLimit(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mp := mpool.MustNewZero()
+	const (
+		sourceAccountID = uint32(7)
+		sourceLogicalID = uint64(24)
+		sourceTableID   = uint64(42)
+		candidateCount  = 16*1024 + 1
+		pageSize        = 128
+	)
+	results := make(map[string]executor.Result)
+	for afterViewID := uint64(0); afterViewID < candidateCount; {
+		rows := pageSize
+		if remaining := candidateCount - int(afterViewID); remaining < rows {
+			rows = remaining
+		}
+		bat := batch.NewWithSize(7)
+		bat.SetRowCount(rows)
+		bat.Vecs[0] = vector.NewVec(types.T_uint32.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_uint64.ToType())
+		bat.Vecs[3] = vector.NewVec(types.T_uint32.ToType())
+		for i := 4; i < len(bat.Vecs); i++ {
+			bat.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
+		}
+		for i := 0; i < rows; i++ {
+			viewID := afterViewID + uint64(i) + 1
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], sourceAccountID, false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[1], viewID, false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[2], viewID, false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[3], uint32(1), false, mp))
+			require.NoError(t, vector.AppendBytes(bat.Vecs[4], []byte("db"), false, mp))
+			require.NoError(t, vector.AppendBytes(bat.Vecs[5], []byte(fmt.Sprintf("v%d", viewID)), false, mp))
+			require.NoError(t, vector.AppendBytes(
+				bat.Vecs[6],
+				[]byte(`{"Stmt":"create view v as select 1","dependencies":[{"account_id":8,"account_id_set":true,"logical_id":1,"table_id":1}]}`),
+				false,
+				mp,
+			))
+		}
+		query := buildViewMetadataRefreshQuery(
+			sourceAccountID, sourceLogicalID, sourceTableID, "db", "source_t", afterViewID, pageSize,
+		)
+		results[query] = executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
+		afterViewID += uint64(rows)
+	}
+	results[buildViewMetadataRefreshQuery(
+		sourceAccountID, sourceLogicalID, sourceTableID, "db", "source_t", candidateCount, pageSize,
+	)] = executor.Result{}
+	spyExec := &alterCopyInsertSpyExecutor{results: results}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, sourceAccountID)
+
+	require.NoError(t, refreshViewMetadataAfterAlter(
+		c, sourceAccountID, sourceLogicalID, sourceTableID, sourceTableID, "db", "source_t", false,
+	))
+	require.Len(t, spyExec.executedSQLs, candidateCount/pageSize+2)
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestAlterCopySameStatementColumnReplacement(t *testing.T) {

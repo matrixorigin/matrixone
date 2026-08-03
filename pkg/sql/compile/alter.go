@@ -2012,10 +2012,6 @@ func wrapViewMetadataRefreshPlanError(ctx context.Context, err error) error {
 	return &viewMetadataRefreshPlanError{err: err}
 }
 
-const (
-	maxLegacyCandidatesPerMetadataRefresh = 16 * 1024
-)
-
 type viewMetadataRefreshSource struct {
 	accountID  uint32
 	logicalID  uint64
@@ -2062,7 +2058,6 @@ func refreshViewMetadataAfterAlter(
 	sourceTable string,
 	onlyPending bool,
 ) error {
-	var examinedCandidates int
 	subscriptionsByAccount := make(map[uint32]currentViewSubscriptionResolver)
 	sources := []viewMetadataRefreshSource{{
 		accountID:  sourceAccountID,
@@ -2099,10 +2094,6 @@ func refreshViewMetadataAfterAlter(
 				viewKey := [2]uint64{uint64(view.accountID), view.id}
 				if _, ok := processedViews[viewKey]; ok {
 					continue
-				}
-				examinedCandidates++
-				if err := checkViewMetadataCandidateLimit(c.proc.Ctx, examinedCandidates); err != nil {
-					return err
 				}
 				var subscriptions currentViewSubscriptionResolver
 				subscriptionsLoaded := false
@@ -2279,17 +2270,6 @@ func markViewMetadataRefreshPending(c *Compile, view viewMetadataRefresh) error 
 	)
 }
 
-func checkViewMetadataCandidateLimit(ctx context.Context, count int) error {
-	if count <= maxLegacyCandidatesPerMetadataRefresh {
-		return nil
-	}
-	return moerr.NewInvalidInputf(
-		ctx,
-		"alter table examines more than %d view candidates",
-		maxLegacyCandidatesPerMetadataRefresh,
-	)
-}
-
 func viewDependenciesContainLiveSource(
 	dependencies []plan2.ViewDependency,
 	source viewMetadataRefreshSource,
@@ -2393,6 +2373,90 @@ func loadCurrentViewSubscriptions(
 		return true
 	})
 	return resolver, nil
+}
+
+func refreshPendingViewMetadataAfterSubscriptionCreate(c *Compile, subscriptionDatabase string) error {
+	subscriberAccountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	subscriptions, err := loadCurrentViewSubscriptions(c, subscriberAccountID)
+	if err != nil {
+		return err
+	}
+	meta := subscriptions.byDatabase[strings.ToLower(subscriptionDatabase)]
+	if meta == nil {
+		return moerr.NewInternalErrorf(
+			c.proc.Ctx,
+			"subscription metadata for database %s is not visible after creation",
+			subscriptionDatabase,
+		)
+	}
+
+	var sources []viewMetadataRefreshSource
+	err = func() error {
+		oldCtx := c.proc.Ctx
+		c.proc.Ctx = defines.AttachAccountId(oldCtx, uint32(meta.AccountId))
+		defer func() { c.proc.Ctx = oldCtx }()
+
+		publisherDatabase, err := c.e.Database(c.proc.Ctx, meta.DbName, c.proc.GetTxnOperator())
+		if err != nil {
+			return err
+		}
+		var tableNames []string
+		if strings.EqualFold(meta.Tables, pubsub.TableAll) {
+			tableNames, err = publisherDatabase.Relations(c.proc.Ctx)
+			if err != nil {
+				return err
+			}
+		} else {
+			for _, tableName := range strings.Split(meta.Tables, pubsub.Sep) {
+				if tableName = strings.TrimSpace(tableName); tableName != "" {
+					tableNames = append(tableNames, tableName)
+				}
+			}
+		}
+		slices.Sort(tableNames)
+		tableNames = slices.Compact(tableNames)
+		for _, tableName := range tableNames {
+			relation, err := publisherDatabase.Relation(c.proc.Ctx, tableName, nil)
+			if err != nil {
+				return err
+			}
+			tableID := relation.GetTableID(c.proc.Ctx)
+			logicalID := relation.GetTableDef(c.proc.Ctx).GetLogicalId()
+			if logicalID == 0 {
+				logicalID = tableID
+			}
+			sources = append(sources, viewMetadataRefreshSource{
+				accountID:  uint32(meta.AccountId),
+				logicalID:  logicalID,
+				previousID: tableID,
+				currentID:  tableID,
+				database:   meta.DbName,
+				tableName:  tableName,
+			})
+		}
+		return nil
+	}()
+	if err != nil {
+		return err
+	}
+	for _, source := range sources {
+		if err = refreshViewMetadataAfterAlter(
+			c,
+			source.accountID,
+			source.logicalID,
+			source.previousID,
+			source.currentID,
+			source.database,
+			source.tableName,
+			true,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func loadSnapshotViewSubscription(
