@@ -60,9 +60,11 @@ func remoteAllocationStatementGroupKey(
 var remoteAllocationStatementRegistrationTimeout = 5 * time.Minute
 
 // A late RPC can carry a new MessageBoard, so keep a bounded record of an
-// incomplete execution after its active group has been released. The record
+// incomplete execution after its active group has been released. A sender
+// without a caller deadline can remain in flight for MaxRpcTime; expiring the
+// key earlier would let that same physical generation reopen. The record
 // contains no statement resources.
-var remoteAllocationStatementTombstoneTimeout = 5 * time.Minute
+const remoteAllocationStatementTombstoneTimeout = MaxRpcTime
 
 // collectRemoteFragmentCounts computes the number of pipeline RPCs that the
 // complete physical scope graph will send to each CN. The execution address

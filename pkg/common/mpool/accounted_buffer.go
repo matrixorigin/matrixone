@@ -89,11 +89,11 @@ func (b *AccountedBuffer) EnsureCapacity(required int) error {
 	}
 
 	oldLength := len(b.data)
-	capacity, ok := GrowCapacity(int64(cap(b.data)), int64(required))
-	if !ok || capacity > int64(math.MaxInt) {
-		return ErrAllocationAllocatorLimit
-	}
 	if cap(b.data) == 0 {
+		capacity, ok := GrowCapacity(0, int64(required))
+		if !ok || capacity > int64(math.MaxInt) {
+			return ErrAllocationAllocatorLimit
+		}
 		data, err := b.mp.AllocAccounted(
 			int(capacity),
 			b.account,
@@ -107,7 +107,9 @@ func (b *AccountedBuffer) EnsureCapacity(required int) error {
 		return nil
 	}
 
-	data, err := b.mp.Grow(b.data, int(capacity), true)
+	// Grow owns the capacity policy. Pass the caller's requirement instead of
+	// applying GrowCapacity a second time to the already rounded capacity.
+	data, err := b.mp.Grow(b.data, required, true)
 	if err != nil {
 		return err
 	}

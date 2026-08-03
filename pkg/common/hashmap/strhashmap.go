@@ -208,17 +208,17 @@ func (itr *strHashmapIterator) prepareHashKeys(
 	}
 	if cap(itr.keyBuffer) < total {
 		if allocation := itr.mp.iteratorAllocation; allocation != nil {
-			capacity, ok := mpool.GrowCapacity(
-				int64(cap(itr.keyBuffer)), int64(total),
-			)
-			if !ok || int64(int(capacity)) != capacity {
-				return mpool.ErrAllocationAllocatorLimit
-			}
 			var next []byte
 			var err error
 			if cap(itr.keyBuffer) > 0 {
-				next, err = itr.mp.mp.Grow(itr.keyBuffer, int(capacity), true)
+				// Grow owns the capacity policy. Passing a pre-grown capacity
+				// would apply that policy twice and falsely inflate admission.
+				next, err = itr.mp.mp.Grow(itr.keyBuffer, total, true)
 			} else {
+				capacity, ok := mpool.GrowCapacity(0, int64(total))
+				if !ok || int64(int(capacity)) != capacity {
+					return mpool.ErrAllocationAllocatorLimit
+				}
 				next, err = itr.mp.mp.AllocAccounted(
 					int(capacity),
 					allocation.account,

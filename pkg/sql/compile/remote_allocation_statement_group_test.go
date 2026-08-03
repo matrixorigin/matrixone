@@ -416,6 +416,44 @@ func TestRemoteAllocationStatementGroupRejectsLateFragmentAfterAbort(t *testing.
 	require.True(t, terminal.complete)
 }
 
+func TestRemoteAllocationStatementGroupExpiryRejectsLateFragment(t *testing.T) {
+	require.Equal(t, MaxRpcTime, remoteAllocationStatementTombstoneTimeout)
+	key := remoteAllocationStatementGroupKey(newRemoteExecutionID(), "cn-a:6001")
+	t.Cleanup(func() { clearRemoteAllocationStatementTestTombstone(key) })
+
+	board := message.NewMessageBoard()
+	participant, err := acquireRemoteAllocationStatementParticipant(
+		key,
+		board,
+		2,
+		nil,
+	)
+	require.NoError(t, err)
+	expireRemoteAllocationStatementGroup(participant.group)
+	terminal, err := participant.finish(nil)
+	require.Error(t, err)
+	require.True(t, terminal.complete)
+	require.False(t, remoteAllocationStatementGroupRegistered(board))
+
+	lateBoard := message.NewMessageBoard()
+	_, err = acquireRemoteAllocationStatementParticipant(key, lateBoard, 2, nil)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	lateBoard.CloseAndDrain()
+
+	retryKey := remoteAllocationStatementGroupKey(newRemoteExecutionID(), "cn-a:6001")
+	retryBoard := message.NewMessageBoard()
+	retry, err := acquireRemoteAllocationStatementParticipant(
+		retryKey,
+		retryBoard,
+		1,
+		nil,
+	)
+	require.NoError(t, err)
+	terminal, err = retry.finish(nil)
+	require.NoError(t, err)
+	require.True(t, terminal.complete)
+}
+
 func TestRemoteAllocationStatementGroupFailureCancelsActiveSibling(t *testing.T) {
 	board := message.NewMessageBoard()
 	canceled := make(chan error, 2)

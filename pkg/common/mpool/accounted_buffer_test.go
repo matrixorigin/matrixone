@@ -98,6 +98,54 @@ func TestAccountedBufferFailureRetainsPublishedData(t *testing.T) {
 	finalizeTestAllocationAccount(t, registry, account)
 }
 
+func TestAccountedBufferGrowthCapacityBoundary(t *testing.T) {
+	const (
+		oldCapacity = 10_240
+		required    = oldCapacity + 1
+	)
+	newCapacity, ok := GrowCapacity(oldCapacity, required)
+	require.True(t, ok)
+	exactLimit := uint64(oldCapacity) + uint64(newCapacity)
+
+	for _, testCase := range []struct {
+		name      string
+		limit     uint64
+		wantError bool
+	}{
+		{name: "exact-old-plus-rounded-new", limit: exactLimit},
+		{name: "one-byte-short", limit: exactLimit - 1, wantError: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			registry, account := newTestAllocationAccount(t, testCase.limit, 2)
+			mp := MustNew("accounted-buffer-growth-boundary")
+			defer DeleteMPool(mp)
+			buffer, err := NewAccountedBuffer(
+				mp,
+				account,
+				testAllocationOwner,
+				testAllocationSite,
+			)
+			require.NoError(t, err)
+			require.NoError(t, buffer.EnsureCapacity(oldCapacity))
+
+			err = buffer.EnsureCapacity(required)
+			if testCase.wantError {
+				require.ErrorIs(t, err, ErrAllocationAccountCapacity)
+				require.Equal(t, oldCapacity, buffer.Cap())
+				require.Equal(t, uint64(oldCapacity), account.Snapshot().Used)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, int(newCapacity), buffer.Cap())
+				require.Equal(t, uint64(newCapacity), account.Snapshot().Used)
+				require.Equal(t, exactLimit, account.Snapshot().Peak)
+			}
+
+			buffer.Free()
+			finalizeTestAllocationAccount(t, registry, account)
+		})
+	}
+}
+
 func TestAccountedBufferConfiguration(t *testing.T) {
 	_, err := NewAccountedBuffer(nil, nil, 0, 0)
 	require.ErrorIs(t, err, ErrAllocationAccountInvalid)

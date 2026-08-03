@@ -264,6 +264,84 @@ func TestStringHashMapCanonicalizesFullyGroupedKeys(t *testing.T) {
 	require.Equal(t, []int64{1}, zValues)
 }
 
+func TestStringHashIteratorAccountedGrowthCapacityBoundary(t *testing.T) {
+	const (
+		oldCapacity = 10_240
+		required    = oldCapacity + 1
+		payloadSize = required - 4
+	)
+	newCapacity, ok := mpool.GrowCapacity(oldCapacity, required)
+	require.True(t, ok)
+	exactLimit := uint64(oldCapacity) + uint64(newCapacity)
+
+	for _, testCase := range []struct {
+		name      string
+		limit     uint64
+		wantError bool
+	}{
+		{name: "exact-old-plus-rounded-new", limit: exactLimit},
+		{name: "one-byte-short", limit: exactLimit - 1, wantError: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			registry, err := mpool.NewAllocationAccountRegistry(1, 2)
+			require.NoError(t, err)
+			account, err := registry.Open(testCase.limit)
+			require.NoError(t, err)
+			allocation, err := NewIteratorAllocation(
+				account,
+				mpool.AllocationOwnerMin,
+				mpool.AllocationSiteMin,
+			)
+			require.NoError(t, err)
+			mp := mpool.MustNewZero()
+			hashMap, err := NewStrHashMapWithAllocations(
+				false,
+				mp,
+				nil,
+				allocation,
+			)
+			require.NoError(t, err)
+			iterator := hashMap.NewIterator().(*strHashmapIterator)
+			iterator.keyBuffer, err = mp.AllocAccounted(
+				oldCapacity,
+				account,
+				mpool.AllocationOwnerMin,
+				mpool.AllocationSiteMin,
+			)
+			require.NoError(t, err)
+			iterator.keyBuffer = iterator.keyBuffer[:0]
+			vec := vector.NewVec(types.T_varchar.ToType())
+			require.NoError(t, vector.AppendBytes(
+				vec,
+				make([]byte, payloadSize),
+				false,
+				mp,
+			))
+
+			err = iterator.prepareHashKeys([]*vector.Vector{vec}, 0, 1)
+			if testCase.wantError {
+				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+				require.Equal(t, oldCapacity, cap(iterator.keyBuffer))
+				require.Equal(t, uint64(oldCapacity), account.Snapshot().Used)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, int(newCapacity), cap(iterator.keyBuffer))
+				require.Equal(t, uint64(newCapacity), account.Snapshot().Used)
+				require.Equal(t, exactLimit, account.Snapshot().Peak)
+			}
+
+			iterator.releaseScratch()
+			hashMap.Free()
+			vec.Free(mp)
+			require.Zero(t, mp.Stats().NumCurrBytes.Load())
+			require.Zero(t, account.Seal().Used)
+			require.Zero(t, registry.LiveAllocationMetadata())
+			_, err = registry.Finalize(account)
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestGroupingAwareStringHashMapSeparatesRawSentinelBytes(t *testing.T) {
 	mp := mpool.MustNewZero()
 	hashMap, err := NewStrHashMap(false, mp)

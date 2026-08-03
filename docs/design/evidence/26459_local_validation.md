@@ -129,4 +129,54 @@ hash-map build/lookup, and spill scatter. The acceptance rule is no
 new per-row or per-allocation Go object in steady state and no material
 regression outside measurement noise.
 
-Remote auto-test is deliberately not part of this validation cycle.
+The local measurements are complemented by the distributed validation below.
+
+## Distributed workload evidence
+
+The final semantic head before the two review counterexample fixes,
+`d13b9103c8`, completed the TPCH 100G and 1T TKE run
+[`30758186183`](https://github.com/matrixorigin/mo-auto-test/actions/runs/30758186183).
+The workflow built that commit, loaded the native fixtures in 11 seconds and
+49 seconds, and compared every Q1-Q22 result with its golden result. No query
+failed and the run reported no OOM or budget-admission error.
+
+The measured query-only totals were:
+
+| Workload | Candidate turns | Candidate average | Recent main average | Delta |
+| --- | --- | ---: | ---: | ---: |
+| TPCH 100G | 97.739 / 95.005 / 94.982 / 97.469 s | 96.298 s | 98.252 s | -1.99% |
+| TPCH 1T | 1045.573 / 1039.371 s | 1042.472 s | 1027.439 s | +1.46% |
+
+The cited main result is job
+[`91396824792`](https://github.com/matrixorigin/mo-nightly-regression/actions/runs/30708854656/job/91396824792):
+100G turns were 103.550 / 95.127 / 97.321 / 97.010 seconds and 1T turns
+were 1027.322 / 1027.557 seconds. These are adjacent runs of the same TKE
+benchmark shape, not a simultaneous same-base A/B; the deltas establish that
+the stabilized candidate is within normal workload variance, not a stronger
+causal performance claim. Compared with the earlier regressed candidate run
+`30738374292` (135.093 seconds for 100G and 1591.049 seconds for 1T), this head
+recovered 28.7% and 34.5% respectively.
+
+The current review fixes after `d13b9103c8` are allocation-boundary and
+late-RPC-lifetime corrections. They add no per-row work: existing-buffer grow
+now passes the logical requirement to the allocator's single capacity policy,
+and aborted remote generations retain only a key and timer for the maximum
+possible RPC lifetime. Their focused and package validation is recorded in the
+PR review response after the final commit.
+
+## Incident acceptance matrix
+
+This matrix separates durable mechanism regressions from workload executions;
+one is not presented as a substitute for the other.
+
+| Incident | Durable regression retained on this branch | Workload evidence | Current-head gap |
+| --- | --- | --- | --- |
+| #26174 | HashBuild build/hashmap/spill regressions introduced by #26178, plus exact physical batch/vector allocation boundaries in this PR | #26178 TKE BVT: all three 3,840,001-row fulltext inserts succeeded with zero HashBuild rejection | full fulltext workload has not been rerun at the final head |
+| #26192 | exact accounted runtime-filter payload, one-byte-short PASS degradation, varlena/null coverage, and spill decode/reuse lifecycle tests | historical LOAD failure shape is covered by #26231/#26318; the current TPCH fixture LOAD path succeeds | the original `ca_comprehensive_dataset` workload has not been rerun at the final head |
+| #26413 | segmented `CopyIntoBatches` and accounted hash-map growth/rollback regressions, including large external-batch shapes | #26438 verified the real Parquet self-join with both expected 50,000-row results | the Hive fixture has not been rerun at the final head |
+| #26454 | `TestIssue26454ExpressionKeyBuildUsesActualCapacity` exercises the CONCAT/CAST and CASE key shapes under a 16 MiB physical account and validates terminal zero | the exact jinpan SQL/data is not available in this repository | full jinpan workload remains external evidence |
+| #25782 | `TestShuffleHashBuildAccountedSpillLifecycle`, `TestHashTableAccountedHighCardinalityResizeReturnsToZero`, broadcast error propagation, recursive spill, and terminal-zero tests | the two-CN 132,096-row harness at `f5cc97efe7` returned the exact count with positive spill and zero OOM; current-head TPCH 1T also completed without OOM/query failure | the private original high-cardinality SQL harness has not been rerun at the final head |
+
+Accordingly, the current TKE TPCH acceptance is complete, while the unavailable
+external-data workloads and the original private #25782 harness remain explicit
+follow-up evidence rather than being silently marked complete.
