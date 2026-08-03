@@ -238,6 +238,19 @@ set session sql_mode = 'STRICT_TRANS_TABLES';
 insert ignore into mysql_compat_special_ignore values (1, 2156, b'11111', 'bad', 'x,bad');
 select id, y, y + 0, bin(b + 0), e, e + 0, s, s + 0
 from mysql_compat_special_ignore order by id;
+
+-- Exercise the zero-valued ENUM error member through a multi-row ValueScan,
+-- including string/numeric YEAR input, BIT truncation, and all-invalid SET.
+insert ignore into mysql_compat_special_ignore values
+    (2, '2156', b'10000', 9, 'bad'),
+    (3, 2024, b'0011', 'a', 'x,z');
+select id, y + 0, bin(b + 0), e, e + 0, s, s + 0
+from mysql_compat_special_ignore order by id;
+
+-- IGNORE is the adjustment boundary: the equivalent strict insert still fails
+-- and must not add a row.
+insert into mysql_compat_special_ignore values (4, 2156, b'11111', 'bad', 'x,bad');
+select count(*) from mysql_compat_special_ignore;
 set session sql_mode = '';
 drop table mysql_compat_special_ignore;
 
