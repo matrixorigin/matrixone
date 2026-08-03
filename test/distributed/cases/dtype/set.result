@@ -44,6 +44,36 @@ select * from set01 order by colors;
 1  ¦  red  𝄀
 3  ¦  red,green  𝄀
 2  ¦  red,blue
+select id, colors from (select id, colors from set01) d order by colors, id;
+➤ id[4,32,0]  ¦  colors[12,-1,0]  𝄀
+5  ¦  null  𝄀
+4  ¦    𝄀
+1  ¦  red  𝄀
+3  ¦  red,green  𝄀
+2  ¦  red,blue
+select colors from (select colors from set01 group by colors) d order by colors;
+➤ colors[12,-1,0]  𝄀
+null  𝄀
+  𝄀
+red  𝄀
+red,green  𝄀
+red,blue
+with c as (select colors from set01)
+select group_concat(colors order by colors separator '|') as ordered_values
+from c where colors is not null and colors <> '';
+➤ ordered_values[12,0,0]  𝄀
+red|red,green|red,blue
+drop table if exists set_empty_member_order;
+create table set_empty_member_order (id int primary key, tags set('', 'a'));
+insert into set_empty_member_order values (2, 0), (1, 1), (3, 2);
+select id, tags from set_empty_member_order order by tags, id;
+➤ id[4,32,0]  ¦  tags[12,-1,0]  𝄀
+2  ¦    𝄀
+1  ¦    𝄀
+3  ¦  a
+select id, tags from (select id, tags from set_empty_member_order) d order by tags, id;
+not supported: definition-order sorting of projected ENUM/SET values with non-unique display labels or ambiguous SET display values
+drop table set_empty_member_order;
 drop table if exists set_idx;
 create table set_idx (
 id int primary key,
