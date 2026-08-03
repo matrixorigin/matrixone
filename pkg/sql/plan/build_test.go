@@ -2018,6 +2018,47 @@ func countLockOpNodes(logicPlan *Plan) int {
 	return count
 }
 
+func TestSelectSharedLockMode(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name string
+		sql  string
+		mode lockpb.LockMode
+	}{
+		{
+			name: "for share",
+			sql:  "select n_nationkey from nation where n_nationkey = 1 for share",
+			mode: lockpb.LockMode_Shared,
+		},
+		{
+			name: "lock in share mode",
+			sql:  "select n_nationkey from nation where n_nationkey = 1 lock in share mode",
+			mode: lockpb.LockMode_Shared,
+		},
+		{
+			name: "for update remains exclusive",
+			sql:  "select n_nationkey from nation where n_nationkey = 1 for update",
+			mode: lockpb.LockMode_Exclusive,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+
+			var lockTargets []*plan.LockTarget
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_LOCK_OP {
+					lockTargets = append(lockTargets, node.LockTargets...)
+				}
+			}
+			require.Len(t, lockTargets, 1)
+			require.Equal(t, test.mode, lockTargets[0].Mode)
+		})
+	}
+}
+
 // test CTE plan building
 func TestCTESqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer(false)

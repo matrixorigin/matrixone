@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
@@ -4381,8 +4382,15 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		}
 	}
 
-	if stmt.SelectLockInfo != nil && stmt.SelectLockInfo.LockType == tree.SelectLockForUpdate {
-		builder.isForUpdate = true
+	selectLockMode := lockpb.LockMode_Exclusive
+	if stmt.SelectLockInfo != nil {
+		switch stmt.SelectLockInfo.LockType {
+		case tree.SelectLockForUpdate:
+			builder.isForUpdate = true
+		case tree.SelectLockForShare:
+			builder.isForUpdate = true
+			selectLockMode = lockpb.LockMode_Shared
+		}
 	}
 
 	// strip parentheses
@@ -4554,6 +4562,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			astLimit,
 			astTimeWindow,
 			helpFunc,
+			selectLockMode,
 			isRoot,
 		); err != nil {
 			return
@@ -6424,6 +6433,7 @@ func (builder *QueryBuilder) bindSelectClause(
 	astLimit *tree.Limit,
 	astTimeWindow *tree.TimeWindow,
 	helpFunc *helpFunc,
+	selectLockMode lockpb.LockMode,
 	isRoot bool,
 ) (
 	nodeID int32,
@@ -6493,6 +6503,9 @@ func (builder *QueryBuilder) bindSelectClause(
 	// final result set filters out would still get locked.
 	if builder.isForUpdate {
 		lockTargets := builder.collectLockTargets(nodeID, ctx)
+		for _, target := range lockTargets {
+			target.Mode = selectLockMode
+		}
 		if len(lockTargets) > 0 {
 			lockNode = &Node{
 				NodeType:    plan.Node_LOCK_OP,
