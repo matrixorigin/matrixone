@@ -79,6 +79,19 @@ rename table renamed_replacement to renamed_missing;
 -- @ignore:5,6
 desc renamed_dependent;
 
+create table chained_rename_live (a int);
+create table chained_rename_missing (b int);
+create view chained_rename_dependent as
+select live.a, missing.b from chained_rename_live live, chained_rename_missing missing;
+drop table chained_rename_missing;
+alter table chained_rename_live modify column a bigint;
+create table chained_rename_replacement (b decimal(9, 2));
+rename table chained_rename_replacement to chained_rename_missing,
+chained_rename_missing to chained_rename_moved;
+create table chained_rename_missing (b varchar(31));
+-- @ignore:5,6
+desc chained_rename_dependent;
+
 create table ambiguity_left (a int);
 create table ambiguity_right (b int);
 create view ambiguity_view as

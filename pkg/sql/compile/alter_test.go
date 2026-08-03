@@ -381,6 +381,50 @@ func TestViewDependenciesContainLiveSource(t *testing.T) {
 		}))
 }
 
+func TestRenameViewMetadataRecoveryDeferred(t *testing.T) {
+	require.False(t, renameViewMetadataRecoveryDeferred(nil))
+	require.False(t, renameViewMetadataRecoveryDeferred(context.Background()))
+	require.True(t, renameViewMetadataRecoveryDeferred(context.WithValue(
+		context.Background(), deferRenameViewMetadataRecoveryKey{}, true,
+	)))
+}
+
+func TestRefreshPendingViewMetadataAfterRenameSkipsTransientTarget(t *testing.T) {
+	qry := &plan2.RenameTable{AlterTables: []*plan2.AlterTable{
+		{
+			Database: "db",
+			Actions: []*plan2.AlterTable_Action{{Action: &plan2.AlterTable_Action_AlterName{
+				AlterName: &plan2.AlterTableName{OldName: "replacement", NewName: "missing"},
+			}}},
+		},
+		{
+			Database: "db",
+			Actions: []*plan2.AlterTable_Action{{Action: &plan2.AlterTable_Action_AlterName{
+				AlterName: &plan2.AlterTableName{OldName: "missing", NewName: "moved"},
+			}}},
+		},
+	}}
+	targets := collectRenameViewMetadataTargets(qry)
+	require.Len(t, targets, 2)
+
+	ctrl := gomock.NewController(t)
+	pendingMoved := buildViewMetadataRefreshQuery(7, 24, 1, "db", "moved", 0, 128, true)
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{pendingMoved: {}}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, 7)
+	eng := newStubEngine()
+	db := newStubDatabase("db")
+	moved := newStubRelation("moved")
+	moved.tableDef = &plan2.TableDef{TblId: 1, LogicalId: 24}
+	db.rels["moved"] = moved
+	eng.dbs["db"] = db
+	c.e = eng
+
+	require.NoError(t, refreshPendingViewMetadataAfterRename(c, targets))
+	require.Equal(t, []string{pendingMoved}, spyExec.executedSQLs,
+		"the transient missing target was moved away and must not be refreshed")
+}
+
 func TestViewColumnsEqual(t *testing.T) {
 	col := func(name string, typ plan2.Type) *plan2.ColDef {
 		return &plan2.ColDef{Name: name, Typ: typ}

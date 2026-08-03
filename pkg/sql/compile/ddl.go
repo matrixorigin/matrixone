@@ -537,24 +537,7 @@ func (s *Scope) AlterView(c *Compile) error {
 	if err != nil || isViewMetadataRefresh(c.proc.Ctx) {
 		return err
 	}
-	accountID, err := defines.GetAccountId(c.proc.Ctx)
-	if err != nil {
-		return err
-	}
-	logicalID := replaceDef.GetLogicalId()
-	if logicalID == 0 {
-		logicalID = rel.GetTableID(c.proc.Ctx)
-	}
-	return refreshViewMetadataAfterAlter(
-		c,
-		accountID,
-		logicalID,
-		rel.GetTableID(c.proc.Ctx),
-		rel.GetTableID(c.proc.Ctx),
-		dbName,
-		tblName,
-		true,
-	)
+	return refreshPendingViewMetadataForRelation(c, dbName, tblName, rel)
 }
 
 func viewMetadataRefreshGenerationMatches(

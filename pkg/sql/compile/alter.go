@@ -1902,7 +1902,7 @@ func (s *Scope) doAlterTable(c *Compile) error {
 			}
 		}
 	}
-	if pendingRecoveryName != "" {
+	if pendingRecoveryName != "" && !renameViewMetadataRecoveryDeferred(c.proc.Ctx) {
 		database, err := c.e.Database(c.proc.Ctx, qry.GetDatabase(), c.proc.GetTxnOperator())
 		if err != nil {
 			return err
@@ -1911,15 +1911,8 @@ func (s *Scope) doAlterTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		if err = refreshViewMetadataAfterAlter(
-			c,
-			sourceAccountID,
-			sourceLogicalID,
-			relation.GetTableID(c.proc.Ctx),
-			relation.GetTableID(c.proc.Ctx),
-			qry.GetDatabase(),
-			pendingRecoveryName,
-			true,
+		if err = refreshPendingViewMetadataForRelation(
+			c, qry.GetDatabase(), pendingRecoveryName, relation,
 		); err != nil {
 			return err
 		}
@@ -1937,6 +1930,89 @@ func (s *Scope) doAlterTable(c *Compile) error {
 		qry.GetTableDef().GetName(),
 		false,
 	)
+}
+
+type deferRenameViewMetadataRecoveryKey struct{}
+
+type renameViewMetadataTarget struct {
+	database string
+	name     string
+}
+
+func renameViewMetadataRecoveryDeferred(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	deferred, _ := ctx.Value(deferRenameViewMetadataRecoveryKey{}).(bool)
+	return deferred
+}
+
+func refreshPendingViewMetadataForRelation(
+	c *Compile,
+	database string,
+	name string,
+	relation engine.Relation,
+) error {
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	tableID := relation.GetTableID(c.proc.Ctx)
+	logicalID := relation.GetTableDef(c.proc.Ctx).GetLogicalId()
+	if logicalID == 0 {
+		logicalID = tableID
+	}
+	return refreshViewMetadataAfterAlter(
+		c, accountID, logicalID, tableID, tableID, database, name, true,
+	)
+}
+
+func collectRenameViewMetadataTargets(qry *plan.RenameTable) map[renameViewMetadataTarget]struct{} {
+	targets := make(map[renameViewMetadataTarget]struct{})
+	for _, alterTable := range qry.GetAlterTables() {
+		for _, action := range alterTable.GetActions() {
+			if rename, ok := action.GetAction().(*plan.AlterTable_Action_AlterName); ok {
+				targets[renameViewMetadataTarget{
+					database: alterTable.GetDatabase(),
+					name:     rename.AlterName.GetNewName(),
+				}] = struct{}{}
+			}
+		}
+	}
+	return targets
+}
+
+func refreshPendingViewMetadataAfterRename(
+	c *Compile,
+	targetSet map[renameViewMetadataTarget]struct{},
+) error {
+	targets := make([]renameViewMetadataTarget, 0, len(targetSet))
+	for target := range targetSet {
+		targets = append(targets, target)
+	}
+	slices.SortFunc(targets, func(left, right renameViewMetadataTarget) int {
+		if order := strings.Compare(left.database, right.database); order != 0 {
+			return order
+		}
+		return strings.Compare(left.name, right.name)
+	})
+	for _, target := range targets {
+		database, err := c.e.Database(c.proc.Ctx, target.database, c.proc.GetTxnOperator())
+		if err != nil {
+			return err
+		}
+		relation, err := database.Relation(c.proc.Ctx, target.name, nil)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				continue
+			}
+			return err
+		}
+		if err = refreshPendingViewMetadataForRelation(c, target.database, target.name, relation); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type viewMetadataRefresh struct {
@@ -2974,6 +3050,10 @@ func (s *Scope) RenameTable(c *Compile) (err error) {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetRenameTable()
+	targetSet := collectRenameViewMetadataTargets(qry)
+	oldCtx := c.proc.Ctx
+	c.proc.Ctx = context.WithValue(oldCtx, deferRenameViewMetadataRecoveryKey{}, true)
+	defer func() { c.proc.Ctx = oldCtx }()
 	for _, alterTable := range qry.AlterTables {
 		plan := &plan.Plan{
 			Plan: &plan.Plan_Ddl{
@@ -2992,7 +3072,8 @@ func (s *Scope) RenameTable(c *Compile) (err error) {
 			return err
 		}
 	}
-	return nil
+	c.proc.Ctx = oldCtx
+	return refreshPendingViewMetadataAfterRename(c, targetSet)
 }
 
 // updateTableForeignKeyColId update foreign key colid of child table references
