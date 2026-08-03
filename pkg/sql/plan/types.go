@@ -257,14 +257,15 @@ type QueryBuilder struct {
 	nextMsgTag       int32
 	nextSQLUdfCallID uint64
 
-	isPrepareStatement    bool
-	mysqlCompatible       bool
-	isForUpdate           bool // if it's a query plan for update
-	isRestore             bool
-	isRestoreByTs         bool
-	isSkipResolveTableDef bool
-	skipStats             bool
-	isInsertIgnore        bool // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
+	isPrepareStatement     bool
+	mysqlCompatible        bool
+	mysqlFullGroupByCompat bool
+	isForUpdate            bool // if it's a query plan for update
+	isRestore              bool
+	isRestoreByTs          bool
+	isSkipResolveTableDef  bool
+	skipStats              bool
+	isInsertIgnore         bool // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
 
 	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
@@ -441,6 +442,7 @@ type BindContext struct {
 	windowByAst     map[string]int32
 	projectByExpr   map[string]int32
 	timeByAst       map[string]int32
+	whereFilters    []*plan.Expr
 
 	projectColByAst map[string]int32
 

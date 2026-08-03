@@ -1,0 +1,43 @@
+drop database if exists mysql_compat_only_full_group_by;
+create database mysql_compat_only_full_group_by;
+use mysql_compat_only_full_group_by;
+set session sql_mode = 'ONLY_FULL_GROUP_BY';
+create table t_sales(region varchar(10), product varchar(10), qty int);
+insert into t_sales values
+('east', 'phone', 2),
+('east', 'phone', null),
+('west', 'phone', 3),
+(null, 'phone', 5);
+select region, product, sum(qty) as s_qty
+from t_sales
+where product = 'phone'
+group by region
+order by region is null, region;
+region    product    s_qty
+east    phone    2
+west    phone    3
+null    phone    5
+create table t_fd(id int primary key, name varchar(20), amount int);
+insert into t_fd values (1, 'a', 10), (2, 'b', 20), (3, 'c', 30);
+select id, name, sum(amount)
+from t_fd
+group by id
+order by id;
+id    name    sum(amount)
+1    a    10
+2    b    20
+3    c    30
+set session sql_mode = 'ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE';
+select region, product, sum(qty) as s_qty
+from t_sales
+where product = 'phone'
+group by region
+order by region is null, region;
+SQL syntax error: column "t_sales.product" must appear in the GROUP BY clause or be used in an aggregate function
+select id, name, sum(amount)
+from t_fd
+group by id
+order by id;
+SQL syntax error: column "t_fd.name" must appear in the GROUP BY clause or be used in an aggregate function
+set session sql_mode = '';
+drop database mysql_compat_only_full_group_by;

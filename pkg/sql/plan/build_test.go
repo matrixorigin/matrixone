@@ -5443,6 +5443,151 @@ func TestMysqlCompatibilityMode(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestOnlyFullGroupByMySQLAndMatrixOneNativeModes(t *testing.T) {
+	const whereConstrained = "select deptno, job, sum(sal) from constraint_test.emp where job = 'clerk' group by deptno"
+	const primaryKeyDependent = "select empno, ename, sum(sal) from constraint_test.emp group by empno"
+	const unsafeBareColumn = "select deptno, job, sum(sal) from constraint_test.emp group by deptno"
+	const volatileWhereValue = "select deptno, empno, sum(sal) from constraint_test.emp where empno = floor(rand() * 100) group by deptno"
+	const statementStableWhereValue = "select deptno, hiredate, sum(sal) from constraint_test.emp where hiredate = current_date() group by deptno"
+	const whereConstrainedOrderBy = "select deptno, sum(sal) from constraint_test.emp where job = 'clerk' group by deptno order by job"
+	const whereConstrainedHaving = "select deptno, sum(sal) from constraint_test.emp where job = 'clerk' group by deptno having job = 'clerk'"
+	const primaryKeyDependentHaving = "select empno, sum(sal) from constraint_test.emp group by empno having ename <> ''"
+
+	tests := []struct {
+		name    string
+		mode    string
+		sql     string
+		wantErr bool
+	}{
+		{
+			name: "mysql mode without only full group by stays permissive",
+			mode: "STRICT_TRANS_TABLES",
+			sql:  unsafeBareColumn,
+		},
+		{
+			name: "mysql only full group by allows where constrained column",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  whereConstrained,
+		},
+		{
+			name: "mysql only full group by allows primary key dependency",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  primaryKeyDependent,
+		},
+		{
+			name: "mysql only full group by recognizes mode token case and spacing",
+			mode: " strict_trans_tables, only_full_group_by ",
+			sql:  primaryKeyDependent,
+		},
+		{
+			name:    "mysql only full group by rejects unconstrained column",
+			mode:    "ONLY_FULL_GROUP_BY",
+			sql:     unsafeBareColumn,
+			wantErr: true,
+		},
+		{
+			name:    "mysql only full group by rejects volatile where value",
+			mode:    "ONLY_FULL_GROUP_BY",
+			sql:     volatileWhereValue,
+			wantErr: true,
+		},
+		{
+			name: "mysql only full group by allows statement stable where value",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  statementStableWhereValue,
+		},
+		{
+			name: "mysql only full group by allows where constrained having column",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  whereConstrainedHaving,
+		},
+		{
+			name: "mysql only full group by allows where constrained order by column",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  whereConstrainedOrderBy,
+		},
+		{
+			name: "mysql only full group by allows primary key dependent having column",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  primaryKeyDependentHaving,
+		},
+		{
+			name:    "matrixone native keeps strict group by",
+			mode:    "ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE",
+			sql:     whereConstrained,
+			wantErr: true,
+		},
+		{
+			name:    "matrixone native rejects primary key dependency exception",
+			mode:    "ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE",
+			sql:     primaryKeyDependent,
+			wantErr: true,
+		},
+		{
+			name:    "matrixone native rejects where constrained having column",
+			mode:    "ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE",
+			sql:     whereConstrainedHaving,
+			wantErr: true,
+		},
+		{
+			name:    "matrixone native rejects where constrained order by column",
+			mode:    "ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE",
+			sql:     whereConstrainedOrderBy,
+			wantErr: true,
+		},
+		{
+			name: "matrixone native without only full group by stays permissive",
+			mode: "MATRIXONE_NATIVE",
+			sql:  unsafeBareColumn,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.SetSqlModeOverride(test.mode)
+			stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), test.sql, 1)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(mock.CurrentContext(), stmts[0], false)
+			if test.wantErr {
+				require.ErrorContains(t, err, "must appear in the GROUP BY clause")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestOnlyFullGroupByCompositePrimaryKeyDependency(t *testing.T) {
+	builder := &QueryBuilder{
+		qry: &plan.Query{
+			Nodes: []*plan.Node{
+				{
+					TableDef: &plan.TableDef{
+						Pkey: &plan.PrimaryKeyDef{
+							// MatrixOne stores a composite key in a hidden column while
+							// Names retains the user-visible key columns.
+							Cols:        []uint64{2},
+							PkeyColName: catalog.CPrimaryKeyColName,
+							Names:       []string{"tenant_id", "id"},
+						},
+					},
+				},
+			},
+		},
+	}
+	binding := NewBinding(1, 0, "", "composite_pk", 0, []string{"tenant_id", "id"}, nil, nil, false, nil)
+	ctx := &BindContext{groups: []*plan.Expr{
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: binding.tag, ColPos: 0}}},
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: binding.tag, ColPos: 1}}},
+	}}
+
+	require.True(t, builder.groupByIncludesPrimaryKey(ctx, binding))
+	ctx.groups = ctx.groups[:1]
+	require.False(t, builder.groupByIncludesPrimaryKey(ctx, binding))
+}
+
 func TestTcl(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	// should pass

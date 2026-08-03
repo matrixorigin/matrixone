@@ -86,13 +86,14 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 	// FUBAR.
 
 	var mysqlCompatible bool
+	var mysqlFullGroupByCompat bool
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
 	if err == nil {
 		if modeStr, ok := mode.(string); ok {
-			if !strings.Contains(modeStr, "ONLY_FULL_GROUP_BY") {
-				mysqlCompatible = true
-			}
+			onlyFullGroupBy := mysql.HasSQLMode(modeStr, "ONLY_FULL_GROUP_BY")
+			mysqlCompatible = !onlyFullGroupBy
+			mysqlFullGroupByCompat = onlyFullGroupBy && !mysql.HasMatrixOneNativeSQLMode(modeStr)
 		}
 	}
 
@@ -133,23 +134,24 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 			StmtType: queryType,
 			MaxDop:   int64(maxDop),
 		},
-		compCtx:              ctx,
-		ctxByNode:            []*BindContext{},
-		nameByColRef:         make(map[[2]int32]string),
-		protectedScans:       make(map[int32]int),
-		projectSpecialGuards: make(map[int32]*specialIndexGuard),
-		indexHintOwnerByNode: make(map[int32]int32),
-		nextBindTag:          0,
-		mysqlCompatible:      mysqlCompatible,
-		aggSpillMem:          aggSpillMem,
-		joinSpillMem:         joinSpillMem,
-		sortSpillMem:         sortSpillMem,
-		tag2Table:            make(map[int32]*TableDef),
-		tag2NodeID:           make(map[int32]int32),
-		isPrepareStatement:   isPrepareStatement,
-		deleteNode:           make(map[uint64]int32),
-		skipStats:            skipStats,
-		optimizationHistory:  make([]string, 0),
+		compCtx:                ctx,
+		ctxByNode:              []*BindContext{},
+		nameByColRef:           make(map[[2]int32]string),
+		protectedScans:         make(map[int32]int),
+		projectSpecialGuards:   make(map[int32]*specialIndexGuard),
+		indexHintOwnerByNode:   make(map[int32]int32),
+		nextBindTag:            0,
+		mysqlCompatible:        mysqlCompatible,
+		mysqlFullGroupByCompat: mysqlFullGroupByCompat,
+		aggSpillMem:            aggSpillMem,
+		joinSpillMem:           joinSpillMem,
+		sortSpillMem:           sortSpillMem,
+		tag2Table:              make(map[int32]*TableDef),
+		tag2NodeID:             make(map[int32]int32),
+		isPrepareStatement:     isPrepareStatement,
+		deleteNode:             make(map[uint64]int32),
+		skipStats:              skipStats,
+		optimizationHistory:    make([]string, 0),
 		// -1 means "no old-row delete maintenance" (set only on ODKU into an
 		// irregular-index table); step 0 is a valid index so it cannot be the zero value.
 		irregularMaintDeleteStep: -1,
@@ -4621,7 +4623,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		// sample can ignore these check because it supports the sql like 'select a, b, sample(c) from t group by a' whose b is not in group by clause.
 		if (len(ctx.groups) > 0 || len(ctx.aggregates) > 0 || len(ctx.times) > 0) && len(projectionBinder.boundCols) > 0 {
 			if !builder.mysqlCompatible {
-				return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0])
+				if !builder.mysqlFullGroupByCompat || !builder.mysqlFullGroupByAllowsColumns(ctx, projectionBinder.boundCols) {
+					return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0])
+				}
 			}
 
 			// For MySQL compatibility, wrap bare ColRefs in any_value()
@@ -6368,6 +6372,7 @@ func (builder *QueryBuilder) bindWhere(
 			return
 		}
 	}
+	ctx.whereFilters = boundFilterList
 
 	newNodeID = nodeID
 	return
