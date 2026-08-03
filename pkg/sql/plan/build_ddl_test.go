@@ -45,6 +45,37 @@ type rootSQLCompilerContext struct {
 	calls   int
 }
 
+func TestBuildRenameTableUsesPriorDestinationAsNextSource(t *testing.T) {
+	stmt, err := parsers.ParseOne(
+		t.Context(),
+		dialect.MYSQL,
+		"rename table t1 to t2, t2 to t3",
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ctx := NewMockCompilerContext(false)
+	delete(ctx.tables, "t2")
+	delete(ctx.tables, "t3")
+	delete(ctx.objects, "t2")
+	delete(ctx.objects, "t3")
+	ctx.tables["t1"] = DeepCopyTableDef(ctx.tables["nation"], true)
+	ctx.tables["t1"].Name = "t1"
+	ctx.objects["t1"] = &ObjectRef{SchemaName: "tpch", ObjName: "t1"}
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+
+	renames := p.GetDdl().GetRenameTable().GetAlterTables()
+	require.Len(t, renames, 2)
+	require.Equal(t, "t1", renames[0].GetActions()[0].GetAlterName().GetOldName())
+	require.Equal(t, "t2", renames[0].GetActions()[0].GetAlterName().GetNewName())
+	require.Equal(t, "t2", renames[1].GetTableDef().GetName())
+	require.Equal(t, "t2", renames[1].GetActions()[0].GetAlterName().GetOldName())
+	require.Equal(t, "t3", renames[1].GetActions()[0].GetAlterName().GetNewName())
+}
+
 func TestBuildDropTemporaryTableOnlyTargetsTemporaryTable(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "drop temporary table nation", 1)
 	require.NoError(t, err)
@@ -297,6 +328,33 @@ func TestBuildCreateViewExplicitColumnList(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrViewWrongList))
 		require.Equal(t, uint16(moerr.ER_VIEW_WRONG_LIST), err.(*moerr.Error).MySQLCode())
 	})
+}
+
+func TestBuildCreateViewRejectsTemporaryTable(t *testing.T) {
+	tests := []string{
+		"create view v as select * from nation",
+		"create view v as select 1 from nation where false",
+		"create view v as select * from (select * from nation) n",
+		"create view v as select (select n_name from nation limit 1)",
+		"create view v as (select * from nation)",
+	}
+
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false)
+			ctx.tables["nation"].IsTemporary = true
+
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = BuildPlan(ctx, stmt, false)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrViewSelectTmpTable))
+			require.Equal(t, uint16(moerr.ER_VIEW_SELECT_TMPTABLE), err.(*moerr.Error).MySQLCode())
+			require.Equal(t, "View's SELECT refers to a temporary table 'nation'", err.Error())
+		})
+	}
 }
 
 func TestBuildTemporaryTableMarksCatalogRelkind(t *testing.T) {
