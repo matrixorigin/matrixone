@@ -468,6 +468,22 @@ func TestIffCheck_PreservesSupportedConditionTypes(t *testing.T) {
 	}
 }
 
+func TestIffCheckPreservesMatchingTextCollation(t *testing.T) {
+	for _, charset := range []uint8{
+		types.CharsetLegacy,
+		types.CharsetUTF8MB4Bin,
+		types.CharsetUTF8,
+	} {
+		textType := types.NewWithCharset(types.T_varchar, 32, 0, charset)
+		result := iffCheck(nil, []types.Type{
+			types.T_bool.ToType(),
+			textType,
+			textType,
+		})
+		require.Equal(t, succeedMatched, result.status)
+	}
+}
+
 func TestIffCheck_PreservesVectorResultTypes(t *testing.T) {
 	for _, typ := range []types.Type{
 		types.New(types.T_array_float32, 3, 0),

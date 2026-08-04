@@ -53,6 +53,34 @@ func TestCreateTableLikePreservesTextCollationMetadata(t *testing.T) {
 	require.Equal(t, uint32(types.CharsetBinary), FindColumn(clone.Cols, "packed").Typ.Charset)
 }
 
+func TestCreateTableLikePreservesLegacyBytewiseTextBehavior(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	stmt, err := mysql.ParseOne(t.Context(), `create table source_t(
+		legacy_text varchar(10),
+		general_text varchar(10) collate utf8mb4_general_ci
+	)`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+	require.NoError(t, err)
+	source := built.GetDdl().GetCreateTable().GetTableDef()
+	source.DefaultCharset = uint32(types.CharsetLegacy)
+	FindColumn(source.Cols, "legacy_text").Typ.Charset = uint32(types.CharsetLegacy)
+	mock.ctxt.tables["source_t"] = source
+
+	likeStmt, err := mysql.ParseOne(t.Context(), "create table clone_t like source_t", 1)
+	require.NoError(t, err)
+	defer likeStmt.Free()
+	clonePlan, err := BuildPlan(mock.CurrentContext(), likeStmt, false)
+	require.NoError(t, err)
+	clone := clonePlan.GetDdl().GetCreateTable().GetTableDef()
+	// The legacy identity is reconstructed as the explicit bytewise collation;
+	// exact zero is not required, but its pre-upgrade ordering is.
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), clone.DefaultCharset)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), FindColumn(clone.Cols, "legacy_text").Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(clone.Cols, "general_text").Typ.Charset)
+}
+
 func TestCreateTableLikePreservesCheckAcrossSQLModes(t *testing.T) {
 	testCases := []struct {
 		name       string

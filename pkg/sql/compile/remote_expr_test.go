@@ -135,6 +135,7 @@ func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion9)
 	for _, charset := range []uint32{
+		uint32(types.CharsetLegacy),
 		uint32(types.CharsetBinary),
 		uint32(types.CharsetUTF8MB4Bin),
 	} {

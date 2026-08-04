@@ -114,6 +114,21 @@ func TestTypeMarshalAndUnmarshal(t *testing.T) {
 	require.Equal(t, typ, ret)
 }
 
+func TestTextCharsetIdentitiesDistinguishLegacyMetadata(t *testing.T) {
+	require.Equal(t, uint8(0), CharsetLegacy)
+	require.NotEqual(t, CharsetLegacy, CharsetUTF8)
+
+	require.Equal(t, CharsetUTF8, New(T_varchar, 32, 0).Charset)
+	require.Equal(t, CharsetUTF8, T_varchar.ToType().Charset)
+	require.Equal(t, CharsetLegacy,
+		NewWithCharset(T_varchar, 32, 0, CharsetLegacy).Charset)
+	// A zero charset on an intrinsically binary OID is an old plan, not a
+	// request to reinterpret the value as text.
+	require.Equal(t, CharsetBinary,
+		NewWithCharset(T_varbinary, 32, 0, CharsetLegacy).Charset)
+	require.Equal(t, CharsetLegacy, CharsetType(T_int64))
+}
+
 func TestType_String(t *testing.T) {
 	myType := T_int64.ToType()
 	require.Equal(t, "BIGINT", myType.String())

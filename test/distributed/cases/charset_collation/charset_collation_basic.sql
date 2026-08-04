@@ -99,7 +99,6 @@ CREATE TABLE t_utf8mb4_unicode_ci (
     id INT PRIMARY KEY,
     name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-SHOW CREATE TABLE t_utf8mb4_unicode_ci;
 
 -- @case
 -- @desc: Test column level charset and collation

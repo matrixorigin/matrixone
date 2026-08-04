@@ -29,6 +29,7 @@ func TestTextMinMaxUsesGeneralCICollation(t *testing.T) {
 		name    string
 		oid     types.T
 		charset uint8
+		legacy  bool
 		aggID   int64
 		expect  string
 	}{
@@ -40,6 +41,8 @@ func TestTextMinMaxUsesGeneralCICollation(t *testing.T) {
 		{name: "text max", oid: types.T_text, aggID: AggIdOfMax, expect: "E"},
 		{name: "varchar binary collation min", oid: types.T_varchar, charset: types.CharsetUTF8MB4Bin, aggID: AggIdOfMin, expect: "C"},
 		{name: "varchar binary collation max", oid: types.T_varchar, charset: types.CharsetUTF8MB4Bin, aggID: AggIdOfMax, expect: "c"},
+		{name: "legacy varchar min", oid: types.T_varchar, legacy: true, aggID: AggIdOfMin, expect: "C"},
+		{name: "legacy varchar max", oid: types.T_varchar, legacy: true, aggID: AggIdOfMax, expect: "c"},
 		{name: "binary min", oid: types.T_binary, aggID: AggIdOfMin, expect: "C"},
 		{name: "binary max", oid: types.T_binary, aggID: AggIdOfMax, expect: "c"},
 	}
@@ -47,7 +50,10 @@ func TestTextMinMaxUsesGeneralCICollation(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			typ := types.NewWithCharset(tc.oid, 10, 0, tc.charset)
+			typ := types.New(tc.oid, 10, 0)
+			if tc.charset != types.CharsetLegacy || tc.legacy {
+				typ = types.NewWithCharset(tc.oid, 10, 0, tc.charset)
+			}
 			vec := vector.NewVec(typ)
 			for _, value := range values {
 				require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
@@ -87,6 +93,34 @@ func TestTextMinMaxGeneralCIWeights(t *testing.T) {
 	require.Negative(t, exec.comp([]byte("中"), []byte("文")))
 	require.Zero(t, exec.comp([]byte("😜"), []byte("😃")))
 	require.Positive(t, exec.comp([]byte{0xff}, []byte{0xfe}))
+}
+
+func TestTextMinMaxGeneralCIMalformedUTF8IsTransitive(t *testing.T) {
+	values := [][]byte{
+		{0x80},
+		[]byte("z"),
+		[]byte("é"),
+		{0xff},
+		{0xc3},
+		[]byte("A"),
+		[]byte("a "),
+	}
+	for _, a := range values {
+		for _, b := range values {
+			require.Equal(t, -compareUTF8mb4GeneralCI(b, a), compareUTF8mb4GeneralCI(a, b))
+			for _, c := range values {
+				if compareUTF8mb4GeneralCI(a, b) > 0 && compareUTF8mb4GeneralCI(b, c) > 0 {
+					require.Positive(t, compareUTF8mb4GeneralCI(a, c),
+						"non-transitive ordering for %x > %x > %x", a, b, c)
+				}
+			}
+		}
+	}
+
+	// This is the concrete cycle that raw-byte fallback used to create.
+	require.Positive(t, compareUTF8mb4GeneralCI([]byte{0x80}, []byte("z")))
+	require.Positive(t, compareUTF8mb4GeneralCI([]byte("z"), []byte("é")))
+	require.Negative(t, compareUTF8mb4GeneralCI([]byte("é"), []byte{0x80}))
 }
 
 func TestTextMaxGeneralCIDoesNotExpandSharpS(t *testing.T) {

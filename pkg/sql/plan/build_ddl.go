@@ -952,9 +952,10 @@ func buildCreateTable(
 		// CHECK expressions are stored in source-session SQL syntax. Exclude them
 		// from the temporary SQL skeleton because the rewrite parser uses the
 		// current/default SQL mode, then restore the structured metadata below.
+		likeSkeletonDef := normalizeLegacyTextCollationForCreateLike(tableDef)
 		_, newStmt, err := constructCreateTableSQL(
 			ctx,
-			tableDef,
+			likeSkeletonDef,
 			snapshot,
 			true,
 			cloneStmt,
@@ -1270,6 +1271,41 @@ func buildCreateTable(
 			},
 		},
 	}, nil
+}
+
+func normalizeLegacyTextCollationForCreateLike(tableDef *plan.TableDef) *plan.TableDef {
+	legacy := tableDef.DefaultCharset == uint32(types.CharsetLegacy)
+	if !legacy {
+		for _, col := range tableDef.Cols {
+			switch types.T(col.Typ.Id) {
+			case types.T_char, types.T_varchar, types.T_text:
+				if col.Typ.Charset == uint32(types.CharsetLegacy) {
+					legacy = true
+				}
+			}
+		}
+	}
+	if !legacy {
+		return tableDef
+	}
+
+	// Charset zero was persisted before the field had semantics. CREATE LIKE
+	// reparses a generated DDL skeleton, so spell legacy text as utf8mb4_bin in
+	// that private skeleton to retain its historical bytewise ordering without
+	// changing user-visible SHOW CREATE output for old catalog rows.
+	clone := DeepCopyTableDef(tableDef, true)
+	if clone.DefaultCharset == uint32(types.CharsetLegacy) {
+		clone.DefaultCharset = uint32(types.CharsetUTF8MB4Bin)
+	}
+	for _, col := range clone.Cols {
+		switch types.T(col.Typ.Id) {
+		case types.T_char, types.T_varchar, types.T_text:
+			if col.Typ.Charset == uint32(types.CharsetLegacy) {
+				col.Typ.Charset = uint32(types.CharsetUTF8MB4Bin)
+			}
+		}
+	}
+	return clone
 }
 
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {

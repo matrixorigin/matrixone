@@ -622,6 +622,7 @@ func makePlan2StringConstExprWithType(v string, isBin ...bool) *plan.Expr {
 		Expr: makePlan2StringConstExpr(v, isBin...),
 		Typ: plan.Type{
 			Id:          id,
+			Charset:     uint32(types.CharsetUTF8),
 			NotNullable: true,
 			Width:       width,
 		},
@@ -911,8 +912,9 @@ func makeTypeByPlan2Expr(expr *plan.Expr) types.Type {
 
 func makeHiddenColTyp() Type {
 	return Type{
-		Id:    int32(types.T_varchar),
-		Width: types.MaxVarcharLen,
+		Id:      int32(types.T_varchar),
+		Width:   types.MaxVarcharLen,
+		Charset: uint32(types.CharsetBinary),
 	}
 }
 

@@ -117,7 +117,7 @@ name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 SHOW CREATE TABLE t_utf8mb4_bin;
 Table    Create Table
-t_utf8mb4_bin    CREATE TABLE `t_utf8mb4_bin` (\n  `id` int NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+t_utf8mb4_bin    CREATE TABLE `t_utf8mb4_bin` (\n  `id` int NOT NULL,\n  `name` varchar(100) COLLATE utf8mb4_bin DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) COLLATE=utf8mb4_bin
 CREATE TABLE t_utf8mb4_general_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100)
@@ -129,9 +129,7 @@ CREATE TABLE t_utf8mb4_unicode_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-SHOW CREATE TABLE t_utf8mb4_unicode_ci;
-Table    Create Table
-t_utf8mb4_unicode_ci    CREATE TABLE `t_utf8mb4_unicode_ci` (\n  `id` int NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+invalid input: unsupported collation 'utf8mb4_unicode_ci'
 CREATE TABLE t_column_charset (
 id INT PRIMARY KEY,
 name_default VARCHAR(100),
@@ -142,7 +140,7 @@ name_utf8mb4_general VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_
 );
 SHOW CREATE TABLE t_column_charset;
 Table    Create Table
-t_column_charset    CREATE TABLE `t_column_charset` (\n  `id` int NOT NULL,\n  `name_default` varchar(100) DEFAULT NULL,\n  `name_utf8` varchar(100) DEFAULT NULL,\n  `name_utf8mb4` varchar(100) DEFAULT NULL,\n  `name_utf8mb4_bin` varchar(100) DEFAULT NULL,\n  `name_utf8mb4_general` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+t_column_charset    CREATE TABLE `t_column_charset` (\n  `id` int NOT NULL,\n  `name_default` varchar(100) DEFAULT NULL,\n  `name_utf8` varchar(100) DEFAULT NULL,\n  `name_utf8mb4` varchar(100) DEFAULT NULL,\n  `name_utf8mb4_bin` varchar(100) COLLATE utf8mb4_bin DEFAULT NULL,\n  `name_utf8mb4_general` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
 DESC t_column_charset;
 Field    Type    Null    Key    Default    Extra    Comment
 id    INT(32)    NO    PRI    null        
@@ -513,15 +511,13 @@ SHOW CREATE TABLE t_alter;
 Table    Create Table
 t_alter    CREATE TABLE `t_alter` (\n  `id` int NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
 ALTER TABLE t_alter MODIFY COLUMN name VARCHAR(100) CHARACTER SET utf8mb4;
-not supported: unsupport column definition <nil>
 SHOW CREATE TABLE t_alter;
 Table    Create Table
 t_alter    CREATE TABLE `t_alter` (\n  `id` int NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
 ALTER TABLE t_alter MODIFY COLUMN name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
-not supported: unsupport column definition <nil>
 SHOW CREATE TABLE t_alter;
 Table    Create Table
-t_alter    CREATE TABLE `t_alter` (\n  `id` int NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+t_alter    CREATE TABLE `t_alter` (\n  `id` int NOT NULL,\n  `name` varchar(100) COLLATE utf8mb4_bin DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
 CREATE TABLE t_index_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100),

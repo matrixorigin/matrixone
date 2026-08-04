@@ -568,6 +568,20 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 		}
 
 		source := []types.Type{inputs[1], inputs[2]}
+		sameCollatedText := false
+		switch source[0].Oid {
+		case types.T_char, types.T_varchar, types.T_text:
+			sameCollatedText = source[0].Eq(source[1])
+		}
+		if sameCollatedText {
+			// Matching text branches already have a common collation identity.
+			// Preserve it instead of rebuilding the same OID with ToType(), which
+			// would turn legacy or utf8mb4_bin metadata into general_ci.
+			if needCast {
+				return newCheckResultWithCast(0, []types.Type{conditionType, source[0], source[1]})
+			}
+			return newCheckResultWithSuccess(0)
+		}
 		if source[0].Oid.IsArrayRelate() || source[1].Oid.IsArrayRelate() {
 			vectorIdx := 0
 			if !source[0].Oid.IsArrayRelate() {

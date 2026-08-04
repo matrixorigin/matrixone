@@ -44,7 +44,12 @@ func Test_rewriteDecimalTypeIfNecessary(t *testing.T) {
 }
 
 func TestPlanTypeCharsetRoundTrip(t *testing.T) {
-	for _, charset := range []uint8{types.CharsetBinary, types.CharsetUTF8MB4Bin} {
+	for _, charset := range []uint8{
+		types.CharsetLegacy,
+		types.CharsetBinary,
+		types.CharsetUTF8MB4Bin,
+		types.CharsetUTF8,
+	} {
 		original := types.NewWithCharset(types.T_varchar, 32, 0, charset)
 		planType := makePlan2Type(&original)
 		require.Equal(t, uint32(charset), planType.Charset)
@@ -59,6 +64,15 @@ func TestPlanTypeCharsetRoundTrip(t *testing.T) {
 	// Charset was absent from older plans. Keep the OID-derived binary default.
 	legacyBinary := makeTypeByPlan2Type(plan.Type{Id: int32(types.T_binary), Width: 8})
 	require.Equal(t, types.CharsetBinary, legacyBinary.Charset)
+	legacyText := makeTypeByPlan2Type(plan.Type{Id: int32(types.T_varchar), Width: 8})
+	require.Equal(t, types.CharsetLegacy, legacyText.Charset)
+}
+
+func TestNewStringExpressionsAndSerializedColumnsHaveExplicitCharsets(t *testing.T) {
+	require.Equal(t, uint32(types.CharsetUTF8),
+		makePlan2StringConstExprWithType("value").Typ.Charset)
+	require.Equal(t, uint32(types.CharsetBinary),
+		MakeHiddenColDefByName("__mo_serialized").Typ.Charset)
 }
 
 func Test_MakePlan2Vecf32ConstExprWithType(t *testing.T) {

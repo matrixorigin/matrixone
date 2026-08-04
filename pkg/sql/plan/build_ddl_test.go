@@ -102,9 +102,10 @@ func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
 		wantTable uint32
 	}{
 		{
-			name: "default text collation",
-			sql:  "create table t(name varchar(10))",
-			want: uint32(types.CharsetUTF8),
+			name:      "default text collation",
+			sql:       "create table t(name varchar(10))",
+			want:      uint32(types.CharsetUTF8),
+			wantTable: uint32(types.CharsetUTF8),
 		},
 		{
 			name: "table binary collation",
@@ -121,9 +122,10 @@ func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
 			wantTable: uint32(types.CharsetUTF8MB4Bin),
 		},
 		{
-			name: "column binary collation",
-			sql:  "create table t(name varchar(10) collate utf8mb4_bin)",
-			want: uint32(types.CharsetUTF8MB4Bin),
+			name:      "column binary collation",
+			sql:       "create table t(name varchar(10) collate utf8mb4_bin)",
+			want:      uint32(types.CharsetUTF8MB4Bin),
+			wantTable: uint32(types.CharsetUTF8),
 		},
 		{
 			name: "column collation overrides table",
@@ -143,7 +145,8 @@ func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
 			name: "column collation wins independent of option order",
 			sql: "create table t(name varchar(10) collate utf8mb4_bin " +
 				"character set utf8mb4)",
-			want: uint32(types.CharsetUTF8MB4Bin),
+			want:      uint32(types.CharsetUTF8MB4Bin),
+			wantTable: uint32(types.CharsetUTF8),
 		},
 	}
 
@@ -160,6 +163,23 @@ func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
 			require.NotEmpty(t, cols)
 			require.Equal(t, tc.want, cols[0].Typ.Charset)
 			require.Equal(t, tc.wantTable, tableDef.DefaultCharset)
+		})
+	}
+}
+
+func TestBuildCreateTableRejectsUnsupportedCollations(t *testing.T) {
+	for _, sql := range []string{
+		"create table t(v varchar(8)) collate utf8mb4_0900_ai_ci",
+		"create table t(v varchar(8)) collate utf8mb4_unicode_ci",
+		"create table t(v varchar(8) collate utf8mb4_0900_bin)",
+		"create table t(v varchar(8) collate utf8_unicode_ci)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+			require.ErrorContains(t, err, "unsupported collation")
 		})
 	}
 }
@@ -208,6 +228,21 @@ func TestBuildCreateTableRejectsIncompatibleCharsetAndCollation(t *testing.T) {
 			defer stmt.Free()
 			_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
 			require.ErrorContains(t, err, "is not valid for CHARACTER SET")
+		})
+	}
+}
+
+func TestBuildCreateTableAcceptsUTF8MB3Aliases(t *testing.T) {
+	for _, sql := range []string{
+		"create table t(v varchar(8)) character set utf8 collate utf8mb3_bin",
+		"create table t(v varchar(8) character set utf8mb3 collate utf8_general_ci)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+			require.NoError(t, err)
 		})
 	}
 }
