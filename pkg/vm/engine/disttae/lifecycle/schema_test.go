@@ -162,3 +162,53 @@ func TestSchemaDescriptorRestoreDDLDoesNotReuseSourceColumnIDs(t *testing.T) {
 	require.Contains(t, ddl, "`id` BIGINT NOT NULL")
 	require.NotContains(t, ddl, "99")
 }
+
+func TestLifecycleRestoreColumnTypeSQLCoversPhaseOneTypes(t *testing.T) {
+	tests := []struct {
+		name     string
+		column   SchemaColumn
+		expected string
+	}{
+		{"bool", SchemaColumn{TypeID: int32(types.T_bool)}, "BOOL"},
+		{"bit default width", SchemaColumn{TypeID: int32(types.T_bit)}, "BIT(64)"},
+		{"int8", SchemaColumn{TypeID: int32(types.T_int8)}, "TINYINT"},
+		{"int16", SchemaColumn{TypeID: int32(types.T_int16)}, "SMALLINT"},
+		{"int32", SchemaColumn{TypeID: int32(types.T_int32)}, "INT"},
+		{"int64", SchemaColumn{TypeID: int32(types.T_int64)}, "BIGINT"},
+		{"uint8", SchemaColumn{TypeID: int32(types.T_uint8)}, "TINYINT UNSIGNED"},
+		{"uint16", SchemaColumn{TypeID: int32(types.T_uint16)}, "SMALLINT UNSIGNED"},
+		{"uint32", SchemaColumn{TypeID: int32(types.T_uint32)}, "INT UNSIGNED"},
+		{"uint64", SchemaColumn{TypeID: int32(types.T_uint64)}, "BIGINT UNSIGNED"},
+		{"float32", SchemaColumn{TypeID: int32(types.T_float32)}, "FLOAT"},
+		{"float64", SchemaColumn{TypeID: int32(types.T_float64)}, "DOUBLE"},
+		{"char", SchemaColumn{TypeID: int32(types.T_char), Width: 12}, "CHAR(12)"},
+		{"varchar minimum width", SchemaColumn{TypeID: int32(types.T_varchar)}, "VARCHAR(1)"},
+		{"binary", SchemaColumn{TypeID: int32(types.T_binary), Width: 8}, "BINARY(8)"},
+		{"varbinary", SchemaColumn{TypeID: int32(types.T_varbinary), Width: 16}, "VARBINARY(16)"},
+		{"blob", SchemaColumn{TypeID: int32(types.T_blob)}, "BLOB"},
+		{"text", SchemaColumn{TypeID: int32(types.T_text)}, "TEXT"},
+		{"json", SchemaColumn{TypeID: int32(types.T_json)}, "JSON"},
+		{"date", SchemaColumn{TypeID: int32(types.T_date)}, "DATE"},
+		{"datetime", SchemaColumn{TypeID: int32(types.T_datetime), Scale: 6}, "DATETIME(6)"},
+		{"timestamp no scale", SchemaColumn{TypeID: int32(types.T_timestamp)}, "TIMESTAMP"},
+		{"time", SchemaColumn{TypeID: int32(types.T_time), Scale: 3}, "TIME(3)"},
+		{"decimal default width", SchemaColumn{TypeID: int32(types.T_decimal128), Scale: 4}, "DECIMAL(38,4)"},
+		{"uuid", SchemaColumn{TypeID: int32(types.T_uuid)}, "UUID"},
+		{"enum", SchemaColumn{TypeID: int32(types.T_enum), EnumValues: "'red','green'"}, "ENUM('red','green')"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actual, err := lifecycleColumnTypeSQL(test.column)
+			require.NoError(t, err)
+			require.Equal(t, test.expected, actual)
+		})
+	}
+
+	_, err := lifecycleColumnTypeSQL(SchemaColumn{
+		Name:   "status",
+		TypeID: int32(types.T_enum),
+	})
+	require.ErrorContains(t, err, "has no values")
+	_, err = lifecycleColumnTypeSQL(SchemaColumn{TypeID: int32(types.T_array_float32)})
+	require.ErrorContains(t, err, "unsupported")
+}

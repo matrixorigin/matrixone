@@ -98,6 +98,89 @@ func TestSQLCleanupRootRepositoryListsPublishedTemporary(t *testing.T) {
 	require.Equal(t, []CleanupRoot{root}, roots)
 }
 
+func TestSQLCleanupRootRepositoryGetTransitionUpdateAndSweep(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	root := lifecycleSQLCleanupRoot()
+	getFake := &scriptedLifecycleSQLExecutor{
+		t: t,
+		steps: []lifecycleSQLStep{{
+			contains:  "where root_id=unhex",
+			accountID: 0,
+			result:    lifecycleCleanupRootResult(t, mp, root),
+		}},
+	}
+	got, err := (SQLCleanupRootRepository{Executor: getFake}).Get(ctx, root.RootID)
+	require.NoError(t, err)
+	require.Equal(t, root, got)
+	require.Equal(t, 1, getFake.offset)
+
+	transitionFake := &scriptedLifecycleSQLExecutor{
+		t: t,
+		steps: []lifecycleSQLStep{
+			{
+				contains:  "where root_id=unhex",
+				accountID: 0,
+				result:    lifecycleCleanupRootResult(t, mp, root),
+			},
+			{
+				contains:  "set state='VERIFIED',state_version=state_version+1",
+				accountID: 0,
+				result:    executor.Result{AffectedRows: 1},
+			},
+		},
+	}
+	transitioned, err := (SQLCleanupRootRepository{Executor: transitionFake}).Transition(
+		ctx,
+		root.RootID,
+		root.AttemptID,
+		root.ExecutorEpoch,
+		CleanupRootUploading,
+		root.StateVersion,
+		CleanupRootVerified,
+	)
+	require.NoError(t, err)
+	require.Equal(t, CleanupRootVerified, transitioned.State)
+	require.Equal(t, root.StateVersion+1, transitioned.StateVersion)
+	require.Equal(t, 2, transitionFake.offset)
+
+	updateFake := &scriptedLifecycleSQLExecutor{
+		t: t,
+		steps: []lifecycleSQLStep{{
+			contains:  "update mo_catalog.mo_lifecycle_cleanup_roots set",
+			accountID: 0,
+			result:    executor.Result{AffectedRows: 1},
+		}},
+	}
+	updated, err := (SQLCleanupRootRepository{Executor: updateFake}).UpdateCleanup(
+		ctx,
+		transitioned,
+		transitioned.StateVersion,
+	)
+	require.NoError(t, err)
+	require.Equal(t, transitioned.StateVersion+1, updated.StateVersion)
+	require.Equal(t, 1, updateFake.offset)
+
+	sweepRoot := root
+	sweepRoot.State = CleanupRootDeletePending
+	sweepFake := &scriptedLifecycleSQLExecutor{
+		t: t,
+		steps: []lifecycleSQLStep{{
+			contains:  "state in ('DELETE_PENDING','DELETING')",
+			accountID: 0,
+			result:    lifecycleCleanupRootResult(t, mp, sweepRoot),
+		}},
+	}
+	due, err := (SQLCleanupRootRepository{Executor: sweepFake}).ListSweepable(
+		ctx,
+		time.Now().Add(time.Hour),
+		8,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []CleanupRoot{sweepRoot}, due)
+	require.Equal(t, 1, sweepFake.offset)
+}
+
 func TestSQLCleanupRootRepositoryPagesReconcileableRoots(t *testing.T) {
 	root := lifecycleSQLCleanupRoot()
 	root.State = CleanupRootCommitUnknown
@@ -167,6 +250,21 @@ or (state='published' and temporary_cleanup_done=false)`,
 	require.Equal(t, 1, fake.offset)
 }
 
+func TestSQLCleanupRootRepositoryAcceptsBoundedCapacity(t *testing.T) {
+	mp := mpool.MustNewZero()
+	fake := &scriptedLifecycleSQLExecutor{
+		t: t,
+		steps: []lifecycleSQLStep{{
+			contains:  "sum(reserved_cleanup_bytes)",
+			accountID: 0,
+			result:    lifecycleUint64Result(t, mp, 4, 128<<20),
+		}},
+	}
+	require.NoError(t, (SQLCleanupRootRepository{Executor: fake}).
+		CheckCreateCapacity(context.Background(), 64, 1<<30, 64<<20))
+	require.Equal(t, 1, fake.offset)
+}
+
 func TestSQLCleanupReconcileCatalogMatchesArchiveDataset(t *testing.T) {
 	root := lifecycleSQLCleanupRoot()
 	root.State = CleanupRootCommitUnknown
@@ -187,6 +285,25 @@ func TestSQLCleanupReconcileCatalogMatchesArchiveDataset(t *testing.T) {
 		MatchingPublication(context.Background(), root, time.Now())
 	require.NoError(t, err)
 	require.Equal(t, CleanupPublicationPublished, state)
+}
+
+func TestSQLCleanupReconcileCatalogMatchesTTLReceipt(t *testing.T) {
+	root := lifecycleSQLCleanupRoot()
+	root.Mode = CleanupModeTTLRewrite
+	mp := mpool.MustNewZero()
+	fake := &scriptedLifecycleSQLExecutor{
+		t: t,
+		steps: []lifecycleSQLStep{{
+			contains:  "from mo_catalog.mo_lifecycle_ttl_receipts",
+			accountID: root.OwnerAccountID,
+			result:    lifecycleStringResult(t, mp, "PUBLISHED"),
+		}},
+	}
+	state, err := (SQLCleanupReconcileCatalog{Executor: fake}).
+		MatchingPublication(context.Background(), root, time.Now())
+	require.NoError(t, err)
+	require.Equal(t, CleanupPublicationPublished, state)
+	require.Equal(t, 1, fake.offset)
 }
 
 func TestSQLCleanupReconcileCatalogTreatsDroppedAccountAsNoPublication(t *testing.T) {
@@ -248,6 +365,45 @@ func TestSQLCleanupReconcileCatalogRequestsDueDatasetCleanup(t *testing.T) {
 		RequestCleanup(context.Background(), root, time.Now())
 	require.NoError(t, err)
 	require.True(t, cleanup)
+}
+
+func TestSQLCleanupReconcileCatalogRequestsCleanupAfterOwnerAccountDrop(t *testing.T) {
+	root := lifecycleSQLCleanupRoot()
+	root.State = CleanupRootPublished
+	mp := mpool.MustNewZero()
+	fake := &scriptedLifecycleSQLExecutor{
+		t: t,
+		steps: []lifecycleSQLStep{
+			{
+				contains:  "select rel_id from mo_catalog.mo_tables",
+				accountID: 0,
+				result:    executor.Result{Mp: mp},
+			},
+			{
+				contains:  "from mo_catalog.mo_account",
+				accountID: 0,
+				result:    executor.Result{Mp: mp},
+			},
+		},
+	}
+	cleanup, err := (SQLCleanupReconcileCatalog{Executor: fake}).RequestCleanup(
+		context.Background(),
+		root,
+		time.Now(),
+	)
+	require.NoError(t, err)
+	require.True(t, cleanup)
+	require.Equal(t, len(fake.steps), fake.offset)
+}
+
+func TestSQLCleanupReconcileCatalogTTLNeedsNoDatasetMutation(t *testing.T) {
+	root := lifecycleSQLCleanupRoot()
+	root.Mode = CleanupModeTTLRewrite
+	catalogAdapter := SQLCleanupReconcileCatalog{Executor: &scriptedLifecycleSQLExecutor{t: t}}
+	cleanup, err := catalogAdapter.RequestCleanup(context.Background(), root, time.Now())
+	require.NoError(t, err)
+	require.True(t, cleanup)
+	require.NoError(t, catalogAdapter.FinalizeCleanup(context.Background(), root))
 }
 
 func TestSQLCleanupReconcileCatalogFinalizesDatasetAfterPhysicalCleanup(t *testing.T) {
