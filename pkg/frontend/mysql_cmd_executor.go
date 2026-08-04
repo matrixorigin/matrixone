@@ -5061,10 +5061,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		}
 		ses.addSqlCount(1)
 
-		// rewrite to "Prepare stmt_name from 'xxx'"
+		// Rewrite the protocol command through the SQL PREPARE path. The payload
+		// is statement text, so preserve it as one string literal instead of
+		// reparsing it as part of the outer PREPARE grammar.
 		newLastStmtID := ses.GenNewStmtId()
 		newStmtName := getPrepareStmtName(newLastStmtID)
-		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
+		sql = buildComStmtPrepareSQL(newStmtName, sql, sessionSQLModeForParser(ses))
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
 		savedRowCount := ses.GetLastAffectedRows()
@@ -5189,6 +5191,14 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		resp = NewGeneralErrorResponse(req.GetCmd(), ses.GetTxnHandler().GetServerStatus(), moerr.NewInternalErrorf(execCtx.reqCtx, "unsupported command. 0x%x", int64(req.GetCmd())))
 	}
 	return resp, nil
+}
+
+func buildComStmtPrepareSQL(stmtName, sql, sqlMode string) string {
+	escaped := strings.ReplaceAll(sql, "'", "''")
+	if !mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes) {
+		escaped = strings.ReplaceAll(escaped, "\\", "\\\\")
+	}
+	return fmt.Sprintf("prepare %s from '%s'", quotePrepareStmtName(stmtName), escaped)
 }
 
 func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string, *PrepareStmt, error) {

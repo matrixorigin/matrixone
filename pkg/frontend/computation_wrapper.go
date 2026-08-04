@@ -453,7 +453,12 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			// the outer EXECUTE fragment, which cannot contain the inner hint.
 			retComp.SetQuerySchedulingIntent(cwft.querySchedulingIntentForPreparedStatement(originSQL))
 			retComp.SetSchedulingTraceRecorder(&cwft.schedulingTrace)
-			if err = retComp.Reset(cwft.proc, getStatementStartAt(execCtx.reqCtx), fill, cwft.ses.GetSql()); err != nil {
+			if err = retComp.Reset(
+				cwft.proc,
+				getStatementStartAt(execCtx.reqCtx),
+				compileOutputCallback(cwft.stmt, fill),
+				cwft.ses.GetSql(),
+			); err != nil {
 				return nil, err
 			}
 			cwft.compile = retComp
@@ -1194,20 +1199,29 @@ func createCompile(
 			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare)
 	})
 
-	if _, ok := stmt.(*tree.ExplainAnalyze); ok {
-		fill = func(bat *batch.Batch, crs *perfcounter.CounterSet) error { return nil }
-	}
-
-	if _, ok := stmt.(*tree.ExplainPhyPlan); ok {
-		fill = func(bat *batch.Batch, crs *perfcounter.CounterSet) error { return nil }
-	}
-
-	err = retCompile.Compile(execCtx.reqCtx, plan, fill)
+	err = retCompile.Compile(execCtx.reqCtx, plan, compileOutputCallback(stmt, fill))
 	if err != nil {
 		return
 	}
 	retCompile.SetOriginSQL(originSQL)
 	return
+}
+
+// EXPLAIN ANALYZE and EXPLAIN PHYPLAN execute the inner query only to collect
+// runtime data. Their result rows are constructed by the frontend after the
+// pipeline finishes, so inner-query batches must never reach the client output
+// callback. Apply the same rule both when compiling a fresh pipeline and when
+// resetting a cached prepared pipeline for another execution.
+func compileOutputCallback(
+	stmt tree.Statement,
+	fill func(*batch.Batch, *perfcounter.CounterSet) error,
+) func(*batch.Batch, *perfcounter.CounterSet) error {
+	switch stmt.(type) {
+	case *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
+		return func(*batch.Batch, *perfcounter.CounterSet) error { return nil }
+	default:
+		return fill
+	}
 }
 
 func buildPlanForCompileRetry(
