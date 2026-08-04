@@ -15,6 +15,7 @@
 package hashjoin
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -35,13 +36,17 @@ type markResult struct {
 }
 
 func newMarkSpillTestCase(t *testing.T) joinTestCase {
+	return newTypedMarkSpillTestCase(t, types.T_int32.ToType())
+}
+
+func newTypedMarkSpillTestCase(t *testing.T, typ types.Type) joinTestCase {
 	tc := newTestCase(t,
 		[]bool{true},
-		[]types.Type{types.T_int32.ToType()},
+		[]types.Type{typ},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		[][]*plan.Expr{
-			{newExpr(0, types.T_int32.ToType())},
-			{newExpr(0, types.T_int32.ToType())},
+			{newExpr(0, typ)},
+			{newExpr(0, typ)},
 		})
 	tc.arg.JoinType = plan.Node_MARK
 	tc.arg.NonEqCond = nil
@@ -59,6 +64,32 @@ func newMarkSpillTestCase(t *testing.T) joinTestCase {
 	tc.barg.SpillThreshold = 1
 	tc.barg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 10000}
 	return tc
+}
+
+func collectStringMarkResults(t *testing.T, tc *joinTestCase) map[string]markResult {
+	t.Helper()
+	got := make(map[string]markResult)
+	for {
+		res, err := vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		if res.Batch != nil && !res.Batch.IsEmpty() {
+			keys := res.Batch.Vecs[0]
+			marks := vector.GenerateFunctionFixedTypeParameter[bool](res.Batch.Vecs[1])
+			for row := 0; row < res.Batch.RowCount(); row++ {
+				key := keys.GetStringAt(row)
+				if keys.GetNulls().Contains(uint64(row)) {
+					key = "<NULL>"
+				}
+				value, isNull := marks.GetValue(uint64(row))
+				_, duplicated := got[key]
+				require.False(t, duplicated, "probe row %q was emitted more than once", key)
+				got[key] = markResult{value: value, isNull: isNull}
+			}
+		}
+		if res.Status == vm.ExecStop {
+			return got
+		}
+	}
 }
 
 func collectMarkResults(t *testing.T, tc *joinTestCase) map[int32]markResult {
@@ -151,6 +182,201 @@ func TestHashMarkJoinSpillThreeValuedSemantics(t *testing.T) {
 			require.Equal(t, tt.expected, collectMarkResults(t, &tc))
 			finishMarkSpillTest(t, &tc)
 		})
+	}
+}
+
+// TestHashMarkJoinSpillResetAcrossBuildShapes exercises the lifecycle that a
+// prepared/cached pipeline uses: the same HashBuild and HashJoin operators are
+// prepared, executed, reset, and reused with materially different build-side
+// shapes. In particular, a spilled build containing NULL must not leak either
+// its global NULL flag, global row count, spill engine, or message-board state
+// into the following empty and non-NULL generations.
+func TestHashMarkJoinSpillResetAcrossBuildShapes(t *testing.T) {
+	tc := newMarkSpillTestCase(t)
+	defer finishMarkSpillTest(t, &tc)
+	tc.arg.SpillThreshold = 1
+
+	type generation struct {
+		name        string
+		probeValues []int32
+		probeNulls  []uint64
+		buildValues []int32
+		buildNulls  []uint64
+		expected    map[int32]markResult
+		expectSpill bool
+	}
+
+	generations := []generation{
+		{
+			name:        "spilled build with null",
+			probeValues: []int32{1, 2, 0},
+			probeNulls:  []uint64{2},
+			buildValues: []int32{2, 0},
+			buildNulls:  []uint64{1},
+			expected: map[int32]markResult{
+				0: {isNull: true},
+				1: {isNull: true},
+				2: {value: true},
+			},
+			expectSpill: true,
+		},
+		{
+			name:        "empty build after null spill",
+			probeValues: []int32{1, 0},
+			probeNulls:  []uint64{1},
+			expected: map[int32]markResult{
+				0: {value: false},
+				1: {value: false},
+			},
+		},
+		{
+			name:        "non-null spill after empty build",
+			probeValues: []int32{1, 2, 0},
+			probeNulls:  []uint64{2},
+			buildValues: []int32{2, 4},
+			expected: map[int32]markResult{
+				0: {isNull: true},
+				1: {value: false},
+				2: {value: true},
+			},
+			expectSpill: true,
+		},
+	}
+
+	for i, gen := range generations {
+		ok := t.Run(gen.name, func(t *testing.T) {
+			probe := batch.NewWithSize(1)
+			probe.Vecs[0] = testutil.MakeInt32Vector(gen.probeValues, gen.probeNulls, tc.proc.Mp())
+			probe.SetRowCount(len(gen.probeValues))
+			resetChildrenWithBatch(tc.arg, probe)
+
+			build := batch.NewWithSize(1)
+			build.Vecs[0] = testutil.MakeInt32Vector(gen.buildValues, gen.buildNulls, tc.proc.Mp())
+			build.SetRowCount(len(gen.buildValues))
+			resetHashBuildChildrenWithBatch(tc.barg, build)
+
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+			require.NoError(t, tc.barg.Prepare(tc.proc))
+			res, err := vm.Exec(tc.barg, tc.proc)
+			require.NoError(t, err)
+			require.Equal(t, vm.ExecStop, res.Status)
+
+			require.Equal(t, gen.expected, collectMarkResults(t, &tc))
+			if gen.expectSpill {
+				require.NotNil(t, tc.arg.ctr.spillEngine, "generation must traverse the spill path")
+			} else {
+				require.Nil(t, tc.arg.ctr.spillEngine)
+			}
+
+			if i+1 < len(generations) {
+				tc.arg.Reset(tc.proc, false, nil)
+				tc.barg.Reset(tc.proc, false, nil)
+				require.False(t, tc.arg.ctr.buildHasNullKey)
+				require.Zero(t, tc.arg.ctr.globalBuildRowCnt)
+				require.Nil(t, tc.arg.ctr.spillEngine)
+				tc.proc.SetMessageBoard(tc.proc.GetMessageBoard().Reset())
+				tc.proc.GetMessageBoard().BeforeRunonce()
+			}
+		})
+		if !ok {
+			return
+		}
+	}
+}
+
+// TestHashMarkJoinVarcharDuplicatesAcrossSpillReset covers the varlen hashmap
+// and spill ownership path. Duplicate build keys must not duplicate probe rows,
+// and neither their area-backed bytes nor the global NULL fact may survive a
+// prepared/cached operator reset into a different build shape.
+func TestHashMarkJoinVarcharDuplicatesAcrossSpillReset(t *testing.T) {
+	tc := newTypedMarkSpillTestCase(t, types.T_varchar.ToType())
+	defer finishMarkSpillTest(t, &tc)
+	tc.arg.SpillThreshold = 1
+	longKey := strings.Repeat("long-key-", 64)
+
+	type generation struct {
+		name        string
+		probeValues []string
+		probeNulls  []uint64
+		buildValues []string
+		buildNulls  []uint64
+		expected    map[string]markResult
+		expectSpill bool
+	}
+	generations := []generation{
+		{
+			name:        "duplicate inline and area keys with null",
+			probeValues: []string{"dup", longKey, "miss", ""},
+			probeNulls:  []uint64{3},
+			buildValues: []string{"dup", "dup", longKey, longKey, ""},
+			buildNulls:  []uint64{4},
+			expected: map[string]markResult{
+				"dup":    {value: true},
+				longKey:  {value: true},
+				"miss":   {isNull: true},
+				"<NULL>": {isNull: true},
+			},
+			expectSpill: true,
+		},
+		{
+			name:        "empty build after varlen spill",
+			probeValues: []string{"dup", ""},
+			probeNulls:  []uint64{1},
+			expected: map[string]markResult{
+				"dup":    {value: false},
+				"<NULL>": {value: false},
+			},
+		},
+		{
+			name:        "non-null duplicates after empty build",
+			probeValues: []string{"dup", "miss", ""},
+			probeNulls:  []uint64{2},
+			buildValues: []string{"dup", "dup", longKey},
+			expected: map[string]markResult{
+				"dup":    {value: true},
+				"miss":   {value: false},
+				"<NULL>": {isNull: true},
+			},
+			expectSpill: true,
+		},
+	}
+
+	for i, gen := range generations {
+		if !t.Run(gen.name, func(t *testing.T) {
+			probe := batch.NewWithSize(1)
+			probe.Vecs[0] = testutil.MakeVarcharVector(gen.probeValues, gen.probeNulls, tc.proc.Mp())
+			probe.SetRowCount(len(gen.probeValues))
+			resetChildrenWithBatch(tc.arg, probe)
+
+			build := batch.NewWithSize(1)
+			build.Vecs[0] = testutil.MakeVarcharVector(gen.buildValues, gen.buildNulls, tc.proc.Mp())
+			build.SetRowCount(len(gen.buildValues))
+			resetHashBuildChildrenWithBatch(tc.barg, build)
+
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+			require.NoError(t, tc.barg.Prepare(tc.proc))
+			res, err := vm.Exec(tc.barg, tc.proc)
+			require.NoError(t, err)
+			require.Equal(t, vm.ExecStop, res.Status)
+			require.Equal(t, gen.expected, collectStringMarkResults(t, &tc))
+			if gen.expectSpill {
+				require.NotNil(t, tc.arg.ctr.spillEngine)
+			} else {
+				require.Nil(t, tc.arg.ctr.spillEngine)
+			}
+
+			if i+1 < len(generations) {
+				tc.arg.Reset(tc.proc, false, nil)
+				tc.barg.Reset(tc.proc, false, nil)
+				require.False(t, tc.arg.ctr.buildHasNullKey)
+				require.Zero(t, tc.arg.ctr.globalBuildRowCnt)
+				require.Nil(t, tc.arg.ctr.spillEngine)
+				tc.proc.SetMessageBoard(tc.proc.GetMessageBoard().Reset())
+				tc.proc.GetMessageBoard().BeforeRunonce()
+			}
+		}) {
+			return
+		}
 	}
 }
 
