@@ -9056,7 +9056,10 @@ func transparentDerivedCorrelationTargetsNearestAncestor(ctx *BindContext, corr 
 		if _, ownsCorrelation := ancestor.bindingByTag[corr.RelPos]; ownsCorrelation {
 			return true
 		}
-		if len(ancestor.bindingByTag) > 0 {
+		// A bound query block is a real correlation level even when its FROM
+		// clause is empty. Only contexts that have not installed a binder yet
+		// are transparent while a derived table is being built.
+		if ancestor.binder != nil || len(ancestor.bindingByTag) > 0 {
 			return false
 		}
 	}

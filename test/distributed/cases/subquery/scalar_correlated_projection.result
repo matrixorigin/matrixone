@@ -165,4 +165,13 @@ SELECT `t1`.`id`, (SELECT `t0`.`name` FROM `Author` AS `t0` WHERE `t0`.`id` = `t
 SELECT JSON_LENGTH(COALESCE(JSON_ARRAYAGG(`__prisma_data__`), CONVERT('[]', JSON))) AS `post_count` FROM (SELECT JSON_OBJECT('id', `t2`.`id`, 'title', `t2`.`title`, 'authorId', `t2`.`authorId`) AS `__prisma_data__` FROM (SELECT `t1`.* FROM `Post` AS `t1` WHERE `t1`.`authorId` = 3) AS `t2`) AS `t3`;
 ➤ post_count[-5,64,0]  𝄀
 2
+SELECT `a`.`id` FROM `Author` AS `a` WHERE EXISTS (SELECT 1 WHERE EXISTS (SELECT 1 FROM (SELECT `p`.`id` FROM `Post` AS `p` WHERE `p`.`authorId` = `a`.`id`) AS `d`));
+-- @regex("correlated subquery in FROM clause is not yet implemented", true)
+correlated subquery in FROM clause is not yet implemented
+SELECT `a`.`id` FROM `Author` AS `a` WHERE EXISTS (SELECT 1 WHERE EXISTS (SELECT 1 FROM `Post` AS `p` WHERE EXISTS (SELECT 1 FROM (SELECT `a2`.`id` FROM `Author` AS `a2` WHERE `a2`.`id` = `a`.`id`) AS `d`)));
+-- @regex("correlated subquery in FROM clause is not yet implemented", true)
+correlated subquery in FROM clause is not yet implemented
+SELECT `a`.`id` FROM `Author` AS `a` WHERE EXISTS (SELECT 1 FROM `Post` AS `p` WHERE EXISTS (SELECT 1 WHERE EXISTS (SELECT 1 FROM (SELECT `a2`.`id` FROM `Author` AS `a2` WHERE `a2`.`id` = `p`.`authorId`) AS `d`)));
+-- @regex("correlated subquery in FROM clause is not yet implemented", true)
+correlated subquery in FROM clause is not yet implemented
 drop database test_subq_corr_project;

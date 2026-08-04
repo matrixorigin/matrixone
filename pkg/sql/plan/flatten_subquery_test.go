@@ -438,6 +438,54 @@ func TestTransparentCorrelatedDerivedTableRejectsDeepAncestor(t *testing.T) {
 		sql  string
 	}{
 		{
+			name: "empty intermediate scope",
+			sql: `SELECT n1.N_NATIONKEY
+				FROM NATION n1
+				WHERE EXISTS (
+					SELECT 1
+					WHERE EXISTS (
+						SELECT 1 FROM (
+							SELECT n3.N_NATIONKEY FROM NATION n3
+							WHERE n3.N_NATIONKEY = n1.N_NATIONKEY
+						) d
+					)
+				)`,
+		},
+		{
+			name: "empty then non-empty intermediate scopes",
+			sql: `SELECT n1.N_NATIONKEY
+				FROM NATION n1
+				WHERE EXISTS (
+					SELECT 1
+					WHERE EXISTS (
+						SELECT 1 FROM NATION n2
+						WHERE EXISTS (
+							SELECT 1 FROM (
+								SELECT n3.N_NATIONKEY FROM NATION n3
+								WHERE n3.N_NATIONKEY = n1.N_NATIONKEY
+							) d
+						)
+					)
+				)`,
+		},
+		{
+			name: "non-empty then empty intermediate scopes",
+			sql: `SELECT n1.N_NATIONKEY
+				FROM NATION n1
+				WHERE EXISTS (
+					SELECT 1 FROM NATION n2
+					WHERE EXISTS (
+						SELECT 1
+						WHERE EXISTS (
+							SELECT 1 FROM (
+								SELECT n3.N_NATIONKEY FROM NATION n3
+								WHERE n3.N_REGIONKEY = n2.N_REGIONKEY
+							) d
+						)
+					)
+				)`,
+		},
+		{
 			name: "grandparent only",
 			sql: `SELECT n1.N_NATIONKEY
 				FROM NATION n1
@@ -556,6 +604,22 @@ func TestTransparentCorrelatedDerivedTableNormalizationIsAtomic(t *testing.T) {
 		require.NoError(t, newBuilder(nodes).normalizeTransparentCorrelatedDerivedTable(3, ctx))
 		require.Equal(t, int32(1), corr.Depth)
 		require.True(t, ctx.isCorrelated)
+	})
+
+	t.Run("binder-backed empty ancestor is rejected atomically", func(t *testing.T) {
+		corr := &plan.CorrColRef{RelPos: outerTag, Depth: 3}
+		nodes := newNodes(corr, &plan.Node{NodeType: plan.Node_TABLE_SCAN})
+		nodes[1].Children[0] = 0
+		builder := newBuilder(nodes)
+		owner := NewBindContext(nil, nil)
+		owner.bindingByTag[outerTag] = nil
+		emptyQuery := NewBindContext(nil, owner)
+		emptyQuery.binder = NewWhereBinder(builder, emptyQuery)
+		ctx := NewBindContext(nil, emptyQuery)
+		err := builder.normalizeTransparentCorrelatedDerivedTable(3, ctx)
+		require.ErrorContains(t, err, "correlated subquery in FROM clause is not yet implemented")
+		require.Equal(t, int32(3), corr.Depth)
+		require.False(t, ctx.isCorrelated)
 	})
 
 	t.Run("deeper ancestor is rejected atomically", func(t *testing.T) {

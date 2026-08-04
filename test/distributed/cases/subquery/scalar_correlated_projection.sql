@@ -66,5 +66,14 @@ SELECT `t0`.`id`, (SELECT COUNT(*) FROM (SELECT `t1`.`id` FROM `Post` AS `t1` WH
 SELECT `t1`.`id`, (SELECT `t0`.`name` FROM `Author` AS `t0` WHERE `t0`.`id` = `t1`.`authorId`) AS `author_name` FROM `Post` AS `t1` ORDER BY `t1`.`id`;
 SELECT JSON_LENGTH(COALESCE(JSON_ARRAYAGG(`__prisma_data__`), CONVERT('[]', JSON))) AS `post_count` FROM (SELECT JSON_OBJECT('id', `t2`.`id`, 'title', `t2`.`title`, 'authorId', `t2`.`authorId`) AS `__prisma_data__` FROM (SELECT `t1`.* FROM `Post` AS `t1` WHERE `t1`.`authorId` = 3) AS `t2`) AS `t3`;
 
+-- Empty query blocks are real correlation levels even without FROM bindings.
+-- @regex("correlated subquery in FROM clause is not yet implemented",true)
+SELECT `a`.`id` FROM `Author` AS `a` WHERE EXISTS (SELECT 1 WHERE EXISTS (SELECT 1 FROM (SELECT `p`.`id` FROM `Post` AS `p` WHERE `p`.`authorId` = `a`.`id`) AS `d`));
+-- Mixed empty/non-empty ancestor orderings must both stay fail-closed.
+-- @regex("correlated subquery in FROM clause is not yet implemented",true)
+SELECT `a`.`id` FROM `Author` AS `a` WHERE EXISTS (SELECT 1 WHERE EXISTS (SELECT 1 FROM `Post` AS `p` WHERE EXISTS (SELECT 1 FROM (SELECT `a2`.`id` FROM `Author` AS `a2` WHERE `a2`.`id` = `a`.`id`) AS `d`)));
+-- @regex("correlated subquery in FROM clause is not yet implemented",true)
+SELECT `a`.`id` FROM `Author` AS `a` WHERE EXISTS (SELECT 1 FROM `Post` AS `p` WHERE EXISTS (SELECT 1 WHERE EXISTS (SELECT 1 FROM (SELECT `a2`.`id` FROM `Author` AS `a2` WHERE `a2`.`id` = `p`.`authorId`) AS `d`)));
+
 -- @teardown
 drop database test_subq_corr_project;
