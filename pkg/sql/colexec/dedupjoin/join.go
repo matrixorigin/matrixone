@@ -16,7 +16,6 @@ package dedupjoin
 import (
 	"bytes"
 	"context"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -941,14 +940,16 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 						}
 					}
 					if len(rowStr) == 0 {
-						rowStr = ctr.vecs[0].RowToString(i + k)
+						rowStr, err = colexec.FormatDedupKey(ctr.vecs[0], i+k, ap.DedupColTypes)
+						if err != nil {
+							return err
+						}
 					}
 				} else {
-					rowItems, err := types.StringifyTuple(ctr.vecs[0].GetBytesAt(i+k), ap.DedupColTypes)
+					rowStr, err = colexec.FormatDedupKey(ctr.vecs[0], i+k, ap.DedupColTypes)
 					if err != nil {
 						return err
 					}
-					rowStr = "(" + strings.Join(rowItems, ",") + ")"
 				}
 				return moerr.NewDuplicateEntry(proc.Ctx, rowStr, ap.DedupColName)
 			case plan.Node_IGNORE:

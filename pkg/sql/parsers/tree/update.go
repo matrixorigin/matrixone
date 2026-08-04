@@ -26,17 +26,23 @@ import (
 // update statement
 type Update struct {
 	statementImpl
-	Tables TableExprs
-	Exprs  UpdateExprs
-	Ignore bool
+	Tables   TableExprs
+	Exprs    UpdateExprs
+	Priority string
+	Ignore   bool
+	// MultiTable records the comma-separated multi-target parser production.
+	// The normalized Tables tree alone cannot distinguish it from an explicit
+	// CROSS JOIN, but DML RETURNING gives those forms different stable errors.
+	MultiTable bool
 	// From is the optional PostgreSQL-style FROM clause that introduces
 	// additional read-only join sources. It is nil for the classic
 	// single-table and multi-table (comma) UPDATE syntaxes.
-	From    *From
-	Where   *Where
-	OrderBy OrderBy
-	Limit   *Limit
-	With    *With
+	From      *From
+	Where     *Where
+	OrderBy   OrderBy
+	Limit     *Limit
+	With      *With
+	Returning SelectExprs
 }
 
 func (node *Update) Format(ctx *FmtCtx) {
@@ -45,6 +51,10 @@ func (node *Update) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 	}
 	ctx.WriteString("update")
+	if node.Priority != "" {
+		ctx.WriteByte(' ')
+		ctx.WriteString(strings.ToLower(node.Priority))
+	}
 	if node.Ignore {
 		ctx.WriteString(" ignore")
 	}
@@ -95,7 +105,13 @@ func (node *Update) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.Limit.Format(ctx)
 	}
+	if node.HasReturning() {
+		ctx.WriteString(" returning ")
+		node.Returning.Format(ctx)
+	}
 }
+
+func (node *Update) HasReturning() bool { return len(node.Returning) > 0 }
 
 func (node *Update) GetStatementType() string { return "Update" }
 func (node *Update) GetQueryType() string     { return QueryTypeDML }

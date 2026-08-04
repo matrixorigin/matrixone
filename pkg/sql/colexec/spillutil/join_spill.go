@@ -48,6 +48,9 @@ const (
 	// Coalesce serialized records across source batches without retaining
 	// selected vectors. Retained buffer capacity is charged once.
 	spillWriteCoalesceSize = 64 << 10
+	// Match the write coalescing boundary so one physical read usually consumes
+	// a complete write while keeping per-reader admission bounded.
+	spillReadBufferSize = spillWriteCoalesceSize
 	// Keep enough decoded-batch headroom to reuse the reservation for ordinary
 	// spill records without retaining the pre-admission unmarshal estimate
 	// for a large record until the reader closes. The additive bound makes the
@@ -80,6 +83,7 @@ func checkSpillCanceled(proc *process.Process) error {
 // instead of an untracked Go-heap buffer.
 type BucketReader struct {
 	fd            *os.File
+	reader        *accountedFileReader
 	header        [16]byte
 	headerPending bool
 	spillFile     *message.SpillFile
@@ -92,7 +96,12 @@ type BucketReader struct {
 func (r *BucketReader) ReadBatch(
 	proc *process.Process,
 	reuseBat *batch.Batch,
-) (*batch.Batch, error) {
+) (_ *batch.Batch, retErr error) {
+	defer func() {
+		if retErr != nil && !errors.Is(retErr, io.EOF) && r.reader != nil {
+			_ = r.reader.DisableBufferAt(r.reader.Offset())
+		}
+	}()
 	if err := checkSpillCanceled(proc); err != nil {
 		return nil, err
 	}
@@ -107,6 +116,17 @@ func (r *BucketReader) ReadBatch(
 	}
 	if r.allocation == nil {
 		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	if r.reader == nil {
+		var err error
+		r.reader, err = newAccountedFileReader(
+			proc.Mp(),
+			r.allocation,
+			r.fd,
+		)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := reuseBat.SetAllocationAccount(r.allocation.decoded); err != nil {
 		return nil, err
@@ -201,7 +221,7 @@ func (r *BucketReader) peekRecordRows(proc *process.Process) (int64, error) {
 		return 0, err
 	}
 	if !r.headerPending {
-		if _, err := io.ReadFull(r.fd, r.header[:]); err != nil {
+		if _, err := io.ReadFull(r.reader, r.header[:]); err != nil {
 			return 0, err
 		}
 		r.headerPending = true
@@ -225,7 +245,7 @@ func (r *BucketReader) readBatchRecord(
 		return nil, err
 	}
 	if !r.headerPending {
-		if _, err := io.ReadFull(r.fd, r.header[:]); err != nil {
+		if _, err := io.ReadFull(r.reader, r.header[:]); err != nil {
 			return nil, err
 		}
 	}
@@ -238,16 +258,13 @@ func (r *BucketReader) readBatchRecord(
 			"negative spill batch header",
 		)
 	}
-	payloadOffset, err := r.fd.Seek(0, io.SeekCurrent)
-	if err != nil {
-		return nil, err
-	}
+	payloadOffset := r.reader.Offset()
 	decode := func() (io.LimitedReader, error) {
 		reuseBat.CleanOnlyData()
 		if err := checkSpillCanceled(proc); err != nil {
 			return io.LimitedReader{}, err
 		}
-		limited := io.LimitedReader{R: r.fd, N: batchSize}
+		limited := io.LimitedReader{R: r.reader, N: batchSize}
 		return limited, reuseBat.UnmarshalFromReaderWithGrouping(&limited, proc.Mp())
 	}
 	limited, decodeErr := decode()
@@ -258,7 +275,7 @@ func (r *BucketReader) readBatchRecord(
 		if err := reuseBat.SetAllocationAccount(r.allocation.decoded); err != nil {
 			return nil, err
 		}
-		if _, err := r.fd.Seek(payloadOffset, io.SeekStart); err != nil {
+		if err := r.reader.DisableBufferAt(payloadOffset); err != nil {
 			return nil, err
 		}
 		r.cleanRetries++
@@ -274,7 +291,7 @@ func (r *BucketReader) readBatchRecord(
 			limited.N,
 		)
 	}
-	if _, err := io.ReadFull(r.fd, r.header[:8]); err != nil {
+	if _, err := io.ReadFull(r.reader, r.header[:8]); err != nil {
 		return nil, err
 	}
 	if types.DecodeUint64(r.header[:8]) != SpillMagic {
@@ -312,6 +329,14 @@ func (r *BucketReader) ResetForSpillFile(file *message.SpillFile) error {
 	}
 	r.spillFile = file
 	r.fd = file.File()
+	if r.reader != nil {
+		if err := r.reader.Reset(r.fd); err != nil {
+			_ = file.Close()
+			r.spillFile = nil
+			r.fd = nil
+			return err
+		}
+	}
 	r.headerPending = false
 	r.schema = nil
 	return nil
@@ -328,12 +353,19 @@ func (r *BucketReader) closeCurrentFile() {
 		_ = r.fd.Close()
 		r.fd = nil
 	}
+	if r.reader != nil {
+		_ = r.reader.Reset(nil)
+	}
 	r.headerPending = false
 	r.schema = nil
 }
 
 func (r *BucketReader) Close() {
 	r.closeCurrentFile()
+	if r.reader != nil {
+		r.reader.Free()
+		r.reader = nil
+	}
 }
 
 // BucketWriter writes serialized batch records to an fd.

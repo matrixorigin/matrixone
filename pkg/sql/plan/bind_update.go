@@ -96,6 +96,14 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	); err != nil {
 		return 0, err
 	}
+	if stmt.HasReturning() {
+		if len(dmlCtx.tableDefs) != 1 {
+			return 0, returningNotSupported(builder, "multi-table UPDATE")
+		}
+		if err = validateReturningTarget(builder, dmlCtx.tableDefs[0], dmlCtx.objRefs[0]); err != nil {
+			return 0, err
+		}
+	}
 	onDuplicateAction := plan.Node_FAIL
 	if stmt.Ignore {
 		onDuplicateAction = plan.Node_IGNORE
@@ -131,6 +139,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		inlineIrregularIndexes[i], legacyIrregularRoute, err = classifyIrregularIndexesForUpdate(
 			builder.GetContext(), tableDef, dmlCtx.updateCol2Expr[i])
 		if err != nil {
+			if stmt.HasReturning() {
+				if feature := returningUpdatePlannerFeature(err); feature != "" {
+					return 0, returningNotSupported(builder, feature)
+				}
+			}
 			return 0, err
 		}
 		if legacyIrregularRoute {
@@ -139,7 +152,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				moerr.NewUnsupportedDML(builder.GetContext(), "update vector/full-text index"),
 			)
 		}
-
 		validIndexes, _ := getValidIndexes(tableDef)
 		tableDef.Indexes = validIndexes
 
@@ -430,6 +442,30 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	)
 	if err != nil {
 		return 0, err
+	}
+
+	if stmt.HasReturning() {
+		tableDef := dmlCtx.tableDefs[0]
+		alias := dmlCtx.aliases[0]
+		colPos := make(map[string]int32, len(tableDef.Cols))
+		for _, col := range tableDef.Cols {
+			qualifiedName := alias + "." + col.Name
+			pos, ok := oldColName2Idx[qualifiedName]
+			if !ok {
+				return 0, moerr.NewInternalErrorf(
+					builder.GetContext(), "DML RETURNING cannot locate old image column %s", col.Name,
+				)
+			}
+			if newPos, ok := newColName2Idx[qualifiedName]; ok {
+				pos = newPos
+			}
+			colPos[strings.ToLower(col.Name)] = pos
+		}
+		lastNodeID = builder.materializeReturningSource(
+			bindCtx, lastNodeID, selectNodeTag, tableDef, dmlCtx.objRefs[0], tableDef.Name, alias, colPos,
+		)
+		selectNode = builder.qry.Nodes[lastNodeID]
+		selectNodeTag = selectNode.BindingTags[0]
 	}
 
 	idxScanNodes := make([][]*plan.Node, len(dmlCtx.tableDefs))

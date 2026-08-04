@@ -1312,6 +1312,12 @@ message Query {
   // Catalog objects that a rewrite depends on even when the final plan no
   // longer contains the scans that originally carried those objects.
   repeated ObjectRef catalog_dependencies = 12;
+
+  // DML RETURNING is a deferred result: returning_step identifies the step
+  // whose rows are buffered until the statement has reached its terminal
+  // transaction outcome. It is a step-array index, not a node id.
+  bool has_returning = 13;
+  int32 returning_step = 14;
 }
 
 message TransationControl {
