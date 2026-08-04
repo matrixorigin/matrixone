@@ -1308,6 +1308,11 @@ func (s *service) handleBindChanged(newBind pb.LockTable) {
 	s.bindChangeMu.Lock()
 	defer s.bindChangeMu.Unlock()
 
+	current := s.tableGroups.get(newBind.Group, newBind.Table)
+	if current != nil && !current.getBind().Changed(newBind) {
+		return
+	}
+
 	new := s.createLockTableByBind(newBind)
 	s.tableGroups.set(newBind.Group, newBind.Table, new)
 	s.fenceByBindChanged(newBind)
