@@ -714,6 +714,41 @@ func TestMinMaxSerialExpressionsKeepBinaryCollation(t *testing.T) {
 	}
 }
 
+func TestMinMaxConcatExpressionsKeepBinaryCollation(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	mock.ctxt.tables["bind_select"].Cols[2].Typ = plan.Type{
+		Id:      int32(types.T_varchar),
+		Width:   10,
+		Charset: uint32(types.CharsetUTF8MB4Bin),
+	}
+
+	p, err := runOneStmt(mock, t,
+		"select min(concat(c, c)), max(concat_ws('-', c, c)) "+
+			"from select_test.bind_select")
+	require.NoError(t, err)
+
+	var aggregates []*plan.Expr
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG {
+			aggregates = node.AggList
+			break
+		}
+	}
+	require.Len(t, aggregates, 2)
+	for _, aggregate := range aggregates {
+		aggregateFunction := aggregate.GetF()
+		require.NotNil(t, aggregateFunction)
+		require.Equal(t, uint32(types.CharsetUTF8MB4Bin), aggregate.Typ.Charset)
+		require.Len(t, aggregateFunction.Args, 1)
+		concat := aggregateFunction.Args[0]
+		concatFunction := concat.GetF()
+		require.NotNil(t, concatFunction)
+		require.NotNil(t, concatFunction.Func)
+		require.Contains(t, []string{"concat", "concat_ws"}, concatFunction.Func.ObjName)
+		require.Equal(t, uint32(types.CharsetUTF8MB4Bin), concat.Typ.Charset)
+	}
+}
+
 func TestBindSerialFunctionOverEmptyExprListDoesNotPanic(t *testing.T) {
 	ctx := context.Background()
 

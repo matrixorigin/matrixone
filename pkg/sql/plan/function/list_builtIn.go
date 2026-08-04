@@ -62,6 +62,30 @@ func serializedTupleReturnType(_ []types.Type) types.Type {
 	return typ
 }
 
+func concatReturnType(parameters []types.Type) types.Type {
+	result := types.T_varchar.ToType()
+	for _, parameter := range parameters {
+		if parameter.Oid == types.T_binary || parameter.Oid == types.T_varbinary ||
+			parameter.Oid == types.T_blob {
+			return types.T_blob.ToType()
+		}
+
+		// The type system does not carry a separate MySQL coercibility rank here,
+		// so retain the strongest bytewise identity represented by the arguments.
+		// Opaque binary bytes must not be reinterpreted as UTF-8; utf8mb4_bin in
+		// turn dominates the default case-insensitive text identity.
+		switch parameter.Charset {
+		case types.CharsetBinary:
+			result.Charset = types.CharsetBinary
+		case types.CharsetUTF8MB4Bin:
+			if result.Charset != types.CharsetBinary {
+				result.Charset = types.CharsetUTF8MB4Bin
+			}
+		}
+	}
+	return result
+}
+
 // wkbConstructor builds a typed WKB geometry constructor function definition
 // (ST_PointFromWKB, ...) accepting varchar/blob/varbinary input.
 func wkbConstructor(id int, fn executeLogicOfOverload) FuncNew {
@@ -301,14 +325,7 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				retType: func(parameters []types.Type) types.Type {
-					for _, p := range parameters {
-						if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
-							return types.T_blob.ToType()
-						}
-					}
-					return types.T_varchar.ToType()
-				},
+				retType:    concatReturnType,
 				newOp: func() executeLogicOfOverload {
 					return builtInConcat
 				},
@@ -346,14 +363,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				args:       []types.T{},
-				retType: func(parameters []types.Type) types.Type {
-					for _, p := range parameters {
-						if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
-							return types.T_blob.ToType()
-						}
-					}
-					return types.T_varchar.ToType()
-				},
+				retType:    concatReturnType,
 				newOp: func() executeLogicOfOverload {
 					return ConcatWs
 				},
