@@ -3304,9 +3304,8 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			if err != nil {
 				return nil, err
 			}
-			// COM_STMT_PREPARE rewrites the statement before wrapping it in
-			// PREPARE ... FROM. The wrapper SQL no longer starts with the hint,
-			// so use the policy captured on UserInput for its single nested stmt.
+			// Protocol callers may explicitly restore a remap captured with an
+			// already prepared statement whose current SQL text has no hint.
 			if len(execCtx.input.remapDb) > 0 && len(statementRemaps) == 1 {
 				statementRemaps[0] = execCtx.input.remapDb
 			}
@@ -5046,18 +5045,17 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_STMT_PREPARE:
 		ses.SetCmd(COM_STMT_PREPARE)
 		sql = commonutil.UnsafeBytesToString(req.GetData().([]byte))
-		var preparedRemapDb map[string]string
-		// Inject rewrite rules hint before prepare wrapping (only if enabled)
-		if ses.rewriteEnabled.Load() {
-			var rewriteErr error
-			sql, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, sql)
-			if rewriteErr != nil {
-				ses.resetDiagnostics()
-				markRowCountFailed(ses, ses.GetProc())
-				resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
-				return resp, nil
-			}
-			preparedRemapDb = extractInlineRemapDb(sql)
+		// Keep the frozen request policy on the outer PREPARE wrapper. Its nested
+		// statement is rewritten by prepareStringStatement, exactly like SQL-level
+		// PREPARE ... FROM 'sql'. Rewriting the payload before quoting it would put
+		// an already-materialized internal hint inside the string and consume it a
+		// second time.
+		rewritePolicy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)
+		if rewriteErr != nil {
+			ses.resetDiagnostics()
+			markRowCountFailed(ses, ses.GetProc())
+			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
+			return resp, nil
 		}
 		ses.addSqlCount(1)
 
@@ -5066,11 +5064,19 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// reparsing it as part of the outer PREPARE grammar.
 		newLastStmtID := ses.GenNewStmtId()
 		newStmtName := getPrepareStmtName(newLastStmtID)
-		sql = buildComStmtPrepareSQL(newStmtName, sql, sessionSQLModeForParser(ses))
+		input, rewriteErr := buildComStmtPrepareInput(
+			execCtx.reqCtx, newStmtName, sql, sessionSQLModeForParser(ses), rewritePolicy)
+		if rewriteErr != nil {
+			ses.resetDiagnostics()
+			markRowCountFailed(ses, ses.GetProc())
+			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
+			return resp, nil
+		}
+		sql = input.getSql()
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
 		savedRowCount := ses.GetLastAffectedRows()
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql, remapDb: preparedRemapDb})
+		err = doComQuery(ses, execCtx, input)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), err)
 		} else {
@@ -5199,6 +5205,31 @@ func buildComStmtPrepareSQL(stmtName, sql, sqlMode string) string {
 		escaped = strings.ReplaceAll(escaped, "\\", "\\\\")
 	}
 	return fmt.Sprintf("prepare %s from '%s'", quotePrepareStmtName(stmtName), escaped)
+}
+
+func buildComStmtPrepareInput(
+	ctx context.Context,
+	stmtName string,
+	sql string,
+	sqlMode string,
+	policy *rewritePolicySnapshot,
+) (*UserInput, error) {
+	// Validate only the client-supplied inline rules here. The request policy is
+	// deliberately materialized on the outer wrapper below and must not be
+	// decoded from the nested string as if it were user input.
+	if _, _, err := extractInlineRewrites(ctx, sql); err != nil {
+		return nil, err
+	}
+	wrapper := buildComStmtPrepareSQL(stmtName, sql, sqlMode)
+	materialized, err := policy.rewrite(ctx, wrapper, sqlMode)
+	if err != nil {
+		return nil, err
+	}
+	return &UserInput{
+		sql:                       materialized,
+		rewritePolicy:             policy,
+		rewritePolicyMaterialized: true,
+	}, nil
 }
 
 func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string, *PrepareStmt, error) {
