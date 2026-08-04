@@ -235,12 +235,13 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 			storeEngine: mockEngine,
 		},
 		procBuildHelper: processHelper{
-			id:           "test-proc-id",
-			accountId:    catalog.System_Account,
-			unixTime:     time.Now().Unix(),
-			affectedRows: 42,
-			txnClient:    txnClient,
-			txnOperator:  txnOperator,
+			id:                     "test-proc-id",
+			accountId:              catalog.System_Account,
+			unixTime:               time.Now().Unix(),
+			affectedRows:           42,
+			statementRuntimeIgnore: true,
+			txnClient:              txnClient,
+			txnOperator:            txnOperator,
 			prepareParams: pipeline.PrepareParamInfo{
 				Length: 2,
 				Data:   append([]byte(nil), params.GetData()...),
@@ -265,6 +266,7 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	require.True(t, compile.proc.GetPrepareParamIsBin(0))
 	require.False(t, compile.proc.GetPrepareParamIsBin(1))
 	require.Equal(t, int64(42), compile.proc.GetAffectedRows())
+	require.True(t, compile.proc.GetStmtProfile().GetStatementIgnore())
 	require.NotNil(t, compile.fill, "fill callback should be set")
 	remoteParams := compile.proc.GetPrepareParams()
 	require.NotPanics(t, compile.Release)
@@ -342,10 +344,11 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	t.Cleanup(func() { params.Free(proc.Mp()) })
 
 	procInfo := &pipeline.ProcessInfo{
-		Id:           "test-proc-id",
-		AccountId:    catalog.System_Account,
-		UnixTime:     time.Now().Unix(),
-		AffectedRows: 42,
+		Id:                     "test-proc-id",
+		AccountId:              catalog.System_Account,
+		UnixTime:               time.Now().Unix(),
+		AffectedRows:           42,
+		StatementRuntimeIgnore: true,
 		Snapshot: txn.CNTxnSnapshot{
 			Txn: txn.TxnMeta{
 				ID: []byte("test-txn-id"),
@@ -371,6 +374,7 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	require.Equal(t, procInfo.PrepareParams.Data, helper.prepareParams.Data)
 	require.Equal(t, procInfo.PrepareParams.Area, helper.prepareParams.Area)
 	require.Equal(t, int64(42), helper.affectedRows)
+	require.True(t, helper.statementRuntimeIgnore)
 	require.NotNil(t, helper.txnOperator, "txnOperator should be created from snapshot")
 	// Verify that rebuilt txnOperator has nil workspace (key point for remote run)
 	require.Nil(t, helper.txnOperator.GetWorkspace(), "rebuilt txnOperator should have nil workspace initially")

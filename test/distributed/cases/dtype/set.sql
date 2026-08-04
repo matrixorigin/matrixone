@@ -25,6 +25,11 @@ insert into set01 values
 
 select * from set01 order by id;
 select * from set01 where colors = 'red,green' order by id;
+-- SET keeps its comma-separated display value in string comparisons, but uses
+-- its member bitmap for arithmetic, bitwise, and numeric comparison contexts.
+select id, colors + 0, colors & 1, colors = 'red,blue' from set01 order by id;
+select id from set01 where colors & 1 order by id;
+select id from set01 where colors = 3 order by id;
 select * from set01 order by colors;
 -- SET bit-order, including multi-member values, must survive a derived table.
 select id, colors from (select id, colors from set01) d order by colors, id;

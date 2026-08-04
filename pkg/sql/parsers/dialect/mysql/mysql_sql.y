@@ -404,7 +404,11 @@ func sqlTaskInt64(v any) int64 {
 %token <str> BIT TINYINT SMALLINT MEDIUMINT INT INTEGER BIGINT INTNUM
 %token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC DECIMAL_VALUE PRECISION
 %token <str> TIME TIMESTAMP DATETIME YEAR
-%token <str> CHAR VARCHAR BOOL CHARACTER VARBINARY NCHAR
+%token <str> CHAR
+%nonassoc <str> VARCHAR
+%token <str> BOOL CHARACTER
+%nonassoc <str> VARBINARY
+%token <str> NCHAR LONG
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT DATALINK
 %token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64 VECBF16 VECF16 VECINT8 VECUINT8
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
@@ -14244,6 +14248,30 @@ char_type:
             },
         }
     }
+|   LONG VARCHAR
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.BlobFamily,
+                FamilyString: "mediumtext",
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_TEXT),
+            },
+        }
+    }
+|   LONG VARBINARY
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.BlobFamily,
+                FamilyString: "mediumblob",
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_MEDIUM_BLOB),
+            },
+        }
+    }
 |   DATALINK
     {
         locale := ""
@@ -15000,6 +15028,7 @@ non_reserved_keyword:
 |   LEVEL
 |   LINESTRING
 |   LOGSERVICE
+|   LONG %prec LOWER_THAN_STRING
 |   LONGBLOB
 |   LONGTEXT
 |   LOCAL
