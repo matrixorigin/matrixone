@@ -37,8 +37,8 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 12)
-	require.Len(t, clusterUpgEntries, 1)
+	require.Len(t, tenantUpgEntries, 12+len(catalog.LifecycleTenantTableDefinitions))
+	require.Len(t, clusterUpgEntries, 1+len(catalog.LifecycleClusterTableDefinitions)+2)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
 	require.Equal(t, mongodb.TableMappings, tenantUpgEntries[1].TableName)
@@ -81,7 +81,7 @@ func TestUpgradeEntries(t *testing.T) {
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 12)
+	require.Len(t, tenantUpgEntries, 12+len(catalog.LifecycleTenantTableDefinitions))
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
@@ -983,6 +983,74 @@ func TestPopulateInformationSchemaCharacterSetsIsIdempotent(t *testing.T) {
 	require.NoError(t, entry.Upgrade(txn, 42))
 	require.Len(t, executed, 1)
 	require.True(t, strings.HasPrefix(executed[0], "SELECT 1 FROM information_schema.CHARACTER_SETS"))
+}
+
+func TestLifecycleCatalogUpgradeEntries(t *testing.T) {
+	const existingTenantEntries = 3
+	for i, definition := range catalog.LifecycleTenantTableDefinitions {
+		entry := tenantUpgEntries[existingTenantEntries+i]
+		require.Equal(t, definition.Schema, entry.Schema)
+		require.Equal(t, definition.Name, entry.TableName)
+		require.Equal(t, versions.CREATE_NEW_TABLE, entry.UpgType)
+		lower := strings.ToLower(entry.UpgSql)
+		require.Contains(t, lower, "create table")
+		require.Contains(t, lower, "primary key")
+		require.NotContains(t, lower, "alter table mo_catalog.mo_tables")
+		require.NotContains(t, lower, "alter table mo_catalog.mo_columns")
+		require.NotContains(t, lower, "alter table mo_catalog.mo_stages")
+	}
+
+	lifecycleClusterEntries := clusterUpgEntries[1:]
+	require.Len(t, lifecycleClusterEntries, len(catalog.LifecycleClusterTableDefinitions)+2)
+	root := lifecycleClusterEntries[0]
+	require.Equal(t, catalog.MO_CATALOG, root.Schema)
+	require.Equal(t, catalog.MO_LIFECYCLE_CLEANUP_ROOTS, root.TableName)
+	require.Equal(t, versions.CREATE_NEW_TABLE, root.UpgType)
+	rootDDL := strings.ToLower(root.UpgSql)
+	for _, required := range []string{"create cluster table", "primary key", "root_id", "attempt_id", "state_version"} {
+		require.Contains(t, rootDDL, required)
+	}
+
+	activation := lifecycleClusterEntries[1]
+	require.Equal(t, catalog.MO_FEATURE_REGISTRY, activation.TableName)
+	require.Equal(t, versions.MODIFY_METADATA, activation.UpgType)
+	for _, required := range []string{"lifecycle", "false", "archive_stages", "on duplicate key"} {
+		require.Contains(t, strings.ToLower(activation.UpgSql), required)
+	}
+
+	coordinator := lifecycleClusterEntries[2]
+	require.Equal(t, catalog.MOTaskDB, coordinator.Schema)
+	require.Equal(t, "sys_cron_task", coordinator.TableName)
+	require.Equal(t, versions.MODIFY_METADATA, coordinator.UpgType)
+	for _, required := range []string{"tae_object_lifecycle", "sys_cron_task", "on duplicate key"} {
+		require.Contains(t, strings.ToLower(coordinator.UpgSql), required)
+	}
+}
+
+func TestLifecycleCatalogRollingUpgradeCompatibility(t *testing.T) {
+	for _, tableName := range []string{
+		catalog.MO_LIFECYCLE_RESTORE_ATTEMPTS,
+		catalog.MO_LIFECYCLE_RESTORE_CHUNKS,
+	} {
+		var ddl string
+		for _, entry := range tenantUpgEntries {
+			if entry.TableName == tableName {
+				ddl = strings.ToLower(entry.UpgSql)
+				break
+			}
+		}
+		require.NotEmpty(t, ddl, "missing Lifecycle tenant upgrade for %s", tableName)
+		require.Contains(t, ddl, "account_id int unsigned not null default 0")
+	}
+
+	var cleanupDDL string
+	for _, entry := range clusterUpgEntries {
+		if entry.TableName == catalog.MO_LIFECYCLE_CLEANUP_ROOTS {
+			cleanupDDL = strings.ToLower(entry.UpgSql)
+			break
+		}
+	}
+	require.Contains(t, cleanupDDL, "create cluster table")
 }
 
 func TestRetireKafkaSinkDaemonTasks(t *testing.T) {

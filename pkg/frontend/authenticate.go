@@ -1121,6 +1121,11 @@ var (
 
 	// drop tables for the tenant
 	dropSqls = []string{
+		`drop table if exists mo_catalog.mo_lifecycle_restore_chunks;`,
+		`drop table if exists mo_catalog.mo_lifecycle_restore_attempts;`,
+		`drop table if exists mo_catalog.mo_lifecycle_ttl_receipts;`,
+		`drop table if exists mo_catalog.mo_lifecycle_datasets;`,
+		`drop table if exists mo_catalog.mo_lifecycle_bindings;`,
 		`drop table if exists mo_catalog.mo_user;`,
 		`drop table if exists mo_catalog.mo_role;`,
 		`drop table if exists mo_catalog.mo_user_grant;`,
