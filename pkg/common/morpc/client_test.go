@@ -1441,7 +1441,10 @@ func TestMaybeCreateLockedWithEmptyBackends(t *testing.T) {
 		assert.NoError(t, c.Close())
 	}()
 
-	assert.True(t, c.maybeCreateLocked("b1"))
+	c.mu.Lock()
+	created := c.maybeCreateLocked("b1")
+	c.mu.Unlock()
+	assert.True(t, created)
 }
 
 func TestMaybeCreateLockedWithNotFullBackendsAndHasAnyBusy(t *testing.T) {
@@ -1454,11 +1457,14 @@ func TestMaybeCreateLockedWithNotFullBackendsAndHasAnyBusy(t *testing.T) {
 	defer func() {
 		assert.NoError(t, c.Close())
 	}()
+	c.mu.Lock()
 	c.mu.backends["b1"] = []Backend{
 		&testBackend{busy: false},
 		&testBackend{busy: true},
 	}
-	assert.True(t, c.maybeCreateLocked("b1"))
+	created := c.maybeCreateLocked("b1")
+	c.mu.Unlock()
+	assert.True(t, created)
 }
 
 func TestMaybeCreateLockedWithNotFullBackendsAndNoBusy(t *testing.T) {
@@ -1468,10 +1474,13 @@ func TestMaybeCreateLockedWithNotFullBackendsAndNoBusy(t *testing.T) {
 	defer func() {
 		assert.NoError(t, c.Close())
 	}()
+	c.mu.Lock()
 	c.mu.backends["b1"] = []Backend{
 		&testBackend{busy: false},
 	}
-	assert.False(t, c.maybeCreateLocked("b1"))
+	created := c.maybeCreateLocked("b1")
+	c.mu.Unlock()
+	assert.False(t, created)
 }
 
 func TestMaybeCreateLockedWithFullBackends(t *testing.T) {
@@ -1484,10 +1493,13 @@ func TestMaybeCreateLockedWithFullBackends(t *testing.T) {
 	defer func() {
 		assert.NoError(t, c.Close())
 	}()
+	c.mu.Lock()
 	c.mu.backends["b1"] = []Backend{
 		&testBackend{busy: false},
 	}
-	assert.False(t, c.maybeCreateLocked("b1"))
+	created := c.maybeCreateLocked("b1")
+	c.mu.Unlock()
+	assert.False(t, created)
 }
 
 func TestGetBackendAutoCreateDisabled(t *testing.T) {

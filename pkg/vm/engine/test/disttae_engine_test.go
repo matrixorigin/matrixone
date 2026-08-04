@@ -1661,6 +1661,7 @@ func TestCommitKeepsCreatedIndexTableBeforeDependentWrites(t *testing.T) {
 		"primary key(table_id, name, column_name)",
 		1)
 	execSQL(txnop, moIndexesDDL)
+	execSQL(txnop, frontend.MoCatalogMoSubsDDL)
 	execSQL(txnop, frontend.MoCatalogMoForeignKeysDDL)
 	execSQL(txnop, fmt.Sprintf("create database %s", dbName))
 	for i := 0; i < 15; i++ {

@@ -2399,9 +2399,21 @@ func handleAlterRole(ses FeSession, execCtx *ExecCtx, ar *tree.AlterRole) error 
 	return doAlterRole(execCtx.reqCtx, ses.(*Session), ar)
 }
 
+var initFunctionFunc = InitFunction
+
 func handleCreateFunction(ses FeSession, execCtx *ExecCtx, cf *tree.CreateFunction) error {
 	tenant := ses.GetTenantInfo()
-	return InitFunction(ses.(*Session), execCtx, tenant, cf)
+	if err := initFunctionFunc(ses.(*Session), execCtx, tenant, cf); err != nil {
+		return err
+	}
+	bh := ses.GetBackgroundExec(execCtx.reqCtx)
+	defer bh.Close()
+	if err := retryPendingViewMetadataFunc(execCtx.reqCtx, ses.(*Session), bh); err != nil {
+		// InitFunction commits its own transaction before returning. Metadata
+		// recovery must not turn a committed CREATE FUNCTION into a failure.
+		logutil.Warn("failed to retry pending view metadata after create function", zap.Error(err))
+	}
+	return nil
 }
 
 func handleDropFunction(ses FeSession, execCtx *ExecCtx, df *tree.DropFunction, proc *process.Process) error {

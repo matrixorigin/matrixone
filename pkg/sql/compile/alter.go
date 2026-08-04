@@ -16,16 +16,19 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
@@ -46,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -1870,12 +1874,54 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 
 func (s *Scope) doAlterTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
+	refreshViewMetadata := !features.IsPartition(qry.GetTableDef().GetFeatureFlag()) &&
+		(qry.AlgorithmType == plan.AlterTable_COPY || qry.GetCopyTableDef() != nil)
+	pendingRecoveryName := ""
+	for _, action := range qry.GetActions() {
+		if rename, ok := action.GetAction().(*plan.AlterTable_Action_AlterName); ok {
+			pendingRecoveryName = rename.AlterName.GetNewName()
+		}
+	}
+	sourceAccountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	sourceLogicalID := qry.GetTableDef().GetLogicalId()
+	if sourceLogicalID == 0 {
+		sourceLogicalID = qry.GetTableDef().GetTblId()
+	}
 
-	var err error
 	if qry.AlgorithmType == plan.AlterTable_COPY {
 		// COPY ALTER transfers mo_foreign_keys around the source-table drop,
 		// so its catalog statements are executed inside AlterTableCopy.
-		return s.AlterTableCopy(c)
+		if err = s.AlterTableCopy(c); err != nil {
+			return err
+		}
+		if !refreshViewMetadata {
+			return nil
+		}
+		database, err := c.e.Database(c.proc.Ctx, qry.GetDatabase(), c.proc.GetTxnOperator())
+		if err != nil {
+			return err
+		}
+		relation, err := database.Relation(
+			c.proc.Ctx,
+			qry.GetTableDef().GetName(),
+			nil,
+		)
+		if err != nil {
+			return err
+		}
+		return refreshViewMetadataAfterAlter(
+			c,
+			sourceAccountID,
+			sourceLogicalID,
+			qry.GetTableDef().GetTblId(),
+			relation.GetTableID(c.proc.Ctx),
+			qry.GetDatabase(),
+			qry.GetTableDef().GetName(),
+			false,
+		)
 	} else {
 		err = s.AlterTableInplace(c)
 	}
@@ -1892,7 +1938,1290 @@ func (s *Scope) doAlterTable(c *Compile) error {
 			}
 		}
 	}
-	return err
+	if pendingRecoveryName != "" && !renameViewMetadataRecoveryDeferred(c.proc.Ctx) {
+		database, err := c.e.Database(c.proc.Ctx, qry.GetDatabase(), c.proc.GetTxnOperator())
+		if err != nil {
+			return err
+		}
+		relation, err := database.Relation(c.proc.Ctx, pendingRecoveryName, nil)
+		if err != nil {
+			return err
+		}
+		if err = refreshPendingViewMetadataForRelation(
+			c, qry.GetDatabase(), pendingRecoveryName, relation,
+		); err != nil {
+			return err
+		}
+	}
+	if !refreshViewMetadata {
+		return nil
+	}
+	return refreshViewMetadataAfterAlter(
+		c,
+		sourceAccountID,
+		sourceLogicalID,
+		qry.GetTableDef().GetTblId(),
+		qry.GetTableDef().GetTblId(),
+		qry.GetDatabase(),
+		qry.GetTableDef().GetName(),
+		false,
+	)
+}
+
+type deferRenameViewMetadataRecoveryKey struct{}
+
+type renameViewMetadataTarget struct {
+	database string
+	name     string
+}
+
+func renameViewMetadataRecoveryDeferred(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	deferred, _ := ctx.Value(deferRenameViewMetadataRecoveryKey{}).(bool)
+	return deferred
+}
+
+func refreshPendingViewMetadataForRelation(
+	c *Compile,
+	database string,
+	name string,
+	relation engine.Relation,
+) error {
+	return refreshViewMetadataForRelation(c, database, name, relation, true)
+}
+
+func refreshViewMetadataForRelation(
+	c *Compile,
+	database string,
+	name string,
+	relation engine.Relation,
+	onlyPending bool,
+) error {
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	tableID := relation.GetTableID(c.proc.Ctx)
+	logicalID := relation.GetTableDef(c.proc.Ctx).GetLogicalId()
+	if logicalID == 0 {
+		logicalID = tableID
+	}
+	return refreshViewMetadataAfterAlter(
+		c, accountID, logicalID, tableID, tableID, database, name, onlyPending,
+	)
+}
+
+func collectRenameViewMetadataTargets(qry *plan.RenameTable) map[renameViewMetadataTarget]struct{} {
+	targets := make(map[renameViewMetadataTarget]struct{})
+	for _, alterTable := range qry.GetAlterTables() {
+		for _, action := range alterTable.GetActions() {
+			if rename, ok := action.GetAction().(*plan.AlterTable_Action_AlterName); ok {
+				targets[renameViewMetadataTarget{
+					database: alterTable.GetDatabase(),
+					name:     rename.AlterName.GetNewName(),
+				}] = struct{}{}
+			}
+		}
+	}
+	return targets
+}
+
+func refreshPendingViewMetadataAfterRename(
+	c *Compile,
+	targetSet map[renameViewMetadataTarget]struct{},
+) error {
+	targets := make([]renameViewMetadataTarget, 0, len(targetSet))
+	for target := range targetSet {
+		targets = append(targets, target)
+	}
+	slices.SortFunc(targets, func(left, right renameViewMetadataTarget) int {
+		if order := strings.Compare(left.database, right.database); order != 0 {
+			return order
+		}
+		return strings.Compare(left.name, right.name)
+	})
+	for _, target := range targets {
+		database, err := c.e.Database(c.proc.Ctx, target.database, c.proc.GetTxnOperator())
+		if err != nil {
+			return err
+		}
+		relation, err := database.Relation(c.proc.Ctx, target.name, nil)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				continue
+			}
+			return err
+		}
+		if err = refreshPendingViewMetadataForRelation(c, target.database, target.name, relation); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type viewMetadataRefresh struct {
+	accountID  uint32
+	id         uint64
+	logicalID  uint64
+	version    uint32
+	database   string
+	name       string
+	definition string
+	viewData   plan2.ViewData
+	skip       bool
+}
+
+type viewMetadataRefreshContext struct {
+	retry                bool
+	sourceAccountID      uint32
+	sourceLogicalID      uint64
+	currentSourceTableID uint64
+	sourceDatabase       string
+	sourceTable          string
+	confirmed            *bool
+	targetViewID         uint64
+	targetViewVersion    uint32
+	targetViewDefinition string
+}
+
+type viewMetadataRefreshPlanError struct {
+	err error
+}
+
+type viewMetadataSubscriptionResolverKey struct{}
+
+type viewMetadataCompilerContextKey struct{}
+
+type viewMetadataResolverKey struct{}
+
+type viewMetadataSQLModeKey struct{}
+
+type viewMetadataSubscriptionResolver interface {
+	GetSubscriptionMeta(string, *plan2.Snapshot) (*plan2.SubscriptionMeta, error)
+}
+
+type currentViewSubscriptionResolver struct {
+	accountID          uint32
+	loadSnapshot       func(uint32, string, *plan2.Snapshot) (*plan2.SubscriptionMeta, error)
+	byDatabase         map[string]*plan2.SubscriptionMeta
+	snapshotByIdentity map[viewMetadataSnapshotSubscriptionKey]*plan2.SubscriptionMeta
+	loadedSnapshots    map[viewMetadataSnapshotSubscriptionKey]struct{}
+}
+
+type viewMetadataSnapshotSubscriptionKey struct {
+	accountID    uint32
+	database     string
+	physicalTime int64
+	logicalTime  uint32
+}
+
+func (r currentViewSubscriptionResolver) GetSubscriptionMeta(
+	database string,
+	snapshot *plan2.Snapshot,
+) (*plan2.SubscriptionMeta, error) {
+	if !plan2.IsSnapshotValid(snapshot) {
+		return r.byDatabase[strings.ToLower(database)], nil
+	}
+	accountID := r.accountID
+	if snapshot.GetTenant() != nil {
+		accountID = snapshot.GetTenant().GetTenantID()
+	}
+	key := viewMetadataSnapshotSubscriptionKey{
+		accountID:    accountID,
+		database:     strings.ToLower(database),
+		physicalTime: snapshot.GetTS().GetPhysicalTime(),
+		logicalTime:  snapshot.GetTS().GetLogicalTime(),
+	}
+	if _, ok := r.loadedSnapshots[key]; ok {
+		return r.snapshotByIdentity[key], nil
+	}
+	if r.loadSnapshot == nil {
+		return nil, nil
+	}
+	meta, err := r.loadSnapshot(accountID, database, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	r.snapshotByIdentity[key] = meta
+	r.loadedSnapshots[key] = struct{}{}
+	return meta, nil
+}
+
+func (e *viewMetadataRefreshPlanError) Error() string {
+	return e.err.Error()
+}
+
+func (e *viewMetadataRefreshPlanError) Unwrap() error {
+	return e.err
+}
+
+func wrapViewMetadataRefreshPlanError(ctx context.Context, err error) error {
+	if err == nil || !isViewMetadataRefresh(ctx) {
+		return err
+	}
+	return &viewMetadataRefreshPlanError{err: err}
+}
+
+type viewMetadataRefreshSource struct {
+	accountID  uint32
+	logicalID  uint64
+	previousID uint64
+	currentID  uint64
+	database   string
+	tableName  string
+}
+
+type viewMetadataRefreshWork struct {
+	source           viewMetadataRefreshSource
+	legacyCandidates []viewMetadataRefreshSource
+}
+
+func isViewMetadataRefresh(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	_, ok := viewMetadataRefreshContextFromContext(ctx)
+	return ok
+}
+
+func viewMetadataRefreshContextFromContext(ctx context.Context) (viewMetadataRefreshContext, bool) {
+	if ctx == nil {
+		return viewMetadataRefreshContext{}, false
+	}
+	if refresh, ok := ctx.Value(defines.ViewMetadataRefreshKey{}).(viewMetadataRefreshContext); ok {
+		return refresh, true
+	}
+	retry, ok := ctx.Value(defines.ViewMetadataRetryKey{}).(defines.ViewMetadataRetry)
+	if !ok {
+		return viewMetadataRefreshContext{}, false
+	}
+	return viewMetadataRefreshContext{
+		retry:                true,
+		targetViewID:         retry.TargetViewID,
+		targetViewVersion:    retry.TargetViewVersion,
+		targetViewDefinition: retry.TargetViewDefinition,
+	}, true
+}
+
+func refreshViewMetadataAfterAlter(
+	c *Compile,
+	sourceAccountID uint32,
+	sourceLogicalID uint64,
+	previousSourceTableID uint64,
+	currentSourceTableID uint64,
+	sourceDatabase string,
+	sourceTable string,
+	onlyPending bool,
+) error {
+	subscriptionsByAccount := make(map[uint32]currentViewSubscriptionResolver)
+	work := []viewMetadataRefreshWork{{source: viewMetadataRefreshSource{
+		accountID:  sourceAccountID,
+		logicalID:  sourceLogicalID,
+		previousID: previousSourceTableID,
+		currentID:  currentSourceTableID,
+		database:   sourceDatabase,
+		tableName:  sourceTable,
+	}}}
+	processedViews := make(map[[2]uint64]struct{})
+	for len(work) > 0 {
+		currentWork := work[0]
+		work = work[1:]
+		source := currentWork.source
+		var nextLegacyCandidates []viewMetadataRefreshSource
+		var afterViewID uint64
+		for {
+			views, err := loadViewMetadataRefreshPage(
+				c,
+				source.accountID,
+				source.logicalID,
+				source.previousID,
+				source.database,
+				source.tableName,
+				afterViewID,
+				onlyPending,
+				currentWork.legacyCandidates,
+			)
+			if err != nil {
+				return err
+			}
+			if len(views) == 0 {
+				break
+			}
+			for _, view := range views {
+				afterViewID = view.id
+				viewKey := [2]uint64{uint64(view.accountID), view.id}
+				if _, ok := processedViews[viewKey]; ok {
+					continue
+				}
+				var subscriptions currentViewSubscriptionResolver
+				subscriptionsLoaded := false
+				if len(view.viewData.Dependencies) > 0 {
+					confirmed := viewDependenciesContainLiveSource(
+						view.viewData.Dependencies,
+						source,
+						nil,
+					)
+					if !confirmed && viewDependenciesHaveLiveSubscription(view.viewData.Dependencies) {
+						var ok bool
+						subscriptions, ok = subscriptionsByAccount[view.accountID]
+						if !ok {
+							subscriptions, err = loadCurrentViewSubscriptions(c, view.accountID)
+							if err != nil {
+								return err
+							}
+							subscriptionsByAccount[view.accountID] = subscriptions
+						}
+						subscriptionsLoaded = true
+						confirmed = viewDependenciesContainLiveSource(
+							view.viewData.Dependencies,
+							source,
+							subscriptions.byDatabase,
+						)
+					}
+					if !confirmed {
+						processedViews[viewKey] = struct{}{}
+						continue
+					}
+				}
+				if view.skip {
+					processedViews[viewKey] = struct{}{}
+					continue
+				}
+				sql, err := buildRefreshViewSQL(c.proc.Ctx, c.getLower(), view)
+				if err != nil {
+					logutil.Warn("skip refreshing view that cannot be parsed",
+						zap.String("database", view.database),
+						zap.String("view", view.name),
+						zap.Error(err))
+					processedViews[viewKey] = struct{}{}
+					continue
+				}
+				if !subscriptionsLoaded {
+					var ok bool
+					subscriptions, ok = subscriptionsByAccount[view.accountID]
+					if ok {
+						subscriptionsLoaded = true
+					}
+				}
+				if !subscriptionsLoaded {
+					subscriptions, err = loadCurrentViewSubscriptions(c, view.accountID)
+					if err != nil {
+						return err
+					}
+					subscriptionsByAccount[view.accountID] = subscriptions
+				}
+				oldCtx := c.proc.Ctx
+				refreshCtx := oldCtx
+				if refreshCtx == nil {
+					refreshCtx = c.proc.GetTopContext()
+				}
+				if refreshCtx == nil {
+					refreshCtx = context.Background()
+				}
+				confirmed := false
+				c.proc.Ctx = context.WithValue(
+					refreshCtx,
+					defines.ViewMetadataRefreshKey{},
+					viewMetadataRefreshContext{
+						retry:                onlyPending,
+						sourceAccountID:      source.accountID,
+						sourceLogicalID:      source.logicalID,
+						currentSourceTableID: source.currentID,
+						sourceDatabase:       source.database,
+						sourceTable:          source.tableName,
+						confirmed:            &confirmed,
+						targetViewID:         view.id,
+						targetViewVersion:    view.version,
+						targetViewDefinition: view.definition,
+					},
+				)
+				c.proc.Ctx = defines.AttachAccountId(c.proc.Ctx, view.accountID)
+				err = runViewMetadataRefreshSQL(
+					c,
+					sql,
+					view.viewData,
+					subscriptions,
+				)
+				c.proc.Ctx = oldCtx
+				if err != nil {
+					if !canSkipViewMetadataRefreshError(err) {
+						return err
+					}
+					if err := markViewMetadataRefreshPending(c, view); err != nil {
+						return err
+					}
+					logutil.Warn("skip refreshing invalid view metadata",
+						zap.String("database", view.database),
+						zap.String("view", view.name),
+						zap.Error(err))
+					processedViews[viewKey] = struct{}{}
+					continue
+				}
+				if confirmed {
+					processedViews[viewKey] = struct{}{}
+					if len(view.viewData.Dependencies) > 0 {
+						continue
+					}
+					logicalID := view.logicalID
+					if logicalID == 0 {
+						logicalID = view.id
+					}
+					nextLegacyCandidates = append(nextLegacyCandidates, viewMetadataRefreshSource{
+						accountID:  view.accountID,
+						logicalID:  logicalID,
+						previousID: view.id,
+						currentID:  view.id,
+						database:   view.database,
+						tableName:  view.name,
+					})
+				}
+			}
+		}
+		for len(nextLegacyCandidates) > 0 {
+			count := min(len(nextLegacyCandidates), viewMetadataRefreshPageSize)
+			work = append(work, viewMetadataRefreshWork{
+				source:           source,
+				legacyCandidates: nextLegacyCandidates[:count],
+			})
+			nextLegacyCandidates = nextLegacyCandidates[count:]
+		}
+	}
+	return nil
+}
+
+func markViewMetadataRefreshPending(c *Compile, view viewMetadataRefresh) error {
+	if view.viewData.MetadataRefreshPending {
+		return nil
+	}
+	oldCtx := c.proc.Ctx
+	c.proc.Ctx = defines.AttachAccountId(oldCtx, view.accountID)
+	defer func() { c.proc.Ctx = oldCtx }()
+	if err := lockMoDatabase(c, view.database, lock.LockMode_Shared); err != nil {
+		return err
+	}
+	db, err := c.e.Database(c.proc.Ctx, view.database, c.proc.GetTxnOperator())
+	if err != nil {
+		return err
+	}
+	if err = lockMoTable(c, view.database, view.name, lock.LockMode_Exclusive); err != nil {
+		return err
+	}
+	rel, err := db.Relation(c.proc.Ctx, view.name, nil)
+	if err != nil {
+		return err
+	}
+	refresh := viewMetadataRefreshContext{
+		targetViewID:         view.id,
+		targetViewVersion:    view.version,
+		targetViewDefinition: view.definition,
+	}
+	if !viewMetadataRefreshGenerationMatches(c.proc.Ctx, rel, refresh) {
+		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+	}
+	def := plan2.DeepCopyTableDef(rel.GetTableDef(c.proc.Ctx), true)
+	var current plan2.ViewData
+	if def.GetViewSql() == nil || json.Unmarshal([]byte(def.GetViewSql().GetView()), &current) != nil {
+		return nil
+	}
+	current.MetadataRefreshPending = true
+	encoded, err := json.Marshal(current)
+	if err != nil {
+		return err
+	}
+	def.ViewSql = &plan2.ViewDef{View: string(encoded)}
+	databaseID, err := strconv.ParseUint(db.GetDatabaseId(c.proc.Ctx), 10, 64)
+	if err != nil {
+		return err
+	}
+	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.ViewMetadataRefreshKey{}, refresh)
+	return rel.AlterTable(
+		context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql),
+		nil,
+		[]*api.AlterTableReq{api.NewReplaceDefReq(databaseID, rel.GetTableID(c.proc.Ctx), def)},
+	)
+}
+
+func viewDependenciesContainLiveSource(
+	dependencies []plan2.ViewDependency,
+	source viewMetadataRefreshSource,
+	currentSubscriptions map[string]*plan2.SubscriptionMeta,
+) bool {
+	for _, dependency := range dependencies {
+		if dependency.Snapshot || !dependency.AccountIDSet {
+			continue
+		}
+		if dependency.AccountID == source.accountID &&
+			(dependency.LogicalID == source.logicalID ||
+				dependency.TableID == source.previousID ||
+				dependency.TableID == source.currentID) {
+			return true
+		}
+		if dependency.Subscription {
+			if dependency.PublisherAccountIDSet &&
+				dependency.PublisherAccountID == source.accountID &&
+				strings.EqualFold(dependency.PublisherDB, source.database) &&
+				strings.EqualFold(dependency.PublisherTable, source.tableName) {
+				return true
+			}
+			current := currentSubscriptions[strings.ToLower(dependency.SubscriptionDB)]
+			if current != nil && uint32(current.GetAccountId()) == source.accountID &&
+				strings.EqualFold(current.GetDbName(), source.database) &&
+				strings.EqualFold(dependency.SubscriptionTable, source.tableName) &&
+				pubsub.InSubMetaTables(current, source.tableName) {
+				return true
+			}
+			continue
+		}
+		if dependency.AccountID != source.accountID {
+			continue
+		}
+		if strings.EqualFold(dependency.DatabaseName, source.database) &&
+			strings.EqualFold(dependency.TableName, source.tableName) {
+			return true
+		}
+	}
+	return false
+}
+
+func viewDependenciesHaveLiveSubscription(dependencies []plan2.ViewDependency) bool {
+	for _, dependency := range dependencies {
+		if dependency.Subscription && !dependency.Snapshot && dependency.SubscriptionDB != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func loadCurrentViewSubscriptions(
+	c *Compile,
+	accountID uint32,
+) (currentViewSubscriptionResolver, error) {
+	resolver := currentViewSubscriptionResolver{
+		accountID:          accountID,
+		byDatabase:         make(map[string]*plan2.SubscriptionMeta),
+		snapshotByIdentity: make(map[viewMetadataSnapshotSubscriptionKey]*plan2.SubscriptionMeta),
+		loadedSnapshots:    make(map[viewMetadataSnapshotSubscriptionKey]struct{}),
+	}
+	resolver.loadSnapshot = func(accountID uint32, database string, snapshot *plan2.Snapshot) (*plan2.SubscriptionMeta, error) {
+		return loadSnapshotViewSubscription(c, accountID, database, snapshot)
+	}
+	sql := fmt.Sprintf(
+		"select sub_name, pub_account_id, pub_account_name, pub_name, "+
+			"pub_database, pub_tables from %s.%s "+
+			"where sub_account_id = %d and sub_name is not null and status = %d",
+		catalog.MO_CATALOG,
+		catalog.MO_SUBS,
+		accountID,
+		pubsub.SubStatusNormal,
+	)
+	result, err := c.runSqlWithResultAndOptions(
+		sql,
+		int32(catalog.System_Account),
+		executor.StatementOption{}.WithDisableLog(),
+	)
+	if err != nil {
+		result.Close()
+		return resolver, err
+	}
+	defer result.Close()
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		subNames := executor.GetStringRows(cols[0])
+		pubAccountIDs := executor.GetFixedRows[int32](cols[1])
+		pubAccountNames := executor.GetStringRows(cols[2])
+		pubNames := executor.GetStringRows(cols[3])
+		pubDatabases := executor.GetStringRows(cols[4])
+		pubTables := executor.GetStringRows(cols[5])
+		for i := 0; i < rows; i++ {
+			resolver.byDatabase[strings.ToLower(subNames[i])] = &plan2.SubscriptionMeta{
+				Name:        pubNames[i],
+				AccountId:   pubAccountIDs[i],
+				DbName:      pubDatabases[i],
+				AccountName: pubAccountNames[i],
+				SubName:     subNames[i],
+				Tables:      pubTables[i],
+			}
+		}
+		return true
+	})
+	return resolver, nil
+}
+
+func refreshPendingViewMetadataAfterSubscriptionCreate(c *Compile, subscriptionDatabase string) error {
+	subscriberAccountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	subscriptions, err := loadCurrentViewSubscriptions(c, subscriberAccountID)
+	if err != nil {
+		return err
+	}
+	meta := subscriptions.byDatabase[strings.ToLower(subscriptionDatabase)]
+	if meta == nil {
+		return moerr.NewInternalErrorf(
+			c.proc.Ctx,
+			"subscription metadata for database %s is not visible after creation",
+			subscriptionDatabase,
+		)
+	}
+
+	databaseNames := []string{meta.DbName}
+	if strings.EqualFold(meta.DbName, pubsub.TableAll) {
+		err = func() error {
+			oldCtx := c.proc.Ctx
+			c.proc.Ctx = defines.AttachAccountId(oldCtx, uint32(meta.AccountId))
+			defer func() { c.proc.Ctx = oldCtx }()
+			databaseNames, err = c.e.Databases(c.proc.Ctx, c.proc.GetTxnOperator())
+			return err
+		}()
+		if err != nil {
+			return err
+		}
+	}
+	slices.Sort(databaseNames)
+	databaseNames = slices.Compact(databaseNames)
+	for _, databaseName := range databaseNames {
+		var sources []viewMetadataRefreshSource
+		err = func() error {
+			oldCtx := c.proc.Ctx
+			c.proc.Ctx = defines.AttachAccountId(oldCtx, uint32(meta.AccountId))
+			defer func() { c.proc.Ctx = oldCtx }()
+
+			publisherDatabase, err := c.e.Database(c.proc.Ctx, databaseName, c.proc.GetTxnOperator())
+			if err != nil {
+				return err
+			}
+			var tableNames []string
+			if strings.EqualFold(meta.Tables, pubsub.TableAll) {
+				tableNames, err = publisherDatabase.Relations(c.proc.Ctx)
+				if err != nil {
+					return err
+				}
+			} else {
+				for _, tableName := range strings.Split(meta.Tables, pubsub.Sep) {
+					if tableName != "" {
+						tableNames = append(tableNames, tableName)
+					}
+				}
+			}
+			slices.Sort(tableNames)
+			tableNames = slices.Compact(tableNames)
+			for _, tableName := range tableNames {
+				relation, err := publisherDatabase.Relation(c.proc.Ctx, tableName, nil)
+				if err != nil {
+					return err
+				}
+				tableID := relation.GetTableID(c.proc.Ctx)
+				logicalID := relation.GetTableDef(c.proc.Ctx).GetLogicalId()
+				if logicalID == 0 {
+					logicalID = tableID
+				}
+				sources = append(sources, viewMetadataRefreshSource{
+					accountID:  uint32(meta.AccountId),
+					logicalID:  logicalID,
+					previousID: tableID,
+					currentID:  tableID,
+					database:   databaseName,
+					tableName:  tableName,
+				})
+			}
+			return nil
+		}()
+		if err != nil {
+			return err
+		}
+		for _, source := range sources {
+			if err = refreshViewMetadataAfterAlter(
+				c,
+				source.accountID,
+				source.logicalID,
+				source.previousID,
+				source.currentID,
+				source.database,
+				source.tableName,
+				true,
+			); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func loadSnapshotViewSubscription(
+	c *Compile,
+	accountID uint32,
+	database string,
+	snapshot *plan2.Snapshot,
+) (*plan2.SubscriptionMeta, error) {
+	if c == nil || !plan2.IsSnapshotValid(snapshot) {
+		return nil, nil
+	}
+	txnOp := c.proc.GetTxnOperator()
+	if snapshot.GetTS().Less(txnOp.Txn().SnapshotTS) {
+		txnOp = txnOp.CloneSnapshotOp(*snapshot.GetTS())
+	}
+	sql := fmt.Sprintf(
+		"select sub_name, pub_account_id, pub_account_name, pub_name, "+
+			"pub_database, pub_tables from %s.%s "+
+			"where sub_account_id = %d and lower(sub_name) = lower(%s) and status = %d",
+		catalog.MO_CATALOG,
+		catalog.MO_SUBS,
+		accountID,
+		sqlquote.String(database),
+		pubsub.SubStatusNormal,
+	)
+	result, err := c.runSqlWithResultAndOptionsOnTxn(
+		sql,
+		int32(catalog.System_Account),
+		executor.StatementOption{}.WithDisableLog(),
+		txnOp,
+	)
+	if err != nil {
+		result.Close()
+		return nil, err
+	}
+	defer result.Close()
+
+	var subscriptions []*plan2.SubscriptionMeta
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		subNames := executor.GetStringRows(cols[0])
+		pubAccountIDs := executor.GetFixedRows[int32](cols[1])
+		pubAccountNames := executor.GetStringRows(cols[2])
+		pubNames := executor.GetStringRows(cols[3])
+		pubDatabases := executor.GetStringRows(cols[4])
+		pubTables := executor.GetStringRows(cols[5])
+		for i := 0; i < rows; i++ {
+			subscriptions = append(subscriptions, &plan2.SubscriptionMeta{
+				Name:        pubNames[i],
+				AccountId:   pubAccountIDs[i],
+				DbName:      pubDatabases[i],
+				AccountName: pubAccountNames[i],
+				SubName:     subNames[i],
+				Tables:      pubTables[i],
+			})
+		}
+		return true
+	})
+	if len(subscriptions) > 1 {
+		return nil, moerr.NewInternalErrorf(
+			c.proc.Ctx,
+			"find %d subscription records for account %d database %s at snapshot, expect at most 1",
+			len(subscriptions),
+			accountID,
+			database,
+		)
+	}
+	if len(subscriptions) == 0 {
+		return nil, nil
+	}
+	return subscriptions[0], nil
+}
+
+const viewMetadataRefreshPageSize = 128
+
+func loadViewMetadataRefreshPage(
+	c *Compile,
+	sourceAccountID uint32,
+	sourceLogicalID uint64,
+	sourceTableID uint64,
+	sourceDatabase string,
+	sourceTable string,
+	afterViewID uint64,
+	onlyPending bool,
+	legacyCandidates []viewMetadataRefreshSource,
+) ([]viewMetadataRefresh, error) {
+	sql := buildViewMetadataRefreshQueryWithLegacyCandidates(
+		sourceAccountID,
+		sourceLogicalID,
+		sourceTableID,
+		sourceDatabase,
+		sourceTable,
+		afterViewID,
+		viewMetadataRefreshPageSize,
+		onlyPending,
+		legacyCandidates,
+	)
+	result, err := c.runSqlWithResultAndOptions(
+		sql,
+		int32(catalog.System_Account),
+		executor.StatementOption{}.WithDisableLog(),
+	)
+	if err != nil {
+		result.Close()
+		return nil, err
+	}
+	defer result.Close()
+
+	views := make([]viewMetadataRefresh, 0, viewMetadataRefreshPageSize)
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		accountIDs := executor.GetFixedRows[uint32](cols[0])
+		ids := executor.GetFixedRows[uint64](cols[1])
+		logicalIDs := executor.GetFixedRows[uint64](cols[2])
+		versions := executor.GetFixedRows[uint32](cols[3])
+		databases := executor.GetStringRows(cols[4])
+		names := executor.GetStringRows(cols[5])
+		definitions := executor.GetStringRows(cols[6])
+		for i := 0; i < rows; i++ {
+			var viewData plan2.ViewData
+			if err := json.Unmarshal([]byte(definitions[i]), &viewData); err != nil {
+				logutil.Warn("skip refreshing view with invalid definition",
+					zap.String("database", databases[i]),
+					zap.String("view", names[i]),
+					zap.Error(err))
+				views = append(views, viewMetadataRefresh{
+					accountID:  accountIDs[i],
+					id:         ids[i],
+					logicalID:  logicalIDs[i],
+					version:    versions[i],
+					database:   databases[i],
+					name:       names[i],
+					definition: definitions[i],
+					skip:       true,
+				})
+				continue
+			}
+			views = append(views, viewMetadataRefresh{
+				accountID:  accountIDs[i],
+				id:         ids[i],
+				logicalID:  logicalIDs[i],
+				version:    versions[i],
+				database:   databases[i],
+				name:       names[i],
+				definition: definitions[i],
+				viewData:   viewData,
+			})
+		}
+		return true
+	})
+	return views, nil
+}
+
+func buildViewMetadataRefreshQuery(
+	sourceAccountID uint32,
+	sourceLogicalID uint64,
+	sourceTableID uint64,
+	sourceDatabase string,
+	sourceTable string,
+	afterViewID uint64,
+	pageSize int,
+	onlyPending ...bool,
+) string {
+	pending := len(onlyPending) > 0 && onlyPending[0]
+	return buildViewMetadataRefreshQueryWithLegacyCandidates(
+		sourceAccountID,
+		sourceLogicalID,
+		sourceTableID,
+		sourceDatabase,
+		sourceTable,
+		afterViewID,
+		pageSize,
+		pending,
+		nil,
+	)
+}
+
+func buildViewMetadataRefreshQueryWithLegacyCandidates(
+	sourceAccountID uint32,
+	sourceLogicalID uint64,
+	sourceTableID uint64,
+	sourceDatabase string,
+	sourceTable string,
+	afterViewID uint64,
+	pageSize int,
+	onlyPending bool,
+	legacyCandidates []viewMetadataRefreshSource,
+) string {
+	pendingFilter := ""
+	if onlyPending {
+		pendingFilter = "and json_unquote(json_extract(viewdef, '$.metadata_refresh_pending')) = 'true' "
+	}
+	legacyBatchPredicate := buildViewMetadataLegacyBatchPredicate(legacyCandidates)
+	if legacyBatchPredicate != "" {
+		return fmt.Sprintf(
+			"select account_id, rel_id, rel_logical_id, rel_version, reldatabase, relname, viewdef from %s.mo_tables "+
+				"where relkind = '%s' %s"+
+				"and reldatabase not in ('%s', '%s') and rel_id > %d "+
+				"and (%s) order by rel_id limit %d",
+			catalog.MO_CATALOG,
+			catalog.SystemViewRel,
+			pendingFilter,
+			catalog.MO_CATALOG,
+			"information_schema",
+			afterViewID,
+			strings.TrimPrefix(legacyBatchPredicate, " or "),
+			pageSize,
+		)
+	}
+	legacyCandidate, quotedLegacyCandidate, ansiQuotedLegacyCandidate :=
+		viewMetadataLegacyNameCandidates(sourceTable)
+	directLegacyAccountPredicate := fmt.Sprintf("account_id = %d", sourceAccountID)
+	legacyAccountPredicate := fmt.Sprintf(
+		"((account_id = %d) or account_id in "+
+			"(select sub_account_id from %s.%s where pub_account_id = %d and status = %d))",
+		sourceAccountID,
+		catalog.MO_CATALOG,
+		catalog.MO_SUBS,
+		sourceAccountID,
+		pubsub.SubStatusNormal,
+	)
+	if sourceAccountID == catalog.System_Account {
+		// Cluster and shared system relations can be referenced directly by
+		// dependency-less views owned by any tenant.
+		directLegacyAccountPredicate = "1 = 1"
+		legacyAccountPredicate = "1 = 1"
+	}
+	databaseNameJSON, _ := json.Marshal(sourceDatabase)
+	tableNameJSON, _ := json.Marshal(sourceTable)
+	qualifiedNameCandidate := sqlquote.String(
+		"\"database_name\":" + string(databaseNameJSON) +
+			",\"table_name\":" + string(tableNameJSON),
+	)
+	publisherQualifiedNameCandidate := sqlquote.String(
+		"\"publisher_db\":" + string(databaseNameJSON) +
+			",\"publisher_table\":" + string(tableNameJSON),
+	)
+	subscriptionNamePrefix := sqlquote.String("\"subscription_db\":")
+	subscriptionTableSuffix := sqlquote.String(
+		",\"subscription_table\":" + string(tableNameJSON),
+	)
+	if pendingFilter != "" {
+		return fmt.Sprintf(
+			"select account_id, rel_id, rel_logical_id, rel_version, reldatabase, relname, viewdef from %s.mo_tables "+
+				"where relkind = '%s' %s"+
+				"and reldatabase not in ('%s', '%s') and rel_id > %d "+
+				"and ((%s and json_extract(viewdef, '$.dependencies') is null "+
+				"and (instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0)) "+
+				"or (viewdef like '%%\\\"account_id\\\":%d,%%' "+
+				"and (viewdef like '%%\\\"logical_id\\\":%d,%%' "+
+				"or viewdef like '%%\\\"table_id\\\":%d,%%')) "+
+				"or (account_id = %d and viewdef like '%%\\\"table_id\\\":%d,%%' "+
+				"and viewdef not like '%%\\\"logical_id\\\":%%') "+
+				"or (json_extract(viewdef, '$.dependencies') is not null "+
+				"and ((account_id = %d and instr(viewdef, %s) > 0) "+
+				"or instr(viewdef, %s) > 0)) "+
+				"or (json_extract(viewdef, '$.dependencies') is null "+
+				"and (instr(lower(viewdef), lower(%s)) > 0 or instr(lower(viewdef), lower(%s)) > 0 "+
+				"or instr(lower(viewdef), lower(%s)) > 0) "+
+				"and exists (select 1 from %s.%s where sub_account_id = account_id "+
+				"and pub_account_id = %d and sub_name is not null and status = %d "+
+				"and (lower(pub_database) = lower(%s) or pub_database = %s) "+
+				"and (pub_tables = %s or find_in_set(lower(%s), lower(pub_tables)) > 0) "+
+				"and instr(lower(viewdef), lower(sub_name)) > 0))%s) "+
+				"order by rel_id limit %d",
+			catalog.MO_CATALOG,
+			catalog.SystemViewRel,
+			pendingFilter,
+			catalog.MO_CATALOG,
+			"information_schema",
+			afterViewID,
+			directLegacyAccountPredicate,
+			legacyCandidate,
+			quotedLegacyCandidate,
+			ansiQuotedLegacyCandidate,
+			sourceAccountID,
+			sourceLogicalID,
+			sourceTableID,
+			sourceAccountID,
+			sourceTableID,
+			sourceAccountID,
+			qualifiedNameCandidate,
+			publisherQualifiedNameCandidate,
+			legacyCandidate,
+			quotedLegacyCandidate,
+			ansiQuotedLegacyCandidate,
+			catalog.MO_CATALOG,
+			catalog.MO_SUBS,
+			sourceAccountID,
+			pubsub.SubStatusNormal,
+			sqlquote.String(sourceDatabase),
+			sqlquote.String(pubsub.TableAll),
+			sqlquote.String(pubsub.TableAll),
+			legacyCandidate,
+			legacyBatchPredicate,
+			pageSize,
+		)
+	}
+	return fmt.Sprintf(
+		"select account_id, rel_id, rel_logical_id, rel_version, reldatabase, relname, viewdef from %s.mo_tables "+
+			"where relkind = '%s' %s"+
+			"and reldatabase not in ('%s', '%s') and rel_id > %d "+
+			"and ((%s "+
+			"and json_extract(viewdef, '$.dependencies') is null "+
+			"and (instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0)) "+
+			"or (viewdef like '%%\\\"account_id\\\":%d,%%' "+
+			"and (viewdef like '%%\\\"logical_id\\\":%d,%%' "+
+			"or viewdef like '%%\\\"table_id\\\":%d,%%')) "+
+			"or (account_id = %d "+
+			"and viewdef like '%%\\\"table_id\\\":%d,%%' "+
+			"and viewdef not like '%%\\\"logical_id\\\":%%') "+
+			"or ((((account_id = %d) or account_id in "+
+			"(select sub_account_id from %s.%s where pub_account_id = %d and status = %d)) "+
+			"and json_extract(viewdef, '$.dependencies') is not null and "+
+			"(instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0)) "+
+			"or exists (select 1 from %s.%s where sub_account_id = account_id "+
+			"and pub_account_id = %d and lower(pub_database) = lower(%s) and status = %d "+
+			"and instr(viewdef, concat(%s, char(34), "+
+			"replace(replace(sub_name, char(92), concat(char(92), char(92))), "+
+			"char(34), concat(char(92), char(34))), char(34), %s)) > 0))%s) "+
+			"order by rel_id limit %d",
+		catalog.MO_CATALOG,
+		catalog.SystemViewRel,
+		pendingFilter,
+		catalog.MO_CATALOG,
+		"information_schema",
+		afterViewID,
+		legacyAccountPredicate,
+		legacyCandidate,
+		quotedLegacyCandidate,
+		ansiQuotedLegacyCandidate,
+		sourceAccountID,
+		sourceLogicalID,
+		sourceTableID,
+		sourceAccountID,
+		sourceTableID,
+		sourceAccountID,
+		catalog.MO_CATALOG,
+		catalog.MO_SUBS,
+		sourceAccountID,
+		pubsub.SubStatusNormal,
+		qualifiedNameCandidate,
+		publisherQualifiedNameCandidate,
+		catalog.MO_CATALOG,
+		catalog.MO_SUBS,
+		sourceAccountID,
+		sqlquote.String(sourceDatabase),
+		pubsub.SubStatusNormal,
+		subscriptionNamePrefix,
+		subscriptionTableSuffix,
+		legacyBatchPredicate,
+		pageSize,
+	)
+}
+
+func buildViewMetadataLegacyBatchPredicate(candidates []viewMetadataRefreshSource) string {
+	var predicate strings.Builder
+	for _, candidate := range candidates {
+		rawName, quotedName, ansiQuotedName := viewMetadataLegacyNameCandidates(candidate.tableName)
+		fmt.Fprintf(
+			&predicate,
+			" or (account_id = %d and json_extract(viewdef, '$.dependencies') is null "+
+				"and (instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0))",
+			candidate.accountID,
+			rawName,
+			quotedName,
+			ansiQuotedName,
+		)
+	}
+	return predicate.String()
+}
+
+func viewMetadataLegacyNameCandidates(name string) (string, string, string) {
+	quotedNameJSON, _ := json.Marshal(sqlquote.Ident(name))
+	ansiQuotedName := `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+	ansiQuotedNameJSON, _ := json.Marshal(ansiQuotedName)
+	return sqlquote.String(name),
+		sqlquote.String(string(quotedNameJSON[1 : len(quotedNameJSON)-1])),
+		sqlquote.String(string(ansiQuotedNameJSON[1 : len(ansiQuotedNameJSON)-1]))
+}
+
+func runViewMetadataRefreshSQL(
+	c *Compile,
+	sql string,
+	viewData plan2.ViewData,
+	subscriptions currentViewSubscriptionResolver,
+) error {
+	oldDatabase := c.db
+	oldCtx := c.proc.Ctx
+	oldResolveVariable := c.proc.GetResolveVariableFunc()
+	oldSQLMode := c.proc.GetSessionInfo().SqlMode
+	lower := c.getLower()
+	sqlMode := plan2.LegacyViewParserSQLMode()
+	if viewData.SQLMode != nil {
+		sqlMode = *viewData.SQLMode
+	}
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	c.db = viewData.DefaultDatabase
+	c.proc.GetSessionInfo().SqlMode = sqlMode
+	refresh, _ := viewMetadataRefreshContextFromContext(c.proc.Ctx)
+	c.proc.Ctx = context.WithValue(
+		c.proc.Ctx,
+		viewMetadataSubscriptionResolverKey{},
+		viewMetadataSubscriptionResolver(subscriptions),
+	)
+	c.proc.Ctx = context.WithValue(
+		c.proc.Ctx,
+		viewMetadataResolverKey{},
+		viewMetadataRefreshResolver{
+			compile:         c,
+			accountID:       accountID,
+			defaultDatabase: viewData.DefaultDatabase,
+			subscriptions:   subscriptions,
+			dependencies:    viewData.Dependencies,
+			sourceAccountID: refresh.sourceAccountID,
+			sourceDatabase:  refresh.sourceDatabase,
+			sourceTable:     refresh.sourceTable,
+		},
+	)
+	c.proc.Ctx = context.WithValue(c.proc.Ctx, viewMetadataSQLModeKey{}, sqlMode)
+	if helper := c.proc.GetSessionInfo().SqlHelper; helper != nil {
+		if compilerContext, ok := helper.GetCompilerContext().(plan2.CompilerContext); ok {
+			c.proc.Ctx = context.WithValue(
+				c.proc.Ctx,
+				viewMetadataCompilerContextKey{},
+				compilerContext,
+			)
+		}
+	}
+	c.proc.SetResolveVariableFunc(func(name string, isSystemVar, isGlobalVar bool) (any, error) {
+		if isSystemVar && !isGlobalVar && strings.EqualFold(name, "sql_mode") {
+			return sqlMode, nil
+		}
+		if isSystemVar && !isGlobalVar && strings.EqualFold(name, "lower_case_table_names") {
+			return lower, nil
+		}
+		if oldResolveVariable == nil {
+			return nil, nil
+		}
+		return oldResolveVariable(name, isSystemVar, isGlobalVar)
+	})
+	defer func() {
+		c.db = oldDatabase
+		c.proc.Ctx = oldCtx
+		c.proc.GetSessionInfo().SqlMode = oldSQLMode
+		c.proc.SetResolveVariableFunc(oldResolveVariable)
+	}()
+	return c.runSqlWithOptions(sql, executor.StatementOption{}.WithDisableLog())
+}
+
+func canSkipViewMetadataRefreshError(err error) bool {
+	var planErr *viewMetadataRefreshPlanError
+	if !errors.As(err, &planErr) {
+		return false
+	}
+	var snapshotNotFound *viewMetadataSnapshotNotFoundError
+	if errors.As(planErr.err, &snapshotNotFound) {
+		return true
+	}
+	var udfNotFound *viewMetadataUDFNotFoundError
+	if errors.As(planErr.err, &udfNotFound) {
+		return true
+	}
+	code, ok := moerr.GetMoErrCode(planErr.err)
+	if !ok {
+		return false
+	}
+	switch code {
+	case moerr.ErrInvalidInput,
+		moerr.ErrConstraintViolation,
+		moerr.ErrParseError,
+		moerr.ErrBadFieldError,
+		moerr.ErrOperandColumns,
+		moerr.ErrViewWrongList,
+		moerr.ErrBadDB,
+		moerr.ErrNoSuchTable,
+		moerr.ErrNoDB,
+		moerr.ErrBadView:
+		return true
+	default:
+		return false
+	}
+}
+
+func CanSkipViewMetadataRefreshError(err error) bool {
+	if canSkipViewMetadataRefreshError(err) || plan2.IsSnapshotNotFound(err) {
+		return true
+	}
+	code, ok := moerr.GetMoErrCode(err)
+	if !ok {
+		return false
+	}
+	switch code {
+	case moerr.ErrInvalidInput,
+		moerr.ErrConstraintViolation,
+		moerr.ErrParseError,
+		moerr.ErrBadFieldError,
+		moerr.ErrOperandColumns,
+		moerr.ErrViewWrongList,
+		moerr.ErrBadDB,
+		moerr.ErrNoSuchTable,
+		moerr.ErrNoDB,
+		moerr.ErrBadView,
+		moerr.ErrNotSupported:
+		return true
+	default:
+		return false
+	}
+}
+
+func buildRefreshViewSQL(
+	ctx context.Context,
+	lower int64,
+	view viewMetadataRefresh,
+) (string, error) {
+	sqlMode := plan2.LegacyViewParserSQLMode()
+	if view.viewData.SQLMode != nil {
+		sqlMode = *view.viewData.SQLMode
+	}
+	stmts, err := mysql.ParseWithSQLMode(ctx, view.viewData.Stmt, lower, sqlMode)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
+	if len(stmts) != 1 {
+		return "", moerr.NewParseError(ctx, "invalid view definition")
+	}
+
+	var colNames tree.IdentifierList
+	var source *tree.Select
+	switch stmt := stmts[0].(type) {
+	case *tree.CreateView:
+		colNames = stmt.ColNames
+		source = stmt.AsSource
+	case *tree.AlterView:
+		colNames = stmt.ColNames
+		source = stmt.AsSource
+	default:
+		return "", moerr.NewParseError(ctx, "invalid view definition")
+	}
+
+	fmtCtx := tree.NewFmtCtx(
+		dialect.MYSQL,
+		tree.WithQuoteIdentifier(),
+		tree.WithSingleQuoteString(),
+	)
+	fmtCtx.WriteString("alter view ")
+	fmtCtx.WriteString(quoteAlterCopyTableName(view.database, view.name))
+	if len(colNames) > 0 {
+		fmtCtx.WriteString(" (")
+		colNames.Format(fmtCtx)
+		fmtCtx.WriteByte(')')
+	}
+	fmtCtx.WriteString(" as ")
+	source.Format(fmtCtx)
+	return fmtCtx.String(), nil
+}
+
+func BuildViewMetadataRefreshSQL(
+	ctx context.Context,
+	lower int64,
+	database string,
+	name string,
+	viewData plan2.ViewData,
+) (string, error) {
+	return buildRefreshViewSQL(ctx, lower, viewMetadataRefresh{
+		database: database,
+		name:     name,
+		viewData: viewData,
+	})
 }
 
 func (s *Scope) RenameTable(c *Compile) (err error) {
@@ -1903,6 +3232,10 @@ func (s *Scope) RenameTable(c *Compile) (err error) {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetRenameTable()
+	targetSet := collectRenameViewMetadataTargets(qry)
+	oldCtx := c.proc.Ctx
+	c.proc.Ctx = context.WithValue(oldCtx, deferRenameViewMetadataRecoveryKey{}, true)
+	defer func() { c.proc.Ctx = oldCtx }()
 	for _, alterTable := range qry.AlterTables {
 		plan := &plan.Plan{
 			Plan: &plan.Plan_Ddl{
@@ -1921,7 +3254,8 @@ func (s *Scope) RenameTable(c *Compile) (err error) {
 			return err
 		}
 	}
-	return nil
+	c.proc.Ctx = oldCtx
+	return refreshPendingViewMetadataAfterRename(c, targetSet)
 }
 
 // updateTableForeignKeyColId update foreign key colid of child table references

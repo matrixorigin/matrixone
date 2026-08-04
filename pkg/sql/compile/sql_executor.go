@@ -348,14 +348,20 @@ func (exec *txnExecutor) Exec(
 
 	receiveAt := time.Now()
 	lower := exec.opts.LowerCaseTableNames()
-	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, lower)
+	var stmts []tree.Statement
+	var err error
+	if sqlMode, ok := exec.ctx.Value(viewMetadataSQLModeKey{}).(string); ok {
+		stmts, err = parsers.ParseWithSQLMode(exec.ctx, dialect.MYSQL, sql, lower, sqlMode)
+	} else {
+		stmts, err = parsers.Parse(exec.ctx, dialect.MYSQL, sql, lower)
+	}
 	defer func() {
 		for _, stmt := range stmts {
 			stmt.Free()
 		}
 	}()
 	if err != nil {
-		return executor.Result{}, err
+		return executor.Result{}, wrapViewMetadataRefreshPlanError(exec.ctx, err)
 	}
 
 	// TODO(volgariver6): we got a duplicate code logic in `func (cwft *TxnComputationWrapper) Compile`,
@@ -450,20 +456,20 @@ func (exec *txnExecutor) Exec(
 				},
 			}
 		} else {
-			return executor.Result{}, err
+			return executor.Result{}, wrapViewMetadataRefreshPlanError(exec.ctx, err)
 		}
 	default:
 		pn, err = plan.BuildPlan(compileContext, stmt, prepared)
 	}
 
 	if err != nil {
-		return executor.Result{}, err
+		return executor.Result{}, wrapViewMetadataRefreshPlanError(exec.ctx, err)
 	}
 
 	if prepared {
 		_, _, err := plan.ResetPreparePlan(compileContext, pn)
 		if err != nil {
-			return executor.Result{}, err
+			return executor.Result{}, wrapViewMetadataRefreshPlanError(exec.ctx, err)
 		}
 	}
 
@@ -521,7 +527,7 @@ func (exec *txnExecutor) Exec(
 	if exec.opts.ForceRebuildPlan() {
 		pn, err = c.buildPlanFunc(proc.Ctx)
 		if err != nil {
-			return executor.Result{}, err
+			return executor.Result{}, wrapViewMetadataRefreshPlanError(exec.ctx, err)
 		}
 	}
 

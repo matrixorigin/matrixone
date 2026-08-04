@@ -17,13 +17,16 @@ package test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -176,7 +179,17 @@ func exec_sql(
 	if err != nil {
 		return err
 	}
-	return nil
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	if sql == frontend.MoCatalogMoIndexesDDL && accountID == catalog.System_Account {
+		// Source-table DDL now searches subscription-backed views. Keep this
+		// lightweight catalog bootstrap aligned with the production catalog.
+		moSubsDDL := strings.Replace(frontend.MoCatalogMoSubsDDL, "create table", "create table if not exists", 1)
+		_, err = exec.Exec(ctx, moSubsDDL, executor.Options{})
+	}
+	return err
 }
 func mock_mo_indexes(
 	de *testutil.TestDisttaeEngine,
@@ -199,7 +212,7 @@ func mock_mo_indexes(
 		"`options` text DEFAULT NULL," +
 		"`index_table_name` varchar(5000) DEFAULT NULL," +
 		"`included_columns` text DEFAULT NULL," +
-		"PRIMARY KEY (`table_id`,`column_name`)" + // use table_id as primary key instead of id to avoid duplicate
+		"PRIMARY KEY (`table_id`,`name`,`column_name`)" +
 		")"
 
 	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
@@ -224,6 +237,16 @@ func mock_mo_indexes(
 	}
 	if err = txn.Commit(ctx); err != nil {
 		return err
+	}
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	if accountID == catalog.System_Account {
+		// Source-table DDL now searches subscription-backed views. The custom
+		// mo_indexes schema above is used by older engine tests, so create the
+		// production mo_subs definition after widening its test primary key.
+		_, err = exec.Exec(ctx, frontend.MoCatalogMoSubsDDL, executor.Options{})
 	}
 	return err
 }

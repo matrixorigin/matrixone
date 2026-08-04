@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
@@ -187,6 +188,222 @@ func TestConvertDBEOBToNoSuchTablePassThrough(t *testing.T) {
 	want := moerr.NewBadDB(context.Background(), "db1")
 	got := convertDBEOBToNoSuchTable(context.Background(), want, "db1", "t2")
 	require.Same(t, want, got)
+}
+
+func TestScopeAlterViewReplacesDefinitionInPlace(t *testing.T) {
+	tableLockCalls := 0
+	dependencyLockCalls := 0
+	lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, dbName string, _ lock.LockMode) error {
+		require.Equal(t, "other_db", dbName)
+		return nil
+	})
+	defer lockMoDb.Reset()
+	lockMoTbl := gostub.Stub(&lockMoTable, func(_ *Compile, dbName, tableName string, mode lock.LockMode) error {
+		if tableName == "v" {
+			tableLockCalls++
+			require.Equal(t, "other_db", dbName)
+			require.Equal(t, lock.LockMode_Exclusive, mode)
+		} else {
+			dependencyLockCalls++
+			require.Equal(t, "source", tableName)
+			require.Equal(t, lock.LockMode_Shared, mode)
+		}
+		return nil
+	})
+	defer lockMoTbl.Reset()
+
+	oldDef := &plan2.TableDef{
+		Name: "v",
+		Cols: []*plan2.ColDef{{
+			Name: "a",
+			Typ:  plan2.Type{Id: int32(types.T_int32)},
+		}},
+		ViewSql: &plan2.ViewDef{View: `{"Stmt":"create view v as select a from t"}`},
+	}
+	newDef := &plan2.TableDef{
+		Name: "v",
+		Cols: []*plan2.ColDef{{
+			Name: "a",
+			Typ:  plan2.Type{Id: int32(types.T_int64)},
+		}},
+		ViewSql: &plan2.ViewDef{View: `{"Stmt":"alter view v as select cast(a as bigint) from t","dependencies":[{"account_id":7,"account_id_set":true,"table_id":1,"logical_id":10,"version":1}]}`},
+	}
+
+	eng := newStubEngine()
+	db := newStubDatabase("other_db")
+	rel := newStubRelation("v")
+	rel.tableDef = oldDef
+	db.rels["v"] = rel
+	eng.dbs["other_db"] = db
+	source := newStubRelation("source")
+	source.tableDef = &plan2.TableDef{TblId: 1, Version: 1}
+	eng.relationsByID[1] = stubRelationByID{database: "db", table: "source", relation: source}
+
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.WithValue(
+		context.Background(),
+		defines.ViewMetadataRefreshKey{},
+		viewMetadataRefreshContext{
+			sourceAccountID:      7,
+			sourceLogicalID:      9,
+			currentSourceTableID: 1,
+			targetViewID:         1,
+			targetViewVersion:    oldDef.GetVersion(),
+			targetViewDefinition: oldDef.GetViewSql().GetView(),
+		},
+	)
+	proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+	spyExec := &alterCopyInsertSpyExecutor{}
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.SQLExecutor(spyExec))
+	moruntime.SetupServiceBasedRuntime(proc.GetService(), rt)
+	c := NewCompile("test", "default_db", "alter view other_db.v as select a from t", "", "", eng, proc, nil, false, nil, time.Now())
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_AlterView{
+			AlterView: &plan2.AlterView{
+				Database: "other_db",
+				TableDef: newDef,
+			},
+		},
+	}}}}
+	c.pn = s.Plan
+
+	require.NoError(t, s.AlterView(c))
+	require.Len(t, rel.alterReqs, 1)
+	require.Equal(t, api.AlterKind_ReplaceDef, rel.alterReqs[0].GetKind())
+	replaced := rel.alterReqs[0].GetReplaceDef().GetDef()
+	require.Equal(t, int32(types.T_int64), replaced.GetCols()[0].GetTyp().Id)
+	var replacedViewData plan.ViewData
+	require.NoError(t, json.Unmarshal([]byte(replaced.GetViewSql().GetView()), &replacedViewData))
+	require.Equal(t, "create view v as select a from t", replacedViewData.Stmt)
+	require.Equal(t, []plan.ViewDependency{{
+		AccountID:    7,
+		AccountIDSet: true,
+		TableID:      1,
+		LogicalID:    9,
+		Version:      1,
+	}}, replacedViewData.Dependencies)
+
+	rel.alterReqs = nil
+	rel.tableDef = replaced
+	refresh := proc.Ctx.Value(defines.ViewMetadataRefreshKey{}).(viewMetadataRefreshContext)
+	refresh.targetViewDefinition = replaced.GetViewSql().GetView()
+	proc.Ctx = context.WithValue(proc.Ctx, defines.ViewMetadataRefreshKey{}, refresh)
+	require.NoError(t, s.AlterView(c))
+	require.Empty(t, rel.alterReqs, "unchanged refresh must not advance the view schema")
+	require.Equal(t, 2, tableLockCalls)
+	require.Zero(t, dependencyLockCalls, "automatic refresh must not invert source-table lock order")
+	for i := 0; i < 1025; i++ {
+		require.NoError(t, s.AlterView(c), "catalog size must not impose a semantic dependent-view limit")
+	}
+	expectedTableLockCalls := 2 + 1025
+
+	refreshedViewSQL := newDef.GetViewSql().GetView()
+	newDef.ViewSql.View = `{"Stmt":"alter view v as select a from unrelated","dependencies":[{"account_id":8,"account_id_set":true,"table_id":2,"logical_id":2,"version":1}]}`
+	require.NoError(t, s.AlterView(c))
+	require.Equal(t, expectedTableLockCalls, tableLockCalls, "false text candidates must not acquire a view lock")
+	newDef.ViewSql.View = refreshedViewSQL
+
+	rel.tableDef.ViewSql.View = `{"Stmt":"alter view v as select a from concurrently_changed"}`
+	err := s.AlterView(c)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+	require.Empty(t, rel.alterReqs)
+	rel.tableDef.ViewSql.View = refresh.targetViewDefinition
+
+	proc.Ctx = defines.AttachAccountId(context.Background(), 7)
+	require.NoError(t, s.AlterView(c))
+	require.Len(t, rel.alterReqs, 1)
+	require.Equal(
+		t,
+		newDef.GetViewSql().GetView(),
+		rel.alterReqs[0].GetReplaceDef().GetDef().GetViewSql().GetView(),
+		"an explicit ALTER VIEW must replace the stored view definition",
+	)
+	require.Equal(t, 1, dependencyLockCalls, "explicit ALTER VIEW must still validate dependency generations")
+	require.Equal(t, []string{
+		buildViewMetadataRefreshQuery(7, 1, 1, "other_db", "v", 0, 128, false),
+	}, spyExec.executedSQLs, "explicit ALTER VIEW must refresh healthy and pending dependents")
+
+	delete(db.rels, "v")
+	require.Error(t, s.AlterView(c))
+}
+
+func TestNormalizeRefreshedViewDependencies(t *testing.T) {
+	dependencies := []plan.ViewDependency{
+		{AccountID: 7, AccountIDSet: true, TableID: 42, LogicalID: 42},
+		{AccountID: 7, AccountIDSet: true, TableID: 43, LogicalID: 43, Snapshot: true},
+		{AccountID: 8, AccountIDSet: true, TableID: 42, LogicalID: 42},
+	}
+
+	normalizeRefreshedViewDependencies(dependencies, viewMetadataRefreshContext{
+		sourceAccountID:      7,
+		sourceLogicalID:      24,
+		currentSourceTableID: 42,
+	})
+
+	require.Equal(t, uint64(24), dependencies[0].LogicalID)
+	require.Equal(t, uint64(43), dependencies[1].LogicalID)
+	require.Equal(t, uint64(42), dependencies[2].LogicalID)
+}
+
+func TestLockAndValidateViewDependencies(t *testing.T) {
+	require.NoError(t, lockAndValidateViewDependencies(nil, nil))
+
+	var locked []string
+	lockStub := gostub.Stub(&lockMoTable, func(
+		c *Compile,
+		dbName string,
+		tableName string,
+		mode lock.LockMode,
+	) error {
+		require.Equal(t, lock.LockMode_Shared, mode)
+		accountID, err := defines.GetAccountId(c.proc.Ctx)
+		require.NoError(t, err)
+		locked = append(locked, fmt.Sprintf("%d:%s.%s", accountID, dbName, tableName))
+		return nil
+	})
+	defer lockStub.Reset()
+
+	eng := newStubEngine()
+	first := newStubRelation("first")
+	first.tableDef = &plan2.TableDef{TblId: 11, Version: 3}
+	second := newStubRelation("second")
+	second.tableDef = &plan2.TableDef{TblId: 22, Version: 7}
+	cluster := newStubRelation("metric")
+	cluster.tableDef = &plan2.TableDef{TblId: 33, Version: 4}
+	cluster.getTableDef = func(ctx context.Context) *plan2.TableDef {
+		accountID, err := defines.GetAccountId(ctx)
+		require.NoError(t, err)
+		require.Equal(t, uint32(0), accountID)
+		return cluster.tableDef
+	}
+	eng.relationsByID[11] = stubRelationByID{database: "db", table: "first", relation: first}
+	eng.relationsByID[22] = stubRelationByID{database: "other", table: "second", relation: second}
+	eng.relationsByID[33] = stubRelationByID{database: "system_metrics", table: "metric", relation: cluster}
+
+	proc := testutil.NewProcess(t)
+	proc.Ctx = defines.AttachAccountId(context.Background(), 7)
+	c := NewCompile("test", "db", "create view v as select 1", "", "", eng, proc, nil, false, nil, time.Now())
+	require.NoError(t, lockAndValidateViewDependencies(c, &plan2.ViewDef{}))
+	require.Error(t, lockAndValidateViewDependencies(c, &plan2.ViewDef{View: "not-json"}))
+
+	viewData, err := json.Marshal(plan.ViewData{Dependencies: []plan.ViewDependency{
+		{TableID: 11, Version: 3},
+		{AccountID: 9, AccountIDSet: true, TableID: 22, Version: 7},
+		{AccountID: 0, AccountIDSet: true, TableID: 33, Version: 4},
+		{AccountID: 8, AccountIDSet: true, TableID: 44, Version: 1, Snapshot: true},
+	}})
+	require.NoError(t, err)
+	viewDef := &plan2.ViewDef{View: string(viewData)}
+
+	require.NoError(t, lockAndValidateViewDependencies(c, viewDef))
+	require.Equal(t, []string{"7:db.first", "9:other.second", "0:system_metrics.metric"}, locked)
+
+	second.tableDef.Version++
+	err = lockAndValidateViewDependencies(c, viewDef)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
 }
 
 func TestIsMissingCCPRMetadataTable(t *testing.T) {
@@ -906,6 +1123,25 @@ func TestScope_CreateView(t *testing.T) {
 		assert.Error(t, s.CreateView(c))
 	})
 
+}
+
+func TestCreateViewRefreshOnlyPending(t *testing.T) {
+	tests := []struct {
+		name        string
+		existed     bool
+		replace     bool
+		wantPending bool
+	}{
+		{name: "new view", wantPending: false},
+		{name: "new view with replace syntax", replace: true, wantPending: false},
+		{name: "replace existing view", existed: true, replace: true, wantPending: false},
+		{name: "existing view without replace", existed: true, wantPending: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.wantPending, createViewRefreshOnlyPending(test.existed, test.replace))
+		})
+	}
 }
 
 func TestScope_CreateTableIfNotExistsAsSelectWhenTableExists(t *testing.T) {

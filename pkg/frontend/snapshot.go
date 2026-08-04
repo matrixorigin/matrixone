@@ -526,6 +526,9 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	if err != nil {
 		return err
 	}
+	if err = retryPendingViewMetadataFunc(ctx, ses, bh); err != nil {
+		return err
+	}
 
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("create snapshot %s success", snapshotName))
 	return err

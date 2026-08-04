@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -167,6 +168,49 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 	}
 
 	query := stmtPlan.GetQuery()
+	currentAccountID, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
+	dependencyByIdentity := make(map[string]ViewDependency)
+	for _, node := range query.GetNodes() {
+		if node.GetObjRef() == nil || node.GetTableDef() == nil || node.GetObjRef().GetObj() <= 0 {
+			continue
+		}
+		snapshot := node.GetScanSnapshot()
+		if !IsSnapshotValid(snapshot) {
+			snapshot = node.GetObjRef().GetSnapshot()
+		}
+		dependency := makeViewDependency(
+			currentAccountID,
+			node.GetObjRef(),
+			node.GetTableDef(),
+			snapshot,
+		)
+		key := viewDependencyIdentity(dependency)
+		dependencyByIdentity[key] = dependency
+	}
+	for _, viewKey := range ctx.GetViews() {
+		databaseName, viewName, snapshot, err := ParseViewDependencyKey(viewKey)
+		if err != nil {
+			return nil, err
+		}
+		objRef, tableDef, err := ctx.Resolve(databaseName, viewName, snapshot)
+		if err != nil {
+			return nil, err
+		}
+		if objRef == nil || tableDef == nil || objRef.GetObj() <= 0 {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, viewName)
+		}
+		dependency := makeViewDependency(currentAccountID, objRef, tableDef, snapshot)
+		key := viewDependencyIdentity(dependency)
+		dependencyByIdentity[key] = dependency
+	}
+	dependencies := make([]ViewDependency, 0, len(dependencyByIdentity))
+	for _, dependency := range dependencyByIdentity {
+		dependencies = append(dependencies, dependency)
+	}
+	slices.SortFunc(dependencies, compareViewDependencies)
 	projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
 	if len(colNames) > 0 && len(colNames) != len(projectList) {
 		return nil, moerr.NewViewWrongList(ctx.GetContext())
@@ -212,6 +256,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 		DefaultDatabase: ctx.DefaultDatabase(),
 		SQLMode:         parserSQLModeFromContext(ctx),
 		SecurityType:    getViewSecurityTypeFromContext(ctx),
+		Dependencies:    dependencies,
 	})
 	if err != nil {
 		return nil, err
@@ -238,6 +283,123 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 	})
 
 	return &tableDef, nil
+}
+
+func makeViewDependency(
+	currentAccountID uint32,
+	objRef *ObjectRef,
+	tableDef *TableDef,
+	snapshot *Snapshot,
+) ViewDependency {
+	physicalAccountID := currentAccountID
+	isSystemRelation := util.TableIsClusterTable(tableDef.GetTableType()) ||
+		isSharedSystemTable(objRef.GetSchemaName(), objRef.GetObjName())
+	if isSystemRelation {
+		physicalAccountID = catalog.System_Account
+	} else if IsSnapshotValid(snapshot) && snapshot.GetTenant() != nil {
+		physicalAccountID = snapshot.GetTenant().GetTenantID()
+	}
+	dependency := ViewDependency{
+		AccountID:    physicalAccountID,
+		AccountIDSet: true,
+		TableID:      uint64(objRef.GetObj()),
+		LogicalID:    tableDef.GetLogicalId(),
+		Version:      tableDef.GetVersion(),
+		DatabaseName: objRef.GetSchemaName(),
+		TableName:    objRef.GetObjName(),
+	}
+	if dependency.LogicalID == 0 {
+		dependency.LogicalID = dependency.TableID
+	}
+	if objRef.GetPubInfo() != nil {
+		publisherAccountID := uint32(objRef.GetPubInfo().GetTenantId())
+		dependency.AccountID = publisherAccountID
+		dependency.PublisherAccountID = publisherAccountID
+		dependency.PublisherAccountIDSet = true
+		dependency.Subscription = true
+		dependency.SubscriptionDB = objRef.GetSubscriptionName()
+		dependency.SubscriptionTable = objRef.GetObjName()
+		dependency.PublisherDB = objRef.GetSchemaName()
+		dependency.PublisherTable = objRef.GetObjName()
+	}
+	if IsSnapshotValid(snapshot) {
+		dependency.Snapshot = true
+	}
+	return dependency
+}
+
+func viewDependencyIdentity(dependency ViewDependency) string {
+	return fmt.Sprintf(
+		"%d/%d/%d/%t/%t/%d/%t/%s/%s/%s/%s/%s/%s",
+		dependency.AccountID,
+		dependency.LogicalID,
+		dependency.TableID,
+		dependency.Snapshot,
+		dependency.Subscription,
+		dependency.PublisherAccountID,
+		dependency.PublisherAccountIDSet,
+		dependency.SubscriptionDB,
+		dependency.SubscriptionTable,
+		dependency.PublisherDB,
+		dependency.PublisherTable,
+		dependency.DatabaseName,
+		dependency.TableName,
+	)
+}
+
+func compareViewDependencies(left, right ViewDependency) int {
+	if order := cmp.Compare(left.AccountID, right.AccountID); order != 0 {
+		return order
+	}
+	if order := cmp.Compare(left.LogicalID, right.LogicalID); order != 0 {
+		return order
+	}
+	if order := cmp.Compare(left.TableID, right.TableID); order != 0 {
+		return order
+	}
+	if left.Snapshot != right.Snapshot {
+		if left.Snapshot {
+			return 1
+		}
+		return -1
+	}
+	if left.Subscription != right.Subscription {
+		if left.Subscription {
+			return 1
+		}
+		return -1
+	}
+	if order := cmp.Compare(left.PublisherAccountID, right.PublisherAccountID); order != 0 {
+		return order
+	}
+	if left.PublisherAccountIDSet != right.PublisherAccountIDSet {
+		if left.PublisherAccountIDSet {
+			return 1
+		}
+		return -1
+	}
+	if order := cmp.Compare(left.SubscriptionDB, right.SubscriptionDB); order != 0 {
+		return order
+	}
+	if order := cmp.Compare(left.SubscriptionTable, right.SubscriptionTable); order != 0 {
+		return order
+	}
+	if order := cmp.Compare(left.PublisherDB, right.PublisherDB); order != 0 {
+		return order
+	}
+	if order := cmp.Compare(left.PublisherTable, right.PublisherTable); order != 0 {
+		return order
+	}
+	if order := cmp.Compare(left.DatabaseName, right.DatabaseName); order != 0 {
+		return order
+	}
+	return cmp.Compare(left.TableName, right.TableName)
+}
+
+func isSharedSystemTable(database, table string) bool {
+	return (database == catalog.MO_SYSTEM_METRICS &&
+		(table == catalog.MO_METRIC || table == catalog.MO_SQL_STMT_CU)) ||
+		(database == catalog.MO_SYSTEM && table == catalog.MO_STATEMENT)
 }
 
 func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool) ([]*ColDef, *Query, error) {

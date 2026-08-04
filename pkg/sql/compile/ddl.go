@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -106,7 +107,13 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 	}
 
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
-	return c.e.Create(ctx, dbName, c.proc.GetTxnOperator())
+	if err := c.e.Create(ctx, dbName, c.proc.GetTxnOperator()); err != nil {
+		return err
+	}
+	if createDatabase.SubscriptionOption != nil {
+		return refreshPendingViewMetadataAfterSubscriptionCreate(c, dbName)
+	}
+	return nil
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
@@ -428,6 +435,9 @@ func (s *Scope) AlterView(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterView()
 
 	dbName := c.db
+	if qry.GetDatabase() != "" {
+		dbName = qry.GetDatabase()
+	}
 	tblName := qry.GetTableDef().GetName()
 
 	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
@@ -447,27 +457,162 @@ func (s *Scope) AlterView(c *Compile) error {
 		return err
 	}
 
+	replaceDef := qry.GetTableDef()
+	var refresh viewMetadataRefreshContext
+	var refreshedViewData plan2.ViewData
+	if isViewMetadataRefresh(c.proc.Ctx) {
+		refresh, _ = viewMetadataRefreshContextFromContext(c.proc.Ctx)
+		if replaceDef.GetViewSql() == nil ||
+			json.Unmarshal([]byte(replaceDef.GetViewSql().GetView()), &refreshedViewData) != nil ||
+			(!refresh.retry && !viewDependsOnTable(refreshedViewData.Dependencies, refresh)) {
+			return nil
+		}
+	}
+
+	if !isViewMetadataRefresh(c.proc.Ctx) {
+		if err := lockAndValidateViewDependencies(c, replaceDef.GetViewSql()); err != nil {
+			return err
+		}
+	}
 	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
-	// Drop view table.
-	if err := dbSource.Delete(c.proc.Ctx, tblName); err != nil {
-		return err
-	}
-
-	// Create view table.
-	// convert the plan's cols to the execution's cols
-	planCols := qry.GetTableDef().GetCols()
-	exeCols := engine.PlanColsToExeCols(planCols)
-
-	// convert the plan's defs to the execution's defs
-	exeDefs, _, err := engine.PlanDefsToExeDefs(qry.GetTableDef())
+	rel, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 	if err != nil {
 		return err
 	}
+	if isViewMetadataRefresh(c.proc.Ctx) {
+		if !viewMetadataRefreshGenerationMatches(c.proc.Ctx, rel, refresh) {
+			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		}
+		if refresh.confirmed != nil {
+			*refresh.confirmed = true
+		}
+		normalizeRefreshedViewDependencies(refreshedViewData.Dependencies, refresh)
+		currentDef := rel.GetTableDef(c.proc.Ctx)
+		columnsChanged := !viewColumnsEqual(currentDef.GetCols(), replaceDef.GetCols())
+		replaceDef = plan2.DeepCopyTableDef(currentDef, true)
+		if columnsChanged {
+			replaceDef.Cols = qry.GetTableDef().GetCols()
+			replaceDef.Name2ColIndex = nil
+		}
+		viewDataChanged := false
+		if currentDef.GetViewSql() != nil && qry.GetTableDef().GetViewSql() != nil {
+			var currentViewData plan2.ViewData
+			if json.Unmarshal([]byte(currentDef.GetViewSql().GetView()), &currentViewData) == nil &&
+				len(refreshedViewData.Dependencies) > 0 {
+				viewDataChanged = currentViewData.MetadataRefreshPending || !slices.Equal(
+					currentViewData.Dependencies,
+					refreshedViewData.Dependencies,
+				)
+				if viewDataChanged {
+					currentViewData.Dependencies = refreshedViewData.Dependencies
+					currentViewData.MetadataRefreshPending = false
+					if encoded, err := json.Marshal(currentViewData); err == nil {
+						replaceDef.ViewSql = &plan.ViewDef{View: string(encoded)}
+					}
+				}
+			}
+		}
+		if !columnsChanged && !viewDataChanged {
+			return nil
+		}
+	}
+	databaseID, err := strconv.ParseUint(dbSource.GetDatabaseId(c.proc.Ctx), 10, 64)
+	if err != nil {
+		return err
+	}
+	err = rel.AlterTable(
+		context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql),
+		nil,
+		[]*api.AlterTableReq{
+			api.NewReplaceDefReq(
+				databaseID,
+				rel.GetTableID(c.proc.Ctx),
+				replaceDef,
+			),
+		},
+	)
+	if err != nil || isViewMetadataRefresh(c.proc.Ctx) {
+		return err
+	}
+	return refreshViewMetadataForRelation(c, dbName, tblName, rel, false)
+}
 
-	return dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...))
+func viewMetadataRefreshGenerationMatches(
+	ctx context.Context,
+	rel engine.Relation,
+	refresh viewMetadataRefreshContext,
+) bool {
+	currentDef := rel.GetTableDef(ctx)
+	return rel.GetTableID(ctx) == refresh.targetViewID &&
+		currentDef.GetVersion() == refresh.targetViewVersion &&
+		currentDef.GetViewSql().GetView() == refresh.targetViewDefinition
+}
+
+func normalizeRefreshedViewDependencies(
+	dependencies []plan2.ViewDependency,
+	refresh viewMetadataRefreshContext,
+) {
+	for i := range dependencies {
+		dependency := &dependencies[i]
+		if dependency.Snapshot ||
+			!dependency.AccountIDSet ||
+			dependency.AccountID != refresh.sourceAccountID {
+			continue
+		}
+		if dependency.LogicalID == refresh.sourceLogicalID ||
+			dependency.TableID == refresh.currentSourceTableID {
+			dependency.LogicalID = refresh.sourceLogicalID
+		}
+	}
+}
+
+func viewDependsOnTable(
+	dependencies []plan2.ViewDependency,
+	refresh viewMetadataRefreshContext,
+) bool {
+	for _, dependency := range dependencies {
+		if dependency.Snapshot {
+			continue
+		}
+		if dependency.AccountIDSet &&
+			dependency.AccountID == refresh.sourceAccountID &&
+			(dependency.LogicalID == refresh.sourceLogicalID ||
+				dependency.TableID == refresh.currentSourceTableID) {
+			return true
+		}
+		if !dependency.AccountIDSet && dependency.TableID == refresh.currentSourceTableID {
+			return true
+		}
+	}
+	return false
+}
+
+func viewColumnsEqual(current, refreshed []*plan.ColDef) bool {
+	currentVisible := make([]*plan.ColDef, 0, len(current))
+	for _, col := range current {
+		if !col.GetHidden() {
+			currentVisible = append(currentVisible, col)
+		}
+	}
+	if len(currentVisible) != len(refreshed) {
+		return false
+	}
+	for i, oldCol := range currentVisible {
+		newCol := refreshed[i]
+		oldType, newType := oldCol.GetTyp(), newCol.GetTyp()
+		if oldCol.GetName() != newCol.GetName() ||
+			oldType.GetId() != newType.GetId() ||
+			oldType.GetWidth() != newType.GetWidth() ||
+			oldType.GetScale() != newType.GetScale() ||
+			oldType.GetNotNullable() != newType.GetNotNullable() ||
+			oldType.GetEnumvalues() != newType.GetEnumvalues() {
+			return false
+		}
+	}
+	return true
 }
 
 // reindexSpecifiedParams extracts the build options the user wrote on
@@ -2048,6 +2193,31 @@ func (s *Scope) CreateTable(c *Compile) error {
 		// completed. Keep the alias registered in the session.
 		rollbackTempAlias = false
 	}
+	if !isTemp &&
+		!features.IsPartition(qry.GetTableDef().GetFeatureFlag()) &&
+		!plan2.IsFkBannedDatabase(dbName) {
+		accountID, err := defines.GetAccountId(c.proc.Ctx)
+		if err != nil {
+			return err
+		}
+		currentDef := main.GetTableDef(c.proc.Ctx)
+		logicalID := currentDef.GetLogicalId()
+		if logicalID == 0 {
+			logicalID = main.GetTableID(c.proc.Ctx)
+		}
+		if err = refreshViewMetadataAfterAlter(
+			c,
+			accountID,
+			logicalID,
+			main.GetTableID(c.proc.Ctx),
+			main.GetTableID(c.proc.Ctx),
+			dbName,
+			tblName,
+			false,
+		); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -2373,6 +2543,9 @@ func (s *Scope) CreateView(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateView()
+	if err := lockAndValidateViewDependencies(c, qry.GetTableDef().GetViewSql()); err != nil {
+		return err
+	}
 
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
@@ -2414,6 +2587,7 @@ func (s *Scope) CreateView(c *Compile) error {
 		)
 		return err
 	}
+	refreshOnlyPending := createViewRefreshOnlyPending(exists, qry.GetReplace())
 
 	if exists {
 		if qry.GetIfNotExists() {
@@ -2452,6 +2626,86 @@ func (s *Scope) CreateView(c *Compile) error {
 			zap.Error(err),
 		)
 		return err
+	}
+	createdView, err := dbSource.Relation(c.proc.Ctx, viewName, nil)
+	if err != nil {
+		return err
+	}
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	createdDef := createdView.GetTableDef(c.proc.Ctx)
+	logicalID := createdDef.GetLogicalId()
+	if logicalID == 0 {
+		logicalID = createdView.GetTableID(c.proc.Ctx)
+	}
+	return refreshViewMetadataAfterAlter(
+		c,
+		accountID,
+		logicalID,
+		createdView.GetTableID(c.proc.Ctx),
+		createdView.GetTableID(c.proc.Ctx),
+		dbName,
+		viewName,
+		refreshOnlyPending,
+	)
+}
+
+func createViewRefreshOnlyPending(relationExisted bool, replace bool) bool {
+	return false
+}
+
+func lockAndValidateViewDependencies(c *Compile, viewDef *plan.ViewDef) error {
+	if viewDef == nil || viewDef.GetView() == "" {
+		return nil
+	}
+	var viewData plan2.ViewData
+	if err := json.Unmarshal([]byte(viewDef.GetView()), &viewData); err != nil {
+		return err
+	}
+	currentAccountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	for _, dependency := range viewData.Dependencies {
+		if dependency.Snapshot {
+			continue
+		}
+		accountID := dependency.AccountID
+		if !dependency.AccountIDSet {
+			accountID = currentAccountID
+		}
+		oldCtx := c.proc.Ctx
+		dependencyCtx := defines.AttachAccountId(oldCtx, accountID)
+		c.proc.Ctx = dependencyCtx
+		dbName, tableName, _, err := c.e.GetRelationById(
+			dependencyCtx,
+			c.proc.GetTxnOperator(),
+			dependency.TableID,
+		)
+		if err != nil {
+			c.proc.Ctx = oldCtx
+			return err
+		}
+		if err = lockMoTable(c, dbName, tableName, lock.LockMode_Shared); err != nil {
+			c.proc.Ctx = oldCtx
+			return err
+		}
+		_, _, rel, err := c.e.GetRelationById(
+			dependencyCtx,
+			c.proc.GetTxnOperator(),
+			dependency.TableID,
+		)
+		if err != nil {
+			c.proc.Ctx = oldCtx
+			return err
+		}
+		version := rel.GetTableDef(dependencyCtx).GetVersion()
+		c.proc.Ctx = oldCtx
+		if version != dependency.Version {
+			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+		}
 	}
 	return nil
 }

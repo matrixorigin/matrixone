@@ -16,9 +16,11 @@ package compile
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -26,18 +28,40 @@ import (
 
 type stubEngine struct {
 	engine.Engine
-	dbs   map[string]*stubDatabase
-	dbErr error
+	dbs           map[string]*stubDatabase
+	relationsByID map[uint64]stubRelationByID
+	dbErr         error
+}
+
+type stubRelationByID struct {
+	database string
+	table    string
+	relation engine.Relation
 }
 
 func newStubEngine() *stubEngine {
-	e := &stubEngine{dbs: make(map[string]*stubDatabase)}
+	e := &stubEngine{
+		dbs:           make(map[string]*stubDatabase),
+		relationsByID: make(map[uint64]stubRelationByID),
+	}
 	// Setup MO_CATALOG
 	cat := newStubDatabase(catalog.MO_CATALOG)
 	cat.rels[catalog.MO_DATABASE] = newStubRelation(catalog.MO_DATABASE)
 	cat.rels[catalog.MO_TABLES] = newStubRelation(catalog.MO_TABLES)
 	e.dbs[catalog.MO_CATALOG] = cat
 	return e
+}
+
+func (e *stubEngine) GetRelationById(
+	ctx context.Context,
+	_ client.TxnOperator,
+	tableID uint64,
+) (string, string, engine.Relation, error) {
+	item, ok := e.relationsByID[tableID]
+	if !ok {
+		return "", "", nil, moerr.NewNoSuchTable(ctx, "", fmt.Sprintf("%d", tableID))
+	}
+	return item.database, item.table, item.relation, nil
 }
 
 func (e *stubEngine) Database(ctx context.Context, name string, op client.TxnOperator) (engine.Database, error) {
@@ -48,6 +72,14 @@ func (e *stubEngine) Database(ctx context.Context, name string, op client.TxnOpe
 		return db, nil
 	}
 	return nil, moerr.NewBadDB(ctx, name)
+}
+
+func (e *stubEngine) Databases(context.Context, client.TxnOperator) ([]string, error) {
+	names := make([]string, 0, len(e.dbs))
+	for name := range e.dbs {
+		names = append(names, name)
+	}
+	return names, nil
 }
 
 func (e *stubEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
@@ -81,6 +113,14 @@ func (db *stubDatabase) RelationExists(ctx context.Context, name string, op any)
 	return ok, nil
 }
 
+func (db *stubDatabase) Relations(context.Context) ([]string, error) {
+	names := make([]string, 0, len(db.rels))
+	for name := range db.rels {
+		names = append(names, name)
+	}
+	return names, nil
+}
+
 func (db *stubDatabase) Create(ctx context.Context, name string, defs []engine.TableDef) error {
 	if db.createErr != nil {
 		return db.createErr
@@ -99,6 +139,10 @@ type stubRelation struct {
 	tombstones            engine.Tombstoner
 	collectTombstonesErr  error
 	collectTombstonesCall int
+	tableDef              *plan.TableDef
+	getTableDef           func(context.Context) *plan.TableDef
+	alterReqs             []*api.AlterTableReq
+	alterErr              error
 }
 
 func newStubRelation(name string) *stubRelation {
@@ -118,7 +162,22 @@ func (r *stubRelation) TableDefs(ctx context.Context) ([]engine.TableDef, error)
 }
 
 func (r *stubRelation) GetTableDef(ctx context.Context) *plan.TableDef {
+	if r.getTableDef != nil {
+		return r.getTableDef(ctx)
+	}
+	if r.tableDef != nil {
+		return r.tableDef
+	}
 	return &plan.TableDef{}
+}
+
+func (r *stubRelation) AlterTable(
+	_ context.Context,
+	_ *engine.ConstraintDef,
+	reqs []*api.AlterTableReq,
+) error {
+	r.alterReqs = reqs
+	return r.alterErr
 }
 
 func (r *stubRelation) CollectTombstones(

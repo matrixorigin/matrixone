@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -44,6 +46,7 @@ type rootSQLCompilerContext struct {
 	*MockCompilerContext
 	rootSQL string
 	calls   int
+	views   []string
 }
 
 func TestBuildRenameTableUsesPriorDestinationAsNextSource(t *testing.T) {
@@ -106,6 +109,14 @@ func TestBuildDropTemporaryTableIfExistsDoesNotTargetPermanentTable(t *testing.T
 func (c *rootSQLCompilerContext) GetRootSql() string {
 	c.calls++
 	return c.rootSQL
+}
+
+func (c *rootSQLCompilerContext) GetViews() []string {
+	return c.views
+}
+
+func (c *rootSQLCompilerContext) SetViews(views []string) {
+	c.views = append(c.views[:0], views...)
 }
 
 func TestBuildCreateTableCheckConstraints(t *testing.T) {
@@ -291,6 +302,243 @@ func TestGenViewTableDefCapturesRootSQLOnce(t *testing.T) {
 		}
 	}
 	require.Equal(t, rootSQL, createSQL)
+}
+
+func TestGenViewTableDefCapturesDependencyIdentity(t *testing.T) {
+	const rootSQL = "create view tpch.v_dep as select n_name from tpch.nation"
+	mockCtx := NewMockCompilerContext(false)
+	mockCtx.GetAccountIdFunc = func() (uint32, error) {
+		return 7, nil
+	}
+	mockCtx.objects["nation"].Obj = 42
+	mockCtx.tables["nation"].TblId = 42
+	mockCtx.tables["nation"].LogicalId = 41
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: mockCtx,
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal(
+		[]byte(p.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()),
+		&viewData,
+	))
+	require.Len(t, viewData.Dependencies, 1)
+	dependency := viewData.Dependencies[0]
+	require.Equal(t, uint32(7), dependency.AccountID)
+	require.True(t, dependency.AccountIDSet)
+	require.NotZero(t, dependency.TableID)
+	require.NotZero(t, dependency.LogicalID)
+	require.False(t, dependency.Snapshot)
+	require.False(t, dependency.Subscription)
+	require.Equal(t, "tpch", dependency.DatabaseName)
+	require.Equal(t, "nation", dependency.TableName)
+}
+
+func TestMakeViewDependencyKeepsSnapshotPublisherAccount(t *testing.T) {
+	dependency := makeViewDependency(
+		7,
+		&ObjectRef{
+			Obj:              42,
+			ObjName:          "source_t",
+			SchemaName:       "publisher_db",
+			SubscriptionName: "subscriber_db",
+			PubInfo:          &plan.PubInfo{TenantId: 11},
+		},
+		&TableDef{TblId: 42, LogicalId: 41, Version: 3},
+		&Snapshot{
+			TS:     &timestamp.Timestamp{PhysicalTime: 1},
+			Tenant: &SnapshotTenant{TenantID: 7},
+		},
+	)
+
+	require.Equal(t, uint32(11), dependency.AccountID)
+	require.Equal(t, uint32(11), dependency.PublisherAccountID)
+	require.True(t, dependency.PublisherAccountIDSet)
+	require.True(t, dependency.Snapshot)
+	require.True(t, dependency.Subscription)
+	require.Equal(t, "subscriber_db", dependency.SubscriptionDB)
+	require.Equal(t, "source_t", dependency.SubscriptionTable)
+	require.Equal(t, "publisher_db", dependency.PublisherDB)
+	require.Equal(t, "source_t", dependency.PublisherTable)
+	require.Equal(t, "publisher_db", dependency.DatabaseName)
+	require.Equal(t, "source_t", dependency.TableName)
+
+	systemPublisher := makeViewDependency(
+		7,
+		&ObjectRef{
+			Obj: 43, ObjName: "system_t", SchemaName: "system_pub",
+			SubscriptionName: "system_sub", PubInfo: &plan.PubInfo{TenantId: 0},
+		},
+		&TableDef{TblId: 43, LogicalId: 42, Version: 1},
+		&Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1}},
+	)
+	require.Zero(t, systemPublisher.PublisherAccountID)
+	require.True(t, systemPublisher.PublisherAccountIDSet)
+
+	clusterSnapshot := makeViewDependency(
+		7,
+		&ObjectRef{Obj: 44, ObjName: "cluster_t", SchemaName: "mo_catalog"},
+		&TableDef{
+			TblId: 44, LogicalId: 43, Version: 2, TableType: catalog.SystemClusterRel,
+		},
+		&Snapshot{
+			TS:     &timestamp.Timestamp{PhysicalTime: 1},
+			Tenant: &SnapshotTenant{TenantID: 7},
+		},
+	)
+	require.Zero(t, clusterSnapshot.AccountID)
+	require.True(t, clusterSnapshot.AccountIDSet)
+	require.True(t, clusterSnapshot.Snapshot)
+}
+
+func TestGenViewTableDefKeepsDirectNestedViewDependency(t *testing.T) {
+	const rootSQL = "create view v2 as select n_name from v1"
+	mockCtx := NewMockCompilerContext(false)
+	mockCtx.GetAccountIdFunc = func() (uint32, error) {
+		return 7, nil
+	}
+	baseObject := ObjectRef{Obj: 42, SchemaName: "tpch", ObjName: "nation"}
+	baseTable := &TableDef{
+		TblId:     42,
+		LogicalId: 41,
+		Version:   3,
+		Name:      "nation",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols: []*ColDef{{
+			Name: "n_name",
+			Typ:  plan.Type{Id: int32(types.T_varchar), Width: 25},
+		}},
+	}
+	viewData, err := json.Marshal(ViewData{
+		Stmt:            "create view v1 as select n_name from nation",
+		DefaultDatabase: "tpch",
+	})
+	require.NoError(t, err)
+	viewObject := &ObjectRef{Obj: 84, SchemaName: "tpch", ObjName: "v1"}
+	viewTable := &TableDef{
+		TblId:     84,
+		LogicalId: 83,
+		Version:   5,
+		Name:      "v1",
+		TableType: catalog.SystemViewRel,
+		ViewSql:   &ViewDef{View: string(viewData)},
+	}
+	mockCtx.objects["v1"] = viewObject
+	mockCtx.tables["v1"] = viewTable
+	mockCtx.objects["nation"] = &baseObject
+	mockCtx.tables["nation"] = baseTable
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: mockCtx,
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	var persisted ViewData
+	require.NoError(t, json.Unmarshal(
+		[]byte(p.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()),
+		&persisted,
+	))
+	require.Contains(t, persisted.Dependencies, ViewDependency{
+		AccountID:    7,
+		AccountIDSet: true,
+		TableID:      84,
+		LogicalID:    83,
+		Version:      5,
+		DatabaseName: "tpch",
+		TableName:    "v1",
+	})
+	require.Contains(t, persisted.Dependencies, ViewDependency{
+		AccountID:    7,
+		AccountIDSet: true,
+		TableID:      42,
+		LogicalID:    41,
+		Version:      3,
+		DatabaseName: "tpch",
+		TableName:    "nation",
+	})
+}
+
+func TestIsSharedSystemTable(t *testing.T) {
+	require.True(t, isSharedSystemTable(catalog.MO_SYSTEM_METRICS, catalog.MO_METRIC))
+	require.True(t, isSharedSystemTable(catalog.MO_SYSTEM_METRICS, catalog.MO_SQL_STMT_CU))
+	require.True(t, isSharedSystemTable(catalog.MO_SYSTEM, catalog.MO_STATEMENT))
+	require.False(t, isSharedSystemTable(catalog.MO_SYSTEM_METRICS, "tenant_table"))
+	require.False(t, isSharedSystemTable("tenant_db", catalog.MO_METRIC))
+}
+
+func TestCompareViewDependenciesIsTotal(t *testing.T) {
+	dependencies := []ViewDependency{
+		{AccountID: 1, LogicalID: 2, TableID: 3, Subscription: true, SubscriptionDB: "sub-b"},
+		{AccountID: 1, LogicalID: 2, TableID: 3, Snapshot: true},
+		{AccountID: 1, LogicalID: 2, TableID: 3},
+		{AccountID: 1, LogicalID: 2, TableID: 3, Subscription: true, SubscriptionDB: "sub-a"},
+		{AccountID: 1, LogicalID: 2, TableID: 4},
+	}
+
+	slices.SortFunc(dependencies, compareViewDependencies)
+
+	require.Equal(t, []ViewDependency{
+		{AccountID: 1, LogicalID: 2, TableID: 3},
+		{AccountID: 1, LogicalID: 2, TableID: 3, Subscription: true, SubscriptionDB: "sub-a"},
+		{AccountID: 1, LogicalID: 2, TableID: 3, Subscription: true, SubscriptionDB: "sub-b"},
+		{AccountID: 1, LogicalID: 2, TableID: 3, Snapshot: true},
+		{AccountID: 1, LogicalID: 2, TableID: 4},
+	}, dependencies)
+
+	base := ViewDependency{
+		AccountID:             1,
+		LogicalID:             2,
+		TableID:               3,
+		PublisherAccountID:    4,
+		SubscriptionDB:        "sub-db",
+		SubscriptionTable:     "sub-table",
+		PublisherDB:           "pub-db",
+		PublisherTable:        "pub-table",
+		DatabaseName:          "db",
+		TableName:             "table",
+		PublisherAccountIDSet: false,
+	}
+	tests := []struct {
+		name  string
+		left  ViewDependency
+		right ViewDependency
+	}{
+		{name: "account", left: withViewDependency(base, func(d *ViewDependency) { d.AccountID = 0 }), right: base},
+		{name: "logical id", left: withViewDependency(base, func(d *ViewDependency) { d.LogicalID = 1 }), right: base},
+		{name: "table id", left: withViewDependency(base, func(d *ViewDependency) { d.TableID = 2 }), right: base},
+		{name: "snapshot", left: base, right: withViewDependency(base, func(d *ViewDependency) { d.Snapshot = true })},
+		{name: "subscription", left: base, right: withViewDependency(base, func(d *ViewDependency) { d.Subscription = true })},
+		{name: "publisher account", left: withViewDependency(base, func(d *ViewDependency) { d.PublisherAccountID = 3 }), right: base},
+		{name: "publisher account set", left: base, right: withViewDependency(base, func(d *ViewDependency) { d.PublisherAccountIDSet = true })},
+		{name: "subscription database", left: withViewDependency(base, func(d *ViewDependency) { d.SubscriptionDB = "a" }), right: base},
+		{name: "subscription table", left: withViewDependency(base, func(d *ViewDependency) { d.SubscriptionTable = "a" }), right: base},
+		{name: "publisher database", left: withViewDependency(base, func(d *ViewDependency) { d.PublisherDB = "a" }), right: base},
+		{name: "publisher table", left: withViewDependency(base, func(d *ViewDependency) { d.PublisherTable = "a" }), right: base},
+		{name: "database", left: withViewDependency(base, func(d *ViewDependency) { d.DatabaseName = "a" }), right: base},
+		{name: "table", left: withViewDependency(base, func(d *ViewDependency) { d.TableName = "a" }), right: base},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Negative(t, compareViewDependencies(test.left, test.right))
+			require.Positive(t, compareViewDependencies(test.right, test.left))
+		})
+	}
+	require.Zero(t, compareViewDependencies(base, base))
+}
+
+func withViewDependency(base ViewDependency, update func(*ViewDependency)) ViewDependency {
+	update(&base)
+	return base
 }
 
 func TestBuildCreateViewExplicitColumnList(t *testing.T) {
@@ -634,6 +882,7 @@ func TestBuildAlterView(t *testing.T) {
 	ctx.EXPECT().ResolveById(gomock.Any(), gomock.Any()).Return(nil, nil, nil).AnyTimes()
 	ctx.EXPECT().GetStatsCache().Return(nil).AnyTimes()
 	ctx.EXPECT().GetSnapshot().Return(nil).AnyTimes()
+	ctx.EXPECT().GetViews().Return(nil).AnyTimes()
 	ctx.EXPECT().SetViews(gomock.Any()).AnyTimes()
 	ctx.EXPECT().SetSnapshot(gomock.Any()).AnyTimes()
 	ctx.EXPECT().GetLowerCaseTableNames().Return(int64(1)).AnyTimes()

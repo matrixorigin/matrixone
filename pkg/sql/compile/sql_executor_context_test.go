@@ -21,15 +21,27 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+type testSubscriptionResolver struct {
+	meta *plan.SubscriptionMeta
+}
+
+func (r testSubscriptionResolver) GetSubscriptionMeta(string, *plan.Snapshot) (*plan.SubscriptionMeta, error) {
+	return r.meta, nil
+}
 
 func TestNewInternalStatementContextPreservesRootAndClaimsStatsOnce(t *testing.T) {
 	root := resource.NewRoot(resource.ConnExternal)
@@ -56,43 +68,208 @@ func TestNewInternalStatementContextPreservesRootAndClaimsStatsOnce(t *testing.T
 	}
 }
 
-func Test_panic(t *testing.T) {
-	r := func() {
-		err := recover()
-		require.Equal(t, "not supported in internal sql executor", err)
+func TestCompilerContextUnsupportedResolversReturnErrors(t *testing.T) {
+	c := &compilerContext{
+		ctx:  context.Background(),
+		proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 	}
 
+	_, err := c.ResolveUdf("f", nil)
+	require.Error(t, err)
+	_, err = c.ResolveAccountIds([]string{"acc"})
+	require.Error(t, err)
+	_, err = c.ResolveSnapshotWithSnapshotName("sn")
+	require.Error(t, err)
+	require.Error(t, c.CheckSubscriptionValid("sub", "acc", "pub"))
+	_, _, err = c.ResolveSubscriptionTableById(1, nil)
+	require.Error(t, err)
+	_, err = c.IsPublishing("db")
+	require.Error(t, err)
+	_, err = c.CheckTimeStampValid(1)
+	require.Error(t, err)
+	_, _, err = c.GetQueryResultMeta("uuid")
+	require.Error(t, err)
+}
+
+func TestCompilerContextDelegatesViewMetadataResolvers(t *testing.T) {
+	oldCtx := context.WithValue(context.Background(), struct{ name string }{"old"}, "old")
+	delegate := plan.NewMockCompilerContext(false)
+	delegate.SetContext(oldCtx)
+	delegate.ResolveAccountIdsFunc = func(names []string) ([]uint32, error) {
+		require.Equal(t, []string{"acc"}, names)
+		return []uint32{7}, nil
+	}
+	refreshCtx := context.WithValue(context.Background(), struct{ name string }{"new"}, "new")
+	refreshCtx = context.WithValue(refreshCtx, viewMetadataCompilerContextKey{}, delegate)
+	c := &compilerContext{
+		ctx:       refreshCtx,
+		defaultDB: "db",
+		proc:      testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+	}
+
+	obj, def, err := c.ResolveSubscriptionTableById(1, &plan.SubscriptionMeta{})
+	require.NoError(t, err)
+	require.Nil(t, obj)
+	require.Nil(t, def)
+	publishing, err := c.IsPublishing("db")
+	require.NoError(t, err)
+	require.False(t, publishing)
+	snapshot, err := c.ResolveSnapshotWithSnapshotName("sn")
+	require.NoError(t, err)
+	require.Nil(t, snapshot)
+	valid, err := c.CheckTimeStampValid(1)
+	require.NoError(t, err)
+	require.False(t, valid)
+	udf, err := c.ResolveUdf("f", nil)
+	require.NoError(t, err)
+	require.Nil(t, udf)
+	accountIDs, err := c.ResolveAccountIds([]string{"acc"})
+	require.NoError(t, err)
+	require.Equal(t, []uint32{7}, accountIDs)
+	require.Same(t, oldCtx, delegate.GetContext(), "delegate context must be restored after every call")
+}
+
+func TestCompilerContextQueryingSubscription(t *testing.T) {
 	c := &compilerContext{}
+	meta := &plan.SubscriptionMeta{}
 
-	func() {
-		defer r()
-		_ = c.CheckSubscriptionValid("", "", "")
-	}()
+	c.SetQueryingSubscription(meta)
 
-	func() {
-		defer r()
-		_, _ = c.IsPublishing("")
-	}()
+	require.Same(t, meta, c.GetQueryingSubscription())
+}
 
-	func() {
-		defer r()
-		c.SetQueryingSubscription(nil)
-	}()
+func TestCompilerContextUsesRefreshSubscriptionResolver(t *testing.T) {
+	meta := &plan.SubscriptionMeta{SubName: "subdb"}
+	procCtx := context.WithValue(
+		context.Background(),
+		viewMetadataSubscriptionResolverKey{},
+		viewMetadataSubscriptionResolver(testSubscriptionResolver{meta: meta}),
+	)
+	c := &compilerContext{
+		ctx:  context.Background(),
+		proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+	}
+	c.proc.ReplaceTopCtx(procCtx)
 
-	func() {
-		defer r()
-		_, _ = c.ResolveUdf("", nil)
-	}()
+	actual, err := c.GetSubscriptionMeta("subdb", nil)
 
-	func() {
-		defer r()
-		_, _ = c.ResolveAccountIds(nil)
-	}()
+	require.NoError(t, err)
+	require.Same(t, meta, actual)
 
-	func() {
-		defer r()
-		_, _, _ = c.GetQueryResultMeta("")
-	}()
+	snapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1}}
+	actual, err = c.GetSubscriptionMeta("subdb", snapshot)
+	require.NoError(t, err)
+	require.Same(t, meta, actual)
+}
+
+func TestCompilerContextRoutesRecordedSystemRelationToSystemAccount(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	proc.ReplaceTopCtx(ctx)
+	resolverCtx := context.WithValue(ctx, viewMetadataResolverKey{}, viewMetadataRefreshResolver{
+		dependencies: []plan.ViewDependency{{
+			AccountID:    catalog.System_Account,
+			AccountIDSet: true,
+			DatabaseName: catalog.MO_CATALOG,
+			TableName:    "cluster_source",
+		}},
+	})
+	relation := mock_frontend.NewMockRelation(ctrl)
+	database := mock_frontend.NewMockDatabase(ctrl)
+	database.EXPECT().Relation(gomock.Any(), "cluster_source", nil).Return(relation, nil)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _ string, _ any) (engine.Database, error) {
+			accountID, err := defines.GetAccountId(ctx)
+			require.NoError(t, err)
+			require.Equal(t, uint32(catalog.System_Account), accountID)
+			return database, nil
+		},
+	)
+	c := &compilerContext{ctx: resolverCtx, engine: eng, proc: proc}
+
+	relationCtx, actual, err := c.getRelation(catalog.MO_CATALOG, "cluster_source", nil, nil)
+	require.NoError(t, err)
+	require.Same(t, relation, actual)
+	accountID, err := defines.GetAccountId(relationCtx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(catalog.System_Account), accountID)
+}
+
+func TestViewMetadataRefreshResolverRelationAccountID(t *testing.T) {
+	tests := []struct {
+		name       string
+		dependency plan.ViewDependency
+		database   string
+		table      string
+		wantID     uint32
+		wantFound  bool
+	}{
+		{
+			name: "matching live dependency",
+			dependency: plan.ViewDependency{
+				AccountID: 7, AccountIDSet: true, DatabaseName: "db", TableName: "t",
+			},
+			database: "db", table: "t", wantID: 7, wantFound: true,
+		},
+		{
+			name: "different relation",
+			dependency: plan.ViewDependency{
+				AccountID: 7, AccountIDSet: true, DatabaseName: "db", TableName: "other",
+			},
+			database: "db", table: "t",
+		},
+		{
+			name:       "legacy account identity",
+			dependency: plan.ViewDependency{DatabaseName: "db", TableName: "t"},
+			database:   "db", table: "t",
+		},
+		{
+			name: "snapshot dependency uses physical account",
+			dependency: plan.ViewDependency{
+				AccountID: 0, AccountIDSet: true, Snapshot: true, DatabaseName: "db", TableName: "t",
+			},
+			database: "db", table: "t", wantID: 0, wantFound: true,
+		},
+		{
+			name: "subscription dependency",
+			dependency: plan.ViewDependency{
+				AccountIDSet: true, Subscription: true, DatabaseName: "db", TableName: "t",
+			},
+			database: "db", table: "t",
+		},
+		{
+			name:     "legacy refresh source",
+			database: catalog.MO_CATALOG, table: "cluster_source",
+			wantID: catalog.System_Account, wantFound: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			resolver := viewMetadataRefreshResolver{
+				dependencies:    []plan.ViewDependency{test.dependency},
+				sourceAccountID: catalog.System_Account,
+				sourceDatabase:  catalog.MO_CATALOG,
+				sourceTable:     "cluster_source",
+			}
+			accountID, found := resolver.relationAccountID(test.database, test.table)
+			require.Equal(t, test.wantID, accountID)
+			require.Equal(t, test.wantFound, found)
+		})
+	}
+}
+
+func TestCompilerContextRecordsViewDependencies(t *testing.T) {
+	c := &compilerContext{}
+	views := []string{"db#v1", "db#v2"}
+
+	c.SetViews(views)
+	views[0] = "changed"
+	actual := c.GetViews()
+	actual[1] = "also changed"
+
+	require.Equal(t, []string{"db#v1", "db#v2"}, c.GetViews())
 }
 
 func TestCompilerContext_Database(t *testing.T) {
