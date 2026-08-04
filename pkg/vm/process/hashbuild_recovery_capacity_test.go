@@ -15,11 +15,41 @@
 package process
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHashBuildRecoveryCapacitySupports256Workers(t *testing.T) {
+	const workers = 256
+
+	budget := MustNewHashBuildBudget(1, 1)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(1, generation)
+	require.NoError(t, err)
+
+	recoveries := make([]*HashBuildRecoveryCapacity, workers)
+	classes := make([]mpool.AllocationCapacityClass, workers)
+	for i := range workers {
+		recoveries[i], err = NewHashBuildRecoveryCapacity(generation)
+		require.NoError(t, err)
+		classes[i], err = account.RegisterCapacityController(recoveries[i])
+		require.NoError(t, err)
+	}
+	require.Greater(t, uint32(classes[workers-1]), uint32(math.MaxUint8))
+
+	for i := range workers {
+		require.NoError(t, recoveries[i].Close())
+		require.NoError(t, account.UnregisterCapacityController(classes[i], recoveries[i]))
+	}
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+}
 
 func TestHashBuildRecoveryCapacityTransfersPhysicalCharge(t *testing.T) {
 	budget := MustNewHashBuildBudget(1024, 1024)
