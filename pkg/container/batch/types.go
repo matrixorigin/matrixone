@@ -56,4 +56,8 @@ type Batch struct {
 	// row count of batch, to instead of old len(Zs).
 	rowCount int
 	offHeap  bool
+
+	// allocationAccount is the destination selection for owned off-heap
+	// vectors created or reused by this batch. Alias vectors do not copy it.
+	allocationAccount *vector.AllocationAccountSelection
 }

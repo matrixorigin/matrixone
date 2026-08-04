@@ -20,8 +20,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -49,46 +49,6 @@ const (
 	Rows          = 10     // default rows
 	BenchmarkRows = 100000 // default rows for benchmark
 )
-
-// gatedHashBuildInput exposes a deterministic boundary after HashBuild has
-// retained the first batch and before it can pull the second one. Tests use
-// that boundary to model other workers charging the same query generation
-// without scheduler sleeps or polling.
-type gatedHashBuildInput struct {
-	*colexec.MockOperator
-	batches            []*batch.Batch
-	current            int
-	firstBatchRetained chan struct{}
-	continueInput      chan struct{}
-}
-
-func newGatedHashBuildInput(batches ...*batch.Batch) *gatedHashBuildInput {
-	return &gatedHashBuildInput{
-		MockOperator:       colexec.NewMockOperator(),
-		batches:            batches,
-		firstBatchRetained: make(chan struct{}),
-		continueInput:      make(chan struct{}),
-	}
-}
-
-func (op *gatedHashBuildInput) Call(proc *process.Process) (vm.CallResult, error) {
-	result := vm.NewCallResult()
-	if op.current >= len(op.batches) {
-		result.Status = vm.ExecStop
-		return result, nil
-	}
-	if op.current == 1 {
-		close(op.firstBatchRetained)
-		select {
-		case <-op.continueInput:
-		case <-proc.Ctx.Done():
-			return result, context.Cause(proc.Ctx)
-		}
-	}
-	result.Batch = op.batches[op.current]
-	op.current++
-	return result, nil
-}
 
 func runtimeFilterPlanType(typ types.Type) *plan.Type {
 	return &plan.Type{
@@ -205,8 +165,11 @@ func TestHashBuildRepeatedResetFinalizesRuntimeFilterOnce(t *testing.T) {
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
-func TestBroadcastBudgetFailureUnblocksAllConsumers(t *testing.T) {
+func TestBroadcastBudgetFailurePublishesTerminalAndCleansBudget(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	budget := installTestProcessHashBuildBudget(t, tc.arg, tc.proc)
+	account := tc.arg.ctr.hashmapBuilder.mapAllocationAccount
+	require.NotNil(t, account)
 	tc.arg.SetChildren([]vm.Operator{tc.marg})
 	require.NoError(t, tc.marg.Prepare(tc.proc))
 	require.NoError(t, tc.arg.Prepare(tc.proc))
@@ -225,28 +188,20 @@ func TestBroadcastBudgetFailureUnblocksAllConsumers(t *testing.T) {
 	require.Contains(t, buildErr.Error(), "requested=")
 	require.Contains(t, buildErr.Error(), "processLimitationSize")
 	require.NotErrorIs(t, buildErr, process.ErrHashBuildBudgetAdmission)
+	require.Zero(t, tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillStarts"])
+	require.Empty(t, tc.arg.ctr.spilledFds)
+	require.Nil(t, tc.arg.ctr.spillBundle)
 
-	const consumers = 4
-	results := make([]message.JoinMapResult, consumers)
-	receiveErrs := make([]error, consumers)
-	var wg sync.WaitGroup
-	wg.Add(consumers)
-	for i := range consumers {
-		go func(i int) {
-			defer wg.Done()
-			results[i], receiveErrs[i] = message.ReceiveJoinMapResult(
-				tc.arg.JoinMapTag, false, 0, tc.proc.GetMessageBoard(), tc.proc.Ctx)
-		}(i)
-	}
-	wg.Wait()
-
-	for i := range consumers {
-		require.NoError(t, receiveErrs[i])
-		require.True(t, results[i].IsBuildError())
-		require.Equal(t, results[0].BuildError().ErrorCode(), results[i].BuildError().ErrorCode())
-		require.Equal(t, results[0].BuildError().Error(), results[i].BuildError().Error())
-	}
+	terminal, receiveErr := message.ReceiveJoinMapResult(
+		tc.arg.JoinMapTag, false, 0, tc.proc.GetMessageBoard(), tc.proc.Ctx)
+	require.NoError(t, receiveErr)
+	require.True(t, terminal.IsBuildError())
+	require.Equal(t, buildErr.Error(), terminal.BuildError().AsMoErr().Error())
 	tc.arg.Reset(tc.proc, true, buildErr)
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, budget.Used())
+	require.Zero(t, budget.SpillDiskUsed())
+	require.Zero(t, budget.SpillFDUsed())
 
 	bat.Clean(tc.proc.Mp())
 	tc.marg.Reset(tc.proc, true, buildErr)
@@ -271,6 +226,7 @@ func TestHashBuildPrepareConvertsTerminalBudgetAdmission(t *testing.T) {
 			Idx: 0,
 		}},
 	}
+	installTestProcessHashBuildBudget(t, arg, proc)
 	var prepareErr error
 	t.Cleanup(func() {
 		arg.Free(proc, true, prepareErr)
@@ -293,6 +249,7 @@ func TestHashBuildPrepareConvertsTerminalBudgetAdmission(t *testing.T) {
 
 func TestHashBuildWithoutMapStillBudgetsRetainedBatches(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, nil)
+	installTestProcessHashBuildBudget(t, tc.arg, tc.proc)
 	tc.arg.NeedHashMap = false
 	tc.arg.NeedBatches = true
 	tc.arg.SetChildren([]vm.Operator{tc.marg})
@@ -319,23 +276,6 @@ func TestShuffleWithoutMapRejectsMissingRuntimeFilter(t *testing.T) {
 	tc.arg.NeedHashMap = false
 	require.Error(t, tc.arg.Prepare(tc.proc))
 	tc.arg.Free(tc.proc, true, nil)
-}
-
-func TestHashBuildFreeWithoutResetReleasesOwnedMemory(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-	budget, err := tc.proc.GetHashBuildBudget()
-	require.NoError(t, err)
-	input := newBatch(tc.types, tc.proc, 100)
-	require.NoError(t, tc.arg.ctr.hashmapBuilder.copyBuildBatch(input, tc.proc))
-	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = input.RowCount()
-	input.Clean(tc.proc.Mp())
-	require.NoError(t, tc.arg.ctr.hashmapBuilder.BuildHashmap(false, false, false, tc.proc))
-	require.Greater(t, budget.Used(), uint64(0))
-
-	buildErr := errors.New("injected build failure")
-	tc.arg.Free(tc.proc, true, buildErr)
-	require.Zero(t, budget.Used())
 }
 
 func BenchmarkBuild(b *testing.B) {
@@ -390,25 +330,27 @@ func newTestCase(t testing.TB, flgs []bool, ts []types.Type, cs []*plan.Expr) bu
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 		Ch2: make(chan process.PipelineSignal, 10),
 	}
+	arg := &HashBuild{
+		JoinMapTag:    1,
+		JoinMapRefCnt: 1,
+		Conditions:    cs,
+		NeedHashMap:   true,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
+		},
+	}
+	installTestHashBuildAllocation(t, arg)
 	return buildTestCase{
 		types:  ts,
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
-		arg: &HashBuild{
-			JoinMapTag:    1,
-			JoinMapRefCnt: 1,
-			Conditions:    cs,
-			NeedHashMap:   true,
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
-		},
-		marg: &merge.Merge{},
+		arg:    arg,
+		marg:   &merge.Merge{},
 	}
 }
 
@@ -419,6 +361,7 @@ func TestHashBuildPrepareDropsPriorGenerationSpillFileService(t *testing.T) {
 	require.NoError(t, err)
 
 	arg := &HashBuild{NeedHashMap: false}
+	installTestHashBuildAllocation(t, arg)
 	arg.ctr.spillFS = prior
 	require.NoError(t, arg.Prepare(proc))
 	require.Nil(t, arg.ctr.spillFS, "a reused operator must not retain the prior Process service")
@@ -559,6 +502,7 @@ func TestHashBuildWithRuntimeFilter(t *testing.T) {
 			},
 		},
 	}
+	installTestHashBuildAllocation(t, arg)
 
 	err := arg.Prepare(proc)
 	require.NoError(t, err)
@@ -670,14 +614,13 @@ func TestHashBuildOptionalRuntimeFilterCollectionFallsBackToJoinMap(
 	tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(
 		tc.arg.JoinMapTag+500, 100, typ)
 	tc.arg.SetChildren([]vm.Operator{tc.marg})
-	require.NoError(t, tc.marg.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-
 	const capBytes = uint64(64 << 20)
 	aggregate := process.MustNewHashBuildBudget(capBytes, capBytes)
 	generation, err := aggregate.OpenGeneration(1)
 	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+	installTestHashBuildBudget(t, tc.arg, generation)
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
 
 	providerCalls := 0
 	forcedCollectionReject := false
@@ -762,14 +705,13 @@ func TestHashBuildClosedMapBudgetDoesNotRecordCollectionFallback(
 	tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(
 		tc.arg.JoinMapTag+501, 100, typ)
 	tc.arg.SetChildren([]vm.Operator{tc.marg})
-	require.NoError(t, tc.marg.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-
 	const capBytes = uint64(64 << 20)
 	aggregate := process.MustNewHashBuildBudget(capBytes, capBytes)
 	generation, err := aggregate.OpenGeneration(1)
 	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+	installTestHashBuildBudget(t, tc.arg, generation)
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
 
 	providerCalls := 0
 	forcedClosed := false
@@ -814,9 +756,6 @@ func TestHashBuildRuntimeFilterFallbackStatsTriggerDiagnostics(t *testing.T) {
 		"HashBuildRuntimeFilterCollectionFallbacks",
 		"HashBuildRuntimeFilterBudgetFallbacks",
 		"HashBuildRuntimeFilterAllocationFallbacks",
-		"HashBuildSpillScratchReserveRejects",
-		"HashBuildSpillScratchGrowRejects",
-		"HashBuildSpillScratchGrowCount",
 	} {
 		t.Run(stat, func(t *testing.T) {
 			require.True(t, hasHashBuildDiagnosticStats(
@@ -836,13 +775,12 @@ func TestHashmapBuilderUniqueGrowthFailureAbandonsOptionalKeysInPlace(
 		[]types.Type{typ},
 		[]*plan.Expr{newExpr(0, typ)},
 	)
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-
 	const capBytes = uint64(64 << 20)
 	aggregate := process.MustNewHashBuildBudget(capBytes, capBytes)
 	generation, err := aggregate.OpenGeneration(1)
 	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+	installTestHashBuildBudget(t, tc.arg, generation)
+	require.NoError(t, tc.arg.Prepare(tc.proc))
 
 	const uniqueGrowthRows = hashmap.UnitLimit * 2
 	input := newBatch(
@@ -1042,14 +980,13 @@ func TestShuffleDedupAdmissionAfterRewriteDoesNotSpillPartialInput(
 		Tag: tc.arg.JoinMapTag + 700,
 	}
 	tc.arg.SetChildren([]vm.Operator{tc.marg})
-	require.NoError(t, tc.marg.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-
 	const capBytes = uint64(64 << 20)
 	aggregate := process.MustNewHashBuildBudget(capBytes, capBytes)
 	generation, err := aggregate.OpenGeneration(1)
 	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+	installTestHashBuildBudget(t, tc.arg, generation)
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
 	// Ingress happens before BuildHashmap initializes this phase. Mark the
 	// retained source safe so the provider rejects only after Dedup crosses
 	// its explicit in-place rewrite boundary.
@@ -1258,19 +1195,16 @@ func TestHashBuildFloatRuntimeFilterAllocationFailureFallsBackToPass(t *testing.
 		RuntimeFilterSpec: spec,
 	}
 	arg.OpAnalyzer = process.NewAnalyzer(0, false, false, "hash build")
+	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	installTestHashBuildBudget(t, arg, generation)
 
 	keyVec := vector.NewOffHeapVecWithType(typ)
 	require.NoError(t, keyVec.PreExtend(256, mp))
 	keyVec.SetLength(keyVec.Capacity())
 	arg.ctr.hashmapBuilder.InputBatchRowCount = keyVec.Length()
 	arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{keyVec}
-
-	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
-	generation, err := budget.OpenGeneration(1)
-	require.NoError(t, err)
-	arg.ctr.hashmapBuilder.setBudget(generation)
-	require.NoError(t, arg.ctr.hashmapBuilder.reserveBuildAux(true))
-	usedWithUniqueKeys := generation.Used()
 
 	var filler []byte
 	defer func() {
@@ -1293,7 +1227,7 @@ func TestHashBuildFloatRuntimeFilterAllocationFailureFallsBackToPass(t *testing.
 	require.False(t, arg.ctr.runtimeFilterIn)
 	require.Nil(t, arg.ctr.hashmapBuilder.UniqueJoinKeys)
 	require.Zero(t, generation.RejectCount())
-	require.Less(t, generation.Used(), usedWithUniqueKeys)
+	require.Zero(t, generation.Used())
 	extra := arg.OpAnalyzer.GetOpStats().ExtraStats
 	require.Equal(t, int64(1),
 		extra["HashBuildRuntimeFilterAllocationFallbacks"])
@@ -1570,15 +1504,14 @@ func TestRuntimeFilterExplicitDecimalContractProducesIn(t *testing.T) {
 	spec := rawRuntimeFilterSpec(105, 100, decimalType)
 	tc.arg.RuntimeFilterSpec = spec
 	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = 1
+	budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	installTestHashBuildBudget(t, tc.arg, generation)
 	payload := vector.NewVec(decimalType)
 	require.NoError(t, vector.AppendFixed(
 		payload, types.Decimal64(1000), false, tc.proc.Mp()))
 	tc.arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{payload}
-	budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
-	generation, err := budget.OpenGeneration(1)
-	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
-
 	require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
 	require.True(t, tc.arg.ctr.runtimeFilterDone)
 	require.True(t, tc.arg.ctr.runtimeFilterIn)
@@ -1618,15 +1551,14 @@ func TestDirectRuntimeFilterUsesDeclaredHashSlot(t *testing.T) {
 	spec.BuildExpr = newExpr(1, typ)
 	tc.arg.RuntimeFilterSpec = spec
 	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = 2
+	budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	installTestHashBuildBudget(t, tc.arg, generation)
 	tc.arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{
 		testutil.MakeInt32Vector([]int32{901, 902}, nil, tc.proc.Mp()),
 		testutil.MakeInt32Vector([]int32{11, 12}, nil, tc.proc.Mp()),
 	}
-	budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
-	generation, err := budget.OpenGeneration(1)
-	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
-
 	require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
 	receiver := message.NewMessageReceiver(
 		[]int32{spec.Tag},
@@ -1704,6 +1636,10 @@ func TestHashBuildSerializedRuntimeFilterAllocationFailureFallsBackToPass(t *tes
 		RuntimeFilterSpec: spec,
 	}
 	arg.OpAnalyzer = process.NewAnalyzer(0, false, false, "hash build")
+	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	installTestHashBuildBudget(t, arg, generation)
 	arg.ctr.hashmapBuilder.InputBatchRowCount = 1
 	arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{
 		testutil.MakeInt32Vector([]int32{1}, nil, mp),
@@ -1721,11 +1657,6 @@ func TestHashBuildSerializedRuntimeFilterAllocationFailureFallsBackToPass(t *tes
 				moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 		}
 	})
-
-	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
-	generation, err := budget.OpenGeneration(1)
-	require.NoError(t, err)
-	arg.ctr.hashmapBuilder.setBudget(generation)
 
 	var filler []byte
 	defer func() {
@@ -1788,6 +1719,10 @@ func TestSerializedRuntimeFilterUsesTightBudgetAndProducesIn(t *testing.T) {
 		[]types.Type{componentType, componentType}, true)
 	tc.arg.RuntimeFilterSpec = spec
 	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = rowCount
+	budget := process.MustNewHashBuildBudget(512<<10, 512<<10)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	installTestHashBuildBudget(t, tc.arg, generation)
 
 	first := make([]int32, rowCount)
 	second := make([]int32, rowCount)
@@ -1816,11 +1751,6 @@ func TestSerializedRuntimeFilterUsesTightBudgetAndProducesIn(t *testing.T) {
 
 	// The generic VARCHAR(max) estimator would request roughly 64 MiB for
 	// these tiny tuples. The tuple-specific bound must fit comfortably here.
-	budget := process.MustNewHashBuildBudget(512<<10, 512<<10)
-	generation, err := budget.OpenGeneration(1)
-	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
-
 	require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
 	require.True(t, tc.arg.ctr.runtimeFilterDone)
 	require.True(t, tc.arg.ctr.runtimeFilterIn)
@@ -1868,74 +1798,45 @@ func TestSerializedRuntimeFilterUsesTightBudgetAndProducesIn(t *testing.T) {
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
-func TestSerializedRuntimeFilterBudgetAccountsPackerSizeClass(t *testing.T) {
+func TestSerializedRuntimeFilterScratchUsesPhysicalAccount(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	componentType := types.T_varchar.ToType()
-	tc := newTestCase(
-		t,
-		[]bool{false},
-		[]types.Type{componentType},
-		[]*plan.Expr{newExpr(0, componentType)},
-	)
 	spec := makeSerializedRuntimeFilterSpec(
-		t, tc.proc, 107, 2, []types.Type{componentType}, false)
-	tc.arg.RuntimeFilterSpec = spec
-	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = 1
-	value := strings.Repeat("x", 128<<10)
-	keys := []*vector.Vector{
-		testutil.MakeVarcharVector([]string{value}, nil, tc.proc.Mp()),
-	}
-	tc.arg.ctr.hashmapBuilder.UniqueJoinKeys = keys
-
-	service := tc.proc.GetService()
-	rt := moruntime.ServiceRuntime(service)
-	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion8)
-	t.Cleanup(func() {
-		if hadOriginal {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
-		} else {
-			rt.SetGlobalVariables(
-				moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-	})
-
-	areaBytes, maxRowBytes, err :=
-		serializedRuntimeFilterBounds(
-			tc.proc, keys, []int{0}, 1, false)
-	require.NoError(t, err)
-	require.Greater(t, maxRowBytes, uint64(128<<10))
-	packerBytes, ok := types.PackerAllocationSize(maxRowBytes)
-	require.True(t, ok)
-	require.Equal(t, uint64(256<<10), packerBytes)
-	peak, err := serializedRuntimeFilterAllocationPeak(
-		1, areaBytes, maxRowBytes)
-	require.NoError(t, err)
-
-	// One byte below the true peak must fail open before constructing the
-	// packer. Counting only its requested slice would incorrectly admit it.
-	budget := process.MustNewHashBuildBudget(peak-1, peak-1)
+		t, proc, 107, 2, []types.Type{componentType}, false)
+	arg := &HashBuild{RuntimeFilterSpec: spec}
+	budget := process.MustNewHashBuildBudget(450<<10, 450<<10)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+	installTestHashBuildBudget(t, arg, generation)
 
-	require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
-	receiver := message.NewMessageReceiver(
-		[]int32{spec.Tag},
-		message.AddrBroadCastOnCurrentCN(),
-		tc.proc.GetMessageBoard(),
-	)
-	msgs, _, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
-	require.NoError(t, err)
-	require.Len(t, msgs, 1)
-	require.Equal(t, int32(message.RuntimeFilter_PASS),
-		msgs[0].(message.RuntimeFilterMessage).Typ)
+	value := strings.Repeat("x", 300<<10)
+	arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{
+		testutil.MakeVarcharVector([]string{value}, nil, proc.Mp()),
+	}
+	arg.ctr.hashmapBuilder.InputBatchRowCount = 1
+
+	data, release, rows, usable, err :=
+		arg.materializeSerializedRuntimeFilter(
+			proc,
+			spec,
+			[]types.Type{componentType},
+			1,
+		)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.Equal(t, runtimefilter.OptionalFallbackBudgetAdmission,
+		runtimefilter.ClassifyOptionalFallback(err))
+	require.Nil(t, data)
+	require.Nil(t, release)
+	require.Zero(t, rows)
+	require.False(t, usable)
+	require.Equal(t, uint64(1), generation.RejectCount())
 	require.Zero(t, generation.Used())
-	require.Zero(t, generation.Peak())
+	require.NotZero(t, generation.Peak())
 
+	arg.ctr.hashmapBuilder.Free(proc)
 	generation.Close()
-	tc.proc.Free()
-	require.Zero(t, tc.proc.Mp().CurrNB())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestSerializedRuntimeFilterBoundsObserveCancellation(t *testing.T) {
@@ -2106,14 +2007,13 @@ func TestRuntimeFilterMarshalBudgetAdmissionFallsBackToPass(t *testing.T) {
 			tc.arg.RuntimeFilterSpec = spec
 			tc.arg.OpAnalyzer = process.NewAnalyzer(0, false, false, "hash build")
 			tc.arg.ctr.hashmapBuilder.InputBatchRowCount = 1
-			tc.arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{
-				testutil.MakeInt32Vector([]int32{1}, nil, tc.proc.Mp()),
-			}
-
 			budget := process.MustNewHashBuildBudget(1, 1)
 			generation, err := budget.OpenGeneration(1)
 			require.NoError(t, err)
-			tc.arg.ctr.hashmapBuilder.setBudget(generation)
+			installTestHashBuildBudget(t, tc.arg, generation)
+			tc.arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{
+				testutil.MakeInt32Vector([]int32{1}, nil, tc.proc.Mp()),
+			}
 
 			require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
 			require.True(t, tc.arg.ctr.runtimeFilterDone)
@@ -2152,20 +2052,16 @@ func TestRuntimeFilterMarshalUsesSinglePayloadBudget(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()},
 		[]*plan.Expr{newExpr(0, types.T_int32.ToType())})
 	vec := testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, nil, tc.proc.Mp())
-	wireBytes := uint64(1+len(types.EncodeType(vec.GetType()))+4*4+1) +
-		uint64(len(vec.GetData())+len(vec.GetArea()))
-	projected := wireBytes + 64<<10
-
-	budget := process.MustNewHashBuildBudget(projected, projected)
+	budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+	installTestHashBuildBudget(t, tc.arg, generation)
 
-	data, release, err := tc.arg.ctr.hashmapBuilder.marshalRuntimeFilterVector(vec)
+	data, release, err := tc.arg.ctr.hashmapBuilder.marshalRuntimeFilterVector(vec, tc.proc.Mp())
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
-	require.Equal(t, projected, generation.Peak())
-	require.LessOrEqual(t, generation.Used(), projected)
+	require.Equal(t, uint64(cap(data)), generation.Peak())
+	require.Equal(t, uint64(cap(data)), generation.Used())
 	require.NotNil(t, release)
 	release()
 	require.Zero(t, generation.Used())
@@ -2184,20 +2080,16 @@ func TestRuntimeFilterMarshalSinglePayloadCoversVarlenaPeak(t *testing.T) {
 		values[i] = strings.Repeat("x", 1024+i)
 	}
 	vec := testutil.MakeVarcharVector(values, nil, tc.proc.Mp())
-	wireBytes := uint64(1+len(types.EncodeType(vec.GetType()))+4*4+1) +
-		uint64(len(vec.GetData())+len(vec.GetArea()))
-	projected := wireBytes + 64<<10
-
-	budget := process.MustNewHashBuildBudget(projected, projected)
+	budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+	installTestHashBuildBudget(t, tc.arg, generation)
 
-	data, release, err := tc.arg.ctr.hashmapBuilder.marshalRuntimeFilterVector(vec)
+	data, release, err := tc.arg.ctr.hashmapBuilder.marshalRuntimeFilterVector(vec, tc.proc.Mp())
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
-	require.Equal(t, projected, generation.Peak())
-	require.LessOrEqual(t, generation.Used(), projected)
+	require.Equal(t, uint64(cap(data)), generation.Peak())
+	require.Equal(t, uint64(cap(data)), generation.Used())
 	release()
 	require.Zero(t, generation.Used())
 
@@ -2207,37 +2099,182 @@ func TestRuntimeFilterMarshalSinglePayloadCoversVarlenaPeak(t *testing.T) {
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
-func TestRuntimeFilterMarshalClosedBudgetRemainsFatal(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()},
-		[]*plan.Expr{newExpr(0, types.T_int32.ToType())})
-	spec := rawRuntimeFilterSpec(102, 100, types.T_int32.ToType())
-	tc.arg.RuntimeFilterSpec = spec
-	tc.arg.OpAnalyzer = process.NewAnalyzer(0, false, false, "hash build")
-	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = 1
-	tc.arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{
-		testutil.MakeInt32Vector([]int32{1}, nil, tc.proc.Mp()),
-	}
+func TestRuntimeFilterMarshalAccountedPayloadMessageLifecycle(t *testing.T) {
+	tc := newTestCase(t, []bool{true}, []types.Type{types.T_varchar.ToType()},
+		[]*plan.Expr{newExpr(0, types.T_varchar.ToType())})
+	vec := testutil.MakeVarcharVector(
+		[]string{strings.Repeat("x", 4<<10), strings.Repeat("y", 8<<10)},
+		nil,
+		tc.proc.Mp(),
+	)
 
-	budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
+	const limit = uint64(1 << 20)
+	budget := process.MustNewHashBuildBudget(limit, limit)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
-	generation.Close()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(2*limit, generation)
+	require.NoError(t, err)
+	tc.arg.NeedHashMap = true
+	replaceTestHashBuildAllocation(t, tc.arg, account)
 	tc.arg.ctr.hashmapBuilder.setBudget(generation)
 
-	err = tc.arg.handleRuntimeFilter(tc.proc)
-	require.ErrorIs(t, err, process.ErrHashBuildBudgetClosed)
-	require.Nil(t, tc.arg.ctr.hashmapBuilder.UniqueJoinKeys)
-	require.False(t, tc.arg.ctr.runtimeFilterDone)
-	require.Zero(t, tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildRuntimeFilterBudgetFallbacks"])
-	require.Zero(t, tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildRuntimeFilterAllocationFallbacks"])
+	data, release, err := tc.arg.ctr.hashmapBuilder.marshalRuntimeFilterVector(
+		vec,
+		tc.proc.Mp(),
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+	require.NotNil(t, release)
+	snapshot := account.Snapshot()
+	require.Positive(t, snapshot.Used)
+	require.Equal(t, snapshot.Used, generation.Used())
+
+	spec := &plan.RuntimeFilterSpec{Tag: 103}
+	runtimeFilter := message.RuntimeFilterMessage{
+		Tag:  spec.Tag,
+		Typ:  message.RuntimeFilter_IN,
+		Card: 2,
+		Data: data,
+	}
+	runtimeFilter.SetMemoryRelease(release)
+	message.SendRuntimeFilter(runtimeFilter, spec, tc.proc.GetMessageBoard())
+	require.True(t, tc.proc.GetMessageBoard().CloseAndDrain())
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, generation.Used())
+	vec.Free(tc.proc.Mp())
+
+	require.NoError(t, tc.arg.ClearAllocationAccount(account))
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+	generation.Close()
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
+func TestRuntimeFilterMarshalAccountedOneByteShortFallsBackToPass(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()},
+		[]*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	vec := testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, nil, tc.proc.Mp())
+	size, err := vec.MarshalBinarySize()
+	require.NoError(t, err)
+	capacity, ok := mpool.GrowCapacity(0, int64(size))
+	require.True(t, ok)
+	require.Positive(t, capacity)
+	vec.Free(tc.proc.Mp())
+
+	limit := uint64(capacity - 1)
+	budget := process.MustNewHashBuildBudget(limit, limit)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(2*limit, generation)
+	require.NoError(t, err)
+	tc.arg.NeedHashMap = true
+	replaceTestHashBuildAllocation(t, tc.arg, account)
+	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+	tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(
+		104, 100, types.T_int32.ToType())
+	tc.arg.OpAnalyzer = process.NewAnalyzer(0, false, false, "hash build")
+	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = 4
+	tc.arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{
+		testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, nil, tc.proc.Mp()),
+	}
+
+	require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, generation.Used())
+	require.Equal(t, int64(1),
+		tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildRuntimeFilterBudgetFallbacks"])
 
 	receiver := message.NewMessageReceiver(
-		[]int32{spec.Tag}, message.AddrBroadCastOnCurrentCN(), tc.proc.GetMessageBoard())
-	msgs, done, receiveErr := receiver.ReceiveMessage(false, tc.proc.Ctx)
-	require.NoError(t, receiveErr)
+		[]int32{tc.arg.RuntimeFilterSpec.Tag},
+		message.AddrBroadCastOnCurrentCN(),
+		tc.proc.GetMessageBoard(),
+	)
+	msgs, done, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
+	require.NoError(t, err)
 	require.False(t, done)
-	require.Empty(t, msgs)
+	require.Len(t, msgs, 1)
+	runtimeFilter, ok := msgs[0].(message.RuntimeFilterMessage)
+	require.True(t, ok)
+	require.Equal(t, int32(message.RuntimeFilter_PASS), runtimeFilter.Typ)
+	require.Empty(t, runtimeFilter.Data)
 
+	require.True(t, tc.proc.GetMessageBoard().CloseAndDrain())
+	require.NoError(t, tc.arg.ClearAllocationAccount(account))
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+	generation.Close()
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
+func TestRuntimeFilterWithGroupingKeyFallsBackToPass(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()},
+		[]*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{
+		Tag:                 105,
+		UpperLimit:          100,
+		UseMembershipFilter: true,
+	}
+	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = 1
+	tc.arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{
+		vector.NewRollupConst(types.T_int32.ToType(), 1, tc.proc.Mp()),
+	}
+
+	require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
+	receiver := message.NewMessageReceiver(
+		[]int32{tc.arg.RuntimeFilterSpec.Tag},
+		message.AddrBroadCastOnCurrentCN(),
+		tc.proc.GetMessageBoard(),
+	)
+	msgs, done, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Len(t, msgs, 1)
+	runtimeFilter, ok := msgs[0].(message.RuntimeFilterMessage)
+	require.True(t, ok)
+	require.Equal(t, int32(message.RuntimeFilter_PASS), runtimeFilter.Typ)
+	require.Empty(t, runtimeFilter.Data)
+	require.Nil(t, tc.arg.ctr.hashmapBuilder.UniqueJoinKeys)
+
+	tc.arg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
+func TestSpilledBuildRuntimeFilterPassesInsteadOfDropping(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()},
+		[]*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{
+		Tag:        106,
+		UpperLimit: 100,
+		Expr:       newExpr(0, types.T_int32.ToType()),
+	}
+	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = 1
+	file, err := os.CreateTemp(t.TempDir(), "hashbuild-spilled-runtime-filter")
+	require.NoError(t, err)
+	tc.arg.ctr.spilledFds = []*os.File{file}
+
+	require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
+	receiver := message.NewMessageReceiver(
+		[]int32{tc.arg.RuntimeFilterSpec.Tag},
+		message.AddrBroadCastOnCurrentCN(),
+		tc.proc.GetMessageBoard(),
+	)
+	msgs, done, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Len(t, msgs, 1)
+	runtimeFilter, ok := msgs[0].(message.RuntimeFilterMessage)
+	require.True(t, ok)
+	require.Equal(t, int32(message.RuntimeFilter_PASS), runtimeFilter.Typ)
+	require.Empty(t, runtimeFilter.Data)
+
+	tc.arg.Free(tc.proc, false, nil)
 	tc.proc.Free()
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
@@ -2353,6 +2390,7 @@ func TestHashBuildRuntimeFilterWithNulls(t *testing.T) {
 			},
 		},
 	}
+	installTestHashBuildAllocation(t, arg)
 
 	err := arg.Prepare(proc)
 	require.NoError(t, err)
@@ -2405,6 +2443,7 @@ func TestHashBuildRuntimeFilterWithNullsHashOnPK(t *testing.T) {
 			},
 		},
 	}
+	installTestHashBuildAllocation(t, arg)
 
 	err := arg.Prepare(proc)
 	require.NoError(t, err)
@@ -2427,55 +2466,6 @@ func TestHashBuildRuntimeFilterWithNullsHashOnPK(t *testing.T) {
 
 	arg.Free(proc, false, nil)
 	proc.Free()
-}
-
-func TestHashBuildIsShuffle(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
-	budget, budgetErr := tc.proc.GetHashBuildBudget()
-	require.NoError(t, budgetErr)
-	tc.arg.IsShuffle = true
-	tc.arg.ShuffleIdx = 0
-	tc.arg.SpillThreshold = 1
-	tc.arg.TrackNullKeys = true
-	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: 2}
-	tc.arg.SetChildren([]vm.Operator{tc.marg})
-	for cycle := 0; cycle < 2; cycle++ {
-		if cycle > 0 {
-			tc.marg.Reset(tc.proc, false, nil)
-			tc.proc.GetMessageBoard().Reset()
-		}
-		require.NoError(t, tc.marg.Prepare(tc.proc))
-		require.NoError(t, tc.arg.Prepare(tc.proc))
-		build := batch.NewWithSize(1)
-		var buildNulls []uint64
-		if cycle == 0 {
-			buildNulls = []uint64{1}
-		}
-		build.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 0, 2}, buildNulls, tc.proc.Mp())
-		build.SetRowCount(3)
-		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(build, nil, tc.proc.Mp())
-		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
-		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
-		_, err := vm.Exec(tc.arg, tc.proc)
-		require.NoError(t, err)
-		result, receiveErr := message.ReceiveJoinMapResult(tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx, tc.proc.GetMessageBoard(), tc.proc.Ctx)
-		require.NoError(t, receiveErr)
-		require.True(t, result.IsSuccess(), "cycle %d must publish a spilled JoinMap", cycle)
-		jm := result.JoinMap()
-		require.NotNil(t, jm)
-		require.True(t, jm.IsSpilled())
-		spillPayload, err := jm.TakeSpillBuildPayload()
-		require.NoError(t, err)
-		require.Len(t, spillPayload.Files, spillNumBuckets)
-		require.Same(t, budget, spillPayload.BudgetRef)
-		require.NoError(t, spillPayload.Close())
-		require.Zero(t, budget.Used())
-		require.Zero(t, budget.SpillDiskUsed())
-		require.Zero(t, budget.SpillFDUsed())
-		tc.arg.Reset(tc.proc, false, nil)
-	}
-	tc.arg.Free(tc.proc, false, nil)
-	tc.proc.Free()
 }
 
 func TestBroadcastHashBuildParallelConsumersStayResident(t *testing.T) {
@@ -2559,1058 +2549,180 @@ func TestHashBuildRejectsSharedSpillPayload(t *testing.T) {
 	tc.proc.Free()
 }
 
-func TestShuffleHashBuildRecoveryLeaseDoesNotForceSpill(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_varchar.ToType()}, []*plan.Expr{newExpr(0, types.T_varchar.ToType())})
-	tc.arg.IsShuffle = true
-	tc.arg.ShuffleIdx = 0
-	tc.arg.SpillThreshold = 1 << 30
-	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 3500}
-	tc.arg.SetChildren([]vm.Operator{tc.marg})
-	require.NoError(t, tc.marg.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
+func TestHashBuildRejectsNonPositiveJoinMapRefCountBeforeTransfer(t *testing.T) {
+	for _, refCount := range []int32{0, -1} {
+		t.Run(fmt.Sprintf("ref-%d", refCount), func(t *testing.T) {
+			tc := newTestCase(
+				t,
+				[]bool{false},
+				[]types.Type{types.T_int32.ToType()},
+				[]*plan.Expr{newExpr(0, types.T_int32.ToType())},
+			)
+			tc.arg.JoinMapRefCnt = refCount
+			tc.arg.SpillThreshold = math.MaxInt64
+			tc.arg.SetChildren([]vm.Operator{tc.marg})
+			require.NoError(t, tc.marg.Prepare(tc.proc))
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+			account := tc.arg.ctr.hashmapBuilder.mapAllocationAccount
 
-	const capBytes = uint64(8 << 20)
-	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
-	generation, err := budget.OpenGeneration(1)
-	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+			build := batch.NewWithSize(1)
+			build.Vecs[0] = testutil.MakeInt32Vector(
+				[]int32{1, 2, 3}, nil, tc.proc.Mp(),
+			)
+			build.SetRowCount(3)
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(build, nil, tc.proc.Mp())
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
 
-	payload := make([]byte, 1<<20)
-	for i := range payload {
-		payload[i] = 'x'
-	}
-	build := batch.NewWithSize(1)
-	build.Vecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), payload, 1, tc.proc.Mp())
-	require.NoError(t, err)
-	build.SetRowCount(1)
-
-	directNeed, err := spillBudgetBytes(build)
-	require.NoError(t, err)
-	require.Less(t, directNeed, capBytes)
-
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(build, nil, tc.proc.Mp())
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
-	_, err = vm.Exec(tc.arg, tc.proc)
-	require.NoError(t, err)
-
-	result, err := message.ReceiveJoinMapResult(tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx, tc.proc.GetMessageBoard(), tc.proc.Ctx)
-	require.NoError(t, err)
-	require.True(t, result.IsSuccess())
-	jm := result.JoinMap()
-	require.NotNil(t, jm)
-	require.False(t, jm.IsSpilled(),
-		"a recovery lease changes admission ownership, not the local spill policy")
-	require.Equal(t, int64(1), jm.GetRowCount())
-	require.Zero(t, tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillStarts"])
-	require.Positive(t, tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillRecoveryReservedBytes"])
-	jm.Free()
-	require.Zero(t, generation.Used())
-	require.Zero(t, generation.SpillDiskUsed())
-	require.Zero(t, generation.SpillFDUsed())
-
-	tc.arg.Reset(tc.proc, false, nil)
-	tc.arg.Free(tc.proc, false, nil)
-	tc.marg.Reset(tc.proc, false, nil)
-	generation.Close()
-	tc.proc.Free()
-	require.Zero(t, tc.proc.Mp().CurrNB())
-}
-
-func TestShuffleHashBuildSpillsBeforeRetainingThresholdCrossingBatch(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_varchar.ToType()}, []*plan.Expr{newExpr(0, types.T_varchar.ToType())})
-	tc.arg.IsShuffle = true
-	tc.arg.ShuffleIdx = 0
-	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 3502}
-	tc.arg.SetChildren([]vm.Operator{tc.marg})
-	require.NoError(t, tc.marg.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-
-	makeBuildBatch := func() *batch.Batch {
-		values := make([]string, colexec.DefaultBatchSize)
-		for i := range values {
-			values[i] = strings.Repeat("x", 256)
-		}
-		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = testutil.MakeVarcharVector(values, nil, tc.proc.Mp())
-		bat.SetRowCount(len(values))
-		return bat
-	}
-	first := makeBuildBatch()
-	second := makeBuildBatch()
-	inputSize := int64(first.Size())
-	tc.arg.SpillThreshold = inputSize + 1
-	tc.arg.ctr.setSpillThreshold(tc.arg.SpillThreshold)
-
-	projection, err := tc.arg.ctr.hashmapBuilder.projectedBatchCopy(first)
-	require.NoError(t, err)
-	directRecovery, err := spillBudgetBytes(first)
-	require.NoError(t, err)
-	directRecovery, err = spillRecoveryReservationBytes(directRecovery)
-	require.NoError(t, err)
-	retainedRecovery, err := spillRetainedRecoveryBudgetBytes(projection)
-	require.NoError(t, err)
-	retainedRecovery, err = spillRecoveryReservationBytes(retainedRecovery)
-	require.NoError(t, err)
-
-	// Admit the first recovery lease and its retained-copy allocation together.
-	// The second batch crosses the local threshold and must be spilled directly,
-	// without a second retained copy or any failed shared-budget admission.
-	coalesceSlack := uint64(spillNumBuckets * spillWriteCoalesceSize)
-	capBytes := max(directRecovery, retainedRecovery) +
-		projection.admissionBytes + coalesceSlack
-	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
-	generation, err := budget.OpenGeneration(1)
-	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
-
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(first, nil, tc.proc.Mp())
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(second, nil, tc.proc.Mp())
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
-	_, buildErr := vm.Exec(tc.arg, tc.proc)
-	require.NoError(t, buildErr)
-
-	result, err := message.ReceiveJoinMapResult(
-		tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx,
-		tc.proc.GetMessageBoard(), tc.proc.Ctx)
-	require.NoError(t, err)
-	require.True(t, result.IsSuccess())
-	jm := result.JoinMap()
-	require.NotNil(t, jm)
-	require.True(t, jm.IsSpilled())
-	require.Equal(t, int64(2*colexec.DefaultBatchSize), jm.GetRowCount())
-	payload, err := jm.TakeSpillBuildPayload()
-	require.NoError(t, err)
-	var payloadRows int64
-	for _, file := range payload.Files {
-		if file != nil {
-			payloadRows += file.Rows()
-		}
-	}
-	require.Equal(t, int64(2*colexec.DefaultBatchSize), payloadRows,
-		"the physical spill payload must contain every build row exactly once")
-	require.NoError(t, payload.Close())
-
-	extra := tc.arg.OpAnalyzer.GetOpStats().ExtraStats
-	require.Equal(t, int64(1), extra["HashBuildSpillStarts"])
-	require.Zero(t, extra["HashBuildSpillScratchReserveRejects"])
-	require.Zero(t, extra["QueryHashBudgetRejects"],
-		"pre-copy thresholding must not consume recovery headroom first")
-	require.Empty(t, tc.arg.ctr.hashmapBuilder.Batches.Buf)
-	require.Zero(t, generation.Used())
-	require.Zero(t, generation.SpillDiskUsed())
-	require.Zero(t, generation.SpillFDUsed())
-
-	tc.arg.Reset(tc.proc, false, nil)
-	tc.marg.Reset(tc.proc, false, nil)
-	tc.arg.Free(tc.proc, false, nil)
-	first.Clean(tc.proc.Mp())
-	second.Clean(tc.proc.Mp())
-	generation.Close()
-	tc.proc.Free()
-	require.Zero(t, tc.proc.Mp().CurrNB())
-}
-
-func TestShuffleHashBuildPreservesRecoveryHeadroomAcrossSharedBudgetPressure(t *testing.T) {
-	typ := types.T_int32.ToType()
-	tc := newTestCase(t, []bool{false}, []types.Type{typ}, []*plan.Expr{newExpr(0, typ)})
-	tc.arg.IsShuffle = true
-	tc.arg.ShuffleIdx = 0
-	tc.arg.SpillThreshold = 2 * colexec.DefaultBatchSize
-	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 3503}
-
-	makeBuildBatch := func(base int32) *batch.Batch {
-		values := make([]int32, colexec.DefaultBatchSize)
-		for i := range values {
-			values[i] = base + int32(i)
-		}
-		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, tc.proc.Mp())
-		bat.SetRowCount(len(values))
-		return bat
-	}
-	first := makeBuildBatch(0)
-	second := makeBuildBatch(colexec.DefaultBatchSize)
-	input := newGatedHashBuildInput(first, second)
-	tc.arg.SetChildren([]vm.Operator{input})
-	require.NoError(t, input.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-
-	directNeed, err := spillBudgetBytes(first)
-	require.NoError(t, err)
-	retainedNeed, err := spillScratchBudgetBytes(first, true)
-	require.NoError(t, err)
-	recoveryNeed := max(directNeed, retainedNeed)
-	require.Positive(t, recoveryNeed)
-
-	const capBytes = uint64(64 << 20)
-	require.Less(t, recoveryNeed, capBytes/2)
-	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
-	generation, err := budget.OpenGeneration(1)
-	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
-
-	type execOutcome struct {
-		result vm.CallResult
-		err    error
-	}
-	execDone := make(chan execOutcome, 1)
-	go func() {
-		result, execErr := vm.Exec(tc.arg, tc.proc)
-		execDone <- execOutcome{result: result, err: execErr}
-	}()
-
-	select {
-	case <-input.firstBatchRetained:
-	case outcome := <-execDone:
-		t.Fatalf("HashBuild stopped before retaining the first batch: result=%+v err=%v", outcome.result, outcome.err)
-	}
-	continued := false
-	defer func() {
-		if !continued {
-			close(input.continueInput)
-		}
-	}()
-
-	usedAfterFirst := generation.Used()
-	require.Less(t, usedAfterFirst+recoveryNeed, capBytes)
-	// Model sibling HashBuild workers consuming every byte except one less than
-	// this worker needs to recover. A valid recovery lease is already charged
-	// and remains usable; a lazy design has no way to start spilling here.
-	blockerBytes := capBytes - usedAfterFirst - (retainedNeed - 1)
-	blocker, err := generation.Reserve(blockerBytes)
-	require.NoError(t, err)
-
-	close(input.continueInput)
-	continued = true
-	outcome := <-execDone
-	require.NoError(t, outcome.err)
-	require.Equal(t, vm.ExecStop, outcome.result.Status)
-
-	result, err := message.ReceiveJoinMapResult(
-		tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx,
-		tc.proc.GetMessageBoard(), tc.proc.Ctx)
-	require.NoError(t, err)
-	require.True(t, result.IsSuccess())
-	jm := result.JoinMap()
-	require.NotNil(t, jm)
-	require.True(t, jm.IsSpilled())
-	require.Equal(t, int64(2*colexec.DefaultBatchSize), jm.GetRowCount())
-	payload, err := jm.TakeSpillBuildPayload()
-	require.NoError(t, err)
-	require.NoError(t, payload.Close())
-
-	extra := tc.arg.OpAnalyzer.GetOpStats().ExtraStats
-	require.Equal(t, int64(1), extra["HashBuildSpillStarts"])
-	require.Zero(t, extra["HashBuildSpillScratchReserveRejects"])
-	require.Zero(t, extra["HashBuildSpillScratchGrowRejects"])
-
-	require.True(t, blocker.Release())
-	require.Zero(t, generation.Used())
-	tc.arg.Reset(tc.proc, false, nil)
-	tc.arg.Free(tc.proc, false, nil)
-	input.Reset(tc.proc, false, nil)
-	input.Free(tc.proc, false, nil)
-	first.Clean(tc.proc.Mp())
-	second.Clean(tc.proc.Mp())
-	generation.Close()
-	tc.proc.Free()
-	require.Zero(t, tc.proc.Mp().CurrNB())
-}
-
-func TestShuffleHashBuildSerialFullRecoverySurvivesSharedBudgetPressure(t *testing.T) {
-	bindProc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	left := newExpr(0, types.T_int32.ToType())
-	right := newExpr(1, types.T_int32.ToType())
-	serialFull, err := plan2.BindFuncExprImplByPlanExpr(
-		bindProc.Ctx,
-		"serial_full",
-		[]*plan.Expr{left, right},
-	)
-	require.NoError(t, err)
-	bindProc.Free()
-
-	typ := types.T_int32.ToType()
-	tc := newTestCase(
-		t,
-		[]bool{false, false},
-		[]types.Type{typ, typ},
-		[]*plan.Expr{serialFull},
-	)
-	tc.arg.IsShuffle = true
-	tc.arg.ShuffleIdx = 0
-	tc.arg.SpillThreshold = 2 * colexec.DefaultBatchSize
-	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 3505}
-
-	makeBuildBatch := func(base int32, rows, capacityRows int) *batch.Batch {
-		leftValues := make([]int32, capacityRows)
-		rightValues := make([]int32, capacityRows)
-		for i := range leftValues {
-			leftValues[i] = base + int32(i)
-			rightValues[i] = int32(i%97 + 1)
-		}
-		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = testutil.MakeInt32Vector(leftValues, nil, tc.proc.Mp())
-		bat.Vecs[1] = testutil.MakeInt32Vector(rightValues, nil, tc.proc.Mp())
-		batch.SetLength(bat, rows)
-		return bat
-	}
-	first := makeBuildBatch(0, colexec.DefaultBatchSize, colexec.DefaultBatchSize)
-	// A shuffle receiver can emit a later direct-spill batch above the retained
-	// recovery high water. Saturating the shared generation after the first
-	// batch proves that recovery must make progress without a late lease grow.
-	second := makeBuildBatch(
-		colexec.DefaultBatchSize,
-		colexec.DefaultBatchSize,
-		2*colexec.DefaultBatchSize,
-	)
-	third := makeBuildBatch(
-		2*colexec.DefaultBatchSize,
-		2*colexec.DefaultBatchSize,
-		2*colexec.DefaultBatchSize,
-	)
-	input := newGatedHashBuildInput(first, second, third)
-	tc.arg.SetChildren([]vm.Operator{input})
-
-	// Initialize the Process-owned generation before Prepare so both the build
-	// expression lease and every later recovery owner charge the same ledger.
-	const capBytes = uint64(64 << 20)
-	tc.proc.Base.Lim.Size = int64(capBytes)
-	generation, err := tc.proc.GetHashBuildBudget()
-	require.NoError(t, err)
-	require.NoError(t, input.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-
-	type execOutcome struct {
-		result vm.CallResult
-		err    error
-	}
-	execDone := make(chan execOutcome, 1)
-	go func() {
-		result, execErr := vm.Exec(tc.arg, tc.proc)
-		execDone <- execOutcome{result: result, err: execErr}
-	}()
-
-	select {
-	case <-input.firstBatchRetained:
-	case outcome := <-execDone:
-		t.Fatalf("HashBuild stopped before retaining the first batch: result=%+v err=%v", outcome.result, outcome.err)
-	}
-	continued := false
-	defer func() {
-		if !continued {
-			close(input.continueInput)
-		}
-	}()
-
-	usedAfterFirst := generation.Used()
-	require.Less(t, usedAfterFirst, capBytes)
-	directNeed, err := spillBudgetBytes(second)
-	require.NoError(t, err)
-	directNeed, err = spillRecoveryReservationBytes(directNeed)
-	require.NoError(t, err)
-	require.Greater(t, directNeed, tc.arg.ctr.spillScratchBase)
-	directGrowth := directNeed - tc.arg.ctr.spillScratchBase
-	require.Less(t, usedAfterFirst+directGrowth, capBytes)
-	blocker, err := generation.Reserve(capBytes - usedAfterFirst - directGrowth)
-	require.NoError(t, err)
-	require.Equal(t, capBytes-directGrowth, generation.Used())
-
-	close(input.continueInput)
-	continued = true
-	outcome := <-execDone
-	require.NoError(t, outcome.err)
-	require.Equal(t, vm.ExecStop, outcome.result.Status)
-
-	result, err := message.ReceiveJoinMapResult(
-		tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx,
-		tc.proc.GetMessageBoard(), tc.proc.Ctx)
-	require.NoError(t, err)
-	require.True(t, result.IsSuccess())
-	jm := result.JoinMap()
-	require.NotNil(t, jm)
-	require.True(t, jm.IsSpilled())
-	require.Equal(t, int64(4*colexec.DefaultBatchSize), jm.GetRowCount())
-	payload, err := jm.TakeSpillBuildPayload()
-	require.NoError(t, err)
-	var payloadRows int64
-	for _, file := range payload.Files {
-		if file != nil {
-			payloadRows += file.Rows()
-		}
-	}
-	require.Equal(t, int64(4*colexec.DefaultBatchSize), payloadRows,
-		"chunk recovery must neither drop nor replay physical spill rows")
-	require.NoError(t, payload.Close())
-	require.Equal(t, int64(1),
-		tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillStarts"])
-	require.Equal(t, int64(1),
-		tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillRecoveryChunkFallbacks"])
-	require.Equal(t, int64(2),
-		tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillRecoveryChunks"])
-	require.Equal(t, int64(2),
-		tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillRecoveryChunkProbes"])
-
-	require.True(t, blocker.Release())
-	require.Zero(t, generation.Used())
-	tc.arg.Reset(tc.proc, false, nil)
-	tc.arg.Free(tc.proc, false, nil)
-	input.Reset(tc.proc, false, nil)
-	input.Free(tc.proc, false, nil)
-	first.Clean(tc.proc.Mp())
-	second.Clean(tc.proc.Mp())
-	third.Clean(tc.proc.Mp())
-	tc.proc.Free()
-	require.Zero(t, tc.proc.Mp().CurrNB())
-}
-
-func TestShuffleHashBuildSameRowSharedVarlenaRecoveryReusesChunkCeiling(t *testing.T) {
-	const rows = 512
-	typ := types.T_varchar.ToType()
-	tc := newTestCase(t, []bool{false}, []types.Type{typ}, []*plan.Expr{newExpr(0, typ)})
-	tc.arg.IsShuffle = true
-	tc.arg.ShuffleIdx = 0
-	tc.arg.SpillThreshold = 1
-	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 3506}
-
-	makeSharedBatch := func(payloadBytes int) *batch.Batch {
-		constant, err := vector.NewConstBytes(
-			typ, bytes.Repeat([]byte{'x'}, payloadBytes), rows, tc.proc.Mp())
-		require.NoError(t, err)
-		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(typ)
-		require.NoError(t, bat.Vecs[0].UnionBatch(constant, 0, rows, nil, tc.proc.Mp()))
-		constant.Free(tc.proc.Mp())
-		require.False(t, bat.Vecs[0].IsConst())
-		bat.SetRowCount(rows)
-		return bat
-	}
-	first := makeSharedBatch(32)
-	second := makeSharedBatch(32)
-	third := makeSharedBatch(2048)
-	input := newGatedHashBuildInput(first, second, third)
-	tc.arg.SetChildren([]vm.Operator{input})
-
-	const capBytes = uint64(64 << 20)
-	tc.proc.Base.Lim.Size = int64(capBytes)
-	generation, err := tc.proc.GetHashBuildBudget()
-	require.NoError(t, err)
-	require.NoError(t, input.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-
-	type execOutcome struct {
-		result vm.CallResult
-		err    error
-	}
-	execDone := make(chan execOutcome, 1)
-	go func() {
-		result, execErr := vm.Exec(tc.arg, tc.proc)
-		execDone <- execOutcome{result: result, err: execErr}
-	}()
-	select {
-	case <-input.firstBatchRetained:
-	case outcome := <-execDone:
-		t.Fatalf("HashBuild stopped before the shared-budget gate: result=%+v err=%v", outcome.result, outcome.err)
-	}
-	continued := false
-	defer func() {
-		if !continued {
-			close(input.continueInput)
-		}
-	}()
-
-	usedAfterFirst := generation.Used()
-	require.Less(t, usedAfterFirst, capBytes)
-	blocker, err := generation.Reserve(capBytes - usedAfterFirst)
-	require.NoError(t, err)
-	require.Equal(t, capBytes, generation.Used())
-
-	close(input.continueInput)
-	continued = true
-	outcome := <-execDone
-	require.NoError(t, outcome.err)
-	require.Equal(t, vm.ExecStop, outcome.result.Status)
-
-	result, err := message.ReceiveJoinMapResult(
-		tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx,
-		tc.proc.GetMessageBoard(), tc.proc.Ctx)
-	require.NoError(t, err)
-	require.True(t, result.IsSuccess())
-	jm := result.JoinMap()
-	require.NotNil(t, jm)
-	require.True(t, jm.IsSpilled())
-	payload, err := jm.TakeSpillBuildPayload()
-	require.NoError(t, err)
-	var payloadRows int64
-	for _, file := range payload.Files {
-		if file != nil {
-			payloadRows += file.Rows()
-		}
-	}
-	require.Equal(t, int64(3*rows), payloadRows,
-		"same-row varlena recovery must neither drop nor replay physical spill rows")
-	require.NoError(t, payload.Close())
-
-	extra := tc.arg.OpAnalyzer.GetOpStats().ExtraStats
-	require.Equal(t, int64(1), extra["HashBuildSpillRecoveryChunkFallbacks"])
-	chunks := extra["HashBuildSpillRecoveryChunks"]
-	probes := extra["HashBuildSpillRecoveryChunkProbes"]
-	require.Greater(t, chunks, int64(1))
-	require.LessOrEqual(t, probes, chunks+10,
-		"the discovered chunk ceiling must be reused instead of re-running the halving search")
-
-	require.True(t, blocker.Release())
-	require.Zero(t, generation.Used())
-	tc.arg.Reset(tc.proc, false, nil)
-	tc.arg.Free(tc.proc, false, nil)
-	input.Reset(tc.proc, false, nil)
-	input.Free(tc.proc, false, nil)
-	first.Clean(tc.proc.Mp())
-	second.Clean(tc.proc.Mp())
-	third.Clean(tc.proc.Mp())
-	tc.proc.Free()
-	require.Zero(t, tc.proc.Mp().CurrNB())
-}
-
-func TestShuffleHashBuildRecoveryLeaseSharedGenerationFanout(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-	values := make([]int32, colexec.DefaultBatchSize)
-	for i := range values {
-		values[i] = int32(i)
-	}
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
-	bat.SetRowCount(len(values))
-	defer bat.Clean(proc.Mp())
-
-	var projectionBuilder HashmapBuilder
-	projection, err := projectionBuilder.projectedBatchCopy(bat)
-	require.NoError(t, err)
-	directNeed, err := spillBudgetBytes(bat)
-	require.NoError(t, err)
-	directNeed, err = spillRecoveryReservationBytes(directNeed)
-	require.NoError(t, err)
-	retainedNeed, err := spillRetainedRecoveryBudgetBytes(projection)
-	require.NoError(t, err)
-	retainedNeed, err = spillRecoveryReservationBytes(retainedNeed)
-	require.NoError(t, err)
-	perWorker := max(directNeed, retainedNeed)
-
-	for _, workers := range []int{1, 8, 64} {
-		t.Run(fmt.Sprintf("workers-%d", workers), func(t *testing.T) {
-			capBytes, err := spillCheckedMul(perWorker, uint64(workers))
+			_, buildErr := vm.Exec(tc.arg, tc.proc)
+			require.ErrorContains(t, buildErr, "invalid join map reference count")
+			result, err := message.ReceiveJoinMapResult(
+				tc.arg.JoinMapTag,
+				false,
+				0,
+				tc.proc.GetMessageBoard(),
+				tc.proc.Ctx,
+			)
 			require.NoError(t, err)
-			budget := process.MustNewHashBuildBudget(capBytes, capBytes)
-			generation, err := budget.OpenGeneration(1)
-			require.NoError(t, err)
+			require.True(t, result.IsBuildError())
+			require.Nil(t, result.JoinMap())
 
-			containers := make([]container, workers)
-			analyzers := make([]process.Analyzer, workers)
-			start := make(chan struct{})
-			errs := make(chan error, workers)
-			var wg sync.WaitGroup
-			for i := range containers {
-				containers[i].hashmapBuilder.setBudget(generation)
-				analyzers[i] = process.NewAnalyzer(i, false, false, "recovery fanout")
-				wg.Add(1)
-				go func(i int) {
-					defer wg.Done()
-					<-start
-					if reserveErr := containers[i].ensureDirectSpillRecovery(bat, analyzers[i]); reserveErr != nil {
-						errs <- reserveErr
-						return
-					}
-					errs <- containers[i].ensureRetainedSpillRecovery(projection, analyzers[i])
-				}(i)
-			}
-			close(start)
-			wg.Wait()
-			close(errs)
-			for reserveErr := range errs {
-				require.NoError(t, reserveErr)
-			}
-			require.Equal(t, capBytes, generation.Used())
-			for i := range containers {
-				require.Equal(t, perWorker, containers[i].spillScratchBase)
-				require.NotNil(t, containers[i].spillScratchReservation)
-			}
-
-			wg = sync.WaitGroup{}
-			for i := range containers {
-				wg.Add(1)
-				go func(i int) {
-					defer wg.Done()
-					containers[i].releaseSpillScratchReservation()
-					containers[i].releaseSpillScratchReservation()
-				}(i)
-			}
-			wg.Wait()
-			require.Zero(t, generation.Used())
-			generation.Close()
+			tc.arg.Reset(tc.proc, true, buildErr)
+			tc.marg.Reset(tc.proc, true, buildErr)
+			require.Zero(t, account.Snapshot().Used)
+			tc.arg.Free(tc.proc, true, buildErr)
+			tc.proc.Free()
 		})
 	}
 }
 
-func TestShuffleHashBuildCancellationReleasesRecoveryLease(t *testing.T) {
-	typ := types.T_int32.ToType()
-	tc := newTestCase(t, []bool{false}, []types.Type{typ}, []*plan.Expr{newExpr(0, typ)})
-	tc.arg.IsShuffle = true
-	tc.arg.ShuffleIdx = 0
-	tc.arg.SpillThreshold = math.MaxInt64
-	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 3504}
-
-	ctx, cancel := context.WithCancelCause(tc.proc.Ctx)
-	process.ReplacePipelineCtx(tc.proc, ctx, cancel)
-	makeBuildBatch := func(base int32) *batch.Batch {
-		values := make([]int32, colexec.DefaultBatchSize)
-		for i := range values {
-			values[i] = base + int32(i)
-		}
-		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, tc.proc.Mp())
-		bat.SetRowCount(len(values))
-		return bat
-	}
-	first := makeBuildBatch(0)
-	second := makeBuildBatch(colexec.DefaultBatchSize)
-	input := newGatedHashBuildInput(first, second)
-	tc.arg.SetChildren([]vm.Operator{input})
-	require.NoError(t, input.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-
-	const capBytes = uint64(64 << 20)
-	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
-	generation, err := budget.OpenGeneration(1)
-	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
-
-	type execOutcome struct {
-		result vm.CallResult
-		err    error
-	}
-	execDone := make(chan execOutcome, 1)
-	go func() {
-		result, execErr := vm.Exec(tc.arg, tc.proc)
-		execDone <- execOutcome{result: result, err: execErr}
-	}()
-	select {
-	case <-input.firstBatchRetained:
-	case outcome := <-execDone:
-		t.Fatalf("HashBuild stopped before the cancellation boundary: result=%+v err=%v", outcome.result, outcome.err)
-	}
-	require.NotNil(t, tc.arg.ctr.spillScratchReservation)
-	require.Positive(t, generation.Used())
-
-	cancel(context.Canceled)
-	outcome := <-execDone
-	require.ErrorIs(t, outcome.err, context.Canceled)
-	require.Nil(t, tc.arg.ctr.spillScratchReservation,
-		"build terminal cleanup owns the recovery lease")
-	require.Positive(t, generation.Used(),
-		"the copied batch remains owned until pipeline Reset")
-
-	terminal, err := message.ReceiveJoinMapResult(
-		tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx,
-		tc.proc.GetMessageBoard(), context.Background())
-	require.NoError(t, err)
-	require.True(t, terminal.IsBuildError())
-
-	tc.arg.Reset(tc.proc, true, outcome.err)
-	tc.arg.Reset(tc.proc, true, outcome.err)
-	input.Reset(tc.proc, true, outcome.err)
-	require.Zero(t, generation.Used())
-	tc.arg.Free(tc.proc, true, outcome.err)
-	tc.arg.Free(tc.proc, true, outcome.err)
-	input.Free(tc.proc, true, outcome.err)
-	first.Clean(tc.proc.Mp())
-	second.Clean(tc.proc.Mp())
-	generation.Close()
-	tc.proc.Free()
-	require.Zero(t, tc.proc.Mp().CurrNB())
-}
-
-func TestShuffleHashBuildRecoveryAdmissionFailsBeforeRetain(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_varchar.ToType()}, []*plan.Expr{newExpr(0, types.T_varchar.ToType())})
+func TestShuffleHashBuildAccountedSpillLifecycle(t *testing.T) {
+	tc := newTestCase(
+		t,
+		[]bool{false},
+		[]types.Type{types.T_int64.ToType()},
+		[]*plan.Expr{newExpr(0, types.T_int64.ToType())},
+	)
 	tc.arg.IsShuffle = true
 	tc.arg.ShuffleIdx = 0
 	tc.arg.SpillThreshold = 1
 	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{
-		Tag: tc.arg.JoinMapTag + 3501,
+		Tag: tc.arg.JoinMapTag + 4_500,
 	}
 	tc.arg.SetChildren([]vm.Operator{tc.marg})
-	require.NoError(t, tc.marg.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-
-	payload := bytes.Repeat([]byte{'x'}, 1<<20)
-	build := batch.NewWithSize(1)
-	var err error
-	build.Vecs[0], err = vector.NewConstBytes(
-		types.T_varchar.ToType(), payload, 1, tc.proc.Mp())
-	require.NoError(t, err)
-	build.SetRowCount(1)
-
-	// Leave enough budget for the retained copy in isolation, but not for the
-	// direct recovery path. Retention is forbidden: failing before the copy is
-	// the only state that neither exceeds the cap nor strands owned build rows.
-	copyPeak, err := tc.arg.ctr.hashmapBuilder.projectedBatchCopyBytes(build)
-	require.NoError(t, err)
-	budget := process.MustNewHashBuildBudget(copyPeak, copyPeak)
+	const limit = uint64(8 << 20)
+	budget := process.MustNewHashBuildBudget(limit, limit)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 256)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(limit, generation)
+	require.NoError(t, err)
+	replaceTestHashBuildAllocation(t, tc.arg, account)
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
 	tc.arg.ctr.hashmapBuilder.setBudget(generation)
 
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(build, nil, tc.proc.Mp())
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
-	_, buildErr := vm.Exec(tc.arg, tc.proc)
-	require.Error(t, buildErr)
-	require.True(t, moerr.IsMoErrCode(buildErr, moerr.ErrOOM),
-		"terminal spill admission must use the resource-exhausted wire code")
-	require.Contains(t, buildErr.Error(), "hash build memory budget exceeded")
-	extra := tc.arg.OpAnalyzer.GetOpStats().ExtraStats
-	require.Equal(t, int64(1), extra["HashBuildSpillStarts"],
-		"the terminal direct-spill transition is counted even when admission rejects before I/O")
-	require.Equal(t, int64(1), extra["HashBuildSpillRecoveryReserveRejects"])
-	require.Zero(t, extra["HashBuildSpillScratchReserveRejects"])
-	require.Equal(t, int64(1), extra["QueryHashBudgetRejects"])
-
+	build := newBatch(tc.types, tc.proc, colexec.DefaultBatchSize)
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(
+		build,
+		nil,
+		tc.proc.Mp(),
+	)
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(
+		nil,
+		nil,
+		tc.proc.Mp(),
+	)
+	_, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
 	result, err := message.ReceiveJoinMapResult(
-		tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx,
-		tc.proc.GetMessageBoard(), tc.proc.Ctx)
+		tc.arg.JoinMapTag,
+		true,
+		tc.arg.ShuffleIdx,
+		tc.proc.GetMessageBoard(),
+		tc.proc.Ctx,
+	)
 	require.NoError(t, err)
-	require.True(t, result.IsBuildError())
-	require.Equal(t, buildErr.Error(), result.BuildError().Error())
-	require.Zero(t, generation.SpillDiskUsed())
-	require.Zero(t, generation.SpillFDUsed())
-
-	tc.arg.Reset(tc.proc, true, buildErr)
-	tc.marg.Reset(tc.proc, true, buildErr)
-	tc.arg.Free(tc.proc, true, buildErr)
-	build.Clean(tc.proc.Mp())
-	require.Zero(t, generation.Used())
-	generation.Close()
-	tc.proc.Free()
-	require.Zero(t, tc.proc.Mp().CurrNB())
-}
-
-func TestShuffleHashBuildSpillModeReclaimsOptionalCacheForRecoveryGrowth(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
-	tc.arg.IsShuffle = true
-	tc.arg.ShuffleIdx = 0
-	tc.arg.SpillThreshold = 1
-	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 3510}
-	tc.arg.SetChildren([]vm.Operator{tc.marg})
-	require.NoError(t, tc.marg.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-
-	first := newBatch(tc.types, tc.proc, 1)
-	second := newBatch(tc.types, tc.proc, 2048)
-	firstNeed, err := spillBudgetBytes(first)
-	require.NoError(t, err)
-	firstNeed, err = spillRecoveryReservationBytes(firstNeed)
-	require.NoError(t, err)
-	secondNeed, err := spillBudgetBytes(second)
-	require.NoError(t, err)
-	secondNeed, err = spillRecoveryReservationBytes(secondNeed)
-	require.NoError(t, err)
-	require.Equal(t, firstNeed+uint64(spillWriteCoalesceSize), secondNeed,
-		"fixture needs one optional-cache quantum between recovery high waters")
-
-	budget := process.MustNewHashBuildBudget(secondNeed, secondNeed)
-	generation, err := budget.OpenGeneration(1)
-	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
-
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(first, nil, tc.proc.Mp())
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(second, nil, tc.proc.Mp())
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
-	result, buildErr := vm.Exec(tc.arg, tc.proc)
-	require.NoError(t, buildErr)
-	require.Equal(t, vm.ExecStop, result.Status)
-
-	joinResult, err := message.ReceiveJoinMapResult(
-		tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx,
-		tc.proc.GetMessageBoard(), tc.proc.Ctx)
-	require.NoError(t, err)
-	require.True(t, joinResult.IsSuccess())
-	jm := joinResult.JoinMap()
+	require.True(t, result.IsSuccess())
+	jm := result.JoinMap()
 	require.NotNil(t, jm)
 	require.True(t, jm.IsSpilled())
-	require.Equal(t, int64(2049), jm.GetRowCount())
+	require.Equal(t, int64(colexec.DefaultBatchSize), jm.GetRowCount())
 	payload, err := jm.TakeSpillBuildPayload()
 	require.NoError(t, err)
 	require.NoError(t, payload.Close())
-
-	extra := tc.arg.OpAnalyzer.GetOpStats().ExtraStats
-	require.Equal(t, int64(1), extra["HashBuildSpillStarts"])
-	require.Equal(t, int64(1), extra["HashBuildSpillRecoveryGrowRejects"])
-	require.Equal(t, int64(1), extra["HashBuildSpillRecoveryGrowCount"])
-	require.Equal(t, int64(secondNeed-firstNeed),
-		extra["HashBuildSpillRecoveryGrowBytes"])
-	require.Equal(t, int64(1), extra["HashBuildCoalesceGrowRejects"],
-		"one failed optional probe switches the rest of this batch to write-through")
-	require.Equal(t, int64(2), extra["QueryHashBudgetRejects"])
+	require.Zero(t, account.Snapshot().Used)
 	require.Zero(t, generation.Used())
 	require.Zero(t, generation.SpillDiskUsed())
 	require.Zero(t, generation.SpillFDUsed())
 
 	tc.arg.Reset(tc.proc, false, nil)
 	tc.marg.Reset(tc.proc, false, nil)
+	require.NoError(t, tc.arg.ClearAllocationAccount(account))
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
 	tc.arg.Free(tc.proc, false, nil)
-	first.Clean(tc.proc.Mp())
-	second.Clean(tc.proc.Mp())
-	generation.Close()
 	tc.proc.Free()
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
-func TestShuffleHashBuildDirectSpillRejectsInvalidBatchBeforeIO(t *testing.T) {
-	typ := types.T_varchar.ToType()
-	tc := newTestCase(t, []bool{false}, []types.Type{typ}, []*plan.Expr{newExpr(0, typ)})
+func TestShuffleHashBuildDirectSpillUsesActualAllocation(t *testing.T) {
+	tc := newTestCase(
+		t,
+		[]bool{false, false},
+		[]types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
+		nil,
+	)
+	tc.arg.Conditions = []*plan.Expr{makeIssue26454ConcatKey(t, tc.proc)}
 	tc.arg.IsShuffle = true
 	tc.arg.ShuffleIdx = 0
 	tc.arg.SpillThreshold = 1
-	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 3511}
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{
+		Tag: tc.arg.JoinMapTag + 4_501,
+	}
 	tc.arg.SetChildren([]vm.Operator{tc.marg})
-	require.NoError(t, tc.marg.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
 
-	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
-	generation, err := budget.OpenGeneration(1)
-	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
-
-	invalid := batch.NewWithSize(1)
-	invalid.Vecs[0] = vector.NewVec(typ)
-	invalid.SetRowCount(1)
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(invalid, nil, tc.proc.Mp())
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
-	_, buildErr := vm.Exec(tc.arg, tc.proc)
-	require.ErrorIs(t, buildErr, process.ErrHashBuildBudgetInvalid)
-	require.Zero(t, generation.SpillDiskUsed())
-	require.Zero(t, generation.SpillFDUsed())
-
-	tc.arg.Reset(tc.proc, true, buildErr)
-	tc.marg.Reset(tc.proc, true, buildErr)
-	tc.arg.Free(tc.proc, true, buildErr)
-	invalid.Clean(tc.proc.Mp())
-	require.Zero(t, generation.Used())
-	generation.Close()
-	tc.proc.Free()
-	require.Zero(t, tc.proc.Mp().CurrNB())
-}
-
-func TestShuffleHashBuildSpillModeGrowthRejectReleasesRecoveryLease(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
-	tc.arg.IsShuffle = true
-	tc.arg.ShuffleIdx = 0
-	tc.arg.SpillThreshold = 1
-	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 3503}
-	tc.arg.SetChildren([]vm.Operator{tc.marg})
-	require.NoError(t, tc.marg.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-
-	first := newBatch(tc.types, tc.proc, 1)
-	second := newBatch(tc.types, tc.proc, 8*colexec.DefaultBatchSize)
-	firstNeed, err := spillBudgetBytes(first)
-	require.NoError(t, err)
-	firstNeed, err = spillRecoveryReservationBytes(firstNeed)
-	require.NoError(t, err)
-	secondNeed, err := spillBudgetBytes(second)
-	require.NoError(t, err)
-	secondNeed, err = spillRecoveryReservationBytes(secondNeed)
-	require.NoError(t, err)
-	capBytes := firstNeed + uint64(spillWriteCoalesceSize)
-	require.Greater(t, secondNeed, capBytes)
-
-	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
-	generation, err := budget.OpenGeneration(1)
-	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
-
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(first, nil, tc.proc.Mp())
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(second, nil, tc.proc.Mp())
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
-	_, buildErr := vm.Exec(tc.arg, tc.proc)
-	require.True(t, moerr.IsMoErrCode(buildErr, moerr.ErrOOM))
-	require.Contains(t, buildErr.Error(), "hash build memory budget exceeded")
-
-	extra := tc.arg.OpAnalyzer.GetOpStats().ExtraStats
-	require.Equal(t, int64(1), extra["HashBuildSpillStarts"])
-	require.Equal(t, int64(2), extra["HashBuildSpillRecoveryGrowRejects"],
-		"reclaim retries once, then preserves a genuine over-cap failure")
-	require.Zero(t, extra["HashBuildCoalesceGrowRejects"])
-	require.Equal(t, int64(2), extra["QueryHashBudgetRejects"])
-	require.Nil(t, tc.arg.ctr.spillScratchReservation)
-	require.Zero(t, tc.arg.ctr.spillScratchBase)
-	require.Zero(t, generation.Used())
-
-	result, err := message.ReceiveJoinMapResult(
-		tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx,
-		tc.proc.GetMessageBoard(), tc.proc.Ctx)
-	require.NoError(t, err)
-	require.True(t, result.IsBuildError())
-	require.Equal(t, buildErr.Error(), result.BuildError().Error())
-
-	tc.arg.Reset(tc.proc, true, buildErr)
-	tc.marg.Reset(tc.proc, true, buildErr)
-	tc.arg.Free(tc.proc, true, buildErr)
-	first.Clean(tc.proc.Mp())
-	second.Clean(tc.proc.Mp())
-	require.Zero(t, generation.SpillDiskUsed())
-	require.Zero(t, generation.SpillFDUsed())
-	generation.Close()
-	tc.proc.Free()
-	require.Zero(t, tc.proc.Mp().CurrNB())
-}
-
-func TestShuffleHashBuildSpillsExpressionKey(t *testing.T) {
-	bindProc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	col := newExpr(0, types.T_int32.ToType())
-	modulo, err := plan2.BindFuncExprImplByPlanExpr(
-		bindProc.Ctx,
-		"%",
-		[]*plan.Expr{col, plan2.MakePlan2Int32ConstExprWithType(2)},
+	const (
+		limit = uint64(8 << 20)
+		rows  = 128
+	)
+	estimated, err := expressionRecoveryBytes(
+		tc.proc,
+		tc.arg.Conditions,
+		rows,
+		false,
 	)
 	require.NoError(t, err)
+	require.Greater(t, estimated, limit,
+		"fixture must exceed the conservative retained-recovery projection")
 
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{modulo})
-	tc.arg.IsShuffle = true
-	tc.arg.ShuffleIdx = 0
-	tc.arg.SpillThreshold = 1
-	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 4000}
-	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	budget := process.MustNewHashBuildBudget(limit, limit)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 256)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(limit, generation)
+	require.NoError(t, err)
+	replaceTestHashBuildAllocation(t, tc.arg, account)
 	require.NoError(t, tc.marg.Prepare(tc.proc))
 	require.NoError(t, tc.arg.Prepare(tc.proc))
 
-	build := batch.NewWithSize(1)
-	build.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, nil, tc.proc.Mp())
-	build.SetRowCount(4)
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(build, nil, tc.proc.Mp())
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
-
+	build := newBatch(tc.types, tc.proc, rows)
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(
+		build,
+		nil,
+		tc.proc.Mp(),
+	)
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(
+		nil,
+		nil,
+		tc.proc.Mp(),
+	)
 	_, err = vm.Exec(tc.arg, tc.proc)
 	require.NoError(t, err)
-	result, err := message.ReceiveJoinMapResult(tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx, tc.proc.GetMessageBoard(), tc.proc.Ctx)
-	require.NoError(t, err)
-	require.True(t, result.IsSuccess())
-	jm := result.JoinMap()
-	require.NotNil(t, jm)
-	require.True(t, jm.IsSpilled())
-	require.Equal(t, int64(4), jm.GetRowCount())
-	spillPayload, err := jm.TakeSpillBuildPayload()
-	require.NoError(t, err)
-	require.NoError(t, spillPayload.Close())
-	budget, err := tc.proc.GetHashBuildBudget()
-	require.NoError(t, err)
-	require.Zero(t, budget.Used())
-	require.Zero(t, budget.SpillDiskUsed())
-	require.Zero(t, budget.SpillFDUsed())
-
-	tc.arg.Reset(tc.proc, false, nil)
-	tc.arg.Free(tc.proc, false, nil)
-	tc.proc.Free()
-	bindProc.Free()
-}
-
-func TestShuffleHashBuildResizeRejectReleasesPartialMapAndSpills(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
-	tc.arg.IsShuffle = true
-	tc.arg.ShuffleIdx = 0
-	tc.arg.SpillThreshold = 1 << 30
-	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 3000}
-	tc.arg.SetChildren([]vm.Operator{tc.marg})
-	require.NoError(t, tc.marg.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-
-	const capBytes = uint64(64 << 20)
-	aggregate := process.MustNewHashBuildBudget(capBytes, capBytes)
-	generation, err := aggregate.OpenGeneration(1)
-	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
-
-	// With one full ingress batch, the first four admissions are emergency
-	// scratch, retained copy, build auxiliary memory, and the initial map.
-	// Reject exactly the fifth admission: the first resize after insertion.
-	providerCalls := 0
-	forcedResizeReject := false
-	aggregate.SetAggregateCapProvider(func() (uint64, error) {
-		providerCalls++
-		if providerCalls == 5 {
-			forcedResizeReject = true
-			return generation.Used(), nil
-		}
-		return capBytes, nil
-	})
-
-	bat := newBatch(tc.types, tc.proc, 8192)
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(bat, nil, tc.proc.Mp())
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
-	_, err = vm.Exec(tc.arg, tc.proc)
-	require.NoError(t, err)
-	require.True(t, forcedResizeReject)
-	require.Zero(t, generation.Used(), "partial map, retained batches, and emergency scratch must be released before publication")
-
-	result, err := message.ReceiveJoinMapResult(tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx, tc.proc.GetMessageBoard(), tc.proc.Ctx)
-	require.NoError(t, err)
-	require.True(t, result.IsSuccess())
-	jm := result.JoinMap()
-	require.NotNil(t, jm)
-	require.True(t, jm.IsSpilled())
-	require.Equal(t, int64(8192), jm.GetRowCount())
-	spillPayload, err := jm.TakeSpillBuildPayload()
-	require.NoError(t, err)
-	require.NoError(t, spillPayload.Close())
-	require.Zero(t, generation.SpillDiskUsed())
-	require.Zero(t, generation.SpillFDUsed())
-
-	tc.arg.Reset(tc.proc, false, nil)
-	tc.arg.Free(tc.proc, false, nil)
-	tc.marg.Reset(tc.proc, false, nil)
-	tc.proc.Free()
-	require.Zero(t, tc.proc.Mp().CurrNB())
-}
-
-func TestShuffleHashBuildClosedMapBudgetDoesNotSpill(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
-	tc.arg.IsShuffle = true
-	tc.arg.ShuffleIdx = 0
-	tc.arg.SpillThreshold = 1 << 30
-	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 3001}
-	tc.arg.SetChildren([]vm.Operator{tc.marg})
-	require.NoError(t, tc.marg.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-
-	const capBytes = uint64(64 << 20)
-	aggregate := process.MustNewHashBuildBudget(capBytes, capBytes)
-	generation, err := aggregate.OpenGeneration(1)
-	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
-
-	// With one full ingress batch, the fourth admission is the initial hashmap.
-	// A lifecycle failure there is fatal and must never enter spill recovery.
-	providerCalls := 0
-	forcedClosed := &process.HashBuildBudgetError{
-		Kind: process.HashBuildBudgetErrorClosed,
-	}
-	aggregate.SetAggregateCapProvider(func() (uint64, error) {
-		providerCalls++
-		if providerCalls == 4 {
-			return 0, forcedClosed
-		}
-		return capBytes, nil
-	})
-
-	bat := newBatch(tc.types, tc.proc, 8192)
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(bat, nil, tc.proc.Mp())
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
-	_, buildErr := vm.Exec(tc.arg, tc.proc)
-	require.Same(t, forcedClosed, buildErr)
-	require.ErrorIs(t, buildErr, process.ErrHashBuildBudgetClosed)
-	require.NotErrorIs(t, buildErr, process.ErrHashBuildBudgetAdmission)
-	require.Equal(t, 4, providerCalls)
-	require.Zero(t, tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillStarts"])
-	require.Empty(t, tc.arg.ctr.spilledFds)
-	require.Nil(t, tc.arg.ctr.spillBundle)
+	require.Zero(t, generation.RejectCount(),
+		"an unretained direct source must not hit the recovery projection gate")
+	require.Less(t, generation.Peak(), limit)
 
 	result, err := message.ReceiveJoinMapResult(
 		tc.arg.JoinMapTag,
@@ -3620,17 +2732,23 @@ func TestShuffleHashBuildClosedMapBudgetDoesNotSpill(t *testing.T) {
 		tc.proc.Ctx,
 	)
 	require.NoError(t, err)
-	require.True(t, result.IsBuildError())
-	require.False(t, result.IsSuccess())
-	require.Nil(t, result.JoinMap())
-
-	tc.arg.Reset(tc.proc, true, buildErr)
-	tc.arg.Free(tc.proc, true, buildErr)
-	tc.marg.Reset(tc.proc, true, buildErr)
+	require.True(t, result.IsSuccess())
+	jm := result.JoinMap()
+	require.NotNil(t, jm)
+	require.True(t, jm.IsSpilled())
+	require.Equal(t, int64(rows), jm.GetRowCount())
+	payload, err := jm.TakeSpillBuildPayload()
+	require.NoError(t, err)
+	require.NoError(t, payload.Close())
+	require.Zero(t, account.Snapshot().Used)
 	require.Zero(t, generation.Used())
-	require.Zero(t, generation.SpillDiskUsed())
-	require.Zero(t, generation.SpillFDUsed())
-	generation.Close()
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.marg.Reset(tc.proc, false, nil)
+	require.NoError(t, tc.arg.ClearAllocationAccount(account))
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+	tc.arg.Free(tc.proc, false, nil)
 	tc.proc.Free()
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
@@ -3639,11 +2757,16 @@ func TestObserveHashBuildBudgetUsesGenerationSnapshot(t *testing.T) {
 	budget := process.MustNewHashBuildBudget(1024, 1024)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
-	reservation, err := generation.Reserve(128)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 4)
 	require.NoError(t, err)
-	_, err = generation.Reserve(1024)
+	account, err := registry.OpenWithController(2048, generation)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	allocation, err := mp.AllocAccounted(128, account, HashBuildAllocationOwner, HashBuildAllocationSiteHashCell)
+	require.NoError(t, err)
+	_, err = mp.AllocAccounted(1024, account, HashBuildAllocationOwner, HashBuildAllocationSiteHashCell)
 	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
-	reservation.Release()
+	mp.Free(allocation)
 
 	analyzer := process.NewAnalyzer(0, false, false, "hash build")
 	observeHashBuildBudget(analyzer, generation)
@@ -3657,115 +2780,7 @@ func TestObserveHashBuildBudgetUsesGenerationSnapshot(t *testing.T) {
 	observeHashBuildBudget(analyzer, generation)
 	require.Equal(t, int64(1), extra["QueryHashBudgetRejects"])
 	generation.Close()
-}
-
-func TestShuffleHashBuildSpillFailureReleasesEmergencyResources(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
-	tc.arg.IsShuffle = true
-	tc.arg.ShuffleIdx = 0
-	tc.arg.SpillThreshold = 1
-	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 4000}
-	tc.arg.SetChildren([]vm.Operator{tc.marg})
-	runtimeFilterReceiver := message.NewMessageReceiver(
-		[]int32{tc.arg.RuntimeFilterSpec.Tag},
-		message.AddrBroadCastOnCurrentCN(),
-		tc.proc.GetMessageBoard(),
-	)
-	require.NoError(t, tc.marg.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-
-	aggregate := process.MustNewHashBuildBudget(64<<20, 64<<20)
-	generation, err := aggregate.OpenGenerationWithSpillCaps(1, 64<<20, 1, 32)
+	account.Seal()
+	_, err = registry.Finalize(account)
 	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
-
-	bat := newBatch(tc.types, tc.proc, 8192)
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(bat, nil, tc.proc.Mp())
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
-	_, buildErr := vm.Exec(tc.arg, tc.proc)
-	require.True(t, moerr.IsMoErrCode(buildErr, moerr.ErrOOM))
-	require.Contains(t, buildErr.Error(), "hash build spill disk budget exceeded")
-	require.Contains(t, buildErr.Error(), "requested=")
-	require.Contains(t, buildErr.Error(), "processLimitationSpillSize")
-	require.NotErrorIs(t, buildErr, process.ErrHashBuildBudgetAdmission)
-	require.Nil(t, tc.arg.ctr.spillScratchReservation)
-	require.Zero(t, cap(tc.arg.ctr.spillHashValues))
-	require.Zero(t, cap(tc.arg.ctr.spillSelection))
-	require.Zero(t, cap(tc.arg.ctr.spillKeyVecs))
-	require.Zero(t, tc.arg.ctr.spillWriteBuf.Cap())
-
-	tc.arg.Reset(tc.proc, true, buildErr)
-	tc.arg.Reset(tc.proc, true, buildErr)
-	runtimeFilters, done, receiveErr := runtimeFilterReceiver.ReceiveMessage(
-		false, tc.proc.Ctx)
-	require.NoError(t, receiveErr)
-	require.False(t, done)
-	require.Len(t, runtimeFilters, 1,
-		"repeated Reset must publish one terminal value per generation")
-	tc.arg.Free(tc.proc, true, buildErr)
-	tc.arg.Free(tc.proc, true, buildErr)
-	tc.marg.Reset(tc.proc, true, buildErr)
-	require.Zero(t, generation.Used())
-	require.Zero(t, generation.SpillDiskUsed())
-	require.Zero(t, generation.SpillFDUsed())
-	tc.proc.Free()
-	require.Zero(t, tc.proc.Mp().CurrNB())
-}
-
-func TestShuffleHashBuildDrainsRetainedBatchBeforeGrowingScratch(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
-	tc.arg.IsShuffle = true
-	tc.arg.ShuffleIdx = 0
-	tc.arg.SpillThreshold = 1 << 30
-	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 5000}
-	tc.arg.SetChildren([]vm.Operator{tc.marg})
-	require.NoError(t, tc.marg.Prepare(tc.proc))
-	require.NoError(t, tc.arg.Prepare(tc.proc))
-
-	const capBytes = uint64(64 << 20)
-	aggregate := process.MustNewHashBuildBudget(capBytes, capBytes)
-	generation, err := aggregate.OpenGeneration(1)
-	require.NoError(t, err)
-	tc.arg.ctr.hashmapBuilder.setBudget(generation)
-	providerCalls := 0
-	forcedGrowReject := false
-	aggregate.SetAggregateCapProvider(func() (uint64, error) {
-		providerCalls++
-		// First ingress reserves direct scratch, grows it for future retained
-		// drain, then reserves its copy. Reject the fourth admission: growing
-		// direct scratch for the larger second ingress while that copy is live.
-		if providerCalls == 4 {
-			forcedGrowReject = true
-			return generation.Used(), nil
-		}
-		return capBytes, nil
-	})
-
-	first := newBatch(tc.types, tc.proc, 8192)
-	second := newBatch(tc.types, tc.proc, 65536)
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(first, nil, tc.proc.Mp())
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(second, nil, tc.proc.Mp())
-	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
-	_, err = vm.Exec(tc.arg, tc.proc)
-	require.NoError(t, err)
-	require.True(t, forcedGrowReject)
-	require.Zero(t, generation.Used())
-
-	result, err := message.ReceiveJoinMapResult(tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx, tc.proc.GetMessageBoard(), tc.proc.Ctx)
-	require.NoError(t, err)
-	require.True(t, result.IsSuccess())
-	jm := result.JoinMap()
-	require.True(t, jm.IsSpilled())
-	require.Equal(t, int64(73728), jm.GetRowCount())
-	spillPayload, err := jm.TakeSpillBuildPayload()
-	require.NoError(t, err)
-	require.NoError(t, spillPayload.Close())
-	require.Zero(t, generation.SpillDiskUsed())
-	require.Zero(t, generation.SpillFDUsed())
-
-	tc.arg.Reset(tc.proc, false, nil)
-	tc.arg.Free(tc.proc, false, nil)
-	tc.marg.Reset(tc.proc, false, nil)
-	tc.proc.Free()
-	require.Zero(t, tc.proc.Mp().CurrNB())
 }

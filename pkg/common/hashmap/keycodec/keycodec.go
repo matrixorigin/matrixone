@@ -25,6 +25,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+// ValidVectors verifies the row-shape contract required by both resident hash
+// maps and spill partitioning. Hashing a short or nil key must never silently
+// leave a suffix at its previous seed value.
+func ValidVectors(vecs []*vector.Vector, rows int) bool {
+	if rows < 0 || len(vecs) == 0 {
+		return false
+	}
+	for _, vec := range vecs {
+		if vec == nil || vec.Length() != rows {
+			return false
+		}
+	}
+	return true
+}
+
+var groupingColumnHash = xxhash.Sum64([]byte{2})
+
 // Float32Codec holds the SQL comparison normalization for one FLOAT32 type.
 // Construct it once per vector so scale processing is not repeated per row.
 type Float32Codec struct {
@@ -194,6 +211,10 @@ func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) {
 	}
 
 	for _, vec := range keyVecs {
+		if vec.GetGrouping().GetBitmap().CountRange(0, uint64(rowCount)) > 0 {
+			computeGroupingXXHash(vec, hashValues)
+			continue
+		}
 		switch vec.GetType().Oid {
 		case types.T_float32:
 			computeFloat32XXHash(vec, hashValues)
@@ -270,6 +291,41 @@ func computeFloat32XXHash(vec *vector.Vector, hashValues []uint64) {
 	for i := 0; i < n; i++ {
 		value := codec.CanonicalBytes(values[i])
 		hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(value[:]))
+	}
+}
+
+func computeGroupingXXHash(vec *vector.Vector, hashValues []uint64) {
+	rowCount := len(hashValues)
+	grouping := vec.GetGrouping()
+	nulls := vec.GetNulls()
+	for i := 0; i < rowCount; i++ {
+		if grouping.Contains(uint64(i)) {
+			hashValues[i] = HashCombine(hashValues[i], groupingColumnHash)
+			continue
+		}
+		if vec.IsConstNull() || nulls.Contains(uint64(i)) {
+			hashValues[i] = HashCombine(hashValues[i], 0)
+			continue
+		}
+		row := i
+		if vec.IsConst() {
+			row = 0
+		}
+		switch vec.GetType().Oid {
+		case types.T_float32:
+			values := vector.MustFixedColNoTypeCheck[float32](vec)
+			value := NewFloat32Codec(vec.GetType().Scale).CanonicalBytes(values[row])
+			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(value[:]))
+			continue
+		case types.T_float64:
+			values := vector.MustFixedColNoTypeCheck[float64](vec)
+			value := CanonicalFloat64Bytes(values[row])
+			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(value[:]))
+			continue
+		}
+		hashValues[i] = HashCombine(
+			hashValues[i], xxhash.Sum64(vec.GetRawBytesAt(row)),
+		)
 	}
 }
 

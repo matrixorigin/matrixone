@@ -16,8 +16,10 @@ package vector
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"math/bits"
 	"slices"
 	"sort"
@@ -68,11 +70,13 @@ type Vector struct {
 
 	offHeap bool
 
-	// areaDisjoint is true only when every non-inline varlena descriptor in the
-	// vector's logical range references a valid byte range disjoint from every
-	// other descriptor in that range. The invariant deliberately includes null
-	// rows, so changing a null bitmap cannot make this proof stale. Operations
-	// that reuse descriptors clear the proof; ordinary value appends retain it.
+	// allocationAccount selects the account for this vector's first owned
+	// off-heap data and area allocations. Physical MPool metadata owns release.
+	allocationAccount *AllocationAccountSelection
+
+	// areaDisjoint proves that every live non-inline varlena descriptor owns a
+	// distinct range in area. Spill projections use it to avoid scanning normal
+	// append-built vectors; operations that can introduce aliases clear it.
 	areaDisjoint bool
 }
 
@@ -194,7 +198,10 @@ func (v *Vector) Capacity() int {
 // Allocated returns the total allocated memory size of the vector.
 // it can be used to estimate the memory usage of the vector.
 func (v *Vector) Allocated() int {
-	return cap(v.data) + cap(v.area)
+	return cap(v.data) +
+		cap(v.area) +
+		8*v.nsp.GetBitmap().ExternalStorageCapacity() +
+		8*v.gsp.GetBitmap().ExternalStorageCapacity()
 }
 
 func (v *Vector) SetLength(n int) {
@@ -202,6 +209,40 @@ func (v *Vector) SetLength(n int) {
 		v.areaDisjoint = false
 	}
 	v.length = n
+}
+
+// AppendCheckpoint captures the logical state changed by append operations.
+// Capacity growth is deliberately not rolled back: it remains owned by the
+// vector and can be reused by a later append.
+type AppendCheckpoint struct {
+	length     int
+	areaLength int
+	sorted     bool
+}
+
+func (v *Vector) MakeAppendCheckpoint() AppendCheckpoint {
+	return AppendCheckpoint{
+		length:     v.length,
+		areaLength: len(v.area),
+		sorted:     v.sorted,
+	}
+}
+
+// RollbackAppend restores the logical state captured before an attempted
+// append. attemptedRows is needed because grouping bits can be published
+// before a varlen copy fails and advances length.
+func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) {
+	if checkpoint.length < 0 || checkpoint.length > v.length ||
+		checkpoint.areaLength < 0 || checkpoint.areaLength > len(v.area) ||
+		attemptedRows < 0 {
+		panic("invalid vector append checkpoint")
+	}
+	end := max(v.length, checkpoint.length+attemptedRows)
+	nulls.RemoveRange(&v.nsp, uint64(checkpoint.length), uint64(end))
+	nulls.RemoveRange(&v.gsp, uint64(checkpoint.length), uint64(end))
+	v.length = checkpoint.length
+	v.area = v.area[:checkpoint.areaLength]
+	v.sorted = checkpoint.sorted
 }
 
 // Size of data, I think this function is inherently broken.  This
@@ -227,28 +268,41 @@ func (v *Vector) SetType(typ types.Type) {
 	v.typ = typ
 }
 
-// Bug #23240
-// Neither this function, nor the SetType function are good
-// Maybe we should just disallow.
-func (v *Vector) SetTypeAndFixData(typ types.Type, mp *mpool.MPool) {
+// SetTypeAndFixData changes a fixed-width result type and grows its owned data
+// before publishing the new type. A failed growth leaves the original vector
+// type, length, and backing allocation intact.
+func (v *Vector) SetTypeAndFixData(
+	typ types.Type,
+	mp *mpool.MPool,
+) error {
 	if v.typ.IsVarlen() && typ.IsVarlen() {
 		v.typ = typ
-		return
+		return nil
 	}
 
 	if v.typ.IsVarlen() || typ.IsVarlen() {
-		// this is a weird thing to do, we should not allow it.
-		panic("SetTypeAndFixData is not allowed to change from/to varlen type")
+		return moerr.NewInvalidInputNoCtx(
+			"SetTypeAndFixData cannot change from or to a varlen type",
+		)
 	}
 
+	oldType := v.typ
 	v.typ = typ
 	oldLength := v.length
 	v.length = 0
-	extend(v, oldLength, mp)
+	if err := extend(v, oldLength, mp); err != nil {
+		v.typ = oldType
+		v.length = oldLength
+		return err
+	}
 	v.length = oldLength
+	return nil
 }
 
 func (v *Vector) SetOffHeap(offHeap bool) {
+	if !offHeap && v.allocationAccount != nil {
+		panic("allocation-accounted vector must remain off-heap")
+	}
 	v.offHeap = offHeap
 }
 
@@ -545,7 +599,7 @@ func NewVecWithDataCopy(
 	vec.areaDisjoint = !typ.IsVarlen() || length == 0
 	var err error
 	if len(data) > 0 {
-		vec.data, err = mp.Alloc(len(data), false)
+		vec.data, err = vec.allocData(mp, len(data))
 		if err != nil {
 			vec.Free(mp)
 			return nil, err
@@ -553,7 +607,7 @@ func NewVecWithDataCopy(
 		copy(vec.data, data)
 	}
 	if len(area) > 0 {
-		vec.area, err = mp.Alloc(len(area), false)
+		vec.area, err = vec.allocArea(mp, len(area))
 		if err != nil {
 			vec.Free(mp)
 			return nil, err
@@ -622,7 +676,9 @@ func (v *Vector) IsConst() bool {
 }
 
 func (v *Vector) IsGrouping() bool {
-	return v.length > 0 && v.length == v.gsp.Count()
+	return v.length > 0 &&
+		v.length == v.gsp.Count() &&
+		v.length == v.gsp.GetBitmap().CountRange(0, uint64(v.length))
 }
 
 func (v *Vector) SetClass(class int) {
@@ -769,6 +825,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	if !v.cantFreeArea {
 		mp.Free(v.area)
 	}
+	v.freeBitmapStorage(mp)
 	v.class = FLAT
 	v.data = nil
 	v.area = nil
@@ -780,6 +837,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.gsp.Reset()
 	v.sorted = false
 	v.isBin = false
+	v.allocationAccount = nil
 	v.areaDisjoint = true
 
 	// if !v.OnUsed || v.OnPut {
@@ -805,50 +863,174 @@ func (v *Vector) MarshalBinary() ([]byte, error) {
 }
 
 func (v *Vector) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
+	return v.MarshalBinaryTo(buf)
+}
 
-	// write class
-	buf.WriteByte(uint8(v.class))
+// MarshalBinaryPlan is a validated, allocation-free snapshot of one Vector's
+// wire lengths. It lets batch writers size once and encode once.
+type MarshalBinaryPlan struct {
+	vector     *Vector
+	size       int
+	dataLength uint32
+	areaLength uint32
+	nullLength uint32
+}
 
-	// write type
-	data := types.EncodeType(&v.typ)
-	buf.Write(data)
+func (p MarshalBinaryPlan) Size() int {
+	return p.size
+}
 
-	// write length
-	length := uint32(v.length)
-	buf.Write(types.EncodeUint32(&length))
-
-	// write dataLen, data
-	dataLen := uint32(v.typ.TypeSize())
+func (v *Vector) PrepareMarshalBinary() (MarshalBinaryPlan, error) {
+	if v == nil || v.length < 0 {
+		return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx("invalid vector for marshal")
+	}
+	const maxWireBuffer = uint64(^uint32(0))
+	if uint64(v.length) > maxWireBuffer {
+		return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx(
+			"vector length exceeds marshal format",
+		)
+	}
+	typeSize := v.typ.TypeSize()
+	if typeSize < 0 {
+		return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx(
+			"vector type has invalid marshal size",
+		)
+	}
+	dataLength := uint64(typeSize)
 	if !v.IsConst() {
-		dataLen *= uint32(v.length)
+		if v.length != 0 &&
+			dataLength > ^uint64(0)/uint64(v.length) {
+			return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx(
+				"vector data exceeds marshal format",
+			)
+		}
+		dataLength *= uint64(v.length)
 	} else if v.IsConstNull() {
-		dataLen = 0
+		dataLength = 0
 	}
-	buf.Write(types.EncodeUint32(&dataLen))
-	if dataLen > 0 {
-		buf.Write(v.data[:dataLen])
+	areaLength := uint64(len(v.area))
+	nullLength := uint64(v.nsp.MarshalSize())
+	if dataLength > maxWireBuffer ||
+		areaLength > maxWireBuffer ||
+		nullLength > maxWireBuffer {
+		return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx(
+			"vector buffer exceeds marshal format",
+		)
 	}
+	if dataLength > uint64(len(v.data)) {
+		return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx(
+			"vector data is shorter than its marshal length",
+		)
+	}
+	total := uint64(1+types.TSize+4+4+4+4+1) +
+		dataLength + areaLength + nullLength
+	if total > uint64(^uint(0)>>1) {
+		return MarshalBinaryPlan{}, moerr.NewInvalidInputNoCtx(
+			"vector marshal size exceeds platform limit",
+		)
+	}
+	return MarshalBinaryPlan{
+		vector:     v,
+		size:       int(total),
+		dataLength: uint32(dataLength),
+		areaLength: uint32(areaLength),
+		nullLength: uint32(nullLength),
+	}, nil
+}
 
-	// write areaLen, area
-	areaLen := uint32(len(v.area))
-	buf.Write(types.EncodeUint32(&areaLen))
-	if areaLen > 0 {
-		buf.Write(v.area)
-	}
+func (v *Vector) MarshalBinarySize() (int, error) {
+	plan, err := v.PrepareMarshalBinary()
+	return plan.Size(), err
+}
 
-	// write nspLen, nsp
-	nspData, err := v.nsp.Show()
+func (v *Vector) MarshalBinaryTo(w io.Writer) error {
+	plan, err := v.PrepareMarshalBinary()
 	if err != nil {
 		return err
 	}
-	nspLen := uint32(len(nspData))
-	buf.Write(types.EncodeUint32(&nspLen))
-	if nspLen > 0 {
-		buf.Write(nspData)
+	return plan.MarshalTo(w)
+}
+
+func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
+	v := p.vector
+	if v == nil || w == nil {
+		return io.ErrClosedPipe
+	}
+	if err := writeVectorMarshalByte(w, uint8(v.class)); err != nil {
+		return err
+	}
+	if err := writeVectorMarshalBytes(w, types.EncodeType(&v.typ)); err != nil {
+		return err
 	}
 
-	buf.Write(types.EncodeBool(&v.sorted))
+	if err := writeVectorMarshalUint32(w, uint32(v.length)); err != nil {
+		return err
+	}
 
+	if err := writeVectorMarshalUint32(w, p.dataLength); err != nil {
+		return err
+	}
+	if p.dataLength > 0 {
+		if err := writeVectorMarshalBytes(w, v.data[:p.dataLength]); err != nil {
+			return err
+		}
+	}
+
+	if err := writeVectorMarshalUint32(w, p.areaLength); err != nil {
+		return err
+	}
+	if p.areaLength > 0 {
+		if err := writeVectorMarshalBytes(w, v.area); err != nil {
+			return err
+		}
+	}
+
+	if err := writeVectorMarshalUint32(w, p.nullLength); err != nil {
+		return err
+	}
+	if p.nullLength > 0 {
+		if err := v.nsp.MarshalTo(w); err != nil {
+			return err
+		}
+	}
+
+	if v.sorted {
+		return writeVectorMarshalByte(w, 1)
+	}
+	return writeVectorMarshalByte(w, 0)
+}
+
+type vectorPrimitiveWriter interface {
+	WriteByte(byte) error
+	WriteUint32(uint32) error
+}
+
+func writeVectorMarshalByte(w io.Writer, value byte) error {
+	if typed, ok := w.(vectorPrimitiveWriter); ok {
+		return typed.WriteByte(value)
+	}
+	var data [1]byte
+	data[0] = value
+	return writeVectorMarshalBytes(w, data[:])
+}
+
+func writeVectorMarshalUint32(w io.Writer, value uint32) error {
+	if typed, ok := w.(vectorPrimitiveWriter); ok {
+		return typed.WriteUint32(value)
+	}
+	var data [4]byte
+	binary.NativeEndian.PutUint32(data[:], value)
+	return writeVectorMarshalBytes(w, data[:])
+}
+
+func writeVectorMarshalBytes(w io.Writer, value []byte) error {
+	written, err := w.Write(value)
+	if err != nil {
+		return err
+	}
+	if written != len(value) {
+		return io.ErrShortWrite
+	}
 	return nil
 }
 
@@ -873,89 +1055,158 @@ func (v *Vector) UnmarshalBinaryTrusted(data []byte) error {
 	return v.unmarshalBinary(data, false)
 }
 
-func (v *Vector) unmarshalBinary(data []byte, validateValues bool) error {
-	v.areaDisjoint = false
-	read := func(size int) ([]byte, error) {
-		if size < 0 || size > len(data) {
-			return nil, io.ErrUnexpectedEOF
-		}
-		value := data[:size]
-		data = data[size:]
-		return value, nil
+type vectorBinaryLayout struct {
+	class  byte
+	typ    types.Type
+	length int
+	data   []byte
+	area   []byte
+	nulls  []byte
+	sorted bool
+}
+
+type vectorBinaryCursor struct {
+	data   []byte
+	offset int
+}
+
+func (c *vectorBinaryCursor) read(size int) ([]byte, error) {
+	if size < 0 || c.offset > len(c.data)-size {
+		return nil, io.ErrUnexpectedEOF
 	}
-	readUint32 := func() (uint32, error) {
-		value, err := read(4)
+	value := c.data[c.offset : c.offset+size]
+	c.offset += size
+	return value, nil
+}
+
+func (c *vectorBinaryCursor) readUint32() (uint32, error) {
+	value, err := c.read(4)
+	if err != nil {
+		return 0, err
+	}
+	return types.DecodeUint32(value), nil
+}
+
+func decodeVectorBinaryLayout(
+	data []byte,
+	validateValues bool,
+) (vectorBinaryLayout, error) {
+	cursor := vectorBinaryCursor{data: data}
+	class, err := cursor.read(1)
+	if err != nil {
+		return vectorBinaryLayout{}, err
+	}
+	typData, err := cursor.read(types.TSize)
+	if err != nil {
+		return vectorBinaryLayout{}, err
+	}
+	length, err := cursor.readUint32()
+	if err != nil || uint64(length) > uint64(math.MaxInt) {
 		if err != nil {
-			return 0, err
+			return vectorBinaryLayout{}, err
 		}
-		return types.DecodeUint32(value), nil
+		return vectorBinaryLayout{}, moerr.NewInvalidInputNoCtx("vector length exceeds platform limit")
 	}
+	readSized := func() ([]byte, error) {
+		size, err := cursor.readUint32()
+		if err != nil {
+			return nil, err
+		}
+		if uint64(size) > uint64(math.MaxInt) {
+			return nil, moerr.NewInvalidInputNoCtx("vector buffer exceeds platform limit")
+		}
+		return cursor.read(int(size))
+	}
+	vectorData, err := readSized()
+	if err != nil {
+		return vectorBinaryLayout{}, err
+	}
+	area, err := readSized()
+	if err != nil {
+		return vectorBinaryLayout{}, err
+	}
+	nullData, err := readSized()
+	if err != nil {
+		return vectorBinaryLayout{}, err
+	}
+	sorted, err := cursor.read(1)
+	if err != nil {
+		return vectorBinaryLayout{}, err
+	}
+	if cursor.offset != len(cursor.data) {
+		return vectorBinaryLayout{}, moerr.NewInvalidInputNoCtx("trailing vector wire data")
+	}
+	if sorted[0] > 1 {
+		return vectorBinaryLayout{}, moerr.NewInvalidInputNoCtx("invalid vector sorted flag")
+	}
+	if err = validateVectorNullBitmap(nullData, validateValues); err != nil {
+		return vectorBinaryLayout{}, err
+	}
+	var decodedNulls nulls.Nulls
+	if len(nullData) > 0 {
+		if err = decodedNulls.ReadNoCopy(nullData); err != nil {
+			return vectorBinaryLayout{}, err
+		}
+	}
+	typ := types.DecodeType(typData)
+	if err = validateVectorBinary(
+		class[0],
+		typ,
+		length,
+		vectorData,
+		area,
+		&decodedNulls,
+		validateValues,
+	); err != nil {
+		return vectorBinaryLayout{}, err
+	}
+	return vectorBinaryLayout{
+		class:  class[0],
+		typ:    typ,
+		length: int(length),
+		data:   vectorData,
+		area:   area,
+		nulls:  nullData,
+		sorted: sorted[0] != 0,
+	}, nil
+}
 
-	class, err := read(1)
+func (v *Vector) unmarshalBinary(data []byte, validateValues bool) error {
+	if v == nil {
+		return io.ErrClosedPipe
+	}
+	v.areaDisjoint = false
+	if v.allocationAccount != nil {
+		return allocationAccountInvalid(
+			"cannot install aliases in an accounted vector",
+		)
+	}
+	layout, err := decodeVectorBinaryLayout(data, validateValues)
 	if err != nil {
 		return err
 	}
-	typ, err := read(types.TSize)
-	if err != nil {
-		return err
+	if v.hasOwnedBackingStorage() {
+		return allocationAccountInvalid(
+			"cannot replace owned vector storage with aliases",
+		)
 	}
-	length, err := readUint32()
-	if err != nil {
-		return err
-	}
-	dataLen, err := readUint32()
-	if err != nil {
-		return err
-	}
-	vecData, err := read(int(dataLen))
-	if err != nil {
-		return err
-	}
-	areaLen, err := readUint32()
-	if err != nil {
-		return err
-	}
-	area, err := read(int(areaLen))
-	if err != nil {
-		return err
-	}
-	nspLen, err := readUint32()
-	if err != nil {
-		return err
-	}
-	nspData, err := read(int(nspLen))
-	if err != nil {
-		return err
-	}
-	sorted, err := read(1)
-	if err != nil {
-		return err
-	}
-
-	decodedType := types.DecodeType(typ)
-	if err := validateVectorNullBitmap(nspData, validateValues); err != nil {
-		return err
-	}
-	var nsp nulls.Nulls
-	if len(nspData) > 0 {
-		if err := nsp.ReadNoCopy(nspData); err != nil {
+	var decodedNulls nulls.Nulls
+	if len(layout.nulls) > 0 {
+		if err = decodedNulls.ReadNoCopy(layout.nulls); err != nil {
 			return err
 		}
 	}
-	if err := validateVectorBinary(class[0], decodedType, length, vecData, area, &nsp, validateValues); err != nil {
-		return err
-	}
-	v.class = int(class[0])
-	v.typ = decodedType
-	v.length = int(length)
-	v.data = vecData
-	v.area = area
-	v.nsp = nsp
-	v.sorted = types.DecodeBool(sorted)
-
+	v.class = int(layout.class)
+	v.typ = layout.typ
+	v.length = layout.length
+	v.data = layout.data
+	v.area = layout.area
+	v.nsp = decodedNulls
+	v.gsp.Reset()
+	v.sorted = layout.sorted
 	v.cantFreeData = true
 	v.cantFreeArea = true
-
+	v.allocationAccount = nil
 	return nil
 }
 
@@ -1020,14 +1271,15 @@ func validateVectorNullBitmap(data []byte, validateValues bool) error {
 	if len(data) == 0 {
 		return nil
 	}
-	if len(data) < 24 {
+	if len(data) < bitmap.MarshalHeaderSize {
 		return io.ErrUnexpectedEOF
 	}
 	count := types.DecodeInt64(data[:8])
 	bitmapLen := types.DecodeUint64(data[8:16])
 	bitmapDataLen := types.DecodeUint64(data[16:24])
 	if count < 0 || bitmapLen > uint64(1<<63-1) || uint64(count) > bitmapLen ||
-		bitmapDataLen%8 != 0 || bitmapDataLen != uint64(len(data)-24) {
+		bitmapDataLen%8 != 0 ||
+		bitmapDataLen != uint64(len(data)-bitmap.MarshalHeaderSize) {
 		return moerr.NewInvalidInputNoCtx("invalid vector null bitmap")
 	}
 	if bitmapDataLen != ((bitmapLen+63)/64)*8 {
@@ -1036,7 +1288,7 @@ func validateVectorNullBitmap(data []byte, validateValues bool) error {
 	if !validateValues {
 		return nil
 	}
-	words := types.DecodeSlice[uint64](data[24:])
+	words := types.DecodeSlice[uint64](data[bitmap.MarshalHeaderSize:])
 	actualCount := int64(0)
 	for i, word := range words {
 		if i == len(words)-1 && bitmapLen%64 != 0 && word>>uint(bitmapLen%64) != 0 {
@@ -1078,65 +1330,74 @@ func canonicalVectorTypeSize(typ types.Type) (int, error) {
 }
 
 func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
+	if v == nil || mp == nil {
+		return io.ErrClosedPipe
+	}
 	v.areaDisjoint = false
-	var err error
-
-	// read class
-	v.class = int(data[0])
-	data = data[1:]
-
-	// read typ
-	v.typ = types.DecodeType(data[:types.TSize])
-	data = data[types.TSize:]
-
-	// read length
-	v.length = int(types.DecodeUint32(data[:4]))
-	data = data[4:]
-
-	// read data
-	dataLen := int(types.DecodeUint32(data[:4]))
-	data = data[4:]
-	if dataLen > 0 {
-		v.data, err = mp.Alloc(dataLen, v.offHeap)
+	if v.hasBackingStorage() {
+		return allocationAccountInvalid(
+			"cannot replace vector storage without Free",
+		)
+	}
+	layout, err := decodeVectorBinaryLayout(data, true)
+	if err != nil {
+		return err
+	}
+	decoded := NewVec(layout.typ)
+	decoded.offHeap = v.offHeap
+	if v.allocationAccount != nil {
+		if err = decoded.SetAllocationAccount(v.allocationAccount); err != nil {
+			return err
+		}
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			decoded.Free(mp)
+		}
+	}()
+	decoded.class = int(layout.class)
+	decoded.length = layout.length
+	if len(layout.data) > 0 {
+		decoded.data, err = decoded.allocData(mp, len(layout.data))
 		if err != nil {
 			return err
 		}
-		copy(v.data, data[:dataLen])
-		data = data[dataLen:]
+		copy(decoded.data, layout.data)
 	}
-
-	// read area
-	areaLen := int(types.DecodeUint32(data[:4]))
-	data = data[4:]
-	if areaLen > 0 {
-		v.area, err = mp.Alloc(areaLen, v.offHeap)
+	if len(layout.area) > 0 {
+		decoded.area, err = decoded.allocArea(mp, len(layout.area))
 		if err != nil {
 			return err
 		}
-		copy(v.area, data[:areaLen])
-		data = data[areaLen:]
+		copy(decoded.area, layout.area)
 	}
-
-	// read nsp
-	nspLen := types.DecodeUint32(data[:4])
-	data = data[4:]
-	if nspLen > 0 {
-		if err := v.nsp.Read(data[:nspLen]); err != nil {
+	if len(layout.nulls) > 0 {
+		if decoded.allocationAccount != nil {
+			_, bitLength, _, decodeErr := bitmap.DecodeMarshalHeader(layout.nulls)
+			if decodeErr != nil || bitLength > int64(math.MaxInt) {
+				return moerr.NewInvalidInputNoCtx("invalid vector null bitmap")
+			}
+			if err = decoded.ensureNullCapacity(int(bitLength), mp); err != nil {
+				return err
+			}
+		}
+		if err = decoded.nsp.Read(layout.nulls); err != nil {
 			return err
 		}
-		data = data[nspLen:]
-	} else {
-		v.nsp.Reset()
 	}
-
-	v.sorted = types.DecodeBool(data[:1])
-	//data = data[1:]
-
+	decoded.sorted = layout.sorted
+	*v = *decoded
+	committed = true
 	return nil
 }
 
 func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
+	if v == nil || r == nil {
+		return io.ErrClosedPipe
+	}
 	v.areaDisjoint = false
+	v.ResetWithSameType()
 	var err error
 
 	if v.class, err = types.ReadByteAsInt(r); err != nil {
@@ -1150,9 +1411,15 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
 	if v.length, err = types.ReadInt32AsInt(r); err != nil {
 		return err
 	}
+	if v.length < 0 {
+		return moerr.NewInvalidInputNoCtx("negative vector length")
+	}
+	if v.length > math.MaxUint32 {
+		return moerr.NewInvalidInputNoCtx("vector length exceeds marshal format")
+	}
 
 	// read data
-	dataLen, dataBuf, err := types.ReadSizeBytesMp(r, v.data, mp, v.offHeap)
+	dataLen, dataBuf, err := v.readSizeBytes(r, mp, true)
 	if err != nil {
 		return err
 	}
@@ -1161,7 +1428,7 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
 	}
 
 	// read area
-	areaLen, areaBuf, err := types.ReadSizeBytesMp(r, v.area, mp, v.offHeap)
+	areaLen, areaBuf, err := v.readSizeBytes(r, mp, false)
 	if err != nil {
 		return err
 	}
@@ -1169,25 +1436,156 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
 		v.area = areaBuf
 	}
 
-	// read nsp, do not use mpool.  nspBuf is different because
-	// it is not managed by vector.  In the following, it will
-	// be unmarshalled into v.nsp
-	nspLen, nspBuf, err := types.ReadSizeBytes(r)
-	if err != nil {
+	if err = v.readNullsWithReader(r, mp); err != nil {
 		return err
-	}
-	if nspLen > 0 {
-		v.nsp.Read(nspBuf)
-	} else {
-		v.nsp.Reset()
 	}
 
 	v.sorted, err = types.ReadBool(r)
 	if err != nil {
 		return err
 	}
+	return validateVectorBinary(
+		byte(v.class),
+		v.typ,
+		uint32(v.length),
+		v.data[:int(dataLen)],
+		v.area[:int(areaLen)],
+		&v.nsp,
+		true,
+	)
+}
 
-	return nil
+func (v *Vector) readNullsWithReader(r io.Reader, mp *mpool.MPool) error {
+	if v.allocationAccount == nil {
+		nspLen, err := types.ReadInt32(r)
+		if err != nil {
+			return err
+		}
+		if nspLen < 0 {
+			return moerr.NewInvalidInputNoCtx("negative vector null bitmap size")
+		}
+		if err = validateStreamingReadSize(r, int64(nspLen)); err != nil {
+			return err
+		}
+		if nspLen > 0 {
+			nspBuf := make([]byte, nspLen)
+			if _, err = io.ReadFull(r, nspBuf); err != nil {
+				return err
+			}
+			if err := validateVectorNullBitmap(nspBuf, true); err != nil {
+				return err
+			}
+			return v.nsp.Read(nspBuf)
+		}
+		v.nsp.Reset()
+		return nil
+	}
+
+	size, err := types.ReadInt32(r)
+	if err != nil {
+		return err
+	}
+	if size == 0 {
+		v.nsp.Reset()
+		return nil
+	}
+	if size < bitmap.MarshalHeaderSize {
+		return moerr.NewInvalidInputNoCtx("invalid bitmap wire size")
+	}
+	var header [bitmap.MarshalHeaderSize]byte
+	if _, err = io.ReadFull(r, header[:]); err != nil {
+		return err
+	}
+	_, bitLength, _, err := bitmap.DecodeMarshalHeader(header[:])
+	if err != nil {
+		return moerr.NewInvalidInputNoCtx("invalid vector null bitmap")
+	}
+	if bitLength > int64(math.MaxInt) {
+		return moerr.NewInvalidInputNoCtx("vector null bitmap exceeds platform limit")
+	}
+	if err = v.ensureNullCapacity(int(bitLength), mp); err != nil {
+		return err
+	}
+	payload, err := v.nsp.GetBitmap().PrepareExternalUnmarshal(
+		header[:],
+		int(size),
+	)
+	if err != nil {
+		return err
+	}
+	if _, err = io.ReadFull(r, payload); err != nil {
+		v.nsp.Reset()
+		return err
+	}
+	return v.nsp.GetBitmap().Validate()
+}
+
+// GroupingMarshalBinarySize returns the optional grouping bitmap wire size.
+func (v *Vector) GroupingMarshalBinarySize() int {
+	if v == nil {
+		return 0
+	}
+	return v.gsp.MarshalSize()
+}
+
+// MarshalGroupingTo writes the optional grouping bitmap without changing the
+// stable Vector wire format.
+func (v *Vector) MarshalGroupingTo(w io.Writer) error {
+	if v == nil || w == nil {
+		return io.ErrClosedPipe
+	}
+	return v.gsp.MarshalTo(w)
+}
+
+// UnmarshalGroupingFromReader restores a grouping bitmap whose size is framed
+// by the caller.
+func (v *Vector) UnmarshalGroupingFromReader(
+	r io.Reader,
+	size int,
+	mp *mpool.MPool,
+) error {
+	if v == nil || r == nil || size < 0 {
+		return moerr.NewInvalidInputNoCtx("invalid vector grouping bitmap")
+	}
+	if size == 0 {
+		v.gsp.Reset()
+		return nil
+	}
+	if size < bitmap.MarshalHeaderSize {
+		return moerr.NewInvalidInputNoCtx("invalid vector grouping bitmap")
+	}
+	var header [bitmap.MarshalHeaderSize]byte
+	if _, err := io.ReadFull(r, header[:]); err != nil {
+		return err
+	}
+	_, bitLength, _, err := bitmap.DecodeMarshalHeader(header[:])
+	if err != nil || bitLength > int64(math.MaxInt) {
+		return moerr.NewInvalidInputNoCtx("invalid vector grouping bitmap")
+	}
+	if v.allocationAccount == nil {
+		data := make([]byte, size)
+		copy(data, header[:])
+		if _, err = io.ReadFull(r, data[len(header):]); err != nil {
+			return err
+		}
+		if err = validateVectorNullBitmap(data, true); err != nil {
+			return err
+		}
+		v.gsp.Reset()
+		return v.gsp.Read(data)
+	}
+	if err = v.ensureGroupingCapacity(int(bitLength), mp); err != nil {
+		return err
+	}
+	payload, err := v.gsp.GetBitmap().PrepareExternalUnmarshal(header[:], size)
+	if err != nil {
+		return err
+	}
+	if _, err = io.ReadFull(r, payload); err != nil {
+		v.gsp.Reset()
+		return err
+	}
+	return v.gsp.GetBitmap().Validate()
 }
 
 func (v *Vector) ToConst() {
@@ -1206,6 +1604,25 @@ func (v *Vector) PreExtend(rows int, mp *mpool.MPool) error {
 	}
 
 	return extend(v, rows, mp)
+}
+
+// PreExtendBitmap ensures allocation-accounted null and grouping storage can
+// represent rows without allocating vector data. Unaccounted vectors are
+// unchanged.
+func (v *Vector) PreExtendBitmap(rows int, mp *mpool.MPool) error {
+	return v.ensureBitmapCapacity(rows, mp)
+}
+
+// PreExtendNulls ensures allocation-accounted null storage can represent rows.
+// Unaccounted vectors are unchanged.
+func (v *Vector) PreExtendNulls(rows int, mp *mpool.MPool) error {
+	return v.ensureNullCapacity(rows, mp)
+}
+
+// PreExtendGrouping ensures allocation-accounted grouping storage can
+// represent rows. Unaccounted vectors are unchanged.
+func (v *Vector) PreExtendGrouping(rows int, mp *mpool.MPool) error {
+	return v.ensureGroupingCapacity(rows, mp)
 }
 
 // PreExtendArea use to expand the mpool and area of vector
@@ -1231,7 +1648,7 @@ func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool)
 	// grow area
 	var err error
 	oldSz := len(area1)
-	area1, err = mp.Grow(area1, voff+extraAreaSize, v.offHeap)
+	area1, err = v.growArea(mp, voff+extraAreaSize)
 	if err != nil {
 		return err
 	}
@@ -1245,29 +1662,59 @@ func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool)
 
 // Dup use to copy an identical vector
 func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
-	return v.dup(mp, false, v.offHeap)
+	if v.allocationAccount != nil {
+		return v.dup(mp, true, true, v.allocationAccount)
+	}
+	return v.dup(mp, false, v.offHeap, nil)
 }
 
 // DupOffHeap copies a vector with all owned backing data allocated off-heap.
 func (v *Vector) DupOffHeap(mp *mpool.MPool) (*Vector, error) {
-	return v.dup(mp, true, true)
+	return v.dup(mp, true, true, v.allocationAccount)
 }
 
-func (v *Vector) dup(mp *mpool.MPool, offHeap, areaOffHeap bool) (*Vector, error) {
+// DupOffHeapWithAllocation copies a vector into an explicitly selected
+// destination account. Passing nil creates an unaccounted destination.
+func (v *Vector) DupOffHeapWithAllocation(
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) (*Vector, error) {
+	return v.dup(mp, true, true, selection)
+}
+
+func (v *Vector) dup(
+	mp *mpool.MPool,
+	offHeap bool,
+	areaOffHeap bool,
+	selection *AllocationAccountSelection,
+) (*Vector, error) {
+	w := NewVecFromReuse()
+	w.offHeap = offHeap
+	if selection != nil {
+		if err := w.SetAllocationAccount(selection); err != nil {
+			return nil, err
+		}
+	}
+	w.class = v.class
+	w.typ = v.typ
+	w.sorted = v.sorted
+
 	if v.IsConstNull() {
-		return NewConstNull(v.typ, v.Length(), mp), nil
+		w.length = v.length
+		if v.HasGrouping() {
+			if err := w.ensureGroupingCapacity(
+				max(v.length, int(v.GetGrouping().GetBitmap().Len())),
+				mp,
+			); err != nil {
+				w.Free(mp)
+				return nil, err
+			}
+			w.GetGrouping().InitWith(v.GetGrouping())
+		}
+		return w, nil
 	}
 
 	var err error
-
-	w := NewVecFromReuse()
-	w.offHeap = offHeap
-	w.class = v.class
-	w.typ = v.typ
-	w.length = v.length
-	w.sorted = v.sorted
-	w.GetNulls().InitWith(v.GetNulls())
-
 	dataLen := v.typ.TypeSize()
 	if v.IsConst() {
 		if err := extend(w, 1, mp); err != nil {
@@ -1281,10 +1728,34 @@ func (v *Vector) dup(mp *mpool.MPool, offHeap, areaOffHeap bool) (*Vector, error
 		}
 		dataLen *= v.length
 	}
+	// A bitmap may be shorter than a sparse vector or longer than a reused vector
+	// that was shortened with SetLength. Preserve both the complete row domain
+	// and the source bitmap extent before InitWith copies its storage.
+	if v.GetNulls().GetBitmap().Len() > 0 {
+		if err := w.ensureNullCapacity(
+			max(v.length, int(v.GetNulls().GetBitmap().Len())),
+			mp,
+		); err != nil {
+			w.Free(mp)
+			return nil, err
+		}
+	}
+	if v.GetGrouping().GetBitmap().Len() > 0 {
+		if err := w.ensureGroupingCapacity(
+			max(v.length, int(v.GetGrouping().GetBitmap().Len())),
+			mp,
+		); err != nil {
+			w.Free(mp)
+			return nil, err
+		}
+	}
+	w.length = v.length
+	w.GetNulls().InitWith(v.GetNulls())
+	w.GetGrouping().InitWith(v.GetGrouping())
 	copy(w.data, v.data[:dataLen])
 
 	if len(v.area) > 0 {
-		if w.area, err = mp.Alloc(len(v.area), areaOffHeap); err != nil {
+		if w.area, err = w.allocOwned(mp, len(v.area), areaOffHeap, false); err != nil {
 			w.Free(mp)
 			return nil, err
 		}
@@ -1298,7 +1769,37 @@ func (v *Vector) dup(mp *mpool.MPool, offHeap, areaOffHeap bool) (*Vector, error
 // retains varlen payload referenced by the vector's logical rows, so stale or
 // unreferenced bytes in area are not propagated into batch memory accounting.
 func (v *Vector) CloneToFlatCompact(mp *mpool.MPool) (*Vector, error) {
-	w := NewVec(v.typ)
+	if v.allocationAccount != nil {
+		return nil, allocationAccountInvalid(
+			"accounted compact clone requires a destination selection",
+		)
+	}
+	return v.cloneToFlatCompact(mp, nil)
+}
+
+// CloneToFlatCompactWithAllocation creates an off-heap compact copy under the
+// explicit destination selection. Passing nil creates an unaccounted
+// destination and is reserved for a deliberate ownership boundary.
+func (v *Vector) CloneToFlatCompactWithAllocation(
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) (*Vector, error) {
+	return v.cloneToFlatCompact(mp, selection)
+}
+
+func (v *Vector) cloneToFlatCompact(
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) (*Vector, error) {
+	var w *Vector
+	if selection == nil {
+		w = NewVec(v.typ)
+	} else {
+		w = NewOffHeapVecWithType(v.typ)
+		if err := w.SetAllocationAccount(selection); err != nil {
+			return nil, err
+		}
+	}
 	if v.class != FLAT || (!v.typ.IsFixedLen() && !v.typ.IsVarlen()) {
 		if err := GetUnionAllFunction(v.typ, mp)(w, v); err != nil {
 			w.Free(mp)
@@ -1311,7 +1812,13 @@ func (v *Vector) CloneToFlatCompact(mp *mpool.MPool) (*Vector, error) {
 	if v.length == 0 {
 		return w, nil
 	}
-	if err := extend(w, v.length, mp); err != nil {
+	if err := extendWithBitmaps(
+		w,
+		v.length,
+		mp,
+		!v.nsp.EmptyByFlag(),
+		!v.gsp.EmptyByFlag(),
+	); err != nil {
 		w.Free(mp)
 		return nil, err
 	}
@@ -1338,7 +1845,7 @@ func (v *Vector) CloneToFlatCompact(mp *mpool.MPool) (*Vector, error) {
 	}
 	if totalArea > 0 {
 		var err error
-		w.area, err = mp.Alloc(totalArea, w.offHeap)
+		w.area, err = w.allocArea(mp, totalArea)
 		if err != nil {
 			w.Free(mp)
 			return nil, err
@@ -1612,6 +2119,12 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 	if v.IsConst() {
 		return nil
 	}
+	// The reusable buffer is Go-heap storage and therefore has no physical
+	// allocation provenance. Allocation-accounted vectors must use Shuffle,
+	// whose replacement data and bitmap scratch are admitted to their owner.
+	if v.allocationAccount != nil {
+		return v.Shuffle(sels, mp)
+	}
 	// Fall back to allocating Shuffle if the vector doesn't own its data
 	// or the selection changes the element count.
 	if v.cantFreeData || len(sels) != v.length {
@@ -1682,6 +2195,24 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 // Copy simply does v[vi] = w[wi]
 func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	disjoint := v.areaDisjoint
+	sourceGrouping := w.GetGrouping().Contains(uint64(wi))
+	if sourceGrouping && v.allocationAccount != nil {
+		if err := v.ensureGroupingCapacity(int(vi)+1, mp); err != nil {
+			return err
+		}
+	}
+	if sourceGrouping {
+		v.GetGrouping().Set(uint64(vi))
+	} else {
+		v.GetGrouping().Unset(uint64(vi))
+	}
+	sourceNull := w.IsConstNull() ||
+		(!w.IsConst() && w.GetNulls().Contains(uint64(wi)))
+	if sourceNull && v.allocationAccount != nil {
+		if err := v.ensureNullCapacity(int(vi)+1, mp); err != nil {
+			return err
+		}
+	}
 	if w.class == CONSTANT {
 		if w.IsConstNull() {
 			if !v.typ.IsFixedLen() {
@@ -1696,7 +2227,7 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 		// Non-null constant vectors still share the regular null/data path below.
 		wi = 0
 	}
-	if w.GetNulls().Contains(uint64(wi)) {
+	if sourceNull {
 		if !v.typ.IsFixedLen() {
 			vva := MustFixedColNoTypeCheck[types.Varlena](v)
 			vva[vi] = types.Varlena{}
@@ -1734,6 +2265,38 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 // GetUnionAllFunction: A more sensible function for copying vector,
 // which avoids having to do type conversions and type judgements every time you append.
 func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error {
+	union := getUnionAllFunction(typ, mp)
+	return func(v, w *Vector) error {
+		oldLength := v.length
+		if w.gsp.Any() {
+			if err := v.ensureGroupingCapacity(oldLength+w.length, mp); err != nil {
+				return err
+			}
+		}
+		if err := union(v, w); err != nil {
+			return err
+		}
+		if w.gsp.Any() {
+			unionVectorBitmap(&v.gsp, &w.gsp, oldLength, w.length)
+		}
+		return nil
+	}
+}
+
+func unionVectorBitmap(
+	destination *nulls.Nulls,
+	source *nulls.Nulls,
+	offset int,
+	length int,
+) {
+	for row := 0; row < length; row++ {
+		if source.Contains(uint64(row)) {
+			destination.Set(uint64(offset + row))
+		}
+	}
+}
+
+func getUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error {
 	// a more simple and quickly union nsp but not good.
 	unionNsp := func(dst *nulls.Nulls, more *nulls.Nulls, oldLength int, moreLength int) {
 		u64offset := uint64(oldLength)
@@ -1770,7 +2333,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -1799,7 +2362,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -1828,7 +2391,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -1857,7 +2420,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -1886,7 +2449,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -1915,7 +2478,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -1944,7 +2507,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -1973,7 +2536,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -2002,7 +2565,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -2031,7 +2594,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -2060,7 +2623,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -2089,7 +2652,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -2118,7 +2681,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -2147,7 +2710,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -2176,7 +2739,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -2205,7 +2768,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -2234,7 +2797,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -2263,7 +2826,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -2292,7 +2855,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -2321,7 +2884,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -2350,7 +2913,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -2379,7 +2942,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -2408,7 +2971,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -2437,7 +3000,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -2468,11 +3031,11 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if sz := len(v.area) + len(w.area); sz > cap(v.area) {
-				area, err := mp.Grow(v.area, sz, v.offHeap)
+				area, err := v.growArea(mp, sz)
 				if err != nil {
 					return err
 				}
@@ -2481,13 +3044,13 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 
 			var err error
 			vs := toSliceOfLengthNoTypeCheck[types.Varlena](v, v.length+w.length)
+			if w.gsp.Any() {
+				unionNsp(&v.gsp, &w.gsp, v.length, w.length)
+			}
 
 			bm := w.nsp.GetBitmap()
 			if bm != nil && !bm.EmptyByFlag() {
 				for i := range ws {
-					if w.gsp.Contains(uint64(i)) {
-						nulls.Add(&v.gsp, uint64(v.length))
-					}
 					if bm.Contains(uint64(i)) {
 						vs[v.length] = types.Varlena{}
 						nulls.Add(&v.nsp, uint64(v.length))
@@ -2525,7 +3088,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
+			if err := extendWithBitmaps(v, w.length, mp, w.nsp.Any(), w.gsp.Any()); err != nil {
 				return err
 			}
 			if w.nsp.Any() {
@@ -2546,7 +3109,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 
 // GetConstSetFunction: A more sensible function for const vector set,
 // which avoids having to do type conversions and type judgements every time you append.
-func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel int64, length int) error {
+func getConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel int64, length int) error {
 	switch typ.Oid {
 	case types.T_bool:
 		return func(v, w *Vector, sel int64, length int) error {
@@ -2841,6 +3404,29 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 	}
 }
 
+func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel int64, length int) error {
+	set := getConstSetFunction(typ, mp)
+	return func(v, w *Vector, sel int64, length int) error {
+		if v == nil || w == nil || sel < 0 || sel >= int64(w.Length()) || length < 0 {
+			return moerr.NewInvalidInputNoCtx("invalid const vector selection")
+		}
+		grouping := w.gsp.Contains(uint64(sel))
+		if grouping {
+			if err := v.ensureGroupingCapacity(length, mp); err != nil {
+				return err
+			}
+		}
+		if err := set(v, w, sel, length); err != nil {
+			return err
+		}
+		v.gsp.Reset()
+		if grouping && length > 0 {
+			v.gsp.AddRange(0, uint64(length))
+		}
+		return nil
+	}
+}
+
 // fillSlice broadcasts val across s[start:end] using exponential copy doubling:
 // write one element, then double the filled region with copy() — O(log n) memmoves
 // instead of n scalar element stores. Used on the hot const-broadcast path.
@@ -2878,7 +3464,7 @@ func pregrowVarlenaArea(vec *Vector, totalBytes int, mp *mpool.MPool) error {
 		return nil
 	}
 	origLen := len(vec.area)
-	grown, err := mp.Grow(vec.area, need, vec.offHeap)
+	grown, err := vec.growArea(mp, need)
 	if err != nil {
 		return err
 	}
@@ -2895,26 +3481,34 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
 	}
-	if err := extend(v, 1, mp); err != nil {
+	sourceGrouping := nulls.Contains(&w.gsp, uint64(sel))
+	sourceNull := w.IsConstNull() ||
+		(!w.IsConst() && nulls.Contains(&w.nsp, uint64(sel)))
+	if err := extendWithBitmaps(
+		v,
+		1,
+		mp,
+		sourceNull && v.allocationAccount != nil,
+		sourceGrouping && v.allocationAccount != nil,
+	); err != nil {
 		return err
 	}
 
 	oldLen := v.length
 	v.length++
-	if nulls.Contains(&w.gsp, uint64(sel)) {
+	if sourceGrouping {
 		nulls.Add(&v.gsp, uint64(oldLen))
 	}
 	if w.IsConst() {
-		if w.IsConstNull() {
+		if sourceNull {
 			nulls.Add(&v.nsp, uint64(oldLen))
 			return nil
 		}
 		sel = 0
-	} else if nulls.Contains(&w.nsp, uint64(sel)) {
+	} else if sourceNull {
 		nulls.Add(&v.nsp, uint64(oldLen))
 		return nil
 	}
-
 	if v.GetType().IsVarlen() {
 		var vs, ws []types.Varlena
 		ToSliceNoTypeCheck(v, &vs)
@@ -2948,6 +3542,22 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	return nil
 }
 
+func appendSelectedGrouping[T int32 | int64](
+	dst *Vector,
+	src *Vector,
+	oldLength int,
+	sels []T,
+) {
+	if src.gsp.EmptyByFlag() {
+		return
+	}
+	for i, sel := range sels {
+		if src.gsp.Contains(uint64(sel)) {
+			nulls.Add(&dst.gsp, uint64(oldLength+i))
+		}
+	}
+}
+
 // It is simply append. the purpose of retention is ease of use
 func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) error {
 	if v.typ.IsVarlen() {
@@ -2957,26 +3567,34 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 		return nil
 	}
 
-	if err := extend(v, cnt, mp); err != nil {
+	sourceGrouping := nulls.Contains(&w.gsp, uint64(sel))
+	sourceNull := w.IsConstNull() ||
+		(!w.IsConst() && nulls.Contains(&w.nsp, uint64(sel)))
+	if err := extendWithBitmaps(
+		v,
+		cnt,
+		mp,
+		sourceNull && v.allocationAccount != nil,
+		sourceGrouping && v.allocationAccount != nil,
+	); err != nil {
 		return err
 	}
 
 	oldLen := v.length
 	v.length += cnt
-	if nulls.Contains(&w.gsp, uint64(sel)) {
+	if sourceGrouping {
 		nulls.AddRange(&v.gsp, uint64(oldLen), uint64(oldLen+cnt))
 	}
 	if w.IsConst() {
-		if w.IsConstNull() {
+		if sourceNull {
 			nulls.AddRange(&v.nsp, uint64(oldLen), uint64(oldLen+cnt))
 			return nil
 		}
 		sel = 0
-	} else if nulls.Contains(&w.nsp, uint64(sel)) {
+	} else if sourceNull {
 		nulls.AddRange(&v.nsp, uint64(oldLen), uint64(oldLen+cnt))
 		return nil
 	}
-
 	if v.GetType().IsVarlen() {
 		var err error
 		var va types.Varlena
@@ -2998,6 +3616,37 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	return nil
 }
 
+func appendBatchGrouping(
+	dst *Vector,
+	src *Vector,
+	oldLength int,
+	offset int64,
+	cnt int,
+	flags []uint8,
+) {
+	if src.gsp.EmptyByFlag() {
+		return
+	}
+	output := oldLength
+	if flags == nil {
+		for i := range cnt {
+			if src.gsp.Contains(uint64(offset) + uint64(i)) {
+				nulls.Add(&dst.gsp, uint64(output+i))
+			}
+		}
+		return
+	}
+	for i, selected := range flags {
+		if selected == 0 {
+			continue
+		}
+		if src.gsp.Contains(uint64(offset) + uint64(i)) {
+			nulls.Add(&dst.gsp, uint64(output))
+		}
+		output++
+	}
+}
+
 func (v *Vector) Union(w *Vector, sels []int64, mp *mpool.MPool) error {
 	return unionT[int64](v, w, sels, mp)
 }
@@ -3013,7 +3662,13 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		return nil
 	}
 
-	if err := extend(v, len(sels), mp); err != nil {
+	if err := extendWithBitmaps(
+		v,
+		len(sels),
+		mp,
+		w.IsConstNull() || !w.nsp.EmptyByFlag(),
+		w.IsGrouping() || !w.gsp.EmptyByFlag(),
+	); err != nil {
 		return err
 	}
 
@@ -3045,6 +3700,7 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 
 		return nil
 	}
+	appendSelectedGrouping(v, w, oldLen, sels)
 
 	if v.GetType().IsVarlen() {
 		var err error
@@ -3072,9 +3728,6 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		}
 		if !w.GetNulls().EmptyByFlag() {
 			for i, sel := range sels {
-				if w.gsp.Contains(uint64(sel)) {
-					nulls.Add(&v.gsp, uint64(oldLen+i))
-				}
 				if w.nsp.Contains(uint64(sel)) {
 					nulls.Add(&v.nsp, uint64(oldLen+i))
 					continue
@@ -3097,9 +3750,6 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		tlen := v.GetType().TypeSize()
 		if !w.nsp.EmptyByFlag() {
 			for i, sel := range sels {
-				if w.gsp.Contains(uint64(sel)) {
-					nulls.Add(&v.gsp, uint64(oldLen+i))
-				}
 				if w.nsp.Contains(uint64(sel)) {
 					nulls.Add(&v.nsp, uint64(oldLen+i))
 					continue
@@ -3158,7 +3808,13 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		return nil
 	}
 
-	if err := extend(v, addCnt, mp); err != nil {
+	if err := extendWithBitmaps(
+		v,
+		addCnt,
+		mp,
+		w.IsConstNull() || !w.nsp.EmptyByFlag(),
+		w.IsGrouping() || !w.gsp.EmptyByFlag(),
+	); err != nil {
 		return err
 	}
 
@@ -3190,6 +3846,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 
 		return nil
 	}
+	appendBatchGrouping(v, w, v.length, offset, cnt, flags)
 
 	if v.GetType().IsVarlen() {
 		var err error
@@ -3214,10 +3871,20 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 			if len(w.area) > 0 {
 				// preserve mpool semantics: append within cap, else mpool Grow2 (so
 				// v.area stays mpool-tracked rather than escaping to the Go heap).
-				if baseOff+len(w.area) <= cap(v.area) || mp == nil {
+				if baseOff+len(w.area) <= cap(v.area) {
 					v.area = append(v.area, w.area...)
-				} else if v.area, err = mp.Grow2(v.area, w.area, baseOff+len(w.area), v.offHeap); err != nil {
-					return err
+				} else if mp == nil {
+					if v.allocationAccount != nil {
+						return moerr.NewInternalErrorNoCtx(
+							"accounted vector area growth does not have a mpool",
+						)
+					}
+					v.area = append(v.area, w.area...)
+				} else {
+					v.area, err = v.growArea2(mp, w.area, baseOff+len(w.area))
+					if err != nil {
+						return err
+					}
 				}
 			}
 			// one memmove of the header array; inline varlenas carry their bytes here.
@@ -3232,21 +3899,6 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 						vCol[i].SetOffsetLen(offset+uint32(baseOff), length)
 					}
 				}
-			}
-			// propagate grouping bits (value is still real for these rows).
-			// Bound to [0,cnt): Foreach walks every set bit in the underlying
-			// bitmap, but w may carry stale bits at index >= w.length (SetLength
-			// shrinks length without clearing nsp/gsp, and vectors are reused).
-			// The per-row path only consults [0,cnt) via Contains, so we must skip
-			// stale bits here too — otherwise they pollute v.gsp / index past vCol.
-			if !w.gsp.EmptyByFlag() {
-				base, ucnt := uint64(oldLen), uint64(cnt)
-				w.gsp.Foreach(func(i uint64) bool {
-					if i < ucnt {
-						nulls.Add(&v.gsp, base+i)
-					}
-					return true
-				})
 			}
 			// propagate null bits and clear those (never-read) headers so a copied
 			// big-header offset can't linger as a dangling reference into v.area.
@@ -3307,9 +3959,6 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		if !w.nsp.EmptyByFlag() {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
-					if w.gsp.Contains(uint64(offset) + uint64(i)) {
-						nulls.Add(&v.gsp, uint64(v.length))
-					}
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(&v.nsp, uint64(v.length))
 					} else {
@@ -3324,9 +3973,6 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 				for i := range flags {
 					if flags[i] == 0 {
 						continue
-					}
-					if w.gsp.Contains(uint64(offset) + uint64(i)) {
-						nulls.Add(&v.gsp, uint64(v.length))
 					}
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(&v.nsp, uint64(v.length))
@@ -3342,9 +3988,6 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		} else {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
-					if w.gsp.Contains(uint64(offset) + uint64(i)) {
-						nulls.Add(&v.gsp, uint64(v.length))
-					}
 					err = BuildVarlenaFromVarlena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
 					if err != nil {
 						return err
@@ -3355,9 +3998,6 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 				for i := range flags {
 					if flags[i] == 0 {
 						continue
-					}
-					if w.gsp.Contains(uint64(offset) + uint64(i)) {
-						nulls.Add(&v.gsp, uint64(v.length))
 					}
 					err = BuildVarlenaFromVarlena(v, &vCol[v.length], &wCol[int(offset)+i], &w.area, mp)
 					if err != nil {
@@ -3372,9 +4012,6 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		if !w.nsp.EmptyByFlag() {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
-					if w.gsp.Contains(uint64(offset) + uint64(i)) {
-						nulls.Add(&v.gsp, uint64(v.length))
-					}
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(&v.nsp, uint64(v.length))
 					} else {
@@ -3386,9 +4023,6 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 				for i := range flags {
 					if flags[i] == 0 {
 						continue
-					}
-					if w.gsp.Contains(uint64(offset) + uint64(i)) {
-						nulls.Add(&v.gsp, uint64(v.length))
 					}
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
 						nulls.Add(&v.nsp, uint64(v.length))
@@ -3416,9 +4050,6 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 				for i := range flags {
 					if flags[i] == 0 {
 						continue
-					}
-					if w.gsp.Contains(uint64(offset) + uint64(i)) {
-						nulls.Add(&v.gsp, uint64(v.length))
 					}
 					copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
 					v.length++
@@ -4090,7 +4721,7 @@ func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) err
 		return moerr.NewInternalErrorNoCtx("append to const vector")
 	}
 
-	if err := extend(vec, 1, mp); err != nil {
+	if err := extendWithBitmaps(vec, 1, mp, isNull, false); err != nil {
 		return err
 	}
 	length := vec.length
@@ -4169,10 +4800,9 @@ func appendOneArray[T types.ArrayElement](vec *Vector, val []T, isNull bool, mp 
 	}
 }
 
-// appendOneOwnedVarlena installs a descriptor built against vec.area by one of
-// the helpers above. That construction either keeps the value inline or
-// appends a fresh range, so it preserves an existing disjoint-area proof
-// without the invalidate/restore stores required by generic descriptor writes.
+// appendOneOwnedVarlena installs a descriptor built against vec.area. The
+// value is either inline or references a freshly appended area range, so this
+// preserves an existing disjoint-area proof.
 func appendOneOwnedVarlena(
 	vec *Vector,
 	value types.Varlena,
@@ -4183,8 +4813,7 @@ func appendOneOwnedVarlena(
 	}
 	index := vec.length
 	vec.length++
-	values := toSliceOfLengthNoTypeCheck[types.Varlena](vec, vec.length)
-	values[index] = value
+	toSliceOfLengthNoTypeCheck[types.Varlena](vec, vec.length)[index] = value
 	return nil
 }
 
@@ -4192,7 +4821,7 @@ func appendMultiFixed[T any](vec *Vector, val T, isNull bool, cnt int, mp *mpool
 	if vec.typ.IsVarlen() && !isNull {
 		vec.areaDisjoint = false
 	}
-	if err := extend(vec, cnt, mp); err != nil {
+	if err := extendWithBitmaps(vec, cnt, mp, isNull, false); err != nil {
 		return err
 	}
 	length := vec.length
@@ -4216,7 +4845,7 @@ func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.M
 	vec.areaDisjoint = false
 	var err error
 	var va types.Varlena
-	if err = extend(vec, cnt, mp); err != nil {
+	if err = extendWithBitmaps(vec, cnt, mp, isNull, false); err != nil {
 		return err
 	}
 	length := vec.length
@@ -4239,10 +4868,15 @@ func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.M
 
 func appendList[T any](vec *Vector, vals []T, isNulls []bool, mp *mpool.MPool) error {
 	if vec.typ.IsVarlen() {
-		// Generic lists can contain repeated or externally-owned descriptors.
 		vec.areaDisjoint = false
 	}
-	if err := extend(vec, len(vals), mp); err != nil {
+	if err := extendWithBitmaps(
+		vec,
+		len(vals),
+		mp,
+		slices.Contains(isNulls, true),
+		false,
+	); err != nil {
 		return err
 	}
 	length := vec.length
@@ -4262,7 +4896,13 @@ func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool
 	var err error
 	disjoint := vec.areaDisjoint
 	vec.areaDisjoint = false
-	if err = extend(vec, len(vals), mp); err != nil {
+	if err = extendWithBitmaps(
+		vec,
+		len(vals),
+		mp,
+		slices.Contains(isNulls, true),
+		false,
+	); err != nil {
 		return err
 	}
 	length := vec.length
@@ -4290,7 +4930,13 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 	disjoint := vec.areaDisjoint
 	vec.areaDisjoint = false
 
-	if err = extend(vec, len(vals), mp); err != nil {
+	if err = extendWithBitmaps(
+		vec,
+		len(vals),
+		mp,
+		slices.Contains(isNulls, true),
+		false,
+	); err != nil {
 		return err
 	}
 	length := vec.length
@@ -4320,7 +4966,13 @@ func appendArrayList[T types.ArrayElement](vec *Vector, vals [][]T, isNulls []bo
 	disjoint := vec.areaDisjoint
 	vec.areaDisjoint = false
 
-	if err = extend(vec, len(vals), mp); err != nil {
+	if err = extendWithBitmaps(
+		vec,
+		len(vals),
+		mp,
+		slices.Contains(isNulls, true),
+		false,
+	); err != nil {
 		return err
 	}
 	length := vec.length
@@ -4350,8 +5002,8 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 		for i, sel := range sels {
 			vs[i] = vs[sel]
 		}
-		nulls.Filter(&v.gsp, sels, false)
-		nulls.Filter(&v.nsp, sels, false)
+		nulls.FilterInPlaceOrdered(&v.gsp, sels, false)
+		nulls.FilterInPlaceOrdered(&v.nsp, sels, false)
 		v.length = len(sels)
 	} else if len(sels) > 0 {
 		for oldIdx, newIdx, selIdx, sel := 0, 0, 0, sels[0]; oldIdx < v.length; oldIdx++ {
@@ -4370,8 +5022,8 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 				sel = sels[selIdx]
 			}
 		}
-		nulls.Filter(&v.gsp, sels, true)
-		nulls.Filter(&v.nsp, sels, true)
+		nulls.FilterInPlaceOrdered(&v.gsp, sels, true)
+		nulls.FilterInPlaceOrdered(&v.nsp, sels, true)
 		v.length -= len(sels)
 	}
 }
@@ -4386,8 +5038,8 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negat
 			vs[idx] = vs[itr.Next()+offset]
 			idx++
 		}
-		nulls.FilterByMask(&v.gsp, sels, false)
-		nulls.FilterByMask(&v.nsp, sels, false)
+		nulls.FilterByMaskInPlace(&v.gsp, sels, false)
+		nulls.FilterByMaskInPlace(&v.nsp, sels, false)
 		v.length = length
 	} else if length > 0 {
 		sel := itr.Next() + offset
@@ -4406,8 +5058,8 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negat
 				sel = itr.Next() + offset
 			}
 		}
-		nulls.FilterByMask(&v.gsp, sels, true)
-		nulls.FilterByMask(&v.nsp, sels, true)
+		nulls.FilterByMaskInPlace(&v.gsp, sels, true)
+		nulls.FilterByMaskInPlace(&v.nsp, sels, true)
 		v.length -= length
 	}
 }
@@ -4419,16 +5071,18 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 	ns := len(sels)
 	var vs []T
 	ToFixedColNoTypeCheck(v, &vs)
-	data, err := mp.Alloc(ns*v.GetType().TypeSize(), v.offHeap)
+	data, err := v.allocData(mp, ns*v.GetType().TypeSize())
 	if err != nil {
 		return err
 	}
-	v.data = data
-	ws := toSliceOfLengthNoTypeCheck[T](v, ns)
+	ws := util.UnsafeSliceCastToLength[T](data, ns)
 
 	shuffle.FixedLengthShuffle(vs, ws, sels)
-	nulls.Filter(&v.gsp, sels, false)
-	nulls.Filter(&v.nsp, sels, false)
+	if err := v.remapShuffleBitmaps(sels, mp); err != nil {
+		mp.Free(data)
+		return err
+	}
+	v.data = data
 	// XXX We should never allow "half-owned" vectors later. And unowned vector should be strictly read-only.
 	if v.cantFreeData {
 		v.cantFreeData = false
@@ -4436,6 +5090,95 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 		mp.Free(olddata)
 	}
 	v.length = ns
+	return nil
+}
+
+type bitmapRemapScratch struct {
+	destination *bitmap.Bitmap
+	value       bitmap.Bitmap
+	storage     []uint64
+}
+
+func (s *bitmapRemapScratch) release(mp *mpool.MPool) {
+	if s == nil || cap(s.storage) == 0 {
+		return
+	}
+	s.value.ReleaseExternalStorage()
+	mpool.FreeSlice(mp, s.storage)
+	s.storage = nil
+}
+
+// remapShuffleBitmaps preserves Shuffle's arbitrary-selection semantics. An
+// allocation-accounted vector builds both results in admitted temporary
+// storage before publishing either, so rejection cannot leave null and
+// grouping ownership half-mutated.
+func (v *Vector) remapShuffleBitmaps(sels []int64, mp *mpool.MPool) error {
+	if v.allocationAccount == nil {
+		nulls.Filter(&v.gsp, sels, false)
+		nulls.Filter(&v.nsp, sels, false)
+		return nil
+	}
+
+	targets := [...]struct {
+		destination *bitmap.Bitmap
+		site        mpool.AllocationSite
+	}{
+		{v.gsp.GetBitmap(), v.allocationAccount.groupingSite},
+		{v.nsp.GetBitmap(), v.allocationAccount.nullsSite},
+	}
+	if targets[0].destination.EmptyByFlag() &&
+		targets[1].destination.EmptyByFlag() {
+		return nil
+	}
+	if !targets[0].destination.EmptyByFlag() {
+		if err := v.ensureGroupingCapacity(len(sels), mp); err != nil {
+			return err
+		}
+	}
+	if !targets[1].destination.EmptyByFlag() {
+		if err := v.ensureNullCapacity(len(sels), mp); err != nil {
+			return err
+		}
+	}
+
+	var scratch [2]bitmapRemapScratch
+	for i, target := range targets {
+		if target.destination.EmptyByFlag() {
+			continue
+		}
+		words := (len(sels) + 63) / 64
+		storage, err := mpool.MakeSliceAccounted[uint64](
+			words,
+			mp,
+			v.allocationAccount.account,
+			v.allocationAccount.owner,
+			target.site,
+		)
+		if err != nil {
+			for j := range i {
+				scratch[j].release(mp)
+			}
+			return err
+		}
+		scratch[i].destination = target.destination
+		scratch[i].storage = storage
+		scratch[i].value.InstallExternalStorage(storage)
+		scratch[i].value.InitWithSize(int64(len(sels)))
+		for output, source := range sels {
+			if target.destination.Contains(uint64(source)) {
+				scratch[i].value.Add(uint64(output))
+			}
+		}
+	}
+
+	for i := range scratch {
+		if scratch[i].destination != nil {
+			scratch[i].destination.InitWith(&scratch[i].value)
+		}
+	}
+	for i := range scratch {
+		scratch[i].release(mp)
+	}
 	return nil
 }
 
@@ -4486,29 +5229,60 @@ func vecToString[T types.FixedSizeT](v *Vector) string {
 // The returned object is NOT allowed to be modified (
 // TODO: Nulls are deep copied.
 func (v *Vector) Window(start, end int) (*Vector, error) {
-	if v.IsConstNull() {
-		return NewConstNull(v.typ, end-start, nil), nil
-	} else if v.IsConst() {
-		vec := NewVec(v.typ)
-		vec.class = v.class
-		if v.typ.IsVarlen() {
-			vec.areaDisjoint = false
-		}
-		vec.data = v.data
-		vec.area = v.area
-		vec.length = end - start
-		vec.cantFreeArea = true
-		vec.cantFreeData = true
-		vec.sorted = v.sorted
-		return vec, nil
+	return v.window(start, end, nil, nil)
+}
+
+// WindowWithAllocation returns a borrowed data window whose range bitmaps are
+// physical allocations in selection. Accounted pressure paths must use this
+// form so shrinking an operation cannot create invisible Go-heap owners.
+func (v *Vector) WindowWithAllocation(
+	start int,
+	end int,
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) (*Vector, error) {
+	if mp == nil || selection == nil {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	return v.window(start, end, mp, selection)
+}
+
+func (v *Vector) window(
+	start int,
+	end int,
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) (*Vector, error) {
+	if start < 0 || end < start || end > v.Length() {
+		return nil, moerr.NewInvalidInputNoCtx("invalid vector window")
 	}
 	w := NewVec(v.typ)
-	if start == end {
+	if selection != nil {
+		w.offHeap = true
+		if err := w.SetAllocationAccount(selection); err != nil {
+			return nil, err
+		}
+	}
+	w.class = v.class
+	w.length = end - start
+	w.sorted = v.sorted
+	if err := v.copyWindowBitmaps(w, start, end, mp); err != nil {
+		w.Free(mp)
+		return nil, err
+	}
+	if v.IsConst() {
+		if v.typ.IsVarlen() {
+			w.areaDisjoint = false
+		}
+		w.data = v.data
+		w.area = v.area
+		w.cantFreeArea = true
+		w.cantFreeData = true
 		return w, nil
 	}
-	nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
-	w.data = v.data[start*v.typ.TypeSize() : end*v.typ.TypeSize()]
-	w.length = end - start
+	if start != end {
+		w.data = v.data[start*v.typ.TypeSize() : end*v.typ.TypeSize()]
+	}
 	if v.typ.IsVarlen() {
 		w.area = v.area
 		w.areaDisjoint = v.areaDisjoint
@@ -4518,33 +5292,65 @@ func (v *Vector) Window(start, end int) (*Vector, error) {
 	return w, nil
 }
 
+func (v *Vector) copyWindowBitmaps(w *Vector, start, end int, mp *mpool.MPool) error {
+	length := end - start
+	hasNull := v.nsp.GetBitmap().CountRange(uint64(start), uint64(end)) > 0
+	hasGrouping := v.gsp.GetBitmap().CountRange(uint64(start), uint64(end)) > 0
+	if hasNull {
+		if err := w.PreExtendNulls(length, mp); err != nil {
+			return err
+		}
+		nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
+	}
+	if hasGrouping {
+		if err := w.PreExtendGrouping(length, mp); err != nil {
+			return err
+		}
+		nulls.Range(&v.gsp, uint64(start), uint64(end), uint64(start), &w.gsp)
+	}
+	return nil
+}
+
 // CloneWindow Deep copies the content from start to end into another vector. Afterwise it's safe to destroy the original one.
 func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
+	return v.CloneWindowWithAllocation(
+		start,
+		end,
+		mp,
+		v.allocationAccount,
+	)
+}
+
+// CloneWindowWithAllocation deep-copies a window into an explicitly selected
+// off-heap destination account.
+func (v *Vector) CloneWindowWithAllocation(
+	start int,
+	end int,
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) (*Vector, error) {
 	if start == end {
-		return NewOffHeapVecWithType(v.typ), nil
+		w := NewOffHeapVecWithType(v.typ)
+		if selection != nil {
+			if err := w.SetAllocationAccount(selection); err != nil {
+				return nil, err
+			}
+		}
+		return w, nil
 	}
 	if end > v.Length() {
 		panic(fmt.Sprintf("CloneWindow end %d >= length %d", end, v.Length()))
 	}
-	if v.IsConstNull() {
-		return NewConstNull(v.typ, end-start, mp), nil
-	} else if v.IsConst() {
-		if v.typ.IsVarlen() {
-			return NewConstBytes(v.typ, v.GetBytesAt(0), end-start, mp)
-		} else {
-			vec := NewOffHeapVecWithType(v.typ)
-			vec.class = v.class
-			vec.data = make([]byte, len(v.data))
-			copy(vec.data, v.data)
-			vec.length = end - start
-			vec.cantFreeArea = true
-			vec.cantFreeData = true
-			vec.sorted = v.sorted
-			return vec, nil
+	w := NewOffHeapVecWithType(v.typ)
+	if selection != nil {
+		if err := w.SetAllocationAccount(selection); err != nil {
+			return nil, err
 		}
 	}
-	w := NewOffHeapVecWithType(v.typ)
 	if err := v.CloneWindowTo(w, start, end, mp); err != nil {
+		if mp != nil {
+			w.Free(mp)
+		}
 		return nil, err
 	}
 	return w, nil
@@ -4553,6 +5359,9 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error {
 	if start == end {
 		return nil
+	}
+	if err := v.copyWindowBitmaps(w, start, end, mp); err != nil {
+		return err
 	}
 	if v.IsConstNull() {
 		w.class = CONSTANT
@@ -4564,21 +5373,36 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 		return nil
 	} else if v.IsConst() {
 		if v.typ.IsVarlen() {
+			w.class = CONSTANT
 			return SetConstBytes(w, v.GetBytesAt(0), end-start, mp)
 		} else {
+			if mp == nil {
+				if w.allocationAccount != nil {
+					return moerr.NewInternalErrorNoCtx(
+						"accounted vector clone does not have a mpool",
+					)
+				}
+				w.data = make([]byte, len(v.data))
+				w.cantFreeData = true
+			} else {
+				if err := w.PreExtend(1, mp); err != nil {
+					return err
+				}
+				copy(w.data, v.data)
+			}
 			w.class = v.class
-			w.data = make([]byte, len(v.data))
-			copy(w.data, v.data)
 			w.length = end - start
-			w.cantFreeArea = true
-			w.cantFreeData = true
 			w.sorted = v.sorted
 			return nil
 		}
 	}
-	nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
 	length := (end - start) * v.typ.TypeSize()
 	if mp == nil {
+		if w.allocationAccount != nil {
+			return moerr.NewInternalErrorNoCtx(
+				"accounted vector clone does not have a mpool",
+			)
+		}
 		w.data = make([]byte, length)
 		copy(w.data, v.data[start*v.typ.TypeSize():end*v.typ.TypeSize()])
 		w.length = end - start
@@ -5670,14 +6494,25 @@ func BuildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.M
 	vlen := len(*bs)
 	area1 := vec.GetArea()
 	voff := len(area1)
-	if voff+vlen <= cap(area1) || m == nil {
+	if voff+vlen <= cap(area1) {
+		area1 = append(area1, *bs...)
+		v1.SetOffsetLen(uint32(voff), uint32(vlen))
+		vec.area = area1
+		return nil
+	}
+	if m == nil {
+		if vec.allocationAccount != nil {
+			return moerr.NewInternalErrorNoCtx(
+				"accounted vector area growth does not have a mpool",
+			)
+		}
 		area1 = append(area1, *bs...)
 		v1.SetOffsetLen(uint32(voff), uint32(vlen))
 		vec.area = area1
 		return nil
 	}
 	var err error
-	area1, err = m.Grow2(area1, *bs, voff+vlen, vec.offHeap)
+	area1, err = vec.growArea2(m, *bs, voff+vlen)
 	if err != nil {
 		return err
 	}
@@ -5695,13 +6530,18 @@ func BuildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejso
 	if voff+vlen > cap(area1) && m != nil {
 		// Pass nil to Grow2, we can grow area1 to voff+vlen without
 		// copy bytejson data.
-		area1, err = m.Grow2(area1, nil, voff+vlen, vec.offHeap)
+		area1, err = vec.growArea2(m, nil, voff+vlen)
 		if err != nil {
 			return err
 		}
 		area1[voff] = byte(bj.Type)
 		copy(area1[voff+1:voff+vlen], bj.Data)
 	} else {
+		if voff+vlen > cap(area1) && vec.allocationAccount != nil {
+			return moerr.NewInternalErrorNoCtx(
+				"accounted vector area growth does not have a mpool",
+			)
+		}
 		area1 = append(area1, byte(bj.Type))
 		area1 = append(area1, bj.Data...)
 	}
@@ -5794,7 +6634,7 @@ func BuildVarlenaFromByteJsonEncoded(
 	}
 
 	if int(newAreaLen) > cap(vec.area) {
-		newArea, err := m.Grow2(vec.area, nil, int(newAreaLen), vec.offHeap)
+		newArea, err := vec.growArea2(m, nil, int(newAreaLen))
 		if err != nil {
 			return err
 		}

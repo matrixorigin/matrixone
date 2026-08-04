@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -81,6 +82,15 @@ func TestGetFkDepsFromTableInfos(t *testing.T) {
 	require.Equal(t, []string{genKey("d", "parent")}, deps[genKey("d", "child")])
 	require.Equal(t, []string{genKey("d", "self_ref")}, deps[genKey("d", "self_ref")])
 	require.NotContains(t, deps, genKey("d", "v"))
+}
+
+func TestMongoDBMappingsFollowExternalTableRestoreSkipPolicy(t *testing.T) {
+	info := &tableInfo{dbName: moCatalog, tblName: sqlmongodb.TableMappings, typ: "BASE TABLE"}
+	for _, accountID := range []uint32{sysAccountID, 7} {
+		require.True(t, needSkipTable(accountID, moCatalog, sqlmongodb.TableMappings))
+		require.True(t, needSkipSystemTable(accountID, info))
+	}
+	require.Equal(t, int8(1), needSkipTablesInMocatalog[sqlmongodb.TableMappings])
 }
 
 func TestMergeFkDepsDeduplicatesSources(t *testing.T) {

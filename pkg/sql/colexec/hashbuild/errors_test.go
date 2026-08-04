@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -32,18 +33,18 @@ func TestTerminalBudgetError(t *testing.T) {
 	})
 
 	for _, tc := range []struct {
-		name     string
-		resource process.HashBuildBudgetResource
-		want     []string
+		name      string
+		component process.HashBuildBudgetComponent
+		want      []string
 	}{
-		{"memory", process.HashBuildBudgetResourceMemory, []string{"memory", "requested=3", "used=5", "limit=7", "build width", "processLimitationSize", "join_spill_mem", "recovery headroom"}},
-		{"spill disk", process.HashBuildBudgetResourceSpillDisk, []string{"spill disk", "requested=3", "used=5", "limit=7", "processLimitationSpillSize"}},
-		{"spill fd", process.HashBuildBudgetResourceSpillFD, []string{"spill file descriptor", "requested=3", "used=5", "limit=7", "open-file limit"}},
+		{"memory", process.HashBuildBudgetComponentMemory, []string{"memory", "requested=3", "used=5", "limit=7", "build width", "processLimitationSize", "join_spill_mem", "recovery headroom"}},
+		{"spill disk", process.HashBuildBudgetComponentSpillDisk, []string{"spill disk", "requested=3", "used=5", "limit=7", "processLimitationSpillSize"}},
+		{"spill fd", process.HashBuildBudgetComponentSpillFD, []string{"spill file descriptor", "requested=3", "used=5", "limit=7", "open-file limit"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := TerminalBudgetError(context.Background(), &process.HashBuildBudgetError{
 				Kind:      process.HashBuildBudgetErrorAdmission,
-				Resource:  tc.resource,
+				Component: tc.component,
 				Requested: 3,
 				Used:      5,
 				Cap:       7,
@@ -72,7 +73,7 @@ func TestTerminalBudgetError(t *testing.T) {
 	t.Run("resource admission keeps spill depth context", func(t *testing.T) {
 		err := TerminalBudgetError(context.Background(), &process.HashBuildBudgetError{
 			Kind:      process.HashBuildBudgetErrorAdmission,
-			Resource:  process.HashBuildBudgetResourceMemory,
+			Component: process.HashBuildBudgetComponentMemory,
 			Requested: 3,
 			Used:      5,
 			Cap:       7,
@@ -91,6 +92,29 @@ func TestTerminalBudgetError(t *testing.T) {
 		require.NotContains(t, err.Error(), process.ErrHashBuildBudgetAdmission.Error())
 	})
 
+	t.Run("physical capacity is terminal resource exhaustion", func(t *testing.T) {
+		err := TerminalBudgetError(
+			context.Background(), mpool.ErrAllocationAccountCapacity)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
+		require.Contains(t, err.Error(), "hash build memory budget exceeded")
+		require.Contains(t, err.Error(), "processLimitationSize")
+	})
+
+	t.Run("mpool capacity preserves allocator error", func(t *testing.T) {
+		capacity := moerr.NewMPoolCapacityNoCtxf("mpool out of space")
+		require.Same(t, capacity,
+			TerminalBudgetError(context.Background(), capacity))
+	})
+
+	t.Run("physical lifecycle failure stays fatal", func(t *testing.T) {
+		joined := errors.Join(
+			mpool.ErrAllocationAccountCapacity,
+			mpool.ErrAllocationAccountSealed,
+		)
+		require.Same(t, joined,
+			TerminalBudgetError(context.Background(), joined))
+	})
+
 	for _, lifecycle := range []error{
 		process.ErrHashBuildBudgetClosed,
 		process.ErrHashBuildBudgetInvalid,
@@ -100,33 +124,5 @@ func TestTerminalBudgetError(t *testing.T) {
 			joined := errors.Join(process.ErrHashBuildBudgetAdmission, lifecycle)
 			require.Same(t, joined, TerminalBudgetError(context.Background(), joined))
 		})
-	}
-}
-
-func TestIsHashBuildMemoryAdmission(t *testing.T) {
-	memory := &process.HashBuildBudgetError{
-		Kind:     process.HashBuildBudgetErrorAdmission,
-		Resource: process.HashBuildBudgetResourceMemory,
-	}
-	require.True(t, isHashBuildMemoryAdmission(memory))
-	require.True(t, isHashBuildMemoryAdmission(errors.Join(errors.New("context"), memory)))
-
-	for _, err := range []error{
-		nil,
-		process.ErrHashBuildBudgetAdmission,
-		&process.HashBuildBudgetError{
-			Kind:     process.HashBuildBudgetErrorAdmission,
-			Resource: process.HashBuildBudgetResourceSpillDisk,
-		},
-		&process.HashBuildBudgetError{
-			Kind:     process.HashBuildBudgetErrorAdmission,
-			Resource: process.HashBuildBudgetResourceSpillFD,
-		},
-		&process.HashBuildBudgetError{
-			Kind:     process.HashBuildBudgetErrorClosed,
-			Resource: process.HashBuildBudgetResourceMemory,
-		},
-	} {
-		require.False(t, isHashBuildMemoryAdmission(err))
 	}
 }

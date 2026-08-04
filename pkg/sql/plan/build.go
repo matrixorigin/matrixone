@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"reflect"
 	gotrace "runtime/trace"
 	"time"
 
@@ -379,6 +380,42 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
 		return nil, err
 	}
+
+	enabled, err := IsForeignKeyChecksEnabled(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if enabled && query.HasForeignKeyAction {
+		tblInfo, resolveErr := getUpdateTableInfo(ctx, stmt)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		for i, tableDef := range tblInfo.tableDefs {
+			if len(tblInfo.updateKeys[i]) == 0 {
+				continue
+			}
+			selfFkeys := make([]*plan.ForeignKeyDef, 0, len(tableDef.Fkeys))
+			for _, fk := range tableDef.Fkeys {
+				if fk.ForeignTbl == 0 {
+					selfFkeys = append(selfFkeys, fk)
+				}
+			}
+			if len(selfFkeys) == 0 {
+				continue
+			}
+			sqls, genErr := genSqlsForCheckFKSelfRefer(
+				ctx.GetContext(),
+				tblInfo.objRef[i].SchemaName,
+				tableDef.Name,
+				tableDef.Cols,
+				selfFkeys,
+			)
+			if genErr != nil {
+				return nil, genErr
+			}
+			query.DetectSqls = append(query.DetectSqls, sqls...)
+		}
+	}
 	recordUpdatePlannerRoute(updatePlannerModern, updateRouteReasonNone, "selected")
 	return &Plan{
 		Plan: &plan.Plan_Query{
@@ -426,6 +463,47 @@ func buildExplainPhyPlan(ctx CompilerContext, stmt *tree.ExplainPhyPlan, isPrepa
 	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
 }
 
+func selectHasExportParam(stmt tree.SelectStatement) bool {
+	return selectTreeHasExportParam(reflect.ValueOf(stmt))
+}
+
+// selectTreeHasExportParam follows the complete parser tree because SELECT
+// nodes can also be nested in CTEs, table expressions, and scalar predicates.
+// The parser's expression visitor cannot be used here because Subquery.Accept
+// is intentionally unimplemented.
+func selectTreeHasExportParam(value reflect.Value) bool {
+	if !value.IsValid() {
+		return false
+	}
+	if value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return false
+		}
+		if value.CanInterface() {
+			if selectStmt, ok := value.Interface().(*tree.Select); ok && selectStmt.Ep != nil {
+				return true
+			}
+		}
+		return selectTreeHasExportParam(value.Elem())
+	}
+
+	switch value.Kind() {
+	case reflect.Struct:
+		for i := 0; i < value.NumField(); i++ {
+			if selectTreeHasExportParam(value.Field(i)) {
+				return true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < value.Len(); i++ {
+			if selectTreeHasExportParam(value.Index(i)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -435,6 +513,9 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	defer task.End()
 	switch stmt := stmt.(type) {
 	case *tree.Select:
+		if stmt.IsPerform && selectHasExportParam(stmt) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "PERFORM SELECT INTO OUTFILE")
+		}
 		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false)
 	case *tree.ParenSelect:
 		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false)

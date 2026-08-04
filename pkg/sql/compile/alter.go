@@ -1614,6 +1614,12 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 	if len(autoCols) == 0 {
 		return nil
 	}
+	if !engine.TxnSupportsAutoIncrEpochFence(c.proc.GetTxnOperator()) {
+		return moerr.NewNotSupported(
+			c.proc.Ctx,
+			"AUTO_INCREMENT allocator reset requires epoch fencing on every TN service",
+		)
+	}
 
 	sourceOffsets := make(map[string]uint64)
 	sourceNames := mapCloneAutoIncrColumns(srcDef, copyDef, true)
