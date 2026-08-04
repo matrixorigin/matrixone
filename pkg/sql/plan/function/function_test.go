@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -514,6 +515,89 @@ func TestSerialFunctionsReturnBinaryVarchar(t *testing.T) {
 			require.Equal(t, types.CharsetBinary, result.GetReturnType().Charset)
 		})
 	}
+}
+
+func TestConcatFunctionsPreserveStringCollation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	general := types.T_varchar.ToType()
+	utf8mb4Bin := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4Bin)
+	opaqueBinary := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetBinary)
+
+	testCases := []struct {
+		name        string
+		function    string
+		inputs      []types.Type
+		wantOID     types.T
+		wantCharset uint8
+	}{
+		{
+			name:        "concat keeps utf8mb4 bin",
+			function:    "concat",
+			inputs:      []types.Type{general, utf8mb4Bin},
+			wantOID:     types.T_varchar,
+			wantCharset: types.CharsetUTF8MB4Bin,
+		},
+		{
+			name:        "concat ws keeps utf8mb4 bin",
+			function:    "concat_ws",
+			inputs:      []types.Type{general, utf8mb4Bin, utf8mb4Bin},
+			wantOID:     types.T_varchar,
+			wantCharset: types.CharsetUTF8MB4Bin,
+		},
+		{
+			name:        "opaque binary dominates utf8mb4 bin",
+			function:    "concat",
+			inputs:      []types.Type{utf8mb4Bin, opaqueBinary},
+			wantOID:     types.T_varchar,
+			wantCharset: types.CharsetBinary,
+		},
+		{
+			name:        "binary string keeps blob result",
+			function:    "concat",
+			inputs:      []types.Type{general, types.T_varbinary.ToType()},
+			wantOID:     types.T_blob,
+			wantCharset: types.T_blob.ToType().Charset,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			result, err := GetFunctionByName(proc.Ctx, testCase.function, testCase.inputs)
+			require.NoError(t, err)
+			require.Equal(t, testCase.wantOID, result.GetReturnType().Oid)
+			require.Equal(t, testCase.wantCharset, result.GetReturnType().Charset)
+		})
+	}
+}
+
+func TestMinConcatUsesPropagatedBinaryCollation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputType := types.NewWithCharset(types.T_varchar, 10, 0, types.CharsetUTF8MB4Bin)
+	input := vector.NewVec(inputType)
+	defer input.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(input, []byte("a"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(input, []byte("B"), false, proc.Mp()))
+
+	concat, err := GetFunctionByName(proc.Ctx, "concat", []types.Type{inputType, inputType})
+	require.NoError(t, err)
+	concatenated, err := RunFunctionDirectly(
+		proc, concat.GetEncodedOverloadID(), []*vector.Vector{input, input}, 2)
+	require.NoError(t, err)
+	defer concatenated.Free(proc.Mp())
+	require.Equal(t, types.CharsetUTF8MB4Bin, concatenated.GetType().Charset)
+
+	minExec, err := aggexec.MakeAgg(
+		proc.Mp(), aggexec.AggIdOfMin, false, *concatenated.GetType())
+	require.NoError(t, err)
+	defer minExec.Free()
+	require.NoError(t, minExec.GroupGrow(1))
+	require.NoError(t, minExec.BulkFill(0, []*vector.Vector{concatenated}))
+
+	results, err := minExec.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	defer results[0].Free(proc.Mp())
+	require.Equal(t, "BB", string(results[0].GetBytesAt(0)))
 }
 
 func TestMakeTimeStringArgumentTargets(t *testing.T) {
