@@ -113,9 +113,9 @@ drop procedure test_inout_param;
 -- @label:bvt
 drop procedure if exists test_decimal_declared_type;
 set @decimal_io = '1.10';
-create procedure test_decimal_declared_type(in p1 decimal(10,2), inout io decimal(10,2), out ov decimal(10,2)) 'begin declare v1 decimal(10,2) default 6; declare n1 decimal(10,2) default null; select v1 > p1 as default_cmp, n1 is null as null_default, v1 as default_value, p1 as in_value, io as inout_value; set v1 = 11; set io = io + 0.25; set ov = 12.3; select v1 as assigned_value, v1 > p1 as assigned_cmp; end';
-call test_decimal_declared_type(10, @decimal_io, @decimal_out);
-select @decimal_io, @decimal_out;
+create procedure test_decimal_declared_type(in p1 decimal(10,2), inout io decimal(10,2), out ov decimal(10,2), out ocmp bool) 'begin declare v1 decimal(10,2) default 6; declare n1 decimal(10,2) default null; select v1 > p1 as default_cmp, n1 is null as null_default, v1 as default_value, p1 as in_value, io as inout_value; set v1 = 11; set io = io + 0.25; set ov = v1 + 1.3; set ocmp = v1 > p1; end';
+call test_decimal_declared_type(10, @decimal_io, @decimal_out, @decimal_cmp);
+select @decimal_io, @decimal_out, @decimal_cmp;
 drop procedure test_decimal_declared_type;
 
 -- @case
