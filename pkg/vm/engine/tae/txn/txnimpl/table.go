@@ -558,6 +558,7 @@ func (tbl *txnTable) TransferDeletes(
 		}
 		deletes.Vecs[i].CompactByBitmap(&transferd)
 	}
+	tbl.tombstoneTable.tableSpace.node.rows = uint32(deletes.Length())
 	return
 }
 

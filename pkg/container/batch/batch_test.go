@@ -17,6 +17,7 @@ package batch
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -51,6 +52,17 @@ func TestBatchMarshalAndUnmarshal(t *testing.T) {
 	for _, tc := range tcs {
 		data, err := tc.bat.MarshalBinary()
 		require.NoError(t, err)
+		size, err := tc.bat.MarshalBinarySize()
+		require.NoError(t, err)
+		require.Equal(t, len(data), size)
+		var streamed bytes.Buffer
+		require.NoError(t, tc.bat.MarshalBinaryTo(&streamed))
+		require.Equal(t, data, streamed.Bytes())
+		require.ErrorIs(
+			t,
+			tc.bat.MarshalBinaryTo(shortBatchMarshalWriter{}),
+			io.ErrShortWrite,
+		)
 
 		rbat := new(Batch)
 		err = rbat.UnmarshalBinary(data)
@@ -83,6 +95,22 @@ func TestBatchMarshalAndUnmarshal(t *testing.T) {
 			require.Equal(t, vector.MustFixedColWithTypeCheck[int8](tc.bat.Vecs[i]), vector.MustFixedColWithTypeCheck[int8](vec))
 		}
 	}
+}
+
+type shortBatchMarshalWriter struct{}
+
+func (shortBatchMarshalWriter) Write(value []byte) (int, error) {
+	return len(value) - 1, nil
+}
+
+func TestMarshalBinarySizeRejectsInvalidBatch(t *testing.T) {
+	var nilBatch *Batch
+	_, err := nilBatch.MarshalBinarySize()
+	require.Error(t, err)
+
+	invalid := NewWithSize(1)
+	_, err = invalid.MarshalBinarySize()
+	require.Error(t, err)
 }
 
 func TestBatch(t *testing.T) {
