@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,6 +73,143 @@ func TestBuildCatalogRestoreIdentityMapRejectsMalformedRows(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
+}
+
+func TestBuildCatalogRestoreNamedIdentityMap(t *testing.T) {
+	identityMap, err := buildCatalogRestoreNamedIdentityMap(
+		[][]string{{"7", "publisher_user"}, {"8", "source_only"}},
+		[][]string{{"17", "publisher_user"}, {"18", "target_only"}},
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[uint32]uint32{7: 17}, identityMap)
+}
+
+func TestBuildCatalogRestoreNamedIdentityMapRejectsInvalidIDs(t *testing.T) {
+	_, err := buildCatalogRestoreNamedIdentityMap(nil, [][]string{{"invalid", "user"}})
+	require.Error(t, err)
+
+	_, err = buildCatalogRestoreNamedIdentityMap([][]string{{"4294967296", "user"}}, nil)
+	require.ErrorContains(t, err, "exceeds uint32")
+}
+
+func TestResolvePublicationRestoreIdentity(t *testing.T) {
+	pubInfo := &pubsub.PubInfo{
+		PubAccountName: "publisher",
+		PubName:        "orders_pub",
+		Creator:        7,
+		Owner:          8,
+	}
+	targetAccounts := map[string]*pubsub.AccountInfo{
+		"publisher": {Id: 20, Name: "publisher"},
+	}
+	principalMap := &catalogRestorePrincipalIdentityMap{
+		userIDs: map[uint32]uint32{7: 17},
+		roleIDs: map[uint32]uint32{8: 18},
+	}
+
+	identity, err := resolvePublicationRestoreIdentity(
+		t.Context(), pubInfo, targetAccounts, principalMap,
+	)
+	require.NoError(t, err)
+	require.Equal(t, publicationRestoreIdentity{accountID: 20, userID: 17, roleID: 18}, identity)
+
+	delete(targetAccounts, "publisher")
+	_, err = resolvePublicationRestoreIdentity(t.Context(), pubInfo, targetAccounts, principalMap)
+	require.ErrorContains(t, err, "target account publisher does not exist")
+
+	targetAccounts["publisher"] = &pubsub.AccountInfo{Id: 20, Name: "publisher"}
+	delete(principalMap.userIDs, 7)
+	_, err = resolvePublicationRestoreIdentity(t.Context(), pubInfo, targetAccounts, principalMap)
+	require.ErrorContains(t, err, "creator user 7 does not exist")
+
+	principalMap.userIDs[7] = 17
+	delete(principalMap.roleIDs, 8)
+	_, err = resolvePublicationRestoreIdentity(t.Context(), pubInfo, targetAccounts, principalMap)
+	require.ErrorContains(t, err, "owner role 8 does not exist")
+}
+
+func TestLoadCatalogRestorePrincipalIdentityMap(t *testing.T) {
+	const (
+		snapshotTS    = int64(42)
+		sourceAccount = uint32(10)
+		targetAccount = uint32(20)
+	)
+	sourceUserSQL := fmt.Sprintf(
+		"select cast(user_id as char), user_name from mo_catalog.mo_user {MO_TS = %d} order by user_id",
+		snapshotTS,
+	)
+	targetUserSQL := "select cast(user_id as char), user_name from mo_catalog.mo_user order by user_id"
+	sourceRoleSQL := fmt.Sprintf(
+		"select cast(role_id as char), role_name from mo_catalog.mo_role {MO_TS = %d} order by role_id",
+		snapshotTS,
+	)
+	targetRoleSQL := "select cast(role_id as char), role_name from mo_catalog.mo_role order by role_id"
+
+	newBackgroundExec := func() *backgroundExecTest {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[sourceUserSQL] = newMrsForRestoreStringRows(
+			[]string{"user_id", "user_name"},
+			[][]interface{}{{"7", "publisher_user"}},
+		)
+		bh.sql2result[targetUserSQL] = newMrsForRestoreStringRows(
+			[]string{"user_id", "user_name"},
+			[][]interface{}{{"17", "publisher_user"}},
+		)
+		bh.sql2result[sourceRoleSQL] = newMrsForRestoreStringRows(
+			[]string{"role_id", "role_name"},
+			[][]interface{}{{"8", "publisher_role"}},
+		)
+		bh.sql2result[targetRoleSQL] = newMrsForRestoreStringRows(
+			[]string{"role_id", "role_name"},
+			[][]interface{}{{"18", "publisher_role"}},
+		)
+		return bh
+	}
+	restoreContext := func(bh BackgroundExec) *systemCatalogRestoreContext {
+		return &systemCatalogRestoreContext{
+			ctx:           t.Context(),
+			bh:            bh,
+			snapshotTS:    snapshotTS,
+			sourceAccount: sourceAccount,
+			targetAccount: targetAccount,
+		}
+	}
+
+	principalMap, err := loadCatalogRestorePrincipalIdentityMap(restoreContext(newBackgroundExec()))
+	require.NoError(t, err)
+	require.Equal(t, map[uint32]uint32{7: 17}, principalMap.userIDs)
+	require.Equal(t, map[uint32]uint32{8: 18}, principalMap.roleIDs)
+
+	for _, query := range []string{sourceUserSQL, targetUserSQL, sourceRoleSQL, targetRoleSQL} {
+		t.Run(query, func(t *testing.T) {
+			bh := newBackgroundExec()
+			queryErr := errors.New("principal query failed")
+			bh.sql2err[query] = queryErr
+			_, err := loadCatalogRestorePrincipalIdentityMap(restoreContext(bh))
+			require.ErrorIs(t, err, queryErr)
+		})
+	}
+}
+
+func TestCreatePubsValidatesTargetAccount(t *testing.T) {
+	require.NoError(t, createPubs(t.Context(), "", nil, "snapshot", 42, nil))
+
+	pubInfo := &pubsub.PubInfo{PubAccountName: "publisher", PubName: "orders_pub"}
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[getAccountIdNamesSql] = newMrsForGetAllAccounts(
+		[][]interface{}{{uint64(1), "another_account", "open", uint64(1), nil}},
+	)
+	err := createPubs(t.Context(), "", bh, "snapshot", 42, []*pubsub.PubInfo{pubInfo})
+	require.ErrorContains(t, err, "target account publisher does not exist")
+
+	bh = &backgroundExecTest{}
+	bh.init()
+	accountErr := errors.New("account lookup failed")
+	bh.sql2err[getAccountIdNamesSql] = accountErr
+	err = createPubs(t.Context(), "", bh, "snapshot", 42, []*pubsub.PubInfo{pubInfo})
+	require.ErrorIs(t, err, accountErr)
 }
 
 func TestRemapRolePrivilegeObjectID(t *testing.T) {

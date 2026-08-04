@@ -314,21 +314,48 @@ func TestIssue26640ClusterRestoreRebindsSubscriptionPrivileges(t *testing.T) {
 			"grant select on table `"+subscriptionDB+"`.* to subscription_reader")
 		execSQLRequire(t, ctx, subscriberDB, "grant subscription_reader to subscription_user")
 		require.NoError(t, subscriberDB.Close())
-		var sourceSubscriberID uint64
+		var sourcePublisherID, sourceSubscriberID uint64
+		require.NoError(t, sysDB.QueryRowContext(ctx,
+			"select account_id from mo_catalog.mo_account where account_name = ?", publisherAccount,
+		).Scan(&sourcePublisherID))
 		require.NoError(t, sysDB.QueryRowContext(ctx,
 			"select account_id from mo_catalog.mo_account where account_name = ?", subscriberAccount,
 		).Scan(&sourceSubscriberID))
 
 		execSQLRequire(t, ctx, sysDB, "create snapshot "+snapshotName+" for cluster")
-		// Re-creating the subscriber during cluster restore gives it a new account
-		// ID and also forces its subscription database into the deferred phase.
+		// Re-create both sides of the publication. Publication metadata carries
+		// the historical publisher ID, while the subscription database is restored
+		// in a deferred phase after the publication has been reconstructed.
 		execSQLRequire(t, ctx, sysDB, "drop account `"+subscriberAccount+"`")
+		execSQLRequire(t, ctx, sysDB, "drop account `"+publisherAccount+"`")
 		execSQLRequire(t, ctx, sysDB, "restore cluster{snapshot='"+snapshotName+"'}")
-		var targetSubscriberID uint64
+		var targetPublisherID, targetSubscriberID uint64
+		require.NoError(t, sysDB.QueryRowContext(ctx,
+			"select account_id from mo_catalog.mo_account where account_name = ?", publisherAccount,
+		).Scan(&targetPublisherID))
 		require.NoError(t, sysDB.QueryRowContext(ctx,
 			"select account_id from mo_catalog.mo_account where account_name = ?", subscriberAccount,
 		).Scan(&targetSubscriberID))
+		require.NotEqual(t, sourcePublisherID, targetPublisherID)
 		require.NotEqual(t, sourceSubscriberID, targetSubscriberID)
+
+		var restoredPublicationAccountID, restoredPublicationDatabaseID, targetPublishedDatabaseID uint64
+		require.NoError(t, sysDB.QueryRowContext(ctx,
+			"select account_id, database_id from mo_catalog.mo_pubs "+
+				"where account_name = ? and pub_name = ?",
+			publisherAccount,
+			publicationName,
+		).Scan(&restoredPublicationAccountID, &restoredPublicationDatabaseID))
+		require.Equal(t, targetPublisherID, restoredPublicationAccountID)
+		restoredPublisherDB, err := sql.Open("mysql", fmt.Sprintf(
+			"%s#admin#accountadmin:111@tcp(127.0.0.1:%d)/", publisherAccount, port,
+		))
+		require.NoError(t, err)
+		defer restoredPublisherDB.Close()
+		require.NoError(t, restoredPublisherDB.QueryRowContext(ctx,
+			"select dat_id from mo_catalog.mo_database where datname = ?", publishedDB,
+		).Scan(&targetPublishedDatabaseID))
+		require.Equal(t, targetPublishedDatabaseID, restoredPublicationDatabaseID)
 
 		restoredAdminDB, err := sql.Open("mysql", fmt.Sprintf(
 			"%s#admin#accountadmin:111@tcp(127.0.0.1:%d)/", subscriberAccount, port,

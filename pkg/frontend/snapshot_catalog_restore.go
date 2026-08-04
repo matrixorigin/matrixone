@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
@@ -136,6 +137,21 @@ type catalogObjectIdentity struct {
 type catalogRestoreIdentityMap struct {
 	databaseIDs map[uint64]uint64
 	objectIDs   map[uint64]uint64
+}
+
+// catalogRestorePrincipalIdentityMap binds tenant-local identities from the
+// historical account to the account reconstructed by restore. User and role
+// IDs normally survive because their catalog tables are copied, but restore
+// must not rely on that incidental equality when an account is re-created.
+type catalogRestorePrincipalIdentityMap struct {
+	userIDs map[uint32]uint32
+	roleIDs map[uint32]uint32
+}
+
+type publicationRestoreIdentity struct {
+	accountID uint32
+	userID    uint32
+	roleID    uint32
 }
 
 type rolePrivilegeRestoreRow struct {
@@ -264,6 +280,151 @@ func loadCatalogRestoreIdentityMap(restoreCtx *systemCatalogRestoreContext) (*ca
 	}
 
 	return buildCatalogRestoreIdentityMap(sourceDatabases, targetDatabases, sourceObjects, targetObjects)
+}
+
+func loadCatalogRestorePrincipalIdentityMap(
+	restoreCtx *systemCatalogRestoreContext,
+) (*catalogRestorePrincipalIdentityMap, error) {
+	sourceCtx := defines.AttachAccountId(restoreCtx.ctx, restoreCtx.sourceAccount)
+	targetCtx := defines.AttachAccountId(restoreCtx.ctx, restoreCtx.targetAccount)
+
+	sourceUsers, err := getStringColsListFromTS(
+		sourceCtx,
+		restoreCtx.bh,
+		fmt.Sprintf(
+			"select cast(user_id as char), user_name from mo_catalog.mo_user {MO_TS = %d} order by user_id",
+			restoreCtx.snapshotTS,
+		),
+		restoreCtx.sourceAccount,
+		restoreCtx.targetAccount,
+		0,
+		1,
+	)
+	if err != nil {
+		return nil, err
+	}
+	targetUsers, err := getStringColsList(
+		targetCtx,
+		restoreCtx.bh,
+		"select cast(user_id as char), user_name from mo_catalog.mo_user order by user_id",
+		0,
+		1,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	sourceRoles, err := getStringColsListFromTS(
+		sourceCtx,
+		restoreCtx.bh,
+		fmt.Sprintf(
+			"select cast(role_id as char), role_name from mo_catalog.mo_role {MO_TS = %d} order by role_id",
+			restoreCtx.snapshotTS,
+		),
+		restoreCtx.sourceAccount,
+		restoreCtx.targetAccount,
+		0,
+		1,
+	)
+	if err != nil {
+		return nil, err
+	}
+	targetRoles, err := getStringColsList(
+		targetCtx,
+		restoreCtx.bh,
+		"select cast(role_id as char), role_name from mo_catalog.mo_role order by role_id",
+		0,
+		1,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	userIDs, err := buildCatalogRestoreNamedIdentityMap(sourceUsers, targetUsers)
+	if err != nil {
+		return nil, err
+	}
+	roleIDs, err := buildCatalogRestoreNamedIdentityMap(sourceRoles, targetRoles)
+	if err != nil {
+		return nil, err
+	}
+	return &catalogRestorePrincipalIdentityMap{userIDs: userIDs, roleIDs: roleIDs}, nil
+}
+
+func buildCatalogRestoreNamedIdentityMap(sourceRows, targetRows [][]string) (map[uint32]uint32, error) {
+	targetIDs := make(map[string]uint32, len(targetRows))
+	for _, row := range targetRows {
+		id, err := parseCatalogUint32ID(row)
+		if err != nil {
+			return nil, err
+		}
+		targetIDs[row[1]] = id
+	}
+
+	identityMap := make(map[uint32]uint32, len(sourceRows))
+	for _, row := range sourceRows {
+		sourceID, err := parseCatalogUint32ID(row)
+		if err != nil {
+			return nil, err
+		}
+		if targetID, ok := targetIDs[row[1]]; ok {
+			identityMap[sourceID] = targetID
+		}
+	}
+	return identityMap, nil
+}
+
+func parseCatalogUint32ID(row []string) (uint32, error) {
+	id, err := parseCatalogID(row, 2)
+	if err != nil {
+		return 0, err
+	}
+	if id > uint64(^uint32(0)) {
+		return 0, moerr.NewInternalErrorNoCtx("catalog identity exceeds uint32")
+	}
+	return uint32(id), nil
+}
+
+func resolvePublicationRestoreIdentity(
+	ctx context.Context,
+	pubInfo *pubsub.PubInfo,
+	targetAccounts map[string]*pubsub.AccountInfo,
+	principalMap *catalogRestorePrincipalIdentityMap,
+) (publicationRestoreIdentity, error) {
+	targetAccount, ok := targetAccounts[pubInfo.PubAccountName]
+	if !ok || targetAccount == nil || targetAccount.Id < 0 {
+		return publicationRestoreIdentity{}, moerr.NewInternalErrorf(
+			ctx,
+			"cannot restore publication %s: target account %s does not exist",
+			pubInfo.PubName,
+			pubInfo.PubAccountName,
+		)
+	}
+	targetUserID, ok := principalMap.userIDs[pubInfo.Creator]
+	if !ok {
+		return publicationRestoreIdentity{}, moerr.NewInternalErrorf(
+			ctx,
+			"cannot restore publication %s: creator user %d does not exist in target account %s",
+			pubInfo.PubName,
+			pubInfo.Creator,
+			pubInfo.PubAccountName,
+		)
+	}
+	targetRoleID, ok := principalMap.roleIDs[pubInfo.Owner]
+	if !ok {
+		return publicationRestoreIdentity{}, moerr.NewInternalErrorf(
+			ctx,
+			"cannot restore publication %s: owner role %d does not exist in target account %s",
+			pubInfo.PubName,
+			pubInfo.Owner,
+			pubInfo.PubAccountName,
+		)
+	}
+	return publicationRestoreIdentity{
+		accountID: uint32(targetAccount.Id),
+		userID:    targetUserID,
+		roleID:    targetRoleID,
+	}, nil
 }
 
 func buildCatalogRestoreIdentityMap(

@@ -3259,7 +3259,7 @@ func restorePubsWithSnapshotName(
 		return
 	}
 
-	return createPubs(ctx, sid, bh, snapshotName, pubInfos)
+	return createPubs(ctx, sid, bh, snapshotName, restoreTs, pubInfos)
 }
 
 // createPub create pub after the database is created
@@ -3268,25 +3268,66 @@ func createPubs(
 	sid string,
 	bh BackgroundExec,
 	snapshotName string,
+	snapshotTs int64,
 	pubInfos []*pubsub.PubInfo,
 ) (err error) {
-	// restore pub to toAccount
-	var ast []tree.Statement
-	defer func() {
-		for _, s := range ast {
-			s.Free()
-		}
-	}()
+	if len(pubInfos) == 0 {
+		return nil
+	}
+	_, targetAccounts, err := getAccounts(ctx, bh, false)
+	if err != nil {
+		return err
+	}
+	principalMaps := make(map[catalogRestoreAccountPair]*catalogRestorePrincipalIdentityMap)
 
 	for _, pubInfo := range pubInfos {
-		toCtx := defines.AttachAccount(ctx, pubInfo.PubAccountId, pubInfo.Owner, pubInfo.Creator)
+		targetAccount, ok := targetAccounts[pubInfo.PubAccountName]
+		if !ok || targetAccount == nil || targetAccount.Id < 0 {
+			return moerr.NewInternalErrorf(
+				ctx,
+				"cannot restore publication %s: target account %s does not exist",
+				pubInfo.PubName,
+				pubInfo.PubAccountName,
+			)
+		}
+		accountPair := catalogRestoreAccountPair{
+			sourceAccount: pubInfo.PubAccountId,
+			targetAccount: uint32(targetAccount.Id),
+		}
+		principalMap, ok := principalMaps[accountPair]
+		if !ok {
+			principalMap, err = loadCatalogRestorePrincipalIdentityMap(&systemCatalogRestoreContext{
+				ctx:           ctx,
+				sid:           sid,
+				bh:            bh,
+				snapshotTS:    snapshotTs,
+				sourceAccount: accountPair.sourceAccount,
+				targetAccount: accountPair.targetAccount,
+			})
+			if err != nil {
+				return err
+			}
+			principalMaps[accountPair] = principalMap
+		}
+		var identity publicationRestoreIdentity
+		identity, err = resolvePublicationRestoreIdentity(ctx, pubInfo, targetAccounts, principalMap)
+		if err != nil {
+			return err
+		}
+		toCtx := defines.AttachAccount(ctx, identity.accountID, identity.userID, identity.roleID)
 		getLogger(sid).Debug(fmt.Sprintf("[%s] create pub: create pub sql: %s", snapshotName, pubInfo.GetCreateSql()))
+		var ast []tree.Statement
 		ast, err = mysql.Parse(toCtx, pubInfo.GetCreateSql(), 1)
 		if err != nil {
 			return
 		}
 
-		if err = createPublication(toCtx, bh, ast[0].(*tree.CreatePublication)); err != nil {
+		// The CREATE statement carries the stable database name. createPublication
+		// resolves it inside the target tenant and persists the current database
+		// ID, so the historical PubInfo.DbId must not be replayed.
+		err = createPublication(toCtx, bh, ast[0].(*tree.CreatePublication))
+		freeStatements(ast)
+		if err != nil {
 			return
 		}
 	}
