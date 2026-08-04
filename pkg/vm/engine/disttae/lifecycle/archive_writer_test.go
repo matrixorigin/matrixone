@@ -90,6 +90,46 @@ func TestArchiveWriterRoundTripAndStableChunks(t *testing.T) {
 	require.Equal(t, "FULL_READBACK_VERIFIED", persisted.VerificationStatus)
 }
 
+func TestArchiveWriterLargeDynamicChunkRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryArchiveStore()
+	schema := archiveTestSchema()
+	schemaDigest, err := schema.Digest()
+	require.NoError(t, err)
+
+	const rowCount = 7000
+	writer, err := NewArchiveWriter(ctx, ArchiveWriterConfig{
+		RootID:               "root-large-dynamic-chunk",
+		AttemptID:            "attempt-large-dynamic-chunk",
+		Prefix:               "archive/root-large-dynamic-chunk/attempt-large-dynamic-chunk",
+		WriteID:              "write-large-dynamic-chunk",
+		Schema:               schema,
+		SchemaDigest:         schemaDigest,
+		MaxRestoreChunkRows:  rowCount,
+		MaxChunkLogicalBytes: 4 << 20,
+		MaxPhysicalBytes:     archiveTestMaxPhysicalBytes,
+	}, store, &testArchiveSideEffectGuard{durable: true})
+	require.NoError(t, err)
+
+	rows := make([]archiveTestRow, rowCount)
+	for index := range rows {
+		rows[index] = archiveTestRow{int64(index + 1), "variable-payload"}
+	}
+	mp := mpool.MustNewZero()
+	value := archiveTestBatch(t, mp, rows...)
+	defer value.Clean(mp)
+
+	require.NoError(t, writer.WriteBatch(ctx, value, nil))
+	manifest, manifestKey, err := writer.Close(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint64(rowCount), manifest.RowCount)
+	require.Equal(t, uint64(1), manifest.TotalChunkCount)
+
+	verified, err := ReadAndVerifyArchive(ctx, store, manifestKey)
+	require.NoError(t, err)
+	require.Equal(t, uint64(rowCount), verified.RowCount)
+}
+
 func TestArchiveWriterPhase1ScalarMatrixRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	scalars := archivePhase1ScalarTestCases(t)

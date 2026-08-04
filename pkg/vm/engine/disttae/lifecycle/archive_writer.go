@@ -292,23 +292,23 @@ func (writer *ArchiveWriter) flushChunk(ctx context.Context) error {
 		return err
 	}
 	ordinal := len(writer.files)
-	rows := make([]any, len(writer.pending))
 	encoder := NewCanonicalValueEncoder(writer.config.SchemaDigest)
-	for index, row := range writer.pending {
-		rows[index] = row.parquet
+	for _, row := range writer.pending {
 		if err := encoder.WriteRow(ctx, row.cells); err != nil {
 			return err
 		}
 	}
 	var output bytes.Buffer
-	parquetWriter := parquet.NewGenericWriter[any](
+	parquetWriter := parquet.NewWriter(
 		&output,
 		writer.schema,
-		parquet.MaxRowsPerRowGroup(int64(len(rows))),
+		parquet.MaxRowsPerRowGroup(int64(len(writer.pending))),
 		parquet.Compression(&parquet.Zstd),
 	)
-	if _, err := parquetWriter.Write(rows); err != nil {
-		return err
+	for _, row := range writer.pending {
+		if err := parquetWriter.Write(row.parquet); err != nil {
+			return err
+		}
 	}
 	if err := parquetWriter.Close(); err != nil {
 		return err
