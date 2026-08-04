@@ -15,6 +15,7 @@
 package mysql
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -22,6 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+func TestLongRemainsUsableAsIdentifier(t *testing.T) {
+	_, err := ParseOne(context.Background(), "select long", 1)
+	require.NoError(t, err)
+}
 
 func TestLongStringTypeAliases(t *testing.T) {
 	tests := []struct {
