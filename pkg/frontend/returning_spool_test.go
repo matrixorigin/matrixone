@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
@@ -92,6 +94,42 @@ func (r *returningProtocolRecorder) WriteEOFOrOKWithAffectedRows(affectedRows ui
 type returningStageRecorder struct {
 	events     *[]string
 	publishErr error
+}
+
+type returningAccountingFileService struct {
+	fileservice.FileService
+	failWrites bool
+}
+
+func (f *returningAccountingFileService) Write(ctx context.Context, vector fileservice.IOVector) error {
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.FileService.S3.Put.Add(1)
+		for _, entry := range vector.Entries {
+			counter.FileService.S3WriteSize.Add(int64(len(entry.Data)))
+		}
+	})
+	if f.failWrites {
+		return errors.New("injected query-result write failure")
+	}
+	return f.FileService.Write(ctx, vector)
+}
+
+func (f *returningAccountingFileService) Delete(ctx context.Context, paths ...string) error {
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.FileService.S3.DeleteMulti.Add(1)
+	})
+	return f.FileService.Delete(ctx, paths...)
+}
+
+func installReturningAccountingFileService(t *testing.T, ses *Session) *returningAccountingFileService {
+	t.Helper()
+	ses.SetMemPool(ses.proc.Mp())
+	pu := getPu(ses.GetService())
+	original := pu.FileService
+	accountingFS := &returningAccountingFileService{FileService: original}
+	pu.FileService = accountingFS
+	t.Cleanup(func() { pu.FileService = original })
+	return accountingFS
 }
 
 func (*returningStageRecorder) Stage(*ExecCtx, *perfcounter.CounterSet, *batch.Batch) error {
@@ -380,6 +418,9 @@ func TestDeferredReturningClientDisconnectCleansSpool(t *testing.T) {
 func TestReturningQueryResultStagesPhysicalZeroRowBlock(t *testing.T) {
 	ctx := context.Background()
 	ses := newValidateSession(t)
+	installReturningAccountingFileService(t, ses)
+	root := resource.NewRoot(resource.ConnExternal)
+	ctx = resource.ContextWithRoot(ctx, root)
 	ses.SetTenantInfo(&TenantInfo{Tenant: sysAccountName, TenantID: sysAccountID})
 	ses.SetStmtId(uuid.New())
 	ses.limitResultSize = 1
@@ -396,8 +437,104 @@ func TestReturningQueryResultStagesPhysicalZeroRowBlock(t *testing.T) {
 	require.Equal(t, 1, saver.stagedBlocks)
 	require.Zero(t, ses.savedRowCount)
 	require.Zero(t, ses.queryRowCount)
+	require.Zero(t, root.PreResponseSummary().Usage.S3Requests[resource.S3Put])
 	require.NoError(t, saver.Abort(execCtx))
 	require.Zero(t, ses.blockIdx)
+	summary := root.PreResponseSummary()
+	require.Positive(t, summary.Usage.S3Requests[resource.S3Put])
+	require.Equal(t, uint64(1), summary.Usage.S3Requests[resource.S3DeleteMulti])
+}
+
+func TestReturningQueryResultPublishesStageAndMetadataAccounting(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	installReturningAccountingFileService(t, ses)
+	root := resource.NewRoot(resource.ConnExternal)
+	ctx = resource.ContextWithRoot(ctx, root)
+	ses.SetTenantInfo(&TenantInfo{Tenant: sysAccountName, TenantID: sysAccountID})
+	ses.SetStmtId(uuid.New())
+	ses.limitResultSize = 1
+	ses.createdTime = time.Now()
+	ses.expiredTime = ses.createdTime.Add(time.Hour)
+	ses.rs = &plan.ResultColDef{ResultCols: []*plan.ColDef{{
+		Name: "v",
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+	}}}
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses, proc: ses.proc}
+	saver := &QueryResult{}
+	bat := returningTestBatch(t, ses, 7)
+	defer bat.Clean(ses.proc.Mp())
+
+	require.NoError(t, saver.Stage(execCtx, nil, bat))
+	require.Zero(t, root.PreResponseSummary().Usage.S3Requests[resource.S3Put])
+	stagePuts := saver.stageCounter.FileService.S3.Put.Load()
+	require.Positive(t, stagePuts)
+	require.NoError(t, saver.Publish(execCtx))
+	summary := root.PreResponseSummary()
+	require.Greater(t, summary.Usage.S3Requests[resource.S3Put], uint64(stagePuts),
+		"metadata publication must share the staged-result terminal owner")
+	require.Positive(t, summary.Usage.S3WriteBytes)
+	require.NoError(t, saver.Publish(execCtx))
+	require.Equal(t, summary, root.PreResponseSummary(), "terminal accounting must merge exactly once")
+}
+
+func TestReturningQueryResultPublishFailureAccountsAbort(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	accountingFS := installReturningAccountingFileService(t, ses)
+	root := resource.NewRoot(resource.ConnExternal)
+	ctx = resource.ContextWithRoot(ctx, root)
+	ses.SetTenantInfo(&TenantInfo{Tenant: sysAccountName, TenantID: sysAccountID})
+	ses.SetStmtId(uuid.New())
+	ses.limitResultSize = 1
+	ses.createdTime = time.Now()
+	ses.expiredTime = ses.createdTime.Add(time.Hour)
+	ses.rs = &plan.ResultColDef{ResultCols: []*plan.ColDef{{
+		Name: "v",
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+	}}}
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses, proc: ses.proc}
+	saver := &QueryResult{}
+	bat := returningTestBatch(t, ses, 7)
+	defer bat.Clean(ses.proc.Mp())
+
+	require.NoError(t, saver.Stage(execCtx, nil, bat))
+	accountingFS.failWrites = true
+	require.ErrorContains(t, saver.Publish(execCtx), "injected query-result write failure")
+	require.Zero(t, root.PreResponseSummary().Usage.S3Requests[resource.S3Put])
+	require.NoError(t, saver.Abort(execCtx))
+	summary := root.PreResponseSummary()
+	require.Positive(t, summary.Usage.S3Requests[resource.S3Put])
+	require.Equal(t, uint64(1), summary.Usage.S3Requests[resource.S3DeleteMulti])
+}
+
+func TestReturningQueryResultStageFailureAccountsAbort(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	accountingFS := installReturningAccountingFileService(t, ses)
+	accountingFS.failWrites = true
+	root := resource.NewRoot(resource.ConnExternal)
+	ctx = resource.ContextWithRoot(ctx, root)
+	ses.SetTenantInfo(&TenantInfo{Tenant: sysAccountName, TenantID: sysAccountID})
+	ses.SetStmtId(uuid.New())
+	ses.limitResultSize = 1
+	ses.createdTime = time.Now()
+	ses.expiredTime = ses.createdTime.Add(time.Hour)
+	ses.rs = &plan.ResultColDef{ResultCols: []*plan.ColDef{{
+		Name: "v",
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+	}}}
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses, proc: ses.proc}
+	saver := &QueryResult{}
+	bat := returningTestBatch(t, ses, 7)
+	defer bat.Clean(ses.proc.Mp())
+
+	require.ErrorContains(t, saver.Stage(execCtx, nil, bat), "injected query-result write failure")
+	require.Zero(t, root.PreResponseSummary().Usage.S3Requests[resource.S3Put])
+	require.NoError(t, saver.Abort(execCtx))
+	summary := root.PreResponseSummary()
+	require.Positive(t, summary.Usage.S3Requests[resource.S3Put])
+	require.Equal(t, uint64(1), summary.Usage.S3Requests[resource.S3DeleteMulti])
 }
 
 func TestReturningSpoolRejectsTruncatedRecord(t *testing.T) {

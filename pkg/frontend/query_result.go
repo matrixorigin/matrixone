@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -798,10 +799,12 @@ type QueryResult struct {
 	sawRows      bool
 	published    bool
 	aborted      bool
+	stageCounter *perfcounter.CounterSet
+	accounted    bool
 }
 
-func (result *QueryResult) Stage(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
-	newCtx := perfcounter.AttachS3RequestKey(execCtx.reqCtx, crs)
+func (result *QueryResult) Stage(execCtx *ExecCtx, _ *perfcounter.CounterSet, bat *batch.Batch) error {
+	newCtx := perfcounter.AttachS3RequestKey(execCtx.reqCtx, result.counter())
 	ses := execCtx.ses.(*Session)
 	if bat != nil && bat.RowCount() > 0 {
 		result.sawRows = true
@@ -827,7 +830,7 @@ func (result *QueryResult) FinishStage(execCtx *ExecCtx) error {
 	}
 	defer empty.Clean(ses.proc.Mp())
 	empty.SetRowCount(0)
-	return result.Stage(execCtx, new(perfcounter.CounterSet), empty)
+	return result.Stage(execCtx, nil, empty)
 }
 
 func (result *QueryResult) Publish(execCtx *ExecCtx) error {
@@ -839,11 +842,58 @@ func (result *QueryResult) Publish(execCtx *ExecCtx) error {
 	}
 	ses := execCtx.ses.(*Session)
 	result.captureStage(ses)
-	if err := saveMeta(execCtx.reqCtx, ses); err != nil {
+	ctx := perfcounter.AttachS3RequestKey(execCtx.reqCtx, result.counter())
+	if err := saveMeta(ctx, ses); err != nil {
 		return err
 	}
 	result.published = true
+	result.publishAccounting(execCtx.reqCtx)
 	return nil
+}
+
+func (result *QueryResult) counter() *perfcounter.CounterSet {
+	if result.stageCounter == nil {
+		result.stageCounter = new(perfcounter.CounterSet)
+	}
+	return result.stageCounter
+}
+
+func (result *QueryResult) publishAccounting(ctx context.Context) {
+	if result.accounted || result.stageCounter == nil {
+		return
+	}
+	result.accounted = true
+	root := resource.RootFromContext(ctx)
+	if root == nil {
+		return
+	}
+	counter := result.stageCounter
+	var recorder resource.LocalRecorder
+	var quality resource.QualityFlags
+	add := func(op resource.S3Op, value int64) {
+		if value < 0 {
+			quality |= resource.QualityInvariantFailure
+			return
+		}
+		recorder.AddS3Request(op, uint64(value))
+	}
+	add(resource.S3List, counter.FileService.S3.List.Load())
+	add(resource.S3Head, counter.FileService.S3.Head.Load())
+	add(resource.S3Put, counter.FileService.S3.Put.Load())
+	add(resource.S3Get, counter.FileService.S3.Get.Load())
+	add(resource.S3Delete, counter.FileService.S3.Delete.Load())
+	add(resource.S3DeleteMulti, counter.FileService.S3.DeleteMulti.Load())
+	delta := recorder.Snapshot()
+	delta.Quality |= quality
+	readBytes := counter.FileService.S3ReadSize.Load()
+	writeBytes := counter.FileService.S3WriteSize.Load()
+	if readBytes < 0 || writeBytes < 0 {
+		delta.Quality |= resource.QualityInvariantFailure
+	} else {
+		delta.Usage.S3ReadBytes = uint64(readBytes)
+		delta.Usage.S3WriteBytes = uint64(writeBytes)
+	}
+	root.AddLocal(delta)
 }
 
 func (result *QueryResult) captureStage(ses *Session) {
@@ -870,6 +920,7 @@ func (result *QueryResult) Abort(execCtx *ExecCtx) error {
 		context.WithoutCancel(execCtx.reqCtx), returningQueryResultCleanupTimeout,
 	)
 	defer cancel()
+	cleanupCtx = perfcounter.AttachS3RequestKey(cleanupCtx, result.counter())
 	err := fs.Delete(cleanupCtx, paths...)
 	ses.ResetBlockIdx()
 	ses.p = nil
@@ -879,6 +930,7 @@ func (result *QueryResult) Abort(execCtx *ExecCtx) error {
 	if err == nil {
 		result.aborted = true
 	}
+	result.publishAccounting(execCtx.reqCtx)
 	return err
 }
 
