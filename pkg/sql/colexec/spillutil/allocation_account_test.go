@@ -217,6 +217,76 @@ func TestSpillAllocationAccountDecodedBatchLifecycle(t *testing.T) {
 	finalizeTestSpillAllocationAccount(t, state)
 }
 
+func TestSpillReadBufferFallsBackUnderAllocationPressure(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(
+		t,
+		"",
+		mpool.MustNew("spill-read-buffer-fallback"),
+	)
+	defer proc.Free()
+	values := make([]int64, 128)
+	for i := range values {
+		values[i] = int64(i)
+	}
+	source := testutil.NewBatchWithVectors([]*vector.Vector{
+		testutil.NewVector(
+			len(values),
+			types.T_int64.ToType(),
+			proc.Mp(),
+			false,
+			values,
+		),
+	}, nil)
+	defer source.Clean(proc.Mp())
+
+	state := newTestSpillAllocationAccount(t, 32<<10, 64)
+	reader := BucketReader{
+		fd:         writeSpillAllocationTestFile(t, source, 0),
+		allocation: state.allocation,
+	}
+	reuse := batch.NewOffHeapWithSize(0)
+	decoded, err := reader.ReadBatch(proc, reuse)
+	require.NoError(t, err)
+	require.Equal(t, source.RowCount(), decoded.RowCount())
+	require.NotNil(t, reader.reader)
+	require.True(t, reader.reader.disabled)
+	require.Less(t, state.account.Snapshot().Used, uint64(spillReadBufferSize))
+
+	reader.Close()
+	reuse.Clean(proc.Mp())
+	finalizeTestSpillAllocationAccount(t, state)
+}
+
+func TestSpillReadBufferReleasesWhenRewindFails(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(
+		t,
+		"",
+		mpool.MustNew("spill-read-buffer-rewind-failure"),
+	)
+	defer proc.Free()
+	state := newTestSpillAllocationAccount(t, 1<<20, 16)
+
+	path := filepath.Join(t.TempDir(), "closed-spill.bin")
+	require.NoError(t, os.WriteFile(path, []byte("spill"), 0o600))
+	file, err := os.Open(path)
+	require.NoError(t, err)
+	reader, err := newAccountedFileReader(proc.Mp(), state.allocation, file)
+	require.NoError(t, err)
+	require.NoError(t, reader.ensureBuffer())
+	require.NotNil(t, reader.buffer)
+	require.Positive(t, state.account.Snapshot().Used)
+
+	require.NoError(t, file.Close())
+	require.Error(t, reader.DisableBufferAt(0))
+	require.Nil(t, reader.buffer)
+	require.True(t, reader.disabled)
+	require.Zero(t, state.account.Snapshot().Used)
+
+	reader.Free()
+	reader.Free()
+	finalizeTestSpillAllocationAccount(t, state)
+}
+
 func TestSpillAllocationAccountDecodedReuseRetriesFromCleanRecord(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(
 		t,

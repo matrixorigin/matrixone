@@ -217,6 +217,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.fill = fill
 	c.sql = sql
 	c.affectRows.Store(0)
+	c.executionGeneration = 0
 	c.anal.Reset(c.isPrepare, c.IsTpQuery())
 
 	if c.lockMeta != nil {
@@ -298,6 +299,8 @@ func (c *Compile) clear() {
 	c.scopes = c.scopes[:0]
 	c.pn = nil
 	c.fill = nil
+	c.resultSink = nil
+	c.executionGeneration = 0
 	c.affectRows.Store(0)
 	c.addr = ""
 	c.db = ""
@@ -1168,8 +1171,11 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 
 	switch qry.StmtType {
 	case plan.Query_DELETE, plan.Query_INSERT, plan.Query_UPDATE, plan.Query_MERGE:
-		updateScopesLastFlag(ss)
-		return ss, nil
+		if !qry.HasReturning || qry.ReturningStep < 0 || int(qry.ReturningStep) >= len(qry.Steps) || qry.Steps[qry.ReturningStep] != step {
+			updateScopesLastFlag(ss)
+			return ss, nil
+		}
+		fallthrough
 	default:
 		var rs *Scope
 		if c.IsSingleScope(ss) {
@@ -1185,7 +1191,7 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 
 		rs.setRootOperator(
 			output.NewArgument().
-				WithFunc(c.fill).
+				WithFunc(c.resultWriter()).
 				WithBlock(c.needBlock).
 				WithAdaptive(isAdaptive),
 		)

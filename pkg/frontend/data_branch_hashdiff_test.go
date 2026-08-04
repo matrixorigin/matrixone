@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -908,9 +909,10 @@ func (h *closeTrackingBranchHashmap) Close() error {
 }
 
 type capturedBatch struct {
-	kind string
-	side int
-	rows [][]any
+	kind       string
+	side       int
+	rows       [][]any
+	fromUpdate bool
 }
 
 func TestRunLCAProbeWithReaderFallback_EarlyReturns(t *testing.T) {
@@ -1514,6 +1516,48 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		require.ErrorIs(t, err, wantErr)
 	})
 
+	t.Run("float primary key join matches NaN explicitly", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tblStuff := newTestBranchTableStuff(ctrl)
+		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+		tblStuff.def.colTypes[0] = types.T_float64.ToType()
+		targetDef := tblStuff.tarRel.GetTableDef(context.Background())
+		targetDef.Cols[0].Typ = plan.Type{Id: int32(types.T_float64)}
+		baseDef := tblStuff.baseRel.GetTableDef(context.Background())
+		baseDef.Cols[0].Typ = plan.Type{Id: int32(types.T_float64)}
+		lcaDef := newTestBranchTableDef("lca_tbl", "name")
+		lcaDef.Cols[0].Typ = plan.Type{Id: int32(types.T_float64)}
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(76)).AnyTimes()
+
+		wantErr := moerr.NewInternalErrorNoCtx("stop after sql capture")
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, sql string) error {
+				require.Contains(t, sql,
+					"values row(0,bit_cast(unhex('010000000000f87f') as double)),row(1,cast(1.25 as double))")
+				right := "cast(pks.`__mo_data_branch_pk_0` as DOUBLE)"
+				require.Contains(t, sql, dataBranchSQLKeyEqual("lca.`id`", right, types.T_float64.ToType()))
+				return wantErr
+			}).
+			Times(1)
+
+		tBat := batch.NewWithSize(1)
+		tBat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], math.NaN(), false, ses.proc.Mp()))
+		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], 1.25, false, ses.proc.Mp()))
+		tBat.SetRowCount(2)
+		defer tBat.Clean(ses.proc.Mp())
+
+		_, err := handleDelsOnLCA(
+			context.Background(), ses, bh, tBat, tblStuff,
+			types.BuildTS(10, 0).ToTimestamp(),
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
+
 	t.Run("internal aliases do not collide with user primary key", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -1984,7 +2028,9 @@ func TestHashDiff_NoLCABoundedUpdateKeepsLatestRow(t *testing.T) {
 			rows := decodeCapturedRows(t, w.batch, tblStuff.def.colTypes)
 			mu.Lock()
 			if len(rows) > 0 {
-				got = append(got, capturedBatch{kind: w.kind, side: w.side, rows: rows})
+				got = append(got, capturedBatch{
+					kind: w.kind, side: w.side, rows: rows, fromUpdate: w.fromUpdate,
+				})
 			}
 			mu.Unlock()
 			tblStuff.retPool.releaseRetBatch(w.batch, false)
@@ -2002,9 +2048,11 @@ func TestHashDiff_NoLCABoundedUpdateKeepsLatestRow(t *testing.T) {
 	require.Len(t, got, 2)
 	require.Equal(t, diffDelete, got[0].kind)
 	require.Equal(t, diffSideBase, got[0].side)
+	require.True(t, got[0].fromUpdate)
 	require.Equal(t, [][]any{{int64(1), "destination", "h1"}}, got[0].rows)
 	require.Equal(t, diffInsert, got[1].kind)
 	require.Equal(t, diffSideTarget, got[1].side)
+	require.True(t, got[1].fromUpdate)
 	require.Equal(t, [][]any{{int64(1), "bounded", "h1"}}, got[1].rows)
 }
 

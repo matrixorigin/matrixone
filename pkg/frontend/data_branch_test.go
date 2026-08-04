@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -303,6 +305,63 @@ func TestFormatValIntoString_Nil(t *testing.T) {
 
 	require.NoError(t, formatValIntoString(ses, nil, types.New(types.T_varchar, 0, 0), &buf))
 	require.Equal(t, "NULL", buf.String())
+}
+
+func TestFormatValIntoString_FloatLiterals(t *testing.T) {
+	tests := []struct {
+		name string
+		val  any
+		typ  types.Type
+		want string
+	}{
+		{"float32 finite", float32(1.25), types.T_float32.ToType(), "1.25"},
+		{"float32 negative zero", math.Float32frombits(0x80000000), types.T_float32.ToType(), "bit_cast(unhex('00000080') as float)"},
+		{"float32 NaN payload 0", math.Float32frombits(0x7fc00000), types.T_float32.ToType(), "bit_cast(unhex('0000c07f') as float)"},
+		{"float32 NaN payload 1", math.Float32frombits(0x7fc00001), types.T_float32.ToType(), "bit_cast(unhex('0100c07f') as float)"},
+		{"float32 positive infinity", float32(math.Inf(1)), types.T_float32.ToType(), "cast('+Inf' as float)"},
+		{"float32 negative infinity", float32(math.Inf(-1)), types.T_float32.ToType(), "cast('-Inf' as float)"},
+		{"float64 finite", 1.25, types.T_float64.ToType(), "1.25"},
+		{"float64 negative zero", math.Float64frombits(0x8000000000000000), types.T_float64.ToType(), "bit_cast(unhex('0000000000000080') as double)"},
+		{"float64 NaN payload 0", math.Float64frombits(0x7ff8000000000000), types.T_float64.ToType(), "bit_cast(unhex('000000000000f87f') as double)"},
+		{"float64 NaN payload 1", math.Float64frombits(0x7ff8000000000001), types.T_float64.ToType(), "bit_cast(unhex('010000000000f87f') as double)"},
+		{"float64 positive infinity", math.Inf(1), types.T_float64.ToType(), "cast('+Inf' as double)"},
+		{"float64 negative infinity", math.Inf(-1), types.T_float64.ToType(), "cast('-Inf' as double)"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			require.NoError(t, formatValIntoString(&Session{}, tt.val, tt.typ, &buf))
+			require.Equal(t, tt.want, buf.String())
+		})
+	}
+}
+
+func TestFormatValIntoStringWithFloatCast(t *testing.T) {
+	tests := []struct {
+		name string
+		val  any
+		typ  types.Type
+		want string
+	}{
+		{"float32 finite", float32(1.25), types.T_float32.ToType(), "cast(1.25 as float)"},
+		{"float32 NaN", math.Float32frombits(0x7fc00001), types.T_float32.ToType(), "bit_cast(unhex('0100c07f') as float)"},
+		{"float32 negative zero", math.Float32frombits(0x80000000), types.T_float32.ToType(), "bit_cast(unhex('00000080') as float)"},
+		{"float64 finite", 1.25, types.T_float64.ToType(), "cast(1.25 as double)"},
+		{"float64 infinity", math.Inf(1), types.T_float64.ToType(), "cast('+Inf' as double)"},
+		{"float64 negative zero", math.Float64frombits(0x8000000000000000), types.T_float64.ToType(), "bit_cast(unhex('0000000000000080') as double)"},
+		{"non-float unchanged", int64(7), types.T_int64.ToType(), "7"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			require.NoError(t, formatValIntoStringWithFloatCast(
+				&Session{}, tt.val, tt.typ, &buf, true,
+			))
+			require.Equal(t, tt.want, buf.String())
+		})
+	}
 }
 
 func TestFormatValIntoString_DataBranchSpecialTypes(t *testing.T) {
@@ -958,6 +1017,97 @@ func TestCompareSingleValInVector_ConstVectors(t *testing.T) {
 	cmp, err := compareSingleValInVector(ctx, ses, 0, 2, leftVec, rightVec)
 	require.NoError(t, err)
 	require.Equal(t, types.CompareValue(int32(5), int32(7)), cmp)
+}
+
+func TestDataBranchPrimaryKeyFloatIdentity(t *testing.T) {
+	ctx := context.Background()
+	ses := &Session{}
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	float32Vec := buildFixedVector(t, mp, types.T_float32.ToType(),
+		math.Float32frombits(0x00000000),
+		math.Float32frombits(0x80000000),
+	)
+	defer float32Vec.Free(mp)
+	cmp, err := compareDataBranchPrimaryKeyInVectors(ctx, ses, 0, 1, float32Vec, float32Vec)
+	require.NoError(t, err)
+	require.Equal(t, -1, cmp)
+	cmp, err = compareDataBranchPrimaryKeyInVectors(ctx, ses, 1, 0, float32Vec, float32Vec)
+	require.NoError(t, err)
+	require.Equal(t, 1, cmp)
+
+	float64Vec := buildFixedVector(t, mp, types.T_float64.ToType(),
+		math.Float64frombits(0x7ff8000000000000),
+		math.Float64frombits(0x7ff8000000000001),
+	)
+	defer float64Vec.Free(mp)
+	cmp, err = compareDataBranchPrimaryKeyInVectors(ctx, ses, 0, 1, float64Vec, float64Vec)
+	require.NoError(t, err)
+	require.Equal(t, -1, cmp)
+	cmp, err = compareDataBranchPrimaryKeyInVectors(ctx, ses, 1, 1, float64Vec, float64Vec)
+	require.NoError(t, err)
+	require.Zero(t, cmp)
+
+	constFloat, err := vector.NewConstFixed[float64](
+		types.T_float64.ToType(), math.Float64frombits(0x8000000000000000), 2, mp,
+	)
+	require.NoError(t, err)
+	defer constFloat.Free(mp)
+	identity, isNull, err := dataBranchFloatPKIdentityAt(constFloat, 1)
+	require.NoError(t, err)
+	require.False(t, isNull)
+	require.Equal(t, uint64(0x8000000000000000), identity)
+
+	nullFloat := vector.NewConstNull(types.T_float64.ToType(), 1, mp)
+	defer nullFloat.Free(mp)
+	cmp, err = compareDataBranchPrimaryKeyInVectors(ctx, ses, 0, 0, nullFloat, float64Vec)
+	require.NoError(t, err)
+	require.Equal(t, -1, cmp)
+	cmp, err = compareDataBranchPrimaryKeyInVectors(ctx, ses, 0, 0, float64Vec, nullFloat)
+	require.NoError(t, err)
+	require.Equal(t, 1, cmp)
+	cmp, err = compareDataBranchPrimaryKeyInVectors(ctx, ses, 0, 0, nullFloat, nullFloat)
+	require.NoError(t, err)
+	require.Zero(t, cmp)
+
+	intVec := buildFixedVector(t, mp, types.T_int64.ToType(), int64(1), int64(2))
+	defer intVec.Free(mp)
+	cmp, err = compareDataBranchPrimaryKeyInVectors(ctx, ses, 0, 1, intVec, intVec)
+	require.NoError(t, err)
+	require.Equal(t, -1, cmp)
+	_, _, err = dataBranchFloatPKIdentityAt(intVec, 0)
+	require.ErrorContains(t, err, "requires FLOAT/DOUBLE")
+}
+
+func TestSortDataBranchBatchByExactFloatPrimaryKey(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = buildFixedVector(t, mp, types.T_float64.ToType(),
+		math.Float64frombits(0x7ff8000000000001),
+		math.Float64frombits(0x0000000000000000),
+		math.Float64frombits(0x7ff8000000000000),
+		math.Float64frombits(0x8000000000000000),
+	)
+	bat.Vecs[1] = buildFixedVector(t, mp, types.T_int64.ToType(), int64(1), int64(2), int64(3), int64(4))
+	bat.SetRowCount(4)
+	defer bat.Clean(mp)
+
+	require.NoError(t, sortDataBranchBatchByPrimaryKey(bat, 0, mp))
+	require.Equal(t, []uint64{
+		0x0000000000000000,
+		0x7ff8000000000000,
+		0x7ff8000000000001,
+		0x8000000000000000,
+	}, []uint64{
+		math.Float64bits(vector.GetFixedAtNoTypeCheck[float64](bat.Vecs[0], 0)),
+		math.Float64bits(vector.GetFixedAtNoTypeCheck[float64](bat.Vecs[0], 1)),
+		math.Float64bits(vector.GetFixedAtNoTypeCheck[float64](bat.Vecs[0], 2)),
+		math.Float64bits(vector.GetFixedAtNoTypeCheck[float64](bat.Vecs[0], 3)),
+	})
+	require.Equal(t, []int64{2, 3, 1, 4}, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[1]))
 }
 
 func TestCompareTupleValueWithVectorDecimal256(t *testing.T) {
