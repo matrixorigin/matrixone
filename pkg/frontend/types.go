@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
@@ -1518,6 +1519,14 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		return
 	}
 
+	var txnIsolation pbtxn.TxnIsolation
+	setTxnIsolation := name == "transaction_isolation" || name == "tx_isolation"
+	if setTxnIsolation {
+		if txnIsolation, err = txnIsolationFromSystemValue(ctx, val); err != nil {
+			return err
+		}
+	}
+
 	if name == "wait_timeout" || name == "interactive_timeout" {
 		if err = validateTimeoutLimits(ctx, ses, name, val); err != nil {
 			return err
@@ -1550,6 +1559,11 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	}
 	if err == nil && name == "sql_mode" {
 		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, val)
+	}
+	if err == nil && setTxnIsolation {
+		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
+			txnHandler.setSessionTxnIsolation(txnIsolation)
+		}
 	}
 
 	// Update rewriteEnabled cache when enable_remap_hint is changed

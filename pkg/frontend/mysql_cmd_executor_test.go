@@ -64,6 +64,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
@@ -183,16 +185,8 @@ func TestHandleSetTransaction(t *testing.T) {
 			want: "READ-COMMITTED",
 		},
 		{
-			sql:  "set transaction isolation level repeatable read",
+			sql:  "set session transaction isolation level repeatable read",
 			want: "REPEATABLE-READ",
-		},
-		{
-			sql:  "set session transaction isolation level read uncommitted",
-			want: "READ-UNCOMMITTED",
-		},
-		{
-			sql:  "set session transaction isolation level serializable",
-			want: "SERIALIZABLE",
 		},
 	}
 
@@ -219,8 +213,25 @@ func TestHandleSetTransaction(t *testing.T) {
 
 		got, err := ses.GetSessionSysVar("transaction_isolation")
 		require.NoError(t, err)
-		require.Equal(t, "SERIALIZABLE", got)
+		require.Equal(t, "REPEATABLE-READ", got)
 	})
+
+	for _, sql := range []string{
+		"set session transaction isolation level read uncommitted",
+		"set session transaction isolation level serializable",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(ctx, sql, 1)
+			require.NoError(t, err)
+
+			_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
+			require.ErrorContains(t, err, "is not supported")
+
+			got, getErr := ses.GetSessionSysVar("transaction_isolation")
+			require.NoError(t, getErr)
+			require.Equal(t, "REPEATABLE-READ", got)
+		})
+	}
 
 	t.Run("invalid isolation level", func(t *testing.T) {
 		stmt := &tree.SetTransaction{
@@ -231,6 +242,69 @@ func TestHandleSetTransaction(t *testing.T) {
 
 		_, err := execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
 		require.ErrorContains(t, err, "unsupported transaction isolation level 999")
+	})
+}
+
+func TestSetTransactionIsolationAppliedToTxnMeta(t *testing.T) {
+	ctx := context.Background()
+	txnclient.RunTxnTests(func(realTxnClient txnclient.TxnClient, _ rpc.TxnSender) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		originalTxnClient := getPu("").TxnClient
+		defer func() { getPu("").TxnClient = originalTxnClient }()
+		getPu("").TxnClient = realTxnClient
+
+		execSet := func(sql string) {
+			t.Helper()
+			stmt, err := mysql.ParseOne(ctx, sql, 1)
+			require.NoError(t, err)
+			_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
+			require.NoError(t, err)
+		}
+		createTxn := func() txn.TxnIsolation {
+			t.Helper()
+			handler := ses.txnHandler
+			handler.mu.Lock()
+			err := handler.createTxnOpUnsafe(&ExecCtx{reqCtx: ctx, ses: ses})
+			op := handler.txnOp
+			handler.txnOp = nil
+			handler.mu.Unlock()
+			require.NoError(t, err)
+			require.NotNil(t, op)
+			isolation := op.Txn().Isolation
+			require.NoError(t, op.Rollback(ctx))
+			return isolation
+		}
+
+		// The compatibility sysvar defaults to REPEATABLE-READ, but until the
+		// session explicitly changes it the transaction client must retain its
+		// service-wide default.
+		require.Equal(t, txn.TxnIsolation_RC, createTxn())
+
+		execSet("set session transaction isolation level read committed")
+		require.Equal(t, txn.TxnIsolation_RC, createTxn())
+
+		execSet("set transaction isolation level repeatable read")
+		got, err := ses.GetSessionSysVar("transaction_isolation")
+		require.NoError(t, err)
+		require.Equal(t, "READ-COMMITTED", got)
+
+		failedTxnClient := mock_frontend.NewMockTxnClient(ctrl)
+		failedTxnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(nil, moerr.NewInternalErrorNoCtx("injected create failure"))
+		getPu("").TxnClient = failedTxnClient
+		handler := ses.txnHandler
+		handler.mu.Lock()
+		err = handler.createTxnOpUnsafe(&ExecCtx{reqCtx: ctx, ses: ses})
+		retained := handler.hasNextTxnIsolation
+		handler.mu.Unlock()
+		require.Error(t, err)
+		require.True(t, retained)
+
+		getPu("").TxnClient = realTxnClient
+		require.Equal(t, txn.TxnIsolation_SI, createTxn())
+		require.Equal(t, txn.TxnIsolation_RC, createTxn())
 	})
 }
 
