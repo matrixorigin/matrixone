@@ -97,8 +97,8 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 	sp := NewStmtProfile(uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
 	sp.SetTxnId([]byte("txn-profile-123456"))
 	sp.SetStmtId(uuid.MustParse("cccccccc-cccc-cccc-cccc-cccccccccccc"))
-	sp.SetStatementRuntimeProfile("Insert", "DML", true)
 	proc.SetStmtProfile(sp)
+	sp.SetStatementRuntimeProfile("Insert", "DML", true)
 
 	vec := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(vec, []byte("a"), false, proc.Mp()))
