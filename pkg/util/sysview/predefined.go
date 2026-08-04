@@ -202,8 +202,8 @@ var (
 		" then cast(split_part(upper(mo_show_visible_bin(mc.atttyp,3)), ' SRID ', 2) as bigint) else NULL end) as SRS_ID "+
 		"from mo_catalog.mo_columns mc join mo_catalog.mo_tables mt ON mc.account_id = mt.account_id AND mc.att_database = mt.reldatabase AND mc.att_relname = mt.relname "+
 		"where mc.account_id = current_account_id() "+
-		"and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s' and mc.att_relname != '%s' and %s",
-		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard, catalog.MO_ACCOUNT_LOCK, catalog.NonTemporaryTableSQLPredicate("mt"))
+		"and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s' and mc.att_relname != '%s' and not regexp_like(lower(mt.relname), '%s') and %s",
+		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard, catalog.MO_ACCOUNT_LOCK, catalog.LifecycleRestoreTableSQLRegexpPattern, catalog.NonTemporaryTableSQLPredicate("mt"))
 
 	InformationSchemaProfilingDDL = "CREATE TABLE information_schema.PROFILING (" +
 		"QUERY_ID int NOT NULL DEFAULT '0'," +
@@ -407,7 +407,8 @@ var (
 		"join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)) "+
 		"join `mo_catalog`.`mo_columns` `tcl` on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname` "+
 		"and `tcl`.`account_id` = `tbl`.`account_id` and `tcl`.`att_database` = `tbl`.`reldatabase` and `tcl`.`att_relname` = `tbl`.`relname`) "+
-		"where `tbl`.`account_id` = current_account_id() and %s", catalog.NonTemporaryTableSQLPredicate("tbl"))
+		"where `tbl`.`account_id` = current_account_id() and not regexp_like(lower(`tbl`.`relname`), '%s') and %s",
+		catalog.LifecycleRestoreTableSQLRegexpPattern, catalog.NonTemporaryTableSQLPredicate("tbl"))
 
 	InformationSchemaReferentialConstraintsDDL = "CREATE VIEW information_schema.REFERENTIAL_CONSTRAINTS AS " +
 		"SELECT " +
@@ -542,7 +543,8 @@ var (
 		"'YES' AS ENFORCED "+
 		"FROM mo_catalog.mo_indexes idx "+
 		"join mo_catalog.mo_tables tbl on idx.table_id = tbl.rel_id "+
-		"where %s", catalog.NonTemporaryTableSQLPredicate("tbl"))
+		"where not regexp_like(lower(tbl.relname), '%s') and %s",
+		catalog.LifecycleRestoreTableSQLRegexpPattern, catalog.NonTemporaryTableSQLPredicate("tbl"))
 
 	InformationSchemaEventsDDL = "CREATE TABLE information_schema.EVENTS (" +
 		"EVENT_CATALOG varchar(64)," +

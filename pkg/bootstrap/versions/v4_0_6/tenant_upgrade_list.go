@@ -100,6 +100,40 @@ func init() {
 			},
 		})
 	}
+	for _, view := range []struct {
+		name string
+		ddl  string
+	}{
+		{name: "TABLES", ddl: sysview.InformationSchemaTablesDDL},
+		{name: "COLUMNS", ddl: sysview.InformationSchemaColumnsDDL},
+		{name: "STATISTICS", ddl: sysview.InformationSchemaStatisticsDDL},
+		{name: "TABLE_CONSTRAINTS", ddl: sysview.InformationSchemaTableConstraintsDDL},
+	} {
+		tenantUpgEntries = append(tenantUpgEntries, lifecycleInformationSchemaView(view.name, view.ddl))
+	}
+}
+
+func lifecycleInformationSchemaView(viewName, viewDDL string) versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: viewName,
+		UpgType:   versions.MODIFY_VIEW,
+		UpgSql:    viewDDL,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			exists, definition, err := versions.CheckViewDefinition(
+				txn,
+				accountID,
+				sysview.InformationDBConst,
+				viewName,
+			)
+			return exists && definition == viewDDL, err
+		},
+		PreSql: fmt.Sprintf(
+			"DROP VIEW IF EXISTS %s.%s;",
+			sysview.InformationDBConst,
+			viewName,
+		),
+	}
 }
 
 func newMongoDBCatalogTable(name, ddl string) versions.UpgradeEntry {

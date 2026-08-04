@@ -36,7 +36,8 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 9+len(catalog.LifecycleTenantTableDefinitions))
+	const lifecycleInformationSchemaViews = 4
+	require.Len(t, tenantUpgEntries, 9+len(catalog.LifecycleTenantTableDefinitions)+lifecycleInformationSchemaViews)
 	require.Len(t, clusterUpgEntries, 1+len(catalog.LifecycleClusterTableDefinitions)+2)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
@@ -60,7 +61,7 @@ func TestUpgradeEntries(t *testing.T) {
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 9)
+	require.GreaterOrEqual(t, len(tenantUpgEntries), 9)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
@@ -901,6 +902,14 @@ func TestPopulateInformationSchemaCharacterSetsIsIdempotent(t *testing.T) {
 	require.NoError(t, entry.Upgrade(txn, 42))
 	require.Len(t, executed, 1)
 	require.True(t, strings.HasPrefix(executed[0], "SELECT 1 FROM information_schema.CHARACTER_SETS"))
+}
+
+func TestLifecycleInformationSchemaUpgradeEntries(t *testing.T) {
+	start := 3 + len(catalog.LifecycleTenantTableDefinitions)
+	for _, entry := range tenantUpgEntries[start:] {
+		require.Equal(t, versions.MODIFY_VIEW, entry.UpgType)
+		require.Contains(t, entry.UpgSql, catalog.LifecycleRestoreTableSQLRegexpPattern)
+	}
 }
 
 func TestLifecycleCatalogUpgradeEntries(t *testing.T) {

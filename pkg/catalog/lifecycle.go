@@ -87,6 +87,8 @@ const (
 		primary key (dataset_id),
 		unique key uk_lifecycle_dataset_attempt (root_id, attempt_id),
 		key idx_lifecycle_dataset_table (account_id, logical_table_id, state),
+		key idx_lifecycle_dataset_show
+			(account_id, logical_table_id, created_at, dataset_id),
 		key idx_lifecycle_dataset_purge (state, purge_eligible_at),
 		key idx_lifecycle_dataset_terminal (state, updated_at, dataset_id),
 		key idx_lifecycle_dataset_stage (stage_id, state)
@@ -187,7 +189,8 @@ const (
 		key idx_lifecycle_cleanup_temporary
 			(state, temporary_cleanup_done, updated_at, root_id),
 		key idx_lifecycle_cleanup_terminal (state, updated_at, root_id),
-		key idx_lifecycle_cleanup_owner (owner_account_id, logical_table_id)
+		key idx_lifecycle_cleanup_owner (owner_account_id, logical_table_id),
+		key idx_lifecycle_cleanup_show (owner_account_id, updated_at, root_id)
 	)`
 )
 

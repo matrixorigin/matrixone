@@ -82,6 +82,11 @@ func (processor *LifecycleProcessor) ProcessTTLObject(
 			}
 		}
 	}
+	// Whole TTL has no external staging owner to reconcile. Its Receipt and
+	// exact source retirement are committed by the same ordinary transaction:
+	// a successful unknown commit makes the source invisible, while an aborted
+	// commit leaves it eligible for a safe fresh retry. Overlapping retries are
+	// serialized by the existing Object DropIntent/exact ObjectStats checks.
 	protection, err := task.Table.LifecycleSelectProtectionSet(
 		ctx,
 		task.SourceSnapshot,
