@@ -417,6 +417,65 @@ func TestTransparentCorrelatedDerivedTableRejectsUnsafeShapes(t *testing.T) {
 	}
 }
 
+func TestTransparentCorrelatedDerivedTableRejectsDeepAncestor(t *testing.T) {
+	immediateParent := `SELECT n1.N_NATIONKEY
+		FROM NATION n1
+		WHERE EXISTS (
+			SELECT 1 FROM NATION n2
+			WHERE n2.N_NATIONKEY = n1.N_NATIONKEY
+				AND EXISTS (
+					SELECT 1 FROM (
+						SELECT n3.N_NATIONKEY FROM NATION n3
+						WHERE n3.N_REGIONKEY = n2.N_REGIONKEY
+					) d
+				)
+		)`
+	_, err := runOneStmt(NewMockOptimizer(true), t, immediateParent)
+	require.NoError(t, err)
+
+	for _, tt := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "grandparent only",
+			sql: `SELECT n1.N_NATIONKEY
+				FROM NATION n1
+				WHERE EXISTS (
+					SELECT 1 FROM NATION n2
+					WHERE n2.N_NATIONKEY = n1.N_NATIONKEY
+						AND EXISTS (
+							SELECT 1 FROM (
+								SELECT n3.N_NATIONKEY FROM NATION n3
+								WHERE n3.N_NATIONKEY = n1.N_NATIONKEY
+							) d
+						)
+				)`,
+		},
+		{
+			name: "mixed immediate and grandparent",
+			sql: `SELECT n1.N_NATIONKEY
+				FROM NATION n1
+				WHERE EXISTS (
+					SELECT 1 FROM NATION n2
+					WHERE n2.N_NATIONKEY = n1.N_NATIONKEY
+						AND EXISTS (
+							SELECT 1 FROM (
+								SELECT n3.N_NATIONKEY FROM NATION n3
+								WHERE n3.N_REGIONKEY = n2.N_REGIONKEY
+									AND n3.N_NATIONKEY = n1.N_NATIONKEY
+							) d
+						)
+				)`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(true), t, tt.sql)
+			require.ErrorContains(t, err, "correlated subquery in FROM clause is not yet implemented")
+		})
+	}
+}
+
 func TestTransparentCorrelatedDerivedTableNormalizationIsAtomic(t *testing.T) {
 	const outerTag int32 = 41
 
@@ -491,10 +550,27 @@ func TestTransparentCorrelatedDerivedTableNormalizationIsAtomic(t *testing.T) {
 		nodes := newNodes(corr, &plan.Node{NodeType: plan.Node_TABLE_SCAN})
 		nodes[1].Children[0] = 0
 		nodes[1].FilterList = append(nodes[1].FilterList, newTransparentDerivedEquality(corr, 42))
-		ctx := NewBindContext(nil, nil)
+		ancestor := NewBindContext(nil, nil)
+		ancestor.bindingByTag[outerTag] = nil
+		ctx := NewBindContext(nil, ancestor)
 		require.NoError(t, newBuilder(nodes).normalizeTransparentCorrelatedDerivedTable(3, ctx))
 		require.Equal(t, int32(1), corr.Depth)
 		require.True(t, ctx.isCorrelated)
+	})
+
+	t.Run("deeper ancestor is rejected atomically", func(t *testing.T) {
+		corr := &plan.CorrColRef{RelPos: outerTag, Depth: 3}
+		nodes := newNodes(corr, &plan.Node{NodeType: plan.Node_TABLE_SCAN})
+		nodes[1].Children[0] = 0
+		owner := NewBindContext(nil, nil)
+		owner.bindingByTag[outerTag] = nil
+		intermediate := NewBindContext(nil, owner)
+		intermediate.bindingByTag[42] = nil
+		ctx := NewBindContext(nil, intermediate)
+		err := newBuilder(nodes).normalizeTransparentCorrelatedDerivedTable(3, ctx)
+		require.ErrorContains(t, err, "correlated subquery in FROM clause is not yet implemented")
+		require.Equal(t, int32(3), corr.Depth)
+		require.False(t, ctx.isCorrelated)
 	})
 }
 

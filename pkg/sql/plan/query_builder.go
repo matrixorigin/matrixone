@@ -9033,10 +9033,8 @@ func analyzeTransparentDerivedFilter(
 	if corr.Depth <= 0 || local.GetCol() == nil {
 		return false
 	}
-	if corr.Depth == 1 {
-		if _, sameFromScope := ctx.bindingByTag[corr.RelPos]; sameFromScope {
-			return false
-		}
+	if !transparentDerivedCorrelationTargetsNearestAncestor(ctx, corr) {
+		return false
 	}
 	if !transparentDerivedLocalExpr(local) {
 		return false
@@ -9044,6 +9042,25 @@ func analyzeTransparentDerivedFilter(
 
 	corrRefs[corr] = struct{}{}
 	return true
+}
+
+func transparentDerivedCorrelationTargetsNearestAncestor(ctx *BindContext, corr *plan.CorrColRef) bool {
+	if _, sameFromScope := ctx.bindingByTag[corr.RelPos]; sameFromScope {
+		return false
+	}
+	if corr.Depth == 1 {
+		return true
+	}
+
+	for ancestor := ctx.parent; ancestor != nil; ancestor = ancestor.parent {
+		if _, ownsCorrelation := ancestor.bindingByTag[corr.RelPos]; ownsCorrelation {
+			return true
+		}
+		if len(ancestor.bindingByTag) > 0 {
+			return false
+		}
+	}
+	return false
 }
 
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, tableInput *tableFunctionInput) (nodeID int32, err error) {
