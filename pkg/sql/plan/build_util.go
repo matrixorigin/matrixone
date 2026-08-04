@@ -228,6 +228,12 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 			if fstr == "datalink" {
 				return plan.Type{Id: int32(types.T_datalink)}, nil
 			}
+			if fstr == "tinytext" {
+				// TEXT-family limits are byte limits in MySQL. Preserve TINYTEXT's
+				// 255-byte bound in the plan so DML assignment casts can enforce it
+				// without changing the externally visible TEXT type family.
+				return plan.Type{Id: int32(types.T_text), Width: types.MaxTinyTextLen}, nil
+			}
 
 			return plan.Type{Id: int32(types.T_text)}, nil
 		case defines.MYSQL_TYPE_JSON:
@@ -531,7 +537,7 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 }
 
 func mapDDLAssignmentCastError(ctx context.Context, typ plan.Type, colName string, err error) error {
-	if (typ.Id == int32(types.T_char) || typ.Id == int32(types.T_varchar)) &&
+	if useSqlModeStringAssignmentCast(typ) &&
 		moerr.IsMoErrCode(err, moerr.ErrInternal) {
 		return moerr.NewErrInvalidDefault(ctx, colName)
 	}

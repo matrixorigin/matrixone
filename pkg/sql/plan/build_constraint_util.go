@@ -1130,9 +1130,17 @@ func useAssignmentStrictCast(targetType Type) bool {
 	switch targetType.Id {
 	case int32(types.T_char), int32(types.T_varchar), int32(types.T_date), int32(types.T_datetime), int32(types.T_timestamp):
 		return true
+	case int32(types.T_text):
+		return targetType.Width == types.MaxTinyTextLen
 	default:
 		return false
 	}
+}
+
+func useSqlModeStringAssignmentCast(targetType Type) bool {
+	return targetType.Id == int32(types.T_char) ||
+		targetType.Id == int32(types.T_varchar) ||
+		(targetType.Id == int32(types.T_text) && targetType.Width == types.MaxTinyTextLen)
 }
 
 func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr) (*Expr, error) {
@@ -1140,7 +1148,7 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 }
 
 // forceCastExpr2WithIgnore builds the assignment cast for a DML write when the
-// target plan.Expr is already known. For CHAR/VARCHAR targets it normally uses
+// target plan.Expr is already known. For width-constrained string targets it normally uses
 // cast_assign, which honors sql_mode at runtime (strict rejects over-length,
 // non-strict truncates). INSERT IGNORE and generic casts stay lenient.
 func forceCastExpr2WithIgnore(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr, isIgnore bool) (*Expr, error) {
@@ -1176,7 +1184,7 @@ func forceCastExpr2WithProcess(
 	}
 
 	targetType.Typ.NotNullable = expr.Typ.NotNullable
-	// CHAR/VARCHAR assignments use the protocol-gated runtime assignment cast.
+	// Width-constrained string assignments use the protocol-gated runtime assignment cast.
 	// Temporal assignments retain main's cast_strict behavior, while other
 	// conversions continue to use the generic cast.
 	funcName := assignmentCastFunctionName(targetType.Typ, isIgnore, proc)
@@ -1220,7 +1228,7 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 }
 
 func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Process) string {
-	if targetType.Id != int32(types.T_char) && targetType.Id != int32(types.T_varchar) {
+	if !useSqlModeStringAssignmentCast(targetType) {
 		if useAssignmentStrictCast(targetType) {
 			return "cast_strict"
 		}
@@ -1243,7 +1251,7 @@ func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Pr
 }
 
 // forceAssignmentCastExprWithIgnore builds the assignment cast for a DML write.
-// For CHAR/VARCHAR targets it normally uses cast_assign (sql_mode-gated width
+// For width-constrained string targets it normally uses cast_assign (sql_mode-gated width
 // check). When isIgnore is true (INSERT IGNORE or UPDATE IGNORE), over-length
 // writes are downgraded to truncation regardless of sql_mode and warning 1265
 // is recorded.

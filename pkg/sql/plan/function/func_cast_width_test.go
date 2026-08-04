@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -310,6 +311,60 @@ func TestNewAssignCastHonorsSqlMode(t *testing.T) {
 	defer rs.Free()
 	require.NoError(t, rs.PreExtendAndReset(1))
 	require.Error(t, NewStrictCast([]*vector.Vector{src, dst}, rs, proc, 1, nil))
+}
+
+func TestTinyTextAssignmentWidthUsesBytes(t *testing.T) {
+	run := func(
+		t *testing.T,
+		sqlMode string,
+		input string,
+		cast func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error,
+	) (string, error) {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			require.Equal(t, "sql_mode", name)
+			return sqlMode, nil
+		})
+
+		src := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(src, []byte(input), false, proc.Mp()))
+		defer src.Free(proc.Mp())
+
+		target := types.New(types.T_text, types.MaxTinyTextLen, 0)
+		dst := vector.NewVec(target)
+		defer dst.Free(proc.Mp())
+		result := vector.NewFunctionResultWrapper(target, proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+
+		if err := cast([]*vector.Vector{src, dst}, result, proc, 1, nil); err != nil {
+			return "", err
+		}
+		got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+		require.False(t, null)
+		return string(got), nil
+	}
+
+	_, err := run(t, "STRICT_TRANS_TABLES", strings.Repeat("a", types.MaxTinyTextLen+1), NewAssignCast)
+	require.Error(t, err)
+	require.Equal(t, moerr.ErrCastWidthExceeded, err.(*moerr.Error).ErrorCode())
+	require.Equal(t, uint16(moerr.ER_DATA_TOO_LONG), err.(*moerr.Error).MySQLCode())
+
+	// TINYTEXT counts bytes, not Unicode code points: 85 three-byte runes fit,
+	// while 86 are truncated to a valid 255-byte UTF-8 prefix in non-strict mode.
+	got, err := run(t, "", strings.Repeat("你", 86), NewAssignCast)
+	require.NoError(t, err)
+	require.Len(t, []byte(got), types.MaxTinyTextLen)
+	require.Equal(t, 85, utf8.RuneCountInString(got))
+	require.True(t, utf8.ValidString(got))
+
+	_, err = run(t, "STRICT_TRANS_TABLES", strings.Repeat("a", types.MaxTinyTextLen)+" ", NewAssignCast)
+	require.Error(t, err, "TEXT-family values keep trailing spaces; the CHAR/VARCHAR exemption must not apply")
+
+	got, err = run(t, "STRICT_TRANS_TABLES", strings.Repeat("b", types.MaxTinyTextLen+1), NewAssignIgnoreCast)
+	require.NoError(t, err)
+	require.Len(t, got, types.MaxTinyTextLen)
 }
 
 func TestAssignmentCastTypedSource(t *testing.T) {
