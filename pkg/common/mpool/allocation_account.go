@@ -224,7 +224,8 @@ type AllocationCapacityController interface {
 // allocation. Class zero uses the account's statement controller. Non-zero
 // classes are registered by execution owners whose future recovery storage
 // must borrow pre-admitted headroom without charging that headroom twice.
-type AllocationCapacityClass uint8
+// The namespace must accommodate every parallel HashBuild in one statement.
+type AllocationCapacityClass uint32
 
 // AllocationCapacityClassDefault uses the statement's ordinary controller.
 const AllocationCapacityClassDefault AllocationCapacityClass = 0
@@ -296,7 +297,7 @@ func (a *AllocationAccount) RegisterCapacityController(
 			map[AllocationCapacityClass]*allocationCapacityRegistration,
 		)
 	}
-	for range uint16(math.MaxUint8) {
+	for range uint64(math.MaxUint32) {
 		a.nextCapacityClass++
 		if a.nextCapacityClass == AllocationCapacityClassDefault {
 			a.nextCapacityClass++
@@ -971,7 +972,6 @@ type allocationLease struct {
 	site          AllocationSite
 	profiled      bool
 	capacityClass AllocationCapacityClass
-	_             [4]byte
 }
 
 func (l allocationLease) release(capacity uint64) {

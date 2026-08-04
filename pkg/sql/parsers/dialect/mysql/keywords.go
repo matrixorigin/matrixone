@@ -671,6 +671,7 @@ func init() {
 		"kmeans":                     KMEANS,
 		"column_number":              COLUMN_NUMBER,
 		"returns":                    RETURNS,
+		"returning":                  RETURNING,
 		"extension":                  EXTENSION,
 		"query_result":               QUERY_RESULT,
 		"mysql_compatibility_mode":   MYSQL_COMPATIBILITY_MODE,

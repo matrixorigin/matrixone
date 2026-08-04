@@ -272,7 +272,9 @@ type Compile struct {
 
 	// fill is a result writer runs a callback function.
 	// fill will be called when result data is ready.
-	fill func(*batch.Batch, *perfcounter.CounterSet) error
+	fill                func(*batch.Batch, *perfcounter.CounterSet) error
+	resultSink          ResultSink
+	executionGeneration uint64
 	// affectRows stores the number of rows affected while insert / update / delete
 	affectRows *atomic.Uint64
 	// cn address
@@ -382,6 +384,10 @@ type fuzzyCheck struct {
 
 	// handle with primary key(a, b, ...) or unique key (a, b, ...)
 	isCompound bool
+
+	// exactFloatKey means the pipeline carries serial(FLOAT/DOUBLE) rather than
+	// the scalar key. This preserves signed zero and NaN payload identity.
+	exactFloatKey bool
 
 	// handle with cases like create a unique index for existed table, or alter add unique key
 	// and the type of unique key is compound
