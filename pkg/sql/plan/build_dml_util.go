@@ -4620,13 +4620,16 @@ type FkReferKey struct {
 
 // FkReferDef holds the definition & details of the foreign key
 type FkReferDef struct {
-	Db       string //fk database name
-	Tbl      string //fk table name
-	Name     string //fk constraint name
-	Col      string //fk column name, letter case: lower
-	ReferCol string //referenced column name, letter case: lower
-	OnDelete string //on delete action
-	OnUpdate string //on update action
+	Db                  string //fk database name
+	Tbl                 string //fk table name
+	Name                string //fk constraint name
+	Col                 string //fk column name, letter case: lower
+	ReferCol            string //referenced column name, letter case: lower
+	OnDelete            string //on delete action
+	OnUpdate            string //on update action
+	ReferencedIndexName string
+	OnDeleteOrigin      string
+	OnUpdateOrigin      string
 }
 
 func (fk FkReferDef) String() string {
@@ -4656,7 +4659,10 @@ func GetSqlForFkReferredTo(db, table string) string {
 			"column_name, "+
 			"refer_column_name, "+
 			"on_delete, "+
-			"on_update "+
+			"on_update, "+
+			"referenced_index_name, "+
+			"on_delete_origin, "+
+			"on_update_origin "+
 			"from "+
 			"`mo_catalog`.`mo_foreign_keys` "+
 			"where "+
@@ -4685,6 +4691,9 @@ func GetFkReferredTo(ctx CompilerContext, db, table string) (map[FkReferKey]map[
 	const referColIdx = 4
 	const deleteIdx = 5
 	const updateIdx = 6
+	const referencedIndexIdx = 7
+	const deleteOriginIdx = 8
+	const updateOriginIdx = 9
 	if res.Batches != nil {
 		for _, batch := range res.Batches {
 			if batch != nil &&
@@ -4692,13 +4701,16 @@ func GetFkReferredTo(ctx CompilerContext, db, table string) (map[FkReferKey]map[
 				batch.Vecs[0].Length() > 0 {
 				for i := 0; i < batch.Vecs[0].Length(); i++ {
 					fk := &FkReferDef{
-						Db:       string(batch.Vecs[dbIdx].GetBytesAt(i)),
-						Tbl:      string(batch.Vecs[tblIdx].GetBytesAt(i)),
-						Name:     string(batch.Vecs[nameIdx].GetBytesAt(i)),
-						Col:      string(batch.Vecs[colIdx].GetBytesAt(i)),
-						ReferCol: string(batch.Vecs[referColIdx].GetBytesAt(i)),
-						OnDelete: string(batch.Vecs[deleteIdx].GetBytesAt(i)),
-						OnUpdate: string(batch.Vecs[updateIdx].GetBytesAt(i)),
+						Db:                  string(batch.Vecs[dbIdx].GetBytesAt(i)),
+						Tbl:                 string(batch.Vecs[tblIdx].GetBytesAt(i)),
+						Name:                string(batch.Vecs[nameIdx].GetBytesAt(i)),
+						Col:                 string(batch.Vecs[colIdx].GetBytesAt(i)),
+						ReferCol:            string(batch.Vecs[referColIdx].GetBytesAt(i)),
+						OnDelete:            string(batch.Vecs[deleteIdx].GetBytesAt(i)),
+						OnUpdate:            string(batch.Vecs[updateIdx].GetBytesAt(i)),
+						ReferencedIndexName: string(batch.Vecs[referencedIndexIdx].GetBytesAt(i)),
+						OnDeleteOrigin:      string(batch.Vecs[deleteOriginIdx].GetBytesAt(i)),
+						OnUpdateOrigin:      string(batch.Vecs[updateOriginIdx].GetBytesAt(i)),
 					}
 					key := FkReferKey{Db: fk.Db, Tbl: fk.Tbl}
 					var constraint map[string][]*FkReferDef
@@ -4738,13 +4750,24 @@ func convertIntoReferAction(s string) plan.ForeignKeyDef_RefAction {
 	}
 }
 
+func convertIntoReferActionOrigin(s string) plan.ForeignKeyDef_RefActionOrigin {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case plan.ForeignKeyDef_ACTION_ORIGIN_DEFAULT.String():
+		return plan.ForeignKeyDef_ACTION_ORIGIN_DEFAULT
+	case plan.ForeignKeyDef_ACTION_ORIGIN_LEGACY_AMBIGUOUS.String():
+		return plan.ForeignKeyDef_ACTION_ORIGIN_LEGACY_AMBIGUOUS
+	default:
+		return plan.ForeignKeyDef_ACTION_ORIGIN_EXPLICIT
+	}
+}
+
 // getSqlForAddFk returns the insert sql that adds a fk relationship
 // into the mo_foreign_keys table
 func getSqlForAddFk(db, table string, data *FkData) string {
-	row := make([]string, 16)
+	row := make([]string, 19)
 	rows := 0
 	sb := strings.Builder{}
-	sb.WriteString("insert into `mo_catalog`.`mo_foreign_keys`  ")
+	sb.WriteString("insert into `mo_catalog`.`mo_foreign_keys` (constraint_name, constraint_id, db_name, db_id, table_name, table_id, column_name, column_id, refer_db_name, refer_db_id, refer_table_name, refer_table_id, refer_column_name, refer_column_id, on_delete, on_update, referenced_index_name, on_delete_origin, on_update_origin)")
 	sb.WriteString(" values ")
 	for childIdx, childCol := range data.Cols.Cols {
 		row[0] = data.Def.Name
@@ -4764,10 +4787,13 @@ func getSqlForAddFk(db, table string, data *FkData) string {
 		row[13] = "0"
 		row[14] = data.Def.OnDelete.String()
 		row[15] = data.Def.OnUpdate.String()
-		if data.DefaultOnDelete {
+		row[16] = data.Def.ReferencedIndexName
+		row[17] = data.Def.OnDeleteOrigin.String()
+		row[18] = data.Def.OnUpdateOrigin.String()
+		if data.Def.OnDeleteOrigin == plan.ForeignKeyDef_ACTION_ORIGIN_DEFAULT {
 			row[14] = plan.ForeignKeyDef_NO_ACTION.String()
 		}
-		if data.DefaultOnUpdate {
+		if data.Def.OnUpdateOrigin == plan.ForeignKeyDef_ACTION_ORIGIN_DEFAULT {
 			row[15] = plan.ForeignKeyDef_NO_ACTION.String()
 		}
 		{
@@ -4786,6 +4812,16 @@ func getSqlForAddFk(db, table string, data *FkData) string {
 		}
 	}
 	return sb.String()
+}
+
+func getSqlForUpdateFkReferencedIndex(db, table, constraintName, referencedIndexName string) string {
+	return fmt.Sprintf(
+		"update `mo_catalog`.`mo_foreign_keys` set referenced_index_name = %s where db_name = %s and table_name = %s and constraint_name = %s",
+		quoteSQLStringLiteral(referencedIndexName),
+		quoteSQLStringLiteral(db),
+		quoteSQLStringLiteral(table),
+		quoteSQLStringLiteral(constraintName),
+	)
 }
 
 // getSqlForDeleteTable returns the delete sql that deletes all the fk relationships from mo_foreign_keys

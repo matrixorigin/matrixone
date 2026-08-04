@@ -80,17 +80,11 @@ func TestInformationSchemaReferentialConstraintsDDL_UsesMySQLDefaultAction(t *te
 		"replace(fk.on_delete, '_', ' ') AS DELETE_RULE")
 	assert.NotContains(t, InformationSchemaReferentialConstraintsDDL, "upper(fk.on_update)")
 	assert.Contains(t, InformationSchemaReferentialConstraintsDDL,
-		"tbl.reldatabase = fk.refer_db_name AND tbl.relname = fk.refer_table_name")
+		"fk.referenced_index_name AS UNIQUE_CONSTRAINT_NAME")
 	assert.Contains(t, InformationSchemaReferentialConstraintsDDL,
-		"idx.table_id = tbl.rel_id AND idx.indexed_columns = fk.referenced_columns")
-	assert.Contains(t, InformationSchemaReferentialConstraintsDDL,
-		"group_concat(concat(constraint_id, ':', length(refer_column_name), ':', refer_column_name) order by constraint_id) AS referenced_columns")
-	assert.Contains(t, InformationSchemaReferentialConstraintsDDL,
-		"group_concat(concat(ordinal_position, ':', length(column_name), ':', column_name) order by ordinal_position) AS indexed_columns")
-	assert.Contains(t, InformationSchemaReferentialConstraintsDDL,
-		"WHERE type = 'PRIMARY' OR type = 'UNIQUE'")
-	assert.Contains(t, InformationSchemaReferentialConstraintsDDL,
-		"idx.name AS UNIQUE_CONSTRAINT_NAME")
+		"referenced_index_name")
+	assert.NotContains(t, InformationSchemaReferentialConstraintsDDL, "mo_catalog.mo_indexes")
+	assert.NotContains(t, InformationSchemaReferentialConstraintsDDL, "group_concat")
 	assert.NotContains(t, InformationSchemaReferentialConstraintsDDL, "min(idx.type)")
 }
 

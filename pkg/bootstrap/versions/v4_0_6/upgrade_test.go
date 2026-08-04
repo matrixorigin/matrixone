@@ -36,7 +36,7 @@ import (
 )
 
 func TestMongoDBCatalogUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 4)
+	require.Len(t, tenantUpgEntries, 7)
 	require.Len(t, clusterUpgEntries, 1)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
@@ -48,15 +48,22 @@ func TestMongoDBCatalogUpgradeEntries(t *testing.T) {
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 4)
+	require.Len(t, tenantUpgEntries, 7)
 
-	keyColumnUsage := tenantUpgEntries[2]
+	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
+		entry := tenantUpgEntries[2+i]
+		require.Equal(t, versions.ADD_COLUMN, entry.UpgType)
+		require.Equal(t, catalog.MOForeignKeys, entry.TableName)
+		require.Contains(t, entry.UpgSql, "add column "+column)
+	}
+
+	keyColumnUsage := tenantUpgEntries[5]
 	require.Equal(t, versions.CREATE_VIEW, keyColumnUsage.UpgType)
 	require.Equal(t, "KEY_COLUMN_USAGE", keyColumnUsage.TableName)
 	require.Equal(t, sysview.InformationSchemaKeyColumnUsageDDL, keyColumnUsage.UpgSql)
 	require.Contains(t, strings.ToLower(keyColumnUsage.PreSql), "drop table if exists information_schema.key_column_usage")
 
-	referentialConstraints := tenantUpgEntries[3]
+	referentialConstraints := tenantUpgEntries[6]
 	require.Equal(t, versions.MODIFY_VIEW, referentialConstraints.UpgType)
 	require.Equal(t, "REFERENTIAL_CONSTRAINTS", referentialConstraints.TableName)
 	require.Equal(t, sysview.InformationSchemaReferentialConstraintsDDL, referentialConstraints.UpgSql)
@@ -64,8 +71,11 @@ func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
 }
 
 func TestLegacyForeignKeyMetadataQueryUsesForeignKeyCatalogOnly(t *testing.T) {
-	require.NotContains(t, strings.ToLower(legacyForeignKeyTableDefinitionsSQL), "rel_createsql")
-	require.NotContains(t, strings.ToLower(legacyForeignKeyTableDefinitionsSQL), "mo_tables")
+	for _, query := range []string{legacyForeignKeyTableDefinitionsSQL, legacyForeignKeyReferencedIndexDefinitionsSQL} {
+		require.NotContains(t, strings.ToLower(query), "rel_createsql")
+		require.NotContains(t, strings.ToLower(query), "mo_tables")
+	}
+	require.Contains(t, legacyForeignKeyReferencedIndexDefinitionsSQL, "referenced_index_name = ''")
 }
 
 func TestLegacyForeignKeyMetadataUpdatesPreserveOrderAndActions(t *testing.T) {
@@ -83,16 +93,39 @@ func TestLegacyForeignKeyMetadataUpdatesPreserveOrderAndActions(t *testing.T) {
 	require.Len(t, updates, 3)
 
 	for _, expected := range []string{
-		"constraint_id = 1, on_delete = 'NO_ACTION', on_update = 'NO_ACTION'",
+		"constraint_id = 1, on_delete = 'NO_ACTION', on_update = 'NO_ACTION', on_delete_origin = 'ACTION_ORIGIN_DEFAULT', on_update_origin = 'ACTION_ORIGIN_DEFAULT'",
 		"constraint_name = 'fk_default' AND column_name = 'b'",
-		"constraint_id = 2, on_delete = 'NO_ACTION', on_update = 'NO_ACTION'",
+		"constraint_id = 2, on_delete = 'NO_ACTION', on_update = 'NO_ACTION', on_delete_origin = 'ACTION_ORIGIN_DEFAULT', on_update_origin = 'ACTION_ORIGIN_DEFAULT'",
 		"constraint_name = 'fk_default' AND column_name = 'a'",
-		"constraint_id = 1, on_delete = 'RESTRICT', on_update = 'RESTRICT'",
+		"constraint_id = 1, on_delete = 'RESTRICT', on_update = 'RESTRICT', on_delete_origin = 'ACTION_ORIGIN_LEGACY_AMBIGUOUS', on_update_origin = 'ACTION_ORIGIN_LEGACY_AMBIGUOUS'",
 		"constraint_name = 'fk_restrict' AND column_name = 'a'",
 		"db_name = 'db''one'",
 	} {
 		require.Contains(t, strings.Join(updates, "\n"), expected)
 	}
+}
+
+func TestLegacyForeignKeyReferencedIndexNameSelectsExactPrimaryKey(t *testing.T) {
+	var queries []string
+	txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+		queries = append(queries, sql)
+		return newLegacyForeignKeyIndexResult(t, [][]string{
+			{"PRIMARY", "PRIMARY", "1", "id"},
+			{"uq_parent_id", "UNIQUE", "1", "id"},
+			{"uq_parent_compound", "UNIQUE", "1", "id"},
+			{"uq_parent_compound", "UNIQUE", "2", "code"},
+		}), nil
+	})
+	name, err := getLegacyForeignKeyReferencedIndexName(9, txnExecutor, legacyForeignKeyReferencedKey{
+		database: "db",
+		table:    "parent",
+		columns:  []string{"id"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "PRIMARY", name)
+	require.Len(t, queries, 1)
+	require.Contains(t, queries[0], "tbl.reldatabase = 'db'")
+	require.Contains(t, queries[0], "ORDER BY CASE WHEN idx.type = 'PRIMARY' THEN 0 ELSE 1 END")
 }
 
 func TestVersionHandleMetadata(t *testing.T) {
@@ -180,7 +213,7 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 		if err := Handler.HandleTenantUpgrade(context.Background(), 9, txnExecutor); err != nil {
 			t.Fatalf("tenant upgrade: %v", err)
 		}
-		if len(executed) != 1 || executed[0] != legacyForeignKeyTableDefinitionsSQL {
+		if len(executed) == 0 || executed[len(executed)-1] != legacyForeignKeyReferencedIndexDefinitionsSQL {
 			t.Fatalf("unexpected SQL: %v", executed)
 		}
 		if err := Handler.HandleClusterUpgrade(context.Background(), txnExecutor); err != nil {
@@ -219,6 +252,7 @@ func TestLegacyForeignKeyMetadataUpgradeReadsAndUpdatesDefinitions(t *testing.T)
 	if err := upgradeLegacyForeignKeyMetadata(context.Background(), 9, txnExecutor); err != nil {
 		t.Fatalf("upgrade legacy foreign-key metadata: %v", err)
 	}
+	updates = legacyForeignKeyMigrationUpdatesForAssertion(updates)
 	if len(updates) != 2 {
 		t.Fatalf("expected two metadata updates, got %d: %v", len(updates), updates)
 	}
@@ -227,6 +261,39 @@ func TestLegacyForeignKeyMetadataUpgradeReadsAndUpdatesDefinitions(t *testing.T)
 			t.Fatalf("unexpected update: %s", update)
 		}
 	}
+}
+
+func TestLegacyForeignKeyMetadataUpgradeBackfillsReferencedIndexForNumberedLegacyForeignKey(t *testing.T) {
+	definition := legacyForeignKeyTableDefinition{
+		database: "db",
+		table:    "child",
+		foreignKeys: []legacyForeignKeyCatalogRow{{
+			constraintName: "fk_child_parent", columnName: "parent_id", referDBName: "db", referTableName: "parent", referColumnName: "id", onDelete: "RESTRICT", onUpdate: "RESTRICT",
+		}},
+	}
+	var updates []string
+	txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+		switch sql {
+		case legacyForeignKeyTableDefinitionsSQL:
+			// constraint_id was assigned by an earlier upgrade; it must not be
+			// required to backfill the referenced key.
+			return executor.Result{}, nil
+		case legacyForeignKeyReferencedIndexDefinitionsSQL:
+			return newLegacyForeignKeyDefinitionResultForDefinitions(t, []legacyForeignKeyTableDefinition{definition}), nil
+		case "SHOW CREATE TABLE `db`.`child`":
+			return newShowCreateTableResult(t, "child", "create table child (parent_id int, constraint fk_child_parent foreign key (parent_id) references parent (id))"), nil
+		}
+		if strings.HasPrefix(sql, "SELECT idx.name, idx.type") {
+			return newLegacyForeignKeyIndexResult(t, [][]string{{"PRIMARY", "PRIMARY", "1", "id"}}), nil
+		}
+		updates = append(updates, sql)
+		return executor.Result{}, nil
+	})
+
+	require.NoError(t, upgradeLegacyForeignKeyMetadata(context.Background(), 9, txnExecutor))
+	require.Equal(t, []string{
+		"UPDATE mo_catalog.mo_foreign_keys SET referenced_index_name = 'PRIMARY' WHERE db_name = 'db' AND table_name = 'child' AND constraint_name = 'fk_child_parent'",
+	}, updates)
 }
 
 func TestLegacyForeignKeyMetadataUpgradeBackfillsAlterAndUnnamedForeignKeys(t *testing.T) {
@@ -267,7 +334,7 @@ func TestLegacyForeignKeyMetadataUpgradeBackfillsAlterAndUnnamedForeignKeys(t *t
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'CASCADE', on_update = 'SET_NULL' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'alter_child' AND constraint_name = 'fk_added_by_alter' AND column_name = 'b'",
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 2, on_delete = 'CASCADE', on_update = 'SET_NULL' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'alter_child' AND constraint_name = 'fk_added_by_alter' AND column_name = 'a'",
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'RESTRICT', on_update = 'RESTRICT' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'unnamed_child' AND constraint_name = 'catalog_generated_name' AND column_name = 'parent_id'",
-	}, updates)
+	}, legacyForeignKeyMigrationUpdatesForAssertion(updates))
 }
 
 func TestLegacyForeignKeyMetadataUpdatesRejectInvalidDefinitions(t *testing.T) {
@@ -300,7 +367,7 @@ func TestLegacyForeignKeyMetadataUpdatesBackfillAlterTableForeignKey(t *testing.
 	require.Equal(t, []string{
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'CASCADE', on_update = 'SET_NULL' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'fk_added_by_alter' AND column_name = 'b'",
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 2, on_delete = 'CASCADE', on_update = 'SET_NULL' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'fk_added_by_alter' AND column_name = 'a'",
-	}, updates)
+	}, legacyForeignKeyMigrationUpdatesForAssertion(updates))
 }
 
 func TestLegacyForeignKeyMetadataUpdatesPreservesRestrictForAlterFallback(t *testing.T) {
@@ -314,7 +381,7 @@ func TestLegacyForeignKeyMetadataUpdatesPreservesRestrictForAlterFallback(t *tes
 	require.NoError(t, err)
 	require.Equal(t, []string{
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'RESTRICT', on_update = 'RESTRICT' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'fk_added_by_alter' AND column_name = 'parent_id'",
-	}, updates)
+	}, legacyForeignKeyMigrationUpdatesForAssertion(updates))
 }
 
 func TestLegacyForeignKeyMetadataUpdatesRejectInconsistentCatalogActions(t *testing.T) {
@@ -340,7 +407,7 @@ func TestLegacyForeignKeyMetadataUpdatesDoNotMatchReusedConstraintName(t *testin
 	require.NoError(t, err)
 	require.Equal(t, []string{
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'CASCADE', on_update = 'SET_NULL' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'fk_reused' AND column_name = 'b'",
-	}, updates)
+	}, legacyForeignKeyMigrationUpdatesForAssertion(updates))
 }
 
 func TestLegacyForeignKeyMetadataUpdatesEscapeCatalogIdentifiers(t *testing.T) {
@@ -364,7 +431,7 @@ func TestLegacyForeignKeyMetadataUpdatesEscapeCatalogIdentifiers(t *testing.T) {
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'CASCADE', on_update = 'SET_NULL' " +
 			"WHERE constraint_id = 0 AND db_name = 'db\\\\name' AND table_name = 'child\\\\name' " +
 			"AND constraint_name = 'fk\\\\'' OR 1=1 -- ' AND column_name = 'child\\\\column'",
-	}, updates)
+	}, legacyForeignKeyMigrationUpdatesForAssertion(updates))
 }
 
 func TestLegacyForeignKeyMetadataUpdatesEscapeTrailingBackslashIdentifiers(t *testing.T) {
@@ -388,7 +455,7 @@ func TestLegacyForeignKeyMetadataUpdatesEscapeTrailingBackslashIdentifiers(t *te
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'CASCADE', on_update = 'SET_NULL' " +
 			"WHERE constraint_id = 0 AND db_name = 'db\\\\' AND table_name = 'child\\\\' " +
 			"AND constraint_name = 'fk\\\\' AND column_name = 'child\\\\'",
-	}, updates)
+	}, legacyForeignKeyMigrationUpdatesForAssertion(updates))
 }
 
 func TestLegacyForeignKeyMetadataUpdatesRejectUnmatchedCompositeForeignKey(t *testing.T) {
@@ -414,7 +481,7 @@ func TestLegacyForeignKeyMetadataUpdatesBackfillUnnamedForeignKey(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, []string{
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'RESTRICT', on_update = 'RESTRICT' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'catalog-generated-name' AND column_name = 'parent_id'",
-	}, updates)
+	}, legacyForeignKeyMigrationUpdatesForAssertion(updates))
 }
 
 func TestLegacyForeignKeyMetadataUpdatesLeaveAmbiguousUnnamedForeignKeysToCatalog(t *testing.T) {
@@ -430,7 +497,7 @@ func TestLegacyForeignKeyMetadataUpdatesLeaveAmbiguousUnnamedForeignKeysToCatalo
 	require.Equal(t, []string{
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'CASCADE', on_update = 'CASCADE' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'catalog-fk-a' AND column_name = 'parent_id'",
 		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'RESTRICT', on_update = 'RESTRICT' WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'catalog-fk-b' AND column_name = 'parent_id'",
-	}, updates)
+	}, legacyForeignKeyMigrationUpdatesForAssertion(updates))
 }
 
 func TestLegacyForeignKeyMetadataUpdatesRejectAmbiguousUnnamedCompositeForeignKeys(t *testing.T) {
@@ -540,6 +607,42 @@ func newShowCreateTableResult(t *testing.T, tableName, createSQL string) executo
 		}
 	}
 	return result.GetResult()
+}
+
+func newLegacyForeignKeyIndexResult(t *testing.T, rows [][]string) executor.Result {
+	t.Helper()
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	result := executor.NewMemResult([]types.Type{
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	}, mp)
+	result.NewBatchWithRowCount(len(rows))
+	for column := 0; column < 4; column++ {
+		values := make([]string, len(rows))
+		for row := range rows {
+			values[row] = rows[row][column]
+		}
+		if err := executor.AppendStringRows(result, column, values); err != nil {
+			t.Fatalf("append legacy index column %d: %v", column, err)
+		}
+	}
+	return result.GetResult()
+}
+
+func legacyForeignKeyMigrationUpdatesForAssertion(updates []string) []string {
+	ret := make([]string, 0, len(updates))
+	for _, update := range updates {
+		if strings.HasPrefix(update, "SELECT ") {
+			continue
+		}
+		update = strings.ReplaceAll(update,
+			", on_delete_origin = 'ACTION_ORIGIN_LEGACY_AMBIGUOUS', on_update_origin = 'ACTION_ORIGIN_LEGACY_AMBIGUOUS'", "")
+		ret = append(ret, update)
+	}
+	return ret
 }
 
 func TestRetireKafkaSinkDaemonTasks(t *testing.T) {

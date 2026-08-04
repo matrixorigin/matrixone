@@ -410,25 +410,17 @@ var (
 		"fk.constraint_name AS CONSTRAINT_NAME, " +
 		"'def' AS UNIQUE_CONSTRAINT_CATALOG, " +
 		"fk.refer_db_name AS UNIQUE_CONSTRAINT_SCHEMA, " +
-		"idx.name AS UNIQUE_CONSTRAINT_NAME," +
+		"fk.referenced_index_name AS UNIQUE_CONSTRAINT_NAME," +
 		"'NONE' AS MATCH_OPTION, " +
 		"replace(fk.on_update, '_', ' ') AS UPDATE_RULE, " +
 		"replace(fk.on_delete, '_', ' ') AS DELETE_RULE, " +
 		"fk.table_name AS TABLE_NAME, " +
 		"fk.refer_table_name AS REFERENCED_TABLE_NAME " +
 		"FROM (" +
-		"SELECT db_name, table_name, constraint_name, refer_db_name, refer_table_name, on_update, on_delete, " +
-		"group_concat(concat(constraint_id, ':', length(refer_column_name), ':', refer_column_name) order by constraint_id) AS referenced_columns " +
+		"SELECT db_name, table_name, constraint_name, refer_db_name, refer_table_name, on_update, on_delete, referenced_index_name " +
 		"FROM mo_catalog.mo_foreign_keys " +
-		"GROUP BY db_name, table_name, constraint_name, refer_db_name, refer_table_name, on_update, on_delete" +
-		") fk " +
-		"JOIN mo_catalog.mo_tables tbl ON (tbl.reldatabase = fk.refer_db_name AND tbl.relname = fk.refer_table_name AND tbl.account_id = current_account_id()) " +
-		"JOIN (" +
-		"SELECT table_id, name, group_concat(concat(ordinal_position, ':', length(column_name), ':', column_name) order by ordinal_position) AS indexed_columns " +
-		"FROM mo_catalog.mo_indexes " +
-		"WHERE type = 'PRIMARY' OR type = 'UNIQUE' " +
-		"GROUP BY table_id, name" +
-		") idx ON (idx.table_id = tbl.rel_id AND idx.indexed_columns = fk.referenced_columns)"
+		"GROUP BY db_name, table_name, constraint_name, refer_db_name, refer_table_name, on_update, on_delete, referenced_index_name" +
+		") fk"
 
 	InformationSchemaEnginesDDL = "CREATE TABLE information_schema.ENGINES (" +
 		"ENGINE varchar(64)," +

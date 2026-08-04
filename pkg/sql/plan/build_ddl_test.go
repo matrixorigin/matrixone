@@ -1790,3 +1790,94 @@ func TestPartitionCreateSQLIsModeIndependentForAddPartition(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, defs, 1)
 }
+
+func TestCheckFkColsAreValidRecordsExactReferencedKey(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	ctx.SetContext(context.Background())
+	intType := plan.Type{Id: int32(types.T_int32)}
+	parent := &TableDef{
+		Name: "parent",
+		Cols: []*plan.ColDef{
+			{ColId: 1, Name: "id", Typ: intType},
+			{ColId: 2, Name: "code", Typ: intType},
+		},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}},
+		Indexes: []*plan.IndexDef{
+			{IndexName: "uq_parent_id", Unique: true, Parts: []string{"id"}},
+			{IndexName: "uq_parent_code", Unique: true, Parts: []string{"code"}},
+		},
+	}
+	newFK := func(columns ...string) *FkData {
+		return &FkData{
+			ParentTableName: "parent",
+			Cols:            &plan.FkColName{Cols: columns},
+			ColsReferred:    &plan.FkColName{Cols: columns},
+			Def:             &plan.ForeignKeyDef{},
+			ColTyps: map[int]*plan.Type{
+				0: &intType,
+			},
+		}
+	}
+
+	fk := newFK("id")
+	require.NoError(t, checkFkColsAreValid(ctx, fk, parent))
+	require.Equal(t, "PRIMARY", fk.Def.ReferencedIndexName)
+	require.Equal(t, []uint64{1}, fk.Def.ForeignCols)
+
+	composite := newFK("id", "code")
+	composite.ColTyps[1] = &intType
+	require.Error(t, checkFkColsAreValid(ctx, composite, parent), "a partial/mismatched key must not be accepted")
+
+	unique := newFK("code")
+	require.NoError(t, checkFkColsAreValid(ctx, unique, parent))
+	require.Equal(t, "uq_parent_code", unique.Def.ReferencedIndexName)
+}
+
+func TestForwardForeignKeyCatalogLifecycle(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	ctx.SetContext(context.Background())
+	ctx.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
+		if name == "foreign_key_checks" {
+			return int64(0), nil
+		}
+		return nil, moerr.NewInternalError(context.Background(), "unexpected variable")
+	}
+	intType := plan.Type{Id: int32(types.T_int32)}
+	child := &TableDef{
+		Name: "child",
+		Cols: []*plan.ColDef{{ColId: 1, Name: "parent_id", Typ: intType}},
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"create table child (parent_id int, constraint fk_child_parent foreign key (parent_id) references parent (id))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	var foreignKey *tree.ForeignKey
+	for _, def := range stmt.(*tree.CreateTable).Defs {
+		if foreignKey, _ = def.(*tree.ForeignKey); foreignKey != nil {
+			break
+		}
+	}
+	require.NotNil(t, foreignKey)
+
+	data, err := getForeignKeyData(ctx, "db", child, foreignKey)
+	require.NoError(t, err)
+	require.True(t, data.ForwardRefer)
+	require.NotEmpty(t, data.UpdateSql, "the child must persist its deferred FK catalog row")
+	require.Contains(t, data.UpdateSql, "'fk_child_parent'")
+	require.Contains(t, data.UpdateSql, "''", "the parent key is intentionally unresolved at child creation")
+
+	ctx.tables["child"] = child
+	parent := &TableDef{
+		Name: "parent",
+		Cols: []*plan.ColDef{{ColId: 2, Name: "id", Typ: intType}},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}},
+	}
+	resolved, err := buildFkDataOfForwardRefer(ctx, "fk_child_parent", []*FkReferDef{{
+		Db: "db", Tbl: "child", Col: "parent_id", ReferCol: "id", OnDelete: "NO_ACTION", OnUpdate: "NO_ACTION",
+	}}, &plan.CreateTable{Database: "db", TableDef: parent})
+	require.NoError(t, err)
+	require.Equal(t, "PRIMARY", resolved.Def.ReferencedIndexName)
+	require.Equal(t,
+		"update `mo_catalog`.`mo_foreign_keys` set referenced_index_name = 'PRIMARY' where db_name = 'db' and table_name = 'child' and constraint_name = 'fk_child_parent'",
+		getSqlForUpdateFkReferencedIndex("db", "child", "fk_child_parent", resolved.Def.ReferencedIndexName))
+}

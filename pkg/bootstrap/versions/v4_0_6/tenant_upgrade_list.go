@@ -26,8 +26,24 @@ import (
 var tenantUpgEntries = []versions.UpgradeEntry{
 	newMongoDBCatalogTable(mongodb.TableConnections, mongodb.ConnectionsDDL),
 	newMongoDBCatalogTable(mongodb.TableMappings, mongodb.MappingsDDL),
+	addForeignKeyMetadataColumn("referenced_index_name", "varchar(5000) not null default ''", "on_update"),
+	addForeignKeyMetadataColumn("on_delete_origin", "varchar(64) not null default 'ACTION_ORIGIN_LEGACY_AMBIGUOUS'", "referenced_index_name"),
+	addForeignKeyMetadataColumn("on_update_origin", "varchar(64) not null default 'ACTION_ORIGIN_LEGACY_AMBIGUOUS'", "on_delete_origin"),
 	upgradeInformationSchemaKeyColumnUsage(),
 	upgradeInformationSchemaReferentialConstraints(),
+}
+
+func addForeignKeyMetadataColumn(column, definition, after string) versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: catalog.MOForeignKeys,
+		UpgType:   versions.ADD_COLUMN,
+		UpgSql:    fmt.Sprintf("alter table %s.%s add column %s %s after %s", catalog.MO_CATALOG, catalog.MOForeignKeys, column, definition, after),
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			columnInfo, err := versions.CheckTableColumn(txn, accountID, catalog.MO_CATALOG, catalog.MOForeignKeys, column)
+			return columnInfo.IsExits, err
+		},
+	}
 }
 
 func newMongoDBCatalogTable(name, ddl string) versions.UpgradeEntry {

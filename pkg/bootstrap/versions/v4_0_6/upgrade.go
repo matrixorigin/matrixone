@@ -54,10 +54,6 @@ func (v *versionHandle) Prepare(_ context.Context, txn executor.TxnExecutor, _ b
 }
 
 func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
-	if err := upgradeLegacyForeignKeyMetadata(ctx, tenantID, txn); err != nil {
-		return err
-	}
-
 	for _, entry := range tenantUpgEntries {
 		start := time.Now()
 		if err := entry.Upgrade(txn, uint32(tenantID)); err != nil {
@@ -68,6 +64,9 @@ func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32,
 		getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade entry complete",
 			zap.String("upgrade entry", entry.String()), zap.Int64("time cost(ms)", time.Since(start).Milliseconds()), zap.String("toVersion", v.metadata.Version))
 	}
+	if err := upgradeLegacyForeignKeyMetadata(ctx, tenantID, txn); err != nil {
+		return err
+	}
 	getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade success", zap.Int32("tenantId", tenantID), zap.String("toVersion", v.metadata.Version))
 	return nil
 }
@@ -76,6 +75,17 @@ const legacyForeignKeyTableDefinitionsSQL = "SELECT fk.db_name, fk.table_name, "
 	"fk.constraint_name, fk.column_name, fk.refer_db_name, fk.refer_table_name, fk.refer_column_name, fk.on_delete, fk.on_update " +
 	"FROM mo_catalog.mo_foreign_keys fk " +
 	"WHERE fk.constraint_id = 0 " +
+	"ORDER BY fk.db_name, fk.table_name, fk.constraint_name, fk.column_name"
+
+// legacyForeignKeyReferencedIndexDefinitionsSQL intentionally has a broader
+// predicate than legacyForeignKeyTableDefinitionsSQL. Older upgrades may have
+// assigned constraint_id while leaving the referenced key absent, so every FK
+// whose new metadata column is empty must be reconciled with current catalog
+// state.
+const legacyForeignKeyReferencedIndexDefinitionsSQL = "SELECT fk.db_name, fk.table_name, " +
+	"fk.constraint_name, fk.column_name, fk.refer_db_name, fk.refer_table_name, fk.refer_column_name, fk.on_delete, fk.on_update " +
+	"FROM mo_catalog.mo_foreign_keys fk " +
+	"WHERE fk.referenced_index_name = '' " +
 	"ORDER BY fk.db_name, fk.table_name, fk.constraint_name, fk.column_name"
 
 type legacyForeignKeyTableDefinition struct {
@@ -105,15 +115,33 @@ type legacyForeignKeyCatalogConstraint struct {
 // catalog identifies the rows and actions to migrate, while SHOW CREATE TABLE
 // supplies the current foreign-key declaration name and column order.
 func upgradeLegacyForeignKeyMetadata(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
-	definitions, err := getLegacyForeignKeyTableDefinitions(tenantID, txn)
+	ordinalDefinitions, err := getLegacyForeignKeyTableDefinitions(legacyForeignKeyTableDefinitionsSQL, tenantID, txn)
 	if err != nil {
 		return err
 	}
-	if len(definitions) == 0 {
-		return nil
+	referencedIndexDefinitions, err := getLegacyForeignKeyTableDefinitions(legacyForeignKeyReferencedIndexDefinitionsSQL, tenantID, txn)
+	if err != nil {
+		return err
 	}
-	for _, definition := range definitions {
+
+	showCreateByTable := make(map[string]string)
+	getShowCreate := func(definition legacyForeignKeyTableDefinition) (string, error) {
+		key := definition.database + "\x00" + definition.table
+		if createSQL, ok := showCreateByTable[key]; ok {
+			return createSQL, nil
+		}
 		createSQL, err := getLegacyForeignKeyShowCreateSQL(tenantID, txn, definition)
+		if err != nil {
+			return "", err
+		}
+		showCreateByTable[key] = createSQL
+		return createSQL, nil
+	}
+
+	// constraint_id and action origins have a legacy zero-value sentinel, so
+	// only those rows need the ordinal/action migration.
+	for _, definition := range ordinalDefinitions {
+		createSQL, err := getShowCreate(definition)
 		if err != nil {
 			return err
 		}
@@ -129,11 +157,184 @@ func upgradeLegacyForeignKeyMetadata(ctx context.Context, tenantID int32, txn ex
 			res.Close()
 		}
 	}
+
+	// referenced_index_name is independent of the legacy ordinal sentinel.
+	// Backfill it for both zero-ordinal rows and already-numbered historical
+	// rows, without reinterpreting their action metadata.
+	for _, definition := range referencedIndexDefinitions {
+		createSQL, err := getShowCreate(definition)
+		if err != nil {
+			return err
+		}
+		referencedKeys, err := legacyForeignKeyReferencedKeys(definition, createSQL)
+		if err != nil {
+			return err
+		}
+		for constraintName, key := range referencedKeys {
+			indexName, err := getLegacyForeignKeyReferencedIndexName(tenantID, txn, key)
+			if err != nil {
+				return err
+			}
+			if indexName == "" {
+				continue
+			}
+			res, err := txn.Exec(legacyForeignKeyReferencedIndexUpdateSQL(definition, constraintName, indexName), executor.StatementOption{}.WithAccountID(uint32(tenantID)))
+			if err != nil {
+				return err
+			}
+			res.Close()
+		}
+	}
 	return nil
 }
 
-func getLegacyForeignKeyTableDefinitions(tenantID int32, txn executor.TxnExecutor) ([]legacyForeignKeyTableDefinition, error) {
-	res, err := txn.Exec(legacyForeignKeyTableDefinitionsSQL, executor.StatementOption{}.WithAccountID(uint32(tenantID)))
+type legacyForeignKeyReferencedKey struct {
+	database string
+	table    string
+	columns  []string
+}
+
+// legacyForeignKeyReferencedKeys reconciles the current SHOW CREATE output
+// with catalog constraints. It never reads rel_createsql: ALTER-added FKs are
+// deliberately matched by their current child/reference column pairs.
+func legacyForeignKeyReferencedKeys(definition legacyForeignKeyTableDefinition, createSQL string) (map[string]legacyForeignKeyReferencedKey, error) {
+	statements, err := mysql.Parse(context.Background(), createSQL, 1)
+	if err != nil {
+		return nil, moerr.NewInternalErrorNoCtxf("parse legacy foreign-key table %s.%s: %v", definition.database, definition.table, err)
+	}
+	defer func() {
+		for _, statement := range statements {
+			statement.Free()
+		}
+	}()
+	if len(statements) != 1 {
+		return nil, moerr.NewInternalErrorNoCtxf("legacy foreign-key table %s.%s has %d statements", definition.database, definition.table, len(statements))
+	}
+	createTable, ok := statements[0].(*tree.CreateTable)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtxf("legacy foreign-key table %s.%s does not have a CREATE TABLE definition", definition.database, definition.table)
+	}
+
+	constraints := legacyForeignKeyCatalogConstraints(definition.foreignKeys)
+	matched := make(map[string]bool)
+	keys := make(map[string]legacyForeignKeyReferencedKey)
+	for _, tableDef := range createTable.Defs {
+		foreignKey, ok := tableDef.(*tree.ForeignKey)
+		if !ok || foreignKey.Refer == nil {
+			continue
+		}
+		matchedIndex := -1
+		for i, constraint := range constraints {
+			if matched[constraint.name] || !sameLegacyForeignKeyColumns(definition.database, foreignKey, constraint.rows) {
+				continue
+			}
+			if foreignKey.ConstraintSymbol != "" && foreignKey.ConstraintSymbol != constraint.name {
+				continue
+			}
+			if matchedIndex >= 0 {
+				matchedIndex = -1
+				break
+			}
+			matchedIndex = i
+		}
+		if matchedIndex < 0 {
+			continue
+		}
+		constraint := constraints[matchedIndex]
+		matched[constraint.name] = true
+		database := definition.database
+		if foreignKey.Refer.TableName.SchemaName != "" {
+			database = string(foreignKey.Refer.TableName.SchemaName)
+		}
+		columns := make([]string, len(foreignKey.Refer.KeyParts))
+		for i, keyPart := range foreignKey.Refer.KeyParts {
+			columns[i] = keyPart.ColName.ColName()
+		}
+		keys[constraint.name] = legacyForeignKeyReferencedKey{
+			database: database,
+			table:    string(foreignKey.Refer.TableName.ObjectName),
+			columns:  columns,
+		}
+	}
+	for _, constraint := range constraints {
+		if matched[constraint.name] || len(constraint.rows) != 1 {
+			continue
+		}
+		row := constraint.rows[0]
+		database := row.referDBName
+		if database == "" {
+			database = definition.database
+		}
+		keys[constraint.name] = legacyForeignKeyReferencedKey{database: database, table: row.referTableName, columns: []string{row.referColumnName}}
+	}
+	return keys, nil
+}
+
+func getLegacyForeignKeyReferencedIndexName(tenantID int32, txn executor.TxnExecutor, key legacyForeignKeyReferencedKey) (string, error) {
+	query := fmt.Sprintf(
+		"SELECT idx.name, idx.type, idx.ordinal_position, idx.column_name FROM mo_catalog.mo_indexes idx "+
+			"JOIN mo_catalog.mo_tables tbl ON idx.table_id = tbl.rel_id "+
+			"WHERE tbl.account_id = %d AND tbl.reldatabase = %s AND tbl.relname = %s AND (idx.type = 'PRIMARY' OR idx.type = 'UNIQUE') "+
+			"ORDER BY CASE WHEN idx.type = 'PRIMARY' THEN 0 ELSE 1 END, idx.name, idx.ordinal_position",
+		tenantID, sqlquote.String(key.database), sqlquote.String(key.table),
+	)
+	res, err := txn.Exec(query, executor.StatementOption{}.WithAccountID(uint32(tenantID)))
+	if err != nil {
+		return "", err
+	}
+	defer res.Close()
+	type candidate struct {
+		name    string
+		primary bool
+		columns []string
+	}
+	candidates := make(map[string]*candidate)
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		for i := 0; i < rows; i++ {
+			name := cols[0].GetStringAt(i)
+			candidateKey := cols[1].GetStringAt(i) + "\x00" + name
+			entry := candidates[candidateKey]
+			if entry == nil {
+				entry = &candidate{name: name, primary: strings.EqualFold(cols[1].GetStringAt(i), "PRIMARY")}
+				candidates[candidateKey] = entry
+			}
+			entry.columns = append(entry.columns, cols[3].GetStringAt(i))
+		}
+		return true
+	})
+	ordered := make([]*candidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		ordered = append(ordered, candidate)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].primary != ordered[j].primary {
+			return ordered[i].primary
+		}
+		return ordered[i].name < ordered[j].name
+	})
+	for _, candidate := range ordered {
+		if len(candidate.columns) != len(key.columns) {
+			continue
+		}
+		if strings.Join(candidate.columns, "\x00") == strings.Join(key.columns, "\x00") {
+			return candidate.name, nil
+		}
+	}
+	// Legacy MatrixOne accepted some FK shapes that do not name an exact
+	// PRIMARY/UNIQUE key. Leave the value empty rather than inventing a wrong
+	// UNIQUE_CONSTRAINT_NAME; new FK creation rejects those shapes.
+	return "", nil
+}
+
+func legacyForeignKeyReferencedIndexUpdateSQL(definition legacyForeignKeyTableDefinition, constraintName, indexName string) string {
+	return fmt.Sprintf(
+		"UPDATE mo_catalog.mo_foreign_keys SET referenced_index_name = %s WHERE db_name = %s AND table_name = %s AND constraint_name = %s",
+		sqlquote.String(indexName), sqlquote.String(definition.database), sqlquote.String(definition.table), sqlquote.String(constraintName),
+	)
+}
+
+func getLegacyForeignKeyTableDefinitions(query string, tenantID int32, txn executor.TxnExecutor) ([]legacyForeignKeyTableDefinition, error) {
+	res, err := txn.Exec(query, executor.StatementOption{}.WithAccountID(uint32(tenantID)))
 	if err != nil {
 		return nil, err
 	}
@@ -407,16 +608,25 @@ func legacyForeignKeyUpdateSQL(
 	onDelete, onUpdate string,
 ) string {
 	return fmt.Sprintf(
-		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = %d, on_delete = %s, on_update = %s "+
+		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = %d, on_delete = %s, on_update = %s, on_delete_origin = %s, on_update_origin = %s "+
 			"WHERE constraint_id = 0 AND db_name = %s AND table_name = %s AND constraint_name = %s AND column_name = %s",
 		ordinal,
 		sqlquote.String(onDelete),
 		sqlquote.String(onUpdate),
+		sqlquote.String(legacyCatalogReferenceActionOrigin(onDelete)),
+		sqlquote.String(legacyCatalogReferenceActionOrigin(onUpdate)),
 		sqlquote.String(definition.database),
 		sqlquote.String(definition.table),
 		sqlquote.String(constraintName),
 		sqlquote.String(columnName),
 	)
+}
+
+func legacyCatalogReferenceActionOrigin(action string) string {
+	if strings.EqualFold(strings.TrimSpace(action), "NO_ACTION") {
+		return "ACTION_ORIGIN_DEFAULT"
+	}
+	return "ACTION_ORIGIN_LEGACY_AMBIGUOUS"
 }
 
 // The catalog is the authoritative action source. SHOW CREATE TABLE is used

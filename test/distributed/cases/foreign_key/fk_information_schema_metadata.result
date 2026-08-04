@@ -22,6 +22,15 @@ order by constraint_name;
 fk_c_p  ¦  PRIMARY  ¦  NO ACTION  ¦  NO ACTION  𝄀
 fk_c_p_compound  ¦  uq_p_compound  ¦  NO ACTION  ¦  NO ACTION  𝄀
 fk_c_p_restrict  ¦  PRIMARY  ¦  RESTRICT  ¦  RESTRICT
+select constraint_name, referenced_index_name, on_delete_origin, on_update_origin
+from mo_catalog.mo_foreign_keys
+where db_name = database()
+group by constraint_name, referenced_index_name, on_delete_origin, on_update_origin
+order by constraint_name;
+➤ constraint_name[12,-1,0]  ¦  referenced_index_name[12,-1,0]  ¦  on_delete_origin[12,-1,0]  ¦  on_update_origin[12,-1,0]  𝄀
+fk_c_p  ¦  PRIMARY  ¦  ACTION_ORIGIN_DEFAULT  ¦  ACTION_ORIGIN_DEFAULT  𝄀
+fk_c_p_compound  ¦  uq_p_compound  ¦  ACTION_ORIGIN_DEFAULT  ¦  ACTION_ORIGIN_DEFAULT  𝄀
+fk_c_p_restrict  ¦  PRIMARY  ¦  ACTION_ORIGIN_EXPLICIT  ¦  ACTION_ORIGIN_EXPLICIT
 select count(*) as referential_constraint_count
 from information_schema.referential_constraints
 where constraint_schema = database();

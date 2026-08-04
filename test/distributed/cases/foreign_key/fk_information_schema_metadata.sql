@@ -22,6 +22,12 @@ from information_schema.referential_constraints
 where constraint_schema = database()
 order by constraint_name;
 
+select constraint_name, referenced_index_name, on_delete_origin, on_update_origin
+from mo_catalog.mo_foreign_keys
+where db_name = database()
+group by constraint_name, referenced_index_name, on_delete_origin, on_update_origin
+order by constraint_name;
+
 select count(*) as referential_constraint_count
 from information_schema.referential_constraints
 where constraint_schema = database();

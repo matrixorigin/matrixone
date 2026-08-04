@@ -109,20 +109,28 @@ func TestGetSqlForAddFkRecordsCompositeColumnOrder(t *testing.T) {
 func TestGetSqlForAddFkStoresDefaultActionsAsNoAction(t *testing.T) {
 	fkData := &FkData{
 		Def: &plan.ForeignKeyDef{
-			Name:     "fk_default_action",
-			OnDelete: plan.ForeignKeyDef_RESTRICT,
-			OnUpdate: plan.ForeignKeyDef_RESTRICT,
+			Name:           "fk_default_action",
+			OnDelete:       plan.ForeignKeyDef_RESTRICT,
+			OnUpdate:       plan.ForeignKeyDef_RESTRICT,
+			OnDeleteOrigin: plan.ForeignKeyDef_ACTION_ORIGIN_DEFAULT,
+			OnUpdateOrigin: plan.ForeignKeyDef_ACTION_ORIGIN_DEFAULT,
 		},
 		Cols:            &plan.FkColName{Cols: []string{"child_id"}},
 		ColsReferred:    &plan.FkColName{Cols: []string{"parent_id"}},
 		ParentDbName:    "parent_db",
 		ParentTableName: "parent",
-		DefaultOnDelete: true,
-		DefaultOnUpdate: true,
 	}
 
 	sql := getSqlForAddFk("child_db", "child", fkData)
 	require.Contains(t, sql, "'NO_ACTION','NO_ACTION'")
+	require.Contains(t, sql, "'ACTION_ORIGIN_DEFAULT','ACTION_ORIGIN_DEFAULT'")
+}
+
+func TestGetSqlForUpdateFkReferencedIndexEscapesCatalogValues(t *testing.T) {
+	require.Equal(t,
+		"update `mo_catalog`.`mo_foreign_keys` set referenced_index_name = 'uk\\'parent' where db_name = 'child\\'db' and table_name = 'child\\\\table' and constraint_name = 'fk\\'child'",
+		getSqlForUpdateFkReferencedIndex("child'db", `child\table`, "fk'child", "uk'parent"),
+	)
 }
 
 func TestGetSqlForCheckHasDBRefersToEscapesStringLiterals(t *testing.T) {
@@ -167,9 +175,9 @@ func TestGetSqlForAddFkEscapesCatalogValues(t *testing.T) {
 	}
 
 	require.Equal(t,
-		"insert into `mo_catalog`.`mo_foreign_keys`   values "+
-			"('fk\\\\name\\'one','1','child\\'db\\\\part','0','child\\\\table\\'name','0','child\\\\col\\'name','0','parent\\\\db\\'name','0','parent\\\\table\\'name','0','parent\\\\col\\'name','0','CASCADE','RESTRICT'),"+
-			"('fk\\\\name\\'one','2','child\\'db\\\\part','0','child\\\\table\\'name','0','child_col_two','0','parent\\\\db\\'name','0','parent\\\\table\\'name','0','parent_col_two','0','CASCADE','RESTRICT')",
+		"insert into `mo_catalog`.`mo_foreign_keys` (constraint_name, constraint_id, db_name, db_id, table_name, table_id, column_name, column_id, refer_db_name, refer_db_id, refer_table_name, refer_table_id, refer_column_name, refer_column_id, on_delete, on_update, referenced_index_name, on_delete_origin, on_update_origin) values "+
+			"('fk\\\\name\\'one','1','child\\'db\\\\part','0','child\\\\table\\'name','0','child\\\\col\\'name','0','parent\\\\db\\'name','0','parent\\\\table\\'name','0','parent\\\\col\\'name','0','CASCADE','RESTRICT','','ACTION_ORIGIN_EXPLICIT','ACTION_ORIGIN_EXPLICIT'),"+
+			"('fk\\\\name\\'one','2','child\\'db\\\\part','0','child\\\\table\\'name','0','child_col_two','0','parent\\\\db\\'name','0','parent\\\\table\\'name','0','parent_col_two','0','CASCADE','RESTRICT','','ACTION_ORIGIN_EXPLICIT','ACTION_ORIGIN_EXPLICIT')",
 		getSqlForAddFk(`child'db\part`, `child\table'name`, fk),
 	)
 }
