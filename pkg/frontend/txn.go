@@ -648,6 +648,14 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		err, hasRecovered = ExecuteFuncWithRecover(func() error {
 			return th.txnOp.Commit(ctx2)
 		})
+		// CommitTS is assigned by the transaction operator while Commit runs.
+		// Capture the final value before any failure path invalidates txnOp so
+		// the next session transaction cannot start before this commit. After a
+		// panic, retain the pre-commit value because the operator may have been
+		// left in a state that is unsafe to inspect.
+		if !hasRecovered {
+			commitTs = th.txnOp.Txn().CommitTS
+		}
 		if err != nil {
 			err = moerr.AttachCause(ctx2, err)
 			commitResultUnknown = isTxnCommitResultUnknown(err)
