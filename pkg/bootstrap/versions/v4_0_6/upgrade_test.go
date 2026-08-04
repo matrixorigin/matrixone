@@ -70,7 +70,7 @@ func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
 	require.Contains(t, strings.ToLower(referentialConstraints.PreSql), "drop view if exists information_schema.referential_constraints")
 }
 
-func TestLegacyForeignKeyMetadataQueryUsesForeignKeyCatalogOnly(t *testing.T) {
+func TestLegacyForeignKeyMetadataCatalogQueriesUseForeignKeyCatalogOnly(t *testing.T) {
 	for _, query := range []string{legacyForeignKeyTableDefinitionsSQL, legacyForeignKeyReferencedIndexDefinitionsSQL} {
 		require.NotContains(t, strings.ToLower(query), "rel_createsql")
 		require.NotContains(t, strings.ToLower(query), "mo_tables")
@@ -79,16 +79,18 @@ func TestLegacyForeignKeyMetadataQueryUsesForeignKeyCatalogOnly(t *testing.T) {
 }
 
 func TestLegacyForeignKeyMetadataUpdatesPreserveOrderAndActions(t *testing.T) {
-	updates, err := legacyForeignKeyMetadataUpdates(legacyForeignKeyTableDefinition{
+	updates, err := legacyForeignKeyMetadataUpdatesWithHistoricalDefinition(legacyForeignKeyTableDefinition{
 		database: "db'one",
 		table:    "child",
 		foreignKeys: []legacyForeignKeyCatalogRow{
-			{constraintName: "fk_default", columnName: "a", referDBName: "db'one", referTableName: "parent", referColumnName: "a", onDelete: "NO_ACTION", onUpdate: "NO_ACTION"},
-			{constraintName: "fk_default", columnName: "b", referDBName: "db'one", referTableName: "parent", referColumnName: "b", onDelete: "NO_ACTION", onUpdate: "NO_ACTION"},
+			{constraintName: "fk_default", columnName: "a", referDBName: "db'one", referTableName: "parent", referColumnName: "a", onDelete: "RESTRICT", onUpdate: "RESTRICT"},
+			{constraintName: "fk_default", columnName: "b", referDBName: "db'one", referTableName: "parent", referColumnName: "b", onDelete: "RESTRICT", onUpdate: "RESTRICT"},
 			{constraintName: "fk_restrict", columnName: "a", referDBName: "db'one", referTableName: "parent", referColumnName: "a", onDelete: "RESTRICT", onUpdate: "RESTRICT"},
 		},
 	}, "create table child (a int, b int, constraint fk_default foreign key (b, a) references parent (b, a), "+
-		"constraint fk_restrict foreign key (a) references parent (a) on delete restrict on update restrict)")
+		"constraint fk_restrict foreign key (a) references parent (a) on delete restrict on update restrict)",
+		"create table child (a int, b int, constraint fk_default foreign key (b, a) references parent (b, a), "+
+			"constraint fk_restrict foreign key (a) references parent (a) on delete restrict on update restrict)")
 	require.NoError(t, err)
 	require.Len(t, updates, 3)
 
@@ -97,12 +99,50 @@ func TestLegacyForeignKeyMetadataUpdatesPreserveOrderAndActions(t *testing.T) {
 		"constraint_name = 'fk_default' AND column_name = 'b'",
 		"constraint_id = 2, on_delete = 'NO_ACTION', on_update = 'NO_ACTION', on_delete_origin = 'ACTION_ORIGIN_DEFAULT', on_update_origin = 'ACTION_ORIGIN_DEFAULT'",
 		"constraint_name = 'fk_default' AND column_name = 'a'",
-		"constraint_id = 1, on_delete = 'RESTRICT', on_update = 'RESTRICT', on_delete_origin = 'ACTION_ORIGIN_LEGACY_AMBIGUOUS', on_update_origin = 'ACTION_ORIGIN_LEGACY_AMBIGUOUS'",
+		"constraint_id = 1, on_delete = 'RESTRICT', on_update = 'RESTRICT', on_delete_origin = 'ACTION_ORIGIN_EXPLICIT', on_update_origin = 'ACTION_ORIGIN_EXPLICIT'",
 		"constraint_name = 'fk_restrict' AND column_name = 'a'",
 		"db_name = 'db''one'",
 	} {
 		require.Contains(t, strings.Join(updates, "\n"), expected)
 	}
+}
+
+func TestLegacyForeignKeyMetadataUpdatesIgnoreStaleHistoricalActions(t *testing.T) {
+	updates, err := legacyForeignKeyMetadataUpdatesWithHistoricalDefinition(legacyForeignKeyTableDefinition{
+		database: "db",
+		table:    "child",
+		foreignKeys: []legacyForeignKeyCatalogRow{{
+			constraintName: "fk_recreated", columnName: "parent_id", referDBName: "db", referTableName: "parent", referColumnName: "id", onDelete: "CASCADE", onUpdate: "SET_NULL",
+		}},
+	},
+		"create table child (parent_id int, constraint fk_recreated foreign key (parent_id) references parent (id) on delete cascade on update set null)",
+		"create table child (parent_id int, constraint fk_recreated foreign key (parent_id) references parent (id) on delete restrict on update restrict)",
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'CASCADE', on_update = 'SET_NULL', " +
+			"on_delete_origin = 'ACTION_ORIGIN_EXPLICIT', on_update_origin = 'ACTION_ORIGIN_EXPLICIT' " +
+			"WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'fk_recreated' AND column_name = 'parent_id'",
+	}, updates)
+}
+
+func TestLegacyForeignKeyMetadataUpdatesKeepAlterRestrictAmbiguous(t *testing.T) {
+	updates, err := legacyForeignKeyMetadataUpdatesWithHistoricalDefinition(legacyForeignKeyTableDefinition{
+		database: "db",
+		table:    "child",
+		foreignKeys: []legacyForeignKeyCatalogRow{{
+			constraintName: "fk_added_by_alter", columnName: "parent_id", referDBName: "db", referTableName: "parent", referColumnName: "id", onDelete: "RESTRICT", onUpdate: "RESTRICT",
+		}},
+	},
+		"create table child (parent_id int, constraint fk_added_by_alter foreign key (parent_id) references parent (id) on delete restrict on update restrict)",
+		"create table child (parent_id int)",
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"UPDATE mo_catalog.mo_foreign_keys SET constraint_id = 1, on_delete = 'RESTRICT', on_update = 'RESTRICT', " +
+			"on_delete_origin = 'ACTION_ORIGIN_LEGACY_AMBIGUOUS', on_update_origin = 'ACTION_ORIGIN_LEGACY_AMBIGUOUS' " +
+			"WHERE constraint_id = 0 AND db_name = 'db' AND table_name = 'child' AND constraint_name = 'fk_added_by_alter' AND column_name = 'parent_id'",
+	}, updates)
 }
 
 func TestLegacyForeignKeyReferencedIndexNameSelectsExactPrimaryKey(t *testing.T) {
@@ -261,6 +301,50 @@ func TestLegacyForeignKeyMetadataUpgradeReadsAndUpdatesDefinitions(t *testing.T)
 			t.Fatalf("unexpected update: %s", update)
 		}
 	}
+}
+
+func TestLegacyForeignKeyMetadataUpgradeUsesHistoricalCreateActions(t *testing.T) {
+	definition := legacyForeignKeyTableDefinition{
+		database: "db",
+		table:    "child",
+		foreignKeys: []legacyForeignKeyCatalogRow{
+			{constraintName: "fk_default", columnName: "default_parent_id", referDBName: "db", referTableName: "parent", referColumnName: "id", onDelete: "RESTRICT", onUpdate: "RESTRICT"},
+			{constraintName: "fk_restrict", columnName: "restrict_parent_id", referDBName: "db", referTableName: "parent", referColumnName: "id", onDelete: "RESTRICT", onUpdate: "RESTRICT"},
+		},
+	}
+	showCreateSQL := "create table child (default_parent_id int, restrict_parent_id int, " +
+		"constraint fk_default foreign key (default_parent_id) references parent (id) on delete restrict on update restrict, " +
+		"constraint fk_restrict foreign key (restrict_parent_id) references parent (id) on delete restrict on update restrict)"
+	historicalCreateSQL := "create table child (default_parent_id int, restrict_parent_id int, " +
+		"constraint fk_default foreign key (default_parent_id) references parent (id), " +
+		"constraint fk_restrict foreign key (restrict_parent_id) references parent (id) on delete restrict on update restrict)"
+	var updates []string
+	txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+		switch {
+		case sql == legacyForeignKeyTableDefinitionsSQL:
+			return newLegacyForeignKeyDefinitionResultForDefinitions(t, []legacyForeignKeyTableDefinition{definition}), nil
+		case sql == legacyForeignKeyReferencedIndexDefinitionsSQL:
+			return executor.Result{}, nil
+		case sql == "SHOW CREATE TABLE `db`.`child`":
+			return newShowCreateTableResult(t, "child", showCreateSQL), nil
+		case strings.HasPrefix(sql, "SELECT rel_createsql FROM mo_catalog.mo_tables"):
+			return newHistoricalCreateSQLResult(t, historicalCreateSQL), nil
+		default:
+			updates = append(updates, sql)
+			return executor.Result{}, nil
+		}
+	})
+
+	require.NoError(t, upgradeLegacyForeignKeyMetadata(context.Background(), 9, txnExecutor))
+	require.Len(t, updates, 2)
+	require.Contains(t, strings.Join(updates, "\n"),
+		"constraint_name = 'fk_default' AND column_name = 'default_parent_id'")
+	require.Contains(t, strings.Join(updates, "\n"),
+		"on_delete = 'NO_ACTION', on_update = 'NO_ACTION', on_delete_origin = 'ACTION_ORIGIN_DEFAULT', on_update_origin = 'ACTION_ORIGIN_DEFAULT'")
+	require.Contains(t, strings.Join(updates, "\n"),
+		"constraint_name = 'fk_restrict' AND column_name = 'restrict_parent_id'")
+	require.Contains(t, strings.Join(updates, "\n"),
+		"on_delete = 'RESTRICT', on_update = 'RESTRICT', on_delete_origin = 'ACTION_ORIGIN_EXPLICIT', on_update_origin = 'ACTION_ORIGIN_EXPLICIT'")
 }
 
 func TestLegacyForeignKeyMetadataUpgradeBackfillsReferencedIndexForNumberedLegacyForeignKey(t *testing.T) {
@@ -525,6 +609,20 @@ func TestLegacyForeignKeyShowCreateSQLQuotesIdentifiers(t *testing.T) {
 	require.Equal(t, "create table `child``name` (id int)", createSQL)
 }
 
+func TestLegacyForeignKeyHistoricalCreateSQLQuotesCatalogValues(t *testing.T) {
+	definition := legacyForeignKeyTableDefinition{database: "db'name", table: `child\name`}
+	txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+		require.Equal(t,
+			"SELECT rel_createsql FROM mo_catalog.mo_tables WHERE account_id = 9 AND reldatabase = 'db''name' AND relname = 'child\\\\name'",
+			sql,
+		)
+		return newHistoricalCreateSQLResult(t, "create table `child\\name` (id int)"), nil
+	})
+	createSQL, err := getLegacyForeignKeyHistoricalCreateSQL(9, txnExecutor, definition)
+	require.NoError(t, err)
+	require.Equal(t, "create table `child\\name` (id int)", createSQL)
+}
+
 func newVersionTxnExecutor(t *testing.T, mocker func(string) (executor.Result, error)) executor.TxnExecutor {
 	t.Helper()
 	txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
@@ -609,6 +707,18 @@ func newShowCreateTableResult(t *testing.T, tableName, createSQL string) executo
 	return result.GetResult()
 }
 
+func newHistoricalCreateSQLResult(t *testing.T, createSQL string) executor.Result {
+	t.Helper()
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
+	result.NewBatchWithRowCount(1)
+	if err := executor.AppendStringRows(result, 0, []string{createSQL}); err != nil {
+		t.Fatalf("append historical CREATE definition: %v", err)
+	}
+	return result.GetResult()
+}
+
 func newLegacyForeignKeyIndexResult(t *testing.T, rows [][]string) executor.Result {
 	t.Helper()
 	mp := mpool.MustNewZeroNoFixed()
@@ -638,8 +748,11 @@ func legacyForeignKeyMigrationUpdatesForAssertion(updates []string) []string {
 		if strings.HasPrefix(update, "SELECT ") {
 			continue
 		}
-		update = strings.ReplaceAll(update,
-			", on_delete_origin = 'ACTION_ORIGIN_LEGACY_AMBIGUOUS', on_update_origin = 'ACTION_ORIGIN_LEGACY_AMBIGUOUS'", "")
+		if originStart := strings.Index(update, ", on_delete_origin = '"); originStart >= 0 {
+			if whereStart := strings.Index(update[originStart:], " WHERE constraint_id"); whereStart >= 0 {
+				update = update[:originStart] + update[originStart+whereStart:]
+			}
+		}
 		ret = append(ret, update)
 	}
 	return ret
