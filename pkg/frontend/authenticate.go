@@ -11162,10 +11162,14 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 			return moerr.NewInvalidInput(ctx, "mo, mo.*, out_* are reserved and cannot be used as a procedure argument name")
 		}
 
+		argType, ok := cp.Args[i].(*tree.ProcedureArgDecl).Type.(*tree.T)
+		if !ok {
+			return moerr.NewInternalError(ctx, "unknown stored procedure argument type")
+		}
 		argList[i] = tree.ProcedureArgForMarshal{
 			ArgName:   curName,
 			Name:      cp.Args[i].(*tree.ProcedureArgDecl).Name,
-			Type:      cp.Args[i].(*tree.ProcedureArgDecl).Type,
+			Type:      argType,
 			InOutType: cp.Args[i].(*tree.ProcedureArgDecl).InOutType,
 		}
 	}
@@ -11531,9 +11535,10 @@ func doInterpretCall(
 	var argList []tree.ProcedureArgForMarshal
 	// execute related
 	var varScope [](map[string]interface{})
+	var varTypeScope [](map[string]plan.Type)
 	var argsMap map[string]tree.Expr
 	var argsAttr map[string]tree.InOutArgType
-	var argsRuntimeType map[string]types.T
+	var argsType map[string]plan.Type
 
 	// a database must be selected or specified as qualifier when create a function
 	if call.Name.HasNoNameQualifier() {
@@ -11604,16 +11609,21 @@ func doInterpretCall(
 
 	fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 	argsAttr = make(map[string]tree.InOutArgType)
-	argsRuntimeType = make(map[string]types.T)
 	argsMap = make(map[string]tree.Expr) // map arg to param
+	argsType = make(map[string]plan.Type)
 
 	// build argsAttr and argsMap
 	ses.Info(ctx, "Interpret procedure call length:"+strconv.Itoa(len(argList)))
 	i := 0
 	for _, v := range argList {
-		argsAttr[v.ArgName] = v.InOutType
-		argsMap[v.ArgName] = call.Args[i]
-		argsRuntimeType[v.ArgName] = procedureOutputRuntimeType(v.Type)
+		name := strings.ToLower(v.ArgName)
+		argType, err := plan2.GetTypeFromAst(ctx, v.Type)
+		if err != nil {
+			return nil, err
+		}
+		argsAttr[name] = v.InOutType
+		argsMap[name] = call.Args[i]
+		argsType[name] = argType
 		i++
 	}
 
@@ -11622,11 +11632,12 @@ func doInterpretCall(
 	interpreter.fmtctx = fmtctx
 	interpreter.ses = ses
 	interpreter.varScope = &varScope
+	interpreter.varTypeScope = &varTypeScope
 	interpreter.bh = bh
 	interpreter.result = nil
 	interpreter.argsMap = argsMap
 	interpreter.argsAttr = argsAttr
-	interpreter.argsRuntimeType = argsRuntimeType
+	interpreter.argsType = argsType
 	interpreter.outParamMap = make(map[string]interface{})
 	interpreter.initialAffectedRows = callerAffectedRows
 
@@ -11655,57 +11666,6 @@ func doInterpretCall(
 
 	default:
 		return nil, moerr.NewInternalError(ctx, "unknown language")
-	}
-}
-
-func procedureOutputRuntimeType(ref tree.ResolvableTypeReference) types.T {
-	typ, ok := ref.(*tree.T)
-	if !ok {
-		return types.T_any
-	}
-	internal := typ.InternalType
-	familyName := strings.ToLower(strings.TrimSpace(internal.FamilyString))
-	if familyName == "decimal" || familyName == "numeric" || familyName == "dec" || familyName == "fixed" {
-		return types.T_decimal256
-	}
-	switch familyName {
-	case "bool", "boolean":
-		return types.T_bool
-	case "tinyint", "smallint", "mediumint", "int", "integer", "bigint":
-		if internal.Unsigned {
-			return types.T_uint64
-		}
-		return types.T_int64
-	case "float":
-		return types.T_float32
-	case "double", "real":
-		return types.T_float64
-	case "char", "varchar", "text", "binary", "varbinary", "blob":
-		return types.T_varchar
-	}
-	switch internal.Family {
-	case tree.BoolFamily:
-		return types.T_bool
-	case tree.BitFamily:
-		return types.T_bit
-	case tree.IntFamily:
-		if internal.Unsigned {
-			return types.T_uint64
-		}
-		return types.T_int64
-	case tree.FloatFamily:
-		if internal.Width == 32 || familyName == "float" {
-			return types.T_float32
-		}
-		return types.T_float64
-	case tree.StringFamily:
-		return types.T_varchar
-	}
-	switch defines.MysqlType(internal.Oid) {
-	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
-		return types.T_decimal256
-	default:
-		return types.T_any
 	}
 }
 

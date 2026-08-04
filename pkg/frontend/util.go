@@ -337,36 +337,78 @@ func bindSetVariableResultExpr(
 
 // only support single value and unary minus
 func GetSimpleExprValue(ctx context.Context, e tree.Expr, feSes FeSession) (interface{}, error) {
-	switch v := e.(type) {
-	case *tree.UnresolvedName:
-		// set @a = on, type of a is bool.
-		return v.ColName(), nil
-	default:
+	return getSimpleExprValue(ctx, e, feSes, nil)
+}
+
+// GetSimpleExprValueWithType evaluates an expression after coercing it to the
+// supplied assignment target. This preserves declared stored-procedure types
+// even when their runtime representation is a Go string (for example DECIMAL).
+func GetSimpleExprValueWithType(ctx context.Context, e tree.Expr, feSes FeSession, targetType plan.Type) (interface{}, error) {
+	return getSimpleExprValue(ctx, e, feSes, &targetType)
+}
+
+func getSimpleExprValue(ctx context.Context, e tree.Expr, feSes FeSession, targetType *plan.Type) (interface{}, error) {
+	var planExpr *plan.Expr
+	if v, ok := e.(*tree.UnresolvedName); ok && !storedProcedureVariableExists(ctx, v.ColName()) {
+		// Preserve SET @a = on behavior. A stored-procedure variable with the
+		// same syntax is instead bound through its declared type below.
+		if targetType == nil {
+			return v.ColName(), nil
+		}
+		planExpr = plan2.MakePlan2StringConstExprWithType(v.ColName())
+	} else {
 		builder := plan2.NewQueryBuilder(plan.Query_SELECT, feSes.GetTxnCompileCtx(), false, false)
 		bindContext := plan2.NewBindContext(builder, nil)
 		binder := plan2.NewSetVarBinder(builder, bindContext)
-		planExpr, err := binder.BindExpr(e, 0, false)
+		var err error
+		planExpr, err = binder.BindExpr(e, 0, false)
 		if err != nil {
 			return nil, err
 		}
-
-		txnCompileCtx := feSes.GetTxnCompileCtx()
-		// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
-		// Here the evalExpr may execute some function that needs engine.Engine.
-		txnCompileCtx.GetProcess().ReplaceTopCtx(
-			attachValue(txnCompileCtx.GetProcess().GetTopContext(),
-				defines.EngineKey{},
-				feSes.GetTxnHandler().GetStorage()))
-
-		vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(txnCompileCtx.GetProcess(), planExpr)
-		if err != nil {
-			return nil, err
-		}
-
-		value, err := getValueFromVector(ctx, vec, feSes, planExpr)
-		free()
-		return value, err
 	}
+
+	if targetType != nil {
+		var err error
+		planExpr, err = plan2.MakePlan2AssignmentCastExpr(ctx, planExpr, *targetType)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	txnCompileCtx := feSes.GetTxnCompileCtx()
+	// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
+	// Here the evalExpr may execute some function that needs engine.Engine.
+	txnCompileCtx.GetProcess().ReplaceTopCtx(
+		attachValue(txnCompileCtx.GetProcess().GetTopContext(),
+			defines.EngineKey{},
+			feSes.GetTxnHandler().GetStorage()))
+
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(txnCompileCtx.GetProcess(), planExpr)
+	if err != nil {
+		return nil, err
+	}
+
+	value, err := getValueFromVector(ctx, vec, feSes, planExpr)
+	free()
+	return value, err
+}
+
+func storedProcedureVariableExists(ctx context.Context, name string) bool {
+	inSp, _ := ctx.Value(defines.InSp{}).(bool)
+	if !inSp {
+		return false
+	}
+	scopes, ok := ctx.Value(defines.VarScopeKey{}).(*[]map[string]interface{})
+	if !ok || scopes == nil {
+		return false
+	}
+	name = strings.ToLower(name)
+	for i := len(*scopes) - 1; i >= 0; i-- {
+		if _, ok := (*scopes)[i][name]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession, expr *plan2.Expr) (interface{}, error) {

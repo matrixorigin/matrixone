@@ -126,7 +126,7 @@ func (node *ProcedureArgDecl) Free() {
 type ProcedureArgForMarshal struct {
 	ArgName   string
 	Name      *UnresolvedName
-	Type      ResolvableTypeReference
+	Type      *T
 	InOutType InOutArgType
 }
 
