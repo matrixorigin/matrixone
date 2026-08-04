@@ -800,7 +800,13 @@ type QueryResult struct {
 	published    bool
 	aborted      bool
 	stageCounter *perfcounter.CounterSet
-	accounted    bool
+	accounted    queryResultAccounting
+}
+
+type queryResultAccounting struct {
+	s3Requests   [resource.S3OpCount]int64
+	s3ReadBytes  int64
+	s3WriteBytes int64
 }
 
 func (result *QueryResult) Stage(execCtx *ExecCtx, _ *perfcounter.CounterSet, bat *batch.Batch) error {
@@ -859,41 +865,53 @@ func (result *QueryResult) counter() *perfcounter.CounterSet {
 }
 
 func (result *QueryResult) publishAccounting(ctx context.Context) {
-	if result.accounted || result.stageCounter == nil {
+	if result.stageCounter == nil {
 		return
 	}
-	result.accounted = true
 	root := resource.RootFromContext(ctx)
 	if root == nil {
 		return
 	}
 	counter := result.stageCounter
+	current := queryResultAccounting{
+		s3ReadBytes:  counter.FileService.S3ReadSize.Load(),
+		s3WriteBytes: counter.FileService.S3WriteSize.Load(),
+	}
+	current.s3Requests[resource.S3List] = counter.FileService.S3.List.Load()
+	current.s3Requests[resource.S3Head] = counter.FileService.S3.Head.Load()
+	current.s3Requests[resource.S3Put] = counter.FileService.S3.Put.Load()
+	current.s3Requests[resource.S3Get] = counter.FileService.S3.Get.Load()
+	current.s3Requests[resource.S3Delete] = counter.FileService.S3.Delete.Load()
+	current.s3Requests[resource.S3DeleteMulti] = counter.FileService.S3.DeleteMulti.Load()
+	next := result.accounted
 	var recorder resource.LocalRecorder
 	var quality resource.QualityFlags
-	add := func(op resource.S3Op, value int64) {
-		if value < 0 {
+	for op, value := range current.s3Requests {
+		previous := result.accounted.s3Requests[op]
+		if value < 0 || value < previous {
 			quality |= resource.QualityInvariantFailure
-			return
+			continue
 		}
-		recorder.AddS3Request(op, uint64(value))
+		recorder.AddS3Request(resource.S3Op(op), uint64(value-previous))
+		next.s3Requests[op] = value
 	}
-	add(resource.S3List, counter.FileService.S3.List.Load())
-	add(resource.S3Head, counter.FileService.S3.Head.Load())
-	add(resource.S3Put, counter.FileService.S3.Put.Load())
-	add(resource.S3Get, counter.FileService.S3.Get.Load())
-	add(resource.S3Delete, counter.FileService.S3.Delete.Load())
-	add(resource.S3DeleteMulti, counter.FileService.S3.DeleteMulti.Load())
 	delta := recorder.Snapshot()
 	delta.Quality |= quality
-	readBytes := counter.FileService.S3ReadSize.Load()
-	writeBytes := counter.FileService.S3WriteSize.Load()
-	if readBytes < 0 || writeBytes < 0 {
+	if current.s3ReadBytes < 0 || current.s3ReadBytes < result.accounted.s3ReadBytes {
 		delta.Quality |= resource.QualityInvariantFailure
 	} else {
-		delta.Usage.S3ReadBytes = uint64(readBytes)
-		delta.Usage.S3WriteBytes = uint64(writeBytes)
+		delta.Usage.S3ReadBytes = uint64(current.s3ReadBytes - result.accounted.s3ReadBytes)
+		next.s3ReadBytes = current.s3ReadBytes
 	}
-	root.AddLocal(delta)
+	if current.s3WriteBytes < 0 || current.s3WriteBytes < result.accounted.s3WriteBytes {
+		delta.Quality |= resource.QualityInvariantFailure
+	} else {
+		delta.Usage.S3WriteBytes = uint64(current.s3WriteBytes - result.accounted.s3WriteBytes)
+		next.s3WriteBytes = current.s3WriteBytes
+	}
+	if root.AddLocal(delta) {
+		result.accounted = next
+	}
 }
 
 func (result *QueryResult) captureStage(ses *Session) {

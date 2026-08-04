@@ -953,6 +953,10 @@ func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
 }
 
 func (execCtx *ExecCtx) Close() {
+	if execCtx.returning != nil {
+		_ = execCtx.returning.Close(execCtx)
+		execCtx.returning = nil
+	}
 	execCtx.reqCtx = nil
 	execCtx.prepareStmt = nil
 	execCtx.runResult = nil
@@ -973,10 +977,6 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.resper = nil
 	execCtx.results = nil
 	execCtx.prepareColDef = nil
-	if execCtx.returning != nil {
-		_ = execCtx.returning.Close()
-		execCtx.returning = nil
-	}
 	execCtx.rewriteEnabled = false
 }
 

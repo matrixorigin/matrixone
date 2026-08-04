@@ -327,9 +327,16 @@ type returningState struct {
 	stagedSaver  StagedBinaryWriter
 }
 
-func (s *returningState) Close() error {
-	if s == nil || s.spool == nil {
+func (s *returningState) Close(execCtx *ExecCtx) error {
+	if s == nil {
 		return nil
 	}
-	return s.spool.Close()
+	var err error
+	if s.stagedSaver != nil && execCtx != nil {
+		err = s.stagedSaver.Abort(execCtx)
+	}
+	if s.spool != nil {
+		err = errors.Join(err, s.spool.Close())
+	}
+	return err
 }

@@ -3964,7 +3964,7 @@ func executeStmtWithResponse(ses *Session,
 	defer span.End(trace.WithStatementExtra(ses.GetTxnId(), ses.GetStmtId(), ses.GetSqlOfStmt()))
 	defer func() {
 		if execCtx.returning != nil {
-			if closeErr := execCtx.returning.Close(); closeErr != nil {
+			if closeErr := execCtx.returning.Close(execCtx); closeErr != nil {
 				if err != nil {
 					err = errors.Join(err, closeErr)
 				} else {
