@@ -103,6 +103,17 @@ func TestIssue26685PreparedMultiSet(t *testing.T) {
 			a, b = queryIssue26685Vars(t, ctx, conn)
 			require.Equal(t, "88", a)
 			require.Equal(t, "unchanged", b)
+
+			mustExec(t, ctx, conn, "prepare issue26685_text_system from 'set @target_a = ?, transaction_isolation = ?'")
+			defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare issue26685_text_system") }()
+			mustExec(t, ctx, conn, "set @input_a = 7, @input_b = 'INVALID', @target_a = 88")
+			beforeIsolation := queryIssue26685Isolation(t, ctx, conn)
+			_, err = conn.ExecContext(ctx, "execute issue26685_text_system using @input_a, @input_b")
+			require.Error(t, err)
+			a, _ = queryIssue26685Vars(t, ctx, conn)
+			require.Equal(t, "88", a)
+			require.Equal(t, beforeIsolation, queryIssue26685Isolation(t, ctx, conn))
+			require.ErrorContains(t, err, "prepared multi-assignment SET supports user variables only")
 			var one int
 			require.NoError(t, conn.QueryRowContext(ctx, "select 1").Scan(&one))
 			require.Equal(t, 1, one)
@@ -137,6 +148,29 @@ func TestIssue26685PreparedMultiSet(t *testing.T) {
 			a, b = queryIssue26685Vars(t, ctx, conn)
 			require.Equal(t, "88", a)
 			require.Equal(t, "unchanged", b)
+
+			mixedStmt, err := conn.PrepareContext(ctx,
+				"set @target_a = ?, transaction_isolation = ?")
+			require.NoError(t, err)
+			defer mixedStmt.Close()
+			mustExec(t, ctx, conn, "set @target_a = 88")
+			beforeIsolation := queryIssue26685Isolation(t, ctx, conn)
+			singleSystemStmt, err := conn.PrepareContext(ctx, "set transaction_isolation = ?")
+			require.NoError(t, err)
+			defer singleSystemStmt.Close()
+			_, err = singleSystemStmt.ExecContext(ctx, "READ-COMMITTED")
+			require.NoError(t, err)
+			require.Equal(t, "READ-COMMITTED", queryIssue26685Isolation(t, ctx, conn))
+			_, err = singleSystemStmt.ExecContext(ctx, beforeIsolation)
+			require.NoError(t, err)
+			require.Equal(t, beforeIsolation, queryIssue26685Isolation(t, ctx, conn))
+
+			_, err = mixedStmt.ExecContext(ctx, int64(7), "INVALID")
+			require.Error(t, err)
+			a, _ = queryIssue26685Vars(t, ctx, conn)
+			require.Equal(t, "88", a)
+			require.Equal(t, beforeIsolation, queryIssue26685Isolation(t, ctx, conn))
+			require.ErrorContains(t, err, "prepared multi-assignment SET supports user variables only")
 		})
 	})
 }
@@ -153,4 +187,11 @@ func queryIssue26685Vars(t *testing.T, ctx context.Context, conn *sql.Conn) (str
 		b.String = "NULL"
 	}
 	return a.String, b.String
+}
+
+func queryIssue26685Isolation(t *testing.T, ctx context.Context, conn *sql.Conn) string {
+	t.Helper()
+	var isolation string
+	require.NoError(t, conn.QueryRowContext(ctx, "select @@transaction_isolation").Scan(&isolation))
+	return isolation
 }

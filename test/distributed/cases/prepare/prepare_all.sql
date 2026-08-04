@@ -577,8 +577,13 @@ prepare prepared_set_error from 'set @prepared_a = ?, @prepared_b = (select v fr
 set @prepared_a = 88, @prepared_b = 'unchanged';
 execute prepared_set_error using @prepared_input_a;
 select @prepared_a, @prepared_b;
+prepare prepared_set_system_error from 'set @prepared_a = ?, transaction_isolation = ?';
+set @prepared_input_a = 7, @prepared_input_b = 'INVALID', @prepared_a = 88, @prepared_isolation_before = @@transaction_isolation;
+execute prepared_set_system_error using @prepared_input_a, @prepared_input_b;
+select @prepared_a, @@transaction_isolation = @prepared_isolation_before;
 deallocate prepare prepared_set_multi;
 deallocate prepare prepared_set_error;
+deallocate prepare prepared_set_system_error;
 drop table prepared_set_values;
 
 # reset

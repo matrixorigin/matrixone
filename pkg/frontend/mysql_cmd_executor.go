@@ -916,6 +916,15 @@ func doSetVar(
 	sql string,
 	preparedExpression bool,
 ) error {
+	if preparedExpression && len(sv.Assignments) > 1 {
+		for _, assign := range sv.Assignments {
+			if assign.System {
+				return moerr.NewNotSupported(execCtx.reqCtx,
+					"prepared multi-assignment SET supports user variables only")
+			}
+		}
+	}
+
 	var err error = nil
 	var ok bool
 	var userVarIsBin bool
