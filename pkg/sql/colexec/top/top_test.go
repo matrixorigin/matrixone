@@ -45,6 +45,39 @@ type testCase struct {
 	proc  *process.Process
 }
 
+type cancelOnDoneCheckContext struct {
+	context.Context
+	remaining int
+	done      chan struct{}
+}
+
+func newCancelOnDoneCheckContext(parent context.Context, checks int) *cancelOnDoneCheckContext {
+	return &cancelOnDoneCheckContext{
+		Context:   parent,
+		remaining: checks,
+		done:      make(chan struct{}),
+	}
+}
+
+func (ctx *cancelOnDoneCheckContext) Done() <-chan struct{} {
+	if ctx.remaining > 0 {
+		ctx.remaining--
+		if ctx.remaining == 0 {
+			close(ctx.done)
+		}
+	}
+	return ctx.done
+}
+
+func (ctx *cancelOnDoneCheckContext) Err() error {
+	select {
+	case <-ctx.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
 func genTestCases(t *testing.T) []testCase {
 	return []testCase{
 		newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
@@ -231,6 +264,46 @@ func TestTopSpillEvalHonorsCancellationAfterInput(t *testing.T) {
 	require.NotNil(t, tc.arg.ctr.spillFile)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, result.Batch)
+}
+
+func TestTopSpillEvalCancellationCheckpoints(t *testing.T) {
+	tests := []struct {
+		name          string
+		cancelAtCheck int
+	}{
+		{name: "before evaluation", cancelAtCheck: 1},
+		{name: "before spill read", cancelAtCheck: 2},
+		{name: "before result publish", cancelAtCheck: 3},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			arg := &Top{}
+			arg.ctr.n = 1
+			arg.ctr.orderedRefs = []rowRef{{batchIdx: 0, rowIdx: 0}}
+			analyzer := process.NewAnalyzer(0, false, false, "top-cancel-eval")
+			src := newBatch([]types.Type{types.T_int64.ToType()}, proc, 1)
+			require.NoError(t, arg.ctr.spillBatch(src, proc, analyzer))
+			src.Clean(proc.Mp())
+			baseCtx := proc.Ctx
+
+			t.Cleanup(func() {
+				proc.Ctx = baseCtx
+				arg.Free(proc, true, context.Canceled)
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+
+			proc.Ctx = newCancelOnDoneCheckContext(baseCtx, test.cancelAtCheck)
+			var result vm.CallResult
+			done, err := arg.ctr.evalSpill(1, 1, proc, &result)
+			require.ErrorIs(t, err, context.Canceled)
+			require.False(t, done)
+			require.Nil(t, result.Batch)
+			require.Nil(t, arg.ctr.spillOutBat)
+		})
+	}
 }
 
 func TestTopSpillInsufficientRows(t *testing.T) {
