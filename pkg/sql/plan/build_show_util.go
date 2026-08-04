@@ -534,7 +534,7 @@ func constructCreateTableSQL(
 		createStr += "\n"
 	}
 	createStr += ")"
-	createStr += tableCharsetForShowCreate(ctx, tableDef.DefaultCharset)
+	createStr += tableCharsetForShowCreate(ctx, displayTableCharset)
 
 	var comment string
 	var properties []*plan.Property // Collect non-system properties for PROPERTIES clause
@@ -770,13 +770,18 @@ func effectiveTableCharsetForShowCreate(tableDef *plan.TableDef) uint32 {
 	if tableDef.DefaultCharset != uint32(types.CharsetLegacy) {
 		return tableDef.DefaultCharset
 	}
+	hasTextColumn := false
 	for _, col := range tableDef.Cols {
 		switch types.T(col.Typ.Id) {
 		case types.T_char, types.T_varchar, types.T_text:
+			hasTextColumn = true
 			if col.Typ.Charset == uint32(types.CharsetLegacy) {
 				return tableDef.DefaultCharset
 			}
 		}
+	}
+	if !hasTextColumn {
+		return tableDef.DefaultCharset
 	}
 	// Program-authored system definitions predate the table-default field but
 	// now carry explicit UTF-8 on every text column. Treat UTF-8 as their display

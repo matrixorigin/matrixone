@@ -577,10 +577,11 @@ SELECT MIN(CAST(name AS CHAR)) as min_name, MAX(CAST(name AS CHAR)) as max_name
 FROM t_minmax_cast_ci;
 
 CREATE TABLE t_minmax_derived_bin (
-    name VARCHAR(100)
+    name VARCHAR(100),
+    wide_name VARCHAR(200)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 
-INSERT INTO t_minmax_derived_bin VALUES ('a'), ('B');
+INSERT INTO t_minmax_derived_bin VALUES ('a', 'a'), ('B', 'B');
 
 SELECT MIN(CONVERT(name USING binary)) AS min_binary,
        MAX(CONVERT(name USING binary)) AS max_binary
@@ -590,6 +591,15 @@ SELECT MIN(CONVERT(name USING utf8mb4)) AS min_utf8,
 FROM t_minmax_derived_bin;
 SELECT MIN(SUBSTRING(name, 1)) AS min_substring,
        MAX(SUBSTRING(name, 1)) AS max_substring
+FROM t_minmax_derived_bin;
+SELECT MIN(CASE WHEN name IS NOT NULL THEN name ELSE wide_name END) AS min_case,
+       MAX(CASE WHEN name IS NOT NULL THEN name ELSE wide_name END) AS max_case
+FROM t_minmax_derived_bin;
+SELECT MIN(COALESCE(name, wide_name)) AS min_coalesce,
+       MAX(COALESCE(name, wide_name)) AS max_coalesce
+FROM t_minmax_derived_bin;
+SELECT MIN(IF(name IS NOT NULL, name, wide_name)) AS min_if,
+       MAX(IF(name IS NOT NULL, name, wide_name)) AS max_if
 FROM t_minmax_derived_bin;
 
 CREATE TABLE t_binary_default_general_columns (

@@ -66,6 +66,93 @@ func concatReturnType(parameters []types.Type) types.Type {
 	return mergedDerivedStringReturnType(parameters, 0)
 }
 
+func mergedTextCharset(parameters []types.Type, fallback uint8) uint8 {
+	result := fallback
+	for _, parameter := range parameters {
+		if !parameter.Oid.IsMySQLString() {
+			continue
+		}
+
+		// The type system does not carry a separate MySQL coercibility rank here,
+		// so retain the strongest bytewise identity represented by the arguments.
+		// Opaque binary bytes must not be reinterpreted as UTF-8; utf8mb4_bin in
+		// turn dominates legacy byte ordering and the default case-insensitive
+		// text identity.
+		switch parameter.Charset {
+		case types.CharsetBinary:
+			result = types.CharsetBinary
+		case types.CharsetUTF8MB4Bin:
+			if result != types.CharsetBinary {
+				result = types.CharsetUTF8MB4Bin
+			}
+		case types.CharsetLegacy:
+			if result == types.CharsetUTF8 {
+				result = types.CharsetLegacy
+			}
+		}
+	}
+	return result
+}
+
+// commonConditionalStringType keeps the common physical text type selected by
+// CASE/IF/COALESCE while deriving width and collation from every value branch.
+// Their checkers may rebuild CHAR/VARCHAR/TEXT with ToType while aligning
+// branches, so this helper is used both for cast targets and return callbacks.
+func commonConditionalStringType(result types.Type, source []types.Type) types.Type {
+	switch result.Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+		result.Charset = mergedTextCharset(source, result.Charset)
+	default:
+		return result
+	}
+
+	allText := true
+	hasText := false
+	maxWidth := int32(-1)
+	for _, typ := range source {
+		switch typ.Oid {
+		case types.T_any:
+			// An untyped NULL has no width or collation of its own.
+		case types.T_char, types.T_varchar, types.T_text:
+			hasText = true
+			if typ.Width > maxWidth {
+				maxWidth = typ.Width
+			}
+		default:
+			allText = false
+		}
+	}
+	if hasText && allText {
+		result.Width = maxWidth
+	}
+	return result
+}
+
+func caseReturnType(parameters []types.Type) types.Type {
+	if len(parameters) < 2 {
+		return types.T_varchar.ToType()
+	}
+	values := make([]types.Type, 0, (len(parameters)+1)/2)
+	for i := 1; i < len(parameters); i += 2 {
+		values = append(values, parameters[i])
+	}
+	if len(parameters)%2 == 1 {
+		values = append(values, parameters[len(parameters)-1])
+	}
+	return commonConditionalStringType(parameters[1], values)
+}
+
+func iffReturnType(parameters []types.Type) types.Type {
+	if len(parameters) < 3 {
+		return types.T_varchar.ToType()
+	}
+	return commonConditionalStringType(parameters[1], parameters[1:3])
+}
+
+func coalesceStringReturnType(resultOID types.T, parameters []types.Type) types.Type {
+	return commonConditionalStringType(resultOID.ToType(), parameters)
+}
+
 func mergedDerivedStringReturnType(parameters []types.Type, start int) types.Type {
 	result := types.T_varchar.ToType()
 	if start < 0 || start > len(parameters) {
@@ -79,24 +166,8 @@ func mergedDerivedStringReturnType(parameters []types.Type, start int) types.Typ
 			parameter.Oid == types.T_blob {
 			return types.T_blob.ToType()
 		}
-
-		// The type system does not carry a separate MySQL coercibility rank here,
-		// so retain the strongest bytewise identity represented by the arguments.
-		// Opaque binary bytes must not be reinterpreted as UTF-8; utf8mb4_bin in
-		// turn dominates the default case-insensitive text identity.
-		switch parameter.Charset {
-		case types.CharsetBinary:
-			result.Charset = types.CharsetBinary
-		case types.CharsetUTF8MB4Bin:
-			if result.Charset != types.CharsetBinary {
-				result.Charset = types.CharsetUTF8MB4Bin
-			}
-		case types.CharsetLegacy:
-			if result.Charset == types.CharsetUTF8 {
-				result.Charset = types.CharsetLegacy
-			}
-		}
 	}
+	result.Charset = mergedTextCharset(parameters[start:], result.Charset)
 	return result
 }
 
@@ -13074,9 +13145,7 @@ var supportedOthersBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				retType: func(parameters []types.Type) types.Type {
-					return parameters[1]
-				},
+				retType:    iffReturnType,
 				newOp: func() executeLogicOfOverload {
 					return iffFn
 				},

@@ -822,6 +822,50 @@ func TestMinMaxDerivedStringExpressionsKeepCollation(t *testing.T) {
 	}
 }
 
+func TestMinMaxConditionalStringExpressionsKeepCollation(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	mock.ctxt.tables["bind_select"].Cols[1].Typ = plan.Type{
+		Id:      int32(types.T_varchar),
+		Width:   80,
+		Charset: uint32(types.CharsetUTF8MB4Bin),
+	}
+	mock.ctxt.tables["bind_select"].Cols[2].Typ = plan.Type{
+		Id:      int32(types.T_varchar),
+		Width:   10,
+		Charset: uint32(types.CharsetUTF8MB4Bin),
+	}
+
+	p, err := runOneStmt(mock, t,
+		"select min(case when a > 0 then c else c end), min(coalesce(c, c)), min(if(a > 0, c, c)), "+
+			"max(case when a > 0 then c else b end), max(coalesce(c, b)), max(if(a > 0, c, b)) "+
+			"from select_test.bind_select")
+	require.NoError(t, err)
+
+	var aggregates []*plan.Expr
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG {
+			aggregates = node.AggList
+			break
+		}
+	}
+	require.Len(t, aggregates, 6)
+	for i, aggregate := range aggregates {
+		aggregateFunction := aggregate.GetF()
+		require.NotNil(t, aggregateFunction)
+		require.Equal(t, uint32(types.CharsetUTF8MB4Bin), aggregate.Typ.Charset)
+		require.Len(t, aggregateFunction.Args, 1)
+		conditional := aggregateFunction.Args[0]
+		require.NotNil(t, conditional.GetF())
+		require.Contains(t, []string{"case", "coalesce", "if"}, conditional.GetF().Func.ObjName)
+		require.Equal(t, uint32(types.CharsetUTF8MB4Bin), conditional.Typ.Charset)
+		if i < 3 {
+			require.Equal(t, int32(10), conditional.Typ.Width)
+		} else {
+			require.Equal(t, int32(80), conditional.Typ.Width)
+		}
+	}
+}
+
 func TestConvertUsingRejectsUnsupportedCharset(t *testing.T) {
 	_, err := runOneStmt(NewMockOptimizer(true), t,
 		"select convert(c using latin1) from select_test.bind_select")
