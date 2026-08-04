@@ -1167,6 +1167,40 @@ func handleSetVar(ses FeSession, execCtx *ExecCtx, sv *tree.SetVar, sql string) 
 	return nil
 }
 
+func handleSetTransaction(ses *Session, execCtx *ExecCtx, stmt *tree.SetTransaction) error {
+	for _, characteristic := range stmt.CharacterList {
+		if characteristic == nil || !characteristic.IsLevel {
+			continue
+		}
+
+		var value string
+		switch characteristic.Isolation {
+		case tree.ISOLATION_LEVEL_REPEATABLE_READ:
+			value = "REPEATABLE-READ"
+		case tree.ISOLATION_LEVEL_READ_COMMITTED:
+			value = "READ-COMMITTED"
+		case tree.ISOLATION_LEVEL_READ_UNCOMMITTED:
+			value = "READ-UNCOMMITTED"
+		case tree.ISOLATION_LEVEL_SERIALIZABLE:
+			value = "SERIALIZABLE"
+		default:
+			return moerr.NewInvalidInputf(execCtx.reqCtx, "unsupported transaction isolation level %d", characteristic.Isolation)
+		}
+
+		if stmt.Global {
+			if err := doCheckRole(execCtx.reqCtx, ses); err != nil {
+				return err
+			}
+			if err := ses.SetGlobalSysVar(execCtx.reqCtx, "transaction_isolation", value); err != nil {
+				return err
+			}
+		} else if err := ses.SetSessionSysVar(execCtx.reqCtx, "transaction_isolation", value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func preparedSetExpression(execCtx *ExecCtx) bool {
 	if execCtx == nil {
 		return false

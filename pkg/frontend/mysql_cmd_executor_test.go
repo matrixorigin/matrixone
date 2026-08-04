@@ -211,6 +211,49 @@ func TestResetDiagnosticsForStatementLifecycle(t *testing.T) {
 	require.Equal(t, uint16(1001), ses.diagnosticsSnapshot().codes[0])
 }
 
+func TestHandleSetTransaction(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	tests := []struct {
+		sql  string
+		want string
+	}{
+		{
+			sql:  "set session transaction isolation level read committed",
+			want: "READ-COMMITTED",
+		},
+		{
+			sql:  "set transaction isolation level repeatable read",
+			want: "REPEATABLE-READ",
+		},
+		{
+			sql:  "set session transaction isolation level read uncommitted",
+			want: "READ-UNCOMMITTED",
+		},
+		{
+			sql:  "set session transaction isolation level serializable",
+			want: "SERIALIZABLE",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.want, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(ctx, test.sql, 1)
+			require.NoError(t, err)
+
+			_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
+			require.NoError(t, err)
+
+			got, err := ses.GetSessionSysVar("transaction_isolation")
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
 func TestRecordStatementResetsDivByZeroErrorMode(t *testing.T) {
 	ctx := context.Background()
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
