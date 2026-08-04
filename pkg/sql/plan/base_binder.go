@@ -119,23 +119,35 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		}
 		// check existence
 		if b.GetContext() != nil && b.GetContext().Value(defines.InSp{}) != nil && b.GetContext().Value(defines.InSp{}).(bool) {
-			tmpScope := b.GetContext().Value(defines.VarScopeKey{}).(*[]map[string]interface{})
-			for i := len(*tmpScope) - 1; i >= 0; i-- {
-				curScope := (*tmpScope)[i]
-				if _, ok := curScope[exprImpl.ColName()]; ok {
-					typ := types.T_text.ToType()
-					expr = &Expr{
-						Typ: makePlan2Type(&typ),
-						Expr: &plan.Expr_V{
-							V: &plan.VarRef{
-								Name:   exprImpl.ColName(),
-								System: false,
-								Global: false,
+			tmpScope, scopeOK := b.GetContext().Value(defines.VarScopeKey{}).(*[]map[string]interface{})
+			typeScopes, typeScopeOK := b.GetContext().Value(defines.VarScopeTypeKey{}).(*[]map[string]plan.Type)
+			if scopeOK && tmpScope != nil {
+				name := strings.ToLower(exprImpl.ColName())
+				for i := len(*tmpScope) - 1; i >= 0; i-- {
+					curScope := (*tmpScope)[i]
+					if _, ok := curScope[name]; ok {
+						typ := types.T_text.ToType()
+						expr = &Expr{
+							Typ: makePlan2Type(&typ),
+							Expr: &plan.Expr_V{
+								V: &plan.VarRef{
+									Name:   name,
+									System: false,
+									Global: false,
+								},
 							},
-						},
+						}
+						if typeScopeOK && typeScopes != nil && i < len(*typeScopes) {
+							if targetType, ok := (*typeScopes)[i][name]; ok {
+								expr, err = appendCastBeforeExpr(b.GetContext(), expr, targetType)
+							}
+							if err != nil {
+								return nil, err
+							}
+						}
+						err = nil
+						return
 					}
-					err = nil
-					return
 				}
 			}
 		}
