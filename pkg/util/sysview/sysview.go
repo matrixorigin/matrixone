@@ -48,6 +48,7 @@ var (
 		InformationSchemaUserPrivilegesDDL,
 		InformationSchemaSchemataDDL,
 		InformationSchemaCharacterSetsDDL,
+		InformationSchemaCharacterSetsData,
 		InformationSchemaTriggersDDL,
 		InformationSchemaTablesDDL,
 		InformationSchemaPartitionsDDL,

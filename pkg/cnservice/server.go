@@ -385,14 +385,34 @@ func (s *service) registerDefaultIcebergMaintenanceExecutor(ctx context.Context)
 	return nil
 }
 
-func (s *service) Start() error {
-	s.initSqlWriterFactory()
+func (s *service) Start() (err error) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.lifecycle != serviceInitialized {
+		return moerr.NewInvalidStateNoCtx("CN service already started or closed")
+	}
+	s.lifecycle = serviceStarting
+	defer func() {
+		if err != nil {
+			s.lifecycle = serviceClosing
+			err = errors.Join(err, s.closeService())
+			s.lifecycle = serviceClosed
+			return
+		}
+		s.lifecycle = serviceStarted
+	}()
 
-	if err := s.queryService.Start(); err != nil {
+	if err = s.bootstrap(); err != nil {
 		return err
 	}
 
-	err := s.runMoServer()
+	s.initSqlWriterFactory()
+
+	if err = s.queryService.Start(); err != nil {
+		return err
+	}
+
+	err = s.runMoServer()
 	if err != nil {
 		return err
 	}
@@ -407,46 +427,148 @@ func (s *service) Start() error {
 }
 
 func (s *service) Close() error {
-	defer logutil.LogClose(s.logger, "cnservice")()
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.lifecycle != serviceClosed {
+		s.lifecycle = serviceClosing
+	}
+	err := s.closeService()
+	s.lifecycle = serviceClosed
+	return err
+}
 
-	s.stopper.Stop()
+func (s *service) closeService() error {
+	s.closeOnce.Do(func() {
+		defer logutil.LogClose(s.logger, "cnservice")()
 
-	return closeCNServiceSteps(
-		s.bootstrapService.Close,
-		s.stopFrontend,
-		// Frontend shutdown stops accepting interactive work, while stopTask
-		// drains scheduled ingestion statements. Only after both producers have
-		// stopped may the MongoDB pool disconnect clients still leased by a
-		// MongoScan operator.
-		s.stopTask,
-		s.closeMongoDBRuntime,
-		s.stopRPCs,
-		func() error {
-			// stop I/O pipeline
-			ioutil.Stop(s.cfg.UUID)
-			return nil
-		},
-		func() error {
-			if s.gossipNode != nil {
-				return s.gossipNode.Leave(time.Second)
-			}
-			return nil
-		},
-		s.server.Close,
-		s.lockService.Close,
-		func() error {
-			if s.shardService != nil {
-				return s.shardService.Close()
-			}
-			return nil
-		},
-		func() error {
-			if s.pipelines.client != nil {
-				return s.pipelines.client.Close()
-			}
-			return nil
-		},
-	)
+		s.stopper.Stop()
+
+		s.closeErr = closeCNServiceSteps(
+			s.stopFrontend,
+			s.closeBootstrapService,
+			// Frontend shutdown stops accepting interactive work, while stopTask
+			// drains scheduled ingestion statements. Only after both producers have
+			// stopped may the MongoDB pool disconnect clients still leased by a
+			// MongoScan operator.
+			s.stopTask,
+			s.closeMongoDBRuntime,
+			s.closePipelineAdmission,
+			s.server.Close,
+			s.stopRPCs,
+			s.waitPipelineHandlers,
+			s.closeIncrService,
+			s.closeTxnTraceService,
+			func() error {
+				// stop I/O pipeline
+				ioutil.Stop(s.cfg.UUID)
+				return nil
+			},
+			func() error {
+				if s.gossipNode != nil {
+					return s.gossipNode.Leave(time.Second)
+				}
+				return nil
+			},
+			s.lockService.Close,
+			func() error {
+				if s.shardService != nil {
+					return s.shardService.Close()
+				}
+				return nil
+			},
+			func() error {
+				if s.pipelines.client != nil {
+					return s.pipelines.client.Close()
+				}
+				return nil
+			},
+		)
+	})
+	return s.closeErr
+}
+
+func (s *service) closePipelineAdmission() error {
+	s.pipelines.mu.Lock()
+	s.pipelines.closing = true
+	cancels := make([]context.CancelFunc, 0, len(s.pipelines.cancels))
+	for _, cancel := range s.pipelines.cancels {
+		cancels = append(cancels, cancel)
+	}
+	s.pipelines.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+	return nil
+}
+
+func (s *service) admitPipelineHandler(ctx context.Context) (context.Context, func(), bool) {
+	s.pipelines.mu.Lock()
+	if s.pipelines.closing {
+		s.pipelines.mu.Unlock()
+		return nil, nil, false
+	}
+	if s.pipelines.cancels == nil {
+		s.pipelines.cancels = make(map[uint64]context.CancelFunc)
+	}
+	s.pipelines.nextID++
+	id := s.pipelines.nextID
+	handlerCtx, cancel := context.WithCancel(ctx)
+	s.pipelines.cancels[id] = cancel
+	s.pipelines.wg.Add(1)
+	s.pipelines.mu.Unlock()
+
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			cancel()
+			s.pipelines.mu.Lock()
+			delete(s.pipelines.cancels, id)
+			s.pipelines.mu.Unlock()
+			s.pipelines.wg.Done()
+		})
+	}
+	return handlerCtx, release, true
+}
+
+func (s *service) waitPipelineHandlers() error {
+	s.pipelines.wg.Wait()
+	return nil
+}
+
+func (s *service) closeBootstrapService() error {
+	if s.beforeBootstrapClose != nil {
+		s.beforeBootstrapClose()
+	}
+	s.bootstrapMu.Lock()
+	defer s.bootstrapMu.Unlock()
+	if s.bootstrapService == nil {
+		return nil
+	}
+	service := s.bootstrapService
+	s.bootstrapService = nil
+	return service.Close()
+}
+
+func (s *service) closeTxnTraceService() error {
+	if s.txnTraceService == nil {
+		return nil
+	}
+	service := s.txnTraceService
+	s.txnTraceService = nil
+	service.Close()
+	runtime.ServiceRuntime(s.cfg.UUID).CompareAndDeleteGlobalVariables(runtime.TxnTraceService, service)
+	return nil
+}
+
+func (s *service) closeIncrService() error {
+	if s.incrservice == nil {
+		return nil
+	}
+	service := s.incrservice
+	s.incrservice = nil
+	service.Close()
+	runtime.ServiceRuntime(s.cfg.UUID).CompareAndDeleteGlobalVariables(runtime.AutoIncrementService, service)
+	return nil
 }
 
 func closeCNServiceSteps(steps ...func() error) error {
@@ -473,7 +595,12 @@ func (s *service) SessionMgr() *queryservice.SessionManager {
 }
 
 func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
-	finalVersion := s.GetFinalVersion()
+	s.bootstrapMu.RLock()
+	defer s.bootstrapMu.RUnlock()
+	if s.bootstrapService == nil {
+		return moerr.NewInvalidStateNoCtx("bootstrap service is closed")
+	}
+	finalVersion := s.bootstrapService.GetFinalVersion()
 	tenantFetchFunc := func() (int32, string, error) {
 		return int32(tenantID), finalVersion, nil
 	}
@@ -487,6 +614,11 @@ func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
 
 // UpgradeTenant Manual command tenant upgrade entrance
 func (s *service) UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error {
+	s.bootstrapMu.RLock()
+	defer s.bootstrapMu.RUnlock()
+	if s.bootstrapService == nil {
+		return moerr.NewInvalidStateNoCtx("bootstrap service is closed")
+	}
 	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*120, moerr.CauseUpgradeTenant)
 	defer cancel()
 	if _, err := s.bootstrapService.UpgradeTenant(ctx, tenantName, retryCount, isALLAccount); err != nil {
@@ -496,6 +628,11 @@ func (s *service) UpgradeTenant(ctx context.Context, tenantName string, retryCou
 }
 
 func (s *service) GetFinalVersion() string {
+	s.bootstrapMu.RLock()
+	defer s.bootstrapMu.RUnlock()
+	if s.bootstrapService == nil {
+		return ""
+	}
 	return s.bootstrapService.GetFinalVersion()
 }
 
@@ -552,6 +689,26 @@ func (s *service) handleRequest(
 	value morpc.RPCMessage,
 	_ uint64,
 	cs morpc.ClientSession) error {
+	if s.pipelines.beforeAdmission != nil {
+		s.pipelines.beforeAdmission()
+	}
+	handlerCtx, release, admitted := s.admitPipelineHandler(ctx)
+	if !admitted {
+		if value.Cancel != nil {
+			value.Cancel()
+		}
+		return moerr.NewServiceUnavailableNoCtx("CN pipeline service is closing")
+	}
+	owned := true
+	cancelOwned := value.Cancel != nil
+	defer func() {
+		if owned {
+			release()
+		}
+		if cancelOwned {
+			value.Cancel()
+		}
+	}()
 
 	// the following comment is not related to my PR, but I suddenly saw this piece of code.
 	// so I wrote it, hoping it can help future developers understand what this is doing.
@@ -567,7 +724,11 @@ func (s *service) handleRequest(
 	}
 	switch msg.GetSid() {
 	case pipeline.Status_WaitingNext:
-		return handleWaitingNextMsg(ctx, req, cs)
+		transferred, err := handleWaitingNextMsg(ctx, value.Cancel, req, cs)
+		if transferred {
+			cancelOwned = false
+		}
+		return err
 	case pipeline.Status_Last:
 		if msg.IsPipelineMessage() { // only pipeline type need assemble msg now.
 			if err := handleAssemblePipeline(ctx, req, cs); err != nil {
@@ -577,13 +738,18 @@ func (s *service) handleRequest(
 	}
 
 	// start a goroutine to handle one received message.
+	owned = false
+	cancelOwned = false
 	go func() {
-		defer value.Cancel()
+		defer release()
+		if value.Cancel != nil {
+			defer value.Cancel()
+		}
 		s.pipelines.counter.Add(1)
 		defer s.pipelines.counter.Add(-1)
 
 		// there is no need to handle the return error, because the error will be logged in the function.
-		_ = s.requestHandler(ctx,
+		_ = s.requestHandler(handlerCtx,
 			s.pipelineServiceServiceAddr(),
 			req,
 			cs,
@@ -636,7 +802,7 @@ func (s *service) initEngine(
 
 	}
 
-	return s.bootstrap()
+	return nil
 }
 
 func (s *service) createMOServer(
@@ -896,6 +1062,8 @@ func (s *service) GetSQLExecutor() executor.SQLExecutor {
 }
 
 func (s *service) GetBootstrapService() bootstrap.Service {
+	s.bootstrapMu.RLock()
+	defer s.bootstrapMu.RUnlock()
 	return s.bootstrapService
 }
 
@@ -911,18 +1079,23 @@ func (s *service) GetClock() clock.Clock {
 }
 
 // put the waiting-next type msg into client session's cache and return directly
-func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
+func handleWaitingNextMsg(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	message morpc.Message,
+	cs morpc.ClientSession) (bool, error) {
 	msg, _ := message.(*pipeline.Message)
 	switch msg.GetCmd() {
 	case pipeline.Method_PipelineMessage:
 		var cache morpc.MessageCache
 		var err error
-		if cache, err = cs.CreateCache(ctx, message.GetID()); err != nil {
-			return err
+		cache, err = cs.CreateCacheWithCancel(ctx, message.GetID(), cancel)
+		if err != nil {
+			return false, err
 		}
-		return cache.Add(message)
+		return true, cache.Add(message)
 	default:
-		return moerr.NewInvalidInputNoCtx("only pipeline messages may be fragmented")
+		return false, moerr.NewInvalidInputNoCtx("only pipeline messages may be fragmented")
 	}
 }
 
@@ -995,17 +1168,23 @@ func (s *service) initMongoDBRuntime() {
 		MaxConversionErrors: parameters.MaxConversionErrors, MaxConversionErrorRate: parameters.MaxConversionErrorRate,
 		MaxSourceConcurrency: parameters.MaxSourceConcurrency,
 	}
+	pool := sqlmongodb.NewValidatedClientPool(
+		sqlmongodb.OfficialClientFactory{},
+		sqlmongodb.CatalogConnectionResolver{Executor: s.sqlExecutor},
+		config.MaxCachedClients,
+	)
+	retirements := sqlmongodb.NewClientRetirementQueue(
+		pool,
+		sqlmongodb.ClusterRemoteClientRetirer{Cluster: s.moCluster, QueryClient: s.queryClient},
+		sqlmongodb.DefaultClientRetirementQueueCapacity,
+	)
 	dependencies := &sqlmongodb.RuntimeDependencies{
 		Config:      config,
 		Connections: sqlmongodb.CatalogConnectionResolver{Executor: s.sqlExecutor},
 		Mappings:    sqlmongodb.CatalogMappingResolver{Executor: s.sqlExecutor},
 		Secrets:     sqlmongodb.EnvSecretResolver{},
-		Pool: sqlmongodb.NewValidatedClientPool(
-			sqlmongodb.OfficialClientFactory{},
-			sqlmongodb.CatalogConnectionResolver{Executor: s.sqlExecutor},
-			config.MaxCachedClients,
-		),
-		Limiter: sqlmongodb.NewSourceLimiter(config.MaxSourceConcurrency),
+		Pool:        pool, Limiter: sqlmongodb.NewSourceLimiter(config.MaxSourceConcurrency),
+		Retirements: retirements,
 	}
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(sqlmongodb.RuntimeDependenciesKey, dependencies)
 }
@@ -1022,7 +1201,11 @@ func (s *service) closeMongoDBRuntime() error {
 	}
 	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseShutdown)
 	defer cancel()
-	return dependencies.Pool.Close(ctx)
+	var err error
+	if dependencies.Retirements != nil {
+		err = dependencies.Retirements.Close(ctx)
+	}
+	return errors.Join(err, dependencies.Pool.Close(ctx))
 }
 
 func (s *service) initIncrService() {
@@ -1048,14 +1231,18 @@ func (s *service) bootstrap() error {
 	s.initTxnTraceService()
 
 	rt := runtime.ServiceRuntime(s.cfg.UUID)
-	s.bootstrapService = bootstrap.NewService(
-		s.cfg.UUID,
-		&locker{hakeeperClient: s._hakeeperClient, requestID: s.cfg.UUID},
-		rt.Clock(),
-		s._txnClient,
-		s.sqlExecutor,
-		s.options.bootstrapOptions...,
-	)
+	s.bootstrapMu.Lock()
+	defer s.bootstrapMu.Unlock()
+	if s.bootstrapService == nil {
+		s.bootstrapService = bootstrap.NewService(
+			s.cfg.UUID,
+			&locker{hakeeperClient: s._hakeeperClient, requestID: s.cfg.UUID},
+			rt.Clock(),
+			s._txnClient,
+			s.sqlExecutor,
+			s.options.bootstrapOptions...,
+		)
+	}
 
 	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseBootstrap)
 	ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)
@@ -1072,6 +1259,11 @@ func (s *service) bootstrap() error {
 
 	if s.cfg.AutomaticUpgrade {
 		return s.stopper.RunTask(func(ctx context.Context) {
+			s.bootstrapMu.RLock()
+			defer s.bootstrapMu.RUnlock()
+			if s.bootstrapService == nil {
+				return
+			}
 			ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*120, moerr.CauseBootstrap2)
 			defer cancel()
 			if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
@@ -1086,16 +1278,11 @@ func (s *service) bootstrap() error {
 	return nil
 }
 
-// handleBootstrapErr decides whether a bootstrap error should be returned
-// gracefully (for context cancellation during shutdown) or trigger a panic
-// (for real bootstrap failures).  Only context.Canceled is treated as a
-// graceful shutdown signal; DeadlineExceeded from the 5-minute bootstrap
-// timeout is a legitimate failure that should still panic.
+// handleBootstrapErr preserves the bootstrap context cause and returns the
+// failure to Start's caller. The caller owns rolling back the fully constructed
+// service before it returns the error.
 func handleBootstrapErr(ctx context.Context, err error) error {
-	if errors.Is(err, context.Canceled) {
-		return err
-	}
-	panic(moerr.AttachCause(ctx, err))
+	return moerr.AttachCause(ctx, err)
 }
 
 func (s *service) initTxnTraceService() {
@@ -1115,7 +1302,8 @@ func (s *service) initTxnTraceService() {
 	if err != nil {
 		panic(err)
 	}
-	rt.SetGlobalVariables(runtime.TxnTraceService, ts)
+	s.txnTraceService = ts
+	rt.SetGlobalVariables(runtime.TxnTraceService, s.txnTraceService)
 }
 
 // SaveProfile saves profile into etl fs

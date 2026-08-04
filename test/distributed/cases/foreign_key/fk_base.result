@@ -51,7 +51,7 @@ create table c1 (a int, b int, foreign key f_a(a) references f1(a));
 insert into f1 values (1,1), (2,2), (3,3);
 insert into c1 values (1,1), (2,2), (3,3);
 update f1 set a = 11 where b = 1;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update c1 set a = 11 where b = 1;
 Cannot add or update a child row: a foreign key constraint fails
 update c1 set a = null where b = 1;
@@ -120,7 +120,7 @@ INSERT INTO t_emp VALUES (7698,'BLAKE',30,2850.00);
 INSERT INTO t_emp VALUES (7782,'CLARK',10,2950.00);
 INSERT INTO t_emp VALUES (7788,'SCOTT',20,3500.00);
 update t_dept set id = 50 where name = 'ACCOUNTING';
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 delete from t_dept where name = 'ACCOUNTING';
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 update t_emp set deptId = 50 where salary <  1500;
@@ -329,7 +329,7 @@ update f1 set a=a;
 update f1 set a=1;
 update f1 set a=a, b=2;
 update f1 set a=2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 drop table c1;
 drop table f1;
 create table f1(a int, b int, primary key (a,b));
@@ -340,7 +340,7 @@ update f1 set a=a;
 update f1 set a=a, b=1;
 update f1 set b=1, a=a;
 update f1 set a=a, b=2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 drop table c1;
 drop table f1;
 drop database if exists db1;

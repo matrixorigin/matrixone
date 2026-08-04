@@ -2584,6 +2584,48 @@ func TestSendPrepareResponse(t *testing.T) {
 	})
 }
 
+func TestPreparedNumericAggregateBinaryProtocolMetadata(t *testing.T) {
+	ctx := context.TODO()
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{name: "sum", sql: "select sum(?) as result"},
+		{name: "avg", sql: "select avg(?) as result"},
+		{name: "window sum", sql: "select sum(?) over () as result"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			conn := &prepareResponseCaptureConn{}
+			proto, proc, prepareStmt := newBinaryPrepareProtocolTestCaseWithConn(t, test.sql, conn)
+			proto.capability &^= CLIENT_DEPRECATE_EOF
+			defer func() {
+				proc.SetPrepareParams(nil)
+				prepareStmt.clearBinaryParamState(proc)
+			}()
+
+			prepare := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+			require.Equal(t, []int32{int32(types.T_any)}, prepare.ParamTypes)
+			require.NoError(t, proto.SendPrepareResponse(ctx, prepareStmt))
+
+			packets := splitProtocolPackets(t, conn.writes)
+			require.Len(t, packets, 5)
+			require.Equal(t, uint16(1), binary.LittleEndian.Uint16(packets[0][5:]))
+			require.Equal(t, uint16(1), binary.LittleEndian.Uint16(packets[0][7:]))
+
+			parameter := parsePrepareColumnDefinition(t, packets[1])
+			require.Equal(t, "?", parameter.name)
+			require.Equal(t, defines.MYSQL_TYPE_NULL, parameter.typ)
+			require.Equal(t, byte(defines.EOFHeader), packets[2][0])
+
+			result := parsePrepareColumnDefinition(t, packets[3])
+			require.Equal(t, "result", result.name)
+			require.Equal(t, defines.MYSQL_TYPE_DOUBLE, result.typ)
+			require.Equal(t, byte(defines.EOFHeader), packets[4][0])
+		})
+	}
+}
+
 func TestPreparedSetBinaryProtocolReportsAndReplacesParameters(t *testing.T) {
 	ctx := context.TODO()
 	conn := &prepareResponseCaptureConn{}

@@ -291,7 +291,6 @@ func TestCollectPrepareDdlSchemasUsesCloneSourceMetadata(t *testing.T) {
 func TestCollectPrepareDdlSchemasTracksCreateTargetDatabase(t *testing.T) {
 	testCases := []string{
 		"create sequence db1.seq as bigint",
-		"create source db1.src (i int) with (type='kafka')",
 	}
 	for _, sql := range testCases {
 		t.Run(sql, func(t *testing.T) {
@@ -396,23 +395,6 @@ func TestCollectPrepareDdlSchemasCollectsViewQuery(t *testing.T) {
 	require.Equal(t, "v", schemas[1].ObjName)
 }
 
-func TestCollectPrepareDdlSchemasCollectsDynamicTableQuery(t *testing.T) {
-	statements, err := mysql.Parse(
-		context.Background(),
-		"create dynamic table dt as select n_name from nation with (\"type\"='kafka')",
-		1,
-	)
-	require.NoError(t, err)
-
-	schemas, err := collectPrepareDdlSchemas(NewMockCompilerContext(false), statements[0], &planpb.Plan{
-		Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{}},
-	})
-	require.NoError(t, err)
-	require.Len(t, schemas, 2)
-	require.Equal(t, "nation", schemas[0].ObjName)
-	require.Equal(t, "dt", schemas[1].ObjName)
-}
-
 func TestAppendPrepareSchemasDeduplicatesByNameWithoutObjectID(t *testing.T) {
 	schemas := appendPrepareSchemas(nil,
 		&planpb.ObjectRef{SchemaName: "db", ObjName: "tbl"},
@@ -477,10 +459,9 @@ func TestResetPreparePlanCollectsDdlQuerySchemas(t *testing.T) {
 	require.Equal(t, int64(30), schemas[0].Server)
 }
 
-func TestResetPreparePlanCollectsExternalAndSourceScans(t *testing.T) {
+func TestResetPreparePlanCollectsExternalScans(t *testing.T) {
 	for _, nodeType := range []planpb.Node_NodeType{
 		planpb.Node_EXTERNAL_SCAN,
-		planpb.Node_SOURCE_SCAN,
 	} {
 		t.Run(nodeType.String(), func(t *testing.T) {
 			queryPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
@@ -823,10 +804,12 @@ func TestResetPreparePlanCollectsHiddenIndexSchemas(t *testing.T) {
 	const hiddenTable = "__mo_index_hidden"
 	mock := NewMockCompilerContext(false)
 	mock.objects[hiddenTable] = &planpb.ObjectRef{
-		Db:         10,
-		Obj:        20,
-		SchemaName: "db",
-		ObjName:    hiddenTable,
+		Db:               10,
+		Obj:              20,
+		SchemaName:       "publisher_db",
+		ObjName:          hiddenTable,
+		SubscriptionName: "subscriber_alias",
+		PubInfo:          &planpb.PubInfo{TenantId: 42},
 	}
 	mock.tables[hiddenTable] = &planpb.TableDef{Name: hiddenTable, DbId: 10, TblId: 20, Version: 30}
 
@@ -886,7 +869,8 @@ func TestRecordPreparedPluginDependenciesSurvivesScanRemoval(t *testing.T) {
 	scanNode := &planpb.Node{
 		NodeType: planpb.Node_TABLE_SCAN,
 		ObjRef: &planpb.ObjectRef{
-			Db: 1, Obj: 2, SchemaName: "db", ObjName: "src",
+			Db: 1, Obj: 2, SchemaName: "publisher_db", ObjName: "src",
+			SubscriptionName: "subscriber_alias", PubInfo: &planpb.PubInfo{TenantId: 42},
 		},
 		TableDef: &planpb.TableDef{
 			Name: "src", DbId: 1, TblId: 2, Version: 3,
@@ -902,8 +886,12 @@ func TestRecordPreparedPluginDependenciesSurvivesScanRemoval(t *testing.T) {
 	require.NoError(t, builder.recordPreparedPluginDependencies(scanNode))
 	require.Len(t, builder.qry.GetCatalogDependencies(), 2)
 	require.Equal(t, "src", builder.qry.CatalogDependencies[0].ObjName)
+	require.Equal(t, "subscriber_alias", builder.qry.CatalogDependencies[0].SubscriptionName)
+	require.Equal(t, int32(42), builder.qry.CatalogDependencies[0].GetPubInfo().GetTenantId())
 	require.Equal(t, int64(3), builder.qry.CatalogDependencies[0].Server)
 	require.Equal(t, hiddenTable, builder.qry.CatalogDependencies[1].ObjName)
+	require.Equal(t, "subscriber_alias", builder.qry.CatalogDependencies[1].SubscriptionName)
+	require.Equal(t, int32(42), builder.qry.CatalogDependencies[1].GetPubInfo().GetTenantId())
 	require.Equal(t, int64(30), builder.qry.CatalogDependencies[1].Server)
 
 	encoded, err := builder.qry.Marshal()

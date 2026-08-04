@@ -16,6 +16,7 @@ package vector
 
 import (
 	"bytes"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -216,6 +217,34 @@ func OrderedGetMinAndMax[T types.OrderedT](vec *Vector) (minv, maxv T) {
 			if maxv < col[i] {
 				maxv = col[i]
 			}
+		}
+	}
+	return
+}
+
+// FloatGetMinAndMax computes the comparable floating-point bounds of vec.
+// NaN is not equal to any SQL value, including itself, so it cannot widen a
+// useful min/max summary. Returning ok=false for an all-NULL/all-NaN vector
+// keeps the zonemap uninitialized instead of publishing poisoned NaN bounds.
+func FloatGetMinAndMax[T ~float32 | ~float64](vec *Vector) (
+	minv, maxv T,
+	ok bool,
+) {
+	col := MustFixedColNoTypeCheck[T](vec)
+	nulls := vec.GetNulls()
+	for i, value := range col {
+		if nulls.Contains(uint64(i)) || math.IsNaN(float64(value)) {
+			continue
+		}
+		if !ok {
+			minv, maxv, ok = value, value, true
+			continue
+		}
+		if minv > value {
+			minv = value
+		}
+		if maxv < value {
+			maxv = value
 		}
 	}
 	return

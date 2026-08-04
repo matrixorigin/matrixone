@@ -18,11 +18,18 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
+
+func isPerformStatement(stmt tree.Statement) bool {
+	selectStmt, ok := stmt.(*tree.Select)
+	return ok && selectStmt.IsPerform
+}
 
 // executeStatusStmt run the statement that responses status t
 func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
@@ -34,6 +41,32 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	ep := ses.GetExportConfig()
 	switch st := execCtx.stmt.(type) {
 	case *tree.Select:
+		if st.IsPerform {
+			queryResultFinalized := false
+			defer func() {
+				if !queryResultFinalized {
+					resetQueryResultState(ses)
+				}
+			}()
+			ses.rs = &plan.ResultColDef{
+				ResultCols: plan2.GetResultColumnsFromPlan(execCtx.cw.Plan()),
+			}
+			runBegin := time.Now()
+			if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
+				return
+			}
+			if err = finalizePerformQueryResult(execCtx); err != nil {
+				return
+			}
+			queryResultFinalized = true
+			if execCtx.runResult != nil {
+				execCtx.runResult.AffectRows = 0
+			}
+			if time.Since(runBegin) > time.Second {
+				ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
+			}
+			return
+		}
 		if ep.needExportToFile() {
 			defer ep.Close()
 			columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
@@ -99,13 +132,6 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
 			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
-		}
-
-		// Start the dynamic table daemon task
-		if st.IsDynamicTable {
-			if err = handleCreateDynamicTable(execCtx.reqCtx, ses, st); err != nil {
-				return
-			}
 		}
 
 		// grant privilege implicitly
@@ -304,9 +330,6 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			if execCtx.proc.GetLastInsertID() != 0 {
 				ses.SetLastInsertID(execCtx.proc.GetLastInsertID())
 			}
-		case *tree.DropTable:
-			// handle dynamic table drop, cancel all the running daemon task
-			_ = handleDropDynamicTable(execCtx.reqCtx, ses, execCtx.persistentDropTableTargets)
 		case *tree.CreateDatabase:
 			_ = insertRecordToMoMysqlCompatibilityMode(execCtx.reqCtx, ses, execCtx.stmt)
 		case *tree.DropDatabase:

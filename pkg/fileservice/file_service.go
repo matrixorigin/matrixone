@@ -142,6 +142,15 @@ type IOEntry struct {
 	// Data, WriterForRead, ReadCloserForRead may be empty if CachedData is not null
 	// if ToCacheData is provided, caller should always read CachedData instead of Data, WriterForRead or ReadCloserForRead
 	CachedData fscache.Data
+	// CachedDataSize is the expected size of the final cache representation.
+	// Zero means Size. It may differ from Size when ToCacheData decompresses the
+	// storage extent before cache admission.
+	CachedDataSize int64
+	// ValidateCacheData validates a final representation received from a cache
+	// tier. The caller transfers its one input reference to a successful return;
+	// on error the caller releases the input. Implementations may return a sealed
+	// wrapper without retaining the input.
+	ValidateCacheData CacheDataValidator
 
 	// ToCacheData constructs an object byte slice from entry contents
 	// reader or data must not be retained after returns
@@ -176,6 +185,8 @@ type CacheDataAllocator interface {
 	AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data
 	CopyToCacheData(ctx context.Context, data []byte) fscache.Data
 }
+
+type CacheDataValidator func(data fscache.Data) (validated fscache.Data, err error)
 
 // DirEntry is a file or dir
 type DirEntry struct {

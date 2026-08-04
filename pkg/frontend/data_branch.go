@@ -26,6 +26,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -66,6 +67,121 @@ func isDataBranchUserVisibleColumn(col *plan.ColDef) bool {
 	default:
 		return true
 	}
+}
+
+func isDataBranchWritableColumn(col *plan.ColDef) bool {
+	return isDataBranchUserVisibleColumn(col) && col.GeneratedCol == nil
+}
+
+func dataBranchGeneratedColumnsEqual(left, right *plan.GeneratedCol) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	if left.IsStored != right.IsStored {
+		return false
+	}
+	if left.Expr != nil || right.Expr != nil {
+		return proto.Equal(left.Expr, right.Expr)
+	}
+	return left.OriginString != "" && left.OriginString == right.OriginString
+}
+
+func dataBranchGeneratedColumnsLogicallyEqual(
+	tarCol, baseCol *plan.ColDef,
+	tarDef, baseDef *plan.TableDef,
+	resolveBaseColumn dataBranchEndpointColumnResolver,
+) bool {
+	left, right := tarCol.GeneratedCol, baseCol.GeneratedCol
+	if left == nil || right == nil {
+		return left == right
+	}
+	if left.IsStored != right.IsStored {
+		return false
+	}
+	if left.Expr == nil || right.Expr == nil {
+		return left.Expr == nil && right.Expr == nil &&
+			left.OriginString != "" && left.OriginString == right.OriginString
+	}
+
+	leftExpr := proto.Clone(left.Expr).(*plan.Expr)
+	rightExpr := proto.Clone(right.Expr).(*plan.Expr)
+	leftOK := canonicalizeDataBranchGeneratedExpr(leftExpr, func(pos int32) (string, bool) {
+		col := dataBranchGeneratedExprColumn(tarDef, pos)
+		if col == nil {
+			return "", false
+		}
+		resolved := resolveBaseColumn(col)
+		if resolved == nil {
+			return "", false
+		}
+		return strings.ToLower(resolved.Name), true
+	})
+	rightOK := canonicalizeDataBranchGeneratedExpr(rightExpr, func(pos int32) (string, bool) {
+		col := dataBranchGeneratedExprColumn(baseDef, pos)
+		if col == nil {
+			return "", false
+		}
+		return strings.ToLower(col.Name), true
+	})
+	return leftOK && rightOK && proto.Equal(leftExpr, rightExpr)
+}
+
+func dataBranchGeneratedExprColumn(tblDef *plan.TableDef, pos int32) *plan.ColDef {
+	if tblDef == nil || pos < 0 {
+		return nil
+	}
+	// GeneratedColBinder assigns ColPos over user DDL columns. Runtime table
+	// definitions may prefix rowid or contain other internal hidden columns.
+	var generatedExprPos int32
+	for _, col := range tblDef.Cols {
+		if !isDataBranchUserVisibleColumn(col) {
+			continue
+		}
+		if generatedExprPos == pos {
+			return col
+		}
+		generatedExprPos++
+	}
+	return nil
+}
+
+func canonicalizeDataBranchGeneratedExpr(
+	expr *plan.Expr,
+	resolveColumn func(int32) (string, bool),
+) bool {
+	if expr == nil {
+		return true
+	}
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		name, ok := resolveColumn(item.Col.ColPos)
+		if !ok {
+			return false
+		}
+		item.Col = &plan.ColRef{Name: name}
+	case *plan.Expr_Lit:
+		return canonicalizeDataBranchGeneratedExpr(item.Lit.Src, resolveColumn)
+	case *plan.Expr_F:
+		for _, arg := range item.F.Args {
+			if !canonicalizeDataBranchGeneratedExpr(arg, resolveColumn) {
+				return false
+			}
+		}
+	case *plan.Expr_List:
+		for _, listExpr := range item.List.List {
+			if !canonicalizeDataBranchGeneratedExpr(listExpr, resolveColumn) {
+				return false
+			}
+		}
+	case *plan.Expr_T, *plan.Expr_Max, *plan.Expr_Vec, *plan.Expr_Fold:
+		// These leaf expressions contain no column references.
+	case *plan.Expr_Raw, *plan.Expr_Corr, *plan.Expr_W, *plan.Expr_Sub,
+		*plan.Expr_P, *plan.Expr_V:
+		// GeneratedColBinder rejects these endpoint-dependent expression kinds.
+		// Fail closed if malformed or legacy catalog metadata contains one.
+		return false
+	}
+	return true
 }
 
 func dataBranchFakePKColIdxes(tblDef *plan.TableDef) []int {
@@ -1034,10 +1150,7 @@ func getTableStuff(
 	dstTable tree.TableName,
 ) (tblStuff tableStuff, err error) {
 
-	var (
-		tarTblDef  *plan.TableDef
-		baseTblDef *plan.TableDef
-	)
+	var tarTblDef *plan.TableDef
 
 	if tblStuff.tarRel, tblStuff.baseRel, tblStuff.tarSnap, tblStuff.baseSnap, err = getRelations(
 		ctx, ses, bh, srcTable, dstTable,
@@ -1046,10 +1159,6 @@ func getTableStuff(
 	}
 
 	tarTblDef = tblStuff.tarRel.GetTableDef(ctx)
-	baseTblDef = tblStuff.baseRel.GetTableDef(ctx)
-	if err = checkDataBranchPrimaryKeyCompatibility(tarTblDef, baseTblDef); err != nil {
-		return
-	}
 
 	for _, col := range tarTblDef.Cols {
 		if col.Name == catalog.Row_ID {
@@ -1064,14 +1173,17 @@ func getTableStuff(
 		if isDataBranchUserVisibleColumn(col) {
 			tblStuff.def.visibleIdxes = append(tblStuff.def.visibleIdxes, len(tblStuff.def.colNames)-1)
 		}
+		if isDataBranchWritableColumn(col) {
+			tblStuff.def.writableIdxes = append(tblStuff.def.writableIdxes, len(tblStuff.def.colNames)-1)
+		}
 	}
 
-	if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+	if tarTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		tblStuff.def.pkKind = fakeKind
-	} else if baseTblDef.Pkey.CompPkeyCol != nil {
+	} else if tarTblDef.Pkey.CompPkeyCol != nil {
 		// case 2: composite pk, combined all pks columns as the PK
 		tblStuff.def.pkKind = compositeKind
-		pkNames := baseTblDef.Pkey.Names
+		pkNames := tarTblDef.Pkey.Names
 		for _, name := range pkNames {
 			idx := dataBranchColumnIndexByName(tblStuff.def.colNames, name)
 			if idx < 0 {
@@ -1083,7 +1195,7 @@ func getTableStuff(
 	} else {
 		// normal pk
 		tblStuff.def.pkKind = normalKind
-		pkName := baseTblDef.Pkey.PkeyColName
+		pkName := tarTblDef.Pkey.PkeyColName
 		idx := dataBranchColumnIndexByName(tblStuff.def.colNames, pkName)
 		if idx < 0 {
 			err = moerr.NewInternalErrorNoCtxf("primary key column %q is not present in target data columns", pkName)
@@ -1092,14 +1204,14 @@ func getTableStuff(
 		tblStuff.def.pkColIdxes = append(tblStuff.def.pkColIdxes, idx)
 	}
 
-	tblStuff.def.pkColIdx = dataBranchColumnIndexByName(tblStuff.def.colNames, baseTblDef.Pkey.PkeyColName)
+	tblStuff.def.pkColIdx = dataBranchColumnIndexByName(tblStuff.def.colNames, tarTblDef.Pkey.PkeyColName)
 	if tblStuff.def.pkColIdx < 0 {
-		err = moerr.NewInternalErrorNoCtxf("primary key column %q is not present in target data columns", baseTblDef.Pkey.PkeyColName)
+		err = moerr.NewInternalErrorNoCtxf("primary key column %q is not present in target data columns", tarTblDef.Pkey.PkeyColName)
 		return
 	}
-	tblStuff.def.pkSeqnum = int(baseTblDef.Cols[baseTblDef.Name2ColIndex[baseTblDef.Pkey.PkeyColName]].Seqnum)
+	tblStuff.def.pkSeqnum = int(tarTblDef.Cols[tarTblDef.Name2ColIndex[tarTblDef.Pkey.PkeyColName]].Seqnum)
 	if tblStuff.def.pkKind == fakeKind {
-		tblStuff.def.pkColIdxes = dataBranchFakePKColIdxes(baseTblDef)
+		tblStuff.def.pkColIdxes = dataBranchFakePKColIdxes(tarTblDef)
 	}
 
 	tblStuff.retPool = &retBatchList{}
@@ -1189,6 +1301,15 @@ func reconcileDataBranchEndpointSchema(
 	}
 	tables.def.commonIdxes = commonIdxes
 	tables.def.commonVisibleIdxes = commonVisibleIdxes
+	commonVisibleSet := make(map[int]struct{}, len(commonVisibleIdxes))
+	for _, idx := range commonVisibleIdxes {
+		commonVisibleSet[idx] = struct{}{}
+	}
+	for _, idx := range tables.def.writableIdxes {
+		if _, ok := commonVisibleSet[idx]; ok {
+			tables.def.commonWritableIdxes = append(tables.def.commonWritableIdxes, idx)
+		}
+	}
 	tables.def.tarOnlyIdxes = tarOnlyIdxes
 
 	baseDataCols := make([]*plan.ColDef, 0, len(baseDef.Cols))
@@ -1378,7 +1499,10 @@ func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
 			leftDef.Cols[i].ClusterBy != rightDef.Cols[i].ClusterBy ||
 			leftDef.Cols[i].Primary != rightDef.Cols[i].Primary ||
 			leftDef.Cols[i].Seqnum != rightDef.Cols[i].Seqnum ||
-			leftDef.Cols[i].NotNull != rightDef.Cols[i].NotNull {
+			leftDef.Cols[i].NotNull != rightDef.Cols[i].NotNull ||
+			!dataBranchGeneratedColumnsEqual(
+				leftDef.Cols[i].GeneratedCol, rightDef.Cols[i].GeneratedCol,
+			) {
 			return false
 		}
 	}
@@ -1398,13 +1522,22 @@ func dataBranchPrimaryKeyColumns(tblDef *plan.TableDef) (kind int, names []strin
 	return normalKind, []string{tblDef.Pkey.PkeyColName}
 }
 
-func checkDataBranchPrimaryKeyCompatibility(tarDef, baseDef *plan.TableDef) error {
+func checkDataBranchPrimaryKeyCompatibilityWithResolver(
+	tarDef, baseDef *plan.TableDef,
+	resolveBaseColumn dataBranchEndpointColumnResolver,
+) error {
 	tarKind, tarNames := dataBranchPrimaryKeyColumns(tarDef)
 	baseKind, baseNames := dataBranchPrimaryKeyColumns(baseDef)
 	compatible := tarKind == baseKind && len(tarNames) == len(baseNames)
-	if compatible {
+	if compatible && tarKind != fakeKind {
 		for i := range tarNames {
-			if !strings.EqualFold(tarNames[i], baseNames[i]) {
+			tarCol := dataBranchColumnDefByName(tarDef, tarNames[i])
+			if tarCol == nil {
+				compatible = false
+				break
+			}
+			baseCol := resolveBaseColumn(tarCol)
+			if baseCol == nil || !strings.EqualFold(baseCol.Name, baseNames[i]) {
 				compatible = false
 				break
 			}
@@ -1442,7 +1575,9 @@ func checkSchemaCompatibilityWithResolver(
 	tarDef, baseDef *plan.TableDef,
 	resolveBaseColumn dataBranchEndpointColumnResolver,
 ) (commonIdxes, commonVisibleIdxes, tarOnlyIdxes []int, err error) {
-	if err = checkDataBranchPrimaryKeyCompatibility(tarDef, baseDef); err != nil {
+	if err = checkDataBranchPrimaryKeyCompatibilityWithResolver(
+		tarDef, baseDef, resolveBaseColumn,
+	); err != nil {
 		return
 	}
 
@@ -1472,6 +1607,15 @@ func checkSchemaCompatibilityWithResolver(
 		name := strings.ToLower(tarCol.Name)
 		baseCol := resolveBaseColumn(tarCol)
 		if baseCol != nil {
+			if !dataBranchGeneratedColumnsLogicallyEqual(
+				tarCol, baseCol, tarDef, baseDef, resolveBaseColumn,
+			) {
+				err = moerr.NewInternalErrorNoCtxf(
+					"schema compatibility check: column '%s' has different generated definitions",
+					tarCol.Name,
+				)
+				return
+			}
 			if baseCol.Typ.Id == tarCol.Typ.Id {
 				if !dataBranchColumnTypeAttributesEqual(baseCol.Typ, tarCol.Typ) {
 					err = moerr.NewInternalErrorNoCtxf(
@@ -1488,12 +1632,12 @@ func checkSchemaCompatibilityWithResolver(
 					return
 				}
 				commonIdxes = append(commonIdxes, dataIdx)
+				commonColNameSet[name] = true
+				commonColNameSet[strings.ToLower(baseCol.Name)] = true
 				if isDataBranchUserVisibleColumn(tarCol) {
 					commonVisibleIdxes = append(commonVisibleIdxes, dataIdx)
-					commonColNameSet[name] = true
-					commonColNameSet[strings.ToLower(baseCol.Name)] = true
-					delete(baseVisibleColMap, strings.ToLower(baseCol.Name))
 				}
+				delete(baseVisibleColMap, strings.ToLower(baseCol.Name))
 			} else {
 				err = moerr.NewInternalErrorNoCtxf(
 					"schema compatibility check: column '%s' exists in both schemas but has different types (target: %d, base: %d)",
@@ -2193,7 +2337,7 @@ func dataBranchLineageEndpointColumns(
 				candidateReachesLCA, candidateLCACol, candidateRedefined :=
 					dataBranchColumnReachesLCA(baseDefs, baseLineageOnly, candidate)
 				if candidateRedefined || !candidateReachesLCA ||
-					dataBranchColumnDefByLogicalName(baseDefs[0], tarLCACol) != candidateLCACol {
+					dataBranchEndpointColumnDef(baseDefs[0], tarLCACol) != candidateLCACol {
 					continue
 				}
 				if baseCol != nil {
@@ -2213,7 +2357,7 @@ func dataBranchLineageEndpointColumns(
 		)
 		identityMismatch := tarRedefined || baseRedefined || tarReachesLCA != baseReachesLCA
 		if tarReachesLCA && baseReachesLCA {
-			identityMismatch = dataBranchColumnDefByLogicalName(baseDefs[0], tarLCACol) != baseLCACol
+			identityMismatch = dataBranchEndpointColumnDef(baseDefs[0], tarLCACol) != baseLCACol
 		}
 		if !tarReachesLCA && !baseReachesLCA {
 			// Independently added same-name columns are compatible when the

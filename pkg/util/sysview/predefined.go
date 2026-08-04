@@ -253,6 +253,11 @@ var (
 		"MAXLEN int unsigned" +
 		")"
 
+	InformationSchemaCharacterSetsData = "INSERT INTO information_schema.CHARACTER_SETS VALUES " +
+		"('binary','binary','Binary pseudo charset',1)," +
+		"('utf8','utf8_bin','UTF-8 Unicode',4)," +
+		"('utf8mb4','utf8mb4_bin','UTF-8 Unicode',4)"
+
 	InformationSchemaTriggersDDL = "CREATE TABLE information_schema.TRIGGERS (" +
 		"TRIGGER_CATALOG varchar(64)," +
 		"TRIGGER_SCHEMA varchar(64)," +

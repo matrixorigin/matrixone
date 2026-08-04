@@ -254,6 +254,7 @@ message FuzzyFilter {
   plan.Type PkTyp = 3 [(gogoproto.nullable) = false];
   int32 BuildIdx = 4;
   bool IfInsertFromUnique = 5;
+  plan.RuntimeFilterSpec runtime_filter_spec = 6;
 }
 
 message HashJoin {
@@ -362,6 +363,8 @@ message TableFunction {
   bool is_single = 6;
   plan.IndexReaderParam index_reader_param = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 8;
+  plan.ObjectRef fulltext_source_ref = 9;
+  plan.ObjectRef fulltext_index_ref = 10;
 }
 
 message ExternalName2ColIndex {
@@ -474,12 +477,6 @@ message ExternalScan {
   bool iceberg_delete_spill_enabled = 23;
 }
 
-message StreamScan {
-  plan.TableDef tbl_def = 1;
-  int64 offset = 2;
-  int64 limit = 3;
-}
-
 message TableScan {
   repeated plan.Type types = 1 [(gogoproto.nullable) = false];
   repeated plan.Expr filter_exprs = 2;
@@ -568,7 +565,8 @@ message Instruction {
   LockOp lock_op = 33;
   Shuffle shuffle = 34;
   Merge merge = 35;
-  StreamScan stream_scan = 36;
+  reserved 36; // former stream_scan
+  reserved "stream_scan";
   PreInsertSecondaryIndex pre_insert_secondary_index = 37;
   SampleFunc sample_func = 38;
   FuzzyFilter fuzzy_filter = 39;
@@ -649,6 +647,15 @@ message ProcessInfo {
   SessionLoggerInfo session_logger = 8 [(gogoproto.nullable) = false];
   PrepareParamInfo prepare_params = 9 [(gogoproto.nullable) = false];
   int64 affected_rows = 10;
+  // Planned PipelineMessage RPCs per target CN for statement-level remote
+  // MessageBoard and resource-account terminal ownership.
+  map<string, uint32> remote_fragment_counts = 11;
+  // Unique physical execution attempt. Unlike the SQL statement ID, this
+  // changes across retries and prepared-statement executions.
+  bytes remote_execution_id = 12;
+  // Statement-level INSERT IGNORE semantics used by casts in remote pipelines.
+  // Absent in messages from older CNs, which safely decodes as false.
+  bool statement_runtime_ignore = 13;
 }
 
 message SessionInfo {

@@ -112,6 +112,10 @@ func makeSpillOrderBatch(orderCols []*vector.Vector, rowCount int) batch.Batch {
 }
 
 func writeSpillBatch(proc *process.Process, bat *batch.Batch, keyCols []*vector.Vector, writer io.Writer, buf *bytes.Buffer, analyzer process.Analyzer) (int64, int64, error) {
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return 0, 0, err
+	}
+
 	cnt := int64(bat.RowCount())
 	buf.Reset()
 	buf.Write(types.EncodeInt64(&cnt))
@@ -128,8 +132,14 @@ func writeSpillBatch(proc *process.Process, bat *batch.Batch, keyCols []*vector.
 	}
 	magic := uint64(spillMagic)
 	buf.Write(types.EncodeUint64(&magic))
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return 0, 0, err
+	}
 	written, err := writer.Write(buf.Bytes())
 	if err != nil {
+		return 0, 0, err
+	}
+	if err, canceled := vm.CancelCheck(proc); canceled {
 		return 0, 0, err
 	}
 	analyzer.Spill(int64(written))
@@ -348,6 +358,9 @@ func (ctr *container) finalizeActiveSpillRun(proc *process.Process, keepRun bool
 	if ctr.spillActiveRun == nil {
 		return nil
 	}
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return err
+	}
 	run := ctr.spillActiveRun
 	writer := ctr.spillActiveWriter
 	ctr.spillActiveRun = nil
@@ -361,6 +374,11 @@ func (ctr *container) finalizeActiveSpillRun(proc *process.Process, keepRun bool
 			run.file = nil
 			return err
 		}
+	}
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		run.file.Close()
+		run.file = nil
+		return err
 	}
 	if _, err := run.file.Seek(0, io.SeekStart); err != nil {
 		run.file.Close()
@@ -383,6 +401,10 @@ func (ctr *container) spillBatchWithAppend(
 	incomingOrderCols []*vector.Vector,
 	analyzer process.Analyzer,
 ) error {
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return err
+	}
+
 	if ctr.spillActiveRun != nil && ((ctr.spillAppendTarget > 0 && ctr.spillActiveBytes >= ctr.spillAppendTarget) || !ctr.canAppendToActiveRun(incomingOrderCols)) {
 		if err := ctr.finalizeActiveSpillRun(proc, true); err != nil {
 			return err
@@ -402,9 +424,16 @@ func (ctr *container) spillBatchWithAppend(
 }
 
 func (ctr *container) spillCachedRuns(proc *process.Process, analyzer process.Analyzer) error {
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return err
+	}
+
 	for i := range ctr.batchList {
 		if ctr.batchList[i] == nil {
 			continue
+		}
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			return err
 		}
 		bat := ctr.batchList[i]
 		keyCols, err := ctr.buildSpillKeyColumns(proc, bat)
@@ -606,11 +635,17 @@ func (ctr *container) advanceSpillReaderByChunk(proc *process.Process, idx int, 
 func (ctr *container) openSpillReaders(proc *process.Process, runs []*spillRun) error {
 	ctr.spillReaders = make([]*spillRunReader, 0, len(runs))
 	for _, run := range runs {
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			return err
+		}
 		if _, err := run.file.Seek(0, io.SeekStart); err != nil {
 			return err
 		}
 		reader := &spillRunReader{}
 		reader.reset(run.file)
+		// Ownership transfers to the reader before its first read. This keeps
+		// success, EOF, and read-error cleanup under the same owner.
+		run.file = nil
 		ok, err := reader.readNextBatch(proc, ctr)
 		if err != nil {
 			reader.close(proc)
@@ -621,7 +656,6 @@ func (ctr *container) openSpillReaders(proc *process.Process, runs []*spillRun) 
 		} else {
 			reader.close(proc)
 		}
-		run.file = nil
 	}
 	for i := range ctr.spillReaders {
 		ctr.spillReaders[i].heapIdx = i
@@ -661,6 +695,9 @@ func (ctr *container) restoreSpillOrderColumns(proc *process.Process, dataBatch,
 }
 
 func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, analyzer process.Analyzer) (*spillRun, error) {
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return nil, err
+	}
 	if len(runs) == 1 {
 		return runs[0], nil
 	}
@@ -679,12 +716,22 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 		return nil, err
 	}
 	writer := bufio.NewWriterSize(run.file, spillIOBufferSize)
-	defer writer.Flush()
 
 	var out *batch.Batch
 	var outOrder *batch.Batch
 	keyCount := len(ctr.spillKeyIndexes)
 	for len(ctr.spillReaders) > 0 {
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			if out != nil {
+				out.Clean(proc.Mp())
+			}
+			if outOrder != nil {
+				outOrder.Clean(proc.Mp())
+			}
+			run.file.Close()
+			run.file = nil
+			return nil, err
+		}
 		if out == nil {
 			first := ctr.spillReaders[0].batch
 			out = batch.NewOffHeapWithSize(first.VectorCount())
@@ -724,6 +771,22 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 			currentOutSize = -1
 		}
 		for len(ctr.spillReaders) > 0 {
+			if rows >= nextSizeCheck {
+				if err, canceled := vm.CancelCheck(proc); canceled {
+					out.Clean(proc.Mp())
+					if outOrder != nil {
+						outOrder.Clean(proc.Mp())
+					}
+					run.file.Close()
+					run.file = nil
+					return nil, err
+				}
+				if getOutSize() >= maxBatchSizeToSend {
+					break
+				}
+				nextSizeCheck = rows + batchSizeCheckInterval
+			}
+
 			if len(ctr.spillReaders) == 1 {
 				src := ctr.spillReaders[0]
 				chunk := computeDrainChunk(src, getOutSize())
@@ -758,9 +821,6 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 				}
 				if getOutSize() >= maxBatchSizeToSend {
 					break
-				}
-				if rows >= nextSizeCheck {
-					nextSizeCheck = rows + batchSizeCheckInterval
 				}
 				continue
 			}
@@ -811,9 +871,6 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 				if getOutSize() >= maxBatchSizeToSend {
 					break
 				}
-				if rows >= nextSizeCheck {
-					nextSizeCheck = rows + batchSizeCheckInterval
-				}
 				continue
 			}
 
@@ -862,9 +919,6 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 						if getOutSize() >= maxBatchSizeToSend {
 							break
 						}
-						if rows >= nextSizeCheck {
-							nextSizeCheck = rows + batchSizeCheckInterval
-						}
 						continue
 					}
 				}
@@ -900,12 +954,17 @@ func (ctr *container) mergeRunsToSpill(proc *process.Process, runs []*spillRun, 
 				run.file.Close()
 				return nil, err
 			}
-			if rows >= nextSizeCheck {
-				if getOutSize() >= maxBatchSizeToSend {
-					break
-				}
-				nextSizeCheck = rows + batchSizeCheckInterval
+		}
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			if out != nil {
+				out.Clean(proc.Mp())
 			}
+			if outOrder != nil {
+				outOrder.Clean(proc.Mp())
+			}
+			run.file.Close()
+			run.file = nil
+			return nil, err
 		}
 		out.SetRowCount(rows)
 		if outOrder != nil {
@@ -947,12 +1006,17 @@ func (ctr *container) reduceSpillRuns(proc *process.Process, analyzer process.An
 	for len(ctr.spillRuns) > spillMergeFanIn {
 		nextRuns := make([]*spillRun, 0, (len(ctr.spillRuns)+spillMergeFanIn-1)/spillMergeFanIn)
 		for start := 0; start < len(ctr.spillRuns); start += spillMergeFanIn {
+			if err, canceled := vm.CancelCheck(proc); canceled {
+				closeSpillRuns(nextRuns)
+				return err
+			}
 			end := start + spillMergeFanIn
 			if end > len(ctr.spillRuns) {
 				end = len(ctr.spillRuns)
 			}
 			run, err := ctr.mergeRunsToSpill(proc, ctr.spillRuns[start:end], analyzer)
 			if err != nil {
+				closeSpillRuns(nextRuns)
 				return err
 			}
 			nextRuns = append(nextRuns, run)
@@ -963,6 +1027,9 @@ func (ctr *container) reduceSpillRuns(proc *process.Process, analyzer process.An
 }
 
 func (ctr *container) prepareSpillFinalMerge(proc *process.Process, fs []*plan.OrderBySpec, analyzer process.Analyzer) error {
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return err
+	}
 	if err := ctr.finalizeActiveSpillRun(proc, true); err != nil {
 		return err
 	}
@@ -977,6 +1044,9 @@ func (ctr *container) prepareSpillFinalMerge(proc *process.Process, fs []*plan.O
 }
 
 func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResult) (bool, error) {
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return false, err
+	}
 	if ctr.buf == nil {
 		if len(ctr.spillReaders) == 0 {
 			return true, nil
@@ -1010,6 +1080,16 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 		currentBufSize = -1
 	}
 	for len(ctr.spillReaders) > 0 {
+		if rows >= nextSizeCheck {
+			if err, canceled := vm.CancelCheck(proc); canceled {
+				return false, err
+			}
+			if getBufSize() >= maxBatchSizeToSend {
+				break
+			}
+			nextSizeCheck = rows + batchSizeCheckInterval
+		}
+
 		if len(ctr.spillReaders) == 1 {
 			src := ctr.spillReaders[0]
 			chunk := computeDrainChunk(src, getBufSize())
@@ -1026,9 +1106,6 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 			}
 			if getBufSize() >= maxBatchSizeToSend {
 				break
-			}
-			if rows >= nextSizeCheck {
-				nextSizeCheck = rows + batchSizeCheckInterval
 			}
 			continue
 		}
@@ -1055,9 +1132,6 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 			if getBufSize() >= maxBatchSizeToSend {
 				break
 			}
-			if rows >= nextSizeCheck {
-				nextSizeCheck = rows + batchSizeCheckInterval
-			}
 			continue
 		}
 
@@ -1082,9 +1156,6 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 					if getBufSize() >= maxBatchSizeToSend {
 						break
 					}
-					if rows >= nextSizeCheck {
-						nextSizeCheck = rows + batchSizeCheckInterval
-					}
 					continue
 				}
 			}
@@ -1099,16 +1170,13 @@ func (ctr *container) sendSpillResult(proc *process.Process, result *vm.CallResu
 		if err := ctr.advanceSpillReaderByChunk(proc, 0, 1); err != nil {
 			return false, err
 		}
-		if rows >= nextSizeCheck {
-			if getBufSize() >= maxBatchSizeToSend {
-				break
-			}
-			nextSizeCheck = rows + batchSizeCheckInterval
-		}
 	}
 
 	if rows == 0 {
 		return true, nil
+	}
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return false, err
 	}
 	ctr.buf.SetRowCount(rows)
 	result.Batch = ctr.buf

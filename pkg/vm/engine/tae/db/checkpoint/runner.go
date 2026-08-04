@@ -62,6 +62,14 @@ type gckpContext struct {
 	histroyRetention time.Duration
 	truncateLSN      uint64
 	ckpLSN           uint64
+	// predecessor is the finished checkpoint covered by end.
+	// Keeping the entry in the request pins the metadata needed by GCKP even
+	// if checkpoint GC removes the entry from the runner store concurrently.
+	predecessor *CheckpointEntry
+	// done is set only by synchronous force requests. The queue consumer reports
+	// the result to the exact request instead of making the caller infer success
+	// from an unrelated global checkpoint that may use a different retention.
+	done chan error
 }
 
 func (g gckpContext) String() string {
@@ -82,13 +90,29 @@ func (g *gckpContext) Merge(other *gckpContext) {
 	if other.force {
 		g.force = true
 	}
+	retention := g.histroyRetention
+	if other.histroyRetention > retention {
+		retention = other.histroyRetention
+	}
 	if other.end.LE(&g.end) {
+		g.histroyRetention = retention
 		return
 	}
 	g.end = other.end
-	g.histroyRetention = other.histroyRetention
+	g.histroyRetention = retention
 	g.truncateLSN = other.truncateLSN
 	g.ckpLSN = other.ckpLSN
+	g.predecessor = other.predecessor
+}
+
+func (g *gckpContext) rebase(predecessor *CheckpointEntry) {
+	if predecessor == nil {
+		return
+	}
+	g.end = predecessor.end
+	g.truncateLSN = predecessor.truncateLSN
+	g.ckpLSN = predecessor.ckpLSN
+	g.predecessor = predecessor
 }
 
 // Q: What does runner do?
@@ -184,6 +208,12 @@ type runner struct {
 	store *runnerStore
 
 	executor atomic.Pointer[checkpointExecutor]
+	// forceGCKPRequests reserves newly committed ICKPs for an in-flight force
+	// request. Without this handoff, a count-based automatic GCKP can consume
+	// every fresh ICKP before the force request publishes its required
+	// retention. Multiple force callers share the reservation and their queued
+	// contexts are merged by the GCKP executor.
+	forceGCKPRequests atomic.Int64
 
 	postCheckpointQueue sm.Queue
 	gcCheckpointQueue   sm.Queue

@@ -174,7 +174,14 @@ func (mergeOrder *MergeOrder) Reset(proc *process.Process, pipelineFailed bool, 
 		}
 	}
 	if ctr.buf != nil {
-		ctr.buf.CleanOnlyData()
+		if ctr.buf.HasAllocationAccount() {
+			// The final merge batch may directly own a child execution's result.
+			// Accounted storage cannot survive that execution's Reset boundary.
+			ctr.buf.Clean(proc.Mp())
+			ctr.buf = nil
+		} else {
+			ctr.buf.CleanOnlyData()
+		}
 	}
 }
 
@@ -208,22 +215,19 @@ func (mergeOrder *MergeOrder) cleanBatchAndCol(proc *process.Process) {
 	mp := proc.Mp()
 	ctr := &mergeOrder.ctr
 	for i := range ctr.batchList {
+		if ctr.batchList[i] != nil && i < len(ctr.orderCols) && ctr.orderCols[i] != nil {
+			freeOrderColumns(mp, ctr.batchList[i], ctr.orderCols[i])
+		}
 		if ctr.batchList[i] != nil {
 			ctr.batchList[i].Clean(mp)
-		}
-	}
-	for i := range ctr.orderCols {
-		if ctr.orderCols[i] != nil {
-			freeOrderColumns(mp, ctr.batchList[i], ctr.orderCols[i])
 		}
 	}
 }
 
 func (ctr *container) cleanupSpill(proc *process.Process) {
-	if ctr.spillActiveWriter != nil {
-		_ = ctr.spillActiveWriter.Flush()
-		ctr.spillActiveWriter = nil
-	}
+	// An active run has not been committed to spillRuns yet. Cleanup discards
+	// it, so flushing would only perform useless I/O after cancellation/error.
+	ctr.spillActiveWriter = nil
 	if ctr.spillActiveRun != nil && ctr.spillActiveRun.file != nil {
 		ctr.spillActiveRun.file.Close()
 		ctr.spillActiveRun.file = nil
@@ -242,16 +246,20 @@ func (ctr *container) cleanupSpill(proc *process.Process) {
 		ctr.spillReaders[i].close(proc)
 	}
 	ctr.spillReaders = nil
-	for i := range ctr.spillRuns {
-		if ctr.spillRuns[i] != nil && ctr.spillRuns[i].file != nil {
-			ctr.spillRuns[i].file.Close()
-			ctr.spillRuns[i].file = nil
-		}
-	}
+	closeSpillRuns(ctr.spillRuns)
 	ctr.spillRuns = nil
 	ctr.spilling = false
 	ctr.spillMemUsage = 0
 	ctr.spillWriteBuf.Reset()
+}
+
+func closeSpillRuns(runs []*spillRun) {
+	for i := range runs {
+		if runs[i] != nil && runs[i].file != nil {
+			runs[i].file.Close()
+			runs[i].file = nil
+		}
+	}
 }
 
 func (ctr *container) setSpillThreshold(threshold int64) {
@@ -380,6 +388,13 @@ func (r *spillRunReader) refreshDrainProfile() {
 }
 
 func (r *spillRunReader) readNextBatch(proc *process.Process, ctr *container) (bool, error) {
+	// A serialized spill batch is the reader's bounded I/O work unit. Check
+	// before releasing the current batch contents so a known cancellation does
+	// not consume or publish the next unit.
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return false, err
+	}
+
 	if r.batch != nil {
 		r.batch.CleanOnlyData()
 	}
@@ -408,5 +423,11 @@ func (r *spillRunReader) readNextBatch(proc *process.Process, ctr *container) (b
 	}
 	r.refreshDrainProfile()
 	r.rowIdx = 0
+	// The synchronous read/unmarshal cannot be interrupted. Observe cancellation
+	// once it completes, before the refilled batch becomes visible to heap/copy
+	// work in the caller.
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return false, err
+	}
 	return true, nil
 }

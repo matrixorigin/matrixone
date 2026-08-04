@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -40,7 +41,7 @@ func TestSplitRecursiveMember(t *testing.T) {
 	b := &QueryBuilder{}
 
 	var ss []tree.SelectStatement
-	left, err := b.splitRecursiveMember(&stmt, name, &ss)
+	left, distinct, err := b.splitRecursiveMember(&stmt, name, &ss)
 	if err != nil {
 		t.Errorf("splitRecursiveMember err: %v", err)
 		return
@@ -48,6 +49,54 @@ func TestSplitRecursiveMember(t *testing.T) {
 
 	require.Equal(t, 2, len(ss))
 	require.Equal(t, true, left != nil)
+	require.False(t, distinct)
+}
+
+func TestRecursiveUnionDistinctPlan(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		union    string
+		distinct bool
+	}{
+		{name: "union all", union: "union all", distinct: false},
+		{name: "union", union: "union", distinct: true},
+		{name: "union distinct", union: "union distinct", distinct: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			query := fmt.Sprintf(`
+				with recursive r(n) as (
+					select 1
+					%s
+					select n + 1 from r where n < 10
+				)
+				select * from r`, test.union)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, query)
+			require.NoError(t, err)
+
+			var recursiveNode *planpb.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == planpb.Node_RECURSIVE_CTE {
+					recursiveNode = node
+					break
+				}
+			}
+			require.NotNil(t, recursiveNode)
+			require.Equal(t, test.distinct, recursiveNode.RecursiveUnionDistinct)
+		})
+	}
+}
+
+func TestRecursiveUnionRejectsMixedModes(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(false), t, `
+		with recursive r(n) as (
+			select 1
+			union all
+			select n + 1 from r where n < 3
+			union
+			select n + 2 from r where n < 3
+		)
+		select * from r`)
+	require.ErrorContains(t, err, "mixing UNION ALL and UNION DISTINCT")
 }
 
 func TestRecursiveCteConsumerAliases(t *testing.T) {
@@ -88,6 +137,32 @@ func TestRecursiveCteConsumerAliases(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, test.expectedHeadings, logicPlan.GetQuery().Headings)
 		})
+	}
+}
+
+func TestRecursiveCteCanReferencePrecedingCte(t *testing.T) {
+	for _, query := range []string{
+		`with recursive limits(lo, hi) as (
+			select 3, 9
+		), seq(n) as (
+			select lo from limits
+			union all
+			select n + 1 from seq, limits where n < hi
+		)
+		select count(*), sum(n), min(n), max(n) from seq`,
+		`with recursive limits(lo, hi) as (
+			select 3, 9
+		), seq(n) as (
+			select limits.lo from limits
+			union all
+			select seq.n + 1
+			from seq join limits on 1 = 1
+			where seq.n < limits.hi
+		)
+		select * from seq`,
+	} {
+		_, err := runOneStmt(NewMockOptimizer(false), t, query)
+		require.NoError(t, err)
 	}
 }
 

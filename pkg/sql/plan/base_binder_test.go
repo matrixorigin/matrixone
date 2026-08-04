@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -30,6 +31,41 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestStoredProcedureVariablesUseDeclaredDecimalType(t *testing.T) {
+	scopes := []map[string]interface{}{{
+		"p1": "10.00",
+		"v1": "6.00",
+	}}
+	declaredType := plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2}
+	typeScopes := []map[string]plan.Type{{
+		"p1": declaredType,
+		"v1": declaredType,
+	}}
+	ctx := context.WithValue(context.Background(), defines.VarScopeKey{}, &scopes)
+	ctx = context.WithValue(ctx, defines.VarScopeTypeKey{}, &typeScopes)
+	ctx = context.WithValue(ctx, defines.InSp{}, true)
+
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select v1 > p1", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	comparison := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+	binder := NewDefaultBinder(ctx, nil, nil, plan.Type{}, nil)
+	bound, err := binder.BindExpr(comparison, 0, false)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_bool), bound.Typ.Id)
+
+	args := bound.GetF().Args
+	require.Len(t, args, 2)
+	for _, arg := range args {
+		require.Equal(t, declaredType.Id, arg.Typ.Id)
+		require.Equal(t, declaredType.Width, arg.Typ.Width)
+		require.Equal(t, declaredType.Scale, arg.Typ.Scale)
+		require.Equal(t, "cast", arg.GetF().GetFunc().GetObjName())
+		require.NotNil(t, arg.GetF().Args[0].GetV())
+	}
+}
 
 // TestBindFuncExprImplByPlanExpr_PowAlias tests that "pow" is correctly
 // remapped to "power" (line ~1781 in base_binder.go:
@@ -827,6 +863,10 @@ func TestBindNameConstConstArgs(t *testing.T) {
 			name: "positive signed decimal value",
 			sql:  "select name_const('myname', +12.34)",
 		},
+		{
+			name: "string value with backslash",
+			sql:  `select name_const('myname', 'a\\b')`,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			require.NoError(t, bindNameConstSelect(tc.sql))
@@ -866,6 +906,14 @@ func TestBindNameConstInvalidArgs(t *testing.T) {
 		{
 			name: "decimal cast function value",
 			sql:  "select name_const('myname', cast('12.34' as decimal(10,2)))",
+		},
+		{
+			name: "cast hex name",
+			sql:  "select name_const(cast(0x61 as varchar), 1)",
+		},
+		{
+			name: "cast hex value",
+			sql:  "select name_const('x', cast(0x31 as varchar))",
 		},
 		{
 			name: "foldable function value",

@@ -2161,10 +2161,16 @@ func icebergCreateSQLFromPlanTableDef(tableDef *plan.TableDef) string {
 }
 
 func (c *Compile) maybeInsertMongoDBTableMapping(dbSource engine.Database, rel engine.Relation, qry *plan.CreateTable) error {
+	if qry == nil || qry.GetTableDef() == nil || !features.IsMongoDBExternal(qry.GetTableDef().FeatureFlag) {
+		return nil
+	}
 	createSQL := icebergCreateSQLFromPlanTableDef(qry.GetTableDef())
 	env, found, err := sqlmongodb.ParseCreateSQLEnvelope(c.proc.Ctx, createSQL)
-	if err != nil || !found {
+	if err != nil {
 		return err
+	}
+	if !found {
+		return moerr.NewInternalError(c.proc.Ctx, "typed MongoDB table plan is missing its catalog envelope")
 	}
 	accountID, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
@@ -2226,9 +2232,8 @@ func (c *Compile) lookupMongoDBConnectionID(accountID uint32, name string) (uint
 }
 
 func (c *Compile) maybeDeleteMongoDBTableMapping(dbSource engine.Database, rel engine.Relation, tableDef *plan.TableDef) error {
-	createSQL := icebergCreateSQLFromPlanTableDef(tableDef)
-	_, found, err := sqlmongodb.ParseCreateSQLEnvelope(c.proc.Ctx, createSQL)
-	if err != nil || !found {
+	isMongoDB, err := plan2.IsMongoDBTableDef(c.proc.Ctx, tableDef)
+	if err != nil || !isMongoDB {
 		return err
 	}
 	accountID, err := defines.GetAccountId(c.proc.Ctx)
@@ -5599,8 +5604,8 @@ func deleteManyWatermark(
 }
 
 const (
-	defaultConnectorTaskMaxRetryTimes = 10
-	defaultConnectorTaskRetryInterval = int64(time.Second * 10)
+	defaultCDCTaskMaxRetryTimes = 10
+	defaultCDCTaskRetryInterval = int64(time.Second * 10)
 )
 
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
@@ -5608,8 +5613,8 @@ func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
 		ID:       opts.TaskId,
 		Executor: task.TaskCode_InitCdc,
 		Options: task.TaskOptions{
-			MaxRetryTimes: defaultConnectorTaskMaxRetryTimes,
-			RetryInterval: defaultConnectorTaskRetryInterval,
+			MaxRetryTimes: defaultCDCTaskMaxRetryTimes,
+			RetryInterval: defaultCDCTaskRetryInterval,
 			DelayDuration: 0,
 			Concurrency:   0,
 		},

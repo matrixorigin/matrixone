@@ -932,7 +932,7 @@ func TestIssue19551(t *testing.T) {
 }
 
 func TestSpeedupAbortAllTxn(t *testing.T) {
-	c, err := embed.NewCluster(
+	c, err := embed.StartTestCluster(
 		embed.WithPreStart(
 			func(so embed.ServiceOperator) {
 				if so.ServiceType() == metadata.ServiceType_CN {
@@ -945,11 +945,10 @@ func TestSpeedupAbortAllTxn(t *testing.T) {
 			},
 		),
 	)
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
 	require.NoError(t, err)
-	require.NoError(t, c.Start())
-	defer func() {
-		require.NoError(t, c.Close())
-	}()
 
 	op, err := c.GetCNService(0)
 	require.NoError(t, err)
@@ -1061,44 +1060,32 @@ func TestSpeedupAbortAllTxn(t *testing.T) {
 		require.NoError(t, ctx.Err())
 	}
 	require.NoError(t, logtailClient.Disconnect())
-	require.NoError(t, waitLogtailResume(ctx, cn))
 
 	wg.Wait()
 	close(errC)
 	for err := range errC {
 		require.NoError(t, err)
 	}
+	// The active transaction only returns after the subscriber is ready, and the
+	// waiting transaction only returns after that active slot is released.
+	// Check the SQL path once the recovery barrier has completed.
+	require.NoError(t, checkLogtailResumed(ctx, cn))
 }
 
-func waitLogtailResume(ctx context.Context, cn cnservice.Service) error {
+func checkLogtailResumed(ctx context.Context, cn cnservice.Service) error {
 	exec := cn.GetSQLExecutor()
-	fn := func() error {
-		execCtx, cancel := context.WithTimeout(ctx, time.Second*5)
-		defer cancel()
-		res, err := exec.Exec(
-			execCtx,
-			"select * from mo_tables",
-			executor.Options{}.WithDatabase("mo_catalog"),
-		)
-		if err != nil {
-			return err
-		}
-		res.Close()
-		return nil
+	execCtx, cancel := context.WithTimeout(ctx, time.Second*5)
+	defer cancel()
+	res, err := exec.Exec(
+		execCtx,
+		"select * from mo_tables",
+		executor.Options{}.WithDatabase("mo_catalog"),
+	)
+	if err != nil {
+		return err
 	}
-
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	for {
-		if err := fn(); err == nil {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
+	res.Close()
+	return nil
 }
 
 // #15087

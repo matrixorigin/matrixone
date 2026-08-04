@@ -15,7 +15,9 @@
 package vector
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -60,6 +62,39 @@ func TestLength(t *testing.T) {
 		vec.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
+}
+
+func TestAppendCheckpointRollback(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_varchar.ToType())
+	defer vec.Free(mp)
+	first := strings.Repeat("a", 64)
+	require.NoError(t, AppendBytes(vec, []byte(first), false, mp))
+	vec.GetGrouping().Set(0)
+	vec.SetSorted(true)
+	checkpoint := vec.MakeAppendCheckpoint()
+
+	require.NoError(t, AppendBytes(vec, []byte(strings.Repeat("b", 96)), false, mp))
+	vec.GetNulls().Set(1)
+	vec.GetGrouping().Set(1)
+	// Grouping publication can precede a failed varlen copy and therefore can
+	// extend beyond the length reached by the copy itself.
+	vec.GetGrouping().Set(2)
+	vec.SetSorted(false)
+	vec.RollbackAppend(checkpoint, 2)
+
+	require.Equal(t, 1, vec.Length())
+	require.Equal(t, []string{first}, InefficientMustStrCol(vec))
+	require.False(t, vec.GetNulls().Contains(1))
+	require.True(t, vec.GetGrouping().Contains(0))
+	require.False(t, vec.GetGrouping().Contains(1))
+	require.False(t, vec.GetGrouping().Contains(2))
+	require.True(t, vec.GetSorted())
+}
+
+func TestCapacityForUntypedNull(t *testing.T) {
+	vec := NewVec(types.T_any.ToType())
+	require.Equal(t, 0, vec.Capacity())
 }
 
 func TestDupOffHeap(t *testing.T) {
@@ -387,6 +422,30 @@ func TestAppendBytes(t *testing.T) {
 	}
 	vec.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestAppendBytesNullUsesVectorPhysicalType(t *testing.T) {
+	for _, typ := range []types.Type{
+		types.T_bool.ToType(),
+		types.T_decimal128.ToType(),
+		types.T_varchar.ToType(),
+	} {
+		t.Run(typ.String(), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			vec := NewVec(typ)
+
+			// AppendBytes is the generic null path used by expression
+			// evaluation, including for fixed-width result vectors.
+			for i := range 17 {
+				require.NoError(t, AppendBytes(vec, nil, true, mp))
+				require.True(t, vec.IsNull(uint64(i)))
+			}
+			require.Equal(t, 17, vec.Length())
+
+			vec.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
 }
 
 func TestAppendArray(t *testing.T) {
@@ -1477,6 +1536,21 @@ func TestShuffle(t *testing.T) {
 
 func TestCopy(t *testing.T) {
 	mp := mpool.MustNewZero()
+	{ // fixed grouping provenance
+		dst := NewVec(types.T_int32.ToType())
+		src := NewVec(types.T_int32.ToType())
+		require.NoError(t, AppendFixedList(dst, []int32{0, 0}, nil, mp))
+		require.NoError(t, AppendFixedList(src, []int32{1, 2}, nil, mp))
+		src.GetGrouping().Add(0)
+		dst.GetGrouping().Add(1)
+		require.NoError(t, dst.Copy(src, 0, 0, mp))
+		require.NoError(t, dst.Copy(src, 1, 1, mp))
+		require.True(t, dst.GetGrouping().Contains(0))
+		require.False(t, dst.GetGrouping().Contains(1))
+		dst.Free(mp)
+		src.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
 	{ // fixed
 		v := NewVec(types.T_int8.ToType())
 		AppendFixedList(v, []int8{0, 0, 1, 0}, nil, mp)
@@ -1602,6 +1676,20 @@ func TestCloneWindow(t *testing.T) {
 	require.Equal(t, 2, v4.Length())
 	require.Equal(t, int32(10), GetFixedAtWithTypeCheck[int32](v4, 0))
 	require.Equal(t, int32(10), GetFixedAtWithTypeCheck[int32](v4, 1))
+
+	payload := []byte(strings.Repeat("x", 128))
+	v5, err := NewConstBytes(types.T_varchar.ToType(), payload, 10, mp)
+	require.NoError(t, err)
+	defer v5.Free(mp)
+	v6 := NewOffHeapVecWithType(types.T_varchar.ToType())
+	defer v6.Free(mp)
+	require.NoError(t, v5.CloneWindowTo(v6, 3, 5, mp))
+	require.True(t, v6.IsConst())
+	require.Equal(t, 2, v6.Length())
+	require.Equal(t, payload, v6.GetBytesAt(0))
+	require.Equal(t, payload, v6.GetBytesAt(1))
+	require.Equal(t, 10, v5.Length(), "cloning must not mutate the source")
+	require.Equal(t, payload, v5.GetBytesAt(0))
 }
 
 func TestCloneWindowWithMpNil(t *testing.T) {
@@ -1682,6 +1770,13 @@ func TestMarshalAndUnMarshal(t *testing.T) {
 	require.NoError(t, err)
 	data, err := v.MarshalBinary()
 	require.NoError(t, err)
+	size, err := v.MarshalBinarySize()
+	require.NoError(t, err)
+	require.Equal(t, len(data), size)
+	var streamed bytes.Buffer
+	require.NoError(t, v.MarshalBinaryTo(&streamed))
+	require.Equal(t, data, streamed.Bytes())
+	require.ErrorIs(t, v.MarshalBinaryTo(shortVectorMarshalWriter{}), io.ErrShortWrite)
 	w := NewVecFromReuse()
 	err = w.UnmarshalBinary(data)
 	require.NoError(t, err)
@@ -1694,6 +1789,29 @@ func TestMarshalAndUnMarshal(t *testing.T) {
 	v.Free(mp)
 	w.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+type shortVectorMarshalWriter struct{}
+
+func (shortVectorMarshalWriter) Write(value []byte) (int, error) {
+	return len(value) - 1, nil
+}
+
+func TestMarshalBinarySizeRejectsInvalidVector(t *testing.T) {
+	var nilVector *Vector
+	_, err := nilVector.MarshalBinarySize()
+	require.Error(t, err)
+
+	typ := types.T_int64.ToType()
+	typ.Size = -1
+	invalidType := NewVec(typ)
+	_, err = invalidType.MarshalBinarySize()
+	require.Error(t, err)
+
+	shortData := NewVec(types.T_int64.ToType())
+	shortData.SetLength(1)
+	_, err = shortData.MarshalBinarySize()
+	require.Error(t, err)
 }
 
 func TestUnmarshalBinaryAcceptsNullBitmapCoveragePastLength(t *testing.T) {
@@ -1824,6 +1942,47 @@ func TestUnmarshalBinaryRejectsUnsupportedZeroSizeType(t *testing.T) {
 			require.Error(t, unmarshalErr)
 		})
 	}
+}
+
+func TestUnmarshalBinaryTrustedKeepsStructuralChecks(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytes(source, []byte("value longer than inline storage"), false, mp))
+	data, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Free(mp)
+
+	for end := len(data) - 1; end >= 0; end-- {
+		target := NewVecFromReuse()
+		var unmarshalErr error
+		require.NotPanics(t, func() {
+			unmarshalErr = target.UnmarshalBinaryTrusted(data[:end])
+		}, "truncation at %d bytes", end)
+		require.Error(t, unmarshalErr, "truncation at %d bytes", end)
+	}
+}
+
+func TestUnmarshalBinaryTrustedRequiresPriorSemanticValidation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytes(source, []byte("value longer than inline storage"), false, mp))
+	data, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Free(mp)
+
+	// Preserve the complete frame while forging an out-of-range Varlena
+	// offset. The checked boundary rejects it; the trusted bind intentionally
+	// relies on a previous checked decode and immutable bytes.
+	corrupted := append([]byte(nil), data...)
+	varlenOffset := 1 + types.TSize + 4 + 4
+	invalidOffset := uint32(len(data) + 1)
+	copy(corrupted[varlenOffset+4:varlenOffset+8], types.EncodeUint32(&invalidOffset))
+
+	checked := NewVecFromReuse()
+	require.Error(t, checked.UnmarshalBinary(corrupted))
+
+	trusted := NewVecFromReuse()
+	require.NoError(t, trusted.UnmarshalBinaryTrusted(corrupted))
 }
 
 func TestStrMarshalAndUnMarshal(t *testing.T) {
@@ -2927,15 +3086,17 @@ func TestGetAny(t *testing.T) {
 
 func BenchmarkUnmarshal(b *testing.B) {
 	mp := mpool.MustNewZero()
-	vec := NewVec(types.T_int8.ToType())
-	AppendAny(vec, int8(42), false, mp)
-	data, err := vec.MarshalBinary()
+	source := NewVec(types.T_int8.ToType())
+	AppendAny(source, int8(42), false, mp)
+	data, err := source.MarshalBinary()
 	if err != nil {
 		b.Fatal(err)
 	}
+	source.Free(mp)
+	var target Vector
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err := vec.UnmarshalBinary(data)
+		err := target.UnmarshalBinary(data)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -3664,4 +3825,84 @@ func TestInplaceSortAndCompactMarksUniqueVectorsSorted(t *testing.T) {
 	unsupported := NewVec(types.T_any.ToType())
 	unsupported.InplaceSortAndCompact()
 	require.False(t, unsupported.GetSorted())
+}
+
+func TestVarlenaAreaDisjointLifecycle(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	typ := types.T_varchar.ToType()
+	payload := []byte(strings.Repeat("x", 128))
+
+	flat := NewVec(typ)
+	require.True(t, flat.VarlenaAreaIsDisjoint())
+	for range 2 {
+		require.NoError(t, AppendBytes(flat, payload, false, mp))
+	}
+	require.True(t, flat.VarlenaAreaIsDisjoint(),
+		"ordinary appends own disjoint area ranges")
+
+	values, _ := MustVarlenaRawData(flat)
+	require.True(t, flat.VarlenaAreaIsDisjoint(),
+		"read access must not mutate vector metadata")
+	require.NoError(t, SetFixedAtNoTypeCheck(flat, 1, values[0]))
+	require.False(t, flat.VarlenaAreaIsDisjoint(),
+		"installing an arbitrary descriptor must invalidate the proof")
+
+	flat.ResetWithSameType()
+	require.True(t, flat.VarlenaAreaIsDisjoint())
+	require.NoError(t, AppendBytes(flat, payload, false, mp))
+	flat.ResetWithSameType()
+	require.NoError(t, AppendBytes(flat, nil, true, mp))
+	values, _ = MustVarlenaRawData(flat)
+	require.True(t, values[0].IsSmall(),
+		"a null append must clear a stale descriptor from reused capacity")
+	flat.GetNulls().Del(0)
+	require.True(t, flat.VarlenaAreaIsDisjoint(),
+		"null-bitmap changes cannot invalidate a descriptor-level proof")
+
+	flat.ResetWithSameType()
+	for range 2 {
+		require.NoError(t, AppendBytes(flat, payload, false, mp))
+	}
+	flat.Shrink([]int64{0, 0}, false)
+	require.False(t, flat.VarlenaAreaIsDisjoint(),
+		"selection can duplicate a descriptor")
+	flat.Free(mp)
+
+	constant, err := NewConstBytes(typ, payload, 2, mp)
+	require.NoError(t, err)
+	shared := NewVec(typ)
+	require.NoError(t, shared.UnionBatch(constant, 0, 2, nil, mp))
+	require.False(t, shared.VarlenaAreaIsDisjoint(),
+		"const broadcast shares one non-inline descriptor")
+	compact, err := shared.CloneToFlatCompact(mp)
+	require.NoError(t, err)
+	require.True(t, compact.VarlenaAreaIsDisjoint(),
+		"compaction materializes independent payload ranges")
+
+	compact.Free(mp)
+	shared.Free(mp)
+	constant.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestVarlenaAreaDisjointAppendFailureFailsClosed(t *testing.T) {
+	mp, err := mpool.NewMPool("varlena-disjoint-failure", 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	vec := NewVec(types.T_varchar.ToType())
+	vec.SetOffHeap(true)
+	err = AppendBytesList(
+		vec,
+		[][]byte{make([]byte, 128), make([]byte, 2<<20)},
+		nil,
+		mp,
+	)
+	require.Error(t, err)
+	require.False(t, vec.VarlenaAreaIsDisjoint(),
+		"a partially initialized logical range must never retain the fast proof")
+
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
 }

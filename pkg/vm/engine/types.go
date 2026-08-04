@@ -187,6 +187,7 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		FeatureFlag:    tableDef.FeatureFlag,
 		AutoIncrOffset: tableDef.AutoIncrOffset,
 		AutoIncrEpoch:  tableDef.AutoIncrEpoch,
+		Checks:         tableDef.Checks,
 	}
 	propDef.Properties = append(
 		propDef.Properties,
@@ -1281,6 +1282,25 @@ type CatalogCacheGCer interface {
 
 type Hints struct {
 	CommitOrRollbackTimeout time.Duration
+}
+
+// AutoIncrEpochFenceSupporter is implemented by transaction workspaces whose
+// target TN snapshot can prove that every target enforces AUTO_INCREMENT
+// allocator epochs.
+type AutoIncrEpochFenceSupporter interface {
+	SupportsAutoIncrEpochFence() bool
+}
+
+// SupportsAutoIncrEpochFence fails closed for legacy and unknown workspaces.
+func SupportsAutoIncrEpochFence(workspace client.Workspace) bool {
+	supporter, ok := workspace.(AutoIncrEpochFenceSupporter)
+	return ok && supporter.SupportsAutoIncrEpochFence()
+}
+
+// TxnSupportsAutoIncrEpochFence fails closed when the transaction or its
+// workspace cannot prove that every target TN enforces allocator epochs.
+func TxnSupportsAutoIncrEpochFence(txn client.TxnOperator) bool {
+	return txn != nil && SupportsAutoIncrEpochFence(txn.GetWorkspace())
 }
 
 // EntireEngine is a wrapper for Engine to support temporary table

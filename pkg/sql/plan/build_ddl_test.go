@@ -30,7 +30,9 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -42,6 +44,37 @@ type rootSQLCompilerContext struct {
 	*MockCompilerContext
 	rootSQL string
 	calls   int
+}
+
+func TestBuildRenameTableUsesPriorDestinationAsNextSource(t *testing.T) {
+	stmt, err := parsers.ParseOne(
+		t.Context(),
+		dialect.MYSQL,
+		"rename table t1 to t2, t2 to t3",
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ctx := NewMockCompilerContext(false)
+	delete(ctx.tables, "t2")
+	delete(ctx.tables, "t3")
+	delete(ctx.objects, "t2")
+	delete(ctx.objects, "t3")
+	ctx.tables["t1"] = DeepCopyTableDef(ctx.tables["nation"], true)
+	ctx.tables["t1"].Name = "t1"
+	ctx.objects["t1"] = &ObjectRef{SchemaName: "tpch", ObjName: "t1"}
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+
+	renames := p.GetDdl().GetRenameTable().GetAlterTables()
+	require.Len(t, renames, 2)
+	require.Equal(t, "t1", renames[0].GetActions()[0].GetAlterName().GetOldName())
+	require.Equal(t, "t2", renames[0].GetActions()[0].GetAlterName().GetNewName())
+	require.Equal(t, "t2", renames[1].GetTableDef().GetName())
+	require.Equal(t, "t2", renames[1].GetActions()[0].GetAlterName().GetOldName())
+	require.Equal(t, "t3", renames[1].GetActions()[0].GetAlterName().GetNewName())
 }
 
 func TestBuildDropTemporaryTableOnlyTargetsTemporaryTable(t *testing.T) {
@@ -73,6 +106,149 @@ func TestBuildDropTemporaryTableIfExistsDoesNotTargetPermanentTable(t *testing.T
 func (c *rootSQLCompilerContext) GetRootSql() string {
 	c.calls++
 	return c.rootSQL
+}
+
+func TestBuildCreateTableCheckConstraints(t *testing.T) {
+	build := func(sql string, prepare bool) (*plan.TableDef, error) {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		p, err := BuildPlan(NewMockCompilerContext(false), stmt, prepare)
+		if err != nil {
+			return nil, err
+		}
+		return p.GetDdl().GetCreateTable().GetTableDef(), nil
+	}
+
+	t.Run("table check binds after all columns", func(t *testing.T) {
+		tableDef, err := build("create table t(a int, check (b > a), b int)", false)
+		require.NoError(t, err)
+		require.Len(t, tableDef.Checks, 1)
+		require.Equal(t, "__mo_chk_1", tableDef.Checks[0].Name)
+		require.Equal(t, int32(types.T_bool), tableDef.Checks[0].Check.Typ.Id)
+	})
+
+	t.Run("table check preserves explicit name", func(t *testing.T) {
+		tableDef, err := build(
+			"create table t(a int, constraint positive_a check (a > 0))",
+			false,
+		)
+		require.NoError(t, err)
+		require.Len(t, tableDef.Checks, 1)
+		require.Equal(t, "positive_a", tableDef.Checks[0].Name)
+	})
+
+	t.Run("column check only references its column", func(t *testing.T) {
+		_, err := build("create table t(a int, b int check (a > b))", false)
+		require.ErrorContains(t, err, "column check constraint cannot refer to column")
+	})
+
+	t.Run("ctas explicit column preserves column check", func(t *testing.T) {
+		tableDef, err := build(
+			"create table t(a int constraint positive_a check (a > 0)) as select 1 as a",
+			false,
+		)
+		require.NoError(t, err)
+		require.Len(t, tableDef.Checks, 1)
+		require.Equal(t, "positive_a", tableDef.Checks[0].Name)
+		require.Equal(t, "`a` > 0", tableDef.Checks[0].OriginSql)
+	})
+
+	t.Run("check origin sql uses replay-safe string quoting", func(t *testing.T) {
+		tableDef, err := build(
+			"create table t(s varchar(10) check (s = 'ok'))",
+			false,
+		)
+		require.NoError(t, err)
+		require.Len(t, tableDef.Checks, 1)
+		require.Equal(t, "`s` = 'ok'", tableDef.Checks[0].OriginSql)
+	})
+
+	t.Run("name const cast name remains invalid", func(t *testing.T) {
+		_, err := build(
+			"create table t(a int, "+
+				"check (name_const(cast(0x61 as varchar), 1) = 1))",
+			false,
+		)
+		require.ErrorContains(t, err, "invalid argument NAME_CONST")
+	})
+
+	t.Run("non boolean root is converted", func(t *testing.T) {
+		tableDef, err := build("create table t(a int, check (a))", false)
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_bool), tableDef.Checks[0].Check.Typ.Id)
+		require.Equal(t, "cast", tableDef.Checks[0].Check.GetF().GetFunc().GetObjName())
+	})
+
+	t.Run("auto increment references are rejected", func(t *testing.T) {
+		_, err := build("create table t(a int auto_increment primary key, check (a > 0))", false)
+		require.ErrorContains(t, err, "cannot refer to auto-increment column")
+	})
+
+	t.Run("session dependent functions are rejected", func(t *testing.T) {
+		_, err := build("create table t(a int, check (current_user_id() = a))", false)
+		require.ErrorContains(t, err, "session-dependent function")
+	})
+
+	t.Run("not enforced is explicit and unsupported", func(t *testing.T) {
+		_, err := build("create table t(a int check (a > 0) not enforced)", false)
+		require.ErrorContains(t, err, "NOT ENFORCED CHECK constraints")
+	})
+
+	t.Run("external table column check is unsupported", func(t *testing.T) {
+		_, err := build(
+			"create external table t(a int check (a > 0)) "+
+				"infile{'filepath'='/tmp/t.csv'}",
+			false,
+		)
+		require.ErrorContains(t, err, "CHECK constraints on external tables")
+	})
+
+	t.Run("external table table check is unsupported", func(t *testing.T) {
+		_, err := build(
+			"create external table t(a int, check (a > 0)) "+
+				"infile{'filepath'='/tmp/t.csv'}",
+			false,
+		)
+		require.ErrorContains(t, err, "CHECK constraints on external tables")
+	})
+
+	t.Run("invalid function and marker do not panic", func(t *testing.T) {
+		require.NotPanics(t, func() {
+			_, err := build("create table t(a int, check (no_such_func(a) > 0))", false)
+			require.Error(t, err)
+		})
+		require.NotPanics(t, func() {
+			_, err := build("create table t(a int, check (? > 0))", true)
+			require.Error(t, err)
+		})
+	})
+
+	t.Run("mixed version cluster rejects check ddl", func(t *testing.T) {
+		ctx := NewMockCompilerContext(false)
+		proc := ctx.GetProcess()
+		rt := moruntime.ServiceRuntime(proc.GetService())
+		old, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion6)
+		defer func() {
+			if ok {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+			} else {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+
+		stmt, err := parsers.ParseOne(
+			t.Context(),
+			dialect.MYSQL,
+			"create table t(a int, check (a > 0))",
+			1,
+		)
+		require.NoError(t, err)
+		defer stmt.Free()
+		_, err = BuildPlan(ctx, stmt, false)
+		require.ErrorContains(t, err, "protocol version 7")
+	})
 }
 
 func tableDefCreateSQL(tableDef *plan.TableDef) string {
@@ -153,6 +329,33 @@ func TestBuildCreateViewExplicitColumnList(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrViewWrongList))
 		require.Equal(t, uint16(moerr.ER_VIEW_WRONG_LIST), err.(*moerr.Error).MySQLCode())
 	})
+}
+
+func TestBuildCreateViewRejectsTemporaryTable(t *testing.T) {
+	tests := []string{
+		"create view v as select * from nation",
+		"create view v as select 1 from nation where false",
+		"create view v as select * from (select * from nation) n",
+		"create view v as select (select n_name from nation limit 1)",
+		"create view v as (select * from nation)",
+	}
+
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false)
+			ctx.tables["nation"].IsTemporary = true
+
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = BuildPlan(ctx, stmt, false)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrViewSelectTmpTable))
+			require.Equal(t, uint16(moerr.ER_VIEW_SELECT_TMPTABLE), err.(*moerr.Error).MySQLCode())
+			require.Equal(t, "View's SELECT refers to a temporary table 'nation'", err.Error())
+		})
+	}
 }
 
 func TestBuildTemporaryTableMarksCatalogRelkind(t *testing.T) {
@@ -786,8 +989,9 @@ func TestBuildAlterTableRejectsMongoDBExternalTable(t *testing.T) {
 	ctx := mock.CurrentContext().(*MockCompilerContext)
 	ctx.objects["mongo_ext"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "mongo_ext"}
 	ctx.tables["mongo_ext"] = &plan.TableDef{
-		Name:      "mongo_ext",
-		TableType: catalog.SystemExternalRel,
+		Name:        "mongo_ext",
+		TableType:   catalog.SystemExternalRel,
+		FeatureFlag: features.MongoDBExternal,
 		Cols: []*plan.ColDef{
 			{Name: "device_id", Typ: plan.Type{Id: int32(types.T_varchar), Width: 64}},
 			{Name: "measurement", Typ: plan.Type{Id: int32(types.T_float64)}},
@@ -814,6 +1018,31 @@ func TestBuildAlterTableRejectsMongoDBExternalTable(t *testing.T) {
 	}
 }
 
+func TestBuildMongoDBExternalTableRejectsCheckConstraints(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
+	}))
+
+	for _, sql := range []string{
+		`CREATE EXTERNAL TABLE tpch.mongo_check (
+			v BIGINT CHECK (v > 0)
+		) ENGINE=MONGODB WITH (
+			"connection"='source', "database"='telemetry', "collection"='samples'
+		)`,
+		`CREATE EXTERNAL TABLE tpch.mongo_check (
+			v BIGINT,
+			CHECK (v > 0)
+		) ENGINE=MONGODB WITH (
+			"connection"='source', "database"='telemetry', "collection"='samples'
+		)`,
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.ErrorContains(t, err, "CHECK constraints on external tables", sql)
+	}
+}
+
 func TestBuildMongoDBExternalTablePreservesNotNullMapping(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	ctx := mock.CurrentContext().(*MockCompilerContext)
@@ -830,6 +1059,7 @@ func TestBuildMongoDBExternalTablePreservesNotNullMapping(t *testing.T) {
 	require.NoError(t, err)
 	tableDef := logicPlan.GetDdl().GetCreateTable().GetTableDef()
 	require.NotEmpty(t, tableDef.Cols)
+	require.True(t, features.IsMongoDBExternal(tableDef.FeatureFlag))
 	require.Equal(t, "v", tableDef.Cols[0].Name)
 	require.False(t, tableDef.Cols[0].Default.NullAbility)
 
@@ -1285,8 +1515,6 @@ func Test_buildTableDefs(t *testing.T) {
 		ClusterByOption:    nil,
 		Param:              nil,
 		AsSource:           &tree.Select{Select: &tree.SelectClause{From: &tree.From{}}},
-		IsDynamicTable:     false,
-		DTOptions:          nil,
 		IsAsSelect:         true,
 		IsAsLike:           false,
 		LikeTableName:      tree.TableName{},

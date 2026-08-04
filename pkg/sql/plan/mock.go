@@ -89,7 +89,13 @@ func (m *MockCompilerContext) CheckSubscriptionValid(subName, accName string, pu
 }
 
 func (m *MockCompilerContext) ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
-	return m.Resolve(DbNameOfObjRef(ref), tblName, snapshot)
+	objRef, tableDef, err := m.Resolve(DbNameOfObjRef(ref), tblName, snapshot)
+	if objRef != nil && ref != nil {
+		objRef.SchemaName = ref.SchemaName
+		objRef.SubscriptionName = ref.SubscriptionName
+		objRef.PubInfo = ref.PubInfo
+	}
+	return objRef, tableDef, err
 }
 
 func (m *MockCompilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *SubscriptionMeta) (*ObjectRef, *TableDef, error) {

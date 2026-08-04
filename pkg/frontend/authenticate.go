@@ -6402,22 +6402,6 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
-	case *tree.CreateSource:
-		objType = objectTypeDatabase
-		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
-		writeDatabaseAndTableDirectly = true
-		appendWriteTableNameDatabaseName(st.SourceName)
-		if st.SourceName != nil {
-			dbName = string(st.SourceName.SchemaName)
-		}
-	case *tree.CreateConnector:
-		objType = objectTypeDatabase
-		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
-		writeDatabaseAndTableDirectly = true
-		appendWriteTableNameDatabaseName(st.TableName)
-		if st.TableName != nil {
-			dbName = string(st.TableName.SchemaName)
-		}
 	case *tree.CreateSequence:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -6626,7 +6610,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
 		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions, *tree.ShowCcprSubscriptions, *tree.ShowPublicationCoverage,
-		*tree.ShowBackendServers, *tree.ShowStages, *tree.ShowConnectors, *tree.DropConnector,
+		*tree.ShowBackendServers, *tree.ShowStages,
 		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow,
 		*tree.ShowSQLTasks, *tree.ShowSQLTaskRuns,
 		*tree.ShowRules, *tree.CheckTableStmt, *tree.ShowProfileStmt,
@@ -11178,10 +11162,14 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 			return moerr.NewInvalidInput(ctx, "mo, mo.*, out_* are reserved and cannot be used as a procedure argument name")
 		}
 
+		argType, ok := cp.Args[i].(*tree.ProcedureArgDecl).Type.(*tree.T)
+		if !ok {
+			return moerr.NewInternalError(ctx, "unknown stored procedure argument type")
+		}
 		argList[i] = tree.ProcedureArgForMarshal{
 			ArgName:   curName,
 			Name:      cp.Args[i].(*tree.ProcedureArgDecl).Name,
-			Type:      cp.Args[i].(*tree.ProcedureArgDecl).Type,
+			Type:      argType,
 			InOutType: cp.Args[i].(*tree.ProcedureArgDecl).InOutType,
 		}
 	}
@@ -11547,8 +11535,10 @@ func doInterpretCall(
 	var argList []tree.ProcedureArgForMarshal
 	// execute related
 	var varScope [](map[string]interface{})
+	var varTypeScope [](map[string]plan.Type)
 	var argsMap map[string]tree.Expr
 	var argsAttr map[string]tree.InOutArgType
+	var argsType map[string]plan.Type
 
 	// a database must be selected or specified as qualifier when create a function
 	if call.Name.HasNoNameQualifier() {
@@ -11620,13 +11610,20 @@ func doInterpretCall(
 	fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 	argsAttr = make(map[string]tree.InOutArgType)
 	argsMap = make(map[string]tree.Expr) // map arg to param
+	argsType = make(map[string]plan.Type)
 
 	// build argsAttr and argsMap
 	ses.Info(ctx, "Interpret procedure call length:"+strconv.Itoa(len(argList)))
 	i := 0
 	for _, v := range argList {
-		argsAttr[v.ArgName] = v.InOutType
-		argsMap[v.ArgName] = call.Args[i]
+		name := strings.ToLower(v.ArgName)
+		argType, err := plan2.GetTypeFromAst(ctx, v.Type)
+		if err != nil {
+			return nil, err
+		}
+		argsAttr[name] = v.InOutType
+		argsMap[name] = call.Args[i]
+		argsType[name] = argType
 		i++
 	}
 
@@ -11635,10 +11632,12 @@ func doInterpretCall(
 	interpreter.fmtctx = fmtctx
 	interpreter.ses = ses
 	interpreter.varScope = &varScope
+	interpreter.varTypeScope = &varTypeScope
 	interpreter.bh = bh
 	interpreter.result = nil
 	interpreter.argsMap = argsMap
 	interpreter.argsAttr = argsAttr
+	interpreter.argsType = argsType
 	interpreter.outParamMap = make(map[string]interface{})
 	interpreter.initialAffectedRows = callerAffectedRows
 

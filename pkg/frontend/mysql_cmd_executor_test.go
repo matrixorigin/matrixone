@@ -51,6 +51,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	plan0 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -2142,6 +2143,45 @@ func Test_HandlePrepareStringUsesSessionSQLMode(t *testing.T) {
 		}
 		defer preStmt.Close()
 		requirePreparedSelectConcat(t, preStmt)
+		return nil
+	})
+}
+
+func Test_HandlePrepareStringSupportsPipesAsConcatLikePattern(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ec := newTestExecCtx(ctx, ctrl)
+
+	runTestHandle("handlePrepareStringSupportsPipesAsConcatLikePattern", t, func(ses *Session) error {
+		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "PIPES_AS_CONCAT"))
+		ec.resper = ses.respr
+		prepareString := tree.NewPrepareString("stmt_like_concat", `select 'Jack' like '%'||?||'%'`)
+		defer prepareString.Free()
+		preStmt, err := handlePrepareString(
+			ses,
+			ec,
+			prepareString,
+		)
+		if err != nil {
+			return err
+		}
+		defer preStmt.Close()
+
+		selectStmt, ok := preStmt.PrepareStmt.(*tree.Select)
+		require.True(t, ok)
+		selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+		require.True(t, ok)
+		require.Len(t, selectClause.Exprs, 1)
+		likeExpr, ok := selectClause.Exprs[0].Expr.(*tree.ComparisonExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.LIKE, likeExpr.Op)
+		outerConcat, ok := likeExpr.Right.(*tree.FuncExpr)
+		require.True(t, ok)
+		name, ok := outerConcat.Func.FunctionReference.(*tree.UnresolvedName)
+		require.True(t, ok)
+		require.Equal(t, "concat", name.ColName())
 		return nil
 	})
 }
@@ -5727,6 +5767,53 @@ func TestExecRequestRewriteFailureMarksRowCountFailed(t *testing.T) {
 	}
 }
 
+func TestExecRequestStmtPrepareAcceptsSetVariable(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	workspace := newTestWorkspace()
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
+	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).AnyTimes()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.GetResponser().MysqlRrWr().(*MysqlProtocolImpl).SetSession(ses)
+	ses.txnHandler = InitTxnHandler(ses.GetService(), nil, ctx, txnOperator)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+
+	resp, err := ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte("set @binary_value = ?"),
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+
+	stmtName := getPrepareStmtName(ses.GetLastStmtId())
+	prepared, err := ses.GetPrepareStmt(ctx, stmtName)
+	require.NoError(t, err)
+	require.IsType(t, &tree.SetVar{}, prepared.PrepareStmt)
+	require.Len(t, prepared.PreparePlan.GetDcl().GetPrepare().GetParamTypes(), 1)
+
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte("set @first = ?, @second = ?"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.GetCategory())
+}
+
 func TestExecRequestProtocolCommandRowCount(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -6807,7 +6894,7 @@ func TestRecordSessionDDL(t *testing.T) {
 	}, assert.AnError)
 	require.Equal(t, uint64(0), ses.getDDLVersion())
 
-	record(&tree.CreateSource{}, &plan0.Plan{
+	record(&tree.CreateTable{}, &plan0.Plan{
 		Plan: &plan0.Plan_Ddl{Ddl: &plan0.DataDefinition{DdlType: plan0.DataDefinition_CREATE_TABLE}},
 	}, nil)
 	require.Equal(t, uint64(1), ses.getDDLVersion())
@@ -6836,7 +6923,7 @@ func TestRecordSessionDDLPropagatesToUpstreamSession(t *testing.T) {
 	backSes.upstream = ses
 
 	recordSessionDDL(backSes, &ExecCtx{
-		stmt: &tree.CreateSource{},
+		stmt: &tree.CreateTable{},
 		cw: &TxnComputationWrapper{plan: &plan0.Plan{
 			Plan: &plan0.Plan_Ddl{Ddl: &plan0.DataDefinition{
 				DdlType: plan0.DataDefinition_CREATE_TABLE,

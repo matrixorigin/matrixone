@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -51,12 +52,20 @@ type joinKeyContractValue struct {
 type joinKeyContractCase struct {
 	name            string
 	typ             types.Type
+	probeTyp        types.Type
 	build           joinKeyContractValue
 	probe           joinKeyContractValue
 	sqlEquality     string
 	skipReason      string
 	makeBuildFiller func(int) joinKeyContractValue
 	makeEquivalent  func(int) joinKeyContractValue
+}
+
+func (tc joinKeyContractCase) probeType() types.Type {
+	if tc.probeTyp.Oid == types.T_any {
+		return tc.typ
+	}
+	return tc.probeTyp
 }
 
 type joinKeyExecutionMode struct {
@@ -96,7 +105,11 @@ func TestHashJoinKeyEqualityContract(t *testing.T) {
 
 func hashJoinKeyContractCases() []joinKeyContractCase {
 	float32Type := types.T_float32.ToType()
+	float32Type.Width = 5
 	float32Type.Scale = 2
+	float32ProbeType := types.T_float32.ToType()
+	float32ProbeType.Width = 6
+	float32ProbeType.Scale = 3
 	vectorZero := make([]float32, 8)
 	vectorNegativeZero := make([]float32, 8)
 	vectorNegativeZero[3] = float32(math.Copysign(0, -1))
@@ -121,10 +134,27 @@ func hashJoinKeyContractCases() []joinKeyContractCase {
 		{
 			name:        "scaled-float32",
 			typ:         float32Type,
+			probeTyp:    float32ProbeType,
 			build:       joinKeyContractValue{value: float32(1.234)},
-			probe:       joinKeyContractValue{value: float32(1.23)},
+			probe:       joinKeyContractValue{value: float32(1.2304)},
 			sqlEquality: "TRUE",
-			skipReason:  "scaled FLOAT32 key encoding is pending",
+			makeBuildFiller: func(i int) joinKeyContractValue {
+				return joinKeyContractValue{value: float32(i + 10)}
+			},
+			makeEquivalent: func(i int) joinKeyContractValue {
+				if i%2 == 0 {
+					return joinKeyContractValue{value: float32(1.234)}
+				}
+				return joinKeyContractValue{value: float32(1.23)}
+			},
+		},
+		{
+			name:        "scaled-float32-non-equivalent",
+			typ:         float32Type,
+			probeTyp:    float32ProbeType,
+			build:       joinKeyContractValue{value: float32(1.234)},
+			probe:       joinKeyContractValue{value: float32(1.2306)},
+			sqlEquality: "FALSE",
 			makeBuildFiller: func(i int) joinKeyContractValue {
 				return joinKeyContractValue{value: float32(i + 10)}
 			},
@@ -184,6 +214,20 @@ func hashJoinKeyContractCases() []joinKeyContractCase {
 			},
 		},
 		{
+			name:        "scaled-float32-nan",
+			typ:         float32Type,
+			build:       joinKeyContractValue{value: math.Float32frombits(0x7fc00001)},
+			probe:       joinKeyContractValue{value: math.Float32frombits(0x7fc00001)},
+			sqlEquality: "FALSE",
+			skipReason:  "NaN non-match key handling is pending",
+			makeBuildFiller: func(i int) joinKeyContractValue {
+				return joinKeyContractValue{value: float32(i + 1)}
+			},
+			makeEquivalent: func(int) joinKeyContractValue {
+				return joinKeyContractValue{value: math.Float32frombits(0x7fc00001)}
+			},
+		},
+		{
 			name:        "double-null",
 			typ:         types.T_float64.ToType(),
 			build:       joinKeyContractValue{null: true},
@@ -211,6 +255,19 @@ func expectedJoinKeyContractPayloads(tc joinKeyContractCase) []int32 {
 }
 
 func runScalarEqualityOracle(t *testing.T, tc joinKeyContractCase) string {
+	forward := runScalarEquality(t, tc.typ, tc.build, tc.probeType(), tc.probe)
+	reverse := runScalarEquality(t, tc.probeType(), tc.probe, tc.typ, tc.build)
+	require.Equal(t, forward, reverse, "SQL equality must be symmetric")
+	return forward
+}
+
+func runScalarEquality(
+	t *testing.T,
+	leftType types.Type,
+	leftValue joinKeyContractValue,
+	rightType types.Type,
+	rightValue joinKeyContractValue,
+) string {
 	proc := testutil.NewProcess(t)
 	var left, right, result *vector.Vector
 	defer func() {
@@ -226,10 +283,10 @@ func runScalarEqualityOracle(t *testing.T, tc joinKeyContractCase) string {
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	}()
-	left = makeJoinKeyVector(t, proc, tc.typ, []joinKeyContractValue{tc.build})
-	right = makeJoinKeyVector(t, proc, tc.typ, []joinKeyContractValue{tc.probe})
+	left = makeJoinKeyVector(t, proc, leftType, []joinKeyContractValue{leftValue})
+	right = makeJoinKeyVector(t, proc, rightType, []joinKeyContractValue{rightValue})
 
-	fn, err := function.GetFunctionByName(context.Background(), "=", []types.Type{tc.typ, tc.typ})
+	fn, err := function.GetFunctionByName(context.Background(), "=", []types.Type{leftType, rightType})
 	require.NoError(t, err)
 	result, err = function.RunFunctionDirectly(
 		proc,
@@ -256,8 +313,9 @@ func runHashJoinKeyContract(
 	keyCase joinKeyContractCase,
 	mode joinKeyExecutionMode,
 ) []int32 {
+	probeType := keyCase.probeType()
 	keyExprs := [][]*plan.Expr{
-		{newExpr(0, keyCase.typ)},
+		{newExpr(0, probeType)},
 		{newExpr(0, keyCase.typ)},
 	}
 	proc := testutil.NewProcess(t)
@@ -268,7 +326,7 @@ func runHashJoinKeyContract(
 	joinMapTag := tag
 	payloadType := types.T_int32.ToType()
 	arg := &HashJoin{
-		LeftTypes:      []types.Type{keyCase.typ},
+		LeftTypes:      []types.Type{probeType},
 		RightTypes:     []types.Type{keyCase.typ, payloadType},
 		ResultCols:     []colexec.ResultPos{colexec.NewResultPos(1, 1)},
 		EqConds:        keyExprs,
@@ -293,6 +351,7 @@ func runHashJoinKeyContract(
 	if mode.shuffle {
 		buildArg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: joinMapTag + 7000}
 	}
+	installTestAllocation(t, arg, buildArg)
 	var build, probe *batch.Batch
 	defer func() {
 		arg.Free(proc, false, nil)
@@ -335,8 +394,16 @@ func runHashJoinKeyContract(
 	build.Vecs[0] = makeJoinKeyVector(t, proc, keyCase.typ, buildValues)
 	build.Vecs[1] = testutil.MakeInt32Vector(buildPayloads, nil, proc.Mp())
 	build.SetRowCount(joinKeyContractBuildRows)
+	if mode.wantReSpill {
+		requireHashJoinTargetBucketReSpills(
+			t,
+			build.Vecs[0],
+			hashmap.UnitLimit,
+			mode.spillThreshold,
+		)
+	}
 	probe = batch.NewWithSize(1)
-	probe.Vecs[0] = makeJoinKeyVector(t, proc, keyCase.typ, []joinKeyContractValue{keyCase.probe})
+	probe.Vecs[0] = makeJoinKeyVector(t, proc, probeType, []joinKeyContractValue{keyCase.probe})
 	probe.SetRowCount(1)
 
 	resetChildrenWithBatch(arg, probe)
@@ -391,6 +458,25 @@ func runHashJoinKeyContract(
 		return resultPayloads[i] < resultPayloads[j]
 	})
 	return resultPayloads
+}
+
+func requireHashJoinTargetBucketReSpills(
+	t *testing.T,
+	keys *vector.Vector,
+	targetRow int,
+	spillThreshold int64,
+) {
+	hashes := make([]uint64, keys.Length())
+	spillutil.ComputeXXHash([]*vector.Vector{keys}, hashes, 0)
+	mask := uint64(spillutil.SpillNumBuckets - 1)
+	targetBucket := hashes[targetRow] & mask
+	var bucketRows int64
+	for _, hash := range hashes {
+		if hash&mask == targetBucket {
+			bucketRows++
+		}
+	}
+	require.GreaterOrEqual(t, bucketRows, spillThreshold)
 }
 
 func makeJoinKeyVector(

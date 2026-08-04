@@ -32,6 +32,7 @@ fi
 
 shopt -s expand_aliases
 source ./utilities.sh
+source ./ut_tools.bash
 go version
 
 BUILD_WKSP=$(dirname "$PWD") && cd $BUILD_WKSP
@@ -178,6 +179,17 @@ function run_plan_race_shards(){
     return "${shard_status}"
 }
 
+function remove_packages_from_scope(){
+    local scope=$1
+    shift
+    local package
+
+    for package in "$@"; do
+        scope=$(printf '%s\n' "${scope}" | grep -Fvx "${package}")
+    done
+    printf '%s\n' "${scope}"
+}
+
 function run_tests(){
     cd $BUILD_WKSP
     horiz_rule
@@ -187,6 +199,7 @@ function run_tests(){
     echo "#  COVERAGE REPORT: $CODE_COVERAGE"
     echo "#  UT TIMEOUT:      $UT_TIMEOUT"
     echo "#  UT PARALLEL:     $UT_PARALLEL"
+    echo "#  CLUSTER ADMISSION: process lifecycle"
     echo "#  HEAVY RACE UT:   $HEAVY_RACE_PARALLEL"
     horiz_rule
 
@@ -215,8 +228,8 @@ function run_tests(){
     fi
 
     if [[ $SKIP_TESTS == 'race' ]]; then
-        logger "INF" "Run UT without race check"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m"  $test_scope > $UT_REPORT
+        logger "INF" "Run UT packages with parallelism ${UT_PARALLEL} and process-lifecycle cluster admission"
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" $test_scope > $UT_REPORT
         UT_TEST_STATUS=$?
     else
         logger "INF" "Run UT with race check"
@@ -224,7 +237,6 @@ function run_tests(){
         local serial_test_scope
         local heavy_test_scope
         local light_test_scope
-        local package
         local light_status=0
         local serial_status=0
         local heavy_status=0
@@ -244,8 +256,8 @@ function run_tests(){
         fi
 
         # These packages need exclusive runner access. NewTestService callers
-        # bind fixed ports, while the issues package runs multiple embedded
-        # services whose race builds can starve under package-level concurrency.
+        # bind fixed ports, while the issues package intentionally keeps a
+        # shared embedded cluster alive for most of its test process.
         if ! serial_test_scope=$(go list ${GO_MODULE_MODE} \
             ./pkg/logservice \
             ./pkg/vm/engine/tae/logstore \
@@ -267,10 +279,11 @@ function run_tests(){
             return 0
         fi
 
-        light_test_scope="${test_scope}"
-        for package in "${plan_package}" ${serial_test_scope} ${heavy_test_scope}; do
-            light_test_scope=$(printf '%s\n' "${light_test_scope}" | grep -Fvx "${package}")
-        done
+        light_test_scope=$(remove_packages_from_scope \
+            "${test_scope}" \
+            "${plan_package}" \
+            ${serial_test_scope} \
+            ${heavy_test_scope})
 
         if [[ -n "${light_test_scope}" ]]; then
             logger "INF" "Run light race-test packages with parallelism ${UT_PARALLEL}"
@@ -316,7 +329,7 @@ function ut_summary(){
   # analyzer cannot parse a truncated/interleaved go test JSON stream.
   mkdir -p "${report_path}/failed/outputs"
 
-  if ! go install github.com/matrixorigin/go-ut-analysis@latest; then
+  if ! install_go_ut_analysis; then
     analysis_status=1
     logger "ERR" "failed to install go-ut-analysis"
   else
