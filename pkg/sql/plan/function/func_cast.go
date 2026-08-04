@@ -3135,14 +3135,6 @@ func numericToNumeric[T1, T2 constraints.Integer | constraints.Float](
 	return nil
 }
 
-func numericToBit[T constraints.Integer | constraints.Float](
-	ctx context.Context,
-	from vector.FunctionParameterWrapper[T],
-	to *vector.FunctionResult[uint64], bitSize int,
-	length int, selectList *FunctionSelectList) error {
-	return numericToBitWithIgnore(ctx, nil, from, to, bitSize, length, selectList)
-}
-
 func numericToBitWithIgnore[T constraints.Integer | constraints.Float](
 	ctx context.Context, proc *process.Process,
 	from vector.FunctionParameterWrapper[T],
@@ -6004,13 +5996,6 @@ func decimal256ToStr(
 	return nil
 }
 
-func decimal64ToBit(
-	ctx context.Context,
-	from vector.FunctionParameterWrapper[types.Decimal64],
-	to *vector.FunctionResult[uint64], bitSize int, length int, selectList *FunctionSelectList) error {
-	return decimal64ToBitWithIgnore(ctx, nil, from, to, bitSize, length, selectList)
-}
-
 func decimal64ToBitWithIgnore(
 	ctx context.Context, proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Decimal64],
@@ -6034,13 +6019,6 @@ func decimal64ToBitWithIgnore(
 		}
 	}
 	return nil
-}
-
-func decimal128ToBit(
-	ctx context.Context,
-	from vector.FunctionParameterWrapper[types.Decimal128],
-	to *vector.FunctionResult[uint64], bitSize int, length int, selectList *FunctionSelectList) error {
-	return decimal128ToBitWithIgnore(ctx, nil, from, to, bitSize, length, selectList)
 }
 
 func decimal128ToBitWithIgnore(
