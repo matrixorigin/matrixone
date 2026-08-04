@@ -28,18 +28,22 @@ import (
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 var (
@@ -5460,6 +5464,16 @@ func TestIssue14008(t *testing.T) {
 		})
 }
 
+type bindChangeCountingTxnHolder struct {
+	activeTxnHolder
+	fenceCalls atomic.Int64
+}
+
+func (h *bindChangeCountingTxnHolder) fenceByBindChanged(bind pb.LockTable) int {
+	h.fenceCalls.Add(1)
+	return h.activeTxnHolder.fenceByBindChanged(bind)
+}
+
 func TestHandleBindChangedConcurrently(t *testing.T) {
 	table := uint64(10)
 	getRunner(false)(
@@ -5470,6 +5484,11 @@ func TestHandleBindChangedConcurrently(t *testing.T) {
 			s *service,
 			lt *localLockTable) {
 			bind := lt.getBind()
+			core, logs := observer.New(zap.InfoLevel)
+			s.logger = log.GetServiceLogger(zap.New(core), metadata.ServiceType_CN, s.serviceID).
+				Named("lockservice")
+			holder := &bindChangeCountingTxnHolder{activeTxnHolder: s.activeTxnHolder}
+			s.activeTxnHolder = holder
 
 			var wg sync.WaitGroup
 			for i := 0; i < 20; i++ {
@@ -5490,6 +5509,10 @@ func TestHandleBindChangedConcurrently(t *testing.T) {
 				s.handleBindChanged(bind)
 			}
 			wg.Wait()
+			require.Same(t, lt, s.tableGroups.get(bind.Group, bind.Table))
+			assert.Zero(t, logs.FilterMessage("bind created").Len())
+			assert.Zero(t, logs.FilterMessage("bind closed").Len())
+			assert.Zero(t, holder.fenceCalls.Load())
 		},
 	)
 }
