@@ -541,7 +541,7 @@ func constructCreateTableSQL(
 		createStr += "\n"
 	}
 	createStr += ")"
-	createStr += tableCharsetForShowCreate(tableDef.DefaultCharset)
+	createStr += tableCharsetForShowCreate(ctx, tableDef.DefaultCharset)
 
 	var comment string
 	var properties []*plan.Property // Collect non-system properties for PROPERTIES clause
@@ -792,8 +792,20 @@ func effectiveTableCharsetForShowCreate(tableDef *plan.TableDef) uint32 {
 	return uint32(types.CharsetUTF8)
 }
 
-func tableCharsetForShowCreate(charset uint32) string {
+func tableCharsetForShowCreate(ctx CompilerContext, charset uint32) string {
 	switch charset {
+	case uint32(types.CharsetUTF8):
+		// collation_server is runtime-configurable. Spell general_ci whenever it
+		// differs from the effective runtime default; otherwise the historical
+		// concise output is already round-trip safe in this compiler context.
+		if ctx == nil {
+			return ""
+		}
+		serverCharset, err := tableDefaultCharset(ctx, nil)
+		if err == nil && serverCharset == uint32(types.CharsetUTF8) {
+			return ""
+		}
+		return " COLLATE=utf8mb4_general_ci"
 	case uint32(types.CharsetUTF8MB4Bin):
 		return " COLLATE=utf8mb4_bin"
 	case uint32(types.CharsetBinary):

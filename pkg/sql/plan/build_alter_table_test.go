@@ -267,6 +267,29 @@ func TestAlterTableAddColumnInheritsTableDefaultCharset(t *testing.T) {
 	}
 }
 
+func TestAlterTableAddColumnOverridesBinaryTableCharsetBeforeTypeConversion(t *testing.T) {
+	for _, clause := range []string{
+		"character set utf8mb4",
+		"collate utf8mb4_general_ci",
+	} {
+		t.Run(clause, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetBinary)
+
+			logicPlan, err := buildSingleStmt(mock, t,
+				"alter table t1 add column d varchar(10) "+clause)
+			if !assert.NoError(t, err) {
+				return
+			}
+			newCol := FindColumn(logicPlan.GetDdl().GetAlterTable().CopyTableDef.Cols, "d")
+			if assert.NotNil(t, newCol) {
+				assert.Equal(t, int32(types.T_varchar), newCol.Typ.Id)
+				assert.Equal(t, uint32(types.CharsetUTF8), newCol.Typ.Charset)
+			}
+		})
+	}
+}
+
 func TestAlterTableModifyColumnInheritsTableDefaultCharset(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	mock.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetUTF8MB4Bin)
@@ -282,28 +305,34 @@ func TestAlterTableModifyColumnInheritsTableDefaultCharset(t *testing.T) {
 func TestAlterTableModifyColumnCharsetOverridesTableDefault(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
-		charset     string
+		clause      string
 		wantType    int32
 		wantCharset uint32
 	}{
 		{
 			name:        "utf8mb4 resets to its default collation",
-			charset:     "utf8mb4",
+			clause:      "character set utf8mb4",
+			wantType:    int32(types.T_char),
+			wantCharset: uint32(types.CharsetUTF8),
+		},
+		{
+			name:        "general ci overrides the binary table charset",
+			clause:      "collate utf8mb4_general_ci",
 			wantType:    int32(types.T_char),
 			wantCharset: uint32(types.CharsetUTF8),
 		},
 		{
 			name:        "binary changes the physical string type",
-			charset:     "binary",
+			clause:      "character set binary",
 			wantType:    int32(types.T_binary),
 			wantCharset: uint32(types.CharsetBinary),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false)
-			mock.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetUTF8MB4Bin)
+			mock.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetBinary)
 			logicPlan, err := buildSingleStmt(mock, t,
-				"alter table t1 modify column b char(20) character set "+tc.charset)
+				"alter table t1 modify column b char(20) "+tc.clause)
 			if !assert.NoError(t, err) {
 				return
 			}

@@ -812,8 +812,7 @@ func storageAgnosticType(
 		return
 	}
 	nTy.Charset = uint32(types.CharsetType(types.T(nTy.Id)))
-	applyTableDefaultCharsetToPlanType(&nTy, defaultCharset)
-	if err = applyColumnAttributesToType(ctx, &nTy, nCol.Attributes); err != nil {
+	if err = applyDefaultAndColumnAttributesToType(ctx, &nTy, defaultCharset, nCol.Attributes); err != nil {
 		return
 	}
 

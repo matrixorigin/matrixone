@@ -975,6 +975,23 @@ func TestShowCreatePreservesTextCollationMetadata(t *testing.T) {
 	require.Contains(t, showSQL, ") COLLATE=utf8mb4_bin")
 }
 
+func TestShowCreateSerializesGeneralCIDefault(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.ResolveVariableFunc = func(name string, isSystem, isGlobal bool) (interface{}, error) {
+		if name == "collation_server" && isSystem && !isGlobal {
+			return "utf8mb4_bin", nil
+		}
+		return nil, nil
+	}
+	tableDef, err := buildTestCreateTableStmt(mock,
+		"create table general_show(v varchar(10)) collate utf8mb4_general_ci")
+	require.NoError(t, err)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, showSQL, ") COLLATE=utf8mb4_general_ci")
+}
+
 func TestShowCreateKeepsLegacyDefaultOutputStable(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	tableDef, err := buildTestCreateTableStmt(mock,
