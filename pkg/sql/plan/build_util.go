@@ -296,6 +296,13 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 	return plan.Type{}, moerr.NewInternalError(ctx, "unknown data type")
 }
 
+// GetTypeFromAst resolves a parser SQL type into its plan representation.
+// Stored procedure variables use this to retain their declared type, including
+// metadata such as DECIMAL width and scale, throughout interpretation.
+func GetTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan.Type, error) {
+	return getTypeFromAst(ctx, typ)
+}
+
 func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs []tree.ColumnAttribute) error {
 	if !isGeometryPlanType(colType) {
 		for _, attr := range attrs {
