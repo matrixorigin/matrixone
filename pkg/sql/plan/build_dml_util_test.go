@@ -327,6 +327,66 @@ func TestMakeInsertValueConstExprBinaryHexPadding(t *testing.T) {
 	}
 }
 
+func TestMakeInsertValueConstExprBitIgnoreTruncates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	colType := types.New(types.T_bit, 4, 0)
+	numVal := tree.NewNumVal("0b11111", "0b11111", false, tree.P_bit)
+
+	_, err := MakeInsertValueConstExpr(proc, numVal, &colType, false)
+	require.Error(t, err)
+
+	expr, err := MakeInsertValueConstExpr(proc, numVal, &colType, true)
+	require.NoError(t, err)
+	require.Equal(t, uint64(15), expr.GetLit().GetU64Val())
+}
+
+func TestMakeInsertIgnoreMySQLSpecialTypeConstExpr(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name     string
+		target   plan.Type
+		value    *tree.NumVal
+		wantType types.T
+		wantEnum uint32
+		wantSet  uint64
+	}{
+		{
+			name:     "invalid enum becomes error member",
+			target:   plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			value:    tree.NewNumVal("bad", "bad", false, tree.P_char),
+			wantType: types.T_enum,
+		},
+		{
+			name:     "invalid set member is dropped",
+			target:   plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"},
+			value:    tree.NewNumVal("x,bad", "x,bad", false, tree.P_char),
+			wantType: types.T_uint64,
+			wantSet:  1,
+		},
+		{
+			name:     "invalid year becomes zero",
+			target:   plan.Type{Id: int32(types.T_year)},
+			value:    tree.NewNumVal(int64(2156), "2156", false, tree.P_int64),
+			wantType: types.T_year,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(ctx, tt.value, tt.target)
+			require.NoError(t, err)
+			require.True(t, handled)
+			require.Equal(t, int32(tt.wantType), expr.Typ.Id)
+			if tt.wantType == types.T_enum {
+				require.Equal(t, tt.wantEnum, expr.GetLit().GetEnumVal())
+			}
+			if tt.wantType == types.T_uint64 {
+				require.Equal(t, tt.wantSet, expr.GetLit().GetU64Val())
+			}
+		})
+	}
+}
+
 func TestAppendIndexPrefixProjection(t *testing.T) {
 	newBuilder := func(t *testing.T) (*QueryBuilder, *BindContext, int32) {
 		t.Helper()
