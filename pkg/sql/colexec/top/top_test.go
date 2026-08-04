@@ -292,6 +292,93 @@ func TestTopSpillEvalHonorsCancellationAfterInput(t *testing.T) {
 	require.Equal(t, 4, outputRows)
 }
 
+func TestTopSpillWriteHonorsCancellationAfterInputBatch(t *testing.T) {
+	limit := int64(topSpillThreshold + 1)
+	tc := newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int64.ToType()}, limit,
+		[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}})
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.True(t, tc.arg.ctr.spilling)
+
+	baseCtx := tc.proc.Ctx
+	ctx, cancel := context.WithCancel(baseCtx)
+	tc.proc.Ctx = ctx
+	child := colexec.NewMockOperator().
+		WithBatchs([]*batch.Batch{newBatch(tc.types, tc.proc, 32)}).
+		WithBatchCallback(func(int) { cancel() })
+	tc.arg.AppendChild(child)
+
+	t.Cleanup(func() {
+		tc.proc.Ctx = baseCtx
+		tc.arg.Free(tc.proc, true, context.Canceled)
+		child.Free(tc.proc, true, context.Canceled)
+		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	})
+
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, result.Batch)
+	require.Nil(t, tc.arg.ctr.spillFile)
+	require.Empty(t, tc.arg.ctr.spillIndex)
+}
+
+func TestTopSpillBatchCancellationBeforeWrite(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	baseCtx := proc.Ctx
+	arg := &Top{}
+	arg.ctr.n = 1
+	src := newBatch([]types.Type{types.T_int64.ToType()}, proc, 32)
+	analyzer := process.NewAnalyzer(0, false, false, "top-cancel-write")
+
+	t.Cleanup(func() {
+		proc.Ctx = baseCtx
+		arg.Free(proc, true, context.Canceled)
+		src.Clean(proc.Mp())
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	// The entry check passes. Cancellation is then observed after
+	// serialization but before the first file write.
+	proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 2)
+	err := arg.ctr.spillBatch(src, proc, analyzer)
+	require.ErrorIs(t, err, context.Canceled)
+	require.NotNil(t, arg.ctr.spillFile)
+	info, statErr := arg.ctr.spillFile.Stat()
+	require.NoError(t, statErr)
+	require.Zero(t, info.Size())
+	require.Empty(t, arg.ctr.spillIndex)
+}
+
+func TestTopSpillBatchCancellationAfterWrite(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	baseCtx := proc.Ctx
+	arg := &Top{}
+	arg.ctr.n = 1
+	src := newBatch([]types.Type{types.T_int64.ToType()}, proc, 32)
+	analyzer := process.NewAnalyzer(0, false, false, "top-cancel-after-write")
+
+	t.Cleanup(func() {
+		proc.Ctx = baseCtx
+		arg.Free(proc, true, context.Canceled)
+		src.Clean(proc.Mp())
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	// Entry and pre-write checks pass. The post-write boundary observes
+	// cancellation before the spill index or heap state is published.
+	proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 3)
+	err := arg.ctr.spillBatch(src, proc, analyzer)
+	require.ErrorIs(t, err, context.Canceled)
+	require.NotNil(t, arg.ctr.spillFile)
+	info, statErr := arg.ctr.spillFile.Stat()
+	require.NoError(t, statErr)
+	require.Positive(t, info.Size())
+	require.Empty(t, arg.ctr.spillIndex)
+	require.Zero(t, arg.ctr.spillBatIdx)
+}
+
 func TestTopSpillEvalCancellationCheckpoints(t *testing.T) {
 	tests := []struct {
 		name          string

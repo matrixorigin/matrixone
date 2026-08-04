@@ -15,6 +15,7 @@
 package group
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -97,6 +98,19 @@ type cancelOnDoneCheckContext struct {
 	context.Context
 	remaining int
 	done      chan struct{}
+}
+
+type cancelAfterWriteWriter struct {
+	cancel context.CancelFunc
+	writes int
+}
+
+func (w *cancelAfterWriteWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes == 1 {
+		w.cancel()
+	}
+	return len(p), nil
 }
 
 func newCancelOnDoneCheckContext(parent context.Context, checks int) *cancelOnDoneCheckContext {
@@ -362,7 +376,159 @@ func TestGroupSpillReloadHonorsCancellationAfterInput(t *testing.T) {
 	require.Zero(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadBuckets"])
 }
 
+func TestGroupSpillWriteHonorsCancellationAfterInputBatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	baseCtx := proc.Ctx
+	ctx, cancel := context.WithCancel(baseCtx)
+	proc.Ctx = ctx
+
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt32Vector([]int32{4, 1, 3, 2}, nil, proc.Mp())
+	input.SetRowCount(4)
+	child := colexec.NewMockOperator().
+		WithBatchs([]*batch.Batch{input}).
+		WithBatchCallback(func(int) { cancel() })
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, []aggexec.AggFuncExecExpression{countStarAgg()})
+	g.SpillMem = 1
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+
+	t.Cleanup(func() {
+		proc.Ctx = baseCtx
+		g.Free(proc, true, context.Canceled)
+		child.Free(proc, true, context.Canceled)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	result, err := vm.Exec(g, proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, result.Batch)
+	require.Zero(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
+	require.Nil(t, g.ctr.currentSpillBkt)
+}
+
+func TestGroupSpillWriteStopsAtBucketBoundary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	baseCtx := proc.Ctx
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, []aggexec.AggFuncExecExpression{countStarAgg()})
+	g.SpillMem = 1
+	require.NoError(t, g.Prepare(proc))
+
+	const rows = 1024
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	input.SetRowCount(rows)
+	cleaned := false
+	t.Cleanup(func() {
+		if cleaned {
+			return
+		}
+		proc.Ctx = baseCtx
+		g.Free(proc, true, context.Canceled)
+		input.Clean(proc.Mp())
+		proc.Free()
+	})
+	needSpill, err := g.buildOneBatch(proc, input)
+	require.NoError(t, err)
+	require.True(t, needSpill)
+
+	hashCodes := make([]uint64, g.ctr.hr.Hash.GroupCount())
+	hashCodes = g.ctr.hr.Hash.FillGroupHashes(hashCodes)
+	g.ctr.computeBucketIndex(hashCodes, 1)
+	usedBuckets := make(map[int]struct{})
+	firstBucket := spillNumBuckets
+	for _, hashCode := range hashCodes {
+		bucketIndex := int(hashCode & (spillNumBuckets - 1))
+		usedBuckets[bucketIndex] = struct{}{}
+		firstBucket = min(firstBucket, bucketIndex)
+	}
+	require.Greater(t, len(usedBuckets), 1)
+
+	g.ctr.currentSpillBkt = make([]*spillBucket, spillNumBuckets)
+	for i := range g.ctr.currentSpillBkt {
+		g.ctr.currentSpillBkt[i] = &spillBucket{lv: 1, name: fmt.Sprintf("cancel-boundary-%d", i)}
+	}
+	file, err := os.CreateTemp(t.TempDir(), "group-cancel-boundary-*")
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(baseCtx)
+	writer := &cancelAfterWriteWriter{cancel: cancel}
+	g.ctr.currentSpillBkt[firstBucket].file = file
+	g.ctr.currentSpillBkt[firstBucket].writer = bufio.NewWriterSize(writer, 1)
+	proc.Ctx = ctx
+
+	_, _, err = g.ctr.spillDataToDisk(proc, g.OpAnalyzer, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, writer.writes)
+	require.Equal(t, int64(1), g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
+
+	proc.Ctx = baseCtx
+	g.Free(proc, true, context.Canceled)
+	input.Clean(proc.Mp())
+	proc.Free()
+	cleaned = true
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestGroupSpillWriteStopsAfterLastBucket(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	baseCtx := proc.Ctx
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, []aggexec.AggFuncExecExpression{countStarAgg()})
+	g.SpillMem = 1
+	require.NoError(t, g.Prepare(proc))
+
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	input.SetRowCount(1)
+	t.Cleanup(func() {
+		proc.Ctx = baseCtx
+		if g.ctr.mp != nil {
+			g.Free(proc, true, context.Canceled)
+		}
+		input.Clean(proc.Mp())
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	needSpill, err := g.buildOneBatch(proc, input)
+	require.NoError(t, err)
+	require.True(t, needSpill)
+	hashCodes := make([]uint64, g.ctr.hr.Hash.GroupCount())
+	hashCodes = g.ctr.hr.Hash.FillGroupHashes(hashCodes)
+	g.ctr.computeBucketIndex(hashCodes, 1)
+	require.Len(t, hashCodes, 1)
+	bucketIndex := int(hashCodes[0] & (spillNumBuckets - 1))
+
+	g.ctr.currentSpillBkt = make([]*spillBucket, spillNumBuckets)
+	for i := range g.ctr.currentSpillBkt {
+		g.ctr.currentSpillBkt[i] = &spillBucket{lv: 1, name: fmt.Sprintf("cancel-last-%d", i)}
+	}
+	file, err := os.CreateTemp(t.TempDir(), "group-cancel-last-*")
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(baseCtx)
+	writer := &cancelAfterWriteWriter{cancel: cancel}
+	g.ctr.currentSpillBkt[bucketIndex].file = file
+	g.ctr.currentSpillBkt[bucketIndex].writer = bufio.NewWriterSize(writer, 1)
+	proc.Ctx = ctx
+
+	_, _, err = g.ctr.spillDataToDisk(proc, g.OpAnalyzer, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, writer.writes)
+	require.Equal(t, int64(1), g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
+}
+
 func TestGroupSpillReloadCancellationCleansAndReuses(t *testing.T) {
+	const (
+		cancelAtLoadEntry = iota
+		cancelDuringBucketTransfer
+		cancelAfterBucketTransfer
+		cancelAfterFirstRecord
+	)
+
 	proc := testutil.NewProcess(t)
 	baseCtx := proc.Ctx
 
@@ -371,7 +537,8 @@ func TestGroupSpillReloadCancellationCleansAndReuses(t *testing.T) {
 	g.SpillMem = 4096
 	var spillFiles []*os.File
 	var child *colexec.MockOperator
-	installSpillInput := func() {
+	var nonEmptyBuckets int
+	installSpillInput := func(cancelPoint int) {
 		values := make([]int32, rows)
 		for i := range values {
 			values[i] = int32(i)
@@ -380,17 +547,34 @@ func TestGroupSpillReloadCancellationCleansAndReuses(t *testing.T) {
 		input.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
 		input.SetRowCount(rows)
 		spillFiles = nil
+		nonEmptyBuckets = 0
 		child = colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}).WithEndOfDataCallback(func() {
 			for _, bkt := range g.ctr.currentSpillBkt {
 				if bkt.file != nil {
 					spillFiles = append(spillFiles, bkt.file)
 				}
+				if bkt.cnt > 0 {
+					nonEmptyBuckets++
+				}
 			}
+			checksAfterEOF := 3 // EOF boundary, final empty spill, load entry.
+			switch cancelPoint {
+			case cancelDuringBucketTransfer:
+				// Pass the first bucket-flush check and cancel before the second.
+				checksAfterEOF = 5
+			case cancelAfterBucketTransfer:
+				checksAfterEOF = nonEmptyBuckets + 4
+			case cancelAfterFirstRecord:
+				// Also pass every bucket flush, the post-transfer boundary, and
+				// the first record checkpoint; cancel before the second record.
+				checksAfterEOF = nonEmptyBuckets + 6
+			}
+			proc.Ctx = newCancelOnDoneCheckContext(baseCtx, checksAfterEOF)
 		})
 		g.Children = nil
 		g.AppendChild(child)
 	}
-	installSpillInput()
+	installSpillInput(cancelAtLoadEntry)
 	require.NoError(t, g.Prepare(proc))
 
 	t.Cleanup(func() {
@@ -403,7 +587,6 @@ func TestGroupSpillReloadCancellationCleansAndReuses(t *testing.T) {
 
 	// Cancel exactly at loadSpilledData entry. Current buckets have not
 	// transferred yet and Reset remains their sole cleanup owner.
-	proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 5)
 	result, err := g.Call(proc)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, result.Batch)
@@ -420,12 +603,62 @@ func TestGroupSpillReloadCancellationCleansAndReuses(t *testing.T) {
 	child.Free(proc, true, context.Canceled)
 
 	proc.Ctx = baseCtx
-	installSpillInput()
+	installSpillInput(cancelDuringBucketTransfer)
 	require.NoError(t, g.Prepare(proc))
 
-	// Call entry, two child calls, the EOF phase boundary, load entry, first
-	// record, then cancel at the next per-record checkpoint.
-	proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 7)
+	// One bucket has transferred to spillBkts; all remaining bucket files stay
+	// uniquely owned by currentSpillBkt.
+	result, err = g.Call(proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, result.Batch)
+	require.Equal(t, spillNumBuckets, nonEmptyBuckets)
+	require.NotNil(t, g.ctr.spillBkts)
+	require.Equal(t, 1, g.ctr.spillBkts.Len())
+	require.NotNil(t, g.ctr.currentSpillBkt)
+	transferredSlots := 0
+	for _, bkt := range g.ctr.currentSpillBkt {
+		if bkt == nil {
+			transferredSlots++
+		}
+	}
+	require.Equal(t, 1, transferredSlots)
+
+	transferFiles := append([]*os.File(nil), spillFiles...)
+	g.Reset(proc, true, context.Canceled)
+	for _, file := range transferFiles {
+		_, statErr := file.Stat()
+		require.Error(t, statErr)
+	}
+	child.Free(proc, true, context.Canceled)
+
+	proc.Ctx = baseCtx
+	installSpillInput(cancelAfterBucketTransfer)
+	require.NoError(t, g.Prepare(proc))
+
+	// All buckets have transferred to spillBkts, but cancellation is observed
+	// before a bucket is popped for reload.
+	result, err = g.Call(proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, result.Batch)
+	require.Nil(t, g.ctr.currentSpillBkt)
+	require.NotNil(t, g.ctr.spillBkts)
+	require.Equal(t, nonEmptyBuckets, g.ctr.spillBkts.Len())
+	require.Zero(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadBuckets"])
+
+	postTransferFiles := append([]*os.File(nil), spillFiles...)
+	g.Reset(proc, true, context.Canceled)
+	for _, file := range postTransferFiles {
+		_, statErr := file.Stat()
+		require.Error(t, statErr)
+	}
+	child.Free(proc, true, context.Canceled)
+
+	proc.Ctx = baseCtx
+	installSpillInput(cancelAfterFirstRecord)
+	require.NoError(t, g.Prepare(proc))
+
+	// After EOF: pass the phase boundaries and every bucket ownership transfer,
+	// then process one record and cancel at the next per-record checkpoint.
 	result, err = g.Call(proc)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, result.Batch)
@@ -634,6 +867,47 @@ func TestMergeGroupHonorsCancellationAfterInput(t *testing.T) {
 	outputs := collectBatches(t, merge, proc)
 	require.Len(t, outputs, 1)
 	require.Equal(t, 3, outputs[0].RowCount())
+}
+
+func TestMergeGroupSpillWriteHonorsCancellationAfterInputBatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	baseCtx := proc.Ctx
+	partial := batch.NewWithSize(1)
+	partial.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
+	partial.SetRowCount(3)
+
+	var extra bytes.Buffer
+	mtyp := int32(H8)
+	nullable := false
+	nAggs := int32(0)
+	extra.Write(types.EncodeInt32(&mtyp))
+	extra.Write(types.EncodeBool(&nullable))
+	extra.Write(types.EncodeInt32(&nAggs))
+	partial.ExtraBuf = extra.Bytes()
+
+	ctx, cancel := context.WithCancel(baseCtx)
+	proc.Ctx = ctx
+	child := colexec.NewMockOperator().
+		WithBatchs([]*batch.Batch{partial}).
+		WithBatchCallback(func(int) { cancel() })
+	merge := newMergeGroupOp(nil)
+	merge.SpillMem = 1
+	merge.AppendChild(child)
+	require.NoError(t, merge.Prepare(proc))
+
+	t.Cleanup(func() {
+		proc.Ctx = baseCtx
+		merge.Free(proc, true, context.Canceled)
+		child.Free(proc, true, context.Canceled)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	result, err := vm.Exec(merge, proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, result.Batch)
+	require.Zero(t, merge.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
+	require.Nil(t, merge.ctr.currentSpillBkt)
 }
 
 func TestMergeGroupFreesSpillAggListAfterBatchMerge(t *testing.T) {

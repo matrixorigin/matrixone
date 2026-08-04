@@ -152,6 +152,9 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 
 			err = top.ctr.build(top, top.ctr.buildBat, proc, analyzer)
 			if err != nil {
+				if _, canceled := vm.CancelCheck(proc); canceled {
+					return vm.CancelResult, err
+				}
 				return result, err
 			}
 			if top.TopValueTag > 0 && top.updateTopValueZM() {
@@ -326,6 +329,10 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 }
 
 func (ctr *container) spillBatch(bat *batch.Batch, proc *process.Process, analyzer process.Analyzer) error {
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return err
+	}
+
 	if ctr.spillFile == nil {
 		f, err := os.CreateTemp("", "mo-top-spill-*")
 		if err != nil {
@@ -349,7 +356,13 @@ func (ctr *container) spillBatch(bat *batch.Batch, proc *process.Process, analyz
 	if err != nil {
 		return err
 	}
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return err
+	}
 	if _, err := ctr.spillFile.Write(data); err != nil {
+		return err
+	}
+	if err, canceled := vm.CancelCheck(proc); canceled {
 		return err
 	}
 

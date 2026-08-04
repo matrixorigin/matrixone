@@ -225,10 +225,9 @@ func (mergeOrder *MergeOrder) cleanBatchAndCol(proc *process.Process) {
 }
 
 func (ctr *container) cleanupSpill(proc *process.Process) {
-	if ctr.spillActiveWriter != nil {
-		_ = ctr.spillActiveWriter.Flush()
-		ctr.spillActiveWriter = nil
-	}
+	// An active run has not been committed to spillRuns yet. Cleanup discards
+	// it, so flushing would only perform useless I/O after cancellation/error.
+	ctr.spillActiveWriter = nil
 	if ctr.spillActiveRun != nil && ctr.spillActiveRun.file != nil {
 		ctr.spillActiveRun.file.Close()
 		ctr.spillActiveRun.file = nil

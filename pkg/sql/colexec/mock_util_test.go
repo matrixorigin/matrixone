@@ -17,6 +17,7 @@ package colexec
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
 )
@@ -45,4 +46,29 @@ func TestMockOperatorEndOfDataCallback(t *testing.T) {
 	_, err = op.Call(nil)
 	require.NoError(t, err)
 	require.Equal(t, 2, callbackCalls)
+}
+
+func TestMockOperatorBatchCallback(t *testing.T) {
+	var batchIndexes []int
+	op := NewMockOperator().
+		WithBatchs([]*batch.Batch{batch.EmptyBatch, batch.EmptyBatch}).
+		WithBatchCallback(func(index int) {
+			batchIndexes = append(batchIndexes, index)
+		})
+
+	for range 3 {
+		_, err := op.Call(nil)
+		require.NoError(t, err)
+	}
+	require.Equal(t, []int{0, 1}, batchIndexes)
+
+	op.Reset(nil, false, nil)
+	_, err := op.Call(nil)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1, 0}, batchIndexes)
+
+	op.Free(nil, false, nil)
+	_, err = op.Call(nil)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1, 0}, batchIndexes)
 }

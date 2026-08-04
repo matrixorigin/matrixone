@@ -234,6 +234,10 @@ func (ctr *container) computeBucketIndex(hashCodes []uint64, myLv uint64) {
 }
 
 func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.Analyzer, parentBkt *spillBucket) (int64, int64, error) {
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return 0, 0, err
+	}
+
 	var totalBytes, totalRows int64
 	var parentLv int
 	if parentBkt != nil {
@@ -338,6 +342,10 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 
 	hcOffset := 0
 	for nthBatch, gb := range ctr.groupByBatches {
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			return 0, 0, err
+		}
+
 		rc := gb.RowCount()
 		if rc == 0 {
 			continue
@@ -369,6 +377,10 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 		bktFlags := ctr.spillFlagFlat[:rc]
 
 		for _, i := range ctr.spillNonEmptyBuckets {
+			if err, canceled := vm.CancelCheck(proc); canceled {
+				return 0, 0, err
+			}
+
 			indices := bucketRowIds[i]
 			cnt := int64(len(indices))
 
@@ -443,6 +455,13 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 				bktFlags[idx] = 0
 			}
 		}
+
+		// The last bucket has no following loop boundary. Check once more so
+		// cancellation during its serialization or write is still observed
+		// before starting another spill phase.
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			return 0, 0, err
+		}
 	}
 	opStats.AddExtraStat("GroupSpillSerializedBytes", totalBytes)
 	opStats.AddExtraStat("GroupSpillAggChunkHeadersOmitted", compactedAggChunks)
@@ -463,18 +482,28 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		if ctr.spillBkts == nil {
 			ctr.spillBkts = list.New[*spillBucket]()
 		}
-		for _, bkt := range ctr.currentSpillBkt {
+		for i, bkt := range ctr.currentSpillBkt {
 			if bkt.cnt > 0 {
+				if err, canceled := vm.CancelCheck(proc); canceled {
+					return false, err
+				}
 				if err := bkt.flushWriter(); err != nil {
 					bkt.free()
+					ctr.currentSpillBkt[i] = nil
 					return false, err
 				}
 				ctr.spillBkts.PushBack(bkt)
 			} else {
 				bkt.free()
 			}
+			// Ownership has moved to spillBkts or ended at free(). Do not leave
+			// a second source reference behind if a later flush fails/cancels.
+			ctr.currentSpillBkt[i] = nil
 		}
 		ctr.currentSpillBkt = nil
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			return false, err
+		}
 	}
 
 	// then, if there is no spill bucket in the queue, done.

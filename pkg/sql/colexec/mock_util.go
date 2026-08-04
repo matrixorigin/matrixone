@@ -35,6 +35,7 @@ type MockOperator struct {
 
 	batchs             []*batch.Batch
 	current            int
+	batchCallback      func(int)
 	endCallback        func()
 	endCallbackInvoked bool
 }
@@ -64,6 +65,11 @@ func (op *MockOperator) WithEndOfDataCallback(callback func()) *MockOperator {
 	return op
 }
 
+func (op *MockOperator) WithBatchCallback(callback func(int)) *MockOperator {
+	op.batchCallback = callback
+	return op
+}
+
 func (op *MockOperator) GetBatchs() []*batch.Batch {
 	return op.batchs
 }
@@ -89,6 +95,7 @@ func (op *MockOperator) Free(proc *process.Process, pipelineFailed bool, err err
 	}
 	op.batchs = nil
 	op.current = 0
+	op.batchCallback = nil
 	op.endCallback = nil
 	op.endCallbackInvoked = false
 }
@@ -119,8 +126,12 @@ func (op *MockOperator) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 		return result, nil
 	}
-	result.Batch = op.batchs[op.current]
+	batchIndex := op.current
+	result.Batch = op.batchs[batchIndex]
 	op.current = op.current + 1
+	if op.batchCallback != nil {
+		op.batchCallback(batchIndex)
+	}
 	return result, nil
 }
 
