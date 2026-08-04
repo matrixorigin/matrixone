@@ -603,7 +603,16 @@ func TestAssignmentCastPreservesNestedExplicitTemporalCast(t *testing.T) {
 // (cast_strict): an over-length value is rejected, not silently truncated.
 func TestBuildGeneratedExprUsesStrictForCharVarchar(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	rt.SetGlobalVariables(
 		moruntime.MOProtocolVersion,
 		defines.MORPCVersion5,
 	)

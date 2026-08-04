@@ -28,6 +28,17 @@ import (
 )
 
 func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool, skipStats bool) (*Plan, error) {
+	return bindAndOptimizeSelectQueryWithValidator(stmtType, ctx, stmt, isPrepareStmt, skipStats, nil)
+}
+
+func bindAndOptimizeSelectQueryWithValidator(
+	stmtType plan.Query_StatementType,
+	ctx CompilerContext,
+	stmt *tree.Select,
+	isPrepareStmt bool,
+	skipStats bool,
+	validate func(*Query) error,
+) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
@@ -48,6 +59,11 @@ func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerC
 	ctx.SetViews(bindCtx.views)
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	if validate != nil {
+		if err = validate(builder.qry); err != nil {
+			return nil, err
+		}
+	}
 	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err

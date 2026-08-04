@@ -115,6 +115,39 @@ func TestQuantifiedTableSubqueryParse(t *testing.T) {
 	}
 }
 
+func TestSelectSharedLockParse(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "for share",
+			sql:  "SELECT id FROM t WHERE id = '1' FOR SHARE",
+			want: "select id from t where id = 1 for share",
+		},
+		{
+			name: "lock in share mode",
+			sql:  "SELECT id FROM t WHERE id = '1' LOCK IN SHARE MODE",
+			want: "select id from t where id = 1 for share",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			selectStmt, ok := stmt.(*tree.Select)
+			require.True(t, ok)
+			require.NotNil(t, selectStmt.SelectLockInfo)
+			require.Equal(t, tree.SelectLockForShare, selectStmt.SelectLockInfo.LockType)
+			require.Equal(t, test.want, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+}
+
 func TestSQLModeParserModes(t *testing.T) {
 	t.Run("ansi quotes changes double quoted token from string to identifier", func(t *testing.T) {
 		stmt, err := ParseOneWithSQLMode(context.Background(), `select "abc"`, 1, "")
