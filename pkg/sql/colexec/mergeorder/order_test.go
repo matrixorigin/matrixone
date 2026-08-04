@@ -184,6 +184,19 @@ func (ctx *cancelOnDoneCheckContext) Err() error {
 	}
 }
 
+type trackingMutableFileService struct {
+	fileservice.MutableFileService
+	files []*os.File
+}
+
+func (fs *trackingMutableFileService) CreateAndRemoveFile(ctx context.Context, filePath string) (*os.File, error) {
+	file, err := fs.MutableFileService.CreateAndRemoveFile(ctx, filePath)
+	if err == nil {
+		fs.files = append(fs.files, file)
+	}
+	return file, err
+}
+
 func makeTestCases(t *testing.T) []orderTestCase {
 	return []orderTestCase{
 		newTestCase(t, []types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}}),
@@ -302,6 +315,7 @@ func TestOrderSpillFinalMergeHonorsCancellationAfterInput(t *testing.T) {
 		SpillThreshold: 1,
 		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
+	baseCtx := proc.Ctx
 	ctx, cancel := context.WithCancel(proc.Ctx)
 	proc.Ctx = ctx
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
@@ -313,8 +327,9 @@ func TestOrderSpillFinalMergeHonorsCancellationAfterInput(t *testing.T) {
 	require.NoError(t, arg.Prepare(proc))
 
 	t.Cleanup(func() {
-		arg.Free(proc, true, context.Canceled)
-		child.Free(proc, true, context.Canceled)
+		proc.Ctx = baseCtx
+		arg.Free(proc, false, nil)
+		child.Free(proc, false, nil)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -323,6 +338,22 @@ func TestOrderSpillFinalMergeHonorsCancellationAfterInput(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, result.Batch)
 	require.Empty(t, arg.ctr.spillReaders)
+
+	arg.Reset(proc, true, context.Canceled)
+	require.Empty(t, arg.ctr.spillRuns)
+	require.Empty(t, arg.ctr.spillReaders)
+	child.Free(proc, true, context.Canceled)
+
+	proc.Ctx = baseCtx
+	child = colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		newValuesBatch(proc, []int8{3}),
+		newValuesBatch(proc, []int8{1}),
+		newValuesBatch(proc, []int8{2}),
+	})
+	arg.Children = nil
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+	require.Equal(t, []int8{1, 2, 3}, collectInt8Results(t, arg, proc, 0))
 }
 
 func TestSpillCancellationEntryCheckpoints(t *testing.T) {
@@ -415,6 +446,135 @@ func TestMergeRunsToSpillCancellationCheckpoints(t *testing.T) {
 			for _, run := range runs {
 				require.Nil(t, run.file)
 			}
+		})
+	}
+}
+
+func TestOpenSpillReadersCancellationPreservesOwnership(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	ctr := &container{
+		compares:        []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
+		executors:       make([]colexec.ExpressionExecutor, 1),
+		spillColPos:     []int32{-1},
+		spillKeyIndexes: []int{0},
+	}
+	analyzer := process.NewAnalyzer(0, false, false, "mergeorder-cancel-open-readers")
+	runs := []*spillRun{
+		newCancellationTestSpillRun(t, proc, ctr, analyzer, []int8{1}),
+		newCancellationTestSpillRun(t, proc, ctr, analyzer, []int8{2}),
+	}
+	firstFile, secondFile := runs[0].file, runs[1].file
+	baseCtx := proc.Ctx
+
+	t.Cleanup(func() {
+		proc.Ctx = baseCtx
+		ctr.cleanupSpill(proc)
+		closeSpillRuns(runs)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 2)
+	err := ctr.openSpillReaders(proc, runs)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Len(t, ctr.spillReaders, 1)
+	require.Nil(t, runs[0].file)
+	require.Same(t, secondFile, runs[1].file)
+	_, err = firstFile.Stat()
+	require.NoError(t, err)
+	_, err = secondFile.Stat()
+	require.NoError(t, err)
+
+	ctr.cleanupSpill(proc)
+	_, err = firstFile.Stat()
+	require.Error(t, err)
+	_, err = secondFile.Stat()
+	require.NoError(t, err)
+	closeSpillRuns(runs)
+	_, err = secondFile.Stat()
+	require.Error(t, err)
+}
+
+func TestReduceSpillRunsCleansCompletedRuns(t *testing.T) {
+	const inputRunCount = spillMergeFanIn + 2
+
+	tests := []struct {
+		name             string
+		cancelAfterFirst bool
+		corruptLaterRun  bool
+		wantError        error
+	}{
+		{
+			name:             "cancellation after completed fan-in group",
+			cancelAfterFirst: true,
+			wantError:        context.Canceled,
+		},
+		{
+			name:            "later merge read error",
+			corruptLaterRun: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			baseCtx := proc.Ctx
+			baseFS, err := proc.GetSpillFileService()
+			require.NoError(t, err)
+			trackingFS := &trackingMutableFileService{MutableFileService: baseFS}
+			ctr := &container{
+				compares:        []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
+				executors:       make([]colexec.ExpressionExecutor, 1),
+				spillColPos:     []int32{-1},
+				spillKeyIndexes: []int{0},
+				spillFS:         trackingFS,
+			}
+			analyzer := process.NewAnalyzer(0, false, false, "mergeorder-reduce-ownership")
+			runs := make([]*spillRun, 0, inputRunCount)
+			for i := range inputRunCount {
+				runs = append(runs, newCancellationTestSpillRun(t, proc, ctr, analyzer, []int8{int8(i)}))
+			}
+			ctr.spillRuns = runs
+			if test.cancelAfterFirst {
+				// Reduction check, merge entry, one check per source reader,
+				// chunk start, chunk completion, then the next group check.
+				proc.Ctx = newCancelOnDoneCheckContext(baseCtx, spillMergeFanIn+5)
+			}
+			if test.corruptLaterRun {
+				require.NoError(t, runs[spillMergeFanIn].file.Truncate(4))
+				_, err = runs[spillMergeFanIn].file.Seek(0, io.SeekStart)
+				require.NoError(t, err)
+			}
+
+			t.Cleanup(func() {
+				proc.Ctx = baseCtx
+				ctr.cleanupSpill(proc)
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+
+			err = ctr.reduceSpillRuns(proc, analyzer)
+			if test.wantError != nil {
+				require.ErrorIs(t, err, test.wantError)
+			} else {
+				require.Error(t, err)
+			}
+			require.Len(t, trackingFS.files, inputRunCount+1)
+			completedRunFile := trackingFS.files[inputRunCount]
+			_, statErr := completedRunFile.Stat()
+			require.Error(t, statErr)
+
+			for i := 0; i < spillMergeFanIn; i++ {
+				require.Nil(t, runs[i].file)
+			}
+			if test.wantError == nil {
+				// The failing run transferred to its reader before the read;
+				// only the not-yet-opened final run remains source-owned.
+				require.Nil(t, runs[spillMergeFanIn].file)
+			}
+			require.NotNil(t, runs[spillMergeFanIn+1].file)
+			_, statErr = runs[spillMergeFanIn+1].file.Stat()
+			require.NoError(t, statErr)
 		})
 	}
 }

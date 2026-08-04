@@ -614,6 +614,9 @@ func (ctr *container) openSpillReaders(proc *process.Process, runs []*spillRun) 
 		}
 		reader := &spillRunReader{}
 		reader.reset(run.file)
+		// Ownership transfers to the reader before its first read. This keeps
+		// success, EOF, and read-error cleanup under the same owner.
+		run.file = nil
 		ok, err := reader.readNextBatch(proc, ctr)
 		if err != nil {
 			reader.close(proc)
@@ -624,7 +627,6 @@ func (ctr *container) openSpillReaders(proc *process.Process, runs []*spillRun) 
 		} else {
 			reader.close(proc)
 		}
-		run.file = nil
 	}
 	for i := range ctr.spillReaders {
 		ctr.spillReaders[i].heapIdx = i

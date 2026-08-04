@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -90,6 +91,39 @@ func newMergeGroupOp(aggs []aggexec.AggFuncExecExpression) *MergeGroup {
 		OperatorInfo: vm.OperatorInfo{Idx: 0, IsFirst: false, IsLast: false},
 	}
 	return mg
+}
+
+type cancelOnDoneCheckContext struct {
+	context.Context
+	remaining int
+	done      chan struct{}
+}
+
+func newCancelOnDoneCheckContext(parent context.Context, checks int) *cancelOnDoneCheckContext {
+	return &cancelOnDoneCheckContext{
+		Context:   parent,
+		remaining: checks,
+		done:      make(chan struct{}),
+	}
+}
+
+func (ctx *cancelOnDoneCheckContext) Done() <-chan struct{} {
+	if ctx.remaining > 0 {
+		ctx.remaining--
+		if ctx.remaining == 0 {
+			close(ctx.done)
+		}
+	}
+	return ctx.done
+}
+
+func (ctx *cancelOnDoneCheckContext) Err() error {
+	select {
+	case <-ctx.done:
+		return context.Canceled
+	default:
+		return nil
+	}
 }
 
 func resetChildren(g *Group, proc *process.Process) {
@@ -328,6 +362,105 @@ func TestGroupSpillReloadHonorsCancellationAfterInput(t *testing.T) {
 	require.Zero(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadBuckets"])
 }
 
+func TestGroupSpillReloadCancellationCleansAndReuses(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	baseCtx := proc.Ctx
+
+	const rows = 65536
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, []aggexec.AggFuncExecExpression{countStarAgg()})
+	g.SpillMem = 4096
+	var spillFiles []*os.File
+	var child *colexec.MockOperator
+	installSpillInput := func() {
+		values := make([]int32, rows)
+		for i := range values {
+			values[i] = int32(i)
+		}
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+		input.SetRowCount(rows)
+		spillFiles = nil
+		child = colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}).WithEndOfDataCallback(func() {
+			for _, bkt := range g.ctr.currentSpillBkt {
+				if bkt.file != nil {
+					spillFiles = append(spillFiles, bkt.file)
+				}
+			}
+		})
+		g.Children = nil
+		g.AppendChild(child)
+	}
+	installSpillInput()
+	require.NoError(t, g.Prepare(proc))
+
+	t.Cleanup(func() {
+		proc.Ctx = baseCtx
+		g.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	// Cancel exactly at loadSpilledData entry. Current buckets have not
+	// transferred yet and Reset remains their sole cleanup owner.
+	proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 5)
+	result, err := g.Call(proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, result.Batch)
+	require.Zero(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadBuckets"])
+	require.NotEmpty(t, g.ctr.currentSpillBkt)
+	require.NotEmpty(t, spillFiles)
+	entryFiles := append([]*os.File(nil), spillFiles...)
+
+	g.Reset(proc, true, context.Canceled)
+	for _, file := range entryFiles {
+		_, statErr := file.Stat()
+		require.Error(t, statErr)
+	}
+	child.Free(proc, true, context.Canceled)
+
+	proc.Ctx = baseCtx
+	installSpillInput()
+	require.NoError(t, g.Prepare(proc))
+
+	// Call entry, two child calls, the EOF phase boundary, load entry, first
+	// record, then cancel at the next per-record checkpoint.
+	proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 7)
+	result, err = g.Call(proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, result.Batch)
+	require.Positive(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadRecords"])
+	require.NotEmpty(t, spillFiles)
+	require.NotNil(t, g.ctr.spillBkts)
+	require.Positive(t, g.ctr.spillBkts.Len())
+
+	g.Reset(proc, true, context.Canceled)
+	require.Nil(t, g.ctr.mp)
+	require.Nil(t, g.ctr.aggList)
+	require.Nil(t, g.ctr.spillAggList)
+	require.Nil(t, g.ctr.currentSpillBkt)
+	for _, file := range spillFiles {
+		_, statErr := file.Stat()
+		require.Error(t, statErr)
+	}
+	child.Free(proc, true, context.Canceled)
+
+	proc.Ctx = baseCtx
+	fresh := batch.NewWithSize(1)
+	fresh.Vecs[0] = testutil.MakeInt32Vector([]int32{4, 1, 3, 2}, nil, proc.Mp())
+	fresh.SetRowCount(4)
+	child = colexec.NewMockOperator().WithBatchs([]*batch.Batch{fresh})
+	g.Children = nil
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+
+	var outputRows int
+	for _, output := range collectBatches(t, g, proc) {
+		outputRows += output.RowCount()
+	}
+	require.Equal(t, 4, outputRows)
+}
+
 func TestGroupedOrderedGroupConcatComposesWithGenericSpill(t *testing.T) {
 	for _, distinct := range []bool{false, true} {
 		t.Run(fmt.Sprintf("distinct=%t", distinct), func(t *testing.T) {
@@ -451,6 +584,7 @@ func TestMergeGroupPreservesLateNullableGroupKeys(t *testing.T) {
 
 func TestMergeGroupHonorsCancellationAfterInput(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	baseCtx := proc.Ctx
 	partial := batch.NewWithSize(1)
 	partial.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
 	partial.SetRowCount(3)
@@ -472,8 +606,9 @@ func TestMergeGroupHonorsCancellationAfterInput(t *testing.T) {
 	require.NoError(t, merge.Prepare(proc))
 
 	t.Cleanup(func() {
-		merge.Free(proc, true, context.Canceled)
-		child.Free(proc, true, context.Canceled)
+		proc.Ctx = baseCtx
+		merge.Free(proc, false, nil)
+		child.Free(proc, false, nil)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -481,6 +616,24 @@ func TestMergeGroupHonorsCancellationAfterInput(t *testing.T) {
 	result, err := vm.Exec(merge, proc)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, result.Batch)
+
+	merge.Reset(proc, true, context.Canceled)
+	require.Nil(t, merge.ctr.mp)
+	child.Free(proc, true, context.Canceled)
+
+	proc.Ctx = baseCtx
+	freshPartial := batch.NewWithSize(1)
+	freshPartial.Vecs[0] = testutil.MakeInt32Vector([]int32{3, 1, 2}, nil, proc.Mp())
+	freshPartial.SetRowCount(3)
+	freshPartial.ExtraBuf = append(freshPartial.ExtraBuf[:0], extra.Bytes()...)
+	child = colexec.NewMockOperator().WithBatchs([]*batch.Batch{freshPartial})
+	merge.Children = nil
+	merge.AppendChild(child)
+	require.NoError(t, merge.Prepare(proc))
+
+	outputs := collectBatches(t, merge, proc)
+	require.Len(t, outputs, 1)
+	require.Equal(t, 3, outputs[0].RowCount())
 }
 
 func TestMergeGroupFreesSpillAggListAfterBatchMerge(t *testing.T) {
