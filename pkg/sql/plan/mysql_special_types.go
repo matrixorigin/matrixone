@@ -312,6 +312,52 @@ func (bc *BindContext) mysqlSpecialOrderTypeForProject(colPos int32) *plan.Type 
 	return bc.mysqlSpecialOrderTypeForExpr(bc.projects[colPos])
 }
 
+func (bc *BindContext) setMySQLSpecialCanonicalType(colPos int32, typ *plan.Type) {
+	if bc.mysqlSpecialCanonicalTypes == nil {
+		bc.mysqlSpecialCanonicalTypes = make(map[int32]*plan.Type)
+	}
+	bc.mysqlSpecialCanonicalTypes[colPos] = DeepCopyType(typ)
+}
+
+func (bc *BindContext) mysqlSpecialCanonicalTypeForExpr(expr *plan.Expr) *plan.Type {
+	if expr == nil {
+		return nil
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return nil
+	}
+	if col.RelPos == bc.projectTag && col.ColPos >= 0 && int(col.ColPos) < len(bc.projects) {
+		if typ, recorded := bc.mysqlSpecialCanonicalTypes[col.ColPos]; recorded {
+			return DeepCopyType(typ)
+		}
+		project := bc.projects[col.ColPos]
+		if project == nil {
+			return nil
+		}
+		if projectCol := project.GetCol(); projectCol != nil &&
+			projectCol.RelPos == col.RelPos && projectCol.ColPos == col.ColPos {
+			return nil
+		}
+		return bc.mysqlSpecialCanonicalTypeForExpr(project)
+	}
+	binding := bc.bindingByTag[col.RelPos]
+	if binding == nil || col.ColPos < 0 || int(col.ColPos) >= len(binding.mysqlSpecialCanonicalTypes) {
+		return nil
+	}
+	return DeepCopyType(binding.mysqlSpecialCanonicalTypes[col.ColPos])
+}
+
+func (bc *BindContext) mysqlSpecialCanonicalTypeForProject(colPos int32) *plan.Type {
+	if typ, recorded := bc.mysqlSpecialCanonicalTypes[colPos]; recorded {
+		return DeepCopyType(typ)
+	}
+	if colPos < 0 || int(colPos) >= len(bc.projects) {
+		return nil
+	}
+	return bc.mysqlSpecialCanonicalTypeForExpr(bc.projects[colPos])
+}
+
 func mysqlSpecialTypeFromProvenance(provenance OutputColumnProvenance) *plan.Type {
 	if provenance.State != ProvenanceSingleSource || provenance.Source == nil ||
 		!isEnumOrSetPlanType(&provenance.Source.Metadata.Typ) {

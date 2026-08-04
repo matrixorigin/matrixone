@@ -4704,7 +4704,8 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		return
 	}
 	var viewRawProjects []*plan.Expr
-	if ctx.restoreViewMySQLSpecialTypes && astOrderBy != nil && !ctx.isDistinct {
+	if ctx.restoreViewMySQLSpecialTypes && astOrderBy != nil && !ctx.isDistinct &&
+		len(ctx.groups) == 0 && len(ctx.aggregates) == 0 {
 		for i := 0; i < resultLen; i++ {
 			rawExpr, ok := transparentOutputSourceExpr(ctx.projects[i])
 			if !ok {
@@ -4855,6 +4856,13 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		if len(boundOrderBys) > 0 {
 			if nodeID, resultSourceTag, err = builder.appendDistinctOrderProjectionNode(ctx, nodeID, boundOrderBys); err != nil {
 				return
+			}
+		}
+	}
+	if len(ctx.groups) > 0 || ctx.isDistinct {
+		for i := 0; i < resultLen; i++ {
+			if typ := mysqlSpecialTypeFromProvenance(ctx.outputColumnProvenanceForProject(int32(i))); typ != nil {
+				ctx.setMySQLSpecialCanonicalType(int32(i), typ)
 			}
 		}
 	}
@@ -8945,6 +8953,10 @@ func (builder *QueryBuilder) appendMySQLSpecialTypeBoundary(
 	if rootNode.NodeType == plan.Node_PROJECT && len(ctx.mysqlSpecialRawProjectPositions) > 0 {
 		allSpecialTypesRestored := true
 		for i := 0; i < visibleProjects; i++ {
+			if ctx.mysqlSpecialCanonicalTypeForProject(int32(i)) != nil {
+				allSpecialTypesRestored = false
+				continue
+			}
 			targetType := mysqlSpecialTypeFromProvenance(provenance[i])
 			if targetType == nil {
 				continue
@@ -8968,6 +8980,10 @@ func (builder *QueryBuilder) appendMySQLSpecialTypeBoundary(
 		rootVisibleProjects := min(len(ctx.headings), len(rootNode.ProjectList))
 		allSpecialTypesRestored := true
 		for i := 0; i < rootVisibleProjects; i++ {
+			if ctx.mysqlSpecialCanonicalTypeForProject(int32(i)) != nil {
+				allSpecialTypesRestored = false
+				continue
+			}
 			sourceExpr, ok := transparentOutputSourceExpr(rootNode.ProjectList[i])
 			if !ok {
 				if i < len(provenance) && mysqlSpecialTypeFromProvenance(provenance[i]) != nil {
@@ -8987,6 +9003,44 @@ func (builder *QueryBuilder) appendMySQLSpecialTypeBoundary(
 		if allSpecialTypesRestored {
 			return nodeID, nil
 		}
+	}
+
+	sourceTag := ctx.rootTag()
+	projects := make([]*plan.Expr, len(ctx.results))
+	for i := range ctx.results {
+		projects[i] = GetColExpr(ctx.results[i].Typ, sourceTag, int32(i))
+	}
+	needsBoundary := false
+	for i := 0; i < visibleProjects; i++ {
+		targetType := ctx.mysqlSpecialCanonicalTypeForProject(int32(i))
+		if targetType == nil {
+			continue
+		}
+		needsBoundary = true
+		var castErr error
+		if isEnumPlanType(targetType) {
+			projects[i], castErr = funcCastForEnumType(builder.GetContext(), projects[i], *targetType)
+		} else {
+			projects[i], castErr = funcCastForSetType(builder.GetContext(), projects[i], *targetType)
+		}
+		if castErr != nil {
+			return 0, castErr
+		}
+	}
+	if needsBoundary {
+		for i := 0; i < visibleProjects && i < len(provenance); i++ {
+			ctx.outputColumnProvenance[int32(i)] = provenance[i]
+		}
+		ctx.projectTag = builder.genNewBindTag()
+		ctx.resultTag = 0
+		ctx.projects = projects
+		ctx.results = projects
+		return builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			ProjectList: projects,
+			Children:    []int32{nodeID},
+			BindingTags: []int32{ctx.projectTag},
+		}, ctx), nil
 	}
 
 	// Catalog lineage alone cannot prove that a visible string can be reversed
@@ -9528,6 +9582,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var colIsHidden []bool
 	var types []*plan.Type
 	var mysqlSpecialOrderTypes []*plan.Type
+	var mysqlSpecialCanonicalTypes []*plan.Type
 	var outputColumnProvenance []OutputColumnProvenance
 	var defaultVals []string
 	var binding *Binding
@@ -9668,6 +9723,12 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				}
 				mysqlSpecialOrderTypes[i] = orderType
 			}
+			if canonicalType := subCtx.mysqlSpecialCanonicalTypeForProject(int32(i)); canonicalType != nil {
+				if mysqlSpecialCanonicalTypes == nil {
+					mysqlSpecialCanonicalTypes = make([]*plan.Type, colLength)
+				}
+				mysqlSpecialCanonicalTypes[i] = canonicalType
+			}
 			if outputColumnProvenance == nil {
 				outputColumnProvenance = make([]OutputColumnProvenance, colLength)
 			}
@@ -9679,6 +9740,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		binding = NewBinding(tag, nodeID, "", table, 0, cols, colIsHidden, types, false, defaultVals)
 		binding.originCols = originCols
 		binding.mysqlSpecialOrderTypes = mysqlSpecialOrderTypes
+		binding.mysqlSpecialCanonicalTypes = mysqlSpecialCanonicalTypes
 		binding.outputColumnProvenance = outputColumnProvenance
 	}
 

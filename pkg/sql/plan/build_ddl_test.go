@@ -654,59 +654,71 @@ func TestViewRebindPreservesTransparentMySQLSpecialColumnTypes(t *testing.T) {
 	}
 }
 
-func TestViewSpecialTypeBoundaryPreservesDistinctVisibleValues(t *testing.T) {
-	const createViewSQL = "create view v_distinct_set as select distinct flags from nation"
-	ctx := NewMockCompilerContext(false)
-	addMySQLSpecialTypeColumns(ctx)
-	createCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createViewSQL}
-	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createViewSQL, 1)
-	require.NoError(t, err)
-	createPlan, err := BuildPlan(createCtx, stmt, false)
-	stmt.Free()
-	require.NoError(t, err)
+func TestViewSpecialTypeBoundaryCanonicalizesSemanticResults(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		selectSQL string
+	}{
+		{name: "distinct", selectSQL: "select distinct flags from nation"},
+		{name: "group by", selectSQL: "select flags from nation group by flags"},
+		{name: "group by order", selectSQL: "select flags from nation group by flags order by flags"},
+		{name: "derived distinct", selectSQL: "select flags from (select distinct flags from nation) d"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			createViewSQL := "create view v_semantic_set as " + test.selectSQL
+			ctx := NewMockCompilerContext(false)
+			addMySQLSpecialTypeColumns(ctx)
+			createCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createViewSQL}
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createViewSQL, 1)
+			require.NoError(t, err)
+			createPlan, err := BuildPlan(createCtx, stmt, false)
+			stmt.Free()
+			require.NoError(t, err)
 
-	viewDef := DeepCopyTableDef(createPlan.GetDdl().GetCreateView().GetTableDef(), true)
-	viewDef.Name = "v_distinct_set"
-	viewDef.DbName = "tpch"
-	viewDef.TableType = catalog.SystemViewRel
-	ctx.tables[viewDef.Name] = viewDef
-	ctx.objects[viewDef.Name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: viewDef.Name}
+			viewDef := DeepCopyTableDef(createPlan.GetDdl().GetCreateView().GetTableDef(), true)
+			viewDef.Name = "v_semantic_set"
+			viewDef.DbName = "tpch"
+			viewDef.TableType = catalog.SystemViewRel
+			ctx.tables[viewDef.Name] = viewDef
+			ctx.objects[viewDef.Name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: viewDef.Name}
 
-	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL, "select flags from v_distinct_set", 1)
-	require.NoError(t, err)
-	queryPlan, err := BuildPlan(ctx, stmt, false)
-	stmt.Free()
-	require.NoError(t, err)
+			stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL, "select flags from v_semantic_set", 1)
+			require.NoError(t, err)
+			queryPlan, err := BuildPlan(ctx, stmt, false)
+			stmt.Free()
+			require.NoError(t, err)
 
-	query := queryPlan.GetQuery()
-	setDisplayProjects := 0
-	var distinctGroupType *plan.Type
-	for _, node := range query.GetNodes() {
-		if node.GetNodeType() == plan.Node_AGG && len(node.GetGroupBy()) == 1 {
-			distinctGroupType = &node.GetGroupBy()[0].Typ
-		}
-		if node.GetNodeType() != plan.Node_PROJECT || len(node.GetProjectList()) != 1 {
-			continue
-		}
-		fn := node.GetProjectList()[0].GetF()
-		if fn == nil {
-			continue
-		}
-		switch fn.GetFunc().GetObjName() {
-		case moSetCastIndexToValueFun:
-			setDisplayProjects++
-		case moSetCastValueToIndexFun:
-			require.Fail(t, "catalog provenance must not reverse-cast a visible SET value", node.String())
-		}
+			setDisplayProjects := 0
+			setCanonicalProjects := 0
+			semanticStringInput := false
+			for _, node := range queryPlan.GetQuery().GetNodes() {
+				if node.GetNodeType() == plan.Node_AGG {
+					for _, group := range node.GetGroupBy() {
+						if types.T(group.Typ.Id).IsMySQLString() {
+							semanticStringInput = true
+						}
+					}
+				}
+				for _, project := range node.GetProjectList() {
+					if fn := project.GetF(); fn != nil {
+						switch fn.GetFunc().GetObjName() {
+						case moSetCastIndexToValueFun:
+							setDisplayProjects++
+						case moSetCastValueToIndexFun:
+							setCanonicalProjects++
+						}
+					}
+				}
+			}
+			require.GreaterOrEqual(t, setDisplayProjects, 1,
+				"semantic operator must consume the SQL-visible SET value")
+			require.True(t, semanticStringInput,
+				"GROUP BY/DISTINCT must operate on the SQL-visible string type")
+			require.GreaterOrEqual(t, setCanonicalProjects, 1,
+				"completed semantic View boundary must canonically re-encode SET")
+			require.True(t, isSetPlanType(&viewDef.Cols[0].Typ))
+		})
 	}
-
-	require.NotNil(t, distinctGroupType)
-	require.Equal(t, int32(types.T_varchar), distinctGroupType.GetId(),
-		"DISTINCT must consume the SQL-visible SET value")
-	require.GreaterOrEqual(t, setDisplayProjects, 1,
-		"DISTINCT must retain the view's SQL-visible SET projection")
-	require.True(t, isSetPlanType(&viewDef.Cols[0].Typ),
-		"the persisted catalog type remains independent from raw-value availability")
 }
 
 func TestOutputColumnProvenanceCarriesSourceAndClearsSemanticBoundaries(t *testing.T) {
