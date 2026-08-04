@@ -15,6 +15,9 @@
 package frontend
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -147,9 +150,22 @@ func TestValidateSystemCatalogRestoreHandlersRejectsIncompleteRegistry(t *testin
 		systemCatalogPostRestoreHandler{tableName: "mo_user"},
 	)
 	require.ErrorContains(t, validateSystemCatalogRestoreHandlers(t.Context()), "has no transform policy")
+	require.ErrorContains(t,
+		restoreSystemCatalogsAfterObjects(t.Context(), "", nil, 0, 0, 0),
+		"has no transform policy",
+	)
 
 	systemCatalogPostRestoreHandlers = append(slices.Clone(originalHandlers), originalHandlers[0])
 	require.ErrorContains(t, validateSystemCatalogRestoreHandlers(t.Context()), "has multiple handlers")
+
+	handlerErr := errors.New("handler failed")
+	systemCatalogPostRestoreHandlers = []systemCatalogPostRestoreHandler{{
+		tableName: "mo_role_privs",
+		handler: func(*systemCatalogRestoreContext) error {
+			return handlerErr
+		},
+	}}
+	require.ErrorIs(t, restoreSystemCatalogsAfterObjects(t.Context(), "", nil, 0, 0, 0), handlerErr)
 
 	systemCatalogPostRestoreHandlers = originalHandlers
 	originalPolicy := systemCatalogRestorePolicies["mo_user"]
@@ -194,4 +210,66 @@ func TestCatalogRestoreIdentityParsingRejectsInvalidRows(t *testing.T) {
 
 	_, err = parseCatalogObjectIdentity([]string{"1", "db", "table"})
 	require.ErrorContains(t, err, "invalid catalog identity row")
+}
+
+func TestLoadRolePrivilegesAtSnapshotValidatesCatalogRows(t *testing.T) {
+	const snapshotTS = int64(42)
+	query := fmt.Sprintf(
+		"select cast(role_id as char), role_name, obj_type, cast(obj_id as char), "+
+			"cast(privilege_id as char), privilege_name, privilege_level, "+
+			"cast(coalesce(operation_user_id, 0) as char), cast(granted_time as char), "+
+			"cast(with_grant_option as char) from mo_catalog.mo_role_privs {MO_TS = %d} "+
+			"order by role_id, obj_type, obj_id, privilege_id, privilege_level",
+		snapshotTS,
+	)
+	validRow := []interface{}{
+		"1", "reader", objectTypeTable.String(), "100", "2", "select",
+		privilegeLevelTable.String(), "3", "2026-08-04 12:00:00", "true",
+	}
+	tests := []struct {
+		name            string
+		column          int
+		value           string
+		wantErr         bool
+		wantGrantOption bool
+	}{
+		{name: "invalid role ID", column: 0, value: "invalid", wantErr: true},
+		{name: "invalid object ID", column: 3, value: "invalid", wantErr: true},
+		{name: "invalid privilege ID", column: 4, value: "invalid", wantErr: true},
+		{name: "invalid operation user ID", column: 7, value: "invalid", wantErr: true},
+		{name: "invalid grant option", column: 9, value: "invalid", wantErr: true},
+		{name: "numeric false grant option", column: 9, value: "0"},
+		{name: "numeric true grant option", column: 9, value: "1", wantGrantOption: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			row := slices.Clone(validRow)
+			row[test.column] = test.value
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[query] = newMrsForRestoreStringRows(
+				[]string{
+					"role_id", "role_name", "obj_type", "obj_id", "privilege_id",
+					"privilege_name", "privilege_level", "operation_user_id", "granted_time",
+					"with_grant_option",
+				},
+				[][]interface{}{row},
+			)
+			rows, err := loadRolePrivilegesAtSnapshot(&systemCatalogRestoreContext{
+				ctx:           context.Background(),
+				bh:            bh,
+				snapshotTS:    snapshotTS,
+				sourceAccount: 1,
+				targetAccount: 2,
+			})
+			if test.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			require.Equal(t, test.wantGrantOption, rows[0].withGrantOption)
+		})
+	}
 }
