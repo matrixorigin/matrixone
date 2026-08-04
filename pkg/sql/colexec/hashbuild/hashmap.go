@@ -17,7 +17,6 @@ package hashbuild
 import (
 	"math"
 	"runtime"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -744,14 +743,16 @@ buildUnits:
 							}
 
 							if len(rowStr) == 0 {
-								rowStr = hb.curVecs[0].RowToString(vecIdx2 + k)
+								rowStr, err = colexec.FormatDedupKey(hb.curVecs[0], vecIdx2+k, hb.DedupColTypes)
+								if err != nil {
+									return err
+								}
 							}
 						} else {
-							rowItems, err := types.StringifyTuple(hb.curVecs[0].GetBytesAt(vecIdx2+k), hb.DedupColTypes)
+							rowStr, err = colexec.FormatDedupKey(hb.curVecs[0], vecIdx2+k, hb.DedupColTypes)
 							if err != nil {
 								return err
 							}
-							rowStr = "(" + strings.Join(rowItems, ",") + ")"
 						}
 						return moerr.NewDuplicateEntry(proc.Ctx, rowStr, hb.DedupColName)
 					case plan.Node_IGNORE:
