@@ -197,6 +197,447 @@ func TestNestedCorrelatedScalarAggregatePullsUpGroupingKey(t *testing.T) {
 	}
 }
 
+func TestTransparentCorrelatedDerivedTableChain(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		sql      string
+		wantKeys int
+	}{
+		{
+			name:     "one projection",
+			wantKeys: 1,
+			sql: `SELECT n1.N_NATIONKEY,
+			              (SELECT COUNT(*)
+			                 FROM (SELECT n2.N_NATIONKEY
+			                         FROM NATION n2
+			                        WHERE n1.N_REGIONKEY = n2.N_REGIONKEY) d1)
+			         FROM NATION n1`,
+		},
+		{
+			name:     "aliases reorder and local filter",
+			wantKeys: 1,
+			sql: `SELECT n1.N_NATIONKEY,
+			              (SELECT COUNT(*)
+			                 FROM (SELECT d1.region_alias, d1.nation_alias
+			                         FROM (SELECT n2.N_NATIONKEY AS nation_alias,
+			                                      n2.N_REGIONKEY AS region_alias
+			                                 FROM NATION n2
+			                                WHERE n1.N_REGIONKEY = n2.N_REGIONKEY
+			                                  AND n2.N_NATIONKEY >= 0) d1) d2)
+			         FROM NATION n1`,
+		},
+		{
+			name:     "multiple correlation keys",
+			wantKeys: 2,
+			sql: `SELECT n1.N_NATIONKEY,
+			              (SELECT COUNT(*)
+			                 FROM (SELECT n2.N_NATIONKEY
+			                         FROM NATION n2
+			                        WHERE n1.N_REGIONKEY = n2.N_REGIONKEY
+			                          AND n1.N_NATIONKEY = n2.N_NATIONKEY) d1)
+			         FROM NATION n1`,
+		},
+		{
+			name:     "reverse correlation operands",
+			wantKeys: 1,
+			sql: `SELECT n1.N_NATIONKEY,
+			              (SELECT COUNT(*)
+			                 FROM (SELECT n2.N_NATIONKEY
+			                         FROM NATION n2
+			                        WHERE n2.N_REGIONKEY = n1.N_REGIONKEY) d1)
+			         FROM NATION n1`,
+		},
+		{
+			name:     "prisma json aggregate shape",
+			wantKeys: 1,
+			sql: `SELECT n1.N_NATIONKEY,
+			              (SELECT COALESCE(JSON_ARRAYAGG(__prisma_data__), CONVERT('[]', JSON))
+			                 FROM (SELECT d3.__prisma_data__
+			                         FROM (SELECT JSON_OBJECT('id', d2.N_NATIONKEY,
+			                                                  'name', d2.N_NAME,
+			                                                  'regionId', d2.N_REGIONKEY) AS __prisma_data__
+			                                 FROM (SELECT n2.*
+			                                         FROM NATION n2
+			                                        WHERE n1.N_REGIONKEY = n2.N_REGIONKEY) d2) d3) d4)
+			         FROM NATION n1`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tt.sql)
+			require.NoError(t, err)
+
+			query := logicPlan.GetQuery()
+			require.NotNil(t, query)
+			var scalarJoin *plan.Node
+			for _, node := range query.Nodes {
+				if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_LEFT {
+					scalarJoin = node
+					break
+				}
+			}
+			require.NotNil(t, scalarJoin)
+			require.Len(t, scalarJoin.OnList, tt.wantKeys)
+			assertReachablePlanHasNoCorrelatedExpr(t, query)
+		})
+	}
+}
+
+func TestTransparentCorrelatedDerivedTableRejectsUnsafeShapes(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		sql     string
+		wantErr string
+	}{
+		{
+			name:    "same FROM scope",
+			wantErr: "missing FROM-clause entry for table 'n1'",
+			sql: `SELECT n1.N_NATIONKEY
+			         FROM NATION n1
+			         JOIN (SELECT n2.N_NATIONKEY
+			                 FROM NATION n2
+			                WHERE n1.N_REGIONKEY = n2.N_REGIONKEY) d ON TRUE`,
+		},
+		{
+			name: "join inside derived table",
+			sql: `SELECT n1.N_NATIONKEY,
+			              (SELECT COUNT(*)
+			                 FROM (SELECT n2.N_NATIONKEY
+			                         FROM NATION n2 JOIN REGION r
+			                           ON n2.N_REGIONKEY = r.R_REGIONKEY
+			                        WHERE n1.N_REGIONKEY = n2.N_REGIONKEY) d)
+			         FROM NATION n1`,
+		},
+		{
+			name: "correlation in derived projection",
+			sql: `SELECT n1.N_NATIONKEY,
+			              (SELECT COUNT(*)
+			                 FROM (SELECT n1.N_REGIONKEY
+			                         FROM NATION n2) d)
+			         FROM NATION n1`,
+		},
+		{
+			name: "group by",
+			sql: `SELECT n1.N_NATIONKEY,
+			              (SELECT COUNT(*)
+			                 FROM (SELECT n2.N_REGIONKEY
+			                         FROM NATION n2
+			                        WHERE n1.N_REGIONKEY = n2.N_REGIONKEY
+			                        GROUP BY n2.N_REGIONKEY) d)
+			         FROM NATION n1`,
+		},
+		{
+			name: "having",
+			sql: `SELECT n1.N_NATIONKEY,
+			              (SELECT COUNT(*)
+			                 FROM (SELECT n2.N_REGIONKEY
+			                         FROM NATION n2
+			                        WHERE n1.N_REGIONKEY = n2.N_REGIONKEY
+			                        GROUP BY n2.N_REGIONKEY
+			                       HAVING COUNT(*) > 0) d)
+			         FROM NATION n1`,
+		},
+		{
+			name: "distinct",
+			sql: `SELECT n1.N_NATIONKEY,
+			              (SELECT COUNT(*)
+			                 FROM (SELECT DISTINCT n2.N_NATIONKEY
+			                         FROM NATION n2
+			                        WHERE n1.N_REGIONKEY = n2.N_REGIONKEY) d)
+			         FROM NATION n1`,
+		},
+		{
+			name: "window",
+			sql: `SELECT n1.N_NATIONKEY,
+			              (SELECT COUNT(*)
+			                 FROM (SELECT ROW_NUMBER() OVER (ORDER BY n2.N_NATIONKEY) AS rn
+			                         FROM NATION n2
+			                        WHERE n1.N_REGIONKEY = n2.N_REGIONKEY) d)
+			         FROM NATION n1`,
+		},
+		{
+			name: "set operation",
+			sql: `SELECT n1.N_NATIONKEY,
+			              (SELECT COUNT(*)
+			                 FROM (SELECT n2.N_NATIONKEY
+			                         FROM NATION n2
+			                        WHERE n1.N_REGIONKEY = n2.N_REGIONKEY
+			                       UNION ALL
+			                       SELECT r.R_REGIONKEY
+			                         FROM REGION r
+			                        WHERE n1.N_REGIONKEY = r.R_REGIONKEY) d)
+			         FROM NATION n1`,
+		},
+		{
+			name: "order by",
+			sql: `SELECT n1.N_NATIONKEY,
+			              (SELECT COUNT(*)
+			                 FROM (SELECT n2.N_NATIONKEY
+			                         FROM NATION n2
+			                        WHERE n1.N_REGIONKEY = n2.N_REGIONKEY
+			                        ORDER BY n2.N_NATIONKEY) d)
+			         FROM NATION n1`,
+		},
+		{
+			name: "limit and offset",
+			sql: `SELECT n1.N_NATIONKEY,
+			              (SELECT COUNT(*)
+			                 FROM (SELECT n2.N_NATIONKEY
+			                         FROM NATION n2
+			                        WHERE n1.N_REGIONKEY = n2.N_REGIONKEY
+			                        LIMIT 1 OFFSET 1) d)
+			         FROM NATION n1`,
+		},
+		{
+			name: "or correlation",
+			sql: `SELECT n1.N_NATIONKEY,
+			              (SELECT COUNT(*)
+			                 FROM (SELECT n2.N_NATIONKEY
+			                         FROM NATION n2
+			                        WHERE n1.N_REGIONKEY = n2.N_REGIONKEY
+			                           OR n2.N_NATIONKEY = 0) d)
+			         FROM NATION n1`,
+		},
+		{
+			name: "non equality correlation",
+			sql: `SELECT n1.N_NATIONKEY,
+			              (SELECT COUNT(*)
+			                 FROM (SELECT n2.N_NATIONKEY
+			                         FROM NATION n2
+			                        WHERE n1.N_REGIONKEY < n2.N_REGIONKEY) d)
+			         FROM NATION n1`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(true), t, tt.sql)
+			if tt.wantErr == "" {
+				tt.wantErr = "correlated subquery in FROM clause is not yet implemented"
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestTransparentCorrelatedDerivedTableRejectsDeepAncestor(t *testing.T) {
+	immediateParent := `SELECT n1.N_NATIONKEY
+		FROM NATION n1
+		WHERE EXISTS (
+			SELECT 1 FROM NATION n2
+			WHERE n2.N_NATIONKEY = n1.N_NATIONKEY
+				AND EXISTS (
+					SELECT 1 FROM (
+						SELECT n3.N_NATIONKEY FROM NATION n3
+						WHERE n3.N_REGIONKEY = n2.N_REGIONKEY
+					) d
+				)
+		)`
+	_, err := runOneStmt(NewMockOptimizer(true), t, immediateParent)
+	require.NoError(t, err)
+
+	for _, tt := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "empty intermediate scope",
+			sql: `SELECT n1.N_NATIONKEY
+				FROM NATION n1
+				WHERE EXISTS (
+					SELECT 1
+					WHERE EXISTS (
+						SELECT 1 FROM (
+							SELECT n3.N_NATIONKEY FROM NATION n3
+							WHERE n3.N_NATIONKEY = n1.N_NATIONKEY
+						) d
+					)
+				)`,
+		},
+		{
+			name: "empty then non-empty intermediate scopes",
+			sql: `SELECT n1.N_NATIONKEY
+				FROM NATION n1
+				WHERE EXISTS (
+					SELECT 1
+					WHERE EXISTS (
+						SELECT 1 FROM NATION n2
+						WHERE EXISTS (
+							SELECT 1 FROM (
+								SELECT n3.N_NATIONKEY FROM NATION n3
+								WHERE n3.N_NATIONKEY = n1.N_NATIONKEY
+							) d
+						)
+					)
+				)`,
+		},
+		{
+			name: "non-empty then empty intermediate scopes",
+			sql: `SELECT n1.N_NATIONKEY
+				FROM NATION n1
+				WHERE EXISTS (
+					SELECT 1 FROM NATION n2
+					WHERE EXISTS (
+						SELECT 1
+						WHERE EXISTS (
+							SELECT 1 FROM (
+								SELECT n3.N_NATIONKEY FROM NATION n3
+								WHERE n3.N_REGIONKEY = n2.N_REGIONKEY
+							) d
+						)
+					)
+				)`,
+		},
+		{
+			name: "grandparent only",
+			sql: `SELECT n1.N_NATIONKEY
+				FROM NATION n1
+				WHERE EXISTS (
+					SELECT 1 FROM NATION n2
+					WHERE n2.N_NATIONKEY = n1.N_NATIONKEY
+						AND EXISTS (
+							SELECT 1 FROM (
+								SELECT n3.N_NATIONKEY FROM NATION n3
+								WHERE n3.N_NATIONKEY = n1.N_NATIONKEY
+							) d
+						)
+				)`,
+		},
+		{
+			name: "mixed immediate and grandparent",
+			sql: `SELECT n1.N_NATIONKEY
+				FROM NATION n1
+				WHERE EXISTS (
+					SELECT 1 FROM NATION n2
+					WHERE n2.N_NATIONKEY = n1.N_NATIONKEY
+						AND EXISTS (
+							SELECT 1 FROM (
+								SELECT n3.N_NATIONKEY FROM NATION n3
+								WHERE n3.N_REGIONKEY = n2.N_REGIONKEY
+									AND n3.N_NATIONKEY = n1.N_NATIONKEY
+							) d
+						)
+				)`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(true), t, tt.sql)
+			require.ErrorContains(t, err, "correlated subquery in FROM clause is not yet implemented")
+		})
+	}
+}
+
+func TestTransparentCorrelatedDerivedTableNormalizationIsAtomic(t *testing.T) {
+	const outerTag int32 = 41
+
+	newBuilder := func(nodes []*plan.Node) *QueryBuilder {
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder.qry.Nodes = nodes
+		return builder
+	}
+	newNodes := func(corr *plan.CorrColRef, tail *plan.Node) []*plan.Node {
+		return []*plan.Node{
+			{NodeType: plan.Node_TABLE_SCAN},
+			{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{2},
+				FilterList: []*plan.Expr{newTransparentDerivedEquality(corr, 42)},
+			},
+			tail,
+			{
+				NodeType:    plan.Node_PROJECT,
+				Children:    []int32{1},
+				ProjectList: []*plan.Expr{newFlattenSubqueryTestColExpr(42)},
+			},
+		}
+	}
+
+	t.Run("unsupported tail leaves depth and context unchanged", func(t *testing.T) {
+		corr := &plan.CorrColRef{RelPos: outerTag, Depth: 2}
+		nodes := newNodes(corr, &plan.Node{NodeType: plan.Node_SORT, Children: []int32{0}})
+		ctx := NewBindContext(nil, nil)
+		err := newBuilder(nodes).normalizeTransparentCorrelatedDerivedTable(3, ctx)
+		require.ErrorContains(t, err, "correlated subquery in FROM clause is not yet implemented")
+		require.Equal(t, int32(2), corr.Depth)
+		require.False(t, ctx.isCorrelated)
+	})
+
+	t.Run("scan block filter remains unsupported and atomic", func(t *testing.T) {
+		corr := &plan.CorrColRef{RelPos: outerTag, Depth: 2}
+		nodes := newNodes(corr, &plan.Node{NodeType: plan.Node_TABLE_SCAN})
+		nodes[1].Children[0] = 0
+		nodes[0].BlockFilterList = []*plan.Expr{newTransparentDerivedEquality(corr, 42)}
+		ctx := NewBindContext(nil, nil)
+		err := newBuilder(nodes).normalizeTransparentCorrelatedDerivedTable(3, ctx)
+		require.ErrorContains(t, err, "correlated subquery in FROM clause is not yet implemented")
+		require.Equal(t, int32(2), corr.Depth)
+		require.False(t, ctx.isCorrelated)
+	})
+
+	t.Run("same scope remains non lateral", func(t *testing.T) {
+		corr := &plan.CorrColRef{RelPos: outerTag, Depth: 1}
+		nodes := newNodes(corr, &plan.Node{NodeType: plan.Node_TABLE_SCAN})
+		nodes[1].Children[0] = 0
+		ctx := NewBindContext(nil, nil)
+		ctx.bindingByTag[outerTag] = nil
+		err := newBuilder(nodes).normalizeTransparentCorrelatedDerivedTable(3, ctx)
+		require.ErrorContains(t, err, "correlated subquery in FROM clause is not yet implemented")
+		require.Equal(t, int32(1), corr.Depth)
+		require.False(t, ctx.isCorrelated)
+	})
+
+	t.Run("ancestor correlation propagates through binderless scope", func(t *testing.T) {
+		corr := &plan.CorrColRef{RelPos: outerTag, Depth: 1}
+		nodes := newNodes(corr, &plan.Node{NodeType: plan.Node_TABLE_SCAN})
+		nodes[1].Children[0] = 0
+		ctx := NewBindContext(nil, nil)
+		require.NoError(t, newBuilder(nodes).normalizeTransparentCorrelatedDerivedTable(3, ctx))
+		require.Equal(t, int32(1), corr.Depth)
+		require.True(t, ctx.isCorrelated)
+	})
+
+	t.Run("repeated ancestor reference decrements depth exactly once", func(t *testing.T) {
+		corr := &plan.CorrColRef{RelPos: outerTag, Depth: 2}
+		nodes := newNodes(corr, &plan.Node{NodeType: plan.Node_TABLE_SCAN})
+		nodes[1].Children[0] = 0
+		nodes[1].FilterList = append(nodes[1].FilterList, newTransparentDerivedEquality(corr, 42))
+		ancestor := NewBindContext(nil, nil)
+		ancestor.bindingByTag[outerTag] = nil
+		ctx := NewBindContext(nil, ancestor)
+		require.NoError(t, newBuilder(nodes).normalizeTransparentCorrelatedDerivedTable(3, ctx))
+		require.Equal(t, int32(1), corr.Depth)
+		require.True(t, ctx.isCorrelated)
+	})
+
+	t.Run("binder-backed empty ancestor is rejected atomically", func(t *testing.T) {
+		corr := &plan.CorrColRef{RelPos: outerTag, Depth: 3}
+		nodes := newNodes(corr, &plan.Node{NodeType: plan.Node_TABLE_SCAN})
+		nodes[1].Children[0] = 0
+		builder := newBuilder(nodes)
+		owner := NewBindContext(nil, nil)
+		owner.bindingByTag[outerTag] = nil
+		emptyQuery := NewBindContext(nil, owner)
+		emptyQuery.binder = NewWhereBinder(builder, emptyQuery)
+		ctx := NewBindContext(nil, emptyQuery)
+		err := builder.normalizeTransparentCorrelatedDerivedTable(3, ctx)
+		require.ErrorContains(t, err, "correlated subquery in FROM clause is not yet implemented")
+		require.Equal(t, int32(3), corr.Depth)
+		require.False(t, ctx.isCorrelated)
+	})
+
+	t.Run("deeper ancestor is rejected atomically", func(t *testing.T) {
+		corr := &plan.CorrColRef{RelPos: outerTag, Depth: 3}
+		nodes := newNodes(corr, &plan.Node{NodeType: plan.Node_TABLE_SCAN})
+		nodes[1].Children[0] = 0
+		owner := NewBindContext(nil, nil)
+		owner.bindingByTag[outerTag] = nil
+		intermediate := NewBindContext(nil, owner)
+		intermediate.bindingByTag[42] = nil
+		ctx := NewBindContext(nil, intermediate)
+		err := newBuilder(nodes).normalizeTransparentCorrelatedDerivedTable(3, ctx)
+		require.ErrorContains(t, err, "correlated subquery in FROM clause is not yet implemented")
+		require.Equal(t, int32(3), corr.Depth)
+		require.False(t, ctx.isCorrelated)
+	})
+}
+
 func TestNestedCorrelatedScalarStillRejectsUnsafeShapes(t *testing.T) {
 	for _, sql := range []string{
 		`SELECT n1.N_NATIONKEY,
@@ -1082,6 +1523,20 @@ func newFlattenSubqueryTestColExpr(tag int32) *plan.Expr {
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: tag,
+			},
+		},
+	}
+}
+
+func newTransparentDerivedEquality(corr *plan.CorrColRef, localTag int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "="},
+				Args: []*plan.Expr{
+					{Expr: &plan.Expr_Corr{Corr: corr}},
+					newFlattenSubqueryTestColExpr(localTag),
+				},
 			},
 		},
 	}
