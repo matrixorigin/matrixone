@@ -571,6 +571,7 @@ type baseBinder struct {
 	numericSubqueryTarget            *Type
 	numericFunctionTarget            bool
 	allowCanonicalNameConstValueCast bool
+	bindRawMySQLSpecialType          bool
 }
 
 type boundColumn struct {

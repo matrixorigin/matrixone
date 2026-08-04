@@ -4,139 +4,141 @@ insert ignore into insert_ignore_01 values(3,"e"),(6,"f"),(1,"g");
 insert ignore into insert_ignore_01(c2) values("h"),("g"),("k");
 insert ignore into insert_ignore_01 values(NULL,NULL);
 select * from insert_ignore_01;
-c1    c2
-1    a
-2    b
-3    c
-4    d
-6    f
-7    h
-8    g
-9    k
-10    null
+➤ c1[4,32,0]  ¦  c2[12,-1,0]  𝄀
+1  ¦  a  𝄀
+2  ¦  b  𝄀
+3  ¦  c  𝄀
+4  ¦  d  𝄀
+6  ¦  f  𝄀
+7  ¦  h  𝄀
+8  ¦  g  𝄀
+9  ¦  k  𝄀
+10  ¦  null
 drop table insert_ignore_01;
 create table insert_ignore_01 (part_id INT NOT NULL,color VARCHAR(20) NOT NULL,quantity INT,PRIMARY KEY (part_id, color));
 insert ignore into insert_ignore_01 (part_id, color, quantity)values(1, 'Red', 10),(1, 'Blue', 20),(2, 'Green', 15),(1, 'Red', 5);
 select * from insert_ignore_01;
-part_id    color    quantity
-1    Blue    20
-1    Red    10
-2    Green    15
+➤ part_id[4,32,0]  ¦  color[12,-1,0]  ¦  quantity[4,32,0]  𝄀
+1  ¦  Red  ¦  10  𝄀
+1  ¦  Blue  ¦  20  𝄀
+2  ¦  Green  ¦  15
 create table insert_ignore_02(c1 int,c2 decimal(6,2),unique key(c1));
 insert into insert_ignore_02 values(100,1234.56),(200,2345.67),(300,3456.78),(400,4567.89),(NULL,33.00);
 insert ignore into insert_ignore_02 values(100,1234.56),(200,23.7),(500,56.7),(600,6.9);
 insert ignore into insert_ignore_02 values(700,1.56),(800,3.7);
 insert ignore into insert_ignore_02 values(NULL,44.56);
 select * from insert_ignore_02;
-c1    c2
-100    1234.56
-200    2345.67
-300    3456.78
-400    4567.89
-null    33.00
-500    56.70
-600    6.90
-700    1.56
-800    3.70
-null    44.56
+➤ c1[4,32,0]  ¦  c2[3,6,2]  𝄀
+100  ¦  1234.56  𝄀
+200  ¦  2345.67  𝄀
+300  ¦  3456.78  𝄀
+400  ¦  4567.89  𝄀
+null  ¦  33.00  𝄀
+500  ¦  56.70  𝄀
+600  ¦  6.90  𝄀
+700  ¦  1.56  𝄀
+800  ¦  3.70  𝄀
+null  ¦  44.56
 create table insert_ignore_03(c1 int auto_increment primary key,c2 int,key(c2));
 insert into insert_ignore_03(c2) values(2),(2),(5),(10),(12),(NULL);
 insert ignore into insert_ignore_03(c2) values(7),(2),(5),(10),(12),(NULL);
 select * from insert_ignore_03;
-c1    c2
-6    null
-12    null
-1    2
-2    2
-8    2
-3    5
-9    5
-7    7
-4    10
-10    10
-5    12
-11    12
+➤ c1[4,32,0]  ¦  c2[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  2  𝄀
+3  ¦  5  𝄀
+4  ¦  10  𝄀
+5  ¦  12  𝄀
+6  ¦  null  𝄀
+7  ¦  7  𝄀
+8  ¦  2  𝄀
+9  ¦  5  𝄀
+10  ¦  10  𝄀
+11  ¦  12  𝄀
+12  ¦  null
 create table insert_ignore_04 (product_id INT NOT NULL AUTO_INCREMENT,product_name VARCHAR(255) NOT NULL,quantity_in_stock INT DEFAULT 0,price DECIMAL(10, 2) NOT NULL,PRIMARY KEY (product_id));
 insert ignore into insert_ignore_04(product_name, price) VALUES('Laptop', 1200.00),('Monitor', 150.00),('Keyboard', NULL),('Mouse', 15.00);
 constraint violation: Column 'price' cannot be null
 insert ignore into insert_ignore_04(product_name, quantity_in_stock,price) VALUES(NULL, 5,1200.00),('board',6, NULL),('phone',NULL,1500.00);
+[unknown result because it is related to issue#15345]
 select * from insert_ignore_04;
-product_id    product_name    quantity_in_stock    price
-1    Laptop    0    1200.00
-2    Monitor    0    150.00
-3    Keyboard    0    0.00
-4    Mouse    0    15.00
-5        5    1200.00
-6    board    6    0.00
-7    phone    null    1500.00
+[unknown result because it is related to issue#15345]
 create table parent_table(parent_id INT AUTO_INCREMENT PRIMARY KEY,parent_name VARCHAR(255) NOT NULL);
+[unknown result because it is related to issue#15345]
 create table child_table(child_id INT AUTO_INCREMENT PRIMARY KEY,child_name VARCHAR(255) NOT NULL,parent_id INT,FOREIGN KEY (parent_id) REFERENCES parent_table(parent_id)
 );
+[unknown result because it is related to issue#15345]
 insert ignore into parent_table (parent_name) VALUES ('Parent 1'), ('Parent 2'), ('Parent 3');
+[unknown result because it is related to issue#15345]
 insert ignore into child_table (child_name, parent_id) VALUES('Child 1', 1),('Child 2', 2),('Child 3', 4),('Child 4', 1);
+[unknown result because it is related to issue#15345]
 select * from parent_table;
-parent_id    parent_name
-1    Parent 1
-2    Parent 2
-3    Parent 3
+[unknown result because it is related to issue#15345]
 select * from child_table;
-child_id    child_name    parent_id
-1    Child 1    1
-2    Child 2    2
-3    Child 4    1
+[unknown result because it is related to issue#15345]
 insert ignore into insert_ignore_02 values(1234.56);
 Column count doesn't match value count at row 1
 insert ignore into insert_ignore_02 values("abc",1234.56);
+[unknown result because it is related to issue#15345]
 insert ignore into insert_ignore_02 select "abc",34.22;
+[unknown result because it is related to issue#15345]
 insert ignore into insert_ignore values("abc",1234.56);
 no such table insert_ignore.insert_ignore
 create table insert_ignore_05(id TINYINT,created_at DATETIME);
+[unknown result because it is related to issue#15345]
 insert ignore INTO insert_ignore_05 (id, created_at) VALUES(130, '2024-04-03 10:00:00'),(-129, '2024-04-03 11:00:00'),(100, '2024-04-03 12:00:00');
+[unknown result because it is related to issue#15345]
 insert ignore INTO insert_ignore_05 (id, created_at) VALUES(50, '9999-12-31 23:59:59'), (50, '2000-02-29 10:00:00'),(50, '2024-04-03 13:00:00');
+[unknown result because it is related to issue#15345]
 select * from insert_ignore_05;
-id    created_at
-127    2024-04-03 10:00:00
--128    2024-04-03 11:00:00
-100    2024-04-03 12:00:00
-50    9999-12-31 23:59:59
-50    2000-02-29 10:00:00
-50    2024-04-03 13:00:00
+[unknown result because it is related to issue#15345]
 create table insert_ignore_06 (sale_id INT AUTO_INCREMENT,product_id INT,sale_amount DECIMAL(10, 2),sale_date DATE,PRIMARY KEY (sale_id, sale_date))PARTITION BY RANGE (year(sale_date)) (PARTITION p0 VALUES LESS THAN (1991),PARTITION p1 VALUES LESS THAN (1992),PARTITION p2 VALUES LESS THAN (1993),PARTITION p3 VALUES LESS THAN (1994));
 insert ignore into insert_ignore_06 (product_id, sale_amount, sale_date) VALUES(1, 1000.00, '1990-04-01'),(2, 1500.00, '1992-05-01'),(3, 500.00, '1995-06-01'),(1, 2000.00, '1991-07-01');
 invalid input: Table has no partition for value from column_list
 select * from insert_ignore_06;
-sale_id    product_id    sale_amount    sale_date
+➤ sale_id[4,32,0]  ¦  product_id[4,32,0]  ¦  sale_amount[3,10,2]  ¦  sale_date[91,64,0]
 create table insert_ignore_07(c1 int primary key auto_increment, c2 int);
 insert into insert_ignore_07(c2) select result from generate_series(1,100000) g;
 create table insert_ignore_08(c1 int primary key, c2 int);
 insert into insert_ignore_08 values(20,45),(21,55),(1,45),(6,22),(5,1),(1000,222),(99999,19);
 insert ignore into insert_ignore_08 select * from insert_ignore_07;
 select count(*) from insert_ignore_08;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 100000
 select * from insert_ignore_08 where c2 in (45,55,22,1,222,19);
-c1    c2
-20    45
-21    55
-1    45
-6    22
-5    1
-1000    222
-99999    19
-19    19
-22    22
-45    45
-55    55
-222    222
+➤ c1[4,32,0]  ¦  c2[4,32,0]  𝄀
+20  ¦  45  𝄀
+21  ¦  55  𝄀
+1  ¦  45  𝄀
+6  ¦  22  𝄀
+5  ¦  1  𝄀
+1000  ¦  222  𝄀
+99999  ¦  19  𝄀
+19  ¦  19  𝄀
+22  ¦  22  𝄀
+45  ¦  45  𝄀
+55  ¦  55  𝄀
+222  ¦  222
 create table insert_ignore_09(c1 int primary key, c2 int);
 insert into insert_ignore_09 values(20,45),(21,55),(1,45),(6,22),(5,1),(1000,222),(99999,19);
 insert ignore into insert_ignore_09 select result, result from generate_series(1,10000000) g;
 select count(*) from insert_ignore_09;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 10000000
 select count(*) from insert_ignore_09 where c1 != c2;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 7
+set @insert_ignore_remote_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+drop table if exists insert_ignore_remote_special_bit;
+create table insert_ignore_remote_special_bit (b bit(4));
+insert ignore into insert_ignore_remote_special_bit
+select c1 from insert_ignore_09 where c1 between 1 and 100000;
+select count(*), min(b + 0), max(b + 0) from insert_ignore_remote_special_bit;
+➤ count(*)[-5,64,0]  ¦  min(b + 0)[-5,64,0]  ¦  max(b + 0)[-5,64,0]  𝄀
+100000  ¦  1  ¦  15
+drop table insert_ignore_remote_special_bit;
+set session sql_mode = @insert_ignore_remote_sql_mode;
 drop table if exists t_insert_ignore_panic;
 create table t_insert_ignore_panic (
 pk varchar(50) not null,
@@ -181,5 +183,65 @@ insert ignore into t_insert_ignore_panic (pk, col1) values
 ('pk011', 'dup11'),  -- duplicate
 ('pk012', 'dup12');  -- duplicate
 select count(*) from t_insert_ignore_panic;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 23
+set @insert_ignore_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+drop table if exists insert_ignore_special_types;
+create table insert_ignore_special_types (
+id int primary key,
+y year,
+b bit(4),
+e enum('a', 'b', ''),
+s set('x', 'y', 'z')
+);
+insert ignore into insert_ignore_special_types values
+(1, '2156', b'11111', 'bad', 'x,bad'),
+(2, '2156', 31, 9, 99);
+create table insert_ignore_special_source (
+v int,
+u bigint unsigned,
+f double,
+f64 double,
+d decimal(10, 0),
+d256 decimal(40, 0),
+b bit(5)
+);
+insert into insert_ignore_special_source values (31, 31, 31, 18446744073709551616, 2156, 2156, b'11111');
+insert ignore into insert_ignore_special_types
+select 3, '2156', v, 9, 99 from insert_ignore_special_source;
+insert ignore into insert_ignore_special_types
+select 4, d, 0, 9, 99 from insert_ignore_special_source;
+insert ignore into insert_ignore_special_types
+select 5, d256, 0, 9, 99 from insert_ignore_special_source;
+insert ignore into insert_ignore_special_types
+select 6, 0, u, 1, 1 from insert_ignore_special_source;
+insert ignore into insert_ignore_special_types
+select 7, 0, f, 1, 1 from insert_ignore_special_source;
+insert ignore into insert_ignore_special_types
+select 8, 0, d, 1, 1 from insert_ignore_special_source;
+insert ignore into insert_ignore_special_types
+select 9, 0, b, 1, 1 from insert_ignore_special_source;
+drop table if exists insert_ignore_special_bit64;
+create table insert_ignore_special_bit64 (b bit(64));
+insert ignore into insert_ignore_special_bit64
+select f64 from insert_ignore_special_source;
+select hex(b) from insert_ignore_special_bit64;
+➤ hex(b)[12,-1,0]  𝄀
+FFFFFFFFFFFFFFFF
+drop table insert_ignore_special_bit64;
+select id, y + 0, bin(b + 0), e, e + 0, s, s + 0
+from insert_ignore_special_types order by id;
+➤ id[4,32,0]  ¦  y + 0[-5,64,0]  ¦  bin(b + 0)[12,-1,0]  ¦  e[12,-1,0]  ¦  e + 0[-5,64,0]  ¦  s[12,-1,0]  ¦  s + 0[3,38,0]  𝄀
+1  ¦  0  ¦  1111  ¦    ¦  0  ¦  x  ¦  1  𝄀
+2  ¦  0  ¦  1111  ¦    ¦  0  ¦  x,y  ¦  3  𝄀
+3  ¦  0  ¦  1111  ¦    ¦  0  ¦  x,y  ¦  3  𝄀
+4  ¦  0  ¦  0  ¦    ¦  0  ¦  x,y  ¦  3  𝄀
+5  ¦  0  ¦  0  ¦    ¦  0  ¦  x,y  ¦  3  𝄀
+6  ¦  0  ¦  1111  ¦  a  ¦  1  ¦  x  ¦  1  𝄀
+7  ¦  0  ¦  1111  ¦  a  ¦  1  ¦  x  ¦  1  𝄀
+8  ¦  0  ¦  1111  ¦  a  ¦  1  ¦  x  ¦  1  𝄀
+9  ¦  0  ¦  1111  ¦  a  ¦  1  ¦  x  ¦  1
+drop table insert_ignore_special_source;
+drop table insert_ignore_special_types;
+set session sql_mode = @insert_ignore_sql_mode;
