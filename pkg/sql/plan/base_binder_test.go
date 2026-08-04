@@ -774,6 +774,60 @@ func TestMinMaxCastTextUsesExplicitGeneralCICollation(t *testing.T) {
 	}
 }
 
+func TestMinMaxDerivedStringExpressionsKeepCollation(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	mock.ctxt.tables["bind_select"].Cols[2].Typ = plan.Type{
+		Id:      int32(types.T_varchar),
+		Width:   10,
+		Charset: uint32(types.CharsetUTF8MB4Bin),
+	}
+
+	p, err := runOneStmt(mock, t,
+		"select min(convert(c using binary)), max(convert(c using utf8mb4)), "+
+			"min(substring(c, 1)), max(left(c, 1)), min(right(c, 1)), "+
+			"max(replace(c, 'x', 'y')), min(trim(c)), max(ltrim(c)), min(rtrim(c)) "+
+			"from select_test.bind_select")
+	require.NoError(t, err)
+
+	var aggregates []*plan.Expr
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG {
+			aggregates = node.AggList
+			break
+		}
+	}
+	require.Len(t, aggregates, 9)
+	expectedCharsets := []uint32{
+		uint32(types.CharsetBinary),
+		uint32(types.CharsetUTF8),
+		uint32(types.CharsetUTF8MB4Bin),
+		uint32(types.CharsetUTF8MB4Bin),
+		uint32(types.CharsetUTF8MB4Bin),
+		uint32(types.CharsetUTF8MB4Bin),
+		uint32(types.CharsetUTF8MB4Bin),
+		uint32(types.CharsetUTF8MB4Bin),
+		uint32(types.CharsetUTF8MB4Bin),
+	}
+	for i, aggregate := range aggregates {
+		aggregateFunction := aggregate.GetF()
+		require.NotNil(t, aggregateFunction)
+		require.Len(t, aggregateFunction.Args, 1)
+		argumentFunction := aggregateFunction.Args[0].GetF()
+		require.NotNil(t, argumentFunction)
+		require.NotNil(t, argumentFunction.Func)
+		require.Equalf(t, expectedCharsets[i], aggregateFunction.Args[0].Typ.Charset,
+			"aggregate %d argument function %s", i, argumentFunction.Func.ObjName)
+		require.Equalf(t, expectedCharsets[i], aggregate.Typ.Charset,
+			"aggregate %d result", i)
+	}
+}
+
+func TestConvertUsingRejectsUnsupportedCharset(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true), t,
+		"select convert(c using latin1) from select_test.bind_select")
+	require.ErrorContains(t, err, "unsupported character set 'latin1' for CONVERT USING")
+}
+
 func TestBindSerialFunctionOverEmptyExprListDoesNotPanic(t *testing.T) {
 	ctx := context.Background()
 

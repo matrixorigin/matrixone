@@ -184,6 +184,37 @@ func TestBuildCreateTableRejectsUnsupportedCollations(t *testing.T) {
 	}
 }
 
+func TestUnsupportedLegacyCollationExplainsDumpReplacement(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table t(v varchar(8)) collate utf8mb4_unicode_ci", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.ErrorContains(t, err,
+		"replace it with 'utf8mb4_general_ci' when restoring legacy MatrixOne DDL")
+}
+
+func TestCreateTableInheritsEffectiveServerCollation(t *testing.T) {
+	mock := NewMockCompilerContext(false)
+	mock.ResolveVariableFunc = func(name string, isSystem, isGlobal bool) (interface{}, error) {
+		if name == "collation_server" && isSystem && !isGlobal {
+			return "utf8mb4_bin", nil
+		}
+		return nil, nil
+	}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table t(v varchar(8))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(mock, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateTable().GetTableDef()
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), tableDef.DefaultCharset)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), tableDef.Cols[0].Typ.Charset)
+}
+
 func TestBuildCreateTableCharacterSetBinaryConvertsStringTypes(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
 		"create table t(c char(4) character set binary, "+
