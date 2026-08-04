@@ -1996,6 +1996,10 @@ func appendPrimaryConstraintPlan(
 					},
 				},
 			}
+			pkColExpr, err = bindPrimaryKeyIdentityExpr(builder, pkColExpr, pkTyp)
+			if err != nil {
+				return err
+			}
 			lastNodeId, err = appendAggCountGroupByColExpr(builder, bindCtx, lastNodeId, pkColExpr)
 			if err != nil {
 				return err
@@ -2015,13 +2019,25 @@ func appendPrimaryConstraintPlan(
 			if err != nil {
 				return err
 			}
-			varcharType := types.T_varchar.ToType()
-			varcharExpr, err := makePlan2CastExpr(builder.GetContext(), &Expr{
-				Typ: tableDef.Cols[pkPos].Typ,
+			// The group key is the exact identity expression. FLOAT/DOUBLE keys
+			// therefore arrive here as serial(...) bytes; recover the original
+			// value for the user-facing duplicate-entry message without changing
+			// the bit-preserving grouping semantics.
+			displayExpr := &Expr{
+				Typ: pkColExpr.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{ColPos: 1, Name: tableDef.Cols[pkPos].Name},
 				},
-			}, makePlan2Type(&varcharType))
+			}
+			pkType := types.T(pkTyp.Id)
+			if pkType == types.T_float32 || pkType == types.T_float64 {
+				displayExpr, err = MakeSerialExtractExpr(builder.GetContext(), displayExpr, pkTyp, 0)
+				if err != nil {
+					return err
+				}
+			}
+			varcharType := types.T_varchar.ToType()
+			varcharExpr, err := makePlan2CastExpr(builder.GetContext(), displayExpr, makePlan2Type(&varcharType))
 			if err != nil {
 				return err
 			}
@@ -2058,22 +2074,29 @@ func appendPrimaryConstraintPlan(
 					},
 				},
 			}
-			// sink_scan
-			sinkScanNode := &Node{
-				NodeType:   plan.Node_SINK_SCAN,
-				Stats:      &plan.Stats{},
-				SourceStep: []int32{sourceStep},
-				ProjectList: []*Expr{
-					&plan.Expr{
-						Typ: pkTyp,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								ColPos: int32(pkPos),
-								Name:   tableDef.Pkey.PkeyColName,
-							},
-						},
+			probeExpr, err = bindPrimaryKeyIdentityExpr(builder, probeExpr, pkTyp)
+			if err != nil {
+				return err
+			}
+			sourcePKExpr := &plan.Expr{
+				Typ: pkTyp,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						ColPos: int32(pkPos),
+						Name:   tableDef.Pkey.PkeyColName,
 					},
 				},
+			}
+			sourcePKExpr, err = bindPrimaryKeyIdentityExpr(builder, sourcePKExpr, pkTyp)
+			if err != nil {
+				return err
+			}
+			// sink_scan
+			sinkScanNode := &Node{
+				NodeType:    plan.Node_SINK_SCAN,
+				Stats:       &plan.Stats{},
+				SourceStep:  []int32{sourceStep},
+				ProjectList: []*Expr{sourcePKExpr},
 			}
 			lastNodeId = builder.appendNode(sinkScanNode, bindCtx)
 
@@ -2096,20 +2119,25 @@ func appendPrimaryConstraintPlan(
 				}
 			}
 
-			scanNode := &plan.Node{
-				NodeType: plan.Node_TABLE_SCAN,
-				Stats:    &plan.Stats{},
-				ObjRef:   objRef,
-				TableDef: scanTableDef,
-				ProjectList: []*Expr{{
-					Typ: pkTyp,
-					Expr: &plan.Expr_Col{
-						Col: &ColRef{
-							ColPos: int32(len(scanTableDef.Cols) - 1),
-							Name:   tableDef.Pkey.PkeyColName,
-						},
+			scanPKExpr := &plan.Expr{
+				Typ: pkTyp,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						ColPos: int32(len(scanTableDef.Cols) - 1),
+						Name:   tableDef.Pkey.PkeyColName,
 					},
-				}},
+				},
+			}
+			scanPKExpr, err = bindPrimaryKeyIdentityExpr(builder, scanPKExpr, pkTyp)
+			if err != nil {
+				return err
+			}
+			scanNode := &plan.Node{
+				NodeType:    plan.Node_TABLE_SCAN,
+				Stats:       &plan.Stats{},
+				ObjRef:      objRef,
+				TableDef:    scanTableDef,
+				ProjectList: []*Expr{scanPKExpr},
 			}
 
 			if builder.isRestore {
@@ -2150,7 +2178,7 @@ func appendPrimaryConstraintPlan(
 
 			if len(pkFilterExprs) == 0 {
 				buildExpr := &plan.Expr{
-					Typ: pkTyp,
+					Typ: scanPKExpr.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
@@ -2454,4 +2482,15 @@ func appendPrimaryConstraintPlan(
 	}
 
 	return nil
+}
+
+func bindPrimaryKeyIdentityExpr(builder *QueryBuilder, expr *Expr, typ plan.Type) (*Expr, error) {
+	pkType := types.T(typ.Id)
+	if pkType != types.T_float32 && pkType != types.T_float64 {
+		return expr, nil
+	}
+	// FLOAT/DOUBLE primary-key identity is bit-preserving. Feed serial()
+	// encodings to duplicate-check paths so NaN payloads and signed zero are
+	// neither collapsed nor matched inconsistently by scalar-key hash joins.
+	return BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*Expr{expr})
 }

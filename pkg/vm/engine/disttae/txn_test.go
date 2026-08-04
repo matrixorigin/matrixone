@@ -26,6 +26,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1558,6 +1559,59 @@ func TestDupVectorWithoutNulls(t *testing.T) {
 		out.Free(mp)
 		v.Free(mp)
 	})
+}
+
+func TestDupVectorWithoutNullsLeavesSealedStatementOwner(t *testing.T) {
+	proc := testutil.NewProc(t)
+	mp := proc.Mp()
+
+	for _, tc := range []struct {
+		name      string
+		withNulls bool
+	}{
+		{name: "no nulls"},
+		{name: "with nulls", withNulls: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+			require.NoError(t, err)
+			account, err := registry.Open(1 << 20)
+			require.NoError(t, err)
+			selection, err := vector.NewAllocationAccountSelection(
+				account,
+				mpool.AllocationOwner(1),
+				mpool.AllocationSite(1),
+				mpool.AllocationSite(2),
+				mpool.AllocationSite(3),
+				mpool.AllocationSite(4),
+			)
+			require.NoError(t, err)
+			source, err := vector.NewOffHeapVecWithTypeAndAllocation(
+				types.T_int64.ToType(),
+				selection,
+			)
+			require.NoError(t, err)
+			require.NoError(t, vector.AppendFixed(source, int64(1), false, mp))
+			if tc.withNulls {
+				require.NoError(t, vector.AppendFixed(source, int64(0), true, mp))
+			}
+			require.NoError(t, vector.AppendFixed(source, int64(2), false, mp))
+
+			used := account.Seal().Used
+			require.NotZero(t, used)
+			out, err := dupVectorWithoutNulls(source, mp)
+			require.NoError(t, err)
+			require.Nil(t, out.AllocationAccountSelection())
+			require.Equal(t, used, account.Snapshot().Used)
+			require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](out))
+
+			out.Free(mp)
+			source.Free(mp)
+			require.Zero(t, account.Snapshot().Used)
+			_, err = registry.Finalize(account)
+			require.NoError(t, err)
+		})
+	}
 }
 
 func newInt64BatchForTest(

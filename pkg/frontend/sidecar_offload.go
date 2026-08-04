@@ -117,6 +117,18 @@ func stripSidecarHint(sql string) string {
 	return sql
 }
 
+func sidecarQueryMustRunLocally(ctx context.Context, ses *Session, sql string) bool {
+	stmts, err := parsers.ParseWithSQLMode(
+		ctx,
+		dialect.MYSQL,
+		stripSidecarHint(sql),
+		parserLowerCaseTableNames(ses),
+		sessionSQLModeForParser(ses),
+	)
+	defer freeStatements(stmts)
+	return err == nil && len(stmts) == 1 && isPerformStatement(stmts[0])
+}
+
 // (sidecarRequest removed — httpserver accepts raw SQL body)
 
 // httpserver JSONCompact response from DuckDB sidecar.

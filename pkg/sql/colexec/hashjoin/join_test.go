@@ -61,6 +61,7 @@ func TestHashJoinPrepareFailureCanRetry(t *testing.T) {
 		EqConds:   [][]*plan.Expr{{valid}, {valid}},
 		NonEqCond: invalid,
 	}
+	installTestAllocation(t, arg)
 
 	require.Error(t, arg.Prepare(proc))
 	require.Nil(t, arg.ctr.eqCondVecs)
@@ -786,9 +787,9 @@ func TestHashJoinSingleRejectsDuplicateMatchesAcrossWorkers(t *testing.T) {
 		JoinType: plan.Node_SINGLE,
 		NumCPU:   2,
 		IsMerger: true,
-		Channel:  make(chan *bitmap.Bitmap, 1),
+		Mailbox:  NewBitmapMailbox(2),
 	}
-	hashJoin.Channel <- remoteMatches
+	require.True(t, hashJoin.Mailbox.Send(remoteMatches))
 	ctr := container{rightRowsMatched: localMatches, probeSingle: true}
 
 	err := ctr.syncBitmap(hashJoin, proc)
@@ -820,14 +821,14 @@ func TestHashJoinMergerSyncBitmapAborted(t *testing.T) {
 		IsRightJoin: true,
 		NumCPU:      3,
 		IsMerger:    true,
-		Channel:     make(chan *bitmap.Bitmap, 3),
+		Mailbox:     NewBitmapMailbox(3),
 		ResultCols:  []colexec.ResultPos{colexec.NewResultPos(1, 0)},
 		RightTypes:  []types.Type{types.T_int32.ToType()},
 	}
 	// Worker A was torn down before syncing (its Reset sends nil); worker B
 	// synced normally and its bitmap lands after the abort marker.
-	hashJoin.Channel <- nil
-	hashJoin.Channel <- staleMatches
+	require.True(t, hashJoin.Mailbox.Send(nil))
+	require.True(t, hashJoin.Mailbox.Send(staleMatches))
 	hashJoin.ctr.state = SyncBitmap
 	hashJoin.ctr.rightRowsMatched = matched
 	hashJoin.ctr.rightBats = []*batch.Batch{rightBat}
@@ -836,13 +837,13 @@ func TestHashJoinMergerSyncBitmapAborted(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, result.Batch)
 	require.Equal(t, vm.ExecStop, result.Status)
-	// Worker B's bitmap must not be left behind in the shared channel.
-	require.Empty(t, hashJoin.Channel)
+	// Worker B's bitmap must not be left behind in the shared mailbox.
+	require.Empty(t, hashJoin.Mailbox.ch)
 
 	// The merger already synced this generation, so Reset must not push the
 	// nil abort marker either.
 	hashJoin.Reset(proc, false, nil)
-	require.Empty(t, hashJoin.Channel)
+	require.Empty(t, hashJoin.Mailbox.ch)
 
 	// Next generation over the same operator and channel: a clean sync must
 	// only observe this generation's bitmaps.
@@ -856,8 +857,9 @@ func TestHashJoinMergerSyncBitmapAborted(t *testing.T) {
 	workerMatches2.InitWithSize(4)
 	workerMatches2.Add(2)
 
-	hashJoin.Channel <- workerMatches1
-	hashJoin.Channel <- workerMatches2
+	hashJoin.Mailbox = NewBitmapMailbox(3)
+	require.True(t, hashJoin.Mailbox.Send(workerMatches1))
+	require.True(t, hashJoin.Mailbox.Send(workerMatches2))
 	hashJoin.ctr.state = SyncBitmap
 	hashJoin.ctr.rightRowsMatched = matched2
 	hashJoin.ctr.rightBats = []*batch.Batch{rightBat}
@@ -896,11 +898,11 @@ func TestHashJoinMergerFinalizeEmitsUnmatchedBuildRows(t *testing.T) {
 		IsRightJoin: true,
 		NumCPU:      2,
 		IsMerger:    true,
-		Channel:     make(chan *bitmap.Bitmap, 2),
+		Mailbox:     NewBitmapMailbox(2),
 		ResultCols:  []colexec.ResultPos{colexec.NewResultPos(1, 0)},
 		RightTypes:  []types.Type{types.T_int32.ToType()},
 	}
-	hashJoin.Channel <- remoteMatches
+	require.True(t, hashJoin.Mailbox.Send(remoteMatches))
 	hashJoin.ctr.state = SyncBitmap
 	hashJoin.ctr.rightRowsMatched = matched
 	hashJoin.ctr.rightBats = []*batch.Batch{rightBat}
@@ -1049,7 +1051,7 @@ func newTestCaseWithMPool(
 		resultBatch.Vecs[i] = bat.Vecs[rp[i].Pos]
 	}
 	tag++
-	return joinTestCase{
+	tc := joinTestCase{
 		types:  ts,
 		flgs:   flgs,
 		proc:   proc,
@@ -1088,6 +1090,8 @@ func newTestCaseWithMPool(
 		},
 		resultBatch: resultBatch,
 	}
+	installTestAllocation(t, tc.arg, tc.barg)
+	return tc
 }
 
 func resetChildren(arg *HashJoin, m *mpool.MPool) {

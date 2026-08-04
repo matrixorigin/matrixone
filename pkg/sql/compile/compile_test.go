@@ -136,7 +136,6 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
 	require.Nil(t, params.GetArea())
-
 	c.Release()
 	proc.Free()
 	proc.GetSessionInfo().Buf.Free()

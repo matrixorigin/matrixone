@@ -91,6 +91,49 @@ func TestCopyBatchCompactsAndFlattens(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestCopyBatchCrossesAllocationOwnershipBoundary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		1,
+		1,
+		2,
+		3,
+		4,
+	)
+	require.NoError(t, err)
+
+	src := batch.NewOffHeapWithSize(1)
+	vec := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	require.NoError(t, vec.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(vec, int64(42), false, mp))
+	src.SetVector(0, vec)
+	src.SetRowCount(1)
+	sourceUsed := account.Snapshot().Used
+	require.Positive(t, sourceUsed)
+
+	got, err := CopyBatch(src, proc)
+	require.NoError(t, err)
+	require.Nil(t, got.Vecs[0].AllocationAccountSelection())
+	require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](got.Vecs[0], 0))
+	require.Equal(t, sourceUsed, account.Snapshot().Used)
+
+	src.Clean(mp)
+	require.Zero(t, account.Snapshot().Used)
+	require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](got.Vecs[0], 0))
+	got.Clean(mp)
+
+	account.Seal()
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func BenchmarkCopyBatchCompact(b *testing.B) {
 	proc := testutil.NewProcess(b)
 	mp := proc.Mp()
