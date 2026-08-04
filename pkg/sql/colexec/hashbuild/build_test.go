@@ -22,7 +22,6 @@ import (
 	"math"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -166,9 +165,11 @@ func TestHashBuildRepeatedResetFinalizesRuntimeFilterOnce(t *testing.T) {
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
-func TestBroadcastBudgetFailureUnblocksAllConsumers(t *testing.T) {
+func TestBroadcastBudgetFailurePublishesTerminalAndCleansBudget(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
-	installTestProcessHashBuildBudget(t, tc.arg, tc.proc)
+	budget := installTestProcessHashBuildBudget(t, tc.arg, tc.proc)
+	account := tc.arg.ctr.hashmapBuilder.mapAllocationAccount
+	require.NotNil(t, account)
 	tc.arg.SetChildren([]vm.Operator{tc.marg})
 	require.NoError(t, tc.marg.Prepare(tc.proc))
 	require.NoError(t, tc.arg.Prepare(tc.proc))
@@ -187,28 +188,20 @@ func TestBroadcastBudgetFailureUnblocksAllConsumers(t *testing.T) {
 	require.Contains(t, buildErr.Error(), "requested=")
 	require.Contains(t, buildErr.Error(), "processLimitationSize")
 	require.NotErrorIs(t, buildErr, process.ErrHashBuildBudgetAdmission)
+	require.Zero(t, tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillStarts"])
+	require.Empty(t, tc.arg.ctr.spilledFds)
+	require.Nil(t, tc.arg.ctr.spillBundle)
 
-	const consumers = 4
-	results := make([]message.JoinMapResult, consumers)
-	receiveErrs := make([]error, consumers)
-	var wg sync.WaitGroup
-	wg.Add(consumers)
-	for i := range consumers {
-		go func(i int) {
-			defer wg.Done()
-			results[i], receiveErrs[i] = message.ReceiveJoinMapResult(
-				tc.arg.JoinMapTag, false, 0, tc.proc.GetMessageBoard(), tc.proc.Ctx)
-		}(i)
-	}
-	wg.Wait()
-
-	for i := range consumers {
-		require.NoError(t, receiveErrs[i])
-		require.True(t, results[i].IsBuildError())
-		require.Equal(t, results[0].BuildError().ErrorCode(), results[i].BuildError().ErrorCode())
-		require.Equal(t, results[0].BuildError().Error(), results[i].BuildError().Error())
-	}
+	terminal, receiveErr := message.ReceiveJoinMapResult(
+		tc.arg.JoinMapTag, false, 0, tc.proc.GetMessageBoard(), tc.proc.Ctx)
+	require.NoError(t, receiveErr)
+	require.True(t, terminal.IsBuildError())
+	require.Equal(t, buildErr.Error(), terminal.BuildError().AsMoErr().Error())
 	tc.arg.Reset(tc.proc, true, buildErr)
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, budget.Used())
+	require.Zero(t, budget.SpillDiskUsed())
+	require.Zero(t, budget.SpillFDUsed())
 
 	bat.Clean(tc.proc.Mp())
 	tc.marg.Reset(tc.proc, true, buildErr)

@@ -385,6 +385,10 @@ type fuzzyCheck struct {
 	// handle with primary key(a, b, ...) or unique key (a, b, ...)
 	isCompound bool
 
+	// exactFloatKey means the pipeline carries serial(FLOAT/DOUBLE) rather than
+	// the scalar key. This preserves signed zero and NaN payload identity.
+	exactFloatKey bool
+
 	// handle with cases like create a unique index for existed table, or alter add unique key
 	// and the type of unique key is compound
 	onlyInsertHidden bool
