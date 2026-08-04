@@ -275,12 +275,12 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 		defaultVal := ""
 		typ := &expr.Typ
 		provenance := bindCtx.outputColumnProvenanceForProject(int32(i))
-		if provenance.State == ProvenanceSingleSource && provenance.Source != nil && provenance.Source.ColDef != nil {
-			if provenance.Source.ColDef.Default != nil {
-				defaultVal = provenance.Source.ColDef.Default.OriginString
+		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
+			if provenance.Source.Metadata.HasDefault {
+				defaultVal = provenance.Source.Metadata.DefaultOriginString
 			}
-			if isEnumOrSetPlanType(&provenance.Source.ColDef.Typ) {
-				typ = &provenance.Source.ColDef.Typ
+			if isEnumOrSetPlanType(&provenance.Source.Metadata.Typ) {
+				typ = &provenance.Source.Metadata.Typ
 			}
 		}
 

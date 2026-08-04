@@ -4706,7 +4706,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	var viewRawProjects []*plan.Expr
 	if ctx.restoreViewMySQLSpecialTypes && astOrderBy != nil && !ctx.isDistinct {
 		for i := 0; i < resultLen; i++ {
-			rawExpr, ok := mysqlSpecialTypeSourceExpr(ctx.projects[i])
+			rawExpr, ok := transparentOutputSourceExpr(ctx.projects[i])
 			if !ok {
 				continue
 			}
@@ -8968,7 +8968,7 @@ func (builder *QueryBuilder) appendMySQLSpecialTypeBoundary(
 		rootVisibleProjects := min(len(ctx.headings), len(rootNode.ProjectList))
 		allSpecialTypesRestored := true
 		for i := 0; i < rootVisibleProjects; i++ {
-			sourceExpr, ok := mysqlSpecialTypeSourceExpr(rootNode.ProjectList[i])
+			sourceExpr, ok := transparentOutputSourceExpr(rootNode.ProjectList[i])
 			if !ok {
 				if i < len(provenance) && mysqlSpecialTypeFromProvenance(provenance[i]) != nil {
 					allSpecialTypesRestored = false
@@ -9610,8 +9610,13 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		binding.outputColumnProvenance = make([]OutputColumnProvenance, colLength)
 		for i, col := range node.TableDef.Cols {
 			binding.outputColumnProvenance[i] = OutputColumnProvenance{
-				State:  ProvenanceSingleSource,
-				Source: &SourceColumn{RelPos: tag, ColPos: int32(i), TableID: node.TableDef.TblId, ColDef: DeepCopyColDef(col)},
+				State: ProvenanceSingleSource,
+				Source: &SourceColumn{
+					RelPos:   tag,
+					ColPos:   int32(i),
+					TableID:  node.TableDef.TblId,
+					Metadata: snapshotSourceColumnMetadata(col),
+				},
 			}
 		}
 	} else {

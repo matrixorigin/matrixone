@@ -60,6 +60,8 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 			"create table " + db + ".copied_derived as select flags from " + db + ".v_derived",
 			"create table " + db + ".copied_cte as select flags from " + db + ".v_cte",
 			"create table " + db + ".copied_union as select flags from " + db + ".v_union",
+			"create table " + db + ".copied_union_distinct as select flags from " + db + ".v_union_distinct",
+			"create table " + db + ".copied_recursive as select flags from " + db + ".v_recursive",
 			"create table " + db + ".inserted (flags set('', 'a'))",
 			"insert into " + db + ".inserted select flags from " + db + ".v_raw",
 			"create table " + db + ".expr_src (flags set('a', 'b'))",
@@ -100,6 +102,8 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 			{tableName: "copied_derived", dataType: "set"},
 			{tableName: "copied_cte", dataType: "set"},
 			{tableName: "copied_union", dataType: "varchar"},
+			{tableName: "copied_union_distinct", dataType: "varchar"},
+			{tableName: "copied_recursive", dataType: "varchar"},
 		} {
 			var dataType string
 			require.NoError(t, dbConn.QueryRowContext(ctx,

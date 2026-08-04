@@ -744,8 +744,7 @@ func TestOutputColumnProvenanceCarriesSourceAndClearsSemanticBoundaries(t *testi
 			require.Equal(t, test.wantState, provenance.State)
 			if test.wantState == ProvenanceSingleSource {
 				require.NotNil(t, provenance.Source)
-				require.NotNil(t, provenance.Source.ColDef)
-				require.Equal(t, test.wantDefault, provenance.Source.ColDef.Default.OriginString)
+				require.Equal(t, test.wantDefault, provenance.Source.Metadata.DefaultOriginString)
 				require.NotZero(t, provenance.Source.RelPos)
 			} else {
 				require.Nil(t, provenance.Source)
@@ -784,7 +783,31 @@ func TestBuildCTASConsumesOutputColumnProvenance(t *testing.T) {
 	}
 }
 
-func TestMySQLSpecialTypeSourceExprRejectsNonTransparentExpressions(t *testing.T) {
+func TestOutputColumnProvenanceSnapshotsCatalogMetadataOnce(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	addMySQLSpecialTypeColumns(ctx)
+	priorityCol := ctx.tables["nation"].Cols[len(ctx.tables["nation"].Cols)-2]
+	priorityCol.Default = &plan.Default{OriginString: "'low'"}
+
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select priority from nation", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	bindCtx := NewBindContext(builder, nil)
+	_, err = builder.bindSelect(stmt.(*tree.Select), bindCtx, true)
+	require.NoError(t, err)
+	provenance := bindCtx.outputColumnProvenanceForProject(0)
+	require.Equal(t, ProvenanceSingleSource, provenance.State)
+	require.NotNil(t, provenance.Source)
+
+	priorityCol.Typ.Enumvalues = "changed"
+	priorityCol.Default.OriginString = "'changed'"
+	require.Equal(t, "low,medium,high", provenance.Source.Metadata.Typ.Enumvalues)
+	require.True(t, provenance.Source.Metadata.HasDefault)
+	require.Equal(t, "'low'", provenance.Source.Metadata.DefaultOriginString)
+}
+
+func TestTransparentOutputSourceExprRejectsSemanticExpressions(t *testing.T) {
 	enumType := plan.Type{Id: int32(types.T_enum), Enumvalues: "low,high"}
 	valid := &plan.Expr{
 		Expr: &plan.Expr_F{F: &plan.Function{
@@ -796,7 +819,7 @@ func TestMySQLSpecialTypeSourceExprRejectsNonTransparentExpressions(t *testing.T
 		}},
 	}
 
-	got, ok := mysqlSpecialTypeSourceExpr(valid)
+	got, ok := transparentOutputSourceExpr(valid)
 	require.True(t, ok)
 	require.Equal(t, enumType, got.Typ)
 
@@ -808,7 +831,7 @@ func TestMySQLSpecialTypeSourceExprRejectsNonTransparentExpressions(t *testing.T
 	} {
 		expr := DeepCopyExpr(valid)
 		mutate(expr)
-		_, ok = mysqlSpecialTypeSourceExpr(expr)
+		_, ok = transparentOutputSourceExpr(expr)
 		require.False(t, ok)
 	}
 }

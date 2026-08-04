@@ -252,26 +252,6 @@ func mysqlSpecialTypeFuncNames(typ *plan.Type) (string, string, string, error) {
 	}
 }
 
-func mysqlSpecialTypeSourceExpr(expr *plan.Expr) (*plan.Expr, bool) {
-	if expr == nil {
-		return nil, false
-	}
-	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || len(fn.Args) != 2 || fn.Args[1] == nil || fn.Args[1].GetCol() == nil {
-		return nil, false
-	}
-
-	sourceExpr := fn.Args[1]
-	switch fn.Func.ObjName {
-	case moEnumCastIndexToValueFun:
-		return sourceExpr, isEnumPlanType(&sourceExpr.Typ)
-	case moSetCastIndexToValueFun:
-		return sourceExpr, isSetPlanType(&sourceExpr.Typ)
-	default:
-		return nil, false
-	}
-}
-
 // mysqlSpecialOrderTypeForExpr returns the storage type whose definition order
 // belongs to a visible string expression. Provenance is deliberately narrow:
 // an exact ENUM/SET display call originates it, and an exact ColRef may carry it
@@ -332,95 +312,12 @@ func (bc *BindContext) mysqlSpecialOrderTypeForProject(colPos int32) *plan.Type 
 	return bc.mysqlSpecialOrderTypeForExpr(bc.projects[colPos])
 }
 
-func cloneOutputColumnProvenance(provenance OutputColumnProvenance) OutputColumnProvenance {
-	cloned := OutputColumnProvenance{State: provenance.State}
-	if provenance.Source != nil {
-		cloned.Source = &SourceColumn{
-			RelPos:  provenance.Source.RelPos,
-			ColPos:  provenance.Source.ColPos,
-			TableID: provenance.Source.TableID,
-			ColDef:  DeepCopyColDef(provenance.Source.ColDef),
-		}
-	}
-	return cloned
-}
-
-func (bc *BindContext) outputColumnProvenanceForExpr(expr *plan.Expr) OutputColumnProvenance {
-	if expr == nil {
-		return OutputColumnProvenance{State: ProvenanceNone}
-	}
-	if sourceExpr, ok := mysqlSpecialTypeSourceExpr(expr); ok {
-		return bc.outputColumnProvenanceForExpr(sourceExpr)
-	}
-
-	col := expr.GetCol()
-	if col == nil {
-		return OutputColumnProvenance{State: ProvenanceNone}
-	}
-	if col.RelPos == bc.projectTag && col.ColPos >= 0 && int(col.ColPos) < len(bc.projects) {
-		if provenance, recorded := bc.outputColumnProvenance[col.ColPos]; recorded {
-			return cloneOutputColumnProvenance(provenance)
-		}
-		project := bc.projects[col.ColPos]
-		if project == nil {
-			return OutputColumnProvenance{State: ProvenanceNone}
-		}
-		if projectCol := project.GetCol(); projectCol != nil &&
-			projectCol.RelPos == col.RelPos && projectCol.ColPos == col.ColPos {
-			return OutputColumnProvenance{State: ProvenanceNone}
-		}
-		return bc.outputColumnProvenanceForExpr(project)
-	}
-	if bc.groupTag > 0 && col.RelPos == bc.groupTag && col.ColPos >= 0 && int(col.ColPos) < len(bc.groups) {
-		groupExpr := bc.groups[col.ColPos]
-		if groupExpr == nil {
-			return OutputColumnProvenance{State: ProvenanceNone}
-		}
-		if groupCol := groupExpr.GetCol(); groupCol != nil &&
-			groupCol.RelPos == col.RelPos && groupCol.ColPos == col.ColPos {
-			return OutputColumnProvenance{State: ProvenanceNone}
-		}
-		return bc.outputColumnProvenanceForExpr(groupExpr)
-	}
-	binding := bc.bindingByTag[col.RelPos]
-	if binding == nil || col.ColPos < 0 || int(col.ColPos) >= len(binding.outputColumnProvenance) {
-		return OutputColumnProvenance{State: ProvenanceNone}
-	}
-	return cloneOutputColumnProvenance(binding.outputColumnProvenance[col.ColPos])
-}
-
-func (bc *BindContext) outputColumnProvenanceForProject(colPos int32) OutputColumnProvenance {
-	if provenance, recorded := bc.outputColumnProvenance[colPos]; recorded {
-		return cloneOutputColumnProvenance(provenance)
-	}
-	if colPos < 0 || int(colPos) >= len(bc.projects) {
-		return OutputColumnProvenance{State: ProvenanceNone}
-	}
-	return bc.outputColumnProvenanceForExpr(bc.projects[colPos])
-}
-
-func (bc *BindContext) outputColumnProvenanceForBoundary() []OutputColumnProvenance {
-	provenance := make([]OutputColumnProvenance, min(len(bc.headings), len(bc.projects)))
-	for i := range provenance {
-		provenance[i] = bc.outputColumnProvenanceForProject(int32(i))
-	}
-	return provenance
-
-}
-
-func (bc *BindContext) clearOutputColumnProvenance() {
-	for i := 0; i < min(len(bc.headings), len(bc.projects)); i++ {
-		bc.outputColumnProvenance[int32(i)] = OutputColumnProvenance{State: ProvenanceNone}
-	}
-
-}
-
 func mysqlSpecialTypeFromProvenance(provenance OutputColumnProvenance) *plan.Type {
-	if provenance.State != ProvenanceSingleSource || provenance.Source == nil || provenance.Source.ColDef == nil ||
-		!isEnumOrSetPlanType(&provenance.Source.ColDef.Typ) {
+	if provenance.State != ProvenanceSingleSource || provenance.Source == nil ||
+		!isEnumOrSetPlanType(&provenance.Source.Metadata.Typ) {
 		return nil
 	}
-	return DeepCopyType(&provenance.Source.ColDef.Typ)
+	return DeepCopyType(&provenance.Source.Metadata.Typ)
 }
 
 func mysqlSpecialOrderTypesCompatible(left, right *plan.Type) bool {

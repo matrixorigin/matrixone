@@ -708,26 +708,6 @@ type Binding struct {
 	defaults       []string
 }
 
-type ProvenanceState uint8
-
-const (
-	ProvenanceUnknown ProvenanceState = iota
-	ProvenanceNone
-	ProvenanceSingleSource
-)
-
-type SourceColumn struct {
-	RelPos  int32
-	ColPos  int32
-	TableID uint64
-	ColDef  *plan.ColDef
-}
-
-type OutputColumnProvenance struct {
-	State  ProvenanceState
-	Source *SourceColumn
-}
-
 const (
 	maxLengthOfTableComment  int = 2048
 	maxLengthOfColumnComment int = 1024
