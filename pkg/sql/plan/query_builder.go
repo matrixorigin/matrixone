@@ -8961,7 +8961,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 						return 0, moerr.NewParseErrorf(builder.GetContext(), "cte %s reference itself", table)
 					}
 				}
-				if ctx.bindingRecurStmt() {
+				// Only the CTE currently being expanded is backed by the
+				// recursive scan. Other CTEs visible from the declaration scope
+				// must still be bound as their own producers.
+				if ctx.bindingRecurStmt() && cteRef == ctx.cteState.cte {
 					nodeID = ctx.cteState.recScanNodeId
 					return
 				}

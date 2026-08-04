@@ -50,3 +50,6 @@ drop table if exists t_cte_depth;
 
 -- recursive CTE consumers can be independently rebound under explicit aliases
 with recursive seq(n) as (select 1 union all select n + 1 from seq where n < 3) select count(*) as pairs, sum(a.n + b.n) as checksum from seq as a cross join seq as b;
+
+-- a recursive member can reference an earlier non-recursive CTE in the same WITH clause
+with recursive limits(lo, hi) as (select 3, 9), seq(n) as (select lo from limits union all select n + 1 from seq, limits where n < hi) select count(*), sum(n), min(n), max(n) from seq;
