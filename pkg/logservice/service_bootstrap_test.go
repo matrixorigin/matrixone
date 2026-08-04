@@ -206,16 +206,20 @@ func TestWALRecoveryRejectsDirtyDestinationAndKeepsFence(t *testing.T) {
 	walPath := filepath.Join(dir, "wal_data.bin")
 	require.NoError(t, writeTestWALDataFile(walPath, nil))
 
-	cfg := getServiceTestConfig()
-	defer vfs.ReportLeakedFD(cfg.FS, t)
-	cfg.DisableWorkers = false
-	// See TestServiceBootstrapRestoresHAKeeperAndWAL. This test needs the
-	// bootstrap heartbeat command batch to reach the local LogService.
-	cfg.RPC.MaxMessageSize = defaultMaxMessageSize
-	cfg.BootstrapConfig.InitHAKeeperMembers = []string{"131072:" + cfg.UUID}
-	cfg.HAKeeperClientConfig.ServiceAddresses = []string{cfg.LogServiceServiceAddr()}
-	s, err := NewService(
-		cfg,
+	var cfg Config
+	defer func() { vfs.ReportLeakedFD(cfg.FS, t) }()
+	genCfg := func() Config {
+		cfg = getServiceTestConfig()
+		cfg.DisableWorkers = false
+		// See TestServiceBootstrapRestoresHAKeeperAndWAL. This test needs the
+		// bootstrap heartbeat command batch to reach the local LogService.
+		cfg.RPC.MaxMessageSize = defaultMaxMessageSize
+		cfg.BootstrapConfig.InitHAKeeperMembers = []string{"131072:" + cfg.UUID}
+		cfg.HAKeeperClientConfig.ServiceAddresses = []string{cfg.LogServiceServiceAddr()}
+		return cfg
+	}
+	s, err := NewServiceWithRetry(
+		genCfg,
 		newFS(),
 		nil,
 		WithBackendFilter(func(morpc.Message, string) bool { return true }),
