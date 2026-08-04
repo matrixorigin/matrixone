@@ -318,6 +318,9 @@ DESCRIPTION    VARCHAR(2048)    YES        null
 MAXLEN    INT UNSIGNED(32)    YES        null        
 select character_set_name, description, maxlen from character_sets limit 5;
 character_set_name    description    maxlen
+binary    Binary pseudo charset    1
+utf8    UTF-8 Unicode    4
+utf8mb4    UTF-8 Unicode    4
 desc triggers;
 Field    Type    Null    Key    Default    Extra    Comment
 TRIGGER_CATALOG    VARCHAR(64)    YES        null        
