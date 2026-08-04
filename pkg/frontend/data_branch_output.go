@@ -138,14 +138,16 @@ func truncateDiffFileNamePrefix(name string, maxBytes int) string {
 }
 
 type applyBatchInfo struct {
-	dbName             string
-	baseTable          string
-	deleteTable        string
-	insertTable        string
-	deleteKeyNames     []string
-	deleteStageNames   []string
-	writableNames      []string
-	disableInsertStage bool
+	dbName                 string
+	baseTable              string
+	deleteTable            string
+	insertTable            string
+	deleteKeyNames         []string
+	deleteStageNames       []string
+	deleteKeyTypes         []types.Type
+	writableNames          []string
+	disableInsertStage     bool
+	insertRowsIndividually bool
 }
 
 func newSQLValuesAppender(
@@ -219,10 +221,20 @@ func newApplyBatchInfo(
 
 	deleteKeyNames := make([]string, len(deleteKeyColIdxes))
 	deleteStageNames := make([]string, len(deleteKeyColIdxes))
+	deleteKeyTypes := make([]types.Type, len(deleteKeyColIdxes))
+	insertRowsIndividually := false
 	for i, idx := range deleteKeyColIdxes {
 		deleteKeyNames[i] = tblStuff.def.baseColNames[idx]
 		deleteStageNames[i] = fmt.Sprintf("branch_apply_key_%d", i)
+		deleteKeyTypes[i] = tblStuff.def.colTypes[idx]
+		insertRowsIndividually = insertRowsIndividually || isDataBranchFloatType(deleteKeyTypes[i])
 	}
+	// MatrixOne accepts bit-distinct FLOAT/DOUBLE primary keys when each row is
+	// inserted independently. Multi-row INSERT and INSERT ... SELECT currently
+	// compare those keys with scalar float semantics, which collapses NaN
+	// payloads and signed zero. Keep the generated apply path aligned with the
+	// bit-preserving primary-key identity used by storage.
+	disableInsertStage = disableInsertStage || insertRowsIndividually
 
 	writableIdxes := tblStuff.def.writableIdxes
 	if len(tblStuff.def.tarOnlyIdxes) > 0 {
@@ -236,25 +248,65 @@ func newApplyBatchInfo(
 	seq := atomic.AddUint64(&diffTempTableSeq, 1)
 	sessionTag := strings.ReplaceAll(ses.GetUUIDString(), "-", "")
 	return &applyBatchInfo{
-		dbName:             tblStuff.baseRel.GetTableDef(ctx).DbName,
-		baseTable:          tblStuff.baseRel.GetTableName(),
-		deleteTable:        fmt.Sprintf("__mo_diff_del_%s_%d", sessionTag, seq),
-		insertTable:        fmt.Sprintf("__mo_diff_ins_%s_%d", sessionTag, seq),
-		deleteKeyNames:     deleteKeyNames,
-		deleteStageNames:   deleteStageNames,
-		writableNames:      writableNames,
-		disableInsertStage: disableInsertStage,
+		dbName:                 tblStuff.baseRel.GetTableDef(ctx).DbName,
+		baseTable:              tblStuff.baseRel.GetTableName(),
+		deleteTable:            fmt.Sprintf("__mo_diff_del_%s_%d", sessionTag, seq),
+		insertTable:            fmt.Sprintf("__mo_diff_ins_%s_%d", sessionTag, seq),
+		deleteKeyNames:         deleteKeyNames,
+		deleteStageNames:       deleteStageNames,
+		deleteKeyTypes:         deleteKeyTypes,
+		writableNames:          writableNames,
+		disableInsertStage:     disableInsertStage,
+		insertRowsIndividually: insertRowsIndividually,
 	}
 }
 
-func (batchInfo *applyBatchInfo) effectiveDeleteStageNames() []string {
-	if batchInfo == nil {
-		return nil
+func (batchInfo *applyBatchInfo) validateDeleteKeyLayout() error {
+	if batchInfo == nil || len(batchInfo.deleteKeyNames) == 0 ||
+		len(batchInfo.deleteStageNames) != len(batchInfo.deleteKeyNames) ||
+		len(batchInfo.deleteKeyTypes) != len(batchInfo.deleteKeyNames) {
+		return moerr.NewInternalErrorNoCtx("invalid Data Branch staged delete key layout")
 	}
-	if len(batchInfo.deleteStageNames) == len(batchInfo.deleteKeyNames) && len(batchInfo.deleteStageNames) > 0 {
-		return batchInfo.deleteStageNames
+	return nil
+}
+
+func (batchInfo *applyBatchInfo) deleteNeedsExactFloatKeyMatch() bool {
+	for _, typ := range batchInfo.deleteKeyTypes {
+		if isDataBranchFloatType(typ) {
+			return true
+		}
 	}
-	return batchInfo.deleteKeyNames
+	return false
+}
+
+func (batchInfo *applyBatchInfo) stagedDeleteSQL(baseTable, deleteTable string) (string, error) {
+	if err := batchInfo.validateDeleteKeyLayout(); err != nil {
+		return "", err
+	}
+	deleteStageNames := batchInfo.deleteStageNames
+	if !batchInfo.deleteNeedsExactFloatKeyMatch() {
+		pkExpr := quoteIdentifierForSQL(batchInfo.deleteKeyNames[0])
+		if len(batchInfo.deleteKeyNames) > 1 {
+			pkExpr = fmt.Sprintf("(%s)", joinQuotedColumnNames(batchInfo.deleteKeyNames))
+		}
+		return fmt.Sprintf(
+			"delete from %s where %s in (select %s from %s)",
+			baseTable, pkExpr, joinQuotedColumnNames(deleteStageNames), deleteTable,
+		), nil
+	}
+
+	const baseAlias = "branch_apply_base"
+	const stageAlias = "branch_apply_stage"
+	predicates := make([]string, len(batchInfo.deleteKeyNames))
+	for i := range batchInfo.deleteKeyNames {
+		left := fmt.Sprintf("%s.%s", baseAlias, quoteIdentifierForSQL(batchInfo.deleteKeyNames[i]))
+		right := fmt.Sprintf("%s.%s", stageAlias, quoteIdentifierForSQL(deleteStageNames[i]))
+		predicates[i] = dataBranchSQLKeyEqual(left, right, batchInfo.deleteKeyTypes[i])
+	}
+	return fmt.Sprintf(
+		"delete %s from %s as %s join %s as %s on %s",
+		baseAlias, baseTable, baseAlias, deleteTable, stageAlias, strings.Join(predicates, " AND "),
+	), nil
 }
 
 func mergeDiffs(
@@ -1734,6 +1786,7 @@ func writeDeleteRowSQLFull(
 			tblStuff.baseRel.GetTableDef(ctx).Name,
 		),
 	))
+	var literal bytes.Buffer
 	for i, idx := range tblStuff.def.visibleIdxes {
 		if i > 0 {
 			buf.WriteString(" and ")
@@ -1743,11 +1796,13 @@ func writeDeleteRowSQLFull(
 			buf.WriteString(colName)
 			buf.WriteString(" is null")
 		} else {
-			buf.WriteString(colName)
-			buf.WriteString(" = ")
-			if err := formatValIntoString(ses, row[idx], tblStuff.def.colTypes[idx], buf); err != nil {
+			literal.Reset()
+			if err := formatValIntoString(ses, row[idx], tblStuff.def.colTypes[idx], &literal); err != nil {
 				return err
 			}
+			buf.WriteString(dataBranchSQLKeyEqual(
+				colName, literal.String(), tblStuff.def.colTypes[idx],
+			))
 		}
 	}
 	buf.WriteString(" limit 1;\n")
@@ -1863,6 +1918,15 @@ func appendBatchRowsAsSQLValues(
 	tmpValsBuffer *bytes.Buffer,
 	appender sqlValuesAppender,
 ) (err error) {
+	exactFloatKeyUpdate, err := dataBranchExactFloatKeyUpdateBatch(wrapped, appender.batchInfo)
+	if err != nil {
+		return err
+	}
+	if exactFloatKeyUpdate {
+		if wrapped.kind == diffDelete {
+			return nil
+		}
+	}
 
 	//seenCols := make(map[int]struct{}, len(tblStuff.def.visibleIdxes))
 	row := make([]any, len(tblStuff.def.colNames))
@@ -1878,13 +1942,143 @@ func appendBatchRowsAsSQLValues(
 		); err != nil {
 			return
 		}
-		if err = appendDataBranchApplyRowAsSQLValues(
+		if err = appendOrExecuteDataBranchApplyRow(
 			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender,
+			exactFloatKeyUpdate, wrapped.restoreMissing,
 		); err != nil {
 			return
 		}
 	}
 
+	return nil
+}
+
+func dataBranchExactFloatKeyUpdateBatch(
+	wrapped batchWithKind,
+	batchInfo *applyBatchInfo,
+) (bool, error) {
+	if !wrapped.fromUpdate || batchInfo == nil || !batchInfo.deleteNeedsExactFloatKeyMatch() {
+		return false, nil
+	}
+	if wrapped.kind != diffDelete && wrapped.kind != diffInsert {
+		return false, moerr.NewInternalErrorNoCtxf("unexpected Data Branch update batch kind %q", wrapped.kind)
+	}
+	return true, nil
+}
+
+func appendOrExecuteDataBranchApplyRow(
+	ctx context.Context,
+	ses *Session,
+	tblStuff tableStuff,
+	kind string,
+	row []any,
+	tmpValsBuffer *bytes.Buffer,
+	appender sqlValuesAppender,
+	exactFloatKeyUpdate bool,
+	restoreMissing bool,
+) error {
+	if !exactFloatKeyUpdate {
+		return appendDataBranchApplyRowAsSQLValues(
+			ctx, ses, tblStuff, kind, row, tmpValsBuffer, appender,
+		)
+	}
+
+	statements, err := exactFloatKeyUpdateSQL(
+		ctx, ses, tblStuff, row, tmpValsBuffer, restoreMissing,
+	)
+	if err != nil {
+		return err
+	}
+	return execSQLStatements(ctx, ses, appender.bh, appender.writeFile, statements)
+}
+
+// exactFloatKeyUpdateSQL applies a source update without passing FLOAT/DOUBLE
+// identity through scalar equality. A row marked restoreMissing is known by the
+// diff to have been independently deleted from the destination and is restored
+// with one direct INSERT ... VALUES. The primary-key constraint plan compares
+// FLOAT/DOUBLE serial encodings, so this path retains bit-distinct peers.
+func exactFloatKeyUpdateSQL(
+	ctx context.Context,
+	ses *Session,
+	tblStuff tableStuff,
+	row []any,
+	buf *bytes.Buffer,
+	restoreMissing bool,
+) ([]string, error) {
+	writableIdxes := tblStuff.def.writableIdxes
+	if len(tblStuff.def.tarOnlyIdxes) > 0 {
+		writableIdxes = tblStuff.def.commonWritableIdxes
+	}
+	qualifiedName := qualifiedTableName(
+		tblStuff.baseRel.GetTableDef(ctx).DbName,
+		tblStuff.baseRel.GetTableDef(ctx).Name,
+	)
+
+	buf.Reset()
+	buf.WriteString("update ")
+	buf.WriteString(qualifiedName)
+	buf.WriteString(" set ")
+	written := 0
+	for _, idx := range writableIdxes {
+		if slices.Contains(tblStuff.def.pkColIdxes, idx) {
+			continue
+		}
+		if written > 0 {
+			buf.WriteString(",")
+		}
+		buf.WriteString(quoteIdentifierForSQL(tblStuff.def.baseColNames[idx]))
+		buf.WriteString(" = ")
+		if err := formatValIntoString(ses, row[idx], tblStuff.def.colTypes[idx], buf); err != nil {
+			return nil, err
+		}
+		written++
+	}
+	if written == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("Data Branch update has no writable non-key columns")
+	}
+	buf.WriteString(" where ")
+	if err := writeExactDataBranchKeyPredicate(ses, tblStuff, row, buf); err != nil {
+		return nil, err
+	}
+	buf.WriteString(" limit 1")
+	updateSQL := buf.String()
+	if !restoreMissing {
+		return []string{updateSQL}, nil
+	}
+
+	buf.Reset()
+	buf.WriteString("insert into ")
+	buf.WriteString(qualifiedName)
+	buf.WriteString(" (")
+	buf.WriteString(strings.Join(quotedBaseColumnNamesByIdxes(tblStuff, writableIdxes), ","))
+	buf.WriteString(") values ")
+	if err := writeInsertRowValues(ses, tblStuff, row, buf, writableIdxes); err != nil {
+		return nil, err
+	}
+	return []string{buf.String()}, nil
+}
+
+func writeExactDataBranchKeyPredicate(
+	ses *Session,
+	tblStuff tableStuff,
+	row []any,
+	buf *bytes.Buffer,
+) error {
+	var literal bytes.Buffer
+	for i, idx := range tblStuff.def.pkColIdxes {
+		if i > 0 {
+			buf.WriteString(" and ")
+		}
+		literal.Reset()
+		if err := formatValIntoString(ses, row[idx], tblStuff.def.colTypes[idx], &literal); err != nil {
+			return err
+		}
+		buf.WriteString(dataBranchSQLKeyEqual(
+			quoteIdentifierForSQL(tblStuff.def.baseColNames[idx]),
+			literal.String(),
+			tblStuff.def.colTypes[idx],
+		))
+	}
 	return nil
 }
 
@@ -2148,8 +2342,10 @@ func tryFlushDeletesOrInserts(
 				return flushDeletes()
 			}
 		} else {
+			insertRowsIndividually := batchInfo != nil &&
+				batchInfo.insertRowsIndividually && *insertCnt > 0
 			if insertBuf.Len()+newValsLen >= maxSqlBatchSize ||
-				*insertCnt+newRowCnt >= maxSqlBatchCnt {
+				*insertCnt+newRowCnt >= maxSqlBatchCnt || insertRowsIndividually {
 				if *deleteCnt > 0 {
 					if err = flushDeletes(); err != nil {
 						return err
@@ -2206,6 +2402,20 @@ func writeInsertRowValues(
 	idxes []int,
 ) error {
 	buf.WriteString("(")
+	if err := writeRowValueList(ses, tblStuff, row, buf, idxes); err != nil {
+		return err
+	}
+	buf.WriteString(")")
+	return nil
+}
+
+func writeRowValueList(
+	ses *Session,
+	tblStuff tableStuff,
+	row []any,
+	buf *bytes.Buffer,
+	idxes []int,
+) error {
 	for i, idx := range idxes {
 		if err := formatValIntoString(ses, row[idx], tblStuff.def.colTypes[idx], buf); err != nil {
 			return err
@@ -2214,8 +2424,6 @@ func writeInsertRowValues(
 			buf.WriteString(",")
 		}
 	}
-	buf.WriteString(")")
-
 	return nil
 }
 
@@ -2374,12 +2582,15 @@ func initApplyTables(
 	if batchInfo == nil {
 		return nil
 	}
+	if err := batchInfo.validateDeleteKeyLayout(); err != nil {
+		return err
+	}
 
 	baseTable := qualifiedTableName(batchInfo.dbName, batchInfo.baseTable)
 	deleteTable := qualifiedTableName(batchInfo.dbName, batchInfo.deleteTable)
 	insertTable := qualifiedTableName(batchInfo.dbName, batchInfo.insertTable)
 
-	deleteStageNames := batchInfo.effectiveDeleteStageNames()
+	deleteStageNames := batchInfo.deleteStageNames
 	deleteSelectExprs := make([]string, len(batchInfo.deleteKeyNames))
 	for i := range batchInfo.deleteKeyNames {
 		deleteSelectExprs[i] = fmt.Sprintf(
@@ -2471,18 +2682,13 @@ func flushSqlValues(
 		baseTable := qualifiedTableName(batchInfo.dbName, batchInfo.baseTable)
 		deleteTable := qualifiedTableName(batchInfo.dbName, batchInfo.deleteTable)
 		insertTable := qualifiedTableName(batchInfo.dbName, batchInfo.insertTable)
-		deleteStageNames := batchInfo.effectiveDeleteStageNames()
 
 		if isDeleteFrom {
 			insertStmt := fmt.Sprintf("insert into %s values %s", deleteTable, buf.String())
-			pkExpr := quoteIdentifierForSQL(batchInfo.deleteKeyNames[0])
-			if len(batchInfo.deleteKeyNames) > 1 {
-				pkExpr = fmt.Sprintf("(%s)", joinQuotedColumnNames(batchInfo.deleteKeyNames))
+			deleteStmt, err := batchInfo.stagedDeleteSQL(baseTable, deleteTable)
+			if err != nil {
+				return err
 			}
-			deleteStmt := fmt.Sprintf(
-				"delete from %s where %s in (select %s from %s)",
-				baseTable, pkExpr, joinQuotedColumnNames(deleteStageNames), deleteTable,
-			)
 			clearStmt := fmt.Sprintf("delete from %s", deleteTable)
 			return execSQLStatements(ctx, ses, bh, writeFile, []string{insertStmt, deleteStmt, clearStmt})
 		}
