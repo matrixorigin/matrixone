@@ -351,17 +351,62 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 	if err = h.closeCurrentChangeHandle(); err != nil {
 		return err
 	}
-	h.currentChangeHandle, err = logtailreplay.NewChangesHandlerWithPartitionStateRange(
-		ctx,
-		state,
-		h.currentPSFrom,
-		h.currentPSTo,
-		h.skipDeletes,
-		objectio.BlockMaxRows,
-		h.primarySeqnum,
-		h.mp,
-		h.fs,
-	)
+	pkFilter := engine.PKFilterFromContext(ctx)
+	debugLabel := engine.CollectChangesDebugLabelFromContext(ctx)
+	retainRowID := engine.RetainRowIDFromContext(ctx)
+	rangeFrom, rangeTo := h.currentPSFrom, h.currentPSTo
+	skipDeletes, primarySeqnum := h.skipDeletes, h.primarySeqnum
+	rangeMP, rangeFS := h.mp, h.fs
+	h.currentChangeHandle = &deferredChangesHandle{
+		build: func(nextCtx context.Context) (engine.ChangesHandle, error) {
+			nextCtx = engine.WithPKFilter(nextCtx, pkFilter)
+			nextCtx = engine.WithCollectChangesDebugLabel(nextCtx, debugLabel)
+			nextCtx = engine.WithRetainRowID(nextCtx, retainRowID)
+			return logtailreplay.NewChangesHandlerWithPartitionStateRange(
+				nextCtx,
+				state,
+				rangeFrom,
+				rangeTo,
+				skipDeletes,
+				objectio.BlockMaxRows,
+				primarySeqnum,
+				rangeMP,
+				rangeFS,
+			)
+		},
+	}
+	return nil
+}
+
+// deferredChangesHandle keeps CollectChanges construction cheap. The
+// partition-state range is materialized only when the consumer requests its
+// first batch, where the range constructor's explicit memory bound applies.
+type deferredChangesHandle struct {
+	build    func(context.Context) (engine.ChangesHandle, error)
+	handle   engine.ChangesHandle
+	buildErr error
+}
+
+func (h *deferredChangesHandle) Next(
+	ctx context.Context,
+	mp *mpool.MPool,
+) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+	if h.handle == nil && h.buildErr == nil {
+		h.handle, h.buildErr = h.build(ctx)
+		h.build = nil
+	}
+	if h.buildErr != nil {
+		return nil, nil, engine.ChangesHandle_Tail_done, h.buildErr
+	}
+	return h.handle.Next(ctx, mp)
+}
+
+func (h *deferredChangesHandle) Close() error {
+	if h == nil || h.handle == nil {
+		return nil
+	}
+	err := h.handle.Close()
+	h.handle = nil
 	return err
 }
 

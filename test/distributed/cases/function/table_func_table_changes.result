@@ -186,6 +186,36 @@ drop table reserved_change_type;
 drop table reserved_commit_ts;
 drop table reserved_table_id;
 drop table reserved_schema_version;
+create table schema_add (id int primary key, payload int);
+set @schema_add_after = (select watermark from change_watermark() w);
+insert into schema_add values (1, 10);
+alter table schema_add add column added varchar(20);
+set @schema_add_until = (select watermark from change_watermark() w);
+select * from table_changes(
+'table_changes_db', 'schema_add', @schema_add_after, @schema_add_until
+) c;
+not supported: table_changes requires a single source schema version across after, until, and the query snapshot
+create table schema_drop (id int primary key, payload int, dropped bool);
+set @schema_drop_after = (select watermark from change_watermark() w);
+insert into schema_drop values (1, 10, true);
+alter table schema_drop drop column dropped;
+set @schema_drop_until = (select watermark from change_watermark() w);
+select * from table_changes(
+'table_changes_db', 'schema_drop', @schema_drop_after, @schema_drop_until
+) c;
+not supported: table_changes requires a single source schema version across after, until, and the query snapshot
+create table schema_type (id int primary key, payload int);
+set @schema_type_after = (select watermark from change_watermark() w);
+insert into schema_type values (1, 10);
+alter table schema_type modify column payload varchar(20);
+set @schema_type_until = (select watermark from change_watermark() w);
+select * from table_changes(
+'table_changes_db', 'schema_type', @schema_type_after, @schema_type_until
+) c;
+not supported: table_changes requires a single source schema version across after, until, and the query snapshot
+drop table schema_add;
+drop table schema_drop;
+drop table schema_type;
 drop user if exists table_changes_priv_user;
 drop role if exists table_changes_priv_role;
 create role table_changes_priv_role;

@@ -186,6 +186,37 @@ drop table reserved_commit_ts;
 drop table reserved_table_id;
 drop table reserved_schema_version;
 
+-- A change window must not cross ADD, DROP, or type-changing DDL.
+create table schema_add (id int primary key, payload int);
+set @schema_add_after = (select watermark from change_watermark() w);
+insert into schema_add values (1, 10);
+alter table schema_add add column added varchar(20);
+set @schema_add_until = (select watermark from change_watermark() w);
+select * from table_changes(
+    'table_changes_db', 'schema_add', @schema_add_after, @schema_add_until
+) c;
+
+create table schema_drop (id int primary key, payload int, dropped bool);
+set @schema_drop_after = (select watermark from change_watermark() w);
+insert into schema_drop values (1, 10, true);
+alter table schema_drop drop column dropped;
+set @schema_drop_until = (select watermark from change_watermark() w);
+select * from table_changes(
+    'table_changes_db', 'schema_drop', @schema_drop_after, @schema_drop_until
+) c;
+
+create table schema_type (id int primary key, payload int);
+set @schema_type_after = (select watermark from change_watermark() w);
+insert into schema_type values (1, 10);
+alter table schema_type modify column payload varchar(20);
+set @schema_type_until = (select watermark from change_watermark() w);
+select * from table_changes(
+    'table_changes_db', 'schema_type', @schema_type_after, @schema_type_until
+) c;
+drop table schema_add;
+drop table schema_drop;
+drop table schema_type;
+
 -- table_changes requires the source table's SELECT privilege just like a scan.
 drop user if exists table_changes_priv_user;
 drop role if exists table_changes_priv_role;

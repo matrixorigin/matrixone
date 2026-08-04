@@ -46,7 +46,7 @@ func TestPartitionChangesHandleCloseClosesCurrentHandle(t *testing.T) {
 	require.Nil(t, handle.currentChangeHandle)
 }
 
-func TestPartitionChangesHandleVisibleStateStreamsFirstBatch(t *testing.T) {
+func TestPartitionChangesHandleDelegatesOneBatchPerNext(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	defer mpool.DeleteMPool(mp)
 
@@ -67,6 +67,28 @@ func TestPartitionChangesHandleVisibleStateStreamsFirstBatch(t *testing.T) {
 	require.LessOrEqual(t, mp.CurrNB(), int64(1<<20), "retained mpool memory must stay batch-bounded")
 	gotData.Clean(mp)
 	require.Zero(t, mp.CurrNB(), "the partition handle must not retain prior batches")
+}
+
+func TestDeferredChangesHandleBuildsOnFirstNext(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	builds := 0
+	handle := &deferredChangesHandle{
+		build: func(context.Context) (engine.ChangesHandle, error) {
+			builds++
+			return &stubChangesHandle{remaining: 1}, nil
+		},
+	}
+
+	require.Zero(t, builds, "CollectChanges must not materialize the range")
+	data, tombstone, _, err := handle.Next(context.Background(), mp)
+	require.NoError(t, err)
+	require.Equal(t, 1, builds)
+	require.NotNil(t, data)
+	require.Nil(t, tombstone)
+	data.Clean(mp)
+	require.NoError(t, handle.Close())
+	require.Zero(t, mp.CurrNB())
 }
 
 type stubChangesHandle struct {

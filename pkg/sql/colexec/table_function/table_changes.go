@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
@@ -118,6 +119,7 @@ func (s *tableChangesState) start(
 	if err != nil {
 		return moerr.NewInvalidInputf(proc.Ctx, "invalid table_changes after: %s", err)
 	}
+	requestedAfter := s.from
 	s.to, err = parseTableChangesTS(until, false)
 	if err != nil {
 		return moerr.NewInvalidInputf(proc.Ctx, "invalid table_changes until: %s", err)
@@ -152,6 +154,11 @@ func (s *tableChangesState) start(
 	}
 	s.tableDef = s.relation.CopyTableDef(relationCtx)
 	if err := validateRuntimeTableChangesSource(s.tableDef); err != nil {
+		return err
+	}
+	if err := validateTableChangesSchemaWindow(
+		relationCtx, e, proc, databaseName, tableName, s.tableDef, requestedAfter, s.to,
+	); err != nil {
 		return err
 	}
 	if s.isAccountFiltered {
@@ -192,6 +199,7 @@ func (s *tableChangesState) call(tf *TableFunction, proc *process.Process) (vm.C
 		}
 		data, tombstone, _, err := s.handle.Next(proc.Ctx, proc.Mp())
 		if err != nil {
+			cleanTableChangesSource(data, tombstone, proc)
 			return vm.CancelResult, err
 		}
 		if data == nil && tombstone == nil {
@@ -216,6 +224,81 @@ func (s *tableChangesState) call(tf *TableFunction, proc *process.Process) (vm.C
 			return vm.CallResult{Status: vm.ExecNext, Batch: s.batch}, nil
 		}
 	}
+}
+
+func validateTableChangesSchemaWindow(
+	ctx context.Context,
+	e engine.Engine,
+	proc *process.Process,
+	databaseName, tableName string,
+	current *plan.TableDef,
+	after, until types.TS,
+) error {
+	untilDef, err := tableChangesTableDefAt(ctx, e, proc, databaseName, tableName, until)
+	if err != nil {
+		return err
+	}
+	if after.IsEmpty() {
+		return validateTableChangesSchemaIdentity(current, nil, untilDef, true)
+	}
+	afterDef, err := tableChangesTableDefAt(ctx, e, proc, databaseName, tableName, after)
+	if err != nil {
+		return err
+	}
+	return validateTableChangesSchemaIdentity(current, afterDef, untilDef, false)
+}
+
+func validateTableChangesSchemaIdentity(
+	current, after, until *plan.TableDef,
+	unboundedAfter bool,
+) error {
+	if !sameTableChangesSchema(current, until) ||
+		(!unboundedAfter && !sameTableChangesSchema(current, after)) {
+		return tableChangesSchemaWindowError()
+	}
+	// A zero-version table has not been altered since creation. For an
+	// altered table an empty lower bound cannot prove that the unbounded
+	// history uses the current physical schema, so fail closed.
+	if unboundedAfter && current.Version != 0 {
+		return tableChangesSchemaWindowError()
+	}
+	return nil
+}
+
+func tableChangesTableDefAt(
+	ctx context.Context,
+	e engine.Engine,
+	proc *process.Process,
+	databaseName, tableName string,
+	at types.TS,
+) (*plan.TableDef, error) {
+	snapshotOp := proc.GetTxnOperator().CloneSnapshotOp(at.ToTimestamp())
+	database, err := e.Database(ctx, databaseName, snapshotOp)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrBadDB) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	relation, err := database.Relation(ctx, tableName, nil)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return relation.CopyTableDef(ctx), nil
+}
+
+func sameTableChangesSchema(left, right *plan.TableDef) bool {
+	return left != nil && right != nil &&
+		left.TblId == right.TblId && left.Version == right.Version
+}
+
+func tableChangesSchemaWindowError() error {
+	return moerr.NewNotSupportedNoCtx(
+		"table_changes requires a single source schema version across after, until, and the query snapshot",
+	)
 }
 
 func tableChangesReadFailpoint(point string) error {

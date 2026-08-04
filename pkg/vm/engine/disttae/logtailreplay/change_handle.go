@@ -87,6 +87,12 @@ const (
 const (
 	SmallBatchThreshold = objectio.BlockMaxRows
 	CoarseMaxRow        = objectio.BlockMaxRows
+	// Visible-state recovery copies in-memory replay rows so it can reconcile
+	// data and tombstones by commit timestamp. Keep that retained working set
+	// explicitly bounded; callers can narrow the timestamp range and resume
+	// from their last cursor when the bound is reached.
+	visibleStateMaxInMemoryRows  = int(objectio.BlockMaxRows) * 4
+	visibleStateMaxInMemoryBytes = 64 << 20
 
 	LoadParallism = 20
 	LogThreshold  = time.Minute
@@ -895,9 +901,12 @@ func NewBaseHandler(state *PartitionState, changesHandle *ChangeHandler, start, 
 	}
 	rowIter, rowIterKind, pkFilterApplied := p.newReplayRowsIter(state, start, end, tombstone)
 	defer rowIter.Close()
-	p.inMemoryHandle = p.newBatchHandleWithRowIterator(
+	p.inMemoryHandle, err = p.newBatchHandleWithRowIterator(
 		ctx, rowIter, rowIterKind, pkFilterApplied, start, end, tombstone, mp,
 	)
+	if err != nil {
+		return nil, err
+	}
 	aobj, cnObj, tnByCreateTS, tnCreateTSKeys := p.getObjectEntries(iter, start, end)
 	if p.changesHandle.enableDeleteChainResolve {
 		resolvedAObj, resolveErr := p.resolveVisibleObjectsByDeleteChain(
@@ -1081,13 +1090,16 @@ func (p *baseHandle) newBatchHandleWithRowIterator(
 	start, end types.TS,
 	tombstone bool,
 	mp *mpool.MPool,
-) (h *BatchHandle) {
-	bat := p.getBatchesFromRowIterator(iter, iterKind, pkFilterApplied, start, end, tombstone, mp)
+) (h *BatchHandle, err error) {
+	bat, err := p.getBatchesFromRowIterator(iter, iterKind, pkFilterApplied, start, end, tombstone, mp)
+	if err != nil {
+		return nil, err
+	}
 	if bat == nil {
-		return nil
+		return nil, nil
 	}
 	h = NewRowHandle(bat, mp, p, ctx, tombstone)
-	return
+	return h, nil
 }
 func (p *baseHandle) getBatchesFromRowIterator(
 	iter RowsIter,
@@ -1096,15 +1108,27 @@ func (p *baseHandle) getBatchesFromRowIterator(
 	start, end types.TS,
 	tombstone bool,
 	mp *mpool.MPool,
-) (bat *batch.Batch) {
+) (bat *batch.Batch, err error) {
 	var scanned, tsMatched, emitted int
+	defer func() {
+		if err != nil && bat != nil {
+			bat.Clean(mp)
+			bat = nil
+		}
+	}()
 	for iter.Next() {
 		scanned++
 		entry := iter.Entry()
 		if checkTS(start, end, entry.Time) {
 			tsMatched++
 			if !entry.Deleted && !tombstone {
+				if err = p.changesHandle.reserveVisibleStateInMemoryRow(bat); err != nil {
+					return nil, err
+				}
 				fillInInsertBatch(&bat, entry, p.changesHandle.retainRowID, mp)
+				if err = p.changesHandle.accountVisibleStateInMemoryRow(bat); err != nil {
+					return nil, err
+				}
 				emitted++
 			}
 			if entry.Deleted && tombstone {
@@ -1114,7 +1138,13 @@ func (p *baseHandle) getBatchesFromRowIterator(
 						continue
 					}
 				}
+				if err = p.changesHandle.reserveVisibleStateInMemoryRow(bat); err != nil {
+					return nil, err
+				}
 				fillInDeleteBatch(&bat, entry, p.changesHandle.retainRowID, mp)
+				if err = p.changesHandle.accountVisibleStateInMemoryRow(bat); err != nil {
+					return nil, err
+				}
 				emitted++
 			}
 		}
@@ -1132,7 +1162,7 @@ func (p *baseHandle) getBatchesFromRowIterator(
 			zap.Int("emitted", emitted),
 		)
 	}
-	return
+	return bat, nil
 }
 func (p *baseHandle) getObjectEntries(
 	objIter btree.IterG[objectio.ObjectEntry],
@@ -1514,12 +1544,57 @@ type ChangeHandler struct {
 	// pkFilter, when non-nil, enables PK-based pruning at the object, block,
 	// and row level.  Only DATA BRANCH PICK sets this; other callers leave it nil.
 	pkFilter *engine.PKFilter
+
+	maxInMemoryRows              int
+	maxInMemoryBytes             int
+	materializedInMemoryRows     int
+	materializedInMemoryBytes    int
+	materializedBatchBytesBefore int
 	// debugLabel scopes temporary diagnostics to a single CollectChanges call chain.
 	debugLabel string
 
 	retainRowID bool
 
 	LogThreshold time.Duration
+}
+
+func (p *ChangeHandler) reserveVisibleStateInMemoryRow(bat *batch.Batch) error {
+	if p.maxInMemoryRows <= 0 && p.maxInMemoryBytes <= 0 {
+		return nil
+	}
+	if p.maxInMemoryRows > 0 && p.materializedInMemoryRows >= p.maxInMemoryRows {
+		return p.visibleStateInMemoryLimitError()
+	}
+	p.materializedBatchBytesBefore = 0
+	if bat != nil {
+		p.materializedBatchBytesBefore = bat.Allocated()
+	}
+	return nil
+}
+
+func (p *ChangeHandler) accountVisibleStateInMemoryRow(bat *batch.Batch) error {
+	if p.maxInMemoryRows <= 0 && p.maxInMemoryBytes <= 0 {
+		return nil
+	}
+	p.materializedInMemoryRows++
+	if bat != nil {
+		allocatedDelta := bat.Allocated() - p.materializedBatchBytesBefore
+		if allocatedDelta > 0 {
+			p.materializedInMemoryBytes += allocatedDelta
+		}
+	}
+	if p.maxInMemoryBytes > 0 && p.materializedInMemoryBytes > p.maxInMemoryBytes {
+		return p.visibleStateInMemoryLimitError()
+	}
+	return nil
+}
+
+func (p *ChangeHandler) visibleStateInMemoryLimitError() error {
+	return moerr.NewInvalidInputNoCtxf(
+		"visible-state change range exceeds the recovery limit of %d in-memory rows or %d bytes; narrow the timestamp range",
+		p.maxInMemoryRows,
+		p.maxInMemoryBytes,
+	)
 }
 
 type checkpointObjectSelection uint8
@@ -1678,6 +1753,9 @@ func NewChangesHandlerWithPartitionStateRange(
 		enableCommitTSBlockPrune: true,
 		strictCommitTSBlockPrune: true,
 		enableDeleteChainResolve: true,
+		pkFilter:                 engine.PKFilterFromContext(ctx),
+		maxInMemoryRows:          visibleStateMaxInMemoryRows,
+		maxInMemoryBytes:         visibleStateMaxInMemoryBytes,
 		debugLabel:               engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:              engine.RetainRowIDFromContext(ctx),
 	}

@@ -30,9 +30,78 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/tidwall/btree"
 )
+
+func TestPartitionStateRangeHandlerPropagatesPKFilter(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	state := NewPartitionState("", true, 42, false)
+	filter := &engine.PKFilter{
+		ReplaySpec: &engine.PKReplaySpec{Keys: [][]byte{{1}}},
+	}
+
+	handle, err := NewChangesHandlerWithPartitionStateRange(
+		engine.WithPKFilter(context.Background(), filter),
+		state,
+		types.BuildTS(1, 0),
+		types.BuildTS(2, 0),
+		false,
+		objectio.BlockMaxRows,
+		0,
+		mp,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Same(t, filter, handle.pkFilter)
+	require.Equal(t, visibleStateMaxInMemoryRows, handle.maxInMemoryRows)
+	require.Equal(t, visibleStateMaxInMemoryBytes, handle.maxInMemoryBytes)
+	require.NoError(t, handle.Close())
+}
+
+func TestPartitionStateRangeInMemoryMaterializationIsBounded(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	state := NewPartitionState("", true, 42, false)
+	src := batch.NewWithSize(3)
+	src.SetAttributes([]string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "pk"})
+	src.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	src.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	src.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	blockID := types.Blockid{}
+	for row := uint32(0); row < 3; row++ {
+		rowID := types.NewRowid(&blockID, row)
+		ts := types.BuildTS(int64(row+1), 0)
+		require.NoError(t, vector.AppendFixed(src.Vecs[0], rowID, false, mp))
+		require.NoError(t, vector.AppendFixed(src.Vecs[1], ts, false, mp))
+		require.NoError(t, vector.AppendFixed(src.Vecs[2], int64(row), false, mp))
+		state.rows.Set(&RowEntry{
+			BlockID: blockID,
+			RowID:   rowID,
+			Offset:  int64(row),
+			Time:    ts,
+			ID:      int64(row),
+			Batch:   src,
+		})
+	}
+	src.SetRowCount(3)
+	baseline := mp.CurrNB()
+	handle := &ChangeHandler{
+		maxInMemoryRows:  2,
+		maxInMemoryBytes: visibleStateMaxInMemoryBytes,
+	}
+
+	_, err := NewBaseHandler(
+		state, handle, types.BuildTS(1, 0), types.BuildTS(3, 0), mp, false, nil, context.Background(),
+	)
+	require.EqualError(t, err,
+		"invalid input: visible-state change range exceeds the recovery limit of 2 in-memory rows or 67108864 bytes; narrow the timestamp range")
+	require.Equal(t, baseline, mp.CurrNB(), "failed construction must release its bounded working batch")
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
 
 func TestBatchHandleNext_ReturnsEOBOnSchemaMismatch(t *testing.T) {
 	mp := mpool.MustNewZero()

@@ -15,13 +15,20 @@
 package table_function
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -77,6 +84,66 @@ func TestValidateRuntimeTableChangesSourceRejectsMetadataColumnNames(t *testing.
 		})
 	}
 }
+
+func TestValidateTableChangesSchemaIdentity(t *testing.T) {
+	current := &plan.TableDef{TblId: 7, Version: 2}
+
+	require.NoError(t, validateTableChangesSchemaIdentity(
+		current,
+		&plan.TableDef{TblId: 7, Version: 2},
+		&plan.TableDef{TblId: 7, Version: 2},
+		false,
+	))
+	for _, tc := range []struct {
+		name  string
+		after *plan.TableDef
+		until *plan.TableDef
+	}{
+		{name: "add or drop changes version at after", after: &plan.TableDef{TblId: 7, Version: 1}, until: current},
+		{name: "type change changes version at until", after: current, until: &plan.TableDef{TblId: 7, Version: 3}},
+		{name: "drop and recreate changes table identity", after: &plan.TableDef{TblId: 6, Version: 2}, until: current},
+		{name: "table absent at range endpoint", after: current, until: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateTableChangesSchemaIdentity(current, tc.after, tc.until, false)
+			require.EqualError(t, err,
+				"not supported: table_changes requires a single source schema version across after, until, and the query snapshot")
+		})
+	}
+
+	require.NoError(t, validateTableChangesSchemaIdentity(
+		&plan.TableDef{TblId: 7, Version: 0}, nil,
+		&plan.TableDef{TblId: 7, Version: 0}, true,
+	))
+	require.Error(t, validateTableChangesSchemaIdentity(current, nil, current, true))
+}
+
+func TestTableChangesCleansBatchesReturnedWithError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	state := &tableChangesState{handle: &errorWithBatchChangesHandle{}}
+
+	_, err := state.call(&TableFunction{}, proc)
+	require.EqualError(t, err, "internal error: allocated read failure")
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+type errorWithBatchChangesHandle struct{}
+
+func (h *errorWithBatchChangesHandle) Next(
+	_ context.Context,
+	mp *mpool.MPool,
+) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	data := batch.NewWithSize(1)
+	data.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	if err := vector.AppendFixed(data.Vecs[0], int64(1), false, mp); err != nil {
+		return data, nil, engine.ChangesHandle_Tail_done, err
+	}
+	data.SetRowCount(1)
+	return data, nil, engine.ChangesHandle_Tail_done,
+		moerr.NewInternalErrorNoCtx("allocated read failure")
+}
+
+func (h *errorWithBatchChangesHandle) Close() error { return nil }
 
 func TestTableChangesReadFailpoints(t *testing.T) {
 	require.True(t, fault.Enable())
