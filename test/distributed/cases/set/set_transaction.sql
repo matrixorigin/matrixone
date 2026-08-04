@@ -1,5 +1,15 @@
--- just pass syntax check. no actual semantic action.
-set transaction isolation level read committed;
-set global transaction isolation level read committed , read write , isolation level read committed , read only;
-set session transaction isolation level read committed , read write , isolation level read committed , read only;
-set session transaction isolation level read committed , isolation level read uncommitted , isolation level repeatable read , isolation level serializable;
+set transaction_isolation = 'REPEATABLE-READ';
+set session transaction isolation level read committed;
+select @@transaction_isolation;
+
+set transaction isolation level repeatable read;
+select @@transaction_isolation;
+
+set @saved_transaction_isolation = @@global.transaction_isolation;
+set global transaction isolation level read committed;
+select @@global.transaction_isolation;
+set global transaction_isolation = @saved_transaction_isolation;
+
+-- Access modes are still accepted for syntax compatibility.
+set session transaction isolation level read committed, read write, read only;
+select @@transaction_isolation;
