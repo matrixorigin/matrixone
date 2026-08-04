@@ -973,7 +973,8 @@ func doSetVar(
 		var value interface{}
 		userVarIsBin = false
 
-		if preparedPlanExpr := preparedSetPlanExpr(execCtx, assignmentIndex); preparedExpression && preparedPlanExpr != nil {
+		if preparedPlanExpr := preparedSetPlanExpr(execCtx, assignmentIndex); preparedExpression &&
+			preparedPlanExpr != nil && !planExprContainsSubquery(preparedPlanExpr) {
 			value, userVarRuntimeType, err = getPreparedPlanExprValue(
 				ses, execCtx, preparedPlanExpr, &userVarIsBin)
 		} else {
@@ -1073,6 +1074,43 @@ func doSetVar(
 		}
 	}
 	return err
+}
+
+func planExprContainsSubquery(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Sub:
+		return true
+	case *plan.Expr_F:
+		for _, arg := range impl.F.Args {
+			if planExprContainsSubquery(arg) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range impl.List.List {
+			if planExprContainsSubquery(item) {
+				return true
+			}
+		}
+	case *plan.Expr_W:
+		if planExprContainsSubquery(impl.W.WindowFunc) {
+			return true
+		}
+		for _, item := range impl.W.PartitionBy {
+			if planExprContainsSubquery(item) {
+				return true
+			}
+		}
+		for _, item := range impl.W.OrderBy {
+			if item != nil && planExprContainsSubquery(item.Expr) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 /*

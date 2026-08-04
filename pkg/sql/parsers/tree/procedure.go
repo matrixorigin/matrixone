@@ -15,6 +15,8 @@
 package tree
 
 import (
+	"encoding/json"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
 
@@ -126,6 +128,33 @@ type ProcedureArgForMarshal struct {
 	Name      *UnresolvedName
 	Type      ResolvableTypeReference
 	InOutType InOutArgType
+}
+
+// UnmarshalJSON restores the concrete parser type hidden behind
+// ResolvableTypeReference. Without this, encoding/json materializes Type as a
+// map[string]any and callers lose the procedure parameter's declared type.
+func (node *ProcedureArgForMarshal) UnmarshalJSON(data []byte) error {
+	type procedureArgWire struct {
+		ArgName   string
+		Name      *UnresolvedName
+		Type      json.RawMessage
+		InOutType InOutArgType
+	}
+	var wire procedureArgWire
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	var typ T
+	if len(wire.Type) != 0 && string(wire.Type) != "null" {
+		if err := json.Unmarshal(wire.Type, &typ); err != nil {
+			return err
+		}
+		node.Type = &typ
+	}
+	node.ArgName = wire.ArgName
+	node.Name = wire.Name
+	node.InOutType = wire.InOutType
+	return nil
 }
 
 type ProcedureName struct {

@@ -472,7 +472,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 		}
 		for i, arg := range exprImpl.F.Args {
-			if !dynamicNumericArgs[i] || !types.T(arg.Typ.Id).IsUnsignedInt() {
+			if !dynamicNumericArgs[i] || types.T(arg.Typ.Id) != types.T_uint64 {
 				continue
 			}
 			for j, sibling := range exprImpl.F.Args {

@@ -3200,7 +3200,7 @@ func ValidatePreparedPaginationParams(ctx context.Context, preparePlan *Plan, pa
 		}
 		valid, negative := validateIntegerPaginationParam(paramVals[pos])
 		if negative {
-			return moerr.NewOutOfRange(ctx, "unsigned integer", "value is out of range in 'EXECUTE'")
+			return moerr.NewPreparedParamOutOfRange(ctx, "unsigned integer", "EXECUTE")
 		}
 		if !valid {
 			return moerr.NewWrongArguments(ctx, "EXECUTE")

@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -129,4 +130,31 @@ func TestInterpreterOutputDecimalPreservesDeclaredRuntimeType(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.T_int64, flag.RuntimeType)
 	require.Equal(t, int64(1), flag.Value)
+}
+
+func TestProcedureArgumentDeclaredTypeSurvivesCatalogJSON(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		typ  *tree.T
+		want types.T
+	}{
+		{name: "decimal", typ: &tree.T{InternalType: tree.InternalType{
+			Family: tree.FloatFamily, FamilyString: "DECIMAL", Width: 30, Scale: 2,
+		}}, want: types.T_decimal256},
+		{name: "bool", typ: &tree.T{InternalType: tree.InternalType{
+			Family: tree.BoolFamily, FamilyString: "BOOL",
+		}}, want: types.T_bool},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			encoded, err := json.Marshal([]tree.ProcedureArgForMarshal{{
+				ArgName: "out_value", Type: test.typ, InOutType: tree.TYPE_OUT,
+			}})
+			require.NoError(t, err)
+			var decoded []tree.ProcedureArgForMarshal
+			require.NoError(t, json.Unmarshal(encoded, &decoded))
+			require.Len(t, decoded, 1)
+			require.IsType(t, &tree.T{}, decoded[0].Type)
+			require.Equal(t, test.want, procedureOutputRuntimeType(decoded[0].Type))
+		})
+	}
 }

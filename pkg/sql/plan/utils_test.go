@@ -274,6 +274,9 @@ func TestFillValuesOfParamsInPlanValidatesPaginationParamTypes(t *testing.T) {
 			if test.wantErr {
 				if strings.Contains(test.name, "negative") {
 					require.Error(t, err)
+					require.Equal(t,
+						"data out of range: unsigned integer value is out of range in 'EXECUTE'",
+						err.Error())
 					moErr, ok := err.(*moerr.Error)
 					require.True(t, ok)
 					require.Equal(t, uint16(1690), moErr.MySQLCode())
