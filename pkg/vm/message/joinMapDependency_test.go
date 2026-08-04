@@ -48,6 +48,19 @@ func TestJoinMapResultDistinguishesSuccessEmptyAndBuildError(t *testing.T) {
 	require.Equal(t, baseErr.ErrorCode(), got.ErrorCode())
 }
 
+func TestSendJoinMapResultRetainsOwnershipWhenBoardUnavailable(t *testing.T) {
+	jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, nil)
+	require.False(t, SendJoinMapResult(
+		NewJoinMapResult(jm),
+		1,
+		false,
+		0,
+		nil,
+	))
+	require.True(t, jm.IsValid())
+	jm.FreeMemory()
+}
+
 func TestRuntimeFilterMemoryReleaseIsSharedAcrossMessageCopies(t *testing.T) {
 	var releases atomic.Int32
 	msg := RuntimeFilterMessage{Data: make([]byte, 128)}

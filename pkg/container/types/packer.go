@@ -23,14 +23,21 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type Packer struct {
 	buffer            []byte
 	bufferDeallocator malloc.Deallocator
+	fixed             bool
+	overflow          bool
 }
 
 const defaultPackerSize = uint64(4096)
+
+var ErrPackerCapacity = moerr.NewInternalErrorNoCtx(
+	"packer fixed buffer capacity exceeded",
+)
 
 var packerAllocator = malloc.NewShardedAllocator(
 	runtime.GOMAXPROCS(0),
@@ -45,16 +52,13 @@ func NewPacker() *Packer {
 	return NewPackerWithSize(defaultPackerSize)
 }
 
-// PackerAllocationSize returns the backing size-class allocation made by
-// NewPackerWithSize. It lets memory-governed callers reserve the actual
-// allocation, including allocator rounding, before constructing a packer.
+// PackerAllocationSize returns the backing size-class allocation made by a
+// packer request of size bytes.
 func PackerAllocationSize(size uint64) (uint64, bool) {
 	return malloc.ClassAllocationSize(size)
 }
 
 // DefaultPackerCapacity returns the backing capacity retained by NewPacker.
-// Memory-governed callers use this value to admit construction before the
-// allocator is entered.
 func DefaultPackerCapacity() uint64 {
 	size, ok := PackerAllocationSize(defaultPackerSize)
 	if !ok {
@@ -66,12 +70,6 @@ func DefaultPackerCapacity() uint64 {
 // PackerCapacityUpperBound bounds the backing capacity retained after any
 // sequence of Reset and append operations whose logical buffer length never
 // exceeds maxLength and whose individual append never exceeds maxAppend.
-//
-// ensureSizeSlow requests cap(buffer)+append from the class allocator. At a
-// growth point the old capacity is strictly less than maxLength, so the
-// request is at most maxLength+maxAppend-1. If the old capacity already covers
-// maxLength, no growth occurs. This mirrors the allocator contract without
-// replaying input-dependent append sequences in an admission hot path.
 func PackerCapacityUpperBound(maxLength, maxAppend uint64) (uint64, bool) {
 	initial := DefaultPackerCapacity()
 	if maxLength <= initial {
@@ -80,8 +78,7 @@ func PackerCapacityUpperBound(maxLength, maxAppend uint64) (uint64, bool) {
 	if maxAppend == 0 || maxLength > math.MaxUint64-maxAppend+1 {
 		return 0, false
 	}
-	request := maxLength + maxAppend - 1
-	capacity, ok := PackerAllocationSize(request)
+	capacity, ok := PackerAllocationSize(maxLength + maxAppend - 1)
 	if !ok {
 		return 0, false
 	}
@@ -99,6 +96,15 @@ func NewPackerWithSize(size uint64) *Packer {
 	return &Packer{
 		buffer:            bs[:0],
 		bufferDeallocator: dec,
+	}
+}
+
+// NewPackerWithFixedBuffer uses caller-owned storage and never allocates.
+// Err reports an encoding that exceeded the supplied physical capacity.
+func NewPackerWithFixedBuffer(buffer []byte) *Packer {
+	return &Packer{
+		buffer: buffer[:0:cap(buffer)],
+		fixed:  true,
 	}
 }
 
@@ -123,6 +129,7 @@ func (p *Packer) Close() {
 
 func (p *Packer) Reset() {
 	p.buffer = p.buffer[:0]
+	p.overflow = false
 }
 
 // Allocated returns the size-class capacity retained by the packer.
@@ -133,14 +140,11 @@ func (p *Packer) Allocated() uint64 {
 	return uint64(cap(p.buffer))
 }
 
-func (p *Packer) ensureSize(n int) {
-	if len(p.buffer)+n <= cap(p.buffer) {
+func (p *Packer) ensureSizeSlow(n int) {
+	if p.fixed {
+		p.overflow = true
 		return
 	}
-	p.ensureSizeSlow(n)
-}
-
-func (p *Packer) ensureSizeSlow(n int) {
 	newBuffer, newDec, err := packerAllocator.Allocate(uint64(cap(p.buffer)+n), malloc.NoClear)
 	if err != nil {
 		panic(err)
@@ -155,12 +159,26 @@ func (p *Packer) ensureSizeSlow(n int) {
 }
 
 func (p *Packer) putByte(b byte) {
-	p.ensureSize(1)
+	if len(p.buffer) < cap(p.buffer) {
+		p.buffer = append(p.buffer, b)
+		return
+	}
+	p.ensureSizeSlow(1)
+	if p.overflow {
+		return
+	}
 	p.buffer = append(p.buffer, b)
 }
 
 func (p *Packer) putBytes(bs []byte) {
-	p.ensureSize(len(bs))
+	if len(bs) <= cap(p.buffer)-len(p.buffer) {
+		p.buffer = append(p.buffer, bs...)
+		return
+	}
+	p.ensureSizeSlow(len(bs))
+	if p.overflow {
+		return
+	}
 	p.buffer = append(p.buffer, bs...)
 }
 
@@ -378,6 +396,16 @@ func (p *Packer) EncodeObjectid(e *Objectid) {
 
 func (p *Packer) GetBuf() []byte {
 	return p.buffer
+}
+
+func (p *Packer) Err() error {
+	if p == nil {
+		return ErrPackerCapacity
+	}
+	if p.overflow {
+		return ErrPackerCapacity
+	}
+	return nil
 }
 
 func (p *Packer) Bytes() []byte {

@@ -645,6 +645,12 @@ message ProcessInfo {
   SessionLoggerInfo session_logger = 8 [(gogoproto.nullable) = false];
   PrepareParamInfo prepare_params = 9 [(gogoproto.nullable) = false];
   int64 affected_rows = 10;
+  // Planned PipelineMessage RPCs per target CN for statement-level remote
+  // MessageBoard and resource-account terminal ownership.
+  map<string, uint32> remote_fragment_counts = 11;
+  // Unique physical execution attempt. Unlike the SQL statement ID, this
+  // changes across retries and prepared-statement executions.
+  bytes remote_execution_id = 12;
 }
 
 message SessionInfo {

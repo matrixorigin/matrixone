@@ -65,6 +65,7 @@ const (
 	ErrQueryInterrupted            uint16 = 20104
 	ErrNotSupported                uint16 = 20105
 	ErrRemoteDispatchNotRegistered uint16 = 20106
+	ErrMPoolCapacity               uint16 = 20107
 
 	// Group 2: numeric and functions
 	ErrDivByZero                   uint16 = 20200
@@ -100,6 +101,7 @@ const (
 	ErrWrongUsage           uint16 = 20321
 	ErrUpdateTableUsed      uint16 = 20322
 	ErrWindowInvalidUse     uint16 = 20323
+	ErrViewSelectTmpTable   uint16 = 20324
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -392,6 +394,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrQueryInterrupted:            {ER_QUERY_INTERRUPTED, []string{MySQLDefaultSqlState}, "query interrupted"},
 	ErrNotSupported:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not supported: %s"},
 	ErrRemoteDispatchNotRegistered: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote dispatch receiver %s is not registered yet"},
+	ErrMPoolCapacity:               {ER_ENGINE_OUT_OF_MEMORY, []string{MySQLDefaultSqlState}, "mpool physical capacity exceeded: %s"},
 
 	// Group 2: numeric
 	ErrDivByZero:                   {ER_DIVISION_BY_ZERO, []string{MySQLDefaultSqlState}, "division by zero"},
@@ -427,6 +430,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrWrongUsage:           {ER_WRONG_USAGE, []string{MySQLDefaultSqlState}, "Incorrect usage of %s and %s"},
 	ErrUpdateTableUsed:      {ER_UPDATE_TABLE_USED, []string{MySQLDefaultSqlState}, "You can't specify target table '%-.192s' for update in FROM clause"},
 	ErrWindowInvalidUse:     {ER_WINDOW_INVALID_WINDOW_FUNC_USE, []string{"HY000"}, "You cannot use the window function '%s' in this context"},
+	ErrViewSelectTmpTable:   {ER_VIEW_SELECT_TMPTABLE, []string{MySQLDefaultSqlState}, "View's SELECT refers to a temporary table '%-.192s'"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -949,6 +953,13 @@ func NewRemoteDispatchNotRegistered(ctx context.Context, uuid string) *Error {
 
 func NewOOM(ctx context.Context) *Error {
 	return newError(ctx, ErrOOM)
+}
+
+// NewMPoolCapacity reports a physical allocator or MPool capacity failure.
+// Its dedicated wire code lets pressure recovery distinguish retryable
+// physical capacity from unrelated OOMs without wrapping the MO error.
+func NewMPoolCapacity(ctx context.Context, msg string) *Error {
+	return newError(ctx, ErrMPoolCapacity, msg)
 }
 
 // NewResourceExhaustedf preserves the existing resource-exhaustion wire code
@@ -1496,6 +1507,10 @@ func NewWrongValueCountOnRow(ctx context.Context, row int) *Error {
 
 func NewViewWrongList(ctx context.Context) *Error {
 	return newError(ctx, ErrViewWrongList)
+}
+
+func NewViewSelectTmpTable(ctx context.Context, table string) *Error {
+	return newError(ctx, ErrViewSelectTmpTable, table)
 }
 
 func NewOperandColumns(ctx context.Context, columns int) *Error {

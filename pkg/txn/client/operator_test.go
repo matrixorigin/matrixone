@@ -435,6 +435,68 @@ func TestCommit(t *testing.T) {
 	})
 }
 
+func TestAutoIncrEpochFenceUsesGuardedCommitMethod(t *testing.T) {
+	t.Run("commit", func(t *testing.T) {
+		runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+			tc.RequireAutoIncrEpochFenceCommit()
+			tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
+			require.NoError(t, tc.Commit(ctx))
+			requests := ts.getLastRequests()
+			require.Len(t, requests, 1)
+			require.Equal(t, txn.TxnMethod_CommitAutoIncrEpochFence, requests[0].Method)
+		})
+	})
+
+	t.Run("write and commit", func(t *testing.T) {
+		runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+			tc.RequireAutoIncrEpochFenceCommit()
+			result, err := tc.WriteAndCommit(ctx, []txn.TxnRequest{newTNRequest(1, 1)})
+			require.NoError(t, err)
+			if result != nil {
+				result.Release()
+			}
+			requests := ts.getLastRequests()
+			require.Equal(t, txn.TxnMethod_CommitAutoIncrEpochFence, requests[len(requests)-1].Method)
+		})
+	})
+
+	t.Run("cached write", func(t *testing.T) {
+		runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+			_, err := tc.Write(ctx, []txn.TxnRequest{newTNRequest(1, 1)})
+			require.NoError(t, err)
+			tc.RequireAutoIncrEpochFenceCommit()
+			require.NoError(t, tc.Commit(ctx))
+			requests := ts.getLastRequests()
+			require.Equal(t, txn.TxnMethod_CommitAutoIncrEpochFence, requests[len(requests)-1].Method)
+		}, WithTxnCacheWrite())
+	})
+}
+
+func TestAutoIncrEpochFenceLifecycle(t *testing.T) {
+	RunTxnTests(func(c TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		op, err := c.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		tc := op.(*txnOperator)
+		workspace := &trackingWorkspace{}
+		tc.AddWorkspace(workspace)
+		tc.RequireAutoIncrEpochFenceCommit()
+
+		require.NoError(t, workspace.RollbackLastStatement(ctx))
+		require.True(t, tc.Txn().RequireAutoIncrEpochFenceCommit,
+			"statement rollback must not clear a transaction-wide commit requirement")
+		require.NoError(t, tc.Rollback(ctx))
+
+		restarted, err := c.(*txnClient).RestartTxn(ctx, tc, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.False(t, restarted.Txn().RequireAutoIncrEpochFenceCommit,
+			"a restarted transaction generation must not inherit the old requirement")
+		require.NoError(t, restarted.Rollback(ctx))
+	})
+}
+
 func TestCommitFinalizesPreparedWorkspaceAfterCommitSuccess(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 		ws := &trackingWorkspace{
@@ -966,6 +1028,13 @@ func TestApplySnapshotTxnOperator(t *testing.T) {
 		snapshot.LockTables = append(snapshot.LockTables, lock.LockTable{Table: 1})
 		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
 		assert.Equal(t, 1, len(tc.mu.lockTables))
+
+		snapshot.Txn.RequireAutoIncrEpochFenceCommit = true
+		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
+		assert.True(t, tc.mu.txn.RequireAutoIncrEpochFenceCommit)
+		snapshot.Txn.RequireAutoIncrEpochFenceCommit = false
+		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
+		assert.True(t, tc.mu.txn.RequireAutoIncrEpochFenceCommit)
 	})
 }
 
@@ -1243,6 +1312,7 @@ func TestCommitUnknownSchedulesUnknownCommitResolution(t *testing.T) {
 			commitRequests: []txn.TxnRequest{newTNRequest(1, 1)},
 		}
 		tc.AddWorkspace(ws)
+		tc.RequireAutoIncrEpochFenceCommit()
 		ts.setManual(func(sr *rpc.SendResult, err error) (*rpc.SendResult, error) {
 			return nil, moerr.NewTxnUnknown(ctx, "test")
 		})
@@ -1255,6 +1325,11 @@ func TestCommitUnknownSchedulesUnknownCommitResolution(t *testing.T) {
 		require.Equal(t, tc.reset.commitSequence, resolver.resolvedSequence)
 		require.NotEmpty(t, ts.lastRequests)
 		commitReq := ts.lastRequests[len(ts.lastRequests)-1]
+		require.Equal(t, txn.TxnMethod_CommitAutoIncrEpochFence, commitReq.Method)
+		for _, req := range ts.lastRequests {
+			require.NotEqual(t, txn.TxnMethod_Commit, req.Method,
+				"unknown guarded commit must not fall back to the legacy method")
+		}
 		require.NotNil(t, commitReq.CommitRequest)
 		require.Equal(t, resolver.resolvedDeadline.UnixNano(), commitReq.CommitRequest.DeadlineUnixNano)
 		require.Equal(t, resolver.resolvedSequence, commitReq.CommitRequest.CommitSequence)

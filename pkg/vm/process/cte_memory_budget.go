@@ -113,15 +113,15 @@ func (r *CTEMemoryReservation) Resize(ctx context.Context, bytes uint64) error {
 	return nil
 }
 
-func (r *CTEMemoryReservation) Release() {
+func (r *CTEMemoryReservation) Release() bool {
 	if r == nil || r.budget == nil {
-		return
+		return false
 	}
 	b := r.budget
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !r.active {
-		return
+		return false
 	}
 	if !b.closed {
 		if r.bytes <= b.used {
@@ -132,6 +132,7 @@ func (r *CTEMemoryReservation) Release() {
 	}
 	r.bytes = 0
 	r.active = false
+	return true
 }
 
 func (r *CTEMemoryReservation) Bytes() uint64 {

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 )
 
@@ -56,9 +57,21 @@ func IsMongoDBTableDef(ctx context.Context, tableDef *TableDef) (bool, error) {
 	if tableDef == nil || tableDef.TableType != catalog.SystemExternalRel {
 		return false, nil
 	}
-	_, found, err := sqlmongodb.ParseCreateSQLEnvelope(ctx, tableDef.Createsql)
+	env, found, err := sqlmongodb.ParseCreateSQLEnvelope(ctx, tableDef.Createsql)
 	if err != nil {
 		return false, err
 	}
-	return found, nil
+	if !found {
+		if features.IsMongoDBExternal(tableDef.FeatureFlag) {
+			return false, moerr.NewInvalidInput(ctx, "MongoDB external table is missing its catalog envelope")
+		}
+		return false, nil
+	}
+	if env.Version >= 2 {
+		// Version 2 tables must carry the durable typed feature bit. Version 1 is
+		// accepted only for backward compatibility with tables created before the
+		// bit existed; its envelope is safe because it must be the leading value.
+		return features.IsMongoDBExternal(tableDef.FeatureFlag), nil
+	}
+	return true, nil
 }
