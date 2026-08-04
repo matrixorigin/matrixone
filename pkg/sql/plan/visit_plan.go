@@ -203,6 +203,15 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 				return nil, err
 			}
 		}
+		// This visitor restores the expression type after replacing prepared
+		// parameters; it is not a table-storage boundary.  In particular, a
+		// same-type text expression must not acquire cast_assign here.  Doing so
+		// decorates TABLE_SCAN and JOIN projections with executable functions,
+		// while join result construction only accepts column references.  Real
+		// DML storage projections already carry their assignment casts.
+		if makeTypeByPlan2Expr(e).Eq(makeTypeByPlan2Type(oldType)) {
+			return e, nil
+		}
 		return forceAssignmentCastExpr(ctx, e, oldType)
 	}
 

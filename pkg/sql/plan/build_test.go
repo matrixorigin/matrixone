@@ -2285,6 +2285,28 @@ func TestLegacyUpdateIgnoreUsesAssignmentIgnoreCast(t *testing.T) {
 	require.Equal(t, "cast_assign", builder.qry.Nodes[0].ProjectList[0].GetF().GetFunc().GetObjName())
 }
 
+func TestPreparedUpdateKeepsAssignmentExpressionsOutOfJoinResults(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	for _, sql := range []string{
+		"prepare update_int from update constraint_test.emp set mgr = ? where empno = ?",
+		"prepare update_text from update constraint_test.emp set ename = ? where empno = ?",
+	} {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+		query := logicPlan.GetDcl().GetPrepare().GetPlan().GetQuery()
+		require.NotNil(t, query)
+
+		for _, node := range query.Nodes {
+			if node.NodeType != plan.Node_JOIN {
+				continue
+			}
+			for _, result := range node.ProjectList {
+				require.NotNil(t, result.GetCol(), "JOIN result must remain a column reference: %s", result)
+			}
+		}
+	}
+}
+
 func TestUpdateRecomputesCompositeClusterByKey(t *testing.T) {
 	testCases := []struct {
 		name             string

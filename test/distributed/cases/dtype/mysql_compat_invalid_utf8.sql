@@ -80,6 +80,16 @@ update t_invalid_utf8_copy
     where id = 21;
 select id, c, v, t from t_invalid_utf8_copy where id = 21;
 
+-- The legacy UPDATE ... JOIN path must keep the storage assignment cast in a
+-- PROJECT above the JOIN. Besides validating the historical Native value,
+-- this prevents a non-column cast from becoming an unsupported JOIN result.
+insert into t_invalid_utf8_copy values (22, 'old', 'old', 'old');
+update t_invalid_utf8_copy dst
+join t_invalid_utf8 src on src.id = 20
+set dst.v = src.v
+where dst.id = 22;
+select id, c, v, t from t_invalid_utf8_copy where id = 22;
+
 -- Keep every strict same-type and cross-type assignment independent: a
 -- rejected CHAR write must not conceal a VARCHAR/TEXT bypass in the same DML.
 insert into t_invalid_utf8_copy (id, c)
