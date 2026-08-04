@@ -153,6 +153,125 @@ func (txn *activeTxn) lockAdded(
 	return nil
 }
 
+// coarsenLockRequest enforces the row-lock budget at the owner of the actual
+// transaction state. The caller must hold txn's mutex.
+//
+// The budget is scoped to one transaction and physical lock table, rather than
+// one Lock call. That distinction matters because execution sends a large DML
+// as many independently sub-threshold batches and a transaction can contain
+// multiple statements. Once the retained keys plus the incoming keys exceed
+// the budget, one conservative range spanning their observed minimum and
+// maximum replaces them. The range can cover gaps, but never keys outside the
+// observed bounds as a table lock would.
+//
+// Only exclusive, non-sharded requests are coarsened. Replacing locks with an
+// exclusive range cannot weaken a lock already held by this transaction.
+// Shared locks can have other holders on the same lock object and cannot be
+// merged without splitting that shared ownership. Row-sharded requests cannot
+// be represented by a range because its endpoints may belong to different
+// lock tables.
+func (txn *activeTxn) coarsenLockRequest(
+	group uint32,
+	table uint64,
+	rows [][]byte,
+	opts pb.LockOptions,
+	maxLockRowCount int,
+) ([][]byte, pb.LockOptions, bool) {
+	if len(rows) == 0 ||
+		maxLockRowCount <= 0 ||
+		opts.Mode != pb.LockMode_Exclusive ||
+		opts.Sharding != pb.Sharding_None {
+		return rows, opts, false
+	}
+	switch opts.Granularity {
+	case pb.Granularity_Row:
+	case pb.Granularity_Range:
+		if len(rows)%2 != 0 {
+			// Preserve the validation failure in the lock-table layer instead of
+			// turning malformed input into a valid but unintended range.
+			return rows, opts, false
+		}
+	default:
+		return rows, opts, false
+	}
+
+	var held *cowSlice
+	heldCount := 0
+	if h, ok := txn.lockHolders[group]; ok {
+		held = h.tableKeys[table]
+		if held != nil {
+			heldCount = held.mustGet().len()
+		}
+	}
+	// A range needs two endpoints even when a test or deployment configures a
+	// smaller row budget.
+	effectiveBudget := max(maxLockRowCount, 2)
+	if heldCount+len(rows) <= effectiveBudget {
+		return rows, opts, false
+	}
+
+	var minKey, maxKey []byte
+	add := func(key []byte) {
+		if minKey == nil || bytes.Compare(key, minKey) < 0 {
+			minKey = key
+		}
+		if maxKey == nil || bytes.Compare(key, maxKey) > 0 {
+			maxKey = key
+		}
+	}
+	if held != nil {
+		locks := held.slice()
+		locks.iter(func(key []byte) bool {
+			add(key)
+			return true
+		})
+		locks.unref()
+	}
+	for _, row := range rows {
+		add(row)
+	}
+
+	if bytes.Equal(minKey, maxKey) {
+		// Re-entrant calls for one key can duplicate remote-origin bookkeeping.
+		// Compact that bookkeeping without inventing an invalid zero-width range.
+		opts.Granularity = pb.Granularity_Row
+		return [][]byte{bytes.Clone(minKey)}, opts, true
+	}
+	opts.Granularity = pb.Granularity_Range
+	return [][]byte{bytes.Clone(minKey), bytes.Clone(maxKey)}, opts, true
+}
+
+// replaceLocks records a coarsened request without copying the old row key
+// slice. The caller must hold txn's mutex. Allocation and the test failure hook
+// run before the old bookkeeping is detached, so an error leaves the
+// transaction's ownership state unchanged.
+func (txn *activeTxn) replaceLocks(
+	group uint32,
+	bind pb.LockTable,
+	locks [][]byte,
+	logger *log.MOLogger,
+) error {
+	if txn.beforeLockAdded != nil {
+		if err := txn.beforeLockAdded(txn.txnID, locks); err != nil {
+			return err
+		}
+	}
+
+	newLocks, err := newCowSlice(txn.fsp, locks)
+	if err != nil {
+		return err
+	}
+	defer logTxnLockAdded(logger, txn, locks)
+	h := txn.getHoldLocksLocked(group)
+	oldLocks := h.tableKeys[bind.Table]
+	h.tableKeys[bind.Table] = newLocks
+	h.tableBinds[bind.Table] = bind
+	if oldLocks != nil {
+		oldLocks.close()
+	}
+	return nil
+}
+
 func (txn *activeTxn) lockTableBindTouched(bind pb.LockTable) bool {
 	h := txn.getHoldLocksLocked(bind.Group)
 	if _, ok := h.tableBindIntents[bind.Table]; ok {

@@ -428,15 +428,23 @@ func (s *service) handleRemoteLock(
 	txnID := append([]byte(nil), req.Lock.TxnID...)
 	s.bindChangeMu.RUnlock()
 	defer txn.Unlock()
+	rows, opts, replaceTxnLocks := txn.coarsenLockRequest(
+		bind.Group,
+		bind.Table,
+		req.Lock.Rows,
+		req.Lock.Options,
+		int(s.cfg.MaxLockRowCount),
+	)
 
 	l.lock(
 		ctx,
 		txn,
-		req.Lock.Rows,
+		rows,
 		LockOptions{
-			LockOptions:                req.Lock.Options,
+			LockOptions:                opts,
 			async:                      true,
 			remoteLockOwnerWaitTimeout: s.cfg.RemoteLockOwnerWaitTimeout.Duration,
+			replaceTxnLocks:            replaceTxnLocks,
 		},
 		func(result pb.Result, err error) {
 			defer completion.callbackDone()
@@ -551,15 +559,23 @@ func (s *service) handleForwardLock(
 	txnID := append([]byte(nil), req.Lock.TxnID...)
 	s.bindChangeMu.RUnlock()
 	defer txn.Unlock()
+	rows, opts, replaceTxnLocks := txn.coarsenLockRequest(
+		bind.Group,
+		bind.Table,
+		req.Lock.Rows,
+		req.Lock.Options,
+		int(s.cfg.MaxLockRowCount),
+	)
 
 	l.lock(
 		ctx,
 		txn,
-		req.Lock.Rows,
+		rows,
 		LockOptions{
-			LockOptions:                req.Lock.Options,
+			LockOptions:                opts,
 			async:                      true,
 			remoteLockOwnerWaitTimeout: s.cfg.RemoteLockOwnerWaitTimeout.Duration,
+			replaceTxnLocks:            replaceTxnLocks,
 		},
 		func(result pb.Result, err error) {
 			defer completion.callbackDone()

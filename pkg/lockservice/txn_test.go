@@ -122,6 +122,154 @@ func TestLockAddedThatShouldFail(t *testing.T) {
 	})
 }
 
+func TestCoarsenLockRequestUsesTransactionTableState(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		fsp := newFixedSlicePool(32)
+		txn := newActiveTxn([]byte("t1"), "t1", fsp, "")
+		defer reuse.Free(txn, nil)
+		bind := pb.LockTable{Group: 1, Table: 10}
+		require.NoError(t, txn.lockAdded(
+			bind.Group,
+			bind,
+			[][]byte{[]byte("b"), []byte("d")},
+			getLogger(""),
+		))
+
+		exclusive := pb.LockOptions{
+			Granularity: pb.Granularity_Row,
+			Mode:        pb.LockMode_Exclusive,
+		}
+		rows := [][]byte{[]byte("f")}
+		gotRows, gotOpts, replace := txn.coarsenLockRequest(
+			bind.Group, bind.Table, rows, exclusive, 3)
+		require.False(t, replace)
+		require.Equal(t, rows, gotRows)
+		require.Equal(t, pb.Granularity_Row, gotOpts.Granularity)
+
+		gotRows, gotOpts, replace = txn.coarsenLockRequest(
+			bind.Group,
+			bind.Table,
+			[][]byte{[]byte("f"), []byte("a")},
+			exclusive,
+			3,
+		)
+		require.True(t, replace)
+		require.Equal(t, pb.Granularity_Range, gotOpts.Granularity)
+		require.Equal(t, [][]byte{[]byte("a"), []byte("f")}, gotRows)
+
+		// Budgets are isolated by physical table and lock group. A first large
+		// request is still bounded without consulting planner cardinality.
+		gotRows, gotOpts, replace = txn.coarsenLockRequest(
+			bind.Group,
+			bind.Table+1,
+			[][]byte{[]byte("z"), []byte("x"), []byte("y"), []byte("w")},
+			exclusive,
+			3,
+		)
+		require.True(t, replace)
+		require.Equal(t, pb.Granularity_Range, gotOpts.Granularity)
+		require.Equal(t, [][]byte{[]byte("w"), []byte("z")}, gotRows)
+
+		shared := exclusive
+		shared.Mode = pb.LockMode_Shared
+		sharedRows := [][]byte{[]byte("a"), []byte("z")}
+		gotRows, _, replace = txn.coarsenLockRequest(
+			bind.Group, bind.Table, sharedRows, shared, 3)
+		require.False(t, replace)
+		require.Equal(t, sharedRows, gotRows)
+
+		sharded := exclusive
+		sharded.Sharding = pb.Sharding_ByRow
+		shardedRows := [][]byte{[]byte("z")}
+		gotRows, _, replace = txn.coarsenLockRequest(
+			bind.Group, bind.Table, shardedRows, sharded, 2)
+		require.False(t, replace)
+		require.Equal(t, shardedRows, gotRows)
+
+		rangeOptions := exclusive
+		rangeOptions.Granularity = pb.Granularity_Range
+		gotRows, gotOpts, replace = txn.coarsenLockRequest(
+			bind.Group,
+			bind.Table,
+			[][]byte{[]byte("e"), []byte("h")},
+			rangeOptions,
+			3,
+		)
+		require.True(t, replace)
+		require.Equal(t, pb.Granularity_Range, gotOpts.Granularity)
+		require.Equal(t, [][]byte{[]byte("b"), []byte("h")}, gotRows)
+
+		// Invalid inputs remain invalid so validation stays in the lock-table
+		// layer; coarsening must not silently repair them.
+		malformedRange := [][]byte{[]byte("e")}
+		gotRows, _, replace = txn.coarsenLockRequest(
+			bind.Group, bind.Table, malformedRange, rangeOptions, 1)
+		require.False(t, replace)
+		require.Equal(t, malformedRange, gotRows)
+		unsupported := exclusive
+		unsupported.Granularity = pb.Granularity(99)
+		gotRows, _, replace = txn.coarsenLockRequest(
+			bind.Group, bind.Table, rows, unsupported, 1)
+		require.False(t, replace)
+		require.Equal(t, rows, gotRows)
+
+		// Re-entrant duplicates compact to one row, not an invalid range whose
+		// start equals its end.
+		duplicates := [][]byte{[]byte("q"), []byte("q"), []byte("q"), []byte("q")}
+		gotRows, gotOpts, replace = txn.coarsenLockRequest(
+			bind.Group, bind.Table+2, duplicates, exclusive, 3)
+		require.True(t, replace)
+		require.Equal(t, pb.Granularity_Row, gotOpts.Granularity)
+		require.Equal(t, [][]byte{[]byte("q")}, gotRows)
+	})
+}
+
+func TestReplaceLocksFailurePreservesOwnership(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		fsp := newFixedSlicePool(8)
+		txn := newActiveTxn([]byte("t1"), "t1", fsp, "")
+		defer reuse.Free(txn, nil)
+		bind := pb.LockTable{Group: 1, Table: 10}
+		original := [][]byte{[]byte("a"), []byte("b"), []byte("c")}
+		require.NoError(t, txn.lockAdded(bind.Group, bind, original, getLogger("")))
+
+		expectedErr := errors.New("injected bookkeeping failure")
+		txn.beforeLockAdded = func([]byte, [][]byte) error { return expectedErr }
+		err := txn.replaceLocks(
+			bind.Group,
+			bind,
+			[][]byte{[]byte("a"), []byte("z")},
+			getLogger(""),
+		)
+		require.ErrorIs(t, err, expectedErr)
+		locks := txn.lockHolders[bind.Group].tableKeys[bind.Table].slice()
+		require.Equal(t, original, locks.all())
+		locks.unref()
+
+		txn.beforeLockAdded = nil
+		err = txn.replaceLocks(
+			bind.Group,
+			bind,
+			newTestRows(1, 2, 3, 4, 5, 6, 7, 8, 9),
+			getLogger(""),
+		)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade))
+		locks = txn.lockHolders[bind.Group].tableKeys[bind.Table].slice()
+		require.Equal(t, original, locks.all())
+		locks.unref()
+
+		require.NoError(t, txn.replaceLocks(
+			bind.Group,
+			bind,
+			[][]byte{[]byte("a"), []byte("z")},
+			getLogger(""),
+		))
+		locks = txn.lockHolders[bind.Group].tableKeys[bind.Table].slice()
+		require.Equal(t, [][]byte{[]byte("a"), []byte("z")}, locks.all())
+		locks.unref()
+	})
+}
+
 func TestLockTableBindTouchedTracksFenceIntentOnly(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		id := []byte("t1")

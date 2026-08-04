@@ -285,13 +285,23 @@ func (s *service) Lock(
 	}
 	s.bindChangeMu.RUnlock()
 	defer txn.Unlock()
+	rows, options, replaceTxnLocks := txn.coarsenLockRequest(
+		bind.Group,
+		bind.Table,
+		rows,
+		options,
+		int(s.cfg.MaxLockRowCount),
+	)
 
 	var result pb.Result
 	l.lock(
 		ctx,
 		txn,
 		rows,
-		LockOptions{LockOptions: options},
+		LockOptions{
+			LockOptions:     options,
+			replaceTxnLocks: replaceTxnLocks,
+		},
 		func(r pb.Result, e error) {
 			result = r
 			err = e

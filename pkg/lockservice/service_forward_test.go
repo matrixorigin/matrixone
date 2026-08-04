@@ -60,6 +60,56 @@ func TestForwardLock(t *testing.T) {
 	)
 }
 
+func TestForwardLockBudgetAcrossRequests(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			origin := services[0]
+			owner := services[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			const tableID = uint64(26632)
+			_, err := owner.getLockTableWithCreate(
+				ctx, 0, tableID, nil, pb.Sharding_None)
+			require.NoError(t, err)
+
+			opts := newTestRowExclusiveOptions()
+			opts.ForwardTo = "s2"
+			txnID := []byte("forward-budget-txn")
+			for _, rows := range [][][]byte{
+				{{1}, {2}},
+				{{4}},
+				{{5}},
+			} {
+				_, err = origin.Lock(ctx, tableID, rows, txnID, opts)
+				require.NoError(t, err)
+			}
+
+			txn := owner.activeTxnHolder.getActiveTxn(txnID, false, "")
+			require.NotNil(t, txn)
+			txn.RLock()
+			require.Equal(t, 2, txn.lockHolders[0].tableKeys[tableID].mustGet().len())
+			txn.RUnlock()
+
+			lt := owner.tableGroups.get(0, tableID).(*localLockTable)
+			lt.mu.RLock()
+			start, ok := lt.mu.store.Get([]byte{1})
+			require.True(t, ok)
+			require.True(t, start.isLockRangeStart())
+			end, ok := lt.mu.store.Get([]byte{5})
+			require.True(t, ok)
+			require.True(t, end.isLockRangeEnd())
+			lt.mu.RUnlock()
+			require.NoError(t, owner.Unlock(ctx, txnID, timestamp.Timestamp{}))
+		},
+		func(c *Config) {
+			c.MaxLockRowCount = 3
+		})
+}
+
 func TestForwardLockUsesEffectiveLockDeadline(t *testing.T) {
 	holderTxn := []byte("holder")
 	waiterTxn := []byte("waiter")

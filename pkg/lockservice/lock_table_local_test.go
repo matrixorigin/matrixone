@@ -17,6 +17,7 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"sort"
 	"strings"
@@ -24,7 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -1132,7 +1132,7 @@ func Test15608(t *testing.T) {
 		})
 }
 
-func TestLocalNeedUpgrade(t *testing.T) {
+func TestLocalCoarsensBeforeFixedSliceExhaustion(t *testing.T) {
 	runLockServiceTestsWithAdjustConfig(
 		t,
 		[]string{"s1"},
@@ -1150,14 +1150,273 @@ func TestLocalNeedUpgrade(t *testing.T) {
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
 			})
-			assert.Error(t, err)
-			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade))
+			require.NoError(t, err)
+			txn := s1.activeTxnHolder.getActiveTxn(txnID, false, "")
+			require.NotNil(t, txn)
+			txn.RLock()
+			require.Equal(t, 2, txn.lockHolders[0].tableKeys[table].mustGet().len())
+			txn.RUnlock()
+			require.NoError(t, s1.Unlock(ctx, txnID, timestamp.Timestamp{}))
 		},
 		func(c *Config) {
 			c.MaxLockRowCount = 3
 			c.MaxFixedSliceSize = 4
 		},
 	)
+}
+
+func TestExclusiveLockBudgetAppliesAcrossRequests(t *testing.T) {
+	tests := []struct {
+		name       string
+		serviceIDs []string
+		caller     int
+	}{
+		{name: "local", serviceIDs: []string{"s1"}, caller: 0},
+		{name: "remote", serviceIDs: []string{"s1", "s2"}, caller: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runLockServiceTestsWithAdjustConfig(
+				t,
+				tt.serviceIDs,
+				time.Second*10,
+				func(_ *lockTableAllocator, services []*service) {
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+					defer cancel()
+
+					const table = uint64(26630)
+					owner := services[0]
+					caller := services[tt.caller]
+					opts := newTestRowExclusiveOptions()
+
+					// Establish the table on s1 so the remote case exercises both the
+					// origin and owner transaction bookkeeping paths.
+					warmupTxn := newTestTxnID(1)
+					_, err := owner.Lock(ctx, table, newTestRows(9), warmupTxn, opts)
+					require.NoError(t, err)
+					require.NoError(t, owner.Unlock(ctx, warmupTxn, timestamp.Timestamp{}))
+
+					txnID := newTestTxnID(2)
+					_, err = caller.Lock(ctx, table, newTestRows(1, 2), txnID, opts)
+					require.NoError(t, err)
+					_, err = caller.Lock(ctx, table, newTestRows(4), txnID, opts)
+					require.NoError(t, err)
+					_, err = caller.Lock(ctx, table, newTestRows(5), txnID, opts)
+					require.NoError(t, err)
+					// A later generation must compact the previous range together with
+					// newly retained points, not start a fresh per-call budget.
+					_, err = caller.Lock(ctx, table, newTestRows(7, 8), txnID, opts)
+					require.NoError(t, err)
+
+					// The budget is transaction/table scoped: four individually small
+					// requests must compact to one bounded range, on both the lock owner
+					// and a remote origin.
+					for _, service := range []*service{caller, owner} {
+						txn := service.activeTxnHolder.getActiveTxn(txnID, false, "")
+						require.NotNil(t, txn)
+						txn.RLock()
+						holder := txn.lockHolders[0]
+						require.NotNil(t, holder)
+						require.Equal(t, 2, holder.tableKeys[table].mustGet().len())
+						txn.RUnlock()
+						if caller == owner {
+							break
+						}
+					}
+
+					lt := owner.tableGroups.get(0, table).(*localLockTable)
+					lt.mu.RLock()
+					start, ok := lt.mu.store.Get(newTestRows(1)[0])
+					require.True(t, ok)
+					require.True(t, start.isLockRangeStart())
+					end, ok := lt.mu.store.Get(newTestRows(8)[0])
+					require.True(t, ok)
+					require.True(t, end.isLockRangeEnd())
+					lt.mu.RUnlock()
+
+					// Coarsening may cover gaps but must not become a table lock.
+					outsideTxn := newTestTxnID(3)
+					_, err = owner.Lock(ctx, table, newTestRows(9), outsideTxn, opts)
+					require.NoError(t, err)
+					require.NoError(t, owner.Unlock(ctx, outsideTxn, timestamp.Timestamp{}))
+
+					conflictOpts := opts
+					conflictOpts.Policy = pb.WaitPolicy_FastFail
+					conflictTxn := newTestTxnID(4)
+					_, err = owner.Lock(ctx, table, newTestRows(3), conflictTxn, conflictOpts)
+					require.ErrorIs(t, err, ErrLockConflict)
+					require.NoError(t, owner.Unlock(ctx, conflictTxn, timestamp.Timestamp{}))
+					require.NoError(t, caller.Unlock(ctx, txnID, timestamp.Timestamp{}))
+				},
+				func(c *Config) {
+					c.MaxLockRowCount = 3
+				})
+		})
+	}
+}
+
+func TestExclusiveLockBudgetRemainsBoundedAcrossExecutionBatches(t *testing.T) {
+	const (
+		batchSize = 8192
+		batches   = 6
+		budget    = 20000
+		table     = uint64(26633)
+	)
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1"},
+		time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			txnID := []byte("execution-batches")
+
+			encodeKey := func(value uint64) []byte {
+				key := make([]byte, 8)
+				binary.BigEndian.PutUint64(key, value)
+				return key
+			}
+			for batch := 0; batch < batches; batch++ {
+				rows := make([][]byte, batchSize)
+				for row := range rows {
+					rows[row] = encodeKey(uint64(batch*batchSize + row))
+				}
+				_, err := s.Lock(ctx, table, rows, txnID, newTestRowExclusiveOptions())
+				require.NoError(t, err)
+
+				txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
+				require.NotNil(t, txn)
+				txn.RLock()
+				retained := txn.lockHolders[0].tableKeys[table].mustGet().len()
+				txn.RUnlock()
+				require.LessOrEqual(t, retained, budget,
+					"retained lock keys exceeded the transaction/table budget after batch %d", batch)
+			}
+
+			txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
+			txn.RLock()
+			require.Equal(t, 2, txn.lockHolders[0].tableKeys[table].mustGet().len())
+			txn.RUnlock()
+			lt := s.tableGroups.get(0, table).(*localLockTable)
+			lt.mu.RLock()
+			start, ok := lt.mu.store.Get(encodeKey(0))
+			require.True(t, ok)
+			require.True(t, start.isLockRangeStart())
+			end, ok := lt.mu.store.Get(encodeKey(batchSize*batches - 1))
+			require.True(t, ok)
+			require.True(t, end.isLockRangeEnd())
+			lt.mu.RUnlock()
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+		},
+		func(c *Config) {
+			c.MaxLockRowCount = budget
+		})
+}
+
+func TestExclusiveLockBudgetConflictRollsBackCompaction(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1"},
+		time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			const table = uint64(26631)
+			opts := newTestRowExclusiveOptions()
+			blockerTxn := newTestTxnID(1)
+			_, err := s.Lock(ctx, table, newTestRows(3), blockerTxn, opts)
+			require.NoError(t, err)
+
+			txnID := newTestTxnID(2)
+			_, err = s.Lock(ctx, table, newTestRows(1, 2), txnID, opts)
+			require.NoError(t, err)
+			_, err = s.Lock(ctx, table, newTestRows(4), txnID, opts)
+			require.NoError(t, err)
+
+			fastFail := opts
+			fastFail.Policy = pb.WaitPolicy_FastFail
+			_, err = s.Lock(ctx, table, newTestRows(5), txnID, fastFail)
+			require.ErrorIs(t, err, ErrLockConflict)
+
+			// addRangeLockLocked stages row removal in mergeContext. A conflict
+			// must roll that staging back so the transaction can retry safely.
+			txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
+			require.NotNil(t, txn)
+			txn.RLock()
+			require.Equal(t, 3, txn.lockHolders[0].tableKeys[table].mustGet().len())
+			txn.RUnlock()
+			lt := s.tableGroups.get(0, table).(*localLockTable)
+			for _, row := range newTestRows(1, 2, 4) {
+				checkLock(t, lt, row, [][]byte{txnID}, nil, nil)
+			}
+
+			require.NoError(t, s.Unlock(ctx, blockerTxn, timestamp.Timestamp{}))
+			_, err = s.Lock(ctx, table, newTestRows(5), txnID, opts)
+			require.NoError(t, err)
+			txn.RLock()
+			require.Equal(t, 2, txn.lockHolders[0].tableKeys[table].mustGet().len())
+			txn.RUnlock()
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+		},
+		func(c *Config) {
+			c.MaxLockRowCount = 3
+		})
+}
+
+func TestExclusiveLockBudgetReplacementFailurePreservesOwnership(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1"},
+		time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			const table = uint64(26634)
+			txnID := []byte("replacement-failure")
+			opts := newTestRowExclusiveOptions()
+			_, err := s.Lock(ctx, table, newTestRows(1, 2), txnID, opts)
+			require.NoError(t, err)
+			_, err = s.Lock(ctx, table, newTestRows(4), txnID, opts)
+			require.NoError(t, err)
+
+			txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
+			require.NotNil(t, txn)
+			txn.Lock()
+			txn.beforeLockAdded = func([]byte, [][]byte) error { return ErrTxnNotFound }
+			txn.Unlock()
+
+			_, err = s.Lock(ctx, table, newTestRows(5), txnID, opts)
+			require.ErrorIs(t, err, ErrTxnNotFound)
+
+			// Replacement preparation failed before the merge was committed: both
+			// transaction bookkeeping and lock-store ownership must remain intact.
+			txn.RLock()
+			require.Equal(t, 3, txn.lockHolders[0].tableKeys[table].mustGet().len())
+			txn.RUnlock()
+			lt := s.tableGroups.get(0, table).(*localLockTable)
+			for _, row := range newTestRows(1, 2, 4) {
+				checkLock(t, lt, row, [][]byte{txnID}, nil, nil)
+			}
+
+			txn.Lock()
+			txn.beforeLockAdded = nil
+			txn.Unlock()
+			_, err = s.Lock(ctx, table, newTestRows(5), txnID, opts)
+			require.NoError(t, err)
+			txn.RLock()
+			require.Equal(t, 2, txn.lockHolders[0].tableKeys[table].mustGet().len())
+			txn.RUnlock()
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+		},
+		func(c *Config) {
+			c.MaxLockRowCount = 3
+		})
 }
 
 func TestCannotHungIfRangeConflictWithRowMultiTimes(t *testing.T) {

@@ -51,3 +51,13 @@ func TestAdjustConfigRejectsNegativeMaxLockWaitDuration(t *testing.T) {
 	c.MaxLockWaitDuration.Duration = -1
 	assert.Panics(t, c.Validate)
 }
+
+func TestAdjustConfigRequiresRangeCapacity(t *testing.T) {
+	for _, c := range []Config{
+		{ServiceID: "s1", MaxLockRowCount: 1, MaxFixedSliceSize: 1},
+		{ServiceID: "s1", MaxLockRowCount: 2, MaxFixedSliceSize: 2},
+		{ServiceID: "s1", MaxLockRowCount: 3, MaxFixedSliceSize: 3},
+	} {
+		assert.Panics(t, c.Validate)
+	}
+}

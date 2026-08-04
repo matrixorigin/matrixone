@@ -34,6 +34,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -2186,16 +2187,6 @@ func TestInsert(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
-type planLockConfigOnlyService struct {
-	lockservice.LockService
-}
-
-// The planner only needs the threshold from the lock service. Keep this test
-// double free of lock-service goroutines and remote state.
-func (s *planLockConfigOnlyService) GetConfig() lockservice.Config {
-	return lockservice.Config{ServiceID: "plan-test", MaxLockRowCount: 1}
-}
-
 func TestLargeDMLKeepsRowScopedLockTarget(t *testing.T) {
 	sqls := []string{
 		"INSERT INTO NATION SELECT * FROM NATION2",
@@ -2209,7 +2200,12 @@ func TestLargeDMLKeepsRowScopedLockTarget(t *testing.T) {
 		t.Run(sql, func(t *testing.T) {
 			mock := NewMockOptimizer(true)
 			proc := testutil.NewProc(t)
-			proc.Base.LockService = &planLockConfigOnlyService{}
+			lockService := mock_lock.NewMockLockService(gomock.NewController(t))
+			lockService.EXPECT().GetConfig().Return(lockservice.Config{
+				ServiceID:       "plan-test",
+				MaxLockRowCount: 1,
+			}).AnyTimes()
+			proc.Base.LockService = lockService
 			rt := moruntime.ServiceRuntime(proc.GetService())
 			if rt == nil {
 				rt = moruntime.DefaultRuntime()

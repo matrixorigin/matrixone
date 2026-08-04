@@ -953,7 +953,25 @@ func (l *localLockTable) addRangeLockLocked(
 		break
 	}
 
-	mc.commit(l.bind, c.txn, l.mu.store, l.logger)
+	// A budget-driven range contains every lock already retained for this
+	// transaction and table. Prepare and publish its replacement bookkeeping
+	// before committing removal of the old lock-store entries. If allocation or
+	// the failure hook rejects the replacement, rollback leaves both ownership
+	// representations unchanged.
+	txnLocksReplaced := false
+	if c.opts.replaceTxnLocks {
+		if err := c.txn.replaceLocks(
+			l.bind.Group,
+			l.bind,
+			[][]byte{start, end},
+			l.logger,
+		); err != nil {
+			mc.rollback()
+			return nil, Lock{}, err
+		}
+		txnLocksReplaced = true
+	}
+	mc.commit(l.bind, c.txn, l.mu.store, l.logger, txnLocksReplaced)
 	startLock, endLock := newRangeLock(l.logger, c)
 
 	wq.resetCommittedAt(l.mu.tableCommittedAt)
@@ -961,9 +979,11 @@ func (l *localLockTable) addRangeLockLocked(
 	endLock.waiters = wq
 
 	// similar to row lock
-	err = c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{start, end}, l.logger)
-	if err != nil {
-		return nil, Lock{}, err
+	if !txnLocksReplaced {
+		err = c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{start, end}, l.logger)
+		if err != nil {
+			return nil, Lock{}, err
+		}
 	}
 	c.result.NewLockAdd = true
 
@@ -1149,16 +1169,19 @@ func (c *mergeContext) commit(
 	txn *activeTxn,
 	s LockStorage,
 	logger *log.MOLogger,
+	txnLocksReplaced bool,
 ) {
 	for k := range c.mergedLocks {
 		s.Delete(util.UnsafeStringToBytes(k))
 	}
 
-	txn.lockRemoved(
-		bind.Group,
-		bind.Table,
-		c.mergedLocks,
-	)
+	if !txnLocksReplaced {
+		txn.lockRemoved(
+			bind.Group,
+			bind.Table,
+			c.mergedLocks,
+		)
+	}
 
 	for _, q := range c.mergedWaiters {
 		// release ref in merged waiters. The ref is moved to c.to.

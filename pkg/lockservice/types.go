@@ -289,6 +289,12 @@ type LockOptions struct {
 	pb.LockOptions
 	async                      bool
 	remoteLockOwnerWaitTimeout time.Duration
+	// replaceTxnLocks is set when the request was coarsened from every lock
+	// already recorded for the same transaction and lock table. The lock owner
+	// replaces its bookkeeping while committing the range merge. A remote origin
+	// must do the same after the owner accepts the range; otherwise only one side
+	// is bounded.
+	replaceTxnLocks bool
 }
 
 // Lock stores specific lock information. Since there are a large number of lock objects
