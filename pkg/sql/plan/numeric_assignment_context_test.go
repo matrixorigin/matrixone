@@ -802,6 +802,31 @@ func TestPreparedNumericFunctionControlArgUsesOverloadType(t *testing.T) {
 	require.Equal(t, int32(types.T_int64), paramTypes[2].Id)
 }
 
+func TestPreparedNumericAggregateReachesCorrelatedDerivedTable(t *testing.T) {
+	optimizer := NewMockOptimizer(true)
+	// SUM seeds a float64 target for d.x before the correlated derived source is
+	// bound, exercising the numeric-projection buildTable entry.
+	stmt, err := mysql.ParseOne(
+		optimizer.CurrentContext().GetContext(),
+		"insert into constraint_test.emp (sal) "+
+			"select (select sum(d.x) from "+
+			"(select ? as x from NATION n2 "+
+			"where n2.N_REGIONKEY = n1.N_REGIONKEY) d) from NATION n1",
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmt, true)
+	require.NoError(t, err)
+
+	paramTypes := collectUniquePlanParamTypes(t, queryPlan)
+	require.Equal(t, map[int32]planpb.Type{
+		1: {Id: int32(types.T_float64)},
+	}, paramTypes)
+	require.True(t, hasJoinType(queryPlan.GetQuery(), planpb.Node_LEFT))
+	assertReachablePlanHasNoCorrelatedExpr(t, queryPlan.GetQuery())
+}
+
 func TestSeedNumericSourceTargetKeepsAmbiguousPositionEmpty(t *testing.T) {
 	decimal72 := planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2}
 	decimal74 := planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 4}
