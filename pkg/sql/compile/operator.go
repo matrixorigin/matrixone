@@ -716,6 +716,14 @@ func constructFuzzyFilter(node, tableScan, sinkScan *plan.Node) *fuzzyfilter.Fuz
 			}
 		}
 	}
+	// The fuzzy-filter children may project a key identity expression whose
+	// type differs from the stored column. FLOAT/DOUBLE primary keys use
+	// serial(...) bytes, and the operator must allocate/hash that actual type.
+	if len(sinkScan.ProjectList) > 0 {
+		pkTyp = sinkScan.ProjectList[0].Typ
+	} else if len(tableScan.ProjectList) > 0 {
+		pkTyp = tableScan.ProjectList[0].Typ
+	}
 
 	op := fuzzyfilter.NewArgument()
 	op.PkName = pkName
