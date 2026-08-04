@@ -534,26 +534,28 @@ func (exec *txnExecutor) Exec(
 				// the bat is valid only in current method. So we need copy data.
 				// FIXME: add a custom streaming apply handler to consume readed data. Now
 				// our current internal sql will never read too much data.
-				rows, err := bat.Clone(exec.s.mp, streaming)
+				// Internal executor results outlive Compile.Run. Keep the
+				// existing physical clone mode, but end statement allocation
+				// ownership before returning or publishing the batch.
+				rows, err := cloneInternalExecutorResultBatch(
+					bat,
+					exec.s.mp,
+					streaming,
+				)
 				if err != nil {
 					return err
 				}
 				if streaming {
 					stream_result := executor.NewResult(exec.s.mp)
-					for len(stream_chan) == cap(stream_chan) {
-						select {
-						case <-proc.Ctx.Done():
-							err_chan <- moerr.NewInternalError(proc.Ctx, "context cancelled")
-							return moerr.NewInternalError(proc.Ctx, "context cancelled")
-						case <-exec.ctx.Done():
-							err_chan <- exec.ctx.Err()
-							return exec.ctx.Err()
-						default:
-							time.Sleep(1 * time.Millisecond)
-						}
-					}
 					stream_result.Batches = []*batch.Batch{rows}
-					stream_chan <- stream_result
+					if err := publishInternalExecutorStreamResult(
+						proc.Ctx,
+						exec.ctx,
+						stream_chan,
+						stream_result,
+					); err != nil {
+						return err
+					}
 				} else {
 					batches = append(batches, rows)
 				}
@@ -597,6 +599,39 @@ func (exec *txnExecutor) Exec(
 	result.AffectedRows = runResult.AffectRows
 	result.LogicalPlan = pn.GetQuery()
 	return result, nil
+}
+
+func cloneInternalExecutorResultBatch(
+	bat *batch.Batch,
+	mp *mpool.MPool,
+	streaming bool,
+) (*batch.Batch, error) {
+	return bat.CloneWithoutAllocationAccount(mp, streaming)
+}
+
+// publishInternalExecutorStreamResult transfers result ownership only after a
+// successful send. Cancellation keeps ownership here and closes the result.
+func publishInternalExecutorStreamResult(
+	procCtx context.Context,
+	execCtx context.Context,
+	streamChan chan executor.Result,
+	result executor.Result,
+) error {
+	select {
+	case streamChan <- result:
+		return nil
+	default:
+	}
+	select {
+	case streamChan <- result:
+		return nil
+	case <-procCtx.Done():
+		result.Close()
+		return moerr.NewInternalError(procCtx, "context cancelled")
+	case <-execCtx.Done():
+		result.Close()
+		return execCtx.Err()
+	}
 }
 
 func (exec *txnExecutor) LockTable(table string) error {

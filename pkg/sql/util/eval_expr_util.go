@@ -111,13 +111,28 @@ func DecodeBinaryString(s string) ([]byte, error) {
 }
 
 func GenVectorByVarValue(proc *process.Process, typ types.Type, val any) (*vector.Vector, error) {
+	return GenVectorByVarValueWithAllocation(proc, typ, val, nil)
+}
+
+func GenVectorByVarValueWithAllocation(
+	proc *process.Process,
+	typ types.Type,
+	val any,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, error) {
 	if val == nil {
-		vec := vector.NewConstNull(typ, 1, proc.Mp())
-		return vec, nil
-	} else {
-		strVal := getVal(val)
+		if selection == nil {
+			return vector.NewConstNull(typ, 1, proc.Mp()), nil
+		}
+		return vector.NewConstNullWithAllocation(typ, 1, selection)
+	}
+	strVal := getVal(val)
+	if selection == nil {
 		return vector.NewConstBytes(typ, []byte(strVal), 1, proc.Mp())
 	}
+	return vector.NewConstBytesWithAllocation(
+		typ, []byte(strVal), 1, proc.Mp(), selection,
+	)
 }
 
 func AppendAnyToStringVector(proc *process.Process, val any, vec *vector.Vector) error {

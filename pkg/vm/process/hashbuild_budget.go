@@ -15,6 +15,7 @@
 package process
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -29,6 +30,20 @@ import (
 )
 
 const hashBuildMinimumReserve = uint64(4 << 30)
+
+const (
+	hashBuildAllocationGenerationSlots = uint32(131_072)
+	// Account metadata lives outside the MPool payload cap. Bound its worst-case
+	// Go-heap footprint to half of hashBuildMinimumReserve: 128 bytes covers one
+	// sparse pointer/lease-map entry, and 16,777,216 live entries consume at most
+	// 2 GiB by construction. Small aggregate caps use the tighter byte
+	// conservation bound because every physical allocation owns at least one
+	// byte. Slot exhaustion is real metadata capacity pressure, not an
+	// estimator rejection.
+	hashBuildAllocationMetadataBytesPerSlot = uint64(128)
+	hashBuildAllocationMetadataHeadroom     = hashBuildMinimumReserve / 2
+	hashBuildAllocationMetadataMaxSlots     = hashBuildAllocationMetadataHeadroom / hashBuildAllocationMetadataBytesPerSlot
+)
 
 const (
 	// Keep a process-wide reserve for listeners, RPC connections, object
@@ -111,18 +126,12 @@ func observeHashBuildBudget(component, event, scope string, bytes uint64) {
 // process rather than the SQL layer so that operators and remote execution
 // code can make an admission decision without importing frontend packages.
 var (
-	ErrHashBuildBudgetAdmission = moerr.NewInternalErrorNoCtx("hash build budget admission rejected")
-	// ErrHashBuildBudgetRejected is kept as a more discoverable spelling of the
-	// admission sentinel.  It is the same value, so errors.Is works with either.
-	ErrHashBuildBudgetRejected             = ErrHashBuildBudgetAdmission
-	ErrHashBuildBudgetClosed               = moerr.NewInternalErrorNoCtx("hash build budget is closed")
-	ErrHashBuildBudgetInvalid              = moerr.NewInternalErrorNoCtx("invalid hash build budget")
-	ErrHashBuildCeilingMissing             = moerr.NewInternalErrorNoCtx("hash build budget ceiling unavailable")
-	ErrHashBuildBudgetUnavailable          = ErrHashBuildCeilingMissing
-	ErrHashBuildReservationInactive        = moerr.NewInternalErrorNoCtx("hash build reservation is inactive")
-	ErrHashBuildReservationUpward          = moerr.NewInternalErrorNoCtx("hash build reservation reconciliation would increase charge")
-	ErrHashBuildReservationReconcileUpward = ErrHashBuildReservationUpward
-	ErrHashBuildReservationClosed          = ErrHashBuildReservationInactive
+	ErrHashBuildBudgetAdmission          = moerr.NewInternalErrorNoCtx("hash build budget admission rejected")
+	ErrHashBuildBudgetClosed             = moerr.NewInternalErrorNoCtx("hash build budget is closed")
+	ErrHashBuildBudgetInvalid            = moerr.NewInternalErrorNoCtx("invalid hash build budget")
+	ErrHashBuildCeilingMissing           = moerr.NewInternalErrorNoCtx("hash build budget ceiling unavailable")
+	ErrHashBuildSpillReservationInactive = moerr.NewInternalErrorNoCtx("hash build spill reservation is inactive")
+	ErrHashBuildSpillReservationUpward   = moerr.NewInternalErrorNoCtx("hash build spill reservation reconciliation would increase charge")
 )
 
 // HashBuildBudgetErrorKind identifies the class of a budget error.
@@ -135,16 +144,17 @@ const (
 	HashBuildBudgetErrorCeilingMissing
 )
 
-// HashBuildBudgetResource identifies the finite resource whose admission
-// failed. It is separate from Kind: every resource can reject capacity, while
-// lifecycle and accounting failures remain resource-independent.
-type HashBuildBudgetResource uint8
+// HashBuildBudgetComponent identifies the independently bounded resource that
+// rejected an admission. Zero is invalid: every admission error must name its
+// physical resource. A spill-disk or spill-FD rejection must never enter the
+// memory reclaim/reduce loop because reducing an in-memory batch cannot create
+// either resource and may replay already-published spill records.
+type HashBuildBudgetComponent uint8
 
 const (
-	HashBuildBudgetResourceUnknown HashBuildBudgetResource = iota
-	HashBuildBudgetResourceMemory
-	HashBuildBudgetResourceSpillDisk
-	HashBuildBudgetResourceSpillFD
+	HashBuildBudgetComponentMemory HashBuildBudgetComponent = iota + 1
+	HashBuildBudgetComponentSpillDisk
+	HashBuildBudgetComponentSpillFD
 )
 
 // HashBuildBudgetError carries bounded, observational details for an
@@ -153,7 +163,7 @@ const (
 // to inspect; they are never produced by overflowing arithmetic.
 type HashBuildBudgetError struct {
 	Kind      HashBuildBudgetErrorKind
-	Resource  HashBuildBudgetResource
+	Component HashBuildBudgetComponent
 	Requested uint64
 	Used      uint64
 	Cap       uint64
@@ -206,7 +216,7 @@ func (e *HashBuildBudgetError) Is(target error) bool {
 	if e == nil {
 		return false
 	}
-	if target == ErrHashBuildBudgetAdmission || target == ErrHashBuildBudgetRejected {
+	if target == ErrHashBuildBudgetAdmission {
 		return e.Kind == HashBuildBudgetErrorAdmission
 	}
 	switch e.Kind {
@@ -257,6 +267,10 @@ type HashBuildBudget struct {
 	spillFDConfiguredCap uint64
 	spillFDCap           uint64
 	spillFDUsed          uint64
+
+	allocationRegistryOnce sync.Once
+	allocationRegistry     *mpool.AllocationAccountRegistry
+	allocationRegistryErr  error
 }
 
 // NewHashBuildBudget creates a local-CN budget.  Both caps are finite and
@@ -407,10 +421,10 @@ func (b *HashBuildBudget) SetSpillCaps(diskBytes, fds uint64) error {
 	}
 	effectiveFDCap := clampSpillFDCap(fds, processLimit, limitKnown)
 	if b.spillDiskUsed > diskBytes {
-		return newAdmissionError(HashBuildBudgetResourceSpillDisk, 0, b.spillDiskUsed, diskBytes)
+		return newComponentAdmissionError(HashBuildBudgetComponentSpillDisk, 0, b.spillDiskUsed, diskBytes)
 	}
 	if b.spillFDUsed > effectiveFDCap {
-		return newAdmissionError(HashBuildBudgetResourceSpillFD, 0, b.spillFDUsed, effectiveFDCap)
+		return newComponentAdmissionError(HashBuildBudgetComponentSpillFD, 0, b.spillFDUsed, effectiveFDCap)
 	}
 	b.spillDiskCap = diskBytes
 	b.spillFDConfiguredCap = fds
@@ -454,17 +468,6 @@ func MustNewHashBuildBudget(aggregateCap, queryCap uint64) *HashBuildBudget {
 	return b
 }
 
-func NewHashBuildBudgetWithSpillCaps(aggregateCap, queryCap, spillDiskCap, spillFDCap uint64) (*HashBuildBudget, error) {
-	b, err := NewHashBuildBudget(aggregateCap, queryCap)
-	if err != nil {
-		return nil, err
-	}
-	if err = b.SetSpillCaps(spillDiskCap, spillFDCap); err != nil {
-		return nil, err
-	}
-	return b, nil
-}
-
 // AggregateCap returns the configured local-CN cap.
 func (b *HashBuildBudget) AggregateCap() uint64 {
 	if b == nil {
@@ -474,10 +477,6 @@ func (b *HashBuildBudget) AggregateCap() uint64 {
 	defer b.mu.Unlock()
 	return b.aggregateCap
 }
-
-// CNHashCap is an alias useful to callers that describe the aggregate as the
-// CN hash cap.
-func (b *HashBuildBudget) CNHashCap() uint64 { return b.AggregateCap() }
 
 // QueryCap returns the per-generation, per-target-CN cap.
 func (b *HashBuildBudget) QueryCap() uint64 {
@@ -498,15 +497,6 @@ func (b *HashBuildBudget) AggregateUsed() uint64 {
 	defer b.mu.Unlock()
 	return b.aggregateUsed
 }
-
-// CNHashUsed is an alias for AggregateUsed.
-func (b *HashBuildBudget) CNHashUsed() uint64 { return b.AggregateUsed() }
-
-// Current is a concise alias for AggregateUsed.
-func (b *HashBuildBudget) Current() uint64 { return b.AggregateUsed() }
-
-// Capacity is a concise alias for AggregateCap.
-func (b *HashBuildBudget) Capacity() uint64 { return b.AggregateCap() }
 
 // Closed reports whether no new generation or reservation may be opened.
 func (b *HashBuildBudget) Closed() bool {
@@ -835,6 +825,8 @@ type HashBuildBudgetGeneration struct {
 	peakUsed                                                uint64
 }
 
+var _ mpool.AllocationCapacityController = (*HashBuildBudgetGeneration)(nil)
+
 // HashBuildBudgetGenerationSnapshot is an immutable fixed-cardinality view.
 type HashBuildBudgetGenerationSnapshot struct {
 	ID, Cap, Used, PeakUsed                                 uint64
@@ -843,14 +835,6 @@ type HashBuildBudgetGenerationSnapshot struct {
 	SpillFDUsed                                             uint64
 	Closed                                                  bool
 }
-
-// HashBuildGeneration is a shorter spelling retained for call sites.
-type HashBuildGeneration = HashBuildBudgetGeneration
-
-// HashBuildQueryBudget makes the per-generation/per-target-CN scope explicit
-// at call sites.  It is an alias, so tokens and methods retain one ownership
-// implementation.
-type HashBuildQueryBudget = HashBuildBudgetGeneration
 
 // OpenGeneration opens a per-statement execution generation.  The budget's
 // query cap is copied by reference (and remains immutable), while used bytes
@@ -962,10 +946,7 @@ func (b *HashBuildBudget) openProcessGeneration(
 		}
 	}
 
-	memoryCap := requestedMemoryCap
-	if memoryCap > b.aggregateCap {
-		memoryCap = b.aggregateCap
-	}
+	memoryCap := min(requestedMemoryCap, b.aggregateCap)
 	if memoryCap == 0 {
 		return nil, &HashBuildBudgetError{
 			Kind:      HashBuildBudgetErrorInvalid,
@@ -978,17 +959,12 @@ func (b *HashBuildBudget) openProcessGeneration(
 	if spillDiskCap == 0 {
 		spillDiskCap = defaultSpillCap(memoryCap)
 	}
-	if spillDiskCap > b.spillDiskCap {
-		spillDiskCap = b.spillDiskCap
-	}
-	configuredFDCap := configuredSpillFDCap(memoryCap)
-	if configuredFDCap > b.spillFDConfiguredCap {
-		configuredFDCap = b.spillFDConfiguredCap
-	}
-	effectiveFDCap := configuredFDCap
-	if effectiveFDCap > b.spillFDCap {
-		effectiveFDCap = b.spillFDCap
-	}
+	spillDiskCap = min(spillDiskCap, b.spillDiskCap)
+	configuredFDCap := min(
+		configuredSpillFDCap(memoryCap),
+		b.spillFDConfiguredCap,
+	)
+	effectiveFDCap := min(configuredFDCap, b.spillFDCap)
 
 	return &HashBuildBudgetGeneration{
 		budget:               b,
@@ -998,25 +974,6 @@ func (b *HashBuildBudget) openProcessGeneration(
 		spillFDConfiguredCap: configuredFDCap,
 		spillFDCap:           effectiveFDCap,
 	}, nil
-}
-
-// OpenGenerationWithLimits is a compatibility spelling for explicit spill caps.
-func (b *HashBuildBudget) OpenGenerationWithLimits(id, memoryCap, spillDiskCap, spillFDCap uint64) (*HashBuildBudgetGeneration, error) {
-	return b.OpenGenerationWithSpillCaps(id, memoryCap, spillDiskCap, spillFDCap)
-}
-
-func (b *HashBuildBudget) OpenGenerationWithCapAndSpill(id, memoryCap, spillDiskCap, spillFDCap uint64) (*HashBuildBudgetGeneration, error) {
-	return b.OpenGenerationWithSpillCaps(id, memoryCap, spillDiskCap, spillFDCap)
-}
-
-// NewGeneration is an alias for OpenGeneration.
-func (b *HashBuildBudget) NewGeneration(id uint64) (*HashBuildBudgetGeneration, error) {
-	return b.OpenGeneration(id)
-}
-
-// OpenQueryBudget is the explicit per-query-CN spelling of OpenGeneration.
-func (b *HashBuildBudget) OpenQueryBudget(id uint64) (*HashBuildQueryBudget, error) {
-	return b.OpenGeneration(id)
 }
 
 // ID returns the execution generation identity.
@@ -1035,12 +992,6 @@ func (g *HashBuildBudgetGeneration) Cap() uint64 {
 	return g.cap
 }
 
-// QueryCap returns this generation's query-CN cap.
-func (g *HashBuildBudgetGeneration) QueryCap() uint64 { return g.Cap() }
-
-// Capacity is a concise alias for Cap.
-func (g *HashBuildBudgetGeneration) Capacity() uint64 { return g.Cap() }
-
 // Used reports bytes reserved by this generation.
 func (g *HashBuildBudgetGeneration) Used() uint64 {
 	if g == nil || g.budget == nil {
@@ -1049,6 +1000,19 @@ func (g *HashBuildBudgetGeneration) Used() uint64 {
 	g.budget.mu.Lock()
 	defer g.budget.mu.Unlock()
 	return g.used
+}
+
+// Peak reports the maximum physically owned bytes observed by this
+// generation. It is observational only; admission and release remain owned by
+// AllocationAccount-backed MPool allocations.
+func (g *HashBuildBudgetGeneration) Peak() uint64 {
+	return g.Snapshot().PeakUsed
+}
+
+// RejectCount reports physical allocation-capacity rejections observed by
+// this generation.
+func (g *HashBuildBudgetGeneration) RejectCount() uint64 {
+	return g.Snapshot().RejectCount
 }
 
 func (g *HashBuildBudgetGeneration) SpillDiskCap() uint64 {
@@ -1098,17 +1062,6 @@ func (g *HashBuildBudgetGeneration) Snapshot() HashBuildBudgetGenerationSnapshot
 	}
 }
 
-// Stats is an alias retained for observability call sites.
-func (g *HashBuildBudgetGeneration) Stats() HashBuildBudgetGenerationSnapshot { return g.Snapshot() }
-func (g *HashBuildBudgetGeneration) Peak() uint64                             { return g.Snapshot().PeakUsed }
-func (g *HashBuildBudgetGeneration) ReserveCount() uint64                     { return g.Snapshot().ReserveCount }
-func (g *HashBuildBudgetGeneration) RejectCount() uint64                      { return g.Snapshot().RejectCount }
-func (g *HashBuildBudgetGeneration) ReconcileCount() uint64                   { return g.Snapshot().ReconcileCount }
-func (g *HashBuildBudgetGeneration) ReleaseCount() uint64                     { return g.Snapshot().ReleaseCount }
-
-// Current is a concise alias for Used.
-func (g *HashBuildBudgetGeneration) Current() uint64 { return g.Used() }
-
 // Closed reports whether this generation rejects new reservations.
 func (g *HashBuildBudgetGeneration) Closed() bool {
 	if g == nil || g.budget == nil {
@@ -1117,6 +1070,38 @@ func (g *HashBuildBudgetGeneration) Closed() bool {
 	g.budget.mu.Lock()
 	defer g.budget.mu.Unlock()
 	return g.closed || g.budget.closed
+}
+
+// AllocationAccountRegistry returns the bounded CN-local registry shared by
+// every HashBuild generation under this aggregate budget. The slot
+// bound follows a conservation fact rather than a per-operator multiplier:
+// every live allocation owns at least one byte and all accounts share the
+// aggregate byte cap, so live metadata cannot exceed aggregate capacity. A
+// second fixed bound reserves at most 2 GiB of the existing 4 GiB CN
+// headroom at 128 bytes per metadata entry. The registry stores only the
+// resulting scalar limit; it does not preallocate one object per slot.
+func (g *HashBuildBudgetGeneration) AllocationAccountRegistry() (
+	*mpool.AllocationAccountRegistry,
+	error,
+) {
+	if g == nil || g.budget == nil {
+		return nil, ErrHashBuildBudgetInvalid
+	}
+	b := g.budget
+	b.allocationRegistryOnce.Do(func() {
+		capBytes := b.AggregateCap()
+		if capBytes == 0 {
+			b.allocationRegistryErr = ErrHashBuildBudgetInvalid
+			return
+		}
+		allocationSlots := min(capBytes, hashBuildAllocationMetadataMaxSlots)
+		b.allocationRegistry, b.allocationRegistryErr =
+			mpool.NewAllocationAccountRegistry(
+				hashBuildAllocationGenerationSlots,
+				allocationSlots,
+			)
+	})
+	return b.allocationRegistry, b.allocationRegistryErr
 }
 
 // Close rejects future reservations for this generation while allowing all
@@ -1130,12 +1115,56 @@ func (g *HashBuildBudgetGeneration) Close() {
 	g.budget.mu.Unlock()
 }
 
-// Reserve performs the required two-level sequence: charge CN aggregate,
-// then charge query-CN.  If query-CN rejects, aggregate is rolled back before
-// returning, so callers never observe a partial reservation.
-func (g *HashBuildBudgetGeneration) Reserve(size uint64) (*HashBuildReservation, error) {
+// AcquireAllocationCapacity applies the HashBuild query/CN policy to a physical
+// MPool allocation. It creates no independently releasable reservation token:
+// the physical allocation lease is the sole release owner.
+func (g *HashBuildBudgetGeneration) AcquireAllocationCapacity(size uint64) error {
+	if size == 0 {
+		return nil
+	}
+	err := g.acquireMemory(size)
+	if err == nil {
+		return nil
+	}
+	switch {
+	case errors.Is(err, ErrHashBuildBudgetClosed):
+		return errors.Join(mpool.ErrAllocationAccountSealed, err)
+	case errors.Is(err, ErrHashBuildBudgetAdmission):
+		return errors.Join(mpool.ErrAllocationAccountCapacity, err)
+	default:
+		return errors.Join(mpool.ErrAllocationAccountInvariant, err)
+	}
+}
+
+// ReleaseAllocationCapacity is called only by physical MPool Free through the
+// allocation account. A mismatch is an ownership invariant failure.
+func (g *HashBuildBudgetGeneration) ReleaseAllocationCapacity(size uint64) {
+	if size == 0 {
+		return
+	}
 	if g == nil || g.budget == nil {
-		return nil, &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid, Message: "nil hash build generation"}
+		panic("nil hash build allocation capacity controller")
+	}
+	b := g.budget
+	b.mu.Lock()
+	if g.used < size || b.aggregateUsed < size {
+		b.mu.Unlock()
+		panic("hash build allocation capacity release underflow")
+	}
+	g.used -= size
+	b.aggregateUsed -= size
+	g.releaseCount++
+	b.mu.Unlock()
+	observeHashBuildBudget("memory", "release", "query", size)
+	observeHashBuildBudget("memory", "release", "cn", size)
+}
+
+// acquireMemory admits one physical MPool allocation. The allocation account
+// is the only owner of the charge and releases it from MPool.Free; there is no
+// parallel estimate/reservation token.
+func (g *HashBuildBudgetGeneration) acquireMemory(size uint64) error {
+	if g == nil || g.budget == nil {
+		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid, Message: "nil hash build generation"}
 	}
 	b := g.budget
 	// A closed budget/generation has a deterministic lifecycle result and does
@@ -1146,7 +1175,7 @@ func (g *HashBuildBudgetGeneration) Reserve(size uint64) (*HashBuildReservation,
 		observeHashBuildBudget("memory", "reject", "query", size)
 		err := &HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed, Requested: size, Used: g.used, Cap: g.cap}
 		b.mu.Unlock()
-		return nil, err
+		return err
 	}
 
 	// The common cached-cap path decides whether a refresh is needed and updates
@@ -1156,16 +1185,19 @@ func (g *HashBuildBudgetGeneration) Reserve(size uint64) (*HashBuildReservation,
 	if cached {
 		if err != nil {
 			b.mu.Unlock()
-			return nil, err
+			return err
 		}
-		token, firstErr, aggregateRejected := g.reserveLocked(size, false)
+		firstErr, aggregateRejected := g.acquireMemoryLocked(
+			size,
+			false,
+		)
 		b.mu.Unlock()
-		if token != nil {
+		if firstErr == nil && !aggregateRejected {
 			observeHashBuildBudget("memory", "reserve", "query", size)
 			observeHashBuildBudget("memory", "reserve", "cn", size)
 		}
 		if !aggregateRejected {
-			return token, firstErr
+			return firstErr
 		}
 	} else {
 		b.mu.Unlock()
@@ -1175,17 +1207,20 @@ func (g *HashBuildBudgetGeneration) Reserve(size uint64) (*HashBuildReservation,
 		var refreshed bool
 		epoch, hasProvider, refreshed, err = b.refreshAggregateCap(false, 0)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		b.mu.Lock()
-		token, firstErr, aggregateRejected := g.reserveLocked(size, false)
+		firstErr, aggregateRejected := g.acquireMemoryLocked(
+			size,
+			false,
+		)
 		b.mu.Unlock()
-		if token != nil {
+		if firstErr == nil && !aggregateRejected {
 			observeHashBuildBudget("memory", "reserve", "query", size)
 			observeHashBuildBudget("memory", "reserve", "cn", size)
 		}
 		if !aggregateRejected {
-			return token, firstErr
+			return firstErr
 		}
 		if refreshed {
 			hasProvider = false
@@ -1197,32 +1232,39 @@ func (g *HashBuildBudgetGeneration) Reserve(size uint64) (*HashBuildReservation,
 	// The epoch check turns concurrent retries into a single-flight operation.
 	if hasProvider {
 		if _, _, _, err = b.refreshAggregateCap(true, epoch); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	b.mu.Lock()
-	token, err, aggregateRejected := g.reserveLocked(size, true)
+	err, aggregateRejected := g.acquireMemoryLocked(
+		size,
+		true,
+	)
 	b.mu.Unlock()
-	if token != nil {
+	if err == nil && !aggregateRejected {
 		observeHashBuildBudget("memory", "reserve", "query", size)
 		observeHashBuildBudget("memory", "reserve", "cn", size)
 	}
 	if aggregateRejected {
-		return nil, err
+		return err
 	}
-	return token, err
+	return err
 }
 
-// reserveLocked attempts one memory reservation. b.mu must be held. The bool
-// result identifies an aggregate-cap failure so Reserve can trigger a forced
+// acquireMemoryLocked attempts one physical-memory admission. b.mu must be
+// held. The bool result identifies an aggregate-cap failure so the caller can
+// trigger a forced
 // live-ceiling refresh without counting a transient failure as a rejection.
-func (g *HashBuildBudgetGeneration) reserveLocked(size uint64, recordAggregateReject bool) (*HashBuildReservation, error, bool) {
+func (g *HashBuildBudgetGeneration) acquireMemoryLocked(
+	size uint64,
+	recordAggregateReject bool,
+) (error, bool) {
 	b := g.budget
 	if b.closed || g.closed {
 		g.rejectCount++
 		observeHashBuildBudget("memory", "reject", "query", size)
-		return nil, &HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed, Requested: size, Used: g.used, Cap: g.cap}, false
+		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed, Requested: size, Used: g.used, Cap: g.cap}, false
 	}
 	// Check by subtraction rather than used+size: this is safe for
 	// math.MaxUint64 and rejects every overflow-sized request.
@@ -1231,7 +1273,7 @@ func (g *HashBuildBudgetGeneration) reserveLocked(size uint64, recordAggregateRe
 			g.rejectCount++
 			observeHashBuildBudget("memory", "reject", "cn", size)
 		}
-		return nil, newAdmissionError(HashBuildBudgetResourceMemory, size, b.aggregateUsed, b.aggregateCap), true
+		return newAdmissionError(size, b.aggregateUsed, b.aggregateCap), true
 	}
 	b.aggregateUsed += size
 	if g.used > g.cap || size > g.cap-g.used {
@@ -1239,150 +1281,34 @@ func (g *HashBuildBudgetGeneration) reserveLocked(size uint64, recordAggregateRe
 		b.aggregateUsed -= size
 		g.rejectCount++
 		observeHashBuildBudget("memory", "reject", "query", size)
-		return nil, newAdmissionError(HashBuildBudgetResourceMemory, size, g.used, g.cap), false
+		return newAdmissionError(size, g.used, g.cap), false
 	}
 	g.used += size
 	g.reserveCount++
 	if g.used > g.peakUsed {
 		g.peakUsed = g.used
 	}
-	return &HashBuildReservation{budget: b, generation: g, core: &hashBuildReservationCore{size: size}}, nil, false
-}
-
-// TryReserve is a boolean convenience for admission-only call sites.
-func (g *HashBuildBudgetGeneration) TryReserve(size uint64) bool {
-	t, err := g.Reserve(size)
-	if err != nil {
-		return false
-	}
-	// A TryReserve caller has no token to retain; immediately release it.  Use
-	// Release rather than manually decrementing to preserve exactly-once state.
-	t.Release()
-	return true
-}
-
-// Grow increases a live memory reservation atomically. It is used for the
-// Shuffle emergency spill-scratch lease so retained copies cannot consume the
-// memory required to recover from a later admission rejection.
-func (r *HashBuildReservation) Grow(additional uint64) error {
-	if r == nil || r.core == nil || r.budget == nil || r.generation == nil {
-		return ErrHashBuildReservationInactive
-	}
-	if additional == 0 {
-		return nil
-	}
-	b := r.budget
-	b.mu.Lock()
-	if r.core.state.Load() != hashBuildReservationActive {
-		b.mu.Unlock()
-		return ErrHashBuildReservationInactive
-	}
-	if b.closed || r.generation.closed {
-		r.generation.rejectCount++
-		observeHashBuildBudget("memory", "reject", "query", additional)
-		err := &HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed, Requested: additional, Used: r.generation.used, Cap: r.generation.cap}
-		b.mu.Unlock()
-		return err
-	}
-
-	_, epoch, hasProvider, cached, err := b.aggregateCapRefreshDecisionLocked(false, 0)
-	if cached {
-		if err != nil {
-			b.mu.Unlock()
-			return err
-		}
-		firstErr, aggregateRejected := r.growLocked(additional, false)
-		b.mu.Unlock()
-		if firstErr == nil {
-			observeHashBuildBudget("memory", "reserve", "query", additional)
-			observeHashBuildBudget("memory", "reserve", "cn", additional)
-		}
-		if !aggregateRejected {
-			return firstErr
-		}
-	} else {
-		b.mu.Unlock()
-		var refreshed bool
-		epoch, hasProvider, refreshed, err = b.refreshAggregateCap(false, 0)
-		if err != nil {
-			return err
-		}
-		b.mu.Lock()
-		firstErr, aggregateRejected := r.growLocked(additional, false)
-		b.mu.Unlock()
-		if firstErr == nil {
-			observeHashBuildBudget("memory", "reserve", "query", additional)
-			observeHashBuildBudget("memory", "reserve", "cn", additional)
-		}
-		if !aggregateRejected {
-			return firstErr
-		}
-		if refreshed {
-			hasProvider = false
-		}
-	}
-
-	if hasProvider {
-		if _, _, _, err = b.refreshAggregateCap(true, epoch); err != nil {
-			return err
-		}
-	}
-	b.mu.Lock()
-	err, aggregateRejected := r.growLocked(additional, true)
-	b.mu.Unlock()
-	if err == nil {
-		observeHashBuildBudget("memory", "reserve", "query", additional)
-		observeHashBuildBudget("memory", "reserve", "cn", additional)
-	}
-	if aggregateRejected {
-		return err
-	}
-	return err
-}
-
-// growLocked attempts one memory reservation growth. b.mu must be held.
-func (r *HashBuildReservation) growLocked(additional uint64, recordAggregateReject bool) (error, bool) {
-	b := r.budget
-	g := r.generation
-	if r.core.state.Load() != hashBuildReservationActive {
-		return ErrHashBuildReservationInactive, false
-	}
-	if b.closed || g.closed {
-		g.rejectCount++
-		observeHashBuildBudget("memory", "reject", "query", additional)
-		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorClosed, Requested: additional, Used: g.used, Cap: g.cap}, false
-	}
-	if b.aggregateUsed > b.aggregateCap || additional > b.aggregateCap-b.aggregateUsed {
-		// Defer the counter/metric until the caller knows whether a forced
-		// refresh can make this transient failure admissible.
-		if recordAggregateReject {
-			g.rejectCount++
-			observeHashBuildBudget("memory", "reject", "cn", additional)
-		}
-		return newAdmissionError(HashBuildBudgetResourceMemory, additional, b.aggregateUsed, b.aggregateCap), true
-	}
-	if g.used > g.cap || additional > g.cap-g.used {
-		g.rejectCount++
-		observeHashBuildBudget("memory", "reject", "query", additional)
-		return newAdmissionError(HashBuildBudgetResourceMemory, additional, g.used, g.cap), false
-	}
-	if r.core.size > math.MaxUint64-additional {
-		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid, Requested: additional, Message: "hash build reservation size overflow"}, false
-	}
-	b.aggregateUsed += additional
-	g.used += additional
-	r.core.size += additional
-	if g.used > g.peakUsed {
-		g.peakUsed = g.used
-	}
-	g.reserveCount++
 	return nil, false
 }
 
-func newAdmissionError(resource HashBuildBudgetResource, requested, used, cap uint64) error {
+func newAdmissionError(requested, used, cap uint64) error {
+	return newComponentAdmissionError(
+		HashBuildBudgetComponentMemory,
+		requested,
+		used,
+		cap,
+	)
+}
+
+func newComponentAdmissionError(
+	component HashBuildBudgetComponent,
+	requested uint64,
+	used uint64,
+	cap uint64,
+) error {
 	return &HashBuildBudgetError{
 		Kind:      HashBuildBudgetErrorAdmission,
-		Resource:  resource,
+		Component: component,
 		Requested: requested,
 		Used:      used,
 		Cap:       cap,
@@ -1390,167 +1316,29 @@ func newAdmissionError(resource HashBuildBudgetResource, requested, used, cap ui
 	}
 }
 
-// HashBuildReservation is an exactly-once ownership token for one charge in
-// both the CN aggregate and its generation.  State transitions are atomic:
-// active -> released or active -> transferred.  A late release therefore
-// always affects the original generation and can never decrement a newer one.
-type HashBuildReservation struct {
-	budget     *HashBuildBudget
-	generation *HashBuildBudgetGeneration
-	// core is shared by accidental token copies, keeping mutable charge and
-	// exactly-once state together under the budget mutex.
-	core *hashBuildReservationCore
-}
-
-type hashBuildReservationCore struct {
+type hashBuildSpillReservationCore struct {
 	size  uint64
 	state atomic.Uint32
 }
 
 const (
-	hashBuildReservationActive uint32 = iota
-	hashBuildReservationReleased
-	hashBuildReservationTransferred
+	hashBuildSpillReservationActive uint32 = iota
+	hashBuildSpillReservationReleased
 )
-
-// Size returns the reservation's current reconciled charge.
-func (r *HashBuildReservation) Size() uint64 {
-	if r == nil || r.budget == nil || r.core == nil {
-		return 0
-	}
-	r.budget.mu.Lock()
-	defer r.budget.mu.Unlock()
-	return r.core.size
-}
-
-// GenerationID returns the generation charged by this token.
-func (r *HashBuildReservation) GenerationID() uint64 {
-	if r == nil || r.generation == nil {
-		return 0
-	}
-	return r.generation.id
-}
-
-// Released reports whether this token has relinquished its ownership.  A
-// transferred token is not released, but no longer owns the charge.
-func (r *HashBuildReservation) Released() bool {
-	if r == nil || r.core == nil {
-		return true
-	}
-	if r.budget == nil {
-		return r.core.state.Load() != hashBuildReservationActive
-	}
-	r.budget.mu.Lock()
-	defer r.budget.mu.Unlock()
-	return r.core.state.Load() != hashBuildReservationActive
-}
-
-// Release relinquishes this token once.  It returns true only for the caller
-// that won the active -> released transition.
-func (r *HashBuildReservation) Release() bool {
-	if r == nil || r.core == nil || r.budget == nil || r.generation == nil {
-		return false
-	}
-	r.budget.mu.Lock()
-	if !r.core.state.CompareAndSwap(hashBuildReservationActive, hashBuildReservationReleased) {
-		r.budget.mu.Unlock()
-		return false
-	}
-	size := r.core.size
-	// The subtraction is exact for a live token.  Keep a defensive branch so
-	// corrupted state cannot underflow and turn into an apparent huge charge.
-	if r.generation.used >= size {
-		r.generation.used -= size
-	} else {
-		r.generation.used = 0
-	}
-	if r.budget.aggregateUsed >= size {
-		r.budget.aggregateUsed -= size
-	} else {
-		r.budget.aggregateUsed = 0
-	}
-	r.generation.releaseCount++
-	r.budget.mu.Unlock()
-	observeHashBuildBudget("memory", "release", "query", size)
-	observeHashBuildBudget("memory", "release", "cn", size)
-	return true
-}
-
-// ReconcileDown shrinks a live charge to actual bytes. It is linearized with
-// reserve/release/transfer under the owning budget mutex. Upward reconciliation
-// is rejected and inactive tokens never mutate counters.
-func (r *HashBuildReservation) ReconcileDown(actual uint64) (bool, error) {
-	if r == nil || r.core == nil || r.budget == nil || r.generation == nil {
-		return false, ErrHashBuildReservationInactive
-	}
-	r.budget.mu.Lock()
-	if r.core.state.Load() != hashBuildReservationActive {
-		r.budget.mu.Unlock()
-		return false, ErrHashBuildReservationInactive
-	}
-	if actual > r.core.size {
-		r.budget.mu.Unlock()
-		return false, ErrHashBuildReservationUpward
-	}
-	delta := r.core.size - actual
-	if delta > 0 {
-		if r.generation.used < delta || r.budget.aggregateUsed < delta {
-			r.budget.mu.Unlock()
-			return false, ErrHashBuildReservationInactive
-		}
-		r.generation.used -= delta
-		r.budget.aggregateUsed -= delta
-		r.core.size = actual
-	}
-	r.generation.reconcileCount++
-	r.budget.mu.Unlock()
-	if delta > 0 {
-		observeHashBuildBudget("memory", "reconcile", "query", delta)
-		observeHashBuildBudget("memory", "reconcile", "cn", delta)
-	}
-	return true, nil
-}
-
-// Reconcile is a compatibility alias.
-func (r *HashBuildReservation) Reconcile(actual uint64) (bool, error) { return r.ReconcileDown(actual) }
-
-// Transfer moves ownership to a fresh token exactly once.  The original token
-// becomes inert; releasing it after a successful transfer cannot decrement the
-// budget.  If Release wins the race, Transfer returns nil.
-func (r *HashBuildReservation) Transfer() *HashBuildReservation {
-	if r == nil || r.core == nil || r.budget == nil {
-		return nil
-	}
-	r.budget.mu.Lock()
-	defer r.budget.mu.Unlock()
-	if !r.core.state.CompareAndSwap(hashBuildReservationActive, hashBuildReservationTransferred) {
-		return nil
-	}
-	return &HashBuildReservation{budget: r.budget, generation: r.generation, core: &hashBuildReservationCore{size: r.core.size}}
-}
-
-// TransferOwnership is a descriptive alias for Transfer.
-func (r *HashBuildReservation) TransferOwnership() *HashBuildReservation { return r.Transfer() }
-
-// TransferTo is another descriptive spelling for ownership transfer.
-func (r *HashBuildReservation) TransferTo() *HashBuildReservation { return r.Transfer() }
 
 // HashBuildSpillDiskReservation owns query and CN spill-disk bytes.
 type HashBuildSpillDiskReservation struct {
 	budget     *HashBuildBudget
 	generation *HashBuildBudgetGeneration
-	core       *hashBuildReservationCore
+	core       *hashBuildSpillReservationCore
 }
 
 // HashBuildSpillFDReservation owns query and CN spill file descriptors.
 type HashBuildSpillFDReservation struct {
 	budget     *HashBuildBudget
 	generation *HashBuildBudgetGeneration
-	core       *hashBuildReservationCore
+	core       *hashBuildSpillReservationCore
 }
-
-type SpillDiskReservation = HashBuildSpillDiskReservation
-type SpillFDReservation = HashBuildSpillFDReservation
 
 func (r *HashBuildSpillDiskReservation) Size() uint64 {
 	if r == nil || r.budget == nil || r.core == nil {
@@ -1568,13 +1356,6 @@ func (r *HashBuildSpillFDReservation) Size() uint64 {
 	defer r.budget.mu.Unlock()
 	return r.core.size
 }
-func (r *HashBuildSpillDiskReservation) Released() bool {
-	return r == nil || r.core == nil || r.core.state.Load() != hashBuildReservationActive
-}
-func (r *HashBuildSpillFDReservation) Released() bool {
-	return r == nil || r.core == nil || r.core.state.Load() != hashBuildReservationActive
-}
-
 func (g *HashBuildBudgetGeneration) ReserveSpillDisk(size uint64) (*HashBuildSpillDiskReservation, error) {
 	if g == nil || g.budget == nil {
 		return nil, &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid}
@@ -1590,22 +1371,18 @@ func (g *HashBuildBudgetGeneration) ReserveSpillDisk(size uint64) (*HashBuildSpi
 	if b.spillDiskUsed > b.spillDiskCap || size > b.spillDiskCap-b.spillDiskUsed {
 		g.rejectCount++
 		observeHashBuildBudget("spill_disk", "reject", "cn", size)
-		return nil, newAdmissionError(HashBuildBudgetResourceSpillDisk, size, b.spillDiskUsed, b.spillDiskCap)
+		return nil, newComponentAdmissionError(HashBuildBudgetComponentSpillDisk, size, b.spillDiskUsed, b.spillDiskCap)
 	}
 	if g.spillDiskUsed > g.spillDiskCap || size > g.spillDiskCap-g.spillDiskUsed {
 		g.rejectCount++
 		observeHashBuildBudget("spill_disk", "reject", "query", size)
-		return nil, newAdmissionError(HashBuildBudgetResourceSpillDisk, size, g.spillDiskUsed, g.spillDiskCap)
+		return nil, newComponentAdmissionError(HashBuildBudgetComponentSpillDisk, size, g.spillDiskUsed, g.spillDiskCap)
 	}
 	b.spillDiskUsed += size
 	g.spillDiskUsed += size
 	observeHashBuildBudget("spill_disk", "reserve", "query", size)
 	observeHashBuildBudget("spill_disk", "reserve", "cn", size)
-	return &HashBuildSpillDiskReservation{budget: b, generation: g, core: &hashBuildReservationCore{size: size}}, nil
-}
-
-func (g *HashBuildBudgetGeneration) ReserveSpillDiskBytes(size uint64) (*HashBuildSpillDiskReservation, error) {
-	return g.ReserveSpillDisk(size)
+	return &HashBuildSpillDiskReservation{budget: b, generation: g, core: &hashBuildSpillReservationCore{size: size}}, nil
 }
 
 // Grow increases one live per-file disk reservation without allocating a new
@@ -1613,7 +1390,7 @@ func (g *HashBuildBudgetGeneration) ReserveSpillDiskBytes(size uint64) (*HashBui
 // rather than to the number of tiny batch records written to those files.
 func (r *HashBuildSpillDiskReservation) Grow(additional uint64) error {
 	if r == nil || r.core == nil || r.budget == nil || r.generation == nil {
-		return ErrHashBuildReservationInactive
+		return ErrHashBuildSpillReservationInactive
 	}
 	if additional == 0 {
 		return nil
@@ -1622,8 +1399,8 @@ func (r *HashBuildSpillDiskReservation) Grow(additional uint64) error {
 	g := r.generation
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if r.core.state.Load() != hashBuildReservationActive {
-		return ErrHashBuildReservationInactive
+	if r.core.state.Load() != hashBuildSpillReservationActive {
+		return ErrHashBuildSpillReservationInactive
 	}
 	if b.closed || g.closed {
 		g.rejectCount++
@@ -1633,12 +1410,12 @@ func (r *HashBuildSpillDiskReservation) Grow(additional uint64) error {
 	if b.spillDiskUsed > b.spillDiskCap || additional > b.spillDiskCap-b.spillDiskUsed {
 		g.rejectCount++
 		observeHashBuildBudget("spill_disk", "reject", "cn", additional)
-		return newAdmissionError(HashBuildBudgetResourceSpillDisk, additional, b.spillDiskUsed, b.spillDiskCap)
+		return newComponentAdmissionError(HashBuildBudgetComponentSpillDisk, additional, b.spillDiskUsed, b.spillDiskCap)
 	}
 	if g.spillDiskUsed > g.spillDiskCap || additional > g.spillDiskCap-g.spillDiskUsed {
 		g.rejectCount++
 		observeHashBuildBudget("spill_disk", "reject", "query", additional)
-		return newAdmissionError(HashBuildBudgetResourceSpillDisk, additional, g.spillDiskUsed, g.spillDiskCap)
+		return newComponentAdmissionError(HashBuildBudgetComponentSpillDisk, additional, g.spillDiskUsed, g.spillDiskCap)
 	}
 	if r.core.size > math.MaxUint64-additional {
 		return &HashBuildBudgetError{Kind: HashBuildBudgetErrorInvalid, Requested: additional, Message: "spill disk reservation size overflow"}
@@ -1676,22 +1453,18 @@ func (g *HashBuildBudgetGeneration) ReserveSpillFD(size uint64) (*HashBuildSpill
 	if b.spillFDUsed > b.spillFDCap || size > b.spillFDCap-b.spillFDUsed {
 		g.rejectCount++
 		observeHashBuildBudget("spill_fd", "reject", "cn", size)
-		return nil, newAdmissionError(HashBuildBudgetResourceSpillFD, size, b.spillFDUsed, b.spillFDCap)
+		return nil, newComponentAdmissionError(HashBuildBudgetComponentSpillFD, size, b.spillFDUsed, b.spillFDCap)
 	}
 	if g.spillFDUsed > g.spillFDCap || size > g.spillFDCap-g.spillFDUsed {
 		g.rejectCount++
 		observeHashBuildBudget("spill_fd", "reject", "query", size)
-		return nil, newAdmissionError(HashBuildBudgetResourceSpillFD, size, g.spillFDUsed, g.spillFDCap)
+		return nil, newComponentAdmissionError(HashBuildBudgetComponentSpillFD, size, g.spillFDUsed, g.spillFDCap)
 	}
 	b.spillFDUsed += size
 	g.spillFDUsed += size
 	observeHashBuildBudget("spill_fd", "reserve", "query", size)
 	observeHashBuildBudget("spill_fd", "reserve", "cn", size)
-	return &HashBuildSpillFDReservation{budget: b, generation: g, core: &hashBuildReservationCore{size: size}}, nil
-}
-
-func (g *HashBuildBudgetGeneration) ReserveSpillFileDescriptors(size uint64) (*HashBuildSpillFDReservation, error) {
-	return g.ReserveSpillFD(size)
+	return &HashBuildSpillFDReservation{budget: b, generation: g, core: &hashBuildSpillReservationCore{size: size}}, nil
 }
 
 func (r *HashBuildSpillDiskReservation) Release() bool {
@@ -1700,19 +1473,15 @@ func (r *HashBuildSpillDiskReservation) Release() bool {
 	}
 	r.budget.mu.Lock()
 	defer r.budget.mu.Unlock()
-	if !r.core.state.CompareAndSwap(hashBuildReservationActive, hashBuildReservationReleased) {
+	if !r.core.state.CompareAndSwap(hashBuildSpillReservationActive, hashBuildSpillReservationReleased) {
 		return false
 	}
-	if r.generation.spillDiskUsed >= r.core.size {
-		r.generation.spillDiskUsed -= r.core.size
-	} else {
-		r.generation.spillDiskUsed = 0
+	if r.generation.spillDiskUsed < r.core.size ||
+		r.budget.spillDiskUsed < r.core.size {
+		panic("hash build spill disk reservation release underflow")
 	}
-	if r.budget.spillDiskUsed >= r.core.size {
-		r.budget.spillDiskUsed -= r.core.size
-	} else {
-		r.budget.spillDiskUsed = 0
-	}
+	r.generation.spillDiskUsed -= r.core.size
+	r.budget.spillDiskUsed -= r.core.size
 	observeHashBuildBudget("spill_disk", "release", "query", r.core.size)
 	observeHashBuildBudget("spill_disk", "release", "cn", r.core.size)
 	r.generation.releaseCount++
@@ -1725,19 +1494,15 @@ func (r *HashBuildSpillFDReservation) Release() bool {
 	}
 	r.budget.mu.Lock()
 	defer r.budget.mu.Unlock()
-	if !r.core.state.CompareAndSwap(hashBuildReservationActive, hashBuildReservationReleased) {
+	if !r.core.state.CompareAndSwap(hashBuildSpillReservationActive, hashBuildSpillReservationReleased) {
 		return false
 	}
-	if r.generation.spillFDUsed >= r.core.size {
-		r.generation.spillFDUsed -= r.core.size
-	} else {
-		r.generation.spillFDUsed = 0
+	if r.generation.spillFDUsed < r.core.size ||
+		r.budget.spillFDUsed < r.core.size {
+		panic("hash build spill fd reservation release underflow")
 	}
-	if r.budget.spillFDUsed >= r.core.size {
-		r.budget.spillFDUsed -= r.core.size
-	} else {
-		r.budget.spillFDUsed = 0
-	}
+	r.generation.spillFDUsed -= r.core.size
+	r.budget.spillFDUsed -= r.core.size
 	observeHashBuildBudget("spill_fd", "release", "query", r.core.size)
 	observeHashBuildBudget("spill_fd", "release", "cn", r.core.size)
 	r.generation.releaseCount++
@@ -1746,20 +1511,20 @@ func (r *HashBuildSpillFDReservation) Release() bool {
 
 func (r *HashBuildSpillDiskReservation) ReconcileDown(actual uint64) (bool, error) {
 	if r == nil || r.core == nil || r.budget == nil || r.generation == nil {
-		return false, ErrHashBuildReservationInactive
+		return false, ErrHashBuildSpillReservationInactive
 	}
 	r.budget.mu.Lock()
 	defer r.budget.mu.Unlock()
-	if r.core.state.Load() != hashBuildReservationActive {
-		return false, ErrHashBuildReservationInactive
+	if r.core.state.Load() != hashBuildSpillReservationActive {
+		return false, ErrHashBuildSpillReservationInactive
 	}
 	if actual > r.core.size {
-		return false, ErrHashBuildReservationUpward
+		return false, ErrHashBuildSpillReservationUpward
 	}
 	delta := r.core.size - actual
 	if delta > 0 {
 		if r.generation.spillDiskUsed < delta || r.budget.spillDiskUsed < delta {
-			return false, ErrHashBuildReservationInactive
+			return false, ErrHashBuildSpillReservationInactive
 		}
 		r.generation.spillDiskUsed -= delta
 		r.budget.spillDiskUsed -= delta
@@ -1770,71 +1535,6 @@ func (r *HashBuildSpillDiskReservation) ReconcileDown(actual uint64) (bool, erro
 	r.generation.reconcileCount++
 	return true, nil
 }
-func (r *HashBuildSpillFDReservation) ReconcileDown(actual uint64) (bool, error) {
-	if r == nil || r.core == nil || r.budget == nil || r.generation == nil {
-		return false, ErrHashBuildReservationInactive
-	}
-	r.budget.mu.Lock()
-	defer r.budget.mu.Unlock()
-	if r.core.state.Load() != hashBuildReservationActive {
-		return false, ErrHashBuildReservationInactive
-	}
-	if actual > r.core.size {
-		return false, ErrHashBuildReservationUpward
-	}
-	delta := r.core.size - actual
-	if delta > 0 {
-		if r.generation.spillFDUsed < delta || r.budget.spillFDUsed < delta {
-			return false, ErrHashBuildReservationInactive
-		}
-		r.generation.spillFDUsed -= delta
-		r.budget.spillFDUsed -= delta
-		r.core.size = actual
-		observeHashBuildBudget("spill_fd", "reconcile", "query", delta)
-		observeHashBuildBudget("spill_fd", "reconcile", "cn", delta)
-	}
-	r.generation.reconcileCount++
-	return true, nil
-}
-func (r *HashBuildSpillDiskReservation) Reconcile(actual uint64) (bool, error) {
-	return r.ReconcileDown(actual)
-}
-func (r *HashBuildSpillFDReservation) Reconcile(actual uint64) (bool, error) {
-	return r.ReconcileDown(actual)
-}
-
-func (r *HashBuildSpillDiskReservation) Transfer() *HashBuildSpillDiskReservation {
-	if r == nil || r.core == nil || r.budget == nil {
-		return nil
-	}
-	r.budget.mu.Lock()
-	defer r.budget.mu.Unlock()
-	if !r.core.state.CompareAndSwap(hashBuildReservationActive, hashBuildReservationTransferred) {
-		return nil
-	}
-	return &HashBuildSpillDiskReservation{budget: r.budget, generation: r.generation, core: &hashBuildReservationCore{size: r.core.size}}
-}
-func (r *HashBuildSpillFDReservation) Transfer() *HashBuildSpillFDReservation {
-	if r == nil || r.core == nil || r.budget == nil {
-		return nil
-	}
-	r.budget.mu.Lock()
-	defer r.budget.mu.Unlock()
-	if !r.core.state.CompareAndSwap(hashBuildReservationActive, hashBuildReservationTransferred) {
-		return nil
-	}
-	return &HashBuildSpillFDReservation{budget: r.budget, generation: r.generation, core: &hashBuildReservationCore{size: r.core.size}}
-}
-func (r *HashBuildSpillDiskReservation) TransferOwnership() *HashBuildSpillDiskReservation {
-	return r.Transfer()
-}
-func (r *HashBuildSpillFDReservation) TransferOwnership() *HashBuildSpillFDReservation {
-	return r.Transfer()
-}
-func (r *HashBuildSpillDiskReservation) TransferTo() *HashBuildSpillDiskReservation {
-	return r.Transfer()
-}
-func (r *HashBuildSpillFDReservation) TransferTo() *HashBuildSpillFDReservation { return r.Transfer() }
 
 // HashBuildCeilingInputs are the finite resource sources used by
 // ResolveHashBuildCeiling.  A zero or math.MaxUint64 source means unavailable
@@ -1916,18 +1616,6 @@ func ResolveHashBuildCeiling(in HashBuildCeilingInputs) (HashBuildCeiling, error
 		CNHashCap:        cnCap,
 		QueryCap:         queryCap,
 	}, nil
-}
-
-// ResolveHashBuildBudget is a semantic alias used by budget initialization
-// callers.
-func ResolveHashBuildBudget(in HashBuildCeilingInputs) (HashBuildCeiling, error) {
-	return ResolveHashBuildCeiling(in)
-}
-
-// NewHashBuildBudgetFromCeiling wires a resolved ceiling into the local-CN
-// aggregate/generation budget.
-func NewHashBuildBudgetFromCeiling(ceiling HashBuildCeiling) (*HashBuildBudget, error) {
-	return NewHashBuildBudget(ceiling.CNHashCap, ceiling.QueryCap)
 }
 
 // GetHashBuildBudget returns the statement generation shared by every child

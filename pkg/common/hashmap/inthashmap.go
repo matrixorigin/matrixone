@@ -32,8 +32,16 @@ func init() {
 }
 
 func NewIntHashMap(hasNull bool, memPool *mpool.MPool) (*IntHashMap, error) {
+	return NewIntHashMapWithAllocation(hasNull, memPool, nil)
+}
+
+func NewIntHashMapWithAllocation(
+	hasNull bool,
+	memPool *mpool.MPool,
+	allocation *hashtable.AllocationAccountSelection,
+) (*IntHashMap, error) {
 	mp := &hashtable.Int64HashMap{}
-	if err := mp.Init(memPool); err != nil {
+	if err := mp.InitWithAllocation(memPool, allocation); err != nil {
 		return nil, err
 	}
 	return &IntHashMap{

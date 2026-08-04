@@ -27,7 +27,6 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -130,14 +129,14 @@ func mergeReceiverChannelBufferSize(s *Scope) int {
 
 type operatorDupContext struct {
 	shufflePools       map[*shuffle.Shuffle]*shuffle.ShufflePool
-	hashJoinChannels   map[*hashjoin.HashJoin]chan *bitmap.Bitmap
+	hashJoinMailboxes  map[*hashjoin.HashJoin]*hashjoin.BitmapMailbox
 	dedupJoinMailboxes map[*dedupjoin.DedupJoin]*dedupjoin.WorkerJoinMailbox
 }
 
 func newOperatorDupContext() *operatorDupContext {
 	return &operatorDupContext{
 		shufflePools:       make(map[*shuffle.Shuffle]*shuffle.ShufflePool),
-		hashJoinChannels:   make(map[*hashjoin.HashJoin]chan *bitmap.Bitmap),
+		hashJoinMailboxes:  make(map[*hashjoin.HashJoin]*hashjoin.BitmapMailbox),
 		dedupJoinMailboxes: make(map[*dedupjoin.DedupJoin]*dedupjoin.WorkerJoinMailbox),
 	}
 }
@@ -230,12 +229,12 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.CanSkipProbe = t.CanSkipProbe
 		op.IsShuffle = t.IsShuffle
 		if !t.IsShuffle {
-			channel := dupCtx.hashJoinChannels[t]
-			if channel == nil {
-				channel = make(chan *bitmap.Bitmap, maxParallel)
-				dupCtx.hashJoinChannels[t] = channel
+			mailbox := dupCtx.hashJoinMailboxes[t]
+			if mailbox == nil {
+				mailbox = hashjoin.NewBitmapMailbox(maxParallel)
+				dupCtx.hashJoinMailboxes[t] = mailbox
 			}
-			op.Channel = channel
+			op.Mailbox = mailbox
 			op.NumCPU = uint64(maxParallel)
 			op.IsMerger = (index == 0)
 		}
@@ -716,6 +715,14 @@ func constructFuzzyFilter(node, tableScan, sinkScan *plan.Node) *fuzzyfilter.Fuz
 				pkTyp = c.Typ
 			}
 		}
+	}
+	// The fuzzy-filter children may project a key identity expression whose
+	// type differs from the stored column. FLOAT/DOUBLE primary keys use
+	// serial(...) bytes, and the operator must allocate/hash that actual type.
+	if len(sinkScan.ProjectList) > 0 {
+		pkTyp = sinkScan.ProjectList[0].Typ
+	} else if len(tableScan.ProjectList) > 0 {
+		pkTyp = tableScan.ProjectList[0].Typ
 	}
 
 	op := fuzzyfilter.NewArgument()

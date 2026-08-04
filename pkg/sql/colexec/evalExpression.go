@@ -92,9 +92,20 @@ type ExpressionExecutor interface {
 }
 
 func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs []*plan.Expr) (executors []ExpressionExecutor, err error) {
+	return NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, planExprs, nil)
+}
+
+// NewExpressionExecutorsFromPlanExpressionsWithAllocation builds a complete
+// expression tree whose owned MPool vectors use one immutable allocation
+// selection. Borrowed input vectors remain owned and charged by their source.
+func NewExpressionExecutorsFromPlanExpressionsWithAllocation(
+	proc *process.Process,
+	planExprs []*plan.Expr,
+	selection *vector.AllocationAccountSelection,
+) (executors []ExpressionExecutor, err error) {
 	executors = make([]ExpressionExecutor, len(planExprs))
 	for i := range executors {
-		executors[i], err = NewExpressionExecutor(proc, planExprs[i])
+		executors[i], err = NewExpressionExecutorWithAllocation(proc, planExprs[i], selection)
 		if err != nil {
 			for j := 0; j < i; j++ {
 				executors[j].Free()
@@ -106,10 +117,18 @@ func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs 
 }
 
 func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (ExpressionExecutor, error) {
+	return NewExpressionExecutorWithAllocation(proc, planExpr, nil)
+}
+
+func NewExpressionExecutorWithAllocation(
+	proc *process.Process,
+	planExpr *plan.Expr,
+	selection *vector.AllocationAccountSelection,
+) (ExpressionExecutor, error) {
 	switch t := planExpr.Expr.(type) {
 	case *plan.Expr_Lit:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
-		vec, err := generateConstExpressionExecutor(proc, typ, t.Lit)
+		vec, err := generateConstExpressionExecutor(proc, typ, t.Lit, selection)
 		if err != nil {
 			return nil, err
 		}
@@ -117,17 +136,21 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 
 	case *plan.Expr_T:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
-		vec := vector.NewConstNull(typ, 1, proc.Mp())
+		vec, err := newExpressionConstNull(typ, 1, selection)
+		if err != nil {
+			return nil, err
+		}
 		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
 
 	case *plan.Expr_Col:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
 		ce := NewColumnExpressionExecutor()
 		*ce = ColumnExpressionExecutor{
-			mp:       proc.Mp(),
-			relIndex: int(t.Col.RelPos),
-			colIndex: int(t.Col.ColPos),
-			typ:      typ,
+			mp:         proc.Mp(),
+			relIndex:   int(t.Col.RelPos),
+			colIndex:   int(t.Col.ColPos),
+			typ:        typ,
+			allocation: selection,
 		}
 		// [issue#19574]
 		// if < 0, it's special for agg or others.
@@ -138,17 +161,20 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 
 	case *plan.Expr_P:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
-		return NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ), nil
+		executor := NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ)
+		executor.allocation = selection
+		return executor, nil
 
 	case *plan.Expr_V:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
 		ve := NewVarExpressionExecutor()
 		*ve = VarExpressionExecutor{
-			mp:     proc.Mp(),
-			name:   t.V.Name,
-			system: t.V.System,
-			global: t.V.Global,
-			typ:    typ,
+			mp:         proc.Mp(),
+			name:       t.V.Name,
+			system:     t.V.System,
+			global:     t.V.Global,
+			typ:        typ,
+			allocation: selection,
 		}
 		return ve, nil
 
@@ -156,6 +182,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		vec := vector.NewVec(types.T_any.ToType())
 		err := vec.UnmarshalBinary(t.Vec.Data)
 		if err != nil {
+			vec.Free(proc.Mp())
 			return nil, err
 		}
 		return NewFixedVectorExpressionExecutor(proc.Mp(), true, vec), nil
@@ -164,9 +191,12 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		executor := NewListExpressionExecutor()
 		resultVecTyp := t.List.List[0].GetTyp()
 		typ := types.New(types.T(resultVecTyp.Id), resultVecTyp.Width, resultVecTyp.Scale)
-		executor.Init(proc, typ, len(t.List.List))
+		if err := executor.init(proc, typ, len(t.List.List), selection); err != nil {
+			executor.Free()
+			return nil, err
+		}
 		for i := range executor.parameterExecutor {
-			subExecutor, paramErr := NewExpressionExecutor(proc, t.List.List[i])
+			subExecutor, paramErr := NewExpressionExecutorWithAllocation(proc, t.List.List[i], selection)
 			if paramErr != nil {
 				executor.Free()
 				return nil, paramErr
@@ -196,13 +226,13 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		}
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
 
-		if err = executor.Init(proc, len(t.F.Args), typ); err != nil {
+		if err = executor.init(proc, len(t.F.Args), typ, selection); err != nil {
 			executor.Free()
 			return nil, err
 		}
 
 		for i := range executor.parameterExecutor {
-			subExecutor, paramErr := NewExpressionExecutor(proc, t.F.Args[i])
+			subExecutor, paramErr := NewExpressionExecutorWithAllocation(proc, t.F.Args[i], selection)
 			if paramErr != nil {
 				executor.Free()
 				return nil, paramErr
@@ -213,6 +243,66 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 	}
 
 	return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported expression executor for %v now", planExpr))
+}
+
+func newExpressionOffHeapVector(
+	typ types.Type,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, error) {
+	if selection == nil {
+		return vector.NewOffHeapVecWithType(typ), nil
+	}
+	return vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
+}
+
+func newExpressionConstNull(
+	typ types.Type,
+	length int,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, error) {
+	if selection == nil {
+		return vector.NewConstNull(typ, length, nil), nil
+	}
+	return vector.NewConstNullWithAllocation(typ, length, selection)
+}
+
+func newExpressionConstFixed[T any](
+	typ types.Type,
+	value T,
+	length int,
+	mp *mpool.MPool,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, error) {
+	if selection == nil {
+		return vector.NewConstFixed(typ, value, length, mp)
+	}
+	return vector.NewConstFixedWithAllocation(typ, value, length, mp, selection)
+}
+
+func newExpressionConstBytes(
+	typ types.Type,
+	value []byte,
+	length int,
+	mp *mpool.MPool,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, error) {
+	if selection == nil {
+		return vector.NewConstBytes(typ, value, length, mp)
+	}
+	return vector.NewConstBytesWithAllocation(typ, value, length, mp, selection)
+}
+
+func newExpressionConstArray[T types.ArrayElement](
+	typ types.Type,
+	value []T,
+	length int,
+	mp *mpool.MPool,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, error) {
+	if selection == nil {
+		return vector.NewConstArray(typ, value, length, mp)
+	}
+	return vector.NewConstArrayWithAllocation(typ, value, length, mp, selection)
 }
 
 // FixedVectorExpressionExecutor
@@ -230,7 +320,8 @@ type FixedVectorExpressionExecutor struct {
 }
 
 type FunctionExpressionExecutor struct {
-	m *mpool.MPool
+	m          *mpool.MPool
+	allocation *vector.AllocationAccountSelection
 	// resultType is the declared function return type. Some built-ins refine
 	// result metadata (for example temporal scale or decimal width/scale) at
 	// runtime, so reusable result vectors must start each evaluation from this
@@ -262,9 +353,10 @@ type FunctionExpressionExecutor struct {
 }
 
 type ColumnExpressionExecutor struct {
-	mp       *mpool.MPool
-	relIndex int
-	colIndex int
+	mp         *mpool.MPool
+	allocation *vector.AllocationAccountSelection
+	relIndex   int
+	colIndex   int
 
 	// result type.
 	typ types.Type
@@ -283,8 +375,9 @@ func (expr *ColumnExpressionExecutor) GetColIndex() int {
 }
 
 type ParamExpressionExecutor struct {
-	mp   *mpool.MPool
-	null *vector.Vector
+	mp         *mpool.MPool
+	allocation *vector.AllocationAccountSelection
+	null       *vector.Vector
 	// maskedNull is separate from null/vec because it is not a resolved
 	// parameter value and must never participate in the folded-value cache.
 	maskedNull *vector.Vector
@@ -298,7 +391,11 @@ type ParamExpressionExecutor struct {
 func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
 	if noRowsSelected(selectList, expressionRowCount(batches)) {
 		if expr.maskedNull == nil {
-			expr.maskedNull = vector.NewConstNull(expr.typ, 1, proc.GetMPool())
+			var err error
+			expr.maskedNull, err = newExpressionConstNull(expr.typ, 1, expr.allocation)
+			if err != nil {
+				return nil, err
+			}
 		}
 		return expr.maskedNull, nil
 	}
@@ -319,13 +416,18 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 
 	if val == nil {
 		if expr.null == nil {
-			expr.null = vector.NewConstNull(expr.typ, 1, proc.GetMPool())
+			expr.null, err = newExpressionConstNull(expr.typ, 1, expr.allocation)
+			if err != nil {
+				return nil, err
+			}
 		}
 		return expr.null, nil
 	}
 
 	if expr.vec == nil {
-		expr.vec, err = vector.NewConstBytes(expr.typ, val, 1, proc.Mp())
+		expr.vec, err = newExpressionConstBytes(
+			expr.typ, val, 1, proc.Mp(), expr.allocation,
+		)
 	} else {
 		err = vector.SetConstBytes(expr.vec, val, 1, proc.GetMPool())
 	}
@@ -373,8 +475,9 @@ func (expr *ParamExpressionExecutor) IsColumnExpr() bool {
 }
 
 type VarExpressionExecutor struct {
-	mp   *mpool.MPool
-	null *vector.Vector
+	mp         *mpool.MPool
+	allocation *vector.AllocationAccountSelection
+	null       *vector.Vector
 	// maskedNull lets a skipped variable avoid the resolver without changing
 	// the value cache used by a later selected evaluation.
 	maskedNull *vector.Vector
@@ -389,7 +492,11 @@ type VarExpressionExecutor struct {
 func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
 	if noRowsSelected(selectList, expressionRowCount(batches)) {
 		if expr.maskedNull == nil {
-			expr.maskedNull = vector.NewConstNull(expr.typ, 1, proc.GetMPool())
+			var err error
+			expr.maskedNull, err = newExpressionConstNull(expr.typ, 1, expr.allocation)
+			if err != nil {
+				return nil, err
+			}
 		}
 		return expr.maskedNull, nil
 	}
@@ -411,7 +518,9 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 
 	if val == nil {
 		if expr.null == nil {
-			expr.null, err = util.GenVectorByVarValue(proc, expr.typ, nil)
+			expr.null, err = util.GenVectorByVarValueWithAllocation(
+				proc, expr.typ, nil, expr.allocation,
+			)
 		}
 		if err == nil {
 			expr.null.SetIsBin(isBin)
@@ -420,7 +529,9 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	}
 
 	if expr.vec == nil {
-		expr.vec, err = util.GenVectorByVarValue(proc, expr.typ, val)
+		expr.vec, err = util.GenVectorByVarValueWithAllocation(
+			proc, expr.typ, val, expr.allocation,
+		)
 	} else {
 		switch v := val.(type) {
 		case []byte:
@@ -474,7 +585,8 @@ func (expr *VarExpressionExecutor) IsColumnExpr() bool {
 }
 
 type ListExpressionExecutor struct {
-	mp *mpool.MPool
+	mp         *mpool.MPool
+	allocation *vector.AllocationAccountSelection
 
 	typ               types.Type
 	resultVector      *vector.Vector
@@ -484,11 +596,17 @@ type ListExpressionExecutor struct {
 func (expr *ListExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
 
 	if expr.resultVector == nil {
-		expr.resultVector = vector.NewOffHeapVecWithType(expr.typ)
+		var err error
+		expr.resultVector, err = newExpressionOffHeapVector(expr.typ, expr.allocation)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		expr.resultVector.CleanOnlyData()
 	}
-	expr.resultVector.PreExtend(len(expr.parameterExecutor), proc.Mp())
+	if err := expr.resultVector.PreExtend(len(expr.parameterExecutor), proc.Mp()); err != nil {
+		return nil, err
+	}
 	for i := range expr.parameterExecutor {
 		vec, err := expr.parameterExecutor[i].Eval(proc, batches, selectList)
 		if err != nil {
@@ -517,7 +635,9 @@ func (expr *ListExpressionExecutor) Free() {
 		return
 	}
 	for _, e := range expr.parameterExecutor {
-		e.Free()
+		if e != nil {
+			e.Free()
+		}
 	}
 	if expr.resultVector != nil {
 		expr.resultVector.Free(expr.mp)
@@ -531,12 +651,26 @@ func (expr *ListExpressionExecutor) IsColumnExpr() bool {
 }
 
 func (expr *ListExpressionExecutor) Init(proc *process.Process, typ types.Type, parameterNum int) {
+	if err := expr.init(proc, typ, parameterNum, nil); err != nil {
+		panic(err)
+	}
+}
+
+func (expr *ListExpressionExecutor) init(
+	proc *process.Process,
+	typ types.Type,
+	parameterNum int,
+	selection *vector.AllocationAccountSelection,
+) error {
 	m := proc.Mp()
 
 	expr.typ = typ
 	expr.mp = m
+	expr.allocation = selection
 	expr.parameterExecutor = make([]ExpressionExecutor, parameterNum)
-	expr.resultVector = vector.NewOffHeapVecWithType(typ)
+	var err error
+	expr.resultVector, err = newExpressionOffHeapVector(typ, selection)
+	return err
 }
 
 func (expr *ListExpressionExecutor) SetParameter(index int, executor ExpressionExecutor) {
@@ -553,14 +687,24 @@ func (expr *FunctionExpressionExecutor) Init(
 	proc *process.Process,
 	parameterNum int,
 	retType types.Type) (err error) {
+	return expr.init(proc, parameterNum, retType, nil)
+}
+
+func (expr *FunctionExpressionExecutor) init(
+	proc *process.Process,
+	parameterNum int,
+	retType types.Type,
+	selection *vector.AllocationAccountSelection,
+) (err error) {
 	m := proc.Mp()
 
 	expr.m = m
+	expr.allocation = selection
 	expr.resultType = retType
 	expr.parameterResults = make([]*vector.Vector, parameterNum)
 	expr.parameterExecutor = make([]ExpressionExecutor, parameterNum)
 
-	expr.resultVector = vector.NewFunctionResultWrapper(retType, m)
+	expr.resultVector, err = vector.NewFunctionResultWrapperWithAllocation(retType, m, selection)
 	return err
 }
 
@@ -624,14 +768,17 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 			return err
 		}
 	} else {
-		expr.parameterResults[1] = expr.iffNullResult(0, rowCount)
+		expr.parameterResults[1], err = expr.iffNullResult(0, rowCount)
+		if err != nil {
+			return err
+		}
 	}
 	if hasSelectedRows(falseBranch) {
 		expr.parameterResults[2], err = expr.parameterExecutor[2].Eval(proc, batches, falseBranch)
 		return err
 	}
-	expr.parameterResults[2] = expr.iffNullResult(1, rowCount)
-	return nil
+	expr.parameterResults[2], err = expr.iffNullResult(1, rowCount)
+	return err
 }
 
 func hasSelectedRows(selectList []bool) bool {
@@ -643,19 +790,24 @@ func hasSelectedRows(selectList []bool) bool {
 	return false
 }
 
-func (expr *FunctionExpressionExecutor) iffNullResult(index, length int) *vector.Vector {
+func (expr *FunctionExpressionExecutor) iffNullResult(index, length int) (*vector.Vector, error) {
 	typ := expr.resultType
 	result := expr.iffNullResults[index]
 	if result == nil || *result.GetType() != typ {
 		if result != nil {
 			result.Free(expr.m)
+			expr.iffNullResults[index] = nil
 		}
-		result = vector.NewConstNull(typ, length, expr.m)
+		var err error
+		result, err = newExpressionConstNull(typ, length, expr.allocation)
+		if err != nil {
+			return nil, err
+		}
 		expr.iffNullResults[index] = result
 	} else {
 		result.SetLength(length)
 	}
-	return result
+	return result, nil
 }
 
 func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
@@ -786,7 +938,13 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		if rowAligned && !parameter.IsConst() {
 			selected := expr.selectedParameterVectors[i]
 			if selected == nil {
-				selected = vector.NewOffHeapVecWithType(*parameter.GetType())
+				var err error
+				selected, err = newExpressionOffHeapVector(
+					*parameter.GetType(), expr.allocation,
+				)
+				if err != nil {
+					return nil, err
+				}
 				expr.selectedParameterVectors[i] = selected
 			} else {
 				selected.Reset(*parameter.GetType())
@@ -806,7 +964,13 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		return nil, err
 	}
 	if expr.selectedResult == nil {
-		expr.selectedResult = vector.NewFunctionResultWrapper(expr.resultType, expr.m)
+		var err error
+		expr.selectedResult, err = vector.NewFunctionResultWrapperWithAllocation(
+			expr.resultType, expr.m, expr.allocation,
+		)
+		if err != nil {
+			return nil, err
+		}
 	}
 	expr.resetResultType(expr.selectedResult)
 	if err := expr.selectedResult.PreExtendAndReset(selectedCount); err != nil {
@@ -826,7 +990,13 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	result.SetIsBin(runtimeIsBin)
 	result.ResetWithSameType()
 	if expr.selectedNullResult == nil {
-		expr.selectedNullResult = vector.NewConstNull(runtimeType, 1, expr.m)
+		var err error
+		expr.selectedNullResult, err = newExpressionConstNull(
+			runtimeType, 1, expr.allocation,
+		)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		expr.selectedNullResult.SetType(runtimeType)
 		expr.selectedNullResult.SetLength(1)
@@ -1008,19 +1178,27 @@ func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.
 
 	vec := batches[relIndex].Vecs[expr.colIndex]
 	if vec.IsConstNull() {
-		vec = expr.getConstNullVec(expr.typ, vec.Length())
+		var err error
+		vec, err = expr.getConstNullVec(expr.typ, vec.Length())
+		if err != nil {
+			return nil, err
+		}
 	}
 	return vec, nil
 }
 
-func (expr *ColumnExpressionExecutor) getConstNullVec(typ types.Type, length int) *vector.Vector {
+func (expr *ColumnExpressionExecutor) getConstNullVec(typ types.Type, length int) (*vector.Vector, error) {
 	if expr.nullVecCache != nil {
 		expr.nullVecCache.SetType(typ)
 		expr.nullVecCache.SetLength(length)
 	} else {
-		expr.nullVecCache = vector.NewConstNull(typ, length, expr.mp)
+		var err error
+		expr.nullVecCache, err = newExpressionConstNull(typ, length, expr.allocation)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return expr.nullVecCache
+	return expr.nullVecCache, nil
 }
 
 func (expr *ColumnExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
@@ -1077,109 +1255,116 @@ func (expr *FixedVectorExpressionExecutor) IsColumnExpr() bool {
 	return false
 }
 
-func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con *plan.Literal) (vec *vector.Vector, err error) {
+func generateConstExpressionExecutor(
+	proc *process.Process,
+	typ types.Type,
+	con *plan.Literal,
+	selection *vector.AllocationAccountSelection,
+) (vec *vector.Vector, err error) {
 	if con.GetIsnull() {
-		vec = vector.NewConstNull(typ, 1, proc.Mp())
+		vec, err = newExpressionConstNull(typ, 1, selection)
 	} else {
 		switch val := con.GetValue().(type) {
 		case *plan.Literal_Bval:
-			vec, err = vector.NewConstFixed(constBType, val.Bval, 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constBType, val.Bval, 1, proc.Mp(), selection)
 		case *plan.Literal_I8Val:
-			vec, err = vector.NewConstFixed(constI8Type, int8(val.I8Val), 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constI8Type, int8(val.I8Val), 1, proc.Mp(), selection)
 		case *plan.Literal_I16Val:
-			vec, err = vector.NewConstFixed(constI16Type, int16(val.I16Val), 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constI16Type, int16(val.I16Val), 1, proc.Mp(), selection)
 		case *plan.Literal_I32Val:
-			vec, err = vector.NewConstFixed(constI32Type, val.I32Val, 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constI32Type, val.I32Val, 1, proc.Mp(), selection)
 		case *plan.Literal_I64Val:
-			vec, err = vector.NewConstFixed(constI64Type, val.I64Val, 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constI64Type, val.I64Val, 1, proc.Mp(), selection)
 		case *plan.Literal_U8Val:
-			vec, err = vector.NewConstFixed(constU8Type, uint8(val.U8Val), 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constU8Type, uint8(val.U8Val), 1, proc.Mp(), selection)
 		case *plan.Literal_U16Val:
-			vec, err = vector.NewConstFixed(constU16Type, uint16(val.U16Val), 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constU16Type, uint16(val.U16Val), 1, proc.Mp(), selection)
 		case *plan.Literal_U32Val:
-			vec, err = vector.NewConstFixed(constU32Type, val.U32Val, 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constU32Type, val.U32Val, 1, proc.Mp(), selection)
 		case *plan.Literal_U64Val:
 			if typ.Oid == types.T_bit {
-				vec, err = vector.NewConstFixed(typ, val.U64Val, 1, proc.Mp())
+				vec, err = newExpressionConstFixed(typ, val.U64Val, 1, proc.Mp(), selection)
 			} else {
-				vec, err = vector.NewConstFixed(constU64Type, val.U64Val, 1, proc.Mp())
+				vec, err = newExpressionConstFixed(constU64Type, val.U64Val, 1, proc.Mp(), selection)
 			}
 		case *plan.Literal_Fval:
-			vec, err = vector.NewConstFixed(constFType, val.Fval, 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constFType, val.Fval, 1, proc.Mp(), selection)
 		case *plan.Literal_Dval:
-			vec, err = vector.NewConstFixed(constDType, val.Dval, 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constDType, val.Dval, 1, proc.Mp(), selection)
 		case *plan.Literal_Dateval:
-			vec, err = vector.NewConstFixed(constDateType, types.Date(val.Dateval), 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constDateType, types.Date(val.Dateval), 1, proc.Mp(), selection)
 		case *plan.Literal_Timeval:
-			vec, err = vector.NewConstFixed(typ, types.Time(val.Timeval), 1, proc.Mp())
+			vec, err = newExpressionConstFixed(typ, types.Time(val.Timeval), 1, proc.Mp(), selection)
 		case *plan.Literal_Datetimeval:
-			vec, err = vector.NewConstFixed(typ, types.Datetime(val.Datetimeval), 1, proc.Mp())
+			vec, err = newExpressionConstFixed(typ, types.Datetime(val.Datetimeval), 1, proc.Mp(), selection)
 		case *plan.Literal_Decimal64Val:
 			cd64 := val.Decimal64Val
 			d64 := types.Decimal64(cd64.A)
-			vec, err = vector.NewConstFixed(typ, d64, 1, proc.Mp())
+			vec, err = newExpressionConstFixed(typ, d64, 1, proc.Mp(), selection)
 		case *plan.Literal_Decimal128Val:
 			cd128 := val.Decimal128Val
 			d128 := types.Decimal128{B0_63: uint64(cd128.A), B64_127: uint64(cd128.B)}
-			vec, err = vector.NewConstFixed(typ, d128, 1, proc.Mp())
+			vec, err = newExpressionConstFixed(typ, d128, 1, proc.Mp(), selection)
 		case *plan.Literal_Timestampval:
 			scale := typ.Scale
 			if scale < 0 || scale > 6 {
 				return nil, moerr.NewErrTooBigPrecision(proc.Ctx, int64(scale), "TIMESTAMP", 6)
 			}
-			vec, err = vector.NewConstFixed(constTimestampTypes[scale], types.Timestamp(val.Timestampval), 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constTimestampTypes[scale], types.Timestamp(val.Timestampval), 1, proc.Mp(), selection)
 		case *plan.Literal_Sval:
 			sval := val.Sval
 			// Distinguish binary with non-binary string.
 			if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid == types.T_blob {
-				vec, err = vector.NewConstBytes(constBinType, []byte(sval), 1, proc.Mp())
+				vec, err = newExpressionConstBytes(constBinType, []byte(sval), 1, proc.Mp(), selection)
 			} else if typ.Oid == types.T_geometry {
-				vec, err = vector.NewConstBytes(typ, []byte(sval), 1, proc.Mp())
+				vec, err = newExpressionConstBytes(typ, []byte(sval), 1, proc.Mp(), selection)
 			} else if typ.Oid == types.T_array_float32 {
 				array, err1 := types.StringToArray[float32](sval)
 				if err1 != nil {
 					return nil, err1
 				}
-				vec, err = vector.NewConstArray(typ, array, 1, proc.Mp())
+				vec, err = newExpressionConstArray(typ, array, 1, proc.Mp(), selection)
 			} else if typ.Oid == types.T_array_float64 {
 				array, err1 := types.StringToArray[float64](sval)
 				if err1 != nil {
 					return nil, err1
 				}
-				vec, err = vector.NewConstArray(typ, array, 1, proc.Mp())
+				vec, err = newExpressionConstArray(typ, array, 1, proc.Mp(), selection)
 			} else if typ.Oid == types.T_datalink {
 				_, _, err1 := datalink.ParseDatalink(sval, proc)
 				if err1 != nil {
 					return nil, err1
 				}
-				vec, err = vector.NewConstBytes(constBinType, []byte(sval), 1, proc.Mp())
+				vec, err = newExpressionConstBytes(constBinType, []byte(sval), 1, proc.Mp(), selection)
 			} else {
-				vec, err = vector.NewConstBytes(constSType, []byte(sval), 1, proc.Mp())
+				vec, err = newExpressionConstBytes(constSType, []byte(sval), 1, proc.Mp(), selection)
 			}
 		case *plan.Literal_Defaultval:
 			defaultVal := val.Defaultval
-			vec, err = vector.NewConstFixed(constBType, defaultVal, 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constBType, defaultVal, 1, proc.Mp(), selection)
 		case *plan.Literal_EnumVal:
-			vec, err = vector.NewConstFixed(constEnumType, types.Enum(val.EnumVal), 1, proc.Mp())
+			vec, err = newExpressionConstFixed(constEnumType, types.Enum(val.EnumVal), 1, proc.Mp(), selection)
 		case *plan.Literal_VecVal:
 			switch typ.Oid {
 			case types.T_array_float32:
-				vec, err = vector.NewConstArray(typ, types.BytesToArray[float32]([]byte(val.VecVal)), 1, proc.Mp())
+				vec, err = newExpressionConstArray(typ, types.BytesToArray[float32]([]byte(val.VecVal)), 1, proc.Mp(), selection)
 			case types.T_array_float64:
-				vec, err = vector.NewConstArray(typ, types.BytesToArray[float64]([]byte(val.VecVal)), 1, proc.Mp())
+				vec, err = newExpressionConstArray(typ, types.BytesToArray[float64]([]byte(val.VecVal)), 1, proc.Mp(), selection)
 			case types.T_array_bf16:
-				vec, err = vector.NewConstArray(typ, types.BytesToArray[types.BF16]([]byte(val.VecVal)), 1, proc.Mp())
+				vec, err = newExpressionConstArray(typ, types.BytesToArray[types.BF16]([]byte(val.VecVal)), 1, proc.Mp(), selection)
 			case types.T_array_float16:
-				vec, err = vector.NewConstArray(typ, types.BytesToArray[types.Float16]([]byte(val.VecVal)), 1, proc.Mp())
+				vec, err = newExpressionConstArray(typ, types.BytesToArray[types.Float16]([]byte(val.VecVal)), 1, proc.Mp(), selection)
 			case types.T_array_int8:
-				vec, err = vector.NewConstArray(typ, types.BytesToArray[int8]([]byte(val.VecVal)), 1, proc.Mp())
+				vec, err = newExpressionConstArray(typ, types.BytesToArray[int8]([]byte(val.VecVal)), 1, proc.Mp(), selection)
 			case types.T_array_uint8:
-				vec, err = vector.NewConstArray(typ, types.BytesToArray[uint8]([]byte(val.VecVal)), 1, proc.Mp())
+				vec, err = newExpressionConstArray(typ, types.BytesToArray[uint8]([]byte(val.VecVal)), 1, proc.Mp(), selection)
 			}
 		default:
 			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", con.GetValue()))
 		}
-		vec.SetIsBin(con.IsBin)
+		if err == nil {
+			vec.SetIsBin(con.IsBin)
+		}
 	}
 	return vec, err
 }

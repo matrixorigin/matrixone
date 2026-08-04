@@ -270,11 +270,12 @@ func (t *tableStuff) resolvedSnapshots(ses *Session) (tarSP, baseSP types.TS) {
 }
 
 type batchWithKind struct {
-	name       string
-	kind       string
-	side       int
-	fromUpdate bool
-	batch      *batch.Batch
+	name           string
+	kind           string
+	side           int
+	fromUpdate     bool
+	restoreMissing bool
+	batch          *batch.Batch
 }
 
 type emitFunc func(batchWithKind) (stop bool, err error)
