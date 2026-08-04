@@ -691,32 +691,13 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 }
 
 func DeepCopyPlan(pl *Plan) *Plan {
-	switch p := pl.Plan.(type) {
-	case *Plan_Query:
-		return &Plan{
-			Plan: &plan.Plan_Query{
-				Query: DeepCopyQuery(p.Query),
-			},
-			IsPrepare:   pl.IsPrepare,
-			TryRunTimes: pl.TryRunTimes,
-		}
-
-	case *plan.Plan_Ddl:
-		return &Plan{
-			Plan: &plan.Plan_Ddl{
-				Ddl: DeepCopyDataDefinition(p.Ddl),
-			},
-			IsPrepare:   pl.IsPrepare,
-			TryRunTimes: pl.TryRunTimes,
-		}
-
-	case *plan.Plan_Dcl:
-		return proto.Clone(pl).(*Plan)
-
-	default:
-		// only support query/insert plan now
+	if pl == nil {
 		return nil
 	}
+	// Prepared specialization starts from an optimized plan. A protobuf clone
+	// preserves execution-only metadata (message tags, runtime filters, DML
+	// contexts, and future fields) that a hand-maintained field list can drop.
+	return proto.Clone(pl).(*Plan)
 }
 
 func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {

@@ -444,17 +444,17 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		dynamicParamPos := int32(-1)
 		var dynamicParamExpr *plan.Expr
 		dynamicNumericArgs := make([]bool, len(exprImpl.F.Args))
-		coercedNumericArgs := make([]bool, len(exprImpl.F.Args))
+		originalArgTypes := make([]plan.Type, len(exprImpl.F.Args))
 		if exprImpl.F.Func.GetObjName() == "cast" && isPreparedDynamicNumericType(e.Typ) &&
 			len(exprImpl.F.Args) > 0 && exprImpl.F.Args[0].GetP() != nil {
 			dynamicParamPos = exprImpl.F.Args[0].GetP().Pos
 			dynamicParamExpr = exprImpl.F.Args[0]
 		}
 		for i, arg := range exprImpl.F.Args {
+			originalArgTypes[i] = arg.Typ
 			_, directParam := arg.Expr.(*plan.Expr_P)
 			dynamicNumericParam := containsPreparedDynamicNumericParam(arg)
 			dynamicNumericArgs[i] = dynamicNumericParam
-			coercedNumericArgs[i] = isPreparedDynamicNumericType(arg.Typ)
 			rewrittenArg, rewriteErr := rule.ApplyExpr(arg)
 			if rewriteErr != nil {
 				return nil, rewriteErr
@@ -464,6 +464,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			exprImpl.F.Args[i] = rewrittenArg
 		}
+		if needResetFunction && types.T(e.Typ.Id) == types.T_bool {
+			for i, arg := range exprImpl.F.Args {
+				if !dynamicNumericArgs[i] || (arg.Typ.Id == originalArgTypes[i].Id &&
+					arg.Typ.Width == originalArgTypes[i].Width && arg.Typ.Scale == originalArgTypes[i].Scale) {
+					continue
+				}
+				exprImpl.F.Args[i], err = makePlan2CastExpr(rule.ctx, arg, originalArgTypes[i])
+				if err != nil {
+					return nil, err
+				}
+			}
+			return e, nil
+		}
 		if needResetFunction {
 			for i, arg := range exprImpl.F.Args {
 				if !dynamicNumericArgs[i] {
@@ -472,22 +485,43 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 		}
 		for i, arg := range exprImpl.F.Args {
-			if !dynamicNumericArgs[i] || types.T(arg.Typ.Id) != types.T_uint64 {
+			if !dynamicNumericArgs[i] || !types.T(arg.Typ.Id).IsUnsignedInt() {
 				continue
 			}
 			for j, sibling := range exprImpl.F.Args {
-				if i == j || !coercedNumericArgs[j] || !types.T(sibling.Typ.Id).IsSignedInt() {
+				if i == j || !types.T(sibling.Typ.Id).IsSignedInt() {
 					continue
 				}
-				if lit := sibling.GetLit(); lit != nil && lit.GetI64Val() >= 0 {
-					if _, ok := lit.Value.(*plan.Literal_I64Val); !ok {
-						continue
-					}
-					exprImpl.F.Args[j], err = makePreparedIntegerExpr(
-						strconv.FormatInt(lit.GetI64Val(), 10), types.T(arg.Typ.Id))
-					if err != nil {
-						return nil, err
-					}
+				target := types.T_int64.ToType()
+				exprImpl.F.Args[i], err = makePlan2CastExpr(
+					rule.ctx, arg, makePlan2Type(&target))
+				if err != nil {
+					return nil, err
+				}
+				break
+			}
+		}
+		for i, arg := range exprImpl.F.Args {
+			if !types.T(arg.Typ.Id).IsDecimal() {
+				continue
+			}
+			for j, sibling := range exprImpl.F.Args {
+				siblingType := types.T(sibling.Typ.Id)
+				if i == j || (!siblingType.IsUnsignedInt() && siblingType != types.T_bit) {
+					continue
+				}
+				targetOid := types.T_decimal128
+				if arg.Typ.Scale > 18 {
+					targetOid = types.T_decimal256
+				}
+				target := types.New(targetOid, 38, arg.Typ.Scale)
+				if targetOid == types.T_decimal256 {
+					target.Width = 65
+				}
+				exprImpl.F.Args[j], err = makePlan2CastExpr(
+					rule.ctx, sibling, makePlan2Type(&target))
+				if err != nil {
+					return nil, err
 				}
 			}
 		}
@@ -532,7 +566,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				// The prepare-time dynamic DECIMAL domain also coerces the
 				// parameter's sibling operands. Restore those operands before
 				// rebinding the enclosing function for the current runtime type.
-				return exprImpl.F.Args[0], nil
+				return restorePreparedNumericLiteralType(e), nil
 			}
 			value := exprImpl.F.Args[0]
 			if literal := value.GetLit(); literal != nil {
@@ -602,10 +636,19 @@ func restorePreparedNumericLiteralType(expr *plan.Expr) *plan.Expr {
 		return expr
 	}
 	if fn := expr.GetF(); fn != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 &&
-		types.T(expr.Typ.Id).IsDecimal() {
+		isPreparedDynamicNumericType(expr.Typ) {
 		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
 		if overload == 0 {
-			return fn.Args[0]
+			restored := restorePreparedNumericLiteralType(fn.Args[0])
+			if lit := restored.GetLit(); lit != nil {
+				if value, ok := lit.Value.(*plan.Literal_Sval); ok {
+					if decimal, err := makePlan2DecimalExprWithType(
+						context.TODO(), value.Sval, lit.GetIsBin()); err == nil {
+						return decimal
+					}
+				}
+			}
+			return restored
 		}
 	}
 	if !isPreparedDynamicNumericType(expr.Typ) {

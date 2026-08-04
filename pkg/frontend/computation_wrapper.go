@@ -1228,12 +1228,30 @@ func buildExecuteUserParams(
 			}
 		}
 		paramVals[i] = plan2.ParamValue{
-			Value:       param,
-			IsBin:       paramIsBin[i],
-			RuntimeType: preparedExecuteParamRuntimeType(ses, exprImpl.V, param),
+			Value: normalizePreparedParamValue(param),
+			IsBin: paramIsBin[i],
+			RuntimeType: normalizePreparedParamRuntimeType(
+				preparedExecuteParamRuntimeType(ses, exprImpl.V, param)),
 		}
 	}
 	return
+}
+
+func normalizePreparedParamValue(value any) any {
+	if v, ok := value.(bool); ok {
+		if v {
+			return int64(1)
+		}
+		return int64(0)
+	}
+	return value
+}
+
+func normalizePreparedParamRuntimeType(typ types.T) types.T {
+	if typ == types.T_bool {
+		return types.T_int64
+	}
+	return typ
 }
 
 func preparedTextParamRuntimeType(value any) types.T {

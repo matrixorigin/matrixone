@@ -458,7 +458,7 @@ func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
 		wantType types.T
 	}{
 		{value: strconv.FormatInt(math.MaxInt64, 10), wantType: types.T_int64},
-		{value: strconv.FormatUint(math.MaxUint64, 10), unsigned: true, wantType: types.T_uint64},
+		{value: strconv.FormatUint(math.MaxUint64, 10), unsigned: true, wantType: types.T_int64},
 	} {
 		params := vector.NewVec(types.T_text.ToType())
 		require.NoError(t, vector.AppendBytes(params, []byte(test.value), false, cw.proc.Mp()))
@@ -1307,11 +1307,14 @@ func TestTxnComputationWrapperDoesNotPersistNormalLocalTraceOnCompileError(t *te
 	assert.True(t, motrace.StatementInfoFilter(stmt))
 }
 
-func TestNormalizeUserVariableBoolAndDynamicNumericSignature(t *testing.T) {
+func TestNormalizePreparedBoolAndDynamicNumericSignature(t *testing.T) {
 	value, typ, err := normalizeUserVariableValue(true, types.T_bool)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), value)
 	require.Equal(t, types.T_int64, typ)
+	require.Equal(t, int64(1), normalizePreparedParamValue(true))
+	require.Equal(t, int64(0), normalizePreparedParamValue(false))
+	require.Equal(t, types.T_int64, normalizePreparedParamRuntimeType(types.T_bool))
 
 	ctx := context.Background()
 	first, err := preparedNumericParamSignature(ctx, []any{plan2.ParamValue{Value: "2", RuntimeType: types.T_int64}})
@@ -1327,6 +1330,20 @@ func TestNormalizeUserVariableBoolAndDynamicNumericSignature(t *testing.T) {
 	decimalDifferentShape, err := preparedNumericParamSignature(ctx, []any{plan2.ParamValue{Value: "1.20", RuntimeType: types.T_decimal128}})
 	require.NoError(t, err)
 	require.NotEqual(t, decimalA, decimalDifferentShape, "decimal precision and scale changes must rebuild specialization")
+}
+
+func TestOrdinaryBoolUserVariableKeepsBoolType(t *testing.T) {
+	ses, prepareStmt, _, execCtx := newPreparedExecuteEnvForSQL(t, 113, "select 1")
+	defer prepareStmt.Close()
+	defer ses.Close()
+	stmts, err := mysql.Parse(execCtx.reqCtx, "set @ordinary_bool = cast(0 as bool)", 1)
+	require.NoError(t, err)
+	require.NoError(t, handleSetVar(
+		ses, execCtx, stmts[0].(*tree.SetVar), "set @ordinary_bool = cast(0 as bool)"))
+	value, err := ses.GetUserDefinedVar("ordinary_bool")
+	require.NoError(t, err)
+	require.Equal(t, types.T_bool, value.RuntimeType)
+	require.Equal(t, false, value.Value)
 }
 
 func TestPreparedDecimalSameShapeReusesPlanAndCompile(t *testing.T) {

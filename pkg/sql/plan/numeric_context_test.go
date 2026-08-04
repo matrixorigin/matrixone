@@ -815,6 +815,20 @@ func TestDeepCopyPreparedCTASPreservesExecutionMetadata(t *testing.T) {
 	require.NotSame(t, original.GetDdl().GetCreateTable(), create)
 }
 
+func TestDeepCopyPreparedQueryPreservesExecutionMetadata(t *testing.T) {
+	original := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_JOIN,
+			SendMsgList: []planpb.MsgHeader{{MsgTag: 11, MsgType: 1}},
+			RecvMsgList: []planpb.MsgHeader{{MsgTag: 12, MsgType: 2}},
+		}},
+	}}}
+	copied := DeepCopyPlan(original)
+	require.Equal(t, original.GetQuery().Nodes[0].SendMsgList, copied.GetQuery().Nodes[0].SendMsgList)
+	require.Equal(t, original.GetQuery().Nodes[0].RecvMsgList, copied.GetQuery().Nodes[0].RecvMsgList)
+	require.NotSame(t, original.GetQuery().Nodes[0], copied.GetQuery().Nodes[0])
+}
+
 func TestPreparedDynamicNumericRebindsTypeSensitiveParents(t *testing.T) {
 	for _, test := range []struct {
 		sql    string
@@ -835,8 +849,17 @@ func TestPreparedDynamicNumericRebindsTypeSensitiveParents(t *testing.T) {
 	} {
 		t.Run(test.sql, func(t *testing.T) {
 			prepare := buildPreparedAggregatePlan(t, test.sql)
-			_, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, test.values)
+			specialized, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, test.values)
 			require.NoError(t, err)
+			if len(specialized.GetQuery().Steps) > 0 {
+				root := specialized.GetQuery().Nodes[specialized.GetQuery().Steps[0]]
+				if len(root.ProjectList) == 1 && root.ProjectList[0].GetF() != nil {
+					name := root.ProjectList[0].GetF().GetFunc().GetObjName()
+					if name == ">" || name == "<" || name == "between" || name == "in" {
+						require.Equal(t, int32(types.T_bool), root.ProjectList[0].Typ.Id)
+					}
+				}
+			}
 		})
 	}
 }
@@ -900,6 +923,35 @@ func TestPreparedNarrowUnsignedArithmeticWidens(t *testing.T) {
 			require.NoError(t, err)
 			root := specialized.GetQuery().Nodes[specialized.GetQuery().Steps[0]]
 			require.NotEqual(t, int32(test.runtimeType), root.ProjectList[0].Typ.Id)
+		})
+	}
+}
+
+func TestPreparedUint64MixedNumericDomains(t *testing.T) {
+	for _, test := range []struct {
+		sql         string
+		wantDecimal bool
+	}{
+		{sql: "select 0 + ?"},
+		{sql: "select ? + 0"},
+		{sql: "select 0.0 + ?", wantDecimal: true},
+		{sql: "select ? + 0.0", wantDecimal: true},
+		{sql: "select (? + 0.5) + cast(0 as unsigned)", wantDecimal: true},
+		{sql: "select cast(0 as unsigned) + (0.5 + ?)", wantDecimal: true},
+	} {
+		t.Run(test.sql, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, test.sql)
+			specialized, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{ParamValue{
+				Value: strconv.FormatUint(math.MaxUint64, 10), RuntimeType: types.T_uint64,
+			}})
+			require.NoError(t, err)
+			root := specialized.GetQuery().Nodes[specialized.GetQuery().Steps[0]]
+			resultType := types.T(root.ProjectList[0].Typ.Id)
+			if test.wantDecimal {
+				require.True(t, resultType.IsDecimal(), resultType.String())
+			} else {
+				require.True(t, resultType.IsSignedInt(), resultType.String())
+			}
 		})
 	}
 }
