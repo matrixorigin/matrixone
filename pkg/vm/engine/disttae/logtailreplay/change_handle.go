@@ -15,6 +15,7 @@
 package logtailreplay
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -476,7 +478,7 @@ func mergeRangeSpillRuns(
 			if idx+1 < len(runs) {
 				right = &runs[idx+1]
 			}
-			if err = mergeRangeSpillRunPair(input, runs[idx], right, output, mp, chunkRows, chunkBytes); err != nil {
+			if err = mergeRangeSpillRunPair(ctx, input, runs[idx], right, output, mp, chunkRows, chunkBytes); err != nil {
 				_ = output.Close()
 				_ = input.Close()
 				return nil, nil, err
@@ -493,6 +495,7 @@ func mergeRangeSpillRuns(
 }
 
 func mergeRangeSpillRunPair(
+	ctx context.Context,
 	input *rangeSpillFile,
 	leftRun rangeSpillRun,
 	rightRun *rangeSpillRun,
@@ -531,6 +534,11 @@ func mergeRangeSpillRunPair(
 		return nil
 	}
 	for !left.exhausted || (right != nil && !right.exhausted) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		selected := left
 		leftTS, rightTS := left.ts(), types.TS{}
 		if right != nil {
@@ -553,6 +561,174 @@ func mergeRangeSpillRunPair(
 		}
 	}
 	return flush()
+}
+
+func batchPrimaryKeyIndex(bat *batch.Batch, primarySeqnum int, tombstone bool) int {
+	idx := primarySeqnum
+	if tombstone {
+		idx = 0
+	}
+	if len(bat.Vecs) > 0 && bat.Vecs[0] != nil && bat.Vecs[0].GetType().Oid == types.T_Rowid {
+		idx++
+	}
+	return idx
+}
+
+func encodedPrimaryKeyAt(bat *batch.Batch, pkIdx, row int, packer *types.Packer) []byte {
+	return readutil.EncodePrimaryKey(vector.GetAny(bat.Vecs[pkIdx], row, false), packer)
+}
+
+func sortBatchByPrimaryKeyAndTS(bat *batch.Batch, pkIdx int, mp *mpool.MPool) error {
+	if bat == nil || bat.RowCount() < 2 {
+		return nil
+	}
+	packer := types.NewPacker()
+	keys := readutil.EncodePrimaryKeyVector(bat.Vecs[pkIdx], packer)
+	packer.Close()
+	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[len(bat.Vecs)-1])
+	sels := make([]int64, bat.RowCount())
+	for row := range sels {
+		sels[row] = int64(row)
+	}
+	goSort.Slice(sels, func(i, j int) bool {
+		left, right := int(sels[i]), int(sels[j])
+		if cmp := bytes.Compare(keys[left], keys[right]); cmp != 0 {
+			return cmp < 0
+		}
+		return timestamps[left].LT(&timestamps[right])
+	})
+	for _, vec := range bat.Vecs {
+		if err := vec.Shuffle(sels, mp); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rangeSpillRowLessByPrimaryKey(
+	left *rangeSpillRunReader,
+	leftPKIdx int,
+	right *rangeSpillRunReader,
+	rightPKIdx int,
+	leftPacker, rightPacker *types.Packer,
+) bool {
+	leftKey := encodedPrimaryKeyAt(left.bat, leftPKIdx, left.row, leftPacker)
+	rightKey := encodedPrimaryKeyAt(right.bat, rightPKIdx, right.row, rightPacker)
+	if cmp := bytes.Compare(leftKey, rightKey); cmp != 0 {
+		return cmp < 0
+	}
+	leftTS, rightTS := left.ts(), right.ts()
+	return leftTS.LT(&rightTS)
+}
+
+func mergeRangeSpillRunPairByPrimaryKey(
+	ctx context.Context,
+	input *rangeSpillFile,
+	leftRun rangeSpillRun,
+	rightRun *rangeSpillRun,
+	output *rangeSpillFile,
+	pkIdx int,
+	mp *mpool.MPool,
+	chunkRows, chunkBytes int,
+) (err error) {
+	left, err := newRangeSpillRunReader(input, leftRun, mp)
+	if err != nil {
+		return err
+	}
+	defer left.close()
+	var right *rangeSpillRunReader
+	if rightRun != nil {
+		right, err = newRangeSpillRunReader(input, *rightRun, mp)
+		if err != nil {
+			return err
+		}
+		defer right.close()
+	}
+	leftPacker, rightPacker := types.NewPacker(), types.NewPacker()
+	defer leftPacker.Close()
+	defer rightPacker.Close()
+	var out *batch.Batch
+	defer func() {
+		if out != nil {
+			out.Clean(mp)
+		}
+	}()
+	flush := func() error {
+		if out == nil || out.RowCount() == 0 {
+			return nil
+		}
+		if err := output.Append(out); err != nil {
+			return err
+		}
+		out.Clean(mp)
+		out = nil
+		return nil
+	}
+	for !left.exhausted || (right != nil && !right.exhausted) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		selected := left
+		if left.exhausted || (right != nil && !right.exhausted &&
+			rangeSpillRowLessByPrimaryKey(right, pkIdx, left, pkIdx, rightPacker, leftPacker)) {
+			selected = right
+		}
+		if err := appendRangeSpillRow(&out, selected.bat, selected.row, mp); err != nil {
+			return err
+		}
+		if err := selected.next(); err != nil {
+			return err
+		}
+		if (chunkRows > 0 && out.RowCount() >= chunkRows) ||
+			(chunkBytes > 0 && out.Allocated() >= chunkBytes) {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+	}
+	return flush()
+}
+
+func mergeRangeSpillRunsByPrimaryKey(
+	ctx context.Context,
+	input *rangeSpillFile,
+	runs []rangeSpillRun,
+	config engine.ChangeRangeSpillConfig,
+	pkIdx int,
+	mp *mpool.MPool,
+	chunkRows, chunkBytes int,
+) (*rangeSpillFile, []rangeSpillRun, error) {
+	for len(runs) > 1 {
+		output, err := newRangeSpillFile(ctx, config)
+		if err != nil {
+			_ = input.Close()
+			return nil, nil, err
+		}
+		outputRuns := make([]rangeSpillRun, 0, (len(runs)+1)/2)
+		for idx := 0; idx < len(runs); idx += 2 {
+			firstRecord := len(output.records)
+			var right *rangeSpillRun
+			if idx+1 < len(runs) {
+				right = &runs[idx+1]
+			}
+			if err = mergeRangeSpillRunPairByPrimaryKey(
+				ctx, input, runs[idx], right, output, pkIdx, mp, chunkRows, chunkBytes,
+			); err != nil {
+				_ = output.Close()
+				_ = input.Close()
+				return nil, nil, err
+			}
+			outputRuns = append(outputRuns, rangeSpillRun{firstRecord: firstRecord, endRecord: len(output.records)})
+		}
+		if err = input.Close(); err != nil {
+			_ = output.Close()
+			return nil, nil, err
+		}
+		input, runs = output, outputRuns
+	}
+	return input, runs, nil
 }
 
 type spilledBatchHandle struct {
@@ -669,9 +845,10 @@ type CNObjectHandle struct {
 	mp                 *mpool.MPool
 	base               *baseHandle
 
-	cache []*batch.Batch
-	blks  []types.Blockid
-	TSs   []types.TS
+	cache    []*batch.Batch
+	blks     []types.Blockid
+	TSs      []types.TS
+	maxBytes int
 }
 
 func NewCNObjectHandle(isTombstone bool, objects []*objectio.ObjectEntry, fs fileservice.FileService, baseHandle *baseHandle, mp *mpool.MPool) *CNObjectHandle {
@@ -683,13 +860,14 @@ func NewCNObjectHandle(isTombstone bool, objects []*objectio.ObjectEntry, fs fil
 		mp:          mp,
 		cache:       make([]*batch.Batch, 0),
 		blks:        make([]types.Blockid, 0),
+		maxBytes:    baseHandle.changesHandle.maxInMemoryBytes,
 	}
 }
 func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 	t0 := time.Now()
 	jobs := make([]*tasks.Job, 0)
 	blks := make([]types.Blockid, 0)
-	for i := 0; i < LoadParallism; i++ {
+	for i := 0; i < 1; i++ {
 		if h.objectOffsetCursor >= len(h.objects) {
 			break
 		}
@@ -719,6 +897,10 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		}
 		putJob(job)
 		bat := res.Res.(*batch.Batch)
+		if h.maxBytes > 0 && bat.Allocated() > h.maxBytes {
+			bat.Clean(h.mp)
+			return moerr.NewInternalErrorNoCtx("change range object batch exceeds in-memory byte limit")
+		}
 		h.cache = append(h.cache, bat)
 		h.blks = append(h.blks, blks[i])
 	}
@@ -836,6 +1018,7 @@ type AObjectHandle struct {
 	// blockPlans caches block-level commit-ts overlap decisions for objects.
 	// It is only populated when checkpoint-range mode enables block pruning.
 	blockPlans map[string]*aobjBlockPlan
+	maxBytes   int
 }
 
 type aobjBlockPlan struct {
@@ -867,6 +1050,7 @@ func NewAObjectHandle(ctx context.Context, p *baseHandle, isTombstone bool, star
 		cache:       make([]*batch.Batch, 0),
 		blks:        make([]types.Blockid, 0),
 		blockPlans:  make(map[string]*aobjBlockPlan),
+		maxBytes:    p.changesHandle.maxInMemoryBytes,
 	}
 	return handle
 }
@@ -1133,7 +1317,7 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 	t0 := time.Now()
 	jobs := make([]*tasks.Job, 0)
 	blks := make([]types.Blockid, 0)
-	for i := 0; i < LoadParallism; i++ {
+	for i := 0; i < 1; i++ {
 		obj, blk, ok, targetErr := h.nextPrefetchTarget(ctx)
 		if targetErr != nil {
 			err = targetErr
@@ -1161,6 +1345,10 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 		}
 		putJob(job)
 		bat := res.Res.(*batch.Batch)
+		if h.maxBytes > 0 && bat.Allocated() > h.maxBytes {
+			bat.Clean(h.mp)
+			return moerr.NewInternalErrorNoCtx("change range object batch exceeds in-memory byte limit")
+		}
 		h.cache = append(h.cache, bat)
 		h.blks = append(h.blks, blks[i])
 	}
@@ -1581,6 +1769,11 @@ func (p *baseHandle) newBatchHandleWithRowIterator(
 	}
 	chunkRows, chunkBytes := p.changesHandle.rangeSpillChunkLimits()
 	for iter.Next() {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
 		scanned++
 		entry := iter.Entry()
 		if checkTS(start, end, entry.Time) {
@@ -2027,9 +2220,12 @@ type ChangeHandler struct {
 	// and row level.  Only DATA BRANCH PICK sets this; other callers leave it nil.
 	pkFilter *engine.PKFilter
 
-	maxInMemoryRows  int
-	maxInMemoryBytes int
-	spillConfig      engine.ChangeRangeSpillConfig
+	maxInMemoryRows         int
+	maxInMemoryBytes        int
+	spillConfig             engine.ChangeRangeSpillConfig
+	spillNetEffectPrepared  bool
+	spillNetEffectData      replayRowHandle
+	spillNetEffectTombstone replayRowHandle
 	// debugLabel scopes temporary diagnostics to a single CollectChanges call chain.
 	debugLabel string
 
@@ -2559,6 +2755,14 @@ func (p *ChangeHandler) Close() error {
 	}
 	if p.tombstoneHandle != nil {
 		p.tombstoneHandle.Close()
+	}
+	if p.spillNetEffectData != nil {
+		p.spillNetEffectData.Close()
+		p.spillNetEffectData = nil
+	}
+	if p.spillNetEffectTombstone != nil {
+		p.spillNetEffectTombstone.Close()
+		p.spillNetEffectTombstone = nil
 	}
 	if p.scheduler != nil {
 		p.scheduler.Stop()
