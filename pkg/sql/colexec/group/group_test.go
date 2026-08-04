@@ -408,6 +408,63 @@ func TestGroupSpillWriteHonorsCancellationAfterInputBatch(t *testing.T) {
 	require.Nil(t, g.ctr.currentSpillBkt)
 }
 
+func TestGroupStreamingDoesNotPublishAfterInputCancellation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	baseCtx := proc.Ctx
+	ctx, cancel := context.WithCancel(baseCtx)
+	proc.Ctx = ctx
+
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt32Vector([]int32{4, 1, 3, 2}, nil, proc.Mp())
+	input.SetRowCount(4)
+	child := colexec.NewMockOperator().
+		WithBatchs([]*batch.Batch{input}).
+		WithBatchCallback(func(int) { cancel() })
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, []aggexec.AggFuncExecExpression{countStarAgg()})
+	g.NeedEval = false
+	g.SpillMem = 1
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+
+	t.Cleanup(func() {
+		proc.Ctx = baseCtx
+		g.Free(proc, true, context.Canceled)
+		child.Free(proc, true, context.Canceled)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	result, err := vm.Exec(g, proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, result.Batch)
+	require.Equal(t, vm.Eval, g.ctr.state)
+	require.Zero(t, g.ctr.currBatchIdx)
+	require.NotEmpty(t, g.ctr.groupByBatches)
+	require.Empty(t, g.ctr.groupByBatches[0].ExtraBuf)
+
+	g.Reset(proc, true, context.Canceled)
+	require.Nil(t, g.ctr.mp)
+	child.Free(proc, true, context.Canceled)
+
+	proc.Ctx = baseCtx
+	fresh := batch.NewWithSize(1)
+	fresh.Vecs[0] = testutil.MakeInt32Vector([]int32{8, 5, 7, 6}, nil, proc.Mp())
+	fresh.SetRowCount(4)
+	child = colexec.NewMockOperator().WithBatchs([]*batch.Batch{fresh})
+	g.Children = nil
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+
+	freshResult, err := vm.Exec(g, proc)
+	require.NoError(t, err)
+	require.NotNil(t, freshResult.Batch)
+	require.Equal(t, 4, freshResult.Batch.RowCount())
+
+	end, err := vm.Exec(g, proc)
+	require.NoError(t, err)
+	require.Nil(t, end.Batch)
+}
+
 func TestGroupSpillWriteStopsAtBucketBoundary(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	baseCtx := proc.Ctx
