@@ -556,5 +556,30 @@ select @prepared_param;
 deallocate prepare prepared_set_literal;
 deallocate prepare prepared_set_param;
 
+-- @case
+-- @desc:Prepared multi-assignment SET preserves parameters and applies only after all expressions succeed
+-- @label:bvt
+drop table if exists prepared_set_values;
+create table prepared_set_values(v int);
+insert into prepared_set_values values (1), (2);
+set @prepared_a = 99, @prepared_b = 'before';
+prepare prepared_set_multi from 'set @prepared_a = ? + 1, @prepared_b = concat(?, "-text")';
+set @prepared_input_a = 41, @prepared_input_b = 'first';
+execute prepared_set_multi using @prepared_input_a, @prepared_input_b;
+select @prepared_a, @prepared_b;
+set @prepared_input_a = 9, @prepared_input_b = null;
+execute prepared_set_multi using @prepared_input_a, @prepared_input_b;
+select @prepared_a, @prepared_b;
+set @prepared_a = 77, @prepared_b = 'stable';
+execute prepared_set_multi using @prepared_input_a;
+select @prepared_a, @prepared_b;
+prepare prepared_set_error from 'set @prepared_a = ?, @prepared_b = (select v from prepared_set_values)';
+set @prepared_a = 88, @prepared_b = 'unchanged';
+execute prepared_set_error using @prepared_input_a;
+select @prepared_a, @prepared_b;
+deallocate prepare prepared_set_multi;
+deallocate prepare prepared_set_error;
+drop table prepared_set_values;
+
 # reset
 SET TIME_ZONE = "SYSTEM";

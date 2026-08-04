@@ -5810,8 +5810,15 @@ func TestExecRequestStmtPrepareAcceptsSetVariable(t *testing.T) {
 		data: []byte("set @first = ?, @second = ?"),
 	})
 	require.NoError(t, err)
-	require.NotNil(t, resp)
-	require.Equal(t, ErrorResponse, resp.GetCategory())
+	require.Nil(t, resp)
+
+	stmtName = getPrepareStmtName(ses.GetLastStmtId())
+	prepared, err = ses.GetPrepareStmt(ctx, stmtName)
+	require.NoError(t, err)
+	setVar, ok := prepared.PrepareStmt.(*tree.SetVar)
+	require.True(t, ok)
+	require.Len(t, setVar.Assignments, 2)
+	require.Len(t, prepared.PreparePlan.GetDcl().GetPrepare().GetParamTypes(), 2)
 }
 
 func TestExecRequestProtocolCommandRowCount(t *testing.T) {

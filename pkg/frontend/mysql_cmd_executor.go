@@ -919,6 +919,31 @@ func doSetVar(
 	var err error = nil
 	var ok bool
 	var userVarIsBin bool
+	type evaluatedAssignment struct {
+		assign       *tree.VarAssignmentExpr
+		value        interface{}
+		userVarIsBin bool
+	}
+	evaluateAssignment := func(assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
+		isBin := false
+		value, evalErr := getExprValueWithPrepareMode(
+			assign.Value, ses, execCtx, preparedExpression, &isBin)
+		if evalErr != nil {
+			return evaluatedAssignment{}, evalErr
+		}
+
+		if systemVar, exists := gSysVarsDefs[assign.Name]; exists {
+			if isDefault, isBool := value.(bool); isBool && isDefault {
+				value = systemVar.Default
+			}
+		}
+		return evaluatedAssignment{
+			assign:       assign,
+			value:        value,
+			userVarIsBin: isBin,
+		}, nil
+	}
+
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
 		var oldValueRaw interface{}
 		if system {
@@ -963,22 +988,11 @@ func doSetVar(
 		return nil
 	}
 
-	for _, assign := range sv.Assignments {
+	applyAssignment := func(item evaluatedAssignment) error {
+		assign := item.assign
 		name := assign.Name
-		var value interface{}
-		userVarIsBin = false
-
-		value, err = getExprValueWithPrepareMode(
-			assign.Value, ses, execCtx, preparedExpression, &userVarIsBin)
-		if err != nil {
-			return err
-		}
-
-		if systemVar, ok := gSysVarsDefs[name]; ok {
-			if isDefault, ok := value.(bool); ok && isDefault {
-				value = systemVar.Default
-			}
-		}
+		value := item.value
+		userVarIsBin = item.userVarIsBin
 
 		//TODO : fix SET NAMES after parser is ready
 		if name == "names" {
@@ -1061,8 +1075,36 @@ func doSetVar(
 				return err
 			}
 		}
+		return err
 	}
-	return err
+
+	if preparedExpression {
+		evaluated := make([]evaluatedAssignment, 0, len(sv.Assignments))
+		for _, assign := range sv.Assignments {
+			item, evalErr := evaluateAssignment(assign)
+			if evalErr != nil {
+				return evalErr
+			}
+			evaluated = append(evaluated, item)
+		}
+		for _, item := range evaluated {
+			if err = applyAssignment(item); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, assign := range sv.Assignments {
+		item, evalErr := evaluateAssignment(assign)
+		if evalErr != nil {
+			return evalErr
+		}
+		if err = applyAssignment(item); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 /*

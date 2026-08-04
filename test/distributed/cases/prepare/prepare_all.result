@@ -749,4 +749,35 @@ select @prepared_param;
 10
 deallocate prepare prepared_set_literal;
 deallocate prepare prepared_set_param;
+drop table if exists prepared_set_values;
+create table prepared_set_values(v int);
+insert into prepared_set_values values (1), (2);
+set @prepared_a = 99, @prepared_b = 'before';
+prepare prepared_set_multi from 'set @prepared_a = ? + 1, @prepared_b = concat(?, "-text")';
+set @prepared_input_a = 41, @prepared_input_b = 'first';
+execute prepared_set_multi using @prepared_input_a, @prepared_input_b;
+select @prepared_a, @prepared_b;
+➤ @prepared_a[12,0,0]  ¦  @prepared_b[12,0,0]  𝄀
+42  ¦  first-text
+set @prepared_input_a = 9, @prepared_input_b = null;
+execute prepared_set_multi using @prepared_input_a, @prepared_input_b;
+select @prepared_a, @prepared_b;
+➤ @prepared_a[12,0,0]  ¦  @prepared_b[12,0,0]  𝄀
+10  ¦  NULL
+set @prepared_a = 77, @prepared_b = 'stable';
+execute prepared_set_multi using @prepared_input_a;
+invalid input: Incorrect arguments to EXECUTE
+select @prepared_a, @prepared_b;
+➤ @prepared_a[12,0,0]  ¦  @prepared_b[12,0,0]  𝄀
+77  ¦  stable
+prepare prepared_set_error from 'set @prepared_a = ?, @prepared_b = (select v from prepared_set_values)';
+set @prepared_a = 88, @prepared_b = 'unchanged';
+execute prepared_set_error using @prepared_input_a;
+Subquery returns more than 1 row
+select @prepared_a, @prepared_b;
+➤ @prepared_a[12,0,0]  ¦  @prepared_b[12,0,0]  𝄀
+88  ¦  unchanged
+deallocate prepare prepared_set_multi;
+deallocate prepare prepared_set_error;
+drop table prepared_set_values;
 SET TIME_ZONE = "SYSTEM";
