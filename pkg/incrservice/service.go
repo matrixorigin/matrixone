@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -382,6 +383,9 @@ func (s *service) SetOffset(
 		if createCache == nil {
 			return moerr.NewTxnNeedRetryWithDefChanged(ctx)
 		}
+		if createEpoch == math.MaxUint32 {
+			return moerr.NewInternalErrorNoCtx("AUTO_INCREMENT epoch exhausted")
+		}
 	} else {
 		if err := s.Reload(ctx, tableID); err != nil {
 			return err
@@ -414,7 +418,7 @@ func (s *service) SetOffset(
 			ctx,
 			s.sid,
 			tableID,
-			createEpoch,
+			createEpoch+1,
 			cols,
 			s.cfg,
 			s.allocator,

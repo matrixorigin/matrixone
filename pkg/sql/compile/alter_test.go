@@ -724,7 +724,7 @@ func TestAppendAlterAutoIncrementReqsUsesStableColumnIndexAfterRename(t *testing
 	cleanup := newAlterAutoIncrementResetCleanup(c)
 	var reqs []*api.AlterTableReq
 	require.NoError(t, c.appendAlterAutoIncrementReqs(
-		"resolved_db", tableDef, 6, tableDef.TblId, 99, cleanup, &reqs,
+		"resolved_db", tableDef, tableDef, 6, tableDef.TblId, 99, cleanup, &reqs,
 	))
 	require.Equal(t, []string{maxSQL}, spyExec.executedSQLs)
 	require.Len(t, reqs, 1)
@@ -734,6 +734,44 @@ func TestAppendAlterAutoIncrementReqsUsesStableColumnIndexAfterRename(t *testing
 	require.Zero(t, reqs[0].GetUpdateAutoIncrement().GetEpoch(),
 		"disttae must assign the actual next catalog epoch when applying the request")
 	require.Zero(t, resultMP.CurrNB(), "the internal MAX result must be closed")
+
+	statementErr := errors.New("later ALTER step failed")
+	cleanup.finish(&statementErr)
+	require.ErrorContains(t, statementErr, "later ALTER step failed")
+}
+
+func TestAppendAlterAutoIncrementReqsUsesFinalColumnNameInCombinedRename(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	maxSQL := "select cast(coalesce(max(case when `id` > 0 then `id` else 0 end), 0) as unsigned) from `resolved_db`.`dept`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		maxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{140}),
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	tableDef := &plan.TableDef{TblId: 7, Name: "dept", Cols: []*plan.ColDef{{
+		ColId: 11, Name: "id",
+		Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+	}}}
+	targetTableDef := plan.DeepCopyTableDef(tableDef, true)
+	targetTableDef.Cols[0].Name = "new_id"
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(
+		c.proc.Ctx, tableDef.TblId, 0, "new_id", uint64(140), c.proc.GetTxnOperator(),
+	).Return(nil)
+	autoSvc.EXPECT().DiscardOffsetReset(
+		gomock.Any(), tableDef.TblId, c.proc.GetTxnOperator(),
+	).Return(nil)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	cleanup := newAlterAutoIncrementResetCleanup(c)
+	var reqs []*api.AlterTableReq
+	require.NoError(t, c.appendAlterAutoIncrementReqs(
+		"resolved_db", tableDef, targetTableDef, 6, tableDef.TblId, 99, cleanup, &reqs,
+	))
+	require.Equal(t, []string{maxSQL}, spyExec.executedSQLs,
+		"MAX must use the source column that exists before the ALTER is applied")
+	require.Len(t, reqs, 1)
+	require.Zero(t, resultMP.CurrNB())
 
 	statementErr := errors.New("later ALTER step failed")
 	cleanup.finish(&statementErr)
@@ -754,7 +792,7 @@ func TestAppendAlterAutoIncrementReqsRejectsLegacyTNBeforeQuery(t *testing.T) {
 
 	var reqs []*api.AlterTableReq
 	err := c.appendAlterAutoIncrementReqs(
-		"test", tableDef, 6, 7, 99, newAlterAutoIncrementResetCleanup(c), &reqs,
+		"test", tableDef, tableDef, 6, 7, 99, newAlterAutoIncrementResetCleanup(c), &reqs,
 	)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
 	require.Empty(t, spyExec.executedSQLs)
@@ -791,7 +829,7 @@ func TestAppendAlterAutoIncrementReqsDiscardsResetAfterCancellation(t *testing.T
 	cleanup := newAlterAutoIncrementResetCleanup(c)
 	var reqs []*api.AlterTableReq
 	err := c.appendAlterAutoIncrementReqs(
-		"test", tableDef, 6, tableDef.TblId, 99, cleanup, &reqs,
+		"test", tableDef, tableDef, 6, tableDef.TblId, 99, cleanup, &reqs,
 	)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Empty(t, reqs)
@@ -820,7 +858,7 @@ func TestAppendAlterAutoIncrementReqsRejectsNarrowedOverflow(t *testing.T) {
 
 	var reqs []*api.AlterTableReq
 	err := c.appendAlterAutoIncrementReqs(
-		"test", tableDef, 6, tableDef.TblId, 300,
+		"test", tableDef, tableDef, 6, tableDef.TblId, 300,
 		newAlterAutoIncrementResetCleanup(c), &reqs,
 	)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)

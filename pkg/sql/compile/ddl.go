@@ -1131,9 +1131,14 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				act.AlterComment.NewComment,
 			))
 		case *plan.AlterTable_Action_AlterAutoIncrement:
+			targetTableDef := qry.GetCopyTableDef()
+			if targetTableDef == nil {
+				targetTableDef = qry.GetTableDef()
+			}
 			if err := c.appendAlterAutoIncrementReqs(
 				dbName,
 				qry.GetTableDef(),
+				targetTableDef,
 				did,
 				tid,
 				act.AlterAutoIncrement.NewOffset,
@@ -4867,6 +4872,7 @@ func (c *Compile) getAlterAutoIncrementOffset(
 func (c *Compile) appendAlterAutoIncrementReqs(
 	dbName string,
 	tableDef *plan.TableDef,
+	targetTableDef *plan.TableDef,
 	did uint64,
 	tid uint64,
 	requestedOffset uint64,
@@ -4887,6 +4893,16 @@ func (c *Compile) appendAlterAutoIncrementReqs(
 
 	svc := incrservice.GetAutoIncrementService(c.proc.GetService())
 	for _, col := range incrservice.GetUserAutoColumnFromDef(tableDef) {
+		targetCol := plan2.FindColumnByColId(
+			targetTableDef.Cols,
+			tableDef.Cols[col.ColIndex].ColId,
+		)
+		if targetCol == nil || !targetCol.Typ.AutoIncr {
+			return moerr.NewInternalErrorNoCtxf(
+				"AUTO_INCREMENT column %q is missing from final table definition",
+				col.ColName,
+			)
+		}
 		offset, err := c.getAlterAutoIncrementOffset(
 			dbName,
 			tableDef.Name,
@@ -4898,7 +4914,7 @@ func (c *Compile) appendAlterAutoIncrementReqs(
 		}
 		if err := incrservice.ValidateAutoColumnOffset(
 			c.proc.Ctx,
-			types.T(tableDef.Cols[col.ColIndex].Typ.Id),
+			types.T(targetCol.Typ.Id),
 			offset,
 		); err != nil {
 			return err
@@ -4907,7 +4923,7 @@ func (c *Compile) appendAlterAutoIncrementReqs(
 			c.proc.Ctx,
 			tid,
 			col.ColIndex,
-			col.ColName,
+			targetCol.Name,
 			offset,
 			c.proc.GetTxnOperator(),
 		); err != nil {

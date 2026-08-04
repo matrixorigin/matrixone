@@ -845,9 +845,61 @@ func TestSetOffsetOnNewTablePublishesFreshCacheAfterCommit(t *testing.T) {
 		require.False(t, resetExists)
 
 		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
-		last, err := s.InsertValues(ctx, 0, 0, nil, []*vector.Vector{input}, 1, 0)
+		last, err := s.InsertValues(ctx, 0, 1, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 		require.Equal(t, uint64(1000), last)
+	})
+}
+
+func TestSetOffsetOnNewTableUsesPostResetEpochBeforeCommit(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(
+			defines.AttachAccountId(context.Background(), catalog.System_Account),
+			10*time.Second,
+		)
+		defer cancel()
+
+		s := NewIncrService("", NewMemStore(), Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, createTxn))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColIndex, def[0].ColName, 999, createTxn))
+
+		_, err = s.GetLastAllocateTS(ctx, 0, 1, createTxn, def[0].ColName)
+		require.NoError(t, err)
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		last, err := s.InsertValues(ctx, 0, 1, createTxn, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1000), last)
+	})
+}
+
+func TestSetOffsetOnNewTableRejectsEpochOverflowBeforeMutation(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(
+			defines.AttachAccountId(context.Background(), catalog.System_Account),
+			10*time.Second,
+		)
+		defer cancel()
+
+		store := NewMemStore()
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, createTxn))
+		s.getTableCache(0).(*tableCache).epochID = math.MaxUint32
+		before, err := store.GetColumns(ctx, 0, createTxn)
+		require.NoError(t, err)
+
+		err = s.SetOffset(ctx, 0, def[0].ColIndex, def[0].ColName, 999, createTxn)
+		require.ErrorContains(t, err, "AUTO_INCREMENT epoch exhausted")
+		cols, err := store.GetColumns(ctx, 0, createTxn)
+		require.NoError(t, err)
+		require.Equal(t, before[0].Offset, cols[0].Offset)
 	})
 }
 
@@ -871,7 +923,7 @@ func TestDiscardOffsetResetRestoresCreatedTableCache(t *testing.T) {
 		replacement := s.getTableCache(0)
 		require.NotSame(t, original, replacement)
 		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
-		last, err := s.InsertValues(ctx, 0, 0, createTxn, []*vector.Vector{input}, 1, 0)
+		last, err := s.InsertValues(ctx, 0, 1, createTxn, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
 		require.Equal(t, uint64(1000), last)
 		key := privateResetKey{txnID: string(createTxn.Txn().ID), tableID: 0}

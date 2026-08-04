@@ -491,3 +491,22 @@ alter table auto_increment_alter_rename auto_increment = 100;
 insert into auto_increment_alter_rename(v) values (3);
 select * from auto_increment_alter_rename order by new_id;
 drop table auto_increment_alter_rename;
+
+-- A same-statement rename must read the old column and publish the final cache key.
+drop table if exists auto_increment_alter_rename_combined;
+create table auto_increment_alter_rename_combined(id bigint primary key auto_increment, v int);
+insert into auto_increment_alter_rename_combined(v) values (1), (2);
+alter table auto_increment_alter_rename_combined rename column id to new_id, auto_increment = 100;
+insert into auto_increment_alter_rename_combined(v) values (3);
+select * from auto_increment_alter_rename_combined order by new_id;
+drop table auto_increment_alter_rename_combined;
+
+-- CREATE, combined rename/reset, and implicit allocation must share the final name and post-ALTER epoch.
+drop table if exists auto_increment_alter_create_txn;
+begin;
+create table auto_increment_alter_create_txn(id bigint primary key auto_increment, v int);
+alter table auto_increment_alter_create_txn rename column id to new_id, auto_increment = 100;
+insert into auto_increment_alter_create_txn(v) values (1);
+select * from auto_increment_alter_create_txn order by new_id;
+commit;
+drop table auto_increment_alter_create_txn;
