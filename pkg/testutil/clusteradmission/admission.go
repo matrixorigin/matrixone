@@ -20,13 +20,13 @@ package clusteradmission
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/gofrs/flock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const (
@@ -86,7 +86,7 @@ func newManager(path string, delay time.Duration) *manager {
 
 func (m *manager) acquire(ctx context.Context) (*Lease, error) {
 	if ctx == nil {
-		return nil, fmt.Errorf("cluster admission requires a context")
+		return nil, moerr.NewInvalidInputNoCtx("cluster admission requires a context")
 	}
 
 	m.mu.Lock()
@@ -99,12 +99,15 @@ func (m *manager) acquire(ctx context.Context) (*Lease, error) {
 	lock := flock.New(m.path)
 	locked, err := lock.TryLockContext(ctx, m.retryDelay)
 	if err != nil {
-		return nil, fmt.Errorf("acquire test cluster admission %s: %w",
-			m.path, errors.Join(err, lock.Close()))
+		return nil, errors.Join(
+			moerr.NewInternalErrorNoCtxf("acquire test cluster admission %s", m.path),
+			err,
+			lock.Close(),
+		)
 	}
 	if !locked {
 		return nil, errors.Join(
-			fmt.Errorf("test cluster admission %s was not acquired", m.path),
+			moerr.NewInvalidStateNoCtxf("test cluster admission %s was not acquired", m.path),
 			lock.Close(),
 		)
 	}
@@ -117,14 +120,17 @@ func (m *manager) release() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.references <= 0 || m.lock == nil {
-		return fmt.Errorf("test cluster admission %s has no active lease", m.path)
+		return moerr.NewInvalidStateNoCtxf("test cluster admission %s has no active lease", m.path)
 	}
 	if m.references > 1 {
 		m.references--
 		return nil
 	}
 	if err := m.lock.Close(); err != nil {
-		return fmt.Errorf("release test cluster admission %s: %w", m.path, err)
+		return errors.Join(
+			moerr.NewInternalErrorNoCtxf("release test cluster admission %s", m.path),
+			err,
+		)
 	}
 	m.lock = nil
 	m.references = 0
