@@ -56,6 +56,12 @@ func uuidSwapFlagTypeSupported(typ types.Type) bool {
 		typ.Oid.IsMySQLString()
 }
 
+func serializedTupleReturnType(_ []types.Type) types.Type {
+	typ := types.T_varchar.ToType()
+	typ.Charset = types.CharsetBinary
+	return typ
+}
+
 // wkbConstructor builds a typed WKB geometry constructor function definition
 // (ST_PointFromWKB, ...) accepting varchar/blob/varbinary input.
 func wkbConstructor(id int, fn executeLogicOfOverload) FuncNew {
@@ -2949,9 +2955,7 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    serializedTupleReturnType,
 				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
 					opSerial := newOpSerial()
 					return opSerial.BuiltInSerial, opSerial.Reset, opSerial.Close, opSerial.RetainedBytes
@@ -2975,9 +2979,7 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    serializedTupleReturnType,
 				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
 					opSerial := newOpSerial()
 					return opSerial.BuiltInSerialFull, opSerial.Reset, opSerial.Close, opSerial.RetainedBytes
