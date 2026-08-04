@@ -961,3 +961,31 @@ func TestShowCreatePreservesTextCollationMetadata(t *testing.T) {
 	require.Contains(t, showSQL, "`packed` varchar(10) COLLATE binary")
 	require.Contains(t, showSQL, ") COLLATE=utf8mb4_bin")
 }
+
+func TestShowCreateKeepsLegacyDefaultOutputStable(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock,
+		"create table legacy_show(general_text varchar(10))")
+	require.NoError(t, err)
+	tableDef.DefaultCharset = uint32(types.CharsetLegacy)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, showSQL, "`general_text` varchar(10) DEFAULT NULL")
+	require.NotContains(t, showSQL, "COLLATE")
+}
+
+func TestShowCreateDistinguishesMixedLegacyAndGeneralCIColumns(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock,
+		"create table legacy_show(legacy_text varchar(10), general_text varchar(10))")
+	require.NoError(t, err)
+	tableDef.DefaultCharset = uint32(types.CharsetLegacy)
+	FindColumn(tableDef.Cols, "legacy_text").Typ.Charset = uint32(types.CharsetLegacy)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, showSQL, "`legacy_text` varchar(10) DEFAULT NULL")
+	require.Contains(t, showSQL,
+		"`general_text` varchar(10) COLLATE utf8mb4_general_ci DEFAULT NULL")
+}

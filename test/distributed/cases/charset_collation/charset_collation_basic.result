@@ -644,6 +644,14 @@ INSERT INTO t_minmax_bin VALUES (1, 'Apple'), (2, 'apple'), (3, 'APPLE');
 SELECT MIN(name) as min_name, MAX(name) as max_name FROM t_minmax_bin;
 min_name    max_name
 APPLE    apple
+CREATE TABLE t_minmax_cast_ci (
+name VARCHAR(100)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+INSERT INTO t_minmax_cast_ci VALUES ('a'), ('B');
+SELECT MIN(CAST(name AS CHAR)) as min_name, MAX(CAST(name AS CHAR)) as max_name
+FROM t_minmax_cast_ci;
+min_name    max_name
+a    B
 SELECT CAST('test' AS CHAR CHARACTER SET utf8mb4);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 36 near " CHARACTER SET utf8mb4);";
 SELECT CAST('你好' AS CHAR(10) CHARACTER SET utf8mb4);

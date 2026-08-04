@@ -236,6 +236,8 @@ func TestBuildCreateTableAcceptsUTF8MB3Aliases(t *testing.T) {
 	for _, sql := range []string{
 		"create table t(v varchar(8)) character set utf8 collate utf8mb3_bin",
 		"create table t(v varchar(8) character set utf8mb3 collate utf8_general_ci)",
+		"create table t(v varchar(8)) character set utf8 collate utf8mb4_general_ci",
+		"create table t(v varchar(8) character set utf8 collate utf8mb4_bin)",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)

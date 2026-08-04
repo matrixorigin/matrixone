@@ -1892,8 +1892,9 @@ type SchemaExtra struct {
 	// CHECK metadata uses this length-delimited protobuf field so older CNs
 	// safely skip it instead of misreading the legacy constraint byte stream.
 	Checks []*plan.CheckDef `protobuf:"bytes,18,rep,name=checks,proto3" json:"checks,omitempty"`
-	// Table-level default collation class. The zero value is legacy/default
-	// utf8mb4_general_ci; nonzero values use container/types Charset constants.
+	// Table-level default collation class. Zero identifies catalog rows written
+	// before this metadata existed and retains their historical bytewise text
+	// behavior; new definitions use nonzero container/types Charset constants.
 	DefaultCharset       uint32   `protobuf:"varint,19,opt,name=default_charset,json=defaultCharset,proto3" json:"default_charset,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`

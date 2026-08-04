@@ -90,6 +90,17 @@ func GetFunctionTypeStrFromAst(typRef tree.ResolvableTypeReference) (string, err
 }
 
 func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan.Type, error) {
+	ret, err := getTypeFromAstWithoutCharset(ctx, typ)
+	if err != nil {
+		return plan.Type{}, err
+	}
+	// AST-authored types are new metadata. Assign their explicit charset here so
+	// CharsetLegacy remains reserved for types decoded from pre-collation catalogs.
+	ret.Charset = uint32(types.CharsetType(types.T(ret.Id)))
+	return ret, nil
+}
+
+func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeReference) (plan.Type, error) {
 	if n, ok := typ.(*tree.T); ok {
 		switch defines.MysqlType(n.InternalType.Oid) {
 		case defines.MYSQL_TYPE_BIT:
@@ -440,8 +451,10 @@ func charsetAndCollationCompatible(charset, collation string) bool {
 
 func canonicalCharsetName(name string) string {
 	switch strings.ToLower(name) {
-	case "utf8", "utf8mb3":
-		return "utf8mb3"
+	case "utf8", "utf8mb3", "utf8mb4":
+		// MatrixOne implements the accepted utf8/utf8mb3/utf8mb4 general_ci
+		// and _bin spellings with the same internal collation identities.
+		return "utf8mb4"
 	default:
 		return strings.ToLower(name)
 	}
