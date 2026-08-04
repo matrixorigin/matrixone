@@ -56,11 +56,15 @@ select p.id, (select sum(c.v) from child_agg c where c.corr_key = p.corr_key hav
 -- @case
 -- @desc:issue #24737 - Prisma 7.9.1 to-many relation join through transparent derived tables
 -- @label:bvt
+-- @ignore:2
 SELECT `t0`.`id`, `t0`.`name`, (SELECT COALESCE(JSON_ARRAYAGG(`__prisma_data__`), CONVERT('[]', JSON)) AS `__prisma_data__` FROM (SELECT `t3`.`__prisma_data__` FROM (SELECT JSON_OBJECT('id', `t2`.`id`, 'title', `t2`.`title`, 'authorId', `t2`.`authorId`) AS `__prisma_data__` FROM (SELECT `t1`.* FROM `Post` AS `t1` WHERE `t0`.`id` = `t1`.`authorId` /* root select */) AS `t2` /* inner select */) AS `t3` /* middle select */) AS `t4` /* outer select */) AS `posts` FROM `Author` AS `t0` ORDER BY `t0`.`id` ASC;
+SELECT `q`.`id`, JSON_LENGTH(`q`.`posts`) AS `post_count` FROM (SELECT `t0`.`id`, (SELECT COALESCE(JSON_ARRAYAGG(`__prisma_data__`), CONVERT('[]', JSON)) FROM (SELECT `t3`.`__prisma_data__` FROM (SELECT JSON_OBJECT('id', `t2`.`id`, 'title', `t2`.`title`, 'authorId', `t2`.`authorId`) AS `__prisma_data__` FROM (SELECT `t1`.* FROM `Post` AS `t1` WHERE `t0`.`id` = `t1`.`authorId`) AS `t2`) AS `t3`) AS `t4`) AS `posts` FROM `Author` AS `t0`) AS `q` ORDER BY `q`.`id`;
+-- @ignore:1
 SELECT `t0`.`id`, (SELECT COALESCE(JSON_ARRAYAGG(`__prisma_data__`), CONVERT('[]', JSON)) FROM (SELECT JSON_OBJECT('id', `t2`.`id`, 'title', `t2`.`title`) AS `__prisma_data__` FROM (SELECT `t1`.* FROM `Post` AS `t1` WHERE `t0`.`id` = `t1`.`authorId` AND `t1`.`id` >= 30) AS `t2`) AS `t3`) AS `filtered_posts` FROM `Author` AS `t0` ORDER BY `t0`.`id`;
+SELECT `q`.`id`, JSON_LENGTH(`q`.`filtered_posts`) AS `filtered_post_count` FROM (SELECT `t0`.`id`, (SELECT COALESCE(JSON_ARRAYAGG(`__prisma_data__`), CONVERT('[]', JSON)) FROM (SELECT JSON_OBJECT('id', `t2`.`id`, 'title', `t2`.`title`) AS `__prisma_data__` FROM (SELECT `t1`.* FROM `Post` AS `t1` WHERE `t0`.`id` = `t1`.`authorId` AND `t1`.`id` >= 30) AS `t2`) AS `t3`) AS `filtered_posts` FROM `Author` AS `t0`) AS `q` ORDER BY `q`.`id`;
 SELECT `t0`.`id`, (SELECT COUNT(*) FROM (SELECT `t1`.`id` FROM `Post` AS `t1` WHERE `t0`.`id` = `t1`.`authorId`) AS `t2`) AS `post_count` FROM `Author` AS `t0` ORDER BY `t0`.`id`;
 SELECT `t1`.`id`, (SELECT `t0`.`name` FROM `Author` AS `t0` WHERE `t0`.`id` = `t1`.`authorId`) AS `author_name` FROM `Post` AS `t1` ORDER BY `t1`.`id`;
-SELECT COALESCE(JSON_ARRAYAGG(`__prisma_data__`), CONVERT('[]', JSON)) AS `posts` FROM (SELECT JSON_OBJECT('id', `t2`.`id`, 'title', `t2`.`title`, 'authorId', `t2`.`authorId`) AS `__prisma_data__` FROM (SELECT `t1`.* FROM `Post` AS `t1` WHERE `t1`.`authorId` = 3) AS `t2`) AS `t3`;
+SELECT JSON_LENGTH(COALESCE(JSON_ARRAYAGG(`__prisma_data__`), CONVERT('[]', JSON))) AS `post_count` FROM (SELECT JSON_OBJECT('id', `t2`.`id`, 'title', `t2`.`title`, 'authorId', `t2`.`authorId`) AS `__prisma_data__` FROM (SELECT `t1`.* FROM `Post` AS `t1` WHERE `t1`.`authorId` = 3) AS `t2`) AS `t3`;
 
 -- @teardown
 drop database test_subq_corr_project;

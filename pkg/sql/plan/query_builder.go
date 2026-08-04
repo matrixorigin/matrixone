@@ -8967,15 +8967,10 @@ func (builder *QueryBuilder) analyzeTransparentCorrelatedDerivedTable(
 		return builder.analyzeTransparentCorrelatedDerivedTable(node.Children[0], ctx, corrRefs)
 
 	case plan.Node_TABLE_SCAN:
-		if len(node.Children) != 0 || len(node.ProjectList) > 0 {
+		if len(node.Children) != 0 || len(node.ProjectList) > 0 || len(node.BlockFilterList) > 0 {
 			return false
 		}
 		for _, expr := range node.FilterList {
-			if !analyzeTransparentDerivedFilter(expr, ctx, corrRefs) {
-				return false
-			}
-		}
-		for _, expr := range node.BlockFilterList {
 			if !analyzeTransparentDerivedFilter(expr, ctx, corrRefs) {
 				return false
 			}

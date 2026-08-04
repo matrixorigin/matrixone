@@ -452,6 +452,18 @@ func TestTransparentCorrelatedDerivedTableNormalizationIsAtomic(t *testing.T) {
 		require.False(t, ctx.isCorrelated)
 	})
 
+	t.Run("scan block filter remains unsupported and atomic", func(t *testing.T) {
+		corr := &plan.CorrColRef{RelPos: outerTag, Depth: 2}
+		nodes := newNodes(corr, &plan.Node{NodeType: plan.Node_TABLE_SCAN})
+		nodes[1].Children[0] = 0
+		nodes[0].BlockFilterList = []*plan.Expr{newTransparentDerivedEquality(corr, 42)}
+		ctx := NewBindContext(nil, nil)
+		err := newBuilder(nodes).normalizeTransparentCorrelatedDerivedTable(3, ctx)
+		require.ErrorContains(t, err, "correlated subquery in FROM clause is not yet implemented")
+		require.Equal(t, int32(2), corr.Depth)
+		require.False(t, ctx.isCorrelated)
+	})
+
 	t.Run("same scope remains non lateral", func(t *testing.T) {
 		corr := &plan.CorrColRef{RelPos: outerTag, Depth: 1}
 		nodes := newNodes(corr, &plan.Node{NodeType: plan.Node_TABLE_SCAN})
