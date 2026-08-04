@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	sqlutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -286,7 +287,9 @@ func (writer *s3WriterDelegate) append(
 		if tableType == UpdateMainTable {
 			if mainTableNullPkFilter {
 				var checked *batch.Batch
-				if checked, err = projBat.Clone(mp, false); err != nil {
+				// This validation copy leaves any allocation-accounted join owner;
+				// it is short-lived and never published back into that owner.
+				if checked, err = sqlutil.CopyBatch(projBat, proc); err != nil {
 					return
 				}
 				nulls := checked.Vecs[mainTablePkProjectIdx].GetNulls().GetBitmap().Clone()
@@ -321,7 +324,9 @@ func (writer *s3WriterDelegate) append(
 			// Clone because SelectColumns shares vectors, and ShrinkByMask
 			// modifies in-place.
 			var filtered *batch.Batch
-			if filtered, err = projBat.Clone(mp, false); err != nil {
+			// The sinker owns the filtered copy independently of the input
+			// pipeline, so cross the allocation ownership boundary explicitly.
+			if filtered, err = sqlutil.CopyBatch(projBat, proc); err != nil {
 				return
 			}
 			nullIdx := writer.sortIndexes[i]

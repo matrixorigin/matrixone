@@ -26,6 +26,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestFunctionResultAllocationSurvivesVectorTransfer(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	wrapper, err := NewFunctionResultWrapperWithAllocation(
+		types.T_int64.ToType(), mp, selection,
+	)
+	require.NoError(t, err)
+	require.NoError(t, wrapper.PreExtendAndReset(64))
+	transferred := wrapper.GetResultVector()
+	require.Same(t, selection, transferred.AllocationAccountSelection())
+	firstUsed := account.Snapshot().Used
+	require.Positive(t, firstUsed)
+
+	wrapper.SetResultVector(nil)
+	require.NoError(t, wrapper.PreExtendAndReset(64))
+	require.Same(t, selection, wrapper.GetResultVector().AllocationAccountSelection())
+	require.Greater(t, account.Snapshot().Used, firstUsed)
+
+	transferred.Free(mp)
+	wrapper.Free()
+	require.Zero(t, account.Snapshot().Used)
+}
+
 func TestAppendByteJsonUsesStorageCompatibleTypeCodes(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	wrapper := NewFunctionResultWrapper(types.T_json.ToType(), mp)

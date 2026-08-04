@@ -571,9 +571,10 @@ func OptGetBytesParamFromWrapper(wrapper FunctionResultWrapper, idx int, src *Ve
 var _ FunctionResultWrapper = &FunctionResult[int64]{}
 
 type FunctionResult[T types.FixedSizeT] struct {
-	typ types.Type
-	vec *Vector
-	mp  *mpool.MPool
+	typ        types.Type
+	vec        *Vector
+	mp         *mpool.MPool
+	allocation *AllocationAccountSelection
 
 	isVarlena bool
 	cols      []T
@@ -621,7 +622,11 @@ func (fr *FunctionResult[T]) getConvenientParamList() []reusableParameterWrapper
 
 func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 	if fr.vec == nil {
-		fr.vec = NewOffHeapVecWithType(fr.typ)
+		var err error
+		fr.vec, err = NewOffHeapVecWithTypeAndAllocation(fr.typ, fr.allocation)
+		if err != nil {
+			return err
+		}
 	}
 
 	oldLength := fr.vec.Length()
@@ -630,6 +635,9 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 		if err := fr.vec.PreExtend(more, fr.mp); err != nil {
 			return err
 		}
+	}
+	if err := fr.vec.PreExtendNulls(targetSize, fr.mp); err != nil {
+		return err
 	}
 	fr.vec.ResetWithSameType()
 
@@ -760,6 +768,14 @@ func (fr *FunctionResult[T]) Free() {
 	fr.convenientParam = nil
 }
 
+func (fr *FunctionResult[T]) setAllocation(selection *AllocationAccountSelection) {
+	fr.allocation = selection
+}
+
+type functionResultAllocationSetter interface {
+	setAllocation(*AllocationAccountSelection)
+}
+
 func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWrapper {
 	if typ.IsVarlen() {
 		return newResultFunc[types.Varlena](typ, mp)
@@ -818,4 +834,26 @@ func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWra
 		return newResultFunc[types.Enum](typ, mp)
 	}
 	panic(fmt.Sprintf("unexpected type %s for function result", typ))
+}
+
+// NewFunctionResultWrapperWithAllocation constructs a reusable result whose
+// current and future vectors allocate through selection. The selection stays
+// with the wrapper when EvalWithoutResultReusing transfers its current vector.
+func NewFunctionResultWrapperWithAllocation(
+	typ types.Type,
+	mp *mpool.MPool,
+	selection *AllocationAccountSelection,
+) (FunctionResultWrapper, error) {
+	if selection != nil {
+		if err := selection.validate(); err != nil {
+			return nil, err
+		}
+	}
+	result := NewFunctionResultWrapper(typ, mp)
+	setter, ok := result.(functionResultAllocationSetter)
+	if !ok {
+		return nil, mpool.ErrAllocationAccountInvariant
+	}
+	setter.setAllocation(selection)
+	return result, nil
 }

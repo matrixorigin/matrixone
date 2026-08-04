@@ -194,7 +194,10 @@ func (intersectAll *IntersectAll) probe(proc *process.Process, analyzer process.
 				copy(ctr.inserted[:n], ctr.resetInserted[:n])
 				cnt = 0
 
-				vs, _ := itr.Find(i, n, input.Batch.Vecs)
+				vs, _, err := itr.Find(i, n, input.Batch.Vecs)
+				if err != nil {
+					return false, err
+				}
 
 				for j, v := range vs {
 					// not found
