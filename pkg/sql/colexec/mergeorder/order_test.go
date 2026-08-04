@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"bytes"
 	"container/heap"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -147,6 +148,96 @@ func (failWriter) Write(_ []byte) (int, error) {
 	return 0, io.ErrClosedPipe
 }
 
+type cancelAfterWriteWriter struct {
+	cancel context.CancelFunc
+	writes int
+}
+
+func (w *cancelAfterWriteWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes == 1 {
+		w.cancel()
+	}
+	return len(p), nil
+}
+
+type callbackEOFReader struct {
+	callback func()
+	reads    int
+}
+
+func (r *callbackEOFReader) Read([]byte) (int, error) {
+	r.reads++
+	if r.callback != nil {
+		r.callback()
+	}
+	return 0, io.EOF
+}
+
+type cancelAfterReadReader struct {
+	reader io.Reader
+	cancel context.CancelFunc
+	reads  int
+}
+
+func (r *cancelAfterReadReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	r.reads++
+	if r.reads == 1 {
+		r.cancel()
+	}
+	return n, err
+}
+
+// cancelOnDoneCheckContext deterministically cancels on the Nth observation of
+// Done. The spill paths are synchronous, so this lets tests select an exact
+// phase boundary without sleeps or scheduler races.
+type cancelOnDoneCheckContext struct {
+	context.Context
+	remaining int
+	done      chan struct{}
+}
+
+func newCancelOnDoneCheckContext(parent context.Context, checks int) *cancelOnDoneCheckContext {
+	return &cancelOnDoneCheckContext{
+		Context:   parent,
+		remaining: checks,
+		done:      make(chan struct{}),
+	}
+}
+
+func (ctx *cancelOnDoneCheckContext) Done() <-chan struct{} {
+	if ctx.remaining > 0 {
+		ctx.remaining--
+		if ctx.remaining == 0 {
+			close(ctx.done)
+		}
+	}
+	return ctx.done
+}
+
+func (ctx *cancelOnDoneCheckContext) Err() error {
+	select {
+	case <-ctx.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
+type trackingMutableFileService struct {
+	fileservice.MutableFileService
+	files []*os.File
+}
+
+func (fs *trackingMutableFileService) CreateAndRemoveFile(ctx context.Context, filePath string) (*os.File, error) {
+	file, err := fs.MutableFileService.CreateAndRemoveFile(ctx, filePath)
+	if err == nil {
+		fs.files = append(fs.files, file)
+	}
+	return file, err
+}
+
 func makeTestCases(t *testing.T) []orderTestCase {
 	return []orderTestCase{
 		newTestCase(t, []types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}}),
@@ -256,6 +347,654 @@ func TestOrderSpill(t *testing.T) {
 	arg.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestOrderSpillFinalMergeHonorsCancellationAfterInput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &MergeOrder{
+		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}},
+		SpillThreshold: 1,
+		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+	baseCtx := proc.Ctx
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = ctx
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		newValuesBatch(proc, []int8{1, 4, 7}),
+		newValuesBatch(proc, []int8{2, 5, 8}),
+		newValuesBatch(proc, []int8{3, 6, 9}),
+	}).WithEndOfDataCallback(cancel)
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	t.Cleanup(func() {
+		proc.Ctx = baseCtx
+		arg.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	result, err := vm.Exec(arg, proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, result.Batch)
+	require.Empty(t, arg.ctr.spillReaders)
+
+	arg.Reset(proc, true, context.Canceled)
+	require.Empty(t, arg.ctr.spillRuns)
+	require.Empty(t, arg.ctr.spillReaders)
+	child.Free(proc, true, context.Canceled)
+
+	proc.Ctx = baseCtx
+	child = colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		newValuesBatch(proc, []int8{3}),
+		newValuesBatch(proc, []int8{1}),
+		newValuesBatch(proc, []int8{2}),
+	})
+	arg.Children = nil
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+	require.Equal(t, []int8{1, 2, 3}, collectInt8Results(t, arg, proc, 0))
+}
+
+func TestOrderSpillWriteHonorsCancellationAfterInputBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &MergeOrder{
+		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}},
+		SpillThreshold: 1,
+		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+	baseCtx := proc.Ctx
+	ctx, cancel := context.WithCancel(baseCtx)
+	proc.Ctx = ctx
+	child := colexec.NewMockOperator().
+		WithBatchs([]*batch.Batch{newValuesBatch(proc, []int8{3, 1, 2})}).
+		WithBatchCallback(func(int) { cancel() })
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	t.Cleanup(func() {
+		proc.Ctx = baseCtx
+		arg.Free(proc, true, context.Canceled)
+		child.Free(proc, true, context.Canceled)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	result, err := vm.Exec(arg, proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, result.Batch)
+	require.Empty(t, arg.ctr.spillRuns)
+	require.Nil(t, arg.ctr.spillActiveRun)
+}
+
+func TestWriteSpillBatchStopsAtBatchBoundary(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	baseCtx := proc.Ctx
+	ctx, cancel := context.WithCancel(baseCtx)
+	proc.Ctx = ctx
+	bat := newValuesBatch(proc, []int8{1, 2, 3})
+	writer := &cancelAfterWriteWriter{cancel: cancel}
+	analyzer := process.NewAnalyzer(0, false, false, "mergeorder-cancel-write")
+	var writeBuf bytes.Buffer
+
+	t.Cleanup(func() {
+		proc.Ctx = baseCtx
+		bat.Clean(proc.Mp())
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	_, _, err := writeSpillBatch(proc, bat, []*vector.Vector{bat.Vecs[0]}, writer, &writeBuf, analyzer)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, writer.writes)
+
+	_, _, err = writeSpillBatch(proc, bat, []*vector.Vector{bat.Vecs[0]}, writer, &writeBuf, analyzer)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, writer.writes)
+
+	proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 2)
+	var unwritten bytes.Buffer
+	_, _, err = writeSpillBatch(proc, bat, []*vector.Vector{bat.Vecs[0]}, &unwritten, &writeBuf, analyzer)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, unwritten.Len())
+}
+
+func TestCleanupSpillDiscardsUncommittedActiveRun(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	file, err := os.CreateTemp(t.TempDir(), "mergeorder-uncommitted-*")
+	require.NoError(t, err)
+	cleaned := false
+	t.Cleanup(func() {
+		if cleaned {
+			return
+		}
+		_ = file.Close()
+		proc.Free()
+	})
+	written := &bytes.Buffer{}
+	activeWriter := bufio.NewWriterSize(written, 1024)
+	_, err = activeWriter.Write([]byte("uncommitted spill payload"))
+	require.NoError(t, err)
+	require.Zero(t, written.Len())
+
+	ctr := &container{
+		spillActiveRun:    &spillRun{file: file},
+		spillActiveWriter: activeWriter,
+	}
+	ctr.cleanupSpill(proc)
+	require.Zero(t, written.Len())
+	require.Nil(t, ctr.spillActiveRun)
+	require.Nil(t, ctr.spillActiveWriter)
+	_, err = file.Stat()
+	require.Error(t, err)
+
+	proc.Free()
+	cleaned = true
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestSpillCancellationEntryCheckpoints(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	baseCtx := proc.Ctx
+	analyzer := process.NewAnalyzer(0, false, false, "mergeorder-cancel-entry")
+	t.Cleanup(func() {
+		proc.Ctx = baseCtx
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	t.Run("open readers", func(t *testing.T) {
+		proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 1)
+		err := (&container{}).openSpillReaders(proc, []*spillRun{{}})
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("spill cached runs", func(t *testing.T) {
+		proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 1)
+		require.ErrorIs(t, (&container{}).spillCachedRuns(proc, analyzer), context.Canceled)
+	})
+
+	t.Run("spill cached run boundary", func(t *testing.T) {
+		bat := newValuesBatch(proc, []int8{1})
+		ctr := &container{batchList: []*batch.Batch{bat}}
+		proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 2)
+		require.ErrorIs(t, ctr.spillCachedRuns(proc, analyzer), context.Canceled)
+		require.Same(t, bat, ctr.batchList[0])
+		bat.Clean(proc.Mp())
+	})
+
+	t.Run("spill append", func(t *testing.T) {
+		proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 1)
+		err := (&container{}).spillBatchWithAppend(proc, nil, nil, nil, analyzer)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("finalize active run entry", func(t *testing.T) {
+		proc.Ctx = baseCtx
+		ctr := &container{}
+		require.NoError(t, ctr.ensureActiveSpillRun(proc))
+		proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 1)
+		require.ErrorIs(t, ctr.finalizeActiveSpillRun(proc, true), context.Canceled)
+		require.NotNil(t, ctr.spillActiveRun)
+		proc.Ctx = baseCtx
+		ctr.cleanupSpill(proc)
+	})
+
+	t.Run("finalize active run after flush", func(t *testing.T) {
+		file, err := os.CreateTemp(t.TempDir(), "mergeorder-finalize-cancel-*")
+		require.NoError(t, err)
+		ctx, cancel := context.WithCancel(baseCtx)
+		writer := &cancelAfterWriteWriter{cancel: cancel}
+		buffered := bufio.NewWriterSize(writer, 1024)
+		_, err = buffered.Write([]byte("buffered spill payload"))
+		require.NoError(t, err)
+		require.Zero(t, writer.writes)
+		ctr := &container{
+			spillActiveRun:    &spillRun{file: file},
+			spillActiveWriter: buffered,
+		}
+		proc.Ctx = ctx
+		require.ErrorIs(t, ctr.finalizeActiveSpillRun(proc, true), context.Canceled)
+		require.Equal(t, 1, writer.writes)
+		require.Nil(t, ctr.spillActiveRun)
+		require.Empty(t, ctr.spillRuns)
+		_, err = file.Stat()
+		require.Error(t, err)
+	})
+
+	t.Run("merge runs", func(t *testing.T) {
+		proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 1)
+		merged, err := (&container{}).mergeRunsToSpill(proc, []*spillRun{{}, {}}, analyzer)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, merged)
+	})
+
+	t.Run("reduce runs", func(t *testing.T) {
+		ctr := &container{spillRuns: make([]*spillRun, spillMergeFanIn+1)}
+		proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 1)
+		require.ErrorIs(t, ctr.reduceSpillRuns(proc, analyzer), context.Canceled)
+	})
+
+	t.Run("prepare final merge", func(t *testing.T) {
+		proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 1)
+		err := (&container{}).prepareSpillFinalMerge(proc, nil, analyzer)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("send result", func(t *testing.T) {
+		proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 1)
+		var result vm.CallResult
+		done, err := (&container{}).sendSpillResult(proc, &result)
+		require.ErrorIs(t, err, context.Canceled)
+		require.False(t, done)
+		require.Nil(t, result.Batch)
+	})
+}
+
+func TestMergeRunsToSpillCancellationCheckpoints(t *testing.T) {
+	const (
+		inputRunCount = 2
+		// Merge entry, then open-loop/read-entry/read-completion for each
+		// source reader, followed by the outer materialization check.
+		beforeMaterializationCheck = 1 + inputRunCount*3 + 1
+		// Each single-batch source then observes EOF at its next-read entry,
+		// followed by the completed-chunk check immediately before spill write.
+		beforeSpillWriteCheck = beforeMaterializationCheck + inputRunCount + 1
+	)
+	tests := []struct {
+		name          string
+		cancelAtCheck int
+	}{
+		{name: "before materialization", cancelAtCheck: beforeMaterializationCheck},
+		{name: "before spill write", cancelAtCheck: beforeSpillWriteCheck},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			ctr := &container{
+				compares:        []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
+				executors:       make([]colexec.ExpressionExecutor, 1),
+				spillColPos:     []int32{-1},
+				spillKeyIndexes: []int{0},
+			}
+			analyzer := process.NewAnalyzer(0, false, false, "mergeorder-cancel-merge-runs")
+			runs := []*spillRun{
+				newCancellationTestSpillRun(t, proc, ctr, analyzer, []int8{1, 3}),
+				newCancellationTestSpillRun(t, proc, ctr, analyzer, []int8{2, 4}),
+			}
+			baseCtx := proc.Ctx
+
+			t.Cleanup(func() {
+				proc.Ctx = baseCtx
+				ctr.cleanupSpill(proc)
+				closeSpillRuns(runs)
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+
+			proc.Ctx = newCancelOnDoneCheckContext(baseCtx, test.cancelAtCheck)
+			merged, err := ctr.mergeRunsToSpill(proc, runs, analyzer)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Nil(t, merged)
+			for _, run := range runs {
+				require.Nil(t, run.file)
+			}
+		})
+	}
+}
+
+func TestMergeRunsToSpillStopsAtChunkBoundary(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	baseCtx := proc.Ctx
+	baseFS, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	trackingFS := &trackingMutableFileService{MutableFileService: baseFS}
+	ctr := &container{
+		compares:        []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
+		executors:       make([]colexec.ExpressionExecutor, 1),
+		spillColPos:     []int32{-1},
+		spillKeyIndexes: []int{0},
+		spillFS:         trackingFS,
+	}
+	analyzer := process.NewAnalyzer(0, false, false, "mergeorder-cancel-merge-chunk")
+	firstValues := make([]int8, maxWinnerChunkRows*2)
+	for i := range firstValues {
+		firstValues[i] = 1
+	}
+	runs := []*spillRun{
+		newCancellationTestSpillRun(t, proc, ctr, analyzer, firstValues),
+		newCancellationTestSpillRun(t, proc, ctr, analyzer, []int8{2}),
+	}
+
+	t.Cleanup(func() {
+		proc.Ctx = baseCtx
+		ctr.cleanupSpill(proc)
+		closeSpillRuns(runs)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	// Entry, both reader open/read/read-completion triplets, and the outer
+	// materialization check pass.
+	// Cancellation is observed after the first 64-row winner chunk, before
+	// the remaining rows are copied or an output batch is written.
+	proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 9)
+	merged, err := ctr.mergeRunsToSpill(proc, runs, analyzer)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, merged)
+	require.Len(t, trackingFS.files, 3)
+	_, statErr := trackingFS.files[2].Stat()
+	require.Error(t, statErr)
+	for _, run := range runs {
+		require.Nil(t, run.file)
+	}
+}
+
+func TestOpenSpillReadersCancellationPreservesOwnership(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	ctr := &container{
+		compares:        []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
+		executors:       make([]colexec.ExpressionExecutor, 1),
+		spillColPos:     []int32{-1},
+		spillKeyIndexes: []int{0},
+	}
+	analyzer := process.NewAnalyzer(0, false, false, "mergeorder-cancel-open-readers")
+	runs := []*spillRun{
+		newCancellationTestSpillRun(t, proc, ctr, analyzer, []int8{1}),
+		newCancellationTestSpillRun(t, proc, ctr, analyzer, []int8{2}),
+	}
+	firstFile, secondFile := runs[0].file, runs[1].file
+	baseCtx := proc.Ctx
+
+	t.Cleanup(func() {
+		proc.Ctx = baseCtx
+		ctr.cleanupSpill(proc)
+		closeSpillRuns(runs)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	// The first reader uses checks 1-3 for open, read entry, and successful
+	// read completion. Cancel at the second run's open-loop ownership boundary.
+	proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 4)
+	err := ctr.openSpillReaders(proc, runs)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Len(t, ctr.spillReaders, 1)
+	require.Nil(t, runs[0].file)
+	require.Same(t, secondFile, runs[1].file)
+	_, err = firstFile.Stat()
+	require.NoError(t, err)
+	_, err = secondFile.Stat()
+	require.NoError(t, err)
+
+	ctr.cleanupSpill(proc)
+	_, err = firstFile.Stat()
+	require.Error(t, err)
+	_, err = secondFile.Stat()
+	require.NoError(t, err)
+	closeSpillRuns(runs)
+	_, err = secondFile.Stat()
+	require.Error(t, err)
+}
+
+func TestSpillReaderRolloverCancellationBoundaries(t *testing.T) {
+	t.Run("before multi-batch refill", func(t *testing.T) {
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		baseCtx := proc.Ctx
+		ctr := &container{
+			compares:        []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
+			executors:       make([]colexec.ExpressionExecutor, 1),
+			spillColPos:     []int32{-1},
+			spillKeyIndexes: []int{0},
+		}
+		analyzer := process.NewAnalyzer(0, false, false, "mergeorder-cancel-rollover")
+		run := newCancellationTestSpillRunBatches(
+			t, proc, ctr, analyzer,
+			[]int8{1, 2},
+			[]int8{3, 4},
+		)
+		file := run.file
+		require.Equal(t, 2, run.batchCount)
+		require.NoError(t, ctr.openSpillReaders(proc, []*spillRun{run}))
+		require.Nil(t, run.file)
+		require.Len(t, ctr.spillReaders, 1)
+		reader := ctr.spillReaders[0]
+		require.Equal(t, []int8{1, 2}, vector.MustFixedColWithTypeCheck[int8](reader.batch.Vecs[0]))
+		bufferedBefore := reader.reader.Buffered()
+		require.Positive(t, bufferedBefore)
+
+		t.Cleanup(func() {
+			proc.Ctx = baseCtx
+			ctr.cleanupSpill(proc)
+			closeSpillRuns([]*spillRun{run})
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+
+		ctx, cancel := context.WithCancel(baseCtx)
+		proc.Ctx = ctx
+		cancel()
+		err := ctr.advanceSpillReaderByChunk(proc, 0, reader.batch.RowCount())
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, bufferedBefore, reader.reader.Buffered())
+		require.Equal(t, []int8{1, 2}, vector.MustFixedColWithTypeCheck[int8](reader.batch.Vecs[0]))
+		require.Equal(t, int64(2), reader.rowIdx)
+		require.Len(t, ctr.spillReaders, 1)
+
+		proc.Ctx = baseCtx
+		ctr.cleanupSpill(proc)
+		_, err = file.Stat()
+		require.Error(t, err)
+	})
+
+	t.Run("during refill IO", func(t *testing.T) {
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		baseCtx := proc.Ctx
+		ctr := &container{
+			executors:       make([]colexec.ExpressionExecutor, 1),
+			spillColPos:     []int32{-1},
+			spillKeyIndexes: []int{0},
+		}
+		analyzer := process.NewAnalyzer(0, false, false, "mergeorder-cancel-refill-io")
+		bat := newValuesBatch(proc, []int8{3, 4})
+		var payload bytes.Buffer
+		var writeBuf bytes.Buffer
+		_, _, err := writeSpillBatch(proc, bat, []*vector.Vector{bat.Vecs[0]}, &payload, &writeBuf, analyzer)
+		require.NoError(t, err)
+		bat.Clean(proc.Mp())
+
+		ctx, cancel := context.WithCancel(baseCtx)
+		proc.Ctx = ctx
+		source := &cancelAfterReadReader{reader: bytes.NewReader(payload.Bytes()), cancel: cancel}
+		reader := &spillRunReader{reader: bufio.NewReaderSize(source, spillIOBufferSize)}
+		t.Cleanup(func() {
+			proc.Ctx = baseCtx
+			reader.close(proc)
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+
+		ok, err := reader.readNextBatch(proc, ctr)
+		require.ErrorIs(t, err, context.Canceled)
+		require.False(t, ok)
+		require.Equal(t, 1, source.reads)
+	})
+}
+
+func TestReduceSpillRunsCleansCompletedRuns(t *testing.T) {
+	const inputRunCount = spillMergeFanIn + 2
+
+	tests := []struct {
+		name             string
+		cancelAfterFirst bool
+		corruptLaterRun  bool
+		wantError        error
+	}{
+		{
+			name:             "cancellation after completed fan-in group",
+			cancelAfterFirst: true,
+			wantError:        context.Canceled,
+		},
+		{
+			name:            "later merge read error",
+			corruptLaterRun: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			baseCtx := proc.Ctx
+			baseFS, err := proc.GetSpillFileService()
+			require.NoError(t, err)
+			trackingFS := &trackingMutableFileService{MutableFileService: baseFS}
+			ctr := &container{
+				compares:        []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
+				executors:       make([]colexec.ExpressionExecutor, 1),
+				spillColPos:     []int32{-1},
+				spillKeyIndexes: []int{0},
+				spillFS:         trackingFS,
+			}
+			analyzer := process.NewAnalyzer(0, false, false, "mergeorder-reduce-ownership")
+			runs := make([]*spillRun, 0, inputRunCount)
+			for i := range inputRunCount {
+				runs = append(runs, newCancellationTestSpillRun(t, proc, ctr, analyzer, []int8{int8(i)}))
+			}
+			ctr.spillRuns = runs
+			if test.cancelAfterFirst {
+				// Reduction check, merge entry, three open/read checks per
+				// source reader, chunk start, one EOF read-entry check per
+				// single-batch reader, chunk completion, three write boundaries,
+				// then the next fan-in group check.
+				proc.Ctx = newCancelOnDoneCheckContext(baseCtx, spillMergeFanIn*4+8)
+			}
+			if test.corruptLaterRun {
+				require.NoError(t, runs[spillMergeFanIn].file.Truncate(4))
+				_, err = runs[spillMergeFanIn].file.Seek(0, io.SeekStart)
+				require.NoError(t, err)
+			}
+
+			t.Cleanup(func() {
+				proc.Ctx = baseCtx
+				ctr.cleanupSpill(proc)
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+
+			err = ctr.reduceSpillRuns(proc, analyzer)
+			if test.wantError != nil {
+				require.ErrorIs(t, err, test.wantError)
+			} else {
+				require.Error(t, err)
+			}
+			require.Len(t, trackingFS.files, inputRunCount+1)
+			completedRunFile := trackingFS.files[inputRunCount]
+			_, statErr := completedRunFile.Stat()
+			require.Error(t, statErr)
+
+			for i := 0; i < spillMergeFanIn; i++ {
+				require.Nil(t, runs[i].file)
+			}
+			if test.wantError == nil {
+				// The failing run transferred to its reader before the read;
+				// only the not-yet-opened final run remains source-owned.
+				require.Nil(t, runs[spillMergeFanIn].file)
+			}
+			require.NotNil(t, runs[spillMergeFanIn+1].file)
+			_, statErr = runs[spillMergeFanIn+1].file.Stat()
+			require.NoError(t, statErr)
+		})
+	}
+}
+
+func TestSendSpillResultHonorsCancellationBeforePublish(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	ctr := &container{
+		compares:        []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
+		executors:       make([]colexec.ExpressionExecutor, 1),
+		spillColPos:     []int32{-1},
+		spillKeyIndexes: []int{0},
+	}
+	analyzer := process.NewAnalyzer(0, false, false, "mergeorder-cancel-send")
+	run := newCancellationTestSpillRun(t, proc, ctr, analyzer, []int8{1, 2})
+	require.NoError(t, ctr.openSpillReaders(proc, []*spillRun{run}))
+	baseCtx := proc.Ctx
+
+	t.Cleanup(func() {
+		proc.Ctx = baseCtx
+		ctr.cleanupSpill(proc)
+		if ctr.buf != nil {
+			ctr.buf.Clean(proc.Mp())
+			ctr.buf = nil
+		}
+		closeSpillRuns([]*spillRun{run})
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	// Send entry, the exhausted reader's next-read entry, then result publish.
+	proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 3)
+	var result vm.CallResult
+	done, err := ctr.sendSpillResult(proc, &result)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, done)
+	require.Nil(t, result.Batch)
+}
+
+func TestSendSpillResultStopsAtChunkBoundary(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	baseCtx := proc.Ctx
+	ctx, cancel := context.WithCancel(baseCtx)
+	proc.Ctx = ctx
+
+	firstValues := make([]int8, batchSizeCheckInterval)
+	for i := range firstValues {
+		firstValues[i] = int8(i)
+	}
+	firstBatch := newValuesBatch(proc, firstValues)
+	secondBatch := newValuesBatch(proc, []int8{100})
+	firstEOF := &callbackEOFReader{callback: cancel}
+	secondEOF := &callbackEOFReader{}
+	firstReader := &spillRunReader{
+		reader:    bufio.NewReader(firstEOF),
+		batch:     firstBatch,
+		orderCols: []*vector.Vector{firstBatch.Vecs[0]},
+		heapIdx:   0,
+	}
+	secondReader := &spillRunReader{
+		reader:    bufio.NewReader(secondEOF),
+		batch:     secondBatch,
+		orderCols: []*vector.Vector{secondBatch.Vecs[0]},
+		heapIdx:   1,
+	}
+	firstReader.refreshDrainProfile()
+	secondReader.refreshDrainProfile()
+	ctr := &container{
+		compares:     []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
+		spillReaders: []*spillRunReader{firstReader, secondReader},
+	}
+	heap.Init(ctr)
+
+	t.Cleanup(func() {
+		proc.Ctx = baseCtx
+		ctr.cleanupSpill(proc)
+		if ctr.buf != nil {
+			ctr.buf.Clean(proc.Mp())
+			ctr.buf = nil
+		}
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	var result vm.CallResult
+	done, err := ctr.sendSpillResult(proc, &result)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, done)
+	require.Nil(t, result.Batch)
+	require.Equal(t, 1, firstEOF.reads)
+	require.Zero(t, secondEOF.reads)
 }
 
 func TestOrderSpillMultiPass(t *testing.T) {
@@ -1522,6 +2261,41 @@ func newValuesBatch(proc *process.Process, values []int8) *batch.Batch {
 		zs[i] = 1
 	}
 	return testutil.NewBatchWithVectors([]*vector.Vector{vec}, zs)
+}
+
+func newCancellationTestSpillRun(
+	t testing.TB,
+	proc *process.Process,
+	ctr *container,
+	analyzer process.Analyzer,
+	values []int8,
+) *spillRun {
+	return newCancellationTestSpillRunBatches(t, proc, ctr, analyzer, values)
+}
+
+func newCancellationTestSpillRunBatches(
+	t testing.TB,
+	proc *process.Process,
+	ctr *container,
+	analyzer process.Analyzer,
+	valueBatches ...[]int8,
+) *spillRun {
+	t.Helper()
+	run, err := ctr.createSpillRun(proc)
+	require.NoError(t, err)
+	writer := bufio.NewWriterSize(run.file, spillIOBufferSize)
+	for _, values := range valueBatches {
+		bat := newValuesBatch(proc, values)
+		rows, _, writeErr := writeSpillBatch(proc, bat, []*vector.Vector{bat.Vecs[0]}, writer, &ctr.spillWriteBuf, analyzer)
+		bat.Clean(proc.Mp())
+		require.NoError(t, writeErr)
+		run.batchCount++
+		run.rowCount += rows
+	}
+	require.NoError(t, writer.Flush())
+	_, err = run.file.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+	return run
 }
 
 func newNullableValuesBatch(proc *process.Process, values []int8, nulls []uint64) *batch.Batch {

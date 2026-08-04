@@ -279,6 +279,14 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		}
 
+		if group.ctr.inputDone {
+			// EOF and cancellation can arrive in the same child call. Observe
+			// cancellation before flushing or reloading spill state.
+			if err, isCancel = vm.CancelCheck(proc); isCancel {
+				return vm.CancelResult, err
+			}
+		}
+
 		// spilling -- spill whatever left in memory, and load first spilled bucket.
 		if group.ctr.isSpilling() {
 			if bytes, rows, err := group.ctr.spillDataToDisk(proc, group.OpAnalyzer, nil); err != nil {
@@ -539,6 +547,14 @@ func (ctr *container) appendGroupByBatch(
 }
 
 func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error) {
+	// Build can switch directly to Eval and publish in the same Call. The
+	// Call-entry check therefore does not cover cancellation that arrives while
+	// the child batch is being built. Observe it at the output work-unit boundary
+	// before advancing result ownership.
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return vm.CancelResult, err
+	}
+
 	if group.NeedEval {
 		return group.ctr.outputOneBatchFinal(proc, group.OpAnalyzer, group.Aggs)
 	} else {

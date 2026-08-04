@@ -21,10 +21,30 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
+
+func TestGetConstantValue2AppendsEnumLiteralWithEnumWidth(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vec := vector.NewVec(types.T_enum.ToType())
+	defer vec.Free(proc.Mp())
+
+	for _, value := range []uint32{0, 1, 3} {
+		expr := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_EnumVal{EnumVal: value},
+			}},
+		}
+		constant, err := GetConstantValue2(proc, expr, vec)
+		require.NoError(t, err)
+		require.True(t, constant)
+	}
+	require.Equal(t, []types.Enum{0, 1, 3}, vector.MustFixedColNoTypeCheck[types.Enum](vec))
+}
 
 func makeConstantCastExpr(t *testing.T, name string, sourceType, targetType types.Type, value string) *plan.Expr {
 	t.Helper()

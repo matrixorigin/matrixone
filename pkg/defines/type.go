@@ -267,6 +267,10 @@ type BgKey struct{}
 // Sp variable scope
 type VarScopeKey struct{}
 
+// Sp variable declared SQL type scope. It is kept parallel to VarScopeKey so
+// runtime values do not have to encode SQL type metadata such as DECIMAL scale.
+type VarScopeTypeKey struct{}
+
 // Determine if it is a stored procedure
 type InSp struct{}
 
