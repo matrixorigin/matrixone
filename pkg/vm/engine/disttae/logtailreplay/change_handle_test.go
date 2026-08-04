@@ -347,6 +347,57 @@ func TestUpdateDataBatch_RetainsSynthesizedRowID(t *testing.T) {
 	bat.Clean(mp)
 }
 
+func TestUpdatePersistedDataBatch_RetainsLeadingRowID(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	bat := batch.NewWithSize(5)
+	bat.SetAttributes([]string{"a", "b", catalog.Row_ID, objectio.DefaultCommitTS_Attr, objectio.DefaultAbort_Attr})
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[3] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[4] = vector.NewVec(types.T_bool.ToType())
+	blk := objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
+	for i, aborted := range []bool{false, true, false} {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(i+1), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int32((i+1)*10), false, mp))
+		require.NoError(t, vector.AppendFixed(
+			bat.Vecs[2], types.NewRowid(blk, uint32(i)), false, mp))
+		require.NoError(t, vector.AppendFixed(
+			bat.Vecs[3], types.BuildTS(int64(100+i), 0), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[4], aborted, false, mp))
+	}
+	bat.SetRowCount(3)
+
+	layout := objectio.SpecialColumnLayout{
+		PhysicalAddr: 2,
+		CommitTS:     3,
+		Abort:        4,
+	}
+	require.NoError(t, updatePersistedDataBatch(
+		bat, types.BuildTS(50, 0), types.BuildTS(150, 0), blk, layout, true, mp))
+
+	require.Equal(t, []string{
+		catalog.Row_ID, "a", "b", objectio.DefaultCommitTS_Attr,
+	}, bat.Attrs)
+	require.Equal(t, []types.T{
+		types.T_Rowid, types.T_int32, types.T_int32, types.T_TS,
+	}, []types.T{
+		bat.Vecs[0].GetType().Oid,
+		bat.Vecs[1].GetType().Oid,
+		bat.Vecs[2].GetType().Oid,
+		bat.Vecs[3].GetType().Oid,
+	})
+	require.Equal(t, 2, bat.RowCount())
+	rowIDs := vector.MustFixedColNoTypeCheck[types.Rowid](bat.Vecs[0])
+	require.Equal(t, uint32(0), rowIDs[0].GetRowOffset())
+	require.Equal(t, uint32(2), rowIDs[1].GetRowOffset())
+	require.Equal(t, []int32{1, 3}, vector.MustFixedColNoTypeCheck[int32](bat.Vecs[1]))
+
+	bat.Clean(mp)
+}
+
 func TestAObjectHandleShouldReadBlock_UsesCachedPlan(t *testing.T) {
 	obj := makeTestObjectEntry(t, 2, false, false, types.BuildTS(10, 0))
 	handle := &AObjectHandle{

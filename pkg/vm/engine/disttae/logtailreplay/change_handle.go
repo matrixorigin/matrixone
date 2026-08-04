@@ -2950,6 +2950,10 @@ func updatePersistedDataBatch(
 	rowIDPos := uint16(objectio.InvalidSpecialColumnPosition)
 	if layout.PhysicalAddr != objectio.InvalidSpecialColumnPosition {
 		rowIDPos = layout.PhysicalAddr
+		if int(rowIDPos) >= len(bat.Vecs) || bat.Vecs[rowIDPos] == nil ||
+			bat.Vecs[rowIDPos].GetType().Oid != types.T_Rowid {
+			return moerr.NewInternalErrorNoCtx("persisted appendable object has an invalid rowid column")
+		}
 	}
 
 	commitTSVec := bat.Vecs[commitPos]
@@ -2985,7 +2989,21 @@ func updatePersistedDataBatch(
 	filteredVecs := make([]*vector.Vector, 0, len(bat.Vecs)-1)
 	filteredAttrs := make([]string, 0, len(bat.Attrs))
 	commitTSAttr := objectio.DefaultCommitTS_Attr
+	var rowIDVec *vector.Vector
 	rowIDKept := false
+	if retainRowID && rowIDPos == objectio.InvalidSpecialColumnPosition {
+		if blk == nil {
+			return moerr.NewInternalErrorNoCtx("persisted appendable object cannot synthesize rowid without block id")
+		}
+		rowIDVec = vector.NewVec(types.T_Rowid.ToType())
+		for i := range commits {
+			if err := vector.AppendFixed(rowIDVec, types.NewRowid(blk, uint32(i)), false, mp); err != nil {
+				rowIDVec.Free(mp)
+				return err
+			}
+		}
+		rowIDKept = true
+	}
 	for i, vec := range bat.Vecs {
 		pos := uint16(i)
 		switch {
@@ -2997,11 +3015,8 @@ func updatePersistedDataBatch(
 			vec.Free(mp)
 		case pos == rowIDPos:
 			if retainRowID {
-				filteredVecs = append(filteredVecs, vec)
+				rowIDVec = vec
 				rowIDKept = true
-				if rebuildAttrs {
-					filteredAttrs = append(filteredAttrs, bat.Attrs[i])
-				}
 			} else {
 				vec.Free(mp)
 			}
@@ -3010,6 +3025,12 @@ func updatePersistedDataBatch(
 			if rebuildAttrs {
 				filteredAttrs = append(filteredAttrs, bat.Attrs[i])
 			}
+		}
+	}
+	if rowIDKept {
+		filteredVecs = append([]*vector.Vector{rowIDVec}, filteredVecs...)
+		if rebuildAttrs {
+			filteredAttrs = append([]string{catalog.Row_ID}, filteredAttrs...)
 		}
 	}
 	filteredVecs = append(filteredVecs, commitTSVec)
@@ -3025,9 +3046,6 @@ func updatePersistedDataBatch(
 	}
 	if len(bat.Vecs) > 0 {
 		bat.SetRowCount(bat.Vecs[0].Length())
-	}
-	if retainRowID && !rowIDKept {
-		return prependRowIDVectorIfNeeded(bat, blk, mp)
 	}
 	return nil
 }
