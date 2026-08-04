@@ -83,6 +83,11 @@ func newFuzzyCheck(node *plan.Node) (*fuzzyCheck, error) {
 		}
 	}
 
+	if !f.isCompound && f.col != nil {
+		colType := types.T(f.col.Typ.Id)
+		f.exactFloatKey = colType == types.T_float32 || colType == types.T_float64
+	}
+
 	return f, nil
 }
 
@@ -101,6 +106,7 @@ func (f *fuzzyCheck) clear() {
 	f.attr = ""
 	f.condition = ""
 	f.isCompound = false
+	f.exactFloatKey = false
 	f.onlyInsertHidden = false
 	f.col = nil
 	f.compoundCols = nil
@@ -225,7 +231,23 @@ func (f *fuzzyCheck) fill(ctx context.Context, bat *batch.Batch) error {
 func (f *fuzzyCheck) firstlyCheck(ctx context.Context, toCheck *vector.Vector) error {
 	kcnt := make(map[string]int)
 
-	if !f.isCompound {
+	if f.exactFloatKey {
+		for i := 0; i < toCheck.Length(); i++ {
+			if toCheck.GetNulls().Contains(uint64(i)) {
+				continue
+			}
+			key := string(toCheck.GetBytesAt(i))
+			kcnt[key]++
+			if kcnt[key] > 1 {
+				display, err := f.exactFloatKeyDisplay([]byte(key))
+				if err != nil {
+					return err
+				}
+				return moerr.NewDuplicateEntry(ctx, display, f.attr)
+			}
+		}
+		return nil
+	} else if !f.isCompound {
 		pkey, err := f.format(toCheck)
 		if err != nil {
 			return err
@@ -284,7 +306,13 @@ func (f *fuzzyCheck) genCollsionKeys(toCheck *vector.Vector) ([][]string, error)
 	}
 
 	if !f.onlyInsertHidden {
-		if !f.isCompound {
+		if f.exactFloatKey {
+			for i := 0; i < toCheck.Length(); i++ {
+				if !toCheck.GetNulls().Contains(uint64(i)) {
+					keys[0] = append(keys[0], "unhex('"+hex.EncodeToString(toCheck.GetBytesAt(i))+"')")
+				}
+			}
+		} else if !f.isCompound {
 			pkey, err := f.format(toCheck)
 			if err != nil {
 				return nil, err
@@ -363,22 +391,7 @@ func fuzzyCheckSQLValueNeedsQuote(typ types.T) bool {
 
 // backgroundSQLCheck launches a background SQL to check if there are any duplicates
 func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
-	var duplicateCheckSql string
-
-	if !f.onlyInsertHidden {
-		if !f.isCompound {
-			duplicateCheckSql = fmt.Sprintf(fuzzyNonCompoundCheck, f.attr, f.db, f.tbl, f.attr, f.condition, f.attr)
-		} else {
-			cAttrs := make([]string, len(f.compoundCols))
-			for k, c := range f.compoundCols {
-				cAttrs[k] = c.Name
-			}
-			attrs := strings.Join(cAttrs, ", ")
-			duplicateCheckSql = fmt.Sprintf(fuzzyCompoundCheck, attrs, f.db, f.tbl, f.condition, attrs)
-		}
-	} else {
-		duplicateCheckSql = fmt.Sprintf(fuzzyNonCompoundCheck, f.attr, f.db, f.tbl, f.attr, f.condition, f.attr)
-	}
+	duplicateCheckSql := f.duplicateCheckSQL()
 
 	res, err := c.runSqlWithResultAndOptions(duplicateCheckSql, NoAccountId, executor.StatementOption{}.WithDisableLog())
 	if err != nil {
@@ -393,15 +406,24 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 		if vs != nil && vs[0].Length() > 0 { // do dup
 			toCheck := vs[0]
 			if !f.isCompound {
-				f.adjustDecimalScale(toCheck)
-				if dupKey, e := f.format(toCheck); e != nil {
-					err = e
-				} else {
-					ds, e := strconv.Unquote(dupKey[0])
+				if f.exactFloatKey {
+					display, e := f.exactFloatKeyDisplay(toCheck.GetBytesAt(0))
 					if e != nil {
-						err = moerr.NewDuplicateEntry(c.proc.Ctx, dupKey[0], f.attr)
+						err = e
 					} else {
-						err = moerr.NewDuplicateEntry(c.proc.Ctx, ds, f.attr)
+						err = moerr.NewDuplicateEntry(c.proc.Ctx, display, f.attr)
+					}
+				} else {
+					f.adjustDecimalScale(toCheck)
+					if dupKey, e := f.format(toCheck); e != nil {
+						err = e
+					} else {
+						ds, e := strconv.Unquote(dupKey[0])
+						if e != nil {
+							err = moerr.NewDuplicateEntry(c.proc.Ctx, dupKey[0], f.attr)
+						} else {
+							err = moerr.NewDuplicateEntry(c.proc.Ctx, ds, f.attr)
+						}
 					}
 				}
 			} else {
@@ -423,6 +445,37 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 	}
 
 	return err
+}
+
+func (f *fuzzyCheck) duplicateCheckSQL() string {
+	var duplicateCheckSql string
+
+	if !f.onlyInsertHidden {
+		if f.exactFloatKey {
+			identityExpr := fmt.Sprintf("serial(%s)", f.attr)
+			duplicateCheckSql = fmt.Sprintf(fuzzyNonCompoundCheck, identityExpr, f.db, f.tbl, identityExpr, f.condition, identityExpr)
+		} else if !f.isCompound {
+			duplicateCheckSql = fmt.Sprintf(fuzzyNonCompoundCheck, f.attr, f.db, f.tbl, f.attr, f.condition, f.attr)
+		} else {
+			cAttrs := make([]string, len(f.compoundCols))
+			for k, c := range f.compoundCols {
+				cAttrs[k] = c.Name
+			}
+			attrs := strings.Join(cAttrs, ", ")
+			duplicateCheckSql = fmt.Sprintf(fuzzyCompoundCheck, attrs, f.db, f.tbl, f.condition, attrs)
+		}
+	} else {
+		duplicateCheckSql = fmt.Sprintf(fuzzyNonCompoundCheck, f.attr, f.db, f.tbl, f.attr, f.condition, f.attr)
+	}
+	return duplicateCheckSql
+}
+
+func (f *fuzzyCheck) exactFloatKeyDisplay(key []byte) (string, error) {
+	values, err := types.StringifyTuple(key, []plan.Type{f.col.Typ})
+	if err != nil {
+		return "", err
+	}
+	return values[0], nil
 }
 
 // -----------------------------utils-----------------------------------

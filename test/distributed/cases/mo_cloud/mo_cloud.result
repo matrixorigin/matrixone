@@ -904,7 +904,7 @@ SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_tabl
 key_column_usage  ¦  0  ¦  0  ¦  accountadmin  𝄀
 profiling  ¦  0  ¦  0  ¦  accountadmin  𝄀
 user_privileges  ¦  0  ¦  0  ¦  accountadmin  𝄀
-character_sets  ¦  0  ¦  0  ¦  accountadmin  𝄀
+character_sets  ¦  3  ¦  96  ¦  accountadmin  𝄀
 triggers  ¦  0  ¦  0  ¦  accountadmin  𝄀
 engines  ¦  0  ¦  0  ¦  accountadmin  𝄀
 routines  ¦  0  ¦  0  ¦  accountadmin  𝄀

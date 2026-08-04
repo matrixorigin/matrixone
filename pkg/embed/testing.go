@@ -125,14 +125,12 @@ func StartTestCluster(opts ...Option) (Cluster, error) {
 }
 
 const (
-	basicClusterHAKeeperHeartbeatTimeout = 30 * time.Second
-	basicClusterHAKeeperStoreTimeout     = 60 * time.Second
+	basicClusterHAKeeperStoreTimeout = 60 * time.Second
 )
 
 func startBasicCluster() (Cluster, error) {
 	return StartTestCluster(
 		WithCNCount(3),
-		WithHAKeeperHeartbeatTimeout(basicClusterHAKeeperHeartbeatTimeout),
 		WithPreStart(func(svc ServiceOperator) {
 			switch svc.ServiceType() {
 			case metadata.ServiceType_CN:
