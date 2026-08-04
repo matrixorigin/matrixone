@@ -18,11 +18,16 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/assert"
@@ -95,6 +100,74 @@ func TestSqlProcessExecutionIdentityOverride(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint32(7), subscriberID)
 	require.Equal(t, uint32(7), sqlctx.AccountId)
+}
+
+func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
+	const uuid = "fulltext-publisher-process-identity"
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	lockService := mock_lock.NewMockLockService(ctrl)
+	lockService.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: uuid}).AnyTimes()
+	spy := &identityCapturingSQLExecutor{}
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, spy)
+	moruntime.SetupServiceBasedRuntime(uuid, rt)
+
+	type contextKey struct{}
+	key := contextKey{}
+	subscriberCtx := context.WithValue(context.Background(), key, "subscriber")
+	subscriberCtx = defines.AttachAccountId(subscriberCtx, 7)
+	proc := testutil.NewProcessWithMPool(t, uuid, mpool.MustNewZero())
+	proc.Base.LockService = lockService
+	proc.Ctx = subscriberCtx
+	proc.ReplaceTopCtx(subscriberCtx)
+	proc.Base.TxnOperator = txnOp
+	proc.Base.SessionInfo.Database = "subscriber_db"
+	proc.Base.SessionInfo.TimeZone = time.FixedZone("subscriber-zone", 8*60*60)
+	proc.Base.IsFrontend = true
+	resolveVariable := func(varName string, _, _ bool) (interface{}, error) {
+		return "resolved:" + varName, nil
+	}
+	proc.SetResolveVariableFunc(resolveVariable)
+
+	sqlproc := NewSqlProcess(proc).WithExecutionIdentity(42, "publisher_db")
+	assertExecutionIdentity := func(expectedContextValue string) {
+		accountID, err := defines.GetAccountId(spy.ctx)
+		require.NoError(t, err)
+		require.Equal(t, uint32(42), accountID)
+		require.Equal(t, expectedContextValue, spy.ctx.Value(key))
+		require.Same(t, txnOp, spy.opts.Txn())
+		require.Equal(t, "publisher_db", spy.opts.Database())
+		require.Same(t, proc.Base.SessionInfo.TimeZone, spy.opts.GetTimeZone())
+		require.True(t, spy.opts.IsFrontend())
+		value, err := spy.opts.ResolveVariableFunc()("test_variable", true, false)
+		require.NoError(t, err)
+		require.Equal(t, "resolved:test_variable", value)
+		require.True(t, spy.opts.StatementOption().HasAccountID())
+		require.Equal(t, uint32(42), spy.opts.StatementOption().AccountID())
+	}
+
+	_, err := RunSql(sqlproc, "select 1")
+	require.NoError(t, err)
+	assertExecutionIdentity("subscriber")
+
+	streamCtx := context.WithValue(context.Background(), key, "stream")
+	streamCtx = defines.AttachAccountId(streamCtx, 7)
+	streamCh := make(chan executor.Result, 1)
+	errCh := make(chan error, 1)
+	_, err = RunStreamingSql(streamCtx, sqlproc, "select 1", streamCh, errCh)
+	require.NoError(t, err)
+	assertExecutionIdentity("stream")
+
+	subscriberID, err := defines.GetAccountId(subscriberCtx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(7), subscriberID)
+	streamSubscriberID, err := defines.GetAccountId(streamCtx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(7), streamSubscriberID)
+	require.Same(t, txnOp, proc.GetTxnOperator())
+	require.Equal(t, "subscriber_db", proc.Base.SessionInfo.Database)
+	require.Equal(t, "subscriber", proc.GetTopContext().Value(key))
 }
 
 func TestSqlTxnError(t *testing.T) {

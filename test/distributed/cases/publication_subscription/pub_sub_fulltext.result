@@ -33,7 +33,13 @@ SQL parser error: table "secret_table" does not exist
 select count(*) from mo_catalog.mo_indexes where algo = 'fulltext';
 ➤ count(*)[-5,64,0]  𝄀
 0
+select * from fulltext_index_scan('{}', '`pub-ft-db`.`secret_table`', '`pub-ft-db`.`secret_table`', 'hello', 0);
+SQL parser error: No tables used
 prepare subscriber_match_stmt from 'select id from subscriber_table_alias.`articles-quoted` where match(body) against(\'hello\') order by id';
+begin;
+execute subscriber_match_stmt;
+➤ id[4,32,0]  𝄀
+1
 create database second_subscriber_alias from pub_ft_20210 publication pub_ft_table;
 select id from second_subscriber_alias.`articles-quoted` where match(body) against('hello') order by id;
 ➤ id[4,32,0]  𝄀
@@ -41,6 +47,11 @@ select id from second_subscriber_alias.`articles-quoted` where match(body) again
 insert into `pub-ft-db`.`articles-quoted` values (3, 'hello subscriber');
 update `pub-ft-db`.`articles-quoted` set body = 'hello updated' where id = 2;
 delete from `pub-ft-db`.`articles-quoted` where id = 1;
+execute subscriber_match_stmt;
+➤ id[4,32,0]  𝄀
+2
+3
+commit;
 select id from subscriber_table_alias.`articles-quoted` where match(body) against('hello') order by id;
 ➤ id[4,32,0]  𝄀
 2

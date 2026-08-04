@@ -30,7 +30,12 @@ create database subscriber_database_alias from pub_ft_20210 publication pub_ft_d
 select id from subscriber_database_alias.all_articles where match(body) against('publication') order by id;
 select * from subscriber_table_alias.secret_table;
 select count(*) from mo_catalog.mo_indexes where algo = 'fulltext';
+-- Direct string arguments cannot select the publisher account.
+select * from fulltext_index_scan('{}', '`pub-ft-db`.`secret_table`', '`pub-ft-db`.`secret_table`', 'hello', 0);
 prepare subscriber_match_stmt from 'select id from subscriber_table_alias.`articles-quoted` where match(body) against(\'hello\') order by id';
+-- Keep the prepared statement in an open transaction across publisher index maintenance.
+begin;
+execute subscriber_match_stmt;
 -- @session
 
 -- @session:id=3&user=sub_ft_20210_b:admin&password=111
@@ -45,6 +50,8 @@ delete from `pub-ft-db`.`articles-quoted` where id = 1;
 -- @session
 
 -- @session:id=2&user=sub_ft_20210_a:admin&password=111
+execute subscriber_match_stmt;
+commit;
 select id from subscriber_table_alias.`articles-quoted` where match(body) against('hello') order by id;
 execute subscriber_match_stmt;
 -- @session
