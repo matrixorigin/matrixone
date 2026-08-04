@@ -578,6 +578,135 @@ func TestConcatFunctionsPreserveStringCollation(t *testing.T) {
 	}
 }
 
+func TestConditionalStringFunctionsPreserveCommonCollation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	condition := types.T_bool.ToType()
+	binNarrow := types.NewWithCharset(types.T_varchar, 10, 0, types.CharsetUTF8MB4Bin)
+	binWide := types.NewWithCharset(types.T_varchar, 80, 0, types.CharsetUTF8MB4Bin)
+	generalWide := types.NewWithCharset(types.T_varchar, 80, 0, types.CharsetUTF8)
+
+	tests := []struct {
+		name        string
+		function    string
+		inputs      []types.Type
+		wantCharset uint8
+		wantWidth   int32
+	}{
+		{
+			name:        "case keeps matching utf8mb4 bin branches",
+			function:    "case",
+			inputs:      []types.Type{condition, binNarrow, binNarrow},
+			wantCharset: types.CharsetUTF8MB4Bin,
+			wantWidth:   10,
+		},
+		{
+			name:        "case merges branch widths",
+			function:    "case",
+			inputs:      []types.Type{condition, binNarrow, binWide},
+			wantCharset: types.CharsetUTF8MB4Bin,
+			wantWidth:   80,
+		},
+		{
+			name:        "if merges branch widths",
+			function:    "if",
+			inputs:      []types.Type{condition, binNarrow, binWide},
+			wantCharset: types.CharsetUTF8MB4Bin,
+			wantWidth:   80,
+		},
+		{
+			name:        "coalesce merges argument widths",
+			function:    "coalesce",
+			inputs:      []types.Type{binNarrow, binWide},
+			wantCharset: types.CharsetUTF8MB4Bin,
+			wantWidth:   80,
+		},
+		{
+			name:        "binary collation dominates general ci",
+			function:    "coalesce",
+			inputs:      []types.Type{generalWide, binNarrow},
+			wantCharset: types.CharsetUTF8MB4Bin,
+			wantWidth:   80,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := GetFunctionByName(proc.Ctx, test.function, test.inputs)
+			require.NoError(t, err)
+			require.Equal(t, types.T_varchar, result.GetReturnType().Oid)
+			require.Equal(t, test.wantCharset, result.GetReturnType().Charset)
+			require.Equal(t, test.wantWidth, result.GetReturnType().Width)
+
+			castTypes, shouldCast := result.ShouldDoImplicitTypeCast()
+			if shouldCast {
+				for i, typ := range castTypes {
+					if test.inputs[i].Oid == types.T_bool {
+						continue
+					}
+					require.Equal(t, test.wantCharset, typ.Charset)
+					require.Equal(t, test.wantWidth, typ.Width)
+				}
+			}
+		})
+	}
+}
+
+func TestMinConditionalStringsUsesPropagatedBinaryCollation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	narrowType := types.NewWithCharset(types.T_varchar, 10, 0, types.CharsetUTF8MB4Bin)
+	wideType := types.NewWithCharset(types.T_varchar, 80, 0, types.CharsetUTF8MB4Bin)
+	narrow := vector.NewVec(narrowType)
+	defer narrow.Free(proc.Mp())
+	wide := vector.NewVec(wideType)
+	defer wide.Free(proc.Mp())
+	for _, value := range []string{"a", "B"} {
+		require.NoError(t, vector.AppendBytes(narrow, []byte(value), false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(wide, []byte(value), false, proc.Mp()))
+	}
+	condition, err := vector.NewConstFixed(types.T_bool.ToType(), true, 2, proc.Mp())
+	require.NoError(t, err)
+	defer condition.Free(proc.Mp())
+
+	assertBinaryMin := func(t *testing.T, values *vector.Vector) {
+		require.Equal(t, types.CharsetUTF8MB4Bin, values.GetType().Charset)
+		require.Equal(t, int32(80), values.GetType().Width)
+		minExec, err := aggexec.MakeAgg(proc.Mp(), aggexec.AggIdOfMin, false, *values.GetType())
+		require.NoError(t, err)
+		defer minExec.Free()
+		require.NoError(t, minExec.GroupGrow(1))
+		require.NoError(t, minExec.BulkFill(0, []*vector.Vector{values}))
+		results, err := minExec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		defer results[0].Free(proc.Mp())
+		require.Equal(t, "B", string(results[0].GetBytesAt(0)))
+	}
+
+	tests := []struct {
+		name   string
+		inputs []*vector.Vector
+	}{
+		{name: "case", inputs: []*vector.Vector{condition, narrow, wide}},
+		{name: "if", inputs: []*vector.Vector{condition, narrow, wide}},
+		{name: "coalesce", inputs: []*vector.Vector{narrow, wide}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inputTypes := make([]types.Type, len(test.inputs))
+			for i := range test.inputs {
+				inputTypes[i] = *test.inputs[i].GetType()
+			}
+			resolved, err := GetFunctionByName(proc.Ctx, test.name, inputTypes)
+			require.NoError(t, err)
+			values, err := RunFunctionDirectly(
+				proc, resolved.GetEncodedOverloadID(), test.inputs, 2)
+			require.NoError(t, err)
+			defer values.Free(proc.Mp())
+			assertBinaryMin(t, values)
+		})
+	}
+}
+
 func TestDerivedStringFunctionsPreserveSourceCollation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	general := types.T_varchar.ToType()

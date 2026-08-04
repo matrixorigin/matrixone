@@ -53,7 +53,7 @@ func mixedStringNumericToVarchar(source []types.Type) (types.Type, bool) {
 		if hasString && hasNumeric {
 			retType := types.T_varchar.ToType()
 			retType.Width = types.MaxVarBinaryLen
-			return retType, true
+			return commonConditionalStringType(retType, source), true
 		}
 	}
 	return types.Type{}, false
@@ -195,7 +195,7 @@ func textStringCommonType(source []types.Type) (types.Type, bool, bool) {
 	if !hasText {
 		return types.Type{}, false, false
 	}
-	return types.T_text.ToType(), aligned, true
+	return commonConditionalStringType(types.T_text.ToType(), source), aligned, true
 }
 
 // caseCheck check `case X then Y case X1 then Y1 ... (else Z)`
@@ -333,7 +333,7 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 						continue
 					}
 				} else if retType.Oid.IsMySQLString() {
-					setMaxWidthFromSource(&retType, source)
+					retType = commonConditionalStringType(retType, source)
 				}
 				minCost = cost
 			}
@@ -673,7 +673,7 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 						continue
 					}
 				} else if retType.Oid.IsMySQLString() {
-					setMaxWidthFromSource(&retType, source)
+					retType = commonConditionalStringType(retType, source)
 				}
 				minCost = cost
 			}

@@ -1005,6 +1005,30 @@ func TestShowCreateKeepsLegacyDefaultOutputStable(t *testing.T) {
 	require.NotContains(t, showSQL, "COLLATE")
 }
 
+func TestShowCreateRoundTripsMigratedGeneralCIColumnWithLegacyDefault(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.ResolveVariableFunc = func(name string, isSystem, isGlobal bool) (interface{}, error) {
+		if name == "collation_server" && isSystem && !isGlobal {
+			return "utf8mb4_bin", nil
+		}
+		return nil, nil
+	}
+	tableDef, err := buildTestCreateTableStmt(mock,
+		"create table legacy_show(general_text varchar(10)) collate utf8mb4_general_ci")
+	require.NoError(t, err)
+	tableDef.DefaultCharset = uint32(types.CharsetLegacy)
+	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "general_text").Typ.Charset)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, showSQL, ") COLLATE=utf8mb4_general_ci")
+
+	roundTripped, err := buildTestCreateTableStmt(mock, showSQL)
+	require.NoError(t, err)
+	require.Equal(t, uint32(types.CharsetUTF8), roundTripped.DefaultCharset)
+	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(roundTripped.Cols, "general_text").Typ.Charset)
+}
+
 func TestShowCreateDistinguishesMixedLegacyAndGeneralCIColumns(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	tableDef, err := buildTestCreateTableStmt(mock,
