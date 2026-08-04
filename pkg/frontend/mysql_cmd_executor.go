@@ -56,6 +56,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -1168,35 +1169,56 @@ func handleSetVar(ses FeSession, execCtx *ExecCtx, sv *tree.SetVar, sql string) 
 }
 
 func handleSetTransaction(ses *Session, execCtx *ExecCtx, stmt *tree.SetTransaction) error {
+	var value string
+	var isolation pbtxn.TxnIsolation
+	foundIsolation := false
 	for _, characteristic := range stmt.CharacterList {
 		if characteristic == nil || !characteristic.IsLevel {
 			continue
 		}
 
-		var value string
 		switch characteristic.Isolation {
 		case tree.ISOLATION_LEVEL_REPEATABLE_READ:
 			value = "REPEATABLE-READ"
+			isolation = pbtxn.TxnIsolation_SI
 		case tree.ISOLATION_LEVEL_READ_COMMITTED:
 			value = "READ-COMMITTED"
+			isolation = pbtxn.TxnIsolation_RC
 		case tree.ISOLATION_LEVEL_READ_UNCOMMITTED:
-			value = "READ-UNCOMMITTED"
+			return moerr.NewNotSupported(execCtx.reqCtx,
+				"transaction isolation level READ-UNCOMMITTED is not supported")
 		case tree.ISOLATION_LEVEL_SERIALIZABLE:
-			value = "SERIALIZABLE"
+			return moerr.NewNotSupported(execCtx.reqCtx,
+				"transaction isolation level SERIALIZABLE is not supported")
 		default:
 			return moerr.NewInvalidInputf(execCtx.reqCtx, "unsupported transaction isolation level %d", characteristic.Isolation)
 		}
+		foundIsolation = true
+	}
+	if !foundIsolation {
+		return nil
+	}
 
-		if stmt.Global {
-			if err := doCheckRole(execCtx.reqCtx, ses); err != nil {
-				return err
-			}
-			if err := ses.SetGlobalSysVar(execCtx.reqCtx, "transaction_isolation", value); err != nil {
-				return err
-			}
-		} else if err := ses.SetSessionSysVar(execCtx.reqCtx, "transaction_isolation", value); err != nil {
+	switch stmt.Scope {
+	case tree.TransactionScopeNext:
+		txnHandler := ses.GetTxnHandler()
+		if txnHandler == nil {
+			return moerr.NewInternalError(execCtx.reqCtx, "transaction handler is not initialized")
+		}
+		txnHandler.setNextTxnIsolation(isolation)
+	case tree.TransactionScopeSession:
+		if err := ses.SetSessionSysVar(execCtx.reqCtx, "transaction_isolation", value); err != nil {
 			return err
 		}
+	case tree.TransactionScopeGlobal:
+		if err := doCheckRole(execCtx.reqCtx, ses); err != nil {
+			return err
+		}
+		if err := ses.SetGlobalSysVar(execCtx.reqCtx, "transaction_isolation", value); err != nil {
+			return err
+		}
+	default:
+		return moerr.NewInvalidInputf(execCtx.reqCtx, "unsupported transaction scope %d", stmt.Scope)
 	}
 	return nil
 }

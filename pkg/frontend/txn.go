@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -200,6 +201,14 @@ type TxnHandler struct {
 
 	// footPrints for debugging, shared across all transactions in this session
 	footPrints txnclient.FootPrints
+
+	// Session isolation applies to every subsequently created transaction in
+	// this session. Next isolation, when present, overrides it for exactly one
+	// successfully created transaction generation.
+	sessionTxnIsolation    pbtxn.TxnIsolation
+	hasSessionTxnIsolation bool
+	nextTxnIsolation       pbtxn.TxnIsolation
+	hasNextTxnIsolation    bool
 }
 
 func InitTxnHandler(service string, storage engine.Engine, connCtx context.Context, txnOp TxnOperator) *TxnHandler {
@@ -233,6 +242,51 @@ func (th *TxnHandler) Close() {
 	th.shareTxn = false
 	th.serverStatus = defaultServerStatus
 	th.optionBits = defaultOptionBits
+	th.hasSessionTxnIsolation = false
+	th.hasNextTxnIsolation = false
+}
+
+func txnIsolationFromSystemValue(ctx context.Context, value interface{}) (pbtxn.TxnIsolation, error) {
+	text, ok := value.(string)
+	if !ok {
+		return 0, moerr.NewInvalidInputf(ctx, "invalid transaction isolation level %v", value)
+	}
+
+	switch strings.ToUpper(text) {
+	case "READ-COMMITTED":
+		return pbtxn.TxnIsolation_RC, nil
+	case "REPEATABLE-READ":
+		return pbtxn.TxnIsolation_SI, nil
+	default:
+		return 0, moerr.NewNotSupportedf(ctx, "transaction isolation level %s is not supported", text)
+	}
+}
+
+func (th *TxnHandler) setSessionTxnIsolation(isolation pbtxn.TxnIsolation) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.sessionTxnIsolation = isolation
+	th.hasSessionTxnIsolation = true
+}
+
+func (th *TxnHandler) setNextTxnIsolation(isolation pbtxn.TxnIsolation) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.nextTxnIsolation = isolation
+	th.hasNextTxnIsolation = true
+}
+
+// txnIsolationUnsafe returns the isolation override for the transaction being
+// created and whether a next-transaction override must be consumed after New
+// successfully publishes an owned operator. The caller must hold th.mu.
+func (th *TxnHandler) txnIsolationUnsafe() (pbtxn.TxnIsolation, bool, bool) {
+	if th.hasNextTxnIsolation {
+		return th.nextTxnIsolation, true, true
+	}
+	if th.hasSessionTxnIsolation {
+		return th.sessionTxnIsolation, true, false
+	}
+	return 0, false, false
 }
 
 func (th *TxnHandler) GetConnCtx() context.Context {
@@ -450,10 +504,14 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	// quota check and clone. Apply the required mode to that owning transaction;
 	// shared explicit transactions keep their configured semantics and are
 	// validated by the quota checker instead.
+	consumeNextTxnIsolation := false
 	if backSes, ok := execCtx.ses.(*backSession); ok && backSes.forcePessimisticRC {
 		opts = append(opts,
 			txnclient.WithTxnMode(pbtxn.TxnMode_Pessimistic),
 			txnclient.WithTxnIsolation(pbtxn.TxnIsolation_RC))
+	} else if isolation, ok, consumeNext := th.txnIsolationUnsafe(); ok {
+		opts = append(opts, txnclient.WithTxnIsolation(isolation))
+		consumeNextTxnIsolation = consumeNext
 	}
 
 	tempCtx, tempCancel := context.WithTimeoutCause(th.txnCtx, pu.SV.CreateTxnOpTimeout.Duration, moerr.CauseCreateTxnOpUnsafe)
@@ -472,6 +530,9 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	}
 	if th.txnOp == nil {
 		return moerr.NewInternalError(execCtx.reqCtx, "NewTxnOperator: txnClient new a null txn")
+	}
+	if consumeNextTxnIsolation {
+		th.hasNextTxnIsolation = false
 	}
 	return err
 }

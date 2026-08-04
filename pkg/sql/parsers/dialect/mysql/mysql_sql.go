@@ -15860,7 +15860,7 @@ yydefault:
 //line mysql_sql.y:2713
 		{
 			yyLOCAL = &tree.SetTransaction{
-				Global:        false,
+				Scope:         tree.TransactionScopeNext,
 				CharacterList: yyDollar[3].transactionCharacteristicListUnion(),
 			}
 		}
@@ -15871,7 +15871,7 @@ yydefault:
 //line mysql_sql.y:2720
 		{
 			yyLOCAL = &tree.SetTransaction{
-				Global:        true,
+				Scope:         tree.TransactionScopeGlobal,
 				CharacterList: yyDollar[4].transactionCharacteristicListUnion(),
 			}
 		}
@@ -15882,7 +15882,7 @@ yydefault:
 //line mysql_sql.y:2727
 		{
 			yyLOCAL = &tree.SetTransaction{
-				Global:        false,
+				Scope:         tree.TransactionScopeSession,
 				CharacterList: yyDollar[4].transactionCharacteristicListUnion(),
 			}
 		}

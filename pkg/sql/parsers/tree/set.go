@@ -261,15 +261,26 @@ func (tc *TransactionCharacteristic) Format(ctx *FmtCtx) {
 	}
 }
 
+type TransactionScope int
+
+const (
+	TransactionScopeNext TransactionScope = iota
+	TransactionScopeSession
+	TransactionScopeGlobal
+)
+
 type SetTransaction struct {
 	statementImpl
-	Global        bool
+	Scope         TransactionScope
 	CharacterList []*TransactionCharacteristic
 }
 
 func (node *SetTransaction) Format(ctx *FmtCtx) {
 	ctx.WriteString("set")
-	if node.Global {
+	switch node.Scope {
+	case TransactionScopeSession:
+		ctx.WriteString(" session")
+	case TransactionScopeGlobal:
 		ctx.WriteString(" global")
 	}
 	ctx.WriteString(" transaction ")
