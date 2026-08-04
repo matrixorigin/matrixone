@@ -51,6 +51,30 @@ type lcaProbeLayout struct {
 	enumValues  []string
 }
 
+func sortDataBranchBatchByPrimaryKey(bat *batch.Batch, pkColIdx int, mp *mpool.MPool) error {
+	pkVec := bat.Vecs[pkColIdx]
+	if !isDataBranchFloatType(*pkVec.GetType()) {
+		return mergeutil.SortColumnsByIndex(bat.Vecs, pkColIdx, mp)
+	}
+
+	identityVec := vector.NewVec(types.T_uint64.ToType())
+	defer identityVec.Free(mp)
+	for row := range pkVec.Length() {
+		identity, isNull, err := dataBranchFloatPKIdentityAt(pkVec, row)
+		if err != nil {
+			return err
+		}
+		if err = vector.AppendFixed(identityVec, identity, isNull, mp); err != nil {
+			return err
+		}
+	}
+
+	cols := make([]*vector.Vector, 0, len(bat.Vecs)+1)
+	cols = append(cols, bat.Vecs...)
+	cols = append(cols, identityVec)
+	return mergeutil.SortColumnsByIndex(cols, len(cols)-1, mp)
+}
+
 func (layout lcaProbeLayout) columnNameForTargetIndex(targetIdx int) (string, bool) {
 	for i, candidateIdx := range layout.targetIdxes {
 		if candidateIdx == targetIdx {
@@ -1062,8 +1086,8 @@ func hashDiffIfHasLCA(
 
 	handleBaseDeleteAndUpdates := func(wrapped batchWithKind) error {
 		wrapped.side = diffSideBase
-		if err2 := mergeutil.SortColumnsByIndex(
-			wrapped.batch.Vecs, tblStuff.def.pkColIdx, ses.proc.Mp(),
+		if err2 := sortDataBranchBatchByPrimaryKey(
+			wrapped.batch, tblStuff.def.pkColIdx, ses.proc.Mp(),
 		); err2 != nil {
 			return err2
 		}
@@ -1133,8 +1157,8 @@ func hashDiffIfHasLCA(
 			return nil
 		}
 
-		if err2 = mergeutil.SortColumnsByIndex(
-			wrapped.batch.Vecs, tblStuff.def.pkColIdx, ses.proc.Mp(),
+		if err2 = sortDataBranchBatchByPrimaryKey(
+			wrapped.batch, tblStuff.def.pkColIdx, ses.proc.Mp(),
 		); err2 != nil {
 			return err2
 		}
@@ -1159,7 +1183,7 @@ func hashDiffIfHasLCA(
 
 			i, j := 0, 0
 			for i < tarVec.Length() && j < baseVec.Length() {
-				if cmp, err3 = compareSingleValInVector(
+				if cmp, err3 = compareDataBranchPrimaryKeyInVectors(
 					ctx, ses, i, j, tarVec, baseVec,
 				); err3 != nil {
 					return

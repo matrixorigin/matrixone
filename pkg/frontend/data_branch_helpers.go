@@ -60,6 +60,70 @@ func dataBranchSQLKeyEqual(left, right string, typ types.Type) string {
 	return fmt.Sprintf("serial(%s) = serial(%s)", left, right)
 }
 
+// dataBranchFloatPKIdentityAt returns the exact storage identity used to order
+// a simple FLOAT/DOUBLE primary key during hash-diff conflict matching. Scalar
+// float comparison is not a key comparison: it collapses signed zero and NaN
+// payloads. The raw IEEE bits form a deterministic total order and preserve
+// every legal stored key.
+func dataBranchFloatPKIdentityAt(vec *vector.Vector, row int) (uint64, bool, error) {
+	if vec.IsConst() {
+		row = 0
+	}
+	if vec.IsNull(uint64(row)) {
+		return 0, true, nil
+	}
+	switch vec.GetType().Oid {
+	case types.T_float32:
+		return uint64(math.Float32bits(vector.GetFixedAtNoTypeCheck[float32](vec, row))), false, nil
+	case types.T_float64:
+		return math.Float64bits(vector.GetFixedAtNoTypeCheck[float64](vec, row)), false, nil
+	default:
+		return 0, false, moerr.NewInternalErrorNoCtxf(
+			"data branch: exact float key identity requires FLOAT/DOUBLE, got %s",
+			vec.GetType().String(),
+		)
+	}
+}
+
+func compareDataBranchPrimaryKeyInVectors(
+	ctx context.Context,
+	ses *Session,
+	rowIdx1 int,
+	rowIdx2 int,
+	vec1 *vector.Vector,
+	vec2 *vector.Vector,
+) (int, error) {
+	if !vec1.GetType().Eq(*vec2.GetType()) || !isDataBranchFloatType(*vec1.GetType()) {
+		return compareSingleValInVector(ctx, ses, rowIdx1, rowIdx2, vec1, vec2)
+	}
+
+	left, leftNull, err := dataBranchFloatPKIdentityAt(vec1, rowIdx1)
+	if err != nil {
+		return 0, err
+	}
+	right, rightNull, err := dataBranchFloatPKIdentityAt(vec2, rowIdx2)
+	if err != nil {
+		return 0, err
+	}
+	if leftNull || rightNull {
+		switch {
+		case leftNull && rightNull:
+			return 0, nil
+		case leftNull:
+			return -1, nil
+		default:
+			return 1, nil
+		}
+	}
+	if left < right {
+		return -1, nil
+	}
+	if left > right {
+		return 1, nil
+	}
+	return 0, nil
+}
+
 func containsDataBranchTempTableName(sqlLower string) bool {
 	return containsTempTableMarker(sqlLower, "__mo_diff_del_") ||
 		containsTempTableMarker(sqlLower, "__mo_diff_ins_")

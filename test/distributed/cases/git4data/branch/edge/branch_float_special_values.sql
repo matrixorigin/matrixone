@@ -394,6 +394,76 @@ delete from missing_composite_dst where tag = 7;
 data branch merge missing_composite_src into missing_composite_dst when conflict accept;
 select note, hex(serial(f32)), tag from missing_composite_dst order by tag;
 
+-- Crossed changes on bit-distinct keys are independent, not conflicts. The
+-- conflict join must not pair +0 with -0 or different NaN payloads under any
+-- policy.
+create table cross_zero_base(k float primary key, note varchar(32));
+insert into cross_zero_base values(0.0, 'poszero');
+insert into cross_zero_base values(bit_cast(unhex('00000080') as float), 'negzero');
+data branch create table cross_zero_src from cross_zero_base;
+data branch create table cross_zero_fail_dst from cross_zero_base;
+data branch create table cross_zero_skip_dst from cross_zero_base;
+data branch create table cross_zero_accept_dst from cross_zero_base;
+update cross_zero_src set note = 'negzero_cross_updated'
+where serial(k) = serial(bit_cast(unhex('00000080') as float));
+delete from cross_zero_fail_dst
+where serial(k) = serial(cast(0.0 as float));
+delete from cross_zero_skip_dst
+where serial(k) = serial(cast(0.0 as float));
+delete from cross_zero_accept_dst
+where serial(k) = serial(cast(0.0 as float));
+data branch merge cross_zero_src into cross_zero_fail_dst when conflict fail;
+select note, hex(serial(k)) from cross_zero_fail_dst order by note;
+data branch merge cross_zero_src into cross_zero_skip_dst when conflict skip;
+select note, hex(serial(k)) from cross_zero_skip_dst order by note;
+data branch merge cross_zero_src into cross_zero_accept_dst when conflict accept;
+select note, hex(serial(k)) from cross_zero_accept_dst order by note;
+
+data branch create table cross_nan_src from bit_missing_nan_base;
+data branch create table cross_nan_fail_dst from bit_missing_nan_base;
+data branch create table cross_nan_skip_dst from bit_missing_nan_base;
+data branch create table cross_nan_accept_dst from bit_missing_nan_base;
+update cross_nan_src set note = 'nan1_cross_updated'
+where serial(k) = serial(bit_cast(unhex('010000000000f87f') as double));
+delete from cross_nan_fail_dst
+where serial(k) = serial(bit_cast(unhex('000000000000f87f') as double));
+delete from cross_nan_skip_dst
+where serial(k) = serial(bit_cast(unhex('000000000000f87f') as double));
+delete from cross_nan_accept_dst
+where serial(k) = serial(bit_cast(unhex('000000000000f87f') as double));
+data branch pick cross_nan_src into cross_nan_fail_dst
+keys(select k from cross_nan_src where note = 'nan1_cross_updated') when conflict fail;
+select note, hex(serial(k)) from cross_nan_fail_dst order by note;
+data branch pick cross_nan_src into cross_nan_skip_dst
+keys(select k from cross_nan_src where note = 'nan1_cross_updated') when conflict skip;
+select note, hex(serial(k)) from cross_nan_skip_dst order by note;
+data branch pick cross_nan_src into cross_nan_accept_dst
+keys(select k from cross_nan_src where note = 'nan1_cross_updated') when conflict accept;
+select note, hex(serial(k)) from cross_nan_accept_dst order by note;
+
+create table cross_composite_base(
+    k double,
+    tag int,
+    note varchar(32),
+    primary key(k, tag)
+);
+insert into cross_composite_base values(0.0, 7, 'poszero');
+insert into cross_composite_base values(
+    bit_cast(unhex('0000000000000080') as double), 7, 'negzero');
+data branch create table cross_composite_src from cross_composite_base;
+data branch create table cross_composite_merge_dst from cross_composite_base;
+data branch create table cross_composite_pick_dst from cross_composite_base;
+update cross_composite_src set note = 'negzero_cross_updated'
+where serial(k) = serial(bit_cast(unhex('0000000000000080') as double));
+delete from cross_composite_merge_dst where serial(k) = serial(cast(0.0 as double));
+delete from cross_composite_pick_dst where serial(k) = serial(cast(0.0 as double));
+data branch merge cross_composite_src into cross_composite_merge_dst when conflict accept;
+select note, hex(serial(k)), tag from cross_composite_merge_dst order by note;
+data branch pick cross_composite_src into cross_composite_pick_dst
+keys(select k, tag from cross_composite_src where note = 'negzero_cross_updated')
+when conflict accept;
+select note, hex(serial(k)), tag from cross_composite_pick_dst order by note;
+
 -- Round-trip the portable statement shape for a destination-delete conflict.
 create table missing_portable_base(k double primary key, note varchar(32));
 insert into missing_portable_base values
