@@ -10,6 +10,10 @@ create table parent_agg (id int primary key, corr_key int);
 create table child_agg (corr_key int, v int);
 insert into parent_agg values (1, 10), (2, 20), (3, 30), (4, 30);
 insert into child_agg values (10, 5), (10, 7), (20, null);
+create table `Author` (`id` int primary key, `name` varchar(32));
+create table `Post` (`id` int primary key, `title` varchar(32), `authorId` int);
+insert into `Author` values (1, 'Zero'), (2, 'One'), (3, 'Many');
+insert into `Post` values (20, 'Only', 2), (30, 'First', 3), (31, null, 3);
 
 -- @case
 -- @desc:direct outer column projected by a correlated scalar subquery
@@ -48,6 +52,15 @@ with correlated_input as (select corr_key, v from child_agg) select p.id, (selec
 select p.id, (with correlated_input as (select c.v from child_agg c where c.corr_key = p.corr_key) select coalesce(sum(v), 0) from correlated_input) as cte_correlated_sum from parent_agg p order by p.id;
 select p.id, (select sum(c.v) from child_agg c where c.corr_key = p.corr_key group by c.corr_key) as grouped_sum from parent_agg p order by p.id;
 select p.id, (select sum(c.v) from child_agg c where c.corr_key = p.corr_key having sum(c.v) > 100) as having_sum from parent_agg p order by p.id;
+
+-- @case
+-- @desc:issue #24737 - Prisma 7.9.1 to-many relation join through transparent derived tables
+-- @label:bvt
+SELECT `t0`.`id`, `t0`.`name`, (SELECT COALESCE(JSON_ARRAYAGG(`__prisma_data__`), CONVERT('[]', JSON)) AS `__prisma_data__` FROM (SELECT `t3`.`__prisma_data__` FROM (SELECT JSON_OBJECT('id', `t2`.`id`, 'title', `t2`.`title`, 'authorId', `t2`.`authorId`) AS `__prisma_data__` FROM (SELECT `t1`.* FROM `Post` AS `t1` WHERE `t0`.`id` = `t1`.`authorId` /* root select */) AS `t2` /* inner select */) AS `t3` /* middle select */) AS `t4` /* outer select */) AS `posts` FROM `Author` AS `t0` ORDER BY `t0`.`id` ASC;
+SELECT `t0`.`id`, (SELECT COALESCE(JSON_ARRAYAGG(`__prisma_data__`), CONVERT('[]', JSON)) FROM (SELECT JSON_OBJECT('id', `t2`.`id`, 'title', `t2`.`title`) AS `__prisma_data__` FROM (SELECT `t1`.* FROM `Post` AS `t1` WHERE `t0`.`id` = `t1`.`authorId` AND `t1`.`id` >= 30) AS `t2`) AS `t3`) AS `filtered_posts` FROM `Author` AS `t0` ORDER BY `t0`.`id`;
+SELECT `t0`.`id`, (SELECT COUNT(*) FROM (SELECT `t1`.`id` FROM `Post` AS `t1` WHERE `t0`.`id` = `t1`.`authorId`) AS `t2`) AS `post_count` FROM `Author` AS `t0` ORDER BY `t0`.`id`;
+SELECT `t1`.`id`, (SELECT `t0`.`name` FROM `Author` AS `t0` WHERE `t0`.`id` = `t1`.`authorId`) AS `author_name` FROM `Post` AS `t1` ORDER BY `t1`.`id`;
+SELECT COALESCE(JSON_ARRAYAGG(`__prisma_data__`), CONVERT('[]', JSON)) AS `posts` FROM (SELECT JSON_OBJECT('id', `t2`.`id`, 'title', `t2`.`title`, 'authorId', `t2`.`authorId`) AS `__prisma_data__` FROM (SELECT `t1`.* FROM `Post` AS `t1` WHERE `t1`.`authorId` = 3) AS `t2`) AS `t3`;
 
 -- @teardown
 drop database test_subq_corr_project;
