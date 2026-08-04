@@ -24,6 +24,48 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIntHashMapProbeGroupingDoesNotMatchRawKey(t *testing.T) {
+	mp := mpool.MustNewZero()
+	hashMap, err := NewIntHashMap(false, mp)
+	require.NoError(t, err)
+	defer hashMap.Free()
+	raw := vector.NewVec(types.T_uint8.ToType())
+	require.NoError(t, vector.AppendFixed(raw, uint8(0), false, mp))
+	grouping := vector.NewRollupConst(types.T_uint8.ToType(), 1, mp)
+	defer raw.Free(mp)
+	defer grouping.Free(mp)
+
+	iterator := hashMap.NewIterator()
+	_, _, err = iterator.Insert(0, 1, []*vector.Vector{raw})
+	require.NoError(t, err)
+	values, zValues, err := iterator.Find(0, 1, []*vector.Vector{grouping})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{0}, values)
+	require.Equal(t, []int64{0}, zValues)
+}
+
+func TestIntHashMapPartialGroupingRowsDoNotMatchRawKeys(t *testing.T) {
+	mp := mpool.MustNewZero()
+	hashMap, err := NewIntHashMap(false, mp)
+	require.NoError(t, err)
+	defer hashMap.Free()
+	build := vector.NewVec(types.T_int32.ToType())
+	probe := vector.NewVec(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixedList(build, []int32{7, 8}, nil, mp))
+	require.NoError(t, vector.AppendFixedList(probe, []int32{7, 8}, nil, mp))
+	probe.GetGrouping().Add(0)
+	defer build.Free(mp)
+	defer probe.Free(mp)
+
+	iterator := hashMap.NewIterator()
+	_, _, err = iterator.Insert(0, 2, []*vector.Vector{build})
+	require.NoError(t, err)
+	values, zValues, err := iterator.Find(0, 2, []*vector.Vector{probe})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{0, 2}, values)
+	require.Equal(t, []int64{0, 1}, zValues)
+}
+
 func TestIntHashMap_Iterator(t *testing.T) {
 	{
 		m := mpool.MustNewZero()
@@ -42,7 +84,8 @@ func TestIntHashMap_Iterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, rowCount, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 1, 1, 2, 2, 2, 3, 3, 3, 4}, vs)
-		vs, _ = itr.Find(0, rowCount, vecs)
+		vs, _, err = itr.Find(0, rowCount, vecs)
+		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 1, 1, 2, 2, 2, 3, 3, 3, 4}, vs)
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -63,7 +106,8 @@ func TestIntHashMap_Iterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs)
+		vs, _, err = itr.Find(0, Rows, vecs)
+		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -83,7 +127,8 @@ func TestIntHashMap_Iterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs)
+		vs, _, err = itr.Find(0, Rows, vecs)
+		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -103,7 +148,8 @@ func TestIntHashMap_Iterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs)
+		vs, _, err = itr.Find(0, Rows, vecs)
+		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -123,7 +169,8 @@ func TestIntHashMap_Iterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs)
+		vs, _, err = itr.Find(0, Rows, vecs)
+		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -143,7 +190,8 @@ func TestIntHashMap_Iterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{0, 1, 0, 2, 0, 3, 0, 4, 0, 5}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs)
+		vs, _, err = itr.Find(0, Rows, vecs)
+		require.NoError(t, err)
 		require.Equal(t, []uint64{0, 1, 0, 2, 0, 3, 0, 4, 0, 5}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -208,7 +256,8 @@ func TestIntHashMap_MarshalUnmarshal(t *testing.T) {
 		require.Equal(t, expectedGroupCount, unmarshaledMp.GroupCount())
 		require.Equal(t, mp.HasNull(), unmarshaledMp.HasNull())
 
-		foundVs, _ := unmarshaledMp.NewIterator().Find(0, rowCount, vecs)
+		foundVs, _, err := unmarshaledMp.NewIterator().Find(0, rowCount, vecs)
+		require.NoError(t, err)
 		require.Equal(t, expectedMappedValue, foundVs)
 	})
 
@@ -245,7 +294,8 @@ func TestIntHashMap_MarshalUnmarshal(t *testing.T) {
 		require.Equal(t, expectedGroupCount, unmarshaledMp.GroupCount())
 		require.Equal(t, mp.HasNull(), unmarshaledMp.HasNull())
 
-		foundVs, foundZvs := unmarshaledMp.NewIterator().Find(0, numElements, vecs)
+		foundVs, foundZvs, err := unmarshaledMp.NewIterator().Find(0, numElements, vecs)
+		require.NoError(t, err)
 		for i := 0; i < numElements; i++ {
 			require.Equal(t, originalVs[i], foundVs[i], "Mismatch at index %d for mapped value", i)
 			require.Equal(t, originalZvs[i], foundZvs[i], "Mismatch at index %d for zValue", i)

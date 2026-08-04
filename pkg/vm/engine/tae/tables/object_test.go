@@ -204,7 +204,7 @@ func TestMemoryNodeRollbackHoleVisibilityAndWriteLayout(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	rt := moruntime.ServiceRuntime("")
 	originalVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion9)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion10)
 	defer func() {
 		if hadVersion {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, originalVersion)
@@ -272,7 +272,7 @@ func TestMemoryNodeRollbackHoleVisibilityAndWriteLayout(t *testing.T) {
 
 	// During a rolling upgrade, the TN keeps the legacy layout and physically
 	// removes rollback holes so an old CN cannot expose them as user rows.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion8)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion9)
 	legacyBatches := make(map[uint32]*containers.BatchWithVersion)
 	err = mnode.getDataWindowOnWriteSchema(
 		context.Background(),

@@ -177,8 +177,14 @@ func handleDropMongoDBConnection(ctx context.Context, ses *Session, stmt *tree.D
 }
 
 func retireMongoDBClients(ctx context.Context, service string, retirement mongodb.ClientRetirement) {
-	if dependencies := mongoDBRuntimeDependencies(service); dependencies != nil && dependencies.Pool != nil {
-		_ = retirement.Apply(dependencies.Pool)
+	if dependencies := mongoDBRuntimeDependencies(service); dependencies != nil {
+		if dependencies.Retirements != nil {
+			dependencies.Retirements.Submit(retirement)
+			return
+		}
+		if dependencies.Pool != nil {
+			_ = retirement.Apply(dependencies.Pool)
+		}
 	}
 	pu := getPuIfPresent(service)
 	if pu == nil || pu.QueryClient == nil {

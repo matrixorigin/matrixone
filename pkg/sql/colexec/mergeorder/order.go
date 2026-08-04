@@ -278,12 +278,8 @@ func (ctr *container) removeInMemoryBatch(proc *process.Process, index int) erro
 	if ctr.inMemoryHeap != nil {
 		heap.Remove(ctr.inMemoryHeap, ctr.inMemoryHeapPos[index])
 	}
-	for i := range cols {
-		if batchContainsVector(bat, cols[i]) {
-			continue
-		}
-		cols[i].Free(proc.GetMPool())
-	}
+	freeOrderColumns(proc.GetMPool(), bat, cols)
+	bat.Clean(proc.GetMPool())
 	ctr.batchList[index] = nil
 	ctr.orderCols[index] = nil
 	ctr.indexList[index] = -1

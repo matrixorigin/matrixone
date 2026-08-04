@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -328,6 +329,33 @@ func TestBuildCreateViewExplicitColumnList(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrViewWrongList))
 		require.Equal(t, uint16(moerr.ER_VIEW_WRONG_LIST), err.(*moerr.Error).MySQLCode())
 	})
+}
+
+func TestBuildCreateViewRejectsTemporaryTable(t *testing.T) {
+	tests := []string{
+		"create view v as select * from nation",
+		"create view v as select 1 from nation where false",
+		"create view v as select * from (select * from nation) n",
+		"create view v as select (select n_name from nation limit 1)",
+		"create view v as (select * from nation)",
+	}
+
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false)
+			ctx.tables["nation"].IsTemporary = true
+
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = BuildPlan(ctx, stmt, false)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrViewSelectTmpTable))
+			require.Equal(t, uint16(moerr.ER_VIEW_SELECT_TMPTABLE), err.(*moerr.Error).MySQLCode())
+			require.Equal(t, "View's SELECT refers to a temporary table 'nation'", err.Error())
+		})
+	}
 }
 
 func TestBuildTemporaryTableMarksCatalogRelkind(t *testing.T) {
@@ -961,8 +989,9 @@ func TestBuildAlterTableRejectsMongoDBExternalTable(t *testing.T) {
 	ctx := mock.CurrentContext().(*MockCompilerContext)
 	ctx.objects["mongo_ext"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "mongo_ext"}
 	ctx.tables["mongo_ext"] = &plan.TableDef{
-		Name:      "mongo_ext",
-		TableType: catalog.SystemExternalRel,
+		Name:        "mongo_ext",
+		TableType:   catalog.SystemExternalRel,
+		FeatureFlag: features.MongoDBExternal,
 		Cols: []*plan.ColDef{
 			{Name: "device_id", Typ: plan.Type{Id: int32(types.T_varchar), Width: 64}},
 			{Name: "measurement", Typ: plan.Type{Id: int32(types.T_float64)}},
@@ -1030,6 +1059,7 @@ func TestBuildMongoDBExternalTablePreservesNotNullMapping(t *testing.T) {
 	require.NoError(t, err)
 	tableDef := logicPlan.GetDdl().GetCreateTable().GetTableDef()
 	require.NotEmpty(t, tableDef.Cols)
+	require.True(t, features.IsMongoDBExternal(tableDef.FeatureFlag))
 	require.Equal(t, "v", tableDef.Cols[0].Name)
 	require.False(t, tableDef.Cols[0].Default.NullAbility)
 

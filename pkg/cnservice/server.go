@@ -1168,17 +1168,23 @@ func (s *service) initMongoDBRuntime() {
 		MaxConversionErrors: parameters.MaxConversionErrors, MaxConversionErrorRate: parameters.MaxConversionErrorRate,
 		MaxSourceConcurrency: parameters.MaxSourceConcurrency,
 	}
+	pool := sqlmongodb.NewValidatedClientPool(
+		sqlmongodb.OfficialClientFactory{},
+		sqlmongodb.CatalogConnectionResolver{Executor: s.sqlExecutor},
+		config.MaxCachedClients,
+	)
+	retirements := sqlmongodb.NewClientRetirementQueue(
+		pool,
+		sqlmongodb.ClusterRemoteClientRetirer{Cluster: s.moCluster, QueryClient: s.queryClient},
+		sqlmongodb.DefaultClientRetirementQueueCapacity,
+	)
 	dependencies := &sqlmongodb.RuntimeDependencies{
 		Config:      config,
 		Connections: sqlmongodb.CatalogConnectionResolver{Executor: s.sqlExecutor},
 		Mappings:    sqlmongodb.CatalogMappingResolver{Executor: s.sqlExecutor},
 		Secrets:     sqlmongodb.EnvSecretResolver{},
-		Pool: sqlmongodb.NewValidatedClientPool(
-			sqlmongodb.OfficialClientFactory{},
-			sqlmongodb.CatalogConnectionResolver{Executor: s.sqlExecutor},
-			config.MaxCachedClients,
-		),
-		Limiter: sqlmongodb.NewSourceLimiter(config.MaxSourceConcurrency),
+		Pool:        pool, Limiter: sqlmongodb.NewSourceLimiter(config.MaxSourceConcurrency),
+		Retirements: retirements,
 	}
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(sqlmongodb.RuntimeDependenciesKey, dependencies)
 }
@@ -1195,7 +1201,11 @@ func (s *service) closeMongoDBRuntime() error {
 	}
 	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseShutdown)
 	defer cancel()
-	return dependencies.Pool.Close(ctx)
+	var err error
+	if dependencies.Retirements != nil {
+		err = dependencies.Retirements.Close(ctx)
+	}
+	return errors.Join(err, dependencies.Pool.Close(ctx))
 }
 
 func (s *service) initIncrService() {

@@ -79,7 +79,14 @@ func (offset *Offset) Reset(proc *process.Process, pipelineFailed bool, err erro
 		offset.ctr.offsetExecutor.ResetForNextQuery()
 	}
 	if offset.ctr.buf != nil {
-		offset.ctr.buf.CleanOnlyData()
+		if offset.ctr.buf.HasAllocationAccount() {
+			// Do not carry an execution-scoped allocation selection into the next
+			// prepared execution.
+			offset.ctr.buf.Clean(proc.Mp())
+			offset.ctr.buf = nil
+		} else {
+			offset.ctr.buf.CleanOnlyData()
+		}
 	}
 	offset.ctr.seen = 0
 }

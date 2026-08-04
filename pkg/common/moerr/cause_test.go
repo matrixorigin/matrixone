@@ -157,6 +157,9 @@ var causeArray = []error{
 
 	CauseWaitRemoteRegsReady,
 
+	CauseMongoDBClientCleanup,
+	CauseMongoDBClientRetirement,
+
 	CauseIsAvailable,
 	CauseNewMessageSenderOnClient,
 	CauseWaitingTheStopResponse,
