@@ -406,7 +406,7 @@ select id, y + 0, bin(b + 0), e, e + 0, s, s + 0
 from mysql_compat_special_ignore order by id;
 ➤ id[4,32,0]  ¦  y + 0[-5,64,0]  ¦  bin(b + 0)[12,-1,0]  ¦  e[12,-1,0]  ¦  e + 0[-5,64,0]  ¦  s[12,-1,0]  ¦  s + 0[3,38,0]  𝄀
 1  ¦  0  ¦  1111  ¦    ¦  0  ¦  x  ¦  1  𝄀
-2  ¦  0  ¦  0  ¦    ¦  0  ¦    ¦  0  𝄀
+2  ¦  0  ¦  1111  ¦    ¦  0  ¦    ¦  0  𝄀
 3  ¦  2024  ¦  11  ¦  a  ¦  1  ¦  x,z  ¦  5  𝄀
 4  ¦  2024  ¦  0  ¦    ¦  3  ¦    ¦  0
 select id, e, e + 0, e = '', length(e)
