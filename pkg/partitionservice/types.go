@@ -44,7 +44,7 @@ var (
 		partition_name             varchar(50)   not null,
 		partition_ordinal_position int	         unsigned not null,
 		partition_expression_str   varchar(2048) not null,
-    	partition_expression       varchar(2048) not null
+		partition_expression       varbinary(2048) not null
 	)`, catalog.MO_CATALOG, catalog.MOPartitionTables)
 
 	InitSQLs = []string{

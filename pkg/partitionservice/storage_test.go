@@ -255,3 +255,8 @@ func TestGetPartitionTableCreateSQL(t *testing.T) {
 	)
 	require.Equal(t, "create table `test_p1` (`a` int)", str)
 }
+
+func TestPartitionTablesSQLStoresExpressionsAsBinary(t *testing.T) {
+	require.Contains(t, PartitionTablesSQL, "partition_expression       varbinary(2048) not null")
+	require.NotContains(t, PartitionTablesSQL, "partition_expression       varchar")
+}

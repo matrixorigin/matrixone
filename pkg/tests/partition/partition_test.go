@@ -30,6 +30,38 @@ import (
 
 var sharedCluster embed.SharedTestCluster
 
+// Regression for partition protobuf metadata being written through the SQL
+// storage path. partition_expression is binary data, so this must work with
+// compatible-mode UTF-8 validation enabled on text columns.
+func TestPartitionExpressionBinaryMetadataRoundTrip(t *testing.T) {
+	creates := []string{
+		"create table %s (c int) partition by hash(c) partitions 2",
+		"create table %s (c int primary key) partition by list (c) (partition p0 values in (1), partition p1 values in (2))",
+		"create table %s (c int primary key) partition by range (c) (partition p0 values less than (10), partition p1 values less than maxvalue)",
+	}
+
+	runPartitionClusterTest(t, func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+
+		db := testutils.GetDatabaseName(t)
+		testutils.CreateTestDatabase(t, db, cn)
+		for idx, create := range creates {
+			table := fmt.Sprintf("%s_%d", t.Name(), idx)
+			testutils.ExecSQL(t, db, cn, fmt.Sprintf(create, table))
+
+			metadata := getMetadata(t, 0, db, table, cn)
+			require.NotEmpty(t, metadata.Partitions)
+			for _, p := range metadata.Partitions {
+				require.NotNil(t, p.Expr)
+				encoded, err := p.Expr.Marshal()
+				require.NoError(t, err)
+				require.NotEmpty(t, encoded)
+			}
+		}
+	})
+}
+
 func runPartitionTableCreateAndDeleteTestsWithAware(
 	t *testing.T,
 	prepare func(c embed.Cluster) int32,
