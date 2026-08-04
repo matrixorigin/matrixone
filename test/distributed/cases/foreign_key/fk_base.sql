@@ -230,7 +230,7 @@ insert into c1 values(2,2,1,1);
 drop table c1;
 drop table f1;
 
-create table fk_01(a int,b varchar(20),c tinyint,primary key(a,b));
+create table fk_01(a int,b varchar(20),c tinyint,primary key(a,b), unique key(a), unique key(b));
 create table fk_02(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign key(col1,col2) REFERENCES fk_01(a,b) on delete RESTRICT on update RESTRICT);
 create table fk_03(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign key(col1) REFERENCES fk_01(a) on delete RESTRICT on update RESTRICT);
 create table fk_04(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign key(col2) REFERENCES fk_01(b) on delete RESTRICT on update RESTRICT);
@@ -239,7 +239,7 @@ drop table fk_03;
 drop table fk_02;
 drop table fk_01;
 
-create table f1(a int, b int, primary key (a,b));
+create table f1(a int, b int, primary key (a,b), unique key(a));
 create table c1(id int primary key, aa int, bb int, CONSTRAINT `fk_aa` FOREIGN KEY(`aa`) REFERENCES `f1`(`a`));
 insert into f1 values (1,1);
 insert into c1 values (1,1,1);
@@ -260,6 +260,28 @@ update f1 set b=1, a=a;
 update f1 set a=a, b=2;
 drop table c1;
 drop table f1;
+
+-- The referenced columns must match one complete PRIMARY or UNIQUE key, in order.
+create table fk_exact_key_parent (
+    a int,
+    b int,
+    c int,
+    primary key (a, b),
+    unique key uk_b_c (b, c)
+);
+-- @regex("failed to add the foreign key constraint",true)
+create table fk_invalid_pk_prefix (a int, constraint fk_invalid_pk_prefix foreign key (a) references fk_exact_key_parent(a));
+-- @regex("failed to add the foreign key constraint",true)
+create table fk_invalid_unique_prefix (b int, constraint fk_invalid_unique_prefix foreign key (b) references fk_exact_key_parent(b));
+-- @regex("failed to add the foreign key constraint",true)
+create table fk_invalid_key_order (a int, b int, constraint fk_invalid_key_order foreign key (a,b) references fk_exact_key_parent(b,a));
+-- @regex("failed to add the foreign key constraint",true)
+create table fk_invalid_mixed_key (a int, c int, constraint fk_invalid_mixed_key foreign key (a,c) references fk_exact_key_parent(a,c));
+create table fk_invalid_alter_child (a int, b int);
+-- @regex("failed to add the foreign key constraint",true)
+alter table fk_invalid_alter_child add constraint fk_invalid_alter_prefix foreign key (a) references fk_exact_key_parent(a);
+drop table fk_invalid_alter_child;
+drop table fk_exact_key_parent;
 
 drop database if exists db1;
 create database db1;

@@ -268,11 +268,12 @@ create table parent_nonunique_prefix (
 create table child_nonunique_prefix (
     id int primary key,
     parent_a int,
-    constraint fk_nonunique_prefix foreign key (parent_a)
-        references parent_nonunique_prefix(a) on update cascade
+    parent_b int,
+    constraint fk_nonunique_prefix foreign key (parent_a, parent_b)
+        references parent_nonunique_prefix(a, b) on update cascade
 );
 insert into parent_nonunique_prefix values (1, 1), (1, 2);
-insert into child_nonunique_prefix values (10, 1);
+insert into child_nonunique_prefix values (10, 1, 1);
 update parent_nonunique_prefix set a = b + 1 where a = 1;
 select * from parent_nonunique_prefix order by a, b;
 select * from child_nonunique_prefix order by id;
