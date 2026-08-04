@@ -394,27 +394,27 @@ func convertObjectToBatch(
 	return bat, nil
 }
 
-// filterBatchBySnapshotTS filters batch rows by snapshot TS
-// For appendable objects, rows with commit TS >snapshot TS should be filtered out
+// filterBatchBySnapshotTS removes appendable-object rows that are not visible at
+// the snapshot, including rows whose persisted abort marker is set.
 func filterBatchBySnapshotTS(
 	ctx context.Context,
 	bat *containers.Batch,
 	snapshotTS types.TS,
 	mp *mpool.MPool,
-) (*containers.Batch, error) {
+) (*containers.Batch, []uint32, error) {
 	if bat == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// Find the commit TS column
 	commitTSVec := bat.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr)
 	if commitTSVec == nil {
-		return nil, moerr.NewInternalErrorf(ctx, "commit TS column not found in batch")
+		return nil, nil, moerr.NewInternalErrorf(ctx, "commit TS column not found in batch")
 	}
 
 	// Verify the column type is TS
 	if commitTSVec.GetType().Oid != types.T_TS {
-		return nil, moerr.NewInternalErrorf(ctx, "commit TS column type mismatch: expected TS, got %s", commitTSVec.GetType().String())
+		return nil, nil, moerr.NewInternalErrorf(ctx, "commit TS column type mismatch: expected TS, got %s", commitTSVec.GetType().String())
 	}
 
 	// Get commit TS values
@@ -423,11 +423,11 @@ func filterBatchBySnapshotTS(
 	if abortPos, ok := bat.Nameidx[objectio.TombstoneAttr_Abort_Attr]; ok {
 		abortVec := bat.Vecs[abortPos]
 		if abortVec.GetType().Oid != types.T_bool {
-			return nil, moerr.NewInternalErrorf(ctx, "abort column has invalid type")
+			return nil, nil, moerr.NewInternalErrorf(ctx, "abort column has invalid type")
 		}
 		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec.GetDownstreamVector())
 		if len(aborts) != len(commitTSs) {
-			return nil, moerr.NewInternalErrorf(
+			return nil, nil, moerr.NewInternalErrorf(
 				ctx,
 				"abort column length %d does not match commit TS length %d",
 				len(aborts),
@@ -436,17 +436,21 @@ func filterBatchBySnapshotTS(
 		}
 	}
 
-	// Build bitmap of rows to delete (commit TS < snapshot TS)
+	// Build a bitmap of rows hidden at the snapshot and retain the original
+	// physical offset of every surviving row.
 	deletes := roaring.New()
+	originalRowOffsets := make([]uint32, 0, len(commitTSs))
 	for i, ts := range commitTSs {
 		if ts.GT(&snapshotTS) || (aborts != nil && aborts[i]) {
 			deletes.Add(uint32(i))
+			continue
 		}
+		originalRowOffsets = append(originalRowOffsets, uint32(i))
 	}
 
 	// If no rows to delete, return original batch
 	if deletes.IsEmpty() {
-		return bat, nil
+		return bat, originalRowOffsets, nil
 	}
 
 	// Compact all vectors to remove deleted rows
@@ -454,7 +458,7 @@ func filterBatchBySnapshotTS(
 		vec.Compact(deletes)
 	}
 
-	return bat, nil
+	return bat, originalRowOffsets, nil
 }
 
 // createObjectFromBatch sorts batch by primary key, removes commit TS column,
@@ -466,6 +470,7 @@ func filterBatchBySnapshotTS(
 func createObjectFromBatch(
 	ctx context.Context,
 	bat *containers.Batch,
+	originalRowOffsets []uint32,
 	originalStats *objectio.ObjectStats,
 	snapshotTS types.TS,
 	isTombstone bool,
@@ -476,6 +481,18 @@ func createObjectFromBatch(
 ) (objectio.ObjectStats, map[uint32]uint32, error) {
 	if bat == nil || bat.Length() == 0 {
 		return objectio.ObjectStats{}, nil, nil
+	}
+	if originalRowOffsets == nil {
+		originalRowOffsets = make([]uint32, bat.Length())
+		for row := range originalRowOffsets {
+			originalRowOffsets[row] = uint32(row)
+		}
+	} else if len(originalRowOffsets) != bat.Length() {
+		return objectio.ObjectStats{}, nil, moerr.NewInternalErrorf(
+			ctx,
+			"original row offset count %d does not match batch length %d",
+			len(originalRowOffsets), bat.Length(),
+		)
 	}
 
 	// Step 1: Convert to CN batch for sorting
@@ -495,10 +512,11 @@ func createObjectFromBatch(
 	sort.Sort(false, false, true, sortedIdx, cnBat.Vecs[pkIdx])
 
 	// Build rowOffsetMap: maps original rowoffset to new rowoffset after sorting
-	// sortedIdx[newIdx] = oldIdx, so we need: rowOffsetMap[oldIdx] = newIdx
+	// sortedIdx[newIdx] = compactedIdx. Translate compactedIdx through the
+	// provenance returned by snapshot filtering before recording the mapping.
 	rowOffsetMap := make(map[uint32]uint32, len(sortedIdx))
-	for newIdx, oldIdx := range sortedIdx {
-		rowOffsetMap[uint32(oldIdx)] = uint32(newIdx)
+	for newIdx, compactedIdx := range sortedIdx {
+		rowOffsetMap[originalRowOffsets[compactedIdx]] = uint32(newIdx)
 	}
 
 	for i := 0; i < len(cnBat.Vecs); i++ {

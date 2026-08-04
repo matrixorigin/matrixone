@@ -367,6 +367,11 @@ func BlockDataReadBackup(
 	if err != nil {
 		return
 	}
+	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)
+	if err != nil {
+		return
+	}
+	defer tombstones.Release()
 	if !ts.IsEmpty() {
 		location := info.MetaLocation()
 		objectMeta, metaErr := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
@@ -391,7 +396,9 @@ func BlockDataReadBackup(
 		}
 		visibleRows := make([]int64, 0, len(commitTSs))
 		for row, commitTS := range commitTSs {
-			if commitTS.GT(&ts) || (aborts != nil && aborts[row]) {
+			if commitTS.GT(&ts) ||
+				(aborts != nil && aborts[row]) ||
+				tombstones.Contains(uint64(row)) {
 				continue
 			}
 			visibleRows = append(visibleRows, int64(row))
@@ -403,16 +410,12 @@ func BlockDataReadBackup(
 				zap.String("location", info.MetaLocation().String()),
 				zap.Int("rows", len(visibleRows)))
 		}
-	}
-	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)
-	if err != nil {
-		return
-	}
-	defer tombstones.Release()
-	rows := tombstones.ToI64Array(nil)
-	if len(rows) > 0 {
-		logutil.Info("[BlockDataReadBackup Shrink]", zap.String("location", info.MetaLocation().String()), zap.Int("rows", len(rows)))
-		loaded.Shrink(rows, true)
+	} else {
+		rows := tombstones.ToI64Array(nil)
+		if len(rows) > 0 {
+			logutil.Info("[BlockDataReadBackup Shrink]", zap.String("location", info.MetaLocation().String()), zap.Int("rows", len(rows)))
+			loaded.Shrink(rows, true)
+		}
 	}
 	return
 }

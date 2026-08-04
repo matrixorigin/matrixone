@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/require"
 )
@@ -421,6 +422,56 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 	}
 	rowidOnly.Clean(queryMP)
 	require.Zero(t, queryMP.CurrNB())
+}
+
+func TestBlockDataReadBackupCombinesAbortAndTombstoneMasks(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[1] = vector.NewVec(objectio.TSType)
+	input.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	for row := range 4 {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(row), false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], types.BuildTS(1, 0), false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[2], row == 1, false, mp))
+	}
+	input.SetRowCount(4)
+	writer := ioutil.ConstructWriter(
+		0,
+		[]uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+		-1,
+		false,
+		false,
+		fs,
+	)
+	writer.SetAppendable()
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats(objectio.WithAppendable())
+	info := stats.ConstructBlockInfo(0)
+	input.Clean(mp)
+
+	loaded, _, err := BlockDataReadBackup(
+		ctx,
+		&info,
+		&blockReadTestDataSource{deleted: []uint64{2}},
+		nil,
+		types.BuildTS(2, 0),
+		fs,
+	)
+	require.NoError(t, err)
+	defer loaded.Clean(common.DebugAllocator)
+	require.Equal(
+		t,
+		[]int32{0, 3},
+		vector.MustFixedColWithTypeCheck[int32](loaded.Vecs[0]),
+	)
 }
 
 func TestFillOutputBatchBySelectedRows(t *testing.T) {
