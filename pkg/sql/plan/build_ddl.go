@@ -152,11 +152,11 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 
 	// check view statement
 	var stmtPlan *Plan
-	var mysqlSpecialColumnTypes []*plan.Type
+	var outputColumnProvenance []OutputColumnProvenance
 	captureColumnTypes := func(bindCtx *BindContext) {
-		mysqlSpecialColumnTypes = make([]*plan.Type, len(bindCtx.headings))
-		for i := range mysqlSpecialColumnTypes {
-			mysqlSpecialColumnTypes[i] = bindCtx.mysqlSpecialColumnTypeForProject(int32(i))
+		outputColumnProvenance = make([]OutputColumnProvenance, len(bindCtx.headings))
+		for i := range outputColumnProvenance {
+			outputColumnProvenance[i] = bindCtx.outputColumnProvenanceForProject(int32(i))
 		}
 	}
 	var err error
@@ -189,8 +189,10 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 			name = originName
 		}
 		typ := &expr.Typ
-		if idx < len(mysqlSpecialColumnTypes) && mysqlSpecialColumnTypes[idx] != nil {
-			typ = mysqlSpecialColumnTypes[idx]
+		if idx < len(outputColumnProvenance) {
+			if sourceType := mysqlSpecialTypeFromProvenance(outputColumnProvenance[idx]); sourceType != nil {
+				typ = sourceType
+			}
 		}
 		cols[idx] = &plan.ColDef{
 			Name:       strings.ToLower(name),
@@ -259,16 +261,6 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	bindCtx := NewBindContext(builder, nil)
 
-	getTblAndColName := func(relPos, colPos int32) (string, string) {
-		name := builder.nameByColRef[[2]int32{relPos, colPos}]
-		// name pattern: tableName.colName
-		splits := strings.Split(name, ".")
-		if len(splits) < 2 {
-			return "", ""
-		}
-		return splits[0], splits[1]
-	}
-
 	if s, ok := stmt.Select.(*tree.ParenSelect); ok {
 		stmt = s.Select
 	}
@@ -282,15 +274,14 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	for i, expr := range rootNode.ProjectList {
 		defaultVal := ""
 		typ := &expr.Typ
-		switch e := expr.Expr.(type) {
-		case *plan.Expr_Col:
-			tblName, colName := getTblAndColName(e.Col.RelPos, e.Col.ColPos)
-			if binding, ok := bindCtx.bindingByTable[tblName]; ok {
-				defaultVal = binding.defaults[binding.colIdByName[colName]]
+		provenance := bindCtx.outputColumnProvenanceForProject(int32(i))
+		if provenance.State == ProvenanceSingleSource && provenance.Source != nil && provenance.Source.ColDef != nil {
+			if provenance.Source.ColDef.Default != nil {
+				defaultVal = provenance.Source.ColDef.Default.OriginString
 			}
-		}
-		if sourceType, ok := mysqlSpecialTypeSourceType(expr); ok {
-			typ = sourceType
+			if isEnumOrSetPlanType(&provenance.Source.ColDef.Typ) {
+				typ = &provenance.Source.ColDef.Typ
+			}
 		}
 
 		cols[i] = &plan.ColDef{

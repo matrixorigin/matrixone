@@ -398,7 +398,10 @@ func TestBuildCreateViewTracksMySQLSpecialColumnTypeProvenance(t *testing.T) {
 		{name: "cte", selectSQL: "with d as (select priority, flags from nation) select priority, flags from d", wantSpecialType: true},
 		{name: "derived table order by", selectSQL: "select priority, flags from (select priority, flags from nation) d order by flags", wantSpecialType: true},
 		{name: "cte order by", selectSQL: "with d as (select priority, flags from nation) select priority, flags from d order by flags", wantSpecialType: true},
+		{name: "alias", selectSQL: "select priority as p, flags as f from nation", wantSpecialType: true},
+		{name: "same arms union distinct", selectSQL: "select priority, flags from nation union select priority, flags from nation"},
 		{name: "union all", selectSQL: "select priority, flags from nation union all select priority, flags from nation"},
+		{name: "recursive cte", selectSQL: "with recursive d(priority, flags) as (select priority, flags from nation union all select priority, flags from d where false) select priority, flags from d"},
 		{name: "string expressions", selectSQL: "select concat(priority, ''), concat(flags, '') from nation"},
 	}
 
@@ -676,7 +679,6 @@ func TestViewSpecialTypeBoundaryPreservesDistinctVisibleValues(t *testing.T) {
 	require.NoError(t, err)
 
 	query := queryPlan.GetQuery()
-	var viewBoundary *plan.Node
 	setDisplayProjects := 0
 	var distinctGroupType *plan.Type
 	for _, node := range query.GetNodes() {
@@ -694,21 +696,95 @@ func TestViewSpecialTypeBoundaryPreservesDistinctVisibleValues(t *testing.T) {
 		case moSetCastIndexToValueFun:
 			setDisplayProjects++
 		case moSetCastValueToIndexFun:
-			viewBoundary = node
+			require.Fail(t, "catalog provenance must not reverse-cast a visible SET value", node.String())
 		}
 	}
 
 	require.NotNil(t, distinctGroupType)
 	require.Equal(t, int32(types.T_varchar), distinctGroupType.GetId(),
 		"DISTINCT must consume the SQL-visible SET value")
-	require.GreaterOrEqual(t, setDisplayProjects, 2,
-		"both the view's semantic projection and the outer result need display wrappers")
-	require.NotNil(t, viewBoundary)
-	require.True(t, isSetPlanType(&viewBoundary.GetProjectList()[0].Typ),
-		"only the completed view boundary should restore the SET type")
+	require.GreaterOrEqual(t, setDisplayProjects, 1,
+		"DISTINCT must retain the view's SQL-visible SET projection")
+	require.True(t, isSetPlanType(&viewDef.Cols[0].Typ),
+		"the persisted catalog type remains independent from raw-value availability")
 }
 
-func TestMySQLSpecialTypeSourceTypeRejectsNonTransparentExpressions(t *testing.T) {
+func TestOutputColumnProvenanceCarriesSourceAndClearsSemanticBoundaries(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	addMySQLSpecialTypeColumns(ctx)
+	ctx.tables["nation"].Cols[0].Default = &plan.Default{OriginString: "'ALGERIA'"}
+
+	tests := []struct {
+		name        string
+		sql         string
+		wantState   ProvenanceState
+		wantDefault string
+	}{
+		{name: "direct", sql: "select n_nationkey from nation", wantState: ProvenanceSingleSource, wantDefault: "'ALGERIA'"},
+		{name: "alias derived", sql: "select k from (select n_nationkey as k from nation) d", wantState: ProvenanceSingleSource, wantDefault: "'ALGERIA'"},
+		{name: "non recursive cte", sql: "with d as (select n_nationkey as k from nation) select k from d", wantState: ProvenanceSingleSource, wantDefault: "'ALGERIA'"},
+		{name: "expression", sql: "select n_nationkey + 0 from nation", wantState: ProvenanceNone},
+		{name: "same arms union distinct", sql: "select n_nationkey from nation union select n_nationkey from nation", wantState: ProvenanceNone},
+		{name: "union all", sql: "select n_nationkey from nation union all select n_nationkey from nation", wantState: ProvenanceNone},
+		{name: "recursive cte", sql: "with recursive d(k) as (select n_nationkey from nation union all select k from d where false) select k from d", wantState: ProvenanceNone},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			selectStmt := stmt.(*tree.Select)
+			builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+			bindCtx := NewBindContext(builder, nil)
+			_, err = builder.bindSelect(selectStmt, bindCtx, true)
+			require.NoError(t, err)
+
+			provenance := bindCtx.outputColumnProvenanceForProject(0)
+			require.Equal(t, test.wantState, provenance.State)
+			if test.wantState == ProvenanceSingleSource {
+				require.NotNil(t, provenance.Source)
+				require.NotNil(t, provenance.Source.ColDef)
+				require.Equal(t, test.wantDefault, provenance.Source.ColDef.Default.OriginString)
+				require.NotZero(t, provenance.Source.RelPos)
+			} else {
+				require.Nil(t, provenance.Source)
+			}
+		})
+	}
+}
+
+func TestBuildCTASConsumesOutputColumnProvenance(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.tables["nation"].Cols[0].Default = &plan.Default{OriginString: "'ALGERIA'"}
+
+	tests := []struct {
+		name        string
+		selectSQL   string
+		wantDefault string
+	}{
+		{name: "direct alias", selectSQL: "select n_nationkey as k from nation", wantDefault: "'ALGERIA'"},
+		{name: "derived", selectSQL: "select k from (select n_nationkey as k from nation) d", wantDefault: "'ALGERIA'"},
+		{name: "expression", selectSQL: "select n_nationkey + 0 as k from nation"},
+		{name: "union", selectSQL: "select n_nationkey as k from nation union all select n_nationkey from nation"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sql := "create table copied as " + test.selectSQL
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			require.NotEmpty(t, cols)
+			require.Equal(t, test.wantDefault, cols[0].GetDefault().GetOriginString())
+		})
+	}
+}
+
+func TestMySQLSpecialTypeSourceExprRejectsNonTransparentExpressions(t *testing.T) {
 	enumType := plan.Type{Id: int32(types.T_enum), Enumvalues: "low,high"}
 	valid := &plan.Expr{
 		Expr: &plan.Expr_F{F: &plan.Function{
@@ -720,9 +796,9 @@ func TestMySQLSpecialTypeSourceTypeRejectsNonTransparentExpressions(t *testing.T
 		}},
 	}
 
-	got, ok := mysqlSpecialTypeSourceType(valid)
+	got, ok := mysqlSpecialTypeSourceExpr(valid)
 	require.True(t, ok)
-	require.Equal(t, enumType, *got)
+	require.Equal(t, enumType, got.Typ)
 
 	for _, mutate := range []func(*plan.Expr){
 		func(expr *plan.Expr) { expr.GetF().Args = expr.GetF().Args[:1] },
@@ -732,7 +808,7 @@ func TestMySQLSpecialTypeSourceTypeRejectsNonTransparentExpressions(t *testing.T
 	} {
 		expr := DeepCopyExpr(valid)
 		mutate(expr)
-		_, ok = mysqlSpecialTypeSourceType(expr)
+		_, ok = mysqlSpecialTypeSourceExpr(expr)
 		require.False(t, ok)
 	}
 }

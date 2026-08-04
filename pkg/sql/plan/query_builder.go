@@ -3344,11 +3344,12 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	}
 
 	if len(selectStmts) == 1 {
+		var nodeID int32
 		switch sltStmt := selectStmts[0].(type) {
 		case *tree.Select:
 			if sltClause, ok := sltStmt.Select.(*tree.SelectClause); ok {
 				sltClause.Distinct = true
-				return builder.bindSelect(sltStmt, ctx, isRoot)
+				nodeID, err = builder.bindSelect(sltStmt, ctx, isRoot)
 			} else {
 				// rewrite sltStmt to select distinct * from (sltStmt) a
 				tmpSltStmt := &tree.Select{
@@ -3374,15 +3375,19 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					Limit:   astLimit,
 					OrderBy: astOrderBy,
 				}
-				return builder.bindSelect(tmpSltStmt, ctx, isRoot)
+				nodeID, err = builder.bindSelect(tmpSltStmt, ctx, isRoot)
 			}
 
 		case *tree.SelectClause:
 			if !sltStmt.Distinct {
 				sltStmt.Distinct = true
 			}
-			return builder.bindSelect(&tree.Select{Select: sltStmt, Limit: astLimit, OrderBy: astOrderBy}, ctx, isRoot)
+			nodeID, err = builder.bindSelect(&tree.Select{Select: sltStmt, Limit: astLimit, OrderBy: astOrderBy}, ctx, isRoot)
 		}
+		if err == nil {
+			ctx.clearOutputColumnProvenance()
+		}
+		return nodeID, err
 	}
 
 	// build selects
@@ -3619,6 +3624,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			},
 		})
 	}
+	ctx.clearOutputColumnProvenance()
 	// A set-operation result keeps ENUM/SET definition-order provenance only
 	// when every non-NULL branch is the same pure display contract. A literal
 	// NULL is neutral because it cannot introduce a competing comparison
@@ -3978,7 +3984,7 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	}
 	if subCtx.restoreViewMySQLSpecialTypes {
 		nodeID, err = builder.appendMySQLSpecialTypeBoundary(
-			nodeID, subCtx, subCtx.mysqlSpecialColumnTypesForBoundary())
+			nodeID, subCtx, subCtx.outputColumnProvenanceForBoundary())
 		if err != nil {
 			return
 		}
@@ -4321,6 +4327,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	//5. bind final statement
 	ctx.sinkTag = initCtx.sinkTag
 	//5.0 add initial statement as table binding into the ctx of main query
+	initCtx.clearOutputColumnProvenance()
 	err = builder.addBinding(initLastNodeID, *cteRef.ast.Name, ctx)
 	if err != nil {
 		return
@@ -8908,13 +8915,8 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return
 	}
-	viewTypes := make([]*plan.Type, len(viewCtx.headings))
-	for i := range viewTypes {
-		if i < len(tableDef.Cols) && tableDef.Cols[i] != nil && isEnumOrSetPlanType(&tableDef.Cols[i].Typ) {
-			viewTypes[i] = &tableDef.Cols[i].Typ
-		}
-	}
-	nodeID, err = builder.appendMySQLSpecialTypeBoundary(nodeID, viewCtx, viewTypes)
+	nodeID, err = builder.appendMySQLSpecialTypeBoundary(
+		nodeID, viewCtx, viewCtx.outputColumnProvenanceForBoundary())
 	if err != nil {
 		return
 	}
@@ -8936,17 +8938,14 @@ func (builder *QueryBuilder) bindView(
 // continue to consume the SQL-visible value because index-to-value conversion
 // is not always injective.
 func (builder *QueryBuilder) appendMySQLSpecialTypeBoundary(
-	nodeID int32, ctx *BindContext, targetTypes []*plan.Type,
+	nodeID int32, ctx *BindContext, provenance []OutputColumnProvenance,
 ) (int32, error) {
 	visibleProjects := min(len(ctx.headings), len(ctx.projects), len(ctx.results))
 	rootNode := builder.qry.Nodes[nodeID]
 	if rootNode.NodeType == plan.Node_PROJECT && len(ctx.mysqlSpecialRawProjectPositions) > 0 {
 		allSpecialTypesRestored := true
 		for i := 0; i < visibleProjects; i++ {
-			targetType := ctx.mysqlSpecialColumnTypeForProject(int32(i))
-			if targetType == nil && i < len(targetTypes) && isEnumOrSetPlanType(targetTypes[i]) {
-				targetType = targetTypes[i]
-			}
+			targetType := mysqlSpecialTypeFromProvenance(provenance[i])
 			if targetType == nil {
 				continue
 			}
@@ -8971,7 +8970,7 @@ func (builder *QueryBuilder) appendMySQLSpecialTypeBoundary(
 		for i := 0; i < rootVisibleProjects; i++ {
 			sourceExpr, ok := mysqlSpecialTypeSourceExpr(rootNode.ProjectList[i])
 			if !ok {
-				if i < len(targetTypes) && isEnumOrSetPlanType(targetTypes[i]) {
+				if i < len(provenance) && mysqlSpecialTypeFromProvenance(provenance[i]) != nil {
 					allSpecialTypesRestored = false
 				}
 				continue
@@ -8990,47 +8989,10 @@ func (builder *QueryBuilder) appendMySQLSpecialTypeBoundary(
 		}
 	}
 
-	sourceTag := ctx.rootTag()
-	projects := make([]*plan.Expr, len(ctx.results))
-	for i := range ctx.results {
-		projects[i] = GetColExpr(ctx.results[i].Typ, sourceTag, int32(i))
-	}
-	needsBoundary := false
-
-	for i := 0; i < visibleProjects; i++ {
-		targetType := ctx.mysqlSpecialColumnTypeForProject(int32(i))
-		if targetType == nil && i < len(targetTypes) && isEnumOrSetPlanType(targetTypes[i]) {
-			targetType = DeepCopyType(targetTypes[i])
-		}
-		if targetType == nil {
-			continue
-		}
-
-		needsBoundary = true
-		var err error
-		if isEnumPlanType(targetType) {
-			projects[i], err = funcCastForEnumType(builder.GetContext(), projects[i], *targetType)
-		} else {
-			projects[i], err = funcCastForSetType(builder.GetContext(), projects[i], *targetType)
-		}
-		if err != nil {
-			return 0, err
-		}
-	}
-	if !needsBoundary {
-		return nodeID, nil
-	}
-
-	ctx.projectTag = builder.genNewBindTag()
-	ctx.resultTag = 0
-	ctx.projects = projects
-	ctx.results = projects
-	return builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_PROJECT,
-		ProjectList: projects,
-		Children:    []int32{nodeID},
-		BindingTags: []int32{ctx.projectTag},
-	}, ctx), nil
+	// Catalog lineage alone cannot prove that a visible string can be reversed
+	// to its original ENUM ordinal or SET bitmap. Without a raw sidecar or an
+	// exact display wrapper, preserve the visible value unchanged.
+	return nodeID, nil
 }
 
 // ViewData persisted before parser SQL mode was recorded used MatrixOne's
@@ -9056,7 +9018,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		builder.isForUpdate = savedIsForUpdate
 		if err == nil && subCtx.restoreViewMySQLSpecialTypes {
 			nodeID, err = builder.appendMySQLSpecialTypeBoundary(
-				nodeID, subCtx, subCtx.mysqlSpecialColumnTypesForBoundary())
+				nodeID, subCtx, subCtx.outputColumnProvenanceForBoundary())
 		}
 		if subCtx.isCorrelated {
 			return 0, moerr.NewNYI(builder.GetContext(), "correlated subquery in FROM clause")
@@ -9566,7 +9528,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var colIsHidden []bool
 	var types []*plan.Type
 	var mysqlSpecialOrderTypes []*plan.Type
-	var mysqlSpecialColumnTypes []*plan.Type
+	var outputColumnProvenance []OutputColumnProvenance
 	var defaultVals []string
 	var binding *Binding
 	var bindingToReplace *Binding
@@ -9645,6 +9607,13 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		binding = NewBinding(tag, nodeID, node.TableDef.DbName, table, node.TableDef.TblId, cols, colIsHidden, types,
 			util.TableIsClusterTable(node.TableDef.TableType), defaultVals)
 		binding.originCols = originCols
+		binding.outputColumnProvenance = make([]OutputColumnProvenance, colLength)
+		for i, col := range node.TableDef.Cols {
+			binding.outputColumnProvenance[i] = OutputColumnProvenance{
+				State:  ProvenanceSingleSource,
+				Source: &SourceColumn{RelPos: tag, ColPos: int32(i), TableID: node.TableDef.TblId, ColDef: DeepCopyColDef(col)},
+			}
+		}
 	} else {
 		// Subquery
 		subCtx := builder.ctxByNode[nodeID]
@@ -9694,12 +9663,10 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				}
 				mysqlSpecialOrderTypes[i] = orderType
 			}
-			if columnType := subCtx.mysqlSpecialColumnTypeForProject(int32(i)); columnType != nil {
-				if mysqlSpecialColumnTypes == nil {
-					mysqlSpecialColumnTypes = make([]*plan.Type, colLength)
-				}
-				mysqlSpecialColumnTypes[i] = columnType
+			if outputColumnProvenance == nil {
+				outputColumnProvenance = make([]OutputColumnProvenance, colLength)
 			}
+			outputColumnProvenance[i] = subCtx.outputColumnProvenanceForProject(int32(i))
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
@@ -9707,7 +9674,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		binding = NewBinding(tag, nodeID, "", table, 0, cols, colIsHidden, types, false, defaultVals)
 		binding.originCols = originCols
 		binding.mysqlSpecialOrderTypes = mysqlSpecialOrderTypes
-		binding.mysqlSpecialColumnTypes = mysqlSpecialColumnTypes
+		binding.outputColumnProvenance = outputColumnProvenance
 	}
 
 	if bindingToReplace != nil {

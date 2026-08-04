@@ -412,6 +412,11 @@ type aliasItem struct {
 type BindContext struct {
 	binder Binder
 
+	// outputColumnProvenance records planner-local lineage overrides by output
+	// position. An explicit None prevents later transparent-boundary code from
+	// rediscovering a source after a semantic boundary has cleared it.
+	outputColumnProvenance map[int32]OutputColumnProvenance
+
 	// mysqlSpecialOrderTypes records the storage type behind a visible ENUM/SET
 	// display value.  It is planner-local semantic provenance: only a pure
 	// display projection (or a pure column passthrough of one) may populate it.
@@ -693,15 +698,34 @@ type Binding struct {
 	// the string column is a pure display of the recorded ENUM/SET storage
 	// type, and may therefore use definition-order semantics when ordered.
 	mysqlSpecialOrderTypes []*plan.Type
-	// mysqlSpecialColumnTypes is aligned with cols. It records only transparent
-	// column provenance suitable for persisted catalog types; set operations do
-	// not propagate it.
-	mysqlSpecialColumnTypes []*plan.Type
-	refCnts                 []uint
+	// outputColumnProvenance is aligned with cols and carries planner-local,
+	// single-source output lineage. It is never serialized into the plan.
+	outputColumnProvenance []OutputColumnProvenance
+	refCnts                []uint
 	// lower case
 	colIdByName    map[string]int32
 	isClusterTable bool
 	defaults       []string
+}
+
+type ProvenanceState uint8
+
+const (
+	ProvenanceUnknown ProvenanceState = iota
+	ProvenanceNone
+	ProvenanceSingleSource
+)
+
+type SourceColumn struct {
+	RelPos  int32
+	ColPos  int32
+	TableID uint64
+	ColDef  *plan.ColDef
+}
+
+type OutputColumnProvenance struct {
+	State  ProvenanceState
+	Source *SourceColumn
 }
 
 const (
