@@ -629,7 +629,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 			}
 		case types.T_enum:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_EnumVal); ok {
-				val := val.EnumVal
+				val := types.Enum(val.EnumVal)
 				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
 				return true, err
 			} else {
