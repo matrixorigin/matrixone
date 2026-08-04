@@ -49,16 +49,16 @@ update `pub-ft-db`.`articles-quoted` set body = 'hello updated' where id = 2;
 delete from `pub-ft-db`.`articles-quoted` where id = 1;
 execute subscriber_match_stmt;
 ➤ id[4,32,0]  𝄀
-2
+2  𝄀
 3
 commit;
 select id from subscriber_table_alias.`articles-quoted` where match(body) against('hello') order by id;
 ➤ id[4,32,0]  𝄀
-2
+2  𝄀
 3
 execute subscriber_match_stmt;
 ➤ id[4,32,0]  𝄀
-2
+2  𝄀
 3
 alter publication pub_ft_table account sub_ft_20210_b;
 execute subscriber_match_stmt;
@@ -70,13 +70,13 @@ alter publication pub_ft_table account sub_ft_20210_a, sub_ft_20210_b;
 prepare restored_subscriber_stmt from 'select id from subscriber_table_alias.`articles-quoted` where match(body) against(\'hello\') order by id';
 execute restored_subscriber_stmt;
 ➤ id[4,32,0]  𝄀
-2
+2  𝄀
 3
 deallocate prepare restored_subscriber_stmt;
 prepare second_subscriber_stmt from 'select id from second_subscriber_alias.`articles-quoted` where match(body) against(\'hello\') order by id';
 execute second_subscriber_stmt;
 ➤ id[4,32,0]  𝄀
-2
+2  𝄀
 3
 drop publication pub_ft_table;
 execute second_subscriber_stmt;
