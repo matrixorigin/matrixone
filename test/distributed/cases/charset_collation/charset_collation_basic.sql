@@ -9,6 +9,9 @@ SHOW CHARSET;
 SHOW CHARACTER SET;
 SHOW CHARSET LIKE 'utf8%';
 SHOW CHARACTER SET WHERE Charset = 'utf8mb4';
+SELECT CHARACTER_SET_NAME, DEFAULT_COLLATE_NAME, MAXLEN
+FROM information_schema.CHARACTER_SETS
+ORDER BY CHARACTER_SET_NAME;
 
 -- @case
 -- @desc: Test SHOW COLLATION command
@@ -24,6 +27,23 @@ SHOW COLLATION WHERE Charset = 'utf8mb4' AND Collation LIKE '%bin%';
 -- @label:bvt
 CREATE DATABASE charset_test;
 USE charset_test;
+
+-- information_schema metadata used by ODBC SQLColumns
+CREATE TABLE charset_metadata_repro (
+    c_char CHAR(8),
+    c_varchar VARCHAR(128),
+    c_text TEXT
+);
+SELECT c.data_type, c.character_set_name,
+       c.character_maximum_length, c.character_octet_length, cs.maxlen
+FROM information_schema.columns c
+LEFT JOIN information_schema.character_sets cs
+  ON c.character_set_name = cs.character_set_name
+WHERE c.table_schema = 'charset_test'
+  AND c.table_name = 'charset_metadata_repro'
+  AND c.column_name IN ('c_char', 'c_varchar', 'c_text')
+ORDER BY c.ordinal_position;
+DROP TABLE charset_metadata_repro;
 
 -- Create database with explicit charset
 DROP DATABASE IF EXISTS charset_test_utf8;
@@ -590,4 +610,3 @@ DROP DATABASE IF EXISTS charset_test_utf8;
 DROP DATABASE IF EXISTS charset_test_utf8mb4;
 DROP DATABASE IF EXISTS charset_test_utf8mb4_bin;
 DROP DATABASE IF EXISTS charset_test_utf8mb4_general;
-
