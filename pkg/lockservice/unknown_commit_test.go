@@ -400,25 +400,30 @@ func TestUnknownCommitFenceFrontierCollapsesAtBound(t *testing.T) {
 
 func TestUnknownCommitFenceOverflowReleasesSourceTxn(t *testing.T) {
 	runLockServiceTests(t, []string{"s1"}, func(allocator *lockTableAllocator, services []*service) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
 		service := services[0]
-		// The setup performs one allocator RPC per fence. Keep every seed far
-		// enough in the future to create the overflow deadline after setup while
-		// retaining a shorter expiry than every seed.
+		ctl := allocator.getCtl(service.serviceID)
+		// Build the exact frontier directly so the test timeout covers only the
+		// resolver RPC and unlock path under test, rather than 1024 setup RPCs.
 		seedDeadline := time.Now().Add(time.Hour)
 		for i := 0; i < maxPersistentFenceFrontierEntries; i++ {
 			// Increasing sequence and decreasing expiry intentionally build the
 			// largest exact non-dominated frontier.
-			_, _, ok := service.canUnlockUnknownCommits(
-				ctx,
-				[][]byte{[]byte(fmt.Sprintf("seed-%d", i))},
-				seedDeadline.Add(time.Duration(maxPersistentFenceFrontierEntries-i+3)*time.Second),
-				uint64(i+1),
+			state := ctl.tryCannotCommit(
+				fmt.Sprintf("seed-%d", i),
+				commitFence{
+					persist: true,
+					expiresAt: service.unknownCommitFenceExpiry(
+						seedDeadline.Add(time.Duration(maxPersistentFenceFrontierEntries-i+3) * time.Second),
+					).UnixNano(),
+					commitSequence: uint64(i + 1),
+				},
 			)
-			require.True(t, ok)
+			require.Equal(t, cannotCommitState, state)
 		}
+		require.Equal(t, maxPersistentFenceFrontierEntries, ctl.persistentFenceCount())
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 
 		overflowTxn := []byte("overflow")
 		_, err := service.Lock(
@@ -444,7 +449,6 @@ func TestUnknownCommitFenceOverflowReleasesSourceTxn(t *testing.T) {
 				!service.unknownCommitResolver.isPending(overflowTxn)
 		}, 2*time.Second, 10*time.Millisecond)
 
-		ctl := allocator.getCtl(service.serviceID)
 		require.Equal(t, 1, ctl.persistentFenceCount())
 	})
 }

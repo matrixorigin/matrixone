@@ -1,0 +1,47 @@
+drop database if exists query_result_dml_returning;
+create database query_result_dml_returning;
+use query_result_dml_returning;
+create table t(id int primary key, v varchar(20));
+set save_query_result = on;
+/* save_result */insert into t values (1, 'inserted') returning id, v;
+id    v
+1    inserted
+set @insert_result = last_query_id();
+select * from result_scan(@insert_result) as r;
+id    v
+1    inserted
+/* save_result */update t set v = 'updated' where id = 1 returning id, v;
+id    v
+1    updated
+set @update_result = last_query_id();
+select * from result_scan(@update_result) as r;
+id    v
+1    updated
+/* save_result */delete from t where id = 1 returning id, v;
+id    v
+1    updated
+set @delete_result = last_query_id();
+select * from result_scan(@delete_result) as r;
+id    v
+1    updated
+/* save_result */delete from t where id = 999 returning id, v;
+id    v
+set @empty_result = last_query_id();
+select count(*) from result_scan(@empty_result) as r;
+count(*)
+0
+set query_result_maxsize = 0;
+/* save_result */insert into t values (3, 'truncated') returning id, v;
+id    v
+3    truncated
+set @truncated_result = last_query_id();
+select * from result_scan(@truncated_result) as r;
+invalid input: empty query result
+set query_result_maxsize = 100;
+set save_query_result = off;
+insert into t values (2, 'not-saved') returning id, v;
+id    v
+2    not-saved
+select * from result_scan(last_query_id()) as r;
+no configure: save query result
+drop database query_result_dml_returning;

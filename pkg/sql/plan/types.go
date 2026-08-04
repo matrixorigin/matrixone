@@ -307,6 +307,18 @@ type QueryBuilder struct {
 	irregularMaintIndexes     []*plan.IndexDef
 	irregularMaintTableDef    *plan.TableDef
 	irregularMaintObjRef      *plan.ObjectRef
+	irregularMaintSkipInsert  bool
+
+	// DML RETURNING consumes an attempt-local row image from a dedicated sink.
+	// The mutation plan and the returning projection use independent SINK_SCAN
+	// readers, so index/FK side-effect branches cannot multiply returned rows.
+	returningSourceStep int32
+	returningRequested  bool
+	returningTableDef   *plan.TableDef
+	returningObjRef     *plan.ObjectRef
+	returningTableName  string
+	returningAlias      string
+	returningColPos     map[string]int32
 	// sinkColRef records, per materialized step, the post-pruning column remap
 	// produced by createQuery's final remapAllColRefs pass: {step, originalColPos}
 	// -> newColPos. The irregular-index maintenance sub-plans are appended after

@@ -37,6 +37,7 @@ const (
 	SpillAllocationSiteDecodedGrouping
 	SpillAllocationSiteSelectedNulls
 	SpillAllocationSiteSelectedGrouping
+	SpillAllocationSiteReadBuffer
 )
 
 // SpillAllocationAccount is the allocation provenance for one spill
