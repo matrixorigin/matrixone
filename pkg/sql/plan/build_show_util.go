@@ -102,6 +102,7 @@ func constructCreateTableSQL(
 	rowCount := 0
 	var pkDefs []string
 	isClusterTable := util.TableIsClusterTable(tableDef.TableType)
+	displayTableCharset := effectiveTableCharsetForShowCreate(tableDef)
 
 	// col.Name -> col.OriginName
 	colNameToOriginName := make(map[string]string)
@@ -146,7 +147,7 @@ func constructCreateTableSQL(
 			typeStr = strings.ToLower(typeStr)
 		}
 		fmt.Fprintf(buf, "  %s %s", sqlquote.Ident(colNameOrigin), typeStr)
-		appendTextCharsetForShowCreate(buf, col.Typ, tableDef.DefaultCharset)
+		appendTextCharsetForShowCreate(buf, col.Typ, displayTableCharset)
 
 		//-------------------------------------------------------------------------------------------------------------
 		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
@@ -770,6 +771,25 @@ func appendTextCharsetForShowCreate(buf *bytes.Buffer, typ plan.Type, tableChars
 			buf.WriteString(" COLLATE utf8mb4_general_ci")
 		}
 	}
+}
+
+func effectiveTableCharsetForShowCreate(tableDef *plan.TableDef) uint32 {
+	if tableDef.DefaultCharset != uint32(types.CharsetLegacy) {
+		return tableDef.DefaultCharset
+	}
+	for _, col := range tableDef.Cols {
+		switch types.T(col.Typ.Id) {
+		case types.T_char, types.T_varchar, types.T_text:
+			if col.Typ.Charset == uint32(types.CharsetLegacy) {
+				return tableDef.DefaultCharset
+			}
+		}
+	}
+	// Program-authored system definitions predate the table-default field but
+	// now carry explicit UTF-8 on every text column. Treat UTF-8 as their display
+	// default so SHOW CREATE stays concise. A genuinely legacy column above keeps
+	// zero as the display default, causing explicit general_ci peers to be shown.
+	return uint32(types.CharsetUTF8)
 }
 
 func tableCharsetForShowCreate(charset uint32) string {

@@ -749,6 +749,31 @@ func TestMinMaxConcatExpressionsKeepBinaryCollation(t *testing.T) {
 	}
 }
 
+func TestMinMaxCastTextUsesExplicitGeneralCICollation(t *testing.T) {
+	p, err := runOneStmt(NewMockOptimizer(true), t,
+		"select min(cast(c as char)), max(cast(c as varchar(20))), "+
+			"min(cast(c as text)) from select_test.bind_select")
+	require.NoError(t, err)
+
+	var aggregates []*plan.Expr
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG {
+			aggregates = node.AggList
+			break
+		}
+	}
+	require.Len(t, aggregates, 3)
+	for _, aggregate := range aggregates {
+		aggregateFunction := aggregate.GetF()
+		require.NotNil(t, aggregateFunction)
+		require.Equal(t, uint32(types.CharsetUTF8), aggregate.Typ.Charset)
+		require.Len(t, aggregateFunction.Args, 1)
+		cast := aggregateFunction.Args[0]
+		require.NotNil(t, cast.GetF())
+		require.Equal(t, uint32(types.CharsetUTF8), cast.Typ.Charset)
+	}
+}
+
 func TestBindSerialFunctionOverEmptyExprListDoesNotPanic(t *testing.T) {
 	ctx := context.Background()
 

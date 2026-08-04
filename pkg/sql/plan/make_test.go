@@ -72,6 +72,8 @@ func TestNewStringExpressionsAndSerializedColumnsHaveExplicitCharsets(t *testing
 	require.Equal(t, uint32(types.CharsetUTF8),
 		makePlan2StringConstExprWithType("value").Typ.Charset)
 	require.Equal(t, uint32(types.CharsetBinary),
+		makePlan2StringConstExprWithType("\xff", true).Typ.Charset)
+	require.Equal(t, uint32(types.CharsetBinary),
 		MakeHiddenColDefByName("__mo_serialized").Typ.Charset)
 }
 

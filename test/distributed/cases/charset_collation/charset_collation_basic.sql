@@ -567,6 +567,15 @@ INSERT INTO t_minmax_bin VALUES (1, 'Apple'), (2, 'apple'), (3, 'APPLE');
 
 SELECT MIN(name) as min_name, MAX(name) as max_name FROM t_minmax_bin;
 
+CREATE TABLE t_minmax_cast_ci (
+    name VARCHAR(100)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+
+INSERT INTO t_minmax_cast_ci VALUES ('a'), ('B');
+
+SELECT MIN(CAST(name AS CHAR)) as min_name, MAX(CAST(name AS CHAR)) as max_name
+FROM t_minmax_cast_ci;
+
 -- @case
 -- @desc: Test CAST with charset
 -- @label:bvt

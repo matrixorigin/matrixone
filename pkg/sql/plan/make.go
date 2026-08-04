@@ -618,11 +618,17 @@ func makePlan2StringConstExprWithType(v string, isBin ...bool) *plan.Expr {
 	if width == 0 {
 		id = int32(types.T_char)
 	}
+	charset := uint32(types.CharsetUTF8)
+	if len(isBin) > 0 && isBin[0] {
+		// Hex and bit literals use a VARCHAR-shaped container for their raw
+		// payload, but remain binary strings for comparison and protocol metadata.
+		charset = uint32(types.CharsetBinary)
+	}
 	return &plan.Expr{
 		Expr: makePlan2StringConstExpr(v, isBin...),
 		Typ: plan.Type{
 			Id:          id,
-			Charset:     uint32(types.CharsetUTF8),
+			Charset:     charset,
 			NotNullable: true,
 			Width:       width,
 		},
