@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -1309,6 +1310,109 @@ func TestResumeRunningTaskClearsTableErrorsWithoutReplacingExecution(t *testing.
 	require.Same(t, routine, exec.currentActiveRoutine())
 	require.Zero(t, startCalls)
 	require.True(t, internalExecutor.tableErrorsAreCleared())
+}
+
+func TestResumeFailedTableErrorRecoversFromRecordedWatermark(t *testing.T) {
+	internalExecutor := &captureCDCExecutor{}
+	started := make(chan types.TS, 1)
+	startEntered := make(chan struct{})
+	allowStartup := make(chan struct{})
+	recordedWatermark := types.BuildTS(42, 7)
+	exec := &CDCTaskExecutor{
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		spec: &task.CreateCdcDetails{
+			TaskId:   "resume-failed-table-error",
+			TaskName: "resume-failed-table-error",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		ie:             internalExecutor,
+		stateMachine:   NewExecutorStateMachine(),
+		holdCh:         make(chan int, 1),
+		runningReaders: &sync.Map{},
+		startTs:        recordedWatermark,
+	}
+	exec.startFunc = func(context.Context) error {
+		close(startEntered)
+		<-allowStartup
+		if err := exec.stateMachine.Transition(TransitionStartSuccess); err != nil {
+			return err
+		}
+		started <- exec.startTs
+		return nil
+	}
+	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+
+	require.Error(t, exec.failTaskForPermanentTableError(context.Background(), &cdc.DbTableInfo{
+		SourceDbName:  "db1",
+		SourceTblName: "tb1",
+	}))
+	require.Equal(t, StateFailed, exec.stateMachine.State())
+	resumeDone := make(chan error, 1)
+	go func() { resumeDone <- exec.Resume() }()
+	<-startEntered
+	select {
+	case err := <-resumeDone:
+		t.Fatalf("resume returned before failed recovery reached Running: %v", err)
+	default:
+	}
+	close(allowStartup)
+	require.NoError(t, <-resumeDone)
+
+	select {
+	case resumedWatermark := <-started:
+		require.Equal(t, recordedWatermark, resumedWatermark)
+	case <-time.After(time.Second):
+		t.Fatal("failed table-error recovery was not resumed")
+	}
+	require.Equal(t, StateRunning, exec.stateMachine.State())
+	require.True(t, internalExecutor.tableErrorsAreCleared())
+	for _, sql := range internalExecutor.capturedExecSQLs() {
+		require.NotContains(t, sql, "DELETE FROM `mo_catalog`.`mo_cdc_watermark`")
+	}
+}
+
+func TestResumeFailedRecoveryRemainsRetryableOnAdmissionFailure(t *testing.T) {
+	newFailedExecutor := func(startFunc func(context.Context) error) *CDCTaskExecutor {
+		exec := newCDCExecutorForLifecycleTest("resume-failed-retryable", startFunc)
+		require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+		require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+		require.NoError(t, exec.stateMachine.SetFailed("table error"))
+		return exec
+	}
+
+	t.Run("scheduler rejection", func(t *testing.T) {
+		schedulerErr := errors.New("scheduler rejected recovery")
+		exec := newFailedExecutor(func(context.Context) error { return nil })
+		exec.lifecycleTaskScheduler = func(string, func(context.Context)) error {
+			return schedulerErr
+		}
+
+		require.ErrorContains(t, exec.Resume(), schedulerErr.Error())
+		require.Equal(t, StateFailed, exec.stateMachine.State())
+	})
+
+	t.Run("startup timeout", func(t *testing.T) {
+		startEntered := make(chan struct{})
+		startStopped := make(chan struct{})
+		timeoutSignal := make(chan time.Time, 1)
+		exec := newFailedExecutor(func(ctx context.Context) error {
+			close(startEntered)
+			<-ctx.Done()
+			close(startStopped)
+			return ctx.Err()
+		})
+		exec.restartStartupTimeoutSignal = timeoutSignal
+
+		resumeDone := make(chan error, 1)
+		go func() { resumeDone <- exec.Resume() }()
+		<-startEntered
+		timeoutSignal <- time.Now()
+		require.ErrorContains(t, <-resumeDone, "startup timed out")
+		require.Equal(t, StateFailed, exec.stateMachine.State())
+		<-startStopped
+		require.Eventually(t, func() bool { return exec.activeStart() == nil }, time.Second, time.Millisecond)
+	})
 }
 
 func TestCancelFencesResumeWaitingForPreviousStartAttempt(t *testing.T) {
