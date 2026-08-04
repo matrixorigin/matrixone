@@ -30,8 +30,8 @@ const (
 	SnapshotReadPolicyCheckpointReplay SnapshotReadPolicy = iota
 	// SnapshotReadPolicyVisibleState preserves the exact visible net effect of
 	// CollectChanges(start, end). It constructs a range handle from the end
-	// snapshot up front so results can be streamed without retaining the whole
-	// requested range for late replay recovery.
+	// snapshot on demand rather than retaining replay output for late recovery.
+	// Caller-specific materialization limits are independent of this policy.
 	SnapshotReadPolicyVisibleState
 )
 

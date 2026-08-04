@@ -169,6 +169,10 @@ select * from table_changes('table_changes_db', 'external_table', '', '1-0') c;
 
 -- Invalid intervals and non-literal relation names are rejected.
 select * from table_changes('table_changes_db', 'ordinary_single_pk', '2-0', '1-0') c;
+select * from table_changes(
+    'table_changes_db', 'ordinary_single_pk', @ordinary_after,
+    '9223372036854775807-4294967295'
+) c;
 set @database_name = 'table_changes_db';
 select * from table_changes(@database_name, 'ordinary_single_pk', '', '1-0') c;
 

@@ -352,6 +352,7 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 		return err
 	}
 	pkFilter := engine.PKFilterFromContext(ctx)
+	rangeLimit := engine.ChangeRangeLimitFromContext(ctx)
 	debugLabel := engine.CollectChangesDebugLabelFromContext(ctx)
 	retainRowID := engine.RetainRowIDFromContext(ctx)
 	rangeFrom, rangeTo := h.currentPSFrom, h.currentPSTo
@@ -360,6 +361,7 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 	h.currentChangeHandle = &deferredChangesHandle{
 		build: func(nextCtx context.Context) (engine.ChangesHandle, error) {
 			nextCtx = engine.WithPKFilter(nextCtx, pkFilter)
+			nextCtx = engine.WithChangeRangeLimit(nextCtx, rangeLimit)
 			nextCtx = engine.WithCollectChangesDebugLabel(nextCtx, debugLabel)
 			nextCtx = engine.WithRetainRowID(nextCtx, retainRowID)
 			return logtailreplay.NewChangesHandlerWithPartitionStateRange(
@@ -380,7 +382,7 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 
 // deferredChangesHandle keeps CollectChanges construction cheap. The
 // partition-state range is materialized only when the consumer requests its
-// first batch, where the range constructor's explicit memory bound applies.
+// first batch, where any caller-provided range limit applies.
 type deferredChangesHandle struct {
 	build    func(context.Context) (engine.ChangesHandle, error)
 	handle   engine.ChangesHandle

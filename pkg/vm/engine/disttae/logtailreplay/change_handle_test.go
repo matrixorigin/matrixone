@@ -56,14 +56,56 @@ func TestPartitionStateRangeHandlerPropagatesPKFilter(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Same(t, filter, handle.pkFilter)
-	require.Equal(t, visibleStateMaxInMemoryRows, handle.maxInMemoryRows)
-	require.Equal(t, visibleStateMaxInMemoryBytes, handle.maxInMemoryBytes)
+	require.Zero(t, handle.maxInMemoryRows)
+	require.Zero(t, handle.maxInMemoryBytes)
 	require.NoError(t, handle.Close())
 }
 
 func TestPartitionStateRangeInMemoryMaterializationIsBounded(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
+	state, src, start, end := newPartitionStateRangeRows(t, mp, 3)
+	baseline := mp.CurrNB()
+	ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
+		MaxInMemoryRows:  2,
+		MaxInMemoryBytes: 64 << 20,
+	})
+
+	_, err := NewChangesHandlerWithPartitionStateRange(
+		ctx, state, start, end, false, objectio.BlockMaxRows, 0, mp, nil,
+	)
+	require.EqualError(t, err,
+		"invalid input: visible-state change range exceeds the recovery limit of 2 in-memory rows or 67108864 bytes; narrow the timestamp range")
+	require.Equal(t, baseline, mp.CurrNB(), "failed construction must release its bounded working batch")
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestDataBranchVisibleStateRangeExceedingTableChangesCapIsUnbounded(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const previousGenericCap = int(objectio.BlockMaxRows) * 4
+	state, src, start, end := newPartitionStateRangeRows(t, mp, previousGenericCap+1)
+	ctx := engine.WithSnapshotReadPolicy(context.Background(), engine.SnapshotReadPolicyVisibleState)
+
+	handle, err := NewChangesHandlerWithPartitionStateRange(
+		ctx, state, start, end, false, objectio.BlockMaxRows, 0, mp, nil,
+	)
+	require.NoError(t, err)
+	require.Zero(t, handle.maxInMemoryRows)
+	require.Zero(t, handle.maxInMemoryBytes)
+	require.Equal(t, previousGenericCap+1, handle.dataHandle.inMemoryHandle.Rows())
+	require.NoError(t, handle.Close())
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func newPartitionStateRangeRows(
+	t *testing.T,
+	mp *mpool.MPool,
+	rows int,
+) (*PartitionState, *batch.Batch, types.TS, types.TS) {
+	t.Helper()
 	state := NewPartitionState("", true, 42, false)
 	src := batch.NewWithSize(3)
 	src.SetAttributes([]string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "pk"})
@@ -71,36 +113,24 @@ func TestPartitionStateRangeInMemoryMaterializationIsBounded(t *testing.T) {
 	src.Vecs[1] = vector.NewVec(types.T_TS.ToType())
 	src.Vecs[2] = vector.NewVec(types.T_int64.ToType())
 	blockID := types.Blockid{}
-	for row := uint32(0); row < 3; row++ {
-		rowID := types.NewRowid(&blockID, row)
-		ts := types.BuildTS(int64(row+1), 0)
+	for row := 0; row < rows; row++ {
+		rowOffset := uint32(row)
+		rowID := types.NewRowid(&blockID, rowOffset)
+		ts := types.BuildTS(2, rowOffset)
 		require.NoError(t, vector.AppendFixed(src.Vecs[0], rowID, false, mp))
 		require.NoError(t, vector.AppendFixed(src.Vecs[1], ts, false, mp))
 		require.NoError(t, vector.AppendFixed(src.Vecs[2], int64(row), false, mp))
 		state.rows.Set(&RowEntry{
 			BlockID: blockID,
 			RowID:   rowID,
-			Offset:  int64(row),
+			Offset:  int64(rowOffset),
 			Time:    ts,
-			ID:      int64(row),
+			ID:      int64(rowOffset),
 			Batch:   src,
 		})
 	}
-	src.SetRowCount(3)
-	baseline := mp.CurrNB()
-	handle := &ChangeHandler{
-		maxInMemoryRows:  2,
-		maxInMemoryBytes: visibleStateMaxInMemoryBytes,
-	}
-
-	_, err := NewBaseHandler(
-		state, handle, types.BuildTS(1, 0), types.BuildTS(3, 0), mp, false, nil, context.Background(),
-	)
-	require.EqualError(t, err,
-		"invalid input: visible-state change range exceeds the recovery limit of 2 in-memory rows or 67108864 bytes; narrow the timestamp range")
-	require.Equal(t, baseline, mp.CurrNB(), "failed construction must release its bounded working batch")
-	src.Clean(mp)
-	require.Zero(t, mp.CurrNB())
+	src.SetRowCount(rows)
+	return state, src, types.BuildTS(2, 0), types.BuildTS(2, uint32(rows-1))
 }
 
 func TestBatchHandleNext_ReturnsEOBOnSchemaMismatch(t *testing.T) {

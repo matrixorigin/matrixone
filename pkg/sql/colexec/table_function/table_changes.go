@@ -69,6 +69,11 @@ type tableChangesState struct {
 	accountColumnIdx  int
 }
 
+const (
+	tableChangesMaxInMemoryRows  = int(objectio.BlockMaxRows) * 4
+	tableChangesMaxInMemoryBytes = 64 << 20
+)
+
 func tableChangesPrepare(proc *process.Process, tf *TableFunction) (tvfState, error) {
 	var err error
 	tf.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tf.Args)
@@ -124,10 +129,11 @@ func (s *tableChangesState) start(
 	if err != nil {
 		return moerr.NewInvalidInputf(proc.Ctx, "invalid table_changes until: %s", err)
 	}
+	statementSnapshot := types.TimestampToTS(proc.GetTxnOperator().SnapshotTS())
+	if err := validateTableChangesWindow(s.from, s.to, statementSnapshot); err != nil {
+		return err
+	}
 	if !s.from.IsEmpty() {
-		if !s.from.LT(&s.to) {
-			return moerr.NewInvalidInput(proc.Ctx, "table_changes until must be greater than after")
-		}
 		s.from = s.from.Next()
 	}
 
@@ -181,6 +187,10 @@ func (s *tableChangesState) call(tf *TableFunction, proc *process.Process) (vm.C
 			return vm.CancelResult, err
 		}
 		ctx := engine.WithSnapshotReadPolicy(proc.Ctx, engine.SnapshotReadPolicyVisibleState)
+		ctx = engine.WithChangeRangeLimit(ctx, engine.ChangeRangeLimit{
+			MaxInMemoryRows:  tableChangesMaxInMemoryRows,
+			MaxInMemoryBytes: tableChangesMaxInMemoryBytes,
+		})
 		if s.isAccountFiltered {
 			// Cluster and shared catalog tables are physically owned by the
 			// system account. Read that physical change stream, then apply the
@@ -224,6 +234,18 @@ func (s *tableChangesState) call(tf *TableFunction, proc *process.Process) (vm.C
 			return vm.CallResult{Status: vm.ExecNext, Batch: s.batch}, nil
 		}
 	}
+}
+
+func validateTableChangesWindow(after, until, statementSnapshot types.TS) error {
+	if until.GT(&statementSnapshot) {
+		return moerr.NewInvalidInputNoCtx(
+			"table_changes until must not be newer than the statement snapshot",
+		)
+	}
+	if !after.IsEmpty() && !after.LT(&until) {
+		return moerr.NewInvalidInputNoCtx("table_changes until must be greater than after")
+	}
+	return nil
 }
 
 func validateTableChangesSchemaWindow(

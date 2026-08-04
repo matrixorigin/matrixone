@@ -60,6 +60,21 @@ func TestParseTableChangesTS(t *testing.T) {
 	}
 }
 
+func TestValidateTableChangesWindow(t *testing.T) {
+	snapshot := types.BuildTS(100, 5)
+
+	require.NoError(t, validateTableChangesWindow(types.BuildTS(99, 0), snapshot, snapshot))
+	require.NoError(t, validateTableChangesWindow(types.TS{}, snapshot, snapshot))
+	require.EqualError(t,
+		validateTableChangesWindow(types.BuildTS(99, 0), snapshot.Next(), snapshot),
+		"invalid input: table_changes until must not be newer than the statement snapshot",
+	)
+	require.EqualError(t,
+		validateTableChangesWindow(snapshot, snapshot, snapshot),
+		"invalid input: table_changes until must be greater than after",
+	)
+}
+
 func TestValidateRuntimeTableChangesSourceTemporaryTable(t *testing.T) {
 	err := validateRuntimeTableChangesSource(&plan.TableDef{
 		TableType:   catalog.SystemTemporaryTable,

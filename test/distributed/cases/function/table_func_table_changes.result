@@ -167,6 +167,11 @@ select * from table_changes('table_changes_db', 'external_table', '', '1-0') c;
 not supported: table_changes does not support table type "e"
 select * from table_changes('table_changes_db', 'ordinary_single_pk', '2-0', '1-0') c;
 invalid input: table_changes until must be greater than after
+select * from table_changes(
+'table_changes_db', 'ordinary_single_pk', @ordinary_after,
+'9223372036854775807-4294967295'
+) c;
+invalid input: table_changes until must not be newer than the statement snapshot
 set @database_name = 'table_changes_db';
 select * from table_changes(@database_name, 'ordinary_single_pk', '', '1-0') c;
 invalid input: table_changes database name must be a non-empty string literal

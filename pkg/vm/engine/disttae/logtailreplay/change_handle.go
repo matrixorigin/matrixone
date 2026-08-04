@@ -87,12 +87,6 @@ const (
 const (
 	SmallBatchThreshold = objectio.BlockMaxRows
 	CoarseMaxRow        = objectio.BlockMaxRows
-	// Visible-state recovery copies in-memory replay rows so it can reconcile
-	// data and tombstones by commit timestamp. Keep that retained working set
-	// explicitly bounded; callers can narrow the timestamp range and resume
-	// from their last cursor when the bound is reached.
-	visibleStateMaxInMemoryRows  = int(objectio.BlockMaxRows) * 4
-	visibleStateMaxInMemoryBytes = 64 << 20
 
 	LoadParallism = 20
 	LogThreshold  = time.Minute
@@ -1719,8 +1713,10 @@ func NewChangesHandlerWithCheckpointRangeRecovery(
 //   - delete-time chain rewrite for GC-ed visible objects
 //   - commit-ts zonemap block pruning on TN non-appendable objects
 //
-// It is used by snapshot-read policies that need exact range meaning while
-// streaming bounded batches from an end-snapshot view.
+// It is used by snapshot-read policies that need exact range meaning. Output
+// is returned in batches; callers whose contract permits rejecting oversized
+// ranges may opt into an in-memory materialization bound with
+// engine.WithChangeRangeLimit. Existing callers remain unbounded by default.
 func NewChangesHandlerWithPartitionStateRange(
 	ctx context.Context,
 	state *PartitionState,
@@ -1732,6 +1728,7 @@ func NewChangesHandlerWithPartitionStateRange(
 	fs fileservice.FileService,
 ) (changeHandle *ChangeHandler, err error) {
 	stateStart := state.GetStart()
+	rangeLimit := engine.ChangeRangeLimitFromContext(ctx)
 	if stateStart.GT(&start) {
 		logutil.Info("ChangesHandlerWithPartitionStateRange: stateStart > start, proceeding with range-aware scan",
 			zap.String("stateStart", stateStart.ToString()),
@@ -1754,8 +1751,8 @@ func NewChangesHandlerWithPartitionStateRange(
 		strictCommitTSBlockPrune: true,
 		enableDeleteChainResolve: true,
 		pkFilter:                 engine.PKFilterFromContext(ctx),
-		maxInMemoryRows:          visibleStateMaxInMemoryRows,
-		maxInMemoryBytes:         visibleStateMaxInMemoryBytes,
+		maxInMemoryRows:          rangeLimit.MaxInMemoryRows,
+		maxInMemoryBytes:         rangeLimit.MaxInMemoryBytes,
 		debugLabel:               engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:              engine.RetainRowIDFromContext(ctx),
 	}
