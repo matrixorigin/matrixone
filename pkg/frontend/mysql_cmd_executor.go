@@ -968,13 +968,18 @@ func doSetVar(
 		return nil
 	}
 
-	for _, assign := range sv.Assignments {
+	for assignmentIndex, assign := range sv.Assignments {
 		name := assign.Name
 		var value interface{}
 		userVarIsBin = false
 
-		value, userVarRuntimeType, err = getExprValueWithPrepareMode(
-			assign.Value, ses, execCtx, preparedExpression, &userVarIsBin)
+		if preparedPlanExpr := preparedSetPlanExpr(execCtx, assignmentIndex); preparedExpression && preparedPlanExpr != nil {
+			value, userVarRuntimeType, err = getPreparedPlanExprValue(
+				ses, execCtx, preparedPlanExpr, &userVarIsBin)
+		} else {
+			value, userVarRuntimeType, err = getExprValueWithPrepareMode(
+				assign.Value, ses, execCtx, preparedExpression, &userVarIsBin)
+		}
 		if err != nil {
 			return err
 		}
@@ -1089,6 +1094,42 @@ func preparedSetExpression(execCtx *ExecCtx) bool {
 	}
 	cw, ok := execCtx.cw.(*TxnComputationWrapper)
 	return ok && cw.ifIsExeccute
+}
+
+func preparedSetPlanExpr(execCtx *ExecCtx, assignmentIndex int) *plan.Expr {
+	if execCtx == nil || assignmentIndex < 0 {
+		return nil
+	}
+	cw, ok := execCtx.cw.(*TxnComputationWrapper)
+	if !ok || cw.plan == nil || cw.plan.GetDcl() == nil || cw.plan.GetDcl().GetSetVariables() == nil {
+		return nil
+	}
+	items := cw.plan.GetDcl().GetSetVariables().GetItems()
+	if assignmentIndex >= len(items) {
+		return nil
+	}
+	return items[assignmentIndex].GetValue()
+}
+
+func getPreparedPlanExprValue(
+	ses FeSession,
+	execCtx *ExecCtx,
+	expr *plan.Expr,
+	isBin *bool,
+) (any, types.T, error) {
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(execCtx.proc, expr)
+	if err != nil {
+		return nil, types.T_any, err
+	}
+	defer free()
+	if isBin != nil {
+		*isBin = vec.GetIsBin()
+	}
+	value, err := getValueFromVector(execCtx.reqCtx, vec, ses, expr)
+	if err != nil {
+		return nil, types.T_any, err
+	}
+	return value, vec.GetType().Oid, nil
 }
 
 func doShowErrors(ses *Session, execCtx *ExecCtx) error {

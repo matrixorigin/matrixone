@@ -464,6 +464,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			exprImpl.F.Args[i] = rewrittenArg
 		}
+		if needResetFunction {
+			for i, arg := range exprImpl.F.Args {
+				if !dynamicNumericArgs[i] {
+					exprImpl.F.Args[i] = restorePreparedNumericLiteralType(arg)
+				}
+			}
+		}
 		for i, arg := range exprImpl.F.Args {
 			if !dynamicNumericArgs[i] || !types.T(arg.Typ.Id).IsUnsignedInt() {
 				continue
@@ -587,6 +594,34 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		return e, nil
 	default:
 		return e, nil
+	}
+}
+
+func restorePreparedNumericLiteralType(expr *plan.Expr) *plan.Expr {
+	if expr == nil {
+		return expr
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 &&
+		types.T(expr.Typ.Id).IsDecimal() {
+		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+		if overload == 0 {
+			return fn.Args[0]
+		}
+	}
+	if !isPreparedDynamicNumericType(expr.Typ) {
+		return expr
+	}
+	literal := expr.GetLit()
+	if literal == nil {
+		return expr
+	}
+	switch value := literal.Value.(type) {
+	case *plan.Literal_I64Val:
+		return makePlan2Int64ConstExprWithType(value.I64Val)
+	case *plan.Literal_U64Val:
+		return makePlan2Uint64ConstExprWithType(value.U64Val)
+	default:
+		return expr
 	}
 }
 

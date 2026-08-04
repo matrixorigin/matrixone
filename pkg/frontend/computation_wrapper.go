@@ -982,7 +982,10 @@ func specializePreparedNumericPlan(
 	preparePlan *plan.Plan,
 	paramVals []any,
 ) (*plan.Plan, error) {
-	signature := preparedNumericParamSignature(paramVals)
+	signature, err := preparedNumericParamSignature(ctx, paramVals)
+	if err != nil {
+		return nil, err
+	}
 	if prepareStmt.dynamicNumericSignature == signature && prepareStmt.dynamicNumericPlan != nil {
 		return prepareStmt.dynamicNumericPlan, nil
 	}
@@ -1001,7 +1004,7 @@ func specializePreparedNumericPlan(
 	return specialized, nil
 }
 
-func preparedNumericParamSignature(paramVals []any) string {
+func preparedNumericParamSignature(ctx context.Context, paramVals []any) (string, error) {
 	var signature bytes.Buffer
 	for i, raw := range paramVals {
 		if i > 0 {
@@ -1012,12 +1015,13 @@ func preparedNumericParamSignature(paramVals []any) string {
 			fmt.Fprintf(&signature, "%T", raw)
 			continue
 		}
-		fmt.Fprintf(&signature, "%d", param.RuntimeType)
-		if param.RuntimeType.IsDecimal() || param.RuntimeType == types.T_any {
-			fmt.Fprintf(&signature, ":%v", param.Value)
+		oid, width, scale, err := plan2.PreparedParamTypeShape(ctx, param)
+		if err != nil {
+			return "", err
 		}
+		fmt.Fprintf(&signature, "%d:%d:%d", oid, width, scale)
 	}
-	return signature.String()
+	return signature.String(), nil
 }
 
 func prepareSchemaAccountID(currentAccountID uint32, obj *plan.ObjectRef) uint32 {

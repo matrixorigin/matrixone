@@ -103,6 +103,12 @@ func TestInterpreterOutputDecimalPreservesDeclaredRuntimeType(t *testing.T) {
 	require.Equal(t, types.T_decimal256, procedureOutputRuntimeType(&tree.T{
 		InternalType: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_NEWDECIMAL)},
 	}))
+	require.Equal(t, types.T_decimal256, procedureOutputRuntimeType(&tree.T{
+		InternalType: tree.InternalType{Family: tree.FloatFamily, FamilyString: "DECIMAL"},
+	}))
+	require.Equal(t, types.T_bool, procedureOutputRuntimeType(&tree.T{
+		InternalType: tree.InternalType{FamilyString: "BOOL"},
+	}))
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
@@ -116,4 +122,11 @@ func TestInterpreterOutputDecimalPreservesDeclaredRuntimeType(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.T_decimal256, userVar.RuntimeType)
 	require.Equal(t, "9007199254740993.25", userVar.Value)
+
+	interpreter.argsRuntimeType["flag"] = types.T_bool
+	require.NoError(t, interpreter.setOutputUserVariable("out_flag", "flag", true))
+	flag, err := ses.GetUserDefinedVar("out_flag")
+	require.NoError(t, err)
+	require.Equal(t, types.T_int64, flag.RuntimeType)
+	require.Equal(t, int64(1), flag.Value)
 }

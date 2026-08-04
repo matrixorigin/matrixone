@@ -11663,7 +11663,45 @@ func procedureOutputRuntimeType(ref tree.ResolvableTypeReference) types.T {
 	if !ok {
 		return types.T_any
 	}
-	switch defines.MysqlType(typ.InternalType.Oid) {
+	internal := typ.InternalType
+	familyName := strings.ToLower(strings.TrimSpace(internal.FamilyString))
+	if familyName == "decimal" || familyName == "numeric" || familyName == "dec" || familyName == "fixed" {
+		return types.T_decimal256
+	}
+	switch familyName {
+	case "bool", "boolean":
+		return types.T_bool
+	case "tinyint", "smallint", "mediumint", "int", "integer", "bigint":
+		if internal.Unsigned {
+			return types.T_uint64
+		}
+		return types.T_int64
+	case "float":
+		return types.T_float32
+	case "double", "real":
+		return types.T_float64
+	case "char", "varchar", "text", "binary", "varbinary", "blob":
+		return types.T_varchar
+	}
+	switch internal.Family {
+	case tree.BoolFamily:
+		return types.T_bool
+	case tree.BitFamily:
+		return types.T_bit
+	case tree.IntFamily:
+		if internal.Unsigned {
+			return types.T_uint64
+		}
+		return types.T_int64
+	case tree.FloatFamily:
+		if internal.Width == 32 || familyName == "float" {
+			return types.T_float32
+		}
+		return types.T_float64
+	case tree.StringFamily:
+		return types.T_varchar
+	}
+	switch defines.MysqlType(internal.Oid) {
 	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
 		return types.T_decimal256
 	default:

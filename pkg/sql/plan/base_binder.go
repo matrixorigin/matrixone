@@ -2254,7 +2254,62 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 	if (op == "like" || op == "ilike") && astExpr.Escape != nil {
 		args = append(args, astExpr.Escape)
 	}
+	if len(args) == 2 && op != "in" && op != "not_in" {
+		if expr, handled, err := b.bindPreparedDynamicComparison(op, args[0], args[1], depth); handled || err != nil {
+			return expr, err
+		}
+	}
 	return b.bindFuncExprImplByAstExpr(op, args, depth)
+}
+
+func (b *baseBinder) bindPreparedDynamicComparison(
+	op string, leftAst, rightAst tree.Expr, depth int32,
+) (*Expr, bool, error) {
+	if b.builder == nil || !b.builder.isPrepareStatement {
+		return nil, false, nil
+	}
+	leftScan, leftErr := b.numericAstTypesWithHint(leftAst, depth, nil)
+	rightScan, rightErr := b.numericAstTypesWithHint(rightAst, depth, nil)
+	if leftErr != nil || rightErr != nil {
+		if leftErr != nil {
+			return nil, true, leftErr
+		}
+		return nil, true, rightErr
+	}
+	leftDynamic := leftScan.hasParam && isNumericArithmeticRoot(leftAst)
+	rightDynamic := rightScan.hasParam && isNumericArithmeticRoot(rightAst)
+	if leftDynamic == rightDynamic {
+		return nil, false, nil
+	}
+	otherScan := rightScan
+	if rightDynamic {
+		otherScan = leftScan
+	}
+	if otherScan.incompatible || otherScan.hasUnknown {
+		return nil, false, nil
+	}
+	dynamicAst, otherAst := leftAst, rightAst
+	if rightDynamic {
+		dynamicAst, otherAst = rightAst, leftAst
+	}
+	dynamicExpr, err := b.bindNumericExprWithDefaultContext(dynamicAst, depth, nil)
+	if err != nil {
+		return nil, true, err
+	}
+	otherExpr, err := b.impl.BindExpr(otherAst, depth, false)
+	if err != nil {
+		return nil, true, err
+	}
+	otherExpr, err = appendCastBeforeExpr(b.GetContext(), otherExpr, dynamicExpr.Typ)
+	if err != nil {
+		return nil, true, err
+	}
+	args := []*Expr{dynamicExpr, otherExpr}
+	if rightDynamic {
+		args[0], args[1] = args[1], args[0]
+	}
+	expr, err := BindFuncExprImplByPlanExpr(b.GetContext(), op, args)
+	return expr, true, err
 }
 
 func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tuple, depth int32, isNot bool) (*plan.Expr, error) {

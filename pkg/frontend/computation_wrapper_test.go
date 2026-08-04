@@ -499,6 +499,19 @@ func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {
 	}
 
 	first := install("41")
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0}
+	_, executionPlan, stmt, _, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	cw.plan = executionPlan
+	cw.ifIsExeccute = true
+	execCtx.cw = cw
+	require.NoError(t, handleSetVar(ses, execCtx, stmt.(*tree.SetVar), prepareStmt.Sql))
+	setValue, err := ses.GetUserDefinedVar("prepared_set_value")
+	require.NoError(t, err)
+	require.Equal(t, types.T_int64, setValue.RuntimeType)
+	require.Equal(t, int64(42), setValue.Value)
+
 	second := install("9")
 	first.Free(cw.proc.Mp())
 	require.Equal(t, "9", cw.proc.GetPrepareParams().GetStringAt(0))
@@ -1300,10 +1313,37 @@ func TestNormalizeUserVariableBoolAndDynamicNumericSignature(t *testing.T) {
 	require.Equal(t, int64(1), value)
 	require.Equal(t, types.T_int64, typ)
 
-	first := preparedNumericParamSignature([]any{plan2.ParamValue{Value: "2", RuntimeType: types.T_int64}})
-	second := preparedNumericParamSignature([]any{plan2.ParamValue{Value: "3", RuntimeType: types.T_int64}})
+	ctx := context.Background()
+	first, err := preparedNumericParamSignature(ctx, []any{plan2.ParamValue{Value: "2", RuntimeType: types.T_int64}})
+	require.NoError(t, err)
+	second, err := preparedNumericParamSignature(ctx, []any{plan2.ParamValue{Value: "3", RuntimeType: types.T_int64}})
+	require.NoError(t, err)
 	require.Equal(t, first, second, "same integer runtime type must reuse specialization")
-	decimalA := preparedNumericParamSignature([]any{plan2.ParamValue{Value: "1.2", RuntimeType: types.T_decimal128}})
-	decimalB := preparedNumericParamSignature([]any{plan2.ParamValue{Value: "1.20", RuntimeType: types.T_decimal128}})
-	require.NotEqual(t, decimalA, decimalB, "decimal precision and scale may change the specialized plan")
+	decimalA, err := preparedNumericParamSignature(ctx, []any{plan2.ParamValue{Value: "1.2", RuntimeType: types.T_decimal128}})
+	require.NoError(t, err)
+	decimalSameShape, err := preparedNumericParamSignature(ctx, []any{plan2.ParamValue{Value: "2.3", RuntimeType: types.T_decimal128}})
+	require.NoError(t, err)
+	require.Equal(t, decimalA, decimalSameShape)
+	decimalDifferentShape, err := preparedNumericParamSignature(ctx, []any{plan2.ParamValue{Value: "1.20", RuntimeType: types.T_decimal128}})
+	require.NoError(t, err)
+	require.NotEqual(t, decimalA, decimalDifferentShape, "decimal precision and scale changes must rebuild specialization")
+}
+
+func TestPreparedDecimalSameShapeReusesPlanAndCompile(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 112, "select ? + 1")
+	defer prepareStmt.Close()
+	execPlan := &plan.Execute{
+		Name: prepareStmt.Name,
+		Args: []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "decimal_param"}}}},
+	}
+	require.NoError(t, ses.setUserDefinedVarWithType("decimal_param", "1.2", "", false, types.T_decimal128))
+	firstCompile, firstPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+	require.NoError(t, err)
+	require.NotNil(t, firstCompile)
+
+	require.NoError(t, ses.setUserDefinedVarWithType("decimal_param", "2.3", "", false, types.T_decimal128))
+	secondCompile, secondPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+	require.NoError(t, err)
+	require.Same(t, firstPlan, secondPlan)
+	require.Same(t, firstCompile, secondCompile)
 }

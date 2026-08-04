@@ -108,6 +108,29 @@ EXECUTE bool_numeric USING @bool_param;
 ➤ plus_one[-5,64,0]  𝄀
 2
 DEALLOCATE PREPARE bool_numeric;
+PREPARE numeric_compare FROM 'SELECT (? + 1) > 0 AS r';
+SET @compare_param = 2;
+EXECUTE numeric_compare USING @compare_param;
+➤ r[10,1,0]  𝄀
+true
+DEALLOCATE PREPARE numeric_compare;
+PREPARE numeric_set FROM 'SET @set_result = ? + 1';
+SET @set_param = 2;
+EXECUTE numeric_set USING @set_param;
+SELECT @set_result;
+➤ @set_result[-5,64,0]  𝄀
+3
+SET @set_param = 9223372036854775807;
+EXECUTE numeric_set USING @set_param;
+Data truncation: data out of range: data type int64, (9223372036854775807 + 1)
+DEALLOCATE PREPARE numeric_set;
+PREPARE numeric_ctas FROM 'CREATE TABLE prepared_numeric_ctas AS SELECT ? + 1 AS r';
+SET @ctas_param = 2.5;
+EXECUTE numeric_ctas USING @ctas_param;
+SELECT * FROM prepared_numeric_ctas;
+➤ r[3,38,1]  𝄀
+3.5
+DEALLOCATE PREPARE numeric_ctas;
 CREATE TABLE pagination_rows (id INT PRIMARY KEY);
 INSERT INTO pagination_rows VALUES (1), (2), (3), (4);
 PREPARE limit_param FROM 'SELECT id FROM pagination_rows ORDER BY id LIMIT ?';
@@ -136,6 +159,11 @@ SET @page_size = -1;
 EXECUTE limit_param USING @page_size;
 Data truncation: data out of range: unsigned integer value is out of range in 'EXECUTE'
 DEALLOCATE PREPARE limit_param;
+PREPARE ctas_limit FROM 'CREATE TABLE prepared_limit_ctas AS SELECT 1 LIMIT ?';
+SET @page_size = '1';
+EXECUTE ctas_limit USING @page_size;
+Incorrect arguments to EXECUTE
+DEALLOCATE PREPARE ctas_limit;
 PREPARE offset_param FROM 'SELECT id FROM pagination_rows ORDER BY id LIMIT 2 OFFSET ?';
 SET @page_offset = '1';
 EXECUTE offset_param USING @page_offset;

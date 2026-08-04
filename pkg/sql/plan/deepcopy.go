@@ -752,17 +752,10 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 		}
 
 	case *plan.DataDefinition_CreateTable:
-		CreateTable := &plan.CreateTable{
-			Replace:     df.CreateTable.Replace,
-			IfNotExists: df.CreateTable.IfNotExists,
-			Temporary:   df.CreateTable.Temporary,
-			Database:    df.CreateTable.Database,
-			TableDef:    DeepCopyTableDef(df.CreateTable.TableDef, true),
-			IndexTables: DeepCopyTableDefList(df.CreateTable.GetIndexTables()),
-			FkDbs:       slices.Clone(df.CreateTable.FkDbs),
-			FkTables:    slices.Clone(df.CreateTable.FkTables),
-			FkCols:      make([]*plan.FkColName, len(df.CreateTable.FkCols)),
-		}
+		CreateTable := proto.Clone(df.CreateTable).(*plan.CreateTable)
+		CreateTable.TableDef = DeepCopyTableDef(df.CreateTable.TableDef, true)
+		CreateTable.IndexTables = DeepCopyTableDefList(df.CreateTable.GetIndexTables())
+		CreateTable.FkCols = make([]*plan.FkColName, len(df.CreateTable.FkCols))
 		for i, val := range df.CreateTable.FkCols {
 			CreateTable.FkCols[i] = &plan.FkColName{Cols: slices.Clone(val.Cols)}
 		}

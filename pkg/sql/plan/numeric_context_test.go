@@ -796,6 +796,50 @@ func TestPreparedDynamicNumericDiscoveryCoversWindowDCLAndDDL(t *testing.T) {
 	}
 }
 
+func TestDeepCopyPreparedCTASPreservesExecutionMetadata(t *testing.T) {
+	original := &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{
+		Definition: &planpb.DataDefinition_CreateTable{CreateTable: &planpb.CreateTable{
+			CreateAsSelectSql: "insert into cnorm select ? + 1",
+			UpdateFkSqls:      []string{"update fk"},
+			FksReferToMe:      []*planpb.ForeignKeyInfo{{Db: "db"}},
+			RawSQL:            "create table cnorm as select ? + 1",
+		}},
+	}}}
+	copied := DeepCopyPlan(original)
+	create := copied.GetDdl().GetCreateTable()
+	require.Equal(t, "insert into cnorm select ? + 1", create.CreateAsSelectSql)
+	require.Equal(t, []string{"update fk"}, create.UpdateFkSqls)
+	require.Equal(t, "db", create.FksReferToMe[0].Db)
+	require.Equal(t, "create table cnorm as select ? + 1", create.RawSQL)
+	require.NotSame(t, original.GetDdl().GetCreateTable(), create)
+}
+
+func TestPreparedDynamicNumericRebindsTypeSensitiveParents(t *testing.T) {
+	for _, test := range []struct {
+		sql    string
+		values []any
+	}{
+		{sql: "select (? + 1) > 0", values: []any{ParamValue{Value: "2", RuntimeType: types.T_int64}}},
+		{sql: "select 0 < (? + 1)", values: []any{ParamValue{Value: "2", RuntimeType: types.T_int64}}},
+		{sql: "select (? + ?) > 0", values: []any{
+			ParamValue{Value: "1", RuntimeType: types.T_int64},
+			ParamValue{Value: "2", RuntimeType: types.T_int64},
+		}},
+		{sql: "select case when (? + 1) > 0 then 1 else 0 end", values: []any{ParamValue{Value: "2", RuntimeType: types.T_int64}}},
+		{sql: "select (? + 1) between 0 and 10", values: []any{ParamValue{Value: "2", RuntimeType: types.T_int64}}},
+		{sql: "select (? + 1) in (0, 3)", values: []any{ParamValue{Value: "2", RuntimeType: types.T_int64}}},
+		{sql: "select n_nationkey from nation where (? + 1) > n_nationkey", values: []any{ParamValue{Value: "2", RuntimeType: types.T_int64}}},
+		{sql: "select count(*) from nation having (? + 1) > 0", values: []any{ParamValue{Value: "2", RuntimeType: types.T_int64}}},
+		{sql: "select n.n_nationkey from nation n join region r on (? + 1) > r.r_regionkey", values: []any{ParamValue{Value: "2", RuntimeType: types.T_int64}}},
+	} {
+		t.Run(test.sql, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, test.sql)
+			_, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, test.values)
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestPreparedFloatRangeHandling(t *testing.T) {
 	positiveZero, err := parsePreparedFloat("1e-10000", 64)
 	require.NoError(t, err)

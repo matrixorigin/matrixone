@@ -3158,11 +3158,31 @@ type ParamValue struct {
 	RuntimeType types.T
 }
 
+// PreparedParamTypeShape returns the runtime type shape that affects dynamic
+// numeric binding. Values with the same result compare equal even when their
+// payload differs, so frontend compile caching never keys on DECIMAL data.
+func PreparedParamTypeShape(ctx context.Context, param ParamValue) (types.T, int32, int32, error) {
+	if param.Value == nil {
+		return types.T_any, 0, 0, nil
+	}
+	if param.RuntimeType.IsDecimal() || param.RuntimeType == types.T_any {
+		expr, err := makePlan2DecimalExprWithType(ctx, fmt.Sprintf("%v", param.Value), param.IsBin)
+		if err != nil {
+			return types.T_any, 0, 0, err
+		}
+		return types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, nil
+	}
+	return param.RuntimeType, 0, 0, nil
+}
+
 // ValidatePreparedPaginationParams enforces the runtime type contract of
 // parameter markers used by LIMIT and OFFSET before their values are
 // stringified for expression execution.
 func ValidatePreparedPaginationParams(ctx context.Context, preparePlan *Plan, paramVals []any) error {
 	query := preparePlan.GetQuery()
+	if query == nil && preparePlan.GetDdl() != nil {
+		query = preparePlan.GetDdl().GetQuery()
+	}
 	if query == nil {
 		return nil
 	}

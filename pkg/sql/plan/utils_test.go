@@ -293,6 +293,14 @@ func TestFillValuesOfParamsInPlanValidatesPaginationParamTypes(t *testing.T) {
 		assertWrongExecuteArgs(t, err)
 	})
 
+	t.Run("ctas limit", func(t *testing.T) {
+		ctasPlan := buildPreparedPlan(t, "create table prepared_limit_ctas as select 1 limit ?")
+		_, err := FillValuesOfParamsInPlan(context.Background(), ctasPlan, []any{ParamValue{
+			Value: "1", RuntimeType: types.T_varchar,
+		}})
+		assertWrongExecuteArgs(t, err)
+	})
+
 	t.Run("limit and offset positions", func(t *testing.T) {
 		paginationPlan := buildPreparedPlan(t, "select n_nationkey from nation limit ? offset ?")
 		_, err := FillValuesOfParamsInPlan(context.Background(), paginationPlan, []any{int64(2), "1"})

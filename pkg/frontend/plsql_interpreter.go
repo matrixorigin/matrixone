@@ -158,6 +158,11 @@ func (interpreter *Interpreter) FlushParam() error {
 
 func (interpreter *Interpreter) setOutputUserVariable(name, argName string, value any) error {
 	if typ := interpreter.argsRuntimeType[argName]; typ != types.T_any {
+		var err error
+		value, typ, err = normalizeUserVariableValue(value, typ)
+		if err != nil {
+			return err
+		}
 		if ses, ok := interpreter.ses.(interface {
 			setUserDefinedVarWithType(string, interface{}, string, bool, types.T) error
 		}); ok {
