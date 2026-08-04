@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"math"
@@ -1313,8 +1312,4 @@ func lifecycleDiscoveryRequest(
 			MaxDuration:  30 * time.Second,
 		},
 	}
-}
-
-func lifecycleSchemaDigestString(value [sha256.Size]byte) string {
-	return hex.EncodeToString(value[:])
 }
