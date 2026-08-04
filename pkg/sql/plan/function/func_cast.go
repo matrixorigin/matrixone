@@ -2622,7 +2622,7 @@ func strTypeToOthers(proc *process.Process,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink, types.T_geometry, types.T_geometry32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToStr(ctx, proc, source, rs, length, toType,
-			strictStringWidth, allowTrailingSpaceTrim, reportDataTooLong)
+			mode, strictStringWidth, allowTrailingSpaceTrim, reportDataTooLong)
 	case types.T_array_float32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToArray[float32](ctx, source, rs, length, toType)
@@ -7222,10 +7222,10 @@ func strToStr(
 	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type,
-	strictStringWidth bool, allowTrailingSpaceTrim bool, reportDataTooLong bool) error {
+	mode castMode, strictStringWidth bool, allowTrailingSpaceTrim bool, reportDataTooLong bool) error {
 	totype := to.GetType()
 	destLen := int(totype.Width)
-	validateUTF8 := requiresUTF8ValidationForAssignment(proc, from.GetType(), toType, allowTrailingSpaceTrim || strictStringWidth)
+	utf8Policy := utf8TextStoragePolicy(proc, toType, mode)
 	var i uint64
 	var l = uint64(length)
 	// Here cast using cast(data_type as binary[(n)]).
@@ -7288,8 +7288,12 @@ func strToStr(
 				}
 				continue
 			}
-			if validateUTF8 && !utf8.Valid(v) {
-				return moerr.NewIncorrectStringValue(ctx, formatInvalidUTF8Bytes(v))
+			if utf8Policy != utf8StoragePassThrough && !utf8.Valid(v) {
+				var err error
+				v, err = applyUTF8TextStoragePolicy(ctx, v, utf8Policy)
+				if err != nil {
+					return err
+				}
 			}
 			// check the length.
 			s := convertByteSliceToString(v)
@@ -7343,8 +7347,12 @@ func strToStr(
 				}
 				continue
 			}
-			if validateUTF8 && !utf8.Valid(v) {
-				return moerr.NewIncorrectStringValue(ctx, formatInvalidUTF8Bytes(v))
+			if utf8Policy != utf8StoragePassThrough && !utf8.Valid(v) {
+				var err error
+				v, err = applyUTF8TextStoragePolicy(ctx, v, utf8Policy)
+				if err != nil {
+					return err
+				}
 			}
 			if err := to.AppendBytes(v, false); err != nil {
 				return err
@@ -7354,20 +7362,61 @@ func strToStr(
 	return nil
 }
 
-// requiresUTF8ValidationForAssignment keeps the compatibility check on the
-// binary-to-text boundary.  Ordinary text-to-text assignments are not scanned
-// again, while raw-byte expressions such as UNHEX cannot enter a UTF-8 column
-// with invalid encoding in MySQL-compatible mode.
-func requiresUTF8ValidationForAssignment(proc *process.Process, fromType, toType types.Type, assignment bool) bool {
-	if !assignment || (proc != nil && proc.GetSessionInfo().MatrixOneNativeMode) ||
-		types.CharsetType(fromType.Oid) != 1 {
-		return false
-	}
+type utf8StoragePolicy uint8
+
+const (
+	utf8StoragePassThrough utf8StoragePolicy = iota
+	utf8StorageReject
+	utf8StorageTruncate
+)
+
+// utf8TextStoragePolicy is selected by the destination storage boundary, not
+// by the source expression. TEXT values may have been created in
+// MATRIXONE_NATIVE mode and must be checked when compatible-mode DML writes
+// them again.
+func utf8TextStoragePolicy(proc *process.Process, toType types.Type, mode castMode) utf8StoragePolicy {
 	switch toType.Oid {
 	case types.T_char, types.T_varchar, types.T_text:
-		return true
 	default:
-		return false
+		return utf8StoragePassThrough
+	}
+	if proc != nil && proc.GetSessionInfo().MatrixOneNativeMode {
+		return utf8StoragePassThrough
+	}
+	switch mode {
+	case castModeAssignmentIgnore:
+		return utf8StorageTruncate
+	case castModeAssignment:
+		if isStrictSqlMode(proc) {
+			return utf8StorageReject
+		}
+		return utf8StorageTruncate
+	case castModeStrictStringWidth:
+		return utf8StorageReject
+	default:
+		return utf8StoragePassThrough
+	}
+}
+
+func applyUTF8TextStoragePolicy(ctx context.Context, value []byte, policy utf8StoragePolicy) ([]byte, error) {
+	switch policy {
+	case utf8StoragePassThrough:
+		return value, nil
+	case utf8StorageReject:
+		return nil, moerr.NewIncorrectStringValue(ctx, formatInvalidUTF8Bytes(value))
+	case utf8StorageTruncate:
+		// MySQL non-strict and IGNORE assignments retain the valid prefix and
+		// discard the first invalid sequence and everything following it.
+		for i := 0; i < len(value); {
+			_, size := utf8.DecodeRune(value[i:])
+			if size == 1 && value[i] >= utf8.RuneSelf {
+				return value[:i], nil
+			}
+			i += size
+		}
+		return value, nil
+	default:
+		return nil, moerr.NewInternalError(ctx, "unknown UTF-8 storage policy")
 	}
 }
 

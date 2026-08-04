@@ -708,6 +708,23 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 			require.Equal(t, test.want, casted.GetF().GetFunc().GetObjName())
 		}
 	}
+
+	// Same-type DML assignments must keep the runtime storage cast. Native-mode
+	// rows can otherwise bypass compatible-mode UTF-8 validation in INSERT
+	// SELECT and UPDATE.
+	sameType := plan.Type{Id: int32(types.T_varchar), Width: 10}
+	sameSource := &Expr{Typ: sameType, Expr: &plan.Expr_Col{Col: &plan.ColRef{}}}
+	sameTarget := &plan.Expr{Typ: sameType, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+	for _, ignore := range []bool{false, true} {
+		casted, err := forceCastExpr2WithProcess(
+			t.Context(), DeepCopyExpr(sameSource), makeTypeByPlan2Type(sameType), DeepCopyExpr(sameTarget), ignore, proc,
+		)
+		require.NoError(t, err)
+		require.Equal(t, assignmentCastFunctionName(sameType, ignore, proc), casted.GetF().GetFunc().GetObjName())
+	}
+	stored, err := forceCastExprWithName(t.Context(), DeepCopyExpr(sameSource), sameType, "cast_assign")
+	require.NoError(t, err)
+	require.Equal(t, "cast_assign", stored.GetF().GetFunc().GetObjName())
 	require.Equal(t, "cast", assignmentCastFunctionName(plan.Type{Id: int32(types.T_int64)}, false, proc))
 }
 

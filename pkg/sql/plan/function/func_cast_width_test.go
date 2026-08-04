@@ -42,7 +42,7 @@ func runStrToStrWidth(t *testing.T, mp *mpool.MPool, proc *process.Process, inpu
 	defer to.Free()
 	require.NoError(t, to.PreExtendAndReset(1))
 
-	if err := strToStr(context.Background(), proc, from, to, 1, toType, strict, allowTrim, allowTrim); err != nil {
+	if err := strToStr(context.Background(), proc, from, to, 1, toType, castModeNormal, strict, allowTrim, allowTrim); err != nil {
 		return "", false, err
 	}
 	got, null := vector.GenerateFunctionStrParameter(to.GetResultVector()).GetStrValue(0)
@@ -136,17 +136,46 @@ func TestAssignCastInvalidUTF8BinarySource(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, string([]byte{0xc3, 0x28}), got)
 
-	// Text-to-text assignments stay on the existing fast path. This matters for
-	// values written in MATRIXONE_NATIVE mode and read again later.
-	got, err = run(t, false, types.T_varchar.ToType(), types.New(types.T_varchar, 10, 0), NewAssignCast)
-	require.NoError(t, err)
-	require.Equal(t, string([]byte{0xc3, 0x28}), got)
+	// Compatible-mode text-to-text assignments revalidate historical Native
+	// bytes at the destination storage boundary.
+	_, err = run(t, false, types.T_varchar.ToType(), types.New(types.T_varchar, 10, 0), NewAssignCast)
+	require.Error(t, err)
+	require.Equal(t, moerr.ErrIncorrectStringValue, err.(*moerr.Error).ErrorCode())
 
 	// Pre-v5 clients use cast_strict for DML assignment. Keep that fallback on
 	// the same binary-to-text validation boundary.
 	_, err = run(t, false, types.T_blob.ToType(), types.T_text.ToType(), NewStrictCast)
 	require.Error(t, err)
 	require.Equal(t, moerr.ErrIncorrectStringValue, err.(*moerr.Error).ErrorCode())
+}
+
+func TestAssignCastInvalidUTF8NonStrictAndIgnoreTruncate(t *testing.T) {
+	run := func(t *testing.T, sqlMode string, cast func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error) string {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			require.Equal(t, "sql_mode", name)
+			return sqlMode, nil
+		})
+		src := vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(src, []byte{0x41, 0xc3, 0x28, 0x42}, false, proc.Mp()))
+		defer src.Free(proc.Mp())
+		target := types.New(types.T_varchar, 10, 0)
+		dst := vector.NewVec(target)
+		defer dst.Free(proc.Mp())
+		result := vector.NewFunctionResultWrapper(target, proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, cast([]*vector.Vector{src, dst}, result, proc, 1, nil))
+		got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+		require.False(t, null)
+		return string(got)
+	}
+
+	// MySQL retains the valid prefix and drops the first malformed UTF-8
+	// sequence plus its suffix for non-strict and IGNORE writes.
+	require.Equal(t, "A", run(t, "", NewAssignCast))
+	require.Equal(t, "A", run(t, "STRICT_TRANS_TABLES", NewAssignIgnoreCast))
 }
 
 func TestFormatInvalidUTF8BytesIsBounded(t *testing.T) {

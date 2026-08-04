@@ -59,6 +59,37 @@ update t_invalid_utf8
 select id, hex(c) as c_hex, hex(v) as v_hex, hex(t) as t_hex
     from t_invalid_utf8 where id = 11;
 
+-- Compatible-mode writes must revalidate values created in MATRIXONE_NATIVE,
+-- including same-type INSERT SELECT and UPDATE assignments that need no
+-- ordinary conversion cast.
+set session sql_mode = 'STRICT_TRANS_TABLES';
+create table t_invalid_utf8_copy (
+    id int primary key,
+    c char(10) character set utf8mb4,
+    v varchar(10) character set utf8mb4,
+    t text character set utf8mb4
+);
+insert into t_invalid_utf8_copy (id, c, v, t)
+    select id, c, v, t from t_invalid_utf8 where id = 20;
+select count(*) as strict_copy_rows from t_invalid_utf8_copy;
+insert into t_invalid_utf8_copy values (21, 'old', 'old', 'old');
+update t_invalid_utf8_copy
+    set c = (select c from t_invalid_utf8 where id = 20),
+        v = (select v from t_invalid_utf8 where id = 20),
+        t = (select t from t_invalid_utf8 where id = 20)
+    where id = 21;
+select id, c, v, t from t_invalid_utf8_copy where id = 21;
+
+-- MySQL non-strict and IGNORE writes retain only the valid prefix before an
+-- invalid sequence. C328 has no valid prefix, so it is stored as ''.
+set session sql_mode = '';
+insert into t_invalid_utf8_copy values (30, unhex('41C32842'), unhex('C328'), unhex('41C32842'));
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert ignore into t_invalid_utf8_copy values (31, unhex('41C32842'), unhex('C328'), unhex('41C32842'));
+select id, hex(c) as c_hex, hex(v) as v_hex, hex(t) as t_hex
+    from t_invalid_utf8_copy where id in (30, 31) order by id;
+drop table t_invalid_utf8_copy;
+
 drop table t_invalid_utf8;
 set session sql_mode = @old_sql_mode;
 drop database mysql_compat_invalid_utf8;

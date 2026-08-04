@@ -1171,7 +1171,8 @@ func forceCastExpr2WithProcess(
 		return funcCastForTypedArrayType(ctx, expr, targetType.Typ)
 	}
 	t1 := makeTypeByPlan2Expr(expr)
-	if t1.Eq(t2) {
+	funcName := assignmentCastFunctionName(targetType.Typ, isIgnore, proc)
+	if t1.Eq(t2) && !requiresTextStorageAssignmentCast(funcName, targetType.Typ) {
 		return expr, nil
 	}
 
@@ -1179,7 +1180,6 @@ func forceCastExpr2WithProcess(
 	// CHAR/VARCHAR assignments use the protocol-gated runtime assignment cast.
 	// Temporal assignments retain main's cast_strict behavior, while other
 	// conversions continue to use the generic cast.
-	funcName := assignmentCastFunctionName(targetType.Typ, isIgnore, proc)
 	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
@@ -1480,7 +1480,7 @@ func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, fun
 		return funcCastForTypedArrayType(ctx, expr, targetType)
 	}
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
-	if t1.Eq(t2) {
+	if t1.Eq(t2) && !requiresTextStorageAssignmentCast(funcName, targetType) {
 		return expr, nil
 	}
 
@@ -1504,6 +1504,19 @@ func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, fun
 		},
 		Typ: targetType,
 	}, nil
+}
+
+// requiresTextStorageAssignmentCast preserves the runtime write boundary for
+// UTF-8 text columns even when the source and destination types are equal.
+// Without this, INSERT ... SELECT and UPDATE can copy bytes written in
+// MATRIXONE_NATIVE mode into MySQL-compatible text storage without validation.
+func requiresTextStorageAssignmentCast(funcName string, targetType Type) bool {
+	switch targetType.Id {
+	case int32(types.T_char), int32(types.T_varchar), int32(types.T_text):
+		return funcName == "cast_assign" || funcName == "cast_ignore" || funcName == "cast_strict"
+	default:
+		return false
+	}
 }
 
 func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colType *types.Type, isIgnore bool) (*plan.Expr, error) {
