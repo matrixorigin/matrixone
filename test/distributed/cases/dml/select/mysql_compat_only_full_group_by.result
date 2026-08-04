@@ -27,6 +27,38 @@ order by id;
 1  ¦  a  ¦  10  𝄀
 2  ¦  b  ¦  20  𝄀
 3  ¦  c  ¦  30
+select region,
+first_value(product) over (partition by product order by product) as first_product,
+sum(qty) as s_qty
+from t_sales
+where product = 'phone'
+group by region
+order by region is null, region;
+➤ region[12,-1,0]  ¦  first_product[12,-1,0]  ¦  s_qty[-5,64,0]  𝄀
+east  ¦  phone  ¦  2  𝄀
+west  ¦  phone  ¦  3  𝄀
+null  ¦  phone  ¦  5
+select region,
+first_value(product) over () as first_product,
+sum(qty) as s_qty
+from t_sales
+where product = 'phone'
+group by region
+order by region is null, region;
+➤ region[12,-1,0]  ¦  first_product[12,-1,0]  ¦  s_qty[-5,64,0]  𝄀
+east  ¦  phone  ¦  2  𝄀
+west  ¦  phone  ¦  3  𝄀
+null  ¦  phone  ¦  5
+select id,
+first_value(name) over (partition by name order by name) as first_name,
+sum(amount) as s_amount
+from t_fd
+group by id
+order by id;
+➤ id[4,32,0]  ¦  first_name[12,-1,0]  ¦  s_amount[-5,64,0]  𝄀
+1  ¦  a  ¦  10  𝄀
+2  ¦  b  ¦  20  𝄀
+3  ¦  c  ¦  30
 set session sql_mode = 'ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE';
 select region, product, sum(qty) as s_qty
 from t_sales

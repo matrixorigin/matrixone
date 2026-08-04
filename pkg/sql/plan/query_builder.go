@@ -4754,6 +4754,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			for i, proj := range ctx.projects {
 				ctx.projects[i] = builder.wrapBareColRefsInAnyValue(proj, ctx)
 			}
+			// Window functions run above AGG, so their raw argument, partition,
+			// and ordering expressions must be materialized by the aggregate
+			// stage as well. The final projection retains windowTag references.
+			for i, window := range ctx.windows {
+				ctx.windows[i] = builder.wrapBareColRefsInAnyValue(window, ctx)
+			}
 		}
 	}
 

@@ -5987,6 +5987,9 @@ func TestOnlyFullGroupByMySQLAndMatrixOneNativeModes(t *testing.T) {
 	const primaryKeyDependentCube = "select empno, ename, sum(sal) from constraint_test.emp group by cube(empno)"
 	const primaryKeyDependentRollupHaving = "select empno, sum(sal) from constraint_test.emp group by empno with rollup having ename <> ''"
 	const primaryKeyDependentRollupOrderBy = "select empno, sum(sal) from constraint_test.emp group by empno with rollup order by ename"
+	const whereConstrainedWindow = "select deptno, first_value(job) over (partition by job order by job), sum(sal) from constraint_test.emp where job = 'clerk' group by deptno"
+	const whereConstrainedWindowNoSpec = "select deptno, first_value(job) over (), sum(sal) from constraint_test.emp where job = 'clerk' group by deptno"
+	const primaryKeyDependentWindow = "select empno, first_value(ename) over (partition by ename order by ename), sum(sal) from constraint_test.emp group by empno"
 
 	tests := []struct {
 		name    string
@@ -6008,6 +6011,21 @@ func TestOnlyFullGroupByMySQLAndMatrixOneNativeModes(t *testing.T) {
 			name: "mysql only full group by allows primary key dependency",
 			mode: "ONLY_FULL_GROUP_BY",
 			sql:  primaryKeyDependent,
+		},
+		{
+			name: "mysql only full group by keeps where constrained window inputs below window stage",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  whereConstrainedWindow,
+		},
+		{
+			name: "mysql only full group by keeps where constrained window argument below window stage",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  whereConstrainedWindowNoSpec,
+		},
+		{
+			name: "mysql only full group by keeps primary key dependent window inputs below window stage",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  primaryKeyDependentWindow,
 		},
 		{
 			name: "mysql only full group by recognizes mode token case and spacing",
