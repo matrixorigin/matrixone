@@ -56,8 +56,7 @@ func AddColumn(
 		return false, err
 	}
 	colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
-	applyTableDefaultCharsetToPlanType(&colType, tableDef.DefaultCharset)
-	if err = applyColumnAttributesToType(ctx.GetContext(), &colType, specNewColumn.Attributes); err != nil {
+	if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &colType, tableDef.DefaultCharset, specNewColumn.Attributes); err != nil {
 		return false, err
 	}
 	if err = checkTypeCapSize(ctx.GetContext(), &colType, newColName); err != nil {

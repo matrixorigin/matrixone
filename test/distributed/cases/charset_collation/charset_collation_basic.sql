@@ -592,6 +592,22 @@ SELECT MIN(SUBSTRING(name, 1)) AS min_substring,
        MAX(SUBSTRING(name, 1)) AS max_substring
 FROM t_minmax_derived_bin;
 
+CREATE TABLE t_binary_default_general_columns (
+    id INT,
+    create_col VARCHAR(100) CHARACTER SET utf8mb4,
+    modify_col VARCHAR(100) COLLATE utf8mb4_bin
+) CHARACTER SET binary;
+ALTER TABLE t_binary_default_general_columns
+    ADD COLUMN add_col VARCHAR(100) COLLATE utf8mb4_general_ci;
+ALTER TABLE t_binary_default_general_columns
+    MODIFY COLUMN modify_col VARCHAR(100) COLLATE utf8mb4_general_ci;
+INSERT INTO t_binary_default_general_columns VALUES
+    (1, 'a', 'a', 'a'), (2, 'B', 'B', 'B');
+SELECT MIN(create_col) AS min_create, MAX(create_col) AS max_create,
+       MIN(add_col) AS min_add, MAX(add_col) AS max_add,
+       MIN(modify_col) AS min_modify, MAX(modify_col) AS max_modify
+FROM t_binary_default_general_columns;
+
 -- @case
 -- @desc: Test CAST with charset
 -- @label:bvt

@@ -321,6 +321,15 @@ func GetTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 }
 
 func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs []tree.ColumnAttribute) error {
+	return applyDefaultAndColumnAttributesToType(ctx, colType, colType.Charset, attrs)
+}
+
+func applyDefaultAndColumnAttributesToType(
+	ctx context.Context,
+	colType *plan.Type,
+	tableCharset uint32,
+	attrs []tree.ColumnAttribute,
+) error {
 	isGeometry := isGeometryPlanType(colType)
 	srid, sridDefined := geometrySRIDValue(colType)
 	var columnCharset string
@@ -365,11 +374,19 @@ func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs 
 			"COLLATION '%s' is not valid for CHARACTER SET '%s'",
 			columnCollation, columnCharset)
 	}
-	if columnCharset != "" {
+	// Resolve the effective identity before applying it. In particular, a binary
+	// table default converts VARCHAR to VARBINARY; applying that conversion before
+	// an explicit nonbinary column override would make the override irreversible.
+	switch {
+	case columnCharset != "":
 		applyCharsetToPlanType(colType, charset)
-	}
-	if columnCollation != "" {
+		if columnCollation != "" {
+			applyTextCharsetToPlanType(colType, collation)
+		}
+	case columnCollation != "":
 		applyTextCharsetToPlanType(colType, collation)
+	default:
+		applyTableDefaultCharsetToPlanType(colType, tableCharset)
 	}
 	if isGeometry {
 		// Scale (subtype) is already set by getTypeFromAst; an SRID column

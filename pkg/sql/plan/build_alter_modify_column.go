@@ -39,8 +39,7 @@ func updateNewColumnInTableDef(
 		return false, err
 	}
 	nTy.Charset = uint32(types.CharsetType(types.T(nTy.Id)))
-	applyTableDefaultCharsetToPlanType(&nTy, tableDef.DefaultCharset)
-	if err = applyColumnAttributesToType(ctx, &nTy, nColSpec.Attributes); err != nil {
+	if err = applyDefaultAndColumnAttributesToType(ctx, &nTy, tableDef.DefaultCharset, nColSpec.Attributes); err != nil {
 		return false, err
 	}
 

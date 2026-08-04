@@ -53,6 +53,34 @@ func TestCreateTableLikePreservesTextCollationMetadata(t *testing.T) {
 	require.Equal(t, uint32(types.CharsetBinary), FindColumn(clone.Cols, "packed").Typ.Charset)
 }
 
+func TestCreateTableLikePreservesGeneralCIDefaultWhenServerUsesBin(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.ResolveVariableFunc = func(name string, isSystem, isGlobal bool) (interface{}, error) {
+		if name == "collation_server" && isSystem && !isGlobal {
+			return "utf8mb4_bin", nil
+		}
+		return nil, nil
+	}
+	stmt, err := mysql.ParseOne(t.Context(),
+		"create table source_general(v varchar(10)) collate utf8mb4_general_ci", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+	require.NoError(t, err)
+	mock.ctxt.tables["source_general"] = built.GetDdl().GetCreateTable().GetTableDef()
+
+	likeStmt, err := mysql.ParseOne(t.Context(),
+		"create table clone_general like source_general", 1)
+	require.NoError(t, err)
+	defer likeStmt.Free()
+	clonePlan, err := BuildPlan(mock.CurrentContext(), likeStmt, false)
+	require.NoError(t, err)
+	clone := clonePlan.GetDdl().GetCreateTable().GetTableDef()
+	require.Equal(t, uint32(types.CharsetUTF8), clone.DefaultCharset)
+	require.Equal(t, int32(types.T_varchar), FindColumn(clone.Cols, "v").Typ.Id)
+	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(clone.Cols, "v").Typ.Charset)
+}
+
 func TestCreateTableLikePreservesLegacyBytewiseTextBehavior(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	stmt, err := mysql.ParseOne(t.Context(), `create table source_t(

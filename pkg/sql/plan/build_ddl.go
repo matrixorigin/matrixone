@@ -1348,8 +1348,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				return err
 			}
 			cType.Charset = uint32(types.CharsetType(types.T(cType.Id)))
-			applyTableDefaultCharsetToPlanType(&cType, tableCharset)
-			if err = applyColumnAttributesToType(ctx.GetContext(), &cType, def.Attributes); err != nil {
+			if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &cType, tableCharset, def.Attributes); err != nil {
 				return err
 			}
 			isGen := false
@@ -1375,8 +1374,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				return err
 			}
 			colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
-			applyTableDefaultCharsetToPlanType(&colType, tableCharset)
-			if err = applyColumnAttributesToType(ctx.GetContext(), &colType, def.Attributes); err != nil {
+			if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &colType, tableCharset, def.Attributes); err != nil {
 				return err
 			}
 			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||

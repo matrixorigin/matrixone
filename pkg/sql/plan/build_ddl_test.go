@@ -142,6 +142,20 @@ func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
 			wantTable: uint32(types.CharsetUTF8MB4Bin),
 		},
 		{
+			name: "column collation overrides binary table charset",
+			sql: "create table t(name varchar(10) collate utf8mb4_general_ci) " +
+				"character set binary",
+			want:      uint32(types.CharsetUTF8),
+			wantTable: uint32(types.CharsetBinary),
+		},
+		{
+			name: "column charset overrides binary table charset",
+			sql: "create table t(name varchar(10) character set utf8mb4) " +
+				"character set binary",
+			want:      uint32(types.CharsetUTF8),
+			wantTable: uint32(types.CharsetBinary),
+		},
+		{
 			name: "column collation wins independent of option order",
 			sql: "create table t(name varchar(10) collate utf8mb4_bin " +
 				"character set utf8mb4)",
@@ -161,6 +175,7 @@ func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
 			tableDef := p.GetDdl().GetCreateTable().GetTableDef()
 			cols := tableDef.GetCols()
 			require.NotEmpty(t, cols)
+			require.Equal(t, int32(types.T_varchar), cols[0].Typ.Id)
 			require.Equal(t, tc.want, cols[0].Typ.Charset)
 			require.Equal(t, tc.wantTable, tableDef.DefaultCharset)
 		})
