@@ -16917,10 +16917,23 @@ func TestLifecycleCleanupRootsIsSystemAccountTable(t *testing.T) {
 }
 
 func TestLifecycleTenantCatalogTablesArePredefined(t *testing.T) {
+	wantDropOrder := []string{
+		"drop table if exists mo_catalog.mo_lifecycle_restore_chunks;",
+		"drop table if exists mo_catalog.mo_lifecycle_restore_attempts;",
+		"drop table if exists mo_catalog.mo_lifecycle_ttl_receipts;",
+		"drop table if exists mo_catalog.mo_lifecycle_datasets;",
+		"drop table if exists mo_catalog.mo_lifecycle_bindings;",
+	}
+	require.Equal(t, wantDropOrder, getSqlForDropAccount()[:len(wantDropOrder)])
 	for _, definition := range catalog.LifecycleTenantTableDefinitions {
 		require.Contains(t, predefinedTables, definition.Name)
 		require.False(t, isClusterTable(catalog.MO_CATALOG, definition.Name))
 		require.Contains(t, createSqls, definition.DDL)
+		require.Contains(t, getSqlForDropAccount(), fmt.Sprintf(
+			"drop table if exists %s.%s;",
+			definition.Schema,
+			definition.Name,
+		))
 	}
 }
 

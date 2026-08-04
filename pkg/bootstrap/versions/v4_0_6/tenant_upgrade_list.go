@@ -88,6 +88,20 @@ func populateInformationSchemaCharacterSets() versions.UpgradeEntry {
 	}
 }
 
+func init() {
+	for _, table := range catalog.LifecycleTenantTableDefinitions {
+		tenantUpgEntries = append(tenantUpgEntries, versions.UpgradeEntry{
+			Schema:    table.Schema,
+			TableName: table.Name,
+			UpgType:   versions.CREATE_NEW_TABLE,
+			UpgSql:    table.DDL,
+			CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+				return versions.CheckTableDefinition(txn, accountID, table.Schema, table.Name)
+			},
+		})
+	}
+}
+
 func newMongoDBCatalogTable(name, ddl string) versions.UpgradeEntry {
 	return versions.UpgradeEntry{
 		Schema:    catalog.MO_CATALOG,
