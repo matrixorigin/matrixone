@@ -1528,6 +1528,41 @@ func TestFetchRowsSkipsPartialNull(t *testing.T) {
 	require.Equal(t, packer.Bytes(), rows[1])
 }
 
+func TestFetchRowsUsesInputRangeBeyondLimit(t *testing.T) {
+	mp := mpool.MustNew("test")
+	vec := vector.NewVec(types.T_uint64.ToType())
+	defer vec.Free(mp)
+	for _, value := range []uint64{100, 200, 300} {
+		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+	}
+
+	fetcher := GetFetchRowsFunc(types.T_uint64.ToType())
+	packer := types.NewPacker()
+	ok, rows, granularity := fetcher(vec, packer, types.T_uint64.ToType(), 2, false, nil, nil)
+	require.True(t, ok)
+	require.Equal(t, lock.Granularity_Range, granularity)
+	require.Len(t, rows, 2)
+	packer.Reset()
+	packer.EncodeUint64(100)
+	require.Equal(t, packer.Bytes(), rows[0])
+	packer.Reset()
+	packer.EncodeUint64(300)
+	require.Equal(t, packer.Bytes(), rows[1])
+
+	// An explicit table lock is still full-domain; only the automatic
+	// cardinality fallback must preserve the input's bounded range.
+	ok, rows, granularity = fetcher(vec, packer, types.T_uint64.ToType(), 2, true, nil, nil)
+	require.True(t, ok)
+	require.Equal(t, lock.Granularity_Range, granularity)
+	require.Len(t, rows, 2)
+	packer.Reset()
+	packer.EncodeUint64(0)
+	require.Equal(t, packer.Bytes(), rows[0])
+	packer.Reset()
+	packer.EncodeUint64(math.MaxUint64)
+	require.Equal(t, packer.Bytes(), rows[1])
+}
+
 func TestDecimal256(t *testing.T) {
 	packer := types.NewPacker()
 	decimal256Fn := func(v types.Decimal256) []byte {

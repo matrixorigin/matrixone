@@ -174,7 +174,6 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	query.DetectSqls = detectSqls
 	reduceSinkSinkScanNodes(query)
 	builder.tempOptimizeForDML()
-	reCheckifNeedLockWholeTable(builder)
 	query.StmtType = plan.Query_UPDATE
 	return &Plan{
 		Plan: &plan.Plan_Query{

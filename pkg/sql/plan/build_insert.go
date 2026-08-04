@@ -190,7 +190,6 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	query.DetectSqls = sqls
 	reduceSinkSinkScanNodes(query)
 	builder.tempOptimizeForDML()
-	reCheckifNeedLockWholeTable(builder)
 
 	return &Plan{
 		Plan: &plan.Plan_Query{

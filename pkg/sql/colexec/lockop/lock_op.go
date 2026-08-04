@@ -323,6 +323,10 @@ func performLock(
 		if len(group) > 1 {
 			hasNewVersionInRangeFunc = lockOp.hasNewVersionInRangeForTargets(group)
 		}
+		// fetchRows converts an oversized input into a bounded primary-key range,
+		// so lock memory stays bounded without widening the conflict domain. Keep
+		// the planner's row-scoped target here; promoting it to a full-table range
+		// based only on cardinality would serialize disjoint key ranges.
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
 			lockOp.engine,

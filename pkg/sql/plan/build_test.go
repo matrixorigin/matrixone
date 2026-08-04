@@ -34,6 +34,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -2183,6 +2184,57 @@ func TestInsert(t *testing.T) {
 		"INSERT NATION333 (N_NATIONKEY, N_REGIONKEY, N_NAME2222) SELECT 1, 2, 3 FROM NATION2",                        // table not exist
 	}
 	runTestShouldError(mock, t, sqls)
+}
+
+type planLockConfigOnlyService struct {
+	lockservice.LockService
+}
+
+// The planner only needs the threshold from the lock service. Keep this test
+// double free of lock-service goroutines and remote state.
+func (s *planLockConfigOnlyService) GetConfig() lockservice.Config {
+	return lockservice.Config{ServiceID: "plan-test", MaxLockRowCount: 1}
+}
+
+func TestLargeDMLKeepsRowScopedLockTarget(t *testing.T) {
+	sqls := []string{
+		"INSERT INTO NATION SELECT * FROM NATION2",
+		"UPDATE NATION SET N_NAME = 'updated'",
+		"DELETE FROM NATION",
+		"REPLACE INTO NATION SELECT * FROM NATION2",
+		"SELECT N_NATIONKEY FROM NATION FOR UPDATE",
+	}
+
+	for _, sql := range sqls {
+		t.Run(sql, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			proc := testutil.NewProc(t)
+			proc.Base.LockService = &planLockConfigOnlyService{}
+			rt := moruntime.ServiceRuntime(proc.GetService())
+			if rt == nil {
+				rt = moruntime.DefaultRuntime()
+				moruntime.SetupServiceBasedRuntime(proc.GetService(), rt)
+			}
+			rt.SetGlobalVariables("optimizer_hints", "")
+			mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+
+			logicPlan, err := runOneStmt(mock, t, sql)
+			require.NoError(t, err)
+
+			lockNodeCount := 0
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType != plan.Node_LOCK_OP {
+					continue
+				}
+				lockNodeCount++
+				for _, target := range node.LockTargets {
+					require.False(t, target.LockTable,
+						"large DML must retain row/range lock target: %s", sql)
+				}
+			}
+			require.NotZero(t, lockNodeCount, "expected a lock operator: %s", sql)
+		})
+	}
 }
 
 func TestInsertIntoMarkedTemporaryTableUsesModernPath(t *testing.T) {
