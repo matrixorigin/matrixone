@@ -19,11 +19,39 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCreateTableLikePreservesTextCollationMetadata(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	stmt, err := mysql.ParseOne(t.Context(), `create table source_t(
+		bin_text varchar(10),
+		general_text varchar(10) collate utf8mb4_general_ci,
+		packed varchar(10)
+	) collate utf8mb4_bin`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+	require.NoError(t, err)
+	source := built.GetDdl().GetCreateTable().GetTableDef()
+	FindColumn(source.Cols, "packed").Typ.Charset = uint32(types.CharsetBinary)
+	mock.ctxt.tables["source_t"] = source
+
+	likeStmt, err := mysql.ParseOne(t.Context(), "create table clone_t like source_t", 1)
+	require.NoError(t, err)
+	defer likeStmt.Free()
+	clonePlan, err := BuildPlan(mock.CurrentContext(), likeStmt, false)
+	require.NoError(t, err)
+	clone := clonePlan.GetDdl().GetCreateTable().GetTableDef()
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), clone.DefaultCharset)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), FindColumn(clone.Cols, "bin_text").Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(clone.Cols, "general_text").Typ.Charset)
+	require.Equal(t, uint32(types.CharsetBinary), FindColumn(clone.Cols, "packed").Typ.Charset)
+}
 
 func TestCreateTableLikePreservesCheckAcrossSQLModes(t *testing.T) {
 	testCases := []struct {

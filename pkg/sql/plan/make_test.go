@@ -44,15 +44,17 @@ func Test_rewriteDecimalTypeIfNecessary(t *testing.T) {
 }
 
 func TestPlanTypeCharsetRoundTrip(t *testing.T) {
-	original := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetBinary)
-	planType := makePlan2Type(&original)
-	require.Equal(t, uint32(types.CharsetBinary), planType.Charset)
-	require.Equal(t, original, makeTypeByPlan2Type(planType))
-	encoded, err := planType.Marshal()
-	require.NoError(t, err)
-	var decoded plan.Type
-	require.NoError(t, decoded.Unmarshal(encoded))
-	require.Equal(t, planType, decoded)
+	for _, charset := range []uint8{types.CharsetBinary, types.CharsetUTF8MB4Bin} {
+		original := types.NewWithCharset(types.T_varchar, 32, 0, charset)
+		planType := makePlan2Type(&original)
+		require.Equal(t, uint32(charset), planType.Charset)
+		require.Equal(t, original, makeTypeByPlan2Type(planType))
+		encoded, err := planType.Marshal()
+		require.NoError(t, err)
+		var decoded plan.Type
+		require.NoError(t, decoded.Unmarshal(encoded))
+		require.Equal(t, planType, decoded)
+	}
 
 	// Charset was absent from older plans. Keep the OID-derived binary default.
 	legacyBinary := makeTypeByPlan2Type(plan.Type{Id: int32(types.T_binary), Width: 8})

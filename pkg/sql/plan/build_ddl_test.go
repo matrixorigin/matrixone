@@ -111,27 +111,40 @@ func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
 			name: "table binary collation",
 			sql: "create table t(name varchar(10)) character set utf8mb4 " +
 				"collate utf8mb4_bin",
-			want:      uint32(types.CharsetBinary),
-			wantTable: uint32(types.CharsetBinary),
+			want:      uint32(types.CharsetUTF8MB4Bin),
+			wantTable: uint32(types.CharsetUTF8MB4Bin),
 		},
 		{
 			name: "table binary collation before charset",
 			sql: "create table t(name varchar(10)) collate utf8mb4_bin " +
 				"character set utf8mb4",
-			want:      uint32(types.CharsetBinary),
-			wantTable: uint32(types.CharsetBinary),
+			want:      uint32(types.CharsetUTF8MB4Bin),
+			wantTable: uint32(types.CharsetUTF8MB4Bin),
 		},
 		{
 			name: "column binary collation",
 			sql:  "create table t(name varchar(10) collate utf8mb4_bin)",
-			want: uint32(types.CharsetBinary),
+			want: uint32(types.CharsetUTF8MB4Bin),
 		},
 		{
 			name: "column collation overrides table",
 			sql: "create table t(name varchar(10) collate utf8mb4_general_ci) " +
 				"collate utf8mb4_bin",
 			want:      uint32(types.CharsetUTF8),
-			wantTable: uint32(types.CharsetBinary),
+			wantTable: uint32(types.CharsetUTF8MB4Bin),
+		},
+		{
+			name: "column charset overrides table collation",
+			sql: "create table t(name varchar(10) character set utf8mb4) " +
+				"collate utf8mb4_bin",
+			want:      uint32(types.CharsetUTF8),
+			wantTable: uint32(types.CharsetUTF8MB4Bin),
+		},
+		{
+			name: "column collation wins independent of option order",
+			sql: "create table t(name varchar(10) collate utf8mb4_bin " +
+				"character set utf8mb4)",
+			want: uint32(types.CharsetUTF8MB4Bin),
 		},
 	}
 
@@ -148,6 +161,54 @@ func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
 			require.NotEmpty(t, cols)
 			require.Equal(t, tc.want, cols[0].Typ.Charset)
 			require.Equal(t, tc.wantTable, tableDef.DefaultCharset)
+		})
+	}
+}
+
+func TestBuildCreateTableCharacterSetBinaryConvertsStringTypes(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table t(c char(4) character set binary, "+
+			"v varchar(8) character set binary, x text character set binary)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 3)
+	require.Equal(t, int32(types.T_binary), cols[0].Typ.Id)
+	require.Equal(t, int32(types.T_varbinary), cols[1].Typ.Id)
+	require.Equal(t, int32(types.T_blob), cols[2].Typ.Id)
+	for _, col := range cols[:3] {
+		require.Equal(t, uint32(types.CharsetBinary), col.Typ.Charset)
+	}
+}
+
+func TestBuildCreateTableBinaryDefaultConvertsUnqualifiedStringType(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table t(v varchar(8)) character set binary", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateTable().GetTableDef()
+	require.Equal(t, uint32(types.CharsetBinary), tableDef.DefaultCharset)
+	require.Equal(t, int32(types.T_varbinary), tableDef.Cols[0].Typ.Id)
+	require.Equal(t, uint32(types.CharsetBinary), tableDef.Cols[0].Typ.Charset)
+}
+
+func TestBuildCreateTableRejectsIncompatibleCharsetAndCollation(t *testing.T) {
+	for _, sql := range []string{
+		"create table t(v varchar(8)) character set utf8mb4 collate binary",
+		"create table t(v varchar(8) character set binary collate utf8mb4_bin)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+			require.ErrorContains(t, err, "is not valid for CHARACTER SET")
 		})
 	}
 }

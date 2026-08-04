@@ -126,7 +126,10 @@ func TestType_Eq(t *testing.T) {
 
 	utf8 := New(T_varchar, 32, 0)
 	binary := NewWithCharset(T_varchar, 32, 0, CharsetBinary)
+	binaryCollation := NewWithCharset(T_varchar, 32, 0, CharsetUTF8MB4Bin)
 	require.False(t, utf8.Eq(binary))
+	require.False(t, utf8.Eq(binaryCollation))
+	require.False(t, binary.Eq(binaryCollation))
 
 	legacyVarbinary := New(T_varbinary, 32, 0)
 	legacyVarbinary.Charset = CharsetUTF8

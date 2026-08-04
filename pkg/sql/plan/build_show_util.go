@@ -146,6 +146,7 @@ func constructCreateTableSQL(
 			typeStr = strings.ToLower(typeStr)
 		}
 		fmt.Fprintf(buf, "  %s %s", sqlquote.Ident(colNameOrigin), typeStr)
+		appendTextCharsetForShowCreate(buf, col.Typ, tableDef.DefaultCharset)
 
 		//-------------------------------------------------------------------------------------------------------------
 		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
@@ -539,6 +540,7 @@ func constructCreateTableSQL(
 		createStr += "\n"
 	}
 	createStr += ")"
+	createStr += tableCharsetForShowCreate(tableDef.DefaultCharset)
 
 	var comment string
 	var properties []*plan.Property // Collect non-system properties for PROPERTIES clause
@@ -746,6 +748,39 @@ func constructCreateTableSQL(
 		stmt, err = getRewriteSQLStmt(ctx, rewriteStr)
 	}
 	return createStr, stmt, err
+}
+
+func appendTextCharsetForShowCreate(buf *bytes.Buffer, typ plan.Type, tableCharset uint32) {
+	switch types.T(typ.Id) {
+	case types.T_char, types.T_varchar, types.T_text:
+	default:
+		return
+	}
+
+	switch typ.Charset {
+	case uint32(types.CharsetUTF8MB4Bin):
+		buf.WriteString(" COLLATE utf8mb4_bin")
+	case uint32(types.CharsetBinary):
+		// Packed binary values can deliberately use a VARCHAR container. COLLATE
+		// binary is the lossless MO spelling for that representation; CHARACTER
+		// SET binary would instead change the physical type to VARBINARY/BLOB.
+		buf.WriteString(" COLLATE binary")
+	case uint32(types.CharsetUTF8):
+		if tableCharset != uint32(types.CharsetUTF8) {
+			buf.WriteString(" COLLATE utf8mb4_general_ci")
+		}
+	}
+}
+
+func tableCharsetForShowCreate(charset uint32) string {
+	switch charset {
+	case uint32(types.CharsetUTF8MB4Bin):
+		return " COLLATE=utf8mb4_bin"
+	case uint32(types.CharsetBinary):
+		return " CHARACTER SET=binary"
+	default:
+		return ""
+	}
 }
 
 func indexIncludeColumnsToString(includedColumns []string, colNameToOriginName map[string]string) string {

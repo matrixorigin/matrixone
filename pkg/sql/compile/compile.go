@@ -5107,6 +5107,16 @@ func supportsRemoteOrderedAggregates(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion6
 }
 
+func supportsRemoteTextCollationAggregates(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion12
+}
+
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 	return node.Stats.HashmapStats != nil &&
 		node.Stats.HashmapStats.Shuffle &&

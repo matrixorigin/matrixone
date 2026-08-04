@@ -38,8 +38,8 @@ func TestTextMinMaxUsesGeneralCICollation(t *testing.T) {
 		{name: "varchar max", oid: types.T_varchar, aggID: AggIdOfMax, expect: "E"},
 		{name: "text min", oid: types.T_text, aggID: AggIdOfMin, expect: "a"},
 		{name: "text max", oid: types.T_text, aggID: AggIdOfMax, expect: "E"},
-		{name: "varchar binary collation min", oid: types.T_varchar, charset: types.CharsetBinary, aggID: AggIdOfMin, expect: "C"},
-		{name: "varchar binary collation max", oid: types.T_varchar, charset: types.CharsetBinary, aggID: AggIdOfMax, expect: "c"},
+		{name: "varchar binary collation min", oid: types.T_varchar, charset: types.CharsetUTF8MB4Bin, aggID: AggIdOfMin, expect: "C"},
+		{name: "varchar binary collation max", oid: types.T_varchar, charset: types.CharsetUTF8MB4Bin, aggID: AggIdOfMax, expect: "c"},
 		{name: "binary min", oid: types.T_binary, aggID: AggIdOfMin, expect: "C"},
 		{name: "binary max", oid: types.T_binary, aggID: AggIdOfMax, expect: "c"},
 	}

@@ -56,7 +56,7 @@ func AddColumn(
 		return false, err
 	}
 	colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
-	applyTextCharsetToPlanType(&colType, tableDef.DefaultCharset)
+	applyTableDefaultCharsetToPlanType(&colType, tableDef.DefaultCharset)
 	if err = applyColumnAttributesToType(ctx.GetContext(), &colType, specNewColumn.Attributes); err != nil {
 		return false, err
 	}
@@ -194,6 +194,8 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 				return nil, err
 			}
 			newCol.GeneratedCol = generatedCol
+		case *tree.AttributeCharset, *tree.AttributeCollate:
+			// Type metadata was resolved centrally before constructing the column.
 			//default:
 			//	return nil, moerr.NewNotSupported(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}

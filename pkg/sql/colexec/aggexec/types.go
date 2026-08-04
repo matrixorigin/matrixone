@@ -225,7 +225,27 @@ func MakeAgg(
 	aggID int64, isDistinct bool,
 	param ...types.Type,
 ) (AggFuncExec, error) {
-	exec, ok, err := makeSpecialAggExec(mg, aggID, isDistinct, param...)
+	return makeAgg(mg, aggID, isDistinct, false, param...)
+}
+
+// MakeAggWithLegacyTextMinMax is used only while decoding a remote pipeline
+// during the MORPC v9 -> v10 rollout. It preserves the old bytewise text
+// MIN/MAX comparator without changing the argument or result type metadata.
+func MakeAggWithLegacyTextMinMax(
+	mg *mpool.MPool,
+	aggID int64, isDistinct bool,
+	param ...types.Type,
+) (AggFuncExec, error) {
+	return makeAgg(mg, aggID, isDistinct, true, param...)
+}
+
+func makeAgg(
+	mg *mpool.MPool,
+	aggID int64, isDistinct bool,
+	legacyTextMinMax bool,
+	param ...types.Type,
+) (AggFuncExec, error) {
+	exec, ok, err := makeSpecialAggExec(mg, aggID, isDistinct, legacyTextMinMax, param...)
 	if err != nil {
 		return nil, err
 	}
@@ -238,7 +258,7 @@ func MakeAgg(
 
 func makeSpecialAggExec(
 	mp *mpool.MPool,
-	id int64, isDistinct bool, params ...types.Type,
+	id int64, isDistinct bool, legacyTextMinMax bool, params ...types.Type,
 ) (AggFuncExec, bool, error) {
 	if id == AggIdOfMaxBy && len(params) != 3 {
 		return nil, true, moerr.NewInternalErrorNoCtx("max_by requires value, order, and tie arguments")
@@ -268,9 +288,9 @@ func makeSpecialAggExec(
 	case AggIdOfAny:
 		return makeAnyValueExec(mp, id, params[0]), true, nil
 	case AggIdOfMin:
-		return makeMinMaxExec(mp, id, true, params[0]), true, nil
+		return makeMinMaxExecWithLegacyText(mp, id, true, params[0], legacyTextMinMax), true, nil
 	case AggIdOfMax:
-		return makeMinMaxExec(mp, id, false, params[0]), true, nil
+		return makeMinMaxExecWithLegacyText(mp, id, false, params[0], legacyTextMinMax), true, nil
 	case AggIdOfMaxBy:
 		return makeMaxByExec(mp, id, false, params), true, nil
 	case AggIdOfMaxByNonNull:

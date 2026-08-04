@@ -469,6 +469,16 @@ func (exec *minMaxExecBytes) Flush() ([]*vector.Vector, error) {
 }
 
 func makeMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type) AggFuncExec {
+	return makeMinMaxExecWithLegacyText(mp, aggID, isMin, param, false)
+}
+
+func makeMinMaxExecWithLegacyText(
+	mp *mpool.MPool,
+	aggID int64,
+	isMin bool,
+	param types.Type,
+	legacyTextComparator bool,
+) AggFuncExec {
 	switch param.Oid {
 	case types.T_bool:
 		return newBoolMinMaxExec(mp, aggID, isMin, param)
@@ -515,7 +525,8 @@ func makeMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type) 
 	case types.T_enum:
 		return newGenericMinMaxExec[types.Enum](mp, aggID, isMin, param)
 	case types.T_char, types.T_varchar, types.T_text:
-		if param.Charset == types.CharsetBinary {
+		if legacyTextComparator || param.Charset == types.CharsetBinary ||
+			param.Charset == types.CharsetUTF8MB4Bin {
 			return newStrMinMaxExec(mp, aggID, isMin, param)
 		}
 		return newTextMinMaxExec(mp, aggID, isMin, param)
