@@ -1431,7 +1431,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		enforced   bool
 	}
 	pendingChecks := make([]pendingCheckDef, 0)
-	tableCharset, err := tableDefaultCharset(ctx.GetContext(), stmt.Options)
+	tableCharset, err := tableDefaultCharset(ctx, stmt.Options)
 	if err != nil {
 		return err
 	}

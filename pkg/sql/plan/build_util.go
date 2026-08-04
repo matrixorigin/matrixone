@@ -356,7 +356,7 @@ func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs 
 		var ok bool
 		collation, ok = collationForName(columnCollation)
 		if !ok {
-			return moerr.NewInvalidInputf(ctx, "unsupported collation '%s'", columnCollation)
+			return unsupportedCollationError(ctx, columnCollation)
 		}
 	}
 	if columnCharset != "" && columnCollation != "" &&
@@ -433,6 +433,29 @@ func collationForName(name string) (uint32, bool) {
 	}
 }
 
+func unsupportedCollationError(ctx context.Context, name string) error {
+	// Older MatrixOne releases accepted these spellings but collapsed them to
+	// general_ci or byte ordering. A dump can preserve that historical MO
+	// behavior by replacing the name with the explicit supported identity below;
+	// keeping the rejected spelling would falsely promise MySQL UCA semantics.
+	var replacement string
+	switch strings.ToLower(name) {
+	case "utf8_unicode_ci", "utf8mb3_unicode_ci":
+		replacement = "utf8_general_ci"
+	case "utf8mb4_unicode_ci", "utf8mb4_0900_ai_ci",
+		"utf8mb4_de_pb_0900_ai_ci", "utf8mb4_is_0900_ai_ci", "utf8mb4_lv_0900_ai_ci":
+		replacement = "utf8mb4_general_ci"
+	case "utf8mb4_0900_bin":
+		replacement = "utf8mb4_bin"
+	}
+	if replacement != "" {
+		return moerr.NewInvalidInputf(ctx,
+			"unsupported collation '%s'; replace it with '%s' when restoring legacy MatrixOne DDL",
+			name, replacement)
+	}
+	return moerr.NewInvalidInputf(ctx, "unsupported collation '%s'", name)
+}
+
 func applyTableDefaultCharsetToPlanType(typ *plan.Type, charset uint32) {
 	applyCharsetToPlanType(typ, charset)
 }
@@ -460,7 +483,7 @@ func canonicalCharsetName(name string) string {
 	}
 }
 
-func tableDefaultCharset(ctx context.Context, options []tree.TableOption) (uint32, error) {
+func tableDefaultCharset(ctx CompilerContext, options []tree.TableOption) (uint32, error) {
 	tableCharset := uint32(types.CharsetUTF8)
 	tableCollation := uint32(types.CharsetUTF8)
 	var tableCharsetName string
@@ -473,26 +496,47 @@ func tableDefaultCharset(ctx context.Context, options []tree.TableOption) (uint3
 			var ok bool
 			tableCharset, ok = charsetForName(opt.Charset)
 			if !ok {
-				return 0, moerr.NewInvalidInputf(ctx, "unsupported character set '%s'", opt.Charset)
+				return 0, moerr.NewInvalidInputf(ctx.GetContext(), "unsupported character set '%s'", opt.Charset)
 			}
 		case *tree.TableOptionCollate:
 			tableCollationName = opt.Collate
 			var ok bool
 			tableCollation, ok = collationForName(opt.Collate)
 			if !ok {
-				return 0, moerr.NewInvalidInputf(ctx, "unsupported collation '%s'", opt.Collate)
+				return 0, unsupportedCollationError(ctx.GetContext(), opt.Collate)
 			}
 			hasTableCollation = true
 		}
 	}
 	if tableCharsetName != "" && tableCollationName != "" &&
 		!charsetAndCollationCompatible(tableCharsetName, tableCollationName) {
-		return 0, moerr.NewInvalidInputf(ctx,
+		return 0, moerr.NewInvalidInputf(ctx.GetContext(),
 			"COLLATION '%s' is not valid for CHARACTER SET '%s'",
 			tableCollationName, tableCharsetName)
 	}
 	if hasTableCollation {
 		return tableCollation, nil
+	}
+	if tableCharsetName == "" {
+		// An unqualified table inherits the effective server collation. Older
+		// compiler contexts and internal callers may not expose session variables,
+		// in which case the compiled-in general_ci default remains the fallback.
+		value, err := ctx.ResolveVariable("collation_server", true, false)
+		if err != nil {
+			return tableCharset, nil
+		}
+		if value != nil {
+			name, ok := value.(string)
+			if !ok {
+				return 0, moerr.NewInternalError(ctx.GetContext(), "collation_server is not a string")
+			}
+			if name != "" {
+				if serverCollation, supported := collationForName(name); supported {
+					return serverCollation, nil
+				}
+				return 0, unsupportedCollationError(ctx.GetContext(), name)
+			}
+		}
 	}
 	return tableCharset, nil
 }

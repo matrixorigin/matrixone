@@ -576,6 +576,22 @@ INSERT INTO t_minmax_cast_ci VALUES ('a'), ('B');
 SELECT MIN(CAST(name AS CHAR)) as min_name, MAX(CAST(name AS CHAR)) as max_name
 FROM t_minmax_cast_ci;
 
+CREATE TABLE t_minmax_derived_bin (
+    name VARCHAR(100)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+
+INSERT INTO t_minmax_derived_bin VALUES ('a'), ('B');
+
+SELECT MIN(CONVERT(name USING binary)) AS min_binary,
+       MAX(CONVERT(name USING binary)) AS max_binary
+FROM t_minmax_derived_bin;
+SELECT MIN(CONVERT(name USING utf8mb4)) AS min_utf8,
+       MAX(CONVERT(name USING utf8mb4)) AS max_utf8
+FROM t_minmax_derived_bin;
+SELECT MIN(SUBSTRING(name, 1)) AS min_substring,
+       MAX(SUBSTRING(name, 1)) AS max_substring
+FROM t_minmax_derived_bin;
+
 -- @case
 -- @desc: Test CAST with charset
 -- @label:bvt

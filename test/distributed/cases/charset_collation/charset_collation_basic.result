@@ -17,44 +17,24 @@ utf8mb4    utf8mb4_bin    4
 SHOW COLLATION;
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
 binary    binary    63    YES    Yes    1    NO PAD
-utf8_bin    utf8    83    YES    Yes    1    NO PAD
-utf8_general_ci    utf8    33        Yes    1    PAD SPACE
-utf8_unicode_ci    utf8    192        Yes    1    PAD SPACE
-utf8mb4_0900_ai_ci    utf8mb4    255        Yes    0    NO PAD
-utf8mb4_0900_bin    utf8mb4    309        Yes    1    NO PAD
-utf8mb4_bin    utf8mb4    46    YES    Yes    1    NO PAD
-utf8mb4_de_pb_0900_ai_ci    utf8mb4    256        Yes    0    NO PAD
-utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
-utf8mb4_is_0900_ai_ci    utf8mb4    257        Yes    0    NO PAD
-utf8mb4_lv_0900_ai_ci    utf8mb4    258        Yes    0    NO PAD
-utf8mb4_unicode_ci    utf8mb4    224        Yes    1    PAD SPACE
+utf8_bin    utf8    83        Yes    1    NO PAD
+utf8_general_ci    utf8    33    YES    Yes    1    PAD SPACE
+utf8mb4_bin    utf8mb4    46        Yes    1    NO PAD
+utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 SHOW COLLATION LIKE 'utf8mb4%';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_0900_ai_ci    utf8mb4    255        Yes    0    NO PAD
-utf8mb4_0900_bin    utf8mb4    309        Yes    1    NO PAD
-utf8mb4_bin    utf8mb4    46    YES    Yes    1    NO PAD
-utf8mb4_de_pb_0900_ai_ci    utf8mb4    256        Yes    0    NO PAD
-utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
-utf8mb4_is_0900_ai_ci    utf8mb4    257        Yes    0    NO PAD
-utf8mb4_lv_0900_ai_ci    utf8mb4    258        Yes    0    NO PAD
-utf8mb4_unicode_ci    utf8mb4    224        Yes    1    PAD SPACE
+utf8mb4_bin    utf8mb4    46        Yes    1    NO PAD
+utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 SHOW COLLATION WHERE Charset = 'utf8mb4';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_0900_ai_ci    utf8mb4    255        Yes    0    NO PAD
-utf8mb4_0900_bin    utf8mb4    309        Yes    1    NO PAD
-utf8mb4_bin    utf8mb4    46    YES    Yes    1    NO PAD
-utf8mb4_de_pb_0900_ai_ci    utf8mb4    256        Yes    0    NO PAD
-utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
-utf8mb4_is_0900_ai_ci    utf8mb4    257        Yes    0    NO PAD
-utf8mb4_lv_0900_ai_ci    utf8mb4    258        Yes    0    NO PAD
-utf8mb4_unicode_ci    utf8mb4    224        Yes    1    PAD SPACE
+utf8mb4_bin    utf8mb4    46        Yes    1    NO PAD
+utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 SHOW COLLATION WHERE Collation = 'utf8mb4_bin';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_bin    utf8mb4    46    YES    Yes    1    NO PAD
+utf8mb4_bin    utf8mb4    46        Yes    1    NO PAD
 SHOW COLLATION WHERE Charset = 'utf8mb4' AND Collation LIKE '%bin%';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_0900_bin    utf8mb4    309        Yes    1    NO PAD
-utf8mb4_bin    utf8mb4    46    YES    Yes    1    NO PAD
+utf8mb4_bin    utf8mb4    46        Yes    1    NO PAD
 CREATE DATABASE charset_test;
 USE charset_test;
 CREATE TABLE charset_metadata_repro (
@@ -129,7 +109,7 @@ CREATE TABLE t_utf8mb4_unicode_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-invalid input: unsupported collation 'utf8mb4_unicode_ci'
+invalid input: unsupported collation 'utf8mb4_unicode_ci'; replace it with 'utf8mb4_general_ci' when restoring legacy MatrixOne DDL
 CREATE TABLE t_column_charset (
 id INT PRIMARY KEY,
 name_default VARCHAR(100),
@@ -652,6 +632,25 @@ SELECT MIN(CAST(name AS CHAR)) as min_name, MAX(CAST(name AS CHAR)) as max_name
 FROM t_minmax_cast_ci;
 min_name    max_name
 a    B
+CREATE TABLE t_minmax_derived_bin (
+name VARCHAR(100)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+INSERT INTO t_minmax_derived_bin VALUES ('a'), ('B');
+SELECT MIN(CONVERT(name USING binary)) AS min_binary,
+MAX(CONVERT(name USING binary)) AS max_binary
+FROM t_minmax_derived_bin;
+min_binary    max_binary
+B    a
+SELECT MIN(CONVERT(name USING utf8mb4)) AS min_utf8,
+MAX(CONVERT(name USING utf8mb4)) AS max_utf8
+FROM t_minmax_derived_bin;
+min_utf8    max_utf8
+a    B
+SELECT MIN(SUBSTRING(name, 1)) AS min_substring,
+MAX(SUBSTRING(name, 1)) AS max_substring
+FROM t_minmax_derived_bin;
+min_substring    max_substring
+B    a
 SELECT CAST('test' AS CHAR CHARACTER SET utf8mb4);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 36 near " CHARACTER SET utf8mb4);";
 SELECT CAST('你好' AS CHAR(10) CHARACTER SET utf8mb4);

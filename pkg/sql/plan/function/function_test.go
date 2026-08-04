@@ -578,6 +578,99 @@ func TestConcatFunctionsPreserveStringCollation(t *testing.T) {
 	}
 }
 
+func TestDerivedStringFunctionsPreserveSourceCollation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	general := types.T_varchar.ToType()
+	binaryCollation := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4Bin)
+	integer := types.T_int64.ToType()
+
+	tests := []struct {
+		name       string
+		inputs     []types.Type
+		wantSource int
+	}{
+		{name: "left", inputs: []types.Type{binaryCollation, integer}, wantSource: 0},
+		{name: "right", inputs: []types.Type{binaryCollation, integer}, wantSource: 0},
+		{name: "substring", inputs: []types.Type{binaryCollation, integer}, wantSource: 0},
+		{name: "replace", inputs: []types.Type{binaryCollation, general, general}, wantSource: 0},
+		{name: "ltrim", inputs: []types.Type{binaryCollation}, wantSource: 0},
+		{name: "rtrim", inputs: []types.Type{binaryCollation}, wantSource: 0},
+		{name: "trim", inputs: []types.Type{general, general, binaryCollation}, wantSource: 2},
+		{name: "elt", inputs: []types.Type{integer, binaryCollation, general}, wantSource: 1},
+		{name: "make_set", inputs: []types.Type{integer, binaryCollation, general}, wantSource: 1},
+		{name: "export_set", inputs: []types.Type{integer, binaryCollation, general}, wantSource: 1},
+		{name: "quote", inputs: []types.Type{binaryCollation}, wantSource: 0},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := GetFunctionByName(proc.Ctx, test.name, test.inputs)
+			require.NoError(t, err)
+			require.Equal(t, test.inputs[test.wantSource].Charset, result.GetReturnType().Charset)
+		})
+	}
+}
+
+func TestMinConvertUsingAndSubstringUseDerivedCollation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputType := types.NewWithCharset(types.T_varchar, 10, 0, types.CharsetUTF8MB4Bin)
+	input := vector.NewVec(inputType)
+	defer input.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(input, []byte("a"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(input, []byte("B"), false, proc.Mp()))
+
+	assertMin := func(t *testing.T, values *vector.Vector, expected string) {
+		minExec, err := aggexec.MakeAgg(proc.Mp(), aggexec.AggIdOfMin, false, *values.GetType())
+		require.NoError(t, err)
+		defer minExec.Free()
+		require.NoError(t, minExec.GroupGrow(1))
+		require.NoError(t, minExec.BulkFill(0, []*vector.Vector{values}))
+		results, err := minExec.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		defer results[0].Free(proc.Mp())
+		require.Equal(t, expected, string(results[0].GetBytesAt(0)))
+	}
+
+	for _, test := range []struct {
+		name        string
+		charset     uint8
+		expectedMin string
+	}{
+		{name: "binary", charset: types.CharsetBinary, expectedMin: "B"},
+		{name: "utf8mb4", charset: types.CharsetUTF8, expectedMin: "a"},
+	} {
+		t.Run("convert_"+test.name, func(t *testing.T) {
+			charsetType := types.NewWithCharset(types.T_varchar, int32(len(test.name)), 0, test.charset)
+			charset, err := vector.NewConstBytes(charsetType, []byte(test.name), 2, proc.Mp())
+			require.NoError(t, err)
+			defer charset.Free(proc.Mp())
+			convert, err := GetFunctionByName(proc.Ctx, "convert", []types.Type{inputType, charsetType})
+			require.NoError(t, err)
+			converted, err := RunFunctionDirectly(
+				proc, convert.GetEncodedOverloadID(), []*vector.Vector{input, charset}, 2)
+			require.NoError(t, err)
+			defer converted.Free(proc.Mp())
+			require.Equal(t, test.charset, converted.GetType().Charset)
+			assertMin(t, converted, test.expectedMin)
+		})
+	}
+
+	t.Run("substring_utf8mb4_bin", func(t *testing.T) {
+		position, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 2, proc.Mp())
+		require.NoError(t, err)
+		defer position.Free(proc.Mp())
+		substring, err := GetFunctionByName(proc.Ctx, "substring", []types.Type{inputType, types.T_int64.ToType()})
+		require.NoError(t, err)
+		values, err := RunFunctionDirectly(
+			proc, substring.GetEncodedOverloadID(), []*vector.Vector{input, position}, 2)
+		require.NoError(t, err)
+		defer values.Free(proc.Mp())
+		require.Equal(t, types.CharsetUTF8MB4Bin, values.GetType().Charset)
+		assertMin(t, values, "B")
+	})
+}
+
 func TestMinConcatUsesPropagatedBinaryCollation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputType := types.NewWithCharset(types.T_varchar, 10, 0, types.CharsetUTF8MB4Bin)
