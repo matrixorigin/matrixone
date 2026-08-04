@@ -32,12 +32,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStoredProcedureNumericVariablesKeepNumericComparison(t *testing.T) {
+func TestStoredProcedureVariablesUseDeclaredDecimalType(t *testing.T) {
 	scopes := []map[string]interface{}{{
-		"p1": int64(10),
-		"v1": int64(6),
+		"p1": "10.00",
+		"v1": "6.00",
+	}}
+	declaredType := plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2}
+	typeScopes := []map[string]plan.Type{{
+		"p1": declaredType,
+		"v1": declaredType,
 	}}
 	ctx := context.WithValue(context.Background(), defines.VarScopeKey{}, &scopes)
+	ctx = context.WithValue(ctx, defines.VarScopeTypeKey{}, &typeScopes)
 	ctx = context.WithValue(ctx, defines.InSp{}, true)
 
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select v1 > p1", 1)
@@ -53,46 +59,11 @@ func TestStoredProcedureNumericVariablesKeepNumericComparison(t *testing.T) {
 	args := bound.GetF().Args
 	require.Len(t, args, 2)
 	for _, arg := range args {
-		require.Equal(t, int32(types.T_int64), arg.Typ.Id)
+		require.Equal(t, declaredType.Id, arg.Typ.Id)
+		require.Equal(t, declaredType.Width, arg.Typ.Width)
+		require.Equal(t, declaredType.Scale, arg.Typ.Scale)
 		require.Equal(t, "cast", arg.GetF().GetFunc().GetObjName())
 		require.NotNil(t, arg.GetF().Args[0].GetV())
-	}
-}
-
-func TestStoredProcedureVariableCastType(t *testing.T) {
-	tests := []struct {
-		name   string
-		value  any
-		want   types.T
-		wantOK bool
-	}{
-		{name: "bool", value: true, want: types.T_bool, wantOK: true},
-		{name: "int", value: int(1), want: types.T_int64, wantOK: true},
-		{name: "int64", value: int64(1), want: types.T_int64, wantOK: true},
-		{name: "int8", value: int8(1), want: types.T_int8, wantOK: true},
-		{name: "int16", value: int16(1), want: types.T_int16, wantOK: true},
-		{name: "int32", value: int32(1), want: types.T_int32, wantOK: true},
-		{name: "uint", value: uint(1), want: types.T_uint64, wantOK: true},
-		{name: "uint64", value: uint64(1), want: types.T_uint64, wantOK: true},
-		{name: "uint8", value: uint8(1), want: types.T_uint8, wantOK: true},
-		{name: "uint16", value: uint16(1), want: types.T_uint16, wantOK: true},
-		{name: "uint32", value: uint32(1), want: types.T_uint32, wantOK: true},
-		{name: "float32", value: float32(1), want: types.T_float32, wantOK: true},
-		{name: "float64", value: float64(1), want: types.T_float64, wantOK: true},
-		{name: "enum", value: types.Enum(1), want: types.T_enum, wantOK: true},
-		{name: "year", value: types.MoYear(2026), want: types.T_year, wantOK: true},
-		{name: "string", value: "1"},
-		{name: "nil", value: nil},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, ok := storedProcedureVariableCastType(tt.value)
-			require.Equal(t, tt.wantOK, ok)
-			if tt.wantOK {
-				require.Equal(t, tt.want, got.Oid)
-			}
-		})
 	}
 }
 
