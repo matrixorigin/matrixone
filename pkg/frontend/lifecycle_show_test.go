@@ -18,7 +18,11 @@ import (
 	"context"
 	"testing"
 
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 )
 
@@ -55,5 +59,166 @@ func TestLifecycleShowPageIsBounded(t *testing.T) {
 	} {
 		_, _, err = lifecycleShowPage(context.Background(), statement)
 		require.Error(t, err)
+	}
+}
+
+func TestHandleShowLifecycleJobsUsesSystemCatalogAndBuildsRows(t *testing.T) {
+	ctx := context.Background()
+	background := &backgroundExecTest{}
+	background.init()
+	query := `select hex(root_id),mode,state,cast(cleanup_after as varchar),last_error
+from mo_catalog.mo_lifecycle_cleanup_roots where owner_account_id = 17
+order by updated_at desc,root_id desc limit 2 offset 3`
+	execResult := &MysqlResultSet{}
+	for _, column := range lifecycleJobShowColumns {
+		execResult.AddColumn(column)
+	}
+	for _, row := range [][]interface{}{
+		{"00112233", "ARCHIVE_WHOLE", "PUBLISHED", "2026-08-04 12:00:00", nil},
+		{"44556677", "ARCHIVE_REWRITE", "COMMIT_UNKNOWN", "2026-08-04 12:05:00", "commit result unknown"},
+	} {
+		execResult.AddRow(row)
+	}
+	background.sql2result[query] = execResult
+	wrapped := &lifecycleRestoreContextExec{backgroundExecTest: background}
+	stub := gostub.StubFunc(&NewBackgroundExec, wrapped)
+	t.Cleanup(stub.Reset)
+
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	ses.SetTenantInfo(&TenantInfo{TenantID: 17})
+	ses.mrs = &MysqlResultSet{}
+
+	err := handleShowLifecycle(ctx, ses, &tree.ShowLifecycle{
+		Kind: tree.ShowLifecycleJobs,
+		Page: tree.NewLimit(
+			tree.NewNumVal(int64(3), "3", false, tree.P_int64),
+			tree.NewNumVal(int64(2), "2", false, tree.P_int64),
+		),
+	})
+	require.NoError(t, err)
+	require.Equal(t, []uint32{0}, wrapped.accountIDs)
+	require.Equal(t, uint64(5), ses.mrs.GetColumnCount())
+	require.Equal(t, uint64(2), ses.mrs.GetRowCount())
+	row, err := ses.mrs.GetRow(ctx, 0)
+	require.NoError(t, err)
+	require.Equal(t, []interface{}{
+		"00112233", "ARCHIVE_WHOLE", "PUBLISHED", "2026-08-04 12:00:00", nil,
+	}, row)
+	row, err = ses.mrs.GetRow(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, "commit result unknown", row[4])
+}
+
+func TestHandleShowLifecycleJobsEmptyAndInvalidKind(t *testing.T) {
+	ctx := context.Background()
+	background := &backgroundExecTest{}
+	background.init()
+	query := `select hex(root_id),mode,state,cast(cleanup_after as varchar),last_error
+from mo_catalog.mo_lifecycle_cleanup_roots where owner_account_id = 17
+order by updated_at desc,root_id desc limit 1000 offset 0`
+	execResult := &MysqlResultSet{}
+	for _, column := range lifecycleJobShowColumns {
+		execResult.AddColumn(column)
+	}
+	background.sql2result[query] = execResult
+	stub := gostub.StubFunc(&NewBackgroundExec, background)
+	t.Cleanup(stub.Reset)
+
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	ses.SetTenantInfo(&TenantInfo{TenantID: 17})
+	ses.mrs = &MysqlResultSet{}
+
+	require.NoError(t, handleShowLifecycle(ctx, ses, &tree.ShowLifecycle{
+		Kind: tree.ShowLifecycleJobs,
+	}))
+	require.Equal(t, uint64(5), ses.mrs.GetColumnCount())
+	require.Zero(t, ses.mrs.GetRowCount())
+
+	ses.mrs = &MysqlResultSet{}
+	err := handleShowLifecycle(ctx, ses, &tree.ShowLifecycle{})
+	require.ErrorContains(t, err, "unknown SHOW LIFECYCLE kind")
+}
+
+func TestHandleShowLifecycleBindingAndDatasetsResolveExactTable(t *testing.T) {
+	tests := []struct {
+		name    string
+		kind    tree.ShowLifecycleKind
+		query   string
+		columns []Column
+		row     []interface{}
+	}{
+		{
+			name: "binding",
+			kind: tree.ShowLifecycleBinding,
+			query: `select action,state,expire_after_days,stage_id,purge_after_days,binding_generation,cast(updated_at as varchar)
+from mo_catalog.mo_lifecycle_bindings where account_id = 17 and physical_table_id = 42`,
+			columns: lifecycleBindingShowColumns,
+			row: []interface{}{
+				"DELETE", "ACTIVE", uint64(30), nil, nil, uint64(7), "2026-08-04 12:00:00",
+			},
+		},
+		{
+			name: "datasets",
+			kind: tree.ShowLifecycleDatasets,
+			query: `select hex(dataset_id),state,row_count,logical_bytes,cast(purge_eligible_at as varchar),manifest_key
+from mo_catalog.mo_lifecycle_datasets where account_id = 17 and logical_table_id = 42
+order by created_at desc,dataset_id desc limit 1000 offset 0`,
+			columns: lifecycleDatasetShowColumns,
+			row: []interface{}{
+				"00112233", "PUBLISHED", uint64(100), uint64(2048), "2027-08-04 12:00:00", "prefix/manifest.json",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			ctrl := gomock.NewController(t)
+			ses := newSes(nil, ctrl)
+			ses.SetTenantInfo(&TenantInfo{TenantID: 17})
+			ses.mrs = &MysqlResultSet{}
+
+			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+			storage := mock_frontend.NewMockEngine(ctrl)
+			database := mock_frontend.NewMockDatabase(ctrl)
+			relation := mock_frontend.NewMockRelation(ctrl)
+			tableDef := lifecycleTableDef(types.T_timestamp)
+			storage.EXPECT().Database(gomock.Any(), "mo_catalog", txnOperator).
+				Return(database, nil)
+			database.EXPECT().Relation(gomock.Any(), "events", nil).
+				Return(relation, nil)
+			relation.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
+			relation.EXPECT().GetTableID(gomock.Any()).Return(tableDef.TblId)
+			ses.txnHandler = &TxnHandler{storage: storage, txnOp: txnOperator}
+			ses.GetTxnCompileCtx().SetExecCtx(&ExecCtx{reqCtx: ctx, ses: ses})
+
+			background := &backgroundExecTest{}
+			background.init()
+			execResult := &MysqlResultSet{}
+			for _, column := range test.columns {
+				execResult.AddColumn(column)
+			}
+			execResult.AddRow(test.row)
+			background.sql2result[test.query] = execResult
+			stub := gostub.StubFunc(&NewBackgroundExec, background)
+			t.Cleanup(stub.Reset)
+
+			table := tree.NewTableName(
+				"events",
+				tree.ObjectNamePrefix{SchemaName: "mo_catalog", ExplicitSchema: true},
+				nil,
+			)
+			require.NoError(t, handleShowLifecycle(ctx, ses, &tree.ShowLifecycle{
+				Kind:  test.kind,
+				Table: table,
+			}))
+			require.Equal(t, uint64(1), ses.mrs.GetRowCount())
+			row, err := ses.mrs.GetRow(ctx, 0)
+			require.NoError(t, err)
+			require.Equal(t, test.row, row)
+		})
 	}
 }

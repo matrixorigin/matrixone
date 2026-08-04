@@ -16,14 +16,93 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFinalizeLifecycleCommitOwnsCatalogControlAndCommitSequence(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	operator := mock_frontend.NewMockTxnOperator(ctrl)
+	workspace := &Transaction{}
+	control := &api.LifecycleCommitEntry{ProtocolVersion: 1}
+	operator.EXPECT().GetWorkspace().Return(workspace)
+	operator.EXPECT().Commit(gomock.Any()).Return(nil)
+
+	err := FinalizeLifecycleCommit(
+		context.Background(),
+		operator,
+		DNStore{},
+		control,
+		func(_ context.Context, _ client.TxnOperator) error {
+			workspace.writes = append(workspace.writes, Entry{
+				bat: batch.NewWithSize(1),
+			})
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, control, workspace.lifecycleCommitControl.Entry)
+	require.NotSame(t, control, workspace.lifecycleCommitControl.Entry)
+}
+
+func TestFinalizeLifecycleCommitRollsBackCatalogFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	operator := mock_frontend.NewMockTxnOperator(ctrl)
+	expected := errors.New("catalog write failed")
+	operator.EXPECT().Rollback(gomock.Any()).DoAndReturn(
+		func(ctx context.Context) error {
+			require.NoError(t, ctx.Err())
+			_, hasDeadline := ctx.Deadline()
+			require.True(t, hasDeadline)
+			return nil
+		},
+	)
+
+	err := FinalizeLifecycleCommit(
+		context.Background(),
+		operator,
+		DNStore{},
+		&api.LifecycleCommitEntry{ProtocolVersion: 1},
+		func(context.Context, client.TxnOperator) error { return expected },
+	)
+	require.ErrorIs(t, err, expected)
+}
+
+func TestFinalizeLifecycleCommitRejectsIncompleteInputs(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	operator := mock_frontend.NewMockTxnOperator(ctrl)
+	tests := []struct {
+		name    string
+		op      client.TxnOperator
+		control *api.LifecycleCommitEntry
+		write   LifecycleCatalogWrite
+	}{
+		{name: "operator", control: &api.LifecycleCommitEntry{}, write: func(context.Context, client.TxnOperator) error { return nil }},
+		{name: "control", op: operator, write: func(context.Context, client.TxnOperator) error { return nil }},
+		{name: "catalog callback", op: operator, control: &api.LifecycleCommitEntry{}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := FinalizeLifecycleCommit(
+				context.Background(),
+				test.op,
+				DNStore{},
+				test.control,
+				test.write,
+			)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		})
+	}
+}
 
 func TestFinalizeLifecycleCommitWritesCatalogThenControlAndCommits(t *testing.T) {
 	workspace := &Transaction{}

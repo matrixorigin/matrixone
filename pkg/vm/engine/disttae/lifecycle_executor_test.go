@@ -19,21 +19,28 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	objectioio "github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	lifecyclepkg "github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/lifecycle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
@@ -566,6 +573,83 @@ func TestLifecycleMetadataCompactionRunsOnBoundedMaintenanceCadence(t *testing.T
 	))
 }
 
+func TestLifecycleCleanupSweepReleasesPublishedTTLTemporaryOwner(t *testing.T) {
+	mp := mpool.MustNewZero()
+	now := time.Now().UTC()
+	root := lifecyclepkg.CleanupRoot{
+		RootID:               "2d55f9be-4d3e-4ac7-a58a-1f7995d88f7f",
+		AttemptID:            "e091026d-114b-44f9-81f3-326bf6481446",
+		Mode:                 lifecyclepkg.CleanupModeTTLRewrite,
+		OwnerAccountID:       17,
+		LogicalTableID:       42,
+		PhysicalTableID:      43,
+		ExecutorEpoch:        7,
+		WorkerDeadline:       now.Add(time.Minute),
+		TAENamespace:         "shared/2d55f9be-4d3e-4ac7-a58a-1f7995d88f7f/e091026d-114b-44f9-81f3-326bf6481446",
+		BookingPrefix:        "shared/2d55f9be-4d3e-4ac7-a58a-1f7995d88f7f/e091026d-114b-44f9-81f3-326bf6481446/booking",
+		ReservedCleanupBytes: 1 << 20,
+		SourceSetDigest:      [32]byte{2},
+		State:                lifecyclepkg.CleanupRootPublished,
+		StateVersion:         3,
+		CleanupAfter:         now,
+	}
+	cleaned := root
+	cleaned.TemporaryCleanupDone = true
+	cleaned.StateVersion++
+	step := 0
+	sqlExecutor := &restoreTxnSQLExecutor{execute: func(
+		sql string,
+		option executor.StatementOption,
+	) (executor.Result, error) {
+		require.Equal(t, uint32(0), option.AccountID())
+		lower := strings.ToLower(sql)
+		step++
+		switch step {
+		case 1:
+			require.Contains(t, lower, "state='published' and temporary_cleanup_done=false")
+			return lifecycleExecutorCleanupRootResult(t, mp, root), nil
+		case 2:
+			require.Contains(t, lower, "state in ('registered','uploading','verified','finalizing','commit_unknown','published')")
+			return executor.Result{Mp: mp}, nil
+		case 3:
+			require.Contains(t, lower, "state in ('delete_pending','deleting')")
+			return executor.Result{Mp: mp}, nil
+		case 4:
+			require.Contains(t, lower, "temporary_cleanup_done=true")
+			return executor.Result{AffectedRows: 1, Mp: mp}, nil
+		case 5:
+			require.Contains(t, lower, "where root_id=unhex")
+			return lifecycleExecutorCleanupRootResult(t, mp, cleaned), nil
+		case 6:
+			require.Contains(t, lower, "set state='delete_pending'")
+			return executor.Result{AffectedRows: 1, Mp: mp}, nil
+		default:
+			t.Fatalf("unexpected cleanup SQL %s", sql)
+			return executor.Result{}, nil
+		}
+	}}
+	shared, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName,
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { shared.Close(context.Background()) })
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	cursor, complete, err := sweepLifecycleCleanupRoots(
+		ctx,
+		sqlExecutor,
+		shared,
+		nil,
+		"",
+	)
+	require.NoError(t, err)
+	require.True(t, complete)
+	require.Empty(t, cursor)
+	require.Equal(t, 6, step)
+}
+
 func TestLifecycleDisabledContinuesMaintenanceAndSkipsBindingScan(t *testing.T) {
 	fake := &disabledLifecycleSQLExecutor{
 		t:  t,
@@ -590,6 +674,35 @@ func TestLifecycleDisabledContinuesMaintenanceAndSkipsBindingScan(t *testing.T) 
 	require.True(t, sawMetadataCompaction)
 }
 
+func TestLifecycleEnabledCoordinatorCompletesEmptyBindingPage(t *testing.T) {
+	fake := &disabledLifecycleSQLExecutor{
+		t:       t,
+		mp:      mpool.MustNewZero(),
+		enabled: true,
+	}
+	shared, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName,
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { shared.Close(context.Background()) })
+	services, err := fileservice.NewFileServices("", shared)
+	require.NoError(t, err)
+	t.Cleanup(func() { services.Close(context.Background()) })
+
+	run := LifecycleTaskExecutorFactory(nil, nil, fake, services, nil)
+	require.NoError(t, run(context.Background(), &task.AsyncTask{}))
+	sawBindingAccountPage := false
+	for _, query := range fake.queries {
+		if strings.Contains(query, "from mo_catalog.mo_account") &&
+			strings.Contains(query, "order by account_id") {
+			sawBindingAccountPage = true
+		}
+	}
+	require.True(t, sawBindingAccountPage)
+}
+
 func TestLifecycleCoordinatorStopsAfterFirstMaintenanceFailure(t *testing.T) {
 	expected := errors.New("cleanup root catalog unavailable")
 	fake := &failingLifecycleSQLExecutor{
@@ -602,9 +715,452 @@ func TestLifecycleCoordinatorStopsAfterFirstMaintenanceFailure(t *testing.T) {
 	require.Equal(t, 1, fake.calls)
 }
 
+func TestLifecycleBindingExecutorCompletesEmptyObjectPage(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	engineMock := mock_frontend.NewMockEngine(ctrl)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	operator := mock_frontend.NewMockTxnOperator(ctrl)
+	mp := mpool.MustNewZero()
+	fakeSQL := &disabledLifecycleSQLExecutor{
+		t:       t,
+		mp:      mp,
+		enabled: true,
+	}
+
+	tableDef := &plan.TableDef{
+		TblId:   43,
+		Name:    "events",
+		DbName:  "history",
+		Version: 3,
+		Cols: []*plan.ColDef{
+			{
+				ColId:   1,
+				Name:    "id",
+				Seqnum:  0,
+				NotNull: true,
+				Typ: plan.Type{
+					Id:          int32(types.T_int64),
+					NotNullable: true,
+				},
+			},
+			{
+				ColId:   2,
+				Name:    "created_at",
+				Seqnum:  1,
+				NotNull: true,
+				Typ: plan.Type{
+					Id:          int32(types.T_timestamp),
+					NotNullable: true,
+				},
+			},
+		},
+	}
+	snapshot := types.BuildTS(100, 1)
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	table := &emptyLifecycleRunTable{
+		def: tableDef,
+		page: lifecyclepkg.DiscoveryPage{
+			Next: lifecyclepkg.DiscoveryCursor{
+				Snapshot: snapshot,
+				Wrapped:  true,
+			},
+			StartedFullScanAt:   now,
+			CompletedFullScanAt: now,
+		},
+	}
+
+	engineMock.EXPECT().LatestLogtailAppliedTime().Return(timestamp.Timestamp{})
+	txnClient.EXPECT().New(
+		gomock.Any(), gomock.Any(), gomock.Any(),
+	).Return(operator, nil)
+	engineMock.EXPECT().New(gomock.Any(), operator).Return(nil)
+	engineMock.EXPECT().GetRelationById(
+		gomock.Any(), operator, uint64(43),
+	).Return("history", "events", table, nil)
+	operator.EXPECT().SnapshotTS().Return(snapshot.ToTimestamp())
+	operator.EXPECT().Rollback(gomock.Any()).Return(nil)
+
+	shared, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName,
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { shared.Close(context.Background()) })
+
+	schemaDigest := lifecyclepkg.BindingSchemaDigest(tableDef)
+	runner := lifecycleBindingExecutor{
+		engine:       engineMock,
+		txnClient:    txnClient,
+		sqlExecutor:  fakeSQL,
+		taeFS:        shared,
+		release:      lifecyclepkg.SQLReleaseConfig{Executor: fakeSQL},
+		pager:        lifecyclepkg.SQLBindingPager{Executor: fakeSQL},
+		rewriteSlots: make(chan struct{}, 1),
+		now:          func() time.Time { return now },
+		epoch:        7,
+	}
+	runCtx, cancelRun := context.WithTimeout(context.Background(), time.Minute)
+	defer cancelRun()
+	err = runner.run(runCtx, lifecyclepkg.Binding{
+		ID:                    "00112233445566778899aabbccddeeff",
+		AccountID:             17,
+		DatabaseID:            41,
+		LogicalTableID:        43,
+		PhysicalTableID:       43,
+		Generation:            1,
+		LifecycleColumnID:     2,
+		SchemaDigest:          hex.EncodeToString(schemaDigest[:]),
+		Action:                "DELETE",
+		ExpireAfterDays:       7,
+		EvaluationTimezone:    "UTC",
+		Version:               1,
+		LastFullScanAt:        now.Add(-48 * time.Hour),
+		ScanSnapshotHex:       "",
+		ScanLastObjectNameHex: "",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, table.discoveryCalls)
+	require.True(t, slices.ContainsFunc(fakeSQL.queries, func(query string) bool {
+		return strings.Contains(query, "update mo_catalog.mo_lifecycle_bindings") &&
+			strings.Contains(query, "last_full_scan_at=utc_timestamp()")
+	}))
+}
+
+func TestLifecycleBindingExecutorDefersMixedObjectBeforeSideEffectsWhenRewriteBusy(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	engineMock := mock_frontend.NewMockEngine(ctrl)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	operator := mock_frontend.NewMockTxnOperator(ctrl)
+	mp := mpool.MustNewZero()
+	fakeSQL := &disabledLifecycleSQLExecutor{t: t, mp: mp, enabled: true}
+	tableDef := &plan.TableDef{
+		TblId:   43,
+		Name:    "events",
+		DbName:  "history",
+		Version: 3,
+		Cols: []*plan.ColDef{
+			{
+				ColId:  1,
+				Name:   "id",
+				Seqnum: 0,
+				Typ:    plan.Type{Id: int32(types.T_int64)},
+			},
+			{
+				ColId:  2,
+				Name:   "created_at",
+				Seqnum: 1,
+				Typ:    plan.Type{Id: int32(types.T_timestamp)},
+			},
+		},
+	}
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	_, encodedCutoff, err := lifecycleCutoff(
+		now,
+		7,
+		0,
+		"UTC",
+		types.T_timestamp,
+	)
+	require.NoError(t, err)
+	source := lifecyclePlanTestSource(t, 128<<20)
+	zoneMap := index.NewZM(types.T_timestamp, 0)
+	zoneMap.Update(types.Timestamp(encodedCutoff - 1))
+	zoneMap.Update(types.Timestamp(encodedCutoff + 1))
+	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(
+		&source.ObjectStats,
+		zoneMap,
+	))
+	snapshot := types.BuildTS(100, 1)
+	table := &emptyLifecycleRunTable{
+		def:            tableDef,
+		sortKeyOrdinal: 1,
+		page: lifecyclepkg.DiscoveryPage{
+			Candidates: []lifecyclepkg.Candidate{{Snapshot: snapshot, Source: source}},
+			Next: lifecyclepkg.DiscoveryCursor{
+				Snapshot: snapshot,
+				Wrapped:  true,
+			},
+			StartedFullScanAt:   now,
+			CompletedFullScanAt: now,
+		},
+	}
+
+	engineMock.EXPECT().LatestLogtailAppliedTime().Return(timestamp.Timestamp{})
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(operator, nil)
+	engineMock.EXPECT().New(gomock.Any(), operator).Return(nil)
+	engineMock.EXPECT().GetRelationById(
+		gomock.Any(), operator, uint64(43),
+	).Return("history", "events", table, nil)
+	operator.EXPECT().SnapshotTS().Return(snapshot.ToTimestamp())
+	operator.EXPECT().Rollback(gomock.Any()).Return(nil)
+	shared, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName,
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { shared.Close(context.Background()) })
+	rewriteSlots := make(chan struct{}, 1)
+	rewriteSlots <- struct{}{}
+	runner := lifecycleBindingExecutor{
+		engine:       engineMock,
+		txnClient:    txnClient,
+		sqlExecutor:  fakeSQL,
+		taeFS:        shared,
+		release:      lifecyclepkg.SQLReleaseConfig{Executor: fakeSQL},
+		pager:        lifecyclepkg.SQLBindingPager{Executor: fakeSQL},
+		rewriteSlots: rewriteSlots,
+		now:          func() time.Time { return now },
+		epoch:        7,
+	}
+	schemaDigest := lifecyclepkg.BindingSchemaDigest(tableDef)
+	runCtx, cancelRun := context.WithTimeout(context.Background(), time.Minute)
+	defer cancelRun()
+	runErr := runner.run(runCtx, lifecyclepkg.Binding{
+		ID:                 "00112233445566778899aabbccddeeff",
+		AccountID:          17,
+		DatabaseID:         41,
+		LogicalTableID:     43,
+		PhysicalTableID:    43,
+		Generation:         1,
+		LifecycleColumnID:  2,
+		SchemaDigest:       hex.EncodeToString(schemaDigest[:]),
+		Action:             "DELETE",
+		ExpireAfterDays:    7,
+		EvaluationTimezone: "UTC",
+		Version:            1,
+		LastFullScanAt:     now.Add(-48 * time.Hour),
+	})
+	require.ErrorContains(t, runErr, "RESOURCE_BLOCKED")
+	require.True(t, lifecyclepkg.IsLifecycleDeferred(runErr))
+	require.Equal(t, 1, table.discoveryCalls)
+}
+
+func TestLifecycleBindingExecutorFailsWholeObjectBeforeRetireWhenProtectionSelectionFails(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	engineMock := mock_frontend.NewMockEngine(ctrl)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	operator := mock_frontend.NewMockTxnOperator(ctrl)
+	mp := mpool.MustNewZero()
+	fakeSQL := &disabledLifecycleSQLExecutor{t: t, mp: mp, enabled: true}
+	tableDef := &plan.TableDef{
+		TblId:   43,
+		Name:    "events",
+		DbName:  "history",
+		Version: 3,
+		Cols: []*plan.ColDef{
+			{ColId: 1, Name: "id", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 2, Name: "created_at", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_timestamp)}},
+		},
+	}
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	_, encodedCutoff, err := lifecycleCutoff(now, 7, 0, "UTC", types.T_timestamp)
+	require.NoError(t, err)
+	source := lifecyclePlanTestSource(t, 128<<20)
+	zoneMap := index.NewZM(types.T_timestamp, 0)
+	zoneMap.Update(types.Timestamp(encodedCutoff - 2))
+	zoneMap.Update(types.Timestamp(encodedCutoff - 1))
+	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(
+		&source.ObjectStats,
+		zoneMap,
+	))
+	snapshot := types.BuildTS(100, 1)
+	expected := errors.New("protection selection failed")
+	table := &emptyLifecycleRunTable{
+		def:                 tableDef,
+		sortKeyOrdinal:      1,
+		selectProtectionErr: expected,
+		page: lifecyclepkg.DiscoveryPage{
+			Candidates: []lifecyclepkg.Candidate{{Snapshot: snapshot, Source: source}},
+			Next: lifecyclepkg.DiscoveryCursor{
+				Snapshot: snapshot,
+				Wrapped:  true,
+			},
+			StartedFullScanAt:   now,
+			CompletedFullScanAt: now,
+		},
+	}
+	engineMock.EXPECT().LatestLogtailAppliedTime().Return(timestamp.Timestamp{})
+	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(operator, nil)
+	engineMock.EXPECT().New(gomock.Any(), operator).Return(nil)
+	engineMock.EXPECT().GetRelationById(
+		gomock.Any(), operator, uint64(43),
+	).Return("history", "events", table, nil)
+	operator.EXPECT().SnapshotTS().Return(snapshot.ToTimestamp())
+	operator.EXPECT().Rollback(gomock.Any()).Return(nil)
+	shared, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName,
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { shared.Close(context.Background()) })
+	runner := lifecycleBindingExecutor{
+		engine:       engineMock,
+		txnClient:    txnClient,
+		sqlExecutor:  fakeSQL,
+		taeFS:        shared,
+		release:      lifecyclepkg.SQLReleaseConfig{Executor: fakeSQL},
+		pager:        lifecyclepkg.SQLBindingPager{Executor: fakeSQL},
+		rewriteSlots: make(chan struct{}, 1),
+		now:          func() time.Time { return now },
+		epoch:        7,
+	}
+	schemaDigest := lifecyclepkg.BindingSchemaDigest(tableDef)
+	runCtx, cancelRun := context.WithTimeout(context.Background(), time.Minute)
+	defer cancelRun()
+	runErr := runner.run(runCtx, lifecyclepkg.Binding{
+		ID:                 "00112233445566778899aabbccddeeff",
+		AccountID:          17,
+		DatabaseID:         41,
+		LogicalTableID:     43,
+		PhysicalTableID:    43,
+		Generation:         1,
+		LifecycleColumnID:  2,
+		SchemaDigest:       hex.EncodeToString(schemaDigest[:]),
+		Action:             "DELETE",
+		ExpireAfterDays:    7,
+		EvaluationTimezone: "UTC",
+		Version:            1,
+		LastFullScanAt:     now.Add(-48 * time.Hour),
+	})
+	require.ErrorIs(t, runErr, expected)
+	require.Equal(t, 1, table.discoveryCalls)
+}
+
+type emptyLifecycleRunTable struct {
+	engine.Relation
+	def                 *plan.TableDef
+	page                lifecyclepkg.DiscoveryPage
+	discoveryCalls      int
+	sortKeyOrdinal      int
+	selectProtectionErr error
+}
+
+func (table *emptyLifecycleRunTable) GetTableDef(context.Context) *plan.TableDef {
+	return table.def
+}
+
+func (table *emptyLifecycleRunTable) LifecycleDiscoverObjectPage(
+	_ context.Context,
+	request lifecyclepkg.DiscoveryRequest,
+) (lifecyclepkg.DiscoveryPage, error) {
+	table.discoveryCalls++
+	if request.Snapshot.IsEmpty() {
+		return lifecyclepkg.DiscoveryPage{}, errors.New("empty discovery snapshot")
+	}
+	return table.page, nil
+}
+
+func (table *emptyLifecycleRunTable) LifecycleSortKeyOrdinal() int {
+	if table.sortKeyOrdinal == 0 {
+		return -1
+	}
+	return table.sortKeyOrdinal
+}
+
+func (*emptyLifecycleRunTable) LifecycleReadObject(
+	context.Context,
+	types.TS,
+	objectio.ObjectStats,
+	uint64,
+	lifecyclepkg.ExactBlockConsumer,
+) (lifecyclepkg.ObjectScanReport, error) {
+	panic("empty page must not read an Object")
+}
+
+func (*emptyLifecycleRunTable) LifecycleRewriteObject(
+	context.Context,
+	LifecycleRewriteOptions,
+) (LifecycleRewriteResult, error) {
+	panic("empty page must not rewrite an Object")
+}
+
+func (table *emptyLifecycleRunTable) LifecycleSelectProtectionSet(
+	context.Context,
+	types.TS,
+	[]objectio.ObjectEntry,
+	logtailreplay.LifecycleTombstoneSelectionLimits,
+) (lifecyclepkg.ProtectionSet, error) {
+	if table.selectProtectionErr != nil {
+		return lifecyclepkg.ProtectionSet{}, table.selectProtectionErr
+	}
+	panic("empty page must not select a protection set")
+}
+
+func lifecycleExecutorCleanupRootResult(
+	t *testing.T,
+	mp *mpool.MPool,
+	root lifecyclepkg.CleanupRoot,
+) executor.Result {
+	t.Helper()
+	value := batch.NewWithSize(27)
+	stringsByColumn := map[int]string{
+		0:  strings.ReplaceAll(root.RootID, "-", ""),
+		1:  strings.ReplaceAll(root.AttemptID, "-", ""),
+		2:  string(root.Mode),
+		7:  root.WorkerDeadline.Format("2006-01-02 15:04:05.999999"),
+		8:  root.ArchiveNamespace,
+		9:  root.CredentialHandle,
+		10: root.ArchivePrefix,
+		11: root.ManifestKey,
+		12: hex.EncodeToString(root.ManifestDigest[:]),
+		13: root.TAENamespace,
+		14: root.SegmentID,
+		15: root.BookingPrefix,
+		18: hex.EncodeToString(root.SourceSetDigest[:]),
+		19: root.FinalTxnID,
+		20: string(root.State),
+		22: root.CleanupAfter.Format("2006-01-02 15:04:05.999999"),
+		26: root.LastError,
+	}
+	if !root.QuiescenceSince.IsZero() {
+		stringsByColumn[24] = root.QuiescenceSince.Format("2006-01-02 15:04:05.999999")
+	}
+	if !root.LastListAt.IsZero() {
+		stringsByColumn[25] = root.LastListAt.Format("2006-01-02 15:04:05.999999")
+	}
+	numbers := map[int]uint64{
+		3:  uint64(root.OwnerAccountID),
+		4:  root.LogicalTableID,
+		5:  root.PhysicalTableID,
+		6:  root.ExecutorEpoch,
+		16: uint64(root.OrdinalUpperBound),
+		17: root.ReservedCleanupBytes,
+		21: root.StateVersion,
+	}
+	for column := range value.Vecs {
+		switch {
+		case column == 23:
+			value.Vecs[column] = vector.NewVec(types.T_bool.ToType())
+			require.NoError(t, vector.AppendFixed(
+				value.Vecs[column], root.TemporaryCleanupDone, false, mp,
+			))
+		case numbers[column] != 0 || column == 3 || column == 4 ||
+			column == 5 || column == 6 || column == 16 || column == 17 ||
+			column == 21:
+			value.Vecs[column] = vector.NewVec(types.T_uint64.ToType())
+			require.NoError(t, vector.AppendFixed(
+				value.Vecs[column], numbers[column], false, mp,
+			))
+		default:
+			value.Vecs[column] = vector.NewVec(types.T_varchar.ToType())
+			nullValue := (column == 24 && root.QuiescenceSince.IsZero()) ||
+				(column == 25 && root.LastListAt.IsZero())
+			require.NoError(t, vector.AppendBytes(
+				value.Vecs[column], []byte(stringsByColumn[column]), nullValue, mp,
+			))
+		}
+	}
+	value.SetRowCount(1)
+	return executor.Result{Batches: []*batch.Batch{value}, Mp: mp}
+}
+
 type disabledLifecycleSQLExecutor struct {
 	t       *testing.T
 	mp      *mpool.MPool
+	enabled bool
 	queries []string
 }
 
@@ -621,7 +1177,7 @@ func (fake *disabledLifecycleSQLExecutor) Exec(
 		value.Vecs[0] = vector.NewVec(types.T_bool.ToType())
 		value.Vecs[1] = vector.NewVec(types.T_json.ToType())
 		require.NoError(fake.t, vector.AppendFixed(
-			value.Vecs[0], false, false, fake.mp,
+			value.Vecs[0], fake.enabled, false, fake.mp,
 		))
 		scope, err := types.ParseStringToByteJson(`{"archive_stages":[]}`)
 		require.NoError(fake.t, err)
@@ -633,6 +1189,12 @@ func (fake *disabledLifecycleSQLExecutor) Exec(
 			Batches: []*batch.Batch{value},
 			Mp:      fake.mp,
 		}, nil
+	}
+	if strings.Contains(
+		strings.ToLower(sql),
+		"update mo_catalog.mo_lifecycle_bindings",
+	) {
+		return executor.Result{AffectedRows: 1, Mp: fake.mp}, nil
 	}
 	return executor.Result{Mp: fake.mp}, nil
 }

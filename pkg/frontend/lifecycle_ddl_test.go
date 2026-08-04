@@ -20,17 +20,24 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	lifecyclepkg "github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/lifecycle"
 )
 
@@ -670,4 +677,179 @@ where rel_id=42 and reldatabase_id=7 for update`
 		err,
 		"disappeared",
 	)
+}
+
+func TestHandleAlterTableLifecycleStateChangesUseOrdinaryTableFence(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation tree.LifecycleOperation
+		writeSQL  string
+	}{
+		{
+			name:      "pause",
+			operation: tree.LifecycleOperationPause,
+			writeSQL:  buildLifecycleBindingStateSQL(17, 42, lifecycleBindingStatePaused),
+		},
+		{
+			name:      "resume",
+			operation: tree.LifecycleOperationResume,
+			writeSQL:  buildLifecycleBindingStateSQL(17, 42, lifecycleBindingStateActive),
+		},
+		{
+			name:      "unset",
+			operation: tree.LifecycleOperationUnset,
+			writeSQL:  buildLifecycleBindingDeleteSQL(17, 42),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			ctrl := gomock.NewController(t)
+			ses := newSes(nil, ctrl)
+			ses.SetTenantInfo(&TenantInfo{TenantID: 17})
+			isolateLifecycleHandlerRuntime(t, ses)
+
+			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+			storage := mock_frontend.NewMockEngine(ctrl)
+			database := mock_frontend.NewMockDatabase(ctrl)
+			relation := mock_frontend.NewMockRelation(ctrl)
+			tableDef := lifecycleTableDef(types.T_timestamp)
+			storage.EXPECT().Database(gomock.Any(), "mo_catalog", txnOperator).
+				Return(database, nil)
+			database.EXPECT().Relation(gomock.Any(), "events", nil).
+				Return(relation, nil)
+			relation.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
+			relation.EXPECT().GetTableID(gomock.Any()).Return(tableDef.TblId)
+			ses.txnHandler = &TxnHandler{storage: storage, txnOp: txnOperator}
+			ses.GetTxnCompileCtx().SetExecCtx(&ExecCtx{reqCtx: ctx, ses: ses})
+
+			background := &backgroundExecTest{}
+			background.init()
+			lockSQL := `select rel_id,rel_version from mo_catalog.mo_tables
+where rel_id=42 and reldatabase_id=7 for update`
+			bindingSQL := `select binding_id from mo_catalog.mo_lifecycle_bindings where account_id = 17 and physical_table_id = 42`
+			featureSQL := `select enabled, scope_spec from mo_catalog.mo_feature_registry where feature_code = 'LIFECYCLE'`
+			background.sql2result[lockSQL] = newMrsForPasswordOfUser(
+				[][]interface{}{{uint64(42), uint64(3)}},
+			)
+			background.sql2result[bindingSQL] = newMrsForPasswordOfUser(
+				[][]interface{}{{"binding"}},
+			)
+			background.sql2result[featureSQL] = newMrsForFeatureRegistry(
+				[][]interface{}{{int8(1), nil}},
+			)
+			stub := gostub.StubFunc(&NewBackgroundExec, background)
+			t.Cleanup(stub.Reset)
+
+			table := tree.NewTableName(
+				"events",
+				tree.ObjectNamePrefix{SchemaName: "mo_catalog", ExplicitSchema: true},
+				nil,
+			)
+			alter := tree.NewAlterTable(table)
+			alter.Options = tree.AlterTableOptions{
+				tree.NewAlterOptionLifecycle(test.operation, tree.LifecyclePolicy{}),
+			}
+			t.Cleanup(alter.Free)
+
+			require.NoError(t, handleAlterTableLifecycle(ctx, ses, alter))
+			expected := []string{"begin;", lockSQL}
+			if test.operation == tree.LifecycleOperationResume {
+				expected = []string{featureSQL, "begin;", lockSQL, featureSQL}
+			}
+			expected = append(expected, bindingSQL, test.writeSQL, "commit;")
+			require.Equal(t, expected, background.executedSQLs)
+		})
+	}
+}
+
+func TestHandleAlterTableLifecycleSetDeleteCommitsBinding(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	ses.SetTenantInfo(&TenantInfo{TenantID: 17})
+	isolateLifecycleHandlerRuntime(t, ses)
+
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	storage := mock_frontend.NewMockEngine(ctrl)
+	database := mock_frontend.NewMockDatabase(ctrl)
+	relation := mock_frontend.NewMockRelation(ctrl)
+	tableDef := lifecycleTableDef(types.T_timestamp)
+	storage.EXPECT().Database(gomock.Any(), "mo_catalog", txnOperator).
+		Return(database, nil)
+	database.EXPECT().Relation(gomock.Any(), "events", nil).
+		Return(relation, nil)
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
+	relation.EXPECT().GetTableID(gomock.Any()).Return(tableDef.TblId)
+	ses.txnHandler = &TxnHandler{storage: storage, txnOp: txnOperator}
+	ses.GetTxnCompileCtx().SetExecCtx(&ExecCtx{reqCtx: ctx, ses: ses})
+
+	background := &backgroundExecTest{}
+	background.init()
+	featureSQL := `select enabled, scope_spec from mo_catalog.mo_feature_registry where feature_code = 'LIFECYCLE'`
+	featureLockSQL := `update mo_catalog.mo_feature_registry set scope_spec = scope_spec, updated_at = updated_at where feature_code = 'LIFECYCLE'`
+	lockSQL := `select rel_id,rel_version from mo_catalog.mo_tables
+where rel_id=42 and reldatabase_id=7 for update`
+	capacitySQL := lifecycleBindingCapacitySQL(17, 42)
+	background.sql2result[featureSQL] = newMrsForFeatureRegistry(
+		[][]interface{}{{int8(1), nil}},
+	)
+	background.sql2result[lockSQL] = newMrsForPasswordOfUser(
+		[][]interface{}{{uint64(42), uint64(3)}},
+	)
+	background.sql2result[capacitySQL] = newMrsForPasswordOfUser(
+		[][]interface{}{{uint64(12)}},
+	)
+	stub := gostub.StubFunc(&NewBackgroundExec, background)
+	t.Cleanup(stub.Reset)
+
+	table := tree.NewTableName(
+		"events",
+		tree.ObjectNamePrefix{SchemaName: "mo_catalog", ExplicitSchema: true},
+		nil,
+	)
+	alter := tree.NewAlterTable(table)
+	alter.Options = tree.AlterTableOptions{tree.NewAlterOptionLifecycle(
+		tree.LifecycleOperationSet,
+		tree.LifecyclePolicy{
+			Column:          "created_at",
+			ExpireAfterDays: 30,
+			Action:          tree.LifecycleActionDelete,
+		},
+	)}
+	t.Cleanup(alter.Free)
+
+	require.NoError(t, handleAlterTableLifecycle(ctx, ses, alter))
+	require.Len(t, background.executedSQLs, 8)
+	require.Equal(t, []string{
+		featureSQL,
+		"begin;",
+		lockSQL,
+		featureLockSQL,
+		featureSQL,
+		capacitySQL,
+	}, background.executedSQLs[:6])
+	require.Contains(t, background.executedSQLs[6],
+		"insert into mo_catalog.mo_lifecycle_bindings")
+	require.Contains(t, background.executedSQLs[6], "'DELETE'")
+	require.Equal(t, "commit;", background.executedSQLs[7])
+}
+
+func isolateLifecycleHandlerRuntime(t *testing.T, ses *Session) {
+	t.Helper()
+	service := "lifecycle-handler-" + t.Name()
+	ses.service = service
+	runtime := moruntime.NewRuntime(
+		metadata.ServiceType_CN,
+		service,
+		nil,
+		moruntime.WithClock(clock.NewHLCClock(
+			func() int64 { return time.Now().UnixNano() },
+			0,
+		)),
+	)
+	moruntime.SetupServiceBasedRuntime(service, runtime)
 }

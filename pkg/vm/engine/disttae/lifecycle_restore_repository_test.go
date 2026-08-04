@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	mock_incr "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_incr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -509,6 +511,377 @@ func TestSQLRestorePublishRetryStopsAtDoneBeforeHiddenIdentityLookup(t *testing.
 	require.Equal(t, 1, calls)
 }
 
+func TestSQLRestoreImportChunkReturnsCommittedReceiptIdempotently(t *testing.T) {
+	mp := mpool.MustNewZero()
+	chunkDigest := [32]byte{4, 5, 6}
+	var statements []string
+	sqlExecutor := &restoreTxnSQLExecutor{execute: func(
+		sql string,
+		option executor.StatementOption,
+	) (executor.Result, error) {
+		require.Equal(t, uint32(17), option.AccountID())
+		lower := strings.ToLower(sql)
+		statements = append(statements, lower)
+		switch len(statements) {
+		case 1:
+			require.Contains(t, lower, "from mo_catalog.mo_lifecycle_restore_chunks")
+			return lifecycleRestoreStringRows(
+				t,
+				mp,
+				hex.EncodeToString(chunkDigest[:]),
+			), nil
+		case 2:
+			require.Contains(t, lower, "from mo_catalog.mo_lifecycle_restore_attempts")
+			return lifecycleRestoreAttemptRows(t, mp, "IMPORTING"), nil
+		default:
+			t.Fatalf("idempotent Chunk retry must not write data: %s", sql)
+			return executor.Result{}, nil
+		}
+	}}
+	repository := SQLRestoreRepository{
+		AccountID:          17,
+		TargetDatabaseName: "history",
+		Executor:           sqlExecutor,
+		Engine:             lifecycleRestoreEngineStub{},
+		MPool:              mp,
+	}
+	attempt, err := repository.ImportChunk(
+		context.Background(),
+		lifecycleRestoreAttemptForTest("IMPORTING"),
+		lifecyclepkg.RestoreChunkReceipt{
+			RestoreID:    "11111111-1111-1111-1111-111111111111",
+			ChunkOrdinal: 4,
+			ChunkDigest:  chunkDigest,
+		},
+		lifecyclepkg.SchemaDescriptor{},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, uint64(4), attempt.NextChunkOrdinal)
+	require.Equal(t, uint64(100), attempt.RestoredRows)
+	require.Len(t, statements, 2)
+}
+
+func TestSQLRestoreImportsVerifiedChunkInOneTransaction(t *testing.T) {
+	mp := mpool.MustNewZero()
+	controller := gomock.NewController(t)
+	relation := mock_frontend.NewMockRelation(controller)
+	increments := mock_incr.NewMockAutoIncrementService(controller)
+	schema := lifecyclepkg.SchemaDescriptor{
+		FormatVersion: 1,
+		Columns: []lifecyclepkg.SchemaColumn{{
+			Ordinal: 0,
+			Name:    "payload",
+			TypeID:  int32(types.T_int64),
+		}},
+	}
+	rows := [][]lifecyclepkg.CanonicalCell{{{
+		Type:  types.T_int64.ToType(),
+		Value: int64(42),
+	}}}
+	schemaDigest, err := schema.Digest()
+	require.NoError(t, err)
+	encoder := lifecyclepkg.NewCanonicalValueEncoder(schemaDigest)
+	require.NoError(t, encoder.WriteRow(context.Background(), rows[0]))
+	receipt := lifecyclepkg.RestoreChunkReceipt{
+		RestoreID:            "11111111-1111-1111-1111-111111111111",
+		ChunkOrdinal:         4,
+		FileOrdinal:          1,
+		RowGroupOrdinal:      2,
+		ChunkDigest:          [32]byte{4, 5, 6},
+		RowCount:             encoder.RowCount(),
+		LogicalBytes:         encoder.LogicalBytes(),
+		CanonicalContentHash: encoder.Sum(),
+	}
+	tableDef := lifecycleRestoreTableDefForTest()
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
+	relation.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(func(
+		_ context.Context,
+		value *batch.Batch,
+	) error {
+		require.Equal(t, 1, value.RowCount())
+		require.Equal(t, []string{"payload", catalog.FakePrimaryKeyColName}, value.Attrs)
+		return nil
+	})
+	increments.EXPECT().InsertValues(
+		gomock.Any(), uint64(88), uint32(3), gomock.Nil(), gomock.Any(), 1, int64(1),
+	).DoAndReturn(func(
+		_ context.Context,
+		_ uint64,
+		_ uint32,
+		_ client.TxnOperator,
+		vectors []*vector.Vector,
+		_ int,
+		_ int64,
+	) (uint64, error) {
+		vector.SetFixedAtNoTypeCheck(vectors[1], 0, uint64(1))
+		vectors[1].SetNulls(nil)
+		return 1, nil
+	})
+
+	var statements []string
+	sqlExecutor := &restoreTxnSQLExecutor{execute: func(
+		sql string,
+		option executor.StatementOption,
+	) (executor.Result, error) {
+		require.Equal(t, uint32(17), option.AccountID())
+		lower := strings.ToLower(sql)
+		statements = append(statements, lower)
+		switch len(statements) {
+		case 1:
+			require.Contains(t, lower, "from mo_catalog.mo_lifecycle_restore_chunks")
+			return executor.Result{Mp: mp}, nil
+		case 2:
+			require.Contains(t, lower, "from mo_catalog.mo_lifecycle_restore_attempts")
+			return lifecycleRestoreAttemptRows(t, mp, "IMPORTING"), nil
+		case 3:
+			require.Contains(t, lower, "insert into mo_catalog.mo_lifecycle_restore_chunks")
+			return executor.Result{AffectedRows: 1, Mp: mp}, nil
+		case 4:
+			require.Contains(t, lower, "next_chunk_ordinal=next_chunk_ordinal+1")
+			return executor.Result{AffectedRows: 1, Mp: mp}, nil
+		default:
+			t.Fatalf("unexpected SQL %s", sql)
+			return executor.Result{}, nil
+		}
+	}}
+	repository := SQLRestoreRepository{
+		AccountID:          17,
+		TargetDatabaseName: "history",
+		Executor:           sqlExecutor,
+		Engine: lifecycleRestoreEngineStub{
+			relation: relation,
+		},
+		MPool:         mp,
+		AutoIncrement: increments,
+	}
+	updated, err := repository.ImportChunk(
+		context.Background(),
+		lifecycleRestoreAttemptForTest("IMPORTING"),
+		receipt,
+		schema,
+		rows,
+	)
+	require.NoError(t, err)
+	require.Equal(t, uint64(5), updated.NextChunkOrdinal)
+	require.Equal(t, uint64(101), updated.RestoredRows)
+	require.Len(t, statements, 4)
+}
+
+func TestSQLRestoreListsChunkReceiptsInManifestOrder(t *testing.T) {
+	mp := mpool.MustNewZero()
+	firstDigest := [32]byte{1}
+	secondDigest := [32]byte{2}
+	firstHash := [32]byte{3}
+	secondHash := [32]byte{4}
+	sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		require.Contains(t, strings.ToLower(sql), "order by chunk_ordinal")
+		result := executor.NewMemResult([]types.Type{
+			types.T_uint64.ToType(),
+			types.T_uint32.ToType(),
+			types.T_uint32.ToType(),
+			types.T_varchar.ToType(),
+			types.T_uint64.ToType(),
+			types.T_uint64.ToType(),
+			types.T_varchar.ToType(),
+		}, mp)
+		result.NewBatchWithRowCount(2)
+		require.NoError(t, executor.AppendFixedRows(result, 0, []uint64{0, 1}))
+		require.NoError(t, executor.AppendFixedRows(result, 1, []uint32{0, 0}))
+		require.NoError(t, executor.AppendFixedRows(result, 2, []uint32{0, 1}))
+		require.NoError(t, executor.AppendStringRows(result, 3, []string{
+			hex.EncodeToString(firstDigest[:]),
+			hex.EncodeToString(secondDigest[:]),
+		}))
+		require.NoError(t, executor.AppendFixedRows(result, 4, []uint64{8, 9}))
+		require.NoError(t, executor.AppendFixedRows(result, 5, []uint64{80, 90}))
+		require.NoError(t, executor.AppendStringRows(result, 6, []string{
+			hex.EncodeToString(firstHash[:]),
+			hex.EncodeToString(secondHash[:]),
+		}))
+		return result.GetResult(), nil
+	})
+	repository := SQLRestoreRepository{AccountID: 17, Executor: sqlExecutor}
+	receipts, err := repository.ListChunkReceipts(
+		context.Background(),
+		"11111111-1111-1111-1111-111111111111",
+	)
+	require.NoError(t, err)
+	require.Equal(t, []lifecyclepkg.RestoreChunkReceipt{
+		{
+			RestoreID:            "11111111-1111-1111-1111-111111111111",
+			ChunkOrdinal:         0,
+			FileOrdinal:          0,
+			RowGroupOrdinal:      0,
+			ChunkDigest:          firstDigest,
+			RowCount:             8,
+			LogicalBytes:         80,
+			CanonicalContentHash: firstHash,
+		},
+		{
+			RestoreID:            "11111111-1111-1111-1111-111111111111",
+			ChunkOrdinal:         1,
+			FileOrdinal:          0,
+			RowGroupOrdinal:      1,
+			ChunkDigest:          secondDigest,
+			RowCount:             9,
+			LogicalBytes:         90,
+			CanonicalContentHash: secondHash,
+		},
+	}, receipts)
+}
+
+func TestSQLRestorePublishesVerifiedHiddenTableAtomically(t *testing.T) {
+	mp := mpool.MustNewZero()
+	controller := gomock.NewController(t)
+	increments := mock_incr.NewMockAutoIncrementService(controller)
+	increments.EXPECT().SetOffset(
+		gomock.Any(), uint64(88), "id", uint64(255), gomock.Nil(),
+	).Return(nil)
+	verified := [32]byte{7, 8, 9}
+	attempt := lifecycleRestoreAttemptForTest("IMPORTING")
+	var statements []string
+	sqlExecutor := &restoreTxnSQLExecutor{execute: func(
+		sql string,
+		option executor.StatementOption,
+	) (executor.Result, error) {
+		require.Equal(t, uint32(17), option.AccountID())
+		lower := strings.ToLower(sql)
+		statements = append(statements, lower)
+		switch len(statements) {
+		case 1:
+			require.Contains(t, lower, "from mo_catalog.mo_lifecycle_restore_attempts")
+			return lifecycleRestoreAttemptRows(t, mp, "IMPORTING"), nil
+		case 2:
+			require.Contains(t, lower, "from mo_catalog.mo_tables")
+			return lifecycleRestoreTableIdentityRows(
+				t,
+				mp,
+				attempt.StagingDatabaseID,
+				attempt.HiddenName,
+				attempt.StagingTableID,
+			), nil
+		case 3:
+			require.Contains(t, lower, "set state='publishing'")
+			return executor.Result{AffectedRows: 1, Mp: mp}, nil
+		case 4:
+			require.Contains(t, lower, "rename table `history`.`__mo_lifecycle_restore_")
+			return executor.Result{Mp: mp}, nil
+		case 5:
+			require.Contains(t, lower, "set state='done'")
+			return executor.Result{AffectedRows: 1, Mp: mp}, nil
+		case 6:
+			require.Contains(t, lower, "restore_lease_id=null")
+			return executor.Result{AffectedRows: 1, Mp: mp}, nil
+		default:
+			t.Fatalf("unexpected SQL %s", sql)
+			return executor.Result{}, nil
+		}
+	}}
+	repository := SQLRestoreRepository{
+		AccountID:          17,
+		TargetDatabaseName: "history",
+		Executor:           sqlExecutor,
+		AutoIncrement:      increments,
+	}
+	require.NoError(t, repository.Publish(
+		context.Background(),
+		attempt,
+		verified,
+		lifecyclepkg.SchemaDescriptor{Columns: []lifecyclepkg.SchemaColumn{{
+			Name:          "id",
+			TypeID:        int32(types.T_uint8),
+			AutoIncrement: true,
+		}}},
+		[]lifecyclepkg.AutoIncrementMax{{ColumnOrdinal: 0, Value: "255"}},
+	))
+	require.Len(t, statements, 6)
+}
+
+func TestSQLRestoreCleanupDropsOnlyMatchingHiddenTable(t *testing.T) {
+	mp := mpool.MustNewZero()
+	attempt := lifecycleRestoreAttemptForTest("IMPORTING")
+	var statements []string
+	sqlExecutor := &restoreTxnSQLExecutor{execute: func(
+		sql string,
+		option executor.StatementOption,
+	) (executor.Result, error) {
+		lower := strings.ToLower(sql)
+		statements = append(statements, lower)
+		if len(statements) > 1 {
+			require.Equal(t, uint32(17), option.AccountID())
+		}
+		switch len(statements) {
+		case 1, 2:
+			require.Contains(t, lower, "from mo_catalog.mo_lifecycle_restore_attempts")
+			return lifecycleRestoreAttemptRows(t, mp, "IMPORTING"), nil
+		case 3:
+			require.Contains(t, lower, "from mo_catalog.mo_tables")
+			return lifecycleRestoreTableIdentityRows(
+				t,
+				mp,
+				attempt.StagingDatabaseID,
+				attempt.HiddenName,
+				attempt.StagingTableID,
+			), nil
+		case 4:
+			require.Contains(t, lower, "set state='failed'")
+			return executor.Result{AffectedRows: 1, Mp: mp}, nil
+		case 5:
+			require.Contains(t, lower, "drop table `history`.`__mo_lifecycle_restore_")
+			return executor.Result{Mp: mp}, nil
+		case 6:
+			require.Contains(t, lower, "restore_lease_id=null")
+			return executor.Result{AffectedRows: 1, Mp: mp}, nil
+		default:
+			t.Fatalf("unexpected SQL %s", sql)
+			return executor.Result{}, nil
+		}
+	}}
+	repository := SQLRestoreRepository{
+		AccountID:          17,
+		TargetDatabaseName: "history",
+		Executor:           sqlExecutor,
+	}
+	require.NoError(t, repository.CleanupHidden(
+		context.Background(),
+		attempt.RestoreID,
+	))
+	require.Len(t, statements, 6)
+}
+
+func TestSQLRestorePurgeTransitionsPublishedRootAfterDatasetCAS(t *testing.T) {
+	mp := mpool.MustNewZero()
+	root := lifecyclepkg.CleanupRoot{
+		RootID:        "44444444-4444-4444-4444-444444444444",
+		AttemptID:     "55555555-5555-5555-5555-555555555555",
+		ExecutorEpoch: 9,
+		State:         lifecyclepkg.CleanupRootPublished,
+		StateVersion:  3,
+	}
+	roots := &restoreCleanupRootRepositoryStub{root: root}
+	sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		require.Contains(t, strings.ToLower(sql), "set state='delete_pending'")
+		return executor.Result{AffectedRows: 1, Mp: mp}, nil
+	})
+	repository := SQLRestoreRepository{
+		AccountID: 17,
+		Executor:  sqlExecutor,
+		Roots:     roots,
+	}
+	require.NoError(t, repository.RequestPurge(
+		context.Background(),
+		lifecyclepkg.RestoreDataset{
+			DatasetID: "22222222-2222-2222-2222-222222222222",
+			RootID:    root.RootID,
+			State:     "PUBLISHED",
+			Version:   3,
+		},
+		time.Now(),
+	))
+	require.True(t, roots.transitioned)
+}
+
 func TestSQLRestoreCleanupReleasesLeaseWhenHiddenTableWasDropped(t *testing.T) {
 	mp := mpool.MustNewZero()
 	var statements []string
@@ -608,6 +981,82 @@ func lifecycleRestoreAttemptRows(
 	return result.GetResult()
 }
 
+func lifecycleRestoreAttemptForTest(state string) lifecyclepkg.RestoreAttempt {
+	return lifecyclepkg.RestoreAttempt{
+		RestoreID:          "11111111-1111-1111-1111-111111111111",
+		DatasetID:          "22222222-2222-2222-2222-222222222222",
+		LeaseID:            "33333333-3333-3333-3333-333333333333",
+		Deadline:           time.Date(2026, 8, 5, 9, 0, 0, 0, time.UTC),
+		StagingDatabaseID:  7,
+		StagingTableID:     88,
+		HiddenName:         "__mo_lifecycle_restore_11111111111111111111111111111111",
+		TargetDatabaseID:   7,
+		TargetDatabaseName: "history",
+		TargetName:         "events_history",
+		State:              state,
+		NextChunkOrdinal:   4,
+		RestoredRows:       100,
+	}
+}
+
+func lifecycleRestoreStringRows(
+	t *testing.T,
+	mp *mpool.MPool,
+	values ...string,
+) executor.Result {
+	t.Helper()
+	result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
+	if len(values) != 0 {
+		result.NewBatchWithRowCount(len(values))
+		require.NoError(t, executor.AppendStringRows(result, 0, values))
+	}
+	return result.GetResult()
+}
+
+func lifecycleRestoreTableIdentityRows(
+	t *testing.T,
+	mp *mpool.MPool,
+	databaseID uint64,
+	name string,
+	tableID uint64,
+) executor.Result {
+	t.Helper()
+	result := executor.NewMemResult([]types.Type{
+		types.T_uint64.ToType(),
+		types.T_varchar.ToType(),
+		types.T_uint64.ToType(),
+	}, mp)
+	result.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(result, 0, []uint64{databaseID}))
+	require.NoError(t, executor.AppendStringRows(result, 1, []string{name}))
+	require.NoError(t, executor.AppendFixedRows(result, 2, []uint64{tableID}))
+	return result.GetResult()
+}
+
+func lifecycleRestoreTableDefForTest() *plan.TableDef {
+	return &plan.TableDef{
+		TblId:         88,
+		AutoIncrEpoch: 3,
+		Cols: []*plan.ColDef{
+			{Name: "payload", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+			{
+				Name:   catalog.FakePrimaryKeyColName,
+				Hidden: true,
+				Typ: plan.Type{
+					Id:       int32(types.T_uint64),
+					AutoIncr: true,
+				},
+			},
+			{
+				Name:   catalog.Row_ID,
+				Hidden: true,
+				Typ:    plan.Type{Id: int32(types.T_Rowid)},
+			},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+	}
+}
+
 type restoreSQLCall struct {
 	sql       string
 	accountID uint32
@@ -649,6 +1098,63 @@ func (txn restoreTxnExecutor) Exec(
 }
 
 func (restoreTxnExecutor) Txn() client.TxnOperator { return nil }
+
+type restoreCleanupRootRepositoryStub struct {
+	root         lifecyclepkg.CleanupRoot
+	transitioned bool
+}
+
+func (*restoreCleanupRootRepositoryStub) Register(
+	context.Context,
+	lifecyclepkg.CleanupRoot,
+) error {
+	panic("not used")
+}
+
+func (stub *restoreCleanupRootRepositoryStub) Get(
+	context.Context,
+	string,
+) (lifecyclepkg.CleanupRoot, error) {
+	return stub.root, nil
+}
+
+func (*restoreCleanupRootRepositoryStub) HasUnresolvedSource(
+	context.Context,
+	uint32,
+	uint64,
+	[32]byte,
+) (bool, error) {
+	panic("not used")
+}
+
+func (stub *restoreCleanupRootRepositoryStub) Transition(
+	_ context.Context,
+	rootID string,
+	attemptID string,
+	executorEpoch uint64,
+	from lifecyclepkg.CleanupRootState,
+	expectedVersion uint64,
+	to lifecyclepkg.CleanupRootState,
+) (lifecyclepkg.CleanupRoot, error) {
+	if rootID != stub.root.RootID || attemptID != stub.root.AttemptID ||
+		executorEpoch != stub.root.ExecutorEpoch || from != stub.root.State ||
+		expectedVersion != stub.root.StateVersion ||
+		to != lifecyclepkg.CleanupRootDeletePending {
+		return lifecyclepkg.CleanupRoot{}, errors.New("unexpected Cleanup Root transition")
+	}
+	stub.transitioned = true
+	stub.root.State = to
+	stub.root.StateVersion++
+	return stub.root, nil
+}
+
+func (*restoreCleanupRootRepositoryStub) UpdateCleanup(
+	context.Context,
+	lifecyclepkg.CleanupRoot,
+	uint64,
+) (lifecyclepkg.CleanupRoot, error) {
+	panic("not used")
+}
 
 func lifecycleRestoreUint64Rows(
 	t *testing.T,
@@ -701,12 +1207,17 @@ func lifecycleRestoreInitializeRequestForTest(
 	}
 }
 
-type lifecycleRestoreEngineStub struct{}
+type lifecycleRestoreEngineStub struct {
+	relation engine.Relation
+}
 
-func (lifecycleRestoreEngineStub) GetRelationById(
+func (stub lifecycleRestoreEngineStub) GetRelationById(
 	context.Context,
 	client.TxnOperator,
 	uint64,
 ) (string, string, engine.Relation, error) {
+	if stub.relation != nil {
+		return "history", "events", stub.relation, nil
+	}
 	panic("not used by initialization")
 }
