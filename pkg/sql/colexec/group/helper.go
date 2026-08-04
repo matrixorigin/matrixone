@@ -454,6 +454,10 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 
 // load spilled data from the spill bucket queue.
 func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.Analyzer, aggExprs []aggexec.AggFuncExecExpression) (_ bool, retErr error) {
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return false, err
+	}
+
 	// first, if there is current spill bucket, transfer it to the spill bucket queue.
 	if ctr.currentSpillBkt != nil {
 		if ctr.spillBkts == nil {
@@ -531,6 +535,10 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	bufferedFile := ctr.spillReader
 
 	for {
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			return false, err
+		}
+
 		// load next batch from the spill bucket.
 		readStart := time.Now()
 		cnt, err := types.ReadInt64(bufferedFile)

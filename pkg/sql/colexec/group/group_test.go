@@ -295,6 +295,39 @@ func TestGroupSpillReloadKeepsPreallocationBounded(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestGroupSpillReloadHonorsCancellationAfterInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	const rows = 65536
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	input.SetRowCount(rows)
+
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = ctx
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}).WithEndOfDataCallback(cancel)
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, []aggexec.AggFuncExecExpression{countStarAgg()})
+	g.SpillMem = 4096
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+
+	t.Cleanup(func() {
+		g.Free(proc, true, context.Canceled)
+		child.Free(proc, true, context.Canceled)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	result, err := vm.Exec(g, proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, result.Batch)
+	require.Zero(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadBuckets"])
+}
+
 func TestGroupedOrderedGroupConcatComposesWithGenericSpill(t *testing.T) {
 	for _, distinct := range []bool{false, true} {
 		t.Run(fmt.Sprintf("distinct=%t", distinct), func(t *testing.T) {
@@ -414,6 +447,40 @@ func TestMergeGroupPreservesLateNullableGroupKeys(t *testing.T) {
 	require.Equal(t, len(finalBatches)+1, merge.OpAnalyzer.GetOpStats().CallNum)
 	assertMergedTicketCounts(t, finalBatches, 2, 2)
 	merge.Free(proc, false, nil)
+}
+
+func TestMergeGroupHonorsCancellationAfterInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	partial := batch.NewWithSize(1)
+	partial.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp())
+	partial.SetRowCount(3)
+
+	var extra bytes.Buffer
+	mtyp := int32(H8)
+	nullable := false
+	nAggs := int32(0)
+	extra.Write(types.EncodeInt32(&mtyp))
+	extra.Write(types.EncodeBool(&nullable))
+	extra.Write(types.EncodeInt32(&nAggs))
+	partial.ExtraBuf = extra.Bytes()
+
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = ctx
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partial}).WithEndOfDataCallback(cancel)
+	merge := newMergeGroupOp(nil)
+	merge.AppendChild(child)
+	require.NoError(t, merge.Prepare(proc))
+
+	t.Cleanup(func() {
+		merge.Free(proc, true, context.Canceled)
+		child.Free(proc, true, context.Canceled)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	result, err := vm.Exec(merge, proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, result.Batch)
 }
 
 func TestMergeGroupFreesSpillAggListAfterBatchMerge(t *testing.T) {

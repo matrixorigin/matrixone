@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"bytes"
 	"container/heap"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -256,6 +257,36 @@ func TestOrderSpill(t *testing.T) {
 	arg.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestOrderSpillFinalMergeHonorsCancellationAfterInput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &MergeOrder{
+		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}},
+		SpillThreshold: 1,
+		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = ctx
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		newValuesBatch(proc, []int8{1, 4, 7}),
+		newValuesBatch(proc, []int8{2, 5, 8}),
+		newValuesBatch(proc, []int8{3, 6, 9}),
+	}).WithEndOfDataCallback(cancel)
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	t.Cleanup(func() {
+		arg.Free(proc, true, context.Canceled)
+		child.Free(proc, true, context.Canceled)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	result, err := vm.Exec(arg, proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, result.Batch)
+	require.Empty(t, arg.ctr.spillReaders)
 }
 
 func TestOrderSpillMultiPass(t *testing.T) {

@@ -279,6 +279,14 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		}
 
+		if group.ctr.inputDone {
+			// EOF and cancellation can arrive in the same child call. Observe
+			// cancellation before flushing or reloading spill state.
+			if err, isCancel = vm.CancelCheck(proc); isCancel {
+				return vm.CancelResult, err
+			}
+		}
+
 		// spilling -- spill whatever left in memory, and load first spilled bucket.
 		if group.ctr.isSpilling() {
 			if bytes, rows, err := group.ctr.spillDataToDisk(proc, group.OpAnalyzer, nil); err != nil {

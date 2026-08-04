@@ -247,16 +247,20 @@ func (ctr *container) cleanupSpill(proc *process.Process) {
 		ctr.spillReaders[i].close(proc)
 	}
 	ctr.spillReaders = nil
-	for i := range ctr.spillRuns {
-		if ctr.spillRuns[i] != nil && ctr.spillRuns[i].file != nil {
-			ctr.spillRuns[i].file.Close()
-			ctr.spillRuns[i].file = nil
-		}
-	}
+	closeSpillRuns(ctr.spillRuns)
 	ctr.spillRuns = nil
 	ctr.spilling = false
 	ctr.spillMemUsage = 0
 	ctr.spillWriteBuf.Reset()
+}
+
+func closeSpillRuns(runs []*spillRun) {
+	for i := range runs {
+		if runs[i] != nil && runs[i].file != nil {
+			runs[i].file.Close()
+			runs[i].file = nil
+		}
+	}
 }
 
 func (ctr *container) setSpillThreshold(threshold int64) {

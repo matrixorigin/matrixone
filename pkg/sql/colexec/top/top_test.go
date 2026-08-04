@@ -16,6 +16,7 @@ package top
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -201,6 +202,35 @@ func TestTopSpill(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestTopSpillEvalHonorsCancellationAfterInput(t *testing.T) {
+	limit := int64(topSpillThreshold + 1)
+	tc := newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int64.ToType()}, limit,
+		[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}})
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.True(t, tc.arg.ctr.spilling)
+
+	ctx, cancel := context.WithCancel(tc.proc.Ctx)
+	tc.proc.Ctx = ctx
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		newBatch(tc.types, tc.proc, 8192),
+		newBatch(tc.types, tc.proc, 8192),
+		newBatch(tc.types, tc.proc, 8192),
+	}).WithEndOfDataCallback(cancel)
+	tc.arg.AppendChild(child)
+
+	t.Cleanup(func() {
+		tc.arg.Free(tc.proc, true, context.Canceled)
+		child.Free(tc.proc, true, context.Canceled)
+		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	})
+
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NotNil(t, tc.arg.ctr.spillFile)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, result.Batch)
 }
 
 func TestTopSpillInsufficientRows(t *testing.T) {
