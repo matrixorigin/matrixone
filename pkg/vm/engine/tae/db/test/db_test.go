@@ -9304,7 +9304,23 @@ func Test_CheckpointChaos1(t *testing.T) {
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	err = tae.DB.ForceCheckpoint(ctx, now)
-	assert.Error(t, err)
+	require.Error(t, err)
+	// The caller deadline does not cancel an already admitted runner-owned ICKP.
+	// Wait for both queued intent retirement and execution cleanup before
+	// asserting the file-service snapshot.
+	waitCtx, waitCancel := context.WithTimeout(
+		context.Background(), testutil.TestCheckpointTimeout,
+	)
+	defer waitCancel()
+	if intent := tae.BGCheckpointRunner.GetICKPIntentOnlyForTest(); intent != nil {
+		select {
+		case <-waitCtx.Done():
+			require.NoError(t, context.Cause(waitCtx))
+		case <-intent.Wait():
+		}
+	}
+	require.NoError(t,
+		tae.BGCheckpointRunner.WaitRunningCKPDoneForTest(waitCtx, false))
 	require.Equal(t, filesBeforeFailure, snapshotFileService(t, tae.Runtime.Fs),
 		"failed ICKP publication must roll back its data and table-ID objects")
 

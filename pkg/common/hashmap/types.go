@@ -77,16 +77,46 @@ type Iterator interface {
 	// Find vecs[start, start+count) in hashmap
 	// vs  : the number of rows corresponding to each value in the hash table (start with 1, and 0 means not found.)
 	// zvs : if zvs[i] is 0 indicates the presence null, 1 indicates the absence of a null.
-	Find(start, count int, vecs []*vector.Vector) (vs []uint64, zvs []int64)
+	Find(start, count int, vecs []*vector.Vector) (vs []uint64, zvs []int64, err error)
+}
+
+// IteratorAllocation selects exact physical provenance for data-scaled hash
+// key encoding scratch. It is immutable and shared by iterators created from
+// one map generation.
+type IteratorAllocation struct {
+	account *mpool.AllocationAccount
+	owner   mpool.AllocationOwner
+	site    mpool.AllocationSite
+}
+
+func NewIteratorAllocation(
+	account *mpool.AllocationAccount,
+	owner mpool.AllocationOwner,
+	site mpool.AllocationSite,
+) (*IteratorAllocation, error) {
+	allocation := &IteratorAllocation{
+		account: account,
+		owner:   owner,
+		site:    site,
+	}
+	if account == nil || account.Handle() == 0 ||
+		owner < mpool.AllocationOwnerMin || owner > mpool.AllocationOwnerMax ||
+		site < mpool.AllocationSiteMin {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	return allocation, nil
 }
 
 // StrHashMap key is []byte, value is an uint64 value (starting from 1)
 //
 //	each time a new key is inserted, the hashtable returns a last-value+1 or, if the old key is inserted, the value corresponding to that key
 type StrHashMap struct {
-	hasNull bool
-	rows    uint64
-	hashMap *hashtable.StringHashMap
+	hasNull            bool
+	groupingAware      bool
+	rows               uint64
+	hashMap            *hashtable.StringHashMap
+	mp                 *mpool.MPool
+	iteratorAllocation *IteratorAllocation
 }
 
 // IntHashMap key is int64, value is an uint64 (start from 1)
@@ -99,9 +129,11 @@ type IntHashMap struct {
 }
 
 type strHashmapIterator struct {
-	mp     *StrHashMap
-	keys   [][]byte
-	values []uint64
+	mp         *StrHashMap
+	keys       [][]byte
+	values     []uint64
+	keyBuffer  []byte
+	keyLengths [UnitLimit]int
 	// zValues, 0 indicates the presence null, 1 indicates the absence of a null
 	zValues       []int64
 	strHashStates [][3]uint64

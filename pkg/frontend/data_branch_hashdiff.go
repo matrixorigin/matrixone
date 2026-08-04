@@ -51,6 +51,30 @@ type lcaProbeLayout struct {
 	enumValues  []string
 }
 
+func sortDataBranchBatchByPrimaryKey(bat *batch.Batch, pkColIdx int, mp *mpool.MPool) error {
+	pkVec := bat.Vecs[pkColIdx]
+	if !isDataBranchFloatType(*pkVec.GetType()) {
+		return mergeutil.SortColumnsByIndex(bat.Vecs, pkColIdx, mp)
+	}
+
+	identityVec := vector.NewVec(types.T_uint64.ToType())
+	defer identityVec.Free(mp)
+	for row := range pkVec.Length() {
+		identity, isNull, err := dataBranchFloatPKIdentityAt(pkVec, row)
+		if err != nil {
+			return err
+		}
+		if err = vector.AppendFixed(identityVec, identity, isNull, mp); err != nil {
+			return err
+		}
+	}
+
+	cols := make([]*vector.Vector, 0, len(bat.Vecs)+1)
+	cols = append(cols, bat.Vecs...)
+	cols = append(cols, identityVec)
+	return mergeutil.SortColumnsByIndex(cols, len(cols)-1, mp)
+}
+
 func (layout lcaProbeLayout) columnNameForTargetIndex(targetIdx int) (string, bool) {
 	for i, candidateIdx := range layout.targetIdxes {
 		if candidateIdx == targetIdx {
@@ -289,8 +313,8 @@ func handleDelsOnLCA(
 
 				valsBuf.WriteString(fmt.Sprintf("row(%d,", i))
 				for j := range tuple {
-					if err = formatValIntoString(
-						ses, tuple[j], colTypes[expandedPKColIdxes[j]], valsBuf,
+					if err = formatValIntoStringWithFloatCast(
+						ses, tuple[j], colTypes[expandedPKColIdxes[j]], valsBuf, true,
 					); err != nil {
 						return nil, err
 					}
@@ -320,7 +344,7 @@ func handleDelsOnLCA(
 				valsBuf.WriteString(fmt.Sprintf("row(%d,", i))
 				b := tBat.Vecs[0].GetRawBytesAt(i)
 				val := types.DecodeValue(b, tBat.Vecs[0].GetType().Oid)
-				if err = formatValIntoString(ses, val, pkType, valsBuf); err != nil {
+				if err = formatValIntoStringWithFloatCast(ses, val, pkType, valsBuf, true); err != nil {
 					return nil, err
 				}
 				valsBuf.WriteString(")")
@@ -357,12 +381,14 @@ func handleDelsOnLCA(
 		)
 
 		for i := range quotedPKNames {
-			sqlBuf.WriteString(fmt.Sprintf("lca.%s = ", quotedPKNames[i]))
+			left := fmt.Sprintf("lca.%s", quotedPKNames[i])
+			right := fmt.Sprintf("pks.%s", quotedPKValueAliases[i])
 			if castType, ok := lcaProbeJoinCastType(colTypes[expandedPKColIdxes[i]]); ok {
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as %s)", quotedPKValueAliases[i], castType))
-			} else {
-				sqlBuf.WriteString(fmt.Sprintf("pks.%s", quotedPKValueAliases[i]))
+				right = fmt.Sprintf("cast(%s as %s)", right, castType)
 			}
+			sqlBuf.WriteString(dataBranchSQLKeyEqual(
+				left, right, colTypes[expandedPKColIdxes[i]],
+			))
 			if i != len(quotedPKNames)-1 {
 				sqlBuf.WriteString(" AND ")
 			}
@@ -1053,14 +1079,15 @@ func hashDiffIfHasLCA(
 		wg        sync.WaitGroup
 		atomicErr atomic.Value
 
-		baseDeleteBatches []batchWithKind
-		baseUpdateBatches []batchWithKind
+		baseDeleteBatches  []batchWithKind
+		baseUpdateBatches  []batchWithKind
+		restoreMissingKeys = make(map[string]struct{})
 	)
 
 	handleBaseDeleteAndUpdates := func(wrapped batchWithKind) error {
 		wrapped.side = diffSideBase
-		if err2 := mergeutil.SortColumnsByIndex(
-			wrapped.batch.Vecs, tblStuff.def.pkColIdx, ses.proc.Mp(),
+		if err2 := sortDataBranchBatchByPrimaryKey(
+			wrapped.batch, tblStuff.def.pkColIdx, ses.proc.Mp(),
 		); err2 != nil {
 			return err2
 		}
@@ -1076,6 +1103,50 @@ func hashDiffIfHasLCA(
 	handleTarDeleteAndUpdates := func(wrapped batchWithKind) (err2 error) {
 		wrapped.side = diffSideTarget
 		var pickConflictBat *batch.Batch
+		if wrapped.kind == diffInsert && wrapped.fromUpdate && len(restoreMissingKeys) > 0 {
+			var keep []int64
+			restoreBat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+			for rowIdx := range wrapped.batch.RowCount() {
+				key, keyErr := extractPKAsString(ses, tblStuff, wrapped.batch, rowIdx)
+				if keyErr != nil {
+					tblStuff.retPool.releaseRetBatch(restoreBat, false)
+					return keyErr
+				}
+				if _, restore := restoreMissingKeys[key]; !restore {
+					keep = append(keep, int64(rowIdx))
+					continue
+				}
+				if err2 = restoreBat.UnionOne(wrapped.batch, int64(rowIdx), ses.proc.Mp()); err2 != nil {
+					tblStuff.retPool.releaseRetBatch(restoreBat, false)
+					return err2
+				}
+				delete(restoreMissingKeys, key)
+			}
+			if restoreBat.Vecs[0].Length() > 0 {
+				restoreBat.SetRowCount(restoreBat.Vecs[0].Length())
+				if stop, e := emitBatch(emit, batchWithKind{
+					batch:          restoreBat,
+					kind:           diffInsert,
+					name:           wrapped.name,
+					side:           wrapped.side,
+					fromUpdate:     true,
+					restoreMissing: true,
+				}, false, tblStuff.retPool); e != nil {
+					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+					return e
+				} else if stop {
+					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+					return nil
+				}
+			} else {
+				tblStuff.retPool.releaseRetBatch(restoreBat, false)
+			}
+			if len(keep) == 0 {
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				return nil
+			}
+			wrapped.batch.Shrink(keep, true)
+		}
 		if len(baseUpdateBatches) == 0 && len(baseDeleteBatches) == 0 {
 			// no need to check conflict
 			if stop, e := emitBatch(emit, wrapped, false, tblStuff.retPool); e != nil {
@@ -1086,8 +1157,8 @@ func hashDiffIfHasLCA(
 			return nil
 		}
 
-		if err2 = mergeutil.SortColumnsByIndex(
-			wrapped.batch.Vecs, tblStuff.def.pkColIdx, ses.proc.Mp(),
+		if err2 = sortDataBranchBatchByPrimaryKey(
+			wrapped.batch, tblStuff.def.pkColIdx, ses.proc.Mp(),
 		); err2 != nil {
 			return err2
 		}
@@ -1112,7 +1183,7 @@ func hashDiffIfHasLCA(
 
 			i, j := 0, 0
 			for i < tarVec.Length() && j < baseVec.Length() {
-				if cmp, err3 = compareSingleValInVector(
+				if cmp, err3 = compareDataBranchPrimaryKeyInVectors(
 					ctx, ses, i, j, tarVec, baseVec,
 				); err3 != nil {
 					return
@@ -1139,6 +1210,15 @@ func hashDiffIfHasLCA(
 						i++
 						j++
 					} else if copt.conflictOpt.Opt == tree.CONFLICT_ACCEPT {
+						if tarWrapped.kind == diffDelete && tarWrapped.fromUpdate &&
+							baseWrapped.kind == diffDelete && !baseWrapped.fromUpdate {
+							key, keyErr := extractPKAsString(ses, tblStuff, tarWrapped.batch, i)
+							if keyErr != nil {
+								err3 = keyErr
+								return
+							}
+							restoreMissingKeys[key] = struct{}{}
+						}
 						if tarWrapped.kind == diffDelete &&
 							baseWrapped.kind == diffDelete &&
 							!tarWrapped.fromUpdate && !baseWrapped.fromUpdate {
@@ -1254,11 +1334,6 @@ func hashDiffIfHasLCA(
 			return false
 		})
 
-		if wrapped.batch.RowCount() == 0 {
-			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-			return
-		}
-
 		if pickConflictBat != nil {
 			if stop, e := emitBatch(emit, batchWithKind{
 				batch: pickConflictBat,
@@ -1270,6 +1345,10 @@ func hashDiffIfHasLCA(
 			} else if stop {
 				return nil
 			}
+		}
+		if wrapped.batch.RowCount() == 0 {
+			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+			return nil
 		}
 
 		stop, e := emitBatch(emit, wrapped, false, tblStuff.retPool)
@@ -1389,6 +1468,12 @@ func hashDiffIfHasLCA(
 	// phase2: handle tar dels and updates on lca
 	if err = stepHandler(false); err != nil {
 		return
+	}
+	if len(restoreMissingKeys) != 0 {
+		return moerr.NewInternalErrorNoCtxf(
+			"data branch source update is missing %d replacement row(s)",
+			len(restoreMissingKeys),
+		)
 	}
 
 	// what can I do with these left base updates/inserts ?
@@ -1721,10 +1806,11 @@ func findDeleteAndUpdateBat(
 							return err2
 						}
 						if err2 = send(batchWithKind{
-							name:  tblName,
-							side:  side,
-							batch: updateBat,
-							kind:  diffInsert,
+							name:       tblName,
+							side:       side,
+							batch:      updateBat,
+							kind:       diffInsert,
+							fromUpdate: tblStuff.def.pkKind != fakeKind,
 						}); err2 != nil {
 							return err2
 						}
@@ -2092,6 +2178,7 @@ func diffDataHelper(
 			tarBat        *batch.Batch
 			baseBat       *batch.Batch
 			baseDeleteBat *batch.Batch
+			tarUpdateBat  *batch.Batch
 			tarTuple      types.Tuple
 			baseTuple     types.Tuple
 			checkRet      databranchutils.GetResult
@@ -2099,6 +2186,11 @@ func diffDataHelper(
 
 		tarBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 		baseBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+		defer func() {
+			if tarUpdateBat != nil {
+				tblStuff.retPool.releaseRetBatch(tarUpdateBat, false)
+			}
+		}()
 
 		if err2 = cursor.ForEach(func(key []byte, row []byte) error {
 			select {
@@ -2174,10 +2266,13 @@ func diffDataHelper(
 							if baseDeleteBat == nil {
 								baseDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 							}
+							if tarUpdateBat == nil {
+								tarUpdateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+							}
 							if err2 = appendTupleToBat(ses, baseDeleteBat, baseTuple, tblStuff); err2 != nil {
 								return err2
 							}
-							if err2 = appendTupleToBat(ses, tarBat, tarTuple, tblStuff); err2 != nil {
+							if err2 = appendTupleToBat(ses, tarUpdateBat, tarTuple, tblStuff); err2 != nil {
 								return err2
 							}
 						} else {
@@ -2204,11 +2299,28 @@ func diffDataHelper(
 
 		if baseDeleteBat != nil {
 			if stop, err3 := emitBatch(emit, batchWithKind{
-				batch: baseDeleteBat,
-				kind:  diffDelete,
-				name:  tblStuff.baseRel.GetTableName(),
-				side:  diffSideBase,
+				batch:      baseDeleteBat,
+				kind:       diffDelete,
+				name:       tblStuff.baseRel.GetTableName(),
+				side:       diffSideBase,
+				fromUpdate: true,
 			}, false, tblStuff.retPool); err3 != nil {
+				return err3
+			} else if stop {
+				return nil
+			}
+		}
+
+		if tarUpdateBat != nil {
+			stop, err3 := emitBatch(emit, batchWithKind{
+				batch:      tarUpdateBat,
+				kind:       diffInsert,
+				name:       tblStuff.tarRel.GetTableName(),
+				side:       diffSideTarget,
+				fromUpdate: true,
+			}, false, tblStuff.retPool)
+			tarUpdateBat = nil
+			if err3 != nil {
 				return err3
 			} else if stop {
 				return nil

@@ -279,6 +279,116 @@ func TestFullTextTokenizeCallJSONValue(t *testing.T) {
 	ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
 }
 
+func TestFullTextTokenizeSkipsNullContentColumns(t *testing.T) {
+	testCases := []struct {
+		name  string
+		param string
+		left  string
+		right string
+		words []string
+	}{
+		{name: "ordinary", left: "lefttoken", right: "righttoken", words: []string{"lefttoken", "righttoken"}},
+		{name: "default", param: `{"parser":"default"}`, left: "lefttoken", right: "righttoken", words: []string{"lefttoken", "righttoken"}},
+		{name: "ngram", param: `{"parser":"ngram"}`, left: "lefttoken", right: "righttoken", words: []string{"lefttoken", "righttoken"}},
+		{name: "gojieba", param: `{"parser":"gojieba"}`, left: "北京", right: "清华大学", words: []string{"北京", "清华大学"}},
+		{name: "json", param: `{"parser":"json"}`, left: `{"k":"lefttoken"}`, right: `{"k":"righttoken"}`, words: []string{"lefttoken", "righttoken"}},
+		{name: "json_value", param: `{"parser":"json_value"}`, left: `{"k":"lefttoken"}`, right: `{"k":"righttoken"}`, words: []string{"lefttoken", "righttoken"}},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			ut := newFTTTestCase(t, mpool.MustNewZero(), fttdefaultAttrs, testCase.param)
+			ut.arg.Args = fullTextTokenizeThreeArgExprs()
+			inbat := makeNullableFullTextBatch(t, ut.proc, testCase.left, testCase.right)
+			defer inbat.Clean(ut.proc.Mp())
+
+			state := &tokenizeState{}
+			ut.arg.ctr.argVecs = inbat.Vecs
+			defer state.free(ut.arg, ut.proc, false, nil)
+
+			for row := 0; row < inbat.RowCount(); row++ {
+				require.NoError(t, state.start(ut.arg, ut.proc, row, nil))
+
+				if row == 2 {
+					require.Empty(t, state.doc.Words)
+					result, err := state.call(ut.arg, ut.proc)
+					require.NoError(t, err)
+					require.Equal(t, vm.CancelResult.Status, result.Status)
+					continue
+				}
+
+				expectedWords := testCase.words
+				if row < 2 {
+					expectedWords = []string{testCase.words[1-row]}
+				}
+				require.Len(t, state.doc.Words, len(expectedWords)+1)
+				for i, expectedWord := range expectedWords {
+					require.Equal(t, expectedWord, state.doc.Words[i].Word)
+				}
+				require.Equal(t, int32(0), state.doc.Words[0].Pos)
+				require.Equal(t, "__DocLen", state.doc.Words[len(expectedWords)].Word)
+				require.Equal(t, int32(len(expectedWords)), state.doc.Words[len(expectedWords)].Pos)
+			}
+		})
+	}
+}
+
+func TestFullTextTokenizeSkipsConstNullContentColumn(t *testing.T) {
+	ut := newFTTTestCase(t, mpool.MustNewZero(), fttdefaultAttrs, "")
+	ut.arg.Args = fullTextTokenizeThreeArgExprs()
+
+	idVec, err := vector.NewConstFixed(types.T_int32.ToType(), int32(1), 1, ut.proc.Mp())
+	require.NoError(t, err)
+	leftVec := vector.NewConstNull(types.T_varchar.ToType(), 1, ut.proc.Mp())
+	rightVec, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("righttoken"), 1, ut.proc.Mp())
+	require.NoError(t, err)
+	for _, vec := range []*vector.Vector{idVec, leftVec, rightVec} {
+		defer vec.Free(ut.proc.Mp())
+	}
+	ut.arg.ctr.argVecs = []*vector.Vector{idVec, leftVec, rightVec}
+
+	state := &tokenizeState{}
+	defer state.free(ut.arg, ut.proc, false, nil)
+	require.NoError(t, state.start(ut.arg, ut.proc, 0, nil))
+	require.Len(t, state.doc.Words, 2)
+	require.Equal(t, "righttoken", state.doc.Words[0].Word)
+	require.Equal(t, int32(0), state.doc.Words[0].Pos)
+	require.Equal(t, "__DocLen", state.doc.Words[1].Word)
+}
+
+func fullTextTokenizeThreeArgExprs() []*plan.Expr {
+	return []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_int32)}},
+		{Typ: plan.Type{Id: int32(types.T_varchar), Width: 128}},
+		{Typ: plan.Type{Id: int32(types.T_varchar), Width: 128}},
+	}
+}
+
+func makeNullableFullTextBatch(t *testing.T, proc *process.Process, left, right string) *batch.Batch {
+	t.Helper()
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+
+	rows := []struct {
+		leftNull  bool
+		rightNull bool
+	}{
+		{leftNull: true},
+		{rightNull: true},
+		{leftNull: true, rightNull: true},
+		{},
+	}
+	for i, row := range rows {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(i+1), false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(left), row.leftNull, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte(right), row.rightNull, proc.Mp()))
+	}
+	bat.SetRowCount(len(rows))
+	return bat
+}
+
 // create const input exprs
 func makeConstInputExprsFTT() []*plan.Expr {
 

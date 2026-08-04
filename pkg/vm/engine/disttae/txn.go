@@ -298,6 +298,9 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 	autoIncrEpoch uint32,
 	autoIncrEpochKnown bool,
 ) (genRowidVec *vector.Vector, err error) {
+	if err := txn.requireAutoIncrEpochFenceCommit(autoIncrEpoch, autoIncrEpochKnown); err != nil {
+		return nil, err
+	}
 	start := time.Now()
 	seq := txn.op.NextSequence()
 	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
@@ -1589,6 +1592,9 @@ func (txn *Transaction) writeFileLockedWithAutoIncrEpochKnown(
 	autoIncrEpoch uint32,
 	autoIncrEpochKnown bool,
 ) (err error) {
+	if err := txn.requireAutoIncrEpochFenceCommit(autoIncrEpoch, autoIncrEpochKnown); err != nil {
+		return err
+	}
 
 	txn.hasS3Op.Store(true)
 
@@ -1644,6 +1650,16 @@ func (txn *Transaction) writeFileLockedWithAutoIncrEpochKnown(
 	return nil
 }
 
+func (txn *Transaction) requireAutoIncrEpochFenceCommit(autoIncrEpoch uint32, autoIncrEpochKnown bool) error {
+	if !autoIncrEpochKnown || autoIncrEpoch == 0 {
+		return nil
+	}
+	if client.RequireAutoIncrEpochFenceCommit(txn.op) {
+		return nil
+	}
+	return moerr.NewNotSupported(txn.proc.Ctx, "transaction operator cannot enforce AUTO_INCREMENT epochs")
+}
+
 // WriteFileLockedSkipTransfer is similar to WriteFileLocked but marks the entry
 // to skip transfer processing. Used by CCPR for cross-cluster tombstones.
 func (txn *Transaction) WriteFileLockedSkipTransfer(
@@ -1690,6 +1706,9 @@ func (txn *Transaction) writeFileLockedSkipTransferWithAutoIncrEpochKnown(
 	autoIncrEpoch uint32,
 	autoIncrEpochKnown bool,
 ) (err error) {
+	if err := txn.requireAutoIncrEpochFenceCommit(autoIncrEpoch, autoIncrEpochKnown); err != nil {
+		return err
+	}
 
 	txn.hasS3Op.Store(true)
 

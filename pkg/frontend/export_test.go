@@ -19,6 +19,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
@@ -27,9 +28,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 var colName1, colName2 = "DATABASE()", "VARIABLE_VALUE"
@@ -368,6 +371,74 @@ func TestConstructByteFormatsUnscaledFloat64WithFullPrecision(t *testing.T) {
 		convey.So(result.err, convey.ShouldBeNil)
 		convey.So(string(result.writeByte), convey.ShouldEqual, "3.14159265358979\n")
 	})
+}
+
+func TestExportWorkerBatchEndsStatementAllocationOwnership(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	source := batch.NewWithSchema(
+		true,
+		[]string{"value"},
+		[]types.Type{types.T_int64.ToType()},
+	)
+	require.NoError(t, source.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, mp))
+	source.SetRowCount(1)
+	require.Positive(t, account.Snapshot().Used)
+
+	workerBatch, err := cloneExportWorkerBatch(source, mp)
+	require.NoError(t, err)
+	require.Nil(t, workerBatch.AllocationAccountSelection())
+	require.Nil(t, workerBatch.Vecs[0].AllocationAccountSelection())
+
+	source.Clean(mp)
+	snapshot := account.Seal()
+	require.Zero(t, snapshot.Used)
+	require.Zero(t, registry.LiveAllocationMetadata())
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](workerBatch.Vecs[0], 0))
+	workerBatch.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestJSONExportCancellationCleansBlockedWorkerBatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := batch.NewOffHeapWithSize(1)
+	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, mp))
+	bat.SetRowCount(1)
+	require.Positive(t, mp.CurrNB())
+
+	mrs := &MysqlResultSet{}
+	column := &MysqlColumn{}
+	column.SetName("value")
+	mrs.AddColumn(column)
+	ep := &ExportConfig{mrs: mrs}
+	bytesChan := make(chan *BatchByte, 1)
+	bytesChan <- &BatchByte{index: 0}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ses := &backSession{feSessionImpl: feSessionImpl{pool: mp}}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		constructJSONLine(ctx, ses, bat, 1, bytesChan, ep)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("canceled JSON export worker remained blocked on a full channel")
+	}
+	require.Zero(t, mp.CurrNB())
 }
 
 func Test_getExportFormat(t *testing.T) {

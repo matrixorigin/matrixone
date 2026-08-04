@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -51,8 +52,11 @@ func TestExecutionResourceRecorder(t *testing.T) {
 			MaxDomainPeakLiveBytes:      80,
 			SumDomainPeakLiveBytesBound: 80,
 		},
+		resource.AllocationAccountTotals{},
 		0,
 		0,
+		nil,
+		nil,
 	)
 	recorder.finishAttempt(
 		0,
@@ -73,6 +77,42 @@ func TestExecutionResourceRecorder(t *testing.T) {
 	require.Equal(t, uint64(80), summary.Memory.MaxDomainPeakLiveBytes)
 	require.Zero(t, summary.Quality&resource.QualityMissingMemoryDomain)
 	require.Zero(t, summary.Quality&resource.QualityMissingFragment)
+}
+
+func TestExecutionResourceRecorderPublishesAllocationTerminal(t *testing.T) {
+	root := resource.NewRoot(resource.ConnExternal)
+	recorder := newExecutionResourceRecorder(
+		resource.ContextWithRoot(context.Background(), root),
+		true,
+	)
+	require.NotNil(t, recorder)
+	recorder.recordAllocationAccountTerminal(
+		mpool.AllocationAccountTerminalSnapshot{
+			AllocationAccountSnapshot: mpool.AllocationAccountSnapshot{
+				Peak: 64,
+			},
+			State: mpool.AllocationAccountTerminalValid,
+		},
+	)
+	recorder.finishAttempt(
+		0,
+		time.Now(),
+		0,
+		0,
+		nil,
+		nil,
+		nil,
+		"",
+		false,
+	)
+	recorder.publish()
+
+	summary := root.PreResponseSummary()
+	require.Equal(t, uint64(1), summary.Allocation.GenerationCount)
+	require.Equal(t, uint64(1), summary.Allocation.ValidGenerationCount)
+	require.Equal(t, uint64(64), summary.Allocation.MaxGenerationPeak)
+	require.Zero(t, summary.Allocation.LiveBytesAtTerminal)
+	require.Zero(t, summary.Quality&resource.QualityInvariantFailure)
 }
 
 func TestExplainPhyBufferUsesPublishedCurrentAttempt(t *testing.T) {
@@ -258,6 +298,17 @@ func TestRemoteTerminalEnvelope(t *testing.T) {
 			MaxDomainPeakLiveBytes:      15,
 			SumDomainPeakLiveBytesBound: 15,
 		},
+		Allocation: resource.AllocationAccountTotals{
+			GenerationCount:      1,
+			ValidGenerationCount: 1,
+			MaxGenerationPeak:    17,
+			SumGenerationPeak:    17,
+		},
+		PendingAllocationGroups: []remoteAllocationGroupPending{{
+			Key:   "pending@cn",
+			Count: 2,
+		}},
+		CompletedAllocationGroups: []string{"completed@cn"},
 	}
 	data, err := json.Marshal(envelope)
 	require.NoError(t, err)
@@ -267,8 +318,15 @@ func TestRemoteTerminalEnvelope(t *testing.T) {
 	summary := anal.remoteResourceSummary()
 	require.Equal(t, uint64(1), summary.DirectReportCount)
 	require.Equal(t, uint64(11), summary.Usage.ExclusiveActiveNS)
+	require.Equal(t, []remoteAllocationGroupPending{{
+		Key:   "pending@cn",
+		Count: 2,
+	}}, summary.PendingAllocationGroups)
+	require.Equal(t, []string{"completed@cn"}, summary.CompletedAllocationGroups)
 	require.Equal(t, uint64(12), summary.Usage.S3ReadBytes)
 	require.Equal(t, uint64(15), summary.Memory.MaxDomainPeakLiveBytes)
+	require.Equal(t, uint64(1), summary.Allocation.GenerationCount)
+	require.Equal(t, uint64(17), summary.Allocation.MaxGenerationPeak)
 	require.NotZero(t, summary.Quality&resource.QualityPartial)
 	require.Len(t, anal.remotePhyPlans, 1)
 	require.Equal(t, "Merge", anal.remotePhyPlans[0].LocalScope[0].Magic)
@@ -444,7 +502,15 @@ func TestRemoteResourceCounterSaturates(t *testing.T) {
 		remoteMissingMemoryDomains: math.MaxUint64,
 		remoteReports:              math.MaxUint64,
 	}
-	anal.appendRemoteResource(resource.Delta{}, resource.MemoryTotals{}, 1, 1)
+	anal.appendRemoteResource(
+		resource.Delta{},
+		resource.MemoryTotals{},
+		resource.AllocationAccountTotals{},
+		1,
+		1,
+		nil,
+		nil,
+	)
 	snapshot := anal.remoteResourceSummary()
 	require.Equal(t, uint64(math.MaxUint64), snapshot.MissingFragmentCount)
 	require.Equal(t, uint64(math.MaxUint64), snapshot.MissingMemoryDomainCount)
@@ -466,10 +532,121 @@ func TestAnalyzeModuleResetClearsRemoteResourceAggregate(t *testing.T) {
 	anal := &AnalyzeModule{}
 	anal.appendRemoteResource(
 		resource.Delta{Usage: resource.Usage{S3ReadBytes: 11}, Quality: resource.QualityPartial},
-		resource.MemoryTotals{MaxDomainPeakLiveBytes: 8}, 2, 3)
+		resource.MemoryTotals{MaxDomainPeakLiveBytes: 8},
+		resource.AllocationAccountTotals{},
+		2,
+		3,
+		[]remoteAllocationGroupPending{{Key: "pending", Count: 1}},
+		[]string{"completed"},
+	)
 	anal.Reset(false, false)
 	snapshot := anal.remoteResourceSummary()
 	require.Equal(t, remoteResourceSnapshot{}, snapshot)
+}
+
+func TestAnalyzeModuleResolvesRemoteAllocationGroupsInEitherOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		completeFirst bool
+	}{
+		{name: "pending-before-complete"},
+		{name: "complete-before-pending", completeFirst: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			anal := &AnalyzeModule{}
+			pending := []remoteAllocationGroupPending{{
+				Key:   "execution@cn",
+				Count: 1,
+			}}
+			var firstPending, secondPending []remoteAllocationGroupPending
+			var firstCompleted, secondCompleted []string
+			if tc.completeFirst {
+				firstCompleted = []string{"execution@cn"}
+				secondPending = pending
+			} else {
+				firstPending = pending
+				secondCompleted = []string{"execution@cn"}
+			}
+			anal.appendRemoteResource(
+				resource.Delta{}, resource.MemoryTotals{},
+				resource.AllocationAccountTotals{}, 0, 0,
+				firstPending, firstCompleted,
+			)
+			anal.appendRemoteResource(
+				resource.Delta{}, resource.MemoryTotals{},
+				resource.AllocationAccountTotals{}, 0, 0,
+				secondPending, secondCompleted,
+			)
+
+			snapshot := anal.remoteResourceSummary()
+			require.Empty(t, snapshot.PendingAllocationGroups)
+			require.Equal(t, []string{"execution@cn"}, snapshot.CompletedAllocationGroups)
+			require.Zero(t, snapshot.Quality&resource.QualityInvariantFailure)
+		})
+	}
+}
+
+func TestExecutionResourceRecorderMarksUnresolvedAllocationGroupPartial(t *testing.T) {
+	root := resource.NewRoot(resource.ConnExternal)
+	recorder := newExecutionResourceRecorder(
+		resource.ContextWithRoot(context.Background(), root),
+		true,
+	)
+	require.NotNil(t, recorder)
+	anal := &AnalyzeModule{}
+	anal.appendRemoteResource(
+		resource.Delta{}, resource.MemoryTotals{},
+		resource.AllocationAccountTotals{}, 0, 0,
+		[]remoteAllocationGroupPending{{Key: "execution@cn", Count: 1}}, nil,
+	)
+
+	recorder.finishAttempt(
+		0, time.Now(), 0, 0, nil, nil, anal, "local:6001", false,
+	)
+	recorder.publish()
+
+	summary := root.PreResponseSummary()
+	require.Equal(t, uint64(1), summary.MissingMemoryDomainCount)
+	require.NotZero(t, summary.Quality&resource.QualityPartial)
+	require.NotZero(t, summary.Quality&resource.QualityMissingMemoryDomain)
+	require.Zero(t, summary.Quality&resource.QualityMissingFragment)
+}
+
+func TestExecutionResourceRecorderPreservesPendingGroupCardinality(t *testing.T) {
+	root := resource.NewRoot(resource.ConnExternal)
+	recorder := newExecutionResourceRecorder(
+		resource.ContextWithRoot(context.Background(), root),
+		true,
+	)
+	require.NotNil(t, recorder)
+	anal := &AnalyzeModule{}
+	for range 3 {
+		anal.appendRemoteResource(
+			resource.Delta{}, resource.MemoryTotals{},
+			resource.AllocationAccountTotals{}, 0, 0,
+			[]remoteAllocationGroupPending{{Key: "execution@cn", Count: 1}},
+			nil,
+		)
+	}
+	scopes := make([]*Scope, 4)
+	for i := range scopes {
+		scopes[i] = &Scope{
+			Magic:    Remote,
+			NodeInfo: engine.Node{Addr: "remote:6001"},
+		}
+	}
+
+	recorder.finishAttempt(
+		0, time.Now(), 0, 0, nil, scopes, anal, "local:6001", false,
+	)
+	recorder.publish()
+
+	summary := root.PreResponseSummary()
+	require.Equal(t, uint64(1), summary.MissingFragmentCount)
+	require.Equal(t, uint64(4), summary.MissingMemoryDomainCount)
+	require.NotZero(t, summary.Quality&resource.QualityPartial)
+	require.NotZero(t, summary.Quality&resource.QualityMissingFragment)
+	require.NotZero(t, summary.Quality&resource.QualityMissingMemoryDomain)
 }
 
 func TestAnalyzeModuleRemoteResourceConcurrentAccess(t *testing.T) {
@@ -480,7 +657,15 @@ func TestAnalyzeModuleRemoteResourceConcurrentAccess(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				anal.appendRemoteResource(resource.Delta{Usage: resource.Usage{SpillBytes: 1}}, resource.MemoryTotals{}, 1, 1)
+				anal.appendRemoteResource(
+					resource.Delta{Usage: resource.Usage{SpillBytes: 1}},
+					resource.MemoryTotals{},
+					resource.AllocationAccountTotals{},
+					1,
+					1,
+					[]remoteAllocationGroupPending{{Key: "pending", Count: 1}},
+					[]string{"completed"},
+				)
 				_ = anal.remoteResourceSummary()
 			}
 		}()

@@ -260,8 +260,8 @@ func (t *TableEntry) tryFlushWatermark(
 	txn client.TxnOperator,
 	threshold time.Duration,
 ) (flushCount int) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	for _, jobEntry := range t.jobs {
 		needFlush, err := jobEntry.tryFlushWatermark(ctx, txn, threshold)
 		if needFlush && err == nil {
