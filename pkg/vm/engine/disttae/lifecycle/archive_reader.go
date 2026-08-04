@@ -24,7 +24,6 @@ import (
 	"math/big"
 	"path"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -245,25 +244,6 @@ func readArchivePayload(
 		)
 	}
 	return payload, nil
-}
-
-func verifyArchivePayload(
-	ctx context.Context,
-	payload []byte,
-	schema SchemaDescriptor,
-	schemaDigest [32]byte,
-	expected ArchiveChunk,
-) (ArchiveChunk, error) {
-	_, actual, err := decodeArchivePayload(
-		ctx,
-		payload,
-		schema,
-		schemaDigest,
-		expected,
-		expected.RowCount,
-		expected.LogicalBytes,
-	)
-	return actual, err
 }
 
 func decodeArchivePayload(
@@ -525,8 +505,4 @@ func manifestDigestFromKey(key string) ([32]byte, error) {
 	var digest [32]byte
 	copy(digest[:], decoded)
 	return digest, nil
-}
-
-func parseArchiveOrdinal(value string) (uint64, error) {
-	return strconv.ParseUint(value, 10, 64)
 }

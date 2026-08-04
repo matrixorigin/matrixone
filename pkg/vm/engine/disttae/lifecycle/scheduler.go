@@ -191,7 +191,6 @@ func (c *Coordinator) Run(ctx context.Context) error {
 	var wait sync.WaitGroup
 	errs := make(chan error, len(bindings))
 	for _, binding := range bindings {
-		binding := binding
 		wait.Add(1)
 		go func() {
 			defer wait.Done()

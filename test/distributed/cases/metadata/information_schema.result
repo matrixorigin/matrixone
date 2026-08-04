@@ -49,7 +49,6 @@ def    mo_catalog    mo_index_update    BASE TABLE    Tae
 def    mo_catalog    mo_indexes    BASE TABLE    Tae
 def    mo_catalog    mo_iscp_log    BASE TABLE    Tae
 def    mo_catalog    mo_lifecycle_bindings    BASE TABLE    Tae
-def    mo_catalog    mo_lifecycle_cleanup_roots    BASE TABLE    Tae
 def    mo_catalog    mo_lifecycle_datasets    BASE TABLE    Tae
 def    mo_catalog    mo_lifecycle_restore_attempts    BASE TABLE    Tae
 def    mo_catalog    mo_lifecycle_restore_chunks    BASE TABLE    Tae

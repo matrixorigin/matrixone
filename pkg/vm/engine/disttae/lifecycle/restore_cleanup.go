@@ -86,13 +86,13 @@ func (pager SQLExpiredRestorePager) Next(
 	if accountsRemaining == 0 {
 		return attempts, next, nil
 	}
-	accounts, err := (SQLMetadataCompactor{Executor: pager.Executor}).
+	accounts, err := SQLMetadataCompactor(pager).
 		listAccounts(ctx, cursor.AccountID, accountsRemaining)
 	if err != nil {
 		return nil, cursor, err
 	}
 	if len(accounts) == 0 && cursor.AccountID != 0 {
-		accounts, err = (SQLMetadataCompactor{Executor: pager.Executor}).
+		accounts, err = SQLMetadataCompactor(pager).
 			listAccounts(ctx, 0, accountsRemaining)
 		if err != nil {
 			return nil, cursor, err

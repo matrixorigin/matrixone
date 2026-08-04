@@ -33,8 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-const lifecycleFeatureCode = "LIFECYCLE"
-
 // ArchiveStageIdentity is the secret-free Stage identity frozen by SET
 // LIFECYCLE. Keep its digest format byte-compatible with the frontend.
 type ArchiveStageIdentity struct {
