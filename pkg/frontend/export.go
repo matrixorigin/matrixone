@@ -377,6 +377,19 @@ func escapeJSONControlChars(s string) string {
 	return builder.String()
 }
 
+func sendExportBatchByte(
+	ctx context.Context,
+	byteChan chan *BatchByte,
+	value *BatchByte,
+) bool {
+	select {
+	case byteChan <- value:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index int32, ByteChan chan *BatchByte, ep *ExportConfig) {
 	var (
 		ok      bool
@@ -396,15 +409,6 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 	if ctx.Err() != nil {
 		bat.Clean(mp)
 		return
-	}
-
-	sendByte := func(bb *BatchByte) bool {
-		select {
-		case ByteChan <- bb:
-			return true
-		case <-ctx.Done():
-			return false
-		}
 	}
 
 	symbol := ep.Symbol
@@ -482,7 +486,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 			case types.T_geometry, types.T_geometry32:
 				text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt(i))
 				if err != nil {
-					sendByte(&BatchByte{err: err})
+					sendExportBatchByte(ctx, ByteChan, &BatchByte{err: err})
 					bat.Clean(mp)
 					return
 				}
@@ -574,7 +578,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				}
 
 				// stop early if downstream already failed
-				sendByte(&BatchByte{
+				sendExportBatchByte(ctx, ByteChan, &BatchByte{
 					err: moerr.NewInternalErrorf(ctx, "constructByte : unsupported type %d", vec.GetType().Oid),
 				})
 				bat.Clean(mp)
@@ -589,7 +593,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 	copy(result, buffer.Bytes())
 	buffer = nil
 
-	if !sendByte(&BatchByte{
+	if !sendExportBatchByte(ctx, ByteChan, &BatchByte{
 		index:     index,
 		writeByte: result,
 		err:       nil,
@@ -948,7 +952,10 @@ func (ec *ExportConfig) init() {
 
 func (ec *ExportConfig) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
 	ec.Index.Add(1)
-	copied, err := bat.Dup(execCtx.ses.GetMemPool())
+	// CSV and JSON conversion runs asynchronously and can outlive runner.Run.
+	// The worker copy therefore belongs to the export pipeline, not to the
+	// producing statement's allocation account.
+	copied, err := cloneExportWorkerBatch(bat, execCtx.ses.GetMemPool())
 	if err != nil {
 		return err
 	}
@@ -971,6 +978,13 @@ func (ec *ExportConfig) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat
 		return err
 	}
 	return nil
+}
+
+func cloneExportWorkerBatch(
+	bat *batch.Batch,
+	mp *mpool.MPool,
+) (*batch.Batch, error) {
+	return bat.DupWithoutAllocationAccount(mp)
 }
 
 // writeParquet writes a batch to the parquet writer
@@ -1156,8 +1170,11 @@ func constructJSONLine(ctx context.Context, obj FeSession, bat *batch.Batch, ind
 			}
 			val, err := vectorValueToJSON(vec, i, ss, backSes)
 			if err != nil {
-				ByteChan <- &BatchByte{
+				if !sendExportBatchByte(ctx, ByteChan, &BatchByte{
 					err: err,
+				}) {
+					bat.Clean(mp)
+					return
 				}
 				bat.Clean(mp)
 				return
@@ -1166,8 +1183,11 @@ func constructJSONLine(ctx context.Context, obj FeSession, bat *batch.Batch, ind
 		}
 		jsonBytes, err := json.Marshal(row)
 		if err != nil {
-			ByteChan <- &BatchByte{
+			if !sendExportBatchByte(ctx, ByteChan, &BatchByte{
 				err: moerr.NewInternalErrorf(ctx, "failed to marshal JSON: %v", err),
+			}) {
+				bat.Clean(mp)
+				return
 			}
 			bat.Clean(mp)
 			return
@@ -1181,10 +1201,13 @@ func constructJSONLine(ctx context.Context, obj FeSession, bat *batch.Batch, ind
 	copy(result, buffer.Bytes())
 	buffer = nil
 
-	ByteChan <- &BatchByte{
+	if !sendExportBatchByte(ctx, ByteChan, &BatchByte{
 		index:     index,
 		writeByte: result,
 		err:       nil,
+	}) {
+		bat.Clean(mp)
+		return
 	}
 
 	bat.Clean(mp)

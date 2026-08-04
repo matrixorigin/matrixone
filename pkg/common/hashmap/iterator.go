@@ -17,8 +17,46 @@ package hashmap
 import (
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
+
+func validateIteratorVectors(
+	vecs []*vector.Vector,
+	start int,
+	count int,
+) error {
+	if len(vecs) == 0 || start < 0 || count < 0 || count > UnitLimit {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	for _, vec := range vecs {
+		if vec == nil || start > vec.Length() || count > vec.Length()-start {
+			return mpool.ErrAllocationAccountInvalid
+		}
+	}
+	return nil
+}
+
+func hasGroupingInRange(vecs []*vector.Vector, start, count int) bool {
+	end := uint64(start + count)
+	for _, vec := range vecs {
+		if vec != nil && vec.GetGrouping().GetBitmap().CountRange(
+			uint64(start), end,
+		) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func rowHasGrouping(vecs []*vector.Vector, row int) bool {
+	for _, vec := range vecs {
+		if vec.GetGrouping().Contains(uint64(row)) {
+			return true
+		}
+	}
+	return false
+}
 
 // MaxStrIteratorCapacity limits how many bytes of backing storage we keep when
 // reusing a string iterator. Avoids retaining oversized buffers after handling
@@ -31,7 +69,12 @@ func IteratorChangeOwner(itr Iterator, m HashMap) {
 		return
 	}
 	it := itr.(*strHashmapIterator)
-	it.mp = m.(*StrHashMap)
+	next := m.(*StrHashMap)
+	if it.mp != nil &&
+		it.mp.iteratorAllocation != next.iteratorAllocation {
+		it.releaseScratch()
+	}
+	it.mp = next
 }
 
 // IteratorClearOwner detaches the iterator from its hashmap to allow the old
@@ -41,6 +84,7 @@ func IteratorClearOwner(itr Iterator) {
 	case *intHashMapIterator:
 		it.mp = nil
 	case *strHashmapIterator:
+		it.releaseAccountedScratch()
 		it.mp = nil
 	}
 }
@@ -52,28 +96,58 @@ func StrIteratorCapacity(itr Iterator) int {
 	if !ok || it == nil {
 		return 0
 	}
-	total := 0
-	for i := range it.keys {
-		total += cap(it.keys[i])
-	}
-	return total
+	return cap(it.keyBuffer)
 }
 
-func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector) ([]uint64, []int64) {
-	for i := 0; i < count; i++ {
-		itr.keys[i] = itr.keys[i][:0]
+func (itr *strHashmapIterator) releaseScratch() {
+	if itr == nil {
+		return
+	}
+	if cap(itr.keyBuffer) > 0 && itr.mp != nil && itr.mp.mp != nil &&
+		itr.mp.iteratorAllocation != nil {
+		itr.mp.mp.Free(itr.keyBuffer)
+	}
+	itr.keyBuffer = nil
+	clear(itr.keys)
+}
+
+func (itr *strHashmapIterator) releaseAccountedScratch() {
+	if itr == nil || cap(itr.keyBuffer) == 0 || itr.mp == nil ||
+		itr.mp.iteratorAllocation == nil {
+		return
+	}
+	itr.mp.mp.Free(itr.keyBuffer)
+	itr.keyBuffer = nil
+	clear(itr.keys)
+}
+
+func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector) ([]uint64, []int64, error) {
+	if err := itr.prepareHashKeys(vecs, start, count); err != nil {
+		return nil, nil, err
 	}
 	copy(itr.zValues[:count], OneInt64s[:count])
 	copy(itr.values[:count], zeroUint64[:count])
 	itr.encodeHashKeys(vecs, start, count)
 	itr.mp.hashMap.FindStringBatch(itr.strHashStates, itr.keys[:count], itr.values)
-	return itr.values[:count], itr.zValues[:count]
+	if !itr.mp.hasNull && !itr.mp.groupingAware &&
+		hasGroupingInRange(vecs, start, count) {
+		for i := 0; i < count; i++ {
+			if rowHasGrouping(vecs, start+i) {
+				itr.values[i] = 0
+				itr.zValues[i] = 0
+			}
+		}
+	}
+	return itr.values[:count], itr.zValues[:count], nil
 }
 
 // Insert a row from multiple columns into the hashmap, return true if it is new, otherwise false
 func (itr *strHashmapIterator) DetectDup(vecs []*vector.Vector, row int) (bool, error) {
 	keys := itr.keys
 	defer func() { keys[0] = keys[0][:0] }()
+	if err := itr.prepareHashKeys(vecs, row, 1); err != nil {
+		return false, err
+	}
 	itr.encodeHashKeys(vecs, row, 1)
 	if err := itr.mp.hashMap.InsertStringBatch(itr.strHashStates, keys[:1], itr.values[:1]); err != nil {
 		return false, err
@@ -88,6 +162,9 @@ func (itr *strHashmapIterator) DetectDup(vecs []*vector.Vector, row int) (bool, 
 func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector) ([]uint64, []int64, error) {
 	var err error
 
+	if err = itr.prepareHashKeys(vecs, start, count); err != nil {
+		return nil, nil, err
+	}
 	defer func() {
 		for i := 0; i < count; i++ {
 			itr.keys[i] = itr.keys[i][:0]
@@ -110,10 +187,16 @@ func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector) (
 	return vs, zvs, err
 }
 
-func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector) ([]uint64, []int64) {
+func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector) ([]uint64, []int64, error) {
+	if itr == nil || itr.mp == nil {
+		return nil, nil, mpool.ErrAllocationAccountInvalid
+	}
+	if err := validateIteratorVectors(vecs, start, count); err != nil {
+		return nil, nil, err
+	}
 	itr.ensureCapacity(count)
 	if count == 0 {
-		return itr.values, itr.zValues
+		return itr.values, itr.zValues, nil
 	}
 	for i := 0; i < count; i++ {
 		itr.keys[i] = 0
@@ -124,15 +207,37 @@ func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector) ([]
 	itr.encodeHashKeys(vecs, start, count)
 	copy(itr.hashes[:count], zeroUint64[:count])
 	itr.mp.hashMap.FindBatch(count, itr.hashes[:count], unsafe.Pointer(&itr.keys[0]), itr.values[:count])
-	return itr.values[:count], itr.zValues[:count]
+	if hasGroupingInRange(vecs, start, count) {
+		for i := 0; i < count; i++ {
+			if rowHasGrouping(vecs, start+i) {
+				itr.values[i] = 0
+				itr.zValues[i] = 0
+			}
+		}
+	}
+	return itr.values[:count], itr.zValues[:count], nil
 }
 
 func (itr *intHashMapIterator) DetectDup(vecs []*vector.Vector, row int) (bool, error) {
-	panic("not implemented yet!!!")
+	if itr == nil || itr.mp == nil {
+		return false, mpool.ErrAllocationAccountInvalid
+	}
+	before := itr.mp.rows
+	values, zValues, err := itr.Insert(row, 1, vecs)
+	if err != nil {
+		return false, err
+	}
+	return zValues[0] != 0 && values[0] > before, nil
 }
 
 func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) ([]uint64, []int64, error) {
 	var err error
+	if itr == nil || itr.mp == nil {
+		return nil, nil, mpool.ErrAllocationAccountInvalid
+	}
+	if err = validateIteratorVectors(vecs, start, count); err != nil {
+		return nil, nil, err
+	}
 	itr.ensureCapacity(count)
 	if count == 0 {
 		return itr.values, itr.zValues, nil

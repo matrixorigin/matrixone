@@ -189,6 +189,7 @@ func runDedupJoinDoubleSignedZeroContract(
 	if mode.shuffle {
 		buildArg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: joinMapTag + 8000}
 	}
+	installTestAllocation(t, dedupArg, buildArg)
 	buildArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBatch}))
 
 	spillBefore := promtestutil.ToFloat64(
