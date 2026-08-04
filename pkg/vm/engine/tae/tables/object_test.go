@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -270,8 +271,8 @@ func TestMemoryNodeRollbackHoleVisibilityAndWriteLayout(t *testing.T) {
 	)
 	require.Equal(t, []bool{false, true, false}, aborts)
 
-	// During a rolling upgrade, the TN keeps the legacy layout and physically
-	// removes rollback holes so an old CN cannot expose them as user rows.
+	// During a rolling upgrade, the TN keeps the legacy layout and marks abort
+	// holes uncommitted so old readers hide them without shifting RowID offsets.
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion9)
 	legacyBatches := make(map[uint32]*containers.BatchWithVersion)
 	err = mnode.getDataWindowOnWriteSchema(
@@ -288,7 +289,13 @@ func TestMemoryNodeRollbackHoleVisibilityAndWriteLayout(t *testing.T) {
 	require.NotContains(t, legacyBatch.Seqnums, uint16(objectio.SEQNUM_ABORT))
 	require.NotContains(t, legacyBatch.Nameidx, objectio.TombstoneAttr_Abort_Attr)
 	require.Contains(t, legacyBatch.Seqnums, uint16(objectio.SEQNUM_COMMITTS))
-	require.Equal(t, 2, legacyBatch.Length())
+	require.Equal(t, 3, legacyBatch.Length())
+	legacyCommitTS := vector.MustFixedColWithTypeCheck[types.TS](
+		legacyBatch.GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr).GetDownstreamVector(),
+	)
+	require.Equal(t, types.BuildTS(1, 0), legacyCommitTS[0])
+	require.Equal(t, txnif.UncommitTS, legacyCommitTS[1])
+	require.Equal(t, types.BuildTS(3, 0), legacyCommitTS[2])
 
 	var output *containers.Batch
 	err = mnode.Scan(

@@ -175,15 +175,15 @@ func (node *memoryNode) getDataWindowOnWriteSchema(
 		inner.AddVector(objectio.TombstoneAttr_Abort_Attr, abort)
 	} else {
 		// Old readers interpret every non-rowid/non-TS physical column as user
-		// data. Keep their commitTS-only layout and remove rollback holes before
-		// the batch can be flushed or published through logtail.
+		// data. Keep their commitTS-only layout, preserve the original physical
+		// row coordinates, and encode rollback holes as uncommitted rows so old
+		// readers filter them by commit timestamp.
 		aborts := vector.MustFixedColWithTypeCheck[bool](abort.GetDownstreamVector())
 		for row, aborted := range aborts {
 			if aborted {
-				inner.Delete(row)
+				commitTSVec.Update(row, txnif.UncommitTS, false)
 			}
 		}
-		inner.Compact()
 		abort.Close()
 	}
 	if inner.Length() == 0 {

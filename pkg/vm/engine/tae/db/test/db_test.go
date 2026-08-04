@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -4050,6 +4051,95 @@ func TestFlushTransferTombstonesRollback(t *testing.T) {
 	tae.CheckRowsByScan(0, true)
 	tae.Restart(ctx)
 	tae.CheckRowsByScan(0, true)
+}
+
+func TestV9FlushPreservesRowIDAcrossAbortHole(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	serviceRuntime := runtime.ServiceRuntime("")
+	originalVersion, hadVersion := serviceRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+	serviceRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion9)
+	defer func() {
+		if hadVersion {
+			serviceRuntime.SetGlobalVariables(runtime.MOProtocolVersion, originalVersion)
+		}
+	}()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	rows := catalog.MockBatch(schema, 4)
+	defer rows.Close()
+	first := rows.CloneWindow(0, 1)
+	defer first.Close()
+	aborted := rows.CloneWindow(1, 1)
+	defer aborted.Close()
+	tail := rows.CloneWindow(2, 2)
+	defer tail.Close()
+
+	tae.CreateRelAndAppend(first, true)
+	abortTxn, abortRel := tae.GetRelation()
+	require.NoError(t, abortRel.Append(ctx, aborted))
+	// Drive the append through the same prepare/apply boundary used before WAL
+	// publication, then roll it back to leave a physical MVCC-owned hole.
+	require.NoError(t, abortTxn.PrePrepare(ctx))
+	require.NoError(t, abortTxn.PreApplyCommit())
+	require.NoError(t, abortTxn.Rollback(ctx))
+	tae.DoAppend(tail)
+
+	deleteTxn, deleteRel := tae.GetRelation()
+	sortKeyIdx := schema.GetSingleSortKeyIdx()
+	key := tail.Vecs[sortKeyIdx].Get(0)
+	id, offset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(key))
+	require.NoError(t, err)
+	require.Equal(t, uint32(2), offset, "rollback hole must retain its physical slot")
+	oldBlockID := id.BlockID
+	require.NoError(t, deleteRel.RangeDelete(id, offset, offset, handle.DT_Normal))
+	require.NoError(t, deleteTxn.Commit(ctx))
+	deleteTS := deleteTxn.GetCommitTS()
+	snapshotTxn, err := tae.StartTxnWithStartTSAndSnapshotTS(nil, deleteTS)
+	require.NoError(t, err)
+	snapshotTxn.BindAccessInfo(0, 0, 0)
+	snapshotRel := tae.GetRelationWithTxn(snapshotTxn)
+
+	flushTxn, flushRel := tae.GetRelation()
+	dataMetas := testutil.GetAllAppendableMetas(flushRel, false)
+	tombstoneMetas := testutil.GetAllAppendableMetas(flushRel, true)
+	require.NotEmpty(t, dataMetas)
+	task, err := jobs.NewFlushTableTailTask(
+		nil, flushTxn, dataMetas, tombstoneMetas, tae.Runtime,
+	)
+	require.NoError(t, err)
+	require.NoError(t, task.OnExec(ctx))
+	require.NoError(t, flushTxn.Commit(ctx))
+
+	// The historical snapshot is held open while the aobject location is
+	// replaced, so it cannot use tombstones transferred by the later flush.
+	// Its tombstone still targets original offset 2; it must hide that row while
+	// preserving the later live row at offset 3.
+	var view *containers.Batch
+	err = tables.HybridScanByBlock(
+		ctx,
+		snapshotRel.GetMeta().(*catalog.TableEntry),
+		snapshotTxn,
+		&view,
+		schema,
+		[]int{sortKeyIdx},
+		&oldBlockID,
+		common.DefaultAllocator,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, view)
+	defer view.Close()
+	view.Compact()
+	require.Equal(t, 2, view.Length())
+	require.Equal(t, rows.Vecs[sortKeyIdx].Get(0), view.Vecs[0].Get(0))
+	require.Equal(t, rows.Vecs[sortKeyIdx].Get(3), view.Vecs[0].Get(1))
+	require.NoError(t, snapshotTxn.Commit(ctx))
 }
 
 func TestIncrementalDedupIgnoresOldRowsInTNRewrite(t *testing.T) {
