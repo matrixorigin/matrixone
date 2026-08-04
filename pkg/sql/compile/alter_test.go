@@ -611,8 +611,8 @@ func TestReconcileAlterCopyAutoIncrementUsesStableIdentityAndSafeBounds(t *testi
 	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
 	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 	gomock.InOrder(
-		autoSvc.EXPECT().SetOffset(c.proc.Ctx, copyDef.TblId, "id", uint64(99), c.proc.GetTxnOperator()),
-		autoSvc.EXPECT().SetOffset(c.proc.Ctx, copyDef.TblId, "renamed_id", uint64(500), c.proc.GetTxnOperator()),
+		autoSvc.EXPECT().SetOffset(c.proc.Ctx, copyDef.TblId, 0, uint64(99), c.proc.GetTxnOperator()),
+		autoSvc.EXPECT().SetOffset(c.proc.Ctx, copyDef.TblId, 1, uint64(500), c.proc.GetTxnOperator()),
 		autoSvc.EXPECT().DiscardOffsetReset(gomock.Any(), copyDef.TblId, c.proc.GetTxnOperator()).Return(nil),
 	)
 	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
@@ -649,7 +649,7 @@ func TestReconcileAlterCopyAutoIncrementExplicitResetIgnoresReservedSourceRange(
 	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
 	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 	autoSvc.EXPECT().SetOffset(
-		c.proc.Ctx, copyDef.TblId, "id", uint64(500), c.proc.GetTxnOperator(),
+		c.proc.Ctx, copyDef.TblId, 0, uint64(500), c.proc.GetTxnOperator(),
 	)
 	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
 
@@ -689,10 +689,10 @@ func TestReconcileAlterCopyAutoIncrementRejectsLegacyTN(t *testing.T) {
 	require.Empty(t, spyExec.executedSQLs)
 }
 
-func TestAppendAlterAutoIncrementReqsUsesResolvedDatabaseAndSafeOffset(t *testing.T) {
+func TestAppendAlterAutoIncrementReqsUsesStableColumnIndexAfterRename(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	resultMP := mpool.MustNewZero()
-	maxSQL := "select cast(coalesce(max(case when `id` > 0 then `id` else 0 end), 0) as unsigned) from `resolved_db`.`dept`"
+	maxSQL := "select cast(coalesce(max(case when `renamed_id` > 0 then `renamed_id` else 0 end), 0) as unsigned) from `resolved_db`.`dept`"
 	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
 		maxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{140}),
 	}}
@@ -701,7 +701,7 @@ func TestAppendAlterAutoIncrementReqsUsesResolvedDatabaseAndSafeOffset(t *testin
 		TblId: 7,
 		Name:  "dept",
 		Cols: []*plan.ColDef{{
-			Name: "id",
+			Name: "renamed_id",
 			Typ:  plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
 		}},
 	}
@@ -709,7 +709,7 @@ func TestAppendAlterAutoIncrementReqsUsesResolvedDatabaseAndSafeOffset(t *testin
 	autoSvc.EXPECT().SetOffset(
 		c.proc.Ctx,
 		tableDef.TblId,
-		"id",
+		0,
 		uint64(140),
 		c.proc.GetTxnOperator(),
 	).Return(nil)
@@ -777,8 +777,8 @@ func TestAppendAlterAutoIncrementReqsDiscardsResetAfterCancellation(t *testing.T
 	}}}
 	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 	autoSvc.EXPECT().SetOffset(
-		ctx, tableDef.TblId, "id", uint64(99), c.proc.GetTxnOperator(),
-	).DoAndReturn(func(context.Context, uint64, string, uint64, client.TxnOperator) error {
+		ctx, tableDef.TblId, 0, uint64(99), c.proc.GetTxnOperator(),
+	).DoAndReturn(func(context.Context, uint64, int, uint64, client.TxnOperator) error {
 		cancel()
 		return nil
 	})
@@ -905,8 +905,8 @@ func TestReconcileAlterCopyAutoIncrementStopsAfterCancellation(t *testing.T) {
 	copyRel := mock_frontend.NewMockRelation(ctrl)
 	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
 	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
-	autoSvc.EXPECT().SetOffset(ctx, copyDef.TblId, "first", uint64(99), c.proc.GetTxnOperator()).DoAndReturn(
-		func(context.Context, uint64, string, uint64, client.TxnOperator) error {
+	autoSvc.EXPECT().SetOffset(ctx, copyDef.TblId, 0, uint64(99), c.proc.GetTxnOperator()).DoAndReturn(
+		func(context.Context, uint64, int, uint64, client.TxnOperator) error {
 			cancel()
 			return nil
 		},

@@ -480,3 +480,14 @@ alter table auto_increment_alter_copy add column extra int, auto_increment = 100
 insert into auto_increment_alter_copy(v) values (4);
 select id from auto_increment_alter_copy order by id;
 drop table auto_increment_alter_copy;
+
+-- INPLACE rename must not orphan the allocator row used by a later reset.
+-- This canonical case also runs through the proxy/multi-CN BVT suite.
+drop table if exists auto_increment_alter_rename;
+create table auto_increment_alter_rename(id bigint primary key auto_increment, v int);
+insert into auto_increment_alter_rename(v) values (1), (2);
+alter table auto_increment_alter_rename algorithm = instant, rename column id to new_id;
+alter table auto_increment_alter_rename auto_increment = 100;
+insert into auto_increment_alter_rename(v) values (3);
+select * from auto_increment_alter_rename order by new_id;
+drop table auto_increment_alter_rename;

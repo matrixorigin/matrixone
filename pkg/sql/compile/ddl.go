@@ -4906,7 +4906,7 @@ func (c *Compile) appendAlterAutoIncrementReqs(
 		if err = svc.SetOffset(
 			c.proc.Ctx,
 			tid,
-			col.ColName,
+			col.ColIndex,
 			offset,
 			c.proc.GetTxnOperator(),
 		); err != nil {

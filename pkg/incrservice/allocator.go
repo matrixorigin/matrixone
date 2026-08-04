@@ -181,7 +181,7 @@ func (a *allocator) updateMinValue(
 func (a *allocator) forceSetOffset(
 	ctx context.Context,
 	tableID uint64,
-	col string,
+	colIndex int,
 	offset uint64,
 	txnOp client.TxnOperator,
 ) error {
@@ -196,7 +196,7 @@ func (a *allocator) forceSetOffset(
 		accountID:   accountID,
 		actionType:  forceUpdateType,
 		tableID:     tableID,
-		col:         col,
+		colIndex:    colIndex,
 		minValue:    offset,
 		applyUpdate: func(e error) { err = e; close(done) },
 	}); err != nil {
@@ -260,7 +260,7 @@ func (a *allocator) doForceSetOffset(act action) {
 		act.applyUpdate(err)
 		return
 	}
-	err := a.store.ForceSetOffset(ctx, act.tableID, act.col, act.minValue, act.txnOp)
+	err := a.store.ForceSetOffset(ctx, act.tableID, act.colIndex, act.minValue, act.txnOp)
 	err = moerr.AttachCause(ctx, err)
 	act.applyUpdate(err)
 }
@@ -353,6 +353,7 @@ type action struct {
 	actionType    int
 	tableID       uint64
 	col           string
+	colIndex      int
 	count         int
 	minValue      uint64
 	applyAllocate func(uint64, uint64, timestamp.Timestamp, error)

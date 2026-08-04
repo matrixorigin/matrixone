@@ -44,7 +44,7 @@ type setOffsetStore struct {
 	t           *testing.T
 	forceCalled bool
 	tableID     uint64
-	colName     string
+	colIndex    int
 	offset      uint64
 }
 
@@ -81,7 +81,7 @@ type deadlineCheckingForceSetOffsetStore struct {
 func (s *deadlineCheckingForceSetOffsetStore) ForceSetOffset(
 	ctx context.Context,
 	tableID uint64,
-	colName string,
+	colIndex int,
 	offset uint64,
 	txnOp client.TxnOperator,
 ) error {
@@ -90,7 +90,7 @@ func (s *deadlineCheckingForceSetOffsetStore) ForceSetOffset(
 		return errors.New("ForceSetOffset context has no deadline")
 	}
 	s.deadline <- deadline
-	return s.IncrValueStore.ForceSetOffset(ctx, tableID, colName, offset, txnOp)
+	return s.IncrValueStore.ForceSetOffset(ctx, tableID, colIndex, offset, txnOp)
 }
 
 func (s *blockingAllocateStore) blockNext() (<-chan struct{}, func()) {
@@ -194,7 +194,7 @@ func (a *countingAllocator) updateMinValue(context.Context, uint64, string, uint
 	return nil
 }
 
-func (a *countingAllocator) forceSetOffset(context.Context, uint64, string, uint64, client.TxnOperator) error {
+func (a *countingAllocator) forceSetOffset(context.Context, uint64, int, uint64, client.TxnOperator) error {
 	return nil
 }
 
@@ -265,13 +265,13 @@ func (s *setOffsetStore) GetColumns(
 func (s *setOffsetStore) ForceSetOffset(
 	ctx context.Context,
 	tableID uint64,
-	colName string,
+	colIndex int,
 	offset uint64,
 	txnOp client.TxnOperator,
 ) error {
 	s.forceCalled = true
 	s.tableID = tableID
-	s.colName = colName
+	s.colIndex = colIndex
 	s.offset = offset
 	return nil
 }
@@ -414,7 +414,7 @@ func TestSetOffset(t *testing.T) {
 			require.NoError(t, s.Create(ctx, 0, def, op))
 			require.NoError(t, op.Commit(ctx))
 
-			require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 42, nil))
+			require.NoError(t, s.SetOffset(ctx, 0, def[0].ColIndex, 42, nil))
 
 			store := s.store.(*memStore)
 			store.Lock()
@@ -437,7 +437,7 @@ func TestSetOffsetPreservesMaxUint64TerminalValue(t *testing.T) {
 			require.NoError(t, s.Create(ctx, 0, def, ops[0]))
 			require.NoError(t, ops[0].Commit(ctx))
 
-			require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, math.MaxUint64-1, nil))
+			require.NoError(t, s.SetOffset(ctx, 0, def[0].ColIndex, math.MaxUint64-1, nil))
 
 			input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
 			last, err := s.InsertValues(ctx, 0, 0, nil, []*vector.Vector{input}, 1, 0)
@@ -459,10 +459,10 @@ func TestSetOffsetDoesNotReadCommittedColumns(t *testing.T) {
 	defer allocator.close()
 	s := &service{store: store, allocator: allocator}
 
-	require.NoError(t, s.SetOffset(ctx, 10, "auto_col", 99, nil))
+	require.NoError(t, s.SetOffset(ctx, 10, 0, 99, nil))
 	require.True(t, store.forceCalled)
 	require.Equal(t, uint64(10), store.tableID)
-	require.Equal(t, "auto_col", store.colName)
+	require.Equal(t, 0, store.colIndex)
 	require.Equal(t, uint64(99), store.offset)
 }
 
@@ -476,7 +476,7 @@ func TestSetOffsetReturnsStoreError(t *testing.T) {
 			ops []client.TxnOperator,
 		) {
 			s := ss[0]
-			err := s.SetOffset(ctx, 42, "auto_0", 42, ops[0])
+			err := s.SetOffset(ctx, 42, 0, 42, ops[0])
 			require.Error(t, err)
 		})
 }
@@ -552,7 +552,7 @@ func TestMemStoreSetOffsetLowerThanPreAllocated(t *testing.T) {
 
 			// ForceSetOffset to a value LOWER than the current offset bypasses
 			// the monotonic guard. Regular SetOffset would reject the decrease.
-			require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 99, nil))
+			require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColIndex, 99, nil))
 
 			store.Lock()
 			require.Equal(t, uint64(99), store.caches[0][0].Offset)
@@ -689,7 +689,7 @@ func TestForceSetOffset(t *testing.T) {
 
 			// SetOffset should detect the pre-allocation gap and use
 			// ForceSetOffset to bypass the store-level monotonic guard.
-			require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 100, nil))
+			require.NoError(t, s.SetOffset(ctx, 0, def[0].ColIndex, 100, nil))
 
 			store.Lock()
 			require.Equal(t, uint64(100), store.caches[0][0].Offset)
@@ -721,7 +721,7 @@ func TestReloadAfterSetOffsetDropsStalePreAllocatedRange(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, uint64(1), last)
 
-		require.NoError(t, cn2.SetOffset(ctx, 0, def[0].ColName, 100, nil))
+		require.NoError(t, cn2.SetOffset(ctx, 0, def[0].ColIndex, 100, nil))
 		require.NoError(t, cn1.Reload(ctx, 0))
 
 		input = newTestVector[uint64](1, vecType, nil, nil)
@@ -763,7 +763,7 @@ func TestSetOffsetRollbackKeepsCommittedOffsetAndSafelyRebuildsCache(t *testing.
 
 		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
 		require.NoError(t, err)
-		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 50, alterTxn))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColIndex, 50, alterTxn))
 
 		store.Lock()
 		uncommittedCols := append([]AutoColumn(nil), store.uncommitted[string(alterTxn.Txn().ID)][0]...)
@@ -804,7 +804,7 @@ func TestSetOffsetTransactionUsesPendingOffsetForInsert(t *testing.T) {
 
 		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
 		require.NoError(t, err)
-		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, alterTxn))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColIndex, 999, alterTxn))
 
 		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
 		last, err := s.InsertValues(ctx, 0, 1, alterTxn, []*vector.Vector{input}, 1, 0)
@@ -827,7 +827,7 @@ func TestSetOffsetOnNewTablePublishesFreshCacheAfterCommit(t *testing.T) {
 		require.NoError(t, err)
 		def := newTestTableDef(1)
 		require.NoError(t, s.Create(ctx, 0, def, createTxn))
-		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, createTxn))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColIndex, 999, createTxn))
 		key := privateResetKey{txnID: string(createTxn.Txn().ID), tableID: 0}
 		require.NoError(t, createTxn.Commit(ctx))
 		s.mu.Lock()
@@ -858,7 +858,7 @@ func TestDiscardOffsetResetRestoresCreatedTableCache(t *testing.T) {
 		require.NoError(t, s.Create(ctx, 0, def, createTxn))
 		original := s.getTableCache(0)
 
-		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, createTxn))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColIndex, 999, createTxn))
 		replacement := s.getTableCache(0)
 		require.NotSame(t, original, replacement)
 		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
@@ -906,7 +906,7 @@ func TestSetOffsetWithoutInsertDoesNotReservePrivateRange(t *testing.T) {
 
 		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
 		require.NoError(t, err)
-		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, alterTxn))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColIndex, 999, alterTxn))
 
 		store.Lock()
 		staged := append([]AutoColumn(nil), store.uncommitted[string(alterTxn.Txn().ID)][0]...)
@@ -1133,7 +1133,7 @@ func TestPrivateOffsetResetBuildsOneCacheForConcurrentUsers(t *testing.T) {
 		txnOp, err := tc.New(ctx, timestamp.Timestamp{})
 		require.NoError(t, err)
 		require.NoError(t, store.Create(ctx, 0, def, txnOp))
-		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, txnOp))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColIndex, 999, txnOp))
 		require.True(t, txnOp.Txn().RequireAutoIncrEpochFenceCommit)
 
 		key := privateResetKey{txnID: string(txnOp.Txn().ID), tableID: 0}
@@ -1200,7 +1200,7 @@ func TestOffsetResetCacheRetiredOnTransactionClose(t *testing.T) {
 				txnOp, err := tc.New(ctx, timestamp.Timestamp{})
 				require.NoError(t, err)
 				require.NoError(t, store.Create(ctx, 0, def, txnOp))
-				require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, txnOp))
+				require.NoError(t, s.SetOffset(ctx, 0, def[0].ColIndex, 999, txnOp))
 
 				key := privateResetKey{txnID: string(txnOp.Txn().ID), tableID: 0}
 				s.mu.Lock()
@@ -1242,7 +1242,7 @@ func TestDiscardOffsetResetRetiresPrivateCache(t *testing.T) {
 		txnOp, err := tc.New(ctx, timestamp.Timestamp{})
 		require.NoError(t, err)
 		require.NoError(t, store.Create(ctx, 0, def, txnOp))
-		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, txnOp))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColIndex, 999, txnOp))
 
 		key := privateResetKey{txnID: string(txnOp.Txn().ID), tableID: 0}
 		s.mu.Lock()
@@ -1278,7 +1278,7 @@ func TestServiceCloseRetiresPrivateOffsetResetCache(t *testing.T) {
 		txnOp, err := tc.New(ctx, timestamp.Timestamp{})
 		require.NoError(t, err)
 		require.NoError(t, store.Create(ctx, 0, def, txnOp))
-		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, txnOp))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColIndex, 999, txnOp))
 
 		key := privateResetKey{txnID: string(txnOp.Txn().ID), tableID: 0}
 		s.mu.Lock()
@@ -1309,7 +1309,7 @@ func TestPrivateOffsetResetIsVisibleOnlyToOwningTransaction(t *testing.T) {
 		owner, err := tc.New(ctx, timestamp.Timestamp{})
 		require.NoError(t, err)
 		require.NoError(t, store.Create(ctx, 0, def, owner))
-		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, owner))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColIndex, 999, owner))
 		other, err := tc.New(ctx, timestamp.Timestamp{})
 		require.NoError(t, err)
 
@@ -1401,7 +1401,7 @@ func TestInsertValuesReplacesCacheOnAutoIncrementEpochChange(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, uint64(101), last)
 
-		require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 1000, nil))
+		require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColIndex, 1000, nil))
 		input = newTestVector[uint64](1, vecType, nil, nil)
 		last, err = s.InsertValues(ctx, 0, 8, nil, []*vector.Vector{input}, 1, 0)
 		require.NoError(t, err)
@@ -1454,7 +1454,7 @@ func TestTwoServicesKeepStaleRangesAcrossTransactionalReset(t *testing.T) {
 
 		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
 		require.NoError(t, err)
-		require.NoError(t, cn1.SetOffset(ctx, 0, def[0].ColName, effectiveOffset, alterTxn))
+		require.NoError(t, cn1.SetOffset(ctx, 0, def[0].ColIndex, effectiveOffset, alterTxn))
 		require.NoError(t, alterTxn.Commit(ctx))
 
 		// CN2 is deliberately not reloaded. Its known epoch-7 cache can still generate
@@ -1660,7 +1660,7 @@ func TestSetOffsetWaitsForQueuedOldAllocation(t *testing.T) {
 		<-started
 
 		setResult := make(chan error, 1)
-		go func() { setResult <- s.SetOffset(ctx, 0, def[0].ColName, 99, nil) }()
+		go func() { setResult <- s.SetOffset(ctx, 0, def[0].ColIndex, 99, nil) }()
 		require.Eventually(t, func() bool {
 			return len(s.allocator.(*allocator).c) == 1
 		}, time.Second, time.Millisecond)
@@ -1686,7 +1686,7 @@ func TestGetLastAllocateTSUsesRequestedEpochCache(t *testing.T) {
 		def := newTestTableDef(1)
 		require.NoError(t, s.Create(ctx, 0, def, op))
 		require.NoError(t, op.Commit(ctx))
-		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 99, nil))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColIndex, 99, nil))
 
 		_, err = s.GetLastAllocateTS(ctx, 0, 1, nil, def[0].ColName)
 		require.NoError(t, err)
@@ -1720,7 +1720,7 @@ func TestCanceledSetOffsetDoesNotRunQueuedForceUpdate(t *testing.T) {
 
 		setCtx, cancelSet := context.WithCancel(ctx)
 		setResult := make(chan error, 1)
-		go func() { setResult <- s.SetOffset(setCtx, 0, def[0].ColName, 99, nil) }()
+		go func() { setResult <- s.SetOffset(setCtx, 0, def[0].ColIndex, 99, nil) }()
 		require.Eventually(t, func() bool {
 			return len(s.allocator.(*allocator).c) == 1
 		}, time.Second, time.Millisecond)
@@ -1746,7 +1746,7 @@ func TestForceSetOffsetUsesBoundedContext(t *testing.T) {
 	allocator := newValueAllocator("", store).(*allocator)
 	defer allocator.close()
 
-	require.NoError(t, allocator.forceSetOffset(ctx, 0, "auto_0", 99, nil))
+	require.NoError(t, allocator.forceSetOffset(ctx, 0, 0, 99, nil))
 	deadline := <-store.deadline
 	remaining := time.Until(deadline)
 	require.Positive(t, remaining)
@@ -1856,7 +1856,7 @@ func TestMemStoreForceSetOffset(t *testing.T) {
 			require.NoError(t, store.Create(ctx, 0, def, op))
 
 			// ForceSetOffset bypasses the monotonic guard, allowing any value.
-			require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 50, op))
+			require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColIndex, 50, op))
 
 			store.Lock()
 			require.Equal(t, uint64(50), store.uncommitted[string(op.Txn().ID)][0][0].Offset)
@@ -1882,7 +1882,7 @@ func TestMemStoreForceSetOffsetLowerThanCurrent(t *testing.T) {
 			require.NoError(t, store.SetOffset(ctx, 0, def[0].ColName, 1000, op))
 
 			// ForceSetOffset can lower it below the current value.
-			require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 100, op))
+			require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColIndex, 100, op))
 
 			store.Lock()
 			require.Equal(t, uint64(100), store.uncommitted[string(op.Txn().ID)][0][0].Offset)
@@ -1900,11 +1900,11 @@ func TestMemStoreForceSetOffsetCreatesTransactionPrivateState(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, store.Create(ctx, 0, def, createTxn))
 		require.NoError(t, createTxn.Commit(ctx))
-		require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 10, nil))
+		require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColIndex, 10, nil))
 
 		rollbackTxn, err := tc.New(ctx, timestamp.Timestamp{})
 		require.NoError(t, err)
-		require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 99, rollbackTxn))
+		require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColIndex, 99, rollbackTxn))
 		store.Lock()
 		require.Equal(t, uint64(10), store.caches[0][0].Offset)
 		require.Equal(t, uint64(99), store.uncommitted[string(rollbackTxn.Txn().ID)][0][0].Offset)
@@ -1918,7 +1918,7 @@ func TestMemStoreForceSetOffsetCreatesTransactionPrivateState(t *testing.T) {
 
 		commitTxn, err := tc.New(ctx, timestamp.Timestamp{})
 		require.NoError(t, err)
-		require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 77, commitTxn))
+		require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColIndex, 77, commitTxn))
 		require.NoError(t, commitTxn.Commit(ctx))
 		store.Lock()
 		require.Equal(t, uint64(77), store.caches[0][0].Offset)

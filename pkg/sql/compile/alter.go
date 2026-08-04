@@ -1717,7 +1717,7 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 		if err := svc.SetOffset(
 			c.proc.Ctx,
 			tableID,
-			col.ColName,
+			col.ColIndex,
 			effectiveOffset,
 			c.proc.GetTxnOperator(),
 		); err != nil {

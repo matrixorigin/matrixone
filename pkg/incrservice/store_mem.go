@@ -242,7 +242,7 @@ func (s *memStore) SetOffset(
 func (s *memStore) ForceSetOffset(
 	ctx context.Context,
 	tableID uint64,
-	colName string,
+	colIndex int,
 	offset uint64,
 	txnOp client.TxnOperator,
 ) error {
@@ -261,12 +261,12 @@ func (s *memStore) ForceSetOffset(
 		return moerr.NewInternalErrorf(ctx, "incrservice: table %d not found in memStore", tableID)
 	}
 	for i := range cols {
-		if cols[i].ColName == colName {
+		if cols[i].ColIndex == colIndex {
 			cols[i].Offset = offset
 			return nil
 		}
 	}
-	return moerr.NewInternalErrorf(ctx, "incrservice: column %s not found for table %d in memStore", colName, tableID)
+	return moerr.NewInternalErrorf(ctx, "incrservice: column index %d not found for table %d in memStore", colIndex, tableID)
 }
 
 func (s *memStore) Delete(

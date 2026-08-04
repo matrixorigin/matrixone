@@ -204,7 +204,7 @@ func (m *MockAutoIncrementService) Reload(ctx context.Context, tableID uint64) e
 func (m *MockAutoIncrementService) SetOffset(
 	ctx context.Context,
 	tableID uint64,
-	colName string,
+	colIndex int,
 	offset uint64,
 	txn client.TxnOperator,
 ) error {
@@ -213,6 +213,16 @@ func (m *MockAutoIncrementService) SetOffset(
 	counters, ok := m.counters[tableID]
 	if !ok {
 		return moerr.NewInternalErrorf(ctx, "table %d not found in mock auto-increment counters", tableID)
+	}
+	var colName string
+	for _, col := range m.columns[tableID] {
+		if col.ColIndex == colIndex {
+			colName = col.ColName
+			break
+		}
+	}
+	if colName == "" {
+		return moerr.NewInternalErrorf(ctx, "column index %d not found in mock auto-increment counters for table %d", colIndex, tableID)
 	}
 	if current, ok := counters[colName]; !ok || current < offset {
 		counters[colName] = offset

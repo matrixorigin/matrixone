@@ -719,3 +719,15 @@ id
 500
 501
 drop table auto_increment_alter_copy;
+drop table if exists auto_increment_alter_rename;
+create table auto_increment_alter_rename(id bigint primary key auto_increment, v int);
+insert into auto_increment_alter_rename(v) values (1), (2);
+alter table auto_increment_alter_rename algorithm = instant, rename column id to new_id;
+alter table auto_increment_alter_rename auto_increment = 100;
+insert into auto_increment_alter_rename(v) values (3);
+select * from auto_increment_alter_rename order by new_id;
+new_id    v
+1    1
+2    2
+100    3
+drop table auto_increment_alter_rename;

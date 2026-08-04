@@ -71,8 +71,9 @@ type AutoIncrementService interface {
 	CurrentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
 	// Reload reload auto increment cache.
 	Reload(ctx context.Context, tableID uint64) error
-	// SetOffset sets the offset of an auto-increment column and refreshes local cache.
-	SetOffset(ctx context.Context, tableID uint64, colName string, offset uint64, txn client.TxnOperator) error
+	// SetOffset sets the offset of an auto-increment column identified by its stable
+	// ordinal and refreshes local cache.
+	SetOffset(ctx context.Context, tableID uint64, colIndex int, offset uint64, txn client.TxnOperator) error
 	// DiscardOffsetReset synchronously retires a transaction-private reset cache.
 	DiscardOffsetReset(ctx context.Context, tableID uint64, txn client.TxnOperator) error
 	// Close close the auto increment service
@@ -132,7 +133,7 @@ type valueAllocator interface {
 	allocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, timestamp.Timestamp, error)
 	asyncAllocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator, cb func(uint64, uint64, timestamp.Timestamp, error)) error
 	updateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64, txnOp client.TxnOperator) error
-	forceSetOffset(ctx context.Context, tableID uint64, col string, offset uint64, txnOp client.TxnOperator) error
+	forceSetOffset(ctx context.Context, tableID uint64, colIndex int, offset uint64, txnOp client.TxnOperator) error
 	close()
 }
 
@@ -152,7 +153,7 @@ type IncrValueStore interface {
 	// ForceSetOffset sets the offset of an auto-increment column to any value, bypassing
 	// the monotonic guard. Only called during ALTER TABLE AUTO_INCREMENT which holds an
 	// exclusive DDL lock, ensuring no concurrent inserts.
-	ForceSetOffset(ctx context.Context, tableID uint64, colName string, offset uint64, txnOp client.TxnOperator) error
+	ForceSetOffset(ctx context.Context, tableID uint64, colIndex int, offset uint64, txnOp client.TxnOperator) error
 	// Delete remove metadata records from catalog.AutoIncrTableName.
 	Delete(ctx context.Context, tableID uint64) error
 	// Close the store
