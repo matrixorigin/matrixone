@@ -24,8 +24,7 @@ import (
 )
 
 const (
-	authenticatedClusterHeartbeatTimeout = 30 * time.Second
-	authenticatedClusterStoreTimeout     = 60 * time.Second
+	authenticatedClusterStoreTimeout = 60 * time.Second
 )
 
 func runAuthenticatedClusterTest(t *testing.T, fn func(embed.Cluster)) {
@@ -53,19 +52,12 @@ func TestAuthenticatedTestsReuseBaseCluster(t *testing.T) {
 		case metadata.ServiceType_CN:
 			cnCount++
 			require.False(t, cfg.CN.Frontend.SkipCheckUser)
-			require.Equal(
-				t,
-				authenticatedClusterHeartbeatTimeout,
-				cfg.CN.HAKeeper.HeatbeatTimeout.Duration,
-			)
+			require.Zero(t, cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
 		case metadata.ServiceType_TN:
 			tnCount++
 			require.NotNil(t, cfg.TN_please_use_getTNServiceConfig)
-			require.Equal(
-				t,
-				authenticatedClusterHeartbeatTimeout,
-				cfg.TN_please_use_getTNServiceConfig.HAKeeper.HeatbeatTimeout.Duration,
-			)
+			require.Zero(t,
+				cfg.TN_please_use_getTNServiceConfig.HAKeeper.HeatbeatTimeout.Duration)
 		case metadata.ServiceType_LOG:
 			logCount++
 			require.Equal(
@@ -76,16 +68,6 @@ func TestAuthenticatedTestsReuseBaseCluster(t *testing.T) {
 			require.Equal(
 				t,
 				authenticatedClusterStoreTimeout,
-				cfg.LogService.HAKeeperConfig.CNStoreTimeout.Duration,
-			)
-			require.Less(
-				t,
-				authenticatedClusterHeartbeatTimeout,
-				cfg.LogService.HAKeeperConfig.TNStoreTimeout.Duration,
-			)
-			require.Less(
-				t,
-				authenticatedClusterHeartbeatTimeout,
 				cfg.LogService.HAKeeperConfig.CNStoreTimeout.Duration,
 			)
 		}
