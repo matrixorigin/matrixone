@@ -674,6 +674,13 @@ func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Typ
 	return makePlan2CastExprWithName(ctx, expr, targetType, funcName)
 }
 
+// MakePlan2AssignmentCastExpr coerces an expression using assignment
+// semantics. Stored procedure declarations and assignments use the same
+// conversion contract as values written to SQL columns.
+func MakePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	return makePlan2AssignmentCastExpr(ctx, expr, targetType)
+}
+
 func makePlan2CastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
 	var err error
 	if expr == nil {
