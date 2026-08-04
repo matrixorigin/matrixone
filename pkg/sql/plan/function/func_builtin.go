@@ -636,8 +636,18 @@ func builtInInternalCharSize(parameters []*vector.Vector, result vector.Function
 			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
-			if typ.Oid.IsMySQLString() {
-				if err := rs.Append(int64(typ.GetSize()*typ.Width), false); err != nil {
+			switch typ.Oid {
+			case types.T_char, types.T_varchar, types.T_text:
+				// Width is measured in characters for character strings. The
+				// information schema needs the maximum encoded byte length, not
+				// the size of MatrixOne's internal Varlena storage slot.
+				if err := rs.Append(int64(typ.Width)*utf8.UTFMax, false); err != nil {
+					return err
+				}
+				continue
+			case types.T_binary, types.T_varbinary, types.T_blob:
+				// Binary string widths are already measured in octets.
+				if err := rs.Append(int64(typ.Width), false); err != nil {
 					return err
 				}
 				continue
