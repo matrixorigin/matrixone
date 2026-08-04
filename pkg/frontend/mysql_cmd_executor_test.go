@@ -282,6 +282,10 @@ func TestSetTransactionIsolationAppliedToTxnMeta(t *testing.T) {
 		// service-wide default.
 		require.Equal(t, txn.TxnIsolation_RC, createTxn())
 
+		execSet("set session transaction isolation level repeatable read")
+		require.Equal(t, txn.TxnIsolation_SI, createTxn())
+		require.Equal(t, txn.TxnIsolation_SI, createTxn())
+
 		execSet("set session transaction isolation level read committed")
 		require.Equal(t, txn.TxnIsolation_RC, createTxn())
 
