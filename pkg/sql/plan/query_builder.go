@@ -9680,7 +9680,8 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		tag := subCtx.rootTag()
 		headings := subCtx.headings
 		projects := subCtx.projects
-		if subCtx.restoreViewMySQLSpecialTypes && len(subCtx.mysqlSpecialRawProjectPositions) > 0 &&
+		if subCtx.restoreViewMySQLSpecialTypes &&
+			(len(subCtx.mysqlSpecialRawProjectPositions) > 0 || len(subCtx.mysqlSpecialCanonicalTypes) > 0) &&
 			len(subCtx.results) >= len(headings) {
 			projects = subCtx.results
 		}

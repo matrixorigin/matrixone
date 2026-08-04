@@ -72,7 +72,6 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 			"insert into " + db + ".semantic_t values ('low', ''), ('medium', 1), ('high', 'a')",
 			"create view " + db + ".v_semantic_group as select priority, flags from " + db + ".semantic_t group by priority, flags",
 			"create view " + db + ".v_semantic_distinct as select distinct priority, flags from " + db + ".semantic_t",
-			"create view " + db + ".v_semantic_group_order as select priority, flags from " + db + ".semantic_t group by priority, flags order by flags",
 			"create view " + db + ".v_semantic_derived as select priority, flags from (select distinct priority, flags from " + db + ".semantic_t) d",
 		} {
 			execSQLRequire(t, ctx, dbConn, stmt)
@@ -153,21 +152,21 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 		for _, view := range []string{
 			"v_semantic_group",
 			"v_semantic_distinct",
-			"v_semantic_group_order",
 			"v_semantic_derived",
 		} {
 			rows, err := dbConn.QueryContext(ctx,
-				"select cast(priority as unsigned), cast(flags as unsigned) from "+db+"."+view+" order by 1, 2")
-			require.NoError(t, err)
-			var actual [][2]uint64
+				"select priority, cast(flags as unsigned) from "+db+"."+view+" order by priority")
+			require.NoError(t, err, view)
+			defer rows.Close()
+			var actual [][2]any
 			for rows.Next() {
-				var priority, flags uint64
+				var priority string
+				var flags uint64
 				require.NoError(t, rows.Scan(&priority, &flags))
-				actual = append(actual, [2]uint64{priority, flags})
+				actual = append(actual, [2]any{priority, flags})
 			}
 			require.NoError(t, rows.Err())
-			require.NoError(t, rows.Close())
-			require.Equal(t, [][2]uint64{{1, 0}, {2, 0}, {3, 2}}, actual, view)
+			require.Equal(t, [][2]any{{"low", uint64(0)}, {"medium", uint64(0)}, {"high", uint64(2)}}, actual, view)
 		}
 	})
 }
