@@ -326,7 +326,7 @@ func init() {
 		"lock":                       LOCK,
 		"locks":                      LOCKS,
 		"logservice":                 LOGSERVICE,
-		"long":                       UNUSED,
+		"long":                       LONG,
 		"longblob":                   LONGBLOB,
 		"longtext":                   LONGTEXT,
 		"loop":                       LOOP,

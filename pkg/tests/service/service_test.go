@@ -21,7 +21,9 @@ import (
 	"github.com/lni/goutils/leaktest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -29,6 +31,20 @@ import (
 const (
 	supportMultiTN = false
 )
+
+func TestClusterAdmissionCoversServiceClusterLifecycle(t *testing.T) {
+	c := &testCluster{
+		logger:  zap.NewNop(),
+		stopper: stopper.NewStopper("cluster-admission-test"),
+	}
+	c.opt.keepData = true
+
+	require.NoError(t, c.acquireAdmissionLocked())
+	require.NotNil(t, c.mu.admission)
+	c.mu.running = true
+	require.NoError(t, c.Close())
+	require.Nil(t, c.mu.admission)
+}
 
 func TestClusterStart(t *testing.T) {
 	defer leaktest.AfterTest(t)()
