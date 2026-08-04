@@ -77,6 +77,19 @@ insert ignore into insert_ignore_09 select result, result from generate_series(1
 select count(*) from insert_ignore_09;
 select count(*) from insert_ignore_09 where c1 != c2;
 
+-- The preceding large materialized source makes the source PROJECT eligible
+-- for remote-CN execution. INSERT IGNORE must retain its adjustment semantics
+-- when the BIT assignment cast is evaluated in that remote pipeline.
+set @insert_ignore_remote_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+drop table if exists insert_ignore_remote_special_bit;
+create table insert_ignore_remote_special_bit (b bit(4));
+insert ignore into insert_ignore_remote_special_bit
+select c1 from insert_ignore_09 where c1 between 1 and 100000;
+select count(*), min(b + 0), max(b + 0) from insert_ignore_remote_special_bit;
+drop table insert_ignore_remote_special_bit;
+set session sql_mode = @insert_ignore_remote_sql_mode;
+
 -- Test case for INSERT IGNORE with many duplicate primary keys
 -- This test reproduces the index out of range panic issue
 -- Root cause: InputBatchRowCount not updated after Batches.Shrink removes duplicates in hashmap builder

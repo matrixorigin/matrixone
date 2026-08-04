@@ -97,6 +97,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 	sp := NewStmtProfile(uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
 	sp.SetTxnId([]byte("txn-profile-123456"))
 	sp.SetStmtId(uuid.MustParse("cccccccc-cccc-cccc-cccc-cccccccccccc"))
+	sp.SetStatementRuntimeProfile("Insert", "DML", true)
 	proc.SetStmtProfile(sp)
 
 	vec := vector.NewVec(types.T_text.ToType())
@@ -243,6 +244,7 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, []bool{false, true}, info.PrepareParams.Nulls)
 	require.Equal(t, []bool{true, false}, info.PrepareParams.IsBin)
 	require.Equal(t, int64(42), info.AffectedRows)
+	require.True(t, info.StatementRuntimeIgnore)
 	require.Equal(t, uint64(99), info.SessionInfo.ConnectionId)
 	require.Equal(t, int64(7), info.SessionInfo.LockWaitTimeout)
 	require.True(t, info.SessionInfo.MatrixoneNativeMode)
@@ -304,6 +306,7 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.True(t, decodedProc.GetPrepareParamIsBin(0))
 	require.False(t, decodedProc.GetPrepareParamIsBin(1))
 	require.Equal(t, int64(42), decodedProc.GetAffectedRows())
+	require.True(t, decodedProc.GetStmtProfile().GetStatementIgnore())
 	decodedParams := decodedProc.GetPrepareParams()
 	require.NotPanics(t, decodedProc.Free)
 	require.Nil(t, decodedParams.GetData())
@@ -349,6 +352,9 @@ func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) 
 	info, err := proc.BuildProcessInfo("select ?")
 	require.NoError(t, err)
 	info.PrepareParams.IsBin = nil
+	// An old coordinator does not send the new field. Protobuf decodes that
+	// absence as false, preserving the prior strict-mode behavior remotely.
+	info.StatementRuntimeIgnore = false
 
 	payload, err := info.Marshal()
 	require.NoError(t, err)
@@ -363,6 +369,7 @@ func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) 
 	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())
 	require.False(t, decodedProc.GetPrepareParamIsBin(0))
 	require.False(t, decodedProc.GetPrepareParamIsBin(1))
+	require.False(t, decodedProc.GetStmtProfile().GetStatementIgnore())
 	decodedProc.Free()
 }
 
