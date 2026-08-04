@@ -19,6 +19,7 @@ package nulls
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -280,6 +281,19 @@ func Filter(nsp *Nulls, sels []int64, negate bool) {
 	}
 }
 
+// FilterInPlaceOrdered preserves Filter semantics for Vector.Shrink's ordered
+// selection contract without allocating a second row-scaled bitmap.
+func FilterInPlaceOrdered(nsp *Nulls, sels []int64, negate bool) {
+	if nsp.np.EmptyByFlag() {
+		return
+	}
+	if !nsp.np.HasExternalStorage() {
+		Filter(nsp, sels, negate)
+		return
+	}
+	nsp.np.RemapOrdered(sels, negate)
+}
+
 func FilterByMask(nsp *Nulls, sels *bitmap.Bitmap, negate bool) {
 	if nsp.np.EmptyByFlag() {
 		return
@@ -331,6 +345,19 @@ func FilterByMask(nsp *Nulls, sels *bitmap.Bitmap, negate bool) {
 	}
 }
 
+// FilterByMaskInPlace rewrites a null bitmap using the selection bitmap's
+// naturally ordered iterator and therefore requires no row-scaled scratch.
+func FilterByMaskInPlace(nsp *Nulls, sels *bitmap.Bitmap, negate bool) {
+	if nsp.np.EmptyByFlag() {
+		return
+	}
+	if !nsp.np.HasExternalStorage() {
+		FilterByMask(nsp, sels, negate)
+		return
+	}
+	nsp.np.RemapMaskOrdered(sels, negate)
+}
+
 // XXX This emptyFlag thing is broken -- it simply cannot be used concurrently.
 // Make any an alias of EmptyByFlag, otherwise there will be hell lots of race conditions.
 func (nsp *Nulls) Any() bool {
@@ -370,6 +397,20 @@ func (nsp *Nulls) Show() ([]byte, error) {
 		return nil, nil
 	}
 	return nsp.np.Marshal(), nil
+}
+
+func (nsp *Nulls) MarshalSize() int {
+	if nsp == nil || nsp.np.EmptyByFlag() {
+		return 0
+	}
+	return nsp.np.MarshalSize()
+}
+
+func (nsp *Nulls) MarshalTo(w io.Writer) error {
+	if nsp == nil || nsp.np.EmptyByFlag() {
+		return nil
+	}
+	return nsp.np.MarshalTo(w)
 }
 
 // ShowV1 in version 1, bitmap is v1

@@ -915,4 +915,19 @@ func TestExecutor_RecordTxnSQL_Cap(t *testing.T) {
 		e.recordTxnSQL(sqlBuf)
 		assert.Equal(t, 0, len(e.debugTxnRecorder.txnSQL))
 	})
+
+	t.Run("TotalBytes", func(t *testing.T) {
+		e := &Executor{}
+		e.debugTxnRecorder.doRecord = true
+		e.debugTxnRecorder.sqlBytes = maxDebugTxnSQLBytes - 2
+
+		sqlBuf := append(make([]byte, v2SQLBufReserved), []byte("OK")...)
+		e.recordTxnSQL(sqlBuf)
+		assert.Equal(t, maxDebugTxnSQLBytes, e.debugTxnRecorder.sqlBytes)
+		assert.Equal(t, []string{"OK"}, e.debugTxnRecorder.txnSQL)
+
+		e.recordTxnSQL(append(make([]byte, v2SQLBufReserved), byte('X')))
+		assert.Equal(t, maxDebugTxnSQLBytes, e.debugTxnRecorder.sqlBytes)
+		assert.Len(t, e.debugTxnRecorder.txnSQL, 1)
+	})
 }

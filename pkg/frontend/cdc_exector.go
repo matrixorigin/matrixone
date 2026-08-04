@@ -42,6 +42,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
+	"golang.org/x/sync/semaphore"
 )
 
 var CDCExectorError_QueryDaemonTaskTimeout = moerr.NewInternalErrorNoCtx("query daemon task timeout")
@@ -153,6 +154,9 @@ type CDCTaskExecutor struct {
 	startTs, endTs   types.TS
 	noFull           bool
 	additionalConfig map[string]interface{}
+	// initialSnapshotLimiter prevents many tables from retaining large checkpoint
+	// batches at the same time during the first full-sync round.
+	initialSnapshotLimiter *semaphore.Weighted
 
 	activeRoutineMu sync.RWMutex
 	activeRoutine   *cdc.ActiveRoutine
@@ -562,6 +566,9 @@ func NewCDCTaskExecutor(
 		),
 		stateMachine: NewExecutorStateMachine(), // Initialize state machine
 		holdCh:       make(chan int, 1),         // Initialize holdCh to prevent race condition
+		initialSnapshotLimiter: semaphore.NewWeighted(
+			cdc.CDCDefaultInitialSnapshotConcurrency,
+		),
 	}
 	task.startFunc = task.Start
 	return task
@@ -2550,6 +2557,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		exec.endTs,
 		exec.noFull,
 		frequency,
+		cdc.WithInitialSnapshotLimiter(exec.initialSnapshotLimiter),
 	)
 
 	// step 4. start goroutines (sinker first, then reader)

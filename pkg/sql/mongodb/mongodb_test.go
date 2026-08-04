@@ -18,8 +18,10 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"math"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -76,6 +78,8 @@ func TestCreateSQLEnvelopeRoundTripAndRejectsParallelMVP(t *testing.T) {
 	env, found, err := ParseCreateSQLEnvelope(ctx, raw)
 	require.NoError(t, err)
 	require.True(t, found)
+	require.Equal(t, 2, env.Version)
+	require.Equal(t, CreateSQLKindMongoDB, env.Kind)
 	require.Equal(t, mapping.Connection, env.Connection)
 	require.Equal(t, int32(1), env.MaxParallelism)
 	require.Equal(t, mapping.Columns, env.Columns)
@@ -83,6 +87,28 @@ func TestCreateSQLEnvelopeRoundTripAndRejectsParallelMVP(t *testing.T) {
 	_, found, err = ParseCreateSQLEnvelope(ctx, "create external table x (a int)")
 	require.NoError(t, err)
 	require.False(t, found)
+
+	for _, injected := range []string{
+		`{"filepath":"` + raw + `"}`,
+		"create external table x (a int) infile " + raw,
+		`{"filepath":"MO_MONGODB: version=1; connection=admin */"}`,
+	} {
+		_, found, err = ParseCreateSQLEnvelope(ctx, injected)
+		require.NoError(t, err)
+		require.False(t, found, injected)
+	}
+
+	legacy := strings.Replace(raw, "version=2; kind=mongodb_table;", "version=1;", 1)
+	env, found, err = ParseCreateSQLEnvelope(ctx, legacy)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, 1, env.Version)
+	require.Equal(t, CreateSQLKindMongoDB, env.Kind)
+
+	wrongKind := strings.Replace(raw, "kind=mongodb_table", "kind=generic_external", 1)
+	_, found, err = ParseCreateSQLEnvelope(ctx, wrongKind)
+	require.True(t, found)
+	require.ErrorContains(t, err, "kind")
 
 	bad := BuildCreateSQLEnvelope(TableMapping{
 		Connection: "c", Database: "d", Collection: "x", MaxParallelism: 2,
@@ -426,6 +452,37 @@ func TestPlanPredicatePushesTryNullBSONDateTimeWithSafeRounding(t *testing.T) {
 	require.Nil(t, pushed, "strict temporal conversion must not hide malformed values")
 }
 
+func TestPlanPredicateKeepsSubMillisecondScaleTemporalMappingsResidual(t *testing.T) {
+	columnExpr := &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	literalDatetime := types.DatetimeFromUnixWithNsec(time.UTC, 10, 0)
+	literalExpr := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_datetime)},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: int64(literalDatetime)}}},
+	}
+	comparison := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "="}, Args: []*planpb.Expr{columnExpr, literalExpr},
+	}}}
+	in := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "in"}, Args: []*planpb.Expr{columnExpr, {
+			Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{literalExpr}}},
+		}},
+	}}}
+
+	for _, target := range []types.T{types.T_datetime, types.T_timestamp} {
+		for scale := int32(0); scale < 3; scale++ {
+			columns := []*planpb.MongoColumnMapping{{
+				Path: "ts", ConversionMode: ConversionTryNull,
+				MoType: planpb.Type{Id: int32(target), Scale: scale},
+			}}
+			for _, filter := range []*planpb.Expr{comparison, in} {
+				pushed, residual := PushdownPlanFilters(t.Context(), []*planpb.Expr{filter}, columns)
+				require.Nil(t, pushed, "%s(%d)", target, scale)
+				require.NotEmpty(t, residual)
+			}
+		}
+	}
+}
+
 func TestTemporalCandidateRoundingBeforeUnixEpoch(t *testing.T) {
 	require.Equal(t, int64(-2), floorDiv(-1001, 1000))
 	require.Equal(t, int64(-1), ceilDiv(-1001, 1000))
@@ -706,6 +763,79 @@ func TestConverterRejectsOversizeAndUnsupportedType(t *testing.T) {
 	require.NoError(t, err)
 	require.Error(t, converter.AppendDocument(ctx, bat, raw, mp))
 	require.Zero(t, bat.RowCount())
+	bat.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestConverterTemporalRangeScaleAndTryNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+	invalidValues := []bson.DateTime{
+		bson.DateTime(math.MinInt64),
+		bson.DateTime(time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli()),
+		bson.DateTime(math.MaxInt64),
+	}
+	for _, conversion := range []string{ConversionStrict, ConversionTryNull} {
+		converter, err := NewConverter(t.Context(), []ColumnMapping{{
+			Name: "ts", TypeID: int32(types.T_timestamp), Scale: 0, Conversion: conversion,
+		}}, 1024)
+		require.NoError(t, err)
+		bat := converter.NewBatch()
+		for _, invalid := range invalidValues {
+			raw, marshalErr := bson.Marshal(bson.D{{Key: "ts", Value: invalid}})
+			require.NoError(t, marshalErr)
+			err = converter.AppendDocument(t.Context(), bat, raw, mp)
+			if conversion == ConversionStrict {
+				require.ErrorContains(t, err, "cannot be converted")
+				require.Zero(t, bat.RowCount())
+			} else {
+				require.NoError(t, err)
+				require.True(t, bat.Vecs[0].IsNull(uint64(bat.RowCount()-1)))
+			}
+		}
+		bat.Clean(mp)
+	}
+
+	converter, err := NewConverter(t.Context(), []ColumnMapping{{
+		Name: "ts", TypeID: int32(types.T_timestamp), Scale: 0, Conversion: ConversionStrict,
+	}}, 1024)
+	require.NoError(t, err)
+	bat := converter.NewBatch()
+	instant := time.Date(2026, 7, 29, 10, 11, 12, 100*int(time.Millisecond), time.UTC)
+	raw, err := bson.Marshal(bson.D{{Key: "ts", Value: instant}})
+	require.NoError(t, err)
+	require.NoError(t, converter.AppendDocument(t.Context(), bat, raw, mp))
+	want, err := types.ParseTimestamp(time.UTC, "2026-07-29 10:11:12", 0)
+	require.NoError(t, err)
+	require.Equal(t, want, vector.GetFixedAtNoTypeCheck[types.Timestamp](bat.Vecs[0], 0))
+	bat.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestConverterEnforcesDecodedVectorBudgetIncrementally(t *testing.T) {
+	const (
+		columnCount = 64
+		valueBytes  = 256 << 10
+		budget      = 1 << 20
+	)
+	columns := make([]ColumnMapping, columnCount)
+	for i := range columns {
+		columns[i] = ColumnMapping{
+			Name: fmt.Sprintf("copy_%d", i), Path: "payload",
+			TypeID: int32(types.T_blob), Conversion: ConversionTryNull,
+		}
+	}
+	converter, err := NewConverter(t.Context(), columns, valueBytes+1024)
+	require.NoError(t, err)
+	raw, err := bson.Marshal(bson.D{{Key: "payload", Value: bson.Binary{Data: make([]byte, valueBytes)}}})
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	bat := converter.NewBatch()
+	err = converter.AppendDocumentWithBudget(t.Context(), bat, raw, mp, budget)
+	require.True(t, IsDecodedBatchBudgetExceeded(err), "unexpected conversion result: %v", err)
+	require.Zero(t, bat.RowCount())
+	require.Zero(t, converter.conversionAttempts, "a deferred row must not be counted before it commits")
+	require.LessOrEqual(t, bat.Size(), budget)
+	require.Less(t, bat.Allocated(), 2*budget, "conversion must stop before duplicating the value into every mapped column")
 	bat.Clean(mp)
 	require.Zero(t, mp.CurrNB())
 }
@@ -1331,6 +1461,112 @@ func TestClientPoolTenantIsolationRotationAndIdempotentRelease(t *testing.T) {
 	require.Same(t, l3.Client(), l4.Client())
 	require.NoError(t, l4.Release(ctx))
 	require.NoError(t, pool.Close(ctx))
+}
+
+type singleflightFactory struct {
+	mu       sync.Mutex
+	connects int
+	started  chan struct{}
+	release  chan struct{}
+	err      error
+}
+
+func (f *singleflightFactory) Connect(context.Context, Connection, Credentials, RuntimeConfig) (Client, error) {
+	f.mu.Lock()
+	f.connects++
+	f.mu.Unlock()
+	f.started <- struct{}{}
+	<-f.release
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &fakeClient{}, nil
+}
+
+func TestClientPoolSingleflightsColdAcquisitionPerExactKey(t *testing.T) {
+	const callers = 16
+	factory := &singleflightFactory{
+		started: make(chan struct{}, callers),
+		release: make(chan struct{}),
+	}
+	pool := NewClientPool(factory)
+	connection := Connection{AccountID: 1, ConnectionID: 9, Version: 1}
+	type result struct {
+		lease *ClientLease
+		err   error
+	}
+	results := make(chan result, callers)
+	for range callers {
+		go func() {
+			lease, err := pool.Acquire(t.Context(), connection, Credentials{}, RuntimeConfig{})
+			results <- result{lease: lease, err: err}
+		}()
+	}
+	<-factory.started
+	for {
+		pool.mu.Lock()
+		flight := pool.flights[poolKey{accountID: 1, connectionID: 9, version: 1, identity: credentialIdentity(Credentials{})}]
+		waiting := flight != nil && flight.waiters == callers-1
+		pool.mu.Unlock()
+		if waiting {
+			break
+		}
+		runtime.Gosched()
+	}
+	close(factory.release)
+
+	var first Client
+	for range callers {
+		acquired := <-results
+		require.NoError(t, acquired.err)
+		if first == nil {
+			first = acquired.lease.Client()
+		} else {
+			require.Same(t, first, acquired.lease.Client())
+		}
+		require.NoError(t, acquired.lease.Release(t.Context()))
+	}
+	factory.mu.Lock()
+	require.Equal(t, 1, factory.connects)
+	factory.mu.Unlock()
+	require.NoError(t, pool.Close(t.Context()))
+}
+
+func TestClientPoolSingleflightSharesColdAcquisitionFailure(t *testing.T) {
+	const callers = 16
+	connectErr := errors.New("injected connect failure")
+	factory := &singleflightFactory{
+		started: make(chan struct{}, callers),
+		release: make(chan struct{}),
+		err:     connectErr,
+	}
+	pool := NewClientPool(factory)
+	results := make(chan error, callers)
+	for range callers {
+		go func() {
+			_, err := pool.Acquire(t.Context(), Connection{AccountID: 1, ConnectionID: 9, Version: 1}, Credentials{}, RuntimeConfig{})
+			results <- err
+		}()
+	}
+	<-factory.started
+	for {
+		pool.mu.Lock()
+		flight := pool.flights[poolKey{accountID: 1, connectionID: 9, version: 1, identity: credentialIdentity(Credentials{})}]
+		waiting := flight != nil && flight.waiters == callers-1
+		pool.mu.Unlock()
+		if waiting {
+			break
+		}
+		runtime.Gosched()
+	}
+	close(factory.release)
+	for range callers {
+		require.ErrorIs(t, <-results, connectErr)
+	}
+	factory.mu.Lock()
+	require.Equal(t, 1, factory.connects)
+	factory.mu.Unlock()
+	require.NoError(t, pool.Close(t.Context()))
 }
 
 func TestClientPoolDetectsInPlaceSecretRotation(t *testing.T) {

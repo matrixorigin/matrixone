@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
@@ -154,6 +155,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		// -1 means "no old-row delete maintenance" (set only on ODKU into an
 		// irregular-index table); step 0 is a valid index so it cannot be the zero value.
 		irregularMaintDeleteStep: -1,
+		returningSourceStep:      -1,
 	}
 }
 
@@ -4478,9 +4480,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		}
 	}
 
-	if stmt.SelectLockInfo != nil && stmt.SelectLockInfo.LockType == tree.SelectLockForUpdate {
-		builder.isForUpdate = true
-	}
+	effectiveSelectLockInfo := stmt.SelectLockInfo
 
 	// strip parentheses
 	// ((select a from t1)) order by b  [ is equal ] select a from t1 order by b
@@ -4509,6 +4509,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				astRankOption = selectClause.Select.RankOption
 			}
 			stmt = selectClause.Select
+			if stmt.SelectLockInfo != nil {
+				effectiveSelectLockInfo = stmt.SelectLockInfo
+			}
 
 			//stmt may be replaced above.
 			//do preprocess CTEs again
@@ -4518,6 +4521,17 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			}
 		} else {
 			break
+		}
+	}
+
+	selectLockMode := lockpb.LockMode_Exclusive
+	if effectiveSelectLockInfo != nil {
+		switch effectiveSelectLockInfo.LockType {
+		case tree.SelectLockForUpdate:
+			builder.isForUpdate = true
+		case tree.SelectLockForShare:
+			builder.isForUpdate = true
+			selectLockMode = lockpb.LockMode_Shared
 		}
 	}
 
@@ -4573,6 +4587,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					if rewrittenSelect == nil {
 						return 0, moerr.NewNotSupported(builder.GetContext(), "window functions with ROLLUP or CUBE for this expression")
 					}
+					rewrittenSelect.SelectLockInfo = effectiveSelectLockInfo
 					return builder.bindSelect(rewrittenSelect, ctx, isRoot)
 				}
 
@@ -4651,6 +4666,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			astLimit,
 			astTimeWindow,
 			helpFunc,
+			selectLockMode,
 			isRoot,
 		); err != nil {
 			return
@@ -6521,6 +6537,7 @@ func (builder *QueryBuilder) bindSelectClause(
 	astLimit *tree.Limit,
 	astTimeWindow *tree.TimeWindow,
 	helpFunc *helpFunc,
+	selectLockMode lockpb.LockMode,
 	isRoot bool,
 ) (
 	nodeID int32,
@@ -6590,6 +6607,9 @@ func (builder *QueryBuilder) bindSelectClause(
 	// final result set filters out would still get locked.
 	if builder.isForUpdate {
 		lockTargets := builder.collectLockTargets(nodeID, ctx)
+		for _, target := range lockTargets {
+			target.Mode = selectLockMode
+		}
 		if len(lockTargets) > 0 {
 			lockNode = &Node{
 				NodeType:    plan.Node_LOCK_OP,
@@ -6668,7 +6688,7 @@ func (builder *QueryBuilder) bindWhere(
 	}
 	var expr *plan.Expr
 	for _, cond := range whereList {
-		if nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx); err != nil {
+		if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
 			return
 		}
 		boundFilterList = append(boundFilterList, expr)
@@ -7865,7 +7885,7 @@ func (builder *QueryBuilder) appendSampleNode(
 		var expr *plan.Expr
 
 		for _, cond := range boundHavingList {
-			if nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx); err != nil {
+			if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
 				return
 			}
 
@@ -7925,7 +7945,7 @@ func (builder *QueryBuilder) appendAggNode(
 		var expr *plan.Expr
 
 		for _, cond := range preWindowHavingList {
-			if nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx); err != nil {
+			if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
 				return
 			}
 
@@ -8083,7 +8103,7 @@ func (builder *QueryBuilder) appendWindowNode(
 		var expr *plan.Expr
 
 		for _, cond := range postWindowHavingList {
-			if nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx); err != nil {
+			if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
 				return
 			}
 
@@ -9083,13 +9103,20 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			} else if found {
 				icebergEnv = env
 				externType = plan.ExternType_ICEBERG_TB
-			} else if env, found, err := sqlmongodb.ParseCreateSQLEnvelope(builder.GetContext(), tableDef.Createsql); err != nil {
-				return 0, err
-			} else if found {
-				mongoEnv = env
-				externType = plan.ExternType_MONGODB_TB
-				if builder.isPrepareStatement {
-					return 0, moerr.NewNotSupported(builder.GetContext(), "prepared MongoDB external scans")
+			} else {
+				isMongoDB, err := IsMongoDBTableDef(builder.GetContext(), tableDef)
+				if err != nil {
+					return 0, err
+				}
+				if isMongoDB {
+					mongoEnv, _, err = sqlmongodb.ParseCreateSQLEnvelope(builder.GetContext(), tableDef.Createsql)
+					if err != nil {
+						return 0, err
+					}
+					externType = plan.ExternType_MONGODB_TB
+					if builder.isPrepareStatement {
+						return 0, moerr.NewNotSupported(builder.GetContext(), "prepared MongoDB external scans")
+					}
 				}
 			}
 			externScan = &plan.ExternScan{
@@ -9629,7 +9656,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			var onConds, filterConds []*plan.Expr
 			for _, cond := range joinConds {
 				if hasSubquery(cond) {
-					nodeID, cond, err = builder.flattenSubqueries(nodeID, cond, ctx)
+					nodeID, cond, err = builder.flattenFilterSubqueries(nodeID, cond, ctx)
 					if err != nil {
 						return 0, err
 					}

@@ -136,6 +136,137 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
 	require.Nil(t, params.GetArea())
+	c.Release()
+	proc.Free()
+	proc.GetSessionInfo().Buf.Free()
+}
+
+type retryRecordingResultSink struct {
+	events []string
+	rows   map[uint64]int
+}
+
+type generationCheckingResultSink struct {
+	activeGeneration uint64
+	events           []string
+}
+
+func (s *generationCheckingResultSink) BeginAttempt(_ context.Context, generation uint64, _ *process.Process) error {
+	s.activeGeneration = generation
+	s.events = append(s.events, fmt.Sprintf("begin:%d", generation))
+	return nil
+}
+
+func (s *generationCheckingResultSink) Write(generation uint64, bat *batch.Batch, _ *perfcounter.CounterSet) error {
+	if bat == nil {
+		return nil
+	}
+	s.events = append(s.events, fmt.Sprintf("write:%d", generation))
+	if generation != s.activeGeneration {
+		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("result sink generation mismatch: active=%d write=%d", s.activeGeneration, generation))
+	}
+	return nil
+}
+
+func (s *generationCheckingResultSink) SealAttempt(generation uint64) error {
+	s.events = append(s.events, fmt.Sprintf("seal:%d", generation))
+	return nil
+}
+
+func (s *generationCheckingResultSink) AbortAttempt(generation uint64, _ error) error {
+	s.events = append(s.events, fmt.Sprintf("abort:%d", generation))
+	return nil
+}
+
+func (s *retryRecordingResultSink) BeginAttempt(_ context.Context, generation uint64, _ *process.Process) error {
+	s.events = append(s.events, fmt.Sprintf("begin:%d", generation))
+	if s.rows == nil {
+		s.rows = make(map[uint64]int)
+	}
+	return nil
+}
+
+func (s *retryRecordingResultSink) Write(generation uint64, bat *batch.Batch, _ *perfcounter.CounterSet) error {
+	if bat == nil {
+		return nil
+	}
+	s.events = append(s.events, fmt.Sprintf("write:%d", generation))
+	s.rows[generation] += bat.RowCount()
+	if generation < 2 {
+		return moerr.NewTxnNeedRetryNoCtx()
+	}
+	return nil
+}
+
+func (s *retryRecordingResultSink) SealAttempt(generation uint64) error {
+	s.events = append(s.events, fmt.Sprintf("seal:%d", generation))
+	return nil
+}
+
+func (s *retryRecordingResultSink) AbortAttempt(generation uint64, _ error) error {
+	s.events = append(s.events, fmt.Sprintf("abort:%d", generation))
+	delete(s.rows, generation)
+	return nil
+}
+
+func TestResultWriterCapturesExecutionGeneration(t *testing.T) {
+	sink := &retryRecordingResultSink{rows: make(map[uint64]int)}
+	c := &Compile{resultSink: sink, executionGeneration: 3}
+	writer := c.resultWriter()
+	c.executionGeneration = 4
+	require.NoError(t, writer(batch.EmptyBatch, nil))
+	require.Equal(t, []string{"write:3"}, sink.events)
+}
+
+func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().Buf = buffer.New()
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return "STRICT_TRANS_TABLES", nil
+	})
+	compilerCtx := plan2.NewEmptyCompilerContext()
+	compilerCtx.SetContext(ctx)
+	stmts, err := mysql.Parse(ctx, "select 1", 1)
+	require.NoError(t, err)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+	require.NoError(t, err)
+	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+
+	ctrl := gomock.NewController(t)
+	txnCli, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+	proc.Base.TxnClient = txnCli
+	proc.Base.TxnOperator = txnOp
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	c := NewCompile("test", "test", "select 1", "", "", newStubEngine(), proc, stmts[0], false, nil, time.Now())
+	require.NoError(t, c.Compile(ctx, pn, func(*batch.Batch, *perfcounter.CounterSet) error {
+		return errors.New("streaming callback must not be used when ResultSink is installed")
+	}))
+	sink := &retryRecordingResultSink{}
+	c.SetResultSink(sink)
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"begin:0", "write:0", "abort:0",
+		"begin:1", "write:1", "abort:1",
+		"begin:2", "write:2", "seal:2",
+	}, sink.events)
+	require.Equal(t, map[uint64]int{2: 1}, sink.rows)
+	require.Equal(t, uint64(2), c.executionGeneration)
+
+	// Compile.Reset is the prepared-statement reuse boundary. The next execution
+	// must rebuild its output callback for generation zero even when the previous
+	// execution succeeded after retries on a later generation.
+	nextSink := &generationCheckingResultSink{}
+	c.SetResultSink(nextSink)
+	require.NoError(t, c.Reset(proc, time.Now(), func(*batch.Batch, *perfcounter.CounterSet) error {
+		return errors.New("streaming callback must not be used when ResultSink is installed")
+	}, "select 1"))
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.Equal(t, []string{"begin:0", "write:0", "seal:0"}, nextSink.events)
 
 	c.Release()
 	proc.Free()
@@ -328,20 +459,24 @@ func TestConstructLockOpPreservesSharedTableMode(t *testing.T) {
 	}
 }
 
-func TestValidateReplaceParentTxnMode(t *testing.T) {
+func TestValidateForeignKeyParentTxnMode(t *testing.T) {
 	ctx := context.Background()
 	query := &plan.Query{DetectSqls: []string{"REPLACE_PARENT_LOCK:select 1 for update"}}
 
-	require.NoError(t, validateReplaceParentTxnMode(ctx, query, true))
-	require.ErrorContains(t, validateReplaceParentTxnMode(ctx, query, false),
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx, query, true))
+	require.ErrorContains(t, validateForeignKeyParentTxnMode(ctx, query, false),
 		"optimistic transaction mode")
 	query.DetectSqls = []string{"REPLACE_PARENT_PLAN:"}
-	require.NoError(t, validateReplaceParentTxnMode(ctx, query, true))
-	require.ErrorContains(t, validateReplaceParentTxnMode(ctx, query, false),
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx, query, true))
+	require.ErrorContains(t, validateForeignKeyParentTxnMode(ctx, query, false),
 		"optimistic transaction mode")
-	require.NoError(t, validateReplaceParentTxnMode(ctx,
+	query.DetectSqls = []string{"UPDATE_PARENT_PLAN:"}
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx, query, true))
+	require.ErrorContains(t, validateForeignKeyParentTxnMode(ctx, query, false),
+		"UPDATE on a referenced parent table")
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx,
 		&plan.Query{DetectSqls: []string{"select true"}}, false))
-	require.NoError(t, validateReplaceParentTxnMode(ctx, nil, false))
+	require.NoError(t, validateForeignKeyParentTxnMode(ctx, nil, false))
 }
 
 func TestLockTableLocksAllPrePipelineTargets(t *testing.T) {
@@ -412,18 +547,26 @@ func TestLockTableLocksAllPrePipelineTargets(t *testing.T) {
 		},
 	)
 }
-func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.TxnOperator) {
-	return newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_SI)
+func newTestTxnClientAndOp(
+	ctrl *gomock.Controller,
+	workspaces ...client.Workspace,
+) (client.TxnClient, client.TxnOperator) {
+	return newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_SI, workspaces...)
 }
 
 func newTestTxnClientAndOpWithIsolation(
 	ctrl *gomock.Controller,
 	isolation txn.TxnIsolation,
+	workspaces ...client.Workspace,
 ) (client.TxnClient, client.TxnOperator) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	workspace := client.Workspace(&Ws{})
+	if len(workspaces) > 0 {
+		workspace = workspaces[0]
+	}
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
-	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	txnOperator.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{Isolation: isolation}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
