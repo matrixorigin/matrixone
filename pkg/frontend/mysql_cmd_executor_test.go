@@ -252,6 +252,63 @@ func TestHandleSetTransaction(t *testing.T) {
 			require.Equal(t, test.want, got)
 		})
 	}
+
+	t.Run("access mode does not change isolation", func(t *testing.T) {
+		stmt, err := mysql.ParseOne(ctx, "set session transaction read only", 1)
+		require.NoError(t, err)
+
+		_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
+		require.NoError(t, err)
+
+		got, err := ses.GetSessionSysVar("transaction_isolation")
+		require.NoError(t, err)
+		require.Equal(t, "SERIALIZABLE", got)
+	})
+
+	t.Run("invalid isolation level", func(t *testing.T) {
+		stmt := &tree.SetTransaction{
+			CharacterList: []*tree.TransactionCharacteristic{
+				{IsLevel: true, Isolation: tree.IsolationLevelType(999)},
+			},
+		}
+
+		_, err := execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
+		require.ErrorContains(t, err, "unsupported transaction isolation level 999")
+	})
+}
+
+func TestHandleSetGlobalTransaction(t *testing.T) {
+	ctx := context.Background()
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result["begin;"] = nil
+	bh.sql2result["commit;"] = nil
+	bh.sql2result["rollback;"] = nil
+	bh.sql2result[getSqlForGetSysVarWithAccount(sysAccountID, "transaction_isolation")] =
+		newMrsForSystemVariableNameOfAccount(nil)
+	bh.sql2result[getSqlForInsertSysVarWithAccount(
+		sysAccountID, sysAccountName, "transaction_isolation", "READ-COMMITTED",
+	)] = nil
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	stmt, err := mysql.ParseOne(ctx, "set global transaction isolation level read committed", 1)
+	require.NoError(t, err)
+
+	_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
+	require.NoError(t, err)
+
+	got, err := ses.GetGlobalSysVar("transaction_isolation")
+	require.NoError(t, err)
+	require.Equal(t, "READ-COMMITTED", got)
+
+	ses.SetTenantInfo(&TenantInfo{Tenant: sysAccountName, DefaultRole: publicRoleName})
+	_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
+	require.ErrorContains(t, err, "do not have privilege to execute the statement")
 }
 
 func TestRecordStatementResetsDivByZeroErrorMode(t *testing.T) {
