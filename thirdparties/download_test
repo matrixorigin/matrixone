@@ -30,6 +30,9 @@ mock_curl() {
 	retry_count=
 	retry_max_time=
 	retry_all_errors=0
+	max_time=
+	low_speed_limit=
+	low_speed_time=
 	while [ "$#" -gt 0 ]; do
 		case "$1" in
 			--output)
@@ -48,7 +51,19 @@ mock_curl() {
 				retry_all_errors=1
 				shift
 				;;
-			--connect-timeout | --max-time | --max-filesize | --proto | --proto-redir)
+			--max-time)
+				max_time=$2
+				shift 2
+				;;
+			--speed-limit)
+				low_speed_limit=$2
+				shift 2
+				;;
+			--speed-time)
+				low_speed_time=$2
+				shift 2
+				;;
+			--connect-timeout | --max-filesize | --proto | --proto-redir)
 				shift 2
 				;;
 			*)
@@ -65,6 +80,9 @@ mock_curl() {
 	printf '%s\n' "$retry_count" > "$MO_DOWNLOAD_MOCK_STATE/retry-count"
 	printf '%s\n' "$retry_max_time" > "$MO_DOWNLOAD_MOCK_STATE/retry-max-time"
 	printf '%s\n' "$retry_all_errors" > "$MO_DOWNLOAD_MOCK_STATE/retry-all-errors"
+	printf '%s\n' "$max_time" > "$MO_DOWNLOAD_MOCK_STATE/max-time"
+	printf '%s\n' "$low_speed_limit" > "$MO_DOWNLOAD_MOCK_STATE/low-speed-limit"
+	printf '%s\n' "$low_speed_time" > "$MO_DOWNLOAD_MOCK_STATE/low-speed-time"
 
 	count=0
 	if [ -f "$MO_DOWNLOAD_MOCK_STATE/count" ]; then
@@ -149,6 +167,15 @@ assert_retry_contract() {
 	[ "$retry_count" -eq $((MO_DOWNLOAD_ATTEMPTS - 1)) ] || fail "curl retry count is $retry_count"
 	[ "$retry_max_time" -eq $((MO_DOWNLOAD_MAX_TIME_SECONDS * MO_DOWNLOAD_ATTEMPTS)) ] || fail "curl retry time is $retry_max_time"
 	[ "$retry_all_errors" -eq 1 ] || fail "curl retry-all-errors is missing"
+}
+
+assert_slow_transfer_contract() {
+	IFS= read -r max_time < "$MO_DOWNLOAD_MOCK_STATE/max-time"
+	IFS= read -r low_speed_limit < "$MO_DOWNLOAD_MOCK_STATE/low-speed-limit"
+	IFS= read -r low_speed_time < "$MO_DOWNLOAD_MOCK_STATE/low-speed-time"
+	[ "$max_time" -eq 1800 ] || fail "default max time is $max_time seconds, expected 1800"
+	[ "$low_speed_limit" -eq 1024 ] || fail "default low-speed limit is $low_speed_limit bytes/s, expected 1024"
+	[ "$low_speed_time" -eq 120 ] || fail "default low-speed time is $low_speed_time seconds, expected 120"
 }
 
 assert_legacy_retry_contract() {
@@ -259,6 +286,18 @@ assert_retry_contract
 cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "fresh download installed wrong content"
 assert_publicly_readable "$MO_DOWNLOAD_MOCK_STATE/result"
 assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+
+new_case slow-transfer-defaults
+unset MO_DOWNLOAD_MAX_TIME_SECONDS
+MO_DOWNLOAD_MOCK_MODE=success
+export MO_DOWNLOAD_MOCK_MODE
+"$download_script" https://example.invalid/dependency "$expected_sha256" "$MO_DOWNLOAD_MOCK_STATE/result"
+assert_count 1
+assert_slow_transfer_contract
+cmp "$fixture" "$MO_DOWNLOAD_MOCK_STATE/result" || fail "slow-transfer defaults installed wrong content"
+assert_no_temp_files "$MO_DOWNLOAD_MOCK_STATE"
+MO_DOWNLOAD_MAX_TIME_SECONDS=1
+export MO_DOWNLOAD_MAX_TIME_SECONDS
 
 new_case checksum-failure
 MO_DOWNLOAD_MOCK_MODE=always-corrupt

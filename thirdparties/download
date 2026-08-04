@@ -29,7 +29,11 @@ destination=$3
 
 attempts=${MO_DOWNLOAD_ATTEMPTS:-4}
 connect_timeout=${MO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}
-max_time=${MO_DOWNLOAD_MAX_TIME_SECONDS:-120}
+# Large pinned artifacts can take more than ten minutes from some CI regions.
+# Keep a finite hard cap, while the low-speed guard below fails stalled transfers.
+max_time=${MO_DOWNLOAD_MAX_TIME_SECONDS:-1800}
+low_speed_limit=${MO_DOWNLOAD_LOW_SPEED_LIMIT_BYTES_PER_SECOND:-1024}
+low_speed_time=${MO_DOWNLOAD_LOW_SPEED_TIME_SECONDS:-120}
 max_bytes=${MO_DOWNLOAD_MAX_BYTES:-134217728}
 retry_delay=${MO_DOWNLOAD_RETRY_DELAY_SECONDS:-1}
 curl_bin=${MO_DOWNLOAD_CURL_BIN:-curl}
@@ -59,6 +63,8 @@ require_positive_integer() {
 require_positive_integer MO_DOWNLOAD_ATTEMPTS "$attempts"
 require_positive_integer MO_DOWNLOAD_CONNECT_TIMEOUT_SECONDS "$connect_timeout"
 require_positive_integer MO_DOWNLOAD_MAX_TIME_SECONDS "$max_time"
+require_positive_integer MO_DOWNLOAD_LOW_SPEED_LIMIT_BYTES_PER_SECOND "$low_speed_limit"
+require_positive_integer MO_DOWNLOAD_LOW_SPEED_TIME_SECONDS "$low_speed_time"
 require_positive_integer MO_DOWNLOAD_MAX_BYTES "$max_bytes"
 
 case "$retry_delay" in
@@ -166,6 +172,7 @@ run_curl() (
 	exec "$curl_bin" --disable --fail --location --show-error \
 		--proto '=https' --proto-redir '=https' \
 		--connect-timeout "$connect_timeout" --max-time "$max_time" \
+		--speed-limit "$low_speed_limit" --speed-time "$low_speed_time" \
 		--max-filesize "$max_bytes" \
 		"$@" \
 		--output "$tmp" "$url"
