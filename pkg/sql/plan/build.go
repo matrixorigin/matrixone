@@ -88,16 +88,25 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
+	if err := validateReturningSyntax(builder, stmt); err != nil {
+		return nil, err
+	}
+	builder.returningRequested = stmt.HasReturning()
 
 	rootId, err := builder.bindInsert(stmt, bindCtx)
 	if err != nil {
+		if stmt.HasReturning() {
+			if feature := returningFallbackFeature(err, "legacy INSERT path"); feature != "" {
+				return nil, returningNotSupported(builder, feature)
+			}
+		}
 		// ON DUPLICATE KEY UPDATE is fully handled by the modern path; it must
 		// never fall back to the legacy ODKU operator. Two exceptions still fall
 		// back: plain INSERT (e.g. inserting into a system index table); and the
 		// degenerate ODKU on a table with no primary/unique key (no dedup key to
 		// represent the upsert; legacy treats it as a plain INSERT and preserves
 		// the prepared-statement parameters).
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML &&
+		if !stmt.HasReturning() && err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML &&
 			(len(stmt.OnDuplicateUpdate) == 0 ||
 				err.Error() == noPkOnDupUpdateMsg) {
 			return buildInsert(stmt, ctx, false, isPrepareStmt)
@@ -107,6 +116,9 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	ctx.SetViews(bindCtx.views)
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	if err = builder.appendReturningProjection(stmt.Returning, bindCtx); err != nil {
+		return nil, err
+	}
 	builder.skipStats = skipStats
 	query, err := builder.createQuery()
 	if err != nil {
@@ -312,10 +324,19 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
+	if err := validateReturningSyntax(builder, stmt); err != nil {
+		return nil, err
+	}
+	builder.returningRequested = stmt.HasReturning()
 
 	rootId, err := builder.bindDelete(ctx, stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+		if stmt.HasReturning() {
+			if feature := returningFallbackFeature(err, "legacy DELETE path"); feature != "" {
+				return nil, returningNotSupported(builder, feature)
+			}
+		}
+		if !stmt.HasReturning() && err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
 			if err.Error() == icebergRowLevelDMLUnsupportedMsg {
 				return buildIcebergDeletePlan(stmt, ctx, isPrepareStmt)
 			}
@@ -326,9 +347,15 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 	ctx.SetViews(bindCtx.views)
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	if err = builder.appendReturningProjection(stmt.Returning, bindCtx); err != nil {
+		return nil, err
+	}
 	builder.skipStats = skipStats
 	query, err := builder.createQuery()
 	if err != nil {
+		return nil, err
+	}
+	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
 		return nil, err
 	}
 	return &Plan{
@@ -352,6 +379,10 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
+	if err := validateReturningSyntax(builder, stmt); err != nil {
+		return nil, err
+	}
+	builder.returningRequested = stmt.HasReturning()
 
 	rootId, err := builder.bindUpdate(stmt, bindCtx)
 	if err != nil {
@@ -359,12 +390,32 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 		switch route {
 		case updatePlannerLegacy:
 			recordUpdatePlannerRoute(route, reason, "selected")
+			if stmt.HasReturning() {
+				if reason == updateRouteReasonExternalTable {
+					return nil, returningNotSupported(builder, "external table")
+				}
+				return nil, returningNotSupported(builder, "legacy UPDATE path")
+			}
 			return buildTableUpdate(stmt, ctx, isPrepareStmt)
 		case updatePlannerSpecialized:
 			recordUpdatePlannerRoute(route, reason, "selected")
+			if stmt.HasReturning() {
+				if reason == updateRouteReasonIceberg {
+					return nil, returningNotSupported(builder, "Iceberg table")
+				}
+				return nil, returningNotSupported(builder, "specialized UPDATE path")
+			}
 			return buildIcebergUpdatePlan(stmt, ctx, isPrepareStmt)
 		case updatePlannerRejected, updatePlannerUnknown:
 			recordUpdatePlannerRoute(route, reason, "rejected")
+			if stmt.HasReturning() {
+				switch reason {
+				case updateRouteReasonExternalTable:
+					return nil, returningNotSupported(builder, "external table")
+				case updateRouteReasonTableForm:
+					return nil, returningNotSupported(builder, "internal table")
+				}
+			}
 			return nil, routedErr
 		}
 		return nil, routedErr
@@ -372,6 +423,9 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	ctx.SetViews(bindCtx.views)
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	if err = builder.appendReturningProjection(stmt.Returning, bindCtx); err != nil {
+		return nil, err
+	}
 	builder.skipStats = skipStats
 	query, err := builder.createQuery()
 	if err != nil {
@@ -528,12 +582,18 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	case *tree.Insert:
 		return bindAndOptimizeInsertQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Replace:
+		if stmt.HasReturning() {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "DML RETURNING does not support REPLACE")
+		}
 		return bindAndOptimizeReplaceQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Update:
 		return bindAndOptimizeUpdateQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Delete:
 		return bindAndOptimizeDeleteQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Merge:
+		if stmt.HasReturning() {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "DML RETURNING does not support MERGE")
+		}
 		return bindAndOptimizeMergeQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.BeginTransaction:
 		return buildBeginTransaction(stmt, ctx)
@@ -672,7 +732,17 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 // GetResultColumnsFromPlan
 func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 	getResultColumnsByProjectionlist := func(query *Query) []*ColDef {
-		lastNode := query.Nodes[query.Steps[len(query.Steps)-1]]
+		step := len(query.Steps) - 1
+		if query.HasReturning {
+			if query.ReturningStep < 0 || int(query.ReturningStep) >= len(query.Steps) {
+				return nil
+			}
+			step = int(query.ReturningStep)
+		}
+		lastNode := query.Nodes[query.Steps[step]]
+		if query.HasReturning && len(query.Headings) != len(lastNode.ProjectList) {
+			return nil
+		}
 		columns := make([]*ColDef, len(lastNode.ProjectList))
 		for idx, expr := range lastNode.ProjectList {
 			columns[idx] = &ColDef{
@@ -697,6 +767,11 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 		switch logicPlan.Query.StmtType {
 		case plan.Query_SELECT:
 			return getResultColumnsByProjectionlist(logicPlan.Query)
+		case plan.Query_INSERT, plan.Query_UPDATE, plan.Query_DELETE:
+			if logicPlan.Query.HasReturning {
+				return getResultColumnsByProjectionlist(logicPlan.Query)
+			}
+			return nil
 		default:
 			// insert/update/delete statement will return nil
 			return nil
