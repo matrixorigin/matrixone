@@ -728,7 +728,7 @@ func isInplaceModifyColumn(
 		return
 	}
 
-	ok, err = storageAgnosticType(ctx, clause.NewColumn, oCol)
+	ok, err = storageAgnosticType(ctx, clause.NewColumn, oCol, tableDef.DefaultCharset)
 	if err != nil {
 		return
 	}
@@ -773,12 +773,15 @@ func storageAgnosticType(
 	ctx context.Context,
 	nCol *tree.ColumnTableDef,
 	oCol *ColDef,
+	defaultCharset uint32,
 ) (ok bool, err error) {
 
 	nTy, err := getTypeFromAst(ctx, nCol.Type)
 	if err != nil {
 		return
 	}
+	nTy.Charset = uint32(types.CharsetType(types.T(nTy.Id)))
+	applyTextCharsetToPlanType(&nTy, defaultCharset)
 	if err = applyColumnAttributesToType(ctx, &nTy, nCol.Attributes); err != nil {
 		return
 	}

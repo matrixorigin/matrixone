@@ -57,16 +57,20 @@ func TestPlanDefsToExeDefsPersistsChecksInSchemaExtra(t *testing.T) {
 		},
 	}
 	_, extra, err := PlanDefsToExeDefs(&plan.TableDef{
-		Name:   "t",
-		Checks: []*plan.CheckDef{check},
+		Name:           "t",
+		Checks:         []*plan.CheckDef{check},
+		DefaultCharset: uint32(types.CharsetBinary),
 	})
 	require.NoError(t, err)
 	require.Equal(t, []*plan.CheckDef{check}, extra.Checks)
+	require.Equal(t, uint32(types.CharsetBinary), extra.DefaultCharset)
 
 	roundTrip := api.MustUnmarshalTblExtra(api.MustMarshalTblExtra(extra))
 	require.Equal(t, extra.Checks, roundTrip.Checks)
+	require.Equal(t, extra.DefaultCharset, roundTrip.DefaultCharset)
 
 	clone := api.CloneExtra(extra)
 	require.Equal(t, extra.Checks, clone.Checks)
+	require.Equal(t, extra.DefaultCharset, clone.DefaultCharset)
 	require.NotSame(t, extra.Checks[0], clone.Checks[0])
 }

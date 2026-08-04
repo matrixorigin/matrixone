@@ -1969,6 +1969,53 @@ func Test_setMysqlColumnTypeMetadataFloatingPointDecimals(t *testing.T) {
 	}
 }
 
+func Test_setMysqlColumnTypeInfoPreservesBinaryTextCollation(t *testing.T) {
+	testCases := []struct {
+		name        string
+		typ         types.Type
+		wantCharset uint16
+	}{
+		{
+			name:        "varchar utf8mb4_bin",
+			typ:         types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetBinary),
+			wantCharset: uint16(utf8mb4BinCollationID),
+		},
+		{
+			name:        "char utf8mb4_bin",
+			typ:         types.NewWithCharset(types.T_char, 32, 0, types.CharsetBinary),
+			wantCharset: uint16(utf8mb4BinCollationID),
+		},
+		{
+			name:        "text utf8mb4_bin",
+			typ:         types.NewWithCharset(types.T_text, 32, 0, types.CharsetBinary),
+			wantCharset: uint16(utf8mb4BinCollationID),
+		},
+		{
+			name:        "varbinary",
+			typ:         types.New(types.T_varbinary, 32, 0),
+			wantCharset: charsetBinary,
+		},
+		{
+			name:        "binary",
+			typ:         types.New(types.T_binary, 32, 0),
+			wantCharset: charsetBinary,
+		},
+		{
+			name:        "varchar utf8",
+			typ:         types.New(types.T_varchar, 32, 0),
+			wantCharset: charsetVarchar,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+			require.NoError(t, setMysqlColumnTypeInfo(context.Background(), tc.typ, col))
+			require.Equal(t, tc.wantCharset, col.Charset())
+		})
+	}
+}
+
 func Test_convertRowsIntoBatchError(t *testing.T) {
 	colMysqlTyps := []defines.MysqlType{
 		defines.MYSQL_TYPE_TIMESTAMP,

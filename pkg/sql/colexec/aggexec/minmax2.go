@@ -22,8 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"golang.org/x/text/collate"
-	"golang.org/x/text/language"
 )
 
 type minMaxExecFixed[T types.FixedSizeT] struct {
@@ -476,21 +474,10 @@ func newStrMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type
 func newTextMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type) AggFuncExec {
 	var exec minMaxExecBytes
 	exec.mp = mp
-	// MatrixOne currently exposes utf8mb4_general_ci as the collation for
-	// textual expressions. Loose implements its case-, accent-, and
-	// width-insensitive ordering. Keep one collator per executor because a
-	// Collator reuses internal iterators while comparing values.
-	c := collate.New(language.Und, collate.Loose)
-	compare := func(x, y []byte) int {
-		// utf8mb4_general_ci is a PAD SPACE collation.
-		x = bytes.TrimRight(x, " ")
-		y = bytes.TrimRight(y, " ")
-		return c.Compare(x, y)
-	}
 	if isMin {
-		exec.comp = compare
+		exec.comp = compareUTF8mb4GeneralCI
 	} else {
-		exec.comp = func(x, y []byte) int { return -compare(x, y) }
+		exec.comp = func(x, y []byte) int { return -compareUTF8mb4GeneralCI(x, y) }
 	}
 	setupAggInfo(&exec.aggInfo, aggID, param)
 	return &exec

@@ -1289,15 +1289,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		enforced   bool
 	}
 	pendingChecks := make([]pendingCheckDef, 0)
-	tableCharset := uint32(types.CharsetUTF8)
-	for _, option := range stmt.Options {
-		switch opt := option.(type) {
-		case *tree.TableOptionCharset:
-			tableCharset = charsetForName(opt.Charset)
-		case *tree.TableOptionCollate:
-			tableCharset = charsetForName(opt.Collate)
-		}
-	}
+	tableCharset := tableDefaultCharset(stmt.Options)
+	createTable.TableDef.DefaultCharset = tableCharset
 
 	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {

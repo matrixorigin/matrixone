@@ -188,6 +188,7 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		AutoIncrOffset: tableDef.AutoIncrOffset,
 		AutoIncrEpoch:  tableDef.AutoIncrEpoch,
 		Checks:         tableDef.Checks,
+		DefaultCharset: tableDef.DefaultCharset,
 	}
 	propDef.Properties = append(
 		propDef.Properties,
