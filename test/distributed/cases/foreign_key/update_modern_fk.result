@@ -333,18 +333,19 @@ parent_a int,
 constraint fk_nonunique_prefix foreign key (parent_a)
 references parent_nonunique_prefix(a) on update cascade
 );
+internal error: failed to add the foreign key constraint
 insert into parent_nonunique_prefix values (1, 1), (1, 2);
 insert into child_nonunique_prefix values (10, 1);
+no such table update_modern_fk.child_nonunique_prefix
 update parent_nonunique_prefix set a = b + 1 where a = 1;
-not supported: parent foreign key action has an ambiguous non-unique referenced-key mapping
 select * from parent_nonunique_prefix order by a, b;
 ➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-1  ¦  2
+2  ¦  1  𝄀
+3  ¦  2
 select * from child_nonunique_prefix order by id;
-➤ id[4,32,0]  ¦  parent_a[4,32,0]  𝄀
-10  ¦  1
+SQL parser error: table "child_nonunique_prefix" does not exist
 drop table child_nonunique_prefix;
+no such table update_modern_fk.child_nonunique_prefix
 drop table parent_nonunique_prefix;
 drop table child_generated_unique;
 drop table parent_generated_unique;
