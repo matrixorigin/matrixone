@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -43,6 +44,33 @@ func TestBuildCatalogRestoreIdentityMap(t *testing.T) {
 	require.Equal(t, map[uint64]uint64{100: 200, 101: 201}, identityMap.objectIDs)
 }
 
+func TestBuildCatalogRestoreIdentityMapRejectsMalformedRows(t *testing.T) {
+	tests := []struct {
+		name            string
+		sourceDatabases [][]string
+		targetDatabases [][]string
+		sourceObjects   [][]string
+		targetObjects   [][]string
+	}{
+		{name: "target database", targetDatabases: [][]string{{"invalid"}}},
+		{name: "source database", sourceDatabases: [][]string{{"invalid"}}},
+		{name: "target object", targetObjects: [][]string{{"invalid"}}},
+		{name: "source object", sourceObjects: [][]string{{"invalid"}}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := buildCatalogRestoreIdentityMap(
+				test.sourceDatabases,
+				test.targetDatabases,
+				test.sourceObjects,
+				test.targetObjects,
+			)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestRemapRolePrivilegeObjectID(t *testing.T) {
 	identityMap := &catalogRestoreIdentityMap{
 		databaseIDs: map[uint64]uint64{10: 20},
@@ -68,6 +96,7 @@ func TestRemapRolePrivilegeObjectID(t *testing.T) {
 		{name: "omitted database", objectType: objectTypeDatabase.String(), level: privilegeLevelDatabase.String(), objectID: 11},
 		{name: "omitted table", objectType: objectTypeTable.String(), level: privilegeLevelTable.String(), objectID: 102},
 		{name: "invalid database level", objectType: objectTypeDatabase.String(), level: privilegeLevelDatabaseStar.String(), objectID: 10, wantErr: true},
+		{name: "invalid table level", objectType: objectTypeTable.String(), level: privilegeLevelRoutine.String(), objectID: 100, wantErr: true},
 		{name: "copied function identity", objectType: objectTypeFunction.String(), level: privilegeLevelRoutine.String(), objectID: 99, wantID: 99, wantFound: true},
 		{name: "unsupported nonzero identity", objectType: objectTypeAccount.String(), level: privilegeLevelStar.String(), objectID: 99, wantErr: true},
 	}
@@ -107,6 +136,30 @@ func TestSystemCatalogTransformPoliciesHaveHandlers(t *testing.T) {
 	}
 }
 
+func TestValidateSystemCatalogRestoreHandlersRejectsIncompleteRegistry(t *testing.T) {
+	originalHandlers := systemCatalogPostRestoreHandlers
+	t.Cleanup(func() {
+		systemCatalogPostRestoreHandlers = originalHandlers
+	})
+
+	systemCatalogPostRestoreHandlers = append(
+		slices.Clone(originalHandlers),
+		systemCatalogPostRestoreHandler{tableName: "mo_user"},
+	)
+	require.ErrorContains(t, validateSystemCatalogRestoreHandlers(t.Context()), "has no transform policy")
+
+	systemCatalogPostRestoreHandlers = append(slices.Clone(originalHandlers), originalHandlers[0])
+	require.ErrorContains(t, validateSystemCatalogRestoreHandlers(t.Context()), "has multiple handlers")
+
+	systemCatalogPostRestoreHandlers = originalHandlers
+	originalPolicy := systemCatalogRestorePolicies["mo_user"]
+	systemCatalogRestorePolicies["mo_user"] = systemCatalogRestoreCopyThenTransform
+	t.Cleanup(func() {
+		systemCatalogRestorePolicies["mo_user"] = originalPolicy
+	})
+	require.ErrorContains(t, validateSystemCatalogRestoreHandlers(t.Context()), "has no handler")
+}
+
 func TestSystemCatalogRestorePoliciesCoverPredefinedTables(t *testing.T) {
 	for tableName := range predefinedTables {
 		_, ok := systemCatalogRestorePolicies[tableName]
@@ -130,4 +183,15 @@ func TestUnregisteredSystemCatalogRestorePolicyPreservesExistingDefaults(t *test
 	require.False(t, needSkipSystemTable(sysAccountID, info))
 	require.True(t, needSkipTable(7, moCatalog, futureCatalogTable))
 	require.False(t, needSkipSystemTable(7, info))
+}
+
+func TestCatalogRestoreIdentityParsingRejectsInvalidRows(t *testing.T) {
+	_, err := parseCatalogID([]string{"1"}, 2)
+	require.ErrorContains(t, err, "invalid catalog identity row")
+
+	_, err = parseCatalogID([]string{"not-an-id", "db"}, 2)
+	require.Error(t, err)
+
+	_, err = parseCatalogObjectIdentity([]string{"1", "db", "table"})
+	require.ErrorContains(t, err, "invalid catalog identity row")
 }
