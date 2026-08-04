@@ -1,0 +1,69 @@
+drop database if exists `bvt\issue_26073`;
+create database `bvt\issue_26073`;
+create table `bvt\issue_26073`.normal_src(
+id int primary key,
+note varchar(30)
+);
+insert into `bvt\issue_26073`.normal_src values (1, 'normal');
+data branch create table `bvt\issue_26073`.normal_dst
+from `bvt\issue_26073`.normal_src;
+create table `bvt\issue_26073`.`src\t`(
+id int primary key,
+note varchar(30)
+);
+insert into `bvt\issue_26073`.`src\t` values (1, 'source');
+data branch create table `bvt\issue_26073`.`dst\t`
+from `bvt\issue_26073`.`src\t`;
+set @dst_id = (
+select rel_id
+from mo_catalog.mo_tables
+where account_id = 0
+and reldatabase = 'bvt\\issue_26073'
+and relname = 'dst\\t'
+);
+set @branch_snapshot = concat('__mo_branch_', cast(@dst_id as varchar));
+insert into `bvt\issue_26073`.`dst\t` values (2, 'branch-only');
+select id, note from `bvt\issue_26073`.normal_dst order by id;
+➤ id[4,32,0]  ¦  note[12,-1,0]  𝄀
+1  ¦  normal
+select id, note from `bvt\issue_26073`.`dst\t` order by id;
+➤ id[4,32,0]  ¦  note[12,-1,0]  𝄀
+1  ¦  source  𝄀
+2  ¦  branch-only
+select hex(dst.reldatabase) as catalog_database_hex,
+hex(s.database_name) as snapshot_database_hex,
+hex(src.relname) as catalog_table_hex,
+hex(s.table_name) as snapshot_table_hex,
+s.obj_id = src.rel_id as source_object_matches
+from mo_catalog.mo_snapshots s
+join mo_catalog.mo_tables dst
+on s.sname = concat('__mo_branch_', cast(dst.rel_id as varchar))
+join mo_catalog.mo_tables src
+on src.account_id = dst.account_id
+and src.reldatabase = dst.reldatabase
+and src.relname = 'src\\t'
+where s.kind = 'branch'
+and dst.account_id = 0
+and dst.reldatabase = 'bvt\\issue_26073'
+and dst.relname = 'dst\\t';
+➤ catalog_database_hex[12,-1,0]  ¦  snapshot_database_hex[12,-1,0]  ¦  catalog_table_hex[12,-1,0]  ¦  snapshot_table_hex[12,-1,0]  ¦  source_object_matches[-7,1,0]  𝄀
+6276745C69737375655F3236303733  ¦  6276745C69737375655F3236303733  ¦  7372635C74  ¦  7372635C74  ¦  1
+data branch diff `bvt\issue_26073`.`dst\t`
+against `bvt\issue_26073`.`src\t` output summary;
+➤ metric[12,0,0]  ¦  bvt\issue_26073.dst\t[-5,0,0]  ¦  bvt\issue_26073.src\t[-5,0,0]  𝄀
+INSERTED  ¦  1  ¦  0  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  0
+drop table `bvt\issue_26073`.`dst\t`;
+select count(*) as protection_rows_after_drop
+from mo_catalog.mo_snapshots where sname = @branch_snapshot;
+➤ protection_rows_after_drop[-5,64,0]  𝄀
+0
+select count(*) as metadata_rows_after_drop
+from mo_catalog.mo_branch_metadata where table_id = @dst_id;
+➤ metadata_rows_after_drop[-5,64,0]  𝄀
+1
+select id, note from `bvt\issue_26073`.`src\t` order by id;
+➤ id[4,32,0]  ¦  note[12,-1,0]  𝄀
+1  ¦  source
+drop database `bvt\issue_26073`;

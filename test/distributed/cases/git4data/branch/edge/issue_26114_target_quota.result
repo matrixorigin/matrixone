@@ -1,0 +1,194 @@
+drop account if exists bvt_issue_26114_acc;
+create account bvt_issue_26114_acc admin_name = 'admin' identified by '111';
+select mo_feature_registry_upsert(
+'branch',
+'Branch feature',
+'{"allowed_scope":[]}',
+true
+);
+➤ mo_feature_registry_upsert(branch, Branch feature, {"allowed_scope":[]}, true)[12,-1,0]  𝄀
+{
+  "now": {
+    "feature_code": "BRANCH",
+    "description": "Branch feature",
+    "scope_spec": {
+      "allowed_scope": []
+    },
+    "enabled": true
+  },
+  "old": {
+    "feature_code": "BRANCH",
+    "description": "Branch feature",
+    "scope_spec": {
+      "allowed_scope": []
+    },
+    "enabled": true
+  }
+}
+
+select mo_feature_registry_upsert(
+'snapshot',
+'Snapshot feature',
+'{"allowed_scope":["account","database","table"]}',
+true
+);
+➤ mo_feature_registry_upsert(snapshot, Snapshot feature, {"allowed_scope":["account","database","table"]}, true)[12,-1,0]  𝄀
+{
+  "now": {
+    "feature_code": "SNAPSHOT",
+    "description": "Snapshot feature",
+    "scope_spec": {
+      "allowed_scope": ["account", "database", "table"]
+    },
+    "enabled": true
+  },
+  "old": {
+    "feature_code": "SNAPSHOT",
+    "description": "Snapshot feature",
+    "scope_spec": {
+      "allowed_scope": ["account", "database", "table"]
+    },
+    "enabled": true
+  }
+}
+
+set @target_id = (
+select account_id from mo_catalog.mo_account
+where account_name = 'bvt_issue_26114_acc'
+);
+select mo_feature_limit_upsert(@target_id, 'snapshot', 'table', -1);
+➤ mo_feature_limit_upsert(@target_id, snapshot, table, -1)[12,-1,0]  𝄀
+{
+  "now": {
+    "account_id": 9,
+    "feature_code": "SNAPSHOT",
+    "scope": "table",
+    "quota": -1
+  },
+  "old": null
+}
+
+select mo_feature_limit_upsert(@target_id, 'snapshot', 'database', -1);
+➤ mo_feature_limit_upsert(@target_id, snapshot, database, -1)[12,-1,0]  𝄀
+{
+  "now": {
+    "account_id": 9,
+    "feature_code": "SNAPSHOT",
+    "scope": "database",
+    "quota": -1
+  },
+  "old": null
+}
+
+select mo_feature_limit_upsert(@target_id, 'branch', '', 0);
+➤ mo_feature_limit_upsert(@target_id, branch, , 0)[12,-1,0]  𝄀
+{
+  "now": {
+    "account_id": 9,
+    "feature_code": "BRANCH",
+    "scope": "",
+    "quota": 0
+  },
+  "old": null
+}
+
+drop database if exists bvt_issue_26114_dst;
+create database bvt_issue_26114_dst;
+drop snapshot if exists bvt_issue_26114_table_sp;
+drop snapshot if exists bvt_issue_26114_db_sp;
+drop database if exists bvt_issue_26114_src;
+create database bvt_issue_26114_src;
+create table bvt_issue_26114_src.base(
+id int primary key,
+val varchar(20)
+);
+insert into bvt_issue_26114_src.base values (1, 'one');
+create snapshot bvt_issue_26114_table_sp
+for table bvt_issue_26114_src base;
+create snapshot bvt_issue_26114_db_sp
+for database bvt_issue_26114_src;
+data branch create table bvt_issue_26114_dst.blocked_table
+from bvt_issue_26114_src.base{snapshot='bvt_issue_26114_table_sp'}
+to account bvt_issue_26114_acc;
+-- @regex("feature BRANCH with scope .* has disabled for account bvt_issue_26114_acc", true)
+internal error: feature BRANCH with scope  has disabled for account bvt_issue_26114_acc
+data branch create database bvt_issue_26114_blocked_db
+from bvt_issue_26114_src{snapshot='bvt_issue_26114_db_sp'}
+to account bvt_issue_26114_acc;
+-- @regex("feature BRANCH with scope .* has disabled for account bvt_issue_26114_acc", true)
+internal error: feature BRANCH with scope  has disabled for account bvt_issue_26114_acc
+select count(*) as blocked_table_rows
+from mo_catalog.mo_tables
+where reldatabase = 'bvt_issue_26114_dst'
+and relname = 'blocked_table';
+➤ blocked_table_rows[-5,64,0]  𝄀
+0
+select count(*) as blocked_database_rows
+from mo_catalog.mo_database
+where datname = 'bvt_issue_26114_blocked_db';
+➤ blocked_database_rows[-5,64,0]  𝄀
+0
+select count(*) as active_metadata_after_rejection
+from mo_catalog.mo_branch_metadata b
+join mo_catalog.mo_tables t on t.rel_id = b.table_id
+where t.account_id = @target_id
+and b.table_deleted = false;
+➤ active_metadata_after_rejection[-5,64,0]  𝄀
+0
+select mo_feature_limit_upsert(@target_id, 'branch', '', 3);
+➤ mo_feature_limit_upsert(@target_id, branch, , 3)[12,-1,0]  𝄀
+{
+  "now": {
+    "account_id": 9,
+    "feature_code": "BRANCH",
+    "scope": "",
+    "quota": 3
+  },
+  "old": {
+    "account_id": 9,
+    "feature_code": "BRANCH",
+    "scope": "",
+    "quota": 0
+  }
+}
+
+data branch create table bvt_issue_26114_dst.allowed_table
+from bvt_issue_26114_src.base{snapshot='bvt_issue_26114_table_sp'}
+to account bvt_issue_26114_acc;
+data branch create database bvt_issue_26114_allowed_db
+from bvt_issue_26114_src{snapshot='bvt_issue_26114_db_sp'}
+to account bvt_issue_26114_acc;
+select id, val from bvt_issue_26114_dst.allowed_table order by id;
+➤ id[4,32,0]  ¦  val[12,-1,0]  𝄀
+1  ¦  one
+select id, val from bvt_issue_26114_allowed_db.base order by id;
+➤ id[4,32,0]  ¦  val[12,-1,0]  𝄀
+1  ¦  one
+select count(*) as target_owned_active_metadata
+from mo_catalog.mo_branch_metadata b
+join mo_catalog.mo_tables t on t.rel_id = b.table_id
+where t.account_id = @target_id
+and b.creator = @target_id
+and b.table_deleted = false;
+➤ target_owned_active_metadata[-5,64,0]  𝄀
+2
+data branch create table bvt_issue_26114_dst.allowed_table_2
+from bvt_issue_26114_src.base{snapshot='bvt_issue_26114_table_sp'}
+to account bvt_issue_26114_acc;
+data branch create table bvt_issue_26114_dst.rejected_after_limit
+from bvt_issue_26114_src.base{snapshot='bvt_issue_26114_table_sp'}
+to account bvt_issue_26114_acc;
+-- @regex("exceeds.*limit of 3|limit of 3", true)
+internal error: feature BRANCH with scope  has reached the limit of 3
+select count(*) as rejected_table_rows
+from mo_catalog.mo_tables
+where reldatabase = 'bvt_issue_26114_dst'
+and relname = 'rejected_after_limit';
+➤ rejected_table_rows[-5,64,0]  𝄀
+0
+drop database bvt_issue_26114_allowed_db;
+drop database bvt_issue_26114_dst;
+drop snapshot bvt_issue_26114_table_sp;
+drop snapshot bvt_issue_26114_db_sp;
+drop database bvt_issue_26114_src;
+drop account bvt_issue_26114_acc;

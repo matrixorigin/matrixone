@@ -1,0 +1,114 @@
+-- Regression for issue #26121.
+-- User tables must not be filtered only because their names look internal.
+drop database if exists bvt_issue_26121_branch;
+drop database if exists bvt_issue_26121_clone;
+drop database if exists bvt_issue_26121_delete;
+drop database if exists bvt_issue_26121_src;
+create database bvt_issue_26121_src;
+
+create table bvt_issue_26121_src.`__mo_tmp_user_keep`(
+    id int primary key,
+    note varchar(20),
+    unique key uq_note(note)
+);
+create table bvt_issue_26121_src.`__mo_account_lock`(
+    id int primary key,
+    note varchar(20),
+    unique key uq_note(note)
+);
+create table bvt_issue_26121_src.`mo_increment_columns`(
+    id int primary key,
+    note varchar(20),
+    unique key uq_note(note)
+);
+insert into bvt_issue_26121_src.`__mo_tmp_user_keep` values (1, 'v1');
+insert into bvt_issue_26121_src.`__mo_account_lock` values (2, 'v2');
+insert into bvt_issue_26121_src.`mo_increment_columns` values (3, 'v3');
+create view bvt_issue_26121_src.user_visible_view as
+select id, note from bvt_issue_26121_src.`__mo_tmp_user_keep`;
+
+-- A fulltext index supplies a genuine system-managed hidden relation control.
+create table bvt_issue_26121_src.docs(
+    id int primary key,
+    body text
+);
+insert into bvt_issue_26121_src.docs
+values (1, 'matrixone branch regression'), (2, 'ordinary document');
+create fulltext index ft_body on bvt_issue_26121_src.docs(body);
+
+data branch create database bvt_issue_26121_branch
+from bvt_issue_26121_src;
+create database bvt_issue_26121_clone clone bvt_issue_26121_src;
+data branch create database bvt_issue_26121_delete
+from bvt_issue_26121_src;
+create table bvt_issue_26121_delete.`__mo_tmp_user_keep_extra`(
+    id int primary key,
+    note varchar(20)
+);
+insert into bvt_issue_26121_delete.`__mo_tmp_user_keep_extra`
+values (10, 'must-remain');
+
+select 'branch' as copy_kind,
+       (select count(*) from bvt_issue_26121_branch.`__mo_tmp_user_keep`) as tmp_rows,
+       (select count(*) from bvt_issue_26121_branch.`__mo_account_lock`) as lock_rows,
+       (select count(*) from bvt_issue_26121_branch.`mo_increment_columns`) as increment_rows
+union all
+select 'clone',
+       (select count(*) from bvt_issue_26121_clone.`__mo_tmp_user_keep`),
+       (select count(*) from bvt_issue_26121_clone.`__mo_account_lock`),
+       (select count(*) from bvt_issue_26121_clone.`mo_increment_columns`)
+order by copy_kind;
+
+select reldatabase, count(*) as indexed_user_tables
+from mo_catalog.mo_tables t
+where t.account_id = 0
+  and t.reldatabase in ('bvt_issue_26121_branch', 'bvt_issue_26121_clone')
+  and t.relname in ('__mo_tmp_user_keep', '__mo_account_lock', 'mo_increment_columns')
+  and exists (
+      select 1 from mo_catalog.mo_indexes i
+      where i.database_id = t.reldatabase_id
+        and i.table_id = t.rel_id
+        and i.name = 'uq_note'
+  )
+group by reldatabase
+order by reldatabase;
+
+select 'branch' as copy_kind, id, note
+from bvt_issue_26121_branch.user_visible_view
+union all
+select 'clone', id, note
+from bvt_issue_26121_clone.user_visible_view
+order by copy_kind;
+
+select 'branch' as copy_kind, count(*) as fulltext_matches
+from bvt_issue_26121_branch.docs
+where match(body) against('matrixone branch')
+union all
+select 'clone', count(*)
+from bvt_issue_26121_clone.docs
+where match(body) against('matrixone branch')
+order by copy_kind;
+
+select t.reldatabase, count(*) as copied_fulltext_indexes
+from mo_catalog.mo_tables t
+join mo_catalog.mo_indexes i
+  on i.database_id = t.reldatabase_id and i.table_id = t.rel_id
+where t.account_id = 0
+  and t.reldatabase in ('bvt_issue_26121_branch', 'bvt_issue_26121_clone')
+  and t.relname = 'docs'
+  and i.name = 'ft_body'
+group by t.reldatabase
+order by t.reldatabase;
+
+-- @regex("is not an active branch table",true)
+data branch delete database bvt_issue_26121_delete;
+select count(*) as retained_database
+from mo_catalog.mo_database
+where datname = 'bvt_issue_26121_delete';
+select id, note
+from bvt_issue_26121_delete.`__mo_tmp_user_keep_extra`;
+
+drop database bvt_issue_26121_delete;
+drop database bvt_issue_26121_branch;
+drop database bvt_issue_26121_clone;
+drop database bvt_issue_26121_src;

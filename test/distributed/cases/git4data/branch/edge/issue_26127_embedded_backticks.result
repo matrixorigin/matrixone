@@ -1,0 +1,93 @@
+drop database if exists bvt_issue_26127_branch;
+drop database if exists bvt_issue_26127_clone;
+drop database if exists bvt_issue_26127_src;
+create database bvt_issue_26127_src;
+create table bvt_issue_26127_src.`src``table`(
+id int primary key,
+note varchar(32)
+);
+insert into bvt_issue_26127_src.`src``table` values (1, 'source-row');
+create table bvt_issue_26127_src.`ordinary``clone`
+clone bvt_issue_26127_src.`src``table`;
+data branch create table bvt_issue_26127_src.`branch``clone`
+from bvt_issue_26127_src.`src``table`;
+create table bvt_issue_26127_src.parent_p(
+id int primary key,
+note varchar(32)
+);
+create table bvt_issue_26127_src.child_c(
+id int primary key,
+parent_id int,
+constraint fk_parent foreign key(parent_id)
+references bvt_issue_26127_src.parent_p(id)
+);
+insert into bvt_issue_26127_src.parent_p
+values (1, 'parent-one'), (2, 'parent-two');
+insert into bvt_issue_26127_src.child_c values (10, 1), (20, 2);
+create view bvt_issue_26127_src.view_v as
+select id, note from bvt_issue_26127_src.parent_p;
+data branch create database bvt_issue_26127_branch
+from bvt_issue_26127_src;
+create database bvt_issue_26127_clone clone bvt_issue_26127_src;
+select 'ordinary_table_clone' as clone_kind, id, note
+from bvt_issue_26127_src.`ordinary``clone`
+union all
+select 'data_branch_table', id, note
+from bvt_issue_26127_src.`branch``clone`
+union all
+select 'data_branch_database', id, note
+from bvt_issue_26127_branch.`src``table`
+union all
+select 'ordinary_database_clone', id, note
+from bvt_issue_26127_clone.`src``table`
+order by clone_kind;
+➤ clone_kind[12,-1,0]  ¦  id[4,32,0]  ¦  note[12,-1,0]  𝄀
+data_branch_database  ¦  1  ¦  source-row  𝄀
+data_branch_table  ¦  1  ¦  source-row  𝄀
+ordinary_database_clone  ¦  1  ¦  source-row  𝄀
+ordinary_table_clone  ¦  1  ¦  source-row
+select 'branch' as copy_kind, c.id, p.note
+from bvt_issue_26127_branch.child_c c
+join bvt_issue_26127_branch.parent_p p on c.parent_id = p.id
+union all
+select 'clone', c.id, p.note
+from bvt_issue_26127_clone.child_c c
+join bvt_issue_26127_clone.parent_p p on c.parent_id = p.id
+order by copy_kind, id;
+➤ copy_kind[12,-1,0]  ¦  id[4,32,0]  ¦  note[12,-1,0]  𝄀
+branch  ¦  10  ¦  parent-one  𝄀
+branch  ¦  20  ¦  parent-two  𝄀
+clone  ¦  10  ¦  parent-one  𝄀
+clone  ¦  20  ¦  parent-two
+select 'branch' as copy_kind, id, note
+from bvt_issue_26127_branch.view_v
+union all
+select 'clone', id, note
+from bvt_issue_26127_clone.view_v
+order by copy_kind, id;
+➤ copy_kind[12,-1,0]  ¦  id[4,32,0]  ¦  note[12,-1,0]  𝄀
+branch  ¦  1  ¦  parent-one  𝄀
+branch  ¦  2  ¦  parent-two  𝄀
+clone  ¦  1  ¦  parent-one  𝄀
+clone  ¦  2  ¦  parent-two
+insert into bvt_issue_26127_branch.child_c values (30, 999);
+-- @regex("foreign key constraint fails", true)
+internal error: Cannot add or update a child row: a foreign key constraint fails
+insert into bvt_issue_26127_clone.child_c values (30, 999);
+-- @regex("foreign key constraint fails", true)
+internal error: Cannot add or update a child row: a foreign key constraint fails
+insert into bvt_issue_26127_branch.parent_p values (3, 'branch-only');
+select 'source' as location, count(*) as parent_rows
+from bvt_issue_26127_src.parent_p
+union all
+select 'branch', count(*) from bvt_issue_26127_branch.parent_p
+union all
+select 'clone', count(*) from bvt_issue_26127_clone.parent_p
+order by location;
+➤ location[12,-1,0]  ¦  parent_rows[-5,64,0]  𝄀
+branch  ¦  3  𝄀
+clone  ¦  2  𝄀
+source  ¦  2
+drop database bvt_issue_26127_branch;
+drop database bvt_issue_26127_clone;
+drop database bvt_issue_26127_src;

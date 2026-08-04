@@ -1,0 +1,145 @@
+drop snapshot if exists bvt_issue_26120_sp;
+drop snapshot if exists bvt_issue_26120_control_sp;
+drop snapshot if exists bvt_issue_26120_db_sp;
+drop database if exists bvt_issue_26120_db_branch;
+drop database if exists bvt_issue_26120_db_src;
+drop database if exists bvt_issue_26120;
+create database bvt_issue_26120;
+use bvt_issue_26120;
+create table control_parent(id int primary key, val varchar(20));
+insert into control_parent values (10, 'control-row');
+create snapshot bvt_issue_26120_control_sp
+for table bvt_issue_26120 control_parent;
+data branch create table control_child
+from control_parent{snapshot='bvt_issue_26120_control_sp'};
+create table parent_t(id int primary key, val varchar(20));
+insert into parent_t values (1, 'snapshot-row');
+create snapshot bvt_issue_26120_sp for table bvt_issue_26120 parent_t;
+drop table parent_t;
+create table parent_t(id int primary key, val varchar(20));
+insert into parent_t values (2, 'current-row');
+data branch create table child_t
+from parent_t{snapshot='bvt_issue_26120_sp'};
+create database bvt_issue_26120_db_src;
+create table bvt_issue_26120_db_src.parent_t(
+id int primary key,
+val varchar(20)
+);
+insert into bvt_issue_26120_db_src.parent_t
+values (1, 'db-snapshot-row');
+create snapshot bvt_issue_26120_db_sp
+for database bvt_issue_26120_db_src;
+drop table bvt_issue_26120_db_src.parent_t;
+create table bvt_issue_26120_db_src.parent_t(
+id int primary key,
+val varchar(20)
+);
+insert into bvt_issue_26120_db_src.parent_t
+values (2, 'db-current-row');
+data branch create database bvt_issue_26120_db_branch
+from bvt_issue_26120_db_src{snapshot='bvt_issue_26120_db_sp'};
+select id, val from control_child;
+➤ id[4,32,0]  ¦  val[12,-1,0]  𝄀
+10  ¦  control-row
+select id, val from child_t;
+➤ id[4,32,0]  ¦  val[12,-1,0]  𝄀
+1  ¦  snapshot-row
+select count(*) as historical_parent_matches
+from mo_catalog.mo_branch_metadata b
+join mo_catalog.mo_tables child on child.rel_id = b.table_id
+where child.account_id = 0
+and child.reldatabase = 'bvt_issue_26120'
+and child.relname = 'child_t'
+and b.p_table_id = (
+select old_parent.rel_id
+from mo_catalog.mo_tables{snapshot='bvt_issue_26120_sp'} old_parent
+where old_parent.account_id = 0
+and old_parent.reldatabase = 'bvt_issue_26120'
+and old_parent.relname = 'parent_t'
+)
+and b.p_table_id <> (
+select new_parent.rel_id
+from mo_catalog.mo_tables new_parent
+where new_parent.account_id = 0
+and new_parent.reldatabase = 'bvt_issue_26120'
+and new_parent.relname = 'parent_t'
+);
+➤ historical_parent_matches[-5,64,0]  𝄀
+1
+select count(*) as table_protection_snapshot_matches
+from mo_catalog.mo_tables child
+join mo_catalog.mo_snapshots protection
+on protection.sname = concat('__mo_branch_', cast(child.rel_id as varchar))
+where child.account_id = 0
+and child.reldatabase = 'bvt_issue_26120'
+and child.relname = 'child_t'
+and protection.obj_id = (
+select old_parent.rel_id
+from mo_catalog.mo_tables{snapshot='bvt_issue_26120_sp'} old_parent
+where old_parent.account_id = 0
+and old_parent.reldatabase = 'bvt_issue_26120'
+and old_parent.relname = 'parent_t'
+);
+➤ table_protection_snapshot_matches[-5,64,0]  𝄀
+1
+data branch diff child_t against parent_t output summary;
+➤ metric[12,0,0]  ¦  child_t[-5,0,0]  ¦  parent_t[-5,0,0]  𝄀
+INSERTED  ¦  1  ¦  1  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  0
+select id, val from bvt_issue_26120_db_branch.parent_t;
+➤ id[4,32,0]  ¦  val[12,-1,0]  𝄀
+1  ¦  db-snapshot-row
+select id, val from bvt_issue_26120_db_src.parent_t;
+➤ id[4,32,0]  ¦  val[12,-1,0]  𝄀
+2  ¦  db-current-row
+select count(*) as database_historical_parent_matches
+from mo_catalog.mo_branch_metadata b
+join mo_catalog.mo_tables child on child.rel_id = b.table_id
+where child.account_id = 0
+and child.reldatabase = 'bvt_issue_26120_db_branch'
+and child.relname = 'parent_t'
+and b.p_table_id = (
+select old_parent.rel_id
+from mo_catalog.mo_tables{snapshot='bvt_issue_26120_db_sp'} old_parent
+where old_parent.account_id = 0
+and old_parent.reldatabase = 'bvt_issue_26120_db_src'
+and old_parent.relname = 'parent_t'
+)
+and b.p_table_id <> (
+select new_parent.rel_id
+from mo_catalog.mo_tables new_parent
+where new_parent.account_id = 0
+and new_parent.reldatabase = 'bvt_issue_26120_db_src'
+and new_parent.relname = 'parent_t'
+);
+➤ database_historical_parent_matches[-5,64,0]  𝄀
+1
+select count(*) as database_protection_snapshot_matches
+from mo_catalog.mo_tables child
+join mo_catalog.mo_snapshots protection
+on protection.sname = concat('__mo_branch_', cast(child.rel_id as varchar))
+where child.account_id = 0
+and child.reldatabase = 'bvt_issue_26120_db_branch'
+and child.relname = 'parent_t'
+and protection.obj_id = (
+select old_parent.rel_id
+from mo_catalog.mo_tables{snapshot='bvt_issue_26120_db_sp'} old_parent
+where old_parent.account_id = 0
+and old_parent.reldatabase = 'bvt_issue_26120_db_src'
+and old_parent.relname = 'parent_t'
+);
+➤ database_protection_snapshot_matches[-5,64,0]  𝄀
+1
+data branch diff bvt_issue_26120_db_branch.parent_t
+against bvt_issue_26120_db_src.parent_t output summary;
+➤ metric[12,0,0]  ¦  bvt_issue_26120_db_branch.parent_t[-5,0,0]  ¦  bvt_issue_26120_db_src.parent_t[-5,0,0]  𝄀
+INSERTED  ¦  1  ¦  1  𝄀
+DELETED  ¦  0  ¦  0  𝄀
+UPDATED  ¦  0  ¦  0
+drop database bvt_issue_26120_db_branch;
+drop database bvt_issue_26120_db_src;
+drop database bvt_issue_26120;
+drop snapshot bvt_issue_26120_sp;
+drop snapshot bvt_issue_26120_control_sp;
+drop snapshot bvt_issue_26120_db_sp;

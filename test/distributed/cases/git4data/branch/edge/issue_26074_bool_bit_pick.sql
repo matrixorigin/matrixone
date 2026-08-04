@@ -1,0 +1,109 @@
+-- Regression for issue #26074.
+-- DATA BRANCH PICK accepts BOOL and decimal BIT literal keys, including
+-- boundary values, composite keys, conflicts, deletes, and typed subqueries.
+drop database if exists bvt_issue_26074;
+create database bvt_issue_26074;
+use bvt_issue_26074;
+
+-- BOOL literals update only the selected rows.
+create table bool_base(k bool primary key, payload varchar(32), n int);
+insert into bool_base values(false, 'base-false', 0), (true, 'base-true', 1);
+data branch create table bool_src from bool_base;
+data branch create table bool_dst from bool_base;
+update bool_src set payload = concat(payload, '-src'), n = n + 10;
+data branch pick bool_src into bool_dst keys(false);
+select k, payload, n from bool_dst order by k;
+data branch pick bool_src into bool_dst keys(true);
+select k, payload, n from bool_dst order by k;
+
+-- Numeric BOOL keys cover deletes and the conflict modes.
+data branch create table bool_conf_src from bool_base;
+data branch create table bool_conf_dst from bool_base;
+delete from bool_conf_src where payload = 'base-false';
+update bool_conf_src set payload = 'src-true' where payload = 'base-true';
+data branch pick bool_conf_src into bool_conf_dst keys(0);
+select k, payload from bool_conf_dst order by k;
+update bool_conf_dst set payload = 'dst-true' where payload = 'base-true';
+-- @regex("conflict: bool_conf_src INSERT and bool_conf_dst INSERT on pk\(true\) with different values",true)
+data branch pick bool_conf_src into bool_conf_dst keys(1) when conflict fail;
+select k, payload from bool_conf_dst order by k;
+data branch pick bool_conf_src into bool_conf_dst keys(1) when conflict accept;
+select k, payload from bool_conf_dst order by k;
+
+-- BOOL works as one component of a composite primary key.
+create table bool_comp_base(
+    k bool,
+    shard int,
+    payload varchar(32),
+    primary key(k, shard)
+);
+insert into bool_comp_base values
+    (false, 1, 'f1'), (false, 2, 'f2'),
+    (true, 1, 't1'), (true, 2, 't2');
+data branch create table bool_comp_src from bool_comp_base;
+data branch create table bool_comp_dst from bool_comp_base;
+update bool_comp_src set payload = concat(payload, '-src');
+delete from bool_comp_src where shard = 2 and payload = 'f2-src';
+data branch pick bool_comp_src into bool_comp_dst
+    keys((false, 1), (false, 2), (true, 2));
+select k, shard, payload from bool_comp_dst order by k, shard;
+
+-- BIT(1) accepts its complete decimal key range.
+create table bit1_base(k bit(1) primary key, payload varchar(32));
+insert into bit1_base values(b'0', 'zero'), (b'1', 'one');
+data branch create table bit1_src from bit1_base;
+data branch create table bit1_dst from bit1_base;
+update bit1_src set payload = concat(payload, '-src');
+data branch pick bit1_src into bit1_dst keys(0, 1);
+select hex(k), payload from bit1_dst order by k;
+
+-- BIT(8) covers lower/upper boundaries, update, delete, and an absent no-op key.
+create table bit8_base(k bit(8) primary key, payload varchar(32));
+insert into bit8_base values
+    (b'00000000', 'zero'),
+    (b'00000001', 'one'),
+    (b'01111111', 'one-two-seven'),
+    (b'11111111', 'two-five-five');
+data branch create table bit8_src from bit8_base;
+data branch create table bit8_dst from bit8_base;
+update bit8_src set payload = 'zero-src' where hex(k) = '0';
+update bit8_src set payload = 'one-two-seven-src' where hex(k) = '7F';
+update bit8_src set payload = 'two-five-five-src' where hex(k) = 'FF';
+delete from bit8_src where hex(k) = '1';
+data branch pick bit8_src into bit8_dst keys(0, 1, 3, 127, 255);
+select hex(k), payload from bit8_dst order by k;
+
+-- The typed-subquery path remains equivalent to compatible literals.
+data branch create table bit8_sub_src from bit8_base;
+data branch create table bit8_sub_dst from bit8_base;
+update bit8_sub_src set payload = 'one-sub' where hex(k) = '1';
+update bit8_sub_src set payload = 'max-sub' where hex(k) = 'FF';
+data branch pick bit8_sub_src into bit8_sub_dst
+    keys(select k from bit8_sub_src where payload in ('one-sub', 'max-sub'));
+select hex(k), payload from bit8_sub_dst order by k;
+
+-- BIT(64) accepts values on both sides of the signed boundary.
+create table bit64_base(k bit(64) primary key, payload varchar(32));
+insert into bit64_base values
+    (0, 'zero'),
+    (9223372036854775808, 'high-bit'),
+    (18446744073709551615, 'max');
+data branch create table bit64_src from bit64_base;
+data branch create table bit64_dst from bit64_base;
+update bit64_src set payload = concat(payload, '-src');
+data branch pick bit64_src into bit64_dst
+    keys(0, 9223372036854775808, 18446744073709551615);
+select hex(k), payload from bit64_dst order by k;
+
+-- Invalid BIT(8) literals fail without partially modifying the target.
+data branch create table bit8_bad_src from bit8_base;
+data branch create table bit8_bad_dst from bit8_base;
+update bit8_bad_src set payload = 'changed' where hex(k) = 'FF';
+-- @regex("data type bit\(8\), value '256'",true)
+data branch pick bit8_bad_src into bit8_bad_dst keys(256);
+select hex(k), payload from bit8_bad_dst order by k;
+-- @regex("data type bit\(8\), value '-1'",true)
+data branch pick bit8_bad_src into bit8_bad_dst keys(-1);
+select hex(k), payload from bit8_bad_dst order by k;
+
+drop database bvt_issue_26074;

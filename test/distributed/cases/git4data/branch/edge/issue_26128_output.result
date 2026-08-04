@@ -1,0 +1,72 @@
+drop database if exists bvt_issue_26128;
+create database bvt_issue_26128;
+use bvt_issue_26128;
+create table base(
+id int primary key,
+payload varchar(200)
+);
+insert into base values
+(1, 'comma,value'),
+(2, 'quote"value'),
+(3, 'back\\slash'),
+(4, '中文原值'),
+(5, 'line1\nline2');
+data branch create table branch_t from base;
+update branch_t set payload = 'comma,updated' where id = 1;
+delete from branch_t where id = 2;
+update branch_t set payload = '中文"更新"' where id = 4;
+insert into branch_t values (6, 'new\nline');
+select id, hex(payload) as payload_hex from base order by id;
+➤ id[4,32,0]  ¦  payload_hex[12,-1,0]  𝄀
+1  ¦  636F6D6D612C76616C7565  𝄀
+2  ¦  71756F74652276616C7565  𝄀
+3  ¦  6261636B5C736C617368  𝄀
+4  ¦  E4B8ADE69687E58E9FE580BC  𝄀
+5  ¦  6C696E65310A6C696E6532
+select id, hex(payload) as payload_hex from branch_t order by id;
+➤ id[4,32,0]  ¦  payload_hex[12,-1,0]  𝄀
+1  ¦  636F6D6D612C75706461746564  𝄀
+3  ¦  6261636B5C736C617368  𝄀
+4  ¦  E4B8ADE6968722E69BB4E696B022  𝄀
+5  ¦  6C696E65310A6C696E6532  𝄀
+6  ¦  6E65770A6C696E65
+data branch diff branch_t against base output file '/tmp/';
+➤ FILE SAVED TO[12,0,0]  ¦  HINT[12,0,0]  𝄀
+/tmp/diff_branch_t_base_20260730_035035.sql  ¦  DELETE FROM `bvt_issue_26128`.`base`, INSERT INTO `bvt_issue_26128`.`base`
+data branch diff branch_t against base output as diff_rows;
+➤ TABLE CREATED[12,0,0]  𝄀
+`bvt_issue_26128`.`diff_rows`
+select __mo_diff_source,
+__mo_diff_flag,
+id,
+hex(payload) as payload_hex
+from diff_rows
+order by id;
+➤ __mo_diff_source[12,-1,0]  ¦  __mo_diff_flag[12,-1,0]  ¦  id[4,32,0]  ¦  payload_hex[12,-1,0]  𝄀
+branch_t  ¦  UPDATE  ¦  1  ¦  636F6D6D612C75706461746564  𝄀
+branch_t  ¦  DELETE  ¦  2  ¦  71756F74652276616C7565  𝄀
+branch_t  ¦  UPDATE  ¦  4  ¦  E4B8ADE6968722E69BB4E696B022  𝄀
+branch_t  ¦  INSERT  ¦  6  ¦  6E65770A6C696E65
+select count(*) as output_as_branch_metadata
+from mo_catalog.mo_branch_metadata b
+join mo_catalog.mo_tables t on t.rel_id = b.table_id
+where t.account_id = 0
+and t.reldatabase = 'bvt_issue_26128'
+and t.relname = 'diff_rows';
+➤ output_as_branch_metadata[-5,64,0]  𝄀
+0
+select id, hex(payload) as payload_hex from base order by id;
+➤ id[4,32,0]  ¦  payload_hex[12,-1,0]  𝄀
+1  ¦  636F6D6D612C76616C7565  𝄀
+2  ¦  71756F74652276616C7565  𝄀
+3  ¦  6261636B5C736C617368  𝄀
+4  ¦  E4B8ADE69687E58E9FE580BC  𝄀
+5  ¦  6C696E65310A6C696E6532
+select id, hex(payload) as payload_hex from branch_t order by id;
+➤ id[4,32,0]  ¦  payload_hex[12,-1,0]  𝄀
+1  ¦  636F6D6D612C75706461746564  𝄀
+3  ¦  6261636B5C736C617368  𝄀
+4  ¦  E4B8ADE6968722E69BB4E696B022  𝄀
+5  ¦  6C696E65310A6C696E6532  𝄀
+6  ¦  6E65770A6C696E65
+drop database bvt_issue_26128;
