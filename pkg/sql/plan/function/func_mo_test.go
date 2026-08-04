@@ -21,9 +21,25 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCastIndexToValueDisplaysEnumErrorMemberAsEmptyString(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"a,b,"}, nil),
+			NewFunctionTestInput(types.T_enum.ToType(), []types.Enum{0, 1, 3}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", "a", ""}, nil),
+		CastIndexToValue,
+	)
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
+}
 
 func TestCastGeometryToSubtype(t *testing.T) {
 	proc := testutil.NewProcess(t)
@@ -86,6 +102,44 @@ func TestCastValueToIndexConstDefinition(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, inputs, expect, CastValueToIndex)
 	succeed, info := tcc.Run()
 	require.True(t, succeed, info)
+}
+
+func TestInsertIgnoreAdjustsMySQLSpecialTypeValues(t *testing.T) {
+	ignoreProc := testutil.NewProcess(t)
+	ignoreProc.SetStmtProfile(&process.StmtProfile{})
+	ignoreProc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
+
+	run := func(name string, inputs []FunctionTestInput, expect FunctionTestResult, fn func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(ignoreProc, inputs, expect, fn)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	run("enum labels use error member", []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"a,b", "a,b"}, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"bad", "b"}, nil),
+	}, NewFunctionTestResult(types.T_enum.ToType(), false, []types.Enum{0, 2}, nil), CastValueToIndex)
+
+	run("enum numeric values use error member", []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"a,b", "a,b", "a,b"}, nil),
+		NewFunctionTestInput(types.T_uint16.ToType(), []uint16{9, 1, 1}, []bool{false, false, true}),
+	}, NewFunctionTestResult(types.T_enum.ToType(), false, []types.Enum{0, 1, 0}, []bool{false, false, true}), CastIndexValueToIndex)
+
+	run("set labels retain valid members", []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"x,y,z", "x,y,z", "x,y,z"}, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"x,bad", "bad", "x"}, []bool{false, false, true}),
+	}, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 0, 0}, []bool{false, false, true}), CastSetValueToIndex)
+
+	run("set numeric values retain declared bits", []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"x,y,z", "x,y,z", "x,y,z"}, nil),
+		NewFunctionTestInput(types.T_uint64.ToType(), []uint64{99, 4, 1}, []bool{false, false, true}),
+	}, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{3, 4, 0}, []bool{false, false, true}), CastSetIndexValueToIndex)
+
+	require.Equal(t, uint64(7), setMemberBitmap("x,y,z"))
+	require.False(t, statementIgnore(nil))
 }
 
 func TestEnumValueIndexPreservesParseEnumSemantics(t *testing.T) {
