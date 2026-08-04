@@ -236,13 +236,14 @@ func (s *memStore) SetOffset(
 	return moerr.NewInternalErrorf(ctx, "incrservice: column %s not found for table %d in memStore", colName, tableID)
 }
 
-// ForceSetOffset sets the offset of an auto-increment column to any value,
-// bypassing the monotonic guard. Only called from service.SetOffset during
-// ALTER TABLE AUTO_INCREMENT, which holds an exclusive DDL lock.
+// ForceSetOffset sets the offset and current name of an auto-increment column
+// to any value, bypassing the monotonic guard. Only called from service.SetOffset
+// during ALTER TABLE AUTO_INCREMENT, which holds an exclusive DDL lock.
 func (s *memStore) ForceSetOffset(
 	ctx context.Context,
 	tableID uint64,
 	colIndex int,
+	colName string,
 	offset uint64,
 	txnOp client.TxnOperator,
 ) error {
@@ -262,6 +263,7 @@ func (s *memStore) ForceSetOffset(
 	}
 	for i := range cols {
 		if cols[i].ColIndex == colIndex {
+			cols[i].ColName = colName
 			cols[i].Offset = offset
 			return nil
 		}

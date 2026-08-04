@@ -329,6 +329,7 @@ func (s *service) SetOffset(
 	ctx context.Context,
 	tableID uint64,
 	colIndex int,
+	colName string,
 	offset uint64,
 	txnOp client.TxnOperator,
 ) error {
@@ -390,7 +391,7 @@ func (s *service) SetOffset(
 	// ALTER TABLE AUTO_INCREMENT explicitly resets the next value. The caller
 	// has already checked table data and holds the DDL lock, so bypass the
 	// store-level monotonic guard that protects normal pre-allocation updates.
-	if err := s.allocator.forceSetOffset(ctx, tableID, colIndex, offset, txnOp); err != nil {
+	if err := s.allocator.forceSetOffset(ctx, tableID, colIndex, colName, offset, txnOp); err != nil {
 		return err
 	}
 	if txnOp == nil {

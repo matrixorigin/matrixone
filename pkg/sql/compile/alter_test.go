@@ -611,8 +611,8 @@ func TestReconcileAlterCopyAutoIncrementUsesStableIdentityAndSafeBounds(t *testi
 	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
 	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 	gomock.InOrder(
-		autoSvc.EXPECT().SetOffset(c.proc.Ctx, copyDef.TblId, 0, uint64(99), c.proc.GetTxnOperator()),
-		autoSvc.EXPECT().SetOffset(c.proc.Ctx, copyDef.TblId, 1, uint64(500), c.proc.GetTxnOperator()),
+		autoSvc.EXPECT().SetOffset(c.proc.Ctx, copyDef.TblId, 0, "id", uint64(99), c.proc.GetTxnOperator()),
+		autoSvc.EXPECT().SetOffset(c.proc.Ctx, copyDef.TblId, 1, "renamed_id", uint64(500), c.proc.GetTxnOperator()),
 		autoSvc.EXPECT().DiscardOffsetReset(gomock.Any(), copyDef.TblId, c.proc.GetTxnOperator()).Return(nil),
 	)
 	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
@@ -649,7 +649,7 @@ func TestReconcileAlterCopyAutoIncrementExplicitResetIgnoresReservedSourceRange(
 	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
 	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 	autoSvc.EXPECT().SetOffset(
-		c.proc.Ctx, copyDef.TblId, 0, uint64(500), c.proc.GetTxnOperator(),
+		c.proc.Ctx, copyDef.TblId, 0, "id", uint64(500), c.proc.GetTxnOperator(),
 	)
 	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
 
@@ -710,6 +710,7 @@ func TestAppendAlterAutoIncrementReqsUsesStableColumnIndexAfterRename(t *testing
 		c.proc.Ctx,
 		tableDef.TblId,
 		0,
+		"renamed_id",
 		uint64(140),
 		c.proc.GetTxnOperator(),
 	).Return(nil)
@@ -777,8 +778,8 @@ func TestAppendAlterAutoIncrementReqsDiscardsResetAfterCancellation(t *testing.T
 	}}}
 	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 	autoSvc.EXPECT().SetOffset(
-		ctx, tableDef.TblId, 0, uint64(99), c.proc.GetTxnOperator(),
-	).DoAndReturn(func(context.Context, uint64, int, uint64, client.TxnOperator) error {
+		ctx, tableDef.TblId, 0, "id", uint64(99), c.proc.GetTxnOperator(),
+	).DoAndReturn(func(context.Context, uint64, int, string, uint64, client.TxnOperator) error {
 		cancel()
 		return nil
 	})
@@ -813,7 +814,7 @@ func TestAppendAlterAutoIncrementReqsRejectsNarrowedOverflow(t *testing.T) {
 	}}}
 	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 	autoSvc.EXPECT().SetOffset(
-		gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(),
+		gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(),
 	).Times(0)
 	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
 
@@ -842,7 +843,7 @@ func TestReconcileAlterCopyAutoIncrementSkipsHiddenAndRejectsNarrowedOverflow(t 
 		}
 		copyRel := mock_frontend.NewMockRelation(ctrl)
 		autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
-		autoSvc.EXPECT().SetOffset(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+		autoSvc.EXPECT().SetOffset(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
 		incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
 
 		require.NoError(t, c.reconcileAlterCopyAutoIncrement(
@@ -870,7 +871,7 @@ func TestReconcileAlterCopyAutoIncrementSkipsHiddenAndRejectsNarrowedOverflow(t 
 		copyRel := mock_frontend.NewMockRelation(ctrl)
 		copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
 		autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
-		autoSvc.EXPECT().SetOffset(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+		autoSvc.EXPECT().SetOffset(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
 		incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
 
 		err := c.reconcileAlterCopyAutoIncrement(
@@ -905,8 +906,8 @@ func TestReconcileAlterCopyAutoIncrementStopsAfterCancellation(t *testing.T) {
 	copyRel := mock_frontend.NewMockRelation(ctrl)
 	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
 	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
-	autoSvc.EXPECT().SetOffset(ctx, copyDef.TblId, 0, uint64(99), c.proc.GetTxnOperator()).DoAndReturn(
-		func(context.Context, uint64, int, uint64, client.TxnOperator) error {
+	autoSvc.EXPECT().SetOffset(ctx, copyDef.TblId, 0, "first", uint64(99), c.proc.GetTxnOperator()).DoAndReturn(
+		func(context.Context, uint64, int, string, uint64, client.TxnOperator) error {
 			cancel()
 			return nil
 		},

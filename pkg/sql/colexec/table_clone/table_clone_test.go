@@ -124,7 +124,7 @@ func TestUpdateDstAutoIncrColumnsReconcilesAllSafeBounds(t *testing.T) {
 			}
 
 			incrSvc.EXPECT().SetOffset(
-				gomock.Any(), def.TblId, 0, tt.want, gomock.Any(),
+				gomock.Any(), def.TblId, 0, "id", tt.want, gomock.Any(),
 			)
 			require.NoError(t, tc.updateDstAutoIncrColumns(proc.Ctx, proc))
 		})
@@ -135,7 +135,7 @@ func TestUpdateDstAutoIncrColumnsRejectsLegacyTN(t *testing.T) {
 	proc := newTableCloneAutoIncrProcess(t, false)
 	ctrl := gomock.NewController(t)
 	incrSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
-	incrSvc.EXPECT().SetOffset(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+	incrSvc.EXPECT().SetOffset(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
 	proc.Base.IncrService = incrSvc
 	tc := &TableClone{
 		Ctx: &TableCloneCtx{SrcAutoIncrMaxValues: map[string]uint64{"id": 1}},
@@ -172,8 +172,8 @@ func TestUpdateDstAutoIncrColumnsKeepsHiddenAllocatorIndependent(t *testing.T) {
 	}
 
 	gomock.InOrder(
-		incrSvc.EXPECT().SetOffset(gomock.Any(), def.TblId, 0, uint64(999), gomock.Any()),
-		incrSvc.EXPECT().SetOffset(gomock.Any(), def.TblId, 1, uint64(40), gomock.Any()),
+		incrSvc.EXPECT().SetOffset(gomock.Any(), def.TblId, 0, "id", uint64(999), gomock.Any()),
+		incrSvc.EXPECT().SetOffset(gomock.Any(), def.TblId, 1, "__mo_fake_pk_col", uint64(40), gomock.Any()),
 	)
 	require.NoError(t, tc.updateDstAutoIncrColumns(proc.Ctx, proc))
 }
@@ -219,9 +219,9 @@ func TestUpdateDstAutoIncrColumnsReconcilesClonedIndexAllocator(t *testing.T) {
 		},
 	}
 
-	incrSvc.EXPECT().SetOffset(gomock.Any(), uint64(84), 0, uint64(200), gomock.Any())
-	incrSvc.EXPECT().SetOffset(gomock.Any(), uint64(85), 0, uint64(300), gomock.Any())
-	incrSvc.EXPECT().SetOffset(gomock.Any(), uint64(86), 0, uint64(400), gomock.Any())
+	incrSvc.EXPECT().SetOffset(gomock.Any(), uint64(84), 0, "__mo_fake_pk_col", uint64(200), gomock.Any())
+	incrSvc.EXPECT().SetOffset(gomock.Any(), uint64(85), 0, "__mo_fake_pk_col", uint64(300), gomock.Any())
+	incrSvc.EXPECT().SetOffset(gomock.Any(), uint64(86), 0, "__mo_fake_pk_col", uint64(400), gomock.Any())
 	require.NoError(t, tc.updateDstAutoIncrColumns(proc.Ctx, proc))
 }
 
@@ -265,8 +265,8 @@ func TestUpdateDstAutoIncrColumnsRejectsOutOfRangeOffset(t *testing.T) {
 
 			if !tt.wantErr {
 				incrSvc.EXPECT().SetOffset(
-					gomock.Any(), def.TblId, 0, tt.value, gomock.Any(),
-				).DoAndReturn(func(context.Context, uint64, int, uint64, client.TxnOperator) error {
+					gomock.Any(), def.TblId, 0, "id", tt.value, gomock.Any(),
+				).DoAndReturn(func(context.Context, uint64, int, string, uint64, client.TxnOperator) error {
 					return nil
 				})
 			}

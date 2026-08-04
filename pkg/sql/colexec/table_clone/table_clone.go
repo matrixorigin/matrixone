@@ -535,6 +535,7 @@ func updateRelationAutoIncrement(
 			ctx,
 			tableID,
 			col.ColIndex,
+			col.ColName,
 			offset,
 			proc.GetTxnOperator(),
 		)

@@ -341,13 +341,14 @@ func (s *sqlStore) SetOffset(
 	return nil
 }
 
-// ForceSetOffset sets the offset of an auto-increment column to any value,
-// bypassing the monotonic guard. Only called from service.SetOffset during
-// ALTER TABLE AUTO_INCREMENT, which holds an exclusive DDL lock.
+// ForceSetOffset sets the offset and current name of an auto-increment column
+// to any value, bypassing the monotonic guard. Only called from service.SetOffset
+// during ALTER TABLE AUTO_INCREMENT, which holds an exclusive DDL lock.
 func (s *sqlStore) ForceSetOffset(
 	ctx context.Context,
 	tableID uint64,
 	colIndex int,
+	colName string,
 	offset uint64,
 	txnOp client.TxnOperator,
 ) error {
@@ -366,7 +367,7 @@ func (s *sqlStore) ForceSetOffset(
 	currentRes, err := s.exec.Exec(
 		ctx,
 		fmt.Sprintf(
-			"select offset from %s where table_id = %d and col_index = %d for update",
+			"select col_name, offset from %s where table_id = %d and col_index = %d for update",
 			incrTableName, tableID, colIndex,
 		),
 		opts,
@@ -374,26 +375,30 @@ func (s *sqlStore) ForceSetOffset(
 	if err != nil {
 		return err
 	}
-	var currentOffsets []uint64
+	var (
+		currentNames   []string
+		currentOffsets []uint64
+	)
 	currentRes.ReadRows(func(_ int, cols []*vector.Vector) bool {
-		currentOffsets = append(currentOffsets, executor.GetFixedRows[uint64](cols[0])...)
+		currentNames = append(currentNames, executor.GetStringRows(cols[0])...)
+		currentOffsets = append(currentOffsets, executor.GetFixedRows[uint64](cols[1])...)
 		return true
 	})
 	currentRes.Close()
-	if len(currentOffsets) != 1 {
+	if len(currentNames) != 1 || len(currentOffsets) != 1 {
 		return moerr.NewInternalErrorf(
 			ctx,
 			"incrservice: expected one auto-increment column at index %d for table %d, found %d rows",
 			colIndex,
 			tableID,
-			len(currentOffsets),
+			min(len(currentNames), len(currentOffsets)),
 		)
 	}
 	res, err := s.exec.Exec(
 		ctx,
 		fmt.Sprintf(
-			"update %s set offset = %d where table_id = %d and col_index = %d",
-			incrTableName, offset, tableID, colIndex,
+			"update %s set col_name = '%s', offset = %d where table_id = %d and col_index = %d",
+			incrTableName, sqlquote.EscapeString(colName), offset, tableID, colIndex,
 		),
 		opts,
 	)
@@ -401,7 +406,7 @@ func (s *sqlStore) ForceSetOffset(
 		return err
 	}
 	defer res.Close()
-	if res.AffectedRows != 1 && !(res.AffectedRows == 0 && currentOffsets[0] == offset) {
+	if res.AffectedRows != 1 && !(res.AffectedRows == 0 && currentNames[0] == colName && currentOffsets[0] == offset) {
 		return moerr.NewInternalErrorf(
 			ctx,
 			"incrservice: expected to reset one auto-increment column at index %d for table %d, updated %d rows",

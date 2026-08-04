@@ -4907,6 +4907,7 @@ func (c *Compile) appendAlterAutoIncrementReqs(
 			c.proc.Ctx,
 			tid,
 			col.ColIndex,
+			col.ColName,
 			offset,
 			c.proc.GetTxnOperator(),
 		); err != nil {

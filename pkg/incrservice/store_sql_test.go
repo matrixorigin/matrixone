@@ -663,13 +663,14 @@ func Test_Allocate_Retry_When_AffectedRows_Invalid(t *testing.T) {
 	require.Equal(t, int32(2), updateCnt.Load())
 }
 
-func newForceSetOffsetResult(offset uint64) executor.Result {
+func newForceSetOffsetResult(colName string, offset uint64) executor.Result {
 	memRes := executor.NewMemResult(
-		[]types.Type{types.New(types.T_uint64, 64, 0)},
+		[]types.Type{types.New(types.T_varchar, 64, 0), types.New(types.T_uint64, 64, 0)},
 		mpool.MustNewZero(),
 	)
 	memRes.NewBatchWithRowCount(1)
-	executor.AppendFixedRows(memRes, 0, []uint64{offset})
+	executor.AppendStringRows(memRes, 0, []string{colName})
+	executor.AppendFixedRows(memRes, 1, []uint64{offset})
 	return memRes.GetResult()
 }
 
@@ -682,8 +683,8 @@ func TestSQLStoreSetOffset(t *testing.T) {
 	sqlExecutor := executor.NewMemExecutor2(
 		func(sql string) (executor.Result, error) {
 			executedSQLs = append(executedSQLs, sql)
-			if strings.HasPrefix(sql, "select offset from mo_increment_columns") {
-				return newForceSetOffsetResult(math.MaxUint64), nil
+			if strings.HasPrefix(sql, "select col_name, offset from mo_increment_columns") {
+				return newForceSetOffsetResult("old_col", math.MaxUint64), nil
 			}
 			return executor.Result{AffectedRows: 1}, nil
 		},
@@ -696,15 +697,15 @@ func TestSQLStoreSetOffset(t *testing.T) {
 
 	require.NoError(t, s.SetOffset(ctx, 10, "auto_col", 99, nil))
 	require.NoError(t, s.SetOffset(ctx, 10, "auto_col", 100, txnOp))
-	require.NoError(t, s.ForceSetOffset(ctx, 10, 3, math.MaxUint64, txnOp))
+	require.NoError(t, s.ForceSetOffset(ctx, 10, 3, "renamed_col", math.MaxUint64, txnOp))
 	require.Len(t, executedSQLs, 4)
 	require.Contains(t, executedSQLs[0], "update mo_increment_columns set offset = 99")
 	require.Contains(t, executedSQLs[0], "table_id = 10")
 	require.Contains(t, executedSQLs[0], "col_name = 'auto_col'")
 	require.Contains(t, executedSQLs[1], "update mo_increment_columns set offset = 100")
-	require.Contains(t, executedSQLs[2], "select offset from mo_increment_columns")
+	require.Contains(t, executedSQLs[2], "select col_name, offset from mo_increment_columns")
 	require.Contains(t, executedSQLs[2], "col_index = 3")
-	require.Contains(t, executedSQLs[3], "update mo_increment_columns set offset = 18446744073709551615")
+	require.Contains(t, executedSQLs[3], "update mo_increment_columns set col_name = 'renamed_col', offset = 18446744073709551615")
 	require.Contains(t, executedSQLs[3], "table_id = 10")
 	require.Contains(t, executedSQLs[3], "col_index = 3")
 }
@@ -717,8 +718,8 @@ func TestSQLStoreSetOffsetEscapesColumnNameLiteral(t *testing.T) {
 	sqlExecutor := executor.NewMemExecutor2(
 		func(sql string) (executor.Result, error) {
 			executedSQLs = append(executedSQLs, sql)
-			if strings.HasPrefix(sql, "select offset from mo_increment_columns") {
-				return newForceSetOffsetResult(100), nil
+			if strings.HasPrefix(sql, "select col_name, offset from mo_increment_columns") {
+				return newForceSetOffsetResult("old_col", 100), nil
 			}
 			return executor.Result{AffectedRows: 1}, nil
 		},
@@ -731,12 +732,13 @@ func TestSQLStoreSetOffsetEscapesColumnNameLiteral(t *testing.T) {
 
 	require.NoError(t, s.SetOffset(ctx, 10, "1id", 99, nil))
 	require.NoError(t, s.SetOffset(ctx, 10, "auto'col\\x", 100, nil))
-	require.NoError(t, s.ForceSetOffset(ctx, 10, 7, 101, nil))
+	require.NoError(t, s.ForceSetOffset(ctx, 10, 7, "new'col\\x", 101, nil))
 	require.Len(t, executedSQLs, 4)
 	require.Contains(t, executedSQLs[0], "col_name = '1id'")
 	require.Contains(t, executedSQLs[1], `col_name = 'auto''col\\x'`)
 	require.Contains(t, executedSQLs[2], "col_index = 7")
 	require.Contains(t, executedSQLs[3], "col_index = 7")
+	require.Contains(t, executedSQLs[3], `col_name = 'new''col\\x'`)
 }
 
 func TestSQLStoreForceSetOffsetRejectsMissingColumn(t *testing.T) {
@@ -749,7 +751,7 @@ func TestSQLStoreForceSetOffsetRejectsMissingColumn(t *testing.T) {
 	)
 
 	s := &sqlStore{exec: sqlExecutor}
-	err := s.ForceSetOffset(ctx, 10, 3, 101, nil)
+	err := s.ForceSetOffset(ctx, 10, 3, "auto_col", 101, nil)
 	require.ErrorContains(t, err, "expected one auto-increment column at index 3 for table 10, found 0 rows")
 }
 
@@ -757,17 +759,19 @@ func TestSQLStoreForceSetOffsetValidatesZeroAffectedRows(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), 12)
 	for _, tc := range []struct {
 		name          string
+		currentName   string
 		currentOffset uint64
 		wantErr       bool
 	}{
-		{name: "unchanged offset", currentOffset: 101},
-		{name: "lost update", currentOffset: 100, wantErr: true},
+		{name: "unchanged row", currentName: "auto_col", currentOffset: 101},
+		{name: "stale name", currentName: "old_col", currentOffset: 101, wantErr: true},
+		{name: "lost update", currentName: "auto_col", currentOffset: 100, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sqlExecutor := executor.NewMemExecutor2(
 				func(sql string) (executor.Result, error) {
-					if strings.HasPrefix(sql, "select offset from mo_increment_columns") {
-						return newForceSetOffsetResult(tc.currentOffset), nil
+					if strings.HasPrefix(sql, "select col_name, offset from mo_increment_columns") {
+						return newForceSetOffsetResult(tc.currentName, tc.currentOffset), nil
 					}
 					return executor.Result{AffectedRows: 0}, nil
 				},
@@ -775,7 +779,7 @@ func TestSQLStoreForceSetOffsetValidatesZeroAffectedRows(t *testing.T) {
 			)
 
 			s := &sqlStore{exec: sqlExecutor}
-			err := s.ForceSetOffset(ctx, 10, 3, 101, nil)
+			err := s.ForceSetOffset(ctx, 10, 3, "auto_col", 101, nil)
 			if tc.wantErr {
 				require.ErrorContains(t, err, "updated 0 rows")
 			} else {
