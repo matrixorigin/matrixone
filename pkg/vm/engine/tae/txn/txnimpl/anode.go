@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	cnvector "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -118,6 +119,7 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 
 	from := uint32(n.data.Length())
 	an = n.PrepareAppend(data, offset)
+	fakePKProvided := false
 	for _, attr := range data.Attrs {
 		if attr == catalog.PhyAddrColumnName {
 			continue
@@ -128,12 +130,27 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 		// 	}
 		// }
 		def := schema.ColDefs[schema.GetColIdx(attr)]
+		fakePKProvided = fakePKProvided || def.FakePK
 		destVec := n.data.Vecs[def.Idx]
 		// logutil.Infof("destVec: %s, %d, %d", destVec.String(), cnt, data.Length())
 		destVec.ExtendWithOffset(data.Vecs[def.Idx], int(offset), int(an))
 	}
+	if schema.HasFakePK() && !fakePKProvided {
+		fakePK := n.data.Vecs[schema.GetPrimaryKey().Idx]
+		if err = cnvector.AppendMultiFixed(
+			fakePK.GetDownstreamVector(),
+			uint64(0),
+			false,
+			int(an),
+			fakePK.GetAllocator(),
+		); err != nil {
+			return
+		}
+	}
+	if err = n.FillPhyAddrColumn(from, an); err != nil {
+		return
+	}
 	n.rows = uint32(n.data.Length())
-	err = n.FillPhyAddrColumn(from, an)
 	return
 }
 

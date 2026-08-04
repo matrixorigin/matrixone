@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -501,7 +502,10 @@ func filterTargetRows(
 		selections = append(selections, int64(i))
 	}
 
-	filtered, err := input.Clone(proc.Mp(), false)
+	// Modern execution batches can carry a statement allocation account. Keep
+	// that provenance on the owned filtered copy instead of cloning into an
+	// on-heap batch, which cannot accept an allocation selection.
+	filtered, err := input.Clone(proc.Mp(), true)
 	if err != nil {
 		return nil, false, 0, err
 	}
@@ -513,6 +517,7 @@ func filterTargetRows(
 
 	physicalSelections := make([]int64, 0, filtered.RowCount())
 	iterator := seen.NewIterator()
+	defer hashmap.IteratorClearOwner(iterator)
 	for offset := 0; offset < filtered.RowCount(); offset += hashmap.UnitLimit {
 		count := min(hashmap.UnitLimit, filtered.RowCount()-offset)
 		oldGroupCount := seen.GroupCount()
@@ -543,7 +548,7 @@ func (update *MultiUpdate) prepareSeenTargetRows(proc *process.Process) error {
 	}
 	targetCounts := make(map[uint64]int)
 	for _, ctx := range update.MultiUpdateCtx {
-		if !features.IsIndexTable(ctx.TableDef.FeatureFlag) {
+		if ctx.DedupByTargetRowID && !features.IsIndexTable(ctx.TableDef.FeatureFlag) {
 			targetCounts[targetTableID(ctx)]++
 		}
 	}
@@ -552,7 +557,15 @@ func (update *MultiUpdate) prepareSeenTargetRows(proc *process.Process) error {
 		if count < 2 {
 			continue
 		}
-		seen, err := hashmap.NewStrHashMap(false, proc.Mp())
+		if update.mapAllocation == nil || update.iteratorAllocation == nil {
+			return mpool.ErrAllocationAccountInvalid
+		}
+		seen, err := hashmap.NewStrHashMapWithAllocations(
+			false,
+			proc.Mp(),
+			update.mapAllocation,
+			update.iteratorAllocation,
+		)
 		if err != nil {
 			return err
 		}

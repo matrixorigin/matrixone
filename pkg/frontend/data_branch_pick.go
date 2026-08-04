@@ -197,6 +197,11 @@ func pickMergeDiffs(
 		ctx, ses, bh, tblStuff, dataBranchApplyModeOnlinePKOnly,
 		&deleteCnt, deleteFromVals, &insertCnt, insertIntoVals, nil,
 	)
+	var acceptedExactFloatKeys map[string]struct{}
+	if appender.batchInfo.deleteNeedsExactFloatKeyMatch() &&
+		stmt.ConflictOpt != nil && stmt.ConflictOpt.Opt == tree.CONFLICT_ACCEPT {
+		acceptedExactFloatKeys = make(map[string]struct{})
+	}
 	if err = initApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err != nil {
 		return err
 	}
@@ -218,7 +223,7 @@ func pickMergeDiffs(
 
 		if err = appendPickedBatchRows(
 			ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender,
-			stmt.ConflictOpt, skipSet,
+			stmt.ConflictOpt, skipSet, acceptedExactFloatKeys,
 		); err != nil {
 			firstErr = err
 			cancel()
@@ -227,6 +232,9 @@ func pickMergeDiffs(
 		}
 
 		tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+	}
+	if firstErr == nil && len(acceptedExactFloatKeys) != 0 {
+		firstErr = moerr.NewInternalErrorNoCtx("Data Branch PICK accepted conflict is missing its source row")
 	}
 
 	if err = appender.flushAll(); err != nil {
@@ -267,6 +275,7 @@ func appendPickedBatchRows(
 	appender sqlValuesAppender,
 	userConflictOpt *tree.ConflictOpt,
 	skipSet map[string]struct{},
+	acceptedExactFloatKeys map[string]struct{},
 ) (err error) {
 	// PICK only cares about two kinds of batches from hashDiff:
 	//   1. target INSERT (side=target, kind=INSERT) — source rows to add/replace
@@ -278,6 +287,10 @@ func appendPickedBatchRows(
 	// duplicate-key error.
 	if wrapped.side == diffSideBase && wrapped.kind != diffDelete {
 		return nil
+	}
+	exactFloatKeyUpdate, err := dataBranchExactFloatKeyUpdateBatch(wrapped, appender.batchInfo)
+	if err != nil {
+		return err
 	}
 
 	row := make([]any, len(tblStuff.def.colNames))
@@ -310,7 +323,14 @@ func appendPickedBatchRows(
 					skipSet[pkKey] = struct{}{}
 					continue // do not apply the DELETE
 				case tree.CONFLICT_ACCEPT:
-					// fall through — apply the DELETE (source value wins)
+					if acceptedExactFloatKeys != nil {
+						// The matching source row is applied by an exact-key upsert.
+						// Deferring the resolution avoids a staged delete that could
+						// run after the upsert and remove the accepted row.
+						acceptedExactFloatKeys[pkKey] = struct{}{}
+						continue
+					}
+					// Fall through for non-float keys: DELETE + INSERT is safe.
 				}
 			}
 		}
@@ -321,6 +341,15 @@ func appendPickedBatchRows(
 				continue
 			}
 		}
+		if acceptedExactFloatKeys != nil && wrapped.side == diffSideTarget && wrapped.kind == diffInsert {
+			if _, accepted := acceptedExactFloatKeys[pkKey]; accepted {
+				exactFloatKeyUpdate = true
+				delete(acceptedExactFloatKeys, pkKey)
+			}
+		}
+		if exactFloatKeyUpdate && wrapped.kind == diffDelete {
+			continue
+		}
 
 		if err = extractDataBranchApplyRow(
 			ctx, ses, tblStuff, wrapped.batch, rowIdx, appender.extraColIdxesForRow(wrapped.kind), row,
@@ -328,8 +357,9 @@ func appendPickedBatchRows(
 		); err != nil {
 			return
 		}
-		if err = appendDataBranchApplyRowAsSQLValues(
+		if err = appendOrExecuteDataBranchApplyRow(
 			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender,
+			exactFloatKeyUpdate, wrapped.restoreMissing,
 		); err != nil {
 			return
 		}
@@ -1247,22 +1277,29 @@ func normalizePickTimeZone(loc *time.Location) *time.Location {
 
 // appendExprToVec appends a literal AST expression value to a typed vector.
 func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
+	expr = unwrapPickKeyParens(expr)
 	switch e := expr.(type) {
 	case *tree.NumVal:
 		return appendNumValToVec(vec, e, pkType, tz, mp)
 	case *tree.UnaryExpr:
-		num, ok := e.Expr.(*tree.NumVal)
+		operand := unwrapPickKeyParens(e.Expr)
+		num, ok := operand.(*tree.NumVal)
 		if !ok {
-			return moerr.NewInvalidInputNoCtxf("unsupported unary expression type for PK filter: %T", e.Expr)
+			return moerr.NewInvalidInputNoCtxf("unsupported unary expression type for PK filter: %T", operand)
 		}
+		negative := false
 		s := num.String()
 		switch e.Op {
 		case tree.UNARY_MINUS:
+			negative = true
 			s = "-" + s
 		case tree.UNARY_PLUS:
 			s = "+" + s
 		default:
 			return moerr.NewInvalidInputNoCtxf("unsupported unary operator for PK filter: %v", e.Op)
+		}
+		if shouldNormalizeIntegerNumVal(num, pkType) {
+			return appendIntegerNumValToVec(vec, num, negative, pkType, tz, mp)
 		}
 		return appendNumericStringToVec(vec, s, pkType, tz, mp)
 	case *tree.StrVal:
@@ -1273,10 +1310,88 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *
 	}
 }
 
+func unwrapPickKeyParens(expr tree.Expr) tree.Expr {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			return expr
+		}
+		expr = paren.Expr
+	}
+}
+
 // appendNumValToVec converts a numeric literal to the correct typed value
 // and appends it to the vector.
 func appendNumValToVec(vec *vector.Vector, val *tree.NumVal, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
+	if shouldNormalizeIntegerNumVal(val, pkType) {
+		return appendIntegerNumValToVec(vec, val, false, pkType, tz, mp)
+	}
 	return appendNumericStringToVec(vec, val.String(), pkType, tz, mp)
+}
+
+func shouldNormalizeIntegerNumVal(val *tree.NumVal, pkType types.Type) bool {
+	switch val.ValType {
+	case tree.P_bit:
+		return pkType.Oid == types.T_bit
+	case tree.P_hexnum, tree.P_float64:
+		return pkType.Oid.IsInteger()
+	default:
+		return false
+	}
+}
+
+func appendIntegerNumValToVec(
+	vec *vector.Vector,
+	val *tree.NumVal,
+	negative bool,
+	pkType types.Type,
+	tz *time.Location,
+	mp *mpool.MPool,
+) error {
+	var n *big.Int
+	switch val.ValType {
+	case tree.P_hexnum:
+		s := val.String()
+		if len(s) < 3 || (s[:2] != "0x" && s[:2] != "0X") {
+			return moerr.NewInvalidInputNoCtxf("invalid hexadecimal literal %q", s)
+		}
+		var ok bool
+		n, ok = new(big.Int).SetString(s[2:], 16)
+		if !ok {
+			return moerr.NewInvalidInputNoCtxf("invalid hexadecimal literal %q", s)
+		}
+	case tree.P_bit:
+		s := val.String()
+		if len(s) < 2 || (s[:2] != "0b" && s[:2] != "0B") {
+			return moerr.NewInvalidInputNoCtxf("invalid bit literal %q", s)
+		}
+		n = new(big.Int)
+		if len(s) > 2 {
+			var ok bool
+			n, ok = n.SetString(s[2:], 2)
+			if !ok {
+				return moerr.NewInvalidInputNoCtxf("invalid bit literal %q", s)
+			}
+		}
+	case tree.P_float64:
+		r, ok := new(big.Rat).SetString(val.String())
+		if !ok {
+			return moerr.NewInvalidInputNoCtxf("invalid numeric literal %q", val.String())
+		}
+		if !r.IsInt() {
+			return moerr.NewInvalidInputNoCtxf(
+				"numeric literal %q is not an integer for primary key type %s",
+				val.String(), pkType.String(),
+			)
+		}
+		n = new(big.Int).Set(r.Num())
+	default:
+		return moerr.NewInvalidInputNoCtxf("unsupported numeric literal %q", val.String())
+	}
+	if negative {
+		n.Neg(n)
+	}
+	return appendNumericStringToVec(vec, n.String(), pkType, tz, mp)
 }
 
 func appendNumericStringToVec(vec *vector.Vector, s string, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {

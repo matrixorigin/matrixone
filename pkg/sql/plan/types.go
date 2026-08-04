@@ -241,6 +241,7 @@ type QueryBuilder struct {
 	nameByColRef                map[[2]int32]string
 	protectedScans              map[int32]int
 	projectSpecialGuards        map[int32]*specialIndexGuard
+	setBitmapByDisplayNode      map[[2]int32]int32
 	indexHintsByScan            map[int32]*indexHintSet
 	indexHintOwnerByNode        map[int32]int32
 	preserveSinkProjection      map[int32]struct{}
@@ -306,6 +307,18 @@ type QueryBuilder struct {
 	irregularMaintIndexes     []*plan.IndexDef
 	irregularMaintTableDef    *plan.TableDef
 	irregularMaintObjRef      *plan.ObjectRef
+	irregularMaintSkipInsert  bool
+
+	// DML RETURNING consumes an attempt-local row image from a dedicated sink.
+	// The mutation plan and the returning projection use independent SINK_SCAN
+	// readers, so index/FK side-effect branches cannot multiply returned rows.
+	returningSourceStep int32
+	returningRequested  bool
+	returningTableDef   *plan.TableDef
+	returningObjRef     *plan.ObjectRef
+	returningTableName  string
+	returningAlias      string
+	returningColPos     map[string]int32
 	// sinkColRef records, per materialized step, the post-pruning column remap
 	// produced by createQuery's final remapAllColRefs pass: {step, originalColPos}
 	// -> newColPos. The irregular-index maintenance sub-plans are appended after
@@ -398,6 +411,15 @@ type aliasItem struct {
 
 type BindContext struct {
 	binder Binder
+
+	// mysqlSpecialOrderTypes records the storage type behind a visible ENUM/SET
+	// display value.  It is planner-local semantic provenance: only a pure
+	// display projection (or a pure column passthrough of one) may populate it.
+	// A present key with a nil value explicitly suppresses provenance when a
+	// multi-input construct proves the originating display contract unsafe.
+	// The generated plan consumes the provenance by materializing an ordinary
+	// numeric sort expression, so this metadata never crosses the plan wire.
+	mysqlSpecialOrderTypes map[int32]*plan.Type
 
 	//cteByName saves all cte definitions in the current stmt
 	cteByName map[string]*CTERef
@@ -538,14 +560,15 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	sysCtx                context.Context
-	builder               *QueryBuilder
-	ctx                   *BindContext
-	impl                  Binder
-	boundCols             []string
-	numericParamType      *Type
-	numericSubqueryTarget *Type
-	numericFunctionTarget bool
+	sysCtx                           context.Context
+	builder                          *QueryBuilder
+	ctx                              *BindContext
+	impl                             Binder
+	boundCols                        []string
+	numericParamType                 *Type
+	numericSubqueryTarget            *Type
+	numericFunctionTarget            bool
+	allowCanonicalNameConstValueCast bool
 }
 
 type DefaultBinder struct {
@@ -657,7 +680,11 @@ type Binding struct {
 	originCols  []string
 	colIsHidden []bool
 	types       []*plan.Type
-	refCnts     []uint
+	// mysqlSpecialOrderTypes is aligned with cols. A non-nil entry means that
+	// the string column is a pure display of the recorded ENUM/SET storage
+	// type, and may therefore use definition-order semantics when ordered.
+	mysqlSpecialOrderTypes []*plan.Type
+	refCnts                []uint
 	// lower case
 	colIdByName    map[string]int32
 	isClusterTable bool

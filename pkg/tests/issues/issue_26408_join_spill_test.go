@@ -86,6 +86,7 @@ func TestIssue26408JoinSpillSQLRegression(t *testing.T) {
 		}()
 		execJoinSpillSQL(t, ctx, conn, "use `"+dbName+"`")
 		execJoinSpillSQL(t, ctx, conn, "set @@max_dop = 1")
+		defer resetOptimizerHintsOnCN(t, port)
 		execJoinSpillSQL(t, ctx, conn, `set session optimizer_hints = "forceOneCN=1"`)
 
 		execJoinSpillSQL(t, ctx, conn, "create table probe_keys (k bigint not null, payload bigint not null) cluster by k")
@@ -197,18 +198,9 @@ func queryJoinSpillResult(
 
 func queryJoinSpillText(t *testing.T, ctx context.Context, conn *sql.Conn, query string) string {
 	t.Helper()
-	rows, err := conn.QueryContext(ctx, query)
+	text, err := testutils.QueryText(ctx, conn, query)
 	require.NoErrorf(t, err, "query failed: %s", query)
-	defer rows.Close()
-
-	var lines []string
-	for rows.Next() {
-		var line string
-		require.NoError(t, rows.Scan(&line))
-		lines = append(lines, line)
-	}
-	require.NoError(t, rows.Err())
-	return strings.Join(lines, "\n")
+	return text
 }
 
 func patchJoinSpillStats(
@@ -218,6 +210,19 @@ func patchJoinSpillStats(
 	dbName string,
 	tableName string,
 	tableCount int64,
+) {
+	t.Helper()
+	patchJoinSpillStatsWithNDV(t, ctx, conn, dbName, tableName, tableCount, tableCount)
+}
+
+func patchJoinSpillStatsWithNDV(
+	t *testing.T,
+	ctx context.Context,
+	conn *sql.Conn,
+	dbName string,
+	tableName string,
+	tableCount int64,
+	ndv int64,
 ) {
 	t.Helper()
 	stats := fmt.Sprintf(`{
@@ -235,7 +240,7 @@ func patchJoinSpillStats(
 				"result": [1, 5000000, 10000000, 15000000, 20000000]
 			}
 		}
-	}`, tableCount, tableCount)
+	}`, tableCount, ndv)
 	var patched float64
 	err := conn.QueryRowContext(
 		ctx,

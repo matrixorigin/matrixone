@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -158,16 +159,7 @@ func saveBatches(ctx context.Context, ses *Session, data []*batch.Batch) error {
 }
 
 func saveMeta(ctx context.Context, ses *Session) error {
-	defer func() {
-		ses.ResetBlockIdx()
-		ses.p = nil
-		// TIPs: Session.SetTStmt() do reset the tStmt while query is DONE.
-		// Be careful, if you want to do async op.
-		// ses.tStmt = nil /* #16028: QueryResult independent of ses.tStmt */
-		ses.curResultSize = 0
-		ses.savedRowCount = 0
-		ses.queryRowCount = 0
-	}()
+	defer resetQueryResultState(ses)
 	fs := getPu(ses.GetService()).FileService
 	// write query result meta
 	colMap, err := buildColumnMap(ctx, ses.rs)
@@ -244,6 +236,17 @@ func saveMeta(ctx context.Context, ses *Session) error {
 		return err
 	}
 	return err
+}
+
+func resetQueryResultState(ses *Session) {
+	ses.ResetBlockIdx()
+	ses.p = nil
+	// TIPs: Session.SetTStmt() do reset the tStmt while query is DONE.
+	// Be careful, if you want to do async op.
+	// ses.tStmt = nil /* #16028: QueryResult independent of ses.tStmt */
+	ses.curResultSize = 0
+	ses.savedRowCount = 0
+	ses.queryRowCount = 0
 }
 
 // saveQueryResult saves the data composited by hand
@@ -434,7 +437,7 @@ func simpleAstMarshal(stmt tree.Statement) ([]byte, error) {
 		*tree.ShowGrants, *tree.ShowIndex,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList,
-		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowConnectors,
+		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus,
 		*tree.ShowLogserviceReplicas, *tree.ShowLogserviceStores, *tree.ShowLogserviceSettings, *tree.ShowRecoveryWindow:
 		s.Typ = int(astShowNone)
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
@@ -787,7 +790,166 @@ func getFileSize(files []fileservice.DirEntry, fileName string) int64 {
 
 var defResultSaver BinaryWriter = &QueryResult{}
 
+const returningQueryResultCleanupTimeout = 30 * time.Second
+
 type QueryResult struct {
+	stagedBlocks int
+	stagedID     string
+	stagedTenant string
+	sawRows      bool
+	published    bool
+	aborted      bool
+	stageCounter *perfcounter.CounterSet
+	accounted    queryResultAccounting
+}
+
+type queryResultAccounting struct {
+	s3Requests   [resource.S3OpCount]int64
+	s3ReadBytes  int64
+	s3WriteBytes int64
+}
+
+func (result *QueryResult) Stage(execCtx *ExecCtx, _ *perfcounter.CounterSet, bat *batch.Batch) error {
+	newCtx := perfcounter.AttachS3RequestKey(execCtx.reqCtx, result.counter())
+	ses := execCtx.ses.(*Session)
+	if bat != nil && bat.RowCount() > 0 {
+		result.sawRows = true
+	}
+	err := saveBatch(newCtx, ses, bat)
+	// saveBatch increments blockIdx before opening the object writer. Capture
+	// the path even when the write fails so Abort can remove a partial object.
+	result.captureStage(ses)
+	return err
+}
+
+func (result *QueryResult) FinishStage(execCtx *ExecCtx) error {
+	if result.stagedBlocks > 0 || result.sawRows {
+		return nil
+	}
+	ses := execCtx.ses.(*Session)
+	if ses.rs == nil || len(ses.rs.ResultCols) == 0 {
+		return moerr.NewInternalError(execCtx.reqCtx, "DML RETURNING result metadata is missing")
+	}
+	empty := batch.NewWithSize(len(ses.rs.ResultCols))
+	for i, col := range ses.rs.ResultCols {
+		empty.Vecs[i] = vector.NewVec(types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale))
+	}
+	defer empty.Clean(ses.proc.Mp())
+	empty.SetRowCount(0)
+	return result.Stage(execCtx, nil, empty)
+}
+
+func (result *QueryResult) Publish(execCtx *ExecCtx) error {
+	if result.aborted {
+		return moerr.NewInternalError(execCtx.reqCtx, "cannot publish an aborted DML RETURNING result")
+	}
+	if result.published {
+		return nil
+	}
+	ses := execCtx.ses.(*Session)
+	result.captureStage(ses)
+	ctx := perfcounter.AttachS3RequestKey(execCtx.reqCtx, result.counter())
+	if err := saveMeta(ctx, ses); err != nil {
+		return err
+	}
+	result.published = true
+	result.publishAccounting(execCtx.reqCtx)
+	return nil
+}
+
+func (result *QueryResult) counter() *perfcounter.CounterSet {
+	if result.stageCounter == nil {
+		result.stageCounter = new(perfcounter.CounterSet)
+	}
+	return result.stageCounter
+}
+
+func (result *QueryResult) publishAccounting(ctx context.Context) {
+	if result.stageCounter == nil {
+		return
+	}
+	root := resource.RootFromContext(ctx)
+	if root == nil {
+		return
+	}
+	counter := result.stageCounter
+	current := queryResultAccounting{
+		s3ReadBytes:  counter.FileService.S3ReadSize.Load(),
+		s3WriteBytes: counter.FileService.S3WriteSize.Load(),
+	}
+	current.s3Requests[resource.S3List] = counter.FileService.S3.List.Load()
+	current.s3Requests[resource.S3Head] = counter.FileService.S3.Head.Load()
+	current.s3Requests[resource.S3Put] = counter.FileService.S3.Put.Load()
+	current.s3Requests[resource.S3Get] = counter.FileService.S3.Get.Load()
+	current.s3Requests[resource.S3Delete] = counter.FileService.S3.Delete.Load()
+	current.s3Requests[resource.S3DeleteMulti] = counter.FileService.S3.DeleteMulti.Load()
+	next := result.accounted
+	var recorder resource.LocalRecorder
+	var quality resource.QualityFlags
+	for op, value := range current.s3Requests {
+		previous := result.accounted.s3Requests[op]
+		if value < 0 || value < previous {
+			quality |= resource.QualityInvariantFailure
+			continue
+		}
+		recorder.AddS3Request(resource.S3Op(op), uint64(value-previous))
+		next.s3Requests[op] = value
+	}
+	delta := recorder.Snapshot()
+	delta.Quality |= quality
+	if current.s3ReadBytes < 0 || current.s3ReadBytes < result.accounted.s3ReadBytes {
+		delta.Quality |= resource.QualityInvariantFailure
+	} else {
+		delta.Usage.S3ReadBytes = uint64(current.s3ReadBytes - result.accounted.s3ReadBytes)
+		next.s3ReadBytes = current.s3ReadBytes
+	}
+	if current.s3WriteBytes < 0 || current.s3WriteBytes < result.accounted.s3WriteBytes {
+		delta.Quality |= resource.QualityInvariantFailure
+	} else {
+		delta.Usage.S3WriteBytes = uint64(current.s3WriteBytes - result.accounted.s3WriteBytes)
+		next.s3WriteBytes = current.s3WriteBytes
+	}
+	if root.AddLocal(delta) {
+		result.accounted = next
+	}
+}
+
+func (result *QueryResult) captureStage(ses *Session) {
+	result.stagedBlocks = ses.blockIdx
+	result.stagedID = uuid.UUID(ses.GetStmtId()).String()
+	result.stagedTenant = ses.GetTenantInfo().GetTenant()
+}
+
+func (result *QueryResult) Abort(execCtx *ExecCtx) error {
+	if result.published || result.aborted {
+		return nil
+	}
+	ses := execCtx.ses.(*Session)
+	fs := getPu(ses.GetService()).FileService
+	if result.stagedID == "" {
+		result.captureStage(ses)
+	}
+	paths := make([]string, 0, result.stagedBlocks+1)
+	for i := 1; i <= result.stagedBlocks; i++ {
+		paths = append(paths, catalog.BuildQueryResultPath(result.stagedTenant, result.stagedID, i))
+	}
+	paths = append(paths, catalog.BuildQueryResultMetaPath(result.stagedTenant, result.stagedID))
+	cleanupCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(execCtx.reqCtx), returningQueryResultCleanupTimeout,
+	)
+	defer cancel()
+	cleanupCtx = perfcounter.AttachS3RequestKey(cleanupCtx, result.counter())
+	err := fs.Delete(cleanupCtx, paths...)
+	ses.ResetBlockIdx()
+	ses.p = nil
+	ses.curResultSize = 0
+	ses.savedRowCount = 0
+	ses.queryRowCount = 0
+	if err == nil {
+		result.aborted = true
+	}
+	result.publishAccounting(execCtx.reqCtx)
+	return err
 }
 
 func (result *QueryResult) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {

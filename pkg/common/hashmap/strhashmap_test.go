@@ -32,7 +32,7 @@ const (
 	Rows = 10
 )
 
-type float64HashMapShape struct {
+type floatHashMapShape struct {
 	name        string
 	vectorKind  string
 	hasNull     bool
@@ -43,10 +43,111 @@ type float64HashMapShape struct {
 	wantGroups  uint64
 }
 
+type floatHashMapVectorFactory func(
+	t *testing.T,
+	m *mpool.MPool,
+	vectorKind string,
+) (*vector.Vector, *vector.Vector)
+
 func TestHashMapsFloat64SignedZeroContract(t *testing.T) {
 	// Vector representation and NULL policy must not change the signed-zero
 	// equality contract. Exercise both the single-key IntHashMap and a
 	// composite-key StrHashMap through their public iterator API.
+	runFloatHashMapContract(t, makeFloat64HashMapShapeVectors)
+}
+
+func TestHashMapsScaledFloat32Contract(t *testing.T) {
+	// Scaled FLOAT32 keys must use the same normalization in every hashmap
+	// representation and NULL policy.
+	runFloatHashMapContract(t, makeFloat32HashMapShapeVectors)
+}
+
+func TestIntHashMapFloat32NullableOffset(t *testing.T) {
+	for _, hasNull := range []bool{false, true} {
+		shape := floatHashMapShape{
+			name:        "flat-null-offset-unscaled",
+			vectorKind:  "flat-null-offset-unscaled",
+			hasNull:     hasNull,
+			start:       1,
+			count:       2,
+			wantValues:  []uint64{1, 0},
+			wantZValues: []int64{1, 0},
+			wantGroups:  1,
+		}
+		if hasNull {
+			shape.wantValues = []uint64{1, 2}
+			shape.wantZValues = []int64{1, 1}
+			shape.wantGroups = 2
+		}
+		t.Run("has-null-"+strconv.FormatBool(hasNull), func(t *testing.T) {
+			runFloatHashMapShape(t, false, shape, makeFloat32HashMapShapeVectors)
+		})
+	}
+}
+
+func TestIntHashMapFloat32CompositeFloatLast(t *testing.T) {
+	negativeZero := float32(math.Copysign(0, -1))
+	for _, scaleCase := range []struct {
+		name       string
+		scale      int32
+		buildValue float32
+		probeValue float32
+	}{
+		{name: "unscaled", buildValue: 0, probeValue: negativeZero},
+		{name: "scaled", scale: 2, buildValue: 1.234, probeValue: 1.23},
+	} {
+		t.Run(scaleCase.name, func(t *testing.T) {
+			runIntHashMapFloat32CompositeFloatLastCase(
+				t,
+				scaleCase.scale,
+				scaleCase.buildValue,
+				scaleCase.probeValue,
+			)
+		})
+	}
+}
+
+func runIntHashMapFloat32CompositeFloatLastCase(
+	t *testing.T,
+	scale int32,
+	buildValue, probeValue float32,
+) {
+	m := mpool.MustNewZero()
+	floatType := types.T_float32.ToType()
+	floatType.Scale = scale
+	buildFloat := vector.NewVec(floatType)
+	probeFloat := vector.NewVec(floatType)
+	buildDiscriminator := vector.NewVec(types.T_int32.ToType())
+	probeDiscriminator := vector.NewVec(types.T_int32.ToType())
+	vectors := []*vector.Vector{buildFloat, probeFloat, buildDiscriminator, probeDiscriminator}
+	defer func() {
+		for _, vec := range vectors {
+			vec.Free(m)
+		}
+		require.Zero(t, m.Stats().NumCurrBytes.Load())
+	}()
+	require.NoError(t, vector.AppendFixed(buildFloat, buildValue, false, m))
+	require.NoError(t, vector.AppendFixed(probeFloat, probeValue, false, m))
+	require.NoError(t, vector.AppendFixed(buildDiscriminator, int32(7), false, m))
+	require.NoError(t, vector.AppendFixed(probeDiscriminator, int32(7), false, m))
+
+	buildKeys := []*vector.Vector{buildDiscriminator, buildFloat}
+	probeKeys := []*vector.Vector{probeDiscriminator, probeFloat}
+	hashMap, err := NewIntHashMap(false, m)
+	require.NoError(t, err)
+	defer hashMap.Free()
+	itr := hashMap.NewIterator()
+	values, zValues, err := itr.Insert(0, 1, buildKeys)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1}, values)
+	require.Equal(t, []int64{1}, zValues)
+	values, zValues, err = itr.Find(0, 1, probeKeys)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1}, values)
+	require.Equal(t, []int64{1}, zValues)
+}
+
+func runFloatHashMapContract(t *testing.T, makeVectors floatHashMapVectorFactory) {
 	mapKinds := []struct {
 		name      string
 		composite bool
@@ -54,7 +155,7 @@ func TestHashMapsFloat64SignedZeroContract(t *testing.T) {
 		{name: "int"},
 		{name: "composite-str", composite: true},
 	}
-	shapes := []float64HashMapShape{
+	shapes := []floatHashMapShape{
 		{
 			name:        "flat",
 			vectorKind:  "flat",
@@ -130,13 +231,337 @@ func TestHashMapsFloat64SignedZeroContract(t *testing.T) {
 	for _, mapKind := range mapKinds {
 		for _, shape := range shapes {
 			t.Run(mapKind.name+"/"+shape.name, func(t *testing.T) {
-				runFloat64HashMapShape(t, mapKind.composite, shape)
+				runFloatHashMapShape(t, mapKind.composite, shape, makeVectors)
 			})
 		}
 	}
 }
 
-func runFloat64HashMapShape(t *testing.T, composite bool, shape float64HashMapShape) {
+func TestStringHashMapCanonicalizesFullyGroupedKeys(t *testing.T) {
+	mp := mpool.MustNewZero()
+	hashMap, err := NewStrHashMap(false, mp)
+	require.NoError(t, err)
+	require.NoError(t, hashMap.SetGroupingAware())
+	defer hashMap.Free()
+
+	build := vector.NewVec(types.T_int32.ToType())
+	probe := vector.NewVec(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixed(build, int32(111), false, mp))
+	require.NoError(t, vector.AppendFixed(probe, int32(222), false, mp))
+	build.GetGrouping().Add(0)
+	probe.GetGrouping().Add(0)
+	defer build.Free(mp)
+	defer probe.Free(mp)
+
+	iterator := hashMap.NewIterator()
+	values, zValues, err := iterator.Insert(0, 1, []*vector.Vector{build})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1}, values)
+	require.Equal(t, []int64{1}, zValues)
+	values, zValues, err = iterator.Find(0, 1, []*vector.Vector{probe})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1}, values)
+	require.Equal(t, []int64{1}, zValues)
+}
+
+func TestStringHashIteratorAccountedGrowthCapacityBoundary(t *testing.T) {
+	const (
+		oldCapacity = 10_240
+		required    = oldCapacity + 1
+		payloadSize = required - 4
+	)
+	newCapacity, ok := mpool.GrowCapacity(oldCapacity, required)
+	require.True(t, ok)
+	exactLimit := uint64(oldCapacity) + uint64(newCapacity)
+
+	for _, testCase := range []struct {
+		name      string
+		limit     uint64
+		wantError bool
+	}{
+		{name: "exact-old-plus-rounded-new", limit: exactLimit},
+		{name: "one-byte-short", limit: exactLimit - 1, wantError: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			registry, err := mpool.NewAllocationAccountRegistry(1, 2)
+			require.NoError(t, err)
+			account, err := registry.Open(testCase.limit)
+			require.NoError(t, err)
+			allocation, err := NewIteratorAllocation(
+				account,
+				mpool.AllocationOwnerMin,
+				mpool.AllocationSiteMin,
+			)
+			require.NoError(t, err)
+			mp := mpool.MustNewZero()
+			hashMap, err := NewStrHashMapWithAllocations(
+				false,
+				mp,
+				nil,
+				allocation,
+			)
+			require.NoError(t, err)
+			iterator := hashMap.NewIterator().(*strHashmapIterator)
+			iterator.keyBuffer, err = mp.AllocAccounted(
+				oldCapacity,
+				account,
+				mpool.AllocationOwnerMin,
+				mpool.AllocationSiteMin,
+			)
+			require.NoError(t, err)
+			iterator.keyBuffer = iterator.keyBuffer[:0]
+			vec := vector.NewVec(types.T_varchar.ToType())
+			require.NoError(t, vector.AppendBytes(
+				vec,
+				make([]byte, payloadSize),
+				false,
+				mp,
+			))
+
+			err = iterator.prepareHashKeys([]*vector.Vector{vec}, 0, 1)
+			if testCase.wantError {
+				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+				require.Equal(t, oldCapacity, cap(iterator.keyBuffer))
+				require.Equal(t, uint64(oldCapacity), account.Snapshot().Used)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, int(newCapacity), cap(iterator.keyBuffer))
+				require.Equal(t, uint64(newCapacity), account.Snapshot().Used)
+				require.Equal(t, exactLimit, account.Snapshot().Peak)
+			}
+
+			iterator.releaseScratch()
+			hashMap.Free()
+			vec.Free(mp)
+			require.Zero(t, mp.Stats().NumCurrBytes.Load())
+			require.Zero(t, account.Seal().Used)
+			require.Zero(t, registry.LiveAllocationMetadata())
+			_, err = registry.Finalize(account)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestGroupingAwareStringHashMapSeparatesRawSentinelBytes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	hashMap, err := NewStrHashMap(false, mp)
+	require.NoError(t, err)
+	require.NoError(t, hashMap.SetGroupingAware())
+	defer hashMap.Free()
+
+	raw := vector.NewVec(types.T_uint8.ToType())
+	require.NoError(t, vector.AppendFixed(raw, uint8(2), false, mp))
+	grouping := vector.NewRollupConst(types.T_uint8.ToType(), 1, mp)
+	defer raw.Free(mp)
+	defer grouping.Free(mp)
+
+	iterator := hashMap.NewIterator()
+	values, zValues, err := iterator.Insert(0, 1, []*vector.Vector{raw})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1}, values)
+	require.Equal(t, []int64{1}, zValues)
+	values, zValues, err = iterator.Insert(0, 1, []*vector.Vector{grouping})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{2}, values)
+	require.Equal(t, []int64{1}, zValues)
+	require.Equal(t, uint64(2), hashMap.GroupCount())
+}
+
+func TestNullableStringHashMapTreatsGroupingRowsAsSentinel(t *testing.T) {
+	mp := mpool.MustNewZero()
+	hashMap, err := NewStrHashMap(true, mp)
+	require.NoError(t, err)
+	defer hashMap.Free()
+
+	partial := vector.NewVec(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixedList(
+		partial,
+		[]int32{7, 7, 9},
+		nil,
+		mp,
+	))
+	partial.GetGrouping().Add(0)
+	partial.GetGrouping().Add(2)
+	partial.GetNulls().Add(2)
+	defer partial.Free(mp)
+
+	iterator := hashMap.NewIterator()
+	values, zValues, err := iterator.Insert(0, 3, []*vector.Vector{partial})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1, 2, 1}, values)
+	require.Equal(t, []int64{1, 1, 1}, zValues)
+
+	fullGrouping := vector.NewRollupConst(types.T_int32.ToType(), 1, mp)
+	defer fullGrouping.Free(mp)
+	values, zValues, err = iterator.Insert(0, 1, []*vector.Vector{fullGrouping})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1}, values)
+	require.Equal(t, []int64{1}, zValues)
+	require.Equal(t, uint64(2), hashMap.GroupCount())
+}
+
+func TestGroupingAwareStringHashMapConstNullUsesRowwiseGrouping(t *testing.T) {
+	mp := mpool.MustNewZero()
+	for _, hasNull := range []bool{false, true} {
+		hashMap, err := NewStrHashMap(hasNull, mp)
+		require.NoError(t, err)
+		require.NoError(t, hashMap.SetGroupingAware())
+		vec := vector.NewConstNull(types.T_int32.ToType(), 2, mp)
+		vec.GetGrouping().Add(0)
+
+		values, zValues, err := hashMap.NewIterator().Insert(
+			0, 2, []*vector.Vector{vec},
+		)
+		require.NoError(t, err)
+		if hasNull {
+			require.Equal(t, []uint64{1, 2}, values)
+			require.Equal(t, []int64{1, 1}, zValues)
+		} else {
+			require.Equal(t, []uint64{1, 0}, values)
+			require.Equal(t, []int64{1, 0}, zValues)
+		}
+
+		vec.Free(mp)
+		hashMap.Free()
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestStringHashMapProbeGroupingDoesNotMatchRawKey(t *testing.T) {
+	mp := mpool.MustNewZero()
+	hashMap, err := NewStrHashMap(false, mp)
+	require.NoError(t, err)
+	defer hashMap.Free()
+	raw := vector.NewVec(types.T_uint8.ToType())
+	require.NoError(t, vector.AppendFixed(raw, uint8(2), false, mp))
+	grouping := vector.NewRollupConst(types.T_uint8.ToType(), 1, mp)
+	defer raw.Free(mp)
+	defer grouping.Free(mp)
+	iterator := hashMap.NewIterator()
+	_, _, err = iterator.Insert(0, 1, []*vector.Vector{raw})
+	require.NoError(t, err)
+	values, zValues, err := iterator.Find(0, 1, []*vector.Vector{grouping})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{0}, values)
+	require.Equal(t, []int64{0}, zValues)
+}
+
+func TestGroupingAwareStringHashMapRoundTripRetainsKeyGrammar(t *testing.T) {
+	mp := mpool.MustNewZero()
+	original, err := NewStrHashMap(false, mp)
+	require.NoError(t, err)
+	require.NoError(t, original.SetGroupingAware())
+	raw := vector.NewVec(types.T_uint8.ToType())
+	require.NoError(t, vector.AppendFixed(raw, uint8(2), false, mp))
+	defer raw.Free(mp)
+	_, _, err = original.NewIterator().Insert(0, 1, []*vector.Vector{raw})
+	require.NoError(t, err)
+	require.ErrorIs(t, original.SetGroupingAware(), mpool.ErrAllocationAccountInvalid)
+
+	encoded, err := original.MarshalBinary()
+	require.NoError(t, err)
+	original.Free()
+	restored := &StrHashMap{}
+	require.NoError(t, restored.UnmarshalBinary(encoded, mp))
+	values, zValues, err := restored.NewIterator().Find(0, 1, []*vector.Vector{raw})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1}, values)
+	require.Equal(t, []int64{1}, zValues)
+	restored.Free()
+}
+
+func TestStringHashMapWideVarlenaLengthsDoNotCollide(t *testing.T) {
+	mp := mpool.MustNewZero()
+	hashMap, err := NewStrHashMap(false, mp)
+	require.NoError(t, err)
+	defer hashMap.Free()
+
+	large := make([]byte, 1<<16)
+	left := vector.NewVec(types.T_binary.ToType())
+	right := vector.NewVec(types.T_binary.ToType())
+	require.NoError(t, vector.AppendBytesList(left, [][]byte{large, nil}, nil, mp))
+	require.NoError(t, vector.AppendBytesList(right, [][]byte{nil, large}, nil, mp))
+	defer left.Free(mp)
+	defer right.Free(mp)
+
+	values, zValues, err := hashMap.NewIterator().Insert(
+		0, 2, []*vector.Vector{left, right},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1, 2}, values)
+	require.Equal(t, []int64{1, 1}, zValues)
+}
+
+func TestStringHashMapConstAndFlatVarlenaUseSameKey(t *testing.T) {
+	mp := mpool.MustNewZero()
+	for _, buildConst := range []bool{false, true} {
+		hashMap, err := NewStrHashMap(true, mp)
+		require.NoError(t, err)
+		build := vector.NewVec(types.T_varchar.ToType())
+		probe := vector.NewVec(types.T_varchar.ToType())
+		if buildConst {
+			build, err = vector.NewConstBytes(types.T_varchar.ToType(), []byte("abc"), 1, mp)
+			require.NoError(t, err)
+			require.NoError(t, vector.AppendBytes(probe, []byte("abc"), false, mp))
+		} else {
+			require.NoError(t, vector.AppendBytes(build, []byte("abc"), false, mp))
+			probe, err = vector.NewConstBytes(types.T_varchar.ToType(), []byte("abc"), 1, mp)
+			require.NoError(t, err)
+		}
+		iterator := hashMap.NewIterator()
+		_, _, err = iterator.Insert(0, 1, []*vector.Vector{build})
+		require.NoError(t, err)
+		values, zValues, err := iterator.Find(0, 1, []*vector.Vector{probe})
+		require.NoError(t, err)
+		require.Equal(t, []uint64{1}, values)
+		require.Equal(t, []int64{1}, zValues)
+		build.Free(mp)
+		probe.Free(mp)
+		hashMap.Free()
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestHashMapIteratorsRejectMalformedRowShapes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	for _, makeIterator := range []func() (HashMap, Iterator){
+		func() (HashMap, Iterator) {
+			m, err := NewIntHashMap(false, mp)
+			require.NoError(t, err)
+			return m, m.NewIterator()
+		},
+		func() (HashMap, Iterator) {
+			m, err := NewStrHashMap(false, mp)
+			require.NoError(t, err)
+			return m, m.NewIterator()
+		},
+	} {
+		m, iterator := makeIterator()
+		short, err := vector.NewConstFixed(types.T_int32.ToType(), int32(1), 1, mp)
+		require.NoError(t, err)
+		for _, vecs := range [][]*vector.Vector{
+			nil,
+			{nil},
+			{short},
+		} {
+			_, _, err = iterator.Insert(0, 2, vecs)
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+			_, _, err = iterator.Find(1, 1, vecs)
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+		}
+		require.Zero(t, m.GroupCount())
+		short.Free(mp)
+		m.Free()
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+func runFloatHashMapShape(
+	t *testing.T,
+	composite bool,
+	shape floatHashMapShape,
+	makeVectors floatHashMapVectorFactory,
+) {
 	m := mpool.MustNewZero()
 	var (
 		hashMap HashMap
@@ -165,9 +590,9 @@ func runFloat64HashMapShape(t *testing.T, composite bool, shape float64HashMapSh
 		}
 		require.Zero(t, m.Stats().NumCurrBytes.Load())
 	}()
-	buildFloat, probeFloat := makeFloat64HashMapShapeVectors(t, m, shape.vectorKind)
-	build = makeFloat64HashMapKeys(t, m, buildFloat, composite)
-	probe = makeFloat64HashMapKeys(t, m, probeFloat, composite)
+	buildFloat, probeFloat := makeVectors(t, m, shape.vectorKind)
+	build = makeFloatHashMapKeys(t, m, buildFloat, composite)
+	probe = makeFloatHashMapKeys(t, m, probeFloat, composite)
 
 	values, zValues, err := itr.Insert(shape.start, shape.count, build)
 	require.NoError(t, err)
@@ -175,7 +600,8 @@ func runFloat64HashMapShape(t *testing.T, composite bool, shape float64HashMapSh
 	require.Equal(t, shape.wantValues, liveHashMapValues(values, zValues))
 	require.Equal(t, shape.wantGroups, hashMap.GroupCount())
 
-	values, zValues = itr.Find(shape.start, shape.count, probe)
+	values, zValues, err = itr.Find(shape.start, shape.count, probe)
+	require.NoError(t, err)
 	require.Equal(t, shape.wantZValues, zValues)
 	require.Equal(t, shape.wantValues, liveHashMapValues(values, zValues))
 	require.Equal(t, shape.wantGroups, hashMap.GroupCount())
@@ -229,7 +655,56 @@ func makeFloat64HashMapShapeVectors(
 	}
 }
 
-func makeFloat64HashMapKeys(
+func makeFloat32HashMapShapeVectors(
+	t *testing.T,
+	m *mpool.MPool,
+	vectorKind string,
+) (*vector.Vector, *vector.Vector) {
+	floatType := types.T_float32.ToType()
+	floatType.Scale = 2
+	switch vectorKind {
+	case "flat":
+		build := vector.NewVec(floatType)
+		probe := vector.NewVec(floatType)
+		require.NoError(t, vector.AppendFixed(build, float32(123), false, m))
+		require.NoError(t, vector.AppendFixed(build, float32(1.234), false, m))
+		require.NoError(t, vector.AppendFixed(probe, float32(456), false, m))
+		require.NoError(t, vector.AppendFixed(probe, float32(1.23), false, m))
+		return build, probe
+	case "flat-null":
+		build := vector.NewVec(floatType)
+		probe := vector.NewVec(floatType)
+		require.NoError(t, vector.AppendFixed(build, float32(1.234), false, m))
+		require.NoError(t, vector.AppendFixed(build, float32(99), true, m))
+		require.NoError(t, vector.AppendFixed(probe, float32(1.23), false, m))
+		require.NoError(t, vector.AppendFixed(probe, float32(77), true, m))
+		return build, probe
+	case "flat-null-offset-unscaled":
+		floatType.Scale = 0
+		build := vector.NewVec(floatType)
+		probe := vector.NewVec(floatType)
+		require.NoError(t, vector.AppendFixed(build, float32(123), false, m))
+		require.NoError(t, vector.AppendFixed(build, float32(1.25), false, m))
+		require.NoError(t, vector.AppendFixed(build, float32(99), true, m))
+		require.NoError(t, vector.AppendFixed(probe, float32(456), false, m))
+		require.NoError(t, vector.AppendFixed(probe, float32(1.25), false, m))
+		require.NoError(t, vector.AppendFixed(probe, float32(77), true, m))
+		return build, probe
+	case "const":
+		build, err := vector.NewConstFixed(floatType, float32(1.234), 2, m)
+		require.NoError(t, err)
+		probe, err := vector.NewConstFixed(floatType, float32(1.23), 2, m)
+		require.NoError(t, err)
+		return build, probe
+	case "const-null":
+		return vector.NewConstNull(floatType, 2, m), vector.NewConstNull(floatType, 2, m)
+	default:
+		t.Fatalf("unknown float32 hashmap vector kind %q", vectorKind)
+		return nil, nil
+	}
+}
+
+func makeFloatHashMapKeys(
 	t *testing.T,
 	m *mpool.MPool,
 	floatVec *vector.Vector,
@@ -239,16 +714,18 @@ func makeFloat64HashMapKeys(
 		return []*vector.Vector{floatVec}
 	}
 
-	intType := types.T_int8.ToType()
+	// FLOAT32 plus INT64 is wider than eight bytes, matching production's
+	// composite StrHashMap selection.
+	intType := types.T_int64.ToType()
 	var discriminator *vector.Vector
 	if floatVec.IsConst() {
 		var err error
-		discriminator, err = vector.NewConstFixed(intType, int8(7), floatVec.Length(), m)
+		discriminator, err = vector.NewConstFixed(intType, int64(7), floatVec.Length(), m)
 		require.NoError(t, err)
 	} else {
 		discriminator = vector.NewVec(intType)
 		for row := 0; row < floatVec.Length(); row++ {
-			require.NoError(t, vector.AppendFixed(discriminator, int8(7), false, m))
+			require.NoError(t, vector.AppendFixed(discriminator, int64(7), false, m))
 		}
 	}
 	return []*vector.Vector{floatVec, discriminator}
@@ -298,7 +775,8 @@ func TestIterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs)
+		vs, _, err = itr.Find(0, Rows, vecs)
+		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -323,7 +801,8 @@ func TestIterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs)
+		vs, _, err = itr.Find(0, Rows, vecs)
+		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -348,7 +827,8 @@ func TestIterator(t *testing.T) {
 		vs, _, err := itr.Insert(0, Rows, vecs)
 		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
-		vs, _ = itr.Find(0, Rows, vecs)
+		vs, _, err = itr.Find(0, Rows, vecs)
+		require.NoError(t, err)
 		require.Equal(t, []uint64{1, 2, 1, 3, 1, 4, 1, 5, 1, 6}, vs[:Rows])
 		for _, vec := range vecs {
 			vec.Free(m)
@@ -679,7 +1159,8 @@ func TestStrHashMap_MarshalUnmarshal(t *testing.T) {
 		require.Equal(t, expectedGroupCount, unmarshaledMp.GroupCount())
 		require.Equal(t, mp.HasNull(), unmarshaledMp.HasNull())
 
-		foundVs, _ := unmarshaledMp.NewIterator().Find(0, rowCount, vecs)
+		foundVs, _, err := unmarshaledMp.NewIterator().Find(0, rowCount, vecs)
+		require.NoError(t, err)
 		require.Equal(t, expectedMappedValue, foundVs)
 	})
 
@@ -716,7 +1197,8 @@ func TestStrHashMap_MarshalUnmarshal(t *testing.T) {
 		require.Equal(t, expectedGroupCount, unmarshaledMp.GroupCount())
 		require.Equal(t, mp.HasNull(), unmarshaledMp.HasNull())
 
-		foundVs, foundZvs := unmarshaledMp.NewIterator().Find(0, numElements, vecs)
+		foundVs, foundZvs, err := unmarshaledMp.NewIterator().Find(0, numElements, vecs)
+		require.NoError(t, err)
 		for i := 0; i < numElements; i++ {
 			require.Equal(t, originalVs[i], foundVs[i], "Mismatch at index %d for mapped value", i)
 			require.Equal(t, originalZvs[i], foundZvs[i], "Mismatch at index %d for zValue", i)

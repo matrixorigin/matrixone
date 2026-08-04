@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -172,7 +173,29 @@ func TestFilterTargetRowsDedupsAliasesAcrossBatchesWithAccountedHashMap(t *testi
 		DedupByTargetRowID: true,
 		DeleteCols:         []int{0, 2, 1},
 	}
-	seen, err := hashmap.NewStrHashMap(false, mp)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := hashtable.NewAllocationAccountSelection(
+		account,
+		multiUpdateAllocationOwner,
+		multiUpdateAllocationSiteHashCell,
+		multiUpdateAllocationSiteHashDescriptor,
+	)
+	require.NoError(t, err)
+	iteratorAllocation, err := hashmap.NewIteratorAllocation(
+		account,
+		multiUpdateAllocationOwner,
+		multiUpdateAllocationSiteHashIterator,
+	)
+	require.NoError(t, err)
+	seen, err := hashmap.NewStrHashMapWithAllocations(
+		false,
+		mp,
+		selection,
+		iteratorAllocation,
+	)
 	require.NoError(t, err)
 	defer seen.Free()
 

@@ -478,6 +478,7 @@ func (ctx *MultiUpdateCtx) clone() *MultiUpdateCtx {
 		PartitionCols:      ctx.PartitionCols,
 		SkipInsertOnNullPk: ctx.SkipInsertOnNullPk,
 		InsertPkColIdx:     ctx.InsertPkColIdx,
+		IgnoreAffectedRows: ctx.IgnoreAffectedRows,
 		DedupByTargetRowID: ctx.DedupByTargetRowID,
 		TargetUpdateCtxIdx: ctx.TargetUpdateCtxIdx,
 		TargetTableID:      ctx.TargetTableID,

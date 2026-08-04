@@ -127,3 +127,29 @@ func (t testBytes) Retain() {
 func (t testBytes) Slice(length int) fscache.Data {
 	return t[:length]
 }
+
+type sizedTestData struct {
+	bytesCalls int
+}
+
+func (s *sizedTestData) Bytes() []byte {
+	s.bytesCalls++
+	return []byte("foo")
+}
+
+func (*sizedTestData) Size() int64              { return 3 }
+func (*sizedTestData) Release()                 {}
+func (*sizedTestData) Retain()                  {}
+func (s *sizedTestData) Slice(int) fscache.Data { return s }
+
+func TestDataCacheSetUsesSizeWithoutExposingBytes(t *testing.T) {
+	cache := NewDataCache(fscache.ConstCapacity(1024), nil, nil, nil)
+	data := new(sizedTestData)
+	err := cache.Set(context.Background(), fscache.CacheKey{Path: "foo", Sz: 3}, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.bytesCalls != 0 {
+		t.Fatalf("Bytes called %d times", data.bytesCalls)
+	}
+}

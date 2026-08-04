@@ -15,6 +15,7 @@
 package mpool
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -23,8 +24,9 @@ import (
 
 var profilingEnabled atomic.Bool
 
-// EnableProfiling turns on per-allocation stack tracking for off-heap mpool
-// allocations. Tracked allocations appear in the malloc profiler output.
+// EnableProfiling turns on tracking for off-heap mpool allocations. Ordinary
+// allocations are grouped by sampled call stack; accounted allocations are
+// grouped by their explicit owner/site provenance.
 func EnableProfiling() { profilingEnabled.Store(true) }
 
 // DisableProfiling turns off per-allocation stack tracking.
@@ -42,6 +44,11 @@ type profileShard struct {
 }
 
 var globalProfileShards [numProfileShards]profileShard
+
+// Accounted allocations already carry stable, bounded provenance. Reusing one
+// synthetic sample per owner/site avoids collecting and hashing the same
+// runtime stack for every vector growth in a hash build.
+var accountedProfileSamples [AllocationOwnerMax + 1][256]atomic.Pointer[malloc.HeapSampleValues]
 
 func init() {
 	for i := range globalProfileShards {
@@ -96,6 +103,45 @@ func profileRecordFree(ptr uintptr, sz int64) {
 		values.Bytes.Inuse.Add(-sz)
 		values.Objects.Inuse.Add(-1)
 	}
+}
+
+func accountedProfileSample(
+	owner AllocationOwner,
+	site AllocationSite,
+) *malloc.HeapSampleValues {
+	slot := &accountedProfileSamples[owner][site]
+	if values := slot.Load(); values != nil {
+		return values
+	}
+	values := malloc.GlobalProfiler().SampleNamed(fmt.Sprintf(
+		"| mpool accounted owner=%d site=%d |",
+		owner,
+		site,
+	))
+	if slot.CompareAndSwap(nil, values) {
+		return values
+	}
+	return slot.Load()
+}
+
+func profileRecordAccountedAlloc(lease allocationLease, sz int64) {
+	if !lease.profiled {
+		return
+	}
+	values := accountedProfileSample(lease.owner, lease.site)
+	values.Bytes.Allocated.Add(uint64(sz))
+	values.Objects.Allocated.Add(1)
+	values.Bytes.Inuse.Add(sz)
+	values.Objects.Inuse.Add(1)
+}
+
+func profileRecordAccountedFree(lease allocationLease, sz int64) {
+	if !lease.profiled {
+		return
+	}
+	values := accountedProfileSample(lease.owner, lease.site)
+	values.Bytes.Inuse.Add(-sz)
+	values.Objects.Inuse.Add(-1)
 }
 
 func profileRecordRealloc(skip int, oldPtr, newPtr uintptr, oldSz, newSz int64) {

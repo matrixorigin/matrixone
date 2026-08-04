@@ -17,8 +17,11 @@ package frontend
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -390,6 +393,50 @@ func TestPrepareStmt_Close(t *testing.T) {
 
 	// Should not panic
 	ps.Close()
+}
+
+func TestAppendResultBatchEndsStatementAllocationOwnership(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		1,
+		1,
+		2,
+		3,
+		4,
+	)
+	require.NoError(t, err)
+
+	source := batch.NewOffHeapWithSize(1)
+	source.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	require.NoError(t, source.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, mp))
+	source.SetRowCount(1)
+
+	ses := &feSessionImpl{pool: mp}
+	require.NoError(t, ses.AppendResultBatch(source))
+	require.Len(t, ses.resultBatches, 1)
+	require.Nil(t, ses.resultBatches[0].AllocationAccountSelection())
+	require.Nil(t, ses.resultBatches[0].Vecs[0].AllocationAccountSelection())
+
+	source.Clean(mp)
+	snapshot := account.Seal()
+	require.Zero(t, snapshot.Used)
+	require.Zero(t, registry.LiveAllocationMetadata())
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		int64(42),
+		vector.GetFixedAtNoTypeCheck[int64](ses.resultBatches[0].Vecs[0], 0),
+	)
+
+	ses.ClearResultBatches()
+	require.Zero(t, mp.CurrNB())
 }
 
 func BenchmarkSessionAllocator(b *testing.B) {

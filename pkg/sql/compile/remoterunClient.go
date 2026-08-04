@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -69,7 +70,13 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	// encode structures which need to send.
 	var scopeEncodeData, processEncodeData []byte
 	var withoutOutput, folded bool
-	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingData(c.sql, s, c.proc)
+	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingData(
+		c.sql,
+		s,
+		c.proc,
+		c.remoteFragmentCounts,
+		c.remoteExecutionID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -115,6 +122,35 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 //
 // it returns true if the pipeline has only the root operator capable of sending data to other outer pipeline.
 func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
+	offender := findPipelineExternalLocalReceiver(s)
+	if offender == nil {
+		return true
+	}
+
+	switch offender.OpType() {
+	case vm.Dispatch:
+		s.Proc.Infof(
+			s.Proc.Ctx,
+			"txn id : %s, the pipeline %p cannot execute remotely because its dispatch operator targets another local pipeline tree.",
+			s.Proc.GetTxnOperator().Txn().ID, s)
+	case vm.Connector:
+		s.Proc.Infof(
+			s.Proc.Ctx,
+			"txn id : %s, the pipeline %p cannot execute remotely because its connector targets another local pipeline tree.",
+			s.Proc.GetTxnOperator().Txn().ID, s)
+	}
+	return false
+}
+
+// findPipelineExternalLocalReceiver returns the first non-root output operator
+// whose in-process receiver is not owned by the scope tree. The root output is
+// intentionally excluded: RemoteRun retains it on the caller and forwards the
+// remotely executed child tree back through that output.
+func findPipelineExternalLocalReceiver(s *Scope) vm.Operator {
+	if s == nil {
+		return nil
+	}
+
 	var regs = make(map[*process.WaitRegister]struct{})
 	var toScan []*Scope
 	// record which mergeReceivers this scope tree holds.
@@ -123,13 +159,18 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 		for len(toScan) > 0 {
 			node := toScan[len(toScan)-1]
 			toScan = toScan[:len(toScan)-1]
+			if node == nil {
+				continue
+			}
 
 			if len(node.PreScopes) > 0 {
 				toScan = append(toScan, node.PreScopes...)
 			}
 
-			for i := range node.Proc.Reg.MergeReceivers {
-				regs[node.Proc.Reg.MergeReceivers[i]] = struct{}{}
+			if node.Proc != nil {
+				for i := range node.Proc.Reg.MergeReceivers {
+					regs[node.Proc.Reg.MergeReceivers[i]] = struct{}{}
+				}
 			}
 		}
 	}
@@ -143,21 +184,22 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 		for len(toScan) > 0 {
 			node := toScan[len(toScan)-1]
 			toScan = toScan[:len(toScan)-1]
+			if node == nil {
+				continue
+			}
 
 			if len(node.PreScopes) > 0 {
 				toScan = append(toScan, node.PreScopes...)
+			}
+			if node.RootOp == nil {
+				continue
 			}
 
 			if node.RootOp.OpType() == vm.Dispatch {
 				t := node.RootOp.(*dispatch.Dispatch)
 				for i := range t.LocalRegs {
 					if _, ok := regs[t.LocalRegs[i]]; !ok {
-						s.Proc.Infof(
-							s.Proc.Ctx,
-							"txn id : %s, the pipeline %p cannot execute remotely because its dispatch operator targets another local pipeline tree.",
-							s.Proc.GetTxnOperator().Txn().ID, s)
-
-						return false
+						return node.RootOp
 					}
 				}
 				continue
@@ -165,22 +207,23 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 			if node.RootOp.OpType() == vm.Connector {
 				t := node.RootOp.(*connector.Connector)
 				if _, ok := regs[t.Reg]; !ok {
-					s.Proc.Infof(
-						s.Proc.Ctx,
-						"txn id : %s, the pipeline %p cannot execute remotely because its connector targets another local pipeline tree.",
-						s.Proc.GetTxnOperator().Txn().ID, s)
-
-					return false
+					return node.RootOp
 				}
 				continue
 			}
 		}
 	}
 
-	return true
+	return nil
 }
 
-func prepareRemoteRunSendingData(sqlStr string, s *Scope, proc *process.Process) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
+func prepareRemoteRunSendingData(
+	sqlStr string,
+	s *Scope,
+	proc *process.Process,
+	remoteFragmentCounts map[string]uint32,
+	remoteExecutionID uuid.UUID,
+) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
 	encodedScope, withoutOutput := getScopeForRemoteRunEncoding(s)
 	encodedScope, folded, err = foldVarExprsInRemoteRunScope(encodedScope, proc)
 	if err != nil {
@@ -193,7 +236,12 @@ func prepareRemoteRunSendingData(sqlStr string, s *Scope, proc *process.Process)
 	}
 
 	// Encode the Process related information.
-	if processData, err = encodeProcessInfo(s.Proc, sqlStr); err != nil {
+	if processData, err = encodeProcessInfo(
+		s.Proc,
+		sqlStr,
+		remoteFragmentCounts,
+		remoteExecutionID,
+	); err != nil {
 		return nil, false, nil, false, err
 	}
 
@@ -805,8 +853,11 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 		sender.anal.appendRemoteResource(
 			envelope.Delta,
 			envelope.Memory,
+			envelope.Allocation,
 			envelope.MissingFragmentCount,
 			envelope.MissingMemoryDomainCount,
+			envelope.PendingAllocationGroups,
+			envelope.CompletedAllocationGroups,
 		)
 	}
 	sender.terminalSeen = true

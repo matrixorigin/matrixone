@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"maps"
 	"time"
 	"unsafe"
 
@@ -70,7 +71,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
@@ -171,10 +171,16 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 func encodeProcessInfo(
 	proc *process.Process,
 	sql string,
+	remoteFragmentCounts map[string]uint32,
+	remoteExecutionID uuid.UUID,
 ) ([]byte, error) {
 	v, err := proc.BuildProcessInfo(sql)
 	if err != nil {
 		return nil, err
+	}
+	v.RemoteFragmentCounts = maps.Clone(remoteFragmentCounts)
+	if remoteExecutionID != uuid.Nil {
+		v.RemoteExecutionId = append([]byte(nil), remoteExecutionID[:]...)
 	}
 	return v.Marshal()
 }
@@ -524,6 +530,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			PkTyp:              t.PkTyp,
 			BuildIdx:           int32(t.BuildIdx),
 			IfInsertFromUnique: t.IfInsertFromUnique,
+			RuntimeFilterSpec:  t.RuntimeFilterSpec,
 		}
 	case *preinsert.PreInsert:
 		in.PreInsert = &pipeline.PreInsert{
@@ -747,13 +754,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *mongoscan.MongoScan:
 		in.MongodbScan = t.Scan
 		in.ProjectList = t.ProjectList
-	case *source.Source:
-		in.StreamScan = &pipeline.StreamScan{
-			TblDef: t.TblDef,
-			Limit:  t.Limit,
-			Offset: t.Offset,
-		}
-		in.ProjectList = t.ProjectList
 	case *table_scan.TableScan:
 		in.TableScan = &pipeline.TableScan{}
 		in.TableScan.Types = t.Types
@@ -875,6 +875,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 				TableDef:              muCtx.TableDef,
 				SkipInsertOnNullPk:    muCtx.SkipInsertOnNullPk,
 				InsertPkColIdx:        int32(muCtx.InsertPkColIdx),
+				IgnoreAffectedRows:    muCtx.IgnoreAffectedRows,
 				CountDeleteAffectRows: t.CountDeleteAffectRows,
 				DedupByTargetRowId:    muCtx.DedupByTargetRowID,
 				TargetUpdateCtxIdx:    int32(muCtx.TargetUpdateCtxIdx),
@@ -1031,6 +1032,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.PkTyp = t.PkTyp
 		arg.BuildIdx = int(t.BuildIdx)
 		arg.IfInsertFromUnique = t.IfInsertFromUnique
+		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
 		op = arg
 	case vm.Shuffle:
 		t := opr.GetShuffle()
@@ -1260,14 +1262,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.MongoScan:
 		op = mongoscan.NewArgument().WithScan(opr.GetMongodbScan())
 		op.(*mongoscan.MongoScan).ProjectList = opr.ProjectList
-	case vm.Source:
-		t := opr.GetStreamScan()
-		arg := source.NewArgument()
-		arg.TblDef = t.TblDef
-		arg.Limit = t.Limit
-		arg.Offset = t.Offset
-		arg.ProjectList = opr.ProjectList
-		op = arg
 	case vm.TableScan:
 		ts := table_scan.NewArgument().WithTypes(opr.TableScan.Types)
 		ts.FilterExprs = opr.TableScan.FilterExprs
@@ -1392,6 +1386,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 				TableDef:           muCtx.TableDef,
 				SkipInsertOnNullPk: muCtx.SkipInsertOnNullPk,
 				InsertPkColIdx:     int(muCtx.InsertPkColIdx),
+				IgnoreAffectedRows: muCtx.IgnoreAffectedRows,
 				DedupByTargetRowID: muCtx.DedupByTargetRowId,
 				TargetUpdateCtxIdx: int(muCtx.TargetUpdateCtxIdx),
 				TargetTableID:      muCtx.TableDef.TblId,
