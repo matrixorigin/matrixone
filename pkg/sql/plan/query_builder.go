@@ -4695,6 +4695,19 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	if resultLen, notCacheable, err = builder.bindProjection(ctx, projectionBinder, selectList, notCacheable); err != nil {
 		return
 	}
+	var viewRawProjects []*plan.Expr
+	if ctx.restoreViewMySQLSpecialTypes && astOrderBy != nil && !ctx.isDistinct {
+		for i := 0; i < resultLen; i++ {
+			rawExpr, ok := mysqlSpecialTypeSourceExpr(ctx.projects[i])
+			if !ok {
+				continue
+			}
+			if viewRawProjects == nil {
+				viewRawProjects = make([]*plan.Expr, resultLen)
+			}
+			viewRawProjects[i] = DeepCopyExpr(rawExpr)
+		}
+	}
 
 	// bind TIME WINDOW
 	var fillType plan.Node_FillType
@@ -4718,6 +4731,20 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	if astOrderBy != nil {
 		if boundOrderBys, err = builder.bindOrderBy(ctx, astOrderBy, projectionBinder, selectList); err != nil {
 			return
+		}
+	}
+	if len(boundOrderBys) > 0 && len(viewRawProjects) > 0 {
+		ctx.mysqlSpecialRawProjectPositions = make(map[int32]int32, len(viewRawProjects))
+		for visiblePos, rawExpr := range viewRawProjects {
+			if rawExpr == nil {
+				continue
+			}
+			rawPos, appendErr := appendOrderByProjectExpr(ctx, rawExpr)
+			if appendErr != nil {
+				err = appendErr
+				return
+			}
+			ctx.mysqlSpecialRawProjectPositions[int32(visiblePos)] = rawPos
 		}
 	}
 
@@ -8912,6 +8939,29 @@ func (builder *QueryBuilder) appendMySQLSpecialTypeBoundary(
 ) (int32, error) {
 	visibleProjects := min(len(ctx.headings), len(ctx.projects), len(ctx.results))
 	rootNode := builder.qry.Nodes[nodeID]
+	if rootNode.NodeType == plan.Node_PROJECT && len(ctx.mysqlSpecialRawProjectPositions) > 0 {
+		allSpecialTypesRestored := true
+		for i := 0; i < visibleProjects; i++ {
+			targetType := ctx.mysqlSpecialColumnTypeForProject(int32(i))
+			if targetType == nil && i < len(targetTypes) && isEnumOrSetPlanType(targetTypes[i]) {
+				targetType = targetTypes[i]
+			}
+			if targetType == nil {
+				continue
+			}
+			rawPos, ok := ctx.mysqlSpecialRawProjectPositions[int32(i)]
+			if !ok {
+				allSpecialTypesRestored = false
+				continue
+			}
+			rawExpr := GetColExpr(*targetType, ctx.projectTag, rawPos)
+			rootNode.ProjectList[i] = rawExpr
+			ctx.results[i] = rawExpr
+		}
+		if allSpecialTypesRestored {
+			return nodeID, nil
+		}
+	}
 	canExposeRaw := rootNode.NodeType == plan.Node_PROJECT &&
 		len(rootNode.BindingTags) == 1 && rootNode.BindingTags[0] == ctx.projectTag && ctx.resultTag == 0
 	if canExposeRaw {
@@ -9600,6 +9650,10 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		tag := subCtx.rootTag()
 		headings := subCtx.headings
 		projects := subCtx.projects
+		if subCtx.restoreViewMySQLSpecialTypes && len(subCtx.mysqlSpecialRawProjectPositions) > 0 &&
+			len(subCtx.results) >= len(headings) {
+			projects = subCtx.results
+		}
 
 		if len(alias.Cols) > len(headings) {
 			return moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(headings), len(alias.Cols))

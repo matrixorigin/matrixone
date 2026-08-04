@@ -391,10 +391,13 @@ func TestBuildCreateViewTracksMySQLSpecialColumnTypeProvenance(t *testing.T) {
 	}{
 		{name: "direct", selectSQL: "select priority, flags from nation", wantSpecialType: true},
 		{name: "order by", selectSQL: "select priority, flags from nation order by priority, flags", wantSpecialType: true},
+		{name: "order by null", selectSQL: "select priority, flags from nation order by null", wantSpecialType: true},
 		{name: "group by", selectSQL: "select priority, flags from nation group by priority, flags", wantSpecialType: true},
 		{name: "distinct", selectSQL: "select distinct priority, flags from nation", wantSpecialType: true},
 		{name: "derived table", selectSQL: "select priority, flags from (select priority, flags from nation) d", wantSpecialType: true},
 		{name: "cte", selectSQL: "with d as (select priority, flags from nation) select priority, flags from d", wantSpecialType: true},
+		{name: "derived table order by", selectSQL: "select priority, flags from (select priority, flags from nation) d order by flags", wantSpecialType: true},
+		{name: "cte order by", selectSQL: "with d as (select priority, flags from nation) select priority, flags from d order by flags", wantSpecialType: true},
 		{name: "union all", selectSQL: "select priority, flags from nation union all select priority, flags from nation"},
 		{name: "string expressions", selectSQL: "select concat(priority, ''), concat(flags, '') from nation"},
 	}
@@ -577,6 +580,9 @@ func TestViewRebindPreservesTransparentMySQLSpecialColumnTypes(t *testing.T) {
 	}{
 		{name: "derived table", selectSQL: "select priority, flags from (select priority, flags from nation) d", wantSpecialType: true},
 		{name: "cte", selectSQL: "with d as (select priority, flags from nation) select priority, flags from d", wantSpecialType: true},
+		{name: "order by", selectSQL: "select priority, flags from nation order by flags", wantSpecialType: true},
+		{name: "derived table order by", selectSQL: "select priority, flags from (select priority, flags from nation) d order by flags", wantSpecialType: true},
+		{name: "cte order by", selectSQL: "with d as (select priority, flags from nation) select priority, flags from d order by flags", wantSpecialType: true},
 		{name: "union all", selectSQL: "select priority, flags from nation union all select priority, flags from nation"},
 	}
 
@@ -612,10 +618,29 @@ func TestViewRebindPreservesTransparentMySQLSpecialColumnTypes(t *testing.T) {
 				require.True(t, isSetPlanType(&cols[1].Typ))
 				for _, node := range ctasPlan.GetQuery().GetNodes() {
 					for _, project := range node.GetProjectList() {
-						if fn := project.GetF(); fn != nil {
-							require.NotEqual(t, moSetCastValueToIndexFun, fn.GetFunc().GetObjName(),
-								"transparent View CTAS must not round-trip a SET bitmap")
-						}
+						walkPlanExpr(project, func(expr *plan.Expr) {
+							if fn := expr.GetF(); fn != nil {
+								require.NotEqual(t, moSetCastValueToIndexFun, fn.GetFunc().GetObjName(),
+									"transparent View CTAS must not round-trip a SET bitmap")
+							}
+						})
+					}
+				}
+
+				stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
+					"select cast(flags as unsigned) from v", 1)
+				require.NoError(t, err)
+				castPlan, err := BuildPlan(ctx, stmt, false)
+				stmt.Free()
+				require.NoError(t, err)
+				for _, node := range castPlan.GetQuery().GetNodes() {
+					for _, project := range node.GetProjectList() {
+						walkPlanExpr(project, func(expr *plan.Expr) {
+							if fn := expr.GetF(); fn != nil {
+								require.NotEqual(t, moSetCastIndexToValueFun, fn.GetFunc().GetObjName(),
+									"numeric View consumer must receive the raw SET bitmap")
+							}
+						})
 					}
 				}
 			} else {

@@ -412,6 +412,10 @@ type BindContext struct {
 	// View. It lets transparent derived/CTE query boundaries expose their raw
 	// ENUM/SET values without changing ordinary query-boundary behavior.
 	restoreViewMySQLSpecialTypes bool
+	// mysqlSpecialRawProjectPositions maps a visible output position to a hidden
+	// raw ENUM/SET sidecar in the query block's PROJECT. It is populated only
+	// for row-preserving View ORDER BY boundaries.
+	mysqlSpecialRawProjectPositions map[int32]int32
 
 	//cteByName saves all cte definitions in the current stmt
 	cteByName map[string]*CTERef

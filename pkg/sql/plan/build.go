@@ -41,7 +41,7 @@ func bindAndOptimizeSelectQueryWithValidator(
 	validate func(*Query) error,
 ) (*Plan, error) {
 	return bindAndOptimizeSelectQueryWithValidatorAndCapture(
-		stmtType, ctx, stmt, isPrepareStmt, skipStats, validate, nil,
+		stmtType, ctx, stmt, isPrepareStmt, skipStats, validate, nil, false,
 	)
 }
 
@@ -53,6 +53,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	skipStats bool,
 	validate func(*Query) error,
 	capture func(*BindContext),
+	restoreViewMySQLSpecialTypes bool,
 ) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -61,6 +62,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
 	bindCtx := NewBindContext(builder, nil)
+	bindCtx.restoreViewMySQLSpecialTypes = restoreViewMySQLSpecialTypes
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}

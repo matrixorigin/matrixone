@@ -163,13 +163,13 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 	switch s := stmt.Select.(type) {
 	case *tree.ParenSelect:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
-			plan.Query_SELECT, ctx, s.Select, false, true, validate, captureColumnTypes)
+			plan.Query_SELECT, ctx, s.Select, false, true, validate, captureColumnTypes, true)
 		if err != nil {
 			return nil, err
 		}
 	default:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
-			plan.Query_SELECT, ctx, stmt, false, true, validate, captureColumnTypes)
+			plan.Query_SELECT, ctx, stmt, false, true, validate, captureColumnTypes, true)
 		if err != nil {
 			return nil, err
 		}
