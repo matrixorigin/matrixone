@@ -3388,6 +3388,10 @@ prepareable_stmt:
 |   drop_stmt
 |   show_stmt
 |   update_stmt
+|   SET var_assignment
+    {
+        $$ = &tree.SetVar{Assignments: []*tree.VarAssignmentExpr{$2}}
+    }
 |   perform_stmt
 |   select_stmt
     {
