@@ -1532,7 +1532,7 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		return MakePlan2BoolConstExprWithType(num), err
 
 	case types.T_bit:
-		canInsert, num, err := util.SetInsertValueBit(proc, numVal, colType)
+		canInsert, num, err := util.SetInsertValueBit(proc, numVal, colType, isIgnore)
 		if err != nil || !canInsert {
 			return nil, err
 		}
@@ -1743,6 +1743,16 @@ func buildValueScan(
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
 			binder.builder = builder
 			for _, r := range slt.Rows {
+				if nv, ok := r[i].(*tree.NumVal); ok && builder.isInsertIgnore {
+					expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(builder.GetContext(), nv, col.Typ)
+					if err != nil {
+						return err
+					}
+					if handled {
+						rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{Expr: expr})
+						continue
+					}
+				}
 				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
 					if err != nil {
