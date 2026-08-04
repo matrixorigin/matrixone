@@ -15,8 +15,11 @@
 package frontend
 
 import (
+	"errors"
 	"math"
 	"sync"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -57,7 +60,11 @@ func recordLastAffectedRows(ses *Session, execCtx *ExecCtx) {
 	var n int64
 	switch execCtx.stmt.StmtKind().OutputType() {
 	case tree.OUTPUT_RESULT_ROW:
-		n = -1
+		if execCtx.stmt.StmtKind().RespType() == tree.RESP_DEFERRED_RESULT_ROW && execCtx.runResult != nil {
+			n = int64(execCtx.runResult.AffectRows)
+		} else {
+			n = -1
+		}
 	case tree.OUTPUT_STATUS:
 		if execCtx.runResult != nil {
 			n = int64(execCtx.runResult.AffectRows)
@@ -127,6 +134,8 @@ func (resper *MysqlResp) respClient(ses *Session,
 		err = resper.respPrebuildResultRow(ses, execCtx)
 	case tree.RESP_MIXED_RESULT_ROW:
 		err = resper.respMixedResultRow(ses, execCtx)
+	case tree.RESP_DEFERRED_RESULT_ROW:
+		err = resper.respDeferredResultRow(ses, execCtx)
 	case tree.RESP_NOTHING:
 	case tree.RESP_BY_SITUATION:
 		err = resper.respBySituation(ses, execCtx)
@@ -205,6 +214,13 @@ func (resper *MysqlResp) RespPreMeta(execCtx *ExecCtx, meta any) (err error) {
 }
 
 func (resper *MysqlResp) RespResult(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) (err error) {
+	// Output.Reset cannot propagate errors from its terminal nil callback. PERFORM
+	// finalizes saved-result metadata explicitly after runner.Run succeeds, where
+	// the error can still prevent the OK response.
+	if isPerformStatement(execCtx.stmt) && bat == nil {
+		return nil
+	}
+
 	if resper.binWr != nil {
 		//write batch into fileservice
 		err = resper.binWr.Write(execCtx, crs, bat)
@@ -213,7 +229,13 @@ func (resper *MysqlResp) RespResult(execCtx *ExecCtx, crs *perfcounter.CounterSe
 		}
 	}
 
-	//!!!NOTE: after that above
+	return resper.writeClientBatch(execCtx, crs, bat)
+}
+
+func (resper *MysqlResp) writeClientBatch(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) (err error) {
+	if isPerformStatement(execCtx.stmt) {
+		return nil
+	}
 	if bat == nil {
 		return nil
 	}
@@ -227,6 +249,53 @@ func (resper *MysqlResp) RespResult(execCtx *ExecCtx, crs *perfcounter.CounterSe
 		err = resper.mysqlRrWr.Write(execCtx, crs, bat)
 	}
 	return
+}
+
+func (resper *MysqlResp) respDeferredResultRow(ses *Session, execCtx *ExecCtx) error {
+	state := execCtx.returning
+	if state == nil || state.spool == nil {
+		return moerr.NewInternalError(execCtx.reqCtx, "DML RETURNING response state is missing")
+	}
+	if state.stagedSaver != nil {
+		if err := state.stagedSaver.Publish(execCtx); err != nil {
+			abortErr := state.stagedSaver.Abort(execCtx)
+			ses.Warn(execCtx.reqCtx, "failed to publish saved DML RETURNING result", zap.Error(errors.Join(err, abortErr)))
+		}
+	}
+	if err := resper.respColumnDefsWithoutFlush(ses, execCtx, state.columns); err != nil {
+		return err
+	}
+	if err := state.spool.Replay(execCtx.reqCtx, func(bat *batch.Batch, crs *perfcounter.CounterSet) error {
+		return resper.writeClientBatch(execCtx, crs, bat)
+	}); err != nil {
+		return err
+	}
+	status := checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), execCtx.isLastStmt)
+	if writer, ok := resper.mysqlRrWr.(interface {
+		WriteEOFOrOKWithAffectedRows(uint64, uint16, uint16) error
+	}); ok {
+		return writer.WriteEOFOrOKWithAffectedRows(state.affectedRows, 0, status)
+	}
+	return resper.mysqlRrWr.WriteEOFOrOK(0, status)
+}
+
+type queryResultFinalizer interface {
+	finalizeQueryResult(*ExecCtx) error
+}
+
+func (resper *MysqlResp) finalizeQueryResult(execCtx *ExecCtx) error {
+	if resper.binWr == nil {
+		return nil
+	}
+	return resper.binWr.Write(execCtx, nil, nil)
+}
+
+func finalizePerformQueryResult(execCtx *ExecCtx) error {
+	finalizer, ok := execCtx.resper.(queryResultFinalizer)
+	if !ok {
+		return nil
+	}
+	return finalizer.finalizeQueryResult(execCtx)
 }
 
 func (resper *MysqlResp) RespPostMeta(execCtx *ExecCtx, meta any) (err error) {

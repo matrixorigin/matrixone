@@ -15,10 +15,8 @@
 package types
 
 import (
-	"math"
+	"errors"
 	"testing"
-
-	"github.com/stretchr/testify/require"
 )
 
 func TestPacker(t *testing.T) {
@@ -46,40 +44,29 @@ func TestClosedPackerIsOK(t *testing.T) {
 	packer.Close()
 }
 
-func TestPackerCapacityUpperBoundCoversGrowthAndReuse(t *testing.T) {
-	const (
-		columns = 4
-		width   = 65535
-	)
-	component := uint64(2*width + 3)
-	maxLength := uint64(columns) * component
-	bound, ok := PackerCapacityUpperBound(maxLength, component)
-	require.True(t, ok)
-	require.Equal(t, uint64(1<<20), bound)
-
-	packer := NewPacker()
-	require.Equal(t, DefaultPackerCapacity(), packer.Allocated())
-	value := make([]byte, width)
-	for range 2 {
-		packer.Reset()
-		for range columns {
-			packer.EncodeStringType(value)
-		}
-		require.Equal(t, int(maxLength), len(packer.GetBuf()))
-		require.LessOrEqual(t, packer.Allocated(), bound)
+func TestFixedBufferPackerNeverAllocatesPastCapacity(t *testing.T) {
+	storage := make([]byte, 0, 3)
+	packer := NewPackerWithFixedBuffer(storage)
+	packer.EncodeBool(true)
+	packer.EncodeNull()
+	if err := packer.Err(); err != nil {
+		t.Fatal(err)
 	}
-	packer.Close()
-	require.Zero(t, packer.Allocated())
-
-	initial := DefaultPackerCapacity()
-	got, ok := PackerCapacityUpperBound(initial, initial)
-	require.True(t, ok)
-	require.Equal(t, initial, got)
-	got, ok = PackerCapacityUpperBound(initial+1, 1)
-	require.True(t, ok)
-	require.Equal(t, 2*initial, got)
-	_, ok = PackerCapacityUpperBound(math.MaxUint64, 2)
-	require.False(t, ok)
+	if len(packer.GetBuf()) != 2 {
+		t.Fatalf("encoded length = %d", len(packer.GetBuf()))
+	}
+	packer.EncodeInt64(42)
+	if !errors.Is(packer.Err(), ErrPackerCapacity) {
+		t.Fatalf("overflow error = %v", packer.Err())
+	}
+	if len(packer.GetBuf()) > cap(storage) {
+		t.Fatal("fixed packer exceeded caller-owned storage")
+	}
+	packer.Reset()
+	packer.EncodeBool(true)
+	if err := packer.Err(); err != nil {
+		t.Fatalf("reset fixed packer error = %v", err)
+	}
 }
 
 func BenchmarkPacker(b *testing.B) {
@@ -91,11 +78,29 @@ func BenchmarkPacker(b *testing.B) {
 }
 
 func BenchmarkPackerEncode(b *testing.B) {
-	packer := NewPacker()
-	defer packer.Close()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		packer.EncodeInt64(42)
-		packer.Reset()
+	for _, fixed := range []bool{false, true} {
+		mode := "allocator-backed"
+		if fixed {
+			mode = "fixed-buffer"
+		}
+		b.Run(mode, func(b *testing.B) {
+			var packer *Packer
+			if fixed {
+				packer = NewPackerWithFixedBuffer(make([]byte, 16))
+			} else {
+				packer = NewPacker()
+				defer packer.Close()
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				packer.EncodeInt64(42)
+				packer.Reset()
+			}
+			b.StopTimer()
+			if err := packer.Err(); err != nil {
+				b.Fatal(err)
+			}
+		})
 	}
 }

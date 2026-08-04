@@ -65,6 +65,7 @@ const (
 	ErrQueryInterrupted            uint16 = 20104
 	ErrNotSupported                uint16 = 20105
 	ErrRemoteDispatchNotRegistered uint16 = 20106
+	ErrMPoolCapacity               uint16 = 20107
 
 	// Group 2: numeric and functions
 	ErrDivByZero                   uint16 = 20200
@@ -394,6 +395,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrQueryInterrupted:            {ER_QUERY_INTERRUPTED, []string{MySQLDefaultSqlState}, "query interrupted"},
 	ErrNotSupported:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not supported: %s"},
 	ErrRemoteDispatchNotRegistered: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote dispatch receiver %s is not registered yet"},
+	ErrMPoolCapacity:               {ER_ENGINE_OUT_OF_MEMORY, []string{MySQLDefaultSqlState}, "mpool physical capacity exceeded: %s"},
 
 	// Group 2: numeric
 	ErrDivByZero:                   {ER_DIVISION_BY_ZERO, []string{MySQLDefaultSqlState}, "division by zero"},
@@ -953,6 +955,13 @@ func NewRemoteDispatchNotRegistered(ctx context.Context, uuid string) *Error {
 
 func NewOOM(ctx context.Context) *Error {
 	return newError(ctx, ErrOOM)
+}
+
+// NewMPoolCapacity reports a physical allocator or MPool capacity failure.
+// Its dedicated wire code lets pressure recovery distinguish retryable
+// physical capacity from unrelated OOMs without wrapping the MO error.
+func NewMPoolCapacity(ctx context.Context, msg string) *Error {
+	return newError(ctx, ErrMPoolCapacity, msg)
 }
 
 // NewResourceExhaustedf preserves the existing resource-exhaustion wire code

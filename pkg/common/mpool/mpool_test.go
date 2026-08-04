@@ -381,6 +381,13 @@ func TestGrowCapacityValidation(t *testing.T) {
 	capacity, ok := GrowCapacity(128, 64)
 	require.True(t, ok)
 	require.Equal(t, int64(128), capacity)
+
+	maxCapacity := maxAllocationSize()
+	capacity, ok = GrowCapacity(maxCapacity, maxCapacity)
+	require.True(t, ok)
+	require.Equal(t, maxCapacity, capacity)
+	_, ok = GrowCapacity(maxCapacity, maxCapacity+1)
+	require.False(t, ok)
 }
 
 func TestUseMalloc(t *testing.T) {
@@ -532,6 +539,33 @@ func TestCrossPoolFreeOnHeap(t *testing.T) {
 
 	DeleteMPool(mp1)
 	DeleteMPool(mp2)
+}
+
+func TestMPoolTeardownTracksPhysicalLifetime(t *testing.T) {
+	t.Run("normal-pool-late-free", func(t *testing.T) {
+		owner := MustNew("teardown-normal-owner")
+		other := MustNew("teardown-normal-other")
+		defer DeleteMPool(other)
+
+		globalBefore := GlobalStats().NumCurrBytes.Load()
+		buffer, err := owner.Alloc(64, true)
+		require.NoError(t, err)
+		DeleteMPool(owner)
+		require.Equal(t, globalBefore+64, GlobalStats().NumCurrBytes.Load())
+
+		other.Free(buffer)
+		require.Equal(t, globalBefore, GlobalStats().NumCurrBytes.Load())
+	})
+
+	t.Run("no-lock-pool-owns-teardown", func(t *testing.T) {
+		mp := MustNewNoLock("teardown-no-lock-owner")
+		globalBefore := GlobalStats().NumCurrBytes.Load()
+		_, err := mp.Alloc(64, true)
+		require.NoError(t, err)
+
+		DeleteMPool(mp)
+		require.Equal(t, globalBefore, GlobalStats().NumCurrBytes.Load())
+	})
 }
 
 // TestDoubleFree tests that double free is detected and panics.
@@ -812,7 +846,7 @@ func TestMPoolReallocZeroUsesRecordedSourceProvenance(t *testing.T) {
 
 			hdr, ok := mp.getPtrHdr(unsafe.Pointer(unsafe.SliceData(resized)))
 			require.True(t, ok)
-			require.Equal(t, testCase.targetOffHeap, hdr.offHeap)
+			require.Equal(t, testCase.targetOffHeap, hdr.isOffHeap())
 			require.Equal(t, int32(newSize), hdr.allocSz)
 
 			mp.Free(resized)

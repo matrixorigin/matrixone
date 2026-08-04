@@ -762,7 +762,7 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch, crs 
 	}
 	tTime := time.Since(begin)
 	n := 0
-	if bat != nil && bat.Vecs[0] != nil {
+	if !isPerformStatement(execCtx.stmt) && bat != nil && bat.Vecs[0] != nil {
 		n = bat.Vecs[0].Length()
 		ses.sentRows.Add(int64(n))
 	}
@@ -1525,6 +1525,7 @@ type analyzeDerivedResponder struct {
 }
 
 var _ Responser = (*analyzeDerivedResponder)(nil)
+var _ queryResultFinalizer = (*analyzeDerivedResponder)(nil)
 
 func (r *analyzeDerivedResponder) GetStr(id PropertyID) string { return r.live.GetStr(id) }
 func (r *analyzeDerivedResponder) GetU32(id PropertyID) uint32 { return r.live.GetU32(id) }
@@ -4048,6 +4049,18 @@ func executeStmtWithResponse(ses *Session,
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "executeStmtWithResponse",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(ses.GetTxnId(), ses.GetStmtId(), ses.GetSqlOfStmt()))
+	defer func() {
+		if execCtx.returning != nil {
+			if closeErr := execCtx.returning.Close(execCtx); closeErr != nil {
+				if err != nil {
+					err = errors.Join(err, closeErr)
+				} else {
+					ses.Warn(execCtx.reqCtx, "failed to close committed DML RETURNING spool", zap.Error(closeErr))
+				}
+			}
+			execCtx.returning = nil
+		}
+	}()
 
 	ses.SetQueryInProgress(true)
 	ses.SetQueryStart(time.Now())
@@ -4057,7 +4070,7 @@ func executeStmtWithResponse(ses *Session,
 
 	err = executeStmtWithTxn(ses, nil, execCtx)
 	if err != nil {
-		return err
+		return abortStagedReturning(execCtx, err)
 	}
 
 	// Record the rows affected by this statement so the ROW_COUNT() builtin in a
@@ -4071,6 +4084,13 @@ func executeStmtWithResponse(ses *Session,
 	}
 
 	return
+}
+
+func abortStagedReturning(execCtx *ExecCtx, cause error) error {
+	if cause == nil || execCtx == nil || execCtx.returning == nil || execCtx.returning.stagedSaver == nil {
+		return cause
+	}
+	return errors.Join(cause, execCtx.returning.stagedSaver.Abort(execCtx))
 }
 
 func executeStmtWithTxn(ses FeSession,
@@ -4469,6 +4489,18 @@ func executeStmt(ses *Session,
 		return err
 	case tree.EXEC_IN_ENGINE:
 
+	}
+
+	if execCtx.stmt.StmtKind().RespType() == tree.RESP_DEFERRED_RESULT_ROW {
+		if ses.GetIsInternal() || ses.IsBackgroundSession() {
+			return moerr.NewNotSupported(execCtx.reqCtx, "DML RETURNING does not support internal executor")
+		}
+		compiled, ok := ret.(*compile.Compile)
+		if !ok {
+			return moerr.NewInternalError(execCtx.reqCtx, "DML RETURNING requires engine compile")
+		}
+		execCtx.returning = &returningState{spool: &returningSpool{}}
+		compiled.SetResultSink(execCtx.returning.spool)
 	}
 
 	execCtx.runner = ret.(ComputationRunner)
@@ -5028,22 +5060,26 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// fall through to normal MO execution.
 		if isSidecar, useGPU := isSidecarQuery(query); isSidecar {
 			ses.addSqlCount(1)
-			err = handleSidecarOffload(ses, execCtx, query, useGPU)
-			if err == nil {
-				ses.resetDiagnostics()
-				setRowCount(ses, ses.GetProc(), -1)
-				mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-				resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, true)
-				return resp, nil
+			if sidecarQueryMustRunLocally(execCtx.reqCtx, ses, query) {
+				query = stripSidecarHint(query)
+			} else {
+				err = handleSidecarOffload(ses, execCtx, query, useGPU)
+				if err == nil {
+					ses.resetDiagnostics()
+					setRowCount(ses, ses.GetProc(), -1)
+					mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+					resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, true)
+					return resp, nil
+				}
+				if err != errSidecarNotConfigured {
+					ses.resetDiagnostics()
+					markRowCountFailed(ses, ses.GetProc())
+					resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
+					return resp, nil
+				}
+				// errSidecarNotConfigured: strip hint and fall through to normal execution
+				query = stripSidecarHint(query)
 			}
-			if err != errSidecarNotConfigured {
-				ses.resetDiagnostics()
-				markRowCountFailed(ses, ses.GetProc())
-				resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
-				return resp, nil
-			}
-			// errSidecarNotConfigured: strip hint and fall through to normal execution
-			query = stripSidecarHint(query)
 		} else {
 			ses.addSqlCount(1)
 		}

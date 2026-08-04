@@ -194,13 +194,23 @@ func MustVarlenaToInt64Slice(v *Vector) [][3]int64 {
 }
 
 func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
-	data = MustFixedColNoTypeCheck[types.Varlena](v)
+	data = ToSliceNoTypeCheck2[types.Varlena](v)
 	area = v.area
 	return
 }
 
 // XXX extend will extend the vector's Data to accommodate rows more entry.
 func extend(v *Vector, rows int, m *mpool.MPool) error {
+	return extendWithBitmaps(v, rows, m, false, false)
+}
+
+func extendWithBitmaps(
+	v *Vector,
+	rows int,
+	m *mpool.MPool,
+	needNulls bool,
+	needGrouping bool,
+) error {
 	if rows <= 0 {
 		// we will at least extent by 1.
 		// This is a pure hack to
@@ -208,9 +218,23 @@ func extend(v *Vector, rows int, m *mpool.MPool) error {
 	}
 
 	tgtLen := v.length + rows
+	switch {
+	case needNulls && needGrouping:
+		if err := v.ensureBitmapCapacity(tgtLen, m); err != nil {
+			return err
+		}
+	case needNulls:
+		if err := v.ensureNullCapacity(tgtLen, m); err != nil {
+			return err
+		}
+	case needGrouping:
+		if err := v.ensureGroupingCapacity(tgtLen, m); err != nil {
+			return err
+		}
+	}
 	tgtDataCap := tgtLen * v.typ.TypeSize()
 	if tgtDataCap > cap(v.data) {
-		ndata, err := m.Grow(v.data, tgtDataCap, v.offHeap)
+		ndata, err := v.growData(m, tgtDataCap)
 		if err != nil {
 			return err
 		}
