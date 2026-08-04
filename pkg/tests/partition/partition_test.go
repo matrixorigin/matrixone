@@ -15,15 +15,20 @@
 package partition
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
@@ -48,7 +53,7 @@ func TestPartitionExpressionBinaryMetadataRoundTrip(t *testing.T) {
 		testutils.CreateTestDatabase(t, db, cn)
 		for idx, create := range creates {
 			table := fmt.Sprintf("%s_%d", t.Name(), idx)
-			testutils.ExecSQL(t, db, cn, fmt.Sprintf(create, table))
+			execSQLWithSQLMode(t, db, cn, "STRICT_TRANS_TABLES", fmt.Sprintf(create, table))
 
 			metadata := getMetadata(t, 0, db, table, cn)
 			require.NotEmpty(t, metadata.Partitions)
@@ -60,6 +65,190 @@ func TestPartitionExpressionBinaryMetadataRoundTrip(t *testing.T) {
 			}
 		}
 	})
+}
+
+// Regression for upgrading a pre-v4.0.7 catalog. The old VARCHAR declaration
+// already contains raw plan.Expr protobuf bytes; converting its storage type
+// must preserve those bytes and keep metadata readable in strict mode.
+func TestPartitionExpressionBinaryMetadataUpgradePreservesRawBytes(t *testing.T) {
+	runPartitionClusterTestWithReuse(t, func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+
+		db := testutils.GetDatabaseName(t)
+		testutils.CreateTestDatabase(t, db, cn)
+		table := t.Name()
+		execSQLWithSQLMode(t, db, cn, "STRICT_TRANS_TABLES",
+			fmt.Sprintf("create table %s (c int primary key) partition by range (c) (partition p0 values less than (10), partition p1 values less than maxvalue)", table),
+		)
+
+		before := getMetadata(t, 0, db, table, cn)
+		expected := partitionExpressionBytes(t, before)
+
+		// Simulate an old catalog without attempting to convert the current
+		// VARBINARY data back to VARCHAR: that reverse conversion is rightly
+		// rejected by the new UTF-8 invariant. Empty the real metadata rows
+		// first, change the schema, then write the historical raw bytes through
+		// MATRIXONE_NATIVE.
+		execPartitionCatalogTxn(t, cn, "", func(txn executor.TxnExecutor) error {
+			res, err := txn.Exec(
+				fmt.Sprintf("delete from mo_catalog.mo_partition_tables where primary_table_id = %d", before.TableID),
+				executor.StatementOption{},
+			)
+			if err != nil {
+				return err
+			}
+			res.Close()
+			res, err = txn.Exec(
+				"alter table mo_catalog.mo_partition_tables modify column partition_expression varchar(2048) not null",
+				executor.StatementOption{},
+			)
+			if err != nil {
+				return err
+			}
+			res.Close()
+			return nil
+		})
+
+		insertLegacyPartitionMetadata(t, cn, before)
+
+		execPartitionCatalogTxn(t, cn, "", func(txn executor.TxnExecutor) error {
+			return v4_0_7.Handler.HandleTenantUpgrade(context.Background(), 0, txn)
+		})
+
+		after := getMetadata(t, 0, db, table, cn)
+		require.Equal(t, expected, partitionExpressionBytes(t, after))
+	}, false, embed.WithPreStart(func(s embed.ServiceOperator) {
+		// The historical-catalog fixture must write a system table through the
+		// frontend so MATRIXONE_NATIVE takes effect. Restrict this test-only
+		// privilege bypass to its isolated embedded cluster.
+		s.Adjust(func(cfg *embed.ServiceConfig) {
+			cfg.CN.Frontend.SkipCheckPrivilege = true
+		})
+	}))
+}
+
+func insertLegacyPartitionMetadata(t *testing.T, cn embed.ServiceOperator, metadata partition.PartitionMetadata) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	db, err := sql.Open("mysql", fmt.Sprintf("sys#root#moadmin:111@tcp(127.0.0.1:%d)/mo_catalog", cn.GetServiceConfig().CN.Frontend.Port))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, db.Close()) }()
+	db.SetMaxOpenConns(1)
+
+	conn, err := db.Conn(ctx)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, conn.Close()) }()
+	_, err = conn.ExecContext(ctx, "set role moadmin")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, "set session sql_mode = 'MATRIXONE_NATIVE'")
+	require.NoError(t, err)
+
+	for _, p := range metadata.Partitions {
+		encoded, err := p.Expr.Marshal()
+		require.NoError(t, err)
+		_, err = conn.ExecContext(
+			ctx,
+			`insert into mo_catalog.mo_partition_tables (
+				partition_id, partition_table_name, primary_table_id, partition_name,
+				partition_ordinal_position, partition_expression_str, partition_expression
+			) values (?, ?, ?, ?, ?, ?, ?)`,
+			p.PartitionID,
+			p.PartitionTableName,
+			p.PrimaryTableID,
+			p.Name,
+			p.Position,
+			p.ExprStr,
+			encoded,
+		)
+		require.NoError(t, err)
+	}
+}
+
+func execPartitionCatalogTxn(
+	t *testing.T,
+	cn embed.ServiceOperator,
+	sqlMode string,
+	fn func(executor.TxnExecutor) error,
+) {
+	t.Helper()
+
+	exec := testutils.GetSQLExecutor(cn)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	var txnOp client.TxnOperator
+	err := exec.ExecTxn(
+		ctx,
+		func(txn executor.TxnExecutor) error {
+			txnOp = txn.Txn()
+			return fn(txn)
+		},
+		executor.Options{}.
+			WithDatabase(catalog.MO_CATALOG).
+			WithAccountID(catalog.System_Account).
+			WithResolveVariableFunc(func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+				if name == "sql_mode" {
+					return sqlMode, nil
+				}
+				return nil, fmt.Errorf("variable %s not supported", name)
+			}),
+	)
+	require.NoError(t, err)
+	testutils.WaitLogtailApplied(t, txnOp.Txn().CommitTS, cn)
+}
+
+func execSQLWithSQLMode(
+	t *testing.T,
+	db string,
+	cn embed.ServiceOperator,
+	sqlMode string,
+	statements ...string,
+) {
+	t.Helper()
+
+	exec := testutils.GetSQLExecutor(cn)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	var txnOp client.TxnOperator
+	err := exec.ExecTxn(
+		ctx,
+		func(txn executor.TxnExecutor) error {
+			txnOp = txn.Txn()
+			for _, statement := range statements {
+				res, err := txn.Exec(statement, executor.StatementOption{})
+				if err != nil {
+					return err
+				}
+				res.Close()
+			}
+			return nil
+		},
+		executor.Options{}.
+			WithDatabase(db).
+			WithAccountID(catalog.System_Account).
+			WithResolveVariableFunc(func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+				if name == "sql_mode" {
+					return sqlMode, nil
+				}
+				return nil, fmt.Errorf("variable %s not supported", name)
+			}),
+	)
+	require.NoError(t, err)
+	testutils.WaitLogtailApplied(t, txnOp.Txn().CommitTS, cn)
+}
+
+func partitionExpressionBytes(t *testing.T, metadata partition.PartitionMetadata) [][]byte {
+	t.Helper()
+
+	encoded := make([][]byte, 0, len(metadata.Partitions))
+	for _, p := range metadata.Partitions {
+		value, err := p.Expr.Marshal()
+		require.NoError(t, err)
+		encoded = append(encoded, value)
+	}
+	return encoded
 }
 
 func runPartitionTableCreateAndDeleteTestsWithAware(
