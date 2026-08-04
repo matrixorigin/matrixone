@@ -83,14 +83,14 @@ func (builder *QueryBuilder) buildTableChanges(
 	}
 
 	cols := []*plan.ColDef{
-		varcharChangeColumn("change_type"),
-		varcharChangeColumn("commit_ts"),
+		varcharChangeColumn(catalog.TableChangesAttrChangeType),
+		varcharChangeColumn(catalog.TableChangesAttrCommitTS),
 		{
-			Name: "table_id",
+			Name: catalog.TableChangesAttrTableID,
 			Typ:  plan.Type{Id: int32(types.T_uint64)},
 		},
 		{
-			Name: "schema_version",
+			Name: catalog.TableChangesAttrSchemaVersion,
 			Typ:  plan.Type{Id: int32(types.T_uint32)},
 		},
 	}
@@ -137,6 +137,9 @@ func validateTableChangesSource(objectRef *plan.ObjectRef, tableDef *plan.TableD
 	if tableDef.IsTemporary {
 		return moerr.NewNotSupportedNoCtx("table_changes does not support temporary tables")
 	}
+	if err := validateTableChangesColumnNames(tableDef); err != nil {
+		return err
+	}
 	switch tableDef.TableType {
 	case catalog.SystemOrdinaryRel:
 	case catalog.SystemClusterRel:
@@ -161,6 +164,21 @@ func validateTableChangesSource(objectRef *plan.ObjectRef, tableDef *plan.TableD
 		return moerr.NewNotSupportedNoCtx(
 			"table_changes requires cluster table primary keys to include account_id",
 		)
+	}
+	return nil
+}
+
+func validateTableChangesColumnNames(tableDef *plan.TableDef) error {
+	for _, col := range tableDef.Cols {
+		if col == nil {
+			continue
+		}
+		if catalog.IsTableChangesMetadataColumn(col.Name) {
+			return moerr.NewInvalidInputNoCtxf(
+				"table_changes source column %q conflicts with reserved metadata column",
+				col.Name,
+			)
+		}
 	}
 	return nil
 }

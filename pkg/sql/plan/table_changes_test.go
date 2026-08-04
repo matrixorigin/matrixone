@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -28,4 +29,26 @@ func TestValidateTableChangesSourceTemporaryTable(t *testing.T) {
 		IsTemporary: true,
 	})
 	require.EqualError(t, err, "not supported: table_changes does not support temporary tables")
+}
+
+func TestValidateTableChangesSourceRejectsMetadataColumnNames(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  types.T
+	}{
+		{name: catalog.TableChangesAttrChangeType, typ: types.T_int64},
+		{name: catalog.TableChangesAttrCommitTS, typ: types.T_bool},
+		{name: catalog.TableChangesAttrTableID, typ: types.T_varchar},
+		{name: catalog.TableChangesAttrSchemaVersion, typ: types.T_json},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateTableChangesColumnNames(&pbplan.TableDef{Cols: []*pbplan.ColDef{{
+				Name: tt.name,
+				Typ:  pbplan.Type{Id: int32(tt.typ)},
+			}}})
+			require.EqualError(t, err,
+				"invalid input: table_changes source column \""+tt.name+"\" conflicts with reserved metadata column")
+		})
+	}
 }

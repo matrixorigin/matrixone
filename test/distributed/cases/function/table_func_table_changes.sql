@@ -172,6 +172,20 @@ select * from table_changes('table_changes_db', 'ordinary_single_pk', '2-0', '1-
 set @database_name = 'table_changes_db';
 select * from table_changes(@database_name, 'ordinary_single_pk', '', '1-0') c;
 
+-- Metadata names are reserved regardless of the source column's type.
+create table reserved_change_type (id int primary key, change_type int);
+select * from table_changes('table_changes_db', 'reserved_change_type', '', '1-0') c;
+create table reserved_commit_ts (id int primary key, commit_ts bool);
+select * from table_changes('table_changes_db', 'reserved_commit_ts', '', '1-0') c;
+create table reserved_table_id (id int primary key, table_id varchar(20));
+select * from table_changes('table_changes_db', 'reserved_table_id', '', '1-0') c;
+create table reserved_schema_version (id int primary key, schema_version json);
+select * from table_changes('table_changes_db', 'reserved_schema_version', '', '1-0') c;
+drop table reserved_change_type;
+drop table reserved_commit_ts;
+drop table reserved_table_id;
+drop table reserved_schema_version;
+
 -- table_changes requires the source table's SELECT privilege just like a scan.
 drop user if exists table_changes_priv_user;
 drop role if exists table_changes_priv_role;

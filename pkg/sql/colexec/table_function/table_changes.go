@@ -264,6 +264,9 @@ func validateRuntimeTableChangesSource(tableDef *plan.TableDef) error {
 	if tableDef.IsTemporary {
 		return moerr.NewNotSupportedNoCtx("table_changes does not support temporary tables")
 	}
+	if err := validateRuntimeTableChangesColumnNames(tableDef); err != nil {
+		return err
+	}
 	switch tableDef.TableType {
 	case catalog.SystemOrdinaryRel, catalog.SystemClusterRel:
 	default:
@@ -285,6 +288,21 @@ func validateRuntimeTableChangesSource(tableDef *plan.TableDef) error {
 		return moerr.NewNotSupportedNoCtx(
 			"table_changes requires cluster table primary keys to include account_id",
 		)
+	}
+	return nil
+}
+
+func validateRuntimeTableChangesColumnNames(tableDef *plan.TableDef) error {
+	for _, col := range tableDef.Cols {
+		if col == nil {
+			continue
+		}
+		if catalog.IsTableChangesMetadataColumn(col.Name) {
+			return moerr.NewInvalidInputNoCtxf(
+				"table_changes source column %q conflicts with reserved metadata column",
+				col.Name,
+			)
+		}
 	}
 	return nil
 }
@@ -423,13 +441,13 @@ func (s *tableChangesState) appendChangeRow(
 	for outputCol, attr := range attrs {
 		var err error
 		switch attr {
-		case "change_type":
+		case catalog.TableChangesAttrChangeType:
 			err = vector.AppendBytes(s.batch.Vecs[outputCol], []byte(changeType), false, proc.Mp())
-		case "commit_ts":
+		case catalog.TableChangesAttrCommitTS:
 			err = vector.AppendBytes(s.batch.Vecs[outputCol], []byte(commitTS.ToString()), false, proc.Mp())
-		case "table_id":
+		case catalog.TableChangesAttrTableID:
 			err = vector.AppendFixed(s.batch.Vecs[outputCol], s.tableDef.TblId, false, proc.Mp())
-		case "schema_version":
+		case catalog.TableChangesAttrSchemaVersion:
 			err = vector.AppendFixed(s.batch.Vecs[outputCol], s.tableDef.Version, false, proc.Mp())
 		default:
 			sourceIdx, ok := s.tableDef.Name2ColIndex[strings.ToLower(attr)]

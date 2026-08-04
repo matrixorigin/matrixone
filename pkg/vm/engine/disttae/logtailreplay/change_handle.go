@@ -1644,8 +1644,8 @@ func NewChangesHandlerWithCheckpointRangeRecovery(
 //   - delete-time chain rewrite for GC-ed visible objects
 //   - commit-ts zonemap block pruning on TN non-appendable objects
 //
-// It is used only by snapshot-read policies that need exact range meaning after
-// normal partition-state replay can no longer read older object files.
+// It is used by snapshot-read policies that need exact range meaning while
+// streaming bounded batches from an end-snapshot view.
 func NewChangesHandlerWithPartitionStateRange(
 	ctx context.Context,
 	state *PartitionState,

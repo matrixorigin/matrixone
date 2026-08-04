@@ -31,68 +31,69 @@ func TestPartitionChangesHandleCloseWithTypedNil(t *testing.T) {
 	require.NoError(t, handle.Close())
 }
 
-func TestPartitionChangesHandleClose_CleansBufferedBatches(t *testing.T) {
+func TestPartitionChangesHandleCloseClosesCurrentHandle(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-
-	data := batch.NewWithSize(1)
-	data.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vector.AppendFixed(data.Vecs[0], int64(1), false, mp))
-	data.SetRowCount(1)
-
-	tombstone := batch.NewWithSize(1)
-	tombstone.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vector.AppendFixed(tombstone.Vecs[0], int64(2), false, mp))
-	tombstone.SetRowCount(1)
 
 	stub := &stubChangesHandle{}
 	handle := &PartitionChangesHandle{
 		mp:                  mp,
 		currentChangeHandle: stub,
-		bufferedBatches: []queuedChangeBatch{{
-			data:      data,
-			tombstone: tombstone,
-		}},
 	}
 
 	require.NoError(t, handle.Close())
 	require.True(t, stub.closed)
 	require.Nil(t, handle.currentChangeHandle)
-	require.Nil(t, handle.bufferedBatches)
 }
 
-func TestPartitionChangesHandleNextWithSnapshotRecovery_UsesBufferedBatch(t *testing.T) {
-	mp := mpool.MustNewZero()
+func TestPartitionChangesHandleVisibleStateStreamsFirstBatch(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
 	defer mpool.DeleteMPool(mp)
 
-	data := batch.NewWithSize(1)
-	data.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vector.AppendFixed(data.Vecs[0], int64(7), false, mp))
-	data.SetRowCount(1)
-	defer data.Clean(mp)
-
+	const upstreamBatches = 1_000_000
+	stub := &stubChangesHandle{remaining: upstreamBatches}
 	handle := &PartitionChangesHandle{
-		snapshotReadPolicy: engine.SnapshotReadPolicyVisibleState,
-		bufferedBatches: []queuedChangeBatch{{
-			data: data,
-			hint: engine.ChangesHandle_Snapshot,
-		}},
+		snapshotReadPolicy:  engine.SnapshotReadPolicyVisibleState,
+		currentChangeHandle: stub,
 	}
 
 	gotData, gotTombstone, hint, err := handle.Next(context.Background(), mp)
 	require.NoError(t, err)
-	require.Same(t, data, gotData)
+	require.NotNil(t, gotData)
 	require.Nil(t, gotTombstone)
-	require.Equal(t, engine.ChangesHandle_Snapshot, hint)
-	require.Empty(t, handle.bufferedBatches)
+	require.Equal(t, engine.ChangesHandle_Tail_done, hint)
+	require.Equal(t, 1, stub.calls, "first Next must not drain the requested range")
+	require.Equal(t, upstreamBatches-1, stub.remaining)
+	require.LessOrEqual(t, mp.CurrNB(), int64(1<<20), "retained mpool memory must stay batch-bounded")
+	gotData.Clean(mp)
+	require.Zero(t, mp.CurrNB(), "the partition handle must not retain prior batches")
 }
 
 type stubChangesHandle struct {
-	closed bool
+	closed    bool
+	calls     int
+	remaining int
 }
 
-func (s *stubChangesHandle) Next(context.Context, *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
-	return nil, nil, engine.ChangesHandle_Tail_done, nil
+func (s *stubChangesHandle) Next(_ context.Context, mp *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	s.calls++
+	if s.remaining == 0 {
+		return nil, nil, engine.ChangesHandle_Tail_done, nil
+	}
+	s.remaining--
+	data := batch.NewWithSize(1)
+	data.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	const rowsPerBatch = 4096
+	if err := data.Vecs[0].PreExtend(rowsPerBatch, mp); err != nil {
+		return nil, nil, engine.ChangesHandle_Tail_done, err
+	}
+	for row := 0; row < rowsPerBatch; row++ {
+		if err := vector.AppendFixed(data.Vecs[0], int64(s.calls), false, mp); err != nil {
+			return nil, nil, engine.ChangesHandle_Tail_done, err
+		}
+	}
+	data.SetRowCount(rowsPerBatch)
+	return data, nil, engine.ChangesHandle_Tail_done, nil
 }
 
 func (s *stubChangesHandle) Close() error {

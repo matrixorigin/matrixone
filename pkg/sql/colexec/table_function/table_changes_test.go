@@ -61,6 +61,23 @@ func TestValidateRuntimeTableChangesSourceTemporaryTable(t *testing.T) {
 	require.EqualError(t, err, "not supported: table_changes does not support temporary tables")
 }
 
+func TestValidateRuntimeTableChangesSourceRejectsMetadataColumnNames(t *testing.T) {
+	for _, name := range []string{
+		catalog.TableChangesAttrChangeType,
+		catalog.TableChangesAttrCommitTS,
+		catalog.TableChangesAttrTableID,
+		catalog.TableChangesAttrSchemaVersion,
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := validateRuntimeTableChangesColumnNames(&plan.TableDef{
+				Cols: []*plan.ColDef{{Name: name}},
+			})
+			require.EqualError(t, err,
+				"invalid input: table_changes source column \""+name+"\" conflicts with reserved metadata column")
+		})
+	}
+}
+
 func TestTableChangesReadFailpoints(t *testing.T) {
 	require.True(t, fault.Enable())
 	t.Cleanup(func() { fault.Disable() })

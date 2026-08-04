@@ -29,10 +29,9 @@ const (
 	// preserves the historical semantics already used by CDC restart paths.
 	SnapshotReadPolicyCheckpointReplay SnapshotReadPolicy = iota
 	// SnapshotReadPolicyVisibleState preserves the exact visible net effect of
-	// CollectChanges(start, end) when snapshot read is required. The primary
-	// recovery path still uses range-aware checkpoint object selection; if those
-	// object files are gone as well, it falls back to reconstructing the range
-	// from visible snapshots.
+	// CollectChanges(start, end). It constructs a range handle from the end
+	// snapshot up front so results can be streamed without retaining the whole
+	// requested range for late replay recovery.
 	SnapshotReadPolicyVisibleState
 )
 
