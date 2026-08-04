@@ -520,6 +520,7 @@ func TestSerialFunctionsReturnBinaryVarchar(t *testing.T) {
 func TestConcatFunctionsPreserveStringCollation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	general := types.T_varchar.ToType()
+	legacy := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetLegacy)
 	utf8mb4Bin := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4Bin)
 	opaqueBinary := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetBinary)
 
@@ -530,6 +531,13 @@ func TestConcatFunctionsPreserveStringCollation(t *testing.T) {
 		wantOID     types.T
 		wantCharset uint8
 	}{
+		{
+			name:        "concat keeps legacy byte ordering",
+			function:    "concat",
+			inputs:      []types.Type{general, legacy},
+			wantOID:     types.T_varchar,
+			wantCharset: types.CharsetLegacy,
+		},
 		{
 			name:        "concat keeps utf8mb4 bin",
 			function:    "concat",

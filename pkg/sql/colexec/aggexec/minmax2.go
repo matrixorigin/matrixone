@@ -526,7 +526,8 @@ func makeMinMaxExecWithLegacyText(
 		return newGenericMinMaxExec[types.Enum](mp, aggID, isMin, param)
 	case types.T_char, types.T_varchar, types.T_text:
 		if legacyTextComparator || param.Charset == types.CharsetBinary ||
-			param.Charset == types.CharsetUTF8MB4Bin {
+			param.Charset == types.CharsetUTF8MB4Bin ||
+			param.Charset == types.CharsetLegacy {
 			return newStrMinMaxExec(mp, aggID, isMin, param)
 		}
 		return newTextMinMaxExec(mp, aggID, isMin, param)

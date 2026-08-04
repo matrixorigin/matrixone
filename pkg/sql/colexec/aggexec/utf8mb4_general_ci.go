@@ -33,15 +33,8 @@ func compareUTF8mb4GeneralCI(a, b []byte) int {
 
 	ai, bi := 0, 0
 	for ai < len(a) && bi < len(b) {
-		ra, sizeA := utf8.DecodeRune(a[ai:])
-		rb, sizeB := utf8.DecodeRune(b[bi:])
-		if ra == utf8.RuneError && sizeA == 1 || rb == utf8.RuneError && sizeB == 1 {
-			// Text values should contain valid UTF-8. Keep ordering deterministic
-			// for malformed values rather than treating every invalid suffix equal.
-			return bytes.Compare(a[ai:], b[bi:])
-		}
-		wa := utf8mb4GeneralCIWeight(ra)
-		wb := utf8mb4GeneralCIWeight(rb)
+		wa, sizeA := nextUTF8mb4GeneralCIWeight(a[ai:])
+		wb, sizeB := nextUTF8mb4GeneralCIWeight(b[bi:])
 		if wa < wb {
 			return -1
 		}
@@ -58,6 +51,18 @@ func compareUTF8mb4GeneralCI(a, b []byte) int {
 		return -1
 	}
 	return 0
+}
+
+func nextUTF8mb4GeneralCIWeight(value []byte) (uint32, int) {
+	r, size := utf8.DecodeRune(value)
+	if r == utf8.RuneError && size == 1 {
+		// Invalid leading bytes live above the complete valid-rune weight range.
+		// Giving each byte a synthetic weight keeps malformed and valid input in
+		// one lexicographic domain; falling back to bytes.Compare for only some
+		// pairs would make the comparator non-transitive.
+		return 0x10000 + uint32(value[0]), 1
+	}
+	return utf8mb4GeneralCIWeight(r), size
 }
 
 func utf8mb4GeneralCIWeight(r rune) uint32 {

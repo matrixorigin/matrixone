@@ -81,6 +81,10 @@ func concatReturnType(parameters []types.Type) types.Type {
 			if result.Charset != types.CharsetBinary {
 				result.Charset = types.CharsetUTF8MB4Bin
 			}
+		case types.CharsetLegacy:
+			if result.Charset == types.CharsetUTF8 {
+				result.Charset = types.CharsetLegacy
+			}
 		}
 	}
 	return result

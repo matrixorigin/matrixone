@@ -332,6 +332,22 @@ func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs 
 	// Charset and collation clauses are independent attributes. Resolve both
 	// after scanning the list so a compatible COLLATE wins regardless of
 	// textual order.
+	var charset uint32
+	if columnCharset != "" {
+		var ok bool
+		charset, ok = charsetForName(columnCharset)
+		if !ok {
+			return moerr.NewInvalidInputf(ctx, "unsupported character set '%s'", columnCharset)
+		}
+	}
+	var collation uint32
+	if columnCollation != "" {
+		var ok bool
+		collation, ok = collationForName(columnCollation)
+		if !ok {
+			return moerr.NewInvalidInputf(ctx, "unsupported collation '%s'", columnCollation)
+		}
+	}
 	if columnCharset != "" && columnCollation != "" &&
 		!charsetAndCollationCompatible(columnCharset, columnCollation) {
 		return moerr.NewInvalidInputf(ctx,
@@ -339,10 +355,10 @@ func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs 
 			columnCollation, columnCharset)
 	}
 	if columnCharset != "" {
-		applyCharsetToPlanType(colType, charsetForName(columnCharset))
+		applyCharsetToPlanType(colType, charset)
 	}
 	if columnCollation != "" {
-		applyTextCharsetToPlanType(colType, charsetForName(columnCollation))
+		applyTextCharsetToPlanType(colType, collation)
 	}
 	if isGeometry {
 		// Scale (subtype) is already set by getTypeFromAst; an SRID column
@@ -380,15 +396,30 @@ func applyCharsetToPlanType(typ *plan.Type, charset uint32) {
 	typ.Charset = uint32(types.CharsetBinary)
 }
 
-func charsetForName(name string) uint32 {
-	name = strings.ToLower(name)
-	if name == "binary" {
-		return uint32(types.CharsetBinary)
+func charsetForName(name string) (uint32, bool) {
+	switch strings.ToLower(name) {
+	case "binary":
+		return uint32(types.CharsetBinary), true
+	case "utf8", "utf8mb3", "utf8mb4":
+		return uint32(types.CharsetUTF8), true
+	default:
+		return 0, false
 	}
-	if strings.HasSuffix(name, "_bin") {
-		return uint32(types.CharsetUTF8MB4Bin)
+}
+
+func collationForName(name string) (uint32, bool) {
+	switch strings.ToLower(name) {
+	case "binary":
+		return uint32(types.CharsetBinary), true
+	case "utf8_bin", "utf8mb3_bin", "utf8mb4_bin":
+		return uint32(types.CharsetUTF8MB4Bin), true
+	case "utf8_general_ci", "utf8mb3_general_ci", "utf8mb4_general_ci":
+		return uint32(types.CharsetUTF8), true
+	default:
+		// Do not silently alias advertised UCA/0900 collations to either legacy
+		// general_ci or byte ordering. Their weight and padding contracts differ.
+		return 0, false
 	}
-	return uint32(types.CharsetUTF8)
 }
 
 func applyTableDefaultCharsetToPlanType(typ *plan.Type, charset uint32) {
@@ -396,15 +427,24 @@ func applyTableDefaultCharsetToPlanType(typ *plan.Type, charset uint32) {
 }
 
 func charsetAndCollationCompatible(charset, collation string) bool {
-	charset = strings.ToLower(charset)
+	charset = canonicalCharsetName(charset)
 	collation = strings.ToLower(collation)
 	if charset == "binary" || collation == "binary" {
 		return charset == collation
 	}
 	if separator := strings.IndexByte(collation, '_'); separator > 0 {
-		return collation[:separator] == charset
+		return canonicalCharsetName(collation[:separator]) == charset
 	}
 	return true
+}
+
+func canonicalCharsetName(name string) string {
+	switch strings.ToLower(name) {
+	case "utf8", "utf8mb3":
+		return "utf8mb3"
+	default:
+		return strings.ToLower(name)
+	}
 }
 
 func tableDefaultCharset(ctx context.Context, options []tree.TableOption) (uint32, error) {
@@ -417,10 +457,18 @@ func tableDefaultCharset(ctx context.Context, options []tree.TableOption) (uint3
 		switch opt := option.(type) {
 		case *tree.TableOptionCharset:
 			tableCharsetName = opt.Charset
-			tableCharset = charsetForName(opt.Charset)
+			var ok bool
+			tableCharset, ok = charsetForName(opt.Charset)
+			if !ok {
+				return 0, moerr.NewInvalidInputf(ctx, "unsupported character set '%s'", opt.Charset)
+			}
 		case *tree.TableOptionCollate:
 			tableCollationName = opt.Collate
-			tableCollation = charsetForName(opt.Collate)
+			var ok bool
+			tableCollation, ok = collationForName(opt.Collate)
+			if !ok {
+				return 0, moerr.NewInvalidInputf(ctx, "unsupported collation '%s'", opt.Collate)
+			}
 			hasTableCollation = true
 		}
 	}

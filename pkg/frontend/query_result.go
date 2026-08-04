@@ -834,7 +834,9 @@ func (result *QueryResult) FinishStage(execCtx *ExecCtx) error {
 	}
 	empty := batch.NewWithSize(len(ses.rs.ResultCols))
 	for i, col := range ses.rs.ResultCols {
-		empty.Vecs[i] = vector.NewVec(types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale))
+		empty.Vecs[i] = vector.NewVec(types.NewWithCharset(
+			types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset),
+		))
 	}
 	defer empty.Clean(ses.proc.Mp())
 	empty.SetRowCount(0)
