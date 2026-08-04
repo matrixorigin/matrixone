@@ -45,8 +45,10 @@ func (c arrayCompare) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Pro
 }
 
 func (c arrayCompare) Compare(veci, vecj int, vi, vj int64) int {
-	n0 := c.isConstNull[veci] || c.vs[veci].GetNulls().Contains(uint64(vi))
-	n1 := c.isConstNull[vecj] || c.vs[vecj].GetNulls().Contains(uint64(vj))
+	n0 := c.isConstNull[veci] || c.vs[veci].GetNulls().Contains(uint64(vi)) ||
+		c.vs[veci].GetGrouping().Contains(uint64(vi))
+	n1 := c.isConstNull[vecj] || c.vs[vecj].GetNulls().Contains(uint64(vj)) ||
+		c.vs[vecj].GetGrouping().Contains(uint64(vj))
 	cmp := nullsCompare(n0, n1, c.nullsLast)
 	if cmp != 0 {
 		return cmp - nullsCompareFlag

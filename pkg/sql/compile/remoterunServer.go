@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"sync"
 	"time"
@@ -51,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -188,7 +190,7 @@ func (receiver *messageReceiverOnServer) waitUntilDisconnectedOrCancelled() {
 	}
 }
 
-func handlePipelineMessage(receiver *messageReceiverOnServer) error {
+func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 
 	switch receiver.messageTyp {
 	case pipeline.Method_PrepareDoneNotifyMessage:
@@ -251,19 +253,108 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if errBuildCompile != nil {
 			return errBuildCompile
 		}
+		var allocationAttempt *statementAllocationAttempt
+		var allocationParticipant *remoteAllocationStatementParticipant
+		var allocationGroupKey string
+		var localAllocation resource.AllocationAccountTotals
+		var localAllocationQuality resource.QualityFlags
 		var runErr error
+		sharedMessageBoard := runCompile.MessageBoard
+		memoryPool := runCompile.proc.Mp()
+		statementGroupEnabled := len(runCompile.remoteFragmentCounts) > 0
+		participantFinished := false
+		// This outer defer is the last-resort owner for a participant if the
+		// normal terminal path itself panics. Keep the Compile alive until after
+		// this guard runs: Release can make the pooled object reachable by a new
+		// RPC while terminal cleanup still needs its stable attempt references.
 		defer func() {
+			recovered := recover()
+			defer runCompile.Release()
+			if allocationParticipant != nil && !participantFinished {
+				if allocationAttempt != nil {
+					runCompile.allocationAttempt = nil
+				}
+				allocationParticipant.stage(allocationAttempt, memoryPool)
+				cause := err
+				if recovered != nil {
+					cause = joinAllocationLifecycleErrors(
+						cause,
+						moerr.ConvertPanicError(receiver.messageCtx, recovered),
+					)
+				}
+				_, terminalErr := allocationParticipant.finish(cause)
+				err = joinAllocationLifecycleErrors(err, terminalErr)
+				participantFinished = true
+			}
+			if recovered != nil {
+				panic(recovered)
+			}
+		}()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = joinAllocationLifecycleErrors(
+					err,
+					moerr.ConvertPanicError(receiver.messageCtx, recovered),
+				)
+			}
 			// Capture operator and descendant facts before cleanup. The MPool
 			// snapshot intentionally follows Compile.clear so temporary execution
 			// allocations are released before LiveBytesAtSeal is measured. The
 			// descendant snapshot is already reduced under AnalyzeModule's mutex;
 			// sender quiescence remains the lifecycle contract for this boundary.
-			localDelta := collectScopeResourceDelta(runCompile.scopes, receiver.cnInformation.cnAddr)
-			descendant := runCompile.anal.remoteResourceSummary()
-			expectedDirect := countExpectedRemoteScopes(runCompile.scopes, receiver.cnInformation.cnAddr)
-			memoryPool := runCompile.proc.Mp()
-			runCompile.clear()
-			localMemory, localMemoryQuality := memoryPool.ResourceSnapshot()
+			var localDelta resource.Delta
+			var descendant remoteResourceSnapshot
+			var expectedDirect uint64
+			err = joinAllocationLifecycleErrors(err, allocationLifecycleCall(func() error {
+				localDelta = collectScopeResourceDelta(
+					runCompile.scopes,
+					receiver.cnInformation.cnAddr,
+				)
+				descendant = runCompile.anal.remoteResourceSummary()
+				expectedDirect = countExpectedRemoteScopes(
+					runCompile.scopes,
+					receiver.cnInformation.cnAddr,
+				)
+				return nil
+			}))
+			var terminal remoteAllocationStatementTerminal
+			if allocationAttempt != nil {
+				runCompile.allocationAttempt = nil
+			}
+			allocationParticipant.stage(allocationAttempt, memoryPool)
+			err = joinAllocationLifecycleErrors(err, allocationLifecycleCall(func() error {
+				if statementGroupEnabled {
+					// The remote statement group, rather than any one fragment Compile,
+					// owns the shared multi-CN board. Detach it before clear resets the
+					// fragment-local Compile state. A fragment rejected before it joins a
+					// group is terminal for the statement, so it closes its unowned board.
+					if allocationParticipant == nil {
+						sharedMessageBoard.CloseAndDrain()
+					}
+					runCompile.MessageBoard = message.NewMessageBoard()
+					runCompile.proc.SetMessageBoard(runCompile.MessageBoard)
+				}
+				runCompile.clear()
+				return nil
+			}))
+			terminal, terminalErr := allocationParticipant.finish(err)
+			participantFinished = true
+			err = joinAllocationLifecycleErrors(err, terminalErr)
+			for _, snapshot := range terminal.allocation {
+				localAllocationQuality |= localAllocation.AddGeneration(
+					snapshot.Peak,
+					snapshot.Used,
+					snapshot.State == mpool.AllocationAccountTerminalValid,
+				)
+			}
+			var localMemory resource.MemoryDomainSummary
+			var localMemoryQuality resource.QualityFlags
+			if !statementGroupEnabled {
+				err = joinAllocationLifecycleErrors(err, allocationLifecycleCall(func() error {
+					localMemory, localMemoryQuality = memoryPool.ResourceSnapshot()
+					return nil
+				}))
+			}
 			aggregate := composeRemoteResourceAggregate(
 				localDelta,
 				localMemory,
@@ -271,13 +362,60 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 				descendant,
 				expectedDirect,
 			)
+			aggregate.Delta.Quality |= localAllocationQuality |
+				resource.MergeAllocationAccountTotals(
+					&aggregate.Allocation,
+					localAllocation,
+				)
+			aggregate.Delta.Quality |= terminal.quality |
+				resource.MergeMemoryTotals(&aggregate.Memory, terminal.memory)
+			if allocationParticipant != nil {
+				addRemoteAllocationGroupSignal(
+					&aggregate,
+					allocationGroupKey,
+					terminal.complete,
+				)
+			}
 			receiver.resourceDelta = aggregate.Delta
 			receiver.resourceMemory = aggregate.Memory
+			receiver.resourceAllocation = aggregate.Allocation
 			receiver.resourceMissingFragments = aggregate.MissingFragmentCount
 			receiver.resourceMissingMemoryDomains = aggregate.MissingMemoryDomainCount
-
-			runCompile.Release()
+			receiver.resourcePendingAllocationGroups = aggregate.PendingAllocationGroups
+			receiver.resourceCompletedAllocationGroups = aggregate.CompletedAllocationGroups
 		}()
+		if statementGroupEnabled {
+			expectedFragments, ok := runCompile.remoteFragmentCounts[runCompile.addr]
+			if !ok || expectedFragments == 0 {
+				return errors.Join(
+					mpool.ErrAllocationAccountInvariant,
+					moerr.NewInternalErrorNoCtx(
+						"remote fragment topology has no local CN entry",
+					),
+				)
+			}
+			// Capture the function value for this execution generation. Both the
+			// Compile and Process fields are reset after an early sibling returns;
+			// looking up proc.Cancel later could cancel an unrelated generation.
+			remoteCancel := runCompile.proc.Cancel
+			allocationGroupKey = remoteAllocationStatementGroupKey(
+				runCompile.remoteExecutionID,
+				runCompile.addr,
+			)
+			allocationParticipant, runErr = acquireRemoteAllocationStatementParticipant(
+				allocationGroupKey,
+				runCompile.MessageBoard,
+				expectedFragments,
+				func(cause error) {
+					if remoteCancel != nil {
+						remoteCancel(cause)
+					}
+				},
+			)
+			if runErr != nil {
+				return runErr
+			}
+		}
 
 		// decode and running the pipeline.
 		s, runErr := decodeScope(receiver.scopeData, runCompile.proc, true, runCompile.e)
@@ -301,6 +439,23 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		}
 
 		runCompile.scopes = []*Scope{s}
+		if runErr = validateRemoteAllocationTopologyCapability(
+			runCompile.scopes,
+			runCompile.remoteFragmentCounts,
+		); runErr != nil {
+			return runErr
+		}
+		if statementGroupEnabled {
+			runErr = runCompile.ensureAllocationAccountLifecycle(
+				func(mpool.AllocationAccountTerminalSnapshot) {},
+			)
+			if runErr == nil {
+				allocationAttempt, runErr = runCompile.beginAllocationAccountAttempt()
+			}
+		}
+		if runErr != nil {
+			return runErr
+		}
 		runCompile.InitPipelineContextToExecuteQuery()
 		normalizeRemoteDispatchReceiverAddresses(s, runCompile.addr)
 
@@ -525,9 +680,11 @@ type processHelper struct {
 	txnClient   client.TxnClient
 	sessionInfo process.SessionInfo
 	//analysisNodeList []int32
-	StmtId        uuid.UUID
-	prepareParams pipeline.PrepareParamInfo
-	affectedRows  int64
+	StmtId               uuid.UUID
+	prepareParams        pipeline.PrepareParamInfo
+	affectedRows         int64
+	remoteFragmentCounts map[string]uint32
+	remoteExecutionID    uuid.UUID
 }
 
 // messageReceiverOnServer supported a series methods to write back results.
@@ -556,11 +713,14 @@ type messageReceiverOnServer struct {
 	colexecServer *colexec.Server
 
 	// result.
-	phyPlan                      *models.PhyPlan
-	resourceDelta                resource.Delta
-	resourceMemory               resource.MemoryTotals
-	resourceMissingFragments     uint64
-	resourceMissingMemoryDomains uint64
+	phyPlan                           *models.PhyPlan
+	resourceDelta                     resource.Delta
+	resourceMemory                    resource.MemoryTotals
+	resourceAllocation                resource.AllocationAccountTotals
+	resourceMissingFragments          uint64
+	resourceMissingMemoryDomains      uint64
+	resourcePendingAllocationGroups   []remoteAllocationGroupPending
+	resourceCompletedAllocationGroups []string
 }
 
 func newMessageReceiverOnServer(
@@ -715,10 +875,16 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	c := allocateNewCompile(proc)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.e = cnInfo.storeEngine
-	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), c.proc.GetStmtProfile().GetStmtId())
+	messageBoardID := remoteMessageBoardID(
+		c.proc.GetStmtProfile().GetStmtId(),
+		pHelper.remoteExecutionID,
+	)
+	c.MessageBoard = c.MessageBoard.SetMultiCN(c.GetMessageCenter(), messageBoardID)
 	c.proc.SetMessageBoard(c.MessageBoard)
 	c.anal = newAnalyzeModule()
 	c.addr = receiver.cnInformation.cnAddr
+	c.remoteFragmentCounts = maps.Clone(pHelper.remoteFragmentCounts)
+	c.remoteExecutionID = pHelper.remoteExecutionID
 
 	// a method to send back.
 	c.execType = plan2.ExecTypeAP_MULTICN
@@ -858,11 +1024,14 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 
 func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.Message) error {
 	envelope := remoteTerminalEnvelope{
-		TerminalResourceVersion:  remoteTerminalResourceVersion,
-		Delta:                    receiver.resourceDelta,
-		Memory:                   receiver.resourceMemory,
-		MissingFragmentCount:     receiver.resourceMissingFragments,
-		MissingMemoryDomainCount: receiver.resourceMissingMemoryDomains,
+		TerminalResourceVersion:   remoteTerminalResourceVersion,
+		Delta:                     receiver.resourceDelta,
+		Memory:                    receiver.resourceMemory,
+		Allocation:                receiver.resourceAllocation,
+		MissingFragmentCount:      receiver.resourceMissingFragments,
+		MissingMemoryDomainCount:  receiver.resourceMissingMemoryDomains,
+		PendingAllocationGroups:   receiver.resourcePendingAllocationGroups,
+		CompletedAllocationGroups: receiver.resourceCompletedAllocationGroups,
 	}
 	if receiver.phyPlan != nil {
 		envelope.PhyPlan = *receiver.phyPlan
@@ -883,12 +1052,24 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 	}
 
 	result := processHelper{
-		id:           procInfo.Id,
-		lim:          process.ConvertToProcessLimitation(procInfo.Lim),
-		unixTime:     procInfo.UnixTime,
-		accountId:    procInfo.AccountId,
-		txnClient:    cli,
-		affectedRows: procInfo.AffectedRows,
+		id:                   procInfo.Id,
+		lim:                  process.ConvertToProcessLimitation(procInfo.Lim),
+		unixTime:             procInfo.UnixTime,
+		accountId:            procInfo.AccountId,
+		txnClient:            cli,
+		affectedRows:         procInfo.AffectedRows,
+		remoteFragmentCounts: maps.Clone(procInfo.RemoteFragmentCounts),
+	}
+	if len(procInfo.RemoteExecutionId) > 0 {
+		result.remoteExecutionID, err = uuid.FromBytes(procInfo.RemoteExecutionId)
+		if err != nil {
+			return processHelper{}, err
+		}
+	}
+	if (len(result.remoteFragmentCounts) == 0) != (result.remoteExecutionID == uuid.Nil) {
+		return processHelper{}, moerr.NewInternalErrorNoCtx(
+			"incomplete remote allocation lifecycle metadata",
+		)
 	}
 	result.txnOperator, err = cli.NewWithSnapshot(ctx, procInfo.Snapshot)
 	if err != nil {

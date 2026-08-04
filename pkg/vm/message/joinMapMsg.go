@@ -17,6 +17,7 @@ package message
 import (
 	"bytes"
 	"context"
+	"math"
 	"os"
 	"strconv"
 	"sync"
@@ -39,20 +40,67 @@ type GroupSels struct {
 
 	// tmp holds (groupID, rowID) pairs during the build phase, before Finalize.
 	tmp []int32
+
+	account *mpool.AllocationAccount
+	owner   mpool.AllocationOwner
+	site    mpool.AllocationSite
 }
 
 func freeSlice[T any](mp *mpool.MPool, s []T) {
 	mpool.FreeSlice(mp, s[:cap(s)])
 }
 
-func (sels *GroupSels) Init(n int, mp *mpool.MPool) error {
+// InitWithAllocation makes the complete temporary/final row-index owner use
+// one immutable allocation generation. GroupSels is copied into JoinMap at
+// publication, so its physical slices retain this provenance until the last
+// consumer frees the map.
+func (sels *GroupSels) InitWithAllocation(
+	n int,
+	mp *mpool.MPool,
+	account *mpool.AllocationAccount,
+	owner mpool.AllocationOwner,
+	site mpool.AllocationSite,
+) error {
+	if n < 0 || n > math.MaxInt/2 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if sels.tmp != nil || sels.vals != nil || sels.offsets != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	if account == nil || account.Handle() == 0 ||
+		owner < mpool.AllocationOwnerMin || owner > mpool.AllocationOwnerMax ||
+		site < mpool.AllocationSiteMin {
+		return mpool.ErrAllocationAccountInvalid
+	}
 	var err error
-	sels.tmp, err = mpool.MakeSlice[int32](n*2, mp, false)
+	sels.tmp, err = mpool.MakeSliceAccounted[int32](
+		n*2,
+		mp,
+		account,
+		owner,
+		site,
+	)
 	if err != nil {
 		return err
 	}
+	sels.account = account
+	sels.owner = owner
+	sels.site = site
 	sels.tmp = sels.tmp[:0]
 	return nil
+}
+
+func (sels *GroupSels) makeSlice(n int, mp *mpool.MPool) ([]int32, error) {
+	if sels.account == nil {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	return mpool.MakeSliceAccounted[int32](
+		n,
+		mp,
+		sels.account,
+		sels.owner,
+		sels.site,
+	)
 }
 
 func (sels *GroupSels) Free(mp *mpool.MPool) {
@@ -64,6 +112,9 @@ func (sels *GroupSels) Free(mp *mpool.MPool) {
 	sels.vals = nil
 	sels.offsets = nil
 	sels.tmp = nil
+	sels.account = nil
+	sels.owner = 0
+	sels.site = 0
 }
 
 func (sels *GroupSels) Size() int64 {
@@ -107,8 +158,7 @@ func (sels *GroupSels) Finalize(groupCount int, inputRowCount int, mp *mpool.MPo
 		}
 	}
 	// groupCount+2: +1 for sentinel, +1 for 1-based callers (dedup UPDATE uses keys 1..groupCount)
-	var err error
-	sels.offsets, err = mpool.MakeSlice[int32](groupCount+2, mp, false)
+	offsets, err := sels.makeSlice(groupCount+2, mp)
 	if err != nil {
 		return err
 	}
@@ -116,26 +166,29 @@ func (sels *GroupSels) Finalize(groupCount int, inputRowCount int, mp *mpool.MPo
 	// count occurrences per group
 	for i := 0; i < len(sels.tmp); i += 2 {
 		k := sels.tmp[i]
-		sels.offsets[k+1]++
+		offsets[k+1]++
 	}
 	// prefix sum
-	for i := int32(1); i < int32(len(sels.offsets)); i++ {
-		sels.offsets[i] += sels.offsets[i-1]
+	for i := int32(1); i < int32(len(offsets)); i++ {
+		offsets[i] += offsets[i-1]
 	}
 	// scatter vals using offsets as write cursors, then recover
-	sels.vals, err = mpool.MakeSlice[int32](n, mp, false)
+	vals, err := sels.makeSlice(n, mp)
 	if err != nil {
+		freeSlice(mp, offsets)
 		return err
 	}
 	for i := 0; i < len(sels.tmp); i += 2 {
 		k := sels.tmp[i]
 		v := sels.tmp[i+1]
-		sels.vals[sels.offsets[k]] = v
-		sels.offsets[k]++
+		vals[offsets[k]] = v
+		offsets[k]++
 	}
 	// recover offsets: shift right by one
-	copy(sels.offsets[1:], sels.offsets[:len(sels.offsets)-1])
-	sels.offsets[0] = 0
+	copy(offsets[1:], offsets[:len(offsets)-1])
+	offsets[0] = 0
+	sels.vals = vals
+	sels.offsets = offsets
 	freeSlice(mp, sels.tmp)
 	sels.tmp = nil
 	return nil
@@ -165,9 +218,9 @@ type JoinMap struct {
 	memoryReleaseOnce sync.Once
 
 	// A resident JoinMap may be broadcast to multiple consumers, but a spill
-	// payload is move-only. Keep the complete payload behind one lock so files,
-	// legacy descriptors, and the producer budget generation cannot be claimed
-	// by different consumers.
+	// payload is move-only. Keep the complete payload behind one lock so files
+	// and the producer budget generation cannot be claimed by different
+	// consumers.
 	spillMu           sync.Mutex
 	spilled           atomic.Bool
 	spillPayload      SpillBuildPayload
@@ -177,9 +230,7 @@ type JoinMap struct {
 
 var (
 	ErrSpillBuildPayloadEmpty = moerr.NewInternalErrorNoCtx("spill build payload is empty")
-	ErrSpillBuildPayloadMixed = moerr.NewInternalErrorNoCtx("spill build payload mixes accounted files and legacy descriptors")
 	ErrSpillBuildBudgetRef    = moerr.NewInternalErrorNoCtx("accounted spill build payload is missing its budget reference")
-	ErrSpillBuildLegacyBudget = moerr.NewInternalErrorNoCtx("legacy spill build payload must not carry a budget reference")
 	ErrSpillBuildPayloadSet   = moerr.NewInternalErrorNoCtx("spill build payload is already set")
 	ErrSpillBuildPayloadTaken = moerr.NewInternalErrorNoCtx("spill build payload is already taken")
 	ErrSpillBuildShared       = moerr.NewInternalErrorNoCtx("spill build payload requires exactly one consumer")
@@ -191,7 +242,6 @@ var (
 // transferring the files to SpillEngine.
 type SpillBuildPayload struct {
 	Files     []*SpillFile
-	LegacyFds []*os.File
 	BudgetRef any
 }
 
@@ -212,15 +262,6 @@ func (p *SpillBuildPayload) Close() error {
 		}
 	}
 	p.Files = nil
-	for i, fd := range p.LegacyFds {
-		if fd != nil {
-			if err := fd.Close(); err != nil && firstErr == nil {
-				firstErr = err
-			}
-			p.LegacyFds[i] = nil
-		}
-	}
-	p.LegacyFds = nil
 	p.BudgetRef = nil
 	return firstErr
 }
@@ -266,6 +307,40 @@ func (f *SpillFile) Bytes() uint64 {
 		return 0
 	}
 	return f.bytes
+}
+
+// Validate proves that the move-only descriptor still names the complete
+// physical file recorded by its producer. Writers publish Rows and Bytes only
+// after complete-record writes, so a non-empty spill file must have positive
+// metadata and an exact physical size before any record is decoded.
+func (f *SpillFile) Validate() error {
+	if f == nil {
+		return moerr.NewInternalErrorNoCtx("nil spill file")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fd == nil {
+		return moerr.NewInternalErrorNoCtx("invalid spill file metadata")
+	}
+	if f.rows <= 0 {
+		return moerr.NewInternalErrorNoCtx("corrupted spill file row count metadata")
+	}
+	if f.bytes == 0 {
+		return moerr.NewInternalErrorNoCtx("corrupted spill file size metadata")
+	}
+	info, err := f.fd.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size() < 0 || uint64(info.Size()) != f.bytes {
+		return moerr.NewInternalErrorf(
+			context.Background(),
+			"corrupted spill file size: expected=%d actual=%d",
+			f.bytes,
+			info.Size(),
+		)
+	}
+	return nil
 }
 
 func (f *SpillFile) Close() error {
@@ -406,17 +481,11 @@ func (jm *JoinMap) SetMemoryRelease(release func()) {
 //
 // On error, ownership remains with the caller.
 func (jm *JoinMap) SetSpillBuildPayload(payload SpillBuildPayload) error {
-	if jm == nil || (len(payload.Files) == 0 && len(payload.LegacyFds) == 0) {
+	if jm == nil || len(payload.Files) == 0 {
 		return ErrSpillBuildPayloadEmpty
 	}
-	if len(payload.Files) > 0 && len(payload.LegacyFds) > 0 {
-		return ErrSpillBuildPayloadMixed
-	}
-	if len(payload.Files) > 0 && payload.BudgetRef == nil {
+	if payload.BudgetRef == nil {
 		return ErrSpillBuildBudgetRef
-	}
-	if len(payload.LegacyFds) > 0 && payload.BudgetRef != nil {
-		return ErrSpillBuildLegacyBudget
 	}
 	jm.spillMu.Lock()
 	defer jm.spillMu.Unlock()
@@ -436,8 +505,8 @@ func (jm *JoinMap) SetSpillBuildPayload(payload SpillBuildPayload) error {
 	return nil
 }
 
-// TakeSpillBuildPayload atomically transfers files, legacy descriptors, and
-// the producer budget generation to the sole spill consumer.
+// TakeSpillBuildPayload atomically transfers files and the producer budget
+// generation to the sole spill consumer.
 func (jm *JoinMap) TakeSpillBuildPayload() (SpillBuildPayload, error) {
 	if jm == nil {
 		return SpillBuildPayload{}, ErrSpillBuildPayloadEmpty
@@ -515,25 +584,10 @@ func (jm *JoinMap) PreAlloc(n uint64) error {
 }
 
 type JoinMapMsg struct {
-	JoinMapPtr *JoinMap
 	IsShuffle  bool
 	ShuffleIdx int32
 	Tag        int32
-	Spilled    bool
-	// Result is the terminal dependency state.  The zero value is retained for
-	// source compatibility with older direct JoinMapMsg literals; those are
-	// interpreted as an explicit successful result (including nil for an empty
-	// build) by terminalResult.
-	Result JoinMapResult
-}
-
-func (t JoinMapMsg) terminalResult() JoinMapResult {
-	if t.Result.Finalized() {
-		return t.Result
-	}
-	// Legacy messages predate the explicit result field.  A nil JoinMap in a
-	// legacy message is the established empty-build success convention.
-	return NewJoinMapResult(t.JoinMapPtr)
+	Result     JoinMapResult
 }
 
 func (t JoinMapMsg) Serialize() []byte {
@@ -549,10 +603,7 @@ func (t JoinMapMsg) NeedBlock() bool {
 }
 
 func (t JoinMapMsg) Destroy() {
-	jm := t.JoinMapPtr
-	if jm == nil && t.Result.IsSuccess() {
-		jm = t.Result.JoinMap()
-	}
+	jm := t.Result.JoinMap()
 	if jm != nil {
 		jm.FreeMemory()
 	}
@@ -568,13 +619,13 @@ func (t JoinMapMsg) DebugString() string {
 	if t.IsShuffle {
 		buf.WriteString("shuffle index " + strconv.Itoa(int(t.ShuffleIdx)) + "\n")
 	}
-	if t.JoinMapPtr != nil {
-		buf.WriteString("joinmap rowcnt " + strconv.Itoa(int(t.JoinMapPtr.rowCnt)) + "\n")
-		buf.WriteString("joinmap refcnt " + strconv.Itoa(int(t.JoinMapPtr.GetRefCount())) + "\n")
+	if jm := t.Result.JoinMap(); jm != nil {
+		buf.WriteString("joinmap rowcnt " + strconv.Itoa(int(jm.rowCnt)) + "\n")
+		buf.WriteString("joinmap refcnt " + strconv.Itoa(int(jm.GetRefCount())) + "\n")
 	} else if t.Result.IsBuildError() {
 		buf.WriteString("joinmap build error " + t.Result.BuildError().Error() + "\n")
 	} else {
-		buf.WriteString("joinmapPtr is nil \n")
+		buf.WriteString("joinmap is nil \n")
 	}
 	return buf.String()
 }
@@ -620,7 +671,7 @@ func ReceiveJoinMapResult(tag int32, isShuffle bool, shuffleIdx int32, mb *Messa
 					continue
 				}
 			}
-			result := msg.terminalResult()
+			result := msg.Result
 			if !result.Finalized() {
 				// A malformed/zero result must not be interpreted as empty.  Keep
 				// waiting for the producer's terminal publication.
@@ -642,36 +693,24 @@ func ReceiveJoinMapResult(tag int32, isShuffle bool, shuffleIdx int32, mb *Messa
 }
 
 // SendJoinMapResult publishes one terminal dependency value without waiting
-// for any consumer acknowledgement.  The caller owns exactly-once admission
-// (typically an atomic generation gate in HashBuild); this function only
-// performs the non-blocking MessageBoard publication.
-func SendJoinMapResult(result JoinMapResult, tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoard) {
-	if !result.Finalized() {
-		return
+// for consumer acknowledgement. True means the MessageBoard accepted the
+// value's ownership (or was already closed and destroyed it); false leaves
+// ownership with the caller.
+func SendJoinMapResult(result JoinMapResult, tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoard) bool {
+	if !result.Finalized() || mb == nil || mb.rwMutex == nil {
+		return false
 	}
 	msg := JoinMapMsg{
-		JoinMapPtr: result.JoinMap(),
 		IsShuffle:  isShuffle,
 		ShuffleIdx: shuffleIdx,
 		Tag:        tag,
 		Result:     result,
 	}
-	if jm := result.JoinMap(); jm != nil {
-		msg.Spilled = jm.IsSpilled()
-	}
 	SendMessage(msg, mb)
+	return true
 }
 
 // FinalizeJoinMapBuildError publishes a typed BuildError terminal value.
-// It is kept separate from FinalizeJoinMapMessage so legacy nil-map empty
-// build compatibility cannot accidentally turn an admission failure into a
-// successful empty dependency.
-func FinalizeJoinMapBuildError(mb *MessageBoard, tag int32, isShuffle bool, shuffleIdx int32, err error) {
-	SendJoinMapResult(NewJoinMapBuildErrorResult(err), tag, isShuffle, shuffleIdx, mb)
-}
-
-func FinalizeJoinMapMessage(mb *MessageBoard, tag int32, isShuffle bool, shuffleIdx int32, sendMapSucceed bool) {
-	if !sendMapSucceed {
-		SendJoinMapResult(NewJoinMapResult(nil), tag, isShuffle, shuffleIdx, mb)
-	}
+func FinalizeJoinMapBuildError(mb *MessageBoard, tag int32, isShuffle bool, shuffleIdx int32, err error) bool {
+	return SendJoinMapResult(NewJoinMapBuildErrorResult(err), tag, isShuffle, shuffleIdx, mb)
 }

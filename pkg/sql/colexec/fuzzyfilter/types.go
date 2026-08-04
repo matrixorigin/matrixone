@@ -17,6 +17,7 @@ package fuzzyfilter
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -37,6 +38,16 @@ const (
 	End
 )
 
+const fuzzyFilterAllocationOwner mpool.AllocationOwner = 1
+
+const (
+	fuzzyFilterAllocationSiteRuntimeFilterData mpool.AllocationSite = iota + 1
+	fuzzyFilterAllocationSiteRuntimeFilterArea
+	fuzzyFilterAllocationSiteRuntimeFilterNulls
+	fuzzyFilterAllocationSiteRuntimeFilterGrouping
+	fuzzyFilterAllocationSiteRuntimeFilterPayload
+)
+
 type container struct {
 	state int
 
@@ -55,7 +66,9 @@ type container struct {
 }
 
 type FuzzyFilter struct {
-	ctr container
+	ctr                     container
+	allocationAccount       *mpool.AllocationAccount
+	runtimeFilterAllocation *vector.AllocationAccountSelection
 
 	// Estimates of the number of data items obtained from statistical information
 	N                  float64
@@ -67,6 +80,51 @@ type FuzzyFilter struct {
 
 	RuntimeFilterSpec *plan.RuntimeFilterSpec
 	vm.OperatorBase
+}
+
+func (fuzzyFilter *FuzzyFilter) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if account == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if fuzzyFilter.allocationAccount != nil {
+		if fuzzyFilter.allocationAccount == account {
+			return nil
+		}
+		return mpool.ErrAllocationAccountMismatch
+	}
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		fuzzyFilterAllocationOwner,
+		fuzzyFilterAllocationSiteRuntimeFilterData,
+		fuzzyFilterAllocationSiteRuntimeFilterArea,
+		fuzzyFilterAllocationSiteRuntimeFilterNulls,
+		fuzzyFilterAllocationSiteRuntimeFilterGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	fuzzyFilter.allocationAccount = account
+	fuzzyFilter.runtimeFilterAllocation = selection
+	return nil
+}
+
+func (fuzzyFilter *FuzzyFilter) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if fuzzyFilter.allocationAccount == nil {
+		return nil
+	}
+	if fuzzyFilter.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if fuzzyFilter.ctr.pass2RuntimeFilter != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	fuzzyFilter.allocationAccount = nil
+	fuzzyFilter.runtimeFilterAllocation = nil
+	return nil
 }
 
 func (fuzzyFilter *FuzzyFilter) GetOperatorBase() *vm.OperatorBase {
@@ -127,7 +185,8 @@ func (fuzzyFilter *FuzzyFilter) Reset(proc *process.Process, pipelineFailed bool
 	ctr.runtimeFilterUsable = false
 	ctr.collisionCnt = 0
 	if ctr.pass2RuntimeFilter != nil {
-		ctr.pass2RuntimeFilter.CleanOnlyData()
+		ctr.pass2RuntimeFilter.Free(proc.Mp())
+		ctr.pass2RuntimeFilter = nil
 	}
 	if ctr.rbat != nil {
 		ctr.rbat.CleanOnlyData()

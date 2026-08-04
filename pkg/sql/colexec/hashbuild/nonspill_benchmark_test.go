@@ -163,6 +163,8 @@ func benchmarkHashBuildNonSpillE2E(
 	budget, err := proc.GetHashBuildBudget()
 	require.NoError(b, err)
 	require.NotNil(b, budget)
+	registry, err := budget.AllocationAccountRegistry()
+	require.NoError(b, err)
 	keyExpr := nonSpillBenchmarkColumnExpr(0, keyType)
 	if computed {
 		keyExpr, err = plan2.BindFuncExprImplByPlanExpr(
@@ -185,6 +187,12 @@ func benchmarkHashBuildNonSpillE2E(
 	for i := 0; i < b.N; i++ {
 		child := colexec.NewMockOperator().WithBatchs(inputs)
 		arg := newNonSpillBenchmarkHashBuild(keyExpr, child)
+		account, openErr := registry.OpenWithController(
+			budget.Snapshot().Cap,
+			budget,
+		)
+		require.NoError(b, openErr)
+		require.NoError(b, arg.SetAllocationAccount(account))
 		require.NoError(b, child.Prepare(proc))
 		require.NoError(b, arg.Prepare(proc))
 		before := budget.Snapshot()
@@ -221,6 +229,9 @@ func benchmarkHashBuildNonSpillE2E(
 		joinMap.Free()
 		arg.Reset(proc, false, nil)
 		arg.Free(proc, false, nil)
+		require.NoError(b, arg.ClearAllocationAccount(account))
+		_, _, terminalErr := registry.CompleteTerminal(account)
+		require.NoError(b, terminalErr)
 		child.Release()
 		require.Zero(b, budget.Used())
 		proc.GetMessageBoard().Reset()
