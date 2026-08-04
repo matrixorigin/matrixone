@@ -63,6 +63,66 @@ func TestPreparedTableChangesRecordsSourceSchemaDependency(t *testing.T) {
 	require.Equal(t, builder.qry.CatalogDependencies[0], schemas[0])
 }
 
+func TestBuildChangeWatermark(t *testing.T) {
+	builder := NewQueryBuilder(pbplan.Query_SELECT, NewMockCompilerContext(false), false, true)
+	ctx := NewBindContext(builder, nil)
+	nodeID, err := builder.buildChangeWatermark(nil, ctx, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, int32(0), nodeID)
+	require.Equal(t, "change_watermark", builder.qry.Nodes[nodeID].TableDef.TblFunc.Name)
+
+	_, err = builder.buildChangeWatermark(
+		nil, ctx, []*pbplan.Expr{makePlan2StringConstExprWithType("unexpected")}, nil,
+	)
+	require.ErrorContains(t, err, "invalid input args length")
+}
+
+func TestValidateTableChangesSourceContracts(t *testing.T) {
+	valid := func() *pbplan.TableDef {
+		return &pbplan.TableDef{
+			TableType: catalog.SystemOrdinaryRel,
+			Pkey:      &pbplan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		}
+	}
+	require.EqualError(t, validateTableChangesSource(nil, nil),
+		"invalid input: table_changes source table does not exist")
+	require.EqualError(t, validateTableChangesSource(
+		&pbplan.ObjectRef{PubInfo: &pbplan.PubInfo{}}, valid()),
+		"not supported: table_changes does not support subscription tables")
+
+	unsupported := valid()
+	unsupported.TableType = catalog.SystemViewRel
+	require.ErrorContains(t, validateTableChangesSource(nil, unsupported),
+		"table_changes does not support table type")
+	partitioned := valid()
+	partitioned.Partition = &pbplan.Partition{}
+	require.EqualError(t, validateTableChangesSource(nil, partitioned),
+		"not supported: table_changes does not support partitioned tables")
+
+	withoutPK := valid()
+	withoutPK.Pkey = nil
+	require.EqualError(t, validateTableChangesSource(nil, withoutPK),
+		"not supported: table_changes requires an explicit primary key")
+	cluster := valid()
+	cluster.TableType = catalog.SystemClusterRel
+	require.EqualError(t, validateTableChangesSource(nil, cluster),
+		"not supported: table_changes requires cluster table primary keys to include account_id")
+	cluster.Pkey.Names = append(cluster.Pkey.Names, "ACCOUNT_ID")
+	require.NoError(t, validateTableChangesSource(nil, cluster))
+	require.True(t, containsChangeKey(cluster.Pkey.Names, "account_id"))
+	require.False(t, containsChangeKey(cluster.Pkey.Names, "missing"))
+}
+
+func TestTableChangesStringLiteral(t *testing.T) {
+	value, ok := stringLiteral(makePlan2StringConstExprWithType("source"))
+	require.True(t, ok)
+	require.Equal(t, "source", value)
+	_, ok = stringLiteral(nil)
+	require.False(t, ok)
+	_, ok = stringLiteral(makePlan2Int64ConstExprWithType(1))
+	require.False(t, ok)
+}
+
 func TestValidateTableChangesSourceTemporaryTable(t *testing.T) {
 	err := validateTableChangesSource(nil, &pbplan.TableDef{
 		TableType:   catalog.SystemTemporaryTable,

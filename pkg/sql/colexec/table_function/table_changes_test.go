@@ -83,6 +83,126 @@ func TestValidateRuntimeTableChangesSourceTemporaryTable(t *testing.T) {
 	require.EqualError(t, err, "not supported: table_changes does not support temporary tables")
 }
 
+func TestValidateRuntimeTableChangesSourceContracts(t *testing.T) {
+	valid := func() *plan.TableDef {
+		return &plan.TableDef{
+			TableType: catalog.SystemOrdinaryRel,
+			Pkey:      &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		}
+	}
+	require.EqualError(t, validateRuntimeTableChangesSource(nil),
+		"invalid input: table_changes source table does not exist")
+
+	unsupported := valid()
+	unsupported.TableType = catalog.SystemViewRel
+	require.ErrorContains(t, validateRuntimeTableChangesSource(unsupported),
+		"table_changes does not support table type")
+
+	partitioned := valid()
+	partitioned.Partition = &plan.Partition{}
+	require.EqualError(t, validateRuntimeTableChangesSource(partitioned),
+		"not supported: table_changes does not support partitioned tables")
+
+	for _, pkey := range []*plan.PrimaryKeyDef{
+		nil,
+		{},
+		{Names: []string{"id"}, PkeyColName: catalog.FakePrimaryKeyColName},
+	} {
+		withoutPK := valid()
+		withoutPK.Pkey = pkey
+		require.EqualError(t, validateRuntimeTableChangesSource(withoutPK),
+			"not supported: table_changes requires an explicit primary key")
+	}
+
+	cluster := valid()
+	cluster.TableType = catalog.SystemClusterRel
+	require.EqualError(t, validateRuntimeTableChangesSource(cluster),
+		"not supported: table_changes requires cluster table primary keys to include account_id")
+	cluster.Pkey.Names = append(cluster.Pkey.Names, "ACCOUNT_ID")
+	require.NoError(t, validateRuntimeTableChangesSource(cluster))
+	require.True(t, containsTableChangesKey(cluster.Pkey.Names, "account_id"))
+	require.False(t, containsTableChangesKey(cluster.Pkey.Names, "missing"))
+}
+
+func TestRequiredTableChangesString(t *testing.T) {
+	proc := testutil.NewProc(t)
+	stringsVec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(stringsVec, []byte("value"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(stringsVec, nil, true, proc.Mp()))
+	defer stringsVec.Free(proc.Mp())
+
+	value, err := requiredTableChangesString(proc, stringsVec, 0, "argument")
+	require.NoError(t, err)
+	require.Equal(t, "value", value)
+	_, err = requiredTableChangesString(proc, stringsVec, 1, "argument")
+	require.ErrorContains(t, err, "cannot be NULL")
+	_, err = requiredTableChangesString(proc, nil, 0, "argument")
+	require.ErrorContains(t, err, "cannot be NULL")
+
+	intVec := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(intVec, int64(1), false, proc.Mp()))
+	defer intVec.Free(proc.Mp())
+	_, err = requiredTableChangesString(proc, intVec, 0, "argument")
+	require.ErrorContains(t, err, "must be a string")
+}
+
+func TestTableChangesAppendInsertAndDeleteRows(t *testing.T) {
+	proc := testutil.NewProc(t)
+	attrs := []string{
+		catalog.TableChangesAttrChangeType,
+		catalog.TableChangesAttrCommitTS,
+		catalog.TableChangesAttrTableID,
+		catalog.TableChangesAttrSchemaVersion,
+		"id",
+		"payload",
+	}
+	state := &tableChangesState{
+		tableDef: &plan.TableDef{
+			TblId: 42, Version: 7,
+			Name2ColIndex: map[string]int32{"id": 0, "payload": 1},
+			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		},
+		batch: batch.NewWithSize(len(attrs)),
+	}
+	for idx, typ := range []types.Type{
+		types.T_varchar.ToType(), types.T_varchar.ToType(),
+		types.T_uint64.ToType(), types.T_uint32.ToType(),
+		types.T_int64.ToType(), types.T_varchar.ToType(),
+	} {
+		state.batch.Vecs[idx] = vector.NewVec(typ)
+	}
+	defer state.batch.Clean(proc.Mp())
+
+	commitTS := types.BuildTS(10, 2)
+	inserts := batch.NewWithSize(3)
+	inserts.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	inserts.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	inserts.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(inserts.Vecs[0], int64(1), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(inserts.Vecs[1], []byte("inserted"), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(inserts.Vecs[2], commitTS, false, proc.Mp()))
+	inserts.SetRowCount(1)
+	require.NoError(t, state.appendInsertRows(attrs, inserts, proc))
+	inserts.Clean(proc.Mp())
+
+	deletes := batch.NewWithSize(2)
+	deletes.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	deletes.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(deletes.Vecs[0], int64(2), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(deletes.Vecs[1], commitTS.Next(), false, proc.Mp()))
+	deletes.SetRowCount(1)
+	require.NoError(t, state.appendDeleteRows(attrs, deletes, proc))
+	deletes.Clean(proc.Mp())
+
+	require.Equal(t, 2, state.batch.RowCount())
+	require.Equal(t, []string{"insert", "delete"}, vector.InefficientMustStrCol(state.batch.Vecs[0]))
+	require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](state.batch.Vecs[4]))
+	require.Equal(t, "inserted", state.batch.Vecs[5].GetStringAt(0))
+	require.True(t, state.batch.Vecs[5].IsNull(1))
+	require.NoError(t, state.appendInsertRows(attrs, nil, proc))
+	require.NoError(t, state.appendDeleteRows(attrs, nil, proc))
+}
+
 func TestValidateRuntimeTableChangesSourceRejectsMetadataColumnNames(t *testing.T) {
 	for _, name := range []string{
 		catalog.TableChangesAttrChangeType,

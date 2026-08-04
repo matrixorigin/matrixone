@@ -556,14 +556,19 @@ func mergeRangeSpillRunPair(
 }
 
 type spilledBatchHandle struct {
-	file    *rangeSpillFile
-	reader  *rangeSpillRunReader
-	rows    int
-	maxRows int
-	mp      *mpool.MPool
+	file     *rangeSpillFile
+	reader   *rangeSpillRunReader
+	rows     int
+	maxRows  int
+	maxBytes int
+	mp       *mpool.MPool
 }
 
-func newSpilledBatchHandle(file *rangeSpillFile, rows, maxRows int, mp *mpool.MPool) (*spilledBatchHandle, error) {
+func newSpilledBatchHandle(
+	file *rangeSpillFile,
+	rows, maxRows, maxBytes int,
+	mp *mpool.MPool,
+) (*spilledBatchHandle, error) {
 	if file == nil || len(file.records) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("empty change range spill")
 	}
@@ -575,7 +580,10 @@ func newSpilledBatchHandle(file *rangeSpillFile, rows, maxRows int, mp *mpool.MP
 	if maxRows <= 0 {
 		maxRows = int(objectio.BlockMaxRows)
 	}
-	return &spilledBatchHandle{file: file, reader: reader, rows: rows, maxRows: maxRows, mp: mp}, nil
+	return &spilledBatchHandle{
+		file: file, reader: reader, rows: rows,
+		maxRows: maxRows, maxBytes: maxBytes, mp: mp,
+	}, nil
 }
 
 func (h *spilledBatchHandle) init(bool, *mpool.MPool) error { return nil }
@@ -609,18 +617,26 @@ func (h *spilledBatchHandle) Next(dst **batch.Batch, mp *mpool.MPool) error {
 	if h == nil || h.reader == nil || h.reader.exhausted {
 		return moerr.GetOkExpectedEOF()
 	}
+	if h.outputLimitReached(*dst) {
+		return moerr.GetOkExpectedEOB()
+	}
 	if err := appendRangeSpillRow(dst, h.reader.bat, h.reader.row, mp); err != nil {
 		return err
 	}
-	return h.reader.next()
+	if err := h.reader.next(); err != nil {
+		return err
+	}
+	if h.outputLimitReached(*dst) {
+		return moerr.GetOkExpectedEOB()
+	}
+	return nil
 }
 func (h *spilledBatchHandle) QuickNext(dst **batch.Batch, mp *mpool.MPool) error {
 	if h == nil || h.reader == nil || h.reader.exhausted {
 		return moerr.GetOkExpectedEOF()
 	}
-	startRows := 0
-	if *dst != nil {
-		startRows = (*dst).RowCount()
+	if h.outputLimitReached(*dst) {
+		return moerr.GetOkExpectedEOB()
 	}
 	for !h.reader.exhausted {
 		if err := appendRangeSpillRow(dst, h.reader.bat, h.reader.row, mp); err != nil {
@@ -629,11 +645,19 @@ func (h *spilledBatchHandle) QuickNext(dst **batch.Batch, mp *mpool.MPool) error
 		if err := h.reader.next(); err != nil {
 			return err
 		}
-		if (*dst).RowCount()-startRows >= h.maxRows {
-			return nil
+		if h.outputLimitReached(*dst) {
+			return moerr.GetOkExpectedEOB()
 		}
 	}
 	return nil
+}
+
+func (h *spilledBatchHandle) outputLimitReached(bat *batch.Batch) bool {
+	if h == nil || bat == nil {
+		return false
+	}
+	return (h.maxRows > 0 && bat.RowCount() >= h.maxRows) ||
+		(h.maxBytes > 0 && bat.Allocated() >= h.maxBytes)
 }
 
 type CNObjectHandle struct {
@@ -1295,6 +1319,12 @@ func NewBaseHandler(state *PartitionState, changesHandle *ChangeHandler, start, 
 		skipTS:        make(map[types.TS]struct{}),
 		changesHandle: changesHandle,
 	}
+	owned := p
+	defer func() {
+		if err != nil {
+			owned.Close()
+		}
+	}()
 	var iter btree.IterG[objectio.ObjectEntry]
 	if tombstone {
 		iter = state.tombstoneObjectsNameIndex.Iter()
@@ -1609,7 +1639,7 @@ func (p *baseHandle) newBatchHandleWithRowIterator(
 	if err != nil {
 		return nil, err
 	}
-	h, err = newSpilledBatchHandle(spillFile, emitted, chunkRows, mp)
+	h, err = newSpilledBatchHandle(spillFile, emitted, chunkRows, chunkBytes, mp)
 	if err != nil {
 		return nil, err
 	}

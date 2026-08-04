@@ -17,6 +17,7 @@ package logtailreplay
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -67,36 +68,12 @@ func TestPartitionStateRangeSpillsSingleCommitLargerThanMemoryLimit(t *testing.T
 	defer mpool.DeleteMPool(mp)
 	const rows = 20
 	state, src, start, end := newPartitionStateRangeRows(t, mp, rows, true)
-	spillDir := t.TempDir()
-	var diskReservations []*testChangeRangeSpillReservation
-	var fileReservations []*testChangeRangeSpillReservation
+	spillConfig, spillTracker := newTestChangeRangeSpillConfig(t)
 	ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
 		MaxInMemoryRows:  8,
 		MaxInMemoryBytes: 64 << 20,
 	})
-	ctx = engine.WithChangeRangeSpill(ctx, engine.ChangeRangeSpillConfig{
-		FileFactory: func(_ context.Context, _ string) (*os.File, error) {
-			file, err := os.CreateTemp(spillDir, "change-range-*")
-			if err != nil {
-				return nil, err
-			}
-			if err = os.Remove(file.Name()); err != nil {
-				_ = file.Close()
-				return nil, err
-			}
-			return file, nil
-		},
-		ReserveDisk: func(size uint64) (engine.ChangeRangeGrowingSpillReservation, error) {
-			reservation := &testChangeRangeSpillReservation{grown: size}
-			diskReservations = append(diskReservations, reservation)
-			return reservation, nil
-		},
-		ReserveFiles: func(uint64) (engine.ChangeRangeSpillReservation, error) {
-			reservation := &testChangeRangeSpillReservation{}
-			fileReservations = append(fileReservations, reservation)
-			return reservation, nil
-		},
-	})
+	ctx = engine.WithChangeRangeSpill(ctx, spillConfig)
 
 	handle, err := NewChangesHandlerWithPartitionStateRange(
 		ctx, state, start, end, false, objectio.BlockMaxRows, 0, mp, nil,
@@ -126,20 +103,226 @@ func TestPartitionStateRangeSpillsSingleCommitLargerThanMemoryLimit(t *testing.T
 	require.NoError(t, handle.Close())
 	src.Clean(mp)
 	require.Zero(t, mp.CurrNB())
-	require.Greater(t, len(diskReservations), 1, "multi-run input must exercise merge spilling")
-	require.Equal(t, len(diskReservations), len(fileReservations))
-	for _, reservation := range diskReservations {
-		require.True(t, reservation.released)
-		require.Positive(t, reservation.grown)
+	spillTracker.requireReleased(t, true)
+}
+
+func TestPartitionStateRangeSpillReadHonorsByteLimit(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const (
+		rows       = 24
+		payloadLen = 8 << 10
+		maxBytes   = 32 << 10
+	)
+	state, src, start, end := newPartitionStateRangeWideRows(t, mp, rows, payloadLen)
+	baseline := mp.CurrNB()
+	spillConfig, spillTracker := newTestChangeRangeSpillConfig(t)
+	ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
+		MaxInMemoryRows:  1 << 20,
+		MaxInMemoryBytes: maxBytes,
+	})
+	ctx = engine.WithChangeRangeSpill(ctx, spillConfig)
+
+	handle, err := NewChangesHandlerWithPartitionStateRange(
+		ctx, state, start, end, false, objectio.BlockMaxRows, 0, mp, nil,
+	)
+	require.NoError(t, err)
+	require.IsType(t, &spilledBatchHandle{}, handle.dataHandle.inMemoryHandle)
+
+	readRows, peakOutputBytes, peakExtraMPool := 0, 0, mp.CurrNB()-baseline
+	for {
+		data, tombstone, _, nextErr := handle.Next(context.Background(), mp)
+		require.NoError(t, nextErr)
+		require.Nil(t, tombstone)
+		if data == nil {
+			break
+		}
+		readRows += data.RowCount()
+		peakOutputBytes = max(peakOutputBytes, data.Allocated())
+		peakExtraMPool = max(peakExtraMPool, mp.CurrNB()-baseline)
+		data.Clean(mp)
 	}
-	for _, reservation := range fileReservations {
-		require.True(t, reservation.released)
+	require.Equal(t, rows, readRows)
+	require.Less(t, peakOutputBytes, maxBytes*2,
+		"spill replay may exceed the byte limit by at most one wide row allocation")
+	require.Less(t, peakExtraMPool, int64(maxBytes*8),
+		"retained replay memory must stay proportional to the configured batch limit")
+	require.NoError(t, handle.Close())
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	spillTracker.requireReleased(t, true)
+}
+
+func TestNewBaseHandlerReleasesSpillWhenObjectResolutionFails(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	state, src, start, end := newPartitionStateRangeRows(t, mp, 20, true)
+	missing := makeTestObjectEntry(t, 1, true, false, end)
+	state.dataObjectsNameIndex.Set(*missing)
+	spillConfig, spillTracker := newTestChangeRangeSpillConfig(t)
+	changes := &ChangeHandler{
+		start: start, end: end, mp: mp,
+		fs:                       &stubStatFileFS{existing: map[string]struct{}{}},
+		enableDeleteChainResolve: true,
+		maxInMemoryRows:          8,
+		maxInMemoryBytes:         64 << 20,
+		spillConfig:              spillConfig,
 	}
+
+	handle, err := NewBaseHandler(
+		state, changes, start, end, mp, false, changes.fs, context.Background(),
+	)
+	require.Nil(t, handle)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+	spillTracker.requireReleased(t, true)
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestSpilledBatchHandleNextHonorsOutputLimit(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	state, src, start, end := newPartitionStateRangeRows(t, mp, 12, true)
+	spillConfig, spillTracker := newTestChangeRangeSpillConfig(t)
+	ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
+		MaxInMemoryRows: 8, MaxInMemoryBytes: 64 << 20,
+	})
+	ctx = engine.WithChangeRangeSpill(ctx, spillConfig)
+	handle, err := NewChangesHandlerWithPartitionStateRange(
+		ctx, state, start, end, false, objectio.BlockMaxRows, 0, mp, nil,
+	)
+	require.NoError(t, err)
+	spilled := handle.dataHandle.inMemoryHandle.(*spilledBatchHandle)
+	require.False(t, spilled.IsEmpty())
+	require.Equal(t, 12, spilled.Rows())
+	require.Equal(t, end, spilled.NextTS())
+
+	readRows := 0
+	var data *batch.Batch
+	for {
+		nextErr := spilled.Next(&data, mp)
+		if moerr.IsMoErrCode(nextErr, moerr.OkExpectedEOF) {
+			if data != nil {
+				readRows += data.RowCount()
+				data.Clean(mp)
+			}
+			break
+		}
+		if moerr.IsMoErrCode(nextErr, moerr.OkExpectedEOB) {
+			readRows += data.RowCount()
+			data.Clean(mp)
+			data = nil
+			continue
+		}
+		require.NoError(t, nextErr)
+	}
+	require.Equal(t, 12, readRows)
+	require.NoError(t, handle.Close())
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	spillTracker.requireReleased(t, true)
+}
+
+func TestChangeRangeSpillRejectsMissingResources(t *testing.T) {
+	ctx := context.Background()
+	_, err := newRangeSpillFile(ctx, engine.ChangeRangeSpillConfig{})
+	require.EqualError(t, err, "internal error: change range spill is unavailable")
+
+	config := engine.ChangeRangeSpillConfig{
+		FileFactory: func(context.Context, string) (*os.File, error) { return nil, nil },
+		ReserveDisk: func(uint64) (engine.ChangeRangeGrowingSpillReservation, error) {
+			return &testChangeRangeSpillReservation{}, nil
+		},
+		ReserveFiles: func(uint64) (engine.ChangeRangeSpillReservation, error) { return nil, nil },
+	}
+	_, err = newRangeSpillFile(ctx, config)
+	require.EqualError(t, err, "internal error: change range spill file reservation is nil")
+
+	fileReservation := &testChangeRangeSpillReservation{}
+	config.ReserveFiles = func(uint64) (engine.ChangeRangeSpillReservation, error) {
+		return fileReservation, nil
+	}
+	config.ReserveDisk = func(uint64) (engine.ChangeRangeGrowingSpillReservation, error) {
+		return nil, nil
+	}
+	_, err = newRangeSpillFile(ctx, config)
+	require.EqualError(t, err, "internal error: change range spill disk reservation is nil")
+	require.True(t, fileReservation.released)
+
+	fileReservation = &testChangeRangeSpillReservation{}
+	diskReservation := &testChangeRangeSpillReservation{}
+	config.ReserveFiles = func(uint64) (engine.ChangeRangeSpillReservation, error) {
+		return fileReservation, nil
+	}
+	config.ReserveDisk = func(uint64) (engine.ChangeRangeGrowingSpillReservation, error) {
+		return diskReservation, nil
+	}
+	_, err = newRangeSpillFile(ctx, config)
+	require.EqualError(t, err, "internal error: change range spill file is nil")
+	require.True(t, fileReservation.released)
+	require.True(t, diskReservation.released)
+
+	_, err = newSpilledBatchHandle(nil, 0, 0, 0, nil)
+	require.EqualError(t, err, "internal error: empty change range spill")
 }
 
 type testChangeRangeSpillReservation struct {
 	grown    uint64
 	released bool
+}
+
+type testChangeRangeSpillTracker struct {
+	diskReservations []*testChangeRangeSpillReservation
+	fileReservations []*testChangeRangeSpillReservation
+}
+
+func newTestChangeRangeSpillConfig(
+	t *testing.T,
+) (engine.ChangeRangeSpillConfig, *testChangeRangeSpillTracker) {
+	t.Helper()
+	spillDir := t.TempDir()
+	tracker := &testChangeRangeSpillTracker{}
+	return engine.ChangeRangeSpillConfig{
+		FileFactory: func(_ context.Context, _ string) (*os.File, error) {
+			file, err := os.CreateTemp(spillDir, "change-range-*")
+			if err != nil {
+				return nil, err
+			}
+			if err = os.Remove(file.Name()); err != nil {
+				_ = file.Close()
+				return nil, err
+			}
+			return file, nil
+		},
+		ReserveDisk: func(size uint64) (engine.ChangeRangeGrowingSpillReservation, error) {
+			reservation := &testChangeRangeSpillReservation{grown: size}
+			tracker.diskReservations = append(tracker.diskReservations, reservation)
+			return reservation, nil
+		},
+		ReserveFiles: func(uint64) (engine.ChangeRangeSpillReservation, error) {
+			reservation := &testChangeRangeSpillReservation{}
+			tracker.fileReservations = append(tracker.fileReservations, reservation)
+			return reservation, nil
+		},
+	}, tracker
+}
+
+func (tracker *testChangeRangeSpillTracker) requireReleased(t *testing.T, requireMultiple bool) {
+	t.Helper()
+	if requireMultiple {
+		require.Greater(t, len(tracker.diskReservations), 1,
+			"multi-run input must exercise merge spilling")
+	}
+	require.NotEmpty(t, tracker.diskReservations)
+	require.Equal(t, len(tracker.diskReservations), len(tracker.fileReservations))
+	for _, reservation := range tracker.diskReservations {
+		require.True(t, reservation.released)
+		require.Positive(t, reservation.grown)
+	}
+	for _, reservation := range tracker.fileReservations {
+		require.True(t, reservation.released)
+	}
 }
 
 func (r *testChangeRangeSpillReservation) Grow(size uint64) error {
@@ -212,6 +395,38 @@ func newPartitionStateRangeRows(
 		return state, src, types.BuildTS(2, 1), types.BuildTS(2, 1)
 	}
 	return state, src, types.BuildTS(2, 0), types.BuildTS(2, uint32(rows-1))
+}
+
+func newPartitionStateRangeWideRows(
+	t *testing.T,
+	mp *mpool.MPool,
+	rows, payloadLen int,
+) (*PartitionState, *batch.Batch, types.TS, types.TS) {
+	t.Helper()
+	state := NewPartitionState("", true, 42, false)
+	src := batch.NewWithSize(4)
+	src.SetAttributes([]string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "pk", "payload"})
+	src.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	src.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	src.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	src.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+	blockID := types.Blockid{}
+	commitTS := types.BuildTS(2, 1)
+	payload := []byte(strings.Repeat("x", payloadLen))
+	for row := 0; row < rows; row++ {
+		rowOffset := uint32(row)
+		rowID := types.NewRowid(&blockID, rowOffset)
+		require.NoError(t, vector.AppendFixed(src.Vecs[0], rowID, false, mp))
+		require.NoError(t, vector.AppendFixed(src.Vecs[1], commitTS, false, mp))
+		require.NoError(t, vector.AppendFixed(src.Vecs[2], int64(row), false, mp))
+		require.NoError(t, vector.AppendBytes(src.Vecs[3], payload, false, mp))
+		state.rows.Set(&RowEntry{
+			BlockID: blockID, RowID: rowID, Offset: int64(rowOffset),
+			Time: commitTS, ID: int64(rowOffset), Batch: src,
+		})
+	}
+	src.SetRowCount(rows)
+	return state, src, commitTS, commitTS
 }
 
 func TestBatchHandleNext_ReturnsEOBOnSchemaMismatch(t *testing.T) {
