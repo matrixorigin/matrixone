@@ -23,6 +23,46 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPreparedTableChangesRecordsSourceSchemaDependency(t *testing.T) {
+	mock := NewMockCompilerContext(false)
+	mock.objects["source"] = &pbplan.ObjectRef{
+		Db: 10, Obj: 20, SchemaName: "db", ObjName: "source",
+	}
+	mock.tables["source"] = &pbplan.TableDef{
+		Name: "source", DbName: "db", DbId: 10, TblId: 20, Version: 7,
+		TableType: catalog.SystemOrdinaryRel,
+		Cols: []*pbplan.ColDef{{
+			Name: "id", Typ: pbplan.Type{Id: int32(types.T_int64)}, Primary: true,
+		}},
+		Pkey: &pbplan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+	}
+	builder := NewQueryBuilder(pbplan.Query_SELECT, mock, true, true)
+
+	_, err := builder.buildTableChanges(
+		nil,
+		NewBindContext(builder, nil),
+		[]*pbplan.Expr{
+			makePlan2StringConstExprWithType("db"),
+			makePlan2StringConstExprWithType("source"),
+			nil,
+			nil,
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, builder.qry.CatalogDependencies, 1)
+	require.Equal(t, int64(10), builder.qry.CatalogDependencies[0].Db)
+	require.Equal(t, int64(20), builder.qry.CatalogDependencies[0].Obj)
+	require.Equal(t, int64(7), builder.qry.CatalogDependencies[0].Server)
+
+	schemas, _, err := ResetPreparePlan(mock, &pbplan.Plan{
+		Plan: &pbplan.Plan_Query{Query: builder.qry},
+	})
+	require.NoError(t, err)
+	require.Len(t, schemas, 1)
+	require.Equal(t, builder.qry.CatalogDependencies[0], schemas[0])
+}
+
 func TestValidateTableChangesSourceTemporaryTable(t *testing.T) {
 	err := validateTableChangesSource(nil, &pbplan.TableDef{
 		TableType:   catalog.SystemTemporaryTable,

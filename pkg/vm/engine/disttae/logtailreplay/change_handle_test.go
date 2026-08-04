@@ -16,6 +16,7 @@ package logtailreplay
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -61,31 +62,104 @@ func TestPartitionStateRangeHandlerPropagatesPKFilter(t *testing.T) {
 	require.NoError(t, handle.Close())
 }
 
-func TestPartitionStateRangeInMemoryMaterializationIsBounded(t *testing.T) {
+func TestPartitionStateRangeSpillsSingleCommitLargerThanMemoryLimit(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	state, src, start, end := newPartitionStateRangeRows(t, mp, 3)
-	baseline := mp.CurrNB()
+	const rows = 20
+	state, src, start, end := newPartitionStateRangeRows(t, mp, rows, true)
+	spillDir := t.TempDir()
+	var diskReservations []*testChangeRangeSpillReservation
+	var fileReservations []*testChangeRangeSpillReservation
 	ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
-		MaxInMemoryRows:  2,
+		MaxInMemoryRows:  8,
 		MaxInMemoryBytes: 64 << 20,
 	})
+	ctx = engine.WithChangeRangeSpill(ctx, engine.ChangeRangeSpillConfig{
+		FileFactory: func(_ context.Context, _ string) (*os.File, error) {
+			file, err := os.CreateTemp(spillDir, "change-range-*")
+			if err != nil {
+				return nil, err
+			}
+			if err = os.Remove(file.Name()); err != nil {
+				_ = file.Close()
+				return nil, err
+			}
+			return file, nil
+		},
+		ReserveDisk: func(size uint64) (engine.ChangeRangeGrowingSpillReservation, error) {
+			reservation := &testChangeRangeSpillReservation{grown: size}
+			diskReservations = append(diskReservations, reservation)
+			return reservation, nil
+		},
+		ReserveFiles: func(uint64) (engine.ChangeRangeSpillReservation, error) {
+			reservation := &testChangeRangeSpillReservation{}
+			fileReservations = append(fileReservations, reservation)
+			return reservation, nil
+		},
+	})
 
-	_, err := NewChangesHandlerWithPartitionStateRange(
+	handle, err := NewChangesHandlerWithPartitionStateRange(
 		ctx, state, start, end, false, objectio.BlockMaxRows, 0, mp, nil,
 	)
-	require.EqualError(t, err,
-		"invalid input: visible-state change range exceeds the recovery limit of 2 in-memory rows or 67108864 bytes; narrow the timestamp range")
-	require.Equal(t, baseline, mp.CurrNB(), "failed construction must release its bounded working batch")
+	require.NoError(t, err)
+	require.Equal(t, 8, handle.maxInMemoryRows)
+	require.True(t, handle.spillConfig.Enabled())
+	require.Equal(t, rows, handle.dataHandle.inMemoryHandle.Rows())
+	require.IsType(t, &spilledBatchHandle{}, handle.dataHandle.inMemoryHandle)
+
+	readRows := 0
+	for {
+		data, tombstone, _, nextErr := handle.Next(context.Background(), mp)
+		require.NoError(t, nextErr)
+		require.Nil(t, tombstone)
+		if data == nil {
+			break
+		}
+		commitTSs := vector.MustFixedColWithTypeCheck[types.TS](data.Vecs[len(data.Vecs)-1])
+		for _, commitTS := range commitTSs {
+			require.Equal(t, end, commitTS)
+		}
+		readRows += data.RowCount()
+		data.Clean(mp)
+	}
+	require.Equal(t, rows, readRows, "a commit larger than the memory threshold must remain resumable")
+	require.NoError(t, handle.Close())
 	src.Clean(mp)
 	require.Zero(t, mp.CurrNB())
+	require.Greater(t, len(diskReservations), 1, "multi-run input must exercise merge spilling")
+	require.Equal(t, len(diskReservations), len(fileReservations))
+	for _, reservation := range diskReservations {
+		require.True(t, reservation.released)
+		require.Positive(t, reservation.grown)
+	}
+	for _, reservation := range fileReservations {
+		require.True(t, reservation.released)
+	}
+}
+
+type testChangeRangeSpillReservation struct {
+	grown    uint64
+	released bool
+}
+
+func (r *testChangeRangeSpillReservation) Grow(size uint64) error {
+	r.grown += size
+	return nil
+}
+
+func (r *testChangeRangeSpillReservation) Release() bool {
+	if r.released {
+		return false
+	}
+	r.released = true
+	return true
 }
 
 func TestDataBranchVisibleStateRangeExceedingTableChangesCapIsUnbounded(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	const previousGenericCap = int(objectio.BlockMaxRows) * 4
-	state, src, start, end := newPartitionStateRangeRows(t, mp, previousGenericCap+1)
+	state, src, start, end := newPartitionStateRangeRows(t, mp, previousGenericCap+1, false)
 	ctx := engine.WithSnapshotReadPolicy(context.Background(), engine.SnapshotReadPolicyVisibleState)
 
 	handle, err := NewChangesHandlerWithPartitionStateRange(
@@ -104,6 +178,7 @@ func newPartitionStateRangeRows(
 	t *testing.T,
 	mp *mpool.MPool,
 	rows int,
+	sameCommit bool,
 ) (*PartitionState, *batch.Batch, types.TS, types.TS) {
 	t.Helper()
 	state := NewPartitionState("", true, 42, false)
@@ -117,6 +192,9 @@ func newPartitionStateRangeRows(
 		rowOffset := uint32(row)
 		rowID := types.NewRowid(&blockID, rowOffset)
 		ts := types.BuildTS(2, rowOffset)
+		if sameCommit {
+			ts = types.BuildTS(2, 1)
+		}
 		require.NoError(t, vector.AppendFixed(src.Vecs[0], rowID, false, mp))
 		require.NoError(t, vector.AppendFixed(src.Vecs[1], ts, false, mp))
 		require.NoError(t, vector.AppendFixed(src.Vecs[2], int64(row), false, mp))
@@ -130,6 +208,9 @@ func newPartitionStateRangeRows(
 		})
 	}
 	src.SetRowCount(rows)
+	if sameCommit {
+		return state, src, types.BuildTS(2, 1), types.BuildTS(2, 1)
+	}
 	return state, src, types.BuildTS(2, 0), types.BuildTS(2, uint32(rows-1))
 }
 
@@ -717,7 +798,8 @@ func TestBaseHandleNextTS_SelectsEarliestHandle(t *testing.T) {
 	require.Equal(t, types.BuildTS(8, 0), ts)
 	require.Equal(t, NextChangeHandle_InMemory, kind)
 
-	p.inMemoryHandle.rowOffsetCursor = 1
+	inMemory := p.inMemoryHandle.(*BatchHandle)
+	inMemory.rowOffsetCursor = 1
 	ts, kind = p.nextTS()
 	require.Equal(t, types.BuildTS(10, 0), ts)
 	require.Equal(t, NextChangeHandle_AObj, kind)
@@ -729,7 +811,7 @@ func TestBaseHandleNextTS_SelectsEarliestHandle(t *testing.T) {
 	require.Equal(t, NextChangeHandle_CNObj, kind)
 
 	p.aobjHandle.currentBatch.Clean(mp)
-	p.inMemoryHandle.batches.Clean(mp)
+	inMemory.batches.Clean(mp)
 }
 
 func makeTestObjectEntry(

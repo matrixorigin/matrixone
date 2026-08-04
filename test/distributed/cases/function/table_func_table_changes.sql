@@ -221,6 +221,18 @@ drop table schema_add;
 drop table schema_drop;
 drop table schema_type;
 
+-- Prepared plans must rebuild their table_changes output schema after DDL.
+create table prepared_schema (id int primary key, payload int);
+prepare table_changes_prepared from
+    'select id, payload from table_changes(''table_changes_db'', ''prepared_schema'', ?, ?) c';
+alter table prepared_schema modify column payload varchar(20);
+set @prepared_after = (select watermark from change_watermark() w);
+insert into prepared_schema values (1, 'post-ddl');
+set @prepared_until = (select watermark from change_watermark() w);
+execute table_changes_prepared using @prepared_after, @prepared_until;
+deallocate prepare table_changes_prepared;
+drop table prepared_schema;
+
 -- table_changes requires the source table's SELECT privilege just like a scan.
 drop user if exists table_changes_priv_user;
 drop role if exists table_changes_priv_role;

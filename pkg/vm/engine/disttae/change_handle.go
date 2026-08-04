@@ -353,6 +353,7 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 	}
 	pkFilter := engine.PKFilterFromContext(ctx)
 	rangeLimit := engine.ChangeRangeLimitFromContext(ctx)
+	spillConfig := engine.ChangeRangeSpillFromContext(ctx)
 	debugLabel := engine.CollectChangesDebugLabelFromContext(ctx)
 	retainRowID := engine.RetainRowIDFromContext(ctx)
 	rangeFrom, rangeTo := h.currentPSFrom, h.currentPSTo
@@ -362,6 +363,7 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 		build: func(nextCtx context.Context) (engine.ChangesHandle, error) {
 			nextCtx = engine.WithPKFilter(nextCtx, pkFilter)
 			nextCtx = engine.WithChangeRangeLimit(nextCtx, rangeLimit)
+			nextCtx = engine.WithChangeRangeSpill(nextCtx, spillConfig)
 			nextCtx = engine.WithCollectChangesDebugLabel(nextCtx, debugLabel)
 			nextCtx = engine.WithRetainRowID(nextCtx, retainRowID)
 			return logtailreplay.NewChangesHandlerWithPartitionStateRange(

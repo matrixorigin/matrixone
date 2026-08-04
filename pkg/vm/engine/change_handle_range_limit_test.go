@@ -16,6 +16,7 @@ package engine
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -29,4 +30,21 @@ func TestChangeRangeLimitContextRoundTrip(t *testing.T) {
 	want := ChangeRangeLimit{MaxInMemoryRows: 7, MaxInMemoryBytes: 11}
 	ctx := WithChangeRangeLimit(base, want)
 	require.Equal(t, want, ChangeRangeLimitFromContext(ctx))
+}
+
+func TestChangeRangeSpillContextRoundTrip(t *testing.T) {
+	base := context.Background()
+	require.False(t, ChangeRangeSpillFromContext(base).Enabled())
+	require.True(t, WithChangeRangeSpill(base, ChangeRangeSpillConfig{}) == base)
+
+	want := ChangeRangeSpillConfig{
+		FileFactory:  func(context.Context, string) (*os.File, error) { return nil, nil },
+		ReserveDisk:  func(uint64) (ChangeRangeGrowingSpillReservation, error) { return nil, nil },
+		ReserveFiles: func(uint64) (ChangeRangeSpillReservation, error) { return nil, nil },
+	}
+	got := ChangeRangeSpillFromContext(WithChangeRangeSpill(base, want))
+	require.True(t, got.Enabled())
+	require.NotNil(t, got.FileFactory)
+	require.NotNil(t, got.ReserveDisk)
+	require.NotNil(t, got.ReserveFiles)
 }

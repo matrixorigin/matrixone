@@ -16,12 +16,16 @@ package logtailreplay
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"io"
+	"os"
 	"sync"
 	"time"
 
 	goSort "sort"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -104,6 +108,16 @@ type BatchHandle struct {
 	tombstone  bool
 }
 
+type replayRowHandle interface {
+	init(bool, *mpool.MPool) error
+	IsEmpty() bool
+	Rows() int
+	NextTS() types.TS
+	Close()
+	Next(**batch.Batch, *mpool.MPool) error
+	QuickNext(**batch.Batch, *mpool.MPool) error
+}
+
 func batchesShareAppendSchema(dst, src *batch.Batch) bool {
 	if dst == nil || src == nil {
 		return true
@@ -169,7 +183,11 @@ func (r *BatchHandle) NextTS() types.TS {
 	return vector.GetFixedAtNoTypeCheck[types.TS](commitTSVec, r.rowOffsetCursor)
 }
 func (r *BatchHandle) Close() {
+	if r == nil || r.batches == nil {
+		return
+	}
 	r.batches.Clean(r.mp)
+	r.batches = nil
 }
 func (r *BatchHandle) Next(data **batch.Batch, mp *mpool.MPool) (err error) {
 	if r.isEnd() {
@@ -220,6 +238,402 @@ func (r *BatchHandle) next(bat **batch.Batch, mp *mpool.MPool, start, end int) (
 	(*bat).SetRowCount((*bat).Vecs[0].Length())
 	r.baseHandle.changesHandle.copyDuration += time.Since(t0)
 	return
+}
+
+const rangeSpillRecordHeaderSize = int64(8)
+
+type rangeSpillRecord struct {
+	offset int64
+	size   int64
+	rows   int
+}
+
+type rangeSpillRun struct {
+	firstRecord int
+	endRecord   int
+}
+
+type rangeSpillFile struct {
+	file        *os.File
+	records     []rangeSpillRecord
+	bytes       int64
+	disk        engine.ChangeRangeGrowingSpillReservation
+	fileReserve engine.ChangeRangeSpillReservation
+}
+
+func newRangeSpillFile(ctx context.Context, config engine.ChangeRangeSpillConfig) (*rangeSpillFile, error) {
+	if !config.Enabled() {
+		return nil, moerr.NewInternalErrorNoCtx("change range spill is unavailable")
+	}
+	fileReserve, err := config.ReserveFiles(1)
+	if err != nil {
+		return nil, err
+	}
+	if fileReserve == nil {
+		return nil, moerr.NewInternalErrorNoCtx("change range spill file reservation is nil")
+	}
+	disk, err := config.ReserveDisk(0)
+	if err != nil || disk == nil {
+		fileReserve.Release()
+		if err != nil {
+			return nil, err
+		}
+		return nil, moerr.NewInternalErrorNoCtx("change range spill disk reservation is nil")
+	}
+	file, err := config.FileFactory(ctx, "table_changes_range_"+uuid.NewString())
+	if err != nil || file == nil {
+		fileReserve.Release()
+		disk.Release()
+		if file != nil {
+			_ = file.Close()
+		}
+		if err != nil {
+			return nil, err
+		}
+		return nil, moerr.NewInternalErrorNoCtx("change range spill file is nil")
+	}
+	return &rangeSpillFile{file: file, fileReserve: fileReserve, disk: disk}, nil
+}
+
+func (f *rangeSpillFile) Append(bat *batch.Batch) error {
+	if f == nil || f.file == nil || bat == nil || bat.RowCount() == 0 {
+		return moerr.NewInternalErrorNoCtx("invalid change range spill append")
+	}
+	size, err := bat.MarshalBinarySize()
+	if err != nil {
+		return err
+	}
+	recordBytes := uint64(rangeSpillRecordHeaderSize) + uint64(size)
+	if f.disk == nil {
+		return moerr.NewInternalErrorNoCtx("change range spill disk reservation is missing")
+	}
+	if err := f.disk.Grow(recordBytes); err != nil {
+		return err
+	}
+	var header [rangeSpillRecordHeaderSize]byte
+	binary.LittleEndian.PutUint64(header[:], uint64(size))
+	if n, err := f.file.Write(header[:]); err != nil {
+		return err
+	} else if n != len(header) {
+		return io.ErrShortWrite
+	}
+	if err := bat.MarshalBinaryTo(f.file); err != nil {
+		return err
+	}
+	f.records = append(f.records, rangeSpillRecord{
+		offset: f.bytes + rangeSpillRecordHeaderSize,
+		size:   int64(size),
+		rows:   bat.RowCount(),
+	})
+	f.bytes += int64(recordBytes)
+	return nil
+}
+
+func (f *rangeSpillFile) Read(record int, mp *mpool.MPool) (*batch.Batch, error) {
+	if f == nil || f.file == nil || record < 0 || record >= len(f.records) {
+		return nil, moerr.NewInternalErrorNoCtx("invalid change range spill record")
+	}
+	metadata := f.records[record]
+	maxInt := int64(^uint(0) >> 1)
+	if metadata.size < 0 || metadata.size > maxInt {
+		return nil, moerr.NewInternalErrorNoCtx("invalid change range spill record size")
+	}
+	data := make([]byte, int(metadata.size))
+	if _, err := f.file.ReadAt(data, metadata.offset); err != nil {
+		return nil, err
+	}
+	bat := batch.NewWithSize(0)
+	if err := bat.UnmarshalBinaryWithAnyMp(data, mp); err != nil {
+		bat.Clean(mp)
+		return nil, err
+	}
+	if bat.RowCount() != metadata.rows {
+		bat.Clean(mp)
+		return nil, moerr.NewInternalErrorNoCtx("change range spill row count mismatch")
+	}
+	return bat, nil
+}
+
+func (f *rangeSpillFile) Close() error {
+	if f == nil {
+		return nil
+	}
+	var firstErr error
+	if f.file != nil {
+		firstErr = f.file.Close()
+		f.file = nil
+	}
+	if f.disk != nil {
+		f.disk.Release()
+		f.disk = nil
+	}
+	if f.fileReserve != nil {
+		f.fileReserve.Release()
+		f.fileReserve = nil
+	}
+	return firstErr
+}
+
+type rangeSpillRunReader struct {
+	file      *rangeSpillFile
+	run       rangeSpillRun
+	record    int
+	bat       *batch.Batch
+	row       int
+	mp        *mpool.MPool
+	exhausted bool
+}
+
+func newRangeSpillRunReader(file *rangeSpillFile, run rangeSpillRun, mp *mpool.MPool) (*rangeSpillRunReader, error) {
+	r := &rangeSpillRunReader{file: file, run: run, record: run.firstRecord, mp: mp}
+	if err := r.load(); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+func (r *rangeSpillRunReader) load() error {
+	if r.bat != nil {
+		r.bat.Clean(r.mp)
+		r.bat = nil
+	}
+	if r.record >= r.run.endRecord {
+		r.exhausted = true
+		return nil
+	}
+	bat, err := r.file.Read(r.record, r.mp)
+	if err != nil {
+		return err
+	}
+	r.record++
+	r.bat = bat
+	r.row = 0
+	return nil
+}
+
+func (r *rangeSpillRunReader) next() error {
+	if r.exhausted {
+		return nil
+	}
+	r.row++
+	if r.row >= r.bat.RowCount() {
+		return r.load()
+	}
+	return nil
+}
+
+func (r *rangeSpillRunReader) ts() types.TS {
+	if r == nil || r.exhausted || r.bat == nil {
+		return types.TS{}
+	}
+	return vector.GetFixedAtNoTypeCheck[types.TS](r.bat.Vecs[len(r.bat.Vecs)-1], r.row)
+}
+
+func (r *rangeSpillRunReader) close() {
+	if r != nil && r.bat != nil {
+		r.bat.Clean(r.mp)
+		r.bat = nil
+	}
+}
+
+func appendRangeSpillRow(dst **batch.Batch, src *batch.Batch, row int, mp *mpool.MPool) error {
+	if *dst == nil {
+		*dst = batch.NewWithSize(len(src.Vecs))
+		(*dst).Attrs = append((*dst).Attrs, src.Attrs...)
+		for idx := range src.Vecs {
+			(*dst).Vecs[idx] = vector.NewVec(*src.Vecs[idx].GetType())
+		}
+	} else if !batchesShareAppendSchema(*dst, src) {
+		return moerr.GetOkExpectedEOB()
+	}
+	for idx := range src.Vecs {
+		if err := (*dst).Vecs[idx].UnionOne(src.Vecs[idx], int64(row), mp); err != nil {
+			return err
+		}
+	}
+	(*dst).SetRowCount((*dst).Vecs[0].Length())
+	return nil
+}
+
+func mergeRangeSpillRuns(
+	ctx context.Context,
+	input *rangeSpillFile,
+	runs []rangeSpillRun,
+	config engine.ChangeRangeSpillConfig,
+	mp *mpool.MPool,
+	chunkRows, chunkBytes int,
+) (*rangeSpillFile, []rangeSpillRun, error) {
+	for len(runs) > 1 {
+		output, err := newRangeSpillFile(ctx, config)
+		if err != nil {
+			_ = input.Close()
+			return nil, nil, err
+		}
+		outputRuns := make([]rangeSpillRun, 0, (len(runs)+1)/2)
+		for idx := 0; idx < len(runs); idx += 2 {
+			firstRecord := len(output.records)
+			var right *rangeSpillRun
+			if idx+1 < len(runs) {
+				right = &runs[idx+1]
+			}
+			if err = mergeRangeSpillRunPair(input, runs[idx], right, output, mp, chunkRows, chunkBytes); err != nil {
+				_ = output.Close()
+				_ = input.Close()
+				return nil, nil, err
+			}
+			outputRuns = append(outputRuns, rangeSpillRun{firstRecord: firstRecord, endRecord: len(output.records)})
+		}
+		if err = input.Close(); err != nil {
+			_ = output.Close()
+			return nil, nil, err
+		}
+		input, runs = output, outputRuns
+	}
+	return input, runs, nil
+}
+
+func mergeRangeSpillRunPair(
+	input *rangeSpillFile,
+	leftRun rangeSpillRun,
+	rightRun *rangeSpillRun,
+	output *rangeSpillFile,
+	mp *mpool.MPool,
+	chunkRows, chunkBytes int,
+) (err error) {
+	left, err := newRangeSpillRunReader(input, leftRun, mp)
+	if err != nil {
+		return err
+	}
+	defer left.close()
+	var right *rangeSpillRunReader
+	if rightRun != nil {
+		right, err = newRangeSpillRunReader(input, *rightRun, mp)
+		if err != nil {
+			return err
+		}
+		defer right.close()
+	}
+	var out *batch.Batch
+	defer func() {
+		if out != nil {
+			out.Clean(mp)
+		}
+	}()
+	flush := func() error {
+		if out == nil || out.RowCount() == 0 {
+			return nil
+		}
+		if err := output.Append(out); err != nil {
+			return err
+		}
+		out.Clean(mp)
+		out = nil
+		return nil
+	}
+	for !left.exhausted || (right != nil && !right.exhausted) {
+		selected := left
+		leftTS, rightTS := left.ts(), types.TS{}
+		if right != nil {
+			rightTS = right.ts()
+		}
+		if left.exhausted || (right != nil && !right.exhausted && rightTS.LT(&leftTS)) {
+			selected = right
+		}
+		if err := appendRangeSpillRow(&out, selected.bat, selected.row, mp); err != nil {
+			return err
+		}
+		if err := selected.next(); err != nil {
+			return err
+		}
+		if (chunkRows > 0 && out.RowCount() >= chunkRows) ||
+			(chunkBytes > 0 && out.Allocated() >= chunkBytes) {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+	}
+	return flush()
+}
+
+type spilledBatchHandle struct {
+	file    *rangeSpillFile
+	reader  *rangeSpillRunReader
+	rows    int
+	maxRows int
+	mp      *mpool.MPool
+}
+
+func newSpilledBatchHandle(file *rangeSpillFile, rows, maxRows int, mp *mpool.MPool) (*spilledBatchHandle, error) {
+	if file == nil || len(file.records) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("empty change range spill")
+	}
+	reader, err := newRangeSpillRunReader(file, rangeSpillRun{endRecord: len(file.records)}, mp)
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if maxRows <= 0 {
+		maxRows = int(objectio.BlockMaxRows)
+	}
+	return &spilledBatchHandle{file: file, reader: reader, rows: rows, maxRows: maxRows, mp: mp}, nil
+}
+
+func (h *spilledBatchHandle) init(bool, *mpool.MPool) error { return nil }
+func (h *spilledBatchHandle) IsEmpty() bool                 { return h == nil || h.rows == 0 }
+func (h *spilledBatchHandle) Rows() int {
+	if h == nil {
+		return 0
+	}
+	return h.rows
+}
+func (h *spilledBatchHandle) NextTS() types.TS {
+	if h == nil || h.reader == nil {
+		return types.TS{}
+	}
+	return h.reader.ts()
+}
+func (h *spilledBatchHandle) Close() {
+	if h == nil {
+		return
+	}
+	if h.reader != nil {
+		h.reader.close()
+		h.reader = nil
+	}
+	if h.file != nil {
+		_ = h.file.Close()
+		h.file = nil
+	}
+}
+func (h *spilledBatchHandle) Next(dst **batch.Batch, mp *mpool.MPool) error {
+	if h == nil || h.reader == nil || h.reader.exhausted {
+		return moerr.GetOkExpectedEOF()
+	}
+	if err := appendRangeSpillRow(dst, h.reader.bat, h.reader.row, mp); err != nil {
+		return err
+	}
+	return h.reader.next()
+}
+func (h *spilledBatchHandle) QuickNext(dst **batch.Batch, mp *mpool.MPool) error {
+	if h == nil || h.reader == nil || h.reader.exhausted {
+		return moerr.GetOkExpectedEOF()
+	}
+	startRows := 0
+	if *dst != nil {
+		startRows = (*dst).RowCount()
+	}
+	for !h.reader.exhausted {
+		if err := appendRangeSpillRow(dst, h.reader.bat, h.reader.row, mp); err != nil {
+			return err
+		}
+		if err := h.reader.next(); err != nil {
+			return err
+		}
+		if (*dst).RowCount()-startRows >= h.maxRows {
+			return nil
+		}
+	}
+	return nil
 }
 
 type CNObjectHandle struct {
@@ -860,7 +1274,7 @@ func (h *AObjectHandle) NextTS() types.TS {
 type baseHandle struct {
 	aobjHandle     *AObjectHandle
 	cnObjectHandle *CNObjectHandle
-	inMemoryHandle *BatchHandle
+	inMemoryHandle replayRowHandle
 
 	changesHandle *ChangeHandler
 
@@ -961,7 +1375,9 @@ func (p *baseHandle) init(ctx context.Context, quick bool, mp *mpool.MPool) (err
 	if err != nil {
 		return
 	}
-	err = p.inMemoryHandle.init(quick, mp)
+	if p.inMemoryHandle != nil {
+		err = p.inMemoryHandle.init(quick, mp)
+	}
 	return
 }
 func (p *baseHandle) fillInSkipTS(iter btree.IterG[objectio.ObjectEntry], start, end types.TS) {
@@ -990,14 +1406,18 @@ func (p *baseHandle) fillInSkipTSFromObjects(start, end types.TS, groups ...[]*o
 	}
 }
 func (p *baseHandle) IsEmpty() bool {
-	return p.aobjHandle.IsEmpty() && p.inMemoryHandle.IsEmpty() && p.cnObjectHandle.IsEmpty()
+	inMemoryEmpty := p.inMemoryHandle == nil || p.inMemoryHandle.IsEmpty()
+	return p.aobjHandle.IsEmpty() && inMemoryEmpty && p.cnObjectHandle.IsEmpty()
 }
 
 func (p *baseHandle) IsSmall() bool {
 	if !p.cnObjectHandle.IsEmpty() {
 		return false
 	}
-	count := p.aobjHandle.RowCount() + p.inMemoryHandle.Rows()
+	count := p.aobjHandle.RowCount()
+	if p.inMemoryHandle != nil {
+		count += p.inMemoryHandle.Rows()
+	}
 	return count < SmallBatchThreshold
 }
 func (p *baseHandle) Close() {
@@ -1018,7 +1438,10 @@ func (p *baseHandle) less(a, b types.TS) bool {
 	return a.LE(&b)
 }
 func (p *baseHandle) nextTS() (types.TS, int) {
-	inMemoryTS := p.inMemoryHandle.NextTS()
+	var inMemoryTS types.TS
+	if p.inMemoryHandle != nil {
+		inMemoryTS = p.inMemoryHandle.NextTS()
+	}
 	aobjTS := p.aobjHandle.NextTS()
 	cnObjTS := p.cnObjectHandle.NextTS()
 	if p.less(inMemoryTS, aobjTS) && p.less(inMemoryTS, cnObjTS) {
@@ -1084,45 +1507,57 @@ func (p *baseHandle) newBatchHandleWithRowIterator(
 	start, end types.TS,
 	tombstone bool,
 	mp *mpool.MPool,
-) (h *BatchHandle, err error) {
-	bat, err := p.getBatchesFromRowIterator(iter, iterKind, pkFilterApplied, start, end, tombstone, mp)
-	if err != nil {
-		return nil, err
-	}
-	if bat == nil {
-		return nil, nil
-	}
-	h = NewRowHandle(bat, mp, p, ctx, tombstone)
-	return h, nil
-}
-func (p *baseHandle) getBatchesFromRowIterator(
-	iter RowsIter,
-	iterKind string,
-	pkFilterApplied bool,
-	start, end types.TS,
-	tombstone bool,
-	mp *mpool.MPool,
-) (bat *batch.Batch, err error) {
+) (h replayRowHandle, err error) {
+	var bat *batch.Batch
+	var spillFile *rangeSpillFile
+	var spillRuns []rangeSpillRun
 	var scanned, tsMatched, emitted int
 	defer func() {
-		if err != nil && bat != nil {
-			bat.Clean(mp)
-			bat = nil
+		if err != nil {
+			if bat != nil {
+				bat.Clean(mp)
+			}
+			if spillFile != nil {
+				_ = spillFile.Close()
+			}
 		}
 	}()
+	flush := func() error {
+		if bat == nil || bat.RowCount() == 0 {
+			return nil
+		}
+		if !p.changesHandle.spillConfig.Enabled() {
+			return moerr.NewInvalidInputNoCtx(
+				"visible-state change range exceeded its memory limit and spill is unavailable",
+			)
+		}
+		if err := sortBatch(bat, len(bat.Vecs)-1, mp); err != nil {
+			return err
+		}
+		if spillFile == nil {
+			spillFile, err = newRangeSpillFile(ctx, p.changesHandle.spillConfig)
+			if err != nil {
+				return err
+			}
+		}
+		first := len(spillFile.records)
+		if err := spillFile.Append(bat); err != nil {
+			return err
+		}
+		spillRuns = append(spillRuns, rangeSpillRun{firstRecord: first, endRecord: len(spillFile.records)})
+		bat.Clean(mp)
+		bat = nil
+		return nil
+	}
+	chunkRows, chunkBytes := p.changesHandle.rangeSpillChunkLimits()
 	for iter.Next() {
 		scanned++
 		entry := iter.Entry()
 		if checkTS(start, end, entry.Time) {
 			tsMatched++
 			if !entry.Deleted && !tombstone {
-				if err = p.changesHandle.reserveVisibleStateInMemoryRow(bat); err != nil {
-					return nil, err
-				}
 				fillInInsertBatch(&bat, entry, p.changesHandle.retainRowID, mp)
-				if err = p.changesHandle.accountVisibleStateInMemoryRow(bat); err != nil {
-					return nil, err
-				}
+				bat.SetRowCount(bat.Vecs[0].Length())
 				emitted++
 			}
 			if entry.Deleted && tombstone {
@@ -1132,14 +1567,15 @@ func (p *baseHandle) getBatchesFromRowIterator(
 						continue
 					}
 				}
-				if err = p.changesHandle.reserveVisibleStateInMemoryRow(bat); err != nil {
-					return nil, err
-				}
 				fillInDeleteBatch(&bat, entry, p.changesHandle.retainRowID, mp)
-				if err = p.changesHandle.accountVisibleStateInMemoryRow(bat); err != nil {
+				bat.SetRowCount(bat.Vecs[0].Length())
+				emitted++
+			}
+			if bat != nil && ((chunkRows > 0 && bat.RowCount() >= chunkRows) ||
+				(chunkBytes > 0 && bat.Allocated() >= chunkBytes)) {
+				if err = flush(); err != nil {
 					return nil, err
 				}
-				emitted++
 			}
 		}
 	}
@@ -1156,7 +1592,29 @@ func (p *baseHandle) getBatchesFromRowIterator(
 			zap.Int("emitted", emitted),
 		)
 	}
-	return bat, nil
+	if spillFile == nil {
+		if bat == nil {
+			// Keep a typed nil so baseHandle can use the nil-safe BatchHandle
+			// methods through replayRowHandle.
+			return (*BatchHandle)(nil), nil
+		}
+		return NewRowHandle(bat, mp, p, ctx, tombstone), nil
+	}
+	if err = flush(); err != nil {
+		return nil, err
+	}
+	spillFile, spillRuns, err = mergeRangeSpillRuns(
+		ctx, spillFile, spillRuns, p.changesHandle.spillConfig, mp, chunkRows, chunkBytes,
+	)
+	if err != nil {
+		return nil, err
+	}
+	h, err = newSpilledBatchHandle(spillFile, emitted, chunkRows, mp)
+	if err != nil {
+		return nil, err
+	}
+	spillFile = nil
+	return h, nil
 }
 func (p *baseHandle) getObjectEntries(
 	objIter btree.IterG[objectio.ObjectEntry],
@@ -1539,11 +1997,9 @@ type ChangeHandler struct {
 	// and row level.  Only DATA BRANCH PICK sets this; other callers leave it nil.
 	pkFilter *engine.PKFilter
 
-	maxInMemoryRows              int
-	maxInMemoryBytes             int
-	materializedInMemoryRows     int
-	materializedInMemoryBytes    int
-	materializedBatchBytesBefore int
+	maxInMemoryRows  int
+	maxInMemoryBytes int
+	spillConfig      engine.ChangeRangeSpillConfig
 	// debugLabel scopes temporary diagnostics to a single CollectChanges call chain.
 	debugLabel string
 
@@ -1552,43 +2008,17 @@ type ChangeHandler struct {
 	LogThreshold time.Duration
 }
 
-func (p *ChangeHandler) reserveVisibleStateInMemoryRow(bat *batch.Batch) error {
-	if p.maxInMemoryRows <= 0 && p.maxInMemoryBytes <= 0 {
-		return nil
+func (p *ChangeHandler) rangeSpillChunkLimits() (rows, bytes int) {
+	// Construction can retain one chunk for the other replay side while a
+	// merge holds two inputs and one output. Quarters keep that working set
+	// within the caller's combined data+tombstone memory budget.
+	if p.maxInMemoryRows > 0 {
+		rows = max(1, p.maxInMemoryRows/4)
 	}
-	if p.maxInMemoryRows > 0 && p.materializedInMemoryRows >= p.maxInMemoryRows {
-		return p.visibleStateInMemoryLimitError()
+	if p.maxInMemoryBytes > 0 {
+		bytes = max(1, p.maxInMemoryBytes/4)
 	}
-	p.materializedBatchBytesBefore = 0
-	if bat != nil {
-		p.materializedBatchBytesBefore = bat.Allocated()
-	}
-	return nil
-}
-
-func (p *ChangeHandler) accountVisibleStateInMemoryRow(bat *batch.Batch) error {
-	if p.maxInMemoryRows <= 0 && p.maxInMemoryBytes <= 0 {
-		return nil
-	}
-	p.materializedInMemoryRows++
-	if bat != nil {
-		allocatedDelta := bat.Allocated() - p.materializedBatchBytesBefore
-		if allocatedDelta > 0 {
-			p.materializedInMemoryBytes += allocatedDelta
-		}
-	}
-	if p.maxInMemoryBytes > 0 && p.materializedInMemoryBytes > p.maxInMemoryBytes {
-		return p.visibleStateInMemoryLimitError()
-	}
-	return nil
-}
-
-func (p *ChangeHandler) visibleStateInMemoryLimitError() error {
-	return moerr.NewInvalidInputNoCtxf(
-		"visible-state change range exceeds the recovery limit of %d in-memory rows or %d bytes; narrow the timestamp range",
-		p.maxInMemoryRows,
-		p.maxInMemoryBytes,
-	)
+	return
 }
 
 type checkpointObjectSelection uint8
@@ -1714,9 +2144,10 @@ func NewChangesHandlerWithCheckpointRangeRecovery(
 //   - commit-ts zonemap block pruning on TN non-appendable objects
 //
 // It is used by snapshot-read policies that need exact range meaning. Output
-// is returned in batches; callers whose contract permits rejecting oversized
-// ranges may opt into an in-memory materialization bound with
-// engine.WithChangeRangeLimit. Existing callers remain unbounded by default.
+// is returned in batches. Callers may opt into bounded in-memory
+// materialization with engine.WithChangeRangeLimit and provide spill ownership
+// with engine.WithChangeRangeSpill. Existing callers remain unbounded by
+// default.
 func NewChangesHandlerWithPartitionStateRange(
 	ctx context.Context,
 	state *PartitionState,
@@ -1729,6 +2160,7 @@ func NewChangesHandlerWithPartitionStateRange(
 ) (changeHandle *ChangeHandler, err error) {
 	stateStart := state.GetStart()
 	rangeLimit := engine.ChangeRangeLimitFromContext(ctx)
+	spillConfig := engine.ChangeRangeSpillFromContext(ctx)
 	if stateStart.GT(&start) {
 		logutil.Info("ChangesHandlerWithPartitionStateRange: stateStart > start, proceeding with range-aware scan",
 			zap.String("stateStart", stateStart.ToString()),
@@ -1753,6 +2185,7 @@ func NewChangesHandlerWithPartitionStateRange(
 		pkFilter:                 engine.PKFilterFromContext(ctx),
 		maxInMemoryRows:          rangeLimit.MaxInMemoryRows,
 		maxInMemoryBytes:         rangeLimit.MaxInMemoryBytes,
+		spillConfig:              spillConfig,
 		debugLabel:               engine.CollectChangesDebugLabelFromContext(ctx),
 		retainRowID:              engine.RetainRowIDFromContext(ctx),
 	}

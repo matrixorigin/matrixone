@@ -14,11 +14,14 @@
 
 package engine
 
-import "context"
+import (
+	"context"
+	"os"
+)
 
-// ChangeRangeLimit is an opt-in bound for callers whose public contract can
-// reject a range that would retain too much in-memory replay state. A zero
-// value means no limit, preserving existing CollectChanges callers.
+// ChangeRangeLimit is an opt-in memory bound for range replay. Callers that
+// also provide ChangeRangeSpillConfig spill excess replay rows; a zero value
+// means no limit, preserving existing CollectChanges callers.
 type ChangeRangeLimit struct {
 	MaxInMemoryRows  int
 	MaxInMemoryBytes int
@@ -47,4 +50,49 @@ func ChangeRangeLimitFromContext(ctx context.Context) ChangeRangeLimit {
 	}
 	limit, _ := ctx.Value(changeRangeLimitContextKey{}).(ChangeRangeLimit)
 	return limit
+}
+
+// ChangeRangeSpillReservation owns one query-scoped spill resource charge.
+type ChangeRangeSpillReservation interface {
+	Release() bool
+}
+
+// ChangeRangeGrowingSpillReservation owns a spill charge that grows with a
+// single open file.
+type ChangeRangeGrowingSpillReservation interface {
+	ChangeRangeSpillReservation
+	Grow(uint64) error
+}
+
+// ChangeRangeSpillConfig supplies anonymous query-scoped files and admission
+// controls when an opted-in range exceeds its memory limit.
+type ChangeRangeSpillConfig struct {
+	FileFactory  func(context.Context, string) (*os.File, error)
+	ReserveDisk  func(uint64) (ChangeRangeGrowingSpillReservation, error)
+	ReserveFiles func(uint64) (ChangeRangeSpillReservation, error)
+}
+
+// Enabled reports whether all spill ownership hooks are available.
+func (c ChangeRangeSpillConfig) Enabled() bool {
+	return c.FileFactory != nil && c.ReserveDisk != nil && c.ReserveFiles != nil
+}
+
+type changeRangeSpillContextKey struct{}
+
+// WithChangeRangeSpill attaches spill ownership for an explicitly bounded
+// change range.
+func WithChangeRangeSpill(ctx context.Context, config ChangeRangeSpillConfig) context.Context {
+	if ctx == nil || !config.Enabled() {
+		return ctx
+	}
+	return context.WithValue(ctx, changeRangeSpillContextKey{}, config)
+}
+
+// ChangeRangeSpillFromContext returns the caller-owned spill configuration.
+func ChangeRangeSpillFromContext(ctx context.Context) ChangeRangeSpillConfig {
+	if ctx == nil {
+		return ChangeRangeSpillConfig{}
+	}
+	config, _ := ctx.Value(changeRangeSpillContextKey{}).(ChangeRangeSpillConfig)
+	return config
 }

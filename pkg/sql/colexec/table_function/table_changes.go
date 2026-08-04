@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"context"
+	"os"
 	"strconv"
 	"strings"
 
@@ -191,6 +192,7 @@ func (s *tableChangesState) call(tf *TableFunction, proc *process.Process) (vm.C
 			MaxInMemoryRows:  tableChangesMaxInMemoryRows,
 			MaxInMemoryBytes: tableChangesMaxInMemoryBytes,
 		})
+		ctx = engine.WithChangeRangeSpill(ctx, tableChangesSpillConfig(proc))
 		if s.isAccountFiltered {
 			// Cluster and shared catalog tables are physically owned by the
 			// system account. Read that physical change stream, then apply the
@@ -233,6 +235,32 @@ func (s *tableChangesState) call(tf *TableFunction, proc *process.Process) (vm.C
 		if s.batch.RowCount() > 0 {
 			return vm.CallResult{Status: vm.ExecNext, Batch: s.batch}, nil
 		}
+	}
+}
+
+func tableChangesSpillConfig(proc *process.Process) engine.ChangeRangeSpillConfig {
+	return engine.ChangeRangeSpillConfig{
+		FileFactory: func(ctx context.Context, name string) (*os.File, error) {
+			spillFS, err := proc.GetSpillFileService()
+			if err != nil {
+				return nil, err
+			}
+			return spillFS.CreateAndRemoveFile(ctx, name)
+		},
+		ReserveDisk: func(size uint64) (engine.ChangeRangeGrowingSpillReservation, error) {
+			budget, err := proc.GetHashBuildBudget()
+			if err != nil {
+				return nil, err
+			}
+			return budget.ReserveSpillDisk(size)
+		},
+		ReserveFiles: func(size uint64) (engine.ChangeRangeSpillReservation, error) {
+			budget, err := proc.GetHashBuildBudget()
+			if err != nil {
+				return nil, err
+			}
+			return budget.ReserveSpillFD(size)
+		},
 	}
 }
 
