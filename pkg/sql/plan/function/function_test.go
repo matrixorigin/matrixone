@@ -502,6 +502,20 @@ func TestMakeTimeStringSecondUsesExactOverload(t *testing.T) {
 	require.Equal(t, types.T_time.ToTypeWithScale(6), result.retType)
 }
 
+func TestSerialFunctionsReturnBinaryVarchar(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}
+
+	for _, name := range []string{SerialFunctionName, SerialFullFunctionName} {
+		t.Run(name, func(t *testing.T) {
+			result, err := GetFunctionByName(proc.Ctx, name, inputs)
+			require.NoError(t, err)
+			require.Equal(t, types.T_varchar, result.GetReturnType().Oid)
+			require.Equal(t, types.CharsetBinary, result.GetReturnType().Charset)
+		})
+	}
+}
+
 func TestMakeTimeStringArgumentTargets(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defaultFloat := types.T_float64.ToType()

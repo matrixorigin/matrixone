@@ -689,6 +689,31 @@ func TestBinaryLiteralComparisonKeepsVarbinaryColumnUncast(t *testing.T) {
 	}
 }
 
+func TestMinMaxSerialExpressionsKeepBinaryCollation(t *testing.T) {
+	p, err := runOneStmt(NewMockOptimizer(true), t,
+		"select min(serial(a, b)), max(serial(a, b)), "+
+			"min(serial_full(a, b)), max(serial_full(a, b)) "+
+			"from select_test.bind_select")
+	require.NoError(t, err)
+
+	var aggregates []*plan.Expr
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG {
+			aggregates = node.AggList
+			break
+		}
+	}
+	require.Len(t, aggregates, 4)
+	for _, aggregate := range aggregates {
+		fn := aggregate.GetF()
+		require.NotNil(t, fn)
+		require.Contains(t, []string{"min", "max"}, fn.Func.ObjName)
+		require.Equal(t, uint32(types.CharsetBinary), aggregate.Typ.Charset)
+		require.Len(t, fn.Args, 1)
+		require.Equal(t, uint32(types.CharsetBinary), fn.Args[0].Typ.Charset)
+	}
+}
+
 func TestBindSerialFunctionOverEmptyExprListDoesNotPanic(t *testing.T) {
 	ctx := context.Background()
 
