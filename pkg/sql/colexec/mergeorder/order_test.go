@@ -174,6 +174,21 @@ func (r *callbackEOFReader) Read([]byte) (int, error) {
 	return 0, io.EOF
 }
 
+type cancelAfterReadReader struct {
+	reader io.Reader
+	cancel context.CancelFunc
+	reads  int
+}
+
+func (r *cancelAfterReadReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	r.reads++
+	if r.reads == 1 {
+		r.cancel()
+	}
+	return n, err
+}
+
 // cancelOnDoneCheckContext deterministically cancels on the Nth observation of
 // Done. The spill paths are synchronous, so this lets tests select an exact
 // phase boundary without sleeps or scheduler races.
@@ -579,9 +594,13 @@ func TestSpillCancellationEntryCheckpoints(t *testing.T) {
 
 func TestMergeRunsToSpillCancellationCheckpoints(t *testing.T) {
 	const (
-		inputRunCount              = 2
-		beforeMaterializationCheck = 1 + inputRunCount + 1 // entry, each reader, chunk start
-		beforeSpillWriteCheck      = beforeMaterializationCheck + 1
+		inputRunCount = 2
+		// Merge entry, then open-loop/read-entry/read-completion for each
+		// source reader, followed by the outer materialization check.
+		beforeMaterializationCheck = 1 + inputRunCount*3 + 1
+		// Each single-batch source then observes EOF at its next-read entry,
+		// followed by the completed-chunk check immediately before spill write.
+		beforeSpillWriteCheck = beforeMaterializationCheck + inputRunCount + 1
 	)
 	tests := []struct {
 		name          string
@@ -657,10 +676,11 @@ func TestMergeRunsToSpillStopsAtChunkBoundary(t *testing.T) {
 		require.Zero(t, proc.Mp().CurrNB())
 	})
 
-	// Entry, two reader-open checks, and the outer materialization check pass.
+	// Entry, both reader open/read/read-completion triplets, and the outer
+	// materialization check pass.
 	// Cancellation is observed after the first 64-row winner chunk, before
 	// the remaining rows are copied or an output batch is written.
-	proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 5)
+	proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 9)
 	merged, err := ctr.mergeRunsToSpill(proc, runs, analyzer)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, merged)
@@ -696,7 +716,9 @@ func TestOpenSpillReadersCancellationPreservesOwnership(t *testing.T) {
 		require.Zero(t, proc.Mp().CurrNB())
 	})
 
-	proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 2)
+	// The first reader uses checks 1-3 for open, read entry, and successful
+	// read completion. Cancel at the second run's open-loop ownership boundary.
+	proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 4)
 	err := ctr.openSpillReaders(proc, runs)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Len(t, ctr.spillReaders, 1)
@@ -715,6 +737,90 @@ func TestOpenSpillReadersCancellationPreservesOwnership(t *testing.T) {
 	closeSpillRuns(runs)
 	_, err = secondFile.Stat()
 	require.Error(t, err)
+}
+
+func TestSpillReaderRolloverCancellationBoundaries(t *testing.T) {
+	t.Run("before multi-batch refill", func(t *testing.T) {
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		baseCtx := proc.Ctx
+		ctr := &container{
+			compares:        []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
+			executors:       make([]colexec.ExpressionExecutor, 1),
+			spillColPos:     []int32{-1},
+			spillKeyIndexes: []int{0},
+		}
+		analyzer := process.NewAnalyzer(0, false, false, "mergeorder-cancel-rollover")
+		run := newCancellationTestSpillRunBatches(
+			t, proc, ctr, analyzer,
+			[]int8{1, 2},
+			[]int8{3, 4},
+		)
+		file := run.file
+		require.Equal(t, 2, run.batchCount)
+		require.NoError(t, ctr.openSpillReaders(proc, []*spillRun{run}))
+		require.Nil(t, run.file)
+		require.Len(t, ctr.spillReaders, 1)
+		reader := ctr.spillReaders[0]
+		require.Equal(t, []int8{1, 2}, vector.MustFixedColWithTypeCheck[int8](reader.batch.Vecs[0]))
+		bufferedBefore := reader.reader.Buffered()
+		require.Positive(t, bufferedBefore)
+
+		t.Cleanup(func() {
+			proc.Ctx = baseCtx
+			ctr.cleanupSpill(proc)
+			closeSpillRuns([]*spillRun{run})
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+
+		ctx, cancel := context.WithCancel(baseCtx)
+		proc.Ctx = ctx
+		cancel()
+		err := ctr.advanceSpillReaderByChunk(proc, 0, reader.batch.RowCount())
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, bufferedBefore, reader.reader.Buffered())
+		require.Equal(t, []int8{1, 2}, vector.MustFixedColWithTypeCheck[int8](reader.batch.Vecs[0]))
+		require.Equal(t, int64(2), reader.rowIdx)
+		require.Len(t, ctr.spillReaders, 1)
+
+		proc.Ctx = baseCtx
+		ctr.cleanupSpill(proc)
+		_, err = file.Stat()
+		require.Error(t, err)
+	})
+
+	t.Run("during refill IO", func(t *testing.T) {
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		baseCtx := proc.Ctx
+		ctr := &container{
+			executors:       make([]colexec.ExpressionExecutor, 1),
+			spillColPos:     []int32{-1},
+			spillKeyIndexes: []int{0},
+		}
+		analyzer := process.NewAnalyzer(0, false, false, "mergeorder-cancel-refill-io")
+		bat := newValuesBatch(proc, []int8{3, 4})
+		var payload bytes.Buffer
+		var writeBuf bytes.Buffer
+		_, _, err := writeSpillBatch(proc, bat, []*vector.Vector{bat.Vecs[0]}, &payload, &writeBuf, analyzer)
+		require.NoError(t, err)
+		bat.Clean(proc.Mp())
+
+		ctx, cancel := context.WithCancel(baseCtx)
+		proc.Ctx = ctx
+		source := &cancelAfterReadReader{reader: bytes.NewReader(payload.Bytes()), cancel: cancel}
+		reader := &spillRunReader{reader: bufio.NewReaderSize(source, spillIOBufferSize)}
+		t.Cleanup(func() {
+			proc.Ctx = baseCtx
+			reader.close(proc)
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+
+		ok, err := reader.readNextBatch(proc, ctr)
+		require.ErrorIs(t, err, context.Canceled)
+		require.False(t, ok)
+		require.Equal(t, 1, source.reads)
+	})
 }
 
 func TestReduceSpillRunsCleansCompletedRuns(t *testing.T) {
@@ -758,10 +864,11 @@ func TestReduceSpillRunsCleansCompletedRuns(t *testing.T) {
 			}
 			ctr.spillRuns = runs
 			if test.cancelAfterFirst {
-				// Reduction check, merge entry, one check per source reader,
-				// chunk start, chunk completion, three write boundaries, then
-				// the next group check.
-				proc.Ctx = newCancelOnDoneCheckContext(baseCtx, spillMergeFanIn+8)
+				// Reduction check, merge entry, three open/read checks per
+				// source reader, chunk start, one EOF read-entry check per
+				// single-batch reader, chunk completion, three write boundaries,
+				// then the next fan-in group check.
+				proc.Ctx = newCancelOnDoneCheckContext(baseCtx, spillMergeFanIn*4+8)
 			}
 			if test.corruptLaterRun {
 				require.NoError(t, runs[spillMergeFanIn].file.Truncate(4))
@@ -827,7 +934,8 @@ func TestSendSpillResultHonorsCancellationBeforePublish(t *testing.T) {
 		require.Zero(t, proc.Mp().CurrNB())
 	})
 
-	proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 2)
+	// Send entry, the exhausted reader's next-read entry, then result publish.
+	proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 3)
 	var result vm.CallResult
 	done, err := ctr.sendSpillResult(proc, &result)
 	require.ErrorIs(t, err, context.Canceled)
@@ -2162,20 +2270,31 @@ func newCancellationTestSpillRun(
 	analyzer process.Analyzer,
 	values []int8,
 ) *spillRun {
-	t.Helper()
-	bat := newValuesBatch(proc, values)
-	defer bat.Clean(proc.Mp())
+	return newCancellationTestSpillRunBatches(t, proc, ctr, analyzer, values)
+}
 
+func newCancellationTestSpillRunBatches(
+	t testing.TB,
+	proc *process.Process,
+	ctr *container,
+	analyzer process.Analyzer,
+	valueBatches ...[]int8,
+) *spillRun {
+	t.Helper()
 	run, err := ctr.createSpillRun(proc)
 	require.NoError(t, err)
 	writer := bufio.NewWriterSize(run.file, spillIOBufferSize)
-	_, _, err = writeSpillBatch(proc, bat, []*vector.Vector{bat.Vecs[0]}, writer, &ctr.spillWriteBuf, analyzer)
-	require.NoError(t, err)
+	for _, values := range valueBatches {
+		bat := newValuesBatch(proc, values)
+		rows, _, writeErr := writeSpillBatch(proc, bat, []*vector.Vector{bat.Vecs[0]}, writer, &ctr.spillWriteBuf, analyzer)
+		bat.Clean(proc.Mp())
+		require.NoError(t, writeErr)
+		run.batchCount++
+		run.rowCount += rows
+	}
 	require.NoError(t, writer.Flush())
 	_, err = run.file.Seek(0, io.SeekStart)
 	require.NoError(t, err)
-	run.batchCount = 1
-	run.rowCount = int64(bat.RowCount())
 	return run
 }
 

@@ -388,6 +388,13 @@ func (r *spillRunReader) refreshDrainProfile() {
 }
 
 func (r *spillRunReader) readNextBatch(proc *process.Process, ctr *container) (bool, error) {
+	// A serialized spill batch is the reader's bounded I/O work unit. Check
+	// before releasing the current batch contents so a known cancellation does
+	// not consume or publish the next unit.
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return false, err
+	}
+
 	if r.batch != nil {
 		r.batch.CleanOnlyData()
 	}
@@ -416,5 +423,11 @@ func (r *spillRunReader) readNextBatch(proc *process.Process, ctr *container) (b
 	}
 	r.refreshDrainProfile()
 	r.rowIdx = 0
+	// The synchronous read/unmarshal cannot be interrupted. Observe cancellation
+	// once it completes, before the refilled batch becomes visible to heap/copy
+	// work in the caller.
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return false, err
+	}
 	return true, nil
 }
