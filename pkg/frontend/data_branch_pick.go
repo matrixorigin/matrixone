@@ -1247,13 +1247,15 @@ func normalizePickTimeZone(loc *time.Location) *time.Location {
 
 // appendExprToVec appends a literal AST expression value to a typed vector.
 func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
+	expr = unwrapPickKeyParens(expr)
 	switch e := expr.(type) {
 	case *tree.NumVal:
 		return appendNumValToVec(vec, e, pkType, tz, mp)
 	case *tree.UnaryExpr:
-		num, ok := e.Expr.(*tree.NumVal)
+		operand := unwrapPickKeyParens(e.Expr)
+		num, ok := operand.(*tree.NumVal)
 		if !ok {
-			return moerr.NewInvalidInputNoCtxf("unsupported unary expression type for PK filter: %T", e.Expr)
+			return moerr.NewInvalidInputNoCtxf("unsupported unary expression type for PK filter: %T", operand)
 		}
 		negative := false
 		s := num.String()
@@ -1266,7 +1268,7 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *
 		default:
 			return moerr.NewInvalidInputNoCtxf("unsupported unary operator for PK filter: %v", e.Op)
 		}
-		if pkType.Oid.IsInteger() && (num.ValType == tree.P_hexnum || num.ValType == tree.P_float64) {
+		if shouldNormalizeIntegerNumVal(num, pkType) {
 			return appendIntegerNumValToVec(vec, num, negative, pkType, tz, mp)
 		}
 		return appendNumericStringToVec(vec, s, pkType, tz, mp)
@@ -1278,13 +1280,34 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *
 	}
 }
 
+func unwrapPickKeyParens(expr tree.Expr) tree.Expr {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			return expr
+		}
+		expr = paren.Expr
+	}
+}
+
 // appendNumValToVec converts a numeric literal to the correct typed value
 // and appends it to the vector.
 func appendNumValToVec(vec *vector.Vector, val *tree.NumVal, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
-	if pkType.Oid.IsInteger() && (val.ValType == tree.P_hexnum || val.ValType == tree.P_float64) {
+	if shouldNormalizeIntegerNumVal(val, pkType) {
 		return appendIntegerNumValToVec(vec, val, false, pkType, tz, mp)
 	}
 	return appendNumericStringToVec(vec, val.String(), pkType, tz, mp)
+}
+
+func shouldNormalizeIntegerNumVal(val *tree.NumVal, pkType types.Type) bool {
+	switch val.ValType {
+	case tree.P_bit:
+		return pkType.Oid == types.T_bit
+	case tree.P_hexnum, tree.P_float64:
+		return pkType.Oid.IsInteger()
+	default:
+		return false
+	}
 }
 
 func appendIntegerNumValToVec(
@@ -1306,6 +1329,19 @@ func appendIntegerNumValToVec(
 		n, ok = new(big.Int).SetString(s[2:], 16)
 		if !ok {
 			return moerr.NewInvalidInputNoCtxf("invalid hexadecimal literal %q", s)
+		}
+	case tree.P_bit:
+		s := val.String()
+		if len(s) < 2 || (s[:2] != "0b" && s[:2] != "0B") {
+			return moerr.NewInvalidInputNoCtxf("invalid bit literal %q", s)
+		}
+		n = new(big.Int)
+		if len(s) > 2 {
+			var ok bool
+			n, ok = n.SetString(s[2:], 2)
+			if !ok {
+				return moerr.NewInvalidInputNoCtxf("invalid bit literal %q", s)
+			}
 		}
 	case tree.P_float64:
 		r, ok := new(big.Rat).SetString(val.String())

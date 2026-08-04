@@ -933,6 +933,12 @@ func (tc *txnOperator) Status() txn.TxnStatus {
 	return tc.mu.txn.Status
 }
 
+func (tc *txnOperator) RequireAutoIncrEpochFenceCommit() {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.mu.txn.RequireAutoIncrEpochFenceCommit = true
+}
+
 func (tc *txnOperator) Snapshot() (txn.CNTxnSnapshot, error) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -1038,6 +1044,9 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 	}
 	if tc.mu.txn.SnapshotTS.Less(snapshot.Txn.SnapshotTS) {
 		tc.mu.txn.SnapshotTS = snapshot.Txn.SnapshotTS
+	}
+	if snapshot.Txn.RequireAutoIncrEpochFenceCommit {
+		tc.mu.txn.RequireAutoIncrEpochFenceCommit = true
 	}
 	util.LogTxnUpdated(tc.logger, tc.mu.txn)
 	return nil
@@ -1569,8 +1578,12 @@ func (tc *txnOperator) doWrite(
 		if sequencer, ok := tc.lockService.(lockservice.CommitSequenceProvider); ok {
 			commitSequence = sequencer.NextCommitSequence()
 		}
+		commitMethod := txn.TxnMethod_Commit
+		if tc.mu.txn.RequireAutoIncrEpochFenceCommit {
+			commitMethod = txn.TxnMethod_CommitAutoIncrEpochFence
+		}
 		requests = append(requests, txn.TxnRequest{
-			Method: txn.TxnMethod_Commit,
+			Method: commitMethod,
 			Flag:   txn.SkipResponseFlag,
 			CommitRequest: &txn.TxnCommitRequest{
 				Payload:          txnReqs,
@@ -1799,7 +1812,7 @@ func (tc *txnOperator) handleErrorResponse(ctx context.Context, resp txn.TxnResp
 			return err
 		}
 		return tc.checkTxnError(resp.TxnError, writeTxnErrors)
-	case txn.TxnMethod_Commit:
+	case txn.TxnMethod_Commit, txn.TxnMethod_CommitAutoIncrEpochFence:
 		tc.triggerEventLocked(
 			ctx,
 			newCostEvent(

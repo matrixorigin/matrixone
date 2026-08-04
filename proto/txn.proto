@@ -91,6 +91,9 @@ message TxnMeta {
     bool                      Mirror       = 10;
     // LockService lock service's service address. Empty if is not pessimistic txn.
     string                    LockService  = 11;
+    // RequireAutoIncrEpochFenceCommit requires the V9-only terminal commit
+    // method. It is monotonic for the lifetime of the transaction.
+    bool                      RequireAutoIncrEpochFenceCommit = 12;
 }
 
 // CNTxnSnapshot snapshot of the cn txn operation.
@@ -148,6 +151,10 @@ enum TxnMethod {
     RemoveMedata      = 8;
     // DEBUG used to send debug request from cn to tn, and received response from tn to cn
     DEBUG             = 9;
+    // CommitAutoIncrEpochFence has Commit semantics, but requires a TN that
+    // understands and enforces AUTO_INCREMENT epochs. Legacy TNs reject the
+    // method before invoking any transaction handler.
+    CommitAutoIncrEpochFence = 10;
 }
 
 // TxnRequest transaction request. All requests for the transaction are made using TxnRequest, so that 

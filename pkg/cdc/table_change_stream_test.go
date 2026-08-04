@@ -42,6 +42,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/semaphore"
 )
 
 // Helper function to create a test stream with minimal setup
@@ -201,6 +202,76 @@ func readCounterValue(t *testing.T, counter prometheus.Counter) float64 {
 	var metric dto.Metric
 	require.NoError(t, counter.Write(&metric))
 	return metric.GetCounter().GetValue()
+}
+
+func TestTableChangeStream_InitialSnapshotLimiterSharedAcrossTables(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	limiter := semaphore.NewWeighted(1)
+	stream1 := createTestStream(
+		mp,
+		&DbTableInfo{SourceDbName: "db", SourceTblName: "t1"},
+		WithInitialSnapshotLimiter(limiter),
+	)
+	stream2 := createTestStream(
+		mp,
+		&DbTableInfo{SourceDbName: "db", SourceTblName: "t2"},
+		WithInitialSnapshotLimiter(limiter),
+	)
+
+	release1, err := stream1.acquireInitialSnapshotSlot(context.Background())
+	require.NoError(t, err)
+
+	type acquireResult struct {
+		release func()
+		err     error
+	}
+	acquired := make(chan acquireResult, 1)
+	go func() {
+		release, acquireErr := stream2.acquireInitialSnapshotSlot(context.Background())
+		acquired <- acquireResult{release: release, err: acquireErr}
+	}()
+
+	select {
+	case result := <-acquired:
+		if result.release != nil {
+			result.release()
+		}
+		t.Fatal("second table acquired the initial snapshot slot before the first released it")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	release1()
+	select {
+	case result := <-acquired:
+		require.NoError(t, result.err)
+		require.NotNil(t, result.release)
+		result.release()
+	case <-time.After(time.Second):
+		t.Fatal("second table did not acquire the released initial snapshot slot")
+	}
+}
+
+func TestTableChangeStream_InitialSnapshotLimiterSkippedAfterFirstSync(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	limiter := semaphore.NewWeighted(1)
+	require.NoError(t, limiter.Acquire(context.Background(), 1))
+	defer limiter.Release(1)
+
+	stream := createTestStream(
+		mp,
+		&DbTableInfo{SourceDbName: "db", SourceTblName: "incremental"},
+		WithInitialSnapshotLimiter(limiter),
+	)
+	stream.initialSyncPending.Store(false)
+
+	release, err := stream.acquireInitialSnapshotSlot(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, release)
+	release()
 }
 
 func TestTableChangeStream_HandleSnapshotNoProgress_WarningAndReset(t *testing.T) {

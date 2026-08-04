@@ -116,6 +116,14 @@ func TestWindowInvalidUseMySQLError(t *testing.T) {
 	require.Equal(t, "You cannot use the window function 'row_number' in this context", err.Error())
 }
 
+func TestViewSelectTmpTableMySQLError(t *testing.T) {
+	err := NewViewSelectTmpTable(context.Background(), "temp_for_view")
+	require.Equal(t, ErrViewSelectTmpTable, err.ErrorCode())
+	require.Equal(t, ER_VIEW_SELECT_TMPTABLE, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t, "View's SELECT refers to a temporary table 'temp_for_view'", err.Error())
+}
+
 func TestLockWaitTimeoutMySQLError(t *testing.T) {
 	err := NewLockWaitTimeout(context.Background())
 	require.Equal(t, ErrLockWaitTimeout, err.ErrorCode())
@@ -165,6 +173,19 @@ func TestResourceExhaustedWithDetailsEncoding(t *testing.T) {
 	require.Equal(t,
 		"error: resource exhausted: requested=3 used=5 limit=7",
 		err.Error())
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
+}
+
+func TestMPoolCapacityEncoding(t *testing.T) {
+	err := NewMPoolCapacityNoCtxf("alloc %d bytes, cap %d", 8, 4)
+	require.Equal(t, ErrMPoolCapacity, err.ErrorCode())
+	require.Equal(t, ER_ENGINE_OUT_OF_MEMORY, err.MySQLCode())
+	require.Contains(t, err.Error(), "alloc 8 bytes, cap 4")
 
 	data, marshalErr := err.MarshalBinary()
 	require.NoError(t, marshalErr)

@@ -242,7 +242,7 @@ delete from foreign02 where col2New = 2;
 update foreign01 set col2 = 'database ewueh ' where col1 = 1;
 internal error: column 'col2' not found in table 
 update foreign01 set col1new = 9283923 where col1new = 1;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select * from foreign01;
 col1new    col2new    col3    col4
 1    sfhuwe    1    1
