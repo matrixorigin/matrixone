@@ -62,6 +62,15 @@ func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 	if loopJoin.allocationAccount == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
+	loopJoin.recursiveProbe = false
+	if loopJoin.NumChildren() > 0 {
+		_ = vm.HandleAllOp(loopJoin.GetChildren(0), func(_ vm.Operator, op vm.Operator) error {
+			if op.OpType() == vm.MergeRecursive {
+				loopJoin.recursiveProbe = true
+			}
+			return nil
+		})
+	}
 	if loopJoin.OpAnalyzer == nil {
 		loopJoin.OpAnalyzer = process.NewAnalyzer(loopJoin.GetIdx(), loopJoin.IsFirst, loopJoin.IsLast, opName)
 	} else {
@@ -96,7 +105,7 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if err = loopJoin.build(proc, analyzer); err != nil {
 				return result, err
 			}
-			if ctr.mp == nil && (loopJoin.JoinType == plan.Node_INNER || loopJoin.JoinType == plan.Node_SEMI) {
+			if ctr.mp == nil && (loopJoin.JoinType == plan.Node_INNER || loopJoin.JoinType == plan.Node_SEMI) && !loopJoin.recursiveProbe {
 				ctr.state = End
 			} else {
 				if loopJoin.JoinType == plan.Node_OUTER && ctr.mp != nil {
@@ -127,6 +136,10 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					return input, nil
 				}
 				if input.Batch.IsEmpty() {
+					continue
+				}
+				if loopJoin.recursiveProbe && ctr.mp == nil &&
+					(loopJoin.JoinType == plan.Node_INNER || loopJoin.JoinType == plan.Node_SEMI) {
 					continue
 				}
 				ctr.inBat = input.Batch

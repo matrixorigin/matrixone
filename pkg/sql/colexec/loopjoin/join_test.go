@@ -248,6 +248,81 @@ func TestLoopJoinPassesRecursiveMarker(t *testing.T) {
 	require.True(t, res.Batch.Last())
 }
 
+type recursiveLoopJoinProbe struct {
+	*colexec.MockOperator
+}
+
+func (source *recursiveLoopJoinProbe) OpType() vm.OpType {
+	return vm.MergeRecursive
+}
+
+func TestLoopJoinPassesRecursiveMarkerWithEmptyBuild(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+		colexec.NewResultPos(1, 0),
+	})
+	marker := colexec.MakeMockBatchs(tc.proc.Mp())
+	marker.SetLast()
+	probeCalls := 0
+	probe := &recursiveLoopJoinProbe{MockOperator: colexec.NewMockOperator().
+		WithBatchs([]*batch.Batch{colexec.MakeMockBatchs(tc.proc.Mp()), marker}).
+		WithBatchCallback(func(int) { probeCalls++ })}
+	tc.arg.Children = nil
+	tc.arg.AppendChild(probe)
+	resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
+	defer func() {
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		probe.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		tc.cancel()
+	}()
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	res, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Same(t, marker, res.Batch)
+	require.Equal(t, 2, probeCalls)
+}
+
+func TestLoopJoinPrepareRecomputesRecursiveProbeForFastPath(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+		colexec.NewResultPos(1, 0),
+	})
+	probeCalls := 0
+	probe := colexec.NewMockOperator().
+		WithBatchs([]*batch.Batch{colexec.MakeMockBatchs(tc.proc.Mp())}).
+		WithBatchCallback(func(int) { probeCalls++ })
+	tc.arg.Children = nil
+	tc.arg.AppendChild(probe)
+	// Model a reused operator whose previous generation had a recursive probe.
+	tc.arg.recursiveProbe = true
+	resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
+	defer func() {
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		probe.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		tc.cancel()
+	}()
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.False(t, tc.arg.recursiveProbe)
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	res, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	require.Zero(t, probeCalls)
+}
+
 func TestLoopJoinResetAfterEmptyProbe(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),
