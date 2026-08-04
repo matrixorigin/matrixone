@@ -21,13 +21,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const artifactMetadataName = "failure.json"
@@ -79,10 +80,10 @@ type artifactMetadata struct {
 // emitted only when the case explicitly supplied SyntheticPlan.
 func WriteFailureArtifact(root string, report Report, failure error) (string, error) {
 	if root == "" {
-		return "", errors.New("sidecar failure artifact root is empty")
+		return "", moerr.NewInvalidInputNoCtx("sidecar failure artifact root is empty")
 	}
 	if failure == nil {
-		return "", errors.New("sidecar failure artifact requires a failure")
+		return "", moerr.NewInvalidInputNoCtx("sidecar failure artifact requires a failure")
 	}
 	if err := validateCase(report.Case); err != nil {
 		return "", err
@@ -90,10 +91,10 @@ func WriteFailureArtifact(root string, report Report, failure error) (string, er
 
 	caseDir := filepath.Join(root, artifactCaseDirectory(report.Case.ID))
 	if err := os.MkdirAll(caseDir, 0o700); err != nil {
-		return "", fmt.Errorf("create sidecar failure artifact directory: %w", err)
+		return "", errors.Join(moerr.NewInternalErrorNoCtx("create sidecar failure artifact directory"), err)
 	}
 	if err := os.Chmod(caseDir, 0o700); err != nil {
-		return "", fmt.Errorf("secure sidecar failure artifact directory: %w", err)
+		return "", errors.Join(moerr.NewInternalErrorNoCtx("secure sidecar failure artifact directory"), err)
 	}
 
 	redact := func(value string) string {
@@ -101,11 +102,11 @@ func WriteFailureArtifact(root string, report Report, failure error) (string, er
 	}
 	native, err := makeArtifactObservation(report.Native, report.Case.Comparison, redact)
 	if err != nil {
-		return "", fmt.Errorf("encode native failure artifact: %w", err)
+		return "", errors.Join(moerr.NewInvalidInputNoCtx("encode native failure artifact"), err)
 	}
 	offloaded, err := makeArtifactObservation(report.Offloaded, report.Case.Comparison, redact)
 	if err != nil {
-		return "", fmt.Errorf("encode offloaded failure artifact: %w", err)
+		return "", errors.Join(moerr.NewInvalidInputNoCtx("encode offloaded failure artifact"), err)
 	}
 
 	metadata := artifactMetadata{
@@ -125,12 +126,12 @@ func WriteFailureArtifact(root string, report Report, failure error) (string, er
 		metadata.SyntheticPlanSHA256 = sha256Hex(report.Case.SyntheticPlan)
 		planPath := filepath.Join(caseDir, "plan.substrait.bin")
 		if err := os.WriteFile(planPath, report.Case.SyntheticPlan, 0o600); err != nil {
-			return "", fmt.Errorf("write synthetic sidecar plan artifact: %w", err)
+			return "", errors.Join(moerr.NewInternalErrorNoCtx("write synthetic sidecar plan artifact"), err)
 		}
 	} else {
 		planPath := filepath.Join(caseDir, "plan.substrait.bin")
 		if err := os.Remove(planPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("remove stale synthetic sidecar plan artifact: %w", err)
+			return "", errors.Join(moerr.NewInternalErrorNoCtx("remove stale synthetic sidecar plan artifact"), err)
 		}
 	}
 
@@ -139,11 +140,11 @@ func WriteFailureArtifact(root string, report Report, failure error) (string, er
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(metadata); err != nil {
-		return "", fmt.Errorf("marshal sidecar failure artifact: %w", err)
+		return "", errors.Join(moerr.NewInternalErrorNoCtx("marshal sidecar failure artifact"), err)
 	}
 	metadataPath := filepath.Join(caseDir, artifactMetadataName)
 	if err := os.WriteFile(metadataPath, data.Bytes(), 0o600); err != nil {
-		return "", fmt.Errorf("write sidecar failure artifact: %w", err)
+		return "", errors.Join(moerr.NewInternalErrorNoCtx("write sidecar failure artifact"), err)
 	}
 	return metadataPath, nil
 }
@@ -181,7 +182,7 @@ func fingerprintRows(mode ComparisonMode, rows []Row) (string, error) {
 		for i, row := range rows {
 			encoded, err := encodeRow(row)
 			if err != nil {
-				return "", fmt.Errorf("row %d: %w", i, err)
+				return "", errors.Join(moerr.NewInvalidInputNoCtxf("row %d", i), err)
 			}
 			_, _ = hash.Write(encoded)
 		}
@@ -195,7 +196,7 @@ func fingerprintRows(mode ComparisonMode, rows []Row) (string, error) {
 	for i, row := range rows {
 		encoded, err := encodeRow(row)
 		if err != nil {
-			return "", fmt.Errorf("row %d: %w", i, err)
+			return "", errors.Join(moerr.NewInvalidInputNoCtxf("row %d", i), err)
 		}
 		rowDigest := sha256.Sum256(encoded)
 		carry := uint16(0)

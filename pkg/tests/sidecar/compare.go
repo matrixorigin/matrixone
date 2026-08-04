@@ -20,6 +20,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // MismatchError identifies the first semantic difference between two paths.
@@ -36,7 +38,7 @@ func (e *MismatchError) Error() string {
 func Run(ctx context.Context, runner Runner, testCase Case) (Report, error) {
 	report := Report{Case: testCase}
 	if runner == nil {
-		return report, errors.New("sidecar differential runner is nil")
+		return report, moerr.NewInvalidInputNoCtx("sidecar differential runner is nil")
 	}
 	if err := validateCase(testCase); err != nil {
 		return report, err
@@ -45,11 +47,13 @@ func Run(ctx context.Context, runner Runner, testCase Case) (Report, error) {
 	var err error
 	report.Native, err = runner.Run(ctx, testCase, ModeNative)
 	if err != nil {
-		return report, fmt.Errorf("run sidecar case %q in %s mode: %w", testCase.ID, ModeNative, err)
+		return report, errors.Join(
+			moerr.NewInternalErrorNoCtxf("run sidecar case %q in %s mode", testCase.ID, ModeNative), err)
 	}
 	report.Offloaded, err = runner.Run(ctx, testCase, ModeOffloaded)
 	if err != nil {
-		return report, fmt.Errorf("run sidecar case %q in %s mode: %w", testCase.ID, ModeOffloaded, err)
+		return report, errors.Join(
+			moerr.NewInternalErrorNoCtxf("run sidecar case %q in %s mode", testCase.ID, ModeOffloaded), err)
 	}
 
 	return report, Compare(report)
@@ -84,29 +88,30 @@ func Compare(report Report) error {
 
 func validateCase(testCase Case) error {
 	if testCase.ID == "" {
-		return errors.New("sidecar differential case ID is empty")
+		return moerr.NewInvalidInputNoCtx("sidecar differential case ID is empty")
 	}
 	if testCase.SQL == "" {
-		return fmt.Errorf("sidecar differential case %q has empty SQL", testCase.ID)
+		return moerr.NewInvalidInputNoCtxf("sidecar differential case %q has empty SQL", testCase.ID)
 	}
 	if testCase.Comparison != ComparisonOrdered && testCase.Comparison != ComparisonUnordered {
-		return fmt.Errorf("sidecar differential case %q has invalid comparison mode %d", testCase.ID, testCase.Comparison)
+		return moerr.NewInvalidInputNoCtxf(
+			"sidecar differential case %q has invalid comparison mode %d", testCase.ID, testCase.Comparison)
 	}
 	if err := validateExpectation(ModeNative, testCase.NativeExpectation); err != nil {
-		return fmt.Errorf("sidecar differential case %q: %w", testCase.ID, err)
+		return errors.Join(moerr.NewInvalidInputNoCtxf("sidecar differential case %q", testCase.ID), err)
 	}
 	if err := validateExpectation(ModeOffloaded, testCase.OffloadedExpectation); err != nil {
-		return fmt.Errorf("sidecar differential case %q: %w", testCase.ID, err)
+		return errors.Join(moerr.NewInvalidInputNoCtxf("sidecar differential case %q", testCase.ID), err)
 	}
 	return nil
 }
 
 func validateExpectation(mode Mode, expectation Expectation) error {
 	if !validBackend(expectation.Backend) {
-		return fmt.Errorf("%s expectation has invalid backend %d", mode, expectation.Backend)
+		return moerr.NewInvalidInputNoCtxf("%s expectation has invalid backend %d", mode, expectation.Backend)
 	}
 	if !validOutcome(expectation.Outcome) {
-		return fmt.Errorf("%s expectation has invalid outcome %d", mode, expectation.Outcome)
+		return moerr.NewInvalidInputNoCtxf("%s expectation has invalid outcome %d", mode, expectation.Outcome)
 	}
 	return nil
 }
@@ -220,10 +225,10 @@ func encodeRow(row Row) ([]byte, error) {
 
 func validateCell(columnIndex int, cell Cell) error {
 	if cell.Kind < CellNull || cell.Kind > CellBinary {
-		return fmt.Errorf("column %d has invalid cell kind %d", columnIndex, cell.Kind)
+		return moerr.NewInvalidInputNoCtxf("column %d has invalid cell kind %d", columnIndex, cell.Kind)
 	}
 	if cell.Kind == CellNull && len(cell.Data) != 0 {
-		return fmt.Errorf("column %d has NULL cell with data", columnIndex)
+		return moerr.NewInvalidInputNoCtxf("column %d has NULL cell with data", columnIndex)
 	}
 	return nil
 }
