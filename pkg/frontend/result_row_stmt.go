@@ -52,10 +52,27 @@ func GetExplainColumn(ctx context.Context, explainColName string) ([]*plan2.ColD
 }
 
 func getPreparedResultColumns(stmt *PrepareStmt, txnHaveDDL bool) []*plan2.ColDef {
-	dcPrepare := stmt.PreparePlan.GetDcl().GetPrepare()
-	if _, ok := stmt.PrepareStmt.(*tree.ExplainStmt); ok {
-		if query := dcPrepare.GetPlan().GetQuery(); query != nil {
-			title := plan2.GetPlanTitle(query, txnHaveDDL)
+	return getPreparedResultColumnsFromPlan(stmt.PrepareStmt, stmt.PreparePlan, txnHaveDDL)
+}
+
+func getPreparedResultColumnsFromPlan(stmt tree.Statement, preparedPlan *plan2.Plan, txnHaveDDL bool) []*plan2.ColDef {
+	plan := preparedPlan.GetDcl().GetPrepare().GetPlan()
+	return getPreparedResultColumnsFor(stmt, plan, txnHaveDDL)
+}
+
+func getPreparedResultColumnsFor(stmt tree.Statement, plan *plan.Plan, txnHaveDDL bool) []*plan2.ColDef {
+	if isPerformStatement(stmt) {
+		return nil
+	}
+	if query := plan.GetQuery(); query != nil {
+		var title string
+		switch stmt.(type) {
+		case *tree.ExplainStmt, *tree.ExplainAnalyze:
+			title = plan2.GetPlanTitle(query, txnHaveDDL)
+		case *tree.ExplainPhyPlan:
+			title = plan2.GetPhyPlanTitle(query, txnHaveDDL)
+		}
+		if title != "" {
 			return []*plan2.ColDef{{
 				Typ:        plan2.Type{Id: int32(types.T_varchar)},
 				Name:       title,
@@ -63,7 +80,7 @@ func getPreparedResultColumns(stmt *PrepareStmt, txnHaveDDL bool) []*plan2.ColDe
 			}}
 		}
 	}
-	return plan2.GetResultColumnsFromPlan(dcPrepare.GetPlan())
+	return plan2.GetResultColumnsFromPlan(plan)
 }
 
 func sessionTxnHaveDDL(ses FeSession) bool {

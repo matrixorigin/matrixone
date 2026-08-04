@@ -254,6 +254,45 @@ func TestBuildViewPersistsSessionSQLMode(t *testing.T) {
 	require.Equal(t, ctx.sqlMode, *viewData.SQLMode)
 }
 
+func TestPerformRejectsNestedSelectIntoOutfile(t *testing.T) {
+	tests := []string{
+		"perform select 1 into outfile 'direct.csv'",
+		"perform with c as (select 1 into outfile 'cte.csv') select * from c",
+		"perform select (select 1 into outfile 'projection.csv')",
+		"perform select 1 where exists (select 1 into outfile 'predicate.csv')",
+	}
+
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.ErrorContains(t, err, "PERFORM SELECT INTO OUTFILE")
+		})
+	}
+}
+
+func TestPerformAllowsNestedSelectWithoutOutfile(t *testing.T) {
+	tests := []string{
+		"perform with c as (select 1) select * from c",
+		"perform select (select 1)",
+		"perform select 1 where exists (select 1)",
+	}
+
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+		})
+	}
+}
+
 // only use in developing
 func TestSingleSQL(t *testing.T) {
 	// sql := "INSERT INTO NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')"
@@ -2018,6 +2057,65 @@ func countLockOpNodes(logicPlan *Plan) int {
 	return count
 }
 
+func TestSelectSharedLockMode(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name            string
+		sql             string
+		mode            lockpb.LockMode
+		lockTargetCount int
+	}{
+		{
+			name:            "for share",
+			sql:             "select n_nationkey from nation where n_nationkey = 1 for share",
+			mode:            lockpb.LockMode_Shared,
+			lockTargetCount: 1,
+		},
+		{
+			name:            "lock in share mode",
+			sql:             "select n_nationkey from nation where n_nationkey = 1 lock in share mode",
+			mode:            lockpb.LockMode_Shared,
+			lockTargetCount: 1,
+		},
+		{
+			name:            "for share inside nested parentheses",
+			sql:             "((select n_nationkey from nation for share))",
+			mode:            lockpb.LockMode_Shared,
+			lockTargetCount: 1,
+		},
+		{
+			name:            "for share across rollup window rewrite",
+			sql:             "select n_regionkey, row_number() over (order by n_regionkey) from nation group by n_regionkey with rollup for share",
+			mode:            lockpb.LockMode_Shared,
+			lockTargetCount: 2,
+		},
+		{
+			name:            "for update remains exclusive",
+			sql:             "select n_nationkey from nation where n_nationkey = 1 for update",
+			mode:            lockpb.LockMode_Exclusive,
+			lockTargetCount: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+
+			var lockTargets []*plan.LockTarget
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_LOCK_OP {
+					lockTargets = append(lockTargets, node.LockTargets...)
+				}
+			}
+			require.Len(t, lockTargets, test.lockTargetCount)
+			for _, target := range lockTargets {
+				require.Equal(t, test.mode, target.Mode)
+			}
+		})
+	}
+}
+
 // test CTE plan building
 func TestCTESqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer(false)
@@ -2704,7 +2802,7 @@ func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
 }
 
 func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
-	t.Run("affected child key marks prepare uncacheable", func(t *testing.T) {
+	t.Run("ordinary child update marks prepare uncacheable", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_CASCADE)
 
@@ -2712,11 +2810,11 @@ func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
 		require.True(t, query.GetHasForeignKeyAction())
 	})
 
-	t.Run("unrelated child column keeps prepare cacheable", func(t *testing.T) {
+	t.Run("unrelated child update remains cacheable", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_CASCADE)
 
-		query := buildPreparedQuery(t, mock, "prepare stmt1 from update emp set sal = ? where empno = ?")
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from update emp set ename = ? where empno = ?")
 		require.False(t, query.GetHasForeignKeyAction())
 	})
 
@@ -2725,6 +2823,32 @@ func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
 		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_RESTRICT, plan.ForeignKeyDef_CASCADE)
 
 		query := buildPreparedQuery(t, mock, "prepare stmt1 from update dept set deptno = deptno + 10 where deptno = ?")
+		require.True(t, query.GetHasForeignKeyAction())
+	})
+
+	t.Run("unrelated parent update remains cacheable", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_RESTRICT, plan.ForeignKeyDef_CASCADE)
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from update dept set loc = ? where deptno = ?")
+		require.False(t, query.GetHasForeignKeyAction())
+	})
+
+	t.Run("child update remains uncacheable with checks disabled", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_CASCADE)
+		mock.ctxt.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
+			switch name {
+			case "foreign_key_checks":
+				return int64(0), nil
+			case "sql_mode":
+				return "", nil
+			default:
+				return nil, moerr.NewInternalError(context.Background(), "unexpected variable")
+			}
+		}
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from update emp set deptno = ? where empno = ?")
 		require.True(t, query.GetHasForeignKeyAction())
 	})
 
@@ -5502,6 +5626,15 @@ func TestSubQuery(t *testing.T) {
 				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY < n1.N_NATIONKEY
 			)
 		)`, // two-level correlated ALL subquery
+		`SELECT n1.N_NATIONKEY,
+			(SELECT MAX(n2.N_REGIONKEY)
+			 FROM NATION n2
+			 WHERE n2.N_REGIONKEY = (
+				 SELECT MAX(n3.N_REGIONKEY)
+				 FROM NATION n3
+				 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY
+			 ))
+		 FROM NATION n1`, // two-level correlated scalar aggregate subquery
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 

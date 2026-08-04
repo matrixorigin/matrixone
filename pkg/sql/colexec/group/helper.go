@@ -391,7 +391,9 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 				}
 			}
 			gbBatch.SetRowCount(int(cnt))
-			gbBatch.MarshalBinaryWithBuffer(buf, false)
+			if _, err := gbBatch.MarshalBinaryWithBuffer(buf, false); err != nil {
+				return 0, 0, err
+			}
 
 			// write marker
 			var magic uint64 = 0x12345678DEADBEEF

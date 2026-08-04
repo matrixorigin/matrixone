@@ -103,3 +103,85 @@ func TestProfileWritable(t *testing.T) {
 
 	mp.Free(bs)
 }
+
+func TestAccountedProfileUsesProvenanceAcrossProfilingToggle(t *testing.T) {
+	DisableProfiling()
+	defer DisableProfiling()
+	registry, account := newTestAllocationAccount(t, 1024, 1)
+	mp := MustNew("accounted-profile")
+	defer DeleteMPool(mp)
+	values := accountedProfileSample(testAllocationOwner, testAllocationSite)
+	before := values.Values()
+	trackedBefore := ProfileTrackedCount()
+
+	EnableProfiling()
+	buffer, err := mp.AllocAccounted(
+		64,
+		account,
+		testAllocationOwner,
+		testAllocationSite,
+	)
+	require.NoError(t, err)
+	require.Equal(t, trackedBefore, ProfileTrackedCount(),
+		"accounted provenance does not need a per-pointer stack entry")
+	afterAlloc := values.Values()
+	require.Equal(t, int64(1), afterAlloc[0]-before[0])
+	require.Equal(t, int64(64), afterAlloc[1]-before[1])
+	require.Equal(t, int64(1), afterAlloc[2]-before[2])
+	require.Equal(t, int64(64), afterAlloc[3]-before[3])
+
+	// The allocation lease remembers whether it was profiled, so disabling
+	// collection cannot strand an existing in-use sample.
+	DisableProfiling()
+	mp.Free(buffer)
+	afterFree := values.Values()
+	require.Equal(t, before[2], afterFree[2])
+	require.Equal(t, before[3], afterFree[3])
+	finalizeTestAllocationAccount(t, registry, account)
+}
+
+func BenchmarkProfileAllocFree(b *testing.B) {
+	EnableProfiling()
+	defer DisableProfiling()
+	for _, accounted := range []bool{false, true} {
+		name := "stack"
+		if accounted {
+			name = "accounted-provenance"
+		}
+		b.Run(name, func(b *testing.B) {
+			mp := MustNew("profile-benchmark")
+			defer DeleteMPool(mp)
+			var registry *AllocationAccountRegistry
+			var account *AllocationAccount
+			if accounted {
+				registry, account = newTestAllocationAccount(b, 1<<60, 1)
+				// Initialize the bounded owner/site sample outside the measured loop.
+				accountedProfileSample(testAllocationOwner, testAllocationSite)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				var buffer []byte
+				var err error
+				if accounted {
+					buffer, err = mp.AllocAccounted(
+						64,
+						account,
+						testAllocationOwner,
+						testAllocationSite,
+					)
+				} else {
+					buffer, err = mp.Alloc(64, true)
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+				mp.Free(buffer)
+			}
+			b.StopTimer()
+			if accounted {
+				finalizeTestAllocationAccount(b, registry, account)
+			}
+		})
+	}
+}

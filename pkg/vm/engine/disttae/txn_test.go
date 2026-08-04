@@ -26,6 +26,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -49,6 +50,31 @@ func TestValidateAutoIncrEpochAdvance(t *testing.T) {
 	require.NoError(t, validateAutoIncrEpochAdvance(math.MaxUint32-1, 1))
 	require.Error(t, validateAutoIncrEpochAdvance(math.MaxUint32, 1))
 	require.Error(t, validateAutoIncrEpochAdvance(math.MaxUint32-1, 2))
+}
+
+func TestTransactionAutoIncrEpochFenceCapabilityUsesTargetSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		stores   []DNStore
+		expected bool
+	}{
+		{name: "no target", expected: false},
+		{name: "legacy target", stores: []DNStore{{ServiceID: "old"}}, expected: false},
+		{name: "new target", stores: []DNStore{{ServiceID: "new", AutoIncrEpochFenceSupported: true}}, expected: true},
+		{
+			name: "mixed targets fail closed",
+			stores: []DNStore{
+				{ServiceID: "new", AutoIncrEpochFenceSupported: true},
+				{ServiceID: "old"},
+			},
+			expected: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			txn := &Transaction{tnStores: tc.stores}
+			require.Equal(t, tc.expected, txn.SupportsAutoIncrEpochFence())
+		})
+	}
 }
 
 func TestPrecommitEntryCarriesAutoIncrEpoch(t *testing.T) {
@@ -84,6 +110,87 @@ func TestPrecommitEntryCarriesAutoIncrEpoch(t *testing.T) {
 			require.Equal(t, tc.known, decoded.AutoIncrEpochKnown)
 		})
 	}
+}
+
+func TestRequiresAutoIncrEpochFenceCommit(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		entries  []*api.Entry
+		expected bool
+	}{
+		{name: "ordinary legacy write"},
+		{name: "known zero remains rolling-upgrade compatible", entries: []*api.Entry{{AutoIncrEpochKnown: true}}},
+		{name: "fenced DML requires guarded commit", entries: []*api.Entry{{AutoIncrEpochKnown: true, AutoIncrEpoch: 1}}, expected: true},
+		{name: "unknown nonzero is legacy and rejected by new TN epoch validation", entries: []*api.Entry{{AutoIncrEpoch: 1}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.expected, requiresAutoIncrEpochFenceCommit(tc.entries))
+		})
+	}
+}
+
+type recordingAutoIncrEpochFenceCommitter struct {
+	client.TxnOperator
+	required bool
+}
+
+func (op *recordingAutoIncrEpochFenceCommitter) RequireAutoIncrEpochFenceCommit() {
+	op.required = true
+}
+
+func TestTransactionMarksAutoIncrEpochFenceBeforeWorkspaceFlush(t *testing.T) {
+	op := &recordingAutoIncrEpochFenceCommitter{}
+	txn := &Transaction{op: op}
+
+	require.NoError(t, txn.requireAutoIncrEpochFenceCommit(0, true))
+	require.False(t, op.required)
+	require.NoError(t, txn.requireAutoIncrEpochFenceCommit(1, true))
+	require.True(t, op.required)
+}
+
+type unsupportedAutoIncrEpochTxnOperator struct {
+	client.TxnOperator
+}
+
+func TestAutoIncrEpochWritePathsRejectBeforeWorkspaceMutation(t *testing.T) {
+	newTxn := func(t *testing.T) *Transaction {
+		return &Transaction{
+			op:   &unsupportedAutoIncrEpochTxnOperator{},
+			proc: testutil.NewProc(t),
+		}
+	}
+
+	t.Run("row", func(t *testing.T) {
+		txn := newTxn(t)
+		_, err := txn.writeBatchWithAutoIncrEpochKnown(
+			INSERT, "", 1, 2, 3, "db", "tbl", nil, DNStore{}, 1, true,
+		)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+		require.Empty(t, txn.writes)
+		require.Zero(t, txn.workspaceSize)
+	})
+
+	t.Run("file", func(t *testing.T) {
+		txn := newTxn(t)
+		err := txn.writeFileLockedWithAutoIncrEpochKnown(
+			INSERT, 1, 2, 3, "db", "tbl", "file", nil, DNStore{}, 1, true,
+		)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+		require.Empty(t, txn.writes)
+		require.False(t, txn.hasS3Op.Load())
+		require.Zero(t, txn.workspaceSize)
+	})
+
+	t.Run("skip transfer file", func(t *testing.T) {
+		txn := newTxn(t)
+		err := txn.writeFileLockedSkipTransferWithAutoIncrEpochKnown(
+			INSERT, 1, 2, 3, "db", "tbl", "file", nil, DNStore{}, 1, true,
+		)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+		require.Empty(t, txn.writes)
+		require.False(t, txn.hasS3Op.Load())
+		require.Zero(t, txn.workspaceSize)
+	})
 }
 
 func TestWorkspaceFlushKeySeparatesAutoIncrEpochs(t *testing.T) {
@@ -1452,6 +1559,59 @@ func TestDupVectorWithoutNulls(t *testing.T) {
 		out.Free(mp)
 		v.Free(mp)
 	})
+}
+
+func TestDupVectorWithoutNullsLeavesSealedStatementOwner(t *testing.T) {
+	proc := testutil.NewProc(t)
+	mp := proc.Mp()
+
+	for _, tc := range []struct {
+		name      string
+		withNulls bool
+	}{
+		{name: "no nulls"},
+		{name: "with nulls", withNulls: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+			require.NoError(t, err)
+			account, err := registry.Open(1 << 20)
+			require.NoError(t, err)
+			selection, err := vector.NewAllocationAccountSelection(
+				account,
+				mpool.AllocationOwner(1),
+				mpool.AllocationSite(1),
+				mpool.AllocationSite(2),
+				mpool.AllocationSite(3),
+				mpool.AllocationSite(4),
+			)
+			require.NoError(t, err)
+			source, err := vector.NewOffHeapVecWithTypeAndAllocation(
+				types.T_int64.ToType(),
+				selection,
+			)
+			require.NoError(t, err)
+			require.NoError(t, vector.AppendFixed(source, int64(1), false, mp))
+			if tc.withNulls {
+				require.NoError(t, vector.AppendFixed(source, int64(0), true, mp))
+			}
+			require.NoError(t, vector.AppendFixed(source, int64(2), false, mp))
+
+			used := account.Seal().Used
+			require.NotZero(t, used)
+			out, err := dupVectorWithoutNulls(source, mp)
+			require.NoError(t, err)
+			require.Nil(t, out.AllocationAccountSelection())
+			require.Equal(t, used, account.Snapshot().Used)
+			require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](out))
+
+			out.Free(mp)
+			source.Free(mp)
+			require.Zero(t, account.Snapshot().Used)
+			_, err = registry.Finalize(account)
+			require.NoError(t, err)
+		})
+	}
 }
 
 func newInt64BatchForTest(

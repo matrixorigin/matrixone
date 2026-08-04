@@ -107,6 +107,7 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 			SkipInsertOnNullPk:    ctx.SkipInsertOnNullPk,
 			InsertPkColIdx:        ctx.InsertPkColIdx,
 			CountDeleteAffectRows: ctx.CountDeleteAffectRows,
+			IgnoreAffectedRows:    ctx.IgnoreAffectedRows,
 		}
 	}
 

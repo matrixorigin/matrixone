@@ -25,3 +25,16 @@ source.events.insertMany([
   {_id: ObjectId("64b000000000000000000005"), device_id: "device-002", site_id: "site-east", ts: ISODate("2026-07-27T10:01:00Z"), measurement: "malformed"}
 ]);
 source.events.createIndex({ts: 1, _id: 1});
+
+source.temporal_edges.drop();
+source.temporal_edges.insertOne({
+  _id: ObjectId("64b000000000000000000101"),
+  ts: ISODate("2026-07-27T10:00:05.100Z")
+});
+source.temporal_edges.createIndex({ts: 1});
+
+source.decoded_budget.drop();
+source.decoded_budget.insertOne({
+  _id: ObjectId("64b000000000000000000201"),
+  payload: "x".repeat(192 * 1024)
+});

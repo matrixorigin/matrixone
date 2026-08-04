@@ -60,22 +60,106 @@ func (bs *Batches) Reset() {
 
 // copy from input batch into batches
 // the batches structure hold data in fix size 8192 rows, and continue to append from next batch
-// if error return , the batches will clean itself
 func (bs *Batches) CopyIntoBatches(src *batch.Batch, proc *process.Process) (err error) {
-	defer func() {
-		if err != nil {
-			bs.Clean(proc.Mp())
-		}
-	}()
+	return bs.CopyIntoBatchesWithAllocation(src, proc, nil)
+}
 
+// CopyIntoBatchesWithAllocation selects provenance for every retained vector
+// destination. The Go descriptors are bounded by one Batch per 8,192 rows and
+// one Vector pointer per input column; physical data, area, null, and grouping
+// buffers are allocation-accounted and remain owned by the copied batches.
+//
+// The append is transactional. In particular, an allocation rejection while
+// copying a later input must not destroy batches retained from earlier inputs:
+// HashBuild needs those batches intact to recover by spilling them. Existing
+// vectors are restored to logical append checkpoints on failure; successful
+// capacity growth remains owned and reusable. This avoids repeatedly copying
+// a partial 8,192-row tail as small input batches arrive.
+func (bs *Batches) CopyIntoBatchesWithAllocation(
+	src *batch.Batch,
+	proc *process.Process,
+	selection *vector.AllocationAccountSelection,
+) (err error) {
+	if len(bs.Buf) > 0 &&
+		!vector.AllocationAccountSelectionsEqual(
+			bs.Buf[len(bs.Buf)-1].AllocationAccountSelection(),
+			selection,
+		) {
+		return mpool.ErrAllocationAccountMismatch
+	}
+
+	originalLen := len(bs.Buf)
+	originalMemSize := bs.MemSize
+	originalNil := bs.Buf == nil
+	var originalTail *batch.Batch
+	originalTailRows := 0
+	var localTailCheckpoints [16]vector.AppendCheckpoint
+	var tailCheckpoints []vector.AppendCheckpoint
+	if originalLen > 0 && bs.Buf[originalLen-1].RowCount() != DefaultBatchSize {
+		originalTail = bs.Buf[originalLen-1]
+		originalTailRows = originalTail.RowCount()
+		if len(originalTail.Vecs) > len(localTailCheckpoints) {
+			tailCheckpoints = make([]vector.AppendCheckpoint, len(originalTail.Vecs))
+		} else {
+			tailCheckpoints = localTailCheckpoints[:len(originalTail.Vecs)]
+		}
+		for i := range originalTail.Vecs {
+			tailCheckpoints[i] = originalTail.Vecs[i].MakeAppendCheckpoint()
+		}
+	}
+	if err = bs.copyIntoBatches(src, proc, selection); err == nil {
+		return nil
+	}
+	for i := originalLen; i < len(bs.Buf); i++ {
+		bs.Buf[i].Clean(proc.Mp())
+	}
+	bs.Buf = bs.Buf[:originalLen]
+	if originalNil {
+		bs.Buf = nil
+	}
+	if originalTail != nil {
+		for i := range originalTail.Vecs {
+			originalTail.Vecs[i].RollbackAppend(
+				tailCheckpoints[i],
+				DefaultBatchSize-originalTailRows,
+			)
+		}
+		originalTail.SetRowCount(originalTailRows)
+	}
+	bs.MemSize = originalMemSize
+	return err
+}
+
+func (bs *Batches) copyIntoBatches(
+	src *batch.Batch,
+	proc *process.Process,
+	selection *vector.AllocationAccountSelection,
+) (err error) {
 	if bs.Buf == nil {
 		bs.Buf = make([]*batch.Batch, 0, 16)
+	}
+	if len(bs.Buf) > 0 &&
+		!vector.AllocationAccountSelectionsEqual(
+			bs.Buf[len(bs.Buf)-1].AllocationAccountSelection(),
+			selection,
+		) {
+		return mpool.ErrAllocationAccountMismatch
 	}
 
 	var tmp *batch.Batch
 	if src.RowCount() == DefaultBatchSize {
-		tmp, err = src.Dup(proc.Mp())
+		if selection == nil {
+			tmp, err = src.Dup(proc.Mp())
+		} else {
+			tmp, err = proc.NewBatchFromSrcWithAllocation(src, 0, selection)
+			if err == nil {
+				err = src.CloneTo(tmp, proc.Mp())
+			}
+		}
 		if err != nil {
+			if tmp != nil {
+				tmp.Clean(proc.Mp())
+			}
 			return err
 		}
 		bs.MemSize += int64(tmp.Size())
@@ -96,12 +180,22 @@ func (bs *Batches) CopyIntoBatches(src *batch.Batch, proc *process.Process) (err
 		lenBuf := len(bs.Buf)
 		if lenBuf > 0 && bs.Buf[lenBuf-1].RowCount() != DefaultBatchSize {
 			tmp = bs.Buf[lenBuf-1]
+			if !vector.AllocationAccountSelectionsEqual(
+				tmp.AllocationAccountSelection(),
+				selection,
+			) {
+				return mpool.ErrAllocationAccountMismatch
+			}
 		} else {
 			preAllocSize := length - offset
 			if preAllocSize > DefaultBatchSize {
 				preAllocSize = DefaultBatchSize
 			}
-			tmp, err = proc.NewBatchFromSrc(src, preAllocSize)
+			tmp, err = proc.NewBatchFromSrcWithAllocation(
+				src,
+				preAllocSize,
+				selection,
+			)
 			if err != nil {
 				return err
 			}
@@ -123,45 +217,63 @@ func (bs *Batches) Shrink(ignoreRow *bitmap.Bitmap, proc *process.Process) error
 	if ignoreRow.Count() == 0 {
 		return nil
 	}
-
-	ignoreRow.Negate()
-	count := int64(ignoreRow.Count())
-	sels := make([]int32, 0, count)
-	itr := ignoreRow.Iterator()
-	for itr.HasNext() {
-		r := itr.Next()
-		sels = append(sels, int32(r))
+	if len(bs.Buf) == 0 || bs.Buf[0] == nil {
+		return mpool.ErrAllocationAccountInvalid
 	}
 
-	n := (len(sels)-1)/DefaultBatchSize + 1
+	ignoreRow.Negate()
+	// Build the replacement privately and stream the active row IDs directly
+	// from the bitmap. The old implementation materialized one Go int32 per
+	// row and silently dropped the copied-batch allocation provenance.
+	count := ignoreRow.Count()
+	n := (count + DefaultBatchSize - 1) / DefaultBatchSize
+	if n == 0 {
+		n = 1
+	}
+	selection := bs.Buf[0].AllocationAccountSelection()
 	newBuf := make([]*batch.Batch, n)
-	for i := range newBuf {
-		newBuf[i] = batch.NewOffHeapWithSize(len(bs.Buf[i].Vecs))
-		for j, vec := range bs.Buf[0].Vecs {
-			newBuf[i].Vecs[j] = vector.NewOffHeapVecWithType(*vec.GetType())
-		}
-		var newsels []int32
-		if (i+1)*DefaultBatchSize <= len(sels) {
-			newsels = sels[i*DefaultBatchSize : (i+1)*DefaultBatchSize]
-		} else {
-			newsels = sels[i*DefaultBatchSize:]
-		}
-		for _, sel := range newsels {
-			idx1, idx2 := sel/DefaultBatchSize, sel%DefaultBatchSize
-			for j, vec := range bs.Buf[idx1].Vecs {
-				if err := newBuf[i].Vecs[j].UnionOne(vec, int64(idx2), proc.Mp()); err != nil {
-					for k := 0; k <= i; k++ {
-						newBuf[k].Clean(proc.Mp())
-					}
-					return err
+	cleanup := true
+	defer func() {
+		if cleanup {
+			for _, bat := range newBuf {
+				if bat != nil {
+					bat.Clean(proc.Mp())
 				}
 			}
+			// Preserve the caller's ignore-row checkpoint on failure.
+			ignoreRow.Negate()
 		}
-		newBuf[i].SetRowCount(len(newsels))
+	}()
+	for i := range newBuf {
+		newBuf[i] = batch.NewOffHeapWithSize(len(bs.Buf[0].Vecs))
+		if err := newBuf[i].SetAllocationAccount(selection); err != nil {
+			return err
+		}
+		for j, vec := range bs.Buf[0].Vecs {
+			newBuf[i].SetVector(int32(j), vector.NewOffHeapVecWithType(*vec.GetType()))
+		}
+	}
+	itr := ignoreRow.Iterator()
+	outRow := 0
+	for itr.HasNext() {
+		sel := int(itr.Next())
+		srcBatch, srcRow := sel/DefaultBatchSize, sel%DefaultBatchSize
+		dstBatch := outRow / DefaultBatchSize
+		for j, vec := range bs.Buf[srcBatch].Vecs {
+			if err := newBuf[dstBatch].Vecs[j].UnionOne(vec, int64(srcRow), proc.Mp()); err != nil {
+				return err
+			}
+		}
+		newBuf[dstBatch].AddRowCount(1)
+		outRow++
 	}
 
 	bs.Clean(proc.Mp())
 	bs.Buf = newBuf
+	for _, bat := range newBuf {
+		bs.MemSize += int64(bat.Size())
+	}
+	cleanup = false
 
 	return nil
 }
@@ -181,8 +293,21 @@ func appendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Batch, offset int,
 	if length+offset > src.RowCount() {
 		length = src.RowCount() - offset
 	}
+	var localCheckpoints [16]vector.AppendCheckpoint
+	var checkpoints []vector.AppendCheckpoint
+	if len(dst.Vecs) > len(localCheckpoints) {
+		checkpoints = make([]vector.AppendCheckpoint, len(dst.Vecs))
+	} else {
+		checkpoints = localCheckpoints[:len(dst.Vecs)]
+	}
+	for i := range dst.Vecs {
+		checkpoints[i] = dst.Vecs[i].MakeAppendCheckpoint()
+	}
 	for i := range dst.Vecs {
 		if err = dst.Vecs[i].UnionBatch(src.Vecs[i], int64(offset), length, nil, proc.Mp()); err != nil {
+			for j := 0; j <= i; j++ {
+				dst.Vecs[j].RollbackAppend(checkpoints[j], length)
+			}
 			return 0, err
 		}
 		dst.Vecs[i].SetSorted(false)

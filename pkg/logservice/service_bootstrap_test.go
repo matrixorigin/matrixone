@@ -82,15 +82,30 @@ func TestServiceBootstrapRestoresHAKeeperAndWAL(t *testing.T) {
 	cfg.BootstrapConfig.Restore.Enabled = true
 	cfg.HAKeeperClientConfig.ServiceAddresses = []string{cfg.LogServiceServiceAddr()}
 	fileServices := newFS()
-	s, err := NewService(
-		cfg,
-		fileServices,
-		nil,
-		WithBackendFilter(func(morpc.Message, string) bool { return true }),
-	)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, s.Close()) }()
+	var s *Service
+	closeService := func() {
+		if s == nil {
+			return
+		}
+		service := s
+		s = nil
+		require.NoError(t, service.Close())
+	}
+	restartService := func(serviceCfg Config) {
+		closeService()
+		var serviceErr error
+		s, serviceErr = NewService(
+			serviceCfg,
+			fileServices,
+			nil,
+			WithBackendFilter(func(morpc.Message, string) bool { return true }),
+		)
+		require.NoError(t, serviceErr)
+	}
+	restartService(cfg)
+	defer closeService()
 	require.True(t, s.walRecovery.configured)
+	require.True(t, s.walRecovery.coordinator)
 	require.True(t, s.walRecovery.pending.Load())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -150,8 +165,10 @@ func TestServiceBootstrapRestoresHAKeeperAndWAL(t *testing.T) {
 	// artifact and must not wait for the coordinator to restart with it.
 	nonCoordinatorCfg := cfg
 	nonCoordinatorCfg.BootstrapConfig.Restore.WALDataPath = ""
-	s.walRecovery.coordinator = false
-	s.setWALRecoveryInProgress(true)
+	restartService(nonCoordinatorCfg)
+	require.True(t, s.walRecovery.configured)
+	require.False(t, s.walRecovery.coordinator)
+	require.True(t, s.walRecovery.pending.Load())
 	require.NoError(t, s.BootstrapHAKeeper(ctx, nonCoordinatorCfg))
 	require.False(t, s.walRecovery.pending.Load())
 
@@ -162,8 +179,10 @@ func TestServiceBootstrapRestoresHAKeeperAndWAL(t *testing.T) {
 
 	// A restart normally retains the restore configuration. It must verify the
 	// replicated destination marker, preserve the current lease and skip replay.
-	s.walRecovery.coordinator = true
-	s.setWALRecoveryInProgress(true)
+	restartService(cfg)
+	require.True(t, s.walRecovery.configured)
+	require.True(t, s.walRecovery.coordinator)
+	require.True(t, s.walRecovery.pending.Load())
 	require.NoError(t, s.BootstrapHAKeeper(ctx, cfg))
 	require.False(t, s.walRecovery.pending.Load())
 	restartedState, err := s.store.getCheckerState()
