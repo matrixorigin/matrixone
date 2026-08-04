@@ -221,6 +221,33 @@ func TestJoin(t *testing.T) {
 	}
 }
 
+func TestLoopJoinPassesRecursiveMarker(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+		colexec.NewResultPos(1, 0),
+	})
+	defer func() {
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		tc.cancel()
+	}()
+	marker := colexec.MakeMockBatchs(tc.proc.Mp())
+	marker.SetLast()
+	resetChildrenWithBatch(tc.arg, marker)
+	resetHashBuildChildren(tc.barg, tc.proc.Mp())
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+
+	res, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Same(t, marker, res.Batch)
+	require.True(t, res.Batch.Last())
+}
+
 func TestLoopJoinResetAfterEmptyProbe(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),

@@ -123,6 +123,9 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					ctr.state = End
 					continue
 				}
+				if input.Batch.Last() {
+					return input, nil
+				}
 				if input.Batch.IsEmpty() {
 					continue
 				}
