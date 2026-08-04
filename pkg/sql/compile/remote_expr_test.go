@@ -102,6 +102,50 @@ func TestOrderedAggregateRemoteProtocolValidation(t *testing.T) {
 	}))
 }
 
+func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	textMin := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfMin,
+		false,
+		[]*plan.Expr{makeTestVarExpr("value")},
+		nil,
+	)}
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion10)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, textMin),
+		"requires MORPC protocol version 11")
+
+	ordered := aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfGroupConcat,
+		false,
+		[]*plan.Expr{makeTestVarExpr("value")},
+		[]byte{1, 2, 3},
+		plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+	)
+	require.ErrorContains(t,
+		validateRemoteAggregateProtocol(proc,
+			append([]aggexec.AggFuncExecExpression{ordered}, textMin...)),
+		"requires MORPC protocol version 11",
+	)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion11)
+	require.NoError(t, validateRemoteAggregateProtocol(proc, textMin))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion9)
+	for _, charset := range []uint32{
+		uint32(types.CharsetBinary),
+		uint32(types.CharsetUTF8MB4Bin),
+	} {
+		binaryText := makeTestVarExpr("packed")
+		binaryText.Typ.Charset = charset
+		require.NoError(t, validateRemoteAggregateProtocol(proc,
+			[]aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+				aggexec.AggIdOfMax, false, []*plan.Expr{binaryText}, nil)}))
+	}
+}
+
 func TestScopeContainsVarExprInAggArguments(t *testing.T) {
 	scope := newScope(Normal)
 	op := group.NewArgument()

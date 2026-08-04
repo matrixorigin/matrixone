@@ -1289,7 +1289,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		enforced   bool
 	}
 	pendingChecks := make([]pendingCheckDef, 0)
-	tableCharset := tableDefaultCharset(stmt.Options)
+	tableCharset, err := tableDefaultCharset(ctx.GetContext(), stmt.Options)
+	if err != nil {
+		return err
+	}
 	createTable.TableDef.DefaultCharset = tableCharset
 
 	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
@@ -1309,7 +1312,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				return err
 			}
 			cType.Charset = uint32(types.CharsetType(types.T(cType.Id)))
-			applyTextCharsetToPlanType(&cType, tableCharset)
+			applyTableDefaultCharsetToPlanType(&cType, tableCharset)
 			if err = applyColumnAttributesToType(ctx.GetContext(), &cType, def.Attributes); err != nil {
 				return err
 			}
@@ -1336,7 +1339,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				return err
 			}
 			colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
-			applyTextCharsetToPlanType(&colType, tableCharset)
+			applyTableDefaultCharsetToPlanType(&colType, tableCharset)
 			if err = applyColumnAttributesToType(ctx.GetContext(), &colType, def.Attributes); err != nil {
 				return err
 			}
@@ -1918,7 +1921,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 
 	// check Constraint Name (include index/ unique)
-	err := checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
+	err = checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
 	if err != nil {
 		return err
 	}

@@ -28,8 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/util/list"
@@ -842,7 +844,13 @@ func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]a
 				types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale, uint8(arg.Typ.Charset),
 			)
 		}
-		aggList[i], err = aggexec.MakeAgg(ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), typs...)
+		if ctr.legacyTextMinMax {
+			aggList[i], err = aggexec.MakeAggWithLegacyTextMinMax(
+				ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), typs...)
+		} else {
+			aggList[i], err = aggexec.MakeAgg(
+				ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), typs...)
+		}
 		if err != nil {
 			freeAggListPartial(aggList, i)
 			return nil, err
@@ -867,6 +875,20 @@ func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]a
 		}
 	}
 	return aggList, nil
+}
+
+func useLegacyTextMinMaxForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion11
 }
 
 // freeAggListPartial frees the first n aggregators in the list.

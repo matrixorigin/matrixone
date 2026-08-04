@@ -943,3 +943,21 @@ func TestFormatLinesTerminatedBy(t *testing.T) {
 	require.NotEqual(t, formatLinesTerminatedBy("\n"), formatLinesTerminatedBy("\r\n"))
 	require.Equal(t, "#EOL#", formatLinesTerminatedBy("#EOL#"))
 }
+
+func TestShowCreatePreservesTextCollationMetadata(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `create table collated_show(
+		bin_text varchar(10),
+		general_text varchar(10) collate utf8mb4_general_ci,
+		packed varchar(10)
+	) collate utf8mb4_bin`)
+	require.NoError(t, err)
+	FindColumn(tableDef.Cols, "packed").Typ.Charset = uint32(types.CharsetBinary)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, showSQL, "`bin_text` varchar(10) COLLATE utf8mb4_bin")
+	require.Contains(t, showSQL, "`general_text` varchar(10) COLLATE utf8mb4_general_ci")
+	require.Contains(t, showSQL, "`packed` varchar(10) COLLATE binary")
+	require.Contains(t, showSQL, ") COLLATE=utf8mb4_bin")
+}

@@ -142,11 +142,16 @@ func TestAlterTableAddColumnInheritsTableDefaultCharset(t *testing.T) {
 		{
 			name: "inherits table utf8mb4_bin",
 			sql:  "alter table t1 add column d varchar(10)",
-			want: uint32(types.CharsetBinary),
+			want: uint32(types.CharsetUTF8MB4Bin),
 		},
 		{
 			name: "column collation overrides table",
 			sql:  "alter table t1 add column d varchar(10) collate utf8mb4_general_ci",
+			want: uint32(types.CharsetUTF8),
+		},
+		{
+			name: "column charset overrides table",
+			sql:  "alter table t1 add column d varchar(10) character set utf8mb4",
 			want: uint32(types.CharsetUTF8),
 		},
 	}
@@ -154,7 +159,7 @@ func TestAlterTableAddColumnInheritsTableDefaultCharset(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false)
-			mock.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetBinary)
+			mock.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetUTF8MB4Bin)
 
 			logicPlan, err := buildSingleStmt(mock, t, tc.sql)
 			assert.NoError(t, err)
@@ -168,12 +173,63 @@ func TestAlterTableAddColumnInheritsTableDefaultCharset(t *testing.T) {
 
 func TestAlterTableModifyColumnInheritsTableDefaultCharset(t *testing.T) {
 	mock := NewMockOptimizer(false)
-	mock.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetBinary)
+	mock.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetUTF8MB4Bin)
 
 	logicPlan, err := buildSingleStmt(mock, t, "alter table t1 modify column b char(20)")
 	assert.NoError(t, err)
 	newCol := FindColumn(logicPlan.GetDdl().GetAlterTable().CopyTableDef.Cols, "b")
 	if assert.NotNil(t, newCol) {
+		assert.Equal(t, uint32(types.CharsetUTF8MB4Bin), newCol.Typ.Charset)
+	}
+}
+
+func TestAlterTableModifyColumnCharsetOverridesTableDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		charset     string
+		wantType    int32
+		wantCharset uint32
+	}{
+		{
+			name:        "utf8mb4 resets to its default collation",
+			charset:     "utf8mb4",
+			wantType:    int32(types.T_char),
+			wantCharset: uint32(types.CharsetUTF8),
+		},
+		{
+			name:        "binary changes the physical string type",
+			charset:     "binary",
+			wantType:    int32(types.T_binary),
+			wantCharset: uint32(types.CharsetBinary),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetUTF8MB4Bin)
+			logicPlan, err := buildSingleStmt(mock, t,
+				"alter table t1 modify column b char(20) character set "+tc.charset)
+			if !assert.NoError(t, err) {
+				return
+			}
+			newCol := FindColumn(logicPlan.GetDdl().GetAlterTable().CopyTableDef.Cols, "b")
+			if assert.NotNil(t, newCol) {
+				assert.Equal(t, tc.wantType, newCol.Typ.Id)
+				assert.Equal(t, tc.wantCharset, newCol.Typ.Charset)
+			}
+		})
+	}
+}
+
+func TestAlterTableAddColumnCharacterSetBinaryChangesType(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(mock, t,
+		"alter table t1 add column d varchar(10) character set binary")
+	if !assert.NoError(t, err) {
+		return
+	}
+	newCol := FindColumn(logicPlan.GetDdl().GetAlterTable().CopyTableDef.Cols, "d")
+	if assert.NotNil(t, newCol) {
+		assert.Equal(t, int32(types.T_varbinary), newCol.Typ.Id)
 		assert.Equal(t, uint32(types.CharsetBinary), newCol.Typ.Charset)
 	}
 }

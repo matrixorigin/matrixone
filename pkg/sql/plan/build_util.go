@@ -312,10 +312,14 @@ func GetTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs []tree.ColumnAttribute) error {
 	isGeometry := isGeometryPlanType(colType)
 	srid, sridDefined := geometrySRIDValue(colType)
+	var columnCharset string
+	var columnCollation string
 	for _, attr := range attrs {
 		switch attribute := attr.(type) {
+		case *tree.AttributeCharset:
+			columnCharset = attribute.Charset
 		case *tree.AttributeCollate:
-			applyTextCharsetToPlanType(colType, charsetForName(attribute.Collate))
+			columnCollation = attribute.Collate
 		case *tree.AttributeSRID:
 			if !isGeometry {
 				return moerr.NewInvalidInputf(ctx, "SRID is only supported for GEOMETRY columns")
@@ -324,6 +328,21 @@ func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs 
 			srid = sridAttr.Value
 			sridDefined = true
 		}
+	}
+	// Charset and collation clauses are independent attributes. Resolve both
+	// after scanning the list so a compatible COLLATE wins regardless of
+	// textual order.
+	if columnCharset != "" && columnCollation != "" &&
+		!charsetAndCollationCompatible(columnCharset, columnCollation) {
+		return moerr.NewInvalidInputf(ctx,
+			"COLLATION '%s' is not valid for CHARACTER SET '%s'",
+			columnCollation, columnCharset)
+	}
+	if columnCharset != "" {
+		applyCharsetToPlanType(colType, charsetForName(columnCharset))
+	}
+	if columnCollation != "" {
+		applyTextCharsetToPlanType(colType, charsetForName(columnCollation))
 	}
 	if isGeometry {
 		// Scale (subtype) is already set by getTypeFromAst; an SRID column
@@ -340,31 +359,81 @@ func applyTextCharsetToPlanType(typ *plan.Type, charset uint32) {
 	}
 }
 
+func applyCharsetToPlanType(typ *plan.Type, charset uint32) {
+	if charset != uint32(types.CharsetBinary) {
+		applyTextCharsetToPlanType(typ, charset)
+		return
+	}
+
+	// MySQL defines CHARACTER SET binary on a nonbinary string column as the
+	// corresponding binary string type, not as a _bin collation on text.
+	switch types.T(typ.Id) {
+	case types.T_char:
+		typ.Id = int32(types.T_binary)
+	case types.T_varchar:
+		typ.Id = int32(types.T_varbinary)
+	case types.T_text:
+		typ.Id = int32(types.T_blob)
+	default:
+		return
+	}
+	typ.Charset = uint32(types.CharsetBinary)
+}
+
 func charsetForName(name string) uint32 {
 	name = strings.ToLower(name)
-	if name == "binary" || strings.HasSuffix(name, "_bin") {
+	if name == "binary" {
 		return uint32(types.CharsetBinary)
+	}
+	if strings.HasSuffix(name, "_bin") {
+		return uint32(types.CharsetUTF8MB4Bin)
 	}
 	return uint32(types.CharsetUTF8)
 }
 
-func tableDefaultCharset(options []tree.TableOption) uint32 {
+func applyTableDefaultCharsetToPlanType(typ *plan.Type, charset uint32) {
+	applyCharsetToPlanType(typ, charset)
+}
+
+func charsetAndCollationCompatible(charset, collation string) bool {
+	charset = strings.ToLower(charset)
+	collation = strings.ToLower(collation)
+	if charset == "binary" || collation == "binary" {
+		return charset == collation
+	}
+	if separator := strings.IndexByte(collation, '_'); separator > 0 {
+		return collation[:separator] == charset
+	}
+	return true
+}
+
+func tableDefaultCharset(ctx context.Context, options []tree.TableOption) (uint32, error) {
 	tableCharset := uint32(types.CharsetUTF8)
 	tableCollation := uint32(types.CharsetUTF8)
+	var tableCharsetName string
+	var tableCollationName string
 	hasTableCollation := false
 	for _, option := range options {
 		switch opt := option.(type) {
 		case *tree.TableOptionCharset:
+			tableCharsetName = opt.Charset
 			tableCharset = charsetForName(opt.Charset)
 		case *tree.TableOptionCollate:
+			tableCollationName = opt.Collate
 			tableCollation = charsetForName(opt.Collate)
 			hasTableCollation = true
 		}
 	}
-	if hasTableCollation {
-		return tableCollation
+	if tableCharsetName != "" && tableCollationName != "" &&
+		!charsetAndCollationCompatible(tableCharsetName, tableCollationName) {
+		return 0, moerr.NewInvalidInputf(ctx,
+			"COLLATION '%s' is not valid for CHARACTER SET '%s'",
+			tableCollationName, tableCharsetName)
 	}
-	return tableCharset
+	if hasTableCollation {
+		return tableCollation, nil
+	}
+	return tableCharset, nil
 }
 
 func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {

@@ -1977,18 +1977,23 @@ func Test_setMysqlColumnTypeInfoPreservesBinaryTextCollation(t *testing.T) {
 	}{
 		{
 			name:        "varchar utf8mb4_bin",
-			typ:         types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetBinary),
+			typ:         types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4Bin),
 			wantCharset: uint16(utf8mb4BinCollationID),
 		},
 		{
 			name:        "char utf8mb4_bin",
-			typ:         types.NewWithCharset(types.T_char, 32, 0, types.CharsetBinary),
+			typ:         types.NewWithCharset(types.T_char, 32, 0, types.CharsetUTF8MB4Bin),
 			wantCharset: uint16(utf8mb4BinCollationID),
 		},
 		{
 			name:        "text utf8mb4_bin",
-			typ:         types.NewWithCharset(types.T_text, 32, 0, types.CharsetBinary),
+			typ:         types.NewWithCharset(types.T_text, 32, 0, types.CharsetUTF8MB4Bin),
 			wantCharset: uint16(utf8mb4BinCollationID),
+		},
+		{
+			name:        "packed binary varchar",
+			typ:         types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetBinary),
+			wantCharset: charsetBinary,
 		},
 		{
 			name:        "varbinary",

@@ -166,8 +166,14 @@ type Type struct {
 }
 
 const (
-	CharsetUTF8   uint8 = 0
+	// CharsetUTF8 is the zero-value utf8mb4_general_ci text identity.
+	CharsetUTF8 uint8 = 0
+	// CharsetBinary marks binary string types and opaque bytes carried in a
+	// text-shaped container.
 	CharsetBinary uint8 = 1
+	// CharsetUTF8MB4Bin is bytewise utf8mb4 text, which remains nonbinary in
+	// MySQL protocol metadata (collation 46 rather than binary charset 63).
+	CharsetUTF8MB4Bin uint8 = 2
 )
 
 // ProtoSize is used by gogoproto.

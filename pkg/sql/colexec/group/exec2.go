@@ -63,6 +63,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		group.ctr.free()
 	}
 	group.ctr.mp = mpool.MustNewNoLock("group_mpool")
+	group.ctr.legacyTextMinMax = useLegacyTextMinMaxForRemote(proc)
 
 	// debug,
 	// group.ctr.mp.EnableDetailRecording()

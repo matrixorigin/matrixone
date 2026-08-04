@@ -130,7 +130,8 @@ type container struct {
 	hashKeyVecs    []*vector.Vector
 
 	// aggs, which holds the intermediate state of agg functions.
-	aggList []aggexec.AggFuncExec
+	aggList          []aggexec.AggFuncExec
+	legacyTextMinMax bool
 
 	// spill, agglist to load spilled data.
 	spillMem        int64
