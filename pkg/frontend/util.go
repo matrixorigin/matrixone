@@ -1697,7 +1697,16 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 	setMysqlColumnTypeMetadata(col, typ)
 	setCharacter(col)
 	if typ.Charset == types.CharsetBinary {
-		col.SetCharset(charsetBinary)
+		switch typ.Oid {
+		case types.T_char, types.T_varchar, types.T_text:
+			// A _bin collation still describes nonbinary UTF-8 text. Protocol
+			// collation 63 is reserved for the binary character set.
+			col.SetCharset(uint16(utf8mb4BinCollationID))
+		default:
+			col.SetCharset(charsetBinary)
+		}
+	}
+	if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
 		col.SetFlag(col.Flag() | uint16(defines.BINARY_FLAG))
 	}
 	return nil

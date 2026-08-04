@@ -348,6 +348,25 @@ func charsetForName(name string) uint32 {
 	return uint32(types.CharsetUTF8)
 }
 
+func tableDefaultCharset(options []tree.TableOption) uint32 {
+	tableCharset := uint32(types.CharsetUTF8)
+	tableCollation := uint32(types.CharsetUTF8)
+	hasTableCollation := false
+	for _, option := range options {
+		switch opt := option.(type) {
+		case *tree.TableOptionCharset:
+			tableCharset = charsetForName(opt.Charset)
+		case *tree.TableOptionCollate:
+			tableCollation = charsetForName(opt.Collate)
+			hasTableCollation = true
+		}
+	}
+	if hasTableCollation {
+		return tableCollation
+	}
+	return tableCharset
+}
+
 func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {
 	nullAbility := true
 	var expr tree.Expr = nil

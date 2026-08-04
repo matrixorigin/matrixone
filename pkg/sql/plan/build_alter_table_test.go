@@ -229,6 +229,51 @@ func TestAlterTableAddColumns(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestAlterTableAddColumnInheritsTableDefaultCharset(t *testing.T) {
+	testCases := []struct {
+		name string
+		sql  string
+		want uint32
+	}{
+		{
+			name: "inherits table utf8mb4_bin",
+			sql:  "alter table t1 add column d varchar(10)",
+			want: uint32(types.CharsetBinary),
+		},
+		{
+			name: "column collation overrides table",
+			sql:  "alter table t1 add column d varchar(10) collate utf8mb4_general_ci",
+			want: uint32(types.CharsetUTF8),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetBinary)
+
+			logicPlan, err := buildSingleStmt(mock, t, tc.sql)
+			assert.NoError(t, err)
+			newCol := FindColumn(logicPlan.GetDdl().GetAlterTable().CopyTableDef.Cols, "d")
+			if assert.NotNil(t, newCol) {
+				assert.Equal(t, tc.want, newCol.Typ.Charset)
+			}
+		})
+	}
+}
+
+func TestAlterTableModifyColumnInheritsTableDefaultCharset(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetBinary)
+
+	logicPlan, err := buildSingleStmt(mock, t, "alter table t1 modify column b char(20)")
+	assert.NoError(t, err)
+	newCol := FindColumn(logicPlan.GetDdl().GetAlterTable().CopyTableDef.Cols, "b")
+	if assert.NotNil(t, newCol) {
+		assert.Equal(t, uint32(types.CharsetBinary), newCol.Typ.Charset)
+	}
+}
+
 func TestAlterTableCopyPreservesFinalColumnReplacementIdentity(t *testing.T) {
 	for _, sql := range []string{
 		`ALTER TABLE t1 DROP COLUMN b, ADD COLUMN b INT;`,

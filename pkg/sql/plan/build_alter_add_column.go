@@ -55,6 +55,8 @@ func AddColumn(
 	if err != nil {
 		return false, err
 	}
+	colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
+	applyTextCharsetToPlanType(&colType, tableDef.DefaultCharset)
 	if err = applyColumnAttributesToType(ctx.GetContext(), &colType, specNewColumn.Attributes); err != nil {
 		return false, err
 	}

@@ -403,6 +403,9 @@ message SchemaExtra {
     // CHECK metadata uses this length-delimited protobuf field so older CNs
     // safely skip it instead of misreading the legacy constraint byte stream.
     repeated plan.CheckDef checks = 18;
+    // Table-level default collation class. The zero value is legacy/default
+    // utf8mb4_general_ci; nonzero values use container/types Charset constants.
+    uint32 default_charset = 19;
 }
 
 // Int64Map mainly used in unit test

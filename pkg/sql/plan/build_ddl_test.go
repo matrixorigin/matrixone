@@ -97,9 +97,10 @@ func TestBuildRenameTableUsesPriorDestinationAsNextSource(t *testing.T) {
 
 func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
 	testCases := []struct {
-		name string
-		sql  string
-		want uint32
+		name      string
+		sql       string
+		want      uint32
+		wantTable uint32
 	}{
 		{
 			name: "default text collation",
@@ -110,7 +111,15 @@ func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
 			name: "table binary collation",
 			sql: "create table t(name varchar(10)) character set utf8mb4 " +
 				"collate utf8mb4_bin",
-			want: uint32(types.CharsetBinary),
+			want:      uint32(types.CharsetBinary),
+			wantTable: uint32(types.CharsetBinary),
+		},
+		{
+			name: "table binary collation before charset",
+			sql: "create table t(name varchar(10)) collate utf8mb4_bin " +
+				"character set utf8mb4",
+			want:      uint32(types.CharsetBinary),
+			wantTable: uint32(types.CharsetBinary),
 		},
 		{
 			name: "column binary collation",
@@ -121,7 +130,8 @@ func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
 			name: "column collation overrides table",
 			sql: "create table t(name varchar(10) collate utf8mb4_general_ci) " +
 				"collate utf8mb4_bin",
-			want: uint32(types.CharsetUTF8),
+			want:      uint32(types.CharsetUTF8),
+			wantTable: uint32(types.CharsetBinary),
 		},
 	}
 
@@ -133,9 +143,11 @@ func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
 
 			p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
 			require.NoError(t, err)
-			cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			tableDef := p.GetDdl().GetCreateTable().GetTableDef()
+			cols := tableDef.GetCols()
 			require.NotEmpty(t, cols)
 			require.Equal(t, tc.want, cols[0].Typ.Charset)
+			require.Equal(t, tc.wantTable, tableDef.DefaultCharset)
 		})
 	}
 }

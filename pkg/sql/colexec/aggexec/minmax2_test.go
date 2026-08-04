@@ -71,7 +71,7 @@ func TestTextMinMaxUsesGeneralCICollation(t *testing.T) {
 	}
 }
 
-func TestTextMinMaxGeneralCIEquivalence(t *testing.T) {
+func TestTextMinMaxGeneralCIWeights(t *testing.T) {
 	mp := mpool.MustNewZero()
 	exec := newTextMinMaxExec(
 		mp, AggIdOfMin, true, types.New(types.T_varchar, 10, 0),
@@ -80,8 +80,34 @@ func TestTextMinMaxGeneralCIEquivalence(t *testing.T) {
 
 	require.Zero(t, exec.comp([]byte("A"), []byte("a")))
 	require.Zero(t, exec.comp([]byte("å"), []byte("a")))
-	require.Zero(t, exec.comp([]byte("ａ"), []byte("a")))
+	require.Positive(t, exec.comp([]byte("ａ"), []byte("a")))
 	require.Zero(t, exec.comp([]byte("a "), []byte("a")))
+	require.Zero(t, exec.comp([]byte("ß"), []byte("s")))
+	require.Negative(t, exec.comp([]byte("ß"), []byte("ss")))
+	require.Negative(t, exec.comp([]byte("中"), []byte("文")))
+	require.Zero(t, exec.comp([]byte("😜"), []byte("😃")))
+	require.Positive(t, exec.comp([]byte{0xff}, []byte{0xfe}))
+}
+
+func TestTextMaxGeneralCIDoesNotExpandSharpS(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.New(types.T_varchar, 10, 0)
+	vec := vector.NewVec(typ)
+	defer vec.Free(mp)
+	for _, value := range []string{"ß", "ss"} {
+		require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
+	}
+
+	agg := newTextMinMaxExec(mp, AggIdOfMax, false, typ)
+	defer agg.Free()
+	require.NoError(t, agg.GroupGrow(1))
+	require.NoError(t, agg.BulkFill(0, []*vector.Vector{vec}))
+
+	results, err := agg.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	defer results[0].Free(mp)
+	require.Equal(t, "ss", string(results[0].GetBytesAt(0)))
 }
 
 func TestTextMinMaxGeneralCIMerge(t *testing.T) {
