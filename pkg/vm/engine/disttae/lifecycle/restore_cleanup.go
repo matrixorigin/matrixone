@@ -150,7 +150,12 @@ func (pager SQLExpiredRestorePager) readExpiredRestores(
 			`select hex(a.restore_id),coalesce(d.datname,'')
 from mo_catalog.mo_lifecycle_restore_attempts a
 left join mo_catalog.mo_database d on d.dat_id=a.staging_database_id
-where a.state in ('IMPORTING','PUBLISHING') and a.deadline<=%s%s
+where a.state in ('IMPORTING','PUBLISHING') and
+(a.deadline<=%s or not exists (
+  select 1 from mo_catalog.mo_tables h
+  where h.rel_id=a.staging_table_id
+    and h.reldatabase_id=a.staging_database_id
+    and h.relname=a.hidden_name))%s
 order by a.restore_id limit %d`,
 			lifecycleSQLTime(now),
 			predicate,

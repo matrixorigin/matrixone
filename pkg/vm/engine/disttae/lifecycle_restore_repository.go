@@ -800,13 +800,18 @@ func (repository SQLRestoreRepository) Publish(
 				current.RestoredRows != attempt.RestoredRows {
 				return moerr.NewInternalErrorNoCtxf("Lifecycle Restore publish identity changed")
 			}
-			databaseID, name, tableID, identityErr :=
+			databaseID, name, tableID, foundTable, identityErr :=
 				repository.lookupTableIdentity(
 					txn,
 					current.StagingTableID,
 				)
 			if identityErr != nil {
 				return identityErr
+			}
+			if !foundTable {
+				return moerr.NewInternalErrorNoCtxf(
+					"Lifecycle Restore table identity is unknown",
+				)
 			}
 			if identityErr = validateLifecycleRestoreHiddenIdentity(
 				current,
@@ -1013,12 +1018,21 @@ func (repository SQLRestoreRepository) CleanupHidden(
 					current,
 				)
 			}
-			databaseID, name, tableID, lookupErr := repository.lookupTableIdentity(
+			databaseID, name, tableID, foundTable, lookupErr := repository.lookupTableIdentity(
 				txn,
 				current.StagingTableID,
 			)
 			if lookupErr != nil {
 				return lookupErr
+			}
+			if !foundTable {
+				return repository.failRestoreAttemptAndReleaseLease(
+					txn,
+					encoded,
+					datasetID,
+					leaseID,
+					current,
+				)
 			}
 			if identityErr := validateLifecycleRestoreHiddenIdentity(
 				current,
@@ -1247,7 +1261,7 @@ where reldatabase_id=%d and relname=%s`,
 func (repository SQLRestoreRepository) lookupTableIdentity(
 	txn executor.TxnExecutor,
 	tableID uint64,
-) (uint64, string, uint64, error) {
+) (uint64, string, uint64, bool, error) {
 	result, err := txn.Exec(
 		fmt.Sprintf(
 			`select reldatabase_id,relname,rel_id
@@ -1257,7 +1271,7 @@ from mo_catalog.mo_tables where rel_id=%d`,
 		executor.StatementOption{}.WithAccountID(repository.AccountID),
 	)
 	if err != nil {
-		return 0, "", 0, err
+		return 0, "", 0, false, err
 	}
 	defer result.Close()
 	var databaseID uint64
@@ -1274,12 +1288,15 @@ from mo_catalog.mo_tables where rel_id=%d`,
 		rows += count
 		return true
 	})
+	if rows == 0 {
+		return 0, "", 0, false, nil
+	}
 	if rows != 1 {
-		return 0, "", 0, moerr.NewInternalErrorNoCtxf(
-			"Lifecycle Restore table identity is unknown",
+		return 0, "", 0, false, moerr.NewInternalErrorNoCtxf(
+			"Lifecycle Restore table identity is ambiguous",
 		)
 	}
-	return databaseID, name, actualID, nil
+	return databaseID, name, actualID, true, nil
 }
 
 func validateLifecycleRestoreHiddenIdentity(

@@ -36,8 +36,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	baseTenantUpgradeEntries        = 12
+	lifecycleInformationSchemaViews = 4
+)
+
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 12+len(catalog.LifecycleTenantTableDefinitions))
+	require.Len(t, tenantUpgEntries, baseTenantUpgradeEntries+len(catalog.LifecycleTenantTableDefinitions)+lifecycleInformationSchemaViews)
 	require.Len(t, clusterUpgEntries, 1+len(catalog.LifecycleClusterTableDefinitions)+2)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
@@ -81,7 +86,7 @@ func TestUpgradeEntries(t *testing.T) {
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 12+len(catalog.LifecycleTenantTableDefinitions))
+	require.GreaterOrEqual(t, len(tenantUpgEntries), baseTenantUpgradeEntries)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
@@ -985,10 +990,17 @@ func TestPopulateInformationSchemaCharacterSetsIsIdempotent(t *testing.T) {
 	require.True(t, strings.HasPrefix(executed[0], "SELECT 1 FROM information_schema.CHARACTER_SETS"))
 }
 
+func TestLifecycleInformationSchemaUpgradeEntries(t *testing.T) {
+	start := baseTenantUpgradeEntries + len(catalog.LifecycleTenantTableDefinitions)
+	for _, entry := range tenantUpgEntries[start:] {
+		require.Equal(t, versions.MODIFY_VIEW, entry.UpgType)
+		require.Contains(t, entry.UpgSql, catalog.LifecycleRestoreTableSQLRegexpPattern)
+	}
+}
+
 func TestLifecycleCatalogUpgradeEntries(t *testing.T) {
-	const existingTenantEntries = 3
 	for i, definition := range catalog.LifecycleTenantTableDefinitions {
-		entry := tenantUpgEntries[existingTenantEntries+i]
+		entry := tenantUpgEntries[baseTenantUpgradeEntries+i]
 		require.Equal(t, definition.Schema, entry.Schema)
 		require.Equal(t, definition.Name, entry.TableName)
 		require.Equal(t, versions.CREATE_NEW_TABLE, entry.UpgType)

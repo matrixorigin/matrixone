@@ -265,7 +265,8 @@ func (ti *TenantInfo) IsNameOfAdminRoles(name string) bool {
 // database/table privilege checks as well.
 func lifecycleStatementRequiresAccountAdmin(stmt tree.Statement) bool {
 	switch statement := stmt.(type) {
-	case *tree.ShowLifecycle, *tree.RestoreArchiveDataset:
+	case *tree.ShowLifecycle, *tree.RestoreArchiveDataset,
+		*tree.PurgeArchiveDataset:
 		return true
 	case *tree.AlterTable:
 		option, ok := lifecycleOptionFromAlterTable(statement)

@@ -39,6 +39,10 @@ func TestLifecycleTerminalCleanupQueriesHaveCatalogIndexes(t *testing.T) {
 		"idx_lifecycle_binding_schedule (state, binding_id)")
 	require.Contains(t, datasetDDL,
 		"idx_lifecycle_dataset_terminal (state, updated_at, dataset_id)")
+	require.Contains(t, datasetDDL,
+		"idx_lifecycle_dataset_show")
+	require.Contains(t, datasetDDL,
+		"(account_id, logical_table_id, created_at, dataset_id)")
 	require.Contains(t, restoreDDL,
 		"idx_lifecycle_restore_terminal (state, updated_at, restore_id)")
 	require.Contains(t, rootDDL,
@@ -47,6 +51,8 @@ func TestLifecycleTerminalCleanupQueriesHaveCatalogIndexes(t *testing.T) {
 		"(state, temporary_cleanup_done, updated_at, root_id)")
 	require.Contains(t, rootDDL,
 		"idx_lifecycle_cleanup_terminal (state, updated_at, root_id)")
+	require.Contains(t, rootDDL,
+		"idx_lifecycle_cleanup_show (owner_account_id, updated_at, root_id)")
 }
 
 func TestLifecycleRestoreStagingTableNameIsReservedCaseInsensitively(t *testing.T) {

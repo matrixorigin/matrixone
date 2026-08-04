@@ -41,7 +41,7 @@ func TestSQLExpiredRestorePagerReturnsBoundedTenantWork(t *testing.T) {
 				result:    lifecycleAccountResult(t, mp, 17),
 			},
 			{
-				contains:  "state in ('importing','publishing')",
+				contains:  "not exists (",
 				accountID: 17,
 				result: expiredRestoreResult(
 					t, mp, hex.EncodeToString(restoreID[:]), "db",

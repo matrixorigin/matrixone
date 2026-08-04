@@ -509,6 +509,105 @@ func TestSQLRestorePublishRetryStopsAtDoneBeforeHiddenIdentityLookup(t *testing.
 	require.Equal(t, 1, calls)
 }
 
+func TestSQLRestoreCleanupReleasesLeaseWhenHiddenTableWasDropped(t *testing.T) {
+	mp := mpool.MustNewZero()
+	var statements []string
+	sqlExecutor := &restoreTxnSQLExecutor{execute: func(
+		sql string,
+		option executor.StatementOption,
+	) (executor.Result, error) {
+		lower := strings.ToLower(sql)
+		statements = append(statements, lower)
+		if len(statements) > 1 {
+			require.Equal(t, uint32(17), option.AccountID())
+		}
+		switch len(statements) {
+		case 1, 2:
+			require.Contains(t, lower, "from mo_catalog.mo_lifecycle_restore_attempts")
+			return lifecycleRestoreAttemptRows(t, mp, "IMPORTING"), nil
+		case 3:
+			require.Contains(t, lower, "from mo_catalog.mo_tables")
+			return executor.Result{Mp: mp}, nil
+		case 4:
+			require.Contains(t, lower, "set state='failed'")
+			return executor.Result{AffectedRows: 1, Mp: mp}, nil
+		case 5:
+			require.Contains(t, lower, "restore_lease_id=null")
+			return executor.Result{AffectedRows: 1, Mp: mp}, nil
+		default:
+			t.Fatalf("unexpected SQL %s", sql)
+			return executor.Result{}, nil
+		}
+	}}
+	repository := SQLRestoreRepository{
+		AccountID:          17,
+		TargetDatabaseName: "history",
+		Executor:           sqlExecutor,
+	}
+	require.NoError(t, repository.CleanupHidden(
+		context.Background(),
+		"11111111-1111-1111-1111-111111111111",
+	))
+	require.Len(t, statements, 5)
+	for _, sql := range statements {
+		require.NotContains(t, sql, "drop table")
+	}
+}
+
+func lifecycleRestoreAttemptRows(
+	t *testing.T,
+	mp *mpool.MPool,
+	state string,
+) executor.Result {
+	t.Helper()
+	result := executor.NewMemResult([]types.Type{
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_uint64.ToType(),
+		types.T_uint64.ToType(),
+		types.T_varchar.ToType(),
+		types.T_uint64.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_uint64.ToType(),
+		types.T_uint64.ToType(),
+		types.T_varchar.ToType(),
+	}, mp)
+	result.NewBatchWithRowCount(1)
+	for column, value := range map[int]string{
+		0:  "11111111111111111111111111111111",
+		1:  "22222222222222222222222222222222",
+		2:  "33333333333333333333333333333333",
+		3:  "2026-08-05 09:00:00.000000",
+		6:  "__mo_lifecycle_restore_11111111111111111111111111111111",
+		8:  "events_history",
+		9:  state,
+		12: "",
+	} {
+		require.NoError(t, executor.AppendStringRows(
+			result,
+			column,
+			[]string{value},
+		))
+	}
+	for column, value := range map[int]uint64{
+		4:  7,
+		5:  88,
+		7:  7,
+		10: 4,
+		11: 100,
+	} {
+		require.NoError(t, executor.AppendFixedRows(
+			result,
+			column,
+			[]uint64{value},
+		))
+	}
+	return result.GetResult()
+}
+
 type restoreSQLCall struct {
 	sql       string
 	accountID uint32

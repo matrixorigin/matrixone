@@ -16923,7 +16923,7 @@ func TestLifecycleStatementRequiresAccountAdmin(t *testing.T) {
 	require.True(t, lifecycleStatementRequiresAccountAdmin(archiveSet))
 	require.False(t, lifecycleStatementRequiresAccountAdmin(deleteSet))
 	require.False(t, lifecycleStatementRequiresAccountAdmin(pause))
-	require.False(t, lifecycleStatementRequiresAccountAdmin(&tree.PurgeArchiveDataset{}))
+	require.True(t, lifecycleStatementRequiresAccountAdmin(&tree.PurgeArchiveDataset{}))
 	require.False(t, lifecycleStatementRequiresAccountAdmin(&tree.Select{}))
 }
 
@@ -16969,6 +16969,7 @@ func TestAuthenticateRejectsLifecycleAdminOperationsForOrdinaryRole(t *testing.T
 	statements := []tree.Statement{
 		&tree.ShowLifecycle{},
 		&tree.RestoreArchiveDataset{Target: archiveTarget},
+		&tree.PurgeArchiveDataset{DatasetID: "dataset-1"},
 		archiveSet,
 	}
 	for _, statement := range statements {

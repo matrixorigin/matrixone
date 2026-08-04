@@ -54,17 +54,12 @@ func handleRestoreArchiveDataset(
 	if statement == nil || statement.Target == nil {
 		return moerr.NewInternalErrorNoCtxf("Lifecycle Restore target is required")
 	}
-	releaseRestore, acquired := tryAcquireLifecycleRestoreSlot(
+	releaseRestore, err := acquireLifecycleRestoreSlot(
+		ctx,
 		lifecycleRestoreSlots,
 	)
-	if !acquired {
-		metricv2.LifecycleResourceRejectionCounter.WithLabelValues(
-			"restore_cn_concurrency",
-		).Inc()
-		return moerr.NewInternalError(
-			ctx,
-			"RESOURCE_BUSY: this CN is already running the certified number of Lifecycle Restores",
-		)
+	if err != nil {
+		return err
 	}
 	defer releaseRestore()
 	background := ses.GetBackgroundExec(ctx)
@@ -134,6 +129,15 @@ func handleRestoreArchiveDataset(
 	if lifecycleRestoreAlreadyPublished(resumed, restoreAttempt.State) {
 		return nil
 	}
+	if err = rejectExistingLifecycleRestoreTarget(
+		ctx,
+		background,
+		databaseName,
+		tableName,
+		accountID,
+	); err != nil {
+		return err
+	}
 	if !resumed {
 		restoreID := uuid.NewString()
 		restoreAttempt = lifecyclepkg.RestoreAttempt{
@@ -200,6 +204,23 @@ func tryAcquireLifecycleRestoreSlot(
 	}
 }
 
+func acquireLifecycleRestoreSlot(
+	ctx context.Context,
+	slots chan struct{},
+) (func(), error) {
+	release, acquired := tryAcquireLifecycleRestoreSlot(slots)
+	if acquired {
+		return release, nil
+	}
+	metricv2.LifecycleResourceRejectionCounter.WithLabelValues(
+		"restore_cn_concurrency",
+	).Inc()
+	return nil, moerr.NewServiceUnavailable(
+		ctx,
+		"Lifecycle Restore CN concurrency limit reached; retry later",
+	)
+}
+
 func newLifecycleRestoreCoordinator(
 	store lifecyclepkg.ArchiveStore,
 	repository lifecyclepkg.RestoreRepository,
@@ -222,6 +243,29 @@ func validateLifecycleRestoreTargetName(tableName string) error {
 			"Lifecycle Restore target cannot use the reserved canonical staging name %s",
 			tableName,
 		)
+	}
+	return nil
+}
+
+func rejectExistingLifecycleRestoreTarget(
+	ctx context.Context,
+	background BackgroundExec,
+	databaseName string,
+	tableName string,
+	accountID uint32,
+) error {
+	exists, err := cloneTargetTableExists(
+		ctx,
+		background,
+		databaseName,
+		tableName,
+		accountID,
+	)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return moerr.NewTableAlreadyExists(ctx, tableName)
 	}
 	return nil
 }

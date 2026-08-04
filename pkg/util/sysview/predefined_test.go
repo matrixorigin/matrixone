@@ -49,8 +49,15 @@ func TestInformationSchemaMetadataViewsHideTemporaryTables(t *testing.T) {
 	}
 }
 
-func TestInformationSchemaTablesHidesLifecycleRestoreStaging(t *testing.T) {
-	assert.Contains(t, InformationSchemaTablesDDL, catalog.LifecycleRestoreTableSQLRegexpPattern)
+func TestInformationSchemaMetadataViewsHideLifecycleRestoreStaging(t *testing.T) {
+	for _, ddl := range []string{
+		InformationSchemaTablesDDL,
+		InformationSchemaColumnsDDL,
+		InformationSchemaStatisticsDDL,
+		InformationSchemaTableConstraintsDDL,
+	} {
+		assert.Contains(t, ddl, catalog.LifecycleRestoreTableSQLRegexpPattern)
+	}
 }
 
 func TestInformationSchemaStatisticsDDL_ContainsIdxAlgo(t *testing.T) {

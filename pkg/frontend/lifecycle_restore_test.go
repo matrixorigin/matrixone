@@ -19,6 +19,8 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	lifecyclepkg "github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/lifecycle"
@@ -33,21 +35,48 @@ func TestLifecycleRestorePublishedRetryNeedsNoStaging(t *testing.T) {
 
 func TestLifecycleRestoreCNAdmissionIsFailFastAndExactlyOnce(t *testing.T) {
 	slots := make(chan struct{}, 1)
-	release, acquired := tryAcquireLifecycleRestoreSlot(slots)
-	require.True(t, acquired)
+	release, err := acquireLifecycleRestoreSlot(context.Background(), slots)
+	require.NoError(t, err)
 	require.Len(t, slots, 1)
 
-	blockedRelease, acquired := tryAcquireLifecycleRestoreSlot(slots)
-	require.False(t, acquired)
+	blockedRelease, err := acquireLifecycleRestoreSlot(context.Background(), slots)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable))
 	require.Nil(t, blockedRelease)
 
 	release()
 	release()
 	require.Empty(t, slots)
 
-	release, acquired = tryAcquireLifecycleRestoreSlot(slots)
-	require.True(t, acquired)
+	release, err = acquireLifecycleRestoreSlot(context.Background(), slots)
+	require.NoError(t, err)
 	release()
+}
+
+func TestLifecycleRestoreRejectsExistingTargetBeforeImport(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), 17)
+	background := &backgroundExecTest{}
+	background.init()
+	checkSQL, err := getSqlForCheckDatabaseTableWithSnapshot(
+		ctx,
+		"history",
+		"events_restore",
+		17,
+		0,
+	)
+	require.NoError(t, err)
+	background.sql2result[checkSQL] = newMrsForCheckDatabaseTable(
+		[][]interface{}{{int64(88)}},
+	)
+
+	err = rejectExistingLifecycleRestoreTarget(
+		ctx,
+		background,
+		"history",
+		"events_restore",
+		17,
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTableAlreadyExists))
 }
 
 func TestFrontendResolveRejectsLifecycleRestoreStagingBeforeEngineAccess(t *testing.T) {
