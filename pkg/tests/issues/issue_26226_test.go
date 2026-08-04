@@ -73,6 +73,11 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 			"create view " + db + ".v_semantic_group as select priority, flags from " + db + ".semantic_t group by priority, flags",
 			"create view " + db + ".v_semantic_distinct as select distinct priority, flags from " + db + ".semantic_t",
 			"create view " + db + ".v_semantic_derived as select priority, flags from (select distinct priority, flags from " + db + ".semantic_t) d",
+			"create table " + db + ".defaults_src (e enum('low','medium','high') default 'medium', s set('', 'a', 'b') default 'a', n int default 7)",
+			"create table " + db + ".defaults_direct as select e, s, n from " + db + ".defaults_src",
+			"create table " + db + ".defaults_derived as select e, s, n from (select e, s, n from " + db + ".defaults_src) d",
+			"create table " + db + ".defaults_cte as with d as (select e, s, n from " + db + ".defaults_src) select e, s, n from d",
+			"create table " + db + ".defaults_union as select e, s, n from " + db + ".defaults_src union all select e, s, n from " + db + ".defaults_src",
 		} {
 			execSQLRequire(t, ctx, dbConn, stmt)
 		}
@@ -167,6 +172,45 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 			}
 			require.NoError(t, rows.Err())
 			require.Equal(t, [][2]any{{"low", uint64(0)}, {"medium", uint64(0)}, {"high", uint64(2)}}, actual, view)
+		}
+
+		for _, test := range []struct {
+			tableName    string
+			wantDefaults []string
+		}{
+			{tableName: "defaults_direct", wantDefaults: []string{"'medium'", "'a'", "7"}},
+			{tableName: "defaults_derived", wantDefaults: []string{"", "", ""}},
+			{tableName: "defaults_cte", wantDefaults: []string{"", "", ""}},
+			{tableName: "defaults_union", wantDefaults: []string{"", "", ""}},
+		} {
+			rows, err := dbConn.QueryContext(ctx,
+				"select column_default from information_schema.columns "+
+					"where table_schema = ? and table_name = ? and column_name in ('e', 's', 'n') "+
+					"order by ordinal_position",
+				db, test.tableName)
+			require.NoError(t, err, test.tableName)
+			defer rows.Close()
+			var actualDefaults []string
+			for rows.Next() {
+				var defaultValue sql.NullString
+				require.NoError(t, rows.Scan(&defaultValue))
+				actualDefaults = append(actualDefaults, defaultValue.String)
+			}
+			require.NoError(t, rows.Err())
+			require.Equal(t, test.wantDefaults, actualDefaults, test.tableName)
+
+			var name, createSQL string
+			require.NoError(t, dbConn.QueryRowContext(ctx,
+				"show create table "+db+"."+test.tableName).Scan(&name, &createSQL))
+			if test.tableName == "defaults_direct" {
+				require.Contains(t, createSQL, "DEFAULT 'medium'")
+				require.Contains(t, createSQL, "DEFAULT 'a'")
+				require.Contains(t, createSQL, "DEFAULT 7")
+			} else {
+				require.NotContains(t, createSQL, "DEFAULT 'medium'")
+				require.NotContains(t, createSQL, "DEFAULT 'a'")
+				require.NotContains(t, createSQL, "DEFAULT 7")
+			}
 		}
 	})
 }

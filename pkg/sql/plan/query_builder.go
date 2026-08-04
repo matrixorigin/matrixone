@@ -9665,7 +9665,8 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		binding.outputColumnProvenance = make([]OutputColumnProvenance, colLength)
 		for i, col := range node.TableDef.Cols {
 			binding.outputColumnProvenance[i] = OutputColumnProvenance{
-				State: ProvenanceSingleSource,
+				State:                   ProvenanceSingleSource,
+				CanInheritSourceDefault: true,
 				Source: &SourceColumn{
 					RelPos:   tag,
 					ColPos:   int32(i),
@@ -9734,6 +9735,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				outputColumnProvenance = make([]OutputColumnProvenance, colLength)
 			}
 			outputColumnProvenance[i] = subCtx.outputColumnProvenanceForProject(int32(i))
+			outputColumnProvenance[i].CanInheritSourceDefault = false
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}

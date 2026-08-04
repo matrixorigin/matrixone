@@ -276,7 +276,7 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 		typ := &expr.Typ
 		provenance := bindCtx.outputColumnProvenanceForProject(int32(i))
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
-			if provenance.Source.Metadata.HasDefault {
+			if provenance.CanInheritSourceDefault && provenance.Source.Metadata.HasDefault {
 				defaultVal = provenance.Source.Metadata.DefaultOriginString
 			}
 			if isEnumOrSetPlanType(&provenance.Source.Metadata.Typ) {

@@ -727,12 +727,13 @@ func TestOutputColumnProvenanceCarriesSourceAndClearsSemanticBoundaries(t *testi
 	ctx.tables["nation"].Cols[0].Default = &plan.Default{OriginString: "'ALGERIA'"}
 
 	tests := []struct {
-		name        string
-		sql         string
-		wantState   ProvenanceState
-		wantDefault string
+		name              string
+		sql               string
+		wantState         ProvenanceState
+		wantDefault       string
+		canInheritDefault bool
 	}{
-		{name: "direct", sql: "select n_nationkey from nation", wantState: ProvenanceSingleSource, wantDefault: "'ALGERIA'"},
+		{name: "direct", sql: "select n_nationkey from nation", wantState: ProvenanceSingleSource, wantDefault: "'ALGERIA'", canInheritDefault: true},
 		{name: "alias derived", sql: "select k from (select n_nationkey as k from nation) d", wantState: ProvenanceSingleSource, wantDefault: "'ALGERIA'"},
 		{name: "non recursive cte", sql: "with d as (select n_nationkey as k from nation) select k from d", wantState: ProvenanceSingleSource, wantDefault: "'ALGERIA'"},
 		{name: "expression", sql: "select n_nationkey + 0 from nation", wantState: ProvenanceNone},
@@ -757,6 +758,7 @@ func TestOutputColumnProvenanceCarriesSourceAndClearsSemanticBoundaries(t *testi
 			if test.wantState == ProvenanceSingleSource {
 				require.NotNil(t, provenance.Source)
 				require.Equal(t, test.wantDefault, provenance.Source.Metadata.DefaultOriginString)
+				require.Equal(t, test.canInheritDefault, provenance.CanInheritSourceDefault)
 				require.NotZero(t, provenance.Source.RelPos)
 			} else {
 				require.Nil(t, provenance.Source)
@@ -775,7 +777,8 @@ func TestBuildCTASConsumesOutputColumnProvenance(t *testing.T) {
 		wantDefault string
 	}{
 		{name: "direct alias", selectSQL: "select n_nationkey as k from nation", wantDefault: "'ALGERIA'"},
-		{name: "derived", selectSQL: "select k from (select n_nationkey as k from nation) d", wantDefault: "'ALGERIA'"},
+		{name: "derived", selectSQL: "select k from (select n_nationkey as k from nation) d"},
+		{name: "cte", selectSQL: "with d as (select n_nationkey as k from nation) select k from d"},
 		{name: "expression", selectSQL: "select n_nationkey + 0 as k from nation"},
 		{name: "union", selectSQL: "select n_nationkey as k from nation union all select n_nationkey from nation"},
 	}

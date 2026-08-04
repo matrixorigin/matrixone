@@ -42,8 +42,9 @@ type SourceColumn struct {
 }
 
 type OutputColumnProvenance struct {
-	State  ProvenanceState
-	Source *SourceColumn
+	State                   ProvenanceState
+	Source                  *SourceColumn
+	CanInheritSourceDefault bool
 }
 
 func snapshotSourceColumnMetadata(col *plan.ColDef) SourceColumnMetadata {
