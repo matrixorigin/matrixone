@@ -63,6 +63,67 @@ func TestFulltextTopKLimitBounds(t *testing.T) {
 	result.Batch.Clean(proc.Mp())
 }
 
+func TestFulltextResolveExecutionTarget(t *testing.T) {
+	proc := testutil.NewProc(t)
+
+	t.Run("direct call stays in current tenant", func(t *testing.T) {
+		state := &fulltextState{}
+		source, index, err := state.resolveExecutionTarget(proc, &TableFunction{}, "user_source", "user_index")
+		require.NoError(t, err)
+		require.Equal(t, "user_source", source)
+		require.Equal(t, "user_index", index)
+		require.Nil(t, state.publisherAccount)
+	})
+
+	t.Run("trusted refs select publisher and quote identifiers", func(t *testing.T) {
+		state := &fulltextState{}
+		tf := &TableFunction{
+			FulltextSourceRef: &plan.ObjectRef{
+				SchemaName: "pub`db", ObjName: "source`table", SubscriptionName: "sub_alias",
+				PubInfo: &plan.PubInfo{TenantId: 42},
+			},
+			FulltextIndexRef: &plan.ObjectRef{
+				SchemaName: "pub`db", ObjName: "index`table", SubscriptionName: "sub_alias",
+				PubInfo: &plan.PubInfo{TenantId: 42},
+			},
+		}
+		source, index, err := state.resolveExecutionTarget(proc, tf, "ignored", "ignored")
+		require.NoError(t, err)
+		require.Equal(t, "`pub``db`.`source``table`", source)
+		require.Equal(t, "`pub``db`.`index``table`", index)
+		require.Equal(t, uint32(42), *state.publisherAccount)
+		require.Equal(t, "pub`db", state.publisherDB)
+		require.Equal(t, uint32(42), *state.sqlProcess(proc).AccountIDOverride)
+	})
+
+	t.Run("incomplete or inconsistent refs are rejected", func(t *testing.T) {
+		valid := &plan.ObjectRef{
+			SchemaName: "publisher", ObjName: "source", SubscriptionName: "sub_alias",
+			PubInfo: &plan.PubInfo{TenantId: 42},
+		}
+		cases := []struct {
+			name  string
+			src   *plan.ObjectRef
+			index *plan.ObjectRef
+		}{
+			{name: "missing index", src: valid},
+			{name: "missing publisher", src: valid, index: &plan.ObjectRef{SchemaName: "publisher", ObjName: "index", SubscriptionName: "sub_alias"}},
+			{name: "different tenant", src: valid, index: &plan.ObjectRef{SchemaName: "publisher", ObjName: "index", SubscriptionName: "sub_alias", PubInfo: &plan.PubInfo{TenantId: 43}}},
+			{name: "different database", src: valid, index: &plan.ObjectRef{SchemaName: "other", ObjName: "index", SubscriptionName: "sub_alias", PubInfo: &plan.PubInfo{TenantId: 42}}},
+			{name: "different subscription", src: valid, index: &plan.ObjectRef{SchemaName: "publisher", ObjName: "index", SubscriptionName: "other_alias", PubInfo: &plan.PubInfo{TenantId: 42}}},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				_, _, err := (&fulltextState{}).resolveExecutionTarget(proc, &TableFunction{
+					FulltextSourceRef: tc.src,
+					FulltextIndexRef:  tc.index,
+				}, "source", "index")
+				require.Error(t, err)
+			})
+		}
+	})
+}
+
 var (
 	ftdefaultAttrs = []string{"DOC_ID", "SCORE"}
 
@@ -386,7 +447,7 @@ func TestRunCountStarUsesCountOnlyForTFIDF(t *testing.T) {
 		return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeCountOnlyBatchFT(proc)}}, nil
 	}
 
-	_, err := runCountStar(proc, s)
+	_, err := runCountStar(&fulltextState{}, proc, s)
 	require.NoError(t, err)
 	require.Equal(t, "SELECT COUNT(*) from idx_table where word = '__DocLen'", gotSQL)
 	require.Equal(t, int64(100), s.Nrow)
@@ -406,7 +467,7 @@ func TestRunCountStarUsesDedupedDocLenForBM25(t *testing.T) {
 		return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeCountBatchFT(proc)}}, nil
 	}
 
-	_, err := runCountStar(proc, s)
+	_, err := runCountStar(&fulltextState{}, proc, s)
 	require.NoError(t, err)
 	require.Equal(t, "SELECT COUNT(*), AVG(pos) from (SELECT doc_id, MAX(pos) AS pos from idx_table where word = '__DocLen' GROUP BY doc_id) doc_len", gotSQL)
 	require.Equal(t, int64(100), s.Nrow)
