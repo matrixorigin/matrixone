@@ -43,6 +43,60 @@ func (m *MockSQLExecutor) ExecTxn(ctx context.Context, execFunc func(txn executo
 	return nil
 }
 
+type identityCapturingSQLExecutor struct {
+	ctx  context.Context
+	opts executor.Options
+}
+
+func (m *identityCapturingSQLExecutor) Exec(ctx context.Context, _ string, opts executor.Options) (executor.Result, error) {
+	m.ctx = ctx
+	m.opts = opts
+	return executor.Result{}, nil
+}
+
+func (m *identityCapturingSQLExecutor) ExecTxn(context.Context, func(executor.TxnExecutor) error, executor.Options) error {
+	return nil
+}
+
+func TestSqlProcessExecutionIdentityOverride(t *testing.T) {
+	uuid := "fulltext-publisher-identity"
+	spy := &identityCapturingSQLExecutor{}
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, spy)
+	moruntime.SetupServiceBasedRuntime(uuid, rt)
+
+	subscriberCtx := defines.AttachAccountId(context.Background(), 7)
+	sqlctx := NewSqlContext(subscriberCtx, uuid, nil, 7, nil)
+	sqlproc := NewSqlProcessWithContext(sqlctx).WithExecutionIdentity(42, "publisher_db")
+
+	_, err := RunSql(sqlproc, "select 1")
+	require.NoError(t, err)
+	accountID, err := defines.GetAccountId(spy.ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(42), accountID)
+	require.Equal(t, uint32(42), spy.opts.AccountID())
+	require.Equal(t, "publisher_db", spy.opts.Database())
+	require.True(t, spy.opts.StatementOption().HasAccountID())
+	require.Equal(t, uint32(42), spy.opts.StatementOption().AccountID())
+
+	streamCh := make(chan executor.Result, 1)
+	errCh := make(chan error, 1)
+	_, err = RunStreamingSql(subscriberCtx, sqlproc, "select 1", streamCh, errCh)
+	require.NoError(t, err)
+	accountID, err = defines.GetAccountId(spy.ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(42), accountID)
+	require.Equal(t, uint32(42), spy.opts.AccountID())
+	require.Equal(t, "publisher_db", spy.opts.Database())
+	require.True(t, spy.opts.StatementOption().HasAccountID())
+	require.Equal(t, uint32(42), spy.opts.StatementOption().AccountID())
+
+	subscriberID, err := defines.GetAccountId(subscriberCtx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(7), subscriberID)
+	require.Equal(t, uint32(7), sqlctx.AccountId)
+}
+
 func TestSqlTxnError(t *testing.T) {
 
 	m := mpool.MustNewZero()
