@@ -16,10 +16,12 @@ package plan
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,6 +38,73 @@ func TestFuncCastForEnumTypeKeepsMatchingErrorMember(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, expr, got)
 	require.Equal(t, uint32(0), got.GetLit().GetEnumVal())
+}
+
+func TestInsertIgnoreMySQLSpecialTypeLiteralHelpers(t *testing.T) {
+	ctx := context.Background()
+	enumType := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"}
+	setType := plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y,z"}
+	yearType := plan.Type{Id: int32(types.T_year)}
+
+	for _, tc := range []struct {
+		name     string
+		target   plan.Type
+		value    *tree.NumVal
+		wantEnum uint32
+		wantSet  uint64
+		handled  bool
+	}{
+		{"enum valid label", enumType, tree.NewNumVal("b", "b", false, tree.P_char), 2, 0, true},
+		{"enum invalid label", enumType, tree.NewNumVal("bad", "bad", false, tree.P_char), 0, 0, true},
+		{"enum numeric ordinal", enumType, tree.NewNumVal(int64(1), "1", false, tree.P_int64), 1, 0, true},
+		{"enum invalid numeric ordinal", enumType, tree.NewNumVal(uint64(9), "9", false, tree.P_uint64), 0, 0, true},
+		{"set label drops invalid member", setType, tree.NewNumVal("x,bad", "x,bad", false, tree.P_char), 0, 1, true},
+		{"set numeric masks unknown bits", setType, tree.NewNumVal(uint64(99), "99", false, tree.P_uint64), 0, 3, true},
+		{"set negative numeric becomes empty", setType, tree.NewNumVal(int64(-1), "-1", false, tree.P_int64), 0, 0, true},
+		{"invalid year becomes zero", yearType, tree.NewNumVal("2156", "2156", false, tree.P_char), 0, 0, true},
+		{"valid year uses normal conversion", yearType, tree.NewNumVal("2024", "2024", false, tree.P_char), 0, 0, false},
+		{"null uses normal conversion", enumType, tree.NewNumVal("", "", false, tree.P_null), 0, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(ctx, tc.value, tc.target)
+			require.NoError(t, err)
+			require.Equal(t, tc.handled, handled)
+			if !handled {
+				require.Nil(t, expr)
+				return
+			}
+			require.NotNil(t, expr)
+			if tc.target.Id == int32(types.T_enum) {
+				require.Equal(t, tc.wantEnum, expr.GetLit().GetEnumVal())
+			}
+			if tc.target.Id == int32(types.T_uint64) {
+				require.Equal(t, tc.wantSet, expr.GetLit().GetU64Val())
+			}
+		})
+	}
+
+	require.True(t, mysqlYearLiteralIsValid(tree.NewNumVal(int64(2024), "2024", false, tree.P_int64)))
+	require.False(t, mysqlYearLiteralIsValid(tree.NewNumVal(uint64(^uint64(0)), "18446744073709551615", false, tree.P_uint64)))
+	require.True(t, mysqlYearLiteralIsValid(tree.NewNumVal("ignored", "ignored", false, tree.P_hexnum)))
+	require.Equal(t, uint64(7), mysqlSetValidBitmap("x,y,z"))
+	require.Equal(t, ^uint64(0), mysqlSetValidBitmap(strings.Repeat("x,", types.MaxSetMembers-1)+"x"))
+}
+
+func TestMySQLSpecialOrderTypeReversibility(t *testing.T) {
+	enum := &plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,c"}
+	duplicateEnum := &plan.Type{Id: int32(types.T_enum), Enumvalues: "a,A"}
+	set := &plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y"}
+	ambiguousSet := &plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,"}
+
+	require.True(t, mysqlSpecialOrderTypeReversible(enum))
+	require.False(t, mysqlSpecialOrderTypeReversible(duplicateEnum))
+	require.True(t, mysqlSpecialOrderTypeReversible(set))
+	require.False(t, mysqlSpecialOrderTypeReversible(ambiguousSet))
+	require.False(t, mysqlSpecialOrderTypeReversible(&plan.Type{Id: int32(types.T_varchar)}))
+	require.Equal(t, enumFoldKey("K"), enumFoldKey("K"))
+	require.True(t, mysqlSpecialOrderTypesCompatible(enum, DeepCopyType(enum)))
+	require.False(t, mysqlSpecialOrderTypesCompatible(enum, set))
+	require.Error(t, newNonReversibleMySQLSpecialOrderError(context.Background()))
 }
 
 // TestGeomFromTextSRIDInResultType verifies that a constant SRID argument to
