@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/util"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
@@ -349,4 +350,57 @@ func ReadOneBlockAllColumns(
 		bat.SetRowCount(bat.Vecs[i].Length())
 	}
 	return
+}
+
+// ReadOneBlockAllColumnsWindow materializes only the requested rows and reads
+// columns sequentially. This keeps the retained source working set to one
+// decoded column plus the bounded output window.
+func ReadOneBlockAllColumnsWindow(
+	ctx context.Context,
+	meta *ObjectDataMeta,
+	name string,
+	id uint32,
+	cols []uint16,
+	offset, length int,
+	cachePolicy fileservice.Policy,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+) (bat *batch.Batch, err error) {
+	if length <= 0 {
+		return nil, moerr.NewInvalidInputNoCtx("object block window must contain rows")
+	}
+	bat = batch.NewWithSize(len(cols))
+	defer func() {
+		if err != nil {
+			bat.Clean(mp)
+			bat = nil
+		}
+	}()
+	for i, seqnum := range cols {
+		col := meta.GetBlockMeta(id).ColumnMeta(seqnum)
+		ext := col.Location()
+		ioVec := &fileservice.IOVector{
+			FilePath: name,
+			Entries: []fileservice.IOEntry{{
+				Offset: int64(ext.Offset()), Size: int64(ext.Length()),
+				CachedDataSize: int64(ext.OriginSize()),
+				ToCacheData:    constructorFactory(int64(ext.OriginSize()), ext.Alg()),
+			}},
+			Policy: cachePolicy,
+		}
+		if err = fs.Read(ctx, ioVec); err != nil {
+			ioVec.ReleaseReadResultOnError()
+			return nil, err
+		}
+		vec, materializeErr := MaterializeCachedVectorWindow(
+			ioVec.Entries[0].CachedData, offset, length, mp,
+		)
+		ioVec.Release()
+		if materializeErr != nil {
+			return nil, materializeErr
+		}
+		bat.Vecs[i] = vec
+	}
+	bat.SetRowCount(length)
+	return bat, nil
 }

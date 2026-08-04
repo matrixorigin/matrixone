@@ -63,6 +63,130 @@ func TestPartitionStateRangeHandlerPropagatesPKFilter(t *testing.T) {
 	require.NoError(t, handle.Close())
 }
 
+func TestObjectPrefetchWidthHonorsOptionalByteBudget(t *testing.T) {
+	require.Equal(t, LoadParallism, objectPrefetchWidth(0))
+	require.Equal(t, LoadParallism, objectPrefetchWidth(-1))
+	require.Equal(t, 1, objectPrefetchWidth(1))
+}
+
+func TestPersistedObjectPrefetchSlicesToProgressWithinBudget(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	obj, fs := writeTestObjectWithCommitTS(t, mp, []types.TS{
+		types.BuildTS(10, 0), types.BuildTS(11, 0), types.BuildTS(12, 0),
+	})
+	baseline := mp.CurrNB()
+	scheduler := tasks.NewParallelJobScheduler(2)
+	defer scheduler.Stop()
+	changes := &ChangeHandler{scheduler: scheduler, maxInMemoryBytes: 1}
+	base := &baseHandle{changesHandle: changes}
+
+	cn := NewCNObjectHandle(false, []*objectio.ObjectEntry{obj}, fs, base, mp)
+	cnRows, cnWindows := 0, 0
+	for !cn.isEnd() {
+		err := cn.prefetch(context.Background())
+		require.NoError(t, err)
+		for _, bat := range cn.cache {
+			cnRows += bat.RowCount()
+			cnWindows++
+			bat.Clean(mp)
+		}
+		cn.cache, cn.blks, cn.TSs = nil, nil, nil
+	}
+	require.Equal(t, 3, cnRows)
+	require.Equal(t, 3, cnWindows)
+
+	aobj := NewAObjectHandle(context.Background(), base, false,
+		types.BuildTS(1, 0), types.BuildTS(20, 0), []*objectio.ObjectEntry{obj}, fs, mp)
+	aRows, aWindows := 0, 0
+	for !aobj.isEnd() {
+		err := aobj.prefetch(context.Background())
+		require.NoError(t, err)
+		for _, bat := range aobj.cache {
+			aRows += bat.RowCount()
+			aWindows++
+			bat.Clean(mp)
+		}
+		aobj.cache, aobj.blks = nil, nil
+	}
+	require.Equal(t, 3, aRows)
+	require.Equal(t, 3, aWindows)
+	require.Equal(t, baseline, mp.CurrNB())
+}
+
+func TestPersistedWideObjectWindowsBoundAAndCNOutput(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const (
+		rows         = 128
+		payloadBytes = 16 << 10
+		maxBytes     = 64 << 10
+	)
+	obj, fs := writeTestWideObjectWithCommitTS(t, mp, rows, payloadBytes)
+	baseline := mp.CurrNB()
+	scheduler := tasks.NewParallelJobScheduler(2)
+	defer scheduler.Stop()
+	changes := &ChangeHandler{scheduler: scheduler, maxInMemoryBytes: maxBytes}
+	base := &baseHandle{changesHandle: changes}
+
+	drain := func(prefetch func(context.Context) error, isEnd func() bool, cache *[]*batch.Batch) {
+		readRows, peak := 0, 0
+		for !isEnd() {
+			require.NoError(t, prefetch(context.Background()))
+			for _, bat := range *cache {
+				readRows += bat.RowCount()
+				peak = max(peak, bat.Allocated())
+				bat.Clean(mp)
+			}
+			*cache = nil
+		}
+		require.Equal(t, rows, readRows)
+		require.LessOrEqual(t, peak, maxBytes/2,
+			"one persisted window must leave budget for merge/output copies")
+		require.Equal(t, baseline, mp.CurrNB())
+	}
+
+	cn := NewCNObjectHandle(false, []*objectio.ObjectEntry{obj}, fs, base, mp)
+	drain(cn.prefetch, cn.isEnd, &cn.cache)
+	cn.blks, cn.TSs = nil, nil
+	aobj := NewAObjectHandle(context.Background(), base, false,
+		types.BuildTS(1, 0), types.BuildTS(200, 0), []*objectio.ObjectEntry{obj}, fs, mp)
+	drain(aobj.prefetch, aobj.isEnd, &aobj.cache)
+	aobj.blks = nil
+}
+
+func TestCNObjectHandleCleansSourceAfterCopy(t *testing.T) {
+	sourceMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(sourceMP)
+	outputMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(outputMP)
+
+	source := batch.NewWithSize(1)
+	source.Attrs = []string{"id"}
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	for i := 0; i < 200_000; i++ {
+		require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(i), false, sourceMP))
+	}
+	source.SetRowCount(200_000)
+	h := &CNObjectHandle{
+		mp:    sourceMP,
+		base:  &baseHandle{changesHandle: &ChangeHandler{}},
+		cache: []*batch.Batch{source},
+		TSs:   []types.TS{types.BuildTS(2, 1)},
+	}
+
+	var out *batch.Batch
+	err := h.Next(context.Background(), &out, outputMP)
+	require.NoError(t, err)
+	require.Empty(t, h.cache)
+	require.Zero(t, sourceMP.CurrNB(), "the dequeued CN source batch must always be released")
+	require.Equal(t, 200_000, out.RowCount())
+	if out != nil {
+		out.Clean(outputMP)
+	}
+	require.Zero(t, outputMP.CurrNB())
+}
+
 func TestPartitionStateRangeSpillsSingleCommitLargerThanMemoryLimit(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -81,8 +205,8 @@ func TestPartitionStateRangeSpillsSingleCommitLargerThanMemoryLimit(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, 8, handle.maxInMemoryRows)
 	require.True(t, handle.spillConfig.Enabled())
-	require.Equal(t, rows, handle.dataHandle.inMemoryHandle.Rows())
-	require.IsType(t, &spilledBatchHandle{}, handle.dataHandle.inMemoryHandle)
+	require.Equal(t, rows, handle.spillNetEffectData.Rows())
+	require.IsType(t, &spilledBatchHandle{}, handle.spillNetEffectData)
 
 	readRows := 0
 	for {
@@ -127,7 +251,7 @@ func TestPartitionStateRangeSpillReadHonorsByteLimit(t *testing.T) {
 		ctx, state, start, end, false, objectio.BlockMaxRows, 0, mp, nil,
 	)
 	require.NoError(t, err)
-	require.IsType(t, &spilledBatchHandle{}, handle.dataHandle.inMemoryHandle)
+	require.IsType(t, &spilledBatchHandle{}, handle.spillNetEffectData)
 
 	readRows, peakOutputBytes, peakExtraMPool := 0, 0, mp.CurrNB()-baseline
 	for {
@@ -148,6 +272,66 @@ func TestPartitionStateRangeSpillReadHonorsByteLimit(t *testing.T) {
 	require.Less(t, peakExtraMPool, int64(maxBytes*8),
 		"retained replay memory must stay proportional to the configured batch limit")
 	require.NoError(t, handle.Close())
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	spillTracker.requireReleased(t, true)
+}
+
+func TestPartitionStateRangeSpillPreservesCrossChunkNetEffect(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const rows = int(objectio.BlockMaxRows)
+	state, src, start, _ := newPartitionStateRangeRows(t, mp, rows, true)
+	end := types.BuildTS(2, 2)
+	rowID := vector.GetFixedAtNoTypeCheck[types.Rowid](src.Vecs[0], 1)
+	state.rows.Set(&RowEntry{
+		BlockID: rowID.CloneBlockID(), RowID: rowID, Time: end,
+		ID: int64(rows + 1), Deleted: true, Batch: src, Offset: 1,
+	})
+
+	collectPKOne := func(ctx context.Context) (inserts, deletes int) {
+		handle, err := NewChangesHandlerWithPartitionStateRange(
+			ctx, state, start, end, false, objectio.BlockMaxRows, 0, mp, nil,
+		)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, handle.Close()) }()
+		for {
+			data, tombstone, _, nextErr := handle.Next(context.Background(), mp)
+			require.NoError(t, nextErr)
+			if data == nil && tombstone == nil {
+				break
+			}
+			if data != nil {
+				for _, pk := range vector.MustFixedColWithTypeCheck[int64](data.Vecs[0]) {
+					if pk == 1 {
+						inserts++
+					}
+				}
+				data.Clean(mp)
+			}
+			if tombstone != nil {
+				for _, pk := range vector.MustFixedColWithTypeCheck[int64](tombstone.Vecs[0]) {
+					if pk == 1 {
+						deletes++
+					}
+				}
+				tombstone.Clean(mp)
+			}
+		}
+		return
+	}
+
+	wantInserts, wantDeletes := collectPKOne(context.Background())
+	spillConfig, spillTracker := newTestChangeRangeSpillConfig(t)
+	ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
+		MaxInMemoryRows: 4 * int(objectio.BlockMaxRows), MaxInMemoryBytes: 64 << 20,
+	})
+	ctx = engine.WithChangeRangeSpill(ctx, spillConfig)
+	gotInserts, gotDeletes := collectPKOne(ctx)
+	require.Equal(t, 0, wantInserts)
+	require.Equal(t, 0, wantDeletes)
+	require.Equal(t, wantInserts, gotInserts)
+	require.Equal(t, wantDeletes, gotDeletes)
 	src.Clean(mp)
 	require.Zero(t, mp.CurrNB())
 	spillTracker.requireReleased(t, true)
@@ -193,7 +377,7 @@ func TestSpilledBatchHandleNextHonorsOutputLimit(t *testing.T) {
 		ctx, state, start, end, false, objectio.BlockMaxRows, 0, mp, nil,
 	)
 	require.NoError(t, err)
-	spilled := handle.dataHandle.inMemoryHandle.(*spilledBatchHandle)
+	spilled := handle.spillNetEffectData.(*spilledBatchHandle)
 	require.False(t, spilled.IsEmpty())
 	require.Equal(t, 12, spilled.Rows())
 	require.Equal(t, end, spilled.NextTS())
@@ -2283,6 +2467,46 @@ func writeTestObjectWithCommitTS(
 		CreateTime:  types.BuildTS(50, 0),
 	}
 	return entry, fs
+}
+
+func writeTestWideObjectWithCommitTS(
+	t *testing.T,
+	mp *mpool.MPool,
+	rows, payloadBytes int,
+) (*objectio.ObjectEntry, fileservice.FileService) {
+	t.Helper()
+	fs, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
+	)
+	require.NoError(t, err)
+	writer := ioutil.ConstructWriter(
+		0, []uint16{0, objectio.SEQNUM_ROWID, objectio.SEQNUM_COMMITTS},
+		-1, false, false, fs,
+	)
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	payload := []byte(strings.Repeat("w", payloadBytes))
+	var blk types.Blockid
+	for i := 0; i < rows; i++ {
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], payload, false, mp))
+		require.NoError(t, vector.AppendFixed(
+			bat.Vecs[1], types.NewRowid(&blk, uint32(i+1)), false, mp,
+		))
+		require.NoError(t, vector.AppendFixed(
+			bat.Vecs[2], types.BuildTS(100, uint32(i)), false, mp,
+		))
+	}
+	bat.SetRowCount(rows)
+	_, err = writer.WriteBatch(bat)
+	require.NoError(t, err)
+	blocks, _, err := writer.Sync(context.Background())
+	require.NoError(t, err)
+	bat.Clean(mp)
+	stats := writer.Stats()
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(&stats, uint32(len(blocks))))
+	return &objectio.ObjectEntry{ObjectStats: stats, CreateTime: types.BuildTS(150, 0)}, fs
 }
 
 func TestBlockCommitTSOverlapsRange_WithRealZonemap(t *testing.T) {

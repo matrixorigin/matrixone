@@ -298,6 +298,35 @@ func CopyCachedVectorAll(toVec *vector.Vector, data fscache.Data, mp *mpool.MPoo
 	return copyCachedVector(toVec, data, nil, true, mp)
 }
 
+// MaterializeCachedVectorWindow copies one row window from a cache-backed
+// object column without cloning or exposing the complete decoded Vector.
+func MaterializeCachedVectorWindow(
+	data fscache.Data,
+	offset, length int,
+	mp *mpool.MPool,
+) (*vector.Vector, error) {
+	if mp == nil {
+		return nil, moerr.NewInvalidInputNoCtx("nil mpool for object column materialization")
+	}
+	var source vector.Vector
+	if err := bindCachedVectorForScope(&source, data); err != nil {
+		return nil, err
+	}
+	defer source.Free(nil)
+	if offset < 0 || length < 0 || offset > source.Length()-length {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"object column window [%d, %d) out of range [0, %d)",
+			offset, offset+length, source.Length(),
+		)
+	}
+	dst := vector.NewVec(*source.GetType())
+	if err := dst.UnionBatch(&source, int64(offset), length, nil, mp); err != nil {
+		dst.Free(mp)
+		return nil, err
+	}
+	return dst, nil
+}
+
 func copyCachedVector(
 	toVec *vector.Vector,
 	data fscache.Data,

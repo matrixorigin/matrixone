@@ -425,6 +425,15 @@ func TestCopyCachedVectorRowsMaterializesOnlySelectedRows(t *testing.T) {
 	widerType := vector.NewOffHeapVecWithType(types.New(types.T_varchar, 512, 0))
 	require.NoError(t, CopyCachedVectorRows(widerType, cacheData, sels[:1], queryMP))
 	require.Equal(t, bytes.Repeat([]byte{'a'}, valueLen), widerType.GetBytesAt(0))
+	window, err := MaterializeCachedVectorWindow(cacheData, 7000, 3, queryMP)
+	require.NoError(t, err)
+	require.Equal(t, 3, window.Length())
+	require.Equal(t, bytes.Repeat([]byte{byte('a' + 7000%26)}, valueLen), window.GetBytesAt(0))
+	window.Free(queryMP)
+	_, err = MaterializeCachedVectorWindow(cacheData, rowCount-1, 2, queryMP)
+	require.Error(t, err)
+	_, err = MaterializeCachedVectorWindow(cacheData, 0, 1, nil)
+	require.Error(t, err)
 
 	needle := bytes.Repeat([]byte{'h'}, valueLen)
 	search := NewReadFilterSearch(types.T_varchar, [][]byte{needle})
@@ -1067,4 +1076,42 @@ func TestReadOneBlockAllColumnsReleasesPartialReadOnError(t *testing.T) {
 	)
 	require.ErrorIs(t, err, readErr)
 	require.Equal(t, int32(1), releases.Load())
+}
+
+func TestReadOneBlockAllColumnsWindowMaterializesRequestedRows(t *testing.T) {
+	writerMP := mpool.MustNewZero()
+	source := vector.NewVec(types.T_int64.ToType())
+	for i := int64(0); i < 8; i++ {
+		require.NoError(t, vector.AppendFixed(source, i, false, writerMP))
+	}
+	payload, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Free(writerMP)
+	encoded := append([]byte(nil), EncodeIOEntryHeader(&IOEntryHeader{
+		Type: IOET_ColData, Version: IOET_ColumnData_V2,
+	})...)
+	encoded = append(encoded, payload...)
+	var releases atomic.Int32
+	fs := &partialReadErrorFS{data: &releaseTrackingData{releases: &releases, bytes: encoded}}
+	meta := BuildMetaData(1, 1)
+	col := meta.GetBlockMeta(0).ColumnMeta(0)
+	col.setDataType(uint8(types.T_int64))
+	col.setLocation(NewExtent(1, 0, uint32(len(encoded)), uint32(len(encoded))))
+	queryMP := mpool.MustNewZero()
+	bat, err := ReadOneBlockAllColumnsWindow(
+		context.Background(), &meta, "test-object", 0, []uint16{0},
+		2, 3, fileservice.Policy(0), fs, queryMP,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{2, 3, 4}, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0]))
+	bat.Clean(queryMP)
+	require.Equal(t, int32(1), releases.Load())
+	_, err = ReadOneBlockAllColumnsWindow(
+		context.Background(), &meta, "test-object", 0, []uint16{0},
+		0, 0, fileservice.Policy(0), fs, queryMP,
+	)
+	require.Error(t, err)
+	require.Zero(t, queryMP.CurrNB())
+	mpool.DeleteMPool(queryMP)
+	mpool.DeleteMPool(writerMP)
 }
