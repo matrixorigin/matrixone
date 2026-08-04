@@ -35,6 +35,9 @@ func executeStatusStmtInBack(backSes *backSession,
 	if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 		return
 	}
+	if isPerformStatement(execCtx.stmt) && execCtx.runResult != nil {
+		execCtx.runResult.AffectRows = 0
+	}
 
 	// only log if run time is longer than 1s
 	if time.Since(runBegin) > time.Second {

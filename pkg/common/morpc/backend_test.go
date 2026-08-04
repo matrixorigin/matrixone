@@ -703,7 +703,11 @@ func TestIndependentControlBackendPreservesSlowDataRequest(t *testing.T) {
 		"data-replacement-test",
 		dataFactory,
 		WithClientMaxBackendPerHost(1),
-		WithClientMaxBackendMaxIdleDuration(time.Nanosecond),
+		// Keep the process-wide idle GC from racing the state setup below. The
+		// direct closeIdleBackends call still exercises the draining protection:
+		// without that guard, a zero threshold makes this backend immediately
+		// eligible for cleanup.
+		WithClientMaxBackendMaxIdleDuration(0),
 	)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, dataClient.Close()) }()

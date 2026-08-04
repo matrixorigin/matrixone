@@ -752,6 +752,7 @@ func TestUniqueIndexRuntimeFilterUsesSelectedHashSlot(t *testing.T) {
 	}
 	arg.RuntimeFilterSpec = spec
 	arg.AppendChild(child)
+	registry, account := installIndexPlanHashBuildAllocation(t, arg)
 	require.NoError(t, child.Prepare(proc))
 	require.NoError(t, arg.Prepare(proc))
 	result, err := vm.Exec(arg, proc)
@@ -778,10 +779,11 @@ func TestUniqueIndexRuntimeFilterUsesSelectedHashSlot(t *testing.T) {
 	payload.Free(proc.Mp())
 	runtimeFilter.Destroy()
 	arg.Free(proc, false, nil)
+	proc.GetMessageBoard().Reset()
+	finishIndexPlanHashBuildAllocation(t, registry, account, arg)
 	child.Free(proc, false, nil)
 	arg.Release()
 	child.Release()
-	proc.GetMessageBoard().Reset()
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -858,6 +860,7 @@ func TestIndexJoinGeneratedSerializedRuntimeFilterExecutesEndToEnd(t *testing.T)
 		planpb.Type{Id: int32(types.T_int32)}, 0, 0)}
 	arg.RuntimeFilterSpec = spec
 	arg.AppendChild(child)
+	registry, account := installIndexPlanHashBuildAllocation(t, arg)
 	require.NoError(t, child.Prepare(proc))
 	require.NoError(t, arg.Prepare(proc))
 	result, err := vm.Exec(arg, proc)
@@ -916,12 +919,40 @@ func TestIndexJoinGeneratedSerializedRuntimeFilterExecutesEndToEnd(t *testing.T)
 	payload.Free(proc.Mp())
 	runtimeFilter.Destroy()
 	arg.Free(proc, false, nil)
+	proc.GetMessageBoard().Reset()
+	finishIndexPlanHashBuildAllocation(t, registry, account, arg)
 	child.Free(proc, false, nil)
 	arg.Release()
 	child.Release()
-	proc.GetMessageBoard().Reset()
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func installIndexPlanHashBuildAllocation(
+	t testing.TB,
+	arg *hashbuild.HashBuild,
+) (*mpool.AllocationAccountRegistry, *mpool.AllocationAccount) {
+	t.Helper()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 4_096)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 60)
+	require.NoError(t, err)
+	require.NoError(t, arg.SetAllocationAccount(account))
+	return registry, account
+}
+
+func finishIndexPlanHashBuildAllocation(
+	t testing.TB,
+	registry *mpool.AllocationAccountRegistry,
+	account *mpool.AllocationAccount,
+	arg *hashbuild.HashBuild,
+) {
+	t.Helper()
+	require.NoError(t, arg.ClearAllocationAccount(account))
+	snapshot, first, err := registry.CompleteTerminal(account)
+	require.NoError(t, err)
+	require.True(t, first)
+	require.Zero(t, snapshot.Used)
 }
 
 func TestForceIndexForJoinBuildsRightAccessWithoutReorder(t *testing.T) {

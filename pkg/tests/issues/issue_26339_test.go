@@ -114,12 +114,16 @@ func TestIssue26339ForeignKeyExecutionRegressions(t *testing.T) {
 			_, err = parentConn.ExecContext(ctx, "rollback")
 			require.NoError(t, err)
 
+			// Verify the committed child transaction through the same session.
+			// A fresh pooled connection has no last-commit timestamp and may race
+			// asynchronous logtail replay under coverage load, which is unrelated
+			// to the foreign-key closure this regression exercises.
 			var parentID, childParentID, orphanCount int
-			require.NoError(t, db.QueryRowContext(ctx,
+			require.NoError(t, childConn.QueryRowContext(ctx,
 				"select id from "+database+".optimistic_parent").Scan(&parentID))
-			require.NoError(t, db.QueryRowContext(ctx,
+			require.NoError(t, childConn.QueryRowContext(ctx,
 				"select parent_id from "+database+".optimistic_child where id = 10").Scan(&childParentID))
-			require.NoError(t, db.QueryRowContext(ctx,
+			require.NoError(t, childConn.QueryRowContext(ctx,
 				"select count(*) from "+database+".optimistic_child c left join "+
 					database+".optimistic_parent p on c.parent_id = p.id where p.id is null").Scan(&orphanCount))
 			require.Equal(t, 1, parentID)

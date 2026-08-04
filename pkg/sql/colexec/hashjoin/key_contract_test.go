@@ -351,6 +351,7 @@ func runHashJoinKeyContract(
 	if mode.shuffle {
 		buildArg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: joinMapTag + 7000}
 	}
+	installTestAllocation(t, arg, buildArg)
 	var build, probe *batch.Batch
 	defer func() {
 		arg.Free(proc, false, nil)

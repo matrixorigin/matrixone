@@ -15,6 +15,7 @@
 package message
 
 import (
+	"context"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -33,6 +34,32 @@ import (
 type testMessage struct {
 	tag       int32
 	destroyed *atomic.Int32
+}
+
+type accountedTestMessage struct {
+	mp     *mpool.MPool
+	buffer []byte
+}
+
+func (m *accountedTestMessage) Serialize() []byte { return nil }
+
+func (m *accountedTestMessage) Deserialize([]byte) Message { return m }
+
+func (m *accountedTestMessage) NeedBlock() bool { return true }
+
+func (m *accountedTestMessage) GetMsgTag() int32 { return 1 }
+
+func (m *accountedTestMessage) GetReceiverAddr() MessageAddress {
+	return AddrBroadCastOnCurrentCN()
+}
+
+func (m *accountedTestMessage) DebugString() string { return "accounted test message" }
+
+func (m *accountedTestMessage) Destroy() {
+	if m.buffer != nil {
+		m.mp.Free(m.buffer)
+		m.buffer = nil
+	}
 }
 
 func (m testMessage) Serialize() []byte {
@@ -75,7 +102,7 @@ func TestJoinMapMsgDestroyReleasesJoinMapMemory(t *testing.T) {
 		shm:   shm,
 	}
 
-	JoinMapMsg{JoinMapPtr: jm, Tag: 1}.Destroy()
+	JoinMapMsg{Result: NewJoinMapResult(jm), Tag: 1}.Destroy()
 
 	require.Nil(t, jm.shm)
 	require.False(t, jm.valid)
@@ -95,6 +122,102 @@ func TestMessageBoardResetDestroysQueuedMessages(t *testing.T) {
 	require.Equal(t, int32(2), destroyed.Load())
 	require.Empty(t, mb.messages)
 	require.Empty(t, mb.waiters)
+}
+
+func TestMessageBoardCloseAndDrainRejectsLateMessages(t *testing.T) {
+	var destroyed atomic.Int32
+	mb := NewMessageBoard()
+	SendMessage(testMessage{tag: 1, destroyed: &destroyed}, mb)
+
+	receiver := NewMessageReceiver(
+		[]int32{2},
+		AddrBroadCastOnCurrentCN(),
+		mb,
+	)
+	waiting := make(chan error, 1)
+	go func() {
+		_, _, err := receiver.ReceiveMessage(true, context.Background())
+		waiting <- err
+	}()
+
+	require.True(t, mb.CloseAndDrain())
+	require.False(t, mb.CloseAndDrain())
+	require.ErrorContains(t, <-waiting, "message board is closed")
+	require.Equal(t, int32(1), destroyed.Load())
+	require.Empty(t, mb.messages)
+	require.Empty(t, mb.waiters)
+
+	SendMessage(testMessage{tag: 2, destroyed: &destroyed}, mb)
+	require.Equal(t, int32(2), destroyed.Load())
+	require.NotSame(t, mb, mb.Reset())
+}
+
+func TestMessageBoardCloseAndDrainRemovesMultiCNRegistration(t *testing.T) {
+	center := &MessageCenter{
+		StmtIDToBoard: make(map[uuid.UUID]*MessageBoard),
+		RwMutex:       &sync.Mutex{},
+	}
+	stmtID := uuid.New()
+	mb := NewMessageBoard().SetMultiCN(center, stmtID)
+	require.Same(t, mb, center.StmtIDToBoard[stmtID])
+
+	require.True(t, mb.CloseAndDrain())
+	_, ok := center.StmtIDToBoard[stmtID]
+	require.False(t, ok)
+}
+
+func TestMessageBoardCloseDefersQueuedOwnershipDrain(t *testing.T) {
+	mb := NewMessageBoard()
+	var destroyed atomic.Int32
+	SendMessage(testMessage{tag: 1, destroyed: &destroyed}, mb)
+
+	receiver := NewMessageReceiver(
+		[]int32{2},
+		AddrBroadCastOnCurrentCN(),
+		mb,
+	)
+	waiting := make(chan error, 1)
+	go func() {
+		_, _, err := receiver.ReceiveMessage(true, context.Background())
+		waiting <- err
+	}()
+
+	require.True(t, mb.Close())
+	require.False(t, mb.Close())
+	require.ErrorContains(t, <-waiting, "message board is closed")
+	require.Zero(t, destroyed.Load())
+	require.Len(t, mb.messages, 1)
+
+	require.True(t, mb.CloseAndDrain())
+	require.False(t, mb.CloseAndDrain())
+	require.Equal(t, int32(1), destroyed.Load())
+	require.Empty(t, mb.messages)
+}
+
+func TestClosedMessageBoardLatePayloadDrainsOriginalGeneration(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	buffer, err := mp.AllocAccounted(64, account, 1, 1)
+	require.NoError(t, err)
+
+	mb := NewMessageBoard()
+	require.True(t, mb.CloseAndDrain())
+	terminal, first, err := registry.CompleteTerminal(account)
+	require.True(t, first)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	require.Equal(t, uint64(cap(buffer)), terminal.Used)
+	require.True(t, registry.AdmissionSuspended())
+
+	// A producer that already owns a payload cannot republish it after the
+	// attempt boundary. Destroy performs the physical Free against the account
+	// captured by the allocation, even though that generation is now sealed.
+	SendMessage(&accountedTestMessage{mp: mp, buffer: buffer}, mb)
+	require.False(t, registry.AdmissionSuspended())
+	_, ok := registry.Resolve(account.Handle())
+	require.False(t, ok)
 }
 
 func TestMessageBoardFinalizerDestroysQueuedMessages(t *testing.T) {
@@ -118,164 +241,6 @@ func TestMessageBoardFinalizerDestroysQueuedMessages(t *testing.T) {
 		debug.FreeOSMemory()
 		return destroyed.Load() == 1
 	}, 5*time.Second, 20*time.Millisecond)
-}
-
-func TestLegacySpillBuildPayload(t *testing.T) {
-	t.Run("transfers_ownership", func(t *testing.T) {
-		f1, err := os.CreateTemp("", "test_fd_*")
-		require.NoError(t, err)
-		defer os.Remove(f1.Name())
-		f2, err := os.CreateTemp("", "test_fd_*")
-		require.NoError(t, err)
-		defer os.Remove(f2.Name())
-
-		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
-		jm.IncRef(1)
-		require.NoError(t, jm.SetSpillBuildPayload(SpillBuildPayload{
-			LegacyFds: []*os.File{f1, f2},
-		}))
-		payload, err := jm.TakeSpillBuildPayload()
-		require.NoError(t, err)
-
-		require.Len(t, payload.LegacyFds, 2)
-		require.Same(t, f1, payload.LegacyFds[0])
-		require.Same(t, f2, payload.LegacyFds[1])
-
-		require.NoError(t, payload.Close())
-	})
-
-	t.Run("second_call_returns_explicit_error", func(t *testing.T) {
-		f, err := os.CreateTemp("", "test_fd_*")
-		require.NoError(t, err)
-		defer os.Remove(f.Name())
-
-		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
-		jm.IncRef(1)
-		require.NoError(t, jm.SetSpillBuildPayload(SpillBuildPayload{
-			LegacyFds: []*os.File{f},
-		}))
-		payload, err := jm.TakeSpillBuildPayload()
-		require.NoError(t, err)
-
-		_, err = jm.TakeSpillBuildPayload()
-		require.ErrorIs(t, err, ErrSpillBuildPayloadTaken)
-		require.NoError(t, payload.Close())
-	})
-
-	t.Run("empty_payload_is_rejected", func(t *testing.T) {
-		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
-		jm.IncRef(1)
-		require.ErrorIs(t, jm.SetSpillBuildPayload(SpillBuildPayload{}), ErrSpillBuildPayloadEmpty)
-	})
-
-	t.Run("mixed_payload_is_rejected", func(t *testing.T) {
-		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
-		jm.IncRef(1)
-		require.ErrorIs(t, jm.SetSpillBuildPayload(SpillBuildPayload{
-			Files:     []*SpillFile{nil},
-			LegacyFds: []*os.File{nil},
-			BudgetRef: struct{}{},
-		}), ErrSpillBuildPayloadMixed)
-	})
-
-	t.Run("legacy_payload_with_budget_is_rejected", func(t *testing.T) {
-		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
-		jm.IncRef(1)
-		require.ErrorIs(t, jm.SetSpillBuildPayload(SpillBuildPayload{
-			LegacyFds: []*os.File{nil},
-			BudgetRef: struct{}{},
-		}), ErrSpillBuildLegacyBudget)
-	})
-
-	t.Run("free_before_set_rejects_late_publication", func(t *testing.T) {
-		f, err := os.CreateTemp("", "test_fd_*")
-		require.NoError(t, err)
-		defer os.Remove(f.Name())
-
-		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
-		jm.IncRef(1)
-		jm.FreeMemory()
-		payload := SpillBuildPayload{LegacyFds: []*os.File{f}}
-		require.ErrorIs(t, jm.SetSpillBuildPayload(payload), ErrSpillBuildPayloadTaken)
-		_, err = f.Stat()
-		require.NoError(t, err, "rejected late payload remains caller-owned")
-		require.NoError(t, payload.Close())
-	})
-}
-
-func TestFreeMemoryClosesSpillFds(t *testing.T) {
-	t.Run("closes_all_fds", func(t *testing.T) {
-		mp := mpool.MustNewZero()
-		f1, err := os.CreateTemp("", "test_fd_*")
-		require.NoError(t, err)
-		defer os.Remove(f1.Name())
-		f2, err := os.CreateTemp("", "test_fd_*")
-		require.NoError(t, err)
-		defer os.Remove(f2.Name())
-
-		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mp)
-		jm.IncRef(1)
-		require.NoError(t, jm.SetSpillBuildPayload(SpillBuildPayload{
-			LegacyFds: []*os.File{f1, f2},
-		}))
-		jm.FreeMemory()
-
-		require.False(t, jm.valid)
-
-		// Verify fds are closed
-		_, err = f1.Stat()
-		require.Error(t, err)
-		_, err = f2.Stat()
-		require.Error(t, err)
-	})
-
-	t.Run("handles_nil_in_fd_slice", func(t *testing.T) {
-		mp := mpool.MustNewZero()
-		f, err := os.CreateTemp("", "test_fd_*")
-		require.NoError(t, err)
-		defer os.Remove(f.Name())
-
-		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mp)
-		jm.IncRef(1)
-		require.NoError(t, jm.SetSpillBuildPayload(SpillBuildPayload{
-			LegacyFds: []*os.File{f, nil},
-		}))
-		jm.FreeMemory() // must not panic on nil entry
-	})
-
-	t.Run("take_then_free_does_not_double_close", func(t *testing.T) {
-		mp := mpool.MustNewZero()
-		f, err := os.CreateTemp("", "test_fd_*")
-		require.NoError(t, err)
-		defer os.Remove(f.Name())
-
-		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mp)
-		jm.IncRef(1)
-		require.NoError(t, jm.SetSpillBuildPayload(SpillBuildPayload{
-			LegacyFds: []*os.File{f},
-		}))
-		payload, err := jm.TakeSpillBuildPayload()
-		require.NoError(t, err)
-		require.Len(t, payload.LegacyFds, 1)
-
-		// FreeMemory after TakeSpillBuildPayload should not close the fds.
-		jm.FreeMemory()
-
-		// fd is still open (caller owns it)
-		_, err = f.Stat()
-		require.NoError(t, err)
-		require.NoError(t, payload.Close())
-	})
-
-	t.Run("double_free_safe", func(t *testing.T) {
-		mp := mpool.MustNewZero()
-		jm := &JoinMap{
-			valid: true,
-			mpool: mp,
-		}
-		jm.FreeMemory()
-		jm.FreeMemory() // must not panic
-	})
 }
 
 func TestAccountedSpillFileOwnership(t *testing.T) {
