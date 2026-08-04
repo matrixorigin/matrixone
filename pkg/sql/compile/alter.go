@@ -2078,6 +2078,8 @@ type viewMetadataRefreshContext struct {
 	sourceAccountID      uint32
 	sourceLogicalID      uint64
 	currentSourceTableID uint64
+	sourceDatabase       string
+	sourceTable          string
 	confirmed            *bool
 	targetViewID         uint64
 	targetViewVersion    uint32
@@ -2327,6 +2329,8 @@ func refreshViewMetadataAfterAlter(
 						sourceAccountID:      source.accountID,
 						sourceLogicalID:      source.logicalID,
 						currentSourceTableID: source.currentID,
+						sourceDatabase:       source.database,
+						sourceTable:          source.tableName,
 						confirmed:            &confirmed,
 						targetViewID:         view.id,
 						targetViewVersion:    view.version,
@@ -2852,6 +2856,22 @@ func buildViewMetadataRefreshQueryWithLegacyCandidates(
 	}
 	legacyCandidate, quotedLegacyCandidate, ansiQuotedLegacyCandidate :=
 		viewMetadataLegacyNameCandidates(sourceTable)
+	directLegacyAccountPredicate := fmt.Sprintf("account_id = %d", sourceAccountID)
+	legacyAccountPredicate := fmt.Sprintf(
+		"((account_id = %d) or account_id in "+
+			"(select sub_account_id from %s.%s where pub_account_id = %d and status = %d))",
+		sourceAccountID,
+		catalog.MO_CATALOG,
+		catalog.MO_SUBS,
+		sourceAccountID,
+		pubsub.SubStatusNormal,
+	)
+	if sourceAccountID == catalog.System_Account {
+		// Cluster and shared system relations can be referenced directly by
+		// dependency-less views owned by any tenant.
+		directLegacyAccountPredicate = "1 = 1"
+		legacyAccountPredicate = "1 = 1"
+	}
 	databaseNameJSON, _ := json.Marshal(sourceDatabase)
 	tableNameJSON, _ := json.Marshal(sourceTable)
 	qualifiedNameCandidate := sqlquote.String(
@@ -2871,7 +2891,7 @@ func buildViewMetadataRefreshQueryWithLegacyCandidates(
 			"select account_id, rel_id, rel_logical_id, rel_version, reldatabase, relname, viewdef from %s.mo_tables "+
 				"where relkind = '%s' %s"+
 				"and reldatabase not in ('%s', '%s') and rel_id > %d "+
-				"and ((account_id = %d and json_extract(viewdef, '$.dependencies') is null "+
+				"and ((%s and json_extract(viewdef, '$.dependencies') is null "+
 				"and (instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0)) "+
 				"or (viewdef like '%%\\\"account_id\\\":%d,%%' "+
 				"and (viewdef like '%%\\\"logical_id\\\":%d,%%' "+
@@ -2896,7 +2916,7 @@ func buildViewMetadataRefreshQueryWithLegacyCandidates(
 			catalog.MO_CATALOG,
 			"information_schema",
 			afterViewID,
-			sourceAccountID,
+			directLegacyAccountPredicate,
 			legacyCandidate,
 			quotedLegacyCandidate,
 			ansiQuotedLegacyCandidate,
@@ -2927,8 +2947,7 @@ func buildViewMetadataRefreshQueryWithLegacyCandidates(
 		"select account_id, rel_id, rel_logical_id, rel_version, reldatabase, relname, viewdef from %s.mo_tables "+
 			"where relkind = '%s' %s"+
 			"and reldatabase not in ('%s', '%s') and rel_id > %d "+
-			"and ((((account_id = %d) or account_id in "+
-			"(select sub_account_id from %s.%s where pub_account_id = %d and status = %d)) "+
+			"and ((%s "+
 			"and json_extract(viewdef, '$.dependencies') is null "+
 			"and (instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0 or instr(viewdef, %s) > 0)) "+
 			"or (viewdef like '%%\\\"account_id\\\":%d,%%' "+
@@ -2953,11 +2972,7 @@ func buildViewMetadataRefreshQueryWithLegacyCandidates(
 		catalog.MO_CATALOG,
 		"information_schema",
 		afterViewID,
-		sourceAccountID,
-		catalog.MO_CATALOG,
-		catalog.MO_SUBS,
-		sourceAccountID,
-		pubsub.SubStatusNormal,
+		legacyAccountPredicate,
 		legacyCandidate,
 		quotedLegacyCandidate,
 		ansiQuotedLegacyCandidate,
@@ -3032,6 +3047,7 @@ func runViewMetadataRefreshSQL(
 	}
 	c.db = viewData.DefaultDatabase
 	c.proc.GetSessionInfo().SqlMode = sqlMode
+	refresh, _ := viewMetadataRefreshContextFromContext(c.proc.Ctx)
 	c.proc.Ctx = context.WithValue(
 		c.proc.Ctx,
 		viewMetadataSubscriptionResolverKey{},
@@ -3046,6 +3062,9 @@ func runViewMetadataRefreshSQL(
 			defaultDatabase: viewData.DefaultDatabase,
 			subscriptions:   subscriptions,
 			dependencies:    viewData.Dependencies,
+			sourceAccountID: refresh.sourceAccountID,
+			sourceDatabase:  refresh.sourceDatabase,
+			sourceTable:     refresh.sourceTable,
 		},
 	)
 	c.proc.Ctx = context.WithValue(c.proc.Ctx, viewMetadataSQLModeKey{}, sqlMode)

@@ -226,6 +226,22 @@ desc pending_view_two;
 drop snapshot pending_snapshot_one;
 drop snapshot pending_snapshot_two;
 
+create table recreated_source (a int);
+create view recreated_view as select a from recreated_source;
+drop table recreated_source;
+create table recreated_source (a bigint);
+-- @ignore:5,6
+desc recreated_view;
+
+create table recreated_view_source_int (a int);
+create table recreated_view_source_bigint (a bigint);
+create view recreated_inner_view as select a from recreated_view_source_int;
+create view recreated_outer_view as select a from recreated_inner_view;
+drop view recreated_inner_view;
+create view recreated_inner_view as select a from recreated_view_source_bigint;
+-- @ignore:5,6
+desc recreated_outer_view;
+
 drop database view_alter_column_metadata;
 drop database view_alter_column_metadata_cross;
 

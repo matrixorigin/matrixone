@@ -226,11 +226,11 @@ func TestViewMetadataRefreshResolverRelationAccountID(t *testing.T) {
 			database:   "db", table: "t",
 		},
 		{
-			name: "snapshot dependency",
+			name: "snapshot dependency uses physical account",
 			dependency: plan.ViewDependency{
-				AccountIDSet: true, Snapshot: true, DatabaseName: "db", TableName: "t",
+				AccountID: 0, AccountIDSet: true, Snapshot: true, DatabaseName: "db", TableName: "t",
 			},
-			database: "db", table: "t",
+			database: "db", table: "t", wantID: 0, wantFound: true,
 		},
 		{
 			name: "subscription dependency",
@@ -239,10 +239,20 @@ func TestViewMetadataRefreshResolverRelationAccountID(t *testing.T) {
 			},
 			database: "db", table: "t",
 		},
+		{
+			name:     "legacy refresh source",
+			database: catalog.MO_CATALOG, table: "cluster_source",
+			wantID: catalog.System_Account, wantFound: true,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			resolver := viewMetadataRefreshResolver{dependencies: []plan.ViewDependency{test.dependency}}
+			resolver := viewMetadataRefreshResolver{
+				dependencies:    []plan.ViewDependency{test.dependency},
+				sourceAccountID: catalog.System_Account,
+				sourceDatabase:  catalog.MO_CATALOG,
+				sourceTable:     "cluster_source",
+			}
 			accountID, found := resolver.relationAccountID(test.database, test.table)
 			require.Equal(t, test.wantID, accountID)
 			require.Equal(t, test.wantFound, found)

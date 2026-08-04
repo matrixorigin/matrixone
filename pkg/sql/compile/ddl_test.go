@@ -1132,10 +1132,10 @@ func TestCreateViewRefreshOnlyPending(t *testing.T) {
 		replace     bool
 		wantPending bool
 	}{
-		{name: "new view", wantPending: true},
-		{name: "new view with replace syntax", replace: true, wantPending: true},
+		{name: "new view", wantPending: false},
+		{name: "new view with replace syntax", replace: true, wantPending: false},
 		{name: "replace existing view", existed: true, replace: true, wantPending: false},
-		{name: "existing view without replace", existed: true, wantPending: true},
+		{name: "existing view without replace", existed: true, wantPending: false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

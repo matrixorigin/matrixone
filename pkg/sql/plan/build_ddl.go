@@ -291,8 +291,16 @@ func makeViewDependency(
 	tableDef *TableDef,
 	snapshot *Snapshot,
 ) ViewDependency {
+	physicalAccountID := currentAccountID
+	isSystemRelation := util.TableIsClusterTable(tableDef.GetTableType()) ||
+		isSharedSystemTable(objRef.GetSchemaName(), objRef.GetObjName())
+	if isSystemRelation {
+		physicalAccountID = catalog.System_Account
+	} else if IsSnapshotValid(snapshot) && snapshot.GetTenant() != nil {
+		physicalAccountID = snapshot.GetTenant().GetTenantID()
+	}
 	dependency := ViewDependency{
-		AccountID:    currentAccountID,
+		AccountID:    physicalAccountID,
 		AccountIDSet: true,
 		TableID:      uint64(objRef.GetObj()),
 		LogicalID:    tableDef.GetLogicalId(),
@@ -313,15 +321,9 @@ func makeViewDependency(
 		dependency.SubscriptionTable = objRef.GetObjName()
 		dependency.PublisherDB = objRef.GetSchemaName()
 		dependency.PublisherTable = objRef.GetObjName()
-	} else if util.TableIsClusterTable(tableDef.GetTableType()) ||
-		isSharedSystemTable(objRef.GetSchemaName(), objRef.GetObjName()) {
-		dependency.AccountID = catalog.System_Account
 	}
 	if IsSnapshotValid(snapshot) {
 		dependency.Snapshot = true
-		if snapshot.GetTenant() != nil {
-			dependency.AccountID = snapshot.GetTenant().GetTenantID()
-		}
 	}
 	return dependency
 }

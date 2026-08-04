@@ -2213,7 +2213,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			main.GetTableID(c.proc.Ctx),
 			dbName,
 			tblName,
-			true,
+			false,
 		); err != nil {
 			return err
 		}
@@ -2653,7 +2653,7 @@ func (s *Scope) CreateView(c *Compile) error {
 }
 
 func createViewRefreshOnlyPending(relationExisted bool, replace bool) bool {
-	return !relationExisted || !replace
+	return false
 }
 
 func lockAndValidateViewDependencies(c *Compile, viewDef *plan.ViewDef) error {

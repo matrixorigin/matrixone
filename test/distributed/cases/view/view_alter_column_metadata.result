@@ -279,6 +279,22 @@ a  ¦  DECIMAL(10,3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 b  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 drop snapshot pending_snapshot_one;
 drop snapshot pending_snapshot_two;
+create table recreated_source (a int);
+create view recreated_view as select a from recreated_source;
+drop table recreated_source;
+create table recreated_source (a bigint);
+desc recreated_view;
+➛ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+create table recreated_view_source_int (a int);
+create table recreated_view_source_bigint (a bigint);
+create view recreated_inner_view as select a from recreated_view_source_int;
+create view recreated_outer_view as select a from recreated_inner_view;
+drop view recreated_inner_view;
+create view recreated_inner_view as select a from recreated_view_source_bigint;
+desc recreated_outer_view;
+➛ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 drop database view_alter_column_metadata;
 drop database view_alter_column_metadata_cross;
 drop account if exists view_alter_pub;

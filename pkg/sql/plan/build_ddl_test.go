@@ -357,7 +357,7 @@ func TestMakeViewDependencyKeepsSnapshotPublisherAccount(t *testing.T) {
 		},
 	)
 
-	require.Equal(t, uint32(7), dependency.AccountID)
+	require.Equal(t, uint32(11), dependency.AccountID)
 	require.Equal(t, uint32(11), dependency.PublisherAccountID)
 	require.True(t, dependency.PublisherAccountIDSet)
 	require.True(t, dependency.Snapshot)
@@ -380,6 +380,21 @@ func TestMakeViewDependencyKeepsSnapshotPublisherAccount(t *testing.T) {
 	)
 	require.Zero(t, systemPublisher.PublisherAccountID)
 	require.True(t, systemPublisher.PublisherAccountIDSet)
+
+	clusterSnapshot := makeViewDependency(
+		7,
+		&ObjectRef{Obj: 44, ObjName: "cluster_t", SchemaName: "mo_catalog"},
+		&TableDef{
+			TblId: 44, LogicalId: 43, Version: 2, TableType: catalog.SystemClusterRel,
+		},
+		&Snapshot{
+			TS:     &timestamp.Timestamp{PhysicalTime: 1},
+			Tenant: &SnapshotTenant{TenantID: 7},
+		},
+	)
+	require.Zero(t, clusterSnapshot.AccountID)
+	require.True(t, clusterSnapshot.AccountIDSet)
+	require.True(t, clusterSnapshot.Snapshot)
 }
 
 func TestGenViewTableDefKeepsDirectNestedViewDependency(t *testing.T) {

@@ -550,7 +550,7 @@ func (c *compilerContext) getRelation(
 	if sub != nil {
 		ctx = defines.AttachAccountId(ctx, uint32(sub.GetAccountId()))
 		dbName = sub.GetDbName()
-	} else if !plan.IsSnapshotValid(snapshot) {
+	} else {
 		resolverCtx := ctx
 		if _, ok := resolverCtx.Value(viewMetadataResolverKey{}).(viewMetadataRefreshResolver); !ok &&
 			c.ctx != nil {

@@ -209,6 +209,27 @@ func TestBuildPendingViewMetadataRefreshQueryPreservesPublishedTableSpaces(t *te
 	require.Len(t, stmts, 1)
 }
 
+func TestBuildViewMetadataRefreshQueryFindsLegacyTenantClusterViews(t *testing.T) {
+	for _, onlyPending := range []bool{false, true} {
+		query := buildViewMetadataRefreshQuery(
+			catalog.System_Account, 24, 42, catalog.MO_CATALOG, "cluster_source", 0, 128,
+			onlyPending,
+		)
+		require.Contains(t, query,
+			"1 = 1 and json_extract(viewdef, '$.dependencies') is null")
+		stmts, err := mysql.Parse(context.Background(), query, 1)
+		require.NoError(t, err)
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}
+
+	tenantQuery := buildViewMetadataRefreshQuery(7, 24, 42, "db", "source", 0, 128)
+	require.Contains(t, tenantQuery, "account_id = 7")
+	require.Contains(t, tenantQuery, "account_id in (select sub_account_id")
+	require.Contains(t, tenantQuery, "json_extract(viewdef, '$.dependencies') is null")
+}
+
 func TestBuildViewMetadataRefreshQueryMatchesQuotedLegacyIdentifier(t *testing.T) {
 	const tableName = "source`table\\\""
 	rawCandidate, quotedCandidate, ansiQuotedCandidate := viewMetadataLegacyNameCandidates(tableName)

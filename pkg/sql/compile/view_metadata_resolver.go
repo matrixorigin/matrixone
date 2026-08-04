@@ -54,6 +54,9 @@ type viewMetadataRefreshResolver struct {
 	defaultDatabase string
 	subscriptions   currentViewSubscriptionResolver
 	dependencies    []plan2.ViewDependency
+	sourceAccountID uint32
+	sourceDatabase  string
+	sourceTable     string
 }
 
 func (r viewMetadataRefreshResolver) relationAccountID(
@@ -61,12 +64,15 @@ func (r viewMetadataRefreshResolver) relationAccountID(
 	table string,
 ) (uint32, bool) {
 	for _, dependency := range r.dependencies {
-		if dependency.Snapshot || dependency.Subscription ||
+		if dependency.Subscription ||
 			!dependency.AccountIDSet ||
 			dependency.DatabaseName != database || dependency.TableName != table {
 			continue
 		}
 		return dependency.AccountID, true
+	}
+	if strings.EqualFold(r.sourceDatabase, database) && strings.EqualFold(r.sourceTable, table) {
+		return r.sourceAccountID, true
 	}
 	return 0, false
 }
