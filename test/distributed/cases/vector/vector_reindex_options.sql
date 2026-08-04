@@ -20,6 +20,8 @@ use test_reindex_options;
 -- ----------------------------------------------------------------------------
 create table ivf_t(a int primary key, b vecf32(4));
 insert into ivf_t values(1,"[1,2,3,4]"),(2,"[5,6,7,8]"),(3,"[9,10,11,12]"),(4,"[2,1,4,3]"),(5,"[8,7,6,5]"),(6,"[12,11,10,9]"),(7,"[1,1,1,1]"),(8,"[9,9,9,9]");
+create index idx using ivfflat on ivf_t(b) lists=2 op_type "vector_bogus_ops";
+create index idx using ivfflat on ivf_t(b) lists=2 quantization 'garbage';
 create index idx using ivfflat on ivf_t(b) lists=2 op_type "vector_l2_ops";
 show create table ivf_t;
 -- reindex with new supported params -> merged into algo params
@@ -42,6 +44,7 @@ alter table ivf_t alter reindex idx ivfflat quantization 'garbage';
 -- ----------------------------------------------------------------------------
 create table hnsw_t(a bigint primary key, b vecf32(4));
 insert into hnsw_t values(1,"[1,2,3,4]"),(2,"[5,6,7,8]"),(3,"[9,10,11,12]"),(4,"[2,1,4,3]");
+create index hidx using hnsw on hnsw_t(b) op_type "vector_bogus_ops";
 create index hidx using hnsw on hnsw_t(b) op_type "vector_l2_ops" m=48 ef_construction=64 ef_search=64;
 show create table hnsw_t;
 -- reindex with new supported params -> merged into algo params

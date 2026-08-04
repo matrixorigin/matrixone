@@ -9,7 +9,7 @@ services:
     entrypoint: ["bash", "-c", "cp /run/key-source /tmp/mongodb-keyfile && chown mongodb:mongodb /tmp/mongodb-keyfile && chmod 400 /tmp/mongodb-keyfile && exec /usr/local/bin/docker-entrypoint.sh \"$$@\"", "--"]
     command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--auth", "--keyFile", "/tmp/mongodb-keyfile"]
     ports:
-      - "127.0.0.1:${MONGODB_PORT}:27017"
+      - "127.0.0.1:${MONGODB_PORT:-}:27017"
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGODB_ROOT_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_ROOT_PASSWORD}

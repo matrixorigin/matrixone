@@ -298,6 +298,15 @@ func TestAggregator(t *testing.T) {
 
 }
 
+func TestStatementInfoFilterIncludesPerform(t *testing.T) {
+	statement := &StatementInfo{
+		StatementType: "Perform",
+		SqlSourceType: "internal_sql",
+		Status:        StatementStatusSuccess,
+	}
+	require.True(t, StatementInfoFilter(statement))
+}
+
 func TestAggregatorWithStmtMerge(t *testing.T) {
 	c := GetTracerProvider()
 	oldEnableStmtMerge := c.enableStmtMerge

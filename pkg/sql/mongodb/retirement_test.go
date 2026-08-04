@@ -94,6 +94,134 @@ func TestClusterRemoteClientRetirerCoversEveryCNLifecycleScope(t *testing.T) {
 	}
 }
 
+type blockingRemoteRetirer struct {
+	started chan ClientRetirement
+	release chan struct{}
+}
+
+func (r *blockingRemoteRetirer) Retire(ctx context.Context, retirement ClientRetirement) {
+	r.started <- retirement
+	select {
+	case <-r.release:
+	case <-ctx.Done():
+	}
+}
+
+func TestClientRetirementQueueLifecycleBoundaries(t *testing.T) {
+	var nilQueue *ClientRetirementQueue
+	require.False(t, nilQueue.Submit(ClientRetirement{}))
+	require.NoError(t, nilQueue.Close(nil))
+
+	queue := NewClientRetirementQueue(nil, nil, 0)
+	require.Equal(t, DefaultClientRetirementQueueCapacity, cap(queue.jobs))
+	require.NoError(t, queue.Close(nil))
+}
+
+type stubbornRemoteRetirer struct {
+	started chan struct{}
+	calls   chan ClientRetirement
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *stubbornRemoteRetirer) Retire(_ context.Context, retirement ClientRetirement) {
+	r.calls <- retirement
+	r.once.Do(func() { close(r.started) })
+	<-r.release
+}
+
+func TestClientRetirementQueueCloseRespectsCallerContext(t *testing.T) {
+	remote := &stubbornRemoteRetirer{
+		started: make(chan struct{}),
+		calls:   make(chan ClientRetirement, 2),
+		release: make(chan struct{}),
+	}
+	t.Cleanup(func() {
+		select {
+		case <-remote.release:
+		default:
+			close(remote.release)
+		}
+	})
+
+	queue := NewClientRetirementQueue(nil, remote, 2)
+	require.True(t, queue.Submit(ClientRetirement{}))
+	<-remote.started
+	require.True(t, queue.Submit(ClientRetirement{AccountID: 2}))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, queue.Close(ctx), context.Canceled)
+
+	close(remote.release)
+	require.NoError(t, queue.Close(t.Context()))
+	require.Equal(t, 1, len(remote.calls), "shutdown must not drain the queued backlog")
+}
+
+func TestClientRetirementQueueIsAsynchronousAndBounded(t *testing.T) {
+	remote := &blockingRemoteRetirer{
+		started: make(chan ClientRetirement, 1),
+		release: make(chan struct{}),
+	}
+	queue := NewClientRetirementQueue(nil, remote, 1)
+	first := ClientRetirement{AccountID: 1, ConnectionID: 1}
+	require.True(t, queue.Submit(first))
+	require.Equal(t, first, <-remote.started)
+	require.True(t, queue.Submit(ClientRetirement{AccountID: 2}), "one job should fit in the bounded backlog")
+	require.False(t, queue.Submit(ClientRetirement{AccountID: 3}), "a saturated queue must not block the post-commit caller")
+	close(remote.release)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	require.NoError(t, queue.Close(ctx))
+	require.False(t, queue.Submit(ClientRetirement{AccountID: 4}))
+}
+
+type blockingDisconnectClient struct {
+	fakeClient
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (c *blockingDisconnectClient) Disconnect(ctx context.Context) error {
+	c.once.Do(func() { close(c.started) })
+	select {
+	case <-c.release:
+		return nil
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
+}
+
+type fixedRetirementClientFactory struct{ client Client }
+
+func (f fixedRetirementClientFactory) Connect(context.Context, Connection, Credentials, RuntimeConfig) (Client, error) {
+	return f.client, nil
+}
+
+func TestClientRetirementQueueMovesLocalDisconnectOffSubmitter(t *testing.T) {
+	client := &blockingDisconnectClient{started: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() {
+		select {
+		case <-client.release:
+		default:
+			close(client.release)
+		}
+	})
+	pool := NewClientPool(fixedRetirementClientFactory{client: client})
+	lease, err := pool.Acquire(t.Context(), Connection{AccountID: 1, ConnectionID: 9, Version: 1}, Credentials{}, RuntimeConfig{})
+	require.NoError(t, err)
+	require.NoError(t, lease.Release(t.Context()))
+
+	queue := NewClientRetirementQueue(pool, nil, 1)
+	require.True(t, queue.Submit(ClientRetirement{AccountID: 1, ConnectionID: 9}),
+		"post-commit submission must finish before Disconnect")
+	<-client.started
+	close(client.release)
+	require.NoError(t, queue.Close(t.Context()))
+	require.NoError(t, pool.Close(t.Context()))
+}
+
 func seedIdleClient(t *testing.T, pool *ClientPool, connection Connection) *fakeClient {
 	t.Helper()
 	lease, err := pool.Acquire(t.Context(), connection, Credentials{}, RuntimeConfig{})

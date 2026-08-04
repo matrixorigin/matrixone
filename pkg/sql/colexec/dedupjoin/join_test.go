@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"sync"
 	"testing"
@@ -58,6 +59,30 @@ type joinTestCase struct {
 	barg   *hashbuild.HashBuild
 }
 
+func newDedupTestSpillEngine(
+	t *testing.T,
+	cfg spillutil.SpillEngineConfig,
+) *spillutil.SpillEngine {
+	t.Helper()
+	if cfg.Budget == nil {
+		budget := process.MustNewHashBuildBudget(1<<60, 1<<60)
+		var err error
+		cfg.Budget, err = budget.OpenGeneration(1)
+		require.NoError(t, err)
+	}
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<20)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(1<<60, cfg.Budget)
+	require.NoError(t, err)
+	engine, err := spillutil.NewSpillEngine(
+		cfg,
+		account,
+		hashbuild.HashBuildAllocationOwner,
+	)
+	require.NoError(t, err)
+	return engine
+}
+
 func TestDedupFinalizeCleansConsumedBuffer(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	baseline := proc.Mp().CurrNB()
@@ -71,7 +96,10 @@ func TestDedupFinalizeCleansConsumedBuffer(t *testing.T) {
 	arg.ctr.state = Finalize
 	arg.ctr.buf = []*batch.Batch{bat}
 	arg.ctr.lastPos = 1
-	arg.ctr.spillEngine = spillutil.NewSpillEngine(spillutil.SpillEngineConfig{})
+	arg.ctr.spillEngine = newDedupTestSpillEngine(
+		t,
+		spillutil.SpillEngineConfig{},
+	)
 
 	res, err := arg.Call(proc)
 	require.NoError(t, err)
@@ -112,14 +140,32 @@ func writeDedupSpillBatch(t *testing.T, proc *process.Process, name string, valu
 	require.NoError(t, err)
 	fd, err := spillfs.CreateAndRemoveFile(proc.Ctx, name)
 	require.NoError(t, err)
-	w := spillutil.BucketWriter{Name: name, Fd: fd}
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{value}, nil, proc.Mp())
 	bat.SetRowCount(1)
-	var buf bytes.Buffer
-	require.NoError(t, spillutil.FlushBucketBatch(proc, bat, &w, &buf, nil))
+	var payload bytes.Buffer
+	require.NoError(t, bat.MarshalBinaryWithGroupingTo(&payload))
+	rows, size, magic := int64(1), int64(payload.Len()), uint64(spillutil.SpillMagic)
+	for _, part := range [][]byte{
+		types.EncodeInt64(&rows),
+		types.EncodeInt64(&size),
+		payload.Bytes(),
+		types.EncodeUint64(&magic),
+	} {
+		_, err = fd.Write(part)
+		require.NoError(t, err)
+	}
+	_, err = fd.Seek(0, io.SeekStart)
+	require.NoError(t, err)
 	bat.Clean(proc.Mp())
-	return w.HandOffFd()
+	return fd
+}
+
+func newDedupSpillFile(t *testing.T, fd *os.File, rows int64) *message.SpillFile {
+	t.Helper()
+	info, err := fd.Stat()
+	require.NoError(t, err)
+	return message.NewSpillFile(fd, rows, uint64(info.Size()), nil)
 }
 
 func TestDedupSpillAdvancesAfterOutput(t *testing.T) {
@@ -127,15 +173,23 @@ func TestDedupSpillAdvancesAfterOutput(t *testing.T) {
 	baseline := proc.Mp().CurrNB()
 	typ := types.T_int32.ToType()
 	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
-	engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
+	engine := newDedupTestSpillEngine(t, spillutil.SpillEngineConfig{
 		BuildKeyExprs:           conditions[1],
 		NeedBatches:             true,
 		NeedsBuildForEmptyProbe: true,
 		IsDedup:                 true,
 	})
-	engine.InitFromSpilledMap([]*os.File{
-		writeDedupSpillBatch(t, proc, "dedup_bucket_1", 1),
-		writeDedupSpillBatch(t, proc, "dedup_bucket_2", 2),
+	engine.InitFromSpilledFiles([]*message.SpillFile{
+		newDedupSpillFile(
+			t,
+			writeDedupSpillBatch(t, proc, "dedup_bucket_1", 1),
+			1,
+		),
+		newDedupSpillFile(
+			t,
+			writeDedupSpillBatch(t, proc, "dedup_bucket_2", 2),
+			1,
+		),
 	})
 
 	arg := &DedupJoin{
@@ -144,6 +198,7 @@ func TestDedupSpillAdvancesAfterOutput(t *testing.T) {
 		Result:            []colexec.ResultPos{{Rel: 1, Pos: 0}},
 		OnDuplicateAction: plan.Node_FAIL,
 	}
+	installTestAllocation(t, arg)
 	require.NoError(t, arg.Prepare(proc))
 	arg.ctr.state = Finalize
 	arg.ctr.spillEngine = engine
@@ -314,6 +369,7 @@ func TestDedupPrepareFailureCanRetry(t *testing.T) {
 		Conditions:        [][]*plan.Expr{{valid}, {valid}},
 		UpdateColExprList: []*plan.Expr{valid, invalid},
 	}
+	installTestAllocation(t, arg)
 
 	require.Error(t, arg.Prepare(proc))
 	require.Nil(t, arg.ctr.vecs)
@@ -523,7 +579,7 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []int32, cs [][]
 	//	},
 	//})
 	tag++
-	return joinTestCase{
+	tc := joinTestCase{
 		types:  ts,
 		flgs:   flgs,
 		proc:   proc,
@@ -555,6 +611,8 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []int32, cs [][]
 			JoinMapRefCnt:    1,
 		},
 	}
+	installTestAllocation(t, tc.arg, tc.barg)
+	return tc
 }
 
 func resetChildren(arg *DedupJoin, m *mpool.MPool) {
@@ -653,6 +711,7 @@ func TestDedupJoinCapture(t *testing.T) {
 		JoinMapTag:    curTag,
 		JoinMapRefCnt: 1,
 	}
+	installTestAllocation(t, dedupArg, buildArg)
 
 	// Set up children
 	buildOp := colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBat})
@@ -755,6 +814,7 @@ func TestDedupJoinCapturePartialMatch(t *testing.T) {
 		JoinMapTag:    curTag,
 		JoinMapRefCnt: 1,
 	}
+	installTestAllocation(t, dedupArg, buildArg)
 
 	buildOp := colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBat})
 	buildArg.Children = nil
@@ -849,6 +909,7 @@ func TestDedupJoinCaptureReset(t *testing.T) {
 		JoinMapTag:    curTag,
 		JoinMapRefCnt: 1,
 	}
+	installTestAllocation(t, dedupArg, buildArg)
 
 	// --- First run ---
 	buildBat1 := makeInt32Batch(proc.Mp(), [][]int32{{10, 20}, {0, 0}}, [][]uint64{nil, {0, 1}})
@@ -1632,6 +1693,7 @@ func TestDedupFinalizeParallelMergePreservesDataAcrossReset(t *testing.T) {
 		IsMerger: false,
 		Mailbox:  mailbox,
 	}
+	installTestAllocation(t, arg, workerArg)
 	cleaned := false
 	t.Cleanup(func() {
 		if !cleaned {

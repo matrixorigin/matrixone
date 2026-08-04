@@ -57,6 +57,10 @@ func NewOOMNoCtx() *Error {
 	return newError(Context(), ErrOOM)
 }
 
+func NewMPoolCapacityNoCtxf(format string, args ...any) *Error {
+	return NewMPoolCapacity(Context(), fmt.Sprintf(format, args...))
+}
+
 func NewDivByZeroNoCtx() *Error {
 	return newError(Context(), ErrDivByZero)
 }

@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -69,7 +70,13 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	// encode structures which need to send.
 	var scopeEncodeData, processEncodeData []byte
 	var withoutOutput, folded bool
-	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingData(c.sql, s, c.proc)
+	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingData(
+		c.sql,
+		s,
+		c.proc,
+		c.remoteFragmentCounts,
+		c.remoteExecutionID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +217,13 @@ func findPipelineExternalLocalReceiver(s *Scope) vm.Operator {
 	return nil
 }
 
-func prepareRemoteRunSendingData(sqlStr string, s *Scope, proc *process.Process) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
+func prepareRemoteRunSendingData(
+	sqlStr string,
+	s *Scope,
+	proc *process.Process,
+	remoteFragmentCounts map[string]uint32,
+	remoteExecutionID uuid.UUID,
+) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
 	encodedScope, withoutOutput := getScopeForRemoteRunEncoding(s)
 	encodedScope, folded, err = foldVarExprsInRemoteRunScope(encodedScope, proc)
 	if err != nil {
@@ -223,7 +236,12 @@ func prepareRemoteRunSendingData(sqlStr string, s *Scope, proc *process.Process)
 	}
 
 	// Encode the Process related information.
-	if processData, err = encodeProcessInfo(s.Proc, sqlStr); err != nil {
+	if processData, err = encodeProcessInfo(
+		s.Proc,
+		sqlStr,
+		remoteFragmentCounts,
+		remoteExecutionID,
+	); err != nil {
 		return nil, false, nil, false, err
 	}
 
@@ -835,8 +853,11 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 		sender.anal.appendRemoteResource(
 			envelope.Delta,
 			envelope.Memory,
+			envelope.Allocation,
 			envelope.MissingFragmentCount,
 			envelope.MissingMemoryDomainCount,
+			envelope.PendingAllocationGroups,
+			envelope.CompletedAllocationGroups,
 		)
 	}
 	sender.terminalSeen = true
