@@ -353,6 +353,9 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 	}
 
 	tableDef := plan.CloneTableDefForPlan(table.GetTableDef(ctx), true)
+	if err := plan.RecoverLegacyTinyTextFromCreateSQL(ctx, tableDef); err != nil {
+		return nil, nil, err
+	}
 	if isTmpTable || tableDef.IsTemporary {
 		tableDef.IsTemporary = true
 		tableDef.Name = tableName

@@ -469,6 +469,9 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot *plan2.Snaps
 		Obj:        returnTableID,
 	}
 	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(tempCtx), true)
+	if err := plan2.RecoverLegacyTinyTextFromCreateSQL(tempCtx, tableDef); err != nil {
+		return nil, nil, err
+	}
 	return obj, tableDef, nil
 }
 
@@ -494,6 +497,9 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 		Obj:        returnTableID,
 	}
 	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(pubContext), true)
+	if err := plan2.RecoverLegacyTinyTextFromCreateSQL(pubContext, tableDef); err != nil {
+		return nil, nil, err
+	}
 	return obj, tableDef, nil
 }
 
@@ -540,6 +546,9 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		return nil, nil, nil
 	}
 	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(ctx), true)
+	if err := plan2.RecoverLegacyTinyTextFromCreateSQL(ctx, tableDef); err != nil {
+		return nil, nil, err
+	}
 	tableDef.IsTemporary = isTmpTable
 
 	// convert
@@ -612,6 +621,9 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 	}
 
 	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(ctx), true)
+	if err := plan2.RecoverLegacyTinyTextFromCreateSQL(ctx, tableDef); err != nil {
+		return nil, nil, err
+	}
 	if tableDef.IsTemporary {
 		tableDef.Name = tblName
 	}
