@@ -53,6 +53,11 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	defer func() {
 		v2.TxnStatementBuildUpdateHistogram.Observe(time.Since(start).Seconds())
 	}()
+
+	if err = validateUpdateWindowFunctions(ctx, stmt); err != nil {
+		return nil, err
+	}
+
 	tblInfo, err := getUpdateTableInfo(ctx, stmt)
 	if err != nil {
 		return nil, err

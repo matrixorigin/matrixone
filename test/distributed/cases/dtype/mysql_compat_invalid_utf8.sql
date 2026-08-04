@@ -80,14 +80,61 @@ update t_invalid_utf8_copy
     where id = 21;
 select id, c, v, t from t_invalid_utf8_copy where id = 21;
 
+-- Keep every strict same-type and cross-type assignment independent: a
+-- rejected CHAR write must not conceal a VARCHAR/TEXT bypass in the same DML.
+insert into t_invalid_utf8_copy (id, c)
+    select id + 100, c from t_invalid_utf8 where id = 20;
+insert into t_invalid_utf8_copy (id, v)
+    select id + 101, v from t_invalid_utf8 where id = 20;
+insert into t_invalid_utf8_copy (id, t)
+    select id + 102, t from t_invalid_utf8 where id = 20;
+create table t_invalid_utf8_cross (
+    id int primary key,
+    c char(10) character set utf8mb4,
+    v varchar(10) character set utf8mb4,
+    t text character set utf8mb4
+);
+insert into t_invalid_utf8_cross (id, v)
+    select id + 110, c from t_invalid_utf8 where id = 20;
+insert into t_invalid_utf8_cross (id, t)
+    select id + 111, v from t_invalid_utf8 where id = 20;
+insert into t_invalid_utf8_cross (id, c)
+    select id + 112, t from t_invalid_utf8 where id = 20;
+select count(*) as strict_cross_copy_rows from t_invalid_utf8_cross;
+drop table t_invalid_utf8_cross;
+
 -- MySQL non-strict and IGNORE writes retain only the valid prefix before an
 -- invalid sequence. C328 has no valid prefix, so it is stored as ''.
 set session sql_mode = '';
-insert into t_invalid_utf8_copy values (30, unhex('41C32842'), unhex('C328'), unhex('41C32842'));
+insert into t_invalid_utf8_copy (id, c) values (30, unhex('41C32842'));
+insert into t_invalid_utf8_copy (id, v) values (31, unhex('C328'));
+insert into t_invalid_utf8_copy (id, t) values (32, unhex('41C32842'));
 set session sql_mode = 'STRICT_TRANS_TABLES';
-insert ignore into t_invalid_utf8_copy values (31, unhex('41C32842'), unhex('C328'), unhex('41C32842'));
+insert ignore into t_invalid_utf8_copy (id, c) values (40, unhex('41C32842'));
+insert ignore into t_invalid_utf8_copy (id, v) values (41, unhex('C328'));
+insert ignore into t_invalid_utf8_copy (id, t) values (42, unhex('41C32842'));
+
+-- UPDATE follows the same mode matrix. Seed valid data, then exercise each
+-- text destination separately for ordinary non-strict and strict IGNORE DML.
+insert into t_invalid_utf8_copy values
+    (50, 'old', 'old', 'old'),
+    (51, 'old', 'old', 'old'),
+    (52, 'old', 'old', 'old'),
+    (60, 'old', 'old', 'old'),
+    (61, 'old', 'old', 'old'),
+    (62, 'old', 'old', 'old');
+set session sql_mode = '';
+update t_invalid_utf8_copy set c = unhex('41C32842') where id = 50;
+update t_invalid_utf8_copy set v = unhex('C328') where id = 51;
+update t_invalid_utf8_copy set t = unhex('41C32842') where id = 52;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+update ignore t_invalid_utf8_copy set c = unhex('41C32842') where id = 60;
+update ignore t_invalid_utf8_copy set v = unhex('C328') where id = 61;
+update ignore t_invalid_utf8_copy set t = unhex('41C32842') where id = 62;
 select id, hex(c) as c_hex, hex(v) as v_hex, hex(t) as t_hex
-    from t_invalid_utf8_copy where id in (30, 31) order by id;
+    from t_invalid_utf8_copy
+    where id in (30, 31, 32, 40, 41, 42, 50, 51, 52, 60, 61, 62)
+    order by id;
 drop table t_invalid_utf8_copy;
 
 drop table t_invalid_utf8;
