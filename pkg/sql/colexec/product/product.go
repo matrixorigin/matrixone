@@ -71,6 +71,10 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 					ctr.state = End
 					continue
 				}
+				if ctr.inBat.Last() {
+					ctr.inBat = nil
+					return result, nil
+				}
 				if ctr.inBat.IsEmpty() {
 					ctr.inBat = nil
 					continue
@@ -92,6 +96,10 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 				if ctr.inBat == nil {
 					ctr.state = End
 					continue
+				}
+				if ctr.inBat.Last() {
+					ctr.inBat = nil
+					return result, nil
 				}
 				if ctr.inBat.IsEmpty() {
 					ctr.inBat = nil
