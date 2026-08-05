@@ -35,6 +35,18 @@ import (
 
 const restoredTagFile = "./RESTORED"
 
+func waitHAKeeperBootstrapRetry(ctx context.Context, interval time.Duration) error {
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return moerr.AttachCause(ctx, ctx.Err())
+	case <-timer.C:
+		return nil
+	}
+}
+
 func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 	replicaID, bootstrapping := cfg.Bootstrapping()
 	if !bootstrapping {
@@ -160,7 +172,13 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 				}
 				return nil
 			}
-			time.Sleep(retryInterval)
+			if err := waitHAKeeperBootstrapRetry(ctx, retryInterval); err != nil {
+				s.runtime.SubLogger(runtime.SystemInit).Error("context error", zap.Error(ctx.Err()))
+				if restoreConfigured {
+					return err
+				}
+				return nil
+			}
 			continue
 		}
 		initialClusterProposed = true
