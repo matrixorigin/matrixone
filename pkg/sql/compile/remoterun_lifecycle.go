@@ -41,6 +41,7 @@ type pipelineStreamLifecycle struct {
 	finishC   chan pipelineStreamFinishRequest
 	cleanedC  chan struct{}
 	cleanOnce sync.Once
+	batchFlow *pipelineBatchFlow
 }
 
 var pipelineStreamLifecycles sync.Map
@@ -48,11 +49,13 @@ var pipelineStreamLifecycles sync.Map
 func registerPipelineStreamLifecycle(
 	cs morpc.ClientSession,
 	id uint64,
+	batchFlow *pipelineBatchFlow,
 ) (*pipelineStreamLifecycle, error) {
 	lifecycle := &pipelineStreamLifecycle{
-		key:      pipelineStreamLifecycleKey{session: cs, id: id},
-		finishC:  make(chan pipelineStreamFinishRequest, 1),
-		cleanedC: make(chan struct{}),
+		key:       pipelineStreamLifecycleKey{session: cs, id: id},
+		finishC:   make(chan pipelineStreamFinishRequest, 1),
+		cleanedC:  make(chan struct{}),
+		batchFlow: batchFlow,
 	}
 	if _, loaded := pipelineStreamLifecycles.LoadOrStore(lifecycle.key, lifecycle); loaded {
 		_ = cs.Close()

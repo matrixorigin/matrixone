@@ -6885,6 +6885,80 @@ func (pota privilegeTipsArray) String() string {
 	return b.String()
 }
 
+func firstColumnChildIndex(expr *plan.Expr) (int32, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	if col := expr.GetCol(); col != nil {
+		return col.RelPos, true
+	}
+	if function := expr.GetF(); function != nil {
+		for _, arg := range function.Args {
+			if childIndex, ok := firstColumnChildIndex(arg); ok {
+				return childIndex, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// insertDedupTargetScans returns the TABLE_SCAN nodes used only to probe an
+// INSERT target for duplicate keys. The INSERT/REPLACE binders set
+// DedupColName for these internal joins. A SQL-visible DEDUP JOIN uses the
+// same node type and defaults to FAIL, but has no DedupColName; it must retain
+// its SELECT privilege checks. During final plan remapping, BindingTags are
+// removed and DEDUP condition column RelPos values become physical child
+// indexes. The first operand remains the target side even if recursive-plan
+// optimization swaps children, so use that child index rather than stale tags
+// or IsRightJoin.
+func insertDedupTargetScans(q *plan.Query) map[int32]struct{} {
+	if q == nil || q.StmtType != plan.Query_INSERT {
+		return nil
+	}
+
+	scans := make(map[int32]struct{})
+	var collect func(int32, map[int32]struct{})
+	collect = func(nodeID int32, visited map[int32]struct{}) {
+		if nodeID < 0 || int(nodeID) >= len(q.Nodes) {
+			return
+		}
+		if _, ok := visited[nodeID]; ok {
+			return
+		}
+		visited[nodeID] = struct{}{}
+
+		node := q.Nodes[nodeID]
+		if node == nil {
+			return
+		}
+		if node.NodeType == plan.Node_TABLE_SCAN {
+			scans[nodeID] = struct{}{}
+			return
+		}
+		for _, childID := range node.Children {
+			collect(childID, visited)
+		}
+	}
+
+	for _, node := range q.Nodes {
+		if node == nil || node.NodeType != plan.Node_JOIN ||
+			node.JoinType != plan.Node_DEDUP || len(node.Children) != 2 ||
+			node.DedupColName == "" ||
+			(node.OnDuplicateAction != plan.Node_FAIL && node.OnDuplicateAction != plan.Node_IGNORE) {
+			continue
+		}
+		if len(node.OnList) == 0 || node.OnList[0].GetF() == nil || len(node.OnList[0].GetF().Args) == 0 {
+			continue
+		}
+		targetChild, ok := firstColumnChildIndex(node.OnList[0].GetF().Args[0])
+		if !ok || targetChild < 0 || int(targetChild) >= len(node.Children) {
+			continue
+		}
+		collect(node.Children[targetChild], make(map[int32]struct{}))
+	}
+	return scans
+}
+
 // extractPrivilegeTipsFromPlan extracts the privilege tips from the plan
 func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 	// NOTE: the pts may be nil when the plan does operate any table.
@@ -6895,6 +6969,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 
 	if p.GetQuery() != nil { // select,insert select, update, delete
 		q := p.GetQuery()
+		insertDedupScans := insertDedupTargetScans(q)
 
 		// lastNode := q.Nodes[len(q.Nodes)-1]
 		var t PrivilegeType
@@ -6930,8 +7005,11 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 			}
 		}
 
-		for _, node := range q.Nodes {
+		for nodeID, node := range q.Nodes {
 			if node.NodeType == plan.Node_TABLE_SCAN {
+				if _, ok := insertDedupScans[int32(nodeID)]; ok {
+					continue
+				}
 				if node.ObjRef != nil {
 					if node.TableDef != nil && node.TableDef.TableType == catalog.SystemClusterRel {
 						clusterTable = true

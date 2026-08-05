@@ -142,7 +142,11 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 	case plan.Node_LOCK_OP:
 		pname = "Lock"
 	case plan.Node_APPLY:
-		pname = "CROSS APPLY"
+		if ndesc.Node.ApplyType == plan.Node_OUTERAPPLY {
+			pname = "OUTER APPLY"
+		} else {
+			pname = "CROSS APPLY"
+		}
 	case plan.Node_MULTI_UPDATE:
 		pname = "Multi Update"
 	case plan.Node_POSTDML:
