@@ -933,6 +933,7 @@ func lifecycleRestoreAttemptRows(
 	state string,
 ) executor.Result {
 	t.Helper()
+	deadline := time.Now().Add(time.Minute).UTC().Format("2006-01-02 15:04:05.000000")
 	result := executor.NewMemResult([]types.Type{
 		types.T_varchar.ToType(),
 		types.T_varchar.ToType(),
@@ -953,7 +954,7 @@ func lifecycleRestoreAttemptRows(
 		0:  "11111111111111111111111111111111",
 		1:  "22222222222222222222222222222222",
 		2:  "33333333333333333333333333333333",
-		3:  "2026-08-05 09:00:00.000000",
+		3:  deadline,
 		6:  "__mo_lifecycle_restore_11111111111111111111111111111111",
 		8:  "events_history",
 		9:  state,
@@ -986,7 +987,7 @@ func lifecycleRestoreAttemptForTest(state string) lifecyclepkg.RestoreAttempt {
 		RestoreID:          "11111111-1111-1111-1111-111111111111",
 		DatasetID:          "22222222-2222-2222-2222-222222222222",
 		LeaseID:            "33333333-3333-3333-3333-333333333333",
-		Deadline:           time.Date(2026, 8, 5, 9, 0, 0, 0, time.UTC),
+		Deadline:           time.Now().Add(time.Minute),
 		StagingDatabaseID:  7,
 		StagingTableID:     88,
 		HiddenName:         "__mo_lifecycle_restore_11111111111111111111111111111111",

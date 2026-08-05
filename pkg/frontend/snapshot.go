@@ -2852,8 +2852,37 @@ func restoreToCluster(ctx context.Context,
 			return err
 		}
 	}
+	// Cleanup Roots deliberately do not cross a logical Cluster Restore: a
+	// copied Root could still address Archive payload or TAE staging owned by
+	// the source cluster. Recreate only the current, empty system table so the
+	// Coordinator remains operable after the catalog restore.
+	if err = ensureLifecycleClusterTablesAfterRestore(ctx, bh); err != nil {
+		return err
+	}
 
 	return nil
+}
+
+func ensureLifecycleClusterTablesAfterRestore(ctx context.Context, bh BackgroundExec) error {
+	for _, sql := range lifecycleClusterRestoreBootstrapSQLs() {
+		if err := bh.Exec(ctx, sql); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func lifecycleClusterRestoreBootstrapSQLs() []string {
+	sqls := make([]string, 0, len(catalog.LifecycleClusterTableDefinitions))
+	for _, definition := range catalog.LifecycleClusterTableDefinitions {
+		sqls = append(sqls, strings.Replace(
+			definition.DDL,
+			"create cluster table ",
+			"create cluster table if not exists ",
+			1,
+		))
+	}
+	return sqls
 }
 
 func restoreToAccountUsingCluster(
