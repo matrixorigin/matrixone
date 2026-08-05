@@ -29,4 +29,14 @@ where match(body, title) against('aurora' in natural language mode)
 group by category
 order by category;
 
+select category, count(*), row_number() over (order by count(*)) as row_num from ft_gap
+where match(body, title) against('aurora' in natural language mode)
+group by category
+order by category;
+
+select distinct category, count(*) from ft_gap
+where match(body, title) against('aurora' in natural language mode)
+group by category
+order by category;
+
 drop database fulltext_group_match;

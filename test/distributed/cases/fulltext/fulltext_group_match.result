@@ -28,4 +28,18 @@ order by category;
 category    count(*)
 north    3
 south    1
+select category, count(*), row_number() over (order by count(*)) as row_num from ft_gap
+where match(body, title) against('aurora' in natural language mode)
+group by category
+order by category;
+category    count(*)    row_num
+north    3    2
+south    1    1
+select distinct category, count(*) from ft_gap
+where match(body, title) against('aurora' in natural language mode)
+group by category
+order by category;
+category    count(*)
+north    3
+south    1
 drop database fulltext_group_match;

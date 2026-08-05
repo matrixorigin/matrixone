@@ -579,10 +579,10 @@ type fullTextIndexPath struct {
 	scanNode *plan.Node
 }
 
-// resolveFullTextIndexPath finds the small set of plan shapes for which the
-// fulltext rewrite can safely replace a table scan. A SORT above an AGG must be
-// recognized as an aggregate path: the rewrite replaces the AGG input and
-// leaves the final ordering in place.
+// resolveFullTextIndexPath finds the fulltext rewrite boundary. Projection
+// rewrites retain their direct SCAN and SORT -> SCAN shapes. Aggregate rewrites
+// locate the semantic AGG -> SCAN boundary through a single-input ancestor
+// chain, so operators above that boundary do not affect index eligibility.
 func (builder *QueryBuilder) resolveFullTextIndexPath(projNode *plan.Node) *fullTextIndexPath {
 	if scanNode := builder.resolveScanNodeFromProject(projNode, 1); scanNode != nil {
 		return &fullTextIndexPath{scanNode: scanNode}
@@ -592,30 +592,17 @@ func (builder *QueryBuilder) resolveFullTextIndexPath(projNode *plan.Node) *full
 		if scanNode := builder.resolveScanNodeWithIndex(sortNode, 1); scanNode != nil {
 			return &fullTextIndexPath{sortNode: sortNode, scanNode: scanNode}
 		}
-
-		if len(sortNode.Children) != 1 {
-			return nil
-		}
-		aggNode := builder.qry.Nodes[sortNode.Children[0]]
-		if aggNode == nil || aggNode.NodeType != plan.Node_AGG {
-			return nil
-		}
-		scanNode := builder.resolveScanNodeWithIndex(aggNode, 1)
-		if scanNode == nil {
-			return nil
-		}
-		return &fullTextIndexPath{sortNode: sortNode, aggNode: aggNode, scanNode: scanNode}
 	}
 
-	aggNode := builder.resolveAggNode(projNode, 1)
-	if aggNode == nil {
-		return nil
+	for node := projNode; node != nil && len(node.Children) == 1; node = builder.qry.Nodes[node.Children[0]] {
+		if node.NodeType != plan.Node_AGG {
+			continue
+		}
+		if scanNode := builder.resolveScanNodeWithIndex(node, 1); scanNode != nil {
+			return &fullTextIndexPath{aggNode: node, scanNode: scanNode}
+		}
 	}
-	scanNode := builder.resolveScanNodeWithIndex(aggNode, 1)
-	if scanNode == nil {
-		return nil
-	}
-	return &fullTextIndexPath{aggNode: aggNode, scanNode: scanNode}
+	return nil
 }
 
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
@@ -623,11 +610,8 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 	var vecCtx *vectorSortContext
 	// FullText
 	{
-		// support the followings:
-		// 1. project -> scan
-		// 2. project -> sort -> scan
-		// 3. project -> aggregate -> scan
-		// 4. project -> sort -> aggregate -> scan
+		// Rewrites either a direct projection path or the aggregate input/scan
+		// boundary found through its single-input ancestors.
 		path := builder.resolveFullTextIndexPath(projNode)
 		if path != nil && path.aggNode != nil {
 			// agg node and scan node present

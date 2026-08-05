@@ -291,6 +291,20 @@ func TestFullTextGroupedAggregateWithOrderByUsesIndex(t *testing.T) {
 				ORDER BY base_id`,
 			sortAboveAggregate: true,
 		},
+		{
+			name: "window above grouped aggregate",
+			sql: `SELECT base_id, COUNT(*), ROW_NUMBER() OVER (ORDER BY COUNT(*))
+				FROM ft
+				WHERE MATCH(title, body) AGAINST('hello')
+				GROUP BY base_id`,
+		},
+		{
+			name: "distinct above grouped aggregate",
+			sql: `SELECT DISTINCT base_id, COUNT(*)
+				FROM ft
+				WHERE MATCH(title, body) AGAINST('hello')
+				GROUP BY base_id`,
+		},
 	}
 
 	for _, test := range tests {
