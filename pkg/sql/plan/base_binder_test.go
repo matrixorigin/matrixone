@@ -911,6 +911,16 @@ func TestMinOverUnionTreatsPureNullAsCollationNeutral(t *testing.T) {
 			query:       "select min(x) from (select null as x union all select c as x from select_test.bind_select) s",
 			wantCharset: uint32(types.CharsetUTF8),
 		},
+		{
+			name:        "pure null through derived table",
+			query:       "select min(x) from (select c as x from select_test.bind_select union all select x from (select null as x) n) s",
+			wantCharset: uint32(types.CharsetUTF8),
+		},
+		{
+			name:        "pure null through cte",
+			query:       "with n as (select null as x) select min(x) from (select c as x from select_test.bind_select union all select x from n) s",
+			wantCharset: uint32(types.CharsetUTF8),
+		},
 	}
 
 	for _, test := range tests {

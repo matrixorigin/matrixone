@@ -3508,16 +3508,17 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	}
 	// Type coercion below mutates branch project expressions in place, including
 	// the ENUM display expression and the type attached to a literal NULL.
-	// Capture both kinds of provenance before that mutation so a pure NULL can
-	// remain neutral without mistaking an explicit CAST(NULL AS string) for a
-	// neutral branch.
+	// Capture both kinds of provenance before that mutation so a bare NULL can
+	// remain neutral even after transparent derived-table or CTE projection,
+	// without mistaking an explicit CAST(NULL AS string) for a neutral branch.
 	setBranchPureNull := make([][]bool, len(subCtxList))
 	setBranchOrderTypes := make([][]*plan.Type, len(subCtxList))
 	for branchIdx, branchCtx := range subCtxList {
 		setBranchPureNull[branchIdx] = make([]bool, projectLength)
 		setBranchOrderTypes[branchIdx] = make([]*plan.Type, projectLength)
 		for colIdx := 0; colIdx < projectLength && colIdx < len(branchCtx.projects); colIdx++ {
-			setBranchPureNull[branchIdx][colIdx] = isPureNullLiteralExpr(branchCtx.projects[colIdx])
+			setBranchPureNull[branchIdx][colIdx] =
+				branchCtx.outputColumnProvenanceForProject(int32(colIdx)).State == ProvenancePureNull
 			setBranchOrderTypes[branchIdx][colIdx] = branchCtx.mysqlSpecialOrderTypeForProject(int32(colIdx))
 		}
 	}
@@ -3712,6 +3713,21 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		})
 	}
 	ctx.clearOutputColumnProvenance()
+	// A set-operation output is itself pure NULL only when every branch is pure
+	// NULL. Preserve that fact for another transparent derived-table or CTE
+	// boundary so a later set operation still treats the column as neutral.
+	for colIdx := range ctx.projects {
+		allPureNull := true
+		for branchIdx := range setBranchPureNull {
+			if colIdx >= len(setBranchPureNull[branchIdx]) || !setBranchPureNull[branchIdx][colIdx] {
+				allPureNull = false
+				break
+			}
+		}
+		if allPureNull {
+			ctx.outputColumnProvenance[int32(colIdx)] = OutputColumnProvenance{State: ProvenancePureNull}
+		}
+	}
 	// A set-operation result keeps ENUM/SET definition-order provenance only
 	// when every non-NULL branch is the same pure display contract. A literal
 	// NULL is neutral because it cannot introduce a competing comparison
