@@ -511,10 +511,22 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		return
 	}
 
+	if colPos != NotFound {
+		b.boundCols = append(b.boundCols, boundColumn{
+			name:      table + "." + col,
+			relation:  relPos,
+			columnPos: colPos,
+		})
+	}
+
+	preserveSpecialValue := typ != nil && b.mysqlSpecialTargetType != nil &&
+		typ.Enumvalues == b.mysqlSpecialTargetType.Enumvalues &&
+		((isEnumPlanType(typ) && isEnumPlanType(b.mysqlSpecialTargetType)) ||
+			(isSetPlanType(typ) && isSetPlanType(b.mysqlSpecialTargetType)))
 	// ENUM and SET have distinct storage and display representations. Keep their
 	// display value by default. Numeric and bitwise expression binders explicitly
 	// enable raw storage binding so they follow MySQL's numeric semantics.
-	if !b.bindRawMySQLSpecialType && isEnumOrSetPlanType(typ) {
+	if !b.bindRawMySQLSpecialType && !preserveSpecialValue && isEnumOrSetPlanType(typ) {
 		if err != nil {
 			errutil.ReportError(b.GetContext(), err)
 			return
@@ -554,8 +566,6 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	}
 
 	if colPos != NotFound {
-		b.boundCols = append(b.boundCols, table+"."+col)
-
 		expr = &plan.Expr{
 			Typ: *typ,
 		}

@@ -238,6 +238,7 @@ func (t *resumeTask) Handle(ctx context.Context) error {
 	}
 
 	tk := tasks[0]
+	requestRunner := tk.TaskRunner
 	t.runner.clearPauseTaskCompleted(tk.ID)
 	start := time.Now()
 	t.runner.logger.Info("cdc.task.resume.start",
@@ -267,13 +268,44 @@ func (t *resumeTask) Handle(ctx context.Context) error {
 		return nil
 	}
 
+	ar := t.task.activeRoutine.Load()
+	if ar == nil || *ar == nil {
+		return moerr.NewInternalErrorf(handleCtx, "cannot handle resume operation, "+
+			"active routine not set for task %d", t.task.task.ID)
+	}
+	// ResumeRequested is the durable retry owner. Keep it published until the
+	// active executor has admitted recovery, so a concurrent executor failure or
+	// a synchronous resume error cannot strand daemon Running with no live
+	// execution. A failed attempt is picked up by the next reconciliation pass.
+	if err = (*ar).Resume(); err != nil {
+		return err
+	}
+
 	tk.TaskStatus = task.TaskStatus_Running
 	nowTime := time.Now()
 	tk.LastRun = nowTime
 	tk.LastHeartbeat = nowTime
-	_, err = t.runner.service.UpdateDaemonTask(handleCtx, []task.DaemonTask{tk})
+	// Failed recovery can legitimately consume most of handleCtx while waiting
+	// for startup readiness. Publish with an independent bounded context and a
+	// status/runner CAS so a concurrent CANCEL, PAUSE, or ownership transfer is
+	// never overwritten by this older resume request.
+	updateCtx, updateCancel := context.WithTimeoutCause(
+		context.Background(),
+		time.Second*5,
+		moerr.CauseResumeTaskHandle,
+	)
+	defer updateCancel()
+	updated, err := t.runner.service.UpdateDaemonTask(
+		updateCtx,
+		[]task.DaemonTask{tk},
+		WithTaskStatusCond(task.TaskStatus_ResumeRequested),
+		WithTaskRunnerCond(EQ, requestRunner),
+	)
 	if err != nil {
-		return moerr.AttachCause(handleCtx, err)
+		return moerr.AttachCause(updateCtx, err)
+	}
+	if updated != 1 {
+		return nil
 	}
 	t.runner.logger.Info("cdc.task.resume.finish",
 		zap.Uint64("task-id", tk.ID),
@@ -282,13 +314,7 @@ func (t *resumeTask) Handle(ctx context.Context) error {
 		zap.Time("last-run", tk.LastRun),
 		zap.Duration("elapsed", time.Since(start)),
 	)
-
-	ar := t.task.activeRoutine.Load()
-	if ar == nil || *ar == nil {
-		return moerr.NewInternalErrorf(handleCtx, "cannot handle resume operation, "+
-			"active routine not set for task %d", t.task.task.ID)
-	}
-	return (*ar).Resume()
+	return nil
 }
 
 type restartTask struct {

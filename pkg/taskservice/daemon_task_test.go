@@ -93,13 +93,22 @@ func (r *mockErrActiveRoutine) Cancel() error  { return r.cancelErr }
 func (r *mockErrActiveRoutine) Restart() error { return r.restartErr }
 
 type mockFuncActiveRoutine struct {
+	resume  func() error
 	restart func() error
 }
 
-func (r *mockFuncActiveRoutine) Pause() error  { return nil }
-func (r *mockFuncActiveRoutine) Resume() error { return nil }
+func (r *mockFuncActiveRoutine) Pause() error { return nil }
+func (r *mockFuncActiveRoutine) Resume() error {
+	if r.resume == nil {
+		return nil
+	}
+	return r.resume()
+}
 func (r *mockFuncActiveRoutine) Cancel() error { return nil }
 func (r *mockFuncActiveRoutine) Restart() error {
+	if r.restart == nil {
+		return nil
+	}
 	return r.restart()
 }
 
@@ -469,11 +478,71 @@ func TestResumeTaskHandleBranchesDirect(t *testing.T) {
 
 	dt.TaskStatus = task.TaskStatus_ResumeRequested
 	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+	routine := ActiveRoutine(&mockFuncActiveRoutine{})
+	h.task.activeRoutine.Store(&routine)
 	hook.setUpdateErr(errors.New("update failed"))
 	require.Error(t, h.Handle(context.Background()))
 	hook.setUpdateErr(nil)
 
+	h.task.activeRoutine.Store(nil)
 	require.Error(t, h.Handle(context.Background()))
+}
+
+func TestResumeTaskKeepsRequestUntilExecutorRecoverySucceeds(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	dt := newDaemonTaskForTest(1, task.TaskStatus_ResumeRequested, r.runnerID)
+	dt.Metadata.ID = "resume-table-error-race"
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	resumeEntered := make(chan struct{}, 3)
+	resumeRelease := make(chan error, 3)
+	routine := ActiveRoutine(&mockFuncActiveRoutine{resume: func() error {
+		resumeEntered <- struct{}{}
+		return <-resumeRelease
+	}})
+	taskRef := &daemonTask{task: dt}
+	taskRef.activeRoutine.Store(&routine)
+	handler := newResumeTask(r, taskRef)
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- handler.Handle(context.Background()) }()
+	<-resumeEntered
+	// This barrier represents TableDetector completing SetFailed after the
+	// Running -> ResumeRequested request was admitted. The durable request must
+	// remain retryable until executor recovery returns success.
+	tasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, task.TaskStatus_ResumeRequested, tasks[0].TaskStatus)
+
+	resumeErr := errors.New("executor failed before resume admission")
+	resumeRelease <- resumeErr
+	require.ErrorIs(t, <-firstDone, resumeErr)
+	tasks = mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, task.TaskStatus_ResumeRequested, tasks[0].TaskStatus)
+
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- handler.Handle(context.Background()) }()
+	<-resumeEntered
+	tasks = mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, task.TaskStatus_ResumeRequested, tasks[0].TaskStatus)
+	resumeRelease <- nil
+	require.NoError(t, <-secondDone)
+	tasks = mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, task.TaskStatus_Running, tasks[0].TaskStatus)
+
+	// A newer control request owns the row while recovery is in flight. The
+	// successful older resume must not publish its stale Running snapshot.
+	dt = tasks[0]
+	dt.TaskStatus = task.TaskStatus_ResumeRequested
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+	thirdDone := make(chan error, 1)
+	go func() { thirdDone <- handler.Handle(context.Background()) }()
+	<-resumeEntered
+	dt.TaskStatus = task.TaskStatus_Canceled
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
+	resumeRelease <- nil
+	require.NoError(t, <-thirdDone)
+	tasks = mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, task.TaskStatus_Canceled, tasks[0].TaskStatus)
 }
 
 func TestRestartTaskHandleBranchesDirect(t *testing.T) {
