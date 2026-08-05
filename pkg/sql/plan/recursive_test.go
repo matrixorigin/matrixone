@@ -140,6 +140,32 @@ func TestRecursiveCteConsumerAliases(t *testing.T) {
 	}
 }
 
+func TestRecursiveCteCanReferencePrecedingCte(t *testing.T) {
+	for _, query := range []string{
+		`with recursive limits(lo, hi) as (
+			select 3, 9
+		), seq(n) as (
+			select lo from limits
+			union all
+			select n + 1 from seq, limits where n < hi
+		)
+		select count(*), sum(n), min(n), max(n) from seq`,
+		`with recursive limits(lo, hi) as (
+			select 3, 9
+		), seq(n) as (
+			select limits.lo from limits
+			union all
+			select seq.n + 1
+			from seq join limits on 1 = 1
+			where seq.n < limits.hi
+		)
+		select * from seq`,
+	} {
+		_, err := runOneStmt(NewMockOptimizer(false), t, query)
+		require.NoError(t, err)
+	}
+}
+
 func TestRecursiveCteConsumerColumnAliasList(t *testing.T) {
 	statements, err := parsers.Parse(context.Background(), dialect.MYSQL, recursiveSequenceSQL(`
 		select a.renamed_n, renamed_n from seq as a`), 1)

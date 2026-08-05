@@ -500,6 +500,11 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 			}
 
 			if input.Batch == nil {
+				// The child may cancel the process while returning EOF, after this
+				// MergeOrder invocation has passed vm.Exec's entry cancellation check.
+				if err, canceled := vm.CancelCheck(proc); canceled {
+					return vm.CancelResult, err
+				}
 				if ctr.spilling {
 					if err = ctr.prepareSpillFinalMerge(proc, mergeOrder.OrderBySpecs, analyzer); err != nil {
 						return input, err

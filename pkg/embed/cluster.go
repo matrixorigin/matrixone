@@ -30,6 +30,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/testutil/clusteradmission"
 )
 
 type state int
@@ -50,10 +51,6 @@ var (
 )
 
 const (
-	clusterStartupLeaseFilename = "mo-test-cluster-start.lock"
-	clusterStartupLeaseTimeout  = 5 * time.Minute
-	clusterStartupLeaseRetry    = 50 * time.Millisecond
-
 	clusterInfrastructurePortBaseCount = uint64(3)
 	tnPortBaseCount                    = uint64(1)
 	cnPortBaseCount                    = uint64(2)
@@ -78,7 +75,7 @@ type cluster struct {
 	portLease      *clusterPortLease
 	portLeaseBase  uint64
 	portLeaseNext  uint64
-	startupLease   *flock.Flock
+	testAdmission  *clusteradmission.Lease
 
 	options struct {
 		dataPath         string
@@ -148,36 +145,29 @@ func (c *cluster) Start() (err error) {
 	if c.state == started {
 		return moerr.NewInvalidStateNoCtx("embed mo cluster already started")
 	}
-	if err = c.releaseStartupLeaseLocked(); err != nil {
-		return err
-	}
 	if err = c.ensurePortLeaseLocked(); err != nil {
 		return err
 	}
 
 	if c.options.testing {
-		// Starting several complete in-process Raft/HAKeeper control planes at
-		// the same time can starve leader election and heartbeat proposals on
-		// shared UT runners. Serialize only test bootstrap across processes;
-		// clusters run concurrently as soon as their services are ready.
-		leaseCtx, cancelLease := context.WithTimeoutCause(
-			context.Background(),
-			clusterStartupLeaseTimeout,
-			moerr.NewInternalErrorNoCtx("embedded-test startup lease timed out"),
-		)
-		startupLease, acquireErr := acquireClusterStartupLease(leaseCtx)
-		cancelLease()
+		if c.testAdmission != nil {
+			return moerr.NewInvalidStateNoCtx(
+				"embedded test cluster cleanup is incomplete",
+			)
+		}
+		admission, acquireErr := clusteradmission.Acquire(context.Background())
 		if acquireErr != nil {
 			return acquireErr
 		}
-		c.startupLease = startupLease
-		defer func() {
-			err = errors.Join(err, c.releaseStartupLeaseLocked())
-		}()
+		c.testAdmission = admission
 	}
 
 	if err = c.doStartLocked(0); err != nil {
-		return errors.Join(err, c.closeServicesFromLocked(0))
+		cleanupErr := c.closeServicesFromLocked(0)
+		if cleanupErr == nil {
+			cleanupErr = c.releaseTestAdmissionLocked()
+		}
+		return errors.Join(err, cleanupErr)
 	}
 	c.state = started
 	return nil
@@ -224,10 +214,10 @@ func (c *cluster) Close() error {
 	c.Lock()
 	defer c.Unlock()
 
-	err := errors.Join(
-		c.closeServicesLocked(),
-		c.releaseStartupLeaseLocked(),
-	)
+	err := c.closeServicesLocked()
+	if err == nil {
+		err = c.releaseTestAdmissionLocked()
+	}
 	if err == nil {
 		err = c.releasePortLeaseLocked()
 	}
@@ -590,28 +580,6 @@ func tryAcquireClusterPortLease(base uint64) (*clusterPortLease, bool, error) {
 	return lease, true, nil
 }
 
-func acquireClusterStartupLease(ctx context.Context) (*flock.Flock, error) {
-	fl := flock.New(filepath.Join(os.TempDir(), clusterStartupLeaseFilename))
-	locked, err := fl.TryLockContext(ctx, clusterStartupLeaseRetry)
-	if err != nil {
-		return nil, errors.Join(
-			moerr.NewInternalErrorNoCtxf(
-				"failed to acquire embedded-test startup lease %s",
-				fl.Path(),
-			),
-			err,
-			fl.Close(),
-		)
-	}
-	if !locked {
-		return nil, errors.Join(
-			moerr.NewInternalErrorNoCtx("embedded-test startup lease was not acquired"),
-			fl.Close(),
-		)
-	}
-	return fl, nil
-}
-
 func portBaseCapacity() (uint64, error) {
 	if basePortStep == 0 || portLeaseSpan == 0 {
 		return 0, moerr.NewInvalidStateNoCtxf(
@@ -742,14 +710,14 @@ func (c *cluster) releasePortLeaseLocked() error {
 	return err
 }
 
-func (c *cluster) releaseStartupLeaseLocked() error {
-	if c.startupLease == nil {
+func (c *cluster) releaseTestAdmissionLocked() error {
+	if c.testAdmission == nil {
 		return nil
 	}
-	if err := c.startupLease.Close(); err != nil {
+	if err := c.testAdmission.Release(); err != nil {
 		return err
 	}
-	c.startupLease = nil
+	c.testAdmission = nil
 	return nil
 }
 
