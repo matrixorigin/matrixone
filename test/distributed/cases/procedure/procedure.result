@@ -57,7 +57,7 @@ drop procedure if exists test_repeat;
 create procedure test_repeat() 'begin declare p1 int default 10; declare v1 int default 5; repeat set v1 = v1 + 1; until v1 > p1 end repeat; select v1; end';
 call test_repeat();
 v1
-6
+11
 drop procedure test_repeat;
 drop procedure if exists test_loop;
 create procedure test_loop() 'begin declare p1 int default 5; label1: loop set p1 = p1 + 1; if p1 < 10 THEN iterate label1; end if; leave label1; end loop label1; select p1; end';
@@ -94,6 +94,16 @@ select @id;
 @id
 1000
 drop procedure test_inout_param;
+drop procedure if exists test_decimal_declared_type;
+set @decimal_io = '1.10';
+create procedure test_decimal_declared_type(in p1 decimal(10,2), inout io decimal(10,2), out ov decimal(10,2), out ocmp bool) 'begin declare v1 decimal(10,2) default 6; declare n1 decimal(10,2) default null; select v1 > p1 as default_cmp, n1 is null as null_default, v1 as default_value, p1 as in_value, io as inout_value; set v1 = 11; set io = io + 0.25; set ov = v1 + 1.3; set ocmp = v1 > p1; end';
+call test_decimal_declared_type(10, @decimal_io, @decimal_out, @decimal_cmp);
+default_cmp    null_default    default_value    in_value    inout_value
+0    1    6.00    10.00    1.10
+select @decimal_io, @decimal_out, @decimal_cmp;
+@decimal_io    @decimal_out    @decimal_cmp
+1.35    12.30    true
+drop procedure test_decimal_declared_type;
 
 drop table if exists t_prepare_inside;
 create table t_prepare_inside (id int primary key, v int);

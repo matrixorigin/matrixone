@@ -95,6 +95,14 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 			}
 		}
 
+		if mergeGroup.ctr.inputDone {
+			// EOF and cancellation can arrive in the same child call. Observe
+			// cancellation before final merge and spill materialization.
+			if err, isCancel := vm.CancelCheck(proc); isCancel {
+				return vm.CancelResult, err
+			}
+		}
+
 		// has partial results, merge them.
 		if mergeGroup.PartialResults != nil {
 			for i, ag := range mergeGroup.ctr.aggList {

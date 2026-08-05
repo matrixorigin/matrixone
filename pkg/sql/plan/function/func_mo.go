@@ -990,11 +990,29 @@ func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 				return err
 			}
 		} else {
+			// MySQL stores an invalid ENUM value as index 0. It is distinct from
+			// NULL and displays as the empty string.
+			if indexVal == 0 {
+				if err := rs.AppendBytes([]byte{}, false); err != nil {
+					return err
+				}
+				continue
+			}
 			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
 			var enumVlaue string
 
 			enumVlaue, err := types.ParseEnumIndex(typeEnumVal, indexVal)
 			if err != nil {
+				// Ordinal zero is MySQL's ENUM error member.  INSERT IGNORE can
+				// store it for an invalid label and it is displayed as the empty
+				// string, regardless of whether the declaration also has an empty
+				// member at a non-zero ordinal.
+				if indexVal == 0 {
+					if err = rs.AppendBytes([]byte{}, false); err != nil {
+						return err
+					}
+					continue
+				}
 				return err
 			}
 
@@ -1041,7 +1059,12 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 				index, err = types.ParseEnum(typeEnumVal, enumStr)
 			}
 			if err != nil {
-				return err
+				if !statementIgnore(proc) {
+					return err
+				}
+				// MySQL INSERT IGNORE stores the ENUM error member (ordinal 0)
+				// for an unrecognized label instead of rejecting the row.
+				index = 0
 			}
 
 			if err := rs.Append(index, false); err != nil {
@@ -1161,7 +1184,11 @@ func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultW
 
 			index, err := types.ParseEnumValue(typeEnumVal, enumValueIndex)
 			if err != nil {
-				return err
+				if !statementIgnore(proc) {
+					return err
+				}
+				// Invalid numeric ENUM input is adjusted to the error member.
+				index = 0
 			}
 
 			if err = rs.Append(index, false); err != nil {
@@ -1217,13 +1244,40 @@ func CastSetValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWra
 
 		index, err := types.ParseSet(functionUtil.QuickBytesToStr(typeSet), functionUtil.QuickBytesToStr(setValue))
 		if err != nil {
-			return err
+			if !statementIgnore(proc) {
+				return err
+			}
+			// INSERT IGNORE retains the valid SET members and drops invalid
+			// members, matching MySQL's partial-value adjustment.
+			index = 0
+			setDef := functionUtil.QuickBytesToStr(typeSet)
+			for _, member := range strings.Split(functionUtil.QuickBytesToStr(setValue), ",") {
+				memberBits, memberErr := types.ParseSet(setDef, member)
+				if memberErr == nil {
+					index |= memberBits
+				}
+			}
 		}
 		if err = rs.Append(index, false); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func statementIgnore(proc *process.Process) bool {
+	return proc != nil && proc.GetStmtProfile() != nil && proc.GetStmtProfile().GetStatementIgnore()
+}
+
+func setMemberBitmap(definition string) uint64 {
+	var bitmap uint64
+	for bit := uint(0); bit < 64; bit++ {
+		member := uint64(1) << bit
+		if _, err := types.ParseSetValue(definition, member); err == nil {
+			bitmap |= member
+		}
+	}
+	return bitmap
 }
 
 // set("a","b","c") -> CastSetIndexValueToIndex(3) -> 3
@@ -1244,7 +1298,11 @@ func CastSetIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResu
 
 		index, err := types.ParseSetValue(functionUtil.QuickBytesToStr(typeSet), setIndexValue)
 		if err != nil {
-			return err
+			if !statementIgnore(proc) {
+				return err
+			}
+			// Numeric SET input keeps only bits represented by declared members.
+			index = setIndexValue & setMemberBitmap(functionUtil.QuickBytesToStr(typeSet))
 		}
 		if err = rs.Append(index, false); err != nil {
 			return err

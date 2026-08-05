@@ -26,6 +26,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -50,6 +51,10 @@ func TestIssue26339ForeignKeyExecutionRegressions(t *testing.T) {
 		}()
 		execSQLRequire(t, ctx, db, "drop database if exists "+database)
 		execSQLRequire(t, ctx, db, "create database "+database)
+		// CREATE DATABASE commits before its catalog entry is necessarily visible to
+		// a later FK DDL transaction. Wait for the CN's catalog cache so FK setup
+		// cannot observe the transient ExpectedEOB state under CI load.
+		testutils.WaitDatabaseCreated(t, database, cn)
 
 		t.Run("optimistic parent update is rejected before concurrent child write", func(t *testing.T) {
 			execSQLRequire(t, ctx, db, "create table "+database+".optimistic_parent (id int primary key)")

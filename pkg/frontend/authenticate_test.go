@@ -9459,6 +9459,47 @@ func TestInitProcedurePersistsCreationSQLMode(t *testing.T) {
 	require.Contains(t, createSQL, "'PIPES_AS_CONCAT'")
 }
 
+func TestInitProcedurePersistsDeclaredArgumentType(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	stmt, err := parsers.ParseOne(
+		context.Background(),
+		dialect.MYSQL,
+		"create procedure procedure_decimal(in amount decimal(10,2)) 'begin select amount; end'",
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+	cp, ok := stmt.(*tree.CreateProcedure)
+	require.True(t, ok)
+
+	ses := newSes(determinePrivilegeSetOfStatement(cp), ctrl)
+	ses.SetDatabaseName("test_procedure")
+	bh.sql2result[getSqlForCheckProcedureExistence(string(cp.Name.Name.ObjectName), ses.GetDatabaseName())] =
+		newMrsForPasswordOfUser([][]interface{}{})
+
+	require.NoError(t, InitProcedure(ses.GetTxnHandler().GetConnCtx(), ses, ses.GetTenantInfo(), cp))
+
+	var createSQL string
+	for _, sql := range bh.executedSQLs {
+		if strings.HasPrefix(sql, "insert into mo_catalog.mo_stored_procedure") {
+			createSQL = sql
+			break
+		}
+	}
+	require.NotEmpty(t, createSQL)
+	require.Contains(t, createSQL, `"ArgName":"amount"`)
+	require.Contains(t, createSQL, `"FamilyString":"decimal"`)
+	require.Contains(t, createSQL, `"DisplayWith":10`)
+	require.Contains(t, createSQL, `"Scale":2`)
+}
+
 func Test_initProcedure(t *testing.T) {
 	convey.Convey("init precedure fail", t, func() {
 		ctrl := gomock.NewController(t)
