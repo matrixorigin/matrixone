@@ -4849,7 +4849,7 @@ func TestRowLockWithConflictAndUnlock(t *testing.T) {
 			require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
 
 			<-c
-			checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{1})
+			checkLock(t, lt, rows[0], [][]byte{txn1}, nil, nil)
 			require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
 		})
 }
@@ -5555,6 +5555,160 @@ func TestLockWaitTimeout(t *testing.T) {
 			require.Less(t, elapsed, 3*time.Second)
 		},
 	)
+}
+
+func TestCanceledLockWaitRemovesWaiterImmediately(t *testing.T) {
+	testCases := []struct {
+		name        string
+		holderRows  [][]byte
+		waiterRows  [][]byte
+		options     pb.LockOptions
+		conflictKey []byte
+	}{
+		{
+			name:        "row",
+			holderRows:  newTestRows(1),
+			waiterRows:  newTestRows(1),
+			options:     newTestRowExclusiveOptions(),
+			conflictKey: []byte{1},
+		},
+		{
+			name:        "range",
+			holderRows:  newTestRows(1, 10),
+			waiterRows:  newTestRows(2, 3),
+			options:     newTestRangeExclusiveOptions(),
+			conflictKey: []byte{1},
+		},
+	}
+
+	for idx, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			table := uint64(21204 + idx)
+			getRunner(false)(
+				t,
+				table,
+				func(ctx context.Context, s *service, lt *localLockTable) {
+					holderTxn := []byte("issue-21204-holder")
+					waiterTxn := []byte("issue-21204-waiter")
+
+					_, err := s.Lock(ctx, table, testCase.holderRows, holderTxn, testCase.options)
+					require.NoError(t, err)
+
+					waitCtx, cancel := context.WithCancel(ctx)
+					defer cancel()
+					resultC := make(chan error, 1)
+					go func() {
+						_, err := s.Lock(waitCtx, table, testCase.waiterRows, waiterTxn, testCase.options)
+						resultC <- err
+					}()
+
+					require.NoError(t, WaitWaiters(s, 0, table, testCase.conflictKey, 1))
+					cancel()
+					select {
+					case err := <-resultC:
+						require.ErrorIs(t, err, context.Canceled)
+					case <-time.After(time.Second):
+						t.Fatal("canceled lock wait did not return")
+					}
+
+					checkLock(t, lt, testCase.conflictKey, [][]byte{holderTxn}, nil, nil)
+					require.NoError(t, s.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+					require.NoError(t, s.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+				})
+		})
+	}
+}
+
+func TestLockAddedFailureAfterWaitDoesNotLeavePromotedHolder(t *testing.T) {
+	testCases := []struct {
+		name          string
+		holderRows    [][]byte
+		holderOptions pb.LockOptions
+		waiterRows    [][]byte
+		waiterOptions pb.LockOptions
+		conflictKey   []byte
+	}{
+		{
+			name:          "row",
+			holderRows:    newTestRows(1),
+			holderOptions: newTestRowExclusiveOptions(),
+			waiterRows:    newTestRows(1),
+			waiterOptions: newTestRowExclusiveOptions(),
+			conflictKey:   []byte{1},
+		},
+		{
+			name:          "range",
+			holderRows:    newTestRows(5),
+			holderOptions: newTestRowExclusiveOptions(),
+			waiterRows:    newTestRows(1, 9),
+			waiterOptions: newTestRangeExclusiveOptions(),
+			conflictKey:   []byte{5},
+		},
+	}
+
+	for idx, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			table := uint64(21206 + idx)
+			getRunner(false)(
+				t,
+				table,
+				func(ctx context.Context, s *service, lt *localLockTable) {
+					holderTxn := []byte("lock-added-failure-holder")
+					waiterTxn := []byte("lock-added-failure-waiter")
+					recoveryTxn := []byte("lock-added-failure-recovery")
+
+					waiterActiveTxn := lt.txnHolder.getActiveTxn(waiterTxn, true, "")
+					var lockAddedCalls atomic.Int32
+					waiterActiveTxn.Lock()
+					waiterActiveTxn.beforeLockAdded = func([]byte, [][]byte) error {
+						lockAddedCalls.Add(1)
+						return ErrTxnNotFound
+					}
+					waiterActiveTxn.Unlock()
+
+					_, err := s.Lock(ctx, table, testCase.holderRows, holderTxn, testCase.holderOptions)
+					require.NoError(t, err)
+
+					resultC := make(chan error, 1)
+					go func() {
+						_, err := s.Lock(ctx, table, testCase.waiterRows, waiterTxn, testCase.waiterOptions)
+						resultC <- err
+					}()
+
+					require.NoError(t, WaitWaiters(s, 0, table, testCase.conflictKey, 1))
+					require.Zero(t, lockAddedCalls.Load())
+					require.NoError(t, s.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+
+					select {
+					case err := <-resultC:
+						require.ErrorIs(t, err, ErrTxnNotFound)
+					case <-time.After(time.Second):
+						t.Fatal("notified lock waiter did not return bookkeeping failure")
+					}
+					require.Equal(t, int32(1), lockAddedCalls.Load())
+
+					// Do not let the test-only hook follow a pooled activeTxn into
+					// the recovery acquisition below.
+					waiterActiveTxn.Lock()
+					waiterActiveTxn.beforeLockAdded = nil
+					waiterActiveTxn.Unlock()
+					require.NoError(t, s.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+					checkLock(t, lt, testCase.conflictKey, nil, nil, nil)
+
+					recoveryCtx, cancel := context.WithTimeout(ctx, time.Second)
+					defer cancel()
+					_, err = s.Lock(
+						recoveryCtx,
+						table,
+						testCase.waiterRows,
+						recoveryTxn,
+						testCase.waiterOptions,
+					)
+					require.NoError(t, err)
+					require.NoError(t, s.Unlock(ctx, recoveryTxn, timestamp.Timestamp{}))
+				})
+		})
+	}
 }
 
 func TestLockWaitTimeoutCeilingBoundsMissingCallerTimeout(t *testing.T) {
