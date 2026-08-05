@@ -115,6 +115,26 @@ func Test_doCreatePublication(t *testing.T) {
 	})
 }
 
+func TestCreatePublicationRejectsMissingContextAccount(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := defines.AttachAccount(context.Background(), 99, 1, 2)
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	er := mock_frontend.NewMockExecResult(ctrl)
+	er.EXPECT().GetRowCount().Return(uint64(0))
+	bh.EXPECT().ClearExecResultSet()
+	bh.EXPECT().Exec(gomock.Any(), getAccountIdNamesSql).Return(nil)
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{er})
+
+	stmts, err := mysql.Parse(ctx, "create publication pub1 database db1 account all", 1)
+	require.NoError(t, err)
+	defer freeStatements(stmts)
+
+	err = createPublication(ctx, bh, stmts[0].(*tree.CreatePublication))
+	require.ErrorContains(t, err, "account 99 does not exist")
+}
+
 func Test_showTablesFromDbQuotesDatabaseName(t *testing.T) {
 	testCases := []struct {
 		name        string
