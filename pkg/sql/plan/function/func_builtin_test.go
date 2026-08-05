@@ -134,6 +134,41 @@ func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 	}
 }
 
+func TestBuiltInInternalCharSizeUsesEncodedWidth(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typesToEncode := []types.Type{
+		types.New(types.T_char, 8, 0),
+		types.New(types.T_varchar, 128, 0),
+		types.New(types.T_text, 0, 0),
+		types.New(types.T_binary, 8, 0),
+		types.New(types.T_varbinary, 128, 0),
+		types.New(types.T_blob, 0, 0),
+		types.T_int32.ToType(),
+	}
+	encoded := make([]string, len(typesToEncode))
+	for i := range typesToEncode {
+		data, err := typesToEncode[i].Marshal()
+		require.NoError(t, err)
+		encoded[i] = string(data)
+	}
+
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), encoded, nil),
+		},
+		NewFunctionTestResult(
+			types.T_int64.ToType(),
+			false,
+			[]int64{32, 512, 0, 8, 128, 0, 0},
+			[]bool{false, false, false, false, false, false, true},
+		),
+		builtInInternalCharSize,
+	)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
 func TestBuiltInNameConst(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
