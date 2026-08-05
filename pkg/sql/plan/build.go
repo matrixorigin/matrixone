@@ -106,7 +106,7 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 		// degenerate ODKU on a table with no primary/unique key (no dedup key to
 		// represent the upsert; legacy treats it as a plain INSERT and preserves
 		// the prepared-statement parameters).
-		if !stmt.HasReturning() && err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML &&
+		if !stmt.HasReturning() && moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) &&
 			(len(stmt.OnDuplicateUpdate) == 0 ||
 				err.Error() == noPkOnDupUpdateMsg) {
 			return buildInsert(stmt, ctx, false, isPrepareStmt)
@@ -286,7 +286,7 @@ func bindAndOptimizeLoadQuery(ctx CompilerContext, stmt *tree.Load, isPrepareStm
 
 	rootId, err := builder.bindLoad(stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+		if moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) {
 			return buildLoad(stmt, ctx, isPrepareStmt)
 		}
 		return nil, err
@@ -336,7 +336,7 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 				return nil, returningNotSupported(builder, feature)
 			}
 		}
-		if !stmt.HasReturning() && err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+		if !stmt.HasReturning() && moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) {
 			if err.Error() == icebergRowLevelDMLUnsupportedMsg {
 				return buildIcebergDeletePlan(stmt, ctx, isPrepareStmt)
 			}
