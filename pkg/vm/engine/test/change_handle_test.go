@@ -1818,6 +1818,10 @@ func TestISCPExecutor1(t *testing.T) {
 	require.NoError(t, err)
 	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
+	result, err := execSql(disttaeEngine, ctxWithTimeout,
+		"SELECT referenced_index_name, on_delete_origin, on_update_origin FROM mo_catalog.mo_foreign_keys")
+	require.NoError(t, err)
+	result.Close()
 	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
