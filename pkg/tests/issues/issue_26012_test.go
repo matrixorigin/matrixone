@@ -59,17 +59,19 @@ func TestIssue26012MultiKeyEnumOrder(t *testing.T) {
 			"select id from (select id, e from " + db + ".t) d order by e is null, e desc",
 			"with c as (select id, e from " + db + ".t) select id from c order by e is null, e desc",
 		} {
-			rows, err := dbConn.QueryContext(ctx, query)
-			require.NoError(t, err, query)
-			var got []int
-			for rows.Next() {
-				var id int
-				require.NoError(t, rows.Scan(&id), query)
-				got = append(got, id)
-			}
-			require.NoError(t, rows.Err(), query)
-			require.NoError(t, rows.Close(), query)
-			require.Equal(t, []int{2, 1, 3}, got, query)
+			func(query string) {
+				rows, err := dbConn.QueryContext(ctx, query)
+				require.NoError(t, err, query)
+				defer rows.Close()
+				var got []int
+				for rows.Next() {
+					var id int
+					require.NoError(t, rows.Scan(&id), query)
+					got = append(got, id)
+				}
+				require.NoError(t, rows.Err(), query)
+				require.Equal(t, []int{2, 1, 3}, got, query)
+			}(query)
 		}
 	})
 }
