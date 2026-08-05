@@ -296,6 +296,29 @@ create table t1(a datetime,b datetime,c varchar);
 insert into t1 values('2020-02-28 00:00:00','2021-03-01 00:01:00', NULL);
 select * from t1 cross apply generate_series(t1.a,t1.b,t1.c)g;
 invalid input: generate_series datetime step can't be NULL
+-- Regression for issue #26691: OUTER APPLY must emit one NULL-extended row
+-- when the correlated table function produces no rows.
+drop table if exists t_outer_apply_empty;
+create table t_outer_apply_empty(id int primary key, j json, start_v int, stop_v int);
+insert into t_outer_apply_empty values(1, '{"a":1}', 1, 1), (2, null, 1, 0);
+select t.id, u.`index`, u.value
+from t_outer_apply_empty t outer apply unnest(t.j, '$') u
+order by t.id, u.`index`;
+➤ id[4,32,0]  ¦  index[4,32,0]  ¦  value[-1,2147483647,0]  𝄀
+1  ¦  null  ¦  1  𝄀
+2  ¦  null  ¦  null
+select t.id, u.`index`, u.value
+from t_outer_apply_empty t cross apply unnest(t.j, '$') u
+order by t.id, u.`index`;
+➤ id[4,32,0]  ¦  index[4,32,0]  ¦  value[-1,2147483647,0]  𝄀
+1  ¦  null  ¦  1
+select t.id, g.result
+from t_outer_apply_empty t outer apply generate_series(t.start_v, t.stop_v, 1) g
+order by t.id, g.result;
+➤ id[4,32,0]  ¦  result[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null
+drop table t_outer_apply_empty;
 drop table if exists t_apply_prepare_fault;
 create table t_apply_prepare_fault(a int, b int);
 insert into t_apply_prepare_fault values(1,3);
