@@ -269,11 +269,19 @@ func (th *TxnHandler) setSessionTxnIsolation(isolation pbtxn.TxnIsolation) {
 	th.hasSessionTxnIsolation = true
 }
 
-func (th *TxnHandler) setNextTxnIsolation(isolation pbtxn.TxnIsolation) {
+func (th *TxnHandler) setNextTxnIsolation(
+	ctx context.Context,
+	isolation pbtxn.TxnIsolation,
+) error {
 	th.mu.Lock()
 	defer th.mu.Unlock()
+	if th.inActiveTxnUnsafe() {
+		return moerr.NewInvalidInput(ctx,
+			"Transaction characteristics can't be changed while a transaction is in progress")
+	}
 	th.nextTxnIsolation = isolation
 	th.hasNextTxnIsolation = true
+	return nil
 }
 
 // txnIsolationUnsafe returns the isolation override for the transaction being
