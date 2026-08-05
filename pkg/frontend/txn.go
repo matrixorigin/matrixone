@@ -153,6 +153,12 @@ type FeTxnOption struct {
 	//byRollback denotes the txn rolled back by the ROLLBACK.
 	//or error types that need to roll back the whole txn.
 	byRollback bool
+	// activeTxnAtStart records whether the session already owned a transaction
+	// before the current statement entered TxnHandler.Create.  SET TRANSACTION
+	// uses it to distinguish an existing user transaction from the temporary
+	// transaction created to execute the SET statement itself.
+	activeTxnAtStart      bool
+	activeTxnAtStartKnown bool
 }
 
 func (opt *FeTxnOption) Close() {
@@ -160,6 +166,8 @@ func (opt *FeTxnOption) Close() {
 	opt.autoCommit = true
 	opt.byCommit = false
 	opt.byRollback = false
+	opt.activeTxnAtStart = false
+	opt.activeTxnAtStartKnown = false
 }
 
 const (
@@ -262,6 +270,29 @@ func txnIsolationFromSystemValue(ctx context.Context, value interface{}) (pbtxn.
 	}
 }
 
+func txnIsolationToSystemValue(isolation pbtxn.TxnIsolation) (string, bool) {
+	switch isolation {
+	case pbtxn.TxnIsolation_RC:
+		return "READ-COMMITTED", true
+	case pbtxn.TxnIsolation_SI:
+		return "REPEATABLE-READ", true
+	default:
+		return "", false
+	}
+}
+
+func serviceTxnIsolationSystemValue(service string) (string, bool) {
+	value, ok := moruntime.ServiceRuntime(service).GetGlobalVariables(moruntime.TxnIsolation)
+	if !ok {
+		return "", false
+	}
+	isolation, ok := value.(pbtxn.TxnIsolation)
+	if !ok {
+		return "", false
+	}
+	return txnIsolationToSystemValue(isolation)
+}
+
 func (th *TxnHandler) setSessionTxnIsolation(isolation pbtxn.TxnIsolation) {
 	th.mu.Lock()
 	defer th.mu.Unlock()
@@ -272,10 +303,11 @@ func (th *TxnHandler) setSessionTxnIsolation(isolation pbtxn.TxnIsolation) {
 func (th *TxnHandler) setNextTxnIsolation(
 	ctx context.Context,
 	isolation pbtxn.TxnIsolation,
+	allowCurrentStatementTxn bool,
 ) error {
 	th.mu.Lock()
 	defer th.mu.Unlock()
-	if th.inActiveTxnUnsafe() {
+	if th.inActiveTxnUnsafe() && !allowCurrentStatementTxn {
 		return moerr.NewInvalidInput(ctx,
 			"Transaction characteristics can't be changed while a transaction is in progress")
 	}

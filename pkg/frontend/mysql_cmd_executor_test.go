@@ -269,6 +269,41 @@ func TestHandleSetTransaction(t *testing.T) {
 		handler.mu.Unlock()
 		require.False(t, hasNextIsolation)
 	})
+
+	t.Run("statement-owned transaction is not mistaken for an existing transaction", func(t *testing.T) {
+		statementSes := newTestSession(t, ctrl)
+		defer statementSes.Close()
+
+		handler := statementSes.GetTxnHandler()
+		handler.mu.Lock()
+		handler.txnOp = newTestTxnOp()
+		handler.mu.Unlock()
+		defer func() {
+			handler.mu.Lock()
+			handler.txnOp = nil
+			handler.mu.Unlock()
+		}()
+
+		stmt, err := mysql.ParseOne(ctx, "set transaction isolation level read committed", 1)
+		require.NoError(t, err)
+
+		_, err = execInFrontend(statementSes, &ExecCtx{
+			reqCtx: ctx,
+			stmt:   stmt,
+			txnOpt: FeTxnOption{
+				activeTxnAtStartKnown: true,
+				activeTxnAtStart:      false,
+			},
+		})
+		require.NoError(t, err)
+
+		handler.mu.Lock()
+		hasNextIsolation := handler.hasNextTxnIsolation
+		nextIsolation := handler.nextTxnIsolation
+		handler.mu.Unlock()
+		require.True(t, hasNextIsolation)
+		require.Equal(t, txn.TxnIsolation_RC, nextIsolation)
+	})
 }
 
 func TestSetTransactionIsolationAppliedToTxnMeta(t *testing.T) {
@@ -304,8 +339,7 @@ func TestSetTransactionIsolationAppliedToTxnMeta(t *testing.T) {
 		}
 
 		// A new session seeds its real transaction default from the cloned
-		// compatibility sysvar instead of silently retaining the service-wide
-		// default.
+		// compatibility sysvar.
 		require.Equal(t, txn.TxnIsolation_SI, createTxn())
 
 		execSet("set session transaction isolation level repeatable read")
@@ -388,6 +422,19 @@ func TestGlobalTransactionIsolationSeedsNewSessionTxnMeta(t *testing.T) {
 		defer func() { getPu("").TxnClient = originalTxnClient }()
 		getPu("").TxnClient = realTxnClient
 
+		rt := runtime.ServiceRuntime(owner.GetService())
+		originalIsolation, hadOriginalIsolation := rt.GetGlobalVariables(runtime.TxnIsolation)
+		defer func() {
+			if hadOriginalIsolation {
+				rt.SetGlobalVariables(runtime.TxnIsolation, originalIsolation)
+			} else {
+				// Runtime globals have no delete operation. Restore the default used
+				// by the frontend test service instead of leaking RC to later tests.
+				rt.SetGlobalVariables(runtime.TxnIsolation, txn.TxnIsolation_SI)
+			}
+		}()
+		rt.SetGlobalVariables(runtime.TxnIsolation, txn.TxnIsolation_RC)
+
 		GSysVarsMgr.Lock()
 		originalGlobalVars, hadOriginalGlobalVars := GSysVarsMgr.accountsGlobalSysVarsMap[sysAccountID]
 		GSysVarsMgr.Unlock()
@@ -399,6 +446,44 @@ func TestGlobalTransactionIsolationSeedsNewSessionTxnMeta(t *testing.T) {
 				delete(GSysVarsMgr.accountsGlobalSysVarsMap, sysAccountID)
 			}
 			GSysVarsMgr.Unlock()
+		}()
+
+		func() {
+			catalogStub := gostub.Stub(&ExeSqlInBgSes, func(
+				context.Context,
+				BackgroundExec,
+				string,
+			) ([]ExecResult, error) {
+				return []ExecResult{newMrsForGlobalSystemVariables(nil)}, nil
+			})
+			defer catalogStub.Reset()
+
+			defaultSession := NewSession(ctx, "", &testMysqlWriter{}, nil)
+			defer defaultSession.Close()
+			defaultSession.SetTenantInfo(&TenantInfo{
+				Tenant:        sysAccountName,
+				User:          rootName,
+				DefaultRole:   moAdminRoleName,
+				TenantID:      sysAccountID,
+				UserID:        rootID,
+				DefaultRoleID: moAdminRoleID,
+			})
+			require.NoError(t, defaultSession.InitSystemVariables(ctx, nil))
+
+			got, err := defaultSession.GetSessionSysVar("transaction_isolation")
+			require.NoError(t, err)
+			require.Equal(t, "READ-COMMITTED", got)
+
+			defaultHandler := defaultSession.GetTxnHandler()
+			defaultHandler.mu.Lock()
+			err = defaultHandler.createTxnOpUnsafe(&ExecCtx{reqCtx: ctx, ses: defaultSession})
+			defaultOp := defaultHandler.txnOp
+			defaultHandler.txnOp = nil
+			defaultHandler.mu.Unlock()
+			require.NoError(t, err)
+			require.NotNil(t, defaultOp)
+			require.Equal(t, txn.TxnIsolation_RC, defaultOp.Txn().Isolation)
+			require.NoError(t, defaultOp.Rollback(ctx))
 		}()
 
 		isolatedGlobalVars := owner.gSysVars.Clone()
@@ -3097,6 +3182,7 @@ func Test_statement_type(t *testing.T) {
 		convey.So(IsDropStatement(&tree.DropTable{}), convey.ShouldBeTrue)
 		convey.So(IsAdministrativeStatement(&tree.CreateAccount{}), convey.ShouldBeTrue)
 		convey.So(IsParameterModificationStatement(&tree.SetVar{}), convey.ShouldBeTrue)
+		convey.So(IsParameterModificationStatement(&tree.SetTransaction{}), convey.ShouldBeTrue)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.SetVar{}), convey.ShouldBeTrue)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.LockTableStmt{}), convey.ShouldBeTrue)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.UnLockTableStmt{}), convey.ShouldBeFalse)

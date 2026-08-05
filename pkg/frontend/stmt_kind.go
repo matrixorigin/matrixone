@@ -40,7 +40,7 @@ func IsAdministrativeStatement(stmt tree.Statement) bool {
 // IsParameterModificationStatement checks the statement is the statement of parameter modification statement.
 func IsParameterModificationStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
-	case *tree.SetVar:
+	case *tree.SetVar, *tree.SetTransaction:
 		return true
 	}
 	return false
