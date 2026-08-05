@@ -84,7 +84,6 @@ func TestCompareRows(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			err := compareRows(test.comparison, test.native, test.offloaded)
@@ -157,7 +156,6 @@ func TestCompareRejectsInvalidExpectations(t *testing.T) {
 		{name: "invalid outcome", mutate: func(testCase *Case) { testCase.OffloadedExpectation.Outcome = Outcome(99) }},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			report := successfulReport()
@@ -229,7 +227,6 @@ func TestCompareRejectsInconsistentObservations(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			report := successfulReport()
@@ -269,7 +266,6 @@ func TestRunConcurrentCasesKeepEvidenceQueryScoped(t *testing.T) {
 	var workers sync.WaitGroup
 	workers.Add(caseCount)
 	for i := 0; i < caseCount; i++ {
-		i := i
 		go func() {
 			defer workers.Done()
 			<-start
