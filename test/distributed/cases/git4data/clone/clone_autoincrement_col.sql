@@ -7,6 +7,8 @@ create table db1.t10(a int, b int);
 insert into db1.t10 select *,* from generate_series(1, 1000)g;
 create table db1.t10_copy1 clone db1.t10;
 select `__mo_fake_pk_col` as pk, a, b from db1.t10 except select `__mo_fake_pk_col` as pk, a, b from db1.t10_copy1;
+insert into db1.t10_copy1(a, b) values (1001, 1001);
+select a, b from db1.t10_copy1 where a = 1001;
 
 delete from t10 where a mod 19 = 0;
 create table db1.t10_copy2 clone db1.t10;
@@ -26,6 +28,8 @@ create table t11(a int auto_increment, b int, primary key(a));
 insert into t11 select *,* from generate_series(1, 1000)g;
 create table t11_copy1 clone t11;
 select a, b from t11 except select a, b from t11_copy1;
+insert into t11_copy1(b) values (1001);
+select a, b from t11_copy1 where b = 1001;
 
 delete from t11 where a mod 19 = 0;
 create table t11_copy2 clone t11;
