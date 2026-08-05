@@ -424,6 +424,11 @@ type aliasItem struct {
 type BindContext struct {
 	binder Binder
 
+	// outputColumnProvenance records planner-local lineage overrides by output
+	// position. An explicit None prevents later transparent-boundary code from
+	// rediscovering a source after a semantic boundary has cleared it.
+	outputColumnProvenance map[int32]OutputColumnProvenance
+
 	// mysqlSpecialOrderTypes records the storage type behind a visible ENUM/SET
 	// display value.  It is planner-local semantic provenance: only a pure
 	// display projection (or a pure column passthrough of one) may populate it.
@@ -432,6 +437,18 @@ type BindContext struct {
 	// The generated plan consumes the provenance by materializing an ordinary
 	// numeric sort expression, so this metadata never crosses the plan wire.
 	mysqlSpecialOrderTypes map[int32]*plan.Type
+	// mysqlSpecialCanonicalTypes records outputs whose SQL-visible value has
+	// already passed through GROUP BY or DISTINCT and must be canonically
+	// re-encoded when a persisted View exposes an ENUM/SET catalog type.
+	mysqlSpecialCanonicalTypes map[int32]*plan.Type
+	// restoreViewMySQLSpecialTypes is inherited only while rebinding a persisted
+	// View. It lets transparent derived/CTE query boundaries expose their raw
+	// ENUM/SET values without changing ordinary query-boundary behavior.
+	restoreViewMySQLSpecialTypes bool
+	// mysqlSpecialRawProjectPositions maps a visible output position to a hidden
+	// raw ENUM/SET sidecar in the query block's PROJECT. It is populated only
+	// for row-preserving View ORDER BY boundaries.
+	mysqlSpecialRawProjectPositions map[int32]int32
 
 	//cteByName saves all cte definitions in the current stmt
 	cteByName map[string]*CTERef
@@ -581,6 +598,7 @@ type baseBinder struct {
 	numericParamType                 *Type
 	numericSubqueryTarget            *Type
 	numericFunctionTarget            bool
+	mysqlSpecialTargetType           *Type
 	allowCanonicalNameConstValueCast bool
 	bindRawMySQLSpecialType          bool
 }
@@ -704,6 +722,12 @@ type Binding struct {
 	// the string column is a pure display of the recorded ENUM/SET storage
 	// type, and may therefore use definition-order semantics when ordered.
 	mysqlSpecialOrderTypes []*plan.Type
+	// mysqlSpecialCanonicalTypes is aligned with cols and propagates the
+	// post-semantic canonical-value contract through transparent bindings.
+	mysqlSpecialCanonicalTypes []*plan.Type
+	// outputColumnProvenance is aligned with cols and carries planner-local,
+	// single-source output lineage. It is never serialized into the plan.
+	outputColumnProvenance []OutputColumnProvenance
 	refCnts                []uint
 	// lower case
 	colIdByName    map[string]int32
