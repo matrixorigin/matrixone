@@ -103,6 +103,13 @@ func constructCreateTableSQL(
 	var pkDefs []string
 	isClusterTable := util.TableIsClusterTable(tableDef.TableType)
 	displayTableCharset := effectiveTableCharsetForShowCreate(tableDef)
+	columnTableCharset := displayTableCharset
+	if tableDef.TableType == catalog.SystemExternalRel {
+		// External-table grammar has no table charset option. Use a sentinel
+		// that makes every text column emit its own replay-safe collation instead
+		// of relying on a table clause that would make the DDL unparsable.
+		columnTableCharset = uint32(types.CharsetLegacy)
+	}
 
 	// col.Name -> col.OriginName
 	colNameToOriginName := make(map[string]string)
@@ -147,7 +154,7 @@ func constructCreateTableSQL(
 			typeStr = strings.ToLower(typeStr)
 		}
 		fmt.Fprintf(buf, "  %s %s", sqlquote.Ident(colNameOrigin), typeStr)
-		appendTextCharsetForShowCreate(buf, col.Typ, displayTableCharset)
+		appendTextCharsetForShowCreate(buf, col.Typ, columnTableCharset)
 
 		//-------------------------------------------------------------------------------------------------------------
 		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
@@ -534,7 +541,9 @@ func constructCreateTableSQL(
 		createStr += "\n"
 	}
 	createStr += ")"
-	createStr += tableCharsetForShowCreate(ctx, displayTableCharset)
+	if tableDef.TableType != catalog.SystemExternalRel {
+		createStr += tableCharsetForShowCreate(ctx, displayTableCharset)
+	}
 
 	var comment string
 	var properties []*plan.Property // Collect non-system properties for PROPERTIES clause
@@ -752,6 +761,14 @@ func appendTextCharsetForShowCreate(buf *bytes.Buffer, typ plan.Type, tableChars
 	}
 
 	switch typ.Charset {
+	case uint32(types.CharsetLegacy):
+		// A migrated table default can coexist with a text column whose old
+		// catalog row still has no charset metadata. Preserve that column's
+		// historical bytewise ordering even when it cannot inherit the table
+		// display default.
+		if tableCharset != uint32(types.CharsetUTF8MB4Bin) {
+			buf.WriteString(" COLLATE utf8mb4_bin")
+		}
 	case uint32(types.CharsetUTF8MB4Bin):
 		buf.WriteString(" COLLATE utf8mb4_bin")
 	case uint32(types.CharsetBinary):
@@ -776,7 +793,12 @@ func effectiveTableCharsetForShowCreate(tableDef *plan.TableDef) uint32 {
 		case types.T_char, types.T_varchar, types.T_text:
 			hasTextColumn = true
 			if col.Typ.Charset == uint32(types.CharsetLegacy) {
-				return tableDef.DefaultCharset
+				// Legacy text was ordered bytewise before charset metadata became
+				// meaningful. There is no SQL spelling for CharsetLegacy, so use
+				// utf8mb4_bin as its replay-safe, nonbinary text identity. Using
+				// COLLATE binary here would incorrectly advertise VARCHAR as binary
+				// protocol data.
+				return uint32(types.CharsetUTF8MB4Bin)
 			}
 		}
 	}
@@ -785,8 +807,8 @@ func effectiveTableCharsetForShowCreate(tableDef *plan.TableDef) uint32 {
 	}
 	// Program-authored system definitions predate the table-default field but
 	// now carry explicit UTF-8 on every text column. Treat UTF-8 as their display
-	// default so SHOW CREATE stays concise. A genuinely legacy column above keeps
-	// zero as the display default, causing explicit general_ci peers to be shown.
+	// default so SHOW CREATE stays concise. A genuinely legacy column above uses
+	// the bytewise display default, causing explicit general_ci peers to be shown.
 	return uint32(types.CharsetUTF8)
 }
 

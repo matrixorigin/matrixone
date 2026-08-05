@@ -1290,9 +1290,9 @@ func normalizeLegacyTextCollationForCreateLike(tableDef *plan.TableDef) *plan.Ta
 	}
 
 	// Charset zero was persisted before the field had semantics. CREATE LIKE
-	// reparses a generated DDL skeleton, so spell legacy text as utf8mb4_bin in
-	// that private skeleton to retain its historical bytewise ordering without
-	// changing user-visible SHOW CREATE output for old catalog rows.
+	// reparses a generated DDL skeleton, so spell legacy text as utf8mb4_bin to
+	// retain its historical bytewise ordering. SHOW CREATE uses the same public
+	// compatibility spelling for catalog rows that still contain legacy text.
 	clone := DeepCopyTableDef(tableDef, true)
 	if clone.DefaultCharset == uint32(types.CharsetLegacy) {
 		clone.DefaultCharset = uint32(types.CharsetUTF8MB4Bin)

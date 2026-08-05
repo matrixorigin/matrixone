@@ -21,9 +21,12 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -698,7 +701,7 @@ func TestShowCreateMongoDBExternalTable(t *testing.T) {
 	showSQL, stmt, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
 	require.NoError(t, err)
 	require.NotNil(t, stmt)
-	require.Equal(t, "CREATE EXTERNAL TABLE `events` (\n  `DeviceID` varchar(64) DEFAULT NULL MONGODB_PATH 'metadata.device_id' MONGODB_CONVERT 'strict',\n  `measurement` double DEFAULT NULL MONGODB_PATH 'reading.measurement' MONGODB_CONVERT 'try_null'\n) ENGINE = MONGODB WITH (\"connection\" = 'telemetry_source', \"database\" = 'telemetry', \"collection\" = 'measurements', \"schema_mode\" = 'explicit', \"conversion_mode\" = 'strict', \"max_parallelism\" = '1')", showSQL)
+	require.Equal(t, "CREATE EXTERNAL TABLE `events` (\n  `DeviceID` varchar(64) COLLATE utf8mb4_bin DEFAULT NULL MONGODB_PATH 'metadata.device_id' MONGODB_CONVERT 'strict',\n  `measurement` double DEFAULT NULL MONGODB_PATH 'reading.measurement' MONGODB_CONVERT 'try_null'\n) ENGINE = MONGODB WITH (\"connection\" = 'telemetry_source', \"database\" = 'telemetry', \"collection\" = 'measurements', \"schema_mode\" = 'explicit', \"conversion_mode\" = 'strict', \"max_parallelism\" = '1')", showSQL)
 	require.NotContains(t, strings.ToLower(showSQL), "credential")
 	require.NotContains(t, strings.ToLower(showSQL), "password")
 }
@@ -1029,4 +1032,90 @@ func TestShowCreateDistinguishesMixedLegacyAndGeneralCIColumns(t *testing.T) {
 	require.Contains(t, showSQL, "`legacy_text` varchar(10) DEFAULT NULL")
 	require.Contains(t, showSQL,
 		"`general_text` varchar(10) COLLATE utf8mb4_general_ci DEFAULT NULL")
+	require.Contains(t, showSQL, ") COLLATE=utf8mb4_bin")
+
+	roundTripped, err := buildTestCreateTableStmt(mock, showSQL)
+	require.NoError(t, err)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), roundTripped.DefaultCharset)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin),
+		FindColumn(roundTripped.Cols, "legacy_text").Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8),
+		FindColumn(roundTripped.Cols, "general_text").Typ.Charset)
+	require.Equal(t, "B", textMinForShowCreateTest(t,
+		FindColumn(roundTripped.Cols, "legacy_text").Typ))
+	require.Equal(t, "a", textMinForShowCreateTest(t,
+		FindColumn(roundTripped.Cols, "general_text").Typ))
+}
+
+func TestShowCreateRoundTripsFullyLegacyBytewiseText(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.ResolveVariableFunc = func(name string, isSystem, isGlobal bool) (interface{}, error) {
+		if name == "collation_server" && isSystem && !isGlobal {
+			return "utf8mb4_general_ci", nil
+		}
+		return nil, nil
+	}
+	tableDef, err := buildTestCreateTableStmt(mock,
+		"create table legacy_show(legacy_text varchar(10))")
+	require.NoError(t, err)
+	tableDef.DefaultCharset = uint32(types.CharsetLegacy)
+	FindColumn(tableDef.Cols, "legacy_text").Typ.Charset = uint32(types.CharsetLegacy)
+	require.Equal(t, "B", textMinForShowCreateTest(t,
+		FindColumn(tableDef.Cols, "legacy_text").Typ))
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, showSQL, ") COLLATE=utf8mb4_bin")
+
+	roundTripped, err := buildTestCreateTableStmt(mock, showSQL)
+	require.NoError(t, err)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), roundTripped.DefaultCharset)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin),
+		FindColumn(roundTripped.Cols, "legacy_text").Typ.Charset)
+	require.Equal(t, "B", textMinForShowCreateTest(t,
+		FindColumn(roundTripped.Cols, "legacy_text").Typ))
+}
+
+func TestShowCreateRoundTripsLegacyColumnWithGeneralDefault(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock,
+		"create table migrated_default(legacy_text varchar(10)) collate utf8mb4_general_ci")
+	require.NoError(t, err)
+	FindColumn(tableDef.Cols, "legacy_text").Typ.Charset = uint32(types.CharsetLegacy)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, showSQL, "`legacy_text` varchar(10) COLLATE utf8mb4_bin")
+
+	roundTripped, err := buildTestCreateTableStmt(mock, showSQL)
+	require.NoError(t, err)
+	require.Equal(t, uint32(types.CharsetUTF8), roundTripped.DefaultCharset)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin),
+		FindColumn(roundTripped.Cols, "legacy_text").Typ.Charset)
+	require.Equal(t, "B", textMinForShowCreateTest(t,
+		FindColumn(roundTripped.Cols, "legacy_text").Typ))
+}
+
+func textMinForShowCreateTest(t *testing.T, typ plan.Type) string {
+	t.Helper()
+	mp := mpool.MustNewZero()
+	runtimeType := types.NewWithCharset(
+		types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
+	input := vector.NewVec(runtimeType)
+	defer input.Free(mp)
+	for _, value := range []string{"a", "B"} {
+		require.NoError(t, vector.AppendBytes(input, []byte(value), false, mp))
+	}
+
+	exec, err := aggexec.MakeAgg(mp, aggexec.AggIdOfMin, false, runtimeType)
+	require.NoError(t, err)
+	defer exec.Free()
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	defer results[0].Free(mp)
+	return string(results[0].GetBytesAt(0))
 }
