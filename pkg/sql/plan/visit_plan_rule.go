@@ -399,6 +399,62 @@ type ResetParamRefRule struct {
 	exprMemo map[*plan.Expr]*plan.Expr
 }
 
+type preparedTypeLineageRule struct {
+	ctx   context.Context
+	types map[[2]int32]plan.Type
+}
+
+func (rule *preparedTypeLineageRule) MatchNode(*Node) bool  { return false }
+func (rule *preparedTypeLineageRule) IsApplyExpr() bool     { return true }
+func (rule *preparedTypeLineageRule) ApplyNode(*Node) error { return nil }
+func (rule *preparedTypeLineageRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
+	if e == nil {
+		return nil, nil
+	}
+	switch impl := e.Expr.(type) {
+	case *plan.Expr_Col:
+		if typ, ok := rule.types[[2]int32{impl.Col.RelPos, impl.Col.ColPos}]; ok {
+			e.Typ = typ
+		}
+		return e, nil
+	case *plan.Expr_F:
+		changed := false
+		for i, arg := range impl.F.Args {
+			old := arg.Typ
+			rewritten, err := rule.ApplyExpr(arg)
+			if err != nil {
+				return nil, err
+			}
+			impl.F.Args[i] = rewritten
+			changed = changed || old.Id != rewritten.Typ.Id || old.Width != rewritten.Typ.Width ||
+				old.Scale != rewritten.Typ.Scale || old.NotNullable != rewritten.Typ.NotNullable
+		}
+		if !changed {
+			return e, nil
+		}
+		rewritten, err := BindFuncExprImplByPlanExpr(rule.ctx, impl.F.Func.GetObjName(), impl.F.Args)
+		if err != nil {
+			return nil, err
+		}
+		if fn := rewritten.GetF(); fn != nil {
+			fn.AggConfig = bytes.Clone(impl.F.AggConfig)
+			fn.AggConfigType = impl.F.AggConfigType
+		}
+		return rewritten, nil
+	case *plan.Expr_List:
+		for i, item := range impl.List.List {
+			rewritten, err := rule.ApplyExpr(item)
+			if err != nil {
+				return nil, err
+			}
+			impl.List.List[i] = rewritten
+		}
+	case *plan.Expr_W:
+		return applyWindowExpr(e, rule.ApplyExpr)
+	}
+	return e, nil
+}
+
 func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
 	return &ResetParamRefRule{
 		ctx:    ctx,
@@ -492,13 +548,12 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				if i == j || !types.T(sibling.Typ.Id).IsSignedInt() {
 					continue
 				}
-				target := types.T_int64.ToType()
-				exprImpl.F.Args[i], err = makePlan2CastExpr(
-					rule.ctx, arg, makePlan2Type(&target))
+				target := types.T_uint64.ToType()
+				exprImpl.F.Args[j], err = makePlan2CastExpr(
+					rule.ctx, sibling, makePlan2Type(&target))
 				if err != nil {
 					return nil, err
 				}
-				break
 			}
 		}
 		for i, arg := range exprImpl.F.Args {
@@ -636,7 +691,8 @@ func restorePreparedNumericLiteralType(expr *plan.Expr) *plan.Expr {
 		return expr
 	}
 	if fn := expr.GetF(); fn != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 &&
-		isPreparedDynamicNumericType(expr.Typ) {
+		(isPreparedDynamicNumericType(expr.Typ) ||
+			(types.T(expr.Typ.Id).IsDecimal() && expr.Typ.Width > 65)) {
 		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
 		if overload == 0 {
 			restored := restorePreparedNumericLiteralType(fn.Args[0])

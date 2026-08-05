@@ -950,7 +950,64 @@ func TestPreparedUint64MixedNumericDomains(t *testing.T) {
 			if test.wantDecimal {
 				require.True(t, resultType.IsDecimal(), resultType.String())
 			} else {
-				require.True(t, resultType.IsSignedInt(), resultType.String())
+				require.True(t, resultType.IsUnsignedInt(), resultType.String())
+			}
+		})
+	}
+}
+
+func TestPreparedDynamicNumericRefreshesCrossNodeTypeLineage(t *testing.T) {
+	for _, sql := range []string{
+		"select x + 1 from (select ? + 1 as x) d",
+		"with c as (select ? + 1 as x) select x + 1 from c",
+		"select ? + 1 as x union all select 2",
+		"select ? + 1 as x order by x",
+		"select ? + 1 as x group by x",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, sql)
+			specialized, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{ParamValue{
+				Value: "2", RuntimeType: types.T_int64,
+			}})
+			require.NoError(t, err)
+
+			producerTypes := make(map[[2]int32]planpb.Type)
+			for _, node := range specialized.GetQuery().Nodes {
+				if len(node.BindingTags) == 1 {
+					tag := node.BindingTags[0]
+					for col, expr := range node.ProjectList {
+						producerTypes[[2]int32{tag, int32(col)}] = expr.Typ
+					}
+				}
+			}
+			var checkExpr func(*planpb.Expr)
+			checkExpr = func(expr *planpb.Expr) {
+				if expr == nil {
+					return
+				}
+				if col := expr.GetCol(); col != nil {
+					if want, ok := producerTypes[[2]int32{col.RelPos, col.ColPos}]; ok {
+						require.Equal(t, want.Id, expr.Typ.Id)
+						require.Equal(t, want.Width, expr.Typ.Width)
+						require.Equal(t, want.Scale, expr.Typ.Scale)
+					}
+				}
+				if fn := expr.GetF(); fn != nil {
+					for _, arg := range fn.Args {
+						checkExpr(arg)
+					}
+				}
+			}
+			for _, node := range specialized.GetQuery().Nodes {
+				for _, expr := range node.ProjectList {
+					checkExpr(expr)
+				}
+				for _, expr := range node.GroupBy {
+					checkExpr(expr)
+				}
+				for _, order := range node.OrderBy {
+					checkExpr(order.Expr)
+				}
 			}
 		})
 	}

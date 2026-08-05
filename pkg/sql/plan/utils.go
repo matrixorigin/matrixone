@@ -3209,6 +3209,30 @@ func ValidatePreparedPaginationParams(ctx context.Context, preparePlan *Plan, pa
 	return nil
 }
 
+// HasPreparedPaginationParams reports whether LIMIT or OFFSET is evaluated
+// from a parameter marker. Such expressions must be rebuilt for every EXECUTE
+// because folded NULL state is execution-local.
+func HasPreparedPaginationParams(preparePlan *Plan) bool {
+	if preparePlan == nil {
+		return false
+	}
+	query := preparePlan.GetQuery()
+	if query == nil && preparePlan.GetDdl() != nil {
+		query = preparePlan.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return false
+	}
+	positions := make(map[int32]struct{})
+	for _, node := range query.GetNodes() {
+		if node != nil {
+			collectParamRefPositions(node.GetLimit(), positions)
+			collectParamRefPositions(node.GetOffset(), positions)
+		}
+	}
+	return len(positions) > 0
+}
+
 // HasPreparedDynamicNumericParams reports whether a canonical prepared plan
 // must be specialized with this execution's numeric parameter precision and
 // scale before compilation.
@@ -3385,10 +3409,56 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 		}
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
-	VisitQuery := NewVisitPlan(plan0, []VisitPlanRule{paramRule})
-	err := VisitQuery.Visit(ctx)
-	if err != nil {
-		return err
+	if plan0.GetQuery() != nil || (plan0.GetDdl() != nil && plan0.GetDdl().GetQuery() != nil) {
+		return refreshPreparedTypeLineage(ctx, plan0, paramRule)
+	}
+	return NewVisitPlan(plan0, []VisitPlanRule{paramRule}).Visit(ctx)
+}
+
+func refreshPreparedTypeLineage(ctx context.Context, plan0 *Plan, paramRule *ResetParamRefRule) error {
+	query := plan0.GetQuery()
+	if query == nil && plan0.GetDdl() != nil {
+		query = plan0.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return nil
+	}
+	rule := &preparedTypeLineageRule{ctx: ctx, types: make(map[[2]int32]plan.Type)}
+	visitor := NewVisitPlan(plan0, nil)
+	visited := make(map[int32]struct{})
+	var visit func(int32) error
+	visit = func(id int32) error {
+		if _, ok := visited[id]; ok {
+			return nil
+		}
+		visited[id] = struct{}{}
+		if id < 0 || int(id) >= len(query.Nodes) || query.Nodes[id] == nil {
+			return moerr.NewInternalErrorNoCtx("invalid query node id")
+		}
+		node := query.Nodes[id]
+		for _, child := range node.Children {
+			if err := visit(child); err != nil {
+				return err
+			}
+		}
+		if err := visitor.exploreNode(ctx, rule, node, id); err != nil {
+			return err
+		}
+		if err := visitor.exploreNode(ctx, paramRule, node, id); err != nil {
+			return err
+		}
+		if len(node.BindingTags) == 1 {
+			tag := node.BindingTags[0]
+			for col, expr := range node.ProjectList {
+				rule.types[[2]int32{tag, int32(col)}] = expr.Typ
+			}
+		}
+		return nil
+	}
+	for _, root := range query.Steps {
+		if err := visit(root); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -461,7 +461,7 @@ func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
 		wantType types.T
 	}{
 		{value: strconv.FormatInt(math.MaxInt64, 10), wantType: types.T_int64},
-		{value: strconv.FormatUint(math.MaxUint64, 10), unsigned: true, wantType: types.T_int64},
+		{value: strconv.FormatUint(math.MaxUint64, 10), unsigned: true, wantType: types.T_uint64},
 	} {
 		params := vector.NewVec(types.T_text.ToType())
 		require.NoError(t, vector.AppendBytes(params, []byte(test.value), false, cw.proc.Mp()))

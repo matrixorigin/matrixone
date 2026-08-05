@@ -1333,6 +1333,9 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 	if query == nil {
 		return true
 	}
+	if plan2.HasPreparedPaginationParams(p) {
+		return false
+	}
 	for _, node := range query.GetNodes() {
 		if node != nil && node.GetExternScan() != nil && node.GetExternScan().GetIcebergScan() != nil {
 			// Iceberg tasks are resolved from an external snapshot while the
