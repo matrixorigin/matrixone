@@ -1955,7 +1955,8 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 			continue
 		}
 		if dTask.TaskStatus != task.TaskStatus_Canceled {
-			if targetStatus == task.TaskStatus_ResumeRequested && dTask.TaskStatus != task.TaskStatus_Paused ||
+			if targetStatus == task.TaskStatus_ResumeRequested &&
+				(dTask.TaskStatus != task.TaskStatus_Paused && dTask.TaskStatus != task.TaskStatus_Running) ||
 				targetStatus == task.TaskStatus_PauseRequested && dTask.TaskStatus != task.TaskStatus_Running {
 				createCdc := details.CreateCdc
 				logutil.Warn("cdc.task.state.mismatch",
