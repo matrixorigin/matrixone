@@ -22,25 +22,63 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/stretchr/testify/require"
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 2)
+	require.Len(t, tenantUpgEntries, 3)
 	require.Len(t, clusterUpgEntries, 1)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
 	require.Equal(t, mongodb.TableMappings, tenantUpgEntries[1].TableName)
-	for _, entry := range tenantUpgEntries {
+	for _, entry := range tenantUpgEntries[:2] {
 		require.Equal(t, versions.CREATE_NEW_TABLE, entry.UpgType)
 		require.Contains(t, strings.ToLower(entry.UpgSql), "create table mo_catalog.")
 	}
+	characterSets := tenantUpgEntries[2]
+	require.Equal(t, sysview.InformationDBConst, characterSets.Schema)
+	require.Equal(t, "CHARACTER_SETS", characterSets.TableName)
+	require.Equal(t, versions.MODIFY_METADATA, characterSets.UpgType)
+	require.Equal(t, sysview.InformationSchemaCharacterSetsData, characterSets.UpgSql)
+	require.Contains(t, strings.ToLower(characterSets.PreSql), "delete from information_schema.character_sets")
 
 	meta := Handler.Metadata()
 	require.Equal(t, "4.0.6", meta.Version)
 	require.Equal(t, "4.0.5", meta.MinUpgradeVersion)
 	require.Equal(t, versions.Yes, meta.UpgradeTenant)
 	require.Equal(t, uint32(len(tenantUpgEntries)+len(clusterUpgEntries)), meta.VersionOffset)
+}
+
+func TestPopulateInformationSchemaCharacterSetsIsIdempotent(t *testing.T) {
+	entry := populateInformationSchemaCharacterSets()
+	populated := false
+	var executed []string
+	txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		executed = append(executed, sql)
+		switch {
+		case strings.HasPrefix(sql, "SELECT 1 FROM information_schema.CHARACTER_SETS"):
+			if populated {
+				result := executor.NewMemResult(nil, nil)
+				result.NewBatchWithRowCount(1)
+				return result.GetResult(), nil
+			}
+		case sql == entry.UpgSql:
+			populated = true
+		}
+		return executor.Result{}, nil
+	}, nil)
+
+	require.NoError(t, entry.Upgrade(txn, 42))
+	require.Len(t, executed, 3)
+	require.True(t, strings.HasPrefix(executed[0], "SELECT 1 FROM information_schema.CHARACTER_SETS"))
+	require.Equal(t, entry.PreSql, executed[1])
+	require.Equal(t, entry.UpgSql, executed[2])
+
+	executed = nil
+	require.NoError(t, entry.Upgrade(txn, 42))
+	require.Len(t, executed, 1)
+	require.True(t, strings.HasPrefix(executed[0], "SELECT 1 FROM information_schema.CHARACTER_SETS"))
 }
 
 func TestRetireKafkaSinkDaemonTasks(t *testing.T) {

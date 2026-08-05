@@ -87,13 +87,14 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 	// FUBAR.
 
 	var mysqlCompatible bool
+	var mysqlFullGroupByCompat bool
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
 	if err == nil {
 		if modeStr, ok := mode.(string); ok {
-			if !strings.Contains(modeStr, "ONLY_FULL_GROUP_BY") {
-				mysqlCompatible = true
-			}
+			onlyFullGroupBy := mysql.HasSQLMode(modeStr, "ONLY_FULL_GROUP_BY")
+			mysqlCompatible = !onlyFullGroupBy
+			mysqlFullGroupByCompat = onlyFullGroupBy && !mysql.HasMatrixOneNativeSQLMode(modeStr)
 		}
 	}
 
@@ -143,6 +144,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		indexHintOwnerByNode:   make(map[int32]int32),
 		nextBindTag:            0,
 		mysqlCompatible:        mysqlCompatible,
+		mysqlFullGroupByCompat: mysqlFullGroupByCompat,
 		aggSpillMem:            aggSpillMem,
 		joinSpillMem:           joinSpillMem,
 		sortSpillMem:           sortSpillMem,
@@ -3407,6 +3409,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		if err != nil {
 			return 0, err
 		}
+		if subCtx.isCorrelated {
+			ctx.isCorrelated = true
+		}
 
 		if idx == 0 {
 			projectLength = len(builder.qry.Nodes[nodeID].ProjectList)
@@ -4739,12 +4744,24 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		// sample can ignore these check because it supports the sql like 'select a, b, sample(c) from t group by a' whose b is not in group by clause.
 		if (len(ctx.groups) > 0 || len(ctx.aggregates) > 0 || len(ctx.times) > 0) && len(projectionBinder.boundCols) > 0 {
 			if !builder.mysqlCompatible {
-				return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0])
+				if builder.mysqlFullGroupByCompat {
+					if rejectedColumn, rejected := builder.mysqlFullGroupByRejectedColumn(ctx, projectionBinder.boundCols); rejected {
+						return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", rejectedColumn)
+					}
+				} else {
+					return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0].name)
+				}
 			}
 
 			// For MySQL compatibility, wrap bare ColRefs in any_value()
 			for i, proj := range ctx.projects {
 				ctx.projects[i] = builder.wrapBareColRefsInAnyValue(proj, ctx)
+			}
+			// Window functions run above AGG, so their raw argument, partition,
+			// and ordering expressions must be materialized by the aggregate
+			// stage as well. The final projection retains windowTag references.
+			for i, window := range ctx.windows {
+				ctx.windows[i] = builder.wrapBareColRefsInAnyValue(window, ctx)
 			}
 		}
 	}
@@ -6702,6 +6719,7 @@ func (builder *QueryBuilder) bindWhere(
 			return
 		}
 	}
+	ctx.whereFilters = boundFilterList
 
 	newNodeID = nodeID
 	return
@@ -8896,6 +8914,173 @@ type tableFunctionInput struct {
 	attachExecutionChild bool
 }
 
+// normalizeTransparentCorrelatedDerivedTable lets a correlation pass through
+// one derived-table query block when that block is only a transparent unary
+// PROJECT/FILTER chain over one TABLE_SCAN.  It deliberately does not make a
+// same-level FROM reference lateral: a correlation owned by the immediate FROM
+// context remains rejected.  Binder-less derived contexts do not increment
+// CorrColRef.Depth, so ownership, rather than depth alone, distinguishes that
+// case from a reference to an ancestor outside the derived chain.
+//
+// Analysis is completed before any CorrColRef is changed so unsupported shapes
+// cannot leave a partially normalized plan behind.
+func (builder *QueryBuilder) normalizeTransparentCorrelatedDerivedTable(
+	nodeID int32,
+	ctx *BindContext,
+) error {
+	corrRefs := make(map[*plan.CorrColRef]struct{})
+	if !builder.analyzeTransparentCorrelatedDerivedTable(nodeID, ctx, corrRefs) || len(corrRefs) == 0 {
+		return moerr.NewNYI(builder.GetContext(), "correlated subquery in FROM clause")
+	}
+
+	for corr := range corrRefs {
+		if corr.Depth > 1 {
+			corr.Depth--
+		}
+	}
+	ctx.isCorrelated = true
+	return nil
+}
+
+func (builder *QueryBuilder) analyzeTransparentCorrelatedDerivedTable(
+	nodeID int32,
+	ctx *BindContext,
+	corrRefs map[*plan.CorrColRef]struct{},
+) bool {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+
+	node := builder.qry.Nodes[nodeID]
+	if node == nil || len(node.OnList) > 0 || len(node.GroupBy) > 0 || len(node.AggList) > 0 ||
+		len(node.WinSpecList) > 0 || len(node.OrderBy) > 0 || len(node.TblFuncExprList) > 0 ||
+		node.Limit != nil || node.Offset != nil || node.RankOption != nil {
+		return false
+	}
+
+	switch node.NodeType {
+	case plan.Node_PROJECT:
+		if len(node.Children) != 1 || len(node.FilterList) > 0 || len(node.BlockFilterList) > 0 {
+			return false
+		}
+		for _, expr := range node.ProjectList {
+			if !transparentDerivedLocalExpr(expr) {
+				return false
+			}
+		}
+		return builder.analyzeTransparentCorrelatedDerivedTable(node.Children[0], ctx, corrRefs)
+
+	case plan.Node_FILTER:
+		if len(node.Children) != 1 || len(node.ProjectList) > 0 || len(node.BlockFilterList) > 0 {
+			return false
+		}
+		for _, expr := range node.FilterList {
+			if !analyzeTransparentDerivedFilter(expr, ctx, corrRefs) {
+				return false
+			}
+		}
+		return builder.analyzeTransparentCorrelatedDerivedTable(node.Children[0], ctx, corrRefs)
+
+	case plan.Node_TABLE_SCAN:
+		if len(node.Children) != 0 || len(node.ProjectList) > 0 || len(node.BlockFilterList) > 0 {
+			return false
+		}
+		for _, expr := range node.FilterList {
+			if !analyzeTransparentDerivedFilter(expr, ctx, corrRefs) {
+				return false
+			}
+		}
+		return true
+
+	default:
+		return false
+	}
+}
+
+func transparentDerivedLocalExpr(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Corr, *plan.Expr_Sub, *plan.Expr_W:
+		return false
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if !transparentDerivedLocalExpr(arg) {
+				return false
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range exprImpl.List.List {
+			if !transparentDerivedLocalExpr(item) {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+func analyzeTransparentDerivedFilter(
+	expr *plan.Expr,
+	ctx *BindContext,
+	corrRefs map[*plan.CorrColRef]struct{},
+) bool {
+	if !hasCorrCol(expr) {
+		return transparentDerivedLocalExpr(expr)
+	}
+
+	fn := expr.GetF()
+	if fn == nil || fn.Func.GetObjName() != "=" || len(fn.Args) != 2 {
+		return false
+	}
+
+	leftCorr, rightCorr := fn.Args[0].GetCorr(), fn.Args[1].GetCorr()
+	if (leftCorr == nil) == (rightCorr == nil) {
+		return false
+	}
+
+	corr, local := leftCorr, fn.Args[1]
+	if corr == nil {
+		corr, local = rightCorr, fn.Args[0]
+	}
+	if corr.Depth <= 0 || local.GetCol() == nil {
+		return false
+	}
+	if !transparentDerivedCorrelationTargetsNearestAncestor(ctx, corr) {
+		return false
+	}
+	if !transparentDerivedLocalExpr(local) {
+		return false
+	}
+
+	corrRefs[corr] = struct{}{}
+	return true
+}
+
+func transparentDerivedCorrelationTargetsNearestAncestor(ctx *BindContext, corr *plan.CorrColRef) bool {
+	if _, sameFromScope := ctx.bindingByTag[corr.RelPos]; sameFromScope {
+		return false
+	}
+	if corr.Depth == 1 {
+		return true
+	}
+
+	for ancestor := ctx.parent; ancestor != nil; ancestor = ancestor.parent {
+		if _, ownsCorrelation := ancestor.bindingByTag[corr.RelPos]; ownsCorrelation {
+			return true
+		}
+		// A bound query block is a real correlation level even when its FROM
+		// clause is empty. Only contexts that have not installed a binder yet
+		// are transparent while a derived table is being built.
+		if ancestor.binder != nil || len(ancestor.bindingByTag) > 0 {
+			return false
+		}
+	}
+	return false
+}
+
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, tableInput *tableFunctionInput) (nodeID int32, err error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
@@ -8907,8 +9092,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		builder.isForUpdate = false
 		nodeID, err = builder.bindSelect(tbl, subCtx, false)
 		builder.isForUpdate = savedIsForUpdate
+		if err != nil {
+			return 0, err
+		}
 		if subCtx.isCorrelated {
-			return 0, moerr.NewNYI(builder.GetContext(), "correlated subquery in FROM clause")
+			if err = builder.normalizeTransparentCorrelatedDerivedTable(nodeID, ctx); err != nil {
+				return 0, err
+			}
 		}
 
 		if subCtx.hasSingleRow {
@@ -8961,7 +9151,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 						return 0, moerr.NewParseErrorf(builder.GetContext(), "cte %s reference itself", table)
 					}
 				}
-				if ctx.bindingRecurStmt() {
+				// Only the CTE currently being expanded is backed by the
+				// recursive scan. Other CTEs visible from the declaration scope
+				// must still be bound as their own producers.
+				if ctx.bindingRecurStmt() && cteRef == ctx.cteState.cte {
 					nodeID = ctx.cteState.recScanNodeId
 					return
 				}
@@ -9236,8 +9429,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			builder.isForUpdate = false
 			nodeID, err = builder.bindSelect(derivedSelect, subCtx, false)
 			builder.isForUpdate = savedIsForUpdate
+			if err != nil {
+				return 0, err
+			}
 			if subCtx.isCorrelated {
-				return 0, moerr.NewNYI(builder.GetContext(), "correlated subquery in FROM clause")
+				if err = builder.normalizeTransparentCorrelatedDerivedTable(nodeID, ctx); err != nil {
+					return 0, err
+				}
 			}
 			if subCtx.hasSingleRow {
 				ctx.hasSingleRow = true
