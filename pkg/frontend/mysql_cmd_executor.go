@@ -5228,6 +5228,15 @@ func buildComStmtPrepareInput(
 			return nil, err
 		}
 	}
+	// The prepareable grammar intentionally admits only one SET assignment:
+	// prepared multi-assignment has no atomic execution contract yet. Quoting
+	// the payload as PrepareString must not bypass that binary-protocol boundary.
+	if stmt, err := mysql.ParseOneWithSQLMode(ctx, sql, 1, sqlMode); err == nil {
+		defer stmt.Free()
+		if setVar, ok := stmt.(*tree.SetVar); ok && len(setVar.Assignments) != 1 {
+			return nil, moerr.NewParseError(ctx, "binary prepared SET supports exactly one assignment")
+		}
+	}
 	wrapper := buildComStmtPrepareSQL(stmtName, sql, sqlMode)
 	materialized, err := policy.rewrite(ctx, wrapper, sqlMode)
 	if err != nil {
