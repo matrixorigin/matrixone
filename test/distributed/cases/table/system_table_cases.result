@@ -122,13 +122,13 @@ SELECT COUNT(NULL) FROM (SELECT * FROM schemata where schema_name = 'mo_catalog'
 0
 SELECT COUNT(*) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
 ➤ COUNT(*)[-5,64,0]  𝄀
-0
+3
 SELECT COUNT(0) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
 ➤ COUNT(0)[-5,64,0]  𝄀
-0
+3
 SELECT COUNT('') FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
 ➤ COUNT()[-5,64,0]  𝄀
-0
+3
 SELECT COUNT(NULL) FROM (SELECT * FROM character_sets LIMIT 10) AS temp;
 ➤ COUNT(null)[-5,64,0]  𝄀
 0

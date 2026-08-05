@@ -3,6 +3,7 @@
 -- @desc:test for date datatype
 -- @label:bvt
 
+set session sql_mode = default;
 #Test cases of query without table, cast and interval
 select cast('0000-01-01' as date),cast('0000-01-01' as date)-1;
 select cast('2000-01-01' as date);

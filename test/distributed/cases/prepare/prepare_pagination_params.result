@@ -111,8 +111,8 @@ DEALLOCATE PREPARE bool_numeric;
 PREPARE numeric_compare FROM 'SELECT (? + 1) > 0 AS r';
 SET @compare_param = 2;
 EXECUTE numeric_compare USING @compare_param;
-➤ r[10,1,0]  𝄀
-true
+➤ r[-7,1,0]  𝄀
+1
 DEALLOCATE PREPARE numeric_compare;
 PREPARE numeric_set FROM 'SET @set_result = ? + 1';
 SET @set_param = 2;

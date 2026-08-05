@@ -172,7 +172,11 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		}
 		parentParamType := b.numericParamType
 		b.numericParamType = nil
-		if isNumericArithmeticRoot(exprImpl.Expr) ||
+		if b.mysqlSpecialTypeInAst(exprImpl.Expr) && makeTypeByPlan2Type(typ).IsNumeric() {
+			expr, err = b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
+				return b.impl.BindExpr(exprImpl.Expr, depth, false)
+			})
+		} else if isNumericArithmeticRoot(exprImpl.Expr) ||
 			b.isGenericNumericFunctionRoot(exprImpl.Expr, depth, &typ) {
 			expr, err = b.bindNumericExprWithContext(exprImpl.Expr, depth, &typ)
 		} else {
@@ -181,6 +185,12 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		b.numericParamType = parentParamType
 		if err != nil {
 			return
+		}
+		// ENUM and SET normally bind as their display strings.  An explicit
+		// numeric cast is, however, a numeric operand contract in MySQL and
+		// must start from the stored ordinal/bitmap instead of that string.
+		if makeTypeByPlan2Type(typ).IsNumeric() {
+			expr, _ = storedMySQLSpecialTypeExpr(expr)
 		}
 		if b.builder != nil {
 			var rewritten bool
@@ -509,7 +519,18 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		return
 	}
 
-	if isEnumOrSetPlanType(typ) {
+	if colPos != NotFound {
+		b.boundCols = append(b.boundCols, boundColumn{
+			name:      table + "." + col,
+			relation:  relPos,
+			columnPos: colPos,
+		})
+	}
+
+	// ENUM and SET have distinct storage and display representations. Keep their
+	// display value by default. Numeric and bitwise expression binders explicitly
+	// enable raw storage binding so they follow MySQL's numeric semantics.
+	if !b.bindRawMySQLSpecialType && isEnumOrSetPlanType(typ) {
 		if err != nil {
 			errutil.ReportError(b.GetContext(), err)
 			return
@@ -549,8 +570,6 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	}
 
 	if colPos != NotFound {
-		b.boundCols = append(b.boundCols, table+"."+col)
-
 		expr = &plan.Expr{
 			Typ: *typ,
 		}
@@ -722,23 +741,37 @@ func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32, isRoot bo
 }
 
 func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot bool) (*Expr, error) {
-	if astExpr.Not {
-		// rewrite 'col not between 1, 20' to 'col < 1 or col > 20'
-		newLeftExpr := tree.NewComparisonExpr(tree.LESS_THAN, astExpr.Left, astExpr.From)
-		newRightExpr := tree.NewComparisonExpr(tree.GREAT_THAN, astExpr.Left, astExpr.To)
-		return b.bindFuncExprImplByAstExpr("or", []tree.Expr{newLeftExpr, newRightExpr}, depth)
-	} else {
-		if _, ok := astExpr.Left.(*tree.Tuple); ok {
-			newLeftExpr := tree.NewComparisonExpr(tree.GREAT_THAN_EQUAL, astExpr.Left, astExpr.From)
-			newRightExpr := tree.NewComparisonExpr(tree.LESS_THAN_EQUAL, astExpr.Left, astExpr.To)
-			return b.bindFuncExprImplByAstExpr("and", []tree.Expr{newLeftExpr, newRightExpr}, depth)
-		}
+	bind := func() (*Expr, error) {
+		if astExpr.Not {
+			// rewrite 'col not between 1, 20' to 'col < 1 or col > 20'
+			newLeftExpr := tree.NewComparisonExpr(tree.LESS_THAN, astExpr.Left, astExpr.From)
+			newRightExpr := tree.NewComparisonExpr(tree.GREAT_THAN, astExpr.Left, astExpr.To)
+			return b.bindFuncExprImplByAstExpr("or", []tree.Expr{newLeftExpr, newRightExpr}, depth)
+		} else {
+			if _, ok := astExpr.Left.(*tree.Tuple); ok {
+				newLeftExpr := tree.NewComparisonExpr(tree.GREAT_THAN_EQUAL, astExpr.Left, astExpr.From)
+				newRightExpr := tree.NewComparisonExpr(tree.LESS_THAN_EQUAL, astExpr.Left, astExpr.To)
+				return b.bindFuncExprImplByAstExpr("and", []tree.Expr{newLeftExpr, newRightExpr}, depth)
+			}
 
-		return b.bindFuncExprImplByAstExpr("between", []tree.Expr{astExpr.Left, astExpr.From, astExpr.To}, depth)
+			return b.bindFuncExprImplByAstExpr("between", []tree.Expr{astExpr.Left, astExpr.From, astExpr.To}, depth)
+		}
 	}
+	if b.mysqlSpecialTypeInAst(astExpr.Left) &&
+		b.mysqlSpecialTypeNumericContext(astExpr.From) &&
+		b.mysqlSpecialTypeNumericContext(astExpr.To) {
+		return b.bindWithRawMySQLSpecialTypes(bind)
+	}
+	return bind()
 }
 
 func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot bool) (*Expr, error) {
+	if (astExpr.Op == tree.UNARY_PLUS || astExpr.Op == tree.UNARY_MINUS || astExpr.Op == tree.UNARY_TILDE) &&
+		b.mysqlSpecialTypeInAst(astExpr.Expr) {
+		return b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
+			return b.bindUnaryExprWithCurrentContext(astExpr, depth)
+		})
+	}
 	if (astExpr.Op == tree.UNARY_MINUS || astExpr.Op == tree.UNARY_PLUS) && b.numericParamType == nil {
 		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
 	}
@@ -760,10 +793,28 @@ func (b *baseBinder) bindUnaryExprWithCurrentContext(astExpr *tree.UnaryExpr, de
 }
 
 func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoot bool) (*Expr, error) {
+	if (isNumericBinaryOp(astExpr.Op) || isBitwiseBinaryOp(astExpr.Op)) &&
+		(b.mysqlSpecialTypeInAst(astExpr.Left) || b.mysqlSpecialTypeInAst(astExpr.Right)) {
+		return b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
+			if isNumericBinaryOp(astExpr.Op) && b.numericParamType == nil {
+				return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
+			}
+			return b.bindBinaryExprWithCurrentContext(astExpr, depth)
+		})
+	}
 	if isNumericBinaryOp(astExpr.Op) && b.numericParamType == nil {
 		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
 	}
 	return b.bindBinaryExprWithCurrentContext(astExpr, depth)
+}
+
+func isBitwiseBinaryOp(op tree.BinaryOp) bool {
+	switch op {
+	case tree.BIT_XOR, tree.BIT_OR, tree.BIT_AND, tree.LEFT_SHIFT, tree.RIGHT_SHIFT:
+		return true
+	default:
+		return false
+	}
 }
 
 func (b *baseBinder) bindBinaryExprWithCurrentContext(astExpr *tree.BinaryExpr, depth int32) (*Expr, error) {
@@ -2151,6 +2202,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			}
 
 			if subquery := rightArg.GetSub(); subquery != nil {
+				leftArg = b.useStoredMySQLSpecialTypesForNumericSubquery(leftArg, rightArg)
 				if list := leftArg.GetList(); list != nil {
 					if len(list.List) != int(subquery.RowSize) {
 						return nil, moerr.NewNYIf(b.GetContext(), "subquery should return %d columns", len(list.List))
@@ -2197,6 +2249,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			}
 
 			if subquery := rightArg.GetSub(); subquery != nil {
+				leftArg = b.useStoredMySQLSpecialTypesForNumericSubquery(leftArg, rightArg)
 				if list := leftArg.GetList(); list != nil {
 					if len(list.List) != int(subquery.RowSize) {
 						return nil, moerr.NewInvalidInputf(b.GetContext(), "subquery should return %d columns", len(list.List))
@@ -2245,6 +2298,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		}
 
 		if subquery := expr.GetSub(); subquery != nil {
+			child = b.useStoredMySQLSpecialTypesForNumericSubquery(child, expr)
 			if list := child.GetList(); list != nil {
 				if len(list.List) != int(subquery.RowSize) {
 					return nil, moerr.NewInvalidInputf(b.GetContext(), "subquery should return %d columns", len(list.List))
@@ -2284,6 +2338,11 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		if expr, handled, err := b.bindPreparedDynamicComparison(op, args[0], args[1], depth); handled || err != nil {
 			return expr, err
 		}
+	}
+	if b.mysqlSpecialTypeNumericComparison(astExpr.Left, astExpr.Right) {
+		return b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
+			return b.bindFuncExprImplByAstExpr(op, args, depth)
+		})
 	}
 	return b.bindFuncExprImplByAstExpr(op, args, depth)
 }
@@ -2336,6 +2395,110 @@ func (b *baseBinder) bindPreparedDynamicComparison(
 	}
 	expr, err := BindFuncExprImplByPlanExpr(b.GetContext(), op, args)
 	return expr, true, err
+}
+
+func (b *baseBinder) bindWithRawMySQLSpecialTypes(bind func() (*Expr, error)) (*Expr, error) {
+	previous := b.bindRawMySQLSpecialType
+	b.bindRawMySQLSpecialType = true
+	defer func() { b.bindRawMySQLSpecialType = previous }()
+	return bind()
+}
+
+func (b *baseBinder) mysqlSpecialTypeNumericComparison(left, right tree.Expr) bool {
+	return (b.mysqlSpecialTypeAst(left) && b.mysqlSpecialTypeNumericContext(right)) ||
+		(b.mysqlSpecialTypeAst(right) && b.mysqlSpecialTypeNumericContext(left))
+}
+
+// mysqlSpecialTypeNumericContext reports AST expressions whose bound contract
+// is numeric. ENUM and SET are normally exposed as display strings, but MySQL
+// uses their stored ordinal/bitmap when compared with a numeric operand.
+func (b *baseBinder) mysqlSpecialTypeNumericContext(expr tree.Expr) bool {
+	switch value := unwrapParenExpr(expr).(type) {
+	case *tree.NumVal:
+		return mysqlSpecialTypeNumericLiteral(value)
+	case *tree.UnresolvedName:
+		typ, ok := b.numericColumnType(value)
+		return ok && makeTypeByPlan2Type(typ).IsNumeric()
+	case *tree.UnaryExpr:
+		return (value.Op == tree.UNARY_PLUS || value.Op == tree.UNARY_MINUS) &&
+			b.mysqlSpecialTypeNumericContext(value.Expr)
+	case *tree.BinaryExpr:
+		return isNumericBinaryOp(value.Op) || isBitwiseBinaryOp(value.Op)
+	case *tree.CastExpr:
+		typ, err := getTypeFromAst(b.GetContext(), value.Type)
+		return err == nil && makeTypeByPlan2Type(typ).IsNumeric()
+	case *tree.FuncExpr:
+		return supportsGenericNumericFunctionContext(strings.ToLower(numericAstFunctionName(value)))
+	case *tree.Tuple:
+		if len(value.Exprs) == 0 {
+			return false
+		}
+		for _, item := range value.Exprs {
+			if !b.mysqlSpecialTypeNumericContext(item) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func mysqlSpecialTypeInExprs(b *baseBinder, exprs []tree.Expr) bool {
+	for _, expr := range exprs {
+		if b.mysqlSpecialTypeInAst(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *baseBinder) mysqlSpecialTypeAst(expr tree.Expr) bool {
+	name, ok := unwrapParenExpr(expr).(*tree.UnresolvedName)
+	if !ok {
+		return false
+	}
+	typ, ok := b.numericColumnType(name)
+	return ok && isEnumOrSetPlanType(&typ)
+}
+
+func (b *baseBinder) mysqlSpecialTypeInAst(expr tree.Expr) bool {
+	if b.mysqlSpecialTypeAst(expr) {
+		return true
+	}
+	switch value := unwrapParenExpr(expr).(type) {
+	case *tree.UnaryExpr:
+		return b.mysqlSpecialTypeInAst(value.Expr)
+	case *tree.BinaryExpr:
+		return b.mysqlSpecialTypeInAst(value.Left) || b.mysqlSpecialTypeInAst(value.Right)
+	case *tree.CastExpr:
+		return b.mysqlSpecialTypeInAst(value.Expr)
+	case *tree.FuncExpr:
+		return mysqlSpecialTypeInExprs(b, value.Exprs)
+	case *tree.Tuple:
+		return mysqlSpecialTypeInExprs(b, value.Exprs)
+	}
+	return false
+}
+
+func mysqlSpecialTypeNumericLiteral(expr tree.Expr) bool {
+	switch value := unwrapParenExpr(expr).(type) {
+	case *tree.NumVal:
+		switch value.ValType {
+		case tree.P_int64, tree.P_uint64, tree.P_float64:
+			return true
+		}
+	case *tree.Tuple:
+		if len(value.Exprs) == 0 {
+			return false
+		}
+		for _, item := range value.Exprs {
+			if !mysqlSpecialTypeNumericLiteral(item) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tuple, depth int32, isNot bool) (*plan.Expr, error) {
@@ -2414,6 +2577,12 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	funcName := funcRef.ColName()
 	if strings.EqualFold(funcName, "mod") && b.numericParamType == nil {
 		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
+	}
+	if supportsGenericNumericFunctionContext(strings.ToLower(funcName)) &&
+		mysqlSpecialTypeInExprs(b, astExpr.Exprs) {
+		return b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
+			return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+		})
 	}
 
 	if function.GetFunctionIsAggregateByName(funcName) && astExpr.WindowSpec == nil {
@@ -2660,7 +2829,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, err
 		}
 	}
-
+	args = useStoredMySQLSpecialTypesForNumericContract(b.GetContext(), name, args)
 	//promote interval expr rewrite here
 	if name == "interval" {
 		if len(astArgs) == 2 {
@@ -4641,14 +4810,33 @@ func rewriteMySQLSpecialTypeDisplayCast(ctx context.Context, expr *Expr, toType 
 	if toType.Id != int32(types.T_json) {
 		return expr, false, nil
 	}
-	if expr.Typ.Id == int32(types.T_enum) {
-		return nil, false, moerr.NewInvalidArg(ctx, "operator cast", "[ENUM JSON]")
+	if isEnumOrSetPlanType(&expr.Typ) {
+		displayValue, err := makeEnumOrSetDisplayValue(ctx, expr)
+		if err != nil {
+			return nil, false, err
+		}
+		quoted, err := quoteEnumOrSetDisplayValueAsJSON(ctx, displayValue)
+		return quoted, err == nil, err
 	}
 	if isEnumOrSetDisplayValueExpr(expr) {
 		quoted, err := quoteEnumOrSetDisplayValueAsJSON(ctx, expr)
 		return quoted, err == nil, err
 	}
 	return expr, false, nil
+}
+
+func makeEnumOrSetDisplayValue(ctx context.Context, expr *Expr) (*Expr, error) {
+	if expr == nil || !isEnumOrSetPlanType(&expr.Typ) {
+		return expr, nil
+	}
+	indexToValueFun, _, _, err := mysqlSpecialTypeFuncNames(&expr.Typ)
+	if err != nil {
+		return nil, err
+	}
+	return BindFuncExprImplByPlanExpr(ctx, indexToValueFun, []*Expr{
+		makePlan2StringConstExprWithType(expr.Typ.Enumvalues),
+		expr,
+	})
 }
 
 func storedSetBitmapExpr(expr *Expr) (*Expr, bool) {
@@ -4665,6 +4853,175 @@ func storedSetBitmapExpr(expr *Expr) (*Expr, bool) {
 	// as an ordinary bitmap and does not convert it back through SET semantics.
 	bitmap.Typ.Enumvalues = ""
 	return bitmap, true
+}
+
+// storedMySQLSpecialTypeExpr removes the presentation wrapper that column
+// binding adds for ENUM and SET.  The wrapper is appropriate for ordinary
+// string contexts, but numeric contracts must consume the stored ENUM ordinal
+// or SET bitmap.  Keep this narrowly structural: only the wrappers made by
+// makeEnumOrSetDisplayValue are unwrapped.
+func storedMySQLSpecialTypeExpr(expr *Expr) (*Expr, bool) {
+	if isSetDisplayValueExpr(expr) {
+		return storedSetBitmapExpr(expr)
+	}
+	if expr == nil {
+		return expr, false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != moEnumCastIndexToValueFun || len(fn.Args) != 2 || fn.Args[1] == nil {
+		return expr, false
+	}
+	return DeepCopyExpr(fn.Args[1]), true
+}
+
+// useStoredMySQLSpecialTypesForNumericContract chooses ENUM/SET storage from
+// the function overload's bound operand contract, rather than from a small
+// collection of AST shapes.  This preserves display labels for string
+// functions such as LENGTH while allowing numeric consumers such as ABS,
+// comparisons against numeric columns, and IN lists to use MySQL ordinals.
+func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name string, args []*Expr) []*Expr {
+	rawArgs := make([]*Expr, len(args))
+	hasSpecialArg := false
+	for i, arg := range args {
+		raw, unwrapped := storedMySQLSpecialTypeExpr(arg)
+		rawArgs[i] = raw
+		if !unwrapped {
+			continue
+		}
+		hasSpecialArg = true
+	}
+	if !hasSpecialArg {
+		return args
+	}
+
+	// The display-bound operands describe the contract selected for this SQL
+	// expression.  In particular, resolving a raw ENUM against a string can
+	// itself select a numeric comparison rule, so do not use the raw overload
+	// to decide whether the caller asked for numeric semantics.
+	displayTypes := make([]types.Type, len(args))
+	for i, arg := range args {
+		displayTypes[i] = makeTypeByPlan2Expr(arg)
+	}
+	resolved, err := function.GetFunctionByName(ctx, name, displayTypes)
+	if err != nil {
+		return useStoredMySQLSpecialTypesForNumericInList(name, args, rawArgs)
+	}
+	targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+	if !shouldCast || len(targets) != len(rawArgs) {
+		return useStoredMySQLSpecialTypesForNumericInList(name, args, rawArgs)
+	}
+	result := args
+	changed := false
+	for i, arg := range args {
+		if _, unwrapped := storedMySQLSpecialTypeExpr(arg); unwrapped && targets[i].IsNumeric() {
+			if !changed {
+				result = append([]*Expr(nil), args...)
+				changed = true
+			}
+			result[i] = rawArgs[i]
+		}
+	}
+	return result
+}
+
+// An IN list is represented as a plan.ExprList and is not assigned one scalar
+// cast target by the function registry.  Its already-bound member types are
+// therefore the operand contract: use the stored value only when every member
+// is numeric.  Mixed lists retain normal string semantics.
+func useStoredMySQLSpecialTypesForNumericInList(name string, args, rawArgs []*Expr) []*Expr {
+	if (name != "in" && name != "not_in" && name != "partition_in") || len(args) != 2 || args[1].GetList() == nil || len(args[1].GetList().List) == 0 {
+		return args
+	}
+	for _, member := range args[1].GetList().List {
+		if !makeTypeByPlan2Expr(member).IsNumeric() {
+			return args
+		}
+	}
+	result := append([]*Expr(nil), args...)
+	for i, arg := range args {
+		if _, unwrapped := storedMySQLSpecialTypeExpr(arg); unwrapped {
+			result[i] = rawArgs[i]
+		}
+	}
+	return result
+}
+
+// useStoredMySQLSpecialTypesForNumericSubquery applies the numeric operand
+// contract in both directions.  Subquery references expose only one scalar
+// type for single-column results, so tuple comparisons must inspect the
+// subquery projection position-by-position rather than the tuple type itself.
+func (b *baseBinder) useStoredMySQLSpecialTypesForNumericSubquery(left, subqueryExpr *Expr) *Expr {
+	projectList := b.subqueryProjectList(subqueryExpr)
+	if len(projectList) == 0 {
+		return left
+	}
+
+	left = useStoredMySQLSpecialTypeForNumericProjection(left, projectList)
+	for i, project := range projectList {
+		if !numericSubqueryOperandAt(left, i) {
+			continue
+		}
+		if raw, ok := storedMySQLSpecialTypeExpr(project); ok {
+			projectList[i] = raw
+		}
+	}
+	return left
+}
+
+func (b *baseBinder) subqueryProjectList(expr *Expr) []*Expr {
+	if b.builder == nil || expr == nil || expr.GetSub() == nil {
+		return nil
+	}
+	nodeID := expr.GetSub().NodeId
+	if nodeID < 0 || int(nodeID) >= len(b.builder.qry.Nodes) {
+		return nil
+	}
+	return b.builder.qry.Nodes[nodeID].ProjectList
+}
+
+func useStoredMySQLSpecialTypeForNumericProjection(left *Expr, projects []*Expr) *Expr {
+	if left == nil || len(projects) == 0 {
+		return left
+	}
+	if list := left.GetList(); list != nil {
+		if len(list.List) != len(projects) {
+			return left
+		}
+		var result []*Expr
+		for i, item := range list.List {
+			if !makeTypeByPlan2Expr(projects[i]).IsNumeric() {
+				continue
+			}
+			raw, ok := storedMySQLSpecialTypeExpr(item)
+			if !ok {
+				continue
+			}
+			if result == nil {
+				result = append([]*Expr(nil), list.List...)
+			}
+			result[i] = raw
+		}
+		if result == nil {
+			return left
+		}
+		return &Expr{Typ: left.Typ, Expr: &plan.Expr_List{List: &plan.ExprList{List: result}}}
+	}
+	if len(projects) == 1 && makeTypeByPlan2Expr(projects[0]).IsNumeric() {
+		if raw, ok := storedMySQLSpecialTypeExpr(left); ok {
+			return raw
+		}
+	}
+	return left
+}
+
+func numericSubqueryOperandAt(left *Expr, index int) bool {
+	if left == nil {
+		return false
+	}
+	if list := left.GetList(); list != nil {
+		return index < len(list.List) && makeTypeByPlan2Expr(list.List[index]).IsNumeric()
+	}
+	return index == 0 && makeTypeByPlan2Expr(left).IsNumeric()
 }
 
 func isSetDisplayValueExpr(expr *Expr) bool {

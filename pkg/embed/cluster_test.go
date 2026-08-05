@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -28,11 +27,11 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/gofrs/flock"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/testutil/clusteradmission"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/assert"
@@ -504,31 +503,14 @@ func TestClusterRejectsNegativeCNCounts(t *testing.T) {
 	require.Zero(t, c.options.cn)
 }
 
-func TestClusterStartupLeaseIsExclusive(t *testing.T) {
-	first, err := acquireClusterStartupLease(context.Background())
-	require.NoError(t, err)
-	firstClosed := false
-	t.Cleanup(func() {
-		if !firstClosed {
-			require.NoError(t, first.Close())
-		}
-	})
+func TestClusterAdmissionCoversFullLifecycle(t *testing.T) {
+	c := &cluster{state: stopped}
+	c.options.testing = true
 
-	contender := flock.New(filepath.Join(os.TempDir(), clusterStartupLeaseFilename))
-	locked, err := contender.TryLock()
-	require.NoError(t, err)
-	require.False(t, locked)
-	require.NoError(t, contender.Close())
-	canceledCtx, cancel := context.WithCancel(context.Background())
-	cancel()
-	_, err = acquireClusterStartupLease(canceledCtx)
-	require.ErrorIs(t, err, context.Canceled)
-
-	require.NoError(t, first.Close())
-	firstClosed = true
-	next, err := acquireClusterStartupLease(context.Background())
-	require.NoError(t, err)
-	require.NoError(t, next.Close())
+	require.NoError(t, c.Start())
+	require.NotNil(t, c.testAdmission)
+	require.NoError(t, c.Close())
+	require.Nil(t, c.testAdmission)
 }
 
 func TestWithTestingExtendsStoreLivenessWithoutExtendingHeartbeatDeadline(t *testing.T) {
@@ -726,6 +708,7 @@ func TestClusterStartRollbackClosesPartiallyStartedServices(t *testing.T) {
 		portLeaseBase: portLease.base,
 		portLeaseNext: portLease.base,
 	}
+	c.options.testing = true
 	t.Cleanup(func() {
 		if c.portLease != nil {
 			require.NoError(t, c.releasePortLeaseLocked())
@@ -759,6 +742,7 @@ func TestClusterStartRollbackClosesPartiallyStartedServices(t *testing.T) {
 	require.Equal(t, stopped, logOp.state)
 	require.Equal(t, stopped, tnOp.state)
 	require.Equal(t, stopped, cnOp.state)
+	require.Nil(t, c.testAdmission)
 	require.Nil(t, logOp.reset.stopper)
 	require.Nil(t, tnOp.reset.stopper)
 	select {
@@ -787,17 +771,22 @@ func TestClusterCloseContinuesAfterServiceError(t *testing.T) {
 		state:    started,
 		services: []*operator{firstOp, secondOp},
 	}
+	admission, err := clusteradmission.Acquire(context.Background())
+	require.NoError(t, err)
+	c.testAdmission = admission
 
-	err := c.Close()
+	err = c.Close()
 	require.ErrorIs(t, err, secondErr)
 	require.Equal(t, int32(1), first.closeCount.Load())
 	require.Equal(t, int32(1), second.closeCount.Load())
 	require.Equal(t, stopped, c.state)
+	require.NotNil(t, c.testAdmission)
 
 	second.closeErr = nil
 	require.NoError(t, c.Close())
 	require.Equal(t, int32(1), first.closeCount.Load())
 	require.Equal(t, int32(2), second.closeCount.Load())
+	require.Nil(t, c.testAdmission)
 }
 
 func TestRollbackNewServicesKeepsRunningCluster(t *testing.T) {

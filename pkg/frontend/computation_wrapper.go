@@ -708,6 +708,7 @@ func initExecuteStmtParamWithResolverInSession(
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
 	currentNativeMode := owner.sqlModeHasMatrixOneNative()
+	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
 
 	// TODO check if schema change, obj.Obj is zero all the time in 0.6
 	eng := cwft.proc.Base.SessionInfo.StorageEngine
@@ -778,7 +779,8 @@ func initExecuteStmtParamWithResolverInSession(
 	// every EXECUTE so both enabled->disabled and disabled->enabled transitions
 	// observe the current setting.
 	fkSensitive := shouldRebuildPreparePlan(false, preparePlan.Plan)
-	modeMismatch := prepareStmt.NativeMode != currentNativeMode
+	modeMismatch := prepareStmt.NativeMode != currentNativeMode ||
+		prepareStmt.onlyFullGroupBySet && prepareStmt.OnlyFullGroupBy != currentOnlyFullGroupBy
 	protocolVersion := currentProtocolVersion(cwft.proc)
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
@@ -819,6 +821,8 @@ func initExecuteStmtParamWithResolverInSession(
 			execCtx.prepareColDef = newColDefData
 		}
 		prepareStmt.NativeMode = currentNativeMode
+		prepareStmt.OnlyFullGroupBy = currentOnlyFullGroupBy
+		prepareStmt.onlyFullGroupBySet = true
 		prepareStmt.Ts = prepareTs
 		prepareStmt.tempTableVersion = currentTempTableVersion
 		prepareStmt.ddlVersion = currentDDLVersion
@@ -886,7 +890,7 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, err
 		}
 		if needsNumericSpecialization {
-			executionPlan, err = specializePreparedNumericPlan(reqCtx, prepareStmt, preparePlan.Plan, cwft.paramVals)
+			executionPlan, err = specializePreparedNumericPlan(reqCtx, prepareStmt, preparePlan.Plan, cwft.paramVals, cwft.proc)
 			if err != nil {
 				cwft.proc.SetPrepareParams(nil)
 				cwft.paramVals = nil
@@ -906,7 +910,7 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, err
 		}
 		if needsNumericSpecialization {
-			executionPlan, err = specializePreparedNumericPlan(reqCtx, prepareStmt, preparePlan.Plan, paramVals)
+			executionPlan, err = specializePreparedNumericPlan(reqCtx, prepareStmt, preparePlan.Plan, paramVals, cwft.proc)
 			if err != nil {
 				params.Free(cwft.proc.Mp())
 				return nil, nil, nil, originSQL, false, err
@@ -952,8 +956,7 @@ func initExecuteStmtParamWithResolverInSession(
 				return nil, nil, nil, "", false, compileErr
 			}
 			if comp != nil && !comp.IsTpQuery() {
-				comp.SetIsPrepare(false)
-				comp.Release()
+				releaseCompilePreservingPrepareParams(comp, cwft.proc, false)
 				comp = nil
 			}
 			prepareStmt.compile = comp
@@ -981,6 +984,7 @@ func specializePreparedNumericPlan(
 	prepareStmt *PrepareStmt,
 	preparePlan *plan.Plan,
 	paramVals []any,
+	proc *process.Process,
 ) (*plan.Plan, error) {
 	signature, err := preparedNumericParamSignature(ctx, paramVals)
 	if err != nil {
@@ -990,9 +994,7 @@ func specializePreparedNumericPlan(
 		return prepareStmt.dynamicNumericPlan, nil
 	}
 	if prepareStmt.compile != nil {
-		prepareStmt.compile.FreeOperator()
-		prepareStmt.compile.SetIsPrepare(false)
-		prepareStmt.compile.Release()
+		releaseCompilePreservingPrepareParams(prepareStmt.compile, proc, true)
 		prepareStmt.compile = nil
 	}
 	specialized, err := plan2.FillValuesOfParamsInPlan(ctx, preparePlan, paramVals)
@@ -1002,6 +1004,31 @@ func specializePreparedNumericPlan(
 	prepareStmt.dynamicNumericSignature = signature
 	prepareStmt.dynamicNumericPlan = specialized
 	return specialized, nil
+}
+
+// Compile.Release frees the shared Process and therefore clears its prepared
+// parameter vector. During EXECUTE the same Process already owns the current
+// invocation's parameters, so releasing an ineligible or stale cached compile
+// must temporarily detach that state and restore it afterwards.
+func releaseCompilePreservingPrepareParams(comp *compile.Compile, proc *process.Process, freeOperator bool) {
+	if comp == nil {
+		return
+	}
+	if proc == nil {
+		if freeOperator {
+			comp.FreeOperator()
+		}
+		comp.SetIsPrepare(false)
+		comp.Release()
+		return
+	}
+	params := proc.DetachPrepareParams()
+	defer proc.RestorePrepareParams(params)
+	if freeOperator {
+		comp.FreeOperator()
+	}
+	comp.SetIsPrepare(false)
+	comp.Release()
 }
 
 func preparedNumericParamSignature(ctx context.Context, paramVals []any) (string, error) {
@@ -1216,6 +1243,7 @@ func buildExecuteUserParams(
 		if err != nil {
 			return
 		}
+		param = normalizePreparedParamValue(param)
 		err = util.AppendAnyToStringVector(proc, param, params)
 		if err != nil {
 			return
@@ -1228,7 +1256,7 @@ func buildExecuteUserParams(
 			}
 		}
 		paramVals[i] = plan2.ParamValue{
-			Value: normalizePreparedParamValue(param),
+			Value: param,
 			IsBin: paramIsBin[i],
 			RuntimeType: normalizePreparedParamRuntimeType(
 				preparedExecuteParamRuntimeType(ses, exprImpl.V, param)),

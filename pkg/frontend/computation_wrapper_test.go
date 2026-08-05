@@ -149,6 +149,9 @@ func newPreparedExecuteEnvForSQL(t testing.TB, stmtID uint32, sql string) (*Sess
 		Sql:                  prepareString.Sql,
 		PreparePlan:          preparePlan,
 		PrepareStmt:          stmts[0],
+		NativeMode:           ses.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:      ses.sqlModeHasOnlyFullGroupBy(),
+		onlyFullGroupBySet:   true,
 		getFromSendLongData:  make(map[int]struct{}),
 		protocolVersion:      currentProtocolVersion(proc),
 		dynamicNumericParams: plan2.HasPreparedDynamicNumericParams(preparePlan.GetDcl().GetPrepare().Plan),
@@ -1119,6 +1122,26 @@ func TestInitExecuteStmtParamRebuildsPreparedPlanWhenSQLModePresenceChanges(t *t
 	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
 }
 
+func TestInitExecuteStmtParamRebuildsPreparedPlanWhenOnlyFullGroupByChanges(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 109)
+	defer prepareStmt.Close()
+
+	execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", ""))
+	prepareStmt.OnlyFullGroupBy = false
+	prepareStmt.onlyFullGroupBySet = true
+	originalPlan := prepareStmt.PreparePlan
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "ONLY_FULL_GROUP_BY"))
+
+	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotNil(t, retPlan)
+	require.NotNil(t, retStmt)
+	require.True(t, prepareStmt.OnlyFullGroupBy)
+	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
+}
+
 func TestInitExecuteStmtParamBypassesButRetainsCachedTopologyForExplicitSchedulingIntent(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 102)
 	defer prepareStmt.Close()
@@ -1330,6 +1353,38 @@ func TestNormalizePreparedBoolAndDynamicNumericSignature(t *testing.T) {
 	decimalDifferentShape, err := preparedNumericParamSignature(ctx, []any{plan2.ParamValue{Value: "1.20", RuntimeType: types.T_decimal128}})
 	require.NoError(t, err)
 	require.NotEqual(t, decimalA, decimalDifferentShape, "decimal precision and scale changes must rebuild specialization")
+}
+
+func TestBuildExecuteUserParamsNormalizesBoolValueAndRuntimeTypeTogether(t *testing.T) {
+	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 112)
+	defer prepareStmt.Close()
+	require.NoError(t, ses.setUserDefinedVarWithType("bool_param", true, "", false, types.T_bool))
+
+	params, values, _, err := buildExecuteUserParams(ses, cw.proc, []*plan.Expr{{
+		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "bool_param"}},
+	}})
+	require.NoError(t, err)
+	defer params.Free(cw.proc.Mp())
+	require.Equal(t, "1", params.GetStringAt(0))
+	require.Equal(t, []any{plan2.ParamValue{
+		Value: int64(1), RuntimeType: types.T_int64,
+	}}, values)
+}
+
+func TestReleaseCompilePreservesCurrentPreparedParameters(t *testing.T) {
+	_, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 113)
+	defer prepareStmt.Close()
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("2"), false, cw.proc.Mp()))
+	cw.proc.SetOwnedPrepareParamsWithIsBin(params, []bool{false})
+
+	comp := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	releaseCompilePreservingPrepareParams(comp, cw.proc, false)
+
+	require.Same(t, params, cw.proc.GetPrepareParams())
+	require.Equal(t, "2", cw.proc.GetPrepareParams().GetStringAt(0))
 }
 
 func TestOrdinaryBoolUserVariableKeepsBoolType(t *testing.T) {

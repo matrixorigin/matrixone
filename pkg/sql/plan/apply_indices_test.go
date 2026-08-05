@@ -1712,6 +1712,9 @@ func TestFullTextJoinRewriteLeftChild(t *testing.T) {
 	require.Equal(t, rightScanID, joinNode.Children[1])
 	require.Equal(t, planpb.Node_JOIN, builder.qry.Nodes[joinNode.Children[0]].NodeType)
 	require.Equal(t, 1, countFullTextFunctionScans(builder, joinNode.Children[0]))
+	functionScan := collectFullTextFunctionScans(builder, joinNode.Children[0])[0]
+	require.Nil(t, functionScan.TableDef.TblFunc.FulltextSourceRef)
+	require.Nil(t, functionScan.TableDef.TblFunc.FulltextIndexRef)
 	require.False(t, nodeHasFullTextMatchFilter(builder.qry.Nodes[leftScanID]))
 	require.Len(t, joinNode.OnList, 1)
 }
@@ -1742,6 +1745,36 @@ func TestFullTextJoinRewriteFallsBackToScanContextWhenJoinContextIsNil(t *testin
 	require.NotEqual(t, leftScanID, builder.qry.Nodes[joinID].Children[0])
 	require.Equal(t, 1, countFullTextFunctionScans(builder, builder.qry.Nodes[joinID].Children[0]))
 	require.False(t, nodeHasFullTextMatchFilter(builder.qry.Nodes[leftScanID]))
+}
+
+func TestFullTextJoinRewriteCarriesPublisherReferences(t *testing.T) {
+	builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, false)
+	scan := builder.qry.Nodes[leftScanID]
+	scan.ObjRef.SchemaName = "pub`db"
+	scan.ObjRef.ObjName = "source`table"
+	scan.ObjRef.SubscriptionName = "subscriber_alias"
+	scan.ObjRef.PubInfo = &planpb.PubInfo{TenantId: 42}
+
+	indexName := scan.TableDef.Indexes[0].IndexTableName
+	mockCtx := builder.compCtx.(*fullTextJoinMockCompilerContext)
+	indexRef := mockCtx.objects[strings.ToLower(indexName)]
+	indexRef.SchemaName = scan.ObjRef.SchemaName
+	indexRef.ObjName = "index`table"
+	indexRef.SubscriptionName = scan.ObjRef.SubscriptionName
+	indexRef.PubInfo = &planpb.PubInfo{TenantId: 42}
+
+	_, err := builder.applyIndicesForJoins(joinID, builder.qry.Nodes[joinID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+
+	functionScans := collectFullTextFunctionScans(builder, builder.qry.Nodes[joinID].Children[0])
+	require.Len(t, functionScans, 1)
+	functionScan := functionScans[0]
+	require.Equal(t, "`pub``db`.`source``table`", functionScan.TblFuncExprList[0].GetLit().GetSval())
+	require.Equal(t, "`pub``db`.`index``table`", functionScan.TblFuncExprList[1].GetLit().GetSval())
+	require.Equal(t, scan.ObjRef, functionScan.TableDef.TblFunc.FulltextSourceRef)
+	require.Equal(t, indexRef, functionScan.TableDef.TblFunc.FulltextIndexRef)
+	require.NotSame(t, scan.ObjRef, functionScan.TableDef.TblFunc.FulltextSourceRef)
+	require.NotSame(t, indexRef, functionScan.TableDef.TblFunc.FulltextIndexRef)
 }
 
 func TestFullTextJoinRewriteBothChildren(t *testing.T) {
@@ -2058,6 +2091,12 @@ func buildFullTextJoinRewriteTestPlan(t *testing.T, leftFullText, rightFullText,
 	rightTag := builder.genNewBindTag()
 	leftDef := makeFullTextJoinTestTableDef("ft_left", leftFullText)
 	rightDef := makeFullTextJoinTestTableDef("ft_right", rightFullText)
+	if leftFullText {
+		registerFullTextJoinRegularIndexTable(builder, leftDef.Indexes[0].IndexTableName)
+	}
+	if rightFullText {
+		registerFullTextJoinRegularIndexTable(builder, rightDef.Indexes[0].IndexTableName)
+	}
 
 	var leftFilters []*planpb.Expr
 	if leftFullText {
