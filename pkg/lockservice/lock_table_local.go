@@ -1001,11 +1001,12 @@ func (l *localLockTable) addRangeLockLocked(
 		break
 	}
 
-	// A budget-driven range contains every lock already retained for this
-	// transaction and table. Prepare and publish its replacement bookkeeping
-	// before committing removal of the old lock-store entries. If allocation or
-	// the failure hook rejects the replacement, rollback leaves both ownership
-	// representations unchanged.
+	// A budget-driven range contains every lock retained when it was planned.
+	// Prepare and publish its replacement bookkeeping before committing removal
+	// of the old lock-store entries. replaceLocks preserves any out-of-range key
+	// acquired by another same-transaction request while this one was waiting. If
+	// allocation or the failure hook rejects the replacement, rollback leaves
+	// both ownership representations unchanged.
 	txnLocksReplaced := false
 	if c.opts.replaceTxnLocks {
 		if err := c.txn.replaceLocks(

@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
@@ -163,6 +164,298 @@ func TestRemoteMixedModeBudgetKeepsOwnerAndOriginExact(t *testing.T) {
 			c.MaxLockRowCount = 3
 			c.MaxFixedSliceSize = 8
 		},
+	)
+}
+
+func TestReentrantExclusiveBudgetDoesNotWidenAcrossGap(t *testing.T) {
+	tests := []struct {
+		name       string
+		serviceIDs []string
+	}{
+		{name: "local", serviceIDs: []string{"s1"}},
+		{name: "remote", serviceIDs: []string{"s1", "s2"}},
+	}
+
+	for idx, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runLockServiceTestsWithAdjustConfig(
+				t,
+				tt.serviceIDs,
+				time.Second*10,
+				func(_ *lockTableAllocator, services []*service) {
+					owner := services[0]
+					origin := services[len(services)-1]
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+					defer cancel()
+					table := uint64(26720 + idx)
+					_, err := owner.getLockTableWithCreate(
+						ctx, 0, table, nil, pb.Sharding_None)
+					require.NoError(t, err)
+
+					txnA := []byte("reentrant-budget-a")
+					txnB := []byte("reentrant-budget-b")
+					_, err = origin.Lock(
+						ctx, table, newTestRows(1, 5, 9), txnA,
+						newTestRowExclusiveOptions())
+					require.NoError(t, err)
+					_, err = owner.Lock(
+						ctx, table, newTestRows(3), txnB,
+						newTestRowExclusiveOptions())
+					require.NoError(t, err)
+
+					reentrant := newTestRowExclusiveOptions()
+					reentrant.Policy = pb.WaitPolicy_FastFail
+					_, err = origin.Lock(ctx, table, newTestRows(1), txnA, reentrant)
+					require.NoError(t, err)
+					_, err = origin.Lock(
+						ctx, table, newTestRows(1, 5, 9, 1), txnA, reentrant)
+					require.NoError(t, err)
+
+					lt := owner.tableGroups.get(0, table).(*localLockTable)
+					lt.mu.RLock()
+					for _, row := range []byte{1, 3, 5, 9} {
+						lock, ok := lt.mu.store.Get(newTestRows(row)[0])
+						require.True(t, ok, "missing row %d", row)
+						require.True(t, lock.isLockRow(), "row %d was widened into a range", row)
+					}
+					lt.mu.RUnlock()
+					for _, bookkeepingService := range []*service{owner, origin} {
+						txn := bookkeepingService.activeTxnHolder.getActiveTxn(txnA, false, "")
+						require.NotNil(t, txn)
+						txn.RLock()
+						locks := txn.lockHolders[0].tableKeys[table].slice()
+						txn.RUnlock()
+						require.Equal(t, 3, locks.len())
+						locks.unref()
+					}
+
+					require.NoError(t, owner.unlockWithContext(
+						ctx, txnB, timestamp.Timestamp{}))
+					require.NoError(t, origin.unlockWithContext(
+						ctx, txnA, timestamp.Timestamp{}))
+
+					duplicateTxn := []byte("duplicate-budget")
+					_, err = origin.Lock(
+						ctx, table, newTestRows(7, 7, 7, 7), duplicateTxn,
+						newTestRowExclusiveOptions())
+					require.NoError(t, err)
+					for _, bookkeepingService := range []*service{owner, origin} {
+						txn := bookkeepingService.activeTxnHolder.getActiveTxn(
+							duplicateTxn, false, "")
+						require.NotNil(t, txn)
+						txn.RLock()
+						locks := txn.lockHolders[0].tableKeys[table].slice()
+						txn.RUnlock()
+						require.Equal(t, 1, locks.len())
+						locks.unref()
+					}
+					require.NoError(t, origin.unlockWithContext(
+						ctx, duplicateTxn, timestamp.Timestamp{}))
+				},
+				func(c *Config) {
+					c.MaxLockRowCount = 3
+					c.MaxFixedSliceSize = 8
+				},
+			)
+		})
+	}
+}
+
+func TestWaitingReplacementPreservesConcurrentSameTxnLocks(t *testing.T) {
+	tests := []struct {
+		name       string
+		serviceIDs []string
+		forward    bool
+	}{
+		{name: "local", serviceIDs: []string{"s1"}},
+		{name: "remote", serviceIDs: []string{"s1", "s2"}},
+		{name: "forward", serviceIDs: []string{"s1", "s2"}, forward: true},
+	}
+
+	for idx, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runLockServiceTestsWithAdjustConfig(
+				t,
+				tt.serviceIDs,
+				time.Second*10,
+				func(_ *lockTableAllocator, services []*service) {
+					owner := services[0]
+					origin := services[len(services)-1]
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*15)
+					defer cancel()
+					table := uint64(26730 + idx)
+					_, err := owner.getLockTableWithCreate(
+						ctx, 0, table, nil, pb.Sharding_None)
+					require.NoError(t, err)
+
+					txnA := []byte("replacement-merge-a")
+					txnB := []byte("replacement-merge-b")
+					lockA := newTestRowExclusiveOptions()
+					if tt.forward {
+						lockA.ForwardTo = owner.serviceID
+					}
+					_, err = origin.Lock(ctx, table, newTestRows(1, 2, 3), txnA, lockA)
+					require.NoError(t, err)
+					_, err = owner.Lock(
+						ctx, table, newTestRows(5), txnB,
+						newTestRowExclusiveOptions())
+					require.NoError(t, err)
+
+					firstDone := make(chan error, 1)
+					go func() {
+						_, lockErr := origin.Lock(
+							ctx, table, newTestRows(5, 6), txnA, lockA)
+						firstDone <- lockErr
+					}()
+					waitWaiters(t, owner, table, newTestRows(5)[0], 1)
+
+					secondDone := make(chan error, 1)
+					go func() {
+						_, lockErr := origin.Lock(
+							ctx, table, newTestRows(9), txnA, lockA)
+						secondDone <- lockErr
+					}()
+					select {
+					case lockErr := <-secondDone:
+						require.NoError(t, lockErr)
+					case <-ctx.Done():
+						t.Fatalf("concurrent same-txn lock did not progress: %v", ctx.Err())
+					}
+
+					lt := owner.tableGroups.get(0, table).(*localLockTable)
+					lt.mu.RLock()
+					row9, row9Added := lt.mu.store.Get(newTestRows(9)[0])
+					lt.mu.RUnlock()
+					require.True(t, row9Added)
+					require.True(t, row9.isLockRow())
+
+					require.NoError(t, owner.unlockWithContext(
+						ctx, txnB, timestamp.Timestamp{}))
+					select {
+					case lockErr := <-firstDone:
+						require.NoError(t, lockErr)
+					case <-ctx.Done():
+						t.Fatalf("replacement lock did not complete: %v", ctx.Err())
+					}
+
+					// The committed range may replace only the keys it physically
+					// subsumes. Row 9 completed while the range was asleep and must
+					// remain in every cleanup ledger.
+					bookkeepingServices := []*service{owner}
+					if !tt.forward && origin != owner {
+						bookkeepingServices = append(bookkeepingServices, origin)
+					}
+					for _, bookkeepingService := range bookkeepingServices {
+						txn := bookkeepingService.activeTxnHolder.getActiveTxn(txnA, false, "")
+						require.NotNil(t, txn)
+						txn.RLock()
+						locks := txn.lockHolders[0].tableKeys[table].slice()
+						txn.RUnlock()
+						require.Equal(t, 3, locks.len())
+						foundRow9 := false
+						locks.iter(func(key []byte) bool {
+							foundRow9 = foundRow9 || bytes.Equal(key, newTestRows(9)[0])
+							return true
+						})
+						locks.unref()
+						require.True(t, foundRow9)
+					}
+
+					unlockA := origin
+					if tt.forward {
+						unlockA = owner
+					}
+					require.NoError(t, unlockA.unlockWithContext(
+						ctx, txnA, timestamp.Timestamp{}))
+
+					probeTxn := []byte("replacement-merge-probe")
+					probe := newTestRowExclusiveOptions()
+					probe.Policy = pb.WaitPolicy_FastFail
+					_, err = owner.Lock(ctx, table, newTestRows(9), probeTxn, probe)
+					require.NoError(t, err, "row 9 leaked after transaction unlock")
+					require.NoError(t, owner.unlockWithContext(
+						ctx, probeTxn, timestamp.Timestamp{}))
+				},
+				func(c *Config) {
+					c.MaxLockRowCount = 4
+					c.MaxFixedSliceSize = 8
+				},
+			)
+		})
+	}
+}
+
+func TestRemoteSharedMergeSnapshotPreservesLogicalWaitFor(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			owner, origin := services[0], services[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*15)
+			defer cancel()
+			const table = uint64(26740)
+			_, err := owner.getLockTableWithCreate(
+				ctx, 0, table, nil, pb.Sharding_None)
+			require.NoError(t, err)
+
+			txnA := []byte("remote-merge-edge-a")
+			txnB := []byte("remote-merge-edge-b")
+			_, err = origin.Lock(
+				ctx, table, newTestRows(1), txnA, newTestRowSharedOptions())
+			require.NoError(t, err)
+			_, err = origin.Lock(
+				ctx, table, newTestRows(1), txnB, newTestRowSharedOptions())
+			require.NoError(t, err)
+
+			mergeDone := make(chan error, 1)
+			go func() {
+				_, lockErr := origin.Lock(
+					ctx, table, newTestRows(1, 4), txnA,
+					newTestRangeSharedOptions())
+				mergeDone <- lockErr
+			}()
+			waitWaiters(t, owner, table, newTestRows(1)[0], 1)
+
+			fetch := func(holder []byte) [][]byte {
+				t.Helper()
+				txn := origin.activeTxnHolder.getActiveTxn(holder, false, "")
+				require.NotNil(t, txn)
+				var waiting [][]byte
+				ok, fetchErr := txn.fetchWhoWaitingMe(
+					ctx,
+					origin.serviceID,
+					holder,
+					func(waitTxn pb.WaitTxn, _ string) bool {
+						waiting = append(waiting, append([]byte(nil), waitTxn.TxnID...))
+						return true
+					},
+					func(ctx context.Context, group uint32, table uint64) (lockTable, error) {
+						return origin.getLockTable(ctx, group, table)
+					},
+				)
+				require.NoError(t, fetchErr)
+				require.True(t, ok)
+				return waiting
+			}
+
+			// A is physically queued on a lock it co-holds, but logically waits
+			// only for B. Remote and local snapshots must expose the same graph.
+			require.Empty(t, fetch(txnA))
+			require.Equal(t, [][]byte{txnA}, fetch(txnB))
+
+			require.NoError(t, origin.unlockWithContext(
+				ctx, txnB, timestamp.Timestamp{}))
+			select {
+			case mergeErr := <-mergeDone:
+				require.NoError(t, mergeErr)
+			case <-ctx.Done():
+				t.Fatalf("Shared range merge did not complete: %v", ctx.Err())
+			}
+			require.NoError(t, origin.unlockWithContext(
+				ctx, txnA, timestamp.Timestamp{}))
+		},
+		func(*Config) {},
 	)
 }
 

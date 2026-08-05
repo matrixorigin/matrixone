@@ -290,10 +290,10 @@ type LockOptions struct {
 	async                      bool
 	remoteLockOwnerWaitTimeout time.Duration
 	// replaceTxnLocks is set when the request was coarsened from every lock
-	// already recorded for the same transaction and lock table. The lock owner
-	// replaces its bookkeeping while committing the range merge. A remote origin
-	// must do the same after the owner accepts the range; otherwise only one side
-	// is bounded.
+	// recorded for the same transaction and lock table at planning time. The lock
+	// owner merges that replacement into its current bookkeeping at commit time,
+	// preserving any out-of-range key acquired while this request was waiting. A
+	// remote origin must apply the same merge after the owner accepts the range.
 	replaceTxnLocks bool
 }
 

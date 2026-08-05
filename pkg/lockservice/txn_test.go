@@ -215,14 +215,24 @@ func TestCoarsenLockRequestUsesTransactionTableState(t *testing.T) {
 		require.False(t, replace)
 		require.Equal(t, rows, gotRows)
 
-		// Re-entrant duplicates compact to one row, not an invalid range whose
-		// start equals its end.
+		// Re-entrant duplicates add no physical ownership, so crossing the naive
+		// held-plus-requested count must not widen them into a range.
 		duplicates := [][]byte{[]byte("q"), []byte("q"), []byte("q"), []byte("q")}
 		gotRows, gotOpts, replace = txn.coarsenLockRequest(
 			bind.Group, bind.Table+2, duplicates, exclusive, 3)
-		require.True(t, replace)
+		require.False(t, replace)
 		require.Equal(t, pb.Granularity_Row, gotOpts.Granularity)
 		require.Equal(t, [][]byte{[]byte("q")}, gotRows)
+
+		// The same rule applies to rows already retained by the transaction. An
+		// exact re-lock does not consume budget and must stay exact even when a
+		// naive cardinality sum crosses the configured limit.
+		reentrant := [][]byte{[]byte("b"), []byte("b")}
+		gotRows, gotOpts, replace = txn.coarsenLockRequest(
+			bind.Group, bind.Table, reentrant, exclusive, 3)
+		require.False(t, replace)
+		require.Equal(t, pb.Granularity_Row, gotOpts.Granularity)
+		require.Empty(t, gotRows)
 	})
 }
 
@@ -371,6 +381,28 @@ func TestReplaceLocksFailurePreservesOwnership(t *testing.T) {
 		))
 		locks = txn.lockHolders[bind.Group].tableKeys[bind.Table].slice()
 		require.Equal(t, [][]byte{[]byte("a"), []byte("z")}, locks.all())
+		locks.unref()
+
+		// A key acquired while a coarsened range was waiting is outside the
+		// committed replacement and must remain available for transaction cleanup.
+		require.NoError(t, txn.lockAdded(
+			bind.Group,
+			bind,
+			[][]byte{[]byte("zz")},
+			pb.LockOptions{},
+			getLogger(""),
+		))
+		require.NoError(t, txn.replaceLocks(
+			bind.Group,
+			bind,
+			[][]byte{[]byte("a"), []byte("m")},
+			getLogger(""),
+		))
+		locks = txn.lockHolders[bind.Group].tableKeys[bind.Table].slice()
+		require.Equal(t,
+			[][]byte{[]byte("z"), []byte("zz"), []byte("a"), []byte("m")},
+			locks.all(),
+		)
 		locks.unref()
 	})
 }

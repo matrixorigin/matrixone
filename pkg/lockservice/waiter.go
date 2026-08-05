@@ -190,6 +190,18 @@ func (w *waiter) waitsFor(txnID []byte) bool {
 	return false
 }
 
+// isBlockingFor reports whether this physical queue entry is a live logical
+// edge to holderTxnID. A Shared range-merge waiter is also a holder of the lock
+// it is queued on, so its physical self-edge must be filtered while dependencies
+// on the other Shared holders remain visible. Both local and remote deadlock
+// snapshots use this helper to keep the graph semantics identical.
+func (w *waiter) isBlockingFor(holderTxnID []byte) bool {
+	if !w.isBlocking() {
+		return false
+	}
+	return !w.notifyOnSharedHolderChange || w.waitsFor(holderTxnID)
+}
+
 func (w *waiter) setStatus(
 	status waiterStatus,
 ) {

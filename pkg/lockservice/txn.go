@@ -253,18 +253,38 @@ func (txn *activeTxn) coarsenLockRequest(
 	// A range needs two endpoints even when a test or deployment configures a
 	// smaller row budget.
 	effectiveBudget := max(maxLockRowCount, 2)
-	if heldCount+len(rows) <= effectiveBudget {
+	naiveCount := heldCount + len(rows)
+	if naiveCount <= effectiveBudget {
 		return rows, opts, false
 	}
 
 	var minKey, maxKey []byte
-	add := func(key []byte) {
+	// Count distinct retained keys only on the budget-crossing path. Ordinary
+	// requests keep the zero-allocation fast path above; this set is bounded by
+	// effectiveBudget because once one more distinct key is seen, coarsening is
+	// already mandatory and only min/max still need to be scanned.
+	seen := make(map[string]struct{}, min(naiveCount, effectiveBudget))
+	overBudget := false
+	add := func(key []byte) bool {
 		if minKey == nil || bytes.Compare(key, minKey) < 0 {
 			minKey = key
 		}
 		if maxKey == nil || bytes.Compare(key, maxKey) > 0 {
 			maxKey = key
 		}
+		if overBudget {
+			return false
+		}
+		value := util.UnsafeBytesToString(key)
+		if _, ok := seen[value]; ok {
+			return false
+		}
+		if len(seen) == effectiveBudget {
+			overBudget = true
+			return false
+		}
+		seen[value] = struct{}{}
+		return true
 	}
 	if held != nil {
 		locks := held.slice()
@@ -274,8 +294,21 @@ func (txn *activeTxn) coarsenLockRequest(
 		})
 		locks.unref()
 	}
+	newRows := rows
+	if opts.Granularity == pb.Granularity_Row {
+		newRows = make([][]byte, 0, min(len(rows), effectiveBudget))
+	}
 	for _, row := range rows {
-		add(row)
+		if add(row) && opts.Granularity == pb.Granularity_Row {
+			newRows = append(newRows, row)
+		}
+	}
+	if !overBudget {
+		// Re-entrant row keys and request duplicates add no physical ownership.
+		// Remove them on this already-uncommon path so remote-origin bookkeeping
+		// also stays aligned with the authoritative owner. Explicit ranges retain
+		// their endpoint pairs unchanged.
+		return newRows, opts, false
 	}
 
 	if bytes.Equal(minKey, maxKey) {
@@ -288,10 +321,13 @@ func (txn *activeTxn) coarsenLockRequest(
 	return [][]byte{bytes.Clone(minKey), bytes.Clone(maxKey)}, opts, true
 }
 
-// replaceLocks records a coarsened request without copying the old row key
-// slice. The caller must hold txn's mutex. Allocation and the test failure hook
-// run before the old bookkeeping is detached, so an error leaves the
-// transaction's ownership state unchanged.
+// replaceLocks records a committed coarsened range while preserving keys outside
+// that range. A Lock call can wait with txn's mutex released, so another call for
+// the same transaction may acquire an out-of-range key before this replacement
+// commits. Dropping the whole old slice would lose the only cleanup record for
+// that key and leak its physical lock. The caller must hold txn's mutex.
+// Allocation and the test failure hook run before the old bookkeeping is
+// detached, so an error leaves the transaction's ownership state unchanged.
 func (txn *activeTxn) replaceLocks(
 	group uint32,
 	bind pb.LockTable,
@@ -304,13 +340,30 @@ func (txn *activeTxn) replaceLocks(
 		}
 	}
 
-	newLocks, err := newCowSlice(txn.fsp, locks)
+	h := txn.getHoldLocksLocked(group)
+	oldLocks := h.tableKeys[bind.Table]
+	nextLocks := locks
+	if oldLocks != nil && len(locks) == 2 && bytes.Compare(locks[0], locks[1]) < 0 {
+		// Range endpoints must stay adjacent in transaction bookkeeping because
+		// unlock interprets a range-start followed by its range-end as one lock.
+		// Retain concurrent ownership first, then append the replacement pair.
+		nextLocks = make([][]byte, 0, oldLocks.mustGet().len()+2)
+		old := oldLocks.slice()
+		old.iter(func(key []byte) bool {
+			if bytes.Compare(key, locks[0]) < 0 || bytes.Compare(key, locks[1]) > 0 {
+				nextLocks = append(nextLocks, key)
+			}
+			return true
+		})
+		old.unref()
+		nextLocks = append(nextLocks, locks...)
+	}
+
+	newLocks, err := newCowSlice(txn.fsp, nextLocks)
 	if err != nil {
 		return err
 	}
 	defer logTxnLockAdded(logger, txn, locks)
-	h := txn.getHoldLocksLocked(group)
-	oldLocks := h.tableKeys[bind.Table]
 	h.tableKeys[bind.Table] = newLocks
 	h.tableBinds[bind.Table] = bind
 	if oldLocks != nil {
@@ -753,19 +806,7 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 				wt,
 				func(lock Lock) {
 					lock.waiters.iter(func(w *waiter) bool {
-						// A Shared range-merge waiter can be queued on a lock
-						// already held by its own transaction. Its explicit waitFor
-						// list contains only the other Shared holders; following the
-						// physical queue entry here would manufacture a self cycle.
-						if w.notifyOnSharedHolderChange &&
-							!w.waitsFor(txnID) {
-							return true
-						}
-						// Completed or already-notified waiters can remain in the
-						// lock queue until the holder releases the lock. They no
-						// longer represent wait-for edges and must not participate
-						// in deadlock detection.
-						if !w.isBlocking() {
+						if !w.isBlockingFor(txnID) {
 							return true
 						}
 						hasDeadLock = !waiters(w.txn, waiterAddress)
