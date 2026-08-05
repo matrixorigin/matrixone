@@ -403,6 +403,19 @@ func (hb *HashmapBuilder) hasGroupingKey() bool {
 	return false
 }
 
+func (hb *HashmapBuilder) hasNonReflexiveFloatKey() bool {
+	for _, expr := range hb.keyExprs {
+		if expr == nil {
+			continue
+		}
+		oid := types.T(expr.Typ.Id)
+		if oid == types.T_float32 || oid == types.T_float64 {
+			return true
+		}
+	}
+	return false
+}
+
 func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, needUniqueVec bool, proc *process.Process) (retErr error) {
 	hb.runtimeFilterCollectionFallback = false
 	hb.retainedBatchRecoverySafe = true
@@ -470,6 +483,7 @@ func (hb *HashmapBuilder) buildHashmap(
 	var err error
 	var itr hashmap.Iterator
 	hasGroupingKey := hb.hasGroupingKey()
+	rejectNaN := hb.hasNonReflexiveFloatKey()
 	useIntHashMap := hb.keyWidth <= 8 && !hasGroupingKey
 	if hb.mapAllocation == nil || hb.mapAllocationAccount == nil ||
 		hb.iteratorAllocation == nil || hb.batchAllocation == nil {
@@ -487,6 +501,11 @@ func (hb *HashmapBuilder) buildHashmap(
 				hb.IntHashMap = nil
 			}
 			return err
+		}
+		if rejectNaN {
+			if err = hb.IntHashMap.SetRejectNaN(); err != nil {
+				return err
+			}
 		}
 		if hb.cachedIntIterator != nil {
 			hashmap.IteratorChangeOwner(hb.cachedIntIterator, hb.IntHashMap)
@@ -508,6 +527,11 @@ func (hb *HashmapBuilder) buildHashmap(
 				hb.StrHashMap = nil
 			}
 			return err
+		}
+		if rejectNaN {
+			if err = hb.StrHashMap.SetRejectNaN(); err != nil {
+				return err
+			}
 		}
 		if hasGroupingKey {
 			if err = hb.StrHashMap.SetGroupingAware(); err != nil {

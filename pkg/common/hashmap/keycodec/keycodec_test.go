@@ -24,6 +24,57 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func mustEncodeJSON(t *testing.T, text string) []byte {
+	t.Helper()
+	value, err := types.ParseStringToByteJson(text)
+	require.NoError(t, err)
+	encoded, err := types.EncodeJson(value)
+	require.NoError(t, err)
+	return encoded
+}
+
+func TestCanonicalJSONNumberContract(t *testing.T) {
+	one := mustEncodeJSON(t, "1")
+	onePointZero := mustEncodeJSON(t, "1.0")
+	oneExponent := mustEncodeJSON(t, "1e0")
+	two := mustEncodeJSON(t, "2")
+	stringOne := mustEncodeJSON(t, `"1"`)
+
+	want := AppendCanonicalJSON(nil, one)
+	require.Equal(t, want, AppendCanonicalJSON(nil, onePointZero))
+	require.Equal(t, want, AppendCanonicalJSON(nil, oneExponent))
+	require.NotEqual(t, want, AppendCanonicalJSON(nil, two))
+	require.Equal(t, stringOne, AppendCanonicalJSON(nil, stringOne))
+	require.Len(t, want, len(one), "numeric canonicalization must preserve key sizing")
+
+	nestedInteger := mustEncodeJSON(t, `[1,{"n":2.0}]`)
+	nestedFloat := mustEncodeJSON(t, `[1.0,{"n":2}]`)
+	nestedDifferent := mustEncodeJSON(t, `[1,{"n":2.5}]`)
+	nestedCanonical := AppendCanonicalJSON(nil, nestedInteger)
+	require.Equal(t, nestedCanonical, AppendCanonicalJSON(nil, nestedFloat))
+	require.NotEqual(t, nestedCanonical, AppendCanonicalJSON(nil, nestedDifferent))
+	require.Equal(t, len(nestedCanonical), CanonicalJSONSize(nestedInteger))
+}
+
+func TestCanonicalVecF32Contract(t *testing.T) {
+	negativeZero := float32(math.Copysign(0, -1))
+	positive := types.ArrayToBytes([]float32{1, 0, 3})
+	negative := types.ArrayToBytes([]float32{1, negativeZero, 3})
+	negativeBefore := append([]byte(nil), negative...)
+
+	require.Equal(
+		t,
+		AppendCanonicalVecF32(nil, positive),
+		AppendCanonicalVecF32(nil, negative),
+	)
+	require.Equal(t, negativeBefore, negative, "canonicalization must not mutate vector storage")
+	require.NotEqual(
+		t,
+		AppendCanonicalVecF32(nil, positive),
+		AppendCanonicalVecF32(nil, types.ArrayToBytes([]float32{1, 2, 3})),
+	)
+}
+
 func TestFloat32CodecContract(t *testing.T) {
 	scaled := NewFloat32Codec(2)
 	unscaled := NewFloat32Codec(0)

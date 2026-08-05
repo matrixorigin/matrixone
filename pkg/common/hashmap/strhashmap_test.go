@@ -43,6 +43,139 @@ type floatHashMapShape struct {
 	wantGroups  uint64
 }
 
+func TestStrHashMapRejectsCompositeJoinNaN(t *testing.T) {
+	mp := mpool.MustNewZero()
+	m, err := NewStrHashMap(false, mp)
+	require.NoError(t, err)
+	require.NoError(t, m.SetRejectNaN())
+	defer func() {
+		m.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	floats := vector.NewVec(types.T_float32.ToType())
+	discriminators := vector.NewVec(types.T_int32.ToType())
+	defer floats.Free(mp)
+	defer discriminators.Free(mp)
+	for _, value := range []float32{float32(math.NaN()), 7, float32(math.NaN())} {
+		require.NoError(t, vector.AppendFixed(floats, value, false, mp))
+	}
+	require.NoError(t, vector.AppendFixed(discriminators, int32(1), false, mp))
+	require.NoError(t, vector.AppendFixed(discriminators, int32(1), false, mp))
+	require.NoError(t, vector.AppendFixed(discriminators, int32(0), true, mp))
+	keys := []*vector.Vector{floats, discriminators}
+
+	values, zValues, err := m.NewIterator().Insert(0, 3, keys)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{0, 1, 0}, values)
+	require.Equal(t, []int64{1, 1, 0}, zValues)
+
+	encoded, err := m.MarshalBinary()
+	require.NoError(t, err)
+	restored := &StrHashMap{}
+	require.NoError(t, restored.UnmarshalBinary(encoded, mp))
+	defer restored.Free()
+	require.True(t, restored.rejectNaN)
+
+	values, zValues, err = restored.NewIterator().Find(0, 3, keys)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{0, 1, 0}, values)
+	require.Equal(t, []int64{1, 1, 0}, zValues)
+}
+
+func TestStrHashMapRejectsNaNWhenNullKeysParticipate(t *testing.T) {
+	mp := mpool.MustNewZero()
+	m, err := NewStrHashMap(true, mp)
+	require.NoError(t, err)
+	require.NoError(t, m.SetRejectNaN())
+	defer func() {
+		m.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	floats := vector.NewVec(types.T_float64.ToType())
+	discriminators := vector.NewVec(types.T_int32.ToType())
+	defer floats.Free(mp)
+	defer discriminators.Free(mp)
+	require.NoError(t, vector.AppendFixed(floats, math.NaN(), false, mp))
+	require.NoError(t, vector.AppendFixed(floats, float64(8), false, mp))
+	require.NoError(t, vector.AppendFixed(discriminators, int32(0), true, mp))
+	require.NoError(t, vector.AppendFixed(discriminators, int32(0), true, mp))
+	keys := []*vector.Vector{floats, discriminators}
+
+	values, zValues, err := m.NewIterator().Insert(0, 2, keys)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{0, 1}, values)
+	require.Equal(t, []int64{0, 1}, zValues)
+	require.Equal(t, uint64(1), m.GroupCount())
+}
+
+func TestStrHashMapCanonicalVarlenaSerialization(t *testing.T) {
+	encodeJSON := func(t *testing.T, text string) []byte {
+		t.Helper()
+		value, err := types.ParseStringToByteJson(text)
+		require.NoError(t, err)
+		encoded, err := types.EncodeJson(value)
+		require.NoError(t, err)
+		return encoded
+	}
+	negativeZero := float32(math.Copysign(0, -1))
+	tests := []struct {
+		name  string
+		typ   types.Type
+		build []byte
+		probe []byte
+	}{
+		{
+			name:  "json",
+			typ:   types.T_json.ToType(),
+			build: encodeJSON(t, `[1,{"n":2.0}]`),
+			probe: encodeJSON(t, `[1.0,{"n":2}]`),
+		},
+		{
+			name:  "vecf32",
+			typ:   types.T_array_float32.ToType(),
+			build: types.ArrayToBytes([]float32{1, 0, 3}),
+			probe: types.ArrayToBytes([]float32{1, negativeZero, 3}),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer func() { require.Zero(t, mp.CurrNB()) }()
+			build := vector.NewVec(tt.typ)
+			probe := vector.NewVec(tt.typ)
+			defer build.Free(mp)
+			defer probe.Free(mp)
+			require.NoError(t, vector.AppendBytes(build, tt.build, false, mp))
+			require.NoError(t, vector.AppendBytes(probe, tt.probe, false, mp))
+
+			m, err := NewStrHashMap(false, mp)
+			require.NoError(t, err)
+			values, zValues, err := m.NewIterator().Insert(
+				0, 1, []*vector.Vector{build},
+			)
+			require.NoError(t, err)
+			require.Equal(t, []uint64{1}, values)
+			require.Equal(t, []int64{1}, zValues)
+			encoded, err := m.MarshalBinary()
+			require.NoError(t, err)
+			m.Free()
+
+			restored := &StrHashMap{}
+			require.NoError(t, restored.UnmarshalBinary(encoded, mp))
+			defer restored.Free()
+			values, zValues, err = restored.NewIterator().Find(
+				0, 1, []*vector.Vector{probe},
+			)
+			require.NoError(t, err)
+			require.Equal(t, []uint64{1}, values)
+			require.Equal(t, []int64{1}, zValues)
+		})
+	}
+}
+
 type floatHashMapVectorFactory func(
 	t *testing.T,
 	m *mpool.MPool,
