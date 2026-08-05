@@ -2603,15 +2603,36 @@ func TestMultiTargetUpdateUsesIndependentModernSelectors(t *testing.T) {
 }
 
 func TestPartitionedMultiTargetUpdateUsesModernPlan(t *testing.T) {
-	for _, sql := range []string{
-		"UPDATE nation n JOIN nation2 n2 ON n.n_nationkey = n2.n_nationkey " +
-			"SET n.n_name = n2.n_name, n2.n_comment = n.n_comment",
-		"UPDATE nation2 n2 JOIN nation n ON n.n_nationkey = n2.n_nationkey " +
-			"SET n2.n_comment = n.n_comment, n.n_name = n2.n_name",
+	for _, test := range []struct {
+		sql                  string
+		partitionColumnCount int
+	}{
+		{
+			sql: "UPDATE nation n JOIN nation2 n2 ON n.n_nationkey = n2.n_nationkey " +
+				"SET n.n_name = n2.n_name, n2.n_comment = n.n_comment",
+			partitionColumnCount: 1,
+		},
+		{
+			sql: "UPDATE nation2 n2 JOIN nation n ON n.n_nationkey = n2.n_nationkey " +
+				"SET n2.n_comment = n.n_comment, n.n_name = n2.n_name",
+			partitionColumnCount: 1,
+		},
+		{
+			sql: "UPDATE nation n JOIN nation2 n2 ON n.n_nationkey = n2.n_nationkey " +
+				"SET n.n_nationkey = n.n_nationkey + 10, n2.n_comment = n.n_comment",
+			partitionColumnCount: 2,
+		},
 	} {
 		mock := NewMockOptimizer(true)
 		mock.ctxt.tables["nation"].FeatureFlag |= features.Partitioned
-		logicPlan, err := runOneStmt(mock, t, sql)
+		mock.ctxt.tables["nation"].Partition = &plan.Partition{
+			PartitionDefs: []*plan.PartitionDef{{
+				Def: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "n_nationkey"}}},
+				}}}},
+			}},
+		}
+		logicPlan, err := runOneStmt(mock, t, test.sql)
 		require.NoError(t, err)
 
 		multiUpdates := 0
@@ -2619,6 +2640,14 @@ func TestPartitionedMultiTargetUpdateUsesModernPlan(t *testing.T) {
 			if node.NodeType == plan.Node_MULTI_UPDATE {
 				multiUpdates++
 				require.Len(t, node.UpdateCtxList, 2)
+				for _, updateCtx := range node.UpdateCtxList {
+					if updateCtx.TableDef.Name == "nation" {
+						require.Len(t, updateCtx.PartitionCols, test.partitionColumnCount)
+						require.NotEqual(t, int32(-1), updateCtx.PartitionCols[0].ColPos)
+					} else {
+						require.Empty(t, updateCtx.PartitionCols)
+					}
+				}
 			}
 		}
 		require.Equal(t, 1, multiUpdates)
@@ -2678,6 +2707,30 @@ func TestSamePhysicalTargetAliasesShareMergedFinalRows(t *testing.T) {
 	}
 	require.Equal(t, 2, mainContexts)
 	require.GreaterOrEqual(t, mergedAssignments, 2)
+}
+
+func TestModernMultiTargetOnUpdateColumnsKeepActiveSelectorsTyped(t *testing.T) {
+	for _, sql := range []string{
+		"UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey " +
+			"SET a.n_name = 'a', b.n_comment = 'b'",
+		"UPDATE emp, dept SET emp.job = 'a', dept.loc = 'b' " +
+			"WHERE emp.deptno = dept.deptno",
+	} {
+		mock := NewMockOptimizer(true)
+		setMockOnUpdateExpr(t, mock, "nation", "n_regionkey", "1")
+		setMockOnUpdateExpr(t, mock, "emp", "sal", "1")
+		setMockOnUpdateExpr(t, mock, "dept", "dname", "'updated'")
+
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+		multiUpdates := 0
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType == plan.Node_MULTI_UPDATE {
+				multiUpdates++
+			}
+		}
+		require.Equal(t, 1, multiUpdates)
+	}
 }
 
 func TestUpdatePgStyleFromDedupPicksWholeSourceRow(t *testing.T) {

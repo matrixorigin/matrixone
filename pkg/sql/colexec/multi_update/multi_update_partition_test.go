@@ -19,10 +19,47 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPartitionMultiUpdateForwardsAllocationAccountLifecycle(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+
+	raw := &MultiUpdate{}
+	op := &PartitionMultiUpdate{raw: raw}
+	require.False(t, op.ActivatesAllocationAccountLifecycle())
+	require.NoError(t, op.SetAllocationAccount(account))
+	require.Same(t, account, raw.allocationAccount)
+	require.NoError(t, op.ClearAllocationAccount(account))
+	require.Nil(t, raw.allocationAccount)
+}
+
+func TestClonePartitionPhaseContextsSeparatesDeleteAndInsert(t *testing.T) {
+	contexts := []*MultiUpdateCtx{{
+		ObjRef:             &plan.ObjectRef{},
+		TableDef:           &plan.TableDef{},
+		InsertCols:         []int{1, 2},
+		DeleteCols:         []int{3, 4},
+		DedupByTargetRowID: true,
+	}}
+	deleteContexts := clonePartitionPhaseContexts(contexts, true)
+	insertContexts := clonePartitionPhaseContexts(contexts, false)
+
+	require.Empty(t, deleteContexts[0].InsertCols)
+	require.Equal(t, []int{3, 4}, deleteContexts[0].DeleteCols)
+	require.Empty(t, insertContexts[0].DeleteCols)
+	require.Equal(t, []int{1, 2}, insertContexts[0].InsertCols)
+	require.False(t, deleteContexts[0].DedupByTargetRowID)
+	require.False(t, insertContexts[0].DedupByTargetRowID)
+	require.Equal(t, []int{1, 2}, contexts[0].InsertCols)
+	require.Equal(t, []int{3, 4}, contexts[0].DeleteCols)
+}
 
 func TestResetMultiUpdateCtxsClassifiesTemporaryIndexTables(t *testing.T) {
 	uniqueName := "__mo_tmp_018f1f767b9d7f35b2d99b8d7774bde8_db_" +
