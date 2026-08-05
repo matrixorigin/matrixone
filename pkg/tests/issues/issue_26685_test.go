@@ -84,6 +84,40 @@ func TestIssue26685PreparedMultiSet(t *testing.T) {
 			require.Equal(t, "10", a)
 			require.Equal(t, "NULL", b)
 
+			mustExec(t, ctx, conn, "set @visibility_a = 5, @visibility_b = 0, @visibility_input = 41")
+			mustExec(t, ctx, conn,
+				"prepare issue26685_text_visibility from 'set @visibility_a = ?, @visibility_b = @visibility_a + 1'")
+			defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare issue26685_text_visibility") }()
+			mustExec(t, ctx, conn, "execute issue26685_text_visibility using @visibility_input")
+			var visibilityA, visibilityB string
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select cast(@visibility_a as char), cast(@visibility_b as char)").Scan(&visibilityA, &visibilityB))
+			require.Equal(t, "41", visibilityA)
+			require.Equal(t, "42", visibilityB)
+
+			mustExec(t, ctx, conn, "set @self_ref = 5")
+			mustExec(t, ctx, conn,
+				"prepare issue26685_text_self from 'set @self_ref = ?, @self_ref = @self_ref + 1'")
+			defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare issue26685_text_self") }()
+			mustExec(t, ctx, conn, "execute issue26685_text_self using @visibility_input")
+			var selfRef string
+			require.NoError(t, conn.QueryRowContext(ctx, "select cast(@self_ref as char)").Scan(&selfRef))
+			require.Equal(t, "42", selfRef)
+
+			repeatedFailureSQL := fmt.Sprintf(
+				"prepare issue26685_text_self_error from 'set @self_ref = ?, @self_ref = @self_ref + 1, @target_b = (select v from `%s`.multi_set_values)'",
+				dbName,
+			)
+			mustExec(t, ctx, conn, repeatedFailureSQL)
+			defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare issue26685_text_self_error") }()
+			mustExec(t, ctx, conn, "set @self_ref = 5, @target_b = 'unchanged'")
+			_, err = conn.ExecContext(ctx, "execute issue26685_text_self_error using @visibility_input")
+			require.ErrorContains(t, err, "Subquery returns more than 1 row")
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select cast(@self_ref as char), cast(@target_b as char)").Scan(&selfRef, &visibilityB))
+			require.Equal(t, "5", selfRef)
+			require.Equal(t, "unchanged", visibilityB)
+
 			mustExec(t, ctx, conn, "set @target_a = 77, @target_b = 'stable'")
 			_, err = conn.ExecContext(ctx, "execute issue26685_text using @input_a")
 			require.ErrorContains(t, err, "Incorrect arguments to EXECUTE")
@@ -136,6 +170,43 @@ func TestIssue26685PreparedMultiSet(t *testing.T) {
 			a, b = queryIssue26685Vars(t, ctx, conn)
 			require.Equal(t, "10", a)
 			require.Equal(t, "NULL", b)
+
+			mustExec(t, ctx, conn, "set @visibility_a = 5, @visibility_b = 0")
+			visibilityStmt, err := conn.PrepareContext(ctx,
+				"set @visibility_a = ?, @visibility_b = @visibility_a + 1")
+			require.NoError(t, err)
+			defer visibilityStmt.Close()
+			_, err = visibilityStmt.ExecContext(ctx, int64(41))
+			require.NoError(t, err)
+			var visibilityA, visibilityB string
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select cast(@visibility_a as char), cast(@visibility_b as char)").Scan(&visibilityA, &visibilityB))
+			require.Equal(t, "41", visibilityA)
+			require.Equal(t, "42", visibilityB)
+
+			mustExec(t, ctx, conn, "set @self_ref = 5")
+			selfStmt, err := conn.PrepareContext(ctx, "set @self_ref = ?, @self_ref = @self_ref + 1")
+			require.NoError(t, err)
+			defer selfStmt.Close()
+			_, err = selfStmt.ExecContext(ctx, int64(41))
+			require.NoError(t, err)
+			var selfRef string
+			require.NoError(t, conn.QueryRowContext(ctx, "select cast(@self_ref as char)").Scan(&selfRef))
+			require.Equal(t, "42", selfRef)
+
+			repeatedFailureSQL := fmt.Sprintf(
+				"set @self_ref = ?, @self_ref = @self_ref + 1, @target_b = (select v from `%s`.multi_set_values)",
+				dbName)
+			repeatedFailureStmt, err := conn.PrepareContext(ctx, repeatedFailureSQL)
+			require.NoError(t, err)
+			defer repeatedFailureStmt.Close()
+			mustExec(t, ctx, conn, "set @self_ref = 5, @target_b = 'unchanged'")
+			_, err = repeatedFailureStmt.ExecContext(ctx, int64(41))
+			require.ErrorContains(t, err, "Subquery returns more than 1 row")
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select cast(@self_ref as char), cast(@target_b as char)").Scan(&selfRef, &visibilityB))
+			require.Equal(t, "5", selfRef)
+			require.Equal(t, "unchanged", visibilityB)
 
 			failingSQL := fmt.Sprintf(
 				"set @target_a = ?, @target_b = (select v from `%s`.multi_set_values)", dbName)

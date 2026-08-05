@@ -1087,20 +1087,53 @@ func doSetVar(
 		return err
 	}
 
-	if preparedExpression {
-		evaluated := make([]evaluatedAssignment, 0, len(sv.Assignments))
+	if preparedExpression && len(sv.Assignments) > 1 {
+		type userDefinedVarSnapshot struct {
+			value  *UserDefinedVar
+			exists bool
+		}
+		original := make(map[string]userDefinedVarSnapshot, len(sv.Assignments))
+		ses.mu.Lock()
+		for _, assign := range sv.Assignments {
+			name := strings.ToLower(assign.Name)
+			if _, captured := original[name]; captured {
+				continue
+			}
+			value, exists := ses.userDefinedVars[name]
+			if value != nil {
+				copied := *value
+				value = &copied
+			}
+			original[name] = userDefinedVarSnapshot{value: value, exists: exists}
+		}
+		ses.mu.Unlock()
+
+		completed := false
+		defer func() {
+			if completed {
+				return
+			}
+			ses.mu.Lock()
+			defer ses.mu.Unlock()
+			for name, snapshot := range original {
+				if snapshot.exists {
+					ses.userDefinedVars[name] = snapshot.value
+				} else {
+					delete(ses.userDefinedVars, name)
+				}
+			}
+		}()
+
 		for _, assign := range sv.Assignments {
 			item, evalErr := evaluateAssignment(assign)
 			if evalErr != nil {
 				return evalErr
 			}
-			evaluated = append(evaluated, item)
-		}
-		for _, item := range evaluated {
 			if err = applyAssignment(item); err != nil {
 				return err
 			}
 		}
+		completed = true
 		return nil
 	}
 
