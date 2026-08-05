@@ -3390,9 +3390,8 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			if err != nil {
 				return nil, err
 			}
-			// COM_STMT_PREPARE rewrites the statement before wrapping it in
-			// PREPARE ... FROM. The wrapper SQL no longer starts with the hint,
-			// so use the policy captured on UserInput for its single nested stmt.
+			// Protocol callers may explicitly restore a remap captured with an
+			// already prepared statement whose current SQL text has no hint.
 			if len(execCtx.input.remapDb) > 0 && len(statementRemaps) == 1 {
 				statementRemaps[0] = execCtx.input.remapDb
 			}
@@ -5137,7 +5136,8 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		ses.SetCmd(COM_STMT_PREPARE)
 		sql = commonutil.UnsafeBytesToString(req.GetData().([]byte))
 		var preparedRemapDb map[string]string
-		// Inject rewrite rules hint before prepare wrapping (only if enabled)
+		// Materialize rewrite rules on the protocol payload before it enters the
+		// prepareable_stmt grammar. The resulting AST consumes the hint once.
 		if ses.rewriteEnabled.Load() {
 			var rewriteErr error
 			sql, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, sql)
@@ -5151,10 +5151,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		}
 		ses.addSqlCount(1)
 
-		// rewrite to "Prepare stmt_name from 'xxx'"
+		// Keep the protocol acceptance boundary in prepareable_stmt. EXPLAIN is
+		// admitted there explicitly; unsupported and empty payloads fail parsing
+		// before planning.
 		newLastStmtID := ses.GenNewStmtId()
 		newStmtName := getPrepareStmtName(newLastStmtID)
-		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
+		sql = fmt.Sprintf("prepare %s from %s", quotePrepareStmtName(newStmtName), sql)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
 		savedRowCount := ses.GetLastAffectedRows()

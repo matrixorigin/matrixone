@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"strconv"
@@ -1655,10 +1656,34 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 	} else if typ.Oid == types.T_year {
 		// Keep YEAR metadata consistent with regular query result columns.
 		col.SetLength(uint32(types.MaxVarcharLen))
+	} else if typ.Oid == types.T_char || typ.Oid == types.T_varchar {
+		// Protocol::ColumnDefinition41 expresses column_length in bytes. Character
+		// string widths are declared in characters and use utf8mb3 metadata.
+		if typ.Oid == types.T_varchar && typ.Width == 0 {
+			// Synthesized VARCHAR result columns historically use zero as an
+			// unspecified width and must keep their unbounded metadata.
+			col.SetLength(math.MaxUint32)
+		} else {
+			col.SetLength(mysqlStringColumnLength(typ.Width, charsetVarcharMaxBytesPerCharacter))
+		}
+	} else if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
+		// Binary string widths are already declared in bytes.
+		col.SetLength(mysqlStringColumnLength(typ.Width, 1))
 	} else {
 		setColLength(col, typ.Width)
 	}
 	col.SetDecimal(typ.Scale)
+}
+
+func mysqlStringColumnLength(width int32, maxBytesPerCharacter uint32) uint32 {
+	if width < 0 {
+		return math.MaxUint32
+	}
+	length := uint64(width) * uint64(maxBytesPerCharacter)
+	if length > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(length)
 }
 
 // errCodeRollbackWholeTxn denotes that the error code

@@ -1217,6 +1217,23 @@ func newShuffleGroupInputScope(t *testing.T, mcpu int) *Scope {
 	return scope
 }
 
+func TestCompilePreInsertUkMergesParallelMultiKeyIgnoreInput(t *testing.T) {
+	c := NewMockCompile(t)
+	c.anal = &AnalyzeModule{}
+	input := newScope(Merge)
+	input.NodeInfo = engine.Node{Addr: "127.0.0.1:18000", Mcpu: 4}
+	input.Proc = c.proc.NewNoContextChildProc(0)
+	input.setRootOperator(colexec.NewMockOperator())
+
+	node := &plan.Node{PreInsertUkCtx: &plan.PreInsertUkCtx{InsertIgnoreMultiDedup: true}}
+	result := c.compilePreInsertUk(node, []*Scope{input})
+
+	require.Len(t, result, 1)
+	require.NotSame(t, input, result[0])
+	require.Equal(t, 1, result[0].NodeInfo.Mcpu)
+	require.Contains(t, result[0].PreScopes, input)
+}
+
 func newShuffleGroupTestNodes(dop int32) (*plan.Node, []*plan.Node) {
 	col := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_int64)},

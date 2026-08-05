@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -538,4 +539,110 @@ func TestCnServerMessageHandlerWaitObservesConnectionClose(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("wait did not observe connection close")
 	}
+}
+
+func TestMessageReceiverSendBatchUsesNegotiatedCredits(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	flow := newPipelineBatchFlow(2, 1024)
+	lifecycle := &pipelineStreamLifecycle{batchFlow: flow}
+	var sent *pipeline.Message
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			sent = message.(*pipeline.Message)
+			return nil
+		})
+
+	receiver := &messageReceiverOnServer{
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		messageId:       401,
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  1 << 20,
+		streamLifecycle: lifecycle,
+	}
+	require.NoError(t, receiver.sendBatch(batch.NewWithSize(0)))
+	require.NotNil(t, sent)
+	require.Equal(t, uint64(1), sent.GetBatchSequence())
+	require.Equal(t, uint32(2), sent.GetAcceptedBatchCreditCount())
+	require.Equal(t, uint64(1024), sent.GetAcceptedBatchCreditBytes())
+
+	flow.mu.Lock()
+	require.Len(t, flow.pending, 1)
+	flow.mu.Unlock()
+	require.NoError(t, flow.acknowledge(sent.GetBatchSequence()))
+}
+
+func TestMessageReceiverSendFragmentedBatchRollsBackCreditOnWriteFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	wantErr := errors.New("write fragment")
+	flow := newPipelineBatchFlow(2, 1024)
+	bat := batch.NewWithSize(0)
+	data, err := bat.MarshalBinary()
+	require.NoError(t, err)
+	require.Greater(t, len(data), 1)
+	writes := 0
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			writes++
+			msg := message.(*pipeline.Message)
+			require.Equal(t, uint64(1), msg.GetBatchSequence())
+			if writes == 2 {
+				return wantErr
+			}
+			return nil
+		}).Times(2)
+
+	receiver := &messageReceiverOnServer{
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		messageId:       402,
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  len(data) - 1,
+		streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow},
+	}
+	err = receiver.sendBatch(bat)
+	require.ErrorIs(t, err, wantErr)
+	require.Equal(t, 2, writes)
+	flow.mu.Lock()
+	require.Empty(t, flow.pending)
+	require.Zero(t, flow.bytes)
+	flow.mu.Unlock()
+}
+
+func TestMessageReceiverSendFragmentedBatchKeepsCreditUntilAck(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	flow := newPipelineBatchFlow(2, 1024)
+	bat := batch.NewWithSize(0)
+	data, err := bat.MarshalBinary()
+	require.NoError(t, err)
+	require.Greater(t, len(data), 1)
+	writes := 0
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			writes++
+			msg := message.(*pipeline.Message)
+			require.Equal(t, uint64(1), msg.GetBatchSequence())
+			return nil
+		}).Times(2)
+
+	receiver := &messageReceiverOnServer{
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		messageId:       403,
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  len(data) - 1,
+		streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow},
+	}
+	require.NoError(t, receiver.sendBatch(bat))
+	require.Equal(t, 2, writes)
+	flow.mu.Lock()
+	require.Len(t, flow.pending, 1)
+	flow.mu.Unlock()
+	require.NoError(t, flow.acknowledge(1))
 }

@@ -30,6 +30,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
+func TestGetNodeBasicInfoApplyType(t *testing.T) {
+	tests := []struct {
+		name      string
+		applyType plan2.Node_ApplyType
+		want      string
+	}{
+		{name: "cross", applyType: plan2.Node_CROSSAPPLY, want: "CROSS APPLY"},
+		{name: "outer", applyType: plan2.Node_OUTERAPPLY, want: "OUTER APPLY"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			node := &plan2.Node{NodeType: plan2.Node_APPLY, ApplyType: test.applyType}
+			got, err := NewNodeDescriptionImpl(node).GetNodeBasicInfo(
+				context.Background(),
+				&ExplainOptions{Format: EXPLAIN_FORMAT_TEXT},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("expected %q, got %q", test.want, got)
+			}
+		})
+	}
+}
+
 func TestSingleSql(t *testing.T) {
 	// input := "explain verbose SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20"
 	//input := "explain verbose SELECT N_REGIONKEY + 2 as a FROM NATION WHERE -N_NATIONKEY < -20"

@@ -5224,6 +5224,7 @@ func Test_StatementClassify(t *testing.T) {
 		{&tree.ShowPublications{}, true},
 		{&tree.ShowCreatePublications{}, true},
 		{&tree.ShowBackendServers{}, true},
+		{&tree.ExplainPhyPlan{}, true},
 		{&tree.AnalyzeStmt{}, true},
 		{&tree.CheckTableStmt{}, true},
 		{&tree.ShowProfileStmt{}, true},
@@ -5767,7 +5768,7 @@ func TestExecRequestRewriteFailureMarksRowCountFailed(t *testing.T) {
 	}
 }
 
-func TestExecRequestStmtPrepareAcceptsSetVariable(t *testing.T) {
+func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -5789,18 +5790,41 @@ func TestExecRequestStmtPrepareAcceptsSetVariable(t *testing.T) {
 	defer ses.Close()
 	ses.GetResponser().MysqlRrWr().(*MysqlProtocolImpl).SetSession(ses)
 	ses.txnHandler = InitTxnHandler(ses.GetService(), nil, ctx, txnOperator)
+	require.True(t, ses.txnHandler.InActiveTxn())
 	execCtx := newTestExecCtx(ctx, ctrl)
 	execCtx.ses = ses
 
 	resp, err := ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte("explain analyze select 1"),
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	stmtName := getPrepareStmtName(ses.GetLastStmtId())
+	prepared, err := ses.GetPrepareStmt(ctx, stmtName)
+	require.NoError(t, err)
+	require.IsType(t, &tree.ExplainAnalyze{}, prepared.PrepareStmt)
+
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte("explain phyplan select 1"),
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	stmtName = getPrepareStmtName(ses.GetLastStmtId())
+	prepared, err = ses.GetPrepareStmt(ctx, stmtName)
+	require.NoError(t, err)
+	require.IsType(t, &tree.ExplainPhyPlan{}, prepared.PrepareStmt)
+
+	resp, err = ExecRequest(ses, execCtx, &Request{
 		cmd:  COM_STMT_PREPARE,
 		data: []byte("set @binary_value = ?"),
 	})
 	require.NoError(t, err)
 	require.Nil(t, resp)
 
-	stmtName := getPrepareStmtName(ses.GetLastStmtId())
-	prepared, err := ses.GetPrepareStmt(ctx, stmtName)
+	stmtName = getPrepareStmtName(ses.GetLastStmtId())
+	prepared, err = ses.GetPrepareStmt(ctx, stmtName)
 	require.NoError(t, err)
 	require.IsType(t, &tree.SetVar{}, prepared.PrepareStmt)
 	require.Len(t, prepared.PreparePlan.GetDcl().GetPrepare().GetParamTypes(), 1)
@@ -5819,6 +5843,47 @@ func TestExecRequestStmtPrepareAcceptsSetVariable(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, setVar.Assignments, 2)
 	require.Len(t, prepared.PreparePlan.GetDcl().GetPrepare().GetParamTypes(), 2)
+}
+
+func TestExecRequestStmtPrepareRejectsNonPrepareableAndEmptyPayloads(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.GetResponser().MysqlRrWr().(*MysqlProtocolImpl).SetSession(ses)
+	ses.txnHandler = &TxnHandler{}
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{name: "values", payload: "values row(1)"},
+		{name: "lock tables", payload: "lock tables t read"},
+		{name: "unlock tables", payload: "unlock tables"},
+		{name: "empty", payload: ""},
+		{name: "whitespace", payload: " \t\r\n"},
+		{name: "line comment", payload: "-- comment"},
+		{name: "block comment", payload: "/* comment */"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := ExecRequest(ses, execCtx, &Request{
+				cmd:  COM_STMT_PREPARE,
+				data: []byte(tc.payload),
+			})
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+			require.Equal(t, ErrorResponse, resp.GetCategory())
+			moErr, ok := resp.GetData().(*moerr.Error)
+			require.True(t, ok)
+			require.Equal(t, moerr.ErrParseError, moErr.ErrorCode())
+		})
+	}
 }
 
 func TestExecRequestProtocolCommandRowCount(t *testing.T) {
