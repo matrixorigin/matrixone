@@ -19,7 +19,6 @@ import (
 	"math"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -146,6 +146,32 @@ func TestConstructFuzzyFilterUsesFinalizedBuildSide(t *testing.T) {
 		require.Nil(t, op.RuntimeFilterSpec)
 		require.Empty(t, node.RuntimeFilterBuildList)
 		require.Empty(t, tableScan.RuntimeFilterProbeList)
+	})
+
+	t.Run("uses projected exact float identity type", func(t *testing.T) {
+		node, tableScan, sinkScan, _ := newNodes(
+			plan.Node_FUZZY_BUILD_SIDE_SINK, 10, 10)
+		node.TableDef.Cols[0].Typ = plan.Type{Id: int32(types.T_float64)}
+		identityType := plan.Type{Id: int32(types.T_varchar)}
+		tableScan.ProjectList = []*plan.Expr{{Typ: identityType}}
+		sinkScan.ProjectList = []*plan.Expr{{Typ: identityType}}
+
+		op := constructFuzzyFilter(node, tableScan, sinkScan)
+		defer op.Release()
+
+		require.Equal(t, identityType, op.PkTyp)
+	})
+
+	t.Run("uses table projection when sink projection is absent", func(t *testing.T) {
+		node, tableScan, sinkScan, _ := newNodes(
+			plan.Node_FUZZY_BUILD_SIDE_TABLE, 10, 10)
+		identityType := plan.Type{Id: int32(types.T_varchar)}
+		tableScan.ProjectList = []*plan.Expr{{Typ: identityType}}
+
+		op := constructFuzzyFilter(node, tableScan, sinkScan)
+		defer op.Release()
+
+		require.Equal(t, identityType, op.PkTyp)
 	})
 }
 
@@ -599,21 +625,21 @@ func TestDupOperatorDedupJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
 	require.NotSame(t, dup1.Mailbox, nextGeneration.Mailbox)
 }
 
-func TestDupOperatorHashJoinSharesChannelOnlyWithinGeneration(t *testing.T) {
+func TestDupOperatorHashJoinSharesMailboxOnlyWithinGeneration(t *testing.T) {
 	op := hashjoin.NewArgument()
-	staleChannel := make(chan *bitmap.Bitmap, 2)
-	close(staleChannel)
-	op.Channel = staleChannel
+	staleMailbox := hashjoin.NewBitmapMailbox(2)
+	staleMailbox.SealAndDrain(mpool.MustNewZero())
+	op.Mailbox = staleMailbox
 
 	dupCtx := newOperatorDupContext()
 	dup1 := dupOperatorWithContext(op, 0, 2, dupCtx).(*hashjoin.HashJoin)
 	dup2 := dupOperatorWithContext(op, 1, 2, dupCtx).(*hashjoin.HashJoin)
 
-	require.Equal(t, staleChannel, op.Channel, "duplicating must not mutate the reusable template")
-	require.NotEqual(t, staleChannel, dup1.Channel, "a stale closed template channel must not enter a new execution")
-	require.Equal(t, dup1.Channel, dup2.Channel)
+	require.Same(t, staleMailbox, op.Mailbox, "duplicating must not mutate the reusable template")
+	require.NotSame(t, staleMailbox, dup1.Mailbox, "a stale template mailbox must not enter a new execution")
+	require.Same(t, dup1.Mailbox, dup2.Mailbox)
 	nextGeneration := dupOperatorWithContext(op, 0, 2, newOperatorDupContext()).(*hashjoin.HashJoin)
-	require.NotEqual(t, dup1.Channel, nextGeneration.Channel)
+	require.NotSame(t, dup1.Mailbox, nextGeneration.Mailbox)
 }
 
 func TestDupOperatorAssignsSharedShuffleConsumerIndex(t *testing.T) {
@@ -905,9 +931,24 @@ func TestDupOperatorTableFunctionPreservesProbeState(t *testing.T) {
 		Limit:        plan2.MakePlan2Uint64ConstExprWithType(7),
 		OrigFuncName: "l2_distance",
 	}
+	op.FulltextSourceRef = &plan.ObjectRef{SchemaName: "publisher", ObjName: "source", PubInfo: &plan.PubInfo{TenantId: 42}}
+	op.FulltextIndexRef = &plan.ObjectRef{SchemaName: "publisher", ObjName: "index", PubInfo: &plan.PubInfo{TenantId: 42}}
 
 	dup := dupOperator(op, 0, 1).(*table_function.TableFunction)
 	require.Equal(t, op.RuntimeFilterSpecs, dup.RuntimeFilterSpecs)
 	require.Equal(t, uint64(7), dup.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 	require.Equal(t, "l2_distance", dup.IndexReaderParam.GetOrigFuncName())
+	require.Equal(t, op.FulltextSourceRef, dup.FulltextSourceRef)
+	require.Equal(t, op.FulltextIndexRef, dup.FulltextIndexRef)
+}
+
+func TestDupOperatorApplyPreservesFulltextReferences(t *testing.T) {
+	tableFunction := table_function.NewArgument()
+	tableFunction.FulltextSourceRef = &plan.ObjectRef{SchemaName: "publisher", ObjName: "source", PubInfo: &plan.PubInfo{TenantId: 42}}
+	tableFunction.FulltextIndexRef = &plan.ObjectRef{SchemaName: "publisher", ObjName: "index", PubInfo: &plan.PubInfo{TenantId: 42}}
+	op := &apply.Apply{TableFunction: tableFunction}
+
+	dup := dupOperator(op, 0, 1).(*apply.Apply)
+	require.Equal(t, tableFunction.FulltextSourceRef, dup.TableFunction.FulltextSourceRef)
+	require.Equal(t, tableFunction.FulltextIndexRef, dup.TableFunction.FulltextIndexRef)
 }

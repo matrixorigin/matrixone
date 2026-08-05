@@ -804,10 +804,12 @@ func TestResetPreparePlanCollectsHiddenIndexSchemas(t *testing.T) {
 	const hiddenTable = "__mo_index_hidden"
 	mock := NewMockCompilerContext(false)
 	mock.objects[hiddenTable] = &planpb.ObjectRef{
-		Db:         10,
-		Obj:        20,
-		SchemaName: "db",
-		ObjName:    hiddenTable,
+		Db:               10,
+		Obj:              20,
+		SchemaName:       "publisher_db",
+		ObjName:          hiddenTable,
+		SubscriptionName: "subscriber_alias",
+		PubInfo:          &planpb.PubInfo{TenantId: 42},
 	}
 	mock.tables[hiddenTable] = &planpb.TableDef{Name: hiddenTable, DbId: 10, TblId: 20, Version: 30}
 
@@ -867,7 +869,8 @@ func TestRecordPreparedPluginDependenciesSurvivesScanRemoval(t *testing.T) {
 	scanNode := &planpb.Node{
 		NodeType: planpb.Node_TABLE_SCAN,
 		ObjRef: &planpb.ObjectRef{
-			Db: 1, Obj: 2, SchemaName: "db", ObjName: "src",
+			Db: 1, Obj: 2, SchemaName: "publisher_db", ObjName: "src",
+			SubscriptionName: "subscriber_alias", PubInfo: &planpb.PubInfo{TenantId: 42},
 		},
 		TableDef: &planpb.TableDef{
 			Name: "src", DbId: 1, TblId: 2, Version: 3,
@@ -883,8 +886,12 @@ func TestRecordPreparedPluginDependenciesSurvivesScanRemoval(t *testing.T) {
 	require.NoError(t, builder.recordPreparedPluginDependencies(scanNode))
 	require.Len(t, builder.qry.GetCatalogDependencies(), 2)
 	require.Equal(t, "src", builder.qry.CatalogDependencies[0].ObjName)
+	require.Equal(t, "subscriber_alias", builder.qry.CatalogDependencies[0].SubscriptionName)
+	require.Equal(t, int32(42), builder.qry.CatalogDependencies[0].GetPubInfo().GetTenantId())
 	require.Equal(t, int64(3), builder.qry.CatalogDependencies[0].Server)
 	require.Equal(t, hiddenTable, builder.qry.CatalogDependencies[1].ObjName)
+	require.Equal(t, "subscriber_alias", builder.qry.CatalogDependencies[1].SubscriptionName)
+	require.Equal(t, int32(42), builder.qry.CatalogDependencies[1].GetPubInfo().GetTenantId())
 	require.Equal(t, int64(30), builder.qry.CatalogDependencies[1].Server)
 
 	encoded, err := builder.qry.Marshal()

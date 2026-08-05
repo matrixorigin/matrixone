@@ -363,6 +363,8 @@ message TableFunction {
   bool is_single = 6;
   plan.IndexReaderParam index_reader_param = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 8;
+  plan.ObjectRef fulltext_source_ref = 9;
+  plan.ObjectRef fulltext_index_ref = 10;
 }
 
 message ExternalName2ColIndex {
@@ -645,6 +647,15 @@ message ProcessInfo {
   SessionLoggerInfo session_logger = 8 [(gogoproto.nullable) = false];
   PrepareParamInfo prepare_params = 9 [(gogoproto.nullable) = false];
   int64 affected_rows = 10;
+  // Planned PipelineMessage RPCs per target CN for statement-level remote
+  // MessageBoard and resource-account terminal ownership.
+  map<string, uint32> remote_fragment_counts = 11;
+  // Unique physical execution attempt. Unlike the SQL statement ID, this
+  // changes across retries and prepared-statement executions.
+  bytes remote_execution_id = 12;
+  // Statement-level INSERT IGNORE semantics used by casts in remote pipelines.
+  // Absent in messages from older CNs, which safely decodes as false.
+  bool statement_runtime_ignore = 13;
 }
 
 message SessionInfo {

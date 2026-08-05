@@ -34,6 +34,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
+	"golang.org/x/sync/semaphore"
 )
 
 var _ ChangeReader = new(TableChangeStream)
@@ -79,9 +80,10 @@ type TableChangeStream struct {
 	cancelOnce       sync.Once
 
 	// Configuration
-	initSnapshotSplitTxn bool
-	startTs, endTs       types.TS
-	noFull               bool
+	initSnapshotSplitTxn   bool
+	startTs, endTs         types.TS
+	noFull                 bool
+	initialSnapshotLimiter *semaphore.Weighted
 
 	// Column indices (for AtomicBatch)
 	insTsColIdx           int
@@ -95,6 +97,7 @@ type TableChangeStream struct {
 	retryable          bool        // Protected by stateMu, updated together with lastError
 	cleanupRollbackErr error       // Set by processWithTxn defer if rollback fails (protected by stateMu)
 	hasSucceeded       atomic.Bool // Tracks if reader has successfully processed data at least once
+	initialSyncPending atomic.Bool // Limits the first full-sync round until it completes successfully
 
 	// Retry state with exponential backoff
 	retryCount      int           // Current retry count for the same error type
@@ -130,6 +133,7 @@ type tableChangeStreamOptions struct {
 	retryBackoffBase          time.Duration // Base delay for exponential backoff
 	retryBackoffMax           time.Duration // Max delay for exponential backoff
 	retryBackoffFactor        float64       // Factor for exponential backoff
+	initialSnapshotLimiter    *semaphore.Weighted
 }
 
 const (
@@ -195,6 +199,14 @@ func WithRetryBackoff(base, max time.Duration, factor float64) TableChangeStream
 		opts.retryBackoffBase = base
 		opts.retryBackoffMax = max
 		opts.retryBackoffFactor = factor
+	}
+}
+
+// WithInitialSnapshotLimiter shares a task-level concurrency limit across table streams.
+// It only applies to the first successful full-sync round; incremental rounds are unaffected.
+func WithInitialSnapshotLimiter(limiter *semaphore.Weighted) TableChangeStreamOption {
+	return func(opts *tableChangeStreamOptions) {
+		opts.initialSnapshotLimiter = limiter
 	}
 }
 
@@ -313,6 +325,7 @@ var NewTableChangeStream = func(
 		startTs:                   startTs,
 		endTs:                     endTs,
 		noFull:                    noFull,
+		initialSnapshotLimiter:    opts.initialSnapshotLimiter,
 		insTsColIdx:               insTsColIdx,
 		insCompositedPkColIdx:     insCompositedPkColIdx,
 		delTsColIdx:               delTsColIdx,
@@ -327,6 +340,7 @@ var NewTableChangeStream = func(
 		retryBackoffMax:    opts.retryBackoffMax,
 		retryBackoffFactor: opts.retryBackoffFactor,
 	}
+	stream.initialSyncPending.Store(!noFull)
 
 	tableLabel := progressTracker.tableKey()
 	v2.CdcTableStuckGauge.WithLabelValues(tableLabel).Set(0)
@@ -738,6 +752,12 @@ func (s *TableChangeStream) processOneRound(ctx context.Context, ar *ActiveRouti
 	s.cleanupRollbackErr = nil
 	s.stateMu.Unlock()
 
+	releaseInitialSnapshot, err := s.acquireInitialSnapshotSlot(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseInitialSnapshot()
+
 	// Create transaction operator
 	txnOp, err := GetTxnOp(ctx, s.cnEngine, s.cnTxnClient, "tableChangeStream")
 	if err != nil {
@@ -801,6 +821,30 @@ func (s *TableChangeStream) processOneRound(ctx context.Context, ar *ActiveRouti
 	}
 
 	return err
+}
+
+func (s *TableChangeStream) acquireInitialSnapshotSlot(ctx context.Context) (func(), error) {
+	if !s.initialSyncPending.Load() || s.initialSnapshotLimiter == nil {
+		return func() {}, nil
+	}
+
+	if s.progressTracker != nil {
+		s.progressTracker.SetState("waiting_for_initial_snapshot_slot")
+	}
+	start := time.Now()
+	if err := s.initialSnapshotLimiter.Acquire(ctx, 1); err != nil {
+		return nil, err
+	}
+
+	logutil.Info(
+		"cdc.table_stream.initial_snapshot_slot_acquired",
+		zap.String("task-id", s.taskId),
+		zap.String("table", s.tableInfo.String()),
+		zap.Duration("wait", time.Since(start)),
+	)
+	return func() {
+		s.initialSnapshotLimiter.Release(1)
+	}, nil
 }
 
 // updateErrorState updates lastError and retryable atomically
@@ -1160,6 +1204,7 @@ func (s *TableChangeStream) processWithTxn(
 		)
 		// Clear error on first success (lazy, eventual consistency)
 		s.clearErrorOnFirstSuccess(ctx)
+		s.initialSyncPending.Store(false)
 		s.progressTracker.EndRound(true, nil)
 		return nil // Graceful end
 	}
@@ -1380,6 +1425,7 @@ func (s *TableChangeStream) processWithTxn(
 		if changeData.Type == ChangeTypeNoMoreData {
 			// Clear error on first success (lazy, eventual consistency)
 			s.clearErrorOnFirstSuccess(ctx)
+			s.initialSyncPending.Store(false)
 
 			// Mark successful round completion
 			s.progressTracker.EndRound(true, nil)

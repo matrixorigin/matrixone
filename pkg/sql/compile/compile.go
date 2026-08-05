@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/parquet-go/parquet-go"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -216,6 +217,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.fill = fill
 	c.sql = sql
 	c.affectRows.Store(0)
+	c.executionGeneration = 0
 	c.anal.Reset(c.isPrepare, c.IsTpQuery())
 
 	if c.lockMeta != nil {
@@ -240,6 +242,8 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 
 	c.MessageBoard = c.MessageBoard.Reset()
 	proc.SetMessageBoard(c.MessageBoard)
+	c.remoteFragmentCounts = nil
+	c.remoteExecutionID = uuid.Nil
 	c.counterSet.Reset()
 
 	for _, f := range c.fuzzys {
@@ -277,6 +281,12 @@ func (c *Compile) clear() {
 	if c.anal != nil {
 		c.anal.release()
 	}
+	// The attempt owns references to allocation-aware operators. Finalize it
+	// before Scope.release returns those operators to reuse pools; otherwise a
+	// defensive cleanup path could clear an already-reset or reused owner.
+	if err := c.finishAllocationAccountAttempt(); err != nil {
+		logutil.Errorf("allocation account terminal cleanup failed: %v", err)
+	}
 	for i := range c.scopes {
 		c.scopes[i].release()
 	}
@@ -289,6 +299,8 @@ func (c *Compile) clear() {
 	c.scopes = c.scopes[:0]
 	c.pn = nil
 	c.fill = nil
+	c.resultSink = nil
+	c.executionGeneration = 0
 	c.affectRows.Store(0)
 	c.addr = ""
 	c.db = ""
@@ -317,6 +329,14 @@ func (c *Compile) clear() {
 	c.needLockMeta = false
 	c.isInternal = false
 	c.resourceAttemptOwnerEligible = false
+	c.allocationAccountRegistry = nil
+	c.allocationAccountLimit = 0
+	c.allocationControllerProvider = nil
+	c.allocationTerminalExporter = nil
+	c.allocationAccountOwners = nil
+	c.allocationAttempt = nil
+	c.remoteFragmentCounts = nil
+	c.remoteExecutionID = uuid.Nil
 	c.isPrepare = false
 	c.hasMergeOp = false
 	c.needBlock = false
@@ -616,11 +636,7 @@ func (c *Compile) prePipelineInitializer() (err error) {
 func newMaterializedSpillBudget(proc *process.Process) materialized.SpillBudget {
 	return materialized.SpillBudget{
 		ReserveMemory: func(size uint64) (materialized.Reservation, error) {
-			budget, err := proc.GetHashBuildBudget()
-			if err != nil {
-				return nil, err
-			}
-			return budget.Reserve(size)
+			return proc.GetCTEMemoryBudget().Reserve(proc.Ctx, size)
 		},
 		ReserveDisk: func(size uint64) (materialized.GrowingReservation, error) {
 			budget, err := proc.GetHashBuildBudget()
@@ -652,11 +668,13 @@ func (c *Compile) runOnce() (err error) {
 
 	// REPLACE parent checks and actions run before the main pipeline.
 	query := c.pn.GetQuery()
-	if query != nil && query.StmtType == plan.Query_INSERT && len(query.GetDetectSqls()) != 0 {
-		if err = validateReplaceParentTxnMode(
+	if query != nil && len(query.GetDetectSqls()) != 0 {
+		if err = validateForeignKeyParentTxnMode(
 			c.proc.Ctx, query, c.proc.GetTxnOperator().Txn().IsPessimistic()); err != nil {
 			return err
 		}
+	}
+	if query != nil && query.StmtType == plan.Query_INSERT && len(query.GetDetectSqls()) != 0 {
 		for _, sql := range query.DetectSqls {
 			if strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") {
 				continue
@@ -782,7 +800,8 @@ func (c *Compile) runOnce() (err error) {
 			if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") ||
 				strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") ||
 				strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") ||
-				strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
+				strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") ||
+				strings.HasPrefix(sql, "UPDATE_PARENT_PLAN:") {
 				continue
 			}
 			postCheckSqls = append(postCheckSqls, sql)
@@ -799,7 +818,7 @@ func (c *Compile) runOnce() (err error) {
 	return err
 }
 
-func validateReplaceParentTxnMode(ctx context.Context, query *plan.Query, pessimistic bool) error {
+func validateForeignKeyParentTxnMode(ctx context.Context, query *plan.Query, pessimistic bool) error {
 	if pessimistic || query == nil {
 		return nil
 	}
@@ -808,6 +827,10 @@ func validateReplaceParentTxnMode(ctx context.Context, query *plan.Query, pessim
 			strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") {
 			return moerr.NewNotSupported(ctx,
 				"REPLACE on a referenced parent table in optimistic transaction mode")
+		}
+		if strings.HasPrefix(sql, "UPDATE_PARENT_PLAN:") {
+			return moerr.NewNotSupported(ctx,
+				"UPDATE on a referenced parent table in optimistic transaction mode")
 		}
 	}
 	return nil
@@ -1148,8 +1171,11 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 
 	switch qry.StmtType {
 	case plan.Query_DELETE, plan.Query_INSERT, plan.Query_UPDATE, plan.Query_MERGE:
-		updateScopesLastFlag(ss)
-		return ss, nil
+		if !qry.HasReturning || qry.ReturningStep < 0 || int(qry.ReturningStep) >= len(qry.Steps) || qry.Steps[qry.ReturningStep] != step {
+			updateScopesLastFlag(ss)
+			return ss, nil
+		}
+		fallthrough
 	default:
 		var rs *Scope
 		if c.IsSingleScope(ss) {
@@ -1165,7 +1191,7 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 
 		rs.setRootOperator(
 			output.NewArgument().
-				WithFunc(c.fill).
+				WithFunc(c.resultWriter()).
 				WithBlock(c.needBlock).
 				WithAdaptive(isAdaptive),
 		)
@@ -5754,6 +5780,7 @@ func (c *Compile) newEmptyMergeScope() *Scope {
 
 func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	rs := c.newEmptyMergeScope()
+	ss = c.groupRemoteRunDependenciesByCNIfNeeded(ss, rs.NodeInfo)
 	rs.PreScopes = ss
 
 	rs.Proc = c.proc.NewNoContextChildProc(len(ss))
@@ -5990,6 +6017,32 @@ func (c *Compile) mergeShuffleScopesIfNeeded(ss []*Scope, force bool) []*Scope {
 		}
 	}
 	return rs
+}
+
+// groupRemoteRunDependenciesByCNIfNeeded preserves the ownership boundary of
+// in-process dispatch and connector receivers when a local merge makes its
+// inputs separate RemoteRun units. A scope that targets a receiver owned by a
+// sibling scope cannot execute remotely on its own; wrapping all inputs from
+// the same CN in one merge scope keeps those dependencies in one serialized
+// tree. Only a non-local invalid input triggers regrouping; once triggered, the
+// whole input stage is grouped consistently by CN. Independent input stages
+// retain the direct fast path.
+func (c *Compile) groupRemoteRunDependenciesByCNIfNeeded(
+	ss []*Scope,
+	mergeNode engine.Node,
+) []*Scope {
+	stageNodes := shuffleBucketStageNodes(ss)
+	if len(ss) <= len(stageNodes) {
+		return ss
+	}
+
+	for _, scope := range ss {
+		if !sameExecutionNode(scope.NodeInfo, mergeNode) &&
+			findPipelineExternalLocalReceiver(scope) != nil {
+			return c.mergeScopesByStageNodes(ss, stageNodes)
+		}
+	}
+	return ss
 }
 
 // shuffleBucketsNeedPerCNGrouping reports whether a dispatch in one top-level

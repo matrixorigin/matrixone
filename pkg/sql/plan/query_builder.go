@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
@@ -86,13 +87,14 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 	// FUBAR.
 
 	var mysqlCompatible bool
+	var mysqlFullGroupByCompat bool
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
 	if err == nil {
 		if modeStr, ok := mode.(string); ok {
-			if !strings.Contains(modeStr, "ONLY_FULL_GROUP_BY") {
-				mysqlCompatible = true
-			}
+			onlyFullGroupBy := mysql.HasSQLMode(modeStr, "ONLY_FULL_GROUP_BY")
+			mysqlCompatible = !onlyFullGroupBy
+			mysqlFullGroupByCompat = onlyFullGroupBy && !mysql.HasMatrixOneNativeSQLMode(modeStr)
 		}
 	}
 
@@ -142,6 +144,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		indexHintOwnerByNode:   make(map[int32]int32),
 		nextBindTag:            0,
 		mysqlCompatible:        mysqlCompatible,
+		mysqlFullGroupByCompat: mysqlFullGroupByCompat,
 		aggSpillMem:            aggSpillMem,
 		joinSpillMem:           joinSpillMem,
 		sortSpillMem:           sortSpillMem,
@@ -154,6 +157,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		// -1 means "no old-row delete maintenance" (set only on ODKU into an
 		// irregular-index table); step 0 is a valid index so it cannot be the zero value.
 		irregularMaintDeleteStep: -1,
+		returningSourceStep:      -1,
 	}
 }
 
@@ -3405,6 +3409,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		if err != nil {
 			return 0, err
 		}
+		if subCtx.isCorrelated {
+			ctx.isCorrelated = true
+		}
 
 		if idx == 0 {
 			projectLength = len(builder.qry.Nodes[nodeID].ProjectList)
@@ -3423,6 +3430,21 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		}
 		subCtxList[idx] = subCtx
 		nodes[idx] = nodeID
+	}
+	// Type coercion below mutates branch project expressions in place, including
+	// the ENUM display expression and the type attached to a literal NULL.
+	// Capture both kinds of provenance before that mutation so a pure NULL can
+	// remain neutral without mistaking an explicit CAST(NULL AS string) for a
+	// neutral branch.
+	setBranchPureNull := make([][]bool, len(subCtxList))
+	setBranchOrderTypes := make([][]*plan.Type, len(subCtxList))
+	for branchIdx, branchCtx := range subCtxList {
+		setBranchPureNull[branchIdx] = make([]bool, projectLength)
+		setBranchOrderTypes[branchIdx] = make([]*plan.Type, projectLength)
+		for colIdx := 0; colIdx < projectLength && colIdx < len(branchCtx.projects); colIdx++ {
+			setBranchPureNull[branchIdx][colIdx] = isNullLiteralExpr(branchCtx.projects[colIdx])
+			setBranchOrderTypes[branchIdx][colIdx] = branchCtx.mysqlSpecialOrderTypeForProject(int32(colIdx))
+		}
 	}
 
 	// reset all select's return Projection(type cast up)
@@ -3602,6 +3624,39 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			},
 		})
 	}
+	// A set-operation result keeps ENUM/SET definition-order provenance only
+	// when every non-NULL branch is the same pure display contract. A literal
+	// NULL is neutral because it cannot introduce a competing comparison
+	// contract. Mixed definitions, explicit string casts, and ordinary strings
+	// intentionally clear provenance.
+	for colIdx, output := range ctx.projects {
+		if !types.T(output.Typ.Id).IsMySQLString() {
+			continue
+		}
+		var candidate *plan.Type
+		compatible := true
+		for branchIdx := range subCtxList {
+			branchType := setBranchOrderTypes[branchIdx][colIdx]
+			if branchType == nil {
+				if colIdx >= len(setBranchPureNull[branchIdx]) || !setBranchPureNull[branchIdx][colIdx] {
+					compatible = false
+					break
+				}
+				continue
+			}
+			if candidate == nil {
+				candidate = branchType
+				continue
+			}
+			if !mysqlSpecialOrderTypesCompatible(candidate, branchType) {
+				compatible = false
+				break
+			}
+		}
+		if compatible && candidate != nil {
+			ctx.setMySQLSpecialOrderType(int32(colIdx), candidate)
+		}
+	}
 	havingBinder := NewHavingBinder(builder, ctx)
 	projectionBinder := NewProjectionBinder(builder, ctx, havingBinder)
 
@@ -3721,6 +3776,11 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				if err != nil {
 					return 0, err
 				}
+			}
+
+			expr, err = builder.rewriteMySQLSpecialOrderByExpr(ctx, expr)
+			if err != nil {
+				return 0, err
 			}
 
 			orderBy := &plan.OrderBySpec{
@@ -4098,6 +4158,19 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	builder.qry.Nodes[initLastNodeID].RecursiveCte = false
 
 	projects := builder.qry.Nodes[builder.qry.Nodes[initLastNodeID].Children[0]].ProjectList
+	// A recursive CTE may expose the anchor's ENUM/SET display contract only if
+	// every recursive member preserves the same contract. Capture the anchor
+	// before recursive-member coercion; a literal NULL is neutral, while an
+	// ordinary string expression starts (and keeps) the column incompatible.
+	recursiveOrderTypes := make([]*plan.Type, len(projects))
+	recursiveOrderCompatible := make([]bool, len(projects))
+	for colIdx := range projects {
+		if colIdx < len(initCtx.projects) {
+			recursiveOrderTypes[colIdx] = initCtx.mysqlSpecialOrderTypeForProject(int32(colIdx))
+			recursiveOrderCompatible[colIdx] = recursiveOrderTypes[colIdx] != nil ||
+				isNullLiteralExpr(initCtx.projects[colIdx])
+		}
+	}
 	// recursive statement
 	recursiveLastNodeID := initLastNodeID
 	initSourceStep := int32(len(builder.qry.Steps))
@@ -4132,6 +4205,27 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		recursiveLastNodeID, err = builder.bindSelect(&tree.Select{Select: r}, subCtx, false)
 		if err != nil {
 			return
+		}
+		// Snapshot the recursive member before it is coerced to the anchor's
+		// projection types. A cast inserted below must not be mistaken for proof
+		// that an ordinary string member has the anchor's definition order.
+		for colIdx := range projects {
+			if !recursiveOrderCompatible[colIdx] || colIdx >= len(subCtx.projects) {
+				recursiveOrderCompatible[colIdx] = false
+				continue
+			}
+			memberType := subCtx.mysqlSpecialOrderTypeForProject(int32(colIdx))
+			if memberType == nil {
+				if !isNullLiteralExpr(subCtx.projects[colIdx]) {
+					recursiveOrderCompatible[colIdx] = false
+				}
+				continue
+			}
+			if recursiveOrderTypes[colIdx] == nil {
+				recursiveOrderTypes[colIdx] = memberType
+			} else if !mysqlSpecialOrderTypesCompatible(recursiveOrderTypes[colIdx], memberType) {
+				recursiveOrderCompatible[colIdx] = false
+			}
 		}
 
 		//3.2 add Sink Node on the top of single recursive part
@@ -4172,6 +4266,16 @@ func (builder *QueryBuilder) bindRecursiveCte(
 
 		for i, col := range cols {
 			subCtx.headings[i] = string(col)
+		}
+	}
+	// Record every column explicitly, including incompatible columns as nil.
+	// The nil entry is a suppression sentinel: without it, the final binding
+	// would rediscover provenance from the anchor expression alone.
+	for colIdx := range projects {
+		if recursiveOrderCompatible[colIdx] && recursiveOrderTypes[colIdx] != nil {
+			initCtx.setMySQLSpecialOrderType(int32(colIdx), recursiveOrderTypes[colIdx])
+		} else {
+			initCtx.setMySQLSpecialOrderType(int32(colIdx), nil)
 		}
 	}
 
@@ -4381,9 +4485,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		}
 	}
 
-	if stmt.SelectLockInfo != nil && stmt.SelectLockInfo.LockType == tree.SelectLockForUpdate {
-		builder.isForUpdate = true
-	}
+	effectiveSelectLockInfo := stmt.SelectLockInfo
 
 	// strip parentheses
 	// ((select a from t1)) order by b  [ is equal ] select a from t1 order by b
@@ -4412,6 +4514,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				astRankOption = selectClause.Select.RankOption
 			}
 			stmt = selectClause.Select
+			if stmt.SelectLockInfo != nil {
+				effectiveSelectLockInfo = stmt.SelectLockInfo
+			}
 
 			//stmt may be replaced above.
 			//do preprocess CTEs again
@@ -4421,6 +4526,17 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			}
 		} else {
 			break
+		}
+	}
+
+	selectLockMode := lockpb.LockMode_Exclusive
+	if effectiveSelectLockInfo != nil {
+		switch effectiveSelectLockInfo.LockType {
+		case tree.SelectLockForUpdate:
+			builder.isForUpdate = true
+		case tree.SelectLockForShare:
+			builder.isForUpdate = true
+			selectLockMode = lockpb.LockMode_Shared
 		}
 	}
 
@@ -4476,6 +4592,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					if rewrittenSelect == nil {
 						return 0, moerr.NewNotSupported(builder.GetContext(), "window functions with ROLLUP or CUBE for this expression")
 					}
+					rewrittenSelect.SelectLockInfo = effectiveSelectLockInfo
 					return builder.bindSelect(rewrittenSelect, ctx, isRoot)
 				}
 
@@ -4554,6 +4671,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			astLimit,
 			astTimeWindow,
 			helpFunc,
+			selectLockMode,
 			isRoot,
 		); err != nil {
 			return
@@ -4626,12 +4744,24 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		// sample can ignore these check because it supports the sql like 'select a, b, sample(c) from t group by a' whose b is not in group by clause.
 		if (len(ctx.groups) > 0 || len(ctx.aggregates) > 0 || len(ctx.times) > 0) && len(projectionBinder.boundCols) > 0 {
 			if !builder.mysqlCompatible {
-				return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0])
+				if builder.mysqlFullGroupByCompat {
+					if rejectedColumn, rejected := builder.mysqlFullGroupByRejectedColumn(ctx, projectionBinder.boundCols); rejected {
+						return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", rejectedColumn)
+					}
+				} else {
+					return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0].name)
+				}
 			}
 
 			// For MySQL compatibility, wrap bare ColRefs in any_value()
 			for i, proj := range ctx.projects {
 				ctx.projects[i] = builder.wrapBareColRefsInAnyValue(proj, ctx)
+			}
+			// Window functions run above AGG, so their raw argument, partition,
+			// and ordering expressions must be materialized by the aggregate
+			// stage as well. The final projection retains windowTag references.
+			for i, window := range ctx.windows {
+				ctx.windows[i] = builder.wrapBareColRefsInAnyValue(window, ctx)
 			}
 		}
 	}
@@ -6424,6 +6554,7 @@ func (builder *QueryBuilder) bindSelectClause(
 	astLimit *tree.Limit,
 	astTimeWindow *tree.TimeWindow,
 	helpFunc *helpFunc,
+	selectLockMode lockpb.LockMode,
 	isRoot bool,
 ) (
 	nodeID int32,
@@ -6493,6 +6624,9 @@ func (builder *QueryBuilder) bindSelectClause(
 	// final result set filters out would still get locked.
 	if builder.isForUpdate {
 		lockTargets := builder.collectLockTargets(nodeID, ctx)
+		for _, target := range lockTargets {
+			target.Mode = selectLockMode
+		}
 		if len(lockTargets) > 0 {
 			lockNode = &Node{
 				NodeType:    plan.Node_LOCK_OP,
@@ -6571,7 +6705,7 @@ func (builder *QueryBuilder) bindWhere(
 	}
 	var expr *plan.Expr
 	for _, cond := range whereList {
-		if nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx); err != nil {
+		if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
 			return
 		}
 		boundFilterList = append(boundFilterList, expr)
@@ -6585,6 +6719,7 @@ func (builder *QueryBuilder) bindWhere(
 			return
 		}
 	}
+	ctx.whereFilters = boundFilterList
 
 	newNodeID = nodeID
 	return
@@ -7533,31 +7668,9 @@ func (builder *QueryBuilder) bindOrderBy(
 			return
 		}
 
-		// If the ORDER BY expression references a projected cast_index_to_value(enum_str, col),
-		// replace it with a hidden projection of the original ENUM/SET column so that sorting
-		// uses the internal definition order instead of the visible string order.
-		// This hidden raw key is a 1:1 mapping of the visible value, so keeping it through
-		// DISTINCT preserves dedup semantics and the final result projection trims it away.
-		if col := expr.GetCol(); col != nil && col.RelPos == ctx.projectTag {
-			if projExpr := ctx.projects[col.ColPos]; projExpr != nil {
-				if fn := projExpr.GetF(); fn != nil &&
-					(fn.Func.ObjName == moEnumCastIndexToValueFun || fn.Func.ObjName == moSetCastIndexToValueFun) {
-					orderKeyExpr := DeepCopyExpr(fn.Args[1])
-					colPos, appendErr := appendOrderByProjectExpr(ctx, orderKeyExpr)
-					if appendErr != nil {
-						return nil, appendErr
-					}
-					expr = &plan.Expr{
-						Typ: orderKeyExpr.Typ,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: ctx.projectTag,
-								ColPos: colPos,
-							},
-						},
-					}
-				}
-			}
+		expr, err = builder.rewriteMySQLSpecialOrderByExpr(ctx, expr)
+		if err != nil {
+			return nil, err
 		}
 
 		orderBy := &plan.OrderBySpec{
@@ -7583,6 +7696,45 @@ func (builder *QueryBuilder) bindOrderBy(
 	}
 
 	return
+}
+
+// rewriteMySQLSpecialOrderByExpr materializes a numeric ENUM/SET ordering key
+// as a hidden projection. In the originating query block the raw storage value
+// is still available. Across a CTE/derived/set-operation boundary only a pure
+// display ColRef carries provenance, so the visible value is safely converted
+// back to its storage index.
+func (builder *QueryBuilder) rewriteMySQLSpecialOrderByExpr(ctx *BindContext, expr *plan.Expr) (*plan.Expr, error) {
+	col := expr.GetCol()
+	if col == nil || col.RelPos != ctx.projectTag || col.ColPos < 0 || int(col.ColPos) >= len(ctx.projects) {
+		return expr, nil
+	}
+
+	projectExpr := ctx.projects[col.ColPos]
+	var orderKeyExpr *plan.Expr
+	if isEnumOrSetDisplayValueExpr(projectExpr) {
+		fn := projectExpr.GetF()
+		if len(fn.Args) != 2 || !isEnumOrSetPlanType(&fn.Args[1].Typ) {
+			return expr, nil
+		}
+		if ctx.isDistinct && !mysqlSpecialOrderTypeReversible(&fn.Args[1].Typ) {
+			return nil, newNonReversibleMySQLSpecialOrderError(builder.GetContext())
+		}
+		orderKeyExpr = DeepCopyExpr(fn.Args[1])
+	} else if storageType := ctx.mysqlSpecialOrderTypeForProject(col.ColPos); storageType != nil {
+		var err error
+		orderKeyExpr, err = makeMySQLSpecialOrderKey(builder.GetContext(), projectExpr, storageType)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		return expr, nil
+	}
+
+	colPos, err := appendOrderByProjectExpr(ctx, orderKeyExpr)
+	if err != nil {
+		return nil, err
+	}
+	return GetColExpr(orderKeyExpr.Typ, ctx.projectTag, colPos), nil
 }
 
 // projectExprKey uses the full proto encoding so large ORDER BY expressions
@@ -7751,7 +7903,7 @@ func (builder *QueryBuilder) appendSampleNode(
 		var expr *plan.Expr
 
 		for _, cond := range boundHavingList {
-			if nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx); err != nil {
+			if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
 				return
 			}
 
@@ -7811,7 +7963,7 @@ func (builder *QueryBuilder) appendAggNode(
 		var expr *plan.Expr
 
 		for _, cond := range preWindowHavingList {
-			if nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx); err != nil {
+			if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
 				return
 			}
 
@@ -7969,7 +8121,7 @@ func (builder *QueryBuilder) appendWindowNode(
 		var expr *plan.Expr
 
 		for _, cond := range postWindowHavingList {
-			if nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx); err != nil {
+			if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
 				return
 			}
 
@@ -8762,6 +8914,173 @@ type tableFunctionInput struct {
 	attachExecutionChild bool
 }
 
+// normalizeTransparentCorrelatedDerivedTable lets a correlation pass through
+// one derived-table query block when that block is only a transparent unary
+// PROJECT/FILTER chain over one TABLE_SCAN.  It deliberately does not make a
+// same-level FROM reference lateral: a correlation owned by the immediate FROM
+// context remains rejected.  Binder-less derived contexts do not increment
+// CorrColRef.Depth, so ownership, rather than depth alone, distinguishes that
+// case from a reference to an ancestor outside the derived chain.
+//
+// Analysis is completed before any CorrColRef is changed so unsupported shapes
+// cannot leave a partially normalized plan behind.
+func (builder *QueryBuilder) normalizeTransparentCorrelatedDerivedTable(
+	nodeID int32,
+	ctx *BindContext,
+) error {
+	corrRefs := make(map[*plan.CorrColRef]struct{})
+	if !builder.analyzeTransparentCorrelatedDerivedTable(nodeID, ctx, corrRefs) || len(corrRefs) == 0 {
+		return moerr.NewNYI(builder.GetContext(), "correlated subquery in FROM clause")
+	}
+
+	for corr := range corrRefs {
+		if corr.Depth > 1 {
+			corr.Depth--
+		}
+	}
+	ctx.isCorrelated = true
+	return nil
+}
+
+func (builder *QueryBuilder) analyzeTransparentCorrelatedDerivedTable(
+	nodeID int32,
+	ctx *BindContext,
+	corrRefs map[*plan.CorrColRef]struct{},
+) bool {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+
+	node := builder.qry.Nodes[nodeID]
+	if node == nil || len(node.OnList) > 0 || len(node.GroupBy) > 0 || len(node.AggList) > 0 ||
+		len(node.WinSpecList) > 0 || len(node.OrderBy) > 0 || len(node.TblFuncExprList) > 0 ||
+		node.Limit != nil || node.Offset != nil || node.RankOption != nil {
+		return false
+	}
+
+	switch node.NodeType {
+	case plan.Node_PROJECT:
+		if len(node.Children) != 1 || len(node.FilterList) > 0 || len(node.BlockFilterList) > 0 {
+			return false
+		}
+		for _, expr := range node.ProjectList {
+			if !transparentDerivedLocalExpr(expr) {
+				return false
+			}
+		}
+		return builder.analyzeTransparentCorrelatedDerivedTable(node.Children[0], ctx, corrRefs)
+
+	case plan.Node_FILTER:
+		if len(node.Children) != 1 || len(node.ProjectList) > 0 || len(node.BlockFilterList) > 0 {
+			return false
+		}
+		for _, expr := range node.FilterList {
+			if !analyzeTransparentDerivedFilter(expr, ctx, corrRefs) {
+				return false
+			}
+		}
+		return builder.analyzeTransparentCorrelatedDerivedTable(node.Children[0], ctx, corrRefs)
+
+	case plan.Node_TABLE_SCAN:
+		if len(node.Children) != 0 || len(node.ProjectList) > 0 || len(node.BlockFilterList) > 0 {
+			return false
+		}
+		for _, expr := range node.FilterList {
+			if !analyzeTransparentDerivedFilter(expr, ctx, corrRefs) {
+				return false
+			}
+		}
+		return true
+
+	default:
+		return false
+	}
+}
+
+func transparentDerivedLocalExpr(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Corr, *plan.Expr_Sub, *plan.Expr_W:
+		return false
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if !transparentDerivedLocalExpr(arg) {
+				return false
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range exprImpl.List.List {
+			if !transparentDerivedLocalExpr(item) {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+func analyzeTransparentDerivedFilter(
+	expr *plan.Expr,
+	ctx *BindContext,
+	corrRefs map[*plan.CorrColRef]struct{},
+) bool {
+	if !hasCorrCol(expr) {
+		return transparentDerivedLocalExpr(expr)
+	}
+
+	fn := expr.GetF()
+	if fn == nil || fn.Func.GetObjName() != "=" || len(fn.Args) != 2 {
+		return false
+	}
+
+	leftCorr, rightCorr := fn.Args[0].GetCorr(), fn.Args[1].GetCorr()
+	if (leftCorr == nil) == (rightCorr == nil) {
+		return false
+	}
+
+	corr, local := leftCorr, fn.Args[1]
+	if corr == nil {
+		corr, local = rightCorr, fn.Args[0]
+	}
+	if corr.Depth <= 0 || local.GetCol() == nil {
+		return false
+	}
+	if !transparentDerivedCorrelationTargetsNearestAncestor(ctx, corr) {
+		return false
+	}
+	if !transparentDerivedLocalExpr(local) {
+		return false
+	}
+
+	corrRefs[corr] = struct{}{}
+	return true
+}
+
+func transparentDerivedCorrelationTargetsNearestAncestor(ctx *BindContext, corr *plan.CorrColRef) bool {
+	if _, sameFromScope := ctx.bindingByTag[corr.RelPos]; sameFromScope {
+		return false
+	}
+	if corr.Depth == 1 {
+		return true
+	}
+
+	for ancestor := ctx.parent; ancestor != nil; ancestor = ancestor.parent {
+		if _, ownsCorrelation := ancestor.bindingByTag[corr.RelPos]; ownsCorrelation {
+			return true
+		}
+		// A bound query block is a real correlation level even when its FROM
+		// clause is empty. Only contexts that have not installed a binder yet
+		// are transparent while a derived table is being built.
+		if ancestor.binder != nil || len(ancestor.bindingByTag) > 0 {
+			return false
+		}
+	}
+	return false
+}
+
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, tableInput *tableFunctionInput) (nodeID int32, err error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
@@ -8773,8 +9092,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		builder.isForUpdate = false
 		nodeID, err = builder.bindSelect(tbl, subCtx, false)
 		builder.isForUpdate = savedIsForUpdate
+		if err != nil {
+			return 0, err
+		}
 		if subCtx.isCorrelated {
-			return 0, moerr.NewNYI(builder.GetContext(), "correlated subquery in FROM clause")
+			if err = builder.normalizeTransparentCorrelatedDerivedTable(nodeID, ctx); err != nil {
+				return 0, err
+			}
 		}
 
 		if subCtx.hasSingleRow {
@@ -8827,7 +9151,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 						return 0, moerr.NewParseErrorf(builder.GetContext(), "cte %s reference itself", table)
 					}
 				}
-				if ctx.bindingRecurStmt() {
+				// Only the CTE currently being expanded is backed by the
+				// recursive scan. Other CTEs visible from the declaration scope
+				// must still be bound as their own producers.
+				if ctx.bindingRecurStmt() && cteRef == ctx.cteState.cte {
 					nodeID = ctx.cteState.recScanNodeId
 					return
 				}
@@ -8946,7 +9273,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			return 0, err
 		}
 		if tableDef == nil {
-			return 0, moerr.NewParseErrorf(builder.GetContext(), "table %q does not exist", table)
+			return 0, moerr.NewNoSuchTablef(builder.GetContext(), "SQL parser error: table %q does not exist", table)
 		}
 
 		tableDef.Name2ColIndex = map[string]int32{}
@@ -8969,13 +9296,20 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			} else if found {
 				icebergEnv = env
 				externType = plan.ExternType_ICEBERG_TB
-			} else if env, found, err := sqlmongodb.ParseCreateSQLEnvelope(builder.GetContext(), tableDef.Createsql); err != nil {
-				return 0, err
-			} else if found {
-				mongoEnv = env
-				externType = plan.ExternType_MONGODB_TB
-				if builder.isPrepareStatement {
-					return 0, moerr.NewNotSupported(builder.GetContext(), "prepared MongoDB external scans")
+			} else {
+				isMongoDB, err := IsMongoDBTableDef(builder.GetContext(), tableDef)
+				if err != nil {
+					return 0, err
+				}
+				if isMongoDB {
+					mongoEnv, _, err = sqlmongodb.ParseCreateSQLEnvelope(builder.GetContext(), tableDef.Createsql)
+					if err != nil {
+						return 0, err
+					}
+					externType = plan.ExternType_MONGODB_TB
+					if builder.isPrepareStatement {
+						return 0, moerr.NewNotSupported(builder.GetContext(), "prepared MongoDB external scans")
+					}
 				}
 			}
 			externScan = &plan.ExternScan{
@@ -9095,8 +9429,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			builder.isForUpdate = false
 			nodeID, err = builder.bindSelect(derivedSelect, subCtx, false)
 			builder.isForUpdate = savedIsForUpdate
+			if err != nil {
+				return 0, err
+			}
 			if subCtx.isCorrelated {
-				return 0, moerr.NewNYI(builder.GetContext(), "correlated subquery in FROM clause")
+				if err = builder.normalizeTransparentCorrelatedDerivedTable(nodeID, ctx); err != nil {
+					return 0, err
+				}
 			}
 			if subCtx.hasSingleRow {
 				ctx.hasSingleRow = true
@@ -9273,6 +9612,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var cols []string
 	var colIsHidden []bool
 	var types []*plan.Type
+	var mysqlSpecialOrderTypes []*plan.Type
 	var defaultVals []string
 	var binding *Binding
 	var bindingToReplace *Binding
@@ -9379,7 +9719,6 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		colIsHidden = make([]bool, colLength)
 		types = make([]*plan.Type, colLength)
 		defaultVals = make([]string, colLength)
-
 		for i, col := range headings {
 			if i < len(alias.Cols) {
 				cols[i] = string(alias.Cols[i])
@@ -9391,12 +9730,19 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			types[i] = &projects[i].Typ
 			colIsHidden[i] = false
 			defaultVals[i] = ""
+			if orderType := subCtx.mysqlSpecialOrderTypeForProject(int32(i)); orderType != nil {
+				if mysqlSpecialOrderTypes == nil {
+					mysqlSpecialOrderTypes = make([]*plan.Type, colLength)
+				}
+				mysqlSpecialOrderTypes[i] = orderType
+			}
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
 		binding = NewBinding(tag, nodeID, "", table, 0, cols, colIsHidden, types, false, defaultVals)
 		binding.originCols = originCols
+		binding.mysqlSpecialOrderTypes = mysqlSpecialOrderTypes
 	}
 
 	if bindingToReplace != nil {
@@ -9508,7 +9854,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			var onConds, filterConds []*plan.Expr
 			for _, cond := range joinConds {
 				if hasSubquery(cond) {
-					nodeID, cond, err = builder.flattenSubqueries(nodeID, cond, ctx)
+					nodeID, cond, err = builder.flattenFilterSubqueries(nodeID, cond, ctx)
 					if err != nil {
 						return 0, err
 					}

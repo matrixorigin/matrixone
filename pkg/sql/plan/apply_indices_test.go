@@ -752,6 +752,7 @@ func TestUniqueIndexRuntimeFilterUsesSelectedHashSlot(t *testing.T) {
 	}
 	arg.RuntimeFilterSpec = spec
 	arg.AppendChild(child)
+	registry, account := installIndexPlanHashBuildAllocation(t, arg)
 	require.NoError(t, child.Prepare(proc))
 	require.NoError(t, arg.Prepare(proc))
 	result, err := vm.Exec(arg, proc)
@@ -778,10 +779,11 @@ func TestUniqueIndexRuntimeFilterUsesSelectedHashSlot(t *testing.T) {
 	payload.Free(proc.Mp())
 	runtimeFilter.Destroy()
 	arg.Free(proc, false, nil)
+	proc.GetMessageBoard().Reset()
+	finishIndexPlanHashBuildAllocation(t, registry, account, arg)
 	child.Free(proc, false, nil)
 	arg.Release()
 	child.Release()
-	proc.GetMessageBoard().Reset()
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -858,6 +860,7 @@ func TestIndexJoinGeneratedSerializedRuntimeFilterExecutesEndToEnd(t *testing.T)
 		planpb.Type{Id: int32(types.T_int32)}, 0, 0)}
 	arg.RuntimeFilterSpec = spec
 	arg.AppendChild(child)
+	registry, account := installIndexPlanHashBuildAllocation(t, arg)
 	require.NoError(t, child.Prepare(proc))
 	require.NoError(t, arg.Prepare(proc))
 	result, err := vm.Exec(arg, proc)
@@ -916,12 +919,40 @@ func TestIndexJoinGeneratedSerializedRuntimeFilterExecutesEndToEnd(t *testing.T)
 	payload.Free(proc.Mp())
 	runtimeFilter.Destroy()
 	arg.Free(proc, false, nil)
+	proc.GetMessageBoard().Reset()
+	finishIndexPlanHashBuildAllocation(t, registry, account, arg)
 	child.Free(proc, false, nil)
 	arg.Release()
 	child.Release()
-	proc.GetMessageBoard().Reset()
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func installIndexPlanHashBuildAllocation(
+	t testing.TB,
+	arg *hashbuild.HashBuild,
+) (*mpool.AllocationAccountRegistry, *mpool.AllocationAccount) {
+	t.Helper()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 4_096)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 60)
+	require.NoError(t, err)
+	require.NoError(t, arg.SetAllocationAccount(account))
+	return registry, account
+}
+
+func finishIndexPlanHashBuildAllocation(
+	t testing.TB,
+	registry *mpool.AllocationAccountRegistry,
+	account *mpool.AllocationAccount,
+	arg *hashbuild.HashBuild,
+) {
+	t.Helper()
+	require.NoError(t, arg.ClearAllocationAccount(account))
+	snapshot, first, err := registry.CompleteTerminal(account)
+	require.NoError(t, err)
+	require.True(t, first)
+	require.Zero(t, snapshot.Used)
 }
 
 func TestForceIndexForJoinBuildsRightAccessWithoutReorder(t *testing.T) {
@@ -1681,6 +1712,9 @@ func TestFullTextJoinRewriteLeftChild(t *testing.T) {
 	require.Equal(t, rightScanID, joinNode.Children[1])
 	require.Equal(t, planpb.Node_JOIN, builder.qry.Nodes[joinNode.Children[0]].NodeType)
 	require.Equal(t, 1, countFullTextFunctionScans(builder, joinNode.Children[0]))
+	functionScan := collectFullTextFunctionScans(builder, joinNode.Children[0])[0]
+	require.Nil(t, functionScan.TableDef.TblFunc.FulltextSourceRef)
+	require.Nil(t, functionScan.TableDef.TblFunc.FulltextIndexRef)
 	require.False(t, nodeHasFullTextMatchFilter(builder.qry.Nodes[leftScanID]))
 	require.Len(t, joinNode.OnList, 1)
 }
@@ -1711,6 +1745,36 @@ func TestFullTextJoinRewriteFallsBackToScanContextWhenJoinContextIsNil(t *testin
 	require.NotEqual(t, leftScanID, builder.qry.Nodes[joinID].Children[0])
 	require.Equal(t, 1, countFullTextFunctionScans(builder, builder.qry.Nodes[joinID].Children[0]))
 	require.False(t, nodeHasFullTextMatchFilter(builder.qry.Nodes[leftScanID]))
+}
+
+func TestFullTextJoinRewriteCarriesPublisherReferences(t *testing.T) {
+	builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, false)
+	scan := builder.qry.Nodes[leftScanID]
+	scan.ObjRef.SchemaName = "pub`db"
+	scan.ObjRef.ObjName = "source`table"
+	scan.ObjRef.SubscriptionName = "subscriber_alias"
+	scan.ObjRef.PubInfo = &planpb.PubInfo{TenantId: 42}
+
+	indexName := scan.TableDef.Indexes[0].IndexTableName
+	mockCtx := builder.compCtx.(*fullTextJoinMockCompilerContext)
+	indexRef := mockCtx.objects[strings.ToLower(indexName)]
+	indexRef.SchemaName = scan.ObjRef.SchemaName
+	indexRef.ObjName = "index`table"
+	indexRef.SubscriptionName = scan.ObjRef.SubscriptionName
+	indexRef.PubInfo = &planpb.PubInfo{TenantId: 42}
+
+	_, err := builder.applyIndicesForJoins(joinID, builder.qry.Nodes[joinID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+
+	functionScans := collectFullTextFunctionScans(builder, builder.qry.Nodes[joinID].Children[0])
+	require.Len(t, functionScans, 1)
+	functionScan := functionScans[0]
+	require.Equal(t, "`pub``db`.`source``table`", functionScan.TblFuncExprList[0].GetLit().GetSval())
+	require.Equal(t, "`pub``db`.`index``table`", functionScan.TblFuncExprList[1].GetLit().GetSval())
+	require.Equal(t, scan.ObjRef, functionScan.TableDef.TblFunc.FulltextSourceRef)
+	require.Equal(t, indexRef, functionScan.TableDef.TblFunc.FulltextIndexRef)
+	require.NotSame(t, scan.ObjRef, functionScan.TableDef.TblFunc.FulltextSourceRef)
+	require.NotSame(t, indexRef, functionScan.TableDef.TblFunc.FulltextIndexRef)
 }
 
 func TestFullTextJoinRewriteBothChildren(t *testing.T) {
@@ -2027,6 +2091,12 @@ func buildFullTextJoinRewriteTestPlan(t *testing.T, leftFullText, rightFullText,
 	rightTag := builder.genNewBindTag()
 	leftDef := makeFullTextJoinTestTableDef("ft_left", leftFullText)
 	rightDef := makeFullTextJoinTestTableDef("ft_right", rightFullText)
+	if leftFullText {
+		registerFullTextJoinRegularIndexTable(builder, leftDef.Indexes[0].IndexTableName)
+	}
+	if rightFullText {
+		registerFullTextJoinRegularIndexTable(builder, rightDef.Indexes[0].IndexTableName)
+	}
 
 	var leftFilters []*planpb.Expr
 	if leftFullText {

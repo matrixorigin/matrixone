@@ -15,13 +15,31 @@
 package function
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCastIndexToValueDisplaysEnumErrorMemberAsEmptyString(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"a,b,"}, nil),
+			NewFunctionTestInput(types.T_enum.ToType(), []types.Enum{0, 1, 3}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", "a", ""}, nil),
+		CastIndexToValue,
+	)
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
+}
 
 func TestCastGeometryToSubtype(t *testing.T) {
 	proc := testutil.NewProcess(t)
@@ -59,6 +77,144 @@ func TestCastGeometryToSubtype(t *testing.T) {
 			succeed, info := tcc.Run()
 			require.True(t, succeed, info)
 		})
+	}
+}
+
+func TestCastValueToIndexConstDefinition(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	descriptor := "zero,one,two,three,four,five,six,seven"
+	values := []string{"seven", "zero", "THREE", "2", "four", "five", "six", "one"}
+	want := []types.Enum{8, 1, 4, 2, 5, 6, 7, 2}
+	typeEnums := make([]string, 0, len(values)*8)
+	enumValues := make([]string, 0, len(values)*8)
+	expected := make([]types.Enum, 0, len(values)*8)
+	for range 8 {
+		typeEnums = append(typeEnums, descriptor, descriptor, descriptor, descriptor, descriptor, descriptor, descriptor, descriptor)
+		enumValues = append(enumValues, values...)
+		expected = append(expected, want...)
+	}
+	inputs := []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_varchar.ToType(), typeEnums, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), enumValues, nil),
+	}
+	expect := NewFunctionTestResult(types.T_enum.ToType(), false, expected, nil)
+
+	tcc := NewFunctionTestCase(proc, inputs, expect, CastValueToIndex)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestInsertIgnoreAdjustsMySQLSpecialTypeValues(t *testing.T) {
+	ignoreProc := testutil.NewProcess(t)
+	ignoreProc.SetStmtProfile(&process.StmtProfile{})
+	ignoreProc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
+
+	run := func(name string, inputs []FunctionTestInput, expect FunctionTestResult, fn func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(ignoreProc, inputs, expect, fn)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	run("enum labels use error member", []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"a,b", "a,b"}, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"bad", "b"}, nil),
+	}, NewFunctionTestResult(types.T_enum.ToType(), false, []types.Enum{0, 2}, nil), CastValueToIndex)
+
+	run("enum numeric values use error member", []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"a,b", "a,b", "a,b"}, nil),
+		NewFunctionTestInput(types.T_uint16.ToType(), []uint16{9, 1, 1}, []bool{false, false, true}),
+	}, NewFunctionTestResult(types.T_enum.ToType(), false, []types.Enum{0, 1, 0}, []bool{false, false, true}), CastIndexValueToIndex)
+
+	run("set labels retain valid members", []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"x,y,z", "x,y,z", "x,y,z"}, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"x,bad", "bad", "x"}, []bool{false, false, true}),
+	}, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{1, 0, 0}, []bool{false, false, true}), CastSetValueToIndex)
+
+	run("set numeric values retain declared bits", []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"x,y,z", "x,y,z", "x,y,z"}, nil),
+		NewFunctionTestInput(types.T_uint64.ToType(), []uint64{99, 4, 1}, []bool{false, false, true}),
+	}, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{3, 4, 0}, []bool{false, false, true}), CastSetIndexValueToIndex)
+
+	require.Equal(t, uint64(7), setMemberBitmap("x,y,z"))
+	require.False(t, statementIgnore(nil))
+}
+
+func TestEnumValueIndexPreservesParseEnumSemantics(t *testing.T) {
+	for _, definition := range []string{
+		"low,LOW,2,high,high",
+		"K,K,Σ,ς,σ",
+	} {
+		index := buildEnumValueIndex(definition)
+		require.NotNil(t, index)
+		for _, input := range []string{
+			"low", "LOW", "LoW", "2", "0x2", "K", "k", "Σ", "ς", "σ",
+			"missing", "0", "65537", "18446744073709551615",
+		} {
+			want, wantErr := types.ParseEnum(definition, input)
+			got, gotErr := index.parse(input)
+			require.Equal(t, want, got, "definition=%q input=%q", definition, input)
+			if wantErr == nil {
+				require.NoError(t, gotErr, "definition=%q input=%q", definition, input)
+			} else {
+				require.EqualError(t, gotErr, wantErr.Error(), "definition=%q input=%q", definition, input)
+			}
+		}
+	}
+
+	require.Nil(t, buildEnumValueIndex(""))
+	largeDefinition := strings.Repeat("a,", 1023) + "a"
+	require.Nil(t, buildEnumValueIndexForBatch(largeDefinition, 8))
+	require.Nil(t, buildEnumValueIndexForBatch("a,b,c,d,e,f,g", 1024))
+	require.Nil(t, buildEnumValueIndexForBatch("a,b,c,d,e,f,g,h", enumValueIndexMinRows-1))
+	require.NotNil(t, buildEnumValueIndexForBatch("a,b,c,d,e,f,g,h", enumValueIndexMinRows))
+}
+
+func BenchmarkEnumValueIndex(b *testing.B) {
+	for _, labelCount := range []int{8, 32, 64, 256, 512, 1024} {
+		labels := make([]string, labelCount)
+		for i := range labels {
+			labels[i] = "value" + strconv.Itoa(i)
+		}
+		definition := strings.Join(labels, ",")
+		batchSize := enumValueIndexMinRows
+		inputs := []struct {
+			name  string
+			value string
+		}{
+			{name: "exact", value: labels[len(labels)-1]},
+			{name: "case-insensitive", value: strings.ToUpper(labels[len(labels)-1])},
+			{name: "numeric", value: strconv.Itoa(labelCount)},
+		}
+		for _, input := range inputs {
+			prefix := strconv.Itoa(labelCount) + "-labels/" + strconv.Itoa(batchSize) + "-rows/" + input.name
+			b.Run(prefix+"/linear", func(b *testing.B) {
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					for row := 0; row < batchSize; row++ {
+						if _, err := types.ParseEnum(definition, input.value); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+			})
+			b.Run(prefix+"/indexed", func(b *testing.B) {
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					index := buildEnumValueIndexForBatch(definition, batchSize)
+					if index == nil {
+						b.Fatal("batch should use the enum value index")
+					}
+					for row := 0; row < batchSize; row++ {
+						if _, err := index.parse(input.value); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+			})
+		}
 	}
 }
 

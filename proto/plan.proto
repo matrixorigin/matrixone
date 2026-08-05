@@ -475,6 +475,11 @@ message TableFunction {
   string name = 1;
   bytes param = 2;
   bool is_single = 3;
+  // Planner-resolved references for an internal FULLTEXT scan over a
+  // subscription. SQL arguments remain user-visible data and must never carry
+  // the publisher execution identity.
+  ObjectRef fulltext_source_ref = 4;
+  ObjectRef fulltext_index_ref = 5;
 }
 
 enum ShuffleType {
@@ -634,6 +639,7 @@ message UpdateCtx {
   bool skip_insert_on_null_pk = 10;
   int32 insert_pk_col_idx = 11;
   bool count_delete_affect_rows = 12;
+  bool ignore_affected_rows = 13;
 }
 
 message InsertCtx {
@@ -1297,6 +1303,12 @@ message Query {
   // Catalog objects that a rewrite depends on even when the final plan no
   // longer contains the scans that originally carried those objects.
   repeated ObjectRef catalog_dependencies = 12;
+
+  // DML RETURNING is a deferred result: returning_step identifies the step
+  // whose rows are buffered until the statement has reached its terminal
+  // transaction outcome. It is a step-array index, not a node id.
+  bool has_returning = 13;
+  int32 returning_step = 14;
 }
 
 message TransationControl {

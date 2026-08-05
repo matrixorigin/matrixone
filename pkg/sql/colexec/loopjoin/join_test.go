@@ -52,6 +52,67 @@ type joinTestCase struct {
 	resultBatch *batch.Batch
 }
 
+type loopJoinTestAllocationOwner interface {
+	SetAllocationAccount(*mpool.AllocationAccount) error
+}
+
+func installLoopJoinTestAllocation(
+	t testing.TB,
+	owners ...loopJoinTestAllocationOwner,
+) *mpool.AllocationAccount {
+	t.Helper()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 4_096)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 60)
+	require.NoError(t, err)
+	for _, owner := range owners {
+		require.NoError(t, owner.SetAllocationAccount(account))
+	}
+	return account
+}
+
+func TestLoopJoinResultBatchUsesAllocationAccount(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	arg := &LoopJoin{
+		ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}},
+		LeftTypes:  []types.Type{types.T_int64.ToType()},
+	}
+	account := installLoopJoinTestAllocation(t, arg)
+	require.NoError(t, arg.resetResultBat())
+	require.Same(t, arg.resultAllocation, arg.ctr.resBat.Vecs[0].AllocationAccountSelection())
+	require.NoError(t, vector.AppendFixed(arg.ctr.resBat.Vecs[0], int64(1), false, proc.Mp()))
+	used := account.Snapshot().Used
+	require.Positive(t, used)
+	require.NoError(t, arg.resetResultBat())
+	require.Equal(t, used, account.Snapshot().Used)
+
+	arg.Reset(proc, false, nil)
+	require.Nil(t, arg.ctr.resBat)
+	require.Zero(t, account.Snapshot().Used)
+	require.NoError(t, arg.ClearAllocationAccount(account))
+}
+
+func TestLoopJoinResultBatchHonorsAllocationCapacity(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1)
+	require.NoError(t, err)
+	arg := &LoopJoin{
+		ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}},
+		LeftTypes:  []types.Type{types.T_int64.ToType()},
+	}
+	require.NoError(t, arg.SetAllocationAccount(account))
+	require.NoError(t, arg.resetResultBat())
+	err = vector.AppendFixed(arg.ctr.resBat.Vecs[0], int64(1), false, proc.Mp())
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Zero(t, account.Snapshot().Used)
+	arg.Reset(proc, false, nil)
+	require.NoError(t, arg.ClearAllocationAccount(account))
+}
+
 var (
 	tag int32
 )
@@ -66,6 +127,36 @@ func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
 	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
+	}
+}
+
+func TestResetRebuildsExpressionForNextAllocationGeneration(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	join := &LoopJoin{
+		NonEqCond: &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_Bval{Bval: true},
+			}},
+		},
+	}
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+
+	for range 2 {
+		account, openErr := registry.Open(1 << 20)
+		require.NoError(t, openErr)
+		require.NoError(t, join.SetAllocationAccount(account))
+		require.NoError(t, join.Prepare(proc))
+		require.NotNil(t, join.ctr.expr)
+
+		join.Reset(proc, false, nil)
+		require.Nil(t, join.ctr.expr)
+		require.NoError(t, join.ClearAllocationAccount(account))
+		terminal, _, terminalErr := registry.CompleteTerminal(account)
+		require.NoError(t, terminalErr)
+		require.Equal(t, mpool.AllocationAccountTerminalValid, terminal.State)
 	}
 }
 
@@ -128,6 +219,108 @@ func TestJoin(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestLoopJoinPassesRecursiveMarker(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+		colexec.NewResultPos(1, 0),
+	})
+	defer func() {
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		tc.cancel()
+	}()
+	marker := colexec.MakeMockBatchs(tc.proc.Mp())
+	marker.SetLast()
+	resetChildrenWithBatch(tc.arg, marker)
+	resetHashBuildChildren(tc.barg, tc.proc.Mp())
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+
+	res, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Same(t, marker, res.Batch)
+	require.True(t, res.Batch.Last())
+}
+
+type recursiveLoopJoinProbe struct {
+	*colexec.MockOperator
+}
+
+func (source *recursiveLoopJoinProbe) OpType() vm.OpType {
+	return vm.MergeRecursive
+}
+
+func TestLoopJoinPassesRecursiveMarkerWithEmptyBuild(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+		colexec.NewResultPos(1, 0),
+	})
+	marker := colexec.MakeMockBatchs(tc.proc.Mp())
+	marker.SetLast()
+	probeCalls := 0
+	probe := &recursiveLoopJoinProbe{MockOperator: colexec.NewMockOperator().
+		WithBatchs([]*batch.Batch{colexec.MakeMockBatchs(tc.proc.Mp()), marker}).
+		WithBatchCallback(func(int) { probeCalls++ })}
+	tc.arg.Children = nil
+	tc.arg.AppendChild(probe)
+	resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
+	defer func() {
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		probe.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		tc.cancel()
+	}()
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	res, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Same(t, marker, res.Batch)
+	require.Equal(t, 2, probeCalls)
+}
+
+func TestLoopJoinPrepareRecomputesRecursiveProbeForFastPath(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+		colexec.NewResultPos(0, 0),
+		colexec.NewResultPos(1, 0),
+	})
+	probeCalls := 0
+	probe := colexec.NewMockOperator().
+		WithBatchs([]*batch.Batch{colexec.MakeMockBatchs(tc.proc.Mp())}).
+		WithBatchCallback(func(int) { probeCalls++ })
+	tc.arg.Children = nil
+	tc.arg.AppendChild(probe)
+	// Model a reused operator whose previous generation had a recursive probe.
+	tc.arg.recursiveProbe = true
+	resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
+	defer func() {
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		probe.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		tc.cancel()
+	}()
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.False(t, tc.arg.recursiveProbe)
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	res, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+	require.Zero(t, probeCalls)
 }
 
 func TestLoopJoinResetAfterEmptyProbe(t *testing.T) {
@@ -296,6 +489,7 @@ func TestLoopJoinFinalizeResetsAfterPreviousEmptyProbe(t *testing.T) {
 			},
 		},
 	}
+	installLoopJoinTestAllocation(t, join, build)
 
 	resetChildrenWithBatch(join, makeInt32LoopJoinBatch(proc.Mp(), []int32{7}))
 	resetHashBuildChildrenWithBatch(build, batch.EmptyBatch)
@@ -398,6 +592,7 @@ func TestMarkJoinEmitsOneRowPerProbeRowAcrossBuildBatches(t *testing.T) {
 			},
 		},
 	}
+	installLoopJoinTestAllocation(t, join, build)
 	build.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
 		makeInt32LoopJoinBatch(proc.Mp(), []int32{1}),
 		makeInt32LoopJoinBatch(proc.Mp(), []int32{1}),
@@ -487,6 +682,7 @@ func TestMarkJoinResumesAfterDefaultBatchSize(t *testing.T) {
 			},
 		},
 	}
+	installLoopJoinTestAllocation(t, join, build)
 	build.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
 		makeInt32LoopJoinBatch(proc.Mp(), []int32{-1}),
 	}))
@@ -602,7 +798,7 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 		resultBatch.Vecs[i] = bat.Vecs[rp[i].Pos]
 	}
 	tag++
-	return joinTestCase{
+	testCase := joinTestCase{
 		types:  ts,
 		flgs:   flgs,
 		proc:   proc,
@@ -634,6 +830,8 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 		},
 		resultBatch: resultBatch,
 	}
+	installLoopJoinTestAllocation(t, testCase.arg, testCase.barg)
+	return testCase
 }
 
 func resetChildren(arg *LoopJoin, m *mpool.MPool) {

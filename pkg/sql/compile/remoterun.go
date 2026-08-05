@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"maps"
 	"time"
 	"unsafe"
 
@@ -170,10 +171,16 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 func encodeProcessInfo(
 	proc *process.Process,
 	sql string,
+	remoteFragmentCounts map[string]uint32,
+	remoteExecutionID uuid.UUID,
 ) ([]byte, error) {
 	v, err := proc.BuildProcessInfo(sql)
 	if err != nil {
 		return nil, err
+	}
+	v.RemoteFragmentCounts = maps.Clone(remoteFragmentCounts)
+	if remoteExecutionID != uuid.Nil {
+		v.RemoteExecutionId = append([]byte(nil), remoteExecutionID[:]...)
 	}
 	return v.Marshal()
 }
@@ -715,6 +722,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IsSingle:               t.IsSingle,
 			IndexReaderParam:       t.IndexReaderParam,
 			RuntimeFilterProbeList: t.RuntimeFilterSpecs,
+			FulltextSourceRef:      t.FulltextSourceRef,
+			FulltextIndexRef:       t.FulltextIndexRef,
 		}
 		in.Limit = t.Limit
 
@@ -859,6 +868,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IsSingle:               t.TableFunction.IsSingle,
 			IndexReaderParam:       t.TableFunction.IndexReaderParam,
 			RuntimeFilterProbeList: t.TableFunction.RuntimeFilterSpecs,
+			FulltextSourceRef:      t.TableFunction.FulltextSourceRef,
+			FulltextIndexRef:       t.TableFunction.FulltextIndexRef,
 		}
 	case *multi_update.MultiUpdate:
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
@@ -868,6 +879,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 				TableDef:              muCtx.TableDef,
 				SkipInsertOnNullPk:    muCtx.SkipInsertOnNullPk,
 				InsertPkColIdx:        int32(muCtx.InsertPkColIdx),
+				IgnoreAffectedRows:    muCtx.IgnoreAffectedRows,
 				CountDeleteAffectRows: t.CountDeleteAffectRows,
 			}
 
@@ -1211,6 +1223,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IsSingle = opr.TableFunction.IsSingle
 		arg.IndexReaderParam = opr.TableFunction.IndexReaderParam
 		arg.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
+		arg.FulltextSourceRef = opr.TableFunction.FulltextSourceRef
+		arg.FulltextIndexRef = opr.TableFunction.FulltextIndexRef
 		arg.Limit = opr.Limit
 		op = arg
 	case vm.External:
@@ -1355,6 +1369,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
 		arg.TableFunction.IndexReaderParam = opr.TableFunction.IndexReaderParam
 		arg.TableFunction.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
+		arg.TableFunction.FulltextSourceRef = opr.TableFunction.FulltextSourceRef
+		arg.TableFunction.FulltextIndexRef = opr.TableFunction.FulltextIndexRef
 		op = arg
 	case vm.MultiUpdate:
 		arg := multi_update.NewArgument()
@@ -1376,6 +1392,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 				TableDef:           muCtx.TableDef,
 				SkipInsertOnNullPk: muCtx.SkipInsertOnNullPk,
 				InsertPkColIdx:     int(muCtx.InsertPkColIdx),
+				IgnoreAffectedRows: muCtx.IgnoreAffectedRows,
 			}
 
 			arg.MultiUpdateCtx[i].InsertCols = make([]int, len(muCtx.InsertCols))

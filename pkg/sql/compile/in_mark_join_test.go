@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -268,6 +269,79 @@ func TestCompileBroadcastCompositeMarkExpressionsUseHashJoin(t *testing.T) {
 			require.False(t, key.Typ.NotNullable,
 				"operator construction must not mutate the reusable plan")
 		}
+	}
+}
+
+func TestCompileBroadcastMarkJoinSelectsPhysicalOperator(t *testing.T) {
+	tests := []struct {
+		name       string
+		conditions []*plan.Expr
+		left       *plan.Node
+		right      *plan.Node
+		wantHash   bool
+	}{
+		{
+			name:       "single nullable equality uses hash join",
+			conditions: []*plan.Expr{makeMarkJoinTestCondition(t, "=", 0, false)},
+			left:       &plan.Node{ProjectList: []*plan.Expr{makeMarkJoinTestColumn(0, 0, false)}},
+			right:      &plan.Node{ProjectList: []*plan.Expr{makeMarkJoinTestColumn(1, 0, false)}},
+			wantHash:   true,
+		},
+		{
+			name: "partially nullable composite equality uses loop join",
+			conditions: []*plan.Expr{
+				makeMarkJoinTestCondition(t, "=", 0, true),
+				makeMarkJoinTestCondition(t, "=", 1, false),
+			},
+			left: &plan.Node{ProjectList: []*plan.Expr{
+				makeMarkJoinTestColumn(0, 0, true),
+				makeMarkJoinTestColumn(0, 1, false),
+			}},
+			right: &plan.Node{ProjectList: []*plan.Expr{
+				makeMarkJoinTestColumn(1, 0, true),
+				makeMarkJoinTestColumn(1, 1, false),
+			}},
+			wantHash: false,
+		},
+		{
+			name: "equality plus residual uses loop join",
+			conditions: []*plan.Expr{
+				makeMarkJoinTestCondition(t, "=", 0, true),
+				makeMarkJoinTestCondition(t, "<", 1, true),
+			},
+			left: &plan.Node{ProjectList: []*plan.Expr{
+				makeMarkJoinTestColumn(0, 0, true),
+				makeMarkJoinTestColumn(0, 1, true),
+			}},
+			right: &plan.Node{ProjectList: []*plan.Expr{
+				makeMarkJoinTestColumn(1, 0, true),
+				makeMarkJoinTestColumn(1, 1, true),
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := newShuffleJoinTestNode(1)
+			node.JoinType = plan.Node_MARK
+			node.Stats.HashmapStats.Shuffle = false
+			node.OnList = tt.conditions
+			c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}})
+			probe := newShuffleJoinTestScope(t, c.cnList[0], 1)
+			build := newShuffleJoinTestScope(t, c.cnList[0], 1)
+
+			result := c.compileJoin(node, tt.left, tt.right, []*Scope{probe}, []*Scope{build})
+			require.Len(t, result, 1)
+			if tt.wantHash {
+				op, ok := result[0].RootOp.(*hashjoin.HashJoin)
+				require.True(t, ok, "compiled %T, want HashJoin", result[0].RootOp)
+				require.Equal(t, plan.Node_MARK, op.JoinType)
+				return
+			}
+			op, ok := result[0].RootOp.(*loopjoin.LoopJoin)
+			require.True(t, ok, "compiled %T, want LoopJoin", result[0].RootOp)
+			require.Equal(t, plan.Node_MARK, op.JoinType)
+		})
 	}
 }
 
