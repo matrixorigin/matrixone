@@ -5746,6 +5746,143 @@ func Test_getDbNameForPrivilege(t *testing.T) {
 	}
 }
 
+func TestExtractPrivilegeTipsFromPlanInsertDedupTargetScan(t *testing.T) {
+	const (
+		dbName     = "insert_privilege"
+		targetName = "target"
+		sourceName = "source"
+	)
+
+	newTable := func(name string) (*plan.ObjectRef, *plan.TableDef) {
+		return &plan.ObjectRef{SchemaName: dbName, ObjName: name}, &plan.TableDef{
+			DbName: dbName,
+			Name:   name,
+		}
+	}
+	type tipKey struct {
+		typ      PrivilegeType
+		database string
+		table    string
+	}
+
+	tests := []struct {
+		name            string
+		isRightJoin     bool
+		childrenSwapped bool
+		sourceScan      bool
+		sameTable       bool
+		want            []tipKey
+	}{
+		{
+			name: "plain insert values skips internal target scan",
+			want: []tipKey{{
+				typ:      PrivilegeTypeInsert,
+				database: dbName,
+				table:    targetName,
+			}},
+		},
+		{
+			name:        "right dedup keeps the physical target scan internal",
+			isRightJoin: true,
+			want: []tipKey{{
+				typ:      PrivilegeTypeInsert,
+				database: dbName,
+				table:    targetName,
+			}},
+		},
+		{
+			name:       "insert select keeps source select privilege",
+			sourceScan: true,
+			want: []tipKey{
+				{
+					typ:      PrivilegeTypeSelect,
+					database: dbName,
+					table:    sourceName,
+				},
+				{
+					typ:      PrivilegeTypeInsert,
+					database: dbName,
+					table:    targetName,
+				},
+			},
+		},
+		{
+			name:       "insert select from target still requires select",
+			sourceScan: true,
+			sameTable:  true,
+			want: []tipKey{
+				{
+					typ:      PrivilegeTypeSelect,
+					database: dbName,
+					table:    targetName,
+				},
+				{
+					typ:      PrivilegeTypeInsert,
+					database: dbName,
+					table:    targetName,
+				},
+			},
+		},
+		{
+			name:            "recursive source child swap keeps source select privilege",
+			childrenSwapped: true,
+			sourceScan:      true,
+			want: []tipKey{
+				{
+					typ:      PrivilegeTypeSelect,
+					database: dbName,
+					table:    sourceName,
+				},
+				{
+					typ:      PrivilegeTypeInsert,
+					database: dbName,
+					table:    targetName,
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			targetRef, targetDef := newTable(targetName)
+			sourceRef, sourceDef := newTable(sourceName)
+			if tc.sameTable {
+				sourceRef, sourceDef = targetRef, targetDef
+			}
+
+			targetID, sourceID := int32(0), int32(1)
+			targetTag, sourceTag := int32(10), int32(20)
+			children := []int32{targetID, sourceID}
+			if tc.isRightJoin || tc.childrenSwapped {
+				children = []int32{sourceID, targetID}
+			}
+			sourceNode := &plan.Node{NodeType: plan.Node_VALUE_SCAN, BindingTags: []int32{sourceTag}}
+			if tc.sourceScan {
+				sourceNode = &plan.Node{NodeType: plan.Node_TABLE_SCAN, ObjRef: sourceRef, TableDef: sourceDef, BindingTags: []int32{sourceTag}}
+			}
+			dedupCondition := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: targetTag}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: sourceTag}}},
+			}}}}
+			p := &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan.Query{
+				StmtType: plan.Query_INSERT,
+				Nodes: []*plan.Node{
+					{NodeType: plan.Node_TABLE_SCAN, ObjRef: targetRef, TableDef: targetDef, BindingTags: []int32{targetTag}},
+					sourceNode,
+					{NodeType: plan.Node_JOIN, JoinType: plan.Node_DEDUP, Children: children, IsRightJoin: tc.isRightJoin, OnList: []*plan.Expr{dedupCondition}, OnDuplicateAction: plan.Node_FAIL},
+					{NodeType: plan.Node_PRE_INSERT, PreInsertCtx: &plan.PreInsertCtx{Ref: targetRef, TableDef: targetDef}},
+				},
+			}}}
+
+			got := make([]tipKey, 0, len(p.GetQuery().GetNodes()))
+			for _, tip := range extractPrivilegeTipsFromPlan(p) {
+				got = append(got, tipKey{tip.typ, tip.databaseName, tip.tableName})
+			}
+			require.ElementsMatch(t, tc.want, got)
+		})
+	}
+}
+
 func Test_extractPrivilegeTipsFromPlan_Subscription(t *testing.T) {
 	// When a TABLE_SCAN node has SubscriptionName set, the extracted
 	// privilegeTips should use the subscription database name instead
