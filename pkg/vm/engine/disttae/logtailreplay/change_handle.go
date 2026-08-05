@@ -270,6 +270,51 @@ type rangeSpillFile struct {
 	fileReserve engine.ChangeRangeSpillReservation
 }
 
+type legacyColumnSpill struct {
+	owner *rangeSpillFile
+}
+
+func newLegacyColumnSpill(
+	ctx context.Context,
+	config engine.ChangeRangeSpillConfig,
+) (objectio.ColumnWindowSpill, error) {
+	owner, err := newRangeSpillFile(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	return &legacyColumnSpill{owner: owner}, nil
+}
+
+func (s *legacyColumnSpill) ReadAt(data []byte, offset int64) (int, error) {
+	if s == nil || s.owner == nil || s.owner.file == nil {
+		return 0, os.ErrClosed
+	}
+	return s.owner.file.ReadAt(data, offset)
+}
+
+func (s *legacyColumnSpill) Write(data []byte) (int, error) {
+	if s == nil || s.owner == nil || s.owner.file == nil {
+		return 0, os.ErrClosed
+	}
+	return s.owner.file.Write(data)
+}
+
+func (s *legacyColumnSpill) Grow(size uint64) error {
+	if s == nil || s.owner == nil || s.owner.disk == nil {
+		return moerr.NewInternalErrorNoCtx("legacy object column spill reservation is missing")
+	}
+	return s.owner.disk.Grow(size)
+}
+
+func (s *legacyColumnSpill) Close() error {
+	if s == nil || s.owner == nil {
+		return nil
+	}
+	err := s.owner.Close()
+	s.owner = nil
+	return err
+}
+
 func newRangeSpillFile(ctx context.Context, config engine.ChangeRangeSpillConfig) (*rangeSpillFile, error) {
 	if !config.Enabled() {
 		return nil, moerr.NewInternalErrorNoCtx("change range spill is unavailable")
@@ -1286,7 +1331,8 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		blks = append(blks, objectio.NewBlockidWithObjectID(stats.ObjectName().ObjectId(), blk))
 		job := prefetchObjects(
 			ctx, uint32(h.blkOffsetCursor), rowOffset, h.fs, &stats,
-			h.base.changesHandle.scheduler, h.maxBytes, h.mp,
+			h.base.changesHandle.scheduler, h.maxBytes,
+			h.base.changesHandle.spillConfig, h.mp,
 		)
 		jobs = append(jobs, job)
 		if h.maxBytes <= 0 {
@@ -1418,6 +1464,21 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 
 func (h *CNObjectHandle) QuickNext(ctx context.Context, data **batch.Batch, mp *mpool.MPool) (err error) {
 	return h.Next(ctx, data, mp)
+}
+
+func (h *CNObjectHandle) Close() {
+	if h == nil {
+		return
+	}
+	for _, bat := range h.cache {
+		if bat != nil {
+			bat.Clean(h.mp)
+		}
+	}
+	h.cache = nil
+	h.prepared = nil
+	h.blks = nil
+	h.TSs = nil
 }
 
 func (h *CNObjectHandle) NextTS() types.TS {
@@ -1776,7 +1837,8 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 		stats := obj.ObjectStats
 		job := prefetchObjects(
 			ctx, uint32(blk), h.blockRowOffset, h.fs, &stats,
-			h.p.changesHandle.scheduler, h.maxBytes, h.mp,
+			h.p.changesHandle.scheduler, h.maxBytes,
+			h.p.changesHandle.spillConfig, h.mp,
 		)
 		jobs = append(jobs, job)
 		blks = append(blks, objectio.NewBlockidWithObjectID(stats.ObjectName().ObjectId(), blk))
@@ -1933,6 +1995,25 @@ func (h *AObjectHandle) NextTS() types.TS {
 	}
 	commitTSVec := h.currentBatch.Vecs[len(h.currentBatch.Vecs)-1]
 	return vector.GetFixedAtNoTypeCheck[types.TS](commitTSVec, h.rowOffsetCursor)
+}
+
+func (h *AObjectHandle) Close() {
+	if h == nil {
+		return
+	}
+	if h.currentBatch != nil {
+		h.currentBatch.Clean(h.mp)
+		h.currentBatch = nil
+	}
+	for _, bat := range h.cache {
+		if bat != nil {
+			bat.Clean(h.mp)
+		}
+	}
+	h.cache = nil
+	h.blks = nil
+	h.batchLength = 0
+	h.rowOffsetCursor = 0
 }
 
 type baseHandle struct {
@@ -2097,6 +2178,8 @@ func (p *baseHandle) Close() {
 	if p.inMemoryHandle != nil {
 		p.inMemoryHandle.Close()
 	}
+	p.aobjHandle.Close()
+	p.cnObjectHandle.Close()
 }
 func (p *baseHandle) less(a, b types.TS) bool {
 	if a.IsEmpty() {
@@ -3862,6 +3945,7 @@ func prefetchObjects(
 	stats *objectio.ObjectStats,
 	scheduler tasks.JobScheduler,
 	maxBytes int,
+	spillConfig engine.ChangeRangeSpillConfig,
 	mp *mpool.MPool,
 ) (job *tasks.Job) {
 	job = getJob(
@@ -3894,6 +3978,10 @@ func prefetchObjects(
 				bat, err := objectio.ReadOneBlockAllColumnsWindow(
 					ctx, &dataMeta, loc.Name().String(), blockID, cols,
 					rowOffset, windowRows, fileservice.SkipAllCache, fs, mp,
+					max(1, maxBytes/4),
+					func(ctx context.Context) (objectio.ColumnWindowSpill, error) {
+						return newLegacyColumnSpill(ctx, spillConfig)
+					},
 				)
 				if err != nil {
 					return &tasks.JobResult{Err: err}

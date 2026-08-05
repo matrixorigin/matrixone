@@ -72,7 +72,9 @@ func (p *peakTrackingFileService) observePeak() {
 func (p *peakTrackingFileService) Read(ctx context.Context, vector *fileservice.IOVector) error {
 	var compressedBytes int64
 	for i := range vector.Entries {
-		compressedBytes += vector.Entries[i].Size
+		if vector.Entries[i].ReadCloserForRead == nil && vector.Entries[i].WriterForRead == nil {
+			compressedBytes += vector.Entries[i].Size
+		}
 		constructor := vector.Entries[i].ToCacheData
 		if constructor != nil {
 			vector.Entries[i].ToCacheData = func(
@@ -175,7 +177,10 @@ func TestPersistedObjectPrefetchSlicesToProgressWithinBudget(t *testing.T) {
 	baseline := mp.CurrNB()
 	scheduler := tasks.NewParallelJobScheduler(2)
 	defer scheduler.Stop()
-	changes := &ChangeHandler{scheduler: scheduler, maxInMemoryBytes: 1}
+	spillConfig, spillTracker := newTestChangeRangeSpillConfig(t)
+	changes := &ChangeHandler{
+		scheduler: scheduler, maxInMemoryBytes: 1, spillConfig: spillConfig,
+	}
 	base := &baseHandle{changesHandle: changes}
 
 	cn := NewCNObjectHandle(false, []*objectio.ObjectEntry{obj}, fs, base, mp)
@@ -209,6 +214,7 @@ func TestPersistedObjectPrefetchSlicesToProgressWithinBudget(t *testing.T) {
 	require.Equal(t, 3, aRows)
 	require.Equal(t, 3, aWindows)
 	require.Equal(t, baseline, mp.CurrNB())
+	spillTracker.requireReleased(t, true)
 }
 
 func TestPersistedWideObjectWindowsBoundAAndCNOutput(t *testing.T) {
@@ -263,6 +269,60 @@ func TestPersistedWideObjectWindowsBoundAAndCNOutput(t *testing.T) {
 	require.Less(t, fs.peak.Load(), int64(24<<20),
 		"file-service compressed/decompressed allocations must stay chunk-bounded")
 	require.Zero(t, fs.current.Load())
+}
+
+func TestPersistedLegacyWideObjectWindowsBoundAAndCNOutput(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const (
+		rows         = 120
+		payloadBytes = 32 << 10
+		maxBytes     = 1 << 20
+	)
+	obj, rawFS := writeTestWideObjectWithCommitTS(t, mp, rows, payloadBytes)
+	fs := newPeakTrackingFileService(rawFS)
+	metaLoc := obj.ObjectLocation()
+	meta, err := objectio.FastLoadObjectMeta(context.Background(), &metaLoc, false, fs)
+	require.NoError(t, err)
+	payloadExtent := meta.MustGetMeta(objectio.SchemaData).
+		GetBlockMeta(0).ColumnMeta(0).Location()
+	require.Equal(t, uint8(compress.Lz4), payloadExtent.Alg())
+	require.Greater(t, payloadExtent.OriginSize(), uint32(maxBytes))
+
+	baseline := mp.CurrNB()
+	scheduler := tasks.NewParallelJobScheduler(2)
+	defer scheduler.Stop()
+	spillConfig, spillTracker := newTestChangeRangeSpillConfig(t)
+	changes := &ChangeHandler{
+		scheduler: scheduler, maxInMemoryBytes: maxBytes, spillConfig: spillConfig,
+	}
+	base := &baseHandle{changesHandle: changes}
+	drain := func(prefetch func(context.Context) error, isEnd func() bool, cache *[]*batch.Batch) {
+		readRows, peak := 0, 0
+		for !isEnd() {
+			require.NoError(t, prefetch(context.Background()))
+			for _, bat := range *cache {
+				readRows += bat.RowCount()
+				peak = max(peak, bat.Allocated())
+				bat.Clean(mp)
+			}
+			*cache = nil
+		}
+		require.Equal(t, rows, readRows)
+		require.LessOrEqual(t, peak, maxBytes/2)
+		require.Equal(t, baseline, mp.CurrNB())
+	}
+
+	cn := NewCNObjectHandle(false, []*objectio.ObjectEntry{obj}, fs, base, mp)
+	drain(cn.prefetch, cn.isEnd, &cn.cache)
+	cn.prepared, cn.blks, cn.TSs = nil, nil, nil
+	aobj := NewAObjectHandle(context.Background(), base, false,
+		types.BuildTS(1, 0), types.BuildTS(200, 0), []*objectio.ObjectEntry{obj}, fs, mp)
+	drain(aobj.prefetch, aobj.isEnd, &aobj.cache)
+	aobj.blks = nil
+	require.Less(t, fs.peak.Load(), int64(2<<20))
+	require.Zero(t, fs.current.Load())
+	spillTracker.requireReleased(t, true)
 }
 
 func TestCNObjectHandleCleansSourceAfterCopy(t *testing.T) {
@@ -814,6 +874,76 @@ func TestCNObjectHandleNextRetainsSourceOnSchemaBoundary(t *testing.T) {
 	require.Zero(t, sourceMP.CurrNB())
 	dst.Clean(outputMP)
 	require.Zero(t, outputMP.CurrNB())
+}
+
+func TestCNObjectHandleCloseReleasesRetainedSchemaBoundarySource(t *testing.T) {
+	sourceMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(sourceMP)
+	outputMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(outputMP)
+
+	source := batch.NewWithSize(1)
+	source.Attrs = []string{"value"}
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	source.Vecs[0].SetOffHeap(true)
+	for row := 0; row < 4096; row++ {
+		require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(row), false, sourceMP))
+	}
+	require.NotZero(t, sourceMP.CurrNB())
+	source.SetRowCount(4096)
+	base := &baseHandle{changesHandle: &ChangeHandler{}}
+	handle := &CNObjectHandle{
+		mp: sourceMP, base: base,
+		cache: []*batch.Batch{source}, prepared: []bool{false},
+		TSs: []types.TS{types.BuildTS(2, 1)},
+	}
+	base.cnObjectHandle = handle
+
+	dst := batch.NewWithSize(1)
+	dst.Attrs = []string{"other"}
+	dst.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(dst.Vecs[0], types.BuildTS(1, 0), false, outputMP))
+	dst.SetRowCount(1)
+	err := handle.Next(context.Background(), &dst, outputMP)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	require.NotZero(t, sourceMP.CurrNB())
+	require.Len(t, handle.cache, 1)
+
+	base.Close()
+	require.Zero(t, sourceMP.CurrNB())
+	require.Empty(t, handle.cache)
+	require.Empty(t, handle.prepared)
+	base.Close()
+	dst.Clean(outputMP)
+	require.Zero(t, outputMP.CurrNB())
+}
+
+func TestAObjectHandleCloseReleasesOwnedBatches(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	newOwnedBatch := func(value int64) *batch.Batch {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0].SetOffHeap(true)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, mp))
+		bat.SetRowCount(1)
+		return bat
+	}
+	base := &baseHandle{changesHandle: &ChangeHandler{}}
+	handle := &AObjectHandle{
+		mp: mp, currentBatch: newOwnedBatch(1),
+		cache: []*batch.Batch{newOwnedBatch(2)}, batchLength: 1, rowOffsetCursor: 1,
+	}
+	base.aobjHandle = handle
+	require.NotZero(t, mp.CurrNB())
+
+	base.Close()
+	require.Zero(t, mp.CurrNB())
+	require.Nil(t, handle.currentBatch)
+	require.Empty(t, handle.cache)
+	require.Zero(t, handle.batchLength)
+	require.Zero(t, handle.rowOffsetCursor)
+	base.Close()
 }
 
 func TestUpdateCNTombstoneBatch_IsIdempotent(t *testing.T) {

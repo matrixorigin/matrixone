@@ -367,6 +367,8 @@ func ReadOneBlockAllColumnsWindow(
 	cachePolicy fileservice.Policy,
 	fs fileservice.FileService,
 	mp *mpool.MPool,
+	maxSourceBytes int,
+	spillFactory ColumnWindowSpillFactory,
 ) (bat *batch.Batch, err error) {
 	if length <= 0 {
 		return nil, moerr.NewInvalidInputNoCtx("object block window must contain rows")
@@ -384,6 +386,15 @@ func ReadOneBlockAllColumnsWindow(
 		if ext.Alg() == compress.Lz4Chunked {
 			bat.Vecs[i], err = readChunkedColumnWindow(
 				ctx, name, ext, offset, length, cachePolicy, fs, mp,
+			)
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if maxSourceBytes > 0 && int64(ext.OriginSize()) > int64(maxSourceBytes) {
+			bat.Vecs[i], err = readLegacyColumnWindow(
+				ctx, name, ext, offset, length, fs, mp, spillFactory,
 			)
 			if err != nil {
 				return nil, err

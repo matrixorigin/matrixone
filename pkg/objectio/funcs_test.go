@@ -1100,7 +1100,7 @@ func TestReadOneBlockAllColumnsWindowMaterializesRequestedRows(t *testing.T) {
 	queryMP := mpool.MustNewZero()
 	bat, err := ReadOneBlockAllColumnsWindow(
 		context.Background(), &meta, "test-object", 0, []uint16{0},
-		2, 3, fileservice.Policy(0), fs, queryMP,
+		2, 3, fileservice.Policy(0), fs, queryMP, 0, nil,
 	)
 	require.NoError(t, err)
 	require.Equal(t, []int64{2, 3, 4}, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0]))
@@ -1108,7 +1108,7 @@ func TestReadOneBlockAllColumnsWindowMaterializesRequestedRows(t *testing.T) {
 	require.Equal(t, int32(1), releases.Load())
 	_, err = ReadOneBlockAllColumnsWindow(
 		context.Background(), &meta, "test-object", 0, []uint16{0},
-		0, 0, fileservice.Policy(0), fs, queryMP,
+		0, 0, fileservice.Policy(0), fs, queryMP, 0, nil,
 	)
 	require.Error(t, err)
 	require.Zero(t, queryMP.CurrNB())
