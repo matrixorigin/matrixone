@@ -573,6 +573,51 @@ func getColSeqFromColDef(tblCol *plan.ColDef) string {
 	return fmt.Sprintf("%d", tblCol.GetSeqnum())
 }
 
+type fullTextIndexPath struct {
+	sortNode *plan.Node
+	aggNode  *plan.Node
+	scanNode *plan.Node
+}
+
+// resolveFullTextIndexPath finds the small set of plan shapes for which the
+// fulltext rewrite can safely replace a table scan. A SORT above an AGG must be
+// recognized as an aggregate path: the rewrite replaces the AGG input and
+// leaves the final ordering in place.
+func (builder *QueryBuilder) resolveFullTextIndexPath(projNode *plan.Node) *fullTextIndexPath {
+	if scanNode := builder.resolveScanNodeFromProject(projNode, 1); scanNode != nil {
+		return &fullTextIndexPath{scanNode: scanNode}
+	}
+
+	if sortNode := builder.resolveSortNode(projNode, 1); sortNode != nil {
+		if scanNode := builder.resolveScanNodeWithIndex(sortNode, 1); scanNode != nil {
+			return &fullTextIndexPath{sortNode: sortNode, scanNode: scanNode}
+		}
+
+		if len(sortNode.Children) != 1 {
+			return nil
+		}
+		aggNode := builder.qry.Nodes[sortNode.Children[0]]
+		if aggNode == nil || aggNode.NodeType != plan.Node_AGG {
+			return nil
+		}
+		scanNode := builder.resolveScanNodeWithIndex(aggNode, 1)
+		if scanNode == nil {
+			return nil
+		}
+		return &fullTextIndexPath{sortNode: sortNode, aggNode: aggNode, scanNode: scanNode}
+	}
+
+	aggNode := builder.resolveAggNode(projNode, 1)
+	if aggNode == nil {
+		return nil
+	}
+	scanNode := builder.resolveScanNodeWithIndex(aggNode, 1)
+	if scanNode == nil {
+		return nil
+	}
+	return &fullTextIndexPath{aggNode: aggNode, scanNode: scanNode}
+}
+
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	defer builder.clearProjectGuard(projNode.NodeId)
 	var vecCtx *vectorSortContext
@@ -582,59 +627,32 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 		// 1. project -> scan
 		// 2. project -> sort -> scan
 		// 3. project -> aggregate -> scan
-		// try to find scanNode, sortNode from projNode
-		var sortNode, aggNode *plan.Node
-		sortNode = nil
-		aggNode = nil
-		scanNode := builder.resolveScanNodeFromProject(projNode, 1)
-		if scanNode == nil {
-			sortNode = builder.resolveSortNode(projNode, 1)
-			if sortNode == nil {
-				aggNode = builder.resolveAggNode(projNode, 1)
-				if aggNode == nil {
-					goto END_FULLTEXT
-				}
-			}
-
-			if sortNode != nil {
-				scanNode = builder.resolveScanNodeWithIndex(sortNode, 1)
-				if scanNode == nil {
-					goto END_FULLTEXT
-				}
-			}
-			if aggNode != nil {
-				scanNode = builder.resolveScanNodeWithIndex(aggNode, 1)
-				if scanNode == nil {
-					goto END_FULLTEXT
-				}
-			}
-		}
-
-		if aggNode != nil {
+		// 4. project -> sort -> aggregate -> scan
+		path := builder.resolveFullTextIndexPath(projNode)
+		if path != nil && path.aggNode != nil {
 			// agg node and scan node present
 			// get the list of filter that is fulltext_match func
-			filterids, filter_ftidxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+			filterids, filterFTIdxs := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
 
 			// apply fulltext indices when fulltext_match exists
 			if len(filterids) > 0 {
-				return builder.applyIndicesForAggUsingFullTextIndex(nodeID, projNode, aggNode, scanNode,
-					filterids, filter_ftidxs, colRefCnt, idxColMap)
+				return builder.applyIndicesForAggUsingFullTextIndex(nodeID, projNode, path.aggNode, path.scanNode,
+					filterids, filterFTIdxs, colRefCnt, idxColMap)
 			}
-		} else {
+		} else if path != nil {
 			// get the list of project that is fulltext_match func
-			projids, proj_ftidxs := builder.getFullTextMatchFromProject(projNode, scanNode)
+			projids, projFTIdxs := builder.getFullTextMatchFromProject(projNode, path.scanNode)
 
 			// get the list of filter that is fulltext_match func
-			filterids, filter_ftidxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+			filterids, filterFTIdxs := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
 
 			// apply fulltext indices when fulltext_match exists
 			if len(filterids) > 0 || len(projids) > 0 {
-				return builder.applyIndicesForProjectionUsingFullTextIndex(nodeID, projNode, sortNode, scanNode,
-					filterids, filter_ftidxs, projids, proj_ftidxs, colRefCnt, idxColMap)
+				return builder.applyIndicesForProjectionUsingFullTextIndex(nodeID, projNode, path.sortNode, path.scanNode,
+					filterids, filterFTIdxs, projids, projFTIdxs, colRefCnt, idxColMap)
 			}
 		}
 	}
-END_FULLTEXT:
 
 	// 1. Vector Index Check
 	// Handle Queries like
@@ -1358,47 +1376,23 @@ func isPositiveLiteralLimit(limit *plan.Expr) bool {
 }
 
 func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {
-	var sortNode, aggNode *plan.Node
-	scanNode := builder.resolveScanNodeFromProject(projNode, 1)
-	if scanNode == nil {
-		sortNode = builder.resolveSortNode(projNode, 1)
-		if sortNode == nil {
-			aggNode = builder.resolveAggNode(projNode, 1)
-			if aggNode == nil {
-				return nil
-			}
-		}
-
-		if sortNode != nil {
-			scanNode = builder.resolveScanNodeWithIndex(sortNode, 1)
-			if scanNode == nil {
-				return nil
-			}
-		}
-		if aggNode != nil {
-			scanNode = builder.resolveScanNodeWithIndex(aggNode, 1)
-			if scanNode == nil {
-				return nil
-			}
-		}
-	}
-
-	if scanNode == nil {
+	path := builder.resolveFullTextIndexPath(projNode)
+	if path == nil {
 		return nil
 	}
 
-	if aggNode != nil {
-		filterids, _ := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+	if path.aggNode != nil {
+		filterids, _ := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
 		if len(filterids) > 0 {
-			return []int32{scanNode.NodeId}
+			return []int32{path.scanNode.NodeId}
 		}
 		return nil
 	}
 
-	projids, _ := builder.getFullTextMatchFromProject(projNode, scanNode)
-	filterids, _ := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+	projids, _ := builder.getFullTextMatchFromProject(projNode, path.scanNode)
+	filterids, _ := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
 	if len(filterids) > 0 || len(projids) > 0 {
-		return []int32{scanNode.NodeId}
+		return []int32{path.scanNode.NodeId}
 	}
 	return nil
 }
