@@ -512,11 +512,21 @@ func TestValidateTableDumpAutoIncrementRestore(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ctx := context.Background()
 	nilDefRel := mock_frontend.NewMockRelation(ctrl)
-	nilDefRel.EXPECT().GetTableDef(ctx).Return(nil)
-	_, _, err := validateTableDumpAutoIncrementRestore(
+	nilDefRel.EXPECT().GetTableDef(ctx).Return(nil).Times(2)
+	_, _, err := validateTableDumpAutoIncrementRestore(ctx, nilDefRel, nil)
+	require.ErrorContains(t, err, "table definition is unavailable")
+	_, _, err = validateTableDumpAutoIncrementRestore(
 		ctx, nilDefRel, []tableDumpAutoIncr{{Column: "visible", HighWatermark: 100}},
 	)
 	require.ErrorContains(t, err, "table definition is unavailable")
+	plainRel := mock_frontend.NewMockRelation(ctrl)
+	plainRel.EXPECT().GetTableDef(ctx).Return(&plan.TableDef{Cols: []*plan.ColDef{{
+		Name: "plain", Typ: plan.Type{Id: int32(types.T_int64)},
+	}}})
+	restores, schemaOffset, err := validateTableDumpAutoIncrementRestore(ctx, plainRel, nil)
+	require.NoError(t, err)
+	require.Nil(t, restores)
+	require.Zero(t, schemaOffset)
 
 	rel := mock_frontend.NewMockRelation(ctrl)
 	rel.EXPECT().GetTableName().Return("target").AnyTimes()
@@ -528,10 +538,8 @@ func TestValidateTableDumpAutoIncrementRestore(t *testing.T) {
 		},
 	}).AnyTimes()
 
-	restores, schemaOffset, err := validateTableDumpAutoIncrementRestore(ctx, rel, nil)
-	require.NoError(t, err)
-	require.Nil(t, restores)
-	require.Zero(t, schemaOffset)
+	_, _, err = validateTableDumpAutoIncrementRestore(ctx, rel, nil)
+	require.ErrorContains(t, err, "does not match")
 
 	restores, schemaOffset, err = validateTableDumpAutoIncrementRestore(ctx, rel, []tableDumpAutoIncr{
 		{Column: "visible", HighWatermark: 100},
@@ -756,6 +764,86 @@ func TestHandleLoadTable(t *testing.T) {
 	require.Equal(t, []string{object.Name}, workspace.protectedCloneFiles)
 	require.Equal(t, []string{object.Name}, workspace.trackedLoadFiles)
 	require.NoError(t, verifyTableDumpObject(context.Background(), targetFS, object.Name, object.Size, object.SHA256))
+}
+
+func TestHandleLoadTableRejectsMissingAutoIncrementState(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetDatabaseName("tpcc")
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	workspace := newTestWorkspace()
+	ses.txnHandler.storage = eng
+	ses.txnHandler.txnOp = txnOp
+	eng.EXPECT().Database(gomock.Any(), "tpcc", txnOp).Return(db, nil).Times(2)
+	db.EXPECT().Relation(gomock.Any(), "history", nil).Return(rel, nil)
+
+	def := &plan.TableDef{
+		Name: "history",
+		Cols: []*plan.ColDef{{
+			Name: "hist_id", Typ: plan.Type{Id: int32(types.T_int64), AutoIncr: true},
+			Default: &plan.Default{},
+		}},
+	}
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
+	rel.EXPECT().GetTableName().Return("history").AnyTimes()
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+
+	object := newTableDumpTestObject(t, false)
+	content := []byte("auto-increment object fixture")
+	object.Size = int64(len(content))
+	object.SHA256 = fmt.Sprintf("%x", sha256.Sum256(content))
+	object.FixturePath = path.Join("objects", object.Name)
+	dumpRoot := t.TempDir()
+	dumpFS, err := fileservice.NewLocalETLFS("dump", dumpRoot)
+	require.NoError(t, err)
+	require.NoError(t, dumpFS.Write(context.Background(), fileservice.IOVector{
+		FilePath: object.FixturePath,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: object.Size, Data: content}},
+	}))
+	require.NoError(t, dumpFS.Write(context.Background(), fileservice.IOVector{
+		FilePath: tableDumpReadyName,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("1")}},
+	}))
+	schemaHash, err := tableSchemaHash(def)
+	require.NoError(t, err)
+	require.NoError(t, writeTableDumpJSON(context.Background(), dumpFS, tableDumpManifestName, &tableDumpManifest{
+		Version: tableDumpFormatVersion, SourceDatabase: "tpcc", SourceTable: "history",
+		SchemaHash: schemaHash,
+		Relations: []tableDumpRelation{{
+			Role: "main", SourceTable: "history", SchemaHash: schemaHash,
+			Objects: []tableDumpObject{object},
+		}},
+	}))
+
+	targetFS, err := fileservice.NewLocalETLFS("target", t.TempDir())
+	require.NoError(t, err)
+	stub := gostub.Stub(&GetObjectFSProvider, func(*Session) (fileservice.FileService, error) {
+		return targetFS, nil
+	})
+	defer stub.Reset()
+	lockStub := gostub.Stub(&lockTableDumpLoadTargets, func(
+		_ context.Context, _ *Session, refs []tableDumpRelationRef, install bool,
+	) error {
+		require.Len(t, refs, 1)
+		require.True(t, install)
+		return nil
+	})
+	defer lockStub.Reset()
+
+	err = handleLoadTable(context.Background(), ses, &tree.LoadTable{
+		Table: tree.NewTableName("history", tree.ObjectNamePrefix{}, nil), Path: dumpRoot,
+	})
+	require.ErrorContains(t, err, "auto-increment metadata does not match")
+	require.Empty(t, workspace.protectedCloneFiles)
+	require.Empty(t, workspace.trackedLoadFiles)
+	_, err = targetFS.StatFile(context.Background(), object.Name)
+	require.Error(t, err)
 }
 
 func TestHandleDumpTable(t *testing.T) {

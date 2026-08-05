@@ -1213,14 +1213,20 @@ func validateTableDumpAutoIncrementRestore(
 	rel engine.Relation,
 	state []tableDumpAutoIncr,
 ) ([]tableDumpAutoIncrRestore, uint64, error) {
-	if len(state) == 0 {
-		return nil, 0, nil
-	}
 	def := rel.GetTableDef(ctx)
 	if def == nil {
 		return nil, 0, moerr.NewInternalErrorNoCtx("table definition is unavailable")
 	}
 	columns := incrservice.GetAutoColumnFromDef(def)
+	if len(state) == 0 {
+		if len(columns) == 0 {
+			return nil, 0, nil
+		}
+		return nil, 0, moerr.NewInvalidInputNoCtxf(
+			"table dump auto-increment metadata does not match target relation %s",
+			rel.GetTableName(),
+		)
+	}
 	byName := make(map[string]incrservice.AutoColumn, len(columns))
 	for _, column := range columns {
 		byName[strings.ToLower(column.ColName)] = column
