@@ -609,6 +609,21 @@ FROM (
     SELECT NULL AS x
 ) AS u;
 
+SELECT MIN(x) AS min_derived_null_union, MAX(x) AS max_derived_null_union
+FROM (
+    SELECT name AS x FROM t_minmax_cast_ci
+    UNION ALL
+    SELECT x FROM (SELECT NULL AS x) AS n
+) AS u;
+
+WITH n AS (SELECT NULL AS x)
+SELECT MIN(x) AS min_cte_null_union, MAX(x) AS max_cte_null_union
+FROM (
+    SELECT name AS x FROM t_minmax_cast_ci
+    UNION ALL
+    SELECT x FROM n
+) AS u;
+
 SELECT MIN(binary_gc) AS min_binary_gc, MAX(binary_gc) AS max_binary_gc,
        MIN(bin_gc) AS min_bin_gc, MAX(bin_gc) AS max_bin_gc
 FROM (
