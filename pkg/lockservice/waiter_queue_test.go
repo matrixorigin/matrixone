@@ -274,11 +274,16 @@ func TestNotifySharedHolderChange(t *testing.T) {
 		mergeWaiter.setStatus(blocking)
 		defer mergeWaiter.close("", nil)
 
+		completedMergeWaiter := acquireWaiter(pb.WaitTxn{TxnID: []byte("completed-merge")}, "", nil)
+		completedMergeWaiter.notifyOnSharedHolderChange = true
+		completedMergeWaiter.setStatus(completed)
+		defer completedMergeWaiter.close("", nil)
+
 		ordinaryWaiter := acquireWaiter(pb.WaitTxn{TxnID: []byte("ordinary")}, "", nil)
 		ordinaryWaiter.setStatus(blocking)
 		defer ordinaryWaiter.close("", nil)
 
-		q.put(mergeWaiter, ordinaryWaiter)
+		q.put(mergeWaiter, completedMergeWaiter, ordinaryWaiter)
 		q.resetCommittedAt(timestamp.Timestamp{PhysicalTime: 3})
 		q.notifySharedHolderChange(notifyValue{ts: timestamp.Timestamp{PhysicalTime: 1}})
 
