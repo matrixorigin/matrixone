@@ -836,6 +836,10 @@ func (l *localLockTable) addRangeLockLocked(
 		}
 	}
 
+	if err := l.preflightRangeMergeLocked(c, start, end); err != nil {
+		return nil, Lock{}, err
+	}
+
 	wq := newWaiterQueue()
 	wq.init(l.logger)
 	mc := newMergeContext(wq)
@@ -1004,6 +1008,74 @@ func (l *localLockTable) addRangeLockLocked(
 	}
 
 	return nil, Lock{}, nil
+}
+
+// preflightRangeMergeLocked validates a range merge
+// without changing either lock-store ownership or transaction bookkeeping.
+//
+// A merge removes locks already held by the transaction in [start, end]. Its
+// mode must therefore be at least as strong as every removed lock, and a Shared
+// merge cannot absorb a compatible lock owned by another transaction. The
+// latter has no conflict to wait on and cannot be represented by one range
+// without changing that transaction's ownership. This applies to both ordinary
+// range requests and cumulative budget replacements.
+func (l *localLockTable) preflightRangeMergeLocked(
+	c *lockContext,
+	start, end []byte,
+) error {
+	// Exclusive is already the strongest mode, and tryHold cannot mutate a
+	// foreign Shared/Exclusive lock for an Exclusive request. The existing
+	// merge context can therefore roll back every tentative change without an
+	// extra scan. Keep the preflight cost off the common write path.
+	if c.opts.Mode == pb.LockMode_Exclusive {
+		return nil
+	}
+
+	mode := c.opts.Mode
+	foreignSharedLock := false
+	var err error
+	l.mu.store.Range(
+		start,
+		nil,
+		func(key []byte, keyLock Lock) bool {
+			cmp := bytes.Compare(key, end)
+			if cmp > 0 {
+				// Range(start, ...) may first encounter the end of a range
+				// whose start precedes start. Inspect it only when that range
+				// overlaps the merge interval; otherwise no later key can
+				// overlap either.
+				if !keyLock.isLockRangeEnd() ||
+					bytes.Compare(l.mustGetRangeStart(key), end) > 0 {
+					return false
+				}
+			}
+
+			if keyLock.holders.contains(c.txn.txnID) {
+				if keyLock.GetLockMode() == pb.LockMode_Exclusive {
+					mode = pb.LockMode_Exclusive
+				}
+				if keyLock.holders.size() > 1 {
+					err = ErrMergeRangeLockNotSupport
+					return false
+				}
+			} else if keyLock.isShared() {
+				foreignSharedLock = true
+			}
+
+			return cmp < 0
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	// Lock strength is monotonic within a transaction: a later Shared request
+	// may widen an existing Exclusive lock, but must never downgrade it.
+	c.opts.Mode = mode
+	if mode == pb.LockMode_Shared && foreignSharedLock {
+		return ErrMergeRangeLockNotSupport
+	}
+	return nil
 }
 
 func (l *localLockTable) mergeRangeLocked(
