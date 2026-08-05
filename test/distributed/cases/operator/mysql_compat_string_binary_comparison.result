@@ -15,6 +15,81 @@ null regexp 'a' as regexp_null_left,
 'abc' not regexp null as not_regexp_null_pat;
 ➤ like_no_space[-7,1,0]  ¦  like_space[-7,1,0]  ¦  regexp_prefix[-7,1,0]  ¦  regexp_numeric_prefix[-7,1,0]  ¦  regexp_null_left[-7,1,0]  ¦  not_regexp_null_pat[-7,1,0]  𝄀
 0  ¦  1  ¦  1  ¦  1  ¦  null  ¦  null
+select _binary 'abc' regexp 'a';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+select 'abc' regexp _binary 'a';
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_like.
+select _binary 'abc' not regexp 'z';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+select regexp_like(_binary 'abc', 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+select regexp_like('abc', _binary 'a');
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_like.
+select regexp_instr(_binary 'abc', 'b');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_instr.
+select regexp_substr(_binary 'abc123', '[0-9]+');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_substr.
+select regexp_replace(_binary 'abc123', '[0-9]+', 'X');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_replace.
+select regexp_replace('abc123', '[0-9]+', _binary 'X');
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_replace.
+select regexp_like('abc', 'A', _binary 'i');
+➤ regexp_like(abc, A, i)[-7,1,0]  𝄀
+1
+select binary('abc') regexp 'a';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+select regexp_like('abc', binary('a'));
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_like.
+select regexp_instr(unhex('616263'), 'b');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_instr.
+select regexp_substr(from_base64('YWJjMTIz'), '[0-9]+');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_substr.
+select regexp_replace(concat('abc', _binary '123'), '[0-9]+', 'X');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_replace.
+select _binary '' regexp '^$';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+select cast(null as binary) regexp 'a';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+select unhex('ff') regexp '.';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+select regexp_like(null, 'a') as regexp_null_subject;
+➤ regexp_null_subject[-7,1,0]  𝄀
+null
+drop table if exists t_regexp_binary_operands;
+create table t_regexp_binary_operands (
+id int primary key,
+b binary(8),
+vb varbinary(8),
+bl blob,
+tx text
+);
+insert into t_regexp_binary_operands values (1, 'abc', 'abc', 'abc', 'abc');
+select b regexp 'a' from t_regexp_binary_operands;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+select 'abc' not regexp vb from t_regexp_binary_operands;
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_like.
+select regexp_like(bl, 'a') from t_regexp_binary_operands;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+select regexp_instr(tx, vb) from t_regexp_binary_operands;
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_instr.
+select regexp_substr(cast(tx as binary), 'a') from t_regexp_binary_operands;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_substr.
+select regexp_replace(tx, 'a', bl) from t_regexp_binary_operands;
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_replace.
+select regexp_like(derived_b, 'a') from (
+select concat(vb, _binary '') as derived_b from t_regexp_binary_operands
+) dt;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+drop table t_regexp_binary_operands;
+set @regexp_binary_param = binary 'abc';
+prepare regexp_binary_stmt from 'select regexp_like(?, ''a'')';
+execute regexp_binary_stmt using @regexp_binary_param;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+set @regexp_text_param = 'abc';
+execute regexp_binary_stmt using @regexp_text_param;
+➤ regexp_like(?, a)[-7,1,0]  𝄀
+1
+deallocate prepare regexp_binary_stmt;
 drop table if exists t_string_binary_cmp;
 create table t_string_binary_cmp (
 id int primary key,

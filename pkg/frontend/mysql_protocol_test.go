@@ -2957,6 +2957,17 @@ func TestPrepareStmtClearBinaryParamStateReleasesParamArea(t *testing.T) {
 	require.Equal(t, firstAreaLen, len(prepareStmt.params.GetArea()))
 }
 
+func TestParseExecuteDataPreservesBlobParameterType(t *testing.T) {
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+
+	require.NoError(t, proto.ParseExecuteData(
+		ctx, proc, prepareStmt,
+		buildStringExecutePacket(proto, defines.MYSQL_TYPE_BLOB, "abc"), 0))
+	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_BLOB), 0}, prepareStmt.ParamTypes)
+	require.Equal(t, "abc", prepareStmt.params.GetStringAt(0))
+}
+
 func TestParseExecuteDataRejectsTruncatedNewParamBoundFlag(t *testing.T) {
 	ctx := context.TODO()
 	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")

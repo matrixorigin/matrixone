@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -50,6 +51,43 @@ func TestPreparedExplainUsesBinaryParameterValues(t *testing.T) {
 	require.NoError(t, err)
 	require.NotSame(t, queryPlan, filled, "parameter substitution must not mutate the reusable prepared plan")
 	require.NotNil(t, filled.GetQuery())
+}
+
+func TestPreparedParamValuesPreserveProtocolBlobType(t *testing.T) {
+	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 107, "select ?")
+	defer prepareStmt.Close()
+
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("abc"), false, cw.proc.Mp()))
+	cw.proc.SetPrepareParams(params)
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+	}()
+
+	values, err := preparedParamValues(cw.proc, []byte{byte(defines.MYSQL_TYPE_BLOB), 0})
+	require.NoError(t, err)
+	require.Equal(t, []any{plan2.ParamValue{Value: "abc", Type: types.T_blob}}, values)
+}
+
+func TestPreparedProtocolBlobRegexpParameterIsRejected(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 108, "select regexp_like(?, 'a')")
+	defer prepareStmt.Close()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("abc"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_BLOB), 0}
+
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.Error(t, err)
+	var moErr *moerr.Error
+	require.ErrorAs(t, err, &moErr)
+	require.Equal(t, uint16(moerr.ER_CHARACTER_SET_MISMATCH), moErr.MySQLCode())
+	require.Equal(t, "HY000", moErr.SqlState())
+
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_STRING), 0}
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err, "a rejected binary execution must not mutate the reusable prepared plan")
 }
 
 func TestHandlePreparedExplainDoesNotRebuildUnderlyingStatement(t *testing.T) {

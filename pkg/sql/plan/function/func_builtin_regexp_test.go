@@ -218,6 +218,82 @@ func Test_BuiltIn_RegMatchPreservesValidPatterns(t *testing.T) {
 	}
 }
 
+func TestRegexpFunctionsRejectBinaryCharacterSet(t *testing.T) {
+	ctx := context.Background()
+	utf8 := types.T_varchar.ToType()
+	binary := types.T_binary.ToType()
+	varbinary := types.T_varbinary.ToType()
+	blob := types.T_blob.ToType()
+
+	tests := []struct {
+		name         string
+		functionName string
+		args         []types.Type
+		leftCharset  string
+		rightCharset string
+		errorName    string
+	}{
+		{name: "regexp_operator_subject", functionName: "reg_match", args: []types.Type{binary, utf8}, leftCharset: "binary", rightCharset: "utf8mb4_general_ci", errorName: "regexp_like"},
+		{name: "not_regexp_operator_pattern", functionName: "not_reg_match", args: []types.Type{utf8, varbinary}, leftCharset: "utf8mb4_general_ci", rightCharset: "binary", errorName: "regexp_like"},
+		{name: "regexp_like_subject", functionName: "regexp_like", args: []types.Type{blob, utf8}, leftCharset: "binary", rightCharset: "utf8mb4_general_ci", errorName: "regexp_like"},
+		{name: "regexp_instr_pattern", functionName: "regexp_instr", args: []types.Type{utf8, binary}, leftCharset: "utf8mb4_general_ci", rightCharset: "binary", errorName: "regexp_instr"},
+		{name: "regexp_substr_subject", functionName: "regexp_substr", args: []types.Type{varbinary, utf8}, leftCharset: "binary", rightCharset: "utf8mb4_general_ci", errorName: "regexp_substr"},
+		{name: "regexp_replace_pattern", functionName: "regexp_replace", args: []types.Type{utf8, blob, utf8}, leftCharset: "utf8mb4_general_ci", rightCharset: "binary", errorName: "regexp_replace"},
+		{name: "regexp_replace_replacement", functionName: "regexp_replace", args: []types.Type{utf8, utf8, blob}, leftCharset: "utf8mb4_general_ci", rightCharset: "binary", errorName: "regexp_replace"},
+		{name: "regexp_like_both", functionName: "regexp_like", args: []types.Type{binary, varbinary}, leftCharset: "binary", rightCharset: "binary", errorName: "regexp_like"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := GetFunctionByName(ctx, tc.functionName, tc.args)
+			require.Error(t, err)
+			var moErr *moerr.Error
+			require.ErrorAs(t, err, &moErr)
+			require.Equal(t, uint16(3995), moErr.MySQLCode())
+			require.Equal(t, "HY000", moErr.SqlState())
+			require.Equal(t,
+				"Character set '"+tc.leftCharset+"' cannot be used in conjunction with '"+
+					tc.rightCharset+"' in call to "+tc.errorName+".",
+				moErr.Error())
+		})
+	}
+}
+
+func TestRegexpFunctionsPreserveNonBinaryInputs(t *testing.T) {
+	utf8 := types.T_varchar.ToType()
+	binary := types.T_binary.ToType()
+	integer := types.T_int64.ToType()
+	nullType := types.T_any.ToType()
+
+	for _, tc := range []struct {
+		name         string
+		functionName string
+		args         []types.Type
+	}{
+		{name: "regexp_operator_varchar", functionName: "reg_match", args: []types.Type{utf8, utf8}},
+		{name: "regexp_like_null_subject", functionName: "regexp_like", args: []types.Type{nullType, utf8}},
+		{name: "regexp_instr_numeric_subject", functionName: "regexp_instr", args: []types.Type{integer, utf8}},
+		{name: "regexp_replace_varchar_replacement", functionName: "regexp_replace", args: []types.Type{utf8, utf8, utf8}},
+		{name: "regexp_like_binary_match_type", functionName: "regexp_like", args: []types.Type{utf8, utf8, binary}},
+		{name: "non_regexp_binary_arguments", functionName: "replace", args: []types.Type{binary, utf8, utf8}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := GetFunctionByName(context.Background(), tc.functionName, tc.args)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestRegexpCharacterSetValidationPreservesArityError(t *testing.T) {
+	_, err := GetFunctionByName(context.Background(), "regexp_like", []types.Type{types.T_binary.ToType()})
+	require.Error(t, err)
+
+	var moErr *moerr.Error
+	require.ErrorAs(t, err, &moErr)
+	require.Equal(t, moerr.ErrInvalidArg, moErr.ErrorCode())
+	require.NotEqual(t, uint16(3995), moErr.MySQLCode())
+}
+
 func Test_BuiltIn_RegularMatchForLikeOp(t *testing.T) {
 	op := newOpBuiltInRegexp()
 

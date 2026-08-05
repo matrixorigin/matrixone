@@ -20,8 +20,10 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 var (
@@ -395,6 +397,96 @@ type ResetParamRefRule struct {
 	exprMemo map[*plan.Expr]*plan.Expr
 }
 
+type ValidatePreparedRegexpParamRule struct {
+	ctx    context.Context
+	params []*Expr
+}
+
+type DetectRegexpFunctionRule struct {
+	found bool
+}
+
+func (rule *DetectRegexpFunctionRule) MatchNode(_ *Node) bool { return false }
+func (rule *DetectRegexpFunctionRule) IsApplyExpr() bool      { return true }
+func (rule *DetectRegexpFunctionRule) ApplyNode(_ *Node) error {
+	return nil
+}
+func (rule *DetectRegexpFunctionRule) ApplyExpr(expr *Expr) (*Expr, error) {
+	if rule.found || expr == nil {
+		return expr, nil
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func != nil && function.IsRegexpFunctionName(fn.Func.GetObjName()) {
+			rule.found = true
+			return expr, nil
+		}
+		for _, arg := range fn.Args {
+			if _, err := rule.ApplyExpr(arg); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if _, err := rule.ApplyExpr(item); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if expr.GetW() != nil {
+		return applyWindowExpr(expr, rule.ApplyExpr)
+	}
+	return expr, nil
+}
+
+func NewValidatePreparedRegexpParamRule(ctx context.Context, params []*Expr) *ValidatePreparedRegexpParamRule {
+	return &ValidatePreparedRegexpParamRule{ctx: ctx, params: params}
+}
+
+func (rule *ValidatePreparedRegexpParamRule) MatchNode(_ *Node) bool { return false }
+func (rule *ValidatePreparedRegexpParamRule) IsApplyExpr() bool      { return true }
+func (rule *ValidatePreparedRegexpParamRule) ApplyNode(_ *Node) error {
+	return nil
+}
+
+func (rule *ValidatePreparedRegexpParamRule) ApplyExpr(expr *Expr) (*Expr, error) {
+	fn := expr.GetF()
+	if fn == nil {
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				if _, err := rule.ApplyExpr(item); err != nil {
+					return nil, err
+				}
+			}
+		}
+		if expr.GetW() != nil {
+			return applyWindowExpr(expr, rule.ApplyExpr)
+		}
+		return expr, nil
+	}
+	for _, arg := range fn.Args {
+		if _, err := rule.ApplyExpr(arg); err != nil {
+			return nil, err
+		}
+	}
+	if fn.Func == nil {
+		return expr, nil
+	}
+	runtimeArgTypes := make([]types.Type, len(fn.Args))
+	for i, arg := range fn.Args {
+		runtimeArgTypes[i] = makeTypeByPlan2Expr(arg)
+		if pos, ok := preparedParamPositionBeforeImplicitCast(arg); ok && pos >= 0 && pos < len(rule.params) {
+			runtimeArgTypes[i] = makeTypeByPlan2Expr(rule.params[pos])
+		}
+	}
+	if err := function.ValidatePreparedRegexpCharacterSets(
+		rule.ctx, fn.Func.GetObjName(), runtimeArgTypes,
+	); err != nil {
+		return nil, err
+	}
+	return expr, nil
+}
+
 func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
 	return &ResetParamRefRule{
 		ctx:    ctx,
@@ -436,6 +528,18 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
+		runtimeArgTypes := make([]types.Type, len(exprImpl.F.Args))
+		for i, arg := range exprImpl.F.Args {
+			runtimeArgTypes[i] = makeTypeByPlan2Expr(arg)
+			if pos, ok := preparedParamPositionBeforeImplicitCast(arg); ok && pos >= 0 && pos < len(rule.params) {
+				runtimeArgTypes[i] = makeTypeByPlan2Expr(rule.params[pos])
+			}
+		}
+		if err := function.ValidatePreparedRegexpCharacterSets(
+			rule.ctx, exprImpl.F.Func.GetObjName(), runtimeArgTypes,
+		); err != nil {
+			return nil, err
+		}
 		needResetFunction := false
 		for i, arg := range exprImpl.F.Args {
 			if _, ok := arg.Expr.(*plan.Expr_P); ok {
@@ -471,10 +575,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		if int(exprImpl.P.Pos) >= len(rule.params) {
 			return nil, moerr.NewInternalErrorf(context.TODO(), "get prepare params error, index %d not exists", int(exprImpl.P.Pos))
 		}
-		return &plan.Expr{
-			Typ:  e.Typ,
-			Expr: rule.params[int(exprImpl.P.Pos)].Expr,
-		}, nil
+		param := DeepCopyExpr(rule.params[int(exprImpl.P.Pos)])
+		param.Typ = e.Typ
+		return param, nil
 	case *plan.Expr_List:
 		for i, arg := range exprImpl.List.List {
 			exprImpl.List.List[i], err = rule.ApplyExpr(arg)
@@ -486,6 +589,23 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	default:
 		return e, nil
 	}
+}
+
+func preparedParamPositionBeforeImplicitCast(expr *plan.Expr) (int, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	if param := expr.GetP(); param != nil {
+		return int(param.Pos), true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 {
+		return 0, false
+	}
+	if param := fn.Args[0].GetP(); param != nil {
+		return int(param.Pos), true
+	}
+	return 0, false
 }
 
 func applyWindowExpr(e *plan.Expr, apply func(*plan.Expr) (*plan.Expr, error)) (*plan.Expr, error) {

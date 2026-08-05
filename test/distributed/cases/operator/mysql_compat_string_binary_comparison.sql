@@ -20,6 +20,54 @@ select 'a ' like 'a' as like_no_space,
        null regexp 'a' as regexp_null_left,
        'abc' not regexp null as not_regexp_null_pat;
 
+-- Binary character set operands are incompatible with regexp functions.
+select _binary 'abc' regexp 'a';
+select 'abc' regexp _binary 'a';
+select _binary 'abc' not regexp 'z';
+select regexp_like(_binary 'abc', 'a');
+select regexp_like('abc', _binary 'a');
+select regexp_instr(_binary 'abc', 'b');
+select regexp_substr(_binary 'abc123', '[0-9]+');
+select regexp_replace(_binary 'abc123', '[0-9]+', 'X');
+select regexp_replace('abc123', '[0-9]+', _binary 'X');
+select regexp_like('abc', 'A', _binary 'i');
+select binary('abc') regexp 'a';
+select regexp_like('abc', binary('a'));
+select regexp_instr(unhex('616263'), 'b');
+select regexp_substr(from_base64('YWJjMTIz'), '[0-9]+');
+select regexp_replace(concat('abc', _binary '123'), '[0-9]+', 'X');
+select _binary '' regexp '^$';
+select cast(null as binary) regexp 'a';
+select unhex('ff') regexp '.';
+select regexp_like(null, 'a') as regexp_null_subject;
+
+drop table if exists t_regexp_binary_operands;
+create table t_regexp_binary_operands (
+  id int primary key,
+  b binary(8),
+  vb varbinary(8),
+  bl blob,
+  tx text
+);
+insert into t_regexp_binary_operands values (1, 'abc', 'abc', 'abc', 'abc');
+select b regexp 'a' from t_regexp_binary_operands;
+select 'abc' not regexp vb from t_regexp_binary_operands;
+select regexp_like(bl, 'a') from t_regexp_binary_operands;
+select regexp_instr(tx, vb) from t_regexp_binary_operands;
+select regexp_substr(cast(tx as binary), 'a') from t_regexp_binary_operands;
+select regexp_replace(tx, 'a', bl) from t_regexp_binary_operands;
+select regexp_like(derived_b, 'a') from (
+  select concat(vb, _binary '') as derived_b from t_regexp_binary_operands
+) dt;
+drop table t_regexp_binary_operands;
+
+set @regexp_binary_param = binary 'abc';
+prepare regexp_binary_stmt from 'select regexp_like(?, ''a'')';
+execute regexp_binary_stmt using @regexp_binary_param;
+set @regexp_text_param = 'abc';
+execute regexp_binary_stmt using @regexp_text_param;
+deallocate prepare regexp_binary_stmt;
+
 drop table if exists t_string_binary_cmp;
 create table t_string_binary_cmp (
   id int primary key,
