@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -84,13 +83,8 @@ func hasExplicitSourceDefault(metadata SourceColumnMetadata) bool {
 }
 
 func canUseCTASViewTypeDefault(metadata SourceColumnMetadata) bool {
-	switch types.T(metadata.Typ.Id) {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		return true
-	default:
-		return false
-	}
+	_, ok := ctasViewTypeDefaultOrigin(metadata.Typ)
+	return ok
 }
 
 func (bc *BindContext) markViewCTASDefaultBoundary() {

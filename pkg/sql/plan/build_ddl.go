@@ -318,25 +318,61 @@ func buildCTASDefaultForView(ctx CompilerContext, typ plan.Type, nullAbility boo
 		return defaultDef, nil
 	}
 
-	// #26232 has an independent MySQL oracle only for integer CTAS targets.
-	// Keep other implicit-default rules unchanged until they have their own
-	// protocol-level oracle instead of guessing from the source default.
-	switch types.T(typ.Id) {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		zeroExpr, err := makePlan2AssignmentCastExpr(
-			ctx.GetContext(), makePlan2Int64ConstExprWithType(0), typ)
-		if err != nil {
-			return nil, err
-		}
-		zeroExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, zeroExpr, ctx.GetProcess(), false, true)
-		if err != nil {
-			return nil, err
-		}
-		defaultDef.Expr = zeroExpr
-		defaultDef.OriginString = "0"
+	originString, ok := ctasViewTypeDefaultOrigin(typ)
+	if !ok {
+		return defaultDef, nil
 	}
+
+	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, "select "+originString, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Free()
+	selectStmt, ok := stmt.(*tree.Select)
+	if !ok {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "invalid CTAS type default expression")
+	}
+	selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+	if !ok || len(selectClause.Exprs) != 1 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "invalid CTAS type default expression")
+	}
+
+	binder := NewDefaultBinder(ctx.GetContext(), nil, nil, typ, nil)
+	defaultExpr, err := binder.BindExpr(selectClause.Exprs[0].Expr, 0, false)
+	if err != nil {
+		return nil, err
+	}
+	defaultExpr, err = makePlan2AssignmentCastExpr(ctx.GetContext(), defaultExpr, typ)
+	if err != nil {
+		return nil, err
+	}
+	defaultExpr, err = ConstantFold(
+		batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), ctx.GetProcess(), false, true)
+	if err != nil {
+		return nil, err
+	}
+	defaultDef.Expr = defaultExpr
+	defaultDef.OriginString = originString
 	return defaultDef, nil
+}
+
+func ctasViewTypeDefaultOrigin(typ plan.Type) (string, bool) {
+	if isEnumPlanType(&typ) {
+		elements := strings.Split(typ.Enumvalues, ",")
+		if len(elements) == 0 {
+			return "", false
+		}
+		return "'" + formatStrInSingleQuotes(elements[0]) + "'", true
+	}
+
+	originString := buildNotNullColumnVal(&plan.ColDef{Typ: typ})
+	if originString == "null" {
+		return "", false
+	}
+	if types.T(typ.Id).IsDecimal() && typ.Scale > 0 {
+		originString = "0." + strings.Repeat("0", int(typ.Scale))
+	}
+	return originString, true
 }
 
 func ctasExprCanBeNull(expr *Expr) bool {

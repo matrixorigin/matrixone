@@ -534,7 +534,6 @@ func TestBuildCreateViewPreservesDefaultKinds(t *testing.T) {
 }
 
 func TestBuildCTASFromViewUsesIndependentExecutableDefault(t *testing.T) {
-	const createViewSQL = "create view v_source_t as select n_nationkey as qty from nation"
 	ctx := NewMockCompilerContext(false)
 	sourceCol := ctx.tables["nation"].Cols[0]
 	sourceCol.Typ.NotNullable = true
@@ -543,6 +542,53 @@ func TestBuildCTASFromViewUsesIndependentExecutableDefault(t *testing.T) {
 		Expr:         makePlan2Int32ConstExprWithType(7),
 		OriginString: "7",
 	}
+	decimalExpr, err := makePlan2DecimalExprWithType(t.Context(), "1.25")
+	require.NoError(t, err)
+	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols,
+		&plan.ColDef{
+			Name: "str_col",
+			Typ:  plan.Type{Id: int32(types.T_varchar), Width: 20, NotNullable: true},
+			Default: &plan.Default{
+				Expr:         makePlan2StringConstExprWithType("seed"),
+				OriginString: "'seed'",
+			},
+		},
+		&plan.ColDef{
+			Name: "amount",
+			Typ:  plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2, NotNullable: true},
+			Default: &plan.Default{
+				Expr:         decimalExpr,
+				OriginString: "1.25",
+			},
+		},
+		&plan.ColDef{
+			Name: "priority",
+			Typ:  plan.Type{Id: int32(types.T_enum), Enumvalues: "low,medium,high", NotNullable: true},
+			Default: &plan.Default{
+				Expr:         makePlan2StringConstExprWithType("medium"),
+				OriginString: "'medium'",
+			},
+		},
+		&plan.ColDef{
+			Name: "flags",
+			Typ:  plan.Type{Id: int32(types.T_uint64), Enumvalues: "a,b", NotNullable: true},
+			Default: &plan.Default{
+				Expr:         makePlan2Uint64ConstExprWithType(1),
+				OriginString: "'a'",
+			},
+		},
+		&plan.ColDef{
+			Name: "nullable_col",
+			Typ:  plan.Type{Id: int32(types.T_int32)},
+			Default: &plan.Default{
+				NullAbility:  true,
+				Expr:         makePlan2Int32ConstExprWithType(7),
+				OriginString: "7",
+			},
+		},
+	)
+	const createViewSQL = "create view v_source_t as " +
+		"select n_nationkey as qty, str_col, amount, priority, flags, nullable_col from nation"
 	createCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createViewSQL}
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createViewSQL, 1)
 	require.NoError(t, err)
@@ -562,9 +608,9 @@ func TestBuildCTASFromViewUsesIndependentExecutableDefault(t *testing.T) {
 		name      string
 		selectSQL string
 	}{
-		{name: "direct view", selectSQL: "select qty from v_source_t"},
-		{name: "view through derived", selectSQL: "select qty from (select qty from v_source_t) d"},
-		{name: "view through cte", selectSQL: "with d as (select qty from v_source_t) select qty from d"},
+		{name: "direct view", selectSQL: "select qty, str_col, amount, priority, flags, nullable_col from v_source_t"},
+		{name: "view through derived", selectSQL: "select * from (select qty, str_col, amount, priority, flags, nullable_col from v_source_t) d"},
+		{name: "view through cte", selectSQL: "with d as (select qty, str_col, amount, priority, flags, nullable_col from v_source_t) select * from d"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
@@ -574,13 +620,20 @@ func TestBuildCTASFromViewUsesIndependentExecutableDefault(t *testing.T) {
 			ctasPlan, err := BuildPlan(ctx, stmt, false)
 			require.NoError(t, err)
 			cols := ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()
-			require.NotEmpty(t, cols)
-			def := cols[0].GetDefault()
-			require.NotNil(t, def)
-			require.False(t, def.GetNullAbility())
-			require.Equal(t, "0", def.GetOriginString())
-			require.NotNil(t, def.GetExpr())
-			require.Equal(t, int32(0), def.GetExpr().GetLit().GetI32Val())
+			require.GreaterOrEqual(t, len(cols), 6)
+			for i, wantOrigin := range []string{"0", "''", "0.00", "'low'", "''", ""} {
+				def := cols[i].GetDefault()
+				require.NotNil(t, def)
+				require.Equal(t, wantOrigin, def.GetOriginString(), cols[i].GetName())
+				if i == 5 {
+					require.True(t, def.GetNullAbility())
+					require.Nil(t, def.GetExpr())
+					continue
+				}
+				require.False(t, def.GetNullAbility())
+				require.NotNil(t, def.GetExpr(), cols[i].GetName())
+				require.Equal(t, cols[i].Typ.Id, def.GetExpr().Typ.Id, cols[i].GetName())
+			}
 		})
 	}
 }

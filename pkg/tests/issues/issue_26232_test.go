@@ -45,13 +45,14 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			"create database " + db,
 			"create table " + db + ".source_t (" +
 				"id int primary key, qty int not null default 7, nullable_col int, null_col int default null, " +
-				"str_col varchar(20) not null default 'seed', expr_col uuid not null default (uuid()), " +
+				"str_col varchar(20) not null default 'seed', amount decimal(10,2) not null default 1.25, " +
+				"expr_col uuid not null default (uuid()), " +
 				"priority enum('low','medium','high') not null default 'medium', " +
 				"flags set('a','b') not null default 'a')",
 			"create table " + db + ".source_t2 (id int primary key, qty int not null default 9)",
 			"insert into " + db + ".source_t(id) values (1)",
 			"insert into " + db + ".source_t2 values (1, 9)",
-			"create view " + db + ".v_source_t as select id, qty, nullable_col, null_col, str_col, expr_col, priority, flags from " + db + ".source_t",
+			"create view " + db + ".v_source_t as select id, qty, nullable_col, null_col, str_col, amount, expr_col, priority, flags from " + db + ".source_t",
 			"create view " + db + ".v_alias as select qty as amount from " + db + ".source_t",
 			"create view " + db + ".v_explicit(amount) as select qty from " + db + ".source_t",
 			"create view " + db + ".v_derived as select amount from (select qty as amount from " + db + ".source_t) d",
@@ -65,7 +66,7 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			"create view " + db + ".v_union as select qty from " + db + ".source_t union select qty from " + db + ".source_t",
 			"create view " + db + ".v_union_all as select qty from " + db + ".source_t union all select qty from " + db + ".source_t",
 			"create view " + db + ".v_recursive as with recursive d(qty) as (select qty from " + db + ".source_t union all select qty from d where false) select qty from d",
-			"create table " + db + ".ctas_view as select id, qty from " + db + ".v_source_t",
+			"create table " + db + ".ctas_view as select id, qty, nullable_col, null_col, str_col, amount, priority, flags from " + db + ".v_source_t",
 		} {
 			execSQLRequire(t, ctx, dbConn, stmt)
 		}
@@ -90,6 +91,7 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			{viewName: "v_join", column: "right_qty", wantValue: "9"},
 			{viewName: "v_source_t", column: "null_col", wantValue: "null"},
 			{viewName: "v_source_t", column: "str_col", wantValue: "'seed'"},
+			{viewName: "v_source_t", column: "amount", wantValue: "1.25"},
 			{viewName: "v_source_t", column: "expr_col", wantValue: "(uuid())"},
 			{viewName: "v_source_t", column: "priority", wantValue: "'medium'"},
 			{viewName: "v_source_t", column: "flags", wantValue: "'a'"},
@@ -129,26 +131,54 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 		require.Contains(t, strings.ToLower(viewSQL), "create view")
 		require.NotContains(t, strings.ToLower(viewSQL), "default 7")
 
-		var ctasDefault sql.NullString
-		require.NoError(t, dbConn.QueryRowContext(ctx,
-			"select column_default from information_schema.columns "+
-				"where table_schema = ? and table_name = 'ctas_view' and column_name = 'qty'",
-			db).Scan(&ctasDefault))
-		require.True(t, ctasDefault.Valid)
-		require.Equal(t, "0", ctasDefault.String)
-		require.Equal(t, "0", descColumnDefault(t, ctx, dbConn, db+".ctas_view", "qty").String)
+		for _, test := range []struct {
+			column   string
+			wantInfo sql.NullString
+			wantDesc sql.NullString
+		}{
+			{column: "qty", wantInfo: sql.NullString{String: "0", Valid: true}, wantDesc: sql.NullString{String: "0", Valid: true}},
+			{column: "nullable_col"},
+			{column: "null_col"},
+			{column: "str_col", wantInfo: sql.NullString{String: "''", Valid: true}, wantDesc: sql.NullString{String: "", Valid: true}},
+			{column: "amount", wantInfo: sql.NullString{String: "0.00", Valid: true}, wantDesc: sql.NullString{String: "0.00", Valid: true}},
+			{column: "priority", wantInfo: sql.NullString{String: "'low'", Valid: true}, wantDesc: sql.NullString{String: "low", Valid: true}},
+			{column: "flags", wantInfo: sql.NullString{String: "''", Valid: true}, wantDesc: sql.NullString{String: "", Valid: true}},
+		} {
+			var infoDefault sql.NullString
+			require.NoError(t, dbConn.QueryRowContext(ctx,
+				"select column_default from information_schema.columns "+
+					"where table_schema = ? and table_name = 'ctas_view' and column_name = ?",
+				db, test.column).Scan(&infoDefault), test.column)
+			require.Equal(t, test.wantInfo, infoDefault, test.column)
+			require.Equal(t, test.wantDesc,
+				descColumnDefault(t, ctx, dbConn, db+".ctas_view", test.column), test.column)
+		}
 
 		var tableName, createTableSQL string
 		require.NoError(t, dbConn.QueryRowContext(ctx, "show create table "+db+".ctas_view").
 			Scan(&tableName, &createTableSQL))
 		require.Contains(t, createTableSQL, "DEFAULT 0")
 		require.NotContains(t, createTableSQL, "DEFAULT 7")
+		require.Contains(t, createTableSQL, "DEFAULT ''")
+		require.Contains(t, createTableSQL, "DEFAULT 0.00")
+		require.Contains(t, createTableSQL, "DEFAULT 'low'")
 
 		execSQLRequire(t, ctx, dbConn, "insert into "+db+".ctas_view(id) values (2)")
 		var insertedQty int
+		var insertedNullable, insertedNull sql.NullInt64
+		var insertedString, insertedAmount, insertedPriority, insertedFlags string
 		require.NoError(t, dbConn.QueryRowContext(ctx,
-			"select qty from "+db+".ctas_view where id = 2").Scan(&insertedQty))
+			"select qty, nullable_col, null_col, str_col, amount, priority, flags "+
+				"from "+db+".ctas_view where id = 2").
+			Scan(&insertedQty, &insertedNullable, &insertedNull, &insertedString,
+				&insertedAmount, &insertedPriority, &insertedFlags))
 		require.Equal(t, 0, insertedQty)
+		require.False(t, insertedNullable.Valid)
+		require.False(t, insertedNull.Valid)
+		require.Empty(t, insertedString)
+		require.Equal(t, "0.00", insertedAmount)
+		require.Equal(t, "low", insertedPriority)
+		require.Empty(t, insertedFlags)
 	})
 }
 
