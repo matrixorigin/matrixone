@@ -181,6 +181,13 @@ func TestResourceExhaustedWithDetailsEncoding(t *testing.T) {
 	require.Equal(t, err, decoded)
 }
 
+func TestNoSuchTableWithFormattedMessage(t *testing.T) {
+	err := NewNoSuchTablef(context.Background(), "SQL parser error: table %q does not exist", "missing")
+	require.Equal(t, ErrNoSuchTable, err.ErrorCode())
+	require.Equal(t, ER_NO_SUCH_TABLE, err.MySQLCode())
+	require.Equal(t, `SQL parser error: table "missing" does not exist`, err.Error())
+}
+
 func TestMPoolCapacityEncoding(t *testing.T) {
 	err := NewMPoolCapacityNoCtxf("alloc %d bytes, cap %d", 8, 4)
 	require.Equal(t, ErrMPoolCapacity, err.ErrorCode())
