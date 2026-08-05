@@ -46,13 +46,19 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			"create table " + db + ".source_t (" +
 				"id int primary key, qty int not null default 7, nullable_col int, null_col int default null, " +
 				"str_col varchar(20) not null default 'seed', amount decimal(10,2) not null default 1.25, " +
+				"date_col date not null default '2024-01-02', datetime_col datetime not null default '2024-01-02 03:04:05', " +
+				"time_col time not null default '03:04:05', timestamp_col timestamp not null default '2024-01-02 03:04:05', " +
+				"binary_col binary(4) not null default 'xy', varbinary_col varbinary(8) not null default 'xy', " +
+				"blob_col blob not null default ('blob-seed'), float_col float not null default 1.5, " +
+				"double_col double not null default 2.5, bit_col bit(4) not null default b'1010', " +
+				"nullable_expr uuid default (uuid()), " +
 				"expr_col uuid not null default (uuid()), " +
 				"priority enum('low','medium','high') not null default 'medium', " +
 				"flags set('a','b') not null default 'a')",
 			"create table " + db + ".source_t2 (id int primary key, qty int not null default 9)",
 			"insert into " + db + ".source_t(id) values (1)",
 			"insert into " + db + ".source_t2 values (1, 9)",
-			"create view " + db + ".v_source_t as select id, qty, nullable_col, null_col, str_col, amount, expr_col, priority, flags from " + db + ".source_t",
+			"create view " + db + ".v_source_t as select * from " + db + ".source_t",
 			"create view " + db + ".v_alias as select qty as amount from " + db + ".source_t",
 			"create view " + db + ".v_explicit(amount) as select qty from " + db + ".source_t",
 			"create view " + db + ".v_derived as select amount from (select qty as amount from " + db + ".source_t) d",
@@ -66,7 +72,9 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			"create view " + db + ".v_union as select qty from " + db + ".source_t union select qty from " + db + ".source_t",
 			"create view " + db + ".v_union_all as select qty from " + db + ".source_t union all select qty from " + db + ".source_t",
 			"create view " + db + ".v_recursive as with recursive d(qty) as (select qty from " + db + ".source_t union all select qty from d where false) select qty from d",
-			"create table " + db + ".ctas_view as select id, qty, nullable_col, null_col, str_col, amount, priority, flags from " + db + ".v_source_t",
+			"create table " + db + ".ctas_view as select id, qty, nullable_col, null_col, str_col, amount, " +
+				"date_col, datetime_col, time_col, timestamp_col, binary_col, varbinary_col, blob_col, " +
+				"float_col, double_col, bit_col, nullable_expr, priority, flags from " + db + ".v_source_t",
 		} {
 			execSQLRequire(t, ctx, dbConn, stmt)
 		}
@@ -143,6 +151,17 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			{column: "amount", wantInfo: sql.NullString{String: "0.00", Valid: true}, wantDesc: sql.NullString{String: "0.00", Valid: true}},
 			{column: "priority", wantInfo: sql.NullString{String: "'low'", Valid: true}, wantDesc: sql.NullString{String: "low", Valid: true}},
 			{column: "flags", wantInfo: sql.NullString{String: "''", Valid: true}, wantDesc: sql.NullString{String: "", Valid: true}},
+			{column: "date_col"},
+			{column: "datetime_col"},
+			{column: "time_col"},
+			{column: "timestamp_col"},
+			{column: "binary_col", wantInfo: sql.NullString{String: "''", Valid: true}, wantDesc: sql.NullString{String: "", Valid: true}},
+			{column: "varbinary_col", wantInfo: sql.NullString{String: "''", Valid: true}, wantDesc: sql.NullString{String: "", Valid: true}},
+			{column: "blob_col", wantInfo: sql.NullString{String: "('blob-seed')", Valid: true}, wantDesc: sql.NullString{String: "('blob-seed')", Valid: true}},
+			{column: "float_col", wantInfo: sql.NullString{String: "0", Valid: true}, wantDesc: sql.NullString{String: "0", Valid: true}},
+			{column: "double_col", wantInfo: sql.NullString{String: "0", Valid: true}, wantDesc: sql.NullString{String: "0", Valid: true}},
+			{column: "bit_col", wantInfo: sql.NullString{String: "0", Valid: true}, wantDesc: sql.NullString{String: "0", Valid: true}},
+			{column: "nullable_expr"},
 		} {
 			var infoDefault sql.NullString
 			require.NoError(t, dbConn.QueryRowContext(ctx,
@@ -163,7 +182,11 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 		require.Contains(t, createTableSQL, "DEFAULT 0.00")
 		require.Contains(t, createTableSQL, "DEFAULT 'low'")
 
-		execSQLRequire(t, ctx, dbConn, "insert into "+db+".ctas_view(id) values (2)")
+		_, insertErr := dbConn.ExecContext(ctx, "insert into "+db+".ctas_view(id) values (2)")
+		require.Error(t, insertErr)
+		execSQLRequire(t, ctx, dbConn, "insert into "+db+".ctas_view"+
+			"(id,date_col,datetime_col,time_col,timestamp_col) values "+
+			"(2,'2025-02-03','2025-02-03 04:05:06','04:05:06','2025-02-03 04:05:06')")
 		var insertedQty int
 		var insertedNullable, insertedNull sql.NullInt64
 		var insertedString, insertedAmount, insertedPriority, insertedFlags string
@@ -179,6 +202,21 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 		require.Equal(t, "0.00", insertedAmount)
 		require.Equal(t, "low", insertedPriority)
 		require.Empty(t, insertedFlags)
+		var binaryHex, varbinaryHex, insertedBlob string
+		var insertedFloat, insertedDouble float64
+		var insertedBit uint64
+		var nullableExprIsNull bool
+		require.NoError(t, dbConn.QueryRowContext(ctx,
+			"select hex(binary_col), hex(varbinary_col), blob_col, float_col, double_col, bit_col + 0, nullable_expr is null "+
+				"from "+db+".ctas_view where id = 2").
+			Scan(&binaryHex, &varbinaryHex, &insertedBlob, &insertedFloat, &insertedDouble, &insertedBit, &nullableExprIsNull))
+		require.Equal(t, "00000000", binaryHex)
+		require.Empty(t, varbinaryHex)
+		require.Equal(t, "blob-seed", insertedBlob)
+		require.Zero(t, insertedFloat)
+		require.Zero(t, insertedDouble)
+		require.Zero(t, insertedBit)
+		require.True(t, nullableExprIsNull)
 	})
 }
 

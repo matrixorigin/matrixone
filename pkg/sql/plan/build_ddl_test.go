@@ -638,6 +638,51 @@ func TestBuildCTASFromViewUsesIndependentExecutableDefault(t *testing.T) {
 	}
 }
 
+func TestCTASViewDefaultPolicyMatrix(t *testing.T) {
+	explicitDefault := &plan.Default{
+		Expr:         makePlan2Int32ConstExprWithType(1),
+		OriginString: "1",
+	}
+	blobExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_blob), NotNullable: true},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "blob_default"},
+		}},
+	}
+
+	for _, test := range []struct {
+		name       string
+		typ        plan.Type
+		defaultDef *plan.Default
+		wantPolicy CTASDefaultPolicy
+		wantOrigin string
+	}{
+		{name: "date", typ: plan.Type{Id: int32(types.T_date), NotNullable: true}, defaultDef: explicitDefault},
+		{name: "datetime", typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}, defaultDef: explicitDefault},
+		{name: "time", typ: plan.Type{Id: int32(types.T_time), NotNullable: true}, defaultDef: explicitDefault},
+		{name: "timestamp", typ: plan.Type{Id: int32(types.T_timestamp), NotNullable: true}, defaultDef: explicitDefault},
+		{name: "binary", typ: plan.Type{Id: int32(types.T_binary), Width: 8, NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "''"},
+		{name: "varbinary", typ: plan.Type{Id: int32(types.T_varbinary), Width: 8, NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "''"},
+		{name: "float", typ: plan.Type{Id: int32(types.T_float32), NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "0"},
+		{name: "double", typ: plan.Type{Id: int32(types.T_float64), NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "0"},
+		{name: "bit", typ: plan.Type{Id: int32(types.T_bit), Width: 8, NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "0"},
+		{name: "blob expression", typ: plan.Type{Id: int32(types.T_blob), NotNullable: true}, defaultDef: &plan.Default{Expr: blobExpr, OriginString: "(blob_default())"}, wantPolicy: CTASDefaultInheritViewSource},
+		{name: "nullable expression", typ: plan.Type{Id: int32(types.T_varchar)}, defaultDef: &plan.Default{NullAbility: true, Expr: makePlan2StringConstExprWithType("seed"), OriginString: "('seed')"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			metadata := SourceColumnMetadata{Typ: test.typ, Default: DeepCopyDefault(test.defaultDef)}
+			require.Equal(t, test.wantPolicy, ctasViewDefaultPolicy(metadata))
+			origin, ok := ctasViewTypeDefaultOrigin(test.typ)
+			if test.wantPolicy == CTASDefaultUseTypeDefault {
+				require.True(t, ok)
+				require.Equal(t, test.wantOrigin, origin)
+			} else if test.typ.NotNullable && test.wantPolicy != CTASDefaultUseTypeDefault {
+				require.False(t, ok)
+			}
+		})
+	}
+}
+
 func addMySQLSpecialTypeColumns(ctx *MockCompilerContext) {
 	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols,
 		&plan.ColDef{

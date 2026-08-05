@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -34,6 +35,7 @@ type CTASDefaultPolicy uint8
 const (
 	CTASDefaultNone CTASDefaultPolicy = iota
 	CTASDefaultInheritSource
+	CTASDefaultInheritViewSource
 	CTASDefaultUseTypeDefault
 )
 
@@ -82,18 +84,25 @@ func hasExplicitSourceDefault(metadata SourceColumnMetadata) bool {
 	return metadata.Default != nil
 }
 
-func canUseCTASViewTypeDefault(metadata SourceColumnMetadata) bool {
-	_, ok := ctasViewTypeDefaultOrigin(metadata.Typ)
-	return ok
+func ctasViewDefaultPolicy(metadata SourceColumnMetadata) CTASDefaultPolicy {
+	if !metadata.Typ.NotNullable || !hasExplicitSourceDefault(metadata) {
+		return CTASDefaultNone
+	}
+	if types.T(metadata.Typ.Id) == types.T_blob &&
+		(metadata.Default.Expr != nil || metadata.Default.OriginString != "") {
+		return CTASDefaultInheritViewSource
+	}
+	if _, ok := ctasViewTypeDefaultOrigin(metadata.Typ); ok {
+		return CTASDefaultUseTypeDefault
+	}
+	return CTASDefaultNone
 }
 
 func (bc *BindContext) markViewCTASDefaultBoundary() {
 	for i := 0; i < min(len(bc.headings), len(bc.projects)); i++ {
 		provenance := bc.outputColumnProvenanceForProject(int32(i))
-		if provenance.State == ProvenanceSingleSource && provenance.Source != nil &&
-			hasExplicitSourceDefault(provenance.Source.Metadata) &&
-			canUseCTASViewTypeDefault(provenance.Source.Metadata) {
-			provenance.CTASDefaultPolicy = CTASDefaultUseTypeDefault
+		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
+			provenance.CTASDefaultPolicy = ctasViewDefaultPolicy(provenance.Source.Metadata)
 		}
 		bc.outputColumnProvenance[int32(i)] = provenance
 	}

@@ -289,10 +289,16 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 		defaultDef := &plan.Default{NullAbility: nullAbility}
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
 			switch provenance.CTASDefaultPolicy {
-			case CTASDefaultInheritSource:
+			case CTASDefaultInheritSource, CTASDefaultInheritViewSource:
 				if provenance.Source.Metadata.Default != nil {
 					defaultDef = DeepCopyDefault(provenance.Source.Metadata.Default)
 					defaultDef.NullAbility = nullAbility
+					if !nullAbility && defaultDef.Expr == nil && defaultDef.OriginString != "" {
+						defaultDef, err = buildCTASDefaultFromOrigin(ctx, *typ, false, defaultDef.OriginString)
+						if err != nil {
+							return nil, nil, err
+						}
+					}
 				}
 			case CTASDefaultUseTypeDefault:
 				defaultDef, err = buildCTASDefaultForView(ctx, *typ, nullAbility)
@@ -323,6 +329,12 @@ func buildCTASDefaultForView(ctx CompilerContext, typ plan.Type, nullAbility boo
 		return defaultDef, nil
 	}
 
+	return buildCTASDefaultFromOrigin(ctx, typ, false, originString)
+}
+
+func buildCTASDefaultFromOrigin(
+	ctx CompilerContext, typ plan.Type, nullAbility bool, originString string,
+) (*plan.Default, error) {
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, "select "+originString, 1)
 	if err != nil {
 		return nil, err
@@ -351,12 +363,17 @@ func buildCTASDefaultForView(ctx CompilerContext, typ plan.Type, nullAbility boo
 	if err != nil {
 		return nil, err
 	}
-	defaultDef.Expr = defaultExpr
-	defaultDef.OriginString = originString
-	return defaultDef, nil
+	return &plan.Default{
+		NullAbility:  nullAbility,
+		Expr:         defaultExpr,
+		OriginString: originString,
+	}, nil
 }
 
 func ctasViewTypeDefaultOrigin(typ plan.Type) (string, bool) {
+	if isSetPlanType(&typ) {
+		return "''", true
+	}
 	if isEnumPlanType(&typ) {
 		elements := strings.Split(typ.Enumvalues, ",")
 		if len(elements) == 0 {
@@ -365,14 +382,21 @@ func ctasViewTypeDefaultOrigin(typ plan.Type) (string, bool) {
 		return "'" + formatStrInSingleQuotes(elements[0]) + "'", true
 	}
 
-	originString := buildNotNullColumnVal(&plan.ColDef{Typ: typ})
-	if originString == "null" {
+	switch types.T(typ.Id) {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64, types.T_bool, types.T_bit:
+		return "0", true
+	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+		if typ.Scale > 0 {
+			return "0." + strings.Repeat("0", int(typ.Scale)), true
+		}
+		return "0", true
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary:
+		return "''", true
+	default:
 		return "", false
 	}
-	if types.T(typ.Id).IsDecimal() && typ.Scale > 0 {
-		originString = "0." + strings.Repeat("0", int(typ.Scale))
-	}
-	return originString, true
 }
 
 func ctasExprCanBeNull(expr *Expr) bool {
