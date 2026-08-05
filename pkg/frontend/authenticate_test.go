@@ -5931,6 +5931,80 @@ func TestExtractPrivilegeTipsFromPlanKeepsUserDedupJoinSources(t *testing.T) {
 	}, got)
 }
 
+func TestInsertDedupTargetScansMalformedPlans(t *testing.T) {
+	column := func(child int32) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: child}}}
+	}
+	join := func(children []int32, condition *plan.Expr) *plan.Node {
+		return &plan.Node{
+			NodeType:          plan.Node_JOIN,
+			JoinType:          plan.Node_DEDUP,
+			Children:          children,
+			OnList:            []*plan.Expr{condition},
+			OnDuplicateAction: plan.Node_FAIL,
+			DedupColName:      "PRIMARY",
+		}
+	}
+
+	require.Nil(t, insertDedupTargetScans(nil))
+	require.Nil(t, insertDedupTargetScans(&plan.Query{StmtType: plan.Query_SELECT}))
+
+	// A malformed DEDUP probe must fail closed: no target scan becomes exempt
+	// from SELECT privilege checking.
+	for _, node := range []*plan.Node{
+		join([]int32{0, 1}, nil),
+		join([]int32{0, 1}, &plan.Expr{}),
+		join([]int32{0, 1}, &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{}}}),
+		join([]int32{0, 1}, &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{{}}}}}),
+		join([]int32{0, 1}, &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{column(-1)}}}}),
+		join([]int32{0, 1}, &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{column(2)}}}}),
+	} {
+		q := &plan.Query{StmtType: plan.Query_INSERT, Nodes: []*plan.Node{
+			{NodeType: plan.Node_TABLE_SCAN},
+			{NodeType: plan.Node_VALUE_SCAN},
+			node,
+		}}
+		require.Empty(t, insertDedupTargetScans(q))
+	}
+
+	// Traversal accepts only the target child, tolerates invalid and nil child
+	// references, and remains cycle-safe when the same child is listed twice.
+	q := &plan.Query{StmtType: plan.Query_INSERT, Nodes: []*plan.Node{
+		{NodeType: plan.Node_TABLE_SCAN},
+		{NodeType: plan.Node_VALUE_SCAN},
+		{NodeType: plan.Node_PROJECT, Children: []int32{0, 0, 3, -1}},
+		nil,
+		join([]int32{2, 1}, &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{column(0)}}}}),
+	}}
+	require.Equal(t, map[int32]struct{}{0: {}}, insertDedupTargetScans(q))
+}
+
+func TestFirstColumnChildIndex(t *testing.T) {
+	column := &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1}}}
+	nestedColumn := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+		{},
+		{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{column}}}},
+	}}}}
+
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+		want int32
+		ok   bool
+	}{
+		{name: "nil", expr: nil},
+		{name: "no column", expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{}}}},
+		{name: "column", expr: column, want: 1, ok: true},
+		{name: "nested column", expr: nestedColumn, want: 1, ok: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := firstColumnChildIndex(tc.expr)
+			require.Equal(t, tc.ok, ok)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func Test_extractPrivilegeTipsFromPlan_Subscription(t *testing.T) {
 	// When a TABLE_SCAN node has SubscriptionName set, the extracted
 	// privilegeTips should use the subscription database name instead
