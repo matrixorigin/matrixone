@@ -620,7 +620,7 @@ func sqlTaskInt64(v any) int64 {
 %type <expr> merge_search_condition_opt
 %type <str> matched_keyword
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt savepoint_stmt release_savepoint_stmt rollback_to_savepoint_stmt
-%type <statement> explain_stmt explainable_stmt
+%type <statement> explain_stmt explain_plan_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt set_logservice_non_voting_replica_num
 %type <statement> lock_stmt lock_table_stmt unlock_table_stmt
 %type <statement> revoke_stmt grant_stmt
@@ -3384,6 +3384,7 @@ unlock_table_stmt:
 prepareable_stmt:
     create_stmt
 |   alter_stmt
+|   explain_plan_stmt
 |   insert_stmt
 |   replace_stmt
 |   delete_stmt
@@ -3470,7 +3471,13 @@ explain_stmt:
     {
         $$ = tree.NewExplainFor($4, uint64($7.(int64)))
     }
-|   explain_sym explainable_stmt
+|   explain_plan_stmt
+    {
+        $$ = $1
+    }
+
+explain_plan_stmt:
+    explain_sym explainable_stmt
     {
         $$ = tree.NewExplainStmt($2, "text")
     }

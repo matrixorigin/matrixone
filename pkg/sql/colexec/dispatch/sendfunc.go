@@ -435,7 +435,23 @@ func sendBatchToClientSession(
 		}
 	}
 
-	// Send data (original logic unchanged)
+	var batchSequence uint64
+	batchSent := false
+	if wcs.ReserveBatch != nil {
+		batchSequence, err = wcs.ReserveBatch(ctx, uint64(len(encodeBatData)))
+		if err != nil {
+			return false, err
+		}
+		defer func() {
+			if !batchSent && wcs.RollbackBatch != nil {
+				wcs.RollbackBatch(batchSequence)
+			}
+		}()
+	}
+
+	// A logical batch uses one sequence number even when morpc fragmentation is
+	// required. The receiver acknowledges it only after all fragments have been
+	// reconstructed and handed to the local pipeline.
 	if len(encodeBatData) <= maxMessageSizeToMoRpc {
 		msg := cnclient.AcquireMessage()
 		{
@@ -443,10 +459,14 @@ func sendBatchToClientSession(
 			msg.Data = encodeBatData
 			msg.Cmd = pipeline.Method_BatchMessage
 			msg.Sid = pipeline.Status_Last
+			msg.BatchSequence = batchSequence
+			msg.AcceptedBatchCreditCount = wcs.BatchCredits
+			msg.AcceptedBatchCreditBytes = wcs.ByteCredits
 		}
 		if err = wcs.Cs.Write(ctx, msg); err != nil {
 			return false, err
 		}
+		batchSent = true
 		return false, nil
 	}
 
@@ -465,6 +485,9 @@ func sendBatchToClientSession(
 			msg.Data = encodeBatData[start:end]
 			msg.Cmd = pipeline.Method_BatchMessage
 			msg.Sid = sid
+			msg.BatchSequence = batchSequence
+			msg.AcceptedBatchCreditCount = wcs.BatchCredits
+			msg.AcceptedBatchCreditBytes = wcs.ByteCredits
 		}
 
 		if err = wcs.Cs.Write(ctx, msg); err != nil {
@@ -472,5 +495,6 @@ func sendBatchToClientSession(
 		}
 		start = end
 	}
+	batchSent = true
 	return false, nil
 }

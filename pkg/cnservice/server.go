@@ -1121,7 +1121,9 @@ func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc
 		}
 		fragment, ok := cached.(*pipeline.Message)
 		if !ok || fragment.GetCmd() != finalMessage.GetCmd() ||
-			fragment.GetRequestedTeardownMode() != finalMessage.GetRequestedTeardownMode() {
+			fragment.GetRequestedTeardownMode() != finalMessage.GetRequestedTeardownMode() ||
+			fragment.GetRequestedBatchCreditCount() != finalMessage.GetRequestedBatchCreditCount() ||
+			fragment.GetRequestedBatchCreditBytes() != finalMessage.GetRequestedBatchCreditBytes() {
 			return moerr.NewInvalidInputNoCtx("inconsistent pipeline message fragments")
 		}
 		data = append(data, fragment.GetData()...)
