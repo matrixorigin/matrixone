@@ -252,14 +252,20 @@ func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 
 	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES"))
 	stmt := &trackedStatement{}
 	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
 	require.True(t, ses.isCached("cached-sql"))
-
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES"))
 	require.True(t, ses.isCached("cached-sql"))
 	require.Zero(t, stmt.freed)
 
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,ONLY_FULL_GROUP_BY"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
 	require.NoError(t, ses.SetSessionSysVar(ctx, "SQL_MODE", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE"))
 	require.False(t, ses.isCached("cached-sql"))
 	require.Equal(t, 1, stmt.freed)
@@ -302,6 +308,14 @@ func TestSessionSQLModePresenceMatcherUsesExactToken(t *testing.T) {
 	require.True(t, has)
 
 	has, ok = sqlModeHasMatrixOneNativeValue("STRICT_TRANS_TABLES, MATRIXONE_NATIVE_EXTRA")
+	require.True(t, ok)
+	require.False(t, has)
+
+	has, ok = sqlModeHasOnlyFullGroupByValue("STRICT_TRANS_TABLES, ONLY_FULL_GROUP_BY")
+	require.True(t, ok)
+	require.True(t, has)
+
+	has, ok = sqlModeHasOnlyFullGroupByValue("STRICT_TRANS_TABLES, ONLY_FULL_GROUP_BY_EXTRA")
 	require.True(t, ok)
 	require.False(t, has)
 }

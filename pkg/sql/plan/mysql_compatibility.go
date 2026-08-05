@@ -19,7 +19,11 @@ import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 func (builder *QueryBuilder) wrapBareColRefsInAnyValue(expr *plan.Expr, ctx *BindContext) *plan.Expr {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		if exprImpl.Col.RelPos == ctx.groupTag || exprImpl.Col.RelPos == ctx.aggregateTag {
+		// Window results are produced above AGG. They must remain window-tag
+		// references in the final projection rather than becoming any_value()
+		// inputs to the aggregate stage.
+		if exprImpl.Col.RelPos == ctx.groupTag || exprImpl.Col.RelPos == ctx.aggregateTag ||
+			(ctx.windowTag > 0 && exprImpl.Col.RelPos == ctx.windowTag) {
 			return expr
 		}
 		newExpr, _ := BindFuncExprImplByPlanExpr(builder.compCtx.GetContext(), "any_value", []*plan.Expr{expr})
@@ -38,6 +42,16 @@ func (builder *QueryBuilder) wrapBareColRefsInAnyValue(expr *plan.Expr, ctx *Bin
 	case *plan.Expr_F:
 		for i, arg := range exprImpl.F.Args {
 			exprImpl.F.Args[i] = builder.wrapBareColRefsInAnyValue(arg, ctx)
+		}
+		return expr
+
+	case *plan.Expr_W:
+		exprImpl.W.WindowFunc = builder.wrapBareColRefsInAnyValue(exprImpl.W.WindowFunc, ctx)
+		for i, partitionBy := range exprImpl.W.PartitionBy {
+			exprImpl.W.PartitionBy[i] = builder.wrapBareColRefsInAnyValue(partitionBy, ctx)
+		}
+		for _, orderBy := range exprImpl.W.OrderBy {
+			orderBy.Expr = builder.wrapBareColRefsInAnyValue(orderBy.Expr, ctx)
 		}
 		return expr
 
