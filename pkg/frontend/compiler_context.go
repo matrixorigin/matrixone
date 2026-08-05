@@ -584,6 +584,7 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 	if ref.PubInfo != nil {
 		subMeta = &plan.SubscriptionMeta{
 			AccountId: ref.PubInfo.TenantId,
+			DbName:    ref.SchemaName,
 		}
 	}
 

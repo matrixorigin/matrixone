@@ -55,6 +55,124 @@ func isEnumOrSetPlanType(typ *plan.Type) bool {
 	return isEnumPlanType(typ) || isSetPlanType(typ)
 }
 
+// makeInsertIgnoreMySQLSpecialTypeConstExpr implements MySQL's INSERT IGNORE
+// coercion for literal YEAR, ENUM, and SET values. BIT coercion stays in the
+// shared literal parser. Regular INSERT keeps the existing strict conversion
+// path; only IGNORE reaches this helper.
+func makeInsertIgnoreMySQLSpecialTypeConstExpr(
+	ctx context.Context,
+	value *tree.NumVal,
+	targetType plan.Type,
+) (*plan.Expr, bool, error) {
+	if value == nil || value.ValType == tree.P_null || value.ValType == tree.P_nulltext {
+		return nil, false, nil
+	}
+
+	if isEnumPlanType(&targetType) {
+		index, err := mysqlEnumLiteralIndex(targetType.Enumvalues, value)
+		if err != nil {
+			index = 0 // invalid ENUM values are stored as the empty-error member
+		}
+		return &plan.Expr{
+			Typ: targetType,
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_EnumVal{EnumVal: uint32(index)},
+			}},
+		}, true, nil
+	}
+
+	if isSetPlanType(&targetType) {
+		bits := mysqlSetIgnoreLiteralBits(targetType.Enumvalues, value)
+		return &plan.Expr{
+			Typ: targetType,
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_U64Val{U64Val: bits},
+			}},
+		}, true, nil
+	}
+
+	if types.T(targetType.Id) == types.T_year && !mysqlYearLiteralIsValid(value) {
+		zero := makePlan2Int64ConstExprWithType(0)
+		expr, err := appendCastBeforeExpr(ctx, zero, targetType)
+		return expr, true, err
+	}
+
+	return nil, false, nil
+}
+
+func mysqlEnumLiteralIndex(enumValues string, value *tree.NumVal) (types.Enum, error) {
+	switch value.ValType {
+	case tree.P_int64:
+		v, ok := value.Int64()
+		if !ok || v < 0 || v > int64(^uint16(0)) {
+			return 0, moerr.NewInvalidInputNoCtx("invalid ENUM index")
+		}
+		return types.ParseEnumValue(enumValues, uint16(v))
+	case tree.P_uint64:
+		v, ok := value.Uint64()
+		if !ok || v > uint64(^uint16(0)) {
+			return 0, moerr.NewInvalidInputNoCtx("invalid ENUM index")
+		}
+		return types.ParseEnumValue(enumValues, uint16(v))
+	default:
+		return types.ParseEnum(enumValues, value.String())
+	}
+}
+
+func mysqlSetIgnoreLiteralBits(setValues string, value *tree.NumVal) uint64 {
+	if value.ValType == tree.P_int64 {
+		if v, ok := value.Int64(); ok && v >= 0 {
+			return uint64(v) & mysqlSetValidBitmap(setValues)
+		}
+	}
+	if value.ValType == tree.P_uint64 {
+		if v, ok := value.Uint64(); ok {
+			return v & mysqlSetValidBitmap(setValues)
+		}
+	}
+
+	bits := uint64(0)
+	for _, member := range strings.Split(value.String(), ",") {
+		memberBits, err := types.ParseSet(setValues, member)
+		if err == nil {
+			bits |= memberBits
+		}
+	}
+	return bits
+}
+
+func mysqlSetValidBitmap(setValues string) uint64 {
+	memberCount := len(strings.Split(setValues, ","))
+	if memberCount >= types.MaxSetMembers {
+		return ^uint64(0)
+	}
+	return (uint64(1) << uint(memberCount)) - 1
+}
+
+func mysqlYearLiteralIsValid(value *tree.NumVal) bool {
+	switch value.ValType {
+	case tree.P_int64:
+		v, ok := value.Int64()
+		if !ok {
+			return false
+		}
+		_, err := types.ParseMoYearFromInt(v)
+		return err == nil
+	case tree.P_uint64:
+		v, ok := value.Uint64()
+		if !ok || v > uint64(^uint64(0)>>1) {
+			return false
+		}
+		_, err := types.ParseMoYearFromInt(int64(v))
+		return err == nil
+	case tree.P_char:
+		_, err := types.ParseMoYear(value.String())
+		return err == nil
+	default:
+		return true
+	}
+}
+
 func isGeometryPlanType(typ *plan.Type) bool {
 	return typ != nil && (typ.Id == int32(types.T_geometry) || typ.Id == int32(types.T_geometry32))
 }
@@ -310,6 +428,60 @@ func (bc *BindContext) mysqlSpecialOrderTypeForProject(colPos int32) *plan.Type 
 		return nil
 	}
 	return bc.mysqlSpecialOrderTypeForExpr(bc.projects[colPos])
+}
+
+func (bc *BindContext) setMySQLSpecialCanonicalType(colPos int32, typ *plan.Type) {
+	if bc.mysqlSpecialCanonicalTypes == nil {
+		bc.mysqlSpecialCanonicalTypes = make(map[int32]*plan.Type)
+	}
+	bc.mysqlSpecialCanonicalTypes[colPos] = DeepCopyType(typ)
+}
+
+func (bc *BindContext) mysqlSpecialCanonicalTypeForExpr(expr *plan.Expr) *plan.Type {
+	if expr == nil {
+		return nil
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return nil
+	}
+	if col.RelPos == bc.projectTag && col.ColPos >= 0 && int(col.ColPos) < len(bc.projects) {
+		if typ, recorded := bc.mysqlSpecialCanonicalTypes[col.ColPos]; recorded {
+			return DeepCopyType(typ)
+		}
+		project := bc.projects[col.ColPos]
+		if project == nil {
+			return nil
+		}
+		if projectCol := project.GetCol(); projectCol != nil &&
+			projectCol.RelPos == col.RelPos && projectCol.ColPos == col.ColPos {
+			return nil
+		}
+		return bc.mysqlSpecialCanonicalTypeForExpr(project)
+	}
+	binding := bc.bindingByTag[col.RelPos]
+	if binding == nil || col.ColPos < 0 || int(col.ColPos) >= len(binding.mysqlSpecialCanonicalTypes) {
+		return nil
+	}
+	return DeepCopyType(binding.mysqlSpecialCanonicalTypes[col.ColPos])
+}
+
+func (bc *BindContext) mysqlSpecialCanonicalTypeForProject(colPos int32) *plan.Type {
+	if typ, recorded := bc.mysqlSpecialCanonicalTypes[colPos]; recorded {
+		return DeepCopyType(typ)
+	}
+	if colPos < 0 || int(colPos) >= len(bc.projects) {
+		return nil
+	}
+	return bc.mysqlSpecialCanonicalTypeForExpr(bc.projects[colPos])
+}
+
+func mysqlSpecialTypeFromProvenance(provenance OutputColumnProvenance) *plan.Type {
+	if provenance.State != ProvenanceSingleSource || provenance.Source == nil ||
+		!isEnumOrSetPlanType(&provenance.Source.Metadata.Typ) {
+		return nil
+	}
+	return DeepCopyType(&provenance.Source.Metadata.Typ)
 }
 
 func mysqlSpecialOrderTypesCompatible(left, right *plan.Type) bool {

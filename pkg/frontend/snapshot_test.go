@@ -90,7 +90,7 @@ func TestMongoDBMappingsFollowExternalTableRestoreSkipPolicy(t *testing.T) {
 		require.True(t, needSkipTable(accountID, moCatalog, sqlmongodb.TableMappings))
 		require.True(t, needSkipSystemTable(accountID, info))
 	}
-	require.Equal(t, int8(1), needSkipTablesInMocatalog[sqlmongodb.TableMappings])
+	require.Equal(t, systemCatalogRestoreSkip, systemCatalogRestorePolicies[sqlmongodb.TableMappings])
 }
 
 func TestMergeFkDepsDeduplicatesSources(t *testing.T) {

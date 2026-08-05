@@ -121,6 +121,33 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
 		}
+		newExpr, _ := BindFuncExprImplByPlanExpr(b.builder.compCtx.GetContext(), "any_value", []*plan.Expr{expr})
+		colPos := len(b.ctx.aggregates)
+		b.ctx.aggregates = append(b.ctx.aggregates, newExpr)
+		return &plan.Expr{
+			Typ: b.ctx.aggregates[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: b.ctx.aggregateTag,
+					ColPos: int32(colPos),
+				},
+			},
+		}, nil
+	} else if b.builder.mysqlFullGroupByCompat {
+		expr, err := b.baseBindColRef(astExpr, depth, isRoot)
+		if err != nil {
+			return nil, err
+		}
+
+		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
+			if b.corrColRefTargetsCurrentGroup(corr.Corr) || b.corrColRefTargetsGroup(corr.Corr) {
+				return expr, nil
+			}
+			return nil, b.newGroupByColumnError(astExpr)
+		}
+		if !b.builder.mysqlFullGroupByAllowsColRef(b.ctx, expr) {
+			return nil, b.newGroupByColumnError(astExpr)
+		}
 
 		newExpr, _ := BindFuncExprImplByPlanExpr(b.builder.compCtx.GetContext(), "any_value", []*plan.Expr{expr})
 		colPos := len(b.ctx.aggregates)

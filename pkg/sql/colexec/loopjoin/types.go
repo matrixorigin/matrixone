@@ -83,6 +83,9 @@ type LoopJoin struct {
 	MarkPos           int
 	allocationAccount *mpool.AllocationAccount
 	resultAllocation  *vector.AllocationAccountSelection
+	// recursiveProbe is derived from the operator tree during Prepare. An empty
+	// INNER/SEMI build must still drain a recursive probe until its round marker.
+	recursiveProbe bool
 
 	vm.OperatorBase
 }
