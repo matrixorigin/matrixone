@@ -140,6 +140,8 @@ message Group {
   repeated uint32 PartialResultTypes = 9;
   repeated bool grouping_flag = 10;
   int64 spill_mem = 11;
+  // Positions in exprs used for physical hash/equality. Empty means all exprs.
+  repeated int32 group_by_hash_key = 12;
 }
 
 message Insert {

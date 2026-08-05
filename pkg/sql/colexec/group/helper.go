@@ -682,10 +682,11 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		// insert group by batch into the hash table.
 		rowCount := gbBatch.RowCount()
 		hashBytesBefore := ctr.hr.Hash.Size()
+		hashKeyVecs := ctr.hashKeyVectors(gbBatch.Vecs)
 		for i := 0; i < rowCount; i += hashmap.UnitLimit {
 			n := min(rowCount-i, hashmap.UnitLimit)
 			originGroupCount := ctr.hr.Hash.GroupCount()
-			vals, _, err := ctr.hr.Itr.Insert(i, n, gbBatch.Vecs)
+			vals, _, err := ctr.hr.Itr.Insert(i, n, hashKeyVecs)
 			if err != nil {
 				return false, err
 			}
