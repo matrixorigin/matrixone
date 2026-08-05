@@ -395,7 +395,13 @@ func (l *localLockTable) unlock(
 				// cannot dead lock here, the replaceTo txn was created on the same cn.
 				replaceToTxn := l.txnHolder.getActiveTxn(mutations[idx].ReplaceTo, true, txn.remoteService)
 				replaceToTxn.Lock()
-				_ = replaceToTxn.lockAdded(l.bind.Group, l.bind, [][]byte{key}, l.logger)
+				_ = replaceToTxn.lockAdded(
+					l.bind.Group,
+					l.bind,
+					[][]byte{key},
+					pb.LockOptions{Mode: lock.GetLockMode(), Sharding: l.bind.Sharding},
+					l.logger,
+				)
 				replaceToTxn.Unlock()
 				return true
 			}
@@ -548,6 +554,7 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 						l.bind.Group,
 						l.bind,
 						[][]byte{key},
+						c.opts.LockOptions,
 						l.logger,
 					)
 				},
@@ -641,7 +648,13 @@ func (l *localLockTable) addRowLockLocked(
 
 	// we must first add the lock to txn to ensure that the
 	// lock can be read when the deadlock is detected.
-	err := c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{row}, l.logger)
+	err := c.txn.lockAdded(
+		l.bind.Group,
+		l.bind,
+		[][]byte{row},
+		c.opts.LockOptions,
+		l.logger,
+	)
 	if err != nil {
 		return err
 	}
@@ -817,6 +830,7 @@ func (l *localLockTable) addRangeLockLocked(
 					l.bind.Group,
 					l.bind,
 					[][]byte{start, end},
+					c.opts.LockOptions,
 					l.logger,
 				)
 			}
@@ -933,6 +947,7 @@ func (l *localLockTable) addRangeLockLocked(
 						l.bind.Group,
 						l.bind,
 						[][]byte{conflictKey},
+						c.opts.LockOptions,
 						l.logger,
 					)
 				},
@@ -1021,7 +1036,13 @@ func (l *localLockTable) addRangeLockLocked(
 
 	// similar to row lock
 	if !txnLocksReplaced {
-		err = c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{start, end}, l.logger)
+		err = c.txn.lockAdded(
+			l.bind.Group,
+			l.bind,
+			[][]byte{start, end},
+			c.opts.LockOptions,
+			l.logger,
+		)
 		if err != nil {
 			return nil, Lock{}, err
 		}

@@ -152,7 +152,7 @@ func (lp *localLockTableProxy) lock(
 	r := v.result
 	lp.mu.Unlock()
 	bind := lp.getBind()
-	err := txn.lockAdded(bind.Group, bind, rows, lp.logger)
+	err := txn.lockAdded(bind.Group, bind, rows, options.LockOptions, lp.logger)
 	if err != nil {
 		lp.mu.Lock()
 		v.remove(txn)

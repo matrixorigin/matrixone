@@ -34,8 +34,9 @@ var (
 )
 
 type tableLockHolder struct {
-	tableKeys  map[uint64]*cowSlice
-	tableBinds map[uint64]pb.LockTable
+	tableKeys            map[uint64]*cowSlice
+	tableBinds           map[uint64]pb.LockTable
+	nonCoarsenableTables map[uint64]struct{}
 	// tableBindIntents records bind versions touched before a lock attempt
 	// finishes, so bind-change fencing also covers failed in-flight attempts.
 	tableBindIntents map[uint64]pb.LockTable
@@ -112,6 +113,7 @@ func (txn *activeTxn) lockAdded(
 	group uint32,
 	bind pb.LockTable,
 	locks [][]byte,
+	opts pb.LockOptions,
 	logger *log.MOLogger,
 ) error {
 
@@ -142,15 +144,57 @@ func (txn *activeTxn) lockAdded(
 	v, ok := h.tableKeys[bind.Table]
 	var err error
 	if ok {
-		return v.append(locks)
+		err = v.append(locks)
+	} else {
+		var cs *cowSlice
+		cs, err = newCowSlice(txn.fsp, locks)
+		if err == nil {
+			h.tableKeys[bind.Table] = cs
+			h.tableBinds[bind.Table] = bind
+		}
 	}
-	cs, err := newCowSlice(txn.fsp, locks)
 	if err != nil {
 		return err
 	}
-	h.tableKeys[bind.Table] = cs
-	h.tableBinds[bind.Table] = bind
+	// Cumulative coarsening is safe only while the complete retained
+	// transaction/table ownership consists of non-sharded Exclusive locks.
+	// Transaction bookkeeping intentionally stores keys rather than per-key
+	// modes, so conservatively make ineligibility monotonic for this transaction.
+	if opts.Mode != pb.LockMode_Exclusive || opts.Sharding != pb.Sharding_None {
+		if h.nonCoarsenableTables == nil {
+			h.nonCoarsenableTables = make(map[uint64]struct{})
+		}
+		if _, disabled := h.nonCoarsenableTables[bind.Table]; !disabled {
+			h.nonCoarsenableTables[bind.Table] = struct{}{}
+		}
+	}
 	return nil
+}
+
+// hasExactLockLocked reports whether one key is already represented exactly in
+// transaction bookkeeping. The caller must hold txn's mutex. It is used only
+// for the uncommon fully re-entrant singleton remote response, so keeping the
+// ordinary lockAdded path free of an extra per-key index is more important than
+// optimizing this bounded scan. A row covered by an existing range may return
+// false here; conservatively retaining that row as an additional cleanup key is
+// safe.
+func (txn *activeTxn) hasExactLockLocked(
+	group uint32,
+	table uint64,
+	lock []byte,
+) bool {
+	h, ok := txn.lockHolders[group]
+	if !ok || h.tableKeys[table] == nil {
+		return false
+	}
+	held := h.tableKeys[table].slice()
+	defer held.unref()
+	found := false
+	held.iter(func(key []byte) bool {
+		found = bytes.Equal(key, lock)
+		return !found
+	})
+	return found
 }
 
 // coarsenLockRequest enforces the row-lock budget at the owner of the actual
@@ -164,13 +208,12 @@ func (txn *activeTxn) lockAdded(
 // maximum replaces them. The range can cover gaps, but never keys outside the
 // observed bounds as a table lock would.
 //
-// Exclusive requests can be coarsened because replacing locks with an exclusive
-// range cannot weaken this transaction's ownership. Shared requests deliberately
-// stay exact: the non-overlapping range representation cannot replace one
-// transaction's rows across foreign Shared holders without either waiting on a
-// compatible lock or broadening another transaction's ownership. Row-sharded
-// requests cannot be represented by one range because its endpoints may belong
-// to different physical lock tables.
+// An Exclusive request can be coarsened only when every retained lock is also
+// non-sharded Exclusive; otherwise the replacement could strengthen historical
+// Shared ownership or span keys from different physical tables. Shared requests
+// deliberately stay exact: the non-overlapping range representation cannot
+// replace one transaction's rows across foreign Shared holders without either
+// waiting on a compatible lock or broadening another transaction's ownership.
 func (txn *activeTxn) coarsenLockRequest(
 	group uint32,
 	table uint64,
@@ -199,6 +242,9 @@ func (txn *activeTxn) coarsenLockRequest(
 	var held *cowSlice
 	heldCount := 0
 	if h, ok := txn.lockHolders[group]; ok {
+		if _, disabled := h.nonCoarsenableTables[table]; disabled {
+			return rows, opts, false
+		}
 		held = h.tableKeys[table]
 		if held != nil {
 			heldCount = held.mustGet().len()
@@ -484,11 +530,13 @@ func (txn *activeTxn) removeClosedLockTable(
 	}
 	delete(h.tableKeys, table)
 	delete(h.tableBinds, table)
+	delete(h.nonCoarsenableTables, table)
 	// Keep the intent until the whole transaction closes. It owns the service
 	// drain reference even after this table was successfully released during a
 	// retryable, multi-table cleanup.
 	cs.close()
 	if len(h.tableKeys) == 0 && len(h.tableBinds) == 0 &&
+		len(h.nonCoarsenableTables) == 0 &&
 		len(h.tableBindIntents) == 0 {
 		delete(txn.lockHolders, group)
 	}
@@ -502,6 +550,9 @@ func (txn *activeTxn) reset() {
 		}
 		for table := range h.tableBinds {
 			delete(h.tableBinds, table)
+		}
+		for table := range h.nonCoarsenableTables {
+			delete(h.nonCoarsenableTables, table)
 		}
 		for table := range h.tableBindIntents {
 			delete(h.tableBindIntents, table)

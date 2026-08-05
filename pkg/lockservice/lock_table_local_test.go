@@ -1952,7 +1952,7 @@ func TestUnlockLockNotHeldByCurrentTxn(t *testing.T) {
 
 			// Add the same bind to txn2's hold locks to ensure bind is not changed
 			txn2Active.Lock()
-			err = txn2Active.lockAdded(0, lt.bind, rows, lt.logger)
+			err = txn2Active.lockAdded(0, lt.bind, rows, pb.LockOptions{}, lt.logger)
 			require.NoError(t, err)
 			txn2Active.Unlock()
 

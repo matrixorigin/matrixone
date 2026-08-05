@@ -6715,7 +6715,7 @@ func TestDrainWaitsForTxnCloseLinearization(t *testing.T) {
 			txn.Lock()
 			require.True(t, txn.lockTableBindTouched(bind))
 			s.incRef(bind.Group, bind.Table)
-			require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{{1}}, s.logger))
+			require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{{1}}, pb.LockOptions{}, s.logger))
 			txn.Unlock()
 			s.checkCanMoveGroupTables()
 
@@ -6751,7 +6751,7 @@ func TestRetryableUnknownCommitCloseReleasesAllDrainRefs(t *testing.T) {
 				s.tableGroups.set(0, table, lt)
 				require.True(t, txn.lockTableBindTouched(lt.bind))
 				s.incRef(lt.bind.Group, lt.bind.Table)
-				require.NoError(t, txn.lockAdded(0, lt.bind, [][]byte{{byte(table)}}, s.logger))
+				require.NoError(t, txn.lockAdded(0, lt.bind, [][]byte{{byte(table)}}, pb.LockOptions{}, s.logger))
 			}
 			txn.Unlock()
 

@@ -230,7 +230,7 @@ func TestRemoteCoarsenedLockTransportFailureRetainsCleanupUnion(t *testing.T) {
 
 		oldRows := newTestRows(1, 2, 5, 7)
 		txn.Lock()
-		require.NoError(t, txn.lockAdded(bind.Group, bind, oldRows, getLogger("")))
+		require.NoError(t, txn.lockAdded(bind.Group, bind, oldRows, pb.LockOptions{}, getLogger("")))
 
 		var lockErr error
 		remote.lock(
@@ -255,6 +255,76 @@ func TestRemoteCoarsenedLockTransportFailureRetainsCleanupUnion(t *testing.T) {
 		locks := txn.lockHolders[bind.Group].tableKeys[bind.Table].slice()
 		require.Equal(t, append(oldRows, newTestRows(1, 8)...), locks.all())
 		locks.unref()
+		txn.Unlock()
+	})
+}
+
+func TestRemoteMixedModeTransportFailureRetainsExactCleanup(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		bind := pb.LockTable{
+			Group:       0,
+			Table:       26714,
+			OriginTable: 26714,
+			ServiceID:   "owner",
+			Version:     1,
+			Valid:       true,
+			AllocatorID: "allocator",
+		}
+		remote := newRemoteLockTable(
+			"origin",
+			time.Second,
+			bind,
+			&lostCoarsenedLockClient{bind: bind},
+			func(pb.LockTable) {},
+			getLogger(""),
+		)
+		txnID := []byte("lost-mixed-exact-rows")
+		txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(8), "")
+		defer reuse.Free(txn, nil)
+
+		shared := newTestRowSharedOptions()
+		oldRows := newTestRows(1, 2, 5, 7)
+		incomingRows := newTestRows(8, 9)
+		exclusive := newTestRowExclusiveOptions()
+		txn.Lock()
+		require.NoError(t, txn.lockAdded(
+			bind.Group,
+			bind,
+			oldRows,
+			shared,
+			getLogger(""),
+		))
+		rows, opts, replaceTxnLocks := txn.coarsenLockRequest(
+			bind.Group,
+			bind.Table,
+			incomingRows,
+			exclusive,
+			3,
+		)
+		require.False(t, replaceTxnLocks)
+		require.Equal(t, incomingRows, rows)
+
+		var lockErr error
+		remote.lock(
+			context.Background(),
+			txn,
+			rows,
+			LockOptions{LockOptions: opts},
+			func(_ pb.Result, err error) { lockErr = err },
+		)
+		require.Error(t, lockErr)
+
+		// The owner may hold the exact incoming rows even though its response was
+		// lost. Since historical Shared ownership disables replacement, retaining
+		// old and incoming exact keys is both sufficient and capacity-bounded here;
+		// no unrecorded range endpoints can exist.
+		locks := txn.lockHolders[bind.Group].tableKeys[bind.Table].slice()
+		require.Equal(t, append(oldRows, incomingRows...), locks.all())
+		locks.unref()
+		require.Contains(t,
+			txn.lockHolders[bind.Group].nonCoarsenableTables,
+			bind.Table,
+		)
 		txn.Unlock()
 	})
 }

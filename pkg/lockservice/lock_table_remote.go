@@ -186,8 +186,16 @@ func (l *remoteLockTable) lock(
 
 		if opts.replaceTxnLocks {
 			err = txn.replaceLocks(l.bind.Group, l.bind, rows, l.logger)
-		} else {
-			err = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
+		} else if resp.Lock.Result.NewLockAdd ||
+			len(rows) != 1 ||
+			!txn.hasExactLockLocked(l.bind.Group, l.bind.Table, rows[0]) {
+			// The authoritative owner reports whether this request added any
+			// ownership. A fully re-entrant singleton whose exact key is already
+			// recorded needs no append; doing so would make origin capacity drift
+			// from the owner. Multi-row and absent-key cases stay conservative because
+			// proving coverage there would require a new hot-path index or a potentially
+			// quadratic scan.
+			err = txn.lockAdded(l.bind.Group, l.bind, rows, opts.LockOptions, l.logger)
 		}
 		logRemoteLockAdded(l.logger, txn, rows, opts, l.bind)
 		cb(resp.Lock.Result, err)
@@ -201,7 +209,7 @@ func (l *remoteLockTable) lock(
 	// is different: it is an application response from the owner and proves that
 	// no replacement was published, so preserve the exact old bookkeeping.
 	if !moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
-		_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
+		_ = txn.lockAdded(l.bind.Group, l.bind, rows, opts.LockOptions, l.logger)
 	}
 	logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
 	if moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout) {
