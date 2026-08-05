@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -418,6 +417,10 @@ func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
 		logutil.Errorf("%s error:%v", connectionInfo, err)
 		return err
 	}
+	if !routine.mc.tryBeginRequest() {
+		return moerr.NewInternalError(ctx, "cannot process request as routine is closed or busy")
+	}
+	defer routine.mc.endRequest()
 	routine.setInProcessRequest(true)
 	defer routine.setInProcessRequest(false)
 	payload := msg
@@ -506,18 +509,7 @@ func (rm *RoutineManager) MigrateConnectionFromWithContext(
 	if routine == nil {
 		return moerr.NewInternalErrorf(rm.ctx, "cannot get routine to migrate connection %d", req.ConnID)
 	}
-	switch req.Action {
-	case query.MigrateConnFromAction_MigrateConnFromSkipUserLevelLockRelease:
-		if states := function.UserLevelLocksForMigration(routine.getSession().proc); len(states) > 0 {
-			return moerr.NewInternalErrorNoCtx("cannot migrate connection while user-level locks are held")
-		}
-		return routine.migrateConnectionFromWithContext(ctx, nil)
-	case query.MigrateConnFromAction_MigrateConnFromEnableUserLevelLockRelease:
-		routine.getSession().userLevelLocksMigrated = false
-		return nil
-	default:
-		return routine.migrateConnectionFromWithContext(ctx, resp)
-	}
+	return routine.migrateConnectionFromActionWithContext(ctx, req.Action, resp)
 }
 
 func (rm *RoutineManager) ResetSession(req *query.ResetSessionRequest, resp *query.ResetSessionResponse) error {

@@ -363,6 +363,8 @@ message TableFunction {
   bool is_single = 6;
   plan.IndexReaderParam index_reader_param = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 8;
+  plan.ObjectRef fulltext_source_ref = 9;
+  plan.ObjectRef fulltext_index_ref = 10;
 }
 
 message ExternalName2ColIndex {
@@ -651,6 +653,9 @@ message ProcessInfo {
   // Unique physical execution attempt. Unlike the SQL statement ID, this
   // changes across retries and prepared-statement executions.
   bytes remote_execution_id = 12;
+  // Statement-level INSERT IGNORE semantics used by casts in remote pipelines.
+  // Absent in messages from older CNs, which safely decodes as false.
+  bool statement_runtime_ignore = 13;
 }
 
 message SessionInfo {

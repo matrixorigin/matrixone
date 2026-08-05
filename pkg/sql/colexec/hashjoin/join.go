@@ -79,6 +79,15 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 	if hashJoin.allocationAccount == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
+	hashJoin.recursiveProbe = false
+	if hashJoin.NumChildren() > 0 {
+		_ = vm.HandleAllOp(hashJoin.GetChildren(0), func(_ vm.Operator, op vm.Operator) error {
+			if op.OpType() == vm.MergeRecursive {
+				hashJoin.recursiveProbe = true
+			}
+			return nil
+		})
+	}
 
 	if hashJoin.OpAnalyzer == nil {
 		hashJoin.OpAnalyzer = process.NewAnalyzer(hashJoin.GetIdx(), hashJoin.IsFirst, hashJoin.IsLast, opName)
@@ -166,7 +175,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
 
-			if ctr.mp == nil && ctr.spillEngine == nil && !hashJoin.EmitUnmatchedProbe() && !hashJoin.IsMark() {
+			if ctr.mp == nil && ctr.spillEngine == nil && !hashJoin.EmitUnmatchedProbe() && !hashJoin.IsMark() && !hashJoin.recursiveProbe {
 				// TODO: early terminate the probe side for shuffle join
 				if !hashJoin.IsShuffle {
 					ctr.state = End
