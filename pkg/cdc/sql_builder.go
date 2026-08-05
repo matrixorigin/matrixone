@@ -105,7 +105,7 @@ const (
 		"WHERE 1=1 AND account_id = %d"
 
 	CDCGetCdcTaskStateSqlTemplate = "SELECT " +
-		"state " +
+		"state, err_msg " +
 		"FROM `mo_catalog`.`mo_cdc_task` " +
 		"WHERE 1=1 AND account_id = %d AND task_id = '%s'"
 
@@ -426,7 +426,7 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 	},
 	CDCGetTaskStateSqlTemplate_Idx: {
 		SQL:         CDCGetCdcTaskStateSqlTemplate,
-		OutputAttrs: []string{"state"},
+		OutputAttrs: []string{"state", "err_msg"},
 	},
 	CDCInsertWatermarkSqlTemplate_Idx: {
 		SQL: CDCInsertWatermarkSqlTemplate,
