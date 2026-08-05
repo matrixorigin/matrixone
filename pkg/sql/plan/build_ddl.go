@@ -153,15 +153,24 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 
 	// check view statement
 	var stmtPlan *Plan
+	var outputColumnProvenance []OutputColumnProvenance
+	captureColumnTypes := func(bindCtx *BindContext) {
+		outputColumnProvenance = make([]OutputColumnProvenance, len(bindCtx.headings))
+		for i := range outputColumnProvenance {
+			outputColumnProvenance[i] = bindCtx.outputColumnProvenanceForProject(int32(i))
+		}
+	}
 	var err error
 	switch s := stmt.Select.(type) {
 	case *tree.ParenSelect:
-		stmtPlan, err = bindAndOptimizeSelectQueryWithValidator(plan.Query_SELECT, ctx, s.Select, false, true, validate)
+		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
+			plan.Query_SELECT, ctx, s.Select, false, true, validate, captureColumnTypes, true)
 		if err != nil {
 			return nil, err
 		}
 	default:
-		stmtPlan, err = bindAndOptimizeSelectQueryWithValidator(plan.Query_SELECT, ctx, stmt, false, true, validate)
+		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
+			plan.Query_SELECT, ctx, stmt, false, true, validate, captureColumnTypes, true)
 		if err != nil {
 			return nil, err
 		}
@@ -180,11 +189,17 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 			originName = string(colNames[idx])
 			name = originName
 		}
+		typ := &expr.Typ
+		if idx < len(outputColumnProvenance) {
+			if sourceType := mysqlSpecialTypeFromProvenance(outputColumnProvenance[idx]); sourceType != nil {
+				typ = sourceType
+			}
+		}
 		cols[idx] = &plan.ColDef{
 			Name:       strings.ToLower(name),
 			OriginName: originName,
 			Alg:        plan.CompressType_Lz4,
-			Typ:        expr.Typ,
+			Typ:        *typ,
 			Default: &plan.Default{
 				NullAbility:  !expr.Typ.NotNullable,
 				Expr:         nil,
@@ -247,16 +262,6 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	bindCtx := NewBindContext(builder, nil)
 
-	getTblAndColName := func(relPos, colPos int32) (string, string) {
-		name := builder.nameByColRef[[2]int32{relPos, colPos}]
-		// name pattern: tableName.colName
-		splits := strings.Split(name, ".")
-		if len(splits) < 2 {
-			return "", ""
-		}
-		return splits[0], splits[1]
-	}
-
 	if s, ok := stmt.Select.(*tree.ParenSelect); ok {
 		stmt = s.Select
 	}
@@ -270,21 +275,13 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	for i, expr := range rootNode.ProjectList {
 		defaultVal := ""
 		typ := &expr.Typ
-		switch e := expr.Expr.(type) {
-		case *plan.Expr_Col:
-			tblName, colName := getTblAndColName(e.Col.RelPos, e.Col.ColPos)
-			if binding, ok := bindCtx.bindingByTable[tblName]; ok {
-				defaultVal = binding.defaults[binding.colIdByName[colName]]
+		provenance := bindCtx.outputColumnProvenanceForProject(int32(i))
+		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
+			if provenance.CanInheritSourceDefault && provenance.Source.Metadata.HasDefault {
+				defaultVal = provenance.Source.Metadata.DefaultOriginString
 			}
-		case *plan.Expr_F:
-			// enum
-			if e.F.Func.ObjName == moEnumCastIndexToValueFun || e.F.Func.ObjName == moSetCastIndexToValueFun {
-				// cast_index_to_value('apple,banana,orange', cast(col_name as T_uint16))
-				colRef := e.F.Args[1].Expr.(*plan.Expr_Col).Col
-				tblName, colName := getTblAndColName(colRef.RelPos, colRef.ColPos)
-				if binding, ok := bindCtx.bindingByTable[tblName]; ok {
-					typ = binding.types[binding.colIdByName[colName]]
-				}
+			if isEnumOrSetPlanType(&provenance.Source.Metadata.Typ) {
+				typ = &provenance.Source.Metadata.Typ
 			}
 		}
 

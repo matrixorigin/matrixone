@@ -331,6 +331,526 @@ func TestBuildCreateViewExplicitColumnList(t *testing.T) {
 	})
 }
 
+func addMySQLSpecialTypeColumns(ctx *MockCompilerContext) {
+	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols,
+		&plan.ColDef{
+			Name: "priority",
+			Typ: plan.Type{
+				Id:          int32(types.T_enum),
+				Enumvalues:  "low,medium,high",
+				NotNullable: true,
+			},
+		},
+		&plan.ColDef{
+			Name: "flags",
+			Typ: plan.Type{
+				Id:         int32(types.T_uint64),
+				Enumvalues: "red,green,blue",
+			},
+		},
+	)
+}
+
+func TestBuildCreateViewPreservesMySQLSpecialColumnTypes(t *testing.T) {
+	const rootSQL = "create view v (renamed_priority, renamed_flags, renamed_name) as " +
+		"select priority, flags, n_name from nation"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	addMySQLSpecialTypeColumns(ctx.MockCompilerContext)
+
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateView().GetTableDef().GetCols()
+	require.Len(t, cols, 3)
+	priorityType := cols[0].GetTyp()
+	flagsType := cols[1].GetTyp()
+	nameType := cols[2].GetTyp()
+	require.Equal(t, "renamed_priority", cols[0].GetName())
+	require.Equal(t, int32(types.T_enum), priorityType.GetId())
+	require.Equal(t, "low,medium,high", priorityType.GetEnumvalues())
+	require.True(t, priorityType.GetNotNullable())
+	require.Equal(t, "renamed_flags", cols[1].GetName())
+	require.Equal(t, int32(types.T_uint64), flagsType.GetId())
+	require.Equal(t, "red,green,blue", flagsType.GetEnumvalues())
+	require.False(t, flagsType.GetNotNullable())
+	require.Equal(t, "renamed_name", cols[2].GetName())
+	require.Equal(t, int32(types.T_varchar), nameType.GetId())
+}
+
+func TestBuildCreateViewTracksMySQLSpecialColumnTypeProvenance(t *testing.T) {
+	tests := []struct {
+		name            string
+		selectSQL       string
+		wantSpecialType bool
+	}{
+		{name: "direct", selectSQL: "select priority, flags from nation", wantSpecialType: true},
+		{name: "order by", selectSQL: "select priority, flags from nation order by priority, flags", wantSpecialType: true},
+		{name: "order by null", selectSQL: "select priority, flags from nation order by null", wantSpecialType: true},
+		{name: "group by", selectSQL: "select priority, flags from nation group by priority, flags", wantSpecialType: true},
+		{name: "distinct", selectSQL: "select distinct priority, flags from nation", wantSpecialType: true},
+		{name: "derived table", selectSQL: "select priority, flags from (select priority, flags from nation) d", wantSpecialType: true},
+		{name: "cte", selectSQL: "with d as (select priority, flags from nation) select priority, flags from d", wantSpecialType: true},
+		{name: "derived table order by", selectSQL: "select priority, flags from (select priority, flags from nation) d order by flags", wantSpecialType: true},
+		{name: "cte order by", selectSQL: "with d as (select priority, flags from nation) select priority, flags from d order by flags", wantSpecialType: true},
+		{name: "alias", selectSQL: "select priority as p, flags as f from nation", wantSpecialType: true},
+		{name: "same arms union distinct", selectSQL: "select priority, flags from nation union select priority, flags from nation"},
+		{name: "union all", selectSQL: "select priority, flags from nation union all select priority, flags from nation"},
+		{name: "recursive cte", selectSQL: "with recursive d(priority, flags) as (select priority, flags from nation union all select priority, flags from d where false) select priority, flags from d"},
+		{name: "string expressions", selectSQL: "select concat(priority, ''), concat(flags, '') from nation"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rootSQL := "create view v as " + test.selectSQL
+			ctx := &rootSQLCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false),
+				rootSQL:             rootSQL,
+			}
+			addMySQLSpecialTypeColumns(ctx.MockCompilerContext)
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			viewPlan, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			cols := viewPlan.GetDdl().GetCreateView().GetTableDef().GetCols()
+			require.Len(t, cols, 2)
+			if test.wantSpecialType {
+				require.True(t, isEnumPlanType(&cols[0].Typ))
+				require.True(t, isSetPlanType(&cols[1].Typ))
+			} else {
+				require.Equal(t, int32(types.T_varchar), cols[0].Typ.GetId())
+				require.Equal(t, int32(types.T_varchar), cols[1].Typ.GetId())
+			}
+		})
+	}
+}
+
+func TestBuildCTASPreservesMySQLSpecialColumnTypes(t *testing.T) {
+	const sql = "create table copied as select priority, flags, n_name from nation"
+	ctx := NewMockCompilerContext(false)
+	addMySQLSpecialTypeColumns(ctx)
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 3)
+	require.True(t, isEnumPlanType(&cols[0].Typ))
+	require.Equal(t, "low,medium,high", cols[0].Typ.GetEnumvalues())
+	require.True(t, isSetPlanType(&cols[1].Typ))
+	require.Equal(t, "red,green,blue", cols[1].Typ.GetEnumvalues())
+	require.Equal(t, int32(types.T_varchar), cols[2].Typ.GetId())
+}
+
+func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {
+	const createViewSQL = "create view v_enum_set as select priority, flags, n_name from nation"
+	ctx := NewMockCompilerContext(false)
+	addMySQLSpecialTypeColumns(ctx)
+	createCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createViewSQL}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createViewSQL, 1)
+	require.NoError(t, err)
+	createPlan, err := BuildPlan(createCtx, stmt, false)
+	stmt.Free()
+	require.NoError(t, err)
+
+	viewDef := DeepCopyTableDef(createPlan.GetDdl().GetCreateView().GetTableDef(), true)
+	viewDef.Name = "v_enum_set"
+	viewDef.DbName = "tpch"
+	viewDef.TableType = catalog.SystemViewRel
+	ctx.tables["v_enum_set"] = viewDef
+	ctx.objects["v_enum_set"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v_enum_set"}
+
+	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"select priority from v_enum_set order by priority", 1)
+	require.NoError(t, err)
+	selectPlan, err := BuildPlan(ctx, stmt, false)
+	stmt.Free()
+	require.NoError(t, err)
+
+	var sortKey *plan.Expr
+	for _, node := range selectPlan.GetQuery().GetNodes() {
+		if node.GetNodeType() == plan.Node_SORT {
+			require.Len(t, node.GetOrderBy(), 1)
+			sortKey = node.GetOrderBy()[0].GetExpr()
+			break
+		}
+	}
+	require.NotNil(t, sortKey)
+	sortType := sortKey.GetTyp()
+	require.Equal(t, int32(types.T_enum), sortType.GetId())
+	require.Equal(t, "low,medium,high", sortType.GetEnumvalues())
+	query := selectPlan.GetQuery()
+	require.Len(t, query.GetSteps(), 1)
+	resultNode := query.GetNodes()[query.GetSteps()[0]]
+	require.Len(t, resultNode.GetProjectList(), 1)
+	resultType := resultNode.GetProjectList()[0].GetTyp()
+	require.Equal(t, int32(types.T_varchar), resultType.GetId())
+
+	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"select flags from v_enum_set", 1)
+	require.NoError(t, err)
+	rawSetPlan, err := BuildPlan(ctx, stmt, false)
+	stmt.Free()
+	require.NoError(t, err)
+	setDisplayFound := false
+	for _, node := range rawSetPlan.GetQuery().GetNodes() {
+		for _, project := range node.GetProjectList() {
+			fn := project.GetF()
+			if fn == nil {
+				continue
+			}
+			require.NotEqual(t, moSetCastValueToIndexFun, fn.GetFunc().GetObjName(),
+				"a direct view projection must not round-trip a SET bitmap through its display string")
+			if fn.GetFunc().GetObjName() == moSetCastIndexToValueFun {
+				setDisplayFound = true
+				require.Len(t, fn.GetArgs(), 2)
+				require.True(t, isSetPlanType(&fn.GetArgs()[1].Typ))
+			}
+		}
+	}
+	require.True(t, setDisplayFound)
+
+	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table copied_from_view as select priority, flags, n_name from v_enum_set", 1)
+	require.NoError(t, err)
+	ctasPlan, err := BuildPlan(ctx, stmt, false)
+	stmt.Free()
+	require.NoError(t, err)
+	cols := ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 3)
+	require.True(t, isEnumPlanType(&cols[0].Typ))
+	require.Equal(t, "low,medium,high", cols[0].Typ.GetEnumvalues())
+	require.True(t, isSetPlanType(&cols[1].Typ))
+	require.Equal(t, "red,green,blue", cols[1].Typ.GetEnumvalues())
+	require.Equal(t, int32(types.T_varchar), cols[2].Typ.GetId())
+
+	ctasDef := DeepCopyTableDef(ctasPlan.GetDdl().GetCreateTable().GetTableDef(), true)
+	ctasDef.Name = "copied_from_view"
+	ctasDef.DbName = "tpch"
+	ctx.tables[ctasDef.Name] = ctasDef
+	ctx.objects[ctasDef.Name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: ctasDef.Name}
+	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
+		ctasPlan.GetDdl().GetCreateTable().GetCreateAsSelectSql(), 1)
+	require.NoError(t, err)
+	insertPlan, err := BuildPlan(ctx, stmt, false)
+	stmt.Free()
+	require.NoError(t, err)
+	for _, node := range insertPlan.GetQuery().GetNodes() {
+		for _, project := range node.GetProjectList() {
+			if fn := project.GetF(); fn != nil {
+				require.NotEqual(t, moSetCastValueToIndexFun, fn.GetFunc().GetObjName(),
+					"CTAS INSERT must retain the projected SET bitmap: node=%d type=%s expr=%s",
+					node.GetNodeId(), node.GetNodeType().String(), project.String())
+			}
+		}
+	}
+
+	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"insert into copied_from_view (priority, flags, n_name) "+
+			"select priority, concat(flags, ',green'), n_name from v_enum_set", 1)
+	require.NoError(t, err)
+	nestedPlan, err := BuildPlan(ctx, stmt, false)
+	stmt.Free()
+	require.NoError(t, err)
+	nestedDisplayFound := false
+	for _, node := range nestedPlan.GetQuery().GetNodes() {
+		for _, project := range node.GetProjectList() {
+			walkPlanExpr(project, func(expr *plan.Expr) {
+				if fn := expr.GetF(); fn != nil && fn.GetFunc().GetObjName() == moSetCastIndexToValueFun {
+					nestedDisplayFound = true
+				}
+			})
+		}
+	}
+	require.True(t, nestedDisplayFound,
+		"a SET column nested in CONCAT must keep its SQL-visible string semantics")
+}
+
+func TestViewRebindPreservesTransparentMySQLSpecialColumnTypes(t *testing.T) {
+	tests := []struct {
+		name            string
+		selectSQL       string
+		wantSpecialType bool
+	}{
+		{name: "derived table", selectSQL: "select priority, flags from (select priority, flags from nation) d", wantSpecialType: true},
+		{name: "cte", selectSQL: "with d as (select priority, flags from nation) select priority, flags from d", wantSpecialType: true},
+		{name: "order by", selectSQL: "select priority, flags from nation order by flags", wantSpecialType: true},
+		{name: "derived table order by", selectSQL: "select priority, flags from (select priority, flags from nation) d order by flags", wantSpecialType: true},
+		{name: "cte order by", selectSQL: "with d as (select priority, flags from nation) select priority, flags from d order by flags", wantSpecialType: true},
+		{name: "union all", selectSQL: "select priority, flags from nation union all select priority, flags from nation"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			createViewSQL := "create view v as " + test.selectSQL
+			ctx := NewMockCompilerContext(false)
+			addMySQLSpecialTypeColumns(ctx)
+			createCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createViewSQL}
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createViewSQL, 1)
+			require.NoError(t, err)
+			createPlan, err := BuildPlan(createCtx, stmt, false)
+			stmt.Free()
+			require.NoError(t, err)
+
+			viewDef := DeepCopyTableDef(createPlan.GetDdl().GetCreateView().GetTableDef(), true)
+			viewDef.Name = "v"
+			viewDef.DbName = "tpch"
+			viewDef.TableType = catalog.SystemViewRel
+			ctx.tables[viewDef.Name] = viewDef
+			ctx.objects[viewDef.Name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: viewDef.Name}
+
+			stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
+				"create table copied as select priority, flags from v", 1)
+			require.NoError(t, err)
+			ctasPlan, err := BuildPlan(ctx, stmt, false)
+			stmt.Free()
+			require.NoError(t, err)
+			cols := ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			require.GreaterOrEqual(t, len(cols), 2)
+			if test.wantSpecialType {
+				require.True(t, isEnumPlanType(&cols[0].Typ))
+				require.True(t, isSetPlanType(&cols[1].Typ))
+				for _, node := range ctasPlan.GetQuery().GetNodes() {
+					for _, project := range node.GetProjectList() {
+						walkPlanExpr(project, func(expr *plan.Expr) {
+							if fn := expr.GetF(); fn != nil {
+								require.NotEqual(t, moSetCastValueToIndexFun, fn.GetFunc().GetObjName(),
+									"transparent View CTAS must not round-trip a SET bitmap")
+							}
+						})
+					}
+				}
+
+				stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
+					"select cast(flags as unsigned) from v", 1)
+				require.NoError(t, err)
+				castPlan, err := BuildPlan(ctx, stmt, false)
+				stmt.Free()
+				require.NoError(t, err)
+				for _, node := range castPlan.GetQuery().GetNodes() {
+					for _, project := range node.GetProjectList() {
+						walkPlanExpr(project, func(expr *plan.Expr) {
+							if fn := expr.GetF(); fn != nil {
+								require.NotEqual(t, moSetCastIndexToValueFun, fn.GetFunc().GetObjName(),
+									"numeric View consumer must receive the raw SET bitmap")
+							}
+						})
+					}
+				}
+			} else {
+				require.Equal(t, int32(types.T_varchar), cols[0].Typ.GetId())
+				require.Equal(t, int32(types.T_varchar), cols[1].Typ.GetId())
+			}
+		})
+	}
+}
+
+func TestViewSpecialTypeBoundaryCanonicalizesSemanticResults(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		selectSQL string
+	}{
+		{name: "distinct", selectSQL: "select distinct flags from nation"},
+		{name: "group by", selectSQL: "select flags from nation group by flags"},
+		{name: "group by order", selectSQL: "select flags from nation group by flags order by flags"},
+		{name: "derived distinct", selectSQL: "select flags from (select distinct flags from nation) d"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			createViewSQL := "create view v_semantic_set as " + test.selectSQL
+			ctx := NewMockCompilerContext(false)
+			addMySQLSpecialTypeColumns(ctx)
+			createCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createViewSQL}
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createViewSQL, 1)
+			require.NoError(t, err)
+			createPlan, err := BuildPlan(createCtx, stmt, false)
+			stmt.Free()
+			require.NoError(t, err)
+
+			viewDef := DeepCopyTableDef(createPlan.GetDdl().GetCreateView().GetTableDef(), true)
+			viewDef.Name = "v_semantic_set"
+			viewDef.DbName = "tpch"
+			viewDef.TableType = catalog.SystemViewRel
+			ctx.tables[viewDef.Name] = viewDef
+			ctx.objects[viewDef.Name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: viewDef.Name}
+
+			stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL, "select flags from v_semantic_set", 1)
+			require.NoError(t, err)
+			queryPlan, err := BuildPlan(ctx, stmt, false)
+			stmt.Free()
+			require.NoError(t, err)
+
+			setDisplayProjects := 0
+			setCanonicalProjects := 0
+			semanticStringInput := false
+			for _, node := range queryPlan.GetQuery().GetNodes() {
+				if node.GetNodeType() == plan.Node_AGG {
+					for _, group := range node.GetGroupBy() {
+						if types.T(group.Typ.Id).IsMySQLString() {
+							semanticStringInput = true
+						}
+					}
+				}
+				for _, project := range node.GetProjectList() {
+					if fn := project.GetF(); fn != nil {
+						switch fn.GetFunc().GetObjName() {
+						case moSetCastIndexToValueFun:
+							setDisplayProjects++
+						case moSetCastValueToIndexFun:
+							setCanonicalProjects++
+						}
+					}
+				}
+			}
+			require.GreaterOrEqual(t, setDisplayProjects, 1,
+				"semantic operator must consume the SQL-visible SET value")
+			require.True(t, semanticStringInput,
+				"GROUP BY/DISTINCT must operate on the SQL-visible string type")
+			require.GreaterOrEqual(t, setCanonicalProjects, 1,
+				"completed semantic View boundary must canonically re-encode SET")
+			require.True(t, isSetPlanType(&viewDef.Cols[0].Typ))
+		})
+	}
+}
+
+func TestOutputColumnProvenanceCarriesSourceAndClearsSemanticBoundaries(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	addMySQLSpecialTypeColumns(ctx)
+	ctx.tables["nation"].Cols[0].Default = &plan.Default{OriginString: "'ALGERIA'"}
+
+	tests := []struct {
+		name              string
+		sql               string
+		wantState         ProvenanceState
+		wantDefault       string
+		canInheritDefault bool
+	}{
+		{name: "direct", sql: "select n_nationkey from nation", wantState: ProvenanceSingleSource, wantDefault: "'ALGERIA'", canInheritDefault: true},
+		{name: "alias derived", sql: "select k from (select n_nationkey as k from nation) d", wantState: ProvenanceSingleSource, wantDefault: "'ALGERIA'"},
+		{name: "non recursive cte", sql: "with d as (select n_nationkey as k from nation) select k from d", wantState: ProvenanceSingleSource, wantDefault: "'ALGERIA'"},
+		{name: "expression", sql: "select n_nationkey + 0 from nation", wantState: ProvenanceNone},
+		{name: "same arms union distinct", sql: "select n_nationkey from nation union select n_nationkey from nation", wantState: ProvenanceNone},
+		{name: "union all", sql: "select n_nationkey from nation union all select n_nationkey from nation", wantState: ProvenanceNone},
+		{name: "recursive cte", sql: "with recursive d(k) as (select n_nationkey from nation union all select k from d where false) select k from d", wantState: ProvenanceNone},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			selectStmt := stmt.(*tree.Select)
+			builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+			bindCtx := NewBindContext(builder, nil)
+			_, err = builder.bindSelect(selectStmt, bindCtx, true)
+			require.NoError(t, err)
+
+			provenance := bindCtx.outputColumnProvenanceForProject(0)
+			require.Equal(t, test.wantState, provenance.State)
+			if test.wantState == ProvenanceSingleSource {
+				require.NotNil(t, provenance.Source)
+				require.Equal(t, test.wantDefault, provenance.Source.Metadata.DefaultOriginString)
+				require.Equal(t, test.canInheritDefault, provenance.CanInheritSourceDefault)
+				require.NotZero(t, provenance.Source.RelPos)
+			} else {
+				require.Nil(t, provenance.Source)
+			}
+		})
+	}
+}
+
+func TestBuildCTASConsumesOutputColumnProvenance(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.tables["nation"].Cols[0].Default = &plan.Default{OriginString: "'ALGERIA'"}
+
+	tests := []struct {
+		name        string
+		selectSQL   string
+		wantDefault string
+	}{
+		{name: "direct alias", selectSQL: "select n_nationkey as k from nation", wantDefault: "'ALGERIA'"},
+		{name: "derived", selectSQL: "select k from (select n_nationkey as k from nation) d"},
+		{name: "cte", selectSQL: "with d as (select n_nationkey as k from nation) select k from d"},
+		{name: "expression", selectSQL: "select n_nationkey + 0 as k from nation"},
+		{name: "union", selectSQL: "select n_nationkey as k from nation union all select n_nationkey from nation"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sql := "create table copied as " + test.selectSQL
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			require.NotEmpty(t, cols)
+			require.Equal(t, test.wantDefault, cols[0].GetDefault().GetOriginString())
+		})
+	}
+}
+
+func TestOutputColumnProvenanceSnapshotsCatalogMetadataOnce(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	addMySQLSpecialTypeColumns(ctx)
+	priorityCol := ctx.tables["nation"].Cols[len(ctx.tables["nation"].Cols)-2]
+	priorityCol.Default = &plan.Default{OriginString: "'low'"}
+
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select priority from nation", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	bindCtx := NewBindContext(builder, nil)
+	_, err = builder.bindSelect(stmt.(*tree.Select), bindCtx, true)
+	require.NoError(t, err)
+	provenance := bindCtx.outputColumnProvenanceForProject(0)
+	require.Equal(t, ProvenanceSingleSource, provenance.State)
+	require.NotNil(t, provenance.Source)
+
+	priorityCol.Typ.Enumvalues = "changed"
+	priorityCol.Default.OriginString = "'changed'"
+	require.Equal(t, "low,medium,high", provenance.Source.Metadata.Typ.Enumvalues)
+	require.True(t, provenance.Source.Metadata.HasDefault)
+	require.Equal(t, "'low'", provenance.Source.Metadata.DefaultOriginString)
+}
+
+func TestTransparentOutputSourceExprRejectsSemanticExpressions(t *testing.T) {
+	enumType := plan.Type{Id: int32(types.T_enum), Enumvalues: "low,high"}
+	valid := &plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: moEnumCastIndexToValueFun},
+			Args: []*plan.Expr{
+				{Typ: plan.Type{Id: int32(types.T_varchar)}},
+				{Typ: enumType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 2}}},
+			},
+		}},
+	}
+
+	got, ok := transparentOutputSourceExpr(valid)
+	require.True(t, ok)
+	require.Equal(t, enumType, got.Typ)
+
+	for _, mutate := range []func(*plan.Expr){
+		func(expr *plan.Expr) { expr.GetF().Args = expr.GetF().Args[:1] },
+		func(expr *plan.Expr) { expr.GetF().Args[1].Expr = nil },
+		func(expr *plan.Expr) { expr.GetF().Args[1].Typ.Id = int32(types.T_varchar) },
+		func(expr *plan.Expr) { expr.GetF().Func.ObjName = "concat" },
+	} {
+		expr := DeepCopyExpr(valid)
+		mutate(expr)
+		_, ok = transparentOutputSourceExpr(expr)
+		require.False(t, ok)
+	}
+}
+
 func TestBuildCreateViewRejectsTemporaryTable(t *testing.T) {
 	tests := []string{
 		"create view v as select * from nation",
