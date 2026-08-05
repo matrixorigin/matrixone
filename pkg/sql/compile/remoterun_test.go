@@ -396,6 +396,22 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.Equal(t, vm.IntersectAll, restored.OpType())
 	})
 
+	t.Run("GroupByHashKey", func(t *testing.T) {
+		original := group.NewArgument()
+		original.GroupByHashKey = []int32{0, 2}
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		require.Equal(t, original.GroupByHashKey, restored.(*group.Group).GroupByHashKey)
+	})
+
+	t.Run("MergeGroupByHashKey", func(t *testing.T) {
+		original := group.NewArgumentMergeGroup()
+		original.GroupByHashKey = []int32{1}
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		require.Equal(t, original.GroupByHashKey, restored.(*group.MergeGroup).GroupByHashKey)
+	})
+
 	t.Run("SharedTableLock", func(t *testing.T) {
 		original := lockop.NewArgumentByEngine(nil)
 		original.AddLockTargetWithMode(42, nil, lockpb.LockMode_Shared, 0,
