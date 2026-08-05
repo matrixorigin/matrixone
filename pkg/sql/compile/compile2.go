@@ -861,6 +861,7 @@ func (c *Compile) buildRetryCompile(defChanged bool) (*Compile, error) {
 
 	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC.preservePrepareParamsOnClose = c.preservePrepareParamsOnClose
 	runC.resultSink = c.resultSink
 	runC.executionGeneration = c.executionGeneration
 	c.copyAllocationAccountLifecycleTo(runC)

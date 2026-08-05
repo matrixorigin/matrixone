@@ -141,6 +141,26 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	proc.GetSessionInfo().Buf.Free()
 }
 
+func TestCompileReleasePreservesPreparedParameters(t *testing.T) {
+	proc := testutil.NewProc(t)
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("2"), false, proc.Mp()))
+	proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
+
+	c := NewCompile("test", "test", "select ?", "", "", nil, proc, nil, false, nil, time.Now())
+	c.PreservePrepareParamsOnClose()
+	c.Release()
+
+	require.Same(t, params, proc.GetPrepareParams())
+	require.True(t, proc.GetPrepareParamIsBin(0))
+	value, err := proc.GetPrepareParamsAt(0)
+	require.NoError(t, err)
+	require.Equal(t, []byte("2"), value)
+
+	proc.Free()
+	require.Zero(t, params.Length(), "the Process owner must still release the parameter vector")
+}
+
 type retryRecordingResultSink struct {
 	events []string
 	rows   map[uint64]int

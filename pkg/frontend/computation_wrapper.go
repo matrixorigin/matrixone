@@ -1424,6 +1424,7 @@ func createCompile(
 		deepcopy.Copy(ses.getCNLabels()).(map[string]string),
 		getStatementStartAt(execCtx.reqCtx),
 	)
+	retCompile.PreservePrepareParamsOnClose()
 	retCompile.SetIsPrepare(isPrepare)
 	if schedulingSQL == "" {
 		schedulingSQL = originSQL
