@@ -124,6 +124,9 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 				return
 			}
 		}
+		if algo == compress.Lz4Chunked {
+			return decodeChunkedColumn(ctx, data, allocator)
+		}
 
 		// no compress
 		if algo == compress.None {
@@ -320,7 +323,11 @@ func MaterializeCachedVectorWindow(
 		)
 	}
 	dst := vector.NewVec(*source.GetType())
-	if err := dst.UnionBatch(&source, int64(offset), length, nil, mp); err != nil {
+	sels := make([]int64, length)
+	for i := range sels {
+		sels[i] = int64(offset + i)
+	}
+	if err := dst.Union(&source, sels, mp); err != nil {
 		dst.Free(mp)
 		return nil, err
 	}

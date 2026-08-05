@@ -810,7 +810,14 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 		}
 		var ext Extent
 		var err error
-		if data, ext, err = w.WriteWithCompress(0, sbuf.Bytes()); err != nil {
+		if sbuf.Len() > columnChunkTargetBytes && vec.Length() > 1 {
+			if data, err = encodeChunkedColumn(vec); err != nil {
+				return 0, err
+			}
+			ext = NewExtent(
+				compress.Lz4Chunked, 0, uint32(len(data)), uint32(sbuf.Len()),
+			)
+		} else if data, ext, err = w.WriteWithCompress(0, sbuf.Bytes()); err != nil {
 			return 0, err
 		}
 		size += len(data)

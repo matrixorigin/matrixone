@@ -1248,6 +1248,7 @@ type CNObjectHandle struct {
 	base               *baseHandle
 
 	cache    []*batch.Batch
+	prepared []bool
 	blks     []types.Blockid
 	TSs      []types.TS
 	maxBytes int
@@ -1306,6 +1307,7 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		putJob(job)
 		window := res.Res.(*persistedBlockWindow)
 		h.cache = append(h.cache, window.batch)
+		h.prepared = append(h.prepared, false)
 		h.blks = append(h.blks, blks[i])
 		if h.maxBytes > 0 {
 			h.blockRowOffset += window.rows
@@ -1348,36 +1350,41 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 		blk = &h.blks[0]
 	}
 	ts := h.TSs[0]
-	h.cache = h.cache[1:]
-	if len(h.blks) > 0 {
-		h.blks = h.blks[1:]
+	discardSource := func() {
+		h.cache = h.cache[1:]
+		if len(h.prepared) > 0 {
+			h.prepared = h.prepared[1:]
+		}
+		if len(h.blks) > 0 {
+			h.blks = h.blks[1:]
+		}
+		h.TSs = h.TSs[1:]
+		data.Clean(h.mp)
 	}
-	h.TSs = h.TSs[1:]
-	defer data.Clean(h.mp)
+	prepared := len(h.prepared) > 0 && h.prepared[0]
+	if !prepared {
+		t0 := time.Now()
+		if h.isTombstone {
+			err = updateCNTombstoneBatch(
+				data, ts, blk, h.base.changesHandle.retainRowID, h.mp,
+			)
+		} else {
+			err = updateCNDataBatch(
+				data, ts, blk, h.base.changesHandle.retainRowID, h.mp,
+			)
+		}
+		if err != nil {
+			discardSource()
+			return err
+		}
+		if len(h.prepared) == 0 {
+			h.prepared = append(h.prepared, true)
+		} else {
+			h.prepared[0] = true
+		}
+		h.base.changesHandle.updateDuration += time.Since(t0)
+	}
 	t0 := time.Now()
-	if h.isTombstone {
-		if err = updateCNTombstoneBatch(
-			data,
-			ts,
-			blk,
-			h.base.changesHandle.retainRowID,
-			h.mp,
-		); err != nil {
-			return err
-		}
-	} else {
-		if err = updateCNDataBatch(
-			data,
-			ts,
-			blk,
-			h.base.changesHandle.retainRowID,
-			h.mp,
-		); err != nil {
-			return err
-		}
-	}
-	h.base.changesHandle.updateDuration += time.Since(t0)
-	t0 = time.Now()
 	if *bat == nil {
 		*bat = batch.NewWithSize(0)
 		(*bat).Attrs = append((*bat).Attrs, data.Attrs...)
@@ -1399,10 +1406,12 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 	for i, vec := range (*bat).Vecs {
 		src := data.Vecs[i]
 		if err = vec.Union(src, sels, mp); err != nil {
+			discardSource()
 			return err
 		}
 	}
 	(*bat).SetRowCount((*bat).Vecs[0].Length())
+	discardSource()
 	h.base.changesHandle.copyDuration += time.Since(t0)
 	return
 }

@@ -16,26 +16,123 @@ package logtailreplay
 
 import (
 	"context"
+	"io"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/tidwall/btree"
 )
+
+type peakTrackingFileService struct {
+	fileservice.FileService
+	current, readBytes, peak atomic.Int64
+}
+
+type peakTrackingAllocator struct {
+	base    fileservice.CacheDataAllocator
+	tracker *peakTrackingFileService
+}
+
+type peakTrackingAllocation struct {
+	fscache.Data
+	tracker *peakTrackingFileService
+	size    int64
+	refs    *atomic.Int64
+}
+
+func newPeakTrackingFileService(fs fileservice.FileService) *peakTrackingFileService {
+	return &peakTrackingFileService{FileService: fs}
+}
+
+func (p *peakTrackingFileService) observePeak() {
+	value := p.current.Load() + p.readBytes.Load()
+	for old := p.peak.Load(); value > old && !p.peak.CompareAndSwap(old, value); old = p.peak.Load() {
+	}
+}
+
+func (p *peakTrackingFileService) Read(ctx context.Context, vector *fileservice.IOVector) error {
+	var compressedBytes int64
+	for i := range vector.Entries {
+		compressedBytes += vector.Entries[i].Size
+		constructor := vector.Entries[i].ToCacheData
+		if constructor != nil {
+			vector.Entries[i].ToCacheData = func(
+				ctx context.Context,
+				reader io.Reader,
+				data []byte,
+				allocator fileservice.CacheDataAllocator,
+			) (fscache.Data, error) {
+				return constructor(ctx, reader, data, &peakTrackingAllocator{base: allocator, tracker: p})
+			}
+		}
+	}
+	p.readBytes.Add(compressedBytes)
+	p.observePeak()
+	err := p.FileService.Read(ctx, vector)
+	p.readBytes.Add(-compressedBytes)
+	p.observePeak()
+	return err
+}
+
+func (a *peakTrackingAllocator) track(data fscache.Data, size int64) fscache.Data {
+	refs := &atomic.Int64{}
+	refs.Store(1)
+	a.tracker.current.Add(size)
+	a.tracker.observePeak()
+	return &peakTrackingAllocation{Data: data, tracker: a.tracker, size: size, refs: refs}
+}
+
+func (a *peakTrackingAllocator) AllocateCacheData(ctx context.Context, size int) fscache.Data {
+	return a.track(a.base.AllocateCacheData(ctx, size), int64(size))
+}
+
+func (a *peakTrackingAllocator) AllocateCacheDataWithHint(
+	ctx context.Context, size int, hints malloc.Hints,
+) fscache.Data {
+	return a.track(a.base.AllocateCacheDataWithHint(ctx, size, hints), int64(size))
+}
+
+func (a *peakTrackingAllocator) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
+	return a.track(a.base.CopyToCacheData(ctx, data), int64(len(data)))
+}
+
+func (d *peakTrackingAllocation) Slice(length int) fscache.Data {
+	return &peakTrackingAllocation{
+		Data: d.Data.Slice(length), tracker: d.tracker, size: d.size, refs: d.refs,
+	}
+}
+
+func (d *peakTrackingAllocation) Retain() {
+	d.Data.Retain()
+	d.refs.Add(1)
+}
+
+func (d *peakTrackingAllocation) Release() {
+	d.Data.Release()
+	if d.refs.Add(-1) == 0 {
+		d.tracker.current.Add(-d.size)
+		d.tracker.observePeak()
+	}
+}
 
 func TestPartitionStateRangeHandlerPropagatesPKFilter(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -118,11 +215,21 @@ func TestPersistedWideObjectWindowsBoundAAndCNOutput(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	const (
-		rows         = 128
-		payloadBytes = 16 << 10
-		maxBytes     = 64 << 10
+		rows         = 144
+		payloadBytes = 65535
+		maxBytes     = 8 << 20
 	)
-	obj, fs := writeTestWideObjectWithCommitTS(t, mp, rows, payloadBytes)
+	obj, rawFS := writeTestWideObjectWithCommitTS(t, mp, rows, payloadBytes)
+	fs := newPeakTrackingFileService(rawFS)
+	metaLoc := obj.ObjectLocation()
+	meta, err := objectio.FastLoadObjectMeta(context.Background(), &metaLoc, false, fs)
+	require.NoError(t, err)
+	require.Equal(t, uint8(compress.Lz4Chunked),
+		meta.MustGetMeta(objectio.SchemaData).GetBlockMeta(0).ColumnMeta(0).Location().Alg())
+	require.Greater(t,
+		meta.MustGetMeta(objectio.SchemaData).GetBlockMeta(0).ColumnMeta(0).Location().OriginSize(),
+		uint32(maxBytes),
+	)
 	baseline := mp.CurrNB()
 	scheduler := tasks.NewParallelJobScheduler(2)
 	defer scheduler.Stop()
@@ -153,6 +260,9 @@ func TestPersistedWideObjectWindowsBoundAAndCNOutput(t *testing.T) {
 		types.BuildTS(1, 0), types.BuildTS(200, 0), []*objectio.ObjectEntry{obj}, fs, mp)
 	drain(aobj.prefetch, aobj.isEnd, &aobj.cache)
 	aobj.blks = nil
+	require.Less(t, fs.peak.Load(), int64(24<<20),
+		"file-service compressed/decompressed allocations must stay chunk-bounded")
+	require.Zero(t, fs.current.Load())
 }
 
 func TestCNObjectHandleCleansSourceAfterCopy(t *testing.T) {
@@ -667,6 +777,43 @@ func TestAObjectHandleNext_ReturnsEOBOnSchemaMismatch(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
 	require.Equal(t, 0, handle.rowOffsetCursor)
 	require.NotNil(t, handle.currentBatch)
+}
+
+func TestCNObjectHandleNextRetainsSourceOnSchemaBoundary(t *testing.T) {
+	sourceMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(sourceMP)
+	outputMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(outputMP)
+	source := batch.NewWithSize(1)
+	source.Attrs = []string{"value"}
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, sourceMP))
+	source.SetRowCount(1)
+	h := &CNObjectHandle{
+		mp: sourceMP, base: &baseHandle{changesHandle: &ChangeHandler{}},
+		cache: []*batch.Batch{source}, prepared: []bool{false},
+		TSs: []types.TS{types.BuildTS(2, 1)},
+	}
+	dst := batch.NewWithSize(1)
+	dst.Attrs = []string{"other"}
+	dst.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(dst.Vecs[0], types.BuildTS(1, 0), false, outputMP))
+	dst.SetRowCount(1)
+	err := h.Next(context.Background(), &dst, outputMP)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	require.Len(t, h.cache, 1)
+	require.True(t, h.prepared[0])
+	require.Equal(t, 1, h.cache[0].RowCount())
+	dst.Clean(outputMP)
+	dst = nil
+	require.NoError(t, h.Next(context.Background(), &dst, outputMP))
+	require.Equal(t, 1, dst.RowCount())
+	require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](dst.Vecs[0], 0))
+	require.Empty(t, h.cache)
+	require.Empty(t, h.prepared)
+	require.Zero(t, sourceMP.CurrNB())
+	dst.Clean(outputMP)
+	require.Zero(t, outputMP.CurrNB())
 }
 
 func TestUpdateCNTombstoneBatch_IsIdempotent(t *testing.T) {
