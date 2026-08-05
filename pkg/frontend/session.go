@@ -693,13 +693,29 @@ func (ses *Session) sqlModeHasMatrixOneNative() bool {
 	return ok && has
 }
 
-func (ses *Session) updateSqlModeCaches(oldNative bool, val interface{}) {
+func (ses *Session) sqlModeHasOnlyFullGroupBy() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasOnlyFullGroupByValue(value)
+	return ok && has
+}
+
+func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy bool, val interface{}) {
 	ses.updateSqlModeNoAutoValueOnZero(val)
 	newNative, ok := sqlModeHasMatrixOneNativeValue(val)
 	if !ok {
 		return
 	}
-	if oldNative != newNative {
+	newOnlyFullGroupBy, ok := sqlModeHasOnlyFullGroupByValue(val)
+	if !ok {
+		return
+	}
+	if oldNative != newNative || oldOnlyFullGroupBy != newOnlyFullGroupBy {
 		ses.cleanCache()
 	}
 }

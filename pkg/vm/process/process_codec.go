@@ -19,6 +19,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -63,6 +64,10 @@ func (proc *Process) BuildProcessInfo(
 		// Carry ROW_COUNT() state so it is correct when an expression that reads
 		// it (e.g. row_count() in a projection) is pushed down to a remote CN.
 		procInfo.AffectedRows = proc.GetAffectedRows()
+		// Assignment casts can run in a remote scan scope. Carry INSERT IGNORE
+		// semantics with the process so those casts take the same adjustment
+		// path as they do on the coordinating CN.
+		procInfo.StatementRuntimeIgnore = proc.GetStmtProfile().GetStatementIgnore()
 		snapshot, err := proc.GetTxnOperator().Snapshot()
 		if err != nil {
 			return procInfo, err
@@ -231,6 +236,9 @@ func (c *codecService) Decode(
 	proc.Base.SessionInfo = sessionInfo
 	proc.Base.SessionInfo.StorageEngine = c.engine
 	proc.SetAffectedRows(value.AffectedRows)
+	stmtProfile := NewStmtProfile(uuid.Nil, uuid.Nil)
+	stmtProfile.SetStatementRuntimeProfile("", "", value.StatementRuntimeIgnore)
+	proc.Base.StmtProfile = stmtProfile
 	if value.PrepareParams.Length > 0 {
 		prepareParams, err := vector.NewVecWithDataCopy(
 			types.T_text.ToType(),

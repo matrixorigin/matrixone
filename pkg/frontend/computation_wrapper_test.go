@@ -146,6 +146,9 @@ func newPreparedExecuteEnvForSQL(t testing.TB, stmtID uint32, sql string) (*Sess
 		Sql:                 prepareString.Sql,
 		PreparePlan:         preparePlan,
 		PrepareStmt:         stmts[0],
+		NativeMode:          ses.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:     ses.sqlModeHasOnlyFullGroupBy(),
+		onlyFullGroupBySet:  true,
 		getFromSendLongData: make(map[int]struct{}),
 		protocolVersion:     currentProtocolVersion(proc),
 	}
@@ -851,6 +854,26 @@ func TestInitExecuteStmtParamRebuildsPreparedPlanWhenSQLModePresenceChanges(t *t
 	require.NotNil(t, retPlan)
 	require.NotNil(t, retStmt)
 	require.True(t, prepareStmt.NativeMode)
+	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
+}
+
+func TestInitExecuteStmtParamRebuildsPreparedPlanWhenOnlyFullGroupByChanges(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 109)
+	defer prepareStmt.Close()
+
+	execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", ""))
+	prepareStmt.OnlyFullGroupBy = false
+	prepareStmt.onlyFullGroupBySet = true
+	originalPlan := prepareStmt.PreparePlan
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "ONLY_FULL_GROUP_BY"))
+
+	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotNil(t, retPlan)
+	require.NotNil(t, retStmt)
+	require.True(t, prepareStmt.OnlyFullGroupBy)
 	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
 }
 
