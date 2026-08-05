@@ -82,6 +82,8 @@ alter table events resume lifecycle;
 show lifecycle for table events;
 ➤ action[12,0,0]  ¦  state[12,0,0]  ¦  expire_after_days[-5,0,0]  ¦  stage_id[-5,0,0]  ¦  purge_after_days[-5,0,0]  ¦  binding_generation[-5,0,0]  ¦  updated_at[12,0,0]  𝄀
 DELETE  ¦  ACTIVE  ¦  7  ¦  null  ¦  null  ¦  3  ¦  2026-08-04 15:07:03
+create index idx_events_created_at on events(created_at);
+not supported: CREATE INDEX on a Lifecycle-bound table; UNSET LIFECYCLE first
 show lifecycle datasets for table events limit 1;
 ➤ dataset_id[12,0,0]  ¦  state[12,0,0]  ¦  row_count[-5,0,0]  ¦  logical_bytes[-5,0,0]  ¦  purge_eligible_at[12,0,0]  ¦  manifest_key[12,0,0]
 show lifecycle jobs limit 1;
