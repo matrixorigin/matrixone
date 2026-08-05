@@ -9273,7 +9273,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			return 0, err
 		}
 		if tableDef == nil {
-			return 0, moerr.NewParseErrorf(builder.GetContext(), "table %q does not exist", table)
+			return 0, moerr.NewNoSuchTablef(builder.GetContext(), "SQL parser error: table %q does not exist", table)
 		}
 
 		tableDef.Name2ColIndex = map[string]int32{}
