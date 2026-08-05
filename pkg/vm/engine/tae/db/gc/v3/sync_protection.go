@@ -15,6 +15,7 @@
 package gc
 
 import (
+	"bytes"
 	"encoding/base64"
 	"sync"
 	"sync/atomic"
@@ -44,6 +45,31 @@ type SyncProtection struct {
 	ValidTS    int64             // Valid timestamp (nanoseconds), needs to be renewed
 	SoftDelete bool              // Whether soft deleted
 	CreateTime time.Time         // Creation time for logging
+}
+
+// EnsureSyncProtection makes crash replay idempotent while still rejecting a
+// read reference that is already bound to different protection facts.
+func (m *SyncProtectionManager) EnsureSyncProtection(jobID, bfData string, validTS int64, taskID string) error {
+	err := m.RegisterSyncProtection(jobID, bfData, validTS, taskID)
+	if !moerr.IsMoErrCode(err, moerr.ErrSyncProtectionExists) {
+		return err
+	}
+	expected, decodeErr := base64.StdEncoding.DecodeString(bfData)
+	if decodeErr != nil {
+		return moerr.NewSyncProtectionInvalidNoCtx()
+	}
+	m.RLock()
+	p := m.protections[jobID]
+	if p == nil || p.SoftDelete || p.ValidTS != validTS {
+		m.RUnlock()
+		return err
+	}
+	actual, marshalErr := p.BF.Marshal()
+	m.RUnlock()
+	if marshalErr != nil || !bytes.Equal(actual, expected) {
+		return err
+	}
+	return nil
 }
 
 // SyncProtectionManager manages sync protection entries
@@ -239,6 +265,25 @@ func (m *SyncProtectionManager) UnregisterSyncProtection(jobID string) error {
 
 	p.SoftDelete = true
 
+	logutil.Info(
+		"GC-Sync-Protection-Soft-Deleted",
+		zap.String("job-id", jobID),
+		zap.Int64("valid-ts", p.ValidTS),
+	)
+	return nil
+}
+
+// ReleaseSyncProtection is the idempotent terminal form used by durable read
+// leases. A replay may repeat release after the protection was already soft
+// deleted or cleaned.
+func (m *SyncProtectionManager) ReleaseSyncProtection(jobID string) error {
+	m.Lock()
+	defer m.Unlock()
+	p := m.protections[jobID]
+	if p == nil || p.SoftDelete {
+		return nil
+	}
+	p.SoftDelete = true
 	logutil.Info(
 		"GC-Sync-Protection-Soft-Deleted",
 		zap.String("job-id", jobID),
