@@ -1436,6 +1436,11 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	if val, err = def.GetType().Convert(val); err != nil {
 		return err
 	}
+	if name == "transaction_isolation" || name == "tx_isolation" {
+		if _, err = txnIsolationFromSystemValue(ctx, val); err != nil {
+			return err
+		}
+	}
 
 	if name == "wait_timeout" || name == "interactive_timeout" {
 		if err = validateTimeoutLimits(ctx, ses, name, val); err != nil {

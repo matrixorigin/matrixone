@@ -1200,7 +1200,9 @@ func handleSetTransaction(ses *Session, execCtx *ExecCtx, stmt *tree.SetTransact
 		if txnHandler == nil {
 			return moerr.NewInternalError(execCtx.reqCtx, "transaction handler is not initialized")
 		}
-		txnHandler.setNextTxnIsolation(isolation)
+		if err := txnHandler.setNextTxnIsolation(execCtx.reqCtx, isolation); err != nil {
+			return err
+		}
 	case tree.TransactionScopeSession:
 		if err := ses.SetSessionSysVar(execCtx.reqCtx, "transaction_isolation", value); err != nil {
 			return err

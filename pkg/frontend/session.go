@@ -313,17 +313,31 @@ func (ses *Session) InitSystemVariables(ctx context.Context, bh BackgroundExec) 
 	if sv, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx, bh); err != nil {
 		return
 	}
+	sessionVars := sv.Clone()
+	transactionIsolationValue := sessionVars.Get("transaction_isolation")
+	if transactionIsolationValue == nil {
+		transactionIsolationValue = gSysVarsDefs["transaction_isolation"].Default
+	}
+	transactionIsolation, err := txnIsolationFromSystemValue(ctx, transactionIsolationValue)
+	if err != nil {
+		return err
+	}
+
 	ses.mu.Lock()
-	defer ses.mu.Unlock()
 	ses.gSysVars = sv
-	ses.sesSysVars = ses.gSysVars.Clone()
+	ses.sesSysVars = sessionVars
+	txnHandler := ses.txnHandler
+	ses.mu.Unlock()
 	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
 
 	// Initialize rewriteEnabled cache
-	if v := ses.sesSysVars.Get("enable_remap_hint"); v != nil {
+	if v := sessionVars.Get("enable_remap_hint"); v != nil {
 		if on, convErr := valueIsBoolTrue(v); convErr == nil {
 			ses.rewriteEnabled.Store(on)
 		}
+	}
+	if txnHandler != nil {
+		txnHandler.setSessionTxnIsolation(transactionIsolation)
 	}
 	return
 }
