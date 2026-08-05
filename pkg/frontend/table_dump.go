@@ -176,6 +176,44 @@ func tableDumpRelationKey(role, indexName, indexAlgoTableType string) string {
 	return role + "\x00" + indexName + "\x00" + indexAlgoTableType
 }
 
+func tableDumpLegacyTinyTextResolver(
+	ses *Session,
+	defaultDB string,
+	defaultDatabase engine.Database,
+) sqlplan.LegacyTinyTextTableResolver {
+	return func(
+		ctx context.Context,
+		sourceDB string,
+		sourceTable string,
+	) (*plan.TableDef, error) {
+		if sourceDB == "" {
+			sourceDB = defaultDB
+		}
+		database := defaultDatabase
+		if database == nil || !strings.EqualFold(sourceDB, defaultDB) {
+			var err error
+			database, err = ses.GetTxnHandler().GetStorage().Database(
+				ctx, sourceDB, ses.GetTxnHandler().GetTxn(),
+			)
+			if err != nil {
+				return nil, err
+			}
+		}
+		relation, err := database.Relation(ctx, sourceTable, nil)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		sourceDef := sqlplan.CloneTableDefForPlan(relation.GetTableDef(ctx), true)
+		if sourceDef.DbName == "" {
+			sourceDef.DbName = sourceDB
+		}
+		return sourceDef, nil
+	}
+}
+
 func getTableDumpRelations(
 	ctx context.Context,
 	ses *Session,
@@ -190,37 +228,7 @@ func getTableDumpRelations(
 	if err != nil {
 		return nil, err
 	}
-	resolve := func(
-		ctx context.Context,
-		sourceDB string,
-		sourceTable string,
-	) (*plan.TableDef, error) {
-		if sourceDB == "" {
-			sourceDB = dbName
-		}
-		sourceDatabase := db
-		if !strings.EqualFold(sourceDB, dbName) {
-			var err error
-			sourceDatabase, err = ses.GetTxnHandler().GetStorage().Database(
-				ctx, sourceDB, ses.GetTxnHandler().GetTxn(),
-			)
-			if err != nil {
-				return nil, err
-			}
-		}
-		relation, err := sourceDatabase.Relation(ctx, sourceTable, nil)
-		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
-				return nil, nil
-			}
-			return nil, err
-		}
-		sourceDef := sqlplan.CloneTableDefForPlan(relation.GetTableDef(ctx), true)
-		if sourceDef.DbName == "" {
-			sourceDef.DbName = sourceDB
-		}
-		return sourceDef, nil
-	}
+	resolve := tableDumpLegacyTinyTextResolver(ses, dbName, db)
 	masterHash, err := tableSchemaHashWithResolver(ctx, def, resolve)
 	if err != nil {
 		return nil, err
@@ -286,13 +294,7 @@ func tableSchemaHashWithResolver(
 	// For ordinary tables, reconstruct the DDL from the expanded TableDef. This
 	// makes CREATE TABLE ... LIKE ... compare equal to an equivalent explicit
 	// CREATE TABLE statement stored by another cluster.
-	canReconstruct := def.TableType != catalog.SystemClusterRel &&
-		def.TableType != catalog.SystemExternalRel &&
-		def.Partition == nil && len(def.Fkeys) == 0 && def.ViewSql == nil && def.TblFunc == nil
-	for _, col := range def.Cols {
-		canReconstruct = canReconstruct && col != nil && col.Default != nil
-	}
-	if canReconstruct {
+	if canReconstructTableSchema(def) {
 		clone := *def
 		clone.Name = "__table_dump_target__"
 		clone.DbName = ""
@@ -343,6 +345,42 @@ func tableSchemaHashWithResolver(
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+func canReconstructTableSchema(def *plan.TableDef) bool {
+	if def == nil || def.TableType == catalog.SystemClusterRel ||
+		def.TableType == catalog.SystemExternalRel || def.Partition != nil ||
+		len(def.Fkeys) != 0 || def.ViewSql != nil || def.TblFunc != nil {
+		return false
+	}
+	for _, col := range def.Cols {
+		if col == nil || col.Default == nil {
+			return false
+		}
+	}
+	return true
+}
+
+func tableDumpManifestCreateSQL(
+	ctx context.Context,
+	def *plan.TableDef,
+	resolve sqlplan.LegacyTinyTextTableResolver,
+) (string, error) {
+	if def == nil {
+		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
+	}
+	if !sqlplan.LegacyTinyTextCreateSQLNeedsRebuild(def) || !canReconstructTableSchema(def) {
+		return def.Createsql, nil
+	}
+	clone := sqlplan.CloneTableDefForPlan(def, true)
+	if err := sqlplan.RecoverLegacyTinyText(ctx, clone, resolve); err != nil {
+		return "", moerr.NewInternalErrorNoCtxf("cannot normalize table schema: %v", err)
+	}
+	canonical, _, err := sqlplan.ConstructCreateTableSQL(nil, clone, nil, false, nil)
+	if err != nil {
+		return "", moerr.NewInternalErrorNoCtxf("cannot reconstruct table schema: %v", err)
+	}
+	return canonical, nil
 }
 
 func validateTableDumpSchema(def *plan.TableDef) error {
@@ -1020,13 +1058,19 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 	if err != nil {
 		return err
 	}
+	manifestCreateSQL, err := tableDumpManifestCreateSQL(
+		ctx, def, tableDumpLegacyTinyTextResolver(ses, dbName, nil),
+	)
+	if err != nil {
+		return err
+	}
 	if err = validateTableDumpRelations(ctx, refs); err != nil {
 		return err
 	}
 
 	manifest := &tableDumpManifest{
 		Version: tableDumpFormatVersion, SourceDatabase: dbName, SourceTable: tableName,
-		CreateSQL: def.Createsql, SchemaHash: refs[0].SchemaHash, MetadataOnly: stmt.MetadataOnly,
+		CreateSQL: manifestCreateSQL, SchemaHash: refs[0].SchemaHash, MetadataOnly: stmt.MetadataOnly,
 		Relations: make([]tableDumpRelation, 0, len(refs)),
 	}
 	dumpFS, closeDumpFS, err := openTableDumpFS(ctx, ses, stmt.Path)

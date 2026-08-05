@@ -26,6 +26,8 @@ import (
 
 func TestRecoverLegacyTinyTextFromCreateSQL(t *testing.T) {
 	tableDef := &planpb.TableDef{
+		TblId:     10,
+		LogicalId: 10,
 		DbName:    "upgrade_db",
 		Name:      "legacy_t",
 		TableType: catalog.SystemOrdinaryRel,
@@ -49,12 +51,66 @@ func TestRecoverLegacyTinyTextFromCreateSQL(t *testing.T) {
 	require.Equal(t, int32(types.MaxTinyTextLen), tableDef.Cols[1].Typ.Width)
 }
 
-func TestRecoverLegacyTinyTextFromCreateSQLSurvivesColumnRename(t *testing.T) {
+func TestRecoverLegacyTinyTextDoesNotOverrideAlteredSchemas(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		version   uint32
+		tableID   uint64
+		logicalID uint64
+		column    *planpb.ColDef
+	}{
+		{
+			name:      "tinytext modified to text",
+			version:   0,
+			tableID:   11,
+			logicalID: 10,
+			column:    &planpb.ColDef{Name: "payload", OriginName: "payload", Seqnum: 1, Typ: planpb.Type{Id: int32(types.T_text)}},
+		},
+		{
+			name:      "tinytext dropped and text re-added",
+			version:   0,
+			tableID:   12,
+			logicalID: 10,
+			column:    &planpb.ColDef{Name: "payload", OriginName: "payload", Seqnum: 2, Typ: planpb.Type{Id: int32(types.T_text)}},
+		},
+		{
+			name:      "catalog identity unavailable",
+			version:   0,
+			tableID:   0,
+			logicalID: 0,
+			column:    &planpb.ColDef{Name: "payload", OriginName: "payload", Seqnum: 1, Typ: planpb.Type{Id: int32(types.T_text)}},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tableDef := &planpb.TableDef{
+				TblId:     test.tableID,
+				LogicalId: test.logicalID,
+				DbName:    "upgrade_db",
+				Name:      "altered_t",
+				TableType: catalog.SystemOrdinaryRel,
+				Createsql: "CREATE TABLE altered_t (id INT, payload TINYTEXT)",
+				Version:   test.version,
+				Cols: []*planpb.ColDef{
+					{Name: "id", OriginName: "id", Seqnum: 0, Typ: planpb.Type{Id: int32(types.T_int32)}},
+					test.column,
+				},
+			}
+
+			require.NoError(t, RecoverLegacyTinyTextFromCreateSQL(t.Context(), tableDef))
+			require.Zero(t, tableDef.Cols[1].Typ.Width)
+		})
+	}
+}
+
+func TestRecoverLegacyTinyTextPreservesInPlaceRename(t *testing.T) {
 	tableDef := &planpb.TableDef{
+		TblId:     10,
+		LogicalId: 10,
 		DbName:    "upgrade_db",
 		Name:      "renamed_t",
 		TableType: catalog.SystemOrdinaryRel,
 		Createsql: "CREATE TABLE renamed_t (id INT, payload TINYTEXT)",
+		Version:   1,
 		Cols: []*planpb.ColDef{
 			{Name: "id", OriginName: "id", Seqnum: 0, Typ: planpb.Type{Id: int32(types.T_int32)}},
 			{Name: "renamed_payload", OriginName: "renamed_payload", Seqnum: 1, Typ: planpb.Type{Id: int32(types.T_text)}},
@@ -65,9 +121,29 @@ func TestRecoverLegacyTinyTextFromCreateSQLSurvivesColumnRename(t *testing.T) {
 	require.Equal(t, int32(types.MaxTinyTextLen), tableDef.Cols[1].Typ.Width)
 }
 
+func TestRecoverLegacyTinyTextRequiresStableSeqnum(t *testing.T) {
+	tableDef := &planpb.TableDef{
+		TblId:     10,
+		LogicalId: 10,
+		DbName:    "upgrade_db",
+		Name:      "readded_t",
+		TableType: catalog.SystemOrdinaryRel,
+		Createsql: "CREATE TABLE readded_t (id INT, payload TINYTEXT)",
+		Cols: []*planpb.ColDef{
+			{Name: "id", OriginName: "id", Seqnum: 0, Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{Name: "payload", OriginName: "payload", Seqnum: 2, Typ: planpb.Type{Id: int32(types.T_text)}},
+		},
+	}
+
+	require.NoError(t, RecoverLegacyTinyTextFromCreateSQL(t.Context(), tableDef))
+	require.Zero(t, tableDef.Cols[1].Typ.Width)
+}
+
 func TestRecoverLegacyTinyTextFollowsCreateLikeLineage(t *testing.T) {
 	legacyType := planpb.Type{Id: int32(types.T_text)}
 	tableDef := &planpb.TableDef{
+		TblId:     20,
+		LogicalId: 20,
 		DbName:    "upgrade_db",
 		Name:      "legacy_clone",
 		TableType: catalog.SystemOrdinaryRel,
@@ -88,6 +164,8 @@ func TestRecoverLegacyTinyTextFollowsCreateLikeLineage(t *testing.T) {
 		},
 	}
 	sourceDef := &planpb.TableDef{
+		TblId:     10,
+		LogicalId: 10,
 		DbName:    "upgrade_db",
 		Name:      "legacy_source",
 		TableType: catalog.SystemOrdinaryRel,
@@ -119,6 +197,8 @@ func TestRecoverLegacyTinyTextFollowsCreateLikeLineage(t *testing.T) {
 
 func TestRecoverLegacyTinyTextRejectsStaleCreateLikeLineage(t *testing.T) {
 	tableDef := &planpb.TableDef{
+		TblId:     20,
+		LogicalId: 20,
 		DbName:    "upgrade_db",
 		Name:      "legacy_clone",
 		TableType: catalog.SystemOrdinaryRel,
@@ -128,6 +208,8 @@ func TestRecoverLegacyTinyTextRejectsStaleCreateLikeLineage(t *testing.T) {
 		}},
 	}
 	sourceDef := &planpb.TableDef{
+		TblId:     10,
+		LogicalId: 10,
 		DbName:    "upgrade_db",
 		Name:      "legacy_source",
 		TableType: catalog.SystemOrdinaryRel,

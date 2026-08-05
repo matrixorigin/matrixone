@@ -62,12 +62,19 @@ func RecoverLegacyTinyTextFromCreateSQL(ctx context.Context, tableDef *planpb.Ta
 // RecoverLegacyTinyText restores the subtype marker lost by catalog writers
 // that persisted both TINYTEXT and TEXT as T_text/Width=0.
 //
-// For an explicit CREATE, the original declaration ordinal is matched to the
-// column's durable Seqnum. That survives ALTER TABLE RENAME COLUMN and avoids
-// treating the historical column name as the current schema. For a legacy
-// CREATE TABLE ... LIKE, which contains no subtype declarations, recovery
-// follows the source relation and copies only a recovered TINYTEXT marker after
-// the complete visible ColDef structures match.
+// Historical CREATE SQL is authoritative only while the durable catalog
+// identity proves that the current columns still belong to the original
+// physical table: TblId must equal its non-zero LogicalId. Copy-table ALTER
+// (including MODIFY and DROP/ADD) preserves the old LogicalId under a new TblId,
+// so recovery deliberately leaves those tables as unbounded TEXT. In-place
+// changes such as RENAME retain the physical identity; the durable Seqnum match
+// below then recovers the renamed original column without trusting its old name.
+//
+// For an unaltered explicit CREATE, the original declaration ordinal is matched
+// only to the column's durable Seqnum. For an unaltered legacy CREATE TABLE ...
+// LIKE, which contains no subtype declarations, recovery follows the source
+// relation and copies only a recovered TINYTEXT marker after the complete visible
+// ColDef structures match.
 //
 // Recovery is metadata-only: oversized values written before upgrade remain
 // readable, while future assignments observe the recovered 255-byte limit.
@@ -88,7 +95,7 @@ func recoverLegacyTinyText(
 	visited map[string]struct{},
 	depth int,
 ) error {
-	if tableDef == nil || tableDef.Createsql == "" ||
+	if tableDef == nil || !hasAuthoritativeLegacyCreate(tableDef) || tableDef.Createsql == "" ||
 		!isLegacyTinyTextTableKind(tableDef.TableType) ||
 		!hasLegacyUnboundedText(tableDef) || depth >= maxLegacyTinyTextLineageDepth {
 		return nil
@@ -139,6 +146,26 @@ func recoverLegacyTinyText(
 	return nil
 }
 
+func hasAuthoritativeLegacyCreate(tableDef *planpb.TableDef) bool {
+	return tableDef.TblId != 0 &&
+		tableDef.LogicalId != 0 && tableDef.TblId == tableDef.LogicalId
+}
+
+// LegacyTinyTextCreateSQLNeedsRebuild reports whether rel_createsql can no
+// longer describe the current TEXT subtype safely. Schema consumers that emit
+// executable DDL should reconstruct it from the structured TableDef in this
+// case instead of replaying historical TINYTEXT or CREATE LIKE lineage.
+func LegacyTinyTextCreateSQLNeedsRebuild(tableDef *planpb.TableDef) bool {
+	if tableDef == nil || (tableDef.Version == 0 && hasAuthoritativeLegacyCreate(tableDef)) ||
+		tableDef.Createsql == "" || !isLegacyTinyTextTableKind(tableDef.TableType) ||
+		!hasLegacyUnboundedText(tableDef) {
+		return false
+	}
+	lowerCreateSQL := strings.ToLower(tableDef.Createsql)
+	return strings.Contains(lowerCreateSQL, "tinytext") ||
+		strings.Contains(lowerCreateSQL, "like")
+}
+
 func hasLegacyUnboundedText(tableDef *planpb.TableDef) bool {
 	for _, column := range tableDef.Cols {
 		if column != nil && !column.Hidden &&
@@ -162,16 +189,6 @@ func recoverLegacyTinyTextColumns(tableDef *planpb.TableDef, columns []legacyTin
 				break
 			}
 			candidateIndex = index
-		}
-		// Some synthetic or very old definitions do not carry distinct Seqnums.
-		// The former ordinal+name proof remains a safe compatibility fallback.
-		if candidateIndex == -1 {
-			index := historical.ordinal - 1
-			if index >= 0 && index < len(tableDef.Cols) && tableDef.Cols[index] != nil &&
-				!tableDef.Cols[index].Hidden &&
-				strings.EqualFold(tableDef.Cols[index].GetOriginCaseName(), historical.name) {
-				candidateIndex = index
-			}
 		}
 		if candidateIndex == -1 {
 			continue

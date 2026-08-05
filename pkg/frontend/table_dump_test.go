@@ -396,6 +396,8 @@ func TestGetTableDumpRelationsRecoversLegacyTinyTextHashes(t *testing.T) {
 
 	newTinyTextDef := func(name, createSQL string, width int32) *plan.TableDef {
 		return &plan.TableDef{
+			TblId:     1,
+			LogicalId: 1,
 			Name:      name,
 			TableType: catalog.SystemOrdinaryRel,
 			Createsql: createSQL,
@@ -996,6 +998,8 @@ func TestDumpLoadLegacyTinyTextUpgrade(t *testing.T) {
 
 	const createSQL = "create table source(payload tinytext)"
 	legacyDef := &plan.TableDef{
+		TblId:     1,
+		LogicalId: 1,
 		Name:      "source",
 		TableType: catalog.SystemOrdinaryRel,
 		Createsql: createSQL,
@@ -1695,6 +1699,92 @@ func TestTableSchemaHashExpandsCreateLike(t *testing.T) {
 	rightHash, err = tableSchemaHash(right)
 	require.NoError(t, err)
 	require.NotEqual(t, leftHash, rightHash)
+}
+
+func TestTableSchemaHashPreservesAlteredLegacyText(t *testing.T) {
+	definition := func(
+		version uint32,
+		tableID uint64,
+		logicalID uint64,
+		width int32,
+		createSQL string,
+		seqnum uint32,
+	) *plan.TableDef {
+		return &plan.TableDef{
+			TblId:     tableID,
+			LogicalId: logicalID,
+			Name:      "source",
+			TableType: catalog.SystemOrdinaryRel,
+			Createsql: createSQL,
+			Version:   version,
+			Cols: []*plan.ColDef{{
+				Name:   "payload",
+				Seqnum: seqnum,
+				Typ:    plan.Type{Id: int32(types.T_text), Width: width},
+				Default: &plan.Default{
+					NullAbility: true,
+				},
+			}},
+		}
+	}
+	plainTextHash, err := tableSchemaHash(definition(0, 10, 10, 0, "create table source(payload text)", 0))
+	require.NoError(t, err)
+	tinyTextHash, err := tableSchemaHash(definition(0, 10, 10, types.MaxTinyTextLen, "create table source(payload tinytext)", 0))
+	require.NoError(t, err)
+	require.NotEqual(t, plainTextHash, tinyTextHash)
+
+	inPlaceHash, err := tableSchemaHash(
+		definition(1, 10, 10, 0, "create table source(payload tinytext)", 0),
+	)
+	require.NoError(t, err)
+	require.Equal(t, tinyTextHash, inPlaceHash)
+
+	for _, altered := range []*plan.TableDef{
+		definition(0, 11, 10, 0, "create table source(payload tinytext)", 0),
+		definition(0, 12, 10, 0, "create table source(payload tinytext)", 1),
+	} {
+		alteredHash, err := tableSchemaHash(altered)
+		require.NoError(t, err)
+		require.Equal(t, plainTextHash, alteredHash)
+		require.NotEqual(t, tinyTextHash, alteredHash)
+	}
+}
+
+func TestTableDumpManifestCreateSQLRebuildsAlteredLegacyText(t *testing.T) {
+	legacySQL := "CREATE TABLE source(payload TINYTEXT)"
+	definition := func(version uint32, tableID, logicalID uint64) *plan.TableDef {
+		return &plan.TableDef{
+			TblId:     tableID,
+			LogicalId: logicalID,
+			Name:      "source",
+			TableType: catalog.SystemOrdinaryRel,
+			Createsql: legacySQL,
+			Version:   version,
+			Cols: []*plan.ColDef{{
+				Name: "payload",
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Default: &plan.Default{
+					NullAbility: true,
+				},
+			}},
+		}
+	}
+
+	createSQL, err := tableDumpManifestCreateSQL(t.Context(), definition(0, 10, 10), nil)
+	require.NoError(t, err)
+	require.Equal(t, legacySQL, createSQL)
+
+	createSQL, err = tableDumpManifestCreateSQL(t.Context(), definition(1, 10, 10), nil)
+	require.NoError(t, err)
+	require.Contains(t, strings.ToUpper(createSQL), "`PAYLOAD` TINYTEXT")
+
+	createSQL, err = tableDumpManifestCreateSQL(t.Context(), definition(0, 11, 10), nil)
+	require.NoError(t, err)
+	require.NotContains(t, strings.ToUpper(createSQL), "TINYTEXT")
+	require.Contains(t, strings.ToUpper(createSQL), "`PAYLOAD` TEXT")
+
+	_, err = tableDumpManifestCreateSQL(t.Context(), nil, nil)
+	require.Error(t, err)
 }
 
 func TestTableSchemaHashFallback(t *testing.T) {

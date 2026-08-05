@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -61,12 +62,18 @@ func TestV406UpgradeRecoversLegacyTinyText(t *testing.T) {
 			sourceTable       = "legacy_source"
 			cloneTable        = "legacy_clone"
 			renamedTable      = "legacy_renamed"
+			modifiedTable     = "legacy_modified"
+			readdedTable      = "legacy_readded"
 			cloneCopyTable    = "legacy_clone_copy"
 			renamedCopyTable  = "legacy_renamed_copy"
+			modifiedCopyTable = "legacy_modified_copy"
+			readdedCopyTable  = "legacy_readded_copy"
 			stageName         = "tinytext_upgrade_26687_stage"
 			dumpPath          = "legacy-like"
 			legacyCloneSQL    = "CREATE TABLE " + databaseName + "." + cloneTable + " LIKE " + databaseName + "." + sourceTable
 			legacyRenamedSQL  = "CREATE TABLE " + databaseName + "." + renamedTable + " (id INT PRIMARY KEY, payload TINYTEXT)"
+			legacyModifiedSQL = "CREATE TABLE " + databaseName + "." + modifiedTable + " (id INT PRIMARY KEY, payload TINYTEXT)"
+			legacyReaddedSQL  = "CREATE TABLE " + databaseName + "." + readdedTable + " (id INT PRIMARY KEY, payload TINYTEXT)"
 			renamedColumnName = "renamed_payload"
 		)
 		_, _ = conn.ExecContext(ctx, "drop database if exists "+databaseName)
@@ -80,18 +87,19 @@ func TestV406UpgradeRecoversLegacyTinyText(t *testing.T) {
 
 		mustExecTinyTextUpgradeSQL(t, ctx, conn, "set role moadmin")
 		mustExecTinyTextUpgradeSQL(t, ctx, conn, "create database "+databaseName)
+		mustExecTinyTextUpgradeSQL(t, ctx, conn, "use "+databaseName)
 		mustExecTinyTextUpgradeSQL(t, ctx, conn,
 			"create table "+databaseName+"."+sourceTable+" (id int primary key, payload tinytext)")
 		mustExecTinyTextUpgradeSQL(t, ctx, conn, legacyCloneSQL)
 		mustExecTinyTextUpgradeSQL(t, ctx, conn, legacyRenamedSQL)
 		mustExecTinyTextUpgradeSQL(t, ctx, conn,
-			"alter table "+databaseName+"."+renamedTable+" rename column payload to "+renamedColumnName)
+			legacyModifiedSQL)
+		mustExecTinyTextUpgradeSQL(t, ctx, conn, legacyReaddedSQL)
 
-		// Recreate the durable state emitted by a pre-fix binary through the
-		// engine's schema-change protocol: Createsql says TINYTEXT, atttyp says
-		// T_text/Width=0, and an oversized row already exists. Direct catalog
-		// UPDATE is deliberately avoided because system metadata changes must go
-		// through the full delete/create protocol.
+		// Recreate version-zero definitions emitted by a pre-fix binary through
+		// the engine's delete/create protocol: Createsql says TINYTEXT while
+		// atttyp says T_text/Width=0. Direct catalog UPDATE is deliberately
+		// avoided because system metadata changes must follow the full DDL path.
 		writeLegacyTinyTextCatalogAndRow(
 			t,
 			ctx,
@@ -115,12 +123,65 @@ func TestV406UpgradeRecoversLegacyTinyText(t *testing.T) {
 			databaseName,
 			renamedTable,
 			legacyRenamedSQL,
-			renamedColumnName,
+			"payload",
+		)
+		replaceLegacyTinyTextCatalog(
+			t, ctx, cn.RawService().(cnservice.Service), databaseName,
+			modifiedTable, legacyModifiedSQL, "payload",
+		)
+		replaceLegacyTinyTextCatalog(
+			t, ctx, cn.RawService().(cnservice.Service), databaseName,
+			readdedTable, legacyReaddedSQL, "payload",
+		)
+
+		// These three schema changes reproduce the exact ambiguous pre-fix
+		// states. Rename preserves the lossy physical type, Seqnum, and physical
+		// identity. MODIFY and DROP/ADD deliberately choose TEXT through a copy
+		// ALTER whose new TblId retains the original LogicalId.
+		renameLegacyTinyTextColumn(
+			t, ctx, cn.RawService().(cnservice.Service), databaseName,
+			renamedTable, "payload", renamedColumnName,
+		)
+		mustExecTinyTextUpgradeSQL(t, ctx, conn,
+			"alter table "+databaseName+"."+modifiedTable+" modify payload text")
+		mustExecTinyTextUpgradeSQL(t, ctx, conn,
+			"alter table "+databaseName+"."+readdedTable+" drop column payload")
+		mustExecTinyTextUpgradeSQL(t, ctx, conn,
+			"alter table "+databaseName+"."+readdedTable+" add column payload text")
+		for _, tableName := range []string{modifiedTable, readdedTable} {
+			require.Equal(t, int64(0), tinyTextCatalogVersion(t, ctx, conn, databaseName, tableName))
+			tableID, logicalID := tinyTextCatalogIdentity(t, ctx, conn, databaseName, tableName)
+			require.NotEqual(t, logicalID, tableID)
+		}
+		restoreLegacyTinyTextCreateSQL(
+			t, ctx, cn.RawService().(cnservice.Service), databaseName,
+			modifiedTable, legacyModifiedSQL,
+		)
+		restoreLegacyTinyTextCreateSQL(
+			t, ctx, cn.RawService().(cnservice.Service), databaseName,
+			readdedTable, legacyReaddedSQL,
 		)
 
 		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, sourceTable, "payload"))
 		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, cloneTable, "payload"))
 		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, renamedTable, renamedColumnName))
+		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, modifiedTable, "payload"))
+		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, readdedTable, "payload"))
+		require.Equal(t, int64(0), tinyTextCatalogVersion(t, ctx, conn, databaseName, sourceTable))
+		require.Equal(t, int64(0), tinyTextCatalogVersion(t, ctx, conn, databaseName, cloneTable))
+		require.Equal(t, int64(1), tinyTextCatalogVersion(t, ctx, conn, databaseName, renamedTable))
+		require.Equal(t, int64(1), tinyTextCatalogVersion(t, ctx, conn, databaseName, modifiedTable))
+		require.Equal(t, int64(1), tinyTextCatalogVersion(t, ctx, conn, databaseName, readdedTable))
+		for _, tableName := range []string{sourceTable, cloneTable, renamedTable} {
+			tableID, logicalID := tinyTextCatalogIdentity(t, ctx, conn, databaseName, tableName)
+			require.Equal(t, logicalID, tableID)
+		}
+		for _, tableName := range []string{modifiedTable, readdedTable} {
+			tableID, logicalID := tinyTextCatalogIdentity(t, ctx, conn, databaseName, tableName)
+			require.NotEqual(t, logicalID, tableID)
+		}
+		require.Equal(t, legacyModifiedSQL, tinyTextCatalogCreateSQL(t, ctx, conn, databaseName, modifiedTable))
+		require.Equal(t, legacyReaddedSQL, tinyTextCatalogCreateSQL(t, ctx, conn, databaseName, readdedTable))
 
 		// The metadata-only recovery deliberately preserves legacy oversized
 		// values. The recovered bound applies when a value is written again.
@@ -138,19 +199,37 @@ func TestV406UpgradeRecoversLegacyTinyText(t *testing.T) {
 		renamedDDL := showCreateTableSQL(t, ctx, conn, databaseName, renamedTable)
 		require.Contains(t, strings.ToUpper(renamedDDL), strings.ToUpper(renamedColumnName))
 		require.Contains(t, strings.ToUpper(renamedDDL), "TINYTEXT")
+		requireLegacyAlteredTextDDL(
+			t, showCreateTableSQL(t, ctx, conn, databaseName, modifiedTable), "payload",
+		)
+		requireLegacyAlteredTextDDL(
+			t, showCreateTableSQL(t, ctx, conn, databaseName, readdedTable), "payload",
+		)
 		// Recovery is planner-owned and deliberately does not mutate the old
 		// catalog row in place.
 		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, cloneTable, "payload"))
 		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, renamedTable, renamedColumnName))
 
 		mustExecTinyTextUpgradeSQL(t, ctx, conn, "set session sql_mode = 'STRICT_TRANS_TABLES'")
-		for _, tableName := range []string{sourceTable, cloneTable, renamedTable} {
+		for _, tableName := range []string{sourceTable, cloneTable} {
 			expectTinyTextStrictError(
 				t,
 				ctx,
 				conn,
 				"insert into "+databaseName+"."+tableName+" values (2, repeat('s', 256))",
 			)
+		}
+		expectTinyTextStrictError(t, ctx, conn,
+			"insert into "+databaseName+"."+renamedTable+" (id, "+renamedColumnName+") values (2, repeat('s', 256))")
+		for _, table := range []struct {
+			name   string
+			column string
+		}{
+			{name: modifiedTable, column: "payload"},
+			{name: readdedTable, column: "payload"},
+		} {
+			mustExecTinyTextUpgradeSQL(t, ctx, conn,
+				"insert into "+databaseName+"."+table.name+" (id, "+table.column+") values (2, repeat('s', 1000))")
 		}
 		expectTinyTextStrictError(t, ctx, conn,
 			"update "+databaseName+"."+sourceTable+" set payload = repeat('u', 256) where id = 1")
@@ -166,7 +245,17 @@ func TestV406UpgradeRecoversLegacyTinyText(t *testing.T) {
 		mustExecTinyTextUpgradeSQL(t, ctx, conn,
 			"insert into "+databaseName+"."+cloneTable+" values (2, repeat('n', 1000))")
 		mustExecTinyTextUpgradeSQL(t, ctx, conn,
-			"insert into "+databaseName+"."+renamedTable+" values (2, repeat('n', 1000))")
+			"insert into "+databaseName+"."+renamedTable+" (id, "+renamedColumnName+") values (2, repeat('n', 1000))")
+		for _, table := range []struct {
+			name   string
+			column string
+		}{
+			{name: modifiedTable, column: "payload"},
+			{name: readdedTable, column: "payload"},
+		} {
+			mustExecTinyTextUpgradeSQL(t, ctx, conn,
+				"insert into "+databaseName+"."+table.name+" (id, "+table.column+") values (3, repeat('n', 1000))")
+		}
 		mustExecTinyTextUpgradeSQL(t, ctx, conn,
 			"update "+databaseName+"."+sourceTable+" set payload = repeat('u', 1000) where id = 1")
 		require.NoError(t, conn.QueryRowContext(
@@ -190,39 +279,127 @@ func TestV406UpgradeRecoversLegacyTinyText(t *testing.T) {
 			).Scan(&storedLength))
 			require.Equal(t, 255, storedLength)
 		}
+		for _, table := range []struct {
+			name   string
+			column string
+		}{
+			{name: modifiedTable, column: "payload"},
+			{name: readdedTable, column: "payload"},
+		} {
+			for _, id := range []int{2, 3} {
+				var storedLength int
+				require.NoError(t, conn.QueryRowContext(
+					ctx,
+					fmt.Sprintf("select length(%s) from %s.%s where id = %d", table.column, databaseName, table.name, id),
+				).Scan(&storedLength))
+				require.Equal(t, 1000, storedLength)
+			}
+		}
 
-		// Both exact legacy states are usable as a CREATE TABLE ... LIKE source.
+		// CREATE LIKE preserves recovered TINYTEXT through an in-place rename and
+		// the explicit unbounded TEXT choice after copy-table type evolution.
 		mustExecTinyTextUpgradeSQL(t, ctx, conn,
 			"create table "+databaseName+"."+cloneCopyTable+" like "+databaseName+"."+cloneTable)
 		mustExecTinyTextUpgradeSQL(t, ctx, conn,
 			"create table "+databaseName+"."+renamedCopyTable+" like "+databaseName+"."+renamedTable)
+		mustExecTinyTextUpgradeSQL(t, ctx, conn,
+			"create table "+databaseName+"."+modifiedCopyTable+" like "+databaseName+"."+modifiedTable)
+		mustExecTinyTextUpgradeSQL(t, ctx, conn,
+			"create table "+databaseName+"."+readdedCopyTable+" like "+databaseName+"."+readdedTable)
 		require.Equal(t, int64(types.MaxTinyTextLen), tinyTextCatalogWidth(
 			t, ctx, conn, databaseName, cloneCopyTable, "payload",
 		))
 		require.Equal(t, int64(types.MaxTinyTextLen), tinyTextCatalogWidth(
 			t, ctx, conn, databaseName, renamedCopyTable, renamedColumnName,
 		))
+		require.Equal(t, int64(0), tinyTextCatalogWidth(
+			t, ctx, conn, databaseName, modifiedCopyTable, "payload",
+		))
+		require.Equal(t, int64(0), tinyTextCatalogWidth(
+			t, ctx, conn, databaseName, readdedCopyTable, "payload",
+		))
+		for _, table := range []struct {
+			name   string
+			column string
+		}{
+			{name: modifiedCopyTable, column: "payload"},
+			{name: readdedCopyTable, column: "payload"},
+		} {
+			requireLegacyAlteredTextDDL(
+				t, showCreateTableSQL(t, ctx, conn, databaseName, table.name), table.column,
+			)
+			mustExecTinyTextUpgradeSQL(t, ctx, conn,
+				"insert into "+databaseName+"."+table.name+" (id, "+table.column+") values (1, repeat('l', 1000))")
+		}
+		renamedCopyDDL := showCreateTableSQL(t, ctx, conn, databaseName, renamedCopyTable)
+		require.Contains(t, strings.ToUpper(renamedCopyDDL), strings.ToUpper(renamedColumnName))
+		require.Contains(t, strings.ToUpper(renamedCopyDDL), "TINYTEXT")
+		mustExecTinyTextUpgradeSQL(t, ctx, conn,
+			"insert into "+databaseName+"."+renamedCopyTable+" (id, "+renamedColumnName+") values (1, repeat('l', 1000))")
+		var renamedCopyLength int
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select length("+renamedColumnName+") from "+databaseName+"."+renamedCopyTable+" where id = 1",
+		).Scan(&renamedCopyLength))
+		require.Equal(t, 255, renamedCopyLength)
 
-		// DUMP records the raw historical LIKE statement in the manifest, while
-		// its schema hash is normalized through the source lineage. Recreating
-		// the target from that exact DDL must compare equal on LOAD.
+		// DUMP rebuilds stale historical DDL for renamed and type-altered tables,
+		// but preserves an unaltered legacy LIKE statement whose hash is normalized
+		// through the source lineage. Every manifest must recreate a matching target.
 		stageRoot := t.TempDir()
 		mustExecTinyTextUpgradeSQL(t, ctx, conn,
 			fmt.Sprintf("create stage %s url = 'file://%s'", stageName, stageRoot))
+		readManifestCreateSQL := func(path string) string {
+			manifestBytes, err := os.ReadFile(filepath.Join(stageRoot, path, "manifest.json"))
+			require.NoError(t, err)
+			var manifest struct {
+				CreateSQL string `json:"create_sql"`
+			}
+			require.NoError(t, json.Unmarshal(manifestBytes, &manifest))
+			return manifest.CreateSQL
+		}
+
+		const renamedDumpPath = "legacy-renamed"
+		renamedStagePath := fmt.Sprintf("stage://%s/%s", stageName, renamedDumpPath)
+		mustExecTinyTextUpgradeSQL(t, ctx, conn,
+			fmt.Sprintf("select mo_ctl('dn', 'flush', '%s.%s')", databaseName, renamedTable))
+		mustExecTinyTextUpgradeSQL(t, ctx, conn,
+			"dump table "+databaseName+"."+renamedTable+" to '"+renamedStagePath+"' metadata only")
+		renamedManifestSQL := readManifestCreateSQL(renamedDumpPath)
+		require.Contains(t, strings.ToUpper(renamedManifestSQL), strings.ToUpper(renamedColumnName))
+		require.Contains(t, strings.ToUpper(renamedManifestSQL), "TINYTEXT")
+		mustExecTinyTextUpgradeSQL(t, ctx, conn, "drop table "+databaseName+"."+renamedTable)
+		mustExecTinyTextUpgradeSQL(t, ctx, conn, renamedManifestSQL)
+		require.Equal(t, int64(types.MaxTinyTextLen), tinyTextCatalogWidth(
+			t, ctx, conn, databaseName, renamedTable, renamedColumnName,
+		))
+		mustExecTinyTextUpgradeSQL(t, ctx, conn,
+			"load table "+databaseName+"."+renamedTable+" from '"+renamedStagePath+"'")
+
+		const modifiedDumpPath = "legacy-modified"
+		modifiedStagePath := fmt.Sprintf("stage://%s/%s", stageName, modifiedDumpPath)
+		mustExecTinyTextUpgradeSQL(t, ctx, conn,
+			fmt.Sprintf("select mo_ctl('dn', 'flush', '%s.%s')", databaseName, modifiedTable))
+		mustExecTinyTextUpgradeSQL(t, ctx, conn,
+			"dump table "+databaseName+"."+modifiedTable+" to '"+modifiedStagePath+"' metadata only")
+		modifiedManifestSQL := readManifestCreateSQL(modifiedDumpPath)
+		requireLegacyAlteredTextDDL(t, modifiedManifestSQL, "payload")
+		mustExecTinyTextUpgradeSQL(t, ctx, conn, "drop table "+databaseName+"."+modifiedTable)
+		mustExecTinyTextUpgradeSQL(t, ctx, conn, modifiedManifestSQL)
+		require.Equal(t, int64(0), tinyTextCatalogWidth(
+			t, ctx, conn, databaseName, modifiedTable, "payload",
+		))
+		mustExecTinyTextUpgradeSQL(t, ctx, conn,
+			"load table "+databaseName+"."+modifiedTable+" from '"+modifiedStagePath+"'")
+
 		stagePath := fmt.Sprintf("stage://%s/%s", stageName, dumpPath)
 		mustExecTinyTextUpgradeSQL(t, ctx, conn,
 			fmt.Sprintf("select mo_ctl('dn', 'flush', '%s.%s')", databaseName, cloneTable))
 		mustExecTinyTextUpgradeSQL(t, ctx, conn,
 			"dump table "+databaseName+"."+cloneTable+" to '"+stagePath+"' metadata only")
-		manifestBytes, err := os.ReadFile(filepath.Join(stageRoot, dumpPath, "manifest.json"))
-		require.NoError(t, err)
-		var manifest struct {
-			CreateSQL string `json:"create_sql"`
-		}
-		require.NoError(t, json.Unmarshal(manifestBytes, &manifest))
-		require.Equal(t, legacyCloneSQL, manifest.CreateSQL)
+		cloneManifestSQL := readManifestCreateSQL(dumpPath)
+		require.Equal(t, legacyCloneSQL, cloneManifestSQL)
 		mustExecTinyTextUpgradeSQL(t, ctx, conn, "drop table "+databaseName+"."+cloneTable)
-		mustExecTinyTextUpgradeSQL(t, ctx, conn, manifest.CreateSQL)
+		mustExecTinyTextUpgradeSQL(t, ctx, conn, cloneManifestSQL)
 		require.Equal(t, int64(types.MaxTinyTextLen), tinyTextCatalogWidth(
 			t, ctx, conn, databaseName, cloneTable, "payload",
 		))
@@ -268,19 +445,13 @@ func writeLegacyTinyTextCatalogAndRow(
 	require.NoError(t, err)
 	relation, err := database.Relation(ctx, tableName, nil)
 	require.NoError(t, err)
-
-	legacyDef := plan2.DeepCopyTableDef(relation.GetTableDef(ctx), true)
-	payload := plan2.FindColumn(legacyDef.Cols, "payload")
-	require.NotNil(t, payload)
-	require.Equal(t, int32(types.MaxTinyTextLen), payload.Typ.Width)
-	payload.Typ.Width = 0
-	require.NoError(t, relation.AlterTable(
-		ctx,
-		nil,
-		[]*api.AlterTableReq{
-			api.NewReplaceDefReq(relation.GetDBID(ctx), relation.GetTableID(ctx), legacyDef),
-		},
-	))
+	legacyDefs := legacyTinyTextExecutionDefs(
+		t, relation.GetTableDef(ctx), relation.GetTableDef(ctx).Createsql, "payload",
+	)
+	require.NoError(t, database.Delete(ctx, tableName))
+	require.NoError(t, database.Create(ctx, tableName, legacyDefs))
+	relation, err = database.Relation(ctx, tableName, nil)
+	require.NoError(t, err)
 
 	mp := mpool.MustNewZero()
 	legacyRow := batch.NewWithSize(2)
@@ -323,11 +494,120 @@ func replaceLegacyTinyTextCatalog(
 	require.NoError(t, err)
 	relation, err := database.Relation(ctx, tableName, nil)
 	require.NoError(t, err)
-	legacyDef := plan2.DeepCopyTableDef(relation.GetTableDef(ctx), true)
+	legacyDefs := legacyTinyTextExecutionDefs(t, relation.GetTableDef(ctx), createSQL, columnName)
+	require.NoError(t, database.Delete(ctx, tableName))
+	require.NoError(t, database.Create(ctx, tableName, legacyDefs))
+	require.NoError(t, txn.Commit(ctx))
+	committed = true
+}
+
+func legacyTinyTextExecutionDefs(
+	t *testing.T,
+	tableDef *plan2.TableDef,
+	createSQL string,
+	columnName string,
+) []engine.TableDef {
+	t.Helper()
+	require.Zero(t, tableDef.Version)
+	legacyDef := plan2.DeepCopyTableDef(tableDef, true)
 	column := plan2.FindColumn(legacyDef.Cols, columnName)
 	require.NotNil(t, column)
 	require.Equal(t, int32(types.MaxTinyTextLen), column.Typ.Width)
 	column.Typ.Width = 0
+	legacyDef.Createsql = createSQL
+	foundCreateSQLProperty := false
+	for _, definition := range legacyDef.Defs {
+		properties := definition.GetProperties()
+		if properties == nil {
+			continue
+		}
+		for _, property := range properties.Properties {
+			if property.Key == catalog.SystemRelAttr_CreateSQL {
+				property.Value = createSQL
+				foundCreateSQLProperty = true
+			}
+		}
+	}
+	require.True(t, foundCreateSQLProperty)
+	defs, _, err := engine.PlanDefsToExeDefs(legacyDef)
+	require.NoError(t, err)
+	return append(defs, engine.PlanColsToExeCols(legacyDef.Cols)...)
+}
+
+func renameLegacyTinyTextColumn(
+	t *testing.T,
+	ctx context.Context,
+	service cnservice.Service,
+	databaseName string,
+	tableName string,
+	oldName string,
+	newName string,
+) {
+	t.Helper()
+	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
+	txn, err := service.GetTxnClient().New(ctx, timestamp.Timestamp{})
+	require.NoError(t, err)
+	committed := false
+	defer func() {
+		if !committed {
+			_ = txn.Rollback(ctx)
+		}
+	}()
+
+	eng := service.GetEngine()
+	require.NoError(t, eng.New(ctx, txn))
+	database, err := eng.Database(ctx, databaseName, txn)
+	require.NoError(t, err)
+	relation, err := database.Relation(ctx, tableName, nil)
+	require.NoError(t, err)
+	current := relation.GetTableDef(ctx)
+	require.Zero(t, current.Version)
+	renamed := plan2.DeepCopyTableDef(current, true)
+	column := plan2.FindColumn(renamed.Cols, oldName)
+	require.NotNil(t, column)
+	require.Zero(t, column.Typ.Width)
+	column.Name = newName
+	column.OriginName = newName
+	require.NoError(t, relation.AlterTable(
+		ctx,
+		nil,
+		[]*api.AlterTableReq{
+			api.NewReplaceDefReq(relation.GetDBID(ctx), relation.GetTableID(ctx), renamed),
+			api.NewRenameColumnReq(
+				relation.GetDBID(ctx), relation.GetTableID(ctx), oldName, newName, column.Seqnum,
+			),
+		},
+	))
+	require.NoError(t, txn.Commit(ctx))
+	committed = true
+}
+
+func restoreLegacyTinyTextCreateSQL(
+	t *testing.T,
+	ctx context.Context,
+	service cnservice.Service,
+	databaseName string,
+	tableName string,
+	createSQL string,
+) {
+	t.Helper()
+	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
+	txn, err := service.GetTxnClient().New(ctx, timestamp.Timestamp{})
+	require.NoError(t, err)
+	committed := false
+	defer func() {
+		if !committed {
+			_ = txn.Rollback(ctx)
+		}
+	}()
+
+	eng := service.GetEngine()
+	require.NoError(t, eng.New(ctx, txn))
+	database, err := eng.Database(ctx, databaseName, txn)
+	require.NoError(t, err)
+	relation, err := database.Relation(ctx, tableName, nil)
+	require.NoError(t, err)
+	legacyDef := plan2.DeepCopyTableDef(relation.GetTableDef(ctx), true)
 	legacyDef.Createsql = createSQL
 	foundCreateSQLProperty := false
 	for _, definition := range legacyDef.Defs {
@@ -392,6 +672,93 @@ func tinyTextCatalogWidth(
 		),
 	).Scan(&width))
 	return width
+}
+
+func tinyTextCatalogVersion(
+	t *testing.T,
+	ctx context.Context,
+	conn *sql.Conn,
+	databaseName string,
+	tableName string,
+) int64 {
+	t.Helper()
+	var version int64
+	require.NoError(t, conn.QueryRowContext(
+		ctx,
+		fmt.Sprintf(
+			"select %s from %s.%s where %s = '%s' and %s = '%s' and %s = 0",
+			catalog.SystemRelAttr_Version,
+			catalog.MO_CATALOG,
+			catalog.MO_TABLES,
+			catalog.SystemRelAttr_DBName,
+			databaseName,
+			catalog.SystemRelAttr_Name,
+			tableName,
+			catalog.SystemRelAttr_AccID,
+		),
+	).Scan(&version))
+	return version
+}
+
+func tinyTextCatalogIdentity(
+	t *testing.T,
+	ctx context.Context,
+	conn *sql.Conn,
+	databaseName string,
+	tableName string,
+) (uint64, uint64) {
+	t.Helper()
+	var tableID uint64
+	var logicalID uint64
+	require.NoError(t, conn.QueryRowContext(
+		ctx,
+		fmt.Sprintf(
+			"select %s, %s from %s.%s where %s = '%s' and %s = '%s' and %s = 0",
+			catalog.SystemRelAttr_ID,
+			catalog.SystemRelAttr_LogicalID,
+			catalog.MO_CATALOG,
+			catalog.MO_TABLES,
+			catalog.SystemRelAttr_DBName,
+			databaseName,
+			catalog.SystemRelAttr_Name,
+			tableName,
+			catalog.SystemRelAttr_AccID,
+		),
+	).Scan(&tableID, &logicalID))
+	return tableID, logicalID
+}
+
+func tinyTextCatalogCreateSQL(
+	t *testing.T,
+	ctx context.Context,
+	conn *sql.Conn,
+	databaseName string,
+	tableName string,
+) string {
+	t.Helper()
+	var createSQL string
+	require.NoError(t, conn.QueryRowContext(
+		ctx,
+		fmt.Sprintf(
+			"select %s from %s.%s where %s = '%s' and %s = '%s' and %s = 0",
+			catalog.SystemRelAttr_CreateSQL,
+			catalog.MO_CATALOG,
+			catalog.MO_TABLES,
+			catalog.SystemRelAttr_DBName,
+			databaseName,
+			catalog.SystemRelAttr_Name,
+			tableName,
+			catalog.SystemRelAttr_AccID,
+		),
+	).Scan(&createSQL))
+	return createSQL
+}
+
+func requireLegacyAlteredTextDDL(t *testing.T, ddl string, columnName string) {
+	t.Helper()
+	upperDDL := strings.ToUpper(ddl)
+	require.NotContains(t, upperDDL, "TINYTEXT")
+	require.Contains(t, upperDDL, "`"+strings.ToUpper(columnName)+"` TEXT")
 }
 
 func showCreateTableSQL(
