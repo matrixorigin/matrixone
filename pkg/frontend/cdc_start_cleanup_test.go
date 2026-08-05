@@ -677,6 +677,7 @@ type blockingRestartPublicationExecutor struct {
 	writeMu     sync.Mutex
 	stateMu     sync.Mutex
 	state       string
+	errMsg      string
 	started     chan struct{}
 	release     chan struct{}
 	startedOnce sync.Once
@@ -711,15 +712,15 @@ func (e *blockingRestartPublicationExecutor) ExecWithStatus(
 		strings.Contains(sql, "AND state = 'restarting'") {
 		e.startedOnce.Do(func() { close(e.started) })
 		<-e.release
-		return e.transition(cdc.CDCState_Restarting, cdc.CDCState_Running), nil
+		return e.transition(cdc.CDCState_Restarting, cdc.CDCState_Running, ""), nil
 	}
 	if strings.Contains(sql, "SET state = 'failed'") &&
 		strings.Contains(sql, "AND state = 'restarting'") {
-		return e.transition(cdc.CDCState_Restarting, cdc.CDCState_Failed), nil
+		return e.transition(cdc.CDCState_Restarting, cdc.CDCState_Failed, catalogErrMsgFromSQL(sql)), nil
 	}
 	if strings.Contains(sql, "SET state = 'failed'") &&
 		strings.Contains(sql, "AND state = 'running'") {
-		return e.transition(cdc.CDCState_Running, cdc.CDCState_Failed), nil
+		return e.transition(cdc.CDCState_Running, cdc.CDCState_Failed, catalogErrMsgFromSQL(sql)), nil
 	}
 	return ie.InternalExecStatus{AffectedRows: 1}, nil
 }
@@ -727,6 +728,7 @@ func (e *blockingRestartPublicationExecutor) ExecWithStatus(
 func (e *blockingRestartPublicationExecutor) transition(
 	current string,
 	target string,
+	errMsg string,
 ) ie.InternalExecStatus {
 	e.stateMu.Lock()
 	defer e.stateMu.Unlock()
@@ -734,7 +736,22 @@ func (e *blockingRestartPublicationExecutor) transition(
 		return ie.InternalExecStatus{AffectedRows: 0}
 	}
 	e.state = target
+	e.errMsg = errMsg
 	return ie.InternalExecStatus{AffectedRows: 1}
+}
+
+func catalogErrMsgFromSQL(sql string) string {
+	const prefix = "err_msg = '"
+	start := strings.Index(sql, prefix)
+	if start < 0 {
+		return ""
+	}
+	remaining := sql[start+len(prefix):]
+	end := strings.Index(remaining, "' WHERE")
+	if end < 0 {
+		return ""
+	}
+	return strings.ReplaceAll(remaining[:end], "''", "'")
 }
 
 func (e *blockingRestartPublicationExecutor) Query(
@@ -761,7 +778,7 @@ func (e *blockingRestartPublicationExecutor) Query(
 	}
 	e.stateMu.Lock()
 	defer e.stateMu.Unlock()
-	return &cdcStateQueryResult{state: e.state, rows: 1}
+	return &cdcStateQueryResult{state: e.state, errMsg: e.errMsg, rows: 1}
 }
 
 func (e *blockingRestartPublicationExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {
@@ -1313,7 +1330,11 @@ func TestResumeRunningTaskClearsTableErrorsWithoutReplacingExecution(t *testing.
 }
 
 func TestResumeFailedTableErrorRecoversFromRecordedWatermark(t *testing.T) {
-	internalExecutor := &captureCDCExecutor{}
+	catalog := &cdcCatalogStateExecutor{
+		state:        cdc.CDCState_Running,
+		currentState: cdc.CDCState_Running,
+		targetState:  cdc.CDCState_Failed,
+	}
 	started := make(chan types.TS, 1)
 	startEntered := make(chan struct{})
 	allowStartup := make(chan struct{})
@@ -1325,17 +1346,28 @@ func TestResumeFailedTableErrorRecoversFromRecordedWatermark(t *testing.T) {
 			TaskName: "resume-failed-table-error",
 			Accounts: []*task.Account{{Id: 1}},
 		},
-		ie:             internalExecutor,
+		ie:             catalog,
 		stateMachine:   NewExecutorStateMachine(),
 		holdCh:         make(chan int, 1),
 		runningReaders: &sync.Map{},
 		startTs:        recordedWatermark,
 	}
-	exec.startFunc = func(context.Context) error {
+	exec.startFunc = func(ctx context.Context) error {
 		close(startEntered)
 		<-allowStartup
 		if err := exec.stateMachine.Transition(TransitionStartSuccess); err != nil {
 			return err
+		}
+		required, err := exec.publishStartupCatalogTransition(
+			ctx,
+			exec.callbackGeneration.Load(),
+			false,
+		)
+		if err != nil {
+			return err
+		}
+		if !required {
+			return errors.New("failed recovery did not require catalog publication")
 		}
 		started <- exec.startTs
 		return nil
@@ -1348,6 +1380,11 @@ func TestResumeFailedTableErrorRecoversFromRecordedWatermark(t *testing.T) {
 		SourceTblName: "tb1",
 	}))
 	require.Equal(t, StateFailed, exec.stateMachine.State())
+	require.Equal(t, cdc.CDCState_Failed, catalog.getState())
+	require.Contains(t, catalog.getErrMsg(), "permanent table error")
+	// onPreUpdateCDCTasks uses a single state <> failed predicate, so a
+	// committed TableDetector failure remains the startup admission state.
+	catalog.setTransition(cdc.CDCState_Failed, cdc.CDCState_Running)
 	resumeDone := make(chan error, 1)
 	go func() { resumeDone <- exec.Resume() }()
 	<-startEntered
@@ -1366,37 +1403,54 @@ func TestResumeFailedTableErrorRecoversFromRecordedWatermark(t *testing.T) {
 		t.Fatal("failed table-error recovery was not resumed")
 	}
 	require.Equal(t, StateRunning, exec.stateMachine.State())
-	require.True(t, internalExecutor.tableErrorsAreCleared())
-	for _, sql := range internalExecutor.capturedExecSQLs() {
+	require.Equal(t, cdc.CDCState_Running, catalog.getState())
+	require.Empty(t, catalog.getErrMsg())
+	require.True(t, catalog.tableErrorsAreCleared())
+	for _, sql := range catalog.capturedExecSQLs() {
 		require.NotContains(t, sql, "DELETE FROM `mo_catalog`.`mo_cdc_watermark`")
 	}
 }
 
 func TestResumeFailedRecoveryRemainsRetryableOnAdmissionFailure(t *testing.T) {
-	newFailedExecutor := func(startFunc func(context.Context) error) *CDCTaskExecutor {
+	newFailedExecutor := func(startFunc func(context.Context) error) (*CDCTaskExecutor, *cdcCatalogStateExecutor, types.TS) {
+		catalog := &cdcCatalogStateExecutor{
+			state:        cdc.CDCState_Running,
+			currentState: cdc.CDCState_Running,
+			targetState:  cdc.CDCState_Failed,
+		}
+		recordedWatermark := types.BuildTS(84, 9)
 		exec := newCDCExecutorForLifecycleTest("resume-failed-retryable", startFunc)
+		exec.ie = catalog
+		exec.startTs = recordedWatermark
 		require.NoError(t, exec.stateMachine.Transition(TransitionStart))
 		require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
-		require.NoError(t, exec.stateMachine.SetFailed("table error"))
-		return exec
+		require.Error(t, exec.failTaskForPermanentTableError(context.Background(), &cdc.DbTableInfo{
+			SourceDbName:  "db1",
+			SourceTblName: "tb1",
+		}))
+		catalog.setTransition(cdc.CDCState_Failed, cdc.CDCState_Running)
+		return exec, catalog, recordedWatermark
 	}
 
 	t.Run("scheduler rejection", func(t *testing.T) {
 		schedulerErr := errors.New("scheduler rejected recovery")
-		exec := newFailedExecutor(func(context.Context) error { return nil })
+		exec, catalog, recordedWatermark := newFailedExecutor(func(context.Context) error { return nil })
 		exec.lifecycleTaskScheduler = func(string, func(context.Context)) error {
 			return schedulerErr
 		}
 
 		require.ErrorContains(t, exec.Resume(), schedulerErr.Error())
 		require.Equal(t, StateFailed, exec.stateMachine.State())
+		require.Equal(t, cdc.CDCState_Failed, catalog.getState())
+		require.Contains(t, catalog.getErrMsg(), "permanent table error")
+		require.Equal(t, recordedWatermark, exec.startTs)
 	})
 
 	t.Run("startup timeout", func(t *testing.T) {
 		startEntered := make(chan struct{})
 		startStopped := make(chan struct{})
 		timeoutSignal := make(chan time.Time, 1)
-		exec := newFailedExecutor(func(ctx context.Context) error {
+		exec, catalog, recordedWatermark := newFailedExecutor(func(ctx context.Context) error {
 			close(startEntered)
 			<-ctx.Done()
 			close(startStopped)
@@ -1410,6 +1464,9 @@ func TestResumeFailedRecoveryRemainsRetryableOnAdmissionFailure(t *testing.T) {
 		timeoutSignal <- time.Now()
 		require.ErrorContains(t, <-resumeDone, "startup timed out")
 		require.Equal(t, StateFailed, exec.stateMachine.State())
+		require.Equal(t, cdc.CDCState_Failed, catalog.getState())
+		require.Contains(t, catalog.getErrMsg(), "permanent table error")
+		require.Equal(t, recordedWatermark, exec.startTs)
 		<-startStopped
 		require.Eventually(t, func() bool { return exec.activeStart() == nil }, time.Second, time.Millisecond)
 	})

@@ -1764,6 +1764,7 @@ func (exec *CDCTaskExecutor) updateCatalogStateAndErrMsgWithExecutor(
 		errMsg,
 		currentState,
 	)
+	expectedErrMsg := errMsg
 	return execCDCSQLWithAffectedRows(
 		ctx,
 		sqlExecutor,
@@ -1772,6 +1773,7 @@ func (exec *CDCTaskExecutor) updateCatalogStateAndErrMsgWithExecutor(
 		exec.spec.TaskId,
 		state,
 		currentState,
+		&expectedErrMsg,
 	)
 }
 
@@ -1991,6 +1993,7 @@ func execCDCSQLWithAffectedRows(
 	taskID string,
 	targetState string,
 	currentState string,
+	targetErrMsg *string,
 ) error {
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	fault.TriggerFault(cdcStateTransitionFaultPoint(currentState, targetState))
@@ -2003,7 +2006,15 @@ func execCDCSQLWithAffectedRows(
 		case 1:
 			return nil
 		case 0:
-			return validateCDCStateTransitionResult(ctx, sqlExecutor, accountID, taskID, currentState, targetState)
+			return validateCDCStateTransitionResult(
+				ctx,
+				sqlExecutor,
+				accountID,
+				taskID,
+				currentState,
+				targetState,
+				targetErrMsg,
+			)
 		default:
 			return moerr.NewInternalErrorf(
 				ctx,
@@ -2025,6 +2036,7 @@ func validateCDCStateTransitionResult(
 	taskID string,
 	currentState string,
 	targetState string,
+	targetErrMsg *string,
 ) error {
 	querySQL := cdc.CDCSQLBuilder.GetTaskStateSQL(accountID, taskID)
 	result := sqlExecutor.Query(ctx, querySQL, ie.SessionOverrideOptions{})
@@ -2054,7 +2066,23 @@ func validateCDCStateTransitionResult(
 		return err
 	}
 	if state == targetState {
-		return nil
+		if targetErrMsg == nil {
+			return nil
+		}
+		errMsg, err := result.GetString(ctx, 0, 1)
+		if err != nil {
+			return err
+		}
+		if errMsg == *targetErrMsg {
+			return nil
+		}
+		return moerr.NewInternalErrorf(
+			ctx,
+			"cdc task state transition found conflicting catalog err_msg, task_id=%s, current_state=%s, target_state=%s",
+			taskID,
+			currentState,
+			targetState,
+		)
 	}
 	return moerr.NewInternalErrorf(
 		ctx,
@@ -2118,7 +2146,7 @@ func updateCDCTaskState(
 		state,
 		cdc.CDCState_Pausing,
 	)
-	if err := execCDCSQLWithAffectedRows(ctx, sqlExecutor, sql, accountID, spec.TaskId, state, cdc.CDCState_Pausing); err != nil {
+	if err := execCDCSQLWithAffectedRows(ctx, sqlExecutor, sql, accountID, spec.TaskId, state, cdc.CDCState_Pausing, nil); err != nil {
 		logutil.Error(
 			"cdc.frontend.task.update_state.failed",
 			zap.String("task-id", spec.TaskId),
