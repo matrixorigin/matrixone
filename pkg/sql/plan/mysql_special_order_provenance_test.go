@@ -131,6 +131,21 @@ func requireSingleGroupConcatOrderKeyType(t *testing.T, logicPlan *planpb.Plan, 
 	require.Equal(t, int32(typ), found[0].Typ.Id)
 }
 
+func TestMySQLSpecialMultiKeyEnumOrderUsesRawEnumKey(t *testing.T) {
+	logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t, "select id, e from enum_order_t order by e is null, e desc")
+	require.NoError(t, err)
+	var found []*planpb.OrderBySpec
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_SORT {
+			found = append(found, node.OrderBy...)
+		}
+	}
+	require.Len(t, found, 2)
+	require.Equal(t, int32(types.T_bool), found[0].Expr.Typ.Id)
+	require.Equal(t, int32(types.T_enum), found[1].Expr.Typ.Id)
+	require.Equal(t, planpb.OrderBySpec_DESC, found[1].Flag&planpb.OrderBySpec_DESC)
+}
+
 func TestMySQLSpecialOrderProvenanceThroughQueryBoundaries(t *testing.T) {
 	orderCases := []struct {
 		name string
