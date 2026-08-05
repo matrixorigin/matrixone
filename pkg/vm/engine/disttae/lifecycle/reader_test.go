@@ -120,6 +120,27 @@ func TestObjectScanReportRejectsOutOfRangeAndOverlappingClasses(t *testing.T) {
 	))
 }
 
+func TestObjectScanReportCompletesWholeReaderAndAggregatesReports(t *testing.T) {
+	whole := NewObjectScanReport(2, 3)
+	require.NoError(t, whole.ObservePhysicalBlock(1, nulls.Build(1, 0)))
+	require.NoError(t, whole.ObservePhysicalBlock(2, nil))
+	require.NoError(t, whole.SetVisibleClassification(1, 1))
+	require.NoError(t, whole.ValidateComplete())
+	require.Equal(t, uint64(1), whole.SnapshotDeletedRows)
+	require.Equal(t, uint64(1), whole.ExpiredRows)
+	require.Equal(t, uint64(1), whole.LiveRows)
+	require.ErrorContains(t, whole.SetVisibleClassification(1, 1), "duplicated")
+
+	aggregate := NewObjectScanReport(0, 0)
+	require.NoError(t, aggregate.Add(whole))
+	require.NoError(t, aggregate.ValidateComplete())
+
+	incomplete := NewObjectScanReport(1, 1)
+	require.ErrorContains(t, aggregate.Add(incomplete), "incomplete")
+	var nilReport *ObjectScanReport
+	require.ErrorContains(t, nilReport.Add(whole), "aggregate is incomplete")
+}
+
 type testTombstoneSelector struct {
 	selected      []objectio.ObjectEntry
 	selectedStats []objectio.ObjectStats

@@ -136,6 +136,70 @@ func TestCleanupRootStateMachineAndCommitUnknownAreFailClosed(t *testing.T) {
 	require.False(t, CanSweepCleanupRoot(updated))
 }
 
+func TestValidateCleanupRootRejectsInvalidOwnershipCombinations(t *testing.T) {
+	valid := lifecycleCleanupTestRoot()
+	require.NoError(t, ValidateCleanupRoot(valid))
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*CleanupRoot)
+		want   string
+	}{
+		{
+			name: "missing immutable identity",
+			mutate: func(root *CleanupRoot) {
+				root.RootID = ""
+			},
+			want: "identity is incomplete",
+		},
+		{
+			name: "missing resource reservation",
+			mutate: func(root *CleanupRoot) {
+				root.ReservedCleanupBytes = 0
+			},
+			want: "state identity is incomplete",
+		},
+		{
+			name: "whole archive prefix escapes root",
+			mutate: func(root *CleanupRoot) {
+				root.ArchivePrefix = "archive/shared"
+			},
+			want: "Archive prefix is not Root scoped",
+		},
+		{
+			name: "rewrite booking escapes root",
+			mutate: func(root *CleanupRoot) {
+				root.Mode = CleanupModeArchiveRewrite
+				root.BookingPrefix = "tae/shared"
+			},
+			want: "Booking prefix is not Root scoped",
+		},
+		{
+			name: "completed rewrite retains tae ownership",
+			mutate: func(root *CleanupRoot) {
+				root.Mode = CleanupModeTTLRewrite
+				root.BookingPrefix = "tae/" + root.RootID + "/" + root.AttemptID + "/booking"
+				root.TemporaryCleanupDone = true
+				root.SegmentID = "live-segment"
+			},
+			want: "still owns TAE files",
+		},
+		{
+			name: "unknown cleanup mode",
+			mutate: func(root *CleanupRoot) {
+				root.Mode = "UNKNOWN"
+			},
+			want: "unknown Lifecycle cleanup mode",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := valid
+			test.mutate(&root)
+			require.ErrorContains(t, ValidateCleanupRoot(root), test.want)
+		})
+	}
+}
+
 func TestCleanupSweeperWaitsForQuiescenceAndCatchesLatePut(t *testing.T) {
 	ctx := context.Background()
 	now := time.Unix(1000, 0)
@@ -550,6 +614,35 @@ func TestPublishedRewritePurgeDoesNotDeleteTransferredLiveObject(t *testing.T) {
 	}
 	require.NoError(t, sweeper.SweepOne(ctx, root.RootID, now))
 	require.Contains(t, tae.keys(), liveObject)
+}
+
+func TestCleanupPublishedTemporaryDeletesOnlyRootOwnedBooking(t *testing.T) {
+	ctx := context.Background()
+	repository := newMemoryCleanupRootRepository()
+	root := lifecycleCleanupTestRoot()
+	root.Mode = CleanupModeArchiveRewrite
+	root.State = CleanupRootPublished
+	root.BookingPrefix = "tae/" + root.RootID + "/" + root.AttemptID + "/booking"
+	root.SegmentID = ""
+	root.OrdinalUpperBound = 0
+	require.NoError(t, repository.Register(ctx, root))
+
+	store := newMemoryArchiveStore()
+	bookingKey := root.BookingPrefix + "/page-000000"
+	require.NoError(t, store.Put(ctx, bookingKey, []byte("booking")))
+	require.NoError(t, store.Put(ctx, "tae/unrelated/page", []byte("keep")))
+
+	updated, err := CleanupPublishedTemporary(ctx, repository, store, root)
+	require.NoError(t, err)
+	require.True(t, updated.TemporaryCleanupDone)
+	require.Empty(t, updated.BookingPrefix)
+	require.Equal(t, []string{"tae/unrelated/page"}, store.keys())
+
+	persisted, err := repository.Get(ctx, root.RootID)
+	require.NoError(t, err)
+	require.Equal(t, updated, persisted)
+	_, err = CleanupPublishedTemporary(ctx, repository, nil, persisted)
+	require.NoError(t, err, "completed cleanup is idempotent and no longer needs a store")
 }
 
 func lifecycleCleanupTestRoot() CleanupRoot {
