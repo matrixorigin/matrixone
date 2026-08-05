@@ -345,6 +345,53 @@ WHERE grp = 1
 GROUP BY grp;
 grp    GROUP_CONCAT(val, :, suffix, |,order by x % 2 asc, y desc)
 1    b:s2|c:s1|a:s3
+SELECT
+grp,
+GROUP_CONCAT(val ORDER BY x LIMIT 2 SEPARATOR '|') AS limited_values
+FROM group_concat_ordered
+GROUP BY grp
+ORDER BY grp;
+grp    limited_values
+1    c|b
+2    a|b
+3    null-key|one
+SELECT GROUP_CONCAT(val ORDER BY x SEPARATOR '|' LIMIT 1 OFFSET 1) AS offset_value
+FROM group_concat_ordered
+WHERE grp = 1;
+offset_value
+b
+SELECT GROUP_CONCAT(DISTINCT val ORDER BY x LIMIT 1, 1) AS distinct_offset_value
+FROM group_concat_ordered
+WHERE grp = 2;
+distinct_offset_value
+b
+SELECT GROUP_CONCAT(val LIMIT 1 SEPARATOR '|') AS no_order_limit_value
+FROM group_concat_ordered
+WHERE grp = 1 AND val = 'a';
+no_order_limit_value
+a
+SELECT GROUP_CONCAT(val ORDER BY x LIMIT 1) AS default_separator_limit_value
+FROM group_concat_ordered
+WHERE grp = 1;
+default_separator_limit_value
+c
+SELECT GROUP_CONCAT(val ORDER BY x LIMIT 1, 2 SEPARATOR '|') AS comma_offset_limit_value
+FROM group_concat_ordered
+WHERE grp = 1;
+comma_offset_limit_value
+b|a
+SELECT GROUP_CONCAT(val, ':', suffix ORDER BY x DESC SEPARATOR '~' LIMIT 2) AS multi_expr_limit_value
+FROM group_concat_ordered
+WHERE grp = 1;
+multi_expr_limit_value
+a:s3~b:s2
+PREPARE group_concat_limit_stmt FROM
+'SELECT GROUP_CONCAT(val ORDER BY x SEPARATOR ''|'' LIMIT 2) AS prepared_limit_value FROM group_concat_ordered WHERE grp = ?';
+SET @group_concat_limit_grp = 1;
+EXECUTE group_concat_limit_stmt USING @group_concat_limit_grp;
+prepared_limit_value
+c|b
+DEALLOCATE PREPARE group_concat_limit_stmt;
 PREPARE group_concat_ordered_stmt FROM
 'SELECT GROUP_CONCAT(val ORDER BY x) FROM group_concat_ordered WHERE grp = ?';
 SET @group_concat_ordered_grp = 1;

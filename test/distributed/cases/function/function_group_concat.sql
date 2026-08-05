@@ -290,6 +290,47 @@ FROM group_concat_ordered
 WHERE grp = 1
 GROUP BY grp;
 
+-- LIMIT is evaluated after ORDER BY and DISTINCT, and accepts both MySQL
+-- separator/limit clause orders plus OFFSET syntax.
+SELECT
+    grp,
+    GROUP_CONCAT(val ORDER BY x LIMIT 2 SEPARATOR '|') AS limited_values
+FROM group_concat_ordered
+GROUP BY grp
+ORDER BY grp;
+
+SELECT GROUP_CONCAT(val ORDER BY x SEPARATOR '|' LIMIT 1 OFFSET 1) AS offset_value
+FROM group_concat_ordered
+WHERE grp = 1;
+
+SELECT GROUP_CONCAT(DISTINCT val ORDER BY x LIMIT 1, 1) AS distinct_offset_value
+FROM group_concat_ordered
+WHERE grp = 2;
+
+-- Additional LIMIT forms. The no-ORDER-BY case has one input row so its
+-- expected value does not depend on unspecified aggregate input order.
+SELECT GROUP_CONCAT(val LIMIT 1 SEPARATOR '|') AS no_order_limit_value
+FROM group_concat_ordered
+WHERE grp = 1 AND val = 'a';
+
+SELECT GROUP_CONCAT(val ORDER BY x LIMIT 1) AS default_separator_limit_value
+FROM group_concat_ordered
+WHERE grp = 1;
+
+SELECT GROUP_CONCAT(val ORDER BY x LIMIT 1, 2 SEPARATOR '|') AS comma_offset_limit_value
+FROM group_concat_ordered
+WHERE grp = 1;
+
+SELECT GROUP_CONCAT(val, ':', suffix ORDER BY x DESC SEPARATOR '~' LIMIT 2) AS multi_expr_limit_value
+FROM group_concat_ordered
+WHERE grp = 1;
+
+PREPARE group_concat_limit_stmt FROM
+    'SELECT GROUP_CONCAT(val ORDER BY x SEPARATOR ''|'' LIMIT 2) AS prepared_limit_value FROM group_concat_ordered WHERE grp = ?';
+SET @group_concat_limit_grp = 1;
+EXECUTE group_concat_limit_stmt USING @group_concat_limit_grp;
+DEALLOCATE PREPARE group_concat_limit_stmt;
+
 PREPARE group_concat_ordered_stmt FROM
     'SELECT GROUP_CONCAT(val ORDER BY x) FROM group_concat_ordered WHERE grp = ?';
 SET @group_concat_ordered_grp = 1;

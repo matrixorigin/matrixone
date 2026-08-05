@@ -951,6 +951,10 @@ type FuncExpr struct {
 	WindowSpec *WindowSpec
 
 	OrderBy OrderBy
+	// Limit is used by GROUP_CONCAT. It is deliberately kept on FuncExpr rather
+	// than encoded as a function argument because it controls aggregate output,
+	// not an expression passed to the function.
+	Limit *Limit
 }
 
 func (node *FuncExpr) Format(ctx *FmtCtx) {
@@ -994,6 +998,10 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		}
 		ctx.WriteString(" separator ")
 		node.Exprs[len(node.Exprs)-1].Format(ctx)
+		if node.Limit != nil {
+			ctx.WriteByte(' ')
+			node.Limit.Format(ctx)
+		}
 	} else if node.Func.FunctionReference.(*UnresolvedName).ColName() == "trim" {
 		trimExprsFormat(ctx, node.Exprs)
 	} else {

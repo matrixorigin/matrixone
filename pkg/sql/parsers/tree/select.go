@@ -300,6 +300,14 @@ type Limit struct {
 	Offset, Count Expr
 }
 
+// GroupConcatOptions holds the clauses that follow GROUP_CONCAT's expression
+// list. Keeping this parser helper in tree avoids leaking parser-local structs
+// into generated yacc code.
+type GroupConcatOptions struct {
+	Separator string
+	Limit     *Limit
+}
+
 func (node *Limit) Format(ctx *FmtCtx) {
 	needSpace := false
 	if node != nil && node.Count != nil {

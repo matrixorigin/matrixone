@@ -4739,6 +4739,10 @@ func TestGroupConcatDeparseRoundTrip(t *testing.T) {
 	for _, sql := range []string{
 		"select group_concat(v order by v) from t",
 		"select group_concat(distinct v order by v desc separator '|') from t",
+		"select group_concat(v order by v separator '|' limit 2) from t",
+		"select group_concat(v order by v limit 1, 2 separator '|') from t",
+		"select group_concat(v limit 2 separator '|') from t",
+		"select group_concat(v, ':', suffix order by id desc separator '~' limit 2) from t",
 	} {
 		ast, err := ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err)

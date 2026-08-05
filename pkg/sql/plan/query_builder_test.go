@@ -2644,6 +2644,58 @@ func TestGroupConcatOrderByIsBoundPerAggregate(t *testing.T) {
 	}
 }
 
+func TestGroupConcatLimitIsBoundIntoAggregateConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		sql           string
+		args          int
+		orderArgs     int
+		offset, count uint64
+	}{
+		{
+			name:  "limit without order by",
+			sql:   "select group_concat(n_name limit 2) from nation",
+			args:  1,
+			count: 2,
+		},
+		{
+			name:      "offset after order by",
+			sql:       "select group_concat(n_name order by n_nationkey limit 1, 2 separator '|') from nation",
+			args:      2,
+			orderArgs: 1,
+			offset:    1,
+			count:     2,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var fn *plan.Function
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType != plan.Node_AGG || len(node.AggList) == 0 {
+					continue
+				}
+				fn = node.AggList[0].GetF()
+				break
+			}
+			require.NotNil(t, fn)
+			require.Equal(t, plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER, fn.AggConfigType)
+			require.Len(t, fn.Args, tc.args)
+			require.Equal(t, groupConcatLimitConfigVersion, fn.AggConfig[0])
+
+			pos := 1
+			require.Equal(t, uint32(1), binary.BigEndian.Uint32(fn.AggConfig[pos:pos+4]))
+			pos += 4
+			require.Equal(t, uint32(tc.orderArgs), binary.BigEndian.Uint32(fn.AggConfig[pos:pos+4]))
+			pos += 4 + tc.orderArgs + 4*tc.orderArgs
+			require.Equal(t, tc.offset, binary.BigEndian.Uint64(fn.AggConfig[pos:pos+8]))
+			pos += 8
+			require.Equal(t, tc.count, binary.BigEndian.Uint64(fn.AggConfig[pos:pos+8]))
+		})
+	}
+}
+
 func collectReachableSortNodes(query *plan.Query) []*plan.Node {
 	if query == nil || len(query.Steps) == 0 {
 		return nil

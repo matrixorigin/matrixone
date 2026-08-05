@@ -397,6 +397,12 @@ func isCountFuncExpr(astExpr tree.Expr) bool {
 }
 
 const groupConcatOrderConfigVersion = byte(2)
+const groupConcatLimitConfigVersion = byte(3)
+
+type groupConcatLimit struct {
+	offset uint64
+	count  uint64
+}
 
 func (b *HavingBinder) bindGroupConcatOrderBy(
 	astExpr *tree.FuncExpr,
@@ -404,7 +410,11 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 	depth int32,
 	isRoot bool,
 ) error {
-	if len(astExpr.OrderBy) < 1 {
+	limit, err := groupConcatLimitFromAST(b.GetContext(), astExpr.Limit)
+	if err != nil {
+		return err
+	}
+	if len(astExpr.OrderBy) < 1 && limit == nil {
 		return nil
 	}
 
@@ -517,7 +527,7 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 		}
 		orderArgIndexes = append(orderArgIndexes, uint32(orderArgIndex))
 	}
-	if len(orderFlags) == 0 {
+	if len(orderFlags) == 0 && limit == nil {
 		return nil
 	}
 
@@ -526,6 +536,7 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 		orderFlags,
 		orderArgIndexes,
 		separatorLiteral.GetSval(),
+		limit,
 	)
 	args := make([]*plan.Expr, 0, concatArgCount+len(orderExprs))
 	args = append(args, fn.Args[:concatArgCount]...)
@@ -534,6 +545,38 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 	fn.AggConfig = config
 	fn.AggConfigType = plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER
 	return nil
+}
+
+func groupConcatLimitFromAST(ctx context.Context, limit *tree.Limit) (*groupConcatLimit, error) {
+	if limit == nil {
+		return nil, nil
+	}
+	value := func(expr tree.Expr, name string) (uint64, error) {
+		num, ok := expr.(*tree.NumVal)
+		if !ok || num.Kind() != tree.Int || num.Negative() {
+			return 0, moerr.NewSyntaxErrorf(ctx, "GROUP_CONCAT LIMIT %s must be a non-negative integer literal", name)
+		}
+		v, ok := num.Uint64()
+		if !ok {
+			return 0, moerr.NewSyntaxErrorf(ctx, "GROUP_CONCAT LIMIT %s must be a non-negative integer literal", name)
+		}
+		return v, nil
+	}
+	if limit.Count == nil {
+		return nil, moerr.NewSyntaxError(ctx, "GROUP_CONCAT LIMIT requires a row count")
+	}
+	count, err := value(limit.Count, "row count")
+	if err != nil {
+		return nil, err
+	}
+	offset := uint64(0)
+	if limit.Offset != nil {
+		offset, err = value(limit.Offset, "offset")
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &groupConcatLimit{offset: offset, count: count}, nil
 }
 
 func (b *HavingBinder) groupConcatOrderKey(expr *plan.Expr) (*plan.Expr, error) {
@@ -554,10 +597,15 @@ func encodeGroupConcatOrderConfig(
 	orderFlags []byte,
 	orderArgIndexes []uint32,
 	separator string,
+	limit *groupConcatLimit,
 ) []byte {
 	separatorBytes := []byte(separator)
-	config := make([]byte, 0, 13+len(orderFlags)+4*len(orderArgIndexes)+len(separatorBytes))
-	config = append(config, groupConcatOrderConfigVersion)
+	config := make([]byte, 0, 13+len(orderFlags)+4*len(orderArgIndexes)+len(separatorBytes)+16)
+	version := groupConcatOrderConfigVersion
+	if limit != nil {
+		version = groupConcatLimitConfigVersion
+	}
+	config = append(config, version)
 
 	var encodedUint32 [4]byte
 	binary.BigEndian.PutUint32(encodedUint32[:], uint32(concatArgCount))
@@ -568,6 +616,13 @@ func encodeGroupConcatOrderConfig(
 	for _, index := range orderArgIndexes {
 		binary.BigEndian.PutUint32(encodedUint32[:], index)
 		config = append(config, encodedUint32[:]...)
+	}
+	if limit != nil {
+		var encodedUint64 [8]byte
+		binary.BigEndian.PutUint64(encodedUint64[:], limit.offset)
+		config = append(config, encodedUint64[:]...)
+		binary.BigEndian.PutUint64(encodedUint64[:], limit.count)
+		config = append(config, encodedUint64[:]...)
 	}
 	binary.BigEndian.PutUint32(encodedUint32[:], uint32(len(separatorBytes)))
 	config = append(config, encodedUint32[:]...)

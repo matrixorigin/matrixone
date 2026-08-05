@@ -139,6 +139,7 @@ func sqlTaskInt64(v any) int64 {
     orderBy tree.OrderBy
     order *tree.Order
     limit *tree.Limit
+	groupConcatOptions tree.GroupConcatOptions
     rankOption *tree.RankOption
     unionTypeRecord *tree.UnionTypeRecord
     parenTableExpr *tree.ParenTableExpr
@@ -692,6 +693,7 @@ func sqlTaskInt64(v any) int64 {
 %type <order> order
 %type <orderBy> order_list order_by_clause order_by_opt
 %type <limit> limit_opt limit_clause
+%type <groupConcatOptions> group_concat_options
 %type <rankOption> rank_opt
 %type <str> insert_column optype_opt
 %type <str> optype
@@ -877,7 +879,7 @@ func sqlTaskInt64(v any) int64 {
 %type <zeroFillOpt> zero_fill_opt
 %type <boolVal> global_scope exists_opt temporary_opt cycle_opt drop_table_opt rollup_opt
 %type <item> pwd_expire clear_pwd_opt
-%type <str> name_confict separator_opt kmeans_opt
+%type <str> name_confict kmeans_opt
 %type <insert> insert_data
 %type <replace> replace_data
 %type <rowsExprs> values_list
@@ -12443,15 +12445,6 @@ window_partition_by_opt:
         $$ = $1
     }
 
-separator_opt:
-    {
-        $$ = ","
-    }
-|   SEPARATOR STRING
-    {
-       $$ = $2
-    }
-
 kmeans_opt:
     {
         $$ = "1,vector_l2_ops,random,false"
@@ -12494,16 +12487,17 @@ window_spec:
     }
 
 function_call_aggregate:
-    GROUP_CONCAT '(' func_type_opt expression_list order_by_opt separator_opt ')' window_spec_opt
+    GROUP_CONCAT '(' func_type_opt expression_list order_by_opt group_concat_options ')' window_spec_opt
     {
 	    name := tree.NewUnresolvedColName($1)
 	        $$ = &tree.FuncExpr{
 	        Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
-	        Exprs: append($4,tree.NewNumVal($6, $6, false, tree.P_char)),
+	        Exprs: append($4,tree.NewNumVal($6.Separator, $6.Separator, false, tree.P_char)),
 	        Type: $3,
 	        WindowSpec: $8,
             OrderBy:$5,
+			Limit: $6.Limit,
 	    }
     }
 |  CLUSTER_CENTERS '(' func_type_opt expression_list order_by_opt kmeans_opt ')' window_spec_opt
@@ -14509,6 +14503,27 @@ char_type:
     },
     }
 }
+
+group_concat_options:
+    {
+        $$ = tree.GroupConcatOptions{Separator: ","}
+    }
+|   SEPARATOR STRING
+    {
+        $$ = tree.GroupConcatOptions{Separator: $2}
+    }
+|   limit_clause
+    {
+        $$ = tree.GroupConcatOptions{Separator: ",", Limit: $1}
+    }
+|   SEPARATOR STRING limit_clause
+    {
+        $$ = tree.GroupConcatOptions{Separator: $2, Limit: $3}
+    }
+|   limit_clause SEPARATOR STRING
+    {
+        $$ = tree.GroupConcatOptions{Separator: $3, Limit: $1}
+    }
 
 do_stmt:
     DO expression_list

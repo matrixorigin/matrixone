@@ -92,6 +92,70 @@ func TestGroupConcatH0OrderedSpillAndCancellation(t *testing.T) {
 	orderKey.Free(mp)
 }
 
+func TestGroupConcatLimitAppliesAfterOrderAndDistinct(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	newExec := func(distinct bool, concatArgs int, offset, count uint64) *groupConcatExec {
+		info := multiAggInfo{
+			aggID:     100,
+			distinct:  distinct,
+			argTypes:  []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()}[:concatArgs],
+			retType:   types.T_text.ToType(),
+			emptyNull: true,
+		}
+		exec := newGroupConcatExec(mp, info, "|").(*groupConcatExec)
+		require.NoError(t, exec.SetExtraInformation(
+			testGroupConcatLimitConfig(concatArgs, []byte{groupConcatOrderAsc}, "|", offset, count), 0))
+		require.NoError(t, exec.GroupGrow(1))
+		return exec
+	}
+
+	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"c", "a", "b", "a"})
+	orderKeys := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(orderKeys, []int64{3, 1, 2, 0}, nil, mp))
+	defer values.Free(mp)
+	defer orderKeys.Free(mp)
+
+	exec := newExec(false, 2, 1, 2)
+	require.NoError(t, exec.BatchFill(0, []uint64{1, 1, 1, 1}, []*vector.Vector{values, orderKeys}))
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, "a|b", string(result[0].GetBytesAt(0)))
+	result[0].Free(mp)
+	exec.Free()
+
+	exec = newExec(true, 2, 1, 1)
+	require.NoError(t, exec.BatchFill(0, []uint64{1, 1, 1, 1}, []*vector.Vector{values, orderKeys}))
+	result, err = exec.Flush()
+	require.NoError(t, err)
+	// Ordered DISTINCT first keeps the earliest ORDER BY candidate for "a",
+	// then OFFSET is applied to the deduplicated sequence a,b,c.
+	require.Equal(t, "b", string(result[0].GetBytesAt(0)))
+	result[0].Free(mp)
+	exec.Free()
+
+	// LIMIT also has valid semantics without ORDER BY. A zero row count is a
+	// deterministic case that verifies the no-order config path without making
+	// assumptions about unordered aggregate input order.
+	plainInfo := multiAggInfo{
+		aggID:     100,
+		argTypes:  []types.Type{types.T_varchar.ToType()},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+	plainExec := newGroupConcatExec(mp, plainInfo, ",").(*groupConcatExec)
+	require.NoError(t, plainExec.SetExtraInformation(
+		testGroupConcatLimitConfig(1, nil, ",", 0, 0), 0))
+	require.NoError(t, plainExec.GroupGrow(1))
+	require.NoError(t, plainExec.BatchFill(0, []uint64{1}, []*vector.Vector{values}))
+	result, err = plainExec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, "", string(result[0].GetBytesAt(0)))
+	result[0].Free(mp)
+	plainExec.Free()
+}
+
 func TestGroupConcatGroupedOrderedSpillKeepsGroupAddressing(t *testing.T) {
 	mp := mpool.MustNewZero()
 	info := multiAggInfo{
@@ -1112,6 +1176,40 @@ func testGroupConcatOrderConfig(
 		binary.BigEndian.PutUint32(encodedUint32[:], uint32(concatArgCount+i))
 		config = append(config, encodedUint32[:]...)
 	}
+	binary.BigEndian.PutUint32(encodedUint32[:], uint32(len(separatorBytes)))
+	config = append(config, encodedUint32[:]...)
+	config = append(config, separatorBytes...)
+	return AggregateConfig{
+		Type: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+		Data: config,
+	}
+}
+
+func testGroupConcatLimitConfig(
+	concatArgCount int,
+	orderFlags []byte,
+	separator string,
+	offset, count uint64,
+) AggregateConfig {
+	separatorBytes := []byte(separator)
+	config := make([]byte, 0, 29+5*len(orderFlags)+len(separatorBytes))
+	config = append(config, 3)
+
+	var encodedUint32 [4]byte
+	var encodedUint64 [8]byte
+	binary.BigEndian.PutUint32(encodedUint32[:], uint32(concatArgCount))
+	config = append(config, encodedUint32[:]...)
+	binary.BigEndian.PutUint32(encodedUint32[:], uint32(len(orderFlags)))
+	config = append(config, encodedUint32[:]...)
+	config = append(config, orderFlags...)
+	for i := range orderFlags {
+		binary.BigEndian.PutUint32(encodedUint32[:], uint32(concatArgCount+i))
+		config = append(config, encodedUint32[:]...)
+	}
+	binary.BigEndian.PutUint64(encodedUint64[:], offset)
+	config = append(config, encodedUint64[:]...)
+	binary.BigEndian.PutUint64(encodedUint64[:], count)
+	config = append(config, encodedUint64[:]...)
 	binary.BigEndian.PutUint32(encodedUint32[:], uint32(len(separatorBytes)))
 	config = append(config, encodedUint32[:]...)
 	config = append(config, separatorBytes...)

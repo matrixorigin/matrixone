@@ -53,6 +53,8 @@ type groupConcatExec struct {
 	h0SpillData      *os.File
 	orderedSpillRuns [][]groupConcatSpillRun
 	maxLen           uint64
+	limitOffset      uint64
+	limitCount       uint64
 }
 
 var (
@@ -123,6 +125,7 @@ func newGroupConcatExec(mg *mpool.MPool, info multiAggInfo, separator string) Ag
 		separator:    []byte(separator),
 		concatArgCnt: len(info.argTypes),
 		maxLen:       math.MaxUint64,
+		limitCount:   math.MaxUint64,
 	}
 	exec.mp = mg
 	exec.aggInfo = aggInfo{
@@ -431,6 +434,8 @@ func (exec *groupConcatExec) SetExtraInformation(partialResult any, _ int) error
 		exec.orderArgIndexes = nil
 		exec.orderDesc = nil
 		exec.orderNullsLast = nil
+		exec.limitOffset = 0
+		exec.limitCount = math.MaxUint64
 		if len(config) >= groupConcatConfigHeaderSize &&
 			bytes.Equal(config[:len(groupConcatConfigMagic)], groupConcatConfigMagic) {
 			exec.maxLen = binary.LittleEndian.Uint64(config[len(groupConcatConfigMagic):groupConcatConfigHeaderSize])
@@ -447,6 +452,8 @@ func (exec *groupConcatExec) SetExtraInformation(partialResult any, _ int) error
 	}
 
 	config := typedConfig.Data
+	exec.limitOffset = 0
+	exec.limitCount = math.MaxUint64
 	if len(config) >= groupConcatOrderedConfigHeaderSize &&
 		bytes.Equal(config[:len(groupConcatOrderedConfigMagic)], groupConcatOrderedConfigMagic) {
 		exec.maxLen = binary.LittleEndian.Uint64(
@@ -454,12 +461,12 @@ func (exec *groupConcatExec) SetExtraInformation(partialResult any, _ int) error
 		)
 		config = config[groupConcatOrderedConfigHeaderSize:]
 	}
-	concatArgCnt, orderArgIndexes, orderDesc, orderNullsLast, separator, err :=
+	concatArgCnt, orderArgIndexes, orderDesc, orderNullsLast, separator, limitOffset, limitCount, err :=
 		decodeGroupConcatOrderConfig(config)
 	if err != nil {
 		return err
 	}
-	if concatArgCnt < 1 || len(orderDesc) < 1 || len(orderArgIndexes) != len(orderDesc) {
+	if concatArgCnt < 1 || len(orderArgIndexes) != len(orderDesc) {
 		return moerr.NewInternalErrorNoCtx("invalid group_concat order config")
 	}
 	for _, index := range orderArgIndexes {
@@ -473,6 +480,8 @@ func (exec *groupConcatExec) SetExtraInformation(partialResult any, _ int) error
 	exec.orderDesc = orderDesc
 	exec.orderNullsLast = orderNullsLast
 	exec.separator = separator
+	exec.limitOffset = limitOffset
+	exec.limitCount = limitCount
 	exec.retType = GroupConcatReturnType(exec.concatTypes())
 	if exec.distinct {
 		for len(exec.orderedDistinct) < exec.GetNumGroups() {
@@ -637,6 +646,7 @@ func (exec *groupConcatExec) flushSpilledGroup(
 		if exec.distinct {
 			seen = make(map[string]struct{})
 		}
+		skipped, selected := uint64(0), uint64(0)
 		for {
 			if err := context.Cause(ctx); err != nil {
 				return nil, err
@@ -655,6 +665,13 @@ func (exec *groupConcatExec) flushSpilledGroup(
 				}
 				seen[key] = struct{}{}
 			}
+			if skipped < exec.limitOffset {
+				skipped++
+				continue
+			}
+			if selected >= exec.limitCount {
+				break
+			}
 			if !first {
 				var truncated bool
 				buf, truncated = appendGroupConcatBytes(
@@ -672,6 +689,7 @@ func (exec *groupConcatExec) flushSpilledGroup(
 			if truncated {
 				break
 			}
+			selected++
 		}
 		return buf, nil
 	}
@@ -707,6 +725,7 @@ func (exec *groupConcatExec) flushSpilledGroup(
 	if exec.distinct {
 		seen = make(map[string]struct{})
 	}
+	skipped, selected := uint64(0), uint64(0)
 	var replacedOrderBytes int
 	for runHeap.Len() > 0 {
 		if err := context.Cause(ctx); err != nil {
@@ -744,6 +763,24 @@ func (exec *groupConcatExec) flushSpilledGroup(
 			}
 			seen[key] = struct{}{}
 		}
+		if skipped < exec.limitOffset {
+			skipped++
+			heads[run], err = readGroupConcatRunEntry(exec.h0SpillData, &runs[run])
+			if err != nil {
+				return nil, err
+			}
+			if heads[run] != nil {
+				active[run] = *heads[run]
+				if err = exec.setOrderVectorRow(headVectors, run, heads[run].orderPayload); err != nil {
+					return nil, err
+				}
+				heap.Push(runHeap, run)
+			}
+			continue
+		}
+		if selected >= exec.limitCount {
+			break
+		}
 		if !first {
 			var truncated bool
 			buf, truncated = appendGroupConcatBytes(
@@ -761,6 +798,7 @@ func (exec *groupConcatExec) flushSpilledGroup(
 		if truncated {
 			break
 		}
+		selected++
 		heads[run], err = readGroupConcatRunEntry(exec.h0SpillData, &runs[run])
 		if err != nil {
 			return nil, err
@@ -1228,6 +1266,7 @@ func (exec *groupConcatExec) flushOrderedEntries(
 	if deduplicate {
 		seen = make(map[string]struct{}, len(entries))
 	}
+	skipped, selected := uint64(0), uint64(0)
 	for _, selector := range selectors {
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
@@ -1239,6 +1278,13 @@ func (exec *groupConcatExec) flushOrderedEntries(
 				continue
 			}
 			seen[key] = struct{}{}
+		}
+		if skipped < exec.limitOffset {
+			skipped++
+			continue
+		}
+		if selected >= exec.limitCount {
+			break
 		}
 		if !first {
 			var truncated bool
@@ -1258,6 +1304,7 @@ func (exec *groupConcatExec) flushOrderedEntries(
 		if truncated {
 			break
 		}
+		selected++
 	}
 	return buf, nil
 }
@@ -1360,8 +1407,13 @@ func (exec *groupConcatExec) flushGroupInInputOrder(st aggState, group uint16) (
 	buf := make([]byte, 0, 64)
 	first := true
 	truncated := false
+	skipped, selected := uint64(0), uint64(0)
 	if err := st.iter(group, func(key []byte) error {
-		if truncated {
+		if truncated || selected >= exec.limitCount {
+			return nil
+		}
+		if skipped < exec.limitOffset {
+			skipped++
 			return nil
 		}
 		payload := aggPayloadFromKey(&exec.aggInfo, key)
@@ -1386,6 +1438,7 @@ func (exec *groupConcatExec) flushGroupInInputOrder(st aggState, group uint16) (
 			truncated = true
 			return nil
 		}
+		selected++
 		return nil
 	}); err != nil {
 		return nil, err
@@ -1455,11 +1508,12 @@ func decodeGroupConcatOrderConfig(
 	orderArgIndexes []uint32,
 	orderDesc, orderNullsLast []bool,
 	separator []byte,
+	limitOffset, limitCount uint64,
 	err error,
 ) {
 	const uint32Size = 4
 	const minimumSize = 1 + 3*uint32Size
-	if len(config) < minimumSize || (config[0] != 1 && config[0] != groupConcatOrderConfigVersion) {
+	if len(config) < minimumSize || (config[0] != 1 && config[0] != groupConcatOrderConfigVersion && config[0] != 3) {
 		err = moerr.NewInternalErrorNoCtx("invalid group_concat order config")
 		return
 	}
@@ -1508,6 +1562,17 @@ func decodeGroupConcatOrderConfig(
 			orderArgIndexes[i] = binary.BigEndian.Uint32(config[pos : pos+uint32Size])
 			pos += uint32Size
 		}
+	}
+	limitCount = math.MaxUint64
+	if config[0] == 3 {
+		if len(config)-pos < 16+uint32Size {
+			err = moerr.NewInternalErrorNoCtx("invalid group_concat limit config")
+			return
+		}
+		limitOffset = binary.BigEndian.Uint64(config[pos : pos+8])
+		pos += 8
+		limitCount = binary.BigEndian.Uint64(config[pos : pos+8])
+		pos += 8
 	}
 
 	separatorSize := int(binary.BigEndian.Uint32(config[pos : pos+uint32Size]))
