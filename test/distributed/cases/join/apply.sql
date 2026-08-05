@@ -95,9 +95,8 @@ drop table t1;
 create table t1(a datetime,b datetime,c varchar);
 insert into t1 values('2020-02-28 00:00:00','2021-03-01 00:01:00', NULL);
 select * from t1 cross apply generate_series(t1.a,t1.b,t1.c)g;
+drop table t1;
 
--- Regression for issue #26691: OUTER APPLY must emit one NULL-extended row
--- when the correlated table function produces no rows.
 drop table if exists t_outer_apply_empty;
 create table t_outer_apply_empty(id int primary key, j json, start_v int, stop_v int);
 insert into t_outer_apply_empty values(1, '{"a":1}', 1, 1), (2, null, 1, 0);
