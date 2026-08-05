@@ -6885,7 +6885,7 @@ func (pota privilegeTipsArray) String() string {
 	return b.String()
 }
 
-func firstColumnBindingTag(expr *plan.Expr) (int32, bool) {
+func firstColumnChildIndex(expr *plan.Expr) (int32, bool) {
 	if expr == nil {
 		return 0, false
 	}
@@ -6894,39 +6894,31 @@ func firstColumnBindingTag(expr *plan.Expr) (int32, bool) {
 	}
 	if function := expr.GetF(); function != nil {
 		for _, arg := range function.Args {
-			if tag, ok := firstColumnBindingTag(arg); ok {
-				return tag, true
+			if childIndex, ok := firstColumnChildIndex(arg); ok {
+				return childIndex, true
 			}
 		}
 	}
 	return 0, false
 }
 
-func hasBindingTag(node *plan.Node, tag int32) bool {
-	for _, bindingTag := range node.BindingTags {
-		if bindingTag == tag {
-			return true
-		}
-	}
-	return false
-}
-
 // insertDedupTargetScans returns the TABLE_SCAN nodes used only to probe an
 // INSERT target for duplicate keys. The INSERT/REPLACE binders set
 // DedupColName for these internal joins. A SQL-visible DEDUP JOIN uses the
 // same node type and defaults to FAIL, but has no DedupColName; it must retain
-// its SELECT privilege checks. The first operand in each internal DEDUP
-// equality is bound from the target scan. Match that binding tag instead of
-// relying on a physical child position: recursive source scans can swap
-// children without setting IsRightJoin.
+// its SELECT privilege checks. During final plan remapping, BindingTags are
+// removed and DEDUP condition column RelPos values become physical child
+// indexes. The first operand remains the target side even if recursive-plan
+// optimization swaps children, so use that child index rather than stale tags
+// or IsRightJoin.
 func insertDedupTargetScans(q *plan.Query) map[int32]struct{} {
 	if q == nil || q.StmtType != plan.Query_INSERT {
 		return nil
 	}
 
 	scans := make(map[int32]struct{})
-	var collect func(int32, int32, bool, map[int32]struct{})
-	collect = func(nodeID, targetTag int32, matchBindingTag bool, visited map[int32]struct{}) {
+	var collect func(int32, map[int32]struct{})
+	collect = func(nodeID int32, visited map[int32]struct{}) {
 		if nodeID < 0 || int(nodeID) >= len(q.Nodes) {
 			return
 		}
@@ -6940,13 +6932,11 @@ func insertDedupTargetScans(q *plan.Query) map[int32]struct{} {
 			return
 		}
 		if node.NodeType == plan.Node_TABLE_SCAN {
-			if !matchBindingTag || hasBindingTag(node, targetTag) {
-				scans[nodeID] = struct{}{}
-			}
+			scans[nodeID] = struct{}{}
 			return
 		}
 		for _, childID := range node.Children {
-			collect(childID, targetTag, matchBindingTag, visited)
+			collect(childID, visited)
 		}
 	}
 
@@ -6957,12 +6947,14 @@ func insertDedupTargetScans(q *plan.Query) map[int32]struct{} {
 			(node.OnDuplicateAction != plan.Node_FAIL && node.OnDuplicateAction != plan.Node_IGNORE) {
 			continue
 		}
-		if len(node.OnList) > 0 && node.OnList[0].GetF() != nil && len(node.OnList[0].GetF().Args) > 0 {
-			if targetTag, ok := firstColumnBindingTag(node.OnList[0].GetF().Args[0]); ok {
-				collect(node.Children[0], targetTag, true, make(map[int32]struct{}))
-				collect(node.Children[1], targetTag, true, make(map[int32]struct{}))
-			}
+		if len(node.OnList) == 0 || node.OnList[0].GetF() == nil || len(node.OnList[0].GetF().Args) == 0 {
+			continue
 		}
+		targetChild, ok := firstColumnChildIndex(node.OnList[0].GetF().Args[0])
+		if !ok || targetChild < 0 || int(targetChild) >= len(node.Children) {
+			continue
+		}
+		collect(node.Children[targetChild], make(map[int32]struct{}))
 	}
 	return scans
 }

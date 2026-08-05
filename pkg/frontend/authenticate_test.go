@@ -5853,16 +5853,18 @@ func TestExtractPrivilegeTipsFromPlanInsertDedupTargetScan(t *testing.T) {
 			targetID, sourceID := int32(0), int32(1)
 			targetTag, sourceTag := int32(10), int32(20)
 			children := []int32{targetID, sourceID}
+			targetChild, sourceChild := int32(0), int32(1)
 			if tc.isRightJoin || tc.childrenSwapped {
 				children = []int32{sourceID, targetID}
+				targetChild, sourceChild = 1, 0
 			}
 			sourceNode := &plan.Node{NodeType: plan.Node_VALUE_SCAN, BindingTags: []int32{sourceTag}}
 			if tc.sourceScan {
 				sourceNode = &plan.Node{NodeType: plan.Node_TABLE_SCAN, ObjRef: sourceRef, TableDef: sourceDef, BindingTags: []int32{sourceTag}}
 			}
 			dedupCondition := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
-				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: targetTag}}},
-				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: sourceTag}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: targetChild}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: sourceChild}}},
 			}}}}
 			p := &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan.Query{
 				StmtType: plan.Query_INSERT,
@@ -5906,10 +5908,10 @@ func TestExtractPrivilegeTipsFromPlanKeepsUserDedupJoinSources(t *testing.T) {
 		Nodes: []*plan.Node{
 			{NodeType: plan.Node_TABLE_SCAN, ObjRef: targetRef, TableDef: targetDef, BindingTags: []int32{10}},
 			{NodeType: plan.Node_VALUE_SCAN, BindingTags: []int32{20}},
-			{NodeType: plan.Node_JOIN, JoinType: plan.Node_DEDUP, Children: []int32{0, 1}, OnList: []*plan.Expr{equality(10, 20)}, OnDuplicateAction: plan.Node_FAIL, DedupColName: "PRIMARY"},
+			{NodeType: plan.Node_JOIN, JoinType: plan.Node_DEDUP, Children: []int32{0, 1}, OnList: []*plan.Expr{equality(0, 1)}, OnDuplicateAction: plan.Node_FAIL, DedupColName: "PRIMARY"},
 			{NodeType: plan.Node_TABLE_SCAN, ObjRef: secretRef, TableDef: secretDef, BindingTags: []int32{30}},
 			{NodeType: plan.Node_TABLE_SCAN, ObjRef: allowedRef, TableDef: allowedDef, BindingTags: []int32{40}},
-			{NodeType: plan.Node_JOIN, JoinType: plan.Node_DEDUP, Children: []int32{3, 4}, OnList: []*plan.Expr{equality(30, 40)}},
+			{NodeType: plan.Node_JOIN, JoinType: plan.Node_DEDUP, Children: []int32{3, 4}, OnList: []*plan.Expr{equality(0, 1)}},
 			{NodeType: plan.Node_PRE_INSERT, PreInsertCtx: &plan.PreInsertCtx{Ref: targetRef, TableDef: targetDef}},
 		},
 	}}}
