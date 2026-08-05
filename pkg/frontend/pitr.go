@@ -1142,18 +1142,8 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	switch restoreLevel {
 	case tree.RESTORELEVELCLUSTER:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelCluster)
-		subDbToRestore := make(map[string]*subDbRestoreRecord)
-		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, subDbToRestore, &retiredMongoDBAccountIDs); err != nil {
+		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, &retiredMongoDBAccountIDs); err != nil {
 			return
-		}
-		if err = restorePubsWithSnapshotName(ctx, ses.GetService(), bh, pitrName, ts); err != nil {
-			return
-		}
-
-		for _, subDb := range subDbToRestore {
-			if err = restoreToSubDb(ctx, ses.GetService(), bh, pitrName, subDb); err != nil {
-				return
-			}
 		}
 		return
 	case tree.RESTORELEVELACCOUNT:
@@ -1185,6 +1175,24 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 
 	if len(viewMap) > 0 {
 		if err = restoreViewsWithPitr(ctx, ses, bh, pitrName, ts, viewMap, tenantInfo.GetTenant(), tenantInfo.GetTenantID()); err != nil {
+			return
+		}
+	}
+
+	if restoreLevel == tree.RESTORELEVELACCOUNT {
+		// Account PITR recreates databases and relations just like snapshot
+		// restore. Run the same catalog-owner phase only after FK tables and
+		// views exist, so every physical or logical source ID has a final target
+		// identity to bind to. Database/table PITR intentionally does not replace
+		// account-level authorization catalogs and therefore skips this phase.
+		if err = restoreSystemCatalogsAfterObjects(
+			ctx,
+			ses.GetService(),
+			bh,
+			ts,
+			tenantInfo.GetTenantID(),
+			tenantInfo.GetTenantID(),
+		); err != nil {
 			return
 		}
 	}

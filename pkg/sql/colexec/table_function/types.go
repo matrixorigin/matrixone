@@ -39,6 +39,11 @@ type TableFunction struct {
 	Limit    *plan.Expr
 	IsSingle bool
 
+	// Planner-resolved references for internal FULLTEXT SQL over a subscription.
+	// They are never populated from table-function arguments.
+	FulltextSourceRef *plan.ObjectRef
+	FulltextIndexRef  *plan.ObjectRef
+
 	// probe side runtime filter specs
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 
