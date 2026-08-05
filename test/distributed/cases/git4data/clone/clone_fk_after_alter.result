@@ -25,31 +25,25 @@ select table_name, refer_table_name
 from mo_catalog.mo_foreign_keys
 where db_name = 'fk_clone_alter_child_src'
 order by constraint_name;
-➤ table_name[12,-1,0]  ¦  refer_table_name[12,-1,0]  𝄀
-child  ¦  parent
+table_name    refer_table_name
+child    parent
 delete from fk_clone_alter_child_src.parent where id = 1;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 create database fk_clone_alter_child_dst clone fk_clone_alter_child_src;
 select * from fk_clone_alter_child_dst.child order by id;
-➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  payload[12,-1,0]  𝄀
-10  ¦  1  ¦  c1  𝄀
-20  ¦  2  ¦  c2
+id    parent_id    payload
+10    1    c1
+20    2    c2
 show create table fk_clone_alter_child_dst.child;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-child  ¦  CREATE TABLE `child` (
-  `id` int NOT NULL,
-  `parent_id` int DEFAULT NULL,
-  `payload` varchar(64) DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  CONSTRAINT `fk_child_parent` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT
-)
+Table    Create Table
+child    CREATE TABLE `child` (\n  `id` int NOT NULL,\n  `parent_id` int DEFAULT NULL,\n  `payload` varchar(64) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `fk_child_parent` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 delete from fk_clone_alter_child_dst.parent where id = 1;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 insert into fk_clone_alter_child_dst.child values (30, 999, 'invalid');
 internal error: Cannot add or update a child row: a foreign key constraint fails
 insert into fk_clone_alter_child_dst.child values (30, 1, 'valid');
 select count(*) from fk_clone_alter_child_dst.child;
-➤ count(*)[-5,64,0]  𝄀
+count(*)
 3
 drop database fk_clone_alter_child_dst;
 drop database fk_clone_alter_child_src;
@@ -74,27 +68,15 @@ alter table fk_clone_alter_both_src.parent modify column description varchar(128
 alter table fk_clone_alter_both_src.child add column created_at datetime;
 create database fk_clone_alter_both_dst clone fk_clone_alter_both_src;
 show create table fk_clone_alter_both_dst.parent;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-parent  ¦  CREATE TABLE `parent` (
-  `id` int NOT NULL,
-  `code` varchar(16) DEFAULT NULL,
-  `description` varchar(128) DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `code` (`code`)
-)
+Table    Create Table
+parent    CREATE TABLE `parent` (\n  `id` int NOT NULL,\n  `code` varchar(16) DEFAULT NULL,\n  `description` varchar(128) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `code` (`code`)\n)
 show create table fk_clone_alter_both_dst.child;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-child  ¦  CREATE TABLE `child` (
-  `id` int NOT NULL,
-  `parent_id` int DEFAULT NULL,
-  `created_at` datetime DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  CONSTRAINT `fk_both` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT
-)
+Table    Create Table
+child    CREATE TABLE `child` (\n  `id` int NOT NULL,\n  `parent_id` int DEFAULT NULL,\n  `created_at` datetime DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `fk_both` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into fk_clone_alter_both_dst.child(id, parent_id) values (2, 404);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 select count(*) from fk_clone_alter_both_dst.child;
-➤ count(*)[-5,64,0]  𝄀
+count(*)
 1
 drop database fk_clone_alter_both_dst;
 drop database fk_clone_alter_both_src;
@@ -120,24 +102,11 @@ alter table fk_clone_siblings_src.child_b add column b1 int default 2;
 alter table fk_clone_siblings_src.child_a add column a2 int default 3;
 create database fk_clone_siblings_dst clone fk_clone_siblings_src;
 show create table fk_clone_siblings_dst.child_a;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-child_a  ¦  CREATE TABLE `child_a` (
-  `id` int NOT NULL,
-  `parent_id` int DEFAULT NULL,
-  `a1` int DEFAULT 1,
-  `a2` int DEFAULT 3,
-  PRIMARY KEY (`id`),
-  CONSTRAINT `fk_sibling_a` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT
-)
+Table    Create Table
+child_a    CREATE TABLE `child_a` (\n  `id` int NOT NULL,\n  `parent_id` int DEFAULT NULL,\n  `a1` int DEFAULT 1,\n  `a2` int DEFAULT 3,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `fk_sibling_a` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show create table fk_clone_siblings_dst.child_b;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-child_b  ¦  CREATE TABLE `child_b` (
-  `id` int NOT NULL,
-  `parent_id` int DEFAULT NULL,
-  `b1` int DEFAULT 2,
-  PRIMARY KEY (`id`),
-  CONSTRAINT `fk_sibling_b` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT
-)
+Table    Create Table
+child_b    CREATE TABLE `child_b` (\n  `id` int NOT NULL,\n  `parent_id` int DEFAULT NULL,\n  `b1` int DEFAULT 2,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `fk_sibling_b` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into fk_clone_siblings_dst.child_a values (1, 100, 1, 3);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 insert into fk_clone_siblings_dst.child_b values (1, 100, 2);
@@ -172,8 +141,8 @@ select leaf.id, middle.id, root.id
 from fk_clone_chain_dst.leaf leaf
 join fk_clone_chain_dst.middle middle on leaf.middle_id = middle.id
 join fk_clone_chain_dst.root root on middle.root_id = root.id;
-➤ id[4,32,0]  ¦  id[4,32,0]  ¦  id[4,32,0]  𝄀
-1  ¦  1  ¦  1
+id    id    id
+1    1    1
 insert into fk_clone_chain_dst.leaf(id, middle_id) values (2, 999);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 drop database fk_clone_chain_dst;
@@ -200,15 +169,8 @@ alter table fk_clone_composite_src.child add column payload varchar(32);
 alter table fk_clone_composite_src.child modify column payload varchar(64);
 create database fk_clone_composite_dst clone fk_clone_composite_src;
 show create table fk_clone_composite_dst.child;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-child  ¦  CREATE TABLE `child` (
-  `id` int NOT NULL,
-  `tenant_id` int DEFAULT NULL,
-  `object_id` int DEFAULT NULL,
-  `payload` varchar(64) DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  CONSTRAINT `fk_composite` FOREIGN KEY (`tenant_id`,`object_id`) REFERENCES `parent` (`tenant_id`,`object_id`) ON DELETE RESTRICT ON UPDATE RESTRICT
-)
+Table    Create Table
+child    CREATE TABLE `child` (\n  `id` int NOT NULL,\n  `tenant_id` int DEFAULT NULL,\n  `object_id` int DEFAULT NULL,\n  `payload` varchar(64) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `fk_composite` FOREIGN KEY (`tenant_id`,`object_id`) REFERENCES `parent` (`tenant_id`,`object_id`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into fk_clone_composite_dst.child(id, tenant_id, object_id) values (2, 1, 999);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 drop database fk_clone_composite_dst;
@@ -232,17 +194,8 @@ alter table fk_clone_multi_parent_src.child add column payload int default 0;
 alter table fk_clone_multi_parent_src.child add column note varchar(32);
 create database fk_clone_multi_parent_dst clone fk_clone_multi_parent_src;
 show create table fk_clone_multi_parent_dst.child;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-child  ¦  CREATE TABLE `child` (
-  `id` int NOT NULL,
-  `parent_a_id` int DEFAULT NULL,
-  `parent_b_id` int DEFAULT NULL,
-  `payload` int DEFAULT 0,
-  `note` varchar(32) DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  CONSTRAINT `fk_multi_a` FOREIGN KEY (`parent_a_id`) REFERENCES `parent_a` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
-  CONSTRAINT `fk_multi_b` FOREIGN KEY (`parent_b_id`) REFERENCES `parent_b` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT
-)
+Table    Create Table
+child    CREATE TABLE `child` (\n  `id` int NOT NULL,\n  `parent_a_id` int DEFAULT NULL,\n  `parent_b_id` int DEFAULT NULL,\n  `payload` int DEFAULT 0,\n  `note` varchar(32) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `fk_multi_a` FOREIGN KEY (`parent_a_id`) REFERENCES `parent_a` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,\n  CONSTRAINT `fk_multi_b` FOREIGN KEY (`parent_b_id`) REFERENCES `parent_b` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into fk_clone_multi_parent_dst.child(id, parent_a_id, parent_b_id) values (1, 1, 1);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 drop database fk_clone_multi_parent_dst;
@@ -262,19 +215,12 @@ alter table fk_clone_self_src.node add column label varchar(32);
 alter table fk_clone_self_src.node add index idx_label(label);
 create database fk_clone_self_dst clone fk_clone_self_src;
 select id, parent_id from fk_clone_self_dst.node order by id;
-➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
-1  ¦  null  𝄀
-2  ¦  1
+id    parent_id
+1    null
+2    1
 show create table fk_clone_self_dst.node;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-node  ¦  CREATE TABLE `node` (
-  `id` int NOT NULL,
-  `parent_id` int DEFAULT NULL,
-  `label` varchar(32) DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  KEY `idx_label` (`label`),
-  CONSTRAINT `fk_node_parent` FOREIGN KEY (`parent_id`) REFERENCES `node` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT
-)
+Table    Create Table
+node    CREATE TABLE `node` (\n  `id` int NOT NULL,\n  `parent_id` int DEFAULT NULL,\n  `label` varchar(32) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_label` (`label`),\n  CONSTRAINT `fk_node_parent` FOREIGN KEY (`parent_id`) REFERENCES `node` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into fk_clone_self_dst.node(id, parent_id) values (3, 999);
 Cannot add or update a child row: a foreign key constraint fails
 drop database fk_clone_self_dst;
@@ -298,15 +244,8 @@ references fk_clone_recreate_fk_src.parent(id);
 alter table fk_clone_recreate_fk_src.child add column note varchar(32);
 create database fk_clone_recreate_fk_dst clone fk_clone_recreate_fk_src;
 show create table fk_clone_recreate_fk_dst.child;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-child  ¦  CREATE TABLE `child` (
-  `id` int NOT NULL,
-  `parent_id` int DEFAULT NULL,
-  `payload` varchar(32) DEFAULT NULL,
-  `note` varchar(32) DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  CONSTRAINT `fk_recreated` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT
-)
+Table    Create Table
+child    CREATE TABLE `child` (\n  `id` int NOT NULL,\n  `parent_id` int DEFAULT NULL,\n  `payload` varchar(32) DEFAULT NULL,\n  `note` varchar(32) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `fk_recreated` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into fk_clone_recreate_fk_dst.child(id, parent_id) values (1, 999);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 drop database fk_clone_recreate_fk_dst;
@@ -326,19 +265,13 @@ select table_name, constraint_name, refer_table_name
 from mo_catalog.mo_foreign_keys
 where db_name = 'fk_clone_forward_src'
 order by constraint_name;
-➤ table_name[12,-1,0]  ¦  constraint_name[12,-1,0]  ¦  refer_table_name[12,-1,0]  𝄀
-child  ¦  fk_forward  ¦  parent
+table_name    constraint_name    refer_table_name
+child    fk_forward    parent
 create table fk_clone_forward_src.parent (id int primary key);
 set foreign_key_checks = 1;
 show create table fk_clone_forward_src.child;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-child  ¦  CREATE TABLE `child` (
-  `id` int NOT NULL,
-  `parent_id` int DEFAULT NULL,
-  `payload` int DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  CONSTRAINT `fk_forward` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE NO ACTION ON UPDATE NO ACTION
-)
+Table    Create Table
+child    CREATE TABLE `child` (\n  `id` int NOT NULL,\n  `parent_id` int DEFAULT NULL,\n  `payload` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `fk_forward` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into fk_clone_forward_src.child values (1, 404, 0);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 drop database fk_clone_forward_src;
@@ -359,19 +292,13 @@ select table_name, constraint_name, refer_table_name
 from mo_catalog.mo_foreign_keys
 where db_name = 'fk_clone_forward_drop_src'
 order by constraint_name;
-➤ table_name[12,-1,0]  ¦  constraint_name[12,-1,0]  ¦  refer_table_name[12,-1,0]  𝄀
-child  ¦  fk_forward_drop  ¦  parent
+table_name    constraint_name    refer_table_name
+child    fk_forward_drop    parent
 create table fk_clone_forward_drop_src.parent (id int primary key);
 set foreign_key_checks = 1;
 show create table fk_clone_forward_drop_src.child;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-child  ¦  CREATE TABLE `child` (
-  `id` int NOT NULL,
-  `parent_id` int DEFAULT NULL,
-  `payload` int DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  CONSTRAINT `fk_forward_drop` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE NO ACTION ON UPDATE NO ACTION
-)
+Table    Create Table
+child    CREATE TABLE `child` (\n  `id` int NOT NULL,\n  `parent_id` int DEFAULT NULL,\n  `payload` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `fk_forward_drop` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into fk_clone_forward_drop_src.child values (1, 404, 0);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 drop database fk_clone_forward_drop_src;
@@ -395,9 +322,9 @@ select table_name, constraint_name, refer_table_name
 from mo_catalog.mo_foreign_keys
 where db_name = 'fk_clone_self_external_src'
 order by table_name, constraint_name;
-➤ table_name[12,-1,0]  ¦  constraint_name[12,-1,0]  ¦  refer_table_name[12,-1,0]  𝄀
-child  ¦  fk_self_external_child  ¦  parent  𝄀
-parent  ¦  fk_self_external_self  ¦  parent
+table_name    constraint_name    refer_table_name
+child    fk_self_external_child    parent
+parent    fk_self_external_self    parent
 drop table fk_clone_self_external_src.child;
 drop table fk_clone_self_external_src.parent;
 drop database fk_clone_self_external_src;
@@ -420,17 +347,12 @@ select table_name, column_name, refer_table_name, refer_column_name
 from mo_catalog.mo_foreign_keys
 where db_name = 'fk_clone_rename_columns_src'
 order by constraint_name;
-➤ table_name[12,-1,0]  ¦  column_name[12,-1,0]  ¦  refer_table_name[12,-1,0]  ¦  refer_column_name[12,-1,0]  𝄀
-child  ¦  parent_id  ¦  parent  ¦  id
+table_name    column_name    refer_table_name    refer_column_name
+child    parent_id    parent    id
 create database fk_clone_rename_columns_dst clone fk_clone_rename_columns_src;
 show create table fk_clone_rename_columns_dst.child;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-child  ¦  CREATE TABLE `child` (
-  `id` int NOT NULL,
-  `parent_id` int DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  CONSTRAINT `fk_rename_columns` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT
-)
+Table    Create Table
+child    CREATE TABLE `child` (\n  `id` int NOT NULL,\n  `parent_id` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `fk_rename_columns` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into fk_clone_rename_columns_dst.child values (1, 404);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 drop database fk_clone_rename_columns_dst;
@@ -457,17 +379,11 @@ insert into fk_clone_snapshot_src.child(id, parent_id) values (2, 2);
 create database fk_clone_snapshot_dst clone fk_clone_snapshot_src
 {snapshot = 'fk_clone_alter_snapshot'};
 show create table fk_clone_snapshot_dst.child;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-child  ¦  CREATE TABLE `child` (
-  `id` int NOT NULL,
-  `parent_id` int DEFAULT NULL,
-  `before_snapshot` varchar(32) DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  CONSTRAINT `fk_snapshot` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT
-)
+Table    Create Table
+child    CREATE TABLE `child` (\n  `id` int NOT NULL,\n  `parent_id` int DEFAULT NULL,\n  `before_snapshot` varchar(32) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `fk_snapshot` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 select id, parent_id from fk_clone_snapshot_dst.child order by id;
-➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
-1  ¦  1
+id    parent_id
+1    1
 insert into fk_clone_snapshot_dst.child(id, parent_id) values (3, 999);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 drop database fk_clone_snapshot_dst;
@@ -491,15 +407,8 @@ use fk_clone_chain_clone_mid;
 alter table fk_clone_chain_clone_mid.child add column middle_value int;
 create database fk_clone_chain_clone_dst clone fk_clone_chain_clone_mid;
 show create table fk_clone_chain_clone_dst.child;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-child  ¦  CREATE TABLE `child` (
-  `id` int NOT NULL,
-  `parent_id` int DEFAULT NULL,
-  `source_value` int DEFAULT NULL,
-  `middle_value` int DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  CONSTRAINT `fk_clone_chain` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT
-)
+Table    Create Table
+child    CREATE TABLE `child` (\n  `id` int NOT NULL,\n  `parent_id` int DEFAULT NULL,\n  `source_value` int DEFAULT NULL,\n  `middle_value` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `fk_clone_chain` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into fk_clone_chain_clone_dst.child(id, parent_id) values (1, 999);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 drop database fk_clone_chain_clone_dst;
@@ -523,14 +432,8 @@ rename table fk_clone_rename_src.child to fk_clone_rename_src.renamed_child;
 alter table fk_clone_rename_src.renamed_child add column payload varchar(32);
 create database fk_clone_rename_dst clone fk_clone_rename_src;
 show create table fk_clone_rename_dst.renamed_child;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
-renamed_child  ¦  CREATE TABLE `renamed_child` (
-  `id` int NOT NULL,
-  `parent_key` int DEFAULT NULL,
-  `payload` varchar(32) DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  CONSTRAINT `fk_rename` FOREIGN KEY (`parent_key`) REFERENCES `renamed_parent` (`parent_key`) ON DELETE RESTRICT ON UPDATE RESTRICT
-)
+Table    Create Table
+renamed_child    CREATE TABLE `renamed_child` (\n  `id` int NOT NULL,\n  `parent_key` int DEFAULT NULL,\n  `payload` varchar(32) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `fk_rename` FOREIGN KEY (`parent_key`) REFERENCES `renamed_parent` (`parent_key`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into fk_clone_rename_dst.renamed_child(id, parent_key) values (1, 999);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 drop database fk_clone_rename_dst;

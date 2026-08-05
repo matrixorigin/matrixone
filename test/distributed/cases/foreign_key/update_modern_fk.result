@@ -330,20 +330,20 @@ primary key (a, b)
 create table child_nonunique_prefix (
 id int primary key,
 parent_a int,
-parent_b int,
-constraint fk_nonunique_prefix foreign key (parent_a, parent_b)
-references parent_nonunique_prefix(a, b) on update cascade
+constraint fk_nonunique_prefix foreign key (parent_a)
+references parent_nonunique_prefix(a) on update cascade
 );
 insert into parent_nonunique_prefix values (1, 1), (1, 2);
-insert into child_nonunique_prefix values (10, 1, 1);
+insert into child_nonunique_prefix values (10, 1);
 update parent_nonunique_prefix set a = b + 1 where a = 1;
+not supported: parent foreign key action has an ambiguous non-unique referenced-key mapping
 select * from parent_nonunique_prefix order by a, b;
 ➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-2  ¦  1  𝄀
-3  ¦  2
+1  ¦  1  𝄀
+1  ¦  2
 select * from child_nonunique_prefix order by id;
-➤ id[4,32,0]  ¦  parent_a[4,32,0]  ¦  parent_b[4,32,0]  𝄀
-10  ¦  2  ¦  1
+➤ id[4,32,0]  ¦  parent_a[4,32,0]  𝄀
+10  ¦  1
 drop table child_nonunique_prefix;
 drop table parent_nonunique_prefix;
 drop table child_generated_unique;
