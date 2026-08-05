@@ -4199,7 +4199,7 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 	switch {
 	case returnType.Oid == types.T_varchar:
 		changed = adjustControlFlowStringNumericMetadata(args, argTypes, valueIndexes, returnType)
-		changed = adjustControlFlowTemporalStringMetadata(argTypes, valueIndexes, returnType) || changed
+		changed = adjustControlFlowTemporalStringMetadata(args, argTypes, valueIndexes, returnType) || changed
 	case returnType.Oid.IsDecimal():
 		changed = adjustControlFlowDecimalLiteralMetadata(args, argTypes, valueIndexes, returnType)
 	}
@@ -4247,9 +4247,19 @@ func adjustControlFlowStringNumericMetadata(args []*Expr, argTypes []types.Type,
 		} else if typ.Oid.IsInteger() || typ.Oid.IsFloat() || typ.Oid.IsDecimal() {
 			hasNumeric = true
 		} else {
+			// NULL has no display capacity and is intentionally ignored by the
+			// conditional overload. Other non-string/non-numeric values are also
+			// outside this VARCHAR metadata adjustment.
 			continue
 		}
-		if candidate := controlFlowStringWidth(args[idx], typ); candidate > width {
+		candidate, known := controlFlowStringWidth(args[idx], typ)
+		if !known {
+			// Width zero is used both by exact empty literals and by types whose
+			// runtime display capacity is unknown (for example TEXT or FLOAT).
+			// Do not turn the latter into a narrow implicit cast target.
+			return false
+		}
+		if candidate > width {
 			width = candidate
 		}
 	}
@@ -4261,7 +4271,7 @@ func adjustControlFlowStringNumericMetadata(args []*Expr, argTypes []types.Type,
 	return false
 }
 
-func adjustControlFlowTemporalStringMetadata(argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
+func adjustControlFlowTemporalStringMetadata(args []*Expr, argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
 	hasString := false
 	hasTemporal := false
 	width := int32(0)
@@ -4272,8 +4282,12 @@ func adjustControlFlowTemporalStringMetadata(argTypes []types.Type, valueIndexes
 		typ := argTypes[idx]
 		if typ.Oid.IsMySQLString() {
 			hasString = true
-			if typ.Width > width {
-				width = typ.Width
+			stringWidth, known := controlFlowStringWidth(args[idx], typ)
+			if !known {
+				return false
+			}
+			if stringWidth > width {
+				width = stringWidth
 			}
 			continue
 		}
@@ -4383,31 +4397,41 @@ func decimalIntegerWidth(expr *Expr, typ types.Type) (int32, bool) {
 	}
 }
 
-func controlFlowStringWidth(expr *Expr, typ types.Type) int32 {
+// controlFlowStringWidth reports a display bound only when it is safe to use
+// that bound as the target of an implicit cast.  A zero type width alone is not
+// a bound: TEXT/BLOB columns and default-width floating expressions use it to
+// mean that their runtime capacity is unknown.
+func controlFlowStringWidth(expr *Expr, typ types.Type) (int32, bool) {
 	if typ.Oid.IsMySQLString() {
-		return typ.Width
+		if typ.Width > 0 || expr.GetLit() != nil {
+			return typ.Width, true
+		}
+		return 0, false
 	}
 	if typ.Oid.IsDecimal() {
-		return decimalDisplayWidth(typ)
+		if typ.Width <= 0 {
+			return 0, false
+		}
+		return decimalDisplayWidth(typ), true
 	}
 	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
 		switch value := lit.Value.(type) {
 		case *plan.Literal_I8Val:
-			return signedIntegerLiteralWidth(int64(value.I8Val))
+			return signedIntegerLiteralWidth(int64(value.I8Val)), true
 		case *plan.Literal_I16Val:
-			return signedIntegerLiteralWidth(int64(value.I16Val))
+			return signedIntegerLiteralWidth(int64(value.I16Val)), true
 		case *plan.Literal_I32Val:
-			return signedIntegerLiteralWidth(int64(value.I32Val))
+			return signedIntegerLiteralWidth(int64(value.I32Val)), true
 		case *plan.Literal_I64Val:
-			return signedIntegerLiteralWidth(value.I64Val)
+			return signedIntegerLiteralWidth(value.I64Val), true
 		case *plan.Literal_U8Val:
-			return int32(len(strconv.FormatUint(uint64(value.U8Val), 10)))
+			return int32(len(strconv.FormatUint(uint64(value.U8Val), 10))), true
 		case *plan.Literal_U16Val:
-			return int32(len(strconv.FormatUint(uint64(value.U16Val), 10)))
+			return int32(len(strconv.FormatUint(uint64(value.U16Val), 10))), true
 		case *plan.Literal_U32Val:
-			return int32(len(strconv.FormatUint(uint64(value.U32Val), 10)))
+			return int32(len(strconv.FormatUint(uint64(value.U32Val), 10))), true
 		case *plan.Literal_U64Val:
-			return int32(len(strconv.FormatUint(value.U64Val, 10)))
+			return int32(len(strconv.FormatUint(value.U64Val, 10))), true
 		}
 	}
 	if typ.Oid.IsInteger() {
@@ -4415,9 +4439,9 @@ func controlFlowStringWidth(expr *Expr, typ types.Type) int32 {
 		if typ.Oid.IsSignedInt() {
 			width++
 		}
-		return width
+		return width, true
 	}
-	return typ.Width
+	return 0, false
 }
 
 // decimalDisplayWidth returns the maximum byte width of a DECIMAL value after

@@ -66,6 +66,62 @@ func TestBindControlFlowMetadata(t *testing.T) {
 	})
 
 	for _, test := range []struct {
+		name   string
+		args   []*planpb.Expr
+		argPos int
+	}{
+		{
+			name: "text column keeps conservative varchar capacity",
+			args: []*planpb.Expr{
+				makePlan2BoolConstExprWithType(true),
+				{Typ: planpb.Type{Id: int32(types.T_text)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}},
+				makePlan2Int64ConstExprWithType(3),
+			},
+			argPos: 1,
+		},
+		{
+			name: "blob column keeps conservative varchar capacity",
+			args: []*planpb.Expr{
+				makePlan2BoolConstExprWithType(true),
+				{Typ: planpb.Type{Id: int32(types.T_blob)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}},
+				makePlan2Int64ConstExprWithType(3),
+			},
+			argPos: 1,
+		},
+		{
+			name: "float column keeps conservative varchar capacity",
+			args: []*planpb.Expr{
+				makePlan2BoolConstExprWithType(false),
+				makePlan2StringConstExprWithType("x"),
+				{Typ: planpb.Type{Id: int32(types.T_float32)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}},
+			},
+			argPos: 2,
+		},
+		{
+			name: "double expression keeps conservative varchar capacity",
+			args: []*planpb.Expr{
+				makePlan2BoolConstExprWithType(false),
+				makePlan2StringConstExprWithType("x"),
+				{Typ: planpb.Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "cast"}}}},
+			},
+			argPos: 2,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(ctx, "if", test.args)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
+			require.Equal(t, int32(types.MaxVarcharLen), expr.Typ.Width)
+
+			// The branch must not be rewritten to a narrow VARCHAR cast; otherwise
+			// runtime values such as a TEXT column's "abcdef" would be truncated.
+			valueArg := expr.GetF().Args[test.argPos]
+			require.Equal(t, int32(types.T_varchar), valueArg.Typ.Id)
+			require.Equal(t, int32(types.MaxVarcharLen), valueArg.Typ.Width)
+		})
+	}
+
+	for _, test := range []struct {
 		name     string
 		function string
 		args     func(*planpb.Expr) []*planpb.Expr

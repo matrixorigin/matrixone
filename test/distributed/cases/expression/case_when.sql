@@ -449,3 +449,32 @@ desc v_conditional_literal_temporal_nested;
 drop view v_conditional_literal_temporal_nested;
 drop view v_conditional_literal_temporal;
 drop table t_conditional_literal_temporal;
+
+-- @case
+-- @desc:test conditional string metadata does not narrow unknown TEXT/BLOB/FLOAT/DOUBLE branches
+-- @label:bvt
+drop table if exists t_conditional_unknown_width;
+create table t_conditional_unknown_width (
+    s text,
+    b blob,
+    f float,
+    d double
+);
+insert into t_conditional_unknown_width values ('abcdef', 'abcdef', 123.456, 789.012);
+
+drop view if exists v_conditional_unknown_width;
+create view v_conditional_unknown_width as
+select if(true, s, 3) as text_result,
+       if(true, b, 3) as blob_result,
+       if(false, 'x', f) as float_result,
+       if(false, 'x', cast(d as double)) as double_result
+from t_conditional_unknown_width;
+desc v_conditional_unknown_width;
+select length(if(true, s, 3)) as text_length,
+       hex(if(true, b, 3)) as blob_hex,
+       if(false, 'x', f) <> 'x' as float_value_preserved,
+       if(false, 'x', cast(d as double)) <> 'x' as double_value_preserved
+from t_conditional_unknown_width;
+
+drop view v_conditional_unknown_width;
+drop table t_conditional_unknown_width;

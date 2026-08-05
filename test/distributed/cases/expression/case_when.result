@@ -567,3 +567,33 @@ ts_coalesce  ¦  VARCHAR(26)  ¦  NO  ¦    ¦  null  ¦    ¦
 drop view v_conditional_literal_temporal_nested;
 drop view v_conditional_literal_temporal;
 drop table t_conditional_literal_temporal;
+drop table if exists t_conditional_unknown_width;
+create table t_conditional_unknown_width (
+s text,
+b blob,
+f float,
+d double
+);
+insert into t_conditional_unknown_width values ('abcdef', 'abcdef', 123.456, 789.012);
+drop view if exists v_conditional_unknown_width;
+create view v_conditional_unknown_width as
+select if(true, s, 3) as text_result,
+if(true, b, 3) as blob_result,
+if(false, 'x', f) as float_result,
+if(false, 'x', cast(d as double)) as double_result
+from t_conditional_unknown_width;
+desc v_conditional_unknown_width;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+text_result  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+blob_result  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+float_result  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+double_result  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦
+select length(if(true, s, 3)) as text_length,
+hex(if(true, b, 3)) as blob_hex,
+if(false, 'x', f) <> 'x' as float_value_preserved,
+if(false, 'x', cast(d as double)) <> 'x' as double_value_preserved
+from t_conditional_unknown_width;
+➤ text_length[4,0,0]  ¦  blob_hex[12,-1,0]  ¦  float_value_preserved[1,0,0]  ¦  double_value_preserved[1,0,0]  𝄀
+6  ¦  616263646566  ¦  1  ¦  1
+drop view v_conditional_unknown_width;
+drop table t_conditional_unknown_width;
