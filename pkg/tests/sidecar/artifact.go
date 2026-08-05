@@ -192,8 +192,14 @@ func makeArtifactObservation(observation Observation, mode ComparisonMode, redac
 	if err != nil {
 		return artifactObservation{}, err
 	}
+	schema := make([]Column, len(observation.Schema))
+	copy(schema, observation.Schema)
+	for i := range schema {
+		schema[i].Name = redact(schema[i].Name)
+		schema[i].DatabaseType = redact(schema[i].DatabaseType)
+	}
 	result := artifactObservation{
-		Schema:     observation.Schema,
+		Schema:     schema,
 		RowCount:   len(observation.Rows),
 		RowsSHA256: rowsFingerprint,
 		Evidence:   makeArtifactEvidence(observation.Evidence),
@@ -201,8 +207,8 @@ func makeArtifactObservation(observation Observation, mode ComparisonMode, redac
 	if observation.Error != nil {
 		result.Error = &artifactSQLError{
 			Code:     observation.Error.Code,
-			SQLState: observation.Error.SQLState,
-			Class:    observation.Error.Class,
+			SQLState: redact(observation.Error.SQLState),
+			Class:    redact(observation.Error.Class),
 			Message:  redact(observation.Error.Message),
 		}
 	}

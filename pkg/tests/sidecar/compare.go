@@ -107,11 +107,33 @@ func validateCase(testCase Case) error {
 }
 
 func validateExpectation(mode Mode, expectation Expectation) error {
+	if !validOutcome(expectation.Outcome) {
+		return moerr.NewInvalidInputNoCtxf("%s expectation has invalid outcome %d", mode, expectation.Outcome)
+	}
+	if expectation.Backend == BackendUnknown {
+		if expectation.Outcome == OutcomeSucceeded {
+			return moerr.NewInvalidInputNoCtxf("%s successful expectation has no backend", mode)
+		}
+		if expectation.Fallback {
+			return moerr.NewInvalidInputNoCtxf("%s pre-start expectation cannot be a fallback", mode)
+		}
+		return nil
+	}
 	if !validBackend(expectation.Backend) {
 		return moerr.NewInvalidInputNoCtxf("%s expectation has invalid backend %d", mode, expectation.Backend)
 	}
-	if !validOutcome(expectation.Outcome) {
-		return moerr.NewInvalidInputNoCtxf("%s expectation has invalid outcome %d", mode, expectation.Outcome)
+	if mode == ModeNative {
+		if expectation.Backend != BackendMatrixOneNative || expectation.Fallback {
+			return moerr.NewInvalidInputNoCtxf("native expectation has invalid backend/fallback combination %s/%t",
+				expectation.Backend, expectation.Fallback)
+		}
+		return nil
+	}
+	if expectation.Backend == BackendSiriusGPU && expectation.Fallback {
+		return moerr.NewInvalidInputNoCtx("offloaded Sirius expectation cannot be a fallback")
+	}
+	if expectation.Backend != BackendSiriusGPU && !expectation.Fallback {
+		return moerr.NewInvalidInputNoCtxf("offloaded fallback backend %s is not marked as fallback", expectation.Backend)
 	}
 	return nil
 }

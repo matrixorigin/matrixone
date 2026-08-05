@@ -36,7 +36,11 @@ func TestWriteFailureArtifactRedactsAndMinimizesData(t *testing.T) {
 	report.Case.SyntheticPlan = []byte{0x01, 0x02, 0x03}
 	report.Native.Rows = []Row{{TextCell("sensitive-row-value")}}
 	report.Offloaded.Rows = []Row{{TextCell("different-sensitive-row-value")}}
-	report.Offloaded.Error = &SQLError{Code: 1, Message: "password=visible-password authorization: Bearer visible-bearer"}
+	report.Native.Schema[0].Name = "literal-secret"
+	report.Native.Schema[0].DatabaseType = "VARCHAR-literal-secret"
+	report.Offloaded.Schema[0].Name = "literal-secret"
+	report.Offloaded.Schema[0].DatabaseType = "VARCHAR-literal-secret"
+	report.Offloaded.Error = &SQLError{Code: 1, SQLState: "literal-secret", Class: "literal-secret", Message: "password=visible-password authorization: Bearer visible-bearer"}
 
 	path, err := WriteFailureArtifact(t.TempDir(), report, errors.New("request to https://private.example/path used literal-secret"))
 	if err != nil {
@@ -63,6 +67,22 @@ func TestWriteFailureArtifactRedactsAndMinimizesData(t *testing.T) {
 		if !strings.Contains(text, required) {
 			t.Errorf("artifact does not contain %q: %s", required, text)
 		}
+	}
+	var metadata artifactMetadata
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	for _, schema := range [][]Column{metadata.Native.Schema, metadata.Offloaded.Schema} {
+		if len(schema) != 1 || schema[0].Name != "<redacted>" || schema[0].DatabaseType != "VARCHAR-<redacted>" {
+			t.Fatalf("artifact schema was not redacted: %+v", schema)
+		}
+	}
+	if metadata.Offloaded.Error.SQLState != "<redacted>" || metadata.Offloaded.Error.Class != "<redacted>" {
+		t.Fatalf("artifact error identity was not redacted: %+v", metadata.Offloaded.Error)
+	}
+	if report.Native.Schema[0].Name != "literal-secret" || report.Offloaded.Schema[0].DatabaseType != "VARCHAR-literal-secret" {
+		t.Fatalf("artifact redaction mutated source observations: native=%+v offloaded=%+v",
+			report.Native.Schema, report.Offloaded.Schema)
 	}
 
 	plan, err := os.ReadFile(filepath.Join(filepath.Dir(path), "plan.substrait.bin"))

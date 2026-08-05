@@ -112,6 +112,24 @@ func TestCompareRequiresExecutionEvidence(t *testing.T) {
 	}
 }
 
+func TestCompareAllowsPreStartTerminalStates(t *testing.T) {
+	t.Parallel()
+
+	for _, outcome := range []Outcome{OutcomeFailed, OutcomeCancelled} {
+		t.Run(outcome.String(), func(t *testing.T) {
+			t.Parallel()
+			report := failedReport()
+			report.Case.NativeExpectation = Expectation{Backend: BackendUnknown, Outcome: outcome}
+			report.Case.OffloadedExpectation = Expectation{Backend: BackendUnknown, Outcome: outcome}
+			report.Native.Evidence = ExecutionEvidence{Backend: BackendUnknown, Outcome: outcome}
+			report.Offloaded.Evidence = ExecutionEvidence{Backend: BackendUnknown, Outcome: outcome}
+			if err := Compare(report); err != nil {
+				t.Fatalf("Compare() error = %v for matching pre-start %s", err, outcome)
+			}
+		})
+	}
+}
+
 func TestCompareChecksSchemaBeforeRows(t *testing.T) {
 	t.Parallel()
 
@@ -152,6 +170,14 @@ func TestCompareRejectsInvalidExpectations(t *testing.T) {
 		{name: "empty SQL", mutate: func(testCase *Case) { testCase.SQL = "" }},
 		{name: "invalid comparison", mutate: func(testCase *Case) { testCase.Comparison = ComparisonUnknown }},
 		{name: "invalid backend", mutate: func(testCase *Case) { testCase.OffloadedExpectation.Backend = Backend(99) }},
+		{name: "success without backend", mutate: func(testCase *Case) { testCase.OffloadedExpectation.Backend = BackendUnknown }},
+		{name: "pre-start fallback", mutate: func(testCase *Case) {
+			testCase.OffloadedExpectation = Expectation{Backend: BackendUnknown, Outcome: OutcomeFailed, Fallback: true}
+		}},
+		{name: "native wrong backend", mutate: func(testCase *Case) { testCase.NativeExpectation.Backend = BackendSiriusGPU }},
+		{name: "native fallback", mutate: func(testCase *Case) { testCase.NativeExpectation.Fallback = true }},
+		{name: "Sirius marked fallback", mutate: func(testCase *Case) { testCase.OffloadedExpectation.Fallback = true }},
+		{name: "fallback backend unmarked", mutate: func(testCase *Case) { testCase.OffloadedExpectation.Backend = BackendDuckDBCPU }},
 		{name: "pending outcome", mutate: func(testCase *Case) { testCase.OffloadedExpectation.Outcome = OutcomePending }},
 		{name: "invalid outcome", mutate: func(testCase *Case) { testCase.OffloadedExpectation.Outcome = Outcome(99) }},
 	}
