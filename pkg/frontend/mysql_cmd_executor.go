@@ -5051,38 +5051,32 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	case COM_STMT_PREPARE:
 		ses.SetCmd(COM_STMT_PREPARE)
 		sql = commonutil.UnsafeBytesToString(req.GetData().([]byte))
-		// Keep the frozen request policy on the outer PREPARE wrapper. Its nested
-		// statement is rewritten by prepareStringStatement, exactly like SQL-level
-		// PREPARE ... FROM 'sql'. Rewriting the payload before quoting it would put
-		// an already-materialized internal hint inside the string and consume it a
-		// second time.
-		rewritePolicy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)
-		if rewriteErr != nil {
-			ses.resetDiagnostics()
-			markRowCountFailed(ses, ses.GetProc())
-			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
-			return resp, nil
+		var preparedRemapDb map[string]string
+		// Materialize rewrite rules on the protocol payload before it enters the
+		// prepareable_stmt grammar. The resulting AST consumes the hint once.
+		if ses.rewriteEnabled.Load() {
+			var rewriteErr error
+			sql, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, sql)
+			if rewriteErr != nil {
+				ses.resetDiagnostics()
+				markRowCountFailed(ses, ses.GetProc())
+				resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
+				return resp, nil
+			}
+			preparedRemapDb = extractInlineRemapDb(sql)
 		}
 		ses.addSqlCount(1)
 
-		// Rewrite the protocol command through the SQL PREPARE path. The payload
-		// is statement text, so preserve it as one string literal instead of
-		// reparsing it as part of the outer PREPARE grammar.
+		// Keep the protocol acceptance boundary in prepareable_stmt. EXPLAIN is
+		// admitted there explicitly; unsupported and empty payloads fail parsing
+		// before planning.
 		newLastStmtID := ses.GenNewStmtId()
 		newStmtName := getPrepareStmtName(newLastStmtID)
-		input, rewriteErr := buildComStmtPrepareInput(
-			execCtx.reqCtx, newStmtName, sql, sessionSQLModeForParser(ses), rewritePolicy)
-		if rewriteErr != nil {
-			ses.resetDiagnostics()
-			markRowCountFailed(ses, ses.GetProc())
-			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
-			return resp, nil
-		}
-		sql = input.getSql()
+		sql = fmt.Sprintf("prepare %s from %s", quotePrepareStmtName(newStmtName), sql)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
 		savedRowCount := ses.GetLastAffectedRows()
-		err = doComQuery(ses, execCtx, input)
+		err = doComQuery(ses, execCtx, &UserInput{sql: sql, remapDb: preparedRemapDb})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), err)
 		} else {
@@ -5203,50 +5197,6 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		resp = NewGeneralErrorResponse(req.GetCmd(), ses.GetTxnHandler().GetServerStatus(), moerr.NewInternalErrorf(execCtx.reqCtx, "unsupported command. 0x%x", int64(req.GetCmd())))
 	}
 	return resp, nil
-}
-
-func buildComStmtPrepareSQL(stmtName, sql, sqlMode string) string {
-	escaped := strings.ReplaceAll(sql, "'", "''")
-	if !mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes) {
-		escaped = strings.ReplaceAll(escaped, "\\", "\\\\")
-	}
-	return fmt.Sprintf("prepare %s from '%s'", quotePrepareStmtName(stmtName), escaped)
-}
-
-func buildComStmtPrepareInput(
-	ctx context.Context,
-	stmtName string,
-	sql string,
-	sqlMode string,
-	policy *rewritePolicySnapshot,
-) (*UserInput, error) {
-	// Validate only the client-supplied inline rules here. The request policy is
-	// deliberately materialized on the outer wrapper below and must not be
-	// decoded from the nested string as if it were user input.
-	if policy != nil && policy.enabled {
-		if _, _, err := extractInlineRewrites(ctx, sql); err != nil {
-			return nil, err
-		}
-	}
-	// The prepareable grammar intentionally admits only one SET assignment:
-	// prepared multi-assignment has no atomic execution contract yet. Quoting
-	// the payload as PrepareString must not bypass that binary-protocol boundary.
-	if stmt, err := mysql.ParseOneWithSQLMode(ctx, sql, 1, sqlMode); err == nil {
-		defer stmt.Free()
-		if setVar, ok := stmt.(*tree.SetVar); ok && len(setVar.Assignments) != 1 {
-			return nil, moerr.NewParseError(ctx, "binary prepared SET supports exactly one assignment")
-		}
-	}
-	wrapper := buildComStmtPrepareSQL(stmtName, sql, sqlMode)
-	materialized, err := policy.rewrite(ctx, wrapper, sqlMode)
-	if err != nil {
-		return nil, err
-	}
-	return &UserInput{
-		sql:                       materialized,
-		rewritePolicy:             policy,
-		rewritePolicyMaterialized: true,
-	}, nil
 }
 
 func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string, *PrepareStmt, error) {
