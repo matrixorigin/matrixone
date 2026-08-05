@@ -26,7 +26,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -36,7 +35,7 @@ const artifactMetadataName = "failure.json"
 var (
 	artifactURLPattern           = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>]+`)
 	artifactAuthorizationPattern = regexp.MustCompile(`(?i)\bauthorization\b(\s*[:=]\s*)[^\r\n]+`)
-	artifactSecretPattern        = regexp.MustCompile(`(?i)\b(username|user|password|passwd|pwd|token|secret|read_ref|access_key|secret_key|aws_key_id|aws_secret_key|session_token)\b(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)`)
+	artifactSecretPattern        = regexp.MustCompile(`(?i)\b(username|user|password|passwd|pwd|token|secret|read_ref|access_key|secret_key|aws_access_key_id|aws_secret_access_key|aws_session_token|aws_key_id|aws_secret_key|session_token)\b(["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)`)
 )
 
 type artifactObservation struct {
@@ -265,23 +264,8 @@ func makeArtifactEvidence(evidence ExecutionEvidence) artifactEvidence {
 }
 
 func artifactCaseDirectory(caseID string) string {
-	var name strings.Builder
-	for _, r := range caseID {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' {
-			name.WriteRune(r)
-		} else {
-			name.WriteByte('_')
-		}
-	}
-	if name.Len() == 0 {
-		name.WriteString("case")
-	}
-	if name.String() != caseID {
-		digest := sha256.Sum256([]byte(caseID))
-		name.WriteByte('-')
-		name.WriteString(hex.EncodeToString(digest[:4]))
-	}
-	return name.String()
+	digest := sha256.Sum256([]byte(caseID))
+	return "case-" + hex.EncodeToString(digest[:])
 }
 
 func redactArtifactText(value string, explicit []string) string {

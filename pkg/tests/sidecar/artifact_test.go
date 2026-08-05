@@ -28,7 +28,7 @@ func TestWriteFailureArtifactRedactsAndMinimizesData(t *testing.T) {
 
 	report := successfulReport()
 	report.Case.ID = "artifact/case"
-	report.Case.SQL = "SELECT * FROM mysql://visible-user:visible-pass@host/db, s3://bucket/private/path WHERE token=visible-token AND value='literal-secret'"
+	report.Case.SQL = "SELECT * FROM mysql://visible-user:visible-pass@host/db, s3://bucket/private/path WHERE token=visible-token AND value='literal-secret'; AWS_ACCESS_KEY_ID=aws-access AWS_SECRET_ACCESS_KEY='aws-secret' AWS_SESSION_TOKEN=aws-session"
 	report.Case.ArtifactRedactValues = []string{"literal-secret"}
 	report.Case.Seed = 42
 	report.Case.CapabilitySetHash = "capability-hash"
@@ -40,7 +40,7 @@ func TestWriteFailureArtifactRedactsAndMinimizesData(t *testing.T) {
 	report.Native.Schema[0].DatabaseType = "VARCHAR-literal-secret"
 	report.Offloaded.Schema[0].Name = "literal-secret"
 	report.Offloaded.Schema[0].DatabaseType = "VARCHAR-literal-secret"
-	report.Offloaded.Error = &SQLError{Code: 1, SQLState: "literal-secret", Class: "literal-secret", Message: "password=visible-password authorization: Bearer visible-bearer"}
+	report.Offloaded.Error = &SQLError{Code: 1, SQLState: "literal-secret", Class: "literal-secret", Message: `password=visible-password authorization: Bearer visible-bearer {"AWS_ACCESS_KEY_ID":"json-access","AWS_SECRET_ACCESS_KEY":"json-secret","AWS_SESSION_TOKEN":"json-session"}`}
 
 	path, err := WriteFailureArtifact(t.TempDir(), report, errors.New("request to https://private.example/path used literal-secret"))
 	if err != nil {
@@ -54,7 +54,8 @@ func TestWriteFailureArtifactRedactsAndMinimizesData(t *testing.T) {
 	for _, forbidden := range []string{
 		"s3://bucket", "visible-token", "literal-secret", "sensitive-row-value",
 		"different-sensitive-row-value", "visible-password", "visible-user", "visible-pass",
-		"visible-bearer", "private.example",
+		"visible-bearer", "private.example", "aws-access", "aws-secret", "aws-session",
+		"json-access", "json-secret", "json-session",
 	} {
 		if strings.Contains(text, forbidden) {
 			t.Errorf("artifact contains sensitive value %q: %s", forbidden, text)
@@ -94,6 +95,30 @@ func TestWriteFailureArtifactRedactsAndMinimizesData(t *testing.T) {
 	}
 	assertMode(t, path, 0o600)
 	assertMode(t, filepath.Dir(path), 0o700)
+}
+
+func TestWriteFailureArtifactUsesOpaqueCaseDirectory(t *testing.T) {
+	t.Parallel()
+
+	report := successfulReport()
+	report.Case.ID = "case-secret123"
+	report.Case.ArtifactRedactValues = []string{"secret123"}
+	root := t.TempDir()
+	path, err := WriteFailureArtifact(root, report, errors.New("failure"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Base(filepath.Dir(path))
+	if strings.Contains(directory, report.Case.ID) || strings.Contains(directory, "secret123") {
+		t.Fatalf("artifact directory exposes case ID: %q", directory)
+	}
+	if directory != artifactCaseDirectory(report.Case.ID) || len(directory) != len("case-")+64 {
+		t.Fatalf("artifact directory = %q, want deterministic SHA-256 name", directory)
+	}
+	other := artifactCaseDirectory("case-other")
+	if directory == other {
+		t.Fatalf("different case IDs share artifact directory %q", directory)
+	}
 }
 
 func TestWriteFailureArtifactIsDeterministic(t *testing.T) {
