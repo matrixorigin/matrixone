@@ -48,7 +48,6 @@ mo_index_update
 mo_indexes
 mo_iscp_log
 mo_lifecycle_bindings
-mo_lifecycle_cleanup_roots
 mo_lifecycle_datasets
 mo_lifecycle_restore_attempts
 mo_lifecycle_restore_chunks
