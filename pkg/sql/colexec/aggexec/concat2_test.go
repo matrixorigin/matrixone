@@ -156,6 +156,32 @@ func TestGroupConcatLimitAppliesAfterOrderAndDistinct(t *testing.T) {
 	plainExec.Free()
 }
 
+func TestGroupConcatLimitAppliesInInputOrder(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	info := multiAggInfo{
+		aggID:     105,
+		argTypes:  []types.Type{types.T_varchar.ToType()},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	require.NoError(t, exec.SetExtraInformation(
+		testGroupConcatLimitConfig(1, nil, ",", 1, 1), 0))
+	require.NoError(t, exec.GroupGrow(1))
+
+	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"a", "b", "c"})
+	require.NoError(t, exec.BatchFill(0, []uint64{1, 1, 1}, []*vector.Vector{values}))
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, "b", string(result[0].GetBytesAt(0)))
+
+	result[0].Free(mp)
+	values.Free(mp)
+	exec.Free()
+}
+
 func TestGroupConcatGroupedOrderedSpillKeepsGroupAddressing(t *testing.T) {
 	mp := mpool.MustNewZero()
 	info := multiAggInfo{
@@ -465,7 +491,7 @@ func TestGroupConcatSpillCompactsFanIn(t *testing.T) {
 	}
 	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
 	require.NoError(t, exec.SetExtraInformation(
-		testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ","),
+		testGroupConcatLimitConfig(1, []byte{groupConcatOrderAsc}, ",", 1, groupConcatMergeFanIn-1),
 		0,
 	))
 	require.NoError(t, exec.GroupGrow(1))
@@ -491,7 +517,7 @@ func TestGroupConcatSpillCompactsFanIn(t *testing.T) {
 	require.Len(t, exec.orderedSpillRuns[0], groupConcatMergeFanIn+1)
 	result, err := exec.FlushWithContext(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, strings.Join(want, ","), string(result[0].GetBytesAt(0)))
+	require.Equal(t, strings.Join(want[1:], ","), string(result[0].GetBytesAt(0)))
 	require.LessOrEqual(t, len(exec.orderedSpillRuns[0]), groupConcatMergeFanIn)
 	require.Equal(t, 1, fileCreates)
 	result[0].Free(mp)
@@ -859,6 +885,9 @@ func TestGroupConcatOrderConfigValidationAndReturnType(t *testing.T) {
 				[]byte{groupConcatOrderNullsFirst | groupConcatOrderNullsLast},
 				",",
 			),
+			// A v3 config can omit ORDER BY, but it must not claim more
+			// GROUP_CONCAT arguments than the executor received.
+			testGroupConcatLimitConfig(3, nil, ",", 0, 1),
 		}
 		for _, config := range cases {
 			exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)

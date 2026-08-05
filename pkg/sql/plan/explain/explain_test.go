@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSingleSql(t *testing.T) {
@@ -965,6 +966,47 @@ func TestExplainOrderedGroupConcat(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected invalid ordered group_concat config")
 		}
+	})
+
+	t.Run("limit without order by", func(t *testing.T) {
+		fn := &plan2.Function{
+			Func: &plan2.ObjectRef{ObjName: "group_concat", Obj: ordinaryID},
+			Args: []*plan2.Expr{{
+				Typ:  plan2.Type{Id: int32(types.T_varchar)},
+				Expr: &plan2.Expr_Col{Col: &plan2.ColRef{Name: "tw.v"}},
+			}},
+			AggConfig: []byte{
+				3,
+				0, 0, 0, 1,
+				0, 0, 0, 0,
+				0, 0, 0, 0, 0, 0, 0, 1,
+				0, 0, 0, 0, 0, 0, 0, 2,
+				0, 0, 0, 1,
+				'|',
+			},
+		}
+		buf := bytes.NewBuffer(nil)
+		require.NoError(t, explainOrderedGroupConcat(ctx, fn, &ExplainOptions{}, buf))
+		require.Equal(t, "group_concat(tw.v SEPARATOR '|' LIMIT 2 OFFSET 1)", buf.String())
+	})
+
+	t.Run("legacy config without order by", func(t *testing.T) {
+		err := explainOrderedGroupConcat(
+			ctx,
+			&plan2.Function{
+				Func: &plan2.ObjectRef{ObjName: "group_concat", Obj: ordinaryID},
+				AggConfig: []byte{
+					2,
+					0, 0, 0, 1,
+					0, 0, 0, 0,
+					0, 0, 0, 1,
+					'~',
+				},
+			},
+			&ExplainOptions{},
+			bytes.NewBuffer(nil),
+		)
+		require.Error(t, err)
 	})
 
 	t.Run("order argument out of range", func(t *testing.T) {
