@@ -553,7 +553,7 @@ desc v_conditional_literal_temporal;
 d_case_literal  ¦  DECIMAL(8,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 dte_coalesce  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 dt_coalesce  ¦  VARCHAR(19)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-ts_coalesce  ¦  VARCHAR(26)  ¦  NO  ¦    ¦  null  ¦    ¦
+ts_coalesce  ¦  VARCHAR(26)  ¦  NO  ¦    ¦  null  ¦    ¦  
 drop view if exists v_conditional_literal_temporal_nested;
 create view v_conditional_literal_temporal_nested as
 select d_case_literal, dte_coalesce, dt_coalesce, ts_coalesce
@@ -563,7 +563,7 @@ desc v_conditional_literal_temporal_nested;
 d_case_literal  ¦  DECIMAL(8,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 dte_coalesce  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 dt_coalesce  ¦  VARCHAR(19)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-ts_coalesce  ¦  VARCHAR(26)  ¦  NO  ¦    ¦  null  ¦    ¦
+ts_coalesce  ¦  VARCHAR(26)  ¦  NO  ¦    ¦  null  ¦    ¦  
 drop view v_conditional_literal_temporal_nested;
 drop view v_conditional_literal_temporal;
 drop table t_conditional_literal_temporal;

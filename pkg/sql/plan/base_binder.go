@@ -4354,9 +4354,7 @@ func decimalIntegerWidth(expr *Expr, typ types.Type) (int32, bool) {
 	}
 
 	decimalDigits := func(value string) int32 {
-		if strings.HasPrefix(value, "-") {
-			value = value[1:]
-		}
+		value = strings.TrimPrefix(value, "-")
 		return int32(len(value))
 	}
 	switch value := lit.Value.(type) {
