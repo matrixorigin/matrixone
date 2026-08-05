@@ -2237,6 +2237,58 @@ func TestInsertIgnoreIntoInternalIndexTableRemainsUnsupported(t *testing.T) {
 	require.ErrorContains(t, err, "insert into vector/text index table")
 }
 
+func TestInsertIgnoreWithMultipleUniqueConstraintsUsesCoordinatedDedup(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT IGNORE INTO dept VALUES (1, 'Sales', 'NY'), (1, 'Marketing', 'SF')")
+	require.NoError(t, err)
+
+	coordinated := 0
+	legacyIgnoreDedups := 0
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_PRE_INSERT_UK &&
+			node.PreInsertUkCtx.GetInsertIgnoreMultiDedup() {
+			coordinated++
+			require.Len(t, node.PreInsertUkCtx.KeyColumns, 2)
+			require.Len(t, node.PreInsertUkCtx.ConflictColumns, 2)
+			require.Equal(t, node.PreInsertUkCtx.OutputColumns, node.PreInsertUkCtx.KeyColumns[0])
+			for i := range node.PreInsertUkCtx.KeyColumns {
+				require.Equal(t, node.PreInsertUkCtx.KeyColumns[i]+1,
+					node.PreInsertUkCtx.ConflictColumns[i])
+			}
+		}
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP &&
+			node.OnDuplicateAction == plan.Node_IGNORE {
+			legacyIgnoreDedups++
+		}
+	}
+	require.Equal(t, 1, coordinated)
+	require.Zero(t, legacyIgnoreDedups,
+		"independent per-key IGNORE joins would discard fallback rows before all constraints are known")
+}
+
+func TestInsertIgnoreSingleUniqueConstraintKeepsExistingDedupPath(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT IGNORE INTO fake_pk_t VALUES (1, 'x'), (1, 'y')")
+	require.NoError(t, err)
+
+	coordinated := 0
+	legacyIgnoreDedups := 0
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_PRE_INSERT_UK &&
+			node.PreInsertUkCtx.GetInsertIgnoreMultiDedup() {
+			coordinated++
+		}
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP &&
+			node.OnDuplicateAction == plan.Node_IGNORE {
+			legacyIgnoreDedups++
+		}
+	}
+	require.Zero(t, coordinated)
+	require.Equal(t, 1, legacyIgnoreDedups)
+}
+
 func TestUpdate(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	// should pass

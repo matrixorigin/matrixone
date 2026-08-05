@@ -168,10 +168,14 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 		return nil
 	}
 	newCtx := &plan.PreInsertUkCtx{
-		Columns:  slices.Clone(ctx.Columns),
-		PkColumn: ctx.PkColumn,
-		PkType:   ctx.PkType,
-		UkType:   ctx.UkType,
+		Columns:                slices.Clone(ctx.Columns),
+		PkColumn:               ctx.PkColumn,
+		PkType:                 ctx.PkType,
+		UkType:                 ctx.UkType,
+		InsertIgnoreMultiDedup: ctx.InsertIgnoreMultiDedup,
+		KeyColumns:             slices.Clone(ctx.KeyColumns),
+		ConflictColumns:        slices.Clone(ctx.ConflictColumns),
+		OutputColumns:          ctx.OutputColumns,
 	}
 
 	return newCtx
