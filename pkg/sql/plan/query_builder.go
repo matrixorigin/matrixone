@@ -3029,6 +3029,75 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
+	case plan.Node_PRE_INSERT_UK:
+		if node.PreInsertUkCtx == nil || !node.PreInsertUkCtx.InsertIgnoreMultiDedup {
+			return nil, moerr.NewInternalError(builder.GetContext(), "unsupported PRE_INSERT_UK node in query plan")
+		}
+
+		child := builder.qry.Nodes[node.Children[0]]
+		if len(child.BindingTags) != 1 {
+			return nil, moerr.NewInternalError(builder.GetContext(), "invalid INSERT IGNORE dedup input")
+		}
+		childTag := child.BindingTags[0]
+		keyRefs := make([][2]int32, len(node.PreInsertUkCtx.KeyColumns))
+		conflictRefs := make([][2]int32, len(node.PreInsertUkCtx.ConflictColumns))
+		for i, pos := range node.PreInsertUkCtx.KeyColumns {
+			keyRefs[i] = [2]int32{childTag, pos}
+			colRefCnt[keyRefs[i]]++
+		}
+		for i, pos := range node.PreInsertUkCtx.ConflictColumns {
+			conflictRefs[i] = [2]int32{childTag, pos}
+			colRefCnt[conflictRefs[i]]++
+		}
+		outputTag := node.BindingTags[0]
+		neededOutputs := make([]int32, 0, len(node.ProjectList))
+		for i, expr := range node.ProjectList {
+			if colRefCnt[[2]int32{outputTag, int32(i)}] == 0 {
+				continue
+			}
+			neededOutputs = append(neededOutputs, int32(i))
+			increaseRefCnt(expr, 1, colRefCnt)
+		}
+
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+		if err != nil {
+			return nil, err
+		}
+
+		for i, ref := range keyRefs {
+			colRefCnt[ref]--
+			pos, ok := childRemapping.globalToLocal[ref]
+			if !ok {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing INSERT IGNORE dedup key column")
+			}
+			node.PreInsertUkCtx.KeyColumns[i] = pos[1]
+		}
+		for i, ref := range conflictRefs {
+			colRefCnt[ref]--
+			pos, ok := childRemapping.globalToLocal[ref]
+			if !ok {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing INSERT IGNORE conflict column")
+			}
+			node.PreInsertUkCtx.ConflictColumns[i] = pos[1]
+		}
+
+		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		newProjectList := make([]*plan.Expr, 0, len(neededOutputs))
+		remapInfo.tip = "PreInsertUkCtx"
+		for i, output := range neededOutputs {
+			expr := node.ProjectList[output]
+			increaseRefCnt(expr, -1, colRefCnt)
+			remapInfo.srcExprIdx = i
+			if err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo); err != nil {
+				return nil, err
+			}
+			refreshExprNullabilityFromInputs(expr, childProjList)
+			remapping.addColRef([2]int32{outputTag, output})
+			newProjectList = append(newProjectList, expr)
+		}
+		node.ProjectList = newProjectList
+		node.PreInsertUkCtx.OutputColumns = int32(len(newProjectList))
+
 	default:
 		return nil, moerr.NewInternalError(builder.GetContext(), "unsupport node type")
 	}
@@ -3346,11 +3415,12 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	}
 
 	if len(selectStmts) == 1 {
+		var nodeID int32
 		switch sltStmt := selectStmts[0].(type) {
 		case *tree.Select:
 			if sltClause, ok := sltStmt.Select.(*tree.SelectClause); ok {
 				sltClause.Distinct = true
-				return builder.bindSelect(sltStmt, ctx, isRoot)
+				nodeID, err = builder.bindSelect(sltStmt, ctx, isRoot)
 			} else {
 				// rewrite sltStmt to select distinct * from (sltStmt) a
 				tmpSltStmt := &tree.Select{
@@ -3376,15 +3446,19 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					Limit:   astLimit,
 					OrderBy: astOrderBy,
 				}
-				return builder.bindSelect(tmpSltStmt, ctx, isRoot)
+				nodeID, err = builder.bindSelect(tmpSltStmt, ctx, isRoot)
 			}
 
 		case *tree.SelectClause:
 			if !sltStmt.Distinct {
 				sltStmt.Distinct = true
 			}
-			return builder.bindSelect(&tree.Select{Select: sltStmt, Limit: astLimit, OrderBy: astOrderBy}, ctx, isRoot)
+			nodeID, err = builder.bindSelect(&tree.Select{Select: sltStmt, Limit: astLimit, OrderBy: astOrderBy}, ctx, isRoot)
 		}
+		if err == nil {
+			ctx.clearOutputColumnProvenance()
+		}
+		return nodeID, err
 	}
 
 	// build selects
@@ -3624,6 +3698,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			},
 		})
 	}
+	ctx.clearOutputColumnProvenance()
 	// A set-operation result keeps ENUM/SET definition-order provenance only
 	// when every non-NULL branch is the same pure display contract. A literal
 	// NULL is neutral because it cannot introduce a competing comparison
@@ -3981,6 +4056,13 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	if err != nil {
 		return
 	}
+	if subCtx.restoreViewMySQLSpecialTypes {
+		nodeID, err = builder.appendMySQLSpecialTypeBoundary(
+			nodeID, subCtx, subCtx.outputColumnProvenanceForBoundary())
+		if err != nil {
+			return
+		}
+	}
 
 	if subCtx.hasSingleRow {
 		ctx.hasSingleRow = true
@@ -4319,6 +4401,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	//5. bind final statement
 	ctx.sinkTag = initCtx.sinkTag
 	//5.0 add initial statement as table binding into the ctx of main query
+	initCtx.clearOutputColumnProvenance()
 	err = builder.addBinding(initLastNodeID, *cteRef.ast.Name, ctx)
 	if err != nil {
 		return
@@ -4694,6 +4777,20 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	if resultLen, notCacheable, err = builder.bindProjection(ctx, projectionBinder, selectList, notCacheable); err != nil {
 		return
 	}
+	var viewRawProjects []*plan.Expr
+	if ctx.restoreViewMySQLSpecialTypes && astOrderBy != nil && !ctx.isDistinct &&
+		len(ctx.groups) == 0 && len(ctx.aggregates) == 0 {
+		for i := 0; i < resultLen; i++ {
+			rawExpr, ok := transparentOutputSourceExpr(ctx.projects[i])
+			if !ok {
+				continue
+			}
+			if viewRawProjects == nil {
+				viewRawProjects = make([]*plan.Expr, resultLen)
+			}
+			viewRawProjects[i] = DeepCopyExpr(rawExpr)
+		}
+	}
 
 	// bind TIME WINDOW
 	var fillType plan.Node_FillType
@@ -4717,6 +4814,20 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	if astOrderBy != nil {
 		if boundOrderBys, err = builder.bindOrderBy(ctx, astOrderBy, projectionBinder, selectList); err != nil {
 			return
+		}
+	}
+	if len(boundOrderBys) > 0 && len(viewRawProjects) > 0 {
+		ctx.mysqlSpecialRawProjectPositions = make(map[int32]int32, len(viewRawProjects))
+		for visiblePos, rawExpr := range viewRawProjects {
+			if rawExpr == nil {
+				continue
+			}
+			rawPos, appendErr := appendOrderByProjectExpr(ctx, rawExpr)
+			if appendErr != nil {
+				err = appendErr
+				return
+			}
+			ctx.mysqlSpecialRawProjectPositions[int32(visiblePos)] = rawPos
 		}
 	}
 
@@ -4831,6 +4942,13 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		if len(boundOrderBys) > 0 {
 			if nodeID, resultSourceTag, err = builder.appendDistinctOrderProjectionNode(ctx, nodeID, boundOrderBys); err != nil {
 				return
+			}
+		}
+	}
+	if len(ctx.groups) > 0 || ctx.isDistinct {
+		for i := 0; i < resultLen; i++ {
+			if typ := mysqlSpecialTypeFromProvenance(ctx.outputColumnProvenanceForProject(int32(i))); typ != nil {
+				ctx.setMySQLSpecialCanonicalType(int32(i), typ)
 			}
 		}
 	}
@@ -8811,6 +8929,7 @@ func (builder *QueryBuilder) bindView(
 		return 0, nil
 	}
 	viewCtx := NewBindContext(builder, nil)
+	viewCtx.restoreViewMySQLSpecialTypes = true
 	viewCtx.snapshot = snapshot
 	viewCtx.lower = ctx.lower
 
@@ -8891,6 +9010,11 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return
 	}
+	nodeID, err = builder.appendMySQLSpecialTypeBoundary(
+		nodeID, viewCtx, viewCtx.outputColumnProvenanceForBoundary())
+	if err != nil {
+		return
+	}
 	if len(viewStmt.ColNames) > 0 {
 		if len(viewStmt.ColNames) != len(viewCtx.headings) {
 			return 0, moerr.NewViewWrongList(builder.GetContext())
@@ -8902,6 +9026,114 @@ func (builder *QueryBuilder) bindView(
 	ctx.recordViews([]string{viewDependencyKey})
 	ctx.recordViews(viewCtx.views)
 	return
+}
+
+// appendMySQLSpecialTypeBoundary restores transparent ENUM/SET outputs only
+// after a complete query boundary. Semantic operators inside the query must
+// continue to consume the SQL-visible value because index-to-value conversion
+// is not always injective.
+func (builder *QueryBuilder) appendMySQLSpecialTypeBoundary(
+	nodeID int32, ctx *BindContext, provenance []OutputColumnProvenance,
+) (int32, error) {
+	visibleProjects := min(len(ctx.headings), len(ctx.projects), len(ctx.results))
+	rootNode := builder.qry.Nodes[nodeID]
+	if rootNode.NodeType == plan.Node_PROJECT && len(ctx.mysqlSpecialRawProjectPositions) > 0 {
+		allSpecialTypesRestored := true
+		for i := 0; i < visibleProjects; i++ {
+			if ctx.mysqlSpecialCanonicalTypeForProject(int32(i)) != nil {
+				allSpecialTypesRestored = false
+				continue
+			}
+			targetType := mysqlSpecialTypeFromProvenance(provenance[i])
+			if targetType == nil {
+				continue
+			}
+			rawPos, ok := ctx.mysqlSpecialRawProjectPositions[int32(i)]
+			if !ok {
+				allSpecialTypesRestored = false
+				continue
+			}
+			rawExpr := GetColExpr(*targetType, ctx.projectTag, rawPos)
+			rootNode.ProjectList[i] = rawExpr
+			ctx.results[i] = rawExpr
+		}
+		if allSpecialTypesRestored {
+			return nodeID, nil
+		}
+	}
+	canExposeRaw := rootNode.NodeType == plan.Node_PROJECT &&
+		len(rootNode.BindingTags) == 1 && rootNode.BindingTags[0] == ctx.projectTag && ctx.resultTag == 0
+	if canExposeRaw {
+		rootVisibleProjects := min(len(ctx.headings), len(rootNode.ProjectList))
+		allSpecialTypesRestored := true
+		for i := 0; i < rootVisibleProjects; i++ {
+			if ctx.mysqlSpecialCanonicalTypeForProject(int32(i)) != nil {
+				allSpecialTypesRestored = false
+				continue
+			}
+			sourceExpr, ok := transparentOutputSourceExpr(rootNode.ProjectList[i])
+			if !ok {
+				if i < len(provenance) && mysqlSpecialTypeFromProvenance(provenance[i]) != nil {
+					allSpecialTypesRestored = false
+				}
+				continue
+			}
+			restored := DeepCopyExpr(sourceExpr)
+			rootNode.ProjectList[i] = restored
+			if i < len(ctx.projects) {
+				ctx.projects[i] = restored
+			}
+			if i < len(ctx.results) {
+				ctx.results[i] = restored
+			}
+		}
+		if allSpecialTypesRestored {
+			return nodeID, nil
+		}
+	}
+
+	sourceTag := ctx.rootTag()
+	projects := make([]*plan.Expr, len(ctx.results))
+	for i := range ctx.results {
+		projects[i] = GetColExpr(ctx.results[i].Typ, sourceTag, int32(i))
+	}
+	needsBoundary := false
+	for i := 0; i < visibleProjects; i++ {
+		targetType := ctx.mysqlSpecialCanonicalTypeForProject(int32(i))
+		if targetType == nil {
+			continue
+		}
+		needsBoundary = true
+		var castErr error
+		if isEnumPlanType(targetType) {
+			projects[i], castErr = funcCastForEnumType(builder.GetContext(), projects[i], *targetType)
+		} else {
+			projects[i], castErr = funcCastForSetType(builder.GetContext(), projects[i], *targetType)
+		}
+		if castErr != nil {
+			return 0, castErr
+		}
+	}
+	if needsBoundary {
+		for i := 0; i < visibleProjects && i < len(provenance); i++ {
+			ctx.outputColumnProvenance[int32(i)] = provenance[i]
+		}
+		ctx.projectTag = builder.genNewBindTag()
+		ctx.resultTag = 0
+		ctx.projects = projects
+		ctx.results = projects
+		return builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			ProjectList: projects,
+			Children:    []int32{nodeID},
+			BindingTags: []int32{ctx.projectTag},
+		}, ctx), nil
+	}
+
+	// Catalog lineage alone cannot prove that a visible string can be reversed
+	// to its original ENUM ordinal or SET bitmap. Without a raw sidecar or an
+	// exact display wrapper, preserve the visible value unchanged.
+	return nodeID, nil
 }
 
 // ViewData persisted before parser SQL mode was recorded used MatrixOne's
@@ -9094,6 +9326,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		builder.isForUpdate = savedIsForUpdate
 		if err != nil {
 			return 0, err
+		}
+		if subCtx.restoreViewMySQLSpecialTypes {
+			nodeID, err = builder.appendMySQLSpecialTypeBoundary(
+				nodeID, subCtx, subCtx.outputColumnProvenanceForBoundary())
+			if err != nil {
+				return 0, err
+			}
 		}
 		if subCtx.isCorrelated {
 			if err = builder.normalizeTransparentCorrelatedDerivedTable(nodeID, ctx); err != nil {
@@ -9613,6 +9852,8 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var colIsHidden []bool
 	var types []*plan.Type
 	var mysqlSpecialOrderTypes []*plan.Type
+	var mysqlSpecialCanonicalTypes []*plan.Type
+	var outputColumnProvenance []OutputColumnProvenance
 	var defaultVals []string
 	var binding *Binding
 	var bindingToReplace *Binding
@@ -9691,12 +9932,30 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		binding = NewBinding(tag, nodeID, node.TableDef.DbName, table, node.TableDef.TblId, cols, colIsHidden, types,
 			util.TableIsClusterTable(node.TableDef.TableType), defaultVals)
 		binding.originCols = originCols
+		binding.outputColumnProvenance = make([]OutputColumnProvenance, colLength)
+		for i, col := range node.TableDef.Cols {
+			binding.outputColumnProvenance[i] = OutputColumnProvenance{
+				State:                   ProvenanceSingleSource,
+				CanInheritSourceDefault: true,
+				Source: &SourceColumn{
+					RelPos:   tag,
+					ColPos:   int32(i),
+					TableID:  node.TableDef.TblId,
+					Metadata: snapshotSourceColumnMetadata(col),
+				},
+			}
+		}
 	} else {
 		// Subquery
 		subCtx := builder.ctxByNode[nodeID]
 		tag := subCtx.rootTag()
 		headings := subCtx.headings
 		projects := subCtx.projects
+		if subCtx.restoreViewMySQLSpecialTypes &&
+			(len(subCtx.mysqlSpecialRawProjectPositions) > 0 || len(subCtx.mysqlSpecialCanonicalTypes) > 0) &&
+			len(subCtx.results) >= len(headings) {
+			projects = subCtx.results
+		}
 
 		if len(alias.Cols) > len(headings) {
 			return moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(headings), len(alias.Cols))
@@ -9736,6 +9995,17 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				}
 				mysqlSpecialOrderTypes[i] = orderType
 			}
+			if canonicalType := subCtx.mysqlSpecialCanonicalTypeForProject(int32(i)); canonicalType != nil {
+				if mysqlSpecialCanonicalTypes == nil {
+					mysqlSpecialCanonicalTypes = make([]*plan.Type, colLength)
+				}
+				mysqlSpecialCanonicalTypes[i] = canonicalType
+			}
+			if outputColumnProvenance == nil {
+				outputColumnProvenance = make([]OutputColumnProvenance, colLength)
+			}
+			outputColumnProvenance[i] = subCtx.outputColumnProvenanceForProject(int32(i))
+			outputColumnProvenance[i].CanInheritSourceDefault = false
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
@@ -9743,6 +10013,8 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		binding = NewBinding(tag, nodeID, "", table, 0, cols, colIsHidden, types, false, defaultVals)
 		binding.originCols = originCols
 		binding.mysqlSpecialOrderTypes = mysqlSpecialOrderTypes
+		binding.mysqlSpecialCanonicalTypes = mysqlSpecialCanonicalTypes
+		binding.outputColumnProvenance = outputColumnProvenance
 	}
 
 	if bindingToReplace != nil {

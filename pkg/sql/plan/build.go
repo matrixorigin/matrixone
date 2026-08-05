@@ -40,6 +40,21 @@ func bindAndOptimizeSelectQueryWithValidator(
 	skipStats bool,
 	validate func(*Query) error,
 ) (*Plan, error) {
+	return bindAndOptimizeSelectQueryWithValidatorAndCapture(
+		stmtType, ctx, stmt, isPrepareStmt, skipStats, validate, nil, false,
+	)
+}
+
+func bindAndOptimizeSelectQueryWithValidatorAndCapture(
+	stmtType plan.Query_StatementType,
+	ctx CompilerContext,
+	stmt *tree.Select,
+	isPrepareStmt bool,
+	skipStats bool,
+	validate func(*Query) error,
+	capture func(*BindContext),
+	restoreViewMySQLSpecialTypes bool,
+) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
@@ -47,6 +62,7 @@ func bindAndOptimizeSelectQueryWithValidator(
 
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
 	bindCtx := NewBindContext(builder, nil)
+	bindCtx.restoreViewMySQLSpecialTypes = restoreViewMySQLSpecialTypes
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
@@ -58,6 +74,9 @@ func bindAndOptimizeSelectQueryWithValidator(
 	builder.skipStats = skipStats
 	rootId = builder.reuseMultiReferenceCTEs(rootId)
 	ctx.SetViews(bindCtx.views)
+	if capture != nil {
+		capture(bindCtx)
+	}
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
 	if validate != nil {
@@ -106,7 +125,7 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 		// degenerate ODKU on a table with no primary/unique key (no dedup key to
 		// represent the upsert; legacy treats it as a plain INSERT and preserves
 		// the prepared-statement parameters).
-		if !stmt.HasReturning() && err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML &&
+		if !stmt.HasReturning() && moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) &&
 			(len(stmt.OnDuplicateUpdate) == 0 ||
 				err.Error() == noPkOnDupUpdateMsg) {
 			return buildInsert(stmt, ctx, false, isPrepareStmt)
@@ -286,7 +305,7 @@ func bindAndOptimizeLoadQuery(ctx CompilerContext, stmt *tree.Load, isPrepareStm
 
 	rootId, err := builder.bindLoad(stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+		if moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) {
 			return buildLoad(stmt, ctx, isPrepareStmt)
 		}
 		return nil, err
@@ -336,7 +355,7 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 				return nil, returningNotSupported(builder, feature)
 			}
 		}
-		if !stmt.HasReturning() && err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+		if !stmt.HasReturning() && moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) {
 			if err.Error() == icebergRowLevelDMLUnsupportedMsg {
 				return buildIcebergDeletePlan(stmt, ctx, isPrepareStmt)
 			}
