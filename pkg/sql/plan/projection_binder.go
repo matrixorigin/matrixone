@@ -98,6 +98,12 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		target := b.numericTargetType
 		b.numericTargetType = nil
 		defer func() { b.numericTargetType = target }()
+		_, isBareColumn := unwrapParenExpr(astExpr).(*tree.UnresolvedName)
+		if isBareColumn && isEnumOrSetPlanType(target) {
+			previousTarget := b.mysqlSpecialTargetType
+			b.mysqlSpecialTargetType = target
+			defer func() { b.mysqlSpecialTargetType = previousTarget }()
+		}
 		if subquery, ok := scalarSubqueryExpr(astExpr); ok && !subquery.Exists {
 			previousSubqueryTarget := b.numericSubqueryTarget
 			b.numericSubqueryTarget = target
