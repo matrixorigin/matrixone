@@ -120,3 +120,32 @@ func TestComStmtPrepareRewritePolicyConsumedOnce(t *testing.T) {
 		})
 	}
 }
+
+func TestComStmtPrepareDisabledRewriteTreatsHintAsComment(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	payload := `/*+ {"rewrites":{"src.t":["select * from src.t"]}} */ select * from src.t`
+	input, err := buildComStmtPrepareInput(ctx, "__mo_stmt_1", payload, "", &rewritePolicySnapshot{})
+	require.NoError(t, err)
+	require.True(t, input.rewritePolicyMaterialized)
+
+	stmts, err := mysql.Parse(ctx, input.getSql(), 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	prepare, ok := stmts[0].(*tree.PrepareString)
+	require.True(t, ok)
+	defer prepare.Free()
+	require.Equal(t, payload, prepare.Sql)
+
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.rewriteEnabled = false
+	execCtx.sqlOfStmt = input.getSql()
+	rewritten, inner, remap, err := prepareStringStatement(execCtx, ses, prepare.Sql)
+	require.NoError(t, err)
+	defer inner.Free()
+	require.Equal(t, payload, rewritten)
+	require.Nil(t, remap)
+}

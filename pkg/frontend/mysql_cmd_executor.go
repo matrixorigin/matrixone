@@ -5217,8 +5217,10 @@ func buildComStmtPrepareInput(
 	// Validate only the client-supplied inline rules here. The request policy is
 	// deliberately materialized on the outer wrapper below and must not be
 	// decoded from the nested string as if it were user input.
-	if _, _, err := extractInlineRewrites(ctx, sql); err != nil {
-		return nil, err
+	if policy != nil && policy.enabled {
+		if _, _, err := extractInlineRewrites(ctx, sql); err != nil {
+			return nil, err
+		}
 	}
 	wrapper := buildComStmtPrepareSQL(stmtName, sql, sqlMode)
 	materialized, err := policy.rewrite(ctx, wrapper, sqlMode)
