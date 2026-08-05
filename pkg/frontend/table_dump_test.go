@@ -511,6 +511,13 @@ func TestApplyTableDumpAutoIncrementRestoreReportsCleanupOnSetOffsetFailure(t *t
 func TestValidateTableDumpAutoIncrementRestore(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ctx := context.Background()
+	nilDefRel := mock_frontend.NewMockRelation(ctrl)
+	nilDefRel.EXPECT().GetTableDef(ctx).Return(nil)
+	_, _, err := validateTableDumpAutoIncrementRestore(
+		ctx, nilDefRel, []tableDumpAutoIncr{{Column: "visible", HighWatermark: 100}},
+	)
+	require.ErrorContains(t, err, "table definition is unavailable")
+
 	rel := mock_frontend.NewMockRelation(ctrl)
 	rel.EXPECT().GetTableName().Return("target").AnyTimes()
 	rel.EXPECT().GetTableDef(ctx).Return(&plan.TableDef{
