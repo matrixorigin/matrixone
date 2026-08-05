@@ -325,6 +325,59 @@ func TestPersistedLegacyWideObjectWindowsBoundAAndCNOutput(t *testing.T) {
 	spillTracker.requireReleased(t, true)
 }
 
+func TestEmptyStartPersistedLegacyWideRangeStaysBounded(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const (
+		rows         = 120
+		payloadBytes = 32 << 10
+		maxBytes     = 1 << 20
+	)
+	obj, rawFS := writeTestWideObjectWithCommitTS(t, mp, rows, payloadBytes)
+	fs := newPeakTrackingFileService(rawFS)
+	metaLoc := obj.ObjectLocation()
+	meta, err := objectio.FastLoadObjectMeta(context.Background(), &metaLoc, false, fs)
+	require.NoError(t, err)
+	payloadExtent := meta.MustGetMeta(objectio.SchemaData).
+		GetBlockMeta(0).ColumnMeta(0).Location()
+	require.Equal(t, uint8(compress.Lz4), payloadExtent.Alg())
+	require.Greater(t, payloadExtent.OriginSize(), uint32(maxBytes))
+
+	state := NewPartitionState("", true, 42, false)
+	state.dataObjectsNameIndex.Set(*obj)
+	spillConfig, spillTracker := newTestChangeRangeSpillConfig(t)
+	ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
+		MaxInMemoryRows: objectio.BlockMaxRows, MaxInMemoryBytes: maxBytes,
+	})
+	ctx = engine.WithChangeRangeSpill(ctx, spillConfig)
+	handle, err := NewChangesHandlerWithPartitionStateRange(
+		ctx, state, types.TS{}, types.BuildTS(200, 0), false,
+		objectio.BlockMaxRows, 0, mp, fs,
+	)
+	require.NoError(t, err)
+
+	readRows, peakOutput := 0, 0
+	for {
+		data, tombstone, _, nextErr := handle.Next(context.Background(), mp)
+		require.NoError(t, nextErr)
+		require.Nil(t, tombstone)
+		if data == nil {
+			break
+		}
+		readRows += data.RowCount()
+		peakOutput = max(peakOutput, data.Allocated())
+		data.Clean(mp)
+	}
+	require.Equal(t, rows, readRows)
+	require.LessOrEqual(t, peakOutput, maxBytes)
+	require.Less(t, fs.peak.Load(), int64(2<<20),
+		"empty-start legacy reads must not decode the complete persisted column")
+	require.NoError(t, handle.Close())
+	require.Zero(t, fs.current.Load())
+	require.Zero(t, mp.CurrNB())
+	spillTracker.requireReleased(t, true)
+}
+
 func TestCNObjectHandleCleansSourceAfterCopy(t *testing.T) {
 	sourceMP := mpool.MustNewZero()
 	defer mpool.DeleteMPool(sourceMP)
@@ -2767,6 +2820,8 @@ func writeTestWideObjectWithCommitTS(
 	payload := []byte(strings.Repeat("w", payloadBytes))
 	var blk types.Blockid
 	for i := 0; i < rows; i++ {
+		rowKey := uint64(i)
+		copy(payload, types.EncodeUint64(&rowKey))
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], payload, false, mp))
 		require.NoError(t, vector.AppendFixed(
 			bat.Vecs[1], types.NewRowid(&blk, uint32(i+1)), false, mp,

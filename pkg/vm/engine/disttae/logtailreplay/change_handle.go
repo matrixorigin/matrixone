@@ -2225,6 +2225,7 @@ func (p *baseHandle) QuickNext(ctx context.Context, bat **batch.Batch, mp *mpool
 	if p.aobjHandle != nil {
 		err = p.aobjHandle.QuickNext(ctx, bat, mp)
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+			p.aobjHandle.Close()
 			p.aobjHandle = nil
 			err = nil
 		}
@@ -2249,8 +2250,21 @@ func (p *baseHandle) QuickNext(ctx context.Context, bat **batch.Batch, mp *mpool
 	if (*bat) != nil && (*bat).RowCount() > p.changesHandle.coarseMaxRow {
 		return
 	}
-	err = p.cnObjectHandle.QuickNext(ctx, bat, mp)
-	return
+	if p.cnObjectHandle != nil {
+		err = p.cnObjectHandle.QuickNext(ctx, bat, mp)
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+			p.cnObjectHandle.Close()
+			p.cnObjectHandle = nil
+			err = nil
+		}
+		if err != nil {
+			return
+		}
+	}
+	if p.aobjHandle == nil && p.inMemoryHandle == nil && p.cnObjectHandle == nil {
+		return moerr.GetOkExpectedEOF()
+	}
+	return nil
 }
 func (p *baseHandle) newBatchHandleWithRowIterator(
 	ctx context.Context,

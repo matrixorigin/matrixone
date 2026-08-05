@@ -45,6 +45,19 @@ const DefaultLoadParallism = 20
 // from the partition state. It is a variable so tests can stub it.
 var NewPartitionStateChangesHandler = logtailreplay.NewChangesHandler
 
+var newPartitionChangesHandle = func(
+	ctx context.Context,
+	tbl *txnTable,
+	from, to types.TS,
+	skipDeletes bool,
+	snapshotReadPolicy engine.SnapshotReadPolicy,
+	mp *mpool.MPool,
+) (engine.ChangesHandle, error) {
+	return NewPartitionChangesHandle(
+		ctx, tbl, from, to, skipDeletes, snapshotReadPolicy, mp,
+	)
+}
+
 func GetPartitionStateStart(
 	ctx context.Context,
 	rel engine.Relation,
@@ -67,10 +80,10 @@ func (tbl *txnTable) CollectChanges(
 	skipDeletes bool,
 	mp *mpool.MPool,
 ) (engine.ChangesHandle, error) {
-	if from.IsEmpty() {
+	if from.IsEmpty() && !useBoundedVisibleStateRange(ctx) {
 		return NewCheckpointChangesHandle(ctx, tbl, to, mp)
 	}
-	return NewPartitionChangesHandle(
+	return newPartitionChangesHandle(
 		ctx,
 		tbl,
 		from,
@@ -79,6 +92,16 @@ func (tbl *txnTable) CollectChanges(
 		engine.SnapshotReadPolicyFromContext(ctx),
 		mp,
 	)
+}
+
+// useBoundedVisibleStateRange keeps opt-in visible-state callers on the
+// range-aware path even when their lower watermark is empty. In particular,
+// table_changes supplies both this policy and a ChangeRangeLimit; routing it
+// through CheckpointChangesHandle would bypass that limit while decoding
+// legacy persisted columns.
+func useBoundedVisibleStateRange(ctx context.Context) bool {
+	return engine.SnapshotReadPolicyFromContext(ctx) == engine.SnapshotReadPolicyVisibleState &&
+		engine.ChangeRangeLimitFromContext(ctx).Enabled()
 }
 
 type PartitionChangesHandle struct {

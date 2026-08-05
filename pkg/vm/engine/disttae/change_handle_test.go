@@ -31,6 +31,61 @@ func TestPartitionChangesHandleCloseWithTypedNil(t *testing.T) {
 	require.NoError(t, handle.Close())
 }
 
+func TestUseBoundedVisibleStateRangeForEmptyWatermark(t *testing.T) {
+	base := context.Background()
+	require.False(t, useBoundedVisibleStateRange(base))
+	require.False(t, useBoundedVisibleStateRange(
+		engine.WithSnapshotReadPolicy(base, engine.SnapshotReadPolicyVisibleState),
+	))
+
+	bounded := engine.WithChangeRangeLimit(base, engine.ChangeRangeLimit{
+		MaxInMemoryBytes: 64 << 20,
+	})
+	require.False(t, useBoundedVisibleStateRange(bounded))
+	require.True(t, useBoundedVisibleStateRange(
+		engine.WithSnapshotReadPolicy(bounded, engine.SnapshotReadPolicyVisibleState),
+	))
+}
+
+func TestCollectChangesRoutesBoundedEmptyWatermarkToVisibleStateRange(t *testing.T) {
+	original := newPartitionChangesHandle
+	t.Cleanup(func() { newPartitionChangesHandle = original })
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	_, err := original(
+		context.Background(), &txnTable{}, types.BuildTS(1, 0), types.TS{}, false,
+		engine.SnapshotReadPolicyVisibleState, mp,
+	)
+	require.Error(t, err)
+
+	want := &stubChangesHandle{}
+	called := false
+	newPartitionChangesHandle = func(
+		_ context.Context,
+		_ *txnTable,
+		from, to types.TS,
+		skipDeletes bool,
+		policy engine.SnapshotReadPolicy,
+		_ *mpool.MPool,
+	) (engine.ChangesHandle, error) {
+		called = true
+		require.True(t, from.IsEmpty())
+		require.Equal(t, types.BuildTS(20, 0), to)
+		require.False(t, skipDeletes)
+		require.Equal(t, engine.SnapshotReadPolicyVisibleState, policy)
+		return want, nil
+	}
+	ctx := engine.WithSnapshotReadPolicy(context.Background(), engine.SnapshotReadPolicyVisibleState)
+	ctx = engine.WithChangeRangeLimit(ctx, engine.ChangeRangeLimit{MaxInMemoryBytes: 64 << 20})
+
+	got, err := (&txnTable{}).CollectChanges(
+		ctx, types.TS{}, types.BuildTS(20, 0), false, mp,
+	)
+	require.NoError(t, err)
+	require.True(t, called)
+	require.Same(t, want, got)
+}
+
 func TestPartitionChangesHandleCloseClosesCurrentHandle(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
