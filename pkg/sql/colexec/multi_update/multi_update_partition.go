@@ -374,6 +374,7 @@ func (op *PartitionMultiUpdate) Reset(
 	err error,
 ) {
 	op.raw.MultiUpdateCtx = op.rawContexts
+	op.raw.resetMultiUpdateCtxs()
 	op.raw.Reset(proc, pipelineFailed, err)
 	for _, writer := range op.freeWriters {
 		_ = writer.reset(proc)

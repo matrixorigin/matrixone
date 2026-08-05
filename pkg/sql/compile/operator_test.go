@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -944,9 +945,24 @@ func TestDupOperatorTableFunctionPreservesProbeState(t *testing.T) {
 		Limit:        plan2.MakePlan2Uint64ConstExprWithType(7),
 		OrigFuncName: "l2_distance",
 	}
+	op.FulltextSourceRef = &plan.ObjectRef{SchemaName: "publisher", ObjName: "source", PubInfo: &plan.PubInfo{TenantId: 42}}
+	op.FulltextIndexRef = &plan.ObjectRef{SchemaName: "publisher", ObjName: "index", PubInfo: &plan.PubInfo{TenantId: 42}}
 
 	dup := dupOperator(op, 0, 1).(*table_function.TableFunction)
 	require.Equal(t, op.RuntimeFilterSpecs, dup.RuntimeFilterSpecs)
 	require.Equal(t, uint64(7), dup.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 	require.Equal(t, "l2_distance", dup.IndexReaderParam.GetOrigFuncName())
+	require.Equal(t, op.FulltextSourceRef, dup.FulltextSourceRef)
+	require.Equal(t, op.FulltextIndexRef, dup.FulltextIndexRef)
+}
+
+func TestDupOperatorApplyPreservesFulltextReferences(t *testing.T) {
+	tableFunction := table_function.NewArgument()
+	tableFunction.FulltextSourceRef = &plan.ObjectRef{SchemaName: "publisher", ObjName: "source", PubInfo: &plan.PubInfo{TenantId: 42}}
+	tableFunction.FulltextIndexRef = &plan.ObjectRef{SchemaName: "publisher", ObjName: "index", PubInfo: &plan.PubInfo{TenantId: 42}}
+	op := &apply.Apply{TableFunction: tableFunction}
+
+	dup := dupOperator(op, 0, 1).(*apply.Apply)
+	require.Equal(t, tableFunction.FulltextSourceRef, dup.TableFunction.FulltextSourceRef)
+	require.Equal(t, tableFunction.FulltextIndexRef, dup.TableFunction.FulltextIndexRef)
 }

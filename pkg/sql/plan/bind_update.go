@@ -424,7 +424,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				return 0, err
 			}
 		}
-	} else if stmt.From != nil && len(stmt.From.Tables) > 0 {
+	} else if updateHasMultipleSourceTables(stmt) {
 		lastNodeID, selectNode, selectNodeTag, err = builder.appendUpdateFromDedupNode(
 			bindCtx, lastNodeID, selectNode, selectNodeTag, dmlCtx, oldColName2Idx, newColName2Idx)
 		if err != nil {
@@ -1423,9 +1423,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			dmlCtx.tableDefs[i],
 			dmlCtx.objRefs[i],
 		)
-		// Multi-target UPDATE is routed to the legacy planner before this point,
-		// so at most one target can require inline irregular maintenance here.
-		break
 	}
 
 	dmlNode := &plan.Node{
@@ -2191,6 +2188,16 @@ func classifyIrregularIndexesForUpdate(
 		inline = append(inline, idxDef)
 	}
 	return inline, false, nil
+}
+
+func updateHasMultipleSourceTables(stmt *tree.Update) bool {
+	if stmt.From != nil && len(stmt.From.Tables) > 0 {
+		return true
+	}
+	if len(stmt.Tables) > 1 {
+		return true
+	}
+	return len(stmt.Tables) == 1 && tableExprContainsJoin(stmt.Tables[0])
 }
 
 func primaryKeyUpdated(tableDef *plan.TableDef, updateCols map[string]tree.Expr) bool {

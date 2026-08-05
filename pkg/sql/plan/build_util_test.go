@@ -265,6 +265,34 @@ func TestGetTypeFromAstGeometryAliases(t *testing.T) {
 	}
 }
 
+func TestGetTypeFromAstLongStringAliases(t *testing.T) {
+	tests := []struct {
+		typeSQL string
+		want    types.T
+	}{
+		{typeSQL: "long varchar", want: types.T_text},
+		{typeSQL: "long varbinary", want: types.T_blob},
+	}
+
+	for _, test := range tests {
+		t.Run(test.typeSQL, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t (value "+test.typeSQL+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			createTable, ok := stmt.(*tree.CreateTable)
+			require.True(t, ok)
+			require.Len(t, createTable.Defs, 1)
+			colDef, ok := createTable.Defs[0].(*tree.ColumnTableDef)
+			require.True(t, ok)
+
+			typ, err := getTypeFromAst(context.Background(), colDef.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(test.want), typ.Id)
+		})
+	}
+}
+
 func TestGetTypeFromAstArrayAsJson(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(), "create table t (tags array(varchar(20)))", 1)
 	require.NoError(t, err)

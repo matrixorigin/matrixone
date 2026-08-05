@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -123,6 +124,27 @@ func TestPartitionMultiUpdateSetRejectZeroTemporalUpdatesWriters(t *testing.T) {
 	require.True(t, op.raw.RejectZeroTemporal)
 	require.True(t, active.rejectZeroTemporal)
 	require.True(t, free.rejectZeroTemporal)
+}
+
+func TestPartitionMultiUpdateResetRebuildsRawContextMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	original := &MultiUpdateCtx{TableDef: &plan.TableDef{Name: "logical"}}
+	raw := &MultiUpdate{
+		MultiUpdateCtx: []*MultiUpdateCtx{original},
+		ctr: container{updateCtxInfos: map[string]*updateCtxInfo{
+			"physical_partition": {},
+		}},
+	}
+	op := &PartitionMultiUpdate{
+		raw:         raw,
+		rawContexts: []*MultiUpdateCtx{original},
+	}
+
+	op.Reset(proc, false, nil)
+
+	require.Same(t, original, raw.MultiUpdateCtx[0])
+	require.Contains(t, raw.ctr.updateCtxInfos, "logical")
+	require.NotContains(t, raw.ctr.updateCtxInfos, "physical_partition")
 }
 
 func TestAddInsertAffectRows(t *testing.T) {

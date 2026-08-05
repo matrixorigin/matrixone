@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -479,15 +478,12 @@ func filterTargetRows(
 	rowNumbers := vector.MustFixedColWithTypeCheck[int64](rowNumberVec)
 	rowIDNulls := rowIDVec.GetNulls()
 	rowNumberNulls := rowNumberVec.GetNulls()
-	var active []bool
-	var activeNulls *nulls.Nulls
+	var activeVec *vector.Vector
 	if len(updateCtx.DeleteCols) >= 4 {
-		activeVec := input.Vecs[updateCtx.DeleteCols[3]]
+		activeVec = input.Vecs[updateCtx.DeleteCols[3]]
 		if activeVec.GetType().Oid != types.T_bool {
 			return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid multi-target update selector types")
 		}
-		active = vector.MustFixedColWithTypeCheck[bool](activeVec)
-		activeNulls = activeVec.GetNulls()
 	}
 	selections := make([]int64, 0, input.RowCount())
 	for i := 0; i < input.RowCount(); i++ {
@@ -496,7 +492,8 @@ func filterTargetRows(
 			rowNumbers[i] != 1 {
 			continue
 		}
-		if activeNulls != nil && (activeNulls.Contains(uint64(i)) || !active[i]) {
+		if activeVec != nil && (activeVec.IsNull(uint64(i)) ||
+			!vector.GetFixedAtNoTypeCheck[bool](activeVec, i)) {
 			continue
 		}
 		selections = append(selections, int64(i))

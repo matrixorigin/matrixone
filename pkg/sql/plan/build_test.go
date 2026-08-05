@@ -2470,6 +2470,15 @@ func TestUpdatePgStyleFromDedupsDuplicateSourceMatchesOnNewPath(t *testing.T) {
 	}
 }
 
+func TestMySQLSingleTargetMultiTableUpdateDedupsDuplicateSourceMatches(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"update nation as target, (select n_regionkey from nation) as source "+
+			"set target.n_regionkey = 555 where target.n_nationkey = 3")
+	require.NoError(t, err)
+	require.True(t, hasUpdateFromDedupWindow(logicPlan.GetQuery(), 1))
+}
+
 func TestMultiTargetUpdateUsesIndependentModernSelectors(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	logicPlan, err := runOneStmt(
@@ -5858,6 +5867,284 @@ func TestMysqlCompatibilityMode(t *testing.T) {
 	// with mysql compatibility
 	mock.ctxt.mysqlCompatible = true
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestOnlyFullGroupByMySQLAndMatrixOneNativeModes(t *testing.T) {
+	const whereConstrained = "select deptno, job, sum(sal) from constraint_test.emp where job = 'clerk' group by deptno"
+	const primaryKeyDependent = "select empno, ename, sum(sal) from constraint_test.emp group by empno"
+	const unsafeBareColumn = "select deptno, job, sum(sal) from constraint_test.emp group by deptno"
+	const volatileWhereValue = "select deptno, empno, sum(sal) from constraint_test.emp where empno = floor(rand() * 100) group by deptno"
+	const statementStableWhereValue = "select deptno, hiredate, sum(sal) from constraint_test.emp where hiredate = current_date() group by deptno"
+	const whereConstrainedOrderBy = "select deptno, sum(sal) from constraint_test.emp where job = 'clerk' group by deptno order by job"
+	const whereConstrainedHaving = "select deptno, sum(sal) from constraint_test.emp where job = 'clerk' group by deptno having job = 'clerk'"
+	const primaryKeyDependentHaving = "select empno, sum(sal) from constraint_test.emp group by empno having ename <> ''"
+	const primaryKeyDependentRollup = "select empno, ename, sum(sal) from constraint_test.emp group by empno with rollup"
+	const primaryKeyDependentCube = "select empno, ename, sum(sal) from constraint_test.emp group by cube(empno)"
+	const primaryKeyDependentRollupHaving = "select empno, sum(sal) from constraint_test.emp group by empno with rollup having ename <> ''"
+	const primaryKeyDependentRollupOrderBy = "select empno, sum(sal) from constraint_test.emp group by empno with rollup order by ename"
+	const whereConstrainedWindow = "select deptno, first_value(job) over (partition by job order by job), sum(sal) from constraint_test.emp where job = 'clerk' group by deptno"
+	const whereConstrainedWindowNoSpec = "select deptno, first_value(job) over (), sum(sal) from constraint_test.emp where job = 'clerk' group by deptno"
+	const primaryKeyDependentWindow = "select empno, first_value(ename) over (partition by ename order by ename), sum(sal) from constraint_test.emp group by empno"
+
+	tests := []struct {
+		name    string
+		mode    string
+		sql     string
+		wantErr bool
+	}{
+		{
+			name: "mysql mode without only full group by stays permissive",
+			mode: "STRICT_TRANS_TABLES",
+			sql:  unsafeBareColumn,
+		},
+		{
+			name: "mysql only full group by allows where constrained column",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  whereConstrained,
+		},
+		{
+			name: "mysql only full group by allows primary key dependency",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  primaryKeyDependent,
+		},
+		{
+			name: "mysql only full group by keeps where constrained window inputs below window stage",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  whereConstrainedWindow,
+		},
+		{
+			name: "mysql only full group by keeps where constrained window argument below window stage",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  whereConstrainedWindowNoSpec,
+		},
+		{
+			name: "mysql only full group by keeps primary key dependent window inputs below window stage",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  primaryKeyDependentWindow,
+		},
+		{
+			name: "mysql only full group by recognizes mode token case and spacing",
+			mode: " strict_trans_tables, only_full_group_by ",
+			sql:  primaryKeyDependent,
+		},
+		{
+			name:    "mysql only full group by rejects unconstrained column",
+			mode:    "ONLY_FULL_GROUP_BY",
+			sql:     unsafeBareColumn,
+			wantErr: true,
+		},
+		{
+			name:    "mysql only full group by rejects volatile where value",
+			mode:    "ONLY_FULL_GROUP_BY",
+			sql:     volatileWhereValue,
+			wantErr: true,
+		},
+		{
+			name: "mysql only full group by allows statement stable where value",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  statementStableWhereValue,
+		},
+		{
+			name: "mysql only full group by allows where constrained having column",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  whereConstrainedHaving,
+		},
+		{
+			name: "mysql only full group by allows where constrained order by column",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  whereConstrainedOrderBy,
+		},
+		{
+			name: "mysql only full group by allows primary key dependent having column",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  primaryKeyDependentHaving,
+		},
+		{
+			name:    "mysql only full group by rejects primary key dependency in rollup total",
+			mode:    "ONLY_FULL_GROUP_BY",
+			sql:     primaryKeyDependentRollup,
+			wantErr: true,
+		},
+		{
+			name:    "mysql only full group by rejects primary key dependency in cube total",
+			mode:    "ONLY_FULL_GROUP_BY",
+			sql:     primaryKeyDependentCube,
+			wantErr: true,
+		},
+		{
+			name:    "mysql only full group by rejects primary key dependent rollup having",
+			mode:    "ONLY_FULL_GROUP_BY",
+			sql:     primaryKeyDependentRollupHaving,
+			wantErr: true,
+		},
+		{
+			name:    "mysql only full group by rejects primary key dependent rollup order by",
+			mode:    "ONLY_FULL_GROUP_BY",
+			sql:     primaryKeyDependentRollupOrderBy,
+			wantErr: true,
+		},
+		{
+			name:    "matrixone native keeps strict group by",
+			mode:    "ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE",
+			sql:     whereConstrained,
+			wantErr: true,
+		},
+		{
+			name:    "matrixone native rejects primary key dependency exception",
+			mode:    "ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE",
+			sql:     primaryKeyDependent,
+			wantErr: true,
+		},
+		{
+			name:    "matrixone native rejects where constrained having column",
+			mode:    "ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE",
+			sql:     whereConstrainedHaving,
+			wantErr: true,
+		},
+		{
+			name:    "matrixone native rejects where constrained order by column",
+			mode:    "ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE",
+			sql:     whereConstrainedOrderBy,
+			wantErr: true,
+		},
+		{
+			name: "matrixone native without only full group by stays permissive",
+			mode: "MATRIXONE_NATIVE",
+			sql:  unsafeBareColumn,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.SetSqlModeOverride(test.mode)
+			stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), test.sql, 1)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(mock.CurrentContext(), stmts[0], false)
+			if test.wantErr {
+				require.ErrorContains(t, err, "must appear in the GROUP BY clause")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestOnlyFullGroupByCompositePrimaryKeyDependency(t *testing.T) {
+	builder := &QueryBuilder{
+		qry: &plan.Query{
+			Nodes: []*plan.Node{
+				{
+					TableDef: &plan.TableDef{
+						Pkey: &plan.PrimaryKeyDef{
+							// MatrixOne stores a composite key in a hidden column while
+							// Names retains the user-visible key columns.
+							Cols:        []uint64{2},
+							PkeyColName: catalog.CPrimaryKeyColName,
+							Names:       []string{"tenant_id", "id"},
+						},
+					},
+				},
+			},
+		},
+	}
+	binding := NewBinding(1, 0, "", "composite_pk", 0, []string{"tenant_id", "id"}, nil, nil, false, nil)
+	ctx := &BindContext{groups: []*plan.Expr{
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: binding.tag, ColPos: 0}}},
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: binding.tag, ColPos: 1}}},
+	}, groupingFlag: []bool{true, true}}
+
+	require.True(t, builder.groupByIncludesPrimaryKey(ctx, binding))
+	ctx.groupingFlag[1] = false
+	require.False(t, builder.groupByIncludesPrimaryKey(ctx, binding))
+	ctx.groupingFlag[1] = true
+	ctx.groups = ctx.groups[:1]
+	ctx.groupingFlag = ctx.groupingFlag[:1]
+	require.False(t, builder.groupByIncludesPrimaryKey(ctx, binding))
+}
+
+func TestOnlyFullGroupByUsesStructuredBoundColumns(t *testing.T) {
+	builder := &QueryBuilder{
+		qry: &plan.Query{Nodes: []*plan.Node{
+			{TableDef: &plan.TableDef{Pkey: &plan.PrimaryKeyDef{
+				PkeyColName: "customer.account",
+				Names:       []string{"customer.account"},
+			}}},
+			{TableDef: &plan.TableDef{}},
+		}},
+	}
+	binding := NewBinding(1, 0, "", "t", 0, []string{"customer.account", "unsafe"}, nil, nil, false, nil)
+	unsafeBinding := NewBinding(2, 1, "", "u", 0, []string{"unsafe"}, nil, nil, false, nil)
+	ctx := &BindContext{
+		bindingByTag: map[int32]*Binding{binding.tag: binding, unsafeBinding.tag: unsafeBinding},
+		groups: []*plan.Expr{{Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: binding.tag,
+			ColPos: 0,
+		}}}},
+		groupingFlag: []bool{true},
+	}
+
+	rejected, found := builder.mysqlFullGroupByRejectedColumn(ctx, []boundColumn{
+		{name: "t.customer.account", relation: binding.tag, columnPos: 0},
+		{name: "u.unsafe", relation: unsafeBinding.tag, columnPos: 0},
+	})
+	require.True(t, found)
+	require.Equal(t, "u.unsafe", rejected)
+
+	convertedColumn := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+		{Expr: &plan.Expr_Lit{Lit: &plan.Literal{}}},
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: binding.tag, ColPos: 0}}},
+	}}}}
+	require.True(t, builder.mysqlFullGroupByAllowsColRef(ctx, convertedColumn))
+	ctx.groupingFlag[0] = false
+	require.False(t, builder.mysqlFullGroupByAllowsColRef(ctx, convertedColumn))
+}
+
+func TestOnlyFullGroupByEnumColumnValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		sql     string
+		wantErr bool
+	}{
+		{
+			name:    "rejects unconstrained enum projection",
+			sql:     "select deptno, job, sum(sal) from constraint_test.emp group by deptno",
+			wantErr: true,
+		},
+		{
+			name: "allows where constrained enum projection",
+			sql:  "select deptno, job, sum(sal) from constraint_test.emp where job = 'clerk' group by deptno",
+		},
+		{
+			name: "allows where constrained enum having",
+			sql:  "select deptno, sum(sal) from constraint_test.emp where job = 'clerk' group by deptno having job = 'clerk'",
+		},
+		{
+			name: "allows primary key dependent enum projection",
+			sql:  "select empno, job, sum(sal) from constraint_test.emp group by empno",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+			_, tableDef, err := mock.ctxt.Resolve("constraint_test", "emp", nil)
+			require.NoError(t, err)
+			tableDef.Cols[2].Typ.Id = int32(types.T_enum)
+			tableDef.Cols[2].Typ.Enumvalues = "clerk,manager"
+
+			stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), test.sql, 1)
+			require.NoError(t, err)
+			_, err = BuildPlan(mock.CurrentContext(), stmts[0], false)
+			if test.wantErr {
+				require.ErrorContains(t, err, "must appear in the GROUP BY clause")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestTcl(t *testing.T) {

@@ -1,3 +1,4 @@
+set session sql_mode = default;
 DROP TABLE IF EXISTS dept;
 create table dept(
     deptno int unsigned auto_increment COMMENT '部门编号',
