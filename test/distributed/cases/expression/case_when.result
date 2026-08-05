@@ -597,3 +597,20 @@ from t_conditional_unknown_width;
 6  ¦  616263646566  ¦  1  ¦  1
 drop view v_conditional_unknown_width;
 drop table t_conditional_unknown_width;
+drop table if exists t_conditional_composed_width;
+create table t_conditional_composed_width (d double, s varchar(2));
+insert into t_conditional_composed_width values (123.456, '你好');
+select length(case when false then 'x' when true then 1234567890123 else cast('2024-01-01' as date) end) as case_known_length,
+length(coalesce(cast(null as char(1)), 1234567890123, cast('2024-01-01' as date))) as coalesce_known_length,
+case when false then 'x' when true then d else cast('2024-01-01' as date) end <> 'x' as case_unknown_value_preserved,
+coalesce(cast(null as char(1)), d, cast('2024-01-01' as date)) <> 'x' as coalesce_unknown_value_preserved
+from t_conditional_composed_width;
+➤ case_known_length[-5,64,0]  ¦  coalesce_known_length[-5,64,0]  ¦  case_unknown_value_preserved[-7,1,0]  ¦  coalesce_unknown_value_preserved[-7,1,0]  𝄀
+13  ¦  13  ¦  1  ¦  1
+select if(true, s, 12) as unicode_if,
+case when true then s else 12 end as unicode_case,
+coalesce(s, 12) as unicode_coalesce
+from t_conditional_composed_width;
+➤ unicode_if[12,-1,0]  ¦  unicode_case[12,-1,0]  ¦  unicode_coalesce[12,-1,0]  𝄀
+你好  ¦  你好  ¦  你好
+drop table t_conditional_composed_width;

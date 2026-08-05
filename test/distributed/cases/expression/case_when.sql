@@ -478,3 +478,20 @@ from t_conditional_unknown_width;
 
 drop view v_conditional_unknown_width;
 drop table t_conditional_unknown_width;
+
+-- @case
+-- @desc:test composed conditional VARCHAR bounds and UTF-8 values
+-- @label:bvt
+drop table if exists t_conditional_composed_width;
+create table t_conditional_composed_width (d double, s varchar(2));
+insert into t_conditional_composed_width values (123.456, '你好');
+select length(case when false then 'x' when true then 1234567890123 else cast('2024-01-01' as date) end) as case_known_length,
+       length(coalesce(cast(null as char(1)), 1234567890123, cast('2024-01-01' as date))) as coalesce_known_length,
+       case when false then 'x' when true then d else cast('2024-01-01' as date) end <> 'x' as case_unknown_value_preserved,
+       coalesce(cast(null as char(1)), d, cast('2024-01-01' as date)) <> 'x' as coalesce_unknown_value_preserved
+from t_conditional_composed_width;
+select if(true, s, 12) as unicode_if,
+       case when true then s else 12 end as unicode_case,
+       coalesce(s, 12) as unicode_coalesce
+from t_conditional_composed_width;
+drop table t_conditional_composed_width;

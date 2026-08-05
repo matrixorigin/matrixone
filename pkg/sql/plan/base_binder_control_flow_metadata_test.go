@@ -121,6 +121,96 @@ func TestBindControlFlowMetadata(t *testing.T) {
 		})
 	}
 
+	date := makePlan2DateConstExprWithType(0)
+	for _, test := range []struct {
+		name     string
+		function string
+		args     []*planpb.Expr
+		width    int32
+	}{
+		{
+			name:     "case combines string numeric and temporal bounds",
+			function: "case",
+			args: []*planpb.Expr{
+				makePlan2BoolConstExprWithType(false), makePlan2StringConstExprWithType("x"),
+				makePlan2BoolConstExprWithType(true), makePlan2Int64ConstExprWithType(1234567890123),
+				date,
+			},
+			width: 14,
+		},
+		{
+			name:     "coalesce combines string numeric and temporal bounds",
+			function: "coalesce",
+			args: []*planpb.Expr{
+				MakePlan2NullTextConstExprWithType(""), makePlan2StringConstExprWithType("x"),
+				makePlan2Int64ConstExprWithType(1234567890123), date,
+			},
+			width: 14,
+		},
+		{
+			name:     "case keeps unknown double conservative with temporal branch",
+			function: "case",
+			args: []*planpb.Expr{
+				makePlan2BoolConstExprWithType(false), makePlan2StringConstExprWithType("x"),
+				makePlan2BoolConstExprWithType(true),
+				{Typ: planpb.Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}},
+				date,
+			},
+			width: types.MaxVarcharLen,
+		},
+		{
+			name:     "coalesce keeps unknown double conservative with temporal branch",
+			function: "coalesce",
+			args: []*planpb.Expr{
+				MakePlan2NullTextConstExprWithType(""), makePlan2StringConstExprWithType("x"),
+				{Typ: planpb.Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}},
+				date,
+			},
+			width: types.MaxVarcharLen,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(ctx, test.function, test.args)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
+			require.Equal(t, test.width, expr.Typ.Width)
+		})
+	}
+
+	for _, test := range []struct {
+		name     string
+		function string
+		args     []*planpb.Expr
+	}{
+		{
+			name:     "if keeps unicode string cast conservative",
+			function: "if",
+			args:     []*planpb.Expr{makePlan2BoolConstExprWithType(true), makePlan2StringConstExprWithType("你好"), makePlan2Int64ConstExprWithType(12)},
+		},
+		{
+			name:     "case keeps unicode string cast conservative",
+			function: "case",
+			args:     []*planpb.Expr{makePlan2BoolConstExprWithType(true), makePlan2StringConstExprWithType("你好"), makePlan2Int64ConstExprWithType(12)},
+		},
+		{
+			name:     "coalesce keeps unicode string cast conservative",
+			function: "coalesce",
+			args:     []*planpb.Expr{makePlan2StringConstExprWithType("你好"), makePlan2Int64ConstExprWithType(12)},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(ctx, test.function, test.args)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
+			require.Equal(t, int32(3), expr.Typ.Width)
+			for _, arg := range expr.GetF().Args {
+				if types.T(arg.Typ.Id) == types.T_varchar {
+					require.Equal(t, int32(types.MaxVarcharLen), arg.Typ.Width)
+				}
+			}
+		})
+	}
+
 	for _, test := range []struct {
 		name     string
 		function string
@@ -211,11 +301,6 @@ func TestBindControlFlowMetadata(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
 			require.Equal(t, test.width, expr.Typ.Width)
-			for _, arg := range expr.GetF().Args {
-				if types.T(arg.Typ.Id) == types.T_varchar {
-					require.Equal(t, test.width, arg.Typ.Width)
-				}
-			}
 		})
 	}
 

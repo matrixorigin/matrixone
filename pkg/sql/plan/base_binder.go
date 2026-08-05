@@ -4195,16 +4195,31 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 		return
 	}
 
+	conservativeReturnType := *returnType
 	changed := false
 	switch {
 	case returnType.Oid == types.T_varchar:
-		changed = adjustControlFlowStringNumericMetadata(args, argTypes, valueIndexes, returnType)
-		changed = adjustControlFlowTemporalStringMetadata(args, argTypes, valueIndexes, returnType) || changed
+		changed = adjustControlFlowVarcharMetadata(args, argTypes, valueIndexes, returnType)
 	case returnType.Oid.IsDecimal():
 		changed = adjustControlFlowDecimalLiteralMetadata(args, argTypes, valueIndexes, returnType)
 	}
 
-	if changed && len(argsCastType) == len(args) {
+	if !changed || len(argsCastType) != len(args) {
+		return
+	}
+
+	// VARCHAR width is character metadata, while normal casts enforce Width in
+	// bytes. Restore the overload's conservative target rather than its
+	// intermediate type-check target, which may already have been narrowed by a
+	// different value branch. Decimal widths describe the runtime decimal
+	// representation, so their existing cast synchronization remains safe.
+	if returnType.Oid == types.T_varchar {
+		for _, idx := range valueIndexes {
+			argsCastType[idx] = conservativeReturnType
+		}
+		return
+	}
+	if returnType.Oid.IsDecimal() {
 		for _, idx := range valueIndexes {
 			argsCastType[idx] = *returnType
 		}
@@ -4233,26 +4248,38 @@ func controlFlowValueIndexes(name string, argsLength int) []int {
 	return valueIndexes
 }
 
-func adjustControlFlowStringNumericMetadata(args []*Expr, argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
+// adjustControlFlowVarcharMetadata derives one bound across every value
+// branch. String/numeric/temporal subfamilies must not independently narrow a
+// shared return type: the widest proven display bound wins, and any unknown
+// relevant branch keeps the overload's conservative capacity.
+func adjustControlFlowVarcharMetadata(args []*Expr, argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
 	hasString := false
-	hasNumeric := false
+	hasConvertible := false
 	width := int32(0)
 	for _, idx := range valueIndexes {
 		if idx >= len(argTypes) {
 			return false
 		}
 		typ := argTypes[idx]
+		var (
+			candidate int32
+			known     bool
+		)
 		if typ.Oid.IsMySQLString() {
 			hasString = true
+			candidate, known = controlFlowStringWidth(args[idx], typ)
 		} else if typ.Oid.IsInteger() || typ.Oid.IsFloat() || typ.Oid.IsDecimal() {
-			hasNumeric = true
+			hasConvertible = true
+			candidate, known = controlFlowStringWidth(args[idx], typ)
+		} else if temporalWidth, ok := temporalDisplayWidthForVarchar(typ); ok {
+			hasConvertible = true
+			candidate, known = temporalWidth, true
 		} else {
 			// NULL has no display capacity and is intentionally ignored by the
 			// conditional overload. Other non-string/non-numeric values are also
 			// outside this VARCHAR metadata adjustment.
 			continue
 		}
-		candidate, known := controlFlowStringWidth(args[idx], typ)
 		if !known {
 			// Width zero is used both by exact empty literals and by types whose
 			// runtime display capacity is unknown (for example TEXT or FLOAT).
@@ -4263,42 +4290,7 @@ func adjustControlFlowStringNumericMetadata(args []*Expr, argTypes []types.Type,
 			width = candidate
 		}
 	}
-	if hasString && hasNumeric && width > 0 {
-		changed := returnType.Width != width
-		returnType.Width = width
-		return changed
-	}
-	return false
-}
-
-func adjustControlFlowTemporalStringMetadata(args []*Expr, argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
-	hasString := false
-	hasTemporal := false
-	width := int32(0)
-	for _, idx := range valueIndexes {
-		if idx >= len(argTypes) {
-			return false
-		}
-		typ := argTypes[idx]
-		if typ.Oid.IsMySQLString() {
-			hasString = true
-			stringWidth, known := controlFlowStringWidth(args[idx], typ)
-			if !known {
-				return false
-			}
-			if stringWidth > width {
-				width = stringWidth
-			}
-			continue
-		}
-		if temporalWidth, ok := temporalDisplayWidthForVarchar(typ); ok {
-			hasTemporal = true
-			if temporalWidth > width {
-				width = temporalWidth
-			}
-		}
-	}
-	if hasString && hasTemporal && width > 0 {
+	if hasString && hasConvertible && width > 0 {
 		changed := returnType.Width != width
 		returnType.Width = width
 		return changed
