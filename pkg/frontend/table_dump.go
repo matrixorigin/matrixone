@@ -235,6 +235,15 @@ func tableSchemaHash(def *plan.TableDef) (string, error) {
 	if def == nil {
 		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
 	}
+	// Catalogs written before TINYTEXT had a durable width marker retain the
+	// subtype only in Createsql. Normalize a planner-owned clone before hashing
+	// so DUMP and LOAD compare the same logical schema without mutating the
+	// catalog definition shared by the engine cache. Keeping this at the common
+	// hash boundary covers both main and index relations.
+	def = sqlplan.CloneTableDefForPlan(def, true)
+	if err := sqlplan.RecoverLegacyTinyTextFromCreateSQL(context.Background(), def); err != nil {
+		return "", moerr.NewInternalErrorNoCtxf("cannot normalize table schema: %v", err)
+	}
 	// For ordinary tables, reconstruct the DDL from the expanded TableDef. This
 	// makes CREATE TABLE ... LIKE ... compare equal to an equivalent explicit
 	// CREATE TABLE statement stored by another cluster.
