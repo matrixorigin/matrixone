@@ -1948,6 +1948,15 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 	for name, sysVar := range gSysVarsDefs {
 		gSysVars[name] = sysVar.Default
 	}
+	// The SQL compatibility defaults must describe the isolation that the txn
+	// client will actually use when no SET GLOBAL override has been persisted.
+	// Pessimistic deployments default to RC while optimistic deployments use SI.
+	// Catalog values below still win, so SET GLOBAL remains account scoped and
+	// is inherited by subsequently initialized sessions.
+	if value, ok := serviceTxnIsolationSystemValue(ses.service); ok {
+		gSysVars["transaction_isolation"] = value
+		gSysVars["tx_isolation"] = value
+	}
 
 	for _, execResult := range execResults {
 		for i := uint64(0); i < execResult.GetRowCount(); i++ {
