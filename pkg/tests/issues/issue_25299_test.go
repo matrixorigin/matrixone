@@ -59,6 +59,18 @@ func TestIssue25299RegexpRejectsBinaryCharset(t *testing.T) {
 		assertCharacterSetMismatch("select regexp_instr('abc', binary 'a')")
 		assertCharacterSetMismatch("select regexp_replace('abc', 'a', binary 'x')")
 
+		var instr int64
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select regexp_instr('Cat', 'cat', 1, 1, 0, _binary 'i')").Scan(&instr))
+		require.Equal(t, int64(1), instr)
+
+		_, err = conn.ExecContext(ctx, "select regexp_replace('Cat', 'cat', 'X', 1, 0, 'x')")
+		require.Error(t, err)
+		var matchTypeErr *mysqlDriver.MySQLError
+		require.True(t, errors.As(err, &matchTypeErr), "expected MySQL protocol error, got %T: %v", err, err)
+		require.Equal(t, uint16(moerr.ER_WRONG_ARGUMENTS), matchTypeErr.Number)
+		require.Equal(t, [5]byte{'H', 'Y', '0', '0', '0'}, matchTypeErr.SQLState)
+
 		_, err = conn.ExecContext(ctx, "set @regexp_binary_param = binary 'abc'")
 		require.NoError(t, err)
 		_, err = conn.ExecContext(ctx, "prepare regexp_binary_stmt from 'select regexp_like(?, ''a'')'")

@@ -41,6 +41,29 @@ select cast(null as binary) regexp 'a';
 select unhex('ff') regexp '.';
 select regexp_like(null, 'a') as regexp_null_subject;
 
+-- Optional match_type overloads. An explicit empty match_type preserves
+-- MatrixOne's existing case-sensitive default until collation metadata is
+-- available to the function executor.
+select regexp_instr('Cat cat', 'cat', 1, 1, 0, 'i') as instr_i,
+       regexp_instr('Cat cat', 'cat', 1, 1, 0, 'c') as instr_c,
+       regexp_instr('Cat cat', 'cat', 1, 1, 0, 'ic') as instr_ic,
+       regexp_instr('Cat cat', 'cat', 1, 1, 0, 'ci') as instr_ci;
+select regexp_substr('Cat cat', 'cat', 1, 1, 'i') as substr_i,
+       regexp_substr('Cat cat', 'cat', 1, 1, 'c') as substr_c;
+select regexp_replace('Cat cat', 'cat', 'X', 1, 0, 'i') as replace_i,
+       regexp_replace('Cat cat', 'cat', 'X', 1, 0, 'c') as replace_c;
+select regexp_instr('a\nb', '^b', 1, 1, 0, 'm') as instr_m,
+       regexp_substr('a\nb', 'a.b', 1, 1, 'n') as substr_n,
+       regexp_replace('a\nb', 'a.b', 'X', 1, 0, 'mn') as replace_mn;
+select regexp_instr('Cat', 'cat', 1, 1, 0, _binary 'i') as binary_match_type;
+select regexp_substr('Cat', 'cat', 1, 1, null) as null_match_type;
+select regexp_replace('Cat', 'cat', 'X', 1, 0, 'x');
+
+set @regexp_match_type = binary 'i';
+prepare regexp_match_type_stmt from 'select regexp_instr(''Cat'', ''cat'', 1, 1, 0, ?)';
+execute regexp_match_type_stmt using @regexp_match_type;
+deallocate prepare regexp_match_type_stmt;
+
 drop table if exists t_regexp_binary_operands;
 create table t_regexp_binary_operands (
   id int primary key,

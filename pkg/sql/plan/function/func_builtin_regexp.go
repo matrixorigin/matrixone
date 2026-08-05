@@ -446,6 +446,34 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 		}
 		return nil
 
+	case 5:
+		positions := vector.GenerateFunctionFixedTypeParameter[int64](parameters[2])
+		occurrences := vector.GenerateFunctionFixedTypeParameter[int64](parameters[3])
+		matchTypes := vector.GenerateFunctionStrParameter(parameters[4])
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetStrValue(i)
+			v2, null2 := p2.GetStrValue(i)
+			pos, null3 := positions.GetValue(i)
+			ocur, null4 := occurrences.GetValue(i)
+			matchType, null5 := matchTypes.GetStrValue(i)
+			if null1 || null2 || null3 || null4 || null5 || len(v2) == 0 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			} else {
+				expr, pat := functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2)
+				match, res, err := op.regMap.regularSubstrWithMatchType(
+					pat, expr, pos, ocur, functionUtil.QuickBytesToStr(matchType))
+				if err != nil {
+					return err
+				}
+				if err = rs.AppendBytes(functionUtil.QuickStrToBytes(res), !match); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+
 	}
 	return nil
 }
@@ -525,6 +553,35 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 			} else {
 				expr, pat := functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2)
 				index, err := op.regMap.regularInstr(pat, expr, pos, ocur, resOp)
+				if err != nil {
+					return err
+				}
+				if err = rs.Append(index, false); err != nil {
+					return err
+				}
+			}
+		}
+
+	case 6:
+		positions := vector.GenerateFunctionFixedTypeParameter[int64](parameters[2])
+		occurrences := vector.GenerateFunctionFixedTypeParameter[int64](parameters[3])
+		resultOption := vector.GenerateFunctionFixedTypeParameter[int8](parameters[4])
+		matchTypes := vector.GenerateFunctionStrParameter(parameters[5])
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetStrValue(i)
+			v2, null2 := p2.GetStrValue(i)
+			pos, null3 := positions.GetValue(i)
+			ocur, null4 := occurrences.GetValue(i)
+			resOp, null5 := resultOption.GetValue(i)
+			matchType, null6 := matchTypes.GetStrValue(i)
+			if null1 || null2 || null3 || null4 || null5 || null6 {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+			} else {
+				expr, pat := functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2)
+				index, err := op.regMap.regularInstrWithMatchType(
+					pat, expr, pos, ocur, resOp, functionUtil.QuickBytesToStr(matchType))
 				if err != nil {
 					return err
 				}
@@ -649,6 +706,34 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 				}
 			} else {
 				val, err := op.regMap.regularReplace(functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v3), v4, v5)
+				if err != nil {
+					return err
+				}
+				if err = rs.AppendBytes([]byte(val), false); err != nil {
+					return err
+				}
+			}
+		}
+
+	case 6:
+		p4 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[3])
+		p5 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[4])
+		matchTypes := vector.GenerateFunctionStrParameter(parameters[5])
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetStrValue(i)
+			v2, null2 := p2.GetStrValue(i)
+			v3, null3 := p3.GetStrValue(i)
+			v4, null4 := p4.GetValue(i)
+			v5, null5 := p5.GetValue(i)
+			matchType, null6 := matchTypes.GetStrValue(i)
+			if null1 || null2 || null3 || null4 || null5 || null6 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			} else {
+				val, err := op.regMap.regularReplaceWithMatchType(
+					functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(v1),
+					functionUtil.QuickBytesToStr(v3), v4, v5, functionUtil.QuickBytesToStr(matchType))
 				if err != nil {
 					return err
 				}
@@ -789,6 +874,16 @@ func (rs *regexpSet) regularSubstr(pat string, str string, pos, occurrence int64
 	return true, matches[occurrence-1], nil
 }
 
+func (rs *regexpSet) regularSubstrWithMatchType(
+	pat string, str string, pos, occurrence int64, matchType string,
+) (match bool, substr string, err error) {
+	pat, err = regexpPatternWithMatchType(pat, matchType, "regexp_substr")
+	if err != nil {
+		return false, "", err
+	}
+	return rs.regularSubstr(pat, str, pos, occurrence)
+}
+
 func (rs *regexpSet) regularReplace(pat string, str string, repl string, pos, occurrence int64) (r string, err error) {
 	// check position
 	if pos < 1 || pos > int64(len(str)) {
@@ -839,6 +934,16 @@ func (rs *regexpSet) regularReplace(pat string, str string, repl string, pos, oc
 	}
 }
 
+func (rs *regexpSet) regularReplaceWithMatchType(
+	pat string, str string, repl string, pos, occurrence int64, matchType string,
+) (r string, err error) {
+	pat, err = regexpPatternWithMatchType(pat, matchType, "regexp_replace")
+	if err != nil {
+		return "", err
+	}
+	return rs.regularReplace(pat, str, repl, pos, occurrence)
+}
+
 // regularInstr return an index indicating the starting or ending position of the match.
 // it depends on the value of retOption, if 0 then return start, if 1 then return end.
 // return 0 if match failed.
@@ -869,15 +974,24 @@ func (rs *regexpSet) regularInstr(pat string, str string, pos, occurrence int64,
 	return int64(matches[occurrence-1][retOption]) + pos, nil
 }
 
+func (rs *regexpSet) regularInstrWithMatchType(
+	pat string, str string, pos, occurrence int64, retOption int8, matchType string,
+) (index int64, err error) {
+	pat, err = regexpPatternWithMatchType(pat, matchType, "regexp_instr")
+	if err != nil {
+		return 0, err
+	}
+	return rs.regularInstr(pat, str, pos, occurrence, retOption)
+}
+
 func (rs *regexpSet) regularLike(pat string, str string, matchType string) (bool, error) {
-	mt, err := getPureMatchType(matchType)
+	rule, err := regexpPatternWithMatchType(pat, matchType, "regexp_like")
 	if err != nil {
 		return false, err
 	}
 	if pat == "" {
 		return false, moerr.NewRegexpIllegalArgumentNoCtx()
 	}
-	rule := fmt.Sprintf("(?%s)%s", mt, pat)
 
 	reg, err := rs.getRegularMatcher(rule)
 	if err != nil {
@@ -893,7 +1007,15 @@ func (rs *regexpSet) regularLike(pat string, str string, matchType string) (bool
 // c: case sensitive.
 // m: multiple line mode.
 // n: '.' can match line terminator.
-func getPureMatchType(input string) (string, error) {
+func regexpPatternWithMatchType(pattern, matchType, functionName string) (string, error) {
+	flags, err := getPureMatchType(matchType, functionName)
+	if err != nil || flags == "" {
+		return pattern, err
+	}
+	return fmt.Sprintf("(?%s)%s", flags, pattern), nil
+}
+
+func getPureMatchType(input, functionName string) (string, error) {
 	retstring := ""
 	caseType := ""
 	foundn := false
@@ -916,7 +1038,7 @@ func getPureMatchType(input string) (string, error) {
 				foundn = true
 			}
 		default:
-			return "", moerr.NewInvalidInputNoCtx("regexp_like got invalid match_type input!")
+			return "", moerr.NewWrongArguments(moerr.Context(), functionName)
 		}
 	}
 

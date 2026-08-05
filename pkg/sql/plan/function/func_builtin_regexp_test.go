@@ -95,6 +95,63 @@ func Test_BuiltIn_RegularLike(t *testing.T) {
 
 }
 
+func Test_BuiltIn_RegexpOptionalMatchType(t *testing.T) {
+	op := newOpBuiltInRegexp()
+
+	index, err := op.regMap.regularInstrWithMatchType("cat", "Cat cat", 1, 1, 0, "i")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), index)
+	index, err = op.regMap.regularInstrWithMatchType("cat", "Cat cat", 1, 1, 0, "ic")
+	require.NoError(t, err)
+	require.Equal(t, int64(5), index)
+	index, err = op.regMap.regularInstrWithMatchType("cat", "Cat cat", 1, 1, 0, "ci")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), index)
+	index, err = op.regMap.regularInstrWithMatchType("^b", "a\nb", 1, 1, 0, "m")
+	require.NoError(t, err)
+	require.Equal(t, int64(3), index)
+
+	matched, substr, err := op.regMap.regularSubstrWithMatchType("a.b", "a\nb", 1, 1, "n")
+	require.NoError(t, err)
+	require.True(t, matched)
+	require.Equal(t, "a\nb", substr)
+
+	replaced, err := op.regMap.regularReplaceWithMatchType("cat", "Cat cat", "X", 1, 0, "i")
+	require.NoError(t, err)
+	require.Equal(t, "X X", replaced)
+	replaced, err = op.regMap.regularReplaceWithMatchType("cat", "Cat cat", "X", 1, 0, "")
+	require.NoError(t, err)
+	require.Equal(t, "Cat X", replaced)
+
+	_, err = op.regMap.regularInstrWithMatchType("cat", "Cat", 1, 1, 0, "x")
+	require.Error(t, err)
+	var moErr *moerr.Error
+	require.ErrorAs(t, err, &moErr)
+	require.Equal(t, uint16(moerr.ER_WRONG_ARGUMENTS), moErr.MySQLCode())
+	require.Equal(t, "HY000", moErr.SqlState())
+	require.Equal(t, "Incorrect arguments to regexp_instr", moErr.Error())
+}
+
+func TestRegexpOptionalMatchTypeOverloads(t *testing.T) {
+	utf8 := types.T_varchar.ToType()
+	integer := types.T_int64.ToType()
+	returnOption := types.T_int8.ToType()
+
+	for _, tc := range []struct {
+		name string
+		args []types.Type
+	}{
+		{name: "regexp_instr", args: []types.Type{utf8, utf8, integer, integer, returnOption, utf8}},
+		{name: "regexp_substr", args: []types.Type{utf8, utf8, integer, integer, utf8}},
+		{name: "regexp_replace", args: []types.Type{utf8, utf8, utf8, integer, integer, utf8}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := GetFunctionByName(context.Background(), tc.name, tc.args)
+			require.NoError(t, err)
+		})
+	}
+}
+
 func Test_BuiltIn_RegexpLikeRejectsEmptyPattern(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

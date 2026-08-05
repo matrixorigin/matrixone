@@ -55,6 +55,40 @@ Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' i
 select regexp_like(null, 'a') as regexp_null_subject;
 ➤ regexp_null_subject[-7,1,0]  𝄀
 null
+select regexp_instr('Cat cat', 'cat', 1, 1, 0, 'i') as instr_i,
+regexp_instr('Cat cat', 'cat', 1, 1, 0, 'c') as instr_c,
+regexp_instr('Cat cat', 'cat', 1, 1, 0, 'ic') as instr_ic,
+regexp_instr('Cat cat', 'cat', 1, 1, 0, 'ci') as instr_ci;
+➤ instr_i[-5,64,0]  ¦  instr_c[-5,64,0]  ¦  instr_ic[-5,64,0]  ¦  instr_ci[-5,64,0]  𝄀
+1  ¦  5  ¦  5  ¦  1
+select regexp_substr('Cat cat', 'cat', 1, 1, 'i') as substr_i,
+regexp_substr('Cat cat', 'cat', 1, 1, 'c') as substr_c;
+➤ substr_i[12,-1,0]  ¦  substr_c[12,-1,0]  𝄀
+Cat  ¦  cat
+select regexp_replace('Cat cat', 'cat', 'X', 1, 0, 'i') as replace_i,
+regexp_replace('Cat cat', 'cat', 'X', 1, 0, 'c') as replace_c;
+➤ replace_i[12,-1,0]  ¦  replace_c[12,-1,0]  𝄀
+X X  ¦  Cat X
+select regexp_instr('a\nb', '^b', 1, 1, 0, 'm') as instr_m,
+regexp_substr('a\nb', 'a.b', 1, 1, 'n') as substr_n,
+regexp_replace('a\nb', 'a.b', 'X', 1, 0, 'mn') as replace_mn;
+➤ instr_m[-5,64,0]  ¦  substr_n[12,-1,0]  ¦  replace_mn[12,-1,0]  𝄀
+3  ¦  a
+b  ¦  X
+select regexp_instr('Cat', 'cat', 1, 1, 0, _binary 'i') as binary_match_type;
+➤ binary_match_type[-5,64,0]  𝄀
+1
+select regexp_substr('Cat', 'cat', 1, 1, null) as null_match_type;
+➤ null_match_type[12,-1,0]  𝄀
+null
+select regexp_replace('Cat', 'cat', 'X', 1, 0, 'x');
+Incorrect arguments to regexp_replace
+set @regexp_match_type = binary 'i';
+prepare regexp_match_type_stmt from 'select regexp_instr(''Cat'', ''cat'', 1, 1, 0, ?)';
+execute regexp_match_type_stmt using @regexp_match_type;
+➤ regexp_instr(Cat, cat, 1, 1, 0, ?)[-5,64,0]  𝄀
+1
+deallocate prepare regexp_match_type_stmt;
 drop table if exists t_regexp_binary_operands;
 create table t_regexp_binary_operands (
 id int primary key,
