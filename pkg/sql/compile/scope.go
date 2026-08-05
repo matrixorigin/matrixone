@@ -1200,9 +1200,7 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 					message := cnclient.AcquireMessage()
 					message.SetID(sender.streamSender.ID())
 					message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
-					if sender.requestFinishAck {
-						message.RequestedTeardownMode = pbpipeline.StreamTeardownMode_FinishAck
-					}
+					sender.requestStreamProtocols(message)
 					message.NeedNotReply = false
 					message.Uuid = uuid
 
@@ -1323,6 +1321,9 @@ func receiveMsgAndForward(sender *messageSenderOnClient, forwardReg *process.Wai
 
 		var receiverDone bool
 		if receiverDone, err = forwardRemoteBatchWithContext(sender, forwardReg, bat, sender.mp); err != nil || receiverDone {
+			return err
+		}
+		if err = sender.acknowledgeRemoteBatch(); err != nil {
 			return err
 		}
 	}
