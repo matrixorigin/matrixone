@@ -176,6 +176,7 @@ func (sm *ExecutorStateMachine) initTransitions() {
 	sm.addTransition(StateCancelling, TransitionCancelComplete, StateCancelled)
 
 	// From Failed
+	sm.addTransition(StateFailed, TransitionResume, StateStarting)
 	sm.addTransition(StateFailed, TransitionRestart, StateRestarting)
 	sm.addTransition(StateFailed, TransitionCancel, StateCancelling)
 }

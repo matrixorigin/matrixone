@@ -6031,6 +6031,35 @@ func Test_panic(t *testing.T) {
 	runPanic(fault.PanicUseNonMoErr)
 }
 
+func TestExecRequestRecoverWithNilTxnHandler(t *testing.T) {
+	fault.EnableDomain(fault.DomainFrontend)
+	defer fault.DisableDomain(fault.DomainFrontend)
+	fault.AddFaultPointInDomain(
+		context.Background(),
+		fault.DomainFrontend,
+		"exec_request_panic",
+		":::",
+		"panic",
+		fault.PanicUseNonMoErr,
+		"has panic",
+		false,
+	)
+	defer fault.RemoveFaultPointFromDomain(context.Background(), fault.DomainFrontend, "exec_request_panic")
+
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	ses.mu.Lock()
+	ses.txnHandler = nil
+	ses.mu.Unlock()
+
+	resp, err := ExecRequest(ses, &ExecCtx{reqCtx: context.Background(), ses: ses}, &Request{cmd: COM_PING})
+	require.Error(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.GetCategory())
+	require.Zero(t, resp.GetStatus())
+}
+
 func Test_run_panic(t *testing.T) {
 	fault.EnableDomain(fault.DomainFrontend)
 	defer fault.DisableDomain(fault.DomainFrontend)

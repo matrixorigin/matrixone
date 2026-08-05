@@ -4940,13 +4940,17 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	defer func() {
 		if e := recover(); e != nil {
 			markRowCountFailed(ses, ses.GetProc())
+			var serverStatus uint16
+			if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
+				serverStatus = txnHandler.GetServerStatus()
+			}
 			moe, ok := e.(*moerr.Error)
 			if !ok {
 				err = errors.Join(err, moerr.ConvertPanicError(execCtx.reqCtx, e))
-				resp = NewGeneralErrorResponse(COM_QUERY, ses.txnHandler.GetServerStatus(), err)
+				resp = NewGeneralErrorResponse(COM_QUERY, serverStatus, err)
 			} else {
 				err = errors.Join(err, moe)
-				resp = NewGeneralErrorResponse(COM_QUERY, ses.txnHandler.GetServerStatus(), moe)
+				resp = NewGeneralErrorResponse(COM_QUERY, serverStatus, moe)
 			}
 			// log the query's statement and error info.
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
