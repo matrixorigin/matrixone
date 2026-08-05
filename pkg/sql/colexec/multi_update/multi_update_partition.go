@@ -17,6 +17,7 @@ package multi_update
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/partitionprune"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
@@ -79,6 +80,18 @@ func (op *PartitionMultiUpdate) String(buf *bytes.Buffer) {
 
 func (op *PartitionMultiUpdate) OpType() vm.OpType {
 	return vm.PartitionMultiUpdate
+}
+
+func (op *PartitionMultiUpdate) SetAllocationAccount(account *mpool.AllocationAccount) error {
+	return op.raw.SetAllocationAccount(account)
+}
+
+func (op *PartitionMultiUpdate) ClearAllocationAccount(account *mpool.AllocationAccount) error {
+	return op.raw.ClearAllocationAccount(account)
+}
+
+func (op *PartitionMultiUpdate) ActivatesAllocationAccountLifecycle() bool {
+	return op.raw.ActivatesAllocationAccountLifecycle()
 }
 
 func (op *PartitionMultiUpdate) Prepare(
@@ -244,6 +257,9 @@ func (op *PartitionMultiUpdate) writeTarget(
 	if !features.IsPartitioned(target.contexts[0].TableDef.FeatureFlag) {
 		return op.callRawTarget(proc, target, target.contexts, target.tableID, input)
 	}
+	if len(target.contexts[0].PartitionCols) > 1 {
+		return op.writePartitionKeyUpdate(proc, target, input)
+	}
 
 	pos := int32(-1)
 	if len(target.contexts[0].PartitionCols) > 0 {
@@ -259,36 +275,129 @@ func (op *PartitionMultiUpdate) writeTarget(
 	}
 
 	res.Iter(func(p partition.Partition, bat *batch.Batch) bool {
-		var rel engine.Relation
-		_, _, rel, err = op.raw.Engine.GetRelationById(
-			proc.Ctx,
-			proc.GetTxnOperator(),
-			p.PartitionID,
-		)
-		if err != nil {
+		contexts, resolveErr := op.resolvePartitionContexts(proc, target, target.contexts, p)
+		if resolveErr != nil {
+			err = resolveErr
 			return false
 		}
-
-		contexts := make([]*MultiUpdateCtx, len(target.contexts))
-		for i, ctx := range target.contexts {
-			r := rel
-			if features.IsIndexTable(ctx.TableDef.FeatureFlag) {
-				r, err = op.getPartitionIndex(
-					proc,
-					target,
-					ctx.TableDef.TblId,
-					p.PartitionID,
-					rel,
-				)
-				if err != nil {
-					return false
-				}
-			}
-			contexts[i] = ctx.clone()
-			contexts[i].ObjRef.ObjName = r.GetTableName()
-			contexts[i].TableDef = r.GetTableDef(proc.Ctx)
-		}
 		err = op.callRawTarget(proc, target, contexts, p.PartitionID, bat)
+		return err == nil
+	})
+	return err
+}
+
+func (op *PartitionMultiUpdate) resolvePartitionContexts(
+	proc *process.Process,
+	target *partitionUpdateTarget,
+	contexts []*MultiUpdateCtx,
+	p partition.Partition,
+) ([]*MultiUpdateCtx, error) {
+	_, _, rel, err := op.raw.Engine.GetRelationById(
+		proc.Ctx,
+		proc.GetTxnOperator(),
+		p.PartitionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	resolved := make([]*MultiUpdateCtx, len(contexts))
+	for i, ctx := range contexts {
+		r := rel
+		if features.IsIndexTable(ctx.TableDef.FeatureFlag) {
+			r, err = op.getPartitionIndex(
+				proc,
+				target,
+				ctx.TableDef.TblId,
+				p.PartitionID,
+				rel,
+			)
+			if err != nil {
+				return nil, err
+			}
+		}
+		resolved[i] = ctx.clone()
+		resolved[i].ObjRef.ObjName = r.GetTableName()
+		resolved[i].TableDef = r.GetTableDef(proc.Ctx)
+	}
+	return resolved, nil
+}
+
+func (op *PartitionMultiUpdate) writePartitionKeyUpdate(
+	proc *process.Process,
+	target *partitionUpdateTarget,
+	input *batch.Batch,
+) error {
+	mainCtx := target.contexts[0]
+	filtered, owned, duplicateRows, err := filterTargetRows(
+		proc,
+		mainCtx,
+		input,
+		op.raw.ctr.seenTargetRows[targetTableID(mainCtx)],
+	)
+	if err != nil {
+		return err
+	}
+	if owned {
+		defer filtered.Clean(proc.Mp())
+	}
+	op.raw.addAffectedRowsFunc(duplicateRows)
+	if filtered.RowCount() == 0 {
+		return nil
+	}
+
+	deleteContexts := clonePartitionPhaseContexts(target.contexts, true)
+	if err = op.writePartitionPhase(
+		proc, target, deleteContexts, mainCtx.PartitionCols[0], filtered,
+	); err != nil {
+		return err
+	}
+	insertContexts := clonePartitionPhaseContexts(target.contexts, false)
+	return op.writePartitionPhase(
+		proc, target, insertContexts, mainCtx.PartitionCols[1], filtered,
+	)
+}
+
+func clonePartitionPhaseContexts(
+	contexts []*MultiUpdateCtx,
+	deletePhase bool,
+) []*MultiUpdateCtx {
+	cloned := make([]*MultiUpdateCtx, len(contexts))
+	for i, ctx := range contexts {
+		cloned[i] = ctx.clone()
+		cloned[i].DedupByTargetRowID = false
+		if deletePhase {
+			cloned[i].InsertCols = nil
+		} else {
+			cloned[i].DeleteCols = nil
+		}
+	}
+	return cloned
+}
+
+func (op *PartitionMultiUpdate) writePartitionPhase(
+	proc *process.Process,
+	target *partitionUpdateTarget,
+	contexts []*MultiUpdateCtx,
+	partitionCol int,
+	input *batch.Batch,
+) error {
+	res, err := partitionprune.Prune(proc, input, target.meta, int32(partitionCol))
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	if res.Empty() {
+		return nil
+	}
+
+	res.Iter(func(p partition.Partition, bat *batch.Batch) bool {
+		partitionContexts, resolveErr := op.resolvePartitionContexts(proc, target, contexts, p)
+		if resolveErr != nil {
+			err = resolveErr
+			return false
+		}
+		err = op.callRawTarget(proc, target, partitionContexts, p.PartitionID, bat)
 		return err == nil
 	})
 	return err

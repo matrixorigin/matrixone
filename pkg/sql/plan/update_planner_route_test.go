@@ -356,7 +356,7 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		))
 	})
 
-	t.Run("auto increment child key uses legacy final row validation", func(t *testing.T) {
+	t.Run("auto increment child key uses modern final row validation", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareEmpDept(mock)
 		emp := mock.ctxt.tables["emp"]
@@ -377,10 +377,9 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 
 		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
 		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
-		require.Error(t, err)
-		route, reason, _ := classifyUpdatePlannerError(err)
-		require.Equal(t, updatePlannerLegacy, route)
-		require.Equal(t, updateRouteReasonAutoIncrementFK, reason)
+		require.NoError(t, err)
+		require.Equal(t, 1, countUpdateFkPlanNodes(builder.qry, planpb.Node_PRE_INSERT))
+		require.Equal(t, 1, countUpdateFkAsserts(builder.qry))
 	})
 
 	t.Run("disabled checks keep auto increment child key on modern route", func(t *testing.T) {
@@ -406,6 +405,23 @@ func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_MULTI_UPDATE))
 		require.Equal(t, 1, countUpdateFkPlanNodes(query, planpb.Node_PRE_INSERT))
 		require.Equal(t, 0, countUpdateFkMarkJoins(query))
+	})
+
+	t.Run("multi target auto increment child key stays modern", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		prepareEmpDept(mock)
+		for _, col := range mock.ctxt.tables["emp"].Cols {
+			if col.Name == "deptno" {
+				col.Typ.AutoIncr = true
+			}
+		}
+
+		logicPlan, err := runOneStmt(mock, t,
+			"UPDATE emp, dept SET emp.deptno = DEFAULT, dept.loc = 'changed' "+
+				"WHERE emp.deptno = dept.deptno")
+		require.NoError(t, err)
+		require.Equal(t, 1, countUpdateFkPlanNodes(logicPlan.GetQuery(), planpb.Node_PRE_INSERT))
+		require.Equal(t, 1, countUpdateFkPlanNodes(logicPlan.GetQuery(), planpb.Node_MULTI_UPDATE))
 	})
 
 	t.Run("affected restricted parent key stays modern with child probe", func(t *testing.T) {
@@ -930,10 +946,14 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 		return -1
 	}
 
-	t.Run("child generated key uses legacy final row validation", func(t *testing.T) {
+	t.Run("child generated key uses modern final row validation", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		prepareEmpDept(mock)
-		mock.ctxt.tables["emp"].Cols[7].Typ.AutoIncr = true
+		for _, col := range mock.ctxt.tables["emp"].Cols {
+			if col.Name == "deptno" {
+				col.Typ.AutoIncr = true
+			}
+		}
 		stmt, err := parsers.ParseOne(
 			mock.CurrentContext().GetContext(),
 			dialect.MYSQL,
@@ -943,12 +963,11 @@ func TestBindUpdateAutoIncrementRunsBeforeForeignKeys(t *testing.T) {
 		require.NoError(t, err)
 		defer stmt.Free()
 
-		builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-		_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
-		require.ErrorContains(t, err, "auto_increment foreign key update")
-		route, reason, _ := classifyUpdatePlannerError(err)
-		require.Equal(t, updatePlannerLegacy, route)
-		require.Equal(t, updateRouteReasonAutoIncrementFK, reason)
+		query := bindDirect(t, mock, "UPDATE emp SET deptno = DEFAULT")
+		preInsertPos := firstNode(query, func(node *planpb.Node) bool {
+			return node.NodeType == planpb.Node_PRE_INSERT
+		})
+		require.NotEqual(t, -1, preInsertPos)
 	})
 
 	t.Run("parent action on generated key uses legacy planner", func(t *testing.T) {

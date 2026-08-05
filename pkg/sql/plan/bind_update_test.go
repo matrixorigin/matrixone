@@ -154,10 +154,10 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 			updateCols: map[string]tree.Expr{"id": nil},
 		},
 		{
-			name:       "unmigrated master stays legacy",
+			name:       "synchronous master uses modern maintenance",
 			tableDef:   newTableDef(newIndex("master", catalog.MOIndexMasterAlgo.ToString(), "", "body")),
 			updateCols: map[string]tree.Expr{"body": nil},
-			wantLegacy: true,
+			wantInline: 1,
 		},
 	}
 

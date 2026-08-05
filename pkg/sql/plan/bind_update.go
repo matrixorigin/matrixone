@@ -358,7 +358,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 					oldPos := oldColName2Idx[alias+"."+col.Name]
 					newColName2Idx[alias+"."+col.Name] = oldPos
-					oldColName2Idx[alias+"."+col.Name] = int32(len(selectList))
+					oldColName2Idx[alias+"."+col.Name] = int32(len(selectNode.ProjectList))
 					selectNode.ProjectList = append(selectNode.ProjectList, selectNode.ProjectList[oldPos])
 					selectNode.ProjectList[oldPos] = newDefExpr
 				}
@@ -459,10 +459,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 	}
 
-	fkChecksEnabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
-	if err != nil {
-		return 0, err
-	}
 	mayDependOnForeignKeys, err := builder.updateMayDependOnForeignKeys(
 		bindCtx, dmlCtx, newColName2Idx)
 	if err != nil {
@@ -474,21 +470,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		// and generic plan caches rebuild after either session-state transition.
 		builder.qry.HasForeignKeyAction = true
 	}
-	if fkChecksEnabled {
-		for i, tableDef := range dmlCtx.tableDefs {
-			if updateAutoIncrCols[i] &&
-				len(affectedUpdateChildFks(tableDef, dmlCtx.aliases[i], newColName2Idx)) > 0 {
-				return 0, routeUnsupported(
-					updateRouteReasonAutoIncrementFK,
-					moerr.NewUnsupportedDML(
-						builder.compCtx.GetContext(),
-						"auto_increment foreign key update",
-					),
-				)
-			}
-		}
-	}
-
 	for i, tableDef := range dmlCtx.tableDefs {
 		if updateAutoIncrCols[i] {
 			lastNodeID = builder.appendNode(&plan.Node{
@@ -1205,6 +1186,37 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				},
 			},
 		}
+		if tableDef.Partition != nil && len(tableDef.Partition.PartitionDefs) > 0 {
+			partitionColName := getPartitionColName(tableDef.Partition.PartitionDefs[0].Def)
+			if partitionColPos, ok := finalColName2Idx[alias+"."+partitionColName]; ok {
+				oldPartitionColPos := partitionColPos
+				if _, updated := newColName2Idx[alias+"."+partitionColName]; updated {
+					if partitionColName == tableDef.Pkey.PkeyColName {
+						oldPartitionColPos = oldPkPos
+					} else {
+						oldPartitionColPos = int32(len(finalProjList))
+						oldSelectPos := oldColName2Idx[alias+"."+partitionColName]
+						finalProjList = append(finalProjList, &plan.Expr{
+							Typ: selectNode.ProjectList[oldSelectPos].Typ,
+							Expr: &plan.Expr_Col{Col: &plan.ColRef{
+								RelPos: selectNodeTag,
+								ColPos: oldSelectPos,
+							}},
+						})
+					}
+				}
+				updateCtx.PartitionCols = []plan.ColRef{{
+					RelPos: finalProjTag,
+					ColPos: oldPartitionColPos,
+				}}
+				if oldPartitionColPos != partitionColPos {
+					updateCtx.PartitionCols = append(updateCtx.PartitionCols, plan.ColRef{
+						RelPos: finalProjTag,
+						ColPos: partitionColPos,
+					})
+				}
+			}
+		}
 		if isMultiTargetUpdate {
 			updateCtx.DedupByTargetRowId = true
 			targetUpdateCtxIdx[i] = int32(len(updateCtxList))
@@ -1422,6 +1434,18 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			indexes,
 			dmlCtx.tableDefs[i],
 			dmlCtx.objRefs[i],
+		)
+		builder.irregularUpdateMaints = append(
+			builder.irregularUpdateMaints,
+			irregularUpdateMaintenance{
+				sourceStep:  builder.irregularMaintSourceStep,
+				deleteStep:  builder.irregularMaintDeleteStep,
+				deletePkPos: builder.irregularMaintDeletePkPos,
+				deletePkTyp: builder.irregularMaintDeletePkTyp,
+				indexes:     builder.irregularMaintIndexes,
+				tableDef:    builder.irregularMaintTableDef,
+				objRef:      builder.irregularMaintObjRef,
+			},
 		)
 	}
 
@@ -2124,11 +2148,12 @@ func irregularIndexAffectedByUpdate(
 }
 
 // classifyIrregularIndexesForUpdate separates synchronous inline maintenance
-// from CDC-only indexes using plugin metadata. The bool return preserves the
-// legacy route only for an affected irregular algorithm that has not migrated to
-// the plugin contract (currently MASTER); supported plugin indexes never fall
-// back. A synchronous-index PK update is rejected here, before lock/mutation
-// nodes are built, because its hidden rows are keyed by the old source PK.
+// from CDC-only indexes using plugin metadata. MASTER has no plugin, but shares
+// the modern synchronous maintenance pipeline with the plugin-backed indexes.
+// The bool return preserves the legacy route only for an affected irregular
+// algorithm that has not migrated to either mechanism. A synchronous-index PK
+// update is rejected here, before lock/mutation nodes are built, because its
+// hidden rows are keyed by the old source PK.
 func classifyIrregularIndexesForUpdate(
 	ctx context.Context,
 	tableDef *plan.TableDef,
@@ -2151,8 +2176,23 @@ func classifyIrregularIndexesForUpdate(
 
 		p, ok := indexplugin.Get(idxDef.IndexAlgo)
 		if !ok {
-			if affected || pkUpdated {
-				return nil, true, nil
+			if !isModernMaintainedIrregularAlgo(idxDef.IndexAlgo) {
+				if affected || pkUpdated {
+					return nil, true, nil
+				}
+				continue
+			}
+			if pkUpdated {
+				return nil, false, newUpdatePlannerRouteError(
+					updatePlannerRejected,
+					updateRouteReasonIrregularIndex,
+					moerr.NewUnsupportedDML(
+						ctx,
+						"update primary key on a table with a synchronous irregular index"),
+				)
+			}
+			if affected {
+				affectedSyncGroups[idxDef.IndexName+"\x00"+idxDef.IndexTableName] = true
 			}
 			continue
 		}

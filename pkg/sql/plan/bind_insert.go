@@ -858,10 +858,23 @@ func (builder *QueryBuilder) buildIrregularMasterDeleteByPk(bindCtx *BindContext
 // path uses (reduceSinkSinkScanNodes + tempOptimizeForDML). It is a no-op when the
 // table has no irregular indexes. Shared by the modern INSERT and LOAD paths.
 func (builder *QueryBuilder) finishIrregularIndexMaintenance(query *plan.Query, bindCtx *BindContext) error {
-	if len(builder.irregularMaintIndexes) == 0 {
+	if len(builder.irregularMaintIndexes) == 0 && len(builder.irregularUpdateMaints) == 0 {
 		return nil
 	}
-	if len(builder.irregularMaintIndexes) > 0 {
+	if len(builder.irregularUpdateMaints) > 0 {
+		for _, maint := range builder.irregularUpdateMaints {
+			builder.irregularMaintSourceStep = maint.sourceStep
+			builder.irregularMaintDeleteStep = maint.deleteStep
+			builder.irregularMaintDeletePkPos = maint.deletePkPos
+			builder.irregularMaintDeletePkTyp = maint.deletePkTyp
+			builder.irregularMaintIndexes = maint.indexes
+			builder.irregularMaintTableDef = maint.tableDef
+			builder.irregularMaintObjRef = maint.objRef
+			if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
+				return err
+			}
+		}
+	} else if len(builder.irregularMaintIndexes) > 0 {
 		if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
 			return err
 		}

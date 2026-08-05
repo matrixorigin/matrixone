@@ -152,7 +152,8 @@ DROP TABLE IF EXISTS multi_update_partition_target;
 DROP TABLE IF EXISTS multi_update_plain_target;
 CREATE TABLE multi_update_partition_target (
     id INT PRIMARY KEY,
-    x INT
+    x INT,
+    y INT
 ) PARTITION BY RANGE (id) (
     PARTITION p0 VALUES LESS THAN (2),
     PARTITION p1 VALUES LESS THAN (MAXVALUE)
@@ -161,7 +162,7 @@ CREATE TABLE multi_update_plain_target (
     id INT PRIMARY KEY,
     x INT
 );
-INSERT INTO multi_update_partition_target VALUES (1, 0), (2, 0);
+INSERT INTO multi_update_partition_target VALUES (1, 0, 0), (2, 0, 0);
 INSERT INTO multi_update_plain_target VALUES (1, 0), (2, 0);
 
 UPDATE multi_update_partition_target p
@@ -182,5 +183,92 @@ SET
 SELECT id, x FROM multi_update_partition_target ORDER BY id;
 SELECT id, x FROM multi_update_plain_target ORDER BY id;
 
+UPDATE multi_update_partition_target p
+JOIN multi_update_plain_target n ON p.id = n.id
+SET
+    p.id = p.id + 10,
+    n.x = 9
+WHERE p.id = 1;
+
+SELECT ROW_COUNT();
+SELECT id, x FROM multi_update_partition_target ORDER BY id;
+SELECT id, x FROM multi_update_plain_target ORDER BY id;
+
+UPDATE multi_update_partition_target a
+JOIN multi_update_partition_target b ON a.id = b.id
+SET
+    a.x = 7,
+    b.y = 8;
+
+SELECT ROW_COUNT();
+SELECT id, x, y FROM multi_update_partition_target ORDER BY id;
+
 DROP TABLE multi_update_partition_target;
 DROP TABLE multi_update_plain_target;
+
+DROP TABLE IF EXISTS multi_update_on_update;
+CREATE TABLE multi_update_on_update (
+    id INT PRIMARY KEY,
+    x INT,
+    y INT,
+    updated_at TIMESTAMP DEFAULT '2000-01-01 00:00:00' ON UPDATE CURRENT_TIMESTAMP,
+    KEY idx_updated_at (updated_at)
+);
+INSERT INTO multi_update_on_update (id, x, y) VALUES (1, 0, 0), (2, 0, 0);
+UPDATE multi_update_on_update a
+JOIN multi_update_on_update b ON a.id = b.id
+SET
+    a.x = 1,
+    b.y = 2;
+SELECT id, x, y FROM multi_update_on_update ORDER BY id;
+SELECT COUNT(*) FROM multi_update_on_update WHERE updated_at = '2000-01-01 00:00:00';
+DROP TABLE multi_update_on_update;
+
+DROP TABLE IF EXISTS multi_update_master_target;
+DROP TABLE IF EXISTS multi_update_master_plain;
+CREATE TABLE multi_update_master_target (
+    id VARCHAR(30) PRIMARY KEY,
+    a VARCHAR(30),
+    b VARCHAR(30)
+);
+CREATE INDEX idx_multi_update_master USING MASTER ON multi_update_master_target(a, b);
+CREATE TABLE multi_update_master_plain (
+    id VARCHAR(30) PRIMARY KEY,
+    v VARCHAR(30)
+);
+INSERT INTO multi_update_master_target VALUES ('1', 'old', 'value');
+INSERT INTO multi_update_master_plain VALUES ('1', 'old');
+UPDATE multi_update_master_target m
+JOIN multi_update_master_plain p ON m.id = p.id
+SET
+    m.a = 'changed',
+    p.v = 'z';
+SELECT * FROM multi_update_master_target WHERE a = 'changed' AND b = 'value';
+SELECT COUNT(*) FROM multi_update_master_target WHERE a = 'old' AND b = 'value';
+SELECT * FROM multi_update_master_plain ORDER BY id;
+DROP TABLE multi_update_master_target;
+DROP TABLE multi_update_master_plain;
+
+DROP TABLE IF EXISTS multi_update_auto_child;
+DROP TABLE IF EXISTS multi_update_auto_plain;
+DROP TABLE IF EXISTS multi_update_auto_parent;
+CREATE TABLE multi_update_auto_parent (pid INT PRIMARY KEY);
+CREATE TABLE multi_update_auto_child (
+    id INT PRIMARY KEY,
+    pid INT AUTO_INCREMENT,
+    FOREIGN KEY (pid) REFERENCES multi_update_auto_parent(pid)
+);
+CREATE TABLE multi_update_auto_plain (id INT PRIMARY KEY, v INT);
+INSERT INTO multi_update_auto_parent VALUES (1), (2);
+INSERT INTO multi_update_auto_child (id, pid) VALUES (1, 1);
+INSERT INTO multi_update_auto_plain VALUES (1, 0);
+UPDATE multi_update_auto_child c
+JOIN multi_update_auto_plain p ON c.id = p.id
+SET
+    c.pid = DEFAULT,
+    p.v = 9;
+SELECT id, pid FROM multi_update_auto_child;
+SELECT id, v FROM multi_update_auto_plain;
+DROP TABLE multi_update_auto_child;
+DROP TABLE multi_update_auto_plain;
+DROP TABLE multi_update_auto_parent;
