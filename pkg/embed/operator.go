@@ -459,7 +459,7 @@ func (op *operator) waitHAKeeperRunningLocked(
 			state.State != logpb.HAKeeperRunning {
 			// not ready
 			op.reset.logger.Info("hakeeper not ready, retry")
-			time.Sleep(time.Second)
+			time.Sleep(op.cfg.HAKeeperRunningRetryInterval.Duration)
 			continue
 		}
 		return err
@@ -509,7 +509,7 @@ func (op *operator) waitAnyShardReadyLocked(client logservice.CNHAKeeperClient) 
 			op.reset.logger.Info("shard ready")
 			return nil
 		}
-		time.Sleep(time.Second)
+		time.Sleep(op.cfg.TNShardReadyRetryInterval.Duration)
 	}
 }
 

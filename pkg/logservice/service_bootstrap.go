@@ -127,6 +127,10 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 
 	initialClusterProposed := false
 	var lastInitialClusterErr error
+	retryInterval := cfg.HAKeeperBootstrapRetryInterval.Duration
+	if retryInterval <= 0 {
+		retryInterval = defaultHAKeeperBootstrapRetryInterval
+	}
 	for i := 0; i < checkBootstrapCycles; i++ {
 		select {
 		case <-ctx.Done():
@@ -156,7 +160,7 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 				}
 				return nil
 			}
-			time.Sleep(time.Second)
+			time.Sleep(retryInterval)
 			continue
 		}
 		initialClusterProposed = true
