@@ -1068,7 +1068,9 @@ func buildCreateTable(
 				},
 			})
 		case *tree.TableOptionAutoIncrement:
-			createTable.TableDef.AutoIncrOffset = autoIncrementValueToOffset(opt.Value)
+			if opt.Value != 0 {
+				createTable.TableDef.AutoIncrOffset = autoIncrementValueToOffset(opt.Value)
+			}
 
 		// these table options is not support in plan
 		// case *tree.TableOptionEngine, *tree.TableOptionSecondaryEngine, *tree.TableOptionCharset,

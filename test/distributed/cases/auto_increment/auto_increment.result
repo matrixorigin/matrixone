@@ -664,6 +664,12 @@ select * from auto_increment17;
 col1
 10
 drop table auto_increment17;
+create table auto_increment17(col1 int auto_increment) auto_increment = 0;
+insert into auto_increment17 values();
+select * from auto_increment17;
+col1
+10
+drop table auto_increment17;
 set auto_increment_offset = 100;
 create table auto_increment17(col1 int auto_increment);
 insert into auto_increment17 values();

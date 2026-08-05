@@ -46,6 +46,20 @@ type rootSQLCompilerContext struct {
 	calls   int
 }
 
+type autoIncrementOffsetCompilerContext struct {
+	*MockCompilerContext
+	offset int64
+}
+
+func (c *autoIncrementOffsetCompilerContext) ResolveVariable(
+	varName string, isSystemVar, isGlobalVar bool,
+) (interface{}, error) {
+	if varName == "auto_increment_offset" {
+		return c.offset, nil
+	}
+	return c.MockCompilerContext.ResolveVariable(varName, isSystemVar, isGlobalVar)
+}
+
 func TestBuildRenameTableUsesPriorDestinationAsNextSource(t *testing.T) {
 	stmt, err := parsers.ParseOne(
 		t.Context(),
@@ -249,6 +263,32 @@ func TestBuildCreateTableCheckConstraints(t *testing.T) {
 		_, err = BuildPlan(ctx, stmt, false)
 		require.ErrorContains(t, err, "protocol version 7")
 	})
+}
+
+func TestBuildCreateTableAutoIncrementOffset(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		sql        string
+		wantOffset uint64
+	}{
+		{name: "session offset", sql: "create table t(id int auto_increment)", wantOffset: 9},
+		{name: "zero keeps session offset", sql: "create table t(id int auto_increment) auto_increment = 0", wantOffset: 9},
+		{name: "nonzero overrides session offset", sql: "create table t(id int auto_increment) auto_increment = 100", wantOffset: 99},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctx := &autoIncrementOffsetCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false),
+				offset:              10,
+			}
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantOffset, p.GetDdl().GetCreateTable().GetTableDef().GetAutoIncrOffset())
+		})
+	}
 }
 
 func tableDefCreateSQL(tableDef *plan.TableDef) string {
