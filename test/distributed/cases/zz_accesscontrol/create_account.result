@@ -179,7 +179,6 @@ mo_iceberg_residency_policy
 mo_iceberg_tables
 mo_indexes
 mo_lifecycle_bindings
-mo_lifecycle_cleanup_roots
 mo_lifecycle_datasets
 mo_lifecycle_restore_attempts
 mo_lifecycle_restore_chunks
