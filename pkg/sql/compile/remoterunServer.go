@@ -709,11 +709,12 @@ type processHelper struct {
 	txnClient   client.TxnClient
 	sessionInfo process.SessionInfo
 	//analysisNodeList []int32
-	StmtId               uuid.UUID
-	prepareParams        pipeline.PrepareParamInfo
-	affectedRows         int64
-	remoteFragmentCounts map[string]uint32
-	remoteExecutionID    uuid.UUID
+	StmtId                 uuid.UUID
+	statementRuntimeIgnore bool
+	prepareParams          pipeline.PrepareParamInfo
+	affectedRows           int64
+	remoteFragmentCounts   map[string]uint32
+	remoteExecutionID      uuid.UUID
 }
 
 // messageReceiverOnServer supported a series methods to write back results.
@@ -904,7 +905,9 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	{
 		txn := proc.GetTxnOperator().Txn()
 		txnId := txn.GetID()
-		proc.Base.StmtProfile = process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
+		stmtProfile := process.NewStmtProfile(uuid.UUID(txnId), pHelper.StmtId)
+		stmtProfile.SetStatementRuntimeProfile("", "", pHelper.statementRuntimeIgnore)
+		proc.Base.StmtProfile = stmtProfile
 	}
 
 	c := allocateNewCompile(proc)
@@ -1115,13 +1118,14 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 	}
 
 	result := processHelper{
-		id:                   procInfo.Id,
-		lim:                  process.ConvertToProcessLimitation(procInfo.Lim),
-		unixTime:             procInfo.UnixTime,
-		accountId:            procInfo.AccountId,
-		txnClient:            cli,
-		affectedRows:         procInfo.AffectedRows,
-		remoteFragmentCounts: maps.Clone(procInfo.RemoteFragmentCounts),
+		id:                     procInfo.Id,
+		lim:                    process.ConvertToProcessLimitation(procInfo.Lim),
+		unixTime:               procInfo.UnixTime,
+		accountId:              procInfo.AccountId,
+		txnClient:              cli,
+		affectedRows:           procInfo.AffectedRows,
+		statementRuntimeIgnore: procInfo.StatementRuntimeIgnore,
+		remoteFragmentCounts:   maps.Clone(procInfo.RemoteFragmentCounts),
 	}
 	if len(procInfo.RemoteExecutionId) > 0 {
 		result.remoteExecutionID, err = uuid.FromBytes(procInfo.RemoteExecutionId)

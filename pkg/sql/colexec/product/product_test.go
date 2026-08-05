@@ -138,6 +138,54 @@ func TestProduct(t *testing.T) {
 	}
 }
 
+func TestProductPassesRecursiveMarker(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		probeData  bool
+		emptyBuild bool
+	}{
+		{name: "marker before build"},
+		{name: "marker after empty build", probeData: true, emptyBuild: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+				colexec.NewResultPos(0, 0),
+				colexec.NewResultPos(1, 0),
+			})
+			marker := colexec.MakeMockBatchs(tc.proc.Mp())
+			marker.SetLast()
+			probeBatches := []*batch.Batch{marker}
+			if test.probeData {
+				probeBatches = append([]*batch.Batch{colexec.MakeMockBatchs(tc.proc.Mp())}, marker)
+			}
+			probe := colexec.NewMockOperator().WithBatchs(probeBatches)
+			tc.arg.Children = nil
+			tc.arg.AppendChild(probe)
+			if test.emptyBuild {
+				resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
+			} else {
+				resetHashBuildChildren(tc.barg, tc.proc.Mp())
+			}
+			defer func() {
+				tc.arg.Free(tc.proc, false, nil)
+				tc.barg.Free(tc.proc, false, nil)
+				probe.Free(tc.proc, false, nil)
+				tc.proc.Free()
+				tc.cancel()
+			}()
+
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+			require.NoError(t, tc.barg.Prepare(tc.proc))
+			res, err := vm.Exec(tc.barg, tc.proc)
+			require.NoError(t, err)
+			require.Nil(t, res.Batch)
+			res, err = vm.Exec(tc.arg, tc.proc)
+			require.NoError(t, err)
+			require.Same(t, marker, res.Batch)
+		})
+	}
+}
+
 func TestProductConsumesMultipleBuildBatchesWithoutCopy(t *testing.T) {
 	tc := newTestCase(
 		t,
@@ -270,6 +318,10 @@ func resetChildren(arg *Product, m *mpool.MPool) {
 
 func resetHashBuildChildren(arg *hashbuild.HashBuild, m *mpool.MPool) {
 	bat := colexec.MakeMockBatchs(m)
+	resetHashBuildChildrenWithBatch(arg, bat)
+}
+
+func resetHashBuildChildrenWithBatch(arg *hashbuild.HashBuild, bat *batch.Batch) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
