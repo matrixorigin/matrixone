@@ -896,6 +896,19 @@ func TestInsertSelectProjectedSetUsesStoredBitmap(t *testing.T) {
 	require.True(t, planHasPlainUint64ColRef(logicPlan))
 }
 
+func TestInsertSelectSetTargetRejectsUnknownSourceColumn(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addSetBitmapDestinationForTest(mock)
+	mock.ctxt.tables["set_bitmap_destination"].Cols[1].Typ.Enumvalues = "a,b"
+
+	_, err := runOneStmt(
+		mock,
+		t,
+		"insert into set_bitmap_destination(id, bitmap) select n_nationkey, missing from nation",
+	)
+	require.ErrorContains(t, err, "column missing does not exist")
+}
+
 func addSetBitmapDestinationForTest(mock *MockOptimizer) {
 	const tableName = "set_bitmap_destination"
 	idType := plan.Type{Id: int32(types.T_int32), NotNullable: true}
