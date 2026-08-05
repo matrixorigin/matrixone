@@ -125,7 +125,7 @@ func WriteFailureArtifact(root string, report Report, failure error) (string, er
 	if len(report.Case.SyntheticPlan) != 0 {
 		metadata.SyntheticPlanSHA256 = sha256Hex(report.Case.SyntheticPlan)
 		planPath := filepath.Join(caseDir, "plan.substrait.bin")
-		if err := os.WriteFile(planPath, report.Case.SyntheticPlan, 0o600); err != nil {
+		if err := writePrivateFile(planPath, report.Case.SyntheticPlan); err != nil {
 			return "", errors.Join(moerr.NewInternalErrorNoCtx("write synthetic sidecar plan artifact"), err)
 		}
 	} else {
@@ -143,10 +143,48 @@ func WriteFailureArtifact(root string, report Report, failure error) (string, er
 		return "", errors.Join(moerr.NewInternalErrorNoCtx("marshal sidecar failure artifact"), err)
 	}
 	metadataPath := filepath.Join(caseDir, artifactMetadataName)
-	if err := os.WriteFile(metadataPath, data.Bytes(), 0o600); err != nil {
+	if err := writePrivateFile(metadataPath, data.Bytes()); err != nil {
 		return "", errors.Join(moerr.NewInternalErrorNoCtx("write sidecar failure artifact"), err)
 	}
 	return metadataPath, nil
+}
+
+// writePrivateFile replaces path atomically with a newly created 0600 file.
+// Creating a fresh inode is important: os.WriteFile's mode is ignored when the
+// destination already exists, so rewriting a retained artifact would otherwise
+// preserve accidentally widened permissions.
+func writePrivateFile(path string, data []byte) (err error) {
+	temporary, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer func() {
+		if temporary != nil {
+			_ = temporary.Close()
+		}
+		if err != nil {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+
+	if err = temporary.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err = temporary.Write(data); err != nil {
+		return err
+	}
+	if err = temporary.Sync(); err != nil {
+		return err
+	}
+	if err = temporary.Close(); err != nil {
+		return err
+	}
+	temporary = nil
+	if err = os.Rename(temporaryPath, path); err != nil {
+		return err
+	}
+	return nil
 }
 
 func makeArtifactObservation(observation Observation, mode ComparisonMode, redact func(string) string) (artifactObservation, error) {

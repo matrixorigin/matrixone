@@ -156,6 +156,46 @@ func TestWriteFailureArtifactRemovesStaleSyntheticPlan(t *testing.T) {
 	}
 }
 
+func TestWriteFailureArtifactTightensExistingFilePermissions(t *testing.T) {
+	t.Parallel()
+
+	report := successfulReport()
+	report.Case.ID = "reused-artifact"
+	report.Case.SyntheticPlan = []byte("new synthetic plan")
+	root := t.TempDir()
+	caseDir := filepath.Join(root, artifactCaseDirectory(report.Case.ID))
+	if err := os.MkdirAll(caseDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	metadataPath := filepath.Join(caseDir, artifactMetadataName)
+	planPath := filepath.Join(caseDir, "plan.substrait.bin")
+	for _, path := range []string{metadataPath, planPath} {
+		if err := os.WriteFile(path, []byte("stale"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	path, err := WriteFailureArtifact(root, report, errors.New("replacement"))
+	if err != nil {
+		t.Fatalf("WriteFailureArtifact() error = %v", err)
+	}
+	if path != metadataPath {
+		t.Fatalf("artifact path = %q, want %q", path, metadataPath)
+	}
+	assertMode(t, metadataPath, 0o600)
+	assertMode(t, planPath, 0o600)
+	plan, err := os.ReadFile(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(plan) != string(report.Case.SyntheticPlan) {
+		t.Fatalf("synthetic plan = %q, want %q", plan, report.Case.SyntheticPlan)
+	}
+}
+
 func TestWriteFailureArtifactValidatesInput(t *testing.T) {
 	t.Parallel()
 
