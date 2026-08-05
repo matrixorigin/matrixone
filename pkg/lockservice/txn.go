@@ -702,6 +702,13 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 				wt,
 				func(lock Lock) {
 					lock.waiters.iter(func(w *waiter) bool {
+						// A Shared range-merge waiter can be queued on a lock
+						// already held by its own transaction. Its explicit waitFor
+						// list contains only the other Shared holders; following the
+						// physical queue entry here would manufacture a self cycle.
+						if w.notifyOnSharedHolderChange {
+							return true
+						}
 						// Completed or already-notified waiters can remain in the
 						// lock queue until the holder releases the lock. They no
 						// longer represent wait-for edges and must not participate

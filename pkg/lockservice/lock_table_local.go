@@ -672,7 +672,15 @@ func (l *localLockTable) handleLockConflictLocked(
 	c.w.conflictKey.Store(&key)
 	c.w.lt.Store(l)
 	c.w.waitFor = c.w.waitFor[:0]
+	mergeWaitForSharedHolderChange :=
+		c.opts.Granularity == pb.Granularity_Range &&
+			conflictWith.isShared() &&
+			conflictWith.holders.contains(c.txn.txnID)
+	c.w.notifyOnSharedHolderChange = mergeWaitForSharedHolderChange
 	for _, txn := range conflictWith.holders.txns {
+		if bytes.Equal(txn.TxnID, c.txn.txnID) {
+			continue
+		}
 		c.w.waitFor = append(c.w.waitFor, txn.TxnID)
 	}
 	c.result.ConflictKey = key
@@ -836,8 +844,10 @@ func (l *localLockTable) addRangeLockLocked(
 		}
 	}
 
-	if err := l.preflightRangeMergeLocked(c, start, end); err != nil {
+	if conflictKey, conflictWith, err := l.preflightRangeMergeLocked(c, start, end); err != nil {
 		return nil, Lock{}, err
+	} else if len(conflictKey) > 0 {
+		return conflictKey, conflictWith, nil
 	}
 
 	wq := newWaiterQueue()
@@ -850,6 +860,7 @@ func (l *localLockTable) addRangeLockLocked(
 	var conflictKey []byte
 	var prevStartKey []byte
 	rangeStartEncountered := false
+	consumedCurrentWaiter := false
 	// TODO: remove mem allocate.
 	upperBounded := nextKey(end, nil)
 
@@ -858,13 +869,26 @@ func (l *localLockTable) addRangeLockLocked(
 			start,
 			nil,
 			func(key []byte, keyLock Lock) bool {
-				// current txn is not holder, maybe conflict
-				if !keyLock.holders.contains(c.txn.txnID) {
+				// A notified range waiter remains at the head of an empty queue
+				// until it is admitted. If this range subsumes that row, consume
+				// the queue position directly instead of first promoting it to a
+				// row holder: that temporary bookkeeping can exceed the very
+				// MaxFixedSliceSize limit that caused this coarsening.
+				ownedByCurrentTxn := keyLock.holders.contains(c.txn.txnID)
+				consumeCurrentWaiter := !ownedByCurrentTxn &&
+					keyLock.holders.size() == 0 &&
+					keyLock.waiters.first() == c.w
+
+				// Current transaction is not holder, maybe conflict.
+				if !ownedByCurrentTxn && !consumeCurrentWaiter {
 					if hasConflictWithLock(key, keyLock, end) {
 						conflictWith = keyLock
 						conflictKey = key
 					}
 					return false
+				}
+				if consumeCurrentWaiter {
+					consumedCurrentWaiter = true
 				}
 
 				if keyLock.holders.size() > 1 {
@@ -888,6 +912,8 @@ func (l *localLockTable) addRangeLockLocked(
 					prevStartKey,
 					key, keyLock,
 					mc,
+					c.w,
+					consumeCurrentWaiter,
 				)
 				prevStartKey = nil
 				rangeStartEncountered = false
@@ -917,6 +943,7 @@ func (l *localLockTable) addRangeLockLocked(
 			}
 			if hold {
 				if c.w != nil {
+					l.removeOwnerLocalWaitEdgeLocked(c.w)
 					c.w = nil
 				}
 
@@ -952,6 +979,8 @@ func (l *localLockTable) addRangeLockLocked(
 				prevStartKey,
 				key, keyLock,
 				mc,
+				c.w,
+				keyLock.holders.size() == 0 && keyLock.waiters.first() == c.w,
 			)
 		}
 		break
@@ -976,6 +1005,14 @@ func (l *localLockTable) addRangeLockLocked(
 		txnLocksReplaced = true
 	}
 	mc.commit(l.bind, c.txn, l.mu.store, l.logger, txnLocksReplaced)
+	if consumedCurrentWaiter {
+		// The merge committed the source queue without moving this requester
+		// onto its own replacement range. The outer lock loop still releases
+		// its active and waiter-events references on the success path.
+		l.removeOwnerLocalWaitEdgeLocked(c.w)
+		c.w = nil
+		c.rangeLastWaitKey = nil
+	}
 	startLock, endLock := newRangeLock(l.logger, c)
 
 	wq.resetCommittedAt(l.mu.tableCommittedAt)
@@ -1016,24 +1053,24 @@ func (l *localLockTable) addRangeLockLocked(
 // A merge removes locks already held by the transaction in [start, end]. Its
 // mode must therefore be at least as strong as every removed lock, and a Shared
 // merge cannot absorb a compatible lock owned by another transaction. The
-// latter has no conflict to wait on and cannot be represented by one range
-// without changing that transaction's ownership. This applies to both ordinary
-// range requests and cumulative budget replacements.
+// latter is used as a non-mutating merge dependency: this transaction waits
+// until the ownership shape is collapsible, then retries. This applies to both
+// ordinary range requests and cumulative budget replacements.
 func (l *localLockTable) preflightRangeMergeLocked(
 	c *lockContext,
 	start, end []byte,
-) error {
+) ([]byte, Lock, error) {
 	// Exclusive is already the strongest mode, and tryHold cannot mutate a
 	// foreign Shared/Exclusive lock for an Exclusive request. The existing
 	// merge context can therefore roll back every tentative change without an
 	// extra scan. Keep the preflight cost off the common write path.
 	if c.opts.Mode == pb.LockMode_Exclusive {
-		return nil
+		return nil, Lock{}, nil
 	}
 
 	mode := c.opts.Mode
-	foreignSharedLock := false
-	var err error
+	var conflictKey []byte
+	var conflictWith Lock
 	l.mu.store.Range(
 		start,
 		nil,
@@ -1055,27 +1092,27 @@ func (l *localLockTable) preflightRangeMergeLocked(
 					mode = pb.LockMode_Exclusive
 				}
 				if keyLock.holders.size() > 1 {
-					err = ErrMergeRangeLockNotSupport
+					conflictKey = key
+					conflictWith = keyLock
 					return false
 				}
-			} else if keyLock.isShared() {
-				foreignSharedLock = true
+			} else if keyLock.isShared() && keyLock.holders.size() > 0 {
+				conflictKey = key
+				conflictWith = keyLock
+				return false
 			}
 
 			return cmp < 0
 		},
 	)
-	if err != nil {
-		return err
+	if len(conflictKey) > 0 {
+		return conflictKey, conflictWith, nil
 	}
 
 	// Lock strength is monotonic within a transaction: a later Shared request
 	// may widen an existing Exclusive lock, but must never downgrade it.
 	c.opts.Mode = mode
-	if mode == pb.LockMode_Shared && foreignSharedLock {
-		return ErrMergeRangeLockNotSupport
-	}
-	return nil
+	return nil, Lock{}, nil
 }
 
 func (l *localLockTable) mergeRangeLocked(
@@ -1084,6 +1121,8 @@ func (l *localLockTable) mergeRangeLocked(
 	seekKey []byte,
 	seekLock Lock,
 	mc *mergeContext,
+	currentWaiter *waiter,
+	consumeCurrentWaiter bool,
 ) ([]byte, []byte) {
 	// range lock encountered a row lock
 	if seekLock.isLockRow() {
@@ -1094,7 +1133,7 @@ func (l *localLockTable) mergeRangeLocked(
 
 		// [1~4] + [1, 4] => [1, 4]
 		mc.mergeLocks([][]byte{seekKey})
-		mc.mergeWaiter(seekLock.waiters)
+		mc.mergeWaiter(seekLock.waiters, currentWaiter, consumeCurrentWaiter)
 		return start, end
 	}
 
@@ -1119,7 +1158,7 @@ func (l *localLockTable) mergeRangeLocked(
 	}
 
 	mc.mergeLocks([][]byte{oldStart, oldEnd})
-	mc.mergeWaiter(seekLock.waiters)
+	mc.mergeWaiter(seekLock.waiters, currentWaiter, consumeCurrentWaiter)
 	return min, max
 }
 
@@ -1225,8 +1264,18 @@ func (c *mergeContext) close() {
 	mergePool.Put(c)
 }
 
-func (c *mergeContext) mergeWaiter(from waiterQueue) {
-	from.moveTo(c.to)
+func (c *mergeContext) mergeWaiter(
+	from waiterQueue,
+	currentWaiter *waiter,
+	consumeCurrentWaiter bool,
+) {
+	from.iter(func(w *waiter) bool {
+		if consumeCurrentWaiter && w == currentWaiter {
+			return true
+		}
+		c.to.put(w)
+		return true
+	})
 	c.mergedWaiters = append(c.mergedWaiters, from)
 }
 

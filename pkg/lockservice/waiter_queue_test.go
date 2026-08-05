@@ -265,6 +265,35 @@ func TestCanGetCommitTSInWaitQueue(t *testing.T) {
 	})
 }
 
+func TestNotifySharedHolderChange(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		q := newWaiterQueue()
+
+		mergeWaiter := acquireWaiter(pb.WaitTxn{TxnID: []byte("merge")}, "", nil)
+		mergeWaiter.notifyOnSharedHolderChange = true
+		mergeWaiter.setStatus(blocking)
+		defer mergeWaiter.close("", nil)
+
+		ordinaryWaiter := acquireWaiter(pb.WaitTxn{TxnID: []byte("ordinary")}, "", nil)
+		ordinaryWaiter.setStatus(blocking)
+		defer ordinaryWaiter.close("", nil)
+
+		q.put(mergeWaiter, ordinaryWaiter)
+		q.resetCommittedAt(timestamp.Timestamp{PhysicalTime: 3})
+		q.notifySharedHolderChange(notifyValue{ts: timestamp.Timestamp{PhysicalTime: 1}})
+
+		// Only the merge waiter retries; it also inherits the queue's monotonic
+		// commit timestamp instead of the older holder departure timestamp.
+		require.Equal(t, int64(3), mergeWaiter.wait(context.Background(), nil).ts.PhysicalTime)
+		require.Equal(t, 1, q.size())
+		require.Same(t, ordinaryWaiter, q.first())
+		require.Equal(t, blocking, ordinaryWaiter.getStatus())
+
+		q.close(notifyValue{})
+		ordinaryWaiter.wait(context.Background(), nil)
+	})
+}
+
 func TestMoveToCannotCloseWaiter(t *testing.T) {
 	reuse.RunReuseTests(func() {
 

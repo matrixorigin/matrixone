@@ -25,7 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -1256,7 +1255,7 @@ func TestSharedLockBudgetCoarsensAcrossRequests(t *testing.T) {
 	}
 }
 
-func TestSharedRangeEscalationWithOtherHoldersRollsBack(t *testing.T) {
+func TestSharedRangeEscalationWaitsForOtherHolders(t *testing.T) {
 	runLockServiceTestsWithAdjustConfig(
 		t,
 		[]string{"s1"},
@@ -1279,14 +1278,17 @@ func TestSharedRangeEscalationWithOtherHoldersRollsBack(t *testing.T) {
 			_, err = s.Lock(ctx, table, newTestRows(1), txn2, sharedRows)
 			require.NoError(t, err)
 
-			_, err = s.Lock(ctx, table, newTestRows(3, 4), txn1, sharedRows)
-			require.ErrorIs(t, err, ErrMergeRangeLockNotSupport)
+			done := make(chan error, 1)
+			go func() {
+				_, err := s.Lock(ctx, table, newTestRows(3, 4), txn1, sharedRows)
+				done <- err
+			}()
+			waitWaiters(t, s, table, newTestRows(1)[0], 1)
 
-			// Atomic conversion is impossible while row 1 has another shared
-			// holder. The failed upgrade must preserve every old owner and must
-			// not publish either new range endpoint.
+			// The conversion is not representable while row 1 has another Shared
+			// holder. It waits without mutating ownership or bookkeeping.
 			lt := s.tableGroups.get(0, table).(*localLockTable)
-			checkLock(t, lt, newTestRows(1)[0], [][]byte{txn1, txn2}, nil, nil)
+			checkLock(t, lt, newTestRows(1)[0], [][]byte{txn1, txn2}, [][]byte{txn1}, []int32{3})
 			checkLock(t, lt, newTestRows(2)[0], [][]byte{txn1}, nil, nil)
 			lt.mu.RLock()
 			_, hasStart := lt.mu.store.Get(newTestRows(3)[0])
@@ -1300,6 +1302,17 @@ func TestSharedRangeEscalationWithOtherHoldersRollsBack(t *testing.T) {
 			active.RUnlock()
 
 			require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+			require.NoError(t, <-done)
+			lt.mu.RLock()
+			start, hasStart := lt.mu.store.Get(newTestRows(1)[0])
+			end, hasEnd := lt.mu.store.Get(newTestRows(4)[0])
+			lt.mu.RUnlock()
+			require.True(t, hasStart)
+			require.True(t, hasEnd)
+			require.True(t, start.isLockRangeStart())
+			require.True(t, end.isLockRangeEnd())
+			require.Equal(t, pb.LockMode_Shared, start.GetLockMode())
+			require.Equal(t, pb.LockMode_Shared, end.GetLockMode())
 			require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
 		},
 		func(c *Config) {
@@ -1309,7 +1322,7 @@ func TestSharedRangeEscalationWithOtherHoldersRollsBack(t *testing.T) {
 	)
 }
 
-func TestRemoteSharedRangeEscalationWithOtherHoldersRollsBack(t *testing.T) {
+func TestRemoteSharedRangeEscalationWaitsForOtherHolders(t *testing.T) {
 	runLockServiceTestsWithAdjustConfig(
 		t,
 		[]string{"s1", "s2"},
@@ -1338,13 +1351,14 @@ func TestRemoteSharedRangeEscalationWithOtherHoldersRollsBack(t *testing.T) {
 			_, err = owner.Lock(ctx, table, newTestRows(1), txn2, sharedRows)
 			require.NoError(t, err)
 
-			_, err = caller.Lock(ctx, table, newTestRows(3, 4), txn1, sharedRows)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
-			require.ErrorContains(t, err, "merge range lock not support with shared lock")
+			done := make(chan error, 1)
+			go func() {
+				_, err := caller.Lock(ctx, table, newTestRows(3, 4), txn1, sharedRows)
+				done <- err
+			}()
+			waitWaiters(t, owner, table, newTestRows(1)[0], 1)
 
-			// ErrNotSupported is an explicit owner rejection, not an indeterminate
-			// transport failure. Both owner and origin must therefore preserve the
-			// exact old bookkeeping rather than publishing conservative endpoints.
+			// Waiting before conversion preserves exact bookkeeping on both sides.
 			for _, service := range []*service{caller, owner} {
 				active := service.activeTxnHolder.getActiveTxn(txn1, false, "")
 				require.NotNil(t, active)
@@ -1355,7 +1369,7 @@ func TestRemoteSharedRangeEscalationWithOtherHoldersRollsBack(t *testing.T) {
 				active.RUnlock()
 			}
 			lt := owner.tableGroups.get(0, table).(*localLockTable)
-			checkLock(t, lt, newTestRows(1)[0], [][]byte{txn1, txn2}, nil, nil)
+			checkLock(t, lt, newTestRows(1)[0], [][]byte{txn1, txn2}, [][]byte{txn1}, []int32{3})
 			checkLock(t, lt, newTestRows(2)[0], [][]byte{txn1}, nil, nil)
 			lt.mu.RLock()
 			_, hasStart := lt.mu.store.Get(newTestRows(3)[0])
@@ -1364,8 +1378,17 @@ func TestRemoteSharedRangeEscalationWithOtherHoldersRollsBack(t *testing.T) {
 			require.False(t, hasStart)
 			require.False(t, hasEnd)
 
-			require.NoError(t, caller.Unlock(ctx, txn1, timestamp.Timestamp{}))
 			require.NoError(t, owner.Unlock(ctx, txn2, timestamp.Timestamp{}))
+			require.NoError(t, <-done)
+			lt.mu.RLock()
+			start, hasStart := lt.mu.store.Get(newTestRows(1)[0])
+			end, hasEnd := lt.mu.store.Get(newTestRows(4)[0])
+			lt.mu.RUnlock()
+			require.True(t, hasStart)
+			require.True(t, hasEnd)
+			require.Equal(t, pb.LockMode_Shared, start.GetLockMode())
+			require.Equal(t, pb.LockMode_Shared, end.GetLockMode())
+			require.NoError(t, caller.Unlock(ctx, txn1, timestamp.Timestamp{}))
 		},
 		func(c *Config) {
 			c.MaxLockRowCount = 3
@@ -1444,7 +1467,7 @@ func TestRangeEscalationPreservesStrongestHeldMode(t *testing.T) {
 	}
 }
 
-func TestSharedRangeEscalationGapHolderDoesNotMutate(t *testing.T) {
+func TestSharedRangeEscalationGapHolderWaitsWithoutMutation(t *testing.T) {
 	tests := []struct {
 		name       string
 		serviceIDs []string
@@ -1480,25 +1503,33 @@ func TestSharedRangeEscalationGapHolderDoesNotMutate(t *testing.T) {
 
 					txnA := []byte("gap-holder-a")
 					txnB := []byte("gap-holder-b")
-					originalA := newTestRows(1, 2, 5)
+					// Fill the fixed bookkeeping slice exactly. Once the foreign
+					// Shared gap is released, the coarsening must not transiently
+					// promote it to another row holder (which would require a fifth
+					// bookkeeping slot before the range replacement is committed).
+					originalA := newTestRows(1, 2, 5, 7)
 					_, err = caller.Lock(ctx, table, originalA, txnA, shared)
 					require.NoError(t, err)
 					_, err = owner.Lock(ctx, table, newTestRows(3), txnB, shared)
 					require.NoError(t, err)
 
-					_, err = caller.Lock(ctx, table, newTestRows(6), txnA, shared)
-					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
-					require.ErrorContains(t, err, "merge range lock not support with shared lock")
+					done := make(chan error, 1)
+					go func() {
+						_, err := caller.Lock(ctx, table, newTestRows(8), txnA, shared)
+						done <- err
+					}()
+					waitWaiters(t, owner, table, newTestRows(3)[0], 1)
 
-					// Rejection is atomic: the compatible Shared lock in the gap
-					// must not transiently become A's lock, in either owner or origin
-					// bookkeeping.
+					// The compatible Shared lock in the gap becomes a merge dependency,
+					// not an ownership mutation. Both owner and origin remain exact while
+					// the request waits.
 					lt := owner.tableGroups.get(0, table).(*localLockTable)
 					checkLock(t, lt, newTestRows(1)[0], [][]byte{txnA}, nil, nil)
 					checkLock(t, lt, newTestRows(2)[0], [][]byte{txnA}, nil, nil)
-					checkLock(t, lt, newTestRows(3)[0], [][]byte{txnB}, nil, nil)
+					checkLock(t, lt, newTestRows(3)[0], [][]byte{txnB}, [][]byte{txnA}, []int32{3})
 					checkLock(t, lt, newTestRows(5)[0], [][]byte{txnA}, nil, nil)
-					checkLock(t, lt, newTestRows(6)[0], nil, nil, nil)
+					checkLock(t, lt, newTestRows(7)[0], [][]byte{txnA}, nil, nil)
+					checkLock(t, lt, newTestRows(8)[0], nil, nil, nil)
 					for _, service := range []*service{caller, owner} {
 						active := service.activeTxnHolder.getActiveTxn(txnA, false, "")
 						require.NotNil(t, active)
@@ -1512,16 +1543,153 @@ func TestSharedRangeEscalationGapHolderDoesNotMutate(t *testing.T) {
 						}
 					}
 
-					require.NoError(t, caller.Unlock(ctx, txnA, timestamp.Timestamp{}))
 					require.NoError(t, owner.Unlock(ctx, txnB, timestamp.Timestamp{}))
+					require.NoError(t, <-done)
+					lt.mu.RLock()
+					start, hasStart := lt.mu.store.Get(newTestRows(1)[0])
+					end, hasEnd := lt.mu.store.Get(newTestRows(8)[0])
+					lt.mu.RUnlock()
+					require.True(t, hasStart)
+					require.True(t, hasEnd)
+					require.True(t, start.isLockRangeStart())
+					require.True(t, end.isLockRangeEnd())
+					require.Equal(t, pb.LockMode_Shared, start.GetLockMode())
+					require.Equal(t, pb.LockMode_Shared, end.GetLockMode())
+
+					require.NoError(t, caller.Unlock(ctx, txnA, timestamp.Timestamp{}))
 				},
 				func(c *Config) {
-					c.MaxLockRowCount = 3
-					c.MaxFixedSliceSize = 8
+					c.MaxLockRowCount = 4
+					c.MaxFixedSliceSize = 4
 				},
 			)
 		})
 	}
+}
+
+func TestSharedRangeEscalationTransfersWaitersBehindReleasedGap(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1"},
+		time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			const table = uint64(26644)
+			txnA := []byte("gap-merge-a")
+			txnB := []byte("gap-merge-b")
+			txnC := []byte("gap-merge-c")
+			shared := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Shared,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			// A fills its bookkeeping slice; B occupies a compatible gap inside
+			// A's eventual observed range.
+			_, err := s.Lock(ctx, table, newTestRows(1, 2, 5, 7), txnA, shared)
+			require.NoError(t, err)
+			_, err = s.Lock(ctx, table, newTestRows(3), txnB, shared)
+			require.NoError(t, err)
+
+			mergeDone := make(chan error, 1)
+			go func() {
+				_, err := s.Lock(ctx, table, newTestRows(8), txnA, shared)
+				mergeDone <- err
+			}()
+			waitWaiters(t, s, table, newTestRows(3)[0], 1)
+
+			// C queues behind A. Once B releases, A consumes only its own
+			// notified position; C must be transferred to the replacement range,
+			// not dropped or spuriously granted.
+			waiterDone := make(chan error, 1)
+			go func() {
+				_, err := s.Lock(ctx, table, newTestRows(3), txnC, newTestRowExclusiveOptions())
+				waiterDone <- err
+			}()
+			waitWaiters(t, s, table, newTestRows(3)[0], 2)
+
+			require.NoError(t, s.Unlock(ctx, txnB, timestamp.Timestamp{}))
+			require.NoError(t, <-mergeDone)
+
+			lt := s.tableGroups.get(0, table).(*localLockTable)
+			checkLock(t, lt, newTestRows(1)[0], [][]byte{txnA}, [][]byte{txnC}, []int32{3})
+			checkLock(t, lt, newTestRows(8)[0], [][]byte{txnA}, [][]byte{txnC}, []int32{3})
+			require.Never(t, func() bool {
+				select {
+				case err := <-waiterDone:
+					require.NoError(t, err)
+					return true
+				default:
+					return false
+				}
+			}, time.Millisecond*100, time.Millisecond*10)
+
+			require.NoError(t, s.Unlock(ctx, txnA, timestamp.Timestamp{}))
+			require.NoError(t, <-waiterDone)
+			require.NoError(t, s.Unlock(ctx, txnC, timestamp.Timestamp{}))
+		},
+		func(c *Config) {
+			c.MaxLockRowCount = 4
+			c.MaxFixedSliceSize = 4
+		},
+	)
+}
+
+func TestSharedRangeEscalationCancellationDetachesMergeWaiter(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1"},
+		time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			const table = uint64(26645)
+			txnA := []byte("merge-cancel-a")
+			txnB := []byte("merge-cancel-b")
+			shared := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Shared,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+			_, err := s.Lock(ctx, table, newTestRows(1, 2), txnA, shared)
+			require.NoError(t, err)
+			_, err = s.Lock(ctx, table, newTestRows(1), txnB, shared)
+			require.NoError(t, err)
+
+			waitCtx, waitCancel := context.WithTimeout(ctx, time.Millisecond*50)
+			defer waitCancel()
+			done := make(chan error, 1)
+			go func() {
+				_, err := s.Lock(waitCtx, table, newTestRows(3, 4), txnA, shared)
+				done <- err
+			}()
+			waitWaiters(t, s, table, newTestRows(1)[0], 1)
+			require.ErrorIs(t, <-done, context.DeadlineExceeded)
+
+			// The waiting conversion has no persistent ownership side effects when
+			// its caller gives up: A keeps only the original rows and B's queue is
+			// no longer blocked by a stale merge waiter.
+			lt := s.tableGroups.get(0, table).(*localLockTable)
+			checkLock(t, lt, newTestRows(1)[0], [][]byte{txnA, txnB}, nil, nil)
+			checkLock(t, lt, newTestRows(2)[0], [][]byte{txnA}, nil, nil)
+			active := s.activeTxnHolder.getActiveTxn(txnA, false, "")
+			active.RLock()
+			require.Equal(t, 2, active.lockHolders[0].tableKeys[table].mustGet().len())
+			active.RUnlock()
+
+			require.NoError(t, s.Unlock(ctx, txnB, timestamp.Timestamp{}))
+			require.NoError(t, s.Unlock(ctx, txnA, timestamp.Timestamp{}))
+		},
+		func(c *Config) {
+			c.MaxLockRowCount = 3
+			c.MaxFixedSliceSize = 4
+		},
+	)
 }
 
 func TestRangeMergePreservesModeAndFailureAtomicity(t *testing.T) {
@@ -1571,7 +1739,7 @@ func TestRangeMergePreservesModeAndFailureAtomicity(t *testing.T) {
 				require.NoError(t, s.Unlock(ctx, outsideTxn, timestamp.Timestamp{}))
 			})
 
-			t.Run("ordinary shared merge rejects before mutation", func(t *testing.T) {
+			t.Run("ordinary shared merge waits before mutation", func(t *testing.T) {
 				const table = uint64(26643)
 				txnA := []byte("ordinary-gap-a")
 				txnB := []byte("ordinary-gap-b")
@@ -1587,12 +1755,16 @@ func TestRangeMergePreservesModeAndFailureAtomicity(t *testing.T) {
 
 				sharedRange := sharedRows
 				sharedRange.Granularity = pb.Granularity_Range
-				_, err = s.Lock(ctx, table, newTestRows(1, 3), txnA, sharedRange)
-				require.ErrorIs(t, err, ErrMergeRangeLockNotSupport)
+				done := make(chan error, 1)
+				go func() {
+					_, err := s.Lock(ctx, table, newTestRows(1, 3), txnA, sharedRange)
+					done <- err
+				}()
+				waitWaiters(t, s, table, newTestRows(2)[0], 1)
 
 				lt := s.tableGroups.get(0, table).(*localLockTable)
 				checkLock(t, lt, newTestRows(1)[0], [][]byte{txnA}, nil, nil)
-				checkLock(t, lt, newTestRows(2)[0], [][]byte{txnB}, nil, nil)
+				checkLock(t, lt, newTestRows(2)[0], [][]byte{txnB}, [][]byte{txnA}, []int32{3})
 				checkLock(t, lt, newTestRows(3)[0], nil, nil, nil)
 				for _, txnID := range [][]byte{txnA, txnB} {
 					active := s.activeTxnHolder.getActiveTxn(txnID, false, "")
@@ -1603,8 +1775,17 @@ func TestRangeMergePreservesModeAndFailureAtomicity(t *testing.T) {
 					active.RUnlock()
 				}
 
-				require.NoError(t, s.Unlock(ctx, txnA, timestamp.Timestamp{}))
 				require.NoError(t, s.Unlock(ctx, txnB, timestamp.Timestamp{}))
+				require.NoError(t, <-done)
+				lt.mu.RLock()
+				start, hasStart := lt.mu.store.Get(newTestRows(1)[0])
+				end, hasEnd := lt.mu.store.Get(newTestRows(3)[0])
+				lt.mu.RUnlock()
+				require.True(t, hasStart)
+				require.True(t, hasEnd)
+				require.Equal(t, pb.LockMode_Shared, start.GetLockMode())
+				require.Equal(t, pb.LockMode_Shared, end.GetLockMode())
+				require.NoError(t, s.Unlock(ctx, txnA, timestamp.Timestamp{}))
 			})
 		},
 	)

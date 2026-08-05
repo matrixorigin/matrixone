@@ -204,6 +204,12 @@ func (l Lock) closeTxn(
 
 	// has another holders
 	if l.holders.size() > 0 {
+		if l.isShared() {
+			// A range-merge waiter can itself be one of the remaining
+			// compatible Shared holders. Wake only those waiters so they can
+			// retry when the ownership shape becomes collapsible.
+			l.waiters.notifySharedHolderChange(notify)
+		}
 		return false
 	}
 

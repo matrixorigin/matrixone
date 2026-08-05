@@ -117,6 +117,12 @@ type waiter struct {
 	// that may enter the notification lifecycle.
 	isRemoteSnapshot bool
 
+	// notifyOnSharedHolderChange is used by a Shared range merge that already
+	// holds a compatible lock with another transaction. It must retry when any
+	// other Shared holder leaves, rather than waiting for the last holder (which
+	// may be this waiter transaction itself).
+	notifyOnSharedHolderChange bool
+
 	// just used for testing
 	beforeSwapStatusAdjustFunc        func()
 	beforeWaitNotificationReceiveFunc func()
@@ -355,6 +361,7 @@ func (w *waiter) reset() {
 	w.lockWaitGranularity = pb.Granularity_Row
 	w.lockWaitMode = pb.LockMode_Exclusive
 	w.isRemoteSnapshot = false
+	w.notifyOnSharedHolderChange = false
 	w.beforeSwapStatusAdjustFunc = func() {}
 	w.beforeWaitNotificationReceiveFunc = func() {}
 	w.waitTooLongLogged.Store(false)
