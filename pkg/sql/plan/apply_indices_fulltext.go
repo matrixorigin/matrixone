@@ -918,18 +918,3 @@ func (builder *QueryBuilder) getFullTextMatchScoreExpr(expr *plan.Expr) *plan.Ex
 
 	return newExpr
 }
-
-func (builder *QueryBuilder) resolveAggNode(node *plan.Node, depth int32) *plan.Node {
-	if depth == 0 {
-		if node.NodeType == plan.Node_AGG {
-			return node
-		}
-		return nil
-	}
-
-	if node.NodeType == plan.Node_PROJECT && len(node.Children) == 1 {
-		return builder.resolveAggNode(builder.qry.Nodes[node.Children[0]], depth-1)
-	}
-
-	return nil
-}
