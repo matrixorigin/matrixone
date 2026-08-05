@@ -5869,7 +5869,7 @@ func TestExtractPrivilegeTipsFromPlanInsertDedupTargetScan(t *testing.T) {
 				Nodes: []*plan.Node{
 					{NodeType: plan.Node_TABLE_SCAN, ObjRef: targetRef, TableDef: targetDef, BindingTags: []int32{targetTag}},
 					sourceNode,
-					{NodeType: plan.Node_JOIN, JoinType: plan.Node_DEDUP, Children: children, IsRightJoin: tc.isRightJoin, OnList: []*plan.Expr{dedupCondition}, OnDuplicateAction: plan.Node_FAIL},
+					{NodeType: plan.Node_JOIN, JoinType: plan.Node_DEDUP, Children: children, IsRightJoin: tc.isRightJoin, OnList: []*plan.Expr{dedupCondition}, OnDuplicateAction: plan.Node_FAIL, DedupColName: "PRIMARY"},
 					{NodeType: plan.Node_PRE_INSERT, PreInsertCtx: &plan.PreInsertCtx{Ref: targetRef, TableDef: targetDef}},
 				},
 			}}}
@@ -5881,6 +5881,52 @@ func TestExtractPrivilegeTipsFromPlanInsertDedupTargetScan(t *testing.T) {
 			require.ElementsMatch(t, tc.want, got)
 		})
 	}
+}
+
+func TestExtractPrivilegeTipsFromPlanKeepsUserDedupJoinSources(t *testing.T) {
+	const dbName = "insert_privilege"
+	newTable := func(name string) (*plan.ObjectRef, *plan.TableDef) {
+		return &plan.ObjectRef{SchemaName: dbName, ObjName: name}, &plan.TableDef{DbName: dbName, Name: name}
+	}
+	targetRef, targetDef := newTable("target")
+	secretRef, secretDef := newTable("secret")
+	allowedRef, allowedDef := newTable("allowed")
+	column := func(tag int32) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag}}}
+	}
+	equality := func(leftTag, rightTag int32) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{column(leftTag), column(rightTag)}}}}
+	}
+
+	// The first DEDUP is the INSERT's internal conflict probe. The second
+	// represents INSERT ... SELECT ... FROM secret DEDUP JOIN allowed. It has
+	// the default FAIL action too, but no DML-only DedupColName marker.
+	p := &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_INSERT,
+		Nodes: []*plan.Node{
+			{NodeType: plan.Node_TABLE_SCAN, ObjRef: targetRef, TableDef: targetDef, BindingTags: []int32{10}},
+			{NodeType: plan.Node_VALUE_SCAN, BindingTags: []int32{20}},
+			{NodeType: plan.Node_JOIN, JoinType: plan.Node_DEDUP, Children: []int32{0, 1}, OnList: []*plan.Expr{equality(10, 20)}, OnDuplicateAction: plan.Node_FAIL, DedupColName: "PRIMARY"},
+			{NodeType: plan.Node_TABLE_SCAN, ObjRef: secretRef, TableDef: secretDef, BindingTags: []int32{30}},
+			{NodeType: plan.Node_TABLE_SCAN, ObjRef: allowedRef, TableDef: allowedDef, BindingTags: []int32{40}},
+			{NodeType: plan.Node_JOIN, JoinType: plan.Node_DEDUP, Children: []int32{3, 4}, OnList: []*plan.Expr{equality(30, 40)}},
+			{NodeType: plan.Node_PRE_INSERT, PreInsertCtx: &plan.PreInsertCtx{Ref: targetRef, TableDef: targetDef}},
+		},
+	}}}
+
+	type tipKey struct {
+		typ   PrivilegeType
+		table string
+	}
+	got := make([]tipKey, 0)
+	for _, tip := range extractPrivilegeTipsFromPlan(p) {
+		got = append(got, tipKey{typ: tip.typ, table: tip.tableName})
+	}
+	require.ElementsMatch(t, []tipKey{
+		{typ: PrivilegeTypeSelect, table: "secret"},
+		{typ: PrivilegeTypeSelect, table: "allowed"},
+		{typ: PrivilegeTypeInsert, table: "target"},
+	}, got)
 }
 
 func Test_extractPrivilegeTipsFromPlan_Subscription(t *testing.T) {

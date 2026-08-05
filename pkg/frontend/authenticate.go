@@ -6912,11 +6912,13 @@ func hasBindingTag(node *plan.Node, tag int32) bool {
 }
 
 // insertDedupTargetScans returns the TABLE_SCAN nodes used only to probe an
-// INSERT target for duplicate keys.  The first operand in each DEDUP equality
-// is bound from the target scan.  Match that binding tag instead of relying on
-// a physical child position: recursive source scans can swap children without
-// setting IsRightJoin.  These scans are implementation details of writing the
-// target, not SQL-visible reads.
+// INSERT target for duplicate keys. The INSERT/REPLACE binders set
+// DedupColName for these internal joins. A SQL-visible DEDUP JOIN uses the
+// same node type and defaults to FAIL, but has no DedupColName; it must retain
+// its SELECT privilege checks. The first operand in each internal DEDUP
+// equality is bound from the target scan. Match that binding tag instead of
+// relying on a physical child position: recursive source scans can swap
+// children without setting IsRightJoin.
 func insertDedupTargetScans(q *plan.Query) map[int32]struct{} {
 	if q == nil || q.StmtType != plan.Query_INSERT {
 		return nil
@@ -6951,6 +6953,7 @@ func insertDedupTargetScans(q *plan.Query) map[int32]struct{} {
 	for _, node := range q.Nodes {
 		if node == nil || node.NodeType != plan.Node_JOIN ||
 			node.JoinType != plan.Node_DEDUP || len(node.Children) != 2 ||
+			node.DedupColName == "" ||
 			(node.OnDuplicateAction != plan.Node_FAIL && node.OnDuplicateAction != plan.Node_IGNORE) {
 			continue
 		}
@@ -6958,17 +6961,8 @@ func insertDedupTargetScans(q *plan.Query) map[int32]struct{} {
 			if targetTag, ok := firstColumnBindingTag(node.OnList[0].GetF().Args[0]); ok {
 				collect(node.Children[0], targetTag, true, make(map[int32]struct{}))
 				collect(node.Children[1], targetTag, true, make(map[int32]struct{}))
-				continue
 			}
 		}
-
-		// Compatibility fallback for incomplete legacy plans that have no
-		// DEDUP binding expression.
-		targetChild := 0
-		if node.IsRightJoin {
-			targetChild = 1
-		}
-		collect(node.Children[targetChild], 0, false, make(map[int32]struct{}))
 	}
 	return scans
 }
