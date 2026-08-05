@@ -267,7 +267,11 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 	if err != nil {
 		return err
 	}
-	accountName := accIdInfoMap[int32(accountId)].Name
+	accountInfo, ok := accIdInfoMap[int32(accountId)]
+	if !ok || accountInfo == nil {
+		return moerr.NewInternalErrorf(ctx, "account %d does not exist", accountId)
+	}
+	accountName := accountInfo.Name
 	// delete current tenant
 	delete(accIdInfoMap, int32(accountId))
 
