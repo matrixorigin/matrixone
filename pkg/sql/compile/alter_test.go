@@ -628,6 +628,144 @@ func TestReconcileAlterCopyAutoIncrementUsesStableIdentityAndSafeBounds(t *testi
 	require.ErrorContains(t, laterErr, "later ALTER COPY step failed")
 }
 
+func TestReconcileAlterCopyAutoIncrementPreservesFreshColumnInitialization(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	maxSQL := "select cast(coalesce(max(case when `new_id` > 0 then `new_id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		maxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{0}),
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	srcDef := &plan.TableDef{
+		TblId: 1,
+		Cols: []*plan.ColDef{{
+			ColId: 10, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)},
+		}},
+	}
+	copyDef := &plan.TableDef{
+		TblId: 2,
+		Name:  "dept_copy",
+		Cols: []*plan.ColDef{
+			{ColId: 10, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 20, Name: "new_id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+		},
+	}
+	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId)
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(
+		gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(),
+	).Times(0)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	require.NoError(t, c.reconcileAlterCopyAutoIncrement(
+		"test", srcDef, copyDef, copyRel, false, newAlterAutoIncrementResetCleanup(c),
+	))
+	require.Equal(t, []string{maxSQL}, spyExec.executedSQLs)
+	require.Zero(t, resultMP.CurrNB())
+}
+
+func TestReconcileAlterCopyAutoIncrementAdvancesFreshColumnFromCopiedRows(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	maxSQL := "select cast(coalesce(max(case when `new_id` > 0 then `new_id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		maxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{7}),
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	srcDef := &plan.TableDef{
+		TblId: 1,
+		Cols: []*plan.ColDef{{
+			ColId: 10, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)},
+		}},
+	}
+	copyDef := &plan.TableDef{
+		TblId: 2,
+		Name:  "dept_copy",
+		Cols: []*plan.ColDef{
+			{ColId: 10, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 20, Name: "new_id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+		},
+	}
+	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId)
+	copyRel.EXPECT().GetDBID(gomock.Any()).Return(uint64(1))
+	copyRel.EXPECT().AlterTable(gomock.Any(), nil, gomock.Any()).DoAndReturn(
+		func(_ context.Context, _ *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
+			require.Equal(t, []*api.AlterTableReq{
+				api.NewUpdateAutoIncrementReq(1, copyDef.TblId, 7, 0),
+			}, reqs)
+			return nil
+		},
+	)
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(
+		c.proc.Ctx, copyDef.TblId, 1, "new_id", uint64(7), c.proc.GetTxnOperator(),
+	)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	require.NoError(t, c.reconcileAlterCopyAutoIncrement(
+		"test", srcDef, copyDef, copyRel, false, newAlterAutoIncrementResetCleanup(c),
+	))
+	require.Equal(t, []string{maxSQL}, spyExec.executedSQLs)
+	require.Zero(t, resultMP.CurrNB())
+}
+
+func TestReconcileAlterCopyAutoIncrementPreservesFreshColumnAlongsideRetainedColumn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	resultMP := mpool.MustNewZero()
+	sourceOffsetSQL := "select col_index, offset from mo_catalog.mo_increment_columns where table_id = 1"
+	retainedMaxSQL := "select cast(coalesce(max(case when `old_id` > 0 then `old_id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+	freshMaxSQL := "select cast(coalesce(max(case when `new_id` > 0 then `new_id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+		sourceOffsetSQL: newTableCloneOffsetResult(t, resultMP, 0, 50),
+		retainedMaxSQL:  newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{0}),
+		freshMaxSQL:     newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{0}),
+	}}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	autoType := plan.Type{Id: int32(types.T_uint64), AutoIncr: true}
+	srcDef := &plan.TableDef{
+		TblId: 1,
+		Cols: []*plan.ColDef{{
+			ColId: 10, Name: "old_id", Typ: autoType,
+		}},
+	}
+	copyDef := &plan.TableDef{
+		TblId: 2,
+		Name:  "dept_copy",
+		Cols: []*plan.ColDef{
+			{ColId: 10, Name: "old_id", Typ: autoType},
+			{ColId: 20, Name: "new_id", Typ: autoType},
+		},
+	}
+	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId)
+	copyRel.EXPECT().GetDBID(gomock.Any()).Return(uint64(1))
+	copyRel.EXPECT().AlterTable(gomock.Any(), nil, gomock.Any()).DoAndReturn(
+		func(_ context.Context, _ *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
+			require.Equal(t, []*api.AlterTableReq{
+				api.NewUpdateAutoIncrementReq(1, copyDef.TblId, 50, 0),
+			}, reqs)
+			return nil
+		},
+	)
+	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	autoSvc.EXPECT().SetOffset(
+		c.proc.Ctx, copyDef.TblId, 0, "old_id", uint64(50), c.proc.GetTxnOperator(),
+	)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+	require.NoError(t, c.reconcileAlterCopyAutoIncrement(
+		"test", srcDef, copyDef, copyRel, false, newAlterAutoIncrementResetCleanup(c),
+	))
+	require.Equal(
+		t,
+		[]string{sourceOffsetSQL, retainedMaxSQL, freshMaxSQL},
+		spyExec.executedSQLs,
+	)
+	require.Zero(t, resultMP.CurrNB())
+}
+
 func TestReconcileAlterCopyAutoIncrementExplicitResetIgnoresReservedSourceRange(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	resultMP := mpool.MustNewZero()

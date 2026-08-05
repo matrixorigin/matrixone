@@ -1637,6 +1637,10 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 
 	sourceOffsets := make(map[string]uint64)
 	sourceNames := mapCloneAutoIncrColumns(srcDef, copyDef, true)
+	retainedNames := make(map[string]struct{}, len(sourceNames))
+	for _, name := range sourceNames {
+		retainedNames[name] = struct{}{}
+	}
 	// Ordinary COPY preserves the source allocator high-water mark because old
 	// CN caches can still own reserved values. An explicit AUTO_INCREMENT reset
 	// is epoch-fenced, so its contract intentionally replaces those reservations.
@@ -1671,6 +1675,7 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 
 	tableID := newRel.GetTableID(c.proc.Ctx)
 	svc := incrservice.GetAutoIncrementService(c.proc.GetService())
+	epochReqs := make([]*api.AlterTableReq, 0, len(autoCols))
 	for _, col := range autoCols {
 		if err := c.proc.Ctx.Err(); err != nil {
 			return err
@@ -1703,6 +1708,14 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 		}()
 
 		name := strings.ToLower(col.ColName)
+		_, retained := retainedNames[name]
+		// The temporary CREATE already initialized a newly added AUTO_INCREMENT
+		// column from the session variables. With no copied rows and no explicit
+		// reset, preserve that fresh allocator instead of converting the absent
+		// source mapping and zero MAX value into an ordinary offset reset.
+		if !explicitReset && !retained && copyDef.AutoIncrOffset == 0 && copiedMax == 0 {
+			continue
+		}
 		effectiveOffset := max(copyDef.AutoIncrOffset, copiedMax)
 		if !explicitReset {
 			effectiveOffset = max(effectiveOffset, sourceOffsets[name])
@@ -1725,8 +1738,27 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 			return err
 		}
 		cleanup.track(tableID)
+		epochReqs = append(epochReqs, api.NewUpdateAutoIncrementReq(
+			0,
+			tableID,
+			effectiveOffset,
+			0,
+		))
 	}
-	return nil
+	if err := c.proc.Ctx.Err(); err != nil {
+		return err
+	}
+	if len(epochReqs) == 0 {
+		return nil
+	}
+	// SetOffset publishes the next allocator generation. Publish the matching
+	// catalog generation on the COPY replacement before it becomes visible, so
+	// the next implicit insert does not observe a stale table definition.
+	databaseID := newRel.GetDBID(c.proc.Ctx)
+	for _, req := range epochReqs {
+		req.DbId = databaseID
+	}
+	return newRel.AlterTable(c.proc.Ctx, nil, epochReqs)
 }
 
 func (s *Scope) AlterTable(c *Compile) (err error) {

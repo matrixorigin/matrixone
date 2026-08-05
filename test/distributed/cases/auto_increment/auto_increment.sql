@@ -485,6 +485,17 @@ insert into auto_increment_alter_copy(v) values (4);
 select id from auto_increment_alter_copy order by id;
 drop table auto_increment_alter_copy;
 
+-- COPY must preserve the session-initialized allocator for a newly added
+-- AUTO_INCREMENT column when the source table is empty.
+drop table if exists auto_increment_alter_add_empty;
+set auto_increment_offset = 10;
+create table auto_increment_alter_add_empty(v int);
+alter table auto_increment_alter_add_empty add column id bigint auto_increment, algorithm = copy;
+insert into auto_increment_alter_add_empty(v) values (1);
+select * from auto_increment_alter_add_empty;
+drop table auto_increment_alter_add_empty;
+set auto_increment_offset = 1;
+
 -- INPLACE rename must not orphan the allocator row used by a later reset.
 -- This canonical case also runs through the proxy/multi-CN BVT suite.
 drop table if exists auto_increment_alter_rename;
