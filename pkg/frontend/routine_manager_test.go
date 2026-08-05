@@ -773,6 +773,151 @@ func TestRoutineManagerMigrationAndResetErrorBranches(t *testing.T) {
 	}, &query.MigrateConnFromResponse{}), "cannot migrate connection while user-level locks are held")
 }
 
+func TestRoutineManagerLegacyMigrationActionsWaitForRequest(t *testing.T) {
+	t.Run("skip user lock release rechecks after request", func(t *testing.T) {
+		rm, routine, ses := newLegacyMigrationActionTestFixture(t, 1011)
+		require.True(t, routine.mc.tryBeginRequest())
+		var releaseRequest sync.Once
+		t.Cleanup(func() { releaseRequest.Do(routine.mc.endRequest) })
+
+		result := startLegacyMigrationAction(rm, 1011,
+			query.MigrateConnFromAction_MigrateConnFromSkipUserLevelLockRelease)
+		requireLegacyMigrationActionPending(t, result)
+
+		function.RestoreUserLevelLocksFromMigration(ses.proc, []function.UserLevelLockState{
+			{Name: "request_acquired_lock", Count: 1},
+		})
+		defer function.DiscardMigratedUserLevelLocks(ses.proc)
+		releaseRequest.Do(routine.mc.endRequest)
+
+		require.ErrorContains(t, receiveLegacyMigrationActionResult(t, result),
+			"cannot migrate connection while user-level locks are held")
+		require.False(t, ses.userLevelLocksMigrated)
+	})
+
+	t.Run("enable user lock release waits for request", func(t *testing.T) {
+		rm, routine, ses := newLegacyMigrationActionTestFixture(t, 1012)
+		ses.userLevelLocksMigrated = true
+		require.True(t, routine.mc.tryBeginRequest())
+		var releaseRequest sync.Once
+		t.Cleanup(func() { releaseRequest.Do(routine.mc.endRequest) })
+
+		result := startLegacyMigrationAction(rm, 1012,
+			query.MigrateConnFromAction_MigrateConnFromEnableUserLevelLockRelease)
+		requireLegacyMigrationActionPending(t, result)
+		require.True(t, ses.userLevelLocksMigrated)
+
+		releaseRequest.Do(routine.mc.endRequest)
+		require.NoError(t, receiveLegacyMigrationActionResult(t, result))
+		require.False(t, ses.userLevelLocksMigrated)
+	})
+}
+
+func TestRoutineManagerLegacyMigrationActionsWaitForReset(t *testing.T) {
+	t.Run("skip user lock release checks replacement session", func(t *testing.T) {
+		rm, routine, oldSession := newLegacyMigrationActionTestFixture(t, 1013)
+		require.True(t, routine.mc.tryBeginOperation())
+		var releaseReset sync.Once
+		t.Cleanup(func() { releaseReset.Do(routine.mc.endOperation) })
+
+		result := startLegacyMigrationAction(rm, 1013,
+			query.MigrateConnFromAction_MigrateConnFromSkipUserLevelLockRelease)
+		requireLegacyMigrationActionPending(t, result)
+
+		newSession := newLegacyMigrationActionTestSession(t, 1013)
+		function.RestoreUserLevelLocksFromMigration(newSession.proc, []function.UserLevelLockState{
+			{Name: "replacement_session_lock", Count: 1},
+		})
+		defer function.DiscardMigratedUserLevelLocks(newSession.proc)
+		routine.setSession(newSession)
+		releaseReset.Do(routine.mc.endOperation)
+
+		require.ErrorContains(t, receiveLegacyMigrationActionResult(t, result),
+			"cannot migrate connection while user-level locks are held")
+		require.False(t, oldSession.userLevelLocksMigrated)
+		require.False(t, newSession.userLevelLocksMigrated)
+	})
+
+	t.Run("enable user lock release mutates replacement session", func(t *testing.T) {
+		rm, routine, oldSession := newLegacyMigrationActionTestFixture(t, 1014)
+		oldSession.userLevelLocksMigrated = true
+		require.True(t, routine.mc.tryBeginOperation())
+		var releaseReset sync.Once
+		t.Cleanup(func() { releaseReset.Do(routine.mc.endOperation) })
+
+		result := startLegacyMigrationAction(rm, 1014,
+			query.MigrateConnFromAction_MigrateConnFromEnableUserLevelLockRelease)
+		requireLegacyMigrationActionPending(t, result)
+		require.True(t, oldSession.userLevelLocksMigrated)
+
+		newSession := newLegacyMigrationActionTestSession(t, 1014)
+		newSession.userLevelLocksMigrated = true
+		routine.setSession(newSession)
+		releaseReset.Do(routine.mc.endOperation)
+
+		require.NoError(t, receiveLegacyMigrationActionResult(t, result))
+		require.True(t, oldSession.userLevelLocksMigrated)
+		require.False(t, newSession.userLevelLocksMigrated)
+	})
+}
+
+func newLegacyMigrationActionTestFixture(
+	t *testing.T,
+	connID uint32,
+) (*RoutineManager, *Routine, *Session) {
+	t.Helper()
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	ses := newLegacyMigrationActionTestSession(t, connID)
+	routine.setSession(ses)
+	return &RoutineManager{
+		ctx:              context.Background(),
+		routinesByConnID: map[uint32]*Routine{connID: routine},
+	}, routine, ses
+}
+
+func newLegacyMigrationActionTestSession(t *testing.T, connID uint32) *Session {
+	t.Helper()
+	proc := testutil.NewProc(t)
+	proc.GetSessionInfo().Account = "legacy_migration_action"
+	proc.GetSessionInfo().ConnectionID = uint64(connID)
+	return &Session{proc: proc}
+}
+
+func startLegacyMigrationAction(
+	rm *RoutineManager,
+	connID uint32,
+	action query.MigrateConnFromAction,
+) <-chan error {
+	result := make(chan error, 1)
+	go func() {
+		result <- rm.MigrateConnectionFromWithContext(context.Background(),
+			&query.MigrateConnFromRequest{ConnID: connID, Action: action},
+			&query.MigrateConnFromResponse{})
+	}()
+	return result
+}
+
+func requireLegacyMigrationActionPending(t *testing.T, result <-chan error) {
+	t.Helper()
+	select {
+	case err := <-result:
+		require.Failf(t, "legacy migration action bypassed lifecycle admission", "err=%v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func receiveLegacyMigrationActionResult(t *testing.T, result <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(time.Second):
+		require.FailNow(t, "legacy migration action did not finish after lifecycle release")
+		return nil
+	}
+}
+
 func TestRoutineManagerResetSessionRejectsRequestAfterResponseWrite(t *testing.T) {
 	const connID = uint32(1009)
 	ctrl := gomock.NewController(t)
