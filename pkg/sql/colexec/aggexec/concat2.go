@@ -466,7 +466,7 @@ func (exec *groupConcatExec) SetExtraInformation(partialResult any, _ int) error
 	if err != nil {
 		return err
 	}
-	if concatArgCnt < 1 || len(orderArgIndexes) != len(orderDesc) {
+	if concatArgCnt < 1 || concatArgCnt > len(exec.argTypes) || len(orderArgIndexes) != len(orderDesc) {
 		return moerr.NewInternalErrorNoCtx("invalid group_concat order config")
 	}
 	for _, index := range orderArgIndexes {
@@ -1523,7 +1523,10 @@ func decodeGroupConcatOrderConfig(
 	pos += uint32Size
 	orderArgCnt := int(binary.BigEndian.Uint32(config[pos : pos+uint32Size]))
 	pos += uint32Size
-	if orderArgCnt > len(config)-pos-uint32Size {
+	// Versions 1 and 2 are ordered-only encodings. Version 3 additionally
+	// carries LIMIT and is the sole format allowed to represent LIMIT without
+	// ORDER BY.
+	if (orderArgCnt == 0 && config[0] != 3) || orderArgCnt > len(config)-pos-uint32Size {
 		err = moerr.NewInternalErrorNoCtx("invalid group_concat order config")
 		return
 	}

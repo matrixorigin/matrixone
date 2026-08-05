@@ -96,17 +96,17 @@ func TestGroupConcatLimitAppliesAfterOrderAndDistinct(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	newExec := func(distinct bool, concatArgs int, offset, count uint64) *groupConcatExec {
+	newExec := func(distinct bool, offset, count uint64) *groupConcatExec {
 		info := multiAggInfo{
 			aggID:     100,
 			distinct:  distinct,
-			argTypes:  []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()}[:concatArgs],
+			argTypes:  []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
 			retType:   types.T_text.ToType(),
 			emptyNull: true,
 		}
 		exec := newGroupConcatExec(mp, info, "|").(*groupConcatExec)
 		require.NoError(t, exec.SetExtraInformation(
-			testGroupConcatLimitConfig(concatArgs, []byte{groupConcatOrderAsc}, "|", offset, count), 0))
+			testGroupConcatLimitConfig(1, []byte{groupConcatOrderAsc}, "|", offset, count), 0))
 		require.NoError(t, exec.GroupGrow(1))
 		return exec
 	}
@@ -117,7 +117,7 @@ func TestGroupConcatLimitAppliesAfterOrderAndDistinct(t *testing.T) {
 	defer values.Free(mp)
 	defer orderKeys.Free(mp)
 
-	exec := newExec(false, 2, 1, 2)
+	exec := newExec(false, 1, 2)
 	require.NoError(t, exec.BatchFill(0, []uint64{1, 1, 1, 1}, []*vector.Vector{values, orderKeys}))
 	result, err := exec.Flush()
 	require.NoError(t, err)
@@ -125,7 +125,7 @@ func TestGroupConcatLimitAppliesAfterOrderAndDistinct(t *testing.T) {
 	result[0].Free(mp)
 	exec.Free()
 
-	exec = newExec(true, 2, 1, 1)
+	exec = newExec(true, 1, 1)
 	require.NoError(t, exec.BatchFill(0, []uint64{1, 1, 1, 1}, []*vector.Vector{values, orderKeys}))
 	result, err = exec.Flush()
 	require.NoError(t, err)

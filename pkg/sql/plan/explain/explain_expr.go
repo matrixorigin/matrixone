@@ -563,7 +563,10 @@ func decodeGroupConcatOrderConfig(config []byte) (int, []uint32, []byte, string,
 	offset += fixedFieldSize
 	orderArgCount := int(binary.BigEndian.Uint32(config[offset : offset+fixedFieldSize]))
 	offset += fixedFieldSize
-	if orderArgCount > len(config)-offset-fixedFieldSize {
+	// Versions 1 and 2 represent ordered GROUP_CONCAT only. Version 3 also
+	// represents LIMIT without ORDER BY, so it is the only valid zero-order
+	// encoding.
+	if (orderArgCount == 0 && config[0] != 3) || orderArgCount > len(config)-offset-fixedFieldSize {
 		return 0, nil, nil, "", 0, 0, moerr.NewInvalidInputNoCtx("invalid group_concat order config")
 	}
 	orderFlags := config[offset : offset+orderArgCount]
