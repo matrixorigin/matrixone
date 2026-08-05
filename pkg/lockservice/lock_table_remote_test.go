@@ -147,6 +147,34 @@ type retryingGetLockClient struct {
 	release chan struct{}
 }
 
+// lostCoarsenedLockClient models the one state a lock client cannot resolve
+// from the RPC result: the owner may have accepted the request just before the
+// response was lost, or may never have received it.
+type lostCoarsenedLockClient struct {
+	bind pb.LockTable
+}
+
+func (c *lostCoarsenedLockClient) Send(_ context.Context, req *pb.Request) (*pb.Response, error) {
+	switch req.Method {
+	case pb.Method_Lock:
+		return nil, io.ErrUnexpectedEOF
+	case pb.Method_GetBind:
+		resp := &pb.Response{}
+		resp.GetBind.LockTable = c.bind
+		resp.GetBind.AllocatorID = c.bind.AllocatorID
+		resp.GetBind.AllocatorVersion = c.bind.Version
+		return resp, nil
+	default:
+		return nil, io.ErrClosedPipe
+	}
+}
+
+func (c *lostCoarsenedLockClient) AsyncSend(context.Context, *pb.Request) (*morpc.Future, error) {
+	return nil, io.ErrClosedPipe
+}
+
+func (c *lostCoarsenedLockClient) Close() error { return nil }
+
 func (c *retryingGetLockClient) Send(_ context.Context, req *pb.Request) (*pb.Response, error) {
 	switch req.Method {
 	case pb.Method_GetTxnLock:
@@ -176,6 +204,60 @@ func (c *retryingGetLockClient) AsyncSend(context.Context, *pb.Request) (*morpc.
 }
 
 func (c *retryingGetLockClient) Close() error { return nil }
+
+func TestRemoteCoarsenedLockTransportFailureRetainsCleanupUnion(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		bind := pb.LockTable{
+			Group:       0,
+			Table:       26646,
+			OriginTable: 26646,
+			ServiceID:   "owner",
+			Version:     1,
+			Valid:       true,
+			AllocatorID: "allocator",
+		}
+		remote := newRemoteLockTable(
+			"origin",
+			time.Second,
+			bind,
+			&lostCoarsenedLockClient{bind: bind},
+			func(pb.LockTable) {},
+			getLogger(""),
+		)
+		txnID := []byte("lost-coarsened-range")
+		txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(6), "")
+		defer reuse.Free(txn, nil)
+
+		oldRows := newTestRows(1, 2, 5, 7)
+		txn.Lock()
+		require.NoError(t, txn.lockAdded(bind.Group, bind, oldRows, getLogger("")))
+
+		var lockErr error
+		remote.lock(
+			context.Background(),
+			txn,
+			newTestRows(1, 8),
+			LockOptions{
+				LockOptions: pb.LockOptions{
+					Granularity: pb.Granularity_Range,
+					Mode:        pb.LockMode_Shared,
+					Policy:      pb.WaitPolicy_Wait,
+				},
+				replaceTxnLocks: true,
+			},
+			func(_ pb.Result, err error) { lockErr = err },
+		)
+		require.Error(t, lockErr)
+
+		// If the request never reached the owner, rows 1/2/5/7 still need
+		// unlock. If it did reach the owner, range [1,8] needs unlock. Keep the
+		// union so either authoritative state is cleaned up.
+		locks := txn.lockHolders[bind.Group].tableKeys[bind.Table].slice()
+		require.Equal(t, append(oldRows, newTestRows(1, 8)...), locks.all())
+		locks.unref()
+		txn.Unlock()
+	})
+}
 
 func TestRemoteGetLockWithContextStopsOnCancellation(t *testing.T) {
 	client := &blockingGetLockClient{started: make(chan struct{}, 1)}

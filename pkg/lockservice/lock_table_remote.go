@@ -195,16 +195,13 @@ func (l *remoteLockTable) lock(
 	}
 
 	// Transport failures are indeterminate: the request may have reached the
-	// owner and acquired locks even if the response was lost, so retain
-	// conservative cleanup bookkeeping. ErrNotSupported is different: it is an
-	// application response from the owner and proves that no replacement was
-	// published. Preserve the previous exact bookkeeping in that case.
+	// owner and replaced old rows with this range, or it may not have arrived
+	// and the old rows may still exist. Retain their union for cleanup; replacing
+	// the local bookkeeping here would leak one of those two states. ErrNotSupported
+	// is different: it is an application response from the owner and proves that
+	// no replacement was published, so preserve the exact old bookkeeping.
 	if !moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
-		if opts.replaceTxnLocks {
-			_ = txn.replaceLocks(l.bind.Group, l.bind, rows, l.logger)
-		} else {
-			_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
-		}
+		_ = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
 	}
 	logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
 	if moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout) {

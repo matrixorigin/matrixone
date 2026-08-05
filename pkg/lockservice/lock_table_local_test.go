@@ -1168,7 +1168,7 @@ func TestLocalCoarsensBeforeFixedSliceExhaustion(t *testing.T) {
 				},
 				func(c *Config) {
 					c.MaxLockRowCount = 3
-					c.MaxFixedSliceSize = 4
+					c.MaxFixedSliceSize = 5
 				},
 			)
 		})
@@ -1248,7 +1248,7 @@ func TestSharedLockBudgetCoarsensAcrossRequests(t *testing.T) {
 				},
 				func(c *Config) {
 					c.MaxLockRowCount = 3
-					c.MaxFixedSliceSize = 4
+					c.MaxFixedSliceSize = 5
 				},
 			)
 		})
@@ -1317,7 +1317,7 @@ func TestSharedRangeEscalationWaitsForOtherHolders(t *testing.T) {
 		},
 		func(c *Config) {
 			c.MaxLockRowCount = 3
-			c.MaxFixedSliceSize = 4
+			c.MaxFixedSliceSize = 5
 		},
 	)
 }
@@ -1392,7 +1392,7 @@ func TestRemoteSharedRangeEscalationWaitsForOtherHolders(t *testing.T) {
 		},
 		func(c *Config) {
 			c.MaxLockRowCount = 3
-			c.MaxFixedSliceSize = 4
+			c.MaxFixedSliceSize = 5
 		},
 	)
 }
@@ -1503,7 +1503,7 @@ func TestSharedRangeEscalationGapHolderWaitsWithoutMutation(t *testing.T) {
 
 					txnA := []byte("gap-holder-a")
 					txnB := []byte("gap-holder-b")
-					// Fill the fixed bookkeeping slice exactly. Once the foreign
+					// Fill the retained-row budget exactly. Once the foreign
 					// Shared gap is released, the coarsening must not transiently
 					// promote it to another row holder (which would require a fifth
 					// bookkeeping slot before the range replacement is committed).
@@ -1560,7 +1560,7 @@ func TestSharedRangeEscalationGapHolderWaitsWithoutMutation(t *testing.T) {
 				},
 				func(c *Config) {
 					c.MaxLockRowCount = 4
-					c.MaxFixedSliceSize = 4
+					c.MaxFixedSliceSize = 6
 				},
 			)
 		})
@@ -1633,7 +1633,7 @@ func TestSharedRangeEscalationTransfersWaitersBehindReleasedGap(t *testing.T) {
 		},
 		func(c *Config) {
 			c.MaxLockRowCount = 4
-			c.MaxFixedSliceSize = 4
+			c.MaxFixedSliceSize = 6
 		},
 	)
 }
@@ -1687,7 +1687,7 @@ func TestSharedRangeEscalationCancellationDetachesMergeWaiter(t *testing.T) {
 		},
 		func(c *Config) {
 			c.MaxLockRowCount = 3
-			c.MaxFixedSliceSize = 4
+			c.MaxFixedSliceSize = 5
 		},
 	)
 }

@@ -167,10 +167,9 @@ func (txn *activeTxn) lockAdded(
 // Exclusive requests can always be coarsened because replacing locks with an
 // exclusive range cannot weaken a lock already held by this transaction.
 // Shared requests use the same least-coarse observed range; the local lock
-// table admits that conversion only when this transaction is the sole holder
-// of every merged lock, otherwise it rolls back atomically. Row-sharded
-// requests cannot be represented by a range because its endpoints may belong
-// to different physical lock tables.
+// table waits for compatible holders to leave, then commits the conversion
+// atomically. Row-sharded requests cannot be represented by a range because
+// its endpoints may belong to different physical lock tables.
 func (txn *activeTxn) coarsenLockRequest(
 	group uint32,
 	table uint64,

@@ -73,9 +73,9 @@ type Config struct {
 	MaxLockWaitDuration toml.Duration `toml:"max-lock-wait-duration"`
 	// MaxLockRowCount bounds the lock keys retained for one transaction and physical lock table.
 	// Non-sharded exclusive and shared keys are conservatively coarsened to their observed range;
-	// shared conversion succeeds only when existing ownership can be merged atomically. The planner
-	// upgrades cardinality-known shared targets before acquisition. Row-sharded locks retain their
-	// existing behavior because a range may span multiple physical lock tables.
+	// shared conversion waits for compatible ownership to become mergeable, then commits atomically.
+	// The planner upgrades cardinality-known shared targets before acquisition. Row-sharded locks
+	// retain their existing behavior because a range may span multiple physical lock tables.
 	MaxLockRowCount toml.ByteSize `toml:"max-row-lock-count"`
 	// KeepBindTimeout when a locktable is assigned to a lockservice, the lockservice will
 	// continuously hold the bind, and if no hold request is received after the configured time,
@@ -106,8 +106,11 @@ func (c *Config) Validate() {
 	if c.MaxFixedSliceSize < 4 {
 		panic("MaxFixedSliceSize must hold the minimum lock bookkeeping slice")
 	}
-	if c.MaxLockRowCount > c.MaxFixedSliceSize {
-		panic("This parameter configuration may trigger scenarios that violate MaxFixedSliceSize")
+	// A coarsened remote RPC can complete at the owner while its response is
+	// lost. The origin retains both its old rows and the two replacement range
+	// endpoints until unlock, so it must reserve that bounded cleanup union.
+	if c.MaxLockRowCount > c.MaxFixedSliceSize-2 {
+		panic("MaxFixedSliceSize must reserve two range endpoints beyond MaxLockRowCount")
 	}
 	if c.KeepBindDuration.Duration == 0 {
 		c.KeepBindDuration.Duration = time.Second

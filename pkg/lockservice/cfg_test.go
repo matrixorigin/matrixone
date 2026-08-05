@@ -57,6 +57,7 @@ func TestAdjustConfigRequiresRangeCapacity(t *testing.T) {
 		{ServiceID: "s1", MaxLockRowCount: 1, MaxFixedSliceSize: 1},
 		{ServiceID: "s1", MaxLockRowCount: 2, MaxFixedSliceSize: 2},
 		{ServiceID: "s1", MaxLockRowCount: 3, MaxFixedSliceSize: 3},
+		{ServiceID: "s1", MaxLockRowCount: 3, MaxFixedSliceSize: 4},
 	} {
 		assert.Panics(t, c.Validate)
 	}
