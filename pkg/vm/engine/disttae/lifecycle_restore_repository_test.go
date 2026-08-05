@@ -142,6 +142,49 @@ func TestLifecycleRestoreAutoIncrementOffsetValidatesColumnTypeLimit(t *testing.
 	require.Error(t, err)
 }
 
+func TestLifecycleRestoreRepositoryRejectsIncompleteStateAndInvalidPersistentIdentifiers(t *testing.T) {
+	var repository SQLRestoreRepository
+	require.ErrorContains(t, repository.validate(), "repository is incomplete")
+	require.ErrorContains(t, repository.validateReader(), "reader is incomplete")
+	require.ErrorContains(t, repository.validateRestoreAdmission(0), "staging limits are invalid")
+
+	repository.AccountID = 17
+	repository.MaxRestoreStagingBytesPerAccount = 1
+	require.NoError(t, repository.validateRestoreAdmission(1))
+
+	digest := strings.Repeat("ab", 32)
+	decoded, err := lifecycleRestoreDigest(digest)
+	require.NoError(t, err)
+	require.Equal(t, byte(0xab), decoded[0])
+	_, err = lifecycleRestoreDigest("not-a-digest")
+	require.ErrorContains(t, err, "invalid Lifecycle digest")
+
+	require.Equal(t,
+		"11111111-1111-1111-1111-111111111111",
+		lifecycleRestoreUUID("11111111111111111111111111111111"),
+	)
+	require.Empty(t, lifecycleRestoreUUID("not-a-uuid"))
+	require.Equal(t, "`history``events`", lifecycleRestoreIdentifier("history`events"))
+}
+
+func TestDecodeLifecycleRestoreUint64FailsClosedOnMissingOrAmbiguousCatalogRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	missing := executor.NewMemResult([]types.Type{types.T_uint64.ToType()}, mp)
+	_, err := decodeLifecycleRestoreUint64(missing.GetResult(), "staging usage")
+	require.ErrorContains(t, err, "staging usage row is missing")
+
+	valid := lifecycleRestoreUint64Rows(t, mp, 42)
+	value, err := decodeLifecycleRestoreUint64(valid, "staging usage")
+	require.NoError(t, err)
+	require.Equal(t, uint64(42), value)
+
+	ambiguous := lifecycleRestoreUint64Rows(t, mp, 1, 2)
+	_, err = decodeLifecycleRestoreUint64(ambiguous, "staging usage")
+	require.ErrorContains(t, err, "staging usage row is invalid")
+}
+
 func TestSQLRestoreInitializeOwnsLeaseTableAndAttemptInOneTransaction(t *testing.T) {
 	mp := mpool.MustNewZero()
 	var statements []restoreSQLCall
