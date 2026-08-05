@@ -71,10 +71,11 @@ type Config struct {
 	// execution path forgets to propagate a session or task deadline. Callers
 	// that retry across Lock calls still need to own and propagate a deadline.
 	MaxLockWaitDuration toml.Duration `toml:"max-lock-wait-duration"`
-	// MaxLockRowCount bounds the exclusive lock keys retained for one transaction and physical
-	// lock table. If the cumulative keys exceed this value, they are conservatively coarsened to
-	// a range spanning the observed minimum and maximum. Shared and row-sharded locks retain their
-	// existing behavior because they cannot be safely represented by one transaction-local range.
+	// MaxLockRowCount bounds the lock keys retained for one transaction and physical lock table.
+	// Non-sharded exclusive and shared keys are conservatively coarsened to their observed range;
+	// shared conversion succeeds only when existing ownership can be merged atomically. The planner
+	// upgrades cardinality-known shared targets before acquisition. Row-sharded locks retain their
+	// existing behavior because a range may span multiple physical lock tables.
 	MaxLockRowCount toml.ByteSize `toml:"max-row-lock-count"`
 	// KeepBindTimeout when a locktable is assigned to a lockservice, the lockservice will
 	// continuously hold the bind, and if no hold request is received after the configured time,

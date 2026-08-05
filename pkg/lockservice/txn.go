@@ -164,12 +164,13 @@ func (txn *activeTxn) lockAdded(
 // maximum replaces them. The range can cover gaps, but never keys outside the
 // observed bounds as a table lock would.
 //
-// Only exclusive, non-sharded requests are coarsened. Replacing locks with an
+// Exclusive requests can always be coarsened because replacing locks with an
 // exclusive range cannot weaken a lock already held by this transaction.
-// Shared locks can have other holders on the same lock object and cannot be
-// merged without splitting that shared ownership. Row-sharded requests cannot
-// be represented by a range because its endpoints may belong to different
-// lock tables.
+// Shared requests use the same least-coarse observed range; the local lock
+// table admits that conversion only when this transaction is the sole holder
+// of every merged lock, otherwise it rolls back atomically. Row-sharded
+// requests cannot be represented by a range because its endpoints may belong
+// to different physical lock tables.
 func (txn *activeTxn) coarsenLockRequest(
 	group uint32,
 	table uint64,
@@ -179,7 +180,7 @@ func (txn *activeTxn) coarsenLockRequest(
 ) ([][]byte, pb.LockOptions, bool) {
 	if len(rows) == 0 ||
 		maxLockRowCount <= 0 ||
-		opts.Mode != pb.LockMode_Exclusive ||
+		(opts.Mode != pb.LockMode_Exclusive && opts.Mode != pb.LockMode_Shared) ||
 		opts.Sharding != pb.Sharding_None {
 		return rows, opts, false
 	}

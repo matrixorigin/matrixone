@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -41,6 +42,36 @@ import (
 
 // 	return nodeID
 // }
+
+// applySharedLockTableFallback upgrades cardinality-known shared lock targets
+// before their first row lock is acquired. An exclusive owner can safely
+// coarsen its own rows later, but a shared row may already have other holders;
+// converting that ownership in the middle of a transaction is not always
+// possible atomically. The lock service still enforces the actual cumulative
+// budget for estimates that are low or for transactions with many statements.
+func applySharedLockTableFallback(builder *QueryBuilder) {
+	proc := builder.compCtx.GetProcess()
+	if proc == nil || proc.Base.LockService == nil {
+		return
+	}
+	maxRows := float64(proc.Base.LockService.GetConfig().MaxLockRowCount)
+	if maxRows <= 0 {
+		return
+	}
+
+	for _, node := range builder.qry.Nodes {
+		if node.NodeType != plan.Node_LOCK_OP ||
+			node.Stats == nil ||
+			node.Stats.Outcnt <= maxRows {
+			continue
+		}
+		for _, target := range node.LockTargets {
+			if target.Mode == lockpb.LockMode_Shared {
+				target.LockTable = true
+			}
+		}
+	}
+}
 
 // GetFunctionArgTypeStrFromAst function arg type do not have scale and width, it depends on the data that it process
 func GetFunctionArgTypeStrFromAst(arg tree.FunctionArg) (string, error) {

@@ -2233,6 +2233,115 @@ func TestLargeDMLKeepsRowScopedLockTarget(t *testing.T) {
 	}
 }
 
+func TestLargeSharedLockTargetsKeepBoundedFallback(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "select for share",
+			sql:  "SELECT N_NATIONKEY FROM NATION FOR SHARE",
+		},
+		{
+			name: "lock in share mode",
+			sql:  "SELECT N_NATIONKEY FROM NATION LOCK IN SHARE MODE",
+		},
+		{
+			name: "foreign key validation",
+			sql:  "INSERT INTO replace_fk_c VALUES (10, 1), (11, 1)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			proc := testutil.NewProc(t)
+			lockService := mock_lock.NewMockLockService(gomock.NewController(t))
+			lockService.EXPECT().GetConfig().Return(lockservice.Config{
+				ServiceID:       "plan-test",
+				MaxLockRowCount: 1,
+			}).AnyTimes()
+			proc.Base.LockService = lockService
+			rt := moruntime.ServiceRuntime(proc.GetService())
+			if rt == nil {
+				rt = moruntime.DefaultRuntime()
+				moruntime.SetupServiceBasedRuntime(proc.GetService(), rt)
+			}
+			rt.SetGlobalVariables("optimizer_hints", "")
+			mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+
+			sharedTargets := 0
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType != plan.Node_LOCK_OP {
+					continue
+				}
+				for _, target := range node.LockTargets {
+					if target.Mode != lockpb.LockMode_Shared {
+						continue
+					}
+					sharedTargets++
+					require.True(t, target.LockTable,
+						"large shared target must retain the planner fallback: %s", test.sql)
+				}
+			}
+			require.NotZero(t, sharedTargets, "expected a shared lock target: %s", test.sql)
+		})
+	}
+}
+
+func TestApplySharedLockTableFallbackGuardsAndModes(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	builder := &QueryBuilder{
+		compCtx: &mock.ctxt,
+		qry: &plan.Query{Nodes: []*plan.Node{
+			{NodeType: plan.Node_TABLE_SCAN, Stats: &plan.Stats{Outcnt: 100}},
+			{NodeType: plan.Node_LOCK_OP},
+			{
+				NodeType: plan.Node_LOCK_OP,
+				Stats:    &plan.Stats{Outcnt: 3},
+				LockTargets: []*plan.LockTarget{
+					{Mode: lockpb.LockMode_Shared},
+				},
+			},
+			{
+				NodeType: plan.Node_LOCK_OP,
+				Stats:    &plan.Stats{Outcnt: 4},
+				LockTargets: []*plan.LockTarget{
+					{Mode: lockpb.LockMode_Exclusive},
+					{Mode: lockpb.LockMode_Shared},
+				},
+			},
+		}},
+	}
+
+	// Planning without a process or without a real lock service is valid for
+	// internal and mock compiler contexts.
+	mock.ctxt.GetProcessFunc = func() *process.Process { return nil }
+	applySharedLockTableFallback(builder)
+	proc := testutil.NewProc(t)
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+	applySharedLockTableFallback(builder)
+
+	lockService := mock_lock.NewMockLockService(gomock.NewController(t))
+	gomock.InOrder(
+		lockService.EXPECT().GetConfig().Return(lockservice.Config{}),
+		lockService.EXPECT().GetConfig().Return(lockservice.Config{MaxLockRowCount: 3}),
+	)
+	proc.Base.LockService = lockService
+	applySharedLockTableFallback(builder)
+	applySharedLockTableFallback(builder)
+
+	require.False(t, builder.qry.Nodes[2].LockTargets[0].LockTable,
+		"the configured budget is inclusive")
+	require.False(t, builder.qry.Nodes[3].LockTargets[0].LockTable,
+		"exclusive targets are bounded by owner-side range escalation")
+	require.True(t, builder.qry.Nodes[3].LockTargets[1].LockTable,
+		"cardinality-known shared targets must upgrade before acquisition")
+}
+
 func TestInsertIntoMarkedTemporaryTableUsesModernPath(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	catalog.MarkTableDefTemporary(mock.ctxt.tables["nation"])

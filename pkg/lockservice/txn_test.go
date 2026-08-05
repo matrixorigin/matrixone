@@ -173,9 +173,10 @@ func TestCoarsenLockRequestUsesTransactionTableState(t *testing.T) {
 		shared := exclusive
 		shared.Mode = pb.LockMode_Shared
 		sharedRows := [][]byte{[]byte("a"), []byte("z")}
-		gotRows, _, replace = txn.coarsenLockRequest(
+		gotRows, gotOpts, replace = txn.coarsenLockRequest(
 			bind.Group, bind.Table, sharedRows, shared, 3)
-		require.False(t, replace)
+		require.True(t, replace)
+		require.Equal(t, pb.Granularity_Range, gotOpts.Granularity)
 		require.Equal(t, sharedRows, gotRows)
 
 		sharded := exclusive
