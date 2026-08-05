@@ -247,8 +247,12 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 						zap.String("tenant-version", createVersion),
 						zap.String("upgrade", upgrade.String()))
 
-					// createVersion >= upgrade.ToVersion already upgrade
-					if versions.Compare(createVersion, upgrade.ToVersion) >= 0 {
+					// A version-offset refresh can create an upgrade whose source and
+					// target version strings are identical. Reapply that handler so
+					// tenants at the old offset receive its idempotent metadata changes.
+					versionComparison := versions.Compare(createVersion, upgrade.ToVersion)
+					if versionComparison > 0 ||
+						(versionComparison == 0 && upgrade.FromVersion != upgrade.ToVersion) {
 						continue
 					}
 
