@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -554,6 +555,37 @@ func TestArchiveWriterIgnoresNonPositiveSignedAutoIncrementValues(t *testing.T) 
 	manifest, _, err := writer.Close(ctx)
 	require.NoError(t, err)
 	require.Empty(t, manifest.AutoIncrementMaxima)
+}
+
+func TestArchiveWriterChecksPersistedIntegerAndAutoIncrementBounds(t *testing.T) {
+	value, err := checkedInt64(uint64(math.MaxInt64))
+	require.NoError(t, err)
+	require.Equal(t, int64(math.MaxInt64), value)
+	_, err = checkedInt64(uint64(math.MaxInt64) + 1)
+	require.ErrorContains(t, err, "exceeds int64")
+
+	for _, test := range []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{name: "int8", value: int8(-8), want: "-8"},
+		{name: "int16", value: int16(-16), want: "-16"},
+		{name: "int32", value: int32(-32), want: "-32"},
+		{name: "int64", value: int64(-64), want: "-64"},
+		{name: "uint8", value: uint8(8), want: "8"},
+		{name: "uint16", value: uint16(16), want: "16"},
+		{name: "uint32", value: uint32(32), want: "32"},
+		{name: "uint64", value: uint64(math.MaxUint64), want: "18446744073709551615"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value, err := autoIncrementBigInt(CanonicalCell{Value: test.value})
+			require.NoError(t, err)
+			require.Equal(t, test.want, value.String())
+		})
+	}
+	_, err = autoIncrementBigInt(CanonicalCell{Value: "not an integer"})
+	require.ErrorContains(t, err, "unsupported value type")
 }
 
 func TestArchiveReadbackRejectsCorruptionAndReorderedManifest(t *testing.T) {

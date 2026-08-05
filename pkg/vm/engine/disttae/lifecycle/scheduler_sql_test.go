@@ -137,6 +137,97 @@ func TestSQLBindingPagerLeavesFullScanAnchorUnchangedBetweenPages(t *testing.T) 
 	require.Equal(t, anchor, updated.LastFullScanAt)
 }
 
+func TestLifecycleUint64AtRejectsNegativeAndUnsupportedPersistentValues(t *testing.T) {
+	mp := mpool.MustNewZero()
+	newVector := func(oid types.T, appendValue func(*vector.Vector) error) *vector.Vector {
+		value := vector.NewVec(oid.ToType())
+		require.NoError(t, appendValue(value))
+		t.Cleanup(func() { value.Free(mp) })
+		return value
+	}
+
+	for _, test := range []struct {
+		name  string
+		value *vector.Vector
+		want  uint64
+	}{
+		{
+			name: "uint8",
+			value: newVector(types.T_uint8, func(value *vector.Vector) error {
+				return vector.AppendFixed(value, uint8(8), false, mp)
+			}),
+			want: 8,
+		},
+		{
+			name: "uint16",
+			value: newVector(types.T_uint16, func(value *vector.Vector) error {
+				return vector.AppendFixed(value, uint16(16), false, mp)
+			}),
+			want: 16,
+		},
+		{
+			name: "uint32",
+			value: newVector(types.T_uint32, func(value *vector.Vector) error {
+				return vector.AppendFixed(value, uint32(32), false, mp)
+			}),
+			want: 32,
+		},
+		{
+			name: "uint64",
+			value: newVector(types.T_uint64, func(value *vector.Vector) error {
+				return vector.AppendFixed(value, uint64(64), false, mp)
+			}),
+			want: 64,
+		},
+		{
+			name: "int8",
+			value: newVector(types.T_int8, func(value *vector.Vector) error {
+				return vector.AppendFixed(value, int8(8), false, mp)
+			}),
+			want: 8,
+		},
+		{
+			name: "int16",
+			value: newVector(types.T_int16, func(value *vector.Vector) error {
+				return vector.AppendFixed(value, int16(16), false, mp)
+			}),
+			want: 16,
+		},
+		{
+			name: "int32",
+			value: newVector(types.T_int32, func(value *vector.Vector) error {
+				return vector.AppendFixed(value, int32(32), false, mp)
+			}),
+			want: 32,
+		},
+		{
+			name: "int64",
+			value: newVector(types.T_int64, func(value *vector.Vector) error {
+				return vector.AppendFixed(value, int64(64), false, mp)
+			}),
+			want: 64,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			actual, err := lifecycleUint64At(test.value, 0)
+			require.NoError(t, err)
+			require.Equal(t, test.want, actual)
+		})
+	}
+
+	negative := newVector(types.T_int64, func(value *vector.Vector) error {
+		return vector.AppendFixed(value, int64(-1), false, mp)
+	})
+	_, err := lifecycleUint64At(negative, 0)
+	require.ErrorContains(t, err, "non-negative integer")
+
+	unsupported := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(unsupported, []byte("1"), false, mp))
+	t.Cleanup(func() { unsupported.Free(mp) })
+	_, err = lifecycleUint64At(unsupported, 0)
+	require.ErrorContains(t, err, "non-negative integer")
+}
+
 type lifecycleSQLStep struct {
 	contains    string
 	notContains string

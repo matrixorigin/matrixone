@@ -80,6 +80,30 @@ func TestValidateLifecycleBlockReadPeak(t *testing.T) {
 	)
 }
 
+func TestLifecycleRewritePressureChargesOnlyVisibleExpiredRows(t *testing.T) {
+	report := lifecyclepkg.ObjectScanReport{ExpiredRows: 2, LiveRows: 1}
+	expiredBytes, err := lifecycleEstimatedExpiredPressureBytes(900, report)
+	require.NoError(t, err)
+	require.Equal(t, uint64(600), expiredBytes)
+
+	for _, test := range []struct {
+		name   string
+		source uint64
+		report lifecyclepkg.ObjectScanReport
+	}{
+		{name: "zero source", report: report},
+		{name: "zero expired", source: 900, report: lifecyclepkg.ObjectScanReport{LiveRows: 3}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := lifecycleEstimatedExpiredPressureBytes(test.source, test.report)
+			require.ErrorContains(t, err, "MIXED_LAYOUT_BLOCKED")
+		})
+	}
+	// Metrics are observational only; exercising the accounting path must not
+	// alter admission or Object retirement behavior.
+	lifecycleObserveRewritePressure(900, expiredBytes)
+}
+
 func TestValidateLifecycleRewriteLayout(t *testing.T) {
 	require.NoError(t, validateLifecycleRewriteLayout(&api.SchemaExtra{
 		BlockMaxRows:    options.DefaultBlockMaxRows,
@@ -145,6 +169,19 @@ func TestValidateLifecycleRewriteOwnership(t *testing.T) {
 		validateLifecycleRewriteOwnership(root, result),
 		"Booking",
 	)
+
+	result.TransferBookingLocation[2] = path.Join(root.BookingPrefix, "booking-000000")
+	result.CreatedObjectStats[0] = []byte("malformed")
+	require.ErrorContains(t, validateLifecycleRewriteOwnership(root, result), "malformed")
+
+	result.CreatedObjectStats = [][]byte{stats.Marshal(), stats.Marshal()}
+	require.ErrorContains(t, validateLifecycleRewriteOwnership(root, result), "duplicated")
+
+	result.CreatedObjectStats = [][]byte{stats.Marshal()}
+	result.TransferBookingLocation = []string{
+		string(types.EncodeInt32(ptrInt32(1))),
+	}
+	require.ErrorContains(t, validateLifecycleRewriteOwnership(root, result), "no Root-owned Booking")
 }
 
 func ptrInt32(value int32) *int32 { return &value }
