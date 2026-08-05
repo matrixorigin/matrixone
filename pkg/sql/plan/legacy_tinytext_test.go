@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -30,9 +31,9 @@ func TestRecoverLegacyTinyTextFromCreateSQL(t *testing.T) {
 		TableType: catalog.SystemOrdinaryRel,
 		Createsql: "CREATE TABLE `legacy_t` (`id` INT, `payload` TINYTEXT, `body` TEXT)",
 		Cols: []*planpb.ColDef{
-			{Name: "id", OriginName: "id", Typ: planpb.Type{Id: int32(types.T_int32)}},
-			{Name: "payload", OriginName: "payload", Typ: planpb.Type{Id: int32(types.T_text)}},
-			{Name: "body", OriginName: "body", Typ: planpb.Type{Id: int32(types.T_text)}},
+			{Name: "id", OriginName: "id", Seqnum: 0, Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{Name: "payload", OriginName: "payload", Seqnum: 1, Typ: planpb.Type{Id: int32(types.T_text)}},
+			{Name: "body", OriginName: "body", Seqnum: 2, Typ: planpb.Type{Id: int32(types.T_text)}},
 		},
 	}
 	originalLegacyColumn := tableDef.Cols[1]
@@ -48,22 +49,101 @@ func TestRecoverLegacyTinyTextFromCreateSQL(t *testing.T) {
 	require.Equal(t, int32(types.MaxTinyTextLen), tableDef.Cols[1].Typ.Width)
 }
 
-func TestRecoverLegacyTinyTextFromCreateSQLValidatesBeforeMutation(t *testing.T) {
+func TestRecoverLegacyTinyTextFromCreateSQLSurvivesColumnRename(t *testing.T) {
 	tableDef := &planpb.TableDef{
 		DbName:    "upgrade_db",
-		Name:      "broken_t",
+		Name:      "renamed_t",
 		TableType: catalog.SystemOrdinaryRel,
-		Createsql: "CREATE TABLE broken_t (first TINYTEXT, second TINYTEXT)",
+		Createsql: "CREATE TABLE renamed_t (id INT, payload TINYTEXT)",
 		Cols: []*planpb.ColDef{
-			{Name: "first", OriginName: "first", Typ: planpb.Type{Id: int32(types.T_text)}},
-			{Name: "wrong_name", OriginName: "wrong_name", Typ: planpb.Type{Id: int32(types.T_text)}},
+			{Name: "id", OriginName: "id", Seqnum: 0, Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{Name: "renamed_payload", OriginName: "renamed_payload", Seqnum: 1, Typ: planpb.Type{Id: int32(types.T_text)}},
 		},
 	}
 
-	err := RecoverLegacyTinyTextFromCreateSQL(t.Context(), tableDef)
-	require.ErrorContains(t, err, "catalog column name does not match")
-	require.Equal(t, int32(0), tableDef.Cols[0].Typ.Width)
-	require.Equal(t, int32(0), tableDef.Cols[1].Typ.Width)
+	require.NoError(t, RecoverLegacyTinyTextFromCreateSQL(t.Context(), tableDef))
+	require.Equal(t, int32(types.MaxTinyTextLen), tableDef.Cols[1].Typ.Width)
+}
+
+func TestRecoverLegacyTinyTextFollowsCreateLikeLineage(t *testing.T) {
+	legacyType := planpb.Type{Id: int32(types.T_text)}
+	tableDef := &planpb.TableDef{
+		DbName:    "upgrade_db",
+		Name:      "legacy_clone",
+		TableType: catalog.SystemOrdinaryRel,
+		Createsql: "CREATE TABLE legacy_clone LIKE legacy_source",
+		Cols: []*planpb.ColDef{
+			{Name: "id", OriginName: "id", Seqnum: 0, Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{
+				Name: "payload", OriginName: "payload", Seqnum: 1, Typ: legacyType,
+				Default: &planpb.Default{
+					NullAbility:  true,
+					OriginString: "null",
+					Expr: &planpb.Expr{
+						Typ:  planpb.Type{Id: int32(types.T_text), Width: types.MaxTinyTextLen},
+						Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}},
+					},
+				},
+			},
+		},
+	}
+	sourceDef := &planpb.TableDef{
+		DbName:    "upgrade_db",
+		Name:      "legacy_source",
+		TableType: catalog.SystemOrdinaryRel,
+		Createsql: "CREATE TABLE legacy_source (id INT, payload TINYTEXT)",
+		Cols: []*planpb.ColDef{
+			{Name: "id", OriginName: "id", Seqnum: 0, Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{
+				Name: "payload", OriginName: "payload", Seqnum: 1, Typ: legacyType,
+				Default: &planpb.Default{
+					NullAbility: true,
+				},
+			},
+		},
+	}
+
+	require.NoError(t, RecoverLegacyTinyText(t.Context(), tableDef, func(
+		_ context.Context,
+		databaseName string,
+		tableName string,
+	) (*planpb.TableDef, error) {
+		require.Equal(t, "upgrade_db", databaseName)
+		require.Equal(t, "legacy_source", tableName)
+		return sourceDef, nil
+	}))
+	require.Equal(t, int32(types.MaxTinyTextLen), tableDef.Cols[1].Typ.Width)
+	// Both source and target are normalized on planner-owned clones.
+	require.Zero(t, sourceDef.Cols[1].Typ.Width)
+}
+
+func TestRecoverLegacyTinyTextRejectsStaleCreateLikeLineage(t *testing.T) {
+	tableDef := &planpb.TableDef{
+		DbName:    "upgrade_db",
+		Name:      "legacy_clone",
+		TableType: catalog.SystemOrdinaryRel,
+		Createsql: "CREATE TABLE legacy_clone LIKE legacy_source",
+		Cols: []*planpb.ColDef{{
+			Name: "payload", OriginName: "payload", Typ: planpb.Type{Id: int32(types.T_text)},
+		}},
+	}
+	sourceDef := &planpb.TableDef{
+		DbName:    "upgrade_db",
+		Name:      "legacy_source",
+		TableType: catalog.SystemOrdinaryRel,
+		Createsql: "CREATE TABLE legacy_source (payload TINYTEXT NOT NULL)",
+		Cols: []*planpb.ColDef{{
+			Name: "payload", OriginName: "payload", NotNull: true,
+			Typ: planpb.Type{Id: int32(types.T_text)},
+		}},
+	}
+
+	require.NoError(t, RecoverLegacyTinyText(t.Context(), tableDef, func(
+		context.Context, string, string,
+	) (*planpb.TableDef, error) {
+		return sourceDef, nil
+	}))
+	require.Zero(t, tableDef.Cols[0].Typ.Width)
 }
 
 func TestRecoverLegacyTinyTextFromCreateSQLIgnoresUnrelatedText(t *testing.T) {

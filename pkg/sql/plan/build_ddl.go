@@ -124,6 +124,12 @@ func createTableSQLForCatalog(ctx CompilerContext, stmt *tree.CreateTable) strin
 				}
 			}()
 			if len(statements) == 1 {
+				// CREATE TABLE ... LIKE is expanded before this helper runs. Persist
+				// that current schema instead of lossy lineage SQL so new catalogs do
+				// not need source-table recovery after another upgrade.
+				if create, ok := statements[0].(*tree.CreateTable); ok && create.IsAsLike {
+					return canonicalCreateTableSQL(stmt)
+				}
 				return rootSQL
 			}
 		}

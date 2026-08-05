@@ -190,7 +190,38 @@ func getTableDumpRelations(
 	if err != nil {
 		return nil, err
 	}
-	masterHash, err := tableSchemaHash(def)
+	resolve := func(
+		ctx context.Context,
+		sourceDB string,
+		sourceTable string,
+	) (*plan.TableDef, error) {
+		if sourceDB == "" {
+			sourceDB = dbName
+		}
+		sourceDatabase := db
+		if !strings.EqualFold(sourceDB, dbName) {
+			var err error
+			sourceDatabase, err = ses.GetTxnHandler().GetStorage().Database(
+				ctx, sourceDB, ses.GetTxnHandler().GetTxn(),
+			)
+			if err != nil {
+				return nil, err
+			}
+		}
+		relation, err := sourceDatabase.Relation(ctx, sourceTable, nil)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		sourceDef := sqlplan.CloneTableDefForPlan(relation.GetTableDef(ctx), true)
+		if sourceDef.DbName == "" {
+			sourceDef.DbName = sourceDB
+		}
+		return sourceDef, nil
+	}
+	masterHash, err := tableSchemaHashWithResolver(ctx, def, resolve)
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +243,7 @@ func getTableDumpRelations(
 		if err != nil {
 			return nil, err
 		}
-		indexHash, err := tableSchemaHash(indexRel.GetTableDef(ctx))
+		indexHash, err := tableSchemaHashWithResolver(ctx, indexRel.GetTableDef(ctx), resolve)
 		if err != nil {
 			return nil, err
 		}
@@ -232,6 +263,14 @@ func getTableDumpRelations(
 }
 
 func tableSchemaHash(def *plan.TableDef) (string, error) {
+	return tableSchemaHashWithResolver(context.Background(), def, nil)
+}
+
+func tableSchemaHashWithResolver(
+	ctx context.Context,
+	def *plan.TableDef,
+	resolve sqlplan.LegacyTinyTextTableResolver,
+) (string, error) {
 	if def == nil {
 		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
 	}
@@ -241,7 +280,7 @@ func tableSchemaHash(def *plan.TableDef) (string, error) {
 	// catalog definition shared by the engine cache. Keeping this at the common
 	// hash boundary covers both main and index relations.
 	def = sqlplan.CloneTableDefForPlan(def, true)
-	if err := sqlplan.RecoverLegacyTinyTextFromCreateSQL(context.Background(), def); err != nil {
+	if err := sqlplan.RecoverLegacyTinyText(ctx, def, resolve); err != nil {
 		return "", moerr.NewInternalErrorNoCtxf("cannot normalize table schema: %v", err)
 	}
 	// For ordinary tables, reconstruct the DDL from the expanded TableDef. This
@@ -977,10 +1016,6 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 	if err = validateTableDumpSchema(def); err != nil {
 		return err
 	}
-	schemaHash, err := tableSchemaHash(def)
-	if err != nil {
-		return err
-	}
 	refs, err := getTableDumpRelations(ctx, ses, dbName, rel)
 	if err != nil {
 		return err
@@ -991,7 +1026,7 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 
 	manifest := &tableDumpManifest{
 		Version: tableDumpFormatVersion, SourceDatabase: dbName, SourceTable: tableName,
-		CreateSQL: def.Createsql, SchemaHash: schemaHash, MetadataOnly: stmt.MetadataOnly,
+		CreateSQL: def.Createsql, SchemaHash: refs[0].SchemaHash, MetadataOnly: stmt.MetadataOnly,
 		Relations: make([]tableDumpRelation, 0, len(refs)),
 	}
 	dumpFS, closeDumpFS, err := openTableDumpFS(ctx, ses, stmt.Path)
@@ -1392,19 +1427,15 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 			return moerr.NewInvalidInputNoCtx("table dump is incomplete: READY marker is missing")
 		}
 	}
-	targetHash, err := tableSchemaHash(targetDef)
-	if err != nil {
-		return err
-	}
-	if targetHash != manifest.SchemaHash {
-		return moerr.NewInvalidInputNoCtx("target table schema does not match table dump")
-	}
 	targetRefs, err := getTableDumpRelations(ctx, ses, dbName, rel)
 	if err != nil {
 		return err
 	}
 	if err = validateTableDumpRelations(ctx, targetRefs); err != nil {
 		return err
+	}
+	if targetRefs[0].SchemaHash != manifest.SchemaHash {
+		return moerr.NewInvalidInputNoCtx("target table schema does not match table dump")
 	}
 	if len(targetRefs) != len(manifest.Relations) {
 		return moerr.NewInvalidInputNoCtx("target table index topology does not match table dump")

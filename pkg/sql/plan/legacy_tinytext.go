@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,84 +30,224 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+const maxLegacyTinyTextLineageDepth = 64
+
 type legacyTinyTextColumn struct {
 	ordinal int
 	name    string
 }
 
-// RecoverLegacyTinyTextFromCreateSQL recovers the subtype that old catalog
-// writers lost. Before TINYTEXT had a distinct width marker, both TINYTEXT and
-// TEXT were persisted as T_text/Width=0; the original CREATE statement is the
-// only durable discriminator left in those catalogs.
-//
-// Recovery is intentionally metadata-only. Oversized values written by an old
-// binary remain readable, while every future assignment uses the recovered
-// 255-byte contract. The function never guesses: every parseable SQL mode must
-// identify the same columns, and each recovered ordinal, name, and base type
-// must agree with the structured TableDef.
+type legacyTinyTextCreateEvidence struct {
+	columns  []legacyTinyTextColumn
+	likeDB   string
+	likeName string
+}
+
+// LegacyTinyTextTableResolver returns a raw catalog definition for a table in
+// the same transaction/snapshot as the definition being normalized. A missing
+// table is represented by (nil, nil).
+type LegacyTinyTextTableResolver func(
+	ctx context.Context,
+	databaseName string,
+	tableName string,
+) (*planpb.TableDef, error)
+
+// RecoverLegacyTinyTextFromCreateSQL retains the original direct-CREATE API.
+// Callers that can resolve tables should use RecoverLegacyTinyText so catalog
+// definitions created through a legacy CREATE TABLE ... LIKE can also recover.
 func RecoverLegacyTinyTextFromCreateSQL(ctx context.Context, tableDef *planpb.TableDef) error {
+	return RecoverLegacyTinyText(ctx, tableDef, nil)
+}
+
+// RecoverLegacyTinyText restores the subtype marker lost by catalog writers
+// that persisted both TINYTEXT and TEXT as T_text/Width=0.
+//
+// For an explicit CREATE, the original declaration ordinal is matched to the
+// column's durable Seqnum. That survives ALTER TABLE RENAME COLUMN and avoids
+// treating the historical column name as the current schema. For a legacy
+// CREATE TABLE ... LIKE, which contains no subtype declarations, recovery
+// follows the source relation and copies only a recovered TINYTEXT marker after
+// the complete visible ColDef structures match.
+//
+// Recovery is metadata-only: oversized values written before upgrade remain
+// readable, while future assignments observe the recovered 255-byte limit.
+// Stale, missing, cyclic, or ambiguous historical SQL is a safe no-op instead
+// of making an otherwise valid current table unresolvable.
+func RecoverLegacyTinyText(
+	ctx context.Context,
+	tableDef *planpb.TableDef,
+	resolve LegacyTinyTextTableResolver,
+) error {
+	return recoverLegacyTinyText(ctx, tableDef, resolve, make(map[string]struct{}), 0)
+}
+
+func recoverLegacyTinyText(
+	ctx context.Context,
+	tableDef *planpb.TableDef,
+	resolve LegacyTinyTextTableResolver,
+	visited map[string]struct{},
+	depth int,
+) error {
 	if tableDef == nil || tableDef.Createsql == "" ||
-		!isLegacyTinyTextTableKind(tableDef.TableType) {
+		!isLegacyTinyTextTableKind(tableDef.TableType) ||
+		!hasLegacyUnboundedText(tableDef) || depth >= maxLegacyTinyTextLineageDepth {
 		return nil
 	}
-	hasLegacyText := false
+
+	lowerCreateSQL := strings.ToLower(tableDef.Createsql)
+	if !strings.Contains(lowerCreateSQL, "tinytext") && !strings.Contains(lowerCreateSQL, "like") {
+		return nil
+	}
+	evidence, err := parseLegacyTinyTextEvidence(ctx, tableDef.Createsql)
+	if err != nil {
+		return nil
+	}
+	if evidence.likeName == "" {
+		recoverLegacyTinyTextColumns(tableDef, evidence.columns)
+		return nil
+	}
+	if resolve == nil {
+		return nil
+	}
+
+	databaseName := evidence.likeDB
+	if databaseName == "" {
+		databaseName = tableDef.DbName
+	}
+	key := strings.ToLower(databaseName) + "\x00" + strings.ToLower(evidence.likeName)
+	if _, ok := visited[key]; ok {
+		return nil
+	}
+	visited[key] = struct{}{}
+	defer delete(visited, key)
+
+	source, err := resolve(ctx, databaseName, evidence.likeName)
+	if err != nil {
+		return err
+	}
+	if source == nil {
+		return nil
+	}
+	source = CloneTableDefForPlan(source, true)
+	if source.DbName == "" {
+		source.DbName = databaseName
+	}
+	if err := recoverLegacyTinyText(ctx, source, resolve, visited, depth+1); err != nil {
+		return err
+	}
+	recoverLegacyTinyTextFromLike(tableDef, source)
+	return nil
+}
+
+func hasLegacyUnboundedText(tableDef *planpb.TableDef) bool {
 	for _, column := range tableDef.Cols {
 		if column != nil && !column.Hidden &&
 			types.T(column.Typ.Id) == types.T_text && column.Typ.Width == 0 {
-			hasLegacyText = true
-			break
+			return true
 		}
 	}
-	if !hasLegacyText || !strings.Contains(strings.ToLower(tableDef.Createsql), "tinytext") {
-		return nil
-	}
+	return false
+}
 
-	recovered, err := parseLegacyTinyTextColumns(ctx, tableDef.Createsql)
-	if err != nil {
-		return moerr.NewInvalidInputf(
-			ctx,
-			"cannot recover legacy TINYTEXT metadata for %s.%s: %v",
-			tableDef.DbName,
-			tableDef.Name,
-			err,
-		)
+func recoverLegacyTinyTextColumns(tableDef *planpb.TableDef, columns []legacyTinyTextColumn) {
+	for _, historical := range columns {
+		var candidateIndex = -1
+		sequenceNumber := uint32(historical.ordinal - 1)
+		for index, column := range tableDef.Cols {
+			if column == nil || column.Hidden || column.Seqnum != sequenceNumber {
+				continue
+			}
+			if candidateIndex != -1 {
+				candidateIndex = -1
+				break
+			}
+			candidateIndex = index
+		}
+		// Some synthetic or very old definitions do not carry distinct Seqnums.
+		// The former ordinal+name proof remains a safe compatibility fallback.
+		if candidateIndex == -1 {
+			index := historical.ordinal - 1
+			if index >= 0 && index < len(tableDef.Cols) && tableDef.Cols[index] != nil &&
+				!tableDef.Cols[index].Hidden &&
+				strings.EqualFold(tableDef.Cols[index].GetOriginCaseName(), historical.name) {
+				candidateIndex = index
+			}
+		}
+		if candidateIndex == -1 {
+			continue
+		}
+		candidate := tableDef.Cols[candidateIndex]
+		if types.T(candidate.Typ.Id) != types.T_text || candidate.Typ.Width != 0 {
+			continue
+		}
+		cloned := *candidate
+		cloned.Typ.Width = types.MaxTinyTextLen
+		tableDef.Cols[candidateIndex] = &cloned
 	}
-	if len(recovered) == 0 {
-		return nil
-	}
+}
 
-	indexes := make([]int, 0, len(recovered))
-	for _, column := range recovered {
-		index := column.ordinal - 1
-		if index < 0 || index >= len(tableDef.Cols) {
-			return legacyTinyTextMismatch(ctx, tableDef, column, "catalog ordinal is missing")
-		}
-		catalogColumn := tableDef.Cols[index]
-		if catalogColumn == nil || catalogColumn.Hidden ||
-			!strings.EqualFold(catalogColumn.GetOriginCaseName(), column.name) {
-			return legacyTinyTextMismatch(ctx, tableDef, column, "catalog column name does not match")
-		}
-		if types.T(catalogColumn.Typ.Id) != types.T_text {
-			return legacyTinyTextMismatch(ctx, tableDef, column, "catalog base type is not TEXT")
-		}
-		switch catalogColumn.Typ.Width {
-		case 0:
-			indexes = append(indexes, index)
-		case types.MaxTinyTextLen:
-			// Already written by a fixed binary.
-		default:
-			return legacyTinyTextMismatch(ctx, tableDef, column, "catalog TEXT width is incompatible")
+func recoverLegacyTinyTextFromLike(target, source *planpb.TableDef) {
+	targetColumns := visibleLegacyTinyTextColumns(target)
+	sourceColumns := visibleLegacyTinyTextColumns(source)
+	if len(targetColumns) != len(sourceColumns) {
+		return
+	}
+	for index := range targetColumns {
+		if !legacyLikeColumnsCompatible(targetColumns[index], sourceColumns[index]) {
+			return
 		}
 	}
+	for index, sourceColumn := range sourceColumns {
+		targetColumn := targetColumns[index]
+		if types.T(sourceColumn.Typ.Id) != types.T_text ||
+			sourceColumn.Typ.Width != types.MaxTinyTextLen ||
+			types.T(targetColumn.Typ.Id) != types.T_text || targetColumn.Typ.Width != 0 {
+			continue
+		}
+		for tableIndex, column := range target.Cols {
+			if column == targetColumn {
+				cloned := *column
+				cloned.Typ.Width = types.MaxTinyTextLen
+				target.Cols[tableIndex] = &cloned
+				break
+			}
+		}
+	}
+}
 
-	// Clone only the columns that change. Resolve returns a planner-owned Cols
-	// slice, but the ColDef pointers may still be shared with the catalog cache.
-	for _, index := range indexes {
-		column := *tableDef.Cols[index]
-		column.Typ.Width = types.MaxTinyTextLen
-		tableDef.Cols[index] = &column
+func visibleLegacyTinyTextColumns(tableDef *planpb.TableDef) []*planpb.ColDef {
+	columns := make([]*planpb.ColDef, 0, len(tableDef.Cols))
+	for _, column := range tableDef.Cols {
+		if column != nil && !column.Hidden {
+			columns = append(columns, column)
+		}
 	}
-	return nil
+	return columns
+}
+
+func legacyLikeColumnsCompatible(target, source *planpb.ColDef) bool {
+	targetClone := proto.Clone(target).(*planpb.ColDef)
+	sourceClone := proto.Clone(source).(*planpb.ColDef)
+	for _, column := range []*planpb.ColDef{targetClone, sourceClone} {
+		column.ColId = 0
+		column.Seqnum = 0
+		column.TblName = ""
+		column.DbName = ""
+		column.Typ.Table = ""
+		// Legacy CREATE LIKE materialized an implicit nullable default as an
+		// explicit DEFAULT NULL expression. Those encodings are semantically
+		// identical and must not invalidate otherwise exact lineage evidence.
+		if column.Default != nil && column.Default.NullAbility &&
+			(column.Default.Expr == nil || column.Default.Expr.GetLit().GetIsnull()) {
+			column.Default.Expr = nil
+			column.Default.OriginString = ""
+		}
+	}
+	if types.T(targetClone.Typ.Id) == types.T_text && targetClone.Typ.Width == 0 &&
+		types.T(sourceClone.Typ.Id) == types.T_text && sourceClone.Typ.Width == types.MaxTinyTextLen {
+		sourceClone.Typ.Width = 0
+	}
+	return proto.Equal(targetClone, sourceClone)
 }
 
 func isLegacyTinyTextTableKind(tableType string) bool {
@@ -118,25 +259,8 @@ func isLegacyTinyTextTableKind(tableType string) bool {
 	}
 }
 
-func legacyTinyTextMismatch(
-	ctx context.Context,
-	tableDef *planpb.TableDef,
-	column legacyTinyTextColumn,
-	reason string,
-) error {
-	return moerr.NewInvalidInputf(
-		ctx,
-		"cannot recover legacy TINYTEXT metadata for %s.%s column %s at ordinal %d: %s",
-		tableDef.DbName,
-		tableDef.Name,
-		column.name,
-		column.ordinal,
-		reason,
-	)
-}
-
-func parseLegacyTinyTextColumns(ctx context.Context, createSQL string) ([]legacyTinyTextColumn, error) {
-	var recovered []legacyTinyTextColumn
+func parseLegacyTinyTextEvidence(ctx context.Context, createSQL string) (legacyTinyTextCreateEvidence, error) {
+	var recovered legacyTinyTextCreateEvidence
 	var firstParseErr error
 	successfulModes := 0
 	for _, sqlMode := range mysql.ParserSQLModeCombinations() {
@@ -151,22 +275,32 @@ func parseLegacyTinyTextColumns(ctx context.Context, createSQL string) ([]legacy
 		createTable, ok := stmt.(*tree.CreateTable)
 		if !ok {
 			stmt.Free()
-			return nil, moerr.NewInvalidInput(ctx, "stored SQL is not a CREATE TABLE statement")
+			return legacyTinyTextCreateEvidence{}, moerr.NewInvalidInput(ctx, "stored SQL is not a CREATE TABLE statement")
 		}
-		columns := tinyTextColumnsFromLegacyCreate(createTable)
+		evidence := legacyTinyTextEvidenceFromCreate(createTable)
 		stmt.Free()
 
 		if successfulModes == 0 {
-			recovered = columns
-		} else if !equalLegacyTinyTextColumns(recovered, columns) {
-			return nil, moerr.NewInvalidInput(ctx, "stored SQL is ambiguous across SQL modes")
+			recovered = evidence
+		} else if !equalLegacyTinyTextEvidence(recovered, evidence) {
+			return legacyTinyTextCreateEvidence{}, moerr.NewInvalidInput(ctx, "stored SQL is ambiguous across SQL modes")
 		}
 		successfulModes++
 	}
 	if successfulModes == 0 {
-		return nil, firstParseErr
+		return legacyTinyTextCreateEvidence{}, firstParseErr
 	}
 	return recovered, nil
+}
+
+func legacyTinyTextEvidenceFromCreate(stmt *tree.CreateTable) legacyTinyTextCreateEvidence {
+	if stmt.IsAsLike {
+		return legacyTinyTextCreateEvidence{
+			likeDB:   string(stmt.LikeTableName.Schema()),
+			likeName: string(stmt.LikeTableName.Name()),
+		}
+	}
+	return legacyTinyTextCreateEvidence{columns: tinyTextColumnsFromLegacyCreate(stmt)}
 }
 
 func tinyTextColumnsFromLegacyCreate(stmt *tree.CreateTable) []legacyTinyTextColumn {
@@ -191,12 +325,15 @@ func tinyTextColumnsFromLegacyCreate(stmt *tree.CreateTable) []legacyTinyTextCol
 	return columns
 }
 
-func equalLegacyTinyTextColumns(left, right []legacyTinyTextColumn) bool {
-	if len(left) != len(right) {
+func equalLegacyTinyTextEvidence(left, right legacyTinyTextCreateEvidence) bool {
+	if !strings.EqualFold(left.likeDB, right.likeDB) ||
+		!strings.EqualFold(left.likeName, right.likeName) ||
+		len(left.columns) != len(right.columns) {
 		return false
 	}
-	for i := range left {
-		if left[i].ordinal != right[i].ordinal || left[i].name != right[i].name {
+	for index := range left.columns {
+		if left.columns[index].ordinal != right.columns[index].ordinal ||
+			!strings.EqualFold(left.columns[index].name, right.columns[index].name) {
 			return false
 		}
 	}

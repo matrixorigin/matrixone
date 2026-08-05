@@ -387,9 +387,11 @@ func TestGetTableDumpRelationsRecoversLegacyTinyTextHashes(t *testing.T) {
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	master := mock_frontend.NewMockRelation(ctrl)
+	sourceRel := mock_frontend.NewMockRelation(ctrl)
 	indexRel := mock_frontend.NewMockRelation(ctrl)
 	ses.txnHandler.storage = eng
 	eng.EXPECT().Database(gomock.Any(), "tpch", gomock.Any()).Return(db, nil)
+	db.EXPECT().Relation(gomock.Any(), "tinytext_source", nil).Return(sourceRel, nil)
 	db.EXPECT().Relation(gomock.Any(), "__idx", nil).Return(indexRel, nil)
 
 	newTinyTextDef := func(name, createSQL string, width int32) *plan.TableDef {
@@ -406,7 +408,10 @@ func TestGetTableDumpRelationsRecoversLegacyTinyTextHashes(t *testing.T) {
 			}},
 		}
 	}
-	masterDef := newTinyTextDef("orders", "create table orders(payload tinytext)", 0)
+	sourceDef := newTinyTextDef("tinytext_source", "create table tinytext_source(payload tinytext)", 0)
+	sourceDef.Cols[0].Seqnum = 0
+	sourceRel.EXPECT().GetTableDef(gomock.Any()).Return(sourceDef)
+	masterDef := newTinyTextDef("orders", "create table orders like tinytext_source", 0)
 	masterDef.Indexes = []*plan.IndexDef{{
 		IndexName: "idx", IndexTableName: "__idx", IndexAlgoTableType: "regular",
 	}}
@@ -419,7 +424,7 @@ func TestGetTableDumpRelationsRecoversLegacyTinyTextHashes(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, refs, 2)
 
-	fixedMaster := newTinyTextDef("orders", masterDef.Createsql, types.MaxTinyTextLen)
+	fixedMaster := newTinyTextDef("orders", "create table orders(payload tinytext)", types.MaxTinyTextLen)
 	fixedMaster.Indexes = masterDef.Indexes
 	fixedMasterHash, err := tableSchemaHash(fixedMaster)
 	require.NoError(t, err)
