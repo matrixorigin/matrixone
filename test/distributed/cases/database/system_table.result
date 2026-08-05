@@ -2,11 +2,14 @@ SELECT table_catalog,table_schema,table_name,table_type from `information_schema
 ➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  table_type[12,-1,0]  𝄀
 def  ¦  mo_catalog  ¦  mo_tables  ¦  BASE TABLE
 SELECT * FROM `information_schema`.`character_sets` LIMIT 0,1000;
-➤ character_set_name[12,-1,0]  ¦  default_collate_name[12,-1,0]  ¦  description[12,-1,0]  ¦  maxlen[4,32,0]
+➤ character_set_name[12,-1,0]  ¦  default_collate_name[12,-1,0]  ¦  description[12,-1,0]  ¦  maxlen[4,32,0]  𝄀
+binary  ¦  binary  ¦  Binary pseudo charset  ¦  1  𝄀
+utf8  ¦  utf8_bin  ¦  UTF-8 Unicode  ¦  4  𝄀
+utf8mb4  ¦  utf8mb4_bin  ¦  UTF-8 Unicode  ¦  4
 SELECT * FROM `information_schema`.`columns` where TABLE_NAME = 'mo_tables' order by ORDINAL_POSITION LIMIT 2;
 ➤ TABLE_CATALOG[12,-1,0]  ¦  TABLE_SCHEMA[12,-1,0]  ¦  TABLE_NAME[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  ORDINAL_POSITION[4,32,0]  ¦  COLUMN_DEFAULT[12,-1,0]  ¦  IS_NULLABLE[12,-1,0]  ¦  DATA_TYPE[12,-1,0]  ¦  CHARACTER_MAXIMUM_LENGTH[-5,64,0]  ¦  CHARACTER_OCTET_LENGTH[-5,64,0]  ¦  NUMERIC_PRECISION[-5,64,0]  ¦  NUMERIC_SCALE[-5,64,0]  ¦  DATETIME_PRECISION[-5,64,0]  ¦  CHARACTER_SET_NAME[12,-1,0]  ¦  COLLATION_NAME[12,-1,0]  ¦  COLUMN_TYPE[12,-1,0]  ¦  COLUMN_KEY[12,-1,0]  ¦  EXTRA[12,-1,0]  ¦  PRIVILEGES[12,-1,0]  ¦  COLUMN_COMMENT[12,-1,0]  ¦  GENERATION_EXPRESSION[12,-1,0]  ¦  SRS_ID[-5,64,0]  𝄀
 def  ¦  mo_catalog  ¦  mo_tables  ¦  rel_id  ¦  1  ¦  null  ¦  YES  ¦  BIGINT UNSIGNED  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  BIGINT UNSIGNED(0)  ¦    ¦    ¦  select,insert,update,references  ¦    ¦    ¦  null  𝄀
-def  ¦  mo_catalog  ¦  mo_tables  ¦  relname  ¦  2  ¦  null  ¦  YES  ¦  VARCHAR  ¦  5000  ¦  120000  ¦  null  ¦  null  ¦  null  ¦  utf8  ¦  utf8_bin  ¦  VARCHAR(5000)  ¦    ¦    ¦  select,insert,update,references  ¦    ¦    ¦  null
+def  ¦  mo_catalog  ¦  mo_tables  ¦  relname  ¦  2  ¦  null  ¦  YES  ¦  VARCHAR  ¦  5000  ¦  20000  ¦  null  ¦  null  ¦  null  ¦  utf8  ¦  utf8_bin  ¦  VARCHAR(5000)  ¦    ¦    ¦  select,insert,update,references  ¦    ¦    ¦  null
 SELECT * FROM `information_schema`.`key_column_usage` LIMIT 0,1000;
 ➤ CONSTRAINT_CATALOG[12,-1,0]  ¦  CONSTRAINT_SCHEMA[12,-1,0]  ¦  CONSTRAINT_NAME[12,-1,0]  ¦  TABLE_CATALOG[12,-1,0]  ¦  TABLE_SCHEMA[12,-1,0]  ¦  TABLE_NAME[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  ORDINAL_POSITION[4,32,0]  ¦  POSITION_IN_UNIQUE_CONSTRAINT[4,32,0]  ¦  REFERENCED_TABLE_SCHEMA[12,-1,0]  ¦  REFERENCED_TABLE_NAME[12,-1,0]  ¦  REFERENCED_COLUMN_NAME[12,-1,0]
 SELECT * FROM `information_schema`.`profiling` LIMIT 0,1000;

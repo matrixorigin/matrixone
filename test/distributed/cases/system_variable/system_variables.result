@@ -317,7 +317,10 @@ DEFAULT_COLLATE_NAME  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 DESCRIPTION  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 MAXLEN  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select character_set_name, description, maxlen from character_sets limit 5;
-➤ character_set_name[12,-1,0]  ¦  description[12,-1,0]  ¦  maxlen[4,32,0]
+➤ character_set_name[12,-1,0]  ¦  description[12,-1,0]  ¦  maxlen[4,32,0]  𝄀
+binary  ¦  Binary pseudo charset  ¦  1  𝄀
+utf8  ¦  UTF-8 Unicode  ¦  4  𝄀
+utf8mb4  ¦  UTF-8 Unicode  ¦  4
 desc triggers;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 TRIGGER_CATALOG  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀

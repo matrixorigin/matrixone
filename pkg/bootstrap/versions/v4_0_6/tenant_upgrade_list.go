@@ -31,6 +31,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	addForeignKeyMetadataColumn("on_update_origin", "varchar(64) not null default 'ACTION_ORIGIN_LEGACY_AMBIGUOUS'", "on_delete_origin"),
 	upgradeInformationSchemaKeyColumnUsage(),
 	upgradeInformationSchemaReferentialConstraints(),
+	populateInformationSchemaCharacterSets(),
 }
 
 func addForeignKeyMetadataColumn(column, definition, after string) versions.UpgradeEntry {
@@ -42,6 +43,27 @@ func addForeignKeyMetadataColumn(column, definition, after string) versions.Upgr
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			columnInfo, err := versions.CheckTableColumn(txn, accountID, catalog.MO_CATALOG, catalog.MOForeignKeys, column)
 			return columnInfo.IsExits, err
+		},
+	}
+}
+
+func populateInformationSchemaCharacterSets() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "CHARACTER_SETS",
+		UpgType:   versions.MODIFY_METADATA,
+		PreSql: "DELETE FROM information_schema.CHARACTER_SETS " +
+			"WHERE lower(CHARACTER_SET_NAME) IN ('binary','utf8','utf8mb4')",
+		UpgSql: sysview.InformationSchemaCharacterSetsData,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckTableDataExist(txn, accountID,
+				"SELECT 1 FROM information_schema.CHARACTER_SETS "+
+					"WHERE CHARACTER_SET_NAME = 'binary' AND DEFAULT_COLLATE_NAME = 'binary' AND MAXLEN = 1 "+
+					"AND EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
+					"WHERE CHARACTER_SET_NAME = 'utf8' AND DEFAULT_COLLATE_NAME = 'utf8_bin' AND MAXLEN = 4) "+
+					"AND EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
+					"WHERE CHARACTER_SET_NAME = 'utf8mb4' AND DEFAULT_COLLATE_NAME = 'utf8mb4_bin' AND MAXLEN = 4) "+
+					"LIMIT 1")
 		},
 	}
 }

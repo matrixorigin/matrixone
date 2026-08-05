@@ -889,9 +889,10 @@ sql_transaction_total  ¦  accountadmin
 set mo_table_stats.use_old_impl = yes;
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='information_schema';
 ➤ name[12,-1,0]  ¦  rows[-5,64,0]  ¦  size[-5,64,0]  ¦  owner[12,-1,0]  𝄀
-character_sets  ¦  0  ¦  0  ¦  accountadmin  𝄀
+character_sets  ¦  3  ¦  96  ¦  accountadmin  𝄀
 collations  ¦  0  ¦  0  ¦  accountadmin  𝄀
 column_privileges  ¦  0  ¦  0  ¦  accountadmin  𝄀
+key_column_usage  ¦  0  ¦  0  ¦  accountadmin  𝄀
 engines  ¦  0  ¦  0  ¦  accountadmin  𝄀
 events  ¦  0  ¦  0  ¦  accountadmin  𝄀
 files  ¦  0  ¦  0  ¦  accountadmin  𝄀

@@ -95,3 +95,26 @@ func TestInformationSchemaReferentialConstraintsDDL_Parses(t *testing.T) {
 		statement.Free()
 	}
 }
+
+func TestInformationSchemaCharacterSetsData(t *testing.T) {
+	for _, expected := range []string{
+		"('binary','binary','Binary pseudo charset',1)",
+		"('utf8','utf8_bin','UTF-8 Unicode',4)",
+		"('utf8mb4','utf8mb4_bin','UTF-8 Unicode',4)",
+	} {
+		assert.Contains(t, InformationSchemaCharacterSetsData, expected)
+	}
+
+	ddlIndex := -1
+	dataIndex := -1
+	for i, sql := range InitInformationSchemaSysTables {
+		switch sql {
+		case InformationSchemaCharacterSetsDDL:
+			ddlIndex = i
+		case InformationSchemaCharacterSetsData:
+			dataIndex = i
+		}
+	}
+	assert.GreaterOrEqual(t, ddlIndex, 0)
+	assert.Equal(t, ddlIndex+1, dataIndex)
+}

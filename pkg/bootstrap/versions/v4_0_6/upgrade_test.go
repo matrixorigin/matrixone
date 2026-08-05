@@ -36,7 +36,7 @@ import (
 )
 
 func TestMongoDBCatalogUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 7)
+	require.Len(t, tenantUpgEntries, 8)
 	require.Len(t, clusterUpgEntries, 1)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
@@ -45,10 +45,16 @@ func TestMongoDBCatalogUpgradeEntries(t *testing.T) {
 		require.Equal(t, versions.CREATE_NEW_TABLE, entry.UpgType)
 		require.Contains(t, strings.ToLower(entry.UpgSql), "create table mo_catalog.")
 	}
+	characterSets := tenantUpgEntries[7]
+	require.Equal(t, sysview.InformationDBConst, characterSets.Schema)
+	require.Equal(t, "CHARACTER_SETS", characterSets.TableName)
+	require.Equal(t, versions.MODIFY_METADATA, characterSets.UpgType)
+	require.Equal(t, sysview.InformationSchemaCharacterSetsData, characterSets.UpgSql)
+	require.Contains(t, strings.ToLower(characterSets.PreSql), "delete from information_schema.character_sets")
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 7)
+	require.Len(t, tenantUpgEntries, 8)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
@@ -756,6 +762,37 @@ func legacyForeignKeyMigrationUpdatesForAssertion(updates []string) []string {
 		ret = append(ret, update)
 	}
 	return ret
+}
+
+func TestPopulateInformationSchemaCharacterSetsIsIdempotent(t *testing.T) {
+	entry := populateInformationSchemaCharacterSets()
+	populated := false
+	var executed []string
+	txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		executed = append(executed, sql)
+		switch {
+		case strings.HasPrefix(sql, "SELECT 1 FROM information_schema.CHARACTER_SETS"):
+			if populated {
+				result := executor.NewMemResult(nil, nil)
+				result.NewBatchWithRowCount(1)
+				return result.GetResult(), nil
+			}
+		case sql == entry.UpgSql:
+			populated = true
+		}
+		return executor.Result{}, nil
+	}, nil)
+
+	require.NoError(t, entry.Upgrade(txn, 42))
+	require.Len(t, executed, 3)
+	require.True(t, strings.HasPrefix(executed[0], "SELECT 1 FROM information_schema.CHARACTER_SETS"))
+	require.Equal(t, entry.PreSql, executed[1])
+	require.Equal(t, entry.UpgSql, executed[2])
+
+	executed = nil
+	require.NoError(t, entry.Upgrade(txn, 42))
+	require.Len(t, executed, 1)
+	require.True(t, strings.HasPrefix(executed[0], "SELECT 1 FROM information_schema.CHARACTER_SETS"))
 }
 
 func TestRetireKafkaSinkDaemonTasks(t *testing.T) {
