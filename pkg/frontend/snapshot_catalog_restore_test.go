@@ -325,6 +325,20 @@ func TestSystemCatalogRestorePoliciesCoverPredefinedTables(t *testing.T) {
 	}
 }
 
+func TestSystemCatalogRestoreSkipsLifecycleControlPlaneMetadata(t *testing.T) {
+	for _, tableName := range []string{
+		catalog.MO_LIFECYCLE_BINDINGS,
+		catalog.MO_LIFECYCLE_DATASETS,
+		catalog.MO_LIFECYCLE_TTL_RECEIPTS,
+		catalog.MO_LIFECYCLE_RESTORE_ATTEMPTS,
+		catalog.MO_LIFECYCLE_RESTORE_CHUNKS,
+		catalog.MO_LIFECYCLE_CLEANUP_ROOTS,
+	} {
+		require.Equal(t, systemCatalogRestoreSkip, systemCatalogRestorePolicies[tableName])
+		require.True(t, needSkipTable(sysAccountID, moCatalog, tableName))
+	}
+}
+
 func TestUnregisteredSystemCatalogRestorePolicyPreservesExistingDefaults(t *testing.T) {
 	const futureCatalogTable = "mo_future_catalog_table"
 	info := &tableInfo{dbName: moCatalog, tblName: futureCatalogTable, typ: "BASE TABLE"}

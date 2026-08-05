@@ -156,6 +156,19 @@ var (
 		catalog.MO_SNAPSHOTS: systemCatalogRestoreSkip,
 		catalog.MO_PITR:      systemCatalogRestoreSkip,
 
+		// Lifecycle control-plane state is intentionally not restored by a
+		// Snapshot/PITR catalog copy. A historical Binding refers to an old
+		// physical-table identity, while a Cleanup Root can still name external
+		// Archive/TAE staging. The restored active table data remains governed by
+		// ordinary Object MVCC and GC; a Lifecycle policy must be configured again
+		// in the target environment.
+		catalog.MO_LIFECYCLE_BINDINGS:         systemCatalogRestoreSkip,
+		catalog.MO_LIFECYCLE_DATASETS:         systemCatalogRestoreSkip,
+		catalog.MO_LIFECYCLE_TTL_RECEIPTS:     systemCatalogRestoreSkip,
+		catalog.MO_LIFECYCLE_RESTORE_ATTEMPTS: systemCatalogRestoreSkip,
+		catalog.MO_LIFECYCLE_RESTORE_CHUNKS:   systemCatalogRestoreSkip,
+		catalog.MO_LIFECYCLE_CLEANUP_ROOTS:    systemCatalogRestoreSkip,
+
 		catalog.MOPartitionMetadata: systemCatalogRestoreSkip,
 		catalog.MOPartitionTables:   systemCatalogRestoreSkip,
 
