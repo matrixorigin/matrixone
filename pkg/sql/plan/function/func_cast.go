@@ -3150,6 +3150,18 @@ func numericToBitWithIgnore[T constraints.Integer | constraints.Float](
 		} else {
 			floatValue := float64(v)
 			if floatValue < 0 {
+				// BIT(64) values are commonly transported through signed integer
+				// APIs (for example, JDBC setLong). Preserve the integer's bit
+				// pattern so values with the high bit set are not rejected.
+				if bitSize == 64 {
+					switch any(v).(type) {
+					case int, int8, int16, int32, int64:
+						if err := to.Append(uint64(v), false); err != nil {
+							return err
+						}
+						continue
+					}
+				}
 				if !statementIgnore(proc) {
 					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("int%d", bitSize), "value %v", v)
 				}
