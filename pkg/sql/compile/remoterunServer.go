@@ -131,14 +131,16 @@ func CnServerMessageHandler(
 
 	finishNegotiated := false
 	if receiver.supportsFinishAck() {
-		lifecycle, err = registerPipelineStreamLifecycle(receiver.clientSession, receiver.messageId)
+		lifecycle, err = registerPipelineStreamLifecycle(
+			receiver.clientSession,
+			receiver.messageId,
+			newPipelineBatchFlow(
+				msg.GetRequestedBatchCreditCount(),
+				msg.GetRequestedBatchCreditBytes()))
 		finishNegotiated = err == nil
 		if err != nil {
 			return err
 		}
-		lifecycle.batchFlow = newPipelineBatchFlow(
-			msg.GetRequestedBatchCreditCount(),
-			msg.GetRequestedBatchCreditBytes())
 		receiver.streamLifecycle = lifecycle
 		receiver.acceptedTeardownMode = pipeline.StreamTeardownMode_FinishAck
 	}

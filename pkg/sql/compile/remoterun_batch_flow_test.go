@@ -18,8 +18,24 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPipelineBatchFlowNegotiation(t *testing.T) {
+	require.Nil(t, newPipelineBatchFlow(0, 1))
+	require.Nil(t, newPipelineBatchFlow(1, 0))
+
+	flow := newPipelineBatchFlow(pipelineBatchCreditCount+1, pipelineBatchCreditBytes+1)
+	count, bytes := flow.accepted()
+	require.Equal(t, pipelineBatchCreditCount, count)
+	require.Equal(t, pipelineBatchCreditBytes, bytes)
+
+	var nilFlow *pipelineBatchFlow
+	count, bytes = nilFlow.accepted()
+	require.Zero(t, count)
+	require.Zero(t, bytes)
+}
 
 func TestPipelineBatchFlowBoundsAndReleasesCredits(t *testing.T) {
 	flow := newPipelineBatchFlow(1, 10)
@@ -79,4 +95,71 @@ func TestPipelineBatchFlowDrainWaitHonorsCancellation(t *testing.T) {
 func TestPipelineBatchFlowRejectsAckAheadOfSentData(t *testing.T) {
 	flow := newPipelineBatchFlow(1, 1024)
 	require.Error(t, flow.acknowledge(1))
+}
+
+func TestPipelineBatchFlowWaitsForCreditAndObservesConnectionClose(t *testing.T) {
+	flow := newPipelineBatchFlow(1, 1024)
+	seq, err := flow.reserve(context.Background(), context.Background(), 10)
+	require.NoError(t, err)
+
+	connectionCtx, closeConnection := context.WithCancel(context.Background())
+	closeConnection()
+	_, err = flow.reserve(context.Background(), connectionCtx, 10)
+	require.Error(t, err)
+
+	flow.rollback(seq)
+	flow.rollback(seq)
+	flow.rollback(0)
+	require.NoError(t, flow.acknowledge(0))
+	require.NoError(t, flow.acknowledge(seq))
+}
+
+func TestHandlePipelineBatchAck(t *testing.T) {
+	t.Run("unknown lifecycle is a harmless late ack", func(t *testing.T) {
+		session := &lifecycleTestSession{ctx: context.Background()}
+		require.NoError(t, handlePipelineBatchAck(
+			&pipeline.Message{Id: 301, BatchAckSequence: 1}, session))
+		require.Zero(t, session.closeCalls)
+	})
+
+	t.Run("ack without negotiation poisons the session", func(t *testing.T) {
+		session := &lifecycleTestSession{ctx: context.Background()}
+		lifecycle, err := registerPipelineStreamLifecycle(session, 302, nil)
+		require.NoError(t, err)
+		t.Cleanup(lifecycle.remove)
+
+		err = handlePipelineBatchAck(
+			&pipeline.Message{Id: 302, BatchAckSequence: 1}, session)
+		require.Error(t, err)
+		require.Equal(t, 1, session.closeCalls)
+	})
+
+	t.Run("negotiated ack releases credit", func(t *testing.T) {
+		session := &lifecycleTestSession{ctx: context.Background()}
+		lifecycle, err := registerPipelineStreamLifecycle(
+			session, 303, newPipelineBatchFlow(1, 1024))
+		require.NoError(t, err)
+		t.Cleanup(lifecycle.remove)
+
+		seq, err := lifecycle.batchFlow.reserve(context.Background(), context.Background(), 10)
+		require.NoError(t, err)
+		require.NoError(t, handlePipelineBatchAck(
+			&pipeline.Message{Id: 303, BatchAckSequence: seq}, session))
+		require.NoError(t, lifecycle.batchFlow.waitUntilDrained(
+			context.Background(), context.Background(), nil))
+		require.Zero(t, session.closeCalls)
+	})
+
+	t.Run("ack ahead of sent data poisons the session", func(t *testing.T) {
+		session := &lifecycleTestSession{ctx: context.Background()}
+		lifecycle, err := registerPipelineStreamLifecycle(
+			session, 304, newPipelineBatchFlow(1, 1024))
+		require.NoError(t, err)
+		t.Cleanup(lifecycle.remove)
+
+		err = handlePipelineBatchAck(
+			&pipeline.Message{Id: 304, BatchAckSequence: 1}, session)
+		require.Error(t, err)
+		require.Equal(t, 1, session.closeCalls)
+	})
 }

@@ -1223,6 +1223,60 @@ func TestSendBatchToClientSessionRollsBackBatchCreditOnWriteFailure(t *testing.T
 	require.Equal(t, uint64(7), rolledBack)
 }
 
+func TestSendBatchToClientSessionReturnsBatchCreditReservationError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	wantErr := moerr.NewInternalErrorNoCtx("batch credit unavailable")
+	wcs := &process.WrapCs{
+		MsgId: 42,
+		Cs:    session,
+		ReserveBatch: func(_ context.Context, _ uint64) (uint64, error) {
+			return 0, wantErr
+		},
+	}
+
+	done, err := sendBatchToClientSession(
+		context.Background(), []byte("batch"), wcs, FailureModeStrict, "receiver")
+	require.ErrorIs(t, err, wantErr)
+	require.False(t, done)
+}
+
+func TestSendBatchToClientSessionKeepsOneCreditAcrossFragments(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	payload := make([]byte, maxMessageSizeToMoRpc+1)
+	writes := 0
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			writes++
+			msg := message.(*pipeline.Message)
+			require.Equal(t, uint64(11), msg.GetBatchSequence())
+			require.Equal(t, uint32(2), msg.GetAcceptedBatchCreditCount())
+			require.Equal(t, uint64(len(payload)), msg.GetAcceptedBatchCreditBytes())
+			return nil
+		}).Times(2)
+
+	reserveCalls := 0
+	wcs := &process.WrapCs{
+		MsgId:        42,
+		Cs:           session,
+		BatchCredits: 2,
+		ByteCredits:  uint64(len(payload)),
+		ReserveBatch: func(_ context.Context, size uint64) (uint64, error) {
+			reserveCalls++
+			require.Equal(t, uint64(len(payload)), size)
+			return 11, nil
+		},
+	}
+
+	done, err := sendBatchToClientSession(
+		context.Background(), payload, wcs, FailureModeStrict, "receiver")
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Equal(t, 1, reserveCalls)
+	require.Equal(t, 2, writes)
+}
+
 // TestSendToAllRemoteFunc_ReceiverFailure tests SendToAll scenario with receiver failure
 func TestSendToAllRemoteFunc_ReceiverFailure(t *testing.T) {
 	proc := testutil.NewProcess(t)
