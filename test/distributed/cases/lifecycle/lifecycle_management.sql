@@ -58,6 +58,11 @@ alter table events resume lifecycle;
 -- @ignore:6
 show lifecycle for table events;
 
+-- A bound base table must also reject indexes added later: Lifecycle retires
+-- only the base Object and Phase 1 deliberately does not maintain index-child
+-- Objects.
+create index idx_events_created_at on events(created_at);
+
 -- Empty result paths still exercise the public, bounded SHOW endpoints.
 show lifecycle datasets for table events limit 1;
 show lifecycle jobs limit 1;
