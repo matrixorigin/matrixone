@@ -183,6 +183,37 @@ func countReachableFullTextMatches(query *planpb.Query) int {
 	return count
 }
 
+func hasReachableSortAboveAggregate(query *planpb.Query) bool {
+	seen := make(map[int32]bool)
+	var visit func(int32) bool
+	visit = func(nodeID int32) bool {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) || seen[nodeID] {
+			return false
+		}
+		seen[nodeID] = true
+		node := query.Nodes[nodeID]
+		if node.NodeType == planpb.Node_SORT && len(node.Children) == 1 {
+			childID := node.Children[0]
+			if childID >= 0 && int(childID) < len(query.Nodes) && query.Nodes[childID].NodeType == planpb.Node_AGG {
+				return true
+			}
+		}
+		for _, childID := range node.Children {
+			if visit(childID) {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, step := range query.Steps {
+		if visit(step) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestIssue24822FullTextComposesWithNestedQueries(t *testing.T) {
 	tests := []struct {
 		name string
@@ -233,6 +264,56 @@ func TestIssue24822FullTextComposesWithNestedQueries(t *testing.T) {
 			require.NoError(t, err)
 			query := logicPlan.GetQuery()
 			require.GreaterOrEqual(t, countReachableFullTextScans(query), 1)
+			require.Zero(t, countReachableFullTextMatches(query))
+		})
+	}
+}
+
+func TestFullTextGroupedAggregateWithOrderByUsesIndex(t *testing.T) {
+	tests := []struct {
+		name               string
+		sql                string
+		sortAboveAggregate bool
+	}{
+		{
+			name: "grouped aggregate",
+			sql: `SELECT base_id, COUNT(*)
+				FROM ft
+				WHERE MATCH(title, body) AGAINST('hello')
+				GROUP BY base_id`,
+		},
+		{
+			name: "sort above grouped aggregate",
+			sql: `SELECT base_id, COUNT(*)
+				FROM ft
+				WHERE MATCH(title, body) AGAINST('hello')
+				GROUP BY base_id
+				ORDER BY base_id`,
+			sortAboveAggregate: true,
+		},
+		{
+			name: "window above grouped aggregate",
+			sql: `SELECT base_id, COUNT(*), ROW_NUMBER() OVER (ORDER BY COUNT(*))
+				FROM ft
+				WHERE MATCH(title, body) AGAINST('hello')
+				GROUP BY base_id`,
+		},
+		{
+			name: "distinct above grouped aggregate",
+			sql: `SELECT DISTINCT base_id, COUNT(*)
+				FROM ft
+				WHERE MATCH(title, body) AGAINST('hello')
+				GROUP BY base_id`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(newIssue24822Optimizer(), t, test.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.Equal(t, test.sortAboveAggregate, hasReachableSortAboveAggregate(query))
+			require.Equal(t, 1, countReachableFullTextScans(query))
 			require.Zero(t, countReachableFullTextMatches(query))
 		})
 	}
