@@ -4767,13 +4767,13 @@ create table f1 (a int ,b int, c int ,d int ,e int,
 
 	primary key(a,b),  unique key(c,d), unique key (e))
 
-The referenced columns must exactly match one PRIMARY or UNIQUE key, in the
-same order. Prefixes are not enough: with PRIMARY KEY(a, b), only (a, b) is
-valid; neither (a) nor (b) identifies the referenced constraint.
+The referenced columns must be a leading prefix of one PRIMARY or UNIQUE key,
+in the same order. With PRIMARY KEY(a, b), both (a) and (a, b) are valid, but
+(b) and (b, a) are not.
 
-When more than one exact key exists, PRIMARY is selected first; otherwise the
-lexicographically first named UNIQUE key is selected. Persisting this selected
-name makes information_schema.REFERENTIAL_CONSTRAINTS deterministic.
+When more than one key has the same prefix, PRIMARY is selected first;
+otherwise the lexicographically first named UNIQUE key is selected. Persisting
+this selected name makes information_schema.REFERENTIAL_CONSTRAINTS deterministic.
 */
 func checkFkColsAreValid(ctx CompilerContext, fkData *FkData, parentTableDef *TableDef) error {
 	// colId in parent table-> position in parent table
@@ -4817,19 +4817,19 @@ func checkFkColsAreValid(ctx CompilerContext, fkData *FkData, parentTableDef *Ta
 	})
 
 	for _, key := range keys {
-		if len(key.columns) != len(fkData.ColsReferred.Cols) {
+		if len(key.columns) < len(fkData.ColsReferred.Cols) {
 			continue
 		}
-		matchCols := make([]uint64, len(key.columns))
+		matchCols := make([]uint64, len(fkData.ColsReferred.Cols))
 		matched := true
-		for i, colName := range key.columns {
-			if colName != fkData.ColsReferred.Cols[i] {
+		for i, referredColName := range fkData.ColsReferred.Cols {
+			if key.columns[i] != referredColName {
 				matched = false
 				break
 			}
-			colID := parentTableDef.Cols[columnNamePos[colName]].ColId
+			colID := parentTableDef.Cols[columnNamePos[referredColName]].ColId
 			if parentTableDef.Cols[columnIdPos[colID]].Typ.Id != fkData.ColTyps[i].Id {
-				return moerr.NewInternalErrorf(ctx.GetContext(), "type of reference column '%v' is not match for column '%v'", colName, fkData.Cols.Cols[i])
+				return moerr.NewInternalErrorf(ctx.GetContext(), "type of reference column '%v' is not match for column '%v'", referredColName, fkData.Cols.Cols[i])
 			}
 			matchCols[i] = colID
 		}

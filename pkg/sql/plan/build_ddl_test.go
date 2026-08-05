@@ -1852,7 +1852,7 @@ func TestPartitionCreateSQLIsModeIndependentForAddPartition(t *testing.T) {
 	require.Len(t, defs, 1)
 }
 
-func TestCheckFkColsAreValidRecordsExactReferencedKey(t *testing.T) {
+func TestCheckFkColsAreValidRecordsReferencedKey(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	ctx.SetContext(context.Background())
 	intType := plan.Type{Id: int32(types.T_int32)}
@@ -1862,7 +1862,7 @@ func TestCheckFkColsAreValidRecordsExactReferencedKey(t *testing.T) {
 			{ColId: 1, Name: "id", Typ: intType},
 			{ColId: 2, Name: "code", Typ: intType},
 		},
-		Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"id", "code"}},
 		Indexes: []*plan.IndexDef{
 			{IndexName: "uq_parent_id", Unique: true, Parts: []string{"id"}},
 			{IndexName: "uq_parent_code", Unique: true, Parts: []string{"code"}},
@@ -1887,7 +1887,13 @@ func TestCheckFkColsAreValidRecordsExactReferencedKey(t *testing.T) {
 
 	composite := newFK("id", "code")
 	composite.ColTyps[1] = &intType
-	require.Error(t, checkFkColsAreValid(ctx, composite, parent), "a partial/mismatched key must not be accepted")
+	require.NoError(t, checkFkColsAreValid(ctx, composite, parent))
+	require.Equal(t, "PRIMARY", composite.Def.ReferencedIndexName)
+	require.Equal(t, []uint64{1, 2}, composite.Def.ForeignCols)
+
+	nonPrefix := newFK("code", "id")
+	nonPrefix.ColTyps[1] = &intType
+	require.Error(t, checkFkColsAreValid(ctx, nonPrefix, parent), "a non-prefix key must not be accepted")
 
 	unique := newFK("code")
 	require.NoError(t, checkFkColsAreValid(ctx, unique, parent))
