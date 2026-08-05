@@ -195,6 +195,13 @@ func TestTruncateCastBytesResultWidthBounds(t *testing.T) {
 		{name: "strict_defers_error", input: "x", target: types.New(types.T_varchar, 0, 0), strict: true, want: "x"},
 		{name: "negative_is_unbounded", input: "x", target: types.New(types.T_varchar, -1, 0), want: "x"},
 		{name: "text_is_unbounded", input: "x", target: types.T_text.ToType(), want: "x"},
+		{name: "tinytext_within_byte_limit", input: "x", target: types.New(types.T_text, types.MaxTinyTextLen, 0), want: "x"},
+		{
+			name:   "tinytext_truncates_at_utf8_boundary",
+			input:  strings.Repeat("你", 86),
+			target: types.New(types.T_text, types.MaxTinyTextLen, 0),
+			want:   strings.Repeat("你", 85),
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
