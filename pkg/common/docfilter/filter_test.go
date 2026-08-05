@@ -58,6 +58,30 @@ func TestBuildNewRoundTrip(t *testing.T) {
 	})
 }
 
+// TestBuildTenMillionRangeUsesCbitmap guards the IVF pre-filter workload from
+// #26720. A candidate set spanning a 10M-row integer-PK table must stay on the
+// bounded dense representation instead of falling back to cardinality-sized
+// CRoaring storage, which is multiplied by concurrent queries.
+func TestBuildTenMillionRangeUsesCbitmap(t *testing.T) {
+	mp := mpool.MustNewZero()
+	v := buildIntVec(t, mp, types.T_int64.ToType(), []int64{0, 5_000_000, 9_999_999}, nil)
+	defer v.Free(mp)
+
+	payload, err := Build(v)
+	require.NoError(t, err)
+	require.NotEmpty(t, payload)
+	require.Equal(t, TagCbitmap, payload[0])
+	require.LessOrEqual(t, len(payload), 2<<20)
+
+	f, err := New(payload)
+	require.NoError(t, err)
+	defer f.Free()
+	require.True(t, f.Exact())
+	for i := 0; i < v.Length(); i++ {
+		require.True(t, f.Test(v.GetRawBytesAt(i)))
+	}
+}
+
 // assertRoundTrip builds a filter from v, asserts the tag and exactness, and
 // verifies that every (present) row of v tests positive through Test,
 // TestVector, and a Shared copy.

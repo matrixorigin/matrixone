@@ -37,12 +37,13 @@ const TagCbitmap byte = 3
 // doc_id value, so its size is O(max value), not O(count) — only viable when
 // the max id is bounded. Above this the caller falls back to CRoaring.
 //
-// 2^23 bits = 1 MB, sized to stay within a typical per-core L2 cache so the
-// random per-row membership probe hits L2 rather than L3/DRAM, and to bound
-// per-query memory under concurrency (N concurrent queries * up to 1 MB).
-// Covers dense integer PKs up to ~8.4M; sparser/larger id ranges fall back to
-// the compact CRoaring bitset.
-const MaxCbitmapBits = uint64(1) << 23
+// 2^24 bits = 2 MiB. This covers the common 10M-row integer-PK vector-index
+// workload with a small, fixed upper bound per query. Keeping the previous
+// 2^23-bit cutoff made a 10M-wide candidate set fall back to CRoaring, whose
+// memory is O(cardinality) and can be much larger for dense sets. Under high
+// pre-filter concurrency that fallback multiplied into CN-wide memory spikes.
+// Sparser/larger id ranges still fall back to the compact CRoaring bitset.
+const MaxCbitmapBits = uint64(1) << 24
 
 // CbitmapFeasible reports whether a max doc_id value is small enough that a
 // dense cbitmap is worthwhile (vs the compact CRoaring filter). This is the
