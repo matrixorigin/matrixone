@@ -2,7 +2,7 @@ drop database if exists mysql_compat_model11_min2;
 create database mysql_compat_model11_min2;
 use mysql_compat_model11_min2;
 create table p (id int primary key, key p_secondary (id));
-create table p_compound (id int, code int, unique key uq_p_compound (id, code), key p_compound_secondary (id, code));
+create table p_compound (id int, code int, unique key uq_p_compound (id, code), unique key zz_p_compound (id, code), key p_compound_secondary (id, code));
 create table unrelated (id int, unique key unrelated_id (id));
 create table c (
 id int primary key,
@@ -45,4 +45,16 @@ c  ¦  parent_id  ¦  p  ¦  id  ¦  1  𝄀
 c  ¦  compound_parent_id  ¦  p_compound  ¦  id  ¦  1  𝄀
 c  ¦  parent_code  ¦  p_compound  ¦  code  ¦  2  𝄀
 c  ¦  restrict_parent_id  ¦  p  ¦  id  ¦  1
+drop index zz_p_compound on p_compound;
+drop index uq_p_compound on p_compound;
+Cannot drop index 'uq_p_compound': needed in a foreign key constraint
+alter table p_compound drop index uq_p_compound;
+Cannot drop index 'uq_p_compound': needed in a foreign key constraint
+alter table p drop primary key;
+Cannot drop index 'PRIMARY': needed in a foreign key constraint
+select constraint_name, unique_constraint_name
+from information_schema.referential_constraints
+where constraint_schema = database() and constraint_name = 'fk_c_p_compound';
+➤ constraint_name[12,-1,0]  ¦  unique_constraint_name[12,-1,0]  𝄀
+fk_c_p_compound  ¦  uq_p_compound
 drop database mysql_compat_model11_min2;

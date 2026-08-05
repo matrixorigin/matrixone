@@ -174,6 +174,68 @@ func TestLegacyForeignKeyReferencedIndexNameSelectsExactPrimaryKey(t *testing.T)
 	require.Contains(t, queries[0], "ORDER BY CASE WHEN idx.type = 'PRIMARY' THEN 0 ELSE 1 END")
 }
 
+func TestLegacyForeignKeyReferencedIndexNameUsesOrderedLeadingPrefix(t *testing.T) {
+	tests := []struct {
+		name        string
+		indexRows   [][]string
+		foreignCols []string
+		want        string
+	}{
+		{
+			name: "composite primary prefix",
+			indexRows: [][]string{
+				{"PRIMARY", "PRIMARY", "1", "id"},
+				{"PRIMARY", "PRIMARY", "2", "code"},
+			},
+			foreignCols: []string{"id"},
+			want:        "PRIMARY",
+		},
+		{
+			name: "primary wins over exact unique",
+			indexRows: [][]string{
+				{"PRIMARY", "PRIMARY", "1", "id"},
+				{"PRIMARY", "PRIMARY", "2", "code"},
+				{"uq_id", "UNIQUE", "1", "id"},
+			},
+			foreignCols: []string{"id"},
+			want:        "PRIMARY",
+		},
+		{
+			name: "non prefix is rejected",
+			indexRows: [][]string{
+				{"uq_code_id", "UNIQUE", "1", "code"},
+				{"uq_code_id", "UNIQUE", "2", "id"},
+			},
+			foreignCols: []string{"id"},
+			want:        "",
+		},
+		{
+			name: "unique tie is lexical",
+			indexRows: [][]string{
+				{"uq_z", "UNIQUE", "1", "id"},
+				{"uq_a", "UNIQUE", "1", "id"},
+			},
+			foreignCols: []string{"id"},
+			want:        "uq_a",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			txnExecutor := newVersionTxnExecutor(t, func(string) (executor.Result, error) {
+				return newLegacyForeignKeyIndexResult(t, test.indexRows), nil
+			})
+			name, err := getLegacyForeignKeyReferencedIndexName(9, txnExecutor, legacyForeignKeyReferencedKey{
+				database: "db",
+				table:    "parent",
+				columns:  test.foreignCols,
+			})
+			require.NoError(t, err)
+			require.Equal(t, test.want, name)
+		})
+	}
+}
+
 func TestVersionHandleMetadata(t *testing.T) {
 	meta := Handler.Metadata()
 	require.Equal(t, "4.0.6", meta.Version)

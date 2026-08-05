@@ -65,6 +65,57 @@ func TestGetSqlForFkReferredToEscapesStringLiterals(t *testing.T) {
 	require.Contains(t, sql, "table_name != 'quote\\'src'")
 }
 
+func TestForeignKeyCatalogLayoutIsExtendedOnlyAfterAllColumnsExist(t *testing.T) {
+	ctx := NewEmptyCompilerContext()
+	ctx.tables[catalog.MOForeignKeys] = &TableDef{
+		Name: catalog.MOForeignKeys,
+		Cols: []*ColDef{{Name: "referenced_index_name"}, {Name: "on_delete_origin"}},
+	}
+	layout, err := resolveForeignKeyCatalogLayout(ctx)
+	require.NoError(t, err)
+	require.Equal(t, foreignKeyCatalogLegacy, layout)
+
+	ctx.tables[catalog.MOForeignKeys].Cols = append(ctx.tables[catalog.MOForeignKeys].Cols,
+		&ColDef{Name: "on_update_origin"})
+	layout, err = resolveForeignKeyCatalogLayout(ctx)
+	require.NoError(t, err)
+	require.Equal(t, foreignKeyCatalogExtended, layout)
+}
+
+func TestLegacyForeignKeyCatalogSQLAvoidsNewColumns(t *testing.T) {
+	readSQL := getSqlForFkReferredToWithCatalogLayout("parent_db", "parent", foreignKeyCatalogLegacy)
+	require.NotContains(t, readSQL, "referenced_index_name")
+	require.NotContains(t, readSQL, "on_delete_origin")
+	require.Contains(t, readSQL, "on_update from `mo_catalog`.`mo_foreign_keys`")
+
+	fkData := &FkData{
+		Def: &plan.ForeignKeyDef{
+			Name:           "fk_child_parent",
+			OnDelete:       plan.ForeignKeyDef_RESTRICT,
+			OnUpdate:       plan.ForeignKeyDef_RESTRICT,
+			OnDeleteOrigin: plan.ForeignKeyDef_ACTION_ORIGIN_EXPLICIT,
+			OnUpdateOrigin: plan.ForeignKeyDef_ACTION_ORIGIN_EXPLICIT,
+		},
+		Cols:            &plan.FkColName{Cols: []string{"parent_id"}},
+		ColsReferred:    &plan.FkColName{Cols: []string{"id"}},
+		ParentDbName:    "parent_db",
+		ParentTableName: "parent",
+	}
+	insertSQL := getSqlForAddFkWithCatalogLayout("child_db", "child", fkData, foreignKeyCatalogLegacy)
+	require.NotContains(t, insertSQL, "referenced_index_name")
+	require.NotContains(t, insertSQL, "on_delete_origin")
+	require.Contains(t, insertSQL, "on_delete, on_update) values")
+}
+
+func TestLegacyForeignKeyActionOriginIsConservative(t *testing.T) {
+	require.Equal(t, plan.ForeignKeyDef_ACTION_ORIGIN_LEGACY_AMBIGUOUS.String(),
+		legacyForeignKeyActionOrigin("RESTRICT"))
+	require.Equal(t, plan.ForeignKeyDef_ACTION_ORIGIN_LEGACY_AMBIGUOUS.String(),
+		legacyForeignKeyActionOrigin("NO ACTION"))
+	require.Equal(t, plan.ForeignKeyDef_ACTION_ORIGIN_EXPLICIT.String(),
+		legacyForeignKeyActionOrigin("CASCADE"))
+}
+
 func TestGetSqlForAddFkEscapesStringLiterals(t *testing.T) {
 	fkData := &FkData{
 		Def: &plan.ForeignKeyDef{

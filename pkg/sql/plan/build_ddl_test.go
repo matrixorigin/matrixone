@@ -37,7 +37,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type rootSQLCompilerContext struct {
@@ -2420,9 +2422,159 @@ func TestCheckFkColsAreValidRecordsReferencedKey(t *testing.T) {
 	require.Equal(t, "uq_parent_code", unique.Def.ReferencedIndexName)
 }
 
+func TestDropSelectedForeignKeyIndexIsRejected(t *testing.T) {
+	for _, referencedIndexName := range []string{"idx1", ""} {
+		mode := "persisted name"
+		if referencedIndexName == "" {
+			mode = "legacy inferred name"
+		}
+		t.Run(mode, func(t *testing.T) {
+			for _, sql := range []string{
+				"drop index idx1 on test_idx",
+				"alter table test_idx drop index idx1",
+			} {
+				t.Run(sql, func(t *testing.T) {
+					mock := NewMockOptimizer(true)
+					parent := mock.ctxt.tables["test_idx"]
+					parent.TblId = 100
+					parent.Pkey = nil
+					parent.RefChildTbls = []uint64{200}
+					parent.Indexes = []*plan.IndexDef{
+						{IndexName: "idx1", Unique: true, Parts: []string{"n_nationkey"}},
+						{IndexName: "idx_alternative", Unique: true, Parts: []string{"n_nationkey"}},
+						{IndexName: "idx_unrelated", Unique: true, Parts: []string{"n_name"}},
+					}
+					child := &TableDef{
+						Name:  "fk_child",
+						TblId: 200,
+						Fkeys: []*plan.ForeignKeyDef{{
+							Name:                "fk_child_parent",
+							ForeignTbl:          parent.TblId,
+							ForeignCols:         []uint64{parent.Cols[0].ColId},
+							ReferencedIndexName: referencedIndexName,
+						}},
+					}
+					mock.ctxt.tables[child.Name] = child
+					mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+					mock.ctxt.id2name[child.TblId] = child.Name
+
+					_, err := runOneStmt(mock, t, sql)
+					require.Error(t, err)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+
+					plan, err := runOneStmt(mock, t, "drop index idx_unrelated on test_idx")
+					require.NoError(t, err)
+					require.Equal(t, "idx_unrelated", plan.GetDdl().GetDropIndex().GetIndexName())
+
+					_, err = runOneStmt(mock, t, "drop index idx_alternative on test_idx")
+					if referencedIndexName == "" {
+						require.Error(t, err, "legacy metadata must not guess which compatible key was bound")
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+					} else {
+						require.NoError(t, err, "a persisted binding makes an alternative key independently droppable")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestAlterCanDropSelfForeignKeyAndItsSelectedIndexTogether(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tableDef := mock.ctxt.tables["test_idx"]
+	tableDef.TblId = 100
+	tableDef.Pkey = nil
+	tableDef.RefChildTbls = []uint64{0}
+	tableDef.Indexes = []*plan.IndexDef{{
+		IndexName: "idx1", Unique: true, Parts: []string{"n_nationkey"},
+	}}
+	tableDef.Fkeys = []*plan.ForeignKeyDef{{
+		Name:                "fk_self",
+		ForeignTbl:          0,
+		ForeignCols:         []uint64{tableDef.Cols[0].ColId},
+		ReferencedIndexName: "idx1",
+	}}
+
+	logicPlan, err := runOneStmt(mock, t,
+		"alter table test_idx drop foreign key fk_self, drop index idx1")
+	require.NoError(t, err)
+	require.Len(t, logicPlan.GetDdl().GetAlterTable().GetActions(), 2)
+}
+
+func TestDropReferencedPrimaryKeyIsRejected(t *testing.T) {
+	for _, referencedIndexName := range []string{"PRIMARY", ""} {
+		mock := NewMockOptimizer(true)
+		parent := mock.ctxt.tables["test_idx"]
+		parent.TblId = 100
+		parent.RefChildTbls = []uint64{200}
+		child := &TableDef{
+			Name:  "fk_child_primary",
+			TblId: 200,
+			Fkeys: []*plan.ForeignKeyDef{{
+				Name:                "fk_child_primary",
+				ForeignTbl:          parent.TblId,
+				ForeignCols:         []uint64{parent.Cols[0].ColId},
+				ReferencedIndexName: referencedIndexName,
+			}},
+		}
+		mock.ctxt.tables[child.Name] = child
+		mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+		mock.ctxt.id2name[child.TblId] = child.Name
+
+		_, err := runOneStmt(mock, t, "alter table test_idx drop primary key")
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+	}
+}
+
+func TestCreateForeignKeyUsesLegacyCatalogBeforeTenantUpgrade(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	legacyColumnNames := []string{
+		"constraint_name", "constraint_id", "db_name", "db_id", "table_name", "table_id",
+		"column_name", "column_id", "refer_db_name", "refer_db_id", "refer_table_name",
+		"refer_table_id", "refer_column_name", "refer_column_id", "on_delete", "on_update",
+	}
+	legacyCatalog := &TableDef{Name: catalog.MOForeignKeys}
+	for _, name := range legacyColumnNames {
+		legacyCatalog.Cols = append(legacyCatalog.Cols, &ColDef{Name: name})
+	}
+	mock.ctxt.tables[catalog.MOForeignKeys] = legacyCatalog
+
+	proc := testutil.NewProcess(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+	var internalQueries []string
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			internalQueries = append(internalQueries, sql)
+			return executor.Result{}, nil
+		}),
+	)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"create table fk_before_upgrade (parent_id int, constraint fk_before_upgrade_parent foreign key (parent_id) references nation(n_nationkey))")
+	require.NoError(t, err)
+	createTable := logicPlan.GetDdl().GetCreateTable()
+	require.Len(t, createTable.UpdateFkSqls, 1)
+	require.NotContains(t, createTable.UpdateFkSqls[0], "referenced_index_name")
+	require.NotContains(t, createTable.UpdateFkSqls[0], "on_delete_origin")
+	require.Len(t, internalQueries, 1)
+	require.NotContains(t, internalQueries[0], "referenced_index_name")
+	require.NotContains(t, internalQueries[0], "on_delete_origin")
+}
+
 func TestForwardForeignKeyCatalogLifecycle(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	ctx.SetContext(context.Background())
+	ctx.tables[catalog.MOForeignKeys] = &TableDef{
+		Name: catalog.MOForeignKeys,
+		Cols: []*ColDef{
+			{Name: "referenced_index_name"},
+			{Name: "on_delete_origin"},
+			{Name: "on_update_origin"},
+		},
+	}
 	ctx.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
 		if name == "foreign_key_checks" {
 			return int64(0), nil

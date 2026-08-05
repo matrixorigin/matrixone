@@ -342,16 +342,23 @@ func getLegacyForeignKeyReferencedIndexName(tenantID int32, txn executor.TxnExec
 		return ordered[i].name < ordered[j].name
 	})
 	for _, candidate := range ordered {
-		if len(candidate.columns) != len(key.columns) {
+		if len(candidate.columns) < len(key.columns) {
 			continue
 		}
-		if strings.Join(candidate.columns, "\x00") == strings.Join(key.columns, "\x00") {
+		matched := true
+		for i, column := range key.columns {
+			if candidate.columns[i] != column {
+				matched = false
+				break
+			}
+		}
+		if matched {
 			return candidate.name, nil
 		}
 	}
-	// Legacy MatrixOne accepted some FK shapes that do not name an exact
-	// PRIMARY/UNIQUE key. Leave the value empty rather than inventing a wrong
-	// UNIQUE_CONSTRAINT_NAME; new FK creation rejects those shapes.
+	// Legacy MatrixOne accepted some FK shapes that do not name an ordered
+	// leading prefix of a PRIMARY/UNIQUE key. Leave the value empty rather than
+	// inventing a wrong UNIQUE_CONSTRAINT_NAME; new FK creation rejects them.
 	return "", nil
 }
 
