@@ -62,13 +62,13 @@ func (lp *localLockTableProxy) lock(
 	rows [][]byte,
 	options LockOptions,
 	cb func(pb.Result, error)) {
-	if options.Mode != pb.LockMode_Shared {
+	// The proxy cache represents exactly one Shared row. Range and multi-row
+	// requests must retain the remote lock table's full merge and replacement
+	// semantics; routing them through the singleton cache would either panic or
+	// lose transaction-bookkeeping replacement.
+	if options.Mode != pb.LockMode_Shared || len(rows) != 1 {
 		lp.remote.lock(ctx, txn, rows, options, cb)
 		return
-	}
-
-	if len(rows) != 1 {
-		panic("local lock table proxy can only support on single row")
 	}
 
 	lp.mu.Lock()
@@ -95,6 +95,16 @@ func (lp *localLockTableProxy) lock(
 			bind: lp.getBind(),
 		}
 		lp.mu.holders[key] = v
+	}
+	// Mirror localLockTable's re-entrant Shared behavior: once this transaction
+	// is a granted local proxy holder, the key is already present in both proxy
+	// and transaction bookkeeping. Appending it again only consumes fixed-slice
+	// capacity and can manufacture a false lock-upgrade threshold.
+	if lp.hasRemoteHolderLocked(key) && v.contains(txn) {
+		r := v.result
+		lp.mu.Unlock()
+		cb(r, nil)
+		return
 	}
 
 	first := v.isEmpty()
@@ -382,6 +392,15 @@ func (s *sharedOps) done(
 
 func (s *sharedOps) isEmpty() bool {
 	return len(s.txns) == 0
+}
+
+func (s *sharedOps) contains(txn *activeTxn) bool {
+	for _, holder := range s.txns {
+		if holder == txn {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *sharedOps) lastExcept(txn *activeTxn) ([]byte, bool) {

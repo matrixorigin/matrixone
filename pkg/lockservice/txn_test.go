@@ -175,8 +175,8 @@ func TestCoarsenLockRequestUsesTransactionTableState(t *testing.T) {
 		sharedRows := [][]byte{[]byte("a"), []byte("z")}
 		gotRows, gotOpts, replace = txn.coarsenLockRequest(
 			bind.Group, bind.Table, sharedRows, shared, 3)
-		require.True(t, replace)
-		require.Equal(t, pb.Granularity_Range, gotOpts.Granularity)
+		require.False(t, replace)
+		require.Equal(t, pb.Granularity_Row, gotOpts.Granularity)
 		require.Equal(t, sharedRows, gotRows)
 
 		sharded := exclusive
@@ -374,6 +374,74 @@ func TestFetchWhoWaitingMeSkipsInactiveWaiters(t *testing.T) {
 		assert.NoError(t, err)
 		assert.True(t, ok)
 		assert.Equal(t, [][]byte{[]byte("blocking")}, waitingTxnIDs)
+	})
+}
+
+func TestFetchWhoWaitingMeKeepsLogicalMergeDependency(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		logger := getLogger("")
+		bind := pb.LockTable{Group: 0, Table: 1, ServiceID: "owner"}
+		key := []byte("key")
+		holderA := []byte("holder-a")
+		holderB := []byte("holder-b")
+
+		txnB := newActiveTxn(holderB, string(holderB), newFixedSlicePool(2), "")
+		defer reuse.Free(txnB, nil)
+		require.NoError(t, txnB.lockAdded(0, bind, [][]byte{key}, logger))
+
+		lt := newLocalLockTable(
+			bind,
+			nil,
+			nil,
+			runtime.DefaultRuntime().Clock(),
+			nil,
+			logger,
+		).(*localLockTable)
+		holders := newHolders()
+		holders.add(pb.WaitTxn{TxnID: holderA, CreatedOn: "origin"})
+		holders.add(pb.WaitTxn{TxnID: holderB, CreatedOn: "origin"})
+		q := newWaiterQueue()
+		q.init(logger)
+		mergeWaiter := acquireWaiter(
+			pb.WaitTxn{TxnID: holderA, CreatedOn: "origin"},
+			"test logical merge dependency",
+			logger,
+		)
+		mergeWaiter.setStatus(blocking)
+		mergeWaiter.notifyOnSharedHolderChange = true
+		mergeWaiter.waitFor = append(mergeWaiter.waitFor, holderB)
+		q.put(mergeWaiter)
+		defer func() {
+			removed, _ := q.remove(mergeWaiter)
+			require.True(t, removed)
+			mergeWaiter.close("test logical merge dependency", logger)
+		}()
+		lt.mu.store.Add(key, Lock{
+			value:    flagLockRow | flagLockSharedMode,
+			createAt: time.Now(),
+			holders:  holders,
+			waiters:  q,
+		})
+
+		var waitingTxnIDs [][]byte
+		ok, err := txnB.fetchWhoWaitingMe(
+			context.Background(),
+			"origin",
+			holderB,
+			func(waitTxn pb.WaitTxn, waiterAddress string) bool {
+				waitingTxnIDs = append(waitingTxnIDs, waitTxn.TxnID)
+				assert.Equal(t, bind.ServiceID, waiterAddress)
+				return true
+			},
+			func(_ context.Context, group uint32, table uint64) (lockTable, error) {
+				assert.Equal(t, bind.Group, group)
+				assert.Equal(t, bind.Table, table)
+				return lt, nil
+			},
+		)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, [][]byte{holderA}, waitingTxnIDs)
 	})
 }
 

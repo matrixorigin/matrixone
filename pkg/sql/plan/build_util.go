@@ -47,8 +47,9 @@ import (
 // before their first row lock is acquired. An exclusive owner can safely
 // coarsen its own rows later, but a shared row may already have other holders;
 // converting that ownership in the middle of a transaction is not always
-// possible atomically. The lock service still enforces the actual cumulative
-// budget for estimates that are low or for transactions with many statements.
+// possible without changing Shared compatibility. Estimates that are low and
+// transactions with many statements retain exact Shared rows up to the fixed
+// bookkeeping-pool ceiling rather than changing lock semantics at this budget.
 func applySharedLockTableFallback(builder *QueryBuilder) {
 	proc := builder.compCtx.GetProcess()
 	if proc == nil || proc.Base.LockService == nil {

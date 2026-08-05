@@ -71,10 +71,11 @@ type Config struct {
 	// execution path forgets to propagate a session or task deadline. Callers
 	// that retry across Lock calls still need to own and propagate a deadline.
 	MaxLockWaitDuration toml.Duration `toml:"max-lock-wait-duration"`
-	// MaxLockRowCount bounds the lock keys retained for one transaction and physical lock table.
-	// Non-sharded exclusive and shared keys are conservatively coarsened to their observed range;
-	// shared conversion waits for compatible ownership to become mergeable, then commits atomically.
-	// The planner upgrades cardinality-known shared targets before acquisition. Row-sharded locks
+	// MaxLockRowCount bounds non-sharded exclusive lock keys retained for one transaction and
+	// physical lock table by conservatively coarsening them to their observed range. Shared
+	// locks are not coarsened after acquisition because an overlapping range cannot preserve
+	// independent compatible ownership in the current lock-store representation; the planner
+	// upgrades cardinality-known shared targets before acquisition instead. Row-sharded locks
 	// retain their existing behavior because a range may span multiple physical lock tables.
 	MaxLockRowCount toml.ByteSize `toml:"max-row-lock-count"`
 	// KeepBindTimeout when a locktable is assigned to a lockservice, the lockservice will
@@ -103,13 +104,14 @@ func (c *Config) Validate() {
 	if c.MaxFixedSliceSize == 0 {
 		c.MaxFixedSliceSize = toml.ByteSize(defaultMaxFixedSliceSize)
 	}
-	if c.MaxFixedSliceSize < 4 {
+	effectiveFixedSliceSize := toml.ByteSize(roundUp(int(c.MaxFixedSliceSize)))
+	if effectiveFixedSliceSize < 4 {
 		panic("MaxFixedSliceSize must hold the minimum lock bookkeeping slice")
 	}
 	// A coarsened remote RPC can complete at the owner while its response is
 	// lost. The origin retains both its old rows and the two replacement range
 	// endpoints until unlock, so it must reserve that bounded cleanup union.
-	if c.MaxLockRowCount > c.MaxFixedSliceSize-2 {
+	if c.MaxLockRowCount > effectiveFixedSliceSize-2 {
 		panic("MaxFixedSliceSize must reserve two range endpoints beyond MaxLockRowCount")
 	}
 	if c.KeepBindDuration.Duration == 0 {

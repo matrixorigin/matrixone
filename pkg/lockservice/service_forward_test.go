@@ -102,18 +102,28 @@ func TestForwardLockBudgetAcrossRequests(t *testing.T) {
 					txn := owner.activeTxnHolder.getActiveTxn(txnID, false, "")
 					require.NotNil(t, txn)
 					txn.RLock()
-					require.Equal(t, 2, txn.lockHolders[0].tableKeys[tableID].mustGet().len())
+					lockCount := txn.lockHolders[0].tableKeys[tableID].mustGet().len()
 					txn.RUnlock()
+					expectedLockCount := 2
+					if tt.mode == pb.LockMode_Shared {
+						expectedLockCount = 4
+					}
+					require.Equal(t, expectedLockCount, lockCount)
 
 					lt := owner.tableGroups.get(0, tableID).(*localLockTable)
 					lt.mu.RLock()
-					start, ok := lt.mu.store.Get([]byte{1})
-					require.True(t, ok)
-					require.True(t, start.isLockRangeStart())
-					end, ok := lt.mu.store.Get([]byte{5})
-					require.True(t, ok)
-					require.True(t, end.isLockRangeEnd())
+					start, hasStart := lt.mu.store.Get([]byte{1})
+					end, hasEnd := lt.mu.store.Get([]byte{5})
 					lt.mu.RUnlock()
+					require.True(t, hasStart)
+					require.True(t, hasEnd)
+					if tt.mode == pb.LockMode_Exclusive {
+						require.True(t, start.isLockRangeStart())
+						require.True(t, end.isLockRangeEnd())
+					} else {
+						require.True(t, start.isLockRow())
+						require.True(t, end.isLockRow())
+					}
 					require.NoError(t, owner.Unlock(ctx, txnID, timestamp.Timestamp{}))
 				},
 				func(c *Config) {

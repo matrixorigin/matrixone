@@ -178,6 +178,18 @@ func (w *waiter) isBlocking() bool {
 	return w.isRemoteSnapshot || w.getStatus() == blocking
 }
 
+// waitsFor reports whether txnID is a real logical dependency of this waiter.
+// A Shared range-merge waiter can be physically queued on a lock that it already
+// holds, so queue membership alone is insufficient for deadlock traversal.
+func (w *waiter) waitsFor(txnID []byte) bool {
+	for _, holder := range w.waitFor {
+		if bytes.Equal(holder, txnID) {
+			return true
+		}
+	}
+	return false
+}
+
 func (w *waiter) setStatus(
 	status waiterStatus,
 ) {

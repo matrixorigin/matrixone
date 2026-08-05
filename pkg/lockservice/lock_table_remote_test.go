@@ -240,7 +240,7 @@ func TestRemoteCoarsenedLockTransportFailureRetainsCleanupUnion(t *testing.T) {
 			LockOptions{
 				LockOptions: pb.LockOptions{
 					Granularity: pb.Granularity_Range,
-					Mode:        pb.LockMode_Shared,
+					Mode:        pb.LockMode_Exclusive,
 					Policy:      pb.WaitPolicy_Wait,
 				},
 				replaceTxnLocks: true,

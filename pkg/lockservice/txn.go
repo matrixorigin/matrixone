@@ -164,12 +164,13 @@ func (txn *activeTxn) lockAdded(
 // maximum replaces them. The range can cover gaps, but never keys outside the
 // observed bounds as a table lock would.
 //
-// Exclusive requests can always be coarsened because replacing locks with an
-// exclusive range cannot weaken a lock already held by this transaction.
-// Shared requests use the same least-coarse observed range; the local lock
-// table waits for compatible holders to leave, then commits the conversion
-// atomically. Row-sharded requests cannot be represented by a range because
-// its endpoints may belong to different physical lock tables.
+// Exclusive requests can be coarsened because replacing locks with an exclusive
+// range cannot weaken this transaction's ownership. Shared requests deliberately
+// stay exact: the non-overlapping range representation cannot replace one
+// transaction's rows across foreign Shared holders without either waiting on a
+// compatible lock or broadening another transaction's ownership. Row-sharded
+// requests cannot be represented by one range because its endpoints may belong
+// to different physical lock tables.
 func (txn *activeTxn) coarsenLockRequest(
 	group uint32,
 	table uint64,
@@ -179,7 +180,7 @@ func (txn *activeTxn) coarsenLockRequest(
 ) ([][]byte, pb.LockOptions, bool) {
 	if len(rows) == 0 ||
 		maxLockRowCount <= 0 ||
-		(opts.Mode != pb.LockMode_Exclusive && opts.Mode != pb.LockMode_Shared) ||
+		opts.Mode != pb.LockMode_Exclusive ||
 		opts.Sharding != pb.Sharding_None {
 		return rows, opts, false
 	}
@@ -705,7 +706,8 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 						// already held by its own transaction. Its explicit waitFor
 						// list contains only the other Shared holders; following the
 						// physical queue entry here would manufacture a self cycle.
-						if w.notifyOnSharedHolderChange {
+						if w.notifyOnSharedHolderChange &&
+							!w.waitsFor(txnID) {
 							return true
 						}
 						// Completed or already-notified waiters can remain in the
