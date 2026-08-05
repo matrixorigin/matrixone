@@ -16,8 +16,10 @@ package hashbuild
 
 import (
 	"math"
+	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -51,7 +53,7 @@ func (t *testRuntimeFilterConsumerThrottler) Release(size int64) int64 {
 func installRuntimeFilterConsumerThrottler(
 	t *testing.T,
 	proc *process.Process,
-	throttler *testRuntimeFilterConsumerThrottler,
+	throttler rscthrottler.RSCThrottler,
 ) {
 	t.Helper()
 	rt := moruntime.ServiceRuntime(proc.GetService())
@@ -64,6 +66,37 @@ func installRuntimeFilterConsumerThrottler(
 		}
 		rt.CompareAndDeleteGlobalVariables(moruntime.CNMemoryThrottler, throttler)
 	})
+}
+
+type boundedRuntimeFilterConsumerThrottler struct {
+	mu   sync.Mutex
+	cap  int64
+	used int64
+	peak int64
+}
+
+func (t *boundedRuntimeFilterConsumerThrottler) Refresh()    {}
+func (t *boundedRuntimeFilterConsumerThrottler) PrintUsage() {}
+func (t *boundedRuntimeFilterConsumerThrottler) Available() int64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.cap - t.used
+}
+func (t *boundedRuntimeFilterConsumerThrottler) Acquire(size int64) (int64, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if size < 0 || size > t.cap-t.used {
+		return t.cap - t.used, false
+	}
+	t.used += size
+	t.peak = max(t.peak, t.used)
+	return t.cap - t.used, true
+}
+func (t *boundedRuntimeFilterConsumerThrottler) Release(size int64) int64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.used -= size
+	return t.cap - t.used
 }
 
 func TestRuntimeFilterConsumerMemoryBound(t *testing.T) {
@@ -137,4 +170,44 @@ func TestMembershipRuntimeFilterConsumerMemoryAdmission(t *testing.T) {
 			require.Zero(t, tc.proc.Mp().CurrNB())
 		})
 	}
+}
+
+// TestMembershipRuntimeFilterHundredConcurrentTenMillionKeys models the
+// production shape from #26720 without allocating 100 physical 10M vectors.
+// Every successful reservation remains live while all 100 queries attempt
+// admission, exactly matching the concurrent filter-build pressure. The
+// bounded CN admits only the requests it can cover; handleRuntimeFilter's
+// rejection test above proves the remaining requests publish PASS.
+func TestMembershipRuntimeFilterHundredConcurrentTenMillionKeys(t *testing.T) {
+	const (
+		queries       = 100
+		cardinality   = 10_000_000
+		payloadBytes  = 80 << 20 // serialized 10M int64 keys
+		cnConsumerCap = int64(2 << 30)
+	)
+
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	throttler := &boundedRuntimeFilterConsumerThrottler{cap: cnConsumerCap}
+	installRuntimeFilterConsumerThrottler(t, proc, throttler)
+
+	requested, ok := runtimeFilterConsumerMemoryBound(payloadBytes, cardinality)
+	require.True(t, ok)
+	var releases []func()
+	for range queries {
+		release, gotRequested, granted := reserveRuntimeFilterConsumerMemory(
+			proc, payloadBytes, cardinality)
+		require.Equal(t, requested, gotRequested)
+		if granted {
+			releases = append(releases, release)
+		}
+	}
+
+	require.Equal(t, int(cnConsumerCap/requested), len(releases))
+	require.Less(t, len(releases), queries)
+	require.LessOrEqual(t, throttler.peak, cnConsumerCap)
+	for _, release := range releases {
+		release()
+	}
+	require.Zero(t, throttler.used)
 }
