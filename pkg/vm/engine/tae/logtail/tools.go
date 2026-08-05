@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"go.uber.org/zap/zapcore"
 )
 
@@ -176,19 +177,27 @@ func TombstoneChangeToLogtailBatch(src *containers.BatchWithVersion) *containers
 }
 
 func filterAbortedLogtailRows(src *containers.BatchWithVersion) {
-	abortPos := -1
+	abortPos, commitTSPos := -1, -1
 	for i, seqnum := range src.Seqnums {
-		if seqnum == objectio.SEQNUM_ABORT {
+		switch seqnum {
+		case objectio.SEQNUM_ABORT:
 			abortPos = i
-			break
+		case objectio.SEQNUM_COMMITTS:
+			commitTSPos = i
 		}
 	}
+	var aborts []bool
 	if abortPos != -1 && !src.Vecs[abortPos].IsConstNull() {
-		aborts := vector.MustFixedColWithTypeCheck[bool](src.Vecs[abortPos].GetDownstreamVector())
-		for row, aborted := range aborts {
-			if aborted {
-				src.Delete(row)
-			}
+		aborts = vector.MustFixedColWithTypeCheck[bool](src.Vecs[abortPos].GetDownstreamVector())
+	}
+	var commitTSs []types.TS
+	if commitTSPos != -1 && !src.Vecs[commitTSPos].IsConstNull() {
+		commitTSs = vector.MustFixedColWithTypeCheck[types.TS](src.Vecs[commitTSPos].GetDownstreamVector())
+	}
+	for row := 0; row < src.Length(); row++ {
+		if (row < len(aborts) && aborts[row]) ||
+			(row < len(commitTSs) && commitTSs[row].Equal(&txnif.UncommitTS)) {
+			src.Delete(row)
 		}
 	}
 	if src.HasDelete() {

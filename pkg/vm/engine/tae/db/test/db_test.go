@@ -4062,6 +4062,8 @@ func TestV9FlushPreservesRowIDAcrossAbortHole(t *testing.T) {
 	defer func() {
 		if hadVersion {
 			serviceRuntime.SetGlobalVariables(runtime.MOProtocolVersion, originalVersion)
+		} else {
+			serviceRuntime.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion9)
 		}
 	}()
 
@@ -4140,6 +4142,76 @@ func TestV9FlushPreservesRowIDAcrossAbortHole(t *testing.T) {
 	require.Equal(t, rows.Vecs[sortKeyIdx].Get(0), view.Vecs[0].Get(0))
 	require.Equal(t, rows.Vecs[sortKeyIdx].Get(3), view.Vecs[0].Get(1))
 	require.NoError(t, snapshotTxn.Commit(ctx))
+}
+
+func TestV9PersistedTombstoneContainsSkipsRollback(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	serviceRuntime := runtime.ServiceRuntime("")
+	originalVersion, hadVersion := serviceRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+	serviceRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion9)
+	defer func() {
+		if hadVersion {
+			serviceRuntime.SetGlobalVariables(runtime.MOProtocolVersion, originalVersion)
+		} else {
+			serviceRuntime.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion9)
+		}
+	}()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 10
+	tae.BindSchema(schema)
+	rows := catalog.MockBatch(schema, 2)
+	defer rows.Close()
+	tae.CreateRelAndAppend(rows, true)
+
+	abortTxn, abortRel := tae.GetRelation()
+	key := rows.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	id, offset, err := abortRel.GetByFilter(ctx, handle.NewEQFilter(key))
+	require.NoError(t, err)
+	target := objectio.NewRowid(&id.BlockID, offset)
+	require.NoError(t, abortRel.RangeDelete(id, offset, offset, handle.DT_Normal))
+	require.NoError(t, abortTxn.PrePrepare(ctx))
+	require.NoError(t, abortTxn.PreApplyCommit())
+	require.NoError(t, abortTxn.Rollback(ctx))
+
+	deleteTxn, deleteRel := tae.GetRelation()
+	committedKey := rows.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	committedID, committedOffset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(committedKey))
+	require.NoError(t, err)
+	require.NoError(t, deleteRel.RangeDelete(committedID, committedOffset, committedOffset, handle.DT_Normal))
+	require.NoError(t, deleteTxn.Commit(ctx))
+
+	flushTxn, flushRel := tae.GetRelation()
+	tombstones := testutil.GetAllAppendableMetas(flushRel, true)
+	require.NotEmpty(t, tombstones)
+	task, err := jobs.NewFlushTableTailTask(nil, flushTxn, nil, tombstones, tae.Runtime)
+	require.NoError(t, err)
+	require.NoError(t, task.OnExec(ctx))
+	require.NoError(t, flushTxn.Commit(ctx))
+
+	readTxn, readRel := tae.GetRelation()
+	var persisted *catalog.ObjectEntry
+	it := readRel.MakeObjectIt(true)
+	for it.Next() {
+		candidate := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+		if !candidate.IsAppendable() && !candidate.HasDropCommitted() {
+			persisted = candidate
+			break
+		}
+	}
+	it.Close()
+	require.NotNil(t, persisted)
+
+	rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+	defer rowIDs.Close()
+	rowIDs.Append(target, false)
+	require.NoError(t, persisted.GetObjectData().Contains(ctx, readTxn, rowIDs, nil, common.DebugAllocator))
+	require.False(t, rowIDs.IsNull(0), "a rolled-back v9 tombstone must not hide its data row")
+	require.NoError(t, readTxn.Commit(ctx))
 }
 
 func TestIncrementalDedupIgnoresOldRowsInTNRewrite(t *testing.T) {

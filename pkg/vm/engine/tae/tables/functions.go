@@ -349,6 +349,9 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 					return nil
 				}
 				commitTS := vector.GetFixedAtNoTypeCheck[types.TS](tsVec.GetDownstreamVector(), row)
+				if commitTS.Equal(&txnif.UncommitTS) {
+					return nil
+				}
 				startTS := txn.GetStartTS()
 				// `from` is the first timestamp in the dedup window. Callers
 				// advance their exclusive watermark with Next(), so equality
@@ -411,6 +414,9 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 						return nil
 					}
 					commitTS := tsVec.Get(row).(types.TS)
+					if commitTS.Equal(&txnif.UncommitTS) {
+						return nil
+					}
 					// Keep the lower bound inclusive; see the varlen path.
 					if commitTS.LT(&from) {
 						return nil
@@ -475,8 +481,11 @@ func containsABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args 
 					if isAborted(abortVec, row) {
 						continue
 					}
-					rowIDs.Update(rowOffset, nil, true)
 					commitTS := tsVec.Get(row).(types.TS)
+					if commitTS.Equal(&txnif.UncommitTS) {
+						continue
+					}
+					rowIDs.Update(rowOffset, nil, true)
 					startTS := txn.GetStartTS()
 					if commitTS.GT(&startTS) {
 						ts, err := delsFn(v1, commitTS)
