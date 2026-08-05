@@ -1198,6 +1198,14 @@ func NewNoSuchTable(ctx context.Context, db, tbl string) *Error {
 	return newError(noReportCtx, ErrNoSuchTable, db, tbl)
 }
 
+// NewNoSuchTablef preserves a caller-facing diagnostic while classifying the
+// error as ErrNoSuchTable for MySQL protocol compatibility.
+func NewNoSuchTablef(ctx context.Context, format string, args ...any) *Error {
+	err := NewNoSuchTable(ctx, "", "")
+	err.message = fmt.Sprintf(format, args...)
+	return err
+}
+
 func NewNoSuchSequence(ctx context.Context, db, tbl string) *Error {
 	noReportCtx := errutil.ContextWithNoReport(ctx, true)
 	return newError(noReportCtx, ErrNoSuchSequence, db, tbl)
