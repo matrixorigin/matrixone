@@ -353,7 +353,7 @@ select id, coalesce(i, d) as mix_coalesce from t_coalesce_mix order by id;
 2  ¦  10.00000
 drop table t_coalesce_mix;
 select coalesce(null, 1, cast(0.5 as decimal(10,5))) as mix_const_coalesce;
-➤ mix_const_coalesce[3,24,5]  𝄀
+➤ mix_const_coalesce[3,10,5]  𝄀
 1.00000
 select coalesce(null, cast(1.23 as decimal(23,2)), cast(4.56780 as decimal(38,7))) as three_branch;
 ➤ three_branch[3,38,7]  𝄀
@@ -587,13 +587,13 @@ desc v_conditional_unknown_width;
 text_result  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 blob_result  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 float_result  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-double_result  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦
+double_result  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select length(if(true, s, 3)) as text_length,
 hex(if(true, b, 3)) as blob_hex,
 if(false, 'x', f) <> 'x' as float_value_preserved,
 if(false, 'x', cast(d as double)) <> 'x' as double_value_preserved
 from t_conditional_unknown_width;
-➤ text_length[4,0,0]  ¦  blob_hex[12,-1,0]  ¦  float_value_preserved[1,0,0]  ¦  double_value_preserved[1,0,0]  𝄀
+➤ text_length[-5,64,0]  ¦  blob_hex[12,-1,0]  ¦  float_value_preserved[-7,1,0]  ¦  double_value_preserved[-7,1,0]  𝄀
 6  ¦  616263646566  ¦  1  ¦  1
 drop view v_conditional_unknown_width;
 drop table t_conditional_unknown_width;
