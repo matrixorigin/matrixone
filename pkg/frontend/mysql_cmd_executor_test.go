@@ -5224,6 +5224,7 @@ func Test_StatementClassify(t *testing.T) {
 		{&tree.ShowPublications{}, true},
 		{&tree.ShowCreatePublications{}, true},
 		{&tree.ShowBackendServers{}, true},
+		{&tree.ExplainPhyPlan{}, true},
 		{&tree.AnalyzeStmt{}, true},
 		{&tree.CheckTableStmt{}, true},
 		{&tree.ShowProfileStmt{}, true},
@@ -5789,6 +5790,7 @@ func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 	defer ses.Close()
 	ses.GetResponser().MysqlRrWr().(*MysqlProtocolImpl).SetSession(ses)
 	ses.txnHandler = InitTxnHandler(ses.GetService(), nil, ctx, txnOperator)
+	require.True(t, ses.txnHandler.InActiveTxn())
 	execCtx := newTestExecCtx(ctx, ctrl)
 	execCtx.ses = ses
 
@@ -5802,6 +5804,17 @@ func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 	prepared, err := ses.GetPrepareStmt(ctx, stmtName)
 	require.NoError(t, err)
 	require.IsType(t, &tree.ExplainAnalyze{}, prepared.PrepareStmt)
+
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte("explain phyplan select 1"),
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	stmtName = getPrepareStmtName(ses.GetLastStmtId())
+	prepared, err = ses.GetPrepareStmt(ctx, stmtName)
+	require.NoError(t, err)
+	require.IsType(t, &tree.ExplainPhyPlan{}, prepared.PrepareStmt)
 
 	resp, err = ExecRequest(ses, execCtx, &Request{
 		cmd:  COM_STMT_PREPARE,
