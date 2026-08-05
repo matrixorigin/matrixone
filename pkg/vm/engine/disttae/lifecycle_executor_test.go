@@ -59,6 +59,82 @@ func TestLifecycleCutoffUsesEvaluationTimezoneAndGrace(t *testing.T) {
 	require.Equal(t, int64(types.DateFromCalendar(2026, 5, 1)), encoded)
 }
 
+func TestLifecycleCutoffEncodesSupportedTemporalTypesAndRejectsInvalidInput(t *testing.T) {
+	evaluation := time.Date(2026, 7, 31, 22, 3, 4, 567_000_000, time.UTC)
+
+	_, datetime, err := lifecycleCutoff(
+		evaluation, 1, 0, "Asia/Shanghai", types.T_datetime,
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(types.DatetimeFromClock(2026, 7, 31, 6, 3, 4, 567_000)), datetime)
+
+	_, timestamp, err := lifecycleCutoff(
+		evaluation, 1, 0, "Asia/Shanghai", types.T_timestamp,
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(types.UnixNanoToTimestamp(evaluation.AddDate(0, 0, -1).UnixNano())), timestamp)
+
+	_, _, err = lifecycleCutoff(time.Time{}, 1, 0, "UTC", types.T_date)
+	require.ErrorContains(t, err, "incomplete")
+	_, _, err = lifecycleCutoff(evaluation, 0, 0, "UTC", types.T_date)
+	require.ErrorContains(t, err, "incomplete")
+	_, _, err = lifecycleCutoff(evaluation, 1, 0, "not/a-timezone", types.T_date)
+	require.Error(t, err)
+	_, _, err = lifecycleCutoff(evaluation, 1, 0, "UTC", types.T_int64)
+	require.ErrorContains(t, err, "unsupported Lifecycle column type")
+}
+
+func TestLifecycleColumnRejectsHiddenUnsupportedAndStaleDefinitions(t *testing.T) {
+	table := &plan.TableDef{Cols: []*plan.ColDef{
+		{ColId: 1, Name: "hidden", Hidden: true, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_timestamp)}},
+		{ColId: 2, Name: "created_at", Seqnum: 3, Typ: plan.Type{Id: int32(types.T_timestamp)}},
+		{ColId: 3, Name: "value", Seqnum: 4, Typ: plan.Type{Id: int32(types.T_int64)}},
+	}}
+
+	ordinal, seqnum, typ, err := lifecycleColumn(table, 2)
+	require.NoError(t, err)
+	require.Equal(t, 0, ordinal)
+	require.Equal(t, uint16(3), seqnum)
+	require.Equal(t, types.T_timestamp, typ)
+
+	_, _, _, err = lifecycleColumn(table, 1)
+	require.ErrorContains(t, err, "no longer exists")
+	_, _, _, err = lifecycleColumn(table, 3)
+	require.ErrorContains(t, err, "no longer supported")
+	_, _, _, err = lifecycleColumn(table, 99)
+	require.ErrorContains(t, err, "no longer exists")
+
+	table.Cols[1].Seqnum = 1 << 16
+	_, _, _, err = lifecycleColumn(table, 2)
+	require.ErrorContains(t, err, "exceeds Object metadata encoding")
+}
+
+func TestLifecycleObjectMetadataChargeAndTemporalConversionsFailClosed(t *testing.T) {
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsExtent(
+		stats, objectio.NewExtent(0, 0, 11, 13),
+	))
+	charge, err := lifecycleObjectMetaCharge(*stats)
+	require.NoError(t, err)
+	require.Equal(t, uint64(37), charge)
+
+	zero := objectio.NewObjectStats()
+	_, err = lifecycleObjectMetaCharge(*zero)
+	require.ErrorContains(t, err, "not certified")
+
+	value, ok := lifecycleTemporalValue(types.Date(7))
+	require.True(t, ok)
+	require.Equal(t, int64(7), value)
+	value, ok = lifecycleTemporalValue(types.Datetime(8))
+	require.True(t, ok)
+	require.Equal(t, int64(8), value)
+	value, ok = lifecycleTemporalValue(types.Timestamp(9))
+	require.True(t, ok)
+	require.Equal(t, int64(9), value)
+	_, ok = lifecycleTemporalValue("not temporal")
+	require.False(t, ok)
+}
+
 func TestLifecycleObjectExpirationUsesOnlyLifecycleSortKeyProof(t *testing.T) {
 	stats := objectio.NewObjectStats()
 	zoneMap := index.NewZM(types.T_timestamp, 0)

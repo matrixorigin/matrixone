@@ -528,6 +528,99 @@ func TestResolveLifecycleStageIdentityRequiresDeploymentCertification(t *testing
 	require.ErrorContains(t, err, "credential handle")
 }
 
+func lifecycleStageResult(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+	for _, name := range []string{"stage_id", "url", "stage_credentials", "stage_status"} {
+		column := &MysqlColumn{}
+		column.SetName(name)
+		column.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		mrs.AddColumn(column)
+	}
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+	return mrs
+}
+
+func TestLoadLifecycleArchiveStageConfigurationFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	certificationSQL := `select scope_spec from mo_catalog.mo_feature_registry where feature_code = 'LIFECYCLE' and enabled = true`
+	stageSQL := `select stage_id,url,stage_credentials,stage_status from mo_catalog.mo_stages where stage_name = 'archive_stage' for update`
+	certification := lifecycleArchiveStageCertification{
+		AccountID:                17,
+		StageID:                  12,
+		CanonicalURL:             "s3://archive-bucket/mo/history",
+		Provider:                 "amazon",
+		Endpoint:                 "https://s3.example.com",
+		Region:                   "me-south-1",
+		CredentialHandle:         "role-arn:arn:aws:iam::17:role/mo-archive",
+		VersioningDisabled:       true,
+		AbortIncompleteMultipart: true,
+	}
+	encodedCertification := `{"archive_stages":[{"account_id":17,"stage_id":12,"canonical_url":"s3://archive-bucket/mo/history","provider":"amazon","endpoint":"https://s3.example.com","region":"me-south-1","credential_handle":"role-arn:arn:aws:iam::17:role/mo-archive","versioning_disabled":true,"abort_incomplete_multipart":true}]}`
+	stageRow := []interface{}{
+		uint64(12),
+		"s3://archive-bucket/mo/history",
+		"provider=amazon,endpoint=https://s3.example.com,aws_region=me-south-1",
+		"in_use",
+	}
+
+	t.Run("certified stage is frozen", func(t *testing.T) {
+		background := &backgroundExecTest{}
+		background.init()
+		background.sql2result[certificationSQL] = newMrsForFeatureRegistry(
+			[][]interface{}{{encodedCertification}},
+		)
+		background.sql2result[stageSQL] = lifecycleStageResult([][]interface{}{stageRow})
+
+		certifications, err := loadLifecycleArchiveStageCertifications(ctx, background)
+		require.NoError(t, err)
+		require.Equal(t, []lifecycleArchiveStageCertification{certification}, certifications)
+		identity, err := loadLifecycleStageIdentity(ctx, background, 17, "archive_stage", certifications)
+		require.NoError(t, err)
+		require.Equal(t, uint64(12), identity.ID)
+		require.Equal(t, "archive-bucket", identity.Bucket)
+		require.Equal(t, "mo/history", identity.Prefix)
+		require.NotEmpty(t, identity.Frozen)
+	})
+
+	t.Run("missing enabled certification is rejected", func(t *testing.T) {
+		background := &backgroundExecTest{}
+		background.init()
+		background.sql2result[certificationSQL] = newMrsForFeatureRegistry(nil)
+		_, err := loadLifecycleArchiveStageCertifications(ctx, background)
+		require.ErrorContains(t, err, "no certified Archive Stage")
+	})
+
+	t.Run("malformed certification is rejected", func(t *testing.T) {
+		background := &backgroundExecTest{}
+		background.init()
+		background.sql2result[certificationSQL] = newMrsForFeatureRegistry(
+			[][]interface{}{{"not-json"}},
+		)
+		_, err := loadLifecycleArchiveStageCertifications(ctx, background)
+		require.ErrorContains(t, err, "invalid Lifecycle release configuration")
+	})
+
+	t.Run("stage status and scheme are checked before binding", func(t *testing.T) {
+		background := &backgroundExecTest{}
+		background.init()
+		background.sql2result[stageSQL] = lifecycleStageResult([][]interface{}{
+			{uint64(12), "s3://archive-bucket/mo/history", stageRow[2], "disabled"},
+		})
+		_, err := loadLifecycleStageIdentity(ctx, background, 17, "archive_stage", []lifecycleArchiveStageCertification{certification})
+		require.ErrorContains(t, err, "not in use")
+
+		background = &backgroundExecTest{}
+		background.init()
+		background.sql2result[stageSQL] = lifecycleStageResult([][]interface{}{
+			{uint64(12), "file:///archive", stageRow[2], "in_use"},
+		})
+		_, err = loadLifecycleStageIdentity(ctx, background, 17, "archive_stage", []lifecycleArchiveStageCertification{certification})
+		require.ErrorContains(t, err, "scheme")
+	})
+}
+
 func TestBuildLifecycleBindingStateSQL(t *testing.T) {
 	require.Contains(t,
 		buildLifecycleBindingStateSQL(3, 42, lifecycleBindingStatePaused),
@@ -836,6 +929,87 @@ where rel_id=42 and reldatabase_id=7 for update`
 		"insert into mo_catalog.mo_lifecycle_bindings")
 	require.Contains(t, background.executedSQLs[6], "'DELETE'")
 	require.Equal(t, "commit;", background.executedSQLs[7])
+}
+
+func TestHandleAlterTableLifecycleSetArchiveUsesCertifiedStage(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	ses.SetTenantInfo(&TenantInfo{TenantID: 17})
+	isolateLifecycleHandlerRuntime(t, ses)
+
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	storage := mock_frontend.NewMockEngine(ctrl)
+	database := mock_frontend.NewMockDatabase(ctrl)
+	relation := mock_frontend.NewMockRelation(ctrl)
+	tableDef := lifecycleTableDef(types.T_timestamp)
+	storage.EXPECT().Database(gomock.Any(), "mo_catalog", txnOperator).Return(database, nil)
+	database.EXPECT().Relation(gomock.Any(), "events", nil).Return(relation, nil)
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
+	relation.EXPECT().GetTableID(gomock.Any()).Return(tableDef.TblId)
+	ses.txnHandler = &TxnHandler{storage: storage, txnOp: txnOperator}
+	ses.GetTxnCompileCtx().SetExecCtx(&ExecCtx{reqCtx: ctx, ses: ses})
+
+	background := &backgroundExecTest{}
+	background.init()
+	featureSQL := `select enabled, scope_spec from mo_catalog.mo_feature_registry where feature_code = 'LIFECYCLE'`
+	featureLockSQL := `update mo_catalog.mo_feature_registry set scope_spec = scope_spec, updated_at = updated_at where feature_code = 'LIFECYCLE'`
+	lockSQL := `select rel_id,rel_version from mo_catalog.mo_tables
+where rel_id=42 and reldatabase_id=7 for update`
+	capacitySQL := lifecycleBindingCapacitySQL(17, 42)
+	certificationSQL := `select scope_spec from mo_catalog.mo_feature_registry where feature_code = 'LIFECYCLE' and enabled = true`
+	stageSQL := `select stage_id,url,stage_credentials,stage_status from mo_catalog.mo_stages where stage_name = 'archive_stage' for update`
+	background.sql2result[featureSQL] = newMrsForFeatureRegistry([][]interface{}{{int8(1), nil}})
+	background.sql2result[lockSQL] = newMrsForPasswordOfUser([][]interface{}{{uint64(42), uint64(3)}})
+	background.sql2result[capacitySQL] = newMrsForPasswordOfUser([][]interface{}{{uint64(12)}})
+	background.sql2result[certificationSQL] = newMrsForFeatureRegistry([][]interface{}{{
+		`{"archive_stages":[{"account_id":17,"stage_id":12,"canonical_url":"s3://archive-bucket/mo/history","provider":"amazon","endpoint":"https://s3.example.com","region":"me-south-1","credential_handle":"role-arn:arn:aws:iam::17:role/mo-archive","versioning_disabled":true,"abort_incomplete_multipart":true}]}`,
+	}})
+	background.sql2result[stageSQL] = lifecycleStageResult([][]interface{}{{
+		uint64(12),
+		"s3://archive-bucket/mo/history",
+		"provider=amazon,endpoint=https://s3.example.com,aws_region=me-south-1",
+		"in_use",
+	}})
+	stub := gostub.StubFunc(&NewBackgroundExec, background)
+	t.Cleanup(stub.Reset)
+
+	table := tree.NewTableName(
+		"events",
+		tree.ObjectNamePrefix{SchemaName: "mo_catalog", ExplicitSchema: true},
+		nil,
+	)
+	alter := tree.NewAlterTable(table)
+	alter.Options = tree.AlterTableOptions{tree.NewAlterOptionLifecycle(
+		tree.LifecycleOperationSet,
+		tree.LifecyclePolicy{
+			Column:          "created_at",
+			ExpireAfterDays: 30,
+			Action:          tree.LifecycleActionArchive,
+			HasStage:        true,
+			Stage:           "archive_stage",
+			HasPurgeAfter:   true,
+			PurgeAfterDays:  365,
+		},
+	)}
+	t.Cleanup(alter.Free)
+
+	require.NoError(t, handleAlterTableLifecycle(ctx, ses, alter))
+	require.Equal(t, []string{
+		featureSQL,
+		"begin;",
+		lockSQL,
+		featureLockSQL,
+		featureSQL,
+		capacitySQL,
+		certificationSQL,
+		stageSQL,
+	}, background.executedSQLs[:8])
+	require.Contains(t, background.executedSQLs[8], "insert into mo_catalog.mo_lifecycle_bindings")
+	require.Contains(t, background.executedSQLs[8], "'ARCHIVE'")
+	require.Contains(t, background.executedSQLs[8], "unhex('")
+	require.Equal(t, "commit;", background.executedSQLs[9])
 }
 
 func isolateLifecycleHandlerRuntime(t *testing.T, ses *Session) {

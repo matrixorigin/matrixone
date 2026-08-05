@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -96,6 +97,31 @@ func TestLifecycleArchiveClusterRootProbeCoversCurrentAndHistoricalOwners(t *tes
 		require.Contains(t, sql, "mode in ('ARCHIVE_WHOLE','ARCHIVE_REWRITE')")
 		require.Contains(t, sql, "state<>'CLEANED'")
 	}
+}
+
+func TestRejectLifecycleArchiveClusterRestoreStopsAtLiveRoot(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	ses.service = "lifecycle-cluster-restore-root-" + t.Name()
+
+	base := &backgroundExecTest{}
+	base.init()
+	background := &lifecycleRestoreContextExec{backgroundExecTest: base}
+	currentRootSQL := lifecycleArchiveRootProbeSQL(0)
+	base.sql2result[currentRootSQL] = newMrsForPasswordOfUser([][]interface{}{{"root"}})
+
+	err := rejectLifecycleArchiveClusterRestore(
+		ctx,
+		ses,
+		background,
+		"restored-account",
+		123456,
+		"RESTORE CLUSTER",
+	)
+	require.ErrorContains(t, err, "target scope contains Lifecycle Archive state")
+	require.Equal(t, []string{currentRootSQL}, base.executedSQLs)
+	require.Equal(t, []uint32{catalog.System_Account}, background.accountIDs)
 }
 
 func TestLifecycleArchiveRestoreScopeIsArchiveOnlyAndFailsClosed(t *testing.T) {

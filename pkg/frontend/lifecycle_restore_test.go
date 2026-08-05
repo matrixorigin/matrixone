@@ -92,6 +92,28 @@ func TestHandleRestoreArchiveDatasetFailsBeforeExternalSideEffects(t *testing.T)
 	require.Empty(t, lifecycleRestoreSlots)
 }
 
+func TestLifecyclePurgeRejectsInvalidDatasetBeforeCatalogMutation(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	ses.SetTenantInfo(&TenantInfo{TenantID: 17})
+	service := "lifecycle-restore-invalid-dataset-" + t.Name()
+	ses.service = service
+	runtime := moruntime.NewRuntime(
+		metadata.ServiceType_CN,
+		service,
+		nil,
+		moruntime.WithClock(clock.NewHLCClock(func() int64 { return time.Now().UnixNano() }, 0)),
+	)
+	moruntime.SetupServiceBasedRuntime(service, runtime)
+	runtime.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(
+		func(string) (executor.Result, error) { return executor.Result{}, nil },
+	))
+
+	err := handlePurgeArchiveDataset(ctx, ses, &tree.PurgeArchiveDataset{DatasetID: "not-a-uuid"})
+	require.ErrorContains(t, err, "invalid Lifecycle Dataset ID")
+}
+
 func TestLifecycleRestoreCNAdmissionIsFailFastAndExactlyOnce(t *testing.T) {
 	slots := make(chan struct{}, 1)
 	release, err := acquireLifecycleRestoreSlot(context.Background(), slots)
