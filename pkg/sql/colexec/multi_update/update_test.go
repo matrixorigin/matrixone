@@ -395,6 +395,61 @@ func TestRetainedS3InputColsCountsEveryContextCopy(t *testing.T) {
 	)
 }
 
+func TestS3WriterActionDoesNotRequireMainTableContext(t *testing.T) {
+	tests := []struct {
+		name       string
+		updateCtxs []*MultiUpdateCtx
+		want       actionType
+	}{
+		{
+			name: "index backfill insert",
+			updateCtxs: []*MultiUpdateCtx{
+				{InsertCols: []int{0, 1}},
+				{InsertCols: []int{2, 3}},
+			},
+			want: actionInsert,
+		},
+		{
+			name:       "delete only",
+			updateCtxs: []*MultiUpdateCtx{{DeleteCols: []int{0, 1}}},
+			want:       actionDelete,
+		},
+		{
+			name: "mixed contexts",
+			updateCtxs: []*MultiUpdateCtx{
+				{InsertCols: []int{0, 1}},
+				{DeleteCols: []int{2, 3}},
+			},
+			want: actionUpdate,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, s3WriterAction(test.updateCtxs))
+		})
+	}
+}
+
+func TestNewS3WriterAllowsIndexOnlyContext(t *testing.T) {
+	_, _, proc := prepareTestCtx(t, false)
+	objRef, tableDef := getTestSecondaryIndexTable("index_backfill")
+	updateCtx := &MultiUpdateCtx{
+		ObjRef:     objRef,
+		TableDef:   tableDef,
+		InsertCols: []int{0, 1},
+	}
+	update := &MultiUpdate{MultiUpdateCtx: []*MultiUpdateCtx{updateCtx}}
+	update.resetMultiUpdateCtxs()
+
+	writer, err := newS3Writer(proc.GetService(), update)
+	require.NoError(t, err)
+	require.Equal(t, actionInsert, writer.action)
+	require.Equal(t, InsertWriteS3Threshold, writer.flushThreshold)
+	require.Equal(t, []int{0, 1}, writer.checkSizeCols)
+	require.NoError(t, writer.free(proc))
+}
+
 // update table s3
 func TestUpdateS3SingleTable(t *testing.T) {
 	hasUniqueKey := false

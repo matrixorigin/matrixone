@@ -165,13 +165,7 @@ func newS3Writer(
 
 	faultInjected := false
 
-	mainIdx := -1
-	for i, updateCtx := range update.MultiUpdateCtx {
-		if mainIdx == -1 &&
-			update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType == UpdateMainTable {
-			mainIdx = i
-		}
-
+	for _, updateCtx := range update.MultiUpdateCtx {
 		if !faultInjected {
 			faultInjected, _ = objectio.LogCNFlushSmallObjsInjected(
 				updateCtx.TableDef.DbName, updateCtx.TableDef.Name,
@@ -182,32 +176,37 @@ func newS3Writer(
 	}
 
 	writer.updateCtxs = update.MultiUpdateCtx
-	if mainIdx == -1 {
-		return nil, moerr.NewInternalErrorNoCtx("multi update has no main table context")
-	}
 
 	threshold := InsertWriteS3Threshold
 	if faultInjected {
 		threshold = colexec.FaultInjectedS3Threshold
 	}
 
-	upCtx := writer.updateCtxs[mainIdx]
-	if len(upCtx.DeleteCols) > 0 && len(upCtx.InsertCols) > 0 {
-		//update
-		writer.action = actionUpdate
-		writer.flushThreshold = threshold
-	} else if len(upCtx.InsertCols) > 0 {
-		//insert
-		writer.action = actionInsert
-		writer.flushThreshold = threshold
-	} else {
-		//delete
-		writer.action = actionDelete
+	writer.action = s3WriterAction(writer.updateCtxs)
+	if writer.action == actionDelete {
 		writer.flushThreshold = DeleteWriteS3Threshold
+	} else {
+		writer.flushThreshold = threshold
 	}
 	writer.checkSizeCols = retainedS3InputCols(writer.updateCtxs, writer.action)
 
 	return writer, nil
+}
+
+func s3WriterAction(updateCtxs []*MultiUpdateCtx) actionType {
+	hasInsert := false
+	hasDelete := false
+	for _, updateCtx := range updateCtxs {
+		hasInsert = hasInsert || len(updateCtx.InsertCols) > 0
+		hasDelete = hasDelete || len(updateCtx.DeleteCols) > 0
+	}
+	if hasInsert && hasDelete {
+		return actionUpdate
+	}
+	if hasInsert {
+		return actionInsert
+	}
+	return actionDelete
 }
 
 func retainedS3InputCols(updateCtxs []*MultiUpdateCtx, action actionType) []int {
