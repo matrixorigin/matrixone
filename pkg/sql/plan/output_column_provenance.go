@@ -14,7 +14,10 @@
 
 package plan
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
 
 type ProvenanceState uint8
 
@@ -24,14 +27,24 @@ const (
 	ProvenanceSingleSource
 )
 
+// CTASDefaultPolicy is deliberately separate from source-column identity.
+// View schema generation consumes the source snapshot directly, while CTAS
+// uses this policy to decide whether the target may copy that source default.
+type CTASDefaultPolicy uint8
+
+const (
+	CTASDefaultNone CTASDefaultPolicy = iota
+	CTASDefaultInheritSource
+	CTASDefaultUseTypeDefault
+)
+
 // SourceColumnMetadata is an immutable planner-local snapshot. It deliberately
 // contains only metadata consumed by output-schema builders, so transparent
 // query boundaries can share it without retaining or repeatedly copying a
 // complete catalog ColDef.
 type SourceColumnMetadata struct {
-	Typ                 plan.Type
-	HasDefault          bool
-	DefaultOriginString string
+	Typ     plan.Type
+	Default *plan.Default
 }
 
 type SourceColumn struct {
@@ -42,9 +55,9 @@ type SourceColumn struct {
 }
 
 type OutputColumnProvenance struct {
-	State                   ProvenanceState
-	Source                  *SourceColumn
-	CanInheritSourceDefault bool
+	State             ProvenanceState
+	Source            *SourceColumn
+	CTASDefaultPolicy CTASDefaultPolicy
 }
 
 func snapshotSourceColumnMetadata(col *plan.ColDef) SourceColumnMetadata {
@@ -60,11 +73,36 @@ func snapshotSourceColumnMetadata(col *plan.ColDef) SourceColumnMetadata {
 			Enumvalues:  typ.Enumvalues,
 		},
 	}
-	if col.Default != nil {
-		metadata.HasDefault = true
-		metadata.DefaultOriginString = col.Default.OriginString
+	if col.Default != nil && (col.Default.Expr != nil || col.Default.OriginString != "") {
+		metadata.Default = DeepCopyDefault(col.Default)
 	}
 	return metadata
+}
+
+func hasExplicitSourceDefault(metadata SourceColumnMetadata) bool {
+	return metadata.Default != nil
+}
+
+func canUseCTASViewTypeDefault(metadata SourceColumnMetadata) bool {
+	switch types.T(metadata.Typ.Id) {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		return true
+	default:
+		return false
+	}
+}
+
+func (bc *BindContext) markViewCTASDefaultBoundary() {
+	for i := 0; i < min(len(bc.headings), len(bc.projects)); i++ {
+		provenance := bc.outputColumnProvenanceForProject(int32(i))
+		if provenance.State == ProvenanceSingleSource && provenance.Source != nil &&
+			hasExplicitSourceDefault(provenance.Source.Metadata) &&
+			canUseCTASViewTypeDefault(provenance.Source.Metadata) {
+			provenance.CTASDefaultPolicy = CTASDefaultUseTypeDefault
+		}
+		bc.outputColumnProvenance[int32(i)] = provenance
+	}
 }
 
 // transparentOutputSourceExpr unwraps planner display adapters that preserve

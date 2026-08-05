@@ -30,6 +30,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -194,16 +195,21 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 				typ = sourceType
 			}
 		}
+		defaultDef := &plan.Default{NullAbility: !expr.Typ.NotNullable}
+		if idx < len(outputColumnProvenance) {
+			provenance := outputColumnProvenance[idx]
+			if provenance.State == ProvenanceSingleSource && provenance.Source != nil &&
+				provenance.Source.Metadata.Default != nil {
+				defaultDef = DeepCopyDefault(provenance.Source.Metadata.Default)
+				defaultDef.NullAbility = !expr.Typ.NotNullable
+			}
+		}
 		cols[idx] = &plan.ColDef{
 			Name:       strings.ToLower(name),
 			OriginName: originName,
 			Alg:        plan.CompressType_Lz4,
 			Typ:        *typ,
-			Default: &plan.Default{
-				NullAbility:  !expr.Typ.NotNullable,
-				Expr:         nil,
-				OriginString: "",
-			},
+			Default:    defaultDef,
 		}
 	}
 	tableDef.Cols = cols
@@ -272,30 +278,65 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
 	for i, expr := range rootNode.ProjectList {
-		defaultVal := ""
 		typ := &expr.Typ
 		provenance := bindCtx.outputColumnProvenanceForProject(int32(i))
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
-			if provenance.CanInheritSourceDefault && provenance.Source.Metadata.HasDefault {
-				defaultVal = provenance.Source.Metadata.DefaultOriginString
-			}
 			if isEnumOrSetPlanType(&provenance.Source.Metadata.Typ) {
 				typ = &provenance.Source.Metadata.Typ
 			}
 		}
+		nullAbility := ctasExprCanBeNull(expr)
+		defaultDef := &plan.Default{NullAbility: nullAbility}
+		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
+			switch provenance.CTASDefaultPolicy {
+			case CTASDefaultInheritSource:
+				if provenance.Source.Metadata.Default != nil {
+					defaultDef = DeepCopyDefault(provenance.Source.Metadata.Default)
+					defaultDef.NullAbility = nullAbility
+				}
+			case CTASDefaultUseTypeDefault:
+				defaultDef, err = buildCTASDefaultForView(ctx, *typ, nullAbility)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		}
 
 		cols[i] = &plan.ColDef{
-			Name: strings.ToLower(bindCtx.headings[i]),
-			Alg:  plan.CompressType_Lz4,
-			Typ:  *typ,
-			Default: &plan.Default{
-				NullAbility:  ctasExprCanBeNull(expr),
-				Expr:         nil,
-				OriginString: defaultVal,
-			},
+			Name:    strings.ToLower(bindCtx.headings[i]),
+			Alg:     plan.CompressType_Lz4,
+			Typ:     *typ,
+			Default: defaultDef,
 		}
 	}
 	return cols, builder.qry, nil
+}
+
+func buildCTASDefaultForView(ctx CompilerContext, typ plan.Type, nullAbility bool) (*plan.Default, error) {
+	defaultDef := &plan.Default{NullAbility: nullAbility}
+	if nullAbility {
+		return defaultDef, nil
+	}
+
+	// #26232 has an independent MySQL oracle only for integer CTAS targets.
+	// Keep other implicit-default rules unchanged until they have their own
+	// protocol-level oracle instead of guessing from the source default.
+	switch types.T(typ.Id) {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		zeroExpr, err := makePlan2AssignmentCastExpr(
+			ctx.GetContext(), makePlan2Int64ConstExprWithType(0), typ)
+		if err != nil {
+			return nil, err
+		}
+		zeroExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, zeroExpr, ctx.GetProcess(), false, true)
+		if err != nil {
+			return nil, err
+		}
+		defaultDef.Expr = zeroExpr
+		defaultDef.OriginString = "0"
+	}
+	return defaultDef, nil
 }
 
 func ctasExprCanBeNull(expr *Expr) bool {
