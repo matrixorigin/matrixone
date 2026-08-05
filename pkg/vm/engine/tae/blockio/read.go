@@ -37,7 +37,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"go.uber.org/zap"
 )
 
@@ -358,22 +360,21 @@ func BlockDataReadBackup(
 	ts types.TS,
 	fs fileservice.FileService,
 ) (loaded *batch.Batch, sortKey uint16, err error) {
+	location := info.MetaLocation()
+	requestedColumnCount := len(idxes)
+	commitPos, abortPos := -1, -1
 	if len(idxes) == 0 {
-		loaded, sortKey, err = ioutil.LoadOneBlock(ctx, fs, info.MetaLocation(), objectio.SchemaData)
+		var layout objectio.SpecialColumnLayout
+		loaded, sortKey, layout, err = ioutil.LoadOneBlockWithSpecialLayout(
+			ctx, fs, location, objectio.SchemaData,
+		)
+		if pos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS); ok {
+			commitPos = int(pos)
+		}
+		if pos, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok {
+			abortPos = int(pos)
+		}
 	} else {
-		loaded, sortKey, err = ioutil.LoadOneBlockWithIndex(ctx, fs, idxes, info.MetaLocation(), objectio.SchemaData)
-	}
-	// read block data from storage specified by meta location
-	if err != nil {
-		return
-	}
-	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)
-	if err != nil {
-		return
-	}
-	defer tombstones.Release()
-	if !ts.IsEmpty() {
-		location := info.MetaLocation()
 		objectMeta, metaErr := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
 		if metaErr != nil {
 			err = metaErr
@@ -381,41 +382,88 @@ func BlockDataReadBackup(
 		}
 		blockMeta := objectMeta.MustDataMeta().GetBlockMeta(uint32(location.ID()))
 		layout := objectio.ResolveSpecialColumnLayout(blockMeta)
-		commitPos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS)
-		if !ok {
+		loadIdxes := slices.Clone(idxes)
+		if pos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS); ok {
+			commitPos = slices.Index(loadIdxes, pos)
+			if commitPos < 0 {
+				commitPos = len(loadIdxes)
+				loadIdxes = append(loadIdxes, pos)
+			}
+		}
+		if pos, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok {
+			abortPos = slices.Index(loadIdxes, pos)
+			if abortPos < 0 {
+				abortPos = len(loadIdxes)
+				loadIdxes = append(loadIdxes, pos)
+			}
+		}
+		loaded, sortKey, err = ioutil.LoadOneBlockWithIndex(
+			ctx, fs, loadIdxes, location, objectio.SchemaData,
+		)
+	}
+	// read block data from storage specified by meta location
+	if err != nil {
+		return
+	}
+	defer func() {
+		if err != nil {
+			loaded.Clean(common.DebugAllocator)
+			loaded = nil
+			return
+		}
+		if requestedColumnCount > 0 {
+			for i := requestedColumnCount; i < len(loaded.Vecs); i++ {
+				loaded.Vecs[i].Free(common.DebugAllocator)
+				loaded.Vecs[i] = nil
+			}
+			loaded.Vecs = loaded.Vecs[:requestedColumnCount]
+			if len(loaded.Attrs) > requestedColumnCount {
+				loaded.Attrs = loaded.Attrs[:requestedColumnCount]
+			}
+		}
+	}()
+	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)
+	if err != nil {
+		return
+	}
+	defer tombstones.Release()
+	if commitPos < 0 {
+		if !ts.IsEmpty() {
 			err = moerr.NewInternalError(ctx, "backup object has no commit timestamp")
 			return
 		}
-		commitTSs := vector.MustFixedColWithTypeCheck[types.TS](loaded.Vecs[commitPos])
-		var aborts []bool
-		if abortPos, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok {
-			abortVec := loaded.Vecs[abortPos]
-			if !abortVec.IsConstNull() {
-				aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
-			}
-		}
-		visibleRows := make([]int64, 0, len(commitTSs))
-		for row, commitTS := range commitTSs {
-			if commitTS.GT(&ts) ||
-				(aborts != nil && aborts[row]) ||
-				tombstones.Contains(uint64(row)) {
-				continue
-			}
-			visibleRows = append(visibleRows, int64(row))
-		}
-		if len(visibleRows) != len(commitTSs) {
-			loaded.Shrink(visibleRows, false)
-			logutil.Info("[BlockDataReadBackup]",
-				zap.String("ts", ts.ToString()),
-				zap.String("location", info.MetaLocation().String()),
-				zap.Int("rows", len(visibleRows)))
-		}
-	} else {
 		rows := tombstones.ToI64Array(nil)
 		if len(rows) > 0 {
-			logutil.Info("[BlockDataReadBackup Shrink]", zap.String("location", info.MetaLocation().String()), zap.Int("rows", len(rows)))
+			logutil.Info("[BlockDataReadBackup Shrink]", zap.String("location", location.String()), zap.Int("rows", len(rows)))
 			loaded.Shrink(rows, true)
 		}
+		return
+	}
+
+	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](loaded.Vecs[commitPos])
+	var aborts []bool
+	if abortPos >= 0 {
+		abortVec := loaded.Vecs[abortPos]
+		if !abortVec.IsConstNull() {
+			aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
+		}
+	}
+	visibleRows := make([]int64, 0, len(commitTSs))
+	for row, commitTS := range commitTSs {
+		if (!ts.IsEmpty() && commitTS.GT(&ts)) ||
+			commitTS.Equal(&txnif.UncommitTS) ||
+			(aborts != nil && aborts[row]) ||
+			tombstones.Contains(uint64(row)) {
+			continue
+		}
+		visibleRows = append(visibleRows, int64(row))
+	}
+	if len(visibleRows) != len(commitTSs) {
+		loaded.Shrink(visibleRows, false)
+		logutil.Info("[BlockDataReadBackup]",
+			zap.String("ts", ts.ToString()),
+			zap.String("location", location.String()),
+			zap.Int("rows", len(visibleRows)))
 	}
 	return
 }

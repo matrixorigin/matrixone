@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/stretchr/testify/require"
 )
 
@@ -425,53 +426,74 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 }
 
 func TestBlockDataReadBackupCombinesAbortAndTombstoneMasks(t *testing.T) {
-	ctx := context.Background()
-	fs := testutil.NewSharedFS()
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
+	for _, test := range []struct {
+		name     string
+		seqnums  []uint16
+		commitTS []types.TS
+		aborts   []bool
+	}{
+		{
+			name:     "v10-abort-column",
+			seqnums:  []uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+			commitTS: []types.TS{types.BuildTS(1, 0), types.BuildTS(1, 0), types.BuildTS(1, 0), types.BuildTS(1, 0)},
+			aborts:   []bool{false, true, false, false},
+		},
+		{
+			name:     "v9-uncommitted-sentinel",
+			seqnums:  []uint16{0, objectio.SEQNUM_COMMITTS},
+			commitTS: []types.TS{types.BuildTS(1, 0), txnif.UncommitTS, types.BuildTS(1, 0), types.BuildTS(1, 0)},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			fs := testutil.NewSharedFS()
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
 
-	input := batch.NewWithSize(3)
-	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	input.Vecs[1] = vector.NewVec(objectio.TSType)
-	input.Vecs[2] = vector.NewVec(types.T_bool.ToType())
-	for row := range 4 {
-		require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(row), false, mp))
-		require.NoError(t, vector.AppendFixed(input.Vecs[1], types.BuildTS(1, 0), false, mp))
-		require.NoError(t, vector.AppendFixed(input.Vecs[2], row == 1, false, mp))
+			input := batch.NewWithSize(len(test.seqnums))
+			input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			input.Vecs[1] = vector.NewVec(objectio.TSType)
+			if len(test.aborts) > 0 {
+				input.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+			}
+			for row := range 4 {
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(row), false, mp))
+				require.NoError(t, vector.AppendFixed(input.Vecs[1], test.commitTS[row], false, mp))
+				if len(test.aborts) > 0 {
+					require.NoError(t, vector.AppendFixed(input.Vecs[2], test.aborts[row], false, mp))
+				}
+			}
+			input.SetRowCount(4)
+			writer := ioutil.ConstructWriter(0, test.seqnums, -1, false, false, fs)
+			writer.SetAppendable()
+			_, err := writer.WriteBatch(input)
+			require.NoError(t, err)
+			_, _, err = writer.Sync(ctx)
+			require.NoError(t, err)
+			stats := writer.GetObjectStats(objectio.WithAppendable())
+			info := stats.ConstructBlockInfo(0)
+			input.Clean(mp)
+
+			for _, idxes := range [][]uint16{nil, {0}} {
+				for _, cutoff := range []types.TS{types.BuildTS(2, 0), {}} {
+					loaded, _, err := BlockDataReadBackup(
+						ctx,
+						&info,
+						&blockReadTestDataSource{deleted: []uint64{2}},
+						idxes,
+						cutoff,
+						fs,
+					)
+					require.NoError(t, err)
+					if len(idxes) > 0 {
+						require.Len(t, loaded.Vecs, len(idxes))
+					}
+					require.Equal(t, []int32{0, 3}, vector.MustFixedColWithTypeCheck[int32](loaded.Vecs[0]))
+					loaded.Clean(common.DebugAllocator)
+				}
+			}
+		})
 	}
-	input.SetRowCount(4)
-	writer := ioutil.ConstructWriter(
-		0,
-		[]uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
-		-1,
-		false,
-		false,
-		fs,
-	)
-	writer.SetAppendable()
-	_, err := writer.WriteBatch(input)
-	require.NoError(t, err)
-	_, _, err = writer.Sync(ctx)
-	require.NoError(t, err)
-	stats := writer.GetObjectStats(objectio.WithAppendable())
-	info := stats.ConstructBlockInfo(0)
-	input.Clean(mp)
-
-	loaded, _, err := BlockDataReadBackup(
-		ctx,
-		&info,
-		&blockReadTestDataSource{deleted: []uint64{2}},
-		nil,
-		types.BuildTS(2, 0),
-		fs,
-	)
-	require.NoError(t, err)
-	defer loaded.Clean(common.DebugAllocator)
-	require.Equal(
-		t,
-		[]int32{0, 3},
-		vector.MustFixedColWithTypeCheck[int32](loaded.Vecs[0]),
-	)
 }
 
 func TestFillOutputBatchBySelectedRows(t *testing.T) {
