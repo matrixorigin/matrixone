@@ -1393,7 +1393,7 @@ func (ses *feSessionImpl) GetGlobalSysVar(name string) (interface{}, error) {
 
 	// If global vars have not been initialized, fall back to default.
 	if ses.gSysVars == nil {
-		return gSysVarsDefs[name].Default, nil
+		return gSysVarsDefs[canonicalSystemVariableName(name)].Default, nil
 	}
 	return ses.gSysVars.Get(name), nil
 }
@@ -1436,7 +1436,7 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	if val, err = def.GetType().Convert(val); err != nil {
 		return err
 	}
-	if name == "transaction_isolation" || name == "tx_isolation" {
+	if isTransactionIsolationSystemVariable(name) {
 		if _, err = txnIsolationFromSystemValue(ctx, val); err != nil {
 			return err
 		}
@@ -1458,10 +1458,11 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	}
 
 	// save to table first
-	if err = doSetGlobalSystemVariable(ctx, ses, name, val); err != nil {
+	canonicalName := canonicalSystemVariableName(name)
+	if err = doSetGlobalSystemVariable(ctx, ses, canonicalName, val); err != nil {
 		return
 	}
-	ses.gSysVars.Set(name, val)
+	ses.gSysVars.Set(canonicalName, val)
 	return
 }
 
@@ -1479,7 +1480,7 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	// when ses.sesSysVars is nil
 	// in this scenario, use Default value in gSysVarsDefs
 	if ses.sesSysVars == nil {
-		return gSysVarsDefs[name].Default, nil
+		return gSysVarsDefs[canonicalSystemVariableName(name)].Default, nil
 	}
 	// sesSysVars is a clone of gSysVars (the per-account catalog
 	// snapshot from mo_mysql_compatibility_mode). Sysvars added to
@@ -1495,7 +1496,7 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	if v := ses.sesSysVars.Get(name); v != nil {
 		return v, nil
 	}
-	return gSysVarsDefs[name].Default, nil
+	return gSysVarsDefs[canonicalSystemVariableName(name)].Default, nil
 }
 
 func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {
@@ -1525,7 +1526,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	}
 
 	var txnIsolation pbtxn.TxnIsolation
-	setTxnIsolation := name == "transaction_isolation" || name == "tx_isolation"
+	setTxnIsolation := isTransactionIsolationSystemVariable(name)
 	if setTxnIsolation {
 		if txnIsolation, err = txnIsolationFromSystemValue(ctx, val); err != nil {
 			return err
@@ -1557,10 +1558,11 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars = ses.gSysVars.Clone()
 	}
 
+	canonicalName := canonicalSystemVariableName(name)
 	if def.UpdateSessVar != nil {
-		err = def.UpdateSessVar(ctx, ses, ses.sesSysVars, name, val)
+		err = def.UpdateSessVar(ctx, ses, ses.sesSysVars, canonicalName, val)
 	} else {
-		ses.sesSysVars.Set(name, val)
+		ses.sesSysVars.Set(canonicalName, val)
 	}
 	if err == nil && name == "sql_mode" {
 		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, val)

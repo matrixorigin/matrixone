@@ -28,6 +28,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -600,7 +601,7 @@ func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
 				the transaction need to be committed at the end of the statement.
 	*/
 	if !bitsIsSet(th.optionBits, OPTION_BEGIN|OPTION_NOT_AUTOCOMMIT) ||
-		th.inActiveTxnUnsafe() && NeedToBeCommittedInActiveTransaction(execCtx.stmt) ||
+		th.inActiveTxnUnsafe() && needToFinishTransactionAtStatementEnd(execCtx) ||
 		execCtx.txnOpt.byCommit {
 		execCtx.ses.EnterFPrint(FPCommitBeforeCommitUnsafe)
 		defer execCtx.ses.ExitFPrint(FPCommitBeforeCommitUnsafe)
@@ -765,7 +766,7 @@ func (th *TxnHandler) rollback(
 				(every error will abort the transaction.)
 	*/
 	if !bitsIsSet(th.optionBits, OPTION_BEGIN|OPTION_NOT_AUTOCOMMIT) ||
-		th.inActiveTxnUnsafe() && NeedToBeCommittedInActiveTransaction(execCtx.stmt) ||
+		th.inActiveTxnUnsafe() && needToFinishTransactionAtStatementEnd(execCtx) ||
 		execCtx.txnOpt.byRollback {
 		execCtx.ses.EnterFPrint(FPRollbackUnsafe1)
 		defer execCtx.ses.ExitFPrint(FPRollbackUnsafe1)
@@ -795,6 +796,25 @@ func (th *TxnHandler) rollback(
 		}
 	}
 	return err
+}
+
+// needToFinishTransactionAtStatementEnd reports whether the statement owns
+// the active transaction and must finish it. SET TRANSACTION changes future
+// transaction characteristics, so it must never commit or roll back a
+// transaction that was already active when the statement started. The
+// frontend still creates a transaction for every statement, including SET;
+// clean up that statement-owned transaction when autocommit is disabled.
+func needToFinishTransactionAtStatementEnd(execCtx *ExecCtx) bool {
+	if execCtx == nil {
+		return false
+	}
+	if NeedToBeCommittedInActiveTransaction(execCtx.stmt) {
+		return true
+	}
+	if _, ok := execCtx.stmt.(*tree.SetTransaction); !ok {
+		return false
+	}
+	return execCtx.txnOpt.activeTxnAtStartKnown && !execCtx.txnOpt.activeTxnAtStart
 }
 
 func (th *TxnHandler) rollbackUnsafe(
