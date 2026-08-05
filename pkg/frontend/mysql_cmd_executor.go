@@ -2015,6 +2015,8 @@ func createPrepareStmtInSession(
 		PreparePlan:         preparePlan,
 		PrepareStmt:         saveStmt,
 		NativeMode:          owner.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:     owner.sqlModeHasOnlyFullGroupBy(),
+		onlyFullGroupBySet:  true,
 		remapDb:             maps.Clone(execCtx.remapDb),
 		defaultDatabase:     executionSes.GetTxnCompileCtx().GetDatabase(),
 		tempTableVersion:    owner.GetTempTableVersion(),
