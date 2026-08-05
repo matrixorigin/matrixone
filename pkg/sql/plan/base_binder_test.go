@@ -866,6 +866,28 @@ func TestMinMaxConditionalStringExpressionsKeepCollation(t *testing.T) {
 	}
 }
 
+func TestMinMaxParseJSONLStringUsesExplicitGeneralCICollation(t *testing.T) {
+	p, err := runOneStmt(NewMockOptimizer(true), t,
+		"select min(col0), max(col0) from parse_jsonl_data($$[\"a\"]\n[\"B\"]$$, 's') t")
+	require.NoError(t, err)
+
+	var aggregates []*plan.Expr
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG {
+			aggregates = node.AggList
+			break
+		}
+	}
+	require.Len(t, aggregates, 2)
+	for _, aggregate := range aggregates {
+		aggregateFunction := aggregate.GetF()
+		require.NotNil(t, aggregateFunction)
+		require.Len(t, aggregateFunction.Args, 1)
+		require.Equal(t, uint32(types.CharsetUTF8), aggregateFunction.Args[0].Typ.Charset)
+		require.Equal(t, uint32(types.CharsetUTF8), aggregate.Typ.Charset)
+	}
+}
+
 func TestConvertUsingRejectsUnsupportedCharset(t *testing.T) {
 	_, err := runOneStmt(NewMockOptimizer(true), t,
 		"select convert(c using latin1) from select_test.bind_select")

@@ -1969,7 +1969,7 @@ func Test_setMysqlColumnTypeMetadataFloatingPointDecimals(t *testing.T) {
 	}
 }
 
-func Test_setMysqlColumnTypeInfoPreservesBinaryTextCollation(t *testing.T) {
+func Test_setMysqlColumnTypeInfoPreservesTextCollation(t *testing.T) {
 	testCases := []struct {
 		name        string
 		typ         types.Type
@@ -2006,8 +2006,23 @@ func Test_setMysqlColumnTypeInfoPreservesBinaryTextCollation(t *testing.T) {
 			wantCharset: charsetBinary,
 		},
 		{
-			name:        "varchar utf8",
+			name:        "varchar utf8mb4 general ci",
 			typ:         types.New(types.T_varchar, 32, 0),
+			wantCharset: uint16(Utf8mb4CollationID),
+		},
+		{
+			name:        "char utf8mb4 general ci",
+			typ:         types.New(types.T_char, 32, 0),
+			wantCharset: uint16(Utf8mb4CollationID),
+		},
+		{
+			name:        "text utf8mb4 general ci",
+			typ:         types.New(types.T_text, 32, 0),
+			wantCharset: uint16(Utf8mb4CollationID),
+		},
+		{
+			name:        "legacy varchar",
+			typ:         types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetLegacy),
 			wantCharset: charsetVarchar,
 		},
 	}

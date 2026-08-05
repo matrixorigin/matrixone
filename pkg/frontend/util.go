@@ -1643,11 +1643,17 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 	}
 	setMysqlColumnTypeMetadata(col, typ)
 	setCharacter(col)
-	if typ.Charset == types.CharsetUTF8MB4Bin {
+	switch typ.Charset {
+	case types.CharsetUTF8:
+		// CharsetUTF8 is MatrixOne's explicit utf8mb4_general_ci identity.
+		// setCharacter uses the older utf8_general_ci protocol default, so
+		// override it with the exact utf8mb4 collation ID.
+		col.SetCharset(uint16(Utf8mb4CollationID))
+	case types.CharsetUTF8MB4Bin:
 		// A _bin collation still describes nonbinary UTF-8 text. Protocol
 		// collation 63 is reserved for the binary character set.
 		col.SetCharset(uint16(utf8mb4BinCollationID))
-	} else if typ.Charset == types.CharsetBinary {
+	case types.CharsetBinary:
 		// Some internal functions intentionally return packed bytes in a VARCHAR
 		// container. Keep those values binary even though their physical OID is a
 		// text OID; clients must not attempt UTF-8 conversion on the payload.

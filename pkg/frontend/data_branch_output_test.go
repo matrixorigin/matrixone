@@ -697,7 +697,7 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 			require.Equal(t, expectedType, col.ColumnType())
 			expectedCharset := uint16(charsetBinary)
 			if idx == 3 {
-				expectedCharset = charsetVarchar
+				expectedCharset = uint16(Utf8mb4CollationID)
 			}
 			require.Equal(t, expectedCharset, col.(*MysqlColumn).Charset())
 		}
