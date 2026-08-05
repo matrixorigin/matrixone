@@ -383,7 +383,7 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 		for i := uint64(0); i < uint64(length); i++ {
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
-			if null1 || null2 || len(v2) == 0 {
+			if null1 || null2 {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -405,7 +405,7 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			pos, null3 := positions.GetValue(i)
-			if null1 || null2 || null3 || len(v2) == 0 {
+			if null1 || null2 || null3 {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -429,7 +429,7 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 			v2, null2 := p2.GetStrValue(i)
 			pos, null3 := positions.GetValue(i)
 			ocur, null4 := occurrences.GetValue(i)
-			if null1 || null2 || null3 || null4 || len(v2) == 0 {
+			if null1 || null2 || null3 || null4 {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -456,7 +456,7 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 			pos, null3 := positions.GetValue(i)
 			ocur, null4 := occurrences.GetValue(i)
 			matchType, null5 := matchTypes.GetStrValue(i)
-			if null1 || null2 || null3 || null4 || null5 || len(v2) == 0 {
+			if null1 || null2 || null3 || null4 || null5 {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -853,144 +853,209 @@ func (rs *regexpSet) regularMatchForLikeOpWithEscape(
 // if str[pos:] matched pat.
 // return Nth (N = occurrence here) of match result
 func (rs *regexpSet) regularSubstr(pat string, str string, pos, occurrence int64) (match bool, substr string, err error) {
-	// check position
-	if pos < 1 || pos > int64(len(str)) {
-		return false, "", moerr.NewInvalidInputNoCtxf("regexp_substr: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d", pos, len(str))
+	return rs.regularSubstrOnInput(pat, str, str, pos, occurrence)
+}
+
+func (rs *regexpSet) regularSubstrOnInput(
+	pat, original, matchInput string, pos, occurrence int64,
+) (match bool, substr string, err error) {
+	originalRunes := []rune(original)
+	matchRunes := []rune(matchInput)
+	if pos < 1 || pos > int64(len(originalRunes))+1 {
+		return false, "", moerr.NewRegexpIndexOutOfBoundsNoCtx()
 	}
-	// check occurrence
+	if pos == int64(len(originalRunes))+1 {
+		return false, "", nil
+	}
 	if occurrence < 1 {
-		return false, "", moerr.NewInvalidInputNoCtxf("regexp_substr have Index out of bounds in regular expression search, return occurrence %d", occurrence)
+		occurrence = 1
 	}
-	reg, err := rs.getRegularMatcher(pat)
+	reg, err := rs.getRegularMatcherForMatch(pat)
 	if err != nil {
 		return false, "", err
 	}
 
-	// match and return
-	matches := reg.FindAllString(str[pos-1:], -1)
+	search := string(matchRunes[pos-1:])
+	matches := reg.FindAllStringIndex(search, -1)
 	if l := int64(len(matches)); l < occurrence {
 		return false, "", nil
 	}
-	return true, matches[occurrence-1], nil
+	selected := matches[occurrence-1]
+	start := utf8.RuneCountInString(search[:selected[0]])
+	end := utf8.RuneCountInString(search[:selected[1]])
+	return true, string(originalRunes[int(pos-1)+start : int(pos-1)+end]), nil
 }
 
 func (rs *regexpSet) regularSubstrWithMatchType(
 	pat string, str string, pos, occurrence int64, matchType string,
 ) (match bool, substr string, err error) {
-	pat, err = regexpPatternWithMatchType(pat, matchType, "regexp_substr")
+	original := str
+	var normalizeNewlines bool
+	pat, normalizeNewlines, err = regexpPatternWithMatchType(pat, matchType, "regexp_substr")
 	if err != nil {
 		return false, "", err
 	}
-	return rs.regularSubstr(pat, str, pos, occurrence)
+	if normalizeNewlines {
+		str = normalizeRegexpNewlines(str)
+	}
+	return rs.regularSubstrOnInput(pat, original, str, pos, occurrence)
 }
 
 func (rs *regexpSet) regularReplace(pat string, str string, repl string, pos, occurrence int64) (r string, err error) {
-	// check position
-	if pos < 1 || pos > int64(len(str)) {
-		return "", moerr.NewInvalidInputNoCtxf("regexp_replace: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d", pos, len(str))
+	return rs.regularReplaceOnInput(pat, str, str, repl, pos, occurrence)
+}
+
+func (rs *regexpSet) regularReplaceOnInput(
+	pat, original, matchInput, repl string, pos, occurrence int64,
+) (r string, err error) {
+	originalRunes := []rune(original)
+	matchRunes := []rune(matchInput)
+	if pos < 1 || pos > int64(len(originalRunes))+1 {
+		return "", moerr.NewRegexpIndexOutOfBoundsNoCtx()
 	}
-	// check occurrence
+	if pos == int64(len(originalRunes))+1 {
+		return original, nil
+	}
 	if occurrence < 0 {
-		return "", moerr.NewInvalidInputNoCtxf("regexp_replace have Index out of bounds in regular expression search, return occurrence %d", occurrence)
+		occurrence = 1
 	}
 
-	reg, err := rs.getRegularMatcher(pat)
+	reg, err := rs.getRegularMatcherForMatch(pat)
 	if err != nil {
-		pat = "[" + pat + "]"
+		if pat == "" {
+			return "", err
+		}
 		return "", moerr.NewInvalidArgNoCtx("regexp_replace have invalid regexp pattern arg", pat)
 	}
-
-	//match result indexs
-	matchRes := reg.FindAllStringIndex(str, -1)
-	if matchRes == nil {
-		return str, nil
-	} //find the match position
-	index := 0
-	for int64(matchRes[index][0]) < pos-1 {
-		index++
-		if index == len(matchRes) {
-			return str, nil
-		}
-	}
-	matchRes = matchRes[index:]
-	if int64(len(matchRes)) < occurrence {
-		return str, nil
-	}
+	prefix := string(originalRunes[:pos-1])
+	originalSearch := string(originalRunes[pos-1:])
+	matchSearch := string(matchRunes[pos-1:])
+	matches := reg.FindAllStringSubmatchIndex(matchSearch, -1)
 	if occurrence == 0 {
-		return reg.ReplaceAllLiteralString(str, repl), nil
-	} else if occurrence == int64(len(matchRes)) {
-		// the string won't be replaced
-		notRepl := str[:matchRes[occurrence-1][0]]
-		// the string will be replaced
-		replace := str[matchRes[occurrence-1][0]:]
-		return notRepl + reg.ReplaceAllLiteralString(replace, repl), nil
-	} else {
-		// the string won't be replaced
-		notRepl := str[:matchRes[occurrence-1][0]]
-		// the string will be replaced
-		replace := str[matchRes[occurrence-1][0]:matchRes[occurrence][0]]
-		left := str[matchRes[occurrence][0]:]
-		return notRepl + reg.ReplaceAllLiteralString(replace, repl) + left, nil
+		if len(matches) == 0 {
+			return original, nil
+		}
+		var result strings.Builder
+		result.WriteString(prefix)
+		last := 0
+		for _, match := range matches {
+			mapped := remapRegexpMatchIndexes(match, matchSearch, originalSearch)
+			result.WriteString(originalSearch[last:mapped[0]])
+			result.Write(reg.ExpandString(nil, repl, originalSearch, mapped))
+			last = mapped[1]
+		}
+		result.WriteString(originalSearch[last:])
+		return result.String(), nil
 	}
+	if int64(len(matches)) < occurrence {
+		return original, nil
+	}
+	selected := remapRegexpMatchIndexes(matches[occurrence-1], matchSearch, originalSearch)
+	expanded := reg.ExpandString(nil, repl, originalSearch, selected)
+	return prefix + originalSearch[:selected[0]] + string(expanded) + originalSearch[selected[1]:], nil
+}
+
+func remapRegexpMatchIndexes(indexes []int, matchInput, original string) []int {
+	mapped := make([]int, len(indexes))
+	for i, index := range indexes {
+		if index < 0 {
+			mapped[i] = -1
+			continue
+		}
+		runeIndex := utf8.RuneCountInString(matchInput[:index])
+		mapped[i] = runeIndexToByteOffset(original, runeIndex)
+	}
+	return mapped
+}
+
+func runeIndexToByteOffset(input string, runeIndex int) int {
+	if runeIndex <= 0 {
+		return 0
+	}
+	count := 0
+	for index := range input {
+		if count == runeIndex {
+			return index
+		}
+		count++
+	}
+	return len(input)
 }
 
 func (rs *regexpSet) regularReplaceWithMatchType(
 	pat string, str string, repl string, pos, occurrence int64, matchType string,
 ) (r string, err error) {
-	pat, err = regexpPatternWithMatchType(pat, matchType, "regexp_replace")
+	original := str
+	var normalizeNewlines bool
+	pat, normalizeNewlines, err = regexpPatternWithMatchType(pat, matchType, "regexp_replace")
 	if err != nil {
 		return "", err
 	}
-	return rs.regularReplace(pat, str, repl, pos, occurrence)
+	if normalizeNewlines {
+		str = normalizeRegexpNewlines(str)
+	}
+	return rs.regularReplaceOnInput(pat, original, str, repl, pos, occurrence)
 }
 
 // regularInstr return an index indicating the starting or ending position of the match.
 // it depends on the value of retOption, if 0 then return start, if 1 then return end.
 // return 0 if match failed.
 func (rs *regexpSet) regularInstr(pat string, str string, pos, occurrence int64, retOption int8) (index int64, err error) {
-	// check position
-	if pos < 1 || pos > int64(len(str)) {
-		return 0, moerr.NewInvalidInputNoCtxf("regexp_instr: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d", pos, len(str))
-	}
-	// check occurrence
+	runes := []rune(str)
 	if occurrence < 1 {
-		return 0, moerr.NewInvalidInputNoCtxf("regexp_instr have Index out of bounds in regular expression search, return occurrence %d", occurrence)
+		occurrence = 1
 	}
-	// check retOption
-	if retOption > 1 {
-		return 0, moerr.NewInvalidInputNoCtxf("regexp_instr have Index out of bounds in regular expression search, return option %d", retOption)
+	if retOption < 0 || retOption > 1 {
+		return 0, moerr.NewWrongArguments(moerr.Context(), "regexp_instr")
 	}
 
-	reg, err := rs.getRegularMatcher(pat)
+	reg, err := rs.getRegularMatcherForMatch(pat)
 	if err != nil {
-		pat = "[" + pat + "]"
+		if pat == "" {
+			return 0, err
+		}
 		return 0, moerr.NewInvalidArgNoCtx("regexp_instr have invalid regexp pattern arg", pat)
 	}
+	if pos < 1 || pos > int64(len(runes)) {
+		if len(runes) == 0 && pos == 1 {
+			return 0, nil
+		}
+		return 0, moerr.NewRegexpIndexOutOfBoundsNoCtx()
+	}
 
-	matches := reg.FindAllStringIndex(str[pos-1:], -1)
+	search := string(runes[pos-1:])
+	matches := reg.FindAllStringIndex(search, -1)
 	if int64(len(matches)) < occurrence {
 		return 0, nil
 	}
-	return int64(matches[occurrence-1][retOption]) + pos, nil
+	byteIndex := matches[occurrence-1][retOption]
+	return int64(utf8.RuneCountInString(search[:byteIndex])) + pos, nil
 }
 
 func (rs *regexpSet) regularInstrWithMatchType(
 	pat string, str string, pos, occurrence int64, retOption int8, matchType string,
 ) (index int64, err error) {
-	pat, err = regexpPatternWithMatchType(pat, matchType, "regexp_instr")
+	var normalizeNewlines bool
+	pat, normalizeNewlines, err = regexpPatternWithMatchType(pat, matchType, "regexp_instr")
 	if err != nil {
 		return 0, err
+	}
+	if normalizeNewlines {
+		str = normalizeRegexpNewlines(str)
 	}
 	return rs.regularInstr(pat, str, pos, occurrence, retOption)
 }
 
 func (rs *regexpSet) regularLike(pat string, str string, matchType string) (bool, error) {
-	rule, err := regexpPatternWithMatchType(pat, matchType, "regexp_like")
+	rule, normalizeNewlines, err := regexpPatternWithMatchType(pat, matchType, "regexp_like")
 	if err != nil {
 		return false, err
 	}
 	if pat == "" {
 		return false, moerr.NewRegexpIllegalArgumentNoCtx()
+	}
+	if normalizeNewlines {
+		str = normalizeRegexpNewlines(str)
 	}
 
 	reg, err := rs.getRegularMatcher(rule)
@@ -1007,15 +1072,16 @@ func (rs *regexpSet) regularLike(pat string, str string, matchType string) (bool
 // c: case sensitive.
 // m: multiple line mode.
 // n: '.' can match line terminator.
-func regexpPatternWithMatchType(pattern, matchType, functionName string) (string, error) {
-	flags, err := getPureMatchType(matchType, functionName)
+// u: Unix-only line endings for m mode.
+func regexpPatternWithMatchType(pattern, matchType, functionName string) (string, bool, error) {
+	flags, unixLines, multiline, err := getPureMatchType(matchType, functionName)
 	if err != nil || flags == "" {
-		return pattern, err
+		return pattern, multiline && !unixLines, err
 	}
-	return fmt.Sprintf("(?%s)%s", flags, pattern), nil
+	return fmt.Sprintf("(?%s)%s", flags, pattern), multiline && !unixLines, nil
 }
 
-func getPureMatchType(input, functionName string) (string, error) {
+func getPureMatchType(input, functionName string) (flags string, unixLines bool, multiline bool, err error) {
 	retstring := ""
 	caseType := ""
 	foundn := false
@@ -1028,6 +1094,7 @@ func getPureMatchType(input, functionName string) (string, error) {
 		case "c":
 			caseType = ""
 		case "m":
+			multiline = true
 			if !foundm {
 				retstring += "m"
 				foundm = true
@@ -1037,12 +1104,25 @@ func getPureMatchType(input, functionName string) (string, error) {
 				retstring += "s"
 				foundn = true
 			}
+		case "u":
+			unixLines = true
 		default:
-			return "", moerr.NewWrongArguments(moerr.Context(), functionName)
+			return "", false, false, moerr.NewWrongArguments(moerr.Context(), functionName)
 		}
 	}
 
 	retstring += caseType
 
-	return retstring, nil
+	return retstring, unixLines, multiline, nil
+}
+
+func normalizeRegexpNewlines(input string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '\r', '\u0085', '\u2028', '\u2029':
+			return '\n'
+		default:
+			return r
+		}
+	}, input)
 }

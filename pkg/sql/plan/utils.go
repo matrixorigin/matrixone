@@ -3144,14 +3144,36 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 type ParamValue struct {
 	Value any
 	IsBin bool
-	// Type carries the runtime semantic type used to rebind prepared
-	// expressions. IsBin is retained for vector execution metadata, but must
-	// not be used as a substitute for the expression's type OID.
-	Type types.T
 }
 
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
-	params := makePreparedParamExprs(paramVals)
+	params := make([]*Expr, len(paramVals))
+	for i, val := range paramVals {
+		isBin := false
+		if param, ok := val.(ParamValue); ok {
+			val = param.Value
+			isBin = param.IsBin
+		}
+		if val == nil {
+			pc := &plan.Literal{
+				Isnull: true,
+				Value:  &plan.Literal_Sval{Sval: ""},
+			}
+			params[i] = &plan.Expr{
+				Expr: &plan.Expr_Lit{
+					Lit: pc,
+				},
+			}
+		} else {
+			pc := &plan.Literal{IsBin: isBin}
+			pc.Value = &plan.Literal_Sval{Sval: fmt.Sprintf("%v", val)}
+			params[i] = &plan.Expr{
+				Expr: &plan.Expr_Lit{
+					Lit: pc,
+				},
+			}
+		}
+	}
 	paramRule := NewResetParamRefRule(ctx, params)
 	VisitQuery := NewVisitPlan(plan0, []VisitPlanRule{paramRule})
 	err := VisitQuery.Visit(ctx)
@@ -3159,65 +3181,6 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 		return err
 	}
 	return nil
-}
-
-// ValidatePreparedRegexpParams checks runtime parameter OIDs against regexp
-// operands without rebuilding or mutating the cached prepared plan.
-func ValidatePreparedRegexpParams(ctx context.Context, plan0 *Plan, paramVals []any) error {
-	if plan0 == nil || len(paramVals) == 0 {
-		return nil
-	}
-	detector := &DetectRegexpFunctionRule{}
-	if err := NewVisitPlan(plan0, []VisitPlanRule{detector}).Visit(ctx); err != nil {
-		return err
-	}
-	if !detector.found {
-		return nil
-	}
-	planCopy := DeepCopyPlan(plan0)
-	validator := NewValidatePreparedRegexpParamRule(ctx, makePreparedParamExprs(paramVals))
-	return NewVisitPlan(planCopy, []VisitPlanRule{validator}).Visit(ctx)
-}
-
-func makePreparedParamExprs(paramVals []any) []*Expr {
-	params := make([]*Expr, len(paramVals))
-	for i, val := range paramVals {
-		isBin := false
-		paramType := types.T_any
-		if param, ok := val.(ParamValue); ok {
-			val = param.Value
-			isBin = param.IsBin
-			paramType = param.Type
-		}
-		if val == nil {
-			literalType := types.T_any.ToType()
-			pc := &plan.Literal{
-				Isnull: true,
-				Value:  &plan.Literal_Sval{Sval: ""},
-			}
-			params[i] = &plan.Expr{
-				Typ: makePlan2Type(&literalType),
-				Expr: &plan.Expr_Lit{
-					Lit: pc,
-				},
-			}
-		} else {
-			literalType := types.T_varchar.ToType()
-			pc := &plan.Literal{IsBin: isBin}
-			pc.Value = &plan.Literal_Sval{Sval: fmt.Sprintf("%v", val)}
-			params[i] = &plan.Expr{
-				Typ: makePlan2Type(&literalType),
-				Expr: &plan.Expr_Lit{
-					Lit: pc,
-				},
-			}
-		}
-		if paramType != types.T_any {
-			runtimeType := paramType.ToType()
-			params[i].Typ = makePlan2Type(&runtimeType)
-		}
-	}
-	return params
 }
 
 // XXX: Any code relying on Name in ColRef, except for "explain", is bad design and practically buggy.

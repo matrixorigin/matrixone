@@ -23,7 +23,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -232,35 +231,6 @@ func TestFillValuesOfParamsInPlanRejectsControlStatements(t *testing.T) {
 		Plan: &plan.Plan_Dcl{Dcl: &plan.DataControl{}},
 	}, nil)
 	require.Error(t, err)
-}
-
-func TestFillValuesOfParamsInPlanRejectsRuntimeBinaryRegexpParameter(t *testing.T) {
-	queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
-		Steps: []int32{0},
-		Nodes: []*plan.Node{{
-			NodeType: plan.Node_PROJECT,
-			ProjectList: []*plan.Expr{{
-				Typ: plan.Type{Id: int32(types.T_bool)},
-				Expr: &plan.Expr_F{F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: "regexp_like"},
-					Args: []*plan.Expr{
-						{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
-						{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "a"}}}},
-					},
-				}},
-			}},
-		}},
-	}}}
-
-	_, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{
-		ParamValue{Value: "abc", IsBin: true, Type: types.T_blob},
-	})
-	require.Error(t, err)
-	var moErr *moerr.Error
-	require.ErrorAs(t, err, &moErr)
-	require.Equal(t, uint16(3995), moErr.MySQLCode())
-	require.Equal(t, "HY000", moErr.SqlState())
-	require.Contains(t, moErr.Error(), "in call to regexp_like")
 }
 
 func TestCheckNoNeedCastWithTrailingZeros(t *testing.T) {

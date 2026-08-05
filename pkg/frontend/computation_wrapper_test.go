@@ -210,7 +210,7 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, cw.proc.GetPrepareParamIsBin(0))
 	require.False(t, cw.proc.GetPrepareParamIsBin(1))
-	require.Equal(t, plan2.ParamValue{Value: "AB\x00\x00", IsBin: true, Type: types.T_varbinary}, cw.paramVals[0])
+	require.Equal(t, plan2.ParamValue{Value: "AB\x00\x00", IsBin: true}, cw.paramVals[0])
 	require.Equal(t, plan2.ParamValue{Value: "text", IsBin: false}, cw.paramVals[1])
 
 	params := cw.proc.GetPrepareParams()
@@ -335,7 +335,7 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 	require.Equal(t, []any{
 		plan2.ParamValue{Value: int64(10), IsBin: false},
 		plan2.ParamValue{Value: int64(20), IsBin: false},
-		plan2.ParamValue{Value: "session-binary", IsBin: true, Type: types.T_varbinary},
+		plan2.ParamValue{Value: "session-binary", IsBin: true},
 	}, paramVals)
 	require.Equal(t, "10", params.GetStringAt(0))
 	require.Equal(t, "20", params.GetStringAt(1))

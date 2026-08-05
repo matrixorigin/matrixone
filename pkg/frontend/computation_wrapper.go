@@ -873,7 +873,7 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 		cwft.proc.SetPrepareParams(prepareStmt.params)
-		cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes)
+		cwft.paramVals, err = preparedParamValues(cwft.proc)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
@@ -891,9 +891,6 @@ func initExecuteStmtParamWithResolverInSession(
 		if numParams > 0 {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-	}
-	if err = plan2.ValidatePreparedRegexpParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
-		return nil, nil, nil, originSQL, false, err
 	}
 	// A cached prepared Compile already owns a materialized worker topology.
 	// Explicit scheduling intent must be evaluated for this execution, so it
@@ -1028,7 +1025,7 @@ func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
 	}
 }
 
-func preparedParamValues(proc *process.Process, mysqlParamTypes []byte) ([]any, error) {
+func preparedParamValues(proc *process.Process) ([]any, error) {
 	params := proc.GetPrepareParams()
 	if params == nil || params.Length() == 0 {
 		return nil, nil
@@ -1042,18 +1039,7 @@ func preparedParamValues(proc *process.Process, mysqlParamTypes []byte) ([]any, 
 		if err != nil {
 			return nil, err
 		}
-		isBin := proc.GetPrepareParamIsBin(i)
-		paramType := types.T_any
-		if isBin {
-			paramType = types.T_varbinary
-		} else if i*2 < len(mysqlParamTypes) {
-			switch defines.MysqlType(mysqlParamTypes[i*2]) {
-			case defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB,
-				defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB:
-				paramType = types.T_blob
-			}
-		}
-		values[i] = plan2.ParamValue{Value: string(raw), IsBin: isBin, Type: paramType}
+		values[i] = plan2.ParamValue{Value: string(raw), IsBin: proc.GetPrepareParamIsBin(i)}
 	}
 	return values, nil
 }
@@ -1088,11 +1074,7 @@ func buildExecuteUserParams(
 				return
 			}
 		}
-		paramType := types.T_any
-		if paramIsBin[i] {
-			paramType = types.T_varbinary
-		}
-		paramVals[i] = plan2.ParamValue{Value: param, IsBin: paramIsBin[i], Type: paramType}
+		paramVals[i] = plan2.ParamValue{Value: param, IsBin: paramIsBin[i]}
 	}
 	return
 }

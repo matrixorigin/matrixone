@@ -132,6 +132,73 @@ func Test_BuiltIn_RegexpOptionalMatchType(t *testing.T) {
 	require.Equal(t, "Incorrect arguments to regexp_instr", moErr.Error())
 }
 
+func Test_BuiltIn_RegexpMySQLBoundarySemantics(t *testing.T) {
+	op := newOpBuiltInRegexp()
+
+	_, err := op.regMap.regularInstrWithMatchType("a", "a", 1, 1, -1, "c")
+	require.Error(t, err)
+	var moErr *moerr.Error
+	require.ErrorAs(t, err, &moErr)
+	require.Equal(t, uint16(moerr.ER_WRONG_ARGUMENTS), moErr.MySQLCode())
+
+	replaced, err := op.regMap.regularReplaceWithMatchType("a", "abcabc", "X", 4, 0, "c")
+	require.NoError(t, err)
+	require.Equal(t, "abcXbc", replaced)
+
+	index, err := op.regMap.regularInstrWithMatchType("a", "你a", 1, 1, 0, "c")
+	require.NoError(t, err)
+	require.Equal(t, int64(2), index)
+	matched, substr, err := op.regMap.regularSubstrWithMatchType("a", "你a", 2, 1, "c")
+	require.NoError(t, err)
+	require.True(t, matched)
+	require.Equal(t, "a", substr)
+	replaced, err = op.regMap.regularReplaceWithMatchType("a", "你a", "X", 2, 0, "c")
+	require.NoError(t, err)
+	require.Equal(t, "你X", replaced)
+
+	for _, newline := range []string{"\r", "\u0085", "\u2028", "\u2029"} {
+		index, err = op.regMap.regularInstrWithMatchType("^b", "a"+newline+"b", 1, 1, 0, "m")
+		require.NoError(t, err)
+		require.Equal(t, int64(3), index)
+		index, err = op.regMap.regularInstrWithMatchType("^b", "a"+newline+"b", 1, 1, 0, "mu")
+		require.NoError(t, err)
+		require.Equal(t, int64(0), index)
+	}
+
+	_, err = op.regMap.regularInstrWithMatchType("", "abc", 1, 1, 0, "c")
+	require.Error(t, err)
+	require.ErrorAs(t, err, &moErr)
+	require.Equal(t, uint16(moerr.ER_REGEXP_ILLEGAL_ARGUMENT), moErr.MySQLCode())
+	matched, _, err = op.regMap.regularSubstrWithMatchType("", "abc", 1, 1, "c")
+	require.False(t, matched)
+	require.Error(t, err)
+	_, err = op.regMap.regularReplaceWithMatchType("", "abc", "X", 1, 0, "c")
+	require.Error(t, err)
+
+	matched, _, err = op.regMap.regularSubstrWithMatchType("a", "abc", 4, 1, "c")
+	require.NoError(t, err)
+	require.False(t, matched)
+	replaced, err = op.regMap.regularReplaceWithMatchType("a", "abc", "X", 4, 0, "c")
+	require.NoError(t, err)
+	require.Equal(t, "abc", replaced)
+
+	index, err = op.regMap.regularInstrWithMatchType("a", "abc", 1, -1, 0, "c")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), index)
+	matched, substr, err = op.regMap.regularSubstrWithMatchType("a", "abc", 1, 0, "c")
+	require.NoError(t, err)
+	require.True(t, matched)
+	require.Equal(t, "a", substr)
+	replaced, err = op.regMap.regularReplaceWithMatchType("a", "abcabc", "X", 1, -1, "c")
+	require.NoError(t, err)
+	require.Equal(t, "Xbcabc", replaced)
+
+	replaced, err = op.regMap.regularReplaceWithMatchType(
+		"([a-z]+)([0-9]+)", "abc123", "$2-$1", 1, 0, "c")
+	require.NoError(t, err)
+	require.Equal(t, "123-abc", replaced)
+}
+
 func TestRegexpOptionalMatchTypeOverloads(t *testing.T) {
 	utf8 := types.T_varchar.ToType()
 	integer := types.T_int64.ToType()
@@ -271,47 +338,6 @@ func Test_BuiltIn_RegMatchPreservesValidPatterns(t *testing.T) {
 
 			succeed, errInfo := tcc.Run()
 			require.True(t, succeed, errInfo)
-		})
-	}
-}
-
-func TestRegexpFunctionsRejectBinaryCharacterSet(t *testing.T) {
-	ctx := context.Background()
-	utf8 := types.T_varchar.ToType()
-	binary := types.T_binary.ToType()
-	varbinary := types.T_varbinary.ToType()
-	blob := types.T_blob.ToType()
-
-	tests := []struct {
-		name         string
-		functionName string
-		args         []types.Type
-		leftCharset  string
-		rightCharset string
-		errorName    string
-	}{
-		{name: "regexp_operator_subject", functionName: "reg_match", args: []types.Type{binary, utf8}, leftCharset: "binary", rightCharset: "utf8mb4_general_ci", errorName: "regexp_like"},
-		{name: "not_regexp_operator_pattern", functionName: "not_reg_match", args: []types.Type{utf8, varbinary}, leftCharset: "utf8mb4_general_ci", rightCharset: "binary", errorName: "regexp_like"},
-		{name: "regexp_like_subject", functionName: "regexp_like", args: []types.Type{blob, utf8}, leftCharset: "binary", rightCharset: "utf8mb4_general_ci", errorName: "regexp_like"},
-		{name: "regexp_instr_pattern", functionName: "regexp_instr", args: []types.Type{utf8, binary}, leftCharset: "utf8mb4_general_ci", rightCharset: "binary", errorName: "regexp_instr"},
-		{name: "regexp_substr_subject", functionName: "regexp_substr", args: []types.Type{varbinary, utf8}, leftCharset: "binary", rightCharset: "utf8mb4_general_ci", errorName: "regexp_substr"},
-		{name: "regexp_replace_pattern", functionName: "regexp_replace", args: []types.Type{utf8, blob, utf8}, leftCharset: "utf8mb4_general_ci", rightCharset: "binary", errorName: "regexp_replace"},
-		{name: "regexp_replace_replacement", functionName: "regexp_replace", args: []types.Type{utf8, utf8, blob}, leftCharset: "utf8mb4_general_ci", rightCharset: "binary", errorName: "regexp_replace"},
-		{name: "regexp_like_both", functionName: "regexp_like", args: []types.Type{binary, varbinary}, leftCharset: "binary", rightCharset: "binary", errorName: "regexp_like"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := GetFunctionByName(ctx, tc.functionName, tc.args)
-			require.Error(t, err)
-			var moErr *moerr.Error
-			require.ErrorAs(t, err, &moErr)
-			require.Equal(t, uint16(3995), moErr.MySQLCode())
-			require.Equal(t, "HY000", moErr.SqlState())
-			require.Equal(t,
-				"Character set '"+tc.leftCharset+"' cannot be used in conjunction with '"+
-					tc.rightCharset+"' in call to "+tc.errorName+".",
-				moErr.Error())
 		})
 	}
 }
@@ -625,7 +651,7 @@ func Test_BuiltIn_RegularReplace(t *testing.T) {
 		{pat: "[0-9]", str: "abcdefg123456ABC", repl: "", pos: 4, ocr: 0, expected: "abcdefgABC"},
 		{pat: "[0-9]", str: "abcDEfg123456ABC", repl: "", pos: 4, ocr: 0, expected: "abcDEfgABC"},
 		{pat: "[0-9]", str: "abcDEfg123456ABC", repl: "", pos: 7, ocr: 0, expected: "abcDEfgABC"},
-		{pat: "[0-9]", str: "abcDefg123456ABC", repl: "", pos: 10, ocr: 0, expected: "abcDefgABC"},
+		{pat: "[0-9]", str: "abcDefg123456ABC", repl: "", pos: 10, ocr: 0, expected: "abcDefg12ABC"},
 	}
 
 	for i, c := range cs {

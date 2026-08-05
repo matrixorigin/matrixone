@@ -69,6 +69,10 @@ func NewRegexpIllegalArgumentNoCtx() *Error {
 	return newError(Context(), ErrRegexpIllegalArgument)
 }
 
+func NewRegexpIndexOutOfBoundsNoCtx() *Error {
+	return newError(Context(), ErrRegexpIndexOutOfBounds)
+}
+
 func NewOutOfRangeNoCtxf(typ string, format string, args ...any) *Error {
 	return newError(Context(), ErrOutOfRange, typ, fmt.Sprintf(format, args...))
 }

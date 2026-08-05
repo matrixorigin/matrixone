@@ -48,8 +48,9 @@ select regexp_replace(concat('abc', _binary '123'), '[0-9]+', 'X');
 Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_replace.
 select _binary '' regexp '^$';
 Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
-select cast(null as binary) regexp 'a';
-Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+select cast(null as binary) regexp 'a' as binary_null_regexp;
+➤ binary_null_regexp[-7,1,0]  𝄀
+null
 select unhex('ff') regexp '.';
 Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
 select regexp_like(null, 'a') as regexp_null_subject;
@@ -83,6 +84,38 @@ select regexp_substr('Cat', 'cat', 1, 1, null) as null_match_type;
 null
 select regexp_replace('Cat', 'cat', 'X', 1, 0, 'x');
 Incorrect arguments to regexp_replace
+select regexp_instr('a', 'a', 1, 1, -1, 'c');
+Incorrect arguments to regexp_instr
+select regexp_replace('abcabc', 'a', 'X', 4, 0, 'c') as replace_from_pos;
+➤ replace_from_pos[12,-1,0]  𝄀
+abcXbc
+select regexp_instr('你a', 'a', 1, 1, 0, 'c') as utf8_instr,
+regexp_substr('你a', 'a', 2, 1, 'c') as utf8_substr,
+regexp_replace('你a', 'a', 'X', 2, 0, 'c') as utf8_replace;
+➤ utf8_instr[-5,64,0]  ¦  utf8_substr[12,-1,0]  ¦  utf8_replace[12,-1,0]  𝄀
+2  ¦  a  ¦  你X
+select regexp_instr('a\rb', '^b', 1, 1, 0, 'm') as cr_multiline,
+regexp_instr('a\rb', '^b', 1, 1, 0, 'mu') as cr_unix_lines;
+➤ cr_multiline[-5,64,0]  ¦  cr_unix_lines[-5,64,0]  𝄀
+3  ¦  0
+select regexp_instr('abc', '', 1, 1, 0, 'c');
+Illegal argument to a regular expression.
+select regexp_substr('abc', '', 1, 1, 'c');
+Illegal argument to a regular expression.
+select regexp_replace('abc', '', 'X', 1, 0, 'c');
+Illegal argument to a regular expression.
+select regexp_substr('abc', 'a', 4, 1, 'c') as substr_after_end,
+regexp_replace('abc', 'a', 'X', 4, 0, 'c') as replace_after_end;
+➤ substr_after_end[12,-1,0]  ¦  replace_after_end[12,-1,0]  𝄀
+null  ¦  abc
+select regexp_instr('abc', 'a', 1, -1, 0, 'c') as instr_negative_occurrence,
+regexp_substr('abc', 'a', 1, 0, 'c') as substr_zero_occurrence,
+regexp_replace('abcabc', 'a', 'X', 1, -1, 'c') as replace_negative_occurrence;
+➤ instr_negative_occurrence[-5,64,0]  ¦  substr_zero_occurrence[12,-1,0]  ¦  replace_negative_occurrence[12,-1,0]  𝄀
+1  ¦  a  ¦  Xbcabc
+select regexp_replace('abc123', '([a-z]+)([0-9]+)', '$2-$1', 1, 0, 'c') as capture_replace;
+➤ capture_replace[12,-1,0]  𝄀
+123-abc
 set @regexp_match_type = binary 'i';
 prepare regexp_match_type_stmt from 'select regexp_instr(''Cat'', ''cat'', 1, 1, 0, ?)';
 execute regexp_match_type_stmt using @regexp_match_type;
@@ -118,7 +151,8 @@ drop table t_regexp_binary_operands;
 set @regexp_binary_param = binary 'abc';
 prepare regexp_binary_stmt from 'select regexp_like(?, ''a'')';
 execute regexp_binary_stmt using @regexp_binary_param;
-Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+➤ regexp_like(?, a)[-7,1,0]  𝄀
+1
 set @regexp_text_param = 'abc';
 execute regexp_binary_stmt using @regexp_text_param;
 ➤ regexp_like(?, a)[-7,1,0]  𝄀

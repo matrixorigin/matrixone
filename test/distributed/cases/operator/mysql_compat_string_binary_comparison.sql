@@ -37,7 +37,7 @@ select regexp_instr(unhex('616263'), 'b');
 select regexp_substr(from_base64('YWJjMTIz'), '[0-9]+');
 select regexp_replace(concat('abc', _binary '123'), '[0-9]+', 'X');
 select _binary '' regexp '^$';
-select cast(null as binary) regexp 'a';
+select cast(null as binary) regexp 'a' as binary_null_regexp;
 select unhex('ff') regexp '.';
 select regexp_like(null, 'a') as regexp_null_subject;
 
@@ -58,6 +58,22 @@ select regexp_instr('a\nb', '^b', 1, 1, 0, 'm') as instr_m,
 select regexp_instr('Cat', 'cat', 1, 1, 0, _binary 'i') as binary_match_type;
 select regexp_substr('Cat', 'cat', 1, 1, null) as null_match_type;
 select regexp_replace('Cat', 'cat', 'X', 1, 0, 'x');
+select regexp_instr('a', 'a', 1, 1, -1, 'c');
+select regexp_replace('abcabc', 'a', 'X', 4, 0, 'c') as replace_from_pos;
+select regexp_instr('你a', 'a', 1, 1, 0, 'c') as utf8_instr,
+       regexp_substr('你a', 'a', 2, 1, 'c') as utf8_substr,
+       regexp_replace('你a', 'a', 'X', 2, 0, 'c') as utf8_replace;
+select regexp_instr('a\rb', '^b', 1, 1, 0, 'm') as cr_multiline,
+       regexp_instr('a\rb', '^b', 1, 1, 0, 'mu') as cr_unix_lines;
+select regexp_instr('abc', '', 1, 1, 0, 'c');
+select regexp_substr('abc', '', 1, 1, 'c');
+select regexp_replace('abc', '', 'X', 1, 0, 'c');
+select regexp_substr('abc', 'a', 4, 1, 'c') as substr_after_end,
+       regexp_replace('abc', 'a', 'X', 4, 0, 'c') as replace_after_end;
+select regexp_instr('abc', 'a', 1, -1, 0, 'c') as instr_negative_occurrence,
+       regexp_substr('abc', 'a', 1, 0, 'c') as substr_zero_occurrence,
+       regexp_replace('abcabc', 'a', 'X', 1, -1, 'c') as replace_negative_occurrence;
+select regexp_replace('abc123', '([a-z]+)([0-9]+)', '$2-$1', 1, 0, 'c') as capture_replace;
 
 set @regexp_match_type = binary 'i';
 prepare regexp_match_type_stmt from 'select regexp_instr(''Cat'', ''cat'', 1, 1, 0, ?)';

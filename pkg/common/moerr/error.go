@@ -76,6 +76,7 @@ const (
 	ErrTooBigPrecision             uint16 = 20205
 	ErrRegexpIllegalArgument       uint16 = 20206
 	ErrCharacterSetMismatch        uint16 = 20207
+	ErrRegexpIndexOutOfBounds      uint16 = 20208
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -407,6 +408,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTooBigPrecision:             {ER_TOO_BIG_PRECISION, []string{"42000", "S1009"}, "Too-big precision %d specified for '%-.192s'. Maximum is %d."},
 	ErrRegexpIllegalArgument:       {ER_REGEXP_ILLEGAL_ARGUMENT, []string{MySQLDefaultSqlState}, "Illegal argument to a regular expression."},
 	ErrCharacterSetMismatch:        {ER_CHARACTER_SET_MISMATCH, []string{MySQLDefaultSqlState}, "Character set '%s' cannot be used in conjunction with '%s' in call to %s."},
+	ErrRegexpIndexOutOfBounds:      {ER_REGEXP_INDEX_OUTOFBOUNDS_ERROR, []string{MySQLDefaultSqlState}, "Index out of bounds in regular expression search."},
 
 	// Group 3: invalid input
 	ErrBadConfig:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
@@ -989,6 +991,10 @@ func NewRegexpIllegalArgument(ctx context.Context) *Error {
 
 func NewCharacterSetMismatch(ctx context.Context, left, right, function string) *Error {
 	return newError(ctx, ErrCharacterSetMismatch, left, right, function)
+}
+
+func NewRegexpIndexOutOfBounds(ctx context.Context) *Error {
+	return newError(ctx, ErrRegexpIndexOutOfBounds)
 }
 
 func NewOutOfRangef(ctx context.Context, typ string, format string, args ...any) *Error {

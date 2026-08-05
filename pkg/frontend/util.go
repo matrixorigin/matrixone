@@ -295,18 +295,9 @@ func getExprValueWithPrepareMode(
 	}
 
 	if len(isBin) > 0 {
-		*isBin[0] = resultVec.GetIsBin() || isBinaryStringType(oid)
+		*isBin[0] = resultVec.GetIsBin()
 	}
 	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
-}
-
-func isBinaryStringType(oid types.T) bool {
-	switch oid {
-	case types.T_binary, types.T_varbinary, types.T_blob:
-		return true
-	default:
-		return false
-	}
 }
 
 func bindSetVariableResultExpr(

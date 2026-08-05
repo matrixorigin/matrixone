@@ -110,6 +110,14 @@ func TestNewCharacterSetMismatch(t *testing.T) {
 		err.Error())
 }
 
+func TestNewRegexpIndexOutOfBounds(t *testing.T) {
+	err := NewRegexpIndexOutOfBounds(context.Background())
+	require.Equal(t, ErrRegexpIndexOutOfBounds, err.ErrorCode())
+	require.Equal(t, uint16(ER_REGEXP_INDEX_OUTOFBOUNDS_ERROR), err.MySQLCode())
+	require.Equal(t, "HY000", err.SqlState())
+	require.Equal(t, "Index out of bounds in regular expression search.", err.Error())
+}
+
 func TestWrongArgumentsMySQLError(t *testing.T) {
 	err := NewWrongArguments(context.Background(), "nth_value")
 	require.Equal(t, ErrWrongArguments, err.ErrorCode())

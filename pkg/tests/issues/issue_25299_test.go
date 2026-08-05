@@ -77,10 +77,27 @@ func TestIssue25299RegexpRejectsBinaryCharset(t *testing.T) {
 		require.NoError(t, err)
 		defer conn.ExecContext(context.Background(), "deallocate prepare regexp_binary_stmt")
 
-		assertCharacterSetMismatch("execute regexp_binary_stmt using @regexp_binary_param")
+		var matched bool
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"execute regexp_binary_stmt using @regexp_binary_param").Scan(&matched))
+		require.True(t, matched)
+		_, err = conn.ExecContext(ctx, "set @regexp_binary_null = cast(null as binary)")
+		require.NoError(t, err)
+		var nullMatched sql.NullBool
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"execute regexp_binary_stmt using @regexp_binary_null").Scan(&nullMatched))
+		require.False(t, nullMatched.Valid)
+
+		_, err = conn.ExecContext(ctx,
+			"prepare regexp_cast_stmt from 'select regexp_like(cast(? as char), ''a'')'")
+		require.NoError(t, err)
+		defer conn.ExecContext(context.Background(), "deallocate prepare regexp_cast_stmt")
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"execute regexp_cast_stmt using @regexp_binary_param").Scan(&matched))
+		require.True(t, matched)
+
 		_, err = conn.ExecContext(ctx, "set @regexp_text_param = 'abc'")
 		require.NoError(t, err)
-		var matched bool
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"execute regexp_binary_stmt using @regexp_text_param").Scan(&matched))
 		require.True(t, matched)

@@ -17,7 +17,6 @@ package function
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -161,11 +160,6 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 	}
 
 	check := f.checkFn(f.Overloads, args)
-	if check.status == succeedMatched || check.status == succeedWithCast {
-		if err = validateRegexpCharacterSets(ctx, r.fid, args); err != nil {
-			return r, err
-		}
-	}
 	switch check.status {
 	case succeedMatched:
 		r.overloadId = int32(check.idx)
@@ -196,77 +190,6 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 	}
 
 	return r, err
-}
-
-func validateRegexpCharacterSets(ctx context.Context, functionID int32, args []types.Type) error {
-	functionName := ""
-	argumentIndexes := []int{1}
-	switch functionID {
-	case REG_MATCH, NOT_REG_MATCH, REGEXP_LIKE:
-		functionName = "regexp_like"
-	case REGEXP_INSTR:
-		functionName = "regexp_instr"
-	case REGEXP_REPLACE:
-		functionName = "regexp_replace"
-		argumentIndexes = append(argumentIndexes, 2)
-	case REGEXP_SUBSTR:
-		functionName = "regexp_substr"
-	default:
-		return nil
-	}
-
-	for _, argumentIndex := range argumentIndexes {
-		if argumentIndex >= len(args) ||
-			(!isBinaryCharacterSet(args[0]) && !isBinaryCharacterSet(args[argumentIndex])) {
-			continue
-		}
-		return moerr.NewCharacterSetMismatch(
-			ctx,
-			regexpCharacterSetName(args[0]),
-			regexpCharacterSetName(args[argumentIndex]),
-			functionName,
-		)
-	}
-	return nil
-}
-
-// ValidatePreparedRegexpCharacterSets applies the same pre-cast regexp
-// validation when prepared parameters acquire their semantic types at EXECUTE
-// time. Non-regexp names are intentionally a no-op.
-func ValidatePreparedRegexpCharacterSets(ctx context.Context, name string, args []types.Type) error {
-	if !IsRegexpFunctionName(name) {
-		return nil
-	}
-	functionID, err := getFunctionIdByName(ctx, name)
-	if err != nil {
-		return err
-	}
-	return validateRegexpCharacterSets(ctx, functionID, args)
-}
-
-func IsRegexpFunctionName(name string) bool {
-	switch strings.ToLower(name) {
-	case "reg_match", "not_reg_match", "regexp_instr", "regexp_like", "regexp_replace", "regexp_substr":
-		return true
-	default:
-		return false
-	}
-}
-
-func regexpCharacterSetName(typ types.Type) string {
-	if isBinaryCharacterSet(typ) {
-		return "binary"
-	}
-	return "utf8mb4_general_ci"
-}
-
-func isBinaryCharacterSet(typ types.Type) bool {
-	switch typ.Oid {
-	case types.T_binary, types.T_varbinary, types.T_blob:
-		return true
-	default:
-		return false
-	}
 }
 
 // GetFunctionByNameWithOverload validates the arguments using the function's

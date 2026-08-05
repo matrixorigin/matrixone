@@ -3826,6 +3826,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 		return nil, err
 	}
+	if err := validateRegexpBinaryOperands(ctx, name, args); err != nil {
+		return nil, err
+	}
 
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
@@ -4155,6 +4158,63 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		},
 		Typ: Typ,
 	}, nil
+}
+
+func validateRegexpBinaryOperands(ctx context.Context, name string, args []*Expr) error {
+	functionName := ""
+	argumentIndexes := []int{1}
+	switch name {
+	case "reg_match", "not_reg_match", "regexp_like":
+		functionName = "regexp_like"
+	case "regexp_instr":
+		functionName = "regexp_instr"
+	case "regexp_replace":
+		functionName = "regexp_replace"
+		argumentIndexes = append(argumentIndexes, 2)
+	case "regexp_substr":
+		functionName = "regexp_substr"
+	default:
+		return nil
+	}
+
+	for _, index := range argumentIndexes {
+		if index >= len(args) || (regexpOperandAllowsBinary(args[0]) && regexpOperandAllowsBinary(args[index])) {
+			continue
+		}
+		return moerr.NewCharacterSetMismatch(
+			ctx, regexpOperandCharacterSet(args[0]), regexpOperandCharacterSet(args[index]), functionName)
+	}
+	return nil
+}
+
+func regexpOperandAllowsBinary(expr *Expr) bool {
+	if expr == nil || expr.GetP() != nil || regexpOperandIsNull(expr) {
+		return true
+	}
+	switch types.T(expr.Typ.Id) {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return false
+	default:
+		return true
+	}
+}
+
+func regexpOperandIsNull(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return lit.Isnull
+	}
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && len(fn.Args) > 0 && regexpOperandIsNull(fn.Args[0])
+}
+
+func regexpOperandCharacterSet(expr *Expr) string {
+	if !regexpOperandAllowsBinary(expr) {
+		return "binary"
+	}
+	return "utf8mb4_general_ci"
 }
 
 func invalidUTCFunctionFSPError(ctx context.Context, name string) error {
