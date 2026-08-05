@@ -314,9 +314,9 @@ func (ses *Session) InitSystemVariables(ctx context.Context, bh BackgroundExec) 
 		return
 	}
 	sessionVars := sv.Clone()
-	transactionIsolationValue := sessionVars.Get("transaction_isolation")
+	transactionIsolationValue := sessionVars.Get(transactionIsolationSystemVariable)
 	if transactionIsolationValue == nil {
-		transactionIsolationValue = gSysVarsDefs["transaction_isolation"].Default
+		transactionIsolationValue = gSysVarsDefs[transactionIsolationSystemVariable].Default
 	}
 	transactionIsolation, err := txnIsolationFromSystemValue(ctx, transactionIsolationValue)
 	if err != nil {
@@ -1938,9 +1938,13 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 	// Catalog values below still win, so SET GLOBAL remains account scoped and
 	// is inherited by subsequently initialized sessions.
 	if value, ok := serviceTxnIsolationSystemValue(ses.service); ok {
-		gSysVars["transaction_isolation"] = value
-		gSysVars["tx_isolation"] = value
+		gSysVars[transactionIsolationSystemVariable] = value
+		gSysVars[transactionIsolationSystemVariableAlias] = value
 	}
+	var canonicalIsolationValue interface{}
+	var aliasIsolationValue interface{}
+	var hasCanonicalIsolation bool
+	var hasAliasIsolation bool
 
 	for _, execResult := range execResults {
 		for i := uint64(0); i < execResult.GetRowCount(); i++ {
@@ -1951,6 +1955,7 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 			if varValue, err = execResult.GetString(tenantCtx, i, 1); err != nil {
 				return
 			}
+			varName = strings.ToLower(varName)
 
 			// overwrite with the values from table `mo_mysql_compatibility`
 			if sv, ok := gSysVarsDefs[varName]; ok {
@@ -1958,9 +1963,30 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 				if val, err = sv.GetType().ConvertFromString(varValue); err != nil {
 					return
 				}
+				if isTransactionIsolationSystemVariable(varName) {
+					if varName == transactionIsolationSystemVariable {
+						canonicalIsolationValue = val
+						hasCanonicalIsolation = true
+					} else {
+						aliasIsolationValue = val
+						hasAliasIsolation = true
+					}
+					continue
+				}
 				gSysVars[varName] = val
 			}
 		}
+	}
+
+	// New writes are canonical. Preserve compatibility with old catalogs that
+	// contain only tx_isolation, while making a canonical row authoritative if
+	// both forms happen to exist.
+	if hasCanonicalIsolation {
+		gSysVars[transactionIsolationSystemVariable] = canonicalIsolationValue
+		gSysVars[transactionIsolationSystemVariableAlias] = canonicalIsolationValue
+	} else if hasAliasIsolation {
+		gSysVars[transactionIsolationSystemVariable] = aliasIsolationValue
+		gSysVars[transactionIsolationSystemVariableAlias] = aliasIsolationValue
 	}
 
 	return

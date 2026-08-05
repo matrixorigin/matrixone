@@ -40,7 +40,7 @@ func IsAdministrativeStatement(stmt tree.Statement) bool {
 // IsParameterModificationStatement checks the statement is the statement of parameter modification statement.
 func IsParameterModificationStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
-	case *tree.SetVar, *tree.SetTransaction:
+	case *tree.SetVar:
 		return true
 	}
 	return false
@@ -293,7 +293,7 @@ func statementCanBeExecutedInUncommittedTransaction(
 	case *tree.DropSequence: //Case1, Case3 above
 		//background transaction can execute the DROPxxx in one transaction
 		return ses.IsBackgroundSession() || !ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
-	case *tree.SetVar:
+	case *tree.SetVar, *tree.SetTransaction:
 		return true, nil
 	case *tree.CloneTable,
 		*tree.CloneDatabase,

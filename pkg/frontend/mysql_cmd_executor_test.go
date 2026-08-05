@@ -306,6 +306,147 @@ func TestHandleSetTransaction(t *testing.T) {
 	})
 }
 
+func TestSetTransactionDoesNotFinishExistingTransaction(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+
+	run := func(t *testing.T, setSQL string, wantErr string) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+
+		op := newTestTxnOp()
+		op.meta = txn.TxnMeta{
+			ID:     []byte{1, 2, 3, 4},
+			Status: txn.TxnStatus_Active,
+		}
+		handler := ses.GetTxnHandler()
+		handler.mu.Lock()
+		handler.storage = eng
+		handler.txnOp = op
+		handler.optionBits = OPTION_AUTOCOMMIT | OPTION_BEGIN
+		handler.serverStatus = uint32(SERVER_STATUS_AUTOCOMMIT | SERVER_STATUS_IN_TRANS)
+		handler.mu.Unlock()
+
+		execute := func(sql string) error {
+			t.Helper()
+			stmt, err := mysql.ParseOne(ctx, sql, 1)
+			require.NoError(t, err)
+			if handler.InActiveTxn() {
+				if err = canExecuteStatementInUncommittedTransaction(ctx, ses, stmt); err != nil {
+					return err
+				}
+			}
+			proc := ses.GetProc()
+			execCtx := &ExecCtx{
+				reqCtx:    ctx,
+				stmt:      stmt,
+				ses:       ses,
+				proc:      proc,
+				input:     &UserInput{sql: sql},
+				sqlOfStmt: sql,
+			}
+			execCtx.cw = InitTxnComputationWrapper(ses, stmt, proc)
+			return executeStmtWithWorkspace(ses, nil, execCtx)
+		}
+
+		err := execute(setSQL)
+		if wantErr == "" {
+			require.NoError(t, err)
+		} else {
+			require.ErrorContains(t, err, wantErr)
+		}
+		require.True(t, handler.InActiveTxn())
+		require.Same(t, op, handler.GetTxn())
+		require.Zero(t, op.commitCalls)
+		require.Zero(t, op.rollbackCalls)
+
+		// The explicit transaction still owns the previous work and can be
+		// rolled back by the client after either the successful SESSION SET or
+		// the rejected next-transaction SET.
+		require.NoError(t, execute("rollback"))
+		require.False(t, handler.InActiveTxn())
+		require.Zero(t, op.commitCalls)
+		require.Equal(t, 1, op.rollbackCalls)
+	}
+
+	t.Run("session scope preserves prior work", func(t *testing.T) {
+		run(t, "set session transaction isolation level read committed", "")
+	})
+	t.Run("rejected next scope preserves prior work", func(t *testing.T) {
+		run(t,
+			"set transaction isolation level read committed",
+			"Transaction characteristics can't be changed while a transaction is in progress",
+		)
+	})
+
+	t.Run("statement-owned transaction is still finished", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		require.NoError(t, ses.SetSessionSysVar(ctx, "autocommit", int64(0)))
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil)
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+		ses.GetTxnHandler().storage = eng
+
+		op := newTestTxnOp()
+		op.meta = txn.TxnMeta{
+			ID:     []byte{1, 2, 3, 4},
+			Status: txn.TxnStatus_Active,
+		}
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(op, nil)
+		originalTxnClient := getPu("").TxnClient
+		defer func() { getPu("").TxnClient = originalTxnClient }()
+		getPu("").TxnClient = txnClient
+
+		sql := "set session transaction isolation level read committed"
+		stmt, err := mysql.ParseOne(ctx, sql, 1)
+		require.NoError(t, err)
+		proc := ses.GetProc()
+		execCtx := &ExecCtx{
+			reqCtx:    ctx,
+			stmt:      stmt,
+			ses:       ses,
+			proc:      proc,
+			input:     &UserInput{sql: sql},
+			sqlOfStmt: sql,
+		}
+		execCtx.cw = InitTxnComputationWrapper(ses, stmt, proc)
+
+		require.NoError(t, executeStmtWithWorkspace(ses, nil, execCtx))
+		require.False(t, ses.GetTxnHandler().InActiveTxn())
+		require.Equal(t, 1, op.commitCalls)
+		require.Zero(t, op.rollbackCalls)
+	})
+}
+
+func TestTransactionIsolationAliasUsesCanonicalState(t *testing.T) {
+	vars := &SystemVariables{mp: map[string]interface{}{
+		transactionIsolationSystemVariableAlias: "READ-COMMITTED",
+	}}
+	require.Equal(t, "READ-COMMITTED", vars.Get(transactionIsolationSystemVariable))
+	require.Equal(t, "READ-COMMITTED", vars.Get(transactionIsolationSystemVariableAlias))
+
+	vars.Set(transactionIsolationSystemVariableAlias, "REPEATABLE-READ")
+	require.Equal(t, "REPEATABLE-READ", vars.Get(transactionIsolationSystemVariable))
+	require.Equal(t, "REPEATABLE-READ", vars.Get(transactionIsolationSystemVariableAlias))
+	vars.mu.Lock()
+	canonicalValue := vars.mp[transactionIsolationSystemVariable]
+	aliasValue := vars.mp[transactionIsolationSystemVariableAlias]
+	vars.mu.Unlock()
+	require.Equal(t, "REPEATABLE-READ", canonicalValue)
+	require.Equal(t, "REPEATABLE-READ", aliasValue)
+}
+
 func TestSetTransactionIsolationAppliedToTxnMeta(t *testing.T) {
 	ctx := context.Background()
 	txnclient.RunTxnTests(func(realTxnClient txnclient.TxnClient, _ rpc.TxnSender) {
@@ -398,6 +539,9 @@ func TestHandleSetGlobalTransaction(t *testing.T) {
 	require.NoError(t, err)
 
 	got, err := ses.GetGlobalSysVar("transaction_isolation")
+	require.NoError(t, err)
+	require.Equal(t, "READ-COMMITTED", got)
+	got, err = ses.GetGlobalSysVar("tx_isolation")
 	require.NoError(t, err)
 	require.Equal(t, "READ-COMMITTED", got)
 	err = ses.SetGlobalSysVar(ctx, "transaction_isolation", "SERIALIZABLE")
@@ -504,12 +648,14 @@ func TestGlobalTransactionIsolationSeedsNewSessionTxnMeta(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
-		stmt, err := mysql.ParseOne(ctx, "set global transaction isolation level repeatable read", 1)
-		require.NoError(t, err)
-		_, err = execInFrontend(owner, &ExecCtx{reqCtx: ctx, stmt: stmt})
-		require.NoError(t, err)
+		// The legacy alias is accepted at the SQL compatibility boundary, but
+		// persistence and the shared in-memory state use the canonical name.
+		require.NoError(t, owner.SetGlobalSysVar(ctx, "tx_isolation", "REPEATABLE-READ"))
 
 		got, err := owner.GetGlobalSysVar("transaction_isolation")
+		require.NoError(t, err)
+		require.Equal(t, "REPEATABLE-READ", got)
+		got, err = owner.GetGlobalSysVar("tx_isolation")
 		require.NoError(t, err)
 		require.Equal(t, "REPEATABLE-READ", got)
 
@@ -537,6 +683,9 @@ func TestGlobalTransactionIsolationSeedsNewSessionTxnMeta(t *testing.T) {
 		require.NoError(t, newSession.InitSystemVariables(ctx, nil))
 
 		got, err = newSession.GetSessionSysVar("transaction_isolation")
+		require.NoError(t, err)
+		require.Equal(t, "REPEATABLE-READ", got)
+		got, err = newSession.GetSessionSysVar("tx_isolation")
 		require.NoError(t, err)
 		require.Equal(t, "REPEATABLE-READ", got)
 
@@ -3182,8 +3331,23 @@ func Test_statement_type(t *testing.T) {
 		convey.So(IsDropStatement(&tree.DropTable{}), convey.ShouldBeTrue)
 		convey.So(IsAdministrativeStatement(&tree.CreateAccount{}), convey.ShouldBeTrue)
 		convey.So(IsParameterModificationStatement(&tree.SetVar{}), convey.ShouldBeTrue)
-		convey.So(IsParameterModificationStatement(&tree.SetTransaction{}), convey.ShouldBeTrue)
+		convey.So(IsParameterModificationStatement(&tree.SetTransaction{}), convey.ShouldBeFalse)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.SetVar{}), convey.ShouldBeTrue)
+		convey.So(NeedToBeCommittedInActiveTransaction(&tree.SetTransaction{}), convey.ShouldBeFalse)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			stmt: &tree.SetTransaction{},
+			txnOpt: FeTxnOption{
+				activeTxnAtStartKnown: true,
+				activeTxnAtStart:      false,
+			},
+		}), convey.ShouldBeTrue)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			stmt: &tree.SetTransaction{},
+			txnOpt: FeTxnOption{
+				activeTxnAtStartKnown: true,
+				activeTxnAtStart:      true,
+			},
+		}), convey.ShouldBeFalse)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.LockTableStmt{}), convey.ShouldBeTrue)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.UnLockTableStmt{}), convey.ShouldBeFalse)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.DropTable{}), convey.ShouldBeFalse)
