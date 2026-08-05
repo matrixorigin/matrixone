@@ -822,7 +822,7 @@ func TestSetOffsetTransactionSynchronizesRenamedColumnForInsert(t *testing.T) {
 	})
 }
 
-func TestSetOffsetOnNewTablePublishesFreshCacheAfterCommit(t *testing.T) {
+func TestSetOffsetOnNewTablePublishesFinalCacheAfterRepeatedResets(t *testing.T) {
 	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
 		ctx, cancel := context.WithTimeout(
 			defines.AttachAccountId(context.Background(), catalog.System_Account),
@@ -834,9 +834,12 @@ func TestSetOffsetOnNewTablePublishesFreshCacheAfterCommit(t *testing.T) {
 		defer s.Close()
 		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
 		require.NoError(t, err)
-		def := newTestTableDef(1)
+		def := newTestTableDef(2)
+		def[0].ColIndex = 0
+		def[1].ColIndex = 1
 		require.NoError(t, s.Create(ctx, 0, def, createTxn))
 		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColIndex, def[0].ColName, 999, createTxn))
+		require.NoError(t, s.SetOffset(ctx, 0, def[1].ColIndex, def[1].ColName, 1999, createTxn))
 		key := privateResetKey{txnID: string(createTxn.Txn().ID), tableID: 0}
 		require.NoError(t, createTxn.Commit(ctx))
 		s.mu.Lock()
@@ -844,10 +847,13 @@ func TestSetOffsetOnNewTablePublishesFreshCacheAfterCommit(t *testing.T) {
 		s.mu.Unlock()
 		require.False(t, resetExists)
 
-		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
-		last, err := s.InsertValues(ctx, 0, 1, nil, []*vector.Vector{input}, 1, 0)
+		inputs := []*vector.Vector{
+			newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil),
+			newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil),
+		}
+		last, err := s.InsertValues(ctx, 0, 2, nil, inputs, 1, 0)
 		require.NoError(t, err)
-		require.Equal(t, uint64(1000), last)
+		require.Equal(t, uint64(2000), last)
 	})
 }
 
@@ -951,6 +957,94 @@ func TestDiscardOffsetResetRestoresCreatedTableCache(t *testing.T) {
 		require.True(t, originalCache.lifecycle.retired)
 		require.True(t, originalCache.lifecycle.closed)
 		originalCache.lifecycle.Unlock()
+	})
+}
+
+func TestDiscardOffsetResetRestoresOriginalCreatedTableCacheAfterRepeatedResets(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(
+			defines.AttachAccountId(context.Background(), catalog.System_Account),
+			10*time.Second,
+		)
+		defer cancel()
+
+		s := NewIncrService("", NewMemStore(), Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(2)
+		def[0].ColIndex = 0
+		def[1].ColIndex = 1
+		require.NoError(t, s.Create(ctx, 0, def, createTxn))
+		original := s.getTableCache(0)
+
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColIndex, def[0].ColName, 999, createTxn))
+		firstReplacement := s.getTableCache(0)
+		require.NotSame(t, original, firstReplacement)
+		require.NoError(t, s.SetOffset(ctx, 0, def[1].ColIndex, def[1].ColName, 1999, createTxn))
+		secondReplacement := s.getTableCache(0)
+		require.NotSame(t, firstReplacement, secondReplacement)
+		firstCache := firstReplacement.(*tableCache)
+		firstCache.lifecycle.Lock()
+		require.True(t, firstCache.lifecycle.retired)
+		require.True(t, firstCache.lifecycle.closed)
+		firstCache.lifecycle.Unlock()
+
+		key := privateResetKey{txnID: string(createTxn.Txn().ID), tableID: 0}
+		s.mu.Lock()
+		previous := s.mu.createdResets[key]
+		s.mu.Unlock()
+		require.Same(t, original, previous)
+
+		require.NoError(t, s.DiscardOffsetReset(ctx, 0, createTxn))
+		require.Same(t, original, s.getTableCache(0))
+		secondCache := secondReplacement.(*tableCache)
+		secondCache.lifecycle.Lock()
+		require.True(t, secondCache.lifecycle.retired)
+		require.True(t, secondCache.lifecycle.closed)
+		secondCache.lifecycle.Unlock()
+		_, err = s.GetLastAllocateTS(ctx, 0, 0, createTxn, def[0].ColName)
+		require.NoError(t, err)
+		require.NoError(t, createTxn.Rollback(ctx))
+	})
+}
+
+func TestDiscardOffsetResetRestoresOriginalCreatedTableCacheAfterLaterResetFailure(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(
+			defines.AttachAccountId(context.Background(), catalog.System_Account),
+			10*time.Second,
+		)
+		defer cancel()
+
+		store := &failingGetColumnsStore{IncrValueStore: NewMemStore()}
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(2)
+		def[0].ColIndex = 0
+		def[1].ColIndex = 1
+		require.NoError(t, s.Create(ctx, 0, def, createTxn))
+		original := s.getTableCache(0)
+
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColIndex, def[0].ColName, 999, createTxn))
+		firstReplacement := s.getTableCache(0)
+		loadErr := errors.New("load columns after later reset")
+		store.failWith(loadErr)
+		err = s.SetOffset(ctx, 0, def[1].ColIndex, def[1].ColName, 1999, createTxn)
+		require.ErrorIs(t, err, loadErr)
+
+		require.NoError(t, s.DiscardOffsetReset(ctx, 0, createTxn))
+		require.Same(t, original, s.getTableCache(0))
+		firstCache := firstReplacement.(*tableCache)
+		firstCache.lifecycle.Lock()
+		require.True(t, firstCache.lifecycle.retired)
+		require.True(t, firstCache.lifecycle.closed)
+		firstCache.lifecycle.Unlock()
+		_, err = s.GetLastAllocateTS(ctx, 0, 0, createTxn, def[0].ColName)
+		require.NoError(t, err)
+		require.NoError(t, createTxn.Rollback(ctx))
 	})
 }
 

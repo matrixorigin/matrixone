@@ -338,14 +338,15 @@ func (s *service) SetOffset(
 		return moerr.NewNotSupported(ctx, "transaction operator cannot enforce AUTO_INCREMENT epochs")
 	}
 	var (
-		txnKey           string
-		ownedCreate      bool
-		createCache      incrTableCache
-		createEpoch      uint32
-		createGeneration uint64
-		createResetKey   privateResetKey
-		staleCreateCache incrTableCache
-		trackGeneration  bool
+		txnKey                string
+		ownedCreate           bool
+		createCache           incrTableCache
+		createEpoch           uint32
+		createGeneration      uint64
+		createResetKey        privateResetKey
+		originalCreateCache   incrTableCache
+		supersededCreateCache incrTableCache
+		trackGeneration       bool
 	)
 
 	s.mu.Lock()
@@ -359,8 +360,7 @@ func (s *service) SetOffset(
 		ownedCreate = s.ownsCreateLocked(txnKey, tableID)
 		if ownedCreate {
 			createResetKey = privateResetKey{txnID: txnKey, tableID: tableID}
-			staleCreateCache = s.mu.createdResets[createResetKey]
-			delete(s.mu.createdResets, createResetKey)
+			originalCreateCache = s.mu.createdResets[createResetKey]
 			createCache = s.mu.tables[tableID]
 			if createCache != nil {
 				createEpoch = createCache.epoch()
@@ -374,9 +374,6 @@ func (s *service) SetOffset(
 	defer s.builders.Done()
 	if trackGeneration {
 		defer s.finishGenerationBuild(tableID)
-	}
-	if staleCreateCache != nil {
-		staleCreateCache.retire()
 	}
 
 	if ownedCreate {
@@ -439,8 +436,15 @@ func (s *service) SetOffset(
 			return moerr.NewTxnNeedRetryWithDefChanged(ctx)
 		}
 		s.mu.tables[tableID] = replacement
-		s.mu.createdResets[createResetKey] = createCache
+		if originalCreateCache == nil {
+			s.mu.createdResets[createResetKey] = createCache
+		} else {
+			supersededCreateCache = createCache
+		}
 		s.mu.Unlock()
+		if supersededCreateCache != nil {
+			supersededCreateCache.retire()
+		}
 		return nil
 	}
 
