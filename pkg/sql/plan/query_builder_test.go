@@ -26,6 +26,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -708,6 +709,20 @@ func TestWrongCases(t *testing.T) {
 		_, err := runOneStmt(mock, t, kase.sql)
 		require.Error(t, err, kase.comment, kase.sql)
 	}
+}
+
+func TestMissingBaseTableUsesNoSuchTableError(t *testing.T) {
+	testutil.NewProc(t)
+	mock := NewMockOptimizer(false)
+
+	_, err := runOneStmt(mock, t, "select * from mo_odbc_missing_state")
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), err)
+
+	moErr, ok := err.(*moerr.Error)
+	require.True(t, ok)
+	require.Equal(t, moerr.ER_NO_SUCH_TABLE, moErr.MySQLCode())
+	require.Equal(t, `SQL parser error: table "mo_odbc_missing_state" does not exist`, moErr.Error())
 }
 
 func TestDefaultBigStats(t *testing.T) {

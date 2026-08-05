@@ -107,6 +107,6 @@ func TestGetTaskStateSQL_SQLInjectionProtection(t *testing.T) {
 		"task'; DROP TABLE task; --",
 	)
 
-	expected := "SELECT state FROM `mo_catalog`.`mo_cdc_task` WHERE 1=1 AND account_id = 3 AND task_id = 'task''; DROP TABLE task; --'"
+	expected := "SELECT state, err_msg FROM `mo_catalog`.`mo_cdc_task` WHERE 1=1 AND account_id = 3 AND task_id = 'task''; DROP TABLE task; --'"
 	assert.Equal(t, expected, sql)
 }
