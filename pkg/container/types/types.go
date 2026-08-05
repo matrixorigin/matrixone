@@ -181,6 +181,32 @@ const (
 	CharsetUTF8 uint8 = 3
 )
 
+// MergeStringCharset derives one collation identity for a value composed from
+// multiple MySQL strings. Binary bytes must never be reinterpreted as UTF-8;
+// bytewise utf8mb4 and legacy text likewise retain their stronger ordering
+// identity when combined with default general-ci text.
+func MergeStringCharset(parameters []Type, fallback uint8) uint8 {
+	result := fallback
+	for _, parameter := range parameters {
+		if !parameter.Oid.IsMySQLString() {
+			continue
+		}
+		switch parameter.Charset {
+		case CharsetBinary:
+			result = CharsetBinary
+		case CharsetUTF8MB4Bin:
+			if result != CharsetBinary {
+				result = CharsetUTF8MB4Bin
+			}
+		case CharsetLegacy:
+			if result == CharsetUTF8 {
+				result = CharsetLegacy
+			}
+		}
+	}
+	return result
+}
+
 // ProtoSize is used by gogoproto.
 func (t *Type) ProtoSize() int {
 	return 2*4 + 4*3

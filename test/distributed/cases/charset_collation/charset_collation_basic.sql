@@ -602,6 +602,22 @@ SELECT MIN(IF(name IS NOT NULL, name, wide_name)) AS min_if,
        MAX(IF(name IS NOT NULL, name, wide_name)) AS max_if
 FROM t_minmax_derived_bin;
 
+SELECT MIN(x) AS min_union, MAX(x) AS max_union
+FROM (
+    SELECT name AS x FROM t_minmax_cast_ci
+    UNION ALL
+    SELECT NULL AS x
+) AS u;
+
+SELECT MIN(binary_gc) AS min_binary_gc, MAX(binary_gc) AS max_binary_gc,
+       MIN(bin_gc) AS min_bin_gc, MAX(bin_gc) AS max_bin_gc
+FROM (
+    SELECT GROUP_CONCAT(CONVERT(name USING binary)) AS binary_gc,
+           GROUP_CONCAT(name) AS bin_gc
+    FROM t_minmax_derived_bin
+    GROUP BY name
+) AS g;
+
 CREATE TABLE t_binary_default_general_columns (
     id INT,
     create_col VARCHAR(100) CHARACTER SET utf8mb4,

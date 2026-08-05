@@ -3517,7 +3517,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		setBranchPureNull[branchIdx] = make([]bool, projectLength)
 		setBranchOrderTypes[branchIdx] = make([]*plan.Type, projectLength)
 		for colIdx := 0; colIdx < projectLength && colIdx < len(branchCtx.projects); colIdx++ {
-			setBranchPureNull[branchIdx][colIdx] = isNullLiteralExpr(branchCtx.projects[colIdx])
+			setBranchPureNull[branchIdx][colIdx] = isPureNullLiteralExpr(branchCtx.projects[colIdx])
 			setBranchOrderTypes[branchIdx][colIdx] = branchCtx.mysqlSpecialOrderTypeForProject(int32(colIdx))
 		}
 	}
@@ -3528,9 +3528,21 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		// we don't cast null as any type in function
 		// but we will cast null as some target type in union/intersect/minus
 		var tmpArgsType []types.Type
-		for _, typ := range argsType {
-			if typ.Oid != types.T_any {
+		for branchIdx, typ := range argsType {
+			// A top-level NULL is carried as legacy T_text only so the binder has
+			// a concrete container. It has no collation or width of its own and
+			// must not change the common type chosen from real values.
+			if typ.Oid != types.T_any && !setBranchPureNull[branchIdx][columnIdx] {
 				tmpArgsType = append(tmpArgsType, typ)
+			}
+		}
+		// Preserve the historical concrete text result when every branch is a
+		// pure NULL; there is no real value from which to derive another type.
+		if len(tmpArgsType) == 0 {
+			for _, typ := range argsType {
+				if typ.Oid != types.T_any {
+					tmpArgsType = append(tmpArgsType, typ)
+				}
 			}
 		}
 
@@ -3552,7 +3564,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				targetArgType = tmpArgsType[0]
 				// if string union string, different length may cause error.
 				if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
-					for _, typ := range argsType {
+					for _, typ := range tmpArgsType {
 						if targetArgType.Width < typ.Width {
 							targetArgType.Width = typ.Width
 						}
@@ -3585,7 +3597,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			for idx, tmpID := range nodes {
 				if !argsType[idx].Eq(targetArgType) {
 					node := builder.qry.Nodes[tmpID]
-					if argsType[idx].Oid == types.T_any {
+					if argsType[idx].Oid == types.T_any || setBranchPureNull[idx][columnIdx] {
 						node.ProjectList[columnIdx].Typ = targetType
 					} else {
 						node.ProjectList[columnIdx], err = appendCastBeforeExpr(builder.GetContext(), node.ProjectList[columnIdx], targetType)

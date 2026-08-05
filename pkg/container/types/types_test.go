@@ -129,6 +129,18 @@ func TestTextCharsetIdentitiesDistinguishLegacyMetadata(t *testing.T) {
 	require.Equal(t, CharsetLegacy, CharsetType(T_int64))
 }
 
+func TestMergeStringCharset(t *testing.T) {
+	general := T_varchar.ToType()
+	legacy := NewWithCharset(T_text, 32, 0, CharsetLegacy)
+	utf8mb4Bin := NewWithCharset(T_varchar, 32, 0, CharsetUTF8MB4Bin)
+	opaqueBinary := NewWithCharset(T_varchar, 32, 0, CharsetBinary)
+
+	require.Equal(t, CharsetUTF8, MergeStringCharset([]Type{general, T_int64.ToType()}, CharsetUTF8))
+	require.Equal(t, CharsetLegacy, MergeStringCharset([]Type{general, legacy}, CharsetUTF8))
+	require.Equal(t, CharsetUTF8MB4Bin, MergeStringCharset([]Type{legacy, utf8mb4Bin}, CharsetUTF8))
+	require.Equal(t, CharsetBinary, MergeStringCharset([]Type{utf8mb4Bin, opaqueBinary}, CharsetUTF8))
+}
+
 func TestType_String(t *testing.T) {
 	myType := T_int64.ToType()
 	require.Equal(t, "BIGINT", myType.String())

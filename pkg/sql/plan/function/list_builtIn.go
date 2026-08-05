@@ -66,34 +66,6 @@ func concatReturnType(parameters []types.Type) types.Type {
 	return mergedDerivedStringReturnType(parameters, 0)
 }
 
-func mergedTextCharset(parameters []types.Type, fallback uint8) uint8 {
-	result := fallback
-	for _, parameter := range parameters {
-		if !parameter.Oid.IsMySQLString() {
-			continue
-		}
-
-		// The type system does not carry a separate MySQL coercibility rank here,
-		// so retain the strongest bytewise identity represented by the arguments.
-		// Opaque binary bytes must not be reinterpreted as UTF-8; utf8mb4_bin in
-		// turn dominates legacy byte ordering and the default case-insensitive
-		// text identity.
-		switch parameter.Charset {
-		case types.CharsetBinary:
-			result = types.CharsetBinary
-		case types.CharsetUTF8MB4Bin:
-			if result != types.CharsetBinary {
-				result = types.CharsetUTF8MB4Bin
-			}
-		case types.CharsetLegacy:
-			if result == types.CharsetUTF8 {
-				result = types.CharsetLegacy
-			}
-		}
-	}
-	return result
-}
-
 // commonConditionalStringType keeps the common physical text type selected by
 // CASE/IF/COALESCE while deriving width and collation from every value branch.
 // Their checkers may rebuild CHAR/VARCHAR/TEXT with ToType while aligning
@@ -101,7 +73,7 @@ func mergedTextCharset(parameters []types.Type, fallback uint8) uint8 {
 func commonConditionalStringType(result types.Type, source []types.Type) types.Type {
 	switch result.Oid {
 	case types.T_char, types.T_varchar, types.T_text:
-		result.Charset = mergedTextCharset(source, result.Charset)
+		result.Charset = types.MergeStringCharset(source, result.Charset)
 	default:
 		return result
 	}
@@ -167,7 +139,7 @@ func mergedDerivedStringReturnType(parameters []types.Type, start int) types.Typ
 			return types.T_blob.ToType()
 		}
 	}
-	result.Charset = mergedTextCharset(parameters[start:], result.Charset)
+	result.Charset = types.MergeStringCharset(parameters[start:], result.Charset)
 	return result
 }
 

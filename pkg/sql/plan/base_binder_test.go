@@ -888,6 +888,102 @@ func TestMinMaxParseJSONLStringUsesExplicitGeneralCICollation(t *testing.T) {
 	}
 }
 
+func TestMinOverUnionTreatsPureNullAsCollationNeutral(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	mock.ctxt.tables["bind_select"].Cols[2].Typ = plan.Type{
+		Id:      int32(types.T_varchar),
+		Width:   1,
+		Charset: uint32(types.CharsetUTF8),
+	}
+
+	tests := []struct {
+		name        string
+		query       string
+		wantCharset uint32
+	}{
+		{
+			name:        "trailing pure null",
+			query:       "select min(x) from (select c as x from select_test.bind_select union all select null as x) s",
+			wantCharset: uint32(types.CharsetUTF8),
+		},
+		{
+			name:        "leading pure null",
+			query:       "select min(x) from (select null as x union all select c as x from select_test.bind_select) s",
+			wantCharset: uint32(types.CharsetUTF8),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			p, err := runOneStmt(mock, t, test.query)
+			require.NoError(t, err)
+
+			var minExpr *plan.Expr
+			for _, node := range p.GetQuery().Nodes {
+				for _, aggregate := range node.AggList {
+					if aggregate.GetF().GetFunc().GetObjName() == "min" {
+						minExpr = aggregate
+					}
+				}
+			}
+			require.NotNil(t, minExpr)
+			require.Equal(t, test.wantCharset, minExpr.Typ.Charset)
+			require.Len(t, minExpr.GetF().Args, 1)
+			require.Equal(t, test.wantCharset, minExpr.GetF().Args[0].Typ.Charset)
+			require.Equal(t, int32(1), minExpr.GetF().Args[0].Typ.Width)
+		})
+	}
+
+	p, err := runOneStmt(mock, t,
+		"select min(x) from (select null as x union all select null as x) s")
+	require.NoError(t, err)
+	for _, node := range p.GetQuery().Nodes {
+		for _, aggregate := range node.AggList {
+			if aggregate.GetF().GetFunc().GetObjName() == "min" {
+				require.Equal(t, uint32(types.CharsetLegacy), aggregate.Typ.Charset)
+				return
+			}
+		}
+	}
+	t.Fatal("min aggregate not found")
+}
+
+func TestMinOverGroupConcatPreservesTextShapedBinaryCollation(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	mock.ctxt.tables["bind_select"].Cols[2].Typ = plan.Type{
+		Id:      int32(types.T_varchar),
+		Width:   10,
+		Charset: uint32(types.CharsetUTF8MB4Bin),
+	}
+
+	p, err := runOneStmt(mock, t,
+		"select min(binary_gc), min(bin_gc) from ("+
+			"select group_concat(convert(c using binary)) as binary_gc, group_concat(c) as bin_gc "+
+			"from select_test.bind_select group by a) s")
+	require.NoError(t, err)
+
+	var groupConcatCharsets []uint32
+	var minCharsets []uint32
+	for _, node := range p.GetQuery().Nodes {
+		for _, aggregate := range node.AggList {
+			switch aggregate.GetF().GetFunc().GetObjName() {
+			case "group_concat":
+				groupConcatCharsets = append(groupConcatCharsets, aggregate.Typ.Charset)
+			case "min":
+				minCharsets = append(minCharsets, aggregate.Typ.Charset)
+				require.Len(t, aggregate.GetF().Args, 1)
+				require.Equal(t, aggregate.Typ.Charset, aggregate.GetF().Args[0].Typ.Charset)
+			}
+		}
+	}
+	require.ElementsMatch(t,
+		[]uint32{uint32(types.CharsetBinary), uint32(types.CharsetUTF8MB4Bin)},
+		groupConcatCharsets)
+	require.ElementsMatch(t,
+		[]uint32{uint32(types.CharsetBinary), uint32(types.CharsetUTF8MB4Bin)},
+		minCharsets)
+}
+
 func TestConvertUsingRejectsUnsupportedCharset(t *testing.T) {
 	_, err := runOneStmt(NewMockOptimizer(true), t,
 		"select convert(c using latin1) from select_test.bind_select")
