@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -31,9 +32,10 @@ import (
 )
 
 const (
-	minIDAllocCapacity   uint64 = 1024
-	defaultIDBatchSize   uint64 = 1024 * 10
-	checkBootstrapCycles        = 100
+	minIDAllocCapacity             uint64 = 1024
+	defaultIDBatchSize             uint64 = 1024 * 10
+	checkBootstrapCycles                  = 100
+	bootstrapHAKeeperCheckInterval        = 100 * time.Millisecond
 )
 
 var (
@@ -252,14 +254,33 @@ func (l *store) getCheckerStateFromLeader() (*pb.CheckerState, uint64) {
 
 var debugPrintHAKeeperState atomic.Bool
 
-func (l *store) hakeeperCheck() {
+func (l *store) nextHAKeeperCheckInterval(state *pb.CheckerState) time.Duration {
+	interval := l.cfg.HAKeeperCheckInterval.Duration
+	if state != nil && state.State != pb.HAKeeperRunning {
+		if interval > bootstrapHAKeeperCheckInterval {
+			return bootstrapHAKeeperCheckInterval
+		}
+	}
+	return interval
+}
+
+func (l *store) bootstrapCheckCyclesLimit() uint64 {
+	interval := l.cfg.HAKeeperCheckInterval.Duration
+	if interval <= bootstrapHAKeeperCheckInterval {
+		return checkBootstrapCycles
+	}
+	return uint64((time.Duration(checkBootstrapCycles)*interval +
+		bootstrapHAKeeperCheckInterval - 1) / bootstrapHAKeeperCheckInterval)
+}
+
+func (l *store) hakeeperCheck() *pb.CheckerState {
 	state, term := l.getCheckerStateFromLeader()
 	if state == nil {
-		return
+		return nil
 	}
 	if state.State == pb.HAKeeperCreated {
 		l.runtime.Logger().Warn("waiting for initial cluster info to be set, check skipped")
-		return
+		return state
 	}
 
 	// Establish the replicated protocol barrier before this checker pass can
@@ -296,6 +317,7 @@ func (l *store) hakeeperCheck() {
 	default:
 		panic("unknown HAKeeper state")
 	}
+	return state
 }
 
 func (l *store) assertHAKeeperState(s pb.HAKeeperState) {
@@ -377,6 +399,13 @@ func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
 	}
 	cmds, err := l.getScheduleCommand(false, term, state)
 	if err != nil {
+		if isBootstrapWaitingForLogStores(err) {
+			if time.Since(l.lastBootstrapLogTime) >= time.Second {
+				l.runtime.Logger().Info("waiting for log stores before bootstrap", zap.Error(err))
+				l.lastBootstrapLogTime = time.Now()
+			}
+			return
+		}
 		l.runtime.Logger().Error("failed to get bootstrap schedule commands", zap.Error(err))
 		return
 	}
@@ -414,10 +443,22 @@ func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
 			}
 		}
 
-		l.bootstrapCheckCycles = checkBootstrapCycles
+		// Bootstrap checks run more frequently while the cluster is coming up.
+		// Keep the failure window equivalent to the configured check interval;
+		// otherwise 100 fast polls would turn the original multi-minute window
+		// into a few seconds on a slow or remote cluster.
+		l.bootstrapCheckCycles = l.bootstrapCheckCyclesLimit()
 		l.bootstrapMgr = bootstrap.NewBootstrapManager(state.ClusterInfo)
 		l.assertHAKeeperState(pb.HAKeeperBootstrapCommandsReceived)
+		if l.bootstrapCommandsAdded != nil {
+			l.bootstrapCommandsAdded()
+		}
 	}
+}
+
+func isBootstrapWaitingForLogStores(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrInternal) &&
+		strings.Contains(err.Error(), "not enough log stores")
 }
 
 func (l *store) checkBootstrap(state *pb.CheckerState) {

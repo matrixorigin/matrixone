@@ -15,6 +15,7 @@
 package service
 
 import (
+	"context"
 	"path/filepath"
 	"sync"
 
@@ -226,7 +227,7 @@ func (c *testCluster) startHAKeeperReplica() error {
 }
 
 // setInitialClusterInfo initializes cluster information.
-func (c *testCluster) setInitialClusterInfo() error {
+func (c *testCluster) setInitialClusterInfo(ctx context.Context) error {
 	errChan := make(chan error, 1)
 
 	initialize := func() {
@@ -240,7 +241,8 @@ func (c *testCluster) setInitialClusterInfo() error {
 
 		c.logger.Info("initialize cluster information")
 
-		err = selected[0].SetInitialClusterInfo(
+		leader := c.WaitHAKeeperLeader(ctx)
+		err = leader.SetInitialClusterInfo(
 			c.opt.initial.logShardNum,
 			c.opt.initial.tnShardNum,
 			c.opt.initial.logReplicaNum,

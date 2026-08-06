@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
 func TestIDAllocatorDefaultState(t *testing.T) {
@@ -44,6 +45,37 @@ func TestIDAllocatorDefaultState(t *testing.T) {
 	v, ok := alloc.Next()
 	assert.False(t, ok)
 	assert.Equal(t, uint64(0), v)
+}
+
+func TestNextHAKeeperCheckIntervalUsesFastBootstrapInterval(t *testing.T) {
+	s := &store{
+		cfg: Config{
+			HAKeeperCheckInterval: toml.Duration{Duration: 3 * time.Second},
+		},
+	}
+
+	require.Equal(t, 3*time.Second, s.nextHAKeeperCheckInterval(nil))
+	require.Equal(t, bootstrapHAKeeperCheckInterval, s.nextHAKeeperCheckInterval(&pb.CheckerState{
+		State: pb.HAKeeperBootstrapping,
+	}))
+	require.Equal(t, bootstrapHAKeeperCheckInterval, s.nextHAKeeperCheckInterval(&pb.CheckerState{
+		State: pb.HAKeeperBootstrapCommandsReceived,
+	}))
+	require.Equal(t, 3*time.Second, s.nextHAKeeperCheckInterval(&pb.CheckerState{
+		State: pb.HAKeeperRunning,
+	}))
+}
+
+func TestBootstrapCheckCyclesLimitPreservesFailureWindow(t *testing.T) {
+	fast := &store{cfg: Config{
+		HAKeeperCheckInterval: toml.Duration{Duration: bootstrapHAKeeperCheckInterval},
+	}}
+	require.Equal(t, uint64(checkBootstrapCycles), fast.bootstrapCheckCyclesLimit())
+
+	defaultInterval := &store{cfg: Config{
+		HAKeeperCheckInterval: toml.Duration{Duration: 3 * time.Second},
+	}}
+	require.Equal(t, uint64(30*checkBootstrapCycles), defaultInterval.bootstrapCheckCyclesLimit())
 }
 
 func TestIDAllocatorCapacity(t *testing.T) {
@@ -470,7 +502,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		state, err = leaderStore.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
-		assert.Equal(t, uint64(checkBootstrapCycles), leaderStore.bootstrapCheckCycles)
+		assert.Equal(t, leaderStore.bootstrapCheckCyclesLimit(), leaderStore.bootstrapCheckCycles)
 		require.NotNil(t, leaderStore.bootstrapMgr)
 		assert.False(t, leaderStore.bootstrapMgr.CheckBootstrap(state.LogState))
 
@@ -948,18 +980,24 @@ func testBootstrap(t *testing.T, fail bool, remoteRecoveryPending bool) {
 
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
+		bootstrapCommandsAdded := false
+		store.bootstrapCommandsAdded = func() {
+			bootstrapCommandsAdded = true
+		}
 		store.bootstrap(term, state)
 
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
-		assert.Equal(t, uint64(checkBootstrapCycles), store.bootstrapCheckCycles)
+		assert.True(t, bootstrapCommandsAdded)
+		assert.Equal(t, store.bootstrapCheckCyclesLimit(), store.bootstrapCheckCycles)
 		require.NotNil(t, store.bootstrapMgr)
 		assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
 
 		if fail {
 			// keep checking, bootstrap will eventually be set as failed
-			for i := 0; i <= checkBootstrapCycles; i++ {
+			cycles := store.bootstrapCheckCycles
+			for i := uint64(0); i <= cycles; i++ {
 				store.checkBootstrap(state)
 			}
 
@@ -1072,7 +1110,7 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
-		assert.Equal(t, uint64(checkBootstrapCycles), store.bootstrapCheckCycles)
+		assert.Equal(t, store.bootstrapCheckCyclesLimit(), store.bootstrapCheckCycles)
 		require.NotNil(t, store.bootstrapMgr)
 		assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
 
@@ -1180,7 +1218,7 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
-		assert.Equal(t, uint64(checkBootstrapCycles), store.bootstrapCheckCycles)
+		assert.Equal(t, store.bootstrapCheckCyclesLimit(), store.bootstrapCheckCycles)
 		require.NotNil(t, store.bootstrapMgr)
 		assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
 
