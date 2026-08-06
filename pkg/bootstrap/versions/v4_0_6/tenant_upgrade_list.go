@@ -14,6 +14,8 @@
 package v4_0_6
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -25,6 +27,26 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	newMongoDBCatalogTable(mongodb.TableConnections, mongodb.ConnectionsDDL),
 	newMongoDBCatalogTable(mongodb.TableMappings, mongodb.MappingsDDL),
 	populateInformationSchemaCharacterSets(),
+	upgradeInformationSchemaColumns(),
+}
+
+// Keep this as a separate upgrade entry so tenants that already completed
+// v4.0.6 refresh COLUMNS and expose MySQL-compatible base DATA_TYPE names.
+func upgradeInformationSchemaColumns() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "COLUMNS",
+		UpgType:   versions.MODIFY_VIEW,
+		UpgSql:    sysview.InformationSchemaColumnsDDL,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			exists, viewDef, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "COLUMNS")
+			if err != nil {
+				return false, err
+			}
+			return exists && viewDef == sysview.InformationSchemaColumnsDDL, nil
+		},
+		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.COLUMNS;", sysview.InformationDBConst),
+	}
 }
 
 func populateInformationSchemaCharacterSets() versions.UpgradeEntry {
