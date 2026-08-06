@@ -42,7 +42,9 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 	case *tree.SetRole:
 		ses.EnterFPrint(FPSetRole)
 		defer ses.ExitFPrint(FPSetRole)
-		ses.InvalidatePrivilegeCache()
+		if !st.SecondaryRole {
+			ses.InvalidatePrivilegeCache()
+		}
 		//switch role
 		err = handleSwitchRole(ses, execCtx, st)
 		if err != nil {
