@@ -285,7 +285,7 @@ func TestReentrantRangeLock(t *testing.T) {
 
 					res, err = s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
-					require.True(t, res.NewLockAdd)
+					require.False(t, res.NewLockAdd)
 
 					defer func() {
 						assert.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))

@@ -257,16 +257,6 @@ func TestCoarsenLockRequestRequiresCompleteExclusiveOwnership(t *testing.T) {
 			shared,
 			getLogger(""),
 		))
-		require.True(t, txn.hasExactLockLocked(
-			sharedBind.Group,
-			sharedBind.Table,
-			[]byte("a"),
-		))
-		require.False(t, txn.hasExactLockLocked(
-			sharedBind.Group,
-			sharedBind.Table,
-			[]byte("missing"),
-		))
 		rows := [][]byte{[]byte("c"), []byte("d")}
 		gotRows, gotOpts, replace := txn.coarsenLockRequest(
 			sharedBind.Group,

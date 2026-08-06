@@ -385,6 +385,121 @@ func TestWaitingReplacementPreservesConcurrentSameTxnLocks(t *testing.T) {
 	}
 }
 
+func TestWaitingReplacementFallsBackAfterConcurrentSharedLock(t *testing.T) {
+	tests := []struct {
+		name       string
+		serviceIDs []string
+		forward    bool
+	}{
+		{name: "local", serviceIDs: []string{"s1"}},
+		{name: "remote", serviceIDs: []string{"s1", "s2"}},
+		{name: "forward", serviceIDs: []string{"s1", "s2"}, forward: true},
+	}
+
+	for idx, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runLockServiceTestsWithAdjustConfig(
+				t,
+				tt.serviceIDs,
+				time.Second*10,
+				func(_ *lockTableAllocator, services []*service) {
+					owner := services[0]
+					origin := services[len(services)-1]
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*15)
+					defer cancel()
+					table := uint64(26763 + idx)
+					_, err := owner.getLockTableWithCreate(
+						ctx, 0, table, nil, pb.Sharding_None)
+					require.NoError(t, err)
+
+					txnA := []byte("replacement-mode-a")
+					txnB := []byte("replacement-mode-b")
+					exclusive := newTestRowExclusiveOptions()
+					if tt.forward {
+						exclusive.ForwardTo = owner.serviceID
+					}
+					_, err = origin.Lock(
+						ctx, table, newTestRows(1, 2, 3), txnA, exclusive)
+					require.NoError(t, err)
+					_, err = owner.Lock(
+						ctx, table, newTestRows(5), txnB,
+						newTestRowExclusiveOptions())
+					require.NoError(t, err)
+
+					replacementDone := make(chan error, 1)
+					go func() {
+						_, lockErr := origin.Lock(
+							ctx, table, newTestRows(5, 6), txnA, exclusive)
+						replacementDone <- lockErr
+					}()
+					waitWaiters(t, owner, table, newTestRows(5)[0], 1)
+
+					shared := newTestRowSharedOptions()
+					if tt.forward {
+						shared.ForwardTo = owner.serviceID
+					}
+					_, err = origin.Lock(ctx, table, newTestRows(4), txnA, shared)
+					require.NoError(t, err)
+
+					require.NoError(t, owner.Unlock(ctx, txnB, timestamp.Timestamp{}))
+					select {
+					case lockErr := <-replacementDone:
+						require.NoError(t, lockErr)
+					case <-ctx.Done():
+						t.Fatalf("exact fallback did not complete: %v", ctx.Err())
+					}
+
+					lt := owner.tableGroups.get(0, table).(*localLockTable)
+					lt.mu.RLock()
+					for row := byte(1); row <= 6; row++ {
+						lock, ok := lt.mu.store.Get(newTestRows(row)[0])
+						require.True(t, ok, "missing exact row %d", row)
+						require.True(t, lock.isLockRow(),
+							"stale replacement absorbed row %d", row)
+						if row == 4 {
+							require.Equal(t, pb.LockMode_Shared, lock.GetLockMode())
+						}
+					}
+					lt.mu.RUnlock()
+
+					bookkeepingServices := []*service{owner}
+					if !tt.forward && origin != owner {
+						bookkeepingServices = append(bookkeepingServices, origin)
+					}
+					for _, bookkeepingService := range bookkeepingServices {
+						txn := bookkeepingService.activeTxnHolder.getActiveTxn(
+							txnA, false, "")
+						require.NotNil(t, txn)
+						txn.RLock()
+						keys := txn.lockHolders[0].tableKeys[table].slice()
+						txn.RUnlock()
+						require.Equal(t, 6, keys.len())
+						keys.unref()
+					}
+
+					probeTxn := []byte("replacement-mode-probe")
+					probe := newTestRowSharedOptions()
+					probe.Policy = pb.WaitPolicy_FastFail
+					_, err = owner.Lock(ctx, table, newTestRows(4), probeTxn, probe)
+					require.NoError(t, err,
+						"concurrent Shared ownership was strengthened to Exclusive")
+					require.NoError(t, owner.Unlock(ctx, probeTxn, timestamp.Timestamp{}))
+
+					unlockA := origin
+					if tt.forward {
+						unlockA = owner
+					}
+					require.NoError(t, unlockA.Unlock(ctx, txnA, timestamp.Timestamp{}))
+				},
+				func(c *Config) {
+					c.MaxLockRowCount = 4
+					c.MaxFixedSliceSize = 8
+				},
+			)
+		})
+	}
+}
+
 func TestRemoteSharedMergeSnapshotPreservesLogicalWaitFor(t *testing.T) {
 	txnA := []byte("remote-merge-edge-a")
 	txnB := []byte("remote-merge-edge-b")

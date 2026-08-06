@@ -124,6 +124,13 @@ func (l *remoteLockTable) lock(
 	req.Lock.TxnID = txn.txnID
 	req.Lock.ServiceID = l.serviceID
 	req.Lock.Rows = rows
+	if opts.replaceTxnLocks && len(opts.originalRows) > 0 {
+		// Coarsening is an owner-side physical representation decision. Send the
+		// logical request so the authoritative owner can re-plan from its current
+		// ledger and can retry it exactly if a wait invalidates eligibility.
+		req.Lock.Rows = opts.originalRows
+		req.Lock.Options = opts.originalOptions
+	}
 
 	if err := ctx.Err(); err != nil {
 		logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
@@ -184,32 +191,65 @@ func (l *remoteLockTable) lock(
 			return
 		}
 
-		if opts.replaceTxnLocks {
+		txn.markRemoteUnlockRequiredLocked(l.bind.Group, l.bind.Table)
+		if opts.replaceTxnLocks &&
+			txn.canCoarsenTableLocked(l.bind.Group, l.bind.Table) {
 			err = txn.replaceLocks(l.bind.Group, l.bind, rows, l.logger)
-		} else if resp.Lock.Result.NewLockAdd ||
-			len(rows) != 1 ||
-			!txn.hasExactLockLocked(l.bind.Group, l.bind.Table, rows[0]) {
-			// The authoritative owner reports whether this request added any
-			// ownership. A fully re-entrant singleton whose exact key is already
-			// recorded needs no append; doing so would make origin capacity drift
-			// from the owner. Multi-row and absent-key cases stay conservative because
-			// proving coverage there would require a new hot-path index or a potentially
-			// quadratic scan.
-			err = txn.lockAdded(l.bind.Group, l.bind, rows, opts.LockOptions, l.logger)
+		} else if resp.Lock.Result.NewLockAdd {
+			recordRows := rows
+			recordOptions := opts.LockOptions
+			if opts.replaceTxnLocks && len(opts.originalRows) > 0 {
+				// A concurrent Shared/sharded acquisition invalidated the same
+				// origin-side plan while the RPC was in flight. The owner retried the
+				// logical request exactly, so retain those exact probe keys here too.
+				recordRows = opts.originalRows
+				recordOptions = opts.originalOptions
+			}
+			err = txn.remoteLockAdded(
+				l.bind.Group,
+				l.bind,
+				recordRows,
+				recordOptions,
+				l.logger,
+			)
+		}
+		if err != nil {
+			// The owner has already committed. This origin may have a smaller
+			// fixed-slice pool during a rolling configuration change, so failure
+			// to retain the detailed probe ledger must still leave one bounded
+			// table route for the eventual transaction-ID unlock.
+			if trackingErr := txn.ensureRemoteLockTableTracked(
+				l.bind.Group,
+				l.bind,
+				req.Lock.Rows,
+				req.Lock.Options,
+				l.logger,
+			); trackingErr != nil {
+				err = errors.Join(err, trackingErr)
+			}
 		}
 		logRemoteLockAdded(l.logger, txn, rows, opts, l.bind)
 		cb(resp.Lock.Result, err)
 		return
 	}
 
-	// Transport failures are indeterminate: the request may have reached the
-	// owner and replaced old rows with this range, or it may not have arrived
-	// and the old rows may still exist. Retain their union for cleanup; replacing
-	// the local bookkeeping here would leak one of those two states. ErrNotSupported
-	// is different: it is an application response from the owner and proves that
-	// no replacement was published, so preserve the exact old bookkeeping.
+	// Transport failures are indeterminate, but remote unlock is authoritative
+	// and releases the owner's complete transaction by ID. Keep an existing
+	// table-routing entry unchanged; on the first request, install one bounded
+	// witness. Growing an old+new endpoint union here can fail at fixed capacity
+	// and is neither necessary for cleanup nor safe to ignore. ErrNotSupported is
+	// an application response proving that the owner published no ownership.
 	if !moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
-		_ = txn.lockAdded(l.bind.Group, l.bind, rows, opts.LockOptions, l.logger)
+		txn.markRemoteUnlockRequiredLocked(l.bind.Group, l.bind.Table)
+		if trackingErr := txn.ensureRemoteLockTableTracked(
+			l.bind.Group,
+			l.bind,
+			req.Lock.Rows,
+			req.Lock.Options,
+			l.logger,
+		); trackingErr != nil {
+			err = errors.Join(err, trackingErr)
+		}
 	}
 	logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
 	if moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout) {

@@ -428,6 +428,8 @@ func (s *service) handleRemoteLock(
 	txnID := append([]byte(nil), req.Lock.TxnID...)
 	s.bindChangeMu.RUnlock()
 	defer txn.Unlock()
+	originalRows := req.Lock.Rows
+	originalOptions := req.Lock.Options
 	rows, opts, replaceTxnLocks := txn.coarsenLockRequest(
 		bind.Group,
 		bind.Table,
@@ -445,6 +447,8 @@ func (s *service) handleRemoteLock(
 			async:                      true,
 			remoteLockOwnerWaitTimeout: s.cfg.RemoteLockOwnerWaitTimeout.Duration,
 			replaceTxnLocks:            replaceTxnLocks,
+			originalRows:               originalRows,
+			originalOptions:            originalOptions,
 		},
 		func(result pb.Result, err error) {
 			defer completion.callbackDone()
@@ -559,6 +563,8 @@ func (s *service) handleForwardLock(
 	txnID := append([]byte(nil), req.Lock.TxnID...)
 	s.bindChangeMu.RUnlock()
 	defer txn.Unlock()
+	originalRows := req.Lock.Rows
+	originalOptions := req.Lock.Options
 	rows, opts, replaceTxnLocks := txn.coarsenLockRequest(
 		bind.Group,
 		bind.Table,
@@ -576,6 +582,8 @@ func (s *service) handleForwardLock(
 			async:                      true,
 			remoteLockOwnerWaitTimeout: s.cfg.RemoteLockOwnerWaitTimeout.Duration,
 			replaceTxnLocks:            replaceTxnLocks,
+			originalRows:               originalRows,
+			originalOptions:            originalOptions,
 		},
 		func(result pb.Result, err error) {
 			defer completion.callbackDone()

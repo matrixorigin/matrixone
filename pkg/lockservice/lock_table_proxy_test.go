@@ -835,3 +835,65 @@ func TestProxyRetryPreservesAppliedHandoffRepresentative(t *testing.T) {
 		},
 	)
 }
+
+func TestProxyAmbiguousDirectLockForcesTxnIDUnlock(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			owner, origin := services[0], services[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			const table = uint64(26767)
+			_, err := owner.getLockTableWithCreate(
+				ctx, 0, table, nil, pb.Sharding_None)
+			require.NoError(t, err)
+
+			client := &loseNthLockResponseClient{Client: origin.remote.client}
+			client.dropAt.Store(2)
+			origin.remote.client = client
+
+			representative := []byte("proxy-direct-representative")
+			txnID := []byte("proxy-direct-ambiguous")
+			_, err = origin.Lock(
+				ctx, table, newTestRows(1), representative,
+				newTestRowSharedOptions())
+			require.NoError(t, err)
+			_, err = origin.Lock(
+				ctx, table, newTestRows(1), txnID,
+				newTestRowSharedOptions())
+			require.NoError(t, err)
+
+			// Exclusive requests bypass the singleton Shared proxy. The owner
+			// commits row 3 for txnID, then the wrapper drops that response.
+			_, err = origin.Lock(
+				ctx, table, newTestRows(3), txnID,
+				newTestRowExclusiveOptions())
+			require.Error(t, err)
+
+			proxy := origin.tableGroups.get(0, table).(*localLockTableProxy)
+			proxy.mu.RLock()
+			require.False(t, proxy.isRemoteHolderLocked(string(newTestRows(1)[0]), txnID),
+				"txnID must remain only a local proxy sharer")
+			proxy.mu.RUnlock()
+
+			// Its only retained probe key belongs to the local proxy cache and
+			// would normally make unlock skip the owner RPC. Direct-remote
+			// ownership forces the table-level txnID unlock instead.
+			require.NoError(t, origin.Unlock(ctx, txnID, timestamp.Timestamp{}))
+			probeTxn := []byte("proxy-direct-probe")
+			probe := newTestRowExclusiveOptions()
+			probe.Policy = pb.WaitPolicy_FastFail
+			_, err = owner.Lock(ctx, table, newTestRows(3), probeTxn, probe)
+			require.NoError(t, err, "ambiguous direct ownership leaked behind the proxy")
+			require.NoError(t, owner.Unlock(ctx, probeTxn, timestamp.Timestamp{}))
+			require.NoError(t, origin.Unlock(ctx, representative, timestamp.Timestamp{}))
+		},
+		func(c *Config) {
+			c.EnableRemoteLocalProxy = true
+			c.MaxLockRowCount = 2
+			c.MaxFixedSliceSize = 4
+		},
+	)
+}

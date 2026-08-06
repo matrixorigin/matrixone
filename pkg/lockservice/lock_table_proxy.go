@@ -188,6 +188,8 @@ func (lp *localLockTableProxy) unlockWithContext(
 
 	skipped := 0
 	n := rows.len()
+	bind := lp.getBind()
+	forceRemoteUnlock := txn.isRemoteUnlockRequiredLocked(bind.Group, bind.Table)
 	var remoteMutations []pb.ExtraMutation
 	var updates []holderUpdate
 	lp.mu.Lock()
@@ -285,10 +287,10 @@ func (lp *localLockTableProxy) unlockWithContext(
 	// all skipped
 	var err error
 	if unlocker, ok := lp.remote.(contextUnlocker); ok {
-		if skipped != rows.len() {
+		if skipped != rows.len() || forceRemoteUnlock {
 			err = unlocker.unlockWithContext(ctx, txn, ls, commitTS, remoteMutations...)
 		}
-	} else if skipped != rows.len() {
+	} else if skipped != rows.len() || forceRemoteUnlock {
 		lp.remote.unlock(txn, ls, commitTS, remoteMutations...)
 	}
 	if err != nil {

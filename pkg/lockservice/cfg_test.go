@@ -52,18 +52,19 @@ func TestAdjustConfigRejectsNegativeMaxLockWaitDuration(t *testing.T) {
 	assert.Panics(t, c.Validate)
 }
 
-func TestAdjustConfigRequiresRangeCapacity(t *testing.T) {
+func TestAdjustConfigPreservesFixedSliceCompatibility(t *testing.T) {
+	// These tight settings were accepted before cumulative coarsening existed
+	// and must remain bootable across an upgrade.
 	for _, c := range []Config{
 		{ServiceID: "s1", MaxLockRowCount: 1, MaxFixedSliceSize: 1},
 		{ServiceID: "s1", MaxLockRowCount: 2, MaxFixedSliceSize: 2},
+		{ServiceID: "s1", MaxLockRowCount: 3, MaxFixedSliceSize: 3},
 		{ServiceID: "s1", MaxLockRowCount: 3, MaxFixedSliceSize: 4},
+		{ServiceID: "s1", MaxLockRowCount: 4, MaxFixedSliceSize: 4},
 	} {
-		assert.Panics(t, c.Validate)
+		assert.NotPanics(t, c.Validate)
 	}
 
-	// fixedSlicePool rounds 3 up to an effective capacity of 4, which can
-	// retain one old row plus the two endpoints needed for indeterminate
-	// remote-replacement cleanup.
-	c := Config{ServiceID: "s1", MaxLockRowCount: 1, MaxFixedSliceSize: 3}
-	assert.NotPanics(t, c.Validate)
+	c := Config{ServiceID: "s1", MaxLockRowCount: 5, MaxFixedSliceSize: 4}
+	assert.Panics(t, c.Validate)
 }

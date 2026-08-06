@@ -1458,6 +1458,104 @@ func TestRangeMergePreservesModeAndFailureAtomicity(t *testing.T) {
 	)
 }
 
+func TestFullLedgerSharedRangeMergePreparesBeforeCommit(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1"},
+		time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			const table = uint64(26762)
+			txnA := []byte("full-shared-ledger-a")
+			txnB := []byte("full-shared-ledger-b")
+
+			_, err := s.Lock(
+				ctx, table, newTestRows(1, 2, 3, 4, 5, 6, 7, 8), txnA,
+				newTestRowSharedOptions())
+			require.NoError(t, err)
+			_, err = s.Lock(
+				ctx, table, newTestRows(1, 2), txnA,
+				newTestRangeSharedOptions())
+			require.NoError(t, err,
+				"the post-merge ledger fits exactly and must be prepared before mutation")
+
+			txn := s.activeTxnHolder.getActiveTxn(txnA, false, "")
+			require.NotNil(t, txn)
+			txn.RLock()
+			keys := txn.lockHolders[0].tableKeys[table].slice()
+			txn.RUnlock()
+			require.Equal(t, 8, keys.len())
+			keys.unref()
+
+			probe := newTestRowExclusiveOptions()
+			probe.Policy = pb.WaitPolicy_FastFail
+			_, err = s.Lock(ctx, table, newTestRows(1), txnB, probe)
+			require.ErrorIs(t, err, ErrLockConflict,
+				"a bookkeeping failure must never remove physical ownership")
+			require.NoError(t, s.Unlock(ctx, txnB, timestamp.Timestamp{}))
+			require.NoError(t, s.Unlock(ctx, txnA, timestamp.Timestamp{}))
+
+			_, err = s.Lock(ctx, table, newTestRows(1), txnB, probe)
+			require.NoError(t, err, "the committed range leaked after unlock")
+			require.NoError(t, s.Unlock(ctx, txnB, timestamp.Timestamp{}))
+		},
+		func(c *Config) {
+			c.MaxLockRowCount = 6
+			c.MaxFixedSliceSize = 8
+		},
+	)
+}
+
+func TestGetLockFindsCoveringRangeForRetainedProbe(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			const table = uint64(26768)
+			txnID := []byte("covering-range-holder")
+			_, err := s.Lock(
+				ctx, table, newTestRows(1, 5), txnID,
+				newTestRangeExclusiveOptions())
+			require.NoError(t, err)
+
+			lt := s.tableGroups.get(0, table).(*localLockTable)
+			found := false
+			err = lt.getLock(
+				ctx,
+				newTestRows(3)[0],
+				pb.WaitTxn{TxnID: txnID},
+				func(lock Lock) {
+					found = lock.holders.contains(txnID)
+				},
+			)
+			require.NoError(t, err)
+			require.True(t, found)
+			holder, ok, err := lt.getLockHolder(ctx, newTestRows(3)[0])
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, txnID, holder.TxnID)
+
+			for _, row := range []byte{0, 6} {
+				called := false
+				err = lt.getLock(
+					ctx,
+					newTestRows(row)[0],
+					pb.WaitTxn{TxnID: txnID},
+					func(Lock) { called = true },
+				)
+				require.NoError(t, err)
+				require.False(t, called)
+			}
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+		},
+	)
+}
+
 func TestExclusiveLockBudgetAppliesAcrossRequests(t *testing.T) {
 	tests := []struct {
 		name       string

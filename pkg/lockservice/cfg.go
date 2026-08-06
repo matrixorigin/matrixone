@@ -105,15 +105,11 @@ func (c *Config) Validate() {
 	if c.MaxFixedSliceSize == 0 {
 		c.MaxFixedSliceSize = toml.ByteSize(defaultMaxFixedSliceSize)
 	}
-	effectiveFixedSliceSize := toml.ByteSize(roundUp(int(c.MaxFixedSliceSize)))
-	if effectiveFixedSliceSize < 4 {
-		panic("MaxFixedSliceSize must hold the minimum lock bookkeeping slice")
-	}
-	// A coarsened remote RPC can complete at the owner while its response is
-	// lost. The origin retains both its old rows and the two replacement range
-	// endpoints until unlock, so it must reserve that bounded cleanup union.
-	if c.MaxLockRowCount > effectiveFixedSliceSize-2 {
-		panic("MaxFixedSliceSize must reserve two range endpoints beyond MaxLockRowCount")
+	// Preserve the compatibility contract of existing deployments. Remote
+	// cleanup is routed by table and transaction ID, so cumulative coarsening
+	// must not require extra endpoint capacity in the origin-side key snapshot.
+	if c.MaxLockRowCount > c.MaxFixedSliceSize {
+		panic("This parameter configuration may trigger scenarios that violate MaxFixedSliceSize")
 	}
 	if c.KeepBindDuration.Duration == 0 {
 		c.KeepBindDuration.Duration = time.Second

@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -37,6 +38,11 @@ type tableLockHolder struct {
 	tableKeys            map[uint64]*cowSlice
 	tableBinds           map[uint64]pb.LockTable
 	nonCoarsenableTables map[uint64]struct{}
+	// remoteUnlockRequired records tables on which this origin transaction may
+	// own locks acquired through a direct owner RPC. localLockTableProxy must not
+	// suppress that table-level txnID unlock merely because every retained probe
+	// key belongs to its singleton Shared cache.
+	remoteUnlockRequired map[uint64]struct{}
 	// tableBindIntents records bind versions touched before a lock attempt
 	// finishes, so bind-change fencing also covers failed in-flight attempts.
 	tableBindIntents map[uint64]pb.LockTable
@@ -56,6 +62,43 @@ type activeTxn struct {
 
 	// test-only hook: called before lockAdded; return non-nil to abort
 	beforeLockAdded func(txnID []byte, locks [][]byte) error
+}
+
+// preparedTxnLocks is the transaction-bookkeeping half of one range
+// representation change. Allocation and failure injection happen while the
+// lock store is still untouched; commit itself cannot fail. The caller holds
+// both the transaction mutex and the local lock-table mutex.
+type preparedTxnLocks struct {
+	txn    *activeTxn
+	holder *tableLockHolder
+	table  uint64
+	bind   pb.LockTable
+	old    *cowSlice
+	next   *cowSlice
+	added  [][]byte
+	opts   pb.LockOptions
+	logger *log.MOLogger
+}
+
+func (p *preparedTxnLocks) commit() {
+	if p == nil || p.next == nil {
+		panic("BUG: invalid prepared transaction locks")
+	}
+	defer logTxnLockAdded(p.logger, p.txn, p.added)
+	p.holder.tableKeys[p.table] = p.next
+	p.holder.tableBinds[p.table] = p.bind
+	p.txn.markTableNonCoarsenableLocked(p.holder, p.table, p.opts)
+	p.next = nil
+	if p.old != nil {
+		p.old.close()
+	}
+}
+
+func (p *preparedTxnLocks) close() {
+	if p != nil && p.next != nil {
+		p.next.close()
+		p.next = nil
+	}
 }
 
 type contextUnlocker interface {
@@ -85,28 +128,6 @@ func newActiveTxn(
 
 func (txn activeTxn) TypeName() string {
 	return "lockservice.activeTxn"
-}
-
-func (txn *activeTxn) lockRemoved(
-	group uint32,
-	table uint64,
-	removedLocks map[string]struct{}) {
-	h := txn.getHoldLocksLocked(group)
-	v, ok := h.tableKeys[table]
-	if !ok {
-		return
-	}
-	newV, _ := newCowSlice(txn.fsp, nil)
-	s := v.slice()
-	defer s.unref()
-	s.iter(func(v []byte) bool {
-		if _, ok := removedLocks[util.UnsafeBytesToString(v)]; !ok {
-			newV.append([][]byte{v})
-		}
-		return true
-	})
-	v.close()
-	h.tableKeys[table] = newV
 }
 
 func (txn *activeTxn) lockAdded(
@@ -160,41 +181,204 @@ func (txn *activeTxn) lockAdded(
 	// transaction/table ownership consists of non-sharded Exclusive locks.
 	// Transaction bookkeeping intentionally stores keys rather than per-key
 	// modes, so conservatively make ineligibility monotonic for this transaction.
-	if opts.Mode != pb.LockMode_Exclusive || opts.Sharding != pb.Sharding_None {
-		if h.nonCoarsenableTables == nil {
-			h.nonCoarsenableTables = make(map[uint64]struct{})
+	txn.markTableNonCoarsenableLocked(h, bind.Table, opts)
+	return nil
+}
+
+func (txn *activeTxn) markTableNonCoarsenableLocked(
+	h *tableLockHolder,
+	table uint64,
+	opts pb.LockOptions,
+) {
+	if opts.Mode == pb.LockMode_Exclusive && opts.Sharding == pb.Sharding_None {
+		return
+	}
+	if h.nonCoarsenableTables == nil {
+		h.nonCoarsenableTables = make(map[uint64]struct{})
+	}
+	h.nonCoarsenableTables[table] = struct{}{}
+}
+
+func (txn *activeTxn) canCoarsenTableLocked(group uint32, table uint64) bool {
+	h, ok := txn.lockHolders[group]
+	if !ok {
+		return true
+	}
+	_, disabled := h.nonCoarsenableTables[table]
+	return !disabled
+}
+
+func (txn *activeTxn) markRemoteUnlockRequiredLocked(group uint32, table uint64) {
+	h := txn.getHoldLocksLocked(group)
+	if h.remoteUnlockRequired == nil {
+		h.remoteUnlockRequired = make(map[uint64]struct{})
+	}
+	h.remoteUnlockRequired[table] = struct{}{}
+}
+
+func (txn *activeTxn) isRemoteUnlockRequiredLocked(group uint32, table uint64) bool {
+	h, ok := txn.lockHolders[group]
+	if !ok {
+		return false
+	}
+	_, required := h.remoteUnlockRequired[table]
+	return required
+}
+
+// prepareLockUpdate builds the complete post-merge ledger before either
+// ownership surface changes. keep is evaluated for every currently recorded
+// key; the retained keys are followed by added in their physical unlock order.
+// The caller holds txn's mutex.
+func (txn *activeTxn) prepareLockUpdate(
+	group uint32,
+	bind pb.LockTable,
+	added [][]byte,
+	opts pb.LockOptions,
+	keep func([]byte) bool,
+	logger *log.MOLogger,
+) (*preparedTxnLocks, error) {
+	if txn.beforeLockAdded != nil {
+		if err := txn.beforeLockAdded(txn.txnID, added); err != nil {
+			return nil, err
 		}
-		if _, disabled := h.nonCoarsenableTables[bind.Table]; !disabled {
-			h.nonCoarsenableTables[bind.Table] = struct{}{}
+	}
+
+	h := txn.getHoldLocksLocked(group)
+	old := h.tableKeys[bind.Table]
+	capacity := len(added)
+	if old != nil {
+		capacity += old.mustGet().len()
+	}
+	nextValues := make([][]byte, 0, capacity)
+	if old != nil {
+		current := old.slice()
+		current.iter(func(key []byte) bool {
+			if keep == nil || keep(key) {
+				nextValues = append(nextValues, key)
+			}
+			return true
+		})
+		current.unref()
+	}
+	nextValues = append(nextValues, added...)
+	next, err := newCowSlice(txn.fsp, nextValues)
+	if err != nil {
+		return nil, err
+	}
+	return &preparedTxnLocks{
+		txn:    txn,
+		holder: h,
+		table:  bind.Table,
+		bind:   bind,
+		old:    old,
+		next:   next,
+		added:  added,
+		opts:   opts,
+		logger: logger,
+	}, nil
+}
+
+// remoteLockAdded records origin-side routing/deadlock probe keys. Unlike the
+// authoritative owner ledger, this snapshot is never interpreted as physical
+// range pairs during remote unlock. Keep the common append path unchanged and
+// compact exact duplicates only when the configured fixed capacity would
+// otherwise reject a successful remote operation.
+func (txn *activeTxn) remoteLockAdded(
+	group uint32,
+	bind pb.LockTable,
+	locks [][]byte,
+	opts pb.LockOptions,
+	logger *log.MOLogger,
+) error {
+	if txn.beforeLockAdded != nil {
+		if err := txn.beforeLockAdded(txn.txnID, locks); err != nil {
+			return err
 		}
+	}
+	defer logTxnLockAdded(logger, txn, locks)
+
+	h := txn.getHoldLocksLocked(group)
+	old := h.tableKeys[bind.Table]
+	if old == nil {
+		cs, err := newCowSlice(txn.fsp, locks)
+		if err != nil {
+			return err
+		}
+		h.tableKeys[bind.Table] = cs
+		h.tableBinds[bind.Table] = bind
+		txn.markTableNonCoarsenableLocked(h, bind.Table, opts)
+		return nil
+	}
+	if err := old.append(locks); err == nil {
+		txn.markTableNonCoarsenableLocked(h, bind.Table, opts)
+		return nil
+	} else if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+		return err
+	}
+
+	seen := make(map[string]struct{}, len(locks))
+	values := make([][]byte, 0, len(locks))
+	addDistinct := func(key []byte) {
+		value := util.UnsafeBytesToString(key)
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		values = append(values, key)
+	}
+	if old != nil {
+		current := old.slice()
+		current.iter(func(key []byte) bool {
+			addDistinct(key)
+			return true
+		})
+		current.unref()
+	}
+	for _, key := range locks {
+		addDistinct(key)
+	}
+	next, compactErr := newCowSlice(txn.fsp, values)
+	if compactErr != nil {
+		return compactErr
+	}
+	h.tableKeys[bind.Table] = next
+	h.tableBinds[bind.Table] = bind
+	txn.markTableNonCoarsenableLocked(h, bind.Table, opts)
+	if old != nil {
+		old.close()
 	}
 	return nil
 }
 
-// hasExactLockLocked reports whether one key is already represented exactly in
-// transaction bookkeeping. The caller must hold txn's mutex. It is used only
-// for the uncommon fully re-entrant singleton remote response, so keeping the
-// ordinary lockAdded path free of an extra per-key index is more important than
-// optimizing this bounded scan. A row covered by an existing range may return
-// false here; conservatively retaining that row as an additional cleanup key is
-// safe.
-func (txn *activeTxn) hasExactLockLocked(
+// ensureRemoteLockTableTracked is the bounded cleanup fallback for an
+// indeterminate remote Lock result. Remote unlock releases all owner-side locks
+// by transaction ID; therefore an existing table entry is already sufficient.
+// For a first request, one key creates that routing entry without attempting an
+// old+new union that can exceed fixed capacity. Allocation failure is returned
+// to the caller rather than silently dropping the only route to the owner.
+func (txn *activeTxn) ensureRemoteLockTableTracked(
 	group uint32,
-	table uint64,
-	lock []byte,
-) bool {
-	h, ok := txn.lockHolders[group]
-	if !ok || h.tableKeys[table] == nil {
-		return false
+	bind pb.LockTable,
+	locks [][]byte,
+	opts pb.LockOptions,
+	logger *log.MOLogger,
+) error {
+	h := txn.getHoldLocksLocked(group)
+	if h.tableKeys[bind.Table] != nil || len(locks) == 0 {
+		if h.tableKeys[bind.Table] != nil {
+			txn.markTableNonCoarsenableLocked(h, bind.Table, opts)
+		}
+		return nil
 	}
-	held := h.tableKeys[table].slice()
-	defer held.unref()
-	found := false
-	held.iter(func(key []byte) bool {
-		found = bytes.Equal(key, lock)
-		return !found
-	})
-	return found
+	cs, err := newCowSlice(txn.fsp, locks[:1])
+	if err != nil {
+		return err
+	}
+	defer logTxnLockAdded(logger, txn, locks[:1])
+	h.tableKeys[bind.Table] = cs
+	h.tableBinds[bind.Table] = bind
+	txn.markTableNonCoarsenableLocked(h, bind.Table, opts)
+	return nil
 }
 
 // coarsenLockRequest enforces the row-lock budget at the owner of the actual
@@ -334,41 +518,32 @@ func (txn *activeTxn) replaceLocks(
 	locks [][]byte,
 	logger *log.MOLogger,
 ) error {
-	if txn.beforeLockAdded != nil {
-		if err := txn.beforeLockAdded(txn.txnID, locks); err != nil {
-			return err
+	keep := func([]byte) bool { return false }
+	if len(locks) == 2 && bytes.Compare(locks[0], locks[1]) < 0 {
+		// Range endpoints must stay adjacent in transaction bookkeeping because
+		// local unlock interprets a range-start followed by its range-end as one
+		// lock. Preserve ownership acquired concurrently outside the planned
+		// range; keys inside it are represented by the replacement pair.
+		keep = func(key []byte) bool {
+			return bytes.Compare(key, locks[0]) < 0 ||
+				bytes.Compare(key, locks[1]) > 0
 		}
 	}
-
-	h := txn.getHoldLocksLocked(group)
-	oldLocks := h.tableKeys[bind.Table]
-	nextLocks := locks
-	if oldLocks != nil && len(locks) == 2 && bytes.Compare(locks[0], locks[1]) < 0 {
-		// Range endpoints must stay adjacent in transaction bookkeeping because
-		// unlock interprets a range-start followed by its range-end as one lock.
-		// Retain concurrent ownership first, then append the replacement pair.
-		nextLocks = make([][]byte, 0, oldLocks.mustGet().len()+2)
-		old := oldLocks.slice()
-		old.iter(func(key []byte) bool {
-			if bytes.Compare(key, locks[0]) < 0 || bytes.Compare(key, locks[1]) > 0 {
-				nextLocks = append(nextLocks, key)
-			}
-			return true
-		})
-		old.unref()
-		nextLocks = append(nextLocks, locks...)
-	}
-
-	newLocks, err := newCowSlice(txn.fsp, nextLocks)
+	prepared, err := txn.prepareLockUpdate(
+		group,
+		bind,
+		locks,
+		pb.LockOptions{
+			Mode:     pb.LockMode_Exclusive,
+			Sharding: pb.Sharding_None,
+		},
+		keep,
+		logger,
+	)
 	if err != nil {
 		return err
 	}
-	defer logTxnLockAdded(logger, txn, locks)
-	h.tableKeys[bind.Table] = newLocks
-	h.tableBinds[bind.Table] = bind
-	if oldLocks != nil {
-		oldLocks.close()
-	}
+	prepared.commit()
 	return nil
 }
 
@@ -584,12 +759,14 @@ func (txn *activeTxn) removeClosedLockTable(
 	delete(h.tableKeys, table)
 	delete(h.tableBinds, table)
 	delete(h.nonCoarsenableTables, table)
+	delete(h.remoteUnlockRequired, table)
 	// Keep the intent until the whole transaction closes. It owns the service
 	// drain reference even after this table was successfully released during a
 	// retryable, multi-table cleanup.
 	cs.close()
 	if len(h.tableKeys) == 0 && len(h.tableBinds) == 0 &&
 		len(h.nonCoarsenableTables) == 0 &&
+		len(h.remoteUnlockRequired) == 0 &&
 		len(h.tableBindIntents) == 0 {
 		delete(txn.lockHolders, group)
 	}
@@ -606,6 +783,9 @@ func (txn *activeTxn) reset() {
 		}
 		for table := range h.nonCoarsenableTables {
 			delete(h.nonCoarsenableTables, table)
+		}
+		for table := range h.remoteUnlockRequired {
+			delete(h.remoteUnlockRequired, table)
 		}
 		for table := range h.tableBindIntents {
 			delete(h.tableBindIntents, table)
