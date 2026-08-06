@@ -1797,6 +1797,122 @@ func Test_setMysqlColumnTypeMetadataDecimalLength(t *testing.T) {
 	}
 }
 
+func TestColDef2MysqlColumnStringLengthMetadata(t *testing.T) {
+	cases := []struct {
+		name      string
+		typ       types.Type
+		mysqlType defines.MysqlType
+		charset   uint16
+		length    uint32
+	}{
+		{
+			name:      "varchar length is encoded in utf8mb3 bytes",
+			typ:       types.New(types.T_varchar, 128, 0),
+			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
+			charset:   charsetVarchar,
+			length:    384,
+		},
+		{
+			name:      "char length is encoded in utf8mb3 bytes",
+			typ:       types.New(types.T_char, 128, 0),
+			mysqlType: defines.MYSQL_TYPE_STRING,
+			charset:   charsetVarchar,
+			length:    384,
+		},
+		{
+			name:      "maximum varchar length is encoded in utf8mb3 bytes",
+			typ:       types.New(types.T_varchar, types.MaxVarcharLen, 0),
+			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
+			charset:   charsetVarchar,
+			length:    types.MaxVarcharLen * charsetVarcharMaxBytesPerCharacter,
+		},
+		{
+			name:      "varbinary length stays in bytes",
+			typ:       types.New(types.T_varbinary, 128, 0),
+			mysqlType: defines.MYSQL_TYPE_VARCHAR,
+			charset:   charsetBinary,
+			length:    128,
+		},
+		{
+			name:      "binary length stays in bytes",
+			typ:       types.New(types.T_binary, 128, 0),
+			mysqlType: defines.MYSQL_TYPE_VARCHAR,
+			charset:   charsetBinary,
+			length:    128,
+		},
+		{
+			name:      "unknown varchar width stays unbounded",
+			typ:       types.New(types.T_varchar, -1, 0),
+			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
+			charset:   charsetVarchar,
+			length:    math.MaxUint32,
+		},
+		{
+			name:      "unspecified varchar width stays unbounded",
+			typ:       types.New(types.T_varchar, 0, 0),
+			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
+			charset:   charsetVarchar,
+			length:    math.MaxUint32,
+		},
+		{
+			name:      "varchar byte length saturates instead of wrapping",
+			typ:       types.New(types.T_varchar, math.MaxInt32, 0),
+			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
+			charset:   charsetVarchar,
+			length:    math.MaxUint32,
+		},
+		{
+			name:      "unknown varbinary width stays unbounded",
+			typ:       types.New(types.T_varbinary, -1, 0),
+			mysqlType: defines.MYSQL_TYPE_VARCHAR,
+			charset:   charsetBinary,
+			length:    math.MaxUint32,
+		},
+		{
+			name:      "zero varbinary width stays zero",
+			typ:       types.New(types.T_varbinary, 0, 0),
+			mysqlType: defines.MYSQL_TYPE_VARCHAR,
+			charset:   charsetBinary,
+			length:    0,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			col, err := colDef2MysqlColumn(context.Background(), &plan2.ColDef{
+				Name: "c",
+				Typ: plan2.Type{
+					Id:    int32(tt.typ.Oid),
+					Width: tt.typ.Width,
+					Scale: tt.typ.Scale,
+				},
+			})
+			require.NoError(t, err)
+			require.Equal(t, tt.mysqlType, col.ColumnType())
+			require.Equal(t, tt.charset, col.Charset())
+			require.Equal(t, tt.length, col.Length())
+
+			proto := &MysqlProtocolImpl{io: NewIOPackage(true)}
+			packet := proto.makeColumnDefinition41Payload(col, int(COM_QUERY))
+			pos := HeaderOffset
+			for range 6 {
+				_, next, ok := proto.readStringLenEnc(packet, pos)
+				require.True(t, ok)
+				pos = next
+			}
+			fixedLength, next, ok := proto.io.ReadUint8(packet, pos)
+			require.True(t, ok)
+			require.Equal(t, uint8(0x0c), fixedLength)
+			packetCharset, next, ok := proto.io.ReadUint16(packet, next)
+			require.True(t, ok)
+			require.Equal(t, tt.charset, packetCharset)
+			packetLength, _, ok := proto.io.ReadUint32(packet, next)
+			require.True(t, ok)
+			require.Equal(t, tt.length, packetLength)
+		})
+	}
+}
+
 func Test_convertRowsIntoBatchError(t *testing.T) {
 	colMysqlTyps := []defines.MysqlType{
 		defines.MYSQL_TYPE_TIMESTAMP,

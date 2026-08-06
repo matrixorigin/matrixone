@@ -381,6 +381,23 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 				Name:  Label_Grouping_Keys, //"Grouping keys",
 				Value: value,
 			})
+			if len(m.node.GroupByHashKey) > 0 {
+				hashExprs := make([]*plan.Expr, len(m.node.GroupByHashKey))
+				for i, idx := range m.node.GroupByHashKey {
+					if idx < 0 || int(idx) >= len(m.node.GroupBy) {
+						return nil, moerr.NewInternalErrorf(ctx, "invalid group-by hash key index %d", idx)
+					}
+					hashExprs[i] = m.node.GroupBy[idx]
+				}
+				value, err = GetExprsLabelValue(ctx, hashExprs, options)
+				if err != nil {
+					return nil, err
+				}
+				labels = append(labels, models.Label{
+					Name:  Label_Grouping_Hash_Keys,
+					Value: value,
+				})
+			}
 		}
 
 		// Get Aggregate function info
