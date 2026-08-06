@@ -877,7 +877,17 @@ func initExecuteStmtParamWithResolverInSession(
 		if prepareStmt.params.Length() != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		cwft.proc.SetPrepareParams(prepareStmt.params)
+		paramCount := prepareStmt.params.Length()
+		isBin := make([]bool, paramCount)
+		isSignedInteger := make([]bool, paramCount)
+		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
+			mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
+			unsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
+			isSignedInteger[i] = !unsigned && (mysqlType == defines.MYSQL_TYPE_TINY ||
+				mysqlType == defines.MYSQL_TYPE_SHORT || mysqlType == defines.MYSQL_TYPE_INT24 ||
+				mysqlType == defines.MYSQL_TYPE_LONG || mysqlType == defines.MYSQL_TYPE_LONGLONG)
+		}
+		cwft.proc.SetPrepareParamsWithMeta(prepareStmt.params, isBin, isSignedInteger)
 		cwft.paramVals, err = preparedParamValues(cwft.proc)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err

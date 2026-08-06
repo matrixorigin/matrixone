@@ -496,9 +496,19 @@ drop table prepare_bit_numeric;
 -- signed integer clients use the same 64-bit payload for BIT(64) values
 drop table if exists prepare_bit64_signed;
 create table prepare_bit64_signed (b bit(64));
+-- an unquoted integer expression preserves its signed 64-bit bit pattern
+insert into prepare_bit64_signed values (-6109877384019645241);
+select hex(b), cast(b as unsigned) from prepare_bit64_signed;
+truncate table prepare_bit64_signed;
+-- the same characters in an SQL string remain string-to-BIT input
+-- @regex("data out of range",true)
+insert into prepare_bit64_signed values ('-6109877384019645241');
+
 prepare s from 'insert into prepare_bit64_signed values (?)';
 set @signed_high_bit = -9223372036854775808;
 execute s using @signed_high_bit;
+set @signed_workflow_value = -6109877384019645241;
+execute s using @signed_workflow_value;
 set @signed_all_bits = -1;
 execute s using @signed_all_bits;
 deallocate prepare s;

@@ -537,6 +537,15 @@ func (proc *Process) GetPrepareParamIsBin(i int) bool {
 	return i >= 0 && i < len(proc.Base.prepareParamsIsBin) && proc.Base.prepareParamsIsBin[i]
 }
 
+func (proc *Process) GetPrepareParamIsSignedInteger(i int) bool {
+	paramCount := 0
+	if proc.Base.prepareParams != nil {
+		paramCount = proc.Base.prepareParams.Length()
+	}
+	return i >= 0 && i < paramCount && paramCount+i < len(proc.Base.prepareParamsIsBin) &&
+		proc.Base.prepareParamsIsBin[paramCount+i]
+}
+
 // SetIncrStatementDisabled marks this process (and every child process
 // sharing its BaseProcess) as running internal SQL that must not advance the
 // workspace snapshot write offset. See BaseProcess.incrStatementDisabled.
