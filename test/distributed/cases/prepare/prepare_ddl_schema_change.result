@@ -244,13 +244,13 @@ foreign key (pid) references expanded_parent(id)
 );
 prepare expanded_like_stmt from 'create table expanded_like like expanded_src';
 alter table expanded_parent drop primary key;
+Cannot drop index 'PRIMARY': needed in a foreign key constraint
 execute expanded_like_stmt;
-internal error: failed to add the foreign key constraint
 select count(*)
 from information_schema.referential_constraints
 where constraint_schema = 'prepare_ddl_schema_change' and table_name = 'expanded_like';
 ➤ count(*)[-5,64,0]  𝄀
-0
+1
 deallocate prepare expanded_like_stmt;
 set foreign_key_checks = 1;
 prepare missing_database_stmt from 'drop table if exists prepared_future_db.t';

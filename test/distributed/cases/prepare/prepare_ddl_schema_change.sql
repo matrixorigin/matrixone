@@ -195,6 +195,9 @@ execute temporary_stmt;
 show tables like 'prepared_temporary';
 deallocate prepare temporary_stmt;
 
+-- MySQL-compatible exception: foreign_key_checks = 0 does not permit dropping
+-- a PRIMARY/UNIQUE key required by a child foreign key. The failed ALTER keeps
+-- the parent key intact, so the prepared CREATE TABLE LIKE succeeds with its FK.
 set foreign_key_checks = 0;
 create table expanded_parent (id int primary key);
 create table expanded_src (
