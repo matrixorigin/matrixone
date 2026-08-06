@@ -807,6 +807,7 @@ func TestCommitUsesFinalCommitTSForNextTxn(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
 	ses := newTestSession(t, ctrl)
+	defer ses.Close()
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().Hints().Return(engine.Hints{
 		CommitOrRollbackTimeout: time.Second,

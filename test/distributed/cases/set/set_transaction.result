@@ -14,8 +14,21 @@ select @@global.transaction_isolation;
 @@transaction_isolation
 READ-COMMITTED
 set global transaction_isolation = @saved_transaction_isolation;
-set session transaction isolation level read committed, read write, read only;
+set session transaction read only;
+not supported: transaction access mode READ ONLY is not supported
+set session transaction read write;
+not supported: transaction access mode READ WRITE is not supported
+set session transaction isolation level repeatable read, read only;
+not supported: transaction access mode READ ONLY is not supported
 select @@transaction_isolation;
 @@transaction_isolation
 READ-COMMITTED
+set session transaction isolation level read committed, isolation level read committed;
+invalid input: transaction isolation level specified more than once
+set session transaction isolation level read committed, isolation level repeatable read;
+invalid input: transaction isolation level specified more than once
+set session transaction read only, read only;
+invalid input: transaction access mode specified more than once
+set session transaction read only, read write;
+invalid input: transaction access mode specified more than once
 set session transaction_isolation = @saved_session_transaction_isolation;

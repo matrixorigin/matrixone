@@ -247,17 +247,85 @@ func TestHandleSetTransaction(t *testing.T) {
 		})
 	}
 
-	t.Run("access mode does not change isolation", func(t *testing.T) {
-		stmt, err := mysql.ParseOne(ctx, "set session transaction read only", 1)
+	for _, sql := range []string{
+		"set transaction read only",
+		"set session transaction read only",
+		"set global transaction read write",
+	} {
+		t.Run(sql+" fails closed", func(t *testing.T) {
+			stmt, err := mysql.ParseOne(ctx, sql, 1)
+			require.NoError(t, err)
+
+			_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+			require.ErrorContains(t, err, "transaction access mode")
+
+			got, getErr := ses.GetSessionSysVar("transaction_isolation")
+			require.NoError(t, getErr)
+			require.Equal(t, "REPEATABLE-READ", got)
+			handler := ses.GetTxnHandler()
+			handler.mu.Lock()
+			hasNextIsolation := handler.hasNextTxnIsolation
+			handler.mu.Unlock()
+			require.False(t, hasNextIsolation)
+		})
+	}
+
+	t.Run("access mode prevents partial isolation update", func(t *testing.T) {
+		stmt, err := mysql.ParseOne(ctx,
+			"set session transaction isolation level read committed, read only", 1)
 		require.NoError(t, err)
 
 		_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
-		require.NoError(t, err)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 
-		got, err := ses.GetSessionSysVar("transaction_isolation")
-		require.NoError(t, err)
+		got, getErr := ses.GetSessionSysVar("transaction_isolation")
+		require.NoError(t, getErr)
 		require.Equal(t, "REPEATABLE-READ", got)
 	})
+
+	for _, test := range []struct {
+		name string
+		sql  string
+		err  string
+	}{
+		{
+			name: "duplicate isolation level",
+			sql:  "set session transaction isolation level read committed, isolation level read committed",
+			err:  "transaction isolation level specified more than once",
+		},
+		{
+			name: "conflicting isolation levels",
+			sql:  "set session transaction isolation level read committed, isolation level repeatable read",
+			err:  "transaction isolation level specified more than once",
+		},
+		{
+			name: "duplicate access mode",
+			sql:  "set session transaction read only, read only",
+			err:  "transaction access mode specified more than once",
+		},
+		{
+			name: "conflicting access modes",
+			sql:  "set session transaction read only, read write",
+			err:  "transaction access mode specified more than once",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(ctx, test.sql, 1)
+			require.NoError(t, err)
+
+			_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+			require.ErrorContains(t, err, test.err)
+
+			got, getErr := ses.GetSessionSysVar("transaction_isolation")
+			require.NoError(t, getErr)
+			require.Equal(t, "REPEATABLE-READ", got)
+		})
+	}
 
 	for _, sql := range []string{
 		"set session transaction isolation level read uncommitted",
@@ -285,6 +353,18 @@ func TestHandleSetTransaction(t *testing.T) {
 
 		_, err := execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
 		require.ErrorContains(t, err, "unsupported transaction isolation level 999")
+	})
+
+	t.Run("invalid and empty characteristics", func(t *testing.T) {
+		for _, stmt := range []*tree.SetTransaction{
+			{},
+			{CharacterList: []*tree.TransactionCharacteristic{nil}},
+			{CharacterList: []*tree.TransactionCharacteristic{{Access: tree.ACCESS_MODE_NONE}}},
+		} {
+			_, err := execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		}
 	})
 
 	t.Run("next transaction isolation is rejected in active transaction", func(t *testing.T) {
@@ -424,6 +504,18 @@ func TestSetTransactionDoesNotFinishExistingTransaction(t *testing.T) {
 		run(t,
 			"set transaction isolation level read committed",
 			"Transaction characteristics can't be changed while a transaction is in progress",
+		)
+	})
+	t.Run("unsupported access mode preserves prior work", func(t *testing.T) {
+		run(t,
+			"set session transaction read only",
+			"transaction access mode READ ONLY is not supported",
+		)
+	})
+	t.Run("unsupported next access mode preserves prior work", func(t *testing.T) {
+		run(t,
+			"set transaction read only",
+			"transaction access mode READ ONLY is not supported",
 		)
 	})
 
