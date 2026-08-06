@@ -204,6 +204,46 @@ func TestIssue26725PreparedBit64Numeric(t *testing.T) {
 		require.NoError(t, rows.Err())
 		require.NoError(t, rows.Close())
 
+		// Transparent SELECT/derived-table shapes must not erase provenance, while
+		// an explicit cast to CHAR must deliberately switch back to byte semantics.
+		derivedStmt, err := db.PrepareContext(ctx,
+			"insert into "+dbName+".t64(id, b) select ?, x from (select ? as x) d")
+		require.NoError(t, err)
+		defer derivedStmt.Close()
+		_, err = derivedStmt.ExecContext(ctx, int64(20), float64(5))
+		require.NoError(t, err)
+		_, err = derivedStmt.ExecContext(ctx, int64(21), "5")
+		require.NoError(t, err)
+		execSQLRequire(t, ctx, db, "set @issue26725_id = 22, @issue26725_bit = 5.0")
+		execSQLRequire(t, ctx, db,
+			"insert into "+dbName+".t64(id, b) select id, x from "+
+				"(select @issue26725_id as id, @issue26725_bit as x) d")
+		execSQLRequire(t, ctx, db, "set @issue26725_id = 23, @issue26725_bit = '5'")
+		execSQLRequire(t, ctx, db,
+			"insert into "+dbName+".t64(id, b) select id, x from "+
+				"(select @issue26725_id as id, @issue26725_bit as x) d")
+		castSetStmt, err := db.PrepareContext(ctx,
+			"set @issue26725_id = ?, @issue26725_bit = cast(? as char)")
+		require.NoError(t, err)
+		defer castSetStmt.Close()
+		_, err = castSetStmt.ExecContext(ctx, int64(24), float64(5))
+		require.NoError(t, err)
+		execSQLRequire(t, ctx, db,
+			"insert into "+dbName+".t64(id, b) values (@issue26725_id, @issue26725_bit)")
+		rows, err = db.QueryContext(ctx,
+			"select cast(b as unsigned) from "+dbName+".t64 where id between 20 and 24 order by id")
+		require.NoError(t, err)
+		defer rows.Close()
+		for _, expected := range []string{"5", "53", "5", "53", "53"} {
+			require.True(t, rows.Next())
+			var actual string
+			require.NoError(t, rows.Scan(&actual))
+			require.Equal(t, expected, actual)
+		}
+		require.False(t, rows.Next())
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+
 		execSQLRequire(t, ctx, db,
 			"create table "+dbName+".t63(id bigint primary key, b bit(63))")
 		narrowStmt, err := db.PrepareContext(ctx,
