@@ -377,6 +377,30 @@ func TestBuildFullTextIndexDefs_IncludeUnsupportedType(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestBuildFullTextIndexDefs_IncludeIndexedColumn: the indexed text column itself cannot be
+// an INCLUDE column (it is tokenized into the postings; storing the raw text again is
+// redundant). Rejected before the type gate, so the reason is "indexed text column" rather
+// than a type error.
+func TestBuildFullTextIndexDefs_IncludeIndexedColumn(t *testing.T) {
+	_, _, err := Hooks{}.BuildFullTextIndexDefs(
+		newStubCompilerContext(), ftIndexInclude("ft", "body", "body"), textColMap("id", "body"), nil, "id")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "indexed text column")
+}
+
+// TestBuildFullTextIndexDefs_IncludeIndexedColumnMulti: in a multi-column MATCH(body, title)
+// index, INCLUDE-ing ANY of the indexed columns is rejected (all KeyParts are excluded).
+func TestBuildFullTextIndexDefs_IncludeIndexedColumnMulti(t *testing.T) {
+	idx := ftIndex("ft", "body", "title")
+	idx.IndexOption = &tree.IndexOption{IncludeColumns: []*tree.UnresolvedName{
+		tree.NewUnresolvedName(tree.NewCStr("title", 0)),
+	}}
+	_, _, err := Hooks{}.BuildFullTextIndexDefs(
+		newStubCompilerContext(), idx, textColMap("id", "body", "title"), nil, "id")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "indexed text column")
+}
+
 // TestBuildFullTextIndexDefs_NoInclude: without INCLUDE, IncludedColumns is empty and no
 // included_columns param is written.
 func TestBuildFullTextIndexDefs_NoInclude(t *testing.T) {
