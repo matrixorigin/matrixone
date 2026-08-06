@@ -582,6 +582,57 @@ func BinaryJSONPayloadLen(bj ByteJson) (int, bool) {
 	return len(value.fallbackRaw), true
 }
 
+const canonicalBinaryMarker byte = 0x84
+
+// CanonicalBinarySize returns the exact equality-key size for a binary JSON
+// value. Legacy Base64 BLOB/BIT representations and their raw successors use
+// one subtype-plus-payload domain.
+func CanonicalBinarySize(bj ByteJson) (int, bool) {
+	value, ok := binaryJSONValue(bj)
+	if !ok {
+		return 0, false
+	}
+	payloadSize := len(value.rawPayload)
+	if value.legacyEncoded != nil {
+		if decodedSize, valid := base64DecodedLen(value.legacyEncoded); valid {
+			payloadSize = decodedSize
+		} else {
+			payloadSize = len(value.fallbackRaw)
+		}
+	}
+	return 2 + payloadSize, true
+}
+
+// AppendCanonicalBinary appends the equality key for a binary JSON value.
+// Valid legacy payloads are decoded directly into dst; malformed legacy data
+// retains CompareBinaryJSON's raw fallback behavior.
+func AppendCanonicalBinary(dst []byte, bj ByteJson) ([]byte, bool) {
+	value, ok := binaryJSONValue(bj)
+	if !ok {
+		return dst, false
+	}
+	dst = append(dst, canonicalBinaryMarker, byte(value.subtype))
+	if value.legacyEncoded == nil {
+		return append(dst, value.rawPayload...), true
+	}
+	start := len(dst)
+	var decodedBuffer [binaryJSONCompareDecodedChunkSize]byte
+	for offset := 0; offset < len(value.legacyEncoded); {
+		n, nextOffset, decoded := decodeBase64Chunk(
+			value.legacyEncoded,
+			offset,
+			decodedBuffer[:],
+		)
+		if !decoded {
+			dst = dst[:start]
+			return append(dst, value.fallbackRaw...), true
+		}
+		dst = append(dst, decodedBuffer[:n]...)
+		offset = nextOffset
+	}
+	return dst, true
+}
+
 func compareDecodedBase64Payloads(leftEncoded, rightEncoded []byte) (int, bool) {
 	var leftBuf [binaryJSONCompareDecodedChunkSize]byte
 	var rightBuf [binaryJSONCompareDecodedChunkSize]byte
