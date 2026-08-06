@@ -808,7 +808,10 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 	} else {
 		var udVar *UserDefinedVar
 		if udVar, err = tcc.GetSession().GetUserDefinedVar(varName); err != nil {
-			return nil, err
+			// MySQL creates user variables lazily.  Reading a variable that has
+			// not been assigned yet therefore evaluates to NULL rather than
+			// producing an unknown-variable error.
+			return nil, nil
 		}
 
 		varValue = udVar.Value
@@ -826,7 +829,9 @@ func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar,
 	}
 	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
 	if err != nil {
-		return false, err
+		// See ResolveVariable: an unassigned user variable is NULL and has
+		// no binary-string attribute.
+		return false, nil
 	}
 	return udVar.IsBin, nil
 }

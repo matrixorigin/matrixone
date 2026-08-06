@@ -24,6 +24,13 @@ type SelectStatement interface {
 	Statement
 }
 
+// SelectInto records either a SELECT INTO OUTFILE clause or MySQL's SELECT
+// expression INTO @user_variable form while the parser constructs a Select.
+type SelectInto struct {
+	Export   *ExportParam
+	UserVars []*VarExpr
+}
+
 // Select represents a SelectStatement with an ORDER and/or LIMIT.
 type Select struct {
 	statementImpl
@@ -36,6 +43,7 @@ type Select struct {
 	RankOption     *RankOption
 	With           *With
 	Ep             *ExportParam
+	IntoVars       []*VarExpr
 	SelectLockInfo *SelectLockInfo
 }
 
@@ -67,6 +75,14 @@ func (node *Select) Format(ctx *FmtCtx) {
 	if node.Ep != nil {
 		ctx.WriteByte(' ')
 		node.Ep.Format(ctx)
+	} else if len(node.IntoVars) > 0 {
+		ctx.WriteString(" into ")
+		for i, variable := range node.IntoVars {
+			if i > 0 {
+				ctx.WriteString(", ")
+			}
+			variable.Format(ctx)
+		}
 	}
 	if node.SelectLockInfo != nil {
 		ctx.WriteByte(' ')

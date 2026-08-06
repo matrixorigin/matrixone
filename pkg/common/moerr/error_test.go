@@ -216,6 +216,21 @@ func TestErrSubqueryNo1RowContract(t *testing.T) {
 	require.Equal(t, err, decoded)
 }
 
+func TestErrTooManyRowsContract(t *testing.T) {
+	err := NewTooManyRows(context.Background())
+	require.Equal(t, ErrTooManyRows, err.ErrorCode())
+	require.Equal(t, ER_TOO_MANY_ROWS, err.MySQLCode())
+	require.Equal(t, "42000", err.SqlState())
+	require.Equal(t, "Result consisted of more than one row", err.Error())
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
+}
+
 type fakeErr struct {
 }
 
