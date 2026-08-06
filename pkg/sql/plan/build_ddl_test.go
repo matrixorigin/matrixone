@@ -1965,6 +1965,19 @@ func TestBuildRegularSecondaryIndexPersistsPrefixLengths(t *testing.T) {
 	}
 }
 
+func TestBuildCompositeIndexMarksEncodedKeyBinary(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
+		"create table composite_key_charset (id int primary key, a varchar(10), b varchar(10), index idx_ab(a, b))")
+	require.NoError(t, err)
+
+	createTable := logicPlan.GetDdl().GetCreateTable()
+	require.NotNil(t, createTable)
+	require.Len(t, createTable.IndexTables, 1)
+	key := FindColumn(createTable.IndexTables[0].Cols, catalog.IndexTableIndexColName)
+	require.NotNil(t, key)
+	require.Equal(t, uint32(types.CharsetBinary), key.Typ.Charset)
+}
+
 func TestBuildVectorIndexAllowsIvfFlatOnly(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{

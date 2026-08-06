@@ -3150,35 +3150,9 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 
 						var exprs []*plan.Expr
 						str := child.ObjRef.SchemaName + "." + child.TableDef.Name
-						exprs = append(exprs, &plan.Expr{
-							Typ: Type{
-								Id:          int32(types.T_varchar),
-								NotNullable: true,
-								Width:       int32(len(str)),
-							},
-							Expr: &plan.Expr_Lit{
-								Lit: &plan.Literal{
-									Value: &plan.Literal_Sval{
-										Sval: str,
-									},
-								},
-							},
-						})
+						exprs = append(exprs, makePlan2StringConstExprWithType(str))
 						str = child.TableDef.Cols[0].Name
-						exprs = append(exprs, &plan.Expr{
-							Typ: Type{
-								Id:          int32(types.T_varchar),
-								NotNullable: true,
-								Width:       int32(len(str)),
-							},
-							Expr: &plan.Expr_Lit{
-								Lit: &plan.Literal{
-									Value: &plan.Literal_Sval{
-										Sval: str,
-									},
-								},
-							},
-						})
+						exprs = append(exprs, makePlan2StringConstExprWithType(str))
 						scanNode := &plan.Node{
 							NodeType: plan.Node_VALUE_SCAN,
 						}
@@ -9614,9 +9588,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					ColId: catalog.ExternalFilePathColId,
 					Name:  catalog.ExternalFilePath,
 					Typ: plan.Type{
-						Id:    int32(types.T_varchar),
-						Width: types.MaxVarcharLen,
-						Table: table,
+						Id:      int32(types.T_varchar),
+						Width:   types.MaxVarcharLen,
+						Table:   table,
+						Charset: uint32(types.CharsetUTF8),
 					},
 				}
 				tableDef.Cols = append(tableDef.Cols, col)

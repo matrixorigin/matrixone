@@ -3391,10 +3391,7 @@ func appendPreInsertPlan(
 	if len(idxDef.Parts) == 1 || isSpatialIndexDef(idxDef) {
 		ukType = builder.qry.Nodes[lastNodeId].ProjectList[useColumns[0]].Typ
 	} else {
-		ukType = Type{
-			Id:    int32(types.T_varchar),
-			Width: types.MaxVarcharLen,
-		}
+		ukType = makeHiddenColTyp()
 	}
 	var preinsertUkProjection []*Expr
 	preinsertUkProjection = append(preinsertUkProjection, &plan.Expr{

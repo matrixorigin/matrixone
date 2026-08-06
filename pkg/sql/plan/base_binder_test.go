@@ -888,6 +888,53 @@ func TestMinMaxParseJSONLStringUsesExplicitGeneralCICollation(t *testing.T) {
 	}
 }
 
+func TestMinMaxGeneratedTableFunctionStringsUseExplicitGeneralCICollation(t *testing.T) {
+	tests := []struct {
+		name     string
+		query    string
+		aggCount int
+	}{
+		{
+			name:     "unnest key and path",
+			query:    "select min(`key`), max(path) from unnest('{\"a\":1,\"B\":2}') u",
+			aggCount: 2,
+		},
+		{
+			name:     "current account names",
+			query:    "select min(account_name), max(user_name), min(role_name) from current_account() a",
+			aggCount: 3,
+		},
+		{
+			name:     "stage list file",
+			query:    "select min(file), max(file) from stage_list('stage://s/') s",
+			aggCount: 2,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			p, err := runOneStmt(NewMockOptimizer(true), t, test.query)
+			require.NoError(t, err)
+
+			var aggregates []*plan.Expr
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG {
+					aggregates = node.AggList
+					break
+				}
+			}
+			require.Len(t, aggregates, test.aggCount)
+			for _, aggregate := range aggregates {
+				fn := aggregate.GetF()
+				require.NotNil(t, fn)
+				require.Len(t, fn.Args, 1)
+				require.Equal(t, uint32(types.CharsetUTF8), fn.Args[0].Typ.Charset)
+				require.Equal(t, uint32(types.CharsetUTF8), aggregate.Typ.Charset)
+			}
+		})
+	}
+}
+
 func TestMinOverUnionTreatsPureNullAsCollationNeutral(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	mock.ctxt.tables["bind_select"].Cols[2].Typ = plan.Type{

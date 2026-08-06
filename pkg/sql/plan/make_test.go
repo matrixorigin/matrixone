@@ -77,6 +77,20 @@ func TestNewStringExpressionsAndSerializedColumnsHaveExplicitCharsets(t *testing
 		MakeHiddenColDefByName("__mo_serialized").Typ.Charset)
 }
 
+func TestMakeGeneratedPlan2TypeUsesExplicitTextCharset(t *testing.T) {
+	varchar := makeGeneratedPlan2Type(types.T_varchar, 128, 0, true)
+	require.Equal(t, int32(types.T_varchar), varchar.Id)
+	require.Equal(t, int32(128), varchar.Width)
+	require.True(t, varchar.NotNullable)
+	require.Equal(t, uint32(types.CharsetUTF8), varchar.Charset)
+
+	text := makeGeneratedPlan2Type(types.T_text, types.MaxVarcharLen, 0, false)
+	require.Equal(t, uint32(types.CharsetUTF8), text.Charset)
+
+	integer := makeGeneratedPlan2Type(types.T_int64, 0, 0, false)
+	require.Equal(t, uint32(types.CharsetLegacy), integer.Charset)
+}
+
 func Test_MakePlan2Vecf32ConstExprWithType(t *testing.T) {
 	t1 := MakePlan2Vecf32ConstExprWithType("[1,2,3]", 3)
 	actual := t1.Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_Sval).Sval
