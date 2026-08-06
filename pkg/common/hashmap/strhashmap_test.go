@@ -43,6 +43,15 @@ type floatHashMapShape struct {
 	wantGroups  uint64
 }
 
+func mustEncodeHashMapJSON(t *testing.T, text string) []byte {
+	t.Helper()
+	value, err := types.ParseStringToByteJson(text)
+	require.NoError(t, err)
+	encoded, err := types.EncodeJson(value)
+	require.NoError(t, err)
+	return encoded
+}
+
 func TestStrHashMapRejectsCompositeJoinNaN(t *testing.T) {
 	mp := mpool.MustNewZero()
 	m, err := NewStrHashMap(false, mp)
@@ -111,14 +120,6 @@ func TestStrHashMapRejectsNaNWhenNullKeysParticipate(t *testing.T) {
 }
 
 func TestStrHashMapCanonicalVarlenaSerialization(t *testing.T) {
-	encodeJSON := func(t *testing.T, text string) []byte {
-		t.Helper()
-		value, err := types.ParseStringToByteJson(text)
-		require.NoError(t, err)
-		encoded, err := types.EncodeJson(value)
-		require.NoError(t, err)
-		return encoded
-	}
 	negativeZero := float32(math.Copysign(0, -1))
 	tests := []struct {
 		name  string
@@ -129,8 +130,8 @@ func TestStrHashMapCanonicalVarlenaSerialization(t *testing.T) {
 		{
 			name:  "json",
 			typ:   types.T_json.ToType(),
-			build: encodeJSON(t, `[1,{"n":2.0}]`),
-			probe: encodeJSON(t, `[1.0,{"n":2}]`),
+			build: mustEncodeHashMapJSON(t, `[1,{"n":2.0}]`),
+			probe: mustEncodeHashMapJSON(t, `[1.0,{"n":2}]`),
 		},
 		{
 			name:  "vecf32",
@@ -172,6 +173,173 @@ func TestStrHashMapCanonicalVarlenaSerialization(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, []uint64{1}, values)
 			require.Equal(t, []int64{1}, zValues)
+		})
+	}
+}
+
+func TestStrHashMapCanonicalVarlenaVectorShapes(t *testing.T) {
+	negativeZero := float32(math.Copysign(0, -1))
+	tests := []struct {
+		name       string
+		typ        types.Type
+		build      []byte
+		probe      []byte
+		buildOther []byte
+		probeOther []byte
+	}{
+		{
+			name:       "json",
+			typ:        types.T_json.ToType(),
+			build:      mustEncodeHashMapJSON(t, `[1,{"n":2.0}]`),
+			probe:      mustEncodeHashMapJSON(t, `[1.0,{"n":2}]`),
+			buildOther: mustEncodeHashMapJSON(t, `{"build":[10,20,30]}`),
+			probeOther: mustEncodeHashMapJSON(t, `{"probe":[40,50,60]}`),
+		},
+		{
+			name:       "vecf32",
+			typ:        types.T_array_float32.ToType(),
+			build:      types.ArrayToBytes([]float32{1, 2, 3, 0, 5, 6, 7, 8}),
+			probe:      types.ArrayToBytes([]float32{1, 2, 3, negativeZero, 5, 6, 7, 8}),
+			buildOther: types.ArrayToBytes([]float32{10, 20, 30, 40, 50, 60, 70, 80}),
+			probeOther: types.ArrayToBytes([]float32{40, 50, 60, 70, 80, 90, 100, 110}),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Run("flat-null-offset", func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				build := vector.NewVec(test.typ)
+				probe := vector.NewVec(test.typ)
+				defer func() {
+					build.Free(mp)
+					probe.Free(mp)
+					require.Zero(t, mp.CurrNB())
+				}()
+				require.NoError(t, vector.AppendBytes(build, test.buildOther, false, mp))
+				require.NoError(t, vector.AppendBytes(build, test.build, false, mp))
+				require.NoError(t, vector.AppendBytes(build, test.buildOther, true, mp))
+				require.NoError(t, vector.AppendBytes(probe, test.probeOther, false, mp))
+				require.NoError(t, vector.AppendBytes(probe, test.probe, false, mp))
+				require.NoError(t, vector.AppendBytes(probe, test.probeOther, true, mp))
+
+				m, err := NewStrHashMap(false, mp)
+				require.NoError(t, err)
+				values, zValues, err := m.NewIterator().Insert(
+					1, 2, []*vector.Vector{build},
+				)
+				require.NoError(t, err)
+				require.Equal(t, []uint64{1, 0}, values)
+				require.Equal(t, []int64{1, 0}, zValues)
+				values, zValues, err = m.NewIterator().Find(
+					1, 2, []*vector.Vector{probe},
+				)
+				require.NoError(t, err)
+				require.Equal(t, []uint64{1, 0}, values)
+				require.Equal(t, []int64{1, 0}, zValues)
+				values, zValues, err = m.NewIterator().Find(
+					0, 1, []*vector.Vector{probe},
+				)
+				require.NoError(t, err)
+				require.Equal(t, []uint64{0}, values)
+				require.Equal(t, []int64{1}, zValues)
+				m.Free()
+			})
+
+			t.Run("const", func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				build, err := vector.NewConstBytes(test.typ, test.build, 2, mp)
+				require.NoError(t, err)
+				probe, err := vector.NewConstBytes(test.typ, test.probe, 2, mp)
+				require.NoError(t, err)
+				defer func() {
+					build.Free(mp)
+					probe.Free(mp)
+					require.Zero(t, mp.CurrNB())
+				}()
+
+				m, err := NewStrHashMap(false, mp)
+				require.NoError(t, err)
+				values, zValues, err := m.NewIterator().Insert(
+					0, 2, []*vector.Vector{build},
+				)
+				require.NoError(t, err)
+				require.Equal(t, []uint64{1, 1}, values)
+				require.Equal(t, []int64{1, 1}, zValues)
+				require.Equal(t, uint64(1), m.GroupCount())
+				values, zValues, err = m.NewIterator().Find(
+					0, 2, []*vector.Vector{probe},
+				)
+				require.NoError(t, err)
+				require.Equal(t, []uint64{1, 1}, values)
+				require.Equal(t, []int64{1, 1}, zValues)
+				m.Free()
+			})
+
+			t.Run("grouping-aware", func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				build := vector.NewVec(test.typ)
+				probe := vector.NewVec(test.typ)
+				defer func() {
+					build.Free(mp)
+					probe.Free(mp)
+					require.Zero(t, mp.CurrNB())
+				}()
+				require.NoError(t, vector.AppendBytes(build, test.build, false, mp))
+				require.NoError(t, vector.AppendBytes(build, test.buildOther, true, mp))
+				require.NoError(t, vector.AppendBytes(build, test.buildOther, false, mp))
+				require.NoError(t, vector.AppendBytes(probe, test.probe, false, mp))
+				require.NoError(t, vector.AppendBytes(probe, test.probeOther, true, mp))
+				require.NoError(t, vector.AppendBytes(probe, test.probeOther, false, mp))
+				build.GetGrouping().Add(2)
+				probe.GetGrouping().Add(2)
+
+				m, err := NewStrHashMap(true, mp)
+				require.NoError(t, err)
+				require.NoError(t, m.SetGroupingAware())
+				values, zValues, err := m.NewIterator().Insert(
+					0, 3, []*vector.Vector{build},
+				)
+				require.NoError(t, err)
+				require.Equal(t, []uint64{1, 2, 3}, values)
+				require.Equal(t, []int64{1, 1, 1}, zValues)
+				values, zValues, err = m.NewIterator().Find(
+					0, 3, []*vector.Vector{probe},
+				)
+				require.NoError(t, err)
+				require.Equal(t, []uint64{1, 2, 3}, values)
+				require.Equal(t, []int64{1, 1, 1}, zValues)
+				m.Free()
+			})
+
+			t.Run("const-null-domain", func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				keys := vector.NewConstNull(test.typ, 2, mp)
+				defer func() {
+					keys.Free(mp)
+					require.Zero(t, mp.CurrNB())
+				}()
+
+				filtered, err := NewStrHashMap(false, mp)
+				require.NoError(t, err)
+				values, zValues, err := filtered.NewIterator().Insert(
+					0, 2, []*vector.Vector{keys},
+				)
+				require.NoError(t, err)
+				require.Equal(t, []uint64{0, 0}, values)
+				require.Equal(t, []int64{0, 0}, zValues)
+				filtered.Free()
+
+				retained, err := NewStrHashMap(true, mp)
+				require.NoError(t, err)
+				values, zValues, err = retained.NewIterator().Insert(
+					0, 2, []*vector.Vector{keys},
+				)
+				require.NoError(t, err)
+				require.Equal(t, []uint64{1, 1}, values)
+				require.Equal(t, []int64{1, 1}, zValues)
+				retained.Free()
+			})
 		})
 	}
 }

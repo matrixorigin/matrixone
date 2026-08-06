@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -56,6 +57,39 @@ func TestCanonicalJSONNumberContract(t *testing.T) {
 	require.Equal(t, len(nestedCanonical), CanonicalJSONSize(nestedInteger))
 }
 
+func TestCanonicalJSONNumberDomainBoundaries(t *testing.T) {
+	tests := []struct {
+		name  string
+		left  string
+		right string
+	}{
+		{name: "negative integer", left: "-7", right: "-7.0"},
+		{name: "negative zero", left: "0", right: "-0.0"},
+		{name: "minimum int64", left: "-9223372036854775808", right: "-9.223372036854776e18"},
+		{name: "exact uint64 range", left: "9223372036854775808", right: "9.223372036854776e18"},
+		{name: "non integral", left: "1.25", right: "1.250"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			left := mustEncodeJSON(t, test.left)
+			right := mustEncodeJSON(t, test.right)
+			require.Zero(t, bytejson.CompareByteJson(
+				types.DecodeJson(left), types.DecodeJson(right),
+			), "the codec case must be grounded in scalar JSON equality")
+			leftKey := AppendCanonicalJSON(nil, left)
+			rightKey := AppendCanonicalJSON(nil, right)
+			require.Equal(t, leftKey, rightKey)
+			require.Equal(t, len(leftKey), CanonicalJSONSize(left))
+			require.Equal(t, len(rightKey), CanonicalJSONSize(right))
+		})
+	}
+
+	require.Zero(t, CanonicalJSONSize(nil))
+	prefix := []byte{1, 2, 3}
+	require.Equal(t, prefix, AppendCanonicalJSON(prefix, nil))
+}
+
 func TestCanonicalVecF32Contract(t *testing.T) {
 	negativeZero := float32(math.Copysign(0, -1))
 	positive := types.ArrayToBytes([]float32{1, 0, 3})
@@ -73,6 +107,135 @@ func TestCanonicalVecF32Contract(t *testing.T) {
 		AppendCanonicalVecF32(nil, positive),
 		AppendCanonicalVecF32(nil, types.ArrayToBytes([]float32{1, 2, 3})),
 	)
+}
+
+func TestComputeXXHashCanonicalVarlenaShapes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	jsonType := types.T_json.ToType()
+	vecType := types.T_array_float32.ToType()
+	jsonOne := mustEncodeJSON(t, "1")
+	jsonOnePointZero := mustEncodeJSON(t, "1.0")
+	negativeZero := float32(math.Copysign(0, -1))
+	vecPositiveZero := types.ArrayToBytes([]float32{1, 2, 3, 0, 5, 6, 7, 8})
+	vecNegativeZero := types.ArrayToBytes([]float32{1, 2, 3, negativeZero, 5, 6, 7, 8})
+
+	jsonFlat := vector.NewVec(jsonType)
+	vecFlat := vector.NewVec(vecType)
+	jsonConst, err := vector.NewConstBytes(jsonType, jsonOnePointZero, 3, mp)
+	require.NoError(t, err)
+	vecConst, err := vector.NewConstBytes(vecType, vecNegativeZero, 3, mp)
+	require.NoError(t, err)
+	jsonConstNull := vector.NewConstNull(jsonType, 3, mp)
+	defer func() {
+		jsonFlat.Free(mp)
+		vecFlat.Free(mp)
+		jsonConst.Free(mp)
+		vecConst.Free(mp)
+		jsonConstNull.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	require.NoError(t, vector.AppendBytes(jsonFlat, jsonOne, false, mp))
+	require.NoError(t, vector.AppendBytes(jsonFlat, jsonOnePointZero, false, mp))
+	require.NoError(t, vector.AppendBytes(jsonFlat, mustEncodeJSON(t, "9"), true, mp))
+	require.NoError(t, vector.AppendBytes(vecFlat, vecPositiveZero, false, mp))
+	require.NoError(t, vector.AppendBytes(vecFlat, vecNegativeZero, false, mp))
+	require.NoError(t, vector.AppendBytes(vecFlat, types.ArrayToBytes([]float32{9, 9, 9, 9, 9, 9, 9, 9}), true, mp))
+
+	jsonHashes := make([]uint64, 3)
+	ComputeXXHash([]*vector.Vector{jsonFlat}, jsonHashes, 17)
+	require.Equal(t, jsonHashes[0], jsonHashes[1])
+	require.Equal(t, HashCombine(17, 0), jsonHashes[2])
+	jsonConstHashes := make([]uint64, 3)
+	ComputeXXHash([]*vector.Vector{jsonConst}, jsonConstHashes, 17)
+	require.Equal(t, []uint64{jsonHashes[0], jsonHashes[0], jsonHashes[0]}, jsonConstHashes)
+	jsonNullHashes := make([]uint64, 3)
+	ComputeXXHash([]*vector.Vector{jsonConstNull}, jsonNullHashes, 17)
+	require.Equal(t, []uint64{
+		HashCombine(17, 0), HashCombine(17, 0), HashCombine(17, 0),
+	}, jsonNullHashes)
+
+	vecHashes := make([]uint64, 3)
+	ComputeXXHash([]*vector.Vector{vecFlat}, vecHashes, 17)
+	require.Equal(t, vecHashes[0], vecHashes[1])
+	require.Equal(t, HashCombine(17, 0), vecHashes[2])
+	vecConstHashes := make([]uint64, 3)
+	ComputeXXHash([]*vector.Vector{vecConst}, vecConstHashes, 17)
+	require.Equal(t, []uint64{vecHashes[0], vecHashes[0], vecHashes[0]}, vecConstHashes)
+
+	shortHashes := []uint64{0, 0}
+	ComputeXXHash([]*vector.Vector{jsonFlat}, shortHashes, 17)
+	require.Equal(t, jsonHashes[:2], shortHashes)
+	longHashes := []uint64{0, 0, 0, 0}
+	ComputeXXHash([]*vector.Vector{jsonFlat}, longHashes, 17)
+	require.Equal(t, jsonHashes, longHashes[:3])
+	require.Equal(t, uint64(17), longHashes[3])
+}
+
+func TestComputeXXHashCanonicalVarlenaGroupingRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	negativeZero := float32(math.Copysign(0, -1))
+	tests := []struct {
+		name  string
+		typ   types.Type
+		left  [][]byte
+		right [][]byte
+	}{
+		{
+			name: "json",
+			typ:  types.T_json.ToType(),
+			left: [][]byte{
+				mustEncodeJSON(t, "101"), mustEncodeJSON(t, "1"),
+				mustEncodeJSON(t, "303"), mustEncodeJSON(t, "9"),
+			},
+			right: [][]byte{
+				mustEncodeJSON(t, "111"), mustEncodeJSON(t, "1.0"),
+				mustEncodeJSON(t, "333"), mustEncodeJSON(t, "8"),
+			},
+		},
+		{
+			name: "vecf32",
+			typ:  types.T_array_float32.ToType(),
+			left: [][]byte{
+				types.ArrayToBytes([]float32{101, 1, 2, 3, 4, 5, 6, 7}),
+				types.ArrayToBytes([]float32{1, 2, 3, 0, 5, 6, 7, 8}),
+				types.ArrayToBytes([]float32{303, 1, 2, 3, 4, 5, 6, 7}),
+				types.ArrayToBytes([]float32{9, 9, 9, 9, 9, 9, 9, 9}),
+			},
+			right: [][]byte{
+				types.ArrayToBytes([]float32{111, 1, 2, 3, 4, 5, 6, 7}),
+				types.ArrayToBytes([]float32{1, 2, 3, negativeZero, 5, 6, 7, 8}),
+				types.ArrayToBytes([]float32{333, 1, 2, 3, 4, 5, 6, 7}),
+				types.ArrayToBytes([]float32{8, 8, 8, 8, 8, 8, 8, 8}),
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			left := vector.NewVec(test.typ)
+			right := vector.NewVec(test.typ)
+			defer left.Free(mp)
+			defer right.Free(mp)
+			for row := range test.left {
+				null := row == 3
+				require.NoError(t, vector.AppendBytes(left, test.left[row], null, mp))
+				require.NoError(t, vector.AppendBytes(right, test.right[row], null, mp))
+			}
+			left.GetGrouping().Add(0)
+			left.GetGrouping().Add(2)
+			right.GetGrouping().Add(0)
+			right.GetGrouping().Add(2)
+
+			leftHashes := make([]uint64, len(test.left))
+			rightHashes := make([]uint64, len(test.right))
+			ComputeXXHash([]*vector.Vector{left}, leftHashes, 17)
+			ComputeXXHash([]*vector.Vector{right}, rightHashes, 17)
+			require.Equal(t, leftHashes, rightHashes)
+			require.Equal(t, HashCombine(17, 0), leftHashes[3])
+		})
+	}
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestFloat32CodecContract(t *testing.T) {
