@@ -169,8 +169,9 @@ type SQLError struct {
 }
 
 // Observation is the complete externally visible result of one execution.
-// Schema and Rows retain anything delivered before a terminal failure or
-// cancellation; Compare checks that partial result before the error identity.
+// Schema may be known before execution starts. Rows retain anything delivered
+// after a backend starts and before a terminal failure or cancellation; Compare
+// checks that partial result before the error identity.
 type Observation struct {
 	Schema   []Column
 	Rows     []Row

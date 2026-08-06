@@ -130,6 +130,37 @@ func TestCompareAllowsPreStartTerminalStates(t *testing.T) {
 	}
 }
 
+func TestCompareRejectsPreStartRows(t *testing.T) {
+	t.Parallel()
+
+	for _, outcome := range []Outcome{OutcomeFailed, OutcomeCancelled} {
+		for _, mode := range []Mode{ModeNative, ModeOffloaded} {
+			outcome, mode := outcome, mode
+			t.Run(outcome.String()+"/"+mode.String(), func(t *testing.T) {
+				t.Parallel()
+
+				report := failedReport()
+				report.Case.NativeExpectation = Expectation{Backend: BackendUnknown, Outcome: outcome}
+				report.Case.OffloadedExpectation = Expectation{Backend: BackendUnknown, Outcome: outcome}
+				report.Native.Evidence = ExecutionEvidence{Backend: BackendUnknown, Outcome: outcome}
+				report.Offloaded.Evidence = ExecutionEvidence{Backend: BackendUnknown, Outcome: outcome}
+
+				observation := &report.Native
+				if mode == ModeOffloaded {
+					observation = &report.Offloaded
+				}
+				observation.Rows = []Row{{TextCell("impossible-before-start")}}
+
+				err := Compare(report)
+				var mismatchError *MismatchError
+				if !errors.As(err, &mismatchError) || mismatchError.Field != mode.String()+" execution evidence" {
+					t.Fatalf("Compare() error = %v, want %s pre-start row rejection", err, mode)
+				}
+			})
+		}
+	}
+}
+
 func TestCompareChecksSchemaBeforeRows(t *testing.T) {
 	t.Parallel()
 

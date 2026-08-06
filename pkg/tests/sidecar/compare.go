@@ -157,6 +157,10 @@ func validateObservation(mode Mode, observation Observation, expectation Expecta
 	if observation.Error != nil && !hasStableErrorIdentity(observation.Error) {
 		return mismatch(mode.String()+" error", "error has no stable code, SQLSTATE, or class")
 	}
+	if observation.Evidence.Backend == BackendUnknown && len(observation.Rows) != 0 {
+		return mismatch(mode.String()+" execution evidence", "pre-start %s execution returned %d rows",
+			observation.Evidence.Outcome, len(observation.Rows))
+	}
 
 	for rowIndex, row := range observation.Rows {
 		if len(row) != len(observation.Schema) {

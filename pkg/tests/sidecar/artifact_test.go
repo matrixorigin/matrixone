@@ -122,6 +122,32 @@ func TestWriteFailureArtifactUsesOpaqueCaseDirectory(t *testing.T) {
 	}
 }
 
+func TestWriteFailureArtifactRedactsCredentialNames(t *testing.T) {
+	t.Parallel()
+
+	report := successfulReport()
+	report.Case.SQL = "SELECT 1 /* OPENAI_API_KEY=alpha-4271; PGPASSWORD=bravo-5832; TLS_PRIVATE_KEY=charlie-6943 */"
+	path, err := WriteFailureArtifact(t.TempDir(), report, errors.New("forced failure"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, credential := range []string{"alpha-4271", "bravo-5832", "charlie-6943"} {
+		if strings.Contains(text, credential) {
+			t.Errorf("artifact contains credential value %q: %s", credential, text)
+		}
+	}
+	for _, name := range []string{"OPENAI_API_KEY", "PGPASSWORD", "TLS_PRIVATE_KEY"} {
+		if !strings.Contains(text, name+"=<redacted>") {
+			t.Errorf("artifact did not redact %s assignment: %s", name, text)
+		}
+	}
+}
+
 func TestWriteFailureArtifactIsDeterministic(t *testing.T) {
 	t.Parallel()
 

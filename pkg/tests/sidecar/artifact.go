@@ -35,7 +35,7 @@ const artifactMetadataName = "failure.json"
 var (
 	artifactURLPattern           = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>]+`)
 	artifactAuthorizationPattern = regexp.MustCompile(`(?i)\bauthorization\b(\s*[:=]\s*)[^\r\n]+`)
-	artifactSecretPattern        = regexp.MustCompile(`(?i)\b((?:[a-z0-9]+_)*(?:username|user|password|passwd|pwd|token|secret|read_ref|access_key|secret_key|key_id|session_token))\b(["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)`)
+	artifactSecretPattern        = regexp.MustCompile(`(?i)\b((?:[a-z0-9]+_)*(?:username|user|password|passwd|pwd|pgpassword|token|secret|read_ref|api_key|private_key|access_key|secret_key|key_id|session_token))\b(["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)`)
 )
 
 type artifactObservation struct {
