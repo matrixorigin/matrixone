@@ -17,11 +17,15 @@ package plan
 import (
 	"bytes"
 	"context"
+	"errors"
 	"sort"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 var (
@@ -395,6 +399,62 @@ type ResetParamRefRule struct {
 	exprMemo map[*plan.Expr]*plan.Expr
 }
 
+type preparedTypeLineageRule struct {
+	ctx   context.Context
+	types map[[2]int32]plan.Type
+}
+
+func (rule *preparedTypeLineageRule) MatchNode(*Node) bool  { return false }
+func (rule *preparedTypeLineageRule) IsApplyExpr() bool     { return true }
+func (rule *preparedTypeLineageRule) ApplyNode(*Node) error { return nil }
+func (rule *preparedTypeLineageRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
+	if e == nil {
+		return nil, nil
+	}
+	switch impl := e.Expr.(type) {
+	case *plan.Expr_Col:
+		if typ, ok := rule.types[[2]int32{impl.Col.RelPos, impl.Col.ColPos}]; ok {
+			e.Typ = typ
+		}
+		return e, nil
+	case *plan.Expr_F:
+		changed := false
+		for i, arg := range impl.F.Args {
+			old := arg.Typ
+			rewritten, err := rule.ApplyExpr(arg)
+			if err != nil {
+				return nil, err
+			}
+			impl.F.Args[i] = rewritten
+			changed = changed || old.Id != rewritten.Typ.Id || old.Width != rewritten.Typ.Width ||
+				old.Scale != rewritten.Typ.Scale || old.NotNullable != rewritten.Typ.NotNullable
+		}
+		if !changed {
+			return e, nil
+		}
+		rewritten, err := BindFuncExprImplByPlanExpr(rule.ctx, impl.F.Func.GetObjName(), impl.F.Args)
+		if err != nil {
+			return nil, err
+		}
+		if fn := rewritten.GetF(); fn != nil {
+			fn.AggConfig = bytes.Clone(impl.F.AggConfig)
+			fn.AggConfigType = impl.F.AggConfigType
+		}
+		return rewritten, nil
+	case *plan.Expr_List:
+		for i, item := range impl.List.List {
+			rewritten, err := rule.ApplyExpr(item)
+			if err != nil {
+				return nil, err
+			}
+			impl.List.List[i] = rewritten
+		}
+	case *plan.Expr_W:
+		return applyWindowExpr(e, rule.ApplyExpr)
+	}
+	return e, nil
+}
+
 func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
 	return &ResetParamRefRule{
 		ctx:    ctx,
@@ -437,14 +497,152 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
 		needResetFunction := false
+		dynamicParamPos := int32(-1)
+		var dynamicParamExpr *plan.Expr
+		dynamicNumericArgs := make([]bool, len(exprImpl.F.Args))
+		originalArgTypes := make([]plan.Type, len(exprImpl.F.Args))
+		if exprImpl.F.Func.GetObjName() == "cast" && isPreparedDynamicNumericType(e.Typ) &&
+			len(exprImpl.F.Args) > 0 && exprImpl.F.Args[0].GetP() != nil {
+			dynamicParamPos = exprImpl.F.Args[0].GetP().Pos
+			dynamicParamExpr = exprImpl.F.Args[0]
+		}
 		for i, arg := range exprImpl.F.Args {
-			if _, ok := arg.Expr.(*plan.Expr_P); ok {
+			originalArgTypes[i] = arg.Typ
+			_, directParam := arg.Expr.(*plan.Expr_P)
+			dynamicNumericParam := containsPreparedDynamicNumericParam(arg)
+			dynamicNumericArgs[i] = dynamicNumericParam
+			rewrittenArg, rewriteErr := rule.ApplyExpr(arg)
+			if rewriteErr != nil {
+				return nil, rewriteErr
+			}
+			if directParam || (dynamicNumericParam && rewrittenArg != arg) {
 				needResetFunction = true
 			}
-			exprImpl.F.Args[i], err = rule.ApplyExpr(arg)
-			if err != nil {
-				return nil, err
+			exprImpl.F.Args[i] = rewrittenArg
+		}
+		if needResetFunction && types.T(e.Typ.Id) == types.T_bool {
+			for i, arg := range exprImpl.F.Args {
+				if !dynamicNumericArgs[i] || (arg.Typ.Id == originalArgTypes[i].Id &&
+					arg.Typ.Width == originalArgTypes[i].Width && arg.Typ.Scale == originalArgTypes[i].Scale) {
+					continue
+				}
+				exprImpl.F.Args[i], err = makePlan2CastExpr(rule.ctx, arg, originalArgTypes[i])
+				if err != nil {
+					return nil, err
+				}
 			}
+			return e, nil
+		}
+		if needResetFunction {
+			for i, arg := range exprImpl.F.Args {
+				if !dynamicNumericArgs[i] {
+					exprImpl.F.Args[i] = restorePreparedNumericLiteralType(arg)
+				}
+			}
+		}
+		for i, arg := range exprImpl.F.Args {
+			if !dynamicNumericArgs[i] || !types.T(arg.Typ.Id).IsUnsignedInt() {
+				continue
+			}
+			for j, sibling := range exprImpl.F.Args {
+				if i == j || !types.T(sibling.Typ.Id).IsSignedInt() {
+					continue
+				}
+				target := types.T_uint64.ToType()
+				exprImpl.F.Args[j], err = makePlan2CastExpr(
+					rule.ctx, sibling, makePlan2Type(&target))
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		for i, arg := range exprImpl.F.Args {
+			if !types.T(arg.Typ.Id).IsDecimal() {
+				continue
+			}
+			for j, sibling := range exprImpl.F.Args {
+				siblingType := types.T(sibling.Typ.Id)
+				if i == j || (!siblingType.IsUnsignedInt() && siblingType != types.T_bit) {
+					continue
+				}
+				targetOid := types.T_decimal128
+				if arg.Typ.Scale > 18 {
+					targetOid = types.T_decimal256
+				}
+				target := types.New(targetOid, 38, arg.Typ.Scale)
+				if targetOid == types.T_decimal256 {
+					target.Width = 65
+				}
+				exprImpl.F.Args[j], err = makePlan2CastExpr(
+					rule.ctx, sibling, makePlan2Type(&target))
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		if exprImpl.F.Func.GetObjName() == "cast" && isPreparedDynamicNumericType(e.Typ) {
+			if dynamicParamPos >= 0 && int(dynamicParamPos) < len(rule.params) {
+				param := rule.params[dynamicParamPos]
+				value := param.GetLit().GetSval()
+				runtimeType := types.T(param.Typ.Id)
+				switch runtimeType {
+				case types.T_float32:
+					parsed, parseErr := parsePreparedFloat(value, 32)
+					if parseErr != nil {
+						return nil, parseErr
+					}
+					return makePlan2CastExpr(rule.ctx, dynamicParamExpr,
+						MakePlan2Float32ConstExprWithType(float32(parsed)).Typ)
+				case types.T_float64:
+					parsed, parseErr := parsePreparedFloat(value, 64)
+					if parseErr != nil {
+						return nil, parseErr
+					}
+					return makePlan2CastExpr(rule.ctx, dynamicParamExpr,
+						MakePlan2Float64ConstExprWithType(parsed).Typ)
+				}
+				if runtimeType.IsMySQLString() {
+					parsed, parseErr := planfunction.ParseStringToFloatForNumericExpression(value)
+					if parseErr != nil {
+						return nil, parseErr
+					}
+					return makePlan2CastExpr(rule.ctx, dynamicParamExpr,
+						MakePlan2Float64ConstExprWithType(parsed).Typ)
+				}
+				if runtimeType.IsInteger() || runtimeType == types.T_bit {
+					typed, makeErr := makePreparedIntegerExpr(value, runtimeType)
+					if makeErr != nil {
+						return nil, makeErr
+					}
+					return makePlan2CastExpr(rule.ctx, dynamicParamExpr, typed.Typ)
+				}
+			}
+			if dynamicParamPos < 0 {
+				// The prepare-time dynamic DECIMAL domain also coerces the
+				// parameter's sibling operands. Restore those operands before
+				// rebinding the enclosing function for the current runtime type.
+				return restorePreparedNumericLiteralType(e), nil
+			}
+			value := exprImpl.F.Args[0]
+			if literal := value.GetLit(); literal != nil {
+				var decimal string
+				switch literalValue := literal.Value.(type) {
+				case *plan.Literal_Sval:
+					decimal = literalValue.Sval
+				case *plan.Literal_I64Val:
+					decimal = strconv.FormatInt(literalValue.I64Val, 10)
+				case *plan.Literal_U64Val:
+					decimal = strconv.FormatUint(literalValue.U64Val, 10)
+				}
+				if decimal != "" {
+					typed, makeErr := makePlan2DecimalExprWithType(rule.ctx, decimal, literal.GetIsBin())
+					if makeErr != nil {
+						return nil, makeErr
+					}
+					return makePlan2CastExpr(rule.ctx, dynamicParamExpr, typed.Typ)
+				}
+			}
+			return value, nil
 		}
 
 		// reset function
@@ -485,6 +683,83 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		return e, nil
 	default:
 		return e, nil
+	}
+}
+
+func restorePreparedNumericLiteralType(expr *plan.Expr) *plan.Expr {
+	if expr == nil {
+		return expr
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 &&
+		(isPreparedDynamicNumericType(expr.Typ) ||
+			(types.T(expr.Typ.Id).IsDecimal() && expr.Typ.Width > 65)) {
+		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+		if overload == 0 {
+			restored := restorePreparedNumericLiteralType(fn.Args[0])
+			if lit := restored.GetLit(); lit != nil {
+				if value, ok := lit.Value.(*plan.Literal_Sval); ok {
+					if decimal, err := makePlan2DecimalExprWithType(
+						context.TODO(), value.Sval, lit.GetIsBin()); err == nil {
+						return decimal
+					}
+				}
+			}
+			return restored
+		}
+	}
+	if !isPreparedDynamicNumericType(expr.Typ) {
+		return expr
+	}
+	literal := expr.GetLit()
+	if literal == nil {
+		return expr
+	}
+	switch value := literal.Value.(type) {
+	case *plan.Literal_I64Val:
+		return makePlan2Int64ConstExprWithType(value.I64Val)
+	case *plan.Literal_U64Val:
+		return makePlan2Uint64ConstExprWithType(value.U64Val)
+	default:
+		return expr
+	}
+}
+
+func parsePreparedFloat(value string, bitSize int) (float64, error) {
+	parsed, err := strconv.ParseFloat(value, bitSize)
+	if err == nil || (errors.Is(err, strconv.ErrRange) && parsed == 0) {
+		return parsed, nil
+	}
+	return 0, err
+}
+
+func makePreparedIntegerExpr(value string, typ types.T) (*plan.Expr, error) {
+	switch typ {
+	case types.T_int8:
+		parsed, err := strconv.ParseInt(value, 10, 8)
+		return MakePlan2Int8ConstExprWithType(int8(parsed)), err
+	case types.T_int16:
+		parsed, err := strconv.ParseInt(value, 10, 16)
+		return MakePlan2Int16ConstExprWithType(int16(parsed)), err
+	case types.T_int32:
+		parsed, err := strconv.ParseInt(value, 10, 32)
+		return MakePlan2Int32ConstExprWithType(int32(parsed)), err
+	case types.T_int64:
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		return MakePlan2Int64ConstExprWithType(parsed), err
+	case types.T_uint8:
+		parsed, err := strconv.ParseUint(value, 10, 8)
+		return MakePlan2Uint8ConstExprWithType(uint8(parsed)), err
+	case types.T_uint16:
+		parsed, err := strconv.ParseUint(value, 10, 16)
+		return MakePlan2Uint16ConstExprWithType(uint16(parsed)), err
+	case types.T_uint32:
+		parsed, err := strconv.ParseUint(value, 10, 32)
+		return MakePlan2Uint32ConstExprWithType(uint32(parsed)), err
+	case types.T_uint64, types.T_bit:
+		parsed, err := strconv.ParseUint(value, 10, 64)
+		return MakePlan2Uint64ConstExprWithType(parsed), err
+	default:
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported prepared integer type %s", typ)
 	}
 }
 

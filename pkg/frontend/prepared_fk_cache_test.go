@@ -93,3 +93,16 @@ func TestShouldCachePrepareCompileRejectsIcebergScan(t *testing.T) {
 
 	require.False(t, shouldCachePrepareCompile(p))
 }
+
+func TestShouldCachePrepareCompileRejectsParameterizedPagination(t *testing.T) {
+	parameter := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	withLimit := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{Limit: parameter}}}}}
+	withOffset := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{Offset: parameter}}}}}
+	constant := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{
+		Limit: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 2}}}},
+	}}}}}
+
+	require.False(t, shouldCachePrepareCompile(withLimit))
+	require.False(t, shouldCachePrepareCompile(withOffset))
+	require.True(t, shouldCachePrepareCompile(constant))
+}

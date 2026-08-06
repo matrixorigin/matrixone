@@ -4480,6 +4480,26 @@ func TestParseStringToFloat(t *testing.T) {
 	})
 }
 
+func TestParseStringToFloatForNumericExpression(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  float64
+	}{
+		{value: "2.5", want: 2.5},
+		{value: "9007199254740993", want: 9007199254740992},
+		{value: "\t-1e10 ", want: -1e10},
+	} {
+		got, err := ParseStringToFloatForNumericExpression(test.value)
+		require.NoError(t, err)
+		require.Equal(t, test.want, got)
+	}
+
+	negativeZero, err := ParseStringToFloatForNumericExpression("-1e-10000")
+	require.NoError(t, err)
+	require.Zero(t, negativeZero)
+	require.True(t, math.Signbit(negativeZero))
+}
+
 // These cases mirror MySQL's unittest/gunit/strtod-t.cc Balloc, ManyZeros,
 // and ZerosAndOnes coverage at a size suitable for the function package UT.
 func TestParseStringToFloatMySQLStrtodRegressionCases(t *testing.T) {

@@ -18,11 +18,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -142,15 +145,16 @@ func newPreparedExecuteEnvForSQL(t testing.TB, stmtID uint32, sql string) (*Sess
 	require.NoError(t, err)
 
 	prepareStmt := &PrepareStmt{
-		Name:                stmtName,
-		Sql:                 prepareString.Sql,
-		PreparePlan:         preparePlan,
-		PrepareStmt:         stmts[0],
-		NativeMode:          ses.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:     ses.sqlModeHasOnlyFullGroupBy(),
-		onlyFullGroupBySet:  true,
-		getFromSendLongData: make(map[int]struct{}),
-		protocolVersion:     currentProtocolVersion(proc),
+		Name:                 stmtName,
+		Sql:                  prepareString.Sql,
+		PreparePlan:          preparePlan,
+		PrepareStmt:          stmts[0],
+		NativeMode:           ses.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:      ses.sqlModeHasOnlyFullGroupBy(),
+		onlyFullGroupBySet:   true,
+		getFromSendLongData:  make(map[int]struct{}),
+		protocolVersion:      currentProtocolVersion(proc),
+		dynamicNumericParams: plan2.HasPreparedDynamicNumericParams(preparePlan.GetDcl().GetPrepare().Plan),
 	}
 	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, prepareStmt))
 
@@ -210,8 +214,8 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, cw.proc.GetPrepareParamIsBin(0))
 	require.False(t, cw.proc.GetPrepareParamIsBin(1))
-	require.Equal(t, plan2.ParamValue{Value: "AB\x00\x00", IsBin: true}, cw.paramVals[0])
-	require.Equal(t, plan2.ParamValue{Value: "text", IsBin: false}, cw.paramVals[1])
+	require.Equal(t, plan2.ParamValue{Value: "AB\x00\x00", IsBin: true, RuntimeType: types.T_varchar}, cw.paramVals[0])
+	require.Equal(t, plan2.ParamValue{Value: "text", IsBin: false, RuntimeType: types.T_varchar}, cw.paramVals[1])
 
 	params := cw.proc.GetPrepareParams()
 	require.NoError(t, ses.SetUserDefinedVar("binary_param", "now-text", ""))
@@ -229,6 +233,254 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.False(t, cw.proc.GetPrepareParamIsBin(0), "binary metadata must not leak into the next execution")
 	cw.proc.GetPrepareParams().Free(cw.proc.Mp())
 	cw.proc.SetPrepareParams(nil)
+}
+
+func TestPreparedPaginationUsesRuntimeParamType(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 109, "select 1 limit ?")
+	defer prepareStmt.Close()
+
+	execPlan := &plan.Execute{
+		Name: prepareStmt.Name,
+		Args: []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "limit_param"}}}},
+	}
+	execute := func(value any) error {
+		require.NoError(t, ses.SetUserDefinedVar("limit_param", value, ""))
+		_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+		return err
+	}
+
+	err := execute("3")
+	require.ErrorContains(t, err, "Incorrect arguments to EXECUTE")
+	moErr, ok := err.(*moerr.Error)
+	require.True(t, ok)
+	require.Equal(t, moerr.ER_WRONG_ARGUMENTS, moErr.MySQLCode())
+	require.NoError(t, execute(int64(2)), "a rejected execution must not poison the prepared plan")
+}
+
+func TestPreparedBinaryParamRuntimeType(t *testing.T) {
+	tests := []struct {
+		name     string
+		typ      defines.MysqlType
+		unsigned bool
+		want     types.T
+	}{
+		{name: "bit", typ: defines.MYSQL_TYPE_BIT, want: types.T_bit},
+		{name: "tiny integer", typ: defines.MYSQL_TYPE_TINY, want: types.T_int8},
+		{name: "short integer", typ: defines.MYSQL_TYPE_SHORT, want: types.T_int16},
+		{name: "year", typ: defines.MYSQL_TYPE_YEAR, want: types.T_int16},
+		{name: "medium integer", typ: defines.MYSQL_TYPE_INT24, want: types.T_int32},
+		{name: "long integer", typ: defines.MYSQL_TYPE_LONG, want: types.T_int32},
+		{name: "signed integer", typ: defines.MYSQL_TYPE_LONGLONG, want: types.T_int64},
+		{name: "unsigned tiny integer", typ: defines.MYSQL_TYPE_TINY, unsigned: true, want: types.T_uint8},
+		{name: "unsigned short integer", typ: defines.MYSQL_TYPE_SHORT, unsigned: true, want: types.T_uint16},
+		{name: "unsigned long integer", typ: defines.MYSQL_TYPE_LONG, unsigned: true, want: types.T_uint32},
+		{name: "unsigned longlong integer", typ: defines.MYSQL_TYPE_LONGLONG, unsigned: true, want: types.T_uint64},
+		{name: "float", typ: defines.MYSQL_TYPE_FLOAT, want: types.T_float32},
+		{name: "double", typ: defines.MYSQL_TYPE_DOUBLE, want: types.T_float64},
+		{name: "legacy decimal", typ: defines.MYSQL_TYPE_DECIMAL, want: types.T_decimal128},
+		{name: "decimal", typ: defines.MYSQL_TYPE_NEWDECIMAL, want: types.T_decimal128},
+		{name: "string", typ: defines.MYSQL_TYPE_VAR_STRING, want: types.T_varchar},
+		{name: "null", typ: defines.MYSQL_TYPE_NULL, want: types.T_any},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			flag := byte(0)
+			if test.unsigned {
+				flag = 0x80
+			}
+			require.Equal(t, test.want, preparedBinaryParamRuntimeType([]byte{byte(test.typ), flag}, 0))
+		})
+	}
+	require.Equal(t, types.T_any, preparedBinaryParamRuntimeType(nil, 0))
+	require.Equal(t, types.T_any, preparedBinaryParamRuntimeType([]byte{byte(defines.MYSQL_TYPE_LONG)}, -1))
+	require.Equal(t, types.T_any, preparedBinaryParamRuntimeType([]byte{byte(defines.MYSQL_TYPE_LONG)}, 1))
+}
+
+func TestPreparedTextParamRuntimeType(t *testing.T) {
+	require.Equal(t, types.T_int8, preparedTextParamRuntimeType(int8(1)))
+	require.Equal(t, types.T_int16, preparedTextParamRuntimeType(int16(1)))
+	require.Equal(t, types.T_int32, preparedTextParamRuntimeType(int32(1)))
+	require.Equal(t, types.T_int64, preparedTextParamRuntimeType(int64(1)))
+	require.Equal(t, types.T_uint8, preparedTextParamRuntimeType(uint8(1)))
+	require.Equal(t, types.T_uint16, preparedTextParamRuntimeType(uint16(1)))
+	require.Equal(t, types.T_uint32, preparedTextParamRuntimeType(uint32(1)))
+	require.Equal(t, types.T_uint64, preparedTextParamRuntimeType(uint64(1)))
+	require.Equal(t, types.T_float32, preparedTextParamRuntimeType(float32(1e10)))
+	require.Equal(t, types.T_float64, preparedTextParamRuntimeType(float64(1e100)))
+	require.Equal(t, types.T_varchar, preparedTextParamRuntimeType("1e10"))
+	require.Equal(t, types.T_varchar, preparedTextParamRuntimeType([]byte("2.5")))
+}
+
+func TestPreparedBinaryPaginationUsesProtocolParamType(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 110, "select 1 limit ?")
+	defer prepareStmt.Close()
+	defer cw.proc.SetPrepareParams(nil)
+
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("2"), false, cw.proc.Mp()))
+	prepareStmt.params = params
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
+
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.ErrorContains(t, err, "Incorrect arguments to EXECUTE")
+	require.Nil(t, cw.proc.GetPrepareParams(), "a rejected borrowed binary parameter must not remain on the process")
+
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0}
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, params, cw.proc.GetPrepareParams())
+}
+
+func TestPreparedDynamicNumericPlanUsesCurrentTextAndBinaryValue(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 111, "select ? + 1")
+	defer prepareStmt.Close()
+	defer cw.proc.SetPrepareParams(nil)
+	canonical := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	require.True(t, plan2.HasPreparedDynamicNumericParams(canonical))
+
+	execPlan := &plan.Execute{
+		Name: prepareStmt.Name,
+		Args: []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "numeric_param"}}}},
+	}
+	for _, value := range []string{
+		"12345678901234567890123456789012345678901234567890123456789012345",
+		"0.123456789012345678901234567890",
+	} {
+		require.NoError(t, ses.setUserDefinedVarWithType("numeric_param", value, "", false, types.T_decimal256))
+		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+		require.NoError(t, err)
+		require.Same(t, prepareStmt.compile, comp)
+		require.False(t, plan2.HasPreparedDynamicNumericParams(executionPlan))
+	}
+
+	for _, value := range []float64{1e10, 1e-10, 1e100, -1e10} {
+		require.NoError(t, ses.SetUserDefinedVar("numeric_param", value, ""))
+		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+		require.NoError(t, err)
+		require.Same(t, prepareStmt.compile, comp)
+		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
+		require.True(t, types.T(root.ProjectList[0].Typ.Id).IsFloat())
+	}
+	for _, value := range []string{
+		"2.5", "9007199254740993", "1e10", "1e-10", "-1e10",
+		" 1e10 ", "\t-1e10", "1e-10 ", "1e-10000", "-1e-10000",
+	} {
+		require.NoError(t, ses.SetUserDefinedVar("numeric_param", value, ""))
+		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+		require.NoError(t, err)
+		require.Same(t, prepareStmt.compile, comp)
+		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
+		require.True(t, types.T(root.ProjectList[0].Typ.Id).IsFloat())
+	}
+
+	var cachedIntegerPlan *plan.Plan
+	var cachedIntegerCompile *compile.Compile
+	for _, value := range []int64{2, 3} {
+		require.NoError(t, ses.SetUserDefinedVar("numeric_param", value, ""))
+		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+		require.NoError(t, err)
+		if cachedIntegerPlan == nil {
+			cachedIntegerPlan = executionPlan
+			cachedIntegerCompile = comp
+		} else {
+			require.Same(t, cachedIntegerPlan, executionPlan)
+			require.Same(t, cachedIntegerCompile, comp)
+		}
+		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
+		resultType := types.T(root.ProjectList[0].Typ.Id)
+		require.True(t, resultType.IsInteger(), resultType.String())
+	}
+	require.NoError(t, ses.SetUserDefinedVar("numeric_param", int64(math.MaxInt64), ""))
+	_, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+	require.NoError(t, err)
+	root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
+	require.Equal(t, int32(types.T_int64), root.ProjectList[0].Typ.Id)
+
+	for _, value := range []string{
+		"-12345678901234567890123456789012345678901234567890123456789012345",
+		"-0.123456789012345678901234567890",
+	} {
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
+		prepareStmt.params = params
+		prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		require.Same(t, prepareStmt.compile, comp)
+		require.False(t, plan2.HasPreparedDynamicNumericParams(executionPlan))
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+		prepareStmt.params = nil
+	}
+
+	for _, test := range []struct {
+		value string
+		typ   defines.MysqlType
+	}{
+		{value: "1e+10", typ: defines.MYSQL_TYPE_FLOAT},
+		{value: "1e-10", typ: defines.MYSQL_TYPE_DOUBLE},
+		{value: "1e+100", typ: defines.MYSQL_TYPE_DOUBLE},
+		{value: "-1e+10", typ: defines.MYSQL_TYPE_DOUBLE},
+		{value: "+Inf", typ: defines.MYSQL_TYPE_DOUBLE},
+		{value: "NaN", typ: defines.MYSQL_TYPE_DOUBLE},
+	} {
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(test.value), false, cw.proc.Mp()))
+		prepareStmt.params = params
+		prepareStmt.ParamTypes = []byte{byte(test.typ), 0}
+		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		require.Same(t, prepareStmt.compile, comp)
+		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
+		require.True(t, types.T(root.ProjectList[0].Typ.Id).IsFloat())
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+		prepareStmt.params = nil
+	}
+	for _, value := range []string{
+		"2.5", "9007199254740993", "1e10", "1e-10", "-1e10",
+		" 1e10 ", "\t-1e10", "1e-10 ", "1e-10000", "-1e-10000",
+	} {
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
+		prepareStmt.params = params
+		prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
+		comp, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		require.Same(t, prepareStmt.compile, comp)
+		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
+		require.True(t, types.T(root.ProjectList[0].Typ.Id).IsFloat())
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+		prepareStmt.params = nil
+	}
+
+	for _, test := range []struct {
+		value    string
+		unsigned bool
+		wantType types.T
+	}{
+		{value: strconv.FormatInt(math.MaxInt64, 10), wantType: types.T_int64},
+		{value: strconv.FormatUint(math.MaxUint64, 10), unsigned: true, wantType: types.T_uint64},
+	} {
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(test.value), false, cw.proc.Mp()))
+		prepareStmt.params = params
+		flag := byte(0)
+		if test.unsigned {
+			flag = 0x80
+		}
+		prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), flag}
+		_, executionPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		root := executionPlan.GetQuery().Nodes[executionPlan.GetQuery().Steps[0]]
+		require.Equal(t, int32(test.wantType), root.ProjectList[0].Typ.Id)
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+		prepareStmt.params = nil
+	}
+
+	require.True(t, plan2.HasPreparedDynamicNumericParams(canonical))
 }
 
 func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {
@@ -250,6 +502,19 @@ func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {
 	}
 
 	first := install("41")
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0}
+	_, executionPlan, stmt, _, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	cw.plan = executionPlan
+	cw.ifIsExeccute = true
+	execCtx.cw = cw
+	require.NoError(t, handleSetVar(ses, execCtx, stmt.(*tree.SetVar), prepareStmt.Sql))
+	setValue, err := ses.GetUserDefinedVar("prepared_set_value")
+	require.NoError(t, err)
+	require.Equal(t, types.T_int64, setValue.RuntimeType)
+	require.Equal(t, int64(42), setValue.Value)
+
 	second := install("9")
 	first.Free(cw.proc.Mp())
 	require.Equal(t, "9", cw.proc.GetPrepareParams().GetStringAt(0))
@@ -277,7 +542,7 @@ func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {
 			{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "second"}}},
 		},
 	}
-	params, _, _, err := buildExecuteUserParams(cw.proc, execPlan.Args)
+	params, _, _, err := buildExecuteUserParams(ses, cw.proc, execPlan.Args)
 	require.ErrorIs(t, err, assert.AnError)
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
@@ -327,15 +592,15 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "local_shadow"}}},
 		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "session_only"}}},
 	}
-	params, paramVals, paramIsBin, err := buildExecuteUserParams(cw.proc, args)
+	params, paramVals, paramIsBin, err := buildExecuteUserParams(ses, cw.proc, args)
 	require.NoError(t, err)
 	defer params.Free(cw.proc.Mp())
 
 	require.Equal(t, []bool{false, false, true}, paramIsBin)
 	require.Equal(t, []any{
-		plan2.ParamValue{Value: int64(10), IsBin: false},
-		plan2.ParamValue{Value: int64(20), IsBin: false},
-		plan2.ParamValue{Value: "session-binary", IsBin: true},
+		plan2.ParamValue{Value: int64(10), IsBin: false, RuntimeType: types.T_int64},
+		plan2.ParamValue{Value: int64(20), IsBin: false, RuntimeType: types.T_int64},
+		plan2.ParamValue{Value: "session-binary", IsBin: true, RuntimeType: types.T_varchar},
 	}, paramVals)
 	require.Equal(t, "10", params.GetStringAt(0))
 	require.Equal(t, "20", params.GetStringAt(1))
@@ -1063,4 +1328,94 @@ func TestTxnComputationWrapperDoesNotPersistNormalLocalTraceOnCompileError(t *te
 	cwft.recordSchedulingTraceOnCompileError(context.Background())
 	assert.Nil(t, stmt.ExecPlan)
 	assert.True(t, motrace.StatementInfoFilter(stmt))
+}
+
+func TestNormalizePreparedBoolAndDynamicNumericSignature(t *testing.T) {
+	value, typ, err := normalizeUserVariableValue(true, types.T_bool)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), value)
+	require.Equal(t, types.T_int64, typ)
+	require.Equal(t, int64(1), normalizePreparedParamValue(true))
+	require.Equal(t, int64(0), normalizePreparedParamValue(false))
+	require.Equal(t, types.T_int64, normalizePreparedParamRuntimeType(types.T_bool))
+
+	ctx := context.Background()
+	first, err := preparedNumericParamSignature(ctx, []any{plan2.ParamValue{Value: "2", RuntimeType: types.T_int64}})
+	require.NoError(t, err)
+	second, err := preparedNumericParamSignature(ctx, []any{plan2.ParamValue{Value: "3", RuntimeType: types.T_int64}})
+	require.NoError(t, err)
+	require.Equal(t, first, second, "same integer runtime type must reuse specialization")
+	decimalA, err := preparedNumericParamSignature(ctx, []any{plan2.ParamValue{Value: "1.2", RuntimeType: types.T_decimal128}})
+	require.NoError(t, err)
+	decimalSameShape, err := preparedNumericParamSignature(ctx, []any{plan2.ParamValue{Value: "2.3", RuntimeType: types.T_decimal128}})
+	require.NoError(t, err)
+	require.Equal(t, decimalA, decimalSameShape)
+	decimalDifferentShape, err := preparedNumericParamSignature(ctx, []any{plan2.ParamValue{Value: "1.20", RuntimeType: types.T_decimal128}})
+	require.NoError(t, err)
+	require.NotEqual(t, decimalA, decimalDifferentShape, "decimal precision and scale changes must rebuild specialization")
+}
+
+func TestBuildExecuteUserParamsNormalizesBoolValueAndRuntimeTypeTogether(t *testing.T) {
+	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 112)
+	defer prepareStmt.Close()
+	require.NoError(t, ses.setUserDefinedVarWithType("bool_param", true, "", false, types.T_bool))
+
+	params, values, _, err := buildExecuteUserParams(ses, cw.proc, []*plan.Expr{{
+		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "bool_param"}},
+	}})
+	require.NoError(t, err)
+	defer params.Free(cw.proc.Mp())
+	require.Equal(t, "1", params.GetStringAt(0))
+	require.Equal(t, []any{plan2.ParamValue{
+		Value: int64(1), RuntimeType: types.T_int64,
+	}}, values)
+}
+
+func TestReleaseCompilePreservesCurrentPreparedParameters(t *testing.T) {
+	_, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 113)
+	defer prepareStmt.Close()
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("2"), false, cw.proc.Mp()))
+	cw.proc.SetOwnedPrepareParamsWithIsBin(params, []bool{false})
+
+	comp := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	releaseCompilePreservingPrepareParams(comp, cw.proc, false)
+
+	require.Same(t, params, cw.proc.GetPrepareParams())
+	require.Equal(t, "2", cw.proc.GetPrepareParams().GetStringAt(0))
+}
+
+func TestOrdinaryBoolUserVariableKeepsBoolType(t *testing.T) {
+	ses, prepareStmt, _, execCtx := newPreparedExecuteEnvForSQL(t, 113, "select 1")
+	defer prepareStmt.Close()
+	defer ses.Close()
+	stmts, err := mysql.Parse(execCtx.reqCtx, "set @ordinary_bool = cast(0 as bool)", 1)
+	require.NoError(t, err)
+	require.NoError(t, handleSetVar(
+		ses, execCtx, stmts[0].(*tree.SetVar), "set @ordinary_bool = cast(0 as bool)"))
+	value, err := ses.GetUserDefinedVar("ordinary_bool")
+	require.NoError(t, err)
+	require.Equal(t, types.T_bool, value.RuntimeType)
+	require.Equal(t, false, value.Value)
+}
+
+func TestPreparedDecimalSameShapeReusesPlanAndCompile(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 112, "select ? + 1")
+	defer prepareStmt.Close()
+	execPlan := &plan.Execute{
+		Name: prepareStmt.Name,
+		Args: []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "decimal_param"}}}},
+	}
+	require.NoError(t, ses.setUserDefinedVarWithType("decimal_param", "1.2", "", false, types.T_decimal128))
+	firstCompile, firstPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+	require.NoError(t, err)
+	require.NotNil(t, firstCompile)
+
+	require.NoError(t, ses.setUserDefinedVarWithType("decimal_param", "2.3", "", false, types.T_decimal128))
+	secondCompile, secondPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+	require.NoError(t, err)
+	require.Same(t, firstPlan, secondPlan)
+	require.Same(t, firstCompile, secondCompile)
 }

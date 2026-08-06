@@ -3861,6 +3861,18 @@ func TestPreparedSetExpressionDispatchIsExplicit(t *testing.T) {
 	require.False(t, preparedSetExpression(&ExecCtx{}))
 }
 
+func TestPreparedSetPlanSubqueryUsesQueryExecutor(t *testing.T) {
+	require.False(t, planExprContainsSubquery(&plan0.Expr{}))
+	require.True(t, planExprContainsSubquery(&plan0.Expr{
+		Expr: &plan0.Expr_Sub{Sub: &plan0.SubqueryRef{}},
+	}))
+	require.True(t, planExprContainsSubquery(&plan0.Expr{
+		Expr: &plan0.Expr_F{F: &plan0.Function{Args: []*plan0.Expr{{
+			Expr: &plan0.Expr_Sub{Sub: &plan0.SubqueryRef{}},
+		}}}},
+	}))
+}
+
 func TestMarshalPlanHandlerSanitizesNonFinitePlanStats(t *testing.T) {
 	uid, err := uuid.NewV7()
 	require.NoError(t, err)

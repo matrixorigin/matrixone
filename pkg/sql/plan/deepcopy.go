@@ -698,29 +698,13 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 }
 
 func DeepCopyPlan(pl *Plan) *Plan {
-	switch p := pl.Plan.(type) {
-	case *Plan_Query:
-		return &Plan{
-			Plan: &plan.Plan_Query{
-				Query: DeepCopyQuery(p.Query),
-			},
-			IsPrepare:   pl.IsPrepare,
-			TryRunTimes: pl.TryRunTimes,
-		}
-
-	case *plan.Plan_Ddl:
-		return &Plan{
-			Plan: &plan.Plan_Ddl{
-				Ddl: DeepCopyDataDefinition(p.Ddl),
-			},
-			IsPrepare:   pl.IsPrepare,
-			TryRunTimes: pl.TryRunTimes,
-		}
-
-	default:
-		// only support query/insert plan now
+	if pl == nil {
 		return nil
 	}
+	// Prepared specialization starts from an optimized plan. A protobuf clone
+	// preserves execution-only metadata (message tags, runtime filters, DML
+	// contexts, and future fields) that a hand-maintained field list can drop.
+	return proto.Clone(pl).(*Plan)
 }
 
 func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
@@ -758,17 +742,10 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 		}
 
 	case *plan.DataDefinition_CreateTable:
-		CreateTable := &plan.CreateTable{
-			Replace:     df.CreateTable.Replace,
-			IfNotExists: df.CreateTable.IfNotExists,
-			Temporary:   df.CreateTable.Temporary,
-			Database:    df.CreateTable.Database,
-			TableDef:    DeepCopyTableDef(df.CreateTable.TableDef, true),
-			IndexTables: DeepCopyTableDefList(df.CreateTable.GetIndexTables()),
-			FkDbs:       slices.Clone(df.CreateTable.FkDbs),
-			FkTables:    slices.Clone(df.CreateTable.FkTables),
-			FkCols:      make([]*plan.FkColName, len(df.CreateTable.FkCols)),
-		}
+		CreateTable := proto.Clone(df.CreateTable).(*plan.CreateTable)
+		CreateTable.TableDef = DeepCopyTableDef(df.CreateTable.TableDef, true)
+		CreateTable.IndexTables = DeepCopyTableDefList(df.CreateTable.GetIndexTables())
+		CreateTable.FkCols = make([]*plan.FkColName, len(df.CreateTable.FkCols))
 		for i, val := range df.CreateTable.FkCols {
 			CreateTable.FkCols[i] = &plan.FkColName{Cols: slices.Clone(val.Cols)}
 		}

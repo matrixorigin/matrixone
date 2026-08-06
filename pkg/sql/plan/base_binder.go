@@ -64,7 +64,15 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 
 	switch exprImpl := astExpr.(type) {
 	case *tree.NumVal:
-		expr, err = b.bindNumVal(exprImpl, b.defaultValueBindType())
+		bindType := b.defaultValueBindType()
+		if b.numericParamType != nil && isPreparedDynamicNumericType(*b.numericParamType) {
+			bindType = *b.numericParamType
+		}
+		expr, err = b.bindNumVal(exprImpl, bindType)
+		if err == nil && b.numericParamType != nil && isPreparedDynamicNumericType(*b.numericParamType) &&
+			(exprImpl.ValType == tree.P_int64 || exprImpl.ValType == tree.P_uint64) {
+			expr, err = appendCastBeforeExpr(b.GetContext(), expr, *b.numericParamType)
+		}
 	case *tree.TimeUnitExpr:
 		numVal := tree.NewNumVal(exprImpl.Unit, exprImpl.Unit, false, tree.P_char)
 		expr, err = b.bindNumVal(numVal, b.defaultValueBindType())
@@ -649,6 +657,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
+	numericTarget := b.numericSubqueryTarget
 	if b.numericSubqueryTarget != nil && !astExpr.Exists {
 		subCtx.numericProjectionTypes = []Type{*b.numericSubqueryTarget}
 	}
@@ -703,6 +712,10 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		returnExpr.GetSub().Typ = plan.SubqueryRef_EXISTS
 	} else if rowSize == 1 {
 		returnExpr.Typ = subCtx.results[0].Typ
+		if numericTarget != nil && makeTypeByPlan2Type(*numericTarget).IsNumeric() &&
+			returnExpr.Typ.Id != numericTarget.Id {
+			return makePlan2CastExpr(b.GetContext(), returnExpr, *numericTarget)
+		}
 	}
 
 	return returnExpr, nil
@@ -973,20 +986,28 @@ func (b *baseBinder) bindNumericExprWithCurrentContext(astExpr tree.Expr, depth 
 }
 
 type numericAstTypeScan struct {
-	strong       []Type
-	weakDecimals []Type
-	hasParam     bool
-	hasUnknown   bool
-	incompatible bool
+	strong           []Type
+	literalIntegers  []Type
+	weakDecimals     []Type
+	hasParam         bool
+	hasUnknown       bool
+	incompatible     bool
+	dynamicCandidate bool
 }
 
 func (s numericAstTypeScan) merge(other numericAstTypeScan) numericAstTypeScan {
 	s.strong = append(s.strong, other.strong...)
+	s.literalIntegers = append(s.literalIntegers, other.literalIntegers...)
 	s.weakDecimals = append(s.weakDecimals, other.weakDecimals...)
 	s.hasParam = s.hasParam || other.hasParam
 	s.hasUnknown = s.hasUnknown || other.hasUnknown
 	s.incompatible = s.incompatible || other.incompatible
+	s.dynamicCandidate = s.dynamicCandidate || other.dynamicCandidate
 	return s
+}
+
+func (s numericAstTypeScan) hasExactOperand() bool {
+	return len(s.strong) != 0 || len(s.literalIntegers) != 0 || len(s.weakDecimals) != 0
 }
 
 func numericAstTypedOperand(typ Type) numericAstTypeScan {
@@ -1048,11 +1069,6 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 			return numericAstTypeScan{}, nil
 		}
 		scan, err := b.numericScalarSubqueryAstTypes(expr, depth)
-		// Keep scalar subqueries as deferred parameter-bearing operands even
-		// when their projection type cannot be determined statically. This
-		// preserves assignment-target propagation for expressions whose
-		// parameters are hidden behind unsupported projection shapes.
-		scan.hasParam = true
 		return scan, err
 	case *tree.ParenExpr:
 		return b.numericAstTypesInternalWithHint(expr.Expr, depth, resolveColumn, hint)
@@ -1068,7 +1084,10 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 		if err != nil {
 			return numericAstTypeScan{}, err
 		}
-		return left.merge(right), nil
+		merged := left.merge(right)
+		merged.dynamicCandidate = merged.dynamicCandidate ||
+			(merged.hasParam && (left.hasExactOperand() || right.hasExactOperand()))
+		return merged, nil
 	case *tree.UnaryExpr:
 		if expr.Op == tree.UNARY_PLUS || expr.Op == tree.UNARY_MINUS {
 			return b.numericAstTypesInternalWithHint(expr.Expr, depth, resolveColumn, hint)
@@ -1088,6 +1107,9 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 		if types.T(bound.Typ.Id).IsDecimal() {
 			return numericAstTypeScan{weakDecimals: []Type{bound.Typ}}, nil
 		}
+		if types.T(bound.Typ.Id).IsInteger() {
+			return numericAstTypeScan{literalIntegers: []Type{bound.Typ}}, nil
+		}
 		return numericAstTypedOperand(bound.Typ), nil
 	case *tree.FuncExpr:
 		name := numericAstFunctionName(expr)
@@ -1100,6 +1122,9 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 					return numericAstTypeScan{}, err
 				}
 				scan = scan.merge(value)
+			}
+			if name == "mod" {
+				scan.dynamicCandidate = scan.dynamicCandidate || (scan.hasParam && scan.hasExactOperand())
 			}
 			return scan, nil
 		}
@@ -1266,7 +1291,7 @@ func (b *baseBinder) numericAstStaticType(
 }
 
 func numericTypeFromAstScan(scan numericAstTypeScan, outer *Type) (Type, bool) {
-	typesKnown := make([]types.Type, 0, len(scan.strong)+len(scan.weakDecimals))
+	typesKnown := make([]types.Type, 0, len(scan.strong)+len(scan.literalIntegers)+len(scan.weakDecimals))
 	for i := range scan.strong {
 		typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.strong[i]))
 	}
@@ -1274,6 +1299,18 @@ func numericTypeFromAstScan(scan numericAstTypeScan, outer *Type) (Type, bool) {
 	if outer != nil {
 		typ := makeTypeByPlan2Type(*outer)
 		outerType = &typ
+	}
+	if scan.dynamicCandidate && outerType == nil && !numericScanHasApproximateOperand(scan) {
+		// MySQL resolves a parameter marker in exact arithmetic from the value
+		// supplied by each EXECUTE. MatrixOne plans one static computation type,
+		// so use a tagged maximum DECIMAL domain until runtime specialization.
+		typ := types.New(types.T_decimal256, 65, 30)
+		planType := makePlan2Type(&typ)
+		planType.Table = preparedDynamicNumericTypeMarker
+		return planType, true
+	}
+	for i := range scan.literalIntegers {
+		typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.literalIntegers[i]))
 	}
 	if len(scan.weakDecimals) > 0 && shouldActivateWeakDecimal(typesKnown, outerType) {
 		for i := range scan.weakDecimals {
@@ -1286,6 +1323,23 @@ func numericTypeFromAstScan(scan numericAstTypeScan, outer *Type) (Type, bool) {
 	}
 	return makePlan2Type(&resolved), true
 }
+
+func numericScanHasApproximateOperand(scan numericAstTypeScan) bool {
+	for i := range scan.strong {
+		oid := types.T(scan.strong[i].Id)
+		if oid == types.T_float32 || oid == types.T_float64 {
+			return true
+		}
+	}
+	return false
+}
+
+func isPreparedDynamicNumericType(typ Type) bool {
+	return types.T(typ.Id) == types.T_decimal256 && typ.Width == 65 && typ.Scale == 30 &&
+		typ.Table == preparedDynamicNumericTypeMarker
+}
+
+const preparedDynamicNumericTypeMarker = "__mo_prepared_dynamic_numeric"
 
 func (b *baseBinder) numericScalarSubqueryAstTypes(
 	subquery *tree.Subquery,
@@ -2284,12 +2338,67 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 	if (op == "like" || op == "ilike") && astExpr.Escape != nil {
 		args = append(args, astExpr.Escape)
 	}
+	if len(args) == 2 && op != "in" && op != "not_in" {
+		if expr, handled, err := b.bindPreparedDynamicComparison(op, args[0], args[1], depth); handled || err != nil {
+			return expr, err
+		}
+	}
 	if b.mysqlSpecialTypeNumericComparison(astExpr.Left, astExpr.Right) {
 		return b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
 			return b.bindFuncExprImplByAstExpr(op, args, depth)
 		})
 	}
 	return b.bindFuncExprImplByAstExpr(op, args, depth)
+}
+
+func (b *baseBinder) bindPreparedDynamicComparison(
+	op string, leftAst, rightAst tree.Expr, depth int32,
+) (*Expr, bool, error) {
+	if b.builder == nil || !b.builder.isPrepareStatement {
+		return nil, false, nil
+	}
+	leftScan, leftErr := b.numericAstTypesWithHint(leftAst, depth, nil)
+	rightScan, rightErr := b.numericAstTypesWithHint(rightAst, depth, nil)
+	if leftErr != nil || rightErr != nil {
+		if leftErr != nil {
+			return nil, true, leftErr
+		}
+		return nil, true, rightErr
+	}
+	leftDynamic := leftScan.hasParam && isNumericArithmeticRoot(leftAst)
+	rightDynamic := rightScan.hasParam && isNumericArithmeticRoot(rightAst)
+	if leftDynamic == rightDynamic {
+		return nil, false, nil
+	}
+	otherScan := rightScan
+	if rightDynamic {
+		otherScan = leftScan
+	}
+	if otherScan.incompatible || otherScan.hasUnknown {
+		return nil, false, nil
+	}
+	dynamicAst, otherAst := leftAst, rightAst
+	if rightDynamic {
+		dynamicAst, otherAst = rightAst, leftAst
+	}
+	dynamicExpr, err := b.bindNumericExprWithDefaultContext(dynamicAst, depth, nil)
+	if err != nil {
+		return nil, true, err
+	}
+	otherExpr, err := b.impl.BindExpr(otherAst, depth, false)
+	if err != nil {
+		return nil, true, err
+	}
+	otherExpr, err = appendCastBeforeExpr(b.GetContext(), otherExpr, dynamicExpr.Typ)
+	if err != nil {
+		return nil, true, err
+	}
+	args := []*Expr{dynamicExpr, otherExpr}
+	if rightDynamic {
+		args[0], args[1] = args[1], args[0]
+	}
+	expr, err := BindFuncExprImplByPlanExpr(b.GetContext(), op, args)
+	return expr, true, err
 }
 
 func (b *baseBinder) bindWithRawMySQLSpecialTypes(bind func() (*Expr, error)) (*Expr, error) {
@@ -2803,6 +2912,19 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 
 func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*Expr, error) {
 	if len(args) != 2 {
+		return args, nil
+	}
+	if b.numericParamType != nil && isPreparedDynamicNumericType(*b.numericParamType) {
+		for i := range args {
+			if !makeTypeByPlan2Expr(args[i]).IsNumeric() || args[i].Typ.Id == b.numericParamType.Id {
+				continue
+			}
+			cast, err := appendCastBeforeExpr(b.GetContext(), args[i], *b.numericParamType)
+			if err != nil {
+				return nil, err
+			}
+			args[i] = cast
+		}
 		return args, nil
 	}
 

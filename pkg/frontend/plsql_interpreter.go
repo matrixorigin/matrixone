@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -207,7 +208,7 @@ func (interpreter *Interpreter) FlushParam() error {
 			// save INOUT at session
 			interpreter.bh.ClearExecResultSet()
 			// system setvar execution
-			err := interpreter.ses.SetUserDefinedVar(interpreter.argsMap[k].(*tree.VarExpr).Name, v, "")
+			err := interpreter.setOutputUserVariable(interpreter.argsMap[k].(*tree.VarExpr).Name, k, v)
 			if err != nil {
 				return err
 			}
@@ -215,6 +216,23 @@ func (interpreter *Interpreter) FlushParam() error {
 	}
 
 	return nil
+}
+
+func (interpreter *Interpreter) setOutputUserVariable(name, argName string, value any) error {
+	if declared, ok := interpreter.argsType[argName]; ok && types.T(declared.Id) != types.T_any {
+		typ := types.T(declared.Id)
+		var err error
+		value, typ, err = normalizeUserVariableValue(value, typ)
+		if err != nil {
+			return err
+		}
+		if ses, ok := interpreter.ses.(interface {
+			setUserDefinedVarWithType(string, interface{}, string, bool, types.T) error
+		}); ok {
+			return ses.setUserDefinedVarWithType(name, value, "", false, typ)
+		}
+	}
+	return interpreter.ses.SetUserDefinedVar(name, value, "")
 }
 
 func (interpreter *Interpreter) GetSimpleExprValueWithSpVar(e tree.Expr) (interface{}, error) {

@@ -366,8 +366,7 @@ a    b
 prepare stmt2 from select * from t1 limit ?;
 set @b_var = '1';
 execute stmt2 using @b_var;
-a    b
-1    1
+Incorrect arguments to EXECUTE
 deallocate prepare stmt1;
 deallocate prepare stmt2;
 insert into t1 values(3, 3);

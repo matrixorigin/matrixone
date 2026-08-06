@@ -316,8 +316,21 @@ func (c *Compile) clear() {
 		c.lockMeta = nil
 	}
 
-	c.proc.Free()
+	// Compile borrows the caller's Process. Prepared parameters belong to the
+	// current EXECUTE invocation and can still be needed by another compile or
+	// by execution scopes sharing the same BaseProcess. Releasing this compile
+	// must not end that ownership interval.
+	if c.proc != nil {
+		if c.preservePrepareParamsOnClose {
+			prepareParams := c.proc.DetachPrepareParams()
+			c.proc.Free()
+			c.proc.RestorePrepareParams(prepareParams)
+		} else {
+			c.proc.Free()
+		}
+	}
 	c.proc = nil
+	c.preservePrepareParamsOnClose = false
 
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
@@ -576,6 +589,12 @@ func (c *Compile) IsSingleScope(ss []*Scope) bool {
 
 func (c *Compile) SetIsPrepare(isPrepare bool) {
 	c.isPrepare = isPrepare
+}
+
+// PreservePrepareParamsOnClose marks the Process as borrowed from an EXECUTE
+// owner. Compile.Release then leaves that invocation's parameters intact.
+func (c *Compile) PreservePrepareParamsOnClose() {
+	c.preservePrepareParamsOnClose = true
 }
 
 func (c *Compile) FreeOperator() {

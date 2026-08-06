@@ -187,7 +187,8 @@ func WildcardMatch(pattern, target string) bool {
 
 // getExprValue executes the expression and returns the value.
 func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (interface{}, error) {
-	return getExprValueWithPrepareMode(e, ses, execCtx, false, isBin...)
+	value, _, err := getExprValueWithPrepareMode(e, ses, execCtx, false, isBin...)
+	return value, err
 }
 
 func getExprValueWithPrepareMode(
@@ -196,7 +197,7 @@ func getExprValueWithPrepareMode(
 	execCtx *ExecCtx,
 	preparedExpression bool,
 	isBin ...*bool,
-) (interface{}, error) {
+) (interface{}, types.T, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -209,7 +210,7 @@ func getExprValueWithPrepareMode(
 		if len(isBin) > 0 {
 			*isBin[0] = false
 		}
-		return v.ColName(), nil
+		return v.ColName(), types.T_varchar, nil
 	}
 
 	var err error
@@ -251,16 +252,16 @@ func getExprValueWithPrepareMode(
 	err = executeStmtInSameSession(
 		tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect, preparedExpression)
 	if err != nil {
-		return nil, err
+		return nil, types.T_any, err
 	}
 
 	batches := ses.GetResultBatches()
 	if len(batches) == 0 {
-		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
+		return nil, types.T_any, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
 	}
 
 	if batches[0].VectorCount() > 1 {
-		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi columns value", e.String())
+		return nil, types.T_any, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi columns value", e.String())
 	}
 
 	//evaluate the count of rows, the count of columns
@@ -272,7 +273,7 @@ func getExprValueWithPrepareMode(
 		}
 		count += b.RowCount()
 		if count > 1 {
-			return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi rows value", e.String())
+			return nil, types.T_any, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi rows value", e.String())
 		}
 		if resultVec == nil && b.GetVector(0).Length() != 0 {
 			resultVec = b.GetVector(0)
@@ -280,7 +281,7 @@ func getExprValueWithPrepareMode(
 	}
 
 	if resultVec == nil {
-		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
+		return nil, types.T_any, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
 	}
 
 	// for the decimal type, we need the type of expr
@@ -291,14 +292,36 @@ func getExprValueWithPrepareMode(
 		planExpr, err = bindSetVariableResultExpr(
 			e, ses.GetTxnCompileCtx(), preparedExpression)
 		if err != nil {
-			return nil, err
+			return nil, types.T_any, err
 		}
 	}
 
 	if len(isBin) > 0 {
 		*isBin[0] = resultVec.GetIsBin()
 	}
-	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
+	value, err := getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
+	if err != nil {
+		return nil, types.T_any, err
+	}
+	return value, oid, nil
+}
+
+func normalizeUserVariableValue(value any, oid types.T) (any, types.T, error) {
+	if value == nil {
+		return nil, types.T_any, nil
+	}
+	if oid == types.T_bool {
+		if v, ok := value.(bool); ok {
+			if v {
+				return int64(1), types.T_int64, nil
+			}
+			return int64(0), types.T_int64, nil
+		}
+	}
+	if oid.IsInteger() || oid.IsFloat() || oid.IsDecimal() || oid.IsMySQLString() {
+		return value, oid, nil
+	}
+	return fmt.Sprint(value), types.T_varchar, nil
 }
 
 func bindSetVariableResultExpr(

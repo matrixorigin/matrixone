@@ -295,7 +295,8 @@ type Compile struct {
 	e engine.Engine
 
 	// proc stores the execution context.
-	proc *process.Process
+	proc                         *process.Process
+	preservePrepareParamsOnClose bool
 	// runSqlToken tracks the current statement in txn operator coordination.
 	runSqlToken uint64
 	// TxnOffset read starting offset position within the transaction during the execute current statement

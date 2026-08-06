@@ -3116,9 +3116,16 @@ func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matc
 
 // FillValuesOfParamsInPlan replaces the params by their values
 func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals []any) (*Plan, error) {
-	switch preparePlan.Plan.(type) {
-	case *plan.Plan_Tcl, *plan.Plan_Dcl:
-		return nil, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
+	switch pp := preparePlan.Plan.(type) {
+	case *plan.Plan_Tcl:
+		return nil, moerr.NewInvalidInput(ctx, "cannot prepare TCL statement")
+	case *plan.Plan_Dcl:
+		if pp.Dcl.GetSetVariables() == nil {
+			return nil, moerr.NewInvalidInput(ctx, "cannot prepare this DCL statement")
+		}
+	}
+	if err := ValidatePreparedPaginationParams(ctx, preparePlan, paramVals); err != nil {
+		return nil, err
 	}
 
 	copied := DeepCopyPlan(preparePlan)
@@ -3137,22 +3144,245 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 		if err != nil {
 			return nil, err
 		}
+	case *plan.Plan_Dcl:
+		if err := replaceParamVals(ctx, copied, paramVals); err != nil {
+			return nil, err
+		}
 	}
 	return copied, nil
 }
 
 type ParamValue struct {
-	Value any
-	IsBin bool
+	Value       any
+	IsBin       bool
+	RuntimeType types.T
+}
+
+// PreparedParamTypeShape returns the runtime type shape that affects dynamic
+// numeric binding. Values with the same result compare equal even when their
+// payload differs, so frontend compile caching never keys on DECIMAL data.
+func PreparedParamTypeShape(ctx context.Context, param ParamValue) (types.T, int32, int32, error) {
+	if param.Value == nil {
+		return types.T_any, 0, 0, nil
+	}
+	if param.RuntimeType.IsDecimal() || param.RuntimeType == types.T_any {
+		expr, err := makePlan2DecimalExprWithType(ctx, fmt.Sprintf("%v", param.Value), param.IsBin)
+		if err != nil {
+			return types.T_any, 0, 0, err
+		}
+		return types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, nil
+	}
+	return param.RuntimeType, 0, 0, nil
+}
+
+// ValidatePreparedPaginationParams enforces the runtime type contract of
+// parameter markers used by LIMIT and OFFSET before their values are
+// stringified for expression execution.
+func ValidatePreparedPaginationParams(ctx context.Context, preparePlan *Plan, paramVals []any) error {
+	query := preparePlan.GetQuery()
+	if query == nil && preparePlan.GetDdl() != nil {
+		query = preparePlan.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	for _, node := range query.GetNodes() {
+		if node == nil {
+			continue
+		}
+		collectParamRefPositions(node.GetLimit(), positions)
+		collectParamRefPositions(node.GetOffset(), positions)
+	}
+	for pos := range positions {
+		if pos < 0 || int(pos) >= len(paramVals) {
+			continue
+		}
+		valid, negative := validateIntegerPaginationParam(paramVals[pos])
+		if negative {
+			return moerr.NewPreparedParamOutOfRange(ctx, "unsigned integer", "EXECUTE")
+		}
+		if !valid {
+			return moerr.NewWrongArguments(ctx, "EXECUTE")
+		}
+	}
+	return nil
+}
+
+// HasPreparedPaginationParams reports whether LIMIT or OFFSET is evaluated
+// from a parameter marker. Such expressions must be rebuilt for every EXECUTE
+// because folded NULL state is execution-local.
+func HasPreparedPaginationParams(preparePlan *Plan) bool {
+	if preparePlan == nil {
+		return false
+	}
+	query := preparePlan.GetQuery()
+	if query == nil && preparePlan.GetDdl() != nil {
+		query = preparePlan.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return false
+	}
+	positions := make(map[int32]struct{})
+	for _, node := range query.GetNodes() {
+		if node != nil {
+			collectParamRefPositions(node.GetLimit(), positions)
+			collectParamRefPositions(node.GetOffset(), positions)
+		}
+	}
+	return len(positions) > 0
+}
+
+// HasPreparedDynamicNumericParams reports whether a canonical prepared plan
+// must be specialized with this execution's numeric parameter precision and
+// scale before compilation.
+func HasPreparedDynamicNumericParams(preparePlan *Plan) bool {
+	rule := &preparedDynamicNumericParamRule{}
+	visitor := NewVisitPlan(preparePlan, []VisitPlanRule{rule})
+	_ = visitor.Visit(context.Background())
+	return rule.found
+}
+
+type preparedDynamicNumericParamRule struct {
+	found bool
+}
+
+func (rule *preparedDynamicNumericParamRule) MatchNode(*Node) bool { return false }
+func (rule *preparedDynamicNumericParamRule) IsApplyExpr() bool    { return true }
+func (rule *preparedDynamicNumericParamRule) ApplyNode(*Node) error {
+	return nil
+}
+func (rule *preparedDynamicNumericParamRule) ApplyExpr(expr *Expr) (*Expr, error) {
+	rule.found = rule.found || containsPreparedDynamicNumericParam(expr)
+	return expr, nil
+}
+
+func containsPreparedDynamicNumericParam(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetP() != nil && isPreparedDynamicNumericType(expr.Typ) {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func.GetObjName() == "cast" && isPreparedDynamicNumericType(expr.Typ) &&
+			len(fn.Args) > 0 && fn.Args[0].GetP() != nil {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if containsPreparedDynamicNumericParam(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if containsPreparedDynamicNumericParam(item) {
+				return true
+			}
+		}
+	}
+	if w := expr.GetW(); w != nil {
+		if containsPreparedDynamicNumericParam(w.WindowFunc) {
+			return true
+		}
+		for _, item := range w.PartitionBy {
+			if containsPreparedDynamicNumericParam(item) {
+				return true
+			}
+		}
+		for _, item := range w.OrderBy {
+			if item != nil && containsPreparedDynamicNumericParam(item.Expr) {
+				return true
+			}
+		}
+		if w.Frame != nil {
+			if w.Frame.Start != nil && containsPreparedDynamicNumericParam(w.Frame.Start.Val) {
+				return true
+			}
+			if w.Frame.End != nil && containsPreparedDynamicNumericParam(w.Frame.End.Val) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func collectParamRefPositions(expr *Expr, positions map[int32]struct{}) {
+	if expr == nil {
+		return
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_P:
+		positions[exprImpl.P.Pos] = struct{}{}
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			collectParamRefPositions(arg, positions)
+		}
+	case *plan.Expr_List:
+		for _, item := range exprImpl.List.List {
+			collectParamRefPositions(item, positions)
+		}
+	}
+}
+
+func validateIntegerPaginationParam(value any) (bool, bool) {
+	if param, ok := value.(ParamValue); ok {
+		if param.Value == nil {
+			return true, false
+		}
+		if param.RuntimeType != types.T_any {
+			if !param.RuntimeType.IsInteger() && param.RuntimeType != types.T_bit {
+				return false, false
+			}
+			return paginationValueSign(param.Value)
+		}
+		value = param.Value
+	}
+	if value == nil {
+		return true, false
+	}
+	switch value.(type) {
+	case int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64:
+		return paginationValueSign(value)
+	default:
+		return false, false
+	}
+}
+
+func paginationValueSign(value any) (bool, bool) {
+	switch v := value.(type) {
+	case int:
+		return true, v < 0
+	case int8:
+		return true, v < 0
+	case int16:
+		return true, v < 0
+	case int32:
+		return true, v < 0
+	case int64:
+		return true, v < 0
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if !strings.HasPrefix(trimmed, "-") {
+			return true, false
+		}
+		return true, strings.TrimLeft(strings.TrimPrefix(trimmed, "-"), "0") != ""
+	default:
+		return true, false
+	}
 }
 
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	params := make([]*Expr, len(paramVals))
 	for i, val := range paramVals {
 		isBin := false
+		runtimeType := types.T_any
 		if param, ok := val.(ParamValue); ok {
 			val = param.Value
 			isBin = param.IsBin
+			runtimeType = param.RuntimeType
 		}
 		if val == nil {
 			pc := &plan.Literal{
@@ -3173,12 +3403,62 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 				},
 			}
 		}
+		if runtimeType != types.T_any {
+			typ := runtimeType.ToType()
+			params[i].Typ = makePlan2Type(&typ)
+		}
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
-	VisitQuery := NewVisitPlan(plan0, []VisitPlanRule{paramRule})
-	err := VisitQuery.Visit(ctx)
-	if err != nil {
-		return err
+	if plan0.GetQuery() != nil || (plan0.GetDdl() != nil && plan0.GetDdl().GetQuery() != nil) {
+		return refreshPreparedTypeLineage(ctx, plan0, paramRule)
+	}
+	return NewVisitPlan(plan0, []VisitPlanRule{paramRule}).Visit(ctx)
+}
+
+func refreshPreparedTypeLineage(ctx context.Context, plan0 *Plan, paramRule *ResetParamRefRule) error {
+	query := plan0.GetQuery()
+	if query == nil && plan0.GetDdl() != nil {
+		query = plan0.GetDdl().GetQuery()
+	}
+	if query == nil {
+		return nil
+	}
+	rule := &preparedTypeLineageRule{ctx: ctx, types: make(map[[2]int32]plan.Type)}
+	visitor := NewVisitPlan(plan0, nil)
+	visited := make(map[int32]struct{})
+	var visit func(int32) error
+	visit = func(id int32) error {
+		if _, ok := visited[id]; ok {
+			return nil
+		}
+		visited[id] = struct{}{}
+		if id < 0 || int(id) >= len(query.Nodes) || query.Nodes[id] == nil {
+			return moerr.NewInternalErrorNoCtx("invalid query node id")
+		}
+		node := query.Nodes[id]
+		for _, child := range node.Children {
+			if err := visit(child); err != nil {
+				return err
+			}
+		}
+		if err := visitor.exploreNode(ctx, rule, node, id); err != nil {
+			return err
+		}
+		if err := visitor.exploreNode(ctx, paramRule, node, id); err != nil {
+			return err
+		}
+		if len(node.BindingTags) == 1 {
+			tag := node.BindingTags[0]
+			for col, expr := range node.ProjectList {
+				rule.types[[2]int32{tag, int32(col)}] = expr.Typ
+			}
+		}
+		return nil
+	}
+	for _, root := range query.Steps {
+		if err := visit(root); err != nil {
+			return err
+		}
 	}
 	return nil
 }

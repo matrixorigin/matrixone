@@ -267,3 +267,28 @@ func TestBackgroundPreparedStatementUsesClientRegistry(t *testing.T) {
 	_, err = owner.GetPrepareStmt(ctx, prepared.Name)
 	require.Error(t, err)
 }
+
+func TestInterpreterOutputDecimalPreservesDeclaredRuntimeType(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	interpreter := &Interpreter{
+		ses: ses,
+		argsType: map[string]plan.Type{
+			"amount": {Id: int32(types.T_decimal256), Width: 30, Scale: 2},
+		},
+	}
+	require.NoError(t, interpreter.setOutputUserVariable("out_amount", "amount", "9007199254740993.25"))
+	userVar, err := ses.GetUserDefinedVar("out_amount")
+	require.NoError(t, err)
+	require.Equal(t, types.T_decimal256, userVar.RuntimeType)
+	require.Equal(t, "9007199254740993.25", userVar.Value)
+
+	interpreter.argsType["flag"] = plan.Type{Id: int32(types.T_bool)}
+	require.NoError(t, interpreter.setOutputUserVariable("out_flag", "flag", true))
+	flag, err := ses.GetUserDefinedVar("out_flag")
+	require.NoError(t, err)
+	require.Equal(t, types.T_int64, flag.RuntimeType)
+	require.Equal(t, int64(1), flag.Value)
+}

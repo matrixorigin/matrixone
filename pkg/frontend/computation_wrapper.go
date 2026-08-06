@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"maps"
 	"sync/atomic"
 	"time"
@@ -817,6 +818,9 @@ func initExecuteStmtParamWithResolverInSession(
 
 		preparePlan = newPreparePlan
 		prepareStmt.PreparePlan = newPlan
+		prepareStmt.dynamicNumericParams = plan2.HasPreparedDynamicNumericParams(newPreparePlan.Plan)
+		prepareStmt.dynamicNumericSignature = ""
+		prepareStmt.dynamicNumericPlan = nil
 		prepareStmt.ColDefData = newColDefData
 		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
 			execCtx.prepareColDef = newColDefData
@@ -852,7 +856,8 @@ func initExecuteStmtParamWithResolverInSession(
 			owner, originSQL, prepareStmt.schedulingSQLMode)
 		if !executionSes.IsBackgroundSession() {
 			if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok &&
-				shouldCachePrepareCompile(preparePlan.Plan) && !executionIntent.Explicit {
+				!prepareStmt.dynamicNumericParams && shouldCachePrepareCompile(preparePlan.Plan) &&
+				!executionIntent.Explicit {
 				// Prepare-time compiles are cached and must not retain a statement-owned trace.
 				// The execution path attaches the current wrapper trace after cache retrieval.
 				comp, err := createCompile(execCtx, executionSes, cwft.proc, originSQL, originSQL, &prepareStmt.schedulingSQLMode, prepareStmt.PrepareStmt, preparePlan.Plan, owner.GetOutputCallback(execCtx), true, nil)
@@ -872,29 +877,66 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 	numParams := len(preparePlan.ParamTypes)
+	executionPlan := preparePlan.Plan
+	needsNumericSpecialization := prepareStmt.dynamicNumericParams
 	cwft.paramVals = nil
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
 		if prepareStmt.params.Length() != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 		cwft.proc.SetPrepareParams(prepareStmt.params)
-		cwft.paramVals, err = preparedParamValues(cwft.proc)
+		cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
+		}
+		if err = plan2.ValidatePreparedPaginationParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
+			cwft.proc.SetPrepareParams(nil)
+			cwft.paramVals = nil
+			return nil, nil, nil, originSQL, false, err
+		}
+		if needsNumericSpecialization {
+			executionPlan, err = specializePreparedNumericPlan(reqCtx, prepareStmt, preparePlan.Plan, cwft.paramVals, cwft.proc)
+			if err != nil {
+				cwft.proc.SetPrepareParams(nil)
+				cwft.paramVals = nil
+				return nil, nil, nil, originSQL, false, err
+			}
 		}
 	} else if execPlan != nil && len(execPlan.Args) > 0 {
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		params, paramVals, paramIsBin, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
+		params, paramVals, paramIsBin, err := buildExecuteUserParams(executionSes, cwft.proc, execPlan.Args)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
+		}
+		if err = plan2.ValidatePreparedPaginationParams(reqCtx, preparePlan.Plan, paramVals); err != nil {
+			params.Free(cwft.proc.Mp())
+			return nil, nil, nil, originSQL, false, err
+		}
+		if needsNumericSpecialization {
+			executionPlan, err = specializePreparedNumericPlan(reqCtx, prepareStmt, preparePlan.Plan, paramVals, cwft.proc)
+			if err != nil {
+				params.Free(cwft.proc.Mp())
+				return nil, nil, nil, originSQL, false, err
+			}
 		}
 		cwft.proc.SetOwnedPrepareParamsWithIsBin(params, paramIsBin)
 		cwft.paramVals = paramVals
 	} else {
 		if numParams > 0 {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
+		}
+	}
+	if needsNumericSpecialization && execCtx.input != nil && execCtx.input.isBinaryProtExecute {
+		columns := plan2.GetResultColumnsFromPlan(executionPlan)
+		resper := execCtx.resper
+		if executionSes.IsBackgroundSession() {
+			resper = owner.GetResponser()
+		}
+		execCtx.prepareColDef, err = resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
+		if err != nil {
+			return nil, nil, nil, originSQL, false, err
 		}
 	}
 	// A cached prepared Compile already owns a materialized worker topology.
@@ -907,6 +949,25 @@ func initExecuteStmtParamWithResolverInSession(
 	cwft.hasPreparedSchedulingSQLMode = true
 	cwft.preparedSchedulingSQL = originSQL
 	retComp := prepareStmt.compile
+	if needsNumericSpecialization && retComp == nil && !executionSes.IsBackgroundSession() {
+		executionIntent := querySchedulingIntentForStatementWithSQLMode(
+			owner, originSQL, prepareStmt.schedulingSQLMode)
+		if _, ok := executionPlan.Plan.(*plan.Plan_Query); ok &&
+			shouldCachePrepareCompile(executionPlan) && !executionIntent.Explicit {
+			comp, compileErr := createCompile(execCtx, executionSes, cwft.proc, originSQL, originSQL,
+				&prepareStmt.schedulingSQLMode, prepareStmt.PrepareStmt, executionPlan,
+				owner.GetOutputCallback(execCtx), true, nil)
+			if compileErr != nil && !moerr.IsMoErrCode(compileErr, moerr.ErrCantCompileForPrepare) {
+				return nil, nil, nil, "", false, compileErr
+			}
+			if comp != nil && !comp.IsTpQuery() {
+				releaseCompilePreservingPrepareParams(comp, cwft.proc, false)
+				comp = nil
+			}
+			prepareStmt.compile = comp
+			retComp = comp
+		}
+	}
 	if executionSes.IsBackgroundSession() {
 		// A cached compile owns pipelines tied to the client process used at
 		// PREPARE time. A procedure executes with a distinct background process.
@@ -920,7 +981,79 @@ func initExecuteStmtParamWithResolverInSession(
 	if err != nil {
 		return nil, nil, nil, "", false, err
 	}
-	return retComp, preparePlan.Plan, executionStmt, originSQL, owned, nil
+	return retComp, executionPlan, executionStmt, originSQL, owned, nil
+}
+
+func specializePreparedNumericPlan(
+	ctx context.Context,
+	prepareStmt *PrepareStmt,
+	preparePlan *plan.Plan,
+	paramVals []any,
+	proc *process.Process,
+) (*plan.Plan, error) {
+	signature, err := preparedNumericParamSignature(ctx, paramVals)
+	if err != nil {
+		return nil, err
+	}
+	if prepareStmt.dynamicNumericSignature == signature && prepareStmt.dynamicNumericPlan != nil {
+		return prepareStmt.dynamicNumericPlan, nil
+	}
+	if prepareStmt.compile != nil {
+		releaseCompilePreservingPrepareParams(prepareStmt.compile, proc, true)
+		prepareStmt.compile = nil
+	}
+	specialized, err := plan2.FillValuesOfParamsInPlan(ctx, preparePlan, paramVals)
+	if err != nil {
+		return nil, err
+	}
+	prepareStmt.dynamicNumericSignature = signature
+	prepareStmt.dynamicNumericPlan = specialized
+	return specialized, nil
+}
+
+// Compile.Release frees the shared Process and therefore clears its prepared
+// parameter vector. During EXECUTE the same Process already owns the current
+// invocation's parameters, so releasing an ineligible or stale cached compile
+// must temporarily detach that state and restore it afterwards.
+func releaseCompilePreservingPrepareParams(comp *compile.Compile, proc *process.Process, freeOperator bool) {
+	if comp == nil {
+		return
+	}
+	if proc == nil {
+		if freeOperator {
+			comp.FreeOperator()
+		}
+		comp.SetIsPrepare(false)
+		comp.Release()
+		return
+	}
+	params := proc.DetachPrepareParams()
+	defer proc.RestorePrepareParams(params)
+	if freeOperator {
+		comp.FreeOperator()
+	}
+	comp.SetIsPrepare(false)
+	comp.Release()
+}
+
+func preparedNumericParamSignature(ctx context.Context, paramVals []any) (string, error) {
+	var signature bytes.Buffer
+	for i, raw := range paramVals {
+		if i > 0 {
+			signature.WriteByte(';')
+		}
+		param, ok := raw.(plan2.ParamValue)
+		if !ok {
+			fmt.Fprintf(&signature, "%T", raw)
+			continue
+		}
+		oid, width, scale, err := plan2.PreparedParamTypeShape(ctx, param)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&signature, "%d:%d:%d", oid, width, scale)
+	}
+	return signature.String(), nil
 }
 
 func prepareSchemaAccountID(currentAccountID uint32, obj *plan.ObjectRef) uint32 {
@@ -1030,7 +1163,7 @@ func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
 	}
 }
 
-func preparedParamValues(proc *process.Process) ([]any, error) {
+func preparedParamValues(proc *process.Process, mysqlTypes []byte) ([]any, error) {
 	params := proc.GetPrepareParams()
 	if params == nil || params.Length() == 0 {
 		return nil, nil
@@ -1044,12 +1177,59 @@ func preparedParamValues(proc *process.Process) ([]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		values[i] = plan2.ParamValue{Value: string(raw), IsBin: proc.GetPrepareParamIsBin(i)}
+		values[i] = plan2.ParamValue{
+			Value:       string(raw),
+			IsBin:       proc.GetPrepareParamIsBin(i),
+			RuntimeType: preparedBinaryParamRuntimeType(mysqlTypes, i),
+		}
 	}
 	return values, nil
 }
 
+func preparedBinaryParamRuntimeType(mysqlTypes []byte, paramPos int) types.T {
+	typePos := paramPos << 1
+	if typePos < 0 || typePos+1 >= len(mysqlTypes) {
+		return types.T_any
+	}
+	unsigned := mysqlTypes[typePos+1]&0x80 != 0
+	switch defines.MysqlType(mysqlTypes[typePos]) {
+	case defines.MYSQL_TYPE_BIT:
+		return types.T_bit
+	case defines.MYSQL_TYPE_TINY:
+		if unsigned {
+			return types.T_uint8
+		}
+		return types.T_int8
+	case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_YEAR:
+		if unsigned {
+			return types.T_uint16
+		}
+		return types.T_int16
+	case defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG:
+		if unsigned {
+			return types.T_uint32
+		}
+		return types.T_int32
+	case defines.MYSQL_TYPE_LONGLONG:
+		if unsigned {
+			return types.T_uint64
+		}
+		return types.T_int64
+	case defines.MYSQL_TYPE_FLOAT:
+		return types.T_float32
+	case defines.MYSQL_TYPE_DOUBLE:
+		return types.T_float64
+	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+		return types.T_decimal128
+	case defines.MYSQL_TYPE_NULL:
+		return types.T_any
+	default:
+		return types.T_varchar
+	}
+}
+
 func buildExecuteUserParams(
+	ses FeSession,
 	proc *process.Process,
 	args []*plan.Expr,
 ) (params *vector.Vector, paramVals []any, paramIsBin []bool, err error) {
@@ -1068,6 +1248,7 @@ func buildExecuteUserParams(
 		if err != nil {
 			return
 		}
+		param = normalizePreparedParamValue(param)
 		err = util.AppendAnyToStringVector(proc, param, params)
 		if err != nil {
 			return
@@ -1079,9 +1260,74 @@ func buildExecuteUserParams(
 				return
 			}
 		}
-		paramVals[i] = plan2.ParamValue{Value: param, IsBin: paramIsBin[i]}
+		paramVals[i] = plan2.ParamValue{
+			Value: param,
+			IsBin: paramIsBin[i],
+			RuntimeType: normalizePreparedParamRuntimeType(
+				preparedExecuteParamRuntimeType(ses, exprImpl.V, param)),
+		}
 	}
 	return
+}
+
+func normalizePreparedParamValue(value any) any {
+	if v, ok := value.(bool); ok {
+		if v {
+			return int64(1)
+		}
+		return int64(0)
+	}
+	return value
+}
+
+func normalizePreparedParamRuntimeType(typ types.T) types.T {
+	if typ == types.T_bool {
+		return types.T_int64
+	}
+	return typ
+}
+
+func preparedTextParamRuntimeType(value any) types.T {
+	switch value.(type) {
+	case int8:
+		return types.T_int8
+	case int16:
+		return types.T_int16
+	case int32:
+		return types.T_int32
+	case int, int64:
+		return types.T_int64
+	case uint8:
+		return types.T_uint8
+	case uint16:
+		return types.T_uint16
+	case uint32:
+		return types.T_uint32
+	case uint, uint64:
+		return types.T_uint64
+	case float32:
+		return types.T_float32
+	case float64:
+		return types.T_float64
+	case string, []byte:
+		return types.T_varchar
+	default:
+		return types.T_any
+	}
+}
+
+func preparedExecuteParamRuntimeType(ses FeSession, ref *plan.VarRef, value any) types.T {
+	if ref != nil && !ref.System {
+		if compileCtx := ses.GetTxnCompileCtx(); compileCtx != nil && compileCtx.execCtx != nil {
+			if _, ok := resolveStoredProcedureVariable(compileCtx.execCtx.reqCtx, ref.Name); ok {
+				return preparedTextParamRuntimeType(value)
+			}
+		}
+		if userVar, err := ses.GetUserDefinedVar(ref.Name); err == nil && userVar != nil {
+			return userVar.RuntimeType
+		}
+	}
+	return preparedTextParamRuntimeType(value)
 }
 
 func shouldCachePrepareCompile(p *plan.Plan) bool {
@@ -1091,6 +1337,9 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 	query := p.GetQuery()
 	if query == nil {
 		return true
+	}
+	if plan2.HasPreparedPaginationParams(p) {
+		return false
 	}
 	for _, node := range query.GetNodes() {
 		if node != nil && node.GetExternScan() != nil && node.GetExternScan().GetIcebergScan() != nil {
@@ -1183,6 +1432,7 @@ func createCompile(
 		deepcopy.Copy(ses.getCNLabels()).(map[string]string),
 		getStatementStartAt(execCtx.reqCtx),
 	)
+	retCompile.PreservePrepareParamsOnClose()
 	retCompile.SetIsPrepare(isPrepare)
 	if schedulingSQL == "" {
 		schedulingSQL = originSQL

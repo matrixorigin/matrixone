@@ -919,6 +919,7 @@ func doSetVar(
 	var err error = nil
 	var ok bool
 	var userVarIsBin bool
+	var userVarRuntimeType types.T
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
 		var oldValueRaw interface{}
 		if system {
@@ -955,7 +956,7 @@ func doSetVar(
 				}
 			}
 		} else {
-			err = ses.setUserDefinedVar(name, value, sql, userVarIsBin)
+			err = ses.setUserDefinedVarWithType(name, value, sql, userVarIsBin, userVarRuntimeType)
 			if err != nil {
 				return err
 			}
@@ -963,13 +964,19 @@ func doSetVar(
 		return nil
 	}
 
-	for _, assign := range sv.Assignments {
+	for assignmentIndex, assign := range sv.Assignments {
 		name := assign.Name
 		var value interface{}
 		userVarIsBin = false
 
-		value, err = getExprValueWithPrepareMode(
-			assign.Value, ses, execCtx, preparedExpression, &userVarIsBin)
+		if preparedPlanExpr := preparedSetPlanExpr(execCtx, assignmentIndex); preparedExpression &&
+			preparedPlanExpr != nil && !planExprContainsSubquery(preparedPlanExpr) {
+			value, userVarRuntimeType, err = getPreparedPlanExprValue(
+				ses, execCtx, preparedPlanExpr, &userVarIsBin)
+		} else {
+			value, userVarRuntimeType, err = getExprValueWithPrepareMode(
+				assign.Value, ses, execCtx, preparedExpression, &userVarIsBin)
+		}
 		if err != nil {
 			return err
 		}
@@ -1065,6 +1072,43 @@ func doSetVar(
 	return err
 }
 
+func planExprContainsSubquery(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Sub:
+		return true
+	case *plan.Expr_F:
+		for _, arg := range impl.F.Args {
+			if planExprContainsSubquery(arg) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range impl.List.List {
+			if planExprContainsSubquery(item) {
+				return true
+			}
+		}
+	case *plan.Expr_W:
+		if planExprContainsSubquery(impl.W.WindowFunc) {
+			return true
+		}
+		for _, item := range impl.W.PartitionBy {
+			if planExprContainsSubquery(item) {
+				return true
+			}
+		}
+		for _, item := range impl.W.OrderBy {
+			if item != nil && planExprContainsSubquery(item.Expr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 /*
 handle setvar
 */
@@ -1084,6 +1128,42 @@ func preparedSetExpression(execCtx *ExecCtx) bool {
 	}
 	cw, ok := execCtx.cw.(*TxnComputationWrapper)
 	return ok && cw.ifIsExeccute
+}
+
+func preparedSetPlanExpr(execCtx *ExecCtx, assignmentIndex int) *plan.Expr {
+	if execCtx == nil || assignmentIndex < 0 {
+		return nil
+	}
+	cw, ok := execCtx.cw.(*TxnComputationWrapper)
+	if !ok || cw.plan == nil || cw.plan.GetDcl() == nil || cw.plan.GetDcl().GetSetVariables() == nil {
+		return nil
+	}
+	items := cw.plan.GetDcl().GetSetVariables().GetItems()
+	if assignmentIndex >= len(items) {
+		return nil
+	}
+	return items[assignmentIndex].GetValue()
+}
+
+func getPreparedPlanExprValue(
+	ses FeSession,
+	execCtx *ExecCtx,
+	expr *plan.Expr,
+	isBin *bool,
+) (any, types.T, error) {
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(execCtx.proc, expr)
+	if err != nil {
+		return nil, types.T_any, err
+	}
+	defer free()
+	if isBin != nil {
+		*isBin = vec.GetIsBin()
+	}
+	value, err := getValueFromVector(execCtx.reqCtx, vec, ses, expr)
+	if err != nil {
+		return nil, types.T_any, err
+	}
+	return value, vec.GetType().Oid, nil
 }
 
 func doShowErrors(ses *Session, execCtx *ExecCtx) error {
@@ -1987,9 +2067,11 @@ func createPrepareStmtInSession(
 		owner, originSQL, schedulingSQLMode)
 	var comp *compile.Compile
 	prepareControl := preparePlan.GetDcl().GetPrepare()
+	dynamicNumericParams := plan2.HasPreparedDynamicNumericParams(prepareControl.Plan)
 	_, isQueryPlan := prepareControl.Plan.Plan.(*plan.Plan_Query)
 	if !executionSes.IsBackgroundSession() &&
 		isQueryPlan &&
+		!dynamicNumericParams &&
 		shouldCachePrepareCompile(prepareControl.Plan) &&
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
@@ -2009,22 +2091,23 @@ func createPrepareStmtInSession(
 	}
 
 	prepareStmt := &PrepareStmt{
-		Name:                preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:                 originSQL,
-		compile:             comp,
-		PreparePlan:         preparePlan,
-		PrepareStmt:         saveStmt,
-		NativeMode:          owner.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:     owner.sqlModeHasOnlyFullGroupBy(),
-		onlyFullGroupBySet:  true,
-		remapDb:             maps.Clone(execCtx.remapDb),
-		defaultDatabase:     executionSes.GetTxnCompileCtx().GetDatabase(),
-		tempTableVersion:    owner.GetTempTableVersion(),
-		ddlVersion:          owner.getDDLVersion(),
-		cloneSQL:            cloneSQL,
-		protocolVersion:     protocolVersion,
-		getFromSendLongData: make(map[int]struct{}),
-		schedulingSQLMode:   schedulingSQLMode,
+		Name:                 preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:                  originSQL,
+		compile:              comp,
+		PreparePlan:          preparePlan,
+		PrepareStmt:          saveStmt,
+		NativeMode:           owner.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:      owner.sqlModeHasOnlyFullGroupBy(),
+		onlyFullGroupBySet:   true,
+		remapDb:              maps.Clone(execCtx.remapDb),
+		defaultDatabase:      executionSes.GetTxnCompileCtx().GetDatabase(),
+		tempTableVersion:     owner.GetTempTableVersion(),
+		ddlVersion:           owner.getDDLVersion(),
+		cloneSQL:             cloneSQL,
+		protocolVersion:      protocolVersion,
+		dynamicNumericParams: dynamicNumericParams,
+		getFromSendLongData:  make(map[int]struct{}),
+		schedulingSQLMode:    schedulingSQLMode,
 	}
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)

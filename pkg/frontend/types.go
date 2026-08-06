@@ -328,6 +328,13 @@ type PrepareStmt struct {
 	// protocolVersion is the cluster protocol used to build PreparePlan.
 	// A version change can alter internal function IDs in generated DML plans.
 	protocolVersion int64
+	// dynamicNumericParams marks plans whose arithmetic parameter types must be
+	// specialized from EXECUTE values.
+	dynamicNumericParams bool
+	// dynamicNumericSignature identifies the runtime numeric type shape used by
+	// dynamicNumericPlan and compile. A different shape invalidates both caches.
+	dynamicNumericSignature string
+	dynamicNumericPlan      *plan.Plan
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
@@ -684,6 +691,8 @@ func (prepareStmt *PrepareStmt) Close() {
 		prepareStmt.compile.Release()
 		prepareStmt.compile = nil
 	}
+	prepareStmt.dynamicNumericPlan = nil
+	prepareStmt.dynamicNumericSignature = ""
 	if prepareStmt.PrepareStmt != nil {
 		prepareStmt.PrepareStmt.Free()
 	}
