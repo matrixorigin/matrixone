@@ -17,9 +17,9 @@ package compile
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/substrait"
@@ -52,7 +52,7 @@ func (p *SiriusReadPlan) Release(ctx context.Context, leases *substrait.LeaseMan
 // PR #3 will call this opt-in API and transfer lease ownership to execution.
 func (c *Compile) CompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan, accountID uint64, queryID []byte, dataDir string, ttl time.Duration, leases *substrait.LeaseManager) (*SiriusReadPlan, error) {
 	if c == nil || queryPlan == nil || queryPlan.GetQuery() == nil {
-		return nil, errors.New("substrait: compile has no query plan")
+		return nil, moerr.NewInternalError(ctx, "substrait: compile has no query plan")
 	}
 	candidate, err := substrait.Export(queryPlan.GetQuery())
 	if err != nil {
@@ -60,23 +60,23 @@ func (c *Compile) CompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan,
 	}
 	txnOp := c.proc.GetTxnOperator()
 	if txnOp == nil || txnOp.GetWorkspace() == nil {
-		return nil, errors.New("substrait: compile has no transaction workspace")
+		return nil, moerr.NewInternalError(ctx, "substrait: compile has no transaction workspace")
 	}
 	ws := txnOp.GetWorkspace()
 	readOnly := ws.Readonly()
 	priorWrites := ws.WriteOffset() != 0 || ws.GetSnapshotWriteOffset() != 0
 	if !readOnly || priorWrites {
-		return nil, errors.New("substrait: transaction is not an admissible read-only snapshot")
+		return nil, moerr.NewInternalError(ctx, "substrait: transaction is not an admissible read-only snapshot")
 	}
 	if leases == nil || !leases.Ready() || !leases.Protected() || accountID == 0 || len(queryID) == 0 || ttl <= 0 || ttl > substrait.MaxLeaseTTL {
-		return nil, errors.New("substrait: invalid Sirius admission configuration")
+		return nil, moerr.NewInternalError(ctx, "substrait: invalid Sirius admission configuration")
 	}
 	relations := make(map[uint64]engine.Relation, len(candidate.Reads()))
 	for _, read := range candidate.Reads() {
 		node := queryPlan.GetQuery().Nodes[read.NodeID]
 		rel, _, _, openErr := c.handleDbRelContext(node, false)
 		if openErr != nil {
-			return nil, fmt.Errorf("substrait: open table %d: %w", read.TableID, openErr)
+			return nil, moerr.NewInternalErrorf(ctx, "substrait: open table %d: %v", read.TableID, openErr)
 		}
 		relations[read.TableID] = rel
 	}

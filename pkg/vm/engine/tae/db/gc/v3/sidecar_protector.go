@@ -17,9 +17,9 @@ package gc
 import (
 	"context"
 	"encoding/base64"
-	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -33,10 +33,10 @@ type SidecarReadProtector struct{ Manager *SyncProtectionManager }
 
 func (p SidecarReadProtector) Register(_ context.Context, readRef []byte, objects []string, expires time.Time) error {
 	if p.Manager == nil {
-		return fmt.Errorf("sidecar read protector has no manager")
+		return moerr.NewInternalErrorNoCtxf("sidecar read protector has no manager")
 	}
 	if len(readRef) == 0 {
-		return fmt.Errorf("sidecar read protector has empty reference")
+		return moerr.NewInternalErrorNoCtxf("sidecar read protector has empty reference")
 	}
 	vec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 	defer vec.Close()
@@ -45,7 +45,7 @@ func (p SidecarReadProtector) Register(_ context.Context, readRef []byte, object
 	}
 	for _, name := range objects {
 		if name == "" {
-			return fmt.Errorf("sidecar read protector has empty object name")
+			return moerr.NewInternalErrorNoCtxf("sidecar read protector has empty object name")
 		}
 		vec.Append([]byte(name), false)
 	}
@@ -63,7 +63,7 @@ func (p SidecarReadProtector) Register(_ context.Context, readRef []byte, object
 
 func (p SidecarReadProtector) Unregister(_ context.Context, readRef []byte) error {
 	if p.Manager == nil {
-		return fmt.Errorf("sidecar read protector has no manager")
+		return moerr.NewInternalErrorNoCtxf("sidecar read protector has no manager")
 	}
 	return p.Manager.ReleaseSyncProtection(sidecarReadJobID(readRef))
 }

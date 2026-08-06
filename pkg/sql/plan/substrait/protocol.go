@@ -16,9 +16,8 @@ package substrait
 
 import (
 	"crypto/sha256"
-	"errors"
-	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
@@ -42,16 +41,16 @@ type TaeRead struct {
 
 func (r *TaeRead) Validate(nowUnixMS uint64) error {
 	if r == nil || r.ProtocolVersion != TaeReadProtocolVersion || r.FeatureBits != 0 {
-		return errors.New("invalid TaeRead protocol")
+		return moerr.NewInternalErrorNoCtx("invalid TaeRead protocol")
 	}
 	if len(r.ReadRef) != 32 || len(r.QueryID) == 0 || len(r.QueryID) > 4096 || len(r.SnapshotTS) != 12 || len(r.SchemaDigest) != sha256.Size || len(r.ManifestSHA256) != sha256.Size || len(r.CapabilityHash) != sha256.Size {
-		return errors.New("invalid TaeRead identity or digest length")
+		return moerr.NewInternalErrorNoCtx("invalid TaeRead identity or digest length")
 	}
 	if r.AccountID == 0 || r.TableID == 0 || r.ExpiresAtUnixMS <= nowUnixMS {
-		return errors.New("invalid or expired TaeRead")
+		return moerr.NewInternalErrorNoCtx("invalid or expired TaeRead")
 	}
 	if !equalBytes(r.CapabilityHash, CapabilityHash[:]) {
-		return errors.New("TaeRead capability mismatch")
+		return moerr.NewInternalErrorNoCtx("TaeRead capability mismatch")
 	}
 	return nil
 }
@@ -77,7 +76,7 @@ func MarshalTaeRead(r *TaeRead) ([]byte, error) {
 
 func UnmarshalTaeRead(b []byte, nowUnixMS uint64) (*TaeRead, error) {
 	if len(b) == 0 || len(b) > 16<<10 {
-		return nil, errors.New("invalid TaeRead size")
+		return nil, moerr.NewInternalErrorNoCtx("invalid TaeRead size")
 	}
 	r := new(TaeRead)
 	var seen uint16
@@ -88,12 +87,12 @@ func UnmarshalTaeRead(b []byte, nowUnixMS uint64) (*TaeRead, error) {
 		}
 		b = b[n:]
 		if num < 1 || num > 11 || seen&(1<<uint(num-1)) != 0 {
-			return nil, errors.New("unknown or duplicate TaeRead field")
+			return nil, moerr.NewInternalErrorNoCtx("unknown or duplicate TaeRead field")
 		}
 		seen |= 1 << uint(num-1)
 		integer := num == 1 || num == 2 || num == 5 || num == 6 || num == 11
 		if integer && typ != protowire.VarintType || !integer && typ != protowire.BytesType {
-			return nil, errors.New("wrong TaeRead wire type")
+			return nil, moerr.NewInternalErrorNoCtx("wrong TaeRead wire type")
 		}
 		if integer {
 			v, m := protowire.ConsumeVarint(b)
@@ -104,7 +103,7 @@ func UnmarshalTaeRead(b []byte, nowUnixMS uint64) (*TaeRead, error) {
 			switch num {
 			case 1:
 				if v > 1<<32-1 {
-					return nil, errors.New("TaeRead version overflow")
+					return nil, moerr.NewInternalErrorNoCtx("TaeRead version overflow")
 				}
 				r.ProtocolVersion = uint32(v)
 			case 2:
@@ -142,7 +141,7 @@ func UnmarshalTaeRead(b []byte, nowUnixMS uint64) (*TaeRead, error) {
 	// feature_bits is the only zero-valued field in v1, and canonical proto3
 	// encoding omits it. Every identity and digest field remains mandatory.
 	if seen != ((1<<11)-1)&^(1<<1) && seen != (1<<11)-1 {
-		return nil, errors.New("missing TaeRead field")
+		return nil, moerr.NewInternalErrorNoCtx("missing TaeRead field")
 	}
 	if err := r.Validate(nowUnixMS); err != nil {
 		return nil, err
@@ -159,14 +158,14 @@ func UnmarshalResolveRequest(b []byte) (ResolveTaeReadRequest, error) {
 		return ResolveTaeReadRequest{}, err
 	}
 	if len(fields[0]) == 0 || len(fields[1]) == 0 || len(fields[1]) > 1<<20 {
-		return ResolveTaeReadRequest{}, errors.New("invalid resolve request")
+		return ResolveTaeReadRequest{}, moerr.NewInternalErrorNoCtx("invalid resolve request")
 	}
 	return ResolveTaeReadRequest{TaeRead: fields[0], RequestedSchema: fields[1]}, nil
 }
 
 func MarshalResolveResponse(r ResolveTaeReadResponse) ([]byte, error) {
 	if len(r.TaeRead) == 0 || len(r.Manifest) == 0 || len(r.CanonicalSchema) == 0 || len(r.Manifest) > 64<<20 || len(r.CanonicalSchema) > 1<<20 {
-		return nil, errors.New("invalid resolve response")
+		return nil, moerr.NewInternalErrorNoCtx("invalid resolve response")
 	}
 	var b []byte
 	b = appendBytes(b, 1, r.TaeRead)
@@ -177,7 +176,7 @@ func MarshalResolveResponse(r ResolveTaeReadResponse) ([]byte, error) {
 
 func consumeStrictBytes(b []byte, count protowire.Number, maximum int) ([][]byte, error) {
 	if len(b) == 0 || len(b) > maximum {
-		return nil, errors.New("invalid protobuf size")
+		return nil, moerr.NewInternalErrorNoCtx("invalid protobuf size")
 	}
 	result := make([][]byte, count)
 	var seen uint64
@@ -188,7 +187,7 @@ func consumeStrictBytes(b []byte, count protowire.Number, maximum int) ([][]byte
 		}
 		b = b[n:]
 		if num < 1 || num > count || typ != protowire.BytesType || seen&(1<<uint(num-1)) != 0 {
-			return nil, errors.New("unknown, duplicate, or mistyped protobuf field")
+			return nil, moerr.NewInternalErrorNoCtx("unknown, duplicate, or mistyped protobuf field")
 		}
 		seen |= 1 << uint(num-1)
 		v, m := protowire.ConsumeBytes(b)
@@ -199,7 +198,7 @@ func consumeStrictBytes(b []byte, count protowire.Number, maximum int) ([][]byte
 		result[num-1] = append([]byte(nil), v...)
 	}
 	if seen != 1<<uint(count)-1 {
-		return nil, fmt.Errorf("missing protobuf field")
+		return nil, moerr.NewInternalErrorNoCtxf("missing protobuf field")
 	}
 	return result, nil
 }

@@ -19,9 +19,9 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -45,11 +45,11 @@ type SnapshotProvider struct {
 func (p *SnapshotProvider) PrepareSnapshotRead(ctx context.Context, read substrait.Read, snapshot []byte) (substrait.SnapshotFacts, error) {
 	var rejected substrait.SnapshotFacts
 	if p == nil || p.MPool == nil || len(snapshot) != types.TxnTsSize {
-		return rejected, fmt.Errorf("invalid TAE snapshot provider")
+		return rejected, moerr.NewInternalErrorNoCtxf("invalid TAE snapshot provider")
 	}
 	rel := p.Relations[read.TableID]
 	if rel == nil {
-		return rejected, fmt.Errorf("TAE relation %d is not open", read.TableID)
+		return rejected, moerr.NewInternalErrorNoCtxf("TAE relation %d is not open", read.TableID)
 	}
 	def := rel.GetTableDef(ctx)
 	if def == nil || def.TblId != read.TableID || def.IsTemporary || (def.TableType != "" && def.TableType != "r") {
@@ -61,7 +61,7 @@ func (p *SnapshotProvider) PrepareSnapshotRead(ctx context.Context, read substra
 		return rejected, err
 	}
 	if !bytes.Equal(currentSchema, read.Schema) {
-		return rejected, fmt.Errorf("table %d schema changed after planning", read.TableID)
+		return rejected, moerr.NewInternalErrorNoCtxf("table %d schema changed after planning", read.TableID)
 	}
 	var ts types.TS
 	if err := ts.Unmarshal(snapshot); err != nil {
@@ -93,7 +93,7 @@ func (p *SnapshotProvider) PrepareSnapshotRead(ctx context.Context, read substra
 		}
 		raw := bat.Vecs[logtailreplay.ObjectListAttr_Stats_Idx].GetBytesAt(i)
 		if len(raw) != objectio.ObjectStatsLen {
-			return rejected, fmt.Errorf("invalid object stats length %d", len(raw))
+			return rejected, moerr.NewInternalErrorNoCtxf("invalid object stats length %d", len(raw))
 		}
 		var s objectio.ObjectStats
 		s.UnMarshal(raw)
@@ -153,7 +153,7 @@ type manifestStats struct {
 
 func buildManifest(def *planpb.TableDef, dataDir string, stats []objectio.ObjectStats) ([]byte, []string, error) {
 	if def == nil {
-		return nil, nil, fmt.Errorf("nil table definition")
+		return nil, nil, moerr.NewInternalErrorNoCtxf("nil table definition")
 	}
 	columns := make([]manifestColumn, 0, len(def.Cols))
 	for _, c := range def.Cols {
@@ -163,7 +163,7 @@ func buildManifest(def *planpb.TableDef, dataDir string, stats []objectio.Object
 		columns = append(columns, manifestColumn{Name: c.Name, OID: int(c.Typ.Id), Width: int(c.Typ.Width), Scale: int(c.Typ.Scale)})
 	}
 	if len(columns) == 0 {
-		return nil, nil, fmt.Errorf("table %d has no manifest columns", def.TblId)
+		return nil, nil, moerr.NewInternalErrorNoCtxf("table %d has no manifest columns", def.TblId)
 	}
 	sort.Slice(stats, func(i, j int) bool { return stats[i].ObjectName().String() < stats[j].ObjectName().String() })
 	objects := make([]manifestObject, 0, len(stats))
@@ -173,7 +173,7 @@ func buildManifest(def *planpb.TableDef, dataDir string, stats []objectio.Object
 	for i := range stats {
 		name := stats[i].ObjectName().String()
 		if name == "" {
-			return nil, nil, fmt.Errorf("empty object name")
+			return nil, nil, moerr.NewInternalErrorNoCtxf("empty object name")
 		}
 		obj := manifestObject{Path: name, Rows: int64(stats[i].Rows()), Blocks: int64(stats[i].BlkCnt()), Size: uint64(stats[i].Size()), OriginSize: uint64(stats[i].OriginSize())}
 		if zm := stats[i].SortKeyZoneMap(); zm.IsInited() {

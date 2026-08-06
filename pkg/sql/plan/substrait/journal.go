@@ -21,7 +21,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"path"
 	"sort"
@@ -56,17 +55,17 @@ type journalEnvelope struct {
 func NewFileServiceLeaseJournal(fs fileservice.FileService, prefix string) (*FileServiceLeaseJournal, error) {
 	prefix = strings.Trim(path.Clean(prefix), "/")
 	if fs == nil || prefix == "" || prefix == "." || strings.HasPrefix(prefix, "..") {
-		return nil, errors.New("substrait: invalid lease journal configuration")
+		return nil, moerr.NewInternalErrorNoCtx("substrait: invalid lease journal configuration")
 	}
 	return &FileServiceLeaseJournal{fs: fs, prefix: prefix}, nil
 }
 
 func (j *FileServiceLeaseJournal) Store(ctx context.Context, lease *Lease) error {
 	if lease == nil || lease.Read == nil || len(lease.Read.ReadRef) != 32 {
-		return errors.New("substrait: invalid lease journal record")
+		return moerr.NewInternalErrorNoCtx("substrait: invalid lease journal record")
 	}
 	if _, err := j.fs.StatFile(ctx, j.releasedPath(lease.Read.ReadRef)); err == nil {
-		return errors.New("substrait: released read reference already exists")
+		return moerr.NewInternalErrorNoCtx("substrait: released read reference already exists")
 	} else if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 		return err
 	}
@@ -81,14 +80,14 @@ func (j *FileServiceLeaseJournal) Store(ctx context.Context, lease *Lease) error
 		return err
 	}
 	if len(b) > maxJournalRecordSize {
-		return errors.New("substrait: lease journal record is too large")
+		return moerr.NewInternalErrorNoCtx("substrait: lease journal record is too large")
 	}
 	return j.writeOnce(ctx, j.activePath(lease.Read.ReadRef), b)
 }
 
 func (j *FileServiceLeaseJournal) MarkReleased(ctx context.Context, readRef []byte) error {
 	if len(readRef) != 32 {
-		return errors.New("substrait: invalid released read reference")
+		return moerr.NewInternalErrorNoCtx("substrait: invalid released read reference")
 	}
 	err := j.writeOnce(ctx, j.releasedPath(readRef), []byte{1})
 	if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
@@ -99,7 +98,7 @@ func (j *FileServiceLeaseJournal) MarkReleased(ctx context.Context, readRef []by
 
 func (j *FileServiceLeaseJournal) Delete(ctx context.Context, readRef []byte) error {
 	if len(readRef) != 32 {
-		return errors.New("substrait: invalid deleted read reference")
+		return moerr.NewInternalErrorNoCtx("substrait: invalid deleted read reference")
 	}
 	for _, name := range []string{j.activePath(readRef), j.releasedPath(readRef)} {
 		if err := j.fs.Delete(ctx, name); err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
@@ -121,7 +120,7 @@ func (j *FileServiceLeaseJournal) Load(ctx context.Context) ([]*Lease, error) {
 			continue
 		}
 		if entry.Size <= 0 || entry.Size > maxJournalRecordSize {
-			return nil, fmt.Errorf("substrait: invalid lease journal record %q", entry.Name)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: invalid lease journal record %q", entry.Name)
 		}
 		names = append(names, entry.Name)
 		active[strings.TrimSuffix(entry.Name, ".json")] = struct{}{}
@@ -132,7 +131,7 @@ func (j *FileServiceLeaseJournal) Load(ctx context.Context) ([]*Lease, error) {
 		encoded := strings.TrimSuffix(name, ".json")
 		readRef, err := hex.DecodeString(encoded)
 		if err != nil || len(readRef) != 32 {
-			return nil, fmt.Errorf("substrait: invalid lease journal name %q", name)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: invalid lease journal name %q", name)
 		}
 		b, err := j.read(ctx, path.Join(dir, name))
 		if err != nil {
@@ -142,10 +141,10 @@ func (j *FileServiceLeaseJournal) Load(ctx context.Context) ([]*Lease, error) {
 		decoder := json.NewDecoder(bytes.NewReader(b))
 		decoder.DisallowUnknownFields()
 		if err = decoder.Decode(&envelope); err != nil {
-			return nil, fmt.Errorf("substrait: decode lease journal record %q: %w", name, err)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: decode lease journal record %q: %v", name, err)
 		}
 		if err = ensureJSONEOF(decoder); err != nil {
-			return nil, fmt.Errorf("substrait: decode lease journal record %q: %w", name, err)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: decode lease journal record %q: %v", name, err)
 		}
 		recordBytes, err := json.Marshal(envelope.Record)
 		if err != nil {
@@ -153,12 +152,12 @@ func (j *FileServiceLeaseJournal) Load(ctx context.Context) ([]*Lease, error) {
 		}
 		digest := sha256.Sum256(recordBytes)
 		if !equalBytes(digest[:], envelope.SHA256) {
-			return nil, fmt.Errorf("substrait: lease journal checksum mismatch %q", name)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: lease journal checksum mismatch %q", name)
 		}
 		record := envelope.Record
 		tr, err := UnmarshalTaeRead(record.Wire, 0)
 		if err != nil || !equalBytes(tr.ReadRef, readRef) {
-			return nil, fmt.Errorf("substrait: lease journal identity mismatch %q", name)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: lease journal identity mismatch %q", name)
 		}
 		_, statErr := j.fs.StatFile(ctx, j.releasedPath(readRef))
 		released := statErr == nil
@@ -194,7 +193,7 @@ func (j *FileServiceLeaseJournal) read(ctx context.Context, name string) ([]byte
 	}
 	defer vector.Release()
 	if len(vector.Entries) != 1 || len(vector.Entries[0].Data) == 0 || len(vector.Entries[0].Data) > maxJournalRecordSize {
-		return nil, errors.New("substrait: invalid lease journal record size")
+		return nil, moerr.NewInternalErrorNoCtx("substrait: invalid lease journal record size")
 	}
 	return append([]byte(nil), vector.Entries[0].Data...), nil
 }
@@ -211,7 +210,7 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return errors.New("multiple JSON values")
+			return moerr.NewInternalErrorNoCtx("multiple JSON values")
 		}
 		return err
 	}

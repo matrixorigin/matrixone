@@ -19,9 +19,9 @@ package substrait
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -56,7 +56,7 @@ func (c *Candidate) Reads() []Read { return append([]Read(nil), c.reads...) }
 // Export validates q without performing I/O.
 func Export(q *planpb.Query) (*Candidate, error) {
 	if q == nil || q.StmtType != planpb.Query_SELECT || len(q.Steps) != 1 || len(q.BackgroundQueries) != 0 {
-		return nil, fmt.Errorf("substrait: exactly one query root is required")
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: exactly one query root is required")
 	}
 	c := &Candidate{query: q}
 	e := exporter{query: q, readValues: make(map[int32][]byte), validateOnly: true}
@@ -70,7 +70,7 @@ func Export(q *planpb.Query) (*Candidate, error) {
 // Build binds admitted TaeRead messages to every scan and serializes the plan.
 func (c *Candidate) Build(readValues map[int32][]byte) ([]byte, error) {
 	if c == nil {
-		return nil, fmt.Errorf("substrait: nil candidate")
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: nil candidate")
 	}
 	e := exporter{query: c.query, readValues: readValues}
 	root, err := e.node(c.query.Steps[0])
@@ -85,10 +85,10 @@ func (c *Candidate) Build(readValues map[int32][]byte) ([]byte, error) {
 	}
 	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(p)
 	if err != nil {
-		return nil, fmt.Errorf("substrait: marshal plan: %w", err)
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: marshal plan: %v", err)
 	}
 	if len(b) > MaxPlanBytes {
-		return nil, fmt.Errorf("substrait: plan is %d bytes, maximum is %d", len(b), MaxPlanBytes)
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: plan is %d bytes, maximum is %d", len(b), MaxPlanBytes)
 	}
 	return b, nil
 }
@@ -104,19 +104,19 @@ type exporter struct {
 
 func (e *exporter) node(id int32) (*spb.Rel, error) {
 	if id < 0 || int(id) >= len(e.query.Nodes) {
-		return nil, fmt.Errorf("substrait: invalid node id %d", id)
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: invalid node id %d", id)
 	}
 	if e.visiting == nil {
 		e.visiting = make(map[int32]bool)
 	}
 	if e.visiting[id] {
-		return nil, fmt.Errorf("substrait: cyclic plan at node %d", id)
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: cyclic plan at node %d", id)
 	}
 	e.visiting[id] = true
 	defer delete(e.visiting, id)
 	n := e.query.Nodes[id]
 	if n == nil || n.NodeId != id {
-		return nil, fmt.Errorf("substrait: node %d is missing or misindexed", id)
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d is missing or misindexed", id)
 	}
 	var rel *spb.Rel
 	var err error
@@ -169,7 +169,7 @@ func (e *exporter) node(id int32) (*spb.Rel, error) {
 	case planpb.Node_SORT:
 		rel, err = e.sort(n)
 	default:
-		return nil, fmt.Errorf("substrait: node %d uses unsupported operator %s", id, n.NodeType.String())
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d uses unsupported operator %s", id, n.NodeType.String())
 	}
 	if err != nil {
 		return nil, err
@@ -179,7 +179,7 @@ func (e *exporter) node(id int32) (*spb.Rel, error) {
 
 func (e *exporter) nodeWidth(id int32) (int, error) {
 	if id < 0 || int(id) >= len(e.query.Nodes) || e.query.Nodes[id] == nil {
-		return 0, fmt.Errorf("substrait: invalid node id %d", id)
+		return 0, moerr.NewInternalErrorNoCtxf("substrait: invalid node id %d", id)
 	}
 	n := e.query.Nodes[id]
 	switch n.NodeType {
@@ -189,7 +189,7 @@ func (e *exporter) nodeWidth(id int32) (int, error) {
 		}
 		count := 0
 		if n.TableDef == nil {
-			return 0, fmt.Errorf("substrait: scan has no table")
+			return 0, moerr.NewInternalErrorNoCtxf("substrait: scan has no table")
 		}
 		for _, c := range n.TableDef.Cols {
 			if c != nil && !c.Hidden {
@@ -203,24 +203,24 @@ func (e *exporter) nodeWidth(id int32) (int, error) {
 		return len(n.GroupBy) + len(n.AggList), nil
 	case planpb.Node_FILTER, planpb.Node_SORT:
 		if len(n.Children) != 1 {
-			return 0, fmt.Errorf("substrait: node %d requires one child", id)
+			return 0, moerr.NewInternalErrorNoCtxf("substrait: node %d requires one child", id)
 		}
 		return e.nodeWidth(n.Children[0])
 	default:
-		return 0, fmt.Errorf("substrait: unsupported width for %s", n.NodeType.String())
+		return 0, moerr.NewInternalErrorNoCtxf("substrait: unsupported width for %s", n.NodeType.String())
 	}
 }
 
 func (e *exporter) unary(n *planpb.Node) (*spb.Rel, error) {
 	if len(n.Children) != 1 {
-		return nil, fmt.Errorf("substrait: %s node %d requires one child", n.NodeType.String(), n.NodeId)
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: %s node %d requires one child", n.NodeType.String(), n.NodeId)
 	}
 	return e.node(n.Children[0])
 }
 
 func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 	if len(n.Children) != 0 || n.TableDef == nil || n.ObjRef == nil || n.TableDef.TblId == 0 || uint64(n.ObjRef.Obj) != n.TableDef.TblId || n.TableDef.IsTemporary || n.ScanSnapshot != nil || n.ObjRef.Snapshot != nil || n.ObjRef.PubInfo != nil || (n.TableDef.TableType != "" && n.TableDef.TableType != "r") {
-		return nil, fmt.Errorf("substrait: node %d is not a persistent TAE table scan", n.NodeId)
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d is not a persistent TAE table scan", n.NodeId)
 	}
 	schema, err := namedStruct(n.TableDef)
 	if err != nil {
@@ -233,7 +233,7 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 	e.reads = append(e.reads, Read{NodeID: n.NodeId, TableID: n.TableDef.TblId, Schema: schemaBytes})
 	value := e.readValues[n.NodeId]
 	if !e.validateOnly && len(value) == 0 {
-		return nil, fmt.Errorf("substrait: node %d has no admitted TaeRead", n.NodeId)
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d has no admitted TaeRead", n.NodeId)
 	}
 	rel := &spb.Rel{RelType: &spb.Rel_Read{Read: &spb.ReadRel{
 		BaseSchema: schema,
@@ -271,7 +271,7 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 func (e *exporter) aggregate(n *planpb.Node) (*spb.Rel, error) {
 	for _, flag := range n.GroupingFlag {
 		if flag {
-			return nil, fmt.Errorf("substrait: grouping sets are unsupported")
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: grouping sets are unsupported")
 		}
 	}
 	input, err := e.unary(n)
@@ -298,17 +298,17 @@ func (e *exporter) aggregate(n *planpb.Node) (*spb.Rel, error) {
 	for i, x := range n.AggList {
 		f := x.GetF()
 		if f == nil || f.Func == nil {
-			return nil, fmt.Errorf("substrait: aggregate %d is not a function", i)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: aggregate %d is not a function", i)
 		}
 		if uint64(f.Func.Obj)&function.Distinct != 0 || len(f.AggConfig) != 0 {
-			return nil, fmt.Errorf("substrait: unsupported aggregate form %q", f.Func.ObjName)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported aggregate form %q", f.Func.ObjName)
 		}
 		name, ok := aggregateIdentity(f.Func)
 		if !ok {
-			return nil, fmt.Errorf("substrait: unsupported aggregate %q", f.Func.ObjName)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported aggregate %q", f.Func.ObjName)
 		}
 		if len(f.Args) != 1 {
-			return nil, fmt.Errorf("substrait: unsupported aggregate form %q", f.Func.ObjName)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported aggregate form %q", f.Func.ObjName)
 		}
 		if err := validateMOOverload(f.Func, f.Args, &x.Typ); err != nil {
 			return nil, err
@@ -345,7 +345,7 @@ func (e *exporter) sort(n *planpb.Node) (*spb.Rel, error) {
 	sorts := make([]*spb.SortField, len(n.OrderBy))
 	for i, order := range n.OrderBy {
 		if order == nil || order.Collation != "" || int32(order.Flag)&int32(planpb.OrderBySpec_UNIQUE) != 0 {
-			return nil, fmt.Errorf("substrait: unsupported sort at %d", i)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported sort at %d", i)
 		}
 		if err := validateExprFields([]*planpb.Expr{order.Expr}, inputWidth); err != nil {
 			return nil, err
@@ -359,7 +359,7 @@ func (e *exporter) sort(n *planpb.Node) (*spb.Rel, error) {
 		nullBits := flag & (int32(planpb.OrderBySpec_NULLS_FIRST) | int32(planpb.OrderBySpec_NULLS_LAST))
 		known := directionBits | nullBits
 		if directionBits != int32(planpb.OrderBySpec_ASC) && directionBits != int32(planpb.OrderBySpec_DESC) || nullBits == int32(planpb.OrderBySpec_NULLS_FIRST)|int32(planpb.OrderBySpec_NULLS_LAST) || flag != known {
-			return nil, fmt.Errorf("substrait: unsupported sort flags %d", flag)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported sort flags %d", flag)
 		}
 		desc := flag&int32(planpb.OrderBySpec_DESC) != 0
 		nullsFirst := flag&int32(planpb.OrderBySpec_NULLS_FIRST) != 0
@@ -387,22 +387,22 @@ func (e *exporter) fetch(input *spb.Rel, n *planpb.Node) (*spb.Rel, error) {
 	}
 	count, err := nonnegativeIntLiteral(n.Limit, -1)
 	if err != nil {
-		return nil, fmt.Errorf("substrait: limit: %w", err)
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: limit: %v", err)
 	}
 	offset, err := nonnegativeIntLiteral(n.Offset, 0)
 	if err != nil {
-		return nil, fmt.Errorf("substrait: offset: %w", err)
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: offset: %v", err)
 	}
 	return &spb.Rel{RelType: &spb.Rel_Fetch{Fetch: &spb.FetchRel{Input: input, OffsetMode: &spb.FetchRel_Offset{Offset: offset}, CountMode: &spb.FetchRel_Count{Count: count}}}}, nil
 }
 
 func (e *exporter) conjunction(xs []*planpb.Expr) (*spb.Expression, error) {
 	if len(xs) == 0 {
-		return nil, fmt.Errorf("substrait: empty filter")
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: empty filter")
 	}
 	for _, predicate := range xs {
 		if predicate == nil || types.T(predicate.Typ.Id) != types.T_bool {
-			return nil, fmt.Errorf("substrait: filter predicate is not boolean")
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: filter predicate is not boolean")
 		}
 	}
 	x, err := e.expr(xs[0])
@@ -421,7 +421,7 @@ func (e *exporter) conjunction(xs []*planpb.Expr) (*spb.Expression, error) {
 
 func (e *exporter) expr(x *planpb.Expr) (*spb.Expression, error) {
 	if x == nil {
-		return nil, fmt.Errorf("substrait: nil expression")
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: nil expression")
 	}
 	if _, err := substraitType(&x.Typ); err != nil {
 		return nil, err
@@ -432,21 +432,21 @@ func (e *exporter) expr(x *planpb.Expr) (*spb.Expression, error) {
 		// is the unambiguous ordinal in the single input regardless of MO's
 		// binding-tag value in rel_pos.
 		if v.Col == nil || v.Col.ColPos < 0 {
-			return nil, fmt.Errorf("substrait: invalid column reference")
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: invalid column reference")
 		}
 		return field(v.Col.ColPos), nil
 	case *planpb.Expr_Lit:
 		return literal(v.Lit, &x.Typ)
 	case *planpb.Expr_F:
 		if v.F == nil || v.F.Func == nil {
-			return nil, fmt.Errorf("substrait: malformed function")
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: malformed function")
 		}
 		name, ok := scalarIdentity(v.F.Func)
 		if !ok {
-			return nil, fmt.Errorf("substrait: unsupported scalar function %q", v.F.Func.ObjName)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported scalar function %q", v.F.Func.ObjName)
 		}
 		if want := scalarArity(name); len(v.F.Args) != want {
-			return nil, fmt.Errorf("substrait: %s requires %d arguments", name, want)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: %s requires %d arguments", name, want)
 		}
 		if err := validateMOOverload(v.F.Func, v.F.Args, &x.Typ); err != nil {
 			return nil, err
@@ -467,7 +467,7 @@ func (e *exporter) expr(x *planpb.Expr) (*spb.Expression, error) {
 		}
 		return e.scalar(name, &x.Typ, args...), nil
 	default:
-		return nil, fmt.Errorf("substrait: unsupported expression %T", x.Expr)
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported expression %T", x.Expr)
 	}
 }
 
@@ -510,24 +510,24 @@ func namedStruct(t *planpb.TableDef) (*spb.NamedStruct, error) {
 	hidden := false
 	for _, c := range t.Cols {
 		if c == nil {
-			return nil, fmt.Errorf("substrait: table %q has a nil column", t.Name)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: table %q has a nil column", t.Name)
 		}
 		if c.Hidden {
 			hidden = true
 			continue
 		}
 		if hidden {
-			return nil, fmt.Errorf("substrait: table %q has non-suffix hidden columns", t.Name)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: table %q has non-suffix hidden columns", t.Name)
 		}
 		typ, err := substraitType(&c.Typ)
 		if err != nil {
-			return nil, fmt.Errorf("substrait: column %q: %w", c.Name, err)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: column %q: %v", c.Name, err)
 		}
 		names = append(names, c.Name)
 		fields = append(fields, typ)
 	}
 	if len(fields) == 0 {
-		return nil, fmt.Errorf("substrait: table %q has no exportable columns", t.Name)
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: table %q has no exportable columns", t.Name)
 	}
 	return &spb.NamedStruct{Names: names, Struct: &spb.Type_Struct{Types: fields, Nullability: spb.Type_NULLABILITY_REQUIRED}}, nil
 }
@@ -535,23 +535,23 @@ func namedStruct(t *planpb.TableDef) (*spb.NamedStruct, error) {
 func validateExprFields(exprs []*planpb.Expr, width int) error {
 	for _, expr := range exprs {
 		if expr == nil {
-			return fmt.Errorf("substrait: nil expression")
+			return moerr.NewInternalErrorNoCtxf("substrait: nil expression")
 		}
 		switch value := expr.Expr.(type) {
 		case *planpb.Expr_Col:
 			if value.Col == nil || value.Col.ColPos < 0 || int(value.Col.ColPos) >= width {
-				return fmt.Errorf("substrait: column ordinal is outside input width %d", width)
+				return moerr.NewInternalErrorNoCtxf("substrait: column ordinal is outside input width %d", width)
 			}
 		case *planpb.Expr_F:
 			if value.F == nil {
-				return fmt.Errorf("substrait: malformed function")
+				return moerr.NewInternalErrorNoCtxf("substrait: malformed function")
 			}
 			if err := validateExprFields(value.F.Args, width); err != nil {
 				return err
 			}
 		case *planpb.Expr_Lit:
 		default:
-			return fmt.Errorf("substrait: unsupported expression %T", expr.Expr)
+			return moerr.NewInternalErrorNoCtxf("substrait: unsupported expression %T", expr.Expr)
 		}
 	}
 	return nil
@@ -566,14 +566,14 @@ func CanonicalSchema(t *planpb.TableDef) ([]byte, error) {
 	}
 	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(schema)
 	if err != nil {
-		return nil, fmt.Errorf("substrait: marshal schema: %w", err)
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: marshal schema: %v", err)
 	}
 	return b, nil
 }
 
 func substraitType(t *planpb.Type) (*spb.Type, error) {
 	if t == nil {
-		return nil, fmt.Errorf("missing type")
+		return nil, moerr.NewInternalErrorNoCtxf("missing type")
 	}
 	n := spb.Type_NULLABILITY_NULLABLE
 	if t.NotNullable {
@@ -598,7 +598,7 @@ func substraitType(t *planpb.Type) (*spb.Type, error) {
 		return &spb.Type{Kind: &spb.Type_String_{String_: &spb.Type_String{Nullability: n}}}, nil
 	case types.T_varchar:
 		if t.Width < 0 {
-			return nil, fmt.Errorf("unsupported negative varchar width")
+			return nil, moerr.NewInternalErrorNoCtxf("unsupported negative varchar width")
 		}
 		return &spb.Type{Kind: &spb.Type_Varchar{Varchar: &spb.Type_VarChar{Length: t.Width, Nullability: n}}}, nil
 	case types.T_date:
@@ -606,7 +606,7 @@ func substraitType(t *planpb.Type) (*spb.Type, error) {
 	case types.T_timestamp:
 		return &spb.Type{Kind: &spb.Type_PrecisionTimestamp_{PrecisionTimestamp: &spb.Type_PrecisionTimestamp{Precision: 6, Nullability: n}}}, nil
 	default:
-		return nil, fmt.Errorf("unsupported type %s", types.T(t.Id).String())
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported type %s", types.T(t.Id).String())
 	}
 }
 
@@ -616,7 +616,7 @@ func field(pos int32) *spb.Expression {
 
 func literal(l *planpb.Literal, typ *planpb.Type) (*spb.Expression, error) {
 	if l == nil {
-		return nil, fmt.Errorf("substrait: nil literal")
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: nil literal")
 	}
 	wrap := func(lit *spb.Expression_Literal) *spb.Expression {
 		return &spb.Expression{RexType: &spb.Expression_Literal_{Literal: lit}}
@@ -630,7 +630,7 @@ func literal(l *planpb.Literal, typ *planpb.Type) (*spb.Expression, error) {
 	}
 	oid := types.T(typ.Id)
 	mismatch := func() (*spb.Expression, error) {
-		return nil, fmt.Errorf("substrait: literal value does not match declared type %s", oid.String())
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: literal value does not match declared type %s", oid.String())
 	}
 	switch v := l.Value.(type) {
 	case *planpb.Literal_Bval:
@@ -687,7 +687,7 @@ func literal(l *planpb.Literal, typ *planpb.Type) (*spb.Expression, error) {
 		}
 		return wrap(&spb.Expression_Literal{LiteralType: &spb.Expression_Literal_PrecisionTimestamp_{PrecisionTimestamp: &spb.Expression_Literal_PrecisionTimestamp{Precision: 6, Value: v.Timestampval}}}), nil
 	default:
-		return nil, fmt.Errorf("substrait: unsupported literal %T", l.Value)
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported literal %T", l.Value)
 	}
 }
 
@@ -770,24 +770,24 @@ func validateScalarSignature(name string, out *planpb.Type, args []*planpb.Expr)
 	switch name {
 	case "and", "or", "not":
 		if !isBool(out) {
-			return fmt.Errorf("substrait: %s has non-boolean result", name)
+			return moerr.NewInternalErrorNoCtxf("substrait: %s has non-boolean result", name)
 		}
 		for _, a := range args {
 			if a == nil || !isBool(&a.Typ) {
-				return fmt.Errorf("substrait: %s has non-boolean argument", name)
+				return moerr.NewInternalErrorNoCtxf("substrait: %s has non-boolean argument", name)
 			}
 		}
 	case "equal", "not_equal", "lt", "lte", "gt", "gte", "is_not_distinct_from", "between":
 		if !isBool(out) || !same() {
-			return fmt.Errorf("substrait: unsupported %s signature", name)
+			return moerr.NewInternalErrorNoCtxf("substrait: unsupported %s signature", name)
 		}
 	case "is_null", "is_not_null":
 		if !isBool(out) {
-			return fmt.Errorf("substrait: unsupported %s signature", name)
+			return moerr.NewInternalErrorNoCtxf("substrait: unsupported %s signature", name)
 		}
 	case "add", "subtract", "multiply", "divide", "modulus":
 		if !numeric(out) || !same() || args[0].Typ.Id != out.Id {
-			return fmt.Errorf("substrait: unsupported %s signature", name)
+			return moerr.NewInternalErrorNoCtxf("substrait: unsupported %s signature", name)
 		}
 	}
 	return nil
@@ -797,18 +797,18 @@ func validateMOOverload(ref *planpb.ObjectRef, args []*planpb.Expr, out *planpb.
 	inputs := make([]types.Type, len(args))
 	for i, a := range args {
 		if a == nil {
-			return fmt.Errorf("substrait: nil function argument")
+			return moerr.NewInternalErrorNoCtxf("substrait: nil function argument")
 		}
 		inputs[i] = types.Type{Oid: types.T(a.Typ.Id), Width: a.Typ.Width, Scale: a.Typ.Scale}
 	}
 	resolved, err := function.GetFunctionByName(context.Background(), ref.ObjName, inputs)
 	if err != nil {
-		return fmt.Errorf("substrait: resolve MO overload %q: %w", ref.ObjName, err)
+		return moerr.NewInternalErrorNoCtxf("substrait: resolve MO overload %q: %v", ref.ObjName, err)
 	}
 	_, cast := resolved.ShouldDoImplicitTypeCast()
 	ret := resolved.GetReturnType()
 	if cast || resolved.GetEncodedOverloadID() != ref.Obj || out == nil || ret.Oid != types.T(out.Id) || ret.Width != out.Width || ret.Scale != out.Scale {
-		return fmt.Errorf("substrait: MO overload identity or result type mismatch for %q", ref.ObjName)
+		return moerr.NewInternalErrorNoCtxf("substrait: MO overload identity or result type mismatch for %q", ref.ObjName)
 	}
 	return nil
 }
@@ -819,7 +819,7 @@ func nonnegativeIntLiteral(x *planpb.Expr, absent int64) (int64, error) {
 	}
 	l := x.GetLit()
 	if l == nil || l.Isnull {
-		return 0, fmt.Errorf("must be a constant integer")
+		return 0, moerr.NewInternalErrorNoCtxf("must be a constant integer")
 	}
 	var v int64
 	switch n := l.Value.(type) {
@@ -832,10 +832,10 @@ func nonnegativeIntLiteral(x *planpb.Expr, absent int64) (int64, error) {
 	case *planpb.Literal_I64Val:
 		v = n.I64Val
 	default:
-		return 0, fmt.Errorf("must be a signed integer")
+		return 0, moerr.NewInternalErrorNoCtxf("must be a signed integer")
 	}
 	if v < 0 {
-		return 0, fmt.Errorf("must be non-negative")
+		return 0, moerr.NewInternalErrorNoCtxf("must be non-negative")
 	}
 	return v, nil
 }

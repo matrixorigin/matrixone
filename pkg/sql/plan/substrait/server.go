@@ -22,6 +22,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // ResolverServer is an opt-in CN lifecycle component. A disabled deployment
@@ -36,10 +38,10 @@ type ResolverServer struct {
 
 func NewResolverServer(address string, tlsConfig *tls.Config, leases *LeaseManager) (*ResolverServer, error) {
 	if address == "" || leases == nil || !leases.Ready() || !leases.Protected() {
-		return nil, errors.New("substrait: resolver requires an address and a replayed lease manager")
+		return nil, moerr.NewInternalErrorNoCtx("substrait: resolver requires an address and a replayed lease manager")
 	}
 	if tlsConfig == nil || tlsConfig.ClientAuth != tls.RequireAndVerifyClientCert || tlsConfig.ClientCAs == nil || len(tlsConfig.Certificates) == 0 {
-		return nil, errors.New("substrait: resolver requires a server certificate and verified client CA")
+		return nil, moerr.NewInternalErrorNoCtx("substrait: resolver requires a server certificate and verified client CA")
 	}
 	config := tlsConfig.Clone()
 	if config.MinVersion < tls.VersionTLS12 {
@@ -52,7 +54,7 @@ func (s *ResolverServer) Start() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.listener != nil || s.closed {
-		return errors.New("substrait: resolver already started or closed")
+		return moerr.NewInternalErrorNoCtx("substrait: resolver already started or closed")
 	}
 	ln, err := net.Listen("tcp", s.server.Addr)
 	if err != nil {

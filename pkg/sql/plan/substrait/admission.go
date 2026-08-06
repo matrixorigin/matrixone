@@ -18,13 +18,13 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"errors"
-	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const ResolvePath = "/internal/v1/sidecar/read/resolve"
@@ -93,16 +93,16 @@ func NewPersistentLeaseManager(maximum int, protector Protector, journal LeaseJo
 
 func (m *LeaseManager) Acquire(ctx context.Context, leases []*Lease) error {
 	if len(leases) == 0 {
-		return errors.New("substrait: empty lease acquisition")
+		return moerr.NewInternalErrorNoCtx("substrait: empty lease acquisition")
 	}
 	m.mu.Lock()
 	if !m.ready {
 		m.mu.Unlock()
-		return errors.New("substrait: durable read leases have not been replayed")
+		return moerr.NewInternalErrorNoCtx("substrait: durable read leases have not been replayed")
 	}
 	if m.protector == nil {
 		m.mu.Unlock()
-		return errors.New("substrait: read lease GC protection is not configured")
+		return moerr.NewInternalErrorNoCtx("substrait: read lease GC protection is not configured")
 	}
 	if err := m.pruneExpiredLocked(ctx); err != nil {
 		m.mu.Unlock()
@@ -110,7 +110,7 @@ func (m *LeaseManager) Acquire(ctx context.Context, leases []*Lease) error {
 	}
 	if len(m.leases)+len(leases) > m.maximum {
 		m.mu.Unlock()
-		return errors.New("substrait: read lease capacity reached")
+		return moerr.NewInternalErrorNoCtx("substrait: read lease capacity reached")
 	}
 	seen := make(map[string]struct{}, len(leases))
 	now := uint64(m.now().UnixMilli())
@@ -122,7 +122,7 @@ func (m *LeaseManager) Acquire(ctx context.Context, leases []*Lease) error {
 		_, duplicate := seen[key]
 		if validateLease(l, now, false) != nil || m.leases[key] != nil || duplicate {
 			m.mu.Unlock()
-			return errors.New("substrait: invalid or duplicate read lease")
+			return moerr.NewInternalErrorNoCtx("substrait: invalid or duplicate read lease")
 		}
 		seen[key] = struct{}{}
 	}
@@ -134,7 +134,7 @@ func (m *LeaseManager) Acquire(ctx context.Context, leases []*Lease) error {
 					_ = m.journal.Delete(ctx, stored[i].Read.ReadRef)
 				}
 				m.mu.Unlock()
-				return fmt.Errorf("substrait: persist read lease: %w", err)
+				return moerr.NewInternalErrorNoCtxf("substrait: persist read lease: %v", err)
 			}
 		}
 		stored = append(stored, l)
@@ -153,7 +153,7 @@ func (m *LeaseManager) Acquire(ctx context.Context, leases []*Lease) error {
 					}
 				}
 				m.mu.Unlock()
-				return fmt.Errorf("substrait: protect read lease: %w", err)
+				return moerr.NewInternalErrorNoCtxf("substrait: protect read lease: %v", err)
 			}
 		}
 		registered = append(registered, l)
@@ -184,7 +184,7 @@ func (m *LeaseManager) Release(ctx context.Context, readRef []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.ready {
-		return errors.New("substrait: durable read leases have not been replayed")
+		return moerr.NewInternalErrorNoCtx("substrait: durable read leases have not been replayed")
 	}
 	l := m.leases[string(readRef)]
 	if l == nil {
@@ -193,7 +193,7 @@ func (m *LeaseManager) Release(ctx context.Context, readRef []byte) error {
 	if !l.Released {
 		if m.journal != nil {
 			if err := m.journal.MarkReleased(ctx, readRef); err != nil {
-				return fmt.Errorf("substrait: persist read lease release: %w", err)
+				return moerr.NewInternalErrorNoCtxf("substrait: persist read lease release: %v", err)
 			}
 		}
 		l.Released = true
@@ -205,7 +205,7 @@ func (m *LeaseManager) Release(ctx context.Context, readRef []byte) error {
 	}
 	if m.journal != nil {
 		if err := m.journal.Delete(ctx, readRef); err != nil {
-			return fmt.Errorf("substrait: delete released read lease: %w", err)
+			return moerr.NewInternalErrorNoCtxf("substrait: delete released read lease: %v", err)
 		}
 	}
 	delete(m.leases, string(readRef))
@@ -217,7 +217,7 @@ func (m *LeaseManager) pruneExpiredLocked(ctx context.Context) error {
 	for _, l := range m.leases {
 		if l.Read.ExpiresAtUnixMS <= now {
 			if err := m.releaseLocked(ctx, l); err != nil {
-				return fmt.Errorf("substrait: prune expired read lease: %w", err)
+				return moerr.NewInternalErrorNoCtxf("substrait: prune expired read lease: %v", err)
 			}
 		}
 	}
@@ -256,30 +256,30 @@ func (m *LeaseManager) Replay(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.ready || len(m.leases) != 0 {
-		return errors.New("substrait: cannot replay into a live lease manager")
+		return moerr.NewInternalErrorNoCtx("substrait: cannot replay into a live lease manager")
 	}
 	loaded, err := m.journal.Load(ctx)
 	if err != nil {
-		return fmt.Errorf("substrait: load read leases: %w", err)
+		return moerr.NewInternalErrorNoCtxf("substrait: load read leases: %v", err)
 	}
 	if len(loaded) > m.maximum {
-		return errors.New("substrait: durable read leases exceed capacity")
+		return moerr.NewInternalErrorNoCtx("substrait: durable read leases exceed capacity")
 	}
 	now := uint64(m.now().UnixMilli())
 	registered := make([]*Lease, 0, len(loaded))
 	for _, l := range loaded {
 		if err := validateLease(l, now, true); err != nil {
-			return fmt.Errorf("substrait: invalid durable read lease: %w", err)
+			return moerr.NewInternalErrorNoCtxf("substrait: invalid durable read lease: %v", err)
 		}
 		if l.Released || l.Read.ExpiresAtUnixMS <= now {
 			if err := m.releaseLocked(ctx, l); err != nil {
-				return fmt.Errorf("substrait: clean durable read lease: %w", err)
+				return moerr.NewInternalErrorNoCtxf("substrait: clean durable read lease: %v", err)
 			}
 			continue
 		}
 		if m.protector != nil {
 			if err := m.protector.Register(ctx, l.Read.ReadRef, l.ObjectNames, time.UnixMilli(int64(l.Read.ExpiresAtUnixMS))); err != nil {
-				return fmt.Errorf("substrait: replay read lease protection: %w", err)
+				return moerr.NewInternalErrorNoCtxf("substrait: replay read lease protection: %v", err)
 			}
 		}
 		registered = append(registered, l)
@@ -307,7 +307,7 @@ func (m *LeaseManager) Protected() bool {
 
 func validateLease(l *Lease, now uint64, allowReleased bool) error {
 	if l == nil || l.Read == nil || (!allowReleased && l.Released) {
-		return errors.New("missing or released lease")
+		return moerr.NewInternalErrorNoCtx("missing or released lease")
 	}
 	validationNow := now
 	if allowReleased {
@@ -317,28 +317,28 @@ func validateLease(l *Lease, now uint64, allowReleased bool) error {
 		return err
 	}
 	if len(l.Wire) == 0 || len(l.Manifest) == 0 || len(l.Manifest) > 64<<20 || len(l.CanonicalSchema) == 0 || len(l.CanonicalSchema) > 1<<20 {
-		return errors.New("invalid lease payload size")
+		return moerr.NewInternalErrorNoCtx("invalid lease payload size")
 	}
 	decoded, err := UnmarshalTaeRead(l.Wire, validationNow)
 	if err != nil || !equalBytes(decoded.ReadRef, l.Read.ReadRef) {
-		return errors.New("lease wire identity mismatch")
+		return moerr.NewInternalErrorNoCtx("lease wire identity mismatch")
 	}
 	canonical, err := MarshalTaeRead(l.Read)
 	if err != nil || !equalBytes(canonical, l.Wire) {
-		return errors.New("non-canonical lease wire")
+		return moerr.NewInternalErrorNoCtx("non-canonical lease wire")
 	}
 	schemaHash := sha256.Sum256(l.CanonicalSchema)
 	manifestHash := sha256.Sum256(l.Manifest)
 	if !equalBytes(schemaHash[:], l.Read.SchemaDigest) || !equalBytes(manifestHash[:], l.Read.ManifestSHA256) {
-		return errors.New("lease payload digest mismatch")
+		return moerr.NewInternalErrorNoCtx("lease payload digest mismatch")
 	}
 	seen := make(map[string]struct{}, len(l.ObjectNames))
 	for _, name := range l.ObjectNames {
 		if name == "" {
-			return errors.New("empty protected object name")
+			return moerr.NewInternalErrorNoCtx("empty protected object name")
 		}
 		if _, ok := seen[name]; ok {
-			return errors.New("duplicate protected object name")
+			return moerr.NewInternalErrorNoCtx("duplicate protected object name")
 		}
 		seen[name] = struct{}{}
 	}
@@ -391,13 +391,13 @@ type AdmissionRequest struct {
 // logical plan. It publishes all table leases atomically or none of them.
 func Admit(ctx context.Context, r AdmissionRequest) (map[int32][]byte, error) {
 	if r.Candidate == nil || r.Provider == nil || r.Leases == nil || !r.ReadOnly || r.PriorWrites {
-		return nil, errors.New("substrait: transaction is not an admissible read-only snapshot")
+		return nil, moerr.NewInternalErrorNoCtx("substrait: transaction is not an admissible read-only snapshot")
 	}
 	if r.AccountID == 0 || len(r.QueryID) == 0 || len(r.SnapshotTS) != 12 {
-		return nil, errors.New("substrait: invalid admission identity")
+		return nil, moerr.NewInternalErrorNoCtx("substrait: invalid admission identity")
 	}
 	if r.TTL <= 0 || r.TTL > MaxLeaseTTL {
-		return nil, errors.New("substrait: lease TTL is outside the supported bound")
+		return nil, moerr.NewInternalErrorNoCtx("substrait: lease TTL is outside the supported bound")
 	}
 	if r.Random == nil {
 		r.Random = rand.Reader
@@ -407,7 +407,7 @@ func Admit(ctx context.Context, r AdmissionRequest) (map[int32][]byte, error) {
 	}
 	expires := r.Now.Add(r.TTL).UnixMilli()
 	if expires <= r.Now.UnixMilli() || expires <= 0 {
-		return nil, errors.New("substrait: invalid lease expiry")
+		return nil, moerr.NewInternalErrorNoCtx("substrait: invalid lease expiry")
 	}
 	reads := r.Candidate.Reads()
 	leases := make([]*Lease, 0, len(reads))
@@ -415,17 +415,17 @@ func Admit(ctx context.Context, r AdmissionRequest) (map[int32][]byte, error) {
 	for _, read := range reads {
 		facts, err := r.Provider.PrepareSnapshotRead(ctx, read, r.SnapshotTS)
 		if err != nil {
-			return nil, fmt.Errorf("substrait: prepare table %d: %w", read.TableID, err)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: prepare table %d: %v", read.TableID, err)
 		}
 		if facts.CommittedInMemory || facts.Uncommitted || facts.VisibleTombstones || facts.NonTAE {
-			return nil, fmt.Errorf("substrait: table %d has snapshot state unsupported by Sirius v1", read.TableID)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: table %d has snapshot state unsupported by Sirius v1", read.TableID)
 		}
 		if len(facts.Manifest) == 0 || len(facts.Manifest) > 64<<20 || len(facts.CanonicalSchema) > 1<<20 || !equalBytes(facts.CanonicalSchema, read.Schema) {
-			return nil, fmt.Errorf("substrait: table %d schema or manifest mismatch", read.TableID)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: table %d schema or manifest mismatch", read.TableID)
 		}
 		ref := make([]byte, 32)
 		if _, err = io.ReadFull(r.Random, ref); err != nil {
-			return nil, fmt.Errorf("substrait: create read reference: %w", err)
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: create read reference: %v", err)
 		}
 		schemaHash := sha256.Sum256(facts.CanonicalSchema)
 		manifestHash := sha256.Sum256(facts.Manifest)

@@ -153,11 +153,12 @@ func TestTaeReadStrictWire(t *testing.T) {
 type fakeProvider struct {
 	calls int
 	facts SnapshotFacts
+	err   error
 }
 
 func (f *fakeProvider) PrepareSnapshotRead(context.Context, Read, []byte) (SnapshotFacts, error) {
 	f.calls++
-	return f.facts, nil
+	return f.facts, f.err
 }
 
 type fakeProtector struct {
@@ -351,6 +352,359 @@ func TestResolveRequiresVerifiedMTLSAndExactSchema(t *testing.T) {
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 }
+
+func TestAdmissionRejectsInvalidInputsBeforePublishing(t *testing.T) {
+	c, err := Export(scanQuery())
+	require.NoError(t, err)
+	read := c.Reads()[0]
+	now := time.Now()
+	valid := func() AdmissionRequest {
+		return AdmissionRequest{
+			Candidate:  c,
+			Provider:   &fakeProvider{facts: SnapshotFacts{Manifest: []byte("m"), CanonicalSchema: read.Schema}},
+			Leases:     NewLeaseManager(1, new(fakeProtector)),
+			AccountID:  1,
+			QueryID:    []byte("q"),
+			SnapshotTS: make([]byte, 12),
+			TTL:        time.Minute,
+			ReadOnly:   true,
+			Random:     bytes.NewReader(bytes.Repeat([]byte{1}, 32)),
+			Now:        now,
+		}
+	}
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*AdmissionRequest)
+		want   string
+	}{
+		{name: "missing candidate", mutate: func(r *AdmissionRequest) { r.Candidate = nil }, want: "read-only snapshot"},
+		{name: "missing provider", mutate: func(r *AdmissionRequest) { r.Provider = nil }, want: "read-only snapshot"},
+		{name: "missing leases", mutate: func(r *AdmissionRequest) { r.Leases = nil }, want: "read-only snapshot"},
+		{name: "not read only", mutate: func(r *AdmissionRequest) { r.ReadOnly = false }, want: "read-only snapshot"},
+		{name: "prior writes", mutate: func(r *AdmissionRequest) { r.PriorWrites = true }, want: "read-only snapshot"},
+		{name: "missing account", mutate: func(r *AdmissionRequest) { r.AccountID = 0 }, want: "identity"},
+		{name: "missing query", mutate: func(r *AdmissionRequest) { r.QueryID = nil }, want: "identity"},
+		{name: "bad timestamp", mutate: func(r *AdmissionRequest) { r.SnapshotTS = []byte{1} }, want: "identity"},
+		{name: "zero ttl", mutate: func(r *AdmissionRequest) { r.TTL = 0 }, want: "TTL"},
+		{name: "oversized ttl", mutate: func(r *AdmissionRequest) { r.TTL = MaxLeaseTTL + time.Second }, want: "TTL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := valid()
+			tc.mutate(&r)
+			_, err := Admit(context.Background(), r)
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+
+	r := valid()
+	r.Provider = &fakeProvider{err: context.Canceled}
+	_, err = Admit(context.Background(), r)
+	require.ErrorContains(t, err, "prepare table")
+
+	for _, facts := range []SnapshotFacts{
+		{Manifest: []byte("m"), CanonicalSchema: read.Schema, CommittedInMemory: true},
+		{Manifest: []byte("m"), CanonicalSchema: read.Schema, Uncommitted: true},
+		{Manifest: []byte("m"), CanonicalSchema: read.Schema, VisibleTombstones: true},
+		{Manifest: []byte("m"), CanonicalSchema: read.Schema, NonTAE: true},
+	} {
+		r = valid()
+		r.Provider = &fakeProvider{facts: facts}
+		_, err = Admit(context.Background(), r)
+		require.ErrorContains(t, err, "unsupported")
+	}
+
+	for _, facts := range []SnapshotFacts{
+		{CanonicalSchema: read.Schema},
+		{Manifest: []byte("m"), CanonicalSchema: []byte("wrong")},
+	} {
+		r = valid()
+		r.Provider = &fakeProvider{facts: facts}
+		_, err = Admit(context.Background(), r)
+		require.ErrorContains(t, err, "schema or manifest mismatch")
+	}
+
+	r = valid()
+	r.Random = bytes.NewReader(nil)
+	_, err = Admit(context.Background(), r)
+	require.ErrorContains(t, err, "create read reference")
+
+	protector := &fakeProtector{fail: true}
+	r = valid()
+	r.Leases = NewLeaseManager(1, protector)
+	_, err = Admit(context.Background(), r)
+	require.ErrorContains(t, err, "protect read lease")
+	require.Equal(t, 1, protector.registered)
+}
+
+func TestResolveHandlerRejectsInvalidRequests(t *testing.T) {
+	c, err := Export(scanQuery())
+	require.NoError(t, err)
+	read := c.Reads()[0]
+	now := time.Now()
+	leases := NewLeaseManager(1, new(fakeProtector))
+	wires, err := Admit(context.Background(), AdmissionRequest{
+		Candidate: c, Provider: &fakeProvider{facts: SnapshotFacts{Manifest: []byte("m"), CanonicalSchema: read.Schema}},
+		Leases: leases, AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), TTL: time.Minute,
+		ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{3}, 32)), Now: now,
+	})
+	require.NoError(t, err)
+	validBody := appendBytes(nil, 1, wires[0])
+	validBody = appendBytes(validBody, 2, read.Schema)
+	verifiedTLS := &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{}}}}
+
+	tests := []struct {
+		name        string
+		method      string
+		path        string
+		contentType string
+		body        []byte
+		tls         *tls.ConnectionState
+		manager     *LeaseManager
+		want        int
+	}{
+		{name: "wrong path", method: http.MethodPost, path: "/wrong", want: http.StatusNotFound},
+		{name: "wrong method", method: http.MethodGet, path: ResolvePath, want: http.StatusMethodNotAllowed},
+		{name: "wrong content type", method: http.MethodPost, path: ResolvePath, want: http.StatusUnsupportedMediaType},
+		{name: "unverified client", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: validBody, want: http.StatusUnauthorized},
+		{name: "malformed request", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: []byte{0xff}, tls: verifiedTLS, manager: leases, want: http.StatusBadRequest},
+		{name: "resolver unavailable", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: validBody, tls: verifiedTLS, want: http.StatusServiceUnavailable},
+		{name: "schema mismatch", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: appendBytes(appendBytes(nil, 1, wires[0]), 2, []byte("wrong")), tls: verifiedTLS, manager: leases, want: http.StatusNotFound},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, bytes.NewReader(tc.body))
+			req.Header.Set("Content-Type", tc.contentType)
+			req.TLS = tc.tls
+			w := httptest.NewRecorder()
+			ResolveHandler(tc.manager, func() time.Time { return now }).ServeHTTP(w, req)
+			require.Equal(t, tc.want, w.Code)
+		})
+	}
+}
+
+func TestResolverServerLifecycle(t *testing.T) {
+	leases := NewLeaseManager(1, new(fakeProtector))
+	validTLS := &tls.Config{
+		MinVersion:   tls.VersionTLS10,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    x509.NewCertPool(),
+		Certificates: []tls.Certificate{{Certificate: [][]byte{{1}}}},
+	}
+	_, err := NewResolverServer("", validTLS, leases)
+	require.Error(t, err)
+	_, err = NewResolverServer("127.0.0.1:0", nil, leases)
+	require.Error(t, err)
+	_, err = NewResolverServer("127.0.0.1:0", &tls.Config{}, leases)
+	require.Error(t, err)
+
+	server, err := NewResolverServer("127.0.0.1:0", validTLS, leases)
+	require.NoError(t, err)
+	require.Equal(t, uint16(tls.VersionTLS12), server.server.TLSConfig.MinVersion)
+	require.Equal(t, uint16(tls.VersionTLS10), validTLS.MinVersion)
+	require.NoError(t, server.Start())
+	require.ErrorContains(t, server.Start(), "already started")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, server.Close(ctx))
+	require.NoError(t, server.Close(ctx))
+	require.ErrorContains(t, server.Start(), "closed")
+}
+
+func TestFileServiceLeaseJournalValidationAndReleaseMarker(t *testing.T) {
+	_, err := NewFileServiceLeaseJournal(nil, "leases")
+	require.Error(t, err)
+	fs, err := fileservice.NewMemoryFS("journal-validation", fileservice.CacheConfig{}, nil)
+	require.NoError(t, err)
+	_, err = NewFileServiceLeaseJournal(fs, "../leases")
+	require.Error(t, err)
+	journal, err := NewFileServiceLeaseJournal(fs, "/sirius/read-leases/")
+	require.NoError(t, err)
+	require.Error(t, journal.Store(context.Background(), nil))
+	require.Error(t, journal.MarkReleased(context.Background(), []byte("short")))
+	require.Error(t, journal.Delete(context.Background(), []byte("short")))
+
+	ref := bytes.Repeat([]byte{4}, 32)
+	require.NoError(t, journal.MarkReleased(context.Background(), ref))
+	require.NoError(t, journal.MarkReleased(context.Background(), ref))
+	require.ErrorContains(t, journal.Store(context.Background(), &Lease{Read: &TaeRead{ReadRef: ref}}), "released read reference")
+	require.NoError(t, journal.Delete(context.Background(), ref))
+	require.NoError(t, journal.Delete(context.Background(), ref))
+}
+
+func TestFileServiceLeaseJournalRejectsCorruption(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{name: "multiple values", data: []byte("{}{}"), want: "multiple JSON values"},
+		{name: "checksum mismatch", data: []byte(`{"record":{},"sha256":"AA=="}`), want: "checksum mismatch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			fs, err := fileservice.NewMemoryFS("journal-corrupt-"+tc.name, fileservice.CacheConfig{}, nil)
+			require.NoError(t, err)
+			journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases")
+			require.NoError(t, err)
+			name := journal.activePath(bytes.Repeat([]byte{5}, 32))
+			require.NoError(t, fs.Write(ctx, fileservice.IOVector{FilePath: name, Entries: []fileservice.IOEntry{{Offset: 0, Size: int64(len(tc.data)), Data: tc.data}}}))
+			_, err = journal.Load(ctx)
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}
+
+func TestSubstraitTypeAndLiteralMappings(t *testing.T) {
+	typesAndLiterals := []struct {
+		typ planpb.Type
+		lit *planpb.Literal
+	}{
+		{typ: planpb.Type{Id: int32(types.T_bool)}, lit: &planpb.Literal{Value: &planpb.Literal_Bval{Bval: true}}},
+		{typ: planpb.Type{Id: int32(types.T_int8)}, lit: &planpb.Literal{Value: &planpb.Literal_I8Val{I8Val: 1}}},
+		{typ: planpb.Type{Id: int32(types.T_int16)}, lit: &planpb.Literal{Value: &planpb.Literal_I16Val{I16Val: 2}}},
+		{typ: planpb.Type{Id: int32(types.T_int32)}, lit: &planpb.Literal{Value: &planpb.Literal_I32Val{I32Val: 3}}},
+		{typ: planpb.Type{Id: int32(types.T_int64)}, lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 4}}},
+		{typ: planpb.Type{Id: int32(types.T_float32)}, lit: &planpb.Literal{Value: &planpb.Literal_Fval{Fval: 1.5}}},
+		{typ: planpb.Type{Id: int32(types.T_float64)}, lit: &planpb.Literal{Value: &planpb.Literal_Dval{Dval: 2.5}}},
+		{typ: planpb.Type{Id: int32(types.T_char)}, lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "c"}}},
+		{typ: planpb.Type{Id: int32(types.T_varchar), Width: 12}, lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "varchar"}}},
+		{typ: planpb.Type{Id: int32(types.T_date)}, lit: &planpb.Literal{Value: &planpb.Literal_Dateval{Dateval: 10}}},
+		{typ: planpb.Type{Id: int32(types.T_timestamp)}, lit: &planpb.Literal{Value: &planpb.Literal_Timestampval{Timestampval: 20}}},
+	}
+	for _, tc := range typesAndLiterals {
+		_, err := substraitType(&tc.typ)
+		require.NoError(t, err)
+		_, err = literal(tc.lit, &tc.typ)
+		require.NoError(t, err)
+	}
+
+	nullType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+	_, err := literal(&planpb.Literal{Isnull: true}, &nullType)
+	require.NoError(t, err)
+	_, err = literal(nil, &nullType)
+	require.ErrorContains(t, err, "nil literal")
+	_, err = literal(&planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: 1}}, &nullType)
+	require.ErrorContains(t, err, "unsupported literal")
+	_, err = literal(&planpb.Literal{Value: &planpb.Literal_Sval{Sval: "wrong"}}, &nullType)
+	require.ErrorContains(t, err, "does not match")
+	_, err = substraitType(nil)
+	require.ErrorContains(t, err, "missing type")
+	_, err = substraitType(&planpb.Type{Id: int32(types.T_varchar), Width: -1})
+	require.ErrorContains(t, err, "negative varchar")
+	_, err = substraitType(&planpb.Type{Id: int32(types.T_decimal64)})
+	require.ErrorContains(t, err, "unsupported type")
+}
+
+func TestCanonicalSchemaAndScalarSignatureContracts(t *testing.T) {
+	table := &planpb.TableDef{Name: "t", Cols: []*planpb.ColDef{
+		{Name: "a", Typ: i64Type()},
+		{Name: "hidden", Hidden: true, Typ: i64Type()},
+	}}
+	schema, err := CanonicalSchema(table)
+	require.NoError(t, err)
+	require.NotEmpty(t, schema)
+	_, err = CanonicalSchema(&planpb.TableDef{Name: "empty"})
+	require.ErrorContains(t, err, "no exportable columns")
+	_, err = CanonicalSchema(&planpb.TableDef{Name: "nil", Cols: []*planpb.ColDef{nil}})
+	require.ErrorContains(t, err, "nil column")
+
+	boolExpr := &planpb.Expr{Typ: boolType()}
+	intExpr := &planpb.Expr{Typ: i64Type()}
+	require.NoError(t, validateScalarSignature("and", ptrType(boolType()), []*planpb.Expr{boolExpr, boolExpr}))
+	require.NoError(t, validateScalarSignature("equal", ptrType(boolType()), []*planpb.Expr{intExpr, intExpr}))
+	require.NoError(t, validateScalarSignature("is_null", ptrType(boolType()), []*planpb.Expr{intExpr}))
+	require.NoError(t, validateScalarSignature("add", ptrType(i64Type()), []*planpb.Expr{intExpr, intExpr}))
+	require.ErrorContains(t, validateScalarSignature("and", ptrType(i64Type()), []*planpb.Expr{boolExpr, boolExpr}), "non-boolean result")
+	require.ErrorContains(t, validateScalarSignature("or", ptrType(boolType()), []*planpb.Expr{intExpr, intExpr}), "non-boolean argument")
+	require.ErrorContains(t, validateScalarSignature("equal", ptrType(boolType()), []*planpb.Expr{intExpr, boolExpr}), "unsupported equal")
+	require.ErrorContains(t, validateScalarSignature("is_not_null", ptrType(i64Type()), []*planpb.Expr{intExpr}), "unsupported is_not_null")
+	require.ErrorContains(t, validateScalarSignature("divide", ptrType(boolType()), []*planpb.Expr{boolExpr, boolExpr}), "unsupported divide")
+}
+
+func TestNonnegativeIntegerLiteralForms(t *testing.T) {
+	for _, expr := range []*planpb.Expr{
+		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I8Val{I8Val: 1}}}},
+		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I16Val{I16Val: 2}}}},
+		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I32Val{I32Val: 3}}}},
+		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 4}}}},
+	} {
+		value, err := nonnegativeIntLiteral(expr, -1)
+		require.NoError(t, err)
+		require.Positive(t, value)
+	}
+	value, err := nonnegativeIntLiteral(nil, 7)
+	require.NoError(t, err)
+	require.Equal(t, int64(7), value)
+	_, err = nonnegativeIntLiteral(&planpb.Expr{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}, 0)
+	require.ErrorContains(t, err, "constant integer")
+	_, err = nonnegativeIntLiteral(&planpb.Expr{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "1"}}}}, 0)
+	require.ErrorContains(t, err, "signed integer")
+	_, err = nonnegativeIntLiteral(&planpb.Expr{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: -1}}}}, 0)
+	require.ErrorContains(t, err, "non-negative")
+}
+
+func TestExporterValidationGuards(t *testing.T) {
+	_, err := (*Candidate)(nil).Build(nil)
+	require.ErrorContains(t, err, "nil candidate")
+	candidate, err := Export(scanQuery())
+	require.NoError(t, err)
+	_, err = candidate.Build(nil)
+	require.ErrorContains(t, err, "no admitted TaeRead")
+
+	widthExporter := &exporter{query: &planpb.Query{Nodes: []*planpb.Node{
+		{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, ProjectList: []*planpb.Expr{col(0)}},
+		{NodeId: 1, NodeType: planpb.Node_TABLE_SCAN},
+		{NodeId: 2, NodeType: planpb.Node_FILTER},
+		{NodeId: 3, NodeType: planpb.Node_JOIN},
+	}}}
+	width, err := widthExporter.nodeWidth(0)
+	require.NoError(t, err)
+	require.Equal(t, 1, width)
+	_, err = widthExporter.nodeWidth(-1)
+	require.ErrorContains(t, err, "invalid node id")
+	_, err = widthExporter.nodeWidth(1)
+	require.ErrorContains(t, err, "scan has no table")
+	_, err = widthExporter.nodeWidth(2)
+	require.ErrorContains(t, err, "requires one child")
+	_, err = widthExporter.nodeWidth(3)
+	require.ErrorContains(t, err, "unsupported width")
+
+	exprExporter := &exporter{functions: make(map[string]uint32)}
+	_, err = exprExporter.conjunction(nil)
+	require.ErrorContains(t, err, "empty filter")
+	_, err = exprExporter.conjunction([]*planpb.Expr{intExpr(1)})
+	require.ErrorContains(t, err, "not boolean")
+	predicate := fn(">", boolType(), col(0), i64(1))
+	_, err = exprExporter.conjunction([]*planpb.Expr{predicate, predicate})
+	require.NoError(t, err)
+	require.ErrorContains(t, validateExprFields([]*planpb.Expr{nil}, 1), "nil expression")
+	require.ErrorContains(t, validateExprFields([]*planpb.Expr{{Expr: &planpb.Expr_F{}}}, 1), "malformed function")
+	require.ErrorContains(t, validateExprFields([]*planpb.Expr{{}}, 1), "unsupported expression")
+
+	q := scanQuery()
+	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_AGG, Children: []int32{0}, GroupingFlag: []bool{true}})
+	q.Steps[0] = 1
+	_, err = Export(q)
+	require.ErrorContains(t, err, "grouping sets")
+
+	for _, order := range []*planpb.OrderBySpec{
+		nil,
+		{Expr: col(0), Collation: "utf8"},
+		{Expr: col(0), Flag: planpb.OrderBySpec_UNIQUE},
+		{Expr: col(0), Flag: planpb.OrderBySpec_ASC | planpb.OrderBySpec_DESC},
+	} {
+		q = scanQuery()
+		q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_SORT, Children: []int32{0}, OrderBy: []*planpb.OrderBySpec{order}})
+		q.Steps[0] = 1
+		_, err = Export(q)
+		require.Error(t, err)
+	}
+}
+
+func ptrType(value planpb.Type) *planpb.Type { return &value }
+
+func intExpr(value int64) *planpb.Expr { return i64(value) }
 
 func scanQuery() *planpb.Query {
 	return &planpb.Query{StmtType: planpb.Query_SELECT, Steps: []int32{0}, Nodes: []*planpb.Node{{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, ObjRef: &planpb.ObjectRef{Obj: 42, ObjName: "t"}, TableDef: &planpb.TableDef{TblId: 42, Name: "t", TableType: "r", Cols: []*planpb.ColDef{{Name: "a", Typ: i64Type()}}}}}}
