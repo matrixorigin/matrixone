@@ -186,6 +186,76 @@ func TestUnknownCommitRemoveCallbackCanReenterClose(t *testing.T) {
 	})
 }
 
+func TestUnknownCommitCleanupDoesNotDeadlockBindFence(t *testing.T) {
+	runLockServiceTests(t, []string{"s1"}, func(_ *lockTableAllocator, services []*service) {
+		service := services[0]
+		tableID := uint64(24766)
+		bind := pb.LockTable{
+			Group:     0,
+			Table:     tableID,
+			ServiceID: service.serviceID,
+			Version:   1,
+			Valid:     true,
+		}
+		lockTable := &blockingUnlockTestTable{
+			retryableUnlockTestTable: retryableUnlockTestTable{bind: bind},
+			started:                  make(chan struct{}),
+			release:                  make(chan struct{}),
+		}
+
+		txnID := []byte("unknown-commit-bind-fence")
+		txn := service.activeTxnHolder.getActiveTxn(txnID, true, "")
+		txn.Lock()
+		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{{1}}, service.logger))
+		txn.Unlock()
+		service.incRef(bind.Group, bind.Table)
+
+		holder := service.activeTxnHolder.(*mapBasedTxnHolder)
+		fenceEntered := make(chan struct{}, 1)
+		holder.beforeFenceTxnLock = func(candidate *activeTxn) {
+			if candidate == txn {
+				select {
+				case fenceEntered <- struct{}{}:
+				default:
+				}
+			}
+		}
+		service.tableGroups.set(bind.Group, bind.Table, lockTable)
+
+		unlockDone := make(chan error, 1)
+		go func() {
+			unlockDone <- service.unlockUnknownCommit(
+				context.Background(),
+				txnID,
+				timestamp.Timestamp{},
+			)
+		}()
+		<-lockTable.started
+
+		fenceDone := make(chan int, 1)
+		changedBind := bind
+		changedBind.Version++
+		go func() {
+			fenceDone <- holder.fenceByBindChanged(changedBind)
+		}()
+		<-fenceEntered
+		close(lockTable.release)
+
+		select {
+		case err := <-unlockDone:
+			require.NoError(t, err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("unknown-commit cleanup deadlocked with bind fencing")
+		}
+		select {
+		case <-fenceDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("bind fencing deadlocked with unknown-commit cleanup")
+		}
+		require.False(t, holder.hasActiveTxn(txnID))
+	})
+}
+
 func TestUnknownCommitBatchFencesOnlyNonCommittingTxns(t *testing.T) {
 	runLockServiceTests(t, []string{"s1"}, func(allocator *lockTableAllocator, services []*service) {
 		service := services[0]
