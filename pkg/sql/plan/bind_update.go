@@ -1501,9 +1501,11 @@ func irregularIndexAffectedByUpdate(
 // from CDC-only indexes using plugin metadata. MASTER has no plugin, but shares
 // the modern synchronous maintenance pipeline with the plugin-backed indexes.
 // The bool return preserves the legacy route only for an affected irregular
-// algorithm that has not migrated to either mechanism. A synchronous-index PK
-// update is rejected here, before lock/mutation nodes are built, because its
-// hidden rows are keyed by the old source PK.
+// algorithm that has not migrated to either mechanism. MASTER indexes delete
+// by the old source PK and rebuild from the final row image, so changing the
+// base-table PK is handled by the same maintenance pipeline. Plugin-backed
+// synchronous full-text/vector indexes retain their existing PK-update
+// restriction until their complete hidden-table groups support that contract.
 func classifyIrregularIndexesForUpdate(
 	ctx context.Context,
 	tableDef *plan.TableDef,

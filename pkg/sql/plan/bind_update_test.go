@@ -143,10 +143,10 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 			wantInline: 1,
 		},
 		{
-			name:       "synchronous primary key uses old-key maintenance",
+			name:       "synchronous fulltext primary key remains rejected",
 			tableDef:   newTableDef(newIndex("ft", catalog.MOIndexFullTextAlgo.ToString(), "", "body")),
 			updateCols: map[string]tree.Expr{"id": nil},
-			wantInline: 1,
+			wantReject: true,
 		},
 		{
 			name:       "async primary key stays modern",
