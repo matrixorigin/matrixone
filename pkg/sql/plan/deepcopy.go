@@ -245,6 +245,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		BlockFilterList: DeepCopyExprList(node.BlockFilterList),
 		GroupBy:         DeepCopyExprList(node.GroupBy),
 		GroupingFlag:    slices.Clone(node.GroupingFlag),
+		GroupByHashKey:  slices.Clone(node.GroupByHashKey),
 		AggList:         DeepCopyExprList(node.AggList),
 		OrderBy:         DeepCopyOrderBySpecList(node.OrderBy),
 		Interval:        DeepCopyExpr(node.Interval),

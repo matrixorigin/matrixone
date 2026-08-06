@@ -68,6 +68,89 @@ type releaseTrackingData struct {
 	outstanding *atomic.Int32
 }
 
+func TestAppendableVisibilityFiltersAbortFromMaterializeAndSearch(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	defer input.Clean(mp)
+	for _, row := range []struct {
+		key     string
+		commit  types.TS
+		aborted bool
+	}{
+		{key: "live", commit: types.BuildTS(5, 0)},
+		{key: "aborted", commit: types.BuildTS(6, 0), aborted: true},
+		{key: "future", commit: types.BuildTS(20, 0)},
+	} {
+		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(row.key), false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], row.commit, false, mp))
+		require.NoError(t, vector.AppendFixed(input.Vecs[2], row.aborted, false, mp))
+	}
+	input.SetRowCount(3)
+
+	writer := ConstructWriter(
+		0,
+		[]uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+		-1,
+		false,
+		false,
+		fs,
+	)
+	writer.SetAppendable()
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats(objectio.WithAppendable())
+	location := stats.ObjectLocation()
+	snapshot := types.BuildTS(10, 0)
+
+	destination := vector.NewVec(types.T_varchar.ToType())
+	defer destination.Free(mp)
+	deleteMask, _, err := LoadColumnsDataInto(
+		ctx,
+		[]uint16{0},
+		[]types.Type{types.T_varchar.ToType()},
+		fs,
+		location,
+		[]*vector.Vector{destination},
+		nil,
+		&snapshot,
+		mp,
+		fileservice.Policy(0),
+	)
+	require.NoError(t, err)
+	defer deleteMask.Release()
+	require.True(t, deleteMask.Contains(1), "aborted row must be hidden from full scans")
+	require.True(t, deleteMask.Contains(2), "future row must be hidden from full scans")
+	require.False(t, deleteMask.Contains(0))
+
+	search := objectio.NewReadFilterSearch(
+		types.T_varchar,
+		[][]byte{[]byte("live"), []byte("aborted"), []byte("future")},
+	)
+	sels, _, err := LoadColumnDataBySearch(
+		ctx,
+		0,
+		types.T_varchar.ToType(),
+		fs,
+		location,
+		search,
+		false,
+		&snapshot,
+		mp,
+		fileservice.Policy(0),
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0}, sels, "cached search must return only live visible rows")
+}
+
 func (d *releaseTrackingData) Slice(length int) fscache.Data {
 	d.Data = d.Data.Slice(length)
 	return d
