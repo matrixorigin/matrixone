@@ -98,5 +98,29 @@ func TestIssue26725PreparedBit64SignedLong(t *testing.T) {
 		defer narrowStmt.Close()
 		_, err = narrowStmt.ExecContext(ctx, int64(1), int64(-1))
 		require.ErrorContains(t, err, "data out of range")
+
+		execSQLRequire(t, ctx, db,
+			"create table "+dbName+".t3(id bigint primary key, b bit(3))")
+		ignoreStmt, err := db.PrepareContext(ctx,
+			"insert ignore into "+dbName+".t3(id, b) values (?, ?), (?, ?)")
+		require.NoError(t, err)
+		defer ignoreStmt.Close()
+		_, err = ignoreStmt.ExecContext(ctx,
+			int64(1), int64(8),
+			int64(2), int64(-1))
+		require.NoError(t, err)
+
+		ignoreRows, err := db.QueryContext(ctx,
+			"select cast(b as unsigned) from "+dbName+".t3 order by id")
+		require.NoError(t, err)
+		defer ignoreRows.Close()
+		for _, expected := range []string{"7", "0"} {
+			require.True(t, ignoreRows.Next())
+			var actual string
+			require.NoError(t, ignoreRows.Scan(&actual))
+			require.Equal(t, expected, actual)
+		}
+		require.False(t, ignoreRows.Next())
+		require.NoError(t, ignoreRows.Err())
 	})
 }
