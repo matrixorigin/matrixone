@@ -514,7 +514,7 @@ drop view v_conditional_time_varchar;
 drop table t_conditional_time_varchar;
 
 -- @case
--- @desc:test typed NULL participates in conditional VARCHAR metadata while plain NULL remains neutral
+-- @desc:test typed NULL participates in conditional VARCHAR metadata while direct-NULL IF retains numeric metadata
 -- @label:bvt
 drop view if exists v_conditional_typed_null;
 create view v_conditional_typed_null as

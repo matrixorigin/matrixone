@@ -608,11 +608,6 @@ func TestBuildControlFlowTypedNullVarcharMetadata(t *testing.T) {
 			end`,
 			width: 2,
 		},
-		{
-			name:  "if plain null",
-			sql:   `select if(true, null, 1)`,
-			width: 2,
-		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)

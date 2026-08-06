@@ -620,14 +620,6 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 		if retType, ok := mixedStringNumericToVarchar(source); ok {
 			return newCheckResultWithCast(0, []types.Type{conditionType, retType, retType})
 		}
-		// MySQL aggregates a direct NULL and a numeric IF value as VARCHAR. The
-		// binder refines its display width from the numeric literal later; keep
-		// the overload target conservative here so non-literal values stay safe.
-		if (source[0].Oid == types.T_any && source[1].IsNumeric()) ||
-			(source[1].Oid == types.T_any && source[0].IsNumeric()) {
-			retType := types.T_varchar.ToType()
-			return newCheckResultWithCast(0, []types.Type{conditionType, retType, retType})
-		}
 		if retType, ok := signedUnsignedIntegerCommonType(source); ok {
 			return newCheckResultWithCast(0, []types.Type{conditionType, retType, retType})
 		}
