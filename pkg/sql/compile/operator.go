@@ -204,6 +204,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.SpillMem = t.SpillMem
 		op.GroupingFlag = t.GroupingFlag
 		op.GroupBy = t.GroupBy
+		op.GroupByHashKey = t.GroupByHashKey
 		op.Aggs = t.Aggs
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
@@ -1708,6 +1709,7 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 	arg.SpillMem = node.SpillMem
 	arg.GroupingFlag = node.GroupingFlag
 	arg.GroupBy = node.GroupBy
+	arg.GroupByHashKey = node.GroupByHashKey
 	return arg
 }
 
@@ -1965,6 +1967,7 @@ func constructMergeGroup(node *plan.Node, aggs []aggexec.AggFuncExecExpression) 
 	// group node and then merge them
 	arg.SpillMem = node.SpillMem
 	arg.Aggs = aggs
+	arg.GroupByHashKey = node.GroupByHashKey
 	return arg
 }
 
