@@ -661,12 +661,14 @@ func TestCTASViewDefaultPolicyMatrix(t *testing.T) {
 		{name: "datetime", typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}, defaultDef: explicitDefault},
 		{name: "time", typ: plan.Type{Id: int32(types.T_time), NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "'00:00:00'"},
 		{name: "timestamp", typ: plan.Type{Id: int32(types.T_timestamp), NotNullable: true}, defaultDef: explicitDefault},
+		{name: "year", typ: plan.Type{Id: int32(types.T_year), NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "'0000'"},
 		{name: "binary", typ: plan.Type{Id: int32(types.T_binary), Width: 8, NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "''"},
 		{name: "varbinary", typ: plan.Type{Id: int32(types.T_varbinary), Width: 8, NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "''"},
 		{name: "float", typ: plan.Type{Id: int32(types.T_float32), NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "0"},
 		{name: "double", typ: plan.Type{Id: int32(types.T_float64), NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "0"},
 		{name: "bit", typ: plan.Type{Id: int32(types.T_bit), Width: 8, NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "0"},
 		{name: "blob expression", typ: plan.Type{Id: int32(types.T_blob), NotNullable: true}, defaultDef: &plan.Default{Expr: blobExpr, OriginString: "(blob_default())"}, wantPolicy: CTASDefaultInheritViewSource},
+		{name: "text expression", typ: plan.Type{Id: int32(types.T_text), NotNullable: true}, defaultDef: &plan.Default{Expr: makePlan2StringConstExprWithType("seed"), OriginString: "('seed')"}, wantPolicy: CTASDefaultInheritViewSource},
 		{name: "nullable expression", typ: plan.Type{Id: int32(types.T_varchar)}, defaultDef: &plan.Default{NullAbility: true, Expr: makePlan2StringConstExprWithType("seed"), OriginString: "('seed')"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {

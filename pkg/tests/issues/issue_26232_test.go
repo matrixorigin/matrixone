@@ -51,6 +51,8 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 				"binary_col binary(4) not null default 'xy', varbinary_col varbinary(8) not null default 'xy', " +
 				"blob_col blob not null default ('blob-seed'), float_col float not null default 1.5, " +
 				"double_col double not null default 2.5, bit_col bit(4) not null default b'1010', " +
+				"year_col year not null default 2024, text_col text not null default ('text-seed'), " +
+				"nullable_text text default ('nullable-seed'), " +
 				"nullable_expr uuid default (uuid()), " +
 				"expr_col uuid not null default (uuid()), " +
 				"priority enum('low','medium','high') not null default 'medium', " +
@@ -74,7 +76,8 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			"create view " + db + ".v_recursive as with recursive d(qty) as (select qty from " + db + ".source_t union all select qty from d where false) select qty from d",
 			"create table " + db + ".ctas_view as select id, qty, nullable_col, null_col, str_col, amount, " +
 				"date_col, datetime_col, time_col, timestamp_col, binary_col, varbinary_col, blob_col, " +
-				"float_col, double_col, bit_col, nullable_expr, priority, flags from " + db + ".v_source_t",
+				"float_col, double_col, bit_col, year_col, text_col, nullable_text, nullable_expr, " +
+				"priority, flags from " + db + ".v_source_t",
 		} {
 			execSQLRequire(t, ctx, dbConn, stmt)
 		}
@@ -161,6 +164,9 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			{column: "float_col", wantInfo: sql.NullString{String: "0", Valid: true}, wantDesc: sql.NullString{String: "0", Valid: true}},
 			{column: "double_col", wantInfo: sql.NullString{String: "0", Valid: true}, wantDesc: sql.NullString{String: "0", Valid: true}},
 			{column: "bit_col", wantInfo: sql.NullString{String: "0", Valid: true}, wantDesc: sql.NullString{String: "0", Valid: true}},
+			{column: "year_col", wantInfo: sql.NullString{String: "'0000'", Valid: true}, wantDesc: sql.NullString{String: "0000", Valid: true}},
+			{column: "text_col", wantInfo: sql.NullString{String: "('text-seed')", Valid: true}, wantDesc: sql.NullString{String: "('text-seed')", Valid: true}},
+			{column: "nullable_text"},
 			{column: "nullable_expr"},
 		} {
 			var infoDefault sql.NullString
@@ -182,6 +188,8 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 		require.Contains(t, createTableSQL, "DEFAULT 0.00")
 		require.Contains(t, createTableSQL, "DEFAULT 'low'")
 		require.Contains(t, strings.ToLower(createTableSQL), "`time_col` time not null default '00:00:00'")
+		require.Contains(t, strings.ToLower(createTableSQL), "`year_col` year not null default '0000'")
+		require.Contains(t, strings.ToLower(createTableSQL), "`text_col` text not null default ('text-seed')")
 
 		execSQLRequire(t, ctx, dbConn, "insert into "+db+".ctas_view"+
 			"(id,date_col,datetime_col,timestamp_col) values "+
@@ -231,6 +239,15 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 		require.Zero(t, insertedDouble)
 		require.Zero(t, insertedBit)
 		require.True(t, nullableExprIsNull)
+		var insertedYear int
+		var insertedText string
+		var insertedNullableText sql.NullString
+		require.NoError(t, dbConn.QueryRowContext(ctx,
+			"select year_col, text_col, nullable_text from "+db+".ctas_view where id = 2").
+			Scan(&insertedYear, &insertedText, &insertedNullableText))
+		require.Zero(t, insertedYear)
+		require.Equal(t, "text-seed", insertedText)
+		require.False(t, insertedNullableText.Valid)
 	})
 }
 

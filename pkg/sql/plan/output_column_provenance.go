@@ -88,7 +88,7 @@ func ctasViewDefaultPolicy(metadata SourceColumnMetadata) CTASDefaultPolicy {
 	if !metadata.Typ.NotNullable || !hasExplicitSourceDefault(metadata) {
 		return CTASDefaultNone
 	}
-	if types.T(metadata.Typ.Id) == types.T_blob &&
+	if (types.T(metadata.Typ.Id) == types.T_blob || types.T(metadata.Typ.Id) == types.T_text) &&
 		(metadata.Default.Expr != nil || metadata.Default.OriginString != "") {
 		return CTASDefaultInheritViewSource
 	}
