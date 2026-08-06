@@ -386,6 +386,9 @@ func TestWaitingReplacementPreservesConcurrentSameTxnLocks(t *testing.T) {
 }
 
 func TestRemoteSharedMergeSnapshotPreservesLogicalWaitFor(t *testing.T) {
+	txnA := []byte("remote-merge-edge-a")
+	txnB := []byte("remote-merge-edge-b")
+	txnC := []byte("remote-merge-edge-c")
 	runLockServiceTestsWithAdjustConfig(
 		t,
 		[]string{"s1", "s2"},
@@ -399,9 +402,6 @@ func TestRemoteSharedMergeSnapshotPreservesLogicalWaitFor(t *testing.T) {
 				ctx, 0, table, nil, pb.Sharding_None)
 			require.NoError(t, err)
 
-			txnA := []byte("remote-merge-edge-a")
-			txnB := []byte("remote-merge-edge-b")
-			txnC := []byte("remote-merge-edge-c")
 			_, err = origin.Lock(
 				ctx, table, newTestRows(1), txnA, newTestRowSharedOptions())
 			require.NoError(t, err)
@@ -463,7 +463,19 @@ func TestRemoteSharedMergeSnapshotPreservesLogicalWaitFor(t *testing.T) {
 			require.NoError(t, origin.unlockWithContext(
 				ctx, txnA, timestamp.Timestamp{}))
 		},
-		func(*Config) {},
+		func(c *Config) {
+			// CheckActiveTxn gets its authoritative transaction liveness from
+			// TxnIterFunc in production. Keep the synthetic transactions visible
+			// while the remote waiter is blocked so the orphan checker cannot
+			// invalidate the wait-for snapshot based on scheduler timing.
+			c.TxnIterFunc = func(fn func([]byte) bool) {
+				for _, txnID := range [][]byte{txnA, txnB, txnC} {
+					if !fn(txnID) {
+						return
+					}
+				}
+			}
+		},
 	)
 }
 
