@@ -15,6 +15,7 @@
 package v4_0_6
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -27,7 +28,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 3)
+	require.Len(t, tenantUpgEntries, 4)
 	require.Len(t, clusterUpgEntries, 1)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
@@ -42,12 +43,56 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, versions.MODIFY_METADATA, characterSets.UpgType)
 	require.Equal(t, sysview.InformationSchemaCharacterSetsData, characterSets.UpgSql)
 	require.Contains(t, strings.ToLower(characterSets.PreSql), "delete from information_schema.character_sets")
+	columns := tenantUpgEntries[3]
+	require.Equal(t, sysview.InformationDBConst, columns.Schema)
+	require.Equal(t, "COLUMNS", columns.TableName)
+	require.Equal(t, versions.MODIFY_VIEW, columns.UpgType)
+	require.Equal(t, sysview.InformationSchemaColumnsDDL, columns.UpgSql)
+	require.Contains(t, strings.ToLower(columns.PreSql), "drop view if exists information_schema.columns")
 
 	meta := Handler.Metadata()
 	require.Equal(t, "4.0.6", meta.Version)
 	require.Equal(t, "4.0.5", meta.MinUpgradeVersion)
 	require.Equal(t, versions.Yes, meta.UpgradeTenant)
 	require.Equal(t, uint32(len(tenantUpgEntries)+len(clusterUpgEntries)), meta.VersionOffset)
+}
+
+func TestUpgradeInformationSchemaColumnsCheck(t *testing.T) {
+	entry := upgradeInformationSchemaColumns()
+	checkErr := errors.New("check view definition failed")
+	for _, test := range []struct {
+		name       string
+		exists     bool
+		definition string
+		checkErr   error
+		want       bool
+	}{
+		{name: "current definition", exists: true, definition: sysview.InformationSchemaColumnsDDL, want: true},
+		{name: "old definition", exists: true, definition: "old view definition"},
+		{name: "missing view", definition: sysview.InformationSchemaColumnsDDL},
+		{name: "check error", checkErr: checkErr},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			oldCheck := versions.CheckViewDefinition
+			versions.CheckViewDefinition = func(txn executor.TxnExecutor, accountID uint32, schema, viewName string) (bool, string, error) {
+				require.Nil(t, txn)
+				require.Equal(t, uint32(42), accountID)
+				require.Equal(t, sysview.InformationDBConst, schema)
+				require.Equal(t, "COLUMNS", viewName)
+				return test.exists, test.definition, test.checkErr
+			}
+			defer func() { versions.CheckViewDefinition = oldCheck }()
+
+			ok, err := entry.CheckFunc(nil, 42)
+			if test.checkErr != nil {
+				require.ErrorIs(t, err, test.checkErr)
+				require.False(t, ok)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, ok)
+		})
+	}
 }
 
 func TestPopulateInformationSchemaCharacterSetsIsIdempotent(t *testing.T) {
