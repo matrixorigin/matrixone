@@ -491,7 +491,7 @@ func TestGroupConcatSpillCompactsFanIn(t *testing.T) {
 	}
 	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
 	require.NoError(t, exec.SetExtraInformation(
-		testGroupConcatLimitConfig(1, []byte{groupConcatOrderAsc}, ",", 1, groupConcatMergeFanIn-1),
+		testGroupConcatLimitConfig(1, []byte{groupConcatOrderAsc}, ",", 1, groupConcatMergeFanIn),
 		0,
 	))
 	require.NoError(t, exec.GroupGrow(1))
