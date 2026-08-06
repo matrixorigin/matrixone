@@ -19,6 +19,17 @@ insert into docs values
 (7, 'transfer learning models',       'pending',  15, 'tech'),
 (8, 'classical cooking learning',     'archived', 25, 'food');
 create fulltext2 index ftidx on docs (body) include (status, prio);
+show create table docs;
+➤ Table[12,4,0]  ¦  Create Table[12,264,0]  𝄀
+docs  ¦  CREATE TABLE `docs` (
+  `id` bigint NOT NULL,
+  `body` text NOT NULL,
+  `status` varchar(20) DEFAULT NULL,
+  `prio` int DEFAULT NULL,
+  `category` varchar(20) NOT NULL,
+  PRIMARY KEY (`id`),
+ FULLTEXT2 `ftidx`(`body`) INCLUDE (`status`, `prio`) WITH PARSER ngram
+)
 select id, status, prio from docs where match(body) against('learning') order by id;
 ➤ id[-5,64,0]  ¦  status[12,20,0]  ¦  prio[4,32,0]  𝄀
 1  ¦  active  ¦  10  𝄀

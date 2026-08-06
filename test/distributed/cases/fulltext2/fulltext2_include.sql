@@ -31,6 +31,10 @@ insert into docs values
 
 create fulltext2 index ftidx on docs (body) include (status, prio);
 
+-- DDL round-trip: the INCLUDE clause is reconstructed by SHOW CREATE (a
+-- rebuild from clause-less DDL would silently drop the covering columns).
+show create table docs;
+
 -- covering projection: status/prio served from the index (incl. NULLs), no JOIN.
 select id, status, prio from docs where match(body) against('learning') order by id;
 

@@ -266,6 +266,16 @@ func constructCreateTableSQL(
 
 				indexStr += ")"
 
+				// INCLUDE columns: render so SHOW CREATE round-trips — a rebuild from
+				// the clause-less DDL would silently drop the covering/prefilter columns.
+				// Uses the same helper as the vector-index branch below (INCLUDE is an
+				// order-flexible index_option, so it may precede WITH PARSER).
+				includedColumns, incErr := indexDefIncludedColumns(indexdef)
+				if incErr != nil {
+					return "", nil, incErr
+				}
+				indexStr += indexIncludeColumnsToString(includedColumns, colNameToOriginName)
+
 				if indexdef.IndexAlgoParams != "" {
 					val, err := sonic.Get([]byte(indexdef.IndexAlgoParams), "parser")
 					// ignore err != nil --> value not found
