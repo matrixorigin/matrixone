@@ -656,6 +656,61 @@ func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {
 	}
 }
 
+func TestTinyTextSameTypeAssignmentStillValidates(t *testing.T) {
+	ctx := context.Background()
+	tinyText := plan.Type{Id: int32(types.T_text), Width: types.MaxTinyTextLen}
+	source := &Expr{Typ: tinyText}
+
+	for _, funcName := range []string{"cast_assign", "cast_ignore", "cast_strict"} {
+		casted, err := forceAssignmentCastExprWithName(ctx, DeepCopyExpr(source), tinyText, funcName)
+		require.NoError(t, err)
+		require.Equal(t, funcName, casted.GetF().GetFunc().GetObjName())
+	}
+
+	// Generic casts retain the ordinary same-type no-op behavior. Only a
+	// constrained assignment boundary must revalidate recovered legacy rows.
+	generic, err := forceCastExprWithName(ctx, DeepCopyExpr(source), tinyText, "cast")
+	require.NoError(t, err)
+	require.Nil(t, generic.GetF())
+
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	target := &plan.Expr{Typ: tinyText, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+	for _, test := range []struct {
+		version int64
+		ignore  bool
+		want    string
+	}{
+		{version: defines.MORPCVersion4, want: "cast_strict"},
+		{version: defines.MORPCVersion4, ignore: true, want: "cast"},
+		{version: defines.MORPCVersion5, want: "cast_assign"},
+		{version: defines.MORPCVersion5, ignore: true, want: "cast_ignore"},
+	} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.version)
+		casted, err := forceCastExpr2WithProcess(
+			ctx,
+			DeepCopyExpr(source),
+			makeTypeByPlan2Type(tinyText),
+			DeepCopyExpr(target),
+			test.ignore,
+			proc,
+		)
+		require.NoError(t, err)
+		require.Equal(t, test.want, casted.GetF().GetFunc().GetObjName())
+
+		casted, err = forceAssignmentCastExprWithProcess(
+			ctx,
+			DeepCopyExpr(source),
+			tinyText,
+			test.ignore,
+			proc,
+		)
+		require.NoError(t, err)
+		require.Equal(t, test.want, casted.GetF().GetFunc().GetObjName())
+	}
+}
+
 func TestAssignmentCastPreservesNestedExplicitTemporalCast(t *testing.T) {
 	ctx := context.Background()
 	target := plan.Type{Id: int32(types.T_date)}

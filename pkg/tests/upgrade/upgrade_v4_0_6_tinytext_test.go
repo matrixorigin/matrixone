@@ -58,23 +58,29 @@ func TestV406UpgradeRecoversLegacyTinyText(t *testing.T) {
 		defer conn.Close()
 
 		const (
-			databaseName      = "tinytext_upgrade_26687"
-			sourceTable       = "legacy_source"
-			cloneTable        = "legacy_clone"
-			renamedTable      = "legacy_renamed"
-			modifiedTable     = "legacy_modified"
-			readdedTable      = "legacy_readded"
-			cloneCopyTable    = "legacy_clone_copy"
-			renamedCopyTable  = "legacy_renamed_copy"
-			modifiedCopyTable = "legacy_modified_copy"
-			readdedCopyTable  = "legacy_readded_copy"
-			stageName         = "tinytext_upgrade_26687_stage"
-			dumpPath          = "legacy-like"
-			legacyCloneSQL    = "CREATE TABLE " + databaseName + "." + cloneTable + " LIKE " + databaseName + "." + sourceTable
-			legacyRenamedSQL  = "CREATE TABLE " + databaseName + "." + renamedTable + " (id INT PRIMARY KEY, payload TINYTEXT)"
-			legacyModifiedSQL = "CREATE TABLE " + databaseName + "." + modifiedTable + " (id INT PRIMARY KEY, payload TINYTEXT)"
-			legacyReaddedSQL  = "CREATE TABLE " + databaseName + "." + readdedTable + " (id INT PRIMARY KEY, payload TINYTEXT)"
-			renamedColumnName = "renamed_payload"
+			databaseName       = "tinytext_upgrade_26687"
+			sourceTable        = "legacy_source"
+			cloneTable         = "legacy_clone"
+			renamedTable       = "legacy_renamed"
+			modifiedTable      = "legacy_modified"
+			readdedTable       = "legacy_readded"
+			cloneCopyTable     = "legacy_clone_copy"
+			renamedCopyTable   = "legacy_renamed_copy"
+			modifiedCopyTable  = "legacy_modified_copy"
+			readdedCopyTable   = "legacy_readded_copy"
+			assignTarget       = "fresh_assign_target"
+			ignoreTarget       = "fresh_ignore_target"
+			updateTarget       = "fresh_update_target"
+			alterCopyTable     = "legacy_alter_copy"
+			strictCTASTable    = "strict_ctas_target"
+			nonStrictCTASTable = "nonstrict_ctas_target"
+			stageName          = "tinytext_upgrade_26687_stage"
+			dumpPath           = "legacy-like"
+			legacyCloneSQL     = "CREATE TABLE " + databaseName + "." + cloneTable + " LIKE " + databaseName + "." + sourceTable
+			legacyRenamedSQL   = "CREATE TABLE " + databaseName + "." + renamedTable + " (id INT PRIMARY KEY, payload TINYTEXT)"
+			legacyModifiedSQL  = "CREATE TABLE " + databaseName + "." + modifiedTable + " (id INT PRIMARY KEY, payload TINYTEXT)"
+			legacyReaddedSQL   = "CREATE TABLE " + databaseName + "." + readdedTable + " (id INT PRIMARY KEY, payload TINYTEXT)"
+			renamedColumnName  = "renamed_payload"
 		)
 		_, _ = conn.ExecContext(ctx, "drop database if exists "+databaseName)
 		_, _ = conn.ExecContext(ctx, "drop stage if exists "+stageName)
@@ -95,6 +101,8 @@ func TestV406UpgradeRecoversLegacyTinyText(t *testing.T) {
 		mustExecTinyTextUpgradeSQL(t, ctx, conn,
 			legacyModifiedSQL)
 		mustExecTinyTextUpgradeSQL(t, ctx, conn, legacyReaddedSQL)
+		mustExecTinyTextUpgradeSQL(t, ctx, conn,
+			"create table "+databaseName+"."+alterCopyTable+" (id int primary key, payload tinytext)")
 
 		// Recreate version-zero definitions emitted by a pre-fix binary through
 		// the engine's delete/create protocol: Createsql says TINYTEXT while
@@ -106,6 +114,13 @@ func TestV406UpgradeRecoversLegacyTinyText(t *testing.T) {
 			cn.RawService().(cnservice.Service),
 			databaseName,
 			sourceTable,
+		)
+		writeLegacyTinyTextCatalogAndRow(
+			t,
+			ctx,
+			cn.RawService().(cnservice.Service),
+			databaseName,
+			alterCopyTable,
 		)
 		replaceLegacyTinyTextCatalog(
 			t,
@@ -163,6 +178,7 @@ func TestV406UpgradeRecoversLegacyTinyText(t *testing.T) {
 		)
 
 		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, sourceTable, "payload"))
+		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, alterCopyTable, "payload"))
 		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, cloneTable, "payload"))
 		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, renamedTable, renamedColumnName))
 		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, modifiedTable, "payload"))
@@ -211,6 +227,48 @@ func TestV406UpgradeRecoversLegacyTinyText(t *testing.T) {
 		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, renamedTable, renamedColumnName))
 
 		mustExecTinyTextUpgradeSQL(t, ctx, conn, "set session sql_mode = 'STRICT_TRANS_TABLES'")
+		for _, tableName := range []string{assignTarget, ignoreTarget, updateTarget} {
+			mustExecTinyTextUpgradeSQL(t, ctx, conn,
+				"create table "+databaseName+"."+tableName+" (id int primary key, payload tinytext)")
+		}
+
+		// A recovered source and a fresh target have the same normalized planner
+		// type. The write boundary must still validate the source because its
+		// physical rows predate the TINYTEXT width constraint.
+		expectTinyTextStrictError(t, ctx, conn,
+			"insert into "+databaseName+"."+assignTarget+
+				" select id, payload from "+databaseName+"."+sourceTable)
+		require.Equal(t, 0, tinyTextUpgradeRowCount(t, ctx, conn, databaseName, assignTarget))
+
+		mustExecTinyTextUpgradeSQL(t, ctx, conn,
+			"insert into "+databaseName+"."+updateTarget+" values (1, 'safe')")
+		expectTinyTextStrictError(t, ctx, conn,
+			"update "+databaseName+"."+updateTarget+
+				" set payload = (select payload from "+databaseName+"."+sourceTable+" where id = 1) where id = 1")
+		require.Equal(t, 4, tinyTextUpgradeValueLength(t, ctx, conn, databaseName, updateTarget, "payload", 1))
+
+		expectTinyTextStrictError(t, ctx, conn,
+			"create table "+databaseName+"."+strictCTASTable+
+				" as select id, payload from "+databaseName+"."+sourceTable)
+		mustExecTinyTextUpgradeSQL(t, ctx, conn,
+			"drop table if exists "+databaseName+"."+strictCTASTable)
+
+		// ALTER COPY executes an internal INSERT. It keeps its internal error
+		// contract, but must not silently copy an oversized legacy row.
+		_, alterCopyErr := conn.ExecContext(ctx,
+			"alter table "+databaseName+"."+alterCopyTable+" algorithm=copy, modify column id bigint")
+		require.Error(t, alterCopyErr)
+		require.Equal(t, 1000, tinyTextUpgradeValueLength(
+			t, ctx, conn, databaseName, alterCopyTable, "payload", 1,
+		))
+
+		mustExecTinyTextUpgradeSQL(t, ctx, conn,
+			"insert ignore into "+databaseName+"."+ignoreTarget+
+				" select id, payload from "+databaseName+"."+sourceTable)
+		require.Equal(t, 255, tinyTextUpgradeValueLength(
+			t, ctx, conn, databaseName, ignoreTarget, "payload", 1,
+		))
+
 		for _, tableName := range []string{sourceTable, cloneTable} {
 			expectTinyTextStrictError(
 				t,
@@ -240,6 +298,33 @@ func TestV406UpgradeRecoversLegacyTinyText(t *testing.T) {
 		require.Equal(t, 1000, existingLength)
 
 		mustExecTinyTextUpgradeSQL(t, ctx, conn, "set session sql_mode = ''")
+		mustExecTinyTextUpgradeSQL(t, ctx, conn,
+			"insert into "+databaseName+"."+assignTarget+
+				" select id, payload from "+databaseName+"."+sourceTable)
+		require.Equal(t, 255, tinyTextUpgradeValueLength(
+			t, ctx, conn, databaseName, assignTarget, "payload", 1,
+		))
+		mustExecTinyTextUpgradeSQL(t, ctx, conn,
+			"update "+databaseName+"."+updateTarget+
+				" set payload = (select payload from "+databaseName+"."+sourceTable+" where id = 1) where id = 1")
+		require.Equal(t, 255, tinyTextUpgradeValueLength(
+			t, ctx, conn, databaseName, updateTarget, "payload", 1,
+		))
+		mustExecTinyTextUpgradeSQL(t, ctx, conn,
+			"create table "+databaseName+"."+nonStrictCTASTable+
+				" as select id, payload from "+databaseName+"."+sourceTable)
+		require.Equal(t, int64(types.MaxTinyTextLen), tinyTextCatalogWidth(
+			t, ctx, conn, databaseName, nonStrictCTASTable, "payload",
+		))
+		require.Equal(t, 255, tinyTextUpgradeValueLength(
+			t, ctx, conn, databaseName, nonStrictCTASTable, "payload", 1,
+		))
+		mustExecTinyTextUpgradeSQL(t, ctx, conn,
+			"alter table "+databaseName+"."+alterCopyTable+" algorithm=copy, modify column id bigint")
+		require.Equal(t, 255, tinyTextUpgradeValueLength(
+			t, ctx, conn, databaseName, alterCopyTable, "payload", 1,
+		))
+
 		mustExecTinyTextUpgradeSQL(t, ctx, conn,
 			"insert into "+databaseName+"."+sourceTable+" values (2, repeat('n', 1000))")
 		mustExecTinyTextUpgradeSQL(t, ctx, conn,
@@ -419,6 +504,39 @@ func expectTinyTextStrictError(
 	var mysqlErr *mysqlDriver.MySQLError
 	require.ErrorAs(t, err, &mysqlErr, statement)
 	require.Equal(t, uint16(1406), mysqlErr.Number, statement)
+}
+
+func tinyTextUpgradeRowCount(
+	t *testing.T,
+	ctx context.Context,
+	conn *sql.Conn,
+	databaseName string,
+	tableName string,
+) int {
+	t.Helper()
+	var count int
+	require.NoError(t, conn.QueryRowContext(
+		ctx, "select count(*) from "+databaseName+"."+tableName,
+	).Scan(&count))
+	return count
+}
+
+func tinyTextUpgradeValueLength(
+	t *testing.T,
+	ctx context.Context,
+	conn *sql.Conn,
+	databaseName string,
+	tableName string,
+	columnName string,
+	id int,
+) int {
+	t.Helper()
+	var length int
+	require.NoError(t, conn.QueryRowContext(
+		ctx,
+		fmt.Sprintf("select length(%s) from %s.%s where id = %d", columnName, databaseName, tableName, id),
+	).Scan(&length))
+	return length
 }
 
 func writeLegacyTinyTextCatalogAndRow(

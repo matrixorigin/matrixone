@@ -695,7 +695,7 @@ func (builder *QueryBuilder) applyGeneratedColumnAssignmentCast(expr *plan.Expr,
 		return expr
 	}
 	funcName := assignmentCastFunctionName(expr.Typ, isIgnore, builder.compCtx.GetProcess())
-	assignmentCast, err := forceCastExprWithName(builder.GetContext(), f.Args[0], expr.Typ, funcName)
+	assignmentCast, err := forceAssignmentCastExprWithName(builder.GetContext(), f.Args[0], expr.Typ, funcName)
 	if err != nil {
 		return expr
 	}
