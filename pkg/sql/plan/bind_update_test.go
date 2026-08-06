@@ -143,10 +143,10 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 			wantInline: 1,
 		},
 		{
-			name:       "synchronous primary key rejected",
+			name:       "synchronous primary key uses old-key maintenance",
 			tableDef:   newTableDef(newIndex("ft", catalog.MOIndexFullTextAlgo.ToString(), "", "body")),
 			updateCols: map[string]tree.Expr{"id": nil},
-			wantReject: true,
+			wantInline: 1,
 		},
 		{
 			name:       "async primary key stays modern",
@@ -157,6 +157,12 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 			name:       "synchronous master uses modern maintenance",
 			tableDef:   newTableDef(newIndex("master", catalog.MOIndexMasterAlgo.ToString(), "", "body")),
 			updateCols: map[string]tree.Expr{"body": nil},
+			wantInline: 1,
+		},
+		{
+			name:       "synchronous master primary key uses old-key maintenance",
+			tableDef:   newTableDef(newIndex("master", catalog.MOIndexMasterAlgo.ToString(), "", "body")),
+			updateCols: map[string]tree.Expr{"id": nil},
 			wantInline: 1,
 		},
 	}

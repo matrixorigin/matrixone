@@ -166,6 +166,8 @@ SET
     b.y = 2;
 SELECT id, x, y FROM multi_update_on_update ORDER BY id;
 SELECT COUNT(*) FROM multi_update_on_update WHERE updated_at = '2000-01-01 00:00:00';
+SELECT COUNT(*) FROM multi_update_on_update WHERE updated_at IS NULL;
+SELECT COUNT(*) FROM multi_update_on_update FORCE INDEX (idx_updated_at) WHERE updated_at IS NULL;
 DROP TABLE multi_update_on_update;
 
 DROP TABLE IF EXISTS multi_update_master_target;
@@ -189,6 +191,13 @@ SET
     p.v = 'z';
 SELECT * FROM multi_update_master_target WHERE a = 'changed' AND b = 'value';
 SELECT COUNT(*) FROM multi_update_master_target WHERE a = 'old' AND b = 'value';
+SELECT * FROM multi_update_master_plain ORDER BY id;
+UPDATE multi_update_master_target m
+JOIN multi_update_master_plain p ON m.id = p.id
+SET
+    m.id = '2',
+    p.v = 'pk-updated';
+SELECT * FROM multi_update_master_target WHERE a = 'changed' AND b = 'value';
 SELECT * FROM multi_update_master_plain ORDER BY id;
 DROP TABLE multi_update_master_target;
 DROP TABLE multi_update_master_plain;
@@ -216,3 +225,80 @@ SELECT id, v FROM multi_update_auto_plain;
 DROP TABLE multi_update_auto_child;
 DROP TABLE multi_update_auto_plain;
 DROP TABLE multi_update_auto_parent;
+
+DROP TABLE IF EXISTS multi_update_outer_auto_child;
+DROP TABLE IF EXISTS multi_update_outer_auto_plain;
+CREATE TABLE multi_update_outer_auto_child (
+    id INT PRIMARY KEY,
+    seq INT AUTO_INCREMENT,
+    v INT NOT NULL
+);
+CREATE TABLE multi_update_outer_auto_plain (id INT PRIMARY KEY, v INT);
+INSERT INTO multi_update_outer_auto_child (id, v) VALUES (1, 1);
+INSERT INTO multi_update_outer_auto_plain VALUES (2, 0);
+UPDATE multi_update_outer_auto_child c
+RIGHT JOIN multi_update_outer_auto_plain p ON c.id = p.id
+SET
+    c.seq = DEFAULT,
+    p.v = 9;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_outer_auto_plain;
+INSERT INTO multi_update_outer_auto_child (id, v) VALUES (2, 2);
+SELECT id, seq, v FROM multi_update_outer_auto_child ORDER BY id;
+DROP TABLE multi_update_outer_auto_child;
+DROP TABLE multi_update_outer_auto_plain;
+
+DROP TABLE IF EXISTS multi_update_cascade_child;
+DROP TABLE IF EXISTS multi_update_cascade_parent;
+DROP TABLE IF EXISTS multi_update_cascade_plain;
+DROP TABLE IF EXISTS multi_update_cascade_source;
+CREATE TABLE multi_update_cascade_parent (id INT AUTO_INCREMENT PRIMARY KEY);
+CREATE TABLE multi_update_cascade_child (
+    id INT PRIMARY KEY,
+    parent_id INT,
+    FOREIGN KEY (parent_id) REFERENCES multi_update_cascade_parent(id) ON UPDATE CASCADE
+);
+CREATE TABLE multi_update_cascade_plain (id INT PRIMARY KEY, v INT);
+CREATE TABLE multi_update_cascade_source (id INT);
+INSERT INTO multi_update_cascade_parent VALUES (1);
+INSERT INTO multi_update_cascade_child VALUES (1, 1);
+INSERT INTO multi_update_cascade_plain VALUES (1, 0);
+INSERT INTO multi_update_cascade_source VALUES (1), (1);
+UPDATE multi_update_cascade_parent p
+JOIN multi_update_cascade_source s ON p.id = s.id
+JOIN multi_update_cascade_plain o ON o.id = s.id
+SET
+    p.id = 2,
+    o.v = 8;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_cascade_parent;
+SELECT * FROM multi_update_cascade_child;
+SELECT * FROM multi_update_cascade_plain;
+DROP TABLE multi_update_cascade_child;
+DROP TABLE multi_update_cascade_parent;
+DROP TABLE multi_update_cascade_plain;
+DROP TABLE multi_update_cascade_source;
+
+DROP TABLE IF EXISTS multi_update_fulltext_target;
+DROP TABLE IF EXISTS multi_update_fulltext_source;
+DROP TABLE IF EXISTS multi_update_fulltext_plain;
+CREATE TABLE multi_update_fulltext_target (id INT PRIMARY KEY, body TEXT);
+CREATE FULLTEXT INDEX idx_multi_update_fulltext ON multi_update_fulltext_target(body);
+CREATE TABLE multi_update_fulltext_source (id INT);
+CREATE TABLE multi_update_fulltext_plain (id INT PRIMARY KEY, v INT);
+INSERT INTO multi_update_fulltext_target VALUES (1, 'old token');
+INSERT INTO multi_update_fulltext_source VALUES (1), (1);
+INSERT INTO multi_update_fulltext_plain VALUES (1, 0);
+UPDATE multi_update_fulltext_target f
+JOIN multi_update_fulltext_source s ON f.id = s.id
+JOIN multi_update_fulltext_plain p ON p.id = s.id
+SET
+    f.body = 'new token',
+    p.v = 7;
+SELECT COUNT(*) FROM multi_update_fulltext_target
+WHERE MATCH(body) AGAINST('new' IN NATURAL LANGUAGE MODE);
+SELECT COUNT(*) FROM multi_update_fulltext_target
+WHERE MATCH(body) AGAINST('old' IN NATURAL LANGUAGE MODE);
+DROP TABLE multi_update_fulltext_target;
+DROP TABLE multi_update_fulltext_source;
+DROP TABLE multi_update_fulltext_plain;

@@ -823,6 +823,10 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
 	op.ColOffset = preCtx.ColOffset
+	op.HasTargetSelector = preCtx.HasTargetSelector
+	op.TargetRowNumberCol = preCtx.TargetRowNumberCol
+	op.TargetActiveCol = preCtx.TargetActiveCol
+	op.TargetRowIDCol = preCtx.TargetRowIdCol
 	op.RejectZeroTemporal, err = util.RejectZeroTemporalWritePolicy(proc)
 	if err != nil {
 		return nil, err
