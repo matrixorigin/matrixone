@@ -159,11 +159,18 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 	nkeys := len(u.keys)
 	n := 0
 	for i := u.offset; i < nkeys && n < 8192; i++ {
-		vector.AppendAny(u.batch.Vecs[0], u.keys[i], false, proc.Mp())
+		// Check each append before incrementing n / publishing the batch — an mpool
+		// allocation failure must surface as the error, not a batch that claims more
+		// rows than its vectors hold (the streaming sibling propagates these too).
+		if err := vector.AppendAny(u.batch.Vecs[0], u.keys[i], false, proc.Mp()); err != nil {
+			return vm.CancelResult, err
+		}
 		if withScore {
 			// score column is T_float32 (matches ftIndexColdefs / classic fulltext);
 			// the engine computes float64 relevance, narrow it on append.
-			vector.AppendFixed[float32](u.batch.Vecs[1], float32(u.distances[i]), false, proc.Mp())
+			if err := vector.AppendFixed[float32](u.batch.Vecs[1], float32(u.distances[i]), false, proc.Mp()); err != nil {
+				return vm.CancelResult, err
+			}
 		}
 		n++
 	}

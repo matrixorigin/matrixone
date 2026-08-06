@@ -133,16 +133,21 @@ func disjunctiveTerms(q BoolQuery) ([]clause, bool) {
 	return q.should, true
 }
 
-// searchBooleanFull evaluates a boolean query against a DENSE per-doc-ord accumulator
-// (score []float64 + doc bitsets) rather than a map[int64]float64 per clause plus a
-// candidate map. Doc ords are dense in [0, N) per segment, so the arrays are O(N) with no
-// rehash — a low-selectivity 2-char CJK term matches most of the corpus, and the old maps
-// then rehashed themselves to death and held ~30 bytes/doc × (#clauses+1). This is O(N)
-// memory total, flat, and the dominant remaining boolean-layer allocator is gone.
-func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Membership, gs *globalStats) ([]Result, error) {
+// evalBoolean runs ONE segment's boolean evaluation against a DENSE per-doc-ord accumulator
+// (score []float32 + doc bitsets) rather than a map[int64]float64 per clause plus a
+// candidate map, and calls emit(ord, score) for every doc that satisfies the query (all
+// MUST present, no MUST-NOT, and — with no MUST — at least one SHOULD/ADJUST) AND passes the
+// WHERE/liveness prefilter. Doc ords are dense in [0, N) per segment, so the arrays are O(N)
+// with no rehash — a low-selectivity 2-char CJK term matches most of the corpus, and the old
+// maps then rehashed themselves to death and held ~30 bytes/doc × (#clauses+1). Peak Go heap
+// is O(segment N) (the dense score array + candidate/must bitsets), bounded by the segment
+// capacity and freed when the call returns — INDEPENDENT of k. Both the top-k
+// searchBooleanFull and the no-LIMIT streaming path (Index.streamBoolean) build on this;
+// they differ only in what emit does (bounded heap push vs. stream to the sink).
+func (s *Segment) evalBoolean(q BoolQuery, algo ScoreAlgo, allow Membership, gs *globalStats, emit func(ord int, score float32)) error {
 	n := int(s.N)
-	if n == 0 || k <= 0 {
-		return nil, nil
+	if n == 0 {
+		return nil
 	}
 	avgDocLen := gs.avgdl(s)
 	score := make([]float32, n)
@@ -153,16 +158,15 @@ func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Me
 		if err := s.evalClauseInto(c, algo, avgDocLen, gs, false, func(ord int64, _ float32) {
 			mustNot.set(int(ord))
 		}); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
-	h := newTopKHeap(k, s.N)
 	admit := func(ord int) {
 		if mustNot.get(ord) || !allowed(allow, int64(ord)) { // WHERE prefilter (nil = allow all)
 			return
 		}
-		h.Push(int64(ord), -score[ord])
+		emit(ord, score[ord])
 	}
 
 	if len(q.must) > 0 {
@@ -175,7 +179,7 @@ func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Me
 				mustHit[ord]++
 				touched.set(int(ord))
 			}); err != nil {
-				return nil, err
+				return err
 			}
 		}
 		// SHOULD/ADJUST add to the score of whatever docs they touch; only MUST-satisfying
@@ -185,7 +189,7 @@ func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Me
 				if err := s.evalClauseInto(c, algo, avgDocLen, gs, true, func(ord int64, sc float32) {
 					score[ord] += sc
 				}); err != nil {
-					return nil, err
+					return err
 				}
 			}
 		}
@@ -195,7 +199,7 @@ func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Me
 				admit(ord)
 			}
 		})
-		return heapToResults(s, h), nil
+		return nil
 	}
 
 	// No MUST: the candidate set is the union of SHOULD *and* ADJUST. A ~ (ADJUST) term
@@ -209,11 +213,26 @@ func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Me
 				score[ord] += sc
 				cand.set(int(ord))
 			}); err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
 	cand.forEach(admit)
+	return nil
+}
+
+// searchBooleanFull returns the segment's top-k boolean hits by feeding evalBoolean's
+// admitted candidates into a bounded top-K heap (score desc; equal scores by ascending ord).
+func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Membership, gs *globalStats) ([]Result, error) {
+	if s.N == 0 || k <= 0 {
+		return nil, nil
+	}
+	h := newTopKHeap(k, s.N)
+	if err := s.evalBoolean(q, algo, allow, gs, func(ord int, score float32) {
+		h.Push(int64(ord), -score)
+	}); err != nil {
+		return nil, err
+	}
 	return heapToResults(s, h), nil
 }
 

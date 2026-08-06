@@ -166,12 +166,12 @@ func (s *Segment) streamWAND(clauses []clause, algo ScoreAlgo, gs *globalStats, 
 
 // StreamQuery answers a no-LIMIT MATCH by streaming every matching (pk, score) to emit
 // in bounded batches instead of materializing the whole result set (the ranking is
-// done by the upstream ORDER BY score node). A pure disjunction of single terms — the
-// ranked-retrieval shape — streams heap-free via streamWAND across all segments
-// (global stats + per-segment liveness). Any other shape (NL phrase, a full boolean
-// with MUST/MUST-NOT/phrase) has an intrinsically materialized candidate set, so it
-// runs the normal search unbounded and pushes the result through the same sink — a
-// uniform emit interface, and still no separate paginated copy in the caller.
+// done by the upstream ORDER BY score node). Every shape streams ONE SEGMENT AT A TIME
+// with peak Go heap O(one segment), never O(globalN): a pure disjunction of single terms
+// (the ranked-retrieval shape) streams heap-free via streamWAND; an NL phrase via
+// streamPhrase; and a full boolean with MUST/MUST-NOT/mixed-phrase via streamBoolean
+// (each segment's dense evalBoolean, freed before the next). All share the same sink — a
+// uniform emit interface, and no separate paginated copy in the caller.
 func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo ScoreAlgo, filter docfilter.MembershipFilter, emit func(keys *vectorindex.ColumnBuffer, distances []float64) error) error {
 	if idx.globalN == 0 {
 		return nil
@@ -210,21 +210,12 @@ func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo 
 		return idx.streamPhrase(slots, algo, filter, sink)
 	}
 
-	// Boolean, non-disjunctive (MUST / MUST-NOT / mixed phrase): the candidate set is
-	// intrinsic to the operators, so fall back to the materializing search and push its
-	// results through the sink. Streaming this shape is a further step (its own change).
-	results, err := idx.SearchQuery(pattern, boolean, parser, algo, int(idx.globalN), filter)
-	if err != nil {
-		return err
-	}
-	for _, r := range results {
-		sink.pushAny(r.Pk, r.Score)
-		if sink.err != nil {
-			return sink.err
-		}
-	}
-	sink.flush()
-	return sink.err
+	// Boolean, non-disjunctive (MUST / MUST-NOT / mixed phrase): stream each live match
+	// through the sink one segment at a time via evalBoolean. Peak Go heap is O(one
+	// segment) (bounded by its capacity), NOT O(globalN) — so a low-selectivity boolean
+	// (e.g. +common on millions of rows) no longer materializes the whole live corpus as
+	// a top-K sized to globalN before emitting. Ranking is the upstream ORDER BY node's.
+	return idx.streamBoolean(q, algo, filter, sink)
 }
 
 // streamPhrase emits every live phrase match (pk, score) through sink WITHOUT a global

@@ -433,6 +433,45 @@ func (idx *Index) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, filter docfi
 	return topKResults(results, k), nil
 }
 
+// streamBoolean emits every LIVE, WHERE-admitted boolean match (pk, score) through sink
+// WITHOUT a global top-K heap or an O(corpus) matched map — the streaming analogue of
+// SearchBoolean for the no-LIMIT MUST / MUST-NOT / mixed-phrase path. Liveness is ANDed into
+// each segment's prefilter exactly as SearchBoolean does, so a pk that survives in exactly
+// one live segment is emitted once. Each segment's evalBoolean is O(segment N) (bounded by
+// the segment capacity) and freed before the next, so peak Go heap is O(one segment), NOT
+// O(globalN) — this is what makes the streamed boolean shape genuinely bounded rather than
+// the old SearchQuery(globalN) fallback that materialized the whole live corpus. Ranking is
+// the upstream ORDER BY score node's job (same contract as the other streaming paths).
+func (idx *Index) streamBoolean(q BoolQuery, algo ScoreAlgo, filter docfilter.MembershipFilter, sink *streamSink) error {
+	if idx.globalN == 0 {
+		return nil
+	}
+	gs := idx.newGlobalStats()
+	for si, seg := range idx.segments {
+		allow := andAllow(mkAllow(seg, filter), &livenessMembership{idx: idx, si: si})
+		seg := seg // capture for the emit closure
+		err := seg.evalBoolean(q, algo, allow, gs, func(ord int, score float32) {
+			sink.pushPk(seg, int64(ord), score) // pushPk no-ops once the sink has stopped
+		})
+		if err != nil {
+			return err
+		}
+		// Bail before the NEXT segment on an emit error (the expensive per-segment work is
+		// bounded to one segment). Unlike streamWAND's `for !sink.stopped`, evalBoolean is
+		// NOT short-circuited mid-segment on abort: a boolean query must fully score every
+		// clause into the dense array before it can admit any candidate, so that work is
+		// already done by the time an emit can fail — the only remaining cost is the tail of
+		// the candidate forEach running as no-op pushes (a cheap bitset walk, no scoring).
+		// Threading a stop signal through the sink-agnostic evalBoolean to save that tail
+		// isn't worth complicating the helper it shares with searchBooleanFull.
+		if sink.err != nil {
+			return sink.err
+		}
+	}
+	sink.flush()
+	return sink.err
+}
+
 // SearchBooleanText tokenizes+parses query in boolean mode with tok, then
 // evaluates it across the index — the convenience entry mirroring
 // MATCH(col) AGAINST('query' IN BOOLEAN MODE) with a fixed tokenizer.
