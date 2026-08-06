@@ -178,7 +178,10 @@ func TestClusterCanStartNewCNServices(t *testing.T) {
 
 func TestMultiClusterCanWork(t *testing.T) {
 	new := func() *cluster {
-		value, err := StartTestCluster(WithCNCount(1))
+		value, err := StartTestCluster(
+			WithCNCount(1),
+			WithConcurrentTestClusters(),
+		)
 		if value != nil {
 			t.Cleanup(func() { require.NoError(t, value.Close()) })
 		}
@@ -202,7 +205,10 @@ func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
 		},
 	)
 
-	c, err := StartTestCluster(WithCNCount(1))
+	c, err := StartTestCluster(
+		WithCNCount(1),
+		WithConcurrentTestClusters(),
+	)
 	if c != nil {
 		t.Cleanup(func() { require.NoError(t, c.Close()) })
 	}
@@ -771,7 +777,10 @@ func TestClusterCloseContinuesAfterServiceError(t *testing.T) {
 		state:    started,
 		services: []*operator{firstOp, secondOp},
 	}
-	admission, err := clusteradmission.Acquire(context.Background())
+	admission, err := clusteradmission.Acquire(
+		context.Background(),
+		clusteradmission.AllowConcurrent,
+	)
 	require.NoError(t, err)
 	c.testAdmission = admission
 
