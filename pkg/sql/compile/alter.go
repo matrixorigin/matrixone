@@ -1624,8 +1624,8 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 	if err := c.proc.Ctx.Err(); err != nil {
 		return err
 	}
-	autoCols := incrservice.GetUserAutoColumnFromDef(copyDef)
-	if len(autoCols) == 0 {
+	plannedAutoCols := incrservice.GetUserAutoColumnFromDef(copyDef)
+	if len(plannedAutoCols) == 0 {
 		return nil
 	}
 	if !engine.TxnSupportsAutoIncrEpochFence(c.proc.GetTxnOperator()) {
@@ -1633,6 +1633,32 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 			c.proc.Ctx,
 			"AUTO_INCREMENT allocator reset requires epoch fencing on every TN service",
 		)
+	}
+	// The planner copy definition can retain hidden source columns that are not
+	// emitted into the temporary CREATE SQL. Use the created relation definition
+	// so ColIndex matches mo_increment_columns for SetOffset.
+	createdDef := newRel.GetTableDef(c.proc.Ctx)
+	if createdDef == nil {
+		return moerr.NewInternalError(c.proc.Ctx, "missing ALTER COPY table definition")
+	}
+	autoCols := incrservice.GetUserAutoColumnFromDef(createdDef)
+	plannedNames := make(map[string]struct{}, len(plannedAutoCols))
+	for _, col := range plannedAutoCols {
+		plannedNames[strings.ToLower(col.ColName)] = struct{}{}
+	}
+	for _, col := range autoCols {
+		name := strings.ToLower(col.ColName)
+		if _, ok := plannedNames[name]; !ok {
+			return moerr.NewInternalErrorf(
+				c.proc.Ctx,
+				"unexpected AUTO_INCREMENT column %q on ALTER COPY table",
+				col.ColName,
+			)
+		}
+		delete(plannedNames, name)
+	}
+	if len(plannedNames) != 0 {
+		return moerr.NewInternalError(c.proc.Ctx, "missing AUTO_INCREMENT column on ALTER COPY table")
 	}
 
 	sourceOffsets := make(map[string]uint64)
@@ -1751,7 +1777,7 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 		}
 		if err := incrservice.ValidateAutoColumnOffset(
 			c.proc.Ctx,
-			types.T(copyDef.Cols[col.ColIndex].Typ.Id),
+			types.T(createdDef.Cols[col.ColIndex].Typ.Id),
 			effectiveOffset,
 		); err != nil {
 			return err

@@ -608,6 +608,7 @@ func TestReconcileAlterCopyAutoIncrementUsesStableIdentityAndSafeBounds(t *testi
 		},
 	}
 	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableDef(gomock.Any()).Return(copyDef)
 	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
 	copyRel.EXPECT().GetDBID(gomock.Any()).Return(uint64(1))
 	copyRel.EXPECT().AlterTable(gomock.Any(), nil, gomock.Any()).DoAndReturn(
@@ -668,10 +669,22 @@ func TestReconcileAlterCopyAutoIncrementPreservesFreshColumnInitialization(t *te
 		Name:  "dept_copy",
 		Cols: []*plan.ColDef{
 			{ColId: 10, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 11, Name: catalog.Row_ID, Hidden: true, Typ: plan.Type{Id: int32(types.T_Rowid)}},
+			{ColId: 12, Name: catalog.FakePrimaryKeyColName, Hidden: true, Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
 			{ColId: 20, Name: "new_id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
 		},
 	}
+	createdDef := &plan.TableDef{
+		TblId: 2,
+		Name:  "dept_copy",
+		Cols: []*plan.ColDef{
+			{ColId: 30, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: 31, Name: "new_id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+			{ColId: 32, Name: catalog.FakePrimaryKeyColName, Hidden: true, Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+		},
+	}
 	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableDef(gomock.Any()).Return(createdDef)
 	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId)
 	copyRel.EXPECT().GetDBID(gomock.Any()).Return(uint64(1))
 	copyRel.EXPECT().AlterTable(gomock.Any(), nil, gomock.Any()).DoAndReturn(
@@ -718,6 +731,7 @@ func TestReconcileAlterCopyAutoIncrementAdvancesFreshColumnFromCopiedRows(t *tes
 		},
 	}
 	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableDef(gomock.Any()).Return(copyDef)
 	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId)
 	copyRel.EXPECT().GetDBID(gomock.Any()).Return(uint64(1))
 	copyRel.EXPECT().AlterTable(gomock.Any(), nil, gomock.Any()).DoAndReturn(
@@ -779,6 +793,7 @@ func TestReconcileAlterCopyAutoIncrementReappliesConfiguredFreshColumnAlongsideR
 		},
 	}
 	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableDef(gomock.Any()).Return(copyDef)
 	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId)
 	copyRel.EXPECT().GetDBID(gomock.Any()).Return(uint64(1))
 	copyRel.EXPECT().AlterTable(gomock.Any(), nil, gomock.Any()).DoAndReturn(
@@ -830,6 +845,7 @@ func TestReconcileAlterCopyAutoIncrementExplicitResetIgnoresReservedSourceRange(
 		Cols: []*plan.ColDef{{ColId: 10, Name: "id", Typ: autoType}},
 	}
 	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableDef(gomock.Any()).Return(copyDef)
 	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
 	copyRel.EXPECT().GetDBID(gomock.Any()).Return(uint64(1))
 	copyRel.EXPECT().AlterTable(gomock.Any(), nil, gomock.Any()).DoAndReturn(
@@ -868,6 +884,7 @@ func TestReconcileAlterCopyAutoIncrementAdvancesReplacementEpoch(t *testing.T) {
 		Cols: []*plan.ColDef{{ColId: 10, Name: "id", Typ: autoType}},
 	}
 	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableDef(gomock.Any()).Return(copyDef)
 	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
 	copyRel.EXPECT().GetDBID(gomock.Any()).Return(uint64(1))
 	copyRel.EXPECT().AlterTable(gomock.Any(), nil, gomock.Any()).DoAndReturn(
@@ -1137,6 +1154,7 @@ func TestReconcileAlterCopyAutoIncrementSkipsHiddenAndRejectsNarrowedOverflow(t 
 			ColId: 10, Name: "id", Typ: plan.Type{Id: int32(types.T_uint8), AutoIncr: true},
 		}}}
 		copyRel := mock_frontend.NewMockRelation(ctrl)
+		copyRel.EXPECT().GetTableDef(gomock.Any()).Return(copyDef)
 		copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
 		autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 		autoSvc.EXPECT().SetOffset(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
@@ -1172,6 +1190,7 @@ func TestReconcileAlterCopyAutoIncrementStopsAfterCancellation(t *testing.T) {
 		},
 	}
 	copyRel := mock_frontend.NewMockRelation(ctrl)
+	copyRel.EXPECT().GetTableDef(gomock.Any()).Return(copyDef)
 	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId).AnyTimes()
 	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 	autoSvc.EXPECT().SetOffset(ctx, copyDef.TblId, 0, "first", uint64(99), c.proc.GetTxnOperator()).DoAndReturn(
