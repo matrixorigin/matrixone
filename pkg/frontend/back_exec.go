@@ -909,9 +909,12 @@ func executeStmtInSameSession(
 	prevDerivedStmt := ses.ReplaceDerivedStmt(true)
 	// inherit database
 	ses.SetDatabaseName(prevDB)
-	proc := ses.GetTxnCompileCtx().GetProcess()
+	proc := ses.proc
+	prepareParams := proc.DetachPrepareParams()
+	proc.BorrowPrepareParams(prepareParams)
 	//restore normal protocol and output callback
 	defer func() {
+		defer proc.RestorePrepareParams(prepareParams)
 		ses.ReplaceDerivedStmt(prevDerivedStmt)
 		//@todo we need to improve: make one session, one proc, one txnOperator
 		p := ses.GetTxnCompileCtx().GetProcess()

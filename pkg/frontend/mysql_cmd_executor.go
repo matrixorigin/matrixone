@@ -916,9 +916,43 @@ func doSetVar(
 	sql string,
 	preparedExpression bool,
 ) error {
+	if preparedExpression && len(sv.Assignments) > 1 {
+		for _, assign := range sv.Assignments {
+			if assign.System || assign.SetNames {
+				return moerr.NewNotSupported(execCtx.reqCtx,
+					"prepared multi-assignment SET supports user variables only")
+			}
+		}
+	}
+
 	var err error = nil
 	var ok bool
 	var userVarIsBin bool
+	type evaluatedAssignment struct {
+		assign       *tree.VarAssignmentExpr
+		value        interface{}
+		userVarIsBin bool
+	}
+	evaluateAssignment := func(assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
+		isBin := false
+		value, evalErr := getExprValueWithPrepareMode(
+			assign.Value, ses, execCtx, preparedExpression, &isBin)
+		if evalErr != nil {
+			return evaluatedAssignment{}, evalErr
+		}
+
+		if systemVar, exists := gSysVarsDefs[assign.Name]; exists {
+			if isDefault, isBool := value.(bool); isBool && isDefault {
+				value = systemVar.Default
+			}
+		}
+		return evaluatedAssignment{
+			assign:       assign,
+			value:        value,
+			userVarIsBin: isBin,
+		}, nil
+	}
+
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
 		var oldValueRaw interface{}
 		if system {
@@ -963,25 +997,14 @@ func doSetVar(
 		return nil
 	}
 
-	for _, assign := range sv.Assignments {
+	applyAssignment := func(item evaluatedAssignment) error {
+		assign := item.assign
 		name := assign.Name
-		var value interface{}
-		userVarIsBin = false
-
-		value, err = getExprValueWithPrepareMode(
-			assign.Value, ses, execCtx, preparedExpression, &userVarIsBin)
-		if err != nil {
-			return err
-		}
-
-		if systemVar, ok := gSysVarsDefs[name]; ok {
-			if isDefault, ok := value.(bool); ok && isDefault {
-				value = systemVar.Default
-			}
-		}
+		value := item.value
+		userVarIsBin = item.userVarIsBin
 
 		//TODO : fix SET NAMES after parser is ready
-		if name == "names" {
+		if assign.SetNames {
 			//replaced into three system variable:
 			//character_set_client, character_set_connection, and character_set_results
 			replacedBy := []string{
@@ -993,7 +1016,7 @@ func doSetVar(
 					return err
 				}
 			}
-		} else if name == "clear_privilege_cache" {
+		} else if assign.System && name == "clear_privilege_cache" {
 			//if it is global variable, it does nothing.
 			if !assign.Global {
 				//if the value is 'on or off', just invalidate the privilege cache
@@ -1013,7 +1036,7 @@ func doSetVar(
 					return err
 				}
 			}
-		} else if name == "enable_privilege_cache" {
+		} else if assign.System && name == "enable_privilege_cache" {
 			ok, err = valueIsBoolTrue(value)
 			if err != nil {
 				return err
@@ -1030,25 +1053,25 @@ func doSetVar(
 			if err != nil {
 				return err
 			}
-		} else if name == "optimizer_hints" {
+		} else if assign.System && name == "optimizer_hints" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
 			runtime.ServiceRuntime(ses.service).SetGlobalVariables("optimizer_hints", value)
-		} else if name == "runtime_filter_limit_in" {
+		} else if assign.System && name == "runtime_filter_limit_in" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
 			runtime.ServiceRuntime(ses.service).SetGlobalVariables("runtime_filter_limit_in", value)
-		} else if name == "runtime_filter_limit_bloom_filter" {
+		} else if assign.System && name == "runtime_filter_limit_bloom_filter" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
 			runtime.ServiceRuntime(ses.service).SetGlobalVariables("runtime_filter_limit_bloom_filter", value)
-		} else if name == "disable_agg_statement" {
+		} else if assign.System && name == "disable_agg_statement" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
@@ -1061,8 +1084,69 @@ func doSetVar(
 				return err
 			}
 		}
+		return err
 	}
-	return err
+
+	if preparedExpression && len(sv.Assignments) > 1 {
+		type userDefinedVarSnapshot struct {
+			value  *UserDefinedVar
+			exists bool
+		}
+		original := make(map[string]userDefinedVarSnapshot, len(sv.Assignments))
+		ses.mu.Lock()
+		for _, assign := range sv.Assignments {
+			name := strings.ToLower(assign.Name)
+			if _, captured := original[name]; captured {
+				continue
+			}
+			value, exists := ses.userDefinedVars[name]
+			if value != nil {
+				copied := *value
+				value = &copied
+			}
+			original[name] = userDefinedVarSnapshot{value: value, exists: exists}
+		}
+		ses.mu.Unlock()
+
+		completed := false
+		defer func() {
+			if completed {
+				return
+			}
+			ses.mu.Lock()
+			defer ses.mu.Unlock()
+			for name, snapshot := range original {
+				if snapshot.exists {
+					ses.userDefinedVars[name] = snapshot.value
+				} else {
+					delete(ses.userDefinedVars, name)
+				}
+			}
+		}()
+
+		for _, assign := range sv.Assignments {
+			item, evalErr := evaluateAssignment(assign)
+			if evalErr != nil {
+				return evalErr
+			}
+			if err = applyAssignment(item); err != nil {
+				return err
+			}
+		}
+		completed = true
+		return nil
+	}
+
+	for _, assign := range sv.Assignments {
+		item, evalErr := evaluateAssignment(assign)
+		if evalErr != nil {
+			return evalErr
+		}
+		if err = applyAssignment(item); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 /*
