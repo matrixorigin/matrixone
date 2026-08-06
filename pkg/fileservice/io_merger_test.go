@@ -180,24 +180,36 @@ func TestIOMergerWaitContext(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := merger.waitContext(ctx, key); !errors.Is(err, context.Canceled) {
+	completed, err := merger.waitContext(ctx, key, time.Second)
+	if completed || !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled wait, got %v", err)
+	}
+	completed, err = merger.waitContext(context.Background(), key, time.Millisecond)
+	if completed || err != nil {
+		t.Fatalf("expected bounded wait to expire, got completed=%v, err=%v", completed, err)
 	}
 
 	waitCtx := &waitStartedContext{
 		Context: context.Background(),
 		started: make(chan struct{}),
 	}
-	waitDone := make(chan error, 1)
+	type waitResult struct {
+		completed bool
+		err       error
+	}
+	waitDone := make(chan waitResult, 1)
 	go func() {
-		waitDone <- merger.waitContext(waitCtx, key)
+		completed, err := merger.waitContext(waitCtx, key, time.Second)
+		waitDone <- waitResult{completed: completed, err: err}
 	}()
 	<-waitCtx.started
 	done()
-	if err := <-waitDone; err != nil {
-		t.Fatalf("merge completion wait failed: %v", err)
+	result := <-waitDone
+	if !result.completed || result.err != nil {
+		t.Fatalf("merge completion wait failed: completed=%v, err=%v", result.completed, result.err)
 	}
-	if err := merger.waitContext(context.Background(), key); err != nil {
-		t.Fatalf("completed merge wait failed: %v", err)
+	completed, err = merger.waitContext(context.Background(), key, time.Second)
+	if !completed || err != nil {
+		t.Fatalf("completed merge wait failed: completed=%v, err=%v", completed, err)
 	}
 }

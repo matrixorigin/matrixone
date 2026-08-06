@@ -659,6 +659,10 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		}()
 	}
 
+	mayReadMemoryCache := vector.Policy&SkipMemoryCacheReads == 0
+	mayReadDiskCache := vector.Policy&SkipDiskCacheReads == 0
+	forceMinimalRangeRead := false
+	forcePerEntryRangeRead := false
 read_memory_cache:
 	if s.memCache != nil {
 
@@ -749,9 +753,9 @@ read_disk_cache:
 		}
 	}
 
-	mayReadMemoryCache := vector.Policy&SkipMemoryCacheReads == 0
-	mayReadDiskCache := vector.Policy&SkipDiskCacheReads == 0
-	forceMinimalRangeRead := false
+	if forcePerEntryRangeRead {
+		goto read_s3
+	}
 	if mayReadMemoryCache || mayReadDiskCache {
 		// may read caches, merge
 		LogEvent(ctx, str_ioMerger_Merge_begin)
@@ -782,12 +786,23 @@ read_disk_cache:
 					LogEvent(ctx, str_ioMerger_Merge_wait_expensive_range,
 						logicalBytes, spanBytes)
 					waitStart := time.Now()
-					waitErr := s.ioMerger.waitContext(ctx, mergeKey)
+					completed, waitErr := s.ioMerger.waitContext(
+						ctx,
+						mergeKey,
+						maxIOWaitDuration,
+					)
 					waitTime := time.Since(waitStart)
 					stats.AddS3FSReadIOMergerTimeConsumption(waitTime)
 					metric.FSReadDurationIOMerger.Observe(waitTime.Seconds())
 					if waitErr != nil {
 						return waitErr
+					}
+					if !completed {
+						forcePerEntryRangeRead = true
+						if mayReadMemoryCache {
+							goto read_memory_cache
+						}
+						goto read_disk_cache
 					}
 					if mayReadMemoryCache {
 						goto read_memory_cache
@@ -814,7 +829,12 @@ read_s3:
 		}
 	}
 	s3ReadStart := time.Now()
-	if err := s.read(ctx, vector, forceMinimalRangeRead); err != nil {
+	if forcePerEntryRangeRead {
+		err = s.readEntriesIndividually(ctx, vector)
+	} else {
+		err = s.read(ctx, vector, forceMinimalRangeRead)
+	}
+	if err != nil {
 		return err
 	}
 	metric.FSReadDurationS3Read.Observe(time.Since(s3ReadStart).Seconds())
@@ -825,6 +845,31 @@ read_s3:
 		})
 	}
 
+	return nil
+}
+
+func (s *S3FS) readEntriesIndividually(ctx context.Context, vector *IOVector) error {
+	// The full-object merge is still stalled after its bounded wait. Read exact
+	// entry ranges sequentially so this follower can progress without fetching
+	// the potentially much larger sparse envelope.
+	for i := range vector.Entries {
+		if vector.Entries[i].done {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		single := &IOVector{
+			FilePath: vector.FilePath,
+			Entries:  []IOEntry{vector.Entries[i]},
+			ExpireAt: vector.ExpireAt,
+			Policy:   vector.Policy,
+		}
+		if err := s.read(ctx, single, true); err != nil {
+			return err
+		}
+		vector.Entries[i] = single.Entries[0]
+	}
 	return nil
 }
 

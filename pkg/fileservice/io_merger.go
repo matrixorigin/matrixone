@@ -116,14 +116,22 @@ func (i *IOMerger) IsMerging(key IOMergeKey) bool {
 }
 
 // waitContext waits for the current merge generation for key. It does not
-// start a new merge and always lets caller cancellation terminate the wait.
-func (i *IOMerger) waitContext(ctx context.Context, key IOMergeKey) error {
+// start a new merge and always lets caller cancellation or the local bound
+// terminate the wait.
+func (i *IOMerger) waitContext(
+	ctx context.Context,
+	key IOMergeKey,
+	maxWaitDuration time.Duration,
+) (completed bool, err error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return false, err
 	}
 	v, ok := i.flying.Load(key)
 	if !ok {
-		return nil
+		return true, nil
+	}
+	if maxWaitDuration <= 0 {
+		return false, nil
 	}
 
 	metric.IOMergerCounterWait.Add(1)
@@ -131,11 +139,15 @@ func (i *IOMerger) waitContext(ctx context.Context, key IOMergeKey) error {
 	defer func() {
 		metric.IOMergerDurationWait.Observe(time.Since(t0).Seconds())
 	}()
+	timer := time.NewTimer(maxWaitDuration)
+	defer timer.Stop()
 	select {
 	case <-v.(chan struct{}):
-		return nil
+		return true, nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return false, ctx.Err()
+	case <-timer.C:
+		return false, nil
 	}
 }
 

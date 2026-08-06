@@ -240,6 +240,12 @@ type blockingReadObjectStorage struct {
 	readCount   atomic.Int64
 }
 
+type generatedRangeObjectStorage struct {
+	dummyObjectStorage
+	mu    sync.Mutex
+	reads []objectStorageReadRange
+}
+
 type blockingDataCache struct {
 	fscache.DataCache
 	updateStarted chan struct{}
@@ -269,6 +275,31 @@ func (b *blockingDataCache) Set(ctx context.Context, key fscache.CacheKey, data 
 		}
 	}
 	return b.DataCache.Set(ctx, key, data)
+}
+
+func (g *generatedRangeObjectStorage) Read(
+	_ context.Context,
+	key string,
+	min *int64,
+	max *int64,
+) (io.ReadCloser, error) {
+	g.mu.Lock()
+	g.reads = append(g.reads, objectStorageReadRange{
+		key: key,
+		min: cloneInt64Pointer(min),
+		max: cloneInt64Pointer(max),
+	})
+	g.mu.Unlock()
+	if min == nil || max == nil || *max < *min {
+		return nil, errors.New("expected a bounded range read")
+	}
+	return io.NopCloser(bytes.NewReader(make([]byte, *max-*min))), nil
+}
+
+func (g *generatedRangeObjectStorage) readRanges() []objectStorageReadRange {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]objectStorageReadRange(nil), g.reads...)
 }
 
 func (r *readRangeRecordingObjectStorage) Read(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
@@ -1268,6 +1299,79 @@ func TestS3FSExpensiveRangeWaitsForFullObjectMergeUntilContextDeadline(t *testin
 	err = fs.Read(readCtx, vector)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Equal(t, int64(0), storage.readCount.Load())
+}
+
+func TestS3FSExpensiveRangeHasBoundedPerEntryFallback(t *testing.T) {
+	ctx := context.Background()
+	originalShortWait := shortIOWaitDuration
+	originalMaxWait := maxIOWaitDuration
+	shortIOWaitDuration = time.Millisecond
+	maxIOWaitDuration = 5 * time.Millisecond
+	t.Cleanup(func() {
+		shortIOWaitDuration = originalShortWait
+		maxIOWaitDuration = originalMaxWait
+	})
+
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			DiskPath:     ptrTo(t.TempDir()),
+			DiskCapacity: ptrTo[toml.ByteSize](1 << 30),
+		},
+		nil,
+		false,
+		false,
+	)
+	require.NoError(t, err)
+
+	storage := &generatedRangeObjectStorage{}
+	fs.storage = storage
+	vector := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{Offset: 0, Size: 1},
+			{Offset: 9 << 20, Size: 1},
+		},
+	}
+	doneMerge, waitMerge := fs.ioMerger.Merge(vector.ioMergeKey(), maxIOWaitDuration)
+	require.NotNil(t, doneMerge)
+	require.Nil(t, waitMerge)
+	releaseMerge := sync.OnceFunc(doneMerge)
+	t.Cleanup(func() {
+		releaseMerge()
+		vector.Release()
+		fs.Close(ctx)
+	})
+
+	readDone := make(chan error, 1)
+	go func() {
+		readDone <- fs.Read(context.Background(), vector)
+	}()
+	select {
+	case err := <-readDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		releaseMerge()
+		select {
+		case <-readDone:
+		case <-time.After(time.Second):
+			t.Fatal("follower did not terminate after releasing the merge leader")
+		}
+		t.Fatal("follower with no caller deadline did not reach a bounded fallback")
+	}
+
+	reads := storage.readRanges()
+	require.Len(t, reads, 2)
+	require.Equal(t, int64(0), *reads[0].min)
+	require.Equal(t, int64(1), *reads[0].max)
+	require.Equal(t, int64(9<<20), *reads[1].min)
+	require.Equal(t, int64(9<<20)+1, *reads[1].max)
 }
 
 func TestS3FSRangeReadSkipsPrefetchFullObjectIOMerge(t *testing.T) {
