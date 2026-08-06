@@ -88,7 +88,9 @@ func markNonMatchingNaNs(
 			continue
 		}
 		oid := vec.GetType().Oid
-		if oid != types.T_float32 && oid != types.T_float64 {
+		if oid != types.T_float32 && oid != types.T_float64 &&
+			oid != types.T_array_float32 && oid != types.T_array_float64 &&
+			oid != types.T_array_bf16 && oid != types.T_array_float16 {
 			continue
 		}
 		nulls := vec.GetNulls()
@@ -124,6 +126,54 @@ func markNonMatchingNaNs(
 					valueRow = 0
 				}
 				if math.IsNaN(values[valueRow]) {
+					nonMatching[i] = true
+					zValues[i] = 0
+					marked = true
+				}
+			}
+		case types.T_array_float32, types.T_array_float64,
+			types.T_array_bf16, types.T_array_float16:
+			for i := 0; i < count; i++ {
+				row := start + i
+				if nulls.Contains(uint64(row)) || grouping.Contains(uint64(row)) {
+					continue
+				}
+				valueRow := row
+				if isConst {
+					valueRow = 0
+				}
+				value := vec.GetBytesAt(valueRow)
+				hasNaN := false
+				if oid == types.T_array_float32 {
+					for _, element := range types.BytesToArray[float32](value) {
+						if math.IsNaN(float64(element)) {
+							hasNaN = true
+							break
+						}
+					}
+				} else if oid == types.T_array_float64 {
+					for _, element := range types.BytesToArray[float64](value) {
+						if math.IsNaN(element) {
+							hasNaN = true
+							break
+						}
+					}
+				} else if oid == types.T_array_bf16 {
+					for _, element := range types.BytesToArray[types.BF16](value) {
+						if math.IsNaN(float64(element.ToFloat32())) {
+							hasNaN = true
+							break
+						}
+					}
+				} else {
+					for _, element := range types.BytesToArray[types.Float16](value) {
+						if math.IsNaN(float64(element.ToFloat32())) {
+							hasNaN = true
+							break
+						}
+					}
+				}
+				if hasNaN {
 					nonMatching[i] = true
 					zValues[i] = 0
 					marked = true

@@ -15,6 +15,8 @@
 package keycodec
 
 import (
+	"bytes"
+	"encoding/binary"
 	"math"
 	"testing"
 
@@ -32,6 +34,24 @@ func mustEncodeJSON(t *testing.T, text string) []byte {
 	encoded, err := types.EncodeJson(value)
 	require.NoError(t, err)
 	return encoded
+}
+
+func mustEncodeByteJSON(t *testing.T, value bytejson.ByteJson) []byte {
+	t.Helper()
+	encoded, err := types.EncodeJson(value)
+	require.NoError(t, err)
+	return encoded
+}
+
+func stringByteJSON(valueType bytejson.TpCode, text string) bytejson.ByteJson {
+	data := make([]byte, binary.MaxVarintLen64+len(text))
+	n := binary.PutUvarint(data, uint64(len(text)))
+	copy(data[n:], text)
+	return bytejson.ByteJson{Type: valueType, Data: data[:n+len(text)]}
+}
+
+func decimalByteJSON(text string) bytejson.ByteJson {
+	return stringByteJSON(bytejson.TpCodeDecimal, text)
 }
 
 func TestCanonicalJSONNumberContract(t *testing.T) {
@@ -90,6 +110,125 @@ func TestCanonicalJSONNumberDomainBoundaries(t *testing.T) {
 	require.Equal(t, prefix, AppendCanonicalJSON(prefix, nil))
 }
 
+func TestCanonicalJSONDecimalContract(t *testing.T) {
+	tests := []struct {
+		name  string
+		left  bytejson.ByteJson
+		right bytejson.ByteJson
+	}{
+		{name: "integer scale", left: decimalByteJSON("1.00"), right: types.DecodeJson(mustEncodeJSON(t, "1"))},
+		{name: "float visible value", left: decimalByteJSON("0.100"), right: types.DecodeJson(mustEncodeJSON(t, "0.1"))},
+		{name: "large exponent float", left: decimalByteJSON("10e99"), right: types.DecodeJson(mustEncodeJSON(t, "1e100"))},
+		{name: "arbitrary precision decimal", left: decimalByteJSON("1.2300e1000"), right: decimalByteJSON("123e998")},
+		{name: "extreme exponent", left: decimalByteJSON("1e2147483647"), right: decimalByteJSON("10e2147483646")},
+		{name: "extreme exponent zero", left: decimalByteJSON("0e-2147483647"), right: types.DecodeJson(mustEncodeJSON(t, "0"))},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Zero(t, bytejson.CompareByteJson(test.left, test.right))
+			left := mustEncodeByteJSON(t, test.left)
+			right := mustEncodeByteJSON(t, test.right)
+			leftKey := AppendCanonicalJSON(nil, left)
+			rightKey := AppendCanonicalJSON(nil, right)
+			require.Equal(t, leftKey, rightKey)
+			require.Equal(t, len(leftKey), CanonicalJSONSize(left))
+			require.Equal(t, len(rightKey), CanonicalJSONSize(right))
+		})
+	}
+
+	different := mustEncodeByteJSON(t, decimalByteJSON("0.10000000000000001"))
+	require.NotEqual(t,
+		AppendCanonicalJSON(nil, different),
+		AppendCanonicalJSON(nil, mustEncodeJSON(t, "0.1")),
+	)
+	extreme := mustEncodeByteJSON(t, decimalByteJSON("1e2147483647"))
+	require.Less(t, len(AppendCanonicalJSON(nil, extreme)), 64,
+		"canonical size must depend on exponent text, not expanded magnitude")
+	require.NotEqual(t,
+		AppendCanonicalJSON(nil, extreme),
+		AppendCanonicalJSON(nil, mustEncodeByteJSON(t, decimalByteJSON("2e2147483647"))),
+	)
+
+	leftNested, err := bytejson.CreateByteJSON([]any{decimalByteJSON("1.00")})
+	require.NoError(t, err)
+	rightNested, err := bytejson.CreateByteJSON([]any{types.DecodeJson(mustEncodeJSON(t, "1"))})
+	require.NoError(t, err)
+	left := mustEncodeByteJSON(t, leftNested)
+	right := mustEncodeByteJSON(t, rightNested)
+	require.Zero(t, bytejson.CompareByteJson(leftNested, rightNested))
+	require.Equal(t, AppendCanonicalJSON(nil, left), AppendCanonicalJSON(nil, right))
+}
+
+func TestCanonicalJSONBinaryContract(t *testing.T) {
+	legacy := stringByteJSON(bytejson.TpCodeBlob, "AA==")
+	raw := stringByteJSON(bytejson.TpCodeOpaque, string([]byte{0}))
+	legacyWithNewline := stringByteJSON(bytejson.TpCodeBlob, "A\r\nA==")
+
+	for _, value := range []bytejson.ByteJson{raw, legacyWithNewline} {
+		require.Zero(t, bytejson.CompareByteJson(legacy, value))
+		left := mustEncodeByteJSON(t, legacy)
+		right := mustEncodeByteJSON(t, value)
+		leftKey := AppendCanonicalJSON(nil, left)
+		rightKey := AppendCanonicalJSON(nil, right)
+		require.Equal(t, leftKey, rightKey)
+		require.Equal(t, len(leftKey), CanonicalJSONSize(left))
+		require.Equal(t, len(rightKey), CanonicalJSONSize(right))
+	}
+
+	legacyNested, err := bytejson.CreateByteJSON([]any{legacy})
+	require.NoError(t, err)
+	rawNested, err := bytejson.CreateByteJSON([]any{raw})
+	require.NoError(t, err)
+	left := mustEncodeByteJSON(t, legacyNested)
+	right := mustEncodeByteJSON(t, rawNested)
+	require.Zero(t, bytejson.CompareByteJson(legacyNested, rawNested))
+	require.Equal(t, AppendCanonicalJSON(nil, left), AppendCanonicalJSON(nil, right))
+
+	bit := stringByteJSON(bytejson.TpCodeBit, string([]byte{0}))
+	require.NotEqual(t,
+		AppendCanonicalJSON(nil, mustEncodeByteJSON(t, bit)),
+		AppendCanonicalJSON(nil, mustEncodeByteJSON(t, raw)),
+	)
+}
+
+func TestCanonicalJSONMatchesScalarEquality(t *testing.T) {
+	values := [][]byte{
+		mustEncodeJSON(t, "1"),
+		mustEncodeJSON(t, "1.0"),
+		mustEncodeJSON(t, "1.000000001"),
+		mustEncodeByteJSON(t, decimalByteJSON("1.00")),
+		mustEncodeByteJSON(t, decimalByteJSON("0.1")),
+		mustEncodeByteJSON(t, decimalByteJSON("0.10000000000000001")),
+		mustEncodeByteJSON(t, decimalByteJSON("1e2147483647")),
+		mustEncodeByteJSON(t, decimalByteJSON("10e2147483646")),
+		mustEncodeByteJSON(t, decimalByteJSON("invalid")),
+		mustEncodeByteJSON(t, decimalByteJSON("invalid-2")),
+		mustEncodeJSON(t, "[]"),
+		mustEncodeJSON(t, "[0]"),
+		mustEncodeJSON(t, `{"n":1}`),
+		mustEncodeJSON(t, `{"n":1.0}`),
+		mustEncodeJSON(t, `"1"`),
+		mustEncodeByteJSON(t, stringByteJSON(bytejson.TpCodeBlob, "AA==")),
+		mustEncodeByteJSON(t, stringByteJSON(bytejson.TpCodeBlob, "A\r\nA==")),
+		mustEncodeByteJSON(t, stringByteJSON(bytejson.TpCodeBit, string([]byte{0}))),
+	}
+
+	for i := range values {
+		for j := range values {
+			scalarEqual := bytejson.CompareByteJson(
+				types.DecodeJson(values[i]),
+				types.DecodeJson(values[j]),
+			) == 0
+			keyEqual := bytes.Equal(
+				AppendCanonicalJSON(nil, values[i]),
+				AppendCanonicalJSON(nil, values[j]),
+			)
+			require.Equal(t, scalarEqual, keyEqual, "pair (%d, %d)", i, j)
+		}
+	}
+}
+
 func TestCanonicalVecF32Contract(t *testing.T) {
 	negativeZero := float32(math.Copysign(0, -1))
 	positive := types.ArrayToBytes([]float32{1, 0, 3})
@@ -107,6 +246,51 @@ func TestCanonicalVecF32Contract(t *testing.T) {
 		AppendCanonicalVecF32(nil, positive),
 		AppendCanonicalVecF32(nil, types.ArrayToBytes([]float32{1, 2, 3})),
 	)
+}
+
+func TestCanonicalVecF64Contract(t *testing.T) {
+	negativeZero := math.Copysign(0, -1)
+	positive := types.ArrayToBytes([]float64{1, 0, 3})
+	negative := types.ArrayToBytes([]float64{1, negativeZero, 3})
+	negativeBefore := append([]byte(nil), negative...)
+
+	require.Equal(
+		t,
+		AppendCanonicalVecF64(nil, positive),
+		AppendCanonicalVecF64(nil, negative),
+	)
+	require.Equal(t, negativeBefore, negative, "canonicalization must not mutate vector storage")
+	require.NotEqual(
+		t,
+		AppendCanonicalVecF64(nil, positive),
+		AppendCanonicalVecF64(nil, types.ArrayToBytes([]float64{1, 2, 3})),
+	)
+}
+
+func TestCanonicalVecF16Contract(t *testing.T) {
+	negativeZero := float32(math.Copysign(0, -1))
+	for _, test := range []struct {
+		name     string
+		positive []byte
+		negative []byte
+	}{
+		{
+			name:     "bf16",
+			positive: types.ArrayToBytes(types.Float32ToBF16Slice([]float32{1, 0, 3})),
+			negative: types.ArrayToBytes(types.Float32ToBF16Slice([]float32{1, negativeZero, 3})),
+		},
+		{
+			name:     "float16",
+			positive: types.ArrayToBytes(types.Float32ToFloat16Slice([]float32{1, 0, 3})),
+			negative: types.ArrayToBytes(types.Float32ToFloat16Slice([]float32{1, negativeZero, 3})),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			before := append([]byte(nil), test.negative...)
+			require.Equal(t, AppendCanonicalVecF16(nil, test.positive), AppendCanonicalVecF16(nil, test.negative))
+			require.Equal(t, before, test.negative, "canonicalization must not mutate vector storage")
+		})
+	}
 }
 
 func TestComputeXXHashCanonicalVarlenaShapes(t *testing.T) {
@@ -175,6 +359,7 @@ func TestComputeXXHashCanonicalVarlenaShapes(t *testing.T) {
 func TestComputeXXHashCanonicalVarlenaGroupingRows(t *testing.T) {
 	mp := mpool.MustNewZero()
 	negativeZero := float32(math.Copysign(0, -1))
+	negativeZero64 := math.Copysign(0, -1)
 	tests := []struct {
 		name  string
 		typ   types.Type
@@ -207,6 +392,22 @@ func TestComputeXXHashCanonicalVarlenaGroupingRows(t *testing.T) {
 				types.ArrayToBytes([]float32{1, 2, 3, negativeZero, 5, 6, 7, 8}),
 				types.ArrayToBytes([]float32{333, 1, 2, 3, 4, 5, 6, 7}),
 				types.ArrayToBytes([]float32{8, 8, 8, 8, 8, 8, 8, 8}),
+			},
+		},
+		{
+			name: "vecf64",
+			typ:  types.T_array_float64.ToType(),
+			left: [][]byte{
+				types.ArrayToBytes([]float64{101, 1, 2, 3}),
+				types.ArrayToBytes([]float64{1, 0, 3, 4}),
+				types.ArrayToBytes([]float64{303, 1, 2, 3}),
+				types.ArrayToBytes([]float64{9, 9, 9, 9}),
+			},
+			right: [][]byte{
+				types.ArrayToBytes([]float64{111, 1, 2, 3}),
+				types.ArrayToBytes([]float64{1, negativeZero64, 3, 4}),
+				types.ArrayToBytes([]float64{333, 1, 2, 3}),
+				types.ArrayToBytes([]float64{8, 8, 8, 8}),
 			},
 		},
 	}

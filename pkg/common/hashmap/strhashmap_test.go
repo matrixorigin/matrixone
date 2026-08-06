@@ -121,6 +121,7 @@ func TestStrHashMapRejectsNaNWhenNullKeysParticipate(t *testing.T) {
 
 func TestStrHashMapCanonicalVarlenaSerialization(t *testing.T) {
 	negativeZero := float32(math.Copysign(0, -1))
+	negativeZero64 := math.Copysign(0, -1)
 	tests := []struct {
 		name  string
 		typ   types.Type
@@ -138,6 +139,12 @@ func TestStrHashMapCanonicalVarlenaSerialization(t *testing.T) {
 			typ:   types.T_array_float32.ToType(),
 			build: types.ArrayToBytes([]float32{1, 0, 3}),
 			probe: types.ArrayToBytes([]float32{1, negativeZero, 3}),
+		},
+		{
+			name:  "vecf64",
+			typ:   types.T_array_float64.ToType(),
+			build: types.ArrayToBytes([]float64{1, 0, 3}),
+			probe: types.ArrayToBytes([]float64{1, negativeZero64, 3}),
 		},
 	}
 
@@ -179,6 +186,7 @@ func TestStrHashMapCanonicalVarlenaSerialization(t *testing.T) {
 
 func TestStrHashMapCanonicalVarlenaVectorShapes(t *testing.T) {
 	negativeZero := float32(math.Copysign(0, -1))
+	negativeZero64 := math.Copysign(0, -1)
 	tests := []struct {
 		name       string
 		typ        types.Type
@@ -202,6 +210,14 @@ func TestStrHashMapCanonicalVarlenaVectorShapes(t *testing.T) {
 			probe:      types.ArrayToBytes([]float32{1, 2, 3, negativeZero, 5, 6, 7, 8}),
 			buildOther: types.ArrayToBytes([]float32{10, 20, 30, 40, 50, 60, 70, 80}),
 			probeOther: types.ArrayToBytes([]float32{40, 50, 60, 70, 80, 90, 100, 110}),
+		},
+		{
+			name:       "vecf64",
+			typ:        types.T_array_float64.ToType(),
+			build:      types.ArrayToBytes([]float64{1, 2, 3, 0}),
+			probe:      types.ArrayToBytes([]float64{1, 2, 3, negativeZero64}),
+			buildOther: types.ArrayToBytes([]float64{10, 20, 30, 40}),
+			probeOther: types.ArrayToBytes([]float64{40, 50, 60, 70}),
 		},
 	}
 

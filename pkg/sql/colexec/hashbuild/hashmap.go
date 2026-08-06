@@ -409,7 +409,9 @@ func (hb *HashmapBuilder) hasNonReflexiveFloatKey() bool {
 			continue
 		}
 		oid := types.T(expr.Typ.Id)
-		if oid == types.T_float32 || oid == types.T_float64 {
+		if oid == types.T_float32 || oid == types.T_float64 ||
+			oid == types.T_array_float32 || oid == types.T_array_float64 ||
+			oid == types.T_array_bf16 || oid == types.T_array_float16 {
 			return true
 		}
 	}

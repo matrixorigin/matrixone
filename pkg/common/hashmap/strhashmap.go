@@ -326,7 +326,8 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 	for _, vec := range vecs {
 		if itr.mp.groupingAware || itr.mp.hasNull {
 			switch vec.GetType().Oid {
-			case types.T_json, types.T_array_float32:
+			case types.T_json, types.T_array_float32, types.T_array_float64,
+				types.T_array_bf16, types.T_array_float16:
 				fillCanonicalGroupingAwareVarlena(itr, vec, count, start)
 			default:
 				fillGroupingAwareStr(itr, vec, count, start)
@@ -344,7 +345,8 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 			}
 		} else {
 			switch vec.GetType().Oid {
-			case types.T_json, types.T_array_float32:
+			case types.T_json, types.T_array_float32, types.T_array_float64,
+				types.T_array_bf16, types.T_array_float16:
 				fillCanonicalStringGroupStr(itr, vec, count, start)
 			default:
 				fillStringGroupStr(itr, vec, count, start, len(vecs))
@@ -365,16 +367,23 @@ func appendVarlenaHashKey(dst []byte, oid types.T, value []byte) []byte {
 		return keycodec.AppendCanonicalJSON(dst, value)
 	case types.T_array_float32:
 		return keycodec.AppendCanonicalVecF32(dst, value)
+	case types.T_array_float64:
+		return keycodec.AppendCanonicalVecF64(dst, value)
+	case types.T_array_bf16, types.T_array_float16:
+		return keycodec.AppendCanonicalVecF16(dst, value)
 	default:
 		return append(dst, value...)
 	}
 }
 
-func varlenaHashKeySize(oid types.T, value []byte) int {
-	if oid == types.T_json {
-		return keycodec.CanonicalJSONSize(value)
-	}
-	return len(value)
+func appendFramedVarlenaHashKey(dst []byte, oid types.T, value []byte) []byte {
+	lengthOffset := len(dst)
+	dst = append(dst, 0, 0, 0, 0)
+	valueOffset := len(dst)
+	dst = appendVarlenaHashKey(dst, oid, value)
+	length := uint32(len(dst) - valueOffset)
+	copy(dst[lengthOffset:valueOffset], util.UnsafeToBytes(&length))
+	return dst
 }
 
 func fillCanonicalGroupingAwareVarlena(
@@ -424,9 +433,7 @@ func fillCanonicalGroupingAwareVarlena(
 			valueRow = 0
 		}
 		value := vec.GetBytesAt(valueRow)
-		length := uint32(varlenaHashKeySize(vec.GetType().Oid, value))
-		keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
-		keys[i] = appendVarlenaHashKey(keys[i], vec.GetType().Oid, value)
+		keys[i] = appendFramedVarlenaHashKey(keys[i], vec.GetType().Oid, value)
 	}
 }
 
@@ -451,10 +458,8 @@ func fillCanonicalStringGroupStr(
 	}
 	if vec.IsConst() {
 		value := vec.GetBytesAt(0)
-		length := uint32(varlenaHashKeySize(vec.GetType().Oid, value))
 		for i := 0; i < n; i++ {
-			keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
-			keys[i] = appendVarlenaHashKey(keys[i], vec.GetType().Oid, value)
+			keys[i] = appendFramedVarlenaHashKey(keys[i], vec.GetType().Oid, value)
 		}
 		return
 	}
@@ -465,16 +470,12 @@ func fillCanonicalStringGroupStr(
 		if area == nil {
 			for i := 0; i < n; i++ {
 				value := values[start+i].ByteSlice()
-				length := uint32(varlenaHashKeySize(vec.GetType().Oid, value))
-				keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
-				keys[i] = appendVarlenaHashKey(keys[i], vec.GetType().Oid, value)
+				keys[i] = appendFramedVarlenaHashKey(keys[i], vec.GetType().Oid, value)
 			}
 		} else {
 			for i := 0; i < n; i++ {
 				value := values[start+i].GetByteSlice(area)
-				length := uint32(varlenaHashKeySize(vec.GetType().Oid, value))
-				keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
-				keys[i] = appendVarlenaHashKey(keys[i], vec.GetType().Oid, value)
+				keys[i] = appendFramedVarlenaHashKey(keys[i], vec.GetType().Oid, value)
 			}
 		}
 		return
@@ -486,9 +487,7 @@ func fillCanonicalStringGroupStr(
 			continue
 		}
 		value := values[row].GetByteSlice(area)
-		length := uint32(varlenaHashKeySize(vec.GetType().Oid, value))
-		keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
-		keys[i] = appendVarlenaHashKey(keys[i], vec.GetType().Oid, value)
+		keys[i] = appendFramedVarlenaHashKey(keys[i], vec.GetType().Oid, value)
 	}
 }
 

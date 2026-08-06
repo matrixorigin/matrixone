@@ -191,14 +191,6 @@ func CanonicalFloat64Bytes(value float64) [8]byte {
 	return *(*[8]byte)(unsafe.Pointer(&bits))
 }
 
-const (
-	jsonCanonicalNegativeInteger  byte = 0x80
-	jsonCanonicalPositiveInteger  byte = 0x81
-	jsonCanonicalFloat            byte = 0x82
-	jsonCanonicalMinInt64Float         = -9223372036854775808.0
-	jsonCanonicalUint64LimitFloat      = 18446744073709551616.0
-)
-
 // CanonicalJSONSize returns the exact resident key size for one binary JSON
 // value. Arrays and objects are walked recursively because scalar JSON
 // equality also identifies numeric forms below the root.
@@ -210,9 +202,13 @@ func CanonicalJSONSize(value []byte) int {
 }
 
 func canonicalByteJSONSize(value bytejson.ByteJson) int {
+	if size, ok := bytejson.CanonicalNumberSize(value); ok {
+		return size
+	}
+	if size, ok := bytejson.CanonicalBinarySize(value); ok {
+		return size
+	}
 	switch value.Type {
-	case bytejson.TpCodeInt64, bytejson.TpCodeUint64, bytejson.TpCodeFloat64:
-		return 9
 	case bytejson.TpCodeArray:
 		size := 1 + 4
 		for i := 0; i < value.GetElemCnt(); i++ {
@@ -244,8 +240,11 @@ func AppendCanonicalJSON(dst, value []byte) []byte {
 }
 
 func appendCanonicalByteJSON(dst []byte, value bytejson.ByteJson) []byte {
-	if numeric, ok := appendCanonicalJSONNumeric(dst, value); ok {
+	if numeric, ok := bytejson.AppendCanonicalNumber(dst, value); ok {
 		return numeric
+	}
+	if binaryValue, ok := bytejson.AppendCanonicalBinary(dst, value); ok {
+		return binaryValue
 	}
 
 	switch value.Type {
@@ -280,42 +279,6 @@ func appendCanonicalByteJSON(dst []byte, value bytejson.ByteJson) []byte {
 	}
 }
 
-func appendCanonicalJSONNumeric(dst []byte, value bytejson.ByteJson) ([]byte, bool) {
-	marker := byte(0)
-	payload := uint64(0)
-	switch value.Type {
-	case bytejson.TpCodeInt64:
-		integer := value.GetInt64()
-		if integer < 0 {
-			marker, payload = jsonCanonicalNegativeInteger, uint64(integer)
-		} else {
-			marker, payload = jsonCanonicalPositiveInteger, uint64(integer)
-		}
-	case bytejson.TpCodeUint64:
-		marker, payload = jsonCanonicalPositiveInteger, value.GetUint64()
-	case bytejson.TpCodeFloat64:
-		floating := value.GetFloat64()
-		raw := math.Float64bits(floating)
-		switch {
-		case floating == 0:
-			marker, payload = jsonCanonicalPositiveInteger, 0
-		case floating < 0 && floating >= jsonCanonicalMinInt64Float && math.Trunc(floating) == floating:
-			marker, payload = jsonCanonicalNegativeInteger, uint64(int64(floating))
-		case floating > 0 && floating < jsonCanonicalUint64LimitFloat && math.Trunc(floating) == floating:
-			marker, payload = jsonCanonicalPositiveInteger, uint64(floating)
-		default:
-			marker, payload = jsonCanonicalFloat, raw
-		}
-	default:
-		return dst, false
-	}
-
-	dst = append(dst, marker)
-	var encoded [8]byte
-	binary.LittleEndian.PutUint64(encoded[:], payload)
-	return append(dst, encoded[:]...), true
-}
-
 func appendCanonicalUint32(dst []byte, value uint32) []byte {
 	var encoded [4]byte
 	binary.LittleEndian.PutUint32(encoded[:], value)
@@ -336,6 +299,43 @@ func AppendCanonicalVecF32(dst, value []byte) []byte {
 		bits := binary.LittleEndian.Uint32(canonical[offset:])
 		if bits<<1 == 0 {
 			binary.LittleEndian.PutUint32(canonical[offset:], 0)
+		}
+	}
+	return dst
+}
+
+// AppendCanonicalVecF64 is the FLOAT64-array counterpart of
+// AppendCanonicalVecF32.
+func AppendCanonicalVecF64(dst, value []byte) []byte {
+	start := len(dst)
+	dst = append(dst, value...)
+	if len(value)%8 != 0 {
+		return dst
+	}
+	canonical := dst[start:]
+	for offset := 0; offset < len(canonical); offset += 8 {
+		bits := binary.LittleEndian.Uint64(canonical[offset:])
+		if bits<<1 == 0 {
+			binary.LittleEndian.PutUint64(canonical[offset:], 0)
+		}
+	}
+	return dst
+}
+
+// AppendCanonicalVecF16 appends BF16/FLOAT16 array bytes with both signed-zero
+// representations mapped to zero. Both formats use the high bit as sign and
+// all remaining bits as exponent/mantissa.
+func AppendCanonicalVecF16(dst, value []byte) []byte {
+	start := len(dst)
+	dst = append(dst, value...)
+	if len(value)%2 != 0 {
+		return dst
+	}
+	canonical := dst[start:]
+	for offset := 0; offset < len(canonical); offset += 2 {
+		bits := binary.LittleEndian.Uint16(canonical[offset:])
+		if bits<<1 == 0 {
+			binary.LittleEndian.PutUint16(canonical[offset:], 0)
 		}
 	}
 	return dst
@@ -379,6 +379,12 @@ func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) {
 			continue
 		case types.T_array_float32:
 			computeCanonicalVarlenaXXHash(vec, hashValues, AppendCanonicalVecF32)
+			continue
+		case types.T_array_float64:
+			computeCanonicalVarlenaXXHash(vec, hashValues, AppendCanonicalVecF64)
+			continue
+		case types.T_array_bf16, types.T_array_float16:
+			computeCanonicalVarlenaXXHash(vec, hashValues, AppendCanonicalVecF16)
 			continue
 		}
 		if vec.IsConst() {
@@ -518,6 +524,14 @@ func computeGroupingXXHash(vec *vector.Vector, hashValues []uint64) {
 			continue
 		case types.T_array_float32:
 			scratch = AppendCanonicalVecF32(scratch[:0], vec.GetRawBytesAt(row))
+			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(scratch))
+			continue
+		case types.T_array_float64:
+			scratch = AppendCanonicalVecF64(scratch[:0], vec.GetRawBytesAt(row))
+			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(scratch))
+			continue
+		case types.T_array_bf16, types.T_array_float16:
+			scratch = AppendCanonicalVecF16(scratch[:0], vec.GetRawBytesAt(row))
 			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(scratch))
 			continue
 		}
