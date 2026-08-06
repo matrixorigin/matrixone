@@ -163,13 +163,14 @@ func TestPreparedSignedIntegerTextToBit(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	bit64 := types.New(types.T_bit, 64, 0)
 	bit63 := types.New(types.T_bit, 63, 0)
+	bit3 := types.New(types.T_bit, 3, 0)
 
 	tcc := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"-6109877384019645241", "-1"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"-6109877384019645241", "-1", "5"}, nil),
 			NewFunctionTestInput(bit64, []uint64{}, nil),
 		},
-		NewFunctionTestResult(bit64, false, []uint64{12336866689689906375, math.MaxUint64}, nil),
+		NewFunctionTestResult(bit64, false, []uint64{12336866689689906375, math.MaxUint64, 5}, nil),
 		NewCast)
 	tcc.parameters[0].SetIsSignedIntegerParam(true)
 	succeed, info := tcc.Run()
@@ -184,12 +185,32 @@ func TestPreparedSignedIntegerTextToBit(t *testing.T) {
 	succeed, info = stringCase.Run()
 	require.True(t, succeed, info)
 
+	stringCase = NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"5"}, nil),
+			NewFunctionTestInput(bit64, []uint64{}, nil),
+		},
+		NewFunctionTestResult(bit64, false, []uint64{53}, nil), NewCast)
+	succeed, info = stringCase.Run()
+	require.True(t, succeed, info)
+
 	tcc = NewFunctionTestCase(proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{"-1"}, nil),
 			NewFunctionTestInput(bit63, []uint64{}, nil),
 		},
 		NewFunctionTestResult(bit63, true, []uint64{}, nil),
+		NewCast)
+	tcc.parameters[0].SetIsSignedIntegerParam(true)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, info)
+
+	tcc = NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"8"}, nil),
+			NewFunctionTestInput(bit3, []uint64{}, nil),
+		},
+		NewFunctionTestResult(bit3, true, []uint64{}, nil),
 		NewCast)
 	tcc.parameters[0].SetIsSignedIntegerParam(true)
 	succeed, info = tcc.Run()

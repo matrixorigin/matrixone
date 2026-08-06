@@ -55,19 +55,20 @@ func TestIssue26725PreparedBit64SignedLong(t *testing.T) {
 			"create table "+dbName+".t64(id bigint primary key, b bit(64))")
 
 		stmt, err := db.PrepareContext(ctx,
-			"insert into "+dbName+".t64(id, b) values (?, ?), (?, ?)")
+			"insert into "+dbName+".t64(id, b) values (?, ?), (?, ?), (?, ?)")
 		require.NoError(t, err)
+		defer stmt.Close()
 		_, err = stmt.ExecContext(ctx,
 			int64(1), int64(-6109877384019645241),
-			int64(2), int64(-1))
+			int64(2), int64(-1),
+			int64(3), int64(5))
 		require.NoError(t, err)
-		require.NoError(t, stmt.Close())
 
 		rows, err := db.QueryContext(ctx,
 			"select cast(b as unsigned) from "+dbName+".t64 order by id")
 		require.NoError(t, err)
 		defer rows.Close()
-		for _, expected := range []string{"12336866689689906375", "18446744073709551615"} {
+		for _, expected := range []string{"12336866689689906375", "18446744073709551615", "5"} {
 			require.True(t, rows.Next())
 			var actual string
 			require.NoError(t, rows.Scan(&actual))
@@ -79,17 +80,23 @@ func TestIssue26725PreparedBit64SignedLong(t *testing.T) {
 		stringStmt, err := db.PrepareContext(ctx,
 			"insert into "+dbName+".t64(id, b) values (?, ?)")
 		require.NoError(t, err)
-		_, err = stringStmt.ExecContext(ctx, int64(3), "-6109877384019645241")
+		defer stringStmt.Close()
+		_, err = stringStmt.ExecContext(ctx, int64(4), "5")
+		require.NoError(t, err)
+		var stringValue string
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select cast(b as unsigned) from "+dbName+".t64 where id = 4").Scan(&stringValue))
+		require.Equal(t, "53", stringValue)
+		_, err = stringStmt.ExecContext(ctx, int64(5), "-6109877384019645241")
 		require.ErrorContains(t, err, "data out of range")
-		require.NoError(t, stringStmt.Close())
 
 		execSQLRequire(t, ctx, db,
 			"create table "+dbName+".t63(id bigint primary key, b bit(63))")
 		narrowStmt, err := db.PrepareContext(ctx,
 			"insert into "+dbName+".t63(id, b) values (?, ?)")
 		require.NoError(t, err)
+		defer narrowStmt.Close()
 		_, err = narrowStmt.ExecContext(ctx, int64(1), int64(-1))
 		require.ErrorContains(t, err, "data out of range")
-		require.NoError(t, narrowStmt.Close())
 	})
 }
