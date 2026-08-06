@@ -50,6 +50,8 @@ const (
 	loopJoinAllocationSiteResultGrouping
 )
 
+const defaultLoopJoinResultBatchBytes = 64 * mpool.MB
+
 type container struct {
 	state    int
 	probeIdx int
@@ -58,12 +60,15 @@ type container struct {
 	// required to fit in DefaultBatchSize, so loop join must be able to yield
 	// in the middle of one instead of materializing the whole batch at once.
 	batRowIdx int
-	inBat     *batch.Batch
-	resBat    *batch.Batch
-	joinBat   *batch.Batch
-	expr      colexec.ExpressionExecutor
-	cfs       []func(*vector.Vector, *vector.Vector, int64, int) error
-	mp        *message.JoinMap
+	// resultBatchByteLimit complements DefaultBatchSize for wide rows. Prepare
+	// installs the default unless the execution already has a tighter limit.
+	resultBatchByteLimit int
+	inBat                *batch.Batch
+	resBat               *batch.Batch
+	joinBat              *batch.Batch
+	expr                 colexec.ExpressionExecutor
+	cfs                  []func(*vector.Vector, *vector.Vector, int64, int) error
+	mp                   *message.JoinMap
 
 	// FULL OUTER JOIN bookkeeping. rightRowsMatched is a flat bitmap over
 	// all build rows; bit i is set when build row i matched at least one

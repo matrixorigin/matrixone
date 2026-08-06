@@ -830,6 +830,178 @@ func TestLoopJoinNonEqCondSplitsLargeBuildBatch(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestLoopJoinNoCondSplitsWideRowsByBytes(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+	const byteLimit = 1024
+	buildValues := make([]string, 20)
+	for i := range buildValues {
+		buildValues[i] = strings.Repeat("x", 128)
+	}
+	// A row larger than the byte budget must still make progress as a
+	// one-row batch; subsequent rows are packed within the budget.
+	buildValues[0] = strings.Repeat("y", byteLimit*2)
+	buildBat := makeVarcharLoopJoinBatch(proc.Mp(), buildValues)
+	joinMap := message.NewJoinMap(
+		message.GroupSels{}, nil, nil, nil, []*batch.Batch{buildBat}, proc.Mp())
+	joinMap.IncRef(1)
+
+	join := &LoopJoin{
+		ResultCols: []colexec.ResultPos{
+			colexec.NewResultPos(0, 0),
+			colexec.NewResultPos(1, 0),
+		},
+		LeftTypes:  []types.Type{types.T_varchar.ToType()},
+		RightTypes: []types.Type{types.T_varchar.ToType()},
+		JoinType:   plan.Node_LEFT,
+	}
+	installLoopJoinTestAllocation(t, join)
+	join.ctr.state = Probe
+	join.ctr.mp = joinMap
+	join.ctr.resultBatchByteLimit = byteLimit
+	join.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		makeVarcharLoopJoinBatch(proc.Mp(), []string{"probe"}),
+	}))
+	require.NoError(t, join.Prepare(proc))
+
+	totalRows := 0
+	batchCount := 0
+	for {
+		result, err := join.Call(proc)
+		require.NoError(t, err)
+		if result.Batch == nil {
+			break
+		}
+		require.Positive(t, result.Batch.RowCount())
+		if result.Batch.Size() > byteLimit {
+			require.Equal(t, 1, result.Batch.RowCount())
+		} else {
+			require.LessOrEqual(t, result.Batch.Size(), byteLimit)
+		}
+		totalRows += result.Batch.RowCount()
+		batchCount++
+	}
+	require.Equal(t, len(buildValues), totalRows)
+	require.Greater(t, batchCount, 1)
+
+	join.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestLoopJoinNonEqCondSplitsWideRowsByBytes(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+	const byteLimit = 1024
+	value := strings.Repeat("x", 128)
+	buildValues := make([]string, 20)
+	for i := range buildValues {
+		buildValues[i] = value
+	}
+	buildBat := makeVarcharLoopJoinBatch(proc.Mp(), buildValues)
+	joinMap := message.NewJoinMap(
+		message.GroupSels{}, nil, nil, nil, []*batch.Batch{buildBat}, proc.Mp())
+	joinMap.IncRef(1)
+
+	varcharType := types.T_varchar.ToType()
+	fr, err := function.GetFunctionByName(context.Background(), "=", []types.Type{varcharType, varcharType})
+	require.NoError(t, err)
+	join := &LoopJoin{
+		NonEqCond: &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Args: []*plan.Expr{
+					{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+					{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}}},
+				},
+				Func: &plan.ObjectRef{Obj: fr.GetEncodedOverloadID(), ObjName: "="},
+			}},
+		},
+		ResultCols: []colexec.ResultPos{
+			colexec.NewResultPos(0, 0),
+			colexec.NewResultPos(1, 0),
+		},
+		LeftTypes:  []types.Type{varcharType},
+		RightTypes: []types.Type{varcharType},
+		JoinType:   plan.Node_INNER,
+	}
+	installLoopJoinTestAllocation(t, join)
+	join.ctr.state = Probe
+	join.ctr.mp = joinMap
+	join.ctr.resultBatchByteLimit = byteLimit
+	join.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		makeVarcharLoopJoinBatch(proc.Mp(), []string{value}),
+	}))
+	require.NoError(t, join.Prepare(proc))
+
+	totalRows := 0
+	batchCount := 0
+	for {
+		result, err := join.Call(proc)
+		require.NoError(t, err)
+		if result.Batch == nil {
+			break
+		}
+		require.Positive(t, result.Batch.RowCount())
+		require.LessOrEqual(t, result.Batch.Size(), byteLimit)
+		totalRows += result.Batch.RowCount()
+		batchCount++
+	}
+	require.Equal(t, len(buildValues), totalRows)
+	require.Greater(t, batchCount, 1)
+
+	join.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestLoopJoinEmptyBuildSplitsWideRowsByBytes(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+	const byteLimit = 1024
+	probeValues := make([]string, 20)
+	for i := range probeValues {
+		probeValues[i] = strings.Repeat("x", 128)
+	}
+	join := &LoopJoin{
+		ResultCols: []colexec.ResultPos{
+			colexec.NewResultPos(0, 0),
+			colexec.NewResultPos(1, 0),
+		},
+		LeftTypes:  []types.Type{types.T_varchar.ToType()},
+		RightTypes: []types.Type{types.T_varchar.ToType()},
+		JoinType:   plan.Node_LEFT,
+	}
+	installLoopJoinTestAllocation(t, join)
+	join.ctr.state = Probe
+	join.ctr.resultBatchByteLimit = byteLimit
+	join.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		makeVarcharLoopJoinBatch(proc.Mp(), probeValues),
+	}))
+	require.NoError(t, join.Prepare(proc))
+
+	totalRows := 0
+	batchCount := 0
+	for {
+		result, err := join.Call(proc)
+		require.NoError(t, err)
+		if result.Batch == nil {
+			break
+		}
+		require.Positive(t, result.Batch.RowCount())
+		require.LessOrEqual(t, result.Batch.Size(), byteLimit)
+		require.True(t, result.Batch.Vecs[1].IsConstNull())
+		totalRows += result.Batch.RowCount()
+		batchCount++
+	}
+	require.Equal(t, len(probeValues), totalRows)
+	require.Greater(t, batchCount, 1)
+
+	join.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func makeInt32LoopJoinBatch(mp *mpool.MPool, vals []int32) *batch.Batch {
 	bat := batch.New([]string{"id"})
 	bat.Vecs[0] = testutil.MakeInt32Vector(vals, nil, mp)
