@@ -909,6 +909,109 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpression(t *testing.T) {
 	require.Len(t, query.Nodes[sortNode.Children[0]].ProjectList, 5)
 }
 
+func TestQueryBuilderBuildRollupWithGroupingFunctionExpressions(t *testing.T) {
+	tests := []string{
+		`select year(o.a) as order_year,
+		month(o.a) as order_month,
+		o.b,
+		count(*) as total_sales,
+		grouping(YEAR(O.A)) as year_grouping,
+		grouping(MONTH(O.A)) as month_grouping,
+		grouping(O.B) as city_grouping
+		from select_test.bind_select as o
+		group by year(o.a), month(o.a), o.b with rollup
+		order by order_year, order_month, o.b`,
+		`select grouping(year(o.a)), grouping(month(o.a)), grouping(o.b), count(*)
+		from select_test.bind_select as o
+		group by YEAR(O.A), MONTH(O.A), O.B with rollup`,
+	}
+
+	for _, sql := range tests {
+		stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+
+		queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+		require.NoError(t, err)
+		require.NotNil(t, queryPlan.GetQuery())
+	}
+
+	stmts, err := parsers.Parse(
+		context.TODO(), dialect.MYSQL,
+		`select grouping(if(o.a = 1, 'x', 'same')), count(*)
+		from select_test.bind_select as o
+		group by IF(O.A = 1, 'X', 'same') with rollup`, 1,
+	)
+	require.NoError(t, err)
+	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.Error(t, err, "string literal case must remain significant in grouping-expression matching")
+}
+
+func TestQueryBuilderBuildRollupRejectsNonGroupByGroupingArguments(t *testing.T) {
+	tests := []struct {
+		name          string
+		sql           string
+		errorContains string
+	}{
+		{
+			name: "select derived from separate group items",
+			sql: `select grouping(a+b), count(*)
+				from select_test.bind_select
+				group by a, b with rollup`,
+			errorContains: "Argument #1 of GROUPING function is not in GROUP BY",
+		},
+		{
+			name: "second argument is not a group item",
+			sql: `select grouping(a+1, b+1), count(*)
+				from select_test.bind_select
+				group by a+1, b with rollup`,
+			errorContains: "Argument #2 of GROUPING function is not in GROUP BY",
+		},
+		{
+			name: "aggregate argument",
+			sql: `select grouping(sum(a)), count(*)
+				from select_test.bind_select
+				group by a with rollup`,
+			errorContains: "Argument #1 of GROUPING function is not in GROUP BY",
+		},
+		{
+			name: "having",
+			sql: `select count(*)
+				from select_test.bind_select
+				group by a, b with rollup
+				having grouping(a+b) = 0`,
+			errorContains: "Argument #1 of GROUPING function is not in GROUP BY",
+		},
+		{
+			name: "order by",
+			sql: `select count(*)
+				from select_test.bind_select
+				group by a, b with rollup
+				order by grouping(a+b)`,
+			errorContains: "Argument #1 of GROUPING function is not in GROUP BY",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.ErrorContains(t, err, test.errorContains)
+		})
+	}
+
+	stmts, err := parsers.Parse(
+		context.TODO(), dialect.MYSQL,
+		`select grouping(a+1, b), count(*)
+		from select_test.bind_select
+		group by a+1, b with rollup`, 1,
+	)
+	require.NoError(t, err)
+	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+}
+
 func TestQueryBuilderBuildRollupOrderByWrappedGroupingColumns(t *testing.T) {
 	stmts, err := parsers.Parse(
 		context.TODO(),

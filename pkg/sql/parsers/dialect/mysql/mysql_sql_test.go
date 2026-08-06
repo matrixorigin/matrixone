@@ -121,6 +121,17 @@ func TestDropFunctionIfExists(t *testing.T) {
 	}
 }
 
+func TestGroupingAcceptsExpressions(t *testing.T) {
+	const sql = "select grouping(year(o.order_date), c.city) from orders as o, customers as c group by year(o.order_date), c.city with rollup"
+	const formatted = "select grouping(year(o.order_date), c.city) from orders as o cross join customers as c group by year(o.order_date), c.city with rollup"
+
+	stmt, err := ParseOne(context.Background(), sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	require.Equal(t, formatted, tree.String(stmt, dialect.MYSQL))
+}
+
 func TestQuantifiedTableSubqueryParse(t *testing.T) {
 	tests := []struct {
 		sql  string
