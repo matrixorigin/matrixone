@@ -145,6 +145,7 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.inBat = input.Batch
 				ctr.probeIdx = 0
 				ctr.batIdx = 0
+				ctr.batRowIdx = 0
 			}
 
 			if err = loopJoin.resetResultBat(); err != nil {
@@ -301,7 +302,7 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 		}
 
 		matched := false
-		if ctr.batIdx != 0 {
+		if ctr.batIdx != 0 || ctr.batRowIdx != 0 {
 			matched = true
 		}
 		for idx := ctr.batIdx; idx < len(mpbat); idx++ {
@@ -328,7 +329,11 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 
 				rs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
 				l := uint64(bat.RowCount())
-				for j := uint64(0); j < l; j++ {
+				start := uint64(0)
+				if idx == ctr.batIdx {
+					start = uint64(ctr.batRowIdx)
+				}
+				for j := start; j < l; j++ {
 					b, null := rs.GetValue(j)
 					if !null && b {
 						if ap.JoinType == plan.Node_SINGLE && matched {
@@ -357,6 +362,16 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 							}
 						}
 						rowCountIncrease++
+						if rowCountIncrease >= colexec.DefaultBatchSize &&
+							ap.JoinType != plan.Node_SEMI &&
+							ap.JoinType != plan.Node_SINGLE && j+1 < l {
+							ctr.probeIdx = i
+							ctr.batIdx = idx
+							ctr.batRowIdx = int(j + 1)
+							ctr.resBat.SetRowCount(rowCountIncrease)
+							result.Batch = ctr.resBat
+							return nil
+						}
 
 						if ap.JoinType == plan.Node_SEMI {
 							break
@@ -367,21 +382,38 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 				matched = true
 				switch ap.JoinType {
 				case plan.Node_LEFT, plan.Node_OUTER:
+					start := 0
+					if idx == ctr.batIdx {
+						start = ctr.batRowIdx
+					}
+					remaining := colexec.DefaultBatchSize - rowCountIncrease
+					count := bat.RowCount() - start
+					if count > remaining {
+						count = remaining
+					}
 					for k, rp := range ap.ResultCols {
 						if rp.Rel == 0 {
-							if err := ctr.resBat.Vecs[k].UnionMulti(ctr.inBat.Vecs[rp.Pos], int64(i), bat.RowCount(), proc.Mp()); err != nil {
+							if err := ctr.resBat.Vecs[k].UnionMulti(ctr.inBat.Vecs[rp.Pos], int64(i), count, proc.Mp()); err != nil {
 								return err
 							}
 						} else {
-							if err := ctr.resBat.Vecs[k].UnionBatch(bat.Vecs[rp.Pos], 0, bat.RowCount(), nil, proc.Mp()); err != nil {
+							if err := ctr.resBat.Vecs[k].UnionBatch(bat.Vecs[rp.Pos], int64(start), count, nil, proc.Mp()); err != nil {
 								return err
 							}
 						}
 					}
-					rowCountIncrease += bat.RowCount()
+					rowCountIncrease += count
 					if ap.JoinType == plan.Node_OUTER {
-						base := ctr.rightBatchOffset[idx]
-						ctr.rightRowsMatched.AddRange(base, base+uint64(bat.RowCount()))
+						base := ctr.rightBatchOffset[idx] + uint64(start)
+						ctr.rightRowsMatched.AddRange(base, base+uint64(count))
+					}
+					if start+count < bat.RowCount() {
+						ctr.probeIdx = i
+						ctr.batIdx = idx
+						ctr.batRowIdx = start + count
+						ctr.resBat.SetRowCount(rowCountIncrease)
+						result.Batch = ctr.resBat
+						return nil
 					}
 
 				case plan.Node_SINGLE:
@@ -429,6 +461,7 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 			if ap.JoinType == plan.Node_SEMI && matched {
 				break
 			}
+			ctr.batRowIdx = 0
 		}
 
 		if !matched && (ap.JoinType == plan.Node_ANTI || ap.JoinType == plan.Node_LEFT || ap.JoinType == plan.Node_SINGLE || ap.JoinType == plan.Node_OUTER) {
@@ -446,6 +479,7 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 			rowCountIncrease++
 		}
 		ctr.batIdx = 0
+		ctr.batRowIdx = 0
 	}
 
 	ctr.inBat = nil

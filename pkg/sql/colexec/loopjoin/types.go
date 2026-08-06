@@ -54,12 +54,16 @@ type container struct {
 	state    int
 	probeIdx int
 	batIdx   int
-	inBat    *batch.Batch
-	resBat   *batch.Batch
-	joinBat  *batch.Batch
-	expr     colexec.ExpressionExecutor
-	cfs      []func(*vector.Vector, *vector.Vector, int64, int) error
-	mp       *message.JoinMap
+	// batRowIdx is the next row to consume from batIdx. A JoinMap batch is not
+	// required to fit in DefaultBatchSize, so loop join must be able to yield
+	// in the middle of one instead of materializing the whole batch at once.
+	batRowIdx int
+	inBat     *batch.Batch
+	resBat    *batch.Batch
+	joinBat   *batch.Batch
+	expr      colexec.ExpressionExecutor
+	cfs       []func(*vector.Vector, *vector.Vector, int64, int) error
+	mp        *message.JoinMap
 
 	// FULL OUTER JOIN bookkeeping. rightRowsMatched is a flat bitmap over
 	// all build rows; bit i is set when build row i matched at least one
@@ -183,6 +187,9 @@ func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	}
 	ctr.state = Build
 	ctr.inBat = nil
+	ctr.probeIdx = 0
+	ctr.batIdx = 0
+	ctr.batRowIdx = 0
 	ctr.cleanRightMatchState(proc)
 	ctr.rightMatchedIter = nil
 	ctr.rightMatchedBat = 0

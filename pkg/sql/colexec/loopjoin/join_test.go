@@ -17,6 +17,7 @@ package loopjoin
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -714,9 +715,131 @@ func TestMarkJoinResumesAfterDefaultBatchSize(t *testing.T) {
 	proc.Free()
 }
 
+func TestLoopJoinNoCondSplitsLargeBuildBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+	const extraRows = 17
+	buildValues := make([]string, colexec.DefaultBatchSize+extraRows)
+	for i := range buildValues {
+		buildValues[i] = strings.Repeat("x", 128)
+	}
+	buildBat := makeVarcharLoopJoinBatch(proc.Mp(), buildValues)
+	joinMap := message.NewJoinMap(
+		message.GroupSels{}, nil, nil, nil, []*batch.Batch{buildBat}, proc.Mp())
+	joinMap.IncRef(1)
+
+	join := &LoopJoin{
+		ResultCols: []colexec.ResultPos{
+			colexec.NewResultPos(0, 0),
+			colexec.NewResultPos(1, 0),
+		},
+		LeftTypes:  []types.Type{types.T_varchar.ToType()},
+		RightTypes: []types.Type{types.T_varchar.ToType()},
+		JoinType:   plan.Node_LEFT,
+	}
+	installLoopJoinTestAllocation(t, join)
+	join.ctr.state = Probe
+	join.ctr.mp = joinMap
+	join.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		makeVarcharLoopJoinBatch(proc.Mp(), []string{"probe"}),
+	}))
+	require.NoError(t, join.Prepare(proc))
+
+	result, err := join.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, colexec.DefaultBatchSize, result.Batch.RowCount())
+	require.Equal(t, "probe", result.Batch.Vecs[0].GetStringAt(0))
+	require.Equal(t, buildValues[0], result.Batch.Vecs[1].GetStringAt(0))
+
+	result, err = join.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, extraRows, result.Batch.RowCount())
+	require.Equal(t, "probe", result.Batch.Vecs[0].GetStringAt(extraRows-1))
+	require.Equal(t, buildValues[len(buildValues)-1], result.Batch.Vecs[1].GetStringAt(extraRows-1))
+
+	result, err = join.Call(proc)
+	require.NoError(t, err)
+	require.Nil(t, result.Batch)
+
+	join.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestLoopJoinNonEqCondSplitsLargeBuildBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+	const extraRows = colexec.DefaultBatchSize
+	buildValues := make([]int32, colexec.DefaultBatchSize+extraRows)
+	for i := range buildValues {
+		buildValues[i] = 7
+	}
+	buildBat := makeInt32LoopJoinBatch(proc.Mp(), buildValues)
+	joinMap := message.NewJoinMap(
+		message.GroupSels{}, nil, nil, nil, []*batch.Batch{buildBat}, proc.Mp())
+	joinMap.IncRef(1)
+
+	int32Type := types.T_int32.ToType()
+	fr, err := function.GetFunctionByName(context.Background(), "=", []types.Type{int32Type, int32Type})
+	require.NoError(t, err)
+	join := &LoopJoin{
+		NonEqCond: &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Args: []*plan.Expr{
+					{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+					{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}}},
+				},
+				Func: &plan.ObjectRef{Obj: fr.GetEncodedOverloadID(), ObjName: "="},
+			}},
+		},
+		ResultCols: []colexec.ResultPos{
+			colexec.NewResultPos(0, 0),
+			colexec.NewResultPos(1, 0),
+		},
+		LeftTypes:  []types.Type{int32Type},
+		RightTypes: []types.Type{int32Type},
+		JoinType:   plan.Node_INNER,
+	}
+	installLoopJoinTestAllocation(t, join)
+	join.ctr.state = Probe
+	join.ctr.mp = joinMap
+	join.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		makeInt32LoopJoinBatch(proc.Mp(), []int32{7}),
+	}))
+	require.NoError(t, join.Prepare(proc))
+
+	result, err := join.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, colexec.DefaultBatchSize, result.Batch.RowCount())
+
+	result, err = join.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, extraRows, result.Batch.RowCount())
+
+	result, err = join.Call(proc)
+	require.NoError(t, err)
+	require.Nil(t, result.Batch)
+
+	join.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func makeInt32LoopJoinBatch(mp *mpool.MPool, vals []int32) *batch.Batch {
 	bat := batch.New([]string{"id"})
 	bat.Vecs[0] = testutil.MakeInt32Vector(vals, nil, mp)
+	bat.SetRowCount(len(vals))
+	return bat
+}
+
+func makeVarcharLoopJoinBatch(mp *mpool.MPool, vals []string) *batch.Batch {
+	bat := batch.New([]string{"value"})
+	bat.Vecs[0] = testutil.MakeVarcharVector(vals, nil, mp)
 	bat.SetRowCount(len(vals))
 	return bat
 }
