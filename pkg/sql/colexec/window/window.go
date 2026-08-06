@@ -63,6 +63,9 @@ func (window *Window) OpType() vm.OpType {
 }
 
 func (window *Window) Prepare(proc *process.Process) (err error) {
+	for i := range window.Aggs {
+		window.Aggs[i].ResetPrepareParamKind()
+	}
 	if window.OpAnalyzer == nil {
 		window.OpAnalyzer = process.NewAnalyzer(window.GetIdx(), window.IsFirst, window.IsLast, "window")
 	} else {
@@ -243,6 +246,12 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err
 			}
+			for i := range window.Aggs {
+				if i < len(ctr.aggVecs) && len(ctr.aggVecs[i].Vec) > 0 {
+					window.Aggs[i].ObservePrepareParamKind(
+						ctr.aggVecs[i].Vec[0].GetPrepareParamKind())
+				}
+			}
 
 			ctr.batAggs = make([]aggexec.AggFuncExec, len(window.Aggs))
 			for i, ag := range window.Aggs {
@@ -366,6 +375,7 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 			return err
 		}
 		if ctr.vec != nil {
+			ctr.vec.SetPrepareParamKind(ap.Aggs[idx].GetPrepareParamKind())
 			analyzer.Alloc(int64(ctr.vec.Size()))
 		}
 		ctr.os = nil
@@ -482,6 +492,7 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 	if err != nil {
 		return err
 	}
+	ctr.vec.SetPrepareParamKind(ap.Aggs[idx].GetPrepareParamKind())
 	if isWinOrder {
 		ctr.vec.SetNulls(nil)
 	}
@@ -932,12 +943,12 @@ func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) (er
 			if err != nil {
 				return err
 			}
-
 			if ctr.aggVecs[i].Vec[j] != nil {
 				ctr.aggVecs[i].Vec[j].CleanOnlyData()
 				if err = ctr.aggVecs[i].Vec[j].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
 					return err
 				}
+				ctr.aggVecs[i].Vec[j].SetPrepareParamKind(vec.GetPrepareParamKind())
 			} else {
 				ctr.aggVecs[i].Vec[j], err = vec.Dup(proc.Mp())
 				if err != nil {

@@ -57,6 +57,18 @@ func countStarAgg() aggexec.AggFuncExecExpression {
 	return aggexec.MakeAggFunctionExpression(aggexec.AggIdOfCountStar, false, []*plan.Expr{colExpr(0, types.T_int32)}, nil)
 }
 
+func minPreparedParamAgg() aggexec.AggFuncExecExpression {
+	return aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfMin,
+		false,
+		[]*plan.Expr{{
+			Typ:  plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+		}},
+		nil,
+	)
+}
+
 func orderedGroupConcatAgg(distinct bool) aggexec.AggFuncExecExpression {
 	config := []byte{2}
 	config = binary.BigEndian.AppendUint32(config, 1)
@@ -189,6 +201,42 @@ func buildPartialH0Batch(t *testing.T, proc *process.Process, values []int32) *b
 	batches := collectBatches(t, partial, proc)
 	require.Len(t, batches, 1)
 	return cloneBatch(t, proc, batches[0])
+}
+
+func TestMergeGroupPreservesPreparedParamKind(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("5"), false, proc.Mp()))
+	proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{vector.PrepareParamFloat})
+
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+	input.SetRowCount(2)
+	partialChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	partial := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{minPreparedParamAgg()})
+	partial.NeedEval = false
+	partial.AppendChild(partialChild)
+	require.NoError(t, partial.Prepare(proc))
+	partialBatches := collectBatches(t, partial, proc)
+	require.Len(t, partialBatches, 1)
+	partialBatch := cloneBatch(t, proc, partialBatches[0])
+	partial.Free(proc, false, nil)
+	partialChild.Free(proc, false, nil)
+
+	mergeChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partialBatch})
+	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{minPreparedParamAgg()})
+	merge.AppendChild(mergeChild)
+	require.NoError(t, merge.Prepare(proc))
+	outputs := collectBatches(t, merge, proc)
+	require.Len(t, outputs, 1)
+	require.Equal(t, vector.PrepareParamFloat, outputs[0].Vecs[0].GetPrepareParamKind())
+	require.Equal(t, "5", outputs[0].Vecs[0].GetStringAt(0))
+	merge.Free(proc, false, nil)
+	mergeChild.Free(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func buildPartialGroupBatches(t *testing.T, proc *process.Process, sources []*batch.Batch, forceGroupTypesNotNull bool) []*batch.Batch {

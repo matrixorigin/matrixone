@@ -546,6 +546,21 @@ func TestBatch_UnionOne(t *testing.T) {
 	require.Equal(t, row1, row2)
 }
 
+func TestClonePreservesPrepareParamKind(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
+	source.Vecs[0].SetPrepareParamKind(vector.PrepareParamDecimal)
+	source.SetRowCount(1)
+	defer source.Clean(mp)
+
+	cloned, err := source.Dup(mp)
+	require.NoError(t, err)
+	defer cloned.Clean(mp)
+	require.Equal(t, vector.PrepareParamDecimal, cloned.Vecs[0].GetPrepareParamKind())
+}
+
 // TestBatchUnmarshalWithAnyMp_Bug23156 tests the fix for bug #23156
 // This test verifies that Vecs and Attrs length remain consistent when batch is reused
 // The bug occurred when batch was reused with different Attrs/Vecs configurations,

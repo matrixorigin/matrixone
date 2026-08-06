@@ -244,6 +244,80 @@ func TestIssue26725PreparedBit64Numeric(t *testing.T) {
 		require.NoError(t, rows.Err())
 		require.NoError(t, rows.Close())
 
+		// Aggregates materialize a new result vector. Aggregates that return an
+		// unchanged input value must preserve numeric-vs-string source semantics
+		// across that boundary for both protocol and SQL prepared statements.
+		materializedStmt, err := db.PrepareContext(ctx,
+			"insert into "+dbName+".t64(id, b) select ?, min(?) from "+dbName+".t64")
+		require.NoError(t, err)
+		defer materializedStmt.Close()
+		_, err = materializedStmt.ExecContext(ctx, int64(25), float64(5))
+		require.NoError(t, err)
+		_, err = materializedStmt.ExecContext(ctx, int64(26), "5")
+		require.NoError(t, err)
+		windowStmt, err := db.PrepareContext(ctx,
+			"insert into "+dbName+".t64(id, b) select ?, min(?) over() from "+dbName+".t64 limit 1")
+		require.NoError(t, err)
+		defer windowStmt.Close()
+		_, err = windowStmt.ExecContext(ctx, int64(27), float64(5))
+		require.NoError(t, err)
+		_, err = windowStmt.ExecContext(ctx, int64(28), "5")
+		require.NoError(t, err)
+
+		execSQLRequire(t, ctx, db,
+			"prepare issue26725_agg from 'insert into "+dbName+
+				".t64(id, b) select ?, min(?) from "+dbName+".t64'")
+		execSQLRequire(t, ctx, db, "set @issue26725_id = 29, @issue26725_bit = 5.0")
+		execSQLRequire(t, ctx, db,
+			"execute issue26725_agg using @issue26725_id, @issue26725_bit")
+		execSQLRequire(t, ctx, db, "set @issue26725_id = 30, @issue26725_bit = '5'")
+		execSQLRequire(t, ctx, db,
+			"execute issue26725_agg using @issue26725_id, @issue26725_bit")
+		execSQLRequire(t, ctx, db, "deallocate prepare issue26725_agg")
+		execSQLRequire(t, ctx, db,
+			"insert into "+dbName+".t64(id, b) select 31, min(5.0) from "+dbName+".t64")
+		execSQLRequire(t, ctx, db,
+			"insert into "+dbName+".t64(id, b) select 32, min('5') from "+dbName+".t64")
+
+		rows, err = db.QueryContext(ctx,
+			"select cast(b as unsigned) from "+dbName+".t64 where id between 25 and 32 order by id")
+		require.NoError(t, err)
+		defer rows.Close()
+		for _, expected := range []string{"5", "53", "5", "53", "5", "53", "5", "53"} {
+			require.True(t, rows.Next())
+			var actual string
+			require.NoError(t, rows.Scan(&actual))
+			require.Equal(t, expected, actual)
+		}
+		require.False(t, rows.Next())
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+		// Stored-procedure locals are string-backed at runtime for DECIMAL and
+		// YEAR, so EXECUTE USING must use the declaration from the same scope.
+		execSQLRequire(t, ctx, db,
+			"create procedure "+dbName+".issue26725_local_types() 'begin "+
+				"declare d decimal(10,2) default 5.00; "+
+				"declare y year default 2024; "+
+				"declare s varchar(8) default ''5''; "+
+				"prepare issue26725_local from ''insert into "+dbName+
+				".t64(id, b) values (33, ?), (34, ?), (35, ?)''; "+
+				"execute issue26725_local using @d, @y, @s; "+
+				"deallocate prepare issue26725_local; end'")
+		execSQLRequire(t, ctx, db, "call "+dbName+".issue26725_local_types()")
+		rows, err = db.QueryContext(ctx,
+			"select cast(b as unsigned) from "+dbName+".t64 where id between 33 and 35 order by id")
+		require.NoError(t, err)
+		defer rows.Close()
+		for _, expected := range []string{"5", "2024", "53"} {
+			require.True(t, rows.Next())
+			var actual string
+			require.NoError(t, rows.Scan(&actual))
+			require.Equal(t, expected, actual)
+		}
+		require.False(t, rows.Next())
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+
 		execSQLRequire(t, ctx, db,
 			"create table "+dbName+".t63(id bigint primary key, b bit(63))")
 		narrowStmt, err := db.PrepareContext(ctx,

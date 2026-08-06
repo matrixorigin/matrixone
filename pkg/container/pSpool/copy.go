@@ -165,6 +165,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 			dst.Vecs[i].SetGrouping(vec.GetGrouping())
 		}
 		dst.Vecs[i].SetIsBin(vec.GetIsBin())
+		dst.Vecs[i].SetPrepareParamKind(vec.GetPrepareParamKind())
 
 		// range src and found the same vector.
 		for j := i + 1; j < len(src.Vecs); j++ {

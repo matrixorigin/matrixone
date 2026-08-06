@@ -146,6 +146,7 @@ func (v *Vector) SetSorted(b bool) {
 // we should redefine the value of capacity and values-ptr because of the possible change in type.
 func (v *Vector) Reset(typ types.Type) {
 	v.typ = typ
+	v.prepareParamKind = PrepareParamNone
 
 	v.class = FLAT
 	if v.area != nil {
@@ -160,6 +161,7 @@ func (v *Vector) Reset(typ types.Type) {
 }
 
 func (v *Vector) ResetWithSameType() {
+	v.prepareParamKind = PrepareParamNone
 	v.class = FLAT
 	if v.area != nil {
 		v.area = v.area[:0]
@@ -179,6 +181,7 @@ func (v *Vector) ResetArea() {
 // TODO: It is semantically same as Reset, need to merge them later.
 func (v *Vector) ResetWithNewType(t *types.Type) {
 	v.typ = *t
+	v.prepareParamKind = PrepareParamNone
 	v.class = FLAT
 	if v.area != nil {
 		v.area = v.area[:0]
@@ -454,6 +457,7 @@ func (v *Vector) CleanOnlyData() {
 	v.nsp.Clear()
 	v.gsp.Clear()
 	v.sorted = false
+	v.prepareParamKind = PrepareParamNone
 	v.areaDisjoint = v.length == 0
 }
 
@@ -1722,6 +1726,7 @@ func (v *Vector) dup(
 	w.class = v.class
 	w.typ = v.typ
 	w.sorted = v.sorted
+	w.prepareParamKind = v.prepareParamKind
 
 	if v.IsConstNull() {
 		w.length = v.length
@@ -5290,6 +5295,7 @@ func (v *Vector) window(
 	w.class = v.class
 	w.length = end - start
 	w.sorted = v.sorted
+	w.prepareParamKind = v.prepareParamKind
 	if err := v.copyWindowBitmaps(w, start, end, mp); err != nil {
 		w.Free(mp)
 		return nil, err
@@ -5381,6 +5387,7 @@ func (v *Vector) CloneWindowWithAllocation(
 }
 
 func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error {
+	w.prepareParamKind = v.prepareParamKind
 	if start == end {
 		return nil
 	}

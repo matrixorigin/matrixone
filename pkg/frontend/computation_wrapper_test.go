@@ -423,10 +423,27 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	require.NoError(t, ses.setUserDefinedVar("v1", "session-binary", "", true))
 	require.NoError(t, ses.setUserDefinedVar("session_only", "session-binary", "", true))
 	scopes := []map[string]interface{}{
-		{"v1": int64(10)},
-		{"v1": int64(20), "inner": int64(30)},
+		{"v1": int64(10), "declared_only_outer": "5.0"},
+		{
+			"v1":                  int64(20),
+			"inner":               int64(30),
+			"decimal_value":       "5.00",
+			"year_value":          "2024",
+			"string_value":        "5",
+			"declared_only_outer": "5.0",
+		},
+	}
+	typeScopes := []map[string]plan.Type{
+		{"declared_only_outer": {Id: int32(types.T_decimal64)}},
+		{
+			"v1":            {Id: int32(types.T_int64)},
+			"decimal_value": {Id: int32(types.T_decimal64)},
+			"year_value":    {Id: int32(types.T_year)},
+			"string_value":  {Id: int32(types.T_varchar)},
+		},
 	}
 	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, defines.VarScopeKey{}, &scopes)
+	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, defines.VarScopeTypeKey{}, &typeScopes)
 	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, defines.InSp{}, true)
 
 	value, err := ses.txnCompileCtx.ResolveVariable("V1", false, false)
@@ -438,6 +455,20 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	kind, err := ses.txnCompileCtx.ResolveVariablePrepareParamKind("V1", false, false)
 	require.NoError(t, err)
 	require.Equal(t, vector.PrepareParamInteger, kind)
+
+	for _, test := range []struct {
+		name     string
+		expected vector.PrepareParamKind
+	}{
+		{name: "decimal_value", expected: vector.PrepareParamDecimal},
+		{name: "year_value", expected: vector.PrepareParamInteger},
+		{name: "string_value", expected: vector.PrepareParamNone},
+		{name: "declared_only_outer", expected: vector.PrepareParamNone},
+	} {
+		kind, err = ses.txnCompileCtx.ResolveVariablePrepareParamKind(test.name, false, false)
+		require.NoError(t, err)
+		require.Equal(t, test.expected, kind, test.name)
+	}
 
 	value, err = ses.txnCompileCtx.ResolveVariable("session_only", false, false)
 	require.NoError(t, err)

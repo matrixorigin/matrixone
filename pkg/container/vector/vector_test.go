@@ -3906,3 +3906,38 @@ func TestVarlenaAreaDisjointAppendFailureFailsClosed(t *testing.T) {
 	vec.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }
+
+func TestPrepareParamKindValueLifecycle(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	source, err := NewConstBytes(types.T_text.ToType(), []byte("5"), 2, mp)
+	require.NoError(t, err)
+	source.SetPrepareParamKind(PrepareParamFloat)
+	defer source.Free(mp)
+
+	duplicate, err := source.Dup(mp)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamFloat, duplicate.GetPrepareParamKind())
+	duplicate.Free(mp)
+
+	window, err := source.Window(0, 1)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamFloat, window.GetPrepareParamKind())
+	window.Free(mp)
+
+	clone, err := source.CloneWindow(0, 1, mp)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamFloat, clone.GetPrepareParamKind())
+	clone.ResetWithSameType()
+	require.Equal(t, PrepareParamNone, clone.GetPrepareParamKind())
+	clone.SetPrepareParamKind(PrepareParamDecimal)
+	clone.Reset(types.T_varchar.ToType())
+	require.Equal(t, PrepareParamNone, clone.GetPrepareParamKind())
+	clone.SetPrepareParamKind(PrepareParamInteger)
+	blobType := types.T_blob.ToType()
+	clone.ResetWithNewType(&blobType)
+	require.Equal(t, PrepareParamNone, clone.GetPrepareParamKind())
+	clone.SetPrepareParamKind(PrepareParamBoolean)
+	clone.CleanOnlyData()
+	require.Equal(t, PrepareParamNone, clone.GetPrepareParamKind())
+	clone.Free(mp)
+}

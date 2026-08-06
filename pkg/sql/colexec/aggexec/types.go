@@ -41,6 +41,9 @@ type AggFuncExecExpression struct {
 	argExpressions []*plan.Expr
 	extraConfig    []byte
 	configType     plan.AggregateConfigType
+
+	prepareParamKind     vector.PrepareParamKind
+	prepareParamKindSeen bool
 }
 
 func MakeAggFunctionExpression(
@@ -65,6 +68,51 @@ func MakeAggFunctionExpression(
 
 func (ag *AggFuncExecExpression) GetAggID() int64 {
 	return ag.aggID
+}
+
+// PreservesFirstArgPrepareParamKind reports aggregates whose result is one of
+// the first argument's original values without a semantic type conversion.
+// Source conversion provenance may cross these materialization boundaries.
+func (ag *AggFuncExecExpression) PreservesFirstArgPrepareParamKind() bool {
+	switch ag.aggID {
+	case AggIdOfMin, AggIdOfMax, AggIdOfAny, AggIdOfMaxBy, AggIdOfMaxByNonNull,
+		WinIdOfFirstValue, WinIdOfLastValue, WinIdOfNthValue:
+		return true
+	case WinIdOfLag, WinIdOfLead:
+		// With no explicit default, LAG/LEAD return the first argument or NULL.
+		// A default expression can introduce a different source category.
+		return len(ag.argExpressions) < 3
+	default:
+		return false
+	}
+}
+
+func (ag *AggFuncExecExpression) ResetPrepareParamKind() {
+	ag.prepareParamKind = vector.PrepareParamNone
+	ag.prepareParamKindSeen = false
+}
+
+func (ag *AggFuncExecExpression) ObservePrepareParamKind(kind vector.PrepareParamKind) {
+	if !ag.PreservesFirstArgPrepareParamKind() {
+		return
+	}
+	if !ag.prepareParamKindSeen {
+		ag.prepareParamKind = kind
+		ag.prepareParamKindSeen = true
+		return
+	}
+	if ag.prepareParamKind != kind {
+		// A vector-wide category cannot represent mixed source semantics.
+		// Falling back to ordinary string conversion is conservative.
+		ag.prepareParamKind = vector.PrepareParamNone
+	}
+}
+
+func (ag *AggFuncExecExpression) GetPrepareParamKind() vector.PrepareParamKind {
+	if !ag.prepareParamKindSeen {
+		return vector.PrepareParamNone
+	}
+	return ag.prepareParamKind
 }
 
 func (ag *AggFuncExecExpression) IsDistinct() bool {

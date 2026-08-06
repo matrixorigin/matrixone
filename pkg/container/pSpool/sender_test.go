@@ -28,6 +28,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+func TestCachedBatchPreservesPrepareParamKind(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	source := batch.NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
+	source.Vecs[0].SetPrepareParamKind(vector.PrepareParamFloat)
+	source.SetRowCount(1)
+	defer source.Clean(mp)
+
+	cache := initCachedBatch(mp, 1)
+	copied, useCache, cacheID, err := cache.GetCopiedBatch(source)
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamFloat, copied.Vecs[0].GetPrepareParamKind())
+	cache.CacheBatch(useCache, cacheID, copied)
+	cache.free()
+}
+
 // TestPipelineSpoolForceCleanupRetainsUntilReceiversDrained verifies that
 // ForceCleanup does NOT free spool memory while a receiver still has an
 // unconsumed batch (a pending reference). Freeing it then would let that

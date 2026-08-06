@@ -57,6 +57,9 @@ func hasInactiveGroupingColumn(flags []bool) bool {
 }
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
+	for i := range group.Aggs {
+		group.Aggs[i].ResetPrepareParamKind()
+	}
 	group.diagnosticsLogged = false
 	group.ctr.state = vm.Build
 	if group.ctr.mp != nil {
@@ -346,6 +349,12 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 	if err = group.evaluateGroupByAndAggArgs(proc, bat); err != nil {
 		return false, err
 	}
+	for i := range group.Aggs {
+		if i < len(group.ctr.aggArgEvaluate) && len(group.ctr.aggArgEvaluate[i].Vec) > 0 {
+			group.Aggs[i].ObservePrepareParamKind(
+				group.ctr.aggArgEvaluate[i].Vec[0].GetPrepareParamKind())
+		}
+	}
 
 	// without group by, there is only one group.
 	if group.ctr.mtyp == H0 {
@@ -626,6 +635,9 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	buf.Write(types.EncodeBool(&group.ctr.keyNullable))
 	nAggs := int32(len(group.ctr.aggList))
 	buf.Write(types.EncodeInt32(&nAggs))
+	for i := range group.ctr.aggList {
+		buf.WriteByte(byte(group.Aggs[i].GetPrepareParamKind()))
+	}
 	for _, ag := range group.ctr.aggList {
 		ag.SaveIntermediateResultOfChunk(curr, &buf)
 	}
