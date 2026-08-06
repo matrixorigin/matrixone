@@ -451,6 +451,31 @@ func TestBuildCTASPreservesMySQLSpecialColumnTypes(t *testing.T) {
 	require.Equal(t, int32(types.T_varchar), cols[2].Typ.GetId())
 }
 
+func TestBuildCTASMaterializesBinaryLiteralExpressionTypes(t *testing.T) {
+	const sql = `create table copied as select
+		X'e4bda0' direct_value,
+		concat(X'e4bda0', 'a') concat_value,
+		substr(X'e4bda0', 1) substr_value,
+		lower(X'e4bda0') lower_value,
+		repeat(X'e4bda0', 2) repeat_value,
+		if(true, X'e4bda0', '你好') if_value,
+		case when true then X'e4bda0' else '你好' end case_value,
+		coalesce(null, X'e4bda0') coalesce_value`
+
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 8)
+	wantWidths := []int32{3, 7, 3, 3, 6, 8, 8, 3}
+	for i, width := range wantWidths {
+		require.Equal(t, int32(types.T_varbinary), cols[i].GetTyp().Id, cols[i].GetName())
+		require.Equal(t, width, cols[i].GetTyp().Width, cols[i].GetName())
+	}
+}
+
 func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {
 	const createViewSQL = "create view v_enum_set as select priority, flags, n_name from nation"
 	ctx := NewMockCompilerContext(false)

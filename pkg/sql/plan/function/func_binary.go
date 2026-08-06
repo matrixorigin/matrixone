@@ -1079,6 +1079,7 @@ func CoalesceGeneral[T NormalType](ivecs []*vector.Vector, result vector.Functio
 }
 
 func CoalesceStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	propagateBinaryStringResult(ivecs, result)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vecs := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs))
 	for i := range ivecs {
@@ -1133,6 +1134,7 @@ func concatWsCheck(overloads []overload, inputs []types.Type) checkResult {
 }
 
 func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	propagateBinaryStringResult(ivecs, result)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vecs := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs))
 	for i := range ivecs {
@@ -6023,7 +6025,7 @@ func strcmp(s1, s2 string) (int8, error) {
 func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	binaryInput := isBinaryStringVector(ivecs[0])
 	if binaryInput {
-		result.GetResultVector().SetIsBin(true)
+		result.GetResultVector().SetIsBinaryString(true)
 	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -6131,7 +6133,7 @@ func getSliceFromRightWithLength(s string, offset int64, length int64) string {
 func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	binaryInput := isBinaryStringVector(ivecs[0])
 	if binaryInput {
-		result.GetResultVector().SetIsBin(true)
+		result.GetResultVector().SetIsBinaryString(true)
 	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])

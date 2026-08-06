@@ -139,6 +139,24 @@ func TestFoldVarExprsInScope(t *testing.T) {
 	require.Equal(t, "STRICT_TRANS_TABLES", lit.Lit.GetSval())
 }
 
+func TestFoldVarExprsInScopeMaterializesBinaryStringAsStaticType(t *testing.T) {
+	proc := newResolveVariableProcess(t, "\xe4\xbd\xa0")
+	proc.SetResolveVariableBinaryStringFunc(func(string, bool, bool) (bool, error) {
+		return true, nil
+	})
+	scope := newScope(Normal)
+	scope.DataSource = &Source{FilterList: []*plan.Expr{makeTestVarExpr("sql_mode")}}
+
+	folded, err := foldVarExprsInScope(scope, proc)
+	require.NoError(t, err)
+	require.True(t, folded)
+	expr := scope.DataSource.FilterList[0]
+	require.Equal(t, int32(types.T_varbinary), expr.GetTyp().Id)
+	require.Equal(t, int32(3), expr.GetTyp().Width)
+	require.False(t, expr.GetLit().GetIsBin())
+	require.Equal(t, "\xe4\xbd\xa0", expr.GetLit().GetSval())
+}
+
 func TestFoldVarExprsInScopeUsesPrivateExprCopies(t *testing.T) {
 	shared := makeTestVarExpr("sql_mode")
 	proc1 := newResolveVariableProcess(t, "ANSI")

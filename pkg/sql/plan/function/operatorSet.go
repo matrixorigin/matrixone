@@ -832,6 +832,7 @@ func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date 
 }
 
 func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	propagateBinaryStringResult(vecs[1:], result)
 	p2 := vector.GenerateFunctionStrParameter(vecs[1])
 	p3 := vector.GenerateFunctionStrParameter(vecs[2])
 

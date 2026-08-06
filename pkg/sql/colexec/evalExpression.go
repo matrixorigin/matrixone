@@ -429,10 +429,12 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 			expr.typ, val, 1, proc.Mp(), expr.allocation,
 		)
 	} else {
+		expr.vec.SetType(expr.typ)
 		err = vector.SetConstBytes(expr.vec, val, 1, proc.GetMPool())
 	}
 	if err == nil {
 		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
+		expr.vec.SetIsBinaryString(proc.GetPrepareParamIsBinaryString(expr.pos))
 	}
 	return expr.vec, err
 }
@@ -515,6 +517,13 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 			return nil, err
 		}
 	}
+	binaryString := false
+	if resolveBinaryString := proc.GetResolveVariableBinaryStringFunc(); resolveBinaryString != nil {
+		binaryString, err = resolveBinaryString(expr.name, expr.system, expr.global)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	if val == nil {
 		if expr.null == nil {
@@ -524,6 +533,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		}
 		if err == nil {
 			expr.null.SetIsBin(isBin)
+			expr.null.SetIsBinaryString(binaryString)
 		}
 		return expr.null, err
 	}
@@ -533,6 +543,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 			proc, expr.typ, val, expr.allocation,
 		)
 	} else {
+		expr.vec.SetType(expr.typ)
 		switch v := val.(type) {
 		case []byte:
 			err = vector.SetConstBytes(expr.vec, v, 1, proc.GetMPool())
@@ -544,6 +555,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	}
 	if err == nil {
 		expr.vec.SetIsBin(isBin)
+		expr.vec.SetIsBinaryString(binaryString)
 	}
 	return expr.vec, err
 }
@@ -715,6 +727,7 @@ func (expr *FunctionExpressionExecutor) resetResultType(result vector.FunctionRe
 	if vec := result.GetResultVector(); vec != nil {
 		vec.SetType(expr.resultType)
 		vec.SetIsBin(false)
+		vec.SetIsBinaryString(false)
 	}
 }
 
@@ -950,6 +963,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 				selected.Reset(*parameter.GetType())
 			}
 			selected.SetIsBin(parameter.GetIsBin())
+			selected.SetIsBinaryString(parameter.GetIsBinaryString())
 			if err := selected.Union(parameter, expr.selectedRows, proc.Mp()); err != nil {
 				return nil, err
 			}
@@ -984,11 +998,13 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	selectedResult := expr.selectedResult.GetResultVector()
 	runtimeType := *selectedResult.GetType()
 	runtimeIsBin := selectedResult.GetIsBin()
+	runtimeBinaryString := selectedResult.GetIsBinaryString()
 
 	result := expr.resultVector.GetResultVector()
 	result.SetType(runtimeType)
-	result.SetIsBin(runtimeIsBin)
 	result.ResetWithSameType()
+	result.SetIsBin(runtimeIsBin)
+	result.SetIsBinaryString(runtimeBinaryString)
 	if expr.selectedNullResult == nil {
 		var err error
 		expr.selectedNullResult, err = newExpressionConstNull(
@@ -1002,6 +1018,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		expr.selectedNullResult.SetLength(1)
 	}
 	expr.selectedNullResult.SetIsBin(runtimeIsBin)
+	expr.selectedNullResult.SetIsBinaryString(runtimeBinaryString)
 	selectedRow := int64(0)
 	for row := 0; row < rowCount; row++ {
 		if selectList[row] {
@@ -1364,6 +1381,7 @@ func generateConstExpressionExecutor(
 		}
 		if err == nil {
 			vec.SetIsBin(con.IsBin)
+			vec.SetIsBinaryString(con.IsBin)
 		}
 	}
 	return vec, err
@@ -1471,6 +1489,7 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 				return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", t.GetValue()))
 			}
 			vec.SetIsBin(t.IsBin)
+			vec.SetIsBinaryString(t.IsBin)
 		}
 	}
 	return vec, nil

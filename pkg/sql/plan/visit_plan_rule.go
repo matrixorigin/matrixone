@@ -471,10 +471,12 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		if int(exprImpl.P.Pos) >= len(rule.params) {
 			return nil, moerr.NewInternalErrorf(context.TODO(), "get prepare params error, index %d not exists", int(exprImpl.P.Pos))
 		}
-		return &plan.Expr{
-			Typ:  e.Typ,
-			Expr: rule.params[int(exprImpl.P.Pos)].Expr,
-		}, nil
+		param := rule.params[int(exprImpl.P.Pos)]
+		typ := e.Typ
+		if param.Typ.Id != 0 {
+			typ = param.Typ
+		}
+		return &plan.Expr{Typ: typ, Expr: param.Expr}, nil
 	case *plan.Expr_List:
 		for i, arg := range exprImpl.List.List {
 			exprImpl.List.List[i], err = rule.ApplyExpr(arg)

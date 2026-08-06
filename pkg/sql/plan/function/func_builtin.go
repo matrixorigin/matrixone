@@ -801,12 +801,7 @@ func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
 }
 
 func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	for _, parameter := range parameters {
-		if isBinaryStringVector(parameter) {
-			result.GetResultVector().SetIsBin(true)
-			break
-		}
-	}
+	propagateBinaryStringResult(parameters, result)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ps := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters))
 	for i := range ps {
@@ -1573,9 +1568,7 @@ func doRpad(src string, tgtLen int64, pad string) (string, bool) {
 }
 
 func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if isBinaryStringVector(parameters[0]) {
-		result.GetResultVector().SetIsBin(true)
-	}
+	propagateBinaryStringResult(parameters[:1], result)
 	// repeat the string n times.
 	repeatNTimes := func(base string, n int64) (r string, null bool) {
 		if n <= 0 {
@@ -3823,7 +3816,7 @@ func isUTF8Charset(charset []byte) bool {
 
 func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if isBinaryStringVector(parameters[0]) {
-		result.GetResultVector().SetIsBin(true)
+		result.GetResultVector().SetIsBinaryString(true)
 		return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 			return v
 		}, selectList)
@@ -3835,7 +3828,7 @@ func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWra
 
 func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if isBinaryStringVector(parameters[0]) {
-		result.GetResultVector().SetIsBin(true)
+		result.GetResultVector().SetIsBinaryString(true)
 		return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 			return v
 		}, selectList)
@@ -3850,7 +3843,16 @@ func isBinaryStringVector(vec *vector.Vector) bool {
 	case types.T_binary, types.T_varbinary, types.T_blob:
 		return true
 	default:
-		return vec.GetIsBin()
+		return vec.GetIsBinaryString()
+	}
+}
+
+func propagateBinaryStringResult(parameters []*vector.Vector, result vector.FunctionResultWrapper) {
+	for _, parameter := range parameters {
+		if isBinaryStringVector(parameter) {
+			result.GetResultVector().SetIsBinaryString(true)
+			return
+		}
 	}
 }
 

@@ -886,11 +886,11 @@ func initExecuteStmtParamWithResolverInSession(
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		params, paramVals, paramIsBin, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
+		params, paramVals, paramIsBin, paramBinaryString, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-		cwft.proc.SetOwnedPrepareParamsWithIsBin(params, paramIsBin)
+		cwft.proc.SetOwnedPrepareParamsWithMetadata(params, paramIsBin, paramBinaryString)
 		cwft.paramVals = paramVals
 	} else {
 		if numParams > 0 {
@@ -1044,7 +1044,11 @@ func preparedParamValues(proc *process.Process) ([]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		values[i] = plan2.ParamValue{Value: string(raw), IsBin: proc.GetPrepareParamIsBin(i)}
+		values[i] = plan2.ParamValue{
+			Value:        string(raw),
+			IsBin:        proc.GetPrepareParamIsBin(i),
+			BinaryString: proc.GetPrepareParamIsBinaryString(i),
+		}
 	}
 	return values, nil
 }
@@ -1052,7 +1056,12 @@ func preparedParamValues(proc *process.Process) ([]any, error) {
 func buildExecuteUserParams(
 	proc *process.Process,
 	args []*plan.Expr,
-) (params *vector.Vector, paramVals []any, paramIsBin []bool, err error) {
+) (
+	params *vector.Vector,
+	paramVals []any,
+	paramIsBin, paramBinaryString []bool,
+	err error,
+) {
 	params = vector.NewVec(types.T_text.ToType())
 	defer func() {
 		if err != nil {
@@ -1061,6 +1070,7 @@ func buildExecuteUserParams(
 	}()
 	paramVals = make([]any, len(args))
 	paramIsBin = make([]bool, len(args))
+	paramBinaryString = make([]bool, len(args))
 	for i, arg := range args {
 		exprImpl := arg.Expr.(*plan.Expr_V)
 		var param any
@@ -1079,7 +1089,18 @@ func buildExecuteUserParams(
 				return
 			}
 		}
-		paramVals[i] = plan2.ParamValue{Value: param, IsBin: paramIsBin[i]}
+		resolveBinaryString := proc.GetResolveVariableBinaryStringFunc()
+		if resolveBinaryString != nil {
+			paramBinaryString[i], err = resolveBinaryString(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+			if err != nil {
+				return
+			}
+		}
+		paramVals[i] = plan2.ParamValue{
+			Value:        param,
+			IsBin:        paramIsBin[i],
+			BinaryString: paramBinaryString[i],
+		}
 	}
 	return
 }

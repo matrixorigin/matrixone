@@ -126,7 +126,7 @@ func Test_BuiltInConcat(t *testing.T) {
 	}
 }
 
-func TestBinaryStringFunctionsPreserveRuntimeMetadata(t *testing.T) {
+func TestBinaryStringFunctionsUseStaticResultType(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	mp := proc.Mp()
 	binary := testutil.MakeVarlenaVector(
@@ -137,7 +137,8 @@ func TestBinaryStringFunctionsPreserveRuntimeMetadata(t *testing.T) {
 	defer lowerResult.Free()
 	require.NoError(t, lowerResult.PreExtendAndReset(binary.Length()))
 	require.NoError(t, builtInToLower([]*vector.Vector{binary}, lowerResult, proc, binary.Length(), nil))
-	require.True(t, lowerResult.GetResultVector().GetIsBin())
+	require.False(t, lowerResult.GetResultVector().GetIsBin())
+	require.True(t, lowerResult.GetResultVector().GetIsBinaryString())
 	require.Equal(t, []string{"AB", string([]byte{0xe4, 0xbd, 0xa0})},
 		vector.InefficientMustStrCol(lowerResult.GetResultVector()))
 
@@ -150,7 +151,8 @@ func TestBinaryStringFunctionsPreserveRuntimeMetadata(t *testing.T) {
 	require.NoError(t, substringResult.PreExtendAndReset(binary.Length()))
 	require.NoError(t, SubStringWith3Args(
 		[]*vector.Vector{binary, starts, lens}, substringResult, proc, binary.Length(), nil))
-	require.True(t, substringResult.GetResultVector().GetIsBin())
+	require.False(t, substringResult.GetResultVector().GetIsBin())
+	require.True(t, substringResult.GetResultVector().GetIsBinaryString())
 	require.Equal(t, []string{"B", string([]byte{0xbd})},
 		vector.InefficientMustStrCol(substringResult.GetResultVector()))
 }

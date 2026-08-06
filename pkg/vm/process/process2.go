@@ -246,7 +246,7 @@ func (proc *Process) Free() {
 		proc.Base.cteMemoryBudget = nil
 	}
 	proc.Base.cteMemoryBudgetMu.Unlock()
-	proc.setPrepareParams(nil, nil, false)
+	proc.setPrepareParams(nil, nil, nil, false)
 }
 
 type QueryBaseContext struct {

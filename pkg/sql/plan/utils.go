@@ -3142,17 +3142,20 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 }
 
 type ParamValue struct {
-	Value any
-	IsBin bool
+	Value        any
+	IsBin        bool
+	BinaryString bool
 }
 
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	params := make([]*Expr, len(paramVals))
 	for i, val := range paramVals {
 		isBin := false
+		binaryString := false
 		if param, ok := val.(ParamValue); ok {
 			val = param.Value
 			isBin = param.IsBin
+			binaryString = param.BinaryString
 		}
 		if val == nil {
 			pc := &plan.Literal{
@@ -3171,6 +3174,14 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 				Expr: &plan.Expr_Lit{
 					Lit: pc,
 				},
+			}
+			if binaryString {
+				binaryType := types.New(
+					types.T_varbinary,
+					int32(len(fmt.Sprintf("%v", val))),
+					0,
+				)
+				params[i].Typ = makePlan2Type(&binaryType)
 			}
 		}
 	}

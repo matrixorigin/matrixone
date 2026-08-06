@@ -295,12 +295,12 @@ func TestIffConstantFoldingSkipsUnselectedBranch(t *testing.T) {
 
 }
 
-func TestParamExpressionExecutorPreservesBinaryFlagPerParameter(t *testing.T) {
+func TestParamExpressionExecutorSeparatesBinaryMetadataPerParameter(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, []byte("AB\x00\x00"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("text"), false, proc.Mp()))
-	proc.SetPrepareParamsWithIsBin(params, []bool{true, false})
+	proc.SetPrepareParamsWithMetadata(params, []bool{true, false}, []bool{false, true})
 	t.Cleanup(func() { params.Free(proc.Mp()) })
 
 	binaryExpr := NewParamExpressionExecutor(proc.Mp(), 0, types.T_text.ToType())
@@ -311,11 +311,13 @@ func TestParamExpressionExecutorPreservesBinaryFlagPerParameter(t *testing.T) {
 	binaryVec, err := binaryExpr.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.True(t, binaryVec.GetIsBin())
+	require.False(t, binaryVec.GetIsBinaryString())
 	require.Equal(t, "AB\x00\x00", binaryVec.GetStringAt(0))
 
 	textVec, err := textExpr.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.False(t, textVec.GetIsBin())
+	require.True(t, textVec.GetIsBinaryString())
 	require.Equal(t, "text", textVec.GetStringAt(0))
 }
 

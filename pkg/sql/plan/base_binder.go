@@ -3812,19 +3812,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	var argsCastType []types.Type
 
 	// get function definition
-	lookupArgsType := argsType
-	if name == "maketime" {
-		lookupCloned := false
-		for idx, arg := range args {
-			if literal := arg.GetLit(); literal != nil && literal.IsBin {
-				if !lookupCloned {
-					lookupArgsType = append([]types.Type(nil), argsType...)
-					lookupCloned = true
-				}
-				lookupArgsType[idx] = types.New(types.T_varchar, argsType[idx].Width, argsType[idx].Scale)
-			}
-		}
-	}
+	lookupArgsType := binaryLiteralStringLookupTypes(name, args, argsType)
 	fGet, err := function.GetFunctionByName(ctx, name, lookupArgsType)
 	if err != nil {
 		if name == "between" {
@@ -3847,6 +3835,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
+	adjustBinaryStringFunctionMetadata(name, args, &returnType)
 	adjustControlFlowStringMetadata(name, args, argsType, &returnType)
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage
@@ -4058,14 +4047,11 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 
 	case "maketime":
-		// Hex and bit literals carry IsBin in addition to their VARBINARY type.
-		// They are integral seconds, so they retain TIME(0) metadata even though
-		// the generic string seconds overload normally advertises TIME(6).
+		// Hex and bit literals are represented as VARCHAR literals carrying
+		// IsBin. They are integral seconds, so they retain TIME(0) metadata even
+		// though the VARCHAR seconds overload normally advertises TIME(6).
 		if len(args) == 3 {
-			secondType := types.T(args[2].Typ.Id)
-			literal := args[2].GetLit()
-			if (literal != nil && literal.IsBin) || secondType == types.T_binary ||
-				secondType == types.T_varbinary || secondType == types.T_blob {
+			if literal := args[2].GetLit(); literal != nil && literal.IsBin {
 				returnType.Scale = 0
 			}
 		}
@@ -4131,12 +4117,13 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 		for idx, castType := range argsCastType {
 			if !argsType[idx].Eq(castType) && castType.Oid != types.T_any {
-				// MAKETIME's string overload can consume all MySQL string vectors.
-				// Do not insert a metadata-only VARCHAR cast for hex/bit literals:
-				// it would clear IsBin before MakeTime interprets their raw bytes as
-				// a big-endian integer.
-				if name == "maketime" && castType.Oid == types.T_varchar &&
-					args[idx].GetLit() != nil && args[idx].GetLit().IsBin {
+				// MAKETIME uses the scale on its VARCHAR seconds target only to
+				// derive the TIME return scale. Recasting an already-VARCHAR
+				// argument solely for that metadata clears Literal.IsBin, changing
+				// X'..'/B'..' from a binary number into ordinary text.
+				if name == "maketime" && idx == 2 &&
+					argsType[idx].Oid == types.T_varchar && castType.Oid == types.T_varchar &&
+					argsType[idx].Width == castType.Width {
 					continue
 				}
 				if argsType[idx].Oid == castType.Oid && castType.Oid.IsDecimal() && argsType[idx].Scale == castType.Scale {
@@ -4196,6 +4183,100 @@ func utcFunctionFSPFromPlanExpr(ctx context.Context, name string, expr *Expr) (i
 		return 0, moerr.NewErrTooBigPrecision(ctx, fsp.I64Val, name, 6)
 	}
 	return int32(fsp.I64Val), nil
+}
+
+func binaryLiteralStringType(expr *Expr) (types.Type, bool) {
+	literal := expr.GetLit()
+	if literal == nil || !literal.IsBin || literal.Isnull {
+		return types.Type{}, false
+	}
+	value, ok := literal.Value.(*plan.Literal_Sval)
+	if !ok {
+		return types.Type{}, false
+	}
+	return types.New(types.T_varbinary, int32(len(value.Sval)), 0), true
+}
+
+func binaryLiteralStringLookupTypes(name string, args []*Expr, argTypes []types.Type) []types.Type {
+	binaryValueIndex := func(idx int) bool {
+		switch name {
+		case "concat", "concat_ws", "coalesce":
+			return true
+		case "substring", "substr", "mid", "lower", "lcase", "upper", "ucase", "repeat":
+			return idx == 0
+		case "if", "iff":
+			return idx == 1 || idx == 2
+		case "case":
+			return idx%2 == 1 || len(args)%2 == 1 && idx == len(args)-1
+		default:
+			return false
+		}
+	}
+
+	lookupTypes := argTypes
+	cloned := false
+	for idx, arg := range args {
+		if !binaryValueIndex(idx) {
+			continue
+		}
+		binaryType, ok := binaryLiteralStringType(arg)
+		if !ok {
+			continue
+		}
+		if !cloned {
+			lookupTypes = append([]types.Type(nil), argTypes...)
+			cloned = true
+		}
+		lookupTypes[idx] = binaryType
+	}
+	return lookupTypes
+}
+
+func literalNonNegativeInt64(expr *Expr) (int64, bool) {
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull {
+		return 0, false
+	}
+	var value int64
+	switch v := literal.Value.(type) {
+	case *plan.Literal_I8Val:
+		value = int64(v.I8Val)
+	case *plan.Literal_I16Val:
+		value = int64(v.I16Val)
+	case *plan.Literal_I32Val:
+		value = int64(v.I32Val)
+	case *plan.Literal_I64Val:
+		value = v.I64Val
+	case *plan.Literal_U8Val:
+		value = int64(v.U8Val)
+	case *plan.Literal_U16Val:
+		value = int64(v.U16Val)
+	case *plan.Literal_U32Val:
+		value = int64(v.U32Val)
+	case *plan.Literal_U64Val:
+		if v.U64Val > math.MaxInt64 {
+			return 0, false
+		}
+		value = int64(v.U64Val)
+	default:
+		return 0, false
+	}
+	return value, value >= 0
+}
+
+func adjustBinaryStringFunctionMetadata(name string, args []*Expr, returnType *types.Type) {
+	if name != "repeat" || len(args) != 2 || returnType.Oid != types.T_varbinary {
+		return
+	}
+	repeatCount, ok := literalNonNegativeInt64(args[1])
+	if !ok {
+		return
+	}
+	width := int64(returnType.Width) * repeatCount
+	if width > int64(types.MaxVarBinaryLen) {
+		width = int64(types.MaxVarBinaryLen)
+	}
+	returnType.Width = int32(width)
 }
 
 func adjustControlFlowStringMetadata(name string, args []*Expr, argTypes []types.Type, returnType *types.Type) {
@@ -4467,7 +4548,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 			isFloat := typ.Id == int32(types.T_float32) || typ.Id == int32(types.T_float64)
 			return appendCastBeforeExpr(b.GetContext(), makePlan2StringConstExprWithType(val, isBin[0]), typ, isBin[0], isFloat)
 		}
-		return makePlan2VarBinaryConstExprWithType(val, isBin...), nil
+		return makePlan2StringConstExprWithType(val, isBin...), nil
 	}
 
 	switch astExpr.ValType {

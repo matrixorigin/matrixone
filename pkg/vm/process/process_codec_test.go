@@ -103,7 +103,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 	vec := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(vec, []byte("a"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(vec, []byte("b"), true, proc.Mp()))
-	proc.SetPrepareParamsWithIsBin(vec, []bool{true, false})
+	proc.SetPrepareParamsWithMetadata(vec, []bool{true, false}, []bool{false, true})
 	proc.SetAffectedRows(42)
 	return proc, txnOp
 }
@@ -243,6 +243,7 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, int64(2), info.PrepareParams.Length)
 	require.Equal(t, []bool{false, true}, info.PrepareParams.Nulls)
 	require.Equal(t, []bool{true, false}, info.PrepareParams.IsBin)
+	require.Equal(t, []bool{false, true}, info.PrepareParams.IsBinaryString)
 	require.Equal(t, int64(42), info.AffectedRows)
 	require.True(t, info.StatementRuntimeIgnore)
 	require.Equal(t, uint64(99), info.SessionInfo.ConnectionId)
@@ -305,6 +306,8 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.True(t, decodedProc.GetPrepareParams().GetNulls().Contains(1))
 	require.True(t, decodedProc.GetPrepareParamIsBin(0))
 	require.False(t, decodedProc.GetPrepareParamIsBin(1))
+	require.False(t, decodedProc.GetPrepareParamIsBinaryString(0))
+	require.True(t, decodedProc.GetPrepareParamIsBinaryString(1))
 	require.Equal(t, int64(42), decodedProc.GetAffectedRows())
 	require.True(t, decodedProc.GetStmtProfile().GetStatementIgnore())
 	decodedParams := decodedProc.GetPrepareParams()
@@ -343,6 +346,8 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 	require.False(t, decodedParams.GetNulls().Contains(1))
 	require.True(t, decodedProc.GetPrepareParamIsBin(0))
 	require.False(t, decodedProc.GetPrepareParamIsBin(1))
+	require.False(t, decodedProc.GetPrepareParamIsBinaryString(0))
+	require.False(t, decodedProc.GetPrepareParamIsBinaryString(1))
 	require.Equal(t, "1", decodedParams.GetStringAt(0))
 	require.Equal(t, "0", decodedParams.GetStringAt(1))
 }
@@ -352,6 +357,7 @@ func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) 
 	info, err := proc.BuildProcessInfo("select ?")
 	require.NoError(t, err)
 	info.PrepareParams.IsBin = nil
+	info.PrepareParams.IsBinaryString = nil
 	// An old coordinator does not send the new field. Protobuf decodes that
 	// absence as false, preserving the prior strict-mode behavior remotely.
 	info.StatementRuntimeIgnore = false
@@ -361,6 +367,7 @@ func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) 
 	legacyInfo := pipeline.ProcessInfo{}
 	require.NoError(t, legacyInfo.Unmarshal(payload))
 	require.Empty(t, legacyInfo.PrepareParams.IsBin)
+	require.Empty(t, legacyInfo.PrepareParams.IsBinaryString)
 
 	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
 	decodedProc, err := svc.Decode(context.Background(), legacyInfo)
@@ -369,6 +376,8 @@ func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) 
 	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())
 	require.False(t, decodedProc.GetPrepareParamIsBin(0))
 	require.False(t, decodedProc.GetPrepareParamIsBin(1))
+	require.False(t, decodedProc.GetPrepareParamIsBinaryString(0))
+	require.False(t, decodedProc.GetPrepareParamIsBinaryString(1))
 	require.False(t, decodedProc.GetStmtProfile().GetStatementIgnore())
 	decodedProc.Free()
 }

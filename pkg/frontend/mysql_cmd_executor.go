@@ -928,15 +928,18 @@ func doSetVar(
 	var err error = nil
 	var ok bool
 	var userVarIsBin bool
+	var userVarBinaryString bool
 	type evaluatedAssignment struct {
-		assign       *tree.VarAssignmentExpr
-		value        interface{}
-		userVarIsBin bool
+		assign              *tree.VarAssignmentExpr
+		value               interface{}
+		userVarIsBin        bool
+		userVarBinaryString bool
 	}
 	evaluateAssignment := func(assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
+		binaryString := false
 		value, evalErr := getExprValueWithPrepareMode(
-			assign.Value, ses, execCtx, preparedExpression, &isBin)
+			assign.Value, ses, execCtx, preparedExpression, &isBin, &binaryString)
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr
 		}
@@ -947,9 +950,13 @@ func doSetVar(
 			}
 		}
 		return evaluatedAssignment{
-			assign:       assign,
-			value:        value,
-			userVarIsBin: isBin,
+			assign: assign,
+			value:  value,
+			// IsBin is literal-only numeric interpretation metadata. A user
+			// variable owns a materialized value, so carrying it across SET would
+			// reinterpret the stored bytes as a big-endian integer later.
+			userVarIsBin:        false,
+			userVarBinaryString: binaryString,
 		}, nil
 	}
 
@@ -989,7 +996,7 @@ func doSetVar(
 				}
 			}
 		} else {
-			err = ses.setUserDefinedVar(name, value, sql, userVarIsBin)
+			err = ses.setUserDefinedVar(name, value, sql, userVarIsBin, userVarBinaryString)
 			if err != nil {
 				return err
 			}
@@ -1002,6 +1009,7 @@ func doSetVar(
 		name := assign.Name
 		value := item.value
 		userVarIsBin = item.userVarIsBin
+		userVarBinaryString = item.userVarBinaryString
 
 		//TODO : fix SET NAMES after parser is ready
 		if assign.SetNames {
@@ -4601,6 +4609,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.SetAffectedRows(ses.GetLastAffectedRows())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
+	proc.SetResolveVariableBinaryStringFunc(ses.txnCompileCtx.ResolveVariableBinaryString)
 	refreshStatementScopedSessionInfo(ses, proc)
 	// Frontend client SQL — session-bound resolver. Procs constructed
 	// via pkg/sql/compile/sql_executor.go's NewTopProcess inherit

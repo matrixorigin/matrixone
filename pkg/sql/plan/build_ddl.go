@@ -274,6 +274,10 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	for i, expr := range rootNode.ProjectList {
 		defaultVal := ""
 		typ := &expr.Typ
+		if binaryType, ok := binaryLiteralStringType(expr); ok {
+			planType := makePlan2Type(&binaryType)
+			typ = &planType
+		}
 		provenance := bindCtx.outputColumnProvenanceForProject(int32(i))
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
 			if provenance.CanInheritSourceDefault && provenance.Source.Metadata.HasDefault {

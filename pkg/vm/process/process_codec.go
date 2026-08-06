@@ -86,6 +86,10 @@ func (proc *Process) BuildProcessInfo(
 				procInfo.PrepareParams.Nulls[i] = vec.GetNulls().Contains(uint64(i))
 			}
 			procInfo.PrepareParams.IsBin = append(procInfo.PrepareParams.IsBin, proc.Base.prepareParamsIsBin...)
+			procInfo.PrepareParams.IsBinaryString = append(
+				procInfo.PrepareParams.IsBinaryString,
+				proc.Base.prepareParamsBinaryString...,
+			)
 		}
 	}
 	{ // session info
@@ -256,7 +260,11 @@ func (c *codecService) Decode(
 				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
-		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, append([]bool(nil), value.PrepareParams.IsBin...))
+		proc.SetOwnedPrepareParamsWithMetadata(
+			prepareParams,
+			append([]bool(nil), value.PrepareParams.IsBin...),
+			append([]bool(nil), value.PrepareParams.IsBinaryString...),
+		)
 	}
 	return proc, nil
 }
