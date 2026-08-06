@@ -48,6 +48,8 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 	selectNode *plan.Node,
 	oldColName2Idx map[string]int32,
 	newColName2Idx map[string]int32,
+	targetRowNumberPos []int32,
+	targetBranchActivePos []int32,
 ) (int32, int32, *plan.Node, error) {
 	enabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
 	if err != nil {
@@ -63,6 +65,14 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 		}
 
 		alias := dmlCtx.aliases[i]
+		var targetSelected *plan.Expr
+		if targetRowNumberPos[i] >= 0 {
+			targetSelected, err = builder.buildTargetSelectedExpr(
+				selectNodeTag, selectNode, targetRowNumberPos[i], targetBranchActivePos[i])
+			if err != nil {
+				return 0, 0, nil, err
+			}
+		}
 		lastNodeID, selectNodeTag, err = builder.appendUpdateParentForeignKeyChecks(
 			bindCtx,
 			tableDef,
@@ -71,9 +81,18 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 			selectNodeTag,
 			oldColName2Idx,
 			newColName2Idx,
+			targetSelected,
 		)
 		if err != nil {
 			return 0, 0, nil, err
+		}
+		selectNode = builder.updateInputProjectNode(lastNodeID)
+		if targetRowNumberPos[i] >= 0 {
+			targetSelected, err = builder.buildTargetSelectedExpr(
+				selectNodeTag, selectNode, targetRowNumberPos[i], targetBranchActivePos[i])
+			if err != nil {
+				return 0, 0, nil, err
+			}
 		}
 		affectedFks := affectedUpdateChildFks(tableDef, alias, newColName2Idx)
 		if len(affectedFks) == 0 {
@@ -148,6 +167,18 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 				)
 				if err != nil {
 					return 0, 0, nil, err
+				}
+			}
+			if targetSelected != nil {
+				notSelected, buildErr := BindFuncExprImplByPlanExpr(
+					builder.GetContext(), "not", []*plan.Expr{DeepCopyExpr(targetSelected)})
+				if buildErr != nil {
+					return 0, 0, nil, buildErr
+				}
+				ok, buildErr = BindFuncExprImplByPlanExpr(
+					builder.GetContext(), "or", []*plan.Expr{notSelected, ok})
+				if buildErr != nil {
+					return 0, 0, nil, buildErr
 				}
 			}
 			assertConds[j], err = BindFuncExprImplByPlanExpr(
@@ -289,6 +320,7 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 	selectNodeTag int32,
 	oldColName2Idx map[string]int32,
 	newColName2Idx map[string]int32,
+	targetSelected *plan.Expr,
 ) (int32, int32, error) {
 	if tableDef == nil || len(tableDef.RefChildTbls) == 0 {
 		return lastNodeID, selectNodeTag, nil
@@ -410,6 +442,7 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 				selectNodeTag,
 				oldColName2Idx,
 				newColName2Idx,
+				targetSelected,
 			)
 			if err != nil {
 				return 0, 0, err
@@ -464,6 +497,7 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 			selectNodeTag,
 			oldColName2Idx,
 			newColName2Idx,
+			targetSelected,
 		); err != nil {
 			return 0, 0, err
 		}
@@ -708,21 +742,6 @@ func (builder *QueryBuilder) validateModernUpdateParentMutation(
 ) error {
 	childTableDef := affectedFK.childTableDef
 	ensureName2ColIndexForReplace(childTableDef)
-	parentColByID := make(map[uint64]*plan.ColDef, len(parentTableDef.Cols))
-	for _, col := range parentTableDef.Cols {
-		parentColByID[col.ColId] = col
-	}
-	for _, parentColID := range affectedFK.fk.ForeignCols {
-		if col := parentColByID[parentColID]; col != nil && col.Typ.AutoIncr {
-			return newLegacyUpdatePlannerRouteError(
-				updateRouteReasonForeignKey,
-				moerr.NewUnsupportedDML(
-					builder.GetContext(),
-					"parent foreign key action changing auto-increment referenced key",
-				),
-			)
-		}
-	}
 	if err := builder.validateModernUpdateParentRowClosure(parentTableDef, affectedFK); err != nil {
 		return err
 	}
@@ -899,6 +918,7 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 	sourceTag int32,
 	oldColName2Idx map[string]int32,
 	newColName2Idx map[string]int32,
+	targetSelected *plan.Expr,
 ) error {
 	parentNodeID := builder.appendTaggedSinkScan(bindCtx, sourceStep, sourceTag)
 	parentNode := builder.qry.Nodes[parentNodeID]
@@ -914,6 +934,7 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 	if err != nil {
 		return err
 	}
+	filter := DeepCopyExpr(targetSelected)
 	if unchanged != nil {
 		changed, bindErr := BindFuncExprImplByPlanExpr(
 			builder.GetContext(),
@@ -923,10 +944,19 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 		if bindErr != nil {
 			return bindErr
 		}
+		if filter == nil {
+			filter = changed
+		} else {
+			filter, bindErr = BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "and", []*plan.Expr{filter, changed})
+			if bindErr != nil {
+				return bindErr
+			}
+		}
+	}
+	if filter != nil {
 		parentNodeID = builder.appendNode(&plan.Node{
-			NodeType:   plan.Node_FILTER,
-			Children:   []int32{parentNodeID},
-			FilterList: []*plan.Expr{changed},
+			NodeType: plan.Node_FILTER, Children: []int32{parentNodeID}, FilterList: []*plan.Expr{filter},
 		}, bindCtx)
 	}
 	parentColIDToName := make(map[uint64]string, len(parentTableDef.Cols))
@@ -1472,6 +1502,7 @@ func (builder *QueryBuilder) appendUpdateParentRestrictCheck(
 	selectNodeTag int32,
 	oldColName2Idx map[string]int32,
 	newColName2Idx map[string]int32,
+	targetSelected *plan.Expr,
 ) (int32, int32, error) {
 	sourceNode := builder.updateInputProjectNode(lastNodeID)
 	sourceTypes := make([]plan.Type, len(sourceNode.ProjectList))
@@ -1613,6 +1644,18 @@ func (builder *QueryBuilder) appendUpdateParentRestrictCheck(
 			if err != nil {
 				return 0, 0, err
 			}
+		}
+	}
+	if targetSelected != nil {
+		notSelected, buildErr := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "not", []*plan.Expr{DeepCopyExpr(targetSelected)})
+		if buildErr != nil {
+			return 0, 0, buildErr
+		}
+		ok, buildErr = BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "or", []*plan.Expr{notSelected, ok})
+		if buildErr != nil {
+			return 0, 0, buildErr
 		}
 	}
 	assertExpr, err := BindFuncExprImplByPlanExpr(

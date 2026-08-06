@@ -271,10 +271,19 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if len(dmlCtx.updateCol2Expr[i]) == 0 {
 				continue
 			}
+			identityPos := oldColName2Idx[dmlCtx.aliases[i]+"."+catalog.Row_ID]
+			activeExpr, buildErr := BindFuncExprImplByPlanExpr(
+				builder.GetContext(),
+				"isnotnull",
+				[]*plan.Expr{DeepCopyExpr(selectNode.ProjectList[identityPos])},
+			)
+			if buildErr != nil {
+				return 0, buildErr
+			}
 			targetBranchActivePos[i] = int32(len(selectNode.ProjectList))
 			selectNode.ProjectList = append(
 				selectNode.ProjectList,
-				makePlan2BoolConstExprWithType(true),
+				activeExpr,
 			)
 		}
 	}
@@ -299,9 +308,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						return 0, err
 					}
 				}
-				err = checkNotNull(builder.GetContext(), updateExpr, tableDef, col)
-				if err != nil {
-					return 0, err
+				if !col.Typ.AutoIncr {
+					err = checkNotNull(builder.GetContext(), updateExpr, tableDef, col)
+					if err != nil {
+						return 0, err
+					}
 				}
 				if col != nil && isEnumPlanType(&col.Typ) {
 					selectNode.ProjectList[colPos], err = funcCastForEnumType(builder.GetContext(), updateExpr, col.Typ)
@@ -472,15 +483,20 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	}
 	for i, tableDef := range dmlCtx.tableDefs {
 		if updateAutoIncrCols[i] {
+			rowIDPos := oldColName2Idx[dmlCtx.aliases[i]+"."+catalog.Row_ID]
 			lastNodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_PRE_INSERT,
 				Children: []int32{lastNodeID},
 				PreInsertCtx: &plan.PreInsertCtx{
-					Ref:         dmlCtx.objRefs[i],
-					TableDef:    tableDef,
-					HasAutoCol:  true,
-					ColOffset:   colOffsets[i],
-					IsNewUpdate: true,
+					Ref:                dmlCtx.objRefs[i],
+					TableDef:           tableDef,
+					HasAutoCol:         true,
+					ColOffset:          colOffsets[i],
+					IsNewUpdate:        true,
+					HasTargetSelector:  targetRowNumberPos[i] >= 0,
+					TargetRowNumberCol: targetRowNumberPos[i],
+					TargetActiveCol:    targetBranchActivePos[i],
+					TargetRowIdCol:     rowIDPos,
 				},
 			}, bindCtx)
 		}
@@ -494,6 +510,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		selectNode,
 		oldColName2Idx,
 		newColName2Idx,
+		targetRowNumberPos,
+		targetBranchActivePos,
 	)
 	if err != nil {
 		return 0, err
@@ -1077,6 +1095,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	var finalProjList []*plan.Expr
 	targetRowNumberFinalPos := make([]int32, len(dmlCtx.aliases))
 	targetUpdateCtxIdx := make([]int32, len(dmlCtx.aliases))
+	targetOldPkFinalPos := make([]int32, len(dmlCtx.aliases))
 
 	finalProjNode := &plan.Node{
 		NodeType:    plan.Node_PROJECT,
@@ -1148,6 +1167,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				},
 			})
 		}
+		targetOldPkFinalPos[i] = oldPkPos
 		if isMultiTargetUpdate {
 			targetRowNumberFinalPos[i] = int32(len(finalProjList))
 			rowNumberPos := targetRowNumberPos[i]
@@ -1423,18 +1443,28 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		if len(indexes) == 0 {
 			continue
 		}
-		alias := dmlCtx.aliases[i]
-		pkPos := finalColName2Idx[alias+"."+dmlCtx.tableDefs[i].Pkey.PkeyColName]
-		lastNodeID = builder.appendOnDupIrregularMaintSource(
+		pkPos := targetOldPkFinalPos[i]
+		activePos := int32(-1)
+		rowNumberPos := int32(-1)
+		if isMultiTargetUpdate {
+			rowNumberPos = targetRowNumberFinalPos[i]
+			activePos = rowNumberPos + 1
+		}
+		lastNodeID, err = builder.appendOnDupIrregularMaintSource(
 			bindCtx,
 			lastNodeID,
 			finalProjTag,
 			pkPos,
 			finalProjList[pkPos].Typ,
+			rowNumberPos,
+			activePos,
 			indexes,
 			dmlCtx.tableDefs[i],
 			dmlCtx.objRefs[i],
 		)
+		if err != nil {
+			return 0, err
+		}
 		builder.irregularUpdateMaints = append(
 			builder.irregularUpdateMaints,
 			irregularUpdateMaintenance{
@@ -1757,7 +1787,12 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignmentsAcrossTuples(
 	updatedColsSet := make(map[string]struct{})
 	var contributions []physicalTargetContribution
 	for _, targetIdx := range targets {
-		for colName := range dmlCtx.updateCol2Expr[targetIdx] {
+		alias := dmlCtx.aliases[targetIdx]
+		for _, col := range tableDef.Cols {
+			colName := col.Name
+			if _, updated := newColName2Idx[alias+"."+colName]; !updated {
+				continue
+			}
 			updatedColsSet[colName] = struct{}{}
 			contributions = append(contributions, physicalTargetContribution{
 				targetIdx: targetIdx,
@@ -2151,9 +2186,9 @@ func irregularIndexAffectedByUpdate(
 // from CDC-only indexes using plugin metadata. MASTER has no plugin, but shares
 // the modern synchronous maintenance pipeline with the plugin-backed indexes.
 // The bool return preserves the legacy route only for an affected irregular
-// algorithm that has not migrated to either mechanism. A synchronous-index PK
-// update is rejected here, before lock/mutation nodes are built, because its
-// hidden rows are keyed by the old source PK.
+// algorithm that has not migrated to either mechanism. Synchronous indexes
+// delete by the old source PK and rebuild from the final row image, so changing
+// the base-table PK is handled by the same maintenance pipeline.
 func classifyIrregularIndexesForUpdate(
 	ctx context.Context,
 	tableDef *plan.TableDef,
@@ -2182,16 +2217,7 @@ func classifyIrregularIndexesForUpdate(
 				}
 				continue
 			}
-			if pkUpdated {
-				return nil, false, newUpdatePlannerRouteError(
-					updatePlannerRejected,
-					updateRouteReasonIrregularIndex,
-					moerr.NewUnsupportedDML(
-						ctx,
-						"update primary key on a table with a synchronous irregular index"),
-				)
-			}
-			if affected {
+			if affected || pkUpdated {
 				affectedSyncGroups[idxDef.IndexName+"\x00"+idxDef.IndexTableName] = true
 			}
 			continue
@@ -2207,16 +2233,7 @@ func classifyIrregularIndexesForUpdate(
 		if async {
 			continue
 		}
-		if pkUpdated {
-			return nil, false, newUpdatePlannerRouteError(
-				updatePlannerRejected,
-				updateRouteReasonIrregularIndex,
-				moerr.NewUnsupportedDML(
-					ctx,
-					"update primary key on a table with a synchronous full-text/vector index"),
-			)
-		}
-		if affected {
+		if affected || pkUpdated {
 			affectedSyncGroups[idxDef.IndexName+"\x00"+idxDef.IndexTableName] = true
 		}
 	}
@@ -2367,6 +2384,35 @@ func (builder *QueryBuilder) appendTargetRowNumberNode(
 	}
 	lastNodeID = builder.appendNode(projectNode, bindCtx)
 	return lastNodeID, projectNode, projectTag, rowNumberProjectPos, nil
+}
+
+func (builder *QueryBuilder) buildTargetSelectedExpr(
+	tag int32,
+	node *plan.Node,
+	rowNumberPos int32,
+	activePos int32,
+) (*plan.Expr, error) {
+	rowNumberExpr := &plan.Expr{
+		Typ:  node.ProjectList[rowNumberPos].Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag, ColPos: rowNumberPos}},
+	}
+	selected, err := BindFuncExprImplByPlanExpr(
+		builder.GetContext(),
+		"=",
+		[]*plan.Expr{rowNumberExpr, MakePlan2Int64ConstExprWithType(1)},
+	)
+	if err != nil {
+		return nil, err
+	}
+	activeExpr := &plan.Expr{
+		Typ:  node.ProjectList[activePos].Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag, ColPos: activePos}},
+	}
+	return BindFuncExprImplByPlanExpr(
+		builder.GetContext(),
+		"and",
+		[]*plan.Expr{selected, activeExpr},
+	)
 }
 
 func (builder *QueryBuilder) appendUpdateFromDedupNode(

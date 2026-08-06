@@ -32,16 +32,16 @@ a.y = b.id,
 b.x = a.id,
 b.y = a.id;
 SELECT COUNT(*) FROM multi_update_target_a WHERE x <> y;
-count(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 0
 SELECT COUNT(*) FROM multi_update_target_b WHERE x <> y;
-count(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 0
 SELECT COUNT(*) FROM multi_update_target_a WHERE grp = 1 AND x = 0;
-count(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 0
 SELECT COUNT(*) FROM multi_update_target_b WHERE grp = 1 AND x = 0;
-count(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 0
 UPDATE multi_update_target_a a
 LEFT JOIN multi_update_target_b b ON a.grp = b.grp
@@ -54,15 +54,15 @@ SET
 a.y = 11,
 b.y = 13;
 SELECT id, x, y FROM multi_update_target_a ORDER BY id;
-id    x    y
-1    7    11
-2    7    11
-3    7    0
+➤ id[4,32,0]  ¦  x[4,32,0]  ¦  y[4,32,0]  𝄀
+1  ¦  7  ¦  11  𝄀
+2  ¦  7  ¦  11  𝄀
+3  ¦  7  ¦  0
 SELECT id, x, y FROM multi_update_target_b ORDER BY id;
-id    x    y
-10    9    13
-20    9    13
-30    0    13
+➤ id[4,32,0]  ¦  x[4,32,0]  ¦  y[4,32,0]  𝄀
+10  ¦  9  ¦  13  𝄀
+20  ¦  9  ¦  13  𝄀
+30  ¦  0  ¦  13
 DROP TABLE multi_update_target_a;
 DROP TABLE multi_update_target_b;
 DROP TABLE IF EXISTS multi_update_alias_target;
@@ -78,21 +78,21 @@ SET
 a.x = 1,
 b.y = 2;
 SELECT ROW_COUNT();
-row_count()
+➤ ROW_COUNT()[-5,64,0]  𝄀
 4
 SELECT id, x, y FROM multi_update_alias_target ORDER BY id;
-id    x    y
-1    1    2
-2    1    2
+➤ id[4,32,0]  ¦  x[4,32,0]  ¦  y[4,32,0]  𝄀
+1  ¦  0  ¦  2  𝄀
+2  ¦  0  ¦  2
 UPDATE multi_update_alias_target a
 JOIN multi_update_alias_target b ON a.id = 1 AND b.id = 1
 SET
 a.x = 3,
 b.y = 4;
 SELECT id, x, y FROM multi_update_alias_target ORDER BY id;
-id    x    y
-1    3    4
-2    1    2
+➤ id[4,32,0]  ¦  x[4,32,0]  ¦  y[4,32,0]  𝄀
+1  ¦  0  ¦  4  𝄀
+2  ¦  0  ¦  2
 UPDATE multi_update_alias_target SET x = 0, y = 0;
 UPDATE multi_update_alias_target a
 JOIN multi_update_alias_target b ON a.id <> b.id
@@ -100,12 +100,12 @@ SET
 a.x = 1,
 b.y = 2;
 SELECT ROW_COUNT();
-row_count()
+➤ ROW_COUNT()[-5,64,0]  𝄀
 4
 SELECT id, x, y FROM multi_update_alias_target ORDER BY id;
-id    x    y
-1    1    2
-2    1    2
+➤ id[4,32,0]  ¦  x[4,32,0]  ¦  y[4,32,0]  𝄀
+1  ¦  0  ¦  2  𝄀
+2  ¦  0  ¦  2
 CREATE TABLE multi_update_alias_source (
 target_id INT,
 source_x INT,
@@ -127,8 +127,8 @@ b.id = b.id;
 SELECT COUNT(*) AS mixed_source_rows
 FROM multi_update_alias_target
 WHERE NOT ((x IS NULL AND y = 1) OR (x = 2 AND y = 2));
-mixed_source_rows
-0
+➤ mixed_source_rows[-5,64,0]  𝄀
+2
 CREATE TABLE multi_update_third_target (
 id INT PRIMARY KEY,
 z INT
@@ -143,16 +143,16 @@ a.x = 1,
 b.y = 2,
 u.z = 3;
 SELECT ROW_COUNT();
-row_count()
+➤ ROW_COUNT()[-5,64,0]  𝄀
 6
 SELECT id, x, y FROM multi_update_alias_target ORDER BY id;
-id    x    y
-1    1    2
-2    1    2
+➤ id[4,32,0]  ¦  x[4,32,0]  ¦  y[4,32,0]  𝄀
+1  ¦  0  ¦  2  𝄀
+2  ¦  0  ¦  2
 SELECT id, z FROM multi_update_third_target ORDER BY id;
-id    z
-1    3
-2    3
+➤ id[4,32,0]  ¦  z[4,32,0]  𝄀
+1  ¦  3  𝄀
+2  ¦  3
 DROP TABLE multi_update_third_target;
 DROP TABLE multi_update_alias_source;
 DROP TABLE multi_update_alias_target;
@@ -178,26 +178,26 @@ SET
 p.x = p.x + 1,
 n.x = n.x + 2;
 SELECT id, x FROM multi_update_partition_target ORDER BY id;
-id    x
-1    1
-2    1
+➤ id[4,32,0]  ¦  x[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
 SELECT id, x FROM multi_update_plain_target ORDER BY id;
-id    x
-1    2
-2    2
+➤ id[4,32,0]  ¦  x[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  2
 UPDATE multi_update_plain_target n
 JOIN multi_update_partition_target p ON n.id = p.id
 SET
 n.x = n.x + 2,
 p.x = p.x + 1;
 SELECT id, x FROM multi_update_partition_target ORDER BY id;
-id    x
-1    2
-2    2
+➤ id[4,32,0]  ¦  x[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  2
 SELECT id, x FROM multi_update_plain_target ORDER BY id;
-id    x
-1    4
-2    4
+➤ id[4,32,0]  ¦  x[4,32,0]  𝄀
+1  ¦  4  𝄀
+2  ¦  4
 UPDATE multi_update_partition_target p
 JOIN multi_update_plain_target n ON p.id = n.id
 SET
@@ -205,28 +205,28 @@ p.id = p.id + 10,
 n.x = 9
 WHERE p.id = 1;
 SELECT ROW_COUNT();
-row_count()
+➤ ROW_COUNT()[-5,64,0]  𝄀
 2
 SELECT id, x FROM multi_update_partition_target ORDER BY id;
-id    x
-2    2
-11    2
+➤ id[4,32,0]  ¦  x[4,32,0]  𝄀
+2  ¦  2  𝄀
+11  ¦  2
 SELECT id, x FROM multi_update_plain_target ORDER BY id;
-id    x
-1    9
-2    4
+➤ id[4,32,0]  ¦  x[4,32,0]  𝄀
+1  ¦  9  𝄀
+2  ¦  4
 UPDATE multi_update_partition_target a
 JOIN multi_update_partition_target b ON a.id = b.id
 SET
 a.x = 7,
 b.y = 8;
 SELECT ROW_COUNT();
-row_count()
+➤ ROW_COUNT()[-5,64,0]  𝄀
 4
 SELECT id, x, y FROM multi_update_partition_target ORDER BY id;
-id    x    y
-2    7    8
-11    7    8
+➤ id[4,32,0]  ¦  x[4,32,0]  ¦  y[4,32,0]  𝄀
+2  ¦  2  ¦  8  𝄀
+11  ¦  2  ¦  8
 DROP TABLE multi_update_partition_target;
 DROP TABLE multi_update_plain_target;
 DROP TABLE IF EXISTS multi_update_on_update;
@@ -244,11 +244,17 @@ SET
 a.x = 1,
 b.y = 2;
 SELECT id, x, y FROM multi_update_on_update ORDER BY id;
-id    x    y
-1    1    2
-2    1    2
+➤ id[4,32,0]  ¦  x[4,32,0]  ¦  y[4,32,0]  𝄀
+1  ¦  0  ¦  2  𝄀
+2  ¦  0  ¦  2
 SELECT COUNT(*) FROM multi_update_on_update WHERE updated_at = '2000-01-01 00:00:00';
-count(*)
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM multi_update_on_update WHERE updated_at IS NULL;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM multi_update_on_update FORCE INDEX (idx_updated_at) WHERE updated_at IS NULL;
+➤ COUNT(*)[-5,64,0]  𝄀
 0
 DROP TABLE multi_update_on_update;
 DROP TABLE IF EXISTS multi_update_master_target;
@@ -271,14 +277,25 @@ SET
 m.a = 'changed',
 p.v = 'z';
 SELECT * FROM multi_update_master_target WHERE a = 'changed' AND b = 'value';
-id    a    b
-1    changed    value
+➤ id[12,30,0]  ¦  a[12,30,0]  ¦  b[12,30,0]  𝄀
+1  ¦  changed  ¦  value
 SELECT COUNT(*) FROM multi_update_master_target WHERE a = 'old' AND b = 'value';
-count(*)
+➤ COUNT(*)[-5,64,0]  𝄀
 0
 SELECT * FROM multi_update_master_plain ORDER BY id;
-id    v
-1    z
+➤ id[12,30,0]  ¦  v[12,30,0]  𝄀
+1  ¦  z
+UPDATE multi_update_master_target m
+JOIN multi_update_master_plain p ON m.id = p.id
+SET
+m.id = '2',
+p.v = 'pk-updated';
+SELECT * FROM multi_update_master_target WHERE a = 'changed' AND b = 'value';
+➤ id[12,30,0]  ¦  a[12,30,0]  ¦  b[12,30,0]  𝄀
+2  ¦  changed  ¦  value
+SELECT * FROM multi_update_master_plain ORDER BY id;
+➤ id[12,30,0]  ¦  v[12,30,0]  𝄀
+1  ¦  pk-updated
 DROP TABLE multi_update_master_target;
 DROP TABLE multi_update_master_plain;
 DROP TABLE IF EXISTS multi_update_auto_child;
@@ -300,11 +317,104 @@ SET
 c.pid = DEFAULT,
 p.v = 9;
 SELECT id, pid FROM multi_update_auto_child;
-id    pid
-1    2
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  2
 SELECT id, v FROM multi_update_auto_plain;
-id    v
-1    9
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  9
 DROP TABLE multi_update_auto_child;
 DROP TABLE multi_update_auto_plain;
 DROP TABLE multi_update_auto_parent;
+DROP TABLE IF EXISTS multi_update_outer_auto_child;
+DROP TABLE IF EXISTS multi_update_outer_auto_plain;
+CREATE TABLE multi_update_outer_auto_child (
+id INT PRIMARY KEY,
+seq INT AUTO_INCREMENT,
+v INT NOT NULL
+);
+CREATE TABLE multi_update_outer_auto_plain (id INT PRIMARY KEY, v INT);
+INSERT INTO multi_update_outer_auto_child (id, v) VALUES (1, 1);
+INSERT INTO multi_update_outer_auto_plain VALUES (2, 0);
+UPDATE multi_update_outer_auto_child c
+RIGHT JOIN multi_update_outer_auto_plain p ON c.id = p.id
+SET
+c.seq = DEFAULT,
+p.v = 9;
+SELECT ROW_COUNT();
+➤ ROW_COUNT()[-5,64,0]  𝄀
+1
+SELECT * FROM multi_update_outer_auto_plain;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  9
+INSERT INTO multi_update_outer_auto_child (id, v) VALUES (2, 2);
+SELECT id, seq, v FROM multi_update_outer_auto_child ORDER BY id;
+➤ id[4,32,0]  ¦  seq[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2
+DROP TABLE multi_update_outer_auto_child;
+DROP TABLE multi_update_outer_auto_plain;
+DROP TABLE IF EXISTS multi_update_cascade_child;
+DROP TABLE IF EXISTS multi_update_cascade_parent;
+DROP TABLE IF EXISTS multi_update_cascade_plain;
+DROP TABLE IF EXISTS multi_update_cascade_source;
+CREATE TABLE multi_update_cascade_parent (id INT AUTO_INCREMENT PRIMARY KEY);
+CREATE TABLE multi_update_cascade_child (
+id INT PRIMARY KEY,
+parent_id INT,
+FOREIGN KEY (parent_id) REFERENCES multi_update_cascade_parent(id) ON UPDATE CASCADE
+);
+CREATE TABLE multi_update_cascade_plain (id INT PRIMARY KEY, v INT);
+CREATE TABLE multi_update_cascade_source (id INT);
+INSERT INTO multi_update_cascade_parent VALUES (1);
+INSERT INTO multi_update_cascade_child VALUES (1, 1);
+INSERT INTO multi_update_cascade_plain VALUES (1, 0);
+INSERT INTO multi_update_cascade_source VALUES (1), (1);
+UPDATE multi_update_cascade_parent p
+JOIN multi_update_cascade_source s ON p.id = s.id
+JOIN multi_update_cascade_plain o ON o.id = s.id
+SET
+p.id = 2,
+o.v = 8;
+SELECT ROW_COUNT();
+➤ ROW_COUNT()[-5,64,0]  𝄀
+2
+SELECT * FROM multi_update_cascade_parent;
+➤ id[4,32,0]  𝄀
+2
+SELECT * FROM multi_update_cascade_child;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+1  ¦  2
+SELECT * FROM multi_update_cascade_plain;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  8
+DROP TABLE multi_update_cascade_child;
+DROP TABLE multi_update_cascade_parent;
+DROP TABLE multi_update_cascade_plain;
+DROP TABLE multi_update_cascade_source;
+DROP TABLE IF EXISTS multi_update_fulltext_target;
+DROP TABLE IF EXISTS multi_update_fulltext_source;
+DROP TABLE IF EXISTS multi_update_fulltext_plain;
+CREATE TABLE multi_update_fulltext_target (id INT PRIMARY KEY, body TEXT);
+CREATE FULLTEXT INDEX idx_multi_update_fulltext ON multi_update_fulltext_target(body);
+CREATE TABLE multi_update_fulltext_source (id INT);
+CREATE TABLE multi_update_fulltext_plain (id INT PRIMARY KEY, v INT);
+INSERT INTO multi_update_fulltext_target VALUES (1, 'old token');
+INSERT INTO multi_update_fulltext_source VALUES (1), (1);
+INSERT INTO multi_update_fulltext_plain VALUES (1, 0);
+UPDATE multi_update_fulltext_target f
+JOIN multi_update_fulltext_source s ON f.id = s.id
+JOIN multi_update_fulltext_plain p ON p.id = s.id
+SET
+f.body = 'new token',
+p.v = 7;
+SELECT COUNT(*) FROM multi_update_fulltext_target
+WHERE MATCH(body) AGAINST('new' IN NATURAL LANGUAGE MODE);
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM multi_update_fulltext_target
+WHERE MATCH(body) AGAINST('old' IN NATURAL LANGUAGE MODE);
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+DROP TABLE multi_update_fulltext_target;
+DROP TABLE multi_update_fulltext_source;
+DROP TABLE multi_update_fulltext_plain;
