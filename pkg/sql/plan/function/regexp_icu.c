@@ -304,18 +304,22 @@ int mo_icu_regex_replace(
             *status = 7;
             return 0;
         }
-        int32_t used = start;
-        if (start > 0) {
-            memcpy(*output, regex->subject, (size_t)start * sizeof(UChar));
-        }
-
         *status = 0;
+        int32_t prefix_end = start;
         found = icu.find(regex->regex, start, status) != 0;
         for (int32_t i = 1; i < occurrence && found && *status <= 0; ++i) {
+            prefix_end = icu.end(regex->regex, 0, status);
+            if (*status > 0) {
+                return 0;
+            }
             found = icu.find_next(regex->regex, status) != 0;
         }
         if (*status > 0) {
             return 0;
+        }
+        int32_t used = prefix_end;
+        if (prefix_end > 0) {
+            memcpy(*output, regex->subject, (size_t)prefix_end * sizeof(UChar));
         }
 
         int overflow = 0;

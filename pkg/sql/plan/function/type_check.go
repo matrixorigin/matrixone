@@ -229,14 +229,19 @@ func regexpTypeMatch(operandIndexes ...int) func([]overload, []types.Type) check
 	}
 }
 
-func regexpStringReturnType(parameters []types.Type) types.Type {
-	if len(parameters) > 0 {
-		switch parameters[0].Oid {
-		case types.T_binary, types.T_varbinary, types.T_blob:
-			return types.T_varbinary.ToType()
+func regexpStringReturnType(operandIndexes ...int) func([]types.Type) types.Type {
+	return func(parameters []types.Type) types.Type {
+		for _, index := range operandIndexes {
+			if index >= len(parameters) {
+				continue
+			}
+			switch parameters[index].Oid {
+			case types.T_binary, types.T_varbinary, types.T_blob:
+				return types.T_varbinary.ToType()
+			}
 		}
+		return types.T_varchar.ToType()
 	}
-	return types.T_varchar.ToType()
 }
 
 // a fixed type match method without any type convert. (const null exception)

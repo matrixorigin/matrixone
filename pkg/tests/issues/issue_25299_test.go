@@ -115,6 +115,7 @@ func TestIssue25299RegexpRejectsBinaryCharset(t *testing.T) {
 		assertRegexpError("select regexp_like('a', '(')", moerr.ER_REGEXP_MISMATCHED_PAREN)
 		assertRegexpError("select regexp_like('a', '[z-a]')", moerr.ER_REGEXP_INVALID_RANGE)
 		assertRegexpError("select regexp_instr(null, 'a', 1, 1, -1, 'c')", moerr.ER_WRONG_ARGUMENTS)
+		assertRegexpError("select regexp_instr(null, '*', 1, 1, -1, 'c')", moerr.ER_WRONG_ARGUMENTS)
 		assertRegexpError("select regexp_replace(null, '', null)", moerr.ER_REGEXP_ILLEGAL_ARGUMENT)
 		assertRegexpErrorWithState(
 			"select regexp_substr(null, 'a', 0, 1, 'c')",
@@ -133,6 +134,50 @@ func TestIssue25299RegexpRejectsBinaryCharset(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"select hex(regexp_replace(_binary 0xc3a961, _binary 0x61, _binary 0x58))").Scan(&binaryHex))
 		require.Equal(t, "C3A958", binaryHex)
+
+		var emptyInstr int64
+		var emptySubstr, endSubstr, endReplace string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select regexp_instr('', 'a*', 1, 1, 0, 'c'), "+
+				"regexp_substr('', 'a*', 1, 1, 'c'), "+
+				"regexp_substr('a', '$', 2, 1, 'c'), "+
+				"regexp_replace('a', '$', 'X', 2, 0, 'c')").
+			Scan(&emptyInstr, &emptySubstr, &endSubstr, &endReplace))
+		require.Equal(t, int64(1), emptyInstr)
+		require.Empty(t, emptySubstr)
+		require.Empty(t, endSubstr)
+		require.Equal(t, "aX", endReplace)
+
+		var occurrenceReplacement string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select regexp_replace('Cat Dog Cat Dog Cat', 'Cat', 'Tiger', 1, 2)").
+			Scan(&occurrenceReplacement))
+		require.Equal(t, "Cat Dog Tiger Dog Cat", occurrenceReplacement)
+
+		var substrCharset, replaceCharset, numericBinaryHex string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select charset(regexp_substr(123, _binary '.')), "+
+				"charset(regexp_replace(123, _binary '.', _binary 0xff)), "+
+				"hex(regexp_replace(123, _binary '.', _binary 0xff))").
+			Scan(&substrCharset, &replaceCharset, &numericBinaryHex))
+		require.Equal(t, "binary", substrCharset)
+		require.Equal(t, "binary", replaceCharset)
+		require.Equal(t, "FFFFFF", numericBinaryHex)
+
+		maskedRows, err := conn.QueryContext(ctx,
+			"select id, id = 2 and regexp_like('a', pat) "+
+				"from (values row(1, '*'), row(2, 'a')) t(id, pat) order by id")
+		require.NoError(t, err)
+		defer maskedRows.Close()
+		for expectedID := int64(1); expectedID <= 2; expectedID++ {
+			require.True(t, maskedRows.Next())
+			var id int64
+			var value bool
+			require.NoError(t, maskedRows.Scan(&id, &value))
+			require.Equal(t, expectedID, id)
+			require.Equal(t, expectedID == 2, value)
+		}
+		require.NoError(t, maskedRows.Err())
 
 		var operatorCR, likeCR bool
 		require.NoError(t, conn.QueryRowContext(ctx,
@@ -171,7 +216,7 @@ func TestIssue25299RegexpRejectsBinaryCharset(t *testing.T) {
 		assertRegexpError(
 			"select regexp_like(concat(repeat('a', 30), 'b'), '(a|aa)+$')", moerr.ER_REGEXP_TIME_OUT)
 
-		_, err = conn.ExecContext(ctx, "set @regexp_binary_param = binary 'abc'")
+		_, err = conn.ExecContext(ctx, "set @regexp_binary_param = _binary 0xc3a961")
 		require.NoError(t, err)
 		_, err = conn.ExecContext(ctx, "prepare regexp_binary_stmt from 'select regexp_like(?, ''a'')'")
 		require.NoError(t, err)
@@ -180,6 +225,23 @@ func TestIssue25299RegexpRejectsBinaryCharset(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"execute regexp_binary_stmt using @regexp_binary_param").Scan(&matched))
 		require.True(t, matched)
+
+		_, err = conn.ExecContext(ctx,
+			"prepare regexp_binary_position_stmt from "+
+				"'select regexp_instr(?,''a'',1,1,0,''c''), "+
+				"hex(regexp_substr(?,''.'',1,1,''c'')), "+
+				"hex(regexp_replace(?,''.'',''X'',2,1,''c''))'")
+		require.NoError(t, err)
+		defer conn.ExecContext(context.Background(), "deallocate prepare regexp_binary_position_stmt")
+		var preparedInstr int64
+		var preparedSubstrHex, preparedReplaceHex string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"execute regexp_binary_position_stmt using "+
+				"@regexp_binary_param,@regexp_binary_param,@regexp_binary_param").
+			Scan(&preparedInstr, &preparedSubstrHex, &preparedReplaceHex))
+		require.Equal(t, int64(3), preparedInstr)
+		require.Equal(t, "C383", preparedSubstrHex)
+		require.Equal(t, "C3835861", preparedReplaceHex)
 		_, err = conn.ExecContext(ctx, "set @regexp_binary_null = cast(null as binary)")
 		require.NoError(t, err)
 		var nullMatched sql.NullBool

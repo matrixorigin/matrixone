@@ -317,6 +317,97 @@ func Test_BuiltIn_RegexpICUAndBinaryCompatibility(t *testing.T) {
 	require.Equal(t, strings.Repeat("a", 300), replaced)
 }
 
+func Test_BuiltIn_RegexpZeroWidthBoundarySemantics(t *testing.T) {
+	op := newOpBuiltInRegexp()
+
+	index, err := op.regMap.regularInstrWithMatchType("a*", "", 1, 1, 0, "c")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), index)
+
+	matched, substr, err := op.regMap.regularSubstrWithMatchType("a*", "", 1, 1, "c")
+	require.NoError(t, err)
+	require.True(t, matched)
+	require.Empty(t, substr)
+
+	matched, substr, err = op.regMap.regularSubstrWithMatchType("$", "a", 2, 1, "c")
+	require.NoError(t, err)
+	require.True(t, matched)
+	require.Empty(t, substr)
+
+	replaced, err := op.regMap.regularReplaceWithMatchType("$", "a", "X", 2, 0, "c")
+	require.NoError(t, err)
+	require.Equal(t, "aX", replaced)
+}
+
+func Test_BuiltIn_RegexpReplacePreservesSkippedMatches(t *testing.T) {
+	op := newOpBuiltInRegexp()
+	for _, tc := range []struct {
+		pos        int64
+		occurrence int64
+		expected   string
+	}{
+		{pos: 1, occurrence: 1, expected: "Tiger Dog Cat Dog Cat"},
+		{pos: 1, occurrence: 2, expected: "Cat Dog Tiger Dog Cat"},
+		{pos: 1, occurrence: 3, expected: "Cat Dog Cat Dog Tiger"},
+		{pos: 2, occurrence: 2, expected: "Cat Dog Cat Dog Tiger"},
+		{pos: 1, occurrence: 0, expected: "Tiger Dog Tiger Dog Tiger"},
+	} {
+		actual, err := op.regMap.regularReplaceWithMatchType(
+			"Cat", "Cat Dog Cat Dog Cat", "Tiger", tc.pos, tc.occurrence, "c")
+		require.NoError(t, err)
+		require.Equal(t, tc.expected, actual, "pos=%d occurrence=%d", tc.pos, tc.occurrence)
+	}
+}
+
+func Test_BuiltIn_RegexpHonorsFunctionSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	stringType := types.T_varchar.ToType()
+	maskFirstRow := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
+
+	for _, tc := range []struct {
+		name       string
+		inputs     []FunctionTestInput
+		resultType types.Type
+		fn         fEvalFn
+	}{
+		{name: "regexp", inputs: []FunctionTestInput{
+			NewFunctionTestInput(stringType, []string{"a", "a"}, nil),
+			NewFunctionTestInput(stringType, []string{"*", "a"}, nil),
+		}, resultType: types.T_bool.ToType(), fn: newOpBuiltInRegexp().builtInRegMatch},
+		{name: "not regexp", inputs: []FunctionTestInput{
+			NewFunctionTestInput(stringType, []string{"a", "a"}, nil),
+			NewFunctionTestInput(stringType, []string{"*", "z"}, nil),
+		}, resultType: types.T_bool.ToType(), fn: newOpBuiltInRegexp().builtInNotRegMatch},
+		{name: "regexp_like", inputs: []FunctionTestInput{
+			NewFunctionTestInput(stringType, []string{"a", "a"}, nil),
+			NewFunctionTestInput(stringType, []string{"*", "a"}, nil),
+		}, resultType: types.T_bool.ToType(), fn: newOpBuiltInRegexp().builtInRegexpLike},
+		{name: "regexp_instr", inputs: []FunctionTestInput{
+			NewFunctionTestInput(stringType, []string{"a", "a"}, nil),
+			NewFunctionTestInput(stringType, []string{"*", "a"}, nil),
+		}, resultType: types.T_int64.ToType(), fn: newOpBuiltInRegexp().builtInRegexpInstr},
+		{name: "regexp_substr", inputs: []FunctionTestInput{
+			NewFunctionTestInput(stringType, []string{"a", "a"}, nil),
+			NewFunctionTestInput(stringType, []string{"*", "a"}, nil),
+		}, resultType: stringType, fn: newOpBuiltInRegexp().builtInRegexpSubstr},
+		{name: "regexp_replace", inputs: []FunctionTestInput{
+			NewFunctionTestInput(stringType, []string{"a", "a"}, nil),
+			NewFunctionTestInput(stringType, []string{"*", "a"}, nil),
+			NewFunctionTestInput(stringType, []string{"X", "X"}, nil),
+		}, resultType: stringType, fn: newOpBuiltInRegexp().builtInRegexpReplace},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(
+				proc, tc.inputs, NewFunctionTestResult(tc.resultType, false, nil, nil), tc.fn)
+			require.NoError(t, tcc.result.PreExtendAndReset(2))
+			require.NoError(t, tcc.fn(tcc.parameters, tcc.result, proc, 2, maskFirstRow))
+			result := tcc.GetResultVectorDirectly()
+			require.True(t, result.IsNull(0))
+			require.False(t, result.IsNull(1))
+		})
+	}
+}
+
 func Test_BuiltIn_RegexpICUErrorMapping(t *testing.T) {
 	op := newOpBuiltInRegexp()
 	for _, tc := range []struct {
@@ -366,6 +457,38 @@ func TestRegexpTypeMatchPreservesBinaryOperands(t *testing.T) {
 			require.Equal(t, types.T_varbinary, result.GetReturnType().Oid, tc.name)
 		}
 	}
+
+	for _, tc := range []struct {
+		name string
+		args []types.Type
+	}{
+		{name: "regexp_substr", args: []types.Type{types.T_int64.ToType(), binary}},
+		{name: "regexp_replace", args: []types.Type{types.T_int64.ToType(), binary, binary}},
+	} {
+		result, err := GetFunctionByName(context.Background(), tc.name, tc.args)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, types.T_varbinary, result.GetReturnType().Oid, tc.name)
+	}
+}
+
+func Test_BuiltIn_RegexpRuntimeBinaryMetadataSelectsBytePath(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	stringType := types.T_varchar.ToType()
+	subject := string([]byte{0xc3, 0xa9, 'a'})
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(stringType, []string{subject}, nil),
+		NewFunctionTestInput(stringType, []string{"."}, nil),
+	}
+	tcc := NewFunctionTestCase(
+		proc, inputs, NewFunctionTestResult(stringType, false, nil, nil),
+		newOpBuiltInRegexp().builtInRegexpSubstr)
+	tcc.parameters[0].SetIsBin(true)
+	require.NoError(t, tcc.result.PreExtendAndReset(1))
+	require.NoError(t, tcc.fn(tcc.parameters, tcc.result, proc, 1, nil))
+	result := tcc.GetResultVectorDirectly()
+	require.Equal(t, types.T_varchar, result.GetType().Oid)
+	require.False(t, result.GetIsBin())
+	require.Equal(t, "C383", fmt.Sprintf("%X", result.GetBytesAt(0)))
 }
 
 func Test_BuiltIn_RegexpBinaryVectorsUseByteSemantics(t *testing.T) {
@@ -565,6 +688,21 @@ func Test_BuiltIn_RegexpValidatesNumericArgumentsBeforeNullResult(t *testing.T) 
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(stringType, []string{""}, []bool{true}),
 				NewFunctionTestInput(stringType, []string{"a"}, nil),
+				NewFunctionTestInput(intType, []int64{1}, nil),
+				NewFunctionTestInput(intType, []int64{1}, nil),
+				NewFunctionTestInput(returnOptionType, []int64{-1}, nil),
+				NewFunctionTestInput(stringType, []string{"c"}, nil),
+			},
+			resultType: intType,
+			fn:         newOpBuiltInRegexp().builtInRegexpInstr,
+			mysqlCode:  moerr.ER_WRONG_ARGUMENTS,
+			sqlState:   "HY000",
+		},
+		{
+			name: "instr invalid return option precedes invalid pattern",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(stringType, []string{""}, []bool{true}),
+				NewFunctionTestInput(stringType, []string{"*"}, nil),
 				NewFunctionTestInput(intType, []int64{1}, nil),
 				NewFunctionTestInput(intType, []int64{1}, nil),
 				NewFunctionTestInput(returnOptionType, []int64{-1}, nil),
