@@ -428,15 +428,27 @@ func (s *service) handleRemoteLock(
 	txnID := append([]byte(nil), req.Lock.TxnID...)
 	s.bindChangeMu.RUnlock()
 	defer txn.Unlock()
+	originalRows := req.Lock.Rows
+	originalOptions := req.Lock.Options
+	rows, opts, replaceTxnLocks := txn.coarsenLockRequest(
+		bind.Group,
+		bind.Table,
+		req.Lock.Rows,
+		req.Lock.Options,
+		int(s.cfg.MaxLockRowCount),
+	)
 
 	l.lock(
 		ctx,
 		txn,
-		req.Lock.Rows,
+		rows,
 		LockOptions{
-			LockOptions:                req.Lock.Options,
+			LockOptions:                opts,
 			async:                      true,
 			remoteLockOwnerWaitTimeout: s.cfg.RemoteLockOwnerWaitTimeout.Duration,
+			replaceTxnLocks:            replaceTxnLocks,
+			originalRows:               originalRows,
+			originalOptions:            originalOptions,
 		},
 		func(result pb.Result, err error) {
 			defer completion.callbackDone()
@@ -551,15 +563,27 @@ func (s *service) handleForwardLock(
 	txnID := append([]byte(nil), req.Lock.TxnID...)
 	s.bindChangeMu.RUnlock()
 	defer txn.Unlock()
+	originalRows := req.Lock.Rows
+	originalOptions := req.Lock.Options
+	rows, opts, replaceTxnLocks := txn.coarsenLockRequest(
+		bind.Group,
+		bind.Table,
+		req.Lock.Rows,
+		req.Lock.Options,
+		int(s.cfg.MaxLockRowCount),
+	)
 
 	l.lock(
 		ctx,
 		txn,
-		req.Lock.Rows,
+		rows,
 		LockOptions{
-			LockOptions:                req.Lock.Options,
+			LockOptions:                opts,
 			async:                      true,
 			remoteLockOwnerWaitTimeout: s.cfg.RemoteLockOwnerWaitTimeout.Duration,
+			replaceTxnLocks:            replaceTxnLocks,
+			originalRows:               originalRows,
+			originalOptions:            originalOptions,
 		},
 		func(result pb.Result, err error) {
 			defer completion.callbackDone()
@@ -677,9 +701,11 @@ func (s *service) handleRemoteGetLock(
 			values := make([]pb.WaitTxn, 0)
 			lock.waiters.iter(func(w *waiter) bool {
 				// The response is a wait-for graph snapshot. Only waiters that
-				// are actively blocking represent an edge; notified and completed
-				// waiters may still be present in the queue.
-				if w.getStatus() != blocking {
+				// are logically blocked by the requested holder represent an edge.
+				// Shared merge waiters can be physically queued on their own lock;
+				// isBlockingFor removes that self-edge while deriving every other
+				// dependency from the current holder set.
+				if !w.isBlockingFor(req.GetTxnLock.TxnID, lock.holders) {
 					return true
 				}
 				values = append(values, w.txn)

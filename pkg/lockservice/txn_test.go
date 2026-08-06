@@ -90,11 +90,11 @@ func TestLockAdded(t *testing.T) {
 		txn := newActiveTxn(id, string(id), fsp, "")
 		defer reuse.Free(txn, nil)
 
-		err := txn.lockAdded(0, pb.LockTable{Table: 1}, [][]byte{[]byte("k1")}, getLogger(""))
+		err := txn.lockAdded(0, pb.LockTable{Table: 1}, [][]byte{[]byte("k1")}, pb.LockOptions{}, getLogger(""))
 		assert.NoError(t, err)
-		err = txn.lockAdded(0, pb.LockTable{Table: 1}, [][]byte{[]byte("k11")}, getLogger(""))
+		err = txn.lockAdded(0, pb.LockTable{Table: 1}, [][]byte{[]byte("k11")}, pb.LockOptions{}, getLogger(""))
 		assert.NoError(t, err)
-		err = txn.lockAdded(0, pb.LockTable{Table: 2}, [][]byte{[]byte("k2"), []byte("k22")}, getLogger(""))
+		err = txn.lockAdded(0, pb.LockTable{Table: 2}, [][]byte{[]byte("k2"), []byte("k22")}, pb.LockOptions{}, getLogger(""))
 		assert.NoError(t, err)
 		assert.Equal(t, 2, len(txn.getHoldLocksLocked(0).tableKeys))
 
@@ -116,9 +116,284 @@ func TestLockAddedThatShouldFail(t *testing.T) {
 		fsp := newFixedSlicePool(2)
 		txn := newActiveTxn(id, string(id), fsp, "")
 		defer reuse.Free(txn, nil)
-		err := txn.lockAdded(0, pb.LockTable{Table: 1}, [][]byte{[]byte("k2"), []byte("k22"), []byte("k222")}, getLogger(""))
+		err := txn.lockAdded(0, pb.LockTable{Table: 1}, [][]byte{[]byte("k2"), []byte("k22"), []byte("k222")}, pb.LockOptions{}, getLogger(""))
 		assert.Error(t, err)
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade))
+	})
+}
+
+func TestCoarsenLockRequestUsesTransactionTableState(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		fsp := newFixedSlicePool(32)
+		txn := newActiveTxn([]byte("t1"), "t1", fsp, "")
+		defer reuse.Free(txn, nil)
+		bind := pb.LockTable{Group: 1, Table: 10}
+		require.NoError(t, txn.lockAdded(
+			bind.Group,
+			bind,
+			[][]byte{[]byte("b"), []byte("d")},
+			pb.LockOptions{},
+			getLogger(""),
+		))
+
+		exclusive := pb.LockOptions{
+			Granularity: pb.Granularity_Row,
+			Mode:        pb.LockMode_Exclusive,
+		}
+		rows := [][]byte{[]byte("f")}
+		gotRows, gotOpts, replace := txn.coarsenLockRequest(
+			bind.Group, bind.Table, rows, exclusive, 3)
+		require.False(t, replace)
+		require.Equal(t, rows, gotRows)
+		require.Equal(t, pb.Granularity_Row, gotOpts.Granularity)
+
+		gotRows, gotOpts, replace = txn.coarsenLockRequest(
+			bind.Group,
+			bind.Table,
+			[][]byte{[]byte("f"), []byte("a")},
+			exclusive,
+			3,
+		)
+		require.True(t, replace)
+		require.Equal(t, pb.Granularity_Range, gotOpts.Granularity)
+		require.Equal(t, [][]byte{[]byte("a"), []byte("f")}, gotRows)
+
+		// Budgets are isolated by physical table and lock group. A first large
+		// request is still bounded without consulting planner cardinality.
+		gotRows, gotOpts, replace = txn.coarsenLockRequest(
+			bind.Group,
+			bind.Table+1,
+			[][]byte{[]byte("z"), []byte("x"), []byte("y"), []byte("w")},
+			exclusive,
+			3,
+		)
+		require.True(t, replace)
+		require.Equal(t, pb.Granularity_Range, gotOpts.Granularity)
+		require.Equal(t, [][]byte{[]byte("w"), []byte("z")}, gotRows)
+
+		shared := exclusive
+		shared.Mode = pb.LockMode_Shared
+		sharedRows := [][]byte{[]byte("a"), []byte("z")}
+		gotRows, gotOpts, replace = txn.coarsenLockRequest(
+			bind.Group, bind.Table, sharedRows, shared, 3)
+		require.False(t, replace)
+		require.Equal(t, pb.Granularity_Row, gotOpts.Granularity)
+		require.Equal(t, sharedRows, gotRows)
+
+		sharded := exclusive
+		sharded.Sharding = pb.Sharding_ByRow
+		shardedRows := [][]byte{[]byte("z")}
+		gotRows, _, replace = txn.coarsenLockRequest(
+			bind.Group, bind.Table, shardedRows, sharded, 2)
+		require.False(t, replace)
+		require.Equal(t, shardedRows, gotRows)
+
+		rangeOptions := exclusive
+		rangeOptions.Granularity = pb.Granularity_Range
+		gotRows, gotOpts, replace = txn.coarsenLockRequest(
+			bind.Group,
+			bind.Table,
+			[][]byte{[]byte("e"), []byte("h")},
+			rangeOptions,
+			3,
+		)
+		require.True(t, replace)
+		require.Equal(t, pb.Granularity_Range, gotOpts.Granularity)
+		require.Equal(t, [][]byte{[]byte("b"), []byte("h")}, gotRows)
+
+		// Invalid inputs remain invalid so validation stays in the lock-table
+		// layer; coarsening must not silently repair them.
+		malformedRange := [][]byte{[]byte("e")}
+		gotRows, _, replace = txn.coarsenLockRequest(
+			bind.Group, bind.Table, malformedRange, rangeOptions, 1)
+		require.False(t, replace)
+		require.Equal(t, malformedRange, gotRows)
+		unsupported := exclusive
+		unsupported.Granularity = pb.Granularity(99)
+		gotRows, _, replace = txn.coarsenLockRequest(
+			bind.Group, bind.Table, rows, unsupported, 1)
+		require.False(t, replace)
+		require.Equal(t, rows, gotRows)
+
+		// Re-entrant duplicates add no physical ownership, so crossing the naive
+		// held-plus-requested count must not widen them into a range.
+		duplicates := [][]byte{[]byte("q"), []byte("q"), []byte("q"), []byte("q")}
+		gotRows, gotOpts, replace = txn.coarsenLockRequest(
+			bind.Group, bind.Table+2, duplicates, exclusive, 3)
+		require.False(t, replace)
+		require.Equal(t, pb.Granularity_Row, gotOpts.Granularity)
+		require.Equal(t, [][]byte{[]byte("q")}, gotRows)
+
+		// The same rule applies to rows already retained by the transaction. An
+		// exact re-lock does not consume budget and must stay exact even when a
+		// naive cardinality sum crosses the configured limit.
+		reentrant := [][]byte{[]byte("b"), []byte("b")}
+		gotRows, gotOpts, replace = txn.coarsenLockRequest(
+			bind.Group, bind.Table, reentrant, exclusive, 3)
+		require.False(t, replace)
+		require.Equal(t, pb.Granularity_Row, gotOpts.Granularity)
+		require.Empty(t, gotRows)
+	})
+}
+
+func TestCoarsenLockRequestRequiresCompleteExclusiveOwnership(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		fsp := newFixedSlicePool(32)
+		txn := newActiveTxn([]byte("t1"), "t1", fsp, "")
+		defer reuse.Free(txn, nil)
+
+		exclusive := pb.LockOptions{
+			Granularity: pb.Granularity_Row,
+			Mode:        pb.LockMode_Exclusive,
+		}
+		shared := exclusive
+		shared.Mode = pb.LockMode_Shared
+
+		sharedBind := pb.LockTable{Group: 1, Table: 10}
+		require.NoError(t, txn.lockAdded(
+			sharedBind.Group,
+			sharedBind,
+			[][]byte{[]byte("a"), []byte("b")},
+			shared,
+			getLogger(""),
+		))
+		rows := [][]byte{[]byte("c"), []byte("d")}
+		gotRows, gotOpts, replace := txn.coarsenLockRequest(
+			sharedBind.Group,
+			sharedBind.Table,
+			rows,
+			exclusive,
+			3,
+		)
+		require.False(t, replace)
+		require.Equal(t, rows, gotRows)
+		require.Equal(t, pb.Granularity_Row, gotOpts.Granularity)
+		require.Contains(t,
+			txn.lockHolders[sharedBind.Group].nonCoarsenableTables,
+			sharedBind.Table,
+		)
+
+		shardedBind := pb.LockTable{Group: 1, Table: 11, Sharding: pb.Sharding_ByRow}
+		sharded := exclusive
+		sharded.Sharding = pb.Sharding_ByRow
+		require.NoError(t, txn.lockAdded(
+			shardedBind.Group,
+			shardedBind,
+			[][]byte{[]byte("a"), []byte("b")},
+			sharded,
+			getLogger(""),
+		))
+		gotRows, _, replace = txn.coarsenLockRequest(
+			shardedBind.Group,
+			shardedBind.Table,
+			rows,
+			exclusive,
+			3,
+		)
+		require.False(t, replace)
+		require.Equal(t, rows, gotRows)
+
+		// An explicit bookkeeping failure publishes neither keys nor eligibility
+		// state, so a later all-Exclusive ownership set can still be coarsened.
+		failedBind := pb.LockTable{Group: 1, Table: 12}
+		txn.beforeLockAdded = func([]byte, [][]byte) error {
+			return moerr.NewInternalErrorNoCtx("injected")
+		}
+		require.Error(t, txn.lockAdded(
+			failedBind.Group,
+			failedBind,
+			[][]byte{[]byte("shared")},
+			shared,
+			getLogger(""),
+		))
+		txn.beforeLockAdded = nil
+		require.NotContains(t,
+			txn.lockHolders[failedBind.Group].nonCoarsenableTables,
+			failedBind.Table,
+		)
+		require.NoError(t, txn.lockAdded(
+			failedBind.Group,
+			failedBind,
+			[][]byte{[]byte("a"), []byte("b")},
+			exclusive,
+			getLogger(""),
+		))
+		_, _, replace = txn.coarsenLockRequest(
+			failedBind.Group,
+			failedBind.Table,
+			rows,
+			exclusive,
+			3,
+		)
+		require.True(t, replace)
+	})
+}
+
+func TestReplaceLocksFailurePreservesOwnership(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		fsp := newFixedSlicePool(8)
+		txn := newActiveTxn([]byte("t1"), "t1", fsp, "")
+		defer reuse.Free(txn, nil)
+		bind := pb.LockTable{Group: 1, Table: 10}
+		original := [][]byte{[]byte("a"), []byte("b"), []byte("c")}
+		require.NoError(t, txn.lockAdded(bind.Group, bind, original, pb.LockOptions{}, getLogger("")))
+
+		expectedErr := errors.New("injected bookkeeping failure")
+		txn.beforeLockAdded = func([]byte, [][]byte) error { return expectedErr }
+		err := txn.replaceLocks(
+			bind.Group,
+			bind,
+			[][]byte{[]byte("a"), []byte("z")},
+			getLogger(""),
+		)
+		require.ErrorIs(t, err, expectedErr)
+		locks := txn.lockHolders[bind.Group].tableKeys[bind.Table].slice()
+		require.Equal(t, original, locks.all())
+		locks.unref()
+
+		txn.beforeLockAdded = nil
+		err = txn.replaceLocks(
+			bind.Group,
+			bind,
+			newTestRows(1, 2, 3, 4, 5, 6, 7, 8, 9),
+			getLogger(""),
+		)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade))
+		locks = txn.lockHolders[bind.Group].tableKeys[bind.Table].slice()
+		require.Equal(t, original, locks.all())
+		locks.unref()
+
+		require.NoError(t, txn.replaceLocks(
+			bind.Group,
+			bind,
+			[][]byte{[]byte("a"), []byte("z")},
+			getLogger(""),
+		))
+		locks = txn.lockHolders[bind.Group].tableKeys[bind.Table].slice()
+		require.Equal(t, [][]byte{[]byte("a"), []byte("z")}, locks.all())
+		locks.unref()
+
+		// A key acquired while a coarsened range was waiting is outside the
+		// committed replacement and must remain available for transaction cleanup.
+		require.NoError(t, txn.lockAdded(
+			bind.Group,
+			bind,
+			[][]byte{[]byte("zz")},
+			pb.LockOptions{},
+			getLogger(""),
+		))
+		require.NoError(t, txn.replaceLocks(
+			bind.Group,
+			bind,
+			[][]byte{[]byte("a"), []byte("m")},
+			getLogger(""),
+		))
+		locks = txn.lockHolders[bind.Group].tableKeys[bind.Table].slice()
+		require.Equal(t,
+			[][]byte{[]byte("z"), []byte("zz"), []byte("a"), []byte("m")},
+			locks.all(),
+		)
+		locks.unref()
 	})
 }
 
@@ -160,7 +435,7 @@ func TestFetchWhoWaitingMeSkipsInactiveWaiters(t *testing.T) {
 
 		txn := newActiveTxn(holderID, string(holderID), newFixedSlicePool(2), "")
 		defer reuse.Free(txn, nil)
-		require.NoError(t, txn.lockAdded(0, bind, [][]byte{key}, logger))
+		require.NoError(t, txn.lockAdded(0, bind, [][]byte{key}, pb.LockOptions{}, logger))
 
 		lt := newLocalLockTable(
 			bind,
@@ -225,6 +500,93 @@ func TestFetchWhoWaitingMeSkipsInactiveWaiters(t *testing.T) {
 		assert.NoError(t, err)
 		assert.True(t, ok)
 		assert.Equal(t, [][]byte{[]byte("blocking")}, waitingTxnIDs)
+
+		// A snapshot racing holder release must not retain an edge merely
+		// because the transaction bookkeeping still contains the lock key.
+		holders.remove(holderID)
+		assert.False(t, blockingWaiter.isBlockingFor(holderID, holders))
+	})
+}
+
+func TestFetchWhoWaitingMeKeepsLogicalMergeDependency(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		logger := getLogger("")
+		bind := pb.LockTable{Group: 0, Table: 1, ServiceID: "owner"}
+		key := []byte("key")
+		holderA := []byte("holder-a")
+		holderB := []byte("holder-b")
+		holderC := []byte("holder-c")
+
+		txnB := newActiveTxn(holderB, string(holderB), newFixedSlicePool(2), "")
+		defer reuse.Free(txnB, nil)
+		require.NoError(t, txnB.lockAdded(0, bind, [][]byte{key}, pb.LockOptions{}, logger))
+		txnC := newActiveTxn(holderC, string(holderC), newFixedSlicePool(2), "")
+		defer reuse.Free(txnC, nil)
+		require.NoError(t, txnC.lockAdded(0, bind, [][]byte{key}, pb.LockOptions{}, logger))
+
+		lt := newLocalLockTable(
+			bind,
+			nil,
+			nil,
+			runtime.DefaultRuntime().Clock(),
+			nil,
+			logger,
+		).(*localLockTable)
+		holders := newHolders()
+		holders.add(pb.WaitTxn{TxnID: holderA, CreatedOn: "origin"})
+		holders.add(pb.WaitTxn{TxnID: holderB, CreatedOn: "origin"})
+		q := newWaiterQueue()
+		q.init(logger)
+		mergeWaiter := acquireWaiter(
+			pb.WaitTxn{TxnID: holderA, CreatedOn: "origin"},
+			"test logical merge dependency",
+			logger,
+		)
+		mergeWaiter.setStatus(blocking)
+		mergeWaiter.notifyOnSharedHolderChange = true
+		mergeWaiter.waitFor = append(mergeWaiter.waitFor, holderB)
+		q.put(mergeWaiter)
+		defer func() {
+			removed, _ := q.remove(mergeWaiter)
+			require.True(t, removed)
+			mergeWaiter.close("test logical merge dependency", logger)
+		}()
+		lt.mu.store.Add(key, Lock{
+			value:    flagLockRow | flagLockSharedMode,
+			createAt: time.Now(),
+			holders:  holders,
+			waiters:  q,
+		})
+		// C joins after A is already queued. The frozen admission-time waitFor
+		// snapshot contains only B, but a current deadlock snapshot must expose
+		// the new logical A -> C dependency as well.
+		holders.add(pb.WaitTxn{TxnID: holderC, CreatedOn: "origin"})
+
+		fetch := func(txn *activeTxn, holder []byte) [][]byte {
+			t.Helper()
+			var waitingTxnIDs [][]byte
+			ok, err := txn.fetchWhoWaitingMe(
+				context.Background(),
+				"origin",
+				holder,
+				func(waitTxn pb.WaitTxn, waiterAddress string) bool {
+					waitingTxnIDs = append(waitingTxnIDs, waitTxn.TxnID)
+					assert.Equal(t, bind.ServiceID, waiterAddress)
+					return true
+				},
+				func(_ context.Context, group uint32, table uint64) (lockTable, error) {
+					assert.Equal(t, bind.Group, group)
+					assert.Equal(t, bind.Table, table)
+					return lt, nil
+				},
+			)
+			require.NoError(t, err)
+			require.True(t, ok)
+			return waitingTxnIDs
+		}
+
+		require.Equal(t, [][]byte{holderA}, fetch(txnB, holderB))
+		require.Equal(t, [][]byte{holderA}, fetch(txnC, holderC))
 	})
 }
 
@@ -279,8 +641,8 @@ func TestCloseWithoutFreeWithContextRetriesOnlyFailedTables(t *testing.T) {
 			1: {bind: pb.LockTable{Group: 0, Table: 1}},
 			2: {bind: pb.LockTable{Group: 0, Table: 2}, failFirst: true},
 		}
-		require.NoError(t, txn.lockAdded(0, tables[1].bind, [][]byte{[]byte("k1")}, getLogger("")))
-		require.NoError(t, txn.lockAdded(0, tables[2].bind, [][]byte{[]byte("k2")}, getLogger("")))
+		require.NoError(t, txn.lockAdded(0, tables[1].bind, [][]byte{[]byte("k1")}, pb.LockOptions{}, getLogger("")))
+		require.NoError(t, txn.lockAdded(0, tables[2].bind, [][]byte{[]byte("k2")}, pb.LockOptions{}, getLogger("")))
 
 		err := txn.closeWithoutFreeWithContext(
 			context.Background(),
@@ -320,7 +682,7 @@ func TestCloseWithoutFreeWithContextReturnsCanceledLookup(t *testing.T) {
 		defer reuse.Free(txn, nil)
 
 		bind := pb.LockTable{Group: 0, Table: 1}
-		require.NoError(t, txn.lockAdded(0, bind, [][]byte{[]byte("k1")}, getLogger("")))
+		require.NoError(t, txn.lockAdded(0, bind, [][]byte{[]byte("k1")}, pb.LockOptions{}, getLogger("")))
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 

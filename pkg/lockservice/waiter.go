@@ -87,7 +87,11 @@ func (w *waiter) TypeName() string {
 // lock to be released if a conflict is encountered.
 type waiter struct {
 	// belong to which txn
-	txn           pb.WaitTxn
+	txn pb.WaitTxn
+	// waitFor is the dependency set observed when the waiter enters the queue.
+	// It seeds the first deadlock check only. Later graph snapshots must derive
+	// dependencies from the lock's current holders because compatible Shared
+	// holders can join or leave while a range-merge waiter remains blocked.
 	waitFor       [][]byte
 	conflictKey   *atomic.Pointer[[]byte]
 	lt            *atomic.Pointer[localLockTable]
@@ -116,6 +120,12 @@ type waiter struct {
 	// active wait-for edge captured by the remote lock owner, not a local waiter
 	// that may enter the notification lifecycle.
 	isRemoteSnapshot bool
+
+	// notifyOnSharedHolderChange is used by a Shared range merge that already
+	// holds a compatible lock with another transaction. It must retry when any
+	// other Shared holder leaves, rather than waiting for the last holder (which
+	// may be this waiter transaction itself).
+	notifyOnSharedHolderChange bool
 
 	// just used for testing
 	beforeSwapStatusAdjustFunc        func()
@@ -170,6 +180,25 @@ func (w *waiter) getStatus() waiterStatus {
 
 func (w *waiter) isBlocking() bool {
 	return w.isRemoteSnapshot || w.getStatus() == blocking
+}
+
+// isBlockingFor reports whether this physical queue entry is a live logical
+// edge to holderTxnID in the supplied current holder set. A Shared range-merge
+// waiter is also a holder of the lock it is queued on, so its physical self-edge
+// must be filtered while every current other holder remains visible, including
+// holders that joined after the waiter entered the queue. The caller reads the
+// holder set under the lock-table mutex. Both local and remote deadlock snapshots
+// use this helper to keep the graph semantics identical.
+func (w *waiter) isBlockingFor(
+	holderTxnID []byte,
+	currentHolders *holders,
+) bool {
+	if !w.isBlocking() ||
+		currentHolders == nil ||
+		!currentHolders.contains(holderTxnID) {
+		return false
+	}
+	return !w.notifyOnSharedHolderChange || !w.isTxn(holderTxnID)
 }
 
 func (w *waiter) setStatus(
@@ -355,6 +384,7 @@ func (w *waiter) reset() {
 	w.lockWaitGranularity = pb.Granularity_Row
 	w.lockWaitMode = pb.LockMode_Exclusive
 	w.isRemoteSnapshot = false
+	w.notifyOnSharedHolderChange = false
 	w.beforeSwapStatusAdjustFunc = func() {}
 	w.beforeWaitNotificationReceiveFunc = func() {}
 	w.waitTooLongLogged.Store(false)

@@ -3303,17 +3303,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.forceJoinOnOneCN(rootID, false)
 		// after this ,never call ReCalcNodeStats again !!!
 
-		if builder.isForUpdate {
-			reCheckifNeedLockWholeTable(builder)
-		}
-
 		builder.handleMessages(rootID)
 
 		builder.rewriteStarApproxCount(rootID)
 
-		if builder.qry.StmtType != plan.Query_SELECT {
-			builder.updateLocksOnDemand(rootID)
-		}
 		rootNode := builder.qry.Nodes[rootID]
 
 		for j := range rootNode.ProjectList {
@@ -3323,6 +3316,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			}
 		}
 	}
+	applySharedLockTableFallback(builder)
 
 	for i := range builder.qry.Steps {
 		rootID := builder.qry.Steps[i]

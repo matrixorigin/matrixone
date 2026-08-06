@@ -323,6 +323,10 @@ func performLock(
 		if len(group) > 1 {
 			hasNewVersionInRangeFunc = lockOp.hasNewVersionInRangeForTargets(group)
 		}
+		// Keep the planner target row-scoped. fetchRows bounds an oversized batch,
+		// and lockservice additionally bounds the actual keys retained across calls
+		// for a transaction and physical lock table. A planner estimate cannot own
+		// that runtime budget and must not widen it to the full table domain.
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
 			lockOp.engine,

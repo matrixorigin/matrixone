@@ -20,6 +20,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -147,6 +148,55 @@ type retryingGetLockClient struct {
 	release chan struct{}
 }
 
+// lostCoarsenedLockClient models the one state a lock client cannot resolve
+// from the RPC result: the owner may have accepted the request just before the
+// response was lost, or may never have received it.
+type lostCoarsenedLockClient struct {
+	bind pb.LockTable
+}
+
+type loseNthLockResponseClient struct {
+	Client
+	dropAt atomic.Int32
+	locks  atomic.Int32
+}
+
+func (c *loseNthLockResponseClient) Send(
+	ctx context.Context,
+	req *pb.Request,
+) (*pb.Response, error) {
+	resp, err := c.Client.Send(ctx, req)
+	if err != nil || req.Method != pb.Method_Lock ||
+		c.locks.Add(1) != c.dropAt.Load() {
+		return resp, err
+	}
+	// The owner has completed the request. Drop only its response to exercise
+	// the transport state that the origin cannot distinguish from no delivery.
+	releaseResponse(resp)
+	return nil, io.ErrUnexpectedEOF
+}
+
+func (c *lostCoarsenedLockClient) Send(_ context.Context, req *pb.Request) (*pb.Response, error) {
+	switch req.Method {
+	case pb.Method_Lock:
+		return nil, io.ErrUnexpectedEOF
+	case pb.Method_GetBind:
+		resp := &pb.Response{}
+		resp.GetBind.LockTable = c.bind
+		resp.GetBind.AllocatorID = c.bind.AllocatorID
+		resp.GetBind.AllocatorVersion = c.bind.Version
+		return resp, nil
+	default:
+		return nil, io.ErrClosedPipe
+	}
+}
+
+func (c *lostCoarsenedLockClient) AsyncSend(context.Context, *pb.Request) (*morpc.Future, error) {
+	return nil, io.ErrClosedPipe
+}
+
+func (c *lostCoarsenedLockClient) Close() error { return nil }
+
 func (c *retryingGetLockClient) Send(_ context.Context, req *pb.Request) (*pb.Response, error) {
 	switch req.Method {
 	case pb.Method_GetTxnLock:
@@ -176,6 +226,205 @@ func (c *retryingGetLockClient) AsyncSend(context.Context, *pb.Request) (*morpc.
 }
 
 func (c *retryingGetLockClient) Close() error { return nil }
+
+func TestRemoteCoarsenedLockTransportFailureKeepsBoundedRouting(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		bind := pb.LockTable{
+			Group:       0,
+			Table:       26646,
+			OriginTable: 26646,
+			ServiceID:   "owner",
+			Version:     1,
+			Valid:       true,
+			AllocatorID: "allocator",
+		}
+		remote := newRemoteLockTable(
+			"origin",
+			time.Second,
+			bind,
+			&lostCoarsenedLockClient{bind: bind},
+			func(pb.LockTable) {},
+			getLogger(""),
+		)
+		txnID := []byte("lost-coarsened-range")
+		txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(6), "")
+		defer reuse.Free(txn, nil)
+
+		oldRows := newTestRows(1, 2, 5, 7)
+		txn.Lock()
+		require.NoError(t, txn.lockAdded(bind.Group, bind, oldRows, pb.LockOptions{}, getLogger("")))
+
+		var lockErr error
+		remote.lock(
+			context.Background(),
+			txn,
+			newTestRows(1, 8),
+			LockOptions{
+				LockOptions: pb.LockOptions{
+					Granularity: pb.Granularity_Range,
+					Mode:        pb.LockMode_Exclusive,
+					Policy:      pb.WaitPolicy_Wait,
+				},
+				replaceTxnLocks: true,
+			},
+			func(_ pb.Result, err error) { lockErr = err },
+		)
+		require.Error(t, lockErr)
+
+		// Remote unlock is by transaction ID, so the existing table entry is the
+		// complete cleanup route for either owner outcome. The indeterminate path
+		// must not consume capacity by appending speculative endpoints.
+		locks := txn.lockHolders[bind.Group].tableKeys[bind.Table].slice()
+		require.Equal(t, oldRows, locks.all())
+		locks.unref()
+		txn.Unlock()
+	})
+}
+
+func TestRemoteRepeatedRangeLostReplacementResponseStillUnlocks(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			owner, origin := services[0], services[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			const table = uint64(26761)
+			_, err := owner.getLockTableWithCreate(
+				ctx, 0, table, nil, pb.Sharding_None)
+			require.NoError(t, err)
+
+			client := &loseNthLockResponseClient{Client: origin.remote.client}
+			client.dropAt.Store(3)
+			origin.remote.client = client
+
+			txnID := []byte("remote-repeat-range")
+			rangeOptions := newTestRangeExclusiveOptions()
+			for range 2 {
+				_, err = origin.Lock(
+					ctx, table, newTestRows(1, 2), txnID, rangeOptions)
+				require.NoError(t, err)
+			}
+
+			for _, s := range []*service{owner, origin} {
+				txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
+				require.NotNil(t, txn)
+				txn.RLock()
+				keys := txn.lockHolders[0].tableKeys[table].slice()
+				txn.RUnlock()
+				require.Equal(t, newTestRows(1, 2), keys.all())
+				keys.unref()
+			}
+
+			_, err = origin.Lock(
+				ctx, table, newTestRows(3), txnID, newTestRowExclusiveOptions())
+			require.Error(t, err, "the owner response must be lost after commit")
+
+			lt := owner.tableGroups.get(0, table).(*localLockTable)
+			lt.mu.RLock()
+			start, hasStart := lt.mu.store.Get(newTestRows(1)[0])
+			end, hasEnd := lt.mu.store.Get(newTestRows(3)[0])
+			lt.mu.RUnlock()
+			require.True(t, hasStart)
+			require.True(t, hasEnd)
+			require.True(t, start.isLockRangeStart())
+			require.True(t, end.isLockRangeEnd())
+
+			// The origin remains within its historical capacity and still carries
+			// the table route. Unlock by txnID must release the owner's committed
+			// replacement even though the response never arrived.
+			originTxn := origin.activeTxnHolder.getActiveTxn(txnID, false, "")
+			require.NotNil(t, originTxn)
+			originTxn.RLock()
+			originKeys := originTxn.lockHolders[0].tableKeys[table].slice()
+			originTxn.RUnlock()
+			require.Equal(t, newTestRows(1, 2), originKeys.all())
+			originKeys.unref()
+
+			require.NoError(t, origin.Unlock(ctx, txnID, timestamp.Timestamp{}))
+			probeTxn := []byte("remote-repeat-range-probe")
+			probe := newTestRangeExclusiveOptions()
+			probe.Policy = pb.WaitPolicy_FastFail
+			_, err = owner.Lock(ctx, table, newTestRows(1, 3), probeTxn, probe)
+			require.NoError(t, err, "the lost-response replacement leaked")
+			require.NoError(t, owner.Unlock(ctx, probeTxn, timestamp.Timestamp{}))
+		},
+		func(c *Config) {
+			c.MaxLockRowCount = 2
+			c.MaxFixedSliceSize = 4
+		},
+	)
+}
+
+func TestRemoteMixedModeTransportFailureKeepsExistingCleanupRoute(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		bind := pb.LockTable{
+			Group:       0,
+			Table:       26714,
+			OriginTable: 26714,
+			ServiceID:   "owner",
+			Version:     1,
+			Valid:       true,
+			AllocatorID: "allocator",
+		}
+		remote := newRemoteLockTable(
+			"origin",
+			time.Second,
+			bind,
+			&lostCoarsenedLockClient{bind: bind},
+			func(pb.LockTable) {},
+			getLogger(""),
+		)
+		txnID := []byte("lost-mixed-exact-rows")
+		txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(8), "")
+		defer reuse.Free(txn, nil)
+
+		shared := newTestRowSharedOptions()
+		oldRows := newTestRows(1, 2, 5, 7)
+		incomingRows := newTestRows(8, 9)
+		exclusive := newTestRowExclusiveOptions()
+		txn.Lock()
+		require.NoError(t, txn.lockAdded(
+			bind.Group,
+			bind,
+			oldRows,
+			shared,
+			getLogger(""),
+		))
+		rows, opts, replaceTxnLocks := txn.coarsenLockRequest(
+			bind.Group,
+			bind.Table,
+			incomingRows,
+			exclusive,
+			3,
+		)
+		require.False(t, replaceTxnLocks)
+		require.Equal(t, incomingRows, rows)
+
+		var lockErr error
+		remote.lock(
+			context.Background(),
+			txn,
+			rows,
+			LockOptions{LockOptions: opts},
+			func(_ pb.Result, err error) { lockErr = err },
+		)
+		require.Error(t, lockErr)
+
+		// The owner may hold the exact incoming rows, but remote cleanup releases
+		// its complete transaction by ID. Preserve the existing route instead of
+		// making an indeterminate error path consume more fixed capacity.
+		locks := txn.lockHolders[bind.Group].tableKeys[bind.Table].slice()
+		require.Equal(t, oldRows, locks.all())
+		locks.unref()
+		require.Contains(t,
+			txn.lockHolders[bind.Group].nonCoarsenableTables,
+			bind.Table,
+		)
+		txn.Unlock()
+	})
+}
 
 func TestRemoteGetLockWithContextStopsOnCancellation(t *testing.T) {
 	client := &blockingGetLockClient{started: make(chan struct{}, 1)}
@@ -1022,6 +1271,9 @@ func TestLockRemoteWithNeedUpgrade(t *testing.T) {
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
+					// The owner must report that this request created ownership;
+					// otherwise the origin correctly has nothing new to record.
+					resp.Lock.Result.NewLockAdd = true
 					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				},
 			)
@@ -1038,6 +1290,13 @@ func TestLockRemoteWithNeedUpgrade(t *testing.T) {
 				assert.Error(t, err)
 				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade))
 			})
+			holder := txn.lockHolders[l.bind.Group]
+			require.NotNil(t, holder)
+			route := holder.tableKeys[l.bind.Table].slice()
+			require.Equal(t, rows[:1], route.all(),
+				"an acknowledged owner must remain reachable after probe-ledger overflow")
+			route.unref()
+			require.Contains(t, holder.remoteUnlockRequired, l.bind.Table)
 			reuse.Free(txn, nil)
 		},
 		func(lt pb.LockTable) {},

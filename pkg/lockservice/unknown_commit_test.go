@@ -547,7 +547,7 @@ func TestUnknownCommitResolverCloseCancelsRemoteUnlock(t *testing.T) {
 		txnID := []byte("unknown-commit-remote-unlock")
 		txn := service.activeTxnHolder.getActiveTxn(txnID, true, "")
 		txn.Lock()
-		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{[]byte("key")}, service.logger))
+		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{[]byte("key")}, pb.LockOptions{}, service.logger))
 		txn.Unlock()
 		resolved := make(chan struct{}, 1)
 		callbackCloseErr := make(chan error, 1)
@@ -613,7 +613,7 @@ func TestServiceCloseCancelsOrdinaryRemoteUnlock(t *testing.T) {
 		txnID := []byte("ordinary-remote-unlock")
 		txn := service.activeTxnHolder.getActiveTxn(txnID, true, "")
 		txn.Lock()
-		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{[]byte("key")}, service.logger))
+		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{[]byte("key")}, pb.LockOptions{}, service.logger))
 		txn.Unlock()
 
 		unlockDone := make(chan error, 1)

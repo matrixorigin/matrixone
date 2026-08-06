@@ -289,6 +289,20 @@ type LockOptions struct {
 	pb.LockOptions
 	async                      bool
 	remoteLockOwnerWaitTimeout time.Duration
+	// replaceTxnLocks is set when the request was coarsened from every lock
+	// recorded for the same transaction and lock table at planning time. The lock
+	// owner merges that replacement into its current bookkeeping at commit time,
+	// preserving any out-of-range key acquired while this request was waiting. A
+	// remote origin must apply the same merge after the owner accepts the range.
+	replaceTxnLocks bool
+	// originalRows and originalOptions retain the logical request before a
+	// cumulative Exclusive-row request is represented as one range. A waiting
+	// owner can fall back to this exact request if concurrent ownership makes the
+	// prepared range ineligible before commit. remoteLockTable also sends this
+	// logical request to the authoritative owner instead of forwarding an
+	// origin-side representation decision.
+	originalRows    [][]byte
+	originalOptions pb.LockOptions
 }
 
 // Lock stores specific lock information. Since there are a large number of lock objects

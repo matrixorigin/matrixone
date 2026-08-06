@@ -158,8 +158,16 @@ func (d *detector) doCheck(ctx context.Context) {
 				if err == nil {
 					err = ErrDeadLockDetected
 				}
-				d.ignoreTxns.Store(string(deadlockTxn.TxnID), struct{}{})
-				d.waitTxnAbortFunc(deadlockTxn, err)
+				// Different detector workers can discover the same cycle from
+				// different roots. All traversals choose the same deterministic
+				// victim; LoadOrStore is the linearization point that gives exactly
+				// one worker ownership of the abort notification.
+				if _, loaded := d.ignoreTxns.LoadOrStore(
+					string(deadlockTxn.TxnID),
+					struct{}{},
+				); !loaded {
+					d.waitTxnAbortFunc(deadlockTxn, err)
+				}
 			}
 			d.mu.Lock()
 			delete(d.mu.activeCheckTxn, util.UnsafeBytesToString(txn.waitTxn.TxnID))
@@ -200,8 +208,9 @@ func (d *detector) checkDeadlock(ctx context.Context, w *waiters) (bool, pb.Wait
 
 func (d *detector) deadlockFound(w *waiters) (bool, pb.WaitTxn, error) {
 	node := w.deadlockNode()
-	logDeadLockFound(d.logger, node.txn, printPathFromRoot(node))
-	return true, node.txn, nil
+	victim := w.deadlockVictim()
+	logDeadLockFound(d.logger, victim, printPathFromRoot(node))
+	return true, victim, nil
 }
 
 type txnVisitState uint8
@@ -275,6 +284,21 @@ func (w *waiters) reset(txn deadlockTxn) {
 
 func (w *waiters) deadlockNode() *lockNode {
 	return w.deadlock
+}
+
+// deadlockVictim returns a root-independent victim for the detected cycle.
+// Transaction IDs are opaque, so lexical order is used only as a stable total
+// order. Walking from the closing node upward also preserves the populated
+// WaiterAddress on the duplicate closing occurrence when the cycle includes
+// the detector root.
+func (w *waiters) deadlockVictim() pb.WaitTxn {
+	var victim pb.WaitTxn
+	for node := w.deadlock; node != nil; node = node.parent {
+		if len(victim.TxnID) == 0 || bytes.Compare(node.txn.TxnID, victim.TxnID) > 0 {
+			victim = node.txn
+		}
+	}
+	return victim
 }
 
 func (w *waiters) setDeadlock(closing *lockNode) {
