@@ -247,7 +247,7 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 				Data:   append([]byte(nil), params.GetData()...),
 				Area:   append([]byte(nil), params.GetArea()...),
 				Nulls:  []bool{false, false},
-				IsBin:  []bool{true, false, false, true},
+				IsBin:  []bool{true, false, false, false, false, true, false, false},
 			},
 		},
 		messageAcquirer: func() morpc.Message {
@@ -265,8 +265,8 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	require.Equal(t, "text", compile.proc.GetPrepareParams().GetStringAt(1))
 	require.True(t, compile.proc.GetPrepareParamIsBin(0))
 	require.False(t, compile.proc.GetPrepareParamIsBin(1))
-	require.False(t, compile.proc.GetPrepareParamIsInteger(0))
-	require.True(t, compile.proc.GetPrepareParamIsInteger(1))
+	require.Equal(t, vector.PrepareParamNone, compile.proc.GetPrepareParamKind(0))
+	require.Equal(t, vector.PrepareParamFloat, compile.proc.GetPrepareParamKind(1))
 	require.Equal(t, int64(42), compile.proc.GetAffectedRows())
 	require.True(t, compile.proc.GetStmtProfile().GetStatementIgnore())
 	require.NotNil(t, compile.fill, "fill callback should be set")

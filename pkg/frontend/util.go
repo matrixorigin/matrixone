@@ -196,6 +196,17 @@ func getExprValueWithPrepareMode(
 	preparedExpression bool,
 	isBin ...*bool,
 ) (interface{}, error) {
+	return getExprValueWithPrepareMeta(e, ses, execCtx, preparedExpression, nil, isBin...)
+}
+
+func getExprValueWithPrepareMeta(
+	e tree.Expr,
+	ses *Session,
+	execCtx *ExecCtx,
+	preparedExpression bool,
+	prepareParamKind *vector.PrepareParamKind,
+	isBin ...*bool,
+) (interface{}, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -207,6 +218,9 @@ func getExprValueWithPrepareMode(
 		// set @a = on, type of a is bool.
 		if len(isBin) > 0 {
 			*isBin[0] = false
+		}
+		if prepareParamKind != nil {
+			*prepareParamKind = vector.PrepareParamNone
 		}
 		return v.ColName(), nil
 	}
@@ -296,6 +310,12 @@ func getExprValueWithPrepareMode(
 
 	if len(isBin) > 0 {
 		*isBin[0] = resultVec.GetIsBin()
+	}
+	if prepareParamKind != nil {
+		*prepareParamKind = resultVec.GetPrepareParamKind()
+		if *prepareParamKind == vector.PrepareParamNone {
+			*prepareParamKind = prepareParamKindFromType(resultVec.GetType().Oid)
+		}
 	}
 	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
 }

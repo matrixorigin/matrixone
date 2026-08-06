@@ -28,10 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/embed"
 )
 
-// TestIssue26725PreparedBit64Integer exercises the same binary prepared
-// statement path used by integer client bindings, including the legacy
+// TestIssue26725PreparedBit64Numeric exercises the same binary prepared
+// statement path used by numeric client bindings, including the legacy
 // flink-cdc sink's PreparedStatement.setLong() BIT(64) payloads.
-func TestIssue26725PreparedBit64Integer(t *testing.T) {
+func TestIssue26725PreparedBit64Numeric(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
@@ -82,18 +82,90 @@ func TestIssue26725PreparedBit64Integer(t *testing.T) {
 		require.False(t, rows.Next())
 		require.NoError(t, rows.Err())
 
-		stringStmt, err := db.PrepareContext(ctx,
+		singleStmt, err := db.PrepareContext(ctx,
 			"insert into "+dbName+".t64(id, b) values (?, ?)")
 		require.NoError(t, err)
-		defer stringStmt.Close()
-		_, err = stringStmt.ExecContext(ctx, int64(6), "5")
+		defer singleStmt.Close()
+		_, err = singleStmt.ExecContext(ctx, int64(6), "5")
 		require.NoError(t, err)
 		var stringValue string
 		require.NoError(t, db.QueryRowContext(ctx,
 			"select cast(b as unsigned) from "+dbName+".t64 where id = 6").Scan(&stringValue))
 		require.Equal(t, "53", stringValue)
-		_, err = stringStmt.ExecContext(ctx, int64(7), "-6109877384019645241")
+		_, err = singleStmt.ExecContext(ctx, int64(7), "-6109877384019645241")
 		require.ErrorContains(t, err, "data out of range")
+
+		// Rebinding the same statement as DOUBLE must refresh string provenance
+		// and use numeric rather than ASCII byte semantics.
+		_, err = singleStmt.ExecContext(ctx, int64(8), float64(5))
+		require.NoError(t, err)
+		var floatValue string
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select cast(b as unsigned) from "+dbName+".t64 where id = 8").Scan(&floatValue))
+		require.Equal(t, "5", floatValue)
+
+		// SQL PREPARE/EXECUTE must preserve the numeric type of user variables too.
+		execSQLRequire(t, ctx, db,
+			"prepare issue26725_sql from 'insert into "+dbName+".t64(id, b) values (?, ?)'")
+		execSQLRequire(t, ctx, db, "set @issue26725_id = 9, @issue26725_bit = 5.0")
+		execSQLRequire(t, ctx, db,
+			"execute issue26725_sql using @issue26725_id, @issue26725_bit")
+		var sqlPrepareValue string
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select cast(b as unsigned) from "+dbName+".t64 where id = 9").Scan(&sqlPrepareValue))
+		require.Equal(t, "5", sqlPrepareValue)
+
+		execSQLRequire(t, ctx, db, "set @issue26725_id = 10, @issue26725_bit = 5")
+		execSQLRequire(t, ctx, db,
+			"execute issue26725_sql using @issue26725_id, @issue26725_bit")
+		execSQLRequire(t, ctx, db, "set @issue26725_id = 11, @issue26725_bit = '5'")
+		execSQLRequire(t, ctx, db,
+			"execute issue26725_sql using @issue26725_id, @issue26725_bit")
+		execSQLRequire(t, ctx, db, "set @issue26725_id = 12, @issue26725_bit = true")
+		execSQLRequire(t, ctx, db,
+			"execute issue26725_sql using @issue26725_id, @issue26725_bit")
+		execSQLRequire(t, ctx, db, "set @issue26725_id = 13, @issue26725_bit = b'101'")
+		execSQLRequire(t, ctx, db,
+			"execute issue26725_sql using @issue26725_id, @issue26725_bit")
+		rows, err = db.QueryContext(ctx,
+			"select cast(b as unsigned) from "+dbName+".t64 where id between 10 and 13 order by id")
+		require.NoError(t, err)
+		defer rows.Close()
+		for _, expected := range []string{"5", "53", "1", "5"} {
+			require.True(t, rows.Next())
+			var actual string
+			require.NoError(t, rows.Scan(&actual))
+			require.Equal(t, expected, actual)
+		}
+		require.False(t, rows.Next())
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+		execSQLRequire(t, ctx, db, "deallocate prepare issue26725_sql")
+
+		// Direct user-variable expressions use a different executor from
+		// EXECUTE USING and must preserve the same source conversion semantics.
+		execSQLRequire(t, ctx, db, "set @issue26725_id = 14, @issue26725_bit = 5.0")
+		execSQLRequire(t, ctx, db,
+			"insert into "+dbName+".t64(id, b) values (@issue26725_id, @issue26725_bit)")
+		execSQLRequire(t, ctx, db, "set @issue26725_id = 15, @issue26725_bit = '5'")
+		execSQLRequire(t, ctx, db,
+			"insert into "+dbName+".t64(id, b) values (@issue26725_id, @issue26725_bit)")
+		execSQLRequire(t, ctx, db, "set @issue26725_id = 16, @issue26725_bit = true")
+		execSQLRequire(t, ctx, db,
+			"insert into "+dbName+".t64(id, b) values (@issue26725_id, @issue26725_bit)")
+		rows, err = db.QueryContext(ctx,
+			"select cast(b as unsigned) from "+dbName+".t64 where id between 14 and 16 order by id")
+		require.NoError(t, err)
+		defer rows.Close()
+		for _, expected := range []string{"5", "53", "1"} {
+			require.True(t, rows.Next())
+			var actual string
+			require.NoError(t, rows.Scan(&actual))
+			require.Equal(t, expected, actual)
+		}
+		require.False(t, rows.Next())
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
 
 		execSQLRequire(t, ctx, db,
 			"create table "+dbName+".t63(id bigint primary key, b bit(63))")
@@ -127,5 +199,6 @@ func TestIssue26725PreparedBit64Integer(t *testing.T) {
 		}
 		require.False(t, ignoreRows.Next())
 		require.NoError(t, ignoreRows.Err())
+		require.NoError(t, ignoreRows.Close())
 	})
 }
