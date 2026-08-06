@@ -524,6 +524,44 @@ func TestDetermineShuffleForJoinNDVGuard(t *testing.T) {
 	require.False(t, lowNDVJoin.Stats.HashmapStats.Shuffle)
 }
 
+func TestDetermineShuffleForGroupByCanUseDependentHighNDVColumn(t *testing.T) {
+	child := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		Stats: &plan.Stats{
+			Outcnt:       3_000_000,
+			HashmapStats: &plan.HashMapStats{},
+		},
+	}
+	groupBy := make([]*plan.Expr, 3)
+	for i, ndv := range []float64{1_000, 2_000, 100_000} {
+		groupBy[i] = &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Ndv:  ndv,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: int32(i)}},
+		}
+	}
+	agg := &plan.Node{
+		NodeType:       plan.Node_AGG,
+		Children:       []int32{0},
+		GroupBy:        groupBy,
+		GroupByHashKey: []int32{0, 1},
+		Stats: &plan.Stats{
+			Outcnt:      3_000_000,
+			Selectivity: 1,
+			HashmapStats: &plan.HashMapStats{
+				HashmapSize: 3_000_000,
+			},
+		},
+	}
+	builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{child, agg}}}
+
+	determineShuffleForGroupBy(agg, builder)
+
+	require.True(t, agg.Stats.HashmapStats.Shuffle)
+	require.Equal(t, int32(2), agg.Stats.HashmapStats.ShuffleColIdx,
+		"a logical group column determined by the physical key remains a safe distribution key")
+}
+
 func TestDetermineShuffleForJoinFindsEligibleConditionAcrossPredicateOrder(t *testing.T) {
 	joinTypes := []plan.Node_JoinType{
 		plan.Node_INNER,

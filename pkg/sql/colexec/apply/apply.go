@@ -161,6 +161,7 @@ func (ctr *container) probe(ap *Apply, proc *process.Process, result *vm.CallRes
 							return err
 						}
 					}
+					ctr.rbat.SetRowCount(ctr.rbat.RowCount() + 1)
 				}
 				ctr.tfFinish = true
 				break
