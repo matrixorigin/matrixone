@@ -417,16 +417,20 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	if err != nil {
 		return err
 	}
+	if s.diskCache == nil {
+		return nil
+	}
 
 	startLock := time.Now()
 	defer func() {
 		statistic.StatsInfoFromContext(ctx).AddS3FSPrefetchFileIOMergerTimeConsumption(time.Since(startLock))
 	}()
 
-	done, _, _ := s.ioMerger.mergeWithGeneration(IOMergeKey{
+	done, _ := s.ioMerger.Merge(IOMergeKey{
 		Path:       filePath,
 		FullObject: true,
-	}, maxIOWaitDuration, s.diskCache != nil)
+		CacheFill:  true,
+	}, maxIOWaitDuration)
 	if done != nil {
 		defer done()
 	} else {
@@ -435,15 +439,13 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	}
 
 	// load to disk cache
-	if s.diskCache != nil {
-		if err := s.diskCache.SetFile(
-			ctx, path.File,
-			func(ctx context.Context) (io.ReadCloser, error) {
-				return s.newReadCloser(ctx, filePath)
-			},
-		); err != nil {
-			return err
-		}
+	if err := s.diskCache.SetFile(
+		ctx, path.File,
+		func(ctx context.Context) (io.ReadCloser, error) {
+			return s.newReadCloser(ctx, filePath)
+		},
+	); err != nil {
+		return err
 	}
 	return nil
 }
@@ -758,20 +760,20 @@ read_disk_cache:
 	}
 	if mayReadMemoryCache || mayReadDiskCache {
 		// may read caches, merge
+		mergeKey := s.readMergeKey(vector)
+		if mergeKey.FullObject && !mergeKey.CacheFill {
+			// Stream-only reads cannot publish a reusable cache artifact, so
+			// serializing them behind an unrelated request only adds head-of-line
+			// blocking without eliminating any storage read.
+			goto read_s3
+		}
 		LogEvent(ctx, str_ioMerger_Merge_begin)
 		startLock := time.Now()
-		mergeKey := vector.ioMergeKey()
 		waitDuration := maxIOWaitDuration
 		if mergeKey.FullObject {
 			waitDuration = shortIOWaitDuration
 		}
-		cacheProducer := mergeKey.FullObject &&
-			s.shouldStreamFullObjectToDiskCache(vector)
-		done, wait, generation := s.ioMerger.mergeWithGeneration(
-			mergeKey,
-			waitDuration,
-			cacheProducer,
-		)
+		done, generation := s.ioMerger.merge(mergeKey)
 		if done != nil {
 			finishMerge = done
 			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
@@ -780,20 +782,28 @@ read_disk_cache:
 			LogEvent(ctx, str_ioMerger_Merge_end)
 		} else {
 			LogEvent(ctx, str_ioMerger_Merge_wait)
-			wait()
+			completed, waitErr := waitForIOGeneration(ctx, mergeKey, generation, waitDuration)
 			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
 			metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
 			LogEvent(ctx, str_ioMerger_Merge_end)
-			if mergeKey.FullObject && generation.inProgress() {
+			if waitErr != nil {
+				return waitErr
+			}
+			if !completed && mergeKey.FullObject {
 				logicalBytes, spanBytes, expensive := vector.expensiveMinimalRangeRead()
-				if expensive && mayReadDiskCache && generation.cacheProducer {
+				if mergeKey.CacheFill && expensive {
 					LogEvent(ctx, str_ioMerger_Merge_wait_expensive_range,
 						logicalBytes, spanBytes)
 					waitStart := time.Now()
-					completed, waitErr := generation.waitContext(
-						ctx,
-						maxIOWaitDuration,
-					)
+					remainingWaitDuration := maxIOWaitDuration - waitDuration
+					if remainingWaitDuration > 0 {
+						completed, waitErr = waitForIOGeneration(
+							ctx,
+							mergeKey,
+							generation,
+							remainingWaitDuration,
+						)
+					}
 					waitTime := time.Since(waitStart)
 					stats.AddS3FSReadIOMergerTimeConsumption(waitTime)
 					metric.FSReadDurationIOMerger.Observe(waitTime.Seconds())
@@ -819,11 +829,15 @@ read_disk_cache:
 				forceMinimalRangeRead = true
 				goto read_s3
 			}
-			if mayReadMemoryCache {
-				goto read_memory_cache
-			} else {
+			if completed {
+				if mayReadMemoryCache {
+					goto read_memory_cache
+				}
 				goto read_disk_cache
 			}
+			// The local bound expired. Do not join the same generation again;
+			// make bounded follower progress through the normal range read.
+			goto read_s3
 		}
 	}
 
@@ -1202,6 +1216,34 @@ func (s *S3FS) shouldStreamFullObjectToDiskCache(vector *IOVector) bool {
 		}
 	}
 	return true
+}
+
+func (s *S3FS) readMergeKey(vector *IOVector) IOMergeKey {
+	key := vector.ioMergeKey()
+	if key.FullObject {
+		key.CacheFill = s.willCacheFullObject(vector)
+	}
+	return key
+}
+
+func (s *S3FS) willCacheFullObject(vector *IOVector) bool {
+	if s.diskCache == nil || vector.Policy.Any(SkipDiskCacheWrites) {
+		return false
+	}
+	willReadFullObject := false
+	for i := range vector.Entries {
+		entry := &vector.Entries[i]
+		if entry.done {
+			continue
+		}
+		if entry.Size == 0 {
+			return false
+		}
+		if entry.WriterForRead == nil && entry.ReadCloserForRead == nil {
+			willReadFullObject = true
+		}
+	}
+	return willReadFullObject
 }
 
 func (s *S3FS) readFullObjectToDiskCacheStreaming(

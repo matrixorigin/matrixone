@@ -26,20 +26,20 @@ import (
 
 // IOMerger merges multiple I/O requests to single one
 type IOMerger struct {
-	flying sync.Map // IOMergeKey -> *ioMergeGeneration
-}
-
-type ioMergeGeneration struct {
-	done          chan struct{}
-	cacheProducer bool
+	flying sync.Map // IOMergeKey -> chan struct{}
 }
 
 type IOMergeKey struct {
-	Path       string
-	Offset     int64
-	End        int64
+	Path   string
+	Offset int64
+	End    int64
+	Policy Policy
+	// FullObject describes the physical read range. CacheFill additionally
+	// distinguishes requests whose successful leader publishes a reusable
+	// full-object disk-cache entry. Followers must not long-wait a generation
+	// that cannot publish the artifact they intend to reuse.
 	FullObject bool
-	Policy     Policy
+	CacheFill  bool
 }
 
 func NewIOMerger() *IOMerger {
@@ -52,115 +52,14 @@ var maxIOWaitDuration = time.Minute
 
 var shortIOWaitDuration = time.Millisecond * 200
 
-func (i *IOMerger) makeWaitFunc(
-	key IOMergeKey,
-	generation *ioMergeGeneration,
-	maxWaitDuration time.Duration,
-) func() {
-	metric.IOMergerCounterWait.Add(1)
-	return func() {
-		t0 := time.Now()
-		defer func() {
-			metric.IOMergerDurationWait.Observe(time.Since(t0).Seconds())
-		}()
-		deadline := time.Now().Add(maxWaitDuration)
-		for {
-			waitDuration := slowIOWaitDuration
-			if maxWaitDuration > 0 {
-				remaining := time.Until(deadline)
-				if remaining <= 0 {
-					return
-				}
-				waitDuration = min(waitDuration, remaining)
-			}
-			timer := time.NewTimer(waitDuration)
-			select {
-			case <-generation.done:
-				timer.Stop()
-				return
-			case <-timer.C:
-				if maxWaitDuration > 0 && !time.Now().Before(deadline) {
-					// don't wait too long
-					// number of I/O requests may increase, but we don't want to hurt latencies too much.
-					return
-				}
-				logutil.Warn("wait io for too long",
-					zap.Any("wait", time.Since(t0)),
-					zap.Any("key", key),
-				)
-			}
-		}
-	}
-}
-
-func (i *IOMerger) Merge(key IOMergeKey, maxWaitDuration time.Duration) (done func(), wait func()) {
-	done, wait, _ = i.mergeWithGeneration(key, maxWaitDuration, false)
-	return
-}
-
-func (i *IOMerger) mergeWithGeneration(
-	key IOMergeKey,
-	maxWaitDuration time.Duration,
-	cacheProducer bool,
-) (done func(), wait func(), generation *ioMergeGeneration) {
-	if v, ok := i.flying.Load(key); ok {
-		// wait
-		generation = v.(*ioMergeGeneration)
-		return nil, i.makeWaitFunc(key, generation, maxWaitDuration), generation
-	}
-
-	// try initiate
-	generation = &ioMergeGeneration{
-		done:          make(chan struct{}),
-		cacheProducer: cacheProducer,
-	}
-	v, loaded := i.flying.LoadOrStore(key, generation)
-	if loaded {
-		// not the first request, wait
-		generation = v.(*ioMergeGeneration)
-		return nil, i.makeWaitFunc(key, generation, maxWaitDuration), generation
-	}
-
-	// initiated
-	metric.IOMergerCounterInitiate.Add(1)
-	t0 := time.Now()
-	return func() {
-		defer func() {
-			metric.IOMergerDurationInitiate.Observe(time.Since(t0).Seconds())
-		}()
-		i.flying.CompareAndDelete(key, generation)
-		close(generation.done)
-	}, nil, generation
-}
-
-func (i *IOMerger) IsMerging(key IOMergeKey) bool {
-	_, ok := i.flying.Load(key)
-	return ok
-}
-
-func (g *ioMergeGeneration) inProgress() bool {
-	select {
-	case <-g.done:
-		return false
-	default:
-		return true
-	}
-}
-
-// waitContext waits for this exact merge generation. It always lets caller
-// cancellation or the local bound terminate the wait.
-func (g *ioMergeGeneration) waitContext(
+func waitForIOGeneration(
 	ctx context.Context,
+	key IOMergeKey,
+	generation <-chan struct{},
 	maxWaitDuration time.Duration,
 ) (completed bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
-	}
-	if !g.inProgress() {
-		return true, nil
-	}
-	if maxWaitDuration <= 0 {
-		return false, nil
 	}
 
 	metric.IOMergerCounterWait.Add(1)
@@ -168,16 +67,97 @@ func (g *ioMergeGeneration) waitContext(
 	defer func() {
 		metric.IOMergerDurationWait.Observe(time.Since(t0).Seconds())
 	}()
-	timer := time.NewTimer(maxWaitDuration)
-	defer timer.Stop()
-	select {
-	case <-g.done:
-		return true, nil
-	case <-ctx.Done():
-		return false, ctx.Err()
-	case <-timer.C:
+
+	var deadline time.Time
+	if maxWaitDuration > 0 {
+		deadline = t0.Add(maxWaitDuration)
+	}
+	nextWaitDuration := func() (time.Duration, bool) {
+		if deadline.IsZero() {
+			return slowIOWaitDuration, false
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return 0, true
+		}
+		if slowIOWaitDuration <= 0 {
+			return remaining, false
+		}
+		return min(slowIOWaitDuration, remaining), false
+	}
+
+	waitDuration, expired := nextWaitDuration()
+	if expired {
 		return false, nil
 	}
+	if waitDuration <= 0 {
+		select {
+		case <-generation:
+			return true, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+	timer := time.NewTimer(waitDuration)
+	defer timer.Stop()
+	for {
+		select {
+		case <-generation:
+			return true, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-timer.C:
+			waitDuration, expired = nextWaitDuration()
+			if expired {
+				return false, nil
+			}
+			logutil.Warn("wait io for too long",
+				zap.Any("wait", time.Since(t0)),
+				zap.Any("key", key),
+			)
+			timer.Reset(waitDuration)
+		}
+	}
+}
+
+func (i *IOMerger) merge(key IOMergeKey) (func(), chan struct{}) {
+	if v, ok := i.flying.Load(key); ok {
+		return nil, v.(chan struct{})
+	}
+
+	// try initiate
+	generation := make(chan struct{})
+	v, loaded := i.flying.LoadOrStore(key, generation)
+	if loaded {
+		return nil, v.(chan struct{})
+	}
+
+	// initiated
+	metric.IOMergerCounterInitiate.Add(1)
+	t0 := time.Now()
+	return func() {
+		i.flying.Delete(key)
+		close(generation)
+		metric.IOMergerDurationInitiate.Observe(time.Since(t0).Seconds())
+	}, nil
+}
+
+// Merge preserves the original callback API for callers that only need one
+// bounded wait. S3FS and LocalFS use merge directly so a follower can remain
+// bound to the exact generation it collided with across multiple wait phases.
+func (i *IOMerger) Merge(key IOMergeKey, maxWaitDuration time.Duration) (done func(), wait func()) {
+	done, waiter := i.merge(key)
+	if waiter == nil {
+		return done, nil
+	}
+	return nil, func() {
+		_, _ = waitForIOGeneration(context.Background(), key, waiter, maxWaitDuration)
+	}
+}
+
+func (i *IOMerger) IsMerging(key IOMergeKey) bool {
+	_, ok := i.flying.Load(key)
+	return ok
 }
 
 func (i *IOVector) ioMergeKey() IOMergeKey {
