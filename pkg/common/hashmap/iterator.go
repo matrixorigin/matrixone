@@ -15,9 +15,11 @@
 package hashmap
 
 import (
+	"math"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
@@ -56,6 +58,159 @@ func rowHasGrouping(vecs []*vector.Vector, row int) bool {
 		}
 	}
 	return false
+}
+
+func rowHasNull(vecs []*vector.Vector, row int) bool {
+	for _, vec := range vecs {
+		if vec.IsConstNull() || vec.GetNulls().Contains(uint64(row)) {
+			return true
+		}
+	}
+	return false
+}
+
+// markNonMatchingNaNs removes non-reflexive FLOAT keys from an equality
+// hashmap without conflating them with SQL NULL. The underlying map sees a
+// zero ring value; finishNonMatchingKeys restores the non-NULL state with no
+// matching group so MARK joins produce FALSE rather than UNKNOWN.
+func markNonMatchingNaNs(
+	vecs []*vector.Vector,
+	start, count int,
+	zValues []int64,
+	nonMatching []bool,
+) bool {
+	if len(nonMatching) < count {
+		return false
+	}
+	marked := false
+	for _, vec := range vecs {
+		if vec.IsConstNull() {
+			continue
+		}
+		oid := vec.GetType().Oid
+		if oid != types.T_float32 && oid != types.T_float64 &&
+			oid != types.T_array_float32 && oid != types.T_array_float64 &&
+			oid != types.T_array_bf16 && oid != types.T_array_float16 {
+			continue
+		}
+		nulls := vec.GetNulls()
+		grouping := vec.GetGrouping()
+		isConst := vec.IsConst()
+		switch oid {
+		case types.T_float32:
+			values := vector.MustFixedColNoTypeCheck[float32](vec)
+			for i := 0; i < count; i++ {
+				row := start + i
+				if nulls.Contains(uint64(row)) || grouping.Contains(uint64(row)) {
+					continue
+				}
+				valueRow := row
+				if isConst {
+					valueRow = 0
+				}
+				if math.IsNaN(float64(values[valueRow])) {
+					nonMatching[i] = true
+					zValues[i] = 0
+					marked = true
+				}
+			}
+		case types.T_float64:
+			values := vector.MustFixedColNoTypeCheck[float64](vec)
+			for i := 0; i < count; i++ {
+				row := start + i
+				if nulls.Contains(uint64(row)) || grouping.Contains(uint64(row)) {
+					continue
+				}
+				valueRow := row
+				if isConst {
+					valueRow = 0
+				}
+				if math.IsNaN(values[valueRow]) {
+					nonMatching[i] = true
+					zValues[i] = 0
+					marked = true
+				}
+			}
+		case types.T_array_float32, types.T_array_float64,
+			types.T_array_bf16, types.T_array_float16:
+			for i := 0; i < count; i++ {
+				row := start + i
+				if nulls.Contains(uint64(row)) || grouping.Contains(uint64(row)) {
+					continue
+				}
+				valueRow := row
+				if isConst {
+					valueRow = 0
+				}
+				value := vec.GetBytesAt(valueRow)
+				hasNaN := false
+				if oid == types.T_array_float32 {
+					for _, element := range types.BytesToArray[float32](value) {
+						if math.IsNaN(float64(element)) {
+							hasNaN = true
+							break
+						}
+					}
+				} else if oid == types.T_array_float64 {
+					for _, element := range types.BytesToArray[float64](value) {
+						if math.IsNaN(element) {
+							hasNaN = true
+							break
+						}
+					}
+				} else if oid == types.T_array_bf16 {
+					for _, element := range types.BytesToArray[types.BF16](value) {
+						if math.IsNaN(float64(element.ToFloat32())) {
+							hasNaN = true
+							break
+						}
+					}
+				} else {
+					for _, element := range types.BytesToArray[types.Float16](value) {
+						if math.IsNaN(float64(element.ToFloat32())) {
+							hasNaN = true
+							break
+						}
+					}
+				}
+				if hasNaN {
+					nonMatching[i] = true
+					zValues[i] = 0
+					marked = true
+				}
+			}
+		}
+	}
+	return marked
+}
+
+func finishNonMatchingKeys(
+	vecs []*vector.Vector,
+	start int,
+	values []uint64,
+	zValues []int64,
+	nonMatching []bool,
+) {
+	for i, marked := range nonMatching {
+		if !marked || rowHasNull(vecs, start+i) {
+			continue
+		}
+		values[i] = 0
+		zValues[i] = 1
+	}
+}
+
+func prepareNonMatchingMask(mask []bool, count int, enabled bool) []bool {
+	if !enabled {
+		return mask[:0]
+	}
+	if cap(mask) < count {
+		mask = make([]bool, count)
+	} else {
+		mask = mask[:count]
+		clear(mask)
+	}
+	return mask
 }
 
 // MaxStrIteratorCapacity limits how many bytes of backing storage we keep when
@@ -127,8 +282,19 @@ func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector) ([]
 	}
 	copy(itr.zValues[:count], OneInt64s[:count])
 	copy(itr.values[:count], zeroUint64[:count])
+	itr.nonMatching = prepareNonMatchingMask(
+		itr.nonMatching, count, itr.mp.rejectNaN,
+	)
 	itr.encodeHashKeys(vecs, start, count)
+	hasNonMatching := markNonMatchingNaNs(
+		vecs, start, count, itr.zValues[:count], itr.nonMatching,
+	)
 	itr.mp.hashMap.FindStringBatch(itr.strHashStates, itr.keys[:count], itr.values)
+	if hasNonMatching {
+		finishNonMatchingKeys(
+			vecs, start, itr.values[:count], itr.zValues[:count], itr.nonMatching,
+		)
+	}
 	if !itr.mp.hasNull && !itr.mp.groupingAware &&
 		hasGroupingInRange(vecs, start, count) {
 		for i := 0; i < count; i++ {
@@ -143,20 +309,30 @@ func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector) ([]
 
 // Insert a row from multiple columns into the hashmap, return true if it is new, otherwise false
 func (itr *strHashmapIterator) DetectDup(vecs []*vector.Vector, row int) (bool, error) {
-	keys := itr.keys
-	defer func() { keys[0] = keys[0][:0] }()
-	if err := itr.prepareHashKeys(vecs, row, 1); err != nil {
+	if !itr.mp.rejectNaN {
+		keys := itr.keys
+		defer func() { keys[0] = keys[0][:0] }()
+		if err := itr.prepareHashKeys(vecs, row, 1); err != nil {
+			return false, err
+		}
+		itr.encodeHashKeys(vecs, row, 1)
+		if err := itr.mp.hashMap.InsertStringBatch(
+			itr.strHashStates, keys[:1], itr.values[:1],
+		); err != nil {
+			return false, err
+		}
+		if itr.values[0] > itr.mp.rows {
+			itr.mp.rows++
+			return true, nil
+		}
+		return false, nil
+	}
+	before := itr.mp.rows
+	values, zValues, err := itr.Insert(row, 1, vecs)
+	if err != nil {
 		return false, err
 	}
-	itr.encodeHashKeys(vecs, row, 1)
-	if err := itr.mp.hashMap.InsertStringBatch(itr.strHashStates, keys[:1], itr.values[:1]); err != nil {
-		return false, err
-	}
-	if itr.values[0] > itr.mp.rows {
-		itr.mp.rows++
-		return true, nil
-	}
-	return false, nil
+	return zValues[0] != 0 && values[0] > before, nil
 }
 
 func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector) ([]uint64, []int64, error) {
@@ -171,9 +347,15 @@ func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector) (
 		}
 	}()
 	copy(itr.zValues[:count], OneInt64s[:count])
+	itr.nonMatching = prepareNonMatchingMask(
+		itr.nonMatching, count, itr.mp.rejectNaN,
+	)
 	itr.encodeHashKeys(vecs, start, count)
+	hasNonMatching := markNonMatchingNaNs(
+		vecs, start, count, itr.zValues[:count], itr.nonMatching,
+	)
 
-	if itr.mp.hasNull {
+	if itr.mp.hasNull && !itr.mp.rejectNaN {
 		err = itr.mp.hashMap.InsertStringBatch(itr.strHashStates, itr.keys[:count], itr.values)
 	} else {
 		err = itr.mp.hashMap.InsertStringBatchWithRing(itr.zValues, itr.strHashStates, itr.keys[:count], itr.values)
@@ -183,7 +365,10 @@ func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector) (
 	if err != nil {
 		return nil, nil, err
 	}
-	updateHashTableRows(&itr.mp.rows, itr.mp.hasNull, vs, zvs)
+	if hasNonMatching {
+		finishNonMatchingKeys(vecs, start, vs, zvs, itr.nonMatching)
+	}
+	updateHashTableRows(&itr.mp.rows, itr.mp.hasNull && !itr.mp.rejectNaN, vs, zvs)
 	return vs, zvs, err
 }
 
@@ -204,9 +389,20 @@ func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector) ([]
 	copy(itr.keyOffs[:count], zeroUint32)
 	copy(itr.zValues[:count], OneInt64s[:count])
 	copy(itr.values[:count], zeroUint64[:count])
+	itr.nonMatching = prepareNonMatchingMask(
+		itr.nonMatching, count, itr.mp.rejectNaN,
+	)
 	itr.encodeHashKeys(vecs, start, count)
+	hasNonMatching := markNonMatchingNaNs(
+		vecs, start, count, itr.zValues[:count], itr.nonMatching,
+	)
 	copy(itr.hashes[:count], zeroUint64[:count])
 	itr.mp.hashMap.FindBatch(count, itr.hashes[:count], unsafe.Pointer(&itr.keys[0]), itr.values[:count])
+	if hasNonMatching {
+		finishNonMatchingKeys(
+			vecs, start, itr.values[:count], itr.zValues[:count], itr.nonMatching,
+		)
+	}
 	if hasGroupingInRange(vecs, start, count) {
 		for i := 0; i < count; i++ {
 			if rowHasGrouping(vecs, start+i) {
@@ -251,9 +447,15 @@ func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) (
 	}()
 
 	copy(itr.zValues[:count], OneInt64s[:count])
+	itr.nonMatching = prepareNonMatchingMask(
+		itr.nonMatching, count, itr.mp.rejectNaN,
+	)
 	itr.encodeHashKeys(vecs, start, count)
+	hasNonMatching := markNonMatchingNaNs(
+		vecs, start, count, itr.zValues[:count], itr.nonMatching,
+	)
 	copy(itr.hashes[:count], zeroUint64[:count])
-	if itr.mp.hasNull {
+	if itr.mp.hasNull && !itr.mp.rejectNaN {
 		err = itr.mp.hashMap.InsertBatch(count, itr.hashes[:count], unsafe.Pointer(&itr.keys[0]), itr.values)
 	} else {
 		err = itr.mp.hashMap.InsertBatchWithRing(count, itr.zValues, itr.hashes[:count], unsafe.Pointer(&itr.keys[0]), itr.values)
@@ -262,7 +464,10 @@ func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) (
 	if err != nil {
 		return nil, nil, err
 	}
-	updateHashTableRows(&itr.mp.rows, itr.mp.hasNull, vs, zvs)
+	if hasNonMatching {
+		finishNonMatchingKeys(vecs, start, vs, zvs, itr.nonMatching)
+	}
+	updateHashTableRows(&itr.mp.rows, itr.mp.hasNull && !itr.mp.rejectNaN, vs, zvs)
 	return vs, zvs, err
 }
 

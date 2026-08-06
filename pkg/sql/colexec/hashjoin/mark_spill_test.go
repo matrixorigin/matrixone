@@ -15,6 +15,7 @@
 package hashjoin
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -123,6 +124,60 @@ func finishMarkSpillTest(t *testing.T, tc *joinTestCase) {
 	tc.barg.Free(tc.proc, false, nil)
 	tc.proc.Free()
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
+func TestHashMarkJoinNaNIsFalse(t *testing.T) {
+	tests := []struct {
+		name  string
+		typ   types.Type
+		value joinKeyContractValue
+	}{
+		{
+			name:  "float32",
+			typ:   types.T_float32.ToType(),
+			value: joinKeyContractValue{value: math.Float32frombits(0x7fc00001)},
+		},
+		{
+			name:  "float64",
+			typ:   types.T_float64.ToType(),
+			value: joinKeyContractValue{value: math.Float64frombits(0x7ff8000000000001)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tc := newTypedMarkSpillTestCase(t, tt.typ)
+			defer finishMarkSpillTest(t, &tc)
+			tc.arg.IsShuffle = false
+			tc.arg.SpillThreshold = 0
+			tc.barg.IsShuffle = false
+			tc.barg.SpillThreshold = 0
+			tc.barg.RuntimeFilterSpec = nil
+
+			probe := batch.NewWithSize(1)
+			probe.Vecs[0] = makeJoinKeyVector(t, tc.proc, tt.typ, []joinKeyContractValue{tt.value})
+			probe.SetRowCount(1)
+			resetChildrenWithBatch(tc.arg, probe)
+
+			build := batch.NewWithSize(1)
+			build.Vecs[0] = makeJoinKeyVector(t, tc.proc, tt.typ, []joinKeyContractValue{tt.value})
+			build.SetRowCount(1)
+			resetHashBuildChildrenWithBatch(tc.barg, build)
+
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+			require.NoError(t, tc.barg.Prepare(tc.proc))
+			_, err := vm.Exec(tc.barg, tc.proc)
+			require.NoError(t, err)
+			result, err := vm.Exec(tc.arg, tc.proc)
+			require.NoError(t, err)
+			require.NotNil(t, result.Batch)
+			value, isNull := vector.GenerateFunctionFixedTypeParameter[bool](
+				result.Batch.Vecs[1],
+			).GetValue(0)
+			require.False(t, isNull, "NaN is non-NULL and must not produce UNKNOWN")
+			require.False(t, value, "NaN equality is non-reflexive")
+		})
+	}
 }
 
 func TestHashMarkJoinSpillThreeValuedSemantics(t *testing.T) {
