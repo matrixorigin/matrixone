@@ -23,6 +23,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -40,6 +41,8 @@ type testHAKClient struct {
 
 	closeCount int
 	closeErr   error
+
+	notReady bool
 }
 
 func (client *testHAKClient) Close() error {
@@ -63,6 +66,10 @@ func (client *testHAKClient) AllocateIDByKeyWithBatch(ctx context.Context, key s
 }
 
 func (client *testHAKClient) GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
+	if client.notReady {
+		return pb.ClusterDetails{}, nil
+	}
+
 	cd := pb.ClusterDetails{
 		TNStores: []pb.TNStore{
 			{
@@ -94,6 +101,10 @@ func (client *testHAKClient) GetClusterState(ctx context.Context) (pb.CheckerSta
 			Stores: make(map[string]pb.CNStoreInfo),
 		},
 		State: pb.HAKeeperRunning,
+	}
+	if client.notReady {
+		cs.State = pb.HAKeeperCreated
+		return cs, nil
 	}
 	if client.mod == 1 {
 		client.cnt++
@@ -221,6 +232,55 @@ func Test_waitAnyShardReadyLocked(t *testing.T) {
 
 	err = op.waitAnyShardReadyLocked(client)
 	assert.NoError(t, err)
+}
+
+func TestStartupRetryWaitsHonorDeadline(t *testing.T) {
+	tests := []struct {
+		name      string
+		wait      func(*operator, context.Context, logservice.CNHAKeeperClient) error
+		set       func(*ServiceConfig)
+		newClient func() logservice.CNHAKeeperClient
+	}{
+		{
+			name: "hakeeper running",
+			wait: func(op *operator, ctx context.Context, client logservice.CNHAKeeperClient) error {
+				return op.waitHAKeeperRunning(ctx, client)
+			},
+			set: func(cfg *ServiceConfig) {
+				cfg.HAKeeperRunningRetryInterval.Duration = time.Second
+			},
+			newClient: func() logservice.CNHAKeeperClient {
+				return &testHAKClient{notReady: true}
+			},
+		},
+		{
+			name: "tn shard ready",
+			wait: func(op *operator, ctx context.Context, client logservice.CNHAKeeperClient) error {
+				return op.waitAnyShardReady(ctx, client)
+			},
+			set: func(cfg *ServiceConfig) {
+				cfg.TNShardReadyRetryInterval.Duration = time.Second
+			},
+			newClient: func() logservice.CNHAKeeperClient {
+				return &testHAKClient{notReady: true}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := &operator{cfg: newServiceConfig()}
+			op.reset.logger = zap.NewNop()
+			tt.set(&op.cfg)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+			defer cancel()
+
+			started := time.Now()
+			err := tt.wait(op, ctx, tt.newClient())
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.Less(t, time.Since(started), 500*time.Millisecond)
+		})
+	}
 }
 
 //func Test_waitHAKeeperReadyLocked(t *testing.T) {
