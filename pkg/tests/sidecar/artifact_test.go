@@ -191,16 +191,52 @@ func TestWriteFailureArtifactIsDeterministic(t *testing.T) {
 func TestUnorderedArtifactFingerprintPreservesMultiplicity(t *testing.T) {
 	t.Parallel()
 
-	left, err := fingerprintRows(ComparisonUnordered, []Row{{TextCell("a")}, {TextCell("a")}, {TextCell("b")}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	right, err := fingerprintRows(ComparisonUnordered, []Row{{TextCell("a")}, {TextCell("b")}, {TextCell("b")}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	left := fingerprintRows(ComparisonUnordered, []Row{{TextCell("a")}, {TextCell("a")}, {TextCell("b")}})
+	right := fingerprintRows(ComparisonUnordered, []Row{{TextCell("a")}, {TextCell("b")}, {TextCell("b")}})
 	if left == right {
 		t.Fatalf("unordered fingerprints match for different duplicate counts: %s", left)
+	}
+}
+
+func TestWriteFailureArtifactPersistsMalformedObservations(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		cell Cell
+	}{
+		{name: "invalid kind", cell: Cell{Kind: CellInvalid, Data: []byte("adapter-bug")}},
+		{name: "null with data", cell: Cell{Kind: CellNull, Data: []byte("not-null")}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			report := successfulReport()
+			report.Offloaded.Rows[0][0] = test.cell
+			failure := Compare(report)
+			if failure == nil {
+				t.Fatal("Compare() accepted malformed observation")
+			}
+
+			path, err := WriteFailureArtifact(t.TempDir(), report, failure)
+			if err != nil {
+				t.Fatalf("WriteFailureArtifact() error = %v", err)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(data), string(test.cell.Data)) {
+				t.Fatalf("artifact exposed malformed cell data: %s", data)
+			}
+			var metadata artifactMetadata
+			if err := json.Unmarshal(data, &metadata); err != nil {
+				t.Fatal(err)
+			}
+			if metadata.Offloaded.RowCount != 1 || metadata.Offloaded.RowsSHA256 == "" {
+				t.Fatalf("malformed observation was not fingerprinted: %+v", metadata.Offloaded)
+			}
+		})
 	}
 }
 

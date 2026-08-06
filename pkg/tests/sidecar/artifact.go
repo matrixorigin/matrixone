@@ -99,14 +99,8 @@ func WriteFailureArtifact(root string, report Report, failure error) (string, er
 	redact := func(value string) string {
 		return redactArtifactText(value, report.Case.ArtifactRedactValues)
 	}
-	native, err := makeArtifactObservation(report.Native, report.Case.Comparison, redact)
-	if err != nil {
-		return "", errors.Join(moerr.NewInvalidInputNoCtx("encode native failure artifact"), err)
-	}
-	offloaded, err := makeArtifactObservation(report.Offloaded, report.Case.Comparison, redact)
-	if err != nil {
-		return "", errors.Join(moerr.NewInvalidInputNoCtx("encode offloaded failure artifact"), err)
-	}
+	native := makeArtifactObservation(report.Native, report.Case.Comparison, redact)
+	offloaded := makeArtifactObservation(report.Offloaded, report.Case.Comparison, redact)
 
 	metadata := artifactMetadata{
 		CaseID:               redact(report.Case.ID),
@@ -186,11 +180,8 @@ func writePrivateFile(path string, data []byte) (err error) {
 	return nil
 }
 
-func makeArtifactObservation(observation Observation, mode ComparisonMode, redact func(string) string) (artifactObservation, error) {
-	rowsFingerprint, err := fingerprintRows(mode, observation.Rows)
-	if err != nil {
-		return artifactObservation{}, err
-	}
+func makeArtifactObservation(observation Observation, mode ComparisonMode, redact func(string) string) artifactObservation {
+	rowsFingerprint := fingerprintRows(mode, observation.Rows)
 	schema := make([]Column, len(observation.Schema))
 	copy(schema, observation.Schema)
 	for i := range schema {
@@ -211,10 +202,14 @@ func makeArtifactObservation(observation Observation, mode ComparisonMode, redac
 			Message:  redact(observation.Error.Message),
 		}
 	}
-	return result, nil
+	return result
 }
 
-func fingerprintRows(mode ComparisonMode, rows []Row) (string, error) {
+// fingerprintRows is deliberately total for every Observation representable by
+// the model. Failure artifacts are most important when an adapter returned an
+// invalid cell, so diagnostic encoding must not reuse semantic validation from
+// Compare and fail on the same malformed value.
+func fingerprintRows(mode ComparisonMode, rows []Row) string {
 	hash := sha256.New()
 	_, _ = hash.Write([]byte{byte(mode)})
 	var rowCount [8]byte
@@ -222,26 +217,18 @@ func fingerprintRows(mode ComparisonMode, rows []Row) (string, error) {
 	_, _ = hash.Write(rowCount[:])
 
 	if mode == ComparisonOrdered {
-		for i, row := range rows {
-			encoded, err := encodeRow(row)
-			if err != nil {
-				return "", errors.Join(moerr.NewInvalidInputNoCtxf("row %d", i), err)
-			}
-			_, _ = hash.Write(encoded)
+		for _, row := range rows {
+			_, _ = hash.Write(encodeArtifactRow(row))
 		}
-		return hex.EncodeToString(hash.Sum(nil)), nil
+		return hex.EncodeToString(hash.Sum(nil))
 	}
 
 	// Combine fixed-size row digests instead of sorting copied row bodies. Sum
 	// preserves multiplicity, XOR strengthens the diagnostic fingerprint, and
 	// memory remains constant even when a failed test returned many rows.
 	var sum, xor [sha256.Size]byte
-	for i, row := range rows {
-		encoded, err := encodeRow(row)
-		if err != nil {
-			return "", errors.Join(moerr.NewInvalidInputNoCtxf("row %d", i), err)
-		}
-		rowDigest := sha256.Sum256(encoded)
+	for _, row := range rows {
+		rowDigest := sha256.Sum256(encodeArtifactRow(row))
 		carry := uint16(0)
 		for j := sha256.Size - 1; j >= 0; j-- {
 			value := uint16(sum[j]) + uint16(rowDigest[j]) + carry
@@ -252,7 +239,20 @@ func fingerprintRows(mode ComparisonMode, rows []Row) (string, error) {
 	}
 	_, _ = hash.Write(sum[:])
 	_, _ = hash.Write(xor[:])
-	return hex.EncodeToString(hash.Sum(nil)), nil
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func encodeArtifactRow(row Row) []byte {
+	encoded := make([]byte, 8, 8+len(row)*9)
+	binary.BigEndian.PutUint64(encoded, uint64(len(row)))
+	var length [8]byte
+	for _, cell := range row {
+		encoded = append(encoded, byte(cell.Kind))
+		binary.BigEndian.PutUint64(length[:], uint64(len(cell.Data)))
+		encoded = append(encoded, length[:]...)
+		encoded = append(encoded, cell.Data...)
+	}
+	return encoded
 }
 
 func makeArtifactEvidence(evidence ExecutionEvidence) artifactEvidence {

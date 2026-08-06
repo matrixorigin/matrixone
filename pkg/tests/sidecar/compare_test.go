@@ -370,13 +370,13 @@ func TestRunConcurrentCasesKeepEvidenceQueryScoped(t *testing.T) {
 	var workers sync.WaitGroup
 	workers.Add(caseCount)
 	for i := 0; i < caseCount; i++ {
-		go func() {
+		go func(caseIndex int) {
 			defer workers.Done()
 			<-start
-			testCase := baseCase(fmt.Sprintf("concurrent-%02d", i))
+			testCase := baseCase(fmt.Sprintf("concurrent-%02d", caseIndex))
 			_, err := Run(context.Background(), runner, testCase)
 			errorsByCase <- err
-		}()
+		}(i)
 	}
 	close(start)
 	workers.Wait()
