@@ -1913,6 +1913,50 @@ func TestColDef2MysqlColumnStringLengthMetadata(t *testing.T) {
 	}
 }
 
+func Test_setMysqlColumnTypeMetadataFloatingPointDecimals(t *testing.T) {
+	cases := []struct {
+		name     string
+		typ      types.Type
+		decimals uint8
+	}{
+		{
+			name:     "float without display scale",
+			typ:      types.New(types.T_float32, 0, -1),
+			decimals: mysqlDecimalNotSpecified,
+		},
+		{
+			name:     "double without display scale",
+			typ:      types.New(types.T_float64, 0, -1),
+			decimals: mysqlDecimalNotSpecified,
+		},
+		{
+			name:     "computed double without display width",
+			typ:      types.T_float64.ToType(),
+			decimals: mysqlDecimalNotSpecified,
+		},
+		{
+			name:     "float with explicit zero display scale",
+			typ:      types.New(types.T_float32, 6, 0),
+			decimals: 0,
+		},
+		{
+			name:     "double with explicit display scale",
+			typ:      types.New(types.T_float64, 8, 3),
+			decimals: 3,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+
+			setMysqlColumnTypeMetadata(col, tt.typ)
+
+			require.Equal(t, tt.decimals, col.Decimal())
+		})
+	}
+}
+
 func Test_convertRowsIntoBatchError(t *testing.T) {
 	colMysqlTyps := []defines.MysqlType{
 		defines.MYSQL_TYPE_TIMESTAMP,

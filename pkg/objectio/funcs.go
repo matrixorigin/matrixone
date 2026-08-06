@@ -168,32 +168,19 @@ func ReadOneBlockWithMeta(
 
 	blkmeta := meta.GetBlockMeta(uint32(blk))
 	maxSeqnum := blkmeta.GetMaxSeqnum()
+	specialLayout := ResolveSpecialColumnLayout(blkmeta)
 	for i, seqnum := range seqnums {
 		// special columns
 		if seqnum >= SEQNUM_UPPER {
-			metaColCnt := blkmeta.GetMetaColumnCount()
-			switch seqnum {
-			case SEQNUM_COMMITTS:
-				if metaColCnt == 0 {
-					putFillHolder(i, 0)
-					continue
-				}
-				seqnum = metaColCnt - 1
-			case SEQNUM_ABORT:
-				panic("not support")
-			default:
+			var ok bool
+			if seqnum != SEQNUM_COMMITTS && seqnum != SEQNUM_ABORT {
 				panic(fmt.Sprintf("bad path to read special column %d", seqnum))
 			}
-			// Type alone is insufficient: the last user column may itself be
-			// T_TS. A hidden commit-TS column must sit beyond MaxSeqnum.
-			// If the last column is not commits, do not read it:
-			//  1. created by cn
-			//  2. old version tn nonappendable block
-			col := blkmeta.ColumnMeta(seqnum)
-			hasHiddenColumn := metaColCnt > maxSeqnum+1
-			if !hasHiddenColumn || col.DataType() != uint8(types.T_TS) {
+			seqnum, ok = specialLayout.Resolve(seqnum)
+			if !ok {
 				putFillHolder(i, seqnum)
 			} else {
+				col := blkmeta.ColumnMeta(seqnum)
 				ext := col.Location()
 				ioVec.Entries = append(ioVec.Entries, newColumnIOEntry(ext, factory))
 			}

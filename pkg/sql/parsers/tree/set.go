@@ -53,6 +53,7 @@ type VarAssignmentExpr struct {
 	NodeFormatter
 	System   bool
 	Global   bool
+	SetNames bool
 	Name     string
 	Value    Expr
 	Reserved Expr

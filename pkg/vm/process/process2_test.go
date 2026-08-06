@@ -193,8 +193,13 @@ func TestDetachAndRestorePrepareParams(t *testing.T) {
 	require.False(t, proc.GetPrepareParamIsBin(0))
 	require.Equal(t, 1, params.Length(), "detach must not release owned params")
 
+	proc.BorrowPrepareParams(state)
+	require.Same(t, params, proc.GetPrepareParams())
+	require.True(t, proc.GetPrepareParamIsBin(0))
+	require.False(t, proc.Base.prepareParamsOwned)
+
 	proc.Free()
-	require.Equal(t, 1, params.Length(), "transient Process.Free must not release detached params")
+	require.Equal(t, 1, params.Length(), "transient Process.Free must not release borrowed params")
 
 	proc.RestorePrepareParams(state)
 	require.Same(t, params, proc.GetPrepareParams())
@@ -204,4 +209,11 @@ func TestDetachAndRestorePrepareParams(t *testing.T) {
 	proc.Free()
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
+}
+
+func TestGetPrepareParamsAtWithoutParams(t *testing.T) {
+	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
+	value, err := proc.GetPrepareParamsAt(0)
+	require.Error(t, err)
+	require.Nil(t, value)
 }

@@ -17,6 +17,7 @@ package dedupjoin
 import (
 	"math"
 	"sort"
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -273,4 +275,268 @@ func requireDedupTargetBucketReSpills(
 		}
 	}
 	require.GreaterOrEqual(t, bucketRows, spillThreshold)
+}
+
+type dedupRemainingKeyCase struct {
+	name        string
+	typ         types.Type
+	build       any
+	probe       any
+	wantCapture bool
+	filler      func(int) any
+}
+
+func TestDedupJoinRemainingKeyContracts(t *testing.T) {
+	negativeZero := float32(math.Copysign(0, -1))
+	cases := []dedupRemainingKeyCase{
+		{
+			name:        "json-numeric-representation",
+			typ:         types.T_json.ToType(),
+			build:       "1",
+			probe:       "1.0",
+			wantCapture: true,
+			filler: func(i int) any {
+				return strconv.Itoa(i + 100)
+			},
+		},
+		{
+			name:        "vecf32-signed-zero",
+			typ:         types.T_array_float32.ToType(),
+			build:       []float32{1, 0, 3},
+			probe:       []float32{1, negativeZero, 3},
+			wantCapture: true,
+			filler: func(i int) any {
+				return []float32{float32(i + 10), 2, 3}
+			},
+		},
+		{
+			name:  "float32-nan",
+			typ:   types.T_float32.ToType(),
+			build: math.Float32frombits(0x7fc00001),
+			probe: math.Float32frombits(0x7fc00001),
+			filler: func(i int) any {
+				return float32(i + 10)
+			},
+		},
+		{
+			name:  "float64-nan",
+			typ:   types.T_float64.ToType(),
+			build: math.Float64frombits(0x7ff8000000000001),
+			probe: math.Float64frombits(0x7ff8000000000001),
+			filler: func(i int) any {
+				return float64(i + 10)
+			},
+		},
+	}
+	modes := []dedupKeyContractMode{
+		{name: "resident"},
+		{name: "initial-spill", shuffle: true, spillThreshold: hashmap.UnitLimit + 1, wantInitialSpill: true},
+		{name: "re-spill", shuffle: true, spillThreshold: 2, wantInitialSpill: true, wantReSpill: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, mode := range modes {
+				t.Run(mode.name, func(t *testing.T) {
+					runDedupJoinRemainingKeyContract(t, tc, mode)
+				})
+			}
+		})
+	}
+}
+
+func runDedupJoinRemainingKeyContract(
+	t *testing.T,
+	tc dedupRemainingKeyCase,
+	mode dedupKeyContractMode,
+) {
+	proc, ctrl := newCaptureTestProc(t)
+	defer ctrl.Finish()
+	proc.Base.Lim.Size = 8 << 20
+	proc.Base.Lim.SpillSize = 64 << 20
+	var buildBatch, probeBatch *batch.Batch
+	var dedupArg *DedupJoin
+	var buildArg *hashbuild.HashBuild
+	defer func() {
+		if dedupArg != nil {
+			dedupArg.Free(proc, false, nil)
+		}
+		if buildArg != nil {
+			buildArg.Free(proc, false, nil)
+		}
+		if buildBatch != nil {
+			buildBatch.Clean(proc.Mp())
+		}
+		if probeBatch != nil {
+			probeBatch.Clean(proc.Mp())
+		}
+		budget, budgetErr := proc.GetHashBuildBudget()
+		var used, diskUsed, fdUsed uint64
+		if budgetErr == nil {
+			used = budget.Used()
+			diskUsed = budget.SpillDiskUsed()
+			fdUsed = budget.SpillFDUsed()
+		}
+		proc.Free()
+		require.NoError(t, budgetErr)
+		require.Zero(t, used)
+		require.Zero(t, diskUsed)
+		require.Zero(t, fdUsed)
+		require.Zero(t, proc.Mp().CurrNB())
+	}()
+
+	intType := types.T_int32.ToType()
+	conditions := [][]*plan.Expr{
+		{newExpr(0, tc.typ)},
+		{newExpr(0, tc.typ)},
+	}
+	tag++
+	joinMapTag := tag
+
+	const buildRows = hashmap.UnitLimit + 1
+	buildValues := make([]any, buildRows)
+	for i := 0; i < buildRows-1; i++ {
+		buildValues[i] = tc.filler(i)
+	}
+	buildValues[buildRows-1] = tc.build
+	buildKeys := makeDedupContractKeyVector(t, proc, tc.typ, buildValues)
+	buildPlaceholder := vector.NewVec(intType)
+	for i := 0; i < buildRows; i++ {
+		require.NoError(t, vector.AppendFixed(buildPlaceholder, int32(0), true, proc.Mp()))
+	}
+	buildBatch = batch.NewWithSize(2)
+	buildBatch.Vecs[0] = buildKeys
+	buildBatch.Vecs[1] = buildPlaceholder
+	buildBatch.SetRowCount(buildRows)
+	if mode.wantReSpill {
+		requireDedupTargetBucketReSpills(t, buildKeys, buildRows-1, mode.spillThreshold)
+	}
+
+	probeBatch = batch.NewWithSize(2)
+	probeBatch.Vecs[0] = makeDedupContractKeyVector(t, proc, tc.typ, []any{tc.probe})
+	probeBatch.Vecs[1] = vector.NewVec(intType)
+	require.NoError(t, vector.AppendFixed(probeBatch.Vecs[1], int32(42), false, proc.Mp()))
+	probeBatch.SetRowCount(1)
+
+	dedupArg = &DedupJoin{
+		LeftTypes:  []types.Type{tc.typ, intType},
+		RightTypes: []types.Type{tc.typ, intType},
+		Conditions: conditions,
+		Result: []colexec.ResultPos{
+			colexec.NewResultPos(1, 1),
+		},
+		OnDuplicateAction:               plan.Node_FAIL,
+		OldColCapturePlaceholderIdxList: []int32{1},
+		OldColCaptureProbeIdxList:       []int32{1},
+		DelColIdx:                       -1,
+		IsShuffle:                       mode.shuffle,
+		ShuffleIdx:                      0,
+		SpillThreshold:                  mode.spillThreshold,
+		JoinMapTag:                      joinMapTag,
+	}
+	dedupArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{probeBatch}))
+
+	buildArg = &hashbuild.HashBuild{
+		NeedHashMap:      true,
+		NeedBatches:      true,
+		Conditions:       conditions[1],
+		IsDedup:          true,
+		DelColIdx:        -1,
+		IsShuffle:        mode.shuffle,
+		ShuffleIdx:       0,
+		SpillThreshold:   mode.spillThreshold,
+		JoinMapTag:       joinMapTag,
+		JoinMapRefCnt:    1,
+		NeedAllocateSels: false,
+	}
+	if mode.shuffle {
+		buildArg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: joinMapTag + 8100}
+	}
+	installTestAllocation(t, dedupArg, buildArg)
+	buildArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBatch}))
+
+	spillBefore := promtestutil.ToFloat64(
+		metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1"),
+	)
+	reSpillBefore := promtestutil.ToFloat64(
+		metricv2.HashBuildSpillDepthCounter.WithLabelValues("respill", "2"),
+	)
+	require.NoError(t, buildArg.Prepare(proc))
+	require.NoError(t, dedupArg.Prepare(proc))
+	buildResult, err := vm.Exec(buildArg, proc)
+	require.NoError(t, err)
+	require.Nil(t, buildResult.Batch)
+
+	resultRows := 0
+	capturedRows := 0
+	for {
+		result, execErr := vm.Exec(dedupArg, proc)
+		require.NoError(t, execErr)
+		if result.Batch != nil {
+			resultRows += result.Batch.RowCount()
+			captured := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])
+			for row, value := range captured {
+				if result.Batch.Vecs[0].GetNulls().Contains(uint64(row)) {
+					continue
+				}
+				require.Equal(t, int32(42), value)
+				capturedRows++
+			}
+		}
+		if result.Status == vm.ExecStop {
+			break
+		}
+	}
+	require.Equal(t, buildRows, resultRows)
+	if tc.wantCapture {
+		require.Equal(t, 1, capturedRows)
+	} else {
+		require.Zero(t, capturedRows)
+	}
+
+	spillAfter := promtestutil.ToFloat64(
+		metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1"),
+	)
+	reSpillAfter := promtestutil.ToFloat64(
+		metricv2.HashBuildSpillDepthCounter.WithLabelValues("respill", "2"),
+	)
+	if mode.wantInitialSpill {
+		require.Greater(t, spillAfter, spillBefore)
+	} else {
+		require.Equal(t, spillBefore, spillAfter)
+	}
+	if mode.wantReSpill {
+		require.Greater(t, reSpillAfter, reSpillBefore)
+	} else {
+		require.Equal(t, reSpillBefore, reSpillAfter)
+	}
+}
+
+func makeDedupContractKeyVector(
+	t *testing.T,
+	proc *process.Process,
+	typ types.Type,
+	values []any,
+) *vector.Vector {
+	vec := vector.NewVec(typ)
+	for _, value := range values {
+		switch typ.Oid {
+		case types.T_float32:
+			require.NoError(t, vector.AppendFixed(vec, value.(float32), false, proc.Mp()))
+		case types.T_float64:
+			require.NoError(t, vector.AppendFixed(vec, value.(float64), false, proc.Mp()))
+		case types.T_json:
+			jsonValue, err := types.ParseStringToByteJson(value.(string))
+			require.NoError(t, err)
+			encoded, err := types.EncodeJson(jsonValue)
+			require.NoError(t, err)
+			require.NoError(t, vector.AppendBytes(vec, encoded, false, proc.Mp()))
+		case types.T_array_float32:
+			require.NoError(t, vector.AppendBytes(
+				vec, types.ArrayToBytes(value.([]float32)), false, proc.Mp(),
+			))
+		default:
+			t.Fatalf("unsupported dedup key contract type %s", typ.String())
+		}
+	}
+	return vec
 }
