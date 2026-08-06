@@ -35,8 +35,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMongoDBCatalogUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 8)
+func TestUpgradeEntries(t *testing.T) {
+	require.Len(t, tenantUpgEntries, 9)
 	require.Len(t, clusterUpgEntries, 1)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
@@ -51,10 +51,16 @@ func TestMongoDBCatalogUpgradeEntries(t *testing.T) {
 	require.Equal(t, versions.MODIFY_METADATA, characterSets.UpgType)
 	require.Equal(t, sysview.InformationSchemaCharacterSetsData, characterSets.UpgSql)
 	require.Contains(t, strings.ToLower(characterSets.PreSql), "delete from information_schema.character_sets")
+	columns := tenantUpgEntries[8]
+	require.Equal(t, sysview.InformationDBConst, columns.Schema)
+	require.Equal(t, "COLUMNS", columns.TableName)
+	require.Equal(t, versions.MODIFY_VIEW, columns.UpgType)
+	require.Equal(t, sysview.InformationSchemaColumnsDDL, columns.UpgSql)
+	require.Contains(t, strings.ToLower(columns.PreSql), "drop view if exists information_schema.columns")
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 8)
+	require.Len(t, tenantUpgEntries, 9)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
@@ -74,6 +80,44 @@ func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
 	require.Equal(t, "REFERENTIAL_CONSTRAINTS", referentialConstraints.TableName)
 	require.Equal(t, sysview.InformationSchemaReferentialConstraintsDDL, referentialConstraints.UpgSql)
 	require.Contains(t, strings.ToLower(referentialConstraints.PreSql), "drop view if exists information_schema.referential_constraints")
+}
+
+func TestUpgradeInformationSchemaColumnsCheck(t *testing.T) {
+	entry := upgradeInformationSchemaColumns()
+	checkErr := errors.New("check view definition failed")
+	for _, test := range []struct {
+		name       string
+		exists     bool
+		definition string
+		checkErr   error
+		want       bool
+	}{
+		{name: "current definition", exists: true, definition: sysview.InformationSchemaColumnsDDL, want: true},
+		{name: "old definition", exists: true, definition: "old view definition"},
+		{name: "missing view", definition: sysview.InformationSchemaColumnsDDL},
+		{name: "check error", checkErr: checkErr},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			oldCheck := versions.CheckViewDefinition
+			versions.CheckViewDefinition = func(txn executor.TxnExecutor, accountID uint32, schema, viewName string) (bool, string, error) {
+				require.Nil(t, txn)
+				require.Equal(t, uint32(42), accountID)
+				require.Equal(t, sysview.InformationDBConst, schema)
+				require.Equal(t, "COLUMNS", viewName)
+				return test.exists, test.definition, test.checkErr
+			}
+			defer func() { versions.CheckViewDefinition = oldCheck }()
+
+			ok, err := entry.CheckFunc(nil, 42)
+			if test.checkErr != nil {
+				require.ErrorIs(t, err, test.checkErr)
+				require.False(t, ok)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, ok)
+		})
+	}
 }
 
 func TestLegacyForeignKeyMetadataCatalogQueriesUseForeignKeyCatalogOnly(t *testing.T) {
@@ -303,6 +347,8 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 				return true, sysview.InformationSchemaKeyColumnUsageDDL, nil
 			case "REFERENTIAL_CONSTRAINTS":
 				return true, sysview.InformationSchemaReferentialConstraintsDDL, nil
+			case "COLUMNS":
+				return true, sysview.InformationSchemaColumnsDDL, nil
 			default:
 				return false, "", errors.New("unexpected view")
 			}

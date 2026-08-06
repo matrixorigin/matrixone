@@ -32,6 +32,26 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaKeyColumnUsage(),
 	upgradeInformationSchemaReferentialConstraints(),
 	populateInformationSchemaCharacterSets(),
+	upgradeInformationSchemaColumns(),
+}
+
+// Keep this as a separate upgrade entry so tenants that already completed
+// v4.0.6 refresh COLUMNS and expose MySQL-compatible base DATA_TYPE names.
+func upgradeInformationSchemaColumns() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "COLUMNS",
+		UpgType:   versions.MODIFY_VIEW,
+		UpgSql:    sysview.InformationSchemaColumnsDDL,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			exists, viewDef, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "COLUMNS")
+			if err != nil {
+				return false, err
+			}
+			return exists && viewDef == sysview.InformationSchemaColumnsDDL, nil
+		},
+		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.COLUMNS;", sysview.InformationDBConst),
+	}
 }
 
 func addForeignKeyMetadataColumn(column, definition, after string) versions.UpgradeEntry {

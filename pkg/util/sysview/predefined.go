@@ -179,11 +179,12 @@ var (
 		"mc.attnum AS ORDINAL_POSITION,"+
 		"mo_show_visible_bin(mc.att_default,1) as COLUMN_DEFAULT,"+
 		"(case when mc.attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,"+
-		"(case when length(mc.attr_enum) > 0 then "+
+		"lower(case when length(mc.attr_enum) > 0 then "+
 		"  (case when mo_show_visible_bin(mc.atttyp,2) = 'GEOMETRY' then "+
 		"    upper(case when upper(split_part(mc.attr_enum, ';', 1)) like 'SRID=%%' then 'GEOMETRY' else split_part(mc.attr_enum, ';', 1) end) "+
 		"  else upper(split_part(mo_show_visible_bin_enum(mc.atttyp, mc.attr_enum), '(', 1)) end) "+
-		" else mo_show_visible_bin(mc.atttyp,2) end) as DATA_TYPE,"+
+		" else (case when upper(mo_show_visible_bin(mc.atttyp,2)) = 'BOOL' then 'TINYINT' "+
+		"  else split_part(mo_show_visible_bin(mc.atttyp,2), ' ', 1) end) end) as DATA_TYPE,"+
 		"internal_char_length(mc.atttyp) AS CHARACTER_MAXIMUM_LENGTH,"+
 		"internal_char_size(mc.atttyp) AS CHARACTER_OCTET_LENGTH,"+
 		"internal_numeric_precision(mc.atttyp) AS NUMERIC_PRECISION,"+
