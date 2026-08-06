@@ -57,6 +57,13 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	if err != nil {
 		return nil, err
 	}
+	targetAliases := make([]string, len(tblInfo.tableDefs))
+	for alias, idx := range tblInfo.alias {
+		targetAliases[idx] = alias
+	}
+	if err = validateUpdateTargetSubqueries(ctx, stmt, tblInfo.objRef, tblInfo.tableDefs, targetAliases); err != nil {
+		return nil, err
+	}
 
 	// A synchronously-maintained FULLTEXT/IVF index keys its hidden table(s) by the source
 	// primary key but is updated inline; an UPDATE that changes a primary key column would
@@ -93,11 +100,11 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	if err != nil {
 		return nil, err
 	}
-	err = rewriteUpdateQueryLastNode(builder, updatePlanCtxs, lastNodeId)
+	err = rewriteUpdateQueryLastNode(builder, updatePlanCtxs, lastNodeId, stmt.Ignore)
 	if err != nil {
 		return nil, err
 	}
-	err = rewriteGeneratedColumnsForUpdate(builder, updatePlanCtxs, lastNodeId)
+	err = rewriteGeneratedColumnsForUpdate(builder, updatePlanCtxs, lastNodeId, stmt.Ignore)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +191,7 @@ func isDefaultValExpr(e *Expr) bool {
 	return false
 }
 
-func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, lastNodeId int32) error {
+func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, lastNodeId int32, isIgnore bool) error {
 	var err error
 
 	lastNode := builder.qry.Nodes[lastNodeId]
@@ -224,7 +231,8 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 						return err
 					}
 				} else {
-					lastNode.ProjectList[pos], err = forceAssignmentCastExpr(builder.GetContext(), posExpr, col.Typ)
+					lastNode.ProjectList[pos], err = builder.forceProjectedAssignmentCastExpr(
+						posExpr, posExpr, col.Typ, isIgnore)
 					if err != nil {
 						return err
 					}
@@ -257,7 +265,8 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 						return err
 					}
 				} else {
-					lastNode.ProjectList[pos], err = forceAssignmentCastExpr(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
+					lastNode.ProjectList[pos], err = builder.forceProjectedAssignmentCastExpr(
+						lastNode.ProjectList[pos], lastNode.ProjectList[pos], col.Typ, isIgnore)
 					if err != nil {
 						return err
 					}
@@ -269,7 +278,12 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 	return nil
 }
 
-func rewriteGeneratedColumnsForUpdate(builder *QueryBuilder, planCtxs []*dmlPlanCtx, lastNodeId int32) error {
+func rewriteGeneratedColumnsForUpdate(
+	builder *QueryBuilder,
+	planCtxs []*dmlPlanCtx,
+	lastNodeId int32,
+	isIgnore bool,
+) error {
 	selectNode := builder.qry.Nodes[lastNodeId]
 	tableBase := int32(0)
 	for _, upPlanCtx := range planCtxs {
@@ -299,7 +313,11 @@ func rewriteGeneratedColumnsForUpdate(builder *QueryBuilder, planCtxs []*dmlPlan
 					// (or dropped for SET = DEFAULT); should not happen here.
 					continue
 				}
-				genExpr := substituteColRefsInExpr(col.GeneratedCol.Expr, baseLookup, 0)
+				genExpr := builder.applyGeneratedColumnAssignmentCast(
+					DeepCopyExpr(col.GeneratedCol.Expr),
+					isIgnore,
+				)
+				genExpr = substituteColRefsInExpr(genExpr, baseLookup, 0)
 				insertPos := int(tableBase) + len(tableDef.Cols) + upPlanCtx.updateColLength
 				selectNode.ProjectList = append(selectNode.ProjectList, nil)
 				copy(selectNode.ProjectList[insertPos+1:], selectNode.ProjectList[insertPos:])

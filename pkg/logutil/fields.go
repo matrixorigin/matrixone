@@ -23,6 +23,20 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	legacyConnectionCloseEvents = ConnectionCloseEvents{
+		Expected: Event{Name: "connection.close.expected", Message: "connection closed during normal lifecycle"},
+		Failed:   Event{Name: "connection.close.failed", Message: "connection close or I/O failed"},
+	}
+)
+
+// ConnectionCloseEvents gives one stable event population to each terminal
+// connection operation and outcome. Callers define it once at package scope.
+type ConnectionCloseEvents struct {
+	Expected Event
+	Failed   Event
+}
+
 func ConnectionIdField(val uint32) zap.Field { return zap.Uint32("connection_id", val) }
 func QueryField(val string) zap.Field        { return zap.String("query", val) }
 func StatementField(val string) zap.Field    { return zap.String("statement", val) }
@@ -66,15 +80,27 @@ func IsExpectedConnectionCloseError(err error) bool {
 	return strings.Contains(errStr, "use of closed network connection")
 }
 
-// LogConnectionCloseError logs connection close errors at appropriate level.
-// Expected errors (like "use of closed network connection") are logged at DEBUG level,
-// while unexpected errors are logged at ERROR level.
-func LogConnectionCloseError(msg string, err error, fields ...zap.Field) {
-	if IsExpectedConnectionCloseError(err) {
-		allFields := append([]zap.Field{zap.Error(err)}, fields...)
-		Debug(msg+" (connection closed)", allFields...)
-	} else {
-		allFields := append([]zap.Field{zap.Error(err)}, fields...)
-		Error(msg, allFields...)
+// LogConnectionCloseEvent logs a connection operation at an appropriate level.
+// Expected errors (like "use of closed network connection") use Expected at
+// DEBUG, while unexpected errors use Failed at ERROR.
+func LogConnectionCloseEvent(events ConnectionCloseEvents, err error, fields ...zap.Field) {
+	build := func() []zap.Field {
+		out := append([]zap.Field(nil), fields...)
+		return append(out, ErrorFingerprintFields("error", err)...)
 	}
+	if IsExpectedConnectionCloseError(err) {
+		events.Expected.DebugLazy(build)
+	} else {
+		events.Failed.ErrorLazy(build)
+	}
+}
+
+// LogConnectionCloseError is kept for compatibility with callers that have
+// not yet supplied a stable operation-specific Event pair.
+//
+// Deprecated: use LogConnectionCloseEvent with package-level ConnectionCloseEvents.
+func LogConnectionCloseError(msg string, err error, fields ...zap.Field) {
+	out := append([]zap.Field(nil), fields...)
+	out = append(out, StringFingerprintFields("operation", msg)...)
+	LogConnectionCloseEvent(legacyConnectionCloseEvents, err, out...)
 }

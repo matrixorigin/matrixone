@@ -91,6 +91,236 @@ func TestParquetDecimalMappingRegression(t *testing.T) {
 	}, got)
 }
 
+func TestParquetDecimalSameScalePrecisionOverflow(t *testing.T) {
+	proc := testutil.NewProc(t)
+	ctx := context.Background()
+	encodings := []struct {
+		name       string
+		dictionary bool
+	}{
+		{name: "plain"},
+		{name: "dictionary", dictionary: true},
+	}
+	targets := []struct {
+		name            string
+		oid             types.T
+		targetPrecision int32
+		sourcePrecision int
+		byteWidth       int
+	}{
+		{name: "decimal64", oid: types.T_decimal64, targetPrecision: 4, sourcePrecision: 5, byteWidth: 8},
+		{name: "decimal128", oid: types.T_decimal128, targetPrecision: 19, sourcePrecision: 20, byteWidth: 16},
+		{name: "decimal256", oid: types.T_decimal256, targetPrecision: 39, sourcePrecision: 40, byteWidth: 32},
+	}
+
+	for _, encoding := range encodings {
+		for _, target := range targets {
+			t.Run(encoding.name+"/"+target.name, func(t *testing.T) {
+				overflow := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(target.targetPrecision)), nil)
+				encoded, err := bigIntToTwosComplementBytes(ctx, overflow, target.byteWidth)
+				require.NoError(t, err)
+				node := parquet.Decimal(2, target.sourcePrecision, parquet.FixedLenByteArrayType(target.byteWidth))
+				if encoding.dictionary {
+					node = parquet.Encoded(node, &parquet.RLEDictionary)
+				}
+				f, page := writeDictAndGetPage(t, node, []parquet.Value{
+					parquet.FixedLenByteArrayValue(encoded),
+				})
+				if encoding.dictionary {
+					require.NotNil(t, page.Dictionary())
+				}
+
+				vec := vector.NewVec(types.New(target.oid, target.targetPrecision, 2))
+				var h ParquetHandler
+				mp := h.getMapper(f.Root().Column("c"), plan.Type{
+					Id:          int32(target.oid),
+					Width:       target.targetPrecision,
+					Scale:       2,
+					NotNullable: true,
+				})
+				require.NotNil(t, mp)
+				err = mp.mapping(page, proc, vec)
+				require.ErrorContains(t, err, fmt.Sprintf("DECIMAL(%d,2)", target.targetPrecision))
+			})
+		}
+	}
+}
+
+func TestParquetDecimalScaleConversion(t *testing.T) {
+	proc := testutil.NewProc(t)
+	ctx := context.Background()
+	decimalBytes := func(v int64) []byte {
+		b, err := bigIntToTwosComplementBytes(ctx, big.NewInt(v), 8)
+		require.NoError(t, err)
+		return b
+	}
+
+	encodings := []struct {
+		name       string
+		dictionary bool
+	}{
+		{name: "plain"},
+		{name: "dictionary", dictionary: true},
+	}
+	targets := []struct {
+		name  string
+		oid   types.T
+		width int32
+	}{
+		{name: "decimal64", oid: types.T_decimal64, width: 10},
+		{name: "decimal128", oid: types.T_decimal128, width: 20},
+		{name: "decimal256", oid: types.T_decimal256, width: 40},
+	}
+
+	for _, encoding := range encodings {
+		for _, target := range targets {
+			t.Run(encoding.name+"/"+target.name, func(t *testing.T) {
+				node := parquet.Decimal(3, 10, parquet.FixedLenByteArrayType(8))
+				if encoding.dictionary {
+					node = parquet.Encoded(node, &parquet.RLEDictionary)
+				}
+				f, page := writeDictAndGetPage(t, node, []parquet.Value{
+					parquet.FixedLenByteArrayValue(decimalBytes(1235)),
+					parquet.FixedLenByteArrayValue(decimalBytes(-1235)),
+					parquet.FixedLenByteArrayValue(decimalBytes(12345)),
+					parquet.FixedLenByteArrayValue(decimalBytes(1)),
+				})
+				if encoding.dictionary {
+					require.NotNil(t, page.Dictionary())
+				}
+
+				vec := vector.NewVec(types.New(target.oid, target.width, 2))
+				var h ParquetHandler
+				mp := h.getMapper(f.Root().Column("c"), plan.Type{
+					Id:          int32(target.oid),
+					Width:       target.width,
+					Scale:       2,
+					NotNullable: true,
+				})
+				require.NotNil(t, mp)
+				require.NoError(t, mp.mapping(page, proc, vec))
+
+				neg124 := int64(-124)
+				switch target.oid {
+				case types.T_decimal64:
+					require.Equal(t, []types.Decimal64{124, types.Decimal64(neg124), 1235, 0},
+						vector.MustFixedColWithTypeCheck[types.Decimal64](vec))
+				case types.T_decimal128:
+					require.Equal(t, []types.Decimal128{
+						decimal128FromInt64(124), decimal128FromInt64(neg124), decimal128FromInt64(1235), {},
+					}, vector.MustFixedColWithTypeCheck[types.Decimal128](vec))
+				case types.T_decimal256:
+					require.Equal(t, []types.Decimal256{
+						decimal256FromInt64(124), decimal256FromInt64(neg124), decimal256FromInt64(1235), {},
+					}, vector.MustFixedColWithTypeCheck[types.Decimal256](vec))
+				}
+			})
+		}
+	}
+
+	t.Run("source precision exceeds decimal256", func(t *testing.T) {
+		tenth := new(big.Int).Exp(big.NewInt(10), big.NewInt(99), nil)
+		encode := func(value *big.Int) []byte {
+			b, err := bigIntToTwosComplementBytes(ctx, value, 43)
+			require.NoError(t, err)
+			return b
+		}
+		f, page := writeDictAndGetPage(t,
+			parquet.Decimal(100, 100, parquet.FixedLenByteArrayType(43)),
+			[]parquet.Value{
+				parquet.FixedLenByteArrayValue(encode(big.NewInt(0))),
+				parquet.FixedLenByteArrayValue(encode(tenth)),
+				parquet.FixedLenByteArrayValue(encode(new(big.Int).Neg(tenth))),
+			})
+
+		vec := vector.NewVec(types.New(types.T_decimal64, 10, 2))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{
+			Id:          int32(types.T_decimal64),
+			Width:       10,
+			Scale:       2,
+			NotNullable: true,
+		})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		neg10 := int64(-10)
+		require.Equal(t, []types.Decimal64{0, 10, types.Decimal64(neg10)},
+			vector.MustFixedColWithTypeCheck[types.Decimal64](vec))
+	})
+}
+
+func TestParquetDecimalScaleConversionBounds(t *testing.T) {
+	ctx := context.Background()
+	sourceType := parquet.Decimal(2, 9, parquet.Int64Type).Type()
+
+	t.Run("scale up", func(t *testing.T) {
+		got, err := parquetDecimalValueToTargetBigInt(ctx, sourceType, parquet.Int64Value(123), 7, 4)
+		require.NoError(t, err)
+		require.Equal(t, "12300", got.String())
+	})
+
+	t.Run("unchanged scale", func(t *testing.T) {
+		got, err := parquetDecimalValueToTargetBigInt(ctx, sourceType, parquet.Int64Value(-123), 3, 2)
+		require.NoError(t, err)
+		require.Equal(t, "-123", got.String())
+	})
+
+	t.Run("invalid scale", func(t *testing.T) {
+		_, err := parquetDecimalValueToTargetBigInt(ctx, sourceType, parquet.Int64Value(1), 9, -1)
+		require.Error(t, err)
+	})
+
+	t.Run("unsupported physical type", func(t *testing.T) {
+		_, err := parquetDecimalValueToTargetBigInt(ctx, parquet.BooleanType, parquet.BooleanValue(true), 9, 0)
+		require.Error(t, err)
+	})
+
+	t.Run("scale up precision overflow", func(t *testing.T) {
+		_, err := parquetDecimalValueToTargetBigInt(ctx, sourceType, parquet.Int64Value(123), 4, 4)
+		require.Error(t, err)
+	})
+
+	t.Run("rounding precision overflow", func(t *testing.T) {
+		st := parquet.Decimal(1, 3, parquet.Int32Type).Type()
+		_, err := parquetDecimalValueToTargetBigInt(ctx, st, parquet.Int32Value(999), 2, 0)
+		require.Error(t, err)
+	})
+
+	encode := func(value *big.Int) parquet.Value {
+		b, err := bigIntToTwosComplementBytes(ctx, value, 43)
+		require.NoError(t, err)
+		return parquet.FixedLenByteArrayValue(b)
+	}
+	wideSourceType := parquet.Decimal(0, 100, parquet.FixedLenByteArrayType(43)).Type()
+
+	t.Run("decimal64 storage overflow", func(t *testing.T) {
+		_, err := parquetDecimalValueToDecimal64(ctx, wideSourceType,
+			encode(new(big.Int).Lsh(big.NewInt(1), 63)), 100, 0)
+		require.Error(t, err)
+	})
+
+	t.Run("decimal128 storage overflow", func(t *testing.T) {
+		_, err := parquetDecimalValueToDecimal128(ctx, wideSourceType,
+			encode(new(big.Int).Lsh(big.NewInt(1), 127)), 100, 0)
+		require.Error(t, err)
+	})
+
+	t.Run("decimal256 storage overflow", func(t *testing.T) {
+		_, err := parquetDecimalValueToDecimal256(ctx, wideSourceType,
+			encode(new(big.Int).Lsh(big.NewInt(1), 255)), 100, 0)
+		require.Error(t, err)
+	})
+
+	t.Run("target conversion error", func(t *testing.T) {
+		_, err := parquetDecimalValueToDecimal64(ctx, parquet.BooleanType, parquet.BooleanValue(true), 9, 0)
+		require.Error(t, err)
+		_, err = parquetDecimalValueToDecimal128(ctx, parquet.BooleanType, parquet.BooleanValue(true), 9, 0)
+		require.Error(t, err)
+		_, err = parquetDecimalValueToDecimal256(ctx, parquet.BooleanType, parquet.BooleanValue(true), 9, 0)
+		require.Error(t, err)
+	})
+}
+
 func TestParquetOpenFileUsesIcebergObjectIORef(t *testing.T) {
 	ctx := context.Background()
 	var buf bytes.Buffer
@@ -501,6 +731,29 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, [][]float32{{1.25, 2.25, 3.25}}, vector.MustArrayCol[float32](vec))
+	})
+
+	t.Run("double list to vecf32 rejects overflow", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			value float64
+		}{
+			{name: "positive", value: 1e100},
+			{name: "negative", value: -1e100},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				f, page := writeListAndGetPage(t, parquet.Leaf(parquet.DoubleType), []parquet.Row{{
+					parquet.DoubleValue(tc.value).Level(0, 1, 0),
+				}})
+
+				var h ParquetHandler
+				_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 1})
+				require.NotNil(t, mp)
+
+				vec := vector.NewVec(types.New(types.T_array_float32, 1, 0))
+				require.ErrorContains(t, mp.mapping(page, proc, vec), "overflows FLOAT")
+			})
+		}
 	})
 
 	t.Run("dimension mismatch", func(t *testing.T) {
@@ -1515,6 +1768,72 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 	})
 }
 
+func TestParquetFloat32Overflow(t *testing.T) {
+	proc := testutil.NewProc(t)
+	assertOverflow := func(t *testing.T, f *parquet.File, page parquet.Page) {
+		t.Helper()
+		vec := vector.NewVec(types.T_float32.ToType())
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_float32), NotNullable: true})
+		require.NotNil(t, mp)
+		require.ErrorContains(t, mp.mapping(page, proc, vec), "overflows FLOAT")
+	}
+
+	for _, tc := range []struct {
+		name       string
+		value      float64
+		dictionary bool
+	}{
+		{name: "plain positive", value: 1e100},
+		{name: "plain negative", value: -1e100},
+		{name: "dictionary positive", value: 1e100, dictionary: true},
+		{name: "dictionary negative", value: -1e100, dictionary: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.dictionary {
+				f, page := writeDictAndGetPage(t,
+					parquet.Encoded(parquet.Leaf(parquet.DoubleType), &parquet.RLEDictionary),
+					[]parquet.Value{parquet.DoubleValue(tc.value)},
+				)
+				assertOverflow(t, f, page)
+				return
+			}
+			f, page := writeColumnAndGetPage(t, parquet.Leaf(parquet.DoubleType), []parquet.Row{{
+				parquet.DoubleValue(tc.value).Level(0, 0, 0),
+			}})
+			assertOverflow(t, f, page)
+		})
+	}
+
+	t.Run("decimal positive and negative", func(t *testing.T) {
+		magnitude := new(big.Int).Exp(big.NewInt(10), big.NewInt(39), nil)
+		for _, tc := range []struct {
+			name  string
+			value *big.Int
+		}{
+			{name: "positive", value: magnitude},
+			{name: "negative", value: new(big.Int).Neg(magnitude)},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				data, err := bigIntToTwosComplementBytes(context.Background(), tc.value, 17)
+				require.NoError(t, err)
+				f, page := writeColumnAndGetPage(t, parquet.Decimal(0, 40, parquet.FixedLenByteArrayType(17)), []parquet.Row{{
+					parquet.FixedLenByteArrayValue(data).Level(0, 0, 0),
+				}})
+				assertOverflow(t, f, page)
+			})
+		}
+	})
+
+	t.Run("accepts finite boundaries", func(t *testing.T) {
+		for _, value := range []float64{math.MaxFloat32, -math.MaxFloat32} {
+			converted, err := parquetFloat64ToFloat32(context.Background(), value)
+			require.NoError(t, err)
+			require.Equal(t, float32(value), converted)
+		}
+	})
+}
+
 func TestParquetCrossTypeHelperCoverage(t *testing.T) {
 	ctx := context.Background()
 
@@ -1526,6 +1845,9 @@ func TestParquetCrossTypeHelperCoverage(t *testing.T) {
 	require.True(t, useRawIntegerDecimalMapping(parquet.Int32Type, 0, 0))
 	require.False(t, useRawIntegerDecimalMapping(parquet.BooleanType, 0, 0))
 	require.False(t, useRawIntegerDecimalMapping(decimalInt32, 0, 0))
+	require.True(t, canUseRawDecimalMapping(decimalInt32, 9, 2))
+	require.False(t, canUseRawDecimalMapping(decimalInt32, 8, 2))
+	require.False(t, canUseRawDecimalMapping(decimalInt32, 9, 3))
 
 	boolVal, err := parquetValueToBool(ctx, decimalInt32, parquet.Int32Value(100))
 	require.NoError(t, err)
@@ -2184,6 +2506,7 @@ func TestParquet_Mappers_MoreIntsAndStringDict(t *testing.T) {
 
 func TestParquet_Time_Timestamp_Datetime_Units(t *testing.T) {
 	proc := testutil.NewProc(t)
+	proc.Base.SessionInfo.TimeZone = time.UTC
 	// TIME nanos non-dict
 	{
 		st := parquet.Time(parquet.Nanosecond).Type()
@@ -2254,6 +2577,7 @@ func TestParquet_Time_Timestamp_Datetime_Units(t *testing.T) {
 
 func TestParquet_Dictionary_Datetime(t *testing.T) {
 	proc := testutil.NewProc(t)
+	proc.Base.SessionInfo.TimeZone = time.UTC
 
 	// DATETIME nanos dictionary (int64 nanos)
 	{
@@ -2313,6 +2637,63 @@ func TestParquet_Dictionary_Datetime(t *testing.T) {
 			types.Datetime(types.UnixMicroToTimestamp(4_000)),
 			types.Datetime(types.UnixMicroToTimestamp(3_000)),
 		}, got)
+	}
+}
+
+func TestParquetTimestampToDatetimeUsesSessionTimeZone(t *testing.T) {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	require.NoError(t, err)
+	proc := testutil.NewProc(t)
+	proc.Base.SessionInfo.TimeZone = loc
+
+	micros := time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC).UnixMicro()
+	for _, tc := range []struct {
+		name  string
+		unit  parquet.TimeUnit
+		value int64
+	}{
+		{name: "nanos", unit: parquet.Nanosecond, value: micros * 1000},
+		{name: "micros", unit: parquet.Microsecond, value: micros},
+		{name: "millis", unit: parquet.Millisecond, value: micros / 1000},
+	} {
+		for _, adjusted := range []bool{true, false} {
+			for _, dictionary := range []bool{false, true} {
+				name := fmt.Sprintf("%s/adjusted=%t/dictionary=%t", tc.name, adjusted, dictionary)
+				t.Run(name, func(t *testing.T) {
+					node := parquet.TimestampAdjusted(tc.unit, adjusted)
+					var f *parquet.File
+					var page parquet.Page
+					if dictionary {
+						f, page = writeDictAndGetPage(t, parquet.Encoded(node, &parquet.RLEDictionary), []parquet.Value{
+							parquet.Int64Value(tc.value),
+							parquet.Int64Value(tc.value),
+						})
+					} else {
+						f, page = writeColumnAndGetPage(t, node, []parquet.Row{{
+							parquet.Int64Value(tc.value).Level(0, 0, 0),
+						}})
+					}
+
+					vec := vector.NewVec(types.T_datetime.ToType())
+					var h ParquetHandler
+					mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_datetime), NotNullable: true})
+					require.NotNil(t, mp)
+					require.NoError(t, mp.mapping(page, proc, vec))
+
+					wantText := "2024-01-01 00:00:00"
+					if adjusted {
+						wantText = "2024-01-01 08:00:00"
+					}
+					want, err := types.ParseDatetime(wantText, 0)
+					require.NoError(t, err)
+					got := vector.MustFixedColWithTypeCheck[types.Datetime](vec)
+					require.NotEmpty(t, got)
+					for _, value := range got {
+						require.Equal(t, want, value)
+					}
+				})
+			}
+		}
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"context"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -40,11 +41,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"go.uber.org/zap"
+)
+
+var (
+	iscpExecutorReadyTimeout = 2 * time.Second
+	iscpGetExecutorRuntimeFn = iscp.GetExecutorRuntime
 )
 
 func (s *service) initQueryService() error {
@@ -107,6 +114,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_CtlPrefetchOnSubscribed, s.handleCtlPrefetchOnSubscribed, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_ISCPDrainConsumer, s.handleISCPDrainConsumer, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_IcebergCacheInvalidate, s.handleIcebergCacheInvalidate, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_MongoDBClientRetire, s.handleMongoDBClientRetire, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -202,17 +210,6 @@ func (s *service) handleISCPDrainConsumer(ctx context.Context, req *query.Reques
 		return moerr.NewInternalError(ctx, "bad request")
 	}
 	r := req.ISCPDrainConsumerRequest
-	exec, ok := iscp.GetExecutorRuntime(s.cfg.UUID)
-	if !ok || exec == nil {
-		return moerr.NewInternalErrorf(
-			ctx,
-			"cannot confirm ISCP consumer quiescence on CN %s for tableID=%d jobName=%s jobID=%d",
-			s.cfg.UUID,
-			r.TableID,
-			r.JobName,
-			r.JobID,
-		)
-	}
 	key := iscp.NewJobRuntimeKey(r.AccountID, r.TableID, r.JobName, r.JobID)
 	if r.RemoveFenceOnly {
 		if _, msg, injected := fault.TriggerFault(objectio.FJ_ISCPCancelRemoveFenceError); injected {
@@ -221,12 +218,16 @@ func (s *service) handleISCPDrainConsumer(ctx context.Context, req *query.Reques
 			}
 			return moerr.NewInternalErrorNoCtxf("injected ISCP remove fence error: %s", msg)
 		}
-		exec.RemoveJobFence(key)
+		iscp.RemoveCNJobFence(s.cfg.UUID, key)
 		resp.ISCPDrainConsumerResponse = &query.ISCPDrainConsumerResponse{Success: true}
 		return nil
 	}
 	if r.RenewFenceOnly {
-		if !exec.RenewJobFence(key, iscp.RollbackFenceTTL()) {
+		ttl := iscp.RollbackFenceTTL()
+		// Renewal must never create a fence. A delayed renew can be processed
+		// after rollback cleanup; requiring the CN fence to exist makes remove
+		// terminal even when RPC handling is reordered.
+		if !iscp.RenewCNJobFence(s.cfg.UUID, key, ttl) {
 			return moerr.NewInternalErrorf(
 				ctx,
 				"cannot renew ISCP consumer quiescence fence on CN %s for tableID=%d jobName=%s jobID=%d",
@@ -239,12 +240,61 @@ func (s *service) handleISCPDrainConsumer(ctx context.Context, req *query.Reques
 		resp.ISCPDrainConsumerResponse = &query.ISCPDrainConsumerResponse{Success: true}
 		return nil
 	}
+
+	// Install the CN-scoped fence before looking up the executor. This closes
+	// the task-assignment/readiness gap: a replacement executor generation on
+	// this CN observes the fence even if it is published after this request.
+	iscp.InstallCNJobFence(s.cfg.UUID, key, iscp.RollbackFenceTTL())
+	// A daemon task publishes task_runner before its executor has completed
+	// recovery and registered its runtime.
+	readyCtx, cancel := context.WithTimeout(ctx, iscpExecutorReadyTimeout)
+	defer cancel()
+	exec, ok := getISCPExecutorRuntime(readyCtx, s.cfg.UUID)
+	if !ok || exec == nil {
+		exec, ok = waitISCPExecutorRuntime(readyCtx, s.cfg.UUID)
+	}
+	if !ok || exec == nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// This code is preserved by queryservice's response error envelope and
+		// is retried by the compile-side drain path only.
+		return moerr.NewRetryForCNRollingRestart()
+	}
 	if err := exec.CancelAndDrainJobConsumer(ctx, r.AccountID, r.TableID, r.JobName, r.JobID); err != nil {
 		exec.RemoveJobFence(key)
 		return err
 	}
 	resp.ISCPDrainConsumerResponse = &query.ISCPDrainConsumerResponse{Success: true}
 	return nil
+}
+
+func getISCPExecutorRuntime(ctx context.Context, cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
+	if _, _, injected := fault.TriggerFaultWithContext(ctx, objectio.FJ_ISCPCancelExecutorNotReady); injected {
+		return nil, false
+	}
+	return iscpGetExecutorRuntimeFn(cnUUID)
+}
+
+func waitISCPExecutorRuntime(ctx context.Context, cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
+	if ctx.Err() != nil {
+		return nil, false
+	}
+	if exec, ok := getISCPExecutorRuntime(ctx, cnUUID); ok && exec != nil {
+		return exec, true
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, false
+		case <-ticker.C:
+			if exec, ok := getISCPExecutorRuntime(ctx, cnUUID); ok && exec != nil {
+				return exec, true
+			}
+		}
+	}
 }
 
 // handleGetLockInfo sends the lock info on current cn to another cn that needs.
@@ -727,6 +777,32 @@ func (s *service) handleIcebergCacheInvalidate(
 		return err
 	}
 	resp.IcebergCacheInvalidateResponse.RemovedEntries = int64(removed)
+	return nil
+}
+
+func (s *service) handleMongoDBClientRetire(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+	if req == nil {
+		return moerr.NewInternalError(ctx, "invalid MongoDB client retirement request")
+	}
+	value, ok := moruntime.ServiceRuntime(s.serviceID()).GetGlobalVariables(sqlmongodb.RuntimeDependenciesKey)
+	if !ok || value == nil {
+		resp.MongoDBClientRetireResponse.Success = true
+		return nil
+	}
+	dependencies, ok := value.(*sqlmongodb.RuntimeDependencies)
+	if !ok {
+		return moerr.NewInternalError(ctx, "invalid MongoDB runtime dependencies")
+	}
+	payload := req.GetMongoDBClientRetireRequest()
+	if err := (sqlmongodb.ClientRetirement{
+		AccountID: payload.AccountID, ConnectionID: payload.ConnectionID,
+		VersionExclusive: payload.VersionExclusive,
+	}).Apply(dependencies.Pool); err != nil {
+		return err
+	}
+	resp.MongoDBClientRetireResponse.Success = true
 	return nil
 }
 

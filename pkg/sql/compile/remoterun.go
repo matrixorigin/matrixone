@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"maps"
 	"time"
 	"unsafe"
 
@@ -55,6 +56,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
@@ -69,7 +71,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
@@ -170,10 +171,16 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 func encodeProcessInfo(
 	proc *process.Process,
 	sql string,
+	remoteFragmentCounts map[string]uint32,
+	remoteExecutionID uuid.UUID,
 ) ([]byte, error) {
 	v, err := proc.BuildProcessInfo(sql)
 	if err != nil {
 		return nil, err
+	}
+	v.RemoteFragmentCounts = maps.Clone(remoteFragmentCounts)
+	if remoteExecutionID != uuid.Nil {
+		v.RemoteExecutionId = append([]byte(nil), remoteExecutionID[:]...)
 	}
 	return v.Marshal()
 }
@@ -523,6 +530,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			PkTyp:              t.PkTyp,
 			BuildIdx:           int32(t.BuildIdx),
 			IfInsertFromUnique: t.IfInsertFromUnique,
+			RuntimeFilterSpec:  t.RuntimeFilterSpec,
 		}
 	case *preinsert.PreInsert:
 		in.PreInsert = &pipeline.PreInsert{
@@ -592,12 +600,16 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			}
 		}
 	case *group.Group:
+		if err := validateRemoteAggregateProtocol(proc, t.Aggs); err != nil {
+			return ctxId, nil, err
+		}
 		in.Agg = &pipeline.Group{
-			NeedEval:     t.NeedEval,
-			SpillMem:     t.SpillMem,
-			GroupingFlag: t.GroupingFlag,
-			Exprs:        t.GroupBy,
-			Aggs:         convertToPipelineAggregates(t.Aggs),
+			NeedEval:       t.NeedEval,
+			SpillMem:       t.SpillMem,
+			GroupingFlag:   t.GroupingFlag,
+			Exprs:          t.GroupBy,
+			Aggs:           convertToPipelineAggregates(t.Aggs),
+			GroupByHashKey: t.GroupByHashKey,
 		}
 		in.ProjectList = t.ProjectList
 	case *sample.Sample:
@@ -684,8 +696,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *mergerecursive.MergeRecursive:
 	case *group.MergeGroup:
 		in.Agg = &pipeline.Group{
-			SpillMem: t.SpillMem,
-			Aggs:     convertToPipelineAggregates(t.Aggs),
+			SpillMem:       t.SpillMem,
+			Aggs:           convertToPipelineAggregates(t.Aggs),
+			GroupByHashKey: t.GroupByHashKey,
 		}
 		in.ProjectList = t.ProjectList
 		EncodeMergeGroup(t, in.Agg)
@@ -711,7 +724,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IsSingle:               t.IsSingle,
 			IndexReaderParam:       t.IndexReaderParam,
 			RuntimeFilterProbeList: t.RuntimeFilterSpecs,
+			FulltextSourceRef:      t.FulltextSourceRef,
+			FulltextIndexRef:       t.FulltextIndexRef,
 		}
+		in.Limit = t.Limit
 
 	case *external.External:
 		in.ExternalScan = &pipeline.ExternalScan{
@@ -739,12 +755,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IcebergDeleteSpillEnabled:   t.Es.IcebergDeleteSpillEnabled,
 		}
 		in.ProjectList = t.ProjectList
-	case *source.Source:
-		in.StreamScan = &pipeline.StreamScan{
-			TblDef: t.TblDef,
-			Limit:  t.Limit,
-			Offset: t.Offset,
-		}
+	case *mongoscan.MongoScan:
+		in.MongodbScan = t.Scan
 		in.ProjectList = t.ProjectList
 	case *table_scan.TableScan:
 		in.TableScan = &pipeline.TableScan{}
@@ -858,6 +870,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IsSingle:               t.TableFunction.IsSingle,
 			IndexReaderParam:       t.TableFunction.IndexReaderParam,
 			RuntimeFilterProbeList: t.TableFunction.RuntimeFilterSpecs,
+			FulltextSourceRef:      t.TableFunction.FulltextSourceRef,
+			FulltextIndexRef:       t.TableFunction.FulltextIndexRef,
 		}
 	case *multi_update.MultiUpdate:
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
@@ -867,6 +881,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 				TableDef:              muCtx.TableDef,
 				SkipInsertOnNullPk:    muCtx.SkipInsertOnNullPk,
 				InsertPkColIdx:        int32(muCtx.InsertPkColIdx),
+				IgnoreAffectedRows:    muCtx.IgnoreAffectedRows,
 				CountDeleteAffectRows: t.CountDeleteAffectRows,
 			}
 
@@ -995,11 +1010,11 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		lockArg := lockop.NewArgumentByEngine(eng)
 		for _, target := range t.Targets {
 			typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-			lockArg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, target.PartitionColIdxInBat, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
+			lockArg.AddLockTargetWithMode(target.GetTableId(), target.GetObjRef(), target.GetMode(), target.GetPrimaryColIdxInBat(), typ, target.PartitionColIdxInBat, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 		}
 		for _, target := range t.Targets {
 			if target.LockTable {
-				lockArg.LockTable(target.TableId, target.ChangeDef)
+				lockArg.LockTableWithMode(target.TableId, target.Mode, target.ChangeDef)
 			}
 		}
 		op = lockArg
@@ -1021,6 +1036,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.PkTyp = t.PkTyp
 		arg.BuildIdx = int(t.BuildIdx)
 		arg.IfInsertFromUnique = t.IfInsertFromUnique
+		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
 		op = arg
 	case vm.Shuffle:
 		t := opr.GetShuffle()
@@ -1083,6 +1099,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.SpillMem = t.SpillMem
 		arg.GroupingFlag = t.GroupingFlag
 		arg.GroupBy = t.Exprs
+		arg.GroupByHashKey = t.GroupByHashKey
 		arg.Aggs = convertToAggregates(t.Aggs)
 		arg.ProjectList = opr.ProjectList
 		op = arg
@@ -1105,6 +1122,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IsShuffle = t.IsShuffle
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.JoinMapTag = t.JoinMapTag
+		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.Limit:
 		op = limit.NewArgument().WithLimit(opr.Limit)
@@ -1186,6 +1204,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetAgg()
 		arg.SpillMem = t.SpillMem
 		arg.Aggs = convertToAggregates(t.Aggs)
+		arg.GroupByHashKey = t.GroupByHashKey
 		arg.ProjectList = opr.ProjectList
 		op = arg
 		DecodeMergeGroup(op.(*group.MergeGroup), opr.Agg)
@@ -1208,6 +1227,9 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IsSingle = opr.TableFunction.IsSingle
 		arg.IndexReaderParam = opr.TableFunction.IndexReaderParam
 		arg.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
+		arg.FulltextSourceRef = opr.TableFunction.FulltextSourceRef
+		arg.FulltextIndexRef = opr.TableFunction.FulltextIndexRef
+		arg.Limit = opr.Limit
 		op = arg
 	case vm.External:
 		t := opr.GetExternalScan()
@@ -1245,14 +1267,9 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			},
 		)
 		op.(*external.External).ProjectList = opr.ProjectList
-	case vm.Source:
-		t := opr.GetStreamScan()
-		arg := source.NewArgument()
-		arg.TblDef = t.TblDef
-		arg.Limit = t.Limit
-		arg.Offset = t.Offset
-		arg.ProjectList = opr.ProjectList
-		op = arg
+	case vm.MongoScan:
+		op = mongoscan.NewArgument().WithScan(opr.GetMongodbScan())
+		op.(*mongoscan.MongoScan).ProjectList = opr.ProjectList
 	case vm.TableScan:
 		ts := table_scan.NewArgument().WithTypes(opr.TableScan.Types)
 		ts.FilterExprs = opr.TableScan.FilterExprs
@@ -1320,6 +1337,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.UpdateColExprList = t.UpdateColExprList
 		arg.OldColCapturePlaceholderIdxList = t.OldColCapturePlaceholderIdxList
 		arg.OldColCaptureProbeIdxList = t.OldColCaptureProbeIdxList
+		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.RightDedupJoin:
 		arg := rightdedupjoin.NewArgument()
@@ -1338,6 +1356,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DelColIdx = t.DelColIdx
 		arg.UpdateColIdxList = t.UpdateColIdxList
 		arg.UpdateColExprList = t.UpdateColExprList
+		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.Apply:
 		arg := apply.NewArgument()
@@ -1354,6 +1373,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
 		arg.TableFunction.IndexReaderParam = opr.TableFunction.IndexReaderParam
 		arg.TableFunction.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
+		arg.TableFunction.FulltextSourceRef = opr.TableFunction.FulltextSourceRef
+		arg.TableFunction.FulltextIndexRef = opr.TableFunction.FulltextIndexRef
 		op = arg
 	case vm.MultiUpdate:
 		arg := multi_update.NewArgument()
@@ -1375,6 +1396,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 				TableDef:           muCtx.TableDef,
 				SkipInsertOnNullPk: muCtx.SkipInsertOnNullPk,
 				InsertPkColIdx:     int(muCtx.InsertPkColIdx),
+				IgnoreAffectedRows: muCtx.IgnoreAffectedRows,
 			}
 
 			arg.MultiUpdateCtx[i].InsertCols = make([]int, len(muCtx.InsertCols))
@@ -1457,15 +1479,34 @@ func convertToTypes(ts []plan.Type) []types.Type {
 	return result
 }
 
+func validateRemoteAggregateProtocol(
+	proc *process.Process,
+	aggs []aggexec.AggFuncExecExpression,
+) error {
+	for _, agg := range aggs {
+		if agg.GetConfigType() != plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
+			continue
+		}
+		if proc != nil && supportsRemoteOrderedAggregates(proc.GetService()) {
+			return nil
+		}
+		return moerr.NewNotSupportedNoCtx(
+			"ordered aggregate remote execution requires MORPC protocol version 6",
+		)
+	}
+	return nil
+}
+
 // convert []aggexec.AggFuncExecExpression to []*pipeline.Aggregate
 func convertToPipelineAggregates(ags []aggexec.AggFuncExecExpression) []*pipeline.Aggregate {
 	result := make([]*pipeline.Aggregate, len(ags))
 	for i, a := range ags {
 		result[i] = &pipeline.Aggregate{
-			Op:     a.GetAggID(),
-			Dist:   a.IsDistinct(),
-			Expr:   a.GetArgExpressions(),
-			Config: a.GetExtraConfig(),
+			Op:         a.GetAggID(),
+			Dist:       a.IsDistinct(),
+			Expr:       a.GetArgExpressions(),
+			Config:     a.GetExtraConfig(),
+			ConfigType: a.GetConfigType(),
 		}
 	}
 	return result
@@ -1475,7 +1516,7 @@ func convertToPipelineAggregates(ags []aggexec.AggFuncExecExpression) []*pipelin
 func convertToAggregates(ags []*pipeline.Aggregate) []aggexec.AggFuncExecExpression {
 	result := make([]aggexec.AggFuncExecExpression, len(ags))
 	for i, a := range ags {
-		result[i] = aggexec.MakeAggFunctionExpression(a.Op, a.Dist, a.Expr, a.Config)
+		result[i] = aggexec.MakeAggFunctionExpression(a.Op, a.Dist, a.Expr, a.Config, a.ConfigType)
 	}
 	return result
 }

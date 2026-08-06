@@ -16,8 +16,11 @@ package incrservice
 
 import (
 	"context"
+	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -165,11 +168,62 @@ type AutoColumn struct {
 	Step     uint64
 }
 
-// GetAutoColumnFromDef get auto columns from table def
+// ValidateAutoColumnOffset rejects allocator offsets that cannot be represented
+// by the destination AUTO_INCREMENT column type.
+func ValidateAutoColumnOffset(ctx context.Context, typ types.T, offset uint64) error {
+	var limit uint64
+	switch typ {
+	case types.T_uint8:
+		limit = math.MaxUint8
+	case types.T_uint16:
+		limit = math.MaxUint16
+	case types.T_uint32:
+		limit = math.MaxUint32
+	case types.T_uint64:
+		return nil
+	case types.T_int8:
+		limit = math.MaxInt8
+	case types.T_int16:
+		limit = math.MaxInt16
+	case types.T_int32:
+		limit = math.MaxInt32
+	case types.T_int64:
+		limit = math.MaxInt64
+	default:
+		return nil
+	}
+	if offset <= limit {
+		return nil
+	}
+	return moerr.NewOutOfRangef(
+		ctx,
+		typ.ToType().String(),
+		"AUTO_INCREMENT value %d",
+		offset,
+	)
+}
+
+// GetAutoColumnFromDef gets all allocator-owned columns from a table definition,
+// including internal hidden columns such as __mo_fake_pk_col.
 func GetAutoColumnFromDef(def *plan.TableDef) []AutoColumn {
+	return getAutoColumnsFromDef(def, func(*plan.ColDef) bool { return true })
+}
+
+// GetUserAutoColumnFromDef gets only SQL-visible AUTO_INCREMENT columns.
+func GetUserAutoColumnFromDef(def *plan.TableDef) []AutoColumn {
+	return getAutoColumnsFromDef(def, func(col *plan.ColDef) bool { return !col.Hidden })
+}
+
+// GetInternalAutoColumnFromDef gets allocator-owned hidden columns. User offset
+// requests must not change these columns.
+func GetInternalAutoColumnFromDef(def *plan.TableDef) []AutoColumn {
+	return getAutoColumnsFromDef(def, func(col *plan.ColDef) bool { return col.Hidden })
+}
+
+func getAutoColumnsFromDef(def *plan.TableDef, include func(*plan.ColDef) bool) []AutoColumn {
 	var cols []AutoColumn
 	for i, col := range def.Cols {
-		if col.Typ.AutoIncr {
+		if col.Typ.AutoIncr && include(col) {
 			cols = append(cols, AutoColumn{
 				ColName:  col.Name,
 				TableID:  def.TblId,

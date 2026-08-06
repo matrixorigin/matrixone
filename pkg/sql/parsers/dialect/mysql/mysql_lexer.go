@@ -33,6 +33,17 @@ type MySQLParser struct {
 	// parser  yyParserImpl
 }
 
+func integralToUint64(v any) uint64 {
+	switch value := v.(type) {
+	case int64:
+		return uint64(value)
+	case uint64:
+		return value
+	default:
+		panic(fmt.Sprintf("unexpected integral type %T", v))
+	}
+}
+
 func (p *MySQLParser) Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, error) {
 	return p.ParseWithSQLMode(ctx, sql, lower, "")
 }

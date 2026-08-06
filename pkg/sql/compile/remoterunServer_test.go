@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -235,12 +236,13 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 			storeEngine: mockEngine,
 		},
 		procBuildHelper: processHelper{
-			id:           "test-proc-id",
-			accountId:    catalog.System_Account,
-			unixTime:     time.Now().Unix(),
-			affectedRows: 42,
-			txnClient:    txnClient,
-			txnOperator:  txnOperator,
+			id:                     "test-proc-id",
+			accountId:              catalog.System_Account,
+			unixTime:               time.Now().Unix(),
+			affectedRows:           42,
+			statementRuntimeIgnore: true,
+			txnClient:              txnClient,
+			txnOperator:            txnOperator,
 			prepareParams: pipeline.PrepareParamInfo{
 				Length: 2,
 				Data:   append([]byte(nil), params.GetData()...),
@@ -265,6 +267,7 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	require.True(t, compile.proc.GetPrepareParamIsBin(0))
 	require.False(t, compile.proc.GetPrepareParamIsBin(1))
 	require.Equal(t, int64(42), compile.proc.GetAffectedRows())
+	require.True(t, compile.proc.GetStmtProfile().GetStatementIgnore())
 	require.NotNil(t, compile.fill, "fill callback should be set")
 	remoteParams := compile.proc.GetPrepareParams()
 	require.NotPanics(t, compile.Release)
@@ -342,10 +345,11 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	t.Cleanup(func() { params.Free(proc.Mp()) })
 
 	procInfo := &pipeline.ProcessInfo{
-		Id:           "test-proc-id",
-		AccountId:    catalog.System_Account,
-		UnixTime:     time.Now().Unix(),
-		AffectedRows: 42,
+		Id:                     "test-proc-id",
+		AccountId:              catalog.System_Account,
+		UnixTime:               time.Now().Unix(),
+		AffectedRows:           42,
+		StatementRuntimeIgnore: true,
 		Snapshot: txn.CNTxnSnapshot{
 			Txn: txn.TxnMeta{
 				ID: []byte("test-txn-id"),
@@ -371,6 +375,7 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	require.Equal(t, procInfo.PrepareParams.Data, helper.prepareParams.Data)
 	require.Equal(t, procInfo.PrepareParams.Area, helper.prepareParams.Area)
 	require.Equal(t, int64(42), helper.affectedRows)
+	require.True(t, helper.statementRuntimeIgnore)
 	require.NotNil(t, helper.txnOperator, "txnOperator should be created from snapshot")
 	// Verify that rebuilt txnOperator has nil workspace (key point for remote run)
 	require.Nil(t, helper.txnOperator.GetWorkspace(), "rebuilt txnOperator should have nil workspace initially")
@@ -534,4 +539,110 @@ func TestCnServerMessageHandlerWaitObservesConnectionClose(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("wait did not observe connection close")
 	}
+}
+
+func TestMessageReceiverSendBatchUsesNegotiatedCredits(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	flow := newPipelineBatchFlow(2, 1024)
+	lifecycle := &pipelineStreamLifecycle{batchFlow: flow}
+	var sent *pipeline.Message
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			sent = message.(*pipeline.Message)
+			return nil
+		})
+
+	receiver := &messageReceiverOnServer{
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		messageId:       401,
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  1 << 20,
+		streamLifecycle: lifecycle,
+	}
+	require.NoError(t, receiver.sendBatch(batch.NewWithSize(0)))
+	require.NotNil(t, sent)
+	require.Equal(t, uint64(1), sent.GetBatchSequence())
+	require.Equal(t, uint32(2), sent.GetAcceptedBatchCreditCount())
+	require.Equal(t, uint64(1024), sent.GetAcceptedBatchCreditBytes())
+
+	flow.mu.Lock()
+	require.Len(t, flow.pending, 1)
+	flow.mu.Unlock()
+	require.NoError(t, flow.acknowledge(sent.GetBatchSequence()))
+}
+
+func TestMessageReceiverSendFragmentedBatchRollsBackCreditOnWriteFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	wantErr := errors.New("write fragment")
+	flow := newPipelineBatchFlow(2, 1024)
+	bat := batch.NewWithSize(0)
+	data, err := bat.MarshalBinary()
+	require.NoError(t, err)
+	require.Greater(t, len(data), 1)
+	writes := 0
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			writes++
+			msg := message.(*pipeline.Message)
+			require.Equal(t, uint64(1), msg.GetBatchSequence())
+			if writes == 2 {
+				return wantErr
+			}
+			return nil
+		}).Times(2)
+
+	receiver := &messageReceiverOnServer{
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		messageId:       402,
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  len(data) - 1,
+		streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow},
+	}
+	err = receiver.sendBatch(bat)
+	require.ErrorIs(t, err, wantErr)
+	require.Equal(t, 2, writes)
+	flow.mu.Lock()
+	require.Empty(t, flow.pending)
+	require.Zero(t, flow.bytes)
+	flow.mu.Unlock()
+}
+
+func TestMessageReceiverSendFragmentedBatchKeepsCreditUntilAck(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	flow := newPipelineBatchFlow(2, 1024)
+	bat := batch.NewWithSize(0)
+	data, err := bat.MarshalBinary()
+	require.NoError(t, err)
+	require.Greater(t, len(data), 1)
+	writes := 0
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			writes++
+			msg := message.(*pipeline.Message)
+			require.Equal(t, uint64(1), msg.GetBatchSequence())
+			return nil
+		}).Times(2)
+
+	receiver := &messageReceiverOnServer{
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		messageId:       403,
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  len(data) - 1,
+		streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow},
+	}
+	require.NoError(t, receiver.sendBatch(bat))
+	require.Equal(t, 2, writes)
+	flow.mu.Lock()
+	require.Len(t, flow.pending, 1)
+	flow.mu.Unlock()
+	require.NoError(t, flow.acknowledge(1))
 }

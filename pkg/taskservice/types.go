@@ -111,6 +111,12 @@ func (c *taskRunnerCond) eval(v any) bool {
 }
 
 func (c *taskRunnerCond) sql() string {
+	if c.op == EQ && c.taskRunner == "" {
+		// Unassigned daemon tasks are persisted as either SQL NULL (initial
+		// insert) or an empty string (explicit ownership release). Both encode
+		// the same owner state; non-empty owners remain strict equality fences.
+		return "(task_runner='' or task_runner is NULL)"
+	}
 	return fmt.Sprintf("task_runner%s'%s'", OpName[c.op], c.taskRunner)
 }
 
@@ -474,6 +480,7 @@ var (
 		CondTaskID:        {},
 		CondTaskRunner:    {},
 		CondTaskStatus:    {},
+		CondTaskExecutor:  {},
 		CondTaskType:      {},
 		CondAccountID:     {},
 		CondAccount:       {},
@@ -664,6 +671,17 @@ type TaskService interface {
 	QueryDaemonTask(ctx context.Context, conds ...Condition) ([]task.DaemonTask, error)
 	// UpdateDaemonTask updates the daemon task record.
 	UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, cond ...Condition) (int, error)
+	// UpdateDaemonTaskStatus updates only status-owned fields. In particular, it
+	// preserves the runner lease (TaskRunner and LastHeartbeat) while applying
+	// the supplied compare-and-swap conditions.
+	UpdateDaemonTaskStatus(
+		ctx context.Context,
+		taskID uint64,
+		status task.TaskStatus,
+		updateAt time.Time,
+		endAt time.Time,
+		cond ...Condition,
+	) (int, error)
 	// HeartbeatDaemonTask sends heartbeat to daemon task.
 	HeartbeatDaemonTask(ctx context.Context, task task.DaemonTask) error
 
@@ -761,6 +779,15 @@ type TaskStorage interface {
 	AddDaemonTask(ctx context.Context, tasks ...task.DaemonTask) (int, error)
 	// UpdateDaemonTask updates daemon tasks and returns number of successful updated.
 	UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, conds ...Condition) (int, error)
+	// UpdateDaemonTaskStatus updates only task_status, update_at and end_at.
+	UpdateDaemonTaskStatus(
+		ctx context.Context,
+		taskID uint64,
+		status task.TaskStatus,
+		updateAt time.Time,
+		endAt time.Time,
+		conds ...Condition,
+	) (int, error)
 	// DeleteDaemonTask deletes daemon tasks and returns number of successful deleted.
 	DeleteDaemonTask(ctx context.Context, condition ...Condition) (int, error)
 	// QueryDaemonTask queries daemon tasks by conditions.

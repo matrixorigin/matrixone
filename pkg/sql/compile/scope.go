@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"net"
 	"slices"
 	"strconv"
@@ -38,11 +39,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -102,6 +105,7 @@ func (s *Scope) Reset(c *Compile) error {
 }
 
 func (s *Scope) reset(c *Compile, rejectZeroTemporal bool) error {
+	s.releaseParallelGenerations(c)
 	if err := refreshZeroTemporalWritePolicy(s.RootOp, rejectZeroTemporal); err != nil {
 		return err
 	}
@@ -115,6 +119,65 @@ func (s *Scope) reset(c *Compile, rejectZeroTemporal bool) error {
 		}
 	}
 	return nil
+}
+
+// releaseParallelGenerations closes the ownership interval that starts in
+// newParallelScope. The trees must remain reachable through PreScopes until
+// AnalyzeExecPlan has consumed their physical shape and runtime statistics,
+// so the next Compile.Reset is the first safe generation boundary.
+func (s *Scope) releaseParallelGenerations(c *Compile) {
+	if s == nil || len(s.parallelGenerations) == 0 {
+		return
+	}
+	generations := s.parallelGenerations
+	s.parallelGenerations = nil
+	for _, generation := range generations {
+		if generation == nil {
+			continue
+		}
+		if idx := slices.Index(s.PreScopes, generation); idx >= 0 {
+			s.PreScopes = slices.Delete(s.PreScopes, idx, idx+1)
+		}
+		// Prepared pipeline cleanup intentionally Reset-only. These clones are
+		// execution-local rather than reusable templates, so finish their
+		// physical ownership before returning them to the reuse pools.
+		if c != nil && c.isPrepare {
+			generation.freeOperatorsWithOwnProcess()
+		}
+		generation.release()
+	}
+}
+
+func (s *Scope) freeOperatorsWithOwnProcess() {
+	if s == nil {
+		return
+	}
+	for _, preScope := range s.PreScopes {
+		preScope.freeOperatorsWithOwnProcess()
+	}
+	if s.Proc == nil {
+		return
+	}
+	_ = vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		op.Free(s.Proc, false, nil)
+		return nil
+	})
+}
+
+// discardParallelGeneration handles construction failure before a generated
+// tree can contribute execution statistics. It removes both ownership links
+// and releases the complete tree exactly once.
+func (s *Scope) discardParallelGeneration(generation *Scope) {
+	if s == nil || generation == nil {
+		return
+	}
+	if idx := slices.Index(s.PreScopes, generation); idx >= 0 {
+		s.PreScopes = slices.Delete(s.PreScopes, idx, idx+1)
+	}
+	if idx := slices.Index(s.parallelGenerations, generation); idx >= 0 {
+		s.parallelGenerations = slices.Delete(s.parallelGenerations, idx, idx+1)
+	}
+	generation.release()
 }
 
 type zeroTemporalWritePolicySetter interface {
@@ -133,12 +196,79 @@ func refreshZeroTemporalWritePolicy(root vm.Operator, reject bool) error {
 	})
 }
 
+func refreshGroupConcatMaxLen(scopes []*Scope, proc *process.Process) error {
+	var maxLen uint64
+	resolved := false
+	visited := make(map[*Scope]struct{})
+
+	var refreshScope func(*Scope) error
+	refreshScope = func(scope *Scope) error {
+		if scope == nil {
+			return nil
+		}
+		if _, ok := visited[scope]; ok {
+			return nil
+		}
+		visited[scope] = struct{}{}
+
+		if err := vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			var aggs []aggexec.AggFuncExecExpression
+			switch arg := op.(type) {
+			case *group.Group:
+				aggs = arg.Aggs
+			case *group.MergeGroup:
+				aggs = arg.Aggs
+			case *window.Window:
+				aggs = arg.Aggs
+			}
+
+			for i := range aggs {
+				if aggs[i].GetAggID() != aggexec.AggIdOfGroupConcat {
+					continue
+				}
+				if !resolved {
+					value, err := resolveVariableOrDefault(proc, "group_concat_max_len", true, false)
+					if err != nil {
+						return err
+					}
+					sessionMaxLen, ok := value.(int64)
+					if !ok || sessionMaxLen < 0 {
+						return moerr.NewInternalErrorNoCtxf(
+							"group_concat_max_len has invalid value %v", value)
+					}
+					maxLen = uint64(sessionMaxLen)
+					resolved = true
+				}
+				aggs[i].SetExtraConfig(aggexec.RefreshGroupConcatConfigMaxLen(
+					aggs[i].GetExtraConfig(), maxLen))
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+
+		for _, preScope := range scope.PreScopes {
+			if err := refreshScope(preScope); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, scope := range scopes {
+		if err := refreshScope(scope); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Scope) resetForReuse(c *Compile) (err error) {
 	s.resourceExecutedLocally = false
 
 	if err = vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
 		if op.OpType() == vm.Output {
-			op.(*output.Output).Func = c.fill
+			op.(*output.Output).Func = c.resultWriter()
 		}
 		return nil
 	}); err != nil {
@@ -308,7 +438,7 @@ func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
 //	2. send notify message to remote node for its data producer.
 //	3. run itself.
 //	4. listen to all running pipelines, once any error occurs, stop the NormalMergeRun asap.
-func (s *Scope) MergeRun(c *Compile) error {
+func (s *Scope) MergeRun(c *Compile) (err error) {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
@@ -328,7 +458,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 	// Merge Run normally.
 	var wg sync.WaitGroup
-	preScopeResultReceiveChan := make(chan error, len(s.PreScopes))
+	preScopeResultReceiveChan := make(chan scopeRunResult, len(s.PreScopes))
 
 	// step 1.
 	for i := range s.PreScopes {
@@ -353,7 +483,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 					cleanPipelineWitchStartFail(scope, err, c.isPrepare)
 				}
 				s.cancelMergeSiblingsOnError(err)
-				preScopeResultReceiveChan <- err
+				preScopeResultReceiveChan <- newScopeRunResult(err, scope)
 			})
 
 		// build routine failed.
@@ -361,7 +491,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 			wg.Done() // this is necessary, because the submitPreScope may panic.
 			cleanPipelineWitchStartFail(scope, submitPreScope, c.isPrepare)
 			s.cancelMergeSiblingsOnError(submitPreScope)
-			preScopeResultReceiveChan <- submitPreScope
+			preScopeResultReceiveChan <- newScopeRunResult(submitPreScope, scope)
 		}
 	}
 
@@ -376,24 +506,18 @@ func (s *Scope) MergeRun(c *Compile) error {
 	defer func() {
 		// should wait all the notify-message-routine and preScopes done.
 		wg.Wait()
-
-		// not necessary, but we still clean the preScope error channel here.
-		for len(preScopeResultReceiveChan) > 0 {
-			<-preScopeResultReceiveChan
-		}
-
-		// clean the notifyMessageResultReceiveChan to make sure all the rpc-sender can be closed.
-		for len(notifyMessageResultReceiveChan) > 0 {
-			result := <-notifyMessageResultReceiveChan
-			result.clean(s.Proc)
-		}
+		err = collectMergeRunResults(
+			s.Proc,
+			scopeRunResult{err: err, ctx: s.Proc.Ctx},
+			preScopeResultReceiveChan,
+			notifyMessageResultReceiveChan)
 	}()
 
 	preScopeCount := len(s.PreScopes)
 	remoteScopeCount := len(s.RemoteReceivRegInfos)
 	//after parallelRun, prescope count may change. we need to save this before parallelRun
 
-	err := s.ParallelRun(c)
+	err = s.ParallelRun(c)
 	if err != nil {
 		return s.cancelMergeSiblingsOnError(err)
 	}
@@ -401,7 +525,9 @@ func (s *Scope) MergeRun(c *Compile) error {
 	// receive and check error from pre-scopes and remote scopes.
 	if remoteScopeCount == 0 {
 		for i := 0; i < preScopeCount; i++ {
-			if err = <-preScopeResultReceiveChan; err != nil {
+			result := <-preScopeResultReceiveChan
+			result, _ = result.resolveCancelCause()
+			if err = result.err; err != nil {
 				return err
 			}
 		}
@@ -410,7 +536,9 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 	for {
 		select {
-		case err := <-preScopeResultReceiveChan:
+		case result := <-preScopeResultReceiveChan:
+			result, _ = result.resolveCancelCause()
+			err := result.err
 			if err != nil {
 				return s.cancelMergeSiblingsOnError(err)
 			}
@@ -428,6 +556,28 @@ func (s *Scope) MergeRun(c *Compile) error {
 			return nil
 		}
 	}
+}
+
+// collectMergeRunResults consumes results left behind after MergeRun returns
+// early. A terminal-signal delivery fallback from the merge pipeline is
+// secondary when a producer or remote notifier reports the execution error
+// that caused cleanup to race a full pipeline channel.
+func collectMergeRunResults(
+	proc *process.Process,
+	current scopeRunResult,
+	preScopeResults <-chan scopeRunResult,
+	notifyResults <-chan notifyMessageResult,
+) error {
+	for len(preScopeResults) > 0 {
+		current = preferPrimaryScopeResult(current, <-preScopeResults)
+	}
+	for len(notifyResults) > 0 {
+		result := <-notifyResults
+		current = preferPrimaryScopeResult(current, scopeRunResult{err: result.err, ctx: proc.Ctx})
+		result.clean(proc)
+	}
+	current, _ = current.resolveCancelCause()
+	return current.err
 }
 
 // cancelMergeSiblingsOnError breaks the wait-for cycle between a failed
@@ -597,9 +747,13 @@ func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			isConst: true,
 		}
 		if err := ss[i].initDataSource(c); err != nil {
-			ReleaseScopes(ss)
+			s.discardParallelGeneration(ms)
 			return nil, err
 		}
+	}
+	if err := c.attachRuntimeAllocationOwners(ss); err != nil {
+		s.discardParallelGeneration(ms)
+		return nil, err
 	}
 	return ms, nil
 }
@@ -651,6 +805,10 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			node:         s.DataSource.node,
 			RecvMsgList:  recvMsgList,
 		}
+	}
+	if err := c.attachRuntimeAllocationOwners(ss); err != nil {
+		s.discardParallelGeneration(ms)
+		return nil, err
 	}
 
 	return ms, nil
@@ -878,6 +1036,7 @@ func newParallelScope(s *Scope) (*Scope, []*Scope) {
 
 	rs.PreScopes = parallelScopes
 	s.PreScopes = append(s.PreScopes, rs)
+	s.parallelGenerations = append(s.parallelGenerations, rs)
 
 	// after parallelScope
 	// s(fake)
@@ -1003,7 +1162,7 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 ) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
-		err = suppressRemoteRunCancelError(s.Proc.Ctx, err)
+		err = suppressRemoteNotifyCancelError(s.Proc.Ctx, err)
 		s.cancelMergeSiblingsOnError(err)
 		sendRemoteNotifyCleanupTerminal(s.Proc, reg, err)
 		resultChan <- notifyMessageResult{err: err, sender: sender}
@@ -1041,9 +1200,7 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 					message := cnclient.AcquireMessage()
 					message.SetID(sender.streamSender.ID())
 					message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
-					if sender.requestFinishAck {
-						message.RequestedTeardownMode = pbpipeline.StreamTeardownMode_FinishAck
-					}
+					sender.requestStreamProtocols(message)
 					message.NeedNotReply = false
 					message.Uuid = uuid
 
@@ -1138,6 +1295,17 @@ func suppressRemoteRunCancelError(procCtx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}
+	if procCtx != nil && procCtx.Err() != nil &&
+		(moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) || errors.Is(err, context.Canceled)) {
+		return nil
+	}
+	return err
+}
+
+func suppressRemoteNotifyCancelError(procCtx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
 	if procCtx != nil && procCtx.Err() != nil && moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) {
 		return nil
 	}
@@ -1153,6 +1321,9 @@ func receiveMsgAndForward(sender *messageSenderOnClient, forwardReg *process.Wai
 
 		var receiverDone bool
 		if receiverDone, err = forwardRemoteBatchWithContext(sender, forwardReg, bat, sender.mp); err != nil || receiverDone {
+			return err
+		}
+		if err = sender.acknowledgeRemoteBatch(); err != nil {
 			return err
 		}
 	}

@@ -66,18 +66,19 @@ func MakePlan2Decimal128ExprWithType(v types.Decimal128, typ *Type) *plan.Expr {
 
 func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) (*plan.Expr, error) {
 	var typ plan.Type
+	width := decimalLiteralPrecision(v)
 	_, scale, err := types.Parse128(v)
 	if err == nil && scale < 18 && len(v) < 18 {
 		typ = plan.Type{
 			Id:          int32(types.T_decimal64),
-			Width:       18,
+			Width:       width,
 			Scale:       scale,
 			NotNullable: true,
 		}
 	} else if err == nil {
 		typ = plan.Type{
 			Id:          int32(types.T_decimal128),
-			Width:       38,
+			Width:       width,
 			Scale:       scale,
 			NotNullable: true,
 		}
@@ -88,12 +89,25 @@ func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) 
 		}
 		typ = plan.Type{
 			Id:          int32(types.T_decimal256),
-			Width:       65,
+			Width:       width,
 			Scale:       scale,
 			NotNullable: true,
 		}
 	}
 	return appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType(v, isBin...), typ)
+}
+
+func decimalLiteralPrecision(v string) int32 {
+	var width int32
+	for i := 0; i < len(v); i++ {
+		if v[i] >= '0' && v[i] <= '9' {
+			width++
+		}
+	}
+	if width == 0 {
+		return 1
+	}
+	return width
 }
 
 func makePlan2DateConstNullExpr(t types.T) *plan.Expr {
@@ -648,10 +662,10 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr,
 }
 
 // makePlan2AssignmentCastExpr builds a cast used when validating/storing a value
-// against a real column type (e.g. column DEFAULT / ON UPDATE). Assignment
-// conversions use cast_strict for CHAR/VARCHAR width checks and temporal
-// zero-date preservation, mirroring forceAssignmentCastExpr. Explicit SQL CAST
-// keeps the lenient generic cast.
+// against a real column type at the DDL layer (e.g. column DEFAULT / ON UPDATE).
+// It uses cast_strict for CHAR/VARCHAR width checks and temporal zero-date
+// preservation. DDL-specific error mapping is applied by the DDL validation
+// layer rather than changing cast_strict's execution contract.
 func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
 	funcName := "cast"
 	if useAssignmentStrictCast(targetType) {
@@ -660,10 +674,25 @@ func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Typ
 	return makePlan2CastExprWithName(ctx, expr, targetType, funcName)
 }
 
+// MakePlan2AssignmentCastExpr coerces an expression using assignment
+// semantics. Stored procedure declarations and assignments use the same
+// conversion contract as values written to SQL columns.
+func MakePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	return makePlan2AssignmentCastExpr(ctx, expr, targetType)
+}
+
 func makePlan2CastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
 	var err error
 	if expr == nil {
 		return nil, moerr.NewInvalidInput(ctx, "nil expression in cast")
+	}
+	var rewritten bool
+	expr, rewritten, err = rewriteMySQLSpecialTypeDisplayCast(ctx, expr, targetType)
+	if err != nil {
+		return nil, err
+	}
+	if rewritten {
+		return expr, nil
 	}
 	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil
@@ -736,6 +765,10 @@ func makePlan2CastExprWithName(ctx context.Context, expr *Expr, targetType Type,
 func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
 	var err error
 	if targetType.Id != int32(types.T_enum) {
+		return expr, nil
+	}
+	if isEnumPlanType(&expr.Typ) && expr.Typ.Enumvalues == targetType.Enumvalues {
+		expr.Typ = targetType
 		return expr, nil
 	}
 	sourceExpr := expr

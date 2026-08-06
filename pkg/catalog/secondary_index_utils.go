@@ -123,7 +123,10 @@ const (
 	IntermediateGraphDegree = "intermediate_graph_degree"
 	GraphDegree             = "graph_degree"
 	ITopkSize               = "itopk_size"
-	IncludedColumns         = "included_columns"
+	// IncludedColumns persists INCLUDE metadata inside algo_params. Consumers
+	// prefer plan.IndexDef.IncludedColumns when present and fall back to this key
+	// for catalog-loaded definitions.
+	IncludedColumns = "included_columns"
 
 	// Index-defining build params, settable as CREATE INDEX options (parsed by
 	// each plugin's ParamsFromTree). Written into flat algo_params only when
@@ -153,6 +156,49 @@ const (
 	// plugin routes each hook to the matching engine by this value.
 	IndexAlgoParamVersion = "version"
 )
+
+func ParseIncludeColumnsValue(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+
+	if strings.HasPrefix(raw, "[") {
+		var cols []string
+		if err := json.Unmarshal([]byte(raw), &cols); err == nil {
+			return cols, nil
+		}
+	}
+
+	parts := strings.Split(raw, ",")
+	cols := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		cols = append(cols, part)
+	}
+	if len(cols) == 0 {
+		return nil, nil
+	}
+	return cols, nil
+}
+
+// MarshalIncludeColumnsValue encodes INCLUDE column names without losing
+// commas or leading/trailing whitespace that are valid inside quoted SQL
+// identifiers. ParseIncludeColumnsValue retains support for the historical
+// comma-separated representation when catalog metadata is reloaded.
+func MarshalIncludeColumnsValue(cols []string) (string, error) {
+	if len(cols) == 0 {
+		return "", nil
+	}
+	encoded, err := json.Marshal(cols)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
 
 /* 1. ToString Functions */
 
@@ -273,18 +319,10 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamVersion, val)
 	}
 
-	if val, ok := result[IncludedColumns]; ok && len(val) > 0 {
-		raw := strings.Split(val, ",")
-		parts := make([]string, 0, len(raw))
-		for _, p := range raw {
-			if p = strings.TrimSpace(p); p != "" {
-				parts = append(parts, p)
-			}
-		}
-		if len(parts) > 0 {
-			res += " INCLUDE (" + strings.Join(parts, ", ") + ") "
-		}
-	}
+	// NOTE: included_columns is intentionally NOT rendered here. INCLUDE columns are a
+	// first-class plan.IndexDef field in the merged design and are rendered by the DDL /
+	// SHOW CREATE path (see indexDefIncludedColumns); rendering them here too would
+	// double-emit them. Guarded by TestIndexParamsToStringList_DoesNotRenderIncludeColumns.
 	return res, nil
 }
 
@@ -474,7 +512,7 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 		case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID, tree.INDEX_TYPE_RTREE:
 			// do nothing
 		case tree.INDEX_TYPE_MASTER:
-			// do nothing
+		// do nothing
 		default:
 			// Vector algorithms (IVFFLAT / HNSW / CAGRA / IVFPQ) build their
 			// algo_params via the per-plugin plan hook BuildIndexParams; they

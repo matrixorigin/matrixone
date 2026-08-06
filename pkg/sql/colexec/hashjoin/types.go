@@ -17,12 +17,14 @@ package hashjoin
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -45,6 +47,15 @@ const (
 	psNextBatch probeState = iota
 	psSelsForOneRow
 	psBatchRow
+)
+
+const hashJoinAllocationSiteMatchedRows mpool.AllocationSite = 80
+
+const (
+	hashJoinAllocationSiteResultData mpool.AllocationSite = iota + 102
+	hashJoinAllocationSiteResultArea
+	hashJoinAllocationSiteResultNulls
+	hashJoinAllocationSiteResultGrouping
 )
 
 type container struct {
@@ -120,7 +131,7 @@ type HashJoin struct {
 	NonEqCond  *plan.Expr
 	EqConds    [][]*plan.Expr
 
-	Channel chan *bitmap.Bitmap
+	Mailbox *BitmapMailbox
 	NumCPU  uint64
 
 	HashOnPK     bool
@@ -133,8 +144,66 @@ type HashJoin struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
 	SpillThreshold     int64
+	allocationAccount  *mpool.AllocationAccount
+	resultAllocation   *vector.AllocationAccountSelection
+	// recursiveProbe is derived from the operator tree during Prepare. An empty
+	// build must still drain a recursive probe until its round marker.
+	recursiveProbe bool
 
 	vm.OperatorBase
+}
+
+func (hashJoin *HashJoin) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if account == nil || account.Handle() == 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if hashJoin.allocationAccount != nil &&
+		hashJoin.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if hashJoin.allocationAccount == account {
+		return nil
+	}
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		hashbuild.HashBuildAllocationOwner,
+		hashJoinAllocationSiteResultData,
+		hashJoinAllocationSiteResultArea,
+		hashJoinAllocationSiteResultNulls,
+		hashJoinAllocationSiteResultGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	hashJoin.allocationAccount = account
+	hashJoin.resultAllocation = selection
+	return nil
+}
+
+func (hashJoin *HashJoin) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if hashJoin.allocationAccount == nil {
+		return nil
+	}
+	if hashJoin.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if hashJoin.ctr.mp != nil || hashJoin.ctr.spillEngine != nil ||
+		len(hashJoin.ctr.eqCondExecs) != 0 ||
+		hashJoin.ctr.nonEqCondExec != nil ||
+		hashJoin.ctr.rightRowsMatched != nil ||
+		hashJoin.ctr.resBat != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	if hashJoin.NumCPU > 1 && !hashJoin.Mailbox.Terminal() {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	hashJoin.allocationAccount = nil
+	hashJoin.resultAllocation = nil
+	return nil
 }
 
 func (hashJoin *HashJoin) GetOperatorBase() *vm.OperatorBase {
@@ -186,15 +255,23 @@ func (hashJoin *HashJoin) ExecProjection(proc *process.Process, input *batch.Bat
 
 func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &hashJoin.ctr
+	hashmap.IteratorClearOwner(ctr.itr)
 	ctr.itr = nil
 	if !ctr.bitmapSynced && hashJoin.NumCPU > 1 && !hashJoin.IsMerger {
-		hashJoin.Channel <- nil
+		hashJoin.Mailbox.Send(nil)
 	}
-	ctr.resetEqCondExecutors()
+	if hashJoin.NumCPU > 1 && hashJoin.IsMerger {
+		hashJoin.Mailbox.SealAndDrain(proc.Mp())
+	}
 	ctr.cleanBucketBatches(proc)
+	ctr.cleanEqCondExecutors()
 	ctr.cleanHashMap()
-	ctr.resetNonEqCondExecutor()
-	ctr.rightRowsMatched = nil
+	ctr.cleanNonEqCondExecutor()
+	if ctr.resBat != nil {
+		ctr.resBat.Clean(proc.GetMPool())
+		ctr.resBat = nil
+	}
+	ctr.freeRightRowsMatched(proc)
 	ctr.rightMatchedIter = nil
 	ctr.skipProbe = false
 	ctr.bitmapSynced = false
@@ -204,7 +281,6 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.state = Build
 	ctr.probeState = psNextBatch
 	ctr.lastIdx = 0
-
 	if hashJoin.OpAnalyzer != nil {
 		hashJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
 	}
@@ -215,16 +291,10 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &hashJoin.ctr
 	ctr.cleanBatch(proc)
-	ctr.cleanEqCondExecutors()
 	ctr.cleanBucketBatches(proc)
+	ctr.cleanEqCondExecutors()
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
-}
-
-func (ctr *container) resetNonEqCondExecutor() {
-	if ctr.nonEqCondExec != nil {
-		ctr.nonEqCondExec.ResetForNextQuery()
-	}
 }
 
 func (ctr *container) cleanNonEqCondExecutor() {
@@ -246,9 +316,12 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 			ctr.joinBats[i] = nil
 		}
 	}
-	if ctr.rightRowsMatched != nil {
-		ctr.rightRowsMatched = nil
-	}
+	ctr.freeRightRowsMatched(proc)
+}
+
+func (ctr *container) freeRightRowsMatched(proc *process.Process) {
+	colexec.FreeAccountedBitmap(ctr.rightRowsMatched, proc.Mp())
+	ctr.rightRowsMatched = nil
 }
 
 func (ctr *container) cleanBucketBatches(proc *process.Process) {
@@ -260,6 +333,8 @@ func (ctr *container) cleanBucketBatches(proc *process.Process) {
 }
 
 func (ctr *container) cleanHashMap() {
+	hashmap.IteratorClearOwner(ctr.itr)
+	ctr.itr = nil
 	if ctr.mp != nil {
 		ctr.mp.Free()
 		ctr.mp = nil
@@ -273,14 +348,7 @@ func (ctr *container) cleanEqCondExecutors() {
 		}
 	}
 	ctr.eqCondExecs = nil
-}
-
-func (ctr *container) resetEqCondExecutors() {
-	for i := range ctr.eqCondExecs {
-		if ctr.eqCondExecs[i] != nil {
-			ctr.eqCondExecs[i].ResetForNextQuery()
-		}
-	}
+	ctr.eqCondVecs = nil
 }
 
 func (hashJoin *HashJoin) IsInner() bool {

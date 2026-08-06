@@ -115,14 +115,11 @@ func (l *localLockTable) doLock(
 			err = l.doAcquireLock(c)
 			if err != nil {
 				logLocalLockFailed(l.logger, c.txn, table, c.rows, c.opts, err)
-				if c.w == nil && old != nil {
-					old.disableNotify()
-					old.close("doLock, doAcquireLock old err", l.logger)
+				w := c.w
+				if w == nil {
+					w = old
 				}
-				if c.w != nil {
-					c.w.disableNotify()
-					c.w.close("doLock, doAcquireLock err", l.logger)
-				}
+				l.detachFailedWaiter(c, w)
 				c.done(err)
 				return
 			}
@@ -228,31 +225,7 @@ func (l *localLockTable) doLock(
 				c.txn.closeBlockWaiters(l.logger)
 			}
 
-			ck := *c.w.conflictKey.Load()
-			if len(ck) > 0 &&
-				c.opts.Granularity == pb.Granularity_Row {
-
-				if l.options.beforeCloseFirstWaiter != nil {
-					l.options.beforeCloseFirstWaiter(c)
-				}
-
-				l.mu.Lock()
-				// we must reload conflict lock, because the lock may be deleted
-				// by other txn and readd into store. So c.w.conflictWith is
-				// invalid.
-				conflictWith, ok := l.mu.store.Get(ck)
-				if ok {
-					l.removeOwnerLocalWaitEdgeLocked(c.w)
-					if conflictWith.closeWaiter(c.w, l.logger) {
-						l.mu.store.Delete(ck)
-					} else {
-						l.removeInactiveOwnerLocalWaitEdgesLocked(conflictWith)
-					}
-				}
-				l.mu.Unlock()
-			}
-
-			c.w.close("doLock, txn closed between Unlock and get Lock again", l.logger)
+			l.detachFailedWaiter(c, c.w)
 			c.done(e)
 			return
 		}
@@ -273,6 +246,60 @@ func (l *localLockTable) doLock(
 			c.opts.TableDefChanged = v.defChanged
 		}
 		blocked = false
+	}
+}
+
+// detachFailedWaiter releases every ownership edge created when a lock
+// request entered the wait state. A terminal error must detach the waiter from
+// the event checker, active transaction and lock queue before releasing the
+// caller's reference; otherwise the queue can retain the only reference and
+// trigger the reuse checker's missing-free panic when the lock table is
+// collected.
+//
+// The caller holds c.txn's mutex. Container removal is idempotent, so the same
+// path is safe before queue admission and after a concurrent notification.
+func (l *localLockTable) detachFailedWaiter(c *lockContext, w *waiter) {
+	if w == nil {
+		return
+	}
+
+	w.disableNotify()
+	l.events.removeBlockedWaiter(w)
+	c.txn.clearBlocked(w, l.logger)
+
+	var ck []byte
+	if conflictKey := w.conflictKey.Load(); conflictKey != nil {
+		ck = *conflictKey
+	}
+	if len(ck) > 0 {
+		if c.opts.Granularity == pb.Granularity_Row &&
+			l.options.beforeCloseFirstWaiter != nil {
+			l.options.beforeCloseFirstWaiter(c)
+		}
+
+		l.mu.Lock()
+		switch c.opts.Granularity {
+		case pb.Granularity_Row:
+			conflictWith, ok := l.mu.store.Get(ck)
+			if ok {
+				removed, empty := conflictWith.removeWaiter(w, l.logger)
+				if removed && empty {
+					l.deleteEmptyLockLocked(ck, conflictWith)
+				}
+				if removed && !empty {
+					l.removeInactiveOwnerLocalWaitEdgesLocked(conflictWith)
+				}
+			}
+			l.removeOwnerLocalWaitEdgeLocked(w)
+		case pb.Granularity_Range:
+			l.closeRangeWaiterLocked(c, w, true)
+		}
+		l.mu.Unlock()
+	}
+
+	w.close("doLock, detach failed waiter", l.logger)
+	if c.w == w {
+		c.w = nil
 	}
 }
 
@@ -448,10 +475,24 @@ func (l *localLockTable) getBind() pb.LockTable {
 
 func (l *localLockTable) close(reason closeReason) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
+	if l.mu.closed {
+		l.mu.Unlock()
+		return
+	}
 	l.mu.closed = true
 
-	l.mu.store.Iter(func(key []byte, lock Lock) bool {
+	// Detach the terminal snapshot while holding l.mu, then notify waiters
+	// outside the lock. Async waiter notification can block on waiterEvents'
+	// bounded admission queue, while its consumers may need l.mu to finish the
+	// notified lock context. Holding l.mu across notification would therefore
+	// create a close -> eventC -> worker -> l.mu wait cycle.
+	store := l.mu.store
+	l.mu.store = newBtreeBasedStorage()
+	ownerLocalWaits := l.mu.ownerLocalWaits
+	l.mu.ownerLocalWaits = make(map[ownerLocalTxnKey][]ownerLocalWaitEdge)
+	l.mu.Unlock()
+
+	store.Iter(func(key []byte, lock Lock) bool {
 		if lock.isLockRow() || lock.isLockRangeEnd() {
 			// if there are waiters in the current lock, just notify
 			// the head, and the subsequent waiters will be notified
@@ -460,8 +501,8 @@ func (l *localLockTable) close(reason closeReason) {
 		}
 		return true
 	})
-	clear(l.mu.ownerLocalWaits)
-	l.mu.store.Clear()
+	clear(ownerLocalWaits)
+	store.Clear()
 	logLockTableClosed(l.logger, l.bind, false, reason)
 }
 
@@ -499,7 +540,21 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 		if ok &&
 			(bytes.Equal(key, row) ||
 				lock.isLockRangeEnd()) {
-			hold, newHolder := lock.tryHold(l.logger, c)
+			hold, newHolder, err := lock.tryHold(
+				l.logger,
+				c,
+				func() error {
+					return c.txn.lockAdded(
+						l.bind.Group,
+						l.bind,
+						[][]byte{key},
+						l.logger,
+					)
+				},
+			)
+			if err != nil {
+				return err
+			}
 			if hold {
 				if c.w != nil {
 					l.removeOwnerLocalWaitEdgeLocked(c.w)
@@ -516,10 +571,6 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 						// subsequent isLockModeAllowed checks on either key see the
 						// correct mode.
 						l.setModePairedRangeLock(key, updated, c.opts.Mode)
-					}
-					err := c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{key}, l.logger)
-					if err != nil {
-						return err
 					}
 					c.result.NewLockAdd = true
 				}
@@ -615,7 +666,7 @@ func (l *localLockTable) handleLockConflictLocked(
 	}
 
 	if c.opts.Granularity == pb.Granularity_Range {
-		l.closeRangeLastWaiterLocked(c)
+		l.closeRangeWaiterLocked(c, c.w, false)
 	}
 
 	c.w.conflictKey.Store(&key)
@@ -649,26 +700,35 @@ func (l *localLockTable) handleLockConflictLocked(
 	return nil
 }
 
-func (l *localLockTable) closeRangeLastWaiterLocked(c *lockContext) {
+func (l *localLockTable) closeRangeWaiterLocked(
+	c *lockContext,
+	w *waiter,
+	allowMissing bool,
+) {
 	if len(c.rangeLastWaitKey) == 0 {
 		return
 	}
 
 	v, ok := l.mu.store.Get(c.rangeLastWaitKey)
 	if ok {
-		removed, empty := v.removeWaiter(c.w, l.logger)
+		removed, empty := v.removeWaiter(w, l.logger)
 		if removed {
-			l.removeOwnerLocalWaitEdgeLocked(c.w)
+			l.removeOwnerLocalWaitEdgeLocked(w)
 			l.removeInactiveOwnerLocalWaitEdgesLocked(v)
 			if empty {
-				l.mu.store.Delete(c.rangeLastWaitKey)
+				l.deleteEmptyLockLocked(c.rangeLastWaitKey, v)
 			}
 			c.rangeLastWaitKey = nil
 			return
 		}
-		if empty {
-			l.mu.store.Delete(c.rangeLastWaitKey)
-		}
+	}
+	if allowMissing && !ok {
+		// Range unlock notifies all waiters and removes both range entries.
+		// A notified waiter that then fails final admission therefore has no
+		// queue entry left to detach; only its txn/event references remain.
+		l.removeOwnerLocalWaitEdgeLocked(w)
+		c.rangeLastWaitKey = nil
+		return
 	}
 
 	l.logger.Error("missing range last wait key when moving waiter to next conflict",
@@ -677,22 +737,61 @@ func (l *localLockTable) closeRangeLastWaiterLocked(c *lockContext) {
 		zap.Binary("last-wait-key", c.rangeLastWaitKey),
 		zap.Bool("last-wait-key-exists", ok))
 
-	var deleteKeys [][]byte
+	type emptyLock struct {
+		key  []byte
+		lock Lock
+	}
+	var emptyLocks []emptyLock
 	l.mu.store.Iter(func(key []byte, lock Lock) bool {
-		removed, empty := lock.removeWaiter(c.w, l.logger)
+		removed, empty := lock.removeWaiter(w, l.logger)
 		if removed {
-			l.removeOwnerLocalWaitEdgeLocked(c.w)
+			l.removeOwnerLocalWaitEdgeLocked(w)
 			l.removeInactiveOwnerLocalWaitEdgesLocked(lock)
 		}
 		if removed && empty {
-			deleteKeys = append(deleteKeys, append([]byte(nil), key...))
+			emptyLocks = append(emptyLocks, emptyLock{
+				key:  append([]byte(nil), key...),
+				lock: lock,
+			})
 		}
 		return true
 	})
-	for _, key := range deleteKeys {
-		l.mu.store.Delete(key)
+	for _, empty := range emptyLocks {
+		l.deleteEmptyLockLocked(empty.key, empty.lock)
 	}
 	c.rangeLastWaitKey = nil
+}
+
+// deleteEmptyLockLocked removes the store ownership of an empty lock and
+// returns its pooled state exactly once. Range endpoints are two Lock values
+// backed by the same holders and waiter queue, so both entries must disappear
+// before the shared state can be released.
+func (l *localLockTable) deleteEmptyLockLocked(key []byte, lock Lock) {
+	if !lock.isEmpty() {
+		return
+	}
+	if lock.isLockRow() ||
+		(!lock.isLockRangeStart() && !lock.isLockRangeEnd()) {
+		// The second form covers stale/legacy singleton entries without a
+		// granularity bit. They have no paired store ownership.
+		l.mu.store.Delete(key)
+		lock.release()
+		return
+	}
+
+	pairedKey, pairedLock, ok := l.findPairedRangeLock(key, lock)
+	if !ok || pairedLock.holders != lock.holders || pairedLock.waiters != lock.waiters {
+		// Do not return shared state to the pools while an unmatched endpoint may
+		// still reference it. Leaving the corrupt entry visible is safer than a
+		// use-after-reuse and makes the invariant failure observable.
+		l.logger.Error("missing paired empty range lock during waiter cleanup",
+			zap.Uint64("table", l.bind.Table),
+			zap.Binary("key", key))
+		return
+	}
+	l.mu.store.Delete(key)
+	l.mu.store.Delete(pairedKey)
+	lock.release()
 }
 
 func (l *localLockTable) addRangeLockLocked(
@@ -705,11 +804,25 @@ func (l *localLockTable) addRangeLockLocked(
 		if ok1 && ok2 &&
 			l1.isShared() && l2.isShared() &&
 			l1.isLockRangeStart() && l2.isLockRangeEnd() {
-			hold, newHolder := l1.tryHold(l.logger, c)
+			addTxnLock := func() error {
+				return c.txn.lockAdded(
+					l.bind.Group,
+					l.bind,
+					[][]byte{start, end},
+					l.logger,
+				)
+			}
+			hold, newHolder, err := l1.tryHold(l.logger, c, addTxnLock)
+			if err != nil {
+				return nil, Lock{}, err
+			}
 			if !hold {
 				panic("BUG: must get shared lock")
 			}
-			hold, _ = l2.tryHold(l.logger, c)
+			hold, _, err = l2.tryHold(l.logger, c, addTxnLock)
+			if err != nil {
+				return nil, Lock{}, err
+			}
 			if !hold {
 				panic("BUG: must get shared lock")
 			}
@@ -717,10 +830,6 @@ func (l *localLockTable) addRangeLockLocked(
 				c.w = nil
 			}
 			if newHolder {
-				err := c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{start, end}, l.logger)
-				if err != nil {
-					return nil, Lock{}, err
-				}
 				c.result.NewLockAdd = true
 			}
 			return nil, Lock{}, nil
@@ -786,7 +895,22 @@ func (l *localLockTable) addRangeLockLocked(
 		}
 
 		if len(conflictKey) > 0 {
-			hold, newHolder := conflictWith.tryHold(l.logger, c)
+			hold, newHolder, holdErr := conflictWith.tryHold(
+				l.logger,
+				c,
+				func() error {
+					return c.txn.lockAdded(
+						l.bind.Group,
+						l.bind,
+						[][]byte{conflictKey},
+						l.logger,
+					)
+				},
+			)
+			if holdErr != nil {
+				mc.rollback()
+				return nil, Lock{}, holdErr
+			}
 			if hold {
 				if c.w != nil {
 					c.w = nil
@@ -801,10 +925,6 @@ func (l *localLockTable) addRangeLockLocked(
 						// independent Lock.value bytes. Update the paired entry
 						// so both ends reflect the correct mode.
 						l.setModePairedRangeLock(conflictKey, updated, c.opts.Mode)
-					}
-					err = c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{conflictKey}, l.logger)
-					if err != nil {
-						return nil, Lock{}, err
 					}
 					c.result.NewLockAdd = true
 				}

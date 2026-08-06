@@ -102,54 +102,68 @@ func makeCrossJoinCentroidsMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 	return joinMetaAndCentroidsId, nil
 }
 
-func makeTblCrossJoinL2Centroids(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, currVersionCentroids int32, typeOriginPk Type, posOriginPk int, typeOriginVecColumn Type, posOriginVecColumn int, optype string) int32 {
+func makeTblCrossJoinL2Centroids(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, currVersionCentroids int32, typeOriginPk Type, posOriginPk int, typeOriginVecColumn Type, posOriginVecColumn int, includeSourceCols []ivfIncludeSourceCol, optype string) int32 {
+	projectList := []*Expr{
+		{ // centroids.version
+			Typ: makePlan2TypeValue(&bigIntType),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 1,
+					ColPos: 0,
+					Name:   catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+				},
+			},
+		},
+		{ // centroids.centroid_id
+			Typ: makePlan2TypeValue(&bigIntType),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 1,
+					ColPos: 1,
+					Name:   catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
+				},
+			},
+		},
+		{ // tbl.pk
+			Typ: *DeepCopyType(&typeOriginPk),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(posOriginPk),
+					Name:   tableDef.Cols[posOriginPk].Name,
+				},
+			},
+		},
+		{ // tbl.embedding
+			Typ: *DeepCopyType(&typeOriginVecColumn),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(posOriginVecColumn),
+					Name:   tableDef.Cols[posOriginVecColumn].Name,
+				},
+			},
+		},
+	}
+	for _, includeCol := range includeSourceCols {
+		projectList = append(projectList, &plan.Expr{
+			Typ: *DeepCopyType(&includeCol.typ),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(includeCol.pos),
+					Name:   includeCol.name,
+				},
+			},
+		})
+	}
+
 	joinTblAndCentroidsUsingCrossL2Join := builder.appendNode(&plan.Node{
 		NodeType:     plan.Node_JOIN,
 		JoinType:     plan.Node_L2,
 		ExtraOptions: optype,
 		Children:     []int32{lastNodeId, currVersionCentroids},
-		ProjectList: []*Expr{
-			{ // centroids.version
-				Typ: makePlan2TypeValue(&bigIntType),
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 1,
-						ColPos: 0,
-						Name:   catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-					},
-				},
-			},
-			{ // centroids.centroid_id
-				Typ: makePlan2TypeValue(&bigIntType),
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 1,
-						ColPos: 1,
-						Name:   catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
-					},
-				},
-			},
-			{ // tbl.pk
-				Typ: *DeepCopyType(&typeOriginPk),
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 0,
-						ColPos: int32(posOriginPk),
-						Name:   tableDef.Cols[posOriginPk].Name,
-					},
-				},
-			},
-			{ // tbl.embedding
-				Typ: *DeepCopyType(&typeOriginVecColumn),
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 0,
-						ColPos: int32(posOriginVecColumn),
-						Name:   tableDef.Cols[posOriginVecColumn].Name,
-					},
-				},
-			},
-		},
+		ProjectList:  projectList,
 		OnList: []*Expr{
 			{ // centroids.centroid
 				Typ: *DeepCopyType(&typeOriginVecColumn),
@@ -179,10 +193,6 @@ func makeTblCrossJoinL2Centroids(builder *QueryBuilder, bindCtx *BindContext, ta
 func makeFinalProject(builder *QueryBuilder, bindCtx *BindContext, joinTblAndCentroidsUsingCrossL2Join int32) (int32, error) {
 	var finalProjections = getProjectionByLastNode(builder, joinTblAndCentroidsUsingCrossL2Join)
 
-	centroidsVersion := DeepCopyExpr(finalProjections[0])
-	centroidsId := DeepCopyExpr(finalProjections[1])
-	tblPk := DeepCopyExpr(finalProjections[2])
-	tblEmbedding := DeepCopyExpr(finalProjections[3])
 	cpKey, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{
 		DeepCopyExpr(finalProjections[0]),
 		DeepCopyExpr(finalProjections[1]),
@@ -192,11 +202,17 @@ func makeFinalProject(builder *QueryBuilder, bindCtx *BindContext, joinTblAndCen
 		return -1, err
 	}
 
+	projectList := make([]*Expr, 0, len(finalProjections)+1)
+	for _, projection := range finalProjections {
+		projectList = append(projectList, DeepCopyExpr(projection))
+	}
+	projectList = append(projectList, cpKey)
+
 	projectWithCpKey := builder.appendNode(
 		&plan.Node{
 			NodeType:    plan.Node_PROJECT,
 			Children:    []int32{joinTblAndCentroidsUsingCrossL2Join},
-			ProjectList: []*Expr{centroidsVersion, centroidsId, tblPk, tblEmbedding, cpKey},
+			ProjectList: projectList,
 		},
 		bindCtx)
 	return projectWithCpKey, nil

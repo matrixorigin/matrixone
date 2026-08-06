@@ -33,6 +33,9 @@ docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn 
 # cn-1 
 docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn logs cn-1
 
+# proxy
+docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn logs proxy
+
 # tn
 docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn logs tn
 
@@ -47,17 +50,15 @@ docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn 
 username: minio
 password: minio123
 
-## connect service
+## connect service through proxy
 
-cn-0
 ```shell
 mysql -h 127.0.0.1 -P 6001 -udump -p111
 ```
 
-cn-1:
-```shell
-mysql -h 127.0.0.1 -P 7001 -udump -p111
-```
+Port `6001` is the Proxy entrypoint. CN SQL ports are intentionally not
+published to the host; clients should enter through Proxy so that both CNs are
+eligible backends.
 
 ## down
 

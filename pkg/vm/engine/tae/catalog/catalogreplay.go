@@ -230,7 +230,6 @@ func (catalog *Catalog) onReplayUpdateObject(
 		obj.CreateNode = cmd.mvccNode.TxnMVCCNode
 		cmd.mvccNode.CommitSideEffect = func(id string, ts types.TS) {
 			obj.CreateNode.ApplyCommit(id)
-			obj.EntryMVCCNode.ApplyCommit(ts)
 			rel.UpdateReplayEntryTs(obj, ts)
 		}
 		obj.ObjectMVCCNode = *cmd.mvccNode.BaseNode
@@ -264,14 +263,14 @@ func (catalog *Catalog) onReplayUpdateObject(
 			panic(fmt.Sprintf("obj %v not existed, table:\n%v", cmd.ID.String(), rel.StringWithLevel(3)))
 		}
 		obj = cobj.Clone()
-		obj.prevVersion = cobj
-		cobj.nextVersion = obj
+		updatedCreate := cobj.Clone()
+		updatedCreate.nextVersion = obj
+		obj.prevVersion = updatedCreate
 		obj.EntryMVCCNode = cmd.mvccNode.EntryMVCCNode
 		obj.DeleteNode = cmd.mvccNode.TxnMVCCNode
 		obj.ObjectMVCCNode = *cmd.mvccNode.BaseNode
 		cmd.mvccNode.CommitSideEffect = func(id string, ts types.TS) {
 			obj.DeleteNode.ApplyCommit(id)
-			obj.EntryMVCCNode.ApplyCommit(ts)
 			rel.UpdateReplayEntryTs(obj, ts)
 		}
 		obj.ObjectState = ObjectState_Delete_PrepareCommit
@@ -629,6 +628,7 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(
 		}
 		rel.AddEntryLocked(obj)
 		if !delete.IsEmpty() {
+			updatedCreate := obj.Clone()
 			dropped := obj.Clone()
 			dropped.DeletedAt = delete
 			dropped.DeleteNode = txnbase.TxnMVCCNode{
@@ -636,13 +636,15 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(
 				Prepare: delete,
 				End:     delete,
 			}
-			dropped.prevVersion = obj
-			obj.nextVersion = dropped
+			dropped.prevVersion = updatedCreate
+			updatedCreate.nextVersion = dropped
 			dropped.ObjectState = ObjectState_Delete_ApplyCommit
 			rel.AddEntryLocked(dropped)
+			obj = updatedCreate
 		}
 	} else {
 		if obj.DeletedAt.IsEmpty() && !delete.IsEmpty() {
+			updatedCreate := obj.Clone()
 			dropped := obj.Clone()
 			dropped.DeletedAt = delete
 			dropped.DeleteNode = txnbase.TxnMVCCNode{
@@ -650,15 +652,17 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(
 				Prepare: delete,
 				End:     delete,
 			}
-			dropped.prevVersion = obj
-			obj.nextVersion = dropped
+			dropped.prevVersion = updatedCreate
+			updatedCreate.nextVersion = dropped
 			dropped.ObjectState = ObjectState_Delete_ApplyCommit
 			rel.AddEntryLocked(dropped)
+			obj = updatedCreate
 		}
 	}
 	if obj.objData == nil {
 		obj.objData = catalog.MakeObjectFactory()(obj)
 	} else {
+		obj.objData.UpdateMeta(obj)
 		deleteAt := obj.GetDeleteAt()
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
 			obj.objData.TryUpgrade()
@@ -706,6 +710,37 @@ func (catalog *Catalog) OnReplayObjectBatch(
 		}
 		replayer.Submit(tid, replayFn)
 	}
+}
+
+func replayCheckpointDeleteObject(
+	rel *TableEntry,
+	obj *ObjectEntry,
+	createTS, deleteTS types.TS,
+) *ObjectEntry {
+	if obj.IsDEntry() {
+		return obj.prevVersion
+	}
+	if obj.HasDCounterpart() {
+		return obj
+	}
+
+	updatedCreate := obj.Clone()
+	updatedCreate.DeletedAt = types.TS{}
+	updatedCreate.DeleteNode = txnbase.TxnMVCCNode{}
+	updatedCreate.CreateNode = txnbase.NewTxnMVCCNodeWithTS(createTS)
+	updatedCreate.ObjectState = ObjectState_Create_ApplyCommit
+	updatedCreate.prevVersion = nil
+	updatedCreate.nextVersion = nil
+
+	deleteEntry := updatedCreate.Clone()
+	deleteEntry.DeletedAt = deleteTS
+	deleteEntry.DeleteNode = txnbase.NewTxnMVCCNodeWithTS(deleteTS)
+	deleteEntry.ObjectState = ObjectState_Delete_ApplyCommit
+	updatedCreate.nextVersion = deleteEntry
+	deleteEntry.prevVersion = updatedCreate
+
+	rel.AddEntryLocked(deleteEntry)
+	return updatedCreate
 }
 
 func (catalog *Catalog) onReplayCheckpointObject(
@@ -767,9 +802,10 @@ func (catalog *Catalog) onReplayCheckpointObject(
 				createTS.ToString(), deleteTS.ToString(), isTombstone, objNode.String(),
 				start.ToString(), prepare.ToString(), end.ToString(), rel.StringWithLevel(3)))
 		}
+		updatedCreate := obj.Clone()
 		deleteNode := obj.Clone()
-		obj.nextVersion = deleteNode
-		deleteNode.prevVersion = obj
+		updatedCreate.nextVersion = deleteNode
+		deleteNode.prevVersion = updatedCreate
 		deleteNode.EntryMVCCNode = EntryMVCCNode{
 			CreatedAt: createTS,
 			DeletedAt: deleteTS,
@@ -782,6 +818,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		}
 		deleteNode.ObjectState = ObjectState_Delete_ApplyCommit
 		rel.AddEntryLocked(deleteNode)
+		obj = updatedCreate
 	}
 	if !createTS.Equal(&end) && !deleteTS.Equal(&end) {
 		// In back up, aobj is replaced with naobj and its DeleteAt is removed.
@@ -805,10 +842,12 @@ func (catalog *Catalog) onReplayCheckpointObject(
 				obj, _ = rel.GetObjectByID(objid, isTombstone)
 				if obj == nil {
 					obj = newObject()
+					obj.DeletedAt = types.TS{}
+					obj.DeleteNode = txnbase.TxnMVCCNode{}
+					obj.CreateNode = txnbase.NewTxnMVCCNodeWithTS(createTS)
 					rel.AddEntryLocked(obj)
 				}
-				obj.CreateNode = txnbase.NewTxnMVCCNodeWithTS(createTS)
-				obj.DeleteNode = txnbase.NewTxnMVCCNodeWithTS(deleteTS)
+				obj = replayCheckpointDeleteObject(rel, obj, createTS, deleteTS)
 			}
 		}
 	}
@@ -823,10 +862,14 @@ func (catalog *Catalog) onReplayCheckpointObject(
 	if obj.objData == nil {
 		obj.objData = catalog.MakeObjectFactory()(obj)
 	} else {
+		obj.objData.UpdateMeta(obj)
 		deleteAt := obj.GetDeleteAt()
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
 			obj.objData.TryUpgrade()
 		}
+	}
+	if next := obj.GetNextVersion(); next != nil {
+		next.objData = obj.objData
 	}
 }
 

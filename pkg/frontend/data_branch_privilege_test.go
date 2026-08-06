@@ -59,6 +59,20 @@ func TestBranchRequirementToPrivilegeCopiesLightPrivilegeFields(t *testing.T) {
 	}
 }
 
+func TestLockDataBranchTargetAccount(t *testing.T) {
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	require.NoError(t, lockDataBranchTargetAccount(context.Background(), bh, nil))
+	require.Empty(t, bh.executedSQLs)
+
+	toAccount := &tree.ToAccountOpt{AccountName: tree.Identifier("target_account")}
+	expectedSQL, err := getSqlForLockMoAccountNameFormat(context.Background(), toAccount.AccountName.String())
+	require.NoError(t, err)
+	require.NoError(t, lockDataBranchTargetAccount(context.Background(), bh, toAccount))
+	require.Equal(t, []string{expectedSQL}, bh.executedSQLs)
+}
+
 func TestBranchDeleteDatabaseTableIDsSQLReusesCloneObjectFilter(t *testing.T) {
 	const (
 		accountID uint32 = 42
@@ -76,15 +90,41 @@ func TestBranchDeleteDatabaseTableIDsSQLReusesCloneObjectFilter(t *testing.T) {
 	got := branchDeleteDatabaseTableIDsSQL(accountID, dbName)
 
 	require.Equal(t, expected, got)
-	require.Contains(t, got, "relname not like '\\\\_\\\\_mo\\\\_index\\\\_%' escape '\\\\'")
-	require.Contains(t, got, "relname not like '\\\\_\\\\_mo\\\\_tmp\\\\_%' escape '\\\\'")
+	require.Contains(t, got, "relkind not in (")
+	require.Contains(t, got, "'i'")
+	require.Contains(t, got, "'fulltext'")
+	require.Contains(t, got, "'metadata'")
+	require.Contains(t, got, "'hnsw_meta'")
+	require.Contains(t, got, "relkind = 'temporary_table'")
+	require.Contains(t, got, "mo_is_legacy_temporary_table(coalesce(relkind, ''), coalesce(relname, ''), coalesce(reldatabase, ''), coalesce(rel_createsql, ''), coalesce(extra_info, ''))")
+	require.Contains(t, got, "coalesce(relkind, '') not in ('r', 'v', 'e', 'm', 's', 'cluster', 'partition', 'S') and regexp_like(relname, '^__mo_tmp_[0-9a-f]{32}_')")
 	require.Contains(t, got, "relkind != 'partition'")
 	require.Contains(t, got, "relkind != 'S'")
 	require.Contains(t, got, "relkind != 'v'")
+	require.NotContains(t, got, "relname != 'mo_increment_columns'")
+	require.NotContains(t, got, "relname != '__mo_account_lock'")
+	require.NotContains(t, got, "relname not like")
 }
 
-func TestQuoteSQLLikePatternEscapesWildcardCharacters(t *testing.T) {
-	require.Equal(t, "'a\\\\_b\\\\%c%'", quoteSQLLikePattern("a_b%c"))
+func TestBuildTableInfoListWhereClauseUsesRelationKindForInternalObjects(t *testing.T) {
+	got := buildTableInfoListWhereClause("db1", "", 42)
+
+	require.Contains(t, got, "relkind not in (")
+	require.Contains(t, got, "'i'")
+	require.Contains(t, got, "'fulltext'")
+	require.Contains(t, got, "'metadata'")
+	require.Contains(t, got, "'hnsw_meta'")
+	require.Contains(t, got, "relkind = 'temporary_table'")
+	require.Contains(t, got, "mo_is_legacy_temporary_table(coalesce(relkind, ''), coalesce(relname, ''), coalesce(reldatabase, ''), coalesce(rel_createsql, ''), coalesce(extra_info, ''))")
+	require.Contains(t, got, "coalesce(relkind, '') not in ('r', 'v', 'e', 'm', 's', 'cluster', 'partition', 'S') and regexp_like(relname, '^__mo_tmp_[0-9a-f]{32}_')")
+	require.NotContains(t, got, catalog.MOAutoIncrTable)
+	require.NotContains(t, got, catalog.MO_ACCOUNT_LOCK)
+	require.NotContains(t, got, "relname not like '__mo_tmp_%'")
+
+	systemCatalog := buildTableInfoListWhereClause(catalog.MO_CATALOG, "", 0)
+	require.Contains(t, systemCatalog, "relname != '"+catalog.MOAutoIncrTable+"'")
+	require.Contains(t, systemCatalog, "relname != '"+catalog.MO_ACCOUNT_LOCK+"'")
+	require.Contains(t, systemCatalog, `relname not like '\\_\\_mo\\_index\\_%' escape '\\'`)
 }
 
 func TestQuoteIdentifierForSQLEscapesBackticks(t *testing.T) {

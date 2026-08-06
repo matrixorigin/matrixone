@@ -449,7 +449,6 @@ func (idx *Index) streamBoolean(q BoolQuery, algo ScoreAlgo, filter docfilter.Me
 	gs := idx.newGlobalStats()
 	for si, seg := range idx.segments {
 		allow := andAllow(mkAllow(seg, filter), &livenessMembership{idx: idx, si: si})
-		seg := seg // capture for the emit closure
 		err := seg.evalBoolean(q, algo, allow, gs, func(ord int, score float32) {
 			sink.pushPk(seg, int64(ord), score) // pushPk no-ops once the sink has stopped
 		})

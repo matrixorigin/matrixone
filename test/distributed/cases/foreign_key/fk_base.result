@@ -51,9 +51,9 @@ create table c1 (a int, b int, foreign key f_a(a) references f1(a));
 insert into f1 values (1,1), (2,2), (3,3);
 insert into c1 values (1,1), (2,2), (3,3);
 update f1 set a = 11 where b = 1;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update c1 set a = 11 where b = 1;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 update c1 set a = null where b = 1;
 select * from c1 order by b;
 a	b
@@ -120,11 +120,11 @@ INSERT INTO t_emp VALUES (7698,'BLAKE',30,2850.00);
 INSERT INTO t_emp VALUES (7782,'CLARK',10,2950.00);
 INSERT INTO t_emp VALUES (7788,'SCOTT',20,3500.00);
 update t_dept set id = 50 where name = 'ACCOUNTING';
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 delete from t_dept where name = 'ACCOUNTING';
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 update t_emp set deptId = 50 where salary <  1500;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 update t_emp set deptId = null where salary <  1500;
 select * from t_emp order by salary;
 id    name    deptid    salary
@@ -205,7 +205,7 @@ id    name    deptid    salary
 7698    BLAKE    30    2850.0
 7788    SCOTT    20    3500.0
 update t_emp1 set deptId = 50 where salary < 1500;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 update t_emp1 set deptId = null where salary < 1500;
 drop table t_emp1;
 drop table t_dept1;
@@ -271,7 +271,7 @@ id    name    deptid    salary
 7788    SCOTT    20    3500.0
 7782    CLARK    null    2950.0
 update t_emp2 set deptId = 50 where salary < 1500;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 update t_emp2 set deptId = null where salary < 1500;
 drop table t_emp2;
 drop table t_dept2;
@@ -282,9 +282,9 @@ insert into f1 values (1,1), (2,2), (3,3);
 insert into f2 values (11,11), (22,22), (33,33);
 insert into c1 values (1,11), (2,22), (3,33);
 update c1 set aaa=2, bbb=12 where bbb=11;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 update c1 set aaa=4, bbb=22 where bbb=11;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 update c1 set aaa=2, bbb=33 where bbb=11;
 select * from c1 order by bbb;
 aaa	bbbb
@@ -329,7 +329,7 @@ update f1 set a=a;
 update f1 set a=1;
 update f1 set a=a, b=2;
 update f1 set a=2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 drop table c1;
 drop table f1;
 create table f1(a int, b int, primary key (a,b));
@@ -340,7 +340,7 @@ update f1 set a=a;
 update f1 set a=a, b=1;
 update f1 set b=1, a=a;
 update f1 set a=a, b=2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 drop table c1;
 drop table f1;
 drop database if exists db1;

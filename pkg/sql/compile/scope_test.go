@@ -41,10 +41,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -54,9 +56,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -64,6 +68,65 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRefreshGroupConcatMaxLenForPreparedCompileReuse(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	sessionMaxLen := int64(5)
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		require.Equal(t, "group_concat_max_len", name)
+		require.True(t, system)
+		require.False(t, global)
+		return sessionMaxLen, nil
+	})
+
+	newGroupConcatExpr := func(separator string) aggexec.AggFuncExecExpression {
+		return aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfGroupConcat,
+			false,
+			nil,
+			aggexec.EncodeGroupConcatConfig(separator, 1024))
+	}
+	orderConfig := []byte{1, 2, 3}
+	newOrderedGroupConcatExpr := func() aggexec.AggFuncExecExpression {
+		return aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfGroupConcat,
+			false,
+			nil,
+			aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 1024),
+			plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER)
+	}
+	groupArg := group.NewArgument()
+	groupArg.Aggs = []aggexec.AggFuncExecExpression{
+		newGroupConcatExpr(""),
+		newOrderedGroupConcatExpr(),
+	}
+	mergeGroupArg := group.NewArgumentMergeGroup()
+	mergeGroupArg.Aggs = []aggexec.AggFuncExecExpression{newGroupConcatExpr("|")}
+	windowArg := window.NewArgument()
+	windowArg.Aggs = []aggexec.AggFuncExecExpression{newGroupConcatExpr(",")}
+	scopes := []*Scope{
+		{RootOp: groupArg},
+		{RootOp: mergeGroupArg},
+		{RootOp: windowArg},
+	}
+
+	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc))
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 5), groupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 5), groupArg.Aggs[1].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("|", 5), mergeGroupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig(",", 5), windowArg.Aggs[0].GetExtraConfig())
+
+	sessionMaxLen = 1024
+	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc))
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), groupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 1024), groupArg.Aggs[1].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("|", 1024), mergeGroupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig(",", 1024), windowArg.Aggs[0].GetExtraConfig())
+
+	groupArg.Release()
+	mergeGroupArg.Release()
+	windowArg.Release()
+}
 
 func GetFilePath() string {
 	dir, _ := os.Getwd()
@@ -92,6 +155,177 @@ func checkSrcOpsWithDst(srcRoot vm.Operator, dstRoot vm.Operator) bool {
 		}
 	}
 	return true
+}
+
+func TestCompileProjectionUserLevelLockRunsOnCoordinator(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.anal = &AnalyzeModule{curNodeIdx: 1, isFirst: true}
+
+	node := &plan.Node{
+		ProjectList: []*plan.Expr{makeUserLevelLockExpr(function.GET_LOCK)},
+	}
+	ss := []*Scope{
+		{Magic: Remote, Proc: testCompile.proc, NodeInfo: engine.Node{Addr: "cn2:6001", Mcpu: 1}, RootOp: table_scan.NewArgument()},
+		{Magic: Remote, Proc: testCompile.proc, NodeInfo: engine.Node{Addr: "cn3:6001", Mcpu: 1}, RootOp: table_scan.NewArgument()},
+	}
+
+	out := testCompile.compileProjection(node, ss)
+	require.Len(t, out, 1)
+	require.IsType(t, &projection.Projection{}, out[0].RootOp)
+	require.IsType(t, &merge.Merge{}, out[0].RootOp.GetOperatorBase().GetChildren(0))
+	for _, scanScope := range ss {
+		require.IsType(t, &connector.Connector{}, scanScope.RootOp)
+		require.Nil(t, scanScope.RootOp.GetOperatorBase().GetChildren(0).(*table_scan.TableScan).ProjectList)
+	}
+}
+
+func TestCompileRestrictUserLevelLockRunsOnCoordinator(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.anal = &AnalyzeModule{curNodeIdx: 1, isFirst: true}
+
+	node := &plan.Node{
+		FilterList: []*plan.Expr{makeUserLevelLockExpr(function.GET_LOCK)},
+	}
+	ss := []*Scope{
+		{Magic: Remote, Proc: testCompile.proc, NodeInfo: engine.Node{Addr: "cn2:6001", Mcpu: 1}, RootOp: table_scan.NewArgument()},
+		{Magic: Remote, Proc: testCompile.proc, NodeInfo: engine.Node{Addr: "cn3:6001", Mcpu: 1}, RootOp: table_scan.NewArgument()},
+	}
+
+	out := testCompile.compileRestrict(node, ss)
+	require.Len(t, out, 1)
+	require.IsType(t, &filter.Filter{}, out[0].RootOp)
+	require.IsType(t, &merge.Merge{}, out[0].RootOp.GetOperatorBase().GetChildren(0))
+	for _, scanScope := range ss {
+		require.IsType(t, &connector.Connector{}, scanScope.RootOp)
+		require.Nil(t, scanScope.RootOp.GetOperatorBase().GetChildren(0).(*table_scan.TableScan).FilterExprs)
+	}
+}
+
+func TestUserLevelLockNodeExpressionScannerCoversSortAndWindow(t *testing.T) {
+	require.True(t, nodeHasUserLevelLockFunction(&plan.Node{
+		OrderBy: []*plan.OrderBySpec{{Expr: makeUserLevelLockExpr(function.GET_LOCK)}},
+	}))
+	require.True(t, nodeHasUserLevelLockFunction(&plan.Node{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				PartitionBy: []*plan.Expr{makeUserLevelLockExpr(function.GET_LOCK)},
+				Frame: &plan.FrameClause{
+					Start: &plan.FrameBound{Val: makeUserLevelLockExpr(function.GET_LOCK)},
+				},
+			}},
+		}},
+	}))
+}
+
+func TestCompileProjectionUserLevelLockSingleRemoteScopeMergesToCoordinator(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.anal = &AnalyzeModule{curNodeIdx: 1, isFirst: true}
+
+	node := &plan.Node{
+		ProjectList: []*plan.Expr{{
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: int64(function.RELEASE_ALL_LOCKS) << 32},
+			}},
+		}},
+	}
+	scanScope := &Scope{
+		Magic:    Remote,
+		Proc:     testCompile.proc,
+		NodeInfo: engine.Node{Addr: "cn2:6001", Mcpu: 1},
+		RootOp:   table_scan.NewArgument(),
+	}
+
+	out := testCompile.compileProjection(node, []*Scope{scanScope})
+	require.Len(t, out, 1)
+	require.IsType(t, &projection.Projection{}, out[0].RootOp)
+	require.IsType(t, &merge.Merge{}, out[0].RootOp.GetOperatorBase().GetChildren(0))
+	require.IsType(t, &connector.Connector{}, scanScope.RootOp)
+	require.Nil(t, scanScope.RootOp.GetOperatorBase().GetChildren(0).(*table_scan.TableScan).ProjectList)
+}
+
+func TestCompileTableScanOrdinaryFilterIsInlineOnly(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.anal = &AnalyzeModule{curNodeIdx: 1, isFirst: true}
+	scope := generateScopeWithRootOperator(testCompile.proc, []vm.OpType{vm.TableScan})
+	node := makeOrdinaryTableScanFilterNode()
+
+	out := testCompile.compileTableScanFiltersAndProjection(node, []*Scope{scope})
+
+	require.Len(t, out, 1)
+	require.NoError(t, checkScopeWithExpectedList(out[0], []vm.OpType{vm.TableScan}))
+	ts := out[0].RootOp.(*table_scan.TableScan)
+	require.NotEmpty(t, ts.FilterExprs)
+	require.NotEmpty(t, ts.ProjectList)
+}
+
+func TestCompileTableScanOrdinaryFilterFallsBackWhenNotEmbedded(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.anal = &AnalyzeModule{curNodeIdx: 1, isFirst: true}
+	scanScope := &Scope{
+		Magic:    Remote,
+		Proc:     testCompile.proc,
+		NodeInfo: engine.Node{Addr: "cn2:6001", Mcpu: 1},
+		RootOp:   table_scan.NewArgument(),
+	}
+	node := makeOrdinaryTableScanFilterNode()
+	node.ProjectList = []*plan.Expr{makeUserLevelLockExpr(function.GET_LOCK)}
+
+	out := testCompile.compileTableScanFiltersAndProjection(node, []*Scope{scanScope})
+
+	require.Len(t, out, 1)
+	require.IsType(t, &projection.Projection{}, out[0].RootOp)
+	require.IsType(t, &filter.Filter{}, out[0].RootOp.GetOperatorBase().GetChildren(0))
+	require.IsType(t, &merge.Merge{}, out[0].RootOp.GetOperatorBase().GetChildren(0).GetOperatorBase().GetChildren(0))
+	require.IsType(t, &connector.Connector{}, scanScope.RootOp)
+	require.Nil(t, scanScope.RootOp.GetOperatorBase().GetChildren(0).(*table_scan.TableScan).FilterExprs)
+}
+
+func BenchmarkCompileTableScanOrdinaryFilterInlineOnly(b *testing.B) {
+	proc := testutil.NewProcess(b)
+	node := makeOrdinaryTableScanFilterNode()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		c := &Compile{
+			proc: proc,
+			anal: &AnalyzeModule{curNodeIdx: 1, isFirst: true},
+		}
+		scope := generateScopeWithRootOperator(proc, []vm.OpType{vm.TableScan})
+		out := c.compileTableScanFiltersAndProjection(node, []*Scope{scope})
+		if len(out) != 1 {
+			b.Fatalf("expected one scope, got %d", len(out))
+		}
+		if _, ok := out[0].RootOp.(*table_scan.TableScan); !ok {
+			b.Fatalf("ordinary table scan filter should stay inline, got %T", out[0].RootOp)
+		}
+	}
+}
+
+func makeOrdinaryTableScanFilterNode() *plan.Node {
+	return &plan.Node{
+		FilterList: []*plan.Expr{{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Bval{Bval: true},
+		}}}},
+		ProjectList: []*plan.Expr{{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}}},
+	}
+}
+
+func makeUserLevelLockExpr(fid int64) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: int64(fid) << 32},
+			Args: []*plan.Expr{
+				{Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "concat"},
+					Args: []*plan.Expr{{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}}},
+				}}},
+				{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: 0}}}},
+			},
+		}},
+	}
 }
 
 func TestScopeSerialization(t *testing.T) {
@@ -514,6 +748,37 @@ func TestNewParallelScope(t *testing.T) {
 	}
 }
 
+func TestParallelScopeGenerationsReleasedAtCompileResetBoundary(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.isPrepare = true
+	testCompile.proc.Reg.MergeReceivers = []*process.WaitRegister{{}}
+	scopeToParallel := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.HashJoin, vm.Projection, vm.Limit, vm.Connector},
+	)
+	scopeToParallel.NodeInfo.Mcpu = 2
+
+	first, firstWorkers := newParallelScope(scopeToParallel)
+	require.Len(t, firstWorkers, 2)
+	require.Contains(t, scopeToParallel.PreScopes, first)
+	require.Equal(t, []*Scope{first}, scopeToParallel.parallelGenerations)
+
+	require.NoError(t, scopeToParallel.reset(testCompile, false))
+	require.NotContains(t, scopeToParallel.PreScopes, first)
+	require.Empty(t, scopeToParallel.parallelGenerations)
+
+	second, secondWorkers := newParallelScope(scopeToParallel)
+	require.Len(t, secondWorkers, 2)
+	require.Contains(t, scopeToParallel.PreScopes, second)
+	require.Equal(t, []*Scope{second}, scopeToParallel.parallelGenerations)
+	require.Len(t, scopeToParallel.PreScopes, 1,
+		"reused execution must retain only its current physical generation")
+
+	// The final generation remains attached for post-run physical-plan
+	// analysis and is released with the owning template.
+	scopeToParallel.release()
+}
+
 func TestCompileExternValueScan(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001"}, engine.Node{Addr: "cn2:6001"}}
@@ -553,6 +818,21 @@ func TestCompileExternScanParallelWrite(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, checkScopeWithExpectedList(rs[0], []vm.OpType{vm.Merge}))
 	require.NoError(t, checkScopeWithExpectedList(rs[0].PreScopes[0], []vm.OpType{vm.External, vm.Dispatch}))
+}
+
+func TestGetLoadWriteS3ParallelSizeCapsLoad(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.ncpu = 16
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	n := &plan.Node{Stats: &plan.Stats{
+		Cost:    float64(colexec.WriteS3Threshold * 16),
+		Rowsize: 1,
+	}}
+
+	require.Equal(t, 16, testCompile.getLoadWriteS3ParallelSize(n, 16))
+
+	testCompile.anal.qry.LoadTag = true
+	require.Equal(t, loadWriteS3ParallelSizeLimit, testCompile.getLoadWriteS3ParallelSize(n, 16))
 }
 
 // TestCompileExternScanParallelWriteSourceScopeHasCorrectAddr verifies the
@@ -627,6 +907,29 @@ func TestConstructLocalDispatchFromScopesRejectsRemoteTarget(t *testing.T) {
 	require.Equal(t, beforeNilBatchCnt, untouchedTarget.Proc.Reg.MergeReceivers[0].NilBatchCnt,
 		"validation failure must not partially mutate earlier targets")
 	require.Empty(t, remoteTarget.RemoteReceivRegInfos)
+}
+
+func TestNewMergeScopeLimitsLoadReceiverChannelBuffer(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+	normalScope := &Scope{
+		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 8},
+		Proc:     testCompile.proc.NewNoContextChildProc(0),
+	}
+	normalMerge := testCompile.newMergeScope([]*Scope{normalScope})
+	_, normalCap := process.WaitRegisterChannelState(normalMerge.Proc.Reg.MergeReceivers[0])
+	require.Equal(t, 8, normalCap)
+
+	loadProc := testCompile.proc.NewNoContextChildProc(0)
+	loadProc.Base.LoadTag = true
+	loadScope := &Scope{
+		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 8},
+		Proc:     loadProc,
+	}
+	loadMerge := testCompile.newMergeScope([]*Scope{loadScope})
+	_, loadCap := process.WaitRegisterChannelState(loadMerge.Proc.Reg.MergeReceivers[0])
+	require.Equal(t, loadMergeReceiverChannelBufferSize, loadCap)
 }
 
 func TestConstructLocalDispatchFromScopesRejectsInvalidInputs(t *testing.T) {
@@ -1823,6 +2126,12 @@ func TestSuppressRemoteRunCancelError(t *testing.T) {
 		require.NoError(t, suppressRemoteRunCancelError(ctx, moerr.NewQueryInterrupted(ctx)))
 	})
 
+	t.Run("suppress raw context cancellation after proc cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		require.NoError(t, suppressRemoteRunCancelError(ctx, fmt.Errorf("open remote stream: %w", context.Canceled)))
+	})
+
 	t.Run("keep rpc timeout after proc cancel", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -1836,6 +2145,12 @@ func TestSuppressRemoteRunCancelError(t *testing.T) {
 		err := suppressRemoteRunCancelError(ctx, moerr.NewQueryInterrupted(ctx))
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+	})
+
+	t.Run("keep raw context cancellation while proc still active", func(t *testing.T) {
+		ctx := context.Background()
+		err := suppressRemoteRunCancelError(ctx, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 	})
 }
 
@@ -1964,6 +2279,84 @@ func TestMergeRunReturnsWhenRemotePreScopeAddressIsMalformed(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		parent.Proc.Cancel(moerr.NewInternalErrorNoCtx("test timeout"))
 		t.Fatal("merge run hung after malformed remote pre-scope failed")
+	}
+}
+
+func TestCollectMergeRunResultsPrefersProducerError(t *testing.T) {
+	cleanupErr := process.ErrPipelineEndSignalDeliveryFailed
+	producerErr := moerr.NewDuplicateEntryNoCtx("1000000", "")
+	notifyErr := moerr.NewInternalErrorNoCtx("remote producer failed")
+	internalCancelCtx, cancelInternal := context.WithCancelCause(context.Background())
+	cancelInternal(producerErr)
+	externalCancelCtx, cancelExternal := context.WithCancel(context.Background())
+	cancelExternal()
+
+	tests := []struct {
+		name     string
+		current  scopeRunResult
+		preScope []scopeRunResult
+		notify   []error
+		want     error
+	}{
+		{
+			name:     "producer error replaces cleanup fallback",
+			current:  scopeRunResult{err: cleanupErr},
+			preScope: []scopeRunResult{{err: context.Canceled}, {err: producerErr}},
+			want:     producerErr,
+		},
+		{
+			name:    "remote notifier error replaces cleanup fallback",
+			current: scopeRunResult{err: cleanupErr},
+			notify:  []error{notifyErr},
+			want:    notifyErr,
+		},
+		{
+			name:     "cleanup fallback does not replace producer error",
+			current:  scopeRunResult{err: producerErr},
+			preScope: []scopeRunResult{{err: cleanupErr}},
+			want:     producerErr,
+		},
+		{
+			name:     "internally canceled merge resolves to producer error",
+			current:  scopeRunResult{err: context.Canceled, ctx: internalCancelCtx},
+			preScope: []scopeRunResult{{err: producerErr}},
+			want:     producerErr,
+		},
+		{
+			name:     "internally interrupted merge resolves to producer error",
+			current:  scopeRunResult{err: moerr.NewQueryInterrupted(context.Background()), ctx: internalCancelCtx},
+			preScope: []scopeRunResult{{err: producerErr}},
+			want:     producerErr,
+		},
+		{
+			name:     "externally canceled merge remains canceled",
+			current:  scopeRunResult{err: context.Canceled, ctx: externalCancelCtx},
+			preScope: []scopeRunResult{{err: producerErr}},
+			want:     context.Canceled,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			preScopeResults := make(chan scopeRunResult, len(tt.preScope))
+			for _, result := range tt.preScope {
+				preScopeResults <- result
+			}
+			notifyResults := make(chan notifyMessageResult, len(tt.notify))
+			for _, err := range tt.notify {
+				notifyResults <- notifyMessageResult{err: err}
+			}
+
+			got := collectMergeRunResults(
+				testutil.NewProcess(t),
+				tt.current,
+				preScopeResults,
+				notifyResults)
+
+			require.Same(t, tt.want, got)
+			require.Empty(t, preScopeResults)
+			require.Empty(t, notifyResults)
+		})
 	}
 }
 
@@ -2422,4 +2815,67 @@ func TestRuntimeFilterResultKeepsItsOriginatingSpec(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestShuffleJoinStageNodesDistributesReceiversAndKeepsSinkScanWorker(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+	c.cnList = engine.Nodes{
+		{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 8},
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+	}
+
+	sinkMerge := merge.NewArgument().WithSinkScan(true)
+	root := projection.NewArgument()
+	root.AppendChild(sinkMerge)
+	sinkScope := &Scope{
+		RootOp:   root,
+		NodeInfo: engine.Node{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 1},
+	}
+
+	stageNodes, local := c.shuffleJoinStageNodes([]*Scope{sinkScope}, nil)
+	require.True(t, local)
+	require.Len(t, stageNodes, 2)
+	require.Equal(t, "cn-local:6001", stageNodes[0].Addr)
+	require.Equal(t, "cn-remote:6001", stageNodes[1].Addr)
+
+	normalScope := &Scope{RootOp: merge.NewArgument()}
+	stageNodes, local = c.shuffleJoinStageNodes([]*Scope{normalScope}, nil)
+	require.False(t, local)
+	require.Len(t, stageNodes, 2)
+
+	c.cnList = engine.Nodes{
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+	}
+	stageNodes, local = c.shuffleJoinStageNodes([]*Scope{sinkScope}, nil)
+	require.True(t, local)
+	require.Len(t, stageNodes, 2)
+	require.Equal(t, "cn-remote:6001", stageNodes[0].Addr)
+	require.Equal(t, "cn-local:6001", stageNodes[1].Addr)
+
+	c.cnList = nil
+	stageNodes, local = c.shuffleJoinStageNodes([]*Scope{sinkScope}, nil)
+	require.True(t, local)
+	require.Len(t, stageNodes, 1)
+	require.Equal(t, "cn-local:6001", stageNodes[0].Addr)
+}
+
+func TestAttachShuffleDispatchSourceFallsBackToFirstReceiver(t *testing.T) {
+	receivers := []*Scope{
+		{NodeInfo: engine.Node{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 1}},
+		{NodeInfo: engine.Node{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 1}},
+	}
+	remoteSource := &Scope{NodeInfo: engine.Node{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8}}
+
+	attachShuffleDispatchSource(receivers, remoteSource, true)
+	require.Equal(t, []*Scope{remoteSource}, receivers[0].PreScopes)
+	require.Empty(t, receivers[1].PreScopes)
+
+	localSource := &Scope{NodeInfo: engine.Node{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 8}}
+	attachShuffleDispatchSource(receivers[1:], localSource, false)
+	require.Equal(t, []*Scope{localSource}, receivers[1].PreScopes)
+
+	unmatched := []*Scope{{NodeInfo: engine.Node{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 1}}}
+	attachShuffleDispatchSource(unmatched, remoteSource, false)
+	require.Empty(t, unmatched[0].PreScopes)
 }

@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -45,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -56,6 +58,21 @@ import (
 var (
 	MaxPrepareNumberInOneSession atomic.Uint32
 )
+
+func currentProtocolVersion(proc *process.Process) int64 {
+	if proc == nil {
+		return defines.MORPCLatestVersion
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return defines.MORPCVersion4
+	}
+	version, ok := value.(int64)
+	if !ok {
+		return defines.MORPCVersion4
+	}
+	return version
+}
 
 func init() {
 	MaxPrepareNumberInOneSession.Store(100000)
@@ -142,7 +159,10 @@ type Session struct {
 	// resolution changes. Prepared statements use it to invalidate plans that
 	// were built against an older temporary-table mapping.
 	tempTableVersion uint64
-	hasLockedTables  atomic.Bool
+	// ddlVersion changes after every successful session DDL. It covers
+	// transaction-local catalog writes that are not visible in CatalogCache.
+	ddlVersion      atomic.Uint64
+	hasLockedTables atomic.Bool
 
 	prepareStmts map[string]*PrepareStmt
 	lastStmtId   uint32
@@ -394,6 +414,14 @@ func (ses *Session) GetTempTableVersion() uint64 {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.tempTableVersion
+}
+
+func (ses *Session) getDDLVersion() uint64 {
+	return ses.ddlVersion.Load()
+}
+
+func (ses *Session) advanceDDLVersion() {
+	ses.ddlVersion.Add(1)
 }
 
 // RemoveTempTable removes the temporary table alias
@@ -665,13 +693,29 @@ func (ses *Session) sqlModeHasMatrixOneNative() bool {
 	return ok && has
 }
 
-func (ses *Session) updateSqlModeCaches(oldNative bool, val interface{}) {
+func (ses *Session) sqlModeHasOnlyFullGroupBy() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasOnlyFullGroupByValue(value)
+	return ok && has
+}
+
+func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy bool, val interface{}) {
 	ses.updateSqlModeNoAutoValueOnZero(val)
 	newNative, ok := sqlModeHasMatrixOneNativeValue(val)
 	if !ok {
 		return
 	}
-	if oldNative != newNative {
+	newOnlyFullGroupBy, ok := sqlModeHasOnlyFullGroupByValue(val)
+	if !ok {
+		return
+	}
+	if oldNative != newNative || oldOnlyFullGroupBy != newOnlyFullGroupBy {
 		ses.cleanCache()
 	}
 }
@@ -699,7 +743,20 @@ func (e *errInfo) push(code uint16, msg string) {
 	e.msgs = append(e.msgs, msg)
 }
 
-func (e *errInfo) length() int {
+func (e *errInfo) reset() {
+	e.codes = e.codes[:0]
+	e.msgs = e.msgs[:0]
+}
+
+func (e *errInfo) snapshot() errInfo {
+	return errInfo{
+		codes:  append([]uint16(nil), e.codes...),
+		msgs:   append([]string(nil), e.msgs...),
+		maxCnt: e.maxCnt,
+	}
+}
+
+func (e errInfo) length() int {
 	return len(e.codes)
 }
 
@@ -859,6 +916,14 @@ func (ses *Session) Close() {
 		}()
 	}
 
+	if ses.proc != nil {
+		if ses.userLevelLocksMigrated {
+			function.DiscardMigratedUserLevelLocks(ses.proc)
+		} else {
+			function.ReleaseUserLevelLocksOnSessionClose(ses.proc)
+		}
+	}
+
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.feSessionImpl.Close()
@@ -943,7 +1008,7 @@ func (ses *Session) IsBackgroundSession() bool {
 	return false
 }
 
-func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan) {
+func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan, versions ...int64) {
 	if len(sql) == 0 {
 		return
 	}
@@ -953,7 +1018,11 @@ func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.
 		freeStmts(stmts)
 		return
 	}
-	ses.planCache.cache(sql, stmts, plans)
+	protocolVersion := currentProtocolVersion(ses.proc)
+	if len(versions) > 0 {
+		protocolVersion = versions[0]
+	}
+	ses.planCache.cache(sql, stmts, plans, protocolVersion)
 }
 
 func (ses *Session) getCachedPlan(sql string) *cachedPlan {
@@ -965,7 +1034,12 @@ func (ses *Session) getCachedPlan(sql string) *cachedPlan {
 	if ses.planCache == nil {
 		return nil
 	}
-	return ses.planCache.get(sql)
+	cached := ses.planCache.get(sql)
+	if cached != nil && cached.protocolVersion != currentProtocolVersion(ses.proc) {
+		ses.planCache.remove(sql)
+		return nil
+	}
+	return cached
 }
 
 func (ses *Session) isCached(sql string) bool {
@@ -1162,10 +1236,29 @@ func (ses *Session) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch, *perf
 	}
 }
 
-func (ses *Session) GetErrInfo() *errInfo {
+func (ses *Session) resetDiagnostics() {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.errInfo
+	if ses.errInfo != nil {
+		ses.errInfo.reset()
+	}
+}
+
+func (ses *Session) appendErrorDiagnostic(code uint16, msg string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo != nil {
+		ses.errInfo.push(code, msg)
+	}
+}
+
+func (ses *Session) diagnosticsSnapshot() errInfo {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo == nil {
+		return errInfo{}
+	}
+	return ses.errInfo.snapshot()
 }
 
 func (ses *Session) GenNewStmtId() uint32 {
@@ -1239,11 +1332,13 @@ func (ses *Session) GetTenantName() string {
 }
 
 func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt *PrepareStmt) error {
+	name = strings.ToLower(name)
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; !ok {
-		if len(ses.prepareStmts) >= int(MaxPrepareNumberInOneSession.Load()) {
-			return moerr.NewInvalidStatef(ctx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession.Load())
+		limit := ses.getMaxPrepareStmtCountLocked()
+		if uint64(len(ses.prepareStmts)) >= limit {
+			return moerr.NewMaxPreparedStmtCountReached(ctx, limit)
 		}
 	} else {
 		stmt.Close()
@@ -1257,10 +1352,22 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 	return nil
 }
 
+func (ses *Session) getMaxPrepareStmtCountLocked() uint64 {
+	limit := uint64(MaxPrepareNumberInOneSession.Load())
+	if ses.gSysVars == nil {
+		return limit
+	}
+	if value, ok := ses.gSysVars.Get(maxPreparedStmtCount).(int64); ok && value >= 0 && uint64(value) < limit {
+		return uint64(value)
+	}
+	return limit
+}
+
 func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareStmt, error) {
+	normalizedName := strings.ToLower(name)
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	if prepareStmt, ok := ses.prepareStmts[name]; ok {
+	if prepareStmt, ok := ses.prepareStmts[normalizedName]; ok {
 		return prepareStmt, nil
 	}
 	var connID uint32
@@ -1281,13 +1388,17 @@ func (ses *Session) GetPrepareStmts() []*PrepareStmt {
 	return ret
 }
 
-func (ses *Session) RemovePrepareStmt(name string) {
+func (ses *Session) RemovePrepareStmt(name string) bool {
+	name = strings.ToLower(name)
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	if stmt, ok := ses.prepareStmts[name]; ok {
-		stmt.Close()
+	stmt, ok := ses.prepareStmts[name]
+	if !ok {
+		return false
 	}
+	stmt.Close()
 	delete(ses.prepareStmts, name)
+	return true
 }
 
 // RemoveAllPrepareStmts closes and drops every cached prepared statement. It is
@@ -2191,6 +2302,12 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 	defer cancelRequestFunc()
 	ses.UpdateDebugString()
 	tenant := ses.GetTenantInfo()
+	if ses.proc != nil {
+		ses.proc.Base.SessionInfo.ConnectionID = uint64(req.ConnID)
+		if tenant != nil {
+			ses.proc.Base.SessionInfo.Account = tenant.GetTenant()
+		}
+	}
 	nodeCtx := cancelRequestCtx
 	rm := ses.getRoutineManager()
 	if rm != nil && rm.baseService != nil {
@@ -2207,6 +2324,9 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 	userID := defines.GetUserId(migrationCtx)
 	ses.Infof(migrationCtx, "do migration on connection %d, db: %s, account id: %d, user id: %d",
 		req.ConnID, req.DB, accountID, userID)
+	if len(req.UserLevelLocks) > 0 {
+		return moerr.NewInternalError(ctx, "cannot migrate connection while user-level locks are held")
+	}
 
 	dbm := newDBMigration(req.DB)
 	if err := dbm.Migrate(migrationCtx, ses); err != nil {

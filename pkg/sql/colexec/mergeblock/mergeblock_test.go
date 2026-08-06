@@ -19,6 +19,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -191,6 +193,136 @@ func mockBlockInfoBat(proc *process.Process, withStats bool) *batch.Batch {
 	}
 
 	return blockInfoBat
+}
+
+func makeLegacyBlockInfoBat(
+	t *testing.T,
+	proc *process.Process,
+	tableIdx int16,
+	rows uint32,
+) *batch.Batch {
+	t.Helper()
+
+	segmentID := objectio.NewSegmentid()
+	name := objectio.BuildObjectName(segmentID, 0)
+	loc := blockio.EncodeLocation(name, objectio.Extent{}, rows, 0)
+	blockIDSegment := loc.Name().SegmentId()
+	blockInfo := objectio.BlockInfo{
+		BlockID: *objectio.NewBlockid(
+			&blockIDSegment,
+			loc.Name().Num(),
+			loc.ID(),
+		),
+	}
+	blockInfo.SetMetaLocation(loc)
+
+	bat := batch.NewWithSize(3)
+	bat.Attrs = []string{
+		catalog.BlockMeta_TableIdx_Insert,
+		catalog.BlockMeta_BlockInfo,
+		catalog.ObjectMeta_ObjectStats,
+	}
+	bat.Vecs[0] = vector.NewVec(types.T_int16.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_binary.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], tableIdx, false, proc.GetMPool()))
+	require.NoError(t, vector.AppendBytes(
+		bat.Vecs[1], objectio.EncodeBlockInfo(&blockInfo), false, proc.GetMPool(),
+	))
+	require.NoError(t, vector.AppendBytes(
+		bat.Vecs[2], objectio.ZeroObjectStats.Marshal(), false, proc.GetMPool(),
+	))
+	bat.SetRowCount(1)
+	return bat
+}
+
+func newSplitTestArgument() *MergeBlock {
+	return &MergeBlock{
+		container: Container{
+			source: &mockRelation{},
+			mp:     make(map[int]*batch.Batch),
+			mp2:    make(map[int][]*batch.Batch),
+		},
+		AddAffectedRows: true,
+	}
+}
+
+func TestMergeBlockSplitRejectsLegacyIndexTable(t *testing.T) {
+	for _, tableIdx := range []int16{1, -2} {
+		t.Run(fmt.Sprintf("encoded-index-%d", tableIdx), func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			arg := newSplitTestArgument()
+			bat := makeLegacyBlockInfoBat(t, proc, tableIdx, 15)
+			t.Cleanup(func() {
+				bat.Clean(proc.GetMPool())
+				arg.Free(proc, false, nil)
+				proc.Free()
+				require.Zero(t, proc.GetMPool().CurrNB())
+			})
+
+			err := arg.Split(proc, bat, nil)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart))
+			require.Zero(t, arg.container.mp[0].RowCount())
+			require.Zero(t, arg.container.affectedRows)
+		})
+	}
+}
+
+func TestMergeBlockSplitReturnsAppendOOM(t *testing.T) {
+	for _, preallocateBlockInfo := range []bool{false, true} {
+		name := "block-info"
+		if preallocateBlockInfo {
+			name = "object-stats"
+		}
+		t.Run(name, func(t *testing.T) {
+			procMP, err := mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
+			require.NoError(t, err)
+			proc := testutil.NewProcessWithMPool(t, "", procMP)
+			arg := newSplitTestArgument()
+			bat := makeLegacyBlockInfoBat(t, proc, 0, 15)
+			var filler []byte
+			t.Cleanup(func() {
+				if filler != nil {
+					procMP.Free(filler)
+				}
+				bat.Clean(procMP)
+				arg.Free(proc, false, nil)
+				proc.Free()
+				currNB := procMP.CurrNB()
+				mpool.DeleteMPool(procMP)
+				require.Zero(t, currNB)
+			})
+
+			if preallocateBlockInfo {
+				// Keep capacity in the block-info destination so Split reaches
+				// the object-stats append before exhausting the mpool.
+				arg.GetMetaLocBat(bat, proc)
+				require.NoError(t, vector.AppendBytes(
+					arg.container.mp[0].Vecs[0],
+					bat.Vecs[1].GetBytesAt(0),
+					false,
+					procMP,
+				))
+			}
+
+			remaining := procMP.Cap() - procMP.CurrNB()
+			require.Greater(t, remaining, int64(1))
+			filler, err = procMP.Alloc(int(remaining-1), true)
+			require.NoError(t, err)
+
+			err = arg.Split(proc, bat, nil)
+			require.Error(t, err)
+			require.Zero(t, arg.container.mp[0].RowCount())
+			require.Zero(t, arg.container.affectedRows)
+
+			procMP.Free(filler)
+			filler = nil
+			require.NoError(t, arg.Split(proc, bat, nil))
+			require.Equal(t, 1, arg.container.mp[0].RowCount())
+			require.Equal(t, uint64(15), arg.container.affectedRows)
+		})
+	}
 }
 
 func TestArgument_GetMetaLocBat(t *testing.T) {

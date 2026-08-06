@@ -27,6 +27,7 @@ type SelectStatement interface {
 // Select represents a SelectStatement with an ORDER and/or LIMIT.
 type Select struct {
 	statementImpl
+	IsPerform      bool
 	Select         SelectStatement
 	RewriteOption  *RewriteOption
 	TimeWindow     *TimeWindow
@@ -39,6 +40,9 @@ type Select struct {
 }
 
 func (node *Select) Format(ctx *FmtCtx) {
+	if node.IsPerform {
+		ctx.WriteString("perform ")
+	}
 	if node.With != nil {
 		node.With.Format(ctx)
 		ctx.WriteByte(' ')
@@ -70,8 +74,13 @@ func (node *Select) Format(ctx *FmtCtx) {
 	}
 }
 
-func (node *Select) GetStatementType() string { return "Select" }
-func (node *Select) GetQueryType() string     { return QueryTypeDQL }
+func (node *Select) GetStatementType() string {
+	if node.IsPerform {
+		return "Perform"
+	}
+	return "Select"
+}
+func (node *Select) GetQueryType() string { return QueryTypeDQL }
 
 func NewSelect(s SelectStatement, o OrderBy, l *Limit) *Select {
 	return &Select{
@@ -106,6 +115,7 @@ type Rewrite struct {
 type TimeWindow struct {
 	Interval *Interval
 	Sliding  *Sliding
+	GapFill  bool
 	Fill     *Fill
 }
 
@@ -114,6 +124,9 @@ func (node *TimeWindow) Format(ctx *FmtCtx) {
 	if node.Sliding != nil {
 		ctx.WriteByte(' ')
 		node.Sliding.Format(ctx)
+	}
+	if node.GapFill {
+		ctx.WriteString(" gapfill(partition)")
 	}
 	if node.Fill != nil {
 		ctx.WriteByte(' ')

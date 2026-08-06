@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -58,6 +59,22 @@ func TestBuildPipelineContext(t *testing.T) {
 	// Cancel the context and check if it is canceled
 	proc.Cancel(nil)
 	assert.Error(t, proc.Ctx.Err())
+}
+
+func TestNewBatchFromSrcWithUntypedNull(t *testing.T) {
+	proc := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	src := batch.NewWithSize(1)
+	src.Vecs[0] = vector.NewConstNull(types.T_any.ToType(), 1, proc.Mp())
+	src.SetRowCount(1)
+	defer src.Clean(proc.Mp())
+
+	dst, err := proc.NewBatchFromSrc(src, 1)
+	require.NoError(t, err)
+	defer dst.Clean(proc.Mp())
+	require.Equal(t, types.T_any, dst.Vecs[0].GetType().Oid)
+	require.NoError(t, dst.Vecs[0].UnionBatch(src.Vecs[0], 0, 1, nil, proc.Mp()))
+	require.Equal(t, 1, dst.Vecs[0].Length())
+	require.True(t, dst.Vecs[0].IsNull(0))
 }
 
 func TestGetTaskService(t *testing.T) {
@@ -176,8 +193,13 @@ func TestDetachAndRestorePrepareParams(t *testing.T) {
 	require.False(t, proc.GetPrepareParamIsBin(0))
 	require.Equal(t, 1, params.Length(), "detach must not release owned params")
 
+	proc.BorrowPrepareParams(state)
+	require.Same(t, params, proc.GetPrepareParams())
+	require.True(t, proc.GetPrepareParamIsBin(0))
+	require.False(t, proc.Base.prepareParamsOwned)
+
 	proc.Free()
-	require.Equal(t, 1, params.Length(), "transient Process.Free must not release detached params")
+	require.Equal(t, 1, params.Length(), "transient Process.Free must not release borrowed params")
 
 	proc.RestorePrepareParams(state)
 	require.Same(t, params, proc.GetPrepareParams())
@@ -187,4 +209,11 @@ func TestDetachAndRestorePrepareParams(t *testing.T) {
 	proc.Free()
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
+}
+
+func TestGetPrepareParamsAtWithoutParams(t *testing.T) {
+	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
+	value, err := proc.GetPrepareParamsAt(0)
+	require.Error(t, err)
+	require.Nil(t, value)
 }

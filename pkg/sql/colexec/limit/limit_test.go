@@ -22,6 +22,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -133,6 +135,97 @@ func TestLimit(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestLimitDoesNotMutateInputBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	input := colexec.MakeMockBatchs(proc.Mp())
+	input.ShuffleIDX = 3
+	inputRows := input.RowCount()
+	inputLengths := make([]int, len(input.Vecs))
+	for i := range input.Vecs {
+		inputLengths[i] = input.Vecs[i].Length()
+	}
+
+	arg := NewArgument().WithLimit(plan2.MakePlan2Uint64ConstExprWithType(1))
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Batch.RowCount())
+	require.Equal(t, int32(3), result.Batch.ShuffleIDX)
+	require.Equal(t, inputRows, input.RowCount())
+	for i := range input.Vecs {
+		require.Equal(t, inputLengths[i], input.Vecs[i].Length())
+	}
+
+	arg.Reset(proc, false, nil)
+	secondInput := colexec.MakeMockBatchs(proc.Mp())
+	secondInput.ShuffleIDX = 7
+	secondChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{secondInput})
+	arg.Children = nil
+	arg.AppendChild(secondChild)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err = arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Batch.RowCount())
+	require.Equal(t, int32(7), result.Batch.ShuffleIDX)
+	require.Equal(t, secondInput.RowCount(), inputRows)
+	for i := range secondInput.Vecs {
+		require.Equal(t, inputLengths[i], secondInput.Vecs[i].Length())
+	}
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	secondChild.Free(proc, false, nil)
+	arg.Release()
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestLimitResetReleasesCopiedAllocationAccountData(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	input := batch.NewOffHeapWithSize(1)
+	input.SetVector(0, vector.NewOffHeapVecWithType(types.T_int64.ToType()))
+	require.NoError(t, input.SetAllocationAccount(selection))
+	for i := range 32 {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(i), false, proc.Mp()))
+	}
+	input.SetRowCount(32)
+
+	arg := NewArgument().WithLimit(plan2.MakePlan2Uint64ConstExprWithType(1))
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Batch.RowCount())
+
+	// Pipeline cleanup resets children before parents. Simulate HashJoin
+	// releasing its result batch, then verify Limit releases its accounted copy.
+	input.Clean(proc.Mp())
+	require.Positive(t, account.Snapshot().Used)
+	arg.Reset(proc, false, nil)
+	require.Nil(t, arg.ctr.buf)
+	require.Zero(t, account.Snapshot().Used)
+
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	arg.Release()
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func BenchmarkLimit(b *testing.B) {

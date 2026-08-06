@@ -275,6 +275,34 @@ func Test_GetFunctionByName(t *testing.T) {
 			name: "internal_numeric_scale", args: []types.Type{types.T_char.ToType(), types.T_int64.ToType()},
 			shouldErr: true,
 		},
+		{
+			name: "char_length", args: []types.Type{types.T_binary.ToType()},
+			shouldErr:  false,
+			requireFid: LENGTH_UTF8, requireOid: 3,
+			shouldCast: false,
+			requireRet: types.T_uint64.ToType(),
+		},
+		{
+			name: "char_length", args: []types.Type{types.T_varbinary.ToType()},
+			shouldErr:  false,
+			requireFid: LENGTH_UTF8, requireOid: 4,
+			shouldCast: false,
+			requireRet: types.T_uint64.ToType(),
+		},
+		{
+			name: "char_length", args: []types.Type{types.T_blob.ToType()},
+			shouldErr:  false,
+			requireFid: LENGTH_UTF8, requireOid: 5,
+			shouldCast: false,
+			requireRet: types.T_uint64.ToType(),
+		},
+		{
+			name: "character_length", args: []types.Type{types.T_varbinary.ToType()},
+			shouldErr:  false,
+			requireFid: LENGTH_UTF8, requireOid: 4,
+			shouldCast: false,
+			requireRet: types.T_uint64.ToType(),
+		},
 
 		{
 			name: "iff", args: []types.Type{types.T_bool.ToType(), types.T_any.ToType(), types.T_int64.ToType()},
@@ -615,6 +643,49 @@ func TestGetFunctionByNameAESDecryptReturnsBlob(t *testing.T) {
 func TestGetFunctionIsWinfunByName(t *testing.T) {
 	assert.Equal(t, true, GetFunctionIsWinFunByName("rank"))
 	assert.Equal(t, false, GetFunctionIsWinFunByName("floor"))
+}
+
+func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("rand"))
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("uuid"))
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("now"))
+	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_timestamp"))
+	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("abs"))
+	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("unknown_function"))
+}
+
+func TestProducesNoNullUsesFunctionContract(t *testing.T) {
+	require.True(t, ProducesNoNull(EncodeOverloadID(ISNULL, 0)))
+	require.False(t, ProducesNoNull(EncodeOverloadID(JSON_EXTRACT, 0)),
+		"STRICT only describes NULL-input propagation; a missing JSON path still returns SQL NULL")
+	require.False(t, ProducesNoNull(-1))
+}
+
+func TestDeduceNotNullableForValueWindowFunctions(t *testing.T) {
+	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
+	nullable := &plan.Expr{Typ: plan.Type{NotNullable: false}}
+
+	for _, tt := range []struct {
+		name string
+		fid  int32
+		args []*plan.Expr
+		want bool
+	}{
+		{name: "lag without default", fid: LAG, args: []*plan.Expr{notNull}},
+		{name: "lag with offset only", fid: LAG, args: []*plan.Expr{notNull, notNull}},
+		{name: "lag with non-null default", fid: LAG, args: []*plan.Expr{notNull, notNull, notNull}, want: true},
+		{name: "lag with nullable default", fid: LAG, args: []*plan.Expr{notNull, notNull, nullable}},
+		{name: "lead without default", fid: LEAD, args: []*plan.Expr{notNull}},
+		{name: "lead with non-null default", fid: LEAD, args: []*plan.Expr{notNull, notNull, notNull}, want: true},
+		{name: "first value can see empty frame", fid: FIRST_VALUE, args: []*plan.Expr{notNull}},
+		{name: "last value can see empty frame", fid: LAST_VALUE, args: []*plan.Expr{notNull}},
+		{name: "nth value can miss requested row", fid: NTH_VALUE, args: []*plan.Expr{notNull, notNull}},
+		{name: "row number remains non-null", fid: ROW_NUMBER, want: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, DeduceNotNullable(EncodeOverloadID(tt.fid, 0), tt.args))
+		})
+	}
 }
 
 func TestUserLevelLockBuiltinRegistration(t *testing.T) {

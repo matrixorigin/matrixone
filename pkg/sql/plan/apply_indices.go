@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"slices"
@@ -572,68 +573,70 @@ func getColSeqFromColDef(tblCol *plan.ColDef) string {
 	return fmt.Sprintf("%d", tblCol.GetSeqnum())
 }
 
+type fullTextIndexPath struct {
+	sortNode *plan.Node
+	aggNode  *plan.Node
+	scanNode *plan.Node
+}
+
+// resolveFullTextIndexPath finds the fulltext rewrite boundary. Projection
+// rewrites retain their direct SCAN and SORT -> SCAN shapes. Aggregate rewrites
+// locate the semantic AGG -> SCAN boundary through a single-input ancestor
+// chain, so operators above that boundary do not affect index eligibility.
+func (builder *QueryBuilder) resolveFullTextIndexPath(projNode *plan.Node) *fullTextIndexPath {
+	if scanNode := builder.resolveScanNodeFromProject(projNode, 1); scanNode != nil {
+		return &fullTextIndexPath{scanNode: scanNode}
+	}
+
+	if sortNode := builder.resolveSortNode(projNode, 1); sortNode != nil {
+		if scanNode := builder.resolveScanNodeWithIndex(sortNode, 1); scanNode != nil {
+			return &fullTextIndexPath{sortNode: sortNode, scanNode: scanNode}
+		}
+	}
+
+	for node := projNode; node != nil && len(node.Children) == 1; node = builder.qry.Nodes[node.Children[0]] {
+		if node.NodeType != plan.Node_AGG {
+			continue
+		}
+		if scanNode := builder.resolveScanNodeWithIndex(node, 1); scanNode != nil {
+			return &fullTextIndexPath{aggNode: node, scanNode: scanNode}
+		}
+	}
+	return nil
+}
+
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	defer builder.clearProjectGuard(projNode.NodeId)
 	var vecCtx *vectorSortContext
 	// FullText
 	{
-		// support the followings:
-		// 1. project -> scan
-		// 2. project -> sort -> scan
-		// 3. project -> aggregate -> scan
-		// try to find scanNode, sortNode from projNode
-		var sortNode, aggNode *plan.Node
-		sortNode = nil
-		aggNode = nil
-		scanNode := builder.resolveScanNodeFromProject(projNode, 1)
-		if scanNode == nil {
-			sortNode = builder.resolveSortNode(projNode, 1)
-			if sortNode == nil {
-				aggNode = builder.resolveAggNode(projNode, 1)
-				if aggNode == nil {
-					goto END_FULLTEXT
-				}
-			}
-
-			if sortNode != nil {
-				scanNode = builder.resolveScanNodeWithIndex(sortNode, 1)
-				if scanNode == nil {
-					goto END_FULLTEXT
-				}
-			}
-			if aggNode != nil {
-				scanNode = builder.resolveScanNodeWithIndex(aggNode, 1)
-				if scanNode == nil {
-					goto END_FULLTEXT
-				}
-			}
-		}
-
-		if aggNode != nil {
-			// agg node and scan node present.
-			// get the list of filter that is a match func (fulltext_match / bm25_match)
-			filterids, filter_ftidxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+		// Rewrites either a direct projection path or the aggregate input/scan
+		// boundary found through its single-input ancestors.
+		path := builder.resolveFullTextIndexPath(projNode)
+		if path != nil && path.aggNode != nil {
+			// agg node and scan node present
+			// get the list of filter that is fulltext_match func
+			filterids, filterFTIdxs := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
 
 			// apply the match indices (one unified pass handles a mix of MATCH + BM25)
 			if len(filterids) > 0 {
-				return builder.applyIndicesForAggUsingFullTextIndex(nodeID, projNode, aggNode, scanNode,
-					filterids, filter_ftidxs, colRefCnt, idxColMap)
+				return builder.applyIndicesForAggUsingFullTextIndex(nodeID, projNode, path.aggNode, path.scanNode,
+					filterids, filterFTIdxs, colRefCnt, idxColMap)
 			}
-		} else {
-			// get the list of project that is a match func (fulltext_match / bm25_match)
-			projids, proj_ftidxs := builder.getFullTextMatchFromProject(projNode, scanNode)
+		} else if path != nil {
+			// get the list of project that is fulltext_match func
+			projids, projFTIdxs := builder.getFullTextMatchFromProject(projNode, path.scanNode)
 
-			// get the list of filter that is a match func (fulltext_match / bm25_match)
-			filterids, filter_ftidxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+			// get the list of filter that is fulltext_match func
+			filterids, filterFTIdxs := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
 
 			// apply the match indices (one unified pass handles a mix of MATCH + BM25)
 			if len(filterids) > 0 || len(projids) > 0 {
-				return builder.applyIndicesForProjectionUsingFullTextIndex(nodeID, projNode, sortNode, scanNode,
-					filterids, filter_ftidxs, projids, proj_ftidxs, colRefCnt, idxColMap)
+				return builder.applyIndicesForProjectionUsingFullTextIndex(nodeID, projNode, path.sortNode, path.scanNode,
+					filterids, filterFTIdxs, projids, projFTIdxs, colRefCnt, idxColMap)
 			}
 		}
 	}
-END_FULLTEXT:
 
 	// 1. Vector Index Check
 	// Handle Queries like
@@ -643,9 +646,18 @@ END_FULLTEXT:
 		vecCtx = builder.buildVectorSortContextThroughJoin(projNode)
 	}
 	if vecCtx != nil {
-		multiTableIndexes := builder.collectVectorIndexes(vecCtx.scanNode)
+		multiTableIndexes, err := builder.collectVectorIndexes(vecCtx.scanNode)
+		if err != nil {
+			return nodeID, err
+		}
 		if len(multiTableIndexes) == 0 {
 			return nodeID, nil
+		}
+		// Preserve the dependency closure before a plugin is allowed to rewrite
+		// away the owning TABLE_SCAN. The final plan shape cannot be used as the
+		// source of truth after an index-only rewrite.
+		if err := builder.recordPreparedPluginDependencies(vecCtx.scanNode); err != nil {
+			return nodeID, err
 		}
 
 		var multiTableIndexKeys []string
@@ -678,9 +690,12 @@ END_FULLTEXT:
 				continue
 			}
 			vctxExt, mtiExt := toPlanplugin(vecCtx, multiTableIndex)
-			newNodeID, _, err := p.Plan().ApplyForSort(builder, vctxExt, mtiExt, nodeID, opts)
-			if err != nil || newNodeID != nodeID {
+			newNodeID, applied, err := p.Plan().ApplyForSort(builder, vctxExt, mtiExt, nodeID, opts)
+			if err != nil {
 				return newNodeID, err
+			}
+			if applied {
+				return newNodeID, nil
 			}
 		}
 
@@ -1345,47 +1360,23 @@ func isPositiveLiteralLimit(limit *plan.Expr) bool {
 }
 
 func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {
-	var sortNode, aggNode *plan.Node
-	scanNode := builder.resolveScanNodeFromProject(projNode, 1)
-	if scanNode == nil {
-		sortNode = builder.resolveSortNode(projNode, 1)
-		if sortNode == nil {
-			aggNode = builder.resolveAggNode(projNode, 1)
-			if aggNode == nil {
-				return nil
-			}
-		}
-
-		if sortNode != nil {
-			scanNode = builder.resolveScanNodeWithIndex(sortNode, 1)
-			if scanNode == nil {
-				return nil
-			}
-		}
-		if aggNode != nil {
-			scanNode = builder.resolveScanNodeWithIndex(aggNode, 1)
-			if scanNode == nil {
-				return nil
-			}
-		}
-	}
-
-	if scanNode == nil {
+	path := builder.resolveFullTextIndexPath(projNode)
+	if path == nil {
 		return nil
 	}
 
-	if aggNode != nil {
-		filterids, _ := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+	if path.aggNode != nil {
+		filterids, _ := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
 		if len(filterids) > 0 {
-			return []int32{scanNode.NodeId}
+			return []int32{path.scanNode.NodeId}
 		}
 		return nil
 	}
 
-	projids, _ := builder.getFullTextMatchFromProject(projNode, scanNode)
-	filterids, _ := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+	projids, _ := builder.getFullTextMatchFromProject(projNode, path.scanNode)
+	filterids, _ := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
 	if len(filterids) > 0 || len(projids) > 0 {
-		return []int32{scanNode.NodeId}
+		return []int32{path.scanNode.NodeId}
 	}
 	return nil
 }
@@ -1399,7 +1390,10 @@ func (builder *QueryBuilder) detectVectorGuard(projNode *plan.Node) []int32 {
 		return nil
 	}
 
-	multiTableIndexes := builder.collectVectorIndexes(vecCtx.scanNode)
+	multiTableIndexes, err := builder.collectVectorIndexes(vecCtx.scanNode)
+	if err != nil {
+		return nil
+	}
 	if len(multiTableIndexes) == 0 {
 		return nil
 	}
@@ -1435,10 +1429,10 @@ func (builder *QueryBuilder) detectVectorGuard(projNode *plan.Node) []int32 {
 	return nil
 }
 
-func (builder *QueryBuilder) collectVectorIndexes(scanNode *plan.Node) map[string]*MultiTableIndex {
+func (builder *QueryBuilder) collectVectorIndexes(scanNode *plan.Node) (map[string]*MultiTableIndex, error) {
 	multiTableIndexes := make(map[string]*MultiTableIndex)
 	if scanNode == nil || scanNode.TableDef == nil {
-		return multiTableIndexes
+		return multiTableIndexes, nil
 	}
 
 	for _, indexDef := range scanNode.TableDef.Indexes {
@@ -1452,7 +1446,72 @@ func (builder *QueryBuilder) collectVectorIndexes(scanNode *plan.Node) map[strin
 			multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
 		}
 	}
-	return multiTableIndexes
+
+	for name, multiTableIndex := range multiTableIndexes {
+		if err := validateVectorIndexDefGroup(builder.GetContext(), name, multiTableIndex); err != nil {
+			return nil, err
+		}
+	}
+	return multiTableIndexes, nil
+}
+
+func validateVectorIndexDefGroup(ctx context.Context, indexName string, multiTableIndex *MultiTableIndex) error {
+	if multiTableIndex == nil || len(multiTableIndex.IndexDefs) == 0 {
+		return nil
+	}
+
+	var reference *plan.IndexDef
+	for _, indexDef := range multiTableIndex.IndexDefs {
+		if indexDef == nil {
+			continue
+		}
+		if reference == nil {
+			reference = indexDef
+			continue
+		}
+		if reference.IndexName != indexDef.IndexName ||
+			catalog.ToLower(reference.IndexAlgo) != catalog.ToLower(indexDef.IndexAlgo) ||
+			!slices.Equal(reference.Parts, indexDef.Parts) {
+			return moerr.NewInternalErrorf(ctx, "inconsistent vector index metadata for index %s", indexName)
+		}
+		if catalog.ToLower(reference.IndexAlgo) == catalog.MoIndexIvfFlatAlgo.ToString() {
+			referenceIncludedColumns, err := indexDefIncludedColumns(reference)
+			if err != nil {
+				return err
+			}
+			includedColumns, err := indexDefIncludedColumns(indexDef)
+			if err != nil {
+				return err
+			}
+			if !slices.Equal(referenceIncludedColumns, includedColumns) {
+				return moerr.NewInternalErrorf(ctx, "inconsistent IVF-FLAT INCLUDE metadata for index %s", indexName)
+			}
+		}
+	}
+	if reference != nil {
+		multiTableIndex.IndexAlgo = catalog.ToLower(reference.IndexAlgo)
+	}
+	return nil
+}
+
+func getVectorIndexIncludedColumns(multiTableIndex *MultiTableIndex) ([]string, error) {
+	if multiTableIndex == nil || catalog.ToLower(multiTableIndex.IndexAlgo) != catalog.MoIndexIvfFlatAlgo.ToString() {
+		return nil, nil
+	}
+	for _, tableType := range []string{
+		catalog.SystemSI_IVFFLAT_TblType_Entries,
+		catalog.SystemSI_IVFFLAT_TblType_Metadata,
+		catalog.SystemSI_IVFFLAT_TblType_Centroids,
+	} {
+		includedColumns, err := indexDefIncludedColumns(multiTableIndex.IndexDefs[tableType])
+		if err != nil {
+			return nil, err
+		}
+		if len(includedColumns) > 0 {
+			return includedColumns, nil
+		}
+	}
+	return nil, nil
 }
 
 func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
@@ -2557,7 +2616,12 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		rightTags[tag] = true
 	}
 
-	col2Cond := make(map[int32]int)
+	type indexJoinCondition struct {
+		exprIdx  int
+		hashSlot int
+	}
+	col2Cond := make(map[int32]indexJoinCondition)
+	hashSlot := 0
 	for i, expr := range node.OnList {
 		if !isEquiCond(expr, leftTags, rightTags) {
 			continue
@@ -2565,10 +2629,15 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 
 		col := expr.GetF().Args[0].GetCol()
 		if col == nil {
+			hashSlot++
 			continue
 		}
 
-		col2Cond[col.ColPos] = i
+		col2Cond[col.ColPos] = indexJoinCondition{
+			exprIdx:  i,
+			hashSlot: hashSlot,
+		}
+		hashSlot++
 	}
 
 	joinOnPK := true
@@ -2586,7 +2655,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	}
 
 	indexes := builder.filterRegularIndexesByJoinHints(leftChild, leftChild.TableDef.Indexes)
-	condIdx := make([]int, 0, len(col2Cond))
+	condIdx := make([]indexJoinCondition, 0, len(col2Cond))
 	for _, idxDef := range indexes {
 		if !idxDef.TableExist || !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) || isSpatialIndexDef(idxDef) {
 			continue
@@ -2636,25 +2705,30 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		rfTag := builder.genNewMsgTag()
 
 		var rfBuildExpr *plan.Expr
+		var componentProbeExprs []*plan.Expr
 		if numParts == 1 {
+			condition := node.OnList[condIdx[0].exprIdx].GetF()
 			rfBuildExpr = &plan.Expr{
-				Typ: idxTableDef.Cols[0].Typ,
+				Typ: condition.Args[1].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: -1,
-						ColPos: 0,
+						ColPos: int32(condIdx[0].hashSlot),
 					},
 				},
 			}
 		} else {
 			serialArgs := make([]*plan.Expr, len(condIdx))
+			componentProbeExprs = make([]*plan.Expr, len(condIdx))
 			for i := range condIdx {
+				componentProbeExprs[i] =
+					node.OnList[condIdx[i].exprIdx].GetF().Args[0]
 				serialArgs[i] = &plan.Expr{
-					Typ: node.OnList[condIdx[i]].GetF().Args[1].Typ,
+					Typ: node.OnList[condIdx[i].exprIdx].GetF().Args[1].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: -1,
-							ColPos: int32(condIdx[i]),
+							ColPos: int32(condIdx[i].hashSlot),
 						},
 					},
 				}
@@ -2671,6 +2745,39 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 				},
 			},
 		}
+		var nodeProbeRuntimeFilter, nodeBuildRuntimeFilter *plan.RuntimeFilterSpec
+		var hasRuntimeFilter bool
+		if len(componentProbeExprs) == 0 {
+			nodeProbeRuntimeFilter, nodeBuildRuntimeFilter, hasRuntimeFilter =
+				builder.makeExactRuntimeFilterPair(
+					rfTag,
+					len(condIdx) < numParts,
+					GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt),
+					probeExpr,
+					rfBuildExpr,
+					false,
+				)
+		} else {
+			nodeProbeRuntimeFilter, nodeBuildRuntimeFilter, hasRuntimeFilter =
+				builder.makeSerializedExactRuntimeFilterPair(
+					rfTag,
+					len(condIdx) < numParts,
+					GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt),
+					probeExpr,
+					rfBuildExpr,
+					componentProbeExprs,
+					false,
+				)
+		}
+		if !hasRuntimeFilter && !forceJoinIndex {
+			// The index lookup cost model assumes targeted runtime-filter
+			// pruning.  Without a materializable exact pair this rewrite would
+			// scan the index table under a no-op PASS dependency.
+			continue
+		}
+		// FORCE INDEX remains an explicit request to use the index even when
+		// its serialized lookup key has no proven exact-filter contract. Honor
+		// the hint without publishing a no-op dependency or optimistic stats.
 
 		// recod index table scan info
 		idxScanInfo := plan.IndexScanInfo{
@@ -2682,22 +2789,27 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			IndexTableName: idxDef.IndexTableName,
 		}
 
-		nodeProbeRuntimeFilter := MakeRuntimeFilter(rfTag, len(condIdx) < numParts, 0, probeExpr, false)
-		idxTableNodeID := builder.appendNode(&plan.Node{
-			NodeType:               plan.Node_TABLE_SCAN,
-			TableDef:               idxTableDef,
-			ObjRef:                 idxObjRef,
-			IndexScanInfo:          idxScanInfo,
-			ParentObjRef:           DeepCopyObjectRef(leftChild.ObjRef),
-			BindingTags:            []int32{idxTag},
-			ScanSnapshot:           leftChild.ScanSnapshot,
-			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{nodeProbeRuntimeFilter},
-		}, builder.ctxByNode[nodeID])
+		idxTableNode := &plan.Node{
+			NodeType:      plan.Node_TABLE_SCAN,
+			TableDef:      idxTableDef,
+			ObjRef:        idxObjRef,
+			IndexScanInfo: idxScanInfo,
+			ParentObjRef:  DeepCopyObjectRef(leftChild.ObjRef),
+			BindingTags:   []int32{idxTag},
+			ScanSnapshot:  leftChild.ScanSnapshot,
+		}
+		if hasRuntimeFilter {
+			idxTableNode.RuntimeFilterProbeList =
+				[]*plan.RuntimeFilterSpec{nodeProbeRuntimeFilter}
+		}
+		idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[nodeID])
 		builder.inheritIndexHints(idxTableNodeID, leftChild.NodeId)
 
-		nodeBuildRuntimeFilter := MakeRuntimeFilter(rfTag, len(condIdx) < numParts, GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt), rfBuildExpr, false)
-		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, nodeBuildRuntimeFilter)
-		recalcStatsByRuntimeFilter(builder.qry.Nodes[idxTableNodeID], node, builder)
+		if hasRuntimeFilter {
+			node.RuntimeFilterBuildList = append(
+				node.RuntimeFilterBuildList, nodeBuildRuntimeFilter)
+			recalcStatsByRuntimeFilter(builder.qry.Nodes[idxTableNodeID], node, builder)
+		}
 
 		pkExpr := &plan.Expr{
 			Typ: leftChild.TableDef.Cols[pkIdx].Typ,

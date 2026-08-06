@@ -538,6 +538,48 @@ var supportedOperators = []FuncNew{
 					return newOpBuiltInRegexp().likeFn
 				},
 			},
+			{
+				overloadId: 3,
+				args: []types.T{
+					types.T_char,
+					types.T_char,
+					types.T_varchar,
+				},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().likeFn
+				},
+			},
+			{
+				overloadId: 4,
+				args: []types.T{
+					types.T_varchar,
+					types.T_varchar,
+					types.T_varchar,
+				},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().likeFn
+				},
+			},
+			{
+				overloadId: 5,
+				args: []types.T{
+					types.T_text,
+					types.T_text,
+					types.T_varchar,
+				},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().likeFn
+				},
+			},
 		},
 	},
 
@@ -1089,6 +1131,19 @@ var supportedOperators = []FuncNew{
 			// 		return newOpOperatorStrIn().operatorIn
 			// 	},
 			// },
+			// Keep new overloads append-only. The encoded function ID stores
+			// this slice index, not overload.overloadId, so insertion before an
+			// existing entry changes the plan wire contract.
+			{
+				overloadId: 101,
+				args:       []types.T{types.T_enum, types.T_enum},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpOperatorFixedIn[types.Enum]().operatorIn
+				},
+			},
 		},
 	},
 
@@ -2775,6 +2830,71 @@ var supportedOperators = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return NewStrictCast
+				},
+			},
+		},
+	},
+
+	// operator `cast_assign`
+	// Used by DML assignment paths (INSERT/UPDATE projection) for CHAR/VARCHAR
+	// targets. Unlike `cast_strict` (which always rejects over-length writes),
+	// `cast_assign` honors `sql_mode` at runtime: strict mode rejects (1406),
+	// non-strict mode truncates. Over-length that is only trailing spaces is
+	// accepted (truncated) even in strict mode, matching MySQL. The overload is
+	// marked volatile so it is not constant-folded, letting prepared statements
+	// resolve sql_mode at execution time rather than at prepare time.
+	{
+		functionId: CAST_ASSIGN,
+		class:      plan.Function_STRICT,
+		layout:     CAST_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 2 {
+				if IfTypeCastSupported(inputs[0].Oid, inputs[1].Oid) {
+					return newCheckResultWithSuccess(0)
+				}
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[1]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewAssignCast
+				},
+			},
+		},
+	},
+
+	// operator `cast_ignore`
+	// Used by INSERT IGNORE and UPDATE IGNORE assignment paths. It always
+	// truncates over-width CHAR/VARCHAR values and records warning 1265.
+	{
+		functionId: CAST_IGNORE,
+		class:      plan.Function_STRICT,
+		layout:     CAST_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 2 {
+				if IfTypeCastSupported(inputs[0].Oid, inputs[1].Oid) {
+					return newCheckResultWithSuccess(0)
+				}
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[1]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewAssignIgnoreCast
 				},
 			},
 		},

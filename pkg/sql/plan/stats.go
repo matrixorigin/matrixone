@@ -1233,11 +1233,13 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		if len(node.GroupBy) > 0 {
 			incnt := childStats.Outcnt
 			outcnt := 1.0
-			for _, groupby := range node.GroupBy {
+			for i, groupby := range node.GroupBy {
 				ndv := getExprNdv(groupby, builder)
 				if ndv > 1 {
 					groupby.Ndv = ndv
-					outcnt *= ndv
+					if isPhysicalGroupByKey(node, i) {
+						outcnt *= ndv
+					}
 				}
 			}
 			if outcnt > incnt {
@@ -2485,9 +2487,11 @@ func getOverlap(s *pb.StatsInfo, colname string) float64 {
 
 func calcBlockSelectivityUsingShuffleRange(s *pb.StatsInfo, colname string, expr *plan.Expr) float64 {
 	sel := expr.Selectivity
-	switch expr.GetF().Func.ObjName {
-	case "isnull", "is_null", "prefix_eq", "prefix_in", "prefix_between", "prefix_in_range": //special handle
-		return sel
+	if fn := expr.GetF(); fn != nil {
+		switch fn.Func.ObjName {
+		case "isnull", "is_null", "prefix_eq", "prefix_in", "prefix_between", "prefix_in_range": //special handle
+			return sel
+		}
 	}
 	overlap := getOverlap(s, colname)
 	if overlap < overlapThreshold/3 {

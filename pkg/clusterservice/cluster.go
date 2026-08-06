@@ -603,12 +603,13 @@ func newCNService(cn logpb.CNStore) metadata.CNService {
 
 func newTNService(tn logpb.TNStore) metadata.TNService {
 	v := metadata.TNService{
-		ServiceID:             tn.UUID,
-		TxnServiceAddress:     tn.ServiceAddress,
-		LogTailServiceAddress: tn.LogtailServerAddress,
-		LockServiceAddress:    tn.LockServiceAddress,
-		QueryAddress:          tn.QueryAddress,
-		ShardServiceAddress:   tn.ShardServiceAddress,
+		ServiceID:                   tn.UUID,
+		TxnServiceAddress:           tn.ServiceAddress,
+		LogTailServiceAddress:       tn.LogtailServerAddress,
+		LockServiceAddress:          tn.LockServiceAddress,
+		QueryAddress:                tn.QueryAddress,
+		ShardServiceAddress:         tn.ShardServiceAddress,
+		AutoIncrEpochFenceSupported: tn.AutoIncrEpochFenceSupported,
 	}
 	v.Shards = make([]metadata.TNShard, 0, len(tn.Shards))
 	for _, s := range tn.Shards {

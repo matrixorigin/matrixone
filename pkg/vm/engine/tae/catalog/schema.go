@@ -354,9 +354,11 @@ func (s *Schema) HasFakePK() bool {
 }
 
 func (s *Schema) MustGetExtraBytes() []byte {
-	// Sync FromPublication to Extra before serialization
-	s.Extra.FromPublication = s.FromPublication
-	data, err := s.Extra.Marshal()
+	// Schema is immutable after publication. Keep serialization read-only so
+	// MVCC versions can safely share the same schema.
+	extra := *s.Extra
+	extra.FromPublication = s.FromPublication
+	data, err := extra.Marshal()
 	if err != nil {
 		panic(err)
 	}

@@ -642,6 +642,46 @@ func TestShouldDispatchIvfSearchMultiCNRejectsWritableWorkspace(t *testing.T) {
 	require.False(t, shouldDispatchIvfSearchMultiCN(node, plan2.ExecTypeAP_MULTICN, cnList, writable))
 	require.True(t, shouldDispatchIvfSearchMultiCN(node, plan2.ExecTypeAP_MULTICN, cnList, &readonlyWorkspaceForIvfTest{Ws: &Ws{}}))
 	require.True(t, shouldDispatchIvfSearchMultiCN(node, plan2.ExecTypeAP_MULTICN, cnList, nil))
+
+	node.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{{Tag: 1, UseMembershipFilter: true}}
+	require.False(t, shouldDispatchIvfSearchMultiCN(node, plan2.ExecTypeAP_MULTICN, cnList, nil))
+}
+
+func TestCompileTableFunctionKeepsRuntimeFilteredIvfSearchOnCurrentCN(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.anal = &AnalyzeModule{isFirst: true}
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
+	c.cnList = engine.Nodes{
+		{Id: "cn1", Addr: "cn-local:6001", Mcpu: 4, CNCNT: 2, CNIDX: 0},
+		{Id: "cn2", Addr: "cn-remote:6001", Mcpu: 4, CNCNT: 2, CNIDX: 1},
+	}
+
+	node := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		TableDef: &plan.TableDef{
+			Name:      "idx_entries",
+			TableType: "func_table",
+			Cols:      ivfSearchTestColDefs(),
+			TblFunc:   &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
+		},
+		Stats:                  &plan.Stats{BlockNum: 1, Dop: 1},
+		IndexReaderParam:       &plan.IndexReaderParam{OrigFuncName: "l2_distance"},
+		RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{{Tag: 1, UseMembershipFilter: true}},
+	}
+
+	scopes, err := c.compileTableFunction(node, nil)
+	require.NoError(t, err)
+	require.Len(t, scopes, 1)
+	require.Equal(t, Merge, scopes[0].Magic)
+	require.Equal(t, "cn-local:6001", scopes[0].NodeInfo.Addr)
+
+	op, ok := scopes[0].RootOp.(*table_function.TableFunction)
+	require.True(t, ok)
+	require.Len(t, op.RuntimeFilterSpecs, 1)
+	require.Equal(t, int32(0), op.IndexReaderParam.GetPartitionCnCnt())
+	require.Equal(t, int32(0), op.IndexReaderParam.GetPartitionCnIdx())
 }
 
 func TestCompileTableFunctionUsesSingleCNWithOneEligibleWorker(t *testing.T) {

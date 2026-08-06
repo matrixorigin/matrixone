@@ -52,15 +52,9 @@ func initAllSupportedFunctions() {
 	}
 
 	for _, fn := range supportedWindowInNewFramework {
-		for _, ov := range fn.Overloads {
-			ov.aggFramework.aggRegister(encodeOverloadID(int32(fn.functionId), int32(ov.overloadId)))
-		}
 		allSupportedFunctions[fn.functionId] = fn
 	}
 	for _, fn := range supportedAggInNewFramework {
-		for _, ov := range fn.Overloads {
-			ov.aggFramework.aggRegister(encodeOverloadID(int32(fn.functionId), int32(ov.overloadId)))
-		}
 		allSupportedFunctions[fn.functionId] = fn
 	}
 }
@@ -99,6 +93,19 @@ func GetFunctionIsWinValueFunByName(name string) bool {
 	}
 	f := allSupportedFunctions[fid]
 	return f.isWindowValue()
+}
+
+func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	if !exists {
+		return false
+	}
+	for _, ov := range allSupportedFunctions[fid].Overloads {
+		if ov.CannotFold() || ov.IsRealTimeRelated() {
+			return true
+		}
+	}
+	return false
 }
 
 func GetFunctionIsWinOrderFunById(overloadID int64) bool {
@@ -238,7 +245,7 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 		result.Free()
 		return nil, err
 	}
-	exec, _, execFree := f.GetExecuteMethod()
+	exec, _, execFree, _ := f.GetExecuteMethod()
 	if err = exec(inputs, result, proc, evaluateLength, nil); err != nil {
 		result.Free()
 		if execFree != nil {
@@ -267,7 +274,7 @@ func GetAggFunctionNameByID(overloadID int64) string {
 	if !exist {
 		return "unknown function"
 	}
-	return f.aggFramework.str
+	return f.aggName
 }
 
 // DeduceNotNullable helps optimization sometimes.
@@ -277,6 +284,32 @@ func GetAggFunctionNameByID(overloadID int64) string {
 // we can deduce that c1+1, cast c3 and c1=c3 is notNullable, abs(c2) is nullable.
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	fid, _ := DecodeOverloadID(overloadID)
+	switch fid {
+	case CASE:
+		if caseHasTemporalPromotion(args) {
+			return false
+		}
+	case COALESCE:
+		for _, arg := range args {
+			if arg.Typ.NotNullable {
+				return true
+			}
+		}
+		return false
+	case GREATEST, LEAST:
+		return false
+	// Value window functions can synthesize NULLs even when every input is
+	// NOT NULL. LAG/LEAD do so outside the partition unless an explicit,
+	// non-NULL default is present. FIRST_VALUE/LAST_VALUE can observe an empty
+	// frame, and NTH_VALUE can also miss the requested row. The frame is not
+	// available here, so keep those contracts conservative.
+	case FIRST_VALUE, LAST_VALUE, NTH_VALUE:
+		return false
+	case LAG, LEAD:
+		if len(args) != 3 {
+			return false
+		}
+	}
 	if allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL) {
 		return true
 	}
@@ -287,6 +320,42 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		}
 	}
 	return true
+}
+
+func caseHasTemporalPromotion(args []*plan.Expr) bool {
+	for i := 1; i < len(args); i += 2 {
+		if isTemporalPromotion(args[i]) {
+			return true
+		}
+	}
+	// CASE arguments are condition/value pairs followed by ELSE. The ELSE
+	// expression is at the final even index and needs the same check.
+	if len(args)%2 == 1 && isTemporalPromotion(args[len(args)-1]) {
+		return true
+	}
+	return false
+}
+
+func isTemporalPromotion(arg *plan.Expr) bool {
+	fn := arg.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+		return false
+	}
+	source := types.T(fn.Args[0].Typ.Id)
+	target := types.T(arg.Typ.Id)
+	return source.IsDateRelate() && target.IsDateRelate() && source != target
+}
+
+// ProducesNoNull reports whether a function's contract guarantees a non-NULL
+// result independently of its argument values. This is stronger than
+// DeduceNotNullable: STRICT functions such as json_extract can still return
+// SQL NULL for non-NULL inputs when a requested value is absent.
+func ProducesNoNull(overloadID int64) bool {
+	fid, _ := DecodeOverloadID(overloadID)
+	return fid >= 0 &&
+		int(fid) < len(allSupportedFunctions) &&
+		int(fid) == allSupportedFunctions[fid].functionId &&
+		allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL)
 }
 
 type FuncGetResult struct {
@@ -328,6 +397,15 @@ func DecodeOverloadID(overloadID int64) (fid int32, oIndex int32) {
 	oIndex = int32(overloadID)
 	fid = int32(base >> 32)
 	return fid, oIndex
+}
+
+func IsUserLevelLockFunctionID(fid int32) bool {
+	switch fid {
+	case GET_LOCK, RELEASE_LOCK, IS_FREE_LOCK, IS_USED_LOCK, RELEASE_ALL_LOCKS:
+		return true
+	default:
+		return false
+	}
 }
 
 func getFunctionIdByName(ctx context.Context, name string) (int32, error) {
@@ -381,13 +459,10 @@ type executeFreeOfOverload func() error
 // in case we need it in the future.
 type executeResetOfOverload func() error
 
-type aggregationLogicOfOverload struct {
-	// agg related string for error message.
-	str string
-
-	// how to register the aggregation.
-	aggRegister func(overloadID int64)
-}
+// executeRetainedBytesOfOverload reports non-vector backing allocations kept
+// alive by a stateful function operator. It is optional: ordinary functions
+// whose complete retained state is represented by executor vectors omit it.
+type executeRetainedBytesOfOverload func() uint64
 
 // an overload of a function.
 // stores all information about execution logic.
@@ -412,13 +487,20 @@ type overload struct {
 
 	// the execution logic and free logic.
 	// NOTE: use either newOp or newOpWithFree.
-	newOpWithFree func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload)
+	newOpWithFree func() (
+		executeLogicOfOverload,
+		executeResetOfOverload,
+		executeFreeOfOverload,
+		executeRetainedBytesOfOverload,
+	)
 
 	// in fact, the function framework does not directly run aggregate functions and window functions.
 	// we use two flags to mark whether function is one of them.
-	isAgg        bool
-	isWin        bool
-	aggFramework aggregationLogicOfOverload
+	isAgg bool
+	isWin bool
+
+	// aggName is used in aggregate-related error messages.
+	aggName string
 
 	// if true, overload was unable to run in parallel.
 	// For example,
@@ -449,14 +531,18 @@ func (ov *overload) CannotExecuteInParallel() bool {
 	return ov.cannotParallel
 }
 
-func (ov *overload) GetExecuteMethod() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload) {
+func (ov *overload) GetExecuteMethod() (
+	executeLogicOfOverload,
+	executeResetOfOverload,
+	executeFreeOfOverload,
+	executeRetainedBytesOfOverload,
+) {
 	if ov.newOpWithFree != nil {
-		fn, fnReset, fnFree := ov.newOpWithFree()
-		return fn, fnReset, fnFree
+		return ov.newOpWithFree()
 	}
 
 	fn := ov.newOp()
-	return fn, nil, nil
+	return fn, nil, nil, nil
 }
 
 func (ov *overload) GetReturnTypeMethod() func(parameters []types.Type) types.Type {

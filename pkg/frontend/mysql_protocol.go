@@ -76,6 +76,7 @@ const defaultSaltReadTimeout = time.Millisecond * 200
 
 const charsetBinary = 0x3f
 const charsetVarchar = 0x21
+const charsetVarcharMaxBytesPerCharacter = 3
 const boolColumnLength = 1
 
 func init() {
@@ -460,6 +461,13 @@ func (mp *MysqlProtocolImpl) WriteEOFIFAndNoFlush(warnings uint16, status uint16
 
 func (mp *MysqlProtocolImpl) WriteEOFOrOK(warnings uint16, status uint16) error {
 	return mp.sendEOFOrOkPacket(warnings, status)
+}
+
+func (mp *MysqlProtocolImpl) WriteEOFOrOKWithAffectedRows(affectedRows uint64, warnings uint16, status uint16) error {
+	if mp.capability&CLIENT_DEPRECATE_EOF != 0 {
+		return mp.sendOKPacketWithEof(affectedRows, 0, status, warnings, "")
+	}
+	return mp.sendEOFPacket(warnings, status)
 }
 
 func (mp *MysqlProtocolImpl) WriteERR(errorCode uint16, sqlState, errorMessage string) error {
@@ -2087,7 +2095,7 @@ Error information includes several elements: an error code, SQLSTATE value, and 
 */
 func (mp *MysqlProtocolImpl) sendErrPacket(errorCode uint16, sqlState, errorMessage string) error {
 	if mp.ses != nil {
-		mp.ses.GetErrInfo().push(errorCode, errorMessage)
+		mp.ses.appendErrorDiagnostic(errorCode, errorMessage)
 	}
 	errPkt := mp.makeErrPayload(errorCode, sqlState, errorMessage)
 	return mp.writePackets(errPkt)
@@ -3856,6 +3864,11 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs *Conn) {
 		mp.ses.Debugf(mp.ctx, "failed to set deadline for salt updating: %v", err)
 		return
 	}
+	defer func() {
+		if err := rs.RawConn().SetReadDeadline(time.Time{}); err != nil {
+			mp.ses.Debugf(mp.ctx, "failed to clear deadline for salt updating: %v", err)
+		}
+	}()
 	var i proxy.ExtraInfo
 	reader := bufio.NewReader(rs.RawConn())
 	if err := i.Decode(reader); err != nil {

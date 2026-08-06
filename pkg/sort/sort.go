@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	mopartition "github.com/matrixorigin/matrixone/pkg/partition"
 )
 
 const (
@@ -48,6 +49,26 @@ type xorshift uint64
 type sortedHint int // hint for pdqsort when choosing the pivot
 
 type LessFunc[T any] func(a, b T) bool
+
+func IsSupportedType(typ types.T) bool {
+	switch typ {
+	case types.T_bool, types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_uuid, types.T_date, types.T_datetime, types.T_time,
+		types.T_timestamp, types.T_enum, types.T_year,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_TS, types.T_Rowid, types.T_Blockid,
+		types.T_char, types.T_varchar, types.T_json, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink,
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16,
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		return true
+	default:
+		return false
+	}
+}
 
 func GenericLess[T types.OrderedT](a, b T) bool {
 	return a < b
@@ -80,16 +101,15 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
 			for cursor < sz && !nulls.Contains(vec.GetNulls(), uint64(os[cursor])) {
 				cursor++
 			}
-			if cursor == sz {
-				return
-			}
-			for i := cursor; i < sz; i++ {
-				if !nulls.Contains(vec.GetNulls(), uint64(os[i])) {
-					os[cursor], os[i] = os[i], os[cursor]
-					cursor++
+			if cursor < sz {
+				for i := cursor; i < sz; i++ {
+					if !nulls.Contains(vec.GetNulls(), uint64(os[i])) {
+						os[cursor], os[i] = os[i], os[cursor]
+						cursor++
+					}
 				}
+				os = os[:cursor]
 			}
-			os = os[:cursor]
 		} else { // move null rows to the head
 			var cursor int
 			for cursor < sz && nulls.Contains(vec.GetNulls(), uint64(os[cursor])) {
@@ -348,6 +368,56 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
 		} else {
 			genericSort(col, os, jsonGreater)
 		}
+	}
+}
+
+// SortByVectors sorts row selectors by multiple vectors. Each later vector is
+// applied only within rows that are equal on every preceding vector.
+func SortByVectors(
+	os []int64,
+	vectors []*vector.Vector,
+	desc []bool,
+	nullsLast []bool,
+) {
+	if len(os) < 2 || len(vectors) == 0 {
+		return
+	}
+	if len(vectors) != len(desc) || len(vectors) != len(nullsLast) {
+		panic("sort: mismatched multi-column sort metadata")
+	}
+
+	sortSelectorsByVector(os, vectors[0], desc[0], nullsLast[0])
+	if len(vectors) == 1 {
+		return
+	}
+
+	partitions := make([]int64, 0, 16)
+	diffs := make([]bool, len(os))
+	previous := vectors[0]
+	for i := 1; i < len(vectors); i++ {
+		partitions = mopartition.Partition(os, diffs, partitions, previous)
+		vec := vectors[i]
+		if !vec.IsConst() {
+			for j := range partitions {
+				end := len(os)
+				if j+1 < len(partitions) {
+					end = int(partitions[j+1])
+				}
+				start := int(partitions[j])
+				sortSelectorsByVector(os[start:end], vec, desc[i], nullsLast[i])
+			}
+		}
+		previous = vec
+	}
+}
+
+func sortSelectorsByVector(os []int64, vec *vector.Vector, desc, nullsLast bool) {
+	if vec.IsConst() {
+		return
+	}
+	nullCount := vec.GetNulls().Count()
+	if nullCount < vec.Length() {
+		Sort(desc, nullsLast, nullCount > 0, os, vec)
 	}
 }
 

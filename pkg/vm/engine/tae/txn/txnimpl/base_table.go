@@ -211,6 +211,62 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (r
 /*
 similar to findDeletes
 */
+func foreachIncrementalObject(
+	it *btree.IterG[*catalog.ObjectEntry],
+	from, to types.TS,
+	fn func(*catalog.ObjectEntry) error,
+) error {
+	visit := func(obj *catalog.ObjectEntry, appendable bool) error {
+		if obj.CreatedAt.GT(&to) || (!appendable && obj.CreatedAt.LT(&from)) || !obj.VisibleByTS(to) {
+			return nil
+		}
+		return fn(obj)
+	}
+	if catalog.SeekObjectListGroupBefore(it, catalog.ObjectListGroupAppendableCreate, from) {
+		if err := visit(it.Item(), true); err != nil {
+			return err
+		}
+	}
+	for ok := catalog.SeekObjectListGroup(it, catalog.ObjectListGroupAppendableCreate, from); ok; ok = it.Next() {
+		obj := it.Item()
+		if obj.ObjectListGroup() != catalog.ObjectListGroupAppendableCreate || obj.CreatedAt.GT(&to) {
+			break
+		}
+		if err := visit(obj, true); err != nil {
+			return err
+		}
+	}
+	visitDropGroup := func(group catalog.ObjectListGroup) error {
+		appendable := group == catalog.ObjectListGroupAppendableDrop
+		for ok := catalog.SeekObjectListGroup(it, group, to); ok; ok = it.Next() {
+			obj := it.Item()
+			if obj.ObjectListGroup() != group {
+				break
+			}
+			if err := visit(obj, appendable); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := visitDropGroup(catalog.ObjectListGroupAppendableDrop); err != nil {
+		return err
+	}
+
+	for ok := catalog.SeekObjectListGroup(it, catalog.ObjectListGroupNonAppendableCreate, from); ok; ok = it.Next() {
+		obj := it.Item()
+		if obj.ObjectListGroup() != catalog.ObjectListGroupNonAppendableCreate || obj.CreatedAt.GT(&to) {
+			break
+		}
+		if err := visit(obj, false); err != nil {
+			return err
+		}
+	}
+	return visitDropGroup(catalog.ObjectListGroupNonAppendableDrop)
+}
+
+// incrementalGetRowsByPK checks the inclusive logical interval [from, to].
+// Callers that hold an exclusive dedup watermark must pass watermark.Next().
 func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers.Vector, from, to types.TS, inQueue bool) (rowIDs containers.Vector, err error) {
 	var objIt btree.IterG[*catalog.ObjectEntry]
 	if tbl.isTombstone {
@@ -222,6 +278,14 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 	}
 	defer objIt.Release()
 	rowIDs = tbl.txnTable.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+	defer func() {
+		// Ownership transfers to the caller only on success. In particular,
+		// lazy commit-TS reads add cancellable I/O errors after allocation.
+		if err != nil {
+			rowIDs.Close()
+			rowIDs = nil
+		}
+	}()
 	vector.AppendMultiFixed[types.Rowid](
 		rowIDs.GetDownstreamVector(),
 		types.EmptyRowid,
@@ -230,38 +294,12 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 		common.WorkspaceAllocator,
 	)
 
-	var earlybreak bool
-	for ok := objIt.Last(); ok; ok = objIt.Prev() {
-		if earlybreak {
-			break
-		}
-		obj := objIt.Item()
+	err = foreachIncrementalObject(&objIt, from, to, func(obj *catalog.ObjectEntry) error {
 		if isEmptyDroppedAppendableObject(obj) {
-			continue
-		}
-
-		if obj.CreatedAt.GT(&to) {
-			continue
-		}
-
-		if obj.IsAppendable() {
-			if !obj.HasDropIntent() && obj.CreatedAt.LT(&from) {
-				earlybreak = true
-			}
-		} else if obj.CreatedAt.LT(&from) {
-			continue
-		}
-
-		// only keep the category-a + category-c for candidates.
-		if obj.GetPrevVersion() == nil && obj.GetNextVersion() != nil {
-			continue
-		}
-
-		if !obj.VisibleByTS(to) {
-			continue
+			return nil
 		}
 		objData := obj.GetObjectData()
-		err = objData.GetDuplicatedRows(
+		return objData.GetDuplicatedRows(
 			ctx,
 			tbl.txnTable.store.txn,
 			pks,
@@ -270,9 +308,9 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 			rowIDs,
 			common.WorkspaceAllocator,
 		)
-		if err != nil {
-			return
-		}
+	})
+	if err != nil {
+		return
 	}
 	// s := ""
 	// for _, v := range candidates {

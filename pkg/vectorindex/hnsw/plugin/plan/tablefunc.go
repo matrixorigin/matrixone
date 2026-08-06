@@ -99,10 +99,10 @@ func buildHnswCreate(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx pla
 	return pb.AppendNode(node, ctx), nil
 }
 
-// arg list [param, hnsw.IndexTableConfig (JSON), search_vec]
+// arg list [param, hnsw.IndexTableConfig (JSON), search_vec, filter_payload?]
 func buildHnswSearch(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	if len(exprs) != 3 {
-		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS != 3).")
+	if len(exprs) != 3 && len(exprs) != 4 {
+		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS must be 3 or 4).")
 	}
 
 	colDefs := planplugin.DeepCopyColDefList(HNSWSearchColDefs)

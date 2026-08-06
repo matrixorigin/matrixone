@@ -1,4 +1,5 @@
 -- @label:bvt
+set session sql_mode = default;
 drop database if exists update_text_coalesce_cast;
 create database update_text_coalesce_cast;
 use update_text_coalesce_cast;

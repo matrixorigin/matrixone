@@ -264,7 +264,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 				if err != nil {
 					return result, err
 				}
-				if config := ag.GetExtraConfig(); config != nil {
+				if config := ag.GetExtraInformation(); config != nil {
 					if err = ctr.batAggs[i].SetExtraInformation(config, 0); err != nil {
 						return result, err
 					}
@@ -833,9 +833,13 @@ func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan
 	}
 	switch frame.Start.Type {
 	case plan.FrameBound_CURRENT_ROW:
-		start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
-		if err != nil {
-			return start, end, err
+		if len(ctr.os) > 0 || end-start <= 1 {
+			start, _ = buildPeerInterval(ctr.os, rowIdx, start, end)
+		} else {
+			start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
+			if err != nil {
+				return start, end, err
+			}
 		}
 	case plan.FrameBound_PRECEDING:
 		if !frame.Start.UnBounded {
@@ -853,9 +857,13 @@ func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan
 
 	switch frame.End.Type {
 	case plan.FrameBound_CURRENT_ROW:
-		end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
-		if err != nil {
-			return start, end, err
+		if len(ctr.os) > 0 || end-start <= 1 {
+			_, end = buildPeerInterval(ctr.os, rowIdx, start, end)
+		} else {
+			end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
+			if err != nil {
+				return start, end, err
+			}
 		}
 	case plan.FrameBound_PRECEDING:
 		end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.End.Val, true, desc)
@@ -871,6 +879,29 @@ func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan
 		}
 	}
 	return start, end, nil
+}
+
+// buildPeerInterval returns the peer group containing rowIdx. orderBoundaries
+// contains the first row of every peer group in the sorted window input.
+func buildPeerInterval(orderBoundaries []int64, rowIdx, start, end int) (int, int) {
+	low, high := 0, len(orderBoundaries)
+	for low < high {
+		mid := low + (high-low)/2
+		if orderBoundaries[mid] <= int64(rowIdx) {
+			low = mid + 1
+		} else {
+			high = mid
+		}
+	}
+
+	peerStart, peerEnd := start, end
+	if low > 0 && int(orderBoundaries[low-1]) > peerStart {
+		peerStart = int(orderBoundaries[low-1])
+	}
+	if low < len(orderBoundaries) && int(orderBoundaries[low]) < peerEnd {
+		peerEnd = int(orderBoundaries[low])
+	}
+	return peerStart, peerEnd
 }
 
 func buildPartitionInterval(ps []int64, j int, l int) (int, int) {

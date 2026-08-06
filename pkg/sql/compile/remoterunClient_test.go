@@ -169,6 +169,33 @@ func TestPipelineStreamReuseRuntimeGate(t *testing.T) {
 	require.True(t, pipelineStreamReuseEnabled(sid))
 }
 
+func TestMessageSenderBatchCreditProtocol(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	stream := mock_morpc.NewMockStream(ctrl)
+	stream.EXPECT().ID().Return(uint64(17))
+	stream.EXPECT().Send(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, request morpc.Message) error {
+			message := request.(*pipeline.Message)
+			require.Equal(t, pipeline.Method_PipelineBatchAck, message.GetCmd())
+			require.Equal(t, uint64(9), message.GetBatchAckSequence())
+			return nil
+		})
+
+	sender := &messageSenderOnClient{
+		ctx:              context.Background(),
+		streamSender:     stream,
+		requestFinishAck: true,
+		pendingBatchAck:  9,
+	}
+	request := &pipeline.Message{}
+	sender.requestStreamProtocols(request)
+	require.Equal(t, pipeline.StreamTeardownMode_FinishAck, request.GetRequestedTeardownMode())
+	require.Equal(t, pipelineBatchCreditCount, request.GetRequestedBatchCreditCount())
+	require.Equal(t, pipelineBatchCreditBytes, request.GetRequestedBatchCreditBytes())
+	require.NoError(t, sender.acknowledgeRemoteBatch())
+	require.Zero(t, sender.pendingBatchAck)
+}
+
 func TestNewMessageSenderOnClientReturnsErrorOnNilStream(t *testing.T) {
 	sid := t.Name()
 	runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())

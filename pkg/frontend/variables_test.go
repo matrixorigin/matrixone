@@ -47,6 +47,38 @@ func TestLockWaitTimeoutDefaultIsBounded(t *testing.T) {
 	})
 }
 
+func TestGroupConcatMaxLenDefault(t *testing.T) {
+	convey.Convey("group_concat_max_len should use the MySQL default", t, func() {
+		sv, ok := gSysVarsDefs["group_concat_max_len"]
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(sv.Default, convey.ShouldEqual, int64(1024))
+
+		got, err := sv.Type.Convert(sv.Default)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(got, convey.ShouldEqual, int64(1024))
+	})
+}
+
+func TestCTEMaxMemoryBytesDefinition(t *testing.T) {
+	sv, ok := gSysVarsDefs["cte_max_memory_bytes"]
+	assert.True(t, ok)
+	assert.Equal(t, ScopeBoth, sv.Scope)
+	assert.True(t, sv.Dynamic)
+	assert.False(t, sv.SetVarHintApplies)
+	assert.Equal(t, int64(1073741824), sv.Default)
+
+	converted, err := sv.Type.Convert(int64(0))
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), converted)
+	converted, err = sv.Type.Convert(int64(1099511627776))
+	assert.NoError(t, err)
+	assert.Equal(t, int64(1099511627776), converted)
+	_, err = sv.Type.Convert(int64(-1))
+	assert.Error(t, err)
+	_, err = sv.Type.Convert(int64(1099511627777))
+	assert.Error(t, err)
+}
+
 func TestScope(t *testing.T) {
 	convey.Convey("test scope", t, func() {
 		wanted := make(map[Scope]string)

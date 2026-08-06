@@ -31,13 +31,19 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 var testSlat = []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0}
@@ -878,6 +884,132 @@ func TestServerConn_HandleHandshakeTimeoutStopsWorker(t *testing.T) {
 	// transport is the termination edge that makes that guarantee observable.
 	_, err = remote.Write([]byte{1})
 	require.Error(t, err)
+}
+
+func TestServerConn_HandleHandshakeReadyResultAndCancelLogsTimeoutOnce(t *testing.T) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	local, remote := net.Pipe()
+	defer remote.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	resultC := make(chan backendHandshakeResult, 1)
+	resultC <- backendHandshakeResult{err: net.ErrClosed}
+	var tracker backendHandshakeTracker
+	tracker.enter(backendHandshakeStageReadAuthResponse)
+	sc := &serverConn{
+		cnServer:         &CNServer{addr: "cn-a:6001"},
+		conn:             local,
+		connID:           42,
+		diagnosticLogger: logutil.NewRateLimitedLogger(zap.New(core)),
+	}
+
+	before := testutil.ToFloat64(
+		v2.ProxyBackendHandshakeEventCounter.WithLabelValues(
+			backendDiagnosticHandshakeCanceled,
+			backendHandshakeStageReadAuthResponse.String(),
+		),
+	)
+	_, err := sc.awaitBackendHandshake(
+		ctx,
+		local,
+		resultC,
+		func() {},
+		&tracker,
+		time.Second,
+	)
+	require.Error(t, err)
+	require.True(t, isTimeoutErr(err))
+	require.Len(t, logs.FilterMessage("backend handshake canceled").All(), 1)
+	fields := logs.FilterMessage("backend handshake canceled").All()[0].ContextMap()
+	require.Equal(t, "cn-a:6001", fields["cn"])
+	require.Equal(t, backendHandshakeStageReadAuthResponse.String(), fields["stage"])
+	require.Contains(t, fields, "stage_duration")
+	require.Equal(t, before+1, testutil.ToFloat64(
+		v2.ProxyBackendHandshakeEventCounter.WithLabelValues(
+			backendDiagnosticHandshakeCanceled,
+			backendHandshakeStageReadAuthResponse.String(),
+		),
+	))
+}
+
+func TestServerConn_BackendHandshakeDiagnosticsAreRateLimited(t *testing.T) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	logger := logutil.NewRateLimitedLogger(zap.New(core))
+	var tracker backendHandshakeTracker
+	tracker.enter(backendHandshakeStageReadInitial)
+	sc := &serverConn{
+		cnServer:         &CNServer{addr: "cn-b:6001"},
+		connID:           7,
+		diagnosticLogger: logger,
+	}
+	counter := v2.ProxyBackendHandshakeEventCounter.WithLabelValues(
+		backendDiagnosticHandshakeFailure,
+		backendHandshakeStageReadInitial.String(),
+	)
+	before := testutil.ToFloat64(counter)
+
+	for range 100 {
+		sc.logBackendHandshakeEvent(
+			backendDiagnosticHandshakeFailure,
+			"backend handshake failed",
+			&tracker,
+			false,
+			zap.Error(io.EOF),
+		)
+	}
+
+	entries := logs.FilterMessage("backend handshake failed").All()
+	require.Len(t, entries, 4)
+	require.Equal(t, int64(100), entries[3].ContextMap()["occurrence"])
+	require.Equal(t, int64(96), entries[3].ContextMap()["suppressed"])
+	require.Equal(t, before+100, testutil.ToFloat64(counter))
+}
+
+func TestCNServer_ExtraInfoSlowDiagnosticsAreRateLimited(t *testing.T) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	logger := logutil.NewRateLimitedLogger(zap.New(core))
+	cn := &CNServer{addr: "cn-c:6001"}
+	counter := v2.ProxyBackendHandshakeEventCounter.WithLabelValues(
+		backendDiagnosticExtraInfoSlow,
+		backendDiagnosticExtraInfoStage,
+	)
+	before := testutil.ToFloat64(counter)
+
+	for range 100 {
+		cn.logExtraInfoWriteEvent(
+			logger,
+			backendDiagnosticExtraInfoSlow,
+			"slow proxy extra info write",
+			nil,
+			zap.Duration("duration", slowBackendExtraInfoWriteThreshold),
+		)
+	}
+
+	entries := logs.FilterMessage("slow proxy extra info write").All()
+	require.Len(t, entries, 4)
+	require.Equal(t, int64(100), entries[3].ContextMap()["occurrence"])
+	require.Equal(t, int64(96), entries[3].ContextMap()["suppressed"])
+	require.Equal(t, before+100, testutil.ToFloat64(counter))
+}
+
+func TestBackendHandshakeTrackerSuccessPathAllocations(t *testing.T) {
+	var tracker backendHandshakeTracker
+	allocations := testing.AllocsPerRun(1000, func() {
+		tracker.enter(backendHandshakeStageReadInitial)
+		tracker.enter(backendHandshakeStageWriteAuth)
+		tracker.enter(backendHandshakeStageReadAuthResponse)
+	})
+	require.Zero(t, allocations)
+}
+
+func BenchmarkBackendHandshakeTrackerSuccessPath(b *testing.B) {
+	var tracker backendHandshakeTracker
+	b.ReportAllocs()
+	for range b.N {
+		tracker.enter(backendHandshakeStageReadInitial)
+		tracker.enter(backendHandshakeStageWriteAuth)
+		tracker.enter(backendHandshakeStageReadAuthResponse)
+	}
 }
 
 func TestFakeCNServer(t *testing.T) {

@@ -157,6 +157,9 @@ var causeArray = []error{
 
 	CauseWaitRemoteRegsReady,
 
+	CauseMongoDBClientCleanup,
+	CauseMongoDBClientRetirement,
+
 	CauseIsAvailable,
 	CauseNewMessageSenderOnClient,
 	CauseWaitingTheStopResponse,
@@ -177,8 +180,6 @@ var causeArray = []error{
 	CauseTransferTaskToCN,
 	CauseTransferRequest2OtherCNs,
 	CauseDoUnsubscribeTable,
-
-	CauseKafkaSinkConnectorExecutor,
 
 	CauseResumeTaskHandle,
 	CauseRestartTaskHandle,

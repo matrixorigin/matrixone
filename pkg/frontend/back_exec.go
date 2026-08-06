@@ -517,6 +517,9 @@ func doComQueryInBack(
 		)
 
 		tenant := backSes.GetTenantNameWithStmt(stmt)
+		if backSes.upstream != nil {
+			removePrepareStmtForReplacement(backSes.upstream, stmt)
+		}
 
 		/*
 				if it is in an active or multi-statement transaction, we check the type of the statement.
@@ -818,6 +821,9 @@ func backSesOutputCallback(handle FeSession, execCtx *ExecCtx, dataSet *batch.Ba
 	if handle == nil || dataSet == nil {
 		return nil
 	}
+	if execCtx != nil && isPerformStatement(execCtx.stmt) {
+		return nil
+	}
 
 	// uncomment this to enable backExec export data to CSV file.
 	//back := handle.(*backSession)
@@ -867,7 +873,13 @@ func executeSQLInBackgroundSession(reqCtx context.Context, bh BackgroundExec, sq
 // executeStmtInSameSession executes the statement in the same session.
 // To be clear, only for the select statement derived from the set_var statement
 // in an independent transaction
-func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCtx, stmt tree.Statement) error {
+func executeStmtInSameSession(
+	ctx context.Context,
+	ses *Session,
+	execCtx *ExecCtx,
+	stmt tree.Statement,
+	preparedExpression bool,
+) error {
 	ses.EnterFPrint(FPExecStmtInSameSession)
 	defer ses.ExitFPrint(FPExecStmtInSameSession)
 	switch stmt.(type) {
@@ -897,9 +909,12 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCt
 	prevDerivedStmt := ses.ReplaceDerivedStmt(true)
 	// inherit database
 	ses.SetDatabaseName(prevDB)
-	proc := ses.GetTxnCompileCtx().GetProcess()
+	proc := ses.proc
+	prepareParams := proc.DetachPrepareParams()
+	proc.BorrowPrepareParams(prepareParams)
 	//restore normal protocol and output callback
 	defer func() {
+		defer proc.RestorePrepareParams(prepareParams)
 		ses.ReplaceDerivedStmt(prevDerivedStmt)
 		//@todo we need to improve: make one session, one proc, one txnOperator
 		p := ses.GetTxnCompileCtx().GetProcess()
@@ -916,13 +931,21 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, execCtx *ExecCt
 	ses.Debug(ctx, "query trace(ExecStmtInSameSession)",
 		logutil.ConnectionIdField(ses.GetConnectionID()))
 	//3. execute the statement
-	return doComQuery(ses, execCtx, &UserInput{stmt: stmt, isInternalInput: true})
+	return doComQuery(ses, execCtx, &UserInput{
+		stmt:                 stmt,
+		isInternalInput:      true,
+		isSetExpression:      true,
+		isPreparedExpression: preparedExpression,
+	})
 }
 
 // fakeDataSetFetcher2 gets the result set from the pipeline and save it in the session.
 // It will not send the result to the client.
 func fakeDataSetFetcher2(handle FeSession, execCtx *ExecCtx, dataSet *batch.Batch, _ *perfcounter.CounterSet) error {
 	if handle == nil || dataSet == nil {
+		return nil
+	}
+	if execCtx != nil && isPerformStatement(execCtx.stmt) {
 		return nil
 	}
 
@@ -953,8 +976,11 @@ func fillResultSet(ctx context.Context, dataSet *batch.Batch, ses FeSession, mrs
 
 // batchFetcher2 gets the result batches from the pipeline and save the origin batches in the session.
 // It will not send the result to the client.
-func batchFetcher2(handle FeSession, _ *ExecCtx, dataSet *batch.Batch, _ *perfcounter.CounterSet) error {
+func batchFetcher2(handle FeSession, execCtx *ExecCtx, dataSet *batch.Batch, _ *perfcounter.CounterSet) error {
 	if handle == nil {
+		return nil
+	}
+	if execCtx != nil && isPerformStatement(execCtx.stmt) {
 		return nil
 	}
 	back := handle.(*backSession)
@@ -967,8 +993,11 @@ func batchFetcher2(handle FeSession, _ *ExecCtx, dataSet *batch.Batch, _ *perfco
 
 // batchFetcher gets the result batches from the pipeline and save the origin batches in the session.
 // It will not send the result to the client.
-func batchFetcher(handle FeSession, _ *ExecCtx, dataSet *batch.Batch, _ *perfcounter.CounterSet) error {
+func batchFetcher(handle FeSession, execCtx *ExecCtx, dataSet *batch.Batch, _ *perfcounter.CounterSet) error {
 	if handle == nil {
+		return nil
+	}
+	if execCtx != nil && isPerformStatement(execCtx.stmt) {
 		return nil
 	}
 	ses := handle.(*Session)
@@ -1227,8 +1256,8 @@ func (backSes *backSession) GetLastInsertID() uint64 {
 func (backSes *backSession) SetShowStmtType(statement ShowStatementType) {
 }
 
-func (backSes *backSession) RemovePrepareStmt(name string) {
-
+func (backSes *backSession) RemovePrepareStmt(name string) bool {
+	return backSes.upstream != nil && backSes.upstream.RemovePrepareStmt(name)
 }
 
 func (backSes *backSession) CountPayload(i int) {
@@ -1236,7 +1265,10 @@ func (backSes *backSession) CountPayload(i int) {
 }
 
 func (backSes *backSession) GetPrepareStmt(ctx context.Context, name string) (*PrepareStmt, error) {
-	return nil, moerr.NewInternalError(ctx, "do not support prepare in background exec")
+	if backSes.upstream == nil {
+		return nil, moerr.NewInternalError(ctx, "do not support prepare in background exec without upstream session")
+	}
+	return backSes.upstream.GetPrepareStmt(ctx, name)
 }
 
 func (backSes *backSession) IsBackgroundSession() bool {
@@ -1324,7 +1356,7 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 		return int64(1), nil
 	case "sql_mode":
 		return "", nil
-	case "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
+	case "foreign_key_checks", "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
 		return backSes.upstream.GetSessionSysVar(name)
 	}
 	return nil, nil

@@ -197,9 +197,10 @@ create table tenant_sink(v int primary key);
 create task tenant_task_show schedule '0 0 0 1 1 *' timezone 'UTC' when (1) timeout '30s' as begin insert into tenant_sink select 1 where not exists (select 1 from tenant_sink where v = 1); end;
 execute task tenant_task_show;
 alter task tenant_task_show set when (0);
-execute task tenant_task_show;
+-- @wait_expect(1, 30)
 -- @ignore:6,8
 show tasks;
+execute task tenant_task_show;
 -- @ignore:0,4,5,6,8
 show task runs for tenant_task_show limit 2;
 select count(*) from tenant_sink;

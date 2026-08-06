@@ -131,22 +131,30 @@ func (l Lock) isEmpty() bool {
 func (l Lock) tryHold(
 	logger *log.MOLogger,
 	c *lockContext,
-) (bool, bool) {
+	beforeAddHolder func() error,
+) (bool, bool, error) {
 	if l.isEmpty() {
 		panic("BUG: try hold on empty lock")
 	}
 
 	// txn already hold the lock
 	if l.holders.contains(c.txn.txnID) {
-		return true, false
+		return true, false, nil
 	}
 
 	if l.canHold(c) {
+		// The caller holds both the transaction mutex and the local lock-table
+		// mutex. Record the lock in the transaction before making the waiter a
+		// visible holder, so a bookkeeping failure leaves the lock state
+		// unchanged and the waiter can still be detached from the queue.
+		if err := beforeAddHolder(); err != nil {
+			return false, false, err
+		}
 		l.addHolder(logger, c)
-		return true, true
+		return true, true, nil
 	}
 
-	return false, false
+	return false, false, nil
 }
 
 // (no holders && is first waiter txn) || (both shared lock) can hold lock
@@ -176,38 +184,6 @@ func (l Lock) release() {
 	l.waiters.reset()
 	waitQueuePool.Put(l.waiters)
 	holdersPool.Put(l.holders)
-}
-
-func (l Lock) closeWaiter(w *waiter, logger *log.MOLogger) bool {
-	canRemove := func() bool {
-		if l.holders.size() > 0 {
-			return false
-		}
-
-		if l.waiters.size() == 0 {
-			return true
-		}
-
-		if l.waiters.first() != w {
-			return false
-		}
-
-		if l.waiters.size() == 1 {
-			return true
-		}
-
-		l.waiters.notify(notifyValue{defChanged: l.isLockTableDefChanged()})
-		return l.isEmpty()
-	}()
-
-	if canRemove {
-		// close all ref in waiter waitTxns
-		l.waiters.iter(func(w *waiter) bool {
-			w.close("Lock closeWaiter", logger)
-			return true
-		})
-	}
-	return canRemove
 }
 
 func (l Lock) removeWaiter(w *waiter, logger *log.MOLogger) (bool, bool) {

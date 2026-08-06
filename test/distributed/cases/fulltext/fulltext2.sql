@@ -1,3 +1,4 @@
+set session sql_mode = default;
 set ft_relevancy_algorithm="TF-IDF";
 drop database if exists test_fulltext;
 create database test_fulltext;

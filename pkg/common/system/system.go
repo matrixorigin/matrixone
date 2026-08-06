@@ -238,6 +238,21 @@ func GoMaxProcs() int {
 	return int(goMaxProcs.Load())
 }
 
+// effectiveGoMaxProcs never raises a scheduler limit already established by
+// the Go runtime or GOMAXPROCS, while preserving the detected CPU upper bound.
+func effectiveGoMaxProcs(availableCPUs, currentMaxProcs int) int {
+	if availableCPUs < 1 {
+		return currentMaxProcs
+	}
+	if currentMaxProcs < 1 {
+		return availableCPUs
+	}
+	if currentMaxProcs < availableCPUs {
+		return currentMaxProcs
+	}
+	return availableCPUs
+}
+
 // SetGoMaxProcs
 // co-operate with pkg/cnservice/service.handleGoMaxProcs
 func SetGoMaxProcs(n int) (ret int) {
@@ -403,5 +418,8 @@ func refreshQuotaConfig() {
 func init() {
 	pid = os.Getpid()
 	refreshQuotaConfig()
-	SetGoMaxProcs(int(cpuNum.Load()))
+	SetGoMaxProcs(effectiveGoMaxProcs(
+		int(cpuNum.Load()),
+		runtime.GOMAXPROCS(0),
+	))
 }

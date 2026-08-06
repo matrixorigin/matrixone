@@ -17,15 +17,17 @@ package hashjoin
 import (
 	"bytes"
 	"context"
-	"os"
+	"io"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -74,22 +76,36 @@ func TestHashJoinSpillDiskV2(t *testing.T) {
 	buildBat.Vecs[0] = testutil.MakeInt32Vector(buildVals, nil, proc.Mp())
 	buildBat.SetRowCount(100)
 
-	// spill the build bucket via FlushBucketBatch
+	// Write one production-format spill record to the DISK-V2 file.
 	buildFile, err := spillfs.CreateAndRemoveFile(context.Background(), "diskv2_build")
 	require.NoError(t, err)
-	var buf bytes.Buffer
-	bw := spillutil.BucketWriter{Name: "diskv2_build", Fd: buildFile}
-	err = spillutil.FlushBucketBatch(proc, buildBat, &bw, &buf, nil)
+	var payload bytes.Buffer
+	err = buildBat.MarshalBinaryWithGroupingTo(&payload)
 	require.NoError(t, err)
-	buildFd := bw.HandOffFd()
-	require.NotNil(t, buildFd)
+	rows, size, magic := int64(buildBat.RowCount()), int64(payload.Len()), uint64(spillutil.SpillMagic)
+	for _, part := range [][]byte{
+		types.EncodeInt64(&rows),
+		types.EncodeInt64(&size),
+		payload.Bytes(),
+		types.EncodeUint64(&magic),
+	} {
+		_, err = buildFile.Write(part)
+		require.NoError(t, err)
+	}
+	_, err = buildFile.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+	info, err := buildFile.Stat()
+	require.NoError(t, err)
 
 	// rebuild via SpillEngine
-	engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
-		BuildKeyExprs: makeKeyExpr(),
-		NeedBatches:   true,
+	engine := newAccountedTestSpillEngine(t, spillutil.SpillEngineConfig{
+		BuildKeyExprs:           makeKeyExpr(),
+		NeedsBuildForEmptyProbe: true,
+		NeedBatches:             true,
 	})
-	engine.InitFromSpilledMap([]*os.File{buildFd})
+	engine.InitFromSpilledFiles([]*message.SpillFile{
+		message.NewSpillFile(buildFile, 100, uint64(info.Size()), nil),
+	})
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
 	jm, res, err := engine.RebuildHashmap(proc, analyzer)

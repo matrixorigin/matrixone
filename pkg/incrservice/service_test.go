@@ -1134,6 +1134,7 @@ func TestPrivateOffsetResetBuildsOneCacheForConcurrentUsers(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, store.Create(ctx, 0, def, txnOp))
 		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, txnOp))
+		require.True(t, txnOp.Txn().RequireAutoIncrEpochFenceCommit)
 
 		key := privateResetKey{txnID: string(txnOp.Txn().ID), tableID: 0}
 		s.mu.Lock()

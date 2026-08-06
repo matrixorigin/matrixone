@@ -35,7 +35,7 @@ import (
 // interpolateParams=false forces the driver onto protocol-level prepared
 // statements, and both executions run on the same prepared handle.
 func TestIssue25526PreparedUpdateJoinSecondExecute(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*180)
 			defer cancel()

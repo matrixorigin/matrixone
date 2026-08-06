@@ -247,6 +247,7 @@ func ExecuteIterationWithRuntime(
 	// injection is for ut
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "collectChanges" {
 		err = moerr.NewInternalErrorNoCtx(msg)
+		objectio.WaitForISCPExecutorFault(ctx, msg)
 	}
 	// injection is for ut
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && strings.HasPrefix(msg, "iteration:") {
@@ -422,6 +423,7 @@ func runISCPTaskIterationConsumers(
 			// injection is for ut
 			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "changesNext" {
 				err = moerr.NewInternalErrorNoCtx(msg)
+				objectio.WaitForISCPExecutorFault(ctxWithCancel, msg)
 			}
 			if err != nil {
 				jobNames := ""
@@ -1040,10 +1042,10 @@ func ProcessInitSQL(
 		// Commit only when every InitSQL statement succeeded; roll back on any
 		// error so a multi-statement InitSQL (postings-populate + WAND build) is
 		// atomic — a mid-sequence failure must not leave the earlier statements
-		// committed (which an ISCP retry would then re-apply). finishInitSQLTxn
+		// committed (which an ISCP retry would then re-apply). finishISCPTransaction
 		// runs that commit/rollback under a detached 5-minute timeout context.
 		defer func() {
-			err = finishInitSQLTxn(ctx, txnOp, err)
+			err = finishISCPTransaction(ctx, txnOp, err)
 		}()
 	}
 	// injection is for ut
@@ -1130,14 +1132,14 @@ func splitInitSQL(s string) []string {
 	return []string{s}
 }
 
-func finishInitSQLTxn(ctx context.Context, txnOp client.TxnOperator, err error) error {
+func finishISCPTransaction(ctx context.Context, txnOp client.TxnOperator, err error) error {
 	if txnOp == nil {
 		return err
 	}
 	cleanupCtx, cancel := context.WithTimeoutCause(
 		context.WithoutCancel(ctx),
 		time.Minute*5,
-		moerr.NewInternalErrorNoCtx("iscp init sql txn finish timeout"),
+		moerr.NewInternalErrorNoCtx("iscp transaction finish timeout"),
 	)
 	defer cancel()
 	if err != nil {

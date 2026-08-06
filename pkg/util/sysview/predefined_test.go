@@ -19,7 +19,32 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
+
+func TestInformationSchemaMetadataViewsHideTemporaryTables(t *testing.T) {
+	tests := []struct {
+		name       string
+		ddl        string
+		tableAlias string
+	}{
+		{name: "tables", ddl: InformationSchemaTablesDDL, tableAlias: "tbl"},
+		{name: "columns", ddl: InformationSchemaColumnsDDL, tableAlias: "mt"},
+		{name: "statistics", ddl: InformationSchemaStatisticsDDL, tableAlias: "tbl"},
+		{name: "table constraints", ddl: InformationSchemaTableConstraintsDDL, tableAlias: "tbl"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Contains(t, test.ddl, catalog.NonTemporaryTableSQLPredicate(test.tableAlias))
+			assert.Contains(t, test.ddl, catalog.SystemTemporaryTable)
+			assert.Contains(t, test.ddl, catalog.SystemRelAttr_CreateSQL)
+			assert.Contains(t, test.ddl, `[0-9a-f]{32}`)
+			assert.NotContains(t, test.ddl, "relname not like '__mo_tmp_%'")
+		})
+	}
+}
 
 func TestInformationSchemaStatisticsDDL_ContainsIdxAlgo(t *testing.T) {
 	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`idx`.`algo` AS `INDEX_TYPE`"))
@@ -31,4 +56,27 @@ func TestInformationSchemaStatisticsDDL_RestrictsCatalogJoins(t *testing.T) {
 	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`tcl`.`att_database` = `tbl`.`reldatabase`"))
 	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`tcl`.`att_relname` = `tbl`.`relname`"))
 	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`tbl`.`account_id` = current_account_id()"))
+}
+
+func TestInformationSchemaCharacterSetsData(t *testing.T) {
+	for _, expected := range []string{
+		"('binary','binary','Binary pseudo charset',1)",
+		"('utf8','utf8_bin','UTF-8 Unicode',4)",
+		"('utf8mb4','utf8mb4_bin','UTF-8 Unicode',4)",
+	} {
+		assert.Contains(t, InformationSchemaCharacterSetsData, expected)
+	}
+
+	ddlIndex := -1
+	dataIndex := -1
+	for i, sql := range InitInformationSchemaSysTables {
+		switch sql {
+		case InformationSchemaCharacterSetsDDL:
+			ddlIndex = i
+		case InformationSchemaCharacterSetsData:
+			dataIndex = i
+		}
+	}
+	assert.GreaterOrEqual(t, ddlIndex, 0)
+	assert.Equal(t, ddlIndex+1, dataIndex)
 }

@@ -30,8 +30,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
@@ -49,6 +52,79 @@ const (
 type noopReplayObserver struct{}
 
 func (noopReplayObserver) OnTimeStamp(types.TS) {}
+
+type dedupErrorObjectData struct {
+	data.Object
+	err error
+}
+
+func (data *dedupErrorObjectData) GetDuplicatedRows(
+	context.Context,
+	txnif.TxnReader,
+	containers.Vector,
+	index.ZM,
+	types.TS,
+	types.TS,
+	containers.Vector,
+	*mpool.MPool,
+) error {
+	return data.err
+}
+
+func TestIncrementalGetRowsByPKReleasesResultOnError(t *testing.T) {
+	schema := catalog.MockSchemaAll(3, 2)
+	entry := catalog.MockStaloneTableEntry(1, schema)
+	from := types.BuildTS(2, 0)
+	to := types.BuildTS(3, 0)
+	dedupErr := moerr.NewInternalErrorNoCtx("dedup read")
+
+	objectID := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&objectID, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
+	objectio.WithCNCreated()(stats)
+	object := catalog.MockObjectEntry(
+		entry,
+		stats,
+		false,
+		func(*catalog.ObjectEntry) data.Object {
+			return &dedupErrorObjectData{err: dedupErr}
+		},
+		from,
+	)
+	entry.AddEntryLocked(object)
+
+	pool := containers.NewVectorPool(t.Name(), 4)
+	defer pool.Destory()
+	txn := txnbase.MockTxnReaderWithStartTS(from.Prev())
+	txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	table := newBaseTable(schema, false, &txnTable{
+		entry: entry,
+		store: &txnStore{
+			txn: txn,
+			rt: dbutils.NewRuntime(
+				dbutils.WithRuntimeSmallPool(pool),
+			),
+		},
+	})
+	pks := containers.MakeVector(types.T_int64.ToType(), common.DefaultAllocator)
+	defer pks.Close()
+	pks.Append(int64(1), false)
+
+	rowIDs, err := table.incrementalGetRowsByPK(
+		context.Background(),
+		pks,
+		from,
+		to,
+		true,
+	)
+	if rowIDs != nil {
+		defer rowIDs.Close()
+	}
+	require.ErrorIs(t, err, dedupErr)
+	require.Nil(t, rowIDs)
+	used, _ := pool.Used(false)
+	require.Zero(t, used)
+}
 
 func newPreparingEpochTestTxn(t *testing.T, id string, start, prepare types.TS) *txnbase.Txn {
 	t.Helper()
@@ -109,6 +185,60 @@ func TestReplayOnePCRebuildsAutoIncrementDMLWatermark(t *testing.T) {
 	assert.True(t, tableEntry.ShouldRetryAutoIncrementAlter(startTS.Prev()))
 	assert.NoError(t, store.applyCommit(replayTxn))
 	assert.Equal(t, commitTS, tableEntry.GetLatestKnownDMLPrepare())
+}
+
+func TestReplaySkipsCheckpointGCedDirtyTables(t *testing.T) {
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	mgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(c), catalog.MockTxnFactory(c), types.NewMockHLCClock(1))
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+
+	setupTxn, err := mgr.StartTxn(nil)
+	assert.NoError(t, err)
+	dbEntry, err := c.CreateDBEntry("replay_checkpoint_gc", "", "", setupTxn)
+	assert.NoError(t, err)
+	tableEntry, err := dbEntry.CreateTableEntry(catalog.MockSchemaAll(3, 1), setupTxn, nil)
+	assert.NoError(t, err)
+	assert.NoError(t, setupTxn.Commit(context.Background()))
+
+	startTS := types.BuildTS(10, 0)
+	commitTS := types.BuildTS(12, 0)
+	replayTxn := newPreparingEpochTestTxn(t, "replay-checkpoint-gc", startTS, types.BuildTS(11, 0))
+	replayTxn.GetMemo().AddTable(dbEntry.ID, tableEntry.ID)
+	replayTxn.GetMemo().AddTable(dbEntry.ID, tableEntry.ID+1)
+	replayTxn.GetMemo().AddTable(dbEntry.ID+1, tableEntry.ID+2)
+	assert.NoError(t, replayTxn.SetCommitTS(commitTS))
+	store := &replayTxnStore{Cmd: &txnbase.TxnCmd{ComposedCmd: txnbase.NewComposedCmd()}, Observer: noopReplayObserver{}, catalog: c}
+
+	assert.NoError(t, store.prepareCommit(replayTxn))
+	assert.True(t, tableEntry.ShouldRetryAutoIncrementAlter(startTS))
+	assert.NoError(t, store.applyCommit(replayTxn))
+	assert.Equal(t, commitTS, tableEntry.GetLatestKnownDMLPrepare())
+}
+
+func TestReplayTxnStoreLifecycle(t *testing.T) {
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	mgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(c), catalog.MockTxnFactory(c), types.NewMockHLCClock(1))
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+
+	ctx := context.WithValue(context.Background(), struct{}{}, "replay")
+	txnCtx := txnbase.NewTxnCtx([]byte("replay-lifecycle"), types.BuildTS(10, 0), types.TS{})
+	cmd := &txnbase.TxnCmd{ComposedCmd: txnbase.NewComposedCmd()}
+	replayTxn := MakeReplayTxn(ctx, mgr, txnCtx, 42, cmd, noopReplayObserver{}, c)
+	store := replayTxn.GetStore().(*replayTxnStore)
+
+	assert.Same(t, ctx, store.GetContext())
+	assert.False(t, store.IsOffline())
+	assert.False(t, store.IsReadonly())
+	assert.Equal(t, uint64(42), replayTxn.GetLsn())
+	assert.NoError(t, store.prepareCommit(replayTxn))
+	assert.NoError(t, store.applyRollback(replayTxn))
+	assert.Panics(t, func() {
+		_ = store.prepareRollback(replayTxn)
+	})
 }
 
 type waitingSchemaTxn struct {

@@ -148,4 +148,12 @@ var (
 			Name:      "backend_handshake_inflight",
 			Help:      "Current number of proxy backend CN handshakes in flight.",
 		})
+
+	ProxyBackendHandshakeEventCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "proxy",
+			Name:      "backend_handshake_event_total",
+			Help:      "Total number of proxy backend handshake diagnostic events.",
+		}, []string{"event", "stage"})
 )

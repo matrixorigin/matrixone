@@ -12,7 +12,7 @@ insert into docs values
 (50,'quick quick quick fox fox');
 create fulltext2 index ft on docs(body);
 show create table docs;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,4,0]  ¦  Create Table[12,140,0]  𝄀
 docs  ¦  CREATE TABLE `docs` (
   `id` bit(16) NOT NULL,
   `body` text DEFAULT NULL,

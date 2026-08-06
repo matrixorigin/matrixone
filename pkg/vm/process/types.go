@@ -17,11 +17,11 @@ package process
 import (
 	"context"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
 	"github.com/hayageek/threadsafe"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -54,6 +54,12 @@ import (
 var (
 	NormalEndRegisterMessage = NewRegMsg(nil)
 )
+
+// EmptySqlModeSentinel is used to distinguish an explicitly-empty (non-strict)
+// sql_mode from an unset field during serialization. When resolveSqlMode
+// successfully resolves sql_mode="" it stores this sentinel so the remote CN
+// can tell "explicitly non-strict" apart from "never captured".
+const EmptySqlModeSentinel = "\x00MO_EMPTY_SQL_MODE\x00"
 
 // RegisterMessage channel data
 // Err == nil means pipeline finish with error
@@ -120,18 +126,20 @@ type SessionInfo struct {
 	// carried in the remote process snapshot because remote CNs have no session
 	// variable resolver.
 	ExplicitZeroTemporalCastReturnsNull bool
-	StorageEngine                       engine.Engine
-	QueryId                             []string
-	ResultColTypes                      []types.Type
-	SeqCurValues                        map[uint64]string
-	SeqDeleteKeys                       []uint64
-	SeqAddValues                        map[uint64]string
-	SeqLastValue                        []string
-	SqlHelper                           sqlHelper
-	Buf                                 *buffer.Buffer
-	SourceInMemScanBatch                []*kafka.Message
-	LogLevel                            zapcore.Level
-	SessionId                           uuid.UUID
+	// SqlMode is captured on the initiating CN and used when a remote process has
+	// no session variable resolver.
+	SqlMode        string
+	StorageEngine  engine.Engine
+	QueryId        []string
+	ResultColTypes []types.Type
+	SeqCurValues   map[uint64]string
+	SeqDeleteKeys  []uint64
+	SeqAddValues   map[uint64]string
+	SeqLastValue   []string
+	SqlHelper      sqlHelper
+	Buf            *buffer.Buffer
+	LogLevel       zapcore.Level
+	SessionId      uuid.UUID
 }
 
 type Session interface {
@@ -369,9 +377,18 @@ type BaseProcess struct {
 	messageBoard             *message.MessageBoard
 	hashBuildBudgetMu        sync.Mutex
 	hashBuildBudget          *HashBuildBudgetGeneration
+	cteMemoryBudgetMu        sync.Mutex
+	cteMemoryBudget          *CTEMemoryBudget
 	logger                   *log.MOLogger
 	TxnOperator              client.TxnOperator
 	CloneTxnOperator         client.TxnOperator
+	// userLevelLockIdentity is session-scoped rather than statement-scoped.
+	// SessionInfo is rebuilt before every statement, so keeping this identity
+	// there would lose the synthetic transaction owner while locks are held.
+	userLevelLockIdentityMu sync.Mutex
+	userLevelLockOwner      string
+	userLevelLockConnID     uint64
+	userLevelLockGeneration string
 	// incrStatementDisabled marks a process that executes internal SQL on a
 	// caller-owned transaction without opening a statement of its own
 	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
@@ -431,11 +448,15 @@ type sqlHelper interface {
 // WrapCs record information about pipeline's remote receiver.
 type WrapCs struct {
 	sync.RWMutex
-	ReceiverDone bool
-	MsgId        uint64
-	Uid          uuid.UUID
-	Cs           morpc.ClientSession
-	Err          chan error
+	ReceiverDone  bool
+	MsgId         uint64
+	Uid           uuid.UUID
+	Cs            morpc.ClientSession
+	Err           chan error
+	ReserveBatch  func(context.Context, uint64) (uint64, error)
+	RollbackBatch func(uint64)
+	BatchCredits  uint32
+	ByteCredits   uint64
 }
 
 // RemotePipelineInformationChannel used to deliver remote receiver pipeline's information.
@@ -462,6 +483,12 @@ func (proc *Process) SetStmtProfile(sp *StmtProfile) {
 		proc.Base.hashBuildBudget = nil
 	}
 	proc.Base.hashBuildBudgetMu.Unlock()
+	proc.Base.cteMemoryBudgetMu.Lock()
+	if proc.Base.cteMemoryBudget != nil {
+		proc.Base.cteMemoryBudget.Close()
+		proc.Base.cteMemoryBudget = nil
+	}
+	proc.Base.cteMemoryBudgetMu.Unlock()
 	proc.Base.StmtProfile = sp
 	// Reset division by zero cache for new statement
 	// Each statement must recompute based on its own type and sql_mode
@@ -495,7 +522,7 @@ func (proc *Process) SetFileService(fs fileservice.FileService) {
 }
 
 func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
-	if i < 0 || i >= proc.Base.prepareParams.Length() {
+	if proc.Base.prepareParams == nil || i < 0 || i >= proc.Base.prepareParams.Length() {
 		return nil, moerr.NewInternalErrorf(proc.Ctx, "get prepare params error, index %d not exists", i)
 	}
 	if proc.Base.prepareParams.IsNull(uint64(i)) {
@@ -632,6 +659,41 @@ func (si *SessionInfo) GetCollation() string {
 
 func (si *SessionInfo) GetConnectionID() uint64 {
 	return si.ConnectionID
+}
+
+// GetUserLevelLockIdentity returns the immutable user-level lock identity
+// pinned to this top process. Child processes share BaseProcess and therefore
+// observe the same session identity.
+func (proc *Process) GetUserLevelLockIdentity() (string, uint64) {
+	if proc == nil || proc.Base == nil {
+		return "", 0
+	}
+	proc.Base.userLevelLockIdentityMu.Lock()
+	defer proc.Base.userLevelLockIdentityMu.Unlock()
+	return proc.Base.userLevelLockOwner, proc.Base.userLevelLockConnID
+}
+
+// PinUserLevelLockIdentity installs the user-level lock identity once for the
+// lifetime of this top process. It is intentionally not reset after the last
+// lock is released: a concurrent acquisition must not be assigned a different
+// synthetic transaction owner, and SET CONNECTION ID must not mutate it.
+func (proc *Process) PinUserLevelLockIdentity(owner string, connID uint64) (string, uint64) {
+	if proc == nil || proc.Base == nil {
+		return "", 0
+	}
+	proc.Base.userLevelLockIdentityMu.Lock()
+	defer proc.Base.userLevelLockIdentityMu.Unlock()
+	if proc.Base.userLevelLockOwner == "" {
+		if proc.Base.userLevelLockGeneration == "" {
+			proc.Base.userLevelLockGeneration = uuid.New().String()
+		}
+		if proc.Base.userLevelLockGeneration != "" && strings.Count(owner, ":") < 2 {
+			owner = owner + ":" + proc.Base.userLevelLockGeneration
+		}
+		proc.Base.userLevelLockOwner = owner
+		proc.Base.userLevelLockConnID = connID
+	}
+	return proc.Base.userLevelLockOwner, proc.Base.userLevelLockConnID
 }
 
 func (si *SessionInfo) GetDatabase() string {

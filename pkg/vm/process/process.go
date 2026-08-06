@@ -201,6 +201,13 @@ func (proc *Process) DetachPrepareParams() PrepareParamsState {
 	return state
 }
 
+// BorrowPrepareParams exposes detached prepare parameters without transferring
+// their ownership back to proc. It lets nested work use the parameters while
+// Process.Free releases only resources owned by that nested work.
+func (proc *Process) BorrowPrepareParams(state PrepareParamsState) {
+	proc.setPrepareParams(state.prepareParams, state.isBin, false)
+}
+
 // RestorePrepareParams restores state previously returned by
 // DetachPrepareParams.
 func (proc *Process) RestorePrepareParams(state PrepareParamsState) {
@@ -225,18 +232,46 @@ func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Null
 }
 
 func (proc *Process) NewBatchFromSrc(src *batch.Batch, preAllocSize int) (*batch.Batch, error) {
+	return proc.NewBatchFromSrcWithAllocation(src, preAllocSize, nil)
+}
+
+// NewBatchFromSrcWithAllocation creates an empty off-heap destination whose
+// first vector growth uses the supplied immutable allocation provenance.
+func (proc *Process) NewBatchFromSrcWithAllocation(
+	src *batch.Batch,
+	preAllocSize int,
+	selection *vector.AllocationAccountSelection,
+) (_ *batch.Batch, retErr error) {
+	if proc == nil || src == nil || preAllocSize < 0 {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
 	bat := batch.NewOffHeapWithSize(len(src.Vecs))
+	defer func() {
+		if retErr != nil {
+			bat.Clean(proc.Mp())
+		}
+	}()
 	bat.SetAttributes(src.Attrs)
 	bat.Recursive = src.Recursive
 	for i := range bat.Vecs {
-		v := vector.NewOffHeapVecWithType(*src.Vecs[i].GetType())
+		if src.Vecs[i] == nil {
+			return nil, mpool.ErrAllocationAccountInvalid
+		}
+		bat.Vecs[i] = vector.NewOffHeapVecWithType(*src.Vecs[i].GetType())
+	}
+	if selection != nil {
+		if err := bat.SetAllocationAccount(selection); err != nil {
+			return nil, err
+		}
+	}
+	for i := range bat.Vecs {
+		v := bat.Vecs[i]
 		if v.Capacity() < preAllocSize {
 			err := v.PreExtend(preAllocSize, proc.Mp())
 			if err != nil {
 				return nil, err
 			}
 		}
-		bat.Vecs[i] = v
 	}
 	return bat, nil
 }

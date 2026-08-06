@@ -53,6 +53,62 @@ func TestAlterTableAddColumns(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestAlterTableCopyPreservesFinalColumnReplacementIdentity(t *testing.T) {
+	for _, sql := range []string{
+		`ALTER TABLE t1 DROP COLUMN b, ADD COLUMN b INT;`,
+		`ALTER TABLE t1 RENAME COLUMN b TO tmp, DROP COLUMN tmp, ADD COLUMN b INT;`,
+		`ALTER TABLE t1 DROP COLUMN b, ADD COLUMN tmp INT, RENAME COLUMN tmp TO b;`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+			assert.NoError(t, err)
+
+			alter := logicPlan.GetDdl().GetAlterTable()
+			oldCol := FindColumn(alter.TableDef.Cols, "b")
+			newCol := FindColumn(alter.CopyTableDef.Cols, "b")
+			if assert.NotNil(t, oldCol) && assert.NotNil(t, newCol) {
+				assert.NotEqual(t,
+					[]uint64{oldCol.ColId, uint64(oldCol.Seqnum)},
+					[]uint64{newCol.ColId, uint64(newCol.Seqnum)},
+				)
+				_, mapped := alter.ChangeTblColIdMap[oldCol.ColId]
+				assert.False(t, mapped)
+			}
+		})
+	}
+}
+
+func TestAlterTableCopyPreservesExistingColumnIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		sql              string
+		finalName        string
+		expectsChangeMap bool
+	}{
+		{`ALTER TABLE t1 ALGORITHM=COPY, MODIFY COLUMN b VARCHAR(20);`, "b", true},
+		{`ALTER TABLE t1 RENAME COLUMN b TO bb;`, "bb", false},
+		{`ALTER TABLE t1 ALGORITHM=COPY, RENAME COLUMN b TO bb, MODIFY COLUMN a BIGINT;`, "bb", true},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, tc.sql)
+			assert.NoError(t, err)
+
+			alter := logicPlan.GetDdl().GetAlterTable()
+			oldCol := FindColumn(alter.TableDef.Cols, "b")
+			newCol := FindColumn(alter.CopyTableDef.Cols, tc.finalName)
+			if assert.NotNil(t, oldCol) && assert.NotNil(t, newCol) {
+				assert.Equal(t, oldCol.ColId, newCol.ColId)
+				assert.Equal(t, oldCol.Seqnum, newCol.Seqnum)
+				if tc.expectsChangeMap {
+					mapped, ok := alter.ChangeTblColIdMap[oldCol.ColId]
+					if assert.True(t, ok, "change map: %#v", alter.ChangeTblColIdMap) {
+						assert.Equal(t, tc.finalName, mapped.Name)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestAlterTableRejectsNonGeometrySRIDAttribute(t *testing.T) {
 	mock := NewMockOptimizer(false)
 
@@ -127,7 +183,7 @@ func Test_checkChangeTypeCompatible(t *testing.T) {
 		wantErr assert.ErrorAssertionFunc
 	}{
 		{
-			name: "test1",
+			name: "binary to json still rejected for ddl",
 			args: args{
 				ctx:    context.Background(),
 				origin: &plan.Type{Id: int32(types.T_binary)},
@@ -136,10 +192,19 @@ func Test_checkChangeTypeCompatible(t *testing.T) {
 			wantErr: assert.Error,
 		},
 		{
-			name: "test2",
+			name: "varchar to json remains allowed for ddl",
 			args: args{
 				ctx:    context.Background(),
-				origin: &plan.Type{Id: int32(types.T_binary)},
+				origin: &plan.Type{Id: int32(types.T_varchar)},
+				to:     &plan.Type{Id: int32(types.T_json)},
+			},
+			wantErr: assert.NoError,
+		},
+		{
+			name: "int to json rejected for ddl despite expression cast support",
+			args: args{
+				ctx:    context.Background(),
+				origin: &plan.Type{Id: int32(types.T_int32)},
 				to:     &plan.Type{Id: int32(types.T_json)},
 			},
 			wantErr: assert.Error,

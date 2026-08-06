@@ -8,7 +8,7 @@ insert into t values
 (4,'delta epsilon zeta'),(5,'epsilon zeta alpha'),(6,'zeta alpha beta');
 create fulltext2 index ft on t(body) max_index_capacity 2;
 show create table t;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,1,0]  ¦  Create Table[12,160,0]  𝄀
 t  ¦  CREATE TABLE `t` (
   `id` bigint NOT NULL,
   `body` text DEFAULT NULL,

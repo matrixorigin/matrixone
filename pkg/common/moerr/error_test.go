@@ -89,6 +89,39 @@ func TestNew_MyErrorCode(t *testing.T) {
 
 	err = NewOutOfRange(context.TODO(), "int8", "1111")
 	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
+
+	err = NewUnknownStmtHandler(context.TODO(), "stmt1", "DEALLOCATE PREPARE")
+	require.Equal(t, ErrUnknownStmtHandler, err.ErrorCode())
+	require.Equal(t, ER_UNKNOWN_STMT_HANDLER, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t,
+		"Unknown prepared statement handler (stmt1) given to DEALLOCATE PREPARE",
+		err.Error(),
+	)
+}
+
+func TestWrongArgumentsMySQLError(t *testing.T) {
+	err := NewWrongArguments(context.Background(), "nth_value")
+	require.Equal(t, ErrWrongArguments, err.ErrorCode())
+	require.Equal(t, ER_WRONG_ARGUMENTS, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t, "Incorrect arguments to nth_value", err.Error())
+}
+
+func TestWindowInvalidUseMySQLError(t *testing.T) {
+	err := NewWindowInvalidUse(context.Background(), "row_number")
+	require.Equal(t, ErrWindowInvalidUse, err.ErrorCode())
+	require.Equal(t, ER_WINDOW_INVALID_WINDOW_FUNC_USE, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t, "You cannot use the window function 'row_number' in this context", err.Error())
+}
+
+func TestViewSelectTmpTableMySQLError(t *testing.T) {
+	err := NewViewSelectTmpTable(context.Background(), "temp_for_view")
+	require.Equal(t, ErrViewSelectTmpTable, err.ErrorCode())
+	require.Equal(t, ER_VIEW_SELECT_TMPTABLE, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t, "View's SELECT refers to a temporary table 'temp_for_view'", err.Error())
 }
 
 func TestLockWaitTimeoutMySQLError(t *testing.T) {
@@ -101,6 +134,16 @@ func TestLockWaitTimeoutMySQLError(t *testing.T) {
 	noCtxErr := NewLockWaitTimeoutNoCtx()
 	require.Equal(t, ErrLockWaitTimeout, noCtxErr.ErrorCode())
 	require.Equal(t, ER_LOCK_WAIT_TIMEOUT, noCtxErr.MySQLCode())
+}
+
+func TestMaxPreparedStmtCountReachedMySQLError(t *testing.T) {
+	err := NewMaxPreparedStmtCountReached(context.Background(), 2)
+	require.Equal(t, ErrMaxPreparedStmtCountReached, err.ErrorCode())
+	require.Equal(t, ER_MAX_PREPARED_STMT_COUNT_REACHED, err.MySQLCode())
+	require.Equal(t, "42000", err.SqlState())
+	require.Equal(t,
+		"Can't create more than max_prepared_stmt_count statements (current value: 2)",
+		err.Error())
 }
 
 func TestIsMoErrCode(t *testing.T) {
@@ -121,6 +164,41 @@ func TestEncoding(t *testing.T) {
 	err = e2.UnmarshalBinary(data)
 	require.Nil(t, err)
 	require.Equal(t, e, e2)
+}
+
+func TestResourceExhaustedWithDetailsEncoding(t *testing.T) {
+	err := NewResourceExhaustedf(context.Background(), "requested=%d used=%d limit=%d", 3, 5, 7)
+	require.Equal(t, ErrOOM, err.ErrorCode())
+	require.Equal(t, ER_ENGINE_OUT_OF_MEMORY, err.MySQLCode())
+	require.Equal(t,
+		"error: resource exhausted: requested=3 used=5 limit=7",
+		err.Error())
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
+}
+
+func TestNoSuchTableWithFormattedMessage(t *testing.T) {
+	err := NewNoSuchTablef(context.Background(), "SQL parser error: table %q does not exist", "missing")
+	require.Equal(t, ErrNoSuchTable, err.ErrorCode())
+	require.Equal(t, ER_NO_SUCH_TABLE, err.MySQLCode())
+	require.Equal(t, `SQL parser error: table "missing" does not exist`, err.Error())
+}
+
+func TestMPoolCapacityEncoding(t *testing.T) {
+	err := NewMPoolCapacityNoCtxf("alloc %d bytes, cap %d", 8, 4)
+	require.Equal(t, ErrMPoolCapacity, err.ErrorCode())
+	require.Equal(t, ER_ENGINE_OUT_OF_MEMORY, err.MySQLCode())
+	require.Contains(t, err.Error(), "alloc 8 bytes, cap 4")
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
 }
 
 func TestErrSubqueryNo1RowContract(t *testing.T) {
@@ -278,4 +356,23 @@ func Test_ForCoverage(t *testing.T) {
 
 	err = NewTxnStaleNoCtxf("test")
 	require.True(t, IsMoErrCode(err, ErrTxnStale))
+}
+
+// TestNewErrCastWidthExceeded verifies the cast width-violation error carries the
+// ErrCastWidthExceeded code and maps to MySQL ER_DATA_TOO_LONG (1406) — the
+// correct protocol code for an over-length write. The message template is bare
+// "%s" (no "internal error:" prefix); the JDBC driver then wraps it as
+// java.sql.DataTruncation, which the BVT result files reflect.
+func TestNewErrCastWidthExceeded(t *testing.T) {
+	ctx := context.Background()
+	err := NewErrCastWidthExceeded(ctx, "Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3")
+
+	require.Equal(t, ErrCastWidthExceeded, err.ErrorCode())
+	require.Equal(t, uint16(ER_DATA_TOO_LONG), err.MySQLCode())
+	require.Equal(t, "22001", err.SqlState())
+	require.True(t, IsMoErrCode(err, ErrCastWidthExceeded))
+	// Bare "%s" template: the diagnostic message is carried verbatim.
+	require.Equal(t,
+		"Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3",
+		err.Error())
 }

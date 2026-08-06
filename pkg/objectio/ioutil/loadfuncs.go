@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -71,13 +72,331 @@ func LoadColumnsData(
 		cacheVectors.Free(m)
 	}
 	for i := range columns {
-		if err = objectio.MustVectorTo(&cacheVectors[i], vectors.Entries[i].CachedData.Bytes()); err != nil {
+		if err = objectio.MustVectorToCachedWithMpool(&cacheVectors[i], vectors.Entries[i].CachedData, m); err != nil {
 			logutil.Errorf("LoadColumnsData %s error: %v", location.String(), err.Error())
 			release()
 			release = nil
 			return
 		}
 	}
+	return
+}
+
+func readColumnsData(
+	ctx context.Context,
+	columns []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	extraTSColumn *uint16,
+	m *mpool.MPool,
+	policy fileservice.Policy,
+) (ioVectors fileservice.IOVector, fromCache bool, err error) {
+	if len(columns) != len(typs) {
+		return ioVectors, false, moerr.NewInvalidInputNoCtxf(
+			"object column count %d does not match type count %d",
+			len(columns), len(typs),
+		)
+	}
+	if len(columns) == 0 && extraTSColumn == nil {
+		return
+	}
+
+	readColumns := columns
+	readTypes := typs
+	if extraTSColumn != nil {
+		readColumns = make([]uint16, len(columns), len(columns)+2)
+		copy(readColumns, columns)
+		readColumns = append(readColumns, *extraTSColumn, objectio.SEQNUM_ABORT)
+		readTypes = make([]types.Type, len(typs), len(typs)+2)
+		copy(readTypes, typs)
+		readTypes = append(readTypes, objectio.TSType, types.T_bool.ToType())
+	}
+
+	name := location.Name().UnsafeString()
+	meta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+	if err != nil {
+		return ioVectors, false, err
+	}
+	dataMeta := meta.MustGetMeta(objectio.SchemaData)
+	ioVectors, err = objectio.ReadOneBlock(
+		ctx,
+		&dataMeta,
+		name,
+		location.ID(),
+		readColumns,
+		readTypes,
+		m,
+		fs,
+		policy,
+	)
+	if err != nil {
+		return ioVectors, false, err
+	}
+	fromCache = len(ioVectors.Entries) > 0
+	for i := range ioVectors.Entries {
+		if !ioVectors.Entries[i].WasFromCache() {
+			fromCache = false
+			break
+		}
+	}
+	return
+}
+
+// LoadColumnsDataInto reads a block while its FileService cache entries are
+// pinned and materializes directly into caller-owned destination Vectors. A
+// nil sels copies every row; a non-nil sels copies only the selected rows.
+//
+// visibilityTS is non-nil for appendable blocks. In that case the internal
+// commit-ts column is read in the same IOVector and rows newer than the
+// snapshot are returned in deleteMask. The commit-ts Vector never escapes this
+// scoped read. On an allocation or decode error, destinations may contain a
+// successfully materialized prefix; ownership remains with the caller.
+func LoadColumnsDataInto(
+	ctx context.Context,
+	columns []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	destinations []*vector.Vector,
+	sels []int64,
+	visibilityTS *types.TS,
+	m *mpool.MPool,
+	policy fileservice.Policy,
+) (deleteMask objectio.Bitmap, fromCache bool, err error) {
+	if len(columns) != len(destinations) {
+		err = moerr.NewInvalidInputNoCtxf(
+			"object column count %d does not match destination count %d",
+			len(columns), len(destinations),
+		)
+		return
+	}
+	if len(columns) != len(typs) {
+		err = moerr.NewInvalidInputNoCtxf(
+			"object column count %d does not match type count %d",
+			len(columns), len(typs),
+		)
+		return
+	}
+	for i := range destinations {
+		if destinations[i] == nil {
+			err = moerr.NewInvalidInputNoCtxf("nil destination for object column %d", columns[i])
+			return
+		}
+	}
+	if (len(columns) > 0 || visibilityTS != nil) && m == nil {
+		err = moerr.NewInvalidInputNoCtx("nil mpool for object column materialization")
+		return
+	}
+	if visibilityTS != nil && sels != nil {
+		err = moerr.NewInvalidInputNoCtx("selected-row materialization cannot return a block-coordinate visibility mask")
+		return
+	}
+	var commitTSColumn *uint16
+	if visibilityTS != nil {
+		column := uint16(objectio.SEQNUM_COMMITTS)
+		commitTSColumn = &column
+	}
+	ioVectors, fromCache, err := readColumnsData(
+		ctx,
+		columns,
+		typs,
+		fs,
+		location,
+		commitTSColumn,
+		m,
+		policy,
+	)
+	if err != nil {
+		return deleteMask, false, err
+	}
+	defer objectio.ReleaseIOVector(&ioVectors)
+	defer func() {
+		if err != nil {
+			deleteMask.Release()
+			deleteMask = objectio.NullBitmap
+		}
+	}()
+
+	if visibilityTS != nil {
+		var commits vector.Vector
+		if err = objectio.MustVectorToCached(
+			&commits,
+			ioVectors.Entries[len(columns)].CachedData,
+		); err != nil {
+			return
+		}
+		defer commits.Free(nil)
+		if commits.GetType().Oid != types.T_TS || commits.IsConstNull() {
+			err = moerr.NewInvalidInputNoCtx("object commit-ts column is unavailable")
+			return
+		}
+		var aborts vector.Vector
+		if err = objectio.MustVectorToCached(
+			&aborts,
+			ioVectors.Entries[len(columns)+1].CachedData,
+		); err != nil {
+			return
+		}
+		defer aborts.Free(nil)
+		hasAborts := !aborts.IsConstNull()
+		if hasAborts && (aborts.GetType().Oid != types.T_bool || aborts.Length() != commits.Length()) {
+			err = moerr.NewInvalidInputNoCtx("object abort column is unavailable")
+			return
+		}
+
+		deleteMask = objectio.GetReusableBitmap()
+		for i := 0; i < commits.Length(); i++ {
+			if commits.IsNull(uint64(i)) {
+				err = moerr.NewInvalidInputNoCtxf("object commit-ts row %d is null", i)
+				return
+			}
+			if hasAborts && aborts.IsNull(uint64(i)) {
+				err = moerr.NewInvalidInputNoCtxf("object abort row %d is null", i)
+				return
+			}
+			commit := vector.GetFixedAtNoTypeCheck[types.TS](&commits, i)
+			if commit.GT(visibilityTS) ||
+				(hasAborts && vector.GetFixedAtNoTypeCheck[bool](&aborts, i)) {
+				deleteMask.Add(uint64(i))
+			}
+		}
+	}
+
+	for i := range columns {
+		if sels == nil {
+			err = objectio.CopyCachedVectorAll(
+				destinations[i],
+				ioVectors.Entries[i].CachedData,
+				m,
+			)
+		} else {
+			err = objectio.CopyCachedVectorRows(
+				destinations[i],
+				ioVectors.Entries[i].CachedData,
+				sels,
+				m,
+			)
+		}
+		if err != nil {
+			logutil.Errorf("LoadColumnsDataInto %s error: %v", location.String(), err)
+			return
+		}
+	}
+	return
+}
+
+// LoadColumnDataBySearch executes a fixed supported varlen search while the
+// cache entry is pinned. The cache-backed Vector remains private to ObjectIO.
+func LoadColumnDataBySearch(
+	ctx context.Context,
+	column uint16,
+	typ types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	search *objectio.ReadFilterSearch,
+	sorted bool,
+	visibilityTS *types.TS,
+	m *mpool.MPool,
+	policy fileservice.Policy,
+) (sels []int64, fromCache bool, err error) {
+	if m == nil {
+		return nil, false, moerr.NewInvalidInputNoCtx("nil mpool for object column search")
+	}
+	var commitTSColumn *uint16
+	if visibilityTS != nil {
+		column := uint16(objectio.SEQNUM_COMMITTS)
+		commitTSColumn = &column
+	}
+	ioVectors, fromCache, err := readColumnsData(
+		ctx,
+		[]uint16{column},
+		[]types.Type{typ},
+		fs,
+		location,
+		commitTSColumn,
+		m,
+		policy,
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	defer objectio.ReleaseIOVector(&ioVectors)
+
+	sels, err = objectio.SearchCachedVector(
+		ioVectors.Entries[0],
+		search,
+		sorted,
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	if visibilityTS != nil {
+		sels, err = objectio.FilterCachedRowsByCommitTSAndAbort(
+			ioVectors.Entries[1].CachedData,
+			ioVectors.Entries[2].CachedData,
+			sels,
+			*visibilityTS,
+		)
+		if err != nil {
+			return nil, false, err
+		}
+	}
+	return
+}
+
+// LoadColumnDataBySearchAndCheckTS searches a varlen column and checks whether
+// any selected row's requested commit timestamp lies in (from, to].
+func LoadColumnDataBySearchAndCheckTS(
+	ctx context.Context,
+	column uint16,
+	typ types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	search *objectio.ReadFilterSearch,
+	sorted bool,
+	commitTSColumn uint16,
+	from, to types.TS,
+	m *mpool.MPool,
+	policy fileservice.Policy,
+) (matched bool, usable bool, fromCache bool, err error) {
+	if m == nil {
+		err = moerr.NewInvalidInputNoCtx("nil mpool for object column search")
+		return
+	}
+	ioVectors, fromCache, err := readColumnsData(
+		ctx,
+		[]uint16{column, commitTSColumn, objectio.SEQNUM_ABORT},
+		[]types.Type{typ, objectio.TSType, types.T_bool.ToType()},
+		fs,
+		location,
+		nil,
+		m,
+		policy,
+	)
+	if err != nil {
+		return false, false, false, err
+	}
+	defer objectio.ReleaseIOVector(&ioVectors)
+
+	sels, err := objectio.SearchCachedVector(
+		ioVectors.Entries[0],
+		search,
+		sorted,
+	)
+	if err != nil {
+		return false, false, false, err
+	}
+	if len(sels) == 0 {
+		return false, true, fromCache, nil
+	}
+	matched, usable, err = objectio.AnyCachedTSInRangeWithAbort(
+		ioVectors.Entries[1].CachedData,
+		ioVectors.Entries[2].CachedData,
+		sels,
+		from,
+		to,
+	)
 	return
 }
 
@@ -118,7 +437,7 @@ func LoadColumnsData2(
 	}()
 	var obj any
 	for i := range cols {
-		obj, err = objectio.Decode(ioVectors.Entries[i].CachedData.Bytes())
+		obj, err = objectio.DecodeCached(ioVectors.Entries[i].CachedData)
 		if err != nil {
 			for _, col := range vectors {
 				if col != nil {
@@ -205,22 +524,42 @@ func LoadOneBlock(
 	key objectio.Location,
 	metaType objectio.DataMetaType,
 ) (*batch.Batch, uint16, error) {
+	bat, sortKey, _, err := LoadOneBlockWithSpecialLayout(ctx, fs, key, metaType)
+	return bat, sortKey, err
+}
+
+// LoadOneBlockWithSpecialLayout returns the physical special-column layout
+// alongside the loaded batch. Callers that expose logical rows must use this
+// metadata to remove storage-only columns without guessing from vector types or
+// the physical column count.
+func LoadOneBlockWithSpecialLayout(
+	ctx context.Context,
+	fs fileservice.FileService,
+	key objectio.Location,
+	metaType objectio.DataMetaType,
+) (*batch.Batch, uint16, objectio.SpecialColumnLayout, error) {
 	sortKey := uint16(math.MaxUint16)
+	layout := objectio.SpecialColumnLayout{
+		PhysicalAddr: objectio.InvalidSpecialColumnPosition,
+		CommitTS:     objectio.InvalidSpecialColumnPosition,
+		Abort:        objectio.InvalidSpecialColumnPosition,
+	}
 	meta, err := objectio.FastLoadObjectMeta(ctx, &key, false, fs)
 	if err != nil {
-		return nil, sortKey, err
+		return nil, sortKey, layout, err
 	}
 	data := meta.MustGetMeta(metaType)
 	if data.BlockHeader().Appendable() {
 		sortKey = data.BlockHeader().SortKey()
 	}
+	layout = objectio.ResolveSpecialColumnLayout(data.GetBlockMeta(uint32(key.ID())))
 	idxes := make([]uint16, data.BlockHeader().ColumnCount())
 	for i := range idxes {
 		idxes[i] = uint16(i)
 	}
 	bat, err := objectio.ReadOneBlockAllColumns(ctx, &data, key.Name().String(),
 		uint32(key.ID()), idxes, fileservice.SkipAllCache, fs)
-	return bat, sortKey, err
+	return bat, sortKey, layout, err
 }
 
 func LoadOneBlockWithIndex(

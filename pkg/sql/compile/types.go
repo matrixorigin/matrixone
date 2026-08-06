@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
@@ -189,6 +191,12 @@ type Scope struct {
 	DataSource *Source
 	// PreScopes contains children of this scope will inherit and execute.
 	PreScopes []*Scope
+	// parallelGenerations are execution-created scope trees retained only so
+	// post-run physical-plan analysis can observe their real DOP and stats.
+	// Compile.Reset releases the previous execution's trees before the template
+	// is reused; otherwise prepared executions would append and execute every
+	// prior generation again.
+	parallelGenerations []*Scope
 	// NodeInfo contains the information about the remote node.
 	NodeInfo engine.Node
 	// TxnOffset represents the transaction's write offset, specifying the starting position for reading data.
@@ -264,7 +272,9 @@ type Compile struct {
 
 	// fill is a result writer runs a callback function.
 	// fill will be called when result data is ready.
-	fill func(*batch.Batch, *perfcounter.CounterSet) error
+	fill                func(*batch.Batch, *perfcounter.CounterSet) error
+	resultSink          ResultSink
+	executionGeneration uint64
 	// affectRows stores the number of rows affected while insert / update / delete
 	affectRows *atomic.Uint64
 	// cn address
@@ -306,6 +316,10 @@ type Compile struct {
 	nodeRegs map[[2]int32]*process.WaitRegister
 	stepRegs map[int32][][2]int32
 
+	materializedSinkScanNodes map[int32][]int32
+	materializedSources       map[int32]*materialized.Source
+	materializedReaderIDs     map[[2]int32]int
+
 	// cnLabel is the CN labels which is received from proxy when build connection.
 	cnLabel map[string]string
 
@@ -332,6 +346,14 @@ type Compile struct {
 	// resourceAttemptOwnerEligible is set only for the top-level statement
 	// Compile. The statement root still arbitrates the single actual owner.
 	resourceAttemptOwnerEligible bool
+	allocationAccountRegistry    *mpool.AllocationAccountRegistry
+	allocationAccountLimit       uint64
+	allocationControllerProvider func() (mpool.AllocationCapacityController, error)
+	allocationTerminalExporter   func(mpool.AllocationAccountTerminalSnapshot)
+	allocationAccountOwners      []executionAllocationAccountOwner
+	allocationAttempt            *statementAllocationAttempt
+	remoteFragmentCounts         map[string]uint32
+	remoteExecutionID            uuid.UUID
 	hasMergeOp                   bool
 
 	// ncpu set as system.GoRoutines() while NewCompile, instead of global static value.
@@ -363,6 +385,10 @@ type fuzzyCheck struct {
 	// handle with primary key(a, b, ...) or unique key (a, b, ...)
 	isCompound bool
 
+	// exactFloatKey means the pipeline carries serial(FLOAT/DOUBLE) rather than
+	// the scalar key. This preserves signed zero and NaN payload identity.
+	exactFloatKey bool
+
 	// handle with cases like create a unique index for existed table, or alter add unique key
 	// and the type of unique key is compound
 	onlyInsertHidden bool
@@ -375,6 +401,8 @@ type fuzzyCheck struct {
 
 type MultiTableIndex struct {
 	IndexAlgo string
+	// Compile DDL/ALTER paths keep physical index defs grouped by table type.
+	// They should not infer logical INCLUDE metadata from one physical def.
 	IndexDefs map[string]*plan.IndexDef
 }
 

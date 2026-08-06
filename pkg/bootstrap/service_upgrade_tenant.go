@@ -248,7 +248,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 						zap.String("upgrade", upgrade.String()))
 
 					// createVersion >= upgrade.ToVersion already upgrade
-					if versions.Compare(createVersion, upgrade.ToVersion) > 0 {
+					if versions.Compare(createVersion, upgrade.ToVersion) >= 0 {
 						continue
 					}
 

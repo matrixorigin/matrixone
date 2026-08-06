@@ -30,15 +30,17 @@ func TestFullTextMatchFuncExpressionFormat(t *testing.T) {
 	ft, err := NewFullTextMatchFuncExpression(cols, NewNumVal("apple", "apple", false, P_char), FULLTEXT_BOOLEAN)
 	require.NoError(t, err)
 
+	// The string pattern is emitted as a single-quoted, escaped SQL string literal
+	// UNCONDITIONALLY so the deparsed MATCH re-parses (view expansion / CTAS) — #24823.
 	ctx := NewFmtCtx(dialect.MYSQL, WithQuoteString(true))
 	ft.Format(ctx)
-	require.Equal(t, `MATCH (body) AGAINST ("apple" IN BOOLEAN MODE)`, ctx.String())
+	require.Equal(t, `MATCH (body) AGAINST ('apple' IN BOOLEAN MODE)`, ctx.String())
 
 	// default mode omits the mode clause.
 	def, _ := NewFullTextMatchFuncExpression(cols, NewNumVal("apple", "apple", false, P_char), FULLTEXT_DEFAULT)
 	ctx2 := NewFmtCtx(dialect.MYSQL, WithQuoteString(true))
 	def.Format(ctx2)
-	require.Equal(t, `MATCH (body) AGAINST ("apple")`, ctx2.String())
+	require.Equal(t, `MATCH (body) AGAINST ('apple')`, ctx2.String())
 }
 
 func TestFullTextMatchExprValid(t *testing.T) {

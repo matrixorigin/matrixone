@@ -51,13 +51,11 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 	}
 
 	if len(ctr.aggExe) == 0 {
-		ctr.aggExe = make([]colexec.ExpressionExecutor, len(timeWin.Aggs))
+		ctr.aggExe = make([]colexec.ExprEvalVector, len(timeWin.Aggs))
 		for i, ag := range timeWin.Aggs {
-			if expressions := ag.GetArgExpressions(); len(expressions) > 0 {
-				ctr.aggExe[i], err = colexec.NewExpressionExecutor(proc, expressions[0])
-				if err != nil {
-					return err
-				}
+			ctr.aggExe[i], err = colexec.MakeEvalVector(proc, ag.GetArgExpressions())
+			if err != nil {
+				return err
 			}
 		}
 	}
@@ -300,10 +298,12 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.curRowIdx = ctr.breakRowIdx
 				ctr.preVecIdx = ctr.breakVecIdx
 				ctr.preRowIdx = ctr.breakRowIdx
+				ctr.partIdx = -1
 				ctr.group = -1
 				ctr.withoutFill = true
 				ctr.partEnd = false
 				ctr.partitionBreak = false
+				ctr.partitionWindows = 0
 				ctr.status = firstWindow
 			default:
 				replacements, err := makeAggExecutors(timeWin, proc, true)
@@ -349,12 +349,21 @@ func makeAggExecutors(timeWin *TimeWin, proc *process.Process, growFirstGroup bo
 	}()
 
 	for i, expression := range timeWin.Aggs {
+		params := make([]types.Type, len(expression.GetArgExpressions()))
+		for j, argument := range expression.GetArgExpressions() {
+			params[j] = types.New(types.T(argument.Typ.Id), argument.Typ.Width, argument.Typ.Scale)
+			if j == 0 && params[j].Oid == types.T_any && i < len(timeWin.Types) {
+				// Older manually-constructed plans/tests keep the physical first
+				// argument type in TimeWin.Types rather than the expression.
+				params[j] = timeWin.Types[i]
+			}
+		}
 		aggs[i], err = aggexec.MakeAgg(
-			proc.Mp(), expression.GetAggID(), expression.IsDistinct(), timeWin.Types[i])
+			proc.Mp(), expression.GetAggID(), expression.IsDistinct(), params...)
 		if err != nil {
 			return nil, err
 		}
-		if config := expression.GetExtraConfig(); config != nil {
+		if config := expression.GetExtraInformation(); config != nil {
 			if err = aggs[i].SetExtraInformation(config, 0); err != nil {
 				return nil, err
 			}
@@ -407,7 +416,8 @@ func newTsExpr(typ plan.Type, ctx context.Context) (*plan.Expr, error) {
 }
 
 func (ctr *container) nextWindow(t *TimeWin) error {
-	if !ctr.withoutFill {
+	emit := !ctr.withoutFill || t.GapFill
+	if emit {
 		ctr.wStart = append(ctr.wStart, ctr.left)
 		ctr.wEnd = append(ctr.wEnd, ctr.right)
 	}
@@ -421,13 +431,17 @@ func (ctr *container) nextWindow(t *TimeWin) error {
 	ctr.curVecIdx = ctr.preVecIdx
 	ctr.curRowIdx = ctr.preRowIdx
 
-	if !ctr.withoutFill {
+	if emit {
 		for _, ag := range ctr.aggs {
 			if err := ag.GroupGrow(1); err != nil {
 				return err
 			}
 		}
 		ctr.group++
+		ctr.partitionWindows++
+		if err := ctr.accountGapFillWindow(t); err != nil {
+			return err
+		}
 	}
 	// See firstWindow: the new window is empty until a row lands in it.
 	ctr.withoutFill = true
@@ -435,6 +449,18 @@ func (ctr *container) nextWindow(t *TimeWin) error {
 }
 
 func (ctr *container) firstWindow(t *TimeWin) error {
+	if ctr.partIdx < 0 {
+		ctr.partitionCount++
+		if t.GapFill && ctr.partitionCount > maxGapFillPartitions {
+			return moerr.NewInvalidInputNoCtx("GAPFILL partition limit exceeded")
+		}
+		ctr.partitionWindows = 1
+	} else {
+		ctr.partitionWindows++
+	}
+	if err := ctr.accountGapFillWindow(t); err != nil {
+		return err
+	}
 	val := vector.MustFixedColWithTypeCheck[types.Datetime](ctr.tsVec[ctr.curVecIdx])[ctr.curRowIdx]
 	if val == types.ZeroDatetime {
 		// A zero temporal has no chronological position, but it is a storable
@@ -495,7 +521,7 @@ func (ctr *container) fillRows() error {
 			}
 			if vals[ctr.curRowIdx] == types.ZeroDatetime {
 				for j, agg := range ctr.aggs {
-					if err := agg.Fill(ctr.group, ctr.curRowIdx, []*vector.Vector{ctr.aggVec[ctr.curVecIdx][j]}); err != nil {
+					if err := agg.Fill(ctr.group, ctr.curRowIdx, ctr.aggVec[ctr.curVecIdx][j]); err != nil {
 						return err
 					}
 				}
@@ -538,7 +564,7 @@ func (ctr *container) fillRows() error {
 
 		if vals[ctr.curRowIdx] >= ctr.left && vals[ctr.curRowIdx] < ctr.right {
 			for j, agg := range ctr.aggs {
-				if err := agg.Fill(ctr.group, ctr.curRowIdx, []*vector.Vector{ctr.aggVec[ctr.curVecIdx][j]}); err != nil {
+				if err := agg.Fill(ctr.group, ctr.curRowIdx, ctr.aggVec[ctr.curVecIdx][j]); err != nil {
 					return err
 				}
 			}
@@ -579,6 +605,26 @@ func (ctr *container) fillRows() error {
 }
 
 const maxTimeWindowRows = 8192
+
+const (
+	maxGapFillRowsPerPartition = 1_000_000
+	maxGapFillPartitions       = 100_000
+	maxGapFillRowsTotal        = 10_000_000
+)
+
+func (ctr *container) accountGapFillWindow(timeWin *TimeWin) error {
+	if !timeWin.GapFill {
+		return nil
+	}
+	if ctr.partitionWindows > maxGapFillRowsPerPartition {
+		return moerr.NewInvalidInputNoCtx("GAPFILL generated row limit exceeded for a partition")
+	}
+	ctr.gapFillWindows++
+	if ctr.gapFillWindows > maxGapFillRowsTotal {
+		return moerr.NewInvalidInputNoCtx("GAPFILL generated total row limit exceeded")
+	}
+	return nil
+}
 
 func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	ctr.freeFlushedAggVecs(proc.Mp())
@@ -665,8 +711,8 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err error) {
 	ctr.bat = batch.NewWithSize(ctr.colCnt)
 	i := 0
-	for _, vec := range ctr.aggVec[ctr.i-1] {
-		ctr.bat.SetVector(int32(i), vec)
+	for _, vecs := range ctr.aggVec[ctr.i-1] {
+		ctr.bat.SetVector(int32(i), vecs[0])
 		i++
 	}
 
@@ -853,21 +899,24 @@ func (ctr *container) evalTsVector(bat *batch.Batch, proc *process.Process) erro
 func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) error {
 	f := len(ctr.aggVec) > ctr.i
 	if !f {
-		ctr.aggVec = append(ctr.aggVec, make([]*vector.Vector, len(ctr.aggExe)))
+		ctr.aggVec = append(ctr.aggVec, make([][]*vector.Vector, len(ctr.aggExe)))
 	}
 	for i := range ctr.aggExe {
-		if ctr.aggExe[i] != nil {
-			vec, err := ctr.aggExe[i].Eval(proc, []*batch.Batch{bat}, nil)
+		if !f {
+			ctr.aggVec[ctr.i][i] = make([]*vector.Vector, len(ctr.aggExe[i].Executor))
+		}
+		for j := range ctr.aggExe[i].Executor {
+			vec, err := ctr.aggExe[i].Executor[j].Eval(proc, []*batch.Batch{bat}, nil)
 			if err != nil {
 				return err
 			}
 			if f {
-				ctr.aggVec[ctr.i][i].CleanOnlyData()
-				if err = ctr.aggVec[ctr.i][i].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
+				ctr.aggVec[ctr.i][i][j].CleanOnlyData()
+				if err = ctr.aggVec[ctr.i][i][j].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
 					return err
 				}
 			} else {
-				ctr.aggVec[ctr.i][i], err = vec.Dup(proc.Mp())
+				ctr.aggVec[ctr.i][i][j], err = vec.Dup(proc.Mp())
 				if err != nil {
 					return err
 				}

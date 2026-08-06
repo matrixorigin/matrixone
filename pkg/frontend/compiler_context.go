@@ -92,6 +92,7 @@ func (tcc *TxnCompilerContext) SetExecCtx(execCtx *ExecCtx) {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	tcc.execCtx = execCtx
+	tcc.views = nil
 }
 
 func (tcc *TxnCompilerContext) GetViews() []string {
@@ -119,7 +120,22 @@ func (tcc *TxnCompilerContext) SetSnapshot(snapshot *plan2.Snapshot) {
 }
 
 func (tcc *TxnCompilerContext) InitExecuteStmtParam(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
-	_, p, st, _, err := initExecuteStmtParam(tcc.execCtx, tcc.execCtx.ses.(*Session), tcc.tcw.(*TxnComputationWrapper), execPlan, "")
+	owner, err := preparedStatementOwner(tcc.execCtx.reqCtx, tcc.execCtx.ses)
+	if err != nil {
+		return nil, nil, err
+	}
+	_, p, st, _, owned, err := initExecuteStmtParamInSession(
+		tcc.execCtx,
+		owner,
+		tcc.execCtx.ses,
+		tcc.tcw.(*TxnComputationWrapper),
+		execPlan,
+		"",
+	)
+	if owned && st != nil {
+		st.Free()
+		st = nil
+	}
 	return p, st, err
 }
 
@@ -568,6 +584,7 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 	if ref.PubInfo != nil {
 		subMeta = &plan.SubscriptionMeta{
 			AccountId: ref.PubInfo.TenantId,
+			DbName:    ref.SchemaName,
 		}
 	}
 

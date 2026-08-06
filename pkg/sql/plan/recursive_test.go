@@ -16,8 +16,12 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -37,7 +41,7 @@ func TestSplitRecursiveMember(t *testing.T) {
 	b := &QueryBuilder{}
 
 	var ss []tree.SelectStatement
-	left, err := b.splitRecursiveMember(&stmt, name, &ss)
+	left, distinct, err := b.splitRecursiveMember(&stmt, name, &ss)
 	if err != nil {
 		t.Errorf("splitRecursiveMember err: %v", err)
 		return
@@ -45,6 +49,54 @@ func TestSplitRecursiveMember(t *testing.T) {
 
 	require.Equal(t, 2, len(ss))
 	require.Equal(t, true, left != nil)
+	require.False(t, distinct)
+}
+
+func TestRecursiveUnionDistinctPlan(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		union    string
+		distinct bool
+	}{
+		{name: "union all", union: "union all", distinct: false},
+		{name: "union", union: "union", distinct: true},
+		{name: "union distinct", union: "union distinct", distinct: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			query := fmt.Sprintf(`
+				with recursive r(n) as (
+					select 1
+					%s
+					select n + 1 from r where n < 10
+				)
+				select * from r`, test.union)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, query)
+			require.NoError(t, err)
+
+			var recursiveNode *planpb.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == planpb.Node_RECURSIVE_CTE {
+					recursiveNode = node
+					break
+				}
+			}
+			require.NotNil(t, recursiveNode)
+			require.Equal(t, test.distinct, recursiveNode.RecursiveUnionDistinct)
+		})
+	}
+}
+
+func TestRecursiveUnionRejectsMixedModes(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(false), t, `
+		with recursive r(n) as (
+			select 1
+			union all
+			select n + 1 from r where n < 3
+			union
+			select n + 2 from r where n < 3
+		)
+		select * from r`)
+	require.ErrorContains(t, err, "mixing UNION ALL and UNION DISTINCT")
 }
 
 func TestRecursiveCteConsumerAliases(t *testing.T) {
@@ -88,6 +140,32 @@ func TestRecursiveCteConsumerAliases(t *testing.T) {
 	}
 }
 
+func TestRecursiveCteCanReferencePrecedingCte(t *testing.T) {
+	for _, query := range []string{
+		`with recursive limits(lo, hi) as (
+			select 3, 9
+		), seq(n) as (
+			select lo from limits
+			union all
+			select n + 1 from seq, limits where n < hi
+		)
+		select count(*), sum(n), min(n), max(n) from seq`,
+		`with recursive limits(lo, hi) as (
+			select 3, 9
+		), seq(n) as (
+			select limits.lo from limits
+			union all
+			select seq.n + 1
+			from seq join limits on 1 = 1
+			where seq.n < limits.hi
+		)
+		select * from seq`,
+	} {
+		_, err := runOneStmt(NewMockOptimizer(false), t, query)
+		require.NoError(t, err)
+	}
+}
+
 func TestRecursiveCteConsumerColumnAliasList(t *testing.T) {
 	statements, err := parsers.Parse(context.Background(), dialect.MYSQL, recursiveSequenceSQL(`
 		select a.renamed_n, renamed_n from seq as a`), 1)
@@ -121,6 +199,78 @@ func TestRecursiveCteDuplicateExplicitAliasStillErrors(t *testing.T) {
 		select a.n from seq as a cross join seq as a`))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "table 'a' specified more than once")
+}
+
+func TestRecursiveCteStringAnchorUsesAssignmentCast(t *testing.T) {
+	query := `
+		with recursive r(n, s) as (
+			select 1, 'a'
+			union all
+			select n + 1, concat(s, 'b') from r where n < 4
+		)
+		select * from r`
+	rt := runtime.ServiceRuntime("")
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	for _, test := range []struct {
+		name        string
+		version     int64
+		mustContain string
+		mustExclude []string
+	}{
+		{
+			name:        "mixed version uses supported strict cast",
+			version:     defines.MORPCVersion4,
+			mustContain: "cast_strict",
+			mustExclude: []string{"cast_assign", "cast_ignore"},
+		},
+		{
+			name:        "latest version uses runtime assignment cast",
+			version:     defines.MORPCVersion5,
+			mustContain: "cast_assign",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, test.version)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, query)
+			require.NoError(t, err)
+
+			functionNames := recursivePlanFunctionNames(logicPlan)
+			require.Contains(t, functionNames, test.mustContain)
+			for _, name := range test.mustExclude {
+				require.NotContains(t, functionNames, name)
+			}
+		})
+	}
+}
+
+func recursivePlanFunctionNames(logicPlan *planpb.Plan) map[string]struct{} {
+	functionNames := make(map[string]struct{})
+	var visit func(*planpb.Expr)
+	visit = func(expr *planpb.Expr) {
+		if expr == nil {
+			return
+		}
+		if fn := expr.GetF(); fn != nil {
+			if fn.Func != nil {
+				functionNames[fn.Func.ObjName] = struct{}{}
+			}
+			for _, arg := range fn.Args {
+				visit(arg)
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				visit(item)
+			}
+		}
+	}
+	for _, node := range logicPlan.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			visit(expr)
+		}
+	}
+	return functionNames
 }
 
 func TestOrdinaryAliasesRemainUnchanged(t *testing.T) {

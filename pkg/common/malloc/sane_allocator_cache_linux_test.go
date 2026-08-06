@@ -33,6 +33,28 @@ func newCachedTestSimpleCAllocator(
 	return allocator
 }
 
+func (c *simpleCAllocatorMmapCache) cachedBytes() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.bytes
+}
+
+func (c *simpleCAllocatorMmapCache) drain() {
+	c.mu.Lock()
+	if c.timer != nil {
+		c.timer.Stop()
+		c.timer = nil
+	}
+	c.timerGeneration++
+	entries := c.bySize
+	c.bySize = make(map[uint64][][]byte)
+	c.bytes = 0
+	c.updateGaugeLocked()
+	c.mu.Unlock()
+
+	unmapSimpleCAllocatorCacheEntries(entries)
+}
+
 func TestSimpleCAllocatorMmapCacheExactSizeReuseAndZero(t *testing.T) {
 	const size = simpleCAllocatorMmapThreshold
 	allocator := newCachedTestSimpleCAllocator(

@@ -434,6 +434,12 @@ func (s *stateMachine) assignIDByKey(key string) uint64 {
 	return s.state.NextIDByKey[key]
 }
 
+const bootstrapAllocationRequestPrefix = "\x00bootstrap-allocation-request/"
+
+func bootstrapAllocationRequestKey(key, requestID string) string {
+	return bootstrapAllocationRequestPrefix + key + "\x00" + requestID
+}
+
 func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	data := cmd[headerSize:]
 	var b pb.CommandBatch
@@ -488,7 +494,28 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 
 func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
 	if batch, ok := s.state.ScheduleCommands[uuid]; ok {
-		delete(s.state.ScheduleCommands, uuid)
+		deliver := make([]pb.ScheduleCommand, 0, len(batch.Commands))
+		pending := make([]pb.ScheduleCommand, 0, len(batch.Commands))
+		for _, cmd := range batch.Commands {
+			retryable, applied := s.bootstrapReplicaCommandStatus(cmd)
+			if applied {
+				continue
+			}
+			deliver = append(deliver, cmd)
+			if retryable {
+				pending = append(pending, cmd)
+			}
+		}
+
+		if len(pending) == 0 {
+			delete(s.state.ScheduleCommands, uuid)
+		} else {
+			retained := batch
+			retained.Commands = pending
+			s.state.ScheduleCommands[uuid] = retained
+		}
+
+		batch.Commands = deliver
 		data, err := batch.Marshal()
 		if err != nil {
 			panic(err)
@@ -497,6 +524,52 @@ func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
 	}
 	return sm.Result{}
 
+}
+
+// bootstrapReplicaCommandStatus returns whether a bootstrap command must be
+// retried until its target reports the replica, and whether that report has
+// already arrived. Heartbeat proposals can be committed after their caller's
+// context times out. Retaining these commands until a later heartbeat
+// acknowledges the replica prevents a committed-but-unobserved response from
+// permanently losing the command and stalling bootstrap.
+func (s *stateMachine) bootstrapReplicaCommandStatus(
+	cmd pb.ScheduleCommand,
+) (retryable bool, applied bool) {
+	if !cmd.Bootstrapping ||
+		cmd.ConfigChange == nil ||
+		cmd.ConfigChange.ChangeType != pb.StartReplica {
+		return false, false
+	}
+
+	replica := cmd.ConfigChange.Replica
+	switch cmd.ServiceType {
+	case pb.LogService:
+		store, ok := s.state.LogState.Stores[cmd.UUID]
+		if !ok {
+			return true, false
+		}
+		for _, current := range store.Replicas {
+			if current.ShardID == replica.ShardID &&
+				current.ReplicaID == replica.ReplicaID {
+				return true, true
+			}
+		}
+		return true, false
+	case pb.TNService:
+		store, ok := s.state.TNState.Stores[cmd.UUID]
+		if !ok {
+			return true, false
+		}
+		for _, current := range store.Shards {
+			if current.ShardID == replica.ShardID &&
+				current.ReplicaID == replica.ReplicaID {
+				return true, true
+			}
+		}
+		return true, false
+	default:
+		return false, false
+	}
 }
 
 func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
@@ -541,6 +614,18 @@ func (s *stateMachine) handleGetIDCmd(cmd []byte) sm.Result {
 		s.state.NextID++
 		v := s.state.NextID
 		s.state.NextID += allocIDCmd.Batch - 1
+		return sm.Result{Value: v}
+	}
+
+	if allocIDCmd.RequestID != "" {
+		requestKey := bootstrapAllocationRequestKey(allocIDCmd.Key, allocIDCmd.RequestID)
+		if id, ok := s.state.NextIDByKey[requestKey]; ok {
+			return sm.Result{Value: id}
+		}
+
+		v := s.assignIDByKey(allocIDCmd.Key)
+		s.state.NextIDByKey[allocIDCmd.Key] += allocIDCmd.Batch - 1
+		s.state.NextIDByKey[requestKey] = v
 		return sm.Result{Value: v}
 	}
 
@@ -1021,16 +1106,17 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			state = pb.TimeoutState
 		}
 		n := pb.TNStore{
-			UUID:                 uuid,
-			Tick:                 info.Tick,
-			State:                state,
-			ServiceAddress:       info.ServiceAddress,
-			Shards:               info.Shards,
-			LogtailServerAddress: info.LogtailServerAddress,
-			LockServiceAddress:   info.LockServiceAddress,
-			ShardServiceAddress:  info.ShardServiceAddress,
-			ConfigData:           info.ConfigData,
-			QueryAddress:         info.QueryAddress,
+			UUID:                        uuid,
+			Tick:                        info.Tick,
+			State:                       state,
+			ServiceAddress:              info.ServiceAddress,
+			Shards:                      info.Shards,
+			LogtailServerAddress:        info.LogtailServerAddress,
+			LockServiceAddress:          info.LockServiceAddress,
+			ShardServiceAddress:         info.ShardServiceAddress,
+			ConfigData:                  info.ConfigData,
+			QueryAddress:                info.QueryAddress,
+			AutoIncrEpochFenceSupported: info.AutoIncrEpochFenceSupported,
 		}
 		cd.TNStores = append(cd.TNStores, n)
 	}

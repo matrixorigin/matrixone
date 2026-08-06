@@ -558,6 +558,7 @@ func (tbl *txnTable) TransferDeletes(
 		}
 		deletes.Vecs[i].CompactByBitmap(&transferd)
 	}
+	tbl.tombstoneTable.tableSpace.node.rows = uint32(deletes.Length())
 	return
 }
 
@@ -815,6 +816,7 @@ func (tbl *txnTable) createCommittedAppendableObject(opts *objectio.CreateObjOpt
 	if !opts.Stats.GetAppendable() {
 		return nil, moerr.NewInternalErrorNoCtx("CreateObject outside txn only supports appendable object")
 	}
+	txn := tbl.store.txn
 	baseTxn, ok := tbl.store.txn.GetBase().(*txnbase.Txn)
 	if !ok || baseTxn.Mgr == nil {
 		return nil, moerr.NewInternalErrorNoCtx("missing txn manager for appendable object create")
@@ -824,6 +826,26 @@ func (tbl *txnTable) createCommittedAppendableObject(opts *objectio.CreateObjOpt
 		factory = tbl.store.catalog.DataFactory.MakeObjectFactory()
 	}
 	var meta *catalog.ObjectEntry
+	if txn.GetTxnState(false) == txnif.TxnStatePreparing {
+		// This is a deliberate exception to the normal atomic timestamp
+		// allocation and catalog publication below. Flush and merge may transfer
+		// deletes after the parent has entered PrepareCommit, and each new
+		// appendable object is only a carrier for rows still owned by that parent
+		// transaction. A fresh object timestamp would split rewritten data from
+		// its tombstones. Use the parent's visibility boundary instead.
+		// Correctness scan paths that cross it wait on the parent's rewritten
+		// data/append MVCC before snapshotting the transfer tombstones, and WAL
+		// replay reconstructs the carrier from its append at the same timestamp.
+		//
+		// Do not use this branch for independently committed object state: such
+		// state must retain AllocateAndPublishCommitTS ordering.
+		meta, err = tbl.entry.CreateCommittedObject(txn.GetPrepareTS(), opts, factory)
+		if err != nil {
+			return
+		}
+		obj = newObject(tbl, meta)
+		return
+	}
 	_, err = baseTxn.Mgr.AllocateAndPublishCommitTS(func(createTS types.TS) error {
 		meta, err = tbl.entry.CreateCommittedObject(createTS, opts, factory)
 		return err
@@ -1275,33 +1297,7 @@ func (tbl *txnTable) findDeletes(
 	tbl.entry.WaitTombstoneObjectCommitted(to)
 	it := tbl.entry.MakeTombstoneObjectIt()
 	defer it.Release()
-	var earlybreak bool
-	for ok := it.Last(); ok; ok = it.Prev() {
-		if earlybreak {
-			break
-		}
-		obj := it.Item()
-
-		if obj.CreatedAt.GT(&to) {
-			continue
-		}
-
-		if obj.IsAppendable() {
-			if !obj.HasDropIntent() && obj.CreatedAt.LT(&from) {
-				earlybreak = true
-			}
-		} else if obj.CreatedAt.LT(&from) {
-			continue
-		}
-
-		// only keep the category-a + category-c for candidates.
-		if obj.GetPrevVersion() == nil && obj.GetNextVersion() != nil {
-			continue
-		}
-
-		if !obj.VisibleByTS(to) {
-			continue
-		}
+	return foreachIncrementalObject(&it, from, to, func(obj *catalog.ObjectEntry) error {
 		objData := obj.GetObjectData()
 		if objData == nil {
 			panic(fmt.Sprintf("logic error, object %v", obj.StringWithLevel(3)))
@@ -1311,24 +1307,20 @@ func (tbl *txnTable) findDeletes(
 		if obj.Rows() != 0 {
 			var skip bool
 			if skip, err = quickSkipThisObject(ctx, keysZM, obj); err != nil {
-				return
+				return err
 			} else if skip {
-				continue
+				return nil
 			}
 		}
 
-		if err = objData.Contains(
+		return objData.Contains(
 			ctx,
 			tbl.store.txn,
 			rowIDs,
 			keysZM,
 			common.WorkspaceAllocator,
-		); err != nil {
-			// logutil.Infof("%s, %s, %v", obj.String(), rowmask, err)
-			return
-		}
-	}
-	return
+		)
+	})
 }
 
 // DoPrecommitDedupByPK 1. it do deduplication by traversing all the Objects/blocks, and
@@ -1430,7 +1422,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.
 		if tbl.dedupTS.IsEmpty() {
 			tbl.dedupTS = tbl.store.txn.GetStartTS()
 		}
-		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(ctx, pks, tbl.dedupTS, now, true)
+		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(ctx, pks, tbl.dedupTS.Next(), now, true)
 		if err != nil {
 			return
 		}
@@ -1589,7 +1581,7 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 				}
 				tbl.dumpCore(buf.String())
 			}
-			break
+			return err
 		}
 	}
 	// In flush and merge, it transfers deletes when prepare commit.

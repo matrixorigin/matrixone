@@ -189,7 +189,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			affectedCols = append(affectedCols, option.NewColumn.Name.ColName())
 		case *tree.AlterTableChangeColumnClause:
 			pkAffected, err = ChangeColumn(cctx, alterTablePlan, option, alterTableCtx)
-			affectedCols = append(affectedCols, option.NewColumn.Name.ColName())
+			affectedCols = appendAffectedAlterColumnNames(
+				affectedCols,
+				option.OldColumnName.ColName(),
+				option.NewColumn.Name.ColName(),
+			)
 		case *tree.AlterTableRenameColumnClause:
 			err = RenameColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.OldColumnName.ColName())
@@ -215,17 +219,21 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		}
 	}
 
+	if pkAffected {
+		affectedAllIdxCols()
+	} else {
+		affectedCols, err = collectAffectedIndexNamesForAlter(tableDef.Indexes, affectedCols)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	createTmpDdl, _, err := ConstructCreateTableSQL(cctx, copyTableDef, snapshot, true, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	alterTablePlan.CreateTmpTableSql = createTmpDdl
-
-	if pkAffected {
-		affectedAllIdxCols()
-	}
-
 	alterTablePlan.AffectedCols = affectedCols
 
 	opt := &plan.AlterCopyOpt{
@@ -265,8 +273,6 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 
 	alterTablePlan.ChangeTblColIdMap = alterTableCtx.changColDefMap
 	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, alterTableCtx.UpdateSqls...)
-	//delete copy table records from mo_catalog.mo_foreign_keys
-	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, getSqlForDeleteTable(schemaName, alterTableCtx.copyTableName))
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -277,6 +283,14 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			},
 		},
 	}, nil
+}
+
+func appendAffectedAlterColumnNames(affectedCols []string, oldColName, newColName string) []string {
+	affectedCols = append(affectedCols, oldColName)
+	if newColName != oldColName {
+		affectedCols = append(affectedCols, newColName)
+	}
+	return affectedCols
 }
 
 var ID atomic.Int64
@@ -427,6 +441,14 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}
+	isMongoDB, err := IsMongoDBTableDef(ctx.GetContext(), tableDef)
+	if err != nil {
+		return nil, err
+	}
+	if isMongoDB {
+		return nil, moerr.NewNotSupported(ctx.GetContext(),
+			"ALTER TABLE on a MongoDB external table; drop and recreate the external table to change its schema")
+	}
 
 	if tableDef.IsTemporary {
 		// Only allow a safe subset of alter operations on temporary tables.
@@ -572,7 +594,15 @@ Loop:
 		case *tree.AlterTableChangeColumnClause:
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableRenameColumnClause:
-			algorithm = plan.AlterTable_INPLACE
+			requiresRebuild, err := renameColumnRequiresPluginIndexRebuild(tableDef, option.OldColumnName.ColName())
+			if err != nil {
+				return plan.AlterTable_DEFAULT, err
+			}
+			if requiresRebuild {
+				algorithm = plan.AlterTable_COPY
+			} else {
+				algorithm = plan.AlterTable_INPLACE
+			}
 		case *tree.AlterTableAlterColumnClause:
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableOrderByColumnClause:

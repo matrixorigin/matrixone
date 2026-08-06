@@ -19,9 +19,9 @@ null    null    80
 insert into fk_02(col2,col3) values ('200',5);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 update fk_02 set col2='80' where col2='90';
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 update fk_01 set col1=5 where col2=734;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 delete from fk_01 where col1='90';
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 delete from fk_01 where col1='190';
@@ -96,7 +96,7 @@ col1    col2    col3
 null    null    null
 10    student    4
 update fk_02 set col1=20 where col3=4;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 insert into fk_02 values(15,'ssss',10);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 delete from fk_01 where col1=11;
@@ -139,13 +139,13 @@ col1    col2    col3
 2    apple    4
 1    opppo    2
 update fk_02 set col1=3 where col1=2;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 delete from fk_01 where col1=2 and col2='apple';
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 update fk_01 set col1=3 where col1=2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update fk_01 set col1=1 where col1=2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select * from fk_01;
 col1    col2    col3
 2    yellow    20
@@ -227,7 +227,7 @@ col1    col2    col3    col4
 23.100000000000000000    a    21    2022-10-01
 23.100000000000000000    a    20    2022-10-02
 update fk_02 set col3=19 where col3=20;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 delete from fk_01  where col3=20;
 select * from fk_01;
 col1    col2    col3    col4
@@ -255,7 +255,7 @@ insert into fk_02(col2,col3,col4) values('aa','bb',2),('cc','dd',1),('ee','ff',1
 insert into fk_02(col2,col3,col4) values('aa','bb',4);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 update fk_02 set col4=5 where col3='ff';
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 delete from fk_01 where col1=1;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 select * from fk_01;
@@ -278,7 +278,7 @@ select * from fk_02;
 col1    col2    col3    col4
 1    aa    bb    2
 update fk_01 set col1=8 where col1=2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select * from fk_01;
 col1    col2    col3
 2    safer    prow
@@ -327,7 +327,7 @@ col1    col2    col3
 3    ultra    strong
 4    aaa    bbb
 update fk_01 set col1=8 where col1=2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update fk_02 set col4=5 where col3='ff';
 select * from fk_01;
 col1    col2    col3
@@ -420,7 +420,7 @@ insert into fk_03(book_id,author_id) values (1,2),(2,2),(3,1);
 insert into fk_03(book_id,author_id) values (4,3);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 update fk_03 set book_id=6 where book_id=2;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 update fk_03 set book_id=3 where book_id=2;
 select * from fk_03;
 id    book_id    author_id

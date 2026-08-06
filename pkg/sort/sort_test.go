@@ -142,6 +142,56 @@ func TestSortDecimal256(t *testing.T) {
 	require.Equal(t, []int64{0, 2, 1}, os)
 }
 
+func TestSortByVectors(t *testing.T) {
+	mp := mpool.MustNewZero()
+	first := vector.NewVec(types.T_int64.ToType())
+	second := vector.NewVec(types.T_int64.ToType())
+	defer first.Free(mp)
+	defer second.Free(mp)
+
+	require.NoError(t, vector.AppendFixedList(
+		first,
+		[]int64{1, 1, 1, 2, 2, 0},
+		[]bool{false, false, false, false, false, true},
+		mp,
+	))
+	require.NoError(t, vector.AppendFixedList(second, []int64{2, 1, 3, 2, 1, 0}, nil, mp))
+
+	selectors := []int64{0, 1, 2, 3, 4, 5}
+	SortByVectors(
+		selectors,
+		[]*vector.Vector{first, second},
+		[]bool{false, true},
+		[]bool{true, false},
+	)
+	require.Equal(t, []int64{2, 0, 1, 3, 4, 5}, selectors)
+}
+
+func TestSortByVectorsSortsNonNullPartitionWhenVectorHasNullElsewhere(t *testing.T) {
+	mp := mpool.MustNewZero()
+	first := vector.NewVec(types.T_bool.ToType())
+	second := vector.NewVec(types.T_enum.ToType())
+	defer first.Free(mp)
+	defer second.Free(mp)
+
+	require.NoError(t, vector.AppendFixedList(first, []bool{false, false, true}, nil, mp))
+	require.NoError(t, vector.AppendFixedList(
+		second,
+		[]types.Enum{1, 3, 0},
+		[]bool{false, false, true},
+		mp,
+	))
+
+	selectors := []int64{0, 1, 2}
+	SortByVectors(
+		selectors,
+		[]*vector.Vector{first, second},
+		[]bool{false, true},
+		[]bool{false, true},
+	)
+	require.Equal(t, []int64{1, 0, 2}, selectors)
+}
+
 func BenchmarkSortInt(b *testing.B) {
 	vs := make([]int, BenchmarkRows)
 	for i := range vs {

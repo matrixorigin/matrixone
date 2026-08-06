@@ -22,6 +22,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -48,6 +49,10 @@ func mockTenantUpgrade(t *testing.T) {
 }
 
 func Test_Upgrade(t *testing.T) {
+	originalTenantUpgEntries := append([]versions.UpgradeEntry(nil), tenantUpgEntries...)
+	defer func() {
+		tenantUpgEntries = originalTenantUpgEntries
+	}()
 	mockTenantUpgrade(t)
 
 	sid := ""
@@ -85,11 +90,11 @@ func Test_Upgrade(t *testing.T) {
 }
 
 func Test_versionHandle_HandleClusterUpgrade(t *testing.T) {
-	originalEntries := clusterUpgEntries
-	clusterUpgEntries = nil
+	originalClusterUpgEntries := append([]versions.UpgradeEntry(nil), clusterUpgEntries...)
 	defer func() {
-		clusterUpgEntries = originalEntries
+		clusterUpgEntries = originalClusterUpgEntries
 	}()
+	clusterUpgEntries = []versions.UpgradeEntry{}
 
 	v := &versionHandle{
 		metadata: versions.Version{
@@ -107,6 +112,16 @@ func Test_versionHandle_HandleClusterUpgrade(t *testing.T) {
 		executor2,
 	)
 	assert.Nil(t, err)
+}
+
+func TestUpgradeDefersMoIndexesIncludeColumn(t *testing.T) {
+	for _, entries := range [][]versions.UpgradeEntry{clusterUpgEntries, tenantUpgEntries} {
+		for _, entry := range entries {
+			require.False(t,
+				entry.Schema == catalog.MO_CATALOG && entry.TableName == catalog.MO_INDEXES && entry.UpgType == versions.ADD_COLUMN,
+				"mo_indexes schema changes require a staged release after all writers use explicit column lists")
+		}
+	}
 }
 
 func Test_upg_create_mo_task_sql_task_check_exists(t *testing.T) {

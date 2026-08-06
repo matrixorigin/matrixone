@@ -21,12 +21,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -116,11 +120,11 @@ func TestTxnComputationWrapper_Run_Error(t *testing.T) {
 // newPreparedExecuteEnv sets up a session holding a prepared "select 1" and a
 // computation wrapper that executes it through the binary protocol, so tests
 // can drive cw.Compile through initExecuteStmtParam.
-func newPreparedExecuteEnv(t *testing.T, stmtID uint32) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
+func newPreparedExecuteEnv(t testing.TB, stmtID uint32) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
 	return newPreparedExecuteEnvForSQL(t, stmtID, "select 1")
 }
 
-func newPreparedExecuteEnvForSQL(t *testing.T, stmtID uint32, sql string) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
+func newPreparedExecuteEnvForSQL(t testing.TB, stmtID uint32, sql string) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
 	ctx := statistic.ContextWithStatsInfo(context.Background(), statistic.NewStatsInfo())
 	ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
@@ -142,12 +146,18 @@ func newPreparedExecuteEnvForSQL(t *testing.T, stmtID uint32, sql string) (*Sess
 		Sql:                 prepareString.Sql,
 		PreparePlan:         preparePlan,
 		PrepareStmt:         stmts[0],
+		NativeMode:          ses.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:     ses.sqlModeHasOnlyFullGroupBy(),
+		onlyFullGroupBySet:  true,
 		getFromSendLongData: make(map[int]struct{}),
+		protocolVersion:     currentProtocolVersion(proc),
 	}
 	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, prepareStmt))
 
 	cw := InitTxnComputationWrapper(ses, stmts[0], proc)
 	cw.plan = preparePlan.GetDcl().GetPrepare().Plan
+	cw.binaryPrepare = true
+	cw.stmtBorrowed = true
 	execCtx := &ExecCtx{
 		reqCtx: ctx,
 		ses:    ses,
@@ -196,7 +206,7 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 		},
 	}
 
-	_, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 	require.NoError(t, err)
 	require.True(t, cw.proc.GetPrepareParamIsBin(0))
 	require.False(t, cw.proc.GetPrepareParamIsBin(1))
@@ -205,7 +215,7 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 
 	params := cw.proc.GetPrepareParams()
 	require.NoError(t, ses.SetUserDefinedVar("binary_param", "now-text", ""))
-	_, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 	require.NoError(t, err)
 	require.Zero(t, params.Length(), "the previous owned params must be released on successful replacement")
 	require.Nil(t, params.GetData())
@@ -219,6 +229,31 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.False(t, cw.proc.GetPrepareParamIsBin(0), "binary metadata must not leak into the next execution")
 	cw.proc.GetPrepareParams().Free(cw.proc.Mp())
 	cw.proc.SetPrepareParams(nil)
+}
+
+func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 108, "set @prepared_set_value = ? + 1")
+	defer prepareStmt.Close()
+
+	install := func(value string) *vector.Vector {
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
+		prepareStmt.params = params
+
+		_, _, stmt, _, _, err := initExecuteStmtParam(
+			execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		require.IsType(t, &tree.SetVar{}, stmt)
+		require.Equal(t, value, cw.proc.GetPrepareParams().GetStringAt(0))
+		return params
+	}
+
+	first := install("41")
+	second := install("9")
+	first.Free(cw.proc.Mp())
+	require.Equal(t, "9", cw.proc.GetPrepareParams().GetStringAt(0))
+	require.Same(t, second, prepareStmt.params)
 }
 
 func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {
@@ -311,6 +346,235 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 // compile (e.g. AP query hitting ErrCantCompileForPrepare). Execute must not
 // retry that doomed compile on every run; the cache stays nil and the regular
 // compile path (isPrepare=false) takes over.
+func TestPreparedDDLNeedsCatalogRefresh(t *testing.T) {
+	testCases := []struct {
+		sql      string
+		expected bool
+	}{
+		{sql: "create pitr p for account range 1 'd'", expected: true},
+		{sql: "create database db", expected: false},
+		{sql: "create database sub from pub publication p", expected: true},
+		{sql: "drop database db", expected: true},
+		{sql: "create table dst clone src", expected: true},
+		{sql: "truncate table t", expected: false},
+	}
+	for _, testCase := range testCases {
+		statements, err := mysql.Parse(context.Background(), testCase.sql, 1)
+		require.NoError(t, err)
+		require.Len(t, statements, 1)
+		require.Equal(t, testCase.expected, preparedDDLNeedsCatalogRefresh(statements[0]))
+		statements[0].Free()
+	}
+}
+
+func TestPrepareSchemaAccountID(t *testing.T) {
+	require.Equal(t, uint32(7), prepareSchemaAccountID(7, &plan.ObjectRef{SchemaName: "db", ObjName: "t"}))
+	require.Equal(t, uint32(11), prepareSchemaAccountID(7, &plan.ObjectRef{
+		SchemaName: "db", ObjName: "t", PubInfo: &plan.PubInfo{TenantId: 11},
+	}))
+	require.Equal(t, uint32(sysAccountID), prepareSchemaAccountID(7, &plan.ObjectRef{
+		SchemaName: catalog.MO_SYSTEM, ObjName: catalog.MO_STATEMENT,
+	}))
+}
+
+func TestPreparedSubscriptionSchemaChanged(t *testing.T) {
+	expected := &plan.ObjectRef{
+		Server: 4, Db: 2, Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+		SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+	}
+	resolve := func(
+		ref *plan.ObjectRef,
+		def *plan.TableDef,
+		err error,
+	) preparedSchemaResolver {
+		return func(databaseName, tableName string, _ *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+			require.Equal(t, "sub", databaseName)
+			require.Equal(t, "src", tableName)
+			return ref, def, err
+		}
+	}
+	stableRef := &plan.ObjectRef{
+		Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+		SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+	}
+	stableDef := &plan.TableDef{DbId: 2, TblId: 3, Version: 4}
+	stableResolver := resolve(stableRef, stableDef, nil)
+
+	changed, err := preparedSubscriptionSchemaChanged(stableResolver, expected)
+	require.NoError(t, err)
+	require.False(t, changed)
+
+	changed, err = preparedSubscriptionSchemaChanged(stableResolver, &plan.ObjectRef{
+		SubscriptionName: "sub",
+		ObjName:          "src",
+	})
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	changed, err = preparedSubscriptionSchemaChanged(resolve(nil, nil, nil), expected)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	changed, err = preparedSubscriptionSchemaChanged(resolve(
+		&plan.ObjectRef{
+			Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+			SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 12},
+		},
+		stableDef,
+		nil,
+	), expected)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	changed, err = preparedSubscriptionSchemaChanged(resolve(
+		stableRef,
+		&plan.TableDef{DbId: 2, TblId: 3, Version: 5},
+		nil,
+	), expected)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	changed, err = preparedSubscriptionSchemaChanged(resolve(
+		nil,
+		nil,
+		assert.AnError,
+	), expected)
+	require.ErrorIs(t, err, assert.AnError)
+	require.False(t, changed)
+}
+
+func TestPreparedSubscriptionSchemaChangedUsesLogicalName(t *testing.T) {
+	expected := &plan.ObjectRef{
+		Server: 4, Db: 2, Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+		SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+	}
+	changed, err := preparedSubscriptionSchemaChanged(func(
+		databaseName, tableName string, _ *plan.Snapshot,
+	) (*plan.ObjectRef, *plan.TableDef, error) {
+		require.Equal(t, "sub", databaseName)
+		require.Equal(t, "src", tableName)
+		return &plan.ObjectRef{
+				Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+				SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+			},
+			&plan.TableDef{DbId: 2, TblId: 3, Version: 4}, nil
+	}, expected)
+	require.NoError(t, err)
+	require.False(t, changed)
+}
+
+func TestPreparedSubscriptionSchemaChangedUsesDependencySnapshot(t *testing.T) {
+	snapshot := &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
+	}
+	expected := &plan.ObjectRef{
+		Server: 4, Db: 2, Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+		SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+		Snapshot: snapshot,
+	}
+	calls := 0
+	changed, err := preparedSubscriptionSchemaChanged(func(
+		databaseName, tableName string, gotSnapshot *plan.Snapshot,
+	) (*plan.ObjectRef, *plan.TableDef, error) {
+		calls++
+		if calls == 1 {
+			require.Nil(t, gotSnapshot)
+		} else {
+			require.Equal(t, snapshot, gotSnapshot)
+		}
+		return &plan.ObjectRef{
+				Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+				SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+			},
+			&plan.TableDef{DbId: 2, TblId: 3, Version: 4}, nil
+	}, expected)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, 2, calls)
+}
+
+func TestPreparedSubscriptionsNeedValidation(t *testing.T) {
+	require.False(t, preparedSubscriptionsNeedValidation(
+		timestamp.Timestamp{PhysicalTime: 100},
+		timestamp.Timestamp{PhysicalTime: 100},
+		timestamp.Timestamp{},
+	))
+	require.True(t, preparedSubscriptionsNeedValidation(
+		timestamp.Timestamp{PhysicalTime: 200},
+		timestamp.Timestamp{PhysicalTime: 100},
+		timestamp.Timestamp{},
+	))
+	require.False(t, preparedSubscriptionsNeedValidation(
+		timestamp.Timestamp{PhysicalTime: 200},
+		timestamp.Timestamp{PhysicalTime: 100},
+		timestamp.Timestamp{PhysicalTime: 200},
+	))
+}
+
+func TestPreparedNamedSnapshotsNeedValidation(t *testing.T) {
+	namedSnapshot := &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42},
+		ExtraInfo: &plan.SnapshotExtraInfo{
+			Name: "snap",
+		},
+	}
+	unnamedSnapshot := &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42},
+	}
+	metadataTS := timestamp.Timestamp{PhysicalTime: 200}
+	prepareTS := timestamp.Timestamp{PhysicalTime: 100}
+
+	require.True(t, preparedNamedSnapshotsNeedValidation(
+		[]*plan.ObjectRef{{Snapshot: namedSnapshot}},
+		metadataTS,
+		prepareTS,
+		timestamp.Timestamp{},
+	))
+	require.False(t, preparedNamedSnapshotsNeedValidation(
+		[]*plan.ObjectRef{{Snapshot: unnamedSnapshot}},
+		metadataTS,
+		prepareTS,
+		timestamp.Timestamp{},
+	))
+	require.False(t, preparedNamedSnapshotsNeedValidation(
+		[]*plan.ObjectRef{{Snapshot: namedSnapshot}},
+		metadataTS,
+		prepareTS,
+		metadataTS,
+	))
+}
+
+func TestCurrentTxnSnapshotTS(t *testing.T) {
+	ses, prepareStmt, _, _ := newPreparedExecuteEnv(t, 100)
+	defer prepareStmt.Close()
+
+	snapshot := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+	ctrl := gomock.NewController(t)
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().SnapshotTS().Return(snapshot)
+	ses.proc.Base.TxnOperator = txnOperator
+
+	require.Equal(t, snapshot, currentTxnSnapshotTS(ses))
+}
+
+func TestInitExecuteStmtParamUsesTxnSnapshotAfterRebuild(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 101)
+	defer prepareStmt.Close()
+
+	snapshot := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+	ctrl := gomock.NewController(t)
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().SnapshotTS().Return(snapshot)
+	txnOperator.EXPECT().NextSequence().Return(uint64(1)).AnyTimes()
+	ses.proc.Base.TxnOperator = txnOperator
+	ses.advanceDDLVersion()
+
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Equal(t, snapshot, prepareStmt.Ts)
+	require.Equal(t, ses.getDDLVersion(), prepareStmt.ddlVersion)
+}
+
 func TestInitExecuteStmtParamSkipsPrepareCompileWithoutCache(t *testing.T) {
 	_, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 100)
 	defer prepareStmt.Close()
@@ -337,13 +601,157 @@ func TestInitExecuteStmtParamReusesCachedCompileWhenNoSchemaChange(t *testing.T)
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 	prepareStmt.compile = sentinel
 
-	retComp, retPlan, retStmt, _, err := initExecuteStmtParam(
+	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(
 		execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	require.Same(t, sentinel, retComp)
 	require.Same(t, sentinel, prepareStmt.compile)
 	require.NotNil(t, retPlan)
 	require.NotNil(t, retStmt)
+}
+
+func TestInitExecuteStmtParamTransfersFreshCloneOwnership(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 101)
+	defer prepareStmt.Close()
+
+	clone := &tree.CloneTable{}
+	clone.SrcTable.ObjectName = "src"
+	clone.CreateTable.Table.ObjectName = "dst"
+	prepareStmt.cloneSQL = preparedCloneSQL(clone, "prepare_db")
+
+	_, _, executionStmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.True(t, owned)
+
+	executionClone := executionStmt.(*tree.CloneTable)
+	require.Equal(t, tree.Identifier("prepare_db"), executionClone.SrcTable.SchemaName)
+	cw.stmt = executionStmt
+	cw.stmtBorrowed = !owned
+	cw.Free()
+
+	require.Empty(t, executionClone.SrcTable.SchemaName)
+	require.Empty(t, executionClone.SrcTable.ObjectName)
+	require.Empty(t, executionClone.CreateTable.Table.SchemaName)
+	require.Empty(t, executionClone.CreateTable.Table.ObjectName)
+}
+
+func TestTxnComputationWrapperKeepsSharedPreparedStatement(t *testing.T) {
+	stmt := &trackedStatement{}
+	cw := &TxnComputationWrapper{
+		stmt:         stmt,
+		stmtBorrowed: true,
+	}
+
+	cw.Free()
+	require.Zero(t, stmt.freed)
+}
+
+func TestGetComputationWrapperMarksBinaryPreparedStatementBorrowed(t *testing.T) {
+	ses, prepareStmt, _, execCtx := newPreparedExecuteEnv(t, 101)
+	defer prepareStmt.Close()
+
+	stmt := &trackedStatement{}
+	execCtx.input.stmt = stmt
+	execCtx.input.preparePlan = prepareStmt.PreparePlan
+
+	wrappers, err := GetComputationWrapper(execCtx, "", "root", nil, execCtx.proc, ses)
+	require.NoError(t, err)
+	require.Len(t, wrappers, 1)
+
+	wrapper := wrappers[0].(*TxnComputationWrapper)
+	require.True(t, wrapper.stmtBorrowed)
+	wrapper.Free()
+	require.Zero(t, stmt.freed, "an early binary EXECUTE error must not free the shared prepared AST")
+}
+
+func TestTxnComputationWrapperResetTransfersStatementOwnership(t *testing.T) {
+	borrowed := &trackedStatement{}
+	replanned := &trackedStatement{}
+	wrapper := &TxnComputationWrapper{
+		stmt:         borrowed,
+		stmtBorrowed: true,
+	}
+
+	wrapper.ResetPlanAndStmt(replanned)
+	require.Zero(t, borrowed.freed)
+	require.False(t, wrapper.stmtBorrowed)
+
+	wrapper.Free()
+	require.Equal(t, 1, replanned.freed)
+}
+
+func TestCompilerContextReleasesFreshCloneForExplainExecute(t *testing.T) {
+	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 101)
+	defer prepareStmt.Close()
+	ses.GetTxnCompileCtx().tcw = cw
+
+	clone := &tree.CloneTable{}
+	clone.SrcTable.ObjectName = "src"
+	clone.CreateTable.Table.ObjectName = "dst"
+	prepareStmt.cloneSQL = preparedCloneSQL(clone, "prepare_db")
+
+	_, stmt, err := ses.GetTxnCompileCtx().InitExecuteStmtParam(
+		&plan.Execute{Name: prepareStmt.Name},
+	)
+	require.NoError(t, err)
+	require.Nil(t, stmt, "EXPLAIN consumes only the prepared plan and must release its fresh CLONE AST")
+}
+
+func TestInitExecuteStmtParamReusesStableSubscriptionSelect(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 101)
+	defer prepareStmt.Close()
+
+	expected := &plan.ObjectRef{
+		Server: 4, Db: 2, Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+		SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+	}
+	prepareStmt.PreparePlan.GetDcl().GetPrepare().Schemas = []*plan.ObjectRef{expected}
+	sentinel := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = sentinel
+
+	retComp, _, _, _, _, err := initExecuteStmtParamWithResolver(
+		execCtx, ses, cw, nil, prepareStmt.Name,
+		func(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+			return &plan.ObjectRef{
+					Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+					SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+				},
+				&plan.TableDef{DbId: 2, TblId: 3, Version: 4}, nil
+		},
+	)
+	require.NoError(t, err)
+	require.Same(t, sentinel, retComp)
+	require.Same(t, sentinel, prepareStmt.compile)
+}
+
+func BenchmarkInitExecuteStmtParamReusesStableSubscriptionSelect(b *testing.B) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(b, 101)
+	defer prepareStmt.Close()
+
+	expected := &plan.ObjectRef{
+		Server: 4, Db: 2, Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+		SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+	}
+	prepareStmt.PreparePlan.GetDcl().GetPrepare().Schemas = []*plan.ObjectRef{expected}
+	resolve := func(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+		return &plan.ObjectRef{
+				Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+				SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+			},
+			&plan.TableDef{DbId: 2, TblId: 3, Version: 4}, nil
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		_, _, _, _, _, err := initExecuteStmtParamWithResolver(
+			execCtx, ses, cw, nil, prepareStmt.Name, resolve)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
 }
 
 func TestInitExecuteStmtParamRebuildsWhenTempTableMappingChanges(t *testing.T) {
@@ -362,7 +770,7 @@ func TestInitExecuteStmtParamRebuildsWhenTempTableMappingChanges(t *testing.T) {
 	oldPlan := prepareStmt.PreparePlan
 	ses.AddTempTable("db1", "unrelated", "temp-unrelated")
 
-	retComp, retPlan, retStmt, _, err := initExecuteStmtParam(
+	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(
 		execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	require.Nil(t, retComp)
@@ -372,6 +780,40 @@ func TestInitExecuteStmtParamRebuildsWhenTempTableMappingChanges(t *testing.T) {
 	require.Equal(t, ses.GetTempTableVersion(), prepareStmt.tempTableVersion)
 	require.Equal(t, newColDefData, prepareStmt.ColDefData)
 	require.Equal(t, newColDefData, execCtx.prepareColDef)
+}
+
+func TestInitExecuteStmtParamRebuildsWhenProtocolVersionChanges(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	for i, test := range []struct {
+		name string
+		from int64
+		to   int64
+	}{
+		{name: "existing upgrade", from: defines.MORPCVersion4, to: defines.MORPCVersion5},
+		{name: "existing rollback", from: defines.MORPCVersion5, to: defines.MORPCVersion4},
+		{name: "upgrade", from: defines.MORPCVersion7, to: defines.MORPCVersion8},
+		{name: "rollback", from: defines.MORPCVersion8, to: defines.MORPCVersion7},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.from)
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, uint32(107+i))
+			defer prepareStmt.Close()
+			require.Equal(t, test.from, prepareStmt.protocolVersion)
+			oldPlan := prepareStmt.PreparePlan
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.to)
+			retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepareStmt.Name)
+			require.NoError(t, err)
+			require.Nil(t, retComp)
+			require.NotNil(t, retPlan)
+			require.NotNil(t, retStmt)
+			require.NotSame(t, oldPlan, prepareStmt.PreparePlan)
+			require.Equal(t, test.to, prepareStmt.protocolVersion)
+		})
+	}
 }
 
 func TestInitExecuteStmtParamKeepsOldStateWhenColumnMetadataRefreshFails(t *testing.T) {
@@ -388,7 +830,7 @@ func TestInitExecuteStmtParamKeepsOldStateWhenColumnMetadataRefreshFails(t *test
 	}
 
 	ses.AddTempTable("db1", "unrelated", "temp-unrelated")
-	_, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.EqualError(t, err, "column metadata refresh failed")
 	require.Same(t, oldPlan, prepareStmt.PreparePlan)
 	require.Equal(t, oldColDefData, prepareStmt.ColDefData)
@@ -406,12 +848,32 @@ func TestInitExecuteStmtParamRebuildsPreparedPlanWhenSQLModePresenceChanges(t *t
 	execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
 	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "MATRIXONE_NATIVE"))
 
-	retComp, retPlan, retStmt, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	require.Nil(t, retComp)
 	require.NotNil(t, retPlan)
 	require.NotNil(t, retStmt)
 	require.True(t, prepareStmt.NativeMode)
+	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
+}
+
+func TestInitExecuteStmtParamRebuildsPreparedPlanWhenOnlyFullGroupByChanges(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 109)
+	defer prepareStmt.Close()
+
+	execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", ""))
+	prepareStmt.OnlyFullGroupBy = false
+	prepareStmt.onlyFullGroupBySet = true
+	originalPlan := prepareStmt.PreparePlan
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "ONLY_FULL_GROUP_BY"))
+
+	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotNil(t, retPlan)
+	require.NotNil(t, retStmt)
+	require.True(t, prepareStmt.OnlyFullGroupBy)
 	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
 }
 
@@ -425,7 +887,7 @@ func TestInitExecuteStmtParamBypassesButRetainsCachedTopologyForExplicitScheduli
 	prepareStmt.compile = sentinel
 	require.NoError(t, ses.SetSessionSysVar(context.Background(), queryMaxWorkers, int64(2)))
 
-	retComp, retPlan, retStmt, _, err := initExecuteStmtParam(
+	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(
 		execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	require.Nil(t, retComp)
@@ -457,6 +919,42 @@ func TestRebuildPreparePlanUsesPreparedRootSQL(t *testing.T) {
 	require.Equal(t, executeSQL, ses.GetTxnCompileCtx().GetRootSql())
 }
 
+func TestRebuildPreparePlanUsesFreshCloneStatement(t *testing.T) {
+	ses, prepareStmt, _, execCtx := newPreparedExecuteEnv(t, 108)
+	defer prepareStmt.Close()
+	prepareStmt.PrepareStmt.Free()
+	clone := &tree.CloneTable{}
+	clone.SrcTable.ObjectName = "src"
+	clone.CreateTable.Table.ObjectName = "dst"
+	prepareStmt.PrepareStmt = clone
+	prepareStmt.cloneSQL = preparedCloneSQL(clone, "prepare_db")
+	prepareStmt.defaultDatabase = "prepare_db"
+
+	buildCount := 0
+	buildFn := func(
+		_ context.Context,
+		_ FeSession,
+		_ plan2.CompilerContext,
+		stmt tree.Statement,
+	) (*plan2.Plan, error) {
+		buildCount++
+		inner := stmt.(*tree.PrepareStmt).Stmt.(*tree.CloneTable)
+		require.Equal(t, tree.Identifier("prepare_db"), inner.SrcTable.SchemaName)
+		require.Equal(t, tree.Identifier("prepare_db"), inner.CreateTable.Table.SchemaName)
+		inner.SrcTable.SchemaName = "planner_mutation"
+		inner.CreateTable.Table.SchemaName = "planner_mutation"
+		return &plan2.Plan{}, nil
+	}
+
+	_, err := rebuildPreparePlan(execCtx, ses, prepareStmt, buildFn)
+	require.NoError(t, err)
+	_, err = rebuildPreparePlan(execCtx, ses, prepareStmt, buildFn)
+	require.NoError(t, err)
+	require.Equal(t, 2, buildCount)
+	require.Empty(t, clone.SrcTable.SchemaName)
+	require.Empty(t, clone.CreateTable.Table.SchemaName)
+}
+
 func TestModeMismatchRebuildsPreparedViewWithPreparedRootSQL(t *testing.T) {
 	const preparedSQL = "create view v as select 1"
 	const executeSQL = "execute prepared_view"
@@ -467,7 +965,8 @@ func TestModeMismatchRebuildsPreparedViewWithPreparedRootSQL(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "MATRIXONE_NATIVE"))
 	modeMismatch := prepareStmt.NativeMode != ses.sqlModeHasMatrixOneNative()
 	require.True(t, modeMismatch)
-	require.True(t, preparePlanNeedsRebuild(false, modeMismatch))
+	require.True(t, preparePlanNeedsRebuild(false, modeMismatch, false))
+	require.True(t, preparePlanNeedsRebuild(false, false, true))
 
 	rebuilt, err := rebuildPreparePlan(
 		execCtx,

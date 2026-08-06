@@ -18,6 +18,8 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/stretchr/testify/require"
@@ -90,6 +92,32 @@ func TestIvfflatSupportedOpTypes(t *testing.T) {
 	}
 }
 
+func TestIvfflatIncludeTypesAreMaintainableByISCP(t *testing.T) {
+	supported := CatalogHooks{}.SupportedIncludeColumnTypes()
+	for _, oid := range []types.T{
+		types.T_int128,
+		types.T_uint128,
+		types.T_decimal256,
+		types.T_interval,
+		types.T_year,
+		types.T_geometry,
+		types.T_geometry32,
+	} {
+		require.NotContains(t, supported, oid)
+	}
+
+	for _, oid := range []types.T{
+		types.T_int64,
+		types.T_uint64,
+		types.T_decimal128,
+		types.T_timestamp,
+		types.T_varchar,
+		types.T_binary,
+	} {
+		require.Contains(t, supported, oid)
+	}
+}
+
 func TestIvfflatSyncDescriptor(t *testing.T) {
 	d := CatalogHooks{}.SyncDescriptor()
 	require.True(t, d.UsesCDC)
@@ -124,10 +152,23 @@ func TestIvfflatParamsFromTree_AllOptions(t *testing.T) {
 	require.Equal(t, "2", got[catalog.Hour])
 }
 
+func TestIvfflatParamsFromTree_IncludeColumns(t *testing.T) {
+	idx := &tree.Index{IndexOption: &tree.IndexOption{
+		IncludeColumns: []*tree.UnresolvedName{
+			tree.NewUnresolvedColName("price, usd"),
+			tree.NewUnresolvedColName(" name "),
+		},
+	}}
+	got, err := CatalogHooks{}.ParamsFromTree(idx)
+	require.NoError(t, err)
+	require.Equal(t, `["price, usd"," name "]`, got[catalog.IncludedColumns])
+}
+
 func TestIvfflatParamsFromTree_NegativeList(t *testing.T) {
 	idx := &tree.Index{IndexOption: &tree.IndexOption{AlgoParamList: -1}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 	require.Contains(t, err.Error(), "list")
 }
 
@@ -135,6 +176,7 @@ func TestIvfflatParamsFromTree_InvalidOpType(t *testing.T) {
 	idx := &tree.Index{IndexOption: &tree.IndexOption{AlgoParamVectorOpType: "not_real"}}
 	_, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	require.Contains(t, err.Error(), "invalid op_type")
 }
 
@@ -158,7 +200,10 @@ func TestIvfflatParamsFromTree_InvalidQuantization(t *testing.T) {
 		idx := &tree.Index{IndexOption: &tree.IndexOption{Quantization: q}}
 		_, err := CatalogHooks{}.ParamsFromTree(idx)
 		require.Errorf(t, err, "quantization %q should be rejected", q)
-		require.Contains(t, err.Error(), "unsupported quantization")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		require.Equalf(t,
+			"not supported: ivfflat: unsupported quantization '"+q+"' (supported: 'float32', 'float16', 'bf16', 'int8', 'uint8')",
+			err.Error(), "quantization %q error text", q)
 	}
 }
 

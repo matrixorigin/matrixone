@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -40,76 +41,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 )
-
-func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
-	var tableDef plan.TableDef
-
-	// check view statement
-	var stmtPlan *Plan
-	var err error
-	switch s := stmt.Select.(type) {
-	case *tree.ParenSelect:
-		stmtPlan, err = bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, s.Select, false, true)
-		if err != nil {
-			return nil, err
-		}
-	default:
-		stmtPlan, err = bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt, false, true)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	query := stmtPlan.GetQuery()
-	cols := make([]*plan.ColDef, len(query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList))
-	for idx, expr := range query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList {
-		cols[idx] = &plan.ColDef{
-			Name: strings.ToLower(query.Headings[idx]),
-			Alg:  plan.CompressType_Lz4,
-			Typ:  expr.Typ,
-			Default: &plan.Default{
-				NullAbility:  !expr.Typ.NotNullable,
-				Expr:         nil,
-				OriginString: "",
-			},
-		}
-	}
-	tableDef.Cols = cols
-
-	viewData, err := json.Marshal(ViewData{
-		Stmt:            ctx.GetRootSql(),
-		DefaultDatabase: ctx.DefaultDatabase(),
-		SQLMode:         parserSQLModeFromContext(ctx),
-		SecurityType:    getViewSecurityTypeFromContext(ctx),
-	})
-	if err != nil {
-		return nil, err
-	}
-	tableDef.ViewSql = &plan.ViewDef{
-		View: string(viewData),
-	}
-	properties := []*plan.Property{
-		{
-			Key:   catalog.SystemRelAttr_CreateSQL,
-			Value: ctx.GetRootSql(),
-		},
-	}
-	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-		Def: &plan.TableDef_DefType_Properties{
-			Properties: &plan.PropertiesDef{
-				Properties: properties,
-			},
-		},
-	})
-
-	return &tableDef, nil
-}
 
 func getViewSecurityTypeFromContext(ctx CompilerContext) string {
 	securityType := ""
@@ -138,7 +75,7 @@ func parserSQLModeFromContext(ctx CompilerContext) *string {
 	return &sqlMode
 }
 
-func canonicalPartitionedCreateTableSQL(stmt *tree.CreateTable) string {
+func canonicalCreateTableSQL(stmt *tree.CreateTable) string {
 	fmtCtx := tree.NewFmtCtx(
 		dialect.MYSQL,
 		tree.WithQuoteIdentifier(),
@@ -160,32 +97,108 @@ func canonicalPartitionedCreateTableSQL(stmt *tree.CreateTable) string {
 	return fmtCtx.String()
 }
 
-func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
+// createTableSQLForCatalog preserves the historical rel_createsql contract for
+// a single-statement request, including comments, constraint names, and exact
+// formatting consumed by SHOW CREATE TABLE. For a multi-statement COM_QUERY,
+// GetRootSql contains the whole request and cannot identify the row's creating
+// statement, so persist this statement's canonical AST instead.
+func createTableSQLForCatalog(ctx CompilerContext, stmt *tree.CreateTable) string {
+	// Partition metadata is parsed again by ALTER TABLE ADD PARTITION. Keep it
+	// independent of the creating session's SQL mode, even when the request
+	// contains only this statement.
+	if stmt.PartitionOption != nil {
+		return canonicalCreateTableSQL(stmt)
+	}
+
+	rootSQL := ctx.GetRootSql()
+	if rootSQL != "" {
+		sqlMode := parserSQLModeFromContext(ctx)
+		statements, err := parsers.ParseWithSQLMode(
+			ctx.GetContext(), dialect.MYSQL, rootSQL, 1, *sqlMode,
+		)
+		if err == nil {
+			defer func() {
+				for _, statement := range statements {
+					statement.Free()
+				}
+			}()
+			if len(statements) == 1 {
+				return rootSQL
+			}
+		}
+	}
+	return canonicalCreateTableSQL(stmt)
+}
+
+func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.IdentifierList) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
+	validate := func(query *Query) error {
+		for _, node := range query.Nodes {
+			if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil {
+				continue
+			}
+			if !node.TableDef.IsTemporary && node.TableDef.TableType != catalog.SystemTemporaryTable {
+				continue
+			}
+
+			tableName := node.TableDef.OriginalName
+			if tableName == "" {
+				tableName = node.TableDef.Name
+			}
+			return moerr.NewViewSelectTmpTable(ctx.GetContext(), tableName)
+		}
+		return nil
+	}
 
 	// check view statement
 	var stmtPlan *Plan
+	var outputColumnProvenance []OutputColumnProvenance
+	captureColumnTypes := func(bindCtx *BindContext) {
+		outputColumnProvenance = make([]OutputColumnProvenance, len(bindCtx.headings))
+		for i := range outputColumnProvenance {
+			outputColumnProvenance[i] = bindCtx.outputColumnProvenanceForProject(int32(i))
+		}
+	}
 	var err error
 	switch s := stmt.Select.(type) {
 	case *tree.ParenSelect:
-		stmtPlan, err = bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, s.Select, false, true)
+		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
+			plan.Query_SELECT, ctx, s.Select, false, true, validate, captureColumnTypes, true)
 		if err != nil {
 			return nil, err
 		}
 	default:
-		stmtPlan, err = bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt, false, true)
+		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
+			plan.Query_SELECT, ctx, stmt, false, true, validate, captureColumnTypes, true)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	query := stmtPlan.GetQuery()
-	cols := make([]*plan.ColDef, len(query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList))
-	for idx, expr := range query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList {
+	projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+	if len(colNames) > 0 && len(colNames) != len(projectList) {
+		return nil, moerr.NewViewWrongList(ctx.GetContext())
+	}
+	cols := make([]*plan.ColDef, len(projectList))
+	for idx, expr := range projectList {
+		name := query.Headings[idx]
+		originName := ""
+		if len(colNames) > 0 {
+			originName = string(colNames[idx])
+			name = originName
+		}
+		typ := &expr.Typ
+		if idx < len(outputColumnProvenance) {
+			if sourceType := mysqlSpecialTypeFromProvenance(outputColumnProvenance[idx]); sourceType != nil {
+				typ = sourceType
+			}
+		}
 		cols[idx] = &plan.ColDef{
-			Name: strings.ToLower(query.Headings[idx]),
-			Alg:  plan.CompressType_Lz4,
-			Typ:  expr.Typ,
+			Name:       strings.ToLower(name),
+			OriginName: originName,
+			Alg:        plan.CompressType_Lz4,
+			Typ:        *typ,
 			Default: &plan.Default{
 				NullAbility:  !expr.Typ.NotNullable,
 				Expr:         nil,
@@ -248,16 +261,6 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	bindCtx := NewBindContext(builder, nil)
 
-	getTblAndColName := func(relPos, colPos int32) (string, string) {
-		name := builder.nameByColRef[[2]int32{relPos, colPos}]
-		// name pattern: tableName.colName
-		splits := strings.Split(name, ".")
-		if len(splits) < 2 {
-			return "", ""
-		}
-		return splits[0], splits[1]
-	}
-
 	if s, ok := stmt.Select.(*tree.ParenSelect); ok {
 		stmt = s.Select
 	}
@@ -271,21 +274,13 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	for i, expr := range rootNode.ProjectList {
 		defaultVal := ""
 		typ := &expr.Typ
-		switch e := expr.Expr.(type) {
-		case *plan.Expr_Col:
-			tblName, colName := getTblAndColName(e.Col.RelPos, e.Col.ColPos)
-			if binding, ok := bindCtx.bindingByTable[tblName]; ok {
-				defaultVal = binding.defaults[binding.colIdByName[colName]]
+		provenance := bindCtx.outputColumnProvenanceForProject(int32(i))
+		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
+			if provenance.CanInheritSourceDefault && provenance.Source.Metadata.HasDefault {
+				defaultVal = provenance.Source.Metadata.DefaultOriginString
 			}
-		case *plan.Expr_F:
-			// enum
-			if e.F.Func.ObjName == moEnumCastIndexToValueFun || e.F.Func.ObjName == moSetCastIndexToValueFun {
-				// cast_index_to_value('apple,banana,orange', cast(col_name as T_uint16))
-				colRef := e.F.Args[1].Expr.(*plan.Expr_Col).Col
-				tblName, colName := getTblAndColName(colRef.RelPos, colRef.ColPos)
-				if binding, ok := bindCtx.bindingByTable[tblName]; ok {
-					typ = binding.types[binding.colIdByName[colName]]
-				}
+			if isEnumOrSetPlanType(&provenance.Source.Metadata.Typ) {
+				typ = &provenance.Source.Metadata.Typ
 			}
 		}
 
@@ -294,7 +289,7 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 			Alg:  plan.CompressType_Lz4,
 			Typ:  *typ,
 			Default: &plan.Default{
-				NullAbility:  !expr.Typ.NotNullable,
+				NullAbility:  ctasExprCanBeNull(expr),
 				Expr:         nil,
 				OriginString: defaultVal,
 			},
@@ -303,118 +298,17 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	return cols, builder.qry, nil
 }
 
-func buildCreateSource(stmt *tree.CreateSource, ctx CompilerContext) (*Plan, error) {
-	streamName := string(stmt.SourceName.ObjectName)
-	createStream := &plan.CreateTable{
-		IfNotExists: stmt.IfNotExists,
-		TableDef: &TableDef{
-			TableType: catalog.SystemSourceRel,
-			Name:      streamName,
-		},
-	}
-	if len(stmt.SourceName.SchemaName) == 0 {
-		createStream.Database = ctx.DefaultDatabase()
-	} else {
-		createStream.Database = string(stmt.SourceName.SchemaName)
+func ctasExprCanBeNull(expr *Expr) bool {
+	if !expr.Typ.NotNullable {
+		return true
 	}
 
-	if sub, err := ctx.GetSubscriptionMeta(createStream.Database, nil); err != nil {
-		return nil, err
-	} else if sub != nil {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create stream in subscription database")
-	}
-
-	if err := buildSourceDefs(stmt, ctx, createStream); err != nil {
-		return nil, err
-	}
-
-	var properties []*plan.Property
-	properties = append(properties, &plan.Property{
-		Key:   catalog.SystemRelAttr_Kind,
-		Value: catalog.SystemSourceRel,
-	})
-	configs := make(map[string]interface{})
-	for _, option := range stmt.Options {
-		switch opt := option.(type) {
-		case *tree.CreateSourceWithOption:
-			key := strings.ToLower(string(opt.Key))
-			val := opt.Val.(*tree.NumVal).String()
-			properties = append(properties, &plan.Property{
-				Key:   key,
-				Value: val,
-			})
-			configs[key] = val
-		}
-	}
-	if err := mokafka.ValidateConfig(context.Background(), configs, mokafka.NewKafkaAdapter); err != nil {
-		return nil, err
-	}
-	createStream.TableDef.Defs = append(createStream.TableDef.Defs, &plan.TableDef_DefType{
-		Def: &plan.TableDef_DefType_Properties{
-			Properties: &plan.PropertiesDef{
-				Properties: properties,
-			},
-		},
-	})
-	return &Plan{
-		Plan: &plan.Plan_Ddl{
-			Ddl: &plan.DataDefinition{
-				DdlType: plan.DataDefinition_CREATE_TABLE,
-				Definition: &plan.DataDefinition_CreateTable{
-					CreateTable: createStream,
-				},
-			},
-		},
-	}, nil
-}
-
-func buildSourceDefs(stmt *tree.CreateSource, ctx CompilerContext, createStream *plan.CreateTable) error {
-	colMap := make(map[string]*ColDef)
-	for _, item := range stmt.Defs {
-		switch def := item.(type) {
-		case *tree.ColumnTableDef:
-			colName := def.Name.ColName()
-			colNameOrigin := def.Name.ColNameOrigin()
-			if _, ok := colMap[colName]; ok {
-				return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate column name: %s", colNameOrigin)
-			}
-			colType, err := getTypeFromAst(ctx.GetContext(), def.Type)
-			if err != nil {
-				return err
-			}
-			if err = applyColumnAttributesToType(ctx.GetContext(), &colType, def.Attributes); err != nil {
-				return err
-			}
-			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
-				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
-				if colType.GetWidth() > types.MaxStringSize {
-					return moerr.NewInvalidInputf(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
-				}
-			}
-			col := &ColDef{
-				Name:       colName,
-				OriginName: colNameOrigin,
-				Alg:        plan.CompressType_Lz4,
-				Typ:        colType,
-			}
-			colMap[colName] = col
-			for _, attr := range def.Attributes {
-				switch a := attr.(type) {
-				case *tree.AttributeKey:
-					col.Primary = true
-				case *tree.AttributeHeader:
-					col.Header = a.Key
-				case *tree.AttributeHeaders:
-					col.Headers = true
-				}
-			}
-			createStream.TableDef.Cols = append(createStream.TableDef.Cols, col)
-		case *tree.CreateSourceWithOption:
-		default:
-			return moerr.NewNYIf(ctx.GetContext(), "stream def: '%v'", def)
-		}
-	}
-	return nil
+	// MySQL CTAS creates nullable columns for explicit DATETIME casts, even
+	// when the source expression is a non-NULL literal. Keep this CTAS-only
+	// metadata rule separate from normal expression nullability propagation.
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" &&
+		types.T(expr.Typ.Id) == types.T_datetime
 }
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
@@ -449,7 +343,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create view in subscription database")
 	}
 
-	tableDef, err := genViewTableDef(ctx, stmt.AsSource)
+	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames)
 	if err != nil {
 		return nil, err
 	}
@@ -811,6 +705,175 @@ func preserveIndexSessionVars(p *Plan, src *plan.TableDef) error {
 	return nil
 }
 
+// preserveChecksForCreateLike installs deep copies of the source table's
+// structured CHECK metadata after the LIKE table skeleton has been rebuilt.
+// OriginSql is formatted for the source table's creation SQL mode, so it must
+// not be reparsed in the LIKE session's mode.
+func preserveChecksForCreateLike(p *Plan, src *plan.TableDef) {
+	if p == nil || src == nil || len(src.Checks) == 0 {
+		return
+	}
+	ct := p.GetDdl().GetCreateTable()
+	if ct == nil || ct.GetTableDef() == nil {
+		return
+	}
+	dstChecks := make([]*plan.CheckDef, len(src.Checks))
+	for i, srcCheck := range src.Checks {
+		if srcCheck == nil {
+			continue
+		}
+		dstChecks[i] = &plan.CheckDef{
+			Name:      srcCheck.Name,
+			Check:     DeepCopyExpr(srcCheck.Check),
+			OriginSql: srcCheck.OriginSql,
+		}
+	}
+	ct.GetTableDef().Checks = dstChecks
+}
+
+func bindLegacyChecksForCreateLike(
+	ctx CompilerContext,
+	tableDef *plan.TableDef,
+	sqlMode string,
+) ([]*plan.CheckDef, bool, error) {
+	stmt, err := parsers.ParseOneWithSQLMode(
+		ctx.GetContext(),
+		dialect.MYSQL,
+		tableDef.Createsql,
+		ctx.GetLowerCaseTableNames(),
+		sqlMode,
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	defer stmt.Free()
+
+	createStmt, ok := stmt.(*tree.CreateTable)
+	if !ok {
+		return nil, true, moerr.NewInvalidInput(
+			ctx.GetContext(),
+			"legacy CHECK metadata is not a CREATE TABLE statement",
+		)
+	}
+
+	scratch := &plan.TableDef{
+		Name: tableDef.Name,
+		Cols: tableDef.Cols,
+	}
+	for _, def := range createStmt.Defs {
+		switch typedDef := def.(type) {
+		case *tree.CheckIndex:
+			if !typedDef.Enforced {
+				return nil, true, moerr.NewNotSupported(
+					ctx.GetContext(),
+					"NOT ENFORCED CHECK constraints",
+				)
+			}
+			if err := appendCheckDef(ctx, scratch, typedDef.ConstraintSymbol, typedDef.Expr, -1); err != nil {
+				return nil, true, err
+			}
+		case *tree.ColumnTableDef:
+			columnPos := slices.IndexFunc(
+				tableDef.Cols,
+				func(col *plan.ColDef) bool { return col.Name == typedDef.Name.ColName() },
+			)
+			if columnPos == -1 {
+				return nil, true, moerr.NewInvalidInputf(
+					ctx.GetContext(),
+					"legacy CHECK column '%s' does not exist",
+					typedDef.Name.ColNameOrigin(),
+				)
+			}
+			for _, attr := range typedDef.Attributes {
+				check, ok := attr.(*tree.AttributeCheckConstraint)
+				if !ok {
+					continue
+				}
+				if !check.Enforced {
+					return nil, true, moerr.NewNotSupported(
+						ctx.GetContext(),
+						"NOT ENFORCED CHECK constraints",
+					)
+				}
+				if err := appendCheckDef(ctx, scratch, check.Name, check.Expr, columnPos); err != nil {
+					return nil, true, err
+				}
+			}
+		}
+	}
+	return scratch.Checks, true, nil
+}
+
+func equalCheckDefs(left, right []*plan.CheckDef) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if !proto.Equal(left[i], right[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// recoverLegacyChecksForCreateLike rebuilds structured CHECK metadata for
+// pre-upgrade tables, whose catalog rows contain only the original CREATE SQL.
+// The old catalog did not record the creating SQL mode, so recovery must not
+// silently choose between two valid but semantically different parses.
+func recoverLegacyChecksForCreateLike(ctx CompilerContext, tableDef *plan.TableDef) error {
+	if tableDef == nil || len(tableDef.Checks) > 0 || tableDef.Createsql == "" ||
+		tableDef.TableType == catalog.SystemExternalRel ||
+		!strings.Contains(strings.ToUpper(tableDef.Createsql), "CHECK") {
+		return nil
+	}
+
+	var canonicalChecks []*plan.CheckDef
+	var firstParseErr error
+	var firstBindErr error
+	parsedModes := 0
+	successfulModes := 0
+	for _, sqlMode := range mysql.ParserSQLModeCombinations() {
+		checks, parsed, err := bindLegacyChecksForCreateLike(ctx, tableDef, sqlMode)
+		if !parsed {
+			if firstParseErr == nil {
+				firstParseErr = err
+			}
+			continue
+		}
+		parsedModes++
+		if err != nil {
+			if firstBindErr == nil {
+				firstBindErr = err
+			}
+			continue
+		}
+		if successfulModes == 0 {
+			canonicalChecks = checks
+		} else if !equalCheckDefs(canonicalChecks, checks) {
+			return moerr.NewInvalidInput(
+				ctx.GetContext(),
+				"cannot recover legacy CHECK constraints with ambiguous SQL mode",
+			)
+		}
+		successfulModes++
+	}
+
+	switch {
+	case successfulModes > 0 && firstBindErr != nil:
+		return moerr.NewInvalidInput(
+			ctx.GetContext(),
+			"cannot recover legacy CHECK constraints with ambiguous SQL mode",
+		)
+	case successfulModes > 0:
+		tableDef.Checks = canonicalChecks
+	case parsedModes > 0:
+		return firstBindErr
+	default:
+		return firstParseErr
+	}
+	return nil
+}
+
 func buildCreateTable(
 	ctx CompilerContext,
 	stmt *tree.CreateTable,
@@ -822,8 +885,8 @@ func buildCreateTable(
 		var err error
 		oldTable := stmt.LikeTableName
 		newTable := stmt.Table
-		tblName := formatStr(string(oldTable.ObjectName))
-		dbName := formatStr(string(oldTable.SchemaName))
+		tblName := string(oldTable.ObjectName)
+		dbName := string(oldTable.SchemaName)
 
 		snapshot := ctx.GetSnapshot()
 
@@ -850,6 +913,16 @@ func buildCreateTable(
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 		}
+		hadStructuredChecks := len(tableDef.Checks) > 0
+		if err := recoverLegacyChecksForCreateLike(ctx, tableDef); err != nil {
+			return nil, err
+		}
+		recoveredLegacyChecks := !hadStructuredChecks && len(tableDef.Checks) > 0
+		if len(tableDef.Checks) > 0 {
+			if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
+				return nil, err
+			}
+		}
 		// TODO WHY?
 		if tableDef.TableType == catalog.SystemViewRel || tableDef.TableType == catalog.SystemExternalRel {
 			isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
@@ -869,7 +942,17 @@ func buildCreateTable(
 		}
 		tableDef.IsTemporary = stmt.Temporary
 
-		_, newStmt, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, true, cloneStmt)
+		// CHECK expressions are stored in source-session SQL syntax. Exclude them
+		// from the temporary SQL skeleton because the rewrite parser uses the
+		// current/default SQL mode, then restore the structured metadata below.
+		_, newStmt, err := constructCreateTableSQL(
+			ctx,
+			tableDef,
+			snapshot,
+			true,
+			cloneStmt,
+			recoveredLegacyChecks,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -891,6 +974,7 @@ func buildCreateTable(
 			if err := preserveIndexSessionVars(p, tableDef); err != nil {
 				return nil, err
 			}
+			preserveChecksForCreateLike(p, tableDef)
 			return p, nil
 		}
 
@@ -906,7 +990,7 @@ func buildCreateTable(
 	}
 
 	if stmt.PartitionOption != nil {
-		createTable.RawSQL = canonicalPartitionedCreateTableSQL(stmt)
+		createTable.RawSQL = canonicalCreateTableSQL(stmt)
 		createTable.TableDef.FeatureFlag |= features.Partitioned
 	}
 
@@ -929,17 +1013,6 @@ func buildCreateTable(
 
 	// set tableDef
 	var err error
-	if stmt.IsDynamicTable {
-		tableDef, err := genDynamicTableDef(ctx, stmt.AsSource)
-		if err != nil {
-			return nil, err
-		}
-
-		createTable.TableDef.Cols = tableDef.Cols
-		// createTable.TableDef.ViewSql = tableDef.ViewSql
-		// createTable.TableDef.Defs = tableDef.Defs
-	}
-
 	var asSelectCols []*ColDef
 	var asSelectQuery *Query
 	if stmt.IsAsSelect {
@@ -1050,6 +1123,28 @@ func buildCreateTable(
 					Properties: properties,
 				},
 			}})
+	} else if stmt.MongoDBParam != nil {
+		if err := ensureMongoDBTableSurfaceEnabled(ctx.GetContext()); err != nil {
+			return nil, err
+		}
+		spec, err := sqlmongodb.ParseTableMappingSpec(ctx.GetContext(), stmt.MongoDBParam, stmt.Defs, createTable.TableDef)
+		if err != nil {
+			return nil, err
+		}
+		// FeatureFlag is durable, planner-owned catalog metadata. Unlike the
+		// user-controlled rel_createsql payload of a generic external table, it
+		// is a typed discriminator that cannot be injected through filepath JSON.
+		createTable.TableDef.FeatureFlag |= features.MongoDBExternal
+		properties := []*plan.Property{
+			{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemExternalRel},
+			{Key: catalog.SystemRelAttr_CreateSQL, Value: sqlmongodb.BuildCreateSQLEnvelope(spec.Mapping)},
+		}
+		createTable.TableDef.TableType = catalog.SystemExternalRel
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{Properties: properties},
+			},
+		})
 	} else if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.Option); i += 2 {
 			switch strings.ToLower(stmt.Param.Option[i]) {
@@ -1100,10 +1195,7 @@ func buildCreateTable(
 		if catalog.IsHiddenTable(createTable.TableDef.Name) {
 			kind = ""
 		}
-		createSQL := ctx.GetRootSql()
-		if stmt.PartitionOption != nil {
-			createSQL = canonicalPartitionedCreateTableSQL(stmt)
-		}
+		createSQL := createTableSQLForCatalog(ctx, stmt)
 		properties := []*plan.Property{
 			{
 				Key:   catalog.SystemRelAttr_Kind,
@@ -1154,7 +1246,7 @@ func buildCreateTable(
 	}
 
 	if stmt.Temporary {
-		createTable.TableDef.TableType = catalog.SystemTemporaryTable
+		catalog.MarkTableDefTemporary(createTable.TableDef)
 	}
 	if !isPrepareStmt {
 		asSelectQuery = nil
@@ -1183,8 +1275,15 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	secondaryIndexInfos := make([]*tree.Index, 0)
 	fkDatasOfFKSelfRefer := make([]*FkData, 0)
 	dedupFkName := make(UnorderedSet[string])
+	type pendingCheckDef struct {
+		name       string
+		expr       tree.Expr
+		columnName string
+		enforced   bool
+	}
+	pendingChecks := make([]pendingCheckDef, 0)
 
-	if stmt.Param != nil || stmt.IcebergParam != nil {
+	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
 			return err
 		}
@@ -1253,6 +1352,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			colNameOrigin := def.Name.ColNameOrigin()
 			for _, attr := range def.Attributes {
 				switch attribute := attr.(type) {
+				case *tree.AttributeCheckConstraint:
+					if err := rejectWindowFunction(ctx, attribute.Expr); err != nil {
+						return err
+					}
 				case *tree.AttributeGeneratedAlways:
 					isGenerated = true
 				case *tree.AttributePrimaryKey, *tree.AttributeKey:
@@ -1390,6 +1493,24 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					defaultMap[colName] = "NULL"
 				}
 			}
+			for _, attr := range def.Attributes {
+				check, ok := attr.(*tree.AttributeCheckConstraint)
+				if !ok {
+					continue
+				}
+				if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
+					return moerr.NewNotSupported(
+						ctx.GetContext(),
+						"CHECK constraints on external tables",
+					)
+				}
+				pendingChecks = append(pendingChecks, pendingCheckDef{
+					name:       check.Name,
+					expr:       check.Expr,
+					columnName: colName,
+					enforced:   check.Enforced,
+				})
+			}
 			genColIdx++
 		case *tree.PrimaryKeyIndex:
 			if len(primaryKeys) > 0 {
@@ -1505,8 +1626,20 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				fkDatasOfFKSelfRefer = append(fkDatasOfFKSelfRefer, fkData)
 			}
 		case *tree.CheckIndex:
-			// unsupport in plan. will support in next version.
-			// return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
+			if err := rejectWindowFunction(ctx, def.Expr); err != nil {
+				return err
+			}
+			if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
+				return moerr.NewNotSupported(
+					ctx.GetContext(),
+					"CHECK constraints on external tables",
+				)
+			}
+			pendingChecks = append(pendingChecks, pendingCheckDef{
+				name:     def.ConstraintSymbol,
+				expr:     def.Expr,
+				enforced: def.Enforced,
+			})
 		default:
 			return moerr.NewNYIf(ctx.GetContext(), "table def: '%v'", def)
 		}
@@ -1548,15 +1681,49 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		insertSqlBuilder.WriteString("*")
 
 		// from
+		// The generated INSERT ... SELECT is re-parsed by the internal SQL
+		// executor, which always parses in DEFAULT sql_mode (parsers.Parse
+		// passes an empty mode) regardless of the session's mode. So string
+		// literals here must be default-escaped: a backslash stored literally
+		// under a NO_BACKSLASH_ESCAPES session is emitted doubled and the
+		// default-mode reparse reduces it back to the original literal. Do
+		// NOT make this formatting session-mode-aware unless the internal
+		// executor's parse becomes session-mode-aware too (#24823).
 		fmtCtx := tree.NewFmtCtx(
 			dialect.MYSQL,
 			tree.WithQuoteString(true),
 			tree.WithQuoteIdentifier(),
 		)
 		stmt.AsSource.Format(fmtCtx)
-		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s)", restoreIntervalSyntaxForCTAS(fmtCtx.String())))
+		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s) as __mo_ctas_source", restoreIntervalSyntaxForCTAS(fmtCtx.String())))
 
 		createTable.CreateAsSelectSql = insertSqlBuilder.String()
+	}
+
+	for _, check := range pendingChecks {
+		if !check.enforced {
+			return moerr.NewNotSupported(
+				ctx.GetContext(),
+				"NOT ENFORCED CHECK constraints",
+			)
+		}
+		columnPos := -1
+		if check.columnName != "" {
+			columnPos = slices.IndexFunc(
+				createTable.TableDef.Cols,
+				func(col *ColDef) bool { return col.Name == check.columnName },
+			)
+			if columnPos == -1 {
+				return moerr.NewInternalErrorf(
+					ctx.GetContext(),
+					"column check constraint references missing column '%s'",
+					check.columnName,
+				)
+			}
+		}
+		if err := appendCheckDef(ctx, createTable.TableDef, check.name, check.expr, columnPos); err != nil {
+			return err
+		}
 	}
 
 	// table must have one visible column
@@ -1802,6 +1969,165 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
+	return nil
+}
+
+func appendCheckDef(
+	ctx CompilerContext,
+	tableDef *TableDef,
+	name string,
+	astExpr tree.Expr,
+	columnPos int,
+) error {
+	if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
+		return err
+	}
+	colNames := make([]string, 0, len(tableDef.Cols))
+	colTypes := make([]plan.Type, 0, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+		colNames = append(colNames, col.Name)
+		colTypes = append(colTypes, col.Typ)
+	}
+
+	originSQL := formatCheckConstraintExpr(astExpr)
+	canonicalStmt, err := parsers.ParseOne(
+		ctx.GetContext(),
+		dialect.MYSQL,
+		"select "+originSQL,
+		1,
+	)
+	if err != nil {
+		return err
+	}
+	defer canonicalStmt.Free()
+	canonicalSelect, ok := canonicalStmt.(*tree.Select)
+	if !ok {
+		return moerr.NewInternalError(ctx.GetContext(), "invalid canonical check constraint")
+	}
+	canonicalClause, ok := canonicalSelect.Select.(*tree.SelectClause)
+	if !ok || len(canonicalClause.Exprs) != 1 {
+		return moerr.NewInternalError(ctx.GetContext(), "invalid canonical check constraint expression")
+	}
+
+	binder := NewGeneratedColBinder(ctx.GetContext(), colNames, colTypes)
+	binder.enableCanonicalNameConstValueCast()
+	checkExpr, err := binder.BindExpr(canonicalClause.Exprs[0].Expr, 0, true)
+	if err != nil {
+		return err
+	}
+	if err = validateCheckExpr(ctx.GetContext(), tableDef, checkExpr, columnPos); err != nil {
+		return err
+	}
+	if checkExpr.Typ.Id != int32(types.T_bool) {
+		checkExpr, err = makePlan2CastExpr(
+			ctx.GetContext(),
+			checkExpr,
+			plan.Type{Id: int32(types.T_bool)},
+		)
+		if err != nil {
+			return err
+		}
+	}
+	if name == "" {
+		name = fmt.Sprintf("__mo_chk_%d", len(tableDef.Checks)+1)
+	}
+	for _, check := range tableDef.Checks {
+		if check.Name == name {
+			return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate check constraint name '%s'", name)
+		}
+	}
+	tableDef.Checks = append(tableDef.Checks, &plan.CheckDef{
+		Name:      name,
+		Check:     checkExpr,
+		OriginSql: originSQL,
+	})
+	return nil
+}
+
+func formatCheckConstraintExpr(expr tree.Expr) string {
+	opts := []tree.FmtCtxOption{
+		tree.WithSingleQuoteString(),
+		tree.WithQuoteIdentifier(),
+		tree.WithModeIndependentStringLiterals(),
+	}
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, opts...)
+	expr.Format(fmtCtx)
+	return fmtCtx.String()
+}
+
+func validateCheckExpr(ctx context.Context, tableDef *TableDef, expr *plan.Expr, columnPos int) error {
+	if expr == nil {
+		return moerr.NewInvalidInput(ctx, "check constraint expression cannot be empty")
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		pos := int(e.Col.ColPos)
+		if pos < 0 || pos >= len(tableDef.Cols) {
+			return moerr.NewInvalidInput(ctx, "check constraint references an invalid column")
+		}
+		if columnPos >= 0 && pos != columnPos {
+			return moerr.NewInvalidInputf(
+				ctx,
+				"column check constraint cannot refer to column '%s'",
+				tableDef.Cols[pos].OriginName,
+			)
+		}
+		if tableDef.Cols[pos].Typ.AutoIncr {
+			return moerr.NewInvalidInputf(
+				ctx,
+				"check constraint cannot refer to auto-increment column '%s'",
+				tableDef.Cols[pos].OriginName,
+			)
+		}
+	case *plan.Expr_V:
+		return moerr.NewInvalidInput(ctx, "check constraint cannot refer to a variable")
+	case *plan.Expr_P:
+		return moerr.NewInvalidInput(ctx, "check constraint cannot contain a parameter marker")
+	case *plan.Expr_F:
+		switch strings.ToLower(e.F.Func.ObjName) {
+		case "connection_id",
+			"current_account_id",
+			"current_account_name",
+			"current_role",
+			"current_role_id",
+			"current_role_name",
+			"current_user",
+			"current_user_id",
+			"current_user_name",
+			"database",
+			"found_rows",
+			"last_insert_id",
+			"row_count",
+			"session_user",
+			"system_user",
+			"user":
+			return moerr.NewInvalidInputf(
+				ctx,
+				"check constraint cannot contain session-dependent function '%s'",
+				e.F.Func.ObjName,
+			)
+		}
+		if err := checkExprForVolatileFunc(ctx, expr); err != nil {
+			return moerr.NewInvalidInputf(
+				ctx,
+				"check constraint cannot contain a non-deterministic function",
+			)
+		}
+		for _, arg := range e.F.Args {
+			if err := validateCheckExpr(ctx, tableDef, arg, columnPos); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if err := validateCheckExpr(ctx, tableDef, item, columnPos); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -2648,6 +2974,18 @@ func validateIncludeColumns(ctx CompilerContext,
 	return nil
 }
 
+func getVectorIndexIncludeColumnNames(indexInfo *tree.Index) []string {
+	if indexInfo == nil || indexInfo.IndexOption == nil || len(indexInfo.IndexOption.IncludeColumns) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(indexInfo.IndexOption.IncludeColumns))
+	for _, col := range indexInfo.IndexOption.IncludeColumns {
+		names = append(names, col.ColName())
+	}
+	return names
+}
+
 func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 	indexTableName, indexAlgoTableType string,
 	indexParts []string, isUnique bool) (*plan.IndexDef, error) {
@@ -2658,6 +2996,7 @@ func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 
 	indexDef.IndexTableName = indexTableName
 	indexDef.Parts = indexParts
+	indexDef.IncludedColumns = getVectorIndexIncludeColumnNames(indexInfo)
 
 	indexDef.Unique = isUnique
 	indexDef.TableExist = true
@@ -2848,7 +3187,7 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 
 func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	if len(stmt.Names) == 1 {
-		dropTable, err := buildDropTableSingle(stmt.IfExists, stmt.Names[0], ctx)
+		dropTable, err := buildDropTableSingle(stmt.IfExists, stmt.Temporary, stmt.Names[0], ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -2869,7 +3208,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		Tables:   make([]*plan.DropTable, 0, len(stmt.Names)),
 	}
 	for _, name := range stmt.Names {
-		entry, err := buildDropTableSingle(stmt.IfExists, name, ctx)
+		entry, err := buildDropTableSingle(stmt.IfExists, stmt.Temporary, name, ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -2887,7 +3226,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	}, nil
 }
 
-func buildDropTableSingle(ifExists bool, name *tree.TableName, ctx CompilerContext) (*plan.DropTable, error) {
+func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, ctx CompilerContext) (*plan.DropTable, error) {
 	dropTable := &plan.DropTable{
 		IfExists: ifExists,
 	}
@@ -2909,7 +3248,10 @@ func buildDropTableSingle(ifExists bool, name *tree.TableName, ctx CompilerConte
 		return nil, err
 	}
 
-	if tableDef == nil {
+	// DROP TEMPORARY TABLE must never fall through to a same-named permanent
+	// table. Resolve prefers a session temporary table when one exists, so a
+	// non-temporary result means that the requested temporary table is absent.
+	if tableDef == nil || (temporary && !tableDef.IsTemporary) {
 		if !dropTable.IfExists {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
@@ -3005,7 +3347,9 @@ func buildDropTableSingle(ifExists bool, name *tree.TableName, ctx CompilerConte
 	}
 
 	dropTable.TableDef = tableDef
-	dropTable.UpdateFkSqls = []string{getSqlForDeleteTable(dropTable.Database, dropTable.Table)}
+	if !tableDef.IsTemporary {
+		dropTable.UpdateFkSqls = []string{getSqlForDeleteTable(dropTable.Database, dropTable.Table)}
+	}
 	return dropTable, nil
 }
 
@@ -3402,7 +3746,7 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	defer func() {
 		ctx.SetBuildingAlterView(false, "", "")
 	}()
-	tableDef, err := genViewTableDef(ctx, stmt.AsSource)
+	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames)
 	if err != nil {
 		return nil, err
 	}

@@ -539,5 +539,72 @@ execute prepared_rows_frame using @before, @after;
 deallocate prepare prepared_rows_frame;
 drop table prepared_window_frame;
 
+-- @case
+-- @desc:Prepared SET statements retain literal and parameterized expressions
+-- @label:bvt
+set @input = 41;
+prepare prepared_set_literal from 'set @prepared_literal = 41 + 1';
+execute prepared_set_literal;
+select @prepared_literal;
+
+prepare prepared_set_param from 'set @prepared_param = ? + 1';
+execute prepared_set_param using @input;
+select @prepared_param;
+set @input = 9;
+execute prepared_set_param using @input;
+select @prepared_param;
+deallocate prepare prepared_set_literal;
+deallocate prepare prepared_set_param;
+
+-- @case
+-- @desc:Prepared multi-assignment SET preserves parameters and applies only after all expressions succeed
+-- @label:bvt
+drop table if exists prepared_set_values;
+create table prepared_set_values(v int);
+insert into prepared_set_values values (1), (2);
+set @prepared_a = 99, @prepared_b = 'before';
+prepare prepared_set_multi from 'set @prepared_a = ? + 1, @prepared_b = concat(?, "-text")';
+set @prepared_input_a = 41, @prepared_input_b = 'first';
+execute prepared_set_multi using @prepared_input_a, @prepared_input_b;
+select @prepared_a, @prepared_b;
+set @prepared_input_a = 9, @prepared_input_b = null;
+execute prepared_set_multi using @prepared_input_a, @prepared_input_b;
+select @prepared_a, @prepared_b;
+set @prepared_visibility_a = 5, @prepared_visibility_b = 0, @prepared_visibility_input = 41;
+prepare prepared_set_visibility from 'set @prepared_visibility_a = ?, @prepared_visibility_b = @prepared_visibility_a + 1';
+execute prepared_set_visibility using @prepared_visibility_input;
+select @prepared_visibility_a, @prepared_visibility_b;
+set @prepared_self_ref = 5;
+prepare prepared_set_self_ref from 'set @prepared_self_ref = ?, @prepared_self_ref = @prepared_self_ref + 1';
+execute prepared_set_self_ref using @prepared_visibility_input;
+select @prepared_self_ref;
+prepare prepared_set_self_ref_error from 'set @prepared_self_ref = ?, @prepared_self_ref = @prepared_self_ref + 1, @prepared_b = (select v from prepared_set_values)';
+set @prepared_self_ref = 5, @prepared_b = 'unchanged';
+execute prepared_set_self_ref_error using @prepared_visibility_input;
+select @prepared_self_ref, @prepared_b;
+set @prepared_a = 77, @prepared_b = 'stable';
+execute prepared_set_multi using @prepared_input_a;
+select @prepared_a, @prepared_b;
+prepare prepared_set_error from 'set @prepared_a = ?, @prepared_b = (select v from prepared_set_values)';
+set @prepared_a = 88, @prepared_b = 'unchanged';
+execute prepared_set_error using @prepared_input_a;
+select @prepared_a, @prepared_b;
+prepare prepared_set_reserved_error from 'set @names = ?, @prepared_reserved_failure = (select v from prepared_set_values)';
+set @names = 'names-before', @character_set_client = 'client-before', @character_set_connection = 'connection-before', @character_set_results = 'results-before', @prepared_reserved_input = 'mutated';
+execute prepared_set_reserved_error using @prepared_reserved_input;
+select @names, @character_set_client, @character_set_connection, @character_set_results;
+prepare prepared_set_system_error from 'set @prepared_a = ?, transaction_isolation = ?';
+set @prepared_input_a = 7, @prepared_input_b = 'INVALID', @prepared_a = 88, @prepared_isolation_before = @@transaction_isolation;
+execute prepared_set_system_error using @prepared_input_a, @prepared_input_b;
+select @prepared_a, @@transaction_isolation = @prepared_isolation_before;
+deallocate prepare prepared_set_multi;
+deallocate prepare prepared_set_visibility;
+deallocate prepare prepared_set_self_ref;
+deallocate prepare prepared_set_self_ref_error;
+deallocate prepare prepared_set_error;
+deallocate prepare prepared_set_reserved_error;
+deallocate prepare prepared_set_system_error;
+drop table prepared_set_values;
+
 # reset
 SET TIME_ZONE = "SYSTEM";

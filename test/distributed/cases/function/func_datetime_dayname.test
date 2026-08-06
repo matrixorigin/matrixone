@@ -36,3 +36,11 @@ DROP TABLE t1;
 # All weekdays
 SELECT DAYNAME('2007-01-01') AS monday, DAYNAME('2007-01-02') AS tuesday, DAYNAME('2007-01-03') AS wednesday, DAYNAME('2007-01-04') AS thursday, DAYNAME('2007-01-05') AS friday, DAYNAME('2007-01-06') AS saturday, DAYNAME('2007-01-07') AS sunday;
 
+# Regression: VARCHAR input must resolve without an implicit unsupported cast.
+SELECT DAYNAME('2024-01-15') AS string_dayname;
+
+-- Incomplete VARCHAR dates preserve the regular date-cast grammar.
+SELECT DAYNAME('2001-11-00 12:34:56') AS incomplete_datetime,
+       DAYNAME('20011100') AS incomplete_compact,
+       DAYNAME('2001-11-0') AS incomplete_variable,
+       DAYNAME('0000-00-00 12:34:56') AS zero_datetime;

@@ -31,7 +31,7 @@ import (
 const dataBranchMergePickTxnError = "DATA BRANCH MERGE/PICK is not supported in transactions"
 
 func TestDataBranchMerge(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 			defer cancel()

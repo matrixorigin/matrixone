@@ -785,6 +785,17 @@ order by ga, gb, a, b;
 
 drop table grouping_not_null;
 
+-- Wrapped grouping columns remain available as hidden source sort keys.
+select
+    coalesce(region, '<null>') as display_region,
+    coalesce(product, '<null>') as display_product,
+    sum(amount) as total_amount,
+    grouping(region) as grouping_region,
+    grouping(product) as grouping_product
+from grouping_order
+group by region, product with rollup
+order by grouping(region), region, grouping(product), product;
+
 drop table grouping_order;
 -- rollup with window functions should rank over the full rollup result
 create table rollup_window_sales(region varchar(20), product varchar(20), qty int);

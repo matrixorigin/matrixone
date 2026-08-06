@@ -57,6 +57,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -240,7 +241,8 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 
 	for _, t := range deleteTables {
-		dropSql := fmt.Sprintf(dropTableBeforeDropDatabase, dbName, t)
+		dropSql := fmt.Sprintf("drop table if exists %s.%s;",
+			quoteMySQLIdent(dbName), quoteMySQLIdent(t))
 		if err = c.runSqlWithOptions(
 			dropSql, executor.StatementOption{}.WithDisableLog(),
 		); err != nil {
@@ -284,7 +286,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 			catalog.MO_PITR_CHANGED_TIME, now,
 
 			catalog.MO_PITR_ACCOUNT_ID, accountId,
-			catalog.MO_PITR_DB_NAME, dbName,
+			catalog.MO_PITR_DB_NAME, sqlquote.EscapeString(dbName),
 			catalog.MO_PITR_STATUS, 1,
 			catalog.MO_PITR_OBJECT_ID, database.GetDatabaseId(c.proc.Ctx),
 		)
@@ -1337,6 +1339,41 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return moerr.NewTableAlreadyExists(c.proc.Ctx, aliasName)
 		}
 
+		type tempIndexTableState struct {
+			def         *plan.TableDef
+			name        string
+			tableType   string
+			isTemporary bool
+			tableID     uint64
+		}
+		type tempIndexState struct {
+			def            *plan.IndexDef
+			indexTableName string
+		}
+		originalTableName := qry.TableDef.Name
+		indexTableStates := make([]tempIndexTableState, 0, len(qry.IndexTables))
+		for _, def := range qry.IndexTables {
+			indexTableStates = append(indexTableStates, tempIndexTableState{
+				def: def, name: def.Name, tableType: def.TableType, isTemporary: def.IsTemporary, tableID: def.TblId,
+			})
+		}
+		indexStates := make([]tempIndexState, 0, len(qry.TableDef.Indexes))
+		for _, idx := range qry.TableDef.Indexes {
+			indexStates = append(indexStates, tempIndexState{def: idx, indexTableName: idx.IndexTableName})
+		}
+		defer func() {
+			qry.TableDef.Name = originalTableName
+			for _, state := range indexTableStates {
+				state.def.Name = state.name
+				state.def.TableType = state.tableType
+				state.def.IsTemporary = state.isTemporary
+				state.def.TblId = state.tableID
+			}
+			for _, state := range indexStates {
+				state.def.IndexTableName = state.indexTableName
+			}
+		}()
+
 		realName := defines.GenTempTableName(c.proc.Base.SessionInfo.SessionId, dbName, aliasName)
 		qry.TableDef.Name = realName
 		indexNameMap := make(map[string]string, len(qry.IndexTables))
@@ -1445,8 +1482,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
+	rollbackTempAlias := false
 	if isTemp && session != nil {
 		session.AddTempTable(dbName, aliasName, tblName)
+		rollbackTempAlias = true
+		defer func() {
+			if rollbackTempAlias {
+				session.RemoveTempTable(dbName, aliasName)
+			}
+		}()
 	}
 
 	//update mo_foreign_keys
@@ -1735,6 +1779,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 		)
 		return err
 	}
+	if err := c.maybeInsertMongoDBTableMapping(dbSource, main, qry); err != nil {
+		return err
+	}
 
 	var indexExtra *api.SchemaExtra
 	for i, def := range qry.IndexTables {
@@ -2003,6 +2050,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 		res.Close()
 	}
 
+	if isTemp && session != nil {
+		// The temporary table and all follow-up metadata/index/CTAS work have
+		// completed. Keep the alias registered in the session.
+		rollbackTempAlias = false
+	}
 	return nil
 }
 
@@ -2115,6 +2167,97 @@ func icebergCreateSQLFromPlanTableDef(tableDef *plan.TableDef) string {
 	return ""
 }
 
+func (c *Compile) maybeInsertMongoDBTableMapping(dbSource engine.Database, rel engine.Relation, qry *plan.CreateTable) error {
+	if qry == nil || qry.GetTableDef() == nil || !features.IsMongoDBExternal(qry.GetTableDef().FeatureFlag) {
+		return nil
+	}
+	createSQL := icebergCreateSQLFromPlanTableDef(qry.GetTableDef())
+	env, found, err := sqlmongodb.ParseCreateSQLEnvelope(c.proc.Ctx, createSQL)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return moerr.NewInternalError(c.proc.Ctx, "typed MongoDB table plan is missing its catalog envelope")
+	}
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	dbIDText := dbSource.GetDatabaseId(c.proc.Ctx)
+	dbID, err := strconv.ParseUint(dbIDText, 10, 64)
+	if err != nil || dbID == 0 {
+		return moerr.NewInternalErrorf(c.proc.Ctx, "invalid database id for MongoDB mapping: %s", dbIDText)
+	}
+	connectionID, err := c.lookupMongoDBConnectionID(accountID, env.Connection)
+	if err != nil {
+		return err
+	}
+	mapping := sqlmongodb.TableMapping{
+		AccountID: accountID, DatabaseID: dbID, TableID: rel.GetTableID(c.proc.Ctx),
+		ConnectionID: connectionID, Connection: env.Connection,
+		Database: env.Database, Collection: env.Collection,
+		SchemaMode: env.SchemaMode, Conversion: env.ConversionMode,
+		SplitKey: env.SplitKey, MaxParallelism: env.MaxParallelism,
+		Columns: env.Columns, Version: 1,
+	}
+	return c.runSqlWithOptions(
+		sqlmongodb.InsertTableMappingSQL(mapping),
+		executor.StatementOption{}.WithDisableLog(),
+	)
+}
+
+func (c *Compile) lookupMongoDBConnectionID(accountID uint32, name string) (uint64, error) {
+	res, err := c.runSqlWithResultAndOptions(
+		sqlmongodb.GetConnectionByNameForUpdateSQL(accountID, name),
+		NoAccountId,
+		executor.StatementOption{}.WithDisableLog(),
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer res.Close()
+	var connectionID uint64
+	var disabled bool
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 || len(cols) < 18 {
+			return true
+		}
+		ids := executor.GetFixedRows[uint64](cols[1])
+		disabledValues := executor.GetFixedRows[uint64](cols[17])
+		if len(ids) > 0 {
+			connectionID = ids[0]
+		}
+		if len(disabledValues) > 0 {
+			disabled = disabledValues[0] != 0
+		}
+		return false
+	})
+	if connectionID == 0 || disabled {
+		return 0, moerr.NewInvalidInputf(c.proc.Ctx, "MongoDB connection %s does not exist or is disabled", name)
+	}
+	return connectionID, nil
+}
+
+func (c *Compile) maybeDeleteMongoDBTableMapping(dbSource engine.Database, rel engine.Relation, tableDef *plan.TableDef) error {
+	isMongoDB, err := plan2.IsMongoDBTableDef(c.proc.Ctx, tableDef)
+	if err != nil || !isMongoDB {
+		return err
+	}
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	dbIDText := dbSource.GetDatabaseId(c.proc.Ctx)
+	dbID, err := strconv.ParseUint(dbIDText, 10, 64)
+	if err != nil || dbID == 0 {
+		return moerr.NewInternalErrorf(c.proc.Ctx, "invalid database id for MongoDB mapping delete: %s", dbIDText)
+	}
+	return c.runSqlWithOptions(
+		sqlmongodb.DeleteTableMappingSQL(accountID, dbID, rel.GetTableID(c.proc.Ctx)),
+		executor.StatementOption{}.WithDisableLog(),
+	)
+}
+
 func (c *Compile) runSqlWithSystemTenant(sql string) error {
 	oldCtx := c.proc.Ctx
 	c.proc.Ctx = context.WithValue(oldCtx, defines.TenantIDKey{}, uint32(0))
@@ -2131,11 +2274,12 @@ func (c *Compile) runSqlWithSystemTenant(sql string) error {
 // shared reclaim core from the databranchutils package, and submits the
 // resulting DELETE via a sys-tenant executor.
 //
-// Called synchronously by the plain `DROP TABLE` path after flipping
-// table_deleted=true for the affected tid (design §9.2 / §10).
-func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) error {
+// Called synchronously by the plain `DROP TABLE` path. It reports whether the
+// dropped table participates in branch lineage and acquires the DAG lock before
+// flipping table_deleted=true for the affected tid (design §9.2 / §10).
+func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error) {
 	if len(deadTIDs) == 0 {
-		return nil
+		return false, nil
 	}
 	// Fast path: the vast majority of DROP TABLE operations are on tables
 	// that have nothing to do with data branch. Skip the `FOR UPDATE`
@@ -2158,7 +2302,7 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) error {
 	)
 	probeRes, err := c.runSqlWithResult(probeSQL, int32(catalog.System_Account))
 	if err != nil {
-		return err
+		return false, err
 	}
 	hasBranchRow := false
 	probeRes.ReadRows(func(n int, _ []*vector.Vector) bool {
@@ -2169,7 +2313,7 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) error {
 	})
 	probeRes.Close()
 	if !hasBranchRow {
-		return nil
+		return false, nil
 	}
 
 	loadDAG := func() (databranchutils.BranchReclaimDag, error) {
@@ -2181,7 +2325,7 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) error {
 		// above already confirmed the drop touches mo_branch_metadata,
 		// so the lock scope is limited to real branch drops.
 		querySql := fmt.Sprintf(
-			"select table_id, p_table_id, clone_ts, table_deleted from %s.%s for update",
+			"select table_id, p_table_id, clone_ts, level, table_deleted from %s.%s for update",
 			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
 		)
 		res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))
@@ -2197,13 +2341,15 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) error {
 			tableIDs := vector.MustFixedColWithTypeCheck[uint64](cols[0])
 			parentIDs := vector.MustFixedColWithTypeCheck[uint64](cols[1])
 			cloneTSs := vector.MustFixedColWithTypeCheck[int64](cols[2])
+			levels := executor.GetStringRows(cols[3])
 			for i := 0; i < n; i++ {
-				deleted := !cols[3].IsNull(uint64(i)) &&
-					vector.GetFixedAtWithTypeCheck[bool](cols[3], i)
+				deleted := !cols[4].IsNull(uint64(i)) &&
+					vector.GetFixedAtWithTypeCheck[bool](cols[4], i)
 				rows = append(rows, databranchutils.DataBranchMetadata{
 					TableID:      tableIDs[i],
 					CloneTS:      cloneTSs[i],
 					PTableID:     parentIDs[i],
+					Level:        levels[i],
 					TableDeleted: deleted,
 				})
 			}
@@ -2211,11 +2357,19 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) error {
 		})
 		return databranchutils.NewBranchReclaimDag(rows), nil
 	}
+	markDeleted := func() error {
+		return c.runSqlWithSystemTenant(fmt.Sprintf(
+			"update %s.%s set table_deleted = true where table_id in (%s)",
+			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, idList.String(),
+		))
+	}
 	execDelete := func(snames []string) error {
 		sql := databranchutils.BuildBranchSnapshotDeleteSQL(snames)
 		return c.runSqlWithSystemTenant(sql)
 	}
-	return databranchutils.ReclaimBranchSnapshotsCore(deadTIDs, loadDAG, execDelete)
+	return true, databranchutils.MarkAndReclaimBranchSnapshotsCore(
+		deadTIDs, loadDAG, markDeleted, execDelete,
+	)
 }
 
 func (s *Scope) CreateView(c *Compile) error {
@@ -2884,21 +3038,101 @@ func AddChildTblIdToParentTable(ctx context.Context, fkRelation engine.Relation,
 	if err != nil {
 		return err
 	}
-	var oldRefChildDef *engine.RefChildTableDef
-	for _, ct := range oldCt.Cts {
-		if old, ok := ct.(*engine.RefChildTableDef); ok {
-			oldRefChildDef = old
+	addRefChildTableIDs(oldCt, []uint64{tblId})
+	return fkRelation.UpdateConstraint(ctx, oldCt)
+}
+
+func canonicalRefChildTableIDs(constraintDef *engine.ConstraintDef) []uint64 {
+	var tableIDs []uint64
+	seen := make(map[uint64]struct{})
+	for _, constraint := range constraintDef.Cts {
+		refChildDef, ok := constraint.(*engine.RefChildTableDef)
+		if !ok {
+			continue
+		}
+		for _, tableID := range refChildDef.Tables {
+			if _, exists := seen[tableID]; exists {
+				continue
+			}
+			seen[tableID] = struct{}{}
+			tableIDs = append(tableIDs, tableID)
 		}
 	}
-	if oldRefChildDef == nil {
-		oldRefChildDef = &engine.RefChildTableDef{}
+	return tableIDs
+}
+
+func setRefChildTableIDs(constraintDef *engine.ConstraintDef, tableIDs []uint64) {
+	canonical := make([]uint64, 0, len(tableIDs))
+	seen := make(map[uint64]struct{}, len(tableIDs))
+	for _, tableID := range tableIDs {
+		if _, exists := seen[tableID]; exists {
+			continue
+		}
+		seen[tableID] = struct{}{}
+		canonical = append(canonical, tableID)
 	}
-	oldRefChildDef.Tables = append(oldRefChildDef.Tables, tblId)
-	newCt, err := MakeNewCreateConstraint(oldCt, oldRefChildDef)
-	if err != nil {
-		return err
+	constraintDef.Cts = plan2.RemoveIf(
+		constraintDef.Cts,
+		func(constraint engine.Constraint) bool {
+			_, ok := constraint.(*engine.RefChildTableDef)
+			return ok
+		},
+	)
+	constraintDef.Cts = append(
+		constraintDef.Cts,
+		&engine.RefChildTableDef{Tables: canonical},
+	)
+}
+
+func addRefChildTableIDs(constraintDef *engine.ConstraintDef, added []uint64) {
+	tableIDs := canonicalRefChildTableIDs(constraintDef)
+	seen := make(map[uint64]struct{}, len(tableIDs)+len(added))
+	for _, tableID := range tableIDs {
+		seen[tableID] = struct{}{}
 	}
-	return fkRelation.UpdateConstraint(ctx, newCt)
+	for _, tableID := range added {
+		if _, exists := seen[tableID]; exists {
+			continue
+		}
+		seen[tableID] = struct{}{}
+		tableIDs = append(tableIDs, tableID)
+	}
+	setRefChildTableIDs(constraintDef, tableIDs)
+}
+
+func removeRefChildTableID(constraintDef *engine.ConstraintDef, removed uint64) {
+	tableIDs := canonicalRefChildTableIDs(constraintDef)
+	tableIDs = plan2.RemoveIf(tableIDs, func(tableID uint64) bool {
+		return tableID == removed
+	})
+	setRefChildTableIDs(constraintDef, tableIDs)
+}
+
+func replaceRefChildTableID(
+	constraintDef *engine.ConstraintDef,
+	oldTableID uint64,
+	newTableID uint64,
+) bool {
+	tableIDs := canonicalRefChildTableIDs(constraintDef)
+	replaced := false
+	for i, tableID := range tableIDs {
+		if tableID == oldTableID {
+			tableIDs[i] = newTableID
+			replaced = true
+		}
+	}
+	setRefChildTableIDs(constraintDef, tableIDs)
+	return replaced
+}
+
+func reconcileRefChildTableID(
+	constraintDef *engine.ConstraintDef,
+	oldTableID uint64,
+	newTableID uint64,
+) {
+	if !replaceRefChildTableID(constraintDef, oldTableID, newTableID) {
+		addRefChildTableIDs(constraintDef, []uint64{newTableID})
+	}
 }
 
 func AddFkeyToRelation(ctx context.Context, fkRelation engine.Relation, fkey *plan.ForeignKeyDef) error {
@@ -2931,14 +3165,7 @@ func (s *Scope) removeChildTblIdFromParentTable(c *Compile, fkRelation engine.Re
 	if err != nil {
 		return err
 	}
-	for _, ct := range oldCt.Cts {
-		if def, ok := ct.(*engine.RefChildTableDef); ok {
-			def.Tables = plan2.RemoveIf[uint64](def.Tables, func(id uint64) bool {
-				return id == tblId
-			})
-			break
-		}
-	}
+	removeRefChildTableID(oldCt, tblId)
 	return fkRelation.UpdateConstraint(c.proc.Ctx, oldCt)
 }
 
@@ -3123,11 +3350,10 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		if updateRefChildTableConstraintIDs(oldCt, oldID, newID) {
-			err = fkRelation.UpdateConstraint(c.proc.Ctx, oldCt)
-			if err != nil {
-				return err
-			}
+		replaceRefChildTableID(oldCt, oldID, newID)
+		err = fkRelation.UpdateConstraint(c.proc.Ctx, oldCt)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -3156,23 +3382,6 @@ func cloneCreateIndexForPartition(
 		def.IndexTableName = fmt.Sprintf("%s_%s", def.IndexTableName, partitionName)
 	}
 	return cloned
-}
-
-func updateRefChildTableConstraintIDs(ct *engine.ConstraintDef, oldID, newID uint64) bool {
-	updated := false
-	for _, c := range ct.Cts {
-		def, ok := c.(*engine.RefChildTableDef)
-		if !ok {
-			continue
-		}
-		for idx, refTable := range def.Tables {
-			if refTable == oldID {
-				def.Tables[idx] = newID
-				updated = true
-			}
-		}
-	}
-	return updated
 }
 
 func (s *Scope) DropSequence(c *Compile) error {
@@ -3261,6 +3470,15 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			qry.Table = real
 			isTemp = true
 		}
+	}
+
+	// A plan built for a temporary table must not delete a same-named
+	// permanent table if the session alias disappears before execution.
+	if qry.GetTableDef().GetIsTemporary() && !isTemp {
+		if qry.GetIfExists() {
+			return nil
+		}
+		return moerr.NewNoSuchTable(c.proc.Ctx, dbName, tblName)
 	}
 
 	if !isView && qry.TableDef == nil && !isTemp {
@@ -3444,6 +3662,9 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	if err := c.maybeDeleteIcebergTableMapping(dbSource, rel, qry.GetTableDef()); err != nil {
 		return err
 	}
+	if err := c.maybeDeleteMongoDBTableMapping(dbSource, rel, qry.GetTableDef()); err != nil {
+		return err
+	}
 
 	if err := dbSource.Delete(c.proc.Ctx, tblName); err != nil {
 		return err
@@ -3523,8 +3744,8 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			catalog.MO_PITR_CHANGED_TIME, now,
 
 			catalog.MO_PITR_ACCOUNT_ID, accountID,
-			catalog.MO_PITR_DB_NAME, dbName,
-			catalog.MO_PITR_TABLE_NAME, tblName,
+			catalog.MO_PITR_DB_NAME, sqlquote.EscapeString(dbName),
+			catalog.MO_PITR_TABLE_NAME, sqlquote.EscapeString(tblName),
 			catalog.MO_PITR_STATUS, 1,
 			catalog.MO_PITR_OBJECT_ID, tblID,
 		)
@@ -3540,11 +3761,6 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			"delete from mo_catalog.mo_merge_settings where account_id = %d and tid = %d",
 			accountID, tblID,
 		),
-
-		fmt.Sprintf(
-			"update mo_catalog.mo_branch_metadata set table_deleted = true where table_id = %d",
-			tblID,
-		),
 	}
 
 	for _, ss := range sqls {
@@ -3557,17 +3773,28 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		}
 	}
 
-	// Branch Protect Snapshot reclaim: after flipping table_deleted=true for
-	// this tid, check whether any subtree has become fully deleted and if so
-	// release the corresponding `__mo_branch_*` snapshots. This must run
-	// synchronously so drop paths have identical semantics in the frontend
-	// and compile-layer paths (design §5.3 / §9.2).
-	if err = c.reclaimBranchProtectSnapshots([]uint64{tblID}); err != nil {
+	// Branch Protect Snapshot reclaim: lock the complete metadata DAG before
+	// flipping table_deleted=true for this tid, then check whether any subtree
+	// has become fully deleted and release the corresponding
+	// `__mo_branch_*` snapshots. This must run synchronously so drop paths have
+	// identical semantics in the frontend and compile-layer paths (design
+	// §5.3 / §9.2).
+	var branchParticipates bool
+	if branchParticipates, err = c.reclaimBranchProtectSnapshots([]uint64{tblID}); err != nil {
 		logutil.Error("reclaim branch protect snapshots failed",
 			zap.Uint64("tblID", tblID),
 			zap.Error(err),
 		)
 		return err
+	}
+	if branchParticipates {
+		if err = c.compactExpiredAlterDataBranchLineage(time.Time{}); err != nil {
+			logutil.Error("compact historical ALTER lineage failed",
+				zap.Uint64("tblID", tblID),
+				zap.Error(err),
+			)
+			return err
+		}
 	}
 
 	ps := partitionservice.GetService(c.proc.GetService())
@@ -4705,6 +4932,31 @@ func (s *Scope) CreatePitr(c *Compile) error {
 		return err
 	}
 
+	// INTERNAL PITR creation bypasses the frontend path. Cross the same stable
+	// publication barrier as frontend snapshot/PITR creation before refreshing
+	// the target object ID, and retain the write until the PITR row commits.
+	// This prevents COPY ALTER from swapping the table generation between
+	// planning and publication.
+	pitrObjectID, err := preparePitrPublication(
+		c.lockDataBranchLineageOwnerPublication,
+		func() error {
+			txnMeta := c.proc.GetTxnOperator().Txn()
+			if shouldAdvanceAlterDataBranchLineageSnapshot(
+				txnMeta.IsPessimistic(), txnMeta.IsRCIsolation(),
+			) {
+				_, err := c.advanceAlterDataBranchLineageSnapshot()
+				return err
+			}
+			return nil
+		},
+		func() (uint64, error) {
+			return c.resolveCurrentPitrObjectID(createPitr)
+		},
+	)
+	if err != nil {
+		return err
+	}
+
 	// check pitr if exists（pitr_name + create_account）
 	checkExistSql := getSqlForCheckPitrExists(pitrName, accountId)
 	existRes, err := c.runSqlWithResultAndOptions(checkExistSql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())
@@ -4752,21 +5004,21 @@ func (s *Scope) CreatePitr(c *Compile) error {
                                table_name,
                                obj_id,
                                pitr_length,
-                               pitr_unit,
-                               pitr_status_changed_time) values ('%s', '%s', %d, %d, %d, '%s', %d, '%s', '%s', '%s', %d, %d, '%s', %d)`,
+	                               pitr_unit,
+	                               pitr_status_changed_time) values ('%s', '%s', %d, %d, %d, '%s', %d, '%s', '%s', '%s', %d, %d, '%s', %d)`,
 		newUUid,
-		pitrName,
+		sqlquote.EscapeString(pitrName),
 		createPitr.GetCurrentAccountId(),
 		now,
 		now,
-		pitrLevel.String(),
+		sqlquote.EscapeString(pitrLevel.String()),
 		createPitr.GetCurrentAccountId(),
-		createPitr.GetAccountName(),
-		createPitr.GetDatabaseName(),
-		createPitr.GetTableName(),
-		getPitrObjectId(createPitr),
+		sqlquote.EscapeString(createPitr.GetAccountName()),
+		sqlquote.EscapeString(createPitr.GetDatabaseName()),
+		sqlquote.EscapeString(createPitr.GetTableName()),
+		pitrObjectID,
 		createPitr.GetPitrValue(),
-		createPitr.GetPitrUnit(),
+		sqlquote.EscapeString(createPitr.GetPitrUnit()),
 		now,
 	)
 
@@ -4861,6 +5113,56 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	return nil
 }
 
+func preparePitrPublication(
+	lock func() error,
+	refreshSnapshot func() error,
+	resolveObjectID func() (uint64, error),
+) (uint64, error) {
+	if err := lock(); err != nil {
+		return 0, err
+	}
+	if err := refreshSnapshot(); err != nil {
+		return 0, err
+	}
+	return resolveObjectID()
+}
+
+func (c *Compile) resolveCurrentPitrObjectID(createPitr *plan.CreatePitr) (uint64, error) {
+	ctx := c.proc.Ctx
+	switch tree.PitrLevel(createPitr.GetLevel()) {
+	case tree.PITRLEVELCLUSTER:
+		return math.MaxUint64, nil
+	case tree.PITRLEVELACCOUNT:
+		return uint64(createPitr.GetAccountId()), nil
+	case tree.PITRLEVELDATABASE:
+		db, err := c.e.Database(ctx, createPitr.GetDatabaseName(), c.proc.GetTxnOperator())
+		if err != nil {
+			return 0, err
+		}
+		databaseID, err := strconv.ParseUint(db.GetDatabaseId(ctx), 10, 64)
+		if err != nil {
+			return 0, moerr.NewInternalErrorf(
+				ctx,
+				"The databaseid of '%s' is not a valid number",
+				createPitr.GetDatabaseName(),
+			)
+		}
+		return databaseID, nil
+	case tree.PITRLEVELTABLE:
+		db, err := c.e.Database(ctx, createPitr.GetDatabaseName(), c.proc.GetTxnOperator())
+		if err != nil {
+			return 0, err
+		}
+		rel, err := db.Relation(ctx, createPitr.GetTableName(), nil)
+		if err != nil {
+			return 0, err
+		}
+		return rel.GetTableID(ctx), nil
+	default:
+		return 0, moerr.NewInternalErrorf(ctx, "invalid pitr level %d", createPitr.GetLevel())
+	}
+}
+
 // addTimeSpan returns the UTC time that is 'length' units before now, where unit is one of "h", "d", "mo", "y"
 func addTimeSpan(length int, unit string) (time.Time, error) {
 	now := time.Now().UTC()
@@ -4900,7 +5202,7 @@ func (s *Scope) DropPitr(c *Compile) error {
 	}
 
 	// 1. Check if PITR exists
-	checkSql := fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", pitrName, accountId)
+	checkSql := fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", sqlquote.EscapeString(pitrName), accountId)
 	res, err := c.runSqlWithResultAndOptions(checkSql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
@@ -4914,7 +5216,7 @@ func (s *Scope) DropPitr(c *Compile) error {
 	}
 
 	// 2. Delete PITR record
-	deleteSql := fmt.Sprintf("DELETE FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", pitrName, accountId)
+	deleteSql := fmt.Sprintf("DELETE FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d", sqlquote.EscapeString(pitrName), accountId)
 	err = c.runSqlWithAccountIdAndOptions(deleteSql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())
 	if err != nil {
 		return err
@@ -4962,36 +5264,20 @@ func getSqlForCheckPitrDup(
 		return getSqlForCheckDupPitrFormat(createPitr.CurrentAccountId, math.MaxUint64)
 	case tree.PITRLEVELACCOUNT:
 		if createPitr.OriginAccountName {
-			return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND account_name = '%s' AND level = 'account' AND pitr_status = 1;", createPitr.AccountName)
+			return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND account_name = '%s' AND level = 'account' AND pitr_status = 1;", sqlquote.EscapeString(createPitr.AccountName))
 		} else {
-			return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND account_name = '%s' AND level = 'account' AND pitr_status = 1;", createPitr.CurrentAccount)
+			return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND account_name = '%s' AND level = 'account' AND pitr_status = 1;", sqlquote.EscapeString(createPitr.CurrentAccount))
 		}
 	case tree.PITRLEVELDATABASE:
-		return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND database_name = '%s' AND level = 'database' AND pitr_status = 1;", createPitr.DatabaseName)
+		return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND database_name = '%s' AND level = 'database' AND pitr_status = 1;", sqlquote.EscapeString(createPitr.DatabaseName))
 	case tree.PITRLEVELTABLE:
-		return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND database_name = '%s' AND table_name = '%s' AND level = 'table' AND pitr_status = 1;", createPitr.DatabaseName, createPitr.TableName)
+		return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" AND database_name = '%s' AND table_name = '%s' AND level = 'table' AND pitr_status = 1;", sqlquote.EscapeString(createPitr.DatabaseName), sqlquote.EscapeString(createPitr.TableName))
 	}
 	return sql
 }
 
 func getSqlForCheckDupPitrFormat(accountId uint32, objId uint64) string {
 	return fmt.Sprintf(`SELECT pitr_id FROM mo_catalog.mo_pitr WHERE create_account = %d AND obj_id = %d;`, accountId, objId)
-}
-
-func getPitrObjectId(createPitr *plan.CreatePitr) uint64 {
-	var objectId uint64
-	pitrLevel := tree.PitrLevel(createPitr.GetLevel())
-	switch pitrLevel {
-	case tree.PITRLEVELCLUSTER:
-		objectId = math.MaxUint64
-	case tree.PITRLEVELACCOUNT:
-		objectId = uint64(createPitr.AccountId)
-	case tree.PITRLEVELDATABASE:
-		objectId = createPitr.DatabaseId
-	case tree.PITRLEVELTABLE:
-		objectId = createPitr.TableId
-	}
-	return objectId
 }
 
 // CheckSysMoCatalogPitrResult parses the sys_mo_catalog_pitr query result and determines whether to insert or update.
@@ -5043,7 +5329,7 @@ func CheckSysMoCatalogPitrResult(ctx context.Context, vecs []*vector.Vector, new
 }
 
 func getSqlForCheckPitrExists(pitrName string, accountId uint32) string {
-	return fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d ORDER BY pitr_id", pitrName, accountId)
+	return fmt.Sprintf("SELECT pitr_id FROM mo_catalog.mo_pitr WHERE pitr_name = '%s' AND create_account = %d ORDER BY pitr_id", sqlquote.EscapeString(pitrName), accountId)
 }
 
 func (s *Scope) CreateCDC(c *Compile) error {
@@ -5325,8 +5611,8 @@ func deleteManyWatermark(
 }
 
 const (
-	defaultConnectorTaskMaxRetryTimes = 10
-	defaultConnectorTaskRetryInterval = int64(time.Second * 10)
+	defaultCDCTaskMaxRetryTimes = 10
+	defaultCDCTaskRetryInterval = int64(time.Second * 10)
 )
 
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
@@ -5334,8 +5620,8 @@ func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
 		ID:       opts.TaskId,
 		Executor: task.TaskCode_InitCdc,
 		Options: task.TaskOptions{
-			MaxRetryTimes: defaultConnectorTaskMaxRetryTimes,
-			RetryInterval: defaultConnectorTaskRetryInterval,
+			MaxRetryTimes: defaultCDCTaskMaxRetryTimes,
+			RetryInterval: defaultCDCTaskRetryInterval,
 			DelayDuration: 0,
 			Concurrency:   0,
 		},
@@ -5840,15 +6126,13 @@ func (c *Compile) checkPitrGranularity(
 		}
 
 		checkDBByName := func(nameLower string) (bool, error) {
-			qDB := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='database' and lower(database_name) = '%s' and account_id = %d`,
-				catalog.MO_CATALOG, catalog.MO_PITR, nameLower, accountId)
+			qDB := getPitrDatabaseGranularitySql(nameLower, accountId, true)
 			if ok, err := checkQuery(qDB); err != nil {
 				return false, err
 			} else if ok {
 				return true, nil
 			}
-			qDB2 := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='database' and lower(database_name) = '%s'`,
-				catalog.MO_CATALOG, catalog.MO_PITR, nameLower)
+			qDB2 := getPitrDatabaseGranularitySql(nameLower, accountId, false)
 			return checkQuery(qDB2)
 		}
 
@@ -5885,8 +6169,7 @@ func (c *Compile) checkPitrGranularity(
 
 		// 3) table level only for table pattern
 		if !isDB {
-			qTbl := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='table' and lower(database_name)='%s' and lower(table_name)='%s' and account_id = %d`,
-				catalog.MO_CATALOG, catalog.MO_PITR, dbNameLower, tblNameLower, accountId)
+			qTbl := getPitrTableGranularitySql(dbNameLower, tblNameLower, accountId)
 			if ok, err := checkQuery(qTbl); err != nil {
 				return err
 			} else if ok {
@@ -5898,6 +6181,22 @@ func (c *Compile) checkPitrGranularity(
 			"PITR config of %s.%s insufficient (<%dh)", pt.Source.Database, pt.Source.Table, minPitrLen)
 	}
 	return nil
+}
+
+func getPitrDatabaseGranularitySql(nameLower string, accountId uint32, withAccount bool) string {
+	nameLit := sqlquote.EscapeString(nameLower)
+	if withAccount {
+		return fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='database' and lower(database_name) = '%s' and account_id = %d`,
+			catalog.MO_CATALOG, catalog.MO_PITR, nameLit, accountId)
+	}
+	return fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='database' and lower(database_name) = '%s'`,
+		catalog.MO_CATALOG, catalog.MO_PITR, nameLit)
+}
+
+func getPitrTableGranularitySql(dbNameLower, tblNameLower string, accountId uint32) string {
+	return fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='table' and lower(database_name)='%s' and lower(table_name)='%s' and account_id = %d`,
+		catalog.MO_CATALOG, catalog.MO_PITR,
+		sqlquote.EscapeString(dbNameLower), sqlquote.EscapeString(tblNameLower), accountId)
 }
 
 func toHours(val int64, unit string) int64 {
@@ -6130,6 +6429,9 @@ func checkCCPRTableBeforeDrop(c *Compile, tableID uint64) (bool, error) {
 
 	res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))
 	if err != nil {
+		if isMissingCCPRMetadataTable(err, catalog.MO_CCPR_TABLES) {
+			return true, nil
+		}
 		return false, err
 	}
 	defer res.Close()
@@ -6219,6 +6521,9 @@ func checkCCPRDbBeforeDrop(c *Compile, dbID uint64) (bool, error) {
 
 	res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))
 	if err != nil {
+		if isMissingCCPRMetadataTable(err, catalog.MO_CCPR_DBS) {
+			return true, nil
+		}
 		return false, err
 	}
 	defer res.Close()
@@ -6290,4 +6595,15 @@ func checkCCPRDbBeforeDrop(c *Compile, dbID uint64) (bool, error) {
 
 	// Task exists and is not dropped, deny deletion
 	return false, nil
+}
+
+func isMissingCCPRMetadataTable(err error, tableName string) bool {
+	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+		return true
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrParseError) {
+		return false
+	}
+	// Query planning currently reports a missing resolved table as ErrParseError.
+	return strings.Contains(err.Error(), fmt.Sprintf("table %q does not exist", tableName))
 }

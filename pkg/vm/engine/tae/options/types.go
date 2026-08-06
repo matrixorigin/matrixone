@@ -78,7 +78,6 @@ type Options struct {
 	TransferTableTTL          time.Duration
 	IncrementalDedup          bool
 	IsStandalone              bool
-	EnableApplyTableData      bool
 	GCTimeCheckerFactory      func(any) func(*types.TS) bool
 
 	Fs                fileservice.FileService                  `toml:"-"`

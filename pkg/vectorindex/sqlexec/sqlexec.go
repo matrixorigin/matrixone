@@ -81,12 +81,22 @@ type SqlProcess struct {
 	IvfMembershipFilter []byte
 	// Optional doc_id membership-filter bytes (tagged docfilter payload) for the fulltext index scan.
 	FulltextMembershipFilter []byte
+
+	// Optional raw runtime-filter payload from the build side for IVF probe path.
+	// This contains serialized unique join keys and must be converted by IVF code
+	// before it is exposed to entries table scans.
+	IvfRuntimeFilterData []byte
 	// Optional exact primary-key filter list (SQL literals, comma-separated).
 	// When set, ivf_search uses it to build "pk IN (...)" and skip centroid filtering.
 	ExactPkFilter string
 	// Optional IndexReaderParam attached by vector index runtime.
 	// Used to drive additional filtering in internal SQL executor (e.g. ivf entries scan).
 	IndexReaderParam *plan.IndexReaderParam
+
+	// Optional trusted execution identity for planner-generated internal SQL.
+	// SQL/table-function arguments must never populate these fields.
+	AccountIDOverride *uint32
+	DatabaseOverride  string
 }
 
 func NewSqlProcess(proc *process.Process) *SqlProcess {
@@ -95,6 +105,41 @@ func NewSqlProcess(proc *process.Process) *SqlProcess {
 
 func NewSqlProcessWithContext(ctx *SqlContext) *SqlProcess {
 	return &SqlProcess{SqlCtx: ctx}
+}
+
+func (s *SqlProcess) WithExecutionIdentity(accountID uint32, database string) *SqlProcess {
+	s.AccountIDOverride = &accountID
+	s.DatabaseOverride = database
+	return s
+}
+
+func (s *SqlProcess) executionAccountID(defaultAccountID uint32) uint32 {
+	if s.AccountIDOverride != nil {
+		return *s.AccountIDOverride
+	}
+	return defaultAccountID
+}
+
+func (s *SqlProcess) executionDatabase(defaultDatabase string) string {
+	if s.DatabaseOverride != "" {
+		return s.DatabaseOverride
+	}
+	return defaultDatabase
+}
+
+func (s *SqlProcess) executionContext(ctx context.Context) context.Context {
+	if s.AccountIDOverride != nil {
+		return defines.AttachAccountId(ctx, *s.AccountIDOverride)
+	}
+	return ctx
+}
+
+func (s *SqlProcess) executionStatementOption() executor.StatementOption {
+	option := executor.StatementOption{}.WithDisableLog()
+	if s.AccountIDOverride != nil {
+		option = option.WithAccountID(*s.AccountIDOverride)
+	}
+	return option
 }
 
 func (s *SqlProcess) GetContext() context.Context {
@@ -149,7 +194,7 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 		}
 
 		//-------------------------------------------------------
-		topContext := proc.GetTopContext()
+		topContext := sqlproc.executionContext(proc.GetTopContext())
 		// Attach optional membership filter payload to context for internal executor.
 		if len(sqlproc.IvfMembershipFilter) > 0 {
 			topContext = context.WithValue(topContext, defines.IvfMembershipFilter{}, sqlproc.IvfMembershipFilter)
@@ -167,18 +212,19 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 		}
 		//-------------------------------------------------------
 
+		accountId = sqlproc.executionAccountID(accountId)
 		exec := v.(executor.SQLExecutor)
 		opts := executor.Options{}.
 			// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 			WithDisableIncrStatement().
 			WithTxn(proc.GetTxnOperator()).
-			WithDatabase(proc.GetSessionInfo().Database).
+			WithDatabase(sqlproc.executionDatabase(proc.GetSessionInfo().Database)).
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
 			WithFrontend(proc.Base.IsFrontend).
-			WithStatementOption(executor.StatementOption{}.WithDisableLog())
+			WithStatementOption(sqlproc.executionStatementOption())
 		return exec.Exec(topContext, sql, opts)
 	} else {
 
@@ -188,7 +234,8 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 			panic("missing lock service")
 		}
 
-		accountId := sqlctx.AccountId
+		accountId := sqlproc.executionAccountID(sqlctx.AccountId)
+		execCtx := sqlproc.executionContext(sqlctx.Ctx)
 
 		exec := v.(executor.SQLExecutor)
 		// SqlCtx is the background entry point (no frontend session) —
@@ -198,10 +245,11 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 			WithDisableIncrStatement().
 			WithTxn(sqlctx.Txn()).
+			WithDatabase(sqlproc.executionDatabase("")).
 			WithAccountID(accountId).
 			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc()).
-			WithStatementOption(executor.StatementOption{}.WithDisableLog())
-		return exec.Exec(sqlctx.Ctx, sql, opts)
+			WithStatementOption(sqlproc.executionStatementOption())
+		return exec.Exec(execCtx, sql, opts)
 
 	}
 }
@@ -247,6 +295,7 @@ func RunStreamingSql(
 		}
 
 		//-------------------------------------------------------
+		ctx = sqlproc.executionContext(ctx)
 		// Attach optional membership filter payload to context for internal executor.
 		if len(sqlproc.IvfMembershipFilter) > 0 {
 			ctx = context.WithValue(ctx, defines.IvfMembershipFilter{}, sqlproc.IvfMembershipFilter)
@@ -259,19 +308,20 @@ func RunStreamingSql(
 			return executor.Result{}, err
 		}
 		//-------------------------------------------------------
+		accountId = sqlproc.executionAccountID(accountId)
 		exec := v.(executor.SQLExecutor)
 		opts := executor.Options{}.
 			// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 			WithDisableIncrStatement().
 			WithTxn(proc.GetTxnOperator()).
-			WithDatabase(proc.GetSessionInfo().Database).
+			WithDatabase(sqlproc.executionDatabase(proc.GetSessionInfo().Database)).
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
 			WithStreaming(stream_chan, error_chan).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
 			WithFrontend(proc.Base.IsFrontend).
-			WithStatementOption(executor.StatementOption{}.WithDisableLog())
+			WithStatementOption(sqlproc.executionStatementOption())
 		return exec.Exec(ctx, sql, opts)
 	} else {
 
@@ -282,7 +332,8 @@ func RunStreamingSql(
 			panic("missing lock service")
 		}
 
-		accountId := sqlctx.AccountId
+		accountId := sqlproc.executionAccountID(sqlctx.AccountId)
+		ctx = sqlproc.executionContext(ctx)
 
 		exec := v.(executor.SQLExecutor)
 		// SqlCtx is the background entry point (no frontend session) —
@@ -292,10 +343,11 @@ func RunStreamingSql(
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 			WithDisableIncrStatement().
 			WithTxn(sqlctx.Txn()).
+			WithDatabase(sqlproc.executionDatabase("")).
 			WithAccountID(accountId).
 			WithStreaming(stream_chan, error_chan).
 			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc()).
-			WithStatementOption(executor.StatementOption{}.WithDisableLog())
+			WithStatementOption(sqlproc.executionStatementOption())
 		return exec.Exec(ctx, sql, opts)
 
 	}

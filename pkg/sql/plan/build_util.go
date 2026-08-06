@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"regexp"
@@ -295,6 +296,13 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 	return plan.Type{}, moerr.NewInternalError(ctx, "unknown data type")
 }
 
+// GetTypeFromAst resolves a parser SQL type into its plan representation.
+// Stored procedure variables use this to retain their declared type, including
+// metadata such as DECIMAL width and scale, throughout interpretation.
+func GetTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan.Type, error) {
+	return getTypeFromAst(ctx, typ)
+}
+
 func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs []tree.ColumnAttribute) error {
 	if !isGeometryPlanType(colType) {
 		for _, attr := range attrs {
@@ -381,7 +389,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 	// try to calculate default value, return err if fails
 	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)
 	if err != nil {
-		return nil, err
+		return nil, mapDDLAssignmentCastError(proc.Ctx, typ, colNameOrigin, err)
 	}
 
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
@@ -426,7 +434,7 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 	defer executor.Free()
 	_, err = executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
-		return nil, err
+		return nil, mapDDLAssignmentCastError(proc.Ctx, typ, col.Name.ColNameOrigin(), err)
 	}
 
 	ret := &plan.OnUpdate{
@@ -505,10 +513,9 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 		return nil, err
 	}
 
-	// A generated CHAR/VARCHAR column is materialized as a real column write, so
-	// use the strict assignment cast: an over-length value is rejected instead of
-	// being silently truncated, matching column DEFAULT / ON UPDATE and the DML
-	// assignment paths.
+	// Persist only stable function IDs in generated-column catalog metadata.
+	// DML plan construction rewrites this wrapper to cast_assign/cast_ignore
+	// when the active protocol supports those functions.
 	genExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
@@ -521,6 +528,14 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 		OriginString: fmtCtx.String(),
 		IsStored:     genAttr.Stored,
 	}, nil
+}
+
+func mapDDLAssignmentCastError(ctx context.Context, typ plan.Type, colName string, err error) error {
+	if (typ.Id == int32(types.T_char) || typ.Id == int32(types.T_varchar)) &&
+		moerr.IsMoErrCode(err, moerr.ErrInternal) {
+		return moerr.NewErrInvalidDefault(ctx, colName)
+	}
+	return err
 }
 
 // checkGeneratedExprReferences rejects variable references and auto-increment
@@ -659,6 +674,28 @@ func inlineGeneratedColExpr(expr *plan.Expr, colIdxToProjPos map[int32]int32, pr
 	}
 }
 
+// applyGeneratedColumnAssignmentCast upgrades persisted legacy cast_strict
+// wrappers to cast_assign and uses cast_ignore for INSERT/UPDATE IGNORE. This
+// keeps generated-column assignment semantics compatible across catalog
+// versions without rewriting catalog rows.
+func (builder *QueryBuilder) applyGeneratedColumnAssignmentCast(expr *plan.Expr, isIgnore bool) *plan.Expr {
+	if expr == nil {
+		return expr
+	}
+	f := expr.GetF()
+	if f == nil || f.Func == nil ||
+		(f.Func.ObjName != "cast_assign" && f.Func.ObjName != "cast_strict") ||
+		len(f.Args) == 0 {
+		return expr
+	}
+	funcName := assignmentCastFunctionName(expr.Typ, isIgnore, builder.compCtx.GetProcess())
+	assignmentCast, err := forceCastExprWithName(builder.GetContext(), f.Args[0], expr.Typ, funcName)
+	if err != nil {
+		return expr
+	}
+	return assignmentCast
+}
+
 // substituteColRefsInExpr replaces ColRef(0, colIdx) in a generated column expression
 // with the actual expressions from projList at offset+colIdx. This is used in UPDATE
 // to inline referenced column values into the generated expression.
@@ -684,8 +721,10 @@ func substituteColRefsInExpr(expr *plan.Expr, projList []*plan.Expr, offset int3
 			Typ: expr.Typ,
 			Expr: &plan.Expr_F{
 				F: &plan.Function{
-					Func: e.F.Func,
-					Args: newArgs,
+					Func:          e.F.Func,
+					Args:          newArgs,
+					AggConfig:     bytes.Clone(e.F.AggConfig),
+					AggConfigType: e.F.AggConfigType,
 				},
 			},
 		}
@@ -1016,7 +1055,7 @@ basic logic of fk constraint check.
 			select distinct S.b from S where S.b is not null
 			except
 			select distinct T.a from T
-		)
+		) as __mo_fk_check_source
 	if the result is true, then the fk constraint confirmed.
 */
 func genSqlForCheckFKConstraints(ctx context.Context,
@@ -1050,7 +1089,7 @@ func genSqlForCheckFKConstraints(ctx context.Context,
 	sql := strings.Join([]string{
 		"select count(*) = 0 from (",
 		except,
-		")",
+		") as __mo_fk_check_source",
 	}, " ")
 	return sql, nil
 }

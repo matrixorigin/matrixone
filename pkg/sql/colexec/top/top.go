@@ -122,6 +122,11 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 			bat := result.Batch
 
 			if bat == nil {
+				// The child may cancel the process while returning EOF, after this
+				// Top invocation has passed vm.Exec's entry cancellation check.
+				if err, canceled := vm.CancelCheck(proc); canceled {
+					return vm.CancelResult, err
+				}
 				top.ctr.state = vm.Eval
 				break
 			}
@@ -147,6 +152,9 @@ func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
 
 			err = top.ctr.build(top, top.ctr.buildBat, proc, analyzer)
 			if err != nil {
+				if _, canceled := vm.CancelCheck(proc); canceled {
+					return vm.CancelResult, err
+				}
 				return result, err
 			}
 			if top.TopValueTag > 0 && top.updateTopValueZM() {
@@ -321,6 +329,10 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 }
 
 func (ctr *container) spillBatch(bat *batch.Batch, proc *process.Process, analyzer process.Analyzer) error {
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return err
+	}
+
 	if ctr.spillFile == nil {
 		f, err := os.CreateTemp("", "mo-top-spill-*")
 		if err != nil {
@@ -344,7 +356,13 @@ func (ctr *container) spillBatch(bat *batch.Batch, proc *process.Process, analyz
 	if err != nil {
 		return err
 	}
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return err
+	}
 	if _, err := ctr.spillFile.Write(data); err != nil {
+		return err
+	}
+	if err, canceled := vm.CancelCheck(proc); canceled {
 		return err
 	}
 
@@ -466,6 +484,10 @@ func (ctr *container) evalInMemory(limit uint64, n int, proc *process.Process, r
 const evalSpillChunkSize = 8192
 
 func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, result *vm.CallResult) (bool, error) {
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return false, err
+	}
+
 	// First call: pop heap into sorted order, free heap batch.
 	if ctr.orderedRefs == nil {
 		if uint64(len(ctr.sels)) < limit {
@@ -473,6 +495,11 @@ func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, resu
 		}
 		ctr.orderedRefs = make([]rowRef, len(ctr.sels))
 		for i, j := 0, len(ctr.sels); i < j; i++ {
+			if i%evalSpillChunkSize == 0 {
+				if err, canceled := vm.CancelCheck(proc); canceled {
+					return false, err
+				}
+			}
 			sel := heap.Pop(ctr).(int64)
 			ctr.orderedRefs[len(ctr.orderedRefs)-1-i] = ctr.rowRefs[sel]
 		}
@@ -511,11 +538,20 @@ func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, resu
 	}
 
 	outputBat := batch.NewOffHeapWithSize(n)
+	outputTransferred := false
+	defer func() {
+		if !outputTransferred {
+			outputBat.Clean(proc.Mp())
+		}
+	}()
 
 	reuseBat := batch.NewOffHeapWithSize(0)
 	defer reuseBat.Clean(proc.Mp())
 
 	for bIdx, rows := range batchRows {
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			return false, err
+		}
 		info := ctr.spillIndex[bIdx]
 		data := make([]byte, info.size)
 		if _, err := ctr.spillFile.ReadAt(data, info.offset); err != nil {
@@ -550,9 +586,13 @@ func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, resu
 		}
 	}
 
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return false, err
+	}
 	outputBat.SetRowCount(chunkSize)
 	ctr.evalCursor = chunkEnd
 	ctr.spillOutBat = outputBat
+	outputTransferred = true
 	result.Batch = outputBat
 	return ctr.evalCursor >= len(ctr.orderedRefs), nil
 }

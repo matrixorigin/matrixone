@@ -88,7 +88,6 @@ const (
 	FPUse
 	FPPrepareStmt
 	FPPrepareString
-	FPCreateConnector
 	FPPauseDaemonTask
 	FPCancelDaemonTask
 	FPResumeDaemonTask
@@ -98,8 +97,6 @@ const (
 	FPExecuteSQLTask
 	FPShowSQLTasks
 	FPShowSQLTaskRuns
-	FPDropConnector
-	FPShowConnectors
 	FPDeallocate
 	FPReset
 	FPSetVar
@@ -301,12 +298,16 @@ type PrepareStmt struct {
 	PreparePlan     *plan.Plan
 	PrepareStmt     tree.Statement
 	NativeMode      bool
-	ParamTypes      []byte
-	ColDefData      [][]byte
-	IsCloudNonuser  bool
-	proc            *process.Process
-	remapDb         map[string]string
-	defaultDatabase string
+	OnlyFullGroupBy bool
+	// onlyFullGroupBySet distinguishes a captured disabled mode from legacy or
+	// minimal in-memory fixtures that predate this plan dependency.
+	onlyFullGroupBySet bool
+	ParamTypes         []byte
+	ColDefData         [][]byte
+	IsCloudNonuser     bool
+	proc               *process.Process
+	remapDb            map[string]string
+	defaultDatabase    string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -316,6 +317,17 @@ type PrepareStmt struct {
 	// tempTableVersion is the session temporary-table mapping version used to
 	// build PreparePlan and compile.
 	tempTableVersion uint64
+	// ddlVersion is the session DDL generation used to build the cached plan.
+	ddlVersion uint64
+	// preparedMetadataCheckTS stores the catalog metadata high-watermark
+	// observed by the last successful dependency validation.
+	preparedMetadataCheckTS timestamp.Timestamp
+	// cloneSQL is an immutable, fully qualified SQL representation captured
+	// before clone planning can mutate the parsed AST.
+	cloneSQL string
+	// protocolVersion is the cluster protocol used to build PreparePlan.
+	// A version change can alter internal function IDs in generated DML plans.
+	protocolVersion int64
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
@@ -812,7 +824,7 @@ type FeSession interface {
 	IsBackgroundSession() bool
 	GetPrepareStmt(ctx context.Context, name string) (*PrepareStmt, error)
 	CountPayload(i int)
-	RemovePrepareStmt(name string)
+	RemovePrepareStmt(name string) bool
 	SetShowStmtType(statement ShowStatementType)
 	SetSql(sql string)
 	GetMemPool() *mpool.MPool
@@ -893,6 +905,11 @@ type ExecCtx struct {
 	rootSQLOverride *string
 	//stmt will be replaced by the Execute
 	stmt tree.Statement
+	// persistentDropTableTargets captures the per-target classification before
+	// DROP TABLE executes. Temporary aliases are removed during execution, so
+	// post-execution persistent side effects must consume this snapshot instead
+	// of resolving the statement names again.
+	persistentDropTableTargets tree.TableNames
 	//isLastStmt : true denotes the last statement in the query
 	isLastStmt bool
 	// tenant name
@@ -915,6 +932,7 @@ type ExecCtx struct {
 	resper            Responser
 	results           []ExecResult
 	prepareColDef     [][]byte
+	returning         *returningState
 	isIssue3482       bool
 	// remapDb is the effective database remap (role/session/inline merged) for
 	// this statement. It is applied at the AST level to qualified references by
@@ -939,11 +957,16 @@ func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
 }
 
 func (execCtx *ExecCtx) Close() {
+	if execCtx.returning != nil {
+		_ = execCtx.returning.Close(execCtx)
+		execCtx.returning = nil
+	}
 	execCtx.reqCtx = nil
 	execCtx.prepareStmt = nil
 	execCtx.runResult = nil
 	execCtx.rootSQLOverride = nil
 	execCtx.stmt = nil
+	execCtx.persistentDropTableTargets = nil
 	execCtx.tenant = ""
 	execCtx.userName = ""
 	execCtx.sqlOfStmt = ""
@@ -1029,7 +1052,10 @@ type feSessionImpl struct {
 	// reserved because the connection is still in use in proxy's connection cache.
 	// Default is false, means that the network connection should be closed.
 	reserveConn bool
-	service     string
+	// userLevelLocksMigrated is set after proxy restores this connection on
+	// another CN. The old backend session must not release the migrated locks.
+	userLevelLocksMigrated bool
+	service                string
 
 	//fromRealUser distinguish the sql that the user inputs from the one
 	//that the internal or background program executes
@@ -1342,7 +1368,9 @@ func (ses *feSessionImpl) GetResultBatches() []*batch.Batch {
 }
 
 func (ses *feSessionImpl) AppendResultBatch(bat *batch.Batch) error {
-	copied, err := bat.Dup(ses.pool)
+	// Result batches belong to the session and can remain reachable after the
+	// producing statement has sealed its allocation account.
+	copied, err := bat.DupWithoutAllocationAccount(ses.pool)
 	if err != nil {
 		return err
 	}
@@ -1467,8 +1495,10 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {
 	name = strings.ToLower(name)
 	oldMatrixOneNative := false
+	oldOnlyFullGroupBy := false
 	if name == "sql_mode" {
 		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
+		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
 	}
 
 	def, ok := gSysVarsDefs[name]
@@ -1519,7 +1549,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars.Set(name, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeCaches(oldMatrixOneNative, val)
+		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, val)
 	}
 
 	// Update rewriteEnabled cache when enable_remap_hint is changed
@@ -1780,6 +1810,16 @@ type MysqlPayloadWriter interface {
 // BinaryWriter write batch into fileservice
 type BinaryWriter interface {
 	MediaWriter
+}
+
+// StagedBinaryWriter keeps query-result data invisible until Publish writes
+// the metadata marker. DML RETURNING stages before database commit and
+// publishes only after commit succeeds.
+type StagedBinaryWriter interface {
+	Stage(*ExecCtx, *perfcounter.CounterSet, *batch.Batch) error
+	FinishStage(*ExecCtx) error
+	Publish(*ExecCtx) error
+	Abort(*ExecCtx) error
 }
 
 // CsvWriter write batch into csv file

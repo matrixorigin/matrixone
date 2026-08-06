@@ -17,7 +17,11 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"math"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -40,6 +44,85 @@ import (
 )
 
 var snapConditionRegex = regexp.MustCompile(`\{[^}]+}`)
+
+func isDataBranchFloatType(typ types.Type) bool {
+	return typ.Oid == types.T_float32 || typ.Oid == types.T_float64
+}
+
+// dataBranchSQLKeyEqual returns the SQL predicate for Data Branch key
+// identity. MatrixOne primary keys preserve FLOAT/DOUBLE bits, so scalar
+// equality is insufficient: it collapses signed zero and cannot distinguish
+// NaN payloads. serial() is the same bit-preserving encoding used by key paths.
+func dataBranchSQLKeyEqual(left, right string, typ types.Type) string {
+	if !isDataBranchFloatType(typ) {
+		return fmt.Sprintf("%s = %s", left, right)
+	}
+	return fmt.Sprintf("serial(%s) = serial(%s)", left, right)
+}
+
+// dataBranchFloatPKIdentityAt returns the exact storage identity used to order
+// a simple FLOAT/DOUBLE primary key during hash-diff conflict matching. Scalar
+// float comparison is not a key comparison: it collapses signed zero and NaN
+// payloads. The raw IEEE bits form a deterministic total order and preserve
+// every legal stored key.
+func dataBranchFloatPKIdentityAt(vec *vector.Vector, row int) (uint64, bool, error) {
+	if vec.IsConst() {
+		row = 0
+	}
+	if vec.IsNull(uint64(row)) {
+		return 0, true, nil
+	}
+	switch vec.GetType().Oid {
+	case types.T_float32:
+		return uint64(math.Float32bits(vector.GetFixedAtNoTypeCheck[float32](vec, row))), false, nil
+	case types.T_float64:
+		return math.Float64bits(vector.GetFixedAtNoTypeCheck[float64](vec, row)), false, nil
+	default:
+		return 0, false, moerr.NewInternalErrorNoCtxf(
+			"data branch: exact float key identity requires FLOAT/DOUBLE, got %s",
+			vec.GetType().String(),
+		)
+	}
+}
+
+func compareDataBranchPrimaryKeyInVectors(
+	ctx context.Context,
+	ses *Session,
+	rowIdx1 int,
+	rowIdx2 int,
+	vec1 *vector.Vector,
+	vec2 *vector.Vector,
+) (int, error) {
+	if !vec1.GetType().Eq(*vec2.GetType()) || !isDataBranchFloatType(*vec1.GetType()) {
+		return compareSingleValInVector(ctx, ses, rowIdx1, rowIdx2, vec1, vec2)
+	}
+
+	left, leftNull, err := dataBranchFloatPKIdentityAt(vec1, rowIdx1)
+	if err != nil {
+		return 0, err
+	}
+	right, rightNull, err := dataBranchFloatPKIdentityAt(vec2, rowIdx2)
+	if err != nil {
+		return 0, err
+	}
+	if leftNull || rightNull {
+		switch {
+		case leftNull && rightNull:
+			return 0, nil
+		case leftNull:
+			return -1, nil
+		default:
+			return 1, nil
+		}
+	}
+	if left < right {
+		return -1, nil
+	}
+	if left > right {
+		return 1, nil
+	}
+	return 0, nil
+}
 
 func containsDataBranchTempTableName(sqlLower string) bool {
 	return containsTempTableMarker(sqlLower, "__mo_diff_del_") ||
@@ -360,6 +443,29 @@ func scanSnapshotRelationByID(
 	scanParallelism int,
 	onBatch func(*batch.Batch) error,
 ) error {
+	return scanSnapshotRelationByIDWithFallback(
+		ctx, caller, ses, tableID, snapshotTS, nil,
+		attrs, colTypes, filterExpr, scanParallelism, onBatch,
+	)
+}
+
+// scanSnapshotRelationByIDWithFallback prefers current-view ranges, but can
+// fall back to a relation that was already opened at snapshotTS. ALTER drops
+// replaced physical generations from the current catalog, while bounded data
+// branch operations may still need to hydrate rows from such a generation.
+func scanSnapshotRelationByIDWithFallback(
+	ctx context.Context,
+	caller string,
+	ses *Session,
+	tableID uint64,
+	snapshotTS types.TS,
+	fallbackRangeRel engine.Relation,
+	attrs []string,
+	colTypes []types.Type,
+	filterExpr *plan.Expr,
+	scanParallelism int,
+	onBatch func(*batch.Batch) error,
+) error {
 	if len(attrs) == 0 {
 		return nil
 	}
@@ -389,15 +495,26 @@ func scanSnapshotRelationByID(
 		zap.Int("scan-parallelism", scanParallelism),
 	)
 
-	_, _, rangeRel, err := storage.GetRelationById(ctx, rangeTxnOp, tableID)
-	if err != nil {
-		return err
-	}
-	if rangeRel == nil {
-		return moerr.NewInternalErrorNoCtxf(
-			"scanSnapshotRelationByID: cannot resolve range relation by id %d at snapshot %s",
-			tableID, rangeTS.ToString(),
+	_, _, rangeRel, resolveErr := storage.GetRelationById(ctx, rangeTxnOp, tableID)
+	if resolveErr != nil || rangeRel == nil {
+		if fallbackRangeRel == nil {
+			if resolveErr != nil {
+				return resolveErr
+			}
+			return moerr.NewInternalErrorNoCtxf(
+				"scanSnapshotRelationByID: cannot resolve range relation by id %d at snapshot %s",
+				tableID, rangeTS.ToString(),
+			)
+		}
+		logutil.Info(
+			"DataBranch-SnapshotScan-HistoricalRangeFallback",
+			zap.String("caller", caller),
+			zap.Uint64("table-id", tableID),
+			zap.String("snapshot-ts", snapshotTS.ToString()),
+			zap.Error(resolveErr),
 		)
+		rangeRel = fallbackRangeRel
+		rangeTS = snapshotTS
 	}
 
 	rangesParam := engine.DefaultRangesParam
@@ -478,6 +595,20 @@ func scanSnapshotRelationByID(
 }
 
 func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer) error {
+	return formatValIntoStringWithFloatCast(ses, val, t, buf, false)
+}
+
+// formatValIntoStringWithFloatCast can force finite FLOAT/DOUBLE values to
+// carry an explicit SQL type. This is needed by VALUES probes: without a cast
+// on every row, VALUES type inference can convert a NaN cell to its integer bit
+// pattern before the caller casts the resulting column back to FLOAT/DOUBLE.
+func formatValIntoStringWithFloatCast(
+	ses *Session,
+	val any,
+	t types.Type,
+	buf *bytes.Buffer,
+	castFiniteFloat bool,
+) error {
 	if val == nil {
 		buf.WriteString("NULL")
 		return nil
@@ -493,8 +624,39 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		buf.Write(strconv.AppendUint(scratch[:0], v, 10))
 	}
 
-	writeFloat := func(v float64, bitSize int) {
+	writeFloat := func(v float64, bits uint64, bitSize int, sqlType string) {
+		if math.IsNaN(v) || (v == 0 && math.Signbit(v)) {
+			var raw [8]byte
+			if bitSize == 32 {
+				binary.LittleEndian.PutUint32(raw[:4], uint32(bits))
+			} else {
+				binary.LittleEndian.PutUint64(raw[:], bits)
+			}
+			buf.WriteString("bit_cast(unhex('")
+			buf.WriteString(hex.EncodeToString(raw[:bitSize/8]))
+			buf.WriteString("')")
+			buf.WriteString(" as ")
+			buf.WriteString(sqlType)
+			buf.WriteByte(')')
+			return
+		}
+		if math.IsInf(v, 0) {
+			buf.WriteString("cast('")
+			buf.Write(strconv.AppendFloat(scratch[:0], v, 'g', -1, bitSize))
+			buf.WriteString("' as ")
+			buf.WriteString(sqlType)
+			buf.WriteByte(')')
+			return
+		}
+		if castFiniteFloat {
+			buf.WriteString("cast(")
+		}
 		buf.Write(strconv.AppendFloat(scratch[:0], v, 'g', -1, bitSize))
+		if castFiniteFloat {
+			buf.WriteString(" as ")
+			buf.WriteString(sqlType)
+			buf.WriteByte(')')
+		}
 	}
 
 	writeBool := func(v bool) {
@@ -502,8 +664,8 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 	}
 
 	switch t.Oid {
-	case types.T_varchar, types.T_text, types.T_json, types.T_char, types.
-		T_varbinary, types.T_binary, types.T_blob:
+	case types.T_varchar, types.T_text, types.T_json, types.T_char,
+		types.T_varbinary, types.T_binary, types.T_blob:
 		if t.Oid == types.T_json {
 			var strVal string
 			switch x := val.(type) {
@@ -630,9 +792,11 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 	case types.T_int64:
 		writeInt(val.(int64))
 	case types.T_float32:
-		writeFloat(float64(val.(float32)), 32)
+		v := val.(float32)
+		writeFloat(float64(v), uint64(math.Float32bits(v)), 32, "float")
 	case types.T_float64:
-		writeFloat(val.(float64), 64)
+		v := val.(float64)
+		writeFloat(v, math.Float64bits(v), 64, "double")
 	case types.T_array_float32:
 		buf.WriteString("'")
 		buf.WriteString(types.ArrayToString[float32](val.([]float32)))
@@ -685,7 +849,7 @@ func extractDataBranchSQLRowValue(
 	row []any,
 	rowIdx int,
 ) error {
-	if vec.GetNulls().Contains(uint64(rowIdx)) {
+	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIdx)) {
 		row[colIdx] = nil
 		return nil
 	}
@@ -694,6 +858,9 @@ func extractDataBranchSQLRowValue(
 	case types.T_datetime, types.T_timestamp, types.T_decimal64,
 		types.T_decimal128, types.T_decimal256, types.T_time:
 		row[colIdx] = types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
+		return nil
+	case types.T_array_uint8:
+		row[colIdx] = vector.GetArrayAt[uint8](vec, rowIdx)
 		return nil
 	default:
 		return extractRowFromVector(ctx, ses, vec, colIdx, row, rowIdx, false)
