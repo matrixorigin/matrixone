@@ -4254,6 +4254,7 @@ func controlFlowValueIndexes(name string, argsLength int) []int {
 // relevant branch keeps the overload's conservative capacity.
 func adjustControlFlowVarcharMetadata(args []*Expr, argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
 	hasString := false
+	hasNull := false
 	hasConvertible := false
 	width := int32(0)
 	for _, idx := range valueIndexes {
@@ -4266,6 +4267,7 @@ func adjustControlFlowVarcharMetadata(args []*Expr, argTypes []types.Type, value
 		// Therefore only NULL may be ignored here; an unsupported display bound
 		// must retain the overload's conservative VARCHAR capacity.
 		if controlFlowNullExpr(args[idx]) {
+			hasNull = true
 			continue
 		}
 		typ := argTypes[idx]
@@ -4295,7 +4297,7 @@ func adjustControlFlowVarcharMetadata(args []*Expr, argTypes []types.Type, value
 			width = candidate
 		}
 	}
-	if hasString && hasConvertible && width > 0 {
+	if (hasString || hasNull) && hasConvertible && width > 0 {
 		changed := returnType.Width != width
 		returnType.Width = width
 		return changed
@@ -4304,16 +4306,10 @@ func adjustControlFlowVarcharMetadata(args []*Expr, argTypes []types.Type, value
 }
 
 func controlFlowNullExpr(expr *Expr) bool {
-	for {
-		if isNullLiteralExpr(expr) {
-			return true
-		}
-		unwrapped := unwrapCast(expr)
-		if unwrapped == expr {
-			return false
-		}
-		expr = unwrapped
-	}
+	// Only a direct NULL literal is neutral for MySQL conditional-expression
+	// metadata. A cast gives NULL a declared type, so CAST(NULL AS CHAR(N))
+	// must contribute CHAR(N)'s display width.
+	return isNullLiteralExpr(expr)
 }
 
 func temporalDisplayWidthForVarchar(typ types.Type) (int32, bool) {

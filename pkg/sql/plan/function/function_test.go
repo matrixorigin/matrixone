@@ -308,8 +308,8 @@ func Test_GetFunctionByName(t *testing.T) {
 			name: "iff", args: []types.Type{types.T_bool.ToType(), types.T_any.ToType(), types.T_int64.ToType()},
 			shouldErr:  false,
 			requireFid: IFF, requireOid: 0,
-			shouldCast: true, requireTyp: []types.Type{types.T_bool.ToType(), types.T_int64.ToType(), types.T_int64.ToType()},
-			requireRet: types.T_int64.ToType(),
+			shouldCast: true, requireTyp: []types.Type{types.T_bool.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
+			requireRet: types.T_varchar.ToType(),
 		},
 		{
 			name: "elt", args: []types.Type{types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},

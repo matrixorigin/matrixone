@@ -512,3 +512,20 @@ desc v_conditional_time_varchar;
 select * from v_conditional_time_varchar;
 drop view v_conditional_time_varchar;
 drop table t_conditional_time_varchar;
+
+-- @case
+-- @desc:test typed NULL participates in conditional VARCHAR metadata while plain NULL remains neutral
+-- @label:bvt
+drop view if exists v_conditional_typed_null;
+create view v_conditional_typed_null as
+select coalesce(cast(null as char(10)), 'x', 1) as coalesce_typed_null,
+       case when false then cast(null as char(10)) when true then 'x' else 1 end as case_typed_null,
+       if(true, cast(null as char(10)), 1) as if_typed_null,
+       coalesce(null, 'x', 1) as coalesce_plain_null,
+       case when false then null when true then 'x' else 1 end as case_plain_null,
+       if(true, null, 1) as if_plain_null;
+select column_name, column_type
+from information_schema.columns
+where table_schema = database() and table_name = 'v_conditional_typed_null'
+order by ordinal_position;
+drop view v_conditional_typed_null;

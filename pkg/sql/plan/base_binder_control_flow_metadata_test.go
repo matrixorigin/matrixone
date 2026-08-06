@@ -569,6 +569,66 @@ func TestBuildControlFlowTimeVarcharMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildControlFlowTypedNullVarcharMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		sql   string
+		width int32
+	}{
+		{
+			name:  "coalesce typed null",
+			sql:   `select coalesce(cast(null as char(10)), 'x', 1)`,
+			width: 10,
+		},
+		{
+			name: "case typed null",
+			sql: `select case
+				when false then cast(null as char(10))
+				when true then 'x'
+				else 1
+			end`,
+			width: 10,
+		},
+		{
+			name:  "if typed null",
+			sql:   `select if(true, cast(null as char(10)), 1)`,
+			width: 10,
+		},
+		{
+			name:  "coalesce plain null",
+			sql:   `select coalesce(null, 'x', 1)`,
+			width: 2,
+		},
+		{
+			name: "case plain null",
+			sql: `select case
+				when false then null
+				when true then 'x'
+				else 1
+			end`,
+			width: 2,
+		},
+		{
+			name:  "if plain null",
+			sql:   `select if(true, null, 1)`,
+			width: 2,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+
+			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+			require.Len(t, projectList, 1)
+			require.Equal(t, int32(types.T_varchar), projectList[0].Typ.Id)
+			require.Equal(t, test.width, projectList[0].Typ.Width)
+		})
+	}
+}
+
 func TestBuildCaseSameFixedBinaryMetadata(t *testing.T) {
 	for _, sql := range []string{
 		`select case when true then cast('a' as binary(4)) else cast('b' as binary(4)) end`,
