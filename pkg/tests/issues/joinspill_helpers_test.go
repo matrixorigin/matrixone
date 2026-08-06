@@ -17,9 +17,8 @@ package issues
 import "github.com/matrixorigin/matrixone/pkg/tests/issues/internal/joinspill"
 
 var (
-	execJoinSpillSQL           = joinspill.ExecSQL
-	queryJoinSpillText         = joinspill.QueryText
-	patchJoinSpillStats        = joinspill.PatchStats
-	patchJoinSpillStatsWithNDV = joinspill.PatchStatsWithNDV
-	resetOptimizerHintsOnCN    = joinspill.ResetOptimizerHintsOnCN
+	execJoinSpillSQL        = joinspill.ExecSQL
+	queryJoinSpillText      = joinspill.QueryText
+	patchJoinSpillStats     = joinspill.PatchStats
+	resetOptimizerHintsOnCN = joinspill.ResetOptimizerHintsOnCN
 )
