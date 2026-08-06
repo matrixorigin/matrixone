@@ -1568,7 +1568,7 @@ func doRpad(src string, tgtLen int64, pad string) (string, bool) {
 }
 
 func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	propagateBinaryStringResult(parameters[:1], result)
+	binaryInput := isBinaryStringVector(parameters[0])
 	// repeat the string n times.
 	repeatNTimes := func(base string, n int64) (r string, null bool) {
 		if n <= 0 {
@@ -1607,6 +1607,9 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		if err != nil {
 			return err
 		}
+	}
+	if binaryInput {
+		result.GetResultVector().SetIsBinaryString(true)
 	}
 	return nil
 }
@@ -3816,10 +3819,13 @@ func isUTF8Charset(charset []byte) bool {
 
 func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if isBinaryStringVector(parameters[0]) {
-		result.GetResultVector().SetIsBinaryString(true)
-		return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
+		err := opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 			return v
 		}, selectList)
+		if err == nil {
+			result.GetResultVector().SetIsBinaryString(true)
+		}
+		return err
 	}
 	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 		return bytes.ToUpper(v)
@@ -3828,10 +3834,13 @@ func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWra
 
 func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if isBinaryStringVector(parameters[0]) {
-		result.GetResultVector().SetIsBinaryString(true)
-		return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
+		err := opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 			return v
 		}, selectList)
+		if err == nil {
+			result.GetResultVector().SetIsBinaryString(true)
+		}
+		return err
 	}
 	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 		return bytes.ToLower(v)

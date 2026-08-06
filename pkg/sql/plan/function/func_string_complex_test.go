@@ -126,14 +126,15 @@ func Test_BuiltInConcat(t *testing.T) {
 	}
 }
 
-func TestBinaryStringFunctionsUseStaticResultType(t *testing.T) {
+func TestBinaryStringFunctionsPreserveDynamicSemantics(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	mp := proc.Mp()
 	binary := testutil.MakeVarlenaVector(
-		[][]byte{[]byte("AB"), {0xe4, 0xbd, 0xa0}}, nil, types.T_varbinary.ToType(), mp)
+		[][]byte{[]byte("AB"), {0xe4, 0xbd, 0xa0}}, nil, types.T_varchar.ToType(), mp)
+	binary.SetIsBinaryString(true)
 	defer binary.Free(mp)
 
-	lowerResult := vector.NewFunctionResultWrapper(types.T_varbinary.ToType(), mp)
+	lowerResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
 	defer lowerResult.Free()
 	require.NoError(t, lowerResult.PreExtendAndReset(binary.Length()))
 	require.NoError(t, builtInToLower([]*vector.Vector{binary}, lowerResult, proc, binary.Length(), nil))
@@ -146,7 +147,7 @@ func TestBinaryStringFunctionsUseStaticResultType(t *testing.T) {
 	lens := testutil.MakeInt64Vector([]int64{1, 1}, nil, mp)
 	defer starts.Free(mp)
 	defer lens.Free(mp)
-	substringResult := vector.NewFunctionResultWrapper(types.T_varbinary.ToType(), mp)
+	substringResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
 	defer substringResult.Free()
 	require.NoError(t, substringResult.PreExtendAndReset(binary.Length()))
 	require.NoError(t, SubStringWith3Args(
@@ -155,6 +156,16 @@ func TestBinaryStringFunctionsUseStaticResultType(t *testing.T) {
 	require.True(t, substringResult.GetResultVector().GetIsBinaryString())
 	require.Equal(t, []string{"B", string([]byte{0xbd})},
 		vector.InefficientMustStrCol(substringResult.GetResultVector()))
+
+	repeatCounts := testutil.MakeInt64Vector([]int64{2, 2}, nil, mp)
+	defer repeatCounts.Free(mp)
+	repeatResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer repeatResult.Free()
+	require.NoError(t, repeatResult.PreExtendAndReset(binary.Length()))
+	require.NoError(t, builtInRepeat(
+		[]*vector.Vector{binary, repeatCounts}, repeatResult, proc, binary.Length(), nil))
+	require.False(t, repeatResult.GetResultVector().GetIsBin())
+	require.True(t, repeatResult.GetResultVector().GetIsBinaryString())
 }
 
 // Test_ConcatWs tests CONCAT_WS function (concat with separator)

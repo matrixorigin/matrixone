@@ -122,7 +122,7 @@ SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
 FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'binary_literal_ctas' AND COLUMN_NAME = 'x';
 DATA_TYPE	CHARACTER_MAXIMUM_LENGTH
-VARBINARY	3
+varbinary	3
 SELECT CHAR_LENGTH(x) FROM binary_literal_ctas;
 CHAR_LENGTH(x)
 3
@@ -153,13 +153,13 @@ WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'binary_literal_nested_ctas'
 AND COLUMN_NAME != '__mo_fake_pk_col'
 ORDER BY ORDINAL_POSITION;
 COLUMN_NAME	DATA_TYPE	CHARACTER_MAXIMUM_LENGTH
-concat_value	VARBINARY	7
-substr_value	VARBINARY	3
-lower_value	VARBINARY	3
-repeat_value	VARBINARY	6
-if_value	VARBINARY	8
-case_value	VARBINARY	8
-coalesce_value	VARBINARY	3
+concat_value	varbinary	7
+substr_value	varbinary	3
+lower_value	varbinary	3
+repeat_value	varbinary	6
+if_value	varbinary	8
+case_value	varbinary	8
+coalesce_value	varbinary	3
 SELECT CHAR_LENGTH(concat_value), CHAR_LENGTH(substr_value), CHAR_LENGTH(lower_value),
 CHAR_LENGTH(repeat_value), CHAR_LENGTH(if_value), CHAR_LENGTH(case_value),
 CHAR_LENGTH(coalesce_value)

@@ -2728,6 +2728,28 @@ func Test_strToUnsigned_BinaryIntroducedHexText(t *testing.T) {
 	})
 }
 
+func TestImplicitStringCastPreservesDynamicBinarySemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	input := testutil.MakeVarlenaVector(
+		[][]byte{{0xe4, 0xbd, 0xa0}}, nil, types.T_text.ToType(), mp)
+	input.SetIsBinaryString(true)
+	target := vector.NewConstNull(types.T_varchar.ToType(), 1, mp)
+	defer input.Free(mp)
+	defer target.Free(mp)
+
+	run := func(t *testing.T, castFn func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error, wantBinary bool) {
+		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, castFn([]*vector.Vector{input, target}, result, proc, 1, nil))
+		require.Equal(t, wantBinary, result.GetResultVector().GetIsBinaryString())
+	}
+
+	t.Run("implicit cast", func(t *testing.T) { run(t, NewCast, true) })
+	t.Run("explicit cast", func(t *testing.T) { run(t, NewExplicitCast, false) })
+}
+
 func contains(slice []uint64, item uint64) bool {
 	for _, s := range slice {
 		if s == item {

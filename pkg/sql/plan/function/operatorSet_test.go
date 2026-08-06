@@ -1550,6 +1550,27 @@ func Test_CaseFn_VarBinaryExecution(t *testing.T) {
 	require.True(t, succeed, tc.info, info)
 }
 
+func TestStrCaseFnPreservesDynamicBinarySemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	condition := newVectorByType(mp, types.T_bool.ToType(), []bool{true, false}, nil)
+	binaryBranch := newVectorByType(mp, types.T_varchar.ToType(), []string{"a", "a"}, nil)
+	binaryBranch.SetIsBinaryString(true)
+	textBranch := newVectorByType(mp, types.T_varchar.ToType(), []string{"bc", "bc"}, nil)
+	defer condition.Free(mp)
+	defer binaryBranch.Free(mp)
+	defer textBranch.Free(mp)
+
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(2))
+	require.NoError(t, strCaseFn(
+		[]*vector.Vector{condition, binaryBranch, textBranch}, result, proc, 2, nil))
+	require.False(t, result.GetResultVector().GetIsBin())
+	require.True(t, result.GetResultVector().GetIsBinaryString())
+	require.Equal(t, []string{"a", "bc"}, vector.InefficientMustStrCol(result.GetResultVector()))
+}
+
 func Test_IffFn_Decimal256Execution(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	d1, err := types.ParseDecimal256("123456789012345678901234567890123456789", 76, 0)

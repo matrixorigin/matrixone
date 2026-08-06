@@ -6024,9 +6024,6 @@ func strcmp(s1, s2 string) (int8, error) {
 
 func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	binaryInput := isBinaryStringVector(ivecs[0])
-	if binaryInput {
-		result.GetResultVector().SetIsBinaryString(true)
-	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -6056,6 +6053,9 @@ func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 				return err
 			}
 		}
+	}
+	if binaryInput {
+		result.GetResultVector().SetIsBinaryString(true)
 	}
 	return nil
 }
@@ -6132,9 +6132,6 @@ func getSliceFromRightWithLength(s string, offset int64, length int64) string {
 
 func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	binaryInput := isBinaryStringVector(ivecs[0])
-	if binaryInput {
-		result.GetResultVector().SetIsBinaryString(true)
-	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -6166,6 +6163,9 @@ func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 				return err
 			}
 		}
+	}
+	if binaryInput {
+		result.GetResultVector().SetIsBinaryString(true)
 	}
 	return nil
 }

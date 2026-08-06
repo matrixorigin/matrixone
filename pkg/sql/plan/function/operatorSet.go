@@ -499,6 +499,13 @@ func generalCaseFn[T constraints.Integer | constraints.Float | bool | types.Date
 
 func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	// case Xn then Yn else Z
+	binaryResult := false
+	for i := 1; i < len(vecs); i += 2 {
+		binaryResult = binaryResult || isBinaryStringVector(vecs[i])
+	}
+	if len(vecs)%2 == 1 {
+		binaryResult = binaryResult || isBinaryStringVector(vecs[len(vecs)-1])
+	}
 	xs := make([]vector.FunctionParameterWrapper[bool], 0, len(vecs)/2)
 	ys := make([]vector.FunctionParameterWrapper[types.Varlena], 0, len(vecs)/2)
 
@@ -549,6 +556,9 @@ func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 				}
 			}
 		}
+	}
+	if binaryResult {
+		result.GetResultVector().SetIsBinaryString(true)
 	}
 	return nil
 }
