@@ -37,6 +37,7 @@ const (
 	Label_Scan_Columns              = "Scan columns"
 	Label_List_Expression           = "List of expressions"
 	Label_Grouping_Keys             = "Grouping keys"
+	Label_Grouping_Hash_Keys        = "Grouping hash keys"
 	Label_Agg_Functions             = "Aggregate functions"
 	Label_Filter_Conditions         = "Filter conditions"
 	Label_Block_Filter_Conditions   = "Block Filter conditions"
