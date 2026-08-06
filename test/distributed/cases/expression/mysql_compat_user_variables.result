@@ -12,6 +12,16 @@ select 7, 'ok', null into @out_number, @out_text, @out_null;
 select @out_number, @out_text, @out_null is null;
 ➤ @out_number[12,0,0]  ¦  @out_text[12,0,0]  ¦  @out_null is null[-7,1,0]  𝄀
 7  ¦  ok  ¦  1
+set @a = 1, @b = 2;
+select @a + @b;
+➤ @a + @b[8,53,31]  𝄀
+3.0
+prepare ps_count from 'select ? + ? as sum_val';
+set @c1 = 1, @c2 = 2;
+execute ps_count using @c1, @c2;
+➤ sum_val[8,53,31]  𝄀
+3.0
+deallocate prepare ps_count;
 drop database if exists mysql_compat_user_variables;
 create database mysql_compat_user_variables;
 use mysql_compat_user_variables;

@@ -370,7 +370,7 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 
 func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	typ := types.T_text.ToType()
-	return &Expr{
+	variable := &Expr{
 		Typ: makePlan2Type(&typ),
 		Expr: &plan.Expr_V{
 			V: &plan.VarRef{
@@ -379,7 +379,11 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 				Global: astExpr.Global,
 			},
 		},
-	}, nil
+	}
+	if !astExpr.System && b.numericParamType != nil {
+		return appendCastBeforeExpr(b.GetContext(), variable, *b.numericParamType)
+	}
+	return variable, nil
 }
 
 const (
@@ -847,7 +851,7 @@ func isNumericBinaryOp(op tree.BinaryOp) bool {
 
 func isNumericContextNode(astExpr tree.Expr) bool {
 	switch expr := astExpr.(type) {
-	case *tree.ParamExpr, *tree.NumVal, *tree.ParenExpr, *tree.CastExpr:
+	case *tree.ParamExpr, *tree.VarExpr, *tree.NumVal, *tree.ParenExpr, *tree.CastExpr:
 		return true
 	case *tree.BinaryExpr:
 		return isNumericBinaryOp(expr.Op)
@@ -927,15 +931,14 @@ func (b *baseBinder) bindNumericExprWithContextMode(
 	if b.numericParamType != nil {
 		return b.impl.BindExpr(astExpr, depth, false)
 	}
-	if b.builder == nil || !b.builder.isPrepareStatement {
-		return b.bindNumericExprWithoutNewContext(astExpr, depth)
-	}
-
 	scan, err := b.numericAstTypesWithHint(astExpr, depth, outer)
-	if err != nil || !scan.hasParam || scan.incompatible {
+	if err != nil || (!scan.hasParam && !scan.hasVar) || scan.incompatible {
 		if err != nil {
 			return nil, err
 		}
+		return b.bindNumericExprWithoutNewContext(astExpr, depth)
+	}
+	if scan.hasParam && (b.builder == nil || !b.builder.isPrepareStatement) {
 		return b.bindNumericExprWithoutNewContext(astExpr, depth)
 	}
 
@@ -976,6 +979,7 @@ type numericAstTypeScan struct {
 	strong       []Type
 	weakDecimals []Type
 	hasParam     bool
+	hasVar       bool
 	hasUnknown   bool
 	incompatible bool
 }
@@ -984,6 +988,7 @@ func (s numericAstTypeScan) merge(other numericAstTypeScan) numericAstTypeScan {
 	s.strong = append(s.strong, other.strong...)
 	s.weakDecimals = append(s.weakDecimals, other.weakDecimals...)
 	s.hasParam = s.hasParam || other.hasParam
+	s.hasVar = s.hasVar || other.hasVar
 	s.hasUnknown = s.hasUnknown || other.hasUnknown
 	s.incompatible = s.incompatible || other.incompatible
 	return s
@@ -1043,6 +1048,11 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 	switch expr := astExpr.(type) {
 	case *tree.ParamExpr:
 		return numericAstTypeScan{hasParam: true}, nil
+	case *tree.VarExpr:
+		if expr.System {
+			return numericAstTypeScan{hasUnknown: true}, nil
+		}
+		return numericAstTypeScan{hasVar: true}, nil
 	case *tree.Subquery:
 		if expr.Exists {
 			return numericAstTypeScan{}, nil
@@ -1120,6 +1130,7 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 						return numericAstTypeScan{}, scanErr
 					}
 					scan.hasParam = scan.hasParam || argScan.hasParam
+					scan.hasVar = scan.hasVar || argScan.hasVar
 				}
 				return scan, nil
 			}
@@ -1130,6 +1141,7 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 					return numericAstTypeScan{}, scanErr
 				}
 				scan.hasParam = scan.hasParam || argScan.hasParam
+				scan.hasVar = scan.hasVar || argScan.hasVar
 			}
 			return scan, nil
 		}

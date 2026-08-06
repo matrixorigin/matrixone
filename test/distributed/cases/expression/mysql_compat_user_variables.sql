@@ -10,6 +10,18 @@ select @out, @OUT;
 select 7, 'ok', null into @out_number, @out_text, @out_null;
 select @out_number, @out_text, @out_null is null;
 
+-- User variables participate in numeric arithmetic like MySQL, even when
+-- multiple variables are assigned by the same SET statement.
+set @a = 1, @b = 2;
+select @a + @b;
+
+-- Prepared arithmetic parameters supplied through user variables use the
+-- prepared statement's numeric context instead of TEXT+TEXT overload lookup.
+prepare ps_count from 'select ? + ? as sum_val';
+set @c1 = 1, @c2 = 2;
+execute ps_count using @c1, @c2;
+deallocate prepare ps_count;
+
 drop database if exists mysql_compat_user_variables;
 create database mysql_compat_user_variables;
 use mysql_compat_user_variables;
