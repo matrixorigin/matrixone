@@ -414,12 +414,17 @@ func TestWaitingReplacementFallsBackAfterConcurrentSharedLock(t *testing.T) {
 
 					txnA := []byte("replacement-mode-a")
 					txnB := []byte("replacement-mode-b")
+					txnC := []byte("replacement-mode-c")
 					exclusive := newTestRowExclusiveOptions()
 					if tt.forward {
 						exclusive.ForwardTo = owner.serviceID
 					}
 					_, err = origin.Lock(
 						ctx, table, newTestRows(1, 2, 3), txnA, exclusive)
+					require.NoError(t, err)
+					_, err = owner.Lock(
+						ctx, table, newTestRows(6), txnC,
+						newTestRowExclusiveOptions())
 					require.NoError(t, err)
 					_, err = owner.Lock(
 						ctx, table, newTestRows(5), txnB,
@@ -429,7 +434,7 @@ func TestWaitingReplacementFallsBackAfterConcurrentSharedLock(t *testing.T) {
 					replacementDone := make(chan error, 1)
 					go func() {
 						_, lockErr := origin.Lock(
-							ctx, table, newTestRows(5, 6), txnA, exclusive)
+							ctx, table, newTestRows(6), txnA, exclusive)
 						replacementDone <- lockErr
 					}()
 					waitWaiters(t, owner, table, newTestRows(5)[0], 1)
@@ -442,6 +447,8 @@ func TestWaitingReplacementFallsBackAfterConcurrentSharedLock(t *testing.T) {
 					require.NoError(t, err)
 
 					require.NoError(t, owner.Unlock(ctx, txnB, timestamp.Timestamp{}))
+					waitWaiters(t, owner, table, newTestRows(6)[0], 1)
+					require.NoError(t, owner.Unlock(ctx, txnC, timestamp.Timestamp{}))
 					select {
 					case lockErr := <-replacementDone:
 						require.NoError(t, lockErr)
@@ -451,7 +458,7 @@ func TestWaitingReplacementFallsBackAfterConcurrentSharedLock(t *testing.T) {
 
 					lt := owner.tableGroups.get(0, table).(*localLockTable)
 					lt.mu.RLock()
-					for row := byte(1); row <= 6; row++ {
+					for _, row := range []byte{1, 2, 3, 4, 6} {
 						lock, ok := lt.mu.store.Get(newTestRows(row)[0])
 						require.True(t, ok, "missing exact row %d", row)
 						require.True(t, lock.isLockRow(),
@@ -460,7 +467,18 @@ func TestWaitingReplacementFallsBackAfterConcurrentSharedLock(t *testing.T) {
 							require.Equal(t, pb.LockMode_Shared, lock.GetLockMode())
 						}
 					}
+					_, gapExists := lt.mu.store.Get(newTestRows(5)[0])
+					ownerLocalWaits := len(lt.mu.ownerLocalWaits)
 					lt.mu.RUnlock()
+					require.False(t, gapExists,
+						"coarsened gap retained a stale waiter after exact fallback")
+					require.Zero(t, ownerLocalWaits,
+						"exact fallback retained an owner-local wait edge")
+					lt.events.mu.Lock()
+					blockedWaiters := len(lt.events.mu.blockedWaiters)
+					lt.events.mu.Unlock()
+					require.Zero(t, blockedWaiters,
+						"exact fallback remained in the waiter event checker")
 
 					bookkeepingServices := []*service{owner}
 					if !tt.forward && origin != owner {
@@ -472,8 +490,11 @@ func TestWaitingReplacementFallsBackAfterConcurrentSharedLock(t *testing.T) {
 						require.NotNil(t, txn)
 						txn.RLock()
 						keys := txn.lockHolders[0].tableKeys[table].slice()
+						txnBlockedWaiters := len(txn.blockedWaiters)
 						txn.RUnlock()
-						require.Equal(t, 6, keys.len())
+						require.Zero(t, txnBlockedWaiters,
+							"exact fallback retained transaction blocked state")
+						require.Equal(t, 5, keys.len())
 						keys.unref()
 					}
 
@@ -485,6 +506,16 @@ func TestWaitingReplacementFallsBackAfterConcurrentSharedLock(t *testing.T) {
 						"concurrent Shared ownership was strengthened to Exclusive")
 					require.NoError(t, owner.Unlock(ctx, probeTxn, timestamp.Timestamp{}))
 
+					gapProbeTxn := []byte("replacement-gap-probe")
+					gapProbe := newTestRowExclusiveOptions()
+					gapProbe.Policy = pb.WaitPolicy_FastFail
+					_, err = owner.Lock(
+						ctx, table, newTestRows(5), gapProbeTxn, gapProbe)
+					require.NoError(t, err,
+						"range waiter remained on a gap outside the exact request")
+					require.NoError(t, owner.Unlock(
+						ctx, gapProbeTxn, timestamp.Timestamp{}))
+
 					unlockA := origin
 					if tt.forward {
 						unlockA = owner
@@ -492,7 +523,7 @@ func TestWaitingReplacementFallsBackAfterConcurrentSharedLock(t *testing.T) {
 					require.NoError(t, unlockA.Unlock(ctx, txnA, timestamp.Timestamp{}))
 				},
 				func(c *Config) {
-					c.MaxLockRowCount = 4
+					c.MaxLockRowCount = 3
 					c.MaxFixedSliceSize = 8
 				},
 			)

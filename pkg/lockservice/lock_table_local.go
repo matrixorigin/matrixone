@@ -567,6 +567,18 @@ func (l *localLockTable) doAcquireLock(c *lockContext) error {
 		if len(c.opts.originalRows) == 0 {
 			panic("BUG: invalidated coarsening is missing its original request")
 		}
+		// The range request may have slept on a key that is only inside the
+		// coarsened gap. Retire that wait generation before changing the request
+		// representation; a successful exact-row retry would otherwise leave the
+		// ready waiter at the head of the old range queue forever. Keep the
+		// caller's waiter reference in c.w so a conflicting row retry can reuse
+		// it, but detach the remaining containers owned by the completed range
+		// wait. doLock has already removed the event-checker reference before
+		// reacquiring the transaction mutex.
+		if c.w != nil {
+			c.txn.clearBlocked(c.w, l.logger)
+			l.closeRangeWaiterLocked(c, c.w, true)
+		}
 		// Another call for this transaction made the table non-coarsenable
 		// while this request slept. Retry the caller's exact logical request
 		// under the same table/transaction locks; the staged range merge has
