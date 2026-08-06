@@ -243,9 +243,6 @@ func (l *localLockTable) doLock(
 		if !c.result.HasPrevCommit {
 			c.result.HasPrevCommit = !v.ts.IsEmpty()
 		}
-		if c.opts.TableDefChanged {
-			c.opts.TableDefChanged = v.defChanged
-		}
 		blocked = false
 	}
 }
@@ -405,6 +402,12 @@ func (l *localLockTable) unlock(
 			if lock.isLockTableDefChanged() {
 				tableDefChanged = true
 			}
+			if commitTS.IsEmpty() && lock.isLockTableDefChanged() {
+				// Keep the lock object for its waiters, but end the aborted holder
+				// generation before notifying them. This also makes cancellation of
+				// the first waiter hand the correct (non-DDL) state to the next one.
+				lock = l.setTableDefChangedLocked(key, lock, false)
+			}
 
 			lockCanRemoved := lock.closeTxn(
 				txn,
@@ -435,6 +438,29 @@ func (l *localLockTable) unlock(
 		changedAt := commitTS
 		l.mu.tableDefChangedAt = &changedAt
 	}
+}
+
+// setTableDefChangedLocked updates the stored definition bit and, for range
+// locks, its paired endpoint. The returned value is the copy stored at key.
+func (l *localLockTable) setTableDefChangedLocked(
+	key []byte,
+	lock Lock,
+	value bool,
+) Lock {
+	updated, changed := lock.setTableDefChanged(value)
+	if !changed {
+		return lock
+	}
+	l.mu.store.Add(key, updated)
+	if updated.isLockRow() {
+		return updated
+	}
+	pairedKey, pairedLock, ok := l.findPairedRangeLock(key, updated)
+	if ok {
+		pairedLock, _ = pairedLock.setTableDefChanged(value)
+		l.mu.store.Add(pairedKey, pairedLock)
+	}
+	return updated
 }
 
 func (l *localLockTable) getLock(
@@ -574,18 +600,10 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 					l.removeOwnerLocalWaitEdgeLocked(c.w)
 					c.w = nil
 				}
-				// only new holder can added lock into txn.
-				// newHolder is false means prev op of txn has already added lock into txn
+				l.setHolderPropertiesLocked(key, lock, c, newHolder)
+				// only new holder can add the lock into txn. newHolder=false
+				// means a previous operation of this txn already added it.
 				if newHolder {
-					if updated, changed := lock.setMode(c.opts.Mode); changed {
-						l.mu.store.Add(key, updated)
-						// Range lock is stored as two entries (start + end) with
-						// independent Lock.value bytes. When we update the mode on
-						// one end we must also update the paired entry so that
-						// subsequent isLockModeAllowed checks on either key see the
-						// correct mode.
-						l.setModePairedRangeLock(key, updated, c.opts.Mode)
-					}
 					c.result.NewLockAdd = true
 				}
 				continue
@@ -610,7 +628,7 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 
 	c.offset = 0
 	c.lockedTS = l.mu.tableCommittedAt
-	c.result.TableDefChangedAt = l.mu.tableDefChangedAt
+	l.setTableDefChangedAtLocked(c)
 	return nil
 }
 
@@ -643,8 +661,22 @@ func (l *localLockTable) acquireRangeLockLocked(c *lockContext) error {
 	}
 	c.offset = 0
 	c.lockedTS = l.mu.tableCommittedAt
-	c.result.TableDefChangedAt = l.mu.tableDefChangedAt
+	l.setTableDefChangedAtLocked(c)
 	return nil
+}
+
+// setTableDefChangedAtLocked only sends the retained fence to transactions
+// that could have resolved a plan before it committed. SnapShotTs is the
+// transaction creation timestamp; it is a conservative lower bound for every
+// statement snapshot in that transaction. Fresh transactions therefore keep
+// the ordinary remote lock response allocation- and wire-free, while older
+// transactions still receive the marker for the precise statement-snapshot
+// check on CN.
+func (l *localLockTable) setTableDefChangedAtLocked(c *lockContext) {
+	changedAt := l.mu.tableDefChangedAt
+	if changedAt != nil && c.opts.SnapShotTs.Less(*changedAt) {
+		c.result.TableDefChangedAt = changedAt
+	}
 }
 
 func (l *localLockTable) addRowLockLocked(
@@ -845,6 +877,7 @@ func (l *localLockTable) addRangeLockLocked(
 			if c.w != nil {
 				c.w = nil
 			}
+			l.setHolderPropertiesLocked(start, l1, c, newHolder)
 			if newHolder {
 				c.result.NewLockAdd = true
 			}
@@ -932,16 +965,10 @@ func (l *localLockTable) addRangeLockLocked(
 					c.w = nil
 				}
 
-				// only new holder can added lock into txn.
-				// newHolder is false means prev op of txn has already added lock into txn
+				l.setHolderPropertiesLocked(conflictKey, conflictWith, c, newHolder)
+				// only new holder can add the lock into txn. newHolder=false
+				// means a previous operation of this txn already added it.
 				if newHolder {
-					if updated, changed := conflictWith.setMode(c.opts.Mode); changed {
-						l.mu.store.Add(conflictKey, updated)
-						// Range lock is stored as two entries (start + end) with
-						// independent Lock.value bytes. Update the paired entry
-						// so both ends reflect the correct mode.
-						l.setModePairedRangeLock(conflictKey, updated, c.opts.Mode)
-					}
 					c.result.NewLockAdd = true
 				}
 				conflictWith = Lock{}
@@ -1000,6 +1027,50 @@ func (l *localLockTable) addRangeLockLocked(
 	}
 
 	return nil, Lock{}, nil
+}
+
+// setHolderPropertiesLocked applies properties owned by the new/current
+// holder to the stored Lock value. Mode and definition intent are replaced on
+// holder transfer; a re-entrant holder can only promote its own definition
+// intent from false to true. Range endpoints carry independent value bytes, so
+// both entries are updated together.
+func (l *localLockTable) setHolderPropertiesLocked(
+	key []byte,
+	lock Lock,
+	c *lockContext,
+	newHolder bool,
+) {
+	updated := lock
+	changed := false
+	if newHolder {
+		var modeChanged bool
+		updated, modeChanged = updated.setMode(c.opts.Mode)
+		changed = changed || modeChanged
+	}
+	if newHolder || c.opts.TableDefChanged {
+		var definitionChanged bool
+		updated, definitionChanged = updated.setTableDefChanged(c.opts.TableDefChanged)
+		changed = changed || definitionChanged
+	}
+	if !changed {
+		return
+	}
+
+	l.mu.store.Add(key, updated)
+	if updated.isLockRow() {
+		return
+	}
+	pairedKey, pairedLock, ok := l.findPairedRangeLock(key, updated)
+	if !ok {
+		return
+	}
+	if newHolder {
+		pairedLock, _ = pairedLock.setMode(c.opts.Mode)
+	}
+	if newHolder || c.opts.TableDefChanged {
+		pairedLock, _ = pairedLock.setTableDefChanged(c.opts.TableDefChanged)
+	}
+	l.mu.store.Add(pairedKey, pairedLock)
 }
 
 func (l *localLockTable) mergeRangeLocked(

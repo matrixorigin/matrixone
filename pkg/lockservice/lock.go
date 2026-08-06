@@ -123,6 +123,22 @@ func (l Lock) setMode(mode pb.LockMode) (Lock, bool) {
 	return l, false
 }
 
+// setTableDefChanged records whether the current holder generation changes the
+// table definition. A re-entrant holder can promote false to true; when
+// ownership transfers, the caller replaces the predecessor's value with the
+// successor's own intent after the predecessor notification has been emitted.
+func (l Lock) setTableDefChanged(value bool) (Lock, bool) {
+	if l.isLockTableDefChanged() == value {
+		return l, false
+	}
+	if value {
+		l.value |= flagLockTableDefChanged
+	} else {
+		l.value &^= flagLockTableDefChanged
+	}
+	return l, true
+}
+
 func (l Lock) isEmpty() bool {
 	return l.holders.size() == 0 &&
 		(l.waiters == nil || l.waiters.size() == 0)
@@ -207,7 +223,10 @@ func (l Lock) closeTxn(
 		return false
 	}
 
-	notify.defChanged = l.isLockTableDefChanged()
+	// TableDefChanged describes a visible predecessor generation. An aborted
+	// holder still releases the lock, but must not make its uncommitted DDL
+	// observable to the successor.
+	notify.defChanged = !notify.ts.IsEmpty() && l.isLockTableDefChanged()
 
 	if l.isLockRow() {
 		// notify first waiter, skip completed waiters

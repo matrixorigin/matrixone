@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -128,24 +129,48 @@ func TestHandleCommitStaleTableGenerationRequestsDefinitionRetry(t *testing.T) {
 
 	insertBatch := catalog.MockBatch(schema, 1)
 	defer insertBatch.Close()
-	entry, err := makePBEntry(INSERT, databaseID, oldTableID,
+	insertEntry, err := makePBEntry(INSERT, databaseID, oldTableID,
 		testutil.DefaultTestDB, schema.Name, "", containers.ToCNBatch(insertBatch))
 	require.NoError(t, err)
-	payload, err := (&api.PrecommitWriteCmd{EntryList: []*api.Entry{entry}}).MarshalBinary()
-	require.NoError(t, err)
-	commitReq := &txnpb.TxnCommitRequest{Payload: []*txnpb.TxnRequest{{
-		CNRequest: &txnpb.CNOpRequest{
-			OpCode:  uint32(api.OpCode_OpPreCommit),
-			Payload: payload,
-		},
-	}}}
 
-	for _, mode := range []txnpb.TxnMode{txnpb.TxnMode_Optimistic, txnpb.TxnMode_Pessimistic} {
-		t.Run(mode.String(), func(t *testing.T) {
-			meta := mock1PCTxn(h.db)
-			meta.Mode = mode
-			_, commitErr := h.HandleCommit(ctx, meta, nil, commitReq)
-			require.True(t, moerr.IsMoErrCode(commitErr, moerr.ErrTxnNeedRetryWithDefChanged), commitErr)
+	softDeleteBatch := batch.NewWithSize(1)
+	softDeleteBatch.SetAttributes([]string{"object_id"})
+	softDeleteBatch.Vecs[0] = vector.NewVec(types.T_binary.ToType())
+	objectID := types.NewObjectid()
+	require.NoError(t, vector.AppendBytes(softDeleteBatch.Vecs[0], objectID[:], false, h.m))
+	softDeleteBatch.SetRowCount(1)
+	defer softDeleteBatch.Clean(h.m)
+	softDeleteEntry, err := makePBEntry(DELETE, databaseID, oldTableID,
+		testutil.DefaultTestDB, schema.Name, softDeleteObjectPrefix+"false", softDeleteBatch)
+	require.NoError(t, err)
+
+	for _, entryCase := range []struct {
+		name  string
+		entry *api.Entry
+	}{
+		{name: "insert", entry: insertEntry},
+		{name: "soft-delete-object", entry: softDeleteEntry},
+	} {
+		t.Run(entryCase.name, func(t *testing.T) {
+			payload, err := (&api.PrecommitWriteCmd{EntryList: []*api.Entry{entryCase.entry}}).MarshalBinary()
+			require.NoError(t, err)
+			commitReq := &txnpb.TxnCommitRequest{Payload: []*txnpb.TxnRequest{{
+				CNRequest: &txnpb.CNOpRequest{
+					OpCode:  uint32(api.OpCode_OpPreCommit),
+					Payload: payload,
+				},
+			}}}
+
+			for _, mode := range []txnpb.TxnMode{txnpb.TxnMode_Optimistic, txnpb.TxnMode_Pessimistic} {
+				t.Run(mode.String(), func(t *testing.T) {
+					meta := mock1PCTxn(h.db)
+					meta.Mode = mode
+					_, commitErr := h.HandleCommit(ctx, meta, nil, commitReq)
+					require.True(t,
+						moerr.IsMoErrCode(commitErr, moerr.ErrTxnNeedRetryWithDefChanged),
+						commitErr)
+				})
+			}
 		})
 	}
 }

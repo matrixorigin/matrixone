@@ -1141,6 +1141,21 @@ func TestTableDefChangedAtRetainedAfterUnlock(t *testing.T) {
 					// A later ordinary commit cannot erase the DDL fence.
 					require.NoError(t, service.Unlock(ctx, []byte{4}, timestamp.Timestamp{PhysicalTime: 4}))
 
+					// A transaction created at or after the DDL cannot have resolved a
+					// pre-DDL plan. Omit the marker so its remote response stays free of
+					// the optional timestamp and the corresponding decode allocation.
+					freshOptions := options
+					freshOptions.SnapShotTs = changedAt
+					result, err = service.Lock(ctx, tableID, tc.rows, []byte("fresh"), freshOptions)
+					require.NoError(t, err)
+					require.Nil(t, result.TableDefChangedAt)
+					freshEncoded, err := result.Marshal()
+					require.NoError(t, err)
+					decoded = pb.Result{}
+					require.NoError(t, decoded.Unmarshal(freshEncoded))
+					require.Nil(t, decoded.TableDefChangedAt)
+					require.NoError(t, service.Unlock(ctx, []byte("fresh"), timestamp.Timestamp{}))
+
 					result, err = service.Lock(ctx, tableID, tc.rows, []byte{5}, options)
 					require.NoError(t, err)
 					require.Equal(t, changedAt, *result.TableDefChangedAt)
@@ -1167,6 +1182,157 @@ func TestTableDefChangedAtRetainedAfterUnlock(t *testing.T) {
 					require.Equal(t, changedAt, *retainedMarker)
 					require.NotSame(t, retainedMarker, result.TableDefChangedAt)
 					require.NoError(t, service.Unlock(ctx, []byte{9}, timestamp.Timestamp{}))
+				},
+			)
+		})
+	}
+}
+
+func TestTableDefChangedIntentSurvivesLockWait(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		granularity pb.Granularity
+		rows        [][]byte
+	}{
+		{name: "row", granularity: pb.Granularity_Row, rows: [][]byte{{1}}},
+		{name: "range", granularity: pb.Granularity_Range, rows: [][]byte{{1}, {2}}},
+	} {
+		for _, commitDDL := range []bool{false, true} {
+			outcome := "abort"
+			if commitDDL {
+				outcome = "commit"
+			}
+			t.Run(tc.name+"/"+outcome, func(t *testing.T) {
+				runLockServiceTests(
+					t,
+					[]string{"s1"},
+					func(_ *lockTableAllocator, services []*service) {
+						service := services[0]
+						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						defer cancel()
+
+						const tableID = uint64(10)
+						ordinaryOptions := pb.LockOptions{
+							Granularity: tc.granularity,
+							Mode:        pb.LockMode_Exclusive,
+							Policy:      pb.WaitPolicy_Wait,
+							SnapShotTs:  timestamp.Timestamp{PhysicalTime: 1},
+						}
+						definitionOptions := ordinaryOptions
+						definitionOptions.TableDefChanged = true
+
+						holderTxn := []byte("ordinary-holder")
+						_, err := service.Lock(ctx, tableID, tc.rows, holderTxn, ordinaryOptions)
+						require.NoError(t, err)
+
+						ddlTxn := []byte("definition-waiter")
+						ddlResultC := make(chan pb.Result, 1)
+						ddlErrC := make(chan error, 1)
+						go func() {
+							result, lockErr := service.Lock(ctx, tableID, tc.rows, ddlTxn, definitionOptions)
+							ddlResultC <- result
+							ddlErrC <- lockErr
+						}()
+						waitWaiters(t, service, tableID, tc.rows[0], 1)
+
+						// The predecessor is ordinary DML, so its notification reports no
+						// definition change. That fact must not clear the waiter's own DDL intent.
+						require.NoError(t, service.Unlock(ctx, holderTxn,
+							timestamp.Timestamp{PhysicalTime: 2}))
+						require.NoError(t, <-ddlErrC)
+						ddlResult := <-ddlResultC
+						require.False(t, ddlResult.TableDefChanged)
+
+						// Queue an ordinary successor while DDL owns the same lock. On
+						// promotion it observes the predecessor notification, but the stored
+						// lock must start a new holder generation with ordinary intent.
+						successorTxn := []byte("ordinary-successor")
+						type lockResult struct {
+							result pb.Result
+							err    error
+						}
+						successorC := make(chan lockResult, 1)
+						go func() {
+							result, lockErr := service.Lock(ctx, tableID, tc.rows, successorTxn, ordinaryOptions)
+							successorC <- lockResult{result: result, err: lockErr}
+						}()
+						waitWaiters(t, service, tableID, tc.rows[0], 1)
+
+						ddlCommitTS := timestamp.Timestamp{}
+						if commitDDL {
+							ddlCommitTS = timestamp.Timestamp{PhysicalTime: 3}
+						}
+						require.NoError(t, service.Unlock(ctx, ddlTxn, ddlCommitTS))
+						successor := <-successorC
+						require.NoError(t, successor.err)
+						require.Equal(t, commitDDL, successor.result.TableDefChanged)
+						if commitDDL {
+							// A real CN retries this transaction after a committed DDL.
+							require.NoError(t, service.Unlock(ctx, successorTxn, timestamp.Timestamp{}))
+						} else {
+							// An aborted DDL is not visible, so the successor can commit. Its
+							// ordinary commit must not manufacture a definition fence.
+							require.NoError(t, service.Unlock(ctx, successorTxn,
+								timestamp.Timestamp{PhysicalTime: 4}))
+						}
+
+						result, err := service.Lock(ctx, tableID, tc.rows, []byte("late-dml"), ordinaryOptions)
+						require.NoError(t, err)
+						if commitDDL {
+							require.NotNil(t, result.TableDefChangedAt)
+							require.Equal(t, ddlCommitTS, *result.TableDefChangedAt)
+						} else {
+							require.Nil(t, result.TableDefChangedAt)
+						}
+						require.NoError(t, service.Unlock(ctx, []byte("late-dml"), timestamp.Timestamp{}))
+					},
+				)
+			})
+		}
+	}
+}
+
+func TestTableDefChangedIntentAppliedOnReentrantLock(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		granularity pb.Granularity
+		rows        [][]byte
+	}{
+		{name: "row", granularity: pb.Granularity_Row, rows: [][]byte{{1}}},
+		{name: "range", granularity: pb.Granularity_Range, rows: [][]byte{{1}, {2}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runLockServiceTests(
+				t,
+				[]string{"s1"},
+				func(_ *lockTableAllocator, services []*service) {
+					service := services[0]
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+
+					const tableID = uint64(10)
+					options := pb.LockOptions{
+						Granularity: tc.granularity,
+						Mode:        pb.LockMode_Exclusive,
+						Policy:      pb.WaitPolicy_Wait,
+						SnapShotTs:  timestamp.Timestamp{PhysicalTime: 1},
+					}
+					txnID := []byte("same-txn")
+					_, err := service.Lock(ctx, tableID, tc.rows, txnID, options)
+					require.NoError(t, err)
+
+					definitionOptions := options
+					definitionOptions.TableDefChanged = true
+					_, err = service.Lock(ctx, tableID, tc.rows, txnID, definitionOptions)
+					require.NoError(t, err)
+					changedAt := timestamp.Timestamp{PhysicalTime: 2}
+					require.NoError(t, service.Unlock(ctx, txnID, changedAt))
+
+					result, err := service.Lock(ctx, tableID, tc.rows, []byte("late-dml"), options)
+					require.NoError(t, err)
+					require.NotNil(t, result.TableDefChangedAt)
+					require.Equal(t, changedAt, *result.TableDefChangedAt)
+					require.NoError(t, service.Unlock(ctx, []byte("late-dml"), timestamp.Timestamp{}))
 				},
 			)
 		})
