@@ -105,6 +105,149 @@ func TestJSONBinaryEqualityUsesSubtypeAndRawPayload(t *testing.T) {
 	run(t, lessThanFn, bit, rawBlob, true)
 }
 
+func TestVecF32EqualityDoesNotDependOnVarlenaStorage(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	negativeZero := float32(math.Copysign(0, -1))
+	nan := math.Float32frombits(0x7fc00001)
+
+	tests := []struct {
+		name  string
+		left  []float32
+		right []float32
+		want  bool
+	}{
+		{name: "inline signed zero", left: []float32{1, 0, 3}, right: []float32{1, negativeZero, 3}, want: true},
+		{name: "area signed zero", left: []float32{1, 2, 3, 0, 5, 6, 7, 8}, right: []float32{1, 2, 3, negativeZero, 5, 6, 7, 8}, want: true},
+		{name: "inline different", left: []float32{1, 0, 3}, right: []float32{1, 2, 3}, want: false},
+		{name: "inline nan self", left: []float32{1, nan, 3}, right: []float32{1, nan, 3}, want: false},
+		{name: "inline nan versus number", left: []float32{1, nan, 3}, right: []float32{1, 2, 3}, want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{test.left}, []bool{false}),
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{test.right}, []bool{false}),
+			}
+			for _, fn := range []struct {
+				name string
+				eval fEvalFn
+				want bool
+			}{
+				{name: "equal", eval: equalFn, want: test.want},
+				{name: "null-safe-equal", eval: nullSafeEqualFn, want: test.want},
+				{name: "not-equal", eval: notEqualFn, want: !test.want},
+			} {
+				t.Run(fn.name, func(t *testing.T) {
+					expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{fn.want}, []bool{false})
+					testCase := NewFunctionTestCase(proc, inputs, expect, fn.eval)
+					ok, info := testCase.Run()
+					require.True(t, ok, info)
+				})
+			}
+		})
+	}
+}
+
+func TestVecF64EqualityDoesNotDependOnVarlenaStorage(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	negativeZero := math.Copysign(0, -1)
+	nan := math.Float64frombits(0x7ff8000000000001)
+
+	tests := []struct {
+		name  string
+		left  []float64
+		right []float64
+		want  bool
+	}{
+		{name: "inline signed zero", left: []float64{1, 0}, right: []float64{1, negativeZero}, want: true},
+		{name: "area signed zero", left: []float64{1, 2, 0, 4}, right: []float64{1, 2, negativeZero, 4}, want: true},
+		{name: "inline different", left: []float64{1, 0}, right: []float64{1, 2}, want: false},
+		{name: "inline nan self", left: []float64{1, nan}, right: []float64{1, nan}, want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{test.left}, []bool{false}),
+				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{test.right}, []bool{false}),
+			}
+			for _, fn := range []struct {
+				name string
+				eval fEvalFn
+				want bool
+			}{
+				{name: "equal", eval: equalFn, want: test.want},
+				{name: "null-safe-equal", eval: nullSafeEqualFn, want: test.want},
+				{name: "not-equal", eval: notEqualFn, want: !test.want},
+			} {
+				t.Run(fn.name, func(t *testing.T) {
+					expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{fn.want}, []bool{false})
+					testCase := NewFunctionTestCase(proc, inputs, expect, fn.eval)
+					ok, info := testCase.Run()
+					require.True(t, ok, info)
+				})
+			}
+		})
+	}
+}
+
+func TestNarrowFloatArrayEqualityUsesElementSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	negativeZero := float32(math.Copysign(0, -1))
+	nan := math.Float32frombits(0x7fc00001)
+
+	run := func(t *testing.T, inputs []FunctionTestInput, want bool) {
+		t.Helper()
+		for _, fn := range []struct {
+			name string
+			eval fEvalFn
+			want bool
+		}{
+			{name: "equal", eval: equalFn, want: want},
+			{name: "null-safe-equal", eval: nullSafeEqualFn, want: want},
+			{name: "not-equal", eval: notEqualFn, want: !want},
+		} {
+			t.Run(fn.name, func(t *testing.T) {
+				expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{fn.want}, []bool{false})
+				testCase := NewFunctionTestCase(proc, inputs, expect, fn.eval)
+				ok, info := testCase.Run()
+				require.True(t, ok, info)
+			})
+		}
+	}
+
+	t.Run("bf16 signed zero", func(t *testing.T) {
+		run(t, []FunctionTestInput{
+			NewFunctionTestInput(types.T_array_bf16.ToType(), [][]types.BF16{types.Float32ToBF16Slice([]float32{1, 0})}, []bool{false}),
+			NewFunctionTestInput(types.T_array_bf16.ToType(), [][]types.BF16{types.Float32ToBF16Slice([]float32{1, negativeZero})}, []bool{false}),
+		}, true)
+	})
+	t.Run("bf16 nan", func(t *testing.T) {
+		value := types.Float32ToBF16Slice([]float32{1, nan})
+		run(t, []FunctionTestInput{
+			NewFunctionTestInput(types.T_array_bf16.ToType(), [][]types.BF16{value}, []bool{false}),
+			NewFunctionTestInput(types.T_array_bf16.ToType(), [][]types.BF16{value}, []bool{false}),
+		}, false)
+	})
+	t.Run("float16 signed zero", func(t *testing.T) {
+		run(t, []FunctionTestInput{
+			NewFunctionTestInput(types.T_array_float16.ToType(), [][]types.Float16{types.Float32ToFloat16Slice([]float32{1, 0})}, []bool{false}),
+			NewFunctionTestInput(types.T_array_float16.ToType(), [][]types.Float16{types.Float32ToFloat16Slice([]float32{1, negativeZero})}, []bool{false}),
+		}, true)
+	})
+	t.Run("float16 nan", func(t *testing.T) {
+		value := types.Float32ToFloat16Slice([]float32{1, nan})
+		run(t, []FunctionTestInput{
+			NewFunctionTestInput(types.T_array_float16.ToType(), [][]types.Float16{value}, []bool{false}),
+			NewFunctionTestInput(types.T_array_float16.ToType(), [][]types.Float16{value}, []bool{false}),
+		}, false)
+	})
+}
+
 func TestOperatorOpBitAndUint64Fn(t *testing.T) {
 	// 1 & 2 = 0
 	// max uint64 & 2 = 2
