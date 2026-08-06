@@ -881,6 +881,62 @@ func (expr *FunctionExpressionExecutor) EvalCoalesce(proc *process.Process, batc
 	return nil
 }
 
+// EvalLogicalShortCircuit evaluates multi-argument AND/OR expressions one
+// argument at a time. Rows whose result is already determined are masked from
+// later arguments, while NULL rows remain active because a later FALSE/TRUE
+// can still determine an AND/OR result respectively.
+func (expr *FunctionExpressionExecutor) EvalLogicalShortCircuit(
+	proc *process.Process,
+	batches []*batch.Batch,
+	selectList []bool,
+	isAnd bool,
+) (err error) {
+	rowCount := expressionRowCount(batches)
+	if len(expr.selectList1) < rowCount {
+		expr.selectList1 = make([]bool, rowCount)
+	}
+	remaining := expr.selectList1[:rowCount]
+	if selectList != nil {
+		for row := range remaining {
+			remaining[row] = row < len(selectList) && selectList[row]
+		}
+	} else {
+		for row := range remaining {
+			remaining[row] = true
+		}
+	}
+
+	for argument := range expr.parameterExecutor {
+		if hasSelectedRows(remaining) {
+			expr.parameterResults[argument], err = expr.parameterExecutor[argument].Eval(proc, batches, remaining)
+			if err != nil {
+				return err
+			}
+		} else {
+			expr.parameterResults[argument], err = expr.iffNullResult(0, rowCount)
+			if err != nil {
+				return err
+			}
+			continue
+		}
+
+		if argument == len(expr.parameterExecutor)-1 {
+			continue
+		}
+		values := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[argument])
+		for row := range remaining {
+			if !remaining[row] {
+				continue
+			}
+			value, null := values.GetValue(uint64(row))
+			if !null && value != isAnd {
+				remaining[row] = false
+			}
+		}
+	}
+	return nil
+}
+
 func noRowsSelected(selectList []bool, rowCount int) bool {
 	if selectList == nil {
 		return false
@@ -1049,6 +1105,11 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	} else if expr.fid == function.COALESCE {
 		err = expr.EvalCoalesce(proc, batches, selectList)
+		if err != nil {
+			return nil, err
+		}
+	} else if expr.fid == function.AND || expr.fid == function.OR {
+		err = expr.EvalLogicalShortCircuit(proc, batches, selectList, expr.fid == function.AND)
 		if err != nil {
 			return nil, err
 		}

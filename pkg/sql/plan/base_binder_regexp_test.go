@@ -23,6 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
 
 func regexpTestExpr(oid types.T, value string) *Expr {
@@ -108,4 +110,45 @@ func TestBindRegexpUsesMySQLBinaryCompatibilityPairs(t *testing.T) {
 	_, err = BindFuncExprImplByPlanExpr(
 		context.Background(), "regexp_replace", []*Expr{binary, binary, binary})
 	require.NoError(t, err)
+}
+
+func TestBuildRegexpStringResultKeepsBinaryMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "substr binary pattern", sql: "select regexp_substr(123, _binary '.')"},
+		{name: "replace binary pattern and replacement", sql: "select regexp_replace(123, _binary '.', _binary 0xff)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+
+			built, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+
+			query := built.GetQuery()
+			require.NotNil(t, query)
+			require.NotEmpty(t, query.Nodes)
+			require.NotEmpty(t, query.Nodes[query.Steps[0]].ProjectList)
+			require.Equal(t, int32(types.T_varbinary), query.Nodes[query.Steps[0]].ProjectList[0].Typ.Id)
+		})
+	}
+
+	for _, sql := range []string{
+		"select charset(regexp_substr(123, _binary '.'))",
+		"select charset(regexp_replace(123, _binary '.', _binary 0xff))",
+	} {
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+
+		built, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+		require.NoError(t, err)
+
+		query := built.GetQuery()
+		project := query.Nodes[query.Steps[0]].ProjectList[0]
+		require.Equal(t, "charset", project.GetF().GetFunc().GetObjName())
+		require.Len(t, project.GetF().Args, 1)
+		require.Equal(t, int32(types.T_varbinary), project.GetF().Args[0].Typ.Id)
+	}
 }

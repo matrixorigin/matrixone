@@ -10257,3 +10257,17 @@ func TestDateStringExtractorsYearZeroAndLegacyDelimiters(t *testing.T) {
 		})
 	}
 }
+
+func TestCharsetReportsBinaryOperand(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varbinary.ToType(), []string{"value"}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"binary"}, nil),
+		Charset,
+	)
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
+}

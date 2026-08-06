@@ -4879,8 +4879,18 @@ func Binary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 	return opUnaryBytesToBytes(ivecs, result, proc, length, doBinary, selectList)
 }
 
-func Charset(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func Charset(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	r := proc.GetSessionInfo().GetCharset()
+	if len(parameters) > 0 {
+		switch parameters[0].GetType().Oid {
+		case types.T_binary, types.T_varbinary, types.T_blob:
+			r = "binary"
+		default:
+			if parameters[0].GetIsBin() {
+				r = "binary"
+			}
+		}
+	}
 	return opNoneParamToBytes(result, proc, length, func() []byte {
 		return functionUtil.QuickStrToBytes(r)
 	})

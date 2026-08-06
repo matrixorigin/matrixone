@@ -206,11 +206,11 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithCast(minIndex, castType)
 }
 
-// regexpTypeMatch keeps semantic binary operands visible to the executor while
-// retaining fixedTypeMatch's ordinary numeric and string coercions. The binder
-// has already rejected binary/text charset mismatches; a surviving binary
-// operand therefore selects MySQL's byte-oriented regexp path.
-func regexpTypeMatch(operandIndexes ...int) func([]overload, []types.Type) checkResult {
+// fixedTypeMatchPreservingBinary keeps selected semantic binary operands
+// visible while retaining fixedTypeMatch's ordinary numeric and string
+// coercions. This is required by functions whose behavior or metadata depends
+// on the operand character set.
+func fixedTypeMatchPreservingBinary(operandIndexes ...int) func([]overload, []types.Type) checkResult {
 	return func(overloads []overload, inputs []types.Type) checkResult {
 		result := fixedTypeMatch(overloads, inputs)
 		if result.status != succeedWithCast {

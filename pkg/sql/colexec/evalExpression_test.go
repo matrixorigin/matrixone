@@ -70,6 +70,29 @@ func (e *failAfterFirstExpressionExecutor) Free()              { e.delegate.Free
 func (e *failAfterFirstExpressionExecutor) IsColumnExpr() bool { return false }
 func (e *failAfterFirstExpressionExecutor) TypeName() string   { return "failAfterFirst" }
 
+type selectionRecordingExpressionExecutor struct {
+	delegate   ExpressionExecutor
+	selectList []bool
+}
+
+func (e *selectionRecordingExpressionExecutor) Eval(
+	proc *process.Process, batches []*batch.Batch, selectList []bool,
+) (*vector.Vector, error) {
+	e.selectList = append(e.selectList[:0], selectList...)
+	return e.delegate.Eval(proc, batches, selectList)
+}
+
+func (e *selectionRecordingExpressionExecutor) EvalWithoutResultReusing(
+	proc *process.Process, batches []*batch.Batch, selectList []bool,
+) (*vector.Vector, error) {
+	return e.Eval(proc, batches, selectList)
+}
+
+func (e *selectionRecordingExpressionExecutor) ResetForNextQuery() { e.delegate.ResetForNextQuery() }
+func (e *selectionRecordingExpressionExecutor) Free()              { e.delegate.Free() }
+func (e *selectionRecordingExpressionExecutor) IsColumnExpr() bool { return false }
+func (e *selectionRecordingExpressionExecutor) TypeName() string   { return "selectionRecording" }
+
 func TestListExpressionExecutor(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -154,6 +177,38 @@ func TestEvalIffSkipsUnselectedBranch(t *testing.T) {
 	require.Zero(t, thenExecutor.calls)
 	require.Equal(t, 3, expr.parameterResults[1].Length())
 	require.True(t, expr.parameterResults[1].IsConstNull())
+}
+
+func TestEvalLogicalShortCircuitUsesThreeValuedSelection(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		isAnd    bool
+		first    []bool
+		wantMask []bool
+	}{
+		{name: "and", isAnd: true, first: []bool{false, true, false}, wantMask: []bool{false, true, true}},
+		{name: "or", isAnd: false, first: []bool{true, false, false}, wantMask: []bool{false, true, true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			bat := batch.New(nil)
+			bat.SetRowCount(3)
+
+			first := testutil.MakeBoolVector(test.first, []uint64{2}, proc.Mp())
+			second := testutil.MakeBoolVector([]bool{true, true, true}, nil, proc.Mp())
+			recorder := &selectionRecordingExpressionExecutor{
+				delegate: NewFixedVectorExpressionExecutor(proc.Mp(), false, second),
+			}
+			expr := NewFunctionExpressionExecutor()
+			require.NoError(t, expr.Init(proc, 2, types.T_bool.ToType()))
+			defer expr.Free()
+			expr.SetParameter(0, NewFixedVectorExpressionExecutor(proc.Mp(), false, first))
+			expr.SetParameter(1, recorder)
+
+			require.NoError(t, expr.EvalLogicalShortCircuit(proc, []*batch.Batch{bat}, nil, test.isAnd))
+			require.Equal(t, test.wantMask, recorder.selectList)
+		})
+	}
 }
 
 func TestEvalIffPropagatesSelectedBranchError(t *testing.T) {
