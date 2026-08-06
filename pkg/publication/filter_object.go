@@ -172,7 +172,7 @@ func filterAppendableObject(
 	defer bat.Close()
 
 	// Filter batch by snapshot TS
-	filteredBat, err := filterBatchBySnapshotTS(ctx, bat, snapshotTS, mp)
+	filteredBat, originalRowOffsets, err := filterBatchBySnapshotTS(ctx, bat, snapshotTS, mp)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to filter batch by snapshot TS: %v", err)
 	}
@@ -188,7 +188,7 @@ func filterAppendableObject(
 	// Sort batch by primary key, remove commit TS column, write to file, and record ObjectStats
 	// This is data object (not tombstone), so use SchemaData
 	// Use new object name for appendable objects (keepOriginalName=false)
-	objStats, rowOffsetMap, err := createObjectFromBatch(ctx, filteredBat, stats, snapshotTS, isTombstone, localFS, mp, sortKeySeqnum, false)
+	objStats, rowOffsetMap, err := createObjectFromBatch(ctx, filteredBat, originalRowOffsets, stats, snapshotTS, isTombstone, localFS, mp, sortKeySeqnum, false)
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to create object from batch: %v", err)
 	}

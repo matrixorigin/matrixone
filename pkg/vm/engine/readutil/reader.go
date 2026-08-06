@@ -884,7 +884,7 @@ func (r *reader) read(
 	r.readBlockCnt++
 
 	if len(r.cacheVectors) == 0 {
-		r.cacheVectors = containers.NewVectors(len(r.columns.seqnums) + 1)
+		r.cacheVectors = containers.NewVectors(len(r.columns.seqnums) + 2)
 	}
 	if r.orderByLimit != nil && !r.orderByLimit.OrderedLimit && detachedDistVec != nil {
 		// Re-attach the detached distVec so BlockDataRead can take its fast reuse branch.

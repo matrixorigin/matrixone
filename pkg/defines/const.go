@@ -46,8 +46,7 @@ const (
 	MORPCVersion8      int64 = 8  // versioned exact runtime-filter key contract
 	MORPCVersion9      int64 = 9  // AUTO_INCREMENT epoch-fenced commit
 	MORPCVersion10     int64 = 10 // persisted appendable-object abort metadata
-	MORPCVersion11     int64 = 11 // bounded Sorted64 membership-filter wire format
-	MORPCLatestVersion       = MORPCVersion11
+	MORPCLatestVersion       = MORPCVersion10
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

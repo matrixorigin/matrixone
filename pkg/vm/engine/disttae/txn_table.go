@@ -69,10 +69,9 @@ const (
 )
 
 // docfilter.MembershipFilter (producer view, with Share) must stay assignable to
-// engine.MembershipFilter (consumer view) so a reconstructed docfilter share
-// can be stored in FilterHint.BF. This compile-time assertion locks that
-// relationship from a package that imports both, since docfilter cannot import
-// engine.
+// engine.MembershipFilter (consumer view) so docfilter.New(...).Share() can be
+// stored in FilterHint.BF. This compile-time assertion locks that relationship
+// from a package that imports both, since docfilter cannot import engine.
 var _ engine.MembershipFilter = (docfilter.MembershipFilter)(nil)
 
 var traceFilterExprInterval atomic.Uint64
@@ -1165,7 +1164,7 @@ func (tbl *txnTable) rangesOnePart(
 ) (err error) {
 	var done bool
 
-	if done, err = readutil.TryFastFilterBlocksWithZone(
+	if done, err = readutil.TryFastFilterBlocks(
 		ctx,
 		tbl.db.op.SnapshotTS(),
 		tbl.tableDef,
@@ -1176,7 +1175,6 @@ func (tbl *txnTable) rangesOnePart(
 		outBlocks,
 		tbl.PrefetchAllMeta,
 		tbl.getTxn().engine.fs,
-		proc.GetSessionInfo().TimeZone,
 	); err != nil {
 		return err
 	} else if done {
@@ -1914,7 +1912,6 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		return err
 	}
 	if _, err := tbl.getTxn().writeBatchWithAutoIncrEpoch(
-		ctx,
 		INSERT,
 		"",
 		tbl.accountId,
@@ -2047,12 +2044,6 @@ func (tbl *txnTable) Delete(
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("delete operation is not allowed in snapshot transaction")
 	}
-	if ctx == nil {
-		return moerr.NewInvalidInputNoCtx("disttae table delete context is nil")
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 
 	var (
 		deletionTyp = bat.Attrs[0]
@@ -2157,12 +2148,12 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 	return nil
 }
 
-func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) error {
+func (tbl *txnTable) writeTnPartition(_ context.Context, bat *batch.Batch) error {
 	ibat, err := util.CopyBatch(bat, tbl.getTxn().proc)
 	if err != nil {
 		return err
 	}
-	if _, err := tbl.getTxn().writeBatchWithAutoIncrEpoch(ctx, DELETE, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
+	if _, err := tbl.getTxn().writeBatchWithAutoIncrEpoch(DELETE, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
 		tbl.db.databaseName, tbl.tableName, ibat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
 		ibat.Clean(tbl.getTxn().proc.Mp())
 		return err
@@ -2405,30 +2396,49 @@ func (tbl *txnTable) BuildReaders(
 	def := tbl.GetTableDef(ctx)
 	shards := relData.Split(newNum)
 
-	preparedHint, mainFilter, owned, err := prepareMembershipFilter(
-		filterHint,
-		docfilter.AdmissionForService(proc.GetService()),
-	)
-	if err != nil {
-		return nil, err
+	// Reconstruct the doc_id filter from the tagged bytes. docfilter hides which
+	// structure (cbitmap / CRoaring / bloom) backs it; we just hand each reader
+	// a share and free the builder reference at the end.
+	var mainFilter docfilter.MembershipFilter
+	if len(filterHint.MembershipFilterBytes) > 0 {
+		f, ferr := docfilter.New(filterHint.MembershipFilterBytes)
+		if ferr != nil {
+			// A non-empty payload that fails to decode must NOT be silently
+			// dropped to a nil filter (which disables filtering and lets all rows
+			// through). Fail closed so the corruption surfaces instead of
+			// returning wrong results.
+			return nil, ferr
+		}
+		mainFilter = f
 	}
-	if owned {
-		defer mainFilter.Free()
+
+	// On an error mid-loop we return nil (not rds), so the caller never gets the
+	// partially-built readers and can never Close them to drop their filter
+	// shares. Track every share we hand out and, on the error paths, free all of
+	// them plus the builder's own reference — otherwise the C filter's refcount
+	// never reaches 0 and it leaks for the process lifetime. On success the
+	// readers own their shares and drop them via reset(); we free only the
+	// builder reference.
+	var shares []docfilter.MembershipFilter
+	freeOnError := func() {
+		for _, s := range shares {
+			s.Free()
+		}
+		if mainFilter != nil {
+			mainFilter.Free()
+		}
 	}
 
 	for i := 0; i < newNum; i++ {
-		hint := preparedHint
-		var readerFilter docfilter.MembershipFilter
+		hint := filterHint
 		if mainFilter != nil {
-			readerFilter = mainFilter.Share()
-			hint.BF = readerFilter
+			sh := mainFilter.Share()
+			shares = append(shares, sh)
+			hint.BF = sh
 		}
 		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shards[i], tombstonePolicy, engine.GeneralLocalDataSource)
 		if err != nil {
-			if readerFilter != nil {
-				readerFilter.Free()
-			}
-			closeReaders(rds)
+			freeOnError()
 			return nil, err
 		}
 		rd, err := readutil.NewReader(
@@ -2444,15 +2454,16 @@ func (tbl *txnTable) BuildReaders(
 			hint,
 		)
 		if err != nil {
-			// NewReader consumes the current source and filter share on every
-			// return. Close only the readers that completed earlier iterations.
-			closeReaders(rds)
+			freeOnError()
 			return nil, err
 		}
 
 		rds = append(rds, rd)
 	}
 
+	if mainFilter != nil {
+		mainFilter.Free()
+	}
 	return rds, nil
 }
 
@@ -2607,22 +2618,42 @@ func (tbl *txnTable) getPartitionState(
 // callers should keep the original conservative behavior in that case.
 func pkCommitTSMatchedInRange(
 	commitTSVec *vector.Vector,
+	abortVec *vector.Vector,
 	sels []int64,
 	from, to types.TS,
 ) (bool, bool) {
-	if commitTSVec == nil {
+	if commitTSVec == nil ||
+		commitTSVec.GetType().Oid != types.T_TS ||
+		commitTSVec.IsConstNull() {
 		return false, false
 	}
-	rowCount := commitTSVec.Length()
-	timestamps, err := ioutil.ValidateTombstoneCommitTSColumn(rowCount, commitTSVec)
-	if err != nil {
-		return false, false
-	}
-	for _, sel := range sels {
-		if sel < 0 || int(sel) >= rowCount {
+	timestamps := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
+	var aborts []bool
+	if abortVec != nil && !abortVec.IsConstNull() {
+		if abortVec.GetType().Oid != types.T_bool {
 			return false, false
 		}
-		ts := timestamps.At(int(sel))
+		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
+		if len(aborts) != len(timestamps) {
+			return false, false
+		}
+	}
+	for _, sel := range sels {
+		if sel < 0 || int(sel) >= len(timestamps) {
+			return false, false
+		}
+		if commitTSVec.IsNull(uint64(sel)) {
+			return false, false
+		}
+		if aborts != nil {
+			if abortVec.IsNull(uint64(sel)) {
+				return false, false
+			}
+			if aborts[sel] {
+				continue
+			}
+		}
+		ts := timestamps[sel]
 		if ts.GT(&from) && ts.LE(&to) {
 			return true, true
 		}
@@ -2809,7 +2840,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		return true, nil
 	}
 
-	cacheVectors := containers.NewVectors(2)
+	cacheVectors := containers.NewVectors(3)
 	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 	pkSeq := pkDef.Seqnum
 	pkType := plan2.ExprType2Type(&pkDef.Typ)
@@ -2850,8 +2881,8 @@ func (tbl *txnTable) PKPersistedBetween(
 				var release func()
 				release, _, err = ioutil.LoadColumns(
 					ctx,
-					[]uint16{uint16(pkSeq), objectio.SEQNUM_COMMITTS},
-					[]types.Type{pkType, objectio.TSType},
+					[]uint16{uint16(pkSeq), objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+					[]types.Type{pkType, objectio.TSType, types.T_bool.ToType()},
 					fs,
 					blk.MetaLocation(),
 					cacheVectors,
@@ -2863,7 +2894,7 @@ func (tbl *txnTable) PKPersistedBetween(
 					if len(sels) == 0 {
 						matched, usable = false, true
 					} else {
-						matched, usable = pkCommitTSMatchedInRange(&cacheVectors[1], sels, from, to)
+						matched, usable = pkCommitTSMatchedInRange(&cacheVectors[1], &cacheVectors[2], sels, from, to)
 					}
 					release()
 				}
@@ -2981,29 +3012,6 @@ func tombstonePKExistsInRange(
 					mp,
 					fileservice.Policy(0),
 				)
-				if err == nil && !usable {
-					objectMeta, metaErr := objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
-					if metaErr != nil {
-						err = metaErr
-					} else if legacyCommitTS, ok := ioutil.ResolveLegacyBackupTombstoneCommitTS(
-						objectMeta.MustDataMeta().GetBlockMeta(uint32(loc.ID())),
-					); ok {
-						changed, usable, _, err = ioutil.LoadColumnDataBySearchAndCheckTS(
-							ctx,
-							objectio.TombstoneAttr_PK_SeqNum,
-							pkType,
-							fs,
-							loc,
-							cachedSearch,
-							false,
-							legacyCommitTS,
-							from,
-							to,
-							mp,
-							fileservice.Policy(0),
-						)
-					}
-				}
 				if err != nil {
 					return true, "tombstone_read_error", nil
 				}
@@ -3016,7 +3024,7 @@ func tombstonePKExistsInRange(
 				continue
 			}
 
-			vecCount := 3
+			vecCount := 4
 			if isCNCreated {
 				vecCount = 2
 			}
@@ -3032,7 +3040,7 @@ func tombstonePKExistsInRange(
 					release()
 					return true, "tombstone_cn_hit", nil
 				}
-				changed, ok := pkCommitTSMatchedInRange(&tombVectors[2], hits, from, to)
+				changed, ok := pkCommitTSMatchedInRange(&tombVectors[2], &tombVectors[3], hits, from, to)
 				release()
 				if !ok || changed {
 					if ok {

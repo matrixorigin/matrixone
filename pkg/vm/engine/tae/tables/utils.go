@@ -56,49 +56,63 @@ func LoadPersistedColumnData(
 	mp *mpool.MPool,
 	tsForAppendable *types.TS,
 	needCopy bool,
-	isTombstone bool,
 ) ([]containers.Vector, *nulls.Nulls, func(), error) {
 	cols := make([]uint16, 0, len(colIdxs))
 	typs := make([]types.Type, 0, len(colIdxs))
 	vectors := make([]containers.Vector, len(colIdxs))
-	phyAddIdx := -1
-	committsIdx := -1
-	assignedCommitts := false
+	outputPositions := make([]int, 0, len(colIdxs))
+	commitTSIdx := -1
+	abortIdx := -1
 	var deletes *nulls.Nulls
 	for i, colIdx := range colIdxs {
-		if colIdx == objectio.SEQNUM_COMMITTS {
+		switch colIdx {
+		case objectio.SEQNUM_COMMITTS:
 			cols = append(cols, objectio.SEQNUM_COMMITTS)
 			typs = append(typs, objectio.TSType)
-			committsIdx = len(cols) - 1
-			assignedCommitts = true
+			outputPositions = append(outputPositions, i)
+			commitTSIdx = len(cols) - 1
+			continue
+		case objectio.SEQNUM_ABORT:
+			cols = append(cols, objectio.SEQNUM_ABORT)
+			typs = append(typs, types.T_bool.ToType())
+			outputPositions = append(outputPositions, i)
+			abortIdx = len(cols) - 1
 			continue
 		}
 		def := schema.ColDefs[colIdx]
 		if def.IsPhyAddr() {
 			vec, err := PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
 			if err != nil {
+				for _, existing := range vectors {
+					if existing != nil {
+						existing.Close()
+					}
+				}
 				return nil, deletes, nil, err
 			}
-			phyAddIdx = i
-			vectors[phyAddIdx] = vec
+			vectors[i] = vec
 			continue
 		}
 		cols = append(cols, def.SeqNum)
 		typs = append(typs, def.Type)
+		outputPositions = append(outputPositions, i)
+	}
+	if tsForAppendable != nil {
+		if commitTSIdx == -1 {
+			cols = append(cols, objectio.SEQNUM_COMMITTS)
+			typs = append(typs, types.T_TS.ToType())
+			outputPositions = append(outputPositions, -1)
+			commitTSIdx = len(cols) - 1
+		}
+		if abortIdx == -1 {
+			cols = append(cols, objectio.SEQNUM_ABORT)
+			typs = append(typs, types.T_bool.ToType())
+			outputPositions = append(outputPositions, -1)
+			abortIdx = len(cols) - 1
+		}
 	}
 	if len(cols) == 0 {
 		return vectors, deletes, nil, nil
-	}
-	if tsForAppendable != nil {
-		if committsIdx == -1 {
-			cols = append(cols, objectio.SEQNUM_COMMITTS)
-			typs = append(typs, types.T_TS.ToType())
-			committsIdx = len(cols) - 1
-			defer func() {
-				cols = cols[:len(cols)-1]
-				typs = typs[:len(typs)-1]
-			}()
-		}
 	}
 	var vecs []containers.Vector
 	var release func()
@@ -112,122 +126,38 @@ func LoadPersistedColumnData(
 		needCopy,
 		rt.VectorPool.Transient)
 	if err != nil {
-		if phyAddIdx >= 0 && vectors[phyAddIdx] != nil {
-			vectors[phyAddIdx].Close()
+		for _, vec := range vectors {
+			if vec != nil {
+				vec.Close()
+			}
 		}
 		return nil, deletes, nil, err
 	}
-	cleanupLoaded := func(closePhysicalAddr bool) {
-		for _, vec := range vecs {
-			vec.Close()
-		}
-		if release != nil {
-			release()
-			release = nil
-		}
-		vecs = nil
-		if closePhysicalAddr && phyAddIdx >= 0 && vectors[phyAddIdx] != nil {
-			vectors[phyAddIdx].Close()
-			vectors[phyAddIdx] = nil
-		}
-	}
-	var validatedTombstoneCommitTS ioutil.TombstoneCommitTSColumn
-	if isTombstone && committsIdx >= 0 {
-		// The legacy physical-column mapping is intentionally gated by catalog
-		// tombstone identity: an ordinary three-column object can have the same
-		// physical metadata signature.
-		validatedTombstoneCommitTS, err = ioutil.ValidateTombstoneCommitTSColumn(
-			int(location.Rows()),
-			vecs[committsIdx].GetDownstreamVector(),
-		)
-		if err != nil && vecs[committsIdx].IsConstNull() {
-			objectMeta, metaErr := objectio.FastLoadObjectMeta(ctx, &location, false, rt.Fs)
-			if metaErr != nil {
-				cleanupLoaded(true)
-				return nil, deletes, nil, metaErr
-			}
-			blockMeta := objectMeta.MustDataMeta().GetBlockMeta(uint32(location.ID()))
-			if legacyCommitTS, ok := ioutil.ResolveLegacyBackupTombstoneCommitTS(blockMeta); ok {
-				cleanupLoaded(false)
-				cols[committsIdx] = legacyCommitTS
-				vecs, release, err = ioutil.LoadColumns2(
-					ctx, cols,
-					typs,
-					rt.Fs,
-					location,
-					fileservice.GetFileServicePolicy(ctx),
-					needCopy,
-					rt.VectorPool.Transient,
-				)
-				if err != nil {
-					if phyAddIdx >= 0 && vectors[phyAddIdx] != nil {
-						vectors[phyAddIdx].Close()
-					}
-					return nil, deletes, nil, err
-				}
-				validatedTombstoneCommitTS, err = ioutil.ValidateTombstoneCommitTSColumn(
-					int(location.Rows()),
-					vecs[committsIdx].GetDownstreamVector(),
-				)
-			} else if isCNCreatedTombstoneBlock(blockMeta) {
-				// CN-created tombstones persist only rowid and primary key. Their
-				// per-object CreatedAt is the logical commit timestamp, so keep
-				// the synthesized const-null vector for the caller to replace.
-				err = nil
-			}
-		}
-		if err != nil {
-			cleanupLoaded(true)
-			return nil, deletes, nil, err
-		}
-	}
 	if tsForAppendable != nil {
-		if validatedTombstoneCommitTS.IsPresent() {
-			for i := range int(location.Rows()) {
-				commitTS := validatedTombstoneCommitTS.At(i)
-				if commitTS.GT(tsForAppendable) {
-					if deletes == nil {
-						deletes = nulls.NewWithSize(int(location.Rows()))
-					}
-					deletes.Add(uint64(i))
-				}
-			}
-		} else {
-			commits := vector.MustFixedColNoTypeCheck[types.TS](vecs[committsIdx].GetDownstreamVector())
-			for i := range commits {
-				if !commits[i].GT(tsForAppendable) {
-					continue
-				}
+		commits := vector.MustFixedColNoTypeCheck[types.TS](vecs[commitTSIdx].GetDownstreamVector())
+		abortVec := vecs[abortIdx]
+		var aborts []bool
+		if !abortVec.IsConstNull() {
+			aborts = vector.MustFixedColNoTypeCheck[bool](abortVec.GetDownstreamVector())
+		}
+		for i := range commits {
+			if commits[i].GT(tsForAppendable) || (aborts != nil && aborts[i]) {
 				if deletes == nil {
 					deletes = nulls.NewWithSize(int(location.Rows()))
 				}
 				deletes.Add(uint64(i))
 			}
 		}
-		if !assignedCommitts {
-			vecs[committsIdx].Close()
-			vecs = vecs[:len(vecs)-1]
-		}
 	}
 	for i, vec := range vecs {
-		idx := i
-		if idx >= phyAddIdx && phyAddIdx > -1 {
-			idx++
+		outputPos := outputPositions[i]
+		if outputPos == -1 {
+			vec.Close()
+			continue
 		}
-		vectors[idx] = vec
+		vectors[outputPos] = vec
 	}
 	return vectors, deletes, release, nil
-}
-
-func isCNCreatedTombstoneBlock(block objectio.BlockObject) bool {
-	// Preserve the established two-column [rowid, pk] layout whose logical
-	// commit timestamp is the containing object's CreatedAt.
-	return !block.BlockHeader().Appendable() &&
-		block.GetColumnCount() == uint16(len(objectio.TombstoneSeqnums_CN_Created)) &&
-		block.GetMetaColumnCount() == uint16(len(objectio.TombstoneSeqnums_CN_Created)) &&
-		block.GetMaxSeqnum() == objectio.TombstoneAttr_PK_SeqNum &&
-		block.ColumnMeta(objectio.TombstoneAttr_Rowid_SeqNum).DataType() == uint8(types.T_Rowid) &&
-		block.ColumnMeta(objectio.TombstoneAttr_PK_SeqNum).DataType() != uint8(types.T_any)
 }
 
 func MakeImmuIndex(

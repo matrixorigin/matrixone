@@ -105,12 +105,12 @@ func readColumnsData(
 	readColumns := columns
 	readTypes := typs
 	if extraTSColumn != nil {
-		readColumns = make([]uint16, len(columns), len(columns)+1)
+		readColumns = make([]uint16, len(columns), len(columns)+2)
 		copy(readColumns, columns)
-		readColumns = append(readColumns, *extraTSColumn)
-		readTypes = make([]types.Type, len(typs), len(typs)+1)
+		readColumns = append(readColumns, *extraTSColumn, objectio.SEQNUM_ABORT)
+		readTypes = make([]types.Type, len(typs), len(typs)+2)
 		copy(readTypes, typs)
-		readTypes = append(readTypes, objectio.TSType)
+		readTypes = append(readTypes, objectio.TSType, types.T_bool.ToType())
 	}
 
 	name := location.Name().UnsafeString()
@@ -231,6 +231,19 @@ func LoadColumnsDataInto(
 			err = moerr.NewInvalidInputNoCtx("object commit-ts column is unavailable")
 			return
 		}
+		var aborts vector.Vector
+		if err = objectio.MustVectorToCached(
+			&aborts,
+			ioVectors.Entries[len(columns)+1].CachedData,
+		); err != nil {
+			return
+		}
+		defer aborts.Free(nil)
+		hasAborts := !aborts.IsConstNull()
+		if hasAborts && (aborts.GetType().Oid != types.T_bool || aborts.Length() != commits.Length()) {
+			err = moerr.NewInvalidInputNoCtx("object abort column is unavailable")
+			return
+		}
 
 		deleteMask = objectio.GetReusableBitmap()
 		for i := 0; i < commits.Length(); i++ {
@@ -238,8 +251,13 @@ func LoadColumnsDataInto(
 				err = moerr.NewInvalidInputNoCtxf("object commit-ts row %d is null", i)
 				return
 			}
+			if hasAborts && aborts.IsNull(uint64(i)) {
+				err = moerr.NewInvalidInputNoCtxf("object abort row %d is null", i)
+				return
+			}
 			commit := vector.GetFixedAtNoTypeCheck[types.TS](&commits, i)
-			if commit.GT(visibilityTS) {
+			if commit.GT(visibilityTS) ||
+				(hasAborts && vector.GetFixedAtNoTypeCheck[bool](&aborts, i)) {
 				deleteMask.Add(uint64(i))
 			}
 		}
@@ -314,8 +332,9 @@ func LoadColumnDataBySearch(
 		return nil, false, err
 	}
 	if visibilityTS != nil {
-		sels, err = objectio.FilterCachedRowsByCommitTS(
+		sels, err = objectio.FilterCachedRowsByCommitTSAndAbort(
 			ioVectors.Entries[1].CachedData,
+			ioVectors.Entries[2].CachedData,
 			sels,
 			*visibilityTS,
 		)
@@ -388,11 +407,11 @@ func LoadColumnDataBySearchAndCheckTS(
 	}
 	ioVectors, fromCache, err := readColumnsData(
 		ctx,
-		[]uint16{column},
-		[]types.Type{typ},
+		[]uint16{column, commitTSColumn, objectio.SEQNUM_ABORT},
+		[]types.Type{typ, objectio.TSType, types.T_bool.ToType()},
 		fs,
 		location,
-		&commitTSColumn,
+		nil,
 		m,
 		policy,
 	)
@@ -412,8 +431,9 @@ func LoadColumnDataBySearchAndCheckTS(
 	if len(sels) == 0 {
 		return false, true, fromCache, nil
 	}
-	matched, usable, err = objectio.AnyCachedTSInRange(
+	matched, usable, err = objectio.AnyCachedTSInRangeWithAbort(
 		ioVectors.Entries[1].CachedData,
+		ioVectors.Entries[2].CachedData,
 		sels,
 		from,
 		to,
@@ -545,22 +565,42 @@ func LoadOneBlock(
 	key objectio.Location,
 	metaType objectio.DataMetaType,
 ) (*batch.Batch, uint16, error) {
+	bat, sortKey, _, err := LoadOneBlockWithSpecialLayout(ctx, fs, key, metaType)
+	return bat, sortKey, err
+}
+
+// LoadOneBlockWithSpecialLayout returns the physical special-column layout
+// alongside the loaded batch. Callers that expose logical rows must use this
+// metadata to remove storage-only columns without guessing from vector types or
+// the physical column count.
+func LoadOneBlockWithSpecialLayout(
+	ctx context.Context,
+	fs fileservice.FileService,
+	key objectio.Location,
+	metaType objectio.DataMetaType,
+) (*batch.Batch, uint16, objectio.SpecialColumnLayout, error) {
 	sortKey := uint16(math.MaxUint16)
+	layout := objectio.SpecialColumnLayout{
+		PhysicalAddr: objectio.InvalidSpecialColumnPosition,
+		CommitTS:     objectio.InvalidSpecialColumnPosition,
+		Abort:        objectio.InvalidSpecialColumnPosition,
+	}
 	meta, err := objectio.FastLoadObjectMeta(ctx, &key, false, fs)
 	if err != nil {
-		return nil, sortKey, err
+		return nil, sortKey, layout, err
 	}
 	data := meta.MustGetMeta(metaType)
 	if data.BlockHeader().Appendable() {
 		sortKey = data.BlockHeader().SortKey()
 	}
+	layout = objectio.ResolveSpecialColumnLayout(data.GetBlockMeta(uint32(key.ID())))
 	idxes := make([]uint16, data.BlockHeader().ColumnCount())
 	for i := range idxes {
 		idxes[i] = uint16(i)
 	}
 	bat, err := objectio.ReadOneBlockAllColumns(ctx, &data, key.Name().String(),
 		uint32(key.ID()), idxes, fileservice.SkipAllCache, fs)
-	return bat, sortKey, err
+	return bat, sortKey, layout, err
 }
 
 func LoadOneBlockWithIndex(
