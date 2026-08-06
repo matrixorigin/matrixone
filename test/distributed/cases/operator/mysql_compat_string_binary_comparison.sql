@@ -74,6 +74,29 @@ select regexp_instr('abc', 'a', 1, -1, 0, 'c') as instr_negative_occurrence,
        regexp_substr('abc', 'a', 1, 0, 'c') as substr_zero_occurrence,
        regexp_replace('abcabc', 'a', 'X', 1, -1, 'c') as replace_negative_occurrence;
 select regexp_replace('abc123', '([a-z]+)([0-9]+)', '$2-$1', 1, 0, 'c') as capture_replace;
+select _binary 'a' regexp _binary 'a' as binary_binary_regexp,
+       null regexp _binary 'a' as null_binary_regexp,
+       1 regexp _binary '1' as numeric_binary_regexp;
+select cast(null as binary) regexp 'a';
+select regexp_replace(_binary 'abc', _binary 'a', _binary 'X') as all_binary_replace;
+select regexp_like('a\r', '\r', 'm') as literal_cr_match,
+       regexp_like('\r', '.', 'c') as dot_does_not_match_cr;
+select regexp_instr('a\r\nb', '^$', 1, 1, 0, 'm') as no_empty_line_inside_crlf,
+       regexp_instr('a\r\nb', '$', 1, 2, 0, 'm') as second_multiline_end,
+       regexp_instr('a\rb', '(?m)^b', 1, 1, 0, 'c') as inline_multiline;
+select regexp_instr('abc', '^b', 2, 1, 0, 'c') as instr_resets_subject,
+       regexp_substr('abc', '^b', 2, 1, 'c') as substr_keeps_subject_anchor,
+       regexp_replace('abc', '^b', 'X', 2, 0, 'c') as replace_keeps_subject_anchor;
+select regexp_replace('abc123', '([a-z]+)([0-9]+)', '$10', 1, 0, 'c') as capture_one_then_zero,
+       regexp_replace('abc123', '([a-z]+)([0-9]+)', '$1x', 1, 0, 'c') as capture_one_then_literal;
+select regexp_replace('a', '(a)', '$2');
+select regexp_replace('a', '(a)', '${1}');
+select regexp_replace('a', '(a)', '$$');
+select regexp_substr('', '');
+select regexp_replace('', '', 'X');
+select regexp_substr('a', '', 2, 1, 'c');
+select regexp_instr(null, '', 1, 1, 0, 'c');
+select regexp_replace(null, 'a', 'X', 1, 0, 'x');
 
 set @regexp_match_type = binary 'i';
 prepare regexp_match_type_stmt from 'select regexp_instr(''Cat'', ''cat'', 1, 1, 0, ?)';

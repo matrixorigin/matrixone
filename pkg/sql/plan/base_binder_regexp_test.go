@@ -78,3 +78,34 @@ func TestBindRegexpAllowsParamsAndBinaryNull(t *testing.T) {
 	_, err = BindFuncExprImplByPlanExpr(context.Background(), "regexp_like", []*Expr{binaryNull, text})
 	require.NoError(t, err)
 }
+
+func TestBindRegexpUsesMySQLBinaryCompatibilityPairs(t *testing.T) {
+	text := regexpTestExpr(types.T_varchar, "a")
+	binary := regexpTestExpr(types.T_binary, "a")
+	number := regexpTestExpr(types.T_int64, "1")
+	typedBinaryNull := &Expr{
+		Typ: planpb.Type{Id: int32(types.T_binary)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "cast"},
+			Args: []*planpb.Expr{{
+				Typ:  planpb.Type{Id: int32(types.T_any)},
+				Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}},
+			}},
+		}},
+	}
+
+	for _, args := range [][]*Expr{{binary, binary}, {number, binary}} {
+		_, err := BindFuncExprImplByPlanExpr(context.Background(), "regexp_like", args)
+		require.NoError(t, err)
+	}
+
+	_, err := BindFuncExprImplByPlanExpr(context.Background(), "regexp_like", []*Expr{typedBinaryNull, text})
+	require.Error(t, err)
+	var moErr *moerr.Error
+	require.ErrorAs(t, err, &moErr)
+	require.Equal(t, uint16(moerr.ER_CHARACTER_SET_MISMATCH), moErr.MySQLCode())
+
+	_, err = BindFuncExprImplByPlanExpr(
+		context.Background(), "regexp_replace", []*Expr{binary, binary, binary})
+	require.NoError(t, err)
+}

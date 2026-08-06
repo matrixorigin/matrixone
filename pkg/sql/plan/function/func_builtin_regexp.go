@@ -22,6 +22,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/dlclark/regexp2"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -46,7 +47,8 @@ type opBuiltInRegexp struct {
 func newOpBuiltInRegexp() *opBuiltInRegexp {
 	return &opBuiltInRegexp{
 		regMap: regexpSet{
-			mp: make(map[string]*regexp.Regexp, mapSizeForRegexp),
+			mp:      make(map[string]*regexp.Regexp, mapSizeForRegexp),
+			mysqlMp: make(map[string]*regexp2.Regexp, mapSizeForRegexp),
 		},
 	}
 }
@@ -384,6 +386,11 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			if null1 || null2 {
+				if !null2 {
+					if err := op.regMap.validateMySQLRegexp(functionUtil.QuickBytesToStr(v2), "c", "regexp_substr"); err != nil {
+						return err
+					}
+				}
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -406,6 +413,11 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 			v2, null2 := p2.GetStrValue(i)
 			pos, null3 := positions.GetValue(i)
 			if null1 || null2 || null3 {
+				if !null2 {
+					if err := op.regMap.validateMySQLRegexp(functionUtil.QuickBytesToStr(v2), "c", "regexp_substr"); err != nil {
+						return err
+					}
+				}
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -430,6 +442,11 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 			pos, null3 := positions.GetValue(i)
 			ocur, null4 := occurrences.GetValue(i)
 			if null1 || null2 || null3 || null4 {
+				if !null2 {
+					if err := op.regMap.validateMySQLRegexp(functionUtil.QuickBytesToStr(v2), "c", "regexp_substr"); err != nil {
+						return err
+					}
+				}
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -457,6 +474,12 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 			ocur, null4 := occurrences.GetValue(i)
 			matchType, null5 := matchTypes.GetStrValue(i)
 			if null1 || null2 || null3 || null4 || null5 {
+				if !null2 && !null5 {
+					if err := op.regMap.validateMySQLRegexp(
+						functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(matchType), "regexp_substr"); err != nil {
+						return err
+					}
+				}
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -478,16 +501,37 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 	return nil
 }
 
-func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, _ *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 
 	rs := vector.MustFunctionResult[int64](result)
 	switch len(parameters) {
 	case 2:
-		return opBinaryStrStrToFixedWithErrorCheck[int64](parameters, result, proc, length, func(v1, v2 string) (int64, error) {
-			return op.regMap.regularInstr(v2, v1, 1, 1, 0)
-		}, selectList)
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetStrValue(i)
+			v2, null2 := p2.GetStrValue(i)
+			if null1 || null2 {
+				if !null2 {
+					if err := op.regMap.validateMySQLRegexp(functionUtil.QuickBytesToStr(v2), "c", "regexp_instr"); err != nil {
+						return err
+					}
+				}
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			index, err := op.regMap.regularInstr(
+				functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(v1), 1, 1, 0)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(index, false); err != nil {
+				return err
+			}
+		}
+		return nil
 
 	case 3:
 		positions := vector.GenerateFunctionFixedTypeParameter[int64](parameters[2])
@@ -496,6 +540,11 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 			v2, null2 := p2.GetStrValue(i)
 			pos, null3 := positions.GetValue(i)
 			if null1 || null2 || null3 {
+				if !null2 {
+					if err := op.regMap.validateMySQLRegexp(functionUtil.QuickBytesToStr(v2), "c", "regexp_instr"); err != nil {
+						return err
+					}
+				}
 				if err := rs.Append(0, true); err != nil {
 					return err
 				}
@@ -520,6 +569,11 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 			pos, null3 := positions.GetValue(i)
 			ocur, null4 := occurrences.GetValue(i)
 			if null1 || null2 || null3 || null4 {
+				if !null2 {
+					if err := op.regMap.validateMySQLRegexp(functionUtil.QuickBytesToStr(v2), "c", "regexp_instr"); err != nil {
+						return err
+					}
+				}
 				if err := rs.Append(0, true); err != nil {
 					return err
 				}
@@ -547,6 +601,11 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 			ocur, null4 := occurrences.GetValue(i)
 			resOp, null5 := resultOption.GetValue(i)
 			if null1 || null2 || null3 || null4 || null5 {
+				if !null2 {
+					if err := op.regMap.validateMySQLRegexp(functionUtil.QuickBytesToStr(v2), "c", "regexp_instr"); err != nil {
+						return err
+					}
+				}
 				if err := rs.Append(0, true); err != nil {
 					return err
 				}
@@ -575,6 +634,12 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 			resOp, null5 := resultOption.GetValue(i)
 			matchType, null6 := matchTypes.GetStrValue(i)
 			if null1 || null2 || null3 || null4 || null5 || null6 {
+				if !null2 && !null6 {
+					if err := op.regMap.validateMySQLRegexp(
+						functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(matchType), "regexp_instr"); err != nil {
+						return err
+					}
+				}
 				if err := rs.Append(0, true); err != nil {
 					return err
 				}
@@ -594,16 +659,35 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 	return nil
 }
 
-func (op *opBuiltInRegexp) builtInRegexpLike(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInRegexp) builtInRegexpLike(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, _ *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[bool](result)
 
 	if len(parameters) == 2 {
-		return opBinaryStrStrToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 string) (bool, error) {
-			match, err := op.regMap.regularLike(v2, v1, "c")
-			return match, err
-		}, selectList)
+		for i := uint64(0); i < uint64(length); i++ {
+			expr, null1 := p1.GetStrValue(i)
+			pat, null2 := p2.GetStrValue(i)
+			if null1 || null2 {
+				if !null2 {
+					if err := op.regMap.validateMySQLRegexp(string(pat), "c", "regexp_like"); err != nil {
+						return err
+					}
+				}
+				if err := rs.Append(false, true); err != nil {
+					return err
+				}
+				continue
+			}
+			match, err := op.regMap.regularLike(string(pat), string(expr), "c")
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(match, false); err != nil {
+				return err
+			}
+		}
+		return nil
 	} else if len(parameters) == 3 {
 		if parameters[2].IsConstNull() {
 			nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
@@ -616,6 +700,11 @@ func (op *opBuiltInRegexp) builtInRegexpLike(parameters []*vector.Vector, result
 			pat, null2 := p2.GetStrValue(i)
 			mt, null3 := p3.GetStrValue(i)
 			if null1 || null2 || null3 {
+				if !null2 && !null3 {
+					if err := op.regMap.validateMySQLRegexp(string(pat), string(mt), "regexp_like"); err != nil {
+						return err
+					}
+				}
 				if err := rs.Append(false, true); err != nil {
 					return err
 				}
@@ -639,15 +728,6 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 	p3 := vector.GenerateFunctionStrParameter(parameters[2]) // repl
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	if parameters[0].IsConstNull() || parameters[1].IsConstNull() || parameters[2].IsConstNull() {
-		for i := uint64(0); i < uint64(length); i++ {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
 	switch len(parameters) {
 	case 3:
 		for i := uint64(0); i < uint64(length); i++ {
@@ -655,6 +735,12 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 			v2, null2 := p2.GetStrValue(i)
 			v3, null3 := p3.GetStrValue(i)
 			if null1 || null2 || null3 {
+				if !null2 && !null3 {
+					if err := op.regMap.validateMySQLRegexpReplacement(
+						functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(v3), "c"); err != nil {
+						return err
+					}
+				}
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -677,6 +763,12 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 			v3, null3 := p3.GetStrValue(i)
 			v4, null4 := p4.GetValue(i)
 			if null1 || null2 || null3 || null4 {
+				if !null2 && !null3 {
+					if err := op.regMap.validateMySQLRegexpReplacement(
+						functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(v3), "c"); err != nil {
+						return err
+					}
+				}
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -701,6 +793,12 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 			v4, null4 := p4.GetValue(i)
 			v5, null5 := p5.GetValue(i)
 			if null1 || null2 || null3 || null4 || null5 {
+				if !null2 && !null3 {
+					if err := op.regMap.validateMySQLRegexpReplacement(
+						functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(v3), "c"); err != nil {
+						return err
+					}
+				}
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -727,6 +825,13 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 			v5, null5 := p5.GetValue(i)
 			matchType, null6 := matchTypes.GetStrValue(i)
 			if null1 || null2 || null3 || null4 || null5 || null6 {
+				if !null2 && !null3 && !null6 {
+					if err := op.regMap.validateMySQLRegexpReplacement(
+						functionUtil.QuickBytesToStr(v2), functionUtil.QuickBytesToStr(v3),
+						functionUtil.QuickBytesToStr(matchType)); err != nil {
+						return err
+					}
+				}
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -747,7 +852,8 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 }
 
 type regexpSet struct {
-	mp map[string]*regexp.Regexp
+	mp      map[string]*regexp.Regexp
+	mysqlMp map[string]*regexp2.Regexp
 }
 
 func (rs *regexpSet) getRegularMatcher(pat string) (*regexp.Regexp, error) {
@@ -853,154 +959,138 @@ func (rs *regexpSet) regularMatchForLikeOpWithEscape(
 // if str[pos:] matched pat.
 // return Nth (N = occurrence here) of match result
 func (rs *regexpSet) regularSubstr(pat string, str string, pos, occurrence int64) (match bool, substr string, err error) {
-	return rs.regularSubstrOnInput(pat, str, str, pos, occurrence)
-}
-
-func (rs *regexpSet) regularSubstrOnInput(
-	pat, original, matchInput string, pos, occurrence int64,
-) (match bool, substr string, err error) {
-	originalRunes := []rune(original)
-	matchRunes := []rune(matchInput)
-	if pos < 1 || pos > int64(len(originalRunes))+1 {
-		return false, "", moerr.NewRegexpIndexOutOfBoundsNoCtx()
-	}
-	if pos == int64(len(originalRunes))+1 {
-		return false, "", nil
-	}
-	if occurrence < 1 {
-		occurrence = 1
-	}
-	reg, err := rs.getRegularMatcherForMatch(pat)
-	if err != nil {
-		return false, "", err
-	}
-
-	search := string(matchRunes[pos-1:])
-	matches := reg.FindAllStringIndex(search, -1)
-	if l := int64(len(matches)); l < occurrence {
-		return false, "", nil
-	}
-	selected := matches[occurrence-1]
-	start := utf8.RuneCountInString(search[:selected[0]])
-	end := utf8.RuneCountInString(search[:selected[1]])
-	return true, string(originalRunes[int(pos-1)+start : int(pos-1)+end]), nil
+	return rs.regularSubstrWithMatchType(pat, str, pos, occurrence, "c")
 }
 
 func (rs *regexpSet) regularSubstrWithMatchType(
 	pat string, str string, pos, occurrence int64, matchType string,
 ) (match bool, substr string, err error) {
-	original := str
-	var normalizeNewlines bool
-	pat, normalizeNewlines, err = regexpPatternWithMatchType(pat, matchType, "regexp_substr")
+	reg, err := rs.getMySQLRegexp(pat, matchType, "regexp_substr")
 	if err != nil {
 		return false, "", err
 	}
-	if normalizeNewlines {
-		str = normalizeRegexpNewlines(str)
+	runes := []rune(str)
+	if pos < 1 || pos > int64(len(runes))+1 {
+		return false, "", moerr.NewRegexpIndexOutOfBoundsNoCtx()
 	}
-	return rs.regularSubstrOnInput(pat, original, str, pos, occurrence)
+	if pos == int64(len(runes))+1 {
+		return false, "", nil
+	}
+	if occurrence < 1 {
+		occurrence = 1
+	}
+	m, err := reg.FindRunesMatchStartingAt(runes, int(pos-1))
+	for found := int64(1); m != nil && found < occurrence; found++ {
+		m, err = reg.FindNextMatch(m)
+		if err != nil {
+			return false, "", mysqlRegexpExecError(err)
+		}
+	}
+	if err != nil {
+		return false, "", mysqlRegexpExecError(err)
+	}
+	if m == nil {
+		return false, "", nil
+	}
+	return true, m.String(), nil
 }
 
 func (rs *regexpSet) regularReplace(pat string, str string, repl string, pos, occurrence int64) (r string, err error) {
-	return rs.regularReplaceOnInput(pat, str, str, repl, pos, occurrence)
-}
-
-func (rs *regexpSet) regularReplaceOnInput(
-	pat, original, matchInput, repl string, pos, occurrence int64,
-) (r string, err error) {
-	originalRunes := []rune(original)
-	matchRunes := []rune(matchInput)
-	if pos < 1 || pos > int64(len(originalRunes))+1 {
-		return "", moerr.NewRegexpIndexOutOfBoundsNoCtx()
-	}
-	if pos == int64(len(originalRunes))+1 {
-		return original, nil
-	}
-	if occurrence < 0 {
-		occurrence = 1
-	}
-
-	reg, err := rs.getRegularMatcherForMatch(pat)
-	if err != nil {
-		if pat == "" {
-			return "", err
-		}
-		return "", moerr.NewInvalidArgNoCtx("regexp_replace have invalid regexp pattern arg", pat)
-	}
-	prefix := string(originalRunes[:pos-1])
-	originalSearch := string(originalRunes[pos-1:])
-	matchSearch := string(matchRunes[pos-1:])
-	matches := reg.FindAllStringSubmatchIndex(matchSearch, -1)
-	if occurrence == 0 {
-		if len(matches) == 0 {
-			return original, nil
-		}
-		var result strings.Builder
-		result.WriteString(prefix)
-		last := 0
-		for _, match := range matches {
-			mapped := remapRegexpMatchIndexes(match, matchSearch, originalSearch)
-			result.WriteString(originalSearch[last:mapped[0]])
-			result.Write(reg.ExpandString(nil, repl, originalSearch, mapped))
-			last = mapped[1]
-		}
-		result.WriteString(originalSearch[last:])
-		return result.String(), nil
-	}
-	if int64(len(matches)) < occurrence {
-		return original, nil
-	}
-	selected := remapRegexpMatchIndexes(matches[occurrence-1], matchSearch, originalSearch)
-	expanded := reg.ExpandString(nil, repl, originalSearch, selected)
-	return prefix + originalSearch[:selected[0]] + string(expanded) + originalSearch[selected[1]:], nil
-}
-
-func remapRegexpMatchIndexes(indexes []int, matchInput, original string) []int {
-	mapped := make([]int, len(indexes))
-	for i, index := range indexes {
-		if index < 0 {
-			mapped[i] = -1
-			continue
-		}
-		runeIndex := utf8.RuneCountInString(matchInput[:index])
-		mapped[i] = runeIndexToByteOffset(original, runeIndex)
-	}
-	return mapped
-}
-
-func runeIndexToByteOffset(input string, runeIndex int) int {
-	if runeIndex <= 0 {
-		return 0
-	}
-	count := 0
-	for index := range input {
-		if count == runeIndex {
-			return index
-		}
-		count++
-	}
-	return len(input)
+	return rs.regularReplaceWithMatchType(pat, str, repl, pos, occurrence, "c")
 }
 
 func (rs *regexpSet) regularReplaceWithMatchType(
 	pat string, str string, repl string, pos, occurrence int64, matchType string,
 ) (r string, err error) {
-	original := str
-	var normalizeNewlines bool
-	pat, normalizeNewlines, err = regexpPatternWithMatchType(pat, matchType, "regexp_replace")
+	reg, err := rs.getMySQLRegexp(pat, matchType, "regexp_replace")
 	if err != nil {
 		return "", err
 	}
-	if normalizeNewlines {
-		str = normalizeRegexpNewlines(str)
+	replacement, err := parseMySQLRegexpReplacement(repl, reg)
+	if err != nil {
+		return "", err
 	}
-	return rs.regularReplaceOnInput(pat, original, str, repl, pos, occurrence)
+	runes := []rune(str)
+	if pos < 1 || pos > int64(len(runes))+1 {
+		return "", moerr.NewRegexpIndexOutOfBoundsNoCtx()
+	}
+	if pos == int64(len(runes))+1 {
+		return str, nil
+	}
+	if occurrence < 0 {
+		occurrence = 1
+	}
+	if literal, ok := replacement.literal(); ok && !regexpPatternHasUnescapedAnchor(pat) {
+		mode, unixLines, ignoreCase, parseErr := parseMySQLRegexpMatchType(matchType, "regexp_replace")
+		if parseErr != nil {
+			return "", parseErr
+		}
+		goPattern := rewriteMySQLRegexpPattern(pat, mode, unixLines)
+		if ignoreCase {
+			goPattern = "(?i)" + goPattern
+		}
+		if goReg, compileErr := regexp.Compile(goPattern); compileErr == nil {
+			prefix := string(runes[:pos-1])
+			search := string(runes[pos-1:])
+			if occurrence == 0 {
+				return prefix + goReg.ReplaceAllLiteralString(search, literal), nil
+			}
+			matches := goReg.FindAllStringIndex(search, int(occurrence))
+			if int64(len(matches)) < occurrence {
+				return str, nil
+			}
+			selected := matches[occurrence-1]
+			return prefix + search[:selected[0]] + literal + search[selected[1]:], nil
+		}
+	}
+
+	m, err := reg.FindRunesMatchStartingAt(runes, int(pos-1))
+	if err != nil {
+		return "", mysqlRegexpExecError(err)
+	}
+	if m == nil {
+		return str, nil
+	}
+
+	if occurrence > 0 {
+		for found := int64(1); found < occurrence && m != nil; found++ {
+			m, err = reg.FindNextMatch(m)
+			if err != nil {
+				return "", mysqlRegexpExecError(err)
+			}
+		}
+		if m == nil {
+			return str, nil
+		}
+		return string(runes[:m.Index]) + replacement.expand(m) + string(runes[m.Index+m.Length:]), nil
+	}
+
+	var result strings.Builder
+	result.Grow(len(str))
+	last := 0
+	for m != nil {
+		result.WriteString(string(runes[last:m.Index]))
+		result.WriteString(replacement.expand(m))
+		last = m.Index + m.Length
+		m, err = reg.FindNextMatch(m)
+		if err != nil {
+			return "", mysqlRegexpExecError(err)
+		}
+	}
+	result.WriteString(string(runes[last:]))
+	return result.String(), nil
 }
 
 // regularInstr return an index indicating the starting or ending position of the match.
 // it depends on the value of retOption, if 0 then return start, if 1 then return end.
 // return 0 if match failed.
 func (rs *regexpSet) regularInstr(pat string, str string, pos, occurrence int64, retOption int8) (index int64, err error) {
+	return rs.regularInstrWithMatchType(pat, str, pos, occurrence, retOption, "c")
+}
+
+func (rs *regexpSet) regularInstrWithMatchType(
+	pat string, str string, pos, occurrence int64, retOption int8, matchType string,
+) (index int64, err error) {
 	runes := []rune(str)
 	if occurrence < 1 {
 		occurrence = 1
@@ -1009,12 +1099,9 @@ func (rs *regexpSet) regularInstr(pat string, str string, pos, occurrence int64,
 		return 0, moerr.NewWrongArguments(moerr.Context(), "regexp_instr")
 	}
 
-	reg, err := rs.getRegularMatcherForMatch(pat)
+	reg, err := rs.getMySQLRegexp(pat, matchType, "regexp_instr")
 	if err != nil {
-		if pat == "" {
-			return 0, err
-		}
-		return 0, moerr.NewInvalidArgNoCtx("regexp_instr have invalid regexp pattern arg", pat)
+		return 0, err
 	}
 	if pos < 1 || pos > int64(len(runes)) {
 		if len(runes) == 0 && pos == 1 {
@@ -1023,106 +1110,31 @@ func (rs *regexpSet) regularInstr(pat string, str string, pos, occurrence int64,
 		return 0, moerr.NewRegexpIndexOutOfBoundsNoCtx()
 	}
 
-	search := string(runes[pos-1:])
-	matches := reg.FindAllStringIndex(search, -1)
-	if int64(len(matches)) < occurrence {
+	search := runes[pos-1:]
+	m, err := reg.FindRunesMatch(search)
+	for found := int64(1); m != nil && found < occurrence; found++ {
+		m, err = reg.FindNextMatch(m)
+		if err != nil {
+			return 0, mysqlRegexpExecError(err)
+		}
+	}
+	if err != nil {
+		return 0, mysqlRegexpExecError(err)
+	}
+	if m == nil {
 		return 0, nil
 	}
-	byteIndex := matches[occurrence-1][retOption]
-	return int64(utf8.RuneCountInString(search[:byteIndex])) + pos, nil
-}
-
-func (rs *regexpSet) regularInstrWithMatchType(
-	pat string, str string, pos, occurrence int64, retOption int8, matchType string,
-) (index int64, err error) {
-	var normalizeNewlines bool
-	pat, normalizeNewlines, err = regexpPatternWithMatchType(pat, matchType, "regexp_instr")
-	if err != nil {
-		return 0, err
+	if retOption == 1 {
+		return int64(m.Index+m.Length) + pos, nil
 	}
-	if normalizeNewlines {
-		str = normalizeRegexpNewlines(str)
-	}
-	return rs.regularInstr(pat, str, pos, occurrence, retOption)
+	return int64(m.Index) + pos, nil
 }
 
 func (rs *regexpSet) regularLike(pat string, str string, matchType string) (bool, error) {
-	rule, normalizeNewlines, err := regexpPatternWithMatchType(pat, matchType, "regexp_like")
+	reg, err := rs.getMySQLRegexp(pat, matchType, "regexp_like")
 	if err != nil {
 		return false, err
 	}
-	if pat == "" {
-		return false, moerr.NewRegexpIllegalArgumentNoCtx()
-	}
-	if normalizeNewlines {
-		str = normalizeRegexpNewlines(str)
-	}
-
-	reg, err := rs.getRegularMatcher(rule)
-	if err != nil {
-		return false, err
-	}
-
-	match := reg.MatchString(str)
-	return match, nil
-}
-
-// Support four arguments:
-// i: case insensitive.
-// c: case sensitive.
-// m: multiple line mode.
-// n: '.' can match line terminator.
-// u: Unix-only line endings for m mode.
-func regexpPatternWithMatchType(pattern, matchType, functionName string) (string, bool, error) {
-	flags, unixLines, multiline, err := getPureMatchType(matchType, functionName)
-	if err != nil || flags == "" {
-		return pattern, multiline && !unixLines, err
-	}
-	return fmt.Sprintf("(?%s)%s", flags, pattern), multiline && !unixLines, nil
-}
-
-func getPureMatchType(input, functionName string) (flags string, unixLines bool, multiline bool, err error) {
-	retstring := ""
-	caseType := ""
-	foundn := false
-	foundm := false
-
-	for _, c := range input {
-		switch string(c) {
-		case "i":
-			caseType = "i"
-		case "c":
-			caseType = ""
-		case "m":
-			multiline = true
-			if !foundm {
-				retstring += "m"
-				foundm = true
-			}
-		case "n":
-			if !foundn {
-				retstring += "s"
-				foundn = true
-			}
-		case "u":
-			unixLines = true
-		default:
-			return "", false, false, moerr.NewWrongArguments(moerr.Context(), functionName)
-		}
-	}
-
-	retstring += caseType
-
-	return retstring, unixLines, multiline, nil
-}
-
-func normalizeRegexpNewlines(input string) string {
-	return strings.Map(func(r rune) rune {
-		switch r {
-		case '\r', '\u0085', '\u2028', '\u2029':
-			return '\n'
-		default:
-			return r
-		}
-	}, input)
+	matched, err := reg.MatchString(str)
+	return matched, mysqlRegexpExecError(err)
 }

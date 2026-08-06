@@ -4182,7 +4182,7 @@ func validateRegexpBinaryOperands(ctx context.Context, name string, args []*Expr
 	}
 
 	for _, index := range argumentIndexes {
-		if index >= len(args) || (regexpOperandAllowsBinary(args[0]) && regexpOperandAllowsBinary(args[index])) {
+		if index >= len(args) || !regexpOperandsHaveCharacterSetMismatch(args[0], args[index]) {
 			continue
 		}
 		return moerr.NewCharacterSetMismatch(
@@ -4191,31 +4191,45 @@ func validateRegexpBinaryOperands(ctx context.Context, name string, args []*Expr
 	return nil
 }
 
-func regexpOperandAllowsBinary(expr *Expr) bool {
-	if expr == nil || expr.GetP() != nil || regexpOperandIsNull(expr) {
-		return true
+func regexpOperandsHaveCharacterSetMismatch(left, right *Expr) bool {
+	return regexpOperandIsBinaryString(left) && !regexpOperandIsBinaryCompatible(right) ||
+		regexpOperandIsBinaryString(right) && !regexpOperandIsBinaryCompatible(left)
+}
+
+func regexpOperandIsBinaryString(expr *Expr) bool {
+	if expr == nil || expr.GetP() != nil {
+		return false
+	}
+	// MySQL excludes NULL_ITEM itself, but not a typed expression such as
+	// CAST(NULL AS BINARY), from the static binary-string check.
+	if lit := expr.GetLit(); lit != nil && lit.Isnull {
+		return false
 	}
 	switch types.T(expr.Typ.Id) {
 	case types.T_binary, types.T_varbinary, types.T_blob:
+		return true
+	default:
+		return false
+	}
+}
+
+func regexpOperandIsBinaryCompatible(expr *Expr) bool {
+	if expr == nil || expr.GetP() != nil || regexpOperandIsBinaryString(expr) {
+		return true
+	}
+	if lit := expr.GetLit(); lit != nil && lit.Isnull {
+		return true
+	}
+	switch types.T(expr.Typ.Id) {
+	case types.T_char, types.T_varchar, types.T_text:
 		return false
 	default:
 		return true
 	}
 }
 
-func regexpOperandIsNull(expr *Expr) bool {
-	if expr == nil {
-		return false
-	}
-	if lit := expr.GetLit(); lit != nil {
-		return lit.Isnull
-	}
-	fn := expr.GetF()
-	return fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && len(fn.Args) > 0 && regexpOperandIsNull(fn.Args[0])
-}
-
 func regexpOperandCharacterSet(expr *Expr) string {
-	if !regexpOperandAllowsBinary(expr) {
+	if regexpOperandIsBinaryString(expr) {
 		return "binary"
 	}
 	return "utf8mb4_general_ci"

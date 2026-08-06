@@ -118,6 +118,19 @@ func TestNewRegexpIndexOutOfBounds(t *testing.T) {
 	require.Equal(t, "Index out of bounds in regular expression search.", err.Error())
 }
 
+func TestNewRegexpInvalidCaptureGroup(t *testing.T) {
+	err := NewRegexpInvalidCaptureGroup(context.Background())
+	require.Equal(t, uint16(ER_REGEXP_INVALID_CAPTURE_GROUP_NAME), err.MySQLCode())
+	require.Equal(t, "HY000", err.SqlState())
+	require.Equal(t, "A capture group has an invalid name.", err.Error())
+}
+
+func TestNewRegexpTimeout(t *testing.T) {
+	err := NewRegexpTimeoutNoCtx()
+	require.Equal(t, uint16(ER_REGEXP_TIME_OUT), err.MySQLCode())
+	require.Equal(t, "HY000", err.SqlState())
+}
+
 func TestWrongArgumentsMySQLError(t *testing.T) {
 	err := NewWrongArguments(context.Background(), "nth_value")
 	require.Equal(t, ErrWrongArguments, err.ErrorCode())

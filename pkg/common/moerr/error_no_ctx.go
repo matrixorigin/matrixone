@@ -73,6 +73,14 @@ func NewRegexpIndexOutOfBoundsNoCtx() *Error {
 	return newError(Context(), ErrRegexpIndexOutOfBounds)
 }
 
+func NewRegexpInvalidCaptureGroupNoCtx() *Error {
+	return newError(Context(), ErrRegexpInvalidCaptureGroup)
+}
+
+func NewRegexpTimeoutNoCtx() *Error {
+	return newError(Context(), ErrRegexpTimeout)
+}
+
 func NewOutOfRangeNoCtxf(typ string, format string, args ...any) *Error {
 	return newError(Context(), ErrOutOfRange, typ, fmt.Sprintf(format, args...))
 }

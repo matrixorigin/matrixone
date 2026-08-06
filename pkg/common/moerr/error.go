@@ -77,6 +77,8 @@ const (
 	ErrRegexpIllegalArgument       uint16 = 20206
 	ErrCharacterSetMismatch        uint16 = 20207
 	ErrRegexpIndexOutOfBounds      uint16 = 20208
+	ErrRegexpInvalidCaptureGroup   uint16 = 20209
+	ErrRegexpTimeout               uint16 = 20210
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -409,6 +411,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrRegexpIllegalArgument:       {ER_REGEXP_ILLEGAL_ARGUMENT, []string{MySQLDefaultSqlState}, "Illegal argument to a regular expression."},
 	ErrCharacterSetMismatch:        {ER_CHARACTER_SET_MISMATCH, []string{MySQLDefaultSqlState}, "Character set '%s' cannot be used in conjunction with '%s' in call to %s."},
 	ErrRegexpIndexOutOfBounds:      {ER_REGEXP_INDEX_OUTOFBOUNDS_ERROR, []string{MySQLDefaultSqlState}, "Index out of bounds in regular expression search."},
+	ErrRegexpInvalidCaptureGroup:   {ER_REGEXP_INVALID_CAPTURE_GROUP_NAME, []string{MySQLDefaultSqlState}, "A capture group has an invalid name."},
+	ErrRegexpTimeout:               {ER_REGEXP_TIME_OUT, []string{MySQLDefaultSqlState}, "Timeout exceeded in regular expression match."},
 
 	// Group 3: invalid input
 	ErrBadConfig:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
@@ -995,6 +999,14 @@ func NewCharacterSetMismatch(ctx context.Context, left, right, function string) 
 
 func NewRegexpIndexOutOfBounds(ctx context.Context) *Error {
 	return newError(ctx, ErrRegexpIndexOutOfBounds)
+}
+
+func NewRegexpInvalidCaptureGroup(ctx context.Context) *Error {
+	return newError(ctx, ErrRegexpInvalidCaptureGroup)
+}
+
+func NewRegexpTimeout(ctx context.Context) *Error {
+	return newError(ctx, ErrRegexpTimeout)
 }
 
 func NewOutOfRangef(ctx context.Context, typ string, format string, args ...any) *Error {

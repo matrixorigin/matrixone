@@ -16,6 +16,8 @@ package function
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -197,6 +199,160 @@ func Test_BuiltIn_RegexpMySQLBoundarySemantics(t *testing.T) {
 		"([a-z]+)([0-9]+)", "abc123", "$2-$1", 1, 0, "c")
 	require.NoError(t, err)
 	require.Equal(t, "123-abc", replaced)
+}
+
+func Test_BuiltIn_RegexpReviewCompatibility(t *testing.T) {
+	op := newOpBuiltInRegexp()
+
+	matched, err := op.regMap.regularLike("\\r", "a\r", "m")
+	require.NoError(t, err)
+	require.True(t, matched)
+	matched, err = op.regMap.regularLike(".", "\r", "c")
+	require.NoError(t, err)
+	require.False(t, matched)
+
+	index, err := op.regMap.regularInstrWithMatchType("^$", "a\r\nb", 1, 1, 0, "m")
+	require.NoError(t, err)
+	require.Zero(t, index)
+	index, err = op.regMap.regularInstrWithMatchType("$", "a\r\nb", 1, 2, 0, "m")
+	require.NoError(t, err)
+	require.Equal(t, int64(5), index)
+	index, err = op.regMap.regularInstrWithMatchType("(?m)^b", "a\rb", 1, 1, 0, "c")
+	require.NoError(t, err)
+	require.Equal(t, int64(3), index)
+
+	index, err = op.regMap.regularInstrWithMatchType("^b", "abc", 2, 1, 0, "c")
+	require.NoError(t, err)
+	require.Equal(t, int64(2), index)
+	matched, substr, err := op.regMap.regularSubstrWithMatchType("^b", "abc", 2, 1, "c")
+	require.NoError(t, err)
+	require.False(t, matched)
+	require.Empty(t, substr)
+	replaced, err := op.regMap.regularReplaceWithMatchType("^b", "abc", "X", 2, 0, "c")
+	require.NoError(t, err)
+	require.Equal(t, "abc", replaced)
+
+	for _, tc := range []struct {
+		replacement string
+		expected    string
+		mysqlCode   uint16
+	}{
+		{replacement: "$2-$1", expected: "123-abc"},
+		{replacement: "$10", expected: "abc0"},
+		{replacement: "$1x", expected: "abcx"},
+		{replacement: "$3", mysqlCode: moerr.ER_REGEXP_INDEX_OUTOFBOUNDS_ERROR},
+		{replacement: "${1}", mysqlCode: moerr.ER_REGEXP_INVALID_CAPTURE_GROUP_NAME},
+		{replacement: "$$", mysqlCode: moerr.ER_REGEXP_INVALID_CAPTURE_GROUP_NAME},
+	} {
+		replaced, err = op.regMap.regularReplaceWithMatchType(
+			"([a-z]+)([0-9]+)", "abc123", tc.replacement, 1, 0, "c")
+		if tc.mysqlCode == 0 {
+			require.NoError(t, err, tc.replacement)
+			require.Equal(t, tc.expected, replaced, tc.replacement)
+			continue
+		}
+		var moErr *moerr.Error
+		require.ErrorAs(t, err, &moErr, tc.replacement)
+		require.Equal(t, tc.mysqlCode, moErr.MySQLCode(), tc.replacement)
+	}
+}
+
+func BenchmarkRegexpReplaceAllLinear(b *testing.B) {
+	op := newOpBuiltInRegexp()
+	for _, size := range []int{1024, 2048, 4096, 8192, 16384} {
+		input := strings.Repeat("a", size)
+		b.Run(fmt.Sprintf("bytes_%d", size), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				_, err := op.regMap.regularReplace("a", input, "X", 1, 0)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func Test_BuiltIn_RegexpValidatesPatternBeforeNullAndPositionShortcuts(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	stringType := types.T_varchar.ToType()
+	intType := types.T_int64.ToType()
+
+	for _, tc := range []struct {
+		name       string
+		inputs     []FunctionTestInput
+		resultType types.Type
+		fn         fEvalFn
+		mysqlCode  uint16
+	}{
+		{
+			name: "substr empty subject and pattern",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(stringType, []string{""}, nil),
+				NewFunctionTestInput(stringType, []string{""}, nil),
+			},
+			resultType: stringType,
+			fn:         newOpBuiltInRegexp().builtInRegexpSubstr,
+			mysqlCode:  moerr.ER_REGEXP_ILLEGAL_ARGUMENT,
+		},
+		{
+			name: "substr position after end and empty pattern",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(stringType, []string{"a"}, nil),
+				NewFunctionTestInput(stringType, []string{""}, nil),
+				NewFunctionTestInput(intType, []int64{2}, nil),
+			},
+			resultType: stringType,
+			fn:         newOpBuiltInRegexp().builtInRegexpSubstr,
+			mysqlCode:  moerr.ER_REGEXP_ILLEGAL_ARGUMENT,
+		},
+		{
+			name: "replace empty subject and pattern",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(stringType, []string{""}, nil),
+				NewFunctionTestInput(stringType, []string{""}, nil),
+				NewFunctionTestInput(stringType, []string{"X"}, nil),
+			},
+			resultType: stringType,
+			fn:         newOpBuiltInRegexp().builtInRegexpReplace,
+			mysqlCode:  moerr.ER_REGEXP_ILLEGAL_ARGUMENT,
+		},
+		{
+			name: "instr null subject and empty pattern",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(stringType, []string{""}, []bool{true}),
+				NewFunctionTestInput(stringType, []string{""}, nil),
+			},
+			resultType: intType,
+			fn:         newOpBuiltInRegexp().builtInRegexpInstr,
+			mysqlCode:  moerr.ER_REGEXP_ILLEGAL_ARGUMENT,
+		},
+		{
+			name: "replace null subject and invalid match type",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(stringType, []string{""}, []bool{true}),
+				NewFunctionTestInput(stringType, []string{"a"}, nil),
+				NewFunctionTestInput(stringType, []string{"X"}, nil),
+				NewFunctionTestInput(intType, []int64{1}, nil),
+				NewFunctionTestInput(intType, []int64{0}, nil),
+				NewFunctionTestInput(stringType, []string{"x"}, nil),
+			},
+			resultType: stringType,
+			fn:         newOpBuiltInRegexp().builtInRegexpReplace,
+			mysqlCode:  moerr.ER_WRONG_ARGUMENTS,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(
+				proc, tc.inputs, NewFunctionTestResult(tc.resultType, false, nil, nil), tc.fn)
+			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
+			_, err := tcc.DebugRun()
+			var moErr *moerr.Error
+			require.ErrorAs(t, err, &moErr)
+			require.Equal(t, tc.mysqlCode, moErr.MySQLCode())
+			require.Equal(t, "HY000", moErr.SqlState())
+		})
+	}
 }
 
 func TestRegexpOptionalMatchTypeOverloads(t *testing.T) {

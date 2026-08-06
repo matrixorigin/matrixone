@@ -58,6 +58,23 @@ func TestIssue25299RegexpRejectsBinaryCharset(t *testing.T) {
 		assertCharacterSetMismatch("select binary 'abc' regexp 'a'")
 		assertCharacterSetMismatch("select regexp_instr('abc', binary 'a')")
 		assertCharacterSetMismatch("select regexp_replace('abc', 'a', binary 'x')")
+		assertCharacterSetMismatch("select cast(null as binary) regexp 'a'")
+
+		var binaryMatched bool
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select _binary 'a' regexp _binary 'a'").Scan(&binaryMatched))
+		require.True(t, binaryMatched)
+		var nullBinaryMatched sql.NullBool
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select null regexp _binary 'a'").Scan(&nullBinaryMatched))
+		require.False(t, nullBinaryMatched.Valid)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select 1 regexp _binary '1'").Scan(&binaryMatched))
+		require.True(t, binaryMatched)
+		var allBinaryReplace string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select regexp_replace(_binary 'abc', _binary 'a', _binary 'X')").Scan(&allBinaryReplace))
+		require.Equal(t, "Xbc", allBinaryReplace)
 
 		var instr int64
 		require.NoError(t, conn.QueryRowContext(ctx,
@@ -70,6 +87,20 @@ func TestIssue25299RegexpRejectsBinaryCharset(t *testing.T) {
 		require.True(t, errors.As(err, &matchTypeErr), "expected MySQL protocol error, got %T: %v", err, err)
 		require.Equal(t, uint16(moerr.ER_WRONG_ARGUMENTS), matchTypeErr.Number)
 		require.Equal(t, [5]byte{'H', 'Y', '0', '0', '0'}, matchTypeErr.SQLState)
+
+		assertRegexpError := func(query string, code uint16) {
+			t.Helper()
+			_, execErr := conn.ExecContext(ctx, query)
+			require.Error(t, execErr)
+			var mysqlErr *mysqlDriver.MySQLError
+			require.True(t, errors.As(execErr, &mysqlErr), "expected MySQL protocol error, got %T: %v", execErr, execErr)
+			require.Equal(t, code, mysqlErr.Number)
+			require.Equal(t, [5]byte{'H', 'Y', '0', '0', '0'}, mysqlErr.SQLState)
+		}
+		assertRegexpError("select regexp_replace('a', '(a)', '$2')", moerr.ER_REGEXP_INDEX_OUTOFBOUNDS_ERROR)
+		assertRegexpError("select regexp_replace('a', '(a)', '${1}')", moerr.ER_REGEXP_INVALID_CAPTURE_GROUP_NAME)
+		assertRegexpError("select regexp_instr(null, '', 1, 1, 0, 'c')", moerr.ER_REGEXP_ILLEGAL_ARGUMENT)
+		assertRegexpError("select regexp_replace(null, 'a', 'X', 1, 0, 'x')", moerr.ER_WRONG_ARGUMENTS)
 
 		_, err = conn.ExecContext(ctx, "set @regexp_binary_param = binary 'abc'")
 		require.NoError(t, err)
