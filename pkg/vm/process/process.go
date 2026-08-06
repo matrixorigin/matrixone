@@ -211,6 +211,13 @@ func (proc *Process) DetachPrepareParams() PrepareParamsState {
 	return state
 }
 
+// BorrowPrepareParams exposes detached prepare parameters without transferring
+// their ownership back to proc. It lets nested work use the parameters while
+// Process.Free releases only resources owned by that nested work.
+func (proc *Process) BorrowPrepareParams(state PrepareParamsState) {
+	proc.setPrepareParams(state.prepareParams, state.isBin, false)
+}
+
 // RestorePrepareParams restores state previously returned by
 // DetachPrepareParams.
 func (proc *Process) RestorePrepareParams(state PrepareParamsState) {

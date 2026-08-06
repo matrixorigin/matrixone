@@ -522,7 +522,7 @@ func (proc *Process) SetFileService(fs fileservice.FileService) {
 }
 
 func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
-	if i < 0 || i >= proc.Base.prepareParams.Length() {
+	if proc.Base.prepareParams == nil || i < 0 || i >= proc.Base.prepareParams.Length() {
 		return nil, moerr.NewInternalErrorf(proc.Ctx, "get prepare params error, index %d not exists", i)
 	}
 	if proc.Base.prepareParams.IsNull(uint64(i)) {
