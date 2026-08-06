@@ -135,7 +135,6 @@ func TestCompareRejectsPreStartRows(t *testing.T) {
 
 	for _, outcome := range []Outcome{OutcomeFailed, OutcomeCancelled} {
 		for _, mode := range []Mode{ModeNative, ModeOffloaded} {
-			outcome, mode := outcome, mode
 			t.Run(outcome.String()+"/"+mode.String(), func(t *testing.T) {
 				t.Parallel()
 
