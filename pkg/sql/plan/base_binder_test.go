@@ -751,6 +751,143 @@ func TestBindFuncExprImplByPlanExpr_JsonValid(t *testing.T) {
 	})
 }
 
+func TestBindFuncExprImplByPlanExpr_DatetimeColumnTimestampComparison(t *testing.T) {
+	ctx := context.Background()
+	makeDatetimeColumn := func(scale int32) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_datetime), Scale: scale},
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{ColPos: 0, Name: "request_at"},
+			},
+		}
+	}
+	makeTimestampFunction := func(t *testing.T, name string, scale int32) *plan.Expr {
+		t.Helper()
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, nil)
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_timestamp), expr.Typ.Id)
+		expr.Typ.Scale = scale
+		return expr
+	}
+
+	for _, tc := range []struct {
+		name       string
+		operator   string
+		columnLeft bool
+	}{
+		{name: "greater than", operator: ">", columnLeft: true},
+		{name: "equal", operator: "=", columnLeft: true},
+		{name: "column on right", operator: "<", columnLeft: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			column := makeDatetimeColumn(6)
+			value := makeTimestampFunction(t, "now", 6)
+			args := []*plan.Expr{column, value}
+			columnIndex := 0
+			valueIndex := 1
+			if !tc.columnLeft {
+				args = []*plan.Expr{value, column}
+				columnIndex, valueIndex = 1, 0
+			}
+
+			result, err := BindFuncExprImplByPlanExpr(ctx, tc.operator, args)
+			require.NoError(t, err)
+			boundArgs := result.GetF().GetArgs()
+			require.NotNil(t, boundArgs[columnIndex].GetCol(), "the storage column must remain directly visible for pruning")
+			require.Equal(t, int32(types.T_datetime), boundArgs[columnIndex].Typ.Id)
+			require.Equal(t, int32(types.T_datetime), boundArgs[valueIndex].Typ.Id)
+			require.Equal(t, "cast", boundArgs[valueIndex].GetF().GetFunc().GetObjName())
+		})
+	}
+
+	t.Run("lower precision datetime column keeps timestamp comparison", func(t *testing.T) {
+		result, err := BindFuncExprImplByPlanExpr(ctx, ">", []*plan.Expr{
+			makeDatetimeColumn(3),
+			makeTimestampFunction(t, "now", 6),
+		})
+		require.NoError(t, err)
+		boundArgs := result.GetF().GetArgs()
+		require.Equal(t, int32(types.T_timestamp), boundArgs[0].Typ.Id)
+		require.Nil(t, boundArgs[0].GetCol(), "a lossy value-side cast must not be substituted")
+		require.Equal(t, "cast", boundArgs[0].GetF().GetFunc().GetObjName())
+		require.Equal(t, int32(types.T_timestamp), boundArgs[1].Typ.Id)
+	})
+
+	assertColumnKeepsTimestampCast := func(t *testing.T, timestampExpr *plan.Expr) {
+		t.Helper()
+		result, err := BindFuncExprImplByPlanExpr(ctx, ">", []*plan.Expr{
+			makeDatetimeColumn(6),
+			timestampExpr,
+		})
+		require.NoError(t, err)
+		boundArgs := result.GetF().GetArgs()
+		require.Equal(t, int32(types.T_timestamp), boundArgs[0].Typ.Id)
+		require.Nil(t, boundArgs[0].GetCol(), "non-statement-constant expressions must not change comparison semantics")
+		require.Equal(t, "cast", boundArgs[0].GetF().GetFunc().GetObjName())
+		require.Equal(t, int32(types.T_timestamp), boundArgs[1].Typ.Id)
+	}
+
+	t.Run("volatile timestamp expression keeps timestamp comparison", func(t *testing.T) {
+		assertColumnKeepsTimestampCast(t, makeTimestampFunction(t, "sysdate", 6))
+	})
+
+	t.Run("column dependent timestamp expression keeps timestamp comparison", func(t *testing.T) {
+		timestampColumn := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{ColPos: 1, Name: "timestamp_value"},
+			},
+		}
+		value, err := BindFuncExprImplByPlanExpr(ctx, "date_sub", []*plan.Expr{
+			timestampColumn,
+			makeIntervalExpr(makeInt64ConstPlanExpr(1), "hour"),
+		})
+		require.NoError(t, err)
+		assertColumnKeepsTimestampCast(t, value)
+	})
+}
+
+func TestBuildPlan_DatetimeColumnComparedWithDateSubNow(t *testing.T) {
+	compilerCtx := NewMockCompilerContext(true)
+	compilerCtx.dbs["system"] = true
+	compilerCtx.objects["statement_info"] = &plan.ObjectRef{
+		SchemaName: "system",
+		ObjName:    "statement_info",
+	}
+	compilerCtx.tables["statement_info"] = &plan.TableDef{
+		Name: "statement_info",
+		Cols: []*plan.ColDef{
+			{
+				Name: "request_at",
+				Typ:  plan.Type{Id: int32(types.T_datetime), Scale: 6},
+			},
+		},
+	}
+
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select request_at from system.statement_info where request_at > date_sub(now(), interval 1 hour)", 1)
+	require.NoError(t, err)
+	queryPlan, err := BuildPlan(compilerCtx, stmt, false)
+	require.NoError(t, err)
+
+	var filter *plan.Expr
+	for _, node := range queryPlan.GetQuery().GetNodes() {
+		if node.GetNodeType() == plan.Node_TABLE_SCAN && node.GetTableDef().GetName() == "statement_info" {
+			require.Len(t, node.GetFilterList(), 1)
+			filter = node.GetFilterList()[0]
+			break
+		}
+	}
+	require.NotNil(t, filter)
+	args := filter.GetF().GetArgs()
+	require.Len(t, args, 2)
+	require.NotNil(t, args[0].GetCol(), "request_at must remain directly visible to storage pruning")
+	require.Equal(t, int32(types.T_datetime), args[0].Typ.Id)
+	require.Equal(t, int32(types.T_datetime), args[1].Typ.Id)
+	require.Equal(t, "cast", args[1].GetF().GetFunc().GetObjName())
+	require.Equal(t, "date_sub", args[1].GetF().GetArgs()[0].GetF().GetFunc().GetObjName())
+}
+
 func TestBindFuncExprImplByPlanExpr_JsonOrderingWithDynamicParam(t *testing.T) {
 	ctx := context.Background()
 
