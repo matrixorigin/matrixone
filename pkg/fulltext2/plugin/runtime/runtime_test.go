@@ -49,8 +49,13 @@ func TestCatalogHooks(t *testing.T) {
 	// RestoreBehavior — zero value (no delete-before-clone).
 	require.Equal(t, catalogplugin.RestoreBehavior{}, h.RestoreBehavior())
 
+	// BuildSessionVars pins lower_case_table_names so the background reindex /
+	// ISCP build fold identifiers the way the index was created (mirrors the
+	// vector-index plugins); sql_mode is intentionally NOT captured (defaulted at
+	// the reindex hook).
+	require.Equal(t, []string{"lower_case_table_names"}, h.BuildSessionVars())
+
 	// Nil / empty accessors.
-	require.Nil(t, h.BuildSessionVars())
 	require.Nil(t, h.DefaultOptions())
 	require.Nil(t, h.SupportedVectorTypes())
 	require.Nil(t, h.SupportedOpTypes())

@@ -12,6 +12,20 @@ drop database if exists fulltext2_include;
 create database fulltext2_include;
 use fulltext2_include;
 
+-- ============================================================================
+-- INCLUDE validation guards (all rejected at CREATE): the primary key, an
+-- indexed text column (single or one of several), an unsupported column type,
+-- and a duplicate column.
+-- ============================================================================
+create table g (id bigint primary key, body text not null, title varchar(100), status varchar(20), prio int, amt decimal(10,2), created date);
+create fulltext2 index gi1 on g (body) include (id);             -- pk
+create fulltext2 index gi2 on g (body) include (body);           -- indexed text column
+create fulltext2 index gi3 on g (body, title) include (title);   -- indexed column (multi-column index)
+create fulltext2 index gi4 on g (body) include (amt);            -- unsupported type: decimal
+create fulltext2 index gi5 on g (body) include (created);        -- unsupported type: date
+create fulltext2 index gi6 on g (body) include (status, status); -- duplicate
+drop table g;
+
 create table docs (
   id bigint primary key,
   body text not null,

@@ -102,6 +102,23 @@ func (Hooks) BuildFullTextIndexDefs(
 	// column; the plugin's SupportedIncludeColumnTypes() gates the accepted types.
 	var includeCols []string
 	if indexInfo.IndexOption != nil && len(indexInfo.IndexOption.IncludeColumns) > 0 {
+		// The indexed text column(s) themselves cannot be INCLUDE columns: they are
+		// tokenized into the postings, and storing the raw text again in the docmap
+		// would bloat the index for no prefilter/coverage benefit. fulltext2 may index
+		// multiple columns (MATCH(body, title)), so exclude every KeyPart. Checked
+		// before the shared validator so an indexed column reports THIS reason rather
+		// than a type error (an indexed varchar column would otherwise pass the type
+		// gate, and an indexed text column would report "unsupported type text").
+		indexed := make(map[string]struct{}, len(indexInfo.KeyParts))
+		for _, kp := range indexInfo.KeyParts {
+			indexed[kp.ColName.ColName()] = struct{}{}
+		}
+		for _, c := range indexInfo.IndexOption.IncludeColumns {
+			if _, ok := indexed[c.ColName()]; ok {
+				return nil, nil, moerr.NewInvalidInput(ctx.GetContext(),
+					fmt.Sprintf("INCLUDE column '%s' cannot be an indexed text column", c.ColNameOrigin()))
+			}
+		}
 		if err := planplugin.ValidateIncludeColumns(ctx, indexInfo.IndexOption.IncludeColumns, colMap, "", pkeyName,
 			fulltext2CatalogHooks.SupportedIncludeColumnTypes()); err != nil {
 			return nil, nil, err

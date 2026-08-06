@@ -2,6 +2,20 @@ set experimental_fulltext2_index = 1;
 drop database if exists fulltext2_include;
 create database fulltext2_include;
 use fulltext2_include;
+create table g (id bigint primary key, body text not null, title varchar(100), status varchar(20), prio int, amt decimal(10,2), created date);
+create fulltext2 index gi1 on g (body) include (id);             -- pk
+invalid input: INCLUDE column 'id' must not be the primary key; predicates on the pk are pushed down automatically via the __mo_pk_host_id virtual column, so listing it here only duplicates storage
+create fulltext2 index gi2 on g (body) include (body);           -- indexed text column
+invalid input: INCLUDE column 'body' cannot be an indexed text column
+create fulltext2 index gi3 on g (body, title) include (title);   -- indexed column (multi-column index)
+invalid input: INCLUDE column 'title' cannot be an indexed text column
+create fulltext2 index gi4 on g (body) include (amt);            -- unsupported type: decimal
+not supported: INCLUDE column 'amt' has unsupported type DECIMAL64 (supported: TINYINT, SMALLINT, INT, BIGINT, TINYINT UNSIGNED, SMALLINT UNSIGNED, INT UNSIGNED, BIGINT UNSIGNED, VARCHAR, CHAR)
+create fulltext2 index gi5 on g (body) include (created);        -- unsupported type: date
+not supported: INCLUDE column 'created' has unsupported type DATE (supported: TINYINT, SMALLINT, INT, BIGINT, TINYINT UNSIGNED, SMALLINT UNSIGNED, INT UNSIGNED, BIGINT UNSIGNED, VARCHAR, CHAR)
+create fulltext2 index gi6 on g (body) include (status, status); -- duplicate
+invalid input: duplicate INCLUDE column 'status'
+drop table g;
 create table docs (
 id bigint primary key,
 body text not null,
