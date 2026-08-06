@@ -11,7 +11,15 @@ set global transaction isolation level read committed;
 select @@global.transaction_isolation;
 set global transaction_isolation = @saved_transaction_isolation;
 
--- Access modes are still accepted for syntax compatibility.
-set session transaction isolation level read committed, read write, read only;
+-- Access modes fail closed until transaction-level read-only enforcement is implemented.
+set session transaction read only;
+set session transaction read write;
+set session transaction isolation level repeatable read, read only;
 select @@transaction_isolation;
+
+-- Duplicate and conflicting characteristics are rejected before state changes.
+set session transaction isolation level read committed, isolation level read committed;
+set session transaction isolation level read committed, isolation level repeatable read;
+set session transaction read only, read only;
+set session transaction read only, read write;
 set session transaction_isolation = @saved_session_transaction_isolation;
