@@ -734,6 +734,8 @@ func TestLeastGreatestStringResolutionPreservesMergedCharset(t *testing.T) {
 	utf8mb4BinVarchar := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4Bin)
 	utf8mb4BinText := types.NewWithCharset(types.T_text, types.MaxVarcharLen, 0, types.CharsetUTF8MB4Bin)
 	generalVarchar := types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetUTF8)
+	binaryVarchar := types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetBinary)
+	legacyVarchar := types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetLegacy)
 
 	tests := []struct {
 		name        string
@@ -761,6 +763,42 @@ func TestLeastGreatestStringResolutionPreservesMergedCharset(t *testing.T) {
 			wantCharset: types.CharsetUTF8MB4Bin,
 			wantWidth:   32,
 		},
+		{
+			name:        "json and varchar keep utf8mb4 bin",
+			inputs:      []types.Type{types.T_json.ToType(), utf8mb4BinVarchar},
+			wantOID:     types.T_varchar,
+			wantCharset: types.CharsetUTF8MB4Bin,
+		},
+		{
+			name:        "varchar and json keep utf8mb4 bin independent of order",
+			inputs:      []types.Type{utf8mb4BinVarchar, types.T_json.ToType()},
+			wantOID:     types.T_varchar,
+			wantCharset: types.CharsetUTF8MB4Bin,
+		},
+		{
+			name:        "json and text keep utf8mb4 bin",
+			inputs:      []types.Type{types.T_json.ToType(), utf8mb4BinText},
+			wantOID:     types.T_text,
+			wantCharset: types.CharsetUTF8MB4Bin,
+		},
+		{
+			name:        "json and binary varchar keep opaque bytes",
+			inputs:      []types.Type{types.T_json.ToType(), binaryVarchar},
+			wantOID:     types.T_varchar,
+			wantCharset: types.CharsetBinary,
+		},
+		{
+			name:        "json and legacy varchar keep legacy byte ordering",
+			inputs:      []types.Type{types.T_json.ToType(), legacyVarchar},
+			wantOID:     types.T_varchar,
+			wantCharset: types.CharsetLegacy,
+		},
+		{
+			name:        "json and general varchar keep general ci",
+			inputs:      []types.Type{types.T_json.ToType(), generalVarchar},
+			wantOID:     types.T_varchar,
+			wantCharset: types.CharsetUTF8,
+		},
 	}
 
 	for _, test := range tests {
@@ -782,6 +820,47 @@ func TestLeastGreatestStringResolutionPreservesMergedCharset(t *testing.T) {
 					require.Equal(t, test.wantCharset, castType.Charset)
 					if test.wantWidth != 0 {
 						require.Equal(t, test.wantWidth, castType.Width)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestLeastGreatestTemporalStringResolutionPreservesMergedCharset(t *testing.T) {
+	utf8mb4BinVarchar := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4Bin)
+	tests := []struct {
+		name        string
+		inputs      []types.Type
+		wantTargets []types.T
+	}{
+		{
+			name:        "json date and varchar",
+			inputs:      []types.Type{types.T_json.ToType(), types.T_date.ToType(), utf8mb4BinVarchar},
+			wantTargets: []types.T{types.T_varchar, types.T_date, types.T_varchar},
+		},
+		{
+			name:        "date and varchar",
+			inputs:      []types.Type{types.T_date.ToType(), utf8mb4BinVarchar},
+			wantTargets: []types.T{types.T_date, types.T_varchar},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, functionName := range []string{"least", "greatest"} {
+				fn, err := GetFunctionByName(context.Background(), functionName, test.inputs)
+				require.NoError(t, err)
+				require.Equal(t, types.T_varchar, fn.GetReturnType().Oid)
+				require.Equal(t, types.CharsetUTF8MB4Bin, fn.GetReturnType().Charset)
+
+				castTypes, shouldCast := fn.ShouldDoImplicitTypeCast()
+				require.True(t, shouldCast)
+				require.Len(t, castTypes, len(test.wantTargets))
+				for i, wantOID := range test.wantTargets {
+					require.Equal(t, wantOID, castTypes[i].Oid)
+					if castTypes[i].Oid.IsMySQLString() {
+						require.Equal(t, types.CharsetUTF8MB4Bin, castTypes[i].Charset)
 					}
 				}
 			}
