@@ -1321,11 +1321,16 @@ func receiveMsgAndForward(sender *messageSenderOnClient, forwardReg *process.Wai
 		}
 
 		var receiverDone bool
-		if receiverDone, err = forwardRemoteBatchWithContext(sender, forwardReg, bat, sender.mp); err != nil || receiverDone {
+		if receiverDone, err = forwardRemoteBatchWithContext(sender, forwardReg, bat, sender.mp); err != nil {
 			return err
 		}
+		// A stopped receiver intentionally discarded the decoded batch, but the
+		// remote sender still owns its credit until this ACK is sent.
 		if err = sender.acknowledgeRemoteBatch(); err != nil {
 			return err
+		}
+		if receiverDone {
+			return nil
 		}
 	}
 }

@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
@@ -129,6 +130,20 @@ func TestConfigCanBeValidated(t *testing.T) {
 	c6.GossipProbeInterval.Duration = 0
 	err = c6.Validate()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+
+	c7 := c
+	c7.HAKeeperBootstrapRetryInterval.Duration = -time.Second
+	err = c7.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+}
+
+func TestHAKeeperBootstrapRetryIntervalDefault(t *testing.T) {
+	cfg := DefaultConfig()
+	assert.Equal(t, time.Second, cfg.HAKeeperBootstrapRetryInterval.Duration)
+
+	cfg.HAKeeperBootstrapRetryInterval.Duration = 0
+	assert.NoError(t, cfg.Validate())
+	assert.Equal(t, time.Second, cfg.HAKeeperBootstrapRetryInterval.Duration)
 }
 
 func TestBootstrapConfigCanBeValidated(t *testing.T) {
