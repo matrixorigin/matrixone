@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 	spb "github.com/substrait-io/substrait-protobuf/go/substraitpb"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -148,6 +149,78 @@ func TestTaeReadStrictWire(t *testing.T) {
 	require.Equal(t, r.TableID, got.TableID)
 	_, err = UnmarshalTaeRead(append(b, b[:2]...), now)
 	require.Error(t, err)
+}
+
+func TestProtocolRejectsMalformedWireShapes(t *testing.T) {
+	now := uint64(time.Now().UnixMilli())
+	digest := sha256.Sum256([]byte("protocol-test"))
+	valid := func() *TaeRead {
+		return &TaeRead{
+			ProtocolVersion: TaeReadProtocolVersion,
+			ReadRef:         bytes.Repeat([]byte{1}, 32),
+			QueryID:         []byte("query"),
+			AccountID:       1,
+			TableID:         2,
+			SnapshotTS:      make([]byte, 12),
+			SchemaDigest:    digest[:],
+			ManifestSHA256:  digest[:],
+			CapabilityHash:  CapabilityHash[:],
+			ExpiresAtUnixMS: now + 1000,
+		}
+	}
+
+	require.Error(t, (*TaeRead)(nil).Validate(now))
+	read := valid()
+	read.QueryID = nil
+	require.ErrorContains(t, read.Validate(now), "identity or digest")
+	read = valid()
+	read.ExpiresAtUnixMS = now
+	require.ErrorContains(t, read.Validate(now), "expired")
+	read = valid()
+	read.CapabilityHash = bytes.Repeat([]byte{9}, sha256.Size)
+	require.ErrorContains(t, read.Validate(now), "capability mismatch")
+
+	unknown := protowire.AppendTag(nil, 12, protowire.BytesType)
+	unknown = protowire.AppendBytes(unknown, []byte{1})
+	wrongType := protowire.AppendTag(nil, 1, protowire.BytesType)
+	wrongType = protowire.AppendBytes(wrongType, []byte{1})
+	truncatedVarint := append(protowire.AppendTag(nil, 1, protowire.VarintType), 0x80)
+	overflowVersion := protowire.AppendTag(nil, 1, protowire.VarintType)
+	overflowVersion = protowire.AppendVarint(overflowVersion, 1<<32)
+	truncatedBytes := append(protowire.AppendTag(nil, 3, protowire.BytesType), 1)
+	for _, wire := range [][]byte{
+		nil,
+		{0x80},
+		unknown,
+		wrongType,
+		truncatedVarint,
+		overflowVersion,
+		truncatedBytes,
+		appendUint(nil, 1, 1),
+	} {
+		_, err := UnmarshalTaeRead(wire, now)
+		require.Error(t, err)
+	}
+
+	request := appendBytes(nil, 1, []byte("read"))
+	request = appendBytes(request, 2, []byte("schema"))
+	decoded, err := UnmarshalResolveRequest(request)
+	require.NoError(t, err)
+	require.Equal(t, []byte("schema"), decoded.RequestedSchema)
+	_, err = UnmarshalResolveRequest(appendBytes(nil, 1, []byte("read")))
+	require.ErrorContains(t, err, "missing protobuf field")
+	_, err = MarshalResolveResponse(ResolveTaeReadResponse{})
+	require.ErrorContains(t, err, "invalid resolve response")
+	response, err := MarshalResolveResponse(ResolveTaeReadResponse{TaeRead: []byte("read"), Manifest: []byte("manifest"), CanonicalSchema: []byte("schema")})
+	require.NoError(t, err)
+	fields, err := consumeStrictBytes(response, 3, len(response))
+	require.NoError(t, err)
+	require.Equal(t, []byte("manifest"), fields[1])
+
+	require.Empty(t, appendUint(nil, 1, 0))
+	require.Empty(t, appendBytes(nil, 1, nil))
+	require.False(t, equalBytes([]byte{1}, []byte{1, 2}))
+	require.False(t, equalBytes([]byte{1}, []byte{2}))
 }
 
 type fakeProvider struct {
