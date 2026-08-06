@@ -2539,10 +2539,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
-				Typ: Type{
-					Id:    int32(types.T_varchar),
-					Width: types.MaxVarcharLen,
-				},
+				Typ:  makeHiddenColTyp(),
 				Default: &plan.Default{
 					NullAbility:  false,
 					Expr:         nil,
@@ -2561,9 +2558,10 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				Alg:  plan.CompressType_Lz4,
 				Typ: plan.Type{
 					// don't copy auto increment
-					Id:    colMap[pkeyName].Typ.Id,
-					Width: colMap[pkeyName].Typ.Width,
-					Scale: colMap[pkeyName].Typ.Scale,
+					Id:      colMap[pkeyName].Typ.Id,
+					Width:   colMap[pkeyName].Typ.Width,
+					Scale:   colMap[pkeyName].Typ.Scale,
+					Charset: colMap[pkeyName].Typ.Charset,
 				},
 				Default: &plan.Default{
 					NullAbility:  false,
@@ -2758,10 +2756,7 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 	colDef := &ColDef{
 		Name: keyName,
 		Alg:  plan.CompressType_Lz4,
-		Typ: Type{
-			Id:    int32(types.T_varchar),
-			Width: types.MaxVarcharLen,
-		},
+		Typ:  makeHiddenColTyp(),
 		Default: &plan.Default{
 			NullAbility:  false,
 			Expr:         nil,
@@ -2779,9 +2774,10 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
 				// don't copy auto increment
-				Id:    colMap[pkeyName].Typ.Id,
-				Width: colMap[pkeyName].Typ.Width,
-				Scale: colMap[pkeyName].Typ.Scale,
+				Id:      colMap[pkeyName].Typ.Id,
+				Width:   colMap[pkeyName].Typ.Width,
+				Scale:   colMap[pkeyName].Typ.Scale,
+				Charset: colMap[pkeyName].Typ.Charset,
 			},
 			Default: &plan.Default{
 				NullAbility:  false,
@@ -2916,9 +2912,10 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
 				// don't copy auto increment
-				Id:    colMap[pkeyName].Typ.Id,
-				Width: colMap[pkeyName].Typ.Width,
-				Scale: colMap[pkeyName].Typ.Scale,
+				Id:      colMap[pkeyName].Typ.Id,
+				Width:   colMap[pkeyName].Typ.Width,
+				Scale:   colMap[pkeyName].Typ.Scale,
+				Charset: colMap[pkeyName].Typ.Charset,
 			},
 			Default: &plan.Default{
 				NullAbility:  false,
@@ -2933,10 +2930,7 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		}
 	} else {
 		keyName = catalog.IndexTableIndexColName
-		idxColType := Type{
-			Id:    int32(types.T_varchar),
-			Width: types.MaxVarcharLen,
-		}
+		idxColType := makeHiddenColTyp()
 		if spatialIndex {
 			idxColType = colMap[indexParts[0]].Typ
 		}
@@ -2962,9 +2956,10 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
 				// don't copy auto increment
-				Id:    colMap[pkeyName].Typ.Id,
-				Width: colMap[pkeyName].Typ.Width,
-				Scale: colMap[pkeyName].Typ.Scale,
+				Id:      colMap[pkeyName].Typ.Id,
+				Width:   colMap[pkeyName].Typ.Width,
+				Scale:   colMap[pkeyName].Typ.Scale,
+				Charset: colMap[pkeyName].Typ.Charset,
 			},
 			Default: &plan.Default{
 				NullAbility:  false,

@@ -1122,16 +1122,15 @@ func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 		return nil, moerr.NewInvalidInputf(ctx, "invalid default value for column '%s'", d.Name)
 	}
 	if d.Default.Expr == nil {
+		typ := d.Typ
+		typ.NotNullable = false
 		return &Expr{
 			Expr: &plan.Expr_Lit{
 				Lit: &Const{
 					Isnull: true,
 				},
 			},
-			Typ: plan.Type{
-				Id:          d.Typ.Id,
-				NotNullable: false,
-			},
+			Typ: typ,
 		}, nil
 	}
 	newDefExpr := DeepCopyExpr(d.Default.Expr)

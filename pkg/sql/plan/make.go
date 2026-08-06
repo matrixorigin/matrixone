@@ -885,6 +885,18 @@ func makeSimplePlan2Type(typT types.T) plan.Type {
 	}
 }
 
+// makeGeneratedPlan2Type constructs types for schemas authored by the current
+// planner. In particular, new CHAR/VARCHAR/TEXT values must carry an explicit
+// charset: zero is reserved for plans and catalog metadata written before
+// charset became meaningful. Text-shaped opaque bytes should instead be built
+// with makePlan2Type and types.NewWithCharset(..., types.CharsetBinary).
+func makeGeneratedPlan2Type(oid types.T, width, scale int32, notNullable bool) plan.Type {
+	typ := types.New(oid, width, scale)
+	result := makePlan2Type(&typ)
+	result.NotNullable = notNullable
+	return result
+}
+
 func makePlan2Type(typ *types.Type) plan.Type {
 	return plan.Type{
 		Id:      int32(typ.Oid),

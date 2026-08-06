@@ -5374,9 +5374,7 @@ func resetDateFunction(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) 
 		List: make([]*Expr, 2),
 	}
 	list.List[0] = intervalExpr
-	strType := &plan.Type{
-		Id: int32(types.T_char),
-	}
+	strType := makeGeneratedPlan2Type(types.T_char, 0, 0, false)
 	strExpr := &Expr{
 		Expr: &plan.Expr_Lit{
 			Lit: &Const{
@@ -5385,7 +5383,7 @@ func resetDateFunction(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) 
 				},
 			},
 		},
-		Typ: *strType,
+		Typ: strType,
 	}
 	list.List[1] = strExpr
 	expr := &plan.Expr_List{
