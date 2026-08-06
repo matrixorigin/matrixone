@@ -47,6 +47,15 @@ const (
 	spillWrBufSize  = 64 * 1024   // 64 KiB write buffer per spill bucket
 )
 
+func hasInactiveGroupingColumn(flags []bool) bool {
+	for _, flag := range flags {
+		if !flag {
+			return true
+		}
+	}
+	return false
+}
+
 func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.diagnosticsLogged = false
 	group.ctr.state = vm.Build
@@ -67,6 +76,13 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	// before preparing aggregate executors so the first execution behaves the
 	// same as a reused prepared operator.
 	group.ctr.setSpillMem(group.SpillMem, group.Aggs)
+	group.ctr.setGroupByHashKey(group.GroupByHashKey)
+	if len(group.GroupByHashKey) > 0 && hasInactiveGroupingColumn(group.GroupingFlag) {
+		return moerr.NewInternalErrorNoCtx("group-by hash key cannot be used with grouping sets")
+	}
+	if err = group.ctr.validateGroupByHashKey(len(group.GroupBy)); err != nil {
+		return err
+	}
 
 	if err = group.prepareGroupAndAggArg(proc); err != nil {
 		return err
@@ -85,7 +101,16 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 	} else {
 		// calculate the key width and key nullable, and hash table type.
 		group.ctr.keyWidth, group.ctr.keyNullable = 0, false
-		for _, expr := range group.GroupBy {
+		hashKeyCount := len(group.GroupBy)
+		if len(group.GroupByHashKey) > 0 {
+			hashKeyCount = len(group.GroupByHashKey)
+		}
+		for i := 0; i < hashKeyCount; i++ {
+			exprIdx := i
+			if len(group.GroupByHashKey) > 0 {
+				exprIdx = int(group.GroupByHashKey[i])
+			}
+			expr := group.GroupBy[exprIdx]
 			group.ctr.keyNullable = group.ctr.keyNullable || (!expr.Typ.NotNullable)
 			if expr.Typ.Id == int32(types.T_tuple) {
 				return moerr.NewInternalErrorNoCtx("tuple is not supported as group by column")
@@ -340,6 +365,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 			}
 		}
 		hashBytesBefore := group.ctr.hr.Hash.Size()
+		hashKeyVecs := group.ctr.hashKeyVectors(group.ctr.groupByEvaluate.Vec)
 
 		// here is a strange loop.   our hash table exposed something called
 		// hashmap.UnitLimit -- which limits per iteration insert mini batch size.
@@ -350,7 +376,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 			originGroupCount := group.ctr.hr.Hash.GroupCount()
 
 			// insert the mini batch into the hash table.
-			vals, _, err := group.ctr.hr.Itr.Insert(i, n, group.ctr.groupByEvaluate.Vec)
+			vals, _, err := group.ctr.hr.Itr.Insert(i, n, hashKeyVecs)
 			if err != nil {
 				return false, err
 			}
