@@ -161,9 +161,63 @@ func (proc *Process) SetPrepareParamsWithIsBin(prepareParams *vector.Vector, isB
 	proc.setPrepareParams(prepareParams, isBin, false)
 }
 
+// SetPrepareParamsWithMeta borrows prepareParams and carries per-parameter
+// string/binary and source conversion-kind provenance. The bool slice retains the
+// legacy binary section followed by three kind-bit sections, so existing remote
+// process serialization remains compatible without a protobuf change.
+func (proc *Process) SetPrepareParamsWithMeta(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	kinds []vector.PrepareParamKind,
+) {
+	proc.setPrepareParams(prepareParams, prepareParamMetadata(prepareParams, isBin, kinds), false)
+}
+
 // SetOwnedPrepareParamsWithIsBin transfers prepareParams to proc. Replacing or freeing proc releases it.
 func (proc *Process) SetOwnedPrepareParamsWithIsBin(prepareParams *vector.Vector, isBin []bool) {
 	proc.setPrepareParams(prepareParams, isBin, true)
+}
+
+// SetOwnedPrepareParamsWithMeta transfers prepareParams to proc and preserves
+// the same metadata contract as SetPrepareParamsWithMeta.
+func (proc *Process) SetOwnedPrepareParamsWithMeta(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	kinds []vector.PrepareParamKind,
+) {
+	proc.setPrepareParams(prepareParams, prepareParamMetadata(prepareParams, isBin, kinds), true)
+}
+
+func prepareParamMetadata(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	kinds []vector.PrepareParamKind,
+) []bool {
+	paramCount := 0
+	if prepareParams != nil {
+		paramCount = prepareParams.Length()
+	}
+	if paramCount == 0 || (len(isBin) == 0 && len(kinds) == 0) {
+		return nil
+	}
+	hasMetadata := false
+	for i := 0; i < paramCount; i++ {
+		if (i < len(isBin) && isBin[i]) || (i < len(kinds) && kinds[i] != vector.PrepareParamNone) {
+			hasMetadata = true
+			break
+		}
+	}
+	if !hasMetadata {
+		return nil
+	}
+	metadata := make([]bool, paramCount*4)
+	copy(metadata[:paramCount], isBin)
+	for i := 0; i < paramCount && i < len(kinds); i++ {
+		metadata[paramCount+i] = kinds[i]&1 != 0
+		metadata[paramCount*2+i] = kinds[i]&2 != 0
+		metadata[paramCount*3+i] = kinds[i]&4 != 0
+	}
+	return metadata
 }
 
 func (proc *Process) setPrepareParams(prepareParams *vector.Vector, isBin []bool, owned bool) {

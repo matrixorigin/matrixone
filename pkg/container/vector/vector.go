@@ -42,6 +42,20 @@ const (
 	DIST            // dictionary vector
 )
 
+// PrepareParamKind preserves the source conversion category of a transient
+// text vector produced by MySQL prepared-statement execution.
+type PrepareParamKind uint8
+
+// Values are bit-packed into bool sections for remote Process transport. Keep
+// the numeric assignments stable and within three bits.
+const (
+	PrepareParamNone PrepareParamKind = iota
+	PrepareParamInteger
+	PrepareParamFloat
+	PrepareParamDecimal
+	PrepareParamBoolean
+)
+
 // Vector represent a column
 type Vector struct {
 	// vector's class
@@ -66,7 +80,8 @@ type Vector struct {
 	sorted bool // for some optimization
 
 	// FIXME: Bad design! Will be deleted soon.
-	isBin bool
+	isBin            bool
+	prepareParamKind PrepareParamKind
 
 	offHeap bool
 
@@ -357,6 +372,14 @@ func (v *Vector) GetIsBin() bool {
 
 func (v *Vector) SetIsBin(isBin bool) {
 	v.isBin = isBin
+}
+
+func (v *Vector) GetPrepareParamKind() PrepareParamKind {
+	return v.prepareParamKind
+}
+
+func (v *Vector) SetPrepareParamKind(kind PrepareParamKind) {
+	v.prepareParamKind = kind
 }
 
 func (v *Vector) NeedDup() bool {
@@ -837,6 +860,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.gsp.Reset()
 	v.sorted = false
 	v.isBin = false
+	v.prepareParamKind = PrepareParamNone
 	v.allocationAccount = nil
 	v.areaDisjoint = true
 

@@ -919,6 +919,7 @@ func doSetVar(
 	var err error = nil
 	var ok bool
 	var userVarIsBin bool
+	var userVarPrepareParamKind vector.PrepareParamKind
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
 		var oldValueRaw interface{}
 		if system {
@@ -955,7 +956,8 @@ func doSetVar(
 				}
 			}
 		} else {
-			err = ses.setUserDefinedVar(name, value, sql, userVarIsBin)
+			err = ses.setUserDefinedVarWithKind(
+				name, value, sql, userVarIsBin, userVarPrepareParamKind)
 			if err != nil {
 				return err
 			}
@@ -967,9 +969,11 @@ func doSetVar(
 		name := assign.Name
 		var value interface{}
 		userVarIsBin = false
+		userVarPrepareParamKind = vector.PrepareParamNone
 
-		value, err = getExprValueWithPrepareMode(
-			assign.Value, ses, execCtx, preparedExpression, &userVarIsBin)
+		value, err = getExprValueWithPrepareMeta(
+			assign.Value, ses, execCtx, preparedExpression,
+			&userVarPrepareParamKind, &userVarIsBin)
 		if err != nil {
 			return err
 		}
@@ -4516,6 +4520,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.SetAffectedRows(ses.GetLastAffectedRows())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
+	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	refreshStatementScopedSessionInfo(ses, proc)
 	// Frontend client SQL — session-bound resolver. Procs constructed
 	// via pkg/sql/compile/sql_executor.go's NewTopProcess inherit

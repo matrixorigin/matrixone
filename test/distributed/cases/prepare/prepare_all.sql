@@ -493,6 +493,27 @@ deallocate prepare s;
 
 drop table prepare_bit_numeric;
 
+-- signed integer clients use the same 64-bit payload for BIT(64) values
+drop table if exists prepare_bit64_signed;
+create table prepare_bit64_signed (b bit(64));
+-- an unquoted integer expression preserves its signed 64-bit bit pattern
+insert into prepare_bit64_signed values (-6109877384019645241);
+select hex(b), cast(b as unsigned) from prepare_bit64_signed;
+truncate table prepare_bit64_signed;
+-- the same characters in an SQL string remain string-to-BIT input
+-- @regex("(data out of range|data too long)",true)
+insert into prepare_bit64_signed values ('-6109877384019645241');
+
+-- the signed bit-pattern compatibility is limited to BIT(64)
+drop table if exists prepare_bit63_signed;
+create table prepare_bit63_signed (b bit(63));
+-- @regex("data out of range",true)
+insert into prepare_bit63_signed values (-1);
+select count(*) from prepare_bit63_signed;
+
+drop table prepare_bit64_signed;
+drop table prepare_bit63_signed;
+
 --test order by clause contains placeholder
 CREATE DATABASE mocloud_meta;
 PREPARE mo_stmt_id_1 FROM SELECT SCHEMA_NAME from Information_schema.SCHEMATA where SCHEMA_NAME LIKE ? ORDER BY SCHEMA_NAME=? DESC,SCHEMA_NAME limit 1;

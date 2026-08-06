@@ -2593,7 +2593,7 @@ func strTypeToOthers(proc *process.Process,
 	switch toType.Oid {
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return strToBit(ctx, source, rs, int(toType.Width), length, selectList)
+		return strToBit(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return strToSigned(ctx, source, rs, 8, length, selectList, explicit)
@@ -3150,6 +3150,18 @@ func numericToBitWithIgnore[T constraints.Integer | constraints.Float](
 		} else {
 			floatValue := float64(v)
 			if floatValue < 0 {
+				// BIT(64) values are commonly transported through signed integer
+				// APIs (for example, JDBC setLong). Preserve the integer's bit
+				// pattern so values with the high bit set are not rejected.
+				if bitSize == 64 {
+					switch any(v).(type) {
+					case int, int8, int16, int32, int64:
+						if err := to.Append(uint64(v), false); err != nil {
+							return err
+						}
+						continue
+					}
+				}
 				if !statementIgnore(proc) {
 					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("int%d", bitSize), "value %v", v)
 				}
@@ -7543,7 +7555,7 @@ func strToStr(
 }
 
 func strToBit(
-	ctx context.Context,
+	ctx context.Context, proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[uint64], bitSize int, length int, selectList *FunctionSelectList) error {
 	for i := 0; i < length; i++ {
@@ -7553,6 +7565,35 @@ func strToBit(
 				return err
 			}
 		} else {
+			// Prepared parameters are transported internally in canonical text.
+			// Provenance restores their source conversion category;
+			// SQL strings containing the same characters retain byte-string semantics.
+			kind := from.GetSourceVector().GetPrepareParamKind()
+			if kind != vector.PrepareParamNone {
+				input := string(v)
+				var value uint64
+				var inRange bool
+				var err error
+				switch kind {
+				case vector.PrepareParamInteger:
+					value, inRange, err = preparedIntegerToBit(input, bitSize)
+				case vector.PrepareParamFloat:
+					value, inRange, err = preparedFloatToBit(input, bitSize)
+				case vector.PrepareParamDecimal:
+					value, inRange, err = preparedDecimalToBit(input, bitSize)
+				case vector.PrepareParamBoolean:
+					value, inRange, err = preparedBooleanToBit(input)
+				default:
+					return moerr.NewInternalErrorf(ctx, "unsupported prepared parameter kind %d", kind)
+				}
+				if err != nil || (!inRange && !statementIgnore(proc)) {
+					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", input)
+				}
+				if err = to.Append(value, false); err != nil {
+					return err
+				}
+				continue
+			}
 			if len(v) > 8 {
 				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
 			}
@@ -7571,6 +7612,100 @@ func strToBit(
 		}
 	}
 	return nil
+}
+
+// preparedIntegerToBit converts the canonical decimal representation emitted
+// by COM_STMT_EXECUTE. Negative values can only originate from signed protocol
+// integers; non-negative signed and unsigned values share the same BIT range.
+func preparedIntegerToBit(input string, bitSize int) (value uint64, inRange bool, err error) {
+	if strings.HasPrefix(input, "-") {
+		signed, parseErr := strconv.ParseInt(input, 10, 64)
+		if parseErr != nil {
+			return 0, false, parseErr
+		}
+		if signed < 0 && bitSize != 64 {
+			return 0, false, nil
+		}
+		return uint64(signed), true, nil
+	}
+
+	unsigned, parseErr := strconv.ParseUint(input, 10, 64)
+	if parseErr != nil {
+		return 0, false, parseErr
+	}
+	maxValue := maxBitValue(bitSize)
+	if unsigned > maxValue {
+		return maxValue, false, nil
+	}
+	return unsigned, true, nil
+}
+
+func preparedFloatToBit(input string, bitSize int) (value uint64, inRange bool, err error) {
+	floating, parseErr := strconv.ParseFloat(input, 64)
+	if parseErr != nil {
+		return 0, false, parseErr
+	}
+	if floating < 0 {
+		return 0, false, nil
+	}
+	rounded := math.Round(floating)
+	if math.IsNaN(rounded) || floatExceedsBitRange(rounded, bitSize) {
+		return maxBitValue(bitSize), false, nil
+	}
+	return uint64(rounded), true, nil
+}
+
+func preparedDecimalToBit(input string, bitSize int) (value uint64, inRange bool, err error) {
+	if input == "" {
+		return 0, false, &strconv.NumError{Func: "preparedDecimalToBit", Num: input, Err: strconv.ErrSyntax}
+	}
+	negative := input[0] == '-'
+	digits := input
+	if input[0] == '-' || input[0] == '+' {
+		digits = input[1:]
+	}
+	integerPart, fractionPart, foundDot := strings.Cut(digits, ".")
+	if integerPart == "" || (foundDot && fractionPart == "") || strings.Contains(fractionPart, ".") {
+		return 0, false, &strconv.NumError{Func: "preparedDecimalToBit", Num: input, Err: strconv.ErrSyntax}
+	}
+	nonZero := false
+	for _, part := range []string{integerPart, fractionPart} {
+		for i := 0; i < len(part); i++ {
+			if part[i] < '0' || part[i] > '9' {
+				return 0, false, &strconv.NumError{Func: "preparedDecimalToBit", Num: input, Err: strconv.ErrSyntax}
+			}
+			nonZero = nonZero || part[i] != '0'
+		}
+	}
+	// Decimal values are normalized before the direct typed cast, so a signed
+	// zero is zero while every other negative decimal remains out of range.
+	if negative && nonZero {
+		return 0, false, nil
+	}
+
+	unsigned, parseErr := strconv.ParseUint(integerPart, 10, 64)
+	if parseErr != nil {
+		if numErr, ok := parseErr.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
+			return maxBitValue(bitSize), false, nil
+		}
+		return 0, false, parseErr
+	}
+	maxValue := maxBitValue(bitSize)
+	if unsigned > maxValue {
+		return maxValue, false, nil
+	}
+	return unsigned, true, nil
+}
+
+func preparedBooleanToBit(input string) (value uint64, inRange bool, err error) {
+	boolean, parseErr := strconv.ParseBool(input)
+	if parseErr != nil {
+		return 0, false, parseErr
+	}
+	if boolean {
+		return 1, true, nil
+	}
+	return 0, true, nil
 }
 
 func strToArray[T types.ArrayElement](

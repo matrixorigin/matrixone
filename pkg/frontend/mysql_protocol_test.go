@@ -2896,6 +2896,18 @@ func TestParseExecuteDataPreservesExactJsonOrderingParams(t *testing.T) {
 	}
 }
 
+func TestParseExecuteDataPreservesYearWireType(t *testing.T) {
+	data := make([]byte, 11)
+	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_YEAR), 0})
+	binary.LittleEndian.PutUint16(data[9:], 2024)
+
+	ctx := context.TODO()
+	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, data, 0))
+	require.Equal(t, "2024", prepareStmt.params.GetStringAt(0))
+	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_YEAR), 0}, prepareStmt.ParamTypes)
+}
+
 func buildStringExecutePacket(proto *MysqlProtocolImpl, tp defines.MysqlType, payload string) []byte {
 	data := make([]byte, 8+2+9+len(payload))
 	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(tp), 0})

@@ -295,27 +295,69 @@ func TestIffConstantFoldingSkipsUnselectedBranch(t *testing.T) {
 
 }
 
-func TestParamExpressionExecutorPreservesBinaryFlagPerParameter(t *testing.T) {
+func TestParamExpressionExecutorPreservesProtocolMetadataPerParameter(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, []byte("AB\x00\x00"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("5"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("5.5"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("5.9"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("true"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("text"), false, proc.Mp()))
-	proc.SetPrepareParamsWithIsBin(params, []bool{true, false})
+	proc.SetPrepareParamsWithMeta(params, []bool{true, false, false, false, false, false}, []vector.PrepareParamKind{
+		vector.PrepareParamNone,
+		vector.PrepareParamInteger,
+		vector.PrepareParamFloat,
+		vector.PrepareParamDecimal,
+		vector.PrepareParamBoolean,
+		vector.PrepareParamNone,
+	})
 	t.Cleanup(func() { params.Free(proc.Mp()) })
 
 	binaryExpr := NewParamExpressionExecutor(proc.Mp(), 0, types.T_text.ToType())
-	textExpr := NewParamExpressionExecutor(proc.Mp(), 1, types.T_text.ToType())
+	integerExpr := NewParamExpressionExecutor(proc.Mp(), 1, types.T_text.ToType())
+	floatExpr := NewParamExpressionExecutor(proc.Mp(), 2, types.T_text.ToType())
+	decimalExpr := NewParamExpressionExecutor(proc.Mp(), 3, types.T_text.ToType())
+	booleanExpr := NewParamExpressionExecutor(proc.Mp(), 4, types.T_text.ToType())
+	textExpr := NewParamExpressionExecutor(proc.Mp(), 5, types.T_text.ToType())
 	t.Cleanup(binaryExpr.Free)
+	t.Cleanup(integerExpr.Free)
+	t.Cleanup(floatExpr.Free)
+	t.Cleanup(decimalExpr.Free)
+	t.Cleanup(booleanExpr.Free)
 	t.Cleanup(textExpr.Free)
 
 	binaryVec, err := binaryExpr.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.True(t, binaryVec.GetIsBin())
+	require.Equal(t, vector.PrepareParamNone, binaryVec.GetPrepareParamKind())
 	require.Equal(t, "AB\x00\x00", binaryVec.GetStringAt(0))
+
+	integerVec, err := integerExpr.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.False(t, integerVec.GetIsBin())
+	require.Equal(t, vector.PrepareParamInteger, integerVec.GetPrepareParamKind())
+	require.Equal(t, "5", integerVec.GetStringAt(0))
+
+	floatVec, err := floatExpr.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamFloat, floatVec.GetPrepareParamKind())
+	require.Equal(t, "5.5", floatVec.GetStringAt(0))
+
+	decimalVec, err := decimalExpr.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamDecimal, decimalVec.GetPrepareParamKind())
+	require.Equal(t, "5.9", decimalVec.GetStringAt(0))
+
+	booleanVec, err := booleanExpr.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamBoolean, booleanVec.GetPrepareParamKind())
+	require.Equal(t, "true", booleanVec.GetStringAt(0))
 
 	textVec, err := textExpr.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.False(t, textVec.GetIsBin())
+	require.Equal(t, vector.PrepareParamNone, textVec.GetPrepareParamKind())
 	require.Equal(t, "text", textVec.GetStringAt(0))
 }
 
@@ -468,15 +510,19 @@ func TestVarExpressionExecutor(t *testing.T) {
 	// require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
-func TestVarExpressionExecutorPreservesBinaryFlagOnReuse(t *testing.T) {
+func TestVarExpressionExecutorPreservesProtocolMetadataOnReuse(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	value := "AB\x00\x00"
 	isBin := true
+	prepareParamKind := vector.PrepareParamNone
 	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 		return value, nil
 	})
 	proc.SetResolveVariableIsBinFunc(func(string, bool, bool) (bool, error) {
 		return isBin, nil
+	})
+	proc.SetResolveVariablePrepareParamKindFunc(func(string, bool, bool) (vector.PrepareParamKind, error) {
+		return prepareParamKind, nil
 	})
 	expr := &plan.Expr{
 		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "copied_var"}},
@@ -489,18 +535,28 @@ func TestVarExpressionExecutorPreservesBinaryFlagOnReuse(t *testing.T) {
 	vec, err := executor.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.True(t, vec.GetIsBin())
+	require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKind())
 	require.Equal(t, "AB\x00\x00", vec.GetStringAt(0))
 
-	value, isBin = "text", false
+	value, isBin, prepareParamKind = "5.0", false, vector.PrepareParamFloat
 	vec, err = executor.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.False(t, vec.GetIsBin())
+	require.Equal(t, vector.PrepareParamFloat, vec.GetPrepareParamKind())
+	require.Equal(t, "5.0", vec.GetStringAt(0))
+
+	value, prepareParamKind = "text", vector.PrepareParamNone
+	vec, err = executor.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.False(t, vec.GetIsBin())
+	require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKind())
 	require.Equal(t, "text", vec.GetStringAt(0))
 
 	value, isBin = "CD\x00\x00", true
 	vec, err = executor.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.True(t, vec.GetIsBin())
+	require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKind())
 	require.Equal(t, "CD\x00\x00", vec.GetStringAt(0))
 }
 

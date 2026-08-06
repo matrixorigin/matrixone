@@ -433,6 +433,7 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 	}
 	if err == nil {
 		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
+		expr.vec.SetPrepareParamKind(proc.GetPrepareParamKind(expr.pos))
 	}
 	return expr.vec, err
 }
@@ -515,6 +516,13 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 			return nil, err
 		}
 	}
+	prepareParamKind := vector.PrepareParamNone
+	if resolveKind := proc.GetResolveVariablePrepareParamKindFunc(); resolveKind != nil {
+		prepareParamKind, err = resolveKind(expr.name, expr.system, expr.global)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	if val == nil {
 		if expr.null == nil {
@@ -524,6 +532,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		}
 		if err == nil {
 			expr.null.SetIsBin(isBin)
+			expr.null.SetPrepareParamKind(prepareParamKind)
 		}
 		return expr.null, err
 	}
@@ -544,6 +553,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	}
 	if err == nil {
 		expr.vec.SetIsBin(isBin)
+		expr.vec.SetPrepareParamKind(prepareParamKind)
 	}
 	return expr.vec, err
 }
