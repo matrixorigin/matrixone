@@ -44,6 +44,11 @@ type Fulltext2Query struct {
 	// prefilter pushed down as a runtime filter (built in C from the eligible pks),
 	// applied INSIDE the search so a pushed LIMIT bounds the filtered set. nil = none.
 	FilterBytes []byte
+	// IncludePredsJSON is the optional pushed-down predicate set on INCLUDE columns
+	// (IncludePredicateSpec JSON), evaluated in Go against the stored per-doc INCLUDE
+	// values INSIDE the search — so a WHERE on an INCLUDE column needs no second base scan.
+	// nil = none. ANDed with FilterBytes.
+	IncludePredsJSON []byte
 }
 
 // Fulltext2Search adapts a loaded fulltext2 Index to veccache.VectorIndexSearchIf so
@@ -176,12 +181,24 @@ func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectori
 	// the C-backed filter never outlives the query (the cached Index is shared, so the
 	// filter must be per-query local, never stored on s.idx).
 	var filter docfilter.MembershipFilter
-	if len(q.FilterBytes) > 0 {
-		filter, err = docfilter.New(q.FilterBytes)
-		if err != nil {
-			return nil, nil, err
+	var pf *prefilter
+	if len(q.FilterBytes) > 0 || len(q.IncludePredsJSON) > 0 {
+		pf = &prefilter{}
+		if len(q.FilterBytes) > 0 {
+			filter, err = docfilter.New(q.FilterBytes)
+			if err != nil {
+				return nil, nil, err
+			}
+			defer filter.Free()
+			pf.docFilter = filter
 		}
-		defer filter.Free()
+		if len(q.IncludePredsJSON) > 0 {
+			preds, cerr := compileIncludePredicates(q.IncludePredsJSON, s.idx.includeTypes(), s.idx.pkType())
+			if cerr != nil {
+				return nil, nil, cerr
+			}
+			pf.include = preds
+		}
 	}
 
 	// No-LIMIT streaming path: when the caller passes an Emit callback (the TVF does
@@ -191,9 +208,9 @@ func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectori
 	if rt.Emit != nil {
 		var serr error
 		if q.BagOfWords {
-			serr = s.idx.StreamBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, filter, rt.Emit)
+			serr = s.idx.StreamBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, pf, rt.Emit)
 		} else {
-			serr = s.idx.StreamQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, filter, rt.Emit)
+			serr = s.idx.StreamQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, pf, rt.Emit)
 		}
 		if serr != nil {
 			return nil, nil, serr
@@ -203,9 +220,9 @@ func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectori
 
 	var results []Result
 	if q.BagOfWords {
-		results, err = s.idx.SearchBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, k, filter)
+		results, err = s.idx.SearchBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, k, pf)
 	} else {
-		results, err = s.idx.SearchQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, k, filter)
+		results, err = s.idx.SearchQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, k, pf)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -216,7 +233,53 @@ func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectori
 		keysOut[i] = r.Pk
 		dist[i] = float64(r.Score)
 	}
+	s.fillIncludeResult(rt, results)
 	return keysOut, dist, nil
+}
+
+// fillIncludeResult populates rt.IncludeResult (the covering side channel, shared with the
+// vector plugins) from each result's positional Include values, keyed by the caller's
+// RequestedIncludeColumns names — so a covered query reads the projected INCLUDE columns
+// straight from the index with no base-table JOIN. No-op when no include columns were
+// requested. rt is passed by value but IncludeResult is a pointer, so the caller observes
+// the population (same contract as the IVF plugins).
+func (s *Fulltext2Search) fillIncludeResult(rt vectorindex.RuntimeConfig, results []Result) {
+	if rt.IncludeResult == nil || len(rt.RequestedIncludeColumns) == 0 {
+		return
+	}
+	// Map each requested name to its position in the index's INCLUDE columns (from cfg).
+	pos := make([]int, len(rt.RequestedIncludeColumns))
+	for i, name := range rt.RequestedIncludeColumns {
+		pos[i] = -1
+		for j, c := range s.cfg.IncludeColumns {
+			if c == name {
+				pos[i] = j
+				break
+			}
+		}
+	}
+	ir := rt.IncludeResult
+	ir.ColNames = rt.RequestedIncludeColumns
+	if ir.Data == nil {
+		ir.Data = make(map[string][]any, len(rt.RequestedIncludeColumns))
+	}
+	if ir.Nulls == nil {
+		ir.Nulls = make(map[string][]bool, len(rt.RequestedIncludeColumns))
+	}
+	for i, name := range rt.RequestedIncludeColumns {
+		data := make([]any, len(results))
+		nulls := make([]bool, len(results))
+		p := pos[i]
+		for r := range results {
+			if p >= 0 && p < len(results[r].Include) && results[r].Include[p] != nil {
+				data[r] = results[r].Include[p]
+			} else {
+				nulls[r] = true
+			}
+		}
+		ir.Data[name] = data
+		ir.Nulls[name] = nulls
+	}
 }
 
 // SearchFloat32 is unsupported (fulltext scores are float64; the vector float32

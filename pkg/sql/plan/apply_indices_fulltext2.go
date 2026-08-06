@@ -54,13 +54,19 @@ func (builder *QueryBuilder) buildFulltext2SearchCfg(scanNode *plan.Node, idxdef
 			idxdef.IndexName)
 	}
 
-	cfgMap := map[string]string{
+	cfgMap := map[string]any{
 		"db":       scanNode.ObjRef.SchemaName,
 		"index":    storeTbl,
 		"metadata": metaTbl,
 	}
 	if parser := fulltext2ParserFromParams(idxdef.IndexAlgoParams); parser != "" {
 		cfgMap["parser"] = parser
+	}
+	// Carry the INCLUDE column NAMES so the engine can map a covering query's requested
+	// columns (by name) to each result's positional Include values (search_cache
+	// fillIncludeResult). Harmless for a non-covering query (the TVF requests nothing).
+	if incCols := indexDefIncludedColumnsBestEffort(idxdef); len(incCols) > 0 {
+		cfgMap["include_columns"] = incCols
 	}
 	cfgBytes, err := json.Marshal(cfgMap)
 	if err != nil {

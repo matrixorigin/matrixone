@@ -38,11 +38,11 @@ func TestSortKey(t *testing.T) {
 // push below the current k-th best is dropped, and k<=0 is a no-op.
 func TestBoundedTopK(t *testing.T) {
 	b := newBoundedTopK(2)
-	b.push("a", 1.0)
-	b.push("b", 3.0)
+	b.push("a", 1.0, nil)
+	b.push("b", 3.0, nil)
 	require.Equal(t, 2, b.len())
-	b.push("c", 2.0) // evicts "a" (1.0), keeps {b:3, c:2}
-	b.push("d", 0.5) // below the k-th best → dropped
+	b.push("c", 2.0, nil) // evicts "a" (1.0), keeps {b:3, c:2}
+	b.push("d", 0.5, nil) // below the k-th best → dropped
 	require.Equal(t, 2, b.len())
 
 	res := b.resultsDescScaled(1.0)
@@ -57,7 +57,7 @@ func TestBoundedTopK(t *testing.T) {
 
 	// k<=0 → push is a no-op.
 	z := newBoundedTopK(0)
-	z.push("x", 5.0)
+	z.push("x", 5.0, nil)
 	require.Equal(t, 0, z.len())
 }
 

@@ -266,13 +266,27 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	if mv := tf.ctr.argVecs[2]; mv != nil && mv.Length() > 0 {
 		mode = vector.GetFixedAtNoTypeCheck[int64](mv, 0)
 	}
+	// Optional INCLUDE/pk prefilter predicate JSON (argVecs[3], a query const): the planner
+	// peels a WHERE predicate on INCLUDE columns / the pk into this ivfpq-aligned JSON, which
+	// the engine evaluates against the stored per-doc values inside the WAND walk. Absent on a
+	// direct fulltext2_search(...) call (3 args) or when nothing was peeled.
+	var includePreds []byte
+	if len(tf.ctr.argVecs) > 3 {
+		if pv := tf.ctr.argVecs[3]; pv != nil && pv.Length() > 0 && !pv.IsNull(0) {
+			if s := pv.GetStringAt(0); len(s) > 0 {
+				includePreds = []byte(s)
+			}
+		}
+	}
+
 	newsearch := fulltext2.NewFulltext2Search(u.tblcfg)
 	q := fulltext2.Fulltext2Query{
-		Pattern:     []byte(pattern),
-		Boolean:     mode == int64(tree.FULLTEXT_BOOLEAN),
-		BagOfWords:  mode == int64(tree.FULLTEXT_BM25),
-		Algo:        fulltext2ScoreAlgo(proc),
-		FilterBytes: u.filterBytes,
+		Pattern:          []byte(pattern),
+		Boolean:          mode == int64(tree.FULLTEXT_BOOLEAN),
+		BagOfWords:       mode == int64(tree.FULLTEXT_BM25),
+		Algo:             fulltext2ScoreAlgo(proc),
+		FilterBytes:      u.filterBytes,
+		IncludePredsJSON: includePreds,
 	}
 
 	if u.limit == 0 {

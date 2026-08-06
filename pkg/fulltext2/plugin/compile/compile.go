@@ -244,13 +244,30 @@ func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef 
 		PositionFree:    positionFree,
 		FromSource:      true,
 	}
-	cfgbytes, err := json.Marshal(cfg)
-	if err != nil {
-		return "", err
-	}
 	cols := make([]string, 0, len(storeDef.Parts))
 	for _, p := range storeDef.Parts {
 		cols = append(cols, sqlquote.QualifiedIdent(srcAlias, p))
+	}
+	// INCLUDE columns: their actual values are stored in the segment docmap (prefilter +
+	// coverage). They are passed as the TRAILING fulltext2_create args (after the text
+	// columns); cfg.IncludeTypes tells the TVF how many trailing args are INCLUDE values and
+	// their types. Resolve names from the first-class field, falling back to algo_params.
+	incNames := fulltext2IncludeColumns(storeDef)
+	if len(incNames) > 0 {
+		incTypes := make([]int32, len(incNames))
+		for i, name := range incNames {
+			ci, ok := origTable.Name2ColIndex[name]
+			if !ok {
+				return "", moerr.NewInternalErrorNoCtx("fulltext2 build: INCLUDE column " + name + " not found on source table")
+			}
+			incTypes[i] = origTable.Cols[ci].Typ.Id
+			cols = append(cols, sqlquote.QualifiedIdent(srcAlias, name))
+		}
+		cfg.IncludeTypes = incTypes
+	}
+	cfgbytes, err := json.Marshal(cfg)
+	if err != nil {
+		return "", err
 	}
 	sql := fmt.Sprintf("SELECT f.* FROM %s AS %s CROSS APPLY fulltext2_create(%s, %s, %s, %s) AS f",
 		sqlquote.QualifiedIdent(db, origTable.Name),
@@ -260,6 +277,27 @@ func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef 
 		sqlquote.QualifiedIdent(srcAlias, origTable.Pkey.PkeyColName),
 		strings.Join(cols, ", "))
 	return sql, nil
+}
+
+// fulltext2IncludeColumns returns the index's INCLUDE column names, preferring the
+// first-class IndexDef field and falling back to the persisted algo_param (reload-safe).
+func fulltext2IncludeColumns(def *plan.IndexDef) []string {
+	if len(def.IncludedColumns) > 0 {
+		return def.IncludedColumns
+	}
+	m, err := catalog.IndexParamsStringToMap(def.IndexAlgoParams)
+	if err != nil {
+		return nil
+	}
+	raw := m[catalog.IncludedColumns]
+	if raw == "" {
+		return nil
+	}
+	names, err := catalog.ParseIncludeColumnsValue(raw)
+	if err != nil {
+		return nil
+	}
+	return names
 }
 
 // HandleReindex runs ALTER … ALTER REINDEX: merge=true compacts the tag=1 tail
@@ -383,15 +421,35 @@ func (Hooks) HiddenTableDropPriority(_ string) int {
 // compaction; must match the runtime plugin's SyncDescriptor.IdxcronAction.
 const actionFulltext2Reindex = "fulltext2_reindex"
 
-// IdxcronMetadata — the scheduled compaction reads max_index_capacity from the
-// PERSISTED algo_params, so the metadata blob carries no captured vars; it only
-// needs to be non-nil so the idxcron task registers. A background re-entry (not
-// frontend) returns nil so the existing task row persists. Mirrors bm25.
+// IdxcronMetadata — the scheduled compaction reads its cadence knobs
+// (max_index_capacity, tail thresholds) from the PERSISTED algo_params, so the
+// only thing worth pinning in the blob is lower_case_table_names: its VALUE
+// matters because the background reindex must fold identifiers in the rebuild
+// SQL exactly as the user built under (a mismatch resolves the wrong
+// table/column). This mirrors the vector-index plugins' capture list. sql_mode
+// is deliberately NOT captured — a background reindex is a system op that runs
+// permissive, defaulted at the reindex hook via
+// sqlexec.Metadata.ResolveVariableWithSessionDefaults (capturing the user's
+// possibly-strict sql_mode would be wrong).
+//
+// A background re-entry (not frontend) returns nil so the existing task row
+// persists. If lower_case_table_names can't be resolved in this context we still
+// register with an empty blob (fulltext2 needs only a non-nil blob to register;
+// it reads everything else from algo_params). Mirrors bm25.
 func (Hooks) IdxcronMetadata(ctx compileplugin.CompileContext) ([]byte, error) {
 	if !ctx.IsFrontend() {
 		return nil, nil
 	}
-	return []byte("{}"), nil
+	blob, err := compileplugin.BuildIdxcronMetadata(ctx, compileplugin.IdxcronVarSpec{
+		Capture: []string{"lower_case_table_names"},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(blob) == 0 {
+		return []byte("{}"), nil
+	}
+	return blob, nil
 }
 
 // registerFulltext2Idxcron registers the scheduled-compaction task (skipped on a

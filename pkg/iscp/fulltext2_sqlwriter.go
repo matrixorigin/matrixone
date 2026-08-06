@@ -42,13 +42,17 @@ const defaultFulltext2PostingCapacity int64 = 8_000_000
 // (per the index parser), and turns into tag=1 CdcTail frames. Binary (typed pk)
 // because a fulltext2 pk is `any` (int64 OR varchar).
 type Fulltext2SqlWriter struct {
-	cfg        fulltext2.TableConfig // DbName + ftv2_index (storage) + ftv2_meta (metadata) + parser
-	pkType     int32                 // types.T of the source primary key
-	pkPos      int32                 // pk column index in the extracted row
-	textPos    []int32               // indexed text columns (all idxdef.Parts) — multi-column joins with '\n'
-	textTypes  []int32               // types.T of each textPos column (to detect T_datalink), textPos-aligned
-	capacity   int64                 // max docs per delta segment (max_index_capacity)
-	postingCap int64                 // max postings per delta segment (max_postings_capacity)
+	cfg       fulltext2.TableConfig // DbName + ftv2_index (storage) + ftv2_meta (metadata) + parser
+	pkType    int32                 // types.T of the source primary key
+	pkPos     int32                 // pk column index in the extracted row
+	textPos   []int32               // indexed text columns (all idxdef.Parts) — multi-column joins with '\n'
+	textTypes []int32               // types.T of each textPos column (to detect T_datalink), textPos-aligned
+	// INCLUDE columns: their positions in the extracted row + types.T (column order), so a
+	// CDC insert/upsert carries their actual values into the tail segment's docmap.
+	includePos   []int32
+	includeTypes []int32
+	capacity     int64 // max docs per delta segment (max_index_capacity)
+	postingCap   int64 // max postings per delta segment (max_postings_capacity)
 
 	// cnEngine/cnTxnClient/cnUUID are the CDC consumer's handles (set by NewIndexConsumer),
 	// used to open a short txn with a FULL sqlproc so a DATALINK column can be resolved to
@@ -179,7 +183,9 @@ func NewFulltext2SqlWriter(algo string, jobID JobID, info *ConsumerInfo, tablede
 	var resolve indexplugin.ResolveVarFunc
 	if sv, e := catalog.IndexParamsSessionVars(idxdef.IndexAlgoParams); e == nil && len(sv) > 0 {
 		if md, e2 := sqlexec.NewMetadataFromJson(string(sv)); e2 == nil && md != nil {
-			resolve = md.ResolveVariableFunc
+			// Soft resolver: AlgoParamInt treats absent as "use default", so a var
+			// the blob doesn't hold must return (nil, nil), not a logged error.
+			resolve = md.ResolveVariableSoft
 		}
 	}
 	capacity, err := indexplugin.AlgoParamInt(flat[catalog.IndexAlgoParamMaxIndexCapacity], resolve, "fulltext_max_index_capacity", defaultFulltext2Capacity)
@@ -191,17 +197,56 @@ func NewFulltext2SqlWriter(algo string, jobID JobID, info *ConsumerInfo, tablede
 		return nil, err
 	}
 
+	// INCLUDE columns (reload-safe from algo_params): resolve each to its row position +
+	// type so CDC carries its value into the tail docmap. cdc.IncludeTypes travels in the
+	// blob so RunFulltext2's TailBuilder decodes it without an external schema.
+	var includePos, includeTypes []int32
+	if raw := flat[catalog.IncludedColumns]; raw != "" {
+		names, perr := catalog.ParseIncludeColumnsValue(raw)
+		if perr != nil {
+			return nil, perr
+		}
+		includePos = make([]int32, len(names))
+		includeTypes = make([]int32, len(names))
+		for i, name := range names {
+			ci, ok := tabledef.Name2ColIndex[name]
+			if !ok {
+				return nil, moerr.NewInternalErrorNoCtx("fulltext2 sink: INCLUDE column " + name + " not found")
+			}
+			includePos[i] = ci
+			includeTypes[i] = tabledef.Cols[ci].Typ.Id
+		}
+	}
+
+	cdc := fulltext2.NewCdc(int32(pkTyp.Id))
+	cdc.IncludeTypes = includeTypes
 	return &Fulltext2SqlWriter{
-		cfg:         fulltext2.TableConfig{DbName: info.DBName, IndexTable: storage, MetadataTable: meta, Parser: flat["parser"], PositionFree: flat[catalog.IndexAlgoParamPositionFree] == "true"},
-		pkType:      int32(pkTyp.Id),
-		pkPos:       pkPos,
-		textPos:     textPos,
-		textTypes:   textTypes,
-		datalinkPos: datalinkPos,
-		capacity:    capacity,
-		postingCap:  postingCap,
-		cdc:         fulltext2.NewCdc(int32(pkTyp.Id)),
+		cfg:          fulltext2.TableConfig{DbName: info.DBName, IndexTable: storage, MetadataTable: meta, Parser: flat["parser"], PositionFree: flat[catalog.IndexAlgoParamPositionFree] == "true"},
+		pkType:       int32(pkTyp.Id),
+		pkPos:        pkPos,
+		textPos:      textPos,
+		textTypes:    textTypes,
+		includePos:   includePos,
+		includeTypes: includeTypes,
+		datalinkPos:  datalinkPos,
+		capacity:     capacity,
+		postingCap:   postingCap,
+		cdc:          cdc,
 	}, nil
+}
+
+// rowInclude reads this row's INCLUDE column values (column order) out of the extracted
+// row, copying them out before the txn's mpool unwinds. nil when the index has no INCLUDE
+// columns; a NULL value stays nil.
+func (w *Fulltext2SqlWriter) rowInclude(row []any) []any {
+	if len(w.includePos) == 0 {
+		return nil
+	}
+	out := make([]any, len(w.includePos))
+	for i, pos := range w.includePos {
+		out[i] = ftCopyPk(row[pos])
+	}
+	return out
 }
 
 func (w *Fulltext2SqlWriter) CheckLastOp(op string) bool { return len(w.last) == 0 || w.last == op }
@@ -211,6 +256,7 @@ func (w *Fulltext2SqlWriter) ToSql() ([]byte, error)     { return w.cdc.Encode()
 
 func (w *Fulltext2SqlWriter) Reset() {
 	w.cdc = fulltext2.NewCdc(w.pkType)
+	w.cdc.IncludeTypes = w.includeTypes
 	w.ndata = 0
 	w.last = ""
 }
@@ -221,7 +267,7 @@ func (w *Fulltext2SqlWriter) Insert(ctx context.Context, row []any) error {
 	if err != nil {
 		return err
 	}
-	w.cdc.Insert(ftCopyPk(row[w.pkPos]), text)
+	w.cdc.Insert(ftCopyPk(row[w.pkPos]), text, w.rowInclude(row))
 	w.ndata += len(text) + 16
 	return nil
 }
@@ -232,7 +278,7 @@ func (w *Fulltext2SqlWriter) Upsert(ctx context.Context, row []any) error {
 	if err != nil {
 		return err
 	}
-	w.cdc.Upsert(ftCopyPk(row[w.pkPos]), text)
+	w.cdc.Upsert(ftCopyPk(row[w.pkPos]), text, w.rowInclude(row))
 	w.ndata += len(text) + 16
 	return nil
 }

@@ -72,6 +72,18 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity, pos
 	if cfg.PositionFree {
 		bopts = append(bopts, WithPositionFree())
 	}
+	// Carry the INCLUDE schema into the rebuilt base so the fresh segments keep the docmap
+	// include section (the source segments all share one schema; read the first that has it).
+	var incTypes []int32
+	for _, s := range segs {
+		if s.nIncludeCols() > 0 {
+			incTypes = s.includeTypes
+			break
+		}
+	}
+	if len(incTypes) > 0 {
+		bopts = append(bopts, WithIncludeTypes(incTypes))
+	}
 
 	// Atomic replace, all in the caller's (TVF statement) txn: drop every prior base +
 	// the whole tail FIRST, then STREAM the fresh dead-doc-free base(s). Deleting first
@@ -127,6 +139,11 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity, pos
 			if e := cur.Add(w, d.Positions[i], d.Pk); e != nil {
 				return 0, e
 			}
+		}
+		// Attach the doc's INCLUDE values (only for docs the Add loop created; a 0-term
+		// shadow doc is intentionally dropped by MERGE — nothing left to shadow, never matches).
+		if len(incTypes) > 0 && len(d.Terms) > 0 {
+			cur.SetInclude(d.Pk, d.Include)
 		}
 		nlive++
 		if ReachedSegmentCap(cur, capacity, postingCap) {

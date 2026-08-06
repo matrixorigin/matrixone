@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -44,6 +45,42 @@ func init() {
 	if planplugin.DeepCopyColDefList == nil {
 		planplugin.DeepCopyColDefList = func(in []*plan.ColDef) []*plan.ColDef { return in }
 	}
+	if planplugin.ValidateIncludeColumns == nil {
+		// Minimal faithful stub of the production validator (pkg/sql/plan build_ddl.go):
+		// reject an INCLUDE column whose type is not in supportedTypes. Enough to exercise
+		// BuildFullTextIndexDefs' include wiring without the pkg/sql/plan import cycle.
+		planplugin.ValidateIncludeColumns = func(ctx planplugin.CompilerContext, includeCols []*tree.UnresolvedName,
+			colMap map[string]*plan.ColDef, _, _ string, supportedTypes []types.T) error {
+			for _, uc := range includeCols {
+				col, ok := colMap[uc.ColName()]
+				if !ok {
+					return moerr.NewInvalidInputNoCtxf("INCLUDE column '%s' is not exist", uc.ColName())
+				}
+				ok = false
+				for _, st := range supportedTypes {
+					if types.T(col.Typ.Id) == st {
+						ok = true
+						break
+					}
+				}
+				if !ok {
+					return moerr.NewNotSupportedNoCtxf("INCLUDE column '%s' has unsupported type", uc.ColName())
+				}
+			}
+			return nil
+		}
+	}
+}
+
+// ftIndexInclude builds a *tree.FullTextIndex over one indexed col plus an INCLUDE list.
+func ftIndexInclude(name, indexedCol string, includeCols ...string) *tree.FullTextIndex {
+	idx := ftIndex(name, indexedCol)
+	inc := make([]*tree.UnresolvedName, 0, len(includeCols))
+	for _, c := range includeCols {
+		inc = append(inc, tree.NewUnresolvedName(tree.NewCStr(c, 0)))
+	}
+	idx.IndexOption = &tree.IndexOption{IncludeColumns: inc}
+	return idx
 }
 
 // --- stubs -----------------------------------------------------------------
@@ -296,6 +333,61 @@ func TestBuildFullTextIndexDefs_GojiebaPositionFreeOK(t *testing.T) {
 	require.NoError(t, perr)
 	require.Equal(t, "gojieba", params["parser"])
 	require.Equal(t, "true", params[catalog.IndexAlgoParamPositionFree])
+}
+
+// --- schema.go: INCLUDE columns --------------------------------------------
+
+// TestBuildFullTextIndexDefs_IncludeOK: INCLUDE(status, prio) with supported types
+// populates IndexDef.IncludedColumns on BOTH hidden-table defs and persists the names in
+// algo_params (for reload). The two hidden tables are unchanged — include values live in
+// the segment docmap, not a SQL column.
+func TestBuildFullTextIndexDefs_IncludeOK(t *testing.T) {
+	m := textColMap("id", "body")
+	m["status"] = &plan.ColDef{Name: "status", Typ: plan.Type{Id: int32(types.T_varchar)}}
+	m["prio"] = &plan.ColDef{Name: "prio", Typ: plan.Type{Id: int32(types.T_int64)}}
+
+	idxDefs, tblDefs, err := Hooks{}.BuildFullTextIndexDefs(
+		newStubCompilerContext(), ftIndexInclude("ft", "body", "status", "prio"), m, nil, "id")
+	require.NoError(t, err)
+	require.Len(t, idxDefs, 2)
+
+	// IncludedColumns set on both defs (storage + metadata).
+	require.Equal(t, []string{"status", "prio"}, idxDefs[0].IncludedColumns)
+	require.Equal(t, []string{"status", "prio"}, idxDefs[1].IncludedColumns)
+
+	// Persisted in algo_params under the shared catalog key, and round-trips.
+	params, perr := catalog.IndexParamsStringToMap(idxDefs[0].IndexAlgoParams)
+	require.NoError(t, perr)
+	names, cerr := catalog.ParseIncludeColumnsValue(params[catalog.IncludedColumns])
+	require.NoError(t, cerr)
+	require.Equal(t, []string{"status", "prio"}, names)
+
+	// Hidden tables are unchanged (no per-include SQL column).
+	require.Len(t, tblDefs[0].Cols, 5)
+	require.Len(t, tblDefs[1].Cols, 6)
+}
+
+// TestBuildFullTextIndexDefs_IncludeUnsupportedType: an INCLUDE column of a type outside
+// the plugin's SupportedIncludeColumnTypes() set is rejected at CREATE.
+func TestBuildFullTextIndexDefs_IncludeUnsupportedType(t *testing.T) {
+	m := textColMap("id", "body")
+	m["amount"] = &plan.ColDef{Name: "amount", Typ: plan.Type{Id: int32(types.T_float64)}} // float not supported
+	_, _, err := Hooks{}.BuildFullTextIndexDefs(
+		newStubCompilerContext(), ftIndexInclude("ft", "body", "amount"), m, nil, "id")
+	require.Error(t, err)
+}
+
+// TestBuildFullTextIndexDefs_NoInclude: without INCLUDE, IncludedColumns is empty and no
+// included_columns param is written.
+func TestBuildFullTextIndexDefs_NoInclude(t *testing.T) {
+	idxDefs, _, err := Hooks{}.BuildFullTextIndexDefs(
+		newStubCompilerContext(), ftIndex("ft", "body"), textColMap("id", "body"), nil, "id")
+	require.NoError(t, err)
+	require.Empty(t, idxDefs[0].IncludedColumns)
+	params, perr := catalog.IndexParamsStringToMap(idxDefs[0].IndexAlgoParams)
+	require.NoError(t, perr)
+	_, ok := params[catalog.IncludedColumns]
+	require.False(t, ok)
 }
 
 // --- schema.go: buildFullText2Params directly ------------------------------

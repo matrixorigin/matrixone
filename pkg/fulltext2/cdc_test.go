@@ -40,9 +40,9 @@ func wsTokenize(s string) []WordPos {
 
 func TestCdcCodecRoundTrip(t *testing.T) {
 	c := NewCdc(int32(types.T_int64))
-	c.Insert(int64(2), "cherry pie")
+	c.Insert(int64(2), "cherry pie", nil)
 	c.Delete(int64(0))
-	c.Upsert(int64(1), "blueberry")
+	c.Upsert(int64(1), "blueberry", nil)
 	require.Equal(t, 3, c.Len())
 
 	blob, err := c.Encode()
@@ -93,9 +93,9 @@ func TestTailBuilderLiveness(t *testing.T) {
 
 	// One CDC flush: insert doc 2, delete doc 0, update doc 1's text.
 	c := NewCdc(int32(types.T_int64))
-	c.Insert(int64(2), "cherry")
+	c.Insert(int64(2), "cherry", nil)
 	c.Delete(int64(0))
-	c.Upsert(int64(1), "blueberry")
+	c.Upsert(int64(1), "blueberry", nil)
 
 	tb, err := NewTailBuilder(int32(types.T_int64), 1000, 0, "", wsTokenize)
 	require.NoError(t, err)
@@ -150,9 +150,9 @@ func TestTailBuilderDeleteSpill(t *testing.T) {
 	c.Delete(int64(12))
 	c.Delete(int64(13))
 	c.Delete(int64(14))
-	c.Upsert(int64(1), "blueberry muffin")
+	c.Upsert(int64(1), "blueberry muffin", nil)
 	c.Delete(int64(0))
-	c.Insert(int64(2), "cherry cake")
+	c.Insert(int64(2), "cherry cake", nil)
 
 	// base (recency 0): doc 0 "apple pie", doc 1 "banana bread".
 	bb := NewBuilder("base", int32(types.T_int64))

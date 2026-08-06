@@ -113,6 +113,9 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 		if u.tblcfg.PositionFree {
 			u.bopts = append(u.bopts, fulltext2.WithPositionFree())
 		}
+		if len(u.tblcfg.IncludeTypes) > 0 {
+			u.bopts = append(u.bopts, fulltext2.WithIncludeTypes(u.tblcfg.IncludeTypes))
+		}
 		// Floor both caps so a segment is sealed+spilled every ~capacity docs OR
 		// ~postingCap postings even when the WITH options are unset, keeping build
 		// memory bounded regardless of doc size (a long-doc corpus seals on postings).
@@ -153,6 +156,12 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 		if aerr := u.cur.Add(w.Word, w.Pos, pk); aerr != nil {
 			return aerr
 		}
+	}
+	// Attach this row's INCLUDE column values (actual values → segment docmap for
+	// prefilter + coverage). Only for docs the Add loop created, i.e. non-empty text
+	// (a NULL/empty-text row is skipped above), consistent with the CDC/build empty-doc skip.
+	if len(u.tblcfg.IncludeTypes) > 0 {
+		u.cur.SetInclude(pk, u.rowInclude(tf, nthRow))
 	}
 	// A document's tokens are fed contiguously, so once the open segment reaches
 	// capacity DISTINCT docs (or its posting cap) the current doc is complete: seal +
@@ -208,13 +217,43 @@ func (u *fulltext2CreateState) sealSegment(proc *process.Process) (err error) {
 	return nil
 }
 
+// rowInclude reads row nthRow's INCLUDE column values (the trailing argVecs after the text
+// columns) in column order. A NULL value stays nil. A varchar value is a view into the
+// batch vector, which is recycled across batches while the builder accumulates — so copy
+// []byte out; scalar types are returned by value and need no copy.
+func (u *fulltext2CreateState) rowInclude(tf *TableFunction, nthRow int) []any {
+	n := len(u.tblcfg.IncludeTypes)
+	if n == 0 {
+		return nil
+	}
+	argVecs := tf.ctr.argVecs
+	start := len(argVecs) - n
+	out := make([]any, n)
+	for j := 0; j < n; j++ {
+		v := argVecs[start+j]
+		if v.IsNull(uint64(nthRow)) {
+			continue // NULL
+		}
+		val := vector.GetAny(v, nthRow, false)
+		if b, ok := val.([]byte); ok {
+			val = append([]byte(nil), b...) // copy: the batch vector is recycled across batches
+		}
+		out[j] = val
+	}
+	return out
+}
+
 // rowTerms tokenizes source row nthRow (columns argVecs[2..]) into ordered terms,
 // applying the index's parser. datalink columns are resolved to plain text and
 // json columns to their flattened values; a NULL column yields no tokens (matches
 // the classic tokenizer's per-row NULL handling).
 func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process, nthRow int) ([]fulltext2.WordPos, error) {
 	argVecs := tf.ctr.argVecs
-	for i := 2; i < len(argVecs); i++ {
+	// Text columns are argVecs[2 : textEnd); the trailing len(IncludeTypes) args are INCLUDE
+	// columns (their values are stored verbatim, NOT tokenized). A NULL in any TEXT column
+	// yields no tokens (empty doc); a NULL INCLUDE column is fine (stored as NULL).
+	textEnd := len(argVecs) - len(u.tblcfg.IncludeTypes)
+	for i := 2; i < textEnd; i++ {
 		if argVecs[i].IsNull(uint64(nthRow)) {
 			return nil, nil
 		}
@@ -223,7 +262,7 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 	jsonValue := fulltext2.IsJSONValueParser(u.tblcfg.Parser)
 	var content bytes.Buffer
 	if fulltext2.IsJSONParser(u.tblcfg.Parser) {
-		for i := 2; i < len(argVecs); i++ {
+		for i := 2; i < textEnd; i++ {
 			binary := argVecs[i].GetType().Oid == types.T_json
 			var raw []byte
 			if binary {
@@ -249,7 +288,7 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 			content.Write(ft)
 		}
 	} else {
-		for i := 2; i < len(argVecs); i++ {
+		for i := 2; i < textEnd; i++ {
 			if content.Len() > 0 {
 				content.WriteByte('\n')
 			}

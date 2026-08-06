@@ -181,7 +181,21 @@ func (w *leBuf) i64(v int64)  { w.u64(uint64(v)) }
 // posting streams (docID gaps, position gaps) where values are small.
 func (w *leBuf) uvarint(v uint64) { n := binary.PutUvarint(w.tmp[:], v); w.b.Write(w.tmp[:n]) }
 
-// ---- docmap: pkType + N + ord->pk + ord->docLen ----
+// ---- docmap: pkType + N + ord->pk + ord->docLen [+ INCLUDE section] ----
+
+const (
+	// docmapIncludeTag marks an optional INCLUDE-values section appended after docLen.
+	// Its presence (a byte remaining after docLen) is how a decoder tells an INCLUDE index
+	// from a plain one — fulltext2 is new, so there is no old format to stay compatible with;
+	// a non-INCLUDE docmap is byte-identical to before. The tag guards against a future
+	// trailing section being misread as INCLUDE values.
+	docmapIncludeTag byte = 0x49 // 'I'
+	includeNotNull   byte = 0    // per-value flag
+	includeNull      byte = 1
+	// maxIncludeCols bounds the decoded column count so a corrupt header can't allocate an
+	// enormous offset table. Well above the DDL-time practical limit.
+	maxIncludeCols = 64
+)
 
 func (s *Segment) encodeDocmap() ([]byte, error) {
 	var w leBuf
@@ -194,6 +208,77 @@ func (s *Segment) encodeDocmap() ([]byte, error) {
 	}
 	for _, dl := range s.docLen {
 		w.i32(dl)
+	}
+	// INCLUDE section (only when the index has INCLUDE columns): tag, nCols, per-col type,
+	// then a dense stride-addressed FIXED region (integer cols: per-doc [NULL bitmask][values])
+	// followed by an offset-addressed VARLENA region (varchar/char cols: per-doc per-col
+	// [nullFlag][u32 len][content]). Fixed cols carry no per-doc offset (stride-computed), so a
+	// numeric-only INCLUDE index needs no resident offset table.
+	if nIncl := len(s.includeTypes); nIncl > 0 {
+		if len(s.includeVals) != len(s.pks) {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"fulltext2: includeVals len %d != docs %d", len(s.includeVals), len(s.pks))
+		}
+		w.b.WriteByte(docmapIncludeTag)
+		w.u32(uint32(nIncl))
+		for _, t := range s.includeTypes {
+			w.i32(t)
+		}
+		lay := computeIncludeLayout(s.includeTypes)
+		valRegion := lay.fixedStride - lay.maskBytes
+		// FIXED region.
+		for ord := range s.pks {
+			row := s.includeVals[ord]
+			mask := make([]byte, lay.maskBytes)
+			vals := make([]byte, valRegion)
+			for c, t := range s.includeTypes {
+				fi := lay.fixedIdx[c]
+				if fi < 0 {
+					continue
+				}
+				var v any
+				if c < len(row) {
+					v = row[c]
+				}
+				if v == nil {
+					mask[fi/8] |= 1 << (uint(fi) & 7)
+					continue // value bytes stay zero
+				}
+				vb, err := encodePk(t, v)
+				if err != nil {
+					return nil, err
+				}
+				if len(vb) != lay.fixedWidth[c] {
+					return nil, moerr.NewInternalErrorNoCtxf("fulltext2: include fixed col %d width %d != %d", c, len(vb), lay.fixedWidth[c])
+				}
+				copy(vals[lay.fixedValOff[c]:], vb)
+			}
+			w.b.Write(mask)
+			w.b.Write(vals)
+		}
+		// VARLENA region.
+		if lay.nVarlena > 0 {
+			for ord := range s.pks {
+				row := s.includeVals[ord]
+				for c, t := range s.includeTypes {
+					if lay.varlenaIdx[c] < 0 {
+						continue
+					}
+					var v any
+					if c < len(row) {
+						v = row[c]
+					}
+					if v == nil {
+						w.b.WriteByte(includeNull)
+						continue
+					}
+					w.b.WriteByte(includeNotNull)
+					if err := w.encodePkLen(t, v); err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
 	}
 	return w.b.Bytes(), nil
 }
@@ -261,6 +346,90 @@ func (s *Segment) decodeDocmap(data []byte) error {
 		dl[i] = int32(binary.LittleEndian.Uint32(data[pos+int(i)*4:]))
 	}
 	s.docLen = dl
+	pos += int(n) * 4
+
+	// Optional INCLUDE section. Absent ⇒ nothing after docLen (plain index).
+	if pos < len(data) {
+		if err := s.decodeIncludeSection(data, pos); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// decodeIncludeSection parses the trailing INCLUDE-values section starting at pos: a tag, the
+// column count + types, then the dense FIXED region (skipped by stride — no offsets) and the
+// VARLENA region (for which it builds an (ord*nVarlena+varlenaIdx)->offset table into `data`,
+// a view; mmap-backed for a base). Fixed values are read directly by stride at query time; no
+// value is materialized at load, and a numeric-only INCLUDE index builds NO offset table.
+func (s *Segment) decodeIncludeSection(data []byte, pos int) error {
+	if data[pos] != docmapIncludeTag {
+		return moerr.NewInternalErrorNoCtx("fulltext2: docmap unknown trailing section")
+	}
+	pos++
+	if pos+4 > len(data) {
+		return moerr.NewInternalErrorNoCtx("fulltext2: docmap truncated include header")
+	}
+	nIncl := int(binary.LittleEndian.Uint32(data[pos:]))
+	pos += 4
+	if nIncl <= 0 || nIncl > maxIncludeCols {
+		return moerr.NewInternalErrorNoCtxf("fulltext2: docmap bad include col count %d", nIncl)
+	}
+	itypes := make([]int32, nIncl)
+	for c := 0; c < nIncl; c++ {
+		if pos+4 > len(data) {
+			return moerr.NewInternalErrorNoCtx("fulltext2: docmap truncated include types")
+		}
+		itypes[c] = int32(binary.LittleEndian.Uint32(data[pos:]))
+		pos += 4
+	}
+	lay := computeIncludeLayout(itypes)
+
+	// FIXED region: N rows × fixedStride bytes, read directly by stride at query time.
+	fixedStart := pos
+	fixedSize := int(s.N) * lay.fixedStride
+	if fixedSize < 0 || fixedStart+fixedSize > len(data) {
+		return moerr.NewInternalErrorNoCtx("fulltext2: docmap truncated include fixed region")
+	}
+	pos += fixedSize
+
+	// VARLENA region: build the offset table (only varlena cols cost resident offsets).
+	var varOffs []int32
+	if lay.nVarlena > 0 {
+		varOffs = make([]int32, int(s.N)*lay.nVarlena)
+		for ord := int64(0); ord < s.N; ord++ {
+			for vi := 0; vi < lay.nVarlena; vi++ {
+				if pos >= len(data) {
+					return moerr.NewInternalErrorNoCtx("fulltext2: docmap truncated include varlena values")
+				}
+				if pos > math.MaxInt32 {
+					return moerr.NewInternalErrorNoCtx("fulltext2: docmap include section exceeds 2GB")
+				}
+				varOffs[int(ord)*lay.nVarlena+vi] = int32(pos)
+				flag := data[pos]
+				pos++
+				if flag == includeNull {
+					continue
+				}
+				if flag != includeNotNull {
+					return moerr.NewInternalErrorNoCtxf("fulltext2: docmap bad include null-flag %d", flag)
+				}
+				if pos+4 > len(data) {
+					return moerr.NewInternalErrorNoCtx("fulltext2: docmap truncated include value length")
+				}
+				l := int(binary.LittleEndian.Uint32(data[pos:]))
+				pos += 4 + l
+				if pos < 0 || pos > len(data) {
+					return moerr.NewInternalErrorNoCtx("fulltext2: docmap truncated include value data")
+				}
+			}
+		}
+	}
+	s.includeTypes = itypes
+	s.includeRaw = data
+	s.includeLay = lay
+	s.includeFixedStart = fixedStart
+	s.includeVarOffsets = varOffs
 	return nil
 }
 
@@ -269,12 +438,15 @@ func (s *Segment) decodeDocmap(data []byte) error {
 // encodeTermsAndPostings builds the FST (term -> ordinal) and THREE posting sections
 // in one pass over the sorted terms (ordinal i in the FST is posting list i):
 //
-//   - RANKING directory (postingsFormatV4, kept RESIDENT at load): version, nterms,
-//     then per term df(varint), nblk(varint), and per BlockSize-doc block
+//   - RANKING directory (kept RESIDENT at load): version, nterms, then per term
+//     df(varint), nblk(varint), the term's absolute base offsets into the blocks/positions
+//     sections + term-level maxTf/minDocLen, and per BlockSize-doc block
 //     {lastDocGap(varint, from the previous block's last ord), maxTf(1 byte),
-//     minDocLn(varint), blkByteLen(varint)}, then posByteLen(varint). This is the
-//     Block-Max skip metadata + a directory into the blocks section; it is all WAND
-//     needs to prune, and it is O(df/BlockSize) — ~1/128 the postings.
+//     minDocLn(varint), blkByteLen(varint), posByteLen(varint)}. This is the Block-Max
+//     skip metadata + a directory into the blocks section; it is all WAND needs to prune,
+//     and it is O(df/BlockSize) — ~1/128 the postings. Each entry is SELF-CONTAINED and the
+//     FST value is its BYTE OFFSET, so LookupLoaded decodes one term's directory on demand
+//     (resident directory heap is O(the current query), not O(vocabulary)).
 //   - BLOCKS (mmap, block-decoded on demand): per term, per block, the docID GAPS
 //     (varint, from the previous block's last ord → tiny deltas) then the block's raw
 //     tf bytes. The WAND cursor decodes only the blocks its walk lands on; docIDs
@@ -284,24 +456,19 @@ func (s *Segment) decodeDocmap(data []byte) error {
 //
 // Delta+varint shrinks docIDs/positions ~4×; blocking docIDs (vs one flat per-term
 // stream) is what lets the loader keep them on the mmap and random-access one block.
-// fulltext2 is experimental, so the old layout is dropped (nothing to migrate); a
-// version byte guards a stale blob.
-// postingsFormatV5 adds a per-block positions byte length to each directory entry
-// (V4 stored one positions length per term), making positions block-seekable for the
-// phrase cursor. fulltext2 is experimental, so the old layout is dropped.
-// postingsFormatV6 makes each term's ranking entry SELF-CONTAINED (it prepends the
-// term's absolute base offsets into the blocks/positions sections + term-level maxTf/
-// minDocLen), and the FST value becomes the BYTE OFFSET of that entry (V5: the ordinal).
-// This lets LookupLoaded decode one term's directory on demand instead of decodePostings
-// expanding all of them at load — the resident directory heap drops from O(vocabulary) to
-// O(the current query). fulltext2 is experimental, so the old layout is dropped.
-const postingsFormatV6 byte = 6
+//
+// postingsFormatV1 is the single, current on-disk format for BOTH base index segments and
+// CDC tail segments (they share this serialization). fulltext2 is experimental and
+// fresh-deploy-only, so there is no migration and the version is NOT advanced as the engine
+// evolves — the version byte is only a stale-blob guard. New per-doc data (e.g. INCLUDE
+// column values) is added in the docmap member (presence-tagged), not by bumping this.
+const postingsFormatV1 byte = 1
 
 func (s *Segment) encodeTermsAndPostings() (fst, ranking, blocks, positions []byte, err error) {
 	n := len(s.sortedTerms)
 	values := make([]uint64, n)
 	var w, bw, pw leBuf // w=ranking directory, bw=blocks, pw=positions
-	w.b.WriteByte(postingsFormatV6)
+	w.b.WriteByte(postingsFormatV1)
 	w.i64(int64(n))
 	for i, term := range s.sortedTerms {
 		tp := s.terms[term]
@@ -379,7 +546,7 @@ func (s *Segment) decodePostings(ranking, blocks, positions []byte) error {
 	if len(ranking) < 1+8 {
 		return moerr.NewInternalErrorNoCtx("fulltext2: ranking blob too short")
 	}
-	if ranking[0] != postingsFormatV6 {
+	if ranking[0] != postingsFormatV1 {
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("fulltext2: unsupported postings format %d", ranking[0]))
 	}
 	s.ranking, s.blocks, s.positions = ranking, blocks, positions

@@ -36,7 +36,8 @@ func tokenWord(tk tokenizer.Token) string {
 
 // buildOpts carries optional build settings shared by the build entry points.
 type buildOpts struct {
-	positionFree bool // drop the positional payload (keep the FST + docID/tf postings)
+	positionFree bool    // drop the positional payload (keep the FST + docID/tf postings)
+	includeTypes []int32 // types.T of each INCLUDE column (nil = no INCLUDE columns)
 }
 
 // BuildOpt configures a segment build (functional-options, so existing callers are
@@ -49,6 +50,14 @@ type BuildOpt func(*buildOpts)
 // / NL exact-match is therefore unavailable on such a segment (bag-of-words retrieval
 // only). Mirrors the footprint of a position-free bm25 index while keeping the FST.
 func WithPositionFree() BuildOpt { return func(o *buildOpts) { o.positionFree = true } }
+
+// WithIncludeTypes builds a segment that carries per-doc INCLUDE column values (the actual
+// typed values, stored in the docmap for in-index prefilter + covering). types holds each
+// INCLUDE column's types.T in column order; a doc's values are supplied via Builder.SetInclude
+// / SetDoc (or TokenizedDoc.Include on the batch build path). Nil/empty ⇒ no INCLUDE columns.
+func WithIncludeTypes(types []int32) BuildOpt {
+	return func(o *buildOpts) { o.includeTypes = types }
+}
 
 func applyBuildOpts(opts []BuildOpt) buildOpts {
 	var bo buildOpts
@@ -157,6 +166,10 @@ type TokenizedDoc struct {
 	Pk        any
 	Terms     []string
 	Positions []int32 // byte position of Terms[i] (parallel to Terms)
+	// Include holds this doc's INCLUDE column values in column order (nil element = SQL
+	// NULL; a nil slice = all NULL). Only meaningful when the segment is built with
+	// WithIncludeTypes; ignored otherwise.
+	Include []any
 }
 
 // BuildSegmentFromTokenized builds a segment from pre-tokenized docs (positions
@@ -187,6 +200,17 @@ func BuildSegmentFromTokenized(id string, pkType int32, docs []TokenizedDoc, opt
 	}
 
 	terms := assembleTerms(global, s.docLen, bo.positionFree)
+
+	// INCLUDE column values: carried on each TokenizedDoc.Include, packed ord-aligned into
+	// the segment so encodeDocmap writes the docmap include section. A nil Include ⇒ all-NULL
+	// row (encodeDocmap fills NULLs for missing columns).
+	if len(bo.includeTypes) > 0 {
+		s.includeTypes = bo.includeTypes
+		s.includeVals = make([][]any, len(docs))
+		for ord := range docs {
+			s.includeVals[ord] = docs[ord].Include
+		}
+	}
 
 	s.N = int64(len(docs))
 	s.setTerms(terms)
@@ -287,7 +311,7 @@ func (b *Builder) Add(word string, pos int32, pk any) error {
 // segment) at query time while itself matching nothing — the way an upsert to empty /
 // NULL text removes the old version from search. Positions/Terms are reset in place so
 // repeated SetDoc of one pk does not grow the backing arrays unboundedly.
-func (b *Builder) SetDoc(pk any, words []WordPos) {
+func (b *Builder) SetDoc(pk any, words []WordPos, include []any) {
 	ord := b.docOrd(pk)
 	d := &b.docs[ord]
 	b.postings -= int64(len(d.Terms)) // drop the prior version's postings before rewriting
@@ -301,6 +325,17 @@ func (b *Builder) SetDoc(pk any, words []WordPos) {
 		d.Positions = append(d.Positions, w.Pos)
 	}
 	b.postings += int64(len(d.Terms))
+	// An upsert supersedes the prior version's INCLUDE values in lock-step with its terms.
+	d.Include = include
+}
+
+// SetInclude sets a doc's INCLUDE column values (assigning a fresh ord on first sight,
+// like Add). Used by the Add-based build paths (base CREATE, MERGE reconstruction) which
+// feed a doc's tokens via Add and then attach its per-row INCLUDE values once. include is
+// retained as-is (column order; a nil element = SQL NULL).
+func (b *Builder) SetInclude(pk any, include []any) {
+	ord := b.docOrd(pk)
+	b.docs[ord].Include = include
 }
 
 // NumDocs returns the number of distinct documents added so far.

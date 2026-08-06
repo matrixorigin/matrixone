@@ -39,28 +39,32 @@ const (
 )
 
 // CdcEvent is one source-row mutation: an INSERT/UPSERT carries the row's text
-// (tokenized at build); a DELETE carries only the pk.
+// (tokenized at build) and its INCLUDE column values; a DELETE carries only the pk.
 type CdcEvent struct {
-	Op   cdcOp
-	Pk   any
-	Text string
+	Op      cdcOp
+	Pk      any
+	Text    string
+	Include []any // INCLUDE column values in column order (nil element = NULL); nil for DELETE
 }
 
 // Cdc is the per-flush CDC batch the sinker accumulates and ships as one blob.
+// IncludeTypes is the index's INCLUDE column schema (types.T per column, column order),
+// needed to typed-encode/decode each event's Include values; nil ⇒ no INCLUDE columns.
 type Cdc struct {
-	PkType int32
-	Events []CdcEvent
+	PkType       int32
+	IncludeTypes []int32
+	Events       []CdcEvent
 }
 
 func NewCdc(pkType int32) *Cdc { return &Cdc{PkType: pkType} }
 
-func (c *Cdc) Insert(pk any, text string) {
-	c.Events = append(c.Events, CdcEvent{cdcInsert, pk, text})
+func (c *Cdc) Insert(pk any, text string, include []any) {
+	c.Events = append(c.Events, CdcEvent{cdcInsert, pk, text, include})
 }
-func (c *Cdc) Upsert(pk any, text string) {
-	c.Events = append(c.Events, CdcEvent{cdcUpsert, pk, text})
+func (c *Cdc) Upsert(pk any, text string, include []any) {
+	c.Events = append(c.Events, CdcEvent{cdcUpsert, pk, text, include})
 }
-func (c *Cdc) Delete(pk any) { c.Events = append(c.Events, CdcEvent{cdcDelete, pk, ""}) }
+func (c *Cdc) Delete(pk any) { c.Events = append(c.Events, CdcEvent{cdcDelete, pk, "", nil}) }
 func (c *Cdc) Len() int      { return len(c.Events) }
 
 const cdcMagic uint32 = 0x46540200 // 'F' 'T' 02 00 — fulltext2 cdc events
@@ -71,6 +75,12 @@ func (c *Cdc) Encode() ([]byte, error) {
 	var b bytes.Buffer
 	_ = binary.Write(&b, binary.LittleEndian, cdcMagic)
 	_ = binary.Write(&b, binary.LittleEndian, c.PkType)
+	// INCLUDE column schema: count + per-col type (0 ⇒ no INCLUDE columns). Lets the
+	// decoder typed-decode each event's Include values without an external schema.
+	_ = binary.Write(&b, binary.LittleEndian, uint32(len(c.IncludeTypes)))
+	for _, t := range c.IncludeTypes {
+		_ = binary.Write(&b, binary.LittleEndian, t)
+	}
 	_ = binary.Write(&b, binary.LittleEndian, int64(len(c.Events)))
 	for _, e := range c.Events {
 		pkb, err := encodePk(c.PkType, e.Pk)
@@ -82,6 +92,25 @@ func (c *Cdc) Encode() ([]byte, error) {
 		b.Write(pkb)
 		_ = binary.Write(&b, binary.LittleEndian, uint32(len(e.Text)))
 		b.WriteString(e.Text)
+		// INCLUDE values (column order); a missing/nil value is SQL NULL. Same
+		// [nullFlag][u32 len][content] shape as the docmap include section.
+		for ci, t := range c.IncludeTypes {
+			var v any
+			if ci < len(e.Include) {
+				v = e.Include[ci]
+			}
+			if v == nil {
+				b.WriteByte(includeNull)
+				continue
+			}
+			vb, err := encodePk(t, v)
+			if err != nil {
+				return nil, err
+			}
+			b.WriteByte(includeNotNull)
+			_ = binary.Write(&b, binary.LittleEndian, uint32(len(vb)))
+			b.Write(vb)
+		}
 	}
 	sum := crc32.ChecksumIEEE(b.Bytes())
 	_ = binary.Write(&b, binary.LittleEndian, sum)
@@ -106,6 +135,21 @@ func DecodeCdc(buf []byte) (*Cdc, error) {
 	c := &Cdc{}
 	if err := binary.Read(r, binary.LittleEndian, &c.PkType); err != nil {
 		return nil, err
+	}
+	var nIncl uint32
+	if err := binary.Read(r, binary.LittleEndian, &nIncl); err != nil {
+		return nil, err
+	}
+	if nIncl > maxIncludeCols {
+		return nil, moerr.NewInternalErrorNoCtx("fulltext2 cdc: bad include col count")
+	}
+	if nIncl > 0 {
+		c.IncludeTypes = make([]int32, nIncl)
+		for i := range c.IncludeTypes {
+			if err := binary.Read(r, binary.LittleEndian, &c.IncludeTypes[i]); err != nil {
+				return nil, err
+			}
+		}
 	}
 	var n int64
 	if err := binary.Read(r, binary.LittleEndian, &n); err != nil {
@@ -135,9 +179,36 @@ func DecodeCdc(buf []byte) (*Cdc, error) {
 		if err != nil {
 			return nil, err
 		}
-		c.Events = append(c.Events, CdcEvent{Op: cdcOp(op), Pk: pk, Text: text})
+		var include []any
+		if nIncl > 0 {
+			include = make([]any, nIncl)
+			for ci := 0; ci < int(nIncl); ci++ {
+				v, ierr := cdcReadInclude(r, c.IncludeTypes[ci])
+				if ierr != nil {
+					return nil, ierr
+				}
+				include[ci] = v
+			}
+		}
+		c.Events = append(c.Events, CdcEvent{Op: cdcOp(op), Pk: pk, Text: text, Include: include})
 	}
 	return c, nil
+}
+
+// cdcReadInclude reads one INCLUDE value: a null flag, then (if not null) a u32 length +
+// typed content decoded via decodePk. Returns nil for a NULL value.
+func cdcReadInclude(r *bytes.Reader, t int32) (any, error) {
+	flag, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	if flag == includeNull {
+		return nil, nil
+	}
+	if flag != includeNotNull {
+		return nil, moerr.NewInternalErrorNoCtx("fulltext2 cdc: bad include null-flag")
+	}
+	return cdcReadLenBytes(r, t)
 }
 
 func cdcReadLenBytes(r *bytes.Reader, pkType int32) (any, error) {

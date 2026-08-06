@@ -308,6 +308,30 @@ type Segment struct {
 	pkRaw     []byte  // loaded-side: the docmap bytes (view; pks live here len-prefixed)
 	docLen    []int32 // ord -> document length (token count), for BM25
 
+	// INCLUDE columns: actual per-doc scalar values stored in the docmap (ord-aligned),
+	// used for in-index prefiltering and covering projection so a covered query needs no
+	// JOIN back to the base table. Encoded with the same pk codec (fixed-width dense for
+	// numerics, [u32 len][content] for varchar/char). All slices are nil when the index has
+	// no INCLUDE columns.
+	//
+	// Build-side: includeVals[ord] is the row's per-column values ([]any of len(includeTypes));
+	// a nil element is SQL NULL. Loaded-side: includeVals is nil, and
+	// includeOffsets[ord*nIncl+col] is the byte offset (into includeRaw, a view over the
+	// docmap bytes == pkRaw) of column col's [nullFlag][u32 len][content] entry, decoded on
+	// demand by includeVal(ord, col).
+	// The docmap include section splits columns into a dense stride-addressed FIXED region
+	// (the integer family — no per-doc offset needed, computed by stride) and an
+	// offset-addressed VARLENA region (varchar/char). So a numeric-only INCLUDE index keeps
+	// ZERO resident offset entries; only varlena columns cost a resident offset table.
+	includeTypes []int32       // types.T of each INCLUDE column (len = nIncl, col order)
+	includeVals  [][]any       // build-side: ord -> per-column values (nil element = NULL)
+	includeRaw   []byte        // loaded-side: docmap bytes view (== pkRaw), mmap-backed on a base
+	includeLay   includeLayout // loaded-side: derived per-column fixed/varlena addressing
+	// loaded-side: byte offset of the FIXED region within includeRaw; the VARLENA offset table
+	// (ord*nVarlena+varlenaIdx -> offset). includeVarOffsets is nil when all columns are fixed.
+	includeFixedStart int
+	includeVarOffsets []int32
+
 	// term dict, BUILD-side representation — dictionary-free, keyed by the
 	// indexed term string. `terms` accumulates postings during build and gives
 	// O(1) exact lookup; `sortedTerms` is the ascending key list. On serialize
@@ -355,6 +379,113 @@ func (s *Segment) pk(ord int64) any {
 	l := int(binary.LittleEndian.Uint32(s.pkRaw[off:]))
 	v, _ := decodePk(s.PkType, s.pkRaw[off+4:off+4+l])
 	return v
+}
+
+// includeLayout is the derived per-column addressing for the docmap include section: a dense
+// stride-addressed FIXED region (the integer family) plus an offset-addressed VARLENA region
+// (varchar/char). Fixed columns need NO per-doc offset — their value sits at a computed
+// (ord*fixedStride + maskBytes + fixedValOff[col]) position — so only varlena columns cost a
+// resident offset table. Derived once from the column types (build encode + load decode).
+type includeLayout struct {
+	fixedIdx    []int // per col: index among fixed cols (0..nFixed-1), or -1 if varlena
+	varlenaIdx  []int // per col: index among varlena cols (0..nVarlena-1), or -1 if fixed
+	fixedValOff []int // per col: byte offset of its value within a row's fixed value region (fixed cols)
+	fixedWidth  []int // per col: byte width (fixed cols)
+	nFixed      int
+	nVarlena    int
+	maskBytes   int // ceil(nFixed/8): the per-row NULL bitmask for fixed cols
+	fixedStride int // maskBytes + sum(fixedWidth): bytes per doc in the fixed region
+}
+
+// computeIncludeLayout derives the fixed/varlena addressing from the INCLUDE column types.
+func computeIncludeLayout(types []int32) includeLayout {
+	l := includeLayout{
+		fixedIdx:    make([]int, len(types)),
+		varlenaIdx:  make([]int, len(types)),
+		fixedValOff: make([]int, len(types)),
+		fixedWidth:  make([]int, len(types)),
+	}
+	valOff := 0
+	for c, t := range types {
+		l.fixedIdx[c], l.varlenaIdx[c] = -1, -1
+		if w, ok := fixedPkByteWidth(t); ok {
+			l.fixedIdx[c] = l.nFixed
+			l.fixedWidth[c] = w
+			l.fixedValOff[c] = valOff
+			valOff += w
+			l.nFixed++
+		} else {
+			l.varlenaIdx[c] = l.nVarlena
+			l.nVarlena++
+		}
+	}
+	l.maskBytes = (l.nFixed + 7) / 8
+	l.fixedStride = l.maskBytes + valOff
+	return l
+}
+
+// nIncludeCols is the number of INCLUDE columns carried by this segment (0 = none).
+func (s *Segment) nIncludeCols() int { return len(s.includeTypes) }
+
+// decodeInclude returns the doc's INCLUDE column values (all columns, in index order; a nil
+// element = SQL NULL), or nil when the segment has no INCLUDE columns. Carried out with a
+// search Result so a covering query needs no base-table JOIN.
+func (s *Segment) decodeInclude(ord int64) []any {
+	n := len(s.includeTypes)
+	if n == 0 {
+		return nil
+	}
+	out := make([]any, n)
+	for c := 0; c < n; c++ {
+		if v, isNull, err := s.includeVal(ord, c); err == nil && !isNull {
+			out[c] = v
+		}
+	}
+	return out
+}
+
+// includeVal returns the value of INCLUDE column col at ord and whether it is SQL NULL.
+// Build-side reads the resident includeVals; a loaded segment decodes on demand: a FIXED
+// (integer) column from the dense stride-addressed region (no offset — computed position + a
+// NULL bitmask), a VARLENA column from includeVarOffsets (a [nullFlag][u32 len][content]
+// entry). Returns (nil, true, nil) when the segment has no INCLUDE columns.
+func (s *Segment) includeVal(ord int64, col int) (any, bool, error) {
+	nIncl := len(s.includeTypes)
+	if nIncl == 0 || col < 0 || col >= nIncl {
+		return nil, true, nil
+	}
+	if s.includeVals != nil { // build-side
+		var v any
+		if int(ord) < len(s.includeVals) && col < len(s.includeVals[ord]) {
+			v = s.includeVals[ord][col]
+		}
+		return v, v == nil, nil
+	}
+	lay := &s.includeLay
+	if fi := lay.fixedIdx[col]; fi >= 0 {
+		// FIXED region: value at a stride-computed position, NULL via the per-row bitmask.
+		rowBase := s.includeFixedStart + int(ord)*lay.fixedStride
+		if s.includeRaw[rowBase+fi/8]&(1<<(uint(fi)&7)) != 0 {
+			return nil, true, nil
+		}
+		valOff := rowBase + lay.maskBytes + lay.fixedValOff[col]
+		v, err := decodePk(s.includeTypes[col], s.includeRaw[valOff:valOff+lay.fixedWidth[col]])
+		if err != nil {
+			return nil, false, err
+		}
+		return v, false, nil
+	}
+	// VARLENA region: offset-addressed [nullFlag][u32 len][content].
+	off := int(s.includeVarOffsets[int(ord)*lay.nVarlena+lay.varlenaIdx[col]])
+	if s.includeRaw[off] == includeNull {
+		return nil, true, nil
+	}
+	l := int(binary.LittleEndian.Uint32(s.includeRaw[off+1:]))
+	v, err := decodePk(s.includeTypes[col], s.includeRaw[off+1+4:off+1+4+l])
+	if err != nil {
+		return nil, false, err
+	}
+	return v, false, nil
 }
 
 // Free releases a loaded segment's mmap (and its backing file, if linked). Safe on

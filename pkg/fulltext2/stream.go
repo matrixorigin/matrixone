@@ -18,7 +18,6 @@ import (
 	"encoding/binary"
 	"math"
 
-	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
@@ -172,7 +171,7 @@ func (s *Segment) streamWAND(clauses []clause, algo ScoreAlgo, gs *globalStats, 
 // streamPhrase; and a full boolean with MUST/MUST-NOT/mixed-phrase via streamBoolean
 // (each segment's dense evalBoolean, freed before the next). All share the same sink — a
 // uniform emit interface, and no separate paginated copy in the caller.
-func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo ScoreAlgo, filter docfilter.MembershipFilter, emit func(keys *vectorindex.ColumnBuffer, distances []float64) error) error {
+func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo ScoreAlgo, filter *prefilter, emit func(keys *vectorindex.ColumnBuffer, distances []float64) error) error {
 	if idx.globalN == 0 {
 		return nil
 	}
@@ -225,7 +224,7 @@ func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo 
 // live df, so this makes two cheap passes: pass 1 counts the live phrase df; pass 2
 // scores + streams. Peak Go heap is O(one segment's matchPhrase hits) (freed before the
 // next segment), NOT O(globalN). Mirrors SearchPhrase's scoring (partial × idf²) exactly.
-func (idx *Index) streamPhrase(slots []phraseSlot, algo ScoreAlgo, filter docfilter.MembershipFilter, sink *streamSink) error {
+func (idx *Index) streamPhrase(slots []phraseSlot, algo ScoreAlgo, filter *prefilter, sink *streamSink) error {
 	if idx.globalN == 0 || len(slots) == 0 {
 		return nil
 	}
@@ -268,7 +267,7 @@ func (idx *Index) streamPhrase(slots []phraseSlot, algo ScoreAlgo, filter docfil
 // heap-free via streamWAND — the position-free analogue of StreamQuery's disjunctive
 // branch, but a CJK run is tokenized to OR terms instead of a positional phrase, so it
 // works on a POSITION_FREE index.
-func (idx *Index) StreamBagOfWords(pattern []byte, parser string, algo ScoreAlgo, filter docfilter.MembershipFilter, emit func(keys *vectorindex.ColumnBuffer, distances []float64) error) error {
+func (idx *Index) StreamBagOfWords(pattern []byte, parser string, algo ScoreAlgo, filter *prefilter, emit func(keys *vectorindex.ColumnBuffer, distances []float64) error) error {
 	if idx.globalN == 0 {
 		return nil
 	}
@@ -287,7 +286,7 @@ func (idx *Index) StreamBagOfWords(pattern []byte, parser string, algo ScoreAlgo
 // corpus stats + per-segment liveness), pushing every (pk, score) into sink and
 // flushing at the end. Shared by StreamQuery's boolean disjunctive branch and
 // StreamBagOfWords' IN BM25 MODE path — a change to the disjunctive walk lands once.
-func (idx *Index) streamDisjunction(terms []clause, algo ScoreAlgo, filter docfilter.MembershipFilter, sink *streamSink) error {
+func (idx *Index) streamDisjunction(terms []clause, algo ScoreAlgo, filter *prefilter, sink *streamSink) error {
 	gs := idx.newGlobalStats()
 	for si, seg := range idx.segments {
 		allow := andAllow(mkAllow(seg, filter), &livenessMembership{idx: idx, si: si})

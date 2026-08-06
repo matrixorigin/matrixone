@@ -20,7 +20,6 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -128,6 +127,27 @@ func (idx *Index) resolve() {
 	}
 }
 
+// includeTypes returns the index's INCLUDE column types (types.T per column), read from the
+// first segment that carries them — all segments of an index share one INCLUDE schema.
+// nil when the index has no INCLUDE columns.
+func (idx *Index) includeTypes() []int32 {
+	for _, s := range idx.segments {
+		if len(s.includeTypes) > 0 {
+			return s.includeTypes
+		}
+	}
+	return nil
+}
+
+// pkType returns the index's primary-key type (types.T), used to type-bind an inline pk
+// predicate. All segments share the pk type; 0 when the index has no segments.
+func (idx *Index) pkType() int32 {
+	if len(idx.segments) > 0 {
+		return idx.segments[0].PkType
+	}
+	return 0
+}
+
 // isLive reports whether (si, ord) is the live copy of its pk, via the per-segment
 // liveness bitmap (nil => the segment is fully live). Same semantics as
 // livenessMembership; no pk key or map lookup needed.
@@ -141,7 +161,7 @@ func (idx *Index) isLive(si int, ord int64) bool {
 // degenerate one-term phrase. Scoring uses global N + global avgDocLen, and the
 // phrase's document frequency is the number of LIVE documents that match (dead
 // and delete-shadowed copies are excluded), so idf is exact.
-func (idx *Index) SearchPhrase(slots []phraseSlot, algo ScoreAlgo, k int, filter docfilter.MembershipFilter) []Result {
+func (idx *Index) SearchPhrase(slots []phraseSlot, algo ScoreAlgo, k int, filter *prefilter) []Result {
 	if k <= 0 || idx.globalN == 0 || len(slots) == 0 {
 		return nil
 	}
@@ -168,7 +188,7 @@ func (idx *Index) SearchPhrase(slots []phraseSlot, algo ScoreAlgo, k int, filter
 			df++ // distinct live phrase match (filter-independent, matches the old dfSet)
 			if allowed(allow, h.ord) {
 				partial := seg.scoreTerm(algo, float64(h.tf), 1.0, h.ord, idx.globalAvgDocLen)
-				tk.push(seg.pk(h.ord), partial)
+				tk.push(seg.pk(h.ord), partial, seg.decodeInclude(h.ord))
 			}
 		}
 	}
@@ -193,8 +213,9 @@ func (idx *Index) SearchPhrase(slots []phraseSlot, algo ScoreAlgo, k int, filter
 // per-segment WAND paths — do not "unify" them; keying this by ord reintroduces cross-
 // segment ord collisions.
 type topKItem struct {
-	pk    any
-	score float32
+	pk      any
+	score   float32
+	include []any // INCLUDE values carried for a covering query (nil when no INCLUDE columns)
 }
 
 type boundedTopK struct {
@@ -210,12 +231,12 @@ func newBoundedTopK(k int) *boundedTopK { return &boundedTopK{k: k} }
 
 func (b *boundedTopK) len() int { return len(b.h) }
 
-func (b *boundedTopK) push(pk any, score float32) {
+func (b *boundedTopK) push(pk any, score float32, include []any) {
 	if b.k <= 0 {
 		return
 	}
 	if len(b.h) < b.k {
-		b.h = append(b.h, topKItem{pk, score})
+		b.h = append(b.h, topKItem{pk, score, include})
 		for i := len(b.h) - 1; i > 0; {
 			p := (i - 1) / 2
 			if b.h[p].score <= b.h[i].score {
@@ -229,7 +250,7 @@ func (b *boundedTopK) push(pk any, score float32) {
 	if score <= b.h[0].score {
 		return // not better than the current k-th best
 	}
-	b.h[0] = topKItem{pk, score}
+	b.h[0] = topKItem{pk, score, include}
 	n := len(b.h)
 	for i := 0; ; {
 		l, r, s := 2*i+1, 2*i+2, i
@@ -252,7 +273,7 @@ func (b *boundedTopK) push(pk any, score float32) {
 func (b *boundedTopK) resultsDescScaled(scale float32) []Result {
 	out := make([]Result, len(b.h))
 	for i := range b.h {
-		out[i] = Result{Pk: b.h[i].pk, Score: b.h[i].score * scale}
+		out[i] = Result{Pk: b.h[i].pk, Score: b.h[i].score * scale, Include: b.h[i].include}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	return out
@@ -295,7 +316,7 @@ func topKResults(results []Result, k int) []Result {
 
 // SearchText tokenizes query with tok and runs an NL exact-phrase search across
 // the index.
-func (idx *Index) SearchText(query []byte, tok tokenizer.Tokenizer, algo ScoreAlgo, k int, filter docfilter.MembershipFilter) ([]Result, error) {
+func (idx *Index) SearchText(query []byte, tok tokenizer.Tokenizer, algo ScoreAlgo, k int, filter *prefilter) ([]Result, error) {
 	return idx.SearchPhrase(tokenizePhraseSlots(tok, query), algo, k, filter), nil
 }
 
@@ -407,7 +428,7 @@ func (gs *globalStats) avgdl(seg *Segment) float64 {
 // the global scale — the merge below is then the exact global top-k even across a
 // base + CDC tail. All clause types (term, prefix, phrase, and the disjunctive WAND
 // path) score on global stats — a phrase clause uses the cross-segment phrase df.
-func (idx *Index) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, filter docfilter.MembershipFilter) ([]Result, error) {
+func (idx *Index) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, filter *prefilter) ([]Result, error) {
 	if k <= 0 || idx.globalN == 0 {
 		return nil, nil
 	}
@@ -442,7 +463,7 @@ func (idx *Index) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, filter docfi
 // O(globalN) — this is what makes the streamed boolean shape genuinely bounded rather than
 // the old SearchQuery(globalN) fallback that materialized the whole live corpus. Ranking is
 // the upstream ORDER BY score node's job (same contract as the other streaming paths).
-func (idx *Index) streamBoolean(q BoolQuery, algo ScoreAlgo, filter docfilter.MembershipFilter, sink *streamSink) error {
+func (idx *Index) streamBoolean(q BoolQuery, algo ScoreAlgo, filter *prefilter, sink *streamSink) error {
 	if idx.globalN == 0 {
 		return nil
 	}
@@ -569,7 +590,23 @@ func (idx *Index) ReconstructLiveDocs(positionFree bool) iter.Seq2[TokenizedDoc,
 					positions[i] = pt.pos // byte position, carried through MERGE
 				}
 				buckets[kd.ord] = nil // copied out — let GC reclaim it
-				if !yield(TokenizedDoc{Pk: seg.pk(kd.ord), Terms: terms, Positions: positions}, nil) {
+				// Carry the source doc's INCLUDE values through MERGE so the rebuilt base
+				// keeps them (a compaction that dropped them would break covering/prefilter).
+				var include []any
+				if nIncl := seg.nIncludeCols(); nIncl > 0 {
+					include = make([]any, nIncl)
+					for c := 0; c < nIncl; c++ {
+						v, isNull, ierr := seg.includeVal(kd.ord, c)
+						if ierr != nil {
+							yield(TokenizedDoc{}, ierr)
+							return
+						}
+						if !isNull {
+							include[c] = v
+						}
+					}
+				}
+				if !yield(TokenizedDoc{Pk: seg.pk(kd.ord), Terms: terms, Positions: positions, Include: include}, nil) {
 					return
 				}
 			}

@@ -40,18 +40,19 @@ type TailSegment struct {
 // TailBuilder (positional Builder here). NOT safe for concurrent use; Cleanup() must
 // be deferred to remove the temp files.
 type TailBuilder struct {
-	pkType     int32
-	capacity   int64 // doc cap (max_index_capacity)
-	postingCap int64 // posting cap (max_postings_capacity); seal on whichever is hit first
-	tokenize   func(string) []WordPos
-	dir        string
-	seq        int
-	cur        *Builder // current open segment (nil until the first insert row)
-	segs       []TailSegment
-	deletes    []DeleteRecord // OPEN delete batch (spilled once it reaches capacity)
-	deleteSegs []TailSegment  // sealed delete frames, spilled to temp files
-	delSeq     int
-	opts       []BuildOpt // carried into each per-segment Builder (e.g. WithPositionFree)
+	pkType       int32
+	capacity     int64 // doc cap (max_index_capacity)
+	postingCap   int64 // posting cap (max_postings_capacity); seal on whichever is hit first
+	tokenize     func(string) []WordPos
+	dir          string
+	seq          int
+	cur          *Builder // current open segment (nil until the first insert row)
+	segs         []TailSegment
+	deletes      []DeleteRecord // OPEN delete batch (spilled once it reaches capacity)
+	deleteSegs   []TailSegment  // sealed delete frames, spilled to temp files
+	delSeq       int
+	opts         []BuildOpt // carried into each per-segment Builder (e.g. WithPositionFree)
+	includeTypes []int32    // INCLUDE column schema, adopted from the first CDC batch
 }
 
 // NewTailBuilder creates a streaming tail builder backed by a private temp dir under
@@ -77,6 +78,13 @@ func NewTailBuilder(pkType int32, capacity, postingCap int64, spillDir string, t
 // the open segment (sealed + spilled once it reaches `capacity` docs), deletes are
 // collected. Same tokenizer as the search side, so build/query tokens match.
 func (t *TailBuilder) AddBatch(cdc *Cdc) error {
+	// The CDC blob is self-describing: adopt its INCLUDE schema once so every tail segment
+	// this builder seals carries the docmap include section (WithIncludeTypes). A copy of
+	// t.opts avoids mutating the caller's slice.
+	if t.includeTypes == nil && len(cdc.IncludeTypes) > 0 {
+		t.includeTypes = cdc.IncludeTypes
+		t.opts = append(append([]BuildOpt(nil), t.opts...), WithIncludeTypes(t.includeTypes))
+	}
 	for i := range cdc.Events {
 		e := &cdc.Events[i]
 		switch e.Op {
@@ -93,8 +101,8 @@ func (t *TailBuilder) AddBatch(cdc *Cdc) error {
 				t.cur = NewBuilder(fmt.Sprintf("cdctail-%d", t.seq), t.pkType, t.opts...)
 			}
 			// REPLACE, not append: a repeated upsert of one pk within this open segment
-			// supersedes its earlier terms (Add would merge old+new under one live doc).
-			t.cur.SetDoc(e.Pk, words)
+			// supersedes its earlier terms AND its INCLUDE values (Add would merge).
+			t.cur.SetDoc(e.Pk, words, e.Include)
 			if ReachedSegmentCap(t.cur, t.capacity, t.postingCap) {
 				if err := t.seal(); err != nil {
 					return err

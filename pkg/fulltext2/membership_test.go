@@ -59,17 +59,17 @@ func TestPrefilterMembership(t *testing.T) {
 	even := []any{int64(0), int64(2), int64(4), int64(6), int64(8)}
 
 	// WAND path (pure disjunction "x") with the filter → only even pks.
-	rWand, err := idx.SearchQuery([]byte("x"), true, ParserDefault, BM25, 100, filter)
+	rWand, err := idx.SearchQuery([]byte("x"), true, ParserDefault, BM25, 100, &prefilter{docFilter: filter})
 	require.NoError(t, err)
 	require.ElementsMatch(t, even, resultIDs(rWand))
 
 	// Full boolean evaluator (MUST "+x") with the filter → only even pks.
-	rBool, err := idx.SearchQuery([]byte("+x"), true, ParserDefault, BM25, 100, filter)
+	rBool, err := idx.SearchQuery([]byte("+x"), true, ParserDefault, BM25, 100, &prefilter{docFilter: filter})
 	require.NoError(t, err)
 	require.ElementsMatch(t, even, resultIDs(rBool))
 
 	// NL phrase path ("x") with the filter → only even pks.
-	rNL, err := idx.SearchQuery([]byte("x"), false, ParserDefault, BM25, 100, filter)
+	rNL, err := idx.SearchQuery([]byte("x"), false, ParserDefault, BM25, 100, &prefilter{docFilter: filter})
 	require.NoError(t, err)
 	require.ElementsMatch(t, even, resultIDs(rNL))
 
@@ -80,7 +80,7 @@ func TestPrefilterMembership(t *testing.T) {
 
 	// The filter also correctly bounds a pushed LIMIT to the FILTERED set: top-2 over
 	// the even docs returns 2 even pks (not 2 of all 10 then post-filtered to fewer).
-	rLimit, err := idx.SearchQuery([]byte("x"), true, ParserDefault, BM25, 2, filter)
+	rLimit, err := idx.SearchQuery([]byte("x"), true, ParserDefault, BM25, 2, &prefilter{docFilter: filter})
 	require.NoError(t, err)
 	require.Len(t, rLimit, 2)
 	for _, pk := range resultIDs(rLimit) {
@@ -128,7 +128,7 @@ func TestPhraseDfFilterIndependent(t *testing.T) {
 	require.NoError(t, err)
 	defer filter.Free()
 
-	filtered := idx.SearchPhrase(phr("alpha"), BM25, 100, filter)
+	filtered := idx.SearchPhrase(phr("alpha"), BM25, 100, &prefilter{docFilter: filter})
 	require.Len(t, filtered, 2, "only the allowed docs are returned")
 	require.InDelta(t, s0, scoreOf(filtered, 0), 1e-5,
 		"doc 0's score must be filter-independent (corpus df, not filtered count)")

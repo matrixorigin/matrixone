@@ -253,6 +253,27 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		}
 	}
 
+	// fulltext2 INCLUDE/pk prefilter pushdown: when the driving index is a fulltext2 index
+	// WITH INCLUDE columns, peel the WHERE predicates on those INCLUDE columns (and the pk)
+	// out of scanNode.FilterList into the ivfpq-aligned predicate JSON, which fulltext2_search
+	// evaluates against the stored per-doc values inside the WAND walk (bounding the pushed
+	// LIMIT to the filtered set). Reusing buildFilterPredicateJSON keeps this correctness-safe:
+	// it peels only NUMERIC + pk predicates exactly and leaves varchar/others residual (so a
+	// collation-sensitive string filter stays on the existing scan path — no wrong results).
+	// Removing the peeled predicates lets the pre-filter second-scan below be skipped when no
+	// residual filter remains.
+	var ft2PredsJSON string
+	if len(indexDefs) > 0 && catalog.IsFullText2IndexAlgo(indexDefs[0].IndexAlgo) {
+		if incCols := indexDefIncludedColumnsBestEffort(indexDefs[0]); len(incCols) > 0 {
+			pkColName := scanNode.TableDef.Pkey.PkeyColName
+			preds, serialized, residual, perr := buildFilterPredicateJSON(scanNode.FilterList, scanNode, incCols, pkColName)
+			if perr == nil && len(serialized) > 0 {
+				ft2PredsJSON = preds
+				scanNode.FilterList = residual
+			}
+		}
+	}
+
 	// A single fulltext stream can safely keep LIMIT+OFFSET candidates. With
 	// multiple streams, limiting each input before their intersection can drop
 	// documents that belong to the final top page, so leave those inputs
@@ -307,6 +328,13 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 				makePlan2StringConstExprWithType(cfg),
 				DeepCopyExpr(fn.Args[0]), // pattern (may be a bound '?' parameter)
 				DeepCopyExpr(fn.Args[1]), // mode (a constant)
+			}
+			// Attach the peeled INCLUDE/pk predicate JSON to the DRIVING TVF (i==0). With
+			// multiple MATCHes the JOIN #1 doc_id intersection propagates the filter, so one
+			// filtered stream constrains the whole result — the predicate need only ride the
+			// driving stream.
+			if i == 0 && ft2PredsJSON != "" {
+				exprs = append(exprs, makePlan2StringConstExprWithType(ft2PredsJSON))
 			}
 			curr_ftnode_id, err = builder.buildFulltext2SearchNode(ctx, exprs, nil)
 			if err != nil {

@@ -97,6 +97,21 @@ func (Hooks) BuildFullTextIndexDefs(
 		}
 	}
 
+	// Validate INCLUDE columns (stored as actual values in the segment docmap for
+	// prefilter + coverage). vecColName is "" — fulltext2 has no single indexed vector
+	// column; the plugin's SupportedIncludeColumnTypes() gates the accepted types.
+	var includeCols []string
+	if indexInfo.IndexOption != nil && len(indexInfo.IndexOption.IncludeColumns) > 0 {
+		if err := planplugin.ValidateIncludeColumns(ctx, indexInfo.IndexOption.IncludeColumns, colMap, "", pkeyName,
+			fulltext2CatalogHooks.SupportedIncludeColumnTypes()); err != nil {
+			return nil, nil, err
+		}
+		includeCols = make([]string, 0, len(indexInfo.IndexOption.IncludeColumns))
+		for _, c := range indexInfo.IndexOption.IncludeColumns {
+			includeCols = append(includeCols, c.ColName())
+		}
+	}
+
 	params, err := buildFullText2Params(indexInfo)
 	if err != nil {
 		return nil, nil, err
@@ -123,6 +138,7 @@ func (Hooks) BuildFullTextIndexDefs(
 			IndexAlgoTableType: tblType,
 			IndexAlgoParams:    params,
 			Parts:              indexParts,
+			IncludedColumns:    includeCols, // stored in the segment docmap, not a hidden table
 			TableExist:         true,
 			Option:             option,
 			Comment:            comment,
@@ -205,6 +221,25 @@ func buildFullText2Params(idx *tree.FullTextIndex) (string, error) {
 		parser = strings.ToLower(idx.IndexOption.ParserName)
 	}
 	res["parser"] = parser
+	// Persist INCLUDE column names in algo_params so they survive catalog reload (the
+	// first-class IndexDef.IncludedColumns is repopulated from here via
+	// indexDefIncludedColumns / parseIncludedColumnsFromParams). Mirrors ivfpq's
+	// ParamsFromTree. Not rendered by IndexParamsToStringList (SHOW CREATE uses the field).
+	if idx.IndexOption != nil && len(idx.IndexOption.IncludeColumns) > 0 {
+		names := make([]string, 0, len(idx.IndexOption.IncludeColumns))
+		for _, c := range idx.IndexOption.IncludeColumns {
+			if n := c.ColName(); n != "" {
+				names = append(names, n)
+			}
+		}
+		if len(names) > 0 {
+			marshaled, err := catalog.MarshalIncludeColumnsValue(names)
+			if err != nil {
+				return "", err
+			}
+			res[catalog.IncludedColumns] = marshaled
+		}
+	}
 	if idx.IndexOption != nil {
 		if idx.IndexOption.MaxIndexCapacity > 0 {
 			res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)

@@ -59,6 +59,15 @@ type TableConfig struct {
 	// position_free algo_param so every build path (create, CDC tail, compact) agrees.
 	PositionFree bool `json:"position_free,omitempty"`
 	FromSource   bool `json:"from_source,omitempty"`
+	// IncludeTypes is the INCLUDE columns' types.T in column order. The build SQL passes the
+	// INCLUDE source columns as the trailing fulltext2_create args (after the text columns),
+	// so the TVF knows how many trailing argVecs are INCLUDE values (vs text) and their types
+	// to store the actual per-doc value in the docmap. nil ⇒ no INCLUDE columns.
+	IncludeTypes []int32 `json:"include_types,omitempty"`
+	// IncludeColumns is the INCLUDE columns' NAMES in column order — carried in the SEARCH
+	// cfg so Fulltext2Search.Search can map a covering query's RequestedIncludeColumns (by
+	// name) to each result's positional Include values. nil ⇒ no INCLUDE columns.
+	IncludeColumns []string `json:"include_columns,omitempty"`
 }
 
 // runSql / runStreamingSql indirect the sqlexec executor entry points so unit tests can

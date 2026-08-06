@@ -341,7 +341,12 @@ func runReindex(ctx context.Context,
 
 	resolveVariableFunc := (func(string, bool, bool) (any, error))(nil)
 	if task.Metadata != nil {
-		resolveVariableFunc = task.Metadata.ResolveVariableFunc
+		// Use the session-defaulting resolver: the reindex compile/exec resolves
+		// session/system vars (e.g. sql_mode, wired into the write-policy check by
+		// #25438) that the captured Metadata never holds. Without this, the rebuild
+		// INSERT aborts every idxcron reindex with "key sql_mode not found". Algo
+		// vars stay strict — an uncaptured one still errors. See metadata.go.
+		resolveVariableFunc = task.Metadata.ResolveVariableWithSessionDefaults
 	}
 
 	err = runTxnWithSqlContext(ctx, txnEngine, txnClient, cnUUID,
@@ -411,6 +416,23 @@ func runReindex(ctx context.Context,
 					if second > 0 {
 						interval = time.Duration(second) * time.Second
 						hour = int64(currentHour)
+					}
+				}
+
+				// Prefer the index's persisted algo_params.session_vars over the
+				// idxcron task's Capture blob (mo_index_update.metadata → task.Metadata,
+				// wired as the resolver above). session_vars is the mechanism the rest of
+				// the system (ISCP async build, clone, ALTER restore) already reads, and
+				// idxcron is migrating to it. This is read here, inside getTableDef's
+				// account context, so account scoping is correct (a global JOIN in the
+				// task-listing query would miss non-system accounts). No per-algo switch:
+				// any index that populates session_vars uses it; ivfflat (which does not)
+				// transparently keeps its Capture-based resolver, preserving legacy behavior.
+				if sv, sverr := catalog.IndexParamsSessionVars(idx.IndexAlgoParams); sverr == nil && len(sv) > 0 {
+					if sessionMeta, merr := sqlexec.NewMetadataFromJson(string(sv)); merr == nil {
+						sqlproc.SqlCtx.SetResolveVariableFunc(sessionMeta.ResolveVariableWithSessionDefaults)
+					} else {
+						logutil.Errorf("[idxcron] index=%s: algo_params.session_vars parse failed, falling back to Capture: %v", task.IndexName, merr)
 					}
 				}
 				break

@@ -54,7 +54,13 @@ func TestCatalogHooks(t *testing.T) {
 	require.Nil(t, h.DefaultOptions())
 	require.Nil(t, h.SupportedVectorTypes())
 	require.Nil(t, h.SupportedOpTypes())
-	require.Nil(t, h.SupportedIncludeColumnTypes())
+	// INCLUDE columns are supported (actual-value storage): the integer family + varchar/char,
+	// exactly the set the pk codec round-trips. Must EXCLUDE float (codec has no float case).
+	incTypes := h.SupportedIncludeColumnTypes()
+	require.NotEmpty(t, incTypes)
+	require.Contains(t, incTypes, types.T_int64)
+	require.Contains(t, incTypes, types.T_varchar)
+	require.NotContains(t, incTypes, types.T_float32)
 	// SupportedPrimaryKeyTypes mirrors the pk codec's domain (NOT nil "any type"): it
 	// includes int/varchar/uuid/temporal/decimal but must EXCLUDE FLOAT/DOUBLE, which the
 	// codec cannot encode — else a float pk would pass CREATE and fail at build.

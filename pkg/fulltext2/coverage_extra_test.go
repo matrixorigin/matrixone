@@ -62,7 +62,7 @@ func TestDecodePostingsGuards(t *testing.T) {
 	bad := append([]byte{0xFF}, make([]byte, 8)...) // 9 bytes, wrong format tag
 	require.ErrorContains(t, s.decodePostings(bad, nil, nil), "unsupported postings format")
 
-	ok := append([]byte{postingsFormatV6}, make([]byte, 8)...)
+	ok := append([]byte{postingsFormatV1}, make([]byte, 8)...)
 	require.NoError(t, s.decodePostings(ok, []byte{1}, []byte{2}))
 	require.Equal(t, ok, s.ranking)
 }

@@ -60,7 +60,16 @@ func (CatalogHooks) RestoreBehavior() catalogplugin.RestoreBehavior {
 }
 
 // BuildSessionVars — fulltext2 captures no session vars into algo_params.
-func (CatalogHooks) BuildSessionVars() []string { return nil }
+// BuildSessionVars — fulltext2 pins lower_case_table_names into
+// algo_params.session_vars so the background reindex folds identifiers in the
+// rebuild SQL exactly as the user built under (its VALUE matters). sql_mode is
+// intentionally omitted: a background reindex runs permissive and gets sql_mode
+// defaulted at the reindex hook (sqlexec.Metadata.ResolveVariableWithSessionDefaults),
+// not captured. Mirrors the vector-index plugins' capture list, and matches this
+// plugin's IdxcronMetadata capture.
+func (CatalogHooks) BuildSessionVars() []string {
+	return []string{"lower_case_table_names"}
+}
 
 // DefaultOptions — no statement-level option JSON required.
 func (CatalogHooks) DefaultOptions() map[string]string { return nil }
@@ -74,12 +83,25 @@ const Fulltext2IndexFlag = "experimental_fulltext2_index"
 // ExperimentalFlag — CREATE FULLTEXT2 INDEX is gated by experimental_fulltext2_index.
 func (CatalogHooks) ExperimentalFlag() string { return Fulltext2IndexFlag }
 
-// SupportedVectorTypes / SupportedOpTypes / SupportedIncludeColumnTypes —
-// fulltext2 has no vector/op-type/include concept.
-func (CatalogHooks) SupportedVectorTypes() []types.T        { return nil }
-func (CatalogHooks) IsVectorIndex() bool                    { return false } // fulltext-family, not ANN
-func (CatalogHooks) SupportedOpTypes() map[string]string    { return nil }
-func (CatalogHooks) SupportedIncludeColumnTypes() []types.T { return nil }
+// SupportedVectorTypes / SupportedOpTypes — fulltext2 has no vector/op-type concept.
+func (CatalogHooks) SupportedVectorTypes() []types.T     { return nil }
+func (CatalogHooks) IsVectorIndex() bool                 { return false } // fulltext-family, not ANN
+func (CatalogHooks) SupportedOpTypes() map[string]string { return nil }
+
+// SupportedIncludeColumnTypes lists the scalar column types accepted as INCLUDE columns —
+// stored as their ACTUAL value in the segment docmap (not a hash), so both prefiltering and
+// covering projection work. The set is EXACTLY what the segment pk codec
+// (pkcodec.go encodePk/decodePk) already round-trips, so include values reuse that codec
+// verbatim: the integer family (dense fixed-width) and varchar/char (varlena [len][value]).
+// float32/64, date/decimal/text are intentionally deferred — pkcodec has no float case and
+// widening the set is a codec extension, not a plan change.
+func (CatalogHooks) SupportedIncludeColumnTypes() []types.T {
+	return []types.T{
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_varchar, types.T_char,
+	}
+}
 
 // SupportedPrimaryKeyTypes lists EXACTLY the pk types the segment codec (pkcodec.go
 // encodePk/decodePk) can round-trip. It is deliberately NOT nil ("any type"): a nil let

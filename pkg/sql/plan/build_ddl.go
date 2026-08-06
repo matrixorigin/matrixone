@@ -2307,6 +2307,32 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		if err != nil {
 			return err
 		}
+		// Capture the plugin's build-time session vars (BuildSessionVars) into each
+		// index def's algo_params.session_vars — mirroring CreateIndexDef's vector
+		// path — so background builds (idxcron reindex, ISCP async, clone/restore)
+		// reproduce the create-time config. fulltext2 pins lower_case_table_names;
+		// classic fulltext's BuildSessionVars returns nil, so this is a no-op there.
+		if ctx != nil {
+			if names := p.Catalog().BuildSessionVars(); len(names) > 0 {
+				sv, cerr := compileplugin.CaptureVars(ctx.ResolveVariable, names)
+				if cerr != nil {
+					return cerr
+				}
+				if len(sv) > 0 {
+					for _, idxDef := range idxDefs {
+						flat := map[string]string{}
+						if idxDef.IndexAlgoParams != "" {
+							if flat, err = catalog.IndexParamsStringToMap(idxDef.IndexAlgoParams); err != nil {
+								return err
+							}
+						}
+						if idxDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonStringWithSessionVars(flat, sv); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
 		createTable.IndexTables = append(createTable.IndexTables, tblDefs...)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, idxDefs...)
 	}
@@ -2966,9 +2992,13 @@ func validateIncludeColumns(ctx CompilerContext,
 			}
 		}
 		if !supported {
+			names := make([]string, 0, len(supportedTypes))
+			for _, st := range supportedTypes {
+				names = append(names, st.String())
+			}
 			return moerr.NewNotSupportedf(ctx.GetContext(),
-				"INCLUDE column '%s' has unsupported type %s (supported: int32, int64, float32, float64)",
-				origin, colType.String())
+				"INCLUDE column '%s' has unsupported type %s (supported: %s)",
+				origin, colType.String(), strings.Join(names, ", "))
 		}
 	}
 	return nil

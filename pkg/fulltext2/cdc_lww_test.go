@@ -86,14 +86,14 @@ func queryIDs(t *testing.T, idx *Index, word string) []any {
 // append), and a zero-word SetDoc keeps a live 0-term doc (the empty-upsert shadow).
 func TestBuilderSetDocReplace(t *testing.T) {
 	b := NewBuilder("b", int32(types.T_int64))
-	b.SetDoc(int64(1), []WordPos{{Word: "alpha", Pos: 0}})
-	b.SetDoc(int64(1), []WordPos{{Word: "beta", Pos: 0}, {Word: "gamma", Pos: 6}})
+	b.SetDoc(int64(1), []WordPos{{Word: "alpha", Pos: 0}}, nil)
+	b.SetDoc(int64(1), []WordPos{{Word: "beta", Pos: 0}, {Word: "gamma", Pos: 6}}, nil)
 	require.Equal(t, 1, b.NumDocs())     // same pk => one doc
 	require.Equal(t, 2, b.NumPostings()) // replaced: 1 -> 2, not appended to 3
 	require.Equal(t, []string{"beta", "gamma"}, b.docs[0].Terms)
 
 	// zero-word upsert => a retained 0-term doc (carries pk + recency to shadow).
-	b.SetDoc(int64(2), nil)
+	b.SetDoc(int64(2), nil, nil)
 	require.Equal(t, 2, b.NumDocs())
 	require.Empty(t, b.docs[1].Terms)
 	require.Equal(t, int64(2), b.docs[1].Pk)
@@ -104,8 +104,8 @@ func TestBuilderSetDocReplace(t *testing.T) {
 func TestCdcUpsertReplaceNoMerge(t *testing.T) {
 	base := mkBase(t, map[int64]string{1: "alpha"})
 	c := NewCdc(int32(types.T_int64))
-	c.Upsert(int64(1), "beta")
-	c.Upsert(int64(1), "gamma")
+	c.Upsert(int64(1), "beta", nil)
+	c.Upsert(int64(1), "gamma", nil)
 	idx := buildTailIndexLWW(t, base, c, 1000)
 
 	require.Empty(t, queryIDs(t, idx, "alpha"), "base term superseded by the upsert")
@@ -119,7 +119,7 @@ func TestCdcUpsertReplaceNoMerge(t *testing.T) {
 func TestCdcUpsertEmptyShadows(t *testing.T) {
 	base := mkBase(t, map[int64]string{1: "alpha", 2: "delta"})
 	c := NewCdc(int32(types.T_int64))
-	c.Upsert(int64(1), "") // empty / NULL text
+	c.Upsert(int64(1), "", nil) // empty / NULL text
 	idx := buildTailIndexLWW(t, base, c, 1000)
 
 	require.Empty(t, queryIDs(t, idx, "alpha"), "emptied row must no longer match its old term")
@@ -133,8 +133,8 @@ func TestCdcUpsertEmptyShadows(t *testing.T) {
 func TestCdcNonemptyThenEmptySameFlush(t *testing.T) {
 	base := mkBase(t, map[int64]string{1: "alpha"})
 	c := NewCdc(int32(types.T_int64))
-	c.Upsert(int64(1), "beta")
-	c.Upsert(int64(1), "") // then emptied
+	c.Upsert(int64(1), "beta", nil)
+	c.Upsert(int64(1), "", nil) // then emptied
 	idx := buildTailIndexLWW(t, base, c, 1000)
 
 	require.Empty(t, queryIDs(t, idx, "alpha"))
@@ -146,9 +146,9 @@ func TestCdcNonemptyThenEmptySameFlush(t *testing.T) {
 // stale copy in the earlier sealed segment is dead.
 func TestCdcUpsertReplaceAcrossCapacity(t *testing.T) {
 	c := NewCdc(int32(types.T_int64))
-	c.Upsert(int64(1), "aaa")
-	c.Upsert(int64(2), "bbb") // seals seg0 (capacity 2)
-	c.Upsert(int64(1), "ccc") // pk 1 again, now in seg1
+	c.Upsert(int64(1), "aaa", nil)
+	c.Upsert(int64(2), "bbb", nil) // seals seg0 (capacity 2)
+	c.Upsert(int64(1), "ccc", nil) // pk 1 again, now in seg1
 	idx := buildTailIndexLWW(t, nil, c, 2)
 
 	require.Empty(t, queryIDs(t, idx, "aaa"), "stale copy of pk 1 in the sealed segment is superseded")
@@ -165,7 +165,7 @@ func TestCdcUpsertReplaceAcrossCapacity(t *testing.T) {
 func TestCdcUpsertThenDeletePhantom(t *testing.T) {
 	base := mkBase(t, map[int64]string{1: "alpha"})
 	c := NewCdc(int32(types.T_int64))
-	c.Upsert(int64(1), "beta")
+	c.Upsert(int64(1), "beta", nil)
 	c.Delete(int64(1))
 	idx := buildTailIndexLWW(t, base, c, 1000)
 

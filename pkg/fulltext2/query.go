@@ -20,7 +20,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
@@ -357,7 +356,7 @@ func BuildSegmentFromDocsParser(id string, pkType int32, docs []Doc, parser stri
 // exact positional phrase (a bare CJK operand included) — never an OR-group of its
 // ngrams. Distinct SHOULD operands still OR together (boolean semantics), and a
 // word* prefix / ( ) group behave as their operators dictate.
-func (idx *Index) SearchQuery(pattern []byte, boolean bool, parser string, algo ScoreAlgo, k int, filter docfilter.MembershipFilter) ([]Result, error) {
+func (idx *Index) SearchQuery(pattern []byte, boolean bool, parser string, algo ScoreAlgo, k int, filter *prefilter) ([]Result, error) {
 	if k <= 0 || idx.globalN == 0 {
 		return nil, nil
 	}
@@ -387,7 +386,7 @@ func (idx *Index) SearchQuery(pattern []byte, boolean bool, parser string, algo 
 // BOOLEAN mode, a CJK run does NOT become a positional phrase (a query "我家有三个人"
 // scores every doc containing 我家/有/三个/人 in any order), so it works on a
 // POSITION_FREE index. Positions are never touched.
-func (idx *Index) SearchBagOfWords(pattern []byte, parser string, algo ScoreAlgo, k int, filter docfilter.MembershipFilter) ([]Result, error) {
+func (idx *Index) SearchBagOfWords(pattern []byte, parser string, algo ScoreAlgo, k int, filter *prefilter) ([]Result, error) {
 	if k <= 0 || idx.globalN == 0 {
 		return nil, nil
 	}

@@ -86,13 +86,30 @@ func (d *docFilterMembership) Contains(ord int64) bool {
 	return d.f.Test(raw)
 }
 
-// mkAllow returns a per-segment WHERE-prefilter Membership over seg's ords, or nil
-// when there is no filter (the "allow all" fast path).
-func mkAllow(seg *Segment, f docfilter.MembershipFilter) Membership {
-	if f == nil {
+// prefilter bundles the per-query WHERE prefilters threaded into every segment search: the
+// pk-based docfilter (WHERE pushdown resolved in C) AND compiled INCLUDE-column predicates
+// (evaluated in Go against the stored per-doc value). Either may be empty; a nil *prefilter
+// means "allow all". Built once per query in Fulltext2Search.Search and bound to each
+// segment by mkAllow. It must never live on the shared Index (per-query state).
+type prefilter struct {
+	docFilter docfilter.MembershipFilter
+	include   []compiledIncludePred
+}
+
+// mkAllow returns a per-segment WHERE-prefilter Membership over seg's ords (the docfilter
+// AND the INCLUDE predicates), or nil when there is no filter (the "allow all" fast path).
+func mkAllow(seg *Segment, p *prefilter) Membership {
+	if p == nil {
 		return nil
 	}
-	return &docFilterMembership{seg: seg, f: f}
+	var m Membership
+	if p.docFilter != nil {
+		m = &docFilterMembership{seg: seg, f: p.docFilter}
+	}
+	if len(p.include) > 0 {
+		m = andAllow(m, &includePredMembership{seg: seg, preds: p.include})
+	}
+	return m
 }
 
 // allowed reports whether ord passes the membership (nil = allow all) — the one-liner

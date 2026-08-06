@@ -52,6 +52,10 @@ const (
 type Result struct {
 	Pk    any
 	Score float32
+	// Include carries the doc's INCLUDE column values (all of the index's INCLUDE columns,
+	// in index order; a nil element = SQL NULL) when the index has INCLUDE columns — so a
+	// COVERING query is served from the index without a base-table JOIN. nil otherwise.
+	Include []any
 }
 
 // lookup resolves a term to its posting list on either a build-side segment (the
@@ -90,8 +94,9 @@ func (s *Segment) SearchPhrase(slots []phraseSlot, algo ScoreAlgo, k int) []Resu
 	results := make([]Result, len(hits))
 	for i, h := range hits {
 		results[i] = Result{
-			Pk:    s.pk(h.ord),
-			Score: s.scoreTerm(algo, float64(h.tf), idf2, h.ord, avgDocLen),
+			Pk:      s.pk(h.ord),
+			Score:   s.scoreTerm(algo, float64(h.tf), idf2, h.ord, avgDocLen),
+			Include: s.decodeInclude(h.ord),
 		}
 	}
 
