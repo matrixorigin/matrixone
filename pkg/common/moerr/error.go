@@ -66,6 +66,7 @@ const (
 	ErrNotSupported                uint16 = 20105
 	ErrRemoteDispatchNotRegistered uint16 = 20106
 	ErrMPoolCapacity               uint16 = 20107
+	ErrQueryTimeout                uint16 = 20108
 
 	// Group 2: numeric and functions
 	ErrDivByZero                   uint16 = 20200
@@ -397,6 +398,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrNotSupported:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not supported: %s"},
 	ErrRemoteDispatchNotRegistered: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote dispatch receiver %s is not registered yet"},
 	ErrMPoolCapacity:               {ER_ENGINE_OUT_OF_MEMORY, []string{MySQLDefaultSqlState}, "mpool physical capacity exceeded: %s"},
+	ErrQueryTimeout:                {ER_QUERY_TIMEOUT, []string{MySQLDefaultSqlState}, "Query execution was interrupted, maximum statement execution time exceeded"},
 
 	// Group 2: numeric
 	ErrDivByZero:                   {ER_DIVISION_BY_ZERO, []string{MySQLDefaultSqlState}, "division by zero"},
@@ -979,6 +981,10 @@ func NewResourceExhaustedf(ctx context.Context, format string, args ...any) *Err
 
 func NewQueryInterrupted(ctx context.Context) *Error {
 	return newError(ctx, ErrQueryInterrupted)
+}
+
+func NewQueryTimeout(ctx context.Context) *Error {
+	return newError(ctx, ErrQueryTimeout)
 }
 
 func NewDivByZero(ctx context.Context) *Error {
