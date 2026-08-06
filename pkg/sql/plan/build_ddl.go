@@ -392,6 +392,8 @@ func ctasViewTypeDefaultOrigin(typ plan.Type) (string, bool) {
 			return "0." + strings.Repeat("0", int(typ.Scale)), true
 		}
 		return "0", true
+	case types.T_time:
+		return "'00:00:00'", true
 	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary:
 		return "''", true
 	default:

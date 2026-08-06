@@ -153,7 +153,7 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			{column: "flags", wantInfo: sql.NullString{String: "''", Valid: true}, wantDesc: sql.NullString{String: "", Valid: true}},
 			{column: "date_col"},
 			{column: "datetime_col"},
-			{column: "time_col"},
+			{column: "time_col", wantInfo: sql.NullString{String: "'00:00:00'", Valid: true}, wantDesc: sql.NullString{String: "00:00:00", Valid: true}},
 			{column: "timestamp_col"},
 			{column: "binary_col", wantInfo: sql.NullString{String: "''", Valid: true}, wantDesc: sql.NullString{String: "", Valid: true}},
 			{column: "varbinary_col", wantInfo: sql.NullString{String: "''", Valid: true}, wantDesc: sql.NullString{String: "", Valid: true}},
@@ -181,12 +181,22 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 		require.Contains(t, createTableSQL, "DEFAULT ''")
 		require.Contains(t, createTableSQL, "DEFAULT 0.00")
 		require.Contains(t, createTableSQL, "DEFAULT 'low'")
+		require.Contains(t, strings.ToLower(createTableSQL), "`time_col` time not null default '00:00:00'")
 
-		_, insertErr := dbConn.ExecContext(ctx, "insert into "+db+".ctas_view(id) values (2)")
-		require.Error(t, insertErr)
 		execSQLRequire(t, ctx, dbConn, "insert into "+db+".ctas_view"+
-			"(id,date_col,datetime_col,time_col,timestamp_col) values "+
-			"(2,'2025-02-03','2025-02-03 04:05:06','04:05:06','2025-02-03 04:05:06')")
+			"(id,date_col,datetime_col,timestamp_col) values "+
+			"(2,'2025-02-03','2025-02-03 04:05:06','2025-02-03 04:05:06')")
+		for _, insertSQL := range []string{
+			"insert into " + db + ".ctas_view(id,datetime_col,timestamp_col) values " +
+				"(3,'2025-02-03 04:05:06','2025-02-03 04:05:06')",
+			"insert into " + db + ".ctas_view(id,date_col,timestamp_col) values " +
+				"(4,'2025-02-03','2025-02-03 04:05:06')",
+			"insert into " + db + ".ctas_view(id,date_col,datetime_col) values " +
+				"(5,'2025-02-03','2025-02-03 04:05:06')",
+		} {
+			_, insertErr := dbConn.ExecContext(ctx, insertSQL)
+			require.Error(t, insertErr, insertSQL)
+		}
 		var insertedQty int
 		var insertedNullable, insertedNull sql.NullInt64
 		var insertedString, insertedAmount, insertedPriority, insertedFlags string
@@ -202,6 +212,10 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 		require.Equal(t, "0.00", insertedAmount)
 		require.Equal(t, "low", insertedPriority)
 		require.Empty(t, insertedFlags)
+		var insertedTime string
+		require.NoError(t, dbConn.QueryRowContext(ctx,
+			"select time_col from "+db+".ctas_view where id = 2").Scan(&insertedTime))
+		require.Equal(t, "00:00:00", insertedTime)
 		var binaryHex, varbinaryHex, insertedBlob string
 		var insertedFloat, insertedDouble float64
 		var insertedBit uint64
