@@ -462,7 +462,7 @@ func TestValidateAndApplyTableDumpAutoIncrementRestore(t *testing.T) {
 			return nil
 		},
 	)
-	autoService.EXPECT().SetOffset(ctx, uint64(42), "hist_id", uint64(100), txnOp).Return(nil)
+	autoService.EXPECT().SetOffset(ctx, uint64(42), 0, "hist_id", uint64(100), txnOp).Return(nil)
 
 	restores, schemaOffset, err := validateTableDumpAutoIncrementRestore(
 		ctx,
@@ -492,7 +492,7 @@ func TestApplyTableDumpAutoIncrementRestoreReportsCleanupOnSetOffsetFailure(t *t
 	rel.EXPECT().GetTableID(ctx).Return(uint64(42))
 	rel.EXPECT().AlterTable(ctx, nil, gomock.Any()).Return(nil)
 	wantErr := errors.New("set offset failed")
-	autoService.EXPECT().SetOffset(ctx, uint64(42), "hist_id", uint64(100), txnOp).Return(wantErr)
+	autoService.EXPECT().SetOffset(ctx, uint64(42), 0, "hist_id", uint64(100), txnOp).Return(wantErr)
 
 	installed, err := applyTableDumpAutoIncrementRestore(
 		ctx,

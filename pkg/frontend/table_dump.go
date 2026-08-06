@@ -1297,7 +1297,12 @@ func applyTableDumpAutoIncrementRestore(
 	resetInstalled = true
 	for _, restore := range restores {
 		if err = proc.GetIncrService().SetOffset(
-			ctx, tableID, restore.column.ColName, restore.offset, proc.GetTxnOperator(),
+			ctx,
+			tableID,
+			restore.column.ColIndex,
+			restore.column.ColName,
+			restore.offset,
+			proc.GetTxnOperator(),
 		); err != nil {
 			return resetInstalled, err
 		}
