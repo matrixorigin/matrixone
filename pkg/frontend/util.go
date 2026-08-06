@@ -1649,6 +1649,8 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 	return nil
 }
 
+const mysqlDecimalNotSpecified = 0x1f
+
 func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 	if typ.IsDecimal() {
 		// DECIMAL display length depends on scale and signedness, not just precision.
@@ -1671,6 +1673,14 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 		col.SetLength(mysqlStringColumnLength(typ.Width, 1))
 	} else {
 		setColLength(col, typ.Width)
+	}
+	// MySQL uses 0x1f (DECIMAL_NOT_SPECIFIED) for FLOAT and DOUBLE
+	// without an explicit display scale. Clients use this metadata when
+	// converting binary floating-point results to text.
+	if (typ.Oid == types.T_float32 || typ.Oid == types.T_float64) &&
+		(typ.Scale < 0 || typ.Width == 0 && typ.Scale == 0) {
+		col.SetDecimal(mysqlDecimalNotSpecified)
+		return
 	}
 	col.SetDecimal(typ.Scale)
 }
@@ -2127,8 +2137,6 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 		return nil, err
 	}
 	setColFlag(c)
-
-	c.SetDecimal(col.Typ.Scale)
 
 	// For TIMESTAMPADD function compatibility with MySQL:
 	// GetResultColumnsFromPlan sets the return type based on input type and unit:
