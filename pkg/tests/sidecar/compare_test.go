@@ -241,6 +241,13 @@ func TestCompareTerminalObservationsIncludePartialResults(t *testing.T) {
 			}
 
 			report = newReport()
+			report.Offloaded.Rows[0][0] = TextCell("different-partial-row")
+			err = Compare(report)
+			if !errors.As(err, &mismatchError) || mismatchError.Field != "row data" {
+				t.Fatalf("Compare() error = %v, want partial-row-data mismatch", err)
+			}
+
+			report = newReport()
 			report.Offloaded.Schema[0].DatabaseType = "VARBINARY"
 			err = Compare(report)
 			if !errors.As(err, &mismatchError) || mismatchError.Field != "schema" {

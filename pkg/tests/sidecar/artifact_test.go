@@ -28,7 +28,7 @@ func TestWriteFailureArtifactRedactsAndMinimizesData(t *testing.T) {
 
 	report := successfulReport()
 	report.Case.ID = "artifact/case"
-	report.Case.SQL = "SELECT * FROM mysql://visible-user:visible-pass@host/db, s3://bucket/private/path WHERE token=visible-token AND value='literal-secret'; AWS_ACCESS_KEY_ID=aws-access AWS_SECRET_ACCESS_KEY='aws-secret' AWS_SESSION_TOKEN=aws-session"
+	report.Case.SQL = "SELECT * FROM mysql://visible-user:visible-pass@host/db, s3://bucket/private/path WHERE token=visible-token AND value='literal-secret'; AWS_ACCESS_KEY_ID=aws-access AWS_SECRET_ACCESS_KEY='aws-secret' AWS_SESSION_TOKEN=aws-session DB_PASSWORD=db-password API_TOKEN=api-token CLIENT_SECRET=client-secret"
 	report.Case.ArtifactRedactValues = []string{"literal-secret"}
 	report.Case.Seed = 42
 	report.Case.CapabilitySetHash = "capability-hash"
@@ -40,7 +40,7 @@ func TestWriteFailureArtifactRedactsAndMinimizesData(t *testing.T) {
 	report.Native.Schema[0].DatabaseType = "VARCHAR-literal-secret"
 	report.Offloaded.Schema[0].Name = "literal-secret"
 	report.Offloaded.Schema[0].DatabaseType = "VARCHAR-literal-secret"
-	report.Offloaded.Error = &SQLError{Code: 1, SQLState: "literal-secret", Class: "literal-secret", Message: `password=visible-password authorization: Bearer visible-bearer {"AWS_ACCESS_KEY_ID":"json-access","AWS_SECRET_ACCESS_KEY":"json-secret","AWS_SESSION_TOKEN":"json-session"}`}
+	report.Offloaded.Error = &SQLError{Code: 1, SQLState: "literal-secret", Class: "literal-secret", Message: `password=visible-password SERVICE_PASSWORD=json-service authorization: Bearer visible-bearer {"AWS_ACCESS_KEY_ID":"json-access","AWS_SECRET_ACCESS_KEY":"json-secret","AWS_SESSION_TOKEN":"json-session"}`}
 
 	path, err := WriteFailureArtifact(t.TempDir(), report, errors.New("request to https://private.example/path used literal-secret"))
 	if err != nil {
@@ -55,7 +55,8 @@ func TestWriteFailureArtifactRedactsAndMinimizesData(t *testing.T) {
 		"s3://bucket", "visible-token", "literal-secret", "sensitive-row-value",
 		"different-sensitive-row-value", "visible-password", "visible-user", "visible-pass",
 		"visible-bearer", "private.example", "aws-access", "aws-secret", "aws-session",
-		"json-access", "json-secret", "json-session",
+		"json-access", "json-secret", "json-session", "db-password", "api-token",
+		"client-secret", "json-service",
 	} {
 		if strings.Contains(text, forbidden) {
 			t.Errorf("artifact contains sensitive value %q: %s", forbidden, text)
