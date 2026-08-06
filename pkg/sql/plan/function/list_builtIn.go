@@ -2814,6 +2814,30 @@ var supportedStringBuiltIns = []FuncNew{
 					return builtInRepeat
 				},
 			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_binary, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload { return builtInRepeat },
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varbinary, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload { return builtInRepeat },
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_blob, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload { return builtInRepeat },
+			},
 		},
 	},
 
@@ -3740,6 +3764,54 @@ var supportedStringBuiltIns = []FuncNew{
 					return SubStringWith2Args
 				},
 			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_binary, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varbinary.ToType()
+				},
+				newOp: func() executeLogicOfOverload { return SubStringWith2Args },
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_varbinary, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varbinary.ToType()
+				},
+				newOp: func() executeLogicOfOverload { return SubStringWith2Args },
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_binary, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varbinary.ToType()
+				},
+				newOp: func() executeLogicOfOverload { return SubStringWith3Args },
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_varbinary, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varbinary.ToType()
+				},
+				newOp: func() executeLogicOfOverload { return SubStringWith3Args },
+			},
+			{
+				overloadId: 11,
+				args:       []types.T{types.T_blob, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload { return SubStringWith2Args },
+			},
+			{
+				overloadId: 12,
+				args:       []types.T{types.T_blob, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload { return SubStringWith3Args },
+			},
 		},
 	},
 
@@ -4047,6 +4119,24 @@ var supportedStringBuiltIns = []FuncNew{
 					return builtInToLower
 				},
 			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_binary},
+				retType:    func(parameters []types.Type) types.Type { return parameters[0] },
+				newOp:      func() executeLogicOfOverload { return builtInToLower },
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varbinary},
+				retType:    func(parameters []types.Type) types.Type { return parameters[0] },
+				newOp:      func() executeLogicOfOverload { return builtInToLower },
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_blob},
+				retType:    func(parameters []types.Type) types.Type { return parameters[0] },
+				newOp:      func() executeLogicOfOverload { return builtInToLower },
+			},
 		},
 	},
 
@@ -4067,6 +4157,24 @@ var supportedStringBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return builtInToUpper
 				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_binary},
+				retType:    func(parameters []types.Type) types.Type { return parameters[0] },
+				newOp:      func() executeLogicOfOverload { return builtInToUpper },
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varbinary},
+				retType:    func(parameters []types.Type) types.Type { return parameters[0] },
+				newOp:      func() executeLogicOfOverload { return builtInToUpper },
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_blob},
+				retType:    func(parameters []types.Type) types.Type { return parameters[0] },
+				newOp:      func() executeLogicOfOverload { return builtInToUpper },
 			},
 		},
 	},
@@ -11249,8 +11357,6 @@ func makeTimeReturnType(parameters []types.Type) types.Type {
 }
 
 func isMakeTimeTextType(oid types.T) bool {
-	// Binary inputs must take the numeric cast path so hex/bit literal byte
-	// semantics are consumed before function-expression evaluation clears IsBin.
 	switch oid {
 	case types.T_binary, types.T_varbinary, types.T_blob:
 		return false

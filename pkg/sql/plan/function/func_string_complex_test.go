@@ -126,6 +126,35 @@ func Test_BuiltInConcat(t *testing.T) {
 	}
 }
 
+func TestBinaryStringFunctionsPreserveRuntimeMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	binary := testutil.MakeVarlenaVector(
+		[][]byte{[]byte("AB"), {0xe4, 0xbd, 0xa0}}, nil, types.T_varbinary.ToType(), mp)
+	defer binary.Free(mp)
+
+	lowerResult := vector.NewFunctionResultWrapper(types.T_varbinary.ToType(), mp)
+	defer lowerResult.Free()
+	require.NoError(t, lowerResult.PreExtendAndReset(binary.Length()))
+	require.NoError(t, builtInToLower([]*vector.Vector{binary}, lowerResult, proc, binary.Length(), nil))
+	require.True(t, lowerResult.GetResultVector().GetIsBin())
+	require.Equal(t, []string{"AB", string([]byte{0xe4, 0xbd, 0xa0})},
+		vector.InefficientMustStrCol(lowerResult.GetResultVector()))
+
+	starts := testutil.MakeInt64Vector([]int64{2, 2}, nil, mp)
+	lens := testutil.MakeInt64Vector([]int64{1, 1}, nil, mp)
+	defer starts.Free(mp)
+	defer lens.Free(mp)
+	substringResult := vector.NewFunctionResultWrapper(types.T_varbinary.ToType(), mp)
+	defer substringResult.Free()
+	require.NoError(t, substringResult.PreExtendAndReset(binary.Length()))
+	require.NoError(t, SubStringWith3Args(
+		[]*vector.Vector{binary, starts, lens}, substringResult, proc, binary.Length(), nil))
+	require.True(t, substringResult.GetResultVector().GetIsBin())
+	require.Equal(t, []string{"B", string([]byte{0xbd})},
+		vector.InefficientMustStrCol(substringResult.GetResultVector()))
+}
+
 // Test_ConcatWs tests CONCAT_WS function (concat with separator)
 // This is a complex function with conditional logic for NULL handling
 func Test_ConcatWs(t *testing.T) {
@@ -894,15 +923,12 @@ func Test_BuiltInCharCheck(t *testing.T) {
 		require.Equal(t, succeedMatched, got.status)
 	}
 
-	// other string types (char/text/blob): cast to varchar
+	// other string types retain their metadata
 	{
 		got := builtInCharCheck(nil, []types.Type{
 			types.T_char.ToType(), types.T_text.ToType(), types.T_blob.ToType(),
 		})
-		require.Equal(t, succeedWithCast, got.status)
-		for _, ft := range got.finalType {
-			require.Equal(t, types.T_varchar, ft.Oid)
-		}
+		require.Equal(t, succeedMatched, got.status)
 	}
 
 	// numeric types (float/decimal): cast to int64

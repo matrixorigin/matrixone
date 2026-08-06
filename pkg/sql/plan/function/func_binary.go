@@ -950,6 +950,18 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
+		if retType, ok := binaryStringCommonType(inputs); ok {
+			castType := make([]types.Type, len(inputs))
+			for i := range castType {
+				castType[i] = retType
+			}
+			for i, over := range overloads {
+				if len(over.args) == 1 && over.args[0] == retType.Oid {
+					return newCheckResultWithCast(i, castType)
+				}
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
 		if result, ok := coalesceTextStringResult(overloads, inputs); ok {
 			return result
 		}
@@ -6009,6 +6021,10 @@ func strcmp(s1, s2 string) (int8, error) {
 }
 
 func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	binaryInput := isBinaryStringVector(ivecs[0])
+	if binaryInput {
+		result.GetResultVector().SetIsBin(true)
+	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -6023,7 +6039,11 @@ func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			}
 		} else {
 			var r string
-			if s > 0 {
+			if binaryInput && s > 0 {
+				r = getSliceFromLeftBytes(v, s-1)
+			} else if binaryInput && s < 0 {
+				r = getSliceFromRightBytes(v, -s)
+			} else if s > 0 {
 				r = getSliceFromLeft(functionUtil.QuickBytesToStr(v), s-1)
 			} else if s < 0 {
 				r = getSliceFromRight(functionUtil.QuickBytesToStr(v), -s)
@@ -6036,6 +6056,20 @@ func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		}
 	}
 	return nil
+}
+
+func getSliceFromLeftBytes(s []byte, offset int64) string {
+	if offset > int64(len(s)) {
+		return ""
+	}
+	return string(s[offset:])
+}
+
+func getSliceFromRightBytes(s []byte, offset int64) string {
+	if offset > int64(len(s)) {
+		return ""
+	}
+	return string(s[int64(len(s))-offset:])
 }
 
 // Cut the slice with length from left to right, starting from 0
@@ -6071,12 +6105,34 @@ func getSliceOffsetLen(s string, offset int64, length int64) string {
 	}
 }
 
+func getSliceOffsetLenBytes(s []byte, offset int64, length int64) string {
+	elemSize := int64(len(s))
+	if offset < 0 {
+		offset += elemSize
+		if offset < 0 {
+			return ""
+		}
+	}
+	if offset >= elemSize || length <= 0 {
+		return ""
+	}
+	end := offset + length
+	if end < offset || end > elemSize {
+		end = elemSize
+	}
+	return string(s[offset:end])
+}
+
 // From right to left, cut the slice with length from 1
 func getSliceFromRightWithLength(s string, offset int64, length int64) string {
 	return getSliceOffsetLen(s, -offset, length)
 }
 
 func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	binaryInput := isBinaryStringVector(ivecs[0])
+	if binaryInput {
+		result.GetResultVector().SetIsBin(true)
+	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -6093,7 +6149,11 @@ func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			}
 		} else {
 			var r string
-			if s > 0 {
+			if binaryInput && s > 0 {
+				r = getSliceOffsetLenBytes(v, s-1, l)
+			} else if binaryInput && s < 0 {
+				r = getSliceOffsetLenBytes(v, s, l)
+			} else if s > 0 {
 				r = getSliceFromLeftWithLength(functionUtil.QuickBytesToStr(v), s-1, l)
 			} else if s < 0 {
 				r = getSliceFromRightWithLength(functionUtil.QuickBytesToStr(v), -s, l)

@@ -20,6 +20,56 @@ SELECT CHAR_LENGTH(_binary X'e4bda0'),
        CHAR_LENGTH('你好');
 SELECT CHAR_LENGTH(CAST(X'e4bda0' AS CHAR)),
        CHAR_LENGTH(CAST(X'e4bda0' AS BINARY));
+
+# binary literal propagation through functions and control flow
+SELECT CHAR_LENGTH(CONCAT(X'e4bda0', 'a')),
+       CHAR_LENGTH(SUBSTR(X'e4bda0', 1)),
+       CHAR_LENGTH(LOWER(X'e4bda0')),
+       CHAR_LENGTH(REPEAT(X'e4bda0', 2)),
+       CHAR_LENGTH(COALESCE(NULL, X'e4bda0'));
+SELECT HEX(SUBSTR(X'e4bda0', 2, 1)),
+       HEX(LOWER(X'4142')),
+       HEX(UPPER(X'6162'));
+CREATE TABLE binary_literal_ids (id INT);
+INSERT INTO binary_literal_ids VALUES (1), (2);
+SELECT id,
+       CHAR_LENGTH(IF(id = 1, X'e4bda0', '你好')),
+       CHAR_LENGTH(CASE WHEN id = 1 THEN X'e4bda0' ELSE '你好' END)
+FROM binary_literal_ids ORDER BY id;
+DROP TABLE binary_literal_ids;
+
+# user variables and text PREPARE preserve binary metadata across reuse
+SET @binary_literal_v = X'e4bda0';
+SELECT CHAR_LENGTH(@binary_literal_v);
+PREPARE binary_literal_stmt FROM 'SELECT CHAR_LENGTH(?)';
+SET @binary_literal_v = X'e4bda0';
+EXECUTE binary_literal_stmt USING @binary_literal_v;
+SET @binary_literal_v = '你好';
+EXECUTE binary_literal_stmt USING @binary_literal_v;
+SET @binary_literal_v = X'e4bda0';
+EXECUTE binary_literal_stmt USING @binary_literal_v;
+DEALLOCATE PREPARE binary_literal_stmt;
+
+# materialization keeps a binary string contract
+CREATE TABLE binary_literal_ctas AS SELECT X'e4bda0' x;
+SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'binary_literal_ctas' AND COLUMN_NAME = 'x';
+SELECT CHAR_LENGTH(x) FROM binary_literal_ctas;
+SELECT tag, CHAR_LENGTH(x)
+FROM (
+    SELECT 1 tag, X'e4bda0' x
+    UNION ALL
+    SELECT 2 tag, '你好' x
+) u ORDER BY tag;
+DROP TABLE binary_literal_ctas;
+
+# numeric and explicit cast contexts keep their existing semantics
+SELECT X'41' + 0,
+       B'1000001' + 0,
+       CAST(X'3132' AS UNSIGNED),
+       CAST(B'11000100110010' AS UNSIGNED),
+       HEX(CHAR(X'41'));
 CREATE TABLE binary_char_length (
     b BINARY(8),
     vb VARBINARY(8),

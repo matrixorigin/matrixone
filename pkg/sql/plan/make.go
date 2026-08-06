@@ -628,9 +628,9 @@ func makePlan2StringConstExprWithType(v string, isBin ...bool) *plan.Expr {
 	}
 }
 
-func makePlan2VarBinaryConstExprWithType(v string) *plan.Expr {
+func makePlan2VarBinaryConstExprWithType(v string, isBin ...bool) *plan.Expr {
 	return &plan.Expr{
-		Expr: makePlan2StringConstExpr(v, false),
+		Expr: makePlan2StringConstExpr(v, isBin...),
 		Typ: plan.Type{
 			Id:          int32(types.T_varbinary),
 			NotNullable: true,

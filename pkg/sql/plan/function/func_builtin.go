@@ -801,6 +801,12 @@ func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
 }
 
 func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	for _, parameter := range parameters {
+		if isBinaryStringVector(parameter) {
+			result.GetResultVector().SetIsBin(true)
+			break
+		}
+	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ps := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters))
 	for i := range ps {
@@ -1109,9 +1115,10 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 	//   - numeric types (float/decimal/bool/bit/...) : rounded to nearest integer
 	//   - string types   : the leading numeric prefix is truncated to an integer
 	//     (e.g. '65.9' -> 65, not 66)
-	// To preserve this distinction we keep integers, cast string types to varchar
-	// (parsed & truncated in builtInChar), and cast every other numeric type to
-	// int64 (the numeric->int64 cast rounds, matching MySQL).
+	// To preserve this distinction we keep integers and string vectors as-is,
+	// and cast every other numeric type to int64 (the numeric->int64 cast rounds,
+	// matching MySQL). Keeping string metadata is required for hex/bit literals:
+	// their IsBin flag selects big-endian byte interpretation below.
 	if len(inputs) < 1 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
@@ -1122,12 +1129,8 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 		switch {
 		case source.Oid.IsInteger():
 			ret[i] = source
-		case source.Oid == types.T_varchar:
-			ret[i] = source
 		case source.Oid.IsMySQLString():
-			// char/text/blob/binary/varbinary -> varchar (truncated in builtInChar)
-			shouldCast = true
-			ret[i] = types.T_varchar.ToType()
+			ret[i] = source
 		default:
 			// float/decimal/bool/bit/... -> int64 (rounded by the cast, like MySQL)
 			c, _ := tryToMatch([]types.Type{source}, []types.T{types.T_int64})
@@ -1147,8 +1150,8 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	// After builtInCharCheck, parameters are either integer types or varchar.
-	// (numeric types were cast to int64, string types to varchar).
+	// After builtInCharCheck, parameters are either integer or string types.
+	// Numeric types were cast to int64; string metadata remains intact.
 	// Each getter returns an int64 value and a null flag.
 	type intGetter func(uint64) (int64, bool)
 	getters := make([]intGetter, len(parameters))
@@ -1570,6 +1573,9 @@ func doRpad(src string, tgtLen int64, pad string) (string, bool) {
 }
 
 func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if isBinaryStringVector(parameters[0]) {
+		result.GetResultVector().SetIsBin(true)
+	}
 	// repeat the string n times.
 	repeatNTimes := func(base string, n int64) (r string, null bool) {
 		if n <= 0 {
@@ -3816,15 +3822,36 @@ func isUTF8Charset(charset []byte) bool {
 }
 
 func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if isBinaryStringVector(parameters[0]) {
+		result.GetResultVector().SetIsBin(true)
+		return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
+			return v
+		}, selectList)
+	}
 	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 		return bytes.ToUpper(v)
 	}, selectList)
 }
 
 func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if isBinaryStringVector(parameters[0]) {
+		result.GetResultVector().SetIsBin(true)
+		return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
+			return v
+		}, selectList)
+	}
 	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 		return bytes.ToLower(v)
 	}, selectList)
+}
+
+func isBinaryStringVector(vec *vector.Vector) bool {
+	switch vec.GetType().Oid {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return true
+	default:
+		return vec.GetIsBin()
+	}
 }
 
 // buildInMOCU extract cu or calculate cu from parameters

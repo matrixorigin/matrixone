@@ -615,7 +615,16 @@ func TestBindScoreBinaryHexnumKeepsBinarySemanticsExceptNumericCast(t *testing.T
 	plainHex := tree.NewNumVal("0x3132", "0x3132", false, tree.P_hexnum)
 	plainHexExpr, err := binder.bindNumVal(plainHex, plan.Type{})
 	require.NoError(t, err)
+	require.Equal(t, int32(types.T_varbinary), plainHexExpr.Typ.Id)
+	require.Equal(t, int32(2), plainHexExpr.Typ.Width)
 	require.True(t, plainHexExpr.GetLit().GetIsBin())
+
+	plainBit := tree.NewNumVal("0b1100001110101001", "0b1100001110101001", false, tree.P_bit)
+	plainBitExpr, err := binder.bindNumVal(plainBit, plan.Type{})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_varbinary), plainBitExpr.Typ.Id)
+	require.Equal(t, int32(2), plainBitExpr.Typ.Width)
+	require.True(t, plainBitExpr.GetLit().GetIsBin())
 
 	bitOrExpr, err := BindFuncExprImplByPlanExpr(context.Background(), "|", []*plan.Expr{rawExpr, plainHexExpr})
 	require.NoError(t, err)

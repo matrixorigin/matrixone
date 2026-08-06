@@ -3812,7 +3812,20 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	var argsCastType []types.Type
 
 	// get function definition
-	fGet, err := function.GetFunctionByName(ctx, name, argsType)
+	lookupArgsType := argsType
+	if name == "maketime" {
+		lookupCloned := false
+		for idx, arg := range args {
+			if literal := arg.GetLit(); literal != nil && literal.IsBin {
+				if !lookupCloned {
+					lookupArgsType = append([]types.Type(nil), argsType...)
+					lookupCloned = true
+				}
+				lookupArgsType[idx] = types.New(types.T_varchar, argsType[idx].Width, argsType[idx].Scale)
+			}
+		}
+	}
+	fGet, err := function.GetFunctionByName(ctx, name, lookupArgsType)
 	if err != nil {
 		if name == "between" {
 			leftFn, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{DeepCopyExpr(args[0]), args[1]})
@@ -4045,11 +4058,14 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 
 	case "maketime":
-		// Hex and bit literals are represented as VARCHAR literals carrying
-		// IsBin. They are integral seconds, so they retain TIME(0) metadata even
-		// though the VARCHAR seconds overload normally advertises TIME(6).
+		// Hex and bit literals carry IsBin in addition to their VARBINARY type.
+		// They are integral seconds, so they retain TIME(0) metadata even though
+		// the generic string seconds overload normally advertises TIME(6).
 		if len(args) == 3 {
-			if literal := args[2].GetLit(); literal != nil && literal.IsBin {
+			secondType := types.T(args[2].Typ.Id)
+			literal := args[2].GetLit()
+			if (literal != nil && literal.IsBin) || secondType == types.T_binary ||
+				secondType == types.T_varbinary || secondType == types.T_blob {
 				returnType.Scale = 0
 			}
 		}
@@ -4115,13 +4131,12 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 		for idx, castType := range argsCastType {
 			if !argsType[idx].Eq(castType) && castType.Oid != types.T_any {
-				// MAKETIME uses the scale on its VARCHAR seconds target only to
-				// derive the TIME return scale. Recasting an already-VARCHAR
-				// argument solely for that metadata clears Literal.IsBin, changing
-				// X'..'/B'..' from a binary number into ordinary text.
-				if name == "maketime" && idx == 2 &&
-					argsType[idx].Oid == types.T_varchar && castType.Oid == types.T_varchar &&
-					argsType[idx].Width == castType.Width {
+				// MAKETIME's string overload can consume all MySQL string vectors.
+				// Do not insert a metadata-only VARCHAR cast for hex/bit literals:
+				// it would clear IsBin before MakeTime interprets their raw bytes as
+				// a big-endian integer.
+				if name == "maketime" && castType.Oid == types.T_varchar &&
+					args[idx].GetLit() != nil && args[idx].GetLit().IsBin {
 					continue
 				}
 				if argsType[idx].Oid == castType.Oid && castType.Oid.IsDecimal() && argsType[idx].Scale == castType.Scale {
@@ -4452,7 +4467,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 			isFloat := typ.Id == int32(types.T_float32) || typ.Id == int32(types.T_float64)
 			return appendCastBeforeExpr(b.GetContext(), makePlan2StringConstExprWithType(val, isBin[0]), typ, isBin[0], isFloat)
 		}
-		return makePlan2StringConstExprWithType(val, isBin...), nil
+		return makePlan2VarBinaryConstExprWithType(val, isBin...), nil
 	}
 
 	switch astExpr.ValType {

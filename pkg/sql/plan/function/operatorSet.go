@@ -94,6 +94,7 @@ func signedUnsignedIntegerCommonType(source []types.Type) (types.Type, bool) {
 
 func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 	hasBinary := false
+	hasBlob := false
 	sameFixedBinary := true
 	hasFixedBinary := false
 	fixedBinaryWidth := int32(0)
@@ -122,6 +123,10 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 			if typ.Width > width {
 				width = typ.Width
 			}
+		case types.T_blob:
+			hasBinary = true
+			hasBlob = true
+			sameFixedBinary = false
 		case types.T_char, types.T_varchar:
 			sameFixedBinary = false
 			// Character widths count runes, while VARBINARY widths count bytes.
@@ -134,12 +139,22 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 			if byteWidth > width {
 				width = byteWidth
 			}
+		case types.T_text:
+			sameFixedBinary = false
+			// TEXT has no useful bounded Width. Keep the binary result wide
+			// enough for any value that a VARBINARY result can represent.
+			if int32(types.MaxVarBinaryLen) > width {
+				width = int32(types.MaxVarBinaryLen)
+			}
 		default:
 			return types.Type{}, false
 		}
 	}
 	if !hasBinary {
 		return types.Type{}, false
+	}
+	if hasBlob {
+		return types.T_blob.ToType(), true
 	}
 	if sameFixedBinary {
 		return types.New(types.T_binary, fixedBinaryWidth, 0), true

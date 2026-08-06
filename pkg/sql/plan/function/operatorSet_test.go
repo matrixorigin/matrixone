@@ -1019,6 +1019,25 @@ func TestBinaryStringCommonTypePreservesSameFixedBinary(t *testing.T) {
 			wantWidth: 4,
 		},
 		{
+			name: "blob dominates character string",
+			source: []types.Type{
+				types.T_blob.ToType(),
+				types.New(types.T_varchar, 4, 0),
+			},
+			wantOK:  true,
+			wantOid: types.T_blob,
+		},
+		{
+			name: "text uses maximum varbinary width",
+			source: []types.Type{
+				types.New(types.T_varbinary, 3, 0),
+				types.T_text.ToType(),
+			},
+			wantOK:    true,
+			wantOid:   types.T_varbinary,
+			wantWidth: int32(types.MaxVarBinaryLen),
+		},
+		{
 			name:   "only null is not binary",
 			source: []types.Type{types.T_any.ToType()},
 			wantOK: false,
@@ -1360,6 +1379,43 @@ func Test_CoalesceCheck_TextStringBranchesStayText(t *testing.T) {
 	require.Len(t, result.finalType, len(inputs))
 	for _, typ := range result.finalType {
 		require.Equal(t, types.T_text, typ.Oid)
+	}
+}
+
+func Test_CoalesceCheck_BinaryStringDominatesCharacterString(t *testing.T) {
+	overloads := []overload{
+		{args: []types.T{types.T_varchar}},
+		{args: []types.T{types.T_varbinary}},
+	}
+	inputs := []types.Type{
+		types.New(types.T_varbinary, 3, 0),
+		types.New(types.T_varchar, 2, 0),
+	}
+	result := coalesceCheck(overloads, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, 1, result.idx)
+	require.Len(t, result.finalType, len(inputs))
+	for _, typ := range result.finalType {
+		require.Equal(t, types.T_varbinary, typ.Oid)
+		require.Equal(t, int32(8), typ.Width)
+	}
+}
+
+func Test_CoalesceCheck_BlobDominatesCharacterString(t *testing.T) {
+	overloads := []overload{
+		{args: []types.T{types.T_varchar}},
+		{args: []types.T{types.T_blob}},
+	}
+	inputs := []types.Type{
+		types.T_blob.ToType(),
+		types.New(types.T_varchar, 2, 0),
+	}
+	result := coalesceCheck(overloads, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, 1, result.idx)
+	require.Len(t, result.finalType, len(inputs))
+	for _, typ := range result.finalType {
+		require.Equal(t, types.T_blob, typ.Oid)
 	}
 }
 
