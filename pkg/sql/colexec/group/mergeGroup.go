@@ -36,6 +36,7 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.keyNullable = false
 	mergeGroup.ctr.keyWidth = 0
 	mergeGroup.ctr.mtyp = 0
+	mergeGroup.ctr.setGroupByHashKey(mergeGroup.GroupByHashKey)
 
 	if mergeGroup.OpAnalyzer != nil {
 		mergeGroup.OpAnalyzer.Reset()
@@ -139,6 +140,9 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 
 func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool, error) {
 	var err error
+	if err = mergeGroup.ctr.validateGroupByHashKey(len(bat.Vecs)); err != nil {
+		return false, err
+	}
 
 	mergeGroup.ctr.freeSpillAggList()
 	mergeGroup.ctr.spillAggList, err = mergeGroup.ctr.makeAggList(mergeGroup.Aggs)
@@ -216,12 +220,13 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		}
 
 		rowCount := bat.RowCount()
+		hashKeyVecs := mergeGroup.ctr.hashKeyVectors(bat.Vecs)
 		for i := 0; i < rowCount; i += hashmap.UnitLimit {
 			n := min(rowCount-i, hashmap.UnitLimit)
 
 			mergeGroup.ctr.sanityCheck()
 			originGroupCount := mergeGroup.ctr.hr.Hash.GroupCount()
-			vals, _, err := mergeGroup.ctr.hr.Itr.Insert(i, n, bat.Vecs)
+			vals, _, err := mergeGroup.ctr.hr.Itr.Insert(i, n, hashKeyVecs)
 			if err != nil {
 				return false, err
 			}

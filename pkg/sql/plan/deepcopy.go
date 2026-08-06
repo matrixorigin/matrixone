@@ -170,10 +170,14 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 		return nil
 	}
 	newCtx := &plan.PreInsertUkCtx{
-		Columns:  slices.Clone(ctx.Columns),
-		PkColumn: ctx.PkColumn,
-		PkType:   ctx.PkType,
-		UkType:   ctx.UkType,
+		Columns:                slices.Clone(ctx.Columns),
+		PkColumn:               ctx.PkColumn,
+		PkType:                 ctx.PkType,
+		UkType:                 ctx.UkType,
+		InsertIgnoreMultiDedup: ctx.InsertIgnoreMultiDedup,
+		KeyColumns:             slices.Clone(ctx.KeyColumns),
+		ConflictColumns:        slices.Clone(ctx.ConflictColumns),
+		OutputColumns:          ctx.OutputColumns,
 	}
 
 	return newCtx
@@ -243,6 +247,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		BlockFilterList: DeepCopyExprList(node.BlockFilterList),
 		GroupBy:         DeepCopyExprList(node.GroupBy),
 		GroupingFlag:    slices.Clone(node.GroupingFlag),
+		GroupByHashKey:  slices.Clone(node.GroupByHashKey),
 		AggList:         DeepCopyExprList(node.AggList),
 		OrderBy:         DeepCopyOrderBySpecList(node.OrderBy),
 		Interval:        DeepCopyExpr(node.Interval),

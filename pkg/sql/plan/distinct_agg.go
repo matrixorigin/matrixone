@@ -69,6 +69,7 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) {
 			BindingTags: []int32{newGroupTag, newAggregateTag},
 			SpillMem:    builder.aggSpillMem,
 		}, builder.ctxByNode[node.Children[0]])
+		builder.determineGroupByHashKey(builder.qry.Nodes[aggNodeID])
 
 		node.Children[0] = aggNodeID
 		node.GroupBy = make([]*plan.Expr, oldGroupLen)
