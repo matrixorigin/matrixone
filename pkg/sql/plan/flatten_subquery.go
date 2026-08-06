@@ -1352,6 +1352,9 @@ func (builder *QueryBuilder) pullupThroughAgg(ctx *BindContext, node *plan.Node,
 		}
 
 		colPos := int32(len(node.GroupBy))
+		// The new correlated key was not part of the earlier primary-key FD
+		// proof. Keep the logical rewrite correct by dropping the physical hint.
+		node.GroupByHashKey = nil
 		node.GroupBy = append(node.GroupBy, expr)
 
 		if colRef, ok := expr.Expr.(*plan.Expr_Col); ok {

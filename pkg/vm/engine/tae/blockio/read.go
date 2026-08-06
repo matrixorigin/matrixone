@@ -37,7 +37,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"go.uber.org/zap"
 )
 
@@ -172,7 +174,7 @@ func BlockDataReadNoCopy(
 		}
 	}()
 
-	cacheVectors := containers.NewVectors(len(columns) + 1)
+	cacheVectors := containers.NewVectors(len(columns) + 2)
 
 	phyAddrColumnPos := -1
 	for i := range columns {
@@ -350,17 +352,6 @@ func CopyBlockData(
 	return
 }
 
-func windowCNBatch(bat *batch.Batch, start, end uint64) error {
-	var err error
-	for i, vec := range bat.Vecs {
-		bat.Vecs[i], err = vec.Window(int(start), int(end))
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func BlockDataReadBackup(
 	ctx context.Context,
 	info *objectio.BlockInfo,
@@ -369,45 +360,110 @@ func BlockDataReadBackup(
 	ts types.TS,
 	fs fileservice.FileService,
 ) (loaded *batch.Batch, sortKey uint16, err error) {
+	location := info.MetaLocation()
+	requestedColumnCount := len(idxes)
+	commitPos, abortPos := -1, -1
 	if len(idxes) == 0 {
-		loaded, sortKey, err = ioutil.LoadOneBlock(ctx, fs, info.MetaLocation(), objectio.SchemaData)
+		var layout objectio.SpecialColumnLayout
+		loaded, sortKey, layout, err = ioutil.LoadOneBlockWithSpecialLayout(
+			ctx, fs, location, objectio.SchemaData,
+		)
+		if pos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS); ok {
+			commitPos = int(pos)
+		}
+		if pos, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok {
+			abortPos = int(pos)
+		}
 	} else {
-		loaded, sortKey, err = ioutil.LoadOneBlockWithIndex(ctx, fs, idxes, info.MetaLocation(), objectio.SchemaData)
+		objectMeta, metaErr := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+		if metaErr != nil {
+			err = metaErr
+			return
+		}
+		blockMeta := objectMeta.MustDataMeta().GetBlockMeta(uint32(location.ID()))
+		layout := objectio.ResolveSpecialColumnLayout(blockMeta)
+		loadIdxes := slices.Clone(idxes)
+		if pos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS); ok {
+			commitPos = slices.Index(loadIdxes, pos)
+			if commitPos < 0 {
+				commitPos = len(loadIdxes)
+				loadIdxes = append(loadIdxes, pos)
+			}
+		}
+		if pos, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok {
+			abortPos = slices.Index(loadIdxes, pos)
+			if abortPos < 0 {
+				abortPos = len(loadIdxes)
+				loadIdxes = append(loadIdxes, pos)
+			}
+		}
+		loaded, sortKey, err = ioutil.LoadOneBlockWithIndex(
+			ctx, fs, loadIdxes, location, objectio.SchemaData,
+		)
 	}
 	// read block data from storage specified by meta location
 	if err != nil {
 		return
 	}
-	if !ts.IsEmpty() {
-		commitTs := types.TS{}
-		for v := 0; v < loaded.Vecs[0].Length(); v++ {
-			err = commitTs.Unmarshal(loaded.Vecs[len(loaded.Vecs)-1].GetRawBytesAt(v))
-			if err != nil {
-				return
+	defer func() {
+		if err != nil {
+			loaded.Clean(common.DebugAllocator)
+			loaded = nil
+			return
+		}
+		if requestedColumnCount > 0 {
+			for i := requestedColumnCount; i < len(loaded.Vecs); i++ {
+				loaded.Vecs[i].Free(common.DebugAllocator)
+				loaded.Vecs[i] = nil
 			}
-			if commitTs.GT(&ts) {
-				err = windowCNBatch(loaded, 0, uint64(v))
-				if err != nil {
-					return
-				}
-				logutil.Info("[BlockDataReadBackup]",
-					zap.String("commitTs", commitTs.ToString()),
-					zap.String("ts", ts.ToString()),
-					zap.String("location", info.MetaLocation().String()),
-					zap.Int("rows", v))
-				break
+			loaded.Vecs = loaded.Vecs[:requestedColumnCount]
+			if len(loaded.Attrs) > requestedColumnCount {
+				loaded.Attrs = loaded.Attrs[:requestedColumnCount]
 			}
 		}
-	}
+	}()
 	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)
 	if err != nil {
 		return
 	}
 	defer tombstones.Release()
-	rows := tombstones.ToI64Array(nil)
-	if len(rows) > 0 {
-		logutil.Info("[BlockDataReadBackup Shrink]", zap.String("location", info.MetaLocation().String()), zap.Int("rows", len(rows)))
-		loaded.Shrink(rows, true)
+	if commitPos < 0 {
+		if !ts.IsEmpty() {
+			err = moerr.NewInternalError(ctx, "backup object has no commit timestamp")
+			return
+		}
+		rows := tombstones.ToI64Array(nil)
+		if len(rows) > 0 {
+			logutil.Info("[BlockDataReadBackup Shrink]", zap.String("location", location.String()), zap.Int("rows", len(rows)))
+			loaded.Shrink(rows, true)
+		}
+		return
+	}
+
+	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](loaded.Vecs[commitPos])
+	var aborts []bool
+	if abortPos >= 0 {
+		abortVec := loaded.Vecs[abortPos]
+		if !abortVec.IsConstNull() {
+			aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
+		}
+	}
+	visibleRows := make([]int64, 0, len(commitTSs))
+	for row, commitTS := range commitTSs {
+		if (!ts.IsEmpty() && commitTS.GT(&ts)) ||
+			commitTS.Equal(&txnif.UncommitTS) ||
+			(aborts != nil && aborts[row]) ||
+			tombstones.Contains(uint64(row)) {
+			continue
+		}
+		visibleRows = append(visibleRows, int64(row))
+	}
+	if len(visibleRows) != len(commitTSs) {
+		loaded.Shrink(visibleRows, false)
+		logutil.Info("[BlockDataReadBackup]",
+			zap.String("ts", ts.ToString()),
+			zap.String("location", location.String()),
+			zap.Int("rows", len(visibleRows)))
 	}
 	return
 }
@@ -1033,11 +1089,12 @@ func readBlockData(
 		deletes objectio.Bitmap,
 		err2 error,
 	) {
-		// appendable block should be filtered by committs
-		//cols = append(cols, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT) // committs, aborted
-		cols = append(cols, objectio.SEQNUM_COMMITTS) // committs, aborted
+		// Appendable blocks are filtered by both MVCC special columns. The
+		// object reader synthesizes a NULL abort vector for old commitTS-only
+		// objects, which is interpreted as "no aborted rows".
+		cols = append(cols, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT)
+		typs = append(typs, objectio.TSType, types.T_bool.ToType())
 
-		// no need to add typs, the two columns won't be generated
 		if err2 = readColumns(
 			cols, cacheVectors2,
 		); err2 != nil {
@@ -1047,10 +1104,14 @@ func readBlockData(
 		deletes = objectio.GetReusableBitmap()
 
 		t0 := time.Now()
-		//aborts := vector.MustFixedColWithTypeCheck[bool](loaded.Vecs[len(loaded.Vecs)-1])
-		commits := vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors2[len(cols)-1])
+		abortVec := &cacheVectors2[len(cols)-1]
+		commits := vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors2[len(cols)-2])
+		var aborts []bool
+		if !abortVec.IsConstNull() {
+			aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
+		}
 		for i := 0; i < len(commits); i++ {
-			if commits[i].GT(&ts) {
+			if commits[i].GT(&ts) || (aborts != nil && aborts[i]) {
 				deletes.Add(uint64(i))
 			}
 		}
