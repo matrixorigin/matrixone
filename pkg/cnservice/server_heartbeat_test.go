@@ -109,7 +109,7 @@ func TestCNCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {
 	conf := &Config{}
 	conf.UUID = "cn-1"
 	conf.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
-	conf.HAKeeper.HeatbeatTimeout.Duration = time.Second
+	conf.HAKeeper.HeatbeatTimeout.Duration = 5 * time.Second
 	client := &blockingCNHeartbeatCommandClient{
 		testHAKClient:    &testHAKClient{cfg: conf},
 		heartbeatEntered: make(chan struct{}),
@@ -136,7 +136,7 @@ func TestCNCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {
 
 	select {
 	case <-client.pollEntered:
-	case <-time.After(time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("command poll did not progress independently of heartbeat")
 	}
 
@@ -148,11 +148,34 @@ func TestCNCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {
 	}
 }
 
+func TestCNCommandTaskSkipsPollWithoutInFlightHeartbeat(t *testing.T) {
+	conf := &Config{UUID: "cn-1"}
+	client := &blockingCNHeartbeatCommandClient{
+		testHAKClient:    &testHAKClient{cfg: conf},
+		heartbeatEntered: make(chan struct{}),
+		pollEntered:      make(chan struct{}),
+	}
+	service := &service{
+		cfg:             conf,
+		_hakeeperClient: client,
+		config:          &util.ConfigData{},
+		logger:          logutil.GetPanicLogger(),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	service.commandTask(ctx)
+	select {
+	case <-client.pollEntered:
+		t.Fatal("healthy idle path issued an unnecessary command poll")
+	default:
+	}
+}
+
 func TestCNCanceledControlResponsesAreNotApplied(t *testing.T) {
 	conf := &Config{}
 	conf.UUID = "cn-1"
 	conf.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
-	conf.HAKeeper.HeatbeatTimeout.Duration = time.Second
+	conf.HAKeeper.HeatbeatTimeout.Duration = 5 * time.Second
 	service := &service{
 		cfg: conf,
 		_hakeeperClient: &canceledCNResponseClient{
@@ -177,7 +200,7 @@ func TestCNCanceledControlResponsesAreNotApplied(t *testing.T) {
 	} {
 		select {
 		case <-entered:
-		case <-time.After(time.Second):
+		case <-time.After(2 * time.Second):
 			t.Fatalf("%s request did not enter", name)
 		}
 	}
@@ -187,4 +210,23 @@ func TestCNCanceledControlResponsesAreNotApplied(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("control-plane workers did not terminate after cancellation")
 	}
+}
+
+func TestCNHeartbeatDropsResponseAfterRequestDeadline(t *testing.T) {
+	conf := &Config{UUID: "cn-1"}
+	conf.HAKeeper.HeatbeatTimeout.Duration = time.Millisecond
+	service := &service{
+		cfg: conf,
+		_hakeeperClient: &canceledCNResponseClient{
+			testHAKClient:    &testHAKClient{cfg: conf},
+			heartbeatEntered: make(chan struct{}),
+			pollEntered:      make(chan struct{}),
+		},
+		config: util.NewConfigData(nil),
+		logger: logutil.GetPanicLogger(),
+	}
+
+	// A nil hakeeperConnected channel would panic if the successful-looking
+	// late response escaped the per-request deadline guard.
+	service.heartbeat(context.Background())
 }

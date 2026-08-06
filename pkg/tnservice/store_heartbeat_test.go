@@ -25,11 +25,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/stretchr/testify/require"
 )
 
 type blockingHeartbeatCommandClient struct {
 	*testHAClient
 	heartbeatEntered chan struct{}
+	pollEntered      chan struct{}
 	command          pb.ScheduleCommand
 }
 
@@ -83,7 +85,12 @@ func (c *blockingHeartbeatCommandClient) GetScheduleCommands(
 	context.Context,
 	pb.ServiceType,
 ) (pb.CommandBatch, error) {
-	return pb.CommandBatch{Commands: []pb.ScheduleCommand{c.command}}, nil
+	select {
+	case <-c.pollEntered:
+	default:
+		close(c.pollEntered)
+	}
+	return pb.CommandBatch{BatchID: 1, Commands: []pb.ScheduleCommand{c.command}}, nil
 }
 
 var _ logservice.TNHAKeeperClient = new(testHAClient)
@@ -161,6 +168,7 @@ func TestCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {
 	client := &blockingHeartbeatCommandClient{
 		testHAClient:     &testHAClient{},
 		heartbeatEntered: make(chan struct{}),
+		pollEntered:      make(chan struct{}),
 		command: pb.ScheduleCommand{
 			UUID:        "tn-1",
 			ServiceType: pb.TNService,
@@ -180,7 +188,7 @@ func TestCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {
 		shutdownC:      make(chan struct{}, 1),
 	}
 	store.cfg.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
-	store.cfg.HAKeeper.HeatbeatTimeout.Duration = time.Second
+	store.cfg.HAKeeper.HeatbeatTimeout.Duration = 5 * time.Second
 
 	ctx, cancel := context.WithCancel(context.Background())
 	controlDone := make(chan struct{})
@@ -196,7 +204,7 @@ func TestCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {
 
 	select {
 	case <-store.shutdownC:
-	case <-time.After(time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("schedule command did not progress independently of heartbeat")
 	}
 
@@ -205,6 +213,23 @@ func TestCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {
 	case <-controlDone:
 	case <-time.After(time.Second):
 		t.Fatal("control-plane workers did not terminate after cancellation")
+	}
+}
+
+func TestCommandTaskSkipsPollWithoutInFlightHeartbeat(t *testing.T) {
+	client := &blockingHeartbeatCommandClient{
+		testHAClient:     &testHAClient{},
+		heartbeatEntered: make(chan struct{}),
+		pollEntered:      make(chan struct{}),
+	}
+	store := &store{hakeeperClient: client}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	store.commandTask(ctx)
+	select {
+	case <-client.pollEntered:
+		t.Fatal("healthy idle path issued an unnecessary command poll")
+	default:
 	}
 }
 
@@ -234,7 +259,7 @@ func TestCanceledControlResponsesAreNotApplied(t *testing.T) {
 		shutdownC: make(chan struct{}, 1),
 	}
 	store.cfg.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
-	store.cfg.HAKeeper.HeatbeatTimeout.Duration = time.Second
+	store.cfg.HAKeeper.HeatbeatTimeout.Duration = 5 * time.Second
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -249,7 +274,7 @@ func TestCanceledControlResponsesAreNotApplied(t *testing.T) {
 	} {
 		select {
 		case <-entered:
-		case <-time.After(time.Second):
+		case <-time.After(2 * time.Second):
 			t.Fatalf("%s request did not enter", name)
 		}
 	}
@@ -264,4 +289,67 @@ func TestCanceledControlResponsesAreNotApplied(t *testing.T) {
 		t.Fatal("response returned after cancellation was applied")
 	default:
 	}
+}
+
+func TestHeartbeatDropsResponseAfterRequestDeadline(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	command := pb.ScheduleCommand{
+		UUID:        "tn-1",
+		ServiceType: pb.TNService,
+		ShutdownStore: &pb.ShutdownStore{
+			StoreID: "tn-1",
+		},
+	}
+	store := &store{
+		cfg: &Config{
+			UUID: "tn-1",
+		},
+		replicas: &sync.Map{},
+		config:   &util.ConfigData{},
+		hakeeperClient: &canceledTNResponseClient{
+			testHAClient:     &testHAClient{},
+			heartbeatEntered: make(chan struct{}),
+			pollEntered:      make(chan struct{}),
+			command:          command,
+		},
+		rt:        rt,
+		shutdownC: make(chan struct{}, 1),
+	}
+	store.cfg.HAKeeper.HeatbeatTimeout.Duration = time.Millisecond
+
+	store.heartbeat(context.Background())
+	select {
+	case <-store.shutdownC:
+		t.Fatal("response returned after its request deadline was applied")
+	default:
+	}
+}
+
+func TestCommandBatchDeduplicatesPollHeartbeatRace(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	command := pb.ScheduleCommand{
+		UUID:        "tn-1",
+		ServiceType: pb.TNService,
+		ShutdownStore: &pb.ShutdownStore{
+			StoreID: "tn-1",
+		},
+	}
+	store := &store{
+		rt:        rt,
+		shutdownC: make(chan struct{}, 4),
+	}
+
+	store.handleCommandBatch(pb.CommandBatch{BatchID: 10, Commands: []pb.ScheduleCommand{command}})
+	store.handleCommandBatch(pb.CommandBatch{BatchID: 10, Commands: []pb.ScheduleCommand{command}})
+	store.handleCommandBatch(pb.CommandBatch{BatchID: 9, Commands: []pb.ScheduleCommand{command}})
+	require.Equal(t, 1, len(store.shutdownC), "duplicate and stale batches must not be applied")
+	store.handleCommandBatch(pb.CommandBatch{Commands: []pb.ScheduleCommand{command}})
+	require.Equal(t, 1, len(store.shutdownC), "one legacy replay after leader downgrade must be suppressed")
+	store.handleCommandBatch(pb.CommandBatch{Commands: []pb.ScheduleCommand{command}})
+	require.Equal(t, 2, len(store.shutdownC), "a later legacy checker retry must remain applicable")
+
+	store.handleCommandBatch(pb.CommandBatch{BatchID: 11, Commands: []pb.ScheduleCommand{command}})
+	require.Equal(t, 3, len(store.shutdownC), "a new checker generation must remain retryable")
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -113,7 +114,11 @@ type store struct {
 	replicas            *sync.Map
 	stopper             *stopper.Stopper
 	shutdownC           chan struct{}
+	heartbeatInFlight   atomic.Bool
 	commandMu           sync.Mutex
+	lastCommandBatchID  uint64
+	lastCommandHash     [32]byte
+	legacyDedupeArmed   bool
 
 	options struct {
 		logServiceClientFactory func(metadata.TNShard) (logservice.Client, error)

@@ -418,7 +418,7 @@ func TestServiceHandleTNHeartbeat(t *testing.T) {
 	runServiceTest(t, true, true, fn)
 }
 
-func TestServicePollCommandsIsIndependentFromTNHeartbeat(t *testing.T) {
+func TestServicePollCommandsIsNonDestructiveAndDeduplicable(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -437,15 +437,6 @@ func TestServicePollCommandsIsIndependentFromTNHeartbeat(t *testing.T) {
 		require.NoError(t,
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{command}))
 
-		heartbeatResp := s.handleTNHeartbeat(ctx, pb.Request{
-			Method: pb.TN_HEARTBEAT,
-			TNHeartbeat: &pb.TNStoreHeartbeat{
-				UUID:                 "uuid1",
-				CommandPollSupported: true,
-			},
-		})
-		require.Empty(t, heartbeatResp.CommandBatch.Commands)
-
 		pollResp := s.handleGetScheduleCommands(ctx, pb.Request{
 			Method: pb.GET_SCHEDULE_COMMANDS,
 			ScheduleCommandQuery: &pb.ScheduleCommandQuery{
@@ -455,10 +446,9 @@ func TestServicePollCommandsIsIndependentFromTNHeartbeat(t *testing.T) {
 		})
 		require.Equal(t, uint32(moerr.Ok), pollResp.ErrorCode)
 		require.Equal(t, []pb.ScheduleCommand{command}, pollResp.CommandBatch.Commands)
+		require.NotZero(t, pollResp.CommandBatch.BatchID)
 
-		// Polling preserves heartbeat delivery semantics: ordinary commands are
-		// consumed by one successful proposal instead of being redelivered by
-		// every read until the next checker cycle.
+		// A retry observes the same stable batch ID and does not mutate the RSM.
 		secondResp := s.handleGetScheduleCommands(ctx, pb.Request{
 			Method: pb.GET_SCHEDULE_COMMANDS,
 			ScheduleCommandQuery: &pb.ScheduleCommandQuery{
@@ -466,7 +456,24 @@ func TestServicePollCommandsIsIndependentFromTNHeartbeat(t *testing.T) {
 				ServiceType: pb.TNService,
 			},
 		})
-		require.Empty(t, secondResp.CommandBatch.Commands)
+		require.Equal(t, *pollResp.CommandBatch, *secondResp.CommandBatch)
+
+		// The ordinary heartbeat path remains the sole destructive delivery
+		// operation, preserving old-client and mixed-version behavior.
+		heartbeatResp := s.handleTNHeartbeat(ctx, pb.Request{
+			Method:      pb.TN_HEARTBEAT,
+			TNHeartbeat: &pb.TNStoreHeartbeat{UUID: "uuid1"},
+		})
+		require.Equal(t, *pollResp.CommandBatch, *heartbeatResp.CommandBatch)
+
+		afterDelivery := s.handleGetScheduleCommands(ctx, pb.Request{
+			Method: pb.GET_SCHEDULE_COMMANDS,
+			ScheduleCommandQuery: &pb.ScheduleCommandQuery{
+				UUID:        "uuid1",
+				ServiceType: pb.TNService,
+			},
+		})
+		require.Empty(t, afterDelivery.CommandBatch.Commands)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -504,6 +511,18 @@ func TestServiceRejectsInvalidScheduleCommandQueries(t *testing.T) {
 			},
 		})
 		require.NotEqual(t, uint32(moerr.Ok), resp.ErrorCode)
+
+		// Validation happens after a read, not a consume. The intended service
+		// can still retrieve the batch after a wrong-type request.
+		resp = s.handleGetScheduleCommands(ctx, pb.Request{
+			Method: pb.GET_SCHEDULE_COMMANDS,
+			ScheduleCommandQuery: &pb.ScheduleCommandQuery{
+				UUID:        "uuid1",
+				ServiceType: pb.CNService,
+			},
+		})
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Equal(t, []pb.ScheduleCommand{command}, resp.CommandBatch.Commands)
 	}
 	runServiceTest(t, true, true, fn)
 }

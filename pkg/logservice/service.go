@@ -403,7 +403,7 @@ func (s *Service) handleGetScheduleCommands(ctx context.Context, req pb.Request)
 			moerr.NewInvalidInputf(ctx, "unsupported schedule command service type %s", query.ServiceType.String()))
 		return resp
 	}
-	batch, err := s.store.takeCommandBatch(ctx, query.UUID)
+	batch, err := s.store.getCommandBatch(ctx, query.UUID)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
@@ -416,6 +416,14 @@ func (s *Service) handleGetScheduleCommands(ctx context.Context, req pb.Request)
 					command.ServiceType.String(), query.ServiceType.String()))
 			return resp
 		}
+	}
+	// A batch installed before every HAKeeper replica understood BatchID cannot
+	// be safely deduplicated against a concurrent heartbeat response. Let the
+	// legacy heartbeat path consume it; an upgraded RSM assigns a stable ID on
+	// its next existing TickUpdate, without introducing a new Raft command.
+	if len(batch.Commands) > 0 && batch.BatchID == 0 {
+		resp.CommandBatch = &pb.CommandBatch{}
+		return resp
 	}
 	resp.CommandBatch = &batch
 	return resp

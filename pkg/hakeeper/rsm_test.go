@@ -972,30 +972,66 @@ func TestGetCommandBatch(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestScheduleCommandPollUsesHeartbeatDeliverySemantics(t *testing.T) {
+func TestScheduleCommandReadIsStableUntilHeartbeatDelivery(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	command := pb.ScheduleCommand{
 		UUID:        "uuid1",
 		ServiceType: pb.TNService,
 		ConfigChange: &pb.ConfigChange{
 			ChangeType: pb.StartReplica,
+			InitialMembers: map[uint64]string{
+				1: "tn-1",
+			},
 		},
 	}
+	_, err := rsm.Update(sm.Entry{
+		Index: 42,
+		Cmd:   GetUpdateCommandsCmd(1, []pb.ScheduleCommand{command}),
+	})
+	require.NoError(t, err)
+
+	value, err := rsm.Lookup(&ScheduleCommandQuery{UUID: command.UUID})
+	require.NoError(t, err)
+	readBatch := value.(*pb.CommandBatch)
+	require.Equal(t, uint64(42), readBatch.BatchID)
+	require.Equal(t, []pb.ScheduleCommand{command}, readBatch.Commands)
+	_, ok := rsm.state.ScheduleCommands[command.UUID]
+	require.True(t, ok, "read-only polling must not consume commands")
+	readBatch.Commands[0].UUID = "caller-owned"
+	readBatch.Commands[0].ConfigChange.InitialMembers[1] = "caller-owned"
+	require.Equal(t, command, rsm.state.ScheduleCommands[command.UUID].Commands[0],
+		"read results must not alias replicated state")
+
+	value, err = rsm.Lookup(&ScheduleCommandQuery{UUID: command.UUID})
+	require.NoError(t, err)
+	readBatch = value.(*pb.CommandBatch)
+
+	heartbeat, err := (&pb.TNStoreHeartbeat{UUID: command.UUID}).Marshal()
+	require.NoError(t, err)
+	result, err := rsm.Update(sm.Entry{Index: 43, Cmd: GetTNStoreHeartbeatCmd(heartbeat)})
+	require.NoError(t, err)
+	var delivered pb.CommandBatch
+	require.NoError(t, delivered.Unmarshal(result.Data))
+	require.Equal(t, *readBatch, delivered)
+	_, ok = rsm.state.ScheduleCommands[command.UUID]
+	require.False(t, ok, "heartbeat keeps the legacy atomic consume semantics")
+}
+
+func TestTickAssignsIDsToLegacyScheduleCommandBatchesOnce(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	command := pb.ScheduleCommand{UUID: "tn-1", ServiceType: pb.TNService}
 	rsm.state.ScheduleCommands[command.UUID] = pb.CommandBatch{
 		Commands: []pb.ScheduleCommand{command},
 	}
 
-	result, err := rsm.Update(sm.Entry{Cmd: GetScheduleCommandPollCmd(command.UUID)})
+	_, err := rsm.Update(sm.Entry{Index: 41, Cmd: GetTickCmd()})
 	require.NoError(t, err)
-	var batch pb.CommandBatch
-	require.NoError(t, batch.Unmarshal(result.Data))
-	require.Equal(t, []pb.ScheduleCommand{command}, batch.Commands)
-	_, ok := rsm.state.ScheduleCommands[command.UUID]
-	require.False(t, ok)
+	require.Equal(t, uint64(41), rsm.state.ScheduleCommands[command.UUID].BatchID)
 
-	result, err = rsm.Update(sm.Entry{Cmd: GetScheduleCommandPollCmd(command.UUID)})
+	_, err = rsm.Update(sm.Entry{Index: 42, Cmd: GetTickCmd()})
 	require.NoError(t, err)
-	require.Empty(t, result.Data)
+	require.Equal(t, uint64(41), rsm.state.ScheduleCommands[command.UUID].BatchID,
+		"subsequent ticks must not rewrite a stable delivery generation")
 }
 
 func TestBootstrapReplicaCommandsRetriedUntilHeartbeatAcknowledges(t *testing.T) {

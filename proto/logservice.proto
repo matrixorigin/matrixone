@@ -145,10 +145,6 @@ message CNStoreHeartbeat {
   Resource        Resource           = 13 [(gogoproto.nullable) = false];
   string  ShardServiceAddress   = 14;
   string          CommitID           = 15;
-  // CommandPollSupported tells HAKeeper that this service obtains schedule
-  // commands through the independent command-poll RPC. Older HAKeepers ignore
-  // this field and continue returning commands in heartbeat responses.
-  bool            CommandPollSupported = 16;
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
@@ -216,8 +212,6 @@ message TNStoreHeartbeat {
   // AutoIncrEpochFenceSupported reports that this TN rejects writes whose
   // allocator epoch does not match the table epoch.
   bool AutoIncrEpochFenceSupported = 12;
-  // CommandPollSupported has the same compatibility contract as the CN field.
-  bool CommandPollSupported = 13;
 };
 
 message RSMState {
@@ -415,7 +409,6 @@ enum HAKeeperUpdateType {
   LogShardUpdate = 17;
   RestoreIDWatermarkUpdate = 18;
   CompleteLogServiceRecoveryUpdate = 19;
-  ScheduleCommandPollUpdate = 20;
 }
 
 // HAKeeperState state transition diagram
@@ -576,6 +569,11 @@ message BootstrapShard {
 message CommandBatch {
   uint64 Term                       = 1;
   repeated ScheduleCommand Commands = 2 [(gogoproto.nullable) = false];
+  // BatchID is the HAKeeper log index that installed this batch. It is stable
+  // across heartbeat delivery and read-only polling, allowing a service to
+  // suppress the same batch when those paths race. Zero denotes a batch
+  // created by an older HAKeeper and is never used as a delivery ID.
+  uint64 BatchID                    = 3;
 }
 
 // CNStoreInfo contains information on a CN store.

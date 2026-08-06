@@ -530,18 +530,18 @@ func TestHAKeeperClientPollScheduleCommands(t *testing.T) {
 		require.NoError(t,
 			s.store.addScheduleCommands(ctx, 0, []pb.ScheduleCommand{command}))
 
-		// A new service declares independent polling, so its heartbeat does not
-		// consume the pending command.
-		batch, err := baseClient.SendTNHeartbeat(ctx, pb.TNStoreHeartbeat{
-			UUID:                 s.ID(),
-			CommandPollSupported: true,
-		})
-		require.NoError(t, err)
-		require.Empty(t, batch.Commands)
-
-		batch, err = client.GetScheduleCommands(ctx, pb.TNService)
+		batch, err := client.GetScheduleCommands(ctx, pb.TNService)
 		require.NoError(t, err)
 		require.Equal(t, []pb.ScheduleCommand{command}, batch.Commands)
+		require.NotZero(t, batch.BatchID)
+
+		retry, err := client.GetScheduleCommands(ctx, pb.TNService)
+		require.NoError(t, err)
+		require.Equal(t, batch, retry)
+
+		delivered, err := baseClient.SendTNHeartbeat(ctx, pb.TNStoreHeartbeat{UUID: s.ID()})
+		require.NoError(t, err)
+		require.Equal(t, batch, delivered)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -555,6 +555,50 @@ func TestHAKeeperClientCommandPollNoopForOlderServer(t *testing.T) {
 	batch, err := client.GetScheduleCommands(ctx, pb.TNService)
 	require.NoError(t, err)
 	require.Empty(t, batch.Commands)
+}
+
+func TestScheduleCommandBatchFingerprintDeterministic(t *testing.T) {
+	batch := pb.CommandBatch{
+		Term:    7,
+		BatchID: 11,
+		Commands: []pb.ScheduleCommand{{
+			UUID:        "tn-1",
+			ServiceType: pb.TNService,
+			ConfigChange: &pb.ConfigChange{
+				InitialMembers: map[uint64]string{
+					3: "c",
+					1: "a",
+					2: "b",
+				},
+			},
+		}},
+	}
+	want := ScheduleCommandBatchFingerprint(batch)
+	for range 100 {
+		require.Equal(t, want, ScheduleCommandBatchFingerprint(batch))
+	}
+
+	batch.Term++
+	batch.BatchID++
+	require.Equal(t, want, ScheduleCommandBatchFingerprint(batch),
+		"delivery metadata must not change command identity")
+}
+
+func TestIsRetryableScheduleCommand(t *testing.T) {
+	command := pb.ScheduleCommand{
+		Bootstrapping: true,
+		ConfigChange: &pb.ConfigChange{
+			ChangeType: pb.StartReplica,
+		},
+	}
+	require.True(t, IsRetryableScheduleCommand(command))
+	command.Bootstrapping = false
+	require.False(t, IsRetryableScheduleCommand(command))
+	command.Bootstrapping = true
+	command.ConfigChange.ChangeType = pb.AddReplica
+	require.False(t, IsRetryableScheduleCommand(command))
+	command.ConfigChange = nil
+	require.False(t, IsRetryableScheduleCommand(command))
 }
 
 func TestHAKeeperClientSendLogHeartbeat(t *testing.T) {

@@ -16,6 +16,8 @@ package logservice
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -36,15 +38,36 @@ import (
 const (
 	defaultBackendReadTimeout = time.Second * 8
 
-	// ScheduleCommandPollInterval and ScheduleCommandPollTimeout define the
-	// local command-progress budget. They intentionally do not inherit the
-	// heartbeat configuration: increasing store-liveness or heartbeat RPC
-	// tolerances must not delay schedule-command delivery.
+	// ScheduleCommandPollInterval is the maximum time a command read waits
+	// before hedging an in-flight heartbeat. ScheduleCommandPollTimeout bounds
+	// that read. Neither value inherits the heartbeat RPC timeout.
 	ScheduleCommandPollInterval = time.Second
 	ScheduleCommandPollTimeout  = 3 * time.Second
 )
 
 var hakeeperClientRetryInterval = 10 * time.Millisecond
+
+// ScheduleCommandBatchFingerprint identifies the command content independently
+// of its delivery ID. It is used only on the rare command path to suppress one
+// legacy heartbeat replay after a rolling-upgrade leader change.
+func ScheduleCommandBatchFingerprint(batch pb.CommandBatch) [sha256.Size]byte {
+	normalized := pb.CommandBatch{
+		Commands: batch.Commands,
+	}
+	data, err := json.Marshal(&normalized)
+	if err != nil {
+		panic(err)
+	}
+	return sha256.Sum256(data)
+}
+
+// IsRetryableScheduleCommand reports commands whose existing HAKeeper
+// delivery contract is at-least-once until store state acknowledges them.
+func IsRetryableScheduleCommand(command pb.ScheduleCommand) bool {
+	return command.Bootstrapping &&
+		command.ConfigChange != nil &&
+		command.ConfigChange.ChangeType == pb.StartReplica
+}
 
 type basicHAKeeperClient interface {
 	// Close closes the hakeeper client.
@@ -674,10 +697,9 @@ func (c *managedHAKeeperClient) SendTNHeartbeat(ctx context.Context,
 	}
 }
 
-// GetScheduleCommands fetches pending commands without waiting for a heartbeat
-// proposal. Capability negotiation turns this into a local no-op while the
-// client is connected to an older HAKeeper, whose heartbeat responses preserve
-// the legacy delivery path.
+// GetScheduleCommands reads pending commands without mutating HAKeeper state.
+// Capability negotiation turns this into a local no-op against an older
+// HAKeeper, whose heartbeat responses preserve the legacy delivery path.
 func (c *managedHAKeeperClient) GetScheduleCommands(
 	ctx context.Context,
 	serviceType pb.ServiceType,

@@ -22,10 +22,16 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
+
+var tnCommandPollFailed = logutil.Event{
+	Name:    "tn.schedule-command.poll.failed",
+	Message: "failed to poll tn schedule commands",
+}
 
 func (s *store) heartbeatTask(ctx context.Context) {
 	if s.cfg.HAKeeper.HeatbeatInterval.Duration == 0 {
@@ -70,6 +76,12 @@ func (s *store) commandTask(ctx context.Context) {
 		return
 	}
 	poll := func() {
+		// Keep the normal heartbeat as the zero-overhead delivery path. This
+		// read is issued only when that RPC is in flight beyond the local poll
+		// cadence, so healthy clusters do not receive duplicate proposals.
+		if !s.heartbeatInFlight.Load() {
+			return
+		}
 		start := time.Now()
 		defer func() {
 			v2.TNCommandPollHistogram.Observe(time.Since(start).Seconds())
@@ -80,14 +92,16 @@ func (s *store) commandTask(ctx context.Context) {
 		if err != nil {
 			if ctx.Err() == nil {
 				v2.TNCommandPollFailureCounter.Inc()
-				s.rt.Logger().Error("failed to poll tn schedule commands", zap.Error(err))
+				tnCommandPollFailed.Error(
+					zap.String("uuid", s.cfg.UUID),
+					zap.Error(err))
 			}
 			return
 		}
-		if ctx.Err() != nil {
+		if ctx2.Err() != nil {
 			return
 		}
-		s.handleCommands(batch.Commands)
+		s.handleCommandBatch(batch)
 	}
 
 	poll()
@@ -111,7 +125,6 @@ func (s *store) heartbeat(ctx context.Context) {
 	ctx2, cancel := context.WithTimeoutCause(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration, moerr.CauseTnServiceHeartbeat)
 	defer cancel()
 
-	_, commandPollSupported := s.hakeeperClient.(logservice.ScheduleCommandHAKeeperClient)
 	hb := logservicepb.TNStoreHeartbeat{
 		UUID:                        s.cfg.UUID,
 		ServiceAddress:              s.txnServiceServiceAddr(),
@@ -122,7 +135,6 @@ func (s *store) heartbeat(ctx context.Context) {
 		ShardServiceAddress:         s.shardServiceServiceAddr(),
 		ConfigData:                  s.config.GetData(),
 		AutoIncrEpochFenceSupported: true,
-		CommandPollSupported:        commandPollSupported,
 		// if the replayed LSN is 0, then it is the master TN.
 		ReplayedLsn: 0,
 	}
@@ -131,24 +143,71 @@ func (s *store) heartbeat(ctx context.Context) {
 		hb.QueryAddress = s.queryServiceServiceAddr()
 	}
 
-	cb, err := s.hakeeperClient.SendTNHeartbeat(ctx2, hb)
+	s.heartbeatInFlight.Store(true)
+	cb, err := func() (logservicepb.CommandBatch, error) {
+		defer s.heartbeatInFlight.Store(false)
+		return s.hakeeperClient.SendTNHeartbeat(ctx2, hb)
+	}()
 	if err != nil {
 		err = moerr.AttachCause(ctx2, err)
 		v2.TNHeartbeatFailureCounter.Inc()
 		s.rt.Logger().Error("failed to send tn heartbeat", zap.Error(err))
 		return
 	}
-	if ctx.Err() != nil {
+	if ctx2.Err() != nil {
 		return
 	}
 
 	s.config.DecrCount()
-	s.handleCommands(cb.Commands)
+	s.handleCommandBatch(cb)
 }
 
 func (s *store) handleCommands(cmds []logservicepb.ScheduleCommand) {
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
+	s.handleCommandsLocked(cmds)
+}
+
+func (s *store) handleCommandBatch(batch logservicepb.CommandBatch) {
+	if len(batch.Commands) == 0 {
+		return
+	}
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
+	if batch.BatchID == 0 {
+		fingerprint := logservice.ScheduleCommandBatchFingerprint(batch)
+		if s.legacyDedupeArmed && fingerprint == s.lastCommandHash {
+			s.legacyDedupeArmed = false
+			s.handleRetryableCommandsLocked(batch.Commands)
+			return
+		}
+		s.legacyDedupeArmed = false
+	} else {
+		if batch.BatchID < s.lastCommandBatchID {
+			return
+		}
+		if batch.BatchID == s.lastCommandBatchID {
+			s.handleRetryableCommandsLocked(batch.Commands)
+			return
+		}
+	}
+	s.handleCommandsLocked(batch.Commands)
+	if batch.BatchID != 0 {
+		s.lastCommandBatchID = batch.BatchID
+		s.lastCommandHash = logservice.ScheduleCommandBatchFingerprint(batch)
+		s.legacyDedupeArmed = true
+	}
+}
+
+func (s *store) handleRetryableCommandsLocked(cmds []logservicepb.ScheduleCommand) {
+	for i := range cmds {
+		if logservice.IsRetryableScheduleCommand(cmds[i]) {
+			s.handleCommandsLocked(cmds[i : i+1])
+		}
+	}
+}
+
+func (s *store) handleCommandsLocked(cmds []logservicepb.ScheduleCommand) {
 	for _, cmd := range cmds {
 		if cmd.ServiceType != logservicepb.TNService {
 			s.rt.Logger().Fatal("received invalid command", zap.String("command", cmd.LogString()))

@@ -29,6 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/version"
 )
 
+var cnCommandPollFailed = logutil.Event{
+	Name:    "cn.schedule-command.poll.failed",
+	Message: "failed to poll cn schedule commands",
+}
+
 func (s *service) startCNStoreHeartbeat() error {
 	if s._hakeeperClient == nil {
 		if _, err := s.getHAKeeperClient(); err != nil {
@@ -82,6 +87,12 @@ func (s *service) commandTask(ctx context.Context) {
 		return
 	}
 	poll := func() {
+		// A healthy heartbeat remains the only command-delivery RPC. Polling is
+		// a bounded hedge only while that RPC is in flight, so the steady-state
+		// path adds no network or Raft traffic.
+		if !s.heartbeatInFlight.Load() {
+			return
+		}
 		start := time.Now()
 		defer func() {
 			v2.CNCommandPollHistogram.Observe(time.Since(start).Seconds())
@@ -92,14 +103,16 @@ func (s *service) commandTask(ctx context.Context) {
 		if err != nil {
 			if ctx.Err() == nil {
 				v2.CNCommandPollFailureCounter.Inc()
-				s.logger.Error("failed to poll cn schedule commands", zap.Error(err))
+				cnCommandPollFailed.Error(
+					zap.String("uuid", s.cfg.UUID),
+					zap.Error(err))
 			}
 			return
 		}
-		if ctx.Err() != nil {
+		if ctx2.Err() != nil {
 			return
 		}
-		s.handleCommands(batch.Commands)
+		s.handleCommandBatch(batch)
 	}
 
 	poll()
@@ -124,7 +137,6 @@ func (s *service) heartbeat(ctx context.Context) {
 	ctx2, cancel := context.WithTimeoutCause(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration, moerr.CauseHeartbeat)
 	defer cancel()
 
-	_, commandPollSupported := s._hakeeperClient.(logservice.ScheduleCommandHAKeeperClient)
 	hb := logservicepb.CNStoreHeartbeat{
 		UUID:                s.cfg.UUID,
 		ServiceAddress:      s.pipelineServiceServiceAddr(),
@@ -142,22 +154,25 @@ func (s *service) heartbeat(ctx context.Context) {
 			MemTotal:     system.MemoryTotal(),
 			MemAvailable: system.MemoryAvailable(),
 		},
-		CommitID:             version.CommitID,
-		CommandPollSupported: commandPollSupported,
+		CommitID: version.CommitID,
 	}
 	if s.gossipNode != nil {
 		hb.GossipAddress = s.gossipServiceAddr()
 		hb.GossipJoined = s.gossipNode.Joined()
 	}
 
-	cb, err := s._hakeeperClient.SendCNHeartbeat(ctx2, hb)
+	s.heartbeatInFlight.Store(true)
+	cb, err := func() (logservicepb.CommandBatch, error) {
+		defer s.heartbeatInFlight.Store(false)
+		return s._hakeeperClient.SendCNHeartbeat(ctx2, hb)
+	}()
 	if err != nil {
 		err = moerr.AttachCause(ctx2, err)
 		v2.CNHeartbeatFailureCounter.Inc()
 		s.logger.Error("failed to send cn heartbeat", zap.Error(err))
 		return
 	}
-	if ctx.Err() != nil {
+	if ctx2.Err() != nil {
 		return
 	}
 
@@ -168,12 +183,42 @@ func (s *service) heartbeat(ctx context.Context) {
 		close(s.hakeeperConnected)
 	}
 	s.config.DecrCount()
-	s.handleCommands(cb.Commands)
+	s.handleCommandBatch(cb)
 }
 
 func (s *service) handleCommands(cmds []logservicepb.ScheduleCommand) {
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
+	s.handleCommandsLocked(cmds)
+}
+
+func (s *service) handleCommandBatch(batch logservicepb.CommandBatch) {
+	if len(batch.Commands) == 0 {
+		return
+	}
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
+	if batch.BatchID == 0 {
+		fingerprint := logservice.ScheduleCommandBatchFingerprint(batch)
+		if s.legacyDedupeArmed && fingerprint == s.lastCommandHash {
+			s.legacyDedupeArmed = false
+			return
+		}
+		s.legacyDedupeArmed = false
+	} else {
+		if batch.BatchID <= s.lastCommandBatchID {
+			return
+		}
+	}
+	s.handleCommandsLocked(batch.Commands)
+	if batch.BatchID != 0 {
+		s.lastCommandBatchID = batch.BatchID
+		s.lastCommandHash = logservice.ScheduleCommandBatchFingerprint(batch)
+		s.legacyDedupeArmed = true
+	}
+}
+
+func (s *service) handleCommandsLocked(cmds []logservicepb.ScheduleCommand) {
 	for _, cmd := range cmds {
 		if cmd.ServiceType != logservicepb.CNService {
 			s.logger.Fatal("received invalid command", zap.String("command", cmd.LogString()))

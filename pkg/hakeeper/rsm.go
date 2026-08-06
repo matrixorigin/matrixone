@@ -182,19 +182,6 @@ func GetUpdateCommandsCmd(term uint64, cmds []pb.ScheduleCommand) []byte {
 	return data
 }
 
-// GetScheduleCommandPollCmd creates an independent command-delivery proposal.
-// It intentionally shares getCommandBatch's consumption and bootstrap-retry
-// semantics with heartbeat delivery.
-func GetScheduleCommandPollCmd(uuid string) []byte {
-	query := pb.ScheduleCommandQuery{UUID: uuid}
-	data := make([]byte, headerSize+query.ProtoSize())
-	binaryEnc.PutUint32(data, uint32(pb.ScheduleCommandPollUpdate))
-	if _, err := query.MarshalTo(data[headerSize:]); err != nil {
-		panic(err)
-	}
-	return data
-}
-
 func parseHeartbeatCmd(cmd []byte) []byte {
 	return cmd[headerSize:]
 }
@@ -494,6 +481,7 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 		l, ok := s.state.ScheduleCommands[c.UUID]
 		if !ok {
 			l = pb.CommandBatch{
+				BatchID:  s.state.Index,
 				Commands: make([]pb.ScheduleCommand, 0),
 			}
 		}
@@ -592,9 +580,6 @@ func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.CNState.Update(hb, s.state.Tick)
-	if hb.CommandPollSupported {
-		return sm.Result{}
-	}
 	return s.getCommandBatch(hb.UUID)
 }
 
@@ -605,9 +590,6 @@ func (s *stateMachine) handleTNHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.TNState.Update(hb, s.state.Tick)
-	if hb.CommandPollSupported {
-		return sm.Result{}
-	}
 	return s.getCommandBatch(hb.UUID)
 }
 
@@ -622,6 +604,17 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 }
 
 func (s *stateMachine) handleTick(cmd []byte) sm.Result {
+	// A replica upgraded from an older snapshot can contain pending batches
+	// without delivery IDs. Reuse an ordinary replicated tick to make them
+	// poll-safe. The decision depends only on replicated state, so replicas that
+	// recovered at different times still produce the same state. Current batches
+	// are skipped, and an empty command map makes this loop constant-time.
+	for uuid, batch := range s.state.ScheduleCommands {
+		if batch.BatchID == 0 {
+			batch.BatchID = s.state.Index
+			s.state.ScheduleCommands[uuid] = batch
+		}
+	}
 	s.state.Tick++
 	return sm.Result{}
 }
@@ -1029,12 +1022,6 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleRestoreIDWatermarkCmd(cmd), nil
 	case pb.CompleteLogServiceRecoveryUpdate:
 		return s.handleCompleteLogServiceRecoveryCmd(), nil
-	case pb.ScheduleCommandPollUpdate:
-		var query pb.ScheduleCommandQuery
-		if err := query.Unmarshal(cmd[headerSize:]); err != nil {
-			panic(err)
-		}
-		return s.getCommandBatch(query.UUID), nil
 	case pb.SetTaskTableUserUpdate:
 		s.assertState()
 		return s.handleTaskTableUserCmd(cmd), nil
@@ -1089,7 +1076,12 @@ func (s *stateMachine) handleStateQuery() interface{} {
 
 func (s *stateMachine) handleScheduleCommandQuery(uuid string) *pb.CommandBatch {
 	if batch, ok := s.state.ScheduleCommands[uuid]; ok {
-		return &batch
+		copied := deepcopy.Copy(&batch)
+		result, ok := copied.(*pb.CommandBatch)
+		if !ok {
+			panic("deep copy failed")
+		}
+		return result
 	}
 	return &pb.CommandBatch{}
 }
