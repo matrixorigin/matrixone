@@ -213,6 +213,8 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	proc.ResetQueryContext()
 	proc.ResetCloneTxnOperator()
 	c.proc = proc
+	c.reusePlanSnapshot = false
+	c.capturePlanSnapshot()
 
 	c.fill = fill
 	c.sql = sql
@@ -270,6 +272,24 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	return nil
 }
 
+// capturePlanSnapshot starts a new plan-execution generation. Definition
+// fences must be compared with this immutable timestamp, not with a mutable RC
+// transaction snapshot that an earlier lock may have advanced.
+func (c *Compile) capturePlanSnapshot() {
+	txnOp := c.proc.GetTxnOperator()
+	if txnOp == nil {
+		c.proc.ClearPlanSnapshotTS()
+		return
+	}
+	c.proc.SetPlanSnapshotTS(txnOp.Txn().SnapshotTS)
+}
+
+func (c *Compile) bindPlanSnapshotForCompile() {
+	if !c.reusePlanSnapshot {
+		c.capturePlanSnapshot()
+	}
+}
+
 func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
 	scope.TxnOffset = txnOffset
 	for i := range scope.PreScopes {
@@ -318,6 +338,7 @@ func (c *Compile) clear() {
 
 	c.proc.Free()
 	c.proc = nil
+	c.reusePlanSnapshot = false
 
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
