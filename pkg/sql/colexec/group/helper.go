@@ -682,10 +682,11 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		// insert group by batch into the hash table.
 		rowCount := gbBatch.RowCount()
 		hashBytesBefore := ctr.hr.Hash.Size()
+		hashKeyVecs := ctr.hashKeyVectors(gbBatch.Vecs)
 		for i := 0; i < rowCount; i += hashmap.UnitLimit {
 			n := min(rowCount-i, hashmap.UnitLimit)
 			originGroupCount := ctr.hr.Hash.GroupCount()
-			vals, _, err := ctr.hr.Itr.Insert(i, n, gbBatch.Vecs)
+			vals, _, err := ctr.hr.Itr.Insert(i, n, hashKeyVecs)
 			if err != nil {
 				return false, err
 			}
@@ -815,17 +816,20 @@ func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
 	memUsed := ctr.memUsed()
 	opAnalyzer.SetMemUsed(memUsed)
 
-	// spill less than 10K, used only for debug.
-	// in this case, we spill when there are more than
-	// this many groups
-	var needSpill bool
-	if ctr.spillMem < 10000 {
-		needSpill = ctr.hr.Hash.GroupCount() >= uint64(ctr.spillMem)
-	} else {
-		needSpill = memUsed > ctr.spillMem
+	// Generic group spill partitions groups using the grouping hash table. H0
+	// has exactly one aggregate group and no grouping hash table. Aggregates
+	// that support H0 spilling (for example ordered GROUP_CONCAT) manage it in
+	// their own executors.
+	if ctr.mtyp == H0 {
+		return false
 	}
 
-	return needSpill
+	// Values below 10K are the debug group-count threshold. Otherwise the
+	// threshold is measured in bytes.
+	if ctr.spillMem < 10000 {
+		return ctr.hr.Hash.GroupCount() >= uint64(ctr.spillMem)
+	}
+	return memUsed > ctr.spillMem
 }
 
 func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]aggexec.AggFuncExec, error) {

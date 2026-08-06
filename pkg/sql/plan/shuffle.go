@@ -1184,9 +1184,12 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	//find the highest ndv
-	highestNDV := node.GroupBy[0].Ndv
+	// Any logical group-by column is constant for a physical equality key, so
+	// it remains a valid distribution key even when it is omitted from the
+	// local hash table. Preserve the highest-NDV choice to avoid skewing a
+	// composite primary key on one of its lower-cardinality components.
 	idx := 0
+	highestNDV := node.GroupBy[idx].Ndv
 	for i := range node.GroupBy {
 		if node.GroupBy[i].Ndv > highestNDV {
 			highestNDV = node.GroupBy[i].Ndv
