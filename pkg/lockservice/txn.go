@@ -425,7 +425,10 @@ func (txn *activeTxn) abort(
 func (txn *activeTxn) fenceByBindChanged(bind pb.LockTable, logger *log.MOLogger) bool {
 	txn.Lock()
 	defer txn.Unlock()
+	return txn.fenceByBindChangedLocked(bind, logger)
+}
 
+func (txn *activeTxn) fenceByBindChangedLocked(bind pb.LockTable, logger *log.MOLogger) bool {
 	h, ok := txn.lockHolders[bind.Group]
 	if !ok {
 		return false
