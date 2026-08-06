@@ -50,7 +50,16 @@ type SyncProtection struct {
 // EnsureSyncProtection makes crash replay idempotent while still rejecting a
 // read reference that is already bound to different protection facts.
 func (m *SyncProtectionManager) EnsureSyncProtection(jobID, bfData string, validTS int64, taskID string) error {
-	err := m.RegisterSyncProtection(jobID, bfData, validTS, taskID)
+	guard, err := m.BeginProtection()
+	if err != nil {
+		return err
+	}
+	defer guard.Close()
+	return guard.EnsureSyncProtection(jobID, bfData, validTS, taskID)
+}
+
+func (m *SyncProtectionManager) ensureSyncProtection(jobID, bfData string, validTS int64, taskID string) error {
+	err := m.registerSyncProtection(jobID, bfData, validTS, taskID)
 	if !moerr.IsMoErrCode(err, moerr.ErrSyncProtectionExists) {
 		return err
 	}
@@ -75,10 +84,57 @@ func (m *SyncProtectionManager) EnsureSyncProtection(jobID, bfData string, valid
 // SyncProtectionManager manages sync protection entries
 type SyncProtectionManager struct {
 	sync.RWMutex
-	protections map[string]*SyncProtection // jobID -> protection
-	gcRunning   atomic.Bool                // Whether GC is running
-	ttl         time.Duration              // TTL for non-soft-deleted protections
-	maxCount    int                        // Maximum number of protections
+	protections       map[string]*SyncProtection // jobID -> protection
+	protectionBarrier sync.RWMutex               // excludes GC from snapshot-to-registration handoffs
+	gcRunning         atomic.Bool                // Whether GC is running
+	ttl               time.Duration              // TTL for non-soft-deleted protections
+	maxCount          int                        // Maximum number of protections
+}
+
+// SyncProtectionGuard prevents GC from starting while a caller enumerates a
+// snapshot and installs its matching protection.
+type SyncProtectionGuard struct {
+	manager *SyncProtectionManager
+	mu      sync.Mutex
+	once    sync.Once
+	closed  bool
+}
+
+// BeginProtection acquires the read side of the GC handoff barrier without
+// waiting. Once GC has started (or is waiting to start), new work fails fast.
+func (m *SyncProtectionManager) BeginProtection() (*SyncProtectionGuard, error) {
+	if m == nil || !m.protectionBarrier.TryRLock() {
+		return nil, moerr.NewGCIsRunningNoCtx()
+	}
+	if m.gcRunning.Load() {
+		m.protectionBarrier.RUnlock()
+		return nil, moerr.NewGCIsRunningNoCtx()
+	}
+	return &SyncProtectionGuard{manager: m}, nil
+}
+
+func (g *SyncProtectionGuard) EnsureSyncProtection(jobID, bfData string, validTS int64, taskID string) error {
+	if g == nil || g.manager == nil {
+		return moerr.NewSyncProtectionInvalidNoCtx()
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
+		return moerr.NewSyncProtectionInvalidNoCtx()
+	}
+	return g.manager.ensureSyncProtection(jobID, bfData, validTS, taskID)
+}
+
+func (g *SyncProtectionGuard) Close() {
+	if g == nil || g.manager == nil {
+		return
+	}
+	g.once.Do(func() {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		g.closed = true
+		g.manager.protectionBarrier.RUnlock()
+	})
 }
 
 // NewSyncProtectionManager creates a new SyncProtectionManager
@@ -92,7 +148,13 @@ func NewSyncProtectionManager() *SyncProtectionManager {
 
 // SetGCRunning sets the GC running state
 func (m *SyncProtectionManager) SetGCRunning(running bool) {
-	m.gcRunning.Store(running)
+	if running {
+		m.protectionBarrier.Lock()
+		m.gcRunning.Store(true)
+	} else {
+		m.gcRunning.Store(false)
+		m.protectionBarrier.Unlock()
+	}
 	logutil.Debug(
 		"GC-Sync-Protection-GC-State-Changed",
 		zap.Bool("running", running),
@@ -109,6 +171,20 @@ func (m *SyncProtectionManager) IsGCRunning() bool {
 // taskID is the CCPR iteration task ID with LSN (e.g., "taskID-123") for logging
 // Returns error if GC is running or job already exists
 func (m *SyncProtectionManager) RegisterSyncProtection(
+	jobID string,
+	bfData string,
+	validTS int64,
+	taskID string,
+) error {
+	guard, err := m.BeginProtection()
+	if err != nil {
+		return err
+	}
+	defer guard.Close()
+	return m.registerSyncProtection(jobID, bfData, validTS, taskID)
+}
+
+func (m *SyncProtectionManager) registerSyncProtection(
 	jobID string,
 	bfData string,
 	validTS int64,

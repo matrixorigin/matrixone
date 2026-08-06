@@ -52,6 +52,21 @@ func TestSidecarReadProtectorLifecycle(t *testing.T) {
 	require.NoError(t, protector.Unregister(ctx, ref))
 }
 
+func TestSidecarReadProtectionScopeExcludesGC(t *testing.T) {
+	ctx := context.Background()
+	manager := NewSyncProtectionManager()
+	protector := SidecarReadProtector{Manager: manager}
+	register, closeProtection, err := protector.Begin(ctx)
+	require.NoError(t, err)
+	require.False(t, manager.protectionBarrier.TryLock())
+	require.NoError(t, register(ctx, []byte("scoped-read"), []string{"obj"}, time.Now().Add(time.Minute)))
+	closeProtection()
+	closeProtection()
+	require.Error(t, register(ctx, []byte("late-read"), []string{"obj"}, time.Now().Add(time.Minute)))
+	require.True(t, manager.protectionBarrier.TryLock())
+	manager.protectionBarrier.Unlock()
+}
+
 func TestSidecarReadProtectorEmptyTableAndGCExclusion(t *testing.T) {
 	ctx := context.Background()
 	expires := time.Now().Add(time.Minute)
@@ -62,5 +77,6 @@ func TestSidecarReadProtectorEmptyTableAndGCExclusion(t *testing.T) {
 	require.True(t, manager.IsProtected("__sidecar_empty_table__"))
 
 	manager.SetGCRunning(true)
+	defer manager.SetGCRunning(false)
 	require.Error(t, protector.Register(ctx, []byte("during-gc"), []string{"obj"}, expires))
 }

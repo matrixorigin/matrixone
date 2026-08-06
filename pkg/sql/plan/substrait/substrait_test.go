@@ -20,6 +20,8 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -224,19 +226,45 @@ func TestProtocolRejectsMalformedWireShapes(t *testing.T) {
 }
 
 type fakeProvider struct {
-	calls int
-	facts SnapshotFacts
-	err   error
+	calls     int
+	facts     SnapshotFacts
+	err       error
+	onPrepare func()
+}
+
+var testClientSPKI = []byte("test-sidecar-subject-public-key-info")
+
+func testClientSPKIHash() []byte {
+	digest := sha256.Sum256(testClientSPKI)
+	return digest[:]
+}
+
+func testVerifiedTLS(spki []byte) *tls.ConnectionState {
+	certificate := &x509.Certificate{RawSubjectPublicKeyInfo: append([]byte(nil), spki...)}
+	return &tls.ConnectionState{PeerCertificates: []*x509.Certificate{certificate}, VerifiedChains: [][]*x509.Certificate{{certificate}}}
 }
 
 func (f *fakeProvider) PrepareSnapshotRead(context.Context, Read, []byte) (SnapshotFacts, error) {
 	f.calls++
+	if f.onPrepare != nil {
+		f.onPrepare()
+	}
 	return f.facts, f.err
 }
 
 type fakeProtector struct {
-	registered, unregistered int
-	fail, failUnregister     bool
+	begun, closed, registered, unregistered int
+	active                                  bool
+	fail, failUnregister                    bool
+}
+
+func (f *fakeProtector) Begin(context.Context) (func(context.Context, []byte, []string, time.Time) error, func(), error) {
+	f.begun++
+	f.active = true
+	return f.Register, func() {
+		f.closed++
+		f.active = false
+	}, nil
 }
 
 func (f *fakeProtector) Register(context.Context, []byte, []string, time.Time) error {
@@ -245,6 +273,52 @@ func (f *fakeProtector) Register(context.Context, []byte, []string, time.Time) e
 		return context.Canceled
 	}
 	return nil
+}
+
+type fakeLeaseJournal struct {
+	events                       []string
+	leases                       []*Lease
+	storeErr, markErr, deleteErr error
+	sawCleanupDeadline           bool
+}
+
+func (f *fakeLeaseJournal) Store(_ context.Context, lease *Lease) error {
+	f.events = append(f.events, "store")
+	f.leases = append(f.leases, cloneLease(lease))
+	return f.storeErr
+}
+
+func (f *fakeLeaseJournal) MarkReleased(ctx context.Context, readRef []byte) error {
+	f.events = append(f.events, "mark-released")
+	_, f.sawCleanupDeadline = ctx.Deadline()
+	for _, lease := range f.leases {
+		if equalBytes(lease.Read.ReadRef, readRef) {
+			lease.Released = true
+		}
+	}
+	return f.markErr
+}
+
+func (f *fakeLeaseJournal) Delete(_ context.Context, readRef []byte) error {
+	f.events = append(f.events, "delete")
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	for i, lease := range f.leases {
+		if equalBytes(lease.Read.ReadRef, readRef) {
+			f.leases = append(f.leases[:i], f.leases[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+
+func (f *fakeLeaseJournal) Load(context.Context) ([]*Lease, error) {
+	result := make([]*Lease, 0, len(f.leases))
+	for _, lease := range f.leases {
+		result = append(result, cloneLease(lease))
+	}
+	return result, nil
 }
 func (f *fakeProtector) Unregister(context.Context, []byte) error {
 	f.unregistered++
@@ -260,10 +334,14 @@ func TestAdmissionPublishesOnlyProtectedSnapshot(t *testing.T) {
 	read := c.Reads()[0]
 	provider := &fakeProvider{facts: SnapshotFacts{Manifest: []byte("manifest"), CanonicalSchema: read.Schema, ObjectNames: []string{"o"}}}
 	protector := new(fakeProtector)
+	provider.onPrepare = func() { require.True(t, protector.active) }
 	leases := NewLeaseManager(1, protector)
 	now := time.Now()
-	wires, err := Admit(context.Background(), AdmissionRequest{Candidate: c, Provider: provider, Leases: leases, AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), TTL: time.Minute, ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{9}, 32)), Now: now})
+	wires, err := Admit(context.Background(), AdmissionRequest{Candidate: c, Provider: provider, Leases: leases, AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), AuthorizedClientSPKIHash: testClientSPKIHash(), TTL: time.Minute, ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{9}, 32)), Now: now})
 	require.NoError(t, err)
+	require.Equal(t, 1, protector.begun)
+	require.Equal(t, 1, protector.closed)
+	require.False(t, protector.active)
 	require.Equal(t, 1, protector.registered)
 	tr, err := UnmarshalTaeRead(wires[0], uint64(now.UnixMilli()))
 	require.NoError(t, err)
@@ -277,9 +355,63 @@ func TestAdmissionRejectsUnsafeSnapshotWithoutLease(t *testing.T) {
 	read := c.Reads()[0]
 	provider := &fakeProvider{facts: SnapshotFacts{Manifest: []byte("m"), CanonicalSchema: read.Schema, VisibleTombstones: true}}
 	protector := new(fakeProtector)
-	_, err = Admit(context.Background(), AdmissionRequest{Candidate: c, Provider: provider, Leases: NewLeaseManager(1, protector), AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), TTL: time.Minute, ReadOnly: true})
+	_, err = Admit(context.Background(), AdmissionRequest{Candidate: c, Provider: provider, Leases: NewLeaseManager(1, protector), AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), AuthorizedClientSPKIHash: testClientSPKIHash(), TTL: time.Minute, ReadOnly: true})
 	require.ErrorContains(t, err, "unsupported")
 	require.Zero(t, protector.registered)
+}
+
+func TestAdmissionRollbackDurablyRevokesAndReportsCleanupFailure(t *testing.T) {
+	c, err := Export(scanQuery())
+	require.NoError(t, err)
+	read := c.Reads()[0]
+	request := func(manager *LeaseManager) AdmissionRequest {
+		return AdmissionRequest{
+			Candidate: c, Provider: &fakeProvider{facts: SnapshotFacts{Manifest: []byte("m"), CanonicalSchema: read.Schema}},
+			Leases: manager, AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), AuthorizedClientSPKIHash: testClientSPKIHash(), TTL: time.Minute,
+			ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{2}, 32)), Now: time.Now(),
+		}
+	}
+	deleteErr := errors.New("delete cleanup failed")
+
+	t.Run("protection failure", func(t *testing.T) {
+		journal := &fakeLeaseJournal{deleteErr: deleteErr}
+		protector := &fakeProtector{fail: true}
+		manager := NewLeaseManager(1, protector)
+		manager.journal = journal
+		_, err := Admit(context.Background(), request(manager))
+		require.ErrorContains(t, err, "protect read lease")
+		require.ErrorContains(t, err, deleteErr.Error())
+		require.Equal(t, []string{"store", "mark-released", "delete"}, journal.events)
+		require.True(t, journal.sawCleanupDeadline)
+		require.Len(t, journal.leases, 1)
+		require.True(t, journal.leases[0].Released)
+	})
+
+	t.Run("ambiguous store failure", func(t *testing.T) {
+		storeErr := errors.New("store failed after write")
+		journal := &fakeLeaseJournal{storeErr: storeErr, deleteErr: deleteErr}
+		manager := NewLeaseManager(1, new(fakeProtector))
+		manager.journal = journal
+		_, err := Admit(context.Background(), request(manager))
+		require.ErrorContains(t, err, storeErr.Error())
+		require.ErrorContains(t, err, deleteErr.Error())
+		require.Equal(t, []string{"store", "mark-released", "delete"}, journal.events)
+		require.Len(t, journal.leases, 1)
+		require.True(t, journal.leases[0].Released)
+	})
+
+	t.Run("retains protection without durable revocation", func(t *testing.T) {
+		markErr := errors.New("mark failed")
+		journal := &fakeLeaseJournal{markErr: markErr, deleteErr: deleteErr}
+		protector := new(fakeProtector)
+		manager := NewLeaseManager(1, protector)
+		manager.journal = journal
+		lease := &Lease{Read: &TaeRead{ReadRef: bytes.Repeat([]byte{3}, 32)}}
+		err := manager.rollbackAcquisition(context.Background(), []*Lease{lease}, []*Lease{lease})
+		require.ErrorContains(t, err, markErr.Error())
+		require.ErrorContains(t, err, deleteErr.Error())
+		require.Zero(t, protector.unregistered)
+	})
 }
 
 func TestReleaseFailureRevokesLeaseAndRetainsRetryState(t *testing.T) {
@@ -290,7 +422,7 @@ func TestReleaseFailureRevokesLeaseAndRetainsRetryState(t *testing.T) {
 	protector := &fakeProtector{failUnregister: true}
 	leases := NewLeaseManager(1, protector)
 	now := time.Now()
-	wires, err := Admit(context.Background(), AdmissionRequest{Candidate: c, Provider: provider, Leases: leases, AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), TTL: time.Minute, ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{4}, 32)), Now: now})
+	wires, err := Admit(context.Background(), AdmissionRequest{Candidate: c, Provider: provider, Leases: leases, AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), AuthorizedClientSPKIHash: testClientSPKIHash(), TTL: time.Minute, ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{4}, 32)), Now: now})
 	require.NoError(t, err)
 	tr, err := UnmarshalTaeRead(wires[0], uint64(now.UnixMilli()))
 	require.NoError(t, err)
@@ -320,7 +452,7 @@ func TestPersistentLeaseReplayAndReleasedCrashRecovery(t *testing.T) {
 	require.False(t, ok)
 	require.ErrorContains(t, leases.Acquire(ctx, []*Lease{{}}), "not been replayed")
 	require.NoError(t, leases.Replay(ctx))
-	wires, err := Admit(ctx, AdmissionRequest{Candidate: c, Provider: provider, Leases: leases, AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), TTL: time.Minute, ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{7}, 32)), Now: now})
+	wires, err := Admit(ctx, AdmissionRequest{Candidate: c, Provider: provider, Leases: leases, AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), AuthorizedClientSPKIHash: testClientSPKIHash(), TTL: time.Minute, ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{7}, 32)), Now: now})
 	require.NoError(t, err)
 	tr, err := UnmarshalTaeRead(wires[0], uint64(now.UnixMilli()))
 	require.NoError(t, err)
@@ -328,8 +460,9 @@ func TestPersistentLeaseReplayAndReleasedCrashRecovery(t *testing.T) {
 	replayed := NewPersistentLeaseManager(1, protector, journal)
 	replayed.now = func() time.Time { return now }
 	require.NoError(t, replayed.Replay(ctx))
-	_, ok = replayed.Resolve(tr.ReadRef)
+	replayedLease, ok := replayed.Resolve(tr.ReadRef)
 	require.True(t, ok)
+	require.Equal(t, testClientSPKIHash(), replayedLease.AuthorizedClientSPKIHash)
 
 	protector.failUnregister = true
 	require.Error(t, replayed.Release(ctx, tr.ReadRef))
@@ -360,7 +493,7 @@ func TestPersistentLeaseReplayExpiresWithoutResurrection(t *testing.T) {
 	leases := NewPersistentLeaseManager(1, new(fakeProtector), journal)
 	leases.now = func() time.Time { return now }
 	require.NoError(t, leases.Replay(ctx))
-	wires, err := Admit(ctx, AdmissionRequest{Candidate: c, Provider: &fakeProvider{facts: SnapshotFacts{Manifest: []byte("m"), CanonicalSchema: read.Schema}}, Leases: leases, AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), TTL: time.Second, ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{6}, 32)), Now: now})
+	wires, err := Admit(ctx, AdmissionRequest{Candidate: c, Provider: &fakeProvider{facts: SnapshotFacts{Manifest: []byte("m"), CanonicalSchema: read.Schema}}, Leases: leases, AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), AuthorizedClientSPKIHash: testClientSPKIHash(), TTL: time.Second, ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{6}, 32)), Now: now})
 	require.NoError(t, err)
 	tr, err := UnmarshalTaeRead(wires[0], uint64(now.UnixMilli()))
 	require.NoError(t, err)
@@ -382,7 +515,7 @@ func TestLeaseResolveReleaseRace(t *testing.T) {
 	provider := &fakeProvider{facts: SnapshotFacts{Manifest: []byte("m"), CanonicalSchema: read.Schema}}
 	leases := NewLeaseManager(1, new(fakeProtector))
 	now := time.Now()
-	wires, err := Admit(context.Background(), AdmissionRequest{Candidate: c, Provider: provider, Leases: leases, AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), TTL: time.Minute, ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{5}, 32)), Now: now})
+	wires, err := Admit(context.Background(), AdmissionRequest{Candidate: c, Provider: provider, Leases: leases, AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), AuthorizedClientSPKIHash: testClientSPKIHash(), TTL: time.Minute, ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{5}, 32)), Now: now})
 	require.NoError(t, err)
 	tr, err := UnmarshalTaeRead(wires[0], uint64(now.UnixMilli()))
 	require.NoError(t, err)
@@ -408,7 +541,7 @@ func TestResolveRequiresVerifiedMTLSAndExactSchema(t *testing.T) {
 	provider := &fakeProvider{facts: SnapshotFacts{Manifest: []byte("m"), CanonicalSchema: read.Schema}}
 	leases := NewLeaseManager(1, new(fakeProtector))
 	now := time.Now()
-	wires, err := Admit(context.Background(), AdmissionRequest{Candidate: c, Provider: provider, Leases: leases, AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), TTL: time.Minute, ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{8}, 32)), Now: now})
+	wires, err := Admit(context.Background(), AdmissionRequest{Candidate: c, Provider: provider, Leases: leases, AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), AuthorizedClientSPKIHash: testClientSPKIHash(), TTL: time.Minute, ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{8}, 32)), Now: now})
 	require.NoError(t, err)
 	body := appendBytes(nil, 1, wires[0])
 	body = appendBytes(body, 2, read.Schema)
@@ -420,7 +553,13 @@ func TestResolveRequiresVerifiedMTLSAndExactSchema(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, w.Code)
 	req = httptest.NewRequest(http.MethodPost, ResolvePath, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-protobuf")
-	req.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{}}}}
+	req.TLS = testVerifiedTLS([]byte("different-sidecar"))
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	require.Equal(t, http.StatusNotFound, w.Code)
+	req = httptest.NewRequest(http.MethodPost, ResolvePath, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	req.TLS = testVerifiedTLS(testClientSPKI)
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
@@ -433,16 +572,17 @@ func TestAdmissionRejectsInvalidInputsBeforePublishing(t *testing.T) {
 	now := time.Now()
 	valid := func() AdmissionRequest {
 		return AdmissionRequest{
-			Candidate:  c,
-			Provider:   &fakeProvider{facts: SnapshotFacts{Manifest: []byte("m"), CanonicalSchema: read.Schema}},
-			Leases:     NewLeaseManager(1, new(fakeProtector)),
-			AccountID:  1,
-			QueryID:    []byte("q"),
-			SnapshotTS: make([]byte, 12),
-			TTL:        time.Minute,
-			ReadOnly:   true,
-			Random:     bytes.NewReader(bytes.Repeat([]byte{1}, 32)),
-			Now:        now,
+			Candidate:                c,
+			Provider:                 &fakeProvider{facts: SnapshotFacts{Manifest: []byte("m"), CanonicalSchema: read.Schema}},
+			Leases:                   NewLeaseManager(1, new(fakeProtector)),
+			AccountID:                1,
+			QueryID:                  []byte("q"),
+			SnapshotTS:               make([]byte, 12),
+			AuthorizedClientSPKIHash: testClientSPKIHash(),
+			TTL:                      time.Minute,
+			ReadOnly:                 true,
+			Random:                   bytes.NewReader(bytes.Repeat([]byte{1}, 32)),
+			Now:                      now,
 		}
 	}
 
@@ -459,6 +599,7 @@ func TestAdmissionRejectsInvalidInputsBeforePublishing(t *testing.T) {
 		{name: "missing account", mutate: func(r *AdmissionRequest) { r.AccountID = 0 }, want: "identity"},
 		{name: "missing query", mutate: func(r *AdmissionRequest) { r.QueryID = nil }, want: "identity"},
 		{name: "bad timestamp", mutate: func(r *AdmissionRequest) { r.SnapshotTS = []byte{1} }, want: "identity"},
+		{name: "missing authorized client", mutate: func(r *AdmissionRequest) { r.AuthorizedClientSPKIHash = nil }, want: "identity"},
 		{name: "zero ttl", mutate: func(r *AdmissionRequest) { r.TTL = 0 }, want: "TTL"},
 		{name: "oversized ttl", mutate: func(r *AdmissionRequest) { r.TTL = MaxLeaseTTL + time.Second }, want: "TTL"},
 	} {
@@ -518,13 +659,13 @@ func TestResolveHandlerRejectsInvalidRequests(t *testing.T) {
 	leases := NewLeaseManager(1, new(fakeProtector))
 	wires, err := Admit(context.Background(), AdmissionRequest{
 		Candidate: c, Provider: &fakeProvider{facts: SnapshotFacts{Manifest: []byte("m"), CanonicalSchema: read.Schema}},
-		Leases: leases, AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), TTL: time.Minute,
+		Leases: leases, AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), AuthorizedClientSPKIHash: testClientSPKIHash(), TTL: time.Minute,
 		ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{3}, 32)), Now: now,
 	})
 	require.NoError(t, err)
 	validBody := appendBytes(nil, 1, wires[0])
 	validBody = appendBytes(validBody, 2, read.Schema)
-	verifiedTLS := &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{}}}}
+	verifiedTLS := testVerifiedTLS(testClientSPKI)
 
 	tests := []struct {
 		name        string
@@ -540,6 +681,7 @@ func TestResolveHandlerRejectsInvalidRequests(t *testing.T) {
 		{name: "wrong method", method: http.MethodGet, path: ResolvePath, want: http.StatusMethodNotAllowed},
 		{name: "wrong content type", method: http.MethodPost, path: ResolvePath, want: http.StatusUnsupportedMediaType},
 		{name: "unverified client", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: validBody, want: http.StatusUnauthorized},
+		{name: "empty verified chain", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: validBody, tls: &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{}}}, manager: leases, want: http.StatusUnauthorized},
 		{name: "malformed request", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: []byte{0xff}, tls: verifiedTLS, manager: leases, want: http.StatusBadRequest},
 		{name: "resolver unavailable", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: validBody, tls: verifiedTLS, want: http.StatusServiceUnavailable},
 		{name: "schema mismatch", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: appendBytes(appendBytes(nil, 1, wires[0]), 2, []byte("wrong")), tls: verifiedTLS, manager: leases, want: http.StatusNotFound},
@@ -603,6 +745,12 @@ func TestFileServiceLeaseJournalValidationAndReleaseMarker(t *testing.T) {
 	require.ErrorContains(t, journal.Store(context.Background(), &Lease{Read: &TaeRead{ReadRef: ref}}), "released read reference")
 	require.NoError(t, journal.Delete(context.Background(), ref))
 	require.NoError(t, journal.Delete(context.Background(), ref))
+}
+
+func TestJournalBoundIncludesJSONBase64Expansion(t *testing.T) {
+	minimum := base64.StdEncoding.EncodedLen(maxManifestSize) +
+		base64.StdEncoding.EncodedLen(maxCanonicalSchemaSize) + maxManifestSize
+	require.Greater(t, maxJournalRecordSize, minimum)
 }
 
 func TestFileServiceLeaseJournalRejectsCorruption(t *testing.T) {
@@ -693,6 +841,18 @@ func TestCanonicalSchemaAndScalarSignatureContracts(t *testing.T) {
 	require.ErrorContains(t, validateScalarSignature("equal", ptrType(boolType()), []*planpb.Expr{intExpr, boolExpr}), "unsupported equal")
 	require.ErrorContains(t, validateScalarSignature("is_not_null", ptrType(i64Type()), []*planpb.Expr{intExpr}), "unsupported is_not_null")
 	require.ErrorContains(t, validateScalarSignature("divide", ptrType(boolType()), []*planpb.Expr{boolExpr, boolExpr}), "unsupported divide")
+}
+
+func TestExportAcceptsBinderNullPredicateAliases(t *testing.T) {
+	for _, name := range []string{"isnull", "isnotnull"} {
+		t.Run(name, func(t *testing.T) {
+			q := scanQuery()
+			q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_FILTER, Children: []int32{0}, FilterList: []*planpb.Expr{fn(name, boolType(), col(0))}})
+			q.Steps[0] = 1
+			_, err := Export(q)
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestNonnegativeIntegerLiteralForms(t *testing.T) {
@@ -791,7 +951,7 @@ func i64(v int64) *planpb.Expr {
 	return &planpb.Expr{Typ: i64Type(), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: v}}}}
 }
 func fn(name string, typ planpb.Type, args ...*planpb.Expr) *planpb.Expr {
-	ids := map[string]int32{"=": function.EQUAL, ">": function.GREAT_THAN, "not": function.NOT, "sum": function.SUM, "min": function.MIN, "starcount": function.STARCOUNT}
+	ids := map[string]int32{"=": function.EQUAL, ">": function.GREAT_THAN, "not": function.NOT, "isnull": function.ISNULL, "isnotnull": function.ISNOTNULL, "sum": function.SUM, "min": function.MIN, "starcount": function.STARCOUNT}
 	id, ok := ids[name]
 	if !ok {
 		panic("missing test function id: " + name)

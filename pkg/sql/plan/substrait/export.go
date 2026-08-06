@@ -697,7 +697,7 @@ func valueArg(x *spb.Expression) *spb.FunctionArgument {
 
 func scalarName(name string) (string, bool) {
 	n := strings.ToLower(name)
-	m := map[string]string{"and": "and", "or": "or", "not": "not", "=": "equal", "equal": "equal", "!=": "not_equal", "<>": "not_equal", "<": "lt", "<=": "lte", ">": "gt", ">=": "gte", "is_null": "is_null", "is_not_null": "is_not_null", "<=>": "is_not_distinct_from", "+": "add", "-": "subtract", "*": "multiply", "/": "divide", "%": "modulus", "between": "between"}
+	m := map[string]string{"and": "and", "or": "or", "not": "not", "=": "equal", "equal": "equal", "!=": "not_equal", "<>": "not_equal", "<": "lt", "<=": "lte", ">": "gt", ">=": "gte", "is_null": "is_null", "isnull": "is_null", "is_not_null": "is_not_null", "isnotnull": "is_not_null", "<=>": "is_not_distinct_from", "+": "add", "-": "subtract", "*": "multiply", "/": "divide", "%": "modulus", "between": "between"}
 	v, ok := m[n]
 	return v, ok
 }

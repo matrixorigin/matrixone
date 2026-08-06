@@ -49,8 +49,9 @@ func (p *SiriusReadPlan) Release(ctx context.Context, leases *substrait.LeaseMan
 
 // CompileSiriusRead runs at the logical-plan cutpoint, before compileScope.
 // Export validates the whole tree before this function opens any relation.
-// PR #3 will call this opt-in API and transfer lease ownership to execution.
-func (c *Compile) CompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan, accountID uint64, queryID []byte, dataDir string, ttl time.Duration, leases *substrait.LeaseManager) (*SiriusReadPlan, error) {
+// PR #3 will call this opt-in API, pass the selected sidecar client's TLS SPKI
+// hash, and transfer lease ownership to execution.
+func (c *Compile) CompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan, accountID uint64, queryID, authorizedClientSPKIHash []byte, dataDir string, ttl time.Duration, leases *substrait.LeaseManager) (*SiriusReadPlan, error) {
 	if c == nil || queryPlan == nil || queryPlan.GetQuery() == nil {
 		return nil, moerr.NewInternalError(ctx, "substrait: compile has no query plan")
 	}
@@ -86,7 +87,7 @@ func (c *Compile) CompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan,
 	if err != nil {
 		return nil, err
 	}
-	wires, err := substrait.Admit(ctx, substrait.AdmissionRequest{Candidate: candidate, Provider: provider, Leases: leases, AccountID: accountID, QueryID: queryID, SnapshotTS: snapshotBytes, TTL: ttl, ReadOnly: readOnly, PriorWrites: priorWrites})
+	wires, err := substrait.Admit(ctx, substrait.AdmissionRequest{Candidate: candidate, Provider: provider, Leases: leases, AccountID: accountID, QueryID: queryID, SnapshotTS: snapshotBytes, AuthorizedClientSPKIHash: authorizedClientSPKIHash, TTL: ttl, ReadOnly: readOnly, PriorWrites: priorWrites})
 	if err != nil {
 		return nil, err
 	}

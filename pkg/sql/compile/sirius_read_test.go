@@ -45,13 +45,13 @@ func TestSiriusReadPlanRelease(t *testing.T) {
 func TestCompileSiriusReadRejectsMissingPlan(t *testing.T) {
 	ctx := context.Background()
 	var c *Compile
-	_, err := c.CompileSiriusRead(ctx, nil, 0, nil, "", 0, nil)
+	_, err := c.CompileSiriusRead(ctx, nil, 0, nil, nil, "", 0, nil)
 	require.ErrorContains(t, err, "no query plan")
-	_, err = c.CompileSiriusRead(ctx, &planpb.Plan{}, 0, nil, "", 0, nil)
+	_, err = c.CompileSiriusRead(ctx, &planpb.Plan{}, 0, nil, nil, "", 0, nil)
 	require.ErrorContains(t, err, "no query plan")
 
 	c = &Compile{}
 	invalid := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{StmtType: planpb.Query_SELECT}}}
-	_, err = c.CompileSiriusRead(ctx, invalid, 0, nil, "", 0, nil)
+	_, err = c.CompileSiriusRead(ctx, invalid, 0, nil, nil, "", 0, nil)
 	require.Error(t, err)
 }

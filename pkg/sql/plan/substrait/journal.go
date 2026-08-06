@@ -30,7 +30,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
-const maxJournalRecordSize = 66 << 20
+// JSON base64-expands the 64 MiB manifest and 1 MiB schema by 4/3. The
+// journal also carries the canonical wire and the manifest's object names.
+const maxJournalRecordSize = 160 << 20
 
 // FileServiceLeaseJournal persists leases in the shared file service. Active
 // records and release markers are write-once objects, so a crash cannot expose
@@ -41,10 +43,11 @@ type FileServiceLeaseJournal struct {
 }
 
 type journalRecord struct {
-	Wire            []byte   `json:"wire"`
-	Manifest        []byte   `json:"manifest"`
-	CanonicalSchema []byte   `json:"canonical_schema"`
-	ObjectNames     []string `json:"object_names,omitempty"`
+	Wire                     []byte   `json:"wire"`
+	Manifest                 []byte   `json:"manifest"`
+	CanonicalSchema          []byte   `json:"canonical_schema"`
+	AuthorizedClientSPKIHash []byte   `json:"authorized_client_spki_hash"`
+	ObjectNames              []string `json:"object_names,omitempty"`
 }
 
 type journalEnvelope struct {
@@ -69,7 +72,7 @@ func (j *FileServiceLeaseJournal) Store(ctx context.Context, lease *Lease) error
 	} else if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 		return err
 	}
-	record := journalRecord{Wire: lease.Wire, Manifest: lease.Manifest, CanonicalSchema: lease.CanonicalSchema, ObjectNames: lease.ObjectNames}
+	record := journalRecord{Wire: lease.Wire, Manifest: lease.Manifest, CanonicalSchema: lease.CanonicalSchema, AuthorizedClientSPKIHash: lease.AuthorizedClientSPKIHash, ObjectNames: lease.ObjectNames}
 	recordBytes, err := json.Marshal(record)
 	if err != nil {
 		return err
@@ -164,7 +167,7 @@ func (j *FileServiceLeaseJournal) Load(ctx context.Context) ([]*Lease, error) {
 		if statErr != nil && !moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound) {
 			return nil, statErr
 		}
-		result = append(result, &Lease{Read: tr, Wire: record.Wire, Manifest: record.Manifest, CanonicalSchema: record.CanonicalSchema, ObjectNames: record.ObjectNames, Released: released})
+		result = append(result, &Lease{Read: tr, Wire: record.Wire, Manifest: record.Manifest, CanonicalSchema: record.CanonicalSchema, AuthorizedClientSPKIHash: record.AuthorizedClientSPKIHash, ObjectNames: record.ObjectNames, Released: released})
 	}
 	for entry, err := range j.fs.List(ctx, path.Join(j.prefix, "released")) {
 		if err != nil {

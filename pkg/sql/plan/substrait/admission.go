@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"errors"
 	"io"
 	"mime"
 	"net/http"
@@ -27,8 +28,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-const ResolvePath = "/internal/v1/sidecar/read/resolve"
-const MaxLeaseTTL = 20 * time.Minute
+const (
+	ResolvePath            = "/internal/v1/sidecar/read/resolve"
+	MaxLeaseTTL            = 20 * time.Minute
+	rollbackCleanupTimeout = 30 * time.Second
+	maxManifestSize        = 64 << 20
+	maxCanonicalSchemaSize = 1 << 20
+)
 
 // SnapshotFacts are produced by a snapshot-bound TAE relation lookup. A
 // provider must set the rejection flags conservatively if it cannot prove a
@@ -44,10 +50,11 @@ type SnapshotProvider interface {
 	PrepareSnapshotRead(context.Context, Read, []byte) (SnapshotFacts, error)
 }
 
-// Protector is the narrow GC-protection seam. Register must reject while GC
-// is already running, so a lease can never appear after its objects were swept.
+// Protector is the narrow GC-protection seam. Begin must fail if GC is already
+// running and must prevent GC from starting until the returned close function
+// is called. The returned register function is valid only within that scope.
 type Protector interface {
-	Register(context.Context, []byte, []string, time.Time) error
+	Begin(context.Context) (register func(context.Context, []byte, []string, time.Time) error, close func(), err error)
 	Unregister(context.Context, []byte) error
 }
 
@@ -64,6 +71,7 @@ type LeaseJournal interface {
 type Lease struct {
 	Read                            *TaeRead
 	Wire, Manifest, CanonicalSchema []byte
+	AuthorizedClientSPKIHash        []byte
 	ObjectNames                     []string
 	Released                        bool
 }
@@ -92,6 +100,43 @@ func NewPersistentLeaseManager(maximum int, protector Protector, journal LeaseJo
 }
 
 func (m *LeaseManager) Acquire(ctx context.Context, leases []*Lease) error {
+	return m.acquirePrepared(ctx, func() ([]*Lease, error) { return leases, nil })
+}
+
+// acquirePrepared holds GC exclusion while prepare enumerates the snapshot and
+// until every durable lease has matching GC protection.
+func (m *LeaseManager) acquirePrepared(ctx context.Context, prepare func() ([]*Lease, error)) error {
+	if prepare == nil {
+		return moerr.NewInternalErrorNoCtx("substrait: missing lease preparation")
+	}
+	m.mu.RLock()
+	ready, protector := m.ready, m.protector
+	m.mu.RUnlock()
+	if !ready {
+		return moerr.NewInternalErrorNoCtx("substrait: durable read leases have not been replayed")
+	}
+	if protector == nil {
+		return moerr.NewInternalErrorNoCtx("substrait: read lease GC protection is not configured")
+	}
+	register, closeProtection, err := protector.Begin(ctx)
+	if err != nil {
+		return moerr.NewInternalErrorNoCtxf("substrait: begin read lease protection: %v", err)
+	}
+	if register == nil || closeProtection == nil {
+		if closeProtection != nil {
+			closeProtection()
+		}
+		return moerr.NewInternalErrorNoCtx("substrait: invalid read lease protection session")
+	}
+	defer closeProtection()
+	leases, err := prepare()
+	if err != nil {
+		return err
+	}
+	return m.acquireProtected(ctx, register, leases)
+}
+
+func (m *LeaseManager) acquireProtected(ctx context.Context, register func(context.Context, []byte, []string, time.Time) error, leases []*Lease) error {
 	if len(leases) == 0 {
 		return moerr.NewInternalErrorNoCtx("substrait: empty lease acquisition")
 	}
@@ -100,7 +145,7 @@ func (m *LeaseManager) Acquire(ctx context.Context, leases []*Lease) error {
 		m.mu.Unlock()
 		return moerr.NewInternalErrorNoCtx("substrait: durable read leases have not been replayed")
 	}
-	if m.protector == nil {
+	if m.protector == nil || register == nil {
 		m.mu.Unlock()
 		return moerr.NewInternalErrorNoCtx("substrait: read lease GC protection is not configured")
 	}
@@ -130,31 +175,23 @@ func (m *LeaseManager) Acquire(ctx context.Context, leases []*Lease) error {
 	for _, l := range leases {
 		if m.journal != nil {
 			if err := m.journal.Store(ctx, l); err != nil {
-				for i := len(stored) - 1; i >= 0; i-- {
-					_ = m.journal.Delete(ctx, stored[i].Read.ReadRef)
-				}
+				// Store can fail after the write became visible. Include the
+				// ambiguous record in the durable revocation set.
+				stored = append(stored, l)
+				rollbackErr := m.rollbackAcquisition(ctx, stored, nil)
 				m.mu.Unlock()
-				return moerr.NewInternalErrorNoCtxf("substrait: persist read lease: %v", err)
+				return errors.Join(moerr.NewInternalErrorNoCtxf("substrait: persist read lease: %v", err), rollbackErr)
 			}
 		}
 		stored = append(stored, l)
 	}
 	registered := make([]*Lease, 0, len(leases))
 	for _, l := range leases {
-		if m.protector != nil {
-			err := m.protector.Register(ctx, l.Read.ReadRef, l.ObjectNames, time.UnixMilli(int64(l.Read.ExpiresAtUnixMS)))
-			if err != nil {
-				for i := len(registered) - 1; i >= 0; i-- {
-					_ = m.protector.Unregister(ctx, registered[i].Read.ReadRef)
-				}
-				if m.journal != nil {
-					for i := len(stored) - 1; i >= 0; i-- {
-						_ = m.journal.Delete(ctx, stored[i].Read.ReadRef)
-					}
-				}
-				m.mu.Unlock()
-				return moerr.NewInternalErrorNoCtxf("substrait: protect read lease: %v", err)
-			}
+		err := register(ctx, l.Read.ReadRef, l.ObjectNames, time.UnixMilli(int64(l.Read.ExpiresAtUnixMS)))
+		if err != nil {
+			rollbackErr := m.rollbackAcquisition(ctx, stored, registered)
+			m.mu.Unlock()
+			return errors.Join(moerr.NewInternalErrorNoCtxf("substrait: protect read lease: %v", err), rollbackErr)
 		}
 		registered = append(registered, l)
 	}
@@ -163,6 +200,49 @@ func (m *LeaseManager) Acquire(ctx context.Context, leases []*Lease) error {
 	}
 	m.mu.Unlock()
 	return nil
+}
+
+// rollbackAcquisition first makes every possibly stored lease non-replayable,
+// removes journal debris, then removes protection only for durably revoked
+// leases. A caller cancellation must not suppress this crash-safety cleanup.
+func (m *LeaseManager) rollbackAcquisition(ctx context.Context, stored, registered []*Lease) error {
+	cleanupCtx, cancel := context.WithTimeoutCause(
+		context.WithoutCancel(ctx),
+		rollbackCleanupTimeout,
+		moerr.NewInternalErrorNoCtx("substrait: read lease rollback timed out"),
+	)
+	defer cancel()
+	var result error
+	revoked := make(map[string]bool, len(stored))
+	if m.journal != nil {
+		for i := len(stored) - 1; i >= 0; i-- {
+			readRef := stored[i].Read.ReadRef
+			err := m.journal.MarkReleased(cleanupCtx, readRef)
+			result = errors.Join(result, err)
+			if err == nil {
+				revoked[string(readRef)] = true
+			}
+		}
+		for i := len(stored) - 1; i >= 0; i-- {
+			readRef := stored[i].Read.ReadRef
+			err := m.journal.Delete(cleanupCtx, readRef)
+			result = errors.Join(result, err)
+			if err == nil {
+				revoked[string(readRef)] = true
+			}
+		}
+	} else {
+		for _, lease := range stored {
+			revoked[string(lease.Read.ReadRef)] = true
+		}
+	}
+	for i := len(registered) - 1; i >= 0; i-- {
+		readRef := registered[i].Read.ReadRef
+		if revoked[string(readRef)] {
+			result = errors.Join(result, m.protector.Unregister(cleanupCtx, readRef))
+		}
+	}
+	return result
 }
 
 func (m *LeaseManager) Resolve(readRef []byte) (*Lease, bool) {
@@ -258,6 +338,22 @@ func (m *LeaseManager) Replay(ctx context.Context) error {
 	if m.ready || len(m.leases) != 0 {
 		return moerr.NewInternalErrorNoCtx("substrait: cannot replay into a live lease manager")
 	}
+	var register func(context.Context, []byte, []string, time.Time) error
+	var closeProtection func()
+	var err error
+	if m.protector != nil {
+		register, closeProtection, err = m.protector.Begin(ctx)
+		if err != nil {
+			return moerr.NewInternalErrorNoCtxf("substrait: begin replay read lease protection: %v", err)
+		}
+		if register == nil || closeProtection == nil {
+			if closeProtection != nil {
+				closeProtection()
+			}
+			return moerr.NewInternalErrorNoCtx("substrait: invalid replay read lease protection session")
+		}
+		defer closeProtection()
+	}
 	loaded, err := m.journal.Load(ctx)
 	if err != nil {
 		return moerr.NewInternalErrorNoCtxf("substrait: load read leases: %v", err)
@@ -277,8 +373,8 @@ func (m *LeaseManager) Replay(ctx context.Context) error {
 			}
 			continue
 		}
-		if m.protector != nil {
-			if err := m.protector.Register(ctx, l.Read.ReadRef, l.ObjectNames, time.UnixMilli(int64(l.Read.ExpiresAtUnixMS))); err != nil {
+		if register != nil {
+			if err := register(ctx, l.Read.ReadRef, l.ObjectNames, time.UnixMilli(int64(l.Read.ExpiresAtUnixMS))); err != nil {
 				return moerr.NewInternalErrorNoCtxf("substrait: replay read lease protection: %v", err)
 			}
 		}
@@ -316,7 +412,7 @@ func validateLease(l *Lease, now uint64, allowReleased bool) error {
 	if err := l.Read.Validate(validationNow); err != nil {
 		return err
 	}
-	if len(l.Wire) == 0 || len(l.Manifest) == 0 || len(l.Manifest) > 64<<20 || len(l.CanonicalSchema) == 0 || len(l.CanonicalSchema) > 1<<20 {
+	if len(l.Wire) == 0 || len(l.Manifest) == 0 || len(l.Manifest) > maxManifestSize || len(l.CanonicalSchema) == 0 || len(l.CanonicalSchema) > maxCanonicalSchemaSize || len(l.AuthorizedClientSPKIHash) != sha256.Size {
 		return moerr.NewInternalErrorNoCtx("invalid lease payload size")
 	}
 	decoded, err := UnmarshalTaeRead(l.Wire, validationNow)
@@ -354,6 +450,7 @@ func cloneLease(l *Lease) *Lease {
 	c.Wire = append([]byte(nil), l.Wire...)
 	c.Manifest = append([]byte(nil), l.Manifest...)
 	c.CanonicalSchema = append([]byte(nil), l.CanonicalSchema...)
+	c.AuthorizedClientSPKIHash = append([]byte(nil), l.AuthorizedClientSPKIHash...)
 	c.ObjectNames = append([]string(nil), l.ObjectNames...)
 	return &c
 }
@@ -373,12 +470,13 @@ func cloneTaeRead(r *TaeRead) *TaeRead {
 }
 
 type AdmissionRequest struct {
-	Candidate           *Candidate
-	Provider            SnapshotProvider
-	Leases              *LeaseManager
-	AccountID           uint64
-	QueryID, SnapshotTS []byte
-	TTL                 time.Duration
+	Candidate                *Candidate
+	Provider                 SnapshotProvider
+	Leases                   *LeaseManager
+	AccountID                uint64
+	QueryID, SnapshotTS      []byte
+	AuthorizedClientSPKIHash []byte
+	TTL                      time.Duration
 	// ReadOnly and PriorWrites are transaction facts captured at the compile
 	// cutpoint. They are explicit to prevent accidental admission after writes.
 	ReadOnly    bool
@@ -393,7 +491,7 @@ func Admit(ctx context.Context, r AdmissionRequest) (map[int32][]byte, error) {
 	if r.Candidate == nil || r.Provider == nil || r.Leases == nil || !r.ReadOnly || r.PriorWrites {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: transaction is not an admissible read-only snapshot")
 	}
-	if r.AccountID == 0 || len(r.QueryID) == 0 || len(r.SnapshotTS) != 12 {
+	if r.AccountID == 0 || len(r.QueryID) == 0 || len(r.SnapshotTS) != 12 || len(r.AuthorizedClientSPKIHash) != sha256.Size {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: invalid admission identity")
 	}
 	if r.TTL <= 0 || r.TTL > MaxLeaseTTL {
@@ -409,35 +507,39 @@ func Admit(ctx context.Context, r AdmissionRequest) (map[int32][]byte, error) {
 	if expires <= r.Now.UnixMilli() || expires <= 0 {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: invalid lease expiry")
 	}
-	reads := r.Candidate.Reads()
-	leases := make([]*Lease, 0, len(reads))
-	wires := make(map[int32][]byte, len(reads))
-	for _, read := range reads {
-		facts, err := r.Provider.PrepareSnapshotRead(ctx, read, r.SnapshotTS)
-		if err != nil {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: prepare table %d: %v", read.TableID, err)
+	var wires map[int32][]byte
+	err := r.Leases.acquirePrepared(ctx, func() ([]*Lease, error) {
+		reads := r.Candidate.Reads()
+		leases := make([]*Lease, 0, len(reads))
+		wires = make(map[int32][]byte, len(reads))
+		for _, read := range reads {
+			facts, err := r.Provider.PrepareSnapshotRead(ctx, read, r.SnapshotTS)
+			if err != nil {
+				return nil, moerr.NewInternalErrorNoCtxf("substrait: prepare table %d: %v", read.TableID, err)
+			}
+			if facts.CommittedInMemory || facts.Uncommitted || facts.VisibleTombstones || facts.NonTAE {
+				return nil, moerr.NewInternalErrorNoCtxf("substrait: table %d has snapshot state unsupported by Sirius v1", read.TableID)
+			}
+			if len(facts.Manifest) == 0 || len(facts.Manifest) > maxManifestSize || len(facts.CanonicalSchema) > maxCanonicalSchemaSize || !equalBytes(facts.CanonicalSchema, read.Schema) {
+				return nil, moerr.NewInternalErrorNoCtxf("substrait: table %d schema or manifest mismatch", read.TableID)
+			}
+			ref := make([]byte, 32)
+			if _, err = io.ReadFull(r.Random, ref); err != nil {
+				return nil, moerr.NewInternalErrorNoCtxf("substrait: create read reference: %v", err)
+			}
+			schemaHash := sha256.Sum256(facts.CanonicalSchema)
+			manifestHash := sha256.Sum256(facts.Manifest)
+			tr := &TaeRead{ProtocolVersion: TaeReadProtocolVersion, ReadRef: ref, QueryID: append([]byte(nil), r.QueryID...), AccountID: r.AccountID, TableID: read.TableID, SnapshotTS: append([]byte(nil), r.SnapshotTS...), SchemaDigest: schemaHash[:], ManifestSHA256: manifestHash[:], CapabilityHash: CapabilityHash[:], ExpiresAtUnixMS: uint64(expires)}
+			wire, err := MarshalTaeRead(tr)
+			if err != nil {
+				return nil, err
+			}
+			leases = append(leases, &Lease{Read: tr, Wire: wire, Manifest: facts.Manifest, CanonicalSchema: facts.CanonicalSchema, AuthorizedClientSPKIHash: append([]byte(nil), r.AuthorizedClientSPKIHash...), ObjectNames: facts.ObjectNames})
+			wires[read.NodeID] = wire
 		}
-		if facts.CommittedInMemory || facts.Uncommitted || facts.VisibleTombstones || facts.NonTAE {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: table %d has snapshot state unsupported by Sirius v1", read.TableID)
-		}
-		if len(facts.Manifest) == 0 || len(facts.Manifest) > 64<<20 || len(facts.CanonicalSchema) > 1<<20 || !equalBytes(facts.CanonicalSchema, read.Schema) {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: table %d schema or manifest mismatch", read.TableID)
-		}
-		ref := make([]byte, 32)
-		if _, err = io.ReadFull(r.Random, ref); err != nil {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: create read reference: %v", err)
-		}
-		schemaHash := sha256.Sum256(facts.CanonicalSchema)
-		manifestHash := sha256.Sum256(facts.Manifest)
-		tr := &TaeRead{ProtocolVersion: TaeReadProtocolVersion, ReadRef: ref, QueryID: append([]byte(nil), r.QueryID...), AccountID: r.AccountID, TableID: read.TableID, SnapshotTS: append([]byte(nil), r.SnapshotTS...), SchemaDigest: schemaHash[:], ManifestSHA256: manifestHash[:], CapabilityHash: CapabilityHash[:], ExpiresAtUnixMS: uint64(expires)}
-		wire, err := MarshalTaeRead(tr)
-		if err != nil {
-			return nil, err
-		}
-		leases = append(leases, &Lease{Read: tr, Wire: wire, Manifest: facts.Manifest, CanonicalSchema: facts.CanonicalSchema, ObjectNames: facts.ObjectNames})
-		wires[read.NodeID] = wire
-	}
-	if err := r.Leases.Acquire(ctx, leases); err != nil {
+		return leases, nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return wires, nil
@@ -463,10 +565,11 @@ func ResolveHandler(leases *LeaseManager, now func() time.Time) http.Handler {
 			http.Error(w, "protobuf content type required", http.StatusUnsupportedMediaType)
 			return
 		}
-		if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 {
+		if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.VerifiedChains[0]) == 0 || len(r.TLS.VerifiedChains[0][0].RawSubjectPublicKeyInfo) == 0 {
 			http.Error(w, "verified client certificate required", http.StatusUnauthorized)
 			return
 		}
+		principalHash := sha256.Sum256(r.TLS.VerifiedChains[0][0].RawSubjectPublicKeyInfo)
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 17<<20))
 		if err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
@@ -487,7 +590,10 @@ func ResolveHandler(leases *LeaseManager, now func() time.Time) http.Handler {
 			return
 		}
 		lease, ok := leases.Resolve(tr.ReadRef)
-		if !ok || !equalBytes(lease.Wire, req.TaeRead) || !equalBytes(lease.CanonicalSchema, req.RequestedSchema) {
+		if !ok || !equalBytes(lease.AuthorizedClientSPKIHash, principalHash[:]) ||
+			lease.Read.AccountID != tr.AccountID || !equalBytes(lease.Read.QueryID, tr.QueryID) ||
+			!equalBytes(lease.Read.SchemaDigest, tr.SchemaDigest) || !equalBytes(lease.Read.ManifestSHA256, tr.ManifestSHA256) ||
+			!equalBytes(lease.Wire, req.TaeRead) || !equalBytes(lease.CanonicalSchema, req.RequestedSchema) {
 			http.Error(w, "read lease not found", http.StatusNotFound)
 			return
 		}
