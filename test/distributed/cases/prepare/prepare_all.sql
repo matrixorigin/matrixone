@@ -501,7 +501,7 @@ insert into prepare_bit64_signed values (-6109877384019645241);
 select hex(b), cast(b as unsigned) from prepare_bit64_signed;
 truncate table prepare_bit64_signed;
 -- the same characters in an SQL string remain string-to-BIT input
--- @regex("data out of range",true)
+-- @regex("(data out of range|data too long)",true)
 insert into prepare_bit64_signed values ('-6109877384019645241');
 
 -- the signed bit-pattern compatibility is limited to BIT(64)

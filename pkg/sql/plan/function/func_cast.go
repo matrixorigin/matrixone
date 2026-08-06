@@ -7565,20 +7565,25 @@ func strToBit(
 				return err
 			}
 		} else {
-			// Prepared parameters are transported internally in a text vector.
-			// Only preserve the two's-complement payload when protocol metadata
-			// proves that the value originated from a signed integer parameter.
-			// An SQL string literal containing the same characters remains a string.
-			if from.GetSourceVector().GetIsSignedIntegerParam() && len(v) > 1 && v[0] == '-' {
-				if signed, err := strconv.ParseInt(string(v), 10, 64); err == nil {
-					if bitSize != 64 {
-						return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
-					}
-					if err = to.Append(uint64(signed), false); err != nil {
-						return err
-					}
-					continue
+			// Prepared integer parameters are transported internally in a text
+			// vector. Protocol provenance selects numeric conversion for both signs;
+			// SQL string literals containing the same characters retain byte-string
+			// semantics.
+			if from.GetSourceVector().GetIsSignedIntegerParam() {
+				signed, err := strconv.ParseInt(string(v), 10, 64)
+				if err != nil {
+					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
 				}
+				if signed < 0 && bitSize != 64 {
+					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
+				}
+				if signed >= 0 && uint64(signed) > maxBitValue(bitSize) {
+					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
+				}
+				if err = to.Append(uint64(signed), false); err != nil {
+					return err
+				}
+				continue
 			}
 			if len(v) > 8 {
 				return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))

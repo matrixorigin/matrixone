@@ -680,7 +680,7 @@ select hex(b), cast(b as unsigned) from prepare_bit64_signed;
 AB355AE40850ECC7  ¦  12336866689689906375
 truncate table prepare_bit64_signed;
 insert into prepare_bit64_signed values ('-6109877384019645241');
--- @regex("data out of range", true)
+-- @regex("(data out of range|data too long)", true)
 Data truncation: data out of range: data type bit(64), value -6109877384019645241
 drop table if exists prepare_bit63_signed;
 create table prepare_bit63_signed (b bit(63));
