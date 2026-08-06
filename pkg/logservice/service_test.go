@@ -418,6 +418,96 @@ func TestServiceHandleTNHeartbeat(t *testing.T) {
 	runServiceTest(t, true, true, fn)
 }
 
+func TestServicePollCommandsIsIndependentFromTNHeartbeat(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		command := pb.ScheduleCommand{
+			UUID:        "uuid1",
+			ServiceType: pb.TNService,
+			ConfigChange: &pb.ConfigChange{
+				ChangeType: pb.StartReplica,
+				Replica: pb.Replica{
+					ShardID:   1,
+					ReplicaID: 2,
+				},
+			},
+		}
+		require.NoError(t,
+			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{command}))
+
+		heartbeatResp := s.handleTNHeartbeat(ctx, pb.Request{
+			Method: pb.TN_HEARTBEAT,
+			TNHeartbeat: &pb.TNStoreHeartbeat{
+				UUID:                 "uuid1",
+				CommandPollSupported: true,
+			},
+		})
+		require.Empty(t, heartbeatResp.CommandBatch.Commands)
+
+		pollResp := s.handleGetScheduleCommands(ctx, pb.Request{
+			Method: pb.GET_SCHEDULE_COMMANDS,
+			ScheduleCommandQuery: &pb.ScheduleCommandQuery{
+				UUID:        "uuid1",
+				ServiceType: pb.TNService,
+			},
+		})
+		require.Equal(t, uint32(moerr.Ok), pollResp.ErrorCode)
+		require.Equal(t, []pb.ScheduleCommand{command}, pollResp.CommandBatch.Commands)
+
+		// Polling preserves heartbeat delivery semantics: ordinary commands are
+		// consumed by one successful proposal instead of being redelivered by
+		// every read until the next checker cycle.
+		secondResp := s.handleGetScheduleCommands(ctx, pb.Request{
+			Method: pb.GET_SCHEDULE_COMMANDS,
+			ScheduleCommandQuery: &pb.ScheduleCommandQuery{
+				UUID:        "uuid1",
+				ServiceType: pb.TNService,
+			},
+		})
+		require.Empty(t, secondResp.CommandBatch.Commands)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceRejectsInvalidScheduleCommandQueries(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		for _, req := range []pb.Request{
+			{Method: pb.GET_SCHEDULE_COMMANDS},
+			{
+				Method: pb.GET_SCHEDULE_COMMANDS,
+				ScheduleCommandQuery: &pb.ScheduleCommandQuery{
+					UUID:        "uuid1",
+					ServiceType: pb.LogService,
+				},
+			},
+		} {
+			resp := s.handleGetScheduleCommands(ctx, req)
+			require.NotEqual(t, uint32(moerr.Ok), resp.ErrorCode)
+		}
+
+		command := pb.ScheduleCommand{
+			UUID:        "uuid1",
+			ServiceType: pb.CNService,
+		}
+		require.NoError(t,
+			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{command}))
+		resp := s.handleGetScheduleCommands(ctx, pb.Request{
+			Method: pb.GET_SCHEDULE_COMMANDS,
+			ScheduleCommandQuery: &pb.ScheduleCommandQuery{
+				UUID:        "uuid1",
+				ServiceType: pb.TNService,
+			},
+		})
+		require.NotEqual(t, uint32(moerr.Ok), resp.ErrorCode)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
 func TestServiceHandleAppend(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)

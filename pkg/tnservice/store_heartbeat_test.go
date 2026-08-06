@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -25,6 +26,65 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 )
+
+type blockingHeartbeatCommandClient struct {
+	*testHAClient
+	heartbeatEntered chan struct{}
+	command          pb.ScheduleCommand
+}
+
+type canceledTNResponseClient struct {
+	*testHAClient
+	heartbeatEntered chan struct{}
+	pollEntered      chan struct{}
+	command          pb.ScheduleCommand
+}
+
+func (c *canceledTNResponseClient) SendTNHeartbeat(
+	ctx context.Context,
+	_ pb.TNStoreHeartbeat,
+) (pb.CommandBatch, error) {
+	select {
+	case <-c.heartbeatEntered:
+	default:
+		close(c.heartbeatEntered)
+	}
+	<-ctx.Done()
+	return pb.CommandBatch{Commands: []pb.ScheduleCommand{c.command}}, nil
+}
+
+func (c *canceledTNResponseClient) GetScheduleCommands(
+	ctx context.Context,
+	_ pb.ServiceType,
+) (pb.CommandBatch, error) {
+	select {
+	case <-c.pollEntered:
+	default:
+		close(c.pollEntered)
+	}
+	<-ctx.Done()
+	return pb.CommandBatch{Commands: []pb.ScheduleCommand{c.command}}, nil
+}
+
+func (c *blockingHeartbeatCommandClient) SendTNHeartbeat(
+	ctx context.Context,
+	hb pb.TNStoreHeartbeat,
+) (pb.CommandBatch, error) {
+	select {
+	case <-c.heartbeatEntered:
+	default:
+		close(c.heartbeatEntered)
+	}
+	<-ctx.Done()
+	return pb.CommandBatch{}, ctx.Err()
+}
+
+func (c *blockingHeartbeatCommandClient) GetScheduleCommands(
+	context.Context,
+	pb.ServiceType,
+) (pb.CommandBatch, error) {
+	return pb.CommandBatch{Commands: []pb.ScheduleCommand{c.command}}, nil
+}
 
 var _ logservice.TNHAKeeperClient = new(testHAClient)
 
@@ -92,5 +152,116 @@ func Test_heartbeat(t *testing.T) {
 	lstore.heartbeat(ctx)
 	if !client.lastHeartbeat.AutoIncrEpochFenceSupported {
 		t.Fatal("TN heartbeat must advertise AUTO_INCREMENT epoch enforcement")
+	}
+}
+
+func TestCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	client := &blockingHeartbeatCommandClient{
+		testHAClient:     &testHAClient{},
+		heartbeatEntered: make(chan struct{}),
+		command: pb.ScheduleCommand{
+			UUID:        "tn-1",
+			ServiceType: pb.TNService,
+			ShutdownStore: &pb.ShutdownStore{
+				StoreID: "tn-1",
+			},
+		},
+	}
+	store := &store{
+		cfg: &Config{
+			UUID: "tn-1",
+		},
+		replicas:       &sync.Map{},
+		config:         &util.ConfigData{},
+		hakeeperClient: client,
+		rt:             rt,
+		shutdownC:      make(chan struct{}, 1),
+	}
+	store.cfg.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
+	store.cfg.HAKeeper.HeatbeatTimeout.Duration = time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	controlDone := make(chan struct{})
+	go func() {
+		defer close(controlDone)
+		store.controlTask(ctx)
+	}()
+	select {
+	case <-client.heartbeatEntered:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat did not enter the injected blocked RPC")
+	}
+
+	select {
+	case <-store.shutdownC:
+	case <-time.After(time.Second):
+		t.Fatal("schedule command did not progress independently of heartbeat")
+	}
+
+	cancel()
+	select {
+	case <-controlDone:
+	case <-time.After(time.Second):
+		t.Fatal("control-plane workers did not terminate after cancellation")
+	}
+}
+
+func TestCanceledControlResponsesAreNotApplied(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	command := pb.ScheduleCommand{
+		UUID:        "tn-1",
+		ServiceType: pb.TNService,
+		ShutdownStore: &pb.ShutdownStore{
+			StoreID: "tn-1",
+		},
+	}
+	store := &store{
+		cfg: &Config{
+			UUID: "tn-1",
+		},
+		replicas: &sync.Map{},
+		config:   &util.ConfigData{},
+		hakeeperClient: &canceledTNResponseClient{
+			testHAClient:     &testHAClient{},
+			heartbeatEntered: make(chan struct{}),
+			pollEntered:      make(chan struct{}),
+			command:          command,
+		},
+		rt:        rt,
+		shutdownC: make(chan struct{}, 1),
+	}
+	store.cfg.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
+	store.cfg.HAKeeper.HeatbeatTimeout.Duration = time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		store.controlTask(ctx)
+	}()
+	client := store.hakeeperClient.(*canceledTNResponseClient)
+	for name, entered := range map[string]<-chan struct{}{
+		"heartbeat": client.heartbeatEntered,
+		"poll":      client.pollEntered,
+	} {
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatalf("%s request did not enter", name)
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("control-plane workers did not terminate after cancellation")
+	}
+	select {
+	case <-store.shutdownC:
+		t.Fatal("response returned after cancellation was applied")
+	default:
 	}
 }

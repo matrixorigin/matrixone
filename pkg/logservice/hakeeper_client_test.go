@@ -506,6 +506,57 @@ func TestHAKeeperClientSendTNHeartbeat(t *testing.T) {
 	runServiceTest(t, true, true, fn)
 }
 
+func TestHAKeeperClientPollScheduleCommands(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		cfg := HAKeeperClientConfig{
+			ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		baseClient, err := NewTNHAKeeperClient(ctx, s.ID(), cfg)
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, baseClient.Close())
+		}()
+		client := baseClient.(ScheduleCommandHAKeeperClient)
+
+		command := pb.ScheduleCommand{
+			UUID:        s.ID(),
+			ServiceType: pb.TNService,
+			ShutdownStore: &pb.ShutdownStore{
+				StoreID: s.ID(),
+			},
+		}
+		require.NoError(t,
+			s.store.addScheduleCommands(ctx, 0, []pb.ScheduleCommand{command}))
+
+		// A new service declares independent polling, so its heartbeat does not
+		// consume the pending command.
+		batch, err := baseClient.SendTNHeartbeat(ctx, pb.TNStoreHeartbeat{
+			UUID:                 s.ID(),
+			CommandPollSupported: true,
+		})
+		require.NoError(t, err)
+		require.Empty(t, batch.Commands)
+
+		batch, err = client.GetScheduleCommands(ctx, pb.TNService)
+		require.NoError(t, err)
+		require.Equal(t, []pb.ScheduleCommand{command}, batch.Commands)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestHAKeeperClientCommandPollNoopForOlderServer(t *testing.T) {
+	client := &managedHAKeeperClient{}
+	client.mu.client = &hakeeperClient{commandPollSupported: false}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	batch, err := client.GetScheduleCommands(ctx, pb.TNService)
+	require.NoError(t, err)
+	require.Empty(t, batch.Commands)
+}
+
 func TestHAKeeperClientSendLogHeartbeat(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cfg := HAKeeperClientConfig{

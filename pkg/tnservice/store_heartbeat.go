@@ -21,6 +21,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -53,6 +54,55 @@ func (s *store) heartbeatTask(ctx context.Context) {
 	}
 }
 
+func (s *store) controlTask(ctx context.Context) {
+	commandDone := make(chan struct{})
+	go func() {
+		defer close(commandDone)
+		s.commandTask(ctx)
+	}()
+	s.heartbeatTask(ctx)
+	<-commandDone
+}
+
+func (s *store) commandTask(ctx context.Context) {
+	client, ok := s.hakeeperClient.(logservice.ScheduleCommandHAKeeperClient)
+	if !ok {
+		return
+	}
+	poll := func() {
+		start := time.Now()
+		defer func() {
+			v2.TNCommandPollHistogram.Observe(time.Since(start).Seconds())
+		}()
+		ctx2, cancel := context.WithTimeout(ctx, logservice.ScheduleCommandPollTimeout)
+		defer cancel()
+		batch, err := client.GetScheduleCommands(ctx2, logservicepb.TNService)
+		if err != nil {
+			if ctx.Err() == nil {
+				v2.TNCommandPollFailureCounter.Inc()
+				s.rt.Logger().Error("failed to poll tn schedule commands", zap.Error(err))
+			}
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		s.handleCommands(batch.Commands)
+	}
+
+	poll()
+	ticker := time.NewTicker(logservice.ScheduleCommandPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			poll()
+		}
+	}
+}
+
 func (s *store) heartbeat(ctx context.Context) {
 	start := time.Now()
 	defer func() {
@@ -61,6 +111,7 @@ func (s *store) heartbeat(ctx context.Context) {
 	ctx2, cancel := context.WithTimeoutCause(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration, moerr.CauseTnServiceHeartbeat)
 	defer cancel()
 
+	_, commandPollSupported := s.hakeeperClient.(logservice.ScheduleCommandHAKeeperClient)
 	hb := logservicepb.TNStoreHeartbeat{
 		UUID:                        s.cfg.UUID,
 		ServiceAddress:              s.txnServiceServiceAddr(),
@@ -71,6 +122,7 @@ func (s *store) heartbeat(ctx context.Context) {
 		ShardServiceAddress:         s.shardServiceServiceAddr(),
 		ConfigData:                  s.config.GetData(),
 		AutoIncrEpochFenceSupported: true,
+		CommandPollSupported:        commandPollSupported,
 		// if the replayed LSN is 0, then it is the master TN.
 		ReplayedLsn: 0,
 	}
@@ -86,12 +138,17 @@ func (s *store) heartbeat(ctx context.Context) {
 		s.rt.Logger().Error("failed to send tn heartbeat", zap.Error(err))
 		return
 	}
+	if ctx.Err() != nil {
+		return
+	}
 
 	s.config.DecrCount()
 	s.handleCommands(cb.Commands)
 }
 
 func (s *store) handleCommands(cmds []logservicepb.ScheduleCommand) {
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
 	for _, cmd := range cmds {
 		if cmd.ServiceType != logservicepb.TNService {
 			s.rt.Logger().Fatal("received invalid command", zap.String("command", cmd.LogString()))

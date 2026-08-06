@@ -686,6 +686,7 @@ type service struct {
 	txnTraceService      trace.Service
 
 	stopper     *stopper.Stopper
+	commandMu   sync.Mutex
 	aicm        *defines.AutoIncrCacheManager
 	lifecycleMu sync.Mutex
 	lifecycle   serviceLifecycleState

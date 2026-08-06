@@ -859,6 +859,19 @@ func (l *store) getCommandBatch(ctx context.Context,
 	return *(v.(*pb.CommandBatch)), nil
 }
 
+func (l *store) takeCommandBatch(ctx context.Context,
+	uuid string) (pb.CommandBatch, error) {
+	cmd := hakeeper.GetScheduleCommandPollCmd(uuid)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		return pb.CommandBatch{}, handleNotHAKeeperError(ctx, err)
+	}
+	var batch pb.CommandBatch
+	MustUnmarshal(&batch, result.Data)
+	return batch, nil
+}
+
 func (l *store) getClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
 	v, err := l.read(ctx,
 		hakeeper.DefaultHAKeeperShardID, &hakeeper.ClusterDetailsQuery{Cfg: l.cfg.GetHAKeeperConfig()})

@@ -35,6 +35,13 @@ import (
 
 const (
 	defaultBackendReadTimeout = time.Second * 8
+
+	// ScheduleCommandPollInterval and ScheduleCommandPollTimeout define the
+	// local command-progress budget. They intentionally do not inherit the
+	// heartbeat configuration: increasing store-liveness or heartbeat RPC
+	// tolerances must not delay schedule-command delivery.
+	ScheduleCommandPollInterval = time.Second
+	ScheduleCommandPollTimeout  = 3 * time.Second
 )
 
 var hakeeperClientRetryInterval = 10 * time.Millisecond
@@ -83,6 +90,13 @@ type TNHAKeeperClient interface {
 	SendTNHeartbeat(ctx context.Context, hb pb.TNStoreHeartbeat) (pb.CommandBatch, error)
 }
 
+// ScheduleCommandHAKeeperClient is implemented by clients that can poll
+// schedule commands independently from heartbeat RPCs. CN and TN services use
+// a type assertion so existing test doubles remain source-compatible.
+type ScheduleCommandHAKeeperClient interface {
+	GetScheduleCommands(ctx context.Context, serviceType pb.ServiceType) (pb.CommandBatch, error)
+}
+
 // LogHAKeeperClient is the HAKeeper client used by a Log store.
 type LogHAKeeperClient interface {
 	basicHAKeeperClient
@@ -120,6 +134,7 @@ var _ CNHAKeeperClient = (*managedHAKeeperClient)(nil)
 var _ TNHAKeeperClient = (*managedHAKeeperClient)(nil)
 var _ LogHAKeeperClient = (*managedHAKeeperClient)(nil)
 var _ ProxyHAKeeperClient = (*managedHAKeeperClient)(nil)
+var _ ScheduleCommandHAKeeperClient = (*managedHAKeeperClient)(nil)
 
 var newHAKeeperClientFunc = newHAKeeperClient
 var sendCNAllocateIDFunc = (*hakeeperClient).sendCNAllocateID
@@ -659,6 +674,45 @@ func (c *managedHAKeeperClient) SendTNHeartbeat(ctx context.Context,
 	}
 }
 
+// GetScheduleCommands fetches pending commands without waiting for a heartbeat
+// proposal. Capability negotiation turns this into a local no-op while the
+// client is connected to an older HAKeeper, whose heartbeat responses preserve
+// the legacy delivery path.
+func (c *managedHAKeeperClient) GetScheduleCommands(
+	ctx context.Context,
+	serviceType pb.ServiceType,
+) (pb.CommandBatch, error) {
+	if err := validateHAKeeperClientContext(ctx); err != nil {
+		return pb.CommandBatch{}, err
+	}
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			if c.isRetryableError(err) {
+				if err := c.waitRetry(ctx); err != nil {
+					return pb.CommandBatch{}, err
+				}
+				continue
+			}
+			return pb.CommandBatch{}, err
+		}
+		client := c.getClient()
+		if !client.commandPollSupported {
+			return pb.CommandBatch{}, nil
+		}
+		batch, err := client.getScheduleCommands(ctx, c.sid, serviceType)
+		if shouldResetHAKeeperClient(err) {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			if err := c.waitRetry(ctx); err != nil {
+				return pb.CommandBatch{}, err
+			}
+			continue
+		}
+		return batch, err
+	}
+}
+
 func (c *managedHAKeeperClient) SendLogHeartbeat(ctx context.Context,
 	hb pb.LogStoreHeartbeat) (pb.CommandBatch, error) {
 	if err := validateHAKeeperClientContext(ctx); err != nil {
@@ -1056,11 +1110,12 @@ func normalizeHAKeeperClientError(ctx context.Context, err error) error {
 }
 
 type hakeeperClient struct {
-	cfg      HAKeeperClientConfig
-	client   morpc.RPCClient
-	addr     string
-	pool     *sync.Pool
-	respPool *sync.Pool
+	cfg                  HAKeeperClientConfig
+	client               morpc.RPCClient
+	addr                 string
+	pool                 *sync.Pool
+	respPool             *sync.Pool
+	commandPollSupported bool
 }
 
 func newHAKeeperClient(
@@ -1276,6 +1331,21 @@ func (c *hakeeperClient) sendTNHeartbeat(ctx context.Context,
 	return c.sendHeartbeat(ctx, req)
 }
 
+func (c *hakeeperClient) getScheduleCommands(
+	ctx context.Context,
+	serviceID string,
+	serviceType pb.ServiceType,
+) (pb.CommandBatch, error) {
+	req := pb.Request{
+		Method: pb.GET_SCHEDULE_COMMANDS,
+		ScheduleCommandQuery: &pb.ScheduleCommandQuery{
+			UUID:        serviceID,
+			ServiceType: serviceType,
+		},
+	}
+	return c.sendHeartbeat(ctx, req)
+}
+
 func (c *hakeeperClient) sendLogHeartbeat(ctx context.Context,
 	hb pb.LogStoreHeartbeat) (pb.CommandBatch, error) {
 	req := pb.Request{
@@ -1408,6 +1478,7 @@ func (c *hakeeperClient) checkIsHAKeeper(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	c.commandPollSupported = resp.CommandPollSupported
 	return resp.IsHAKeeper, nil
 }
 

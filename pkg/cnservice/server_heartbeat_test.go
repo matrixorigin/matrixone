@@ -17,10 +17,75 @@ package cnservice
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 )
+
+type blockingCNHeartbeatCommandClient struct {
+	*testHAKClient
+	heartbeatEntered chan struct{}
+	pollEntered      chan struct{}
+}
+
+type canceledCNResponseClient struct {
+	*testHAKClient
+	heartbeatEntered chan struct{}
+	pollEntered      chan struct{}
+}
+
+func (c *canceledCNResponseClient) SendCNHeartbeat(
+	ctx context.Context,
+	_ pb.CNStoreHeartbeat,
+) (pb.CommandBatch, error) {
+	select {
+	case <-c.heartbeatEntered:
+	default:
+		close(c.heartbeatEntered)
+	}
+	<-ctx.Done()
+	return pb.CommandBatch{Commands: []pb.ScheduleCommand{{ServiceType: pb.TNService}}}, nil
+}
+
+func (c *canceledCNResponseClient) GetScheduleCommands(
+	ctx context.Context,
+	_ pb.ServiceType,
+) (pb.CommandBatch, error) {
+	select {
+	case <-c.pollEntered:
+	default:
+		close(c.pollEntered)
+	}
+	<-ctx.Done()
+	return pb.CommandBatch{Commands: []pb.ScheduleCommand{{ServiceType: pb.TNService}}}, nil
+}
+
+func (c *blockingCNHeartbeatCommandClient) SendCNHeartbeat(
+	ctx context.Context,
+	hb pb.CNStoreHeartbeat,
+) (pb.CommandBatch, error) {
+	select {
+	case <-c.heartbeatEntered:
+	default:
+		close(c.heartbeatEntered)
+	}
+	<-ctx.Done()
+	return pb.CommandBatch{}, ctx.Err()
+}
+
+func (c *blockingCNHeartbeatCommandClient) GetScheduleCommands(
+	context.Context,
+	pb.ServiceType,
+) (pb.CommandBatch, error) {
+	select {
+	case <-c.pollEntered:
+	default:
+		close(c.pollEntered)
+	}
+	return pb.CommandBatch{}, nil
+}
 
 func Test_heartbeat(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -38,4 +103,88 @@ func Test_heartbeat(t *testing.T) {
 		logger:          logutil.GetPanicLogger(),
 	}
 	sv.heartbeat(ctx)
+}
+
+func TestCNCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {
+	conf := &Config{}
+	conf.UUID = "cn-1"
+	conf.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
+	conf.HAKeeper.HeatbeatTimeout.Duration = time.Second
+	client := &blockingCNHeartbeatCommandClient{
+		testHAKClient:    &testHAKClient{cfg: conf},
+		heartbeatEntered: make(chan struct{}),
+		pollEntered:      make(chan struct{}),
+	}
+	service := &service{
+		cfg:             conf,
+		_hakeeperClient: client,
+		config:          &util.ConfigData{},
+		logger:          logutil.GetPanicLogger(),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	controlDone := make(chan struct{})
+	go func() {
+		defer close(controlDone)
+		service.controlTask(ctx)
+	}()
+	select {
+	case <-client.heartbeatEntered:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat did not enter the injected blocked RPC")
+	}
+
+	select {
+	case <-client.pollEntered:
+	case <-time.After(time.Second):
+		t.Fatal("command poll did not progress independently of heartbeat")
+	}
+
+	cancel()
+	select {
+	case <-controlDone:
+	case <-time.After(time.Second):
+		t.Fatal("control-plane workers did not terminate after cancellation")
+	}
+}
+
+func TestCNCanceledControlResponsesAreNotApplied(t *testing.T) {
+	conf := &Config{}
+	conf.UUID = "cn-1"
+	conf.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
+	conf.HAKeeper.HeatbeatTimeout.Duration = time.Second
+	service := &service{
+		cfg: conf,
+		_hakeeperClient: &canceledCNResponseClient{
+			testHAKClient:    &testHAKClient{cfg: conf},
+			heartbeatEntered: make(chan struct{}),
+			pollEntered:      make(chan struct{}),
+		},
+		config: util.NewConfigData(nil),
+		logger: logutil.GetPanicLogger(),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		service.controlTask(ctx)
+	}()
+	client := service._hakeeperClient.(*canceledCNResponseClient)
+	for name, entered := range map[string]<-chan struct{}{
+		"heartbeat": client.heartbeatEntered,
+		"poll":      client.pollEntered,
+	} {
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatalf("%s request did not enter", name)
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("control-plane workers did not terminate after cancellation")
+	}
 }

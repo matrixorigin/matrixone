@@ -113,6 +113,7 @@ type store struct {
 	replicas            *sync.Map
 	stopper             *stopper.Stopper
 	shutdownC           chan struct{}
+	commandMu           sync.Mutex
 
 	options struct {
 		logServiceClientFactory func(metadata.TNShard) (logservice.Client, error)
@@ -234,7 +235,7 @@ func (s *store) Start() error {
 		}
 	}
 	s.rt.SubLogger(runtime.SystemInit).Info("dn heartbeat task started")
-	return s.stopper.RunTask(s.heartbeatTask)
+	return s.stopper.RunTask(s.controlTask)
 }
 
 func (s *store) Close() error {

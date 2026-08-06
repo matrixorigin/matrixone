@@ -375,6 +375,8 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleCheckHealth(ctx, req), pb.LogRecordResponse{}
 	case pb.READ_LSN:
 		return s.handleReadLsn(ctx, req)
+	case pb.GET_SCHEDULE_COMMANDS:
+		return s.handleGetScheduleCommands(ctx, req), pb.LogRecordResponse{}
 	default:
 		resp := getResponse(req)
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(
@@ -386,6 +388,37 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 
 func getResponse(req pb.Request) pb.Response {
 	return pb.Response{Method: req.Method}
+}
+
+func (s *Service) handleGetScheduleCommands(ctx context.Context, req pb.Request) pb.Response {
+	resp := getResponse(req)
+	query := req.ScheduleCommandQuery
+	if query == nil || query.UUID == "" {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(
+			moerr.NewInvalidInput(ctx, "missing schedule command query"))
+		return resp
+	}
+	if query.ServiceType != pb.CNService && query.ServiceType != pb.TNService {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(
+			moerr.NewInvalidInputf(ctx, "unsupported schedule command service type %s", query.ServiceType.String()))
+		return resp
+	}
+	batch, err := s.store.takeCommandBatch(ctx, query.UUID)
+	if err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	}
+	for _, command := range batch.Commands {
+		if command.ServiceType != query.ServiceType {
+			resp.ErrorCode, resp.ErrorMessage = toErrorCode(
+				moerr.NewInternalErrorf(ctx,
+					"schedule command for %s returned to %s",
+					command.ServiceType.String(), query.ServiceType.String()))
+			return resp
+		}
+	}
+	resp.CommandBatch = &batch
+	return resp
 }
 
 func (s *Service) handleGetShardInfo(ctx context.Context, req pb.Request) pb.Response {
@@ -594,6 +627,7 @@ func (s *Service) handleTNHeartbeat(ctx context.Context, req pb.Request) pb.Resp
 
 func (s *Service) handleCheckHAKeeper(ctx context.Context, req pb.Request) pb.Response {
 	resp := getResponse(req)
+	resp.CommandPollSupported = true
 	if atomic.LoadUint64(&s.store.haKeeperReplicaID) != 0 {
 		resp.IsHAKeeper = true
 	}

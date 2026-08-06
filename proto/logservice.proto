@@ -145,6 +145,10 @@ message CNStoreHeartbeat {
   Resource        Resource           = 13 [(gogoproto.nullable) = false];
   string  ShardServiceAddress   = 14;
   string          CommitID           = 15;
+  // CommandPollSupported tells HAKeeper that this service obtains schedule
+  // commands through the independent command-poll RPC. Older HAKeepers ignore
+  // this field and continue returning commands in heartbeat responses.
+  bool            CommandPollSupported = 16;
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
@@ -212,6 +216,8 @@ message TNStoreHeartbeat {
   // AutoIncrEpochFenceSupported reports that this TN rejects writes whose
   // allocator epoch does not match the table epoch.
   bool AutoIncrEpochFenceSupported = 12;
+  // CommandPollSupported has the same compatibility contract as the CN field.
+  bool CommandPollSupported = 13;
 };
 
 message RSMState {
@@ -262,6 +268,7 @@ enum MethodType {
   CHECK_HEALTH = 26;
   READ_LSN = 27;
   UPDATE_LEASEHOLDER_ID = 28;
+  GET_SCHEDULE_COMMANDS = 29;
 };
 
 enum RecordType {
@@ -343,6 +350,7 @@ message Request {
   uint64 NonVotingReplicaNum     = 14;
   Locality NonVotingLocality     = 15;
   CheckHealth CheckHealth        = 16;
+  ScheduleCommandQuery ScheduleCommandQuery = 17;
 };
 
 message LogResponse {
@@ -369,6 +377,9 @@ message Response {
   ShardInfoQueryResult ShardInfo = 10;
   AllocateIDResponse AllocateID  = 11;
   CheckerState CheckerState      = 12;
+  // CommandPollSupported is advertised by HAKeeper so services avoid the new
+  // RPC while connected to an older server during a rolling upgrade.
+  bool CommandPollSupported      = 13;
 };
 
 message LogRecordResponse {
@@ -404,6 +415,7 @@ enum HAKeeperUpdateType {
   LogShardUpdate = 17;
   RestoreIDWatermarkUpdate = 18;
   CompleteLogServiceRecoveryUpdate = 19;
+  ScheduleCommandPollUpdate = 20;
 }
 
 // HAKeeperState state transition diagram
@@ -517,6 +529,13 @@ message ScheduleCommand {
   DeleteProxyStore  DeleteProxyStore  = 9;
   AddLogShard       AddLogShard       = 10;
   BootstrapShard    BootstrapShard    = 11;
+}
+
+// ScheduleCommandQuery fetches the pending command batch for a service without
+// coupling command progress to a heartbeat proposal.
+message ScheduleCommandQuery {
+  string UUID = 1;
+  ServiceType ServiceType = 2;
 }
 
 message JoinGossipCluster {

@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -34,7 +35,7 @@ func (s *service) startCNStoreHeartbeat() error {
 			return err
 		}
 	}
-	return s.stopper.RunNamedTask("cnservice-heartbeat", s.heartbeatTask)
+	return s.stopper.RunNamedTask("cnservice-control-plane", s.controlTask)
 }
 
 func (s *service) heartbeatTask(ctx context.Context) {
@@ -65,6 +66,55 @@ func (s *service) heartbeatTask(ctx context.Context) {
 	}
 }
 
+func (s *service) controlTask(ctx context.Context) {
+	commandDone := make(chan struct{})
+	go func() {
+		defer close(commandDone)
+		s.commandTask(ctx)
+	}()
+	s.heartbeatTask(ctx)
+	<-commandDone
+}
+
+func (s *service) commandTask(ctx context.Context) {
+	client, ok := s._hakeeperClient.(logservice.ScheduleCommandHAKeeperClient)
+	if !ok {
+		return
+	}
+	poll := func() {
+		start := time.Now()
+		defer func() {
+			v2.CNCommandPollHistogram.Observe(time.Since(start).Seconds())
+		}()
+		ctx2, cancel := context.WithTimeout(ctx, logservice.ScheduleCommandPollTimeout)
+		defer cancel()
+		batch, err := client.GetScheduleCommands(ctx2, logservicepb.CNService)
+		if err != nil {
+			if ctx.Err() == nil {
+				v2.CNCommandPollFailureCounter.Inc()
+				s.logger.Error("failed to poll cn schedule commands", zap.Error(err))
+			}
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		s.handleCommands(batch.Commands)
+	}
+
+	poll()
+	ticker := time.NewTicker(logservice.ScheduleCommandPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			poll()
+		}
+	}
+}
+
 func (s *service) heartbeat(ctx context.Context) {
 	start := time.Now()
 	defer func() {
@@ -74,6 +124,7 @@ func (s *service) heartbeat(ctx context.Context) {
 	ctx2, cancel := context.WithTimeoutCause(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration, moerr.CauseHeartbeat)
 	defer cancel()
 
+	_, commandPollSupported := s._hakeeperClient.(logservice.ScheduleCommandHAKeeperClient)
 	hb := logservicepb.CNStoreHeartbeat{
 		UUID:                s.cfg.UUID,
 		ServiceAddress:      s.pipelineServiceServiceAddr(),
@@ -91,7 +142,8 @@ func (s *service) heartbeat(ctx context.Context) {
 			MemTotal:     system.MemoryTotal(),
 			MemAvailable: system.MemoryAvailable(),
 		},
-		CommitID: version.CommitID,
+		CommitID:             version.CommitID,
+		CommandPollSupported: commandPollSupported,
 	}
 	if s.gossipNode != nil {
 		hb.GossipAddress = s.gossipServiceAddr()
@@ -103,6 +155,9 @@ func (s *service) heartbeat(ctx context.Context) {
 		err = moerr.AttachCause(ctx2, err)
 		v2.CNHeartbeatFailureCounter.Inc()
 		s.logger.Error("failed to send cn heartbeat", zap.Error(err))
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 
@@ -117,6 +172,8 @@ func (s *service) heartbeat(ctx context.Context) {
 }
 
 func (s *service) handleCommands(cmds []logservicepb.ScheduleCommand) {
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
 	for _, cmd := range cmds {
 		if cmd.ServiceType != logservicepb.CNService {
 			s.logger.Fatal("received invalid command", zap.String("command", cmd.LogString()))
@@ -126,7 +183,7 @@ func (s *service) handleCommands(cmds []logservicepb.ScheduleCommand) {
 			s.createTaskService(cmd.CreateTaskService)
 			s.createSQLLogger(cmd.CreateTaskService)
 			s.createProxyUser(cmd.CreateTaskService)
-		} else if s.gossipNode.Created() && cmd.JoinGossipCluster != nil {
+		} else if s.gossipNode.Created() && !s.gossipNode.Joined() && cmd.JoinGossipCluster != nil {
 			s.gossipNode.SetJoined()
 
 			// Start an async task to join the gossip cluster to avoid the long time joining, and if

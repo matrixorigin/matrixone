@@ -972,6 +972,32 @@ func TestGetCommandBatch(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestScheduleCommandPollUsesHeartbeatDeliverySemantics(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	command := pb.ScheduleCommand{
+		UUID:        "uuid1",
+		ServiceType: pb.TNService,
+		ConfigChange: &pb.ConfigChange{
+			ChangeType: pb.StartReplica,
+		},
+	}
+	rsm.state.ScheduleCommands[command.UUID] = pb.CommandBatch{
+		Commands: []pb.ScheduleCommand{command},
+	}
+
+	result, err := rsm.Update(sm.Entry{Cmd: GetScheduleCommandPollCmd(command.UUID)})
+	require.NoError(t, err)
+	var batch pb.CommandBatch
+	require.NoError(t, batch.Unmarshal(result.Data))
+	require.Equal(t, []pb.ScheduleCommand{command}, batch.Commands)
+	_, ok := rsm.state.ScheduleCommands[command.UUID]
+	require.False(t, ok)
+
+	result, err = rsm.Update(sm.Entry{Cmd: GetScheduleCommandPollCmd(command.UUID)})
+	require.NoError(t, err)
+	require.Empty(t, result.Data)
+}
+
 func TestBootstrapReplicaCommandsRetriedUntilHeartbeatAcknowledges(t *testing.T) {
 	const (
 		storeID   = "store-1"
