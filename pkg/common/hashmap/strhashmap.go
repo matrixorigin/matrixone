@@ -82,6 +82,16 @@ func (m *StrHashMap) NewIterator() Iterator {
 	}
 }
 
+// SetRejectNaN makes FLOAT NaN keys non-matching, as required by SQL join
+// equality. It must be selected before inserting the first row.
+func (m *StrHashMap) SetRejectNaN() error {
+	if m == nil || m.rows != 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	m.rejectNaN = true
+	return nil
+}
+
 func (itr *strHashmapIterator) prepareHashKeys(
 	vecs []*vector.Vector,
 	start int,
@@ -145,7 +155,12 @@ func (itr *strHashmapIterator) prepareHashKeys(
 				continue
 			}
 			if vec.IsConst() {
-				size := prefix + 4 + len(vec.GetBytesAt(0))
+				value := vec.GetBytesAt(0)
+				valueSize := len(value)
+				if vec.GetType().Oid == types.T_json {
+					valueSize = keycodec.CanonicalJSONSize(value)
+				}
+				size := prefix + 4 + valueSize
 				for i := 0; i < count; i++ {
 					if err := add(i, size); err != nil {
 						return err
@@ -154,10 +169,19 @@ func (itr *strHashmapIterator) prepareHashKeys(
 				continue
 			}
 			values, area := vector.MustVarlenaRawData(vec)
-			for i := 0; i < count; i++ {
-				value := values[start+i].GetByteSlice(area)
-				if err := add(i, prefix+4+len(value)); err != nil {
-					return err
+			if vec.GetType().Oid == types.T_json {
+				for i := 0; i < count; i++ {
+					value := values[start+i].GetByteSlice(area)
+					if err := add(i, prefix+4+keycodec.CanonicalJSONSize(value)); err != nil {
+						return err
+					}
+				}
+			} else {
+				for i := 0; i < count; i++ {
+					value := values[start+i].GetByteSlice(area)
+					if err := add(i, prefix+4+len(value)); err != nil {
+						return err
+					}
 				}
 			}
 			continue
@@ -190,7 +214,12 @@ func (itr *strHashmapIterator) prepareHashKeys(
 			if vec.IsConst() {
 				valueRow = 0
 			}
-			if err := add(i, prefix+4+len(vec.GetBytesAt(valueRow))); err != nil {
+			value := vec.GetBytesAt(valueRow)
+			valueSize := len(value)
+			if vec.GetType().Oid == types.T_json {
+				valueSize = keycodec.CanonicalJSONSize(value)
+			}
+			if err := add(i, prefix+4+valueSize); err != nil {
 				return err
 			}
 		}
@@ -296,7 +325,13 @@ func (m *StrHashMap) Size() int64 {
 func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 	for _, vec := range vecs {
 		if itr.mp.groupingAware || itr.mp.hasNull {
-			fillGroupingAwareStr(itr, vec, count, start)
+			switch vec.GetType().Oid {
+			case types.T_json, types.T_array_float32, types.T_array_float64,
+				types.T_array_bf16, types.T_array_float16:
+				fillCanonicalGroupingAwareVarlena(itr, vec, count, start)
+			default:
+				fillGroupingAwareStr(itr, vec, count, start)
+			}
 			continue
 		}
 		if vec.GetType().IsFixedLen() {
@@ -309,7 +344,13 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 				fillGroupStr(itr, vec, count, vec.GetType().TypeSize(), start, 0, len(vecs))
 			}
 		} else {
-			fillStringGroupStr(itr, vec, count, start, len(vecs))
+			switch vec.GetType().Oid {
+			case types.T_json, types.T_array_float32, types.T_array_float64,
+				types.T_array_bf16, types.T_array_float16:
+				fillCanonicalStringGroupStr(itr, vec, count, start)
+			default:
+				fillStringGroupStr(itr, vec, count, start, len(vecs))
+			}
 		}
 	}
 	keys := itr.keys
@@ -317,6 +358,136 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		if l := len(keys[i]); l < 16 {
 			keys[i] = append(keys[i], hashtable.StrKeyPadding[l:]...)
 		}
+	}
+}
+
+func appendVarlenaHashKey(dst []byte, oid types.T, value []byte) []byte {
+	switch oid {
+	case types.T_json:
+		return keycodec.AppendCanonicalJSON(dst, value)
+	case types.T_array_float32:
+		return keycodec.AppendCanonicalVecF32(dst, value)
+	case types.T_array_float64:
+		return keycodec.AppendCanonicalVecF64(dst, value)
+	case types.T_array_bf16, types.T_array_float16:
+		return keycodec.AppendCanonicalVecF16(dst, value)
+	default:
+		return append(dst, value...)
+	}
+}
+
+func appendFramedVarlenaHashKey(dst []byte, oid types.T, value []byte) []byte {
+	lengthOffset := len(dst)
+	dst = append(dst, 0, 0, 0, 0)
+	valueOffset := len(dst)
+	dst = appendVarlenaHashKey(dst, oid, value)
+	length := uint32(len(dst) - valueOffset)
+	copy(dst[lengthOffset:valueOffset], util.UnsafeToBytes(&length))
+	return dst
+}
+
+func fillCanonicalGroupingAwareVarlena(
+	itr *strHashmapIterator,
+	vec *vector.Vector,
+	n int,
+	start int,
+) {
+	keys := itr.keys
+	if vec.IsGrouping() {
+		for i := 0; i < n; i++ {
+			keys[i] = append(keys[i], byte(2))
+		}
+		return
+	}
+	if vec.IsConstNull() {
+		for i := 0; i < n; i++ {
+			row := start + i
+			if vec.GetGrouping().Contains(uint64(row)) {
+				keys[i] = append(keys[i], byte(2))
+			} else if itr.mp.hasNull {
+				keys[i] = append(keys[i], byte(1))
+			} else {
+				itr.zValues[i] = 0
+			}
+		}
+		return
+	}
+
+	for i := 0; i < n; i++ {
+		row := start + i
+		if vec.GetGrouping().Contains(uint64(row)) {
+			keys[i] = append(keys[i], byte(2))
+			continue
+		}
+		if vec.GetNulls().Contains(uint64(row)) {
+			if itr.mp.hasNull {
+				keys[i] = append(keys[i], byte(1))
+			} else {
+				itr.zValues[i] = 0
+			}
+			continue
+		}
+		keys[i] = append(keys[i], byte(0))
+		valueRow := row
+		if vec.IsConst() {
+			valueRow = 0
+		}
+		value := vec.GetBytesAt(valueRow)
+		keys[i] = appendFramedVarlenaHashKey(keys[i], vec.GetType().Oid, value)
+	}
+}
+
+func fillCanonicalStringGroupStr(
+	itr *strHashmapIterator,
+	vec *vector.Vector,
+	n int,
+	start int,
+) {
+	keys := itr.keys
+	if vec.IsGrouping() {
+		for i := 0; i < n; i++ {
+			keys[i] = append(keys[i], byte(2))
+		}
+		return
+	}
+	if vec.IsConstNull() {
+		for i := 0; i < n; i++ {
+			itr.zValues[i] = 0
+		}
+		return
+	}
+	if vec.IsConst() {
+		value := vec.GetBytesAt(0)
+		for i := 0; i < n; i++ {
+			keys[i] = appendFramedVarlenaHashKey(keys[i], vec.GetType().Oid, value)
+		}
+		return
+	}
+
+	values, area := vector.MustVarlenaRawData(vec)
+	nulls := vec.GetNulls()
+	if !nulls.Any() {
+		if area == nil {
+			for i := 0; i < n; i++ {
+				value := values[start+i].ByteSlice()
+				keys[i] = appendFramedVarlenaHashKey(keys[i], vec.GetType().Oid, value)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				value := values[start+i].GetByteSlice(area)
+				keys[i] = appendFramedVarlenaHashKey(keys[i], vec.GetType().Oid, value)
+			}
+		}
+		return
+	}
+	for i := 0; i < n; i++ {
+		row := start + i
+		if nulls.Contains(uint64(row)) {
+			itr.zValues[i] = 0
+			continue
+		}
+		value := values[row].GetByteSlice(area)
+		keys[i] = appendFramedVarlenaHashKey(keys[i], vec.GetType().Oid, value)
 	}
 }
 
@@ -832,7 +1003,7 @@ func (m *StrHashMap) UnmarshalBinary(data []byte, mp *mpool.MPool) error {
 func (m *StrHashMap) WriteTo(w io.Writer) (int64, error) {
 	var n int64
 
-	// The low two bits retain the key grammar. Historical payloads used only
+	// The low three bits retain the key grammar. Historical payloads used only
 	// bit zero, so 0/1 remain backward-compatible.
 	flags := byte(0)
 	if m.hasNull {
@@ -840,6 +1011,9 @@ func (m *StrHashMap) WriteTo(w io.Writer) (int64, error) {
 	}
 	if m.groupingAware {
 		flags |= 2
+	}
+	if m.rejectNaN {
+		flags |= 4
 	}
 	if _, err := w.Write([]byte{flags}); err != nil {
 		return 0, err
@@ -874,11 +1048,12 @@ func (m *StrHashMap) UnmarshalFrom(r io.Reader, mp *mpool.MPool) (int64, error) 
 		return 0, err
 	}
 	n += int64(rn)
-	if b[0]&^byte(3) != 0 {
+	if b[0]&^byte(7) != 0 {
 		return 0, mpool.ErrAllocationAccountInvalid
 	}
 	m.hasNull = b[0]&1 != 0
 	m.groupingAware = b[0]&2 != 0
+	m.rejectNaN = b[0]&4 != 0
 
 	// Deserialize rows
 	rowsData := make([]byte, 8)
