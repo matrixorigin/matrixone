@@ -674,15 +674,26 @@ deallocate prepare s;
 drop table prepare_bit_numeric;
 drop table if exists prepare_bit64_signed;
 create table prepare_bit64_signed (b bit(64));
+insert into prepare_bit64_signed values (-6109877384019645241);
+select hex(b), cast(b as unsigned) from prepare_bit64_signed;
+➤ hex(b)[12,-1,0]  ¦  cast(b as unsigned)[-5,64,0]  𝄀
+AB355AE40850ECC7  ¦  12336866689689906375
+truncate table prepare_bit64_signed;
+insert into prepare_bit64_signed values ('-6109877384019645241');
+-- @regex("data out of range", true)
+Data truncation: data out of range: data type bit(64), value -6109877384019645241
 prepare s from 'insert into prepare_bit64_signed values (?)';
 set @signed_high_bit = -9223372036854775808;
 execute s using @signed_high_bit;
+set @signed_workflow_value = -6109877384019645241;
+execute s using @signed_workflow_value;
 set @signed_all_bits = -1;
 execute s using @signed_all_bits;
 deallocate prepare s;
 select b from prepare_bit64_signed order by b;
 ➔ b[-7,64,0]  𝄀
 9223372036854775808  𝄀
+12336866689689906375  𝄀
 18446744073709551615
 drop table if exists prepare_bit63_signed;
 create table prepare_bit63_signed (b bit(63));

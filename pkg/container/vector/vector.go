@@ -67,6 +67,9 @@ type Vector struct {
 
 	// FIXME: Bad design! Will be deleted soon.
 	isBin bool
+	// isSignedIntegerParam records that a transient text vector came from a
+	// signed integer in the MySQL binary prepared-statement protocol.
+	isSignedIntegerParam bool
 
 	offHeap bool
 
@@ -357,6 +360,14 @@ func (v *Vector) GetIsBin() bool {
 
 func (v *Vector) SetIsBin(isBin bool) {
 	v.isBin = isBin
+}
+
+func (v *Vector) GetIsSignedIntegerParam() bool {
+	return v.isSignedIntegerParam
+}
+
+func (v *Vector) SetIsSignedIntegerParam(isSignedIntegerParam bool) {
+	v.isSignedIntegerParam = isSignedIntegerParam
 }
 
 func (v *Vector) NeedDup() bool {
