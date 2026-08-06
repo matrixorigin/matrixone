@@ -23,10 +23,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -180,4 +182,28 @@ func TestRebuildPreparedExplainAnalyzeKeepsExplainColumn(t *testing.T) {
 	require.Equal(t, int32(types.T_varchar), rebuiltColumns[0].Typ.Id)
 	require.Equal(t, plan2.GetPlanTitle(rebuiltPlan.GetQuery(), false), rebuiltColumns[0].Name)
 	require.Equal(t, rebuiltColumns[0].Name, rebuiltColumns[0].OriginName)
+}
+
+func TestCompileOutputCallbackSuppressesExplainPipelineRows(t *testing.T) {
+	testCases := []struct {
+		name       string
+		stmt       tree.Statement
+		wantCalled bool
+	}{
+		{name: "select", stmt: &tree.Select{}, wantCalled: true},
+		{name: "explain analyze", stmt: &tree.ExplainAnalyze{}, wantCalled: false},
+		{name: "explain phyplan", stmt: &tree.ExplainPhyPlan{}, wantCalled: false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			fill := func(*batch.Batch, *perfcounter.CounterSet) error {
+				called = true
+				return nil
+			}
+			require.NoError(t, compileOutputCallback(tc.stmt, fill)(nil, nil))
+			require.Equal(t, tc.wantCalled, called)
+		})
+	}
 }

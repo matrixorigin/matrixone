@@ -2621,7 +2621,44 @@ func TestPreparedNumericAggregateBinaryProtocolMetadata(t *testing.T) {
 			result := parsePrepareColumnDefinition(t, packets[3])
 			require.Equal(t, "result", result.name)
 			require.Equal(t, defines.MYSQL_TYPE_DOUBLE, result.typ)
+			require.Equal(t, uint8(mysqlDecimalNotSpecified), result.decimals)
 			require.Equal(t, byte(defines.EOFHeader), packets[4][0])
+		})
+	}
+}
+
+func TestPreparedFloatingPointBinaryProtocolMetadata(t *testing.T) {
+	ctx := context.TODO()
+	tests := []struct {
+		name     string
+		sql      string
+		typ      defines.MysqlType
+		decimals uint8
+	}{
+		{name: "float", sql: "select cast(12.3 as float) as result", typ: defines.MYSQL_TYPE_FLOAT, decimals: mysqlDecimalNotSpecified},
+		{name: "double", sql: "select cast(12.3 as double) as result", typ: defines.MYSQL_TYPE_DOUBLE, decimals: mysqlDecimalNotSpecified},
+		{name: "fixed float", sql: "select cast(12.3 as float(6, 2)) as result", typ: defines.MYSQL_TYPE_FLOAT, decimals: 2},
+		{name: "fixed double", sql: "select cast(12.3 as double(6, 2)) as result", typ: defines.MYSQL_TYPE_DOUBLE, decimals: 2},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			conn := &prepareResponseCaptureConn{}
+			proto, _, prepareStmt := newBinaryPrepareProtocolTestCaseWithConn(t, test.sql, conn)
+			proto.capability &^= CLIENT_DEPRECATE_EOF
+
+			require.NoError(t, proto.SendPrepareResponse(ctx, prepareStmt))
+
+			packets := splitProtocolPackets(t, conn.writes)
+			require.Len(t, packets, 3)
+			require.Equal(t, uint16(1), binary.LittleEndian.Uint16(packets[0][5:]))
+			require.Equal(t, uint16(0), binary.LittleEndian.Uint16(packets[0][7:]))
+
+			result := parsePrepareColumnDefinition(t, packets[1])
+			require.Equal(t, "result", result.name)
+			require.Equal(t, test.typ, result.typ)
+			require.Equal(t, test.decimals, result.decimals)
+			require.Equal(t, byte(defines.EOFHeader), packets[2][0])
 		})
 	}
 }

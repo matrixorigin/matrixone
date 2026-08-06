@@ -76,6 +76,7 @@ const defaultSaltReadTimeout = time.Millisecond * 200
 
 const charsetBinary = 0x3f
 const charsetVarchar = 0x21
+const charsetVarcharMaxBytesPerCharacter = 3
 const boolColumnLength = 1
 
 func init() {
