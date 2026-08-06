@@ -526,6 +526,66 @@ func TestResolveLifecycleStageIdentityRequiresDeploymentCertification(t *testing
 		[]lifecycleArchiveStageCertification{certified},
 	)
 	require.ErrorContains(t, err, "credential handle")
+
+	// A Stage reference is stable only if every storage-routing attribute still
+	// matches the deployment certification. Accepting a partial match could
+	// publish a Dataset that a later Restore reads from another namespace.
+	certified.CredentialHandle = "role-arn:arn:aws:iam::17:role/mo-archive"
+	for _, test := range []struct {
+		name   string
+		mutate func(*lifecycleArchiveStageCertification)
+	}{
+		{
+			name: "different canonical URL",
+			mutate: func(value *lifecycleArchiveStageCertification) {
+				value.CanonicalURL = "s3://archive-bucket/other"
+			},
+		},
+		{
+			name: "different provider",
+			mutate: func(value *lifecycleArchiveStageCertification) {
+				value.Provider = "minio"
+			},
+		},
+		{
+			name: "different endpoint",
+			mutate: func(value *lifecycleArchiveStageCertification) {
+				value.Endpoint = "https://other-s3.example.com"
+			},
+		},
+		{
+			name: "different region",
+			mutate: func(value *lifecycleArchiveStageCertification) {
+				value.Region = "us-east-1"
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mismatch := certified
+			test.mutate(&mismatch)
+			_, err := resolveLifecycleStageIdentity(
+				context.Background(),
+				17,
+				12,
+				stageURL,
+				credentials,
+				[]lifecycleArchiveStageCertification{mismatch},
+			)
+			require.ErrorContains(t, err, "does not match")
+		})
+	}
+
+	nonS3URL, err := url.Parse("file:///archive")
+	require.NoError(t, err)
+	_, err = resolveLifecycleStageIdentity(
+		context.Background(),
+		17,
+		12,
+		nonS3URL,
+		credentials,
+		[]lifecycleArchiveStageCertification{certified},
+	)
+	require.ErrorContains(t, err, "S3-compatible")
 }
 
 func lifecycleStageResult(rows [][]interface{}) *MysqlResultSet {
