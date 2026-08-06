@@ -286,6 +286,7 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 	// state so the edges can carry the next execution's signals.
 	// See: https://github.com/matrixorigin/matrixone/issues/25614
 	if s.Proc != nil {
+		s.Proc.CopyPlanSnapshotFrom(c.proc)
 		for _, reg := range s.Proc.Reg.MergeReceivers {
 			reg.ResetTerminalStateForReuse()
 		}

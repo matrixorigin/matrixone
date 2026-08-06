@@ -751,7 +751,17 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, err
 	}
 
-	snapshotTS := txnOp.Txn().SnapshotTS
+	snapshotTS := txn.SnapshotTS
+	// The transaction snapshot is mutable under RC: an earlier target, batch,
+	// pre-pipeline lock, or remote fragment may already have advanced it. A DDL
+	// fence describes whether the plan generation is stale, so compare it with
+	// the immutable snapshot captured for that plan. Keep using the current
+	// transaction snapshot for ordinary row-version scans so their range stays
+	// minimal. Callers without a compiled plan retain the legacy fallback.
+	planSnapshotTS, hasPlanSnapshot := proc.GetPlanSnapshotTS()
+	if !hasPlanSnapshot {
+		planSnapshotTS = snapshotTS
+	}
 	// if has no conflict, lockedTS means the latest commit ts of this table
 	lockedTS := result.Timestamp
 
@@ -760,7 +770,7 @@ func doLock(
 	// timestamp in the lock table as well, so a late locker can detect that its
 	// statement was compiled against an older physical table generation.
 	definitionChanged := (result.TableDefChanged && result.HasPrevCommit) ||
-		(result.TableDefChangedAt != nil && snapshotTS.Less(*result.TableDefChangedAt))
+		(result.TableDefChangedAt != nil && planSnapshotTS.Less(*result.TableDefChangedAt))
 	if definitionChanged {
 		if !txnOp.Txn().IsRCIsolation() {
 			return false, false, timestamp.Timestamp{},
