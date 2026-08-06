@@ -209,6 +209,47 @@ func TestCompareErrorIdentityIgnoresMessage(t *testing.T) {
 	}
 }
 
+func TestCompareTerminalObservationsIncludePartialResults(t *testing.T) {
+	t.Parallel()
+
+	for _, outcome := range []Outcome{OutcomeFailed, OutcomeCancelled} {
+		t.Run(outcome.String(), func(t *testing.T) {
+			t.Parallel()
+
+			newReport := func() Report {
+				report := failedReport()
+				report.Case.NativeExpectation.Outcome = outcome
+				report.Case.OffloadedExpectation.Outcome = outcome
+				report.Native.Evidence.Outcome = outcome
+				report.Offloaded.Evidence.Outcome = outcome
+				report.Native.Rows = []Row{{TextCell("delivered-before-terminal")}}
+				report.Offloaded.Rows = []Row{{TextCell("delivered-before-terminal")}}
+				return report
+			}
+
+			report := newReport()
+			if err := Compare(report); err != nil {
+				t.Fatalf("Compare() error = %v for matching partial %s observations", err, outcome)
+			}
+
+			report = newReport()
+			report.Offloaded.Rows = nil
+			err := Compare(report)
+			var mismatchError *MismatchError
+			if !errors.As(err, &mismatchError) || mismatchError.Field != "row count" {
+				t.Fatalf("Compare() error = %v, want partial-row mismatch", err)
+			}
+
+			report = newReport()
+			report.Offloaded.Schema[0].DatabaseType = "VARBINARY"
+			err = Compare(report)
+			if !errors.As(err, &mismatchError) || mismatchError.Field != "schema" {
+				t.Fatalf("Compare() error = %v, want partial-schema mismatch", err)
+			}
+		})
+	}
+}
+
 func TestCompareRejectsInconsistentObservations(t *testing.T) {
 	t.Parallel()
 

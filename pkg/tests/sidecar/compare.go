@@ -76,14 +76,16 @@ func Compare(report Report) error {
 			ModeNative, report.Native.Evidence.Outcome, ModeOffloaded, report.Offloaded.Evidence.Outcome)
 	}
 
-	if report.Native.Evidence.Outcome != OutcomeSucceeded {
-		return compareErrors(report.Native.Error, report.Offloaded.Error)
-	}
 	if !columnsEqual(report.Native.Schema, report.Offloaded.Schema) {
 		return mismatch("schema", "native=%v offloaded=%v", report.Native.Schema, report.Offloaded.Schema)
 	}
-
-	return compareRows(report.Case.Comparison, report.Native.Rows, report.Offloaded.Rows)
+	if err := compareRows(report.Case.Comparison, report.Native.Rows, report.Offloaded.Rows); err != nil {
+		return err
+	}
+	if report.Native.Evidence.Outcome != OutcomeSucceeded {
+		return compareErrors(report.Native.Error, report.Offloaded.Error)
+	}
+	return nil
 }
 
 func validateCase(testCase Case) error {
