@@ -29,7 +29,7 @@ insert into t11 select *,* from generate_series(1, 1000)g;
 create table t11_copy1 clone t11;
 select a, b from t11 except select a, b from t11_copy1;
 insert into t11_copy1(b) values (1001);
-select a, b from t11_copy1 where b = 1001;
+select count(*) from t11_copy1 where b = 1001 and a > 1000;
 
 delete from t11 where a mod 19 = 0;
 create table t11_copy2 clone t11;

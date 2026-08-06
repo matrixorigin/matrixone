@@ -645,6 +645,18 @@ func TestReconcileAlterCopyAutoIncrementPreservesFreshColumnInitialization(t *te
 		maxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{0}),
 	}}
 	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	c.proc.SetResolveVariableFunc(func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		switch name {
+		case "auto_increment_offset":
+			require.True(t, isSystemVar)
+			require.False(t, isGlobalVar)
+			return int64(10), nil
+		case "lower_case_table_names":
+			return int64(1), nil
+		default:
+			return nil, fmt.Errorf("unexpected variable %q", name)
+		}
+	})
 	srcDef := &plan.TableDef{
 		TblId: 1,
 		Cols: []*plan.ColDef{{
@@ -661,10 +673,19 @@ func TestReconcileAlterCopyAutoIncrementPreservesFreshColumnInitialization(t *te
 	}
 	copyRel := mock_frontend.NewMockRelation(ctrl)
 	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId)
+	copyRel.EXPECT().GetDBID(gomock.Any()).Return(uint64(1))
+	copyRel.EXPECT().AlterTable(gomock.Any(), nil, gomock.Any()).DoAndReturn(
+		func(_ context.Context, _ *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
+			require.Equal(t, []*api.AlterTableReq{
+				api.NewUpdateAutoIncrementReq(1, copyDef.TblId, 9, 0),
+			}, reqs)
+			return nil
+		},
+	)
 	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 	autoSvc.EXPECT().SetOffset(
-		gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(),
-	).Times(0)
+		c.proc.Ctx, copyDef.TblId, 1, "new_id", uint64(9), c.proc.GetTxnOperator(),
+	)
 	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
 
 	require.NoError(t, c.reconcileAlterCopyAutoIncrement(
@@ -720,7 +741,7 @@ func TestReconcileAlterCopyAutoIncrementAdvancesFreshColumnFromCopiedRows(t *tes
 	require.Zero(t, resultMP.CurrNB())
 }
 
-func TestReconcileAlterCopyAutoIncrementPreservesFreshColumnAlongsideRetainedColumn(t *testing.T) {
+func TestReconcileAlterCopyAutoIncrementReappliesConfiguredFreshColumnAlongsideRetainedColumn(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	resultMP := mpool.MustNewZero()
 	sourceOffsetSQL := "select col_index, offset from mo_catalog.mo_increment_columns where table_id = 1"
@@ -732,6 +753,16 @@ func TestReconcileAlterCopyAutoIncrementPreservesFreshColumnAlongsideRetainedCol
 		freshMaxSQL:     newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{0}),
 	}}
 	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	c.proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		switch name {
+		case "lower_case_table_names":
+			return int64(1), nil
+		case "auto_increment_offset":
+			return int64(10), nil
+		default:
+			return nil, fmt.Errorf("unexpected variable %q", name)
+		}
+	})
 	autoType := plan.Type{Id: int32(types.T_uint64), AutoIncr: true}
 	srcDef := &plan.TableDef{
 		TblId: 1,
@@ -754,13 +785,19 @@ func TestReconcileAlterCopyAutoIncrementPreservesFreshColumnAlongsideRetainedCol
 		func(_ context.Context, _ *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
 			require.Equal(t, []*api.AlterTableReq{
 				api.NewUpdateAutoIncrementReq(1, copyDef.TblId, 50, 0),
+				api.NewUpdateAutoIncrementReq(1, copyDef.TblId, 9, 0),
 			}, reqs)
 			return nil
 		},
 	)
 	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
-	autoSvc.EXPECT().SetOffset(
-		c.proc.Ctx, copyDef.TblId, 0, "old_id", uint64(50), c.proc.GetTxnOperator(),
+	gomock.InOrder(
+		autoSvc.EXPECT().SetOffset(
+			c.proc.Ctx, copyDef.TblId, 0, "old_id", uint64(50), c.proc.GetTxnOperator(),
+		),
+		autoSvc.EXPECT().SetOffset(
+			c.proc.Ctx, copyDef.TblId, 1, "new_id", uint64(9), c.proc.GetTxnOperator(),
+		),
 	)
 	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
 

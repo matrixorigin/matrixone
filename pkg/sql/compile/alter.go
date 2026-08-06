@@ -1676,6 +1676,10 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 	tableID := newRel.GetTableID(c.proc.Ctx)
 	svc := incrservice.GetAutoIncrementService(c.proc.GetService())
 	epochReqs := make([]*api.AlterTableReq, 0, len(autoCols))
+	var (
+		freshColumnOffset         uint64
+		freshColumnOffsetResolved bool
+	)
 	for _, col := range autoCols {
 		if err := c.proc.Ctx.Err(); err != nil {
 			return err
@@ -1709,12 +1713,37 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 
 		name := strings.ToLower(col.ColName)
 		_, retained := retainedNames[name]
-		// The temporary CREATE already initialized a newly added AUTO_INCREMENT
-		// column from the session variables. With no copied rows and no explicit
-		// reset, preserve that fresh allocator instead of converting the absent
-		// source mapping and zero MAX value into an ordinary offset reset.
+		// Internal ALTER COPY SQL may execute without the client session variables.
+		// Reapply a non-default session offset to an empty newly added column from
+		// the outer compile instead of assuming the temporary CREATE inherited it.
 		if !explicitReset && !retained && copyDef.AutoIncrOffset == 0 && copiedMax == 0 {
-			continue
+			if !freshColumnOffsetResolved {
+				value, err := resolveVariableOrDefault(
+					c.proc,
+					"auto_increment_offset",
+					true,
+					false,
+				)
+				if err != nil {
+					return err
+				}
+				offset, ok := value.(int64)
+				if !ok {
+					return moerr.NewInternalErrorf(
+						c.proc.Ctx,
+						"invalid auto_increment_offset type %T",
+						value,
+					)
+				}
+				if offset > 1 {
+					freshColumnOffset = uint64(offset - 1)
+				}
+				freshColumnOffsetResolved = true
+			}
+			if freshColumnOffset == 0 {
+				continue
+			}
+			copiedMax = freshColumnOffset
 		}
 		effectiveOffset := max(copyDef.AutoIncrOffset, copiedMax)
 		if !explicitReset {
