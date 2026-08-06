@@ -218,7 +218,7 @@ func TestPersistedObjectPrefetchSlicesToProgressWithinBudget(t *testing.T) {
 	spillTracker.requireReleased(t, true)
 }
 
-func TestPersistedObjectPrefetchHonorsRowOnlyLimit(t *testing.T) {
+func TestPersistedObjectPrefetchHonorsRowLimitWithByteBudget(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	const maxRows = 8
@@ -231,7 +231,9 @@ func TestPersistedObjectPrefetchHonorsRowOnlyLimit(t *testing.T) {
 	baseline := mp.CurrNB()
 	scheduler := tasks.NewParallelJobScheduler(2)
 	defer scheduler.Stop()
-	changes := &ChangeHandler{scheduler: scheduler, maxInMemoryRows: maxRows}
+	changes := &ChangeHandler{
+		scheduler: scheduler, maxInMemoryRows: maxRows, maxInMemoryBytes: 64 << 20,
+	}
 	base := &baseHandle{changesHandle: changes}
 
 	drain := func(
@@ -268,6 +270,41 @@ func TestPersistedObjectPrefetchHonorsRowOnlyLimit(t *testing.T) {
 	drain(aobj.prefetch, aobj.isEnd, &aobj.cache, func() {
 		aobj.specialLayouts, aobj.blks = nil, nil
 	})
+}
+
+func TestPartitionStateRangeRejectsRowOnlyLimitBeforeReadingLegacyWideObject(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const (
+		rows         = 120
+		payloadBytes = 32 << 10
+	)
+	obj, rawFS := writeTestWideObjectWithCommitTS(t, mp, rows, payloadBytes)
+	metaLoc := obj.ObjectLocation()
+	meta, err := objectio.FastLoadObjectMeta(context.Background(), &metaLoc, false, rawFS)
+	require.NoError(t, err)
+	payloadExtent := meta.MustGetMeta(objectio.SchemaData).
+		GetBlockMeta(0).ColumnMeta(0).Location()
+	require.Equal(t, uint8(compress.Lz4), payloadExtent.Alg())
+	require.Greater(t, payloadExtent.OriginSize(), uint32(1<<20))
+
+	state := NewPartitionState("", true, 42, false)
+	state.dataObjectsNameIndex.Set(*obj)
+	fs := newPeakTrackingFileService(rawFS)
+	ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
+		MaxInMemoryRows: 8,
+	})
+	baseline := mp.CurrNB()
+	handle, err := NewChangesHandlerWithPartitionStateRange(
+		ctx, state, types.TS{}, types.BuildTS(200, 0), false,
+		objectio.BlockMaxRows, 0, mp, fs,
+	)
+	require.Error(t, err)
+	require.Nil(t, handle)
+	require.Contains(t, err.Error(), "MaxInMemoryBytes")
+	require.Zero(t, fs.peak.Load(), "row-only configuration must fail before object decoding")
+	require.Zero(t, fs.current.Load())
+	require.Equal(t, baseline, mp.CurrNB())
 }
 
 func TestPersistedWideObjectWindowsBoundAAndCNOutput(t *testing.T) {

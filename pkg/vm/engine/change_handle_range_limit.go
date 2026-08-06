@@ -21,7 +21,9 @@ import (
 
 // ChangeRangeLimit is an opt-in memory bound for range replay. Callers that
 // also provide ChangeRangeSpillConfig spill excess replay rows; a zero value
-// means no limit, preserving existing CollectChanges callers.
+// means no limit, preserving existing CollectChanges callers. A row bound
+// cannot bound variable-width persisted columns by itself, so range-aware
+// persisted replay rejects MaxInMemoryRows without MaxInMemoryBytes.
 type ChangeRangeLimit struct {
 	MaxInMemoryRows  int
 	MaxInMemoryBytes int

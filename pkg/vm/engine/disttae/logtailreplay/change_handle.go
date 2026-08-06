@@ -2943,8 +2943,13 @@ func NewChangesHandlerWithPartitionStateRange(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (changeHandle *ChangeHandler, err error) {
-	stateStart := state.GetStart()
 	rangeLimit := engine.ChangeRangeLimitFromContext(ctx)
+	if rangeLimit.MaxInMemoryRows > 0 && rangeLimit.MaxInMemoryBytes <= 0 {
+		return nil, moerr.NewInvalidInputNoCtx(
+			"change range MaxInMemoryRows requires MaxInMemoryBytes to bound variable-width persisted columns",
+		)
+	}
+	stateStart := state.GetStart()
 	spillConfig := engine.ChangeRangeSpillFromContext(ctx)
 	if stateStart.GT(&start) {
 		logutil.Info("ChangesHandlerWithPartitionStateRange: stateStart > start, proceeding with range-aware scan",
