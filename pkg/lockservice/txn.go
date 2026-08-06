@@ -806,7 +806,7 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 				wt,
 				func(lock Lock) {
 					lock.waiters.iter(func(w *waiter) bool {
-						if !w.isBlockingFor(txnID) {
+						if !w.isBlockingFor(txnID, lock.holders) {
 							return true
 						}
 						hasDeadLock = !waiters(w.txn, waiterAddress)

@@ -401,6 +401,7 @@ func TestRemoteSharedMergeSnapshotPreservesLogicalWaitFor(t *testing.T) {
 
 			txnA := []byte("remote-merge-edge-a")
 			txnB := []byte("remote-merge-edge-b")
+			txnC := []byte("remote-merge-edge-c")
 			_, err = origin.Lock(
 				ctx, table, newTestRows(1), txnA, newTestRowSharedOptions())
 			require.NoError(t, err)
@@ -416,6 +417,9 @@ func TestRemoteSharedMergeSnapshotPreservesLogicalWaitFor(t *testing.T) {
 				mergeDone <- lockErr
 			}()
 			waitWaiters(t, owner, table, newTestRows(1)[0], 1)
+			_, err = origin.Lock(
+				ctx, table, newTestRows(1), txnC, newTestRowSharedOptions())
+			require.NoError(t, err)
 
 			fetch := func(holder []byte) [][]byte {
 				t.Helper()
@@ -439,11 +443,15 @@ func TestRemoteSharedMergeSnapshotPreservesLogicalWaitFor(t *testing.T) {
 				return waiting
 			}
 
-			// A is physically queued on a lock it co-holds, but logically waits
-			// only for B. Remote and local snapshots must expose the same graph.
+			// A is physically queued on a lock it co-holds. B was present when A
+			// queued; C joined later. Remote and local snapshots must derive both
+			// logical dependencies from current holders while excluding A's self-edge.
 			require.Empty(t, fetch(txnA))
 			require.Equal(t, [][]byte{txnA}, fetch(txnB))
+			require.Equal(t, [][]byte{txnA}, fetch(txnC))
 
+			require.NoError(t, origin.unlockWithContext(
+				ctx, txnC, timestamp.Timestamp{}))
 			require.NoError(t, origin.unlockWithContext(
 				ctx, txnB, timestamp.Timestamp{}))
 			select {
@@ -457,6 +465,123 @@ func TestRemoteSharedMergeSnapshotPreservesLogicalWaitFor(t *testing.T) {
 		},
 		func(*Config) {},
 	)
+}
+
+func TestLateSharedHolderCycleRemainsDeadlockDetectable(t *testing.T) {
+	tests := []struct {
+		name       string
+		serviceIDs []string
+		remote     bool
+	}{
+		{name: "local", serviceIDs: []string{"s1"}},
+		{name: "remote-snapshot", serviceIDs: []string{"s1", "s2"}, remote: true},
+	}
+
+	for idx, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			txnA := []byte("late-shared-cycle-a")
+			txnB := []byte("late-shared-cycle-b")
+			// Keep C lexically greatest so victim selection is deterministic.
+			txnC := []byte("late-shared-cycle-z")
+			runLockServiceTestsWithAdjustConfig(
+				t,
+				tt.serviceIDs,
+				time.Second*10,
+				func(_ *lockTableAllocator, services []*service) {
+					owner := services[0]
+					origin := services[len(services)-1]
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*15)
+					defer cancel()
+
+					sharedTable := uint64(26750 + idx*2)
+					exclusiveTable := sharedTable + 1
+					_, err := owner.getLockTableWithCreate(
+						ctx, 0, sharedTable, nil, pb.Sharding_None)
+					require.NoError(t, err)
+					_, err = origin.getLockTableWithCreate(
+						ctx, 0, exclusiveTable, nil, pb.Sharding_None)
+					require.NoError(t, err)
+
+					_, err = origin.Lock(
+						ctx, sharedTable, newTestRows(1), txnA,
+						newTestRowSharedOptions())
+					require.NoError(t, err)
+					_, err = origin.Lock(
+						ctx, sharedTable, newTestRows(1), txnB,
+						newTestRowSharedOptions())
+					require.NoError(t, err)
+					_, err = origin.Lock(
+						ctx, exclusiveTable, newTestRows(1), txnA,
+						newTestRowExclusiveOptions())
+					require.NoError(t, err)
+
+					if tt.remote {
+						_, ok := origin.tableGroups.get(0, sharedTable).(*remoteLockTable)
+						require.True(t, ok, "shared-table snapshot must cross the owner RPC")
+					}
+
+					mergeDone := make(chan error, 1)
+					go func() {
+						_, lockErr := origin.Lock(
+							ctx, sharedTable, newTestRows(1, 4), txnA,
+							newTestRangeSharedOptions())
+						mergeDone <- lockErr
+					}()
+					waitWaiters(t, owner, sharedTable, newTestRows(1)[0], 1)
+
+					// C becomes a compatible holder only after A's waiter captured its
+					// admission-time dependency set. The live graph is then completed
+					// by C waiting for A on another table: A -> C -> A.
+					_, err = origin.Lock(
+						ctx, sharedTable, newTestRows(1), txnC,
+						newTestRowSharedOptions())
+					require.NoError(t, err)
+
+					cycleDone := make(chan error, 1)
+					go func() {
+						_, lockErr := origin.Lock(
+							ctx, exclusiveTable, newTestRows(1), txnC,
+							newTestRowExclusiveOptions())
+						cycleDone <- lockErr
+					}()
+
+					select {
+					case cycleErr := <-cycleDone:
+						require.ErrorIs(t, cycleErr, ErrDeadLockDetected)
+					case <-time.After(time.Second * 3):
+						t.Fatal("deadlock detector omitted the late Shared holder dependency")
+					}
+
+					require.NoError(t, origin.unlockWithContext(
+						ctx, txnC, timestamp.Timestamp{}))
+					require.NoError(t, origin.unlockWithContext(
+						ctx, txnB, timestamp.Timestamp{}))
+					select {
+					case mergeErr := <-mergeDone:
+						require.NoError(t, mergeErr)
+					case <-time.After(time.Second * 3):
+						t.Fatal("surviving Shared merge did not progress after holders left")
+					}
+					require.NoError(t, origin.unlockWithContext(
+						ctx, txnA, timestamp.Timestamp{}))
+				},
+				func(c *Config) {
+					c.MaxLockRowCount = 3
+					c.MaxFixedSliceSize = 8
+					// Production CheckActiveTxn reads frontend transaction liveness
+					// through TxnIterFunc. Keep these synthetic public-path transactions
+					// authoritative while the remote snapshot closes the wait-for cycle.
+					c.TxnIterFunc = func(fn func([]byte) bool) {
+						for _, txnID := range [][]byte{txnA, txnB, txnC} {
+							if !fn(txnID) {
+								return
+							}
+						}
+					}
+				},
+			)
+		})
+	}
 }
 
 func TestSharedBudgetPreservesCompatibility(t *testing.T) {

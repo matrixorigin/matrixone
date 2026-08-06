@@ -87,7 +87,11 @@ func (w *waiter) TypeName() string {
 // lock to be released if a conflict is encountered.
 type waiter struct {
 	// belong to which txn
-	txn           pb.WaitTxn
+	txn pb.WaitTxn
+	// waitFor is the dependency set observed when the waiter enters the queue.
+	// It seeds the first deadlock check only. Later graph snapshots must derive
+	// dependencies from the lock's current holders because compatible Shared
+	// holders can join or leave while a range-merge waiter remains blocked.
 	waitFor       [][]byte
 	conflictKey   *atomic.Pointer[[]byte]
 	lt            *atomic.Pointer[localLockTable]
@@ -178,28 +182,23 @@ func (w *waiter) isBlocking() bool {
 	return w.isRemoteSnapshot || w.getStatus() == blocking
 }
 
-// waitsFor reports whether txnID is a real logical dependency of this waiter.
-// A Shared range-merge waiter can be physically queued on a lock that it already
-// holds, so queue membership alone is insufficient for deadlock traversal.
-func (w *waiter) waitsFor(txnID []byte) bool {
-	for _, holder := range w.waitFor {
-		if bytes.Equal(holder, txnID) {
-			return true
-		}
-	}
-	return false
-}
-
 // isBlockingFor reports whether this physical queue entry is a live logical
-// edge to holderTxnID. A Shared range-merge waiter is also a holder of the lock
-// it is queued on, so its physical self-edge must be filtered while dependencies
-// on the other Shared holders remain visible. Both local and remote deadlock
-// snapshots use this helper to keep the graph semantics identical.
-func (w *waiter) isBlockingFor(holderTxnID []byte) bool {
-	if !w.isBlocking() {
+// edge to holderTxnID in the supplied current holder set. A Shared range-merge
+// waiter is also a holder of the lock it is queued on, so its physical self-edge
+// must be filtered while every current other holder remains visible, including
+// holders that joined after the waiter entered the queue. The caller reads the
+// holder set under the lock-table mutex. Both local and remote deadlock snapshots
+// use this helper to keep the graph semantics identical.
+func (w *waiter) isBlockingFor(
+	holderTxnID []byte,
+	currentHolders *holders,
+) bool {
+	if !w.isBlocking() ||
+		currentHolders == nil ||
+		!currentHolders.contains(holderTxnID) {
 		return false
 	}
-	return !w.notifyOnSharedHolderChange || w.waitsFor(holderTxnID)
+	return !w.notifyOnSharedHolderChange || !w.isTxn(holderTxnID)
 }
 
 func (w *waiter) setStatus(

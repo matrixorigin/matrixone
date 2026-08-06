@@ -510,6 +510,11 @@ func TestFetchWhoWaitingMeSkipsInactiveWaiters(t *testing.T) {
 		assert.NoError(t, err)
 		assert.True(t, ok)
 		assert.Equal(t, [][]byte{[]byte("blocking")}, waitingTxnIDs)
+
+		// A snapshot racing holder release must not retain an edge merely
+		// because the transaction bookkeeping still contains the lock key.
+		holders.remove(holderID)
+		assert.False(t, blockingWaiter.isBlockingFor(holderID, holders))
 	})
 }
 
@@ -520,10 +525,14 @@ func TestFetchWhoWaitingMeKeepsLogicalMergeDependency(t *testing.T) {
 		key := []byte("key")
 		holderA := []byte("holder-a")
 		holderB := []byte("holder-b")
+		holderC := []byte("holder-c")
 
 		txnB := newActiveTxn(holderB, string(holderB), newFixedSlicePool(2), "")
 		defer reuse.Free(txnB, nil)
 		require.NoError(t, txnB.lockAdded(0, bind, [][]byte{key}, pb.LockOptions{}, logger))
+		txnC := newActiveTxn(holderC, string(holderC), newFixedSlicePool(2), "")
+		defer reuse.Free(txnC, nil)
+		require.NoError(t, txnC.lockAdded(0, bind, [][]byte{key}, pb.LockOptions{}, logger))
 
 		lt := newLocalLockTable(
 			bind,
@@ -558,26 +567,36 @@ func TestFetchWhoWaitingMeKeepsLogicalMergeDependency(t *testing.T) {
 			holders:  holders,
 			waiters:  q,
 		})
+		// C joins after A is already queued. The frozen admission-time waitFor
+		// snapshot contains only B, but a current deadlock snapshot must expose
+		// the new logical A -> C dependency as well.
+		holders.add(pb.WaitTxn{TxnID: holderC, CreatedOn: "origin"})
 
-		var waitingTxnIDs [][]byte
-		ok, err := txnB.fetchWhoWaitingMe(
-			context.Background(),
-			"origin",
-			holderB,
-			func(waitTxn pb.WaitTxn, waiterAddress string) bool {
-				waitingTxnIDs = append(waitingTxnIDs, waitTxn.TxnID)
-				assert.Equal(t, bind.ServiceID, waiterAddress)
-				return true
-			},
-			func(_ context.Context, group uint32, table uint64) (lockTable, error) {
-				assert.Equal(t, bind.Group, group)
-				assert.Equal(t, bind.Table, table)
-				return lt, nil
-			},
-		)
-		require.NoError(t, err)
-		require.True(t, ok)
-		require.Equal(t, [][]byte{holderA}, waitingTxnIDs)
+		fetch := func(txn *activeTxn, holder []byte) [][]byte {
+			t.Helper()
+			var waitingTxnIDs [][]byte
+			ok, err := txn.fetchWhoWaitingMe(
+				context.Background(),
+				"origin",
+				holder,
+				func(waitTxn pb.WaitTxn, waiterAddress string) bool {
+					waitingTxnIDs = append(waitingTxnIDs, waitTxn.TxnID)
+					assert.Equal(t, bind.ServiceID, waiterAddress)
+					return true
+				},
+				func(_ context.Context, group uint32, table uint64) (lockTable, error) {
+					assert.Equal(t, bind.Group, group)
+					assert.Equal(t, bind.Table, table)
+					return lt, nil
+				},
+			)
+			require.NoError(t, err)
+			require.True(t, ok)
+			return waitingTxnIDs
+		}
+
+		require.Equal(t, [][]byte{holderA}, fetch(txnB, holderB))
+		require.Equal(t, [][]byte{holderA}, fetch(txnC, holderC))
 	})
 }
 

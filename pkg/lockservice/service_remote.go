@@ -695,8 +695,9 @@ func (s *service) handleRemoteGetLock(
 				// The response is a wait-for graph snapshot. Only waiters that
 				// are logically blocked by the requested holder represent an edge.
 				// Shared merge waiters can be physically queued on their own lock;
-				// isBlockingFor removes that self-edge while retaining other holders.
-				if !w.isBlockingFor(req.GetTxnLock.TxnID) {
+				// isBlockingFor removes that self-edge while deriving every other
+				// dependency from the current holder set.
+				if !w.isBlockingFor(req.GetTxnLock.TxnID, lock.holders) {
 					return true
 				}
 				values = append(values, w.txn)
