@@ -788,6 +788,46 @@ func TestSetOffsetRollbackKeepsCommittedOffsetAndSafelyRebuildsCache(t *testing.
 	})
 }
 
+func TestDiscardOffsetResetRestoresNextImplicitAllocation(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		defer leaktest.AfterTest(t)()
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+		store := NewMemStore().(*memStore)
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+
+		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, createTxn))
+		require.NoError(t, createTxn.Commit(ctx))
+
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		_, err = s.InsertValues(ctx, 0, 0, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.NoError(t, s.allocator.updateMinValue(ctx, 0, def[0].ColName, 0, nil))
+		store.Lock()
+		committedOffset := store.caches[0][0].Offset
+		store.Unlock()
+
+		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColIndex, def[0].ColName, 999, alterTxn))
+		input = newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		last, err := s.InsertValues(ctx, 0, 1, alterTxn, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1000), last)
+
+		require.NoError(t, s.DiscardOffsetReset(ctx, 0, alterTxn))
+		input = newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		last, err = s.InsertValues(ctx, 0, 0, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, committedOffset+1, last)
+		require.NoError(t, alterTxn.Rollback(ctx))
+	})
+}
+
 func TestSetOffsetTransactionSynchronizesRenamedColumnForInsert(t *testing.T) {
 	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
 		defer leaktest.AfterTest(t)()

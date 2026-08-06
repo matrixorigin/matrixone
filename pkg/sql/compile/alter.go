@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
@@ -1822,6 +1823,8 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	}
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
+	cleanup := newAlterAutoIncrementResetCleanup(c)
+	defer cleanup.finish(&err)
 
 	qry := s.Plan.GetDdl().GetAlterTable()
 
@@ -1833,16 +1836,16 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	ps := c.proc.GetPartitionService()
 	if !ps.Enabled() ||
 		!features.IsPartitioned(qry.TableDef.FeatureFlag) {
-		return s.doAlterTable(c)
+		return s.doAlterTable(c, cleanup)
 	}
 
 	if qry.AlterPartition == nil {
 		switch qry.AlgorithmType {
 		case plan.AlterTable_COPY:
-			return s.doAlterTable(c)
+			return s.doAlterTable(c, cleanup)
 		default:
 			// alter primary table
-			if err := s.doAlterTable(c); err != nil {
+			if err := s.doAlterTable(c, cleanup); err != nil {
 				return err
 			}
 
@@ -1879,26 +1882,12 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 				qry.RawSQL,
 				c.getLower(),
 			)
-			stmt := st.(*tree.AlterTable)
-			table := stmt.Table
-			stmt.PartitionOption = nil
-			for _, p := range metadata.Partitions {
-				stmt.Table = tree.NewTableName(
-					tree.Identifier(p.PartitionTableName),
-					table.ObjectNamePrefix,
-					table.AtTsExpr,
-				)
-				sql := tree.StringWithOpts(
-					stmt,
-					dialect.MYSQL,
-					tree.WithQuoteIdentifier(),
-					tree.WithSingleQuoteString(),
-				)
-				if err := c.runSql(sql); err != nil {
-					return err
-				}
-			}
-			return nil
+			return c.alterPartitionTables(
+				st.(*tree.AlterTable),
+				metadata.Partitions,
+				hasAlterAutoIncrementReset(qry.Actions),
+				cleanup,
+			)
 		}
 	}
 
@@ -1976,10 +1965,38 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	return moerr.NewInternalError(c.proc.Ctx, "unsupported alter partition type")
 }
 
-func (s *Scope) doAlterTable(c *Compile) (err error) {
+func (c *Compile) alterPartitionTables(
+	stmt *tree.AlterTable,
+	partitions []partition.Partition,
+	trackAutoIncrementReset bool,
+	cleanup *alterAutoIncrementResetCleanup,
+) error {
+	table := stmt.Table
+	stmt.PartitionOption = nil
+	for _, p := range partitions {
+		stmt.Table = tree.NewTableName(
+			tree.Identifier(p.PartitionTableName),
+			table.ObjectNamePrefix,
+			table.AtTsExpr,
+		)
+		sql := tree.StringWithOpts(
+			stmt,
+			dialect.MYSQL,
+			tree.WithQuoteIdentifier(),
+			tree.WithSingleQuoteString(),
+		)
+		if err := c.runSql(sql); err != nil {
+			return err
+		}
+		if trackAutoIncrementReset {
+			cleanup.track(p.PartitionID)
+		}
+	}
+	return nil
+}
+
+func (s *Scope) doAlterTable(c *Compile, cleanup *alterAutoIncrementResetCleanup) (err error) {
 	qry := s.Plan.GetDdl().GetAlterTable()
-	cleanup := newAlterAutoIncrementResetCleanup(c)
-	defer cleanup.finish(&err)
 
 	if qry.AlgorithmType == plan.AlterTable_COPY {
 		// COPY ALTER transfers mo_foreign_keys around the source-table drop,

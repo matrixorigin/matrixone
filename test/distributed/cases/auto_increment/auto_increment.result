@@ -747,6 +747,17 @@ new_id    v
 2    2
 100    3
 drop table auto_increment_alter_rename;
+drop table if exists auto_increment_alter_partitioned;
+create table auto_increment_alter_partitioned(id bigint primary key auto_increment, v int) partition by key(id) partitions 2;
+insert into auto_increment_alter_partitioned(v) values (1), (2);
+alter table auto_increment_alter_partitioned auto_increment = 100;
+insert into auto_increment_alter_partitioned(v) values (3);
+select * from auto_increment_alter_partitioned order by id;
+id    v
+1    1
+2    2
+100    3
+drop table auto_increment_alter_partitioned;
 drop table if exists auto_increment_alter_rename_combined;
 create table auto_increment_alter_rename_combined(id bigint primary key auto_increment, v int);
 insert into auto_increment_alter_rename_combined(v) values (1), (2);

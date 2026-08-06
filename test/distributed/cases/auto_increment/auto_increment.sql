@@ -507,6 +507,16 @@ insert into auto_increment_alter_rename(v) values (3);
 select * from auto_increment_alter_rename order by new_id;
 drop table auto_increment_alter_rename;
 
+-- A partitioned ALTER owns logical and physical allocator resets as one SQL
+-- statement and publishes the same next value through the public table.
+drop table if exists auto_increment_alter_partitioned;
+create table auto_increment_alter_partitioned(id bigint primary key auto_increment, v int) partition by key(id) partitions 2;
+insert into auto_increment_alter_partitioned(v) values (1), (2);
+alter table auto_increment_alter_partitioned auto_increment = 100;
+insert into auto_increment_alter_partitioned(v) values (3);
+select * from auto_increment_alter_partitioned order by id;
+drop table auto_increment_alter_partitioned;
+
 -- A same-statement rename must read the old column and publish the final cache key.
 drop table if exists auto_increment_alter_rename_combined;
 create table auto_increment_alter_rename_combined(id bigint primary key auto_increment, v int);

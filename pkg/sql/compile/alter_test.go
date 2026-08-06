@@ -45,9 +45,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -554,6 +558,110 @@ func TestAlterCopyAutoIncrementCleanupDiscardsTrackedReset(t *testing.T) {
 
 	require.ErrorIs(t, statementErr, originalErr)
 	require.ErrorIs(t, statementErr, cleanupErr)
+}
+
+type partitionAlterTestExecutor struct {
+	executedSQLs []string
+	failAt       int
+	failErr      error
+	cancel       context.CancelFunc
+}
+
+func (e *partitionAlterTestExecutor) Exec(
+	ctx context.Context,
+	sql string,
+	opts executor.Options,
+) (executor.Result, error) {
+	index := len(e.executedSQLs)
+	e.executedSQLs = append(e.executedSQLs, sql)
+	if index > 0 {
+		if err := ctx.Err(); err != nil {
+			return executor.Result{}, err
+		}
+	}
+	if index == e.failAt && e.failErr != nil {
+		return executor.Result{}, e.failErr
+	}
+	if index == 0 && e.cancel != nil {
+		e.cancel()
+	}
+	return executor.Result{}, nil
+}
+
+func (e *partitionAlterTestExecutor) ExecTxn(
+	ctx context.Context,
+	execFunc func(executor.TxnExecutor) error,
+	opts executor.Options,
+) error {
+	return execFunc(executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		return e.Exec(ctx, sql, opts)
+	}, opts.Txn()))
+}
+
+func TestAlterPartitionTablesKeepsAutoIncrementCleanupAtStatementBoundary(t *testing.T) {
+	partitionFailure := errors.New("partition alter failed")
+	for _, tc := range []struct {
+		name      string
+		configure func(context.CancelFunc) *partitionAlterTestExecutor
+		wantErr   error
+	}{
+		{
+			name: "later partition fails",
+			configure: func(context.CancelFunc) *partitionAlterTestExecutor {
+				return &partitionAlterTestExecutor{failAt: 1, failErr: partitionFailure}
+			},
+			wantErr: partitionFailure,
+		},
+		{
+			name: "cancel after earlier partition succeeds",
+			configure: func(cancel context.CancelFunc) *partitionAlterTestExecutor {
+				return &partitionAlterTestExecutor{failAt: -1, cancel: cancel}
+			},
+			wantErr: context.Canceled,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			baseCtx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			exec := tc.configure(cancel)
+			c := newAlterCopyPrecheckCompile(t, ctrl, exec)
+			c.proc.Ctx = defines.AttachAccountId(baseCtx, catalog.System_Account)
+			c.proc.ReplaceTopCtx(c.proc.Ctx)
+
+			autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+			gomock.InOrder(
+				autoSvc.EXPECT().DiscardOffsetReset(gomock.Any(), uint64(10), c.proc.GetTxnOperator()).Return(nil),
+				autoSvc.EXPECT().DiscardOffsetReset(gomock.Any(), uint64(11), c.proc.GetTxnOperator()).Return(nil),
+			)
+			incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+
+			st, err := parsers.ParseOne(
+				c.proc.Ctx,
+				dialect.MYSQL,
+				"alter table test.t auto_increment = 100",
+				1,
+			)
+			require.NoError(t, err)
+			cleanup := newAlterAutoIncrementResetCleanup(c)
+			cleanup.track(10)
+			statementErr := c.alterPartitionTables(
+				st.(*tree.AlterTable),
+				[]partition.Partition{
+					{PartitionID: 11, PartitionTableName: "t_p0"},
+					{PartitionID: 12, PartitionTableName: "t_p1"},
+				},
+				true,
+				cleanup,
+			)
+			require.ErrorIs(t, statementErr, tc.wantErr)
+			cleanup.finish(&statementErr)
+			require.ErrorIs(t, statementErr, tc.wantErr)
+			require.Len(t, exec.executedSQLs, 2)
+			require.Contains(t, exec.executedSQLs[0], "`t_p0`")
+			require.Contains(t, exec.executedSQLs[1], "`t_p1`")
+		})
+	}
 }
 
 type alterCopyInsertSpyExecutor struct {
