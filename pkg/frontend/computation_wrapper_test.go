@@ -229,19 +229,20 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 }
 
 func TestInitExecuteStmtParamPreservesIntegerProtocolProvenance(t *testing.T) {
-	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 104, "select ?, ?, ?")
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 104, "select ?, ?, ?, ?")
 	defer func() {
 		cw.proc.SetPrepareParams(nil)
 		prepareStmt.Close()
 	}()
 
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
-	for _, value := range []string{"5", "18446744073709551615", "5"} {
+	for _, value := range []string{"5", "18446744073709551615", "2024", "5"} {
 		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
 	}
 	prepareStmt.ParamTypes = []byte{
 		byte(defines.MYSQL_TYPE_LONGLONG), 0,
 		byte(defines.MYSQL_TYPE_LONGLONG), 0x80,
+		byte(defines.MYSQL_TYPE_YEAR), 0,
 		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
 	}
 
@@ -249,12 +250,14 @@ func TestInitExecuteStmtParamPreservesIntegerProtocolProvenance(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, cw.proc.GetPrepareParamIsInteger(0))
 	require.True(t, cw.proc.GetPrepareParamIsInteger(1))
-	require.False(t, cw.proc.GetPrepareParamIsInteger(2))
+	require.True(t, cw.proc.GetPrepareParamIsInteger(2))
 	require.False(t, cw.proc.GetPrepareParamIsInteger(3))
+	require.False(t, cw.proc.GetPrepareParamIsInteger(4))
 	// An invalid parameter index must not bleed into the packed integer section.
-	require.False(t, cw.proc.GetPrepareParamIsBin(3))
+	require.False(t, cw.proc.GetPrepareParamIsBin(4))
 
 	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
 		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
 		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
 		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
@@ -273,9 +276,11 @@ func TestIsBinaryProtocolIntegerType(t *testing.T) {
 		defines.MYSQL_TYPE_INT24,
 		defines.MYSQL_TYPE_LONG,
 		defines.MYSQL_TYPE_LONGLONG,
+		defines.MYSQL_TYPE_YEAR,
 	} {
 		require.True(t, isBinaryProtocolIntegerType(mysqlType), "type %v", mysqlType)
 	}
+	require.False(t, isBinaryProtocolIntegerType(defines.MYSQL_TYPE_BIT))
 	require.False(t, isBinaryProtocolIntegerType(defines.MYSQL_TYPE_VAR_STRING))
 }
 

@@ -690,7 +690,7 @@ func initExecuteStmtParamWithResolver(
 func isBinaryProtocolIntegerType(mysqlType defines.MysqlType) bool {
 	switch mysqlType {
 	case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24,
-		defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_LONGLONG:
+		defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_YEAR:
 		return true
 	default:
 		return false

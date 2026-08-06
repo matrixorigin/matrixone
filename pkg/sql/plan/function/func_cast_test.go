@@ -169,13 +169,13 @@ func TestPreparedIntegerTextToBit(t *testing.T) {
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{
 				"-9223372036854775808", "-6109877384019645241", "-1",
-				"5", "9223372036854775807", "18446744073709551615",
+				"5", "2024", "9223372036854775807", "18446744073709551615",
 			}, nil),
 			NewFunctionTestInput(bit64, []uint64{}, nil),
 		},
 		NewFunctionTestResult(bit64, false, []uint64{
 			uint64(1) << 63, 12336866689689906375, math.MaxUint64,
-			5, math.MaxInt64, math.MaxUint64,
+			5, 2024, math.MaxInt64, math.MaxUint64,
 		}, nil),
 		NewCast)
 	tcc.parameters[0].SetIsIntegerParam(true)
