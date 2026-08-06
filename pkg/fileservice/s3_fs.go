@@ -775,6 +775,25 @@ read_disk_cache:
 			metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
 			LogEvent(ctx, str_ioMerger_Merge_end)
 			if mergeKey.FullObject && s.ioMerger.IsMerging(mergeKey) {
+				logicalBytes, spanBytes, expensive := vector.expensiveMinimalRangeRead()
+				if mayReadDiskCache &&
+					s.shouldStreamFullObjectToDiskCache(vector) &&
+					expensive {
+					LogEvent(ctx, str_ioMerger_Merge_wait_expensive_range,
+						logicalBytes, spanBytes)
+					waitStart := time.Now()
+					waitErr := s.ioMerger.waitContext(ctx, mergeKey)
+					waitTime := time.Since(waitStart)
+					stats.AddS3FSReadIOMergerTimeConsumption(waitTime)
+					metric.FSReadDurationIOMerger.Observe(waitTime.Seconds())
+					if waitErr != nil {
+						return waitErr
+					}
+					if mayReadMemoryCache {
+						goto read_memory_cache
+					}
+					goto read_disk_cache
+				}
 				forceMinimalRangeRead = true
 				goto read_s3
 			}

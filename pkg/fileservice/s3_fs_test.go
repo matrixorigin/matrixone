@@ -1212,6 +1212,64 @@ func TestS3FSRangeReadSkipsFullObjectIOMergeBeforeDiskCacheUpdate(t *testing.T) 
 	}
 }
 
+func TestS3FSExpensiveRangeWaitsForFullObjectMergeUntilContextDeadline(t *testing.T) {
+	ctx := context.Background()
+	originalShortWait := shortIOWaitDuration
+	shortIOWaitDuration = time.Millisecond
+	t.Cleanup(func() {
+		shortIOWaitDuration = originalShortWait
+	})
+
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			DiskPath:     ptrTo(t.TempDir()),
+			DiskCapacity: ptrTo[toml.ByteSize](1 << 30),
+		},
+		nil,
+		false,
+		false,
+	)
+	require.NoError(t, err)
+
+	storage := &blockingReadObjectStorage{
+		ObjectStorage: fs.storage,
+		readStarted:   make(chan struct{}),
+		releaseRead:   make(chan struct{}),
+	}
+	fs.storage = storage
+	vector := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{Offset: 0, Size: 1 << 20},
+			{Offset: 32 << 20, Size: 1 << 20},
+		},
+	}
+	doneMerge, waitMerge := fs.ioMerger.Merge(vector.ioMergeKey(), maxIOWaitDuration)
+	require.NotNil(t, doneMerge)
+	require.Nil(t, waitMerge)
+	releaseMerge := sync.OnceFunc(doneMerge)
+	releaseRead := sync.OnceFunc(func() { close(storage.releaseRead) })
+	readCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	t.Cleanup(func() {
+		cancel()
+		releaseRead()
+		releaseMerge()
+		vector.Release()
+		fs.Close(ctx)
+	})
+
+	err = fs.Read(readCtx, vector)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, int64(0), storage.readCount.Load())
+}
+
 func TestS3FSRangeReadSkipsPrefetchFullObjectIOMerge(t *testing.T) {
 	ctx := context.Background()
 	fs, err := NewS3FS(

@@ -15,10 +15,23 @@
 package fileservice
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 )
+
+type waitStartedContext struct {
+	context.Context
+	once    sync.Once
+	started chan struct{}
+}
+
+func (c *waitStartedContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.started) })
+	return c.Context.Done()
+}
 
 func TestIOMerger(t *testing.T) {
 	merger := NewIOMerger()
@@ -149,5 +162,42 @@ func TestIOMergerIsMerging(t *testing.T) {
 	done()
 	if merger.IsMerging(key) {
 		t.Fatal("expected key to stop merging")
+	}
+}
+
+func TestIOMergerWaitContext(t *testing.T) {
+	merger := NewIOMerger()
+	key := IOMergeKey{Path: "foo"}
+	done, wait := merger.Merge(key, time.Second)
+	if done == nil || wait != nil {
+		t.Fatal("expected first merge to initiate")
+	}
+	defer func() {
+		if merger.IsMerging(key) {
+			done()
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := merger.waitContext(ctx, key); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled wait, got %v", err)
+	}
+
+	waitCtx := &waitStartedContext{
+		Context: context.Background(),
+		started: make(chan struct{}),
+	}
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- merger.waitContext(waitCtx, key)
+	}()
+	<-waitCtx.started
+	done()
+	if err := <-waitDone; err != nil {
+		t.Fatalf("merge completion wait failed: %v", err)
+	}
+	if err := merger.waitContext(context.Background(), key); err != nil {
+		t.Fatalf("completed merge wait failed: %v", err)
 	}
 }

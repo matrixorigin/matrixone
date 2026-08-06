@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -112,6 +113,30 @@ func (i *IOMerger) Merge(key IOMergeKey, maxWaitDuration time.Duration) (done fu
 func (i *IOMerger) IsMerging(key IOMergeKey) bool {
 	_, ok := i.flying.Load(key)
 	return ok
+}
+
+// waitContext waits for the current merge generation for key. It does not
+// start a new merge and always lets caller cancellation terminate the wait.
+func (i *IOMerger) waitContext(ctx context.Context, key IOMergeKey) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	v, ok := i.flying.Load(key)
+	if !ok {
+		return nil
+	}
+
+	metric.IOMergerCounterWait.Add(1)
+	t0 := time.Now()
+	defer func() {
+		metric.IOMergerDurationWait.Observe(time.Since(t0).Seconds())
+	}()
+	select {
+	case <-v.(chan struct{}):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (i *IOVector) ioMergeKey() IOMergeKey {
