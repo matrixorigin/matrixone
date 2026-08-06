@@ -3239,6 +3239,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.rewriteEffectlessAggToProject(rootID)
 		rootID = builder.optimizeFilters(rootID)
 		builder.pushdownLimitToTableScan(rootID)
+		builder.determineGroupByHashKeys(rootID)
 
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
