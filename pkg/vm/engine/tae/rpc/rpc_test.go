@@ -96,6 +96,60 @@ func TestAutoIncrEpochFenceIsModeIndependent(t *testing.T) {
 	}
 }
 
+func TestHandleCommitStaleTableGenerationRequestsDefinitionRetry(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	h := mockTAEHandle(ctx, t, config.WithLongScanAndCKPOpts(nil))
+	defer h.HandleClose(ctx)
+
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.Name = "stale_generation"
+	_, oldRel := testutil.CreateRelation(t, h.db, testutil.DefaultTestDB, schema, true)
+	oldTableID := oldRel.ID()
+	databaseID := oldRel.GetMeta().(*catalog.TableEntry).GetDB().ID
+
+	// Replace the physical table while preserving its logical name, as copy-based
+	// ALTER TABLE does. The write below deliberately represents a plan compiled
+	// against the previous generation.
+	replacementSchema := schema.Clone()
+	replacementSchema.Name = "stale_generation_replacement"
+	replaceTxn, err := h.db.StartTxn(nil)
+	require.NoError(t, err)
+	replaceDB, err := replaceTxn.GetDatabase(testutil.DefaultTestDB)
+	require.NoError(t, err)
+	replacement, err := replaceDB.CreateRelation(replacementSchema)
+	require.NoError(t, err)
+	_, err = replaceDB.DropRelationByID(oldTableID)
+	require.NoError(t, err)
+	require.NoError(t, replacement.AlterTable(ctx,
+		api.NewRenameTableReq(0, 0, replacementSchema.Name, schema.Name)))
+	require.NoError(t, replaceTxn.Commit(ctx))
+	require.NotEqual(t, oldTableID, replacement.ID())
+
+	insertBatch := catalog.MockBatch(schema, 1)
+	defer insertBatch.Close()
+	entry, err := makePBEntry(INSERT, databaseID, oldTableID,
+		testutil.DefaultTestDB, schema.Name, "", containers.ToCNBatch(insertBatch))
+	require.NoError(t, err)
+	payload, err := (&api.PrecommitWriteCmd{EntryList: []*api.Entry{entry}}).MarshalBinary()
+	require.NoError(t, err)
+	commitReq := &txnpb.TxnCommitRequest{Payload: []*txnpb.TxnRequest{{
+		CNRequest: &txnpb.CNOpRequest{
+			OpCode:  uint32(api.OpCode_OpPreCommit),
+			Payload: payload,
+		},
+	}}}
+
+	for _, mode := range []txnpb.TxnMode{txnpb.TxnMode_Optimistic, txnpb.TxnMode_Pessimistic} {
+		t.Run(mode.String(), func(t *testing.T) {
+			meta := mock1PCTxn(h.db)
+			meta.Mode = mode
+			_, commitErr := h.HandleCommit(ctx, meta, nil, commitReq)
+			require.True(t, moerr.IsMoErrCode(commitErr, moerr.ErrTxnNeedRetryWithDefChanged), commitErr)
+		})
+	}
+}
+
 func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)

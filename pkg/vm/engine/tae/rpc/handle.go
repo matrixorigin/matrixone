@@ -908,6 +908,10 @@ func (h *Handle) HandleWrite(
 
 	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			err = moerr.NewTxnNeedRetryWithDefChanged(ctx)
+			return
+		}
 		err = errors.Join(err, moerr.NewBadDB(ctx, fmt.Sprintf("%d-%s",
 			req.DatabaseId,
 			req.DatabaseName)))
@@ -916,6 +920,15 @@ func (h *Handle) HandleWrite(
 
 	tb, err := dbase.GetRelationByID(req.TableID)
 	if err != nil {
+		// A CN can legitimately reach TN with a plan bound to the previous
+		// physical table generation when a copy-based ALTER commits between
+		// catalog resolution and locking. ExpectedEOB is the catalog iterator's
+		// internal not-visible sentinel; ask the CN to rebuild the plan instead
+		// of exposing it as a user-facing missing-table error.
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			err = moerr.NewTxnNeedRetryWithDefChanged(ctx)
+			return
+		}
 		err = errors.Join(err, moerr.NewNoSuchTable(ctx,
 			fmt.Sprintf("%d-%s", req.DatabaseId, req.DatabaseName),
 			fmt.Sprintf("%d-%s", req.TableID, req.TableName)))
