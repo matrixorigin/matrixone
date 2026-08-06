@@ -81,6 +81,14 @@ func NewRegexpTimeoutNoCtx() *Error {
 	return newError(Context(), ErrRegexpTimeout)
 }
 
+func NewRegexpErrorNoCtx(code uint16, args ...any) *Error {
+	return newError(Context(), code, args...)
+}
+
+func NewWrongParametersToNativeFctNoCtx(function string) *Error {
+	return newError(Context(), ErrWrongParametersToNativeFct, function)
+}
+
 func NewOutOfRangeNoCtxf(typ string, format string, args ...any) *Error {
 	return newError(Context(), ErrOutOfRange, typ, fmt.Sprintf(format, args...))
 }

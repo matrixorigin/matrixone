@@ -131,6 +131,32 @@ func TestNewRegexpTimeout(t *testing.T) {
 	require.Equal(t, "HY000", err.SqlState())
 }
 
+func TestNewRegexpError(t *testing.T) {
+	tests := []struct {
+		code    uint16
+		args    []any
+		message string
+	}{
+		{ErrRegexpRuleSyntax, []any{1, 1}, "Syntax error in regular expression on line 1, character 1."},
+		{ErrRegexpMismatchedParen, nil, "Mismatched parenthesis in regular expression."},
+		{ErrRegexpInvalidRange, nil, "The regular expression contains an [x-y] character range where x comes after y."},
+	}
+	for _, test := range tests {
+		err := NewRegexpErrorNoCtx(test.code, test.args...)
+		require.Equal(t, test.code, err.ErrorCode())
+		require.Equal(t, "HY000", err.SqlState())
+		require.Equal(t, test.message, err.Error())
+	}
+}
+
+func TestNewWrongParametersToNativeFct(t *testing.T) {
+	err := NewWrongParametersToNativeFctNoCtx("regexp_substr")
+	require.Equal(t, ErrWrongParametersToNativeFct, err.ErrorCode())
+	require.Equal(t, uint16(ER_WRONG_PARAMETERS_TO_NATIVE_FCT), err.MySQLCode())
+	require.Equal(t, "42000", err.SqlState())
+	require.Equal(t, "Incorrect parameters in the call to native function 'regexp_substr'", err.Error())
+}
+
 func TestWrongArgumentsMySQLError(t *testing.T) {
 	err := NewWrongArguments(context.Background(), "nth_value")
 	require.Equal(t, ErrWrongArguments, err.ErrorCode())

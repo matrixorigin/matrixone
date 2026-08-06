@@ -14,320 +14,330 @@
 
 package function
 
-import (
-	"fmt"
-	"strings"
-	"time"
-	"unicode"
+/*
+#cgo linux LDFLAGS: -ldl
+#include <stdint.h>
+#include <stdlib.h>
 
-	"github.com/dlclark/regexp2"
+typedef struct mo_icu_regex mo_icu_regex;
+
+mo_icu_regex *mo_icu_regex_open(
+    const uint16_t *, int32_t, uint32_t, int32_t, int32_t,
+    int32_t *, int32_t *, int32_t *);
+void mo_icu_regex_close(mo_icu_regex *);
+int mo_icu_regex_set_text(mo_icu_regex *, const uint16_t *, int32_t, int32_t *);
+int mo_icu_regex_find(mo_icu_regex *, int32_t, int32_t, int32_t *, int32_t *, int32_t *);
+int mo_icu_regex_replace(
+    mo_icu_regex *, const uint16_t *, int32_t, int32_t, int32_t,
+    uint16_t **, int32_t *, int32_t *);
+void mo_icu_regex_free(void *);
+*/
+import "C"
+
+import (
+	"unicode/utf16"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-type mysqlRegexpMode struct {
-	multiline bool
-	dotAll    bool
+const (
+	icuRegexpTimeLimit  = 32
+	icuRegexpStackLimit = 8_000_000
+
+	icuCaseInsensitive = 2
+	icuMultiline       = 8
+	icuDotAll          = 32
+	icuUnixLines       = 1
+
+	icuRegexErrorStart = 0x10300
+)
+
+type mysqlRegexp struct {
+	ptr    *C.mo_icu_regex
+	binary bool
 }
 
-const mysqlRegexpMatchTimeout = time.Second
+type mysqlRegexpExecutionCache struct {
+	key string
+	reg *mysqlRegexp
+}
 
-func (rs *regexpSet) getMySQLRegexp(pattern, matchType, functionName string) (*regexp2.Regexp, error) {
-	if pattern == "" {
-		return nil, moerr.NewRegexpIllegalArgumentNoCtx()
+func (cache *mysqlRegexpExecutionCache) close() {
+	if cache != nil && cache.reg != nil {
+		cache.reg.close()
+		cache.reg = nil
 	}
-	mode, unixLines, ignoreCase, err := parseMySQLRegexpMatchType(matchType, functionName)
+}
+
+func (cache *mysqlRegexpExecutionCache) get(
+	pattern []byte, matchType, functionName string, binary bool,
+) (*mysqlRegexp, error) {
+	key := functionName + "\x00" + matchType + "\x00" + string(pattern)
+	if binary {
+		key = "b\x00" + key
+	}
+	if cache.reg != nil && cache.key == key {
+		return cache.reg, nil
+	}
+	cache.close()
+	reg, err := newMySQLRegexp(pattern, matchType, functionName, binary)
 	if err != nil {
 		return nil, err
 	}
-	rewritten := rewriteMySQLRegexpPattern(pattern, mode, unixLines)
-	key := fmt.Sprintf("%t\x00%s", ignoreCase, rewritten)
-	if reg, ok := rs.mysqlMp[key]; ok {
-		return reg, nil
-	}
-	if len(rs.mysqlMp) == mapSizeForRegexp {
-		for key := range rs.mysqlMp {
-			delete(rs.mysqlMp, key)
-		}
-	}
-	options := regexp2.RegexOptions(regexp2.RE2)
-	if ignoreCase {
-		options |= regexp2.IgnoreCase
-	}
-	reg, err := regexp2.Compile(rewritten, options)
-	if err != nil {
-		return nil, moerr.NewInvalidArgNoCtx(functionName+" have invalid regexp pattern arg", pattern)
-	}
-	// regexp2 is required for ICU-compatible zero-width CRLF boundaries. Bound
-	// its backtracking work so a hostile pattern cannot monopolize a CN worker.
-	reg.MatchTimeout = mysqlRegexpMatchTimeout
-	rs.mysqlMp[key] = reg
+	cache.key = key
+	cache.reg = reg
 	return reg, nil
 }
 
-func mysqlRegexpExecError(err error) error {
-	if err == nil {
-		return nil
+func mysqlRegexpForExecution(
+	cache *mysqlRegexpExecutionCache, pattern []byte, matchType, functionName string, binary bool,
+) (*mysqlRegexp, bool, error) {
+	if cache != nil {
+		reg, err := cache.get(pattern, matchType, functionName, binary)
+		return reg, false, err
 	}
-	if strings.HasPrefix(err.Error(), "match timeout after ") {
-		return moerr.NewRegexpTimeoutNoCtx()
-	}
-	return err
+	reg, err := newMySQLRegexp(pattern, matchType, functionName, binary)
+	return reg, true, err
 }
 
-func (rs *regexpSet) validateMySQLRegexp(pattern, matchType, functionName string) error {
-	_, err := rs.getMySQLRegexp(pattern, matchType, functionName)
-	return err
-}
-
-func (rs *regexpSet) validateMySQLRegexpReplacement(pattern, replacement, matchType string) error {
-	reg, err := rs.getMySQLRegexp(pattern, matchType, "regexp_replace")
-	if err != nil {
-		return err
-	}
-	_, err = parseMySQLRegexpReplacement(replacement, reg)
-	return err
-}
-
-func parseMySQLRegexpMatchType(input, functionName string) (
-	mode mysqlRegexpMode, unixLines bool, ignoreCase bool, err error,
-) {
+func parseMySQLRegexpMatchType(input, functionName string) (uint32, error) {
+	var flags uint32
 	for _, flag := range input {
 		switch flag {
 		case 'i':
-			ignoreCase = true
+			flags |= icuCaseInsensitive
 		case 'c':
-			ignoreCase = false
+			flags &^= icuCaseInsensitive
 		case 'm':
-			mode.multiline = true
+			flags |= icuMultiline
 		case 'n':
-			mode.dotAll = true
+			flags |= icuDotAll
 		case 'u':
-			unixLines = true
+			flags |= icuUnixLines
 		default:
-			return mysqlRegexpMode{}, false, false, moerr.NewWrongArguments(moerr.Context(), functionName)
+			return 0, moerr.NewWrongArguments(moerr.Context(), functionName)
 		}
 	}
-	return mode, unixLines, ignoreCase, nil
+	return flags, nil
 }
 
-// rewriteMySQLRegexpPattern expresses ICU's line-boundary rules without
-// changing the subject. regexp2 is used here because the CRLF rule requires
-// zero-width lookaround; positions therefore remain positions in the original
-// rune slice.
-func rewriteMySQLRegexpPattern(pattern string, initial mysqlRegexpMode, unixLines bool) string {
-	runes := []rune(pattern)
-	mode := initial
-	stack := make([]mysqlRegexpMode, 0, 4)
-	var result strings.Builder
-	result.Grow(len(pattern))
-
-	for i := 0; i < len(runes); i++ {
-		switch runes[i] {
-		case '\\':
-			result.WriteRune(runes[i])
-			if i+1 < len(runes) {
-				i++
-				result.WriteRune(runes[i])
-			}
-		case '[':
-			result.WriteRune(runes[i])
-			for i++; i < len(runes); i++ {
-				result.WriteRune(runes[i])
-				if runes[i] == '\\' && i+1 < len(runes) {
-					i++
-					result.WriteRune(runes[i])
-				} else if runes[i] == ']' {
-					break
-				}
-			}
-		case '(':
-			if updated, end, scoped, rendered, ok := parseInlineRegexpMode(runes, i, mode); ok {
-				result.WriteString(rendered)
-				if scoped {
-					stack = append(stack, mode)
-				}
-				mode = updated
-				i = end
-				continue
-			}
-			stack = append(stack, mode)
-			result.WriteRune('(')
-		case ')':
-			result.WriteRune(')')
-			if len(stack) > 0 {
-				mode = stack[len(stack)-1]
-				stack = stack[:len(stack)-1]
-			}
-		case '.':
-			if mode.dotAll {
-				result.WriteString("(?s:.)")
-			} else {
-				result.WriteString("[^\\r\\n\\x{85}\\x{2028}\\x{2029}]")
-			}
-		case '^':
-			if !mode.multiline {
-				result.WriteRune('^')
-			} else if unixLines {
-				result.WriteString("(?:\\A|(?<=\\n))")
-			} else {
-				result.WriteString("(?:\\A|(?<=\\n)|(?<=\\x{85})|(?<=\\x{2028})|(?<=\\x{2029})|(?<=\\r)(?!\\n))")
-			}
-		case '$':
-			if !mode.multiline {
-				result.WriteRune('$')
-			} else if unixLines {
-				result.WriteString("(?:\\z|(?=\\n))")
-			} else {
-				result.WriteString("(?:\\z|(?=\\r\\n)|(?=\\r(?!\\n))|(?<!\\r)(?=\\n)|(?=[\\x{85}\\x{2028}\\x{2029}]))")
-			}
-		default:
-			result.WriteRune(runes[i])
-		}
+func utf16Pointer(value []uint16) *C.uint16_t {
+	if len(value) == 0 {
+		return nil
 	}
-	return result.String()
+	return (*C.uint16_t)(unsafe.Pointer(&value[0]))
 }
 
-func regexpPatternHasUnescapedAnchor(pattern string) bool {
-	runes := []rune(pattern)
-	inClass := false
-	for i := 0; i < len(runes); i++ {
-		switch runes[i] {
-		case '\\':
-			i++
-		case '[':
-			inClass = true
-		case ']':
-			inClass = false
-		case '^', '$':
-			if !inClass {
-				return true
-			}
+// MySQL maps binary strings one byte to one ICU code unit. This is deliberately
+// not UTF-8 decoding: invalid bytes remain distinct and positions remain byte
+// positions.
+func regexpToUTF16(value []byte, binary bool) []uint16 {
+	if binary {
+		result := make([]uint16, len(value))
+		for i, b := range value {
+			result[i] = mysqlLatin1CodePoint(b)
 		}
+		return result
 	}
-	return false
+	return utf16.Encode([]rune(string(value)))
 }
 
-func parseInlineRegexpMode(
-	pattern []rune, start int, current mysqlRegexpMode,
-) (updated mysqlRegexpMode, end int, scoped bool, rendered string, ok bool) {
-	updated = current
-	if start+2 >= len(pattern) || pattern[start+1] != '?' {
-		return mysqlRegexpMode{}, 0, false, "", false
+func regexpFromUTF16(value []uint16, binary bool) []byte {
+	if binary {
+		result := make([]byte, len(value))
+		for i, unit := range value {
+			result[i] = mysqlLatin1Byte(unit)
+		}
+		return result
 	}
-	i := start + 2
-	enable := true
-	var keptEnable, keptDisable strings.Builder
-	seenFlag := false
-	for ; i < len(pattern); i++ {
-		flag := pattern[i]
-		if flag == '-' {
-			enable = false
-			continue
-		}
-		if flag == ')' || flag == ':' {
-			if !seenFlag {
-				return mysqlRegexpMode{}, 0, false, "", false
-			}
-			scoped = flag == ':'
-			kept := keptEnable.String()
-			if keptDisable.Len() > 0 {
-				kept += "-" + keptDisable.String()
-			}
-			if scoped {
-				if kept == "" {
-					rendered = "(?:"
-				} else {
-					rendered = "(?" + kept + ":"
-				}
-			} else if kept == "" {
-				rendered = "(?:)"
-			} else {
-				rendered = "(?" + kept + ")"
-			}
-			return updated, i, scoped, rendered, true
-		}
-		if !unicode.IsLetter(flag) {
-			return mysqlRegexpMode{}, 0, false, "", false
-		}
-		seenFlag = true
-		switch flag {
-		case 'm':
-			updated.multiline = enable
-		case 's':
-			updated.dotAll = enable
-		default:
-			if enable {
-				keptEnable.WriteRune(flag)
-			} else {
-				keptDisable.WriteRune(flag)
-			}
-		}
-	}
-	return mysqlRegexpMode{}, 0, false, "", false
+	return []byte(string(utf16.Decode(value)))
 }
 
-type mysqlReplacementToken struct {
-	literal string
-	group   int
+var mysqlLatin1HighCodePoints = [...]uint16{
+	0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021,
+	0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008d, 0x017d, 0x008f,
+	0x0090, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014,
+	0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x009d, 0x017e, 0x0178,
 }
 
-type mysqlRegexpReplacement []mysqlReplacementToken
-
-func (replacement mysqlRegexpReplacement) literal() (string, bool) {
-	var result strings.Builder
-	for _, token := range replacement {
-		if token.group >= 0 {
-			return "", false
-		}
-		result.WriteString(token.literal)
+func mysqlLatin1CodePoint(value byte) uint16 {
+	if value >= 0x80 && value <= 0x9f {
+		return mysqlLatin1HighCodePoints[value-0x80]
 	}
-	return result.String(), true
+	return uint16(value)
 }
 
-func parseMySQLRegexpReplacement(input string, reg *regexp2.Regexp) (mysqlRegexpReplacement, error) {
-	groups := make(map[int]struct{})
-	for _, number := range reg.GetGroupNumbers() {
-		groups[number] = struct{}{}
+func mysqlLatin1Byte(value uint16) byte {
+	if value < 0x80 || value > 0x9f && value <= 0xff {
+		return byte(value)
 	}
-	runes := []rune(input)
-	tokens := make(mysqlRegexpReplacement, 0, 4)
-	start := 0
-	for i := 0; i < len(runes); i++ {
-		if runes[i] != '$' {
-			continue
+	for i, codePoint := range mysqlLatin1HighCodePoints {
+		if value == codePoint {
+			return byte(i + 0x80)
 		}
-		if start < i {
-			tokens = append(tokens, mysqlReplacementToken{literal: string(runes[start:i]), group: -1})
-		}
-		if i+1 >= len(runes) || runes[i+1] < '0' || runes[i+1] > '9' {
-			return nil, moerr.NewRegexpInvalidCaptureGroupNoCtx()
-		}
-		i++
-		group := int(runes[i] - '0')
-		if _, ok := groups[group]; !ok {
-			return nil, moerr.NewRegexpIndexOutOfBoundsNoCtx()
-		}
-		tokens = append(tokens, mysqlReplacementToken{group: group})
-		start = i + 1
 	}
-	if start < len(runes) {
-		tokens = append(tokens, mysqlReplacementToken{literal: string(runes[start:]), group: -1})
-	}
-	return tokens, nil
+	return byte(value)
 }
 
-func (replacement mysqlRegexpReplacement) expand(match *regexp2.Match) string {
-	var result strings.Builder
-	for _, token := range replacement {
-		if token.group < 0 {
-			result.WriteString(token.literal)
-			continue
-		}
-		group := match.GroupByNumber(token.group)
-		if group != nil {
-			result.WriteString(group.String())
-		}
+func regexpCharacterCount(value []uint16, binary bool) int64 {
+	if binary {
+		return int64(len(value))
 	}
-	return result.String()
+	return int64(len(utf16.Decode(value)))
+}
+
+func regexpCharacterToUTF16(value []uint16, character int64, binary bool) int32 {
+	if binary {
+		return int32(character)
+	}
+	if character == 0 {
+		return 0
+	}
+	runes := utf16.Decode(value)
+	return int32(len(utf16.Encode(runes[:character])))
+}
+
+func regexpUTF16ToCharacter(value []uint16, offset int32, binary bool) int64 {
+	if binary {
+		return int64(offset)
+	}
+	return int64(len(utf16.Decode(value[:offset])))
+}
+
+func newMySQLRegexp(pattern []byte, matchType, functionName string, binary bool) (*mysqlRegexp, error) {
+	if len(pattern) == 0 {
+		return nil, moerr.NewRegexpIllegalArgumentNoCtx()
+	}
+	flags, err := parseMySQLRegexpMatchType(matchType, functionName)
+	if err != nil {
+		return nil, err
+	}
+	encoded := regexpToUTF16(pattern, binary)
+	var status, line, offset C.int32_t
+	ptr := C.mo_icu_regex_open(
+		utf16Pointer(encoded), C.int32_t(len(encoded)), C.uint32_t(flags),
+		icuRegexpTimeLimit, icuRegexpStackLimit, &status, &line, &offset)
+	if status > 0 || ptr == nil {
+		return nil, mysqlRegexpError(int32(status), int32(line), int32(offset))
+	}
+	return &mysqlRegexp{ptr: ptr, binary: binary}, nil
+}
+
+func (rs *regexpSet) validateMySQLRegexp(pattern, matchType, functionName string) error {
+	return rs.validateMySQLRegexpBytes([]byte(pattern), matchType, functionName, false)
+}
+
+func (rs *regexpSet) validateMySQLRegexpBytes(pattern []byte, matchType, functionName string, binary bool) error {
+	reg, err := newMySQLRegexp(pattern, matchType, functionName, binary)
+	if reg != nil {
+		reg.close()
+	}
+	return err
+}
+
+func (rs *regexpSet) validateMySQLRegexpReplacement(pattern, _ string, matchType string) error {
+	return rs.validateMySQLRegexp(pattern, matchType, "regexp_replace")
+}
+
+func (reg *mysqlRegexp) close() {
+	if reg != nil && reg.ptr != nil {
+		C.mo_icu_regex_close(reg.ptr)
+		reg.ptr = nil
+	}
+}
+
+func (reg *mysqlRegexp) setText(subject []uint16) error {
+	var status C.int32_t
+	if C.mo_icu_regex_set_text(reg.ptr, utf16Pointer(subject), C.int32_t(len(subject)), &status) == 0 {
+		return mysqlRegexpError(int32(status), 0, 0)
+	}
+	return nil
+}
+
+func (reg *mysqlRegexp) find(subject []uint16, start int32, occurrence int64) (bool, int32, int32, error) {
+	if err := reg.setText(subject); err != nil {
+		return false, 0, 0, err
+	}
+	var matchStart, matchEnd, status C.int32_t
+	found := C.mo_icu_regex_find(
+		reg.ptr, C.int32_t(start), C.int32_t(occurrence), &matchStart, &matchEnd, &status)
+	if status > 0 {
+		return false, 0, 0, mysqlRegexpError(int32(status), 0, 0)
+	}
+	return found != 0, int32(matchStart), int32(matchEnd), nil
+}
+
+func (reg *mysqlRegexp) replace(
+	subject, replacement []uint16, start int32, occurrence int64,
+) ([]uint16, error) {
+	if err := reg.setText(subject); err != nil {
+		return nil, err
+	}
+	var output *C.uint16_t
+	var outputLen, status C.int32_t
+	ok := C.mo_icu_regex_replace(
+		reg.ptr, utf16Pointer(replacement), C.int32_t(len(replacement)), C.int32_t(start),
+		C.int32_t(occurrence), &output, &outputLen, &status)
+	if output != nil {
+		defer C.mo_icu_regex_free(unsafe.Pointer(output))
+	}
+	if ok == 0 || status > 0 {
+		return nil, mysqlRegexpError(int32(status), 0, 0)
+	}
+	if outputLen == 0 {
+		return []uint16{}, nil
+	}
+	return append([]uint16(nil), unsafe.Slice((*uint16)(unsafe.Pointer(output)), int(outputLen))...), nil
+}
+
+func mysqlRegexpError(status, line, offset int32) error {
+	switch status {
+	case -1:
+		return moerr.NewInternalErrorNoCtx("ICU regular expression library is unavailable")
+	case 1, icuRegexErrorStart + 4:
+		return moerr.NewRegexpIllegalArgumentNoCtx()
+	case 8:
+		return moerr.NewRegexpIndexOutOfBoundsNoCtx()
+	case 15:
+		return moerr.NewRegexpErrorNoCtx(moerr.ErrRegexpBufferOverflow)
+	case icuRegexErrorStart:
+		return moerr.NewRegexpErrorNoCtx(moerr.ErrRegexpInternal)
+	case icuRegexErrorStart + 1:
+		return moerr.NewRegexpErrorNoCtx(moerr.ErrRegexpRuleSyntax, line, offset)
+	case icuRegexErrorStart + 3:
+		return moerr.NewRegexpErrorNoCtx(moerr.ErrRegexpBadEscape)
+	case icuRegexErrorStart + 5:
+		return moerr.NewRegexpErrorNoCtx(moerr.ErrRegexpUnimplemented)
+	case icuRegexErrorStart + 6:
+		return moerr.NewRegexpErrorNoCtx(moerr.ErrRegexpMismatchedParen)
+	case icuRegexErrorStart + 7:
+		return moerr.NewRegexpErrorNoCtx(moerr.ErrRegexpNumberTooBig)
+	case icuRegexErrorStart + 8:
+		return moerr.NewRegexpErrorNoCtx(moerr.ErrRegexpBadInterval)
+	case icuRegexErrorStart + 9:
+		return moerr.NewRegexpErrorNoCtx(moerr.ErrRegexpMaxLessThanMin)
+	case icuRegexErrorStart + 10:
+		return moerr.NewRegexpErrorNoCtx(moerr.ErrRegexpInvalidBackRef)
+	case icuRegexErrorStart + 11:
+		return moerr.NewRegexpErrorNoCtx(moerr.ErrRegexpInvalidFlag)
+	case icuRegexErrorStart + 12:
+		return moerr.NewRegexpErrorNoCtx(moerr.ErrRegexpLookBehindLimit)
+	case icuRegexErrorStart + 15:
+		return moerr.NewRegexpErrorNoCtx(moerr.ErrRegexpMissingCloseBracket)
+	case icuRegexErrorStart + 16:
+		return moerr.NewRegexpErrorNoCtx(moerr.ErrRegexpInvalidRange)
+	case icuRegexErrorStart + 17:
+		return moerr.NewRegexpErrorNoCtx(moerr.ErrRegexpStackOverflow)
+	case icuRegexErrorStart + 18:
+		return moerr.NewRegexpTimeoutNoCtx()
+	case icuRegexErrorStart + 20:
+		return moerr.NewRegexpErrorNoCtx(moerr.ErrRegexpPatternTooBig)
+	case icuRegexErrorStart + 21:
+		return moerr.NewRegexpInvalidCaptureGroupNoCtx()
+	case 7:
+		return moerr.NewOOMNoCtx()
+	default:
+		return moerr.NewRegexpErrorNoCtx(moerr.ErrRegexpInternal)
+	}
 }

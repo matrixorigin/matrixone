@@ -2541,7 +2541,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: NOT_REG_MATCH,
 		class:      plan.Function_STRICT,
 		layout:     COMPARISON_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		checkFn:    regexpTypeMatch(0, 1),
 
 		Overloads: []overload{
 			{
@@ -2614,7 +2614,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: REG_MATCH,
 		class:      plan.Function_STRICT,
 		layout:     COMPARISON_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		checkFn:    regexpTypeMatch(0, 1),
 
 		Overloads: []overload{
 			{
@@ -2635,7 +2635,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: REGEXP_INSTR,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    regexpTypeMatch(0, 1),
 
 		Overloads: []overload{
 			{
@@ -2670,7 +2670,7 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 3,
-				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64, types.T_int8},
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -2680,7 +2680,7 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 4,
-				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64, types.T_int8, types.T_varchar},
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64, types.T_int64, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -2696,7 +2696,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: REGEXP_LIKE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    regexpTypeMatch(0, 1),
 
 		Overloads: []overload{
 			{
@@ -2727,15 +2727,13 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: REGEXP_REPLACE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    regexpTypeMatch(0, 1, 2),
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    regexpStringReturnType,
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpReplace
 				},
@@ -2743,9 +2741,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    regexpStringReturnType,
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpReplace
 				},
@@ -2753,9 +2749,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    regexpStringReturnType,
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpReplace
 				},
@@ -2763,9 +2757,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 3,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64, types.T_int64, types.T_varchar},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    regexpStringReturnType,
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpReplace
 				},
@@ -2778,15 +2770,13 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: REGEXP_SUBSTR,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    regexpTypeMatch(0, 1),
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    regexpStringReturnType,
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpSubstr
 				},
@@ -2795,9 +2785,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    regexpStringReturnType,
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpSubstr
 				},
@@ -2806,9 +2794,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    regexpStringReturnType,
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpSubstr
 				},
@@ -2816,9 +2802,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 3,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64, types.T_varchar},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    regexpStringReturnType,
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpSubstr
 				},

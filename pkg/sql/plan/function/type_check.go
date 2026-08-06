@@ -206,6 +206,39 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithCast(minIndex, castType)
 }
 
+// regexpTypeMatch keeps semantic binary operands visible to the executor while
+// retaining fixedTypeMatch's ordinary numeric and string coercions. The binder
+// has already rejected binary/text charset mismatches; a surviving binary
+// operand therefore selects MySQL's byte-oriented regexp path.
+func regexpTypeMatch(operandIndexes ...int) func([]overload, []types.Type) checkResult {
+	return func(overloads []overload, inputs []types.Type) checkResult {
+		result := fixedTypeMatch(overloads, inputs)
+		if result.status != succeedWithCast {
+			return result
+		}
+		for _, index := range operandIndexes {
+			if index >= len(inputs) {
+				continue
+			}
+			switch inputs[index].Oid {
+			case types.T_binary, types.T_varbinary, types.T_blob:
+				result.finalType[index] = inputs[index]
+			}
+		}
+		return result
+	}
+}
+
+func regexpStringReturnType(parameters []types.Type) types.Type {
+	if len(parameters) > 0 {
+		switch parameters[0].Oid {
+		case types.T_binary, types.T_varbinary, types.T_blob:
+			return types.T_varbinary.ToType()
+		}
+	}
+	return types.T_varchar.ToType()
+}
+
 // a fixed type match method without any type convert. (const null exception)
 // if all parameters were `constant null`, match the first one whose number of parameters was same.
 func fixedDirectlyTypeMatch(overload []overload, inputs []types.Type) checkResult {

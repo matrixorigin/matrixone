@@ -32,7 +32,6 @@ require (
 	github.com/containerd/cgroups/v3 v3.0.1
 	github.com/cpegeric/pdftotext-go v0.0.0-20241112123704-49cb86a3790e
 	github.com/detailyang/go-fallocate v0.0.0-20180908115635-432fa640bd2e
-	github.com/dlclark/regexp2 v1.10.0
 	github.com/docker/go-units v0.5.0
 	github.com/dolthub/maphash v0.1.0
 	github.com/dslipak/pdf v0.0.2
@@ -155,6 +154,7 @@ require (
 	github.com/coreos/go-systemd/v22 v22.3.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dgryski/go-metro v0.0.0-20250106013310-edb8663e5e33 // indirect
+	github.com/dlclark/regexp2 v1.10.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/dylibso/observe-sdk/go v0.0.0-20240819160327-2d926c5d788a // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect

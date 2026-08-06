@@ -77,6 +77,7 @@ func TestIssue25299RegexpRejectsBinaryCharset(t *testing.T) {
 		require.Equal(t, "Xbc", allBinaryReplace)
 
 		var instr int64
+		var matched bool
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"select regexp_instr('Cat', 'cat', 1, 1, 0, _binary 'i')").Scan(&instr))
 		require.Equal(t, int64(1), instr)
@@ -97,10 +98,78 @@ func TestIssue25299RegexpRejectsBinaryCharset(t *testing.T) {
 			require.Equal(t, code, mysqlErr.Number)
 			require.Equal(t, [5]byte{'H', 'Y', '0', '0', '0'}, mysqlErr.SQLState)
 		}
+		assertRegexpErrorWithState := func(query string, code uint16, state [5]byte) {
+			t.Helper()
+			_, execErr := conn.ExecContext(ctx, query)
+			require.Error(t, execErr)
+			var mysqlErr *mysqlDriver.MySQLError
+			require.True(t, errors.As(execErr, &mysqlErr), "expected MySQL protocol error, got %T: %v", execErr, execErr)
+			require.Equal(t, code, mysqlErr.Number)
+			require.Equal(t, state, mysqlErr.SQLState)
+		}
 		assertRegexpError("select regexp_replace('a', '(a)', '$2')", moerr.ER_REGEXP_INDEX_OUTOFBOUNDS_ERROR)
 		assertRegexpError("select regexp_replace('a', '(a)', '${1}')", moerr.ER_REGEXP_INVALID_CAPTURE_GROUP_NAME)
 		assertRegexpError("select regexp_instr(null, '', 1, 1, 0, 'c')", moerr.ER_REGEXP_ILLEGAL_ARGUMENT)
 		assertRegexpError("select regexp_replace(null, 'a', 'X', 1, 0, 'x')", moerr.ER_WRONG_ARGUMENTS)
+		assertRegexpError("select regexp_like('a', '*')", moerr.ER_REGEXP_RULE_SYNTAX)
+		assertRegexpError("select regexp_like('a', '(')", moerr.ER_REGEXP_MISMATCHED_PAREN)
+		assertRegexpError("select regexp_like('a', '[z-a]')", moerr.ER_REGEXP_INVALID_RANGE)
+		assertRegexpError("select regexp_instr(null, 'a', 1, 1, -1, 'c')", moerr.ER_WRONG_ARGUMENTS)
+		assertRegexpError("select regexp_replace(null, '', null)", moerr.ER_REGEXP_ILLEGAL_ARGUMENT)
+		assertRegexpErrorWithState(
+			"select regexp_substr(null, 'a', 0, 1, 'c')",
+			moerr.ER_WRONG_PARAMETERS_TO_NATIVE_FCT, [5]byte{'4', '2', '0', '0', '0'})
+		assertRegexpErrorWithState(
+			"select regexp_replace(null, 'a', 'X', 0, 0, 'c')",
+			moerr.ER_WRONG_PARAMETERS_TO_NATIVE_FCT, [5]byte{'4', '2', '0', '0', '0'})
+
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select regexp_instr(_binary 0xc3a961, _binary 0x61)").Scan(&instr))
+		require.Equal(t, int64(3), instr)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select regexp_like(_binary 0xff, _binary 0xfe)").Scan(&matched))
+		require.False(t, matched)
+		var binaryHex string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select hex(regexp_replace(_binary 0xc3a961, _binary 0x61, _binary 0x58))").Scan(&binaryHex))
+		require.Equal(t, "C3A958", binaryHex)
+
+		var operatorCR, likeCR bool
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select '\r' regexp '.', regexp_like('\r', '.')").Scan(&operatorCR, &likeCR))
+		require.False(t, operatorCR)
+		require.False(t, likeCR)
+		var digit, word, whitespace, alpha bool
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select regexp_like('١', '\\\\d'), "+
+				"regexp_like('中', '\\\\w'), "+
+				"regexp_like(convert(char(194,160) using utf8mb4), '\\\\s'), "+
+				"regexp_like('中', '[[:alpha:]]')").Scan(&digit, &word, &whitespace, &alpha))
+		require.True(t, digit)
+		require.True(t, word)
+		require.True(t, whitespace)
+		require.True(t, alpha)
+
+		var unixDot bool
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select regexp_like('\r', '.', 'u')").Scan(&unixDot))
+		require.True(t, unixDot)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select regexp_instr('a\r', '$', 1, 1, 0, 'c')").Scan(&instr))
+		require.Equal(t, int64(2), instr)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select regexp_instr('a\r\n', '$', 1, 1, 0, 'u')").Scan(&instr))
+		require.Equal(t, int64(3), instr)
+
+		var replacement string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select regexp_replace('ab', '\\\\bb', 'X', 2, 0, 'c')").Scan(&replacement))
+		require.Equal(t, "ab", replacement)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select regexp_replace('a', '(a)', convert(char(92,36,49) using utf8mb4))").Scan(&replacement))
+		require.Equal(t, "$1", replacement)
+		assertRegexpError(
+			"select regexp_like(concat(repeat('a', 30), 'b'), '(a|aa)+$')", moerr.ER_REGEXP_TIME_OUT)
 
 		_, err = conn.ExecContext(ctx, "set @regexp_binary_param = binary 'abc'")
 		require.NoError(t, err)
@@ -108,7 +177,6 @@ func TestIssue25299RegexpRejectsBinaryCharset(t *testing.T) {
 		require.NoError(t, err)
 		defer conn.ExecContext(context.Background(), "deallocate prepare regexp_binary_stmt")
 
-		var matched bool
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"execute regexp_binary_stmt using @regexp_binary_param").Scan(&matched))
 		require.True(t, matched)
@@ -131,6 +199,21 @@ func TestIssue25299RegexpRejectsBinaryCharset(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"execute regexp_binary_stmt using @regexp_text_param").Scan(&matched))
+		require.True(t, matched)
+
+		protocolStmt, err := conn.PrepareContext(ctx, "select regexp_like(?, 'a')")
+		require.NoError(t, err)
+		defer protocolStmt.Close()
+		require.NoError(t, protocolStmt.QueryRowContext(ctx, []byte("abc")).Scan(&matched))
+		require.True(t, matched)
+		var protocolNull sql.NullBool
+		require.NoError(t, protocolStmt.QueryRowContext(ctx, []byte(nil)).Scan(&protocolNull))
+		require.False(t, protocolNull.Valid)
+
+		protocolCastStmt, err := conn.PrepareContext(ctx, "select regexp_like(cast(? as char), 'a')")
+		require.NoError(t, err)
+		defer protocolCastStmt.Close()
+		require.NoError(t, protocolCastStmt.QueryRowContext(ctx, []byte("abc")).Scan(&matched))
 		require.True(t, matched)
 	})
 }

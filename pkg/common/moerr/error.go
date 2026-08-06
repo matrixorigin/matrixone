@@ -79,6 +79,23 @@ const (
 	ErrRegexpIndexOutOfBounds      uint16 = 20208
 	ErrRegexpInvalidCaptureGroup   uint16 = 20209
 	ErrRegexpTimeout               uint16 = 20210
+	ErrRegexpBufferOverflow        uint16 = 20211
+	ErrRegexpInternal              uint16 = 20212
+	ErrRegexpRuleSyntax            uint16 = 20213
+	ErrRegexpBadEscape             uint16 = 20214
+	ErrRegexpUnimplemented         uint16 = 20215
+	ErrRegexpMismatchedParen       uint16 = 20216
+	ErrRegexpBadInterval           uint16 = 20217
+	ErrRegexpMaxLessThanMin        uint16 = 20218
+	ErrRegexpInvalidBackRef        uint16 = 20219
+	ErrRegexpLookBehindLimit       uint16 = 20220
+	ErrRegexpMissingCloseBracket   uint16 = 20221
+	ErrRegexpInvalidRange          uint16 = 20222
+	ErrRegexpStackOverflow         uint16 = 20223
+	ErrRegexpPatternTooBig         uint16 = 20224
+	ErrWrongParametersToNativeFct  uint16 = 20225
+	ErrRegexpNumberTooBig          uint16 = 20226
+	ErrRegexpInvalidFlag           uint16 = 20227
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -413,6 +430,23 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrRegexpIndexOutOfBounds:      {ER_REGEXP_INDEX_OUTOFBOUNDS_ERROR, []string{MySQLDefaultSqlState}, "Index out of bounds in regular expression search."},
 	ErrRegexpInvalidCaptureGroup:   {ER_REGEXP_INVALID_CAPTURE_GROUP_NAME, []string{MySQLDefaultSqlState}, "A capture group has an invalid name."},
 	ErrRegexpTimeout:               {ER_REGEXP_TIME_OUT, []string{MySQLDefaultSqlState}, "Timeout exceeded in regular expression match."},
+	ErrRegexpBufferOverflow:        {ER_REGEXP_BUFFER_OVERFLOW, []string{MySQLDefaultSqlState}, "The result string is larger than the result buffer."},
+	ErrRegexpInternal:              {ER_REGEXP_INTERNAL_ERROR, []string{MySQLDefaultSqlState}, "Internal error in the regular expression library."},
+	ErrRegexpRuleSyntax:            {ER_REGEXP_RULE_SYNTAX, []string{MySQLDefaultSqlState}, "Syntax error in regular expression on line %d, character %d."},
+	ErrRegexpBadEscape:             {ER_REGEXP_BAD_ESCAPE_SEQUENCE, []string{MySQLDefaultSqlState}, "Unrecognized escape sequence in regular expression."},
+	ErrRegexpUnimplemented:         {ER_REGEXP_UNIMPLEMENTED, []string{MySQLDefaultSqlState}, "The regular expression contains a feature that is not implemented in this library version."},
+	ErrRegexpMismatchedParen:       {ER_REGEXP_MISMATCHED_PAREN, []string{MySQLDefaultSqlState}, "Mismatched parenthesis in regular expression."},
+	ErrRegexpBadInterval:           {ER_REGEXP_BAD_INTERVAL, []string{MySQLDefaultSqlState}, "Incorrect description of a {min,max} interval."},
+	ErrRegexpMaxLessThanMin:        {ER_REGEXP_MAX_LT_MIN, []string{MySQLDefaultSqlState}, "The maximum is less than the minimum in a {min,max} interval."},
+	ErrRegexpInvalidBackRef:        {ER_REGEXP_INVALID_BACK_REF, []string{MySQLDefaultSqlState}, "Invalid back-reference in regular expression."},
+	ErrRegexpLookBehindLimit:       {ER_REGEXP_LOOK_BEHIND_LIMIT, []string{MySQLDefaultSqlState}, "The look-behind assertion exceeds the limit in regular expression."},
+	ErrRegexpMissingCloseBracket:   {ER_REGEXP_MISSING_CLOSE_BRACKET, []string{MySQLDefaultSqlState}, "The regular expression contains an unclosed bracket expression."},
+	ErrRegexpInvalidRange:          {ER_REGEXP_INVALID_RANGE, []string{MySQLDefaultSqlState}, "The regular expression contains an [x-y] character range where x comes after y."},
+	ErrRegexpStackOverflow:         {ER_REGEXP_STACK_OVERFLOW, []string{MySQLDefaultSqlState}, "Overflow in the regular expression backtrack stack."},
+	ErrRegexpPatternTooBig:         {ER_REGEXP_PATTERN_TOO_BIG, []string{MySQLDefaultSqlState}, "The regular expression pattern exceeds limits on size or complexity."},
+	ErrWrongParametersToNativeFct:  {ER_WRONG_PARAMETERS_TO_NATIVE_FCT, []string{"42000"}, "Incorrect parameters in the call to native function '%s'"},
+	ErrRegexpNumberTooBig:          {ER_REGEX_NUMBER_TOO_BIG, []string{MySQLDefaultSqlState}, "Decimal number in regular expression is too large."},
+	ErrRegexpInvalidFlag:           {ER_REGEXP_INVALID_FLAG, []string{MySQLDefaultSqlState}, "Invalid match mode flag in regular expression."},
 
 	// Group 3: invalid input
 	ErrBadConfig:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
@@ -1007,6 +1041,14 @@ func NewRegexpInvalidCaptureGroup(ctx context.Context) *Error {
 
 func NewRegexpTimeout(ctx context.Context) *Error {
 	return newError(ctx, ErrRegexpTimeout)
+}
+
+func NewRegexpError(ctx context.Context, code uint16, args ...any) *Error {
+	return newError(ctx, code, args...)
+}
+
+func NewWrongParametersToNativeFct(ctx context.Context, function string) *Error {
+	return newError(ctx, ErrWrongParametersToNativeFct, function)
 }
 
 func NewOutOfRangef(ctx context.Context, typ string, format string, args ...any) *Error {

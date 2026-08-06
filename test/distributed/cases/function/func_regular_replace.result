@@ -90,5 +90,5 @@ CREATE TABLE t(str1 VARCHAR(20), str2 CHAR(20));
 INSERT INTO t VALUES ('W * P', 'W + Z - O'), ('have has having', 'do does doing');
 INSERT INTO t VALUES ('XV*XZ', 'PP-ZZ-DXA'), ('aa bbb cc ddd', 'k ii lll oooo');
 SELECT REGEXP_REPLACE(str1, '*', 'i'), REGEXP_REPLACE(str2,'hav','hiv') FROM t;
-invalid argument regexp_replace have invalid regexp pattern arg, bad value [*]
+Syntax error in regular expression on line 1, character 1.
 drop table t;
