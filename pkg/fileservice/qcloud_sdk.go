@@ -430,13 +430,10 @@ func (a *QCloudSDK) WriteMultipartParallel(
 			Expires: expiresHeader,
 		},
 	}
-	output, createErr := DoWithRetryContext(ctx, "cos initiate multipart upload", func() (*cos.InitiateMultipartUploadResult, error) {
-		// A raw EOF is intentionally not retryable here. COS may have created an
-		// UploadID before its response was lost, and init has no idempotency key
-		// with which to recover ownership of that server-side upload.
-		res, _, e := a.client.Object.InitiateMultipartUpload(ctx, key, initOpt)
-		return res, e
-	}, maxRetryAttemps, IsRetryableError)
+	// InitiateMultipartUpload creates server-side state and has no idempotency
+	// key. Any error without a usable UploadID is commit-ambiguous, so retrying
+	// could create an unreachable multipart upload that this caller cannot abort.
+	output, _, createErr := a.client.Object.InitiateMultipartUpload(ctx, key, initOpt)
 	if createErr != nil {
 		releasePartBuffer(firstPart)
 		return createErr

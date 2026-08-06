@@ -1049,43 +1049,62 @@ func TestCOSMultipartInitDoesNotRetryEOFBeforeRequest(t *testing.T) {
 	}
 }
 
-func TestCOSMultipartInitDoesNotRetryEOFAfterRequestCommitted(t *testing.T) {
-	var initCalls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || !r.URL.Query().Has("uploads") {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		uploadID := fmt.Sprintf("upload-%d", initCalls.Add(1))
-		w.Header().Set("Content-Type", "application/xml")
-		_, _ = fmt.Fprintf(w, `<InitiateMultipartUploadResult><UploadId>%s</UploadId></InitiateMultipartUploadResult>`, uploadID)
-	}))
-	defer server.Close()
-
-	baseClient := server.Client()
-	baseTransport := baseClient.Transport
-	if baseTransport == nil {
-		baseTransport = http.DefaultTransport
+func TestCOSMultipartInitDoesNotRetryAfterRequestCommitted(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "EOF", err: io.EOF},
+		{name: "unexpected EOF", err: io.ErrUnexpectedEOF},
+		{name: "timeout", err: timeoutError{}},
+		{name: "connection reset", err: errors.New("read: connection reset by peer")},
+		{name: "broken pipe", err: errors.New("write: broken pipe")},
+		{name: "server closed connection", err: errors.New("http: server closed idle connection")},
 	}
-	baseClient.Transport = &cosMultipartInitResponseLostTransport{base: baseTransport}
 
-	baseURL, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatalf("parse url: %v", err)
-	}
-	client := costypes.NewClient(&costypes.BaseURL{BucketURL: baseURL}, baseClient)
-	client.Conf.EnableCRC = false
-	client.Conf.RetryOpt.Count = 0
-	sdk := &QCloudSDK{name: "cos-init-response-lost-test", client: client}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var initCalls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || !r.URL.Query().Has("uploads") {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				uploadID := fmt.Sprintf("upload-%d", initCalls.Add(1))
+				w.Header().Set("Content-Type", "application/xml")
+				_, _ = fmt.Fprintf(w, `<InitiateMultipartUploadResult><UploadId>%s</UploadId></InitiateMultipartUploadResult>`, uploadID)
+			}))
+			defer server.Close()
 
-	data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
-	size := int64(len(data))
-	err = sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, nil)
-	if err == nil {
-		t.Fatalf("expected multipart-init error")
-	}
-	if initCalls.Load() != 1 {
-		t.Fatalf("response-lost EOF must not create additional uploads, got %d", initCalls.Load())
+			baseClient := server.Client()
+			baseTransport := baseClient.Transport
+			if baseTransport == nil {
+				baseTransport = http.DefaultTransport
+			}
+			baseClient.Transport = &cosMultipartInitResponseLostTransport{
+				base: baseTransport,
+				err:  test.err,
+			}
+
+			baseURL, err := url.Parse(server.URL)
+			if err != nil {
+				t.Fatalf("parse url: %v", err)
+			}
+			client := costypes.NewClient(&costypes.BaseURL{BucketURL: baseURL}, baseClient)
+			client.Conf.EnableCRC = false
+			client.Conf.RetryOpt.Count = 0
+			sdk := &QCloudSDK{name: "cos-init-response-lost-test", client: client}
+
+			data := bytes.Repeat([]byte("r"), int(minMultipartPartSize+1))
+			size := int64(len(data))
+			err = sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, nil)
+			if err == nil {
+				t.Fatalf("expected multipart-init error")
+			}
+			if initCalls.Load() != 1 {
+				t.Fatalf("response-lost error must not create additional uploads, got %d", initCalls.Load())
+			}
+		})
 	}
 }
 
@@ -1096,6 +1115,7 @@ type cosMultipartInitEOFTransport struct {
 
 type cosMultipartInitResponseLostTransport struct {
 	base http.RoundTripper
+	err  error
 }
 
 func (t *cosMultipartInitResponseLostTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -1106,7 +1126,7 @@ func (t *cosMultipartInitResponseLostTransport) RoundTrip(req *http.Request) (*h
 	if req.Method == http.MethodPost && req.URL.Query().Has("uploads") {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
-		return nil, io.EOF
+		return nil, t.err
 	}
 	return resp, nil
 }
