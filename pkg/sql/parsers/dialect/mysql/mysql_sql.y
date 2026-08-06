@@ -2990,6 +2990,7 @@ var_assignment:
 |   NAMES charset_name
     {
         $$ = &tree.VarAssignmentExpr{
+			SetNames: true,
             Name: strings.ToLower($1),
             Value: tree.NewNumVal($2, $2, false, tree.P_char),
         }
@@ -2997,6 +2998,7 @@ var_assignment:
 |   NAMES charset_name COLLATE DEFAULT
     {
         $$ = &tree.VarAssignmentExpr{
+			SetNames: true,
             Name: strings.ToLower($1),
             Value: tree.NewNumVal($2, $2, false, tree.P_char),
         }
@@ -3004,6 +3006,7 @@ var_assignment:
 |   NAMES charset_name COLLATE name_string
     {
         $$ = &tree.VarAssignmentExpr{
+			SetNames: true,
             Name: strings.ToLower($1),
             Value: tree.NewNumVal($2, $2, false, tree.P_char),
             Reserved: tree.NewNumVal($4, $4, false, tree.P_char),
@@ -3012,6 +3015,7 @@ var_assignment:
 |   NAMES DEFAULT
     {
         $$ = &tree.VarAssignmentExpr{
+			SetNames: true,
             Name: strings.ToLower($1),
             Value: &tree.DefaultVal{},
         }

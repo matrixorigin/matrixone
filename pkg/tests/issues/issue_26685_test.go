@@ -138,6 +138,23 @@ func TestIssue26685PreparedMultiSet(t *testing.T) {
 			require.Equal(t, "88", a)
 			require.Equal(t, "unchanged", b)
 
+			reservedFailureSQL := fmt.Sprintf(
+				"prepare issue26685_text_reserved_error from 'set @names = ?, @target_b = (select v from `%s`.multi_set_values)'",
+				dbName,
+			)
+			mustExec(t, ctx, conn, reservedFailureSQL)
+			defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare issue26685_text_reserved_error") }()
+			mustExec(t, ctx, conn, "set @names = 'names-before', @character_set_client = 'client-before', @character_set_connection = 'connection-before', @character_set_results = 'results-before', @reserved_input = 'mutated'")
+			_, err = conn.ExecContext(ctx, "execute issue26685_text_reserved_error using @reserved_input")
+			require.ErrorContains(t, err, "Subquery returns more than 1 row")
+			var names string
+			require.NoError(t, conn.QueryRowContext(ctx, "select cast(@names as char)").Scan(&names))
+			require.Equal(t, "names-before", names)
+			client, connection, results := queryIssue26685CharsetVars(t, ctx, conn)
+			require.Equal(t, "client-before", client)
+			require.Equal(t, "connection-before", connection)
+			require.Equal(t, "results-before", results)
+
 			mustExec(t, ctx, conn, "prepare issue26685_text_system from 'set @target_a = ?, transaction_isolation = ?'")
 			defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare issue26685_text_system") }()
 			mustExec(t, ctx, conn, "set @input_a = 7, @input_b = 'INVALID', @target_a = 88")
@@ -220,6 +237,22 @@ func TestIssue26685PreparedMultiSet(t *testing.T) {
 			require.Equal(t, "88", a)
 			require.Equal(t, "unchanged", b)
 
+			reservedFailureSQL := fmt.Sprintf(
+				"set @names = ?, @target_b = (select v from `%s`.multi_set_values)", dbName)
+			reservedFailureStmt, err := conn.PrepareContext(ctx, reservedFailureSQL)
+			require.NoError(t, err)
+			defer reservedFailureStmt.Close()
+			mustExec(t, ctx, conn, "set @names = 'binary-names-before', @character_set_client = 'binary-client-before', @character_set_connection = 'binary-connection-before', @character_set_results = 'binary-results-before'")
+			_, err = reservedFailureStmt.ExecContext(ctx, "binary-mutated")
+			require.ErrorContains(t, err, "Subquery returns more than 1 row")
+			var names string
+			require.NoError(t, conn.QueryRowContext(ctx, "select cast(@names as char)").Scan(&names))
+			require.Equal(t, "binary-names-before", names)
+			client, connection, results := queryIssue26685CharsetVars(t, ctx, conn)
+			require.Equal(t, "binary-client-before", client)
+			require.Equal(t, "binary-connection-before", connection)
+			require.Equal(t, "binary-results-before", results)
+
 			mixedStmt, err := conn.PrepareContext(ctx,
 				"set @target_a = ?, transaction_isolation = ?")
 			require.NoError(t, err)
@@ -265,4 +298,13 @@ func queryIssue26685Isolation(t *testing.T, ctx context.Context, conn *sql.Conn)
 	var isolation string
 	require.NoError(t, conn.QueryRowContext(ctx, "select @@transaction_isolation").Scan(&isolation))
 	return isolation
+}
+
+func queryIssue26685CharsetVars(t *testing.T, ctx context.Context, conn *sql.Conn) (string, string, string) {
+	t.Helper()
+	var client, connection, results string
+	require.NoError(t, conn.QueryRowContext(ctx,
+		"select cast(@character_set_client as char), cast(@character_set_connection as char), cast(@character_set_results as char)").Scan(
+		&client, &connection, &results))
+	return client, connection, results
 }

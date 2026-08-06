@@ -589,6 +589,10 @@ prepare prepared_set_error from 'set @prepared_a = ?, @prepared_b = (select v fr
 set @prepared_a = 88, @prepared_b = 'unchanged';
 execute prepared_set_error using @prepared_input_a;
 select @prepared_a, @prepared_b;
+prepare prepared_set_reserved_error from 'set @names = ?, @prepared_reserved_failure = (select v from prepared_set_values)';
+set @names = 'names-before', @character_set_client = 'client-before', @character_set_connection = 'connection-before', @character_set_results = 'results-before', @prepared_reserved_input = 'mutated';
+execute prepared_set_reserved_error using @prepared_reserved_input;
+select @names, @character_set_client, @character_set_connection, @character_set_results;
 prepare prepared_set_system_error from 'set @prepared_a = ?, transaction_isolation = ?';
 set @prepared_input_a = 7, @prepared_input_b = 'INVALID', @prepared_a = 88, @prepared_isolation_before = @@transaction_isolation;
 execute prepared_set_system_error using @prepared_input_a, @prepared_input_b;
@@ -598,6 +602,7 @@ deallocate prepare prepared_set_visibility;
 deallocate prepare prepared_set_self_ref;
 deallocate prepare prepared_set_self_ref_error;
 deallocate prepare prepared_set_error;
+deallocate prepare prepared_set_reserved_error;
 deallocate prepare prepared_set_system_error;
 drop table prepared_set_values;
 
