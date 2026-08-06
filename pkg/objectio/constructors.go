@@ -146,6 +146,31 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 	}
 }
 
+// DecompressColumnExtent materializes one serialized object column from its
+// physical extent encoding. Raw object consumers must use this entry point so
+// Lz4Chunked columns are not mistaken for legacy single-frame LZ4 data.
+func DecompressColumnExtent(
+	ctx context.Context,
+	data []byte,
+	ext Extent,
+	allocator fileservice.CacheDataAllocator,
+) (fscache.Data, error) {
+	if uint64(len(data)) != uint64(ext.Length()) {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"object column extent length %d does not match data length %d",
+			ext.Length(), len(data),
+		)
+	}
+	switch ext.Alg() {
+	case compress.None, compress.Lz4, compress.Lz4Chunked:
+	default:
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"unsupported object column compression algorithm %d", ext.Alg(),
+		)
+	}
+	return constructorFactory(int64(ext.OriginSize()), ext.Alg())(ctx, nil, data, allocator)
+}
+
 // columnCacheConstructorFactory validates V2 column data once, after
 // decompression and before it can enter the memory cache. Varlen cache hits can
 // then bind an isolated snapshot without repeating linear value scans. Fixed

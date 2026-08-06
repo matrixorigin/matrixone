@@ -162,10 +162,11 @@ func TestPartitionStateRangeHandlerPropagatesPKFilter(t *testing.T) {
 	require.NoError(t, handle.Close())
 }
 
-func TestObjectPrefetchWidthHonorsOptionalByteBudget(t *testing.T) {
-	require.Equal(t, LoadParallism, objectPrefetchWidth(0))
-	require.Equal(t, LoadParallism, objectPrefetchWidth(-1))
-	require.Equal(t, 1, objectPrefetchWidth(1))
+func TestObjectPrefetchWidthHonorsOptionalRangeBudget(t *testing.T) {
+	require.Equal(t, LoadParallism, objectPrefetchWidth(0, 0))
+	require.Equal(t, LoadParallism, objectPrefetchWidth(-1, -1))
+	require.Equal(t, 1, objectPrefetchWidth(1, 0))
+	require.Equal(t, 1, objectPrefetchWidth(0, 1))
 }
 
 func TestPersistedObjectPrefetchSlicesToProgressWithinBudget(t *testing.T) {
@@ -215,6 +216,58 @@ func TestPersistedObjectPrefetchSlicesToProgressWithinBudget(t *testing.T) {
 	require.Equal(t, 3, aWindows)
 	require.Equal(t, baseline, mp.CurrNB())
 	spillTracker.requireReleased(t, true)
+}
+
+func TestPersistedObjectPrefetchHonorsRowOnlyLimit(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const maxRows = 8
+	obj, fs := writeTestObjectWithCommitTS(t, mp, []types.TS{
+		types.BuildTS(10, 0), types.BuildTS(11, 0),
+		types.BuildTS(12, 0), types.BuildTS(13, 0),
+		types.BuildTS(14, 0), types.BuildTS(15, 0),
+		types.BuildTS(16, 0), types.BuildTS(17, 0),
+	})
+	baseline := mp.CurrNB()
+	scheduler := tasks.NewParallelJobScheduler(2)
+	defer scheduler.Stop()
+	changes := &ChangeHandler{scheduler: scheduler, maxInMemoryRows: maxRows}
+	base := &baseHandle{changesHandle: changes}
+
+	drain := func(
+		prefetch func(context.Context) error,
+		isEnd func() bool,
+		cache *[]*batch.Batch,
+		clearMetadata func(),
+	) {
+		readRows, windows := 0, 0
+		for !isEnd() {
+			require.NoError(t, prefetch(context.Background()))
+			require.Len(t, *cache, 1, "a row-only limit must disable parallel block prefetch")
+			for _, bat := range *cache {
+				require.LessOrEqual(t, bat.RowCount(), maxRows/4)
+				readRows += bat.RowCount()
+				windows++
+				bat.Clean(mp)
+			}
+			*cache = nil
+			clearMetadata()
+		}
+		require.Equal(t, 8, readRows)
+		require.Equal(t, 4, windows)
+		require.Equal(t, baseline, mp.CurrNB())
+	}
+
+	cn := NewCNObjectHandle(false, []*objectio.ObjectEntry{obj}, fs, base, mp)
+	drain(cn.prefetch, cn.isEnd, &cn.cache, func() {
+		cn.prepared, cn.blks, cn.TSs = nil, nil, nil
+	})
+
+	aobj := NewAObjectHandle(context.Background(), base, false,
+		types.BuildTS(1, 0), types.BuildTS(20, 0), []*objectio.ObjectEntry{obj}, fs, mp)
+	drain(aobj.prefetch, aobj.isEnd, &aobj.cache, func() {
+		aobj.specialLayouts, aobj.blks = nil, nil
+	})
 }
 
 func TestPersistedWideObjectWindowsBoundAAndCNOutput(t *testing.T) {

@@ -57,8 +57,8 @@ const (
 	JTCDCLoad tasks.JobType = 300 + iota
 )
 
-func objectPrefetchWidth(maxBytes int) int {
-	if maxBytes > 0 {
+func objectPrefetchWidth(maxRows, maxBytes int) int {
+	if maxRows > 0 || maxBytes > 0 {
 		return 1
 	}
 	return LoadParallism
@@ -1296,6 +1296,7 @@ type CNObjectHandle struct {
 	prepared []bool
 	blks     []types.Blockid
 	TSs      []types.TS
+	maxRows  int
 	maxBytes int
 }
 
@@ -1308,6 +1309,7 @@ func NewCNObjectHandle(isTombstone bool, objects []*objectio.ObjectEntry, fs fil
 		mp:          mp,
 		cache:       make([]*batch.Batch, 0),
 		blks:        make([]types.Blockid, 0),
+		maxRows:     baseHandle.changesHandle.maxInMemoryRows,
 		maxBytes:    baseHandle.changesHandle.maxInMemoryBytes,
 	}
 }
@@ -1315,7 +1317,8 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 	t0 := time.Now()
 	jobs := make([]*tasks.Job, 0)
 	blks := make([]types.Blockid, 0)
-	prefetchWidth := objectPrefetchWidth(h.maxBytes)
+	prefetchWidth := objectPrefetchWidth(h.maxRows, h.maxBytes)
+	bounded := h.maxRows > 0 || h.maxBytes > 0
 	for i := 0; i < prefetchWidth; i++ {
 		if h.objectOffsetCursor >= len(h.objects) {
 			break
@@ -1324,18 +1327,18 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		stats := entry.ObjectStats
 		blk := uint16(h.blkOffsetCursor)
 		rowOffset := 0
-		if h.maxBytes > 0 {
+		if bounded {
 			rowOffset = h.blockRowOffset
 		}
 		h.TSs = append(h.TSs, entry.CreateTime)
 		blks = append(blks, objectio.NewBlockidWithObjectID(stats.ObjectName().ObjectId(), blk))
 		job := prefetchObjects(
 			ctx, uint32(h.blkOffsetCursor), rowOffset, h.fs, &stats,
-			h.base.changesHandle.scheduler, h.maxBytes,
+			h.base.changesHandle.scheduler, h.maxRows, h.maxBytes,
 			h.base.changesHandle.spillConfig, h.mp,
 		)
 		jobs = append(jobs, job)
-		if h.maxBytes <= 0 {
+		if !bounded {
 			h.advanceBlock(stats.BlkCnt())
 		}
 	}
@@ -1355,7 +1358,7 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		h.cache = append(h.cache, window.batch)
 		h.prepared = append(h.prepared, false)
 		h.blks = append(h.blks, blks[i])
-		if h.maxBytes > 0 {
+		if bounded {
 			h.blockRowOffset += window.rows
 			if h.blockRowOffset >= window.totalRows {
 				h.blockRowOffset = 0
@@ -1511,6 +1514,7 @@ type AObjectHandle struct {
 	// blockPlans caches block-level commit-ts overlap decisions for objects.
 	// It is only populated when checkpoint-range mode enables block pruning.
 	blockPlans     map[string]*aobjBlockPlan
+	maxRows        int
 	maxBytes       int
 	pendingObject  *objectio.ObjectEntry
 	pendingBlock   uint16
@@ -1546,6 +1550,7 @@ func NewAObjectHandle(ctx context.Context, p *baseHandle, isTombstone bool, star
 		cache:       make([]*batch.Batch, 0),
 		blks:        make([]types.Blockid, 0),
 		blockPlans:  make(map[string]*aobjBlockPlan),
+		maxRows:     p.changesHandle.maxInMemoryRows,
 		maxBytes:    p.changesHandle.maxInMemoryBytes,
 	}
 	return handle
@@ -1811,11 +1816,12 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 	t0 := time.Now()
 	jobs := make([]*tasks.Job, 0)
 	blks := make([]types.Blockid, 0)
-	prefetchWidth := objectPrefetchWidth(h.maxBytes)
+	prefetchWidth := objectPrefetchWidth(h.maxRows, h.maxBytes)
+	bounded := h.maxRows > 0 || h.maxBytes > 0
 	for i := 0; i < prefetchWidth; i++ {
 		var obj *objectio.ObjectEntry
 		var blk uint16
-		if h.maxBytes > 0 && h.pendingObject != nil {
+		if bounded && h.pendingObject != nil {
 			obj, blk = h.pendingObject, h.pendingBlock
 		} else {
 			var ok bool
@@ -1829,14 +1835,14 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 			if !ok {
 				break
 			}
-			if h.maxBytes > 0 {
+			if bounded {
 				h.pendingObject, h.pendingBlock = obj, blk
 			}
 		}
 		stats := obj.ObjectStats
 		job := prefetchObjects(
 			ctx, uint32(blk), h.blockRowOffset, h.fs, &stats,
-			h.p.changesHandle.scheduler, h.maxBytes,
+			h.p.changesHandle.scheduler, h.maxRows, h.maxBytes,
 			h.p.changesHandle.spillConfig, h.mp,
 		)
 		jobs = append(jobs, job)
@@ -1858,7 +1864,7 @@ func (h *AObjectHandle) prefetch(ctx context.Context) (err error) {
 		h.cache = append(h.cache, window.batch)
 		h.specialLayouts = append(h.specialLayouts, window.specialLayout)
 		h.blks = append(h.blks, blks[i])
-		if h.maxBytes > 0 {
+		if bounded {
 			h.blockRowOffset += window.rows
 			if h.blockRowOffset >= window.totalRows {
 				h.blockRowOffset = 0
@@ -3964,6 +3970,7 @@ func prefetchObjects(
 	fs fileservice.FileService,
 	stats *objectio.ObjectStats,
 	scheduler tasks.JobScheduler,
+	maxRows int,
 	maxBytes int,
 	spillConfig engine.ChangeRangeSpillConfig,
 	mp *mpool.MPool,
@@ -3974,7 +3981,7 @@ func prefetchObjects(
 		JTCDCLoad,
 		func(ctx context.Context) (res *tasks.JobResult) {
 			loc := stats.BlockLocation(uint16(blockID), 8192)
-			if maxBytes > 0 {
+			if maxRows > 0 || maxBytes > 0 {
 				meta, err := objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
 				if err != nil {
 					return &tasks.JobResult{Err: err}
@@ -3987,9 +3994,15 @@ func prefetchObjects(
 				}
 				totalRows := int(blockMeta.GetRows())
 				windowRows := totalRows - rowOffset
+				if maxRows > 0 {
+					windowRows = min(windowRows, max(1, maxRows/4))
+				}
+				windowByteBudget := 0
 				if decodedBytes > 0 && totalRows > 0 {
-					windowBudget := uint64(max(1, maxBytes/4))
-					windowRows = min(windowRows, max(1, int(windowBudget*uint64(totalRows)/decodedBytes)))
+					if maxBytes > 0 {
+						windowByteBudget = max(1, maxBytes/4)
+						windowRows = min(windowRows, max(1, int(uint64(windowByteBudget)*uint64(totalRows)/decodedBytes)))
+					}
 				}
 				cols := make([]uint16, blockMeta.GetMetaColumnCount())
 				for i := range cols {
@@ -3998,7 +4011,7 @@ func prefetchObjects(
 				bat, err := objectio.ReadOneBlockAllColumnsWindow(
 					ctx, &dataMeta, loc.Name().String(), blockID, cols,
 					rowOffset, windowRows, fileservice.SkipAllCache, fs, mp,
-					max(1, maxBytes/4),
+					windowByteBudget,
 					func(ctx context.Context) (objectio.ColumnWindowSpill, error) {
 						return newLegacyColumnSpill(ctx, spillConfig)
 					},

@@ -16,18 +16,101 @@ package publication
 
 import (
 	"context"
+	"io"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestConvertObjectToBatchSupportsChunkedColumnExtents(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	fs, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
+	)
+	require.NoError(t, err)
+
+	writer := ioutil.ConstructWriter(
+		0,
+		[]uint16{0, objectio.SEQNUM_ROWID, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT},
+		-1, false, false, fs,
+	)
+	writer.SetAppendable()
+	source := batch.NewWithSize(4)
+	source.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	source.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
+	source.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	source.Vecs[3] = vector.NewVec(types.T_bool.ToType())
+	payload := []byte(strings.Repeat("p", 3<<20))
+	var blk types.Blockid
+	for row := 0; row < 3; row++ {
+		require.NoError(t, vector.AppendBytes(source.Vecs[0], payload, false, mp))
+		require.NoError(t, vector.AppendFixed(
+			source.Vecs[1], types.NewRowid(&blk, uint32(row)), false, mp,
+		))
+		require.NoError(t, vector.AppendFixed(
+			source.Vecs[2], types.BuildTS(100, uint32(row)), false, mp,
+		))
+		require.NoError(t, vector.AppendFixed(source.Vecs[3], row == 1, false, mp))
+	}
+	source.SetRowCount(3)
+	_, err = writer.WriteBatch(source)
+	require.NoError(t, err)
+	blocks, _, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	source.Clean(mp)
+
+	stats := writer.Stats()
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(&stats, uint32(len(blocks))))
+	metaLoc := stats.ObjectLocation()
+	meta, err := objectio.FastLoadObjectMeta(ctx, &metaLoc, false, fs)
+	require.NoError(t, err)
+	require.Equal(t, uint8(compress.Lz4Chunked), meta.MustGetMeta(objectio.SchemaData).
+		GetBlockMeta(0).ColumnMeta(0).Location().Alg())
+
+	var reader io.ReadCloser
+	err = fs.Read(ctx, &fileservice.IOVector{
+		FilePath: stats.ObjectName().String(),
+		Entries: []fileservice.IOEntry{{
+			Offset: 0, Size: -1, ReadCloserForRead: &reader,
+		}},
+		Policy: fileservice.SkipAllCache,
+	})
+	require.NoError(t, err)
+	objectContent, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+
+	converted, err := convertObjectToBatch(
+		ctx, objectContent, &stats, types.BuildTS(200, 0), fs, mp,
+	)
+	require.NoError(t, err)
+	defer converted.Close()
+	require.Equal(t, 3, converted.Length())
+	require.Len(t, converted.GetVectorByName("tmp_0").ShallowGet(0).([]byte), len(payload))
+
+	filtered, offsets, err := filterBatchBySnapshotTS(
+		ctx, converted, types.BuildTS(200, 0), mp,
+	)
+	require.NoError(t, err)
+	require.Same(t, converted, filtered)
+	require.Equal(t, []uint32{0, 2}, offsets)
+	require.Equal(t, 2, filtered.Length())
+}
 
 // ============================================================
 // Tests for rewriteTombstoneRowidsBatch (CN batch version)
