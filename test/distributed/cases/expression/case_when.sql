@@ -416,3 +416,116 @@ desc v_case_binary_null;
 drop view v_case_binary_null;
 
 drop table t_flow_metadata;
+
+-- @case
+-- @desc:test conditional decimal literal and temporal string view metadata, including nested views
+-- @label:bvt
+drop table if exists t_conditional_literal_temporal;
+create table t_conditional_literal_temporal (
+    id int primary key,
+    d decimal(8,2),
+    dte date,
+    dt datetime,
+    ts timestamp(6)
+);
+insert into t_conditional_literal_temporal values
+    (1, 12.50, '2024-01-01', '2024-01-01 01:02:03', '2024-01-01 01:02:03.123456');
+
+drop view if exists v_conditional_literal_temporal;
+create view v_conditional_literal_temporal as
+select case when id = 1 then d else 0 end as d_case_literal,
+       coalesce(dte, '2024-01-01') as dte_coalesce,
+       coalesce(dt, '2024-01-01') as dt_coalesce,
+       coalesce(ts, '2024-01-01') as ts_coalesce
+from t_conditional_literal_temporal;
+desc v_conditional_literal_temporal;
+
+drop view if exists v_conditional_literal_temporal_nested;
+create view v_conditional_literal_temporal_nested as
+select d_case_literal, dte_coalesce, dt_coalesce, ts_coalesce
+from v_conditional_literal_temporal;
+desc v_conditional_literal_temporal_nested;
+
+drop view v_conditional_literal_temporal_nested;
+drop view v_conditional_literal_temporal;
+drop table t_conditional_literal_temporal;
+
+-- @case
+-- @desc:test conditional string metadata does not narrow unknown TEXT/BLOB/FLOAT/DOUBLE branches
+-- @label:bvt
+drop table if exists t_conditional_unknown_width;
+create table t_conditional_unknown_width (
+    s text,
+    b blob,
+    f float,
+    d double
+);
+insert into t_conditional_unknown_width values ('abcdef', 'abcdef', 123.456, 789.012);
+
+drop view if exists v_conditional_unknown_width;
+create view v_conditional_unknown_width as
+select if(true, s, 3) as text_result,
+       if(true, b, 3) as blob_result,
+       if(false, 'x', f) as float_result,
+       if(false, 'x', cast(d as double)) as double_result
+from t_conditional_unknown_width;
+desc v_conditional_unknown_width;
+select length(if(true, s, 3)) as text_length,
+       hex(if(true, b, 3)) as blob_hex,
+       if(false, 'x', f) <> 'x' as float_value_preserved,
+       if(false, 'x', cast(d as double)) <> 'x' as double_value_preserved
+from t_conditional_unknown_width;
+
+drop view v_conditional_unknown_width;
+drop table t_conditional_unknown_width;
+
+-- @case
+-- @desc:test composed conditional VARCHAR bounds and UTF-8 values
+-- @label:bvt
+drop table if exists t_conditional_composed_width;
+create table t_conditional_composed_width (d double, s varchar(2));
+insert into t_conditional_composed_width values (123.456, '你好');
+select length(case when false then 'x' when true then 1234567890123 else cast('2024-01-01' as date) end) as case_known_length,
+       length(coalesce(cast(null as char(1)), 1234567890123, cast('2024-01-01' as date))) as coalesce_known_length,
+       case when false then 'x' when true then d else cast('2024-01-01' as date) end <> 'x' as case_unknown_value_preserved,
+       coalesce(cast(null as char(1)), d, cast('2024-01-01' as date)) <> 'x' as coalesce_unknown_value_preserved
+from t_conditional_composed_width;
+select if(true, s, 12) as unicode_if,
+       case when true then s else 12 end as unicode_case,
+       coalesce(s, 12) as unicode_coalesce
+from t_conditional_composed_width;
+drop table t_conditional_composed_width;
+
+-- @case
+-- @desc:test conditional VARCHAR metadata covers TIME and preserves the selected TIME value
+-- @label:bvt
+drop table if exists t_conditional_time_varchar;
+create table t_conditional_time_varchar (s varchar(1), i int, tm time(6));
+insert into t_conditional_time_varchar values (null, null, '12:34:56.123456');
+
+drop view if exists v_conditional_time_varchar;
+create view v_conditional_time_varchar as
+select case when false then 'x' when false then 1 else tm end as case_time,
+       coalesce(s, i, tm) as coalesce_time
+from t_conditional_time_varchar;
+desc v_conditional_time_varchar;
+select * from v_conditional_time_varchar;
+drop view v_conditional_time_varchar;
+drop table t_conditional_time_varchar;
+
+-- @case
+-- @desc:test typed NULL participates in conditional VARCHAR metadata while direct-NULL IF retains numeric metadata
+-- @label:bvt
+drop view if exists v_conditional_typed_null;
+create view v_conditional_typed_null as
+select coalesce(cast(null as char(10)), 'x', 1) as coalesce_typed_null,
+       case when false then cast(null as char(10)) when true then 'x' else 1 end as case_typed_null,
+       if(true, cast(null as char(10)), 1) as if_typed_null,
+       coalesce(null, 'x', 1) as coalesce_plain_null,
+       case when false then null when true then 'x' else 1 end as case_plain_null,
+       if(true, null, 1) as if_plain_null;
+select column_name, column_type
+from information_schema.columns
+where table_schema = database() and table_name = 'v_conditional_typed_null'
+order by ordinal_position;
+drop view v_conditional_typed_null;
