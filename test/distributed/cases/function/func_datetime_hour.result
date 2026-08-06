@@ -293,6 +293,39 @@ null  ¦  null  ¦  null  𝄀
 0  ¦  0  ¦  0  𝄀
 0  ¦  0  ¦  0
 DROP TABLE time_extract_ambiguous_prefix_ownership;
+DROP TABLE IF EXISTS time_extract_one_digit_year_clock_width;
+CREATE TABLE time_extract_one_digit_year_clock_width (v VARCHAR(32), c CHAR(32), t TEXT);
+INSERT INTO time_extract_one_digit_year_clock_width VALUES
+('1-1-1 1:2:3', '1-1-1 1:2:3', '1-1-1 1:2:3'),
+('1-1-1 01:2:3', '1-1-1 01:2:3', '1-1-1 01:2:3'),
+('1-1-1 1:02:3', '1-1-1 1:02:3', '1-1-1 1:02:3'),
+('1-1-1 1:2:03', '1-1-1 1:2:03', '1-1-1 1:2:03'),
+('1-1-1 1:02:03', '1-1-1 1:02:03', '1-1-1 1:02:03'),
+('1-1-1 01:2:03', '1-1-1 01:2:03', '1-1-1 01:2:03'),
+('1-1-1 01:02:3', '1-1-1 01:02:3', '1-1-1 01:02:3'),
+('1-1-1 01:02:03', '1-1-1 01:02:03', '1-1-1 01:02:03'),
+('0-1-1 1:2:3', '0-1-1 1:2:3', '0-1-1 1:2:3'),
+('0-1-1 1:02:03', '0-1-1 1:02:03', '0-1-1 1:02:03'),
+('0-1-1 1:2:03', '0-1-1 1:2:03', '0-1-1 1:2:03'),
+('0-1-1 12:34:56', '0-1-1 12:34:56', '0-1-1 12:34:56');
+SELECT concat(HOUR(v), '/', MINUTE(v), '/', SECOND(v)) AS v_clock,
+concat(HOUR(c), '/', MINUTE(c), '/', SECOND(c)) AS c_clock,
+concat(HOUR(t), '/', MINUTE(t), '/', SECOND(t)) AS t_clock
+FROM time_extract_one_digit_year_clock_width;
+➤ v_clock[12,-1,0]  ¦  c_clock[12,-1,0]  ¦  t_clock[12,-1,0]  𝄀
+0/0/1  ¦  0/0/1  ¦  0/0/1  𝄀
+1/2/3  ¦  1/2/3  ¦  1/2/3  𝄀
+1/2/3  ¦  1/2/3  ¦  1/2/3  𝄀
+1/2/3  ¦  1/2/3  ¦  1/2/3  𝄀
+1/2/3  ¦  1/2/3  ¦  1/2/3  𝄀
+1/2/3  ¦  1/2/3  ¦  1/2/3  𝄀
+1/2/3  ¦  1/2/3  ¦  1/2/3  𝄀
+1/2/3  ¦  1/2/3  ¦  1/2/3  𝄀
+0/0/0  ¦  0/0/0  ¦  0/0/0  𝄀
+1/2/3  ¦  1/2/3  ¦  1/2/3  𝄀
+1/2/3  ¦  1/2/3  ¦  1/2/3  𝄀
+12/34/56  ¦  12/34/56  ¦  12/34/56
+DROP TABLE time_extract_one_digit_year_clock_width;
 SELECT HOUR('123:34:56 78') AS unpadded_123_hour,
 HOUR('123:34:56 78 ') AS padded_123_hour,
 HOUR('\t123:34:56 78\t') AS tab_padded_123_hour,

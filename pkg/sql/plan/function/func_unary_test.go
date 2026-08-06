@@ -4551,13 +4551,13 @@ func TestStringTimeExtractOneDigitYearAndWhitespaceOwnership(t *testing.T) {
 		t.Run(typ.String(), func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			input := NewFunctionTestInput(typ.ToType(), []string{
-				// One-digit years are DATETIME only with a complete two-digit
-				// clock. Every one-/two-digit clock-width boundary otherwise
-				// retains compact-TIME ownership.
+				// MySQL 8.4.10: for one-digit years only all-one-digit H:M:S
+				// remains compact TIME. Any wider clock field transfers ownership
+				// to DATETIME.
 				"1-1-1 1:2:3", "1-1-1 01:2:3", "1-1-1 1:02:3", "1-1-1 1:2:03",
 				"1-1-1 01:02:3", "1-1-1 01:2:03", "1-1-1 1:02:03", "1-1-1 01:02:03",
-				// The same width contract applies to the zero-year spelling.
-				"0-1-1 1:2:3", "0-1-1 12:34:56",
+				// The same variable hour/minute rule applies to zero year.
+				"0-1-1 1:2:3", "0-1-1 12:34:56", "0-1-1 1:02:03", "0-1-1 1:2:03",
 				// Trailing whitespace is part of the ordered grammar. It must not
 				// be removed before the date-shaped TIME prefix is classified.
 				"123:34:56 78", "123:34:56 78 ", "\t123:34:56 78\t",
@@ -4576,22 +4576,22 @@ func TestStringTimeExtractOneDigitYearAndWhitespaceOwnership(t *testing.T) {
 					name: "hour",
 					fn:   StringToHour,
 					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-						[]uint32{0, 0, 0, 0, 0, 0, 0, 1, 0, 12, 0, 123, 123, 0, 838, 838, 12},
-						[]bool{false, false, false, false, false, false, false, false, false, false, true, false, false, true, false, false, false}),
+						[]uint32{0, 1, 1, 1, 1, 1, 1, 1, 0, 12, 1, 1, 0, 123, 123, 0, 838, 838, 12},
+						[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, true, false, false, false}),
 				},
 				{
 					name: "minute",
 					fn:   StringToMinute,
 					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{0, 0, 0, 0, 0, 0, 0, 2, 0, 34, 0, 34, 34, 0, 59, 59, 34},
-						[]bool{false, false, false, false, false, false, false, false, false, false, true, false, false, true, false, false, false}),
+						[]uint8{0, 2, 2, 2, 2, 2, 2, 2, 0, 34, 2, 2, 0, 34, 34, 0, 59, 59, 34},
+						[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, true, false, false, false}),
 				},
 				{
 					name: "second",
 					fn:   StringToSecond,
 					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{1, 1, 1, 1, 1, 1, 1, 3, 0, 56, 0, 56, 56, 0, 59, 59, 56},
-						[]bool{false, false, false, false, false, false, false, false, false, false, true, false, false, true, false, false, false}),
+						[]uint8{1, 3, 3, 3, 3, 3, 3, 3, 0, 56, 3, 3, 0, 56, 56, 0, 59, 59, 56},
+						[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, true, false, false, false}),
 				},
 			} {
 				t.Run(tc.name, func(t *testing.T) {

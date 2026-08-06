@@ -4896,9 +4896,10 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 	if !ok || yearDigits > 4 || pos >= len(str) || !mysqlDatetimePunctuationForExtract(str[pos]) {
 		return timeExtractParseResult{}
 	}
-	// A one-digit year shares a prefix with compact TIME. It belongs to
-	// separated DATETIME only when the complete following clock is an
-	// unambiguous HH:MM:SS spelling; otherwise the TIME scanner owns it.
+	// A one-digit year shares a prefix with compact TIME. MySQL assigns it to
+	// separated DATETIME when the complete clock is not the all-one-digit
+	// H:M:S compact-TIME spelling. Each clock field itself remains variable
+	// width and is validated by the DATETIME parser afterwards.
 	if yearDigits == 1 && !mysqlOneDigitYearDatetimeClockShapeForExtract(str, pos) {
 		return timeExtractParseResult{}
 	}
@@ -5013,22 +5014,24 @@ func mysqlOneDigitYearDatetimeClockShapeForExtract(str string, pos int) bool {
 		pos++
 	}
 	mysqlConsumeDatetimeClockSignsForExtract(str, &pos)
-	if _, digits, ok := mysqlVariableDigitsForExtract(str, &pos); !ok || digits != 2 ||
+	_, hourDigits, ok := mysqlVariableDigitsForExtract(str, &pos)
+	if !ok ||
 		pos >= len(str) || !mysqlDatetimePunctuationForExtract(str[pos]) {
 		return false
 	}
 	for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
 		pos++
 	}
-	if _, digits, ok := mysqlVariableDigitsForExtract(str, &pos); !ok || digits != 2 ||
+	_, minuteDigits, ok := mysqlVariableDigitsForExtract(str, &pos)
+	if !ok ||
 		pos >= len(str) || !mysqlDatetimePunctuationForExtract(str[pos]) {
 		return false
 	}
 	for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
 		pos++
 	}
-	_, digits, ok := mysqlVariableDigitsForExtract(str, &pos)
-	return ok && digits == 2
+	_, secondDigits, ok := mysqlVariableDigitsForExtract(str, &pos)
+	return ok && (hourDigits > 1 || minuteDigits > 1 || secondDigits > 1)
 }
 
 func mysqlConsumeDatetimeClockSignsForExtract(str string, pos *int) {
