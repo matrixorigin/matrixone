@@ -730,6 +730,65 @@ func TestLeastGreatestFunctionResolution(t *testing.T) {
 	}
 }
 
+func TestLeastGreatestStringResolutionPreservesMergedCharset(t *testing.T) {
+	utf8mb4BinVarchar := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4Bin)
+	utf8mb4BinText := types.NewWithCharset(types.T_text, types.MaxVarcharLen, 0, types.CharsetUTF8MB4Bin)
+	generalVarchar := types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetUTF8)
+
+	tests := []struct {
+		name        string
+		inputs      []types.Type
+		wantOID     types.T
+		wantCharset uint8
+		wantWidth   int32
+	}{
+		{
+			name:        "mixed varchar and text keep utf8mb4 bin",
+			inputs:      []types.Type{utf8mb4BinVarchar, utf8mb4BinText},
+			wantOID:     types.T_text,
+			wantCharset: types.CharsetUTF8MB4Bin,
+		},
+		{
+			name:        "mixed text and varchar keep utf8mb4 bin independent of order",
+			inputs:      []types.Type{utf8mb4BinText, utf8mb4BinVarchar},
+			wantOID:     types.T_text,
+			wantCharset: types.CharsetUTF8MB4Bin,
+		},
+		{
+			name:        "same oid merges stronger collation",
+			inputs:      []types.Type{generalVarchar, utf8mb4BinVarchar},
+			wantOID:     types.T_varchar,
+			wantCharset: types.CharsetUTF8MB4Bin,
+			wantWidth:   32,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, functionName := range []string{"least", "greatest"} {
+				fn, err := GetFunctionByName(context.Background(), functionName, test.inputs)
+				require.NoError(t, err)
+				require.Equal(t, test.wantOID, fn.GetReturnType().Oid)
+				require.Equal(t, test.wantCharset, fn.GetReturnType().Charset)
+				if test.wantWidth != 0 {
+					require.Equal(t, test.wantWidth, fn.GetReturnType().Width)
+				}
+
+				castTypes, shouldCast := fn.ShouldDoImplicitTypeCast()
+				require.True(t, shouldCast)
+				require.Len(t, castTypes, len(test.inputs))
+				for _, castType := range castTypes {
+					require.Equal(t, test.wantOID, castType.Oid)
+					require.Equal(t, test.wantCharset, castType.Charset)
+					if test.wantWidth != 0 {
+						require.Equal(t, test.wantWidth, castType.Width)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestLeastGreatestTemporalResolution(t *testing.T) {
 	cases := []struct {
 		name         string
