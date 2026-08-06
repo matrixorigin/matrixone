@@ -15,6 +15,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -63,7 +64,7 @@ func TestWriteFailureArtifactRedactsAndMinimizesData(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
-		`"seed": 42`, `"rows_sha256"`, `"synthetic_plan_sha256"`,
+		`"seed": 42`, `"rows_sha256"`, `"synthetic_plan_file"`, `"synthetic_plan_sha256"`,
 		`"backend": "sirius_gpu"`, `<redacted>`, `<redacted-url>`,
 	} {
 		if !strings.Contains(text, required) {
@@ -87,14 +88,20 @@ func TestWriteFailureArtifactRedactsAndMinimizesData(t *testing.T) {
 			report.Native.Schema, report.Offloaded.Schema)
 	}
 
-	plan, err := os.ReadFile(filepath.Join(filepath.Dir(path), "plan.substrait.bin"))
+	planPath := filepath.Join(filepath.Dir(path), metadata.SyntheticPlanFile)
+	plan, err := os.ReadFile(planPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(plan) != string(report.Case.SyntheticPlan) {
 		t.Fatalf("synthetic plan = %v, want %v", plan, report.Case.SyntheticPlan)
 	}
+	if metadata.SyntheticPlanFile != artifactPlanName(metadata.SyntheticPlanSHA256) ||
+		metadata.SyntheticPlanSHA256 != sha256Hex(plan) {
+		t.Fatalf("synthetic plan reference does not match content: %+v", metadata)
+	}
 	assertMode(t, path, 0o600)
+	assertMode(t, planPath, 0o600)
 	assertMode(t, filepath.Dir(path), 0o700)
 }
 
@@ -240,7 +247,7 @@ func TestWriteFailureArtifactPersistsMalformedObservations(t *testing.T) {
 	}
 }
 
-func TestWriteFailureArtifactRemovesStaleSyntheticPlan(t *testing.T) {
+func TestWriteFailureArtifactOmitsPlanReferenceForPlanlessGeneration(t *testing.T) {
 	t.Parallel()
 
 	report := successfulReport()
@@ -250,17 +257,25 @@ func TestWriteFailureArtifactRemovesStaleSyntheticPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	planPath := filepath.Join(filepath.Dir(path), "plan.substrait.bin")
+	first := readArtifactMetadata(t, path)
+	planPath := filepath.Join(filepath.Dir(path), first.SyntheticPlanFile)
 	if _, err := os.Stat(planPath); err != nil {
 		t.Fatal(err)
 	}
 
 	report.Case.SyntheticPlan = nil
-	if _, err := WriteFailureArtifact(root, report, errors.New("second")); err != nil {
+	path, err = WriteFailureArtifact(root, report, errors.New("second"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(planPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("stale synthetic plan stat error = %v, want not exist", err)
+	second := readArtifactMetadata(t, path)
+	if second.SyntheticPlanFile != "" || second.SyntheticPlanSHA256 != "" {
+		t.Fatalf("planless generation references a synthetic plan: %+v", second)
+	}
+	// Prior plans are immutable. Removing one here could break a concurrent
+	// writer whose metadata publication has not happened yet.
+	if _, err := os.Stat(planPath); err != nil {
+		t.Fatalf("previous immutable plan was removed: %v", err)
 	}
 }
 
@@ -276,7 +291,7 @@ func TestWriteFailureArtifactTightensExistingFilePermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	metadataPath := filepath.Join(caseDir, artifactMetadataName)
-	planPath := filepath.Join(caseDir, "plan.substrait.bin")
+	planPath := filepath.Join(caseDir, artifactPlanName(sha256Hex(report.Case.SyntheticPlan)))
 	for _, path := range []string{metadataPath, planPath} {
 		if err := os.WriteFile(path, []byte("stale"), 0o600); err != nil {
 			t.Fatal(err)
@@ -304,6 +319,98 @@ func TestWriteFailureArtifactTightensExistingFilePermissions(t *testing.T) {
 	}
 }
 
+func TestWriteFailureArtifactPublishesConsistentConcurrentGeneration(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	slow := successfulReport()
+	slow.Case.ID = "same-case"
+	slow.Case.Seed = 1
+	slow.Case.SyntheticPlan = []byte("slow plan")
+	fast := successfulReport()
+	fast.Case.ID = slow.Case.ID
+	fast.Case.Seed = 2
+	fast.Case.SyntheticPlan = []byte("fast plan")
+
+	slowAtPublication := make(chan struct{})
+	releaseSlow := make(chan struct{})
+	slowResult := make(chan error, 1)
+	go func() {
+		_, err := writeFailureArtifact(root, slow, errors.New("slow failure"), func(path string, data []byte) error {
+			close(slowAtPublication)
+			<-releaseSlow
+			return writePrivateFile(path, data)
+		})
+		slowResult <- err
+	}()
+
+	select {
+	case <-slowAtPublication:
+	case err := <-slowResult:
+		t.Fatalf("slow writer returned before metadata publication: %v", err)
+	}
+	if _, err := WriteFailureArtifact(root, fast, errors.New("fast failure")); err != nil {
+		close(releaseSlow)
+		t.Fatalf("fast WriteFailureArtifact() error = %v", err)
+	}
+	close(releaseSlow)
+	if err := <-slowResult; err != nil {
+		t.Fatalf("slow WriteFailureArtifact() error = %v", err)
+	}
+
+	metadataPath := filepath.Join(root, artifactCaseDirectory(slow.Case.ID), artifactMetadataName)
+	metadata := readArtifactMetadata(t, metadataPath)
+	if metadata.Seed != slow.Case.Seed {
+		t.Fatalf("published seed = %d, want slow writer seed %d", metadata.Seed, slow.Case.Seed)
+	}
+	assertPublishedPlan(t, metadataPath, metadata, slow.Case.SyntheticPlan)
+}
+
+func TestWriteFailureArtifactPreservesPublishedGenerationWhenReplacementStops(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		plan []byte
+	}{
+		{name: "different plan", plan: []byte("replacement plan")},
+		{name: "no plan"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			published := successfulReport()
+			published.Case.ID = "replacement-case"
+			published.Case.Seed = 1
+			published.Case.SyntheticPlan = []byte("published plan")
+			metadataPath, err := WriteFailureArtifact(root, published, errors.New("published failure"))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			replacement := successfulReport()
+			replacement.Case.ID = published.Case.ID
+			replacement.Case.Seed = 2
+			replacement.Case.SyntheticPlan = test.plan
+			publicationStopped := errors.New("metadata publication stopped")
+			_, err = writeFailureArtifact(root, replacement, errors.New("replacement failure"), func(string, []byte) error {
+				return publicationStopped
+			})
+			if !errors.Is(err, publicationStopped) {
+				t.Fatalf("writeFailureArtifact() error = %v, want %v", err, publicationStopped)
+			}
+
+			metadata := readArtifactMetadata(t, metadataPath)
+			if metadata.Seed != published.Case.Seed {
+				t.Fatalf("published seed = %d, want original seed %d", metadata.Seed, published.Case.Seed)
+			}
+			assertPublishedPlan(t, metadataPath, metadata, published.Case.SyntheticPlan)
+		})
+	}
+}
+
 func TestWriteFailureArtifactValidatesInput(t *testing.T) {
 	t.Parallel()
 
@@ -324,5 +431,35 @@ func assertMode(t *testing.T, path string, want os.FileMode) {
 	}
 	if got := info.Mode().Perm(); got != want {
 		t.Fatalf("%s permissions = %o, want %o", path, got, want)
+	}
+}
+
+func readArtifactMetadata(t *testing.T, path string) artifactMetadata {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metadata artifactMetadata
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	return metadata
+}
+
+func assertPublishedPlan(t *testing.T, metadataPath string, metadata artifactMetadata, want []byte) {
+	t.Helper()
+	if metadata.SyntheticPlanFile != artifactPlanName(metadata.SyntheticPlanSHA256) {
+		t.Fatalf("synthetic plan name/hash mismatch: %+v", metadata)
+	}
+	plan, err := os.ReadFile(filepath.Join(filepath.Dir(metadataPath), metadata.SyntheticPlanFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(plan, want) {
+		t.Fatalf("synthetic plan = %q, want %q", plan, want)
+	}
+	if metadata.SyntheticPlanSHA256 != sha256Hex(plan) {
+		t.Fatalf("synthetic plan hash = %q, want %q", metadata.SyntheticPlanSHA256, sha256Hex(plan))
 	}
 }

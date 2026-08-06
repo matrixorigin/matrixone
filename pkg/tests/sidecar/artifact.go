@@ -30,7 +30,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-const artifactMetadataName = "failure.json"
+const (
+	artifactMetadataName = "failure.json"
+	artifactPlanPrefix   = "plan-"
+	artifactPlanSuffix   = ".substrait.bin"
+)
 
 var (
 	artifactURLPattern           = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>]+`)
@@ -66,6 +70,7 @@ type artifactMetadata struct {
 	Seed                 uint64              `json:"seed"`
 	CapabilitySetHash    string              `json:"capability_set_hash,omitempty"`
 	ReadDigest           string              `json:"read_digest,omitempty"`
+	SyntheticPlanFile    string              `json:"synthetic_plan_file,omitempty"`
 	SyntheticPlanSHA256  string              `json:"synthetic_plan_sha256,omitempty"`
 	Failure              string              `json:"failure"`
 	NativeExpectation    artifactEvidence    `json:"native_expectation"`
@@ -76,8 +81,20 @@ type artifactMetadata struct {
 
 // WriteFailureArtifact writes deterministic, data-minimized diagnostics for a
 // failed comparison. Raw rows are fingerprinted, never emitted. A raw plan is
-// emitted only when the case explicitly supplied SyntheticPlan.
+// emitted only for a generation that explicitly supplied SyntheticPlan.
 func WriteFailureArtifact(root string, report Report, failure error) (string, error) {
+	return writeFailureArtifact(root, report, failure, writePrivateFile)
+}
+
+// writeFailureArtifact accepts the metadata publisher separately so tests can
+// stop a replacement at the publication boundary. Plan files are immutable and
+// failure.json is the only pointer to the currently published generation.
+func writeFailureArtifact(
+	root string,
+	report Report,
+	failure error,
+	writeMetadata func(string, []byte) error,
+) (string, error) {
 	if root == "" {
 		return "", moerr.NewInvalidInputNoCtx("sidecar failure artifact root is empty")
 	}
@@ -117,16 +134,15 @@ func WriteFailureArtifact(root string, report Report, failure error) (string, er
 	}
 	if len(report.Case.SyntheticPlan) != 0 {
 		metadata.SyntheticPlanSHA256 = sha256Hex(report.Case.SyntheticPlan)
-		planPath := filepath.Join(caseDir, "plan.substrait.bin")
+		metadata.SyntheticPlanFile = artifactPlanName(metadata.SyntheticPlanSHA256)
+		planPath := filepath.Join(caseDir, metadata.SyntheticPlanFile)
 		if err := writePrivateFile(planPath, report.Case.SyntheticPlan); err != nil {
 			return "", errors.Join(moerr.NewInternalErrorNoCtx("write synthetic sidecar plan artifact"), err)
 		}
-	} else {
-		planPath := filepath.Join(caseDir, "plan.substrait.bin")
-		if err := os.Remove(planPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return "", errors.Join(moerr.NewInternalErrorNoCtx("remove stale synthetic sidecar plan artifact"), err)
-		}
 	}
+	// Content-addressed plans live for the caller-owned artifact root's
+	// lifetime. Deleting an unreferenced plan here could race with another
+	// same-case writer that has created that plan but not yet published it.
 
 	var data bytes.Buffer
 	encoder := json.NewEncoder(&data)
@@ -136,7 +152,7 @@ func WriteFailureArtifact(root string, report Report, failure error) (string, er
 		return "", errors.Join(moerr.NewInternalErrorNoCtx("marshal sidecar failure artifact"), err)
 	}
 	metadataPath := filepath.Join(caseDir, artifactMetadataName)
-	if err := writePrivateFile(metadataPath, data.Bytes()); err != nil {
+	if err := writeMetadata(metadataPath, data.Bytes()); err != nil {
 		return "", errors.Join(moerr.NewInternalErrorNoCtx("write sidecar failure artifact"), err)
 	}
 	return metadataPath, nil
@@ -266,6 +282,10 @@ func makeArtifactEvidence(evidence ExecutionEvidence) artifactEvidence {
 func artifactCaseDirectory(caseID string) string {
 	digest := sha256.Sum256([]byte(caseID))
 	return "case-" + hex.EncodeToString(digest[:])
+}
+
+func artifactPlanName(digest string) string {
+	return artifactPlanPrefix + digest + artifactPlanSuffix
 }
 
 func redactArtifactText(value string, explicit []string) string {
