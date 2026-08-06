@@ -182,6 +182,8 @@ func (s *Service) heartbeatWorker(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-s.heartbeatC:
+			s.heartbeat(ctx)
 		case <-ticker.C:
 			s.heartbeat(ctx)
 			// I'd call this an ugly hack to just workaround select's
@@ -192,6 +194,16 @@ func (s *Service) heartbeatWorker(ctx context.Context) {
 			default:
 			}
 		}
+	}
+}
+
+func (s *Service) requestHeartbeat() {
+	if s.heartbeatC == nil {
+		return
+	}
+	select {
+	case s.heartbeatC <- struct{}{}:
+	default:
 	}
 }
 

@@ -74,6 +74,7 @@ type Service struct {
 	stopper     *stopper.Stopper
 	haClient    LogHAKeeperClient
 	fileService fileservice.FileService
+	heartbeatC  chan struct{}
 	shutdownC   chan struct{}
 
 	options struct {
@@ -116,6 +117,7 @@ func NewService(
 		cfg:         cfg,
 		stopper:     stopper.NewStopper("log-service"),
 		fileService: fileService,
+		heartbeatC:  make(chan struct{}, 1),
 		shutdownC:   shutdownC,
 	}
 	for _, opt := range opts {
@@ -136,6 +138,7 @@ func NewService(
 		service.runtime.Logger().Error("failed to create log store", zap.Error(err))
 		return nil, err
 	}
+	store.bootstrapCommandsAdded = service.requestHeartbeat
 	if err := store.loadMetadata(); err != nil {
 		_ = store.close()
 		return nil, err
