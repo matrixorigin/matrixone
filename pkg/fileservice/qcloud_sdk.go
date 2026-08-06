@@ -51,6 +51,10 @@ type QCloudSDK struct {
 
 const qcloudMultipartAbortTimeout = 30 * time.Second
 
+func isRetryableQCloudMultipartInitError(err error) bool {
+	return errors.Is(err, io.EOF) || IsRetryableError(err)
+}
+
 func NewQCloudSDK(
 	ctx context.Context,
 	args ObjectStorageArguments,
@@ -433,7 +437,7 @@ func (a *QCloudSDK) WriteMultipartParallel(
 	output, createErr := DoWithRetryContext(ctx, "cos initiate multipart upload", func() (*cos.InitiateMultipartUploadResult, error) {
 		res, _, e := a.client.Object.InitiateMultipartUpload(ctx, key, initOpt)
 		return res, e
-	}, maxRetryAttemps, IsRetryableError)
+	}, maxRetryAttemps, isRetryableQCloudMultipartInitError)
 	if createErr != nil {
 		releasePartBuffer(firstPart)
 		return createErr
