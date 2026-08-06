@@ -17,10 +17,12 @@
 package keycodec
 
 import (
+	"encoding/binary"
 	"math"
 	"unsafe"
 
 	"github.com/cespare/xxhash/v2"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -189,6 +191,156 @@ func CanonicalFloat64Bytes(value float64) [8]byte {
 	return *(*[8]byte)(unsafe.Pointer(&bits))
 }
 
+// CanonicalJSONSize returns the exact resident key size for one binary JSON
+// value. Arrays and objects are walked recursively because scalar JSON
+// equality also identifies numeric forms below the root.
+func CanonicalJSONSize(value []byte) int {
+	if len(value) == 0 {
+		return 0
+	}
+	return canonicalByteJSONSize(types.DecodeJson(value))
+}
+
+func canonicalByteJSONSize(value bytejson.ByteJson) int {
+	if size, ok := bytejson.CanonicalNumberSize(value); ok {
+		return size
+	}
+	if size, ok := bytejson.CanonicalBinarySize(value); ok {
+		return size
+	}
+	switch value.Type {
+	case bytejson.TpCodeArray:
+		size := 1 + 4
+		for i := 0; i < value.GetElemCnt(); i++ {
+			size += 4 + canonicalByteJSONSize(value.GetArrayElem(i))
+		}
+		return size
+	case bytejson.TpCodeObject:
+		size := 1 + 4
+		for i := 0; i < value.GetElemCnt(); i++ {
+			size += 4 + len(value.GetObjectKey(i))
+			size += 4 + canonicalByteJSONSize(value.GetObjectVal(i))
+		}
+		return size
+	default:
+		return 1 + len(value.Data)
+	}
+}
+
+// AppendCanonicalJSON appends the resident/spill key bytes for one JSON value.
+// Binary JSON stores 1 as INT64 and 1.0 as FLOAT64 even though scalar JSON
+// equality identifies them. Numeric nodes therefore use a private key-only
+// domain, including inside arrays and objects; other scalar representations
+// remain byte-for-byte compatible with their storage form.
+func AppendCanonicalJSON(dst, value []byte) []byte {
+	if len(value) == 0 {
+		return dst
+	}
+	return appendCanonicalByteJSON(dst, types.DecodeJson(value))
+}
+
+func appendCanonicalByteJSON(dst []byte, value bytejson.ByteJson) []byte {
+	if numeric, ok := bytejson.AppendCanonicalNumber(dst, value); ok {
+		return numeric
+	}
+	if binaryValue, ok := bytejson.AppendCanonicalBinary(dst, value); ok {
+		return binaryValue
+	}
+
+	switch value.Type {
+	case bytejson.TpCodeArray:
+		dst = append(dst, byte(value.Type))
+		dst = appendCanonicalUint32(dst, uint32(value.GetElemCnt()))
+		for i := 0; i < value.GetElemCnt(); i++ {
+			lengthOffset := len(dst)
+			dst = appendCanonicalUint32(dst, 0)
+			valueOffset := len(dst)
+			dst = appendCanonicalByteJSON(dst, value.GetArrayElem(i))
+			binary.LittleEndian.PutUint32(dst[lengthOffset:], uint32(len(dst)-valueOffset))
+		}
+		return dst
+	case bytejson.TpCodeObject:
+		dst = append(dst, byte(value.Type))
+		dst = appendCanonicalUint32(dst, uint32(value.GetElemCnt()))
+		for i := 0; i < value.GetElemCnt(); i++ {
+			key := value.GetObjectKey(i)
+			dst = appendCanonicalUint32(dst, uint32(len(key)))
+			dst = append(dst, key...)
+			lengthOffset := len(dst)
+			dst = appendCanonicalUint32(dst, 0)
+			valueOffset := len(dst)
+			dst = appendCanonicalByteJSON(dst, value.GetObjectVal(i))
+			binary.LittleEndian.PutUint32(dst[lengthOffset:], uint32(len(dst)-valueOffset))
+		}
+		return dst
+	default:
+		dst = append(dst, byte(value.Type))
+		return append(dst, value.Data...)
+	}
+}
+
+func appendCanonicalUint32(dst []byte, value uint32) []byte {
+	var encoded [4]byte
+	binary.LittleEndian.PutUint32(encoded[:], value)
+	return append(dst, encoded[:]...)
+}
+
+// AppendCanonicalVecF32 appends VECF32 key bytes with SQL-equal signed-zero
+// elements mapped to the single all-zero representation. The input vector is
+// never mutated and its byte length is preserved.
+func AppendCanonicalVecF32(dst, value []byte) []byte {
+	start := len(dst)
+	dst = append(dst, value...)
+	if len(value)%4 != 0 {
+		return dst
+	}
+	canonical := dst[start:]
+	for offset := 0; offset < len(canonical); offset += 4 {
+		bits := binary.LittleEndian.Uint32(canonical[offset:])
+		if bits<<1 == 0 {
+			binary.LittleEndian.PutUint32(canonical[offset:], 0)
+		}
+	}
+	return dst
+}
+
+// AppendCanonicalVecF64 is the FLOAT64-array counterpart of
+// AppendCanonicalVecF32.
+func AppendCanonicalVecF64(dst, value []byte) []byte {
+	start := len(dst)
+	dst = append(dst, value...)
+	if len(value)%8 != 0 {
+		return dst
+	}
+	canonical := dst[start:]
+	for offset := 0; offset < len(canonical); offset += 8 {
+		bits := binary.LittleEndian.Uint64(canonical[offset:])
+		if bits<<1 == 0 {
+			binary.LittleEndian.PutUint64(canonical[offset:], 0)
+		}
+	}
+	return dst
+}
+
+// AppendCanonicalVecF16 appends BF16/FLOAT16 array bytes with both signed-zero
+// representations mapped to zero. Both formats use the high bit as sign and
+// all remaining bits as exponent/mantissa.
+func AppendCanonicalVecF16(dst, value []byte) []byte {
+	start := len(dst)
+	dst = append(dst, value...)
+	if len(value)%2 != 0 {
+		return dst
+	}
+	canonical := dst[start:]
+	for offset := 0; offset < len(canonical); offset += 2 {
+		bits := binary.LittleEndian.Uint16(canonical[offset:])
+		if bits<<1 == 0 {
+			binary.LittleEndian.PutUint16(canonical[offset:], 0)
+		}
+	}
+	return dst
+}
+
 // HashCombine merges one column hash into the hash state for a composite key.
 func HashCombine(hash, columnHash uint64) uint64 {
 	return hash ^ (columnHash + 0x9e3779b97f4a7c15 + (hash << 6) + (hash >> 2))
@@ -222,6 +374,18 @@ func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) {
 		case types.T_float64:
 			computeFloat64XXHash(vec, hashValues)
 			continue
+		case types.T_json:
+			computeCanonicalVarlenaXXHash(vec, hashValues, AppendCanonicalJSON)
+			continue
+		case types.T_array_float32:
+			computeCanonicalVarlenaXXHash(vec, hashValues, AppendCanonicalVecF32)
+			continue
+		case types.T_array_float64:
+			computeCanonicalVarlenaXXHash(vec, hashValues, AppendCanonicalVecF64)
+			continue
+		case types.T_array_bf16, types.T_array_float16:
+			computeCanonicalVarlenaXXHash(vec, hashValues, AppendCanonicalVecF16)
+			continue
 		}
 		if vec.IsConst() {
 			columnHash := uint64(0)
@@ -252,6 +416,37 @@ func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) {
 				hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(vec.GetRawBytesAt(i)))
 			}
 		}
+	}
+}
+
+func computeCanonicalVarlenaXXHash(
+	vec *vector.Vector,
+	hashValues []uint64,
+	appendCanonical func([]byte, []byte) []byte,
+) {
+	rowCount := len(hashValues)
+	var scratch []byte
+	if vec.IsConst() {
+		columnHash := uint64(0)
+		if !vec.IsConstNull() {
+			scratch = appendCanonical(scratch, vec.GetRawBytesAt(0))
+			columnHash = xxhash.Sum64(scratch)
+		}
+		for i := 0; i < rowCount; i++ {
+			hashValues[i] = HashCombine(hashValues[i], columnHash)
+		}
+		return
+	}
+
+	n := min(rowCount, vec.Length())
+	nulls := vec.GetNulls()
+	for i := 0; i < n; i++ {
+		if nulls.Contains(uint64(i)) {
+			hashValues[i] = HashCombine(hashValues[i], 0)
+			continue
+		}
+		scratch = appendCanonical(scratch[:0], vec.GetRawBytesAt(i))
+		hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(scratch))
 	}
 }
 
@@ -298,6 +493,7 @@ func computeGroupingXXHash(vec *vector.Vector, hashValues []uint64) {
 	rowCount := len(hashValues)
 	grouping := vec.GetGrouping()
 	nulls := vec.GetNulls()
+	var scratch []byte
 	for i := 0; i < rowCount; i++ {
 		if grouping.Contains(uint64(i)) {
 			hashValues[i] = HashCombine(hashValues[i], groupingColumnHash)
@@ -321,6 +517,22 @@ func computeGroupingXXHash(vec *vector.Vector, hashValues []uint64) {
 			values := vector.MustFixedColNoTypeCheck[float64](vec)
 			value := CanonicalFloat64Bytes(values[row])
 			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(value[:]))
+			continue
+		case types.T_json:
+			scratch = AppendCanonicalJSON(scratch[:0], vec.GetRawBytesAt(row))
+			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(scratch))
+			continue
+		case types.T_array_float32:
+			scratch = AppendCanonicalVecF32(scratch[:0], vec.GetRawBytesAt(row))
+			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(scratch))
+			continue
+		case types.T_array_float64:
+			scratch = AppendCanonicalVecF64(scratch[:0], vec.GetRawBytesAt(row))
+			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(scratch))
+			continue
+		case types.T_array_bf16, types.T_array_float16:
+			scratch = AppendCanonicalVecF16(scratch[:0], vec.GetRawBytesAt(row))
+			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(scratch))
 			continue
 		}
 		hashValues[i] = HashCombine(
