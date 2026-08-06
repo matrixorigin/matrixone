@@ -73,17 +73,17 @@ func TestIssue26725PreparedBit64SignedLong(t *testing.T) {
 			require.NoError(t, rows.Scan(&actual))
 			require.Equal(t, expected, actual)
 		}
-	require.False(t, rows.Next())
-	require.NoError(t, rows.Err())
+		require.False(t, rows.Next())
+		require.NoError(t, rows.Err())
 
-	stringStmt, err := db.PrepareContext(ctx,
-		"insert into "+dbName+".t64(id, b) values (?, ?)")
-	require.NoError(t, err)
-	_, err = stringStmt.ExecContext(ctx, int64(3), "-6109877384019645241")
-	require.ErrorContains(t, err, "data out of range")
-	require.NoError(t, stringStmt.Close())
+		stringStmt, err := db.PrepareContext(ctx,
+			"insert into "+dbName+".t64(id, b) values (?, ?)")
+		require.NoError(t, err)
+		_, err = stringStmt.ExecContext(ctx, int64(3), "-6109877384019645241")
+		require.ErrorContains(t, err, "data out of range")
+		require.NoError(t, stringStmt.Close())
 
-	execSQLRequire(t, ctx, db,
+		execSQLRequire(t, ctx, db,
 			"create table "+dbName+".t63(id bigint primary key, b bit(63))")
 		narrowStmt, err := db.PrepareContext(ctx,
 			"insert into "+dbName+".t63(id, b) values (?, ?)")
