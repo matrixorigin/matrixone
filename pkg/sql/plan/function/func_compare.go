@@ -94,6 +94,30 @@ func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 	return true
 }
 
+func floatArrayEqual[T constraints.Float](left, right []T) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func narrowFloatArrayEqual[T interface{ ToFloat32() float32 }](left, right []T) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i].ToFloat32() != right[i].ToFloat32() {
+			return false
+		}
+	}
+	return true
+}
+
 func opBinaryFixedFixedToFixedNullSafe[T types.FixedSizeTExceptStrType](
 	parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
@@ -257,25 +281,25 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[float32](v1)
 			_v2 := types.BytesToArray[float32](v2)
-			return types.ArrayCompare[float32](_v1, _v2) == 0
+			return floatArrayEqual(_v1, _v2)
 		}, selectList)
 	case types.T_array_float64:
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[float64](v1)
 			_v2 := types.BytesToArray[float64](v2)
-			return types.ArrayCompare[float64](_v1, _v2) == 0
+			return floatArrayEqual(_v1, _v2)
 		}, selectList)
 	case types.T_array_bf16:
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[types.BF16](v1)
 			_v2 := types.BytesToArray[types.BF16](v2)
-			return types.ArrayElementCompare[types.BF16](_v1, _v2) == 0
+			return narrowFloatArrayEqual(_v1, _v2)
 		}, selectList)
 	case types.T_array_float16:
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[types.Float16](v1)
 			_v2 := types.BytesToArray[types.Float16](v2)
-			return types.ArrayElementCompare[types.Float16](_v1, _v2) == 0
+			return narrowFloatArrayEqual(_v1, _v2)
 		}, selectList)
 	case types.T_array_int8:
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(v1, v2 []byte) bool {
@@ -414,32 +438,26 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return v1 == v2
 		}, selectList)
 	case types.T_array_float32:
-		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil && (selectList == nil) {
-			return compareVarlenaEqual(parameters, rs, proc, length, selectList)
-		}
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[float32](v1)
 			_v2 := types.BytesToArray[float32](v2)
 
-			return types.ArrayCompare[float32](_v1, _v2) == 0
+			return floatArrayEqual(_v1, _v2)
 		}, selectList)
 	case types.T_array_float64:
-		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil && (selectList == nil) {
-			return compareVarlenaEqual(parameters, rs, proc, length, selectList)
-		}
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[float64](v1)
 			_v2 := types.BytesToArray[float64](v2)
 
-			return types.ArrayCompare[float64](_v1, _v2) == 0
+			return floatArrayEqual(_v1, _v2)
 		}, selectList)
 	case types.T_array_bf16:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
-			return types.ArrayElementCompare[types.BF16](types.BytesToArray[types.BF16](v1), types.BytesToArray[types.BF16](v2)) == 0
+			return narrowFloatArrayEqual(types.BytesToArray[types.BF16](v1), types.BytesToArray[types.BF16](v2))
 		}, selectList)
 	case types.T_array_float16:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
-			return types.ArrayElementCompare[types.Float16](types.BytesToArray[types.Float16](v1), types.BytesToArray[types.Float16](v2)) == 0
+			return narrowFloatArrayEqual(types.BytesToArray[types.Float16](v1), types.BytesToArray[types.Float16](v2))
 		}, selectList)
 	case types.T_array_int8:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
@@ -1146,26 +1164,26 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			_v1 := types.BytesToArray[float32](v1)
 			_v2 := types.BytesToArray[float32](v2)
 
-			return types.ArrayCompare[float32](_v1, _v2) != 0
+			return !floatArrayEqual(_v1, _v2)
 		}, selectList)
 	case types.T_array_float64:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[float64](v1)
 			_v2 := types.BytesToArray[float64](v2)
 
-			return types.ArrayCompare[float64](_v1, _v2) != 0
+			return !floatArrayEqual(_v1, _v2)
 		}, selectList)
 	case types.T_array_bf16:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[types.BF16](v1)
 			_v2 := types.BytesToArray[types.BF16](v2)
-			return types.ArrayElementCompare[types.BF16](_v1, _v2) != 0
+			return !narrowFloatArrayEqual(_v1, _v2)
 		}, selectList)
 	case types.T_array_float16:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
 			_v1 := types.BytesToArray[types.Float16](v1)
 			_v2 := types.BytesToArray[types.Float16](v2)
-			return types.ArrayElementCompare[types.Float16](_v1, _v2) != 0
+			return !narrowFloatArrayEqual(_v1, _v2)
 		}, selectList)
 	case types.T_array_int8:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
