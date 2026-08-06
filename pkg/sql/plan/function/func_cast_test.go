@@ -159,7 +159,7 @@ func TestSignedIntegerToBit64PreservesBitPattern(t *testing.T) {
 	}
 }
 
-func TestPreparedSignedIntegerTextToBit(t *testing.T) {
+func TestPreparedIntegerTextToBit(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	bit64 := types.New(types.T_bit, 64, 0)
 	bit63 := types.New(types.T_bit, 63, 0)
@@ -167,12 +167,18 @@ func TestPreparedSignedIntegerTextToBit(t *testing.T) {
 
 	tcc := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{"-6109877384019645241", "-1", "5"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{
+				"-9223372036854775808", "-6109877384019645241", "-1",
+				"5", "9223372036854775807", "18446744073709551615",
+			}, nil),
 			NewFunctionTestInput(bit64, []uint64{}, nil),
 		},
-		NewFunctionTestResult(bit64, false, []uint64{12336866689689906375, math.MaxUint64, 5}, nil),
+		NewFunctionTestResult(bit64, false, []uint64{
+			uint64(1) << 63, 12336866689689906375, math.MaxUint64,
+			5, math.MaxInt64, math.MaxUint64,
+		}, nil),
 		NewCast)
-	tcc.parameters[0].SetIsSignedIntegerParam(true)
+	tcc.parameters[0].SetIsIntegerParam(true)
 	succeed, info := tcc.Run()
 	require.True(t, succeed, info)
 
@@ -201,7 +207,7 @@ func TestPreparedSignedIntegerTextToBit(t *testing.T) {
 		},
 		NewFunctionTestResult(bit63, true, []uint64{}, nil),
 		NewCast)
-	tcc.parameters[0].SetIsSignedIntegerParam(true)
+	tcc.parameters[0].SetIsIntegerParam(true)
 	succeed, info = tcc.Run()
 	require.True(t, succeed, info)
 
@@ -212,7 +218,7 @@ func TestPreparedSignedIntegerTextToBit(t *testing.T) {
 		},
 		NewFunctionTestResult(bit3, true, []uint64{}, nil),
 		NewCast)
-	tcc.parameters[0].SetIsSignedIntegerParam(true)
+	tcc.parameters[0].SetIsIntegerParam(true)
 	succeed, info = tcc.Run()
 	require.True(t, succeed, info)
 }
@@ -250,21 +256,22 @@ func TestInsertIgnoreCastsSpecialValues(t *testing.T) {
 	runBitCast("decimal128 saturates", NewFunctionTestInput(types.New(types.T_decimal128, 20, 0), []types.Decimal128{{B0_63: 31}}, nil), bit4, 15)
 	runBitCast("decimal256 saturates", NewFunctionTestInput(types.New(types.T_decimal256, 40, 0), []types.Decimal256{{B0_63: 31}}, nil), bit4, 15)
 
-	runSignedPreparedBitCast := func(name, value string, want uint64) {
+	runPreparedIntegerBitCast := func(name, value string, want uint64) {
 		t.Helper()
 		t.Run(name, func(t *testing.T) {
 			input := NewFunctionTestInput(types.T_varchar.ToType(), []string{value}, nil)
 			tcc := NewFunctionTestCase(proc,
 				[]FunctionTestInput{input, NewFunctionTestInput(bit3, []uint64{}, nil)},
 				NewFunctionTestResult(bit3, false, []uint64{want}, nil), NewCast)
-			tcc.parameters[0].SetIsSignedIntegerParam(true)
+			tcc.parameters[0].SetIsIntegerParam(true)
 			succeed, info := tcc.Run()
 			require.True(t, succeed, info)
 		})
 	}
 
-	runSignedPreparedBitCast("signed prepared positive saturates", "8", 7)
-	runSignedPreparedBitCast("signed prepared negative becomes zero", "-1", 0)
+	runPreparedIntegerBitCast("prepared positive saturates", "8", 7)
+	runPreparedIntegerBitCast("prepared negative becomes zero", "-1", 0)
+	runPreparedIntegerBitCast("prepared unsigned maximum saturates", "18446744073709551615", 7)
 
 	runYearCast := func(name string, input FunctionTestInput) {
 		t.Helper()

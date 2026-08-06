@@ -74,7 +74,7 @@ func TestValidateRemoteReadCompatibility(t *testing.T) {
 	require.Error(t, s.validateRemoteReadCompatibility(t.Context(), unknown, binaryParam))
 }
 
-func TestNewReadRequestUsesVersionedMethodForBinaryParams(t *testing.T) {
+func TestNewReadRequestUsesVersionedMethodForPrepareParamMetadata(t *testing.T) {
 	s := &service{}
 	s.remote.pool = morpc.NewMessagePool(
 		func() *shard.Request { return &shard.Request{} },
@@ -96,6 +96,17 @@ func TestNewReadRequestUsesVersionedMethodForBinaryParams(t *testing.T) {
 	)
 	require.Equal(t, shard.Method_ShardReadV2, binaryReq.RPCMethod)
 	s.remote.pool.ReleaseRequest(binaryReq)
+
+	integerReq := s.newReadRequest(
+		target,
+		ReadRows,
+		shard.ReadParam{Process: pipeline.ProcessInfo{
+			PrepareParams: pipeline.PrepareParamInfo{Length: 1, IsBin: []bool{false, true}},
+		}},
+		timestamp.Timestamp{},
+	)
+	require.Equal(t, shard.Method_ShardReadV2, integerReq.RPCMethod)
+	s.remote.pool.ReleaseRequest(integerReq)
 }
 
 func TestOldReceiverRejectsVersionedShardReadBeforeHandler(t *testing.T) {

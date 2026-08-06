@@ -162,12 +162,20 @@ func (proc *Process) SetPrepareParamsWithIsBin(prepareParams *vector.Vector, isB
 }
 
 // SetPrepareParamsWithMeta borrows prepareParams and carries per-parameter
-// string/binary and signed-integer protocol provenance. The two slices are
-// packed together so existing remote process serialization remains compatible.
-func (proc *Process) SetPrepareParamsWithMeta(prepareParams *vector.Vector, isBin, isSignedInteger []bool) {
-	metadata := make([]bool, 0, len(isBin)+len(isSignedInteger))
-	metadata = append(metadata, isBin...)
-	metadata = append(metadata, isSignedInteger...)
+// string/binary and integer-protocol provenance. The two fixed-width sections
+// are packed together so existing remote process serialization remains compatible.
+func (proc *Process) SetPrepareParamsWithMeta(prepareParams *vector.Vector, isBin, isInteger []bool) {
+	paramCount := 0
+	if prepareParams != nil {
+		paramCount = prepareParams.Length()
+	}
+	if paramCount == 0 || (len(isBin) == 0 && len(isInteger) == 0) {
+		proc.setPrepareParams(prepareParams, nil, false)
+		return
+	}
+	metadata := make([]bool, paramCount*2)
+	copy(metadata[:paramCount], isBin)
+	copy(metadata[paramCount:], isInteger)
 	proc.setPrepareParams(prepareParams, metadata, false)
 }
 

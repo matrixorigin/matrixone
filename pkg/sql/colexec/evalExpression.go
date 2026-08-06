@@ -433,7 +433,7 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 	}
 	if err == nil {
 		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
-		expr.vec.SetIsSignedIntegerParam(proc.GetPrepareParamIsSignedInteger(expr.pos))
+		expr.vec.SetIsIntegerParam(proc.GetPrepareParamIsInteger(expr.pos))
 	}
 	return expr.vec, err
 }

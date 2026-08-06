@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -27,10 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/embed"
 )
 
-// TestIssue26725PreparedBit64SignedLong exercises the same binary prepared
-// statement path used by the legacy flink-cdc sink, which binds BIT(64)
-// payloads with PreparedStatement.setLong().
-func TestIssue26725PreparedBit64SignedLong(t *testing.T) {
+// TestIssue26725PreparedBit64Integer exercises the same binary prepared
+// statement path used by integer client bindings, including the legacy
+// flink-cdc sink's PreparedStatement.setLong() BIT(64) payloads.
+func TestIssue26725PreparedBit64Integer(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
@@ -55,20 +56,24 @@ func TestIssue26725PreparedBit64SignedLong(t *testing.T) {
 			"create table "+dbName+".t64(id bigint primary key, b bit(64))")
 
 		stmt, err := db.PrepareContext(ctx,
-			"insert into "+dbName+".t64(id, b) values (?, ?), (?, ?), (?, ?)")
+			"insert into "+dbName+".t64(id, b) values (?, ?), (?, ?), (?, ?), (?, ?), (?, ?)")
 		require.NoError(t, err)
 		defer stmt.Close()
 		_, err = stmt.ExecContext(ctx,
 			int64(1), int64(-6109877384019645241),
 			int64(2), int64(-1),
-			int64(3), int64(5))
+			int64(3), int64(5),
+			int64(4), uint64(5),
+			int64(5), uint64(math.MaxUint64))
 		require.NoError(t, err)
 
 		rows, err := db.QueryContext(ctx,
 			"select cast(b as unsigned) from "+dbName+".t64 order by id")
 		require.NoError(t, err)
 		defer rows.Close()
-		for _, expected := range []string{"12336866689689906375", "18446744073709551615", "5"} {
+		for _, expected := range []string{
+			"12336866689689906375", "18446744073709551615", "5", "5", "18446744073709551615",
+		} {
 			require.True(t, rows.Next())
 			var actual string
 			require.NoError(t, rows.Scan(&actual))
@@ -81,13 +86,13 @@ func TestIssue26725PreparedBit64SignedLong(t *testing.T) {
 			"insert into "+dbName+".t64(id, b) values (?, ?)")
 		require.NoError(t, err)
 		defer stringStmt.Close()
-		_, err = stringStmt.ExecContext(ctx, int64(4), "5")
+		_, err = stringStmt.ExecContext(ctx, int64(6), "5")
 		require.NoError(t, err)
 		var stringValue string
 		require.NoError(t, db.QueryRowContext(ctx,
-			"select cast(b as unsigned) from "+dbName+".t64 where id = 4").Scan(&stringValue))
+			"select cast(b as unsigned) from "+dbName+".t64 where id = 6").Scan(&stringValue))
 		require.Equal(t, "53", stringValue)
-		_, err = stringStmt.ExecContext(ctx, int64(5), "-6109877384019645241")
+		_, err = stringStmt.ExecContext(ctx, int64(7), "-6109877384019645241")
 		require.ErrorContains(t, err, "data out of range")
 
 		execSQLRequire(t, ctx, db,

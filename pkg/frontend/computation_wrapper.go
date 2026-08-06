@@ -687,6 +687,16 @@ func initExecuteStmtParamWithResolver(
 	return initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cwft, execPlan, stmtName, resolve)
 }
 
+func isBinaryProtocolIntegerType(mysqlType defines.MysqlType) bool {
+	switch mysqlType {
+	case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24,
+		defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_LONGLONG:
+		return true
+	default:
+		return false
+	}
+}
+
 func initExecuteStmtParamWithResolverInSession(
 	execCtx *ExecCtx,
 	owner *Session,
@@ -869,16 +879,21 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 		paramCount := prepareStmt.params.Length()
-		isBin := make([]bool, paramCount)
-		isSignedInteger := make([]bool, paramCount)
+		var isInteger []bool
 		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
 			mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
-			unsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
-			isSignedInteger[i] = !unsigned && (mysqlType == defines.MYSQL_TYPE_TINY ||
-				mysqlType == defines.MYSQL_TYPE_SHORT || mysqlType == defines.MYSQL_TYPE_INT24 ||
-				mysqlType == defines.MYSQL_TYPE_LONG || mysqlType == defines.MYSQL_TYPE_LONGLONG)
+			if isBinaryProtocolIntegerType(mysqlType) {
+				if isInteger == nil {
+					isInteger = make([]bool, paramCount)
+				}
+				isInteger[i] = true
+			}
 		}
-		cwft.proc.SetPrepareParamsWithMeta(prepareStmt.params, isBin, isSignedInteger)
+		if isInteger == nil {
+			cwft.proc.SetPrepareParams(prepareStmt.params)
+		} else {
+			cwft.proc.SetPrepareParamsWithMeta(prepareStmt.params, nil, isInteger)
+		}
 		cwft.paramVals, err = preparedParamValues(cwft.proc)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err

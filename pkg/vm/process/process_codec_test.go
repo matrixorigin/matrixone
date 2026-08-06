@@ -324,7 +324,7 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 	frameParams := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(frameParams, []byte("1"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(frameParams, []byte("0"), false, proc.Mp()))
-	proc.SetPrepareParamsWithIsBin(frameParams, []bool{true, false})
+	proc.SetPrepareParamsWithMeta(frameParams, []bool{true, false}, []bool{false, true})
 
 	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
 	payload, err := svc.Encode(proc, "select sum(n) over (order by id rows between ? preceding and ? following)")
@@ -332,6 +332,7 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 
 	info := pipeline.ProcessInfo{}
 	require.NoError(t, info.Unmarshal(payload))
+	require.Equal(t, []bool{true, false, false, true}, info.PrepareParams.IsBin)
 	decodedProc, err := svc.Decode(context.Background(), info)
 	require.NoError(t, err)
 	defer decodedProc.Free()
@@ -343,6 +344,8 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 	require.False(t, decodedParams.GetNulls().Contains(1))
 	require.True(t, decodedProc.GetPrepareParamIsBin(0))
 	require.False(t, decodedProc.GetPrepareParamIsBin(1))
+	require.False(t, decodedProc.GetPrepareParamIsInteger(0))
+	require.True(t, decodedProc.GetPrepareParamIsInteger(1))
 	require.Equal(t, "1", decodedParams.GetStringAt(0))
 	require.Equal(t, "0", decodedParams.GetStringAt(1))
 }
@@ -369,6 +372,8 @@ func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) 
 	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())
 	require.False(t, decodedProc.GetPrepareParamIsBin(0))
 	require.False(t, decodedProc.GetPrepareParamIsBin(1))
+	require.False(t, decodedProc.GetPrepareParamIsInteger(0))
+	require.False(t, decodedProc.GetPrepareParamIsInteger(1))
 	require.False(t, decodedProc.GetStmtProfile().GetStatementIgnore())
 	decodedProc.Free()
 }

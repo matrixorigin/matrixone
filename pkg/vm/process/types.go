@@ -530,16 +530,21 @@ func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
 }
 
 func (proc *Process) GetPrepareParamIsBin(i int) bool {
-	return i >= 0 && i < len(proc.Base.prepareParamsIsBin) && proc.Base.prepareParamsIsBin[i]
+	return proc.getPrepareParamMeta(i, 0)
 }
 
-func (proc *Process) GetPrepareParamIsSignedInteger(i int) bool {
+func (proc *Process) GetPrepareParamIsInteger(i int) bool {
+	return proc.getPrepareParamMeta(i, 1)
+}
+
+func (proc *Process) getPrepareParamMeta(i, section int) bool {
 	paramCount := 0
 	if proc.Base.prepareParams != nil {
 		paramCount = proc.Base.prepareParams.Length()
 	}
-	return i >= 0 && i < paramCount && paramCount+i < len(proc.Base.prepareParamsIsBin) &&
-		proc.Base.prepareParamsIsBin[paramCount+i]
+	offset := section*paramCount + i
+	return section >= 0 && i >= 0 && i < paramCount && offset < len(proc.Base.prepareParamsIsBin) &&
+		proc.Base.prepareParamsIsBin[offset]
 }
 
 // SetIncrStatementDisabled marks this process (and every child process

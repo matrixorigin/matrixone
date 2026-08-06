@@ -295,27 +295,38 @@ func TestIffConstantFoldingSkipsUnselectedBranch(t *testing.T) {
 
 }
 
-func TestParamExpressionExecutorPreservesBinaryFlagPerParameter(t *testing.T) {
+func TestParamExpressionExecutorPreservesProtocolMetadataPerParameter(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, []byte("AB\x00\x00"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("5"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("text"), false, proc.Mp()))
-	proc.SetPrepareParamsWithIsBin(params, []bool{true, false})
+	proc.SetPrepareParamsWithMeta(params, []bool{true, false, false}, []bool{false, true, false})
 	t.Cleanup(func() { params.Free(proc.Mp()) })
 
 	binaryExpr := NewParamExpressionExecutor(proc.Mp(), 0, types.T_text.ToType())
-	textExpr := NewParamExpressionExecutor(proc.Mp(), 1, types.T_text.ToType())
+	integerExpr := NewParamExpressionExecutor(proc.Mp(), 1, types.T_text.ToType())
+	textExpr := NewParamExpressionExecutor(proc.Mp(), 2, types.T_text.ToType())
 	t.Cleanup(binaryExpr.Free)
+	t.Cleanup(integerExpr.Free)
 	t.Cleanup(textExpr.Free)
 
 	binaryVec, err := binaryExpr.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.True(t, binaryVec.GetIsBin())
+	require.False(t, binaryVec.GetIsIntegerParam())
 	require.Equal(t, "AB\x00\x00", binaryVec.GetStringAt(0))
+
+	integerVec, err := integerExpr.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.False(t, integerVec.GetIsBin())
+	require.True(t, integerVec.GetIsIntegerParam())
+	require.Equal(t, "5", integerVec.GetStringAt(0))
 
 	textVec, err := textExpr.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.False(t, textVec.GetIsBin())
+	require.False(t, textVec.GetIsIntegerParam())
 	require.Equal(t, "text", textVec.GetStringAt(0))
 }
 

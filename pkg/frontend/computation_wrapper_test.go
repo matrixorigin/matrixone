@@ -228,6 +228,57 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	cw.proc.SetPrepareParams(nil)
 }
 
+func TestInitExecuteStmtParamPreservesIntegerProtocolProvenance(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 104, "select ?, ?, ?")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	for _, value := range []string{"5", "18446744073709551615", "5"} {
+		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+	}
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_LONGLONG), 0,
+		byte(defines.MYSQL_TYPE_LONGLONG), 0x80,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+	}
+
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.True(t, cw.proc.GetPrepareParamIsInteger(0))
+	require.True(t, cw.proc.GetPrepareParamIsInteger(1))
+	require.False(t, cw.proc.GetPrepareParamIsInteger(2))
+	require.False(t, cw.proc.GetPrepareParamIsInteger(3))
+	// An invalid parameter index must not bleed into the packed integer section.
+	require.False(t, cw.proc.GetPrepareParamIsBin(3))
+
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+	}
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	for i := 0; i < prepareStmt.params.Length(); i++ {
+		require.False(t, cw.proc.GetPrepareParamIsInteger(i), "parameter %d retained stale integer metadata", i)
+	}
+}
+
+func TestIsBinaryProtocolIntegerType(t *testing.T) {
+	for _, mysqlType := range []defines.MysqlType{
+		defines.MYSQL_TYPE_TINY,
+		defines.MYSQL_TYPE_SHORT,
+		defines.MYSQL_TYPE_INT24,
+		defines.MYSQL_TYPE_LONG,
+		defines.MYSQL_TYPE_LONGLONG,
+	} {
+		require.True(t, isBinaryProtocolIntegerType(mysqlType), "type %v", mysqlType)
+	}
+	require.False(t, isBinaryProtocolIntegerType(defines.MYSQL_TYPE_VAR_STRING))
+}
+
 func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
 		t, 108, "set @prepared_set_value = ? + 1")

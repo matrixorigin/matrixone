@@ -7565,34 +7565,16 @@ func strToBit(
 				return err
 			}
 		} else {
-			// Prepared integer parameters are transported internally in a text
-			// vector. Protocol provenance selects numeric conversion for both signs;
-			// SQL string literals containing the same characters retain byte-string
-			// semantics.
-			if from.GetSourceVector().GetIsSignedIntegerParam() {
-				signed, err := strconv.ParseInt(string(v), 10, 64)
-				if err != nil {
-					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
+			// Prepared integer parameters are transported internally in canonical
+			// decimal text. Protocol provenance selects numeric conversion; SQL
+			// strings containing the same characters retain byte-string semantics.
+			if from.GetSourceVector().GetIsIntegerParam() {
+				input := string(v)
+				value, inRange, err := preparedIntegerToBit(input, bitSize)
+				if err != nil || (!inRange && !statementIgnore(proc)) {
+					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", input)
 				}
-				if signed < 0 && bitSize != 64 {
-					if !statementIgnore(proc) {
-						return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
-					}
-					if err = to.Append(0, false); err != nil {
-						return err
-					}
-					continue
-				}
-				if signed >= 0 && uint64(signed) > maxBitValue(bitSize) {
-					if !statementIgnore(proc) {
-						return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
-					}
-					if err = to.Append(maxBitValue(bitSize), false); err != nil {
-						return err
-					}
-					continue
-				}
-				if err = to.Append(uint64(signed), false); err != nil {
+				if err = to.Append(value, false); err != nil {
 					return err
 				}
 				continue
@@ -7615,6 +7597,32 @@ func strToBit(
 		}
 	}
 	return nil
+}
+
+// preparedIntegerToBit converts the canonical decimal representation emitted
+// by COM_STMT_EXECUTE. Negative values can only originate from signed protocol
+// integers; non-negative signed and unsigned values share the same BIT range.
+func preparedIntegerToBit(input string, bitSize int) (value uint64, inRange bool, err error) {
+	if strings.HasPrefix(input, "-") {
+		signed, parseErr := strconv.ParseInt(input, 10, 64)
+		if parseErr != nil {
+			return 0, false, parseErr
+		}
+		if signed < 0 && bitSize != 64 {
+			return 0, false, nil
+		}
+		return uint64(signed), true, nil
+	}
+
+	unsigned, parseErr := strconv.ParseUint(input, 10, 64)
+	if parseErr != nil {
+		return 0, false, parseErr
+	}
+	maxValue := maxBitValue(bitSize)
+	if unsigned > maxValue {
+		return maxValue, false, nil
+	}
+	return unsigned, true, nil
 }
 
 func strToArray[T types.ArrayElement](
