@@ -47,10 +47,11 @@ type localLockTable struct {
 
 	mu struct {
 		sync.RWMutex
-		closed           bool
-		store            LockStorage
-		tableCommittedAt timestamp.Timestamp
-		ownerLocalWaits  map[ownerLocalTxnKey][]ownerLocalWaitEdge
+		closed            bool
+		store             LockStorage
+		tableCommittedAt  timestamp.Timestamp
+		tableDefChangedAt *timestamp.Timestamp
+		ownerLocalWaits   map[ownerLocalTxnKey][]ownerLocalWaitEdge
 	}
 
 	options struct {
@@ -345,6 +346,7 @@ func (l *localLockTable) unlock(
 	}
 
 	var startKey []byte
+	tableDefChanged := false
 	locks.iter(func(key []byte) bool {
 		if lock, ok := l.mu.store.Get(key); ok {
 			idx := getMutation(key)
@@ -400,6 +402,10 @@ func (l *localLockTable) unlock(
 				return true
 			}
 
+			if lock.isLockTableDefChanged() {
+				tableDefChanged = true
+			}
+
 			lockCanRemoved := lock.closeTxn(
 				txn,
 				notifyValue{ts: commitTS})
@@ -420,6 +426,14 @@ func (l *localLockTable) unlock(
 	})
 	if l.mu.tableCommittedAt.Less(commitTS) {
 		l.mu.tableCommittedAt = commitTS
+	}
+	if tableDefChanged && !commitTS.IsEmpty() &&
+		(l.mu.tableDefChangedAt == nil || l.mu.tableDefChangedAt.Less(commitTS)) {
+		// Treat the retained timestamp as immutable. Lock results can safely share
+		// this pointer without a per-lock allocation; a later DDL installs a new
+		// timestamp instead of mutating an in-flight result.
+		changedAt := commitTS
+		l.mu.tableDefChangedAt = &changedAt
 	}
 }
 
@@ -596,6 +610,7 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 
 	c.offset = 0
 	c.lockedTS = l.mu.tableCommittedAt
+	c.result.TableDefChangedAt = l.mu.tableDefChangedAt
 	return nil
 }
 
@@ -628,6 +643,7 @@ func (l *localLockTable) acquireRangeLockLocked(c *lockContext) error {
 	}
 	c.offset = 0
 	c.lockedTS = l.mu.tableCommittedAt
+	c.result.TableDefChangedAt = l.mu.tableDefChangedAt
 	return nil
 }
 

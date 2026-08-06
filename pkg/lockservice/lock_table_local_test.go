@@ -1077,6 +1077,102 @@ func TestLockedTSIsLastCommittedTSWithRange(t *testing.T) {
 		})
 }
 
+func TestTableDefChangedAtRetainedAfterUnlock(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		granularity pb.Granularity
+		rows        [][]byte
+	}{
+		{name: "row", granularity: pb.Granularity_Row, rows: [][]byte{{1}}},
+		{name: "range", granularity: pb.Granularity_Range, rows: [][]byte{{1}, {2}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runLockServiceTests(
+				t,
+				[]string{"s1"},
+				func(_ *lockTableAllocator, services []*service) {
+					service := services[0]
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+
+					const tableID = uint64(10)
+					options := pb.LockOptions{
+						Granularity: tc.granularity,
+						Mode:        pb.LockMode_Exclusive,
+						Policy:      pb.WaitPolicy_Wait,
+					}
+
+					// Ordinary DML commits advance the table commit timestamp but must not
+					// manufacture a schema-generation change.
+					_, err := service.Lock(ctx, tableID, tc.rows, []byte{1}, options)
+					require.NoError(t, err)
+					require.NoError(t, service.Unlock(ctx, []byte{1}, timestamp.Timestamp{PhysicalTime: 2}))
+					result, err := service.Lock(ctx, tableID, tc.rows, []byte{2}, options)
+					require.NoError(t, err)
+					require.Nil(t, result.TableDefChangedAt)
+					require.NoError(t, service.Unlock(ctx, []byte{2}, timestamp.Timestamp{}))
+
+					definitionOptions := options
+					definitionOptions.TableDefChanged = true
+					// An aborted definition lock must not establish a fence.
+					_, err = service.Lock(ctx, tableID, tc.rows, []byte("aborted-ddl"), definitionOptions)
+					require.NoError(t, err)
+					require.NoError(t, service.Unlock(ctx, []byte("aborted-ddl"), timestamp.Timestamp{}))
+					result, err = service.Lock(ctx, tableID, tc.rows, []byte("after-abort"), options)
+					require.NoError(t, err)
+					require.Nil(t, result.TableDefChangedAt)
+					require.NoError(t, service.Unlock(ctx, []byte("after-abort"), timestamp.Timestamp{}))
+
+					// A committed definition lock establishes the generation fence.
+					_, err = service.Lock(ctx, tableID, tc.rows, []byte{3}, definitionOptions)
+					require.NoError(t, err)
+					changedAt := timestamp.Timestamp{PhysicalTime: 3}
+					require.NoError(t, service.Unlock(ctx, []byte{3}, changedAt))
+
+					result, err = service.Lock(ctx, tableID, tc.rows, []byte{4}, options)
+					require.NoError(t, err)
+					require.Equal(t, changedAt, *result.TableDefChangedAt)
+					retainedMarker := result.TableDefChangedAt
+					encoded, err := result.Marshal()
+					require.NoError(t, err)
+					var decoded pb.Result
+					require.NoError(t, decoded.Unmarshal(encoded))
+					require.Equal(t, changedAt, *decoded.TableDefChangedAt)
+					// A later ordinary commit cannot erase the DDL fence.
+					require.NoError(t, service.Unlock(ctx, []byte{4}, timestamp.Timestamp{PhysicalTime: 4}))
+
+					result, err = service.Lock(ctx, tableID, tc.rows, []byte{5}, options)
+					require.NoError(t, err)
+					require.Equal(t, changedAt, *result.TableDefChangedAt)
+					require.NoError(t, service.Unlock(ctx, []byte{5}, timestamp.Timestamp{}))
+
+					// An aborted DDL never became visible and must not move the fence.
+					_, err = service.Lock(ctx, tableID, tc.rows, []byte{6}, definitionOptions)
+					require.NoError(t, err)
+					require.NoError(t, service.Unlock(ctx, []byte{6}, timestamp.Timestamp{}))
+					result, err = service.Lock(ctx, tableID, tc.rows, []byte{7}, options)
+					require.NoError(t, err)
+					require.Equal(t, changedAt, *result.TableDefChangedAt)
+					require.NoError(t, service.Unlock(ctx, []byte{7}, timestamp.Timestamp{}))
+
+					// A later DDL replaces the immutable marker. Results already handed
+					// to callers keep the timestamp they observed without a data race.
+					_, err = service.Lock(ctx, tableID, tc.rows, []byte{8}, definitionOptions)
+					require.NoError(t, err)
+					secondChangedAt := timestamp.Timestamp{PhysicalTime: 5}
+					require.NoError(t, service.Unlock(ctx, []byte{8}, secondChangedAt))
+					result, err = service.Lock(ctx, tableID, tc.rows, []byte{9}, options)
+					require.NoError(t, err)
+					require.Equal(t, secondChangedAt, *result.TableDefChangedAt)
+					require.Equal(t, changedAt, *retainedMarker)
+					require.NotSame(t, retainedMarker, result.TableDefChangedAt)
+					require.NoError(t, service.Unlock(ctx, []byte{9}, timestamp.Timestamp{}))
+				},
+			)
+		})
+	}
+}
+
 func Test15608(t *testing.T) {
 	runLockServiceTests(
 		t,
