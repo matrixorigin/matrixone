@@ -241,6 +241,139 @@ func TestReadOneBlockSynthesizesCommitTSForEmptyMetadata(t *testing.T) {
 	ioVec.ReleaseReadResultOnError()
 }
 
+func TestResolveSpecialColumnLayoutCompatibility(t *testing.T) {
+	t.Run("commit-only", func(t *testing.T) {
+		block := NewBlock(NewSeqnums([]uint16{0, SEQNUM_COMMITTS}))
+		block.ColumnMeta(0).setDataType(uint8(types.T_int64))
+		block.ColumnMeta(1).setDataType(uint8(types.T_TS))
+
+		layout := ResolveSpecialColumnLayout(block)
+		require.Equal(t, uint16(1), layout.CommitTS)
+		require.Equal(t, uint16(InvalidSpecialColumnPosition), layout.Abort)
+	})
+
+	t.Run("commit-and-abort-with-sparse-schema", func(t *testing.T) {
+		block := NewBlock(NewSeqnums([]uint16{3, SEQNUM_COMMITTS, SEQNUM_ABORT}))
+		block.ColumnMeta(3).setDataType(uint8(types.T_int64))
+		block.ColumnMeta(4).setDataType(uint8(types.T_TS))
+		block.ColumnMeta(5).setDataType(uint8(types.T_bool))
+
+		layout := ResolveSpecialColumnLayout(block)
+		require.Equal(t, uint16(4), layout.CommitTS)
+		require.Equal(t, uint16(5), layout.Abort)
+	})
+
+	t.Run("physical-address-before-mvcc", func(t *testing.T) {
+		block := NewBlock(NewSeqnums([]uint16{
+			3,
+			SEQNUM_ROWID,
+			SEQNUM_COMMITTS,
+			SEQNUM_ABORT,
+		}))
+		block.ColumnMeta(3).setDataType(uint8(types.T_int64))
+		block.ColumnMeta(4).setDataType(uint8(types.T_Rowid))
+		block.ColumnMeta(5).setDataType(uint8(types.T_TS))
+		block.ColumnMeta(6).setDataType(uint8(types.T_bool))
+
+		layout := ResolveSpecialColumnLayout(block)
+		require.Equal(t, uint16(4), layout.PhysicalAddr)
+		require.Equal(t, uint16(5), layout.CommitTS)
+		require.Equal(t, uint16(6), layout.Abort)
+	})
+
+	t.Run("physical-address-between-commit-and-abort", func(t *testing.T) {
+		block := NewBlock(NewSeqnums([]uint16{
+			1,
+			SEQNUM_COMMITTS,
+			SEQNUM_ROWID,
+			SEQNUM_ABORT,
+		}))
+		block.ColumnMeta(1).setDataType(uint8(types.T_int64))
+		block.ColumnMeta(2).setDataType(uint8(types.T_TS))
+		block.ColumnMeta(3).setDataType(uint8(types.T_Rowid))
+		block.ColumnMeta(4).setDataType(uint8(types.T_bool))
+
+		layout := ResolveSpecialColumnLayout(block)
+		require.Equal(t, uint16(3), layout.PhysicalAddr)
+		require.Equal(t, uint16(2), layout.CommitTS)
+		require.Equal(t, uint16(4), layout.Abort)
+	})
+
+	t.Run("user-columns-are-not-special", func(t *testing.T) {
+		block := NewBlock(NewSeqnums([]uint16{0, 1}))
+		block.ColumnMeta(0).setDataType(uint8(types.T_TS))
+		block.ColumnMeta(1).setDataType(uint8(types.T_bool))
+
+		layout := ResolveSpecialColumnLayout(block)
+		require.Equal(t, uint16(InvalidSpecialColumnPosition), layout.CommitTS)
+		require.Equal(t, uint16(InvalidSpecialColumnPosition), layout.Abort)
+	})
+}
+
+func TestTombstoneAbortSelectionIncludesCommitTS(t *testing.T) {
+	hidden := HiddenColumnSelection_Abort
+	require.Equal(
+		t,
+		[]uint16{0, 1, SEQNUM_COMMITTS, SEQNUM_ABORT},
+		GetTombstoneSeqnums(hidden),
+	)
+	require.Equal(
+		t,
+		[]string{
+			TombstoneAttr_Rowid_Attr,
+			TombstoneAttr_PK_Attr,
+			TombstoneAttr_CommitTs_Attr,
+			TombstoneAttr_Abort_Attr,
+		},
+		GetTombstoneAttrs(hidden),
+	)
+}
+
+func TestReadOneBlockAbortColumnCompatibility(t *testing.T) {
+	t.Run("new-object-reads-abort", func(t *testing.T) {
+		readErr := moerr.NewInternalErrorNoCtx("abort column storage read")
+		fs := &partialReadErrorFS{err: readErr}
+		meta := BuildMetaData(1, 3)
+		block := meta.GetBlockMeta(0)
+		block.BlockHeader().SetRows(1)
+		block.BlockHeader().SetMaxSeqnum(0)
+		block.BlockHeader().SetMetaColumnCount(3)
+		block.ColumnMeta(0).setDataType(uint8(types.T_int64))
+		block.ColumnMeta(1).setDataType(uint8(types.T_TS))
+		block.ColumnMeta(2).setDataType(uint8(types.T_bool))
+		block.ColumnMeta(2).setLocation(NewExtent(1, 0, 1, 1))
+
+		_, err := ReadOneBlockWithMeta(
+			context.Background(), &meta, "new-object", 0,
+			[]uint16{SEQNUM_ABORT}, []types.Type{types.T_bool.ToType()},
+			mpool.MustNewZero(), fs, constructorFactory, fileservice.Policy(0),
+		)
+		require.ErrorIs(t, err, readErr)
+	})
+
+	t.Run("old-object-synthesizes-missing-abort", func(t *testing.T) {
+		readErr := moerr.NewInternalErrorNoCtx("must not read storage")
+		fs := &partialReadErrorFS{err: readErr}
+		meta := BuildMetaData(1, 2)
+		block := meta.GetBlockMeta(0)
+		block.BlockHeader().SetRows(1)
+		block.BlockHeader().SetMaxSeqnum(0)
+		block.BlockHeader().SetMetaColumnCount(2)
+		block.ColumnMeta(0).setDataType(uint8(types.T_int64))
+		block.ColumnMeta(1).setDataType(uint8(types.T_TS))
+
+		ioVec, err := ReadOneBlockWithMeta(
+			context.Background(), &meta, "old-object", 0,
+			[]uint16{SEQNUM_ABORT}, []types.Type{types.T_bool.ToType()},
+			mpool.MustNewZero(), fs, constructorFactory, fileservice.Policy(0),
+		)
+		require.NoError(t, err)
+		require.Len(t, ioVec.Entries, 1)
+		require.NotNil(t, ioVec.Entries[0].CachedData)
+		ioVec.ReleaseReadResultOnError()
+	})
+}
+
 func TestReadAllBlocksWithMetaReleasesPartialReadOnError(t *testing.T) {
 	var releases atomic.Int32
 	readErr := moerr.NewInternalErrorNoCtx("read canceled after partial all-blocks fill")
@@ -684,6 +817,24 @@ func TestCachedCommitTSHelpersBroadcastConstants(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, usable)
 	require.True(t, matched)
+
+	abortVec := vector.NewVec(types.T_bool.ToType())
+	for _, aborted := range []bool{false, false, false, true} {
+		require.NoError(t, vector.AppendFixed(abortVec, aborted, false, mp))
+	}
+	abortData := encode(abortVec)
+	abortVec.Free(mp)
+	defer abortData.Release()
+	matched, usable, err = AnyCachedTSInRangeWithAbort(
+		constData,
+		abortData,
+		[]int64{3},
+		types.BuildTS(15, 0),
+		types.BuildTS(20, 0),
+	)
+	require.NoError(t, err)
+	require.True(t, usable)
+	require.False(t, matched, "aborted rows must not count as persisted PK changes")
 
 	matched, usable, err = AnyCachedTSInRange(
 		constData,

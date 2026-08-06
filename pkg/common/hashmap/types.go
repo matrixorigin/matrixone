@@ -66,7 +66,7 @@ type Iterator interface {
 	// not safe for multi parallel!!!!
 	// Insert vecs[start, start+count) into hashmap
 	// vs  : the number of rows corresponding to each value in the hash table (start with 1)
-	// zvs : if zvs[i] is 0 indicates the presence null, 1 indicates the absence of a null.
+	// zvs: 0 indicates a SQL NULL key and 1 indicates a non-NULL key.
 	Insert(start, count int, vecs []*vector.Vector) (vs []uint64, zvs []int64, err error)
 
 	// not safe for multi parallel!!!!
@@ -76,7 +76,7 @@ type Iterator interface {
 	//safe for multi parallel
 	// Find vecs[start, start+count) in hashmap
 	// vs  : the number of rows corresponding to each value in the hash table (start with 1, and 0 means not found.)
-	// zvs : if zvs[i] is 0 indicates the presence null, 1 indicates the absence of a null.
+	// zvs: 0 indicates a SQL NULL key and 1 indicates a non-NULL key.
 	Find(start, count int, vecs []*vector.Vector) (vs []uint64, zvs []int64, err error)
 }
 
@@ -113,6 +113,7 @@ func NewIteratorAllocation(
 type StrHashMap struct {
 	hasNull            bool
 	groupingAware      bool
+	rejectNaN          bool
 	rows               uint64
 	hashMap            *hashtable.StringHashMap
 	mp                 *mpool.MPool
@@ -123,9 +124,10 @@ type StrHashMap struct {
 // before you use the IntHashMap, the user should make sure that
 // sum of vectors' length equal to 8
 type IntHashMap struct {
-	hasNull bool
-	rows    uint64
-	hashMap *hashtable.Int64HashMap
+	hasNull   bool
+	rejectNaN bool
+	rows      uint64
+	hashMap   *hashtable.Int64HashMap
 }
 
 type strHashmapIterator struct {
@@ -134,16 +136,18 @@ type strHashmapIterator struct {
 	values     []uint64
 	keyBuffer  []byte
 	keyLengths [UnitLimit]int
-	// zValues, 0 indicates the presence null, 1 indicates the absence of a null
+	// zValues: 0 indicates a SQL NULL key and 1 indicates a non-NULL key.
 	zValues       []int64
+	nonMatching   []bool
 	strHashStates [][3]uint64
 }
 
 type intHashMapIterator struct {
-	mp      *IntHashMap
-	keys    []uint64
-	keyOffs []uint32
-	values  []uint64
-	zValues []int64
-	hashes  []uint64
+	mp          *IntHashMap
+	keys        []uint64
+	keyOffs     []uint32
+	values      []uint64
+	zValues     []int64
+	nonMatching []bool
+	hashes      []uint64
 }
