@@ -968,6 +968,75 @@ func TestMapBasedTxnHolderConcurrentGetAndDelete(t *testing.T) {
 	})
 }
 
+func TestMapBasedTxnHolderFenceReleasesShardWhileTxnIsBusy(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		hold := newMapBasedTxnHandler(
+			"s1",
+			getLogger(""),
+			newFixedSlicePool(16),
+			func(string) (bool, error) { return true, nil },
+			func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+				return pb.CannotCommitResponse{}, nil
+			},
+			func(pb.WaitTxn) (bool, error) { return true, nil },
+		).(*mapBasedTxnHolder)
+		defer hold.close()
+
+		bind := pb.LockTable{
+			Group: 0, Table: 24766, ServiceID: "s1", Version: 1, Valid: true,
+		}
+		txnID := []byte("busy-bind-fence")
+		txn := hold.getActiveTxn(txnID, true, "")
+		txn.Lock()
+		txnLocked := true
+		defer func() {
+			if txnLocked {
+				txn.Unlock()
+			}
+		}()
+		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{{1}}, hold.logger))
+
+		fenceEntered := make(chan struct{}, 1)
+		hold.beforeFenceTxnLock = func(candidate *activeTxn) {
+			if candidate == txn {
+				select {
+				case fenceEntered <- struct{}{}:
+				default:
+				}
+			}
+		}
+		fenceDone := make(chan int, 1)
+		changedBind := bind
+		changedBind.Version++
+		go func() {
+			fenceDone <- hold.fenceByBindChanged(changedBind)
+		}()
+		<-fenceEntered
+
+		shard := hold.getActiveTxnShard(string(txnID))
+		require.Eventually(t, func() bool {
+			if !shard.TryLock() {
+				return false
+			}
+			shard.Unlock()
+			return true
+		}, time.Second, time.Millisecond,
+			"bind fencing must not retain the shard while waiting for txn.Lock")
+
+		txn.Unlock()
+		txnLocked = false
+		select {
+		case count := <-fenceDone:
+			require.Equal(t, 1, count)
+		case <-time.After(time.Second):
+			t.Fatal("bind fencing did not resume after the transaction unlocked")
+		}
+		txn.RLock()
+		require.True(t, txn.bindChanged)
+		txn.RUnlock()
+	})
+}
+
 func TestMapBasedTxnHolderVisitsAndClosesAllShards(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		hold := newMapBasedTxnHandler(

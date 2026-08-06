@@ -26,6 +26,11 @@ import (
 var tenantUpgEntries = []versions.UpgradeEntry{
 	newMongoDBCatalogTable(mongodb.TableConnections, mongodb.ConnectionsDDL),
 	newMongoDBCatalogTable(mongodb.TableMappings, mongodb.MappingsDDL),
+	addForeignKeyMetadataColumn("referenced_index_name", "varchar(5000) not null default ''", "on_update"),
+	addForeignKeyMetadataColumn("on_delete_origin", "varchar(64) not null default 'ACTION_ORIGIN_LEGACY_AMBIGUOUS'", "referenced_index_name"),
+	addForeignKeyMetadataColumn("on_update_origin", "varchar(64) not null default 'ACTION_ORIGIN_LEGACY_AMBIGUOUS'", "on_delete_origin"),
+	upgradeInformationSchemaKeyColumnUsage(),
+	upgradeInformationSchemaReferentialConstraints(),
 	populateInformationSchemaCharacterSets(),
 	upgradeInformationSchemaColumns(),
 }
@@ -46,6 +51,19 @@ func upgradeInformationSchemaColumns() versions.UpgradeEntry {
 			return exists && viewDef == sysview.InformationSchemaColumnsDDL, nil
 		},
 		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.COLUMNS;", sysview.InformationDBConst),
+	}
+}
+
+func addForeignKeyMetadataColumn(column, definition, after string) versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: catalog.MOForeignKeys,
+		UpgType:   versions.ADD_COLUMN,
+		UpgSql:    fmt.Sprintf("alter table %s.%s add column %s %s after %s", catalog.MO_CATALOG, catalog.MOForeignKeys, column, definition, after),
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			columnInfo, err := versions.CheckTableColumn(txn, accountID, catalog.MO_CATALOG, catalog.MOForeignKeys, column)
+			return columnInfo.IsExits, err
+		},
 	}
 }
 
@@ -79,5 +97,37 @@ func newMongoDBCatalogTable(name, ddl string) versions.UpgradeEntry {
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			return versions.CheckTableDefinition(txn, accountID, catalog.MO_CATALOG, name)
 		},
+	}
+}
+
+func upgradeInformationSchemaKeyColumnUsage() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "KEY_COLUMN_USAGE",
+		UpgType:   versions.CREATE_VIEW,
+		UpgSql:    sysview.InformationSchemaKeyColumnUsageDDL,
+		CheckFunc: checkViewDefinition("KEY_COLUMN_USAGE", sysview.InformationSchemaKeyColumnUsageDDL),
+		PreSql:    fmt.Sprintf("DROP TABLE IF EXISTS %s.%s;", sysview.InformationDBConst, "KEY_COLUMN_USAGE"),
+	}
+}
+
+func upgradeInformationSchemaReferentialConstraints() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "REFERENTIAL_CONSTRAINTS",
+		UpgType:   versions.MODIFY_VIEW,
+		UpgSql:    sysview.InformationSchemaReferentialConstraintsDDL,
+		CheckFunc: checkViewDefinition("REFERENTIAL_CONSTRAINTS", sysview.InformationSchemaReferentialConstraintsDDL),
+		PreSql:    fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "REFERENTIAL_CONSTRAINTS"),
+	}
+}
+
+func checkViewDefinition(viewName, definition string) func(executor.TxnExecutor, uint32) (bool, error) {
+	return func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, viewName)
+		if err != nil {
+			return false, err
+		}
+		return exists && viewDef == definition, nil
 	}
 }
