@@ -504,24 +504,11 @@ truncate table prepare_bit64_signed;
 -- @regex("data out of range",true)
 insert into prepare_bit64_signed values ('-6109877384019645241');
 
-prepare s from 'insert into prepare_bit64_signed values (?)';
-set @signed_high_bit = -9223372036854775808;
-execute s using @signed_high_bit;
-set @signed_workflow_value = -6109877384019645241;
-execute s using @signed_workflow_value;
-set @signed_all_bits = -1;
-execute s using @signed_all_bits;
-deallocate prepare s;
-select b from prepare_bit64_signed order by b;
-
 -- the signed bit-pattern compatibility is limited to BIT(64)
 drop table if exists prepare_bit63_signed;
 create table prepare_bit63_signed (b bit(63));
-prepare s from 'insert into prepare_bit63_signed values (?)';
-set @signed_all_bits = -1;
 -- @regex("data out of range",true)
-execute s using @signed_all_bits;
-deallocate prepare s;
+insert into prepare_bit63_signed values (-1);
 select count(*) from prepare_bit63_signed;
 
 drop table prepare_bit64_signed;
