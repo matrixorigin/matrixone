@@ -8,6 +8,18 @@ SELECT CHAR_LENGTH("Español");
 SELECT LENGTH(_binary '你好'),
        CHAR_LENGTH(_binary '你好'),
        CHARACTER_LENGTH(_binary '你好');
+SELECT LENGTH(X'e4bda0'),
+       CHAR_LENGTH(X'e4bda0'),
+       CHARACTER_LENGTH(X'e4bda0');
+SELECT CHAR_LENGTH(0xE4BDA0),
+       CHAR_LENGTH(B'111001001011110110100000'),
+       CHAR_LENGTH(X''),
+       CHAR_LENGTH(B'');
+SELECT CHAR_LENGTH(_binary X'e4bda0'),
+       CHAR_LENGTH(_binary '你好'),
+       CHAR_LENGTH('你好');
+SELECT CHAR_LENGTH(CAST(X'e4bda0' AS CHAR)),
+       CHAR_LENGTH(CAST(X'e4bda0' AS BINARY));
 CREATE TABLE binary_char_length (
     b BINARY(8),
     vb VARBINARY(8),
