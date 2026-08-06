@@ -293,8 +293,9 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 				if provenance.Source.Metadata.Default != nil {
 					defaultDef = DeepCopyDefault(provenance.Source.Metadata.Default)
 					defaultDef.NullAbility = nullAbility
-					if !nullAbility && defaultDef.Expr == nil && defaultDef.OriginString != "" {
-						defaultDef, err = buildCTASDefaultFromOrigin(ctx, *typ, false, defaultDef.OriginString)
+					if defaultDef.Expr == nil && defaultDef.OriginString != "" {
+						defaultDef, err = buildCTASDefaultFromOrigin(
+							ctx, *typ, nullAbility, defaultDef.OriginString)
 						if err != nil {
 							return nil, nil, err
 						}

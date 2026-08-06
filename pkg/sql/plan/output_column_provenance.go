@@ -85,12 +85,15 @@ func hasExplicitSourceDefault(metadata SourceColumnMetadata) bool {
 }
 
 func ctasViewDefaultPolicy(metadata SourceColumnMetadata) CTASDefaultPolicy {
-	if !metadata.Typ.NotNullable || !hasExplicitSourceDefault(metadata) {
+	if !hasExplicitSourceDefault(metadata) {
 		return CTASDefaultNone
 	}
 	if (types.T(metadata.Typ.Id) == types.T_blob || types.T(metadata.Typ.Id) == types.T_text) &&
 		(metadata.Default.Expr != nil || metadata.Default.OriginString != "") {
 		return CTASDefaultInheritViewSource
+	}
+	if !metadata.Typ.NotNullable {
+		return CTASDefaultNone
 	}
 	if _, ok := ctasViewTypeDefaultOrigin(metadata.Typ); ok {
 		return CTASDefaultUseTypeDefault

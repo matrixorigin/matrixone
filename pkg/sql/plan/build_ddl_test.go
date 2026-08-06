@@ -669,6 +669,8 @@ func TestCTASViewDefaultPolicyMatrix(t *testing.T) {
 		{name: "bit", typ: plan.Type{Id: int32(types.T_bit), Width: 8, NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "0"},
 		{name: "blob expression", typ: plan.Type{Id: int32(types.T_blob), NotNullable: true}, defaultDef: &plan.Default{Expr: blobExpr, OriginString: "(blob_default())"}, wantPolicy: CTASDefaultInheritViewSource},
 		{name: "text expression", typ: plan.Type{Id: int32(types.T_text), NotNullable: true}, defaultDef: &plan.Default{Expr: makePlan2StringConstExprWithType("seed"), OriginString: "('seed')"}, wantPolicy: CTASDefaultInheritViewSource},
+		{name: "nullable blob expression", typ: plan.Type{Id: int32(types.T_blob)}, defaultDef: &plan.Default{NullAbility: true, Expr: blobExpr, OriginString: "(blob_default())"}, wantPolicy: CTASDefaultInheritViewSource},
+		{name: "nullable text expression", typ: plan.Type{Id: int32(types.T_text)}, defaultDef: &plan.Default{NullAbility: true, Expr: makePlan2StringConstExprWithType("seed"), OriginString: "('seed')"}, wantPolicy: CTASDefaultInheritViewSource},
 		{name: "nullable expression", typ: plan.Type{Id: int32(types.T_varchar)}, defaultDef: &plan.Default{NullAbility: true, Expr: makePlan2StringConstExprWithType("seed"), OriginString: "('seed')"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -682,6 +684,19 @@ func TestCTASViewDefaultPolicyMatrix(t *testing.T) {
 				require.False(t, ok)
 			}
 		})
+	}
+}
+
+func TestBuildNullableLOBCTASDefaultFromOrigin(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	for _, oid := range []types.T{types.T_text, types.T_blob} {
+		defaultDef, err := buildCTASDefaultFromOrigin(
+			ctx, plan.Type{Id: int32(oid)}, true, "('seed')")
+		require.NoError(t, err)
+		require.True(t, defaultDef.GetNullAbility())
+		require.Equal(t, "('seed')", defaultDef.GetOriginString())
+		require.NotNil(t, defaultDef.GetExpr())
+		require.Equal(t, int32(oid), defaultDef.GetExpr().Typ.Id)
 	}
 }
 
