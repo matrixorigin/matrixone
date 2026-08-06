@@ -268,13 +268,13 @@ func TestCompareTableDefs_DropColumn(t *testing.T) {
 // ==== filter_object_batch.go ====
 
 func TestFilterBatchBySnapshotTS_NilBatchCov(t *testing.T) {
-	_, err := filterBatchBySnapshotTS(context.Background(), nil, types.TS{}, nil)
+	_, _, err := filterBatchBySnapshotTS(context.Background(), nil, types.TS{}, nil)
 	assert.NoError(t, err)
 }
 
 func TestCreateObjectFromBatch_NilBatchCov(t *testing.T) {
 	var stats objectio.ObjectStats
-	result, _, err := createObjectFromBatch(context.Background(), nil, &stats, types.TS{}, false, nil, nil, 0, false)
+	result, _, err := createObjectFromBatch(context.Background(), nil, nil, &stats, types.TS{}, false, nil, nil, 0, false)
 	assert.NoError(t, err)
 	assert.True(t, result.IsZero())
 }
