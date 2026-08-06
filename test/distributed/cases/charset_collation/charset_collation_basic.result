@@ -72,9 +72,9 @@ AND c.table_name = 'charset_metadata_repro'
 AND c.column_name IN ('c_char', 'c_varchar', 'c_text')
 ORDER BY c.ordinal_position;
 data_type    character_set_name    character_maximum_length    character_octet_length    maxlen
-CHAR    utf8    8    32    4
-VARCHAR    utf8    128    512    4
-TEXT    utf8    0    0    4
+char    utf8    8    32    4
+varchar    utf8    128    512    4
+text    utf8    0    0    4
 DROP TABLE charset_metadata_repro;
 DROP DATABASE IF EXISTS charset_test_utf8;
 CREATE DATABASE charset_test_utf8 CHARACTER SET utf8;
