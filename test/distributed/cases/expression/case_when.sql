@@ -495,3 +495,20 @@ select if(true, s, 12) as unicode_if,
        coalesce(s, 12) as unicode_coalesce
 from t_conditional_composed_width;
 drop table t_conditional_composed_width;
+
+-- @case
+-- @desc:test conditional VARCHAR metadata covers TIME and preserves the selected TIME value
+-- @label:bvt
+drop table if exists t_conditional_time_varchar;
+create table t_conditional_time_varchar (s varchar(1), i int, tm time(6));
+insert into t_conditional_time_varchar values (null, null, '12:34:56.123456');
+
+drop view if exists v_conditional_time_varchar;
+create view v_conditional_time_varchar as
+select case when false then 'x' when false then 1 else tm end as case_time,
+       coalesce(s, i, tm) as coalesce_time
+from t_conditional_time_varchar;
+desc v_conditional_time_varchar;
+select * from v_conditional_time_varchar;
+drop view v_conditional_time_varchar;
+drop table t_conditional_time_varchar;

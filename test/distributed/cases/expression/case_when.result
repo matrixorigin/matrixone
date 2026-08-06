@@ -614,3 +614,20 @@ from t_conditional_composed_width;
 ➤ unicode_if[12,-1,0]  ¦  unicode_case[12,-1,0]  ¦  unicode_coalesce[12,-1,0]  𝄀
 你好  ¦  你好  ¦  你好
 drop table t_conditional_composed_width;
+drop table if exists t_conditional_time_varchar;
+create table t_conditional_time_varchar (s varchar(1), i int, tm time(6));
+insert into t_conditional_time_varchar values (null, null, '12:34:56.123456');
+drop view if exists v_conditional_time_varchar;
+create view v_conditional_time_varchar as
+select case when false then 'x' when false then 1 else tm end as case_time,
+coalesce(s, i, tm) as coalesce_time
+from t_conditional_time_varchar;
+desc v_conditional_time_varchar;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+case_time  ¦  VARCHAR(24)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+coalesce_time  ¦  VARCHAR(24)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from v_conditional_time_varchar;
+➤ case_time[12,-1,0]  ¦  coalesce_time[12,-1,0]  𝄀
+12:34:56.123456  ¦  12:34:56.123456
+drop view v_conditional_time_varchar;
+drop table t_conditional_time_varchar;

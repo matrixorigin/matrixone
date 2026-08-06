@@ -4260,6 +4260,14 @@ func adjustControlFlowVarcharMetadata(args []*Expr, argTypes []types.Type, value
 		if idx >= len(argTypes) {
 			return false
 		}
+		// NULL does not contribute a runtime display value.  Every other arm
+		// participates in the implicit VARCHAR cast selected by the overload,
+		// even when its type is outside the string/numeric/temporal families.
+		// Therefore only NULL may be ignored here; an unsupported display bound
+		// must retain the overload's conservative VARCHAR capacity.
+		if controlFlowNullExpr(args[idx]) {
+			continue
+		}
 		typ := argTypes[idx]
 		var (
 			candidate int32
@@ -4275,10 +4283,7 @@ func adjustControlFlowVarcharMetadata(args []*Expr, argTypes []types.Type, value
 			hasConvertible = true
 			candidate, known = temporalWidth, true
 		} else {
-			// NULL has no display capacity and is intentionally ignored by the
-			// conditional overload. Other non-string/non-numeric values are also
-			// outside this VARCHAR metadata adjustment.
-			continue
+			return false
 		}
 		if !known {
 			// Width zero is used both by exact empty literals and by types whose
@@ -4298,10 +4303,33 @@ func adjustControlFlowVarcharMetadata(args []*Expr, argTypes []types.Type, value
 	return false
 }
 
+func controlFlowNullExpr(expr *Expr) bool {
+	for {
+		if isNullLiteralExpr(expr) {
+			return true
+		}
+		unwrapped := unwrapCast(expr)
+		if unwrapped == expr {
+			return false
+		}
+		expr = unwrapped
+	}
+}
+
 func temporalDisplayWidthForVarchar(typ types.Type) (int32, bool) {
 	switch typ.Oid {
 	case types.T_date:
 		return 10, true
+	case types.T_time:
+		// Time.String2 can format the complete MatrixOne TIME range, including
+		// its optional sign and a ten-digit hour field.  The scale determines
+		// the fractional suffix; this is a real upper bound, unlike a zero type
+		// width on variable-size values such as JSON.
+		width := int32(len(strconv.FormatInt(int64(types.MaxHourInTime), 10)) + 7)
+		if typ.Scale > 0 {
+			width += 1 + typ.Scale
+		}
+		return width, true
 	case types.T_datetime, types.T_timestamp:
 		if typ.Scale > 0 {
 			return 20 + typ.Scale, true

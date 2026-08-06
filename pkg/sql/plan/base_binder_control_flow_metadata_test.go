@@ -304,6 +304,58 @@ func TestBindControlFlowMetadata(t *testing.T) {
 		})
 	}
 
+	for _, test := range []struct {
+		name  string
+		typ   types.Type
+		width int32
+	}{
+		{
+			name:  "time uses its full display bound",
+			typ:   types.T_time.ToTypeWithScale(6),
+			width: 24,
+		},
+		{
+			name:  "bool keeps conservative varchar capacity",
+			typ:   types.T_bool.ToType(),
+			width: types.MaxVarcharLen,
+		},
+		{
+			name:  "bit keeps conservative varchar capacity",
+			typ:   types.T_bit.ToType(),
+			width: types.MaxVarcharLen,
+		},
+		{
+			name:  "uuid keeps conservative varchar capacity",
+			typ:   types.T_uuid.ToType(),
+			width: types.MaxVarcharLen,
+		},
+		{
+			name:  "json keeps conservative varchar capacity",
+			typ:   types.T_json.ToType(),
+			width: types.MaxVarcharLen,
+		},
+		{
+			name:  "datalink keeps conservative varchar capacity",
+			typ:   types.T_datalink.ToType(),
+			width: types.MaxVarcharLen,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := &planpb.Expr{
+				Typ:  planpb.Type{Id: int32(test.typ.Oid), Width: test.typ.Width, Scale: test.typ.Scale},
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+			}
+			expr, err := BindFuncExprImplByPlanExpr(ctx, "coalesce", []*planpb.Expr{
+				makePlan2StringConstExprWithType("x"),
+				makePlan2Int64ConstExprWithType(1),
+				value,
+			})
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
+			require.Equal(t, test.width, expr.Typ.Width)
+		})
+	}
+
 	t.Run("greatest remains nullable in metadata", func(t *testing.T) {
 		expr, err := BindFuncExprImplByPlanExpr(ctx, "greatest", []*planpb.Expr{
 			makePlan2DateConstExprWithType(0),
@@ -477,6 +529,42 @@ func TestBuildControlFlowDecimalStringMetadataWidth(t *testing.T) {
 			require.Len(t, projectList, 1)
 			require.Equal(t, int32(types.T_varchar), projectList[0].Typ.Id)
 			require.Equal(t, test.width, projectList[0].Typ.Width)
+		})
+	}
+}
+
+func TestBuildControlFlowTimeVarcharMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "case",
+			sql: `select case
+				when false then 'x'
+				when false then 1
+				else cast('12:34:56.123456' as time(6))
+			end`,
+		},
+		{
+			name: "coalesce",
+			sql: `select coalesce(
+				'x',
+				1,
+				cast('12:34:56.123456' as time(6)))`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+
+			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+			require.Len(t, projectList, 1)
+			require.Equal(t, int32(types.T_varchar), projectList[0].Typ.Id)
+			require.Equal(t, int32(24), projectList[0].Typ.Width)
 		})
 	}
 }
