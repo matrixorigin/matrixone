@@ -18,9 +18,28 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBasicClusterUsesShortStartupRetryIntervals(t *testing.T) {
+	services := []*operator{
+		{serviceType: metadata.ServiceType_LOG, cfg: newServiceConfig()},
+		{serviceType: metadata.ServiceType_TN, cfg: newServiceConfig()},
+		{serviceType: metadata.ServiceType_CN, cfg: newServiceConfig()},
+	}
+	for _, service := range services {
+		adjustBasicClusterService(service)
+	}
+
+	assert.Equal(t, time.Second, services[0].cfg.LogService.HAKeeperCheckInterval.Duration)
+	assert.Equal(t, 500*time.Millisecond, services[0].cfg.LogService.HAKeeperBootstrapRetryInterval.Duration)
+	assert.Equal(t, 100*time.Millisecond, services[1].cfg.HAKeeperRunningRetryInterval.Duration)
+	assert.Equal(t, 100*time.Millisecond, services[2].cfg.TNShardReadyRetryInterval.Duration)
+}
 
 type panicTestReporter struct{}
 
