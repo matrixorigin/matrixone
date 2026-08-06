@@ -2593,7 +2593,7 @@ func strTypeToOthers(proc *process.Process,
 	switch toType.Oid {
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return strToBit(ctx, source, rs, int(toType.Width), length, selectList)
+		return strToBit(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return strToSigned(ctx, source, rs, 8, length, selectList, explicit)
@@ -7555,7 +7555,7 @@ func strToStr(
 }
 
 func strToBit(
-	ctx context.Context,
+	ctx context.Context, proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[uint64], bitSize int, length int, selectList *FunctionSelectList) error {
 	for i := 0; i < length; i++ {
@@ -7575,10 +7575,22 @@ func strToBit(
 					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
 				}
 				if signed < 0 && bitSize != 64 {
-					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
+					if !statementIgnore(proc) {
+						return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
+					}
+					if err = to.Append(0, false); err != nil {
+						return err
+					}
+					continue
 				}
 				if signed >= 0 && uint64(signed) > maxBitValue(bitSize) {
-					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
+					if !statementIgnore(proc) {
+						return moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value %s", string(v))
+					}
+					if err = to.Append(maxBitValue(bitSize), false); err != nil {
+						return err
+					}
+					continue
 				}
 				if err = to.Append(uint64(signed), false); err != nil {
 					return err

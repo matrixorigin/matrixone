@@ -221,6 +221,7 @@ func TestInsertIgnoreCastsSpecialValues(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.SetStmtProfile(&process.StmtProfile{})
 	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
+	bit3 := types.New(types.T_bit, 3, 0)
 	bit4 := types.New(types.T_bit, 4, 0)
 	bit64 := types.New(types.T_bit, 64, 0)
 
@@ -248,6 +249,22 @@ func TestInsertIgnoreCastsSpecialValues(t *testing.T) {
 	runBitCast("decimal64 saturates", NewFunctionTestInput(types.New(types.T_decimal64, 10, 0), []types.Decimal64{31}, nil), bit4, 15)
 	runBitCast("decimal128 saturates", NewFunctionTestInput(types.New(types.T_decimal128, 20, 0), []types.Decimal128{{B0_63: 31}}, nil), bit4, 15)
 	runBitCast("decimal256 saturates", NewFunctionTestInput(types.New(types.T_decimal256, 40, 0), []types.Decimal256{{B0_63: 31}}, nil), bit4, 15)
+
+	runSignedPreparedBitCast := func(name, value string, want uint64) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			input := NewFunctionTestInput(types.T_varchar.ToType(), []string{value}, nil)
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{input, NewFunctionTestInput(bit3, []uint64{}, nil)},
+				NewFunctionTestResult(bit3, false, []uint64{want}, nil), NewCast)
+			tcc.parameters[0].SetIsSignedIntegerParam(true)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	runSignedPreparedBitCast("signed prepared positive saturates", "8", 7)
+	runSignedPreparedBitCast("signed prepared negative becomes zero", "-1", 0)
 
 	runYearCast := func(name string, input FunctionTestInput) {
 		t.Helper()
