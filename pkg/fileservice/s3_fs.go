@@ -423,10 +423,10 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 		statistic.StatsInfoFromContext(ctx).AddS3FSPrefetchFileIOMergerTimeConsumption(time.Since(startLock))
 	}()
 
-	done, _ := s.ioMerger.Merge(IOMergeKey{
+	done, _, _ := s.ioMerger.mergeWithGeneration(IOMergeKey{
 		Path:       filePath,
 		FullObject: true,
-	}, maxIOWaitDuration)
+	}, maxIOWaitDuration, s.diskCache != nil)
 	if done != nil {
 		defer done()
 	} else {
@@ -765,7 +765,13 @@ read_disk_cache:
 		if mergeKey.FullObject {
 			waitDuration = shortIOWaitDuration
 		}
-		done, wait := s.ioMerger.Merge(mergeKey, waitDuration)
+		cacheProducer := mergeKey.FullObject &&
+			s.shouldStreamFullObjectToDiskCache(vector)
+		done, wait, generation := s.ioMerger.mergeWithGeneration(
+			mergeKey,
+			waitDuration,
+			cacheProducer,
+		)
 		if done != nil {
 			finishMerge = done
 			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
@@ -778,17 +784,14 @@ read_disk_cache:
 			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
 			metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
 			LogEvent(ctx, str_ioMerger_Merge_end)
-			if mergeKey.FullObject && s.ioMerger.IsMerging(mergeKey) {
+			if mergeKey.FullObject && generation.inProgress() {
 				logicalBytes, spanBytes, expensive := vector.expensiveMinimalRangeRead()
-				if mayReadDiskCache &&
-					s.shouldStreamFullObjectToDiskCache(vector) &&
-					expensive {
+				if expensive && mayReadDiskCache && generation.cacheProducer {
 					LogEvent(ctx, str_ioMerger_Merge_wait_expensive_range,
 						logicalBytes, spanBytes)
 					waitStart := time.Now()
-					completed, waitErr := s.ioMerger.waitContext(
+					completed, waitErr := generation.waitContext(
 						ctx,
-						mergeKey,
 						maxIOWaitDuration,
 					)
 					waitTime := time.Since(waitStart)
@@ -808,6 +811,10 @@ read_disk_cache:
 						goto read_memory_cache
 					}
 					goto read_disk_cache
+				}
+				if expensive {
+					forcePerEntryRangeRead = true
+					goto read_s3
 				}
 				forceMinimalRangeRead = true
 				goto read_s3

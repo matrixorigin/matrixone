@@ -168,7 +168,7 @@ func TestIOMergerIsMerging(t *testing.T) {
 func TestIOMergerWaitContext(t *testing.T) {
 	merger := NewIOMerger()
 	key := IOMergeKey{Path: "foo"}
-	done, wait := merger.Merge(key, time.Second)
+	done, wait, generation := merger.mergeWithGeneration(key, time.Second, true)
 	if done == nil || wait != nil {
 		t.Fatal("expected first merge to initiate")
 	}
@@ -180,11 +180,11 @@ func TestIOMergerWaitContext(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	completed, err := merger.waitContext(ctx, key, time.Second)
+	completed, err := generation.waitContext(ctx, time.Second)
 	if completed || !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled wait, got %v", err)
 	}
-	completed, err = merger.waitContext(context.Background(), key, time.Millisecond)
+	completed, err = generation.waitContext(context.Background(), time.Millisecond)
 	if completed || err != nil {
 		t.Fatalf("expected bounded wait to expire, got completed=%v, err=%v", completed, err)
 	}
@@ -199,7 +199,7 @@ func TestIOMergerWaitContext(t *testing.T) {
 	}
 	waitDone := make(chan waitResult, 1)
 	go func() {
-		completed, err := merger.waitContext(waitCtx, key, time.Second)
+		completed, err := generation.waitContext(waitCtx, time.Second)
 		waitDone <- waitResult{completed: completed, err: err}
 	}()
 	<-waitCtx.started
@@ -208,8 +208,39 @@ func TestIOMergerWaitContext(t *testing.T) {
 	if !result.completed || result.err != nil {
 		t.Fatalf("merge completion wait failed: completed=%v, err=%v", result.completed, result.err)
 	}
-	completed, err = merger.waitContext(context.Background(), key, time.Second)
+	completed, err = generation.waitContext(context.Background(), time.Second)
 	if !completed || err != nil {
 		t.Fatalf("completed merge wait failed: completed=%v, err=%v", completed, err)
+	}
+}
+
+func TestIOMergerGenerationUsesLeaderCapability(t *testing.T) {
+	merger := NewIOMerger()
+	key := IOMergeKey{Path: "foo"}
+	done, wait, leaderGeneration := merger.mergeWithGeneration(key, time.Second, true)
+	if done == nil || wait != nil {
+		t.Fatal("expected first merge to initiate")
+	}
+
+	doneFollower, waitFollower, followerGeneration := merger.mergeWithGeneration(key, time.Second, false)
+	if doneFollower != nil || waitFollower == nil {
+		t.Fatal("expected second merge to wait")
+	}
+	if followerGeneration != leaderGeneration || !followerGeneration.cacheProducer {
+		t.Fatal("follower did not observe the leader generation capability")
+	}
+
+	done()
+	doneNext, waitNext, nextGeneration := merger.mergeWithGeneration(key, time.Second, false)
+	if doneNext == nil || waitNext != nil {
+		t.Fatal("expected next merge generation to initiate")
+	}
+	defer doneNext()
+	if nextGeneration == leaderGeneration || nextGeneration.cacheProducer {
+		t.Fatal("new generation inherited the previous leader capability")
+	}
+	completed, err := followerGeneration.waitContext(context.Background(), time.Second)
+	if !completed || err != nil {
+		t.Fatalf("old generation wait followed the new generation: completed=%v, err=%v", completed, err)
 	}
 }
