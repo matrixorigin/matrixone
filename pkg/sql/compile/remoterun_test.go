@@ -396,6 +396,22 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.Equal(t, vm.IntersectAll, restored.OpType())
 	})
 
+	t.Run("GroupByHashKey", func(t *testing.T) {
+		original := group.NewArgument()
+		original.GroupByHashKey = []int32{0, 2}
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		require.Equal(t, original.GroupByHashKey, restored.(*group.Group).GroupByHashKey)
+	})
+
+	t.Run("MergeGroupByHashKey", func(t *testing.T) {
+		original := group.NewArgumentMergeGroup()
+		original.GroupByHashKey = []int32{1}
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		require.Equal(t, original.GroupByHashKey, restored.(*group.MergeGroup).GroupByHashKey)
+	})
+
 	t.Run("SharedTableLock", func(t *testing.T) {
 		original := lockop.NewArgumentByEngine(nil)
 		original.AddLockTargetWithMode(42, nil, lockpb.LockMode_Shared, 0,
@@ -1488,13 +1504,14 @@ func TestHandlePrepareDoneNotifyObservesMessageCancellationAfterAttach(t *testin
 	session := mock_morpc.NewMockClientSession(ctrl)
 	session.EXPECT().SessionCtx().Return(context.Background()).AnyTimes()
 	receiver := &messageReceiverOnServer{
-		messageCtx:    messageCtx,
-		connectionCtx: context.Background(),
-		messageId:     7,
-		messageTyp:    pipeline.Method_PrepareDoneNotifyMessage,
-		messageUuid:   uid,
-		clientSession: session,
-		colexecServer: server,
+		messageCtx:      messageCtx,
+		connectionCtx:   context.Background(),
+		messageId:       7,
+		messageTyp:      pipeline.Method_PrepareDoneNotifyMessage,
+		messageUuid:     uid,
+		clientSession:   session,
+		colexecServer:   server,
+		streamLifecycle: &pipelineStreamLifecycle{batchFlow: newPipelineBatchFlow(2, 1024)},
 	}
 
 	done := make(chan error, 1)
@@ -1507,6 +1524,14 @@ func TestHandlePrepareDoneNotifyObservesMessageCancellationAfterAttach(t *testin
 	case attached = <-notifyCh:
 		require.NotNil(t, attached)
 		require.Equal(t, uid, attached.Uid)
+		require.Equal(t, uint32(2), attached.BatchCredits)
+		require.Equal(t, uint64(1024), attached.ByteCredits)
+		require.NotNil(t, attached.ReserveBatch)
+		require.NotNil(t, attached.RollbackBatch)
+		seq, err := attached.ReserveBatch(context.Background(), 10)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), seq)
+		attached.RollbackBatch(seq)
 	case <-time.After(time.Second):
 		t.Fatal("prepare-done notify did not attach to the published receiver")
 	}

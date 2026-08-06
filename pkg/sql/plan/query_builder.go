@@ -3029,6 +3029,75 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
+	case plan.Node_PRE_INSERT_UK:
+		if node.PreInsertUkCtx == nil || !node.PreInsertUkCtx.InsertIgnoreMultiDedup {
+			return nil, moerr.NewInternalError(builder.GetContext(), "unsupported PRE_INSERT_UK node in query plan")
+		}
+
+		child := builder.qry.Nodes[node.Children[0]]
+		if len(child.BindingTags) != 1 {
+			return nil, moerr.NewInternalError(builder.GetContext(), "invalid INSERT IGNORE dedup input")
+		}
+		childTag := child.BindingTags[0]
+		keyRefs := make([][2]int32, len(node.PreInsertUkCtx.KeyColumns))
+		conflictRefs := make([][2]int32, len(node.PreInsertUkCtx.ConflictColumns))
+		for i, pos := range node.PreInsertUkCtx.KeyColumns {
+			keyRefs[i] = [2]int32{childTag, pos}
+			colRefCnt[keyRefs[i]]++
+		}
+		for i, pos := range node.PreInsertUkCtx.ConflictColumns {
+			conflictRefs[i] = [2]int32{childTag, pos}
+			colRefCnt[conflictRefs[i]]++
+		}
+		outputTag := node.BindingTags[0]
+		neededOutputs := make([]int32, 0, len(node.ProjectList))
+		for i, expr := range node.ProjectList {
+			if colRefCnt[[2]int32{outputTag, int32(i)}] == 0 {
+				continue
+			}
+			neededOutputs = append(neededOutputs, int32(i))
+			increaseRefCnt(expr, 1, colRefCnt)
+		}
+
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+		if err != nil {
+			return nil, err
+		}
+
+		for i, ref := range keyRefs {
+			colRefCnt[ref]--
+			pos, ok := childRemapping.globalToLocal[ref]
+			if !ok {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing INSERT IGNORE dedup key column")
+			}
+			node.PreInsertUkCtx.KeyColumns[i] = pos[1]
+		}
+		for i, ref := range conflictRefs {
+			colRefCnt[ref]--
+			pos, ok := childRemapping.globalToLocal[ref]
+			if !ok {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing INSERT IGNORE conflict column")
+			}
+			node.PreInsertUkCtx.ConflictColumns[i] = pos[1]
+		}
+
+		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		newProjectList := make([]*plan.Expr, 0, len(neededOutputs))
+		remapInfo.tip = "PreInsertUkCtx"
+		for i, output := range neededOutputs {
+			expr := node.ProjectList[output]
+			increaseRefCnt(expr, -1, colRefCnt)
+			remapInfo.srcExprIdx = i
+			if err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo); err != nil {
+				return nil, err
+			}
+			refreshExprNullabilityFromInputs(expr, childProjList)
+			remapping.addColRef([2]int32{outputTag, output})
+			newProjectList = append(newProjectList, expr)
+		}
+		node.ProjectList = newProjectList
+		node.PreInsertUkCtx.OutputColumns = int32(len(newProjectList))
+
 	default:
 		return nil, moerr.NewInternalError(builder.GetContext(), "unsupport node type")
 	}
@@ -3170,6 +3239,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.rewriteEffectlessAggToProject(rootID)
 		rootID = builder.optimizeFilters(rootID)
 		builder.pushdownLimitToTableScan(rootID)
+		builder.determineGroupByHashKeys(rootID)
 
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
