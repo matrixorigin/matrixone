@@ -2186,9 +2186,11 @@ func irregularIndexAffectedByUpdate(
 // from CDC-only indexes using plugin metadata. MASTER has no plugin, but shares
 // the modern synchronous maintenance pipeline with the plugin-backed indexes.
 // The bool return preserves the legacy route only for an affected irregular
-// algorithm that has not migrated to either mechanism. Synchronous indexes
-// delete by the old source PK and rebuild from the final row image, so changing
-// the base-table PK is handled by the same maintenance pipeline.
+// algorithm that has not migrated to either mechanism. MASTER indexes delete
+// by the old source PK and rebuild from the final row image, so changing the
+// base-table PK is handled by the same maintenance pipeline. Plugin-backed
+// synchronous full-text/vector indexes retain their existing PK-update
+// restriction until their complete hidden-table groups support that contract.
 func classifyIrregularIndexesForUpdate(
 	ctx context.Context,
 	tableDef *plan.TableDef,
@@ -2233,7 +2235,16 @@ func classifyIrregularIndexesForUpdate(
 		if async {
 			continue
 		}
-		if affected || pkUpdated {
+		if pkUpdated {
+			return nil, false, newUpdatePlannerRouteError(
+				updatePlannerRejected,
+				updateRouteReasonIrregularIndex,
+				moerr.NewUnsupportedDML(
+					ctx,
+					"update primary key on a table with a synchronous full-text/vector index"),
+			)
+		}
+		if affected {
 			affectedSyncGroups[idxDef.IndexName+"\x00"+idxDef.IndexTableName] = true
 		}
 	}
