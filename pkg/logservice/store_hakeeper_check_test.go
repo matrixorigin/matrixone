@@ -54,7 +54,11 @@ func TestNextHAKeeperCheckIntervalUsesFastBootstrapInterval(t *testing.T) {
 		},
 	}
 
-	require.Equal(t, bootstrapHAKeeperCheckInterval, s.nextHAKeeperCheckInterval(nil))
+	require.Equal(t, bootstrapHAKeeperCheckInterval, s.initialHAKeeperCheckInterval())
+	require.Equal(t, 3*time.Second, s.nextHAKeeperCheckInterval(nil))
+	require.Equal(t, bootstrapHAKeeperCheckInterval, s.nextHAKeeperCheckInterval(&pb.CheckerState{
+		State: pb.HAKeeperCreated,
+	}))
 	require.Equal(t, bootstrapHAKeeperCheckInterval, s.nextHAKeeperCheckInterval(&pb.CheckerState{
 		State: pb.HAKeeperBootstrapping,
 	}))

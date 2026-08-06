@@ -1232,7 +1232,7 @@ func (l *store) ticker(ctx context.Context) {
 	defer func() {
 		l.runtime.Logger().Info("HAKeeper ticker stopped")
 	}()
-	haTimer := time.NewTimer(l.nextHAKeeperCheckInterval(nil))
+	haTimer := time.NewTimer(l.initialHAKeeperCheckInterval())
 	defer haTimer.Stop()
 
 	// moving task schedule from the ticker normal routine to a

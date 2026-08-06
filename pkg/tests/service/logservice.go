@@ -228,12 +228,10 @@ func (c *testCluster) startHAKeeperReplica() error {
 
 // setInitialClusterInfo initializes cluster information.
 func (c *testCluster) setInitialClusterInfo(ctx context.Context) error {
-	errChan := make(chan error, 1)
-
 	initialize := func() {
 		var err error
 		defer func() {
-			errChan <- err
+			c.log.initialInfoErr = err
 		}()
 
 		selected := c.selectHAkeeperServices()
@@ -257,7 +255,7 @@ func (c *testCluster) setInitialClusterInfo(ctx context.Context) error {
 
 	// initialize cluster only once
 	c.log.once.Do(initialize)
-	return <-errChan
+	return c.log.initialInfoErr
 }
 
 // listHAKeeperService lists all log services that start hakeeper.

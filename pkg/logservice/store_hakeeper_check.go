@@ -254,9 +254,17 @@ func (l *store) getCheckerStateFromLeader() (*pb.CheckerState, uint64) {
 
 var debugPrintHAKeeperState atomic.Bool
 
+func (l *store) initialHAKeeperCheckInterval() time.Duration {
+	interval := l.cfg.HAKeeperCheckInterval.Duration
+	if interval > bootstrapHAKeeperCheckInterval {
+		return bootstrapHAKeeperCheckInterval
+	}
+	return interval
+}
+
 func (l *store) nextHAKeeperCheckInterval(state *pb.CheckerState) time.Duration {
 	interval := l.cfg.HAKeeperCheckInterval.Duration
-	if state == nil || state.State != pb.HAKeeperRunning {
+	if state != nil && state.State != pb.HAKeeperRunning {
 		if interval > bootstrapHAKeeperCheckInterval {
 			return bootstrapHAKeeperCheckInterval
 		}
@@ -272,7 +280,10 @@ func (l *store) hakeeperCheck() *pb.CheckerState {
 
 	switch state.State {
 	case pb.HAKeeperCreated:
-		l.runtime.Logger().Warn("waiting for initial cluster info to be set, check skipped")
+		if time.Since(l.lastBootstrapLogTime) >= time.Second {
+			l.runtime.Logger().Warn("waiting for initial cluster info to be set, check skipped")
+			l.lastBootstrapLogTime = time.Now()
+		}
 		return state
 	case pb.HAKeeperBootstrapping:
 		l.bootstrap(term, state)

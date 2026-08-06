@@ -71,6 +71,22 @@ func TestSetInitialClusterInfoUsesHAKeeperLeader(t *testing.T) {
 	require.Equal(t, [3]uint64{3, 4, 5}, leader.initialClusterInfoArgs)
 }
 
+func TestSetInitialClusterInfoCanBeCalledAgain(t *testing.T) {
+	leader := &initialClusterInfoLogService{id: "leader", leader: true}
+	c := &testCluster{
+		t:      t,
+		logger: zap.NewNop(),
+	}
+	c.opt.initial.logServiceNum = 1
+	c.log.svcs = []LogService{leader}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, c.setInitialClusterInfo(ctx))
+	require.NoError(t, c.setInitialClusterInfo(ctx))
+	require.Equal(t, 1, leader.initialClusterInfoCalls)
+}
+
 type initialClusterInfoLogService struct {
 	id                      string
 	leader                  bool

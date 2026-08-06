@@ -257,7 +257,8 @@ type testCluster struct {
 	}
 
 	log struct {
-		once sync.Once
+		once           sync.Once
+		initialInfoErr error
 
 		sync.Mutex
 		cfgs []logservice.Config
