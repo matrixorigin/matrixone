@@ -52,7 +52,8 @@ func TestIntHashMapIteratorLazyBuffers(t *testing.T) {
 
 							insertedVs := append([]uint64(nil), vs...)
 							insertedZvs := append([]int64(nil), zvs...)
-							foundVs, foundZvs := itr.Find(0, count, vecs)
+							foundVs, foundZvs, err := itr.Find(0, count, vecs)
+							require.NoError(t, err)
 							if count > 0 {
 								require.Equal(t, insertedVs, foundVs)
 								require.Equal(t, insertedZvs, foundZvs)
@@ -224,7 +225,10 @@ func BenchmarkIntHashMapFindFloat32(b *testing.B) {
 			b.SetBytes(int64(count * types.T_float32.TypeLen()))
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				benchmarkIntValues, benchmarkIntZValues = itr.Find(0, count, vecs)
+				benchmarkIntValues, benchmarkIntZValues, err = itr.Find(0, count, vecs)
+				if err != nil {
+					b.Fatal(err)
+				}
 			}
 		})
 	}

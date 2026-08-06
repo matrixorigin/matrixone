@@ -234,6 +234,10 @@ func (ctr *container) computeBucketIndex(hashCodes []uint64, myLv uint64) {
 }
 
 func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.Analyzer, parentBkt *spillBucket) (int64, int64, error) {
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return 0, 0, err
+	}
+
 	var totalBytes, totalRows int64
 	var parentLv int
 	if parentBkt != nil {
@@ -338,6 +342,10 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 
 	hcOffset := 0
 	for nthBatch, gb := range ctr.groupByBatches {
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			return 0, 0, err
+		}
+
 		rc := gb.RowCount()
 		if rc == 0 {
 			continue
@@ -369,6 +377,10 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 		bktFlags := ctr.spillFlagFlat[:rc]
 
 		for _, i := range ctr.spillNonEmptyBuckets {
+			if err, canceled := vm.CancelCheck(proc); canceled {
+				return 0, 0, err
+			}
+
 			indices := bucketRowIds[i]
 			cnt := int64(len(indices))
 
@@ -391,7 +403,9 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 				}
 			}
 			gbBatch.SetRowCount(int(cnt))
-			gbBatch.MarshalBinaryWithBuffer(buf, false)
+			if _, err := gbBatch.MarshalBinaryWithBuffer(buf, false); err != nil {
+				return 0, 0, err
+			}
 
 			// write marker
 			var magic uint64 = 0x12345678DEADBEEF
@@ -441,6 +455,13 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 				bktFlags[idx] = 0
 			}
 		}
+
+		// The last bucket has no following loop boundary. Check once more so
+		// cancellation during its serialization or write is still observed
+		// before starting another spill phase.
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			return 0, 0, err
+		}
 	}
 	opStats.AddExtraStat("GroupSpillSerializedBytes", totalBytes)
 	opStats.AddExtraStat("GroupSpillAggChunkHeadersOmitted", compactedAggChunks)
@@ -452,23 +473,37 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 
 // load spilled data from the spill bucket queue.
 func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.Analyzer, aggExprs []aggexec.AggFuncExecExpression) (_ bool, retErr error) {
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return false, err
+	}
+
 	// first, if there is current spill bucket, transfer it to the spill bucket queue.
 	if ctr.currentSpillBkt != nil {
 		if ctr.spillBkts == nil {
 			ctr.spillBkts = list.New[*spillBucket]()
 		}
-		for _, bkt := range ctr.currentSpillBkt {
+		for i, bkt := range ctr.currentSpillBkt {
 			if bkt.cnt > 0 {
+				if err, canceled := vm.CancelCheck(proc); canceled {
+					return false, err
+				}
 				if err := bkt.flushWriter(); err != nil {
 					bkt.free()
+					ctr.currentSpillBkt[i] = nil
 					return false, err
 				}
 				ctr.spillBkts.PushBack(bkt)
 			} else {
 				bkt.free()
 			}
+			// Ownership has moved to spillBkts or ended at free(). Do not leave
+			// a second source reference behind if a later flush fails/cancels.
+			ctr.currentSpillBkt[i] = nil
 		}
 		ctr.currentSpillBkt = nil
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			return false, err
+		}
 	}
 
 	// then, if there is no spill bucket in the queue, done.
@@ -529,6 +564,10 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	bufferedFile := ctr.spillReader
 
 	for {
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			return false, err
+		}
+
 		// load next batch from the spill bucket.
 		readStart := time.Now()
 		cnt, err := types.ReadInt64(bufferedFile)
@@ -643,10 +682,11 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		// insert group by batch into the hash table.
 		rowCount := gbBatch.RowCount()
 		hashBytesBefore := ctr.hr.Hash.Size()
+		hashKeyVecs := ctr.hashKeyVectors(gbBatch.Vecs)
 		for i := 0; i < rowCount; i += hashmap.UnitLimit {
 			n := min(rowCount-i, hashmap.UnitLimit)
 			originGroupCount := ctr.hr.Hash.GroupCount()
-			vals, _, err := ctr.hr.Itr.Insert(i, n, gbBatch.Vecs)
+			vals, _, err := ctr.hr.Itr.Insert(i, n, hashKeyVecs)
 			if err != nil {
 				return false, err
 			}
@@ -776,17 +816,20 @@ func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
 	memUsed := ctr.memUsed()
 	opAnalyzer.SetMemUsed(memUsed)
 
-	// spill less than 10K, used only for debug.
-	// in this case, we spill when there are more than
-	// this many groups
-	var needSpill bool
-	if ctr.spillMem < 10000 {
-		needSpill = ctr.hr.Hash.GroupCount() >= uint64(ctr.spillMem)
-	} else {
-		needSpill = memUsed > ctr.spillMem
+	// Generic group spill partitions groups using the grouping hash table. H0
+	// has exactly one aggregate group and no grouping hash table. Aggregates
+	// that support H0 spilling (for example ordered GROUP_CONCAT) manage it in
+	// their own executors.
+	if ctr.mtyp == H0 {
+		return false
 	}
 
-	return needSpill
+	// Values below 10K are the debug group-count threshold. Otherwise the
+	// threshold is measured in bytes.
+	if ctr.spillMem < 10000 {
+		return ctr.hr.Hash.GroupCount() >= uint64(ctr.spillMem)
+	}
+	return memUsed > ctr.spillMem
 }
 
 func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]aggexec.AggFuncExec, error) {

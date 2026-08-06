@@ -19,16 +19,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -897,6 +900,131 @@ func TestDispatchResetEndPreservesQueuedBroadcastBatchUntilDeferredCleanup(t *te
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestDispatchAllocationClearFinalizesTerminalSpoolPending(t *testing.T) {
+	testDispatchAllocationClearFinalizesSpool(t, false)
+}
+
+func TestDispatchAccountedDeferredCleanupReleasesReusableCache(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	src := newDispatchSpoolTestBatch(t, srcMP, 1024)
+	t.Cleanup(func() {
+		src.Clean(srcMP)
+	})
+
+	sp := pSpool.InitMyPipelineSpool(mp, 1)
+	done, err := sp.SendBatch(context.Background(), 0, src, nil)
+	require.NoError(t, err)
+	require.False(t, done)
+	got, info := sp.ReceiveBatch(0)
+	require.NoError(t, info)
+	require.NotNil(t, got)
+	sp.ReleaseCurrent(0)
+	require.Positive(t, mp.CurrNB())
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	d := &Dispatch{cleanupSpool: sp}
+	require.NoError(t, d.SetAllocationAccount(account))
+	d.CleanupDeferredSpool()
+	require.Same(t, sp, d.cleanupSpool)
+	require.Zero(t, mp.CurrNB())
+	require.NoError(t, d.ClearAllocationAccount(account))
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
+}
+
+func TestDispatchAllocationAccountContract(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(2, 1)
+	require.NoError(t, err)
+	first, err := registry.Open(1)
+	require.NoError(t, err)
+	second, err := registry.Open(1)
+	require.NoError(t, err)
+	d := &Dispatch{}
+	require.False(t, d.ActivatesAllocationAccountLifecycle())
+	require.ErrorIs(t, d.SetAllocationAccount(nil), mpool.ErrAllocationAccountInvalid)
+	require.NoError(t, d.SetAllocationAccount(first))
+	require.ErrorIs(t, d.SetAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
+	require.ErrorIs(t, d.ClearAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
+	d.ctr = &container{sp: &pSpool.PipelineSpool{}}
+	require.ErrorIs(t, d.ClearAllocationAccount(first), mpool.ErrAllocationAccountInvariant)
+	d.ctr = nil
+	require.NoError(t, d.ClearAllocationAccount(first))
+	require.NoError(t, d.ClearAllocationAccount(first))
+	_, _, err = registry.CompleteTerminal(first)
+	require.NoError(t, err)
+	_, _, err = registry.CompleteTerminal(second)
+	require.NoError(t, err)
+}
+
+func TestDispatchAllocationClearFinalizesAbortedSpool(t *testing.T) {
+	testDispatchAllocationClearFinalizesSpool(t, true)
+}
+
+func testDispatchAllocationClearFinalizesSpool(t *testing.T, abort bool) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		1,
+		102,
+		103,
+		104,
+		105,
+	)
+	require.NoError(t, err)
+	src := batch.NewOffHeapWithSize(1)
+	require.NoError(t, src.SetAllocationAccount(selection))
+	src.SetVector(0, vector.NewOffHeapVecWithType(types.T_int64.ToType()))
+	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(1), false, mp))
+	src.SetRowCount(1)
+
+	sp := pSpool.InitMyPipelineSpool(mp, 1)
+	done, err := sp.SendBatch(context.Background(), 0, src, nil)
+	require.NoError(t, err)
+	require.False(t, done)
+
+	d := &Dispatch{}
+	require.NoError(t, d.SetAllocationAccount(account))
+	if abort {
+		got, info := sp.ReceiveBatch(0)
+		require.NoError(t, info)
+		require.NotNil(t, got)
+		d.ctr = &container{sp: sp}
+		d.Reset(nil, true, moerr.NewInternalErrorNoCtx("pipeline failed"))
+		require.Same(t, sp, d.cleanupSpool)
+		sp.ReleaseCurrent(0)
+	} else {
+		d.cleanupSpool = sp
+		sp.ForceCleanupAfterTerminalSignal()
+	}
+	d.CleanupDeferredSpool()
+	require.Same(t, sp, d.cleanupSpool)
+	require.NoError(t, d.ClearAllocationAccount(account))
+	require.Nil(t, d.cleanupSpool)
+
+	src.Clean(mp)
+	snapshot := account.Seal()
+	require.Zero(t, snapshot.Used)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+}
+
 // TestReceiverDone_OldBehavior tests the old behavior (kept for backward compatibility verification)
 func TestReceiverDone_OldBehavior(t *testing.T) {
 	proc := testutil.NewProcess(t)
@@ -1030,6 +1158,123 @@ func TestSendBatchToClientSession_TolerantMode(t *testing.T) {
 
 	require.True(t, done, "receiver should be marked as done")
 	require.NoError(t, err, "tolerant mode should NOT return error when ReceiverDone=true")
+}
+
+func TestSendBatchToClientSessionUsesBatchCredits(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	var sent *pipeline.Message
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			sent = message.(*pipeline.Message)
+			return nil
+		})
+
+	reserved := uint64(0)
+	rolledBack := uint64(0)
+	wcs := &process.WrapCs{
+		MsgId:        42,
+		Cs:           session,
+		BatchCredits: 8,
+		ByteCredits:  64 << 20,
+		ReserveBatch: func(_ context.Context, size uint64) (uint64, error) {
+			reserved = size
+			return 7, nil
+		},
+		RollbackBatch: func(sequence uint64) {
+			rolledBack = sequence
+		},
+	}
+
+	done, err := sendBatchToClientSession(
+		context.Background(), []byte("batch"), wcs, FailureModeStrict, "receiver")
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Equal(t, uint64(5), reserved)
+	require.Zero(t, rolledBack)
+	require.NotNil(t, sent)
+	require.Equal(t, uint64(7), sent.GetBatchSequence())
+	require.Equal(t, uint32(8), sent.GetAcceptedBatchCreditCount())
+	require.Equal(t, uint64(64<<20), sent.GetAcceptedBatchCreditBytes())
+}
+
+func TestSendBatchToClientSessionRollsBackBatchCreditOnWriteFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	wantErr := moerr.NewInternalErrorNoCtx("remote write failed")
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).Return(wantErr)
+
+	rolledBack := uint64(0)
+	wcs := &process.WrapCs{
+		MsgId: 42,
+		Cs:    session,
+		ReserveBatch: func(_ context.Context, _ uint64) (uint64, error) {
+			return 7, nil
+		},
+		RollbackBatch: func(sequence uint64) {
+			rolledBack = sequence
+		},
+	}
+
+	done, err := sendBatchToClientSession(
+		context.Background(), []byte("batch"), wcs, FailureModeStrict, "receiver")
+	require.ErrorIs(t, err, wantErr)
+	require.False(t, done)
+	require.Equal(t, uint64(7), rolledBack)
+}
+
+func TestSendBatchToClientSessionReturnsBatchCreditReservationError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	wantErr := moerr.NewInternalErrorNoCtx("batch credit unavailable")
+	wcs := &process.WrapCs{
+		MsgId: 42,
+		Cs:    session,
+		ReserveBatch: func(_ context.Context, _ uint64) (uint64, error) {
+			return 0, wantErr
+		},
+	}
+
+	done, err := sendBatchToClientSession(
+		context.Background(), []byte("batch"), wcs, FailureModeStrict, "receiver")
+	require.ErrorIs(t, err, wantErr)
+	require.False(t, done)
+}
+
+func TestSendBatchToClientSessionKeepsOneCreditAcrossFragments(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	payload := make([]byte, maxMessageSizeToMoRpc+1)
+	writes := 0
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			writes++
+			msg := message.(*pipeline.Message)
+			require.Equal(t, uint64(11), msg.GetBatchSequence())
+			require.Equal(t, uint32(2), msg.GetAcceptedBatchCreditCount())
+			require.Equal(t, uint64(len(payload)), msg.GetAcceptedBatchCreditBytes())
+			return nil
+		}).Times(2)
+
+	reserveCalls := 0
+	wcs := &process.WrapCs{
+		MsgId:        42,
+		Cs:           session,
+		BatchCredits: 2,
+		ByteCredits:  uint64(len(payload)),
+		ReserveBatch: func(_ context.Context, size uint64) (uint64, error) {
+			reserveCalls++
+			require.Equal(t, uint64(len(payload)), size)
+			return 11, nil
+		},
+	}
+
+	done, err := sendBatchToClientSession(
+		context.Background(), payload, wcs, FailureModeStrict, "receiver")
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Equal(t, 1, reserveCalls)
+	require.Equal(t, 2, writes)
 }
 
 // TestSendToAllRemoteFunc_ReceiverFailure tests SendToAll scenario with receiver failure

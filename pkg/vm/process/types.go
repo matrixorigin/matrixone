@@ -448,11 +448,15 @@ type sqlHelper interface {
 // WrapCs record information about pipeline's remote receiver.
 type WrapCs struct {
 	sync.RWMutex
-	ReceiverDone bool
-	MsgId        uint64
-	Uid          uuid.UUID
-	Cs           morpc.ClientSession
-	Err          chan error
+	ReceiverDone  bool
+	MsgId         uint64
+	Uid           uuid.UUID
+	Cs            morpc.ClientSession
+	Err           chan error
+	ReserveBatch  func(context.Context, uint64) (uint64, error)
+	RollbackBatch func(uint64)
+	BatchCredits  uint32
+	ByteCredits   uint64
 }
 
 // RemotePipelineInformationChannel used to deliver remote receiver pipeline's information.
@@ -518,7 +522,7 @@ func (proc *Process) SetFileService(fs fileservice.FileService) {
 }
 
 func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
-	if i < 0 || i >= proc.Base.prepareParams.Length() {
+	if proc.Base.prepareParams == nil || i < 0 || i >= proc.Base.prepareParams.Length() {
 		return nil, moerr.NewInternalErrorf(proc.Ctx, "get prepare params error, index %d not exists", i)
 	}
 	if proc.Base.prepareParams.IsNull(uint64(i)) {

@@ -1,10 +1,10 @@
-// Copyright 2023 Matrix Origin
+// Copyright 2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,21 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package colexec
+package mock_frontend
 
-import (
-	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-)
-
-func ReceiveBitmapFromChannel(usr context.Context, ch chan *bitmap.Bitmap) *bitmap.Bitmap {
-	select {
-	case <-usr.Done():
-		return nil
-	case bm, ok := <-ch:
-		if !ok {
-			return nil
-		}
-		return bm
-	}
-}
+// RequireAutoIncrEpochFenceCommit lets the shared transaction mock satisfy the
+// additive client capability without changing the generated mock interface.
+func (m *MockTxnOperator) RequireAutoIncrEpochFenceCommit() {}

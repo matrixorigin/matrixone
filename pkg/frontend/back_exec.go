@@ -821,6 +821,9 @@ func backSesOutputCallback(handle FeSession, execCtx *ExecCtx, dataSet *batch.Ba
 	if handle == nil || dataSet == nil {
 		return nil
 	}
+	if execCtx != nil && isPerformStatement(execCtx.stmt) {
+		return nil
+	}
 
 	// uncomment this to enable backExec export data to CSV file.
 	//back := handle.(*backSession)
@@ -906,9 +909,12 @@ func executeStmtInSameSession(
 	prevDerivedStmt := ses.ReplaceDerivedStmt(true)
 	// inherit database
 	ses.SetDatabaseName(prevDB)
-	proc := ses.GetTxnCompileCtx().GetProcess()
+	proc := ses.proc
+	prepareParams := proc.DetachPrepareParams()
+	proc.BorrowPrepareParams(prepareParams)
 	//restore normal protocol and output callback
 	defer func() {
+		defer proc.RestorePrepareParams(prepareParams)
 		ses.ReplaceDerivedStmt(prevDerivedStmt)
 		//@todo we need to improve: make one session, one proc, one txnOperator
 		p := ses.GetTxnCompileCtx().GetProcess()
@@ -939,6 +945,9 @@ func fakeDataSetFetcher2(handle FeSession, execCtx *ExecCtx, dataSet *batch.Batc
 	if handle == nil || dataSet == nil {
 		return nil
 	}
+	if execCtx != nil && isPerformStatement(execCtx.stmt) {
+		return nil
+	}
 
 	back := handle.(*backSession)
 	err := fillResultSet(execCtx.reqCtx, dataSet, back, back.mrs)
@@ -967,8 +976,11 @@ func fillResultSet(ctx context.Context, dataSet *batch.Batch, ses FeSession, mrs
 
 // batchFetcher2 gets the result batches from the pipeline and save the origin batches in the session.
 // It will not send the result to the client.
-func batchFetcher2(handle FeSession, _ *ExecCtx, dataSet *batch.Batch, _ *perfcounter.CounterSet) error {
+func batchFetcher2(handle FeSession, execCtx *ExecCtx, dataSet *batch.Batch, _ *perfcounter.CounterSet) error {
 	if handle == nil {
+		return nil
+	}
+	if execCtx != nil && isPerformStatement(execCtx.stmt) {
 		return nil
 	}
 	back := handle.(*backSession)
@@ -981,8 +993,11 @@ func batchFetcher2(handle FeSession, _ *ExecCtx, dataSet *batch.Batch, _ *perfco
 
 // batchFetcher gets the result batches from the pipeline and save the origin batches in the session.
 // It will not send the result to the client.
-func batchFetcher(handle FeSession, _ *ExecCtx, dataSet *batch.Batch, _ *perfcounter.CounterSet) error {
+func batchFetcher(handle FeSession, execCtx *ExecCtx, dataSet *batch.Batch, _ *perfcounter.CounterSet) error {
 	if handle == nil {
+		return nil
+	}
+	if execCtx != nil && isPerformStatement(execCtx.stmt) {
 		return nil
 	}
 	ses := handle.(*Session)

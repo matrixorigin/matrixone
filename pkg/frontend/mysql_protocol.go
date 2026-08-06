@@ -76,6 +76,7 @@ const defaultSaltReadTimeout = time.Millisecond * 200
 
 const charsetBinary = 0x3f
 const charsetVarchar = 0x21
+const charsetVarcharMaxBytesPerCharacter = 3
 const boolColumnLength = 1
 
 func init() {
@@ -460,6 +461,13 @@ func (mp *MysqlProtocolImpl) WriteEOFIFAndNoFlush(warnings uint16, status uint16
 
 func (mp *MysqlProtocolImpl) WriteEOFOrOK(warnings uint16, status uint16) error {
 	return mp.sendEOFOrOkPacket(warnings, status)
+}
+
+func (mp *MysqlProtocolImpl) WriteEOFOrOKWithAffectedRows(affectedRows uint64, warnings uint16, status uint16) error {
+	if mp.capability&CLIENT_DEPRECATE_EOF != 0 {
+		return mp.sendOKPacketWithEof(affectedRows, 0, status, warnings, "")
+	}
+	return mp.sendEOFPacket(warnings, status)
 }
 
 func (mp *MysqlProtocolImpl) WriteERR(errorCode uint16, sqlState, errorMessage string) error {

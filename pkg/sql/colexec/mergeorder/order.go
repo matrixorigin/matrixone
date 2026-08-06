@@ -278,12 +278,8 @@ func (ctr *container) removeInMemoryBatch(proc *process.Process, index int) erro
 	if ctr.inMemoryHeap != nil {
 		heap.Remove(ctr.inMemoryHeap, ctr.inMemoryHeapPos[index])
 	}
-	for i := range cols {
-		if batchContainsVector(bat, cols[i]) {
-			continue
-		}
-		cols[i].Free(proc.GetMPool())
-	}
+	freeOrderColumns(proc.GetMPool(), bat, cols)
+	bat.Clean(proc.GetMPool())
 	ctr.batchList[index] = nil
 	ctr.orderCols[index] = nil
 	ctr.indexList[index] = -1
@@ -504,6 +500,11 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 			}
 
 			if input.Batch == nil {
+				// The child may cancel the process while returning EOF, after this
+				// MergeOrder invocation has passed vm.Exec's entry cancellation check.
+				if err, canceled := vm.CancelCheck(proc); canceled {
+					return vm.CancelResult, err
+				}
 				if ctr.spilling {
 					if err = ctr.prepareSpillFinalMerge(proc, mergeOrder.OrderBySpecs, analyzer); err != nil {
 						return input, err

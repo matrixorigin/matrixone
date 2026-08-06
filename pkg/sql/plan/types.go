@@ -258,14 +258,15 @@ type QueryBuilder struct {
 	nextMsgTag       int32
 	nextSQLUdfCallID uint64
 
-	isPrepareStatement    bool
-	mysqlCompatible       bool
-	isForUpdate           bool // if it's a query plan for update
-	isRestore             bool
-	isRestoreByTs         bool
-	isSkipResolveTableDef bool
-	skipStats             bool
-	isInsertIgnore        bool // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
+	isPrepareStatement     bool
+	mysqlCompatible        bool
+	mysqlFullGroupByCompat bool
+	isForUpdate            bool // if it's a query plan for update
+	isRestore              bool
+	isRestoreByTs          bool
+	isSkipResolveTableDef  bool
+	skipStats              bool
+	isInsertIgnore         bool // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
 
 	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
@@ -307,6 +308,18 @@ type QueryBuilder struct {
 	irregularMaintIndexes     []*plan.IndexDef
 	irregularMaintTableDef    *plan.TableDef
 	irregularMaintObjRef      *plan.ObjectRef
+	irregularMaintSkipInsert  bool
+
+	// DML RETURNING consumes an attempt-local row image from a dedicated sink.
+	// The mutation plan and the returning projection use independent SINK_SCAN
+	// readers, so index/FK side-effect branches cannot multiply returned rows.
+	returningSourceStep int32
+	returningRequested  bool
+	returningTableDef   *plan.TableDef
+	returningObjRef     *plan.ObjectRef
+	returningTableName  string
+	returningAlias      string
+	returningColPos     map[string]int32
 	// sinkColRef records, per materialized step, the post-pruning column remap
 	// produced by createQuery's final remapAllColRefs pass: {step, originalColPos}
 	// -> newColPos. The irregular-index maintenance sub-plans are appended after
@@ -400,6 +413,32 @@ type aliasItem struct {
 type BindContext struct {
 	binder Binder
 
+	// outputColumnProvenance records planner-local lineage overrides by output
+	// position. An explicit None prevents later transparent-boundary code from
+	// rediscovering a source after a semantic boundary has cleared it.
+	outputColumnProvenance map[int32]OutputColumnProvenance
+
+	// mysqlSpecialOrderTypes records the storage type behind a visible ENUM/SET
+	// display value.  It is planner-local semantic provenance: only a pure
+	// display projection (or a pure column passthrough of one) may populate it.
+	// A present key with a nil value explicitly suppresses provenance when a
+	// multi-input construct proves the originating display contract unsafe.
+	// The generated plan consumes the provenance by materializing an ordinary
+	// numeric sort expression, so this metadata never crosses the plan wire.
+	mysqlSpecialOrderTypes map[int32]*plan.Type
+	// mysqlSpecialCanonicalTypes records outputs whose SQL-visible value has
+	// already passed through GROUP BY or DISTINCT and must be canonically
+	// re-encoded when a persisted View exposes an ENUM/SET catalog type.
+	mysqlSpecialCanonicalTypes map[int32]*plan.Type
+	// restoreViewMySQLSpecialTypes is inherited only while rebinding a persisted
+	// View. It lets transparent derived/CTE query boundaries expose their raw
+	// ENUM/SET values without changing ordinary query-boundary behavior.
+	restoreViewMySQLSpecialTypes bool
+	// mysqlSpecialRawProjectPositions maps a visible output position to a hidden
+	// raw ENUM/SET sidecar in the query block's PROJECT. It is populated only
+	// for row-preserving View ORDER BY boundaries.
+	mysqlSpecialRawProjectPositions map[int32]int32
+
 	//cteByName saves all cte definitions in the current stmt
 	cteByName map[string]*CTERef
 	//cteState records state of binding cte
@@ -442,6 +481,7 @@ type BindContext struct {
 	windowByAst     map[string]int32
 	projectByExpr   map[string]int32
 	timeByAst       map[string]int32
+	whereFilters    []*plan.Expr
 
 	projectColByAst map[string]int32
 
@@ -543,11 +583,19 @@ type baseBinder struct {
 	builder                          *QueryBuilder
 	ctx                              *BindContext
 	impl                             Binder
-	boundCols                        []string
+	boundCols                        []boundColumn
 	numericParamType                 *Type
 	numericSubqueryTarget            *Type
 	numericFunctionTarget            bool
+	mysqlSpecialTargetType           *Type
 	allowCanonicalNameConstValueCast bool
+	bindRawMySQLSpecialType          bool
+}
+
+type boundColumn struct {
+	name      string
+	relation  int32
+	columnPos int32
 }
 
 type DefaultBinder struct {
@@ -659,7 +707,17 @@ type Binding struct {
 	originCols  []string
 	colIsHidden []bool
 	types       []*plan.Type
-	refCnts     []uint
+	// mysqlSpecialOrderTypes is aligned with cols. A non-nil entry means that
+	// the string column is a pure display of the recorded ENUM/SET storage
+	// type, and may therefore use definition-order semantics when ordered.
+	mysqlSpecialOrderTypes []*plan.Type
+	// mysqlSpecialCanonicalTypes is aligned with cols and propagates the
+	// post-semantic canonical-value contract through transparent bindings.
+	mysqlSpecialCanonicalTypes []*plan.Type
+	// outputColumnProvenance is aligned with cols and carries planner-local,
+	// single-source output lineage. It is never serialized into the plan.
+	outputColumnProvenance []OutputColumnProvenance
+	refCnts                []uint
 	// lower case
 	colIdByName    map[string]int32
 	isClusterTable bool

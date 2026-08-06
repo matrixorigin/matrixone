@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"maps"
 	"time"
 	"unsafe"
 
@@ -170,10 +171,16 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 func encodeProcessInfo(
 	proc *process.Process,
 	sql string,
+	remoteFragmentCounts map[string]uint32,
+	remoteExecutionID uuid.UUID,
 ) ([]byte, error) {
 	v, err := proc.BuildProcessInfo(sql)
 	if err != nil {
 		return nil, err
+	}
+	v.RemoteFragmentCounts = maps.Clone(remoteFragmentCounts)
+	if remoteExecutionID != uuid.Nil {
+		v.RemoteExecutionId = append([]byte(nil), remoteExecutionID[:]...)
 	}
 	return v.Marshal()
 }
@@ -597,11 +604,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			return ctxId, nil, err
 		}
 		in.Agg = &pipeline.Group{
-			NeedEval:     t.NeedEval,
-			SpillMem:     t.SpillMem,
-			GroupingFlag: t.GroupingFlag,
-			Exprs:        t.GroupBy,
-			Aggs:         convertToPipelineAggregates(t.Aggs),
+			NeedEval:       t.NeedEval,
+			SpillMem:       t.SpillMem,
+			GroupingFlag:   t.GroupingFlag,
+			Exprs:          t.GroupBy,
+			Aggs:           convertToPipelineAggregates(t.Aggs),
+			GroupByHashKey: t.GroupByHashKey,
 		}
 		in.ProjectList = t.ProjectList
 	case *sample.Sample:
@@ -688,8 +696,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *mergerecursive.MergeRecursive:
 	case *group.MergeGroup:
 		in.Agg = &pipeline.Group{
-			SpillMem: t.SpillMem,
-			Aggs:     convertToPipelineAggregates(t.Aggs),
+			SpillMem:       t.SpillMem,
+			Aggs:           convertToPipelineAggregates(t.Aggs),
+			GroupByHashKey: t.GroupByHashKey,
 		}
 		in.ProjectList = t.ProjectList
 		EncodeMergeGroup(t, in.Agg)
@@ -715,6 +724,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IsSingle:               t.IsSingle,
 			IndexReaderParam:       t.IndexReaderParam,
 			RuntimeFilterProbeList: t.RuntimeFilterSpecs,
+			FulltextSourceRef:      t.FulltextSourceRef,
+			FulltextIndexRef:       t.FulltextIndexRef,
 		}
 		in.Limit = t.Limit
 
@@ -859,6 +870,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IsSingle:               t.TableFunction.IsSingle,
 			IndexReaderParam:       t.TableFunction.IndexReaderParam,
 			RuntimeFilterProbeList: t.TableFunction.RuntimeFilterSpecs,
+			FulltextSourceRef:      t.TableFunction.FulltextSourceRef,
+			FulltextIndexRef:       t.TableFunction.FulltextIndexRef,
 		}
 	case *multi_update.MultiUpdate:
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
@@ -868,6 +881,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 				TableDef:              muCtx.TableDef,
 				SkipInsertOnNullPk:    muCtx.SkipInsertOnNullPk,
 				InsertPkColIdx:        int32(muCtx.InsertPkColIdx),
+				IgnoreAffectedRows:    muCtx.IgnoreAffectedRows,
 				CountDeleteAffectRows: t.CountDeleteAffectRows,
 			}
 
@@ -1085,6 +1099,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.SpillMem = t.SpillMem
 		arg.GroupingFlag = t.GroupingFlag
 		arg.GroupBy = t.Exprs
+		arg.GroupByHashKey = t.GroupByHashKey
 		arg.Aggs = convertToAggregates(t.Aggs)
 		arg.ProjectList = opr.ProjectList
 		op = arg
@@ -1189,6 +1204,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetAgg()
 		arg.SpillMem = t.SpillMem
 		arg.Aggs = convertToAggregates(t.Aggs)
+		arg.GroupByHashKey = t.GroupByHashKey
 		arg.ProjectList = opr.ProjectList
 		op = arg
 		DecodeMergeGroup(op.(*group.MergeGroup), opr.Agg)
@@ -1211,6 +1227,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IsSingle = opr.TableFunction.IsSingle
 		arg.IndexReaderParam = opr.TableFunction.IndexReaderParam
 		arg.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
+		arg.FulltextSourceRef = opr.TableFunction.FulltextSourceRef
+		arg.FulltextIndexRef = opr.TableFunction.FulltextIndexRef
 		arg.Limit = opr.Limit
 		op = arg
 	case vm.External:
@@ -1355,6 +1373,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
 		arg.TableFunction.IndexReaderParam = opr.TableFunction.IndexReaderParam
 		arg.TableFunction.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
+		arg.TableFunction.FulltextSourceRef = opr.TableFunction.FulltextSourceRef
+		arg.TableFunction.FulltextIndexRef = opr.TableFunction.FulltextIndexRef
 		op = arg
 	case vm.MultiUpdate:
 		arg := multi_update.NewArgument()
@@ -1376,6 +1396,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 				TableDef:           muCtx.TableDef,
 				SkipInsertOnNullPk: muCtx.SkipInsertOnNullPk,
 				InsertPkColIdx:     int(muCtx.InsertPkColIdx),
+				IgnoreAffectedRows: muCtx.IgnoreAffectedRows,
 			}
 
 			arg.MultiUpdateCtx[i].InsertCols = make([]int, len(muCtx.InsertCols))

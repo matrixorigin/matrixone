@@ -27,7 +27,6 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -130,14 +129,14 @@ func mergeReceiverChannelBufferSize(s *Scope) int {
 
 type operatorDupContext struct {
 	shufflePools       map[*shuffle.Shuffle]*shuffle.ShufflePool
-	hashJoinChannels   map[*hashjoin.HashJoin]chan *bitmap.Bitmap
+	hashJoinMailboxes  map[*hashjoin.HashJoin]*hashjoin.BitmapMailbox
 	dedupJoinMailboxes map[*dedupjoin.DedupJoin]*dedupjoin.WorkerJoinMailbox
 }
 
 func newOperatorDupContext() *operatorDupContext {
 	return &operatorDupContext{
 		shufflePools:       make(map[*shuffle.Shuffle]*shuffle.ShufflePool),
-		hashJoinChannels:   make(map[*hashjoin.HashJoin]chan *bitmap.Bitmap),
+		hashJoinMailboxes:  make(map[*hashjoin.HashJoin]*hashjoin.BitmapMailbox),
 		dedupJoinMailboxes: make(map[*dedupjoin.DedupJoin]*dedupjoin.WorkerJoinMailbox),
 	}
 }
@@ -205,6 +204,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.SpillMem = t.SpillMem
 		op.GroupingFlag = t.GroupingFlag
 		op.GroupBy = t.GroupBy
+		op.GroupByHashKey = t.GroupByHashKey
 		op.Aggs = t.Aggs
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
@@ -230,12 +230,12 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.CanSkipProbe = t.CanSkipProbe
 		op.IsShuffle = t.IsShuffle
 		if !t.IsShuffle {
-			channel := dupCtx.hashJoinChannels[t]
-			if channel == nil {
-				channel = make(chan *bitmap.Bitmap, maxParallel)
-				dupCtx.hashJoinChannels[t] = channel
+			mailbox := dupCtx.hashJoinMailboxes[t]
+			if mailbox == nil {
+				mailbox = hashjoin.NewBitmapMailbox(maxParallel)
+				dupCtx.hashJoinMailboxes[t] = mailbox
 			}
-			op.Channel = channel
+			op.Mailbox = mailbox
 			op.NumCPU = uint64(maxParallel)
 			op.IsMerger = (index == 0)
 		}
@@ -385,6 +385,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Limit = t.Limit
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.IndexReaderParam = t.IndexReaderParam
+		op.FulltextSourceRef = t.FulltextSourceRef
+		op.FulltextIndexRef = t.FulltextIndexRef
 		op.SetInfo(&info)
 		if op.FuncName == "generate_series" {
 			op.GenerateSeriesCtrNumState(t.OffsetTotal[index][0], t.OffsetTotal[index][1], t.GetGenerateSeriesCtrNumStateStep(), t.OffsetTotal[index][0])
@@ -589,6 +591,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.TableFunction.Limit = t.TableFunction.Limit
 		op.TableFunction.RuntimeFilterSpecs = t.TableFunction.RuntimeFilterSpecs
 		op.TableFunction.IndexReaderParam = t.TableFunction.IndexReaderParam
+		op.TableFunction.FulltextSourceRef = t.TableFunction.FulltextSourceRef
+		op.TableFunction.FulltextIndexRef = t.TableFunction.FulltextIndexRef
 		op.TableFunction.SetInfo(&info)
 		op.SetInfo(&info)
 		return op
@@ -716,6 +720,14 @@ func constructFuzzyFilter(node, tableScan, sinkScan *plan.Node) *fuzzyfilter.Fuz
 				pkTyp = c.Typ
 			}
 		}
+	}
+	// The fuzzy-filter children may project a key identity expression whose
+	// type differs from the stored column. FLOAT/DOUBLE primary keys use
+	// serial(...) bytes, and the operator must allocate/hash that actual type.
+	if len(sinkScan.ProjectList) > 0 {
+		pkTyp = sinkScan.ProjectList[0].Typ
+	} else if len(tableScan.ProjectList) > 0 {
+		pkTyp = tableScan.ProjectList[0].Typ
 	}
 
 	op := fuzzyfilter.NewArgument()
@@ -905,6 +917,7 @@ func constructMultiUpdate(
 			PartitionCols:      partitionCols,
 			SkipInsertOnNullPk: updateCtx.SkipInsertOnNullPk,
 			InsertPkColIdx:     int(updateCtx.InsertPkColIdx),
+			IgnoreAffectedRows: updateCtx.IgnoreAffectedRows,
 		}
 	}
 	arg.Action = action
@@ -1326,6 +1339,8 @@ func constructTableFunction(node *plan.Node, qry *plan.Query) *table_function.Ta
 	arg.FuncName = node.TableDef.TblFunc.Name
 	arg.Params = node.TableDef.TblFunc.Param
 	arg.IsSingle = node.TableDef.TblFunc.IsSingle
+	arg.FulltextSourceRef = node.TableDef.TblFunc.FulltextSourceRef
+	arg.FulltextIndexRef = node.TableDef.TblFunc.FulltextIndexRef
 	arg.Limit = node.Limit
 	// probe side runtime filter specs
 	arg.RuntimeFilterSpecs = node.RuntimeFilterProbeList
@@ -1694,6 +1709,7 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 	arg.SpillMem = node.SpillMem
 	arg.GroupingFlag = node.GroupingFlag
 	arg.GroupBy = node.GroupBy
+	arg.GroupByHashKey = node.GroupByHashKey
 	return arg
 }
 
@@ -1951,6 +1967,7 @@ func constructMergeGroup(node *plan.Node, aggs []aggexec.AggFuncExecExpression) 
 	// group node and then merge them
 	arg.SpillMem = node.SpillMem
 	arg.Aggs = aggs
+	arg.GroupByHashKey = node.GroupByHashKey
 	return arg
 }
 

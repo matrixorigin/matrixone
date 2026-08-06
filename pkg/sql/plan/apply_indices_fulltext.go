@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -268,8 +269,18 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	for i := 0; i < len(ft_filters); i++ {
 		ftidxscan := ft_filters[i]
 		idxdef := indexDefs[i]
-		idxtblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, idxdef.IndexTableName)
-		srctblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, scanNode.TableDef.Name)
+		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(
+			scanNode.ObjRef, idxdef.IndexTableName, scanNode.ScanSnapshot)
+		if err != nil {
+			return -1, nil, nil, err
+		}
+		if idxObjRef == nil || idxTableDef == nil {
+			return -1, nil, nil, moerr.NewInternalErrorf(
+				builder.GetContext(), "resolved fulltext index table %q without catalog metadata", idxdef.IndexTableName)
+		}
+
+		idxtblname := sqlquote.QualifiedIdent(idxObjRef.SchemaName, idxObjRef.ObjName)
+		srctblname := sqlquote.QualifiedIdent(scanNode.ObjRef.SchemaName, scanNode.ObjRef.ObjName)
 		fn := ftidxscan.GetF()
 		params := idxdef.IndexAlgoParams
 		aliasName := fmt.Sprintf("mo_fulltext_alias_%d", i)
@@ -298,6 +309,11 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		curr_ftnode_id, err := builder.buildFullTextIndexScanNode(ctx, exprs, nil, params, sql)
 		if err != nil {
 			return -1, nil, nil, err
+		}
+		if scanNode.ObjRef.PubInfo != nil {
+			fulltextFunc := builder.qry.Nodes[curr_ftnode_id].TableDef.TblFunc
+			fulltextFunc.FulltextSourceRef = DeepCopyObjectRef(scanNode.ObjRef)
+			fulltextFunc.FulltextIndexRef = DeepCopyObjectRef(idxObjRef)
 		}
 		// save the created fulltext node to either filter or projection
 		// check equal fulltext_match() and return node id to correct project position
@@ -901,19 +917,4 @@ func (builder *QueryBuilder) getFullTextMatchScoreExpr(expr *plan.Expr) *plan.Ex
 	}
 
 	return newExpr
-}
-
-func (builder *QueryBuilder) resolveAggNode(node *plan.Node, depth int32) *plan.Node {
-	if depth == 0 {
-		if node.NodeType == plan.Node_AGG {
-			return node
-		}
-		return nil
-	}
-
-	if node.NodeType == plan.Node_PROJECT && len(node.Children) == 1 {
-		return builder.resolveAggNode(builder.qry.Nodes[node.Children[0]], depth-1)
-	}
-
-	return nil
 }

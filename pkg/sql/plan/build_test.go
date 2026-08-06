@@ -254,6 +254,45 @@ func TestBuildViewPersistsSessionSQLMode(t *testing.T) {
 	require.Equal(t, ctx.sqlMode, *viewData.SQLMode)
 }
 
+func TestPerformRejectsNestedSelectIntoOutfile(t *testing.T) {
+	tests := []string{
+		"perform select 1 into outfile 'direct.csv'",
+		"perform with c as (select 1 into outfile 'cte.csv') select * from c",
+		"perform select (select 1 into outfile 'projection.csv')",
+		"perform select 1 where exists (select 1 into outfile 'predicate.csv')",
+	}
+
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.ErrorContains(t, err, "PERFORM SELECT INTO OUTFILE")
+		})
+	}
+}
+
+func TestPerformAllowsNestedSelectWithoutOutfile(t *testing.T) {
+	tests := []string{
+		"perform with c as (select 1) select * from c",
+		"perform select (select 1)",
+		"perform select 1 where exists (select 1)",
+	}
+
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+		})
+	}
+}
+
 // only use in developing
 func TestSingleSQL(t *testing.T) {
 	// sql := "INSERT INTO NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')"
@@ -855,6 +894,19 @@ func TestInsertSelectProjectedSetUsesStoredBitmap(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, planHasVarcharToIntegerCast(logicPlan))
 	require.True(t, planHasPlainUint64ColRef(logicPlan))
+}
+
+func TestInsertSelectSetTargetRejectsUnknownSourceColumn(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addSetBitmapDestinationForTest(mock)
+	mock.ctxt.tables["set_bitmap_destination"].Cols[1].Typ.Enumvalues = "a,b"
+
+	_, err := runOneStmt(
+		mock,
+		t,
+		"insert into set_bitmap_destination(id, bitmap) select n_nationkey, missing from nation",
+	)
+	require.ErrorContains(t, err, "column missing does not exist")
 }
 
 func addSetBitmapDestinationForTest(mock *MockOptimizer) {
@@ -2018,6 +2070,65 @@ func countLockOpNodes(logicPlan *Plan) int {
 	return count
 }
 
+func TestSelectSharedLockMode(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name            string
+		sql             string
+		mode            lockpb.LockMode
+		lockTargetCount int
+	}{
+		{
+			name:            "for share",
+			sql:             "select n_nationkey from nation where n_nationkey = 1 for share",
+			mode:            lockpb.LockMode_Shared,
+			lockTargetCount: 1,
+		},
+		{
+			name:            "lock in share mode",
+			sql:             "select n_nationkey from nation where n_nationkey = 1 lock in share mode",
+			mode:            lockpb.LockMode_Shared,
+			lockTargetCount: 1,
+		},
+		{
+			name:            "for share inside nested parentheses",
+			sql:             "((select n_nationkey from nation for share))",
+			mode:            lockpb.LockMode_Shared,
+			lockTargetCount: 1,
+		},
+		{
+			name:            "for share across rollup window rewrite",
+			sql:             "select n_regionkey, row_number() over (order by n_regionkey) from nation group by n_regionkey with rollup for share",
+			mode:            lockpb.LockMode_Shared,
+			lockTargetCount: 2,
+		},
+		{
+			name:            "for update remains exclusive",
+			sql:             "select n_nationkey from nation where n_nationkey = 1 for update",
+			mode:            lockpb.LockMode_Exclusive,
+			lockTargetCount: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+
+			var lockTargets []*plan.LockTarget
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_LOCK_OP {
+					lockTargets = append(lockTargets, node.LockTargets...)
+				}
+			}
+			require.Len(t, lockTargets, test.lockTargetCount)
+			for _, target := range lockTargets {
+				require.Equal(t, test.mode, target.Mode)
+			}
+		})
+	}
+}
+
 // test CTE plan building
 func TestCTESqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer(false)
@@ -2124,6 +2235,58 @@ func TestInsertIgnoreIntoInternalIndexTableRemainsUnsupported(t *testing.T) {
 		"insert ignore into `__mo_index_secondary_meta` (`__mo_index_key`, `__mo_index_val`) "+
 			"values ('version', '0')")
 	require.ErrorContains(t, err, "insert into vector/text index table")
+}
+
+func TestInsertIgnoreWithMultipleUniqueConstraintsUsesCoordinatedDedup(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT IGNORE INTO dept VALUES (1, 'Sales', 'NY'), (1, 'Marketing', 'SF')")
+	require.NoError(t, err)
+
+	coordinated := 0
+	legacyIgnoreDedups := 0
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_PRE_INSERT_UK &&
+			node.PreInsertUkCtx.GetInsertIgnoreMultiDedup() {
+			coordinated++
+			require.Len(t, node.PreInsertUkCtx.KeyColumns, 2)
+			require.Len(t, node.PreInsertUkCtx.ConflictColumns, 2)
+			require.Equal(t, node.PreInsertUkCtx.OutputColumns, node.PreInsertUkCtx.KeyColumns[0])
+			for i := range node.PreInsertUkCtx.KeyColumns {
+				require.Equal(t, node.PreInsertUkCtx.KeyColumns[i]+1,
+					node.PreInsertUkCtx.ConflictColumns[i])
+			}
+		}
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP &&
+			node.OnDuplicateAction == plan.Node_IGNORE {
+			legacyIgnoreDedups++
+		}
+	}
+	require.Equal(t, 1, coordinated)
+	require.Zero(t, legacyIgnoreDedups,
+		"independent per-key IGNORE joins would discard fallback rows before all constraints are known")
+}
+
+func TestInsertIgnoreSingleUniqueConstraintKeepsExistingDedupPath(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT IGNORE INTO fake_pk_t VALUES (1, 'x'), (1, 'y')")
+	require.NoError(t, err)
+
+	coordinated := 0
+	legacyIgnoreDedups := 0
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_PRE_INSERT_UK &&
+			node.PreInsertUkCtx.GetInsertIgnoreMultiDedup() {
+			coordinated++
+		}
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP &&
+			node.OnDuplicateAction == plan.Node_IGNORE {
+			legacyIgnoreDedups++
+		}
+	}
+	require.Zero(t, coordinated)
+	require.Equal(t, 1, legacyIgnoreDedups)
 }
 
 func TestUpdate(t *testing.T) {
@@ -2704,7 +2867,7 @@ func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
 }
 
 func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
-	t.Run("affected child key marks prepare uncacheable", func(t *testing.T) {
+	t.Run("ordinary child update marks prepare uncacheable", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_CASCADE)
 
@@ -2712,11 +2875,11 @@ func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
 		require.True(t, query.GetHasForeignKeyAction())
 	})
 
-	t.Run("unrelated child column keeps prepare cacheable", func(t *testing.T) {
+	t.Run("unrelated child update remains cacheable", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_CASCADE)
 
-		query := buildPreparedQuery(t, mock, "prepare stmt1 from update emp set sal = ? where empno = ?")
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from update emp set ename = ? where empno = ?")
 		require.False(t, query.GetHasForeignKeyAction())
 	})
 
@@ -2725,6 +2888,32 @@ func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
 		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_RESTRICT, plan.ForeignKeyDef_CASCADE)
 
 		query := buildPreparedQuery(t, mock, "prepare stmt1 from update dept set deptno = deptno + 10 where deptno = ?")
+		require.True(t, query.GetHasForeignKeyAction())
+	})
+
+	t.Run("unrelated parent update remains cacheable", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_RESTRICT, plan.ForeignKeyDef_CASCADE)
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from update dept set loc = ? where deptno = ?")
+		require.False(t, query.GetHasForeignKeyAction())
+	})
+
+	t.Run("child update remains uncacheable with checks disabled", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		setMockEmpDeptForeignKeyAction(t, mock, plan.ForeignKeyDef_SET_NULL, plan.ForeignKeyDef_CASCADE)
+		mock.ctxt.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
+			switch name {
+			case "foreign_key_checks":
+				return int64(0), nil
+			case "sql_mode":
+				return "", nil
+			default:
+				return nil, moerr.NewInternalError(context.Background(), "unexpected variable")
+			}
+		}
+
+		query := buildPreparedQuery(t, mock, "prepare stmt1 from update emp set deptno = ? where empno = ?")
 		require.True(t, query.GetHasForeignKeyAction())
 	})
 
@@ -5502,6 +5691,15 @@ func TestSubQuery(t *testing.T) {
 				WHERE n3.N_NATIONKEY = n2.N_NATIONKEY AND n2.N_NATIONKEY < n1.N_NATIONKEY
 			)
 		)`, // two-level correlated ALL subquery
+		`SELECT n1.N_NATIONKEY,
+			(SELECT MAX(n2.N_REGIONKEY)
+			 FROM NATION n2
+			 WHERE n2.N_REGIONKEY = (
+				 SELECT MAX(n3.N_REGIONKEY)
+				 FROM NATION n3
+				 WHERE n3.N_NATIONKEY = n1.N_NATIONKEY
+			 ))
+		 FROM NATION n1`, // two-level correlated scalar aggregate subquery
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -5839,6 +6037,284 @@ func TestMysqlCompatibilityMode(t *testing.T) {
 	// with mysql compatibility
 	mock.ctxt.mysqlCompatible = true
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestOnlyFullGroupByMySQLAndMatrixOneNativeModes(t *testing.T) {
+	const whereConstrained = "select deptno, job, sum(sal) from constraint_test.emp where job = 'clerk' group by deptno"
+	const primaryKeyDependent = "select empno, ename, sum(sal) from constraint_test.emp group by empno"
+	const unsafeBareColumn = "select deptno, job, sum(sal) from constraint_test.emp group by deptno"
+	const volatileWhereValue = "select deptno, empno, sum(sal) from constraint_test.emp where empno = floor(rand() * 100) group by deptno"
+	const statementStableWhereValue = "select deptno, hiredate, sum(sal) from constraint_test.emp where hiredate = current_date() group by deptno"
+	const whereConstrainedOrderBy = "select deptno, sum(sal) from constraint_test.emp where job = 'clerk' group by deptno order by job"
+	const whereConstrainedHaving = "select deptno, sum(sal) from constraint_test.emp where job = 'clerk' group by deptno having job = 'clerk'"
+	const primaryKeyDependentHaving = "select empno, sum(sal) from constraint_test.emp group by empno having ename <> ''"
+	const primaryKeyDependentRollup = "select empno, ename, sum(sal) from constraint_test.emp group by empno with rollup"
+	const primaryKeyDependentCube = "select empno, ename, sum(sal) from constraint_test.emp group by cube(empno)"
+	const primaryKeyDependentRollupHaving = "select empno, sum(sal) from constraint_test.emp group by empno with rollup having ename <> ''"
+	const primaryKeyDependentRollupOrderBy = "select empno, sum(sal) from constraint_test.emp group by empno with rollup order by ename"
+	const whereConstrainedWindow = "select deptno, first_value(job) over (partition by job order by job), sum(sal) from constraint_test.emp where job = 'clerk' group by deptno"
+	const whereConstrainedWindowNoSpec = "select deptno, first_value(job) over (), sum(sal) from constraint_test.emp where job = 'clerk' group by deptno"
+	const primaryKeyDependentWindow = "select empno, first_value(ename) over (partition by ename order by ename), sum(sal) from constraint_test.emp group by empno"
+
+	tests := []struct {
+		name    string
+		mode    string
+		sql     string
+		wantErr bool
+	}{
+		{
+			name: "mysql mode without only full group by stays permissive",
+			mode: "STRICT_TRANS_TABLES",
+			sql:  unsafeBareColumn,
+		},
+		{
+			name: "mysql only full group by allows where constrained column",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  whereConstrained,
+		},
+		{
+			name: "mysql only full group by allows primary key dependency",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  primaryKeyDependent,
+		},
+		{
+			name: "mysql only full group by keeps where constrained window inputs below window stage",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  whereConstrainedWindow,
+		},
+		{
+			name: "mysql only full group by keeps where constrained window argument below window stage",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  whereConstrainedWindowNoSpec,
+		},
+		{
+			name: "mysql only full group by keeps primary key dependent window inputs below window stage",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  primaryKeyDependentWindow,
+		},
+		{
+			name: "mysql only full group by recognizes mode token case and spacing",
+			mode: " strict_trans_tables, only_full_group_by ",
+			sql:  primaryKeyDependent,
+		},
+		{
+			name:    "mysql only full group by rejects unconstrained column",
+			mode:    "ONLY_FULL_GROUP_BY",
+			sql:     unsafeBareColumn,
+			wantErr: true,
+		},
+		{
+			name:    "mysql only full group by rejects volatile where value",
+			mode:    "ONLY_FULL_GROUP_BY",
+			sql:     volatileWhereValue,
+			wantErr: true,
+		},
+		{
+			name: "mysql only full group by allows statement stable where value",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  statementStableWhereValue,
+		},
+		{
+			name: "mysql only full group by allows where constrained having column",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  whereConstrainedHaving,
+		},
+		{
+			name: "mysql only full group by allows where constrained order by column",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  whereConstrainedOrderBy,
+		},
+		{
+			name: "mysql only full group by allows primary key dependent having column",
+			mode: "ONLY_FULL_GROUP_BY",
+			sql:  primaryKeyDependentHaving,
+		},
+		{
+			name:    "mysql only full group by rejects primary key dependency in rollup total",
+			mode:    "ONLY_FULL_GROUP_BY",
+			sql:     primaryKeyDependentRollup,
+			wantErr: true,
+		},
+		{
+			name:    "mysql only full group by rejects primary key dependency in cube total",
+			mode:    "ONLY_FULL_GROUP_BY",
+			sql:     primaryKeyDependentCube,
+			wantErr: true,
+		},
+		{
+			name:    "mysql only full group by rejects primary key dependent rollup having",
+			mode:    "ONLY_FULL_GROUP_BY",
+			sql:     primaryKeyDependentRollupHaving,
+			wantErr: true,
+		},
+		{
+			name:    "mysql only full group by rejects primary key dependent rollup order by",
+			mode:    "ONLY_FULL_GROUP_BY",
+			sql:     primaryKeyDependentRollupOrderBy,
+			wantErr: true,
+		},
+		{
+			name:    "matrixone native keeps strict group by",
+			mode:    "ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE",
+			sql:     whereConstrained,
+			wantErr: true,
+		},
+		{
+			name:    "matrixone native rejects primary key dependency exception",
+			mode:    "ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE",
+			sql:     primaryKeyDependent,
+			wantErr: true,
+		},
+		{
+			name:    "matrixone native rejects where constrained having column",
+			mode:    "ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE",
+			sql:     whereConstrainedHaving,
+			wantErr: true,
+		},
+		{
+			name:    "matrixone native rejects where constrained order by column",
+			mode:    "ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE",
+			sql:     whereConstrainedOrderBy,
+			wantErr: true,
+		},
+		{
+			name: "matrixone native without only full group by stays permissive",
+			mode: "MATRIXONE_NATIVE",
+			sql:  unsafeBareColumn,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.SetSqlModeOverride(test.mode)
+			stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), test.sql, 1)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(mock.CurrentContext(), stmts[0], false)
+			if test.wantErr {
+				require.ErrorContains(t, err, "must appear in the GROUP BY clause")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestOnlyFullGroupByCompositePrimaryKeyDependency(t *testing.T) {
+	builder := &QueryBuilder{
+		qry: &plan.Query{
+			Nodes: []*plan.Node{
+				{
+					TableDef: &plan.TableDef{
+						Pkey: &plan.PrimaryKeyDef{
+							// MatrixOne stores a composite key in a hidden column while
+							// Names retains the user-visible key columns.
+							Cols:        []uint64{2},
+							PkeyColName: catalog.CPrimaryKeyColName,
+							Names:       []string{"tenant_id", "id"},
+						},
+					},
+				},
+			},
+		},
+	}
+	binding := NewBinding(1, 0, "", "composite_pk", 0, []string{"tenant_id", "id"}, nil, nil, false, nil)
+	ctx := &BindContext{groups: []*plan.Expr{
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: binding.tag, ColPos: 0}}},
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: binding.tag, ColPos: 1}}},
+	}, groupingFlag: []bool{true, true}}
+
+	require.True(t, builder.groupByIncludesPrimaryKey(ctx, binding))
+	ctx.groupingFlag[1] = false
+	require.False(t, builder.groupByIncludesPrimaryKey(ctx, binding))
+	ctx.groupingFlag[1] = true
+	ctx.groups = ctx.groups[:1]
+	ctx.groupingFlag = ctx.groupingFlag[:1]
+	require.False(t, builder.groupByIncludesPrimaryKey(ctx, binding))
+}
+
+func TestOnlyFullGroupByUsesStructuredBoundColumns(t *testing.T) {
+	builder := &QueryBuilder{
+		qry: &plan.Query{Nodes: []*plan.Node{
+			{TableDef: &plan.TableDef{Pkey: &plan.PrimaryKeyDef{
+				PkeyColName: "customer.account",
+				Names:       []string{"customer.account"},
+			}}},
+			{TableDef: &plan.TableDef{}},
+		}},
+	}
+	binding := NewBinding(1, 0, "", "t", 0, []string{"customer.account", "unsafe"}, nil, nil, false, nil)
+	unsafeBinding := NewBinding(2, 1, "", "u", 0, []string{"unsafe"}, nil, nil, false, nil)
+	ctx := &BindContext{
+		bindingByTag: map[int32]*Binding{binding.tag: binding, unsafeBinding.tag: unsafeBinding},
+		groups: []*plan.Expr{{Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: binding.tag,
+			ColPos: 0,
+		}}}},
+		groupingFlag: []bool{true},
+	}
+
+	rejected, found := builder.mysqlFullGroupByRejectedColumn(ctx, []boundColumn{
+		{name: "t.customer.account", relation: binding.tag, columnPos: 0},
+		{name: "u.unsafe", relation: unsafeBinding.tag, columnPos: 0},
+	})
+	require.True(t, found)
+	require.Equal(t, "u.unsafe", rejected)
+
+	convertedColumn := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+		{Expr: &plan.Expr_Lit{Lit: &plan.Literal{}}},
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: binding.tag, ColPos: 0}}},
+	}}}}
+	require.True(t, builder.mysqlFullGroupByAllowsColRef(ctx, convertedColumn))
+	ctx.groupingFlag[0] = false
+	require.False(t, builder.mysqlFullGroupByAllowsColRef(ctx, convertedColumn))
+}
+
+func TestOnlyFullGroupByEnumColumnValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		sql     string
+		wantErr bool
+	}{
+		{
+			name:    "rejects unconstrained enum projection",
+			sql:     "select deptno, job, sum(sal) from constraint_test.emp group by deptno",
+			wantErr: true,
+		},
+		{
+			name: "allows where constrained enum projection",
+			sql:  "select deptno, job, sum(sal) from constraint_test.emp where job = 'clerk' group by deptno",
+		},
+		{
+			name: "allows where constrained enum having",
+			sql:  "select deptno, sum(sal) from constraint_test.emp where job = 'clerk' group by deptno having job = 'clerk'",
+		},
+		{
+			name: "allows primary key dependent enum projection",
+			sql:  "select empno, job, sum(sal) from constraint_test.emp group by empno",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+			_, tableDef, err := mock.ctxt.Resolve("constraint_test", "emp", nil)
+			require.NoError(t, err)
+			tableDef.Cols[2].Typ.Id = int32(types.T_enum)
+			tableDef.Cols[2].Typ.Enumvalues = "clerk,manager"
+
+			stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), test.sql, 1)
+			require.NoError(t, err)
+			_, err = BuildPlan(mock.CurrentContext(), stmts[0], false)
+			if test.wantErr {
+				require.ErrorContains(t, err, "must appear in the GROUP BY clause")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestTcl(t *testing.T) {

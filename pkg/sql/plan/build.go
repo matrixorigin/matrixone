@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"reflect"
 	gotrace "runtime/trace"
 	"time"
 
@@ -28,6 +29,32 @@ import (
 )
 
 func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool, skipStats bool) (*Plan, error) {
+	return bindAndOptimizeSelectQueryWithValidator(stmtType, ctx, stmt, isPrepareStmt, skipStats, nil)
+}
+
+func bindAndOptimizeSelectQueryWithValidator(
+	stmtType plan.Query_StatementType,
+	ctx CompilerContext,
+	stmt *tree.Select,
+	isPrepareStmt bool,
+	skipStats bool,
+	validate func(*Query) error,
+) (*Plan, error) {
+	return bindAndOptimizeSelectQueryWithValidatorAndCapture(
+		stmtType, ctx, stmt, isPrepareStmt, skipStats, validate, nil, false,
+	)
+}
+
+func bindAndOptimizeSelectQueryWithValidatorAndCapture(
+	stmtType plan.Query_StatementType,
+	ctx CompilerContext,
+	stmt *tree.Select,
+	isPrepareStmt bool,
+	skipStats bool,
+	validate func(*Query) error,
+	capture func(*BindContext),
+	restoreViewMySQLSpecialTypes bool,
+) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
@@ -35,6 +62,7 @@ func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerC
 
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
 	bindCtx := NewBindContext(builder, nil)
+	bindCtx.restoreViewMySQLSpecialTypes = restoreViewMySQLSpecialTypes
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
@@ -46,8 +74,16 @@ func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerC
 	builder.skipStats = skipStats
 	rootId = builder.reuseMultiReferenceCTEs(rootId)
 	ctx.SetViews(bindCtx.views)
+	if capture != nil {
+		capture(bindCtx)
+	}
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	if validate != nil {
+		if err = validate(builder.qry); err != nil {
+			return nil, err
+		}
+	}
 	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
@@ -71,16 +107,25 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
+	if err := validateReturningSyntax(builder, stmt); err != nil {
+		return nil, err
+	}
+	builder.returningRequested = stmt.HasReturning()
 
 	rootId, err := builder.bindInsert(stmt, bindCtx)
 	if err != nil {
+		if stmt.HasReturning() {
+			if feature := returningFallbackFeature(err, "legacy INSERT path"); feature != "" {
+				return nil, returningNotSupported(builder, feature)
+			}
+		}
 		// ON DUPLICATE KEY UPDATE is fully handled by the modern path; it must
 		// never fall back to the legacy ODKU operator. Two exceptions still fall
 		// back: plain INSERT (e.g. inserting into a system index table); and the
 		// degenerate ODKU on a table with no primary/unique key (no dedup key to
 		// represent the upsert; legacy treats it as a plain INSERT and preserves
 		// the prepared-statement parameters).
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML &&
+		if !stmt.HasReturning() && moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) &&
 			(len(stmt.OnDuplicateUpdate) == 0 ||
 				err.Error() == noPkOnDupUpdateMsg) {
 			return buildInsert(stmt, ctx, false, isPrepareStmt)
@@ -90,6 +135,9 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	ctx.SetViews(bindCtx.views)
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	if err = builder.appendReturningProjection(stmt.Returning, bindCtx); err != nil {
+		return nil, err
+	}
 	builder.skipStats = skipStats
 	query, err := builder.createQuery()
 	if err != nil {
@@ -257,7 +305,7 @@ func bindAndOptimizeLoadQuery(ctx CompilerContext, stmt *tree.Load, isPrepareStm
 
 	rootId, err := builder.bindLoad(stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+		if moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) {
 			return buildLoad(stmt, ctx, isPrepareStmt)
 		}
 		return nil, err
@@ -295,10 +343,19 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
+	if err := validateReturningSyntax(builder, stmt); err != nil {
+		return nil, err
+	}
+	builder.returningRequested = stmt.HasReturning()
 
 	rootId, err := builder.bindDelete(ctx, stmt, bindCtx)
 	if err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrUnsupportedDML {
+		if stmt.HasReturning() {
+			if feature := returningFallbackFeature(err, "legacy DELETE path"); feature != "" {
+				return nil, returningNotSupported(builder, feature)
+			}
+		}
+		if !stmt.HasReturning() && moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) {
 			if err.Error() == icebergRowLevelDMLUnsupportedMsg {
 				return buildIcebergDeletePlan(stmt, ctx, isPrepareStmt)
 			}
@@ -309,9 +366,15 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 	ctx.SetViews(bindCtx.views)
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	if err = builder.appendReturningProjection(stmt.Returning, bindCtx); err != nil {
+		return nil, err
+	}
 	builder.skipStats = skipStats
 	query, err := builder.createQuery()
 	if err != nil {
+		return nil, err
+	}
+	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
 		return nil, err
 	}
 	return &Plan{
@@ -335,6 +398,10 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
+	if err := validateReturningSyntax(builder, stmt); err != nil {
+		return nil, err
+	}
+	builder.returningRequested = stmt.HasReturning()
 
 	rootId, err := builder.bindUpdate(stmt, bindCtx)
 	if err != nil {
@@ -342,12 +409,32 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 		switch route {
 		case updatePlannerLegacy:
 			recordUpdatePlannerRoute(route, reason, "selected")
+			if stmt.HasReturning() {
+				if reason == updateRouteReasonExternalTable {
+					return nil, returningNotSupported(builder, "external table")
+				}
+				return nil, returningNotSupported(builder, "legacy UPDATE path")
+			}
 			return buildTableUpdate(stmt, ctx, isPrepareStmt)
 		case updatePlannerSpecialized:
 			recordUpdatePlannerRoute(route, reason, "selected")
+			if stmt.HasReturning() {
+				if reason == updateRouteReasonIceberg {
+					return nil, returningNotSupported(builder, "Iceberg table")
+				}
+				return nil, returningNotSupported(builder, "specialized UPDATE path")
+			}
 			return buildIcebergUpdatePlan(stmt, ctx, isPrepareStmt)
 		case updatePlannerRejected, updatePlannerUnknown:
 			recordUpdatePlannerRoute(route, reason, "rejected")
+			if stmt.HasReturning() {
+				switch reason {
+				case updateRouteReasonExternalTable:
+					return nil, returningNotSupported(builder, "external table")
+				case updateRouteReasonTableForm:
+					return nil, returningNotSupported(builder, "internal table")
+				}
+			}
 			return nil, routedErr
 		}
 		return nil, routedErr
@@ -355,6 +442,9 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	ctx.SetViews(bindCtx.views)
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	if err = builder.appendReturningProjection(stmt.Returning, bindCtx); err != nil {
+		return nil, err
+	}
 	builder.skipStats = skipStats
 	query, err := builder.createQuery()
 	if err != nil {
@@ -362,6 +452,42 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	}
 	if err = builder.finishIrregularIndexMaintenance(query, bindCtx); err != nil {
 		return nil, err
+	}
+
+	enabled, err := IsForeignKeyChecksEnabled(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if enabled && query.HasForeignKeyAction {
+		tblInfo, resolveErr := getUpdateTableInfo(ctx, stmt)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		for i, tableDef := range tblInfo.tableDefs {
+			if len(tblInfo.updateKeys[i]) == 0 {
+				continue
+			}
+			selfFkeys := make([]*plan.ForeignKeyDef, 0, len(tableDef.Fkeys))
+			for _, fk := range tableDef.Fkeys {
+				if fk.ForeignTbl == 0 {
+					selfFkeys = append(selfFkeys, fk)
+				}
+			}
+			if len(selfFkeys) == 0 {
+				continue
+			}
+			sqls, genErr := genSqlsForCheckFKSelfRefer(
+				ctx.GetContext(),
+				tblInfo.objRef[i].SchemaName,
+				tableDef.Name,
+				tableDef.Cols,
+				selfFkeys,
+			)
+			if genErr != nil {
+				return nil, genErr
+			}
+			query.DetectSqls = append(query.DetectSqls, sqls...)
+		}
 	}
 	recordUpdatePlannerRoute(updatePlannerModern, updateRouteReasonNone, "selected")
 	return &Plan{
@@ -410,6 +536,47 @@ func buildExplainPhyPlan(ctx CompilerContext, stmt *tree.ExplainPhyPlan, isPrepa
 	return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
 }
 
+func selectHasExportParam(stmt tree.SelectStatement) bool {
+	return selectTreeHasExportParam(reflect.ValueOf(stmt))
+}
+
+// selectTreeHasExportParam follows the complete parser tree because SELECT
+// nodes can also be nested in CTEs, table expressions, and scalar predicates.
+// The parser's expression visitor cannot be used here because Subquery.Accept
+// is intentionally unimplemented.
+func selectTreeHasExportParam(value reflect.Value) bool {
+	if !value.IsValid() {
+		return false
+	}
+	if value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return false
+		}
+		if value.CanInterface() {
+			if selectStmt, ok := value.Interface().(*tree.Select); ok && selectStmt.Ep != nil {
+				return true
+			}
+		}
+		return selectTreeHasExportParam(value.Elem())
+	}
+
+	switch value.Kind() {
+	case reflect.Struct:
+		for i := 0; i < value.NumField(); i++ {
+			if selectTreeHasExportParam(value.Field(i)) {
+				return true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < value.Len(); i++ {
+			if selectTreeHasExportParam(value.Index(i)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -419,6 +586,9 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	defer task.End()
 	switch stmt := stmt.(type) {
 	case *tree.Select:
+		if stmt.IsPerform && selectHasExportParam(stmt) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "PERFORM SELECT INTO OUTFILE")
+		}
 		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false)
 	case *tree.ParenSelect:
 		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false)
@@ -431,12 +601,18 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	case *tree.Insert:
 		return bindAndOptimizeInsertQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Replace:
+		if stmt.HasReturning() {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "DML RETURNING does not support REPLACE")
+		}
 		return bindAndOptimizeReplaceQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Update:
 		return bindAndOptimizeUpdateQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Delete:
 		return bindAndOptimizeDeleteQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.Merge:
+		if stmt.HasReturning() {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "DML RETURNING does not support MERGE")
+		}
 		return bindAndOptimizeMergeQuery(ctx, stmt, isPrepareStmt, false)
 	case *tree.BeginTransaction:
 		return buildBeginTransaction(stmt, ctx)
@@ -575,7 +751,17 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 // GetResultColumnsFromPlan
 func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 	getResultColumnsByProjectionlist := func(query *Query) []*ColDef {
-		lastNode := query.Nodes[query.Steps[len(query.Steps)-1]]
+		step := len(query.Steps) - 1
+		if query.HasReturning {
+			if query.ReturningStep < 0 || int(query.ReturningStep) >= len(query.Steps) {
+				return nil
+			}
+			step = int(query.ReturningStep)
+		}
+		lastNode := query.Nodes[query.Steps[step]]
+		if query.HasReturning && len(query.Headings) != len(lastNode.ProjectList) {
+			return nil
+		}
 		columns := make([]*ColDef, len(lastNode.ProjectList))
 		for idx, expr := range lastNode.ProjectList {
 			columns[idx] = &ColDef{
@@ -600,6 +786,11 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 		switch logicPlan.Query.StmtType {
 		case plan.Query_SELECT:
 			return getResultColumnsByProjectionlist(logicPlan.Query)
+		case plan.Query_INSERT, plan.Query_UPDATE, plan.Query_DELETE:
+			if logicPlan.Query.HasReturning {
+				return getResultColumnsByProjectionlist(logicPlan.Query)
+			}
+			return nil
 		default:
 			// insert/update/delete statement will return nil
 			return nil

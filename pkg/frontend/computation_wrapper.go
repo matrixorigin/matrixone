@@ -453,7 +453,12 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			// the outer EXECUTE fragment, which cannot contain the inner hint.
 			retComp.SetQuerySchedulingIntent(cwft.querySchedulingIntentForPreparedStatement(originSQL))
 			retComp.SetSchedulingTraceRecorder(&cwft.schedulingTrace)
-			if err = retComp.Reset(cwft.proc, getStatementStartAt(execCtx.reqCtx), fill, cwft.ses.GetSql()); err != nil {
+			if err = retComp.Reset(
+				cwft.proc,
+				getStatementStartAt(execCtx.reqCtx),
+				compileOutputCallback(cwft.stmt, fill),
+				cwft.ses.GetSql(),
+			); err != nil {
 				return nil, err
 			}
 			cwft.compile = retComp
@@ -707,6 +712,7 @@ func initExecuteStmtParamWithResolverInSession(
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
 	currentNativeMode := owner.sqlModeHasMatrixOneNative()
+	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
 
 	// TODO check if schema change, obj.Obj is zero all the time in 0.6
 	eng := cwft.proc.Base.SessionInfo.StorageEngine
@@ -777,7 +783,8 @@ func initExecuteStmtParamWithResolverInSession(
 	// every EXECUTE so both enabled->disabled and disabled->enabled transitions
 	// observe the current setting.
 	fkSensitive := shouldRebuildPreparePlan(false, preparePlan.Plan)
-	modeMismatch := prepareStmt.NativeMode != currentNativeMode
+	modeMismatch := prepareStmt.NativeMode != currentNativeMode ||
+		prepareStmt.onlyFullGroupBySet && prepareStmt.OnlyFullGroupBy != currentOnlyFullGroupBy
 	protocolVersion := currentProtocolVersion(cwft.proc)
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
@@ -792,7 +799,13 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		prepareTs := currentTxnSnapshotTSForProcess(cwft.proc)
 		newPreparePlan := newPlan.GetDcl().GetPrepare()
-		columns := plan2.GetResultColumnsFromPlan(newPreparePlan.Plan)
+		var txnHaveDDL bool
+		switch prepareStmt.PrepareStmt.(type) {
+		case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
+			txnHaveDDL = sessionTxnHaveDDL(executionSes)
+		}
+		columns := getPreparedResultColumnsFromPlan(
+			prepareStmt.PrepareStmt, newPlan, txnHaveDDL)
 		resper := execCtx.resper
 		if executionSes.IsBackgroundSession() {
 			resper = owner.GetResponser()
@@ -809,6 +822,8 @@ func initExecuteStmtParamWithResolverInSession(
 			execCtx.prepareColDef = newColDefData
 		}
 		prepareStmt.NativeMode = currentNativeMode
+		prepareStmt.OnlyFullGroupBy = currentOnlyFullGroupBy
+		prepareStmt.onlyFullGroupBySet = true
 		prepareStmt.Ts = prepareTs
 		prepareStmt.tempTableVersion = currentTempTableVersion
 		prepareStmt.ddlVersion = currentDDLVersion
@@ -1188,20 +1203,29 @@ func createCompile(
 			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare)
 	})
 
-	if _, ok := stmt.(*tree.ExplainAnalyze); ok {
-		fill = func(bat *batch.Batch, crs *perfcounter.CounterSet) error { return nil }
-	}
-
-	if _, ok := stmt.(*tree.ExplainPhyPlan); ok {
-		fill = func(bat *batch.Batch, crs *perfcounter.CounterSet) error { return nil }
-	}
-
-	err = retCompile.Compile(execCtx.reqCtx, plan, fill)
+	err = retCompile.Compile(execCtx.reqCtx, plan, compileOutputCallback(stmt, fill))
 	if err != nil {
 		return
 	}
 	retCompile.SetOriginSQL(originSQL)
 	return
+}
+
+// EXPLAIN ANALYZE and EXPLAIN PHYPLAN execute the inner query only to collect
+// runtime data. Their result rows are constructed by the frontend after the
+// pipeline finishes, so inner-query batches must never reach the client output
+// callback. Apply the same rule both when compiling a fresh pipeline and when
+// resetting a cached prepared pipeline for another execution.
+func compileOutputCallback(
+	stmt tree.Statement,
+	fill func(*batch.Batch, *perfcounter.CounterSet) error,
+) func(*batch.Batch, *perfcounter.CounterSet) error {
+	switch stmt.(type) {
+	case *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
+		return func(*batch.Batch, *perfcounter.CounterSet) error { return nil }
+	default:
+		return fill
+	}
 }
 
 func buildPlanForCompileRetry(

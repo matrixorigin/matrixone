@@ -38,13 +38,15 @@ const (
 	MORPCMinVersion    int64 = math.MinInt64
 	MORPCVersion1      int64 = 1
 	MORPCVersion2      int64 = 2
-	MORPCVersion3      int64 = 3 // start from 1.3.0
-	MORPCVersion4      int64 = 4 // start from 2.0.1
-	MORPCVersion5      int64 = 5 // assignment-aware CHAR/VARCHAR casts
-	MORPCVersion6      int64 = 6 // ordered aggregate pipeline configuration
-	MORPCVersion7      int64 = 7 // structured CHECK constraint metadata and enforcement
-	MORPCVersion8      int64 = 8 // versioned exact runtime-filter key contract
-	MORPCLatestVersion       = MORPCVersion8
+	MORPCVersion3      int64 = 3  // start from 1.3.0
+	MORPCVersion4      int64 = 4  // start from 2.0.1
+	MORPCVersion5      int64 = 5  // assignment-aware CHAR/VARCHAR casts
+	MORPCVersion6      int64 = 6  // ordered aggregate pipeline configuration
+	MORPCVersion7      int64 = 7  // structured CHECK constraint metadata and enforcement
+	MORPCVersion8      int64 = 8  // versioned exact runtime-filter key contract
+	MORPCVersion9      int64 = 9  // AUTO_INCREMENT epoch-fenced commit
+	MORPCVersion10     int64 = 10 // persisted appendable-object abort metadata
+	MORPCLatestVersion       = MORPCVersion10
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

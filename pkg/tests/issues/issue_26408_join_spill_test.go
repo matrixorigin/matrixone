@@ -212,6 +212,19 @@ func patchJoinSpillStats(
 	tableCount int64,
 ) {
 	t.Helper()
+	patchJoinSpillStatsWithNDV(t, ctx, conn, dbName, tableName, tableCount, tableCount)
+}
+
+func patchJoinSpillStatsWithNDV(
+	t *testing.T,
+	ctx context.Context,
+	conn *sql.Conn,
+	dbName string,
+	tableName string,
+	tableCount int64,
+	ndv int64,
+) {
+	t.Helper()
 	stats := fmt.Sprintf(`{
 		"table_cnt": %d,
 		"block_number": 2048,
@@ -227,7 +240,7 @@ func patchJoinSpillStats(
 				"result": [1, 5000000, 10000000, 15000000, 20000000]
 			}
 		}
-	}`, tableCount, tableCount)
+	}`, tableCount, ndv)
 	var patched float64
 	err := conn.QueryRowContext(
 		ctx,

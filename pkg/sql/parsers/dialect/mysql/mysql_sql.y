@@ -404,7 +404,11 @@ func sqlTaskInt64(v any) int64 {
 %token <str> BIT TINYINT SMALLINT MEDIUMINT INT INTEGER BIGINT INTNUM
 %token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC DECIMAL_VALUE PRECISION
 %token <str> TIME TIMESTAMP DATETIME YEAR
-%token <str> CHAR VARCHAR BOOL CHARACTER VARBINARY NCHAR
+%token <str> CHAR
+%nonassoc <str> VARCHAR
+%token <str> BOOL CHARACTER
+%nonassoc <str> VARBINARY
+%token <str> NCHAR LONG
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT DATALINK
 %token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64 VECBF16 VECF16 VECINT8 VECUINT8
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
@@ -543,6 +547,9 @@ func sqlTaskInt64(v any) int64 {
 // Do
 %token <str> DO
 
+// Perform
+%token <str> PERFORM
+
 // Declare
 %token <str> DECLARE
 
@@ -612,7 +619,7 @@ func sqlTaskInt64(v any) int64 {
 %type <expr> merge_search_condition_opt
 %type <str> matched_keyword
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt savepoint_stmt release_savepoint_stmt rollback_to_savepoint_stmt
-%type <statement> explain_stmt explainable_stmt
+%type <statement> explain_stmt explain_plan_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt set_logservice_non_voting_replica_num
 %type <statement> lock_stmt lock_table_stmt unlock_table_stmt
 %type <statement> revoke_stmt grant_stmt
@@ -620,7 +627,7 @@ func sqlTaskInt64(v any) int64 {
 %type <statement> analyze_stmt check_table_stmt show_profile_stmt
 %type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt reset_stmt
 %type <statement> replace_stmt
-%type <statement> do_stmt
+%type <statement> do_stmt perform_stmt
 %type <statement> declare_stmt
 %type <statement> values_stmt
 %type <statement> call_stmt
@@ -670,9 +677,9 @@ func sqlTaskInt64(v any) int64 {
 %type <pickKeys> pick_keys_clause
 %type <diffOutputOpt> diff_output_opt
 
-%type <select> select_stmt select_no_parens replace_table_source
+%type <select> select_stmt select_no_parens perform_select replace_table_source
 %type <selectStatement> simple_select select_with_parens simple_select_clause table_query_subquery table_query_expr table_query_term table_query_primary values_query_subquery values_query_expr values_query_term values_query_primary
-%type <selectExprs> select_expression_list
+%type <selectExprs> select_expression_list returning_clause_opt
 %type <selectExpr> select_expression
 %type <selectOptions> select_options_opt select_option_list
 %type <selectOption> select_option_opt
@@ -944,6 +951,7 @@ func sqlTaskInt64(v any) int64 {
 %token <str> BACKUP FILESYSTEM PARALLELISM RESTORE
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
+%left <str> RETURNING
 %token <str> ARRAY
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
@@ -1075,6 +1083,7 @@ normal_stmt:
 |   load_table_stmt
 |   load_extension_stmt
 |   do_stmt
+|   perform_stmt
 |   values_stmt
 |   select_stmt
     {
@@ -2981,6 +2990,7 @@ var_assignment:
 |   NAMES charset_name
     {
         $$ = &tree.VarAssignmentExpr{
+			SetNames: true,
             Name: strings.ToLower($1),
             Value: tree.NewNumVal($2, $2, false, tree.P_char),
         }
@@ -2988,6 +2998,7 @@ var_assignment:
 |   NAMES charset_name COLLATE DEFAULT
     {
         $$ = &tree.VarAssignmentExpr{
+			SetNames: true,
             Name: strings.ToLower($1),
             Value: tree.NewNumVal($2, $2, false, tree.P_char),
         }
@@ -2995,6 +3006,7 @@ var_assignment:
 |   NAMES charset_name COLLATE name_string
     {
         $$ = &tree.VarAssignmentExpr{
+			SetNames: true,
             Name: strings.ToLower($1),
             Value: tree.NewNumVal($2, $2, false, tree.P_char),
             Reserved: tree.NewNumVal($4, $4, false, tree.P_char),
@@ -3003,6 +3015,7 @@ var_assignment:
 |   NAMES DEFAULT
     {
         $$ = &tree.VarAssignmentExpr{
+			SetNames: true,
             Name: strings.ToLower($1),
             Value: &tree.DefaultVal{},
         }
@@ -3260,29 +3273,34 @@ update_stmt:
     }
 
 update_no_with_stmt:
-    UPDATE priority_opt ignore_opt table_reference SET update_list where_expression_opt order_by_opt limit_opt
+    UPDATE priority_opt ignore_opt table_reference SET update_list where_expression_opt order_by_opt limit_opt returning_clause_opt
     {
         // Single-table syntax
         $$ = &tree.Update{
             Tables: tree.TableExprs{$4},
             Exprs: $6,
+            Priority: $2,
             Ignore: $3 != "",
             Where: $7,
             OrderBy: $8,
             Limit: $9,
+            Returning: $10,
         }
     }
-|    UPDATE priority_opt ignore_opt table_references SET update_list where_expression_opt
+|    UPDATE priority_opt ignore_opt table_references SET update_list where_expression_opt returning_clause_opt
     {
         // Multiple-table syntax
         $$ = &tree.Update{
             Tables: tree.TableExprs{$4},
             Exprs: $6,
+            Priority: $2,
             Ignore: $3 != "",
             Where: $7,
+            Returning: $8,
+            MultiTable: true,
         }
     }
-|    UPDATE priority_opt ignore_opt table_reference SET update_list FROM table_references where_expression_opt
+|    UPDATE priority_opt ignore_opt table_reference SET update_list FROM table_references where_expression_opt returning_clause_opt
     {
         // PostgreSQL-style UPDATE target SET ... FROM source_tables WHERE ...
         // The target table is kept in Tables; FROM-clause sources are stored
@@ -3291,9 +3309,11 @@ update_no_with_stmt:
         $$ = &tree.Update{
             Tables: tree.TableExprs{$4},
             Exprs:  $6,
+            Priority: $2,
             Ignore: $3 != "",
             From:   &tree.From{Tables: tree.TableExprs{$8}},
             Where:  $9,
+            Returning: $10,
         }
     }
 
@@ -3366,12 +3386,18 @@ unlock_table_stmt:
 prepareable_stmt:
     create_stmt
 |   alter_stmt
+|   explain_plan_stmt
 |   insert_stmt
 |   replace_stmt
 |   delete_stmt
 |   drop_stmt
 |   show_stmt
 |   update_stmt
+|   SET var_assignment_list
+    {
+		$$ = &tree.SetVar{Assignments: $2}
+    }
+|   perform_stmt
 |   select_stmt
     {
         $$ = $1
@@ -3447,7 +3473,13 @@ explain_stmt:
     {
         $$ = tree.NewExplainFor($4, uint64($7.(int64)))
     }
-|   explain_sym explainable_stmt
+|   explain_plan_stmt
+    {
+        $$ = $1
+    }
+
+explain_plan_stmt:
+    explain_sym explainable_stmt
     {
         $$ = tree.NewExplainStmt($2, "text")
     }
@@ -5576,7 +5608,7 @@ delete_stmt:
     }
 
 delete_without_using_stmt:
-    DELETE priority_opt quick_opt ignore_opt FROM table_name partition_clause_opt as_opt_id where_expression_opt order_by_opt limit_opt
+    DELETE priority_opt quick_opt ignore_opt FROM table_name partition_clause_opt as_opt_id where_expression_opt order_by_opt limit_opt returning_clause_opt
     {
         // Single-Table Syntax
         t := &tree.AliasedTableExpr {
@@ -5587,29 +5619,42 @@ delete_without_using_stmt:
         }
         $$ = &tree.Delete{
             Tables: tree.TableExprs{t},
+            Priority: $2,
+            Quick: $3 != "",
+            Ignore: $4 != "",
+            PartitionNames: $7,
             Where: $9,
             OrderBy: $10,
             Limit: $11,
+            Returning: $12,
         }
     }
-|    DELETE priority_opt quick_opt ignore_opt table_name_wild_list FROM table_references where_expression_opt
+|    DELETE priority_opt quick_opt ignore_opt table_name_wild_list FROM table_references where_expression_opt returning_clause_opt
     {
         // Multiple-Table Syntax
         $$ = &tree.Delete{
             Tables: $5,
+            Priority: $2,
+            Quick: $3 != "",
+            Ignore: $4 != "",
             Where: $8,
             TableRefs: tree.TableExprs{$7},
+            Returning: $9,
         }
     }
 
 delete_with_using_stmt:
-    DELETE priority_opt quick_opt ignore_opt FROM table_name_wild_list USING table_references where_expression_opt
+    DELETE priority_opt quick_opt ignore_opt FROM table_name_wild_list USING table_references where_expression_opt returning_clause_opt
     {
         // Multiple-Table Syntax
         $$ = &tree.Delete{
             Tables: $6,
+            Priority: $2,
+            Quick: $3 != "",
+            Ignore: $4 != "",
             Where: $9,
             TableRefs: tree.TableExprs{$8},
+            Returning: $10,
         }
     }
 
@@ -5645,7 +5690,7 @@ wild_opt:
     {}
 
 priority_opt:
-    {}
+    { $$ = "" }
 |    priority
 
 priority:
@@ -5654,7 +5699,7 @@ priority:
 |    DELAYED
 
 quick_opt:
-    {}
+    { $$ = "" }
 |    QUICK
 
 ignore_opt:
@@ -5675,11 +5720,12 @@ replace_priority_opt:
 |    DELAYED
 
 replace_stmt:
-    REPLACE replace_priority_opt into_table_name partition_clause_opt replace_data
+    REPLACE replace_priority_opt into_table_name partition_clause_opt replace_data returning_clause_opt
     {
         rep := $5
         rep.Table = $3
         rep.PartitionNames = $4
+        rep.Returning = $6
         $$ = rep
     }
 
@@ -5769,7 +5815,7 @@ insert_stmt:
     }
 
 insert_no_with_stmt:
-    INSERT into_table_name insert_partition_clause_opt insert_data on_duplicate_key_update_opt
+    INSERT into_table_name insert_partition_clause_opt insert_data on_duplicate_key_update_opt returning_clause_opt
     {
         ins := $4
         ins.Table = $2
@@ -5778,9 +5824,10 @@ insert_no_with_stmt:
             ins.PartitionValues = $3.Values
         }
         ins.OnDuplicateUpdate = $5
+        ins.Returning = $6
         $$ = ins
     }
-|   INSERT OVERWRITE into_table_name insert_partition_clause_opt insert_data
+|   INSERT OVERWRITE into_table_name insert_partition_clause_opt insert_data returning_clause_opt
     {
         ins := $5
         ins.Table = $3
@@ -5789,9 +5836,10 @@ insert_no_with_stmt:
             ins.PartitionValues = $4.Values
         }
         ins.Overwrite = true
+        ins.Returning = $6
         $$ = ins
     }
-|   INSERT IGNORE into_table_name insert_partition_clause_opt insert_data
+|   INSERT IGNORE into_table_name insert_partition_clause_opt insert_data returning_clause_opt
     {
         ins := $5
         ins.Table = $3
@@ -5800,7 +5848,17 @@ insert_no_with_stmt:
             ins.PartitionValues = $4.Values
         }
         ins.OnDuplicateUpdate = []*tree.UpdateExpr{nil}
+        ins.Returning = $6
         $$ = ins
+    }
+
+returning_clause_opt:
+    {
+        $$ = nil
+    }
+|   RETURNING select_expression_list
+    {
+        $$ = $2
     }
 
 merge_stmt:
@@ -5822,6 +5880,16 @@ merge_no_with_stmt:
             Source: $5,
             On: $7,
             Clauses: $8,
+        }
+    }
+|   MERGE INTO table_reference USING table_reference ON expression merge_when_list RETURNING select_expression_list
+    {
+        $$ = &tree.Merge{
+            Target: $3,
+            Source: $5,
+            On: $7,
+            Clauses: $8,
+            Returning: $10,
         }
     }
 
@@ -5971,6 +6039,7 @@ on_duplicate_key_update_opt:
     }
 
 set_value_list:
+    %prec RETURNING
     {
         $$ = nil
     }
@@ -6591,6 +6660,18 @@ select_lock_opt:
     {
         $$ = &tree.SelectLockInfo{
             LockType:tree.SelectLockForUpdate,
+        }
+    }
+|   FOR SHARE
+    {
+        $$ = &tree.SelectLockInfo{
+            LockType:tree.SelectLockForShare,
+        }
+    }
+|   LOCK IN SHARE MODE
+    {
+        $$ = &tree.SelectLockInfo{
+            LockType:tree.SelectLockForShare,
         }
     }
 
@@ -7478,6 +7559,7 @@ index_name_list:
 	}
 
 as_opt_id:
+    %prec RETURNING
     {
         $$ = ""
     }
@@ -7501,6 +7583,7 @@ table_alias:
     }
 
 as_name_opt:
+    %prec RETURNING
     {
         $$ = tree.NewCStr("", 1)
     }
@@ -11569,15 +11652,6 @@ bit_expr:
     {
         $$ = tree.NewBinaryExpr(tree.BIT_XOR, $1, $3)
     }
-|   bit_expr PIPE_CONCAT bit_expr
-    {
-        name := tree.NewUnresolvedColName("concat")
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStr("concat", 1),
-            Exprs: tree.Exprs{$1, $3},
-        }
-    }
 |   bit_expr '+' bit_expr %prec '+'
     {
         $$ = tree.NewBinaryExpr(tree.PLUS, $1, $3)
@@ -11655,6 +11729,15 @@ simple_expr:
 |   literal
     {
         $$ = $1
+    }
+|   simple_expr PIPE_CONCAT simple_expr
+    {
+        name := tree.NewUnresolvedColName("concat")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr("concat", 1),
+            Exprs: tree.Exprs{$1, $3},
+        }
     }
 |   '(' expression ')'
     {
@@ -14176,6 +14259,30 @@ char_type:
             },
         }
     }
+|   LONG VARCHAR
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.BlobFamily,
+                FamilyString: "mediumtext",
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_TEXT),
+            },
+        }
+    }
+|   LONG VARBINARY
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.BlobFamily,
+                FamilyString: "mediumblob",
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_MEDIUM_BLOB),
+            },
+        }
+    }
 |   DATALINK
     {
         locale := ""
@@ -14420,6 +14527,23 @@ do_stmt:
         $$ = &tree.Do {
             Exprs: $2,
         }
+    }
+
+perform_stmt:
+    PERFORM perform_select
+    {
+        $2.IsPerform = true
+        $$ = $2
+    }
+
+perform_select:
+    simple_select time_window_opt order_by_opt limit_opt rank_opt export_data_param_opt select_lock_opt
+    {
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6, SelectLockInfo: $7}
+    }
+|   with_clause simple_select time_window_opt order_by_opt limit_opt rank_opt export_data_param_opt select_lock_opt
+    {
+        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: $7, SelectLockInfo: $8, With: $1}
     }
 
 declare_stmt:
@@ -14842,6 +14966,7 @@ non_reserved_keyword:
 |   DISK
 |   DUMP
 |   DO
+|   PERFORM
 |   DOUBLE
 |   DIRECTORY
 |   DISTRIBUTION_MODE
@@ -14914,6 +15039,7 @@ non_reserved_keyword:
 |   LEVEL
 |   LINESTRING
 |   LOGSERVICE
+|   LONG %prec LOWER_THAN_STRING
 |   LONGBLOB
 |   LONGTEXT
 |   LOCAL
@@ -15191,6 +15317,7 @@ non_reserved_keyword:
 |   TASKS
 |	COLUMN_NUMBER
 |	RETURNS
+|	RETURNING
 |	QUERY_RESULT
 |	MYSQL_COMPATIBILITY_MODE
 |   UNIQUE_CHECK_ON_AUTOINCR

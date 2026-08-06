@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -259,6 +260,149 @@ func TestPreInsertUniqueUpdateKeepsCompactedRowsAligned(t *testing.T) {
 				vector.MustFixedColNoTypeCheck[types.Rowid](result.Batch.Vecs[rowIdColPos]))
 		})
 	}
+}
+
+func TestInsertIgnoreMultiDedupArbitratesWholeRowsInInputOrder(t *testing.T) {
+	testCases := []struct {
+		name        string
+		ids         []int32
+		uniqueKeys  []int32
+		uniqueNulls []bool
+		pkConflicts []bool
+		ukConflicts []bool
+		wantIDs     []int32
+		wantKeys    []int32
+	}{
+		{
+			name:        "existing unique conflict does not reserve primary key",
+			ids:         []int32{3, 3},
+			uniqueKeys:  []int32{20, 30},
+			pkConflicts: []bool{false, false},
+			ukConflicts: []bool{true, false},
+			wantIDs:     []int32{3},
+			wantKeys:    []int32{30},
+		},
+		{
+			name:        "primary conflict loser does not reserve unique key",
+			ids:         []int32{1, 1, 2},
+			uniqueKeys:  []int32{10, 20, 20},
+			pkConflicts: []bool{false, false, false},
+			ukConflicts: []bool{false, false, false},
+			wantIDs:     []int32{1, 2},
+			wantKeys:    []int32{10, 20},
+		},
+		{
+			name:        "unique conflict loser does not reserve primary key",
+			ids:         []int32{1, 2, 2},
+			uniqueKeys:  []int32{10, 10, 20},
+			pkConflicts: []bool{false, false, false},
+			ukConflicts: []bool{false, false, false},
+			wantIDs:     []int32{1, 2},
+			wantKeys:    []int32{10, 20},
+		},
+		{
+			name:        "nullable unique keys do not conflict",
+			ids:         []int32{1, 2},
+			uniqueKeys:  []int32{0, 0},
+			uniqueNulls: []bool{true, true},
+			pkConflicts: []bool{false, false},
+			ukConflicts: []bool{false, false},
+			wantIDs:     []int32{1, 2},
+			wantKeys:    []int32{0, 0},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			input := makeInsertIgnoreMultiDedupBatch(
+				t, proc, tc.ids, tc.uniqueKeys, tc.uniqueNulls, tc.pkConflicts, tc.ukConflicts)
+			arg := newInsertIgnoreMultiDedupArgument(input)
+			require.NoError(t, arg.Prepare(proc))
+
+			result, err := arg.Call(proc)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantIDs,
+				vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[:result.Batch.RowCount()])
+			require.Equal(t, tc.wantKeys,
+				vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[1])[:result.Batch.RowCount()])
+
+			arg.Free(proc, false, nil)
+			input.Clean(proc.Mp())
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestInsertIgnoreMultiDedupCarriesAcceptedKeysAcrossBatchesAndReset(t *testing.T) {
+	proc := testutil.NewProc(t)
+	first := makeInsertIgnoreMultiDedupBatch(t, proc,
+		[]int32{1}, []int32{10}, nil, []bool{false}, []bool{false})
+	second := makeInsertIgnoreMultiDedupBatch(t, proc,
+		[]int32{1, 2}, []int32{20, 20}, nil, []bool{false, false}, []bool{false, false})
+	arg := newInsertIgnoreMultiDedupArgument(first, second)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int32{1},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[:result.Batch.RowCount()])
+	result, err = arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int32{2},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[:result.Batch.RowCount()])
+	require.Equal(t, []int32{20},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[1])[:result.Batch.RowCount()])
+
+	arg.Reset(proc, false, nil)
+	arg.Children = nil
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{second}))
+	require.NoError(t, arg.Prepare(proc))
+	result, err = arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int32{1},
+		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[:result.Batch.RowCount()])
+
+	arg.Free(proc, false, nil)
+	first.Clean(proc.Mp())
+	second.Clean(proc.Mp())
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func makeInsertIgnoreMultiDedupBatch(
+	t *testing.T,
+	proc *process.Process,
+	ids, uniqueKeys []int32,
+	uniqueNulls, pkConflicts, ukConflicts []bool,
+) *batch.Batch {
+	t.Helper()
+	input := batch.NewWithSize(4)
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	input.Vecs[3] = vector.NewVec(types.T_bool.ToType())
+	for row := range ids {
+		nullUnique := len(uniqueNulls) > row && uniqueNulls[row]
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], ids[row], false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], uniqueKeys[row], nullUnique, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(input.Vecs[2], pkConflicts[row], false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(input.Vecs[3], ukConflicts[row], false, proc.Mp()))
+	}
+	input.SetRowCount(len(ids))
+	return input
+}
+
+func newInsertIgnoreMultiDedupArgument(inputs ...*batch.Batch) *PreInsertUnique {
+	arg := &PreInsertUnique{
+		PreInsertCtx: &plan.PreInsertUkCtx{
+			InsertIgnoreMultiDedup: true,
+			KeyColumns:             []int32{0, 1},
+			ConflictColumns:        []int32{2, 3},
+			OutputColumns:          2,
+		},
+	}
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs(inputs))
+	return arg
 }
 
 func resetChildren(arg *PreInsertUnique, m *mpool.MPool) {

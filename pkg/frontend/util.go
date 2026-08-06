@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"strconv"
@@ -314,36 +315,78 @@ func bindSetVariableResultExpr(
 
 // only support single value and unary minus
 func GetSimpleExprValue(ctx context.Context, e tree.Expr, feSes FeSession) (interface{}, error) {
-	switch v := e.(type) {
-	case *tree.UnresolvedName:
-		// set @a = on, type of a is bool.
-		return v.ColName(), nil
-	default:
+	return getSimpleExprValue(ctx, e, feSes, nil)
+}
+
+// GetSimpleExprValueWithType evaluates an expression after coercing it to the
+// supplied assignment target. This preserves declared stored-procedure types
+// even when their runtime representation is a Go string (for example DECIMAL).
+func GetSimpleExprValueWithType(ctx context.Context, e tree.Expr, feSes FeSession, targetType plan.Type) (interface{}, error) {
+	return getSimpleExprValue(ctx, e, feSes, &targetType)
+}
+
+func getSimpleExprValue(ctx context.Context, e tree.Expr, feSes FeSession, targetType *plan.Type) (interface{}, error) {
+	var planExpr *plan.Expr
+	if v, ok := e.(*tree.UnresolvedName); ok && !storedProcedureVariableExists(ctx, v.ColName()) {
+		// Preserve SET @a = on behavior. A stored-procedure variable with the
+		// same syntax is instead bound through its declared type below.
+		if targetType == nil {
+			return v.ColName(), nil
+		}
+		planExpr = plan2.MakePlan2StringConstExprWithType(v.ColName())
+	} else {
 		builder := plan2.NewQueryBuilder(plan.Query_SELECT, feSes.GetTxnCompileCtx(), false, false)
 		bindContext := plan2.NewBindContext(builder, nil)
 		binder := plan2.NewSetVarBinder(builder, bindContext)
-		planExpr, err := binder.BindExpr(e, 0, false)
+		var err error
+		planExpr, err = binder.BindExpr(e, 0, false)
 		if err != nil {
 			return nil, err
 		}
-
-		txnCompileCtx := feSes.GetTxnCompileCtx()
-		// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
-		// Here the evalExpr may execute some function that needs engine.Engine.
-		txnCompileCtx.GetProcess().ReplaceTopCtx(
-			attachValue(txnCompileCtx.GetProcess().GetTopContext(),
-				defines.EngineKey{},
-				feSes.GetTxnHandler().GetStorage()))
-
-		vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(txnCompileCtx.GetProcess(), planExpr)
-		if err != nil {
-			return nil, err
-		}
-
-		value, err := getValueFromVector(ctx, vec, feSes, planExpr)
-		free()
-		return value, err
 	}
+
+	if targetType != nil {
+		var err error
+		planExpr, err = plan2.MakePlan2AssignmentCastExpr(ctx, planExpr, *targetType)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	txnCompileCtx := feSes.GetTxnCompileCtx()
+	// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
+	// Here the evalExpr may execute some function that needs engine.Engine.
+	txnCompileCtx.GetProcess().ReplaceTopCtx(
+		attachValue(txnCompileCtx.GetProcess().GetTopContext(),
+			defines.EngineKey{},
+			feSes.GetTxnHandler().GetStorage()))
+
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(txnCompileCtx.GetProcess(), planExpr)
+	if err != nil {
+		return nil, err
+	}
+
+	value, err := getValueFromVector(ctx, vec, feSes, planExpr)
+	free()
+	return value, err
+}
+
+func storedProcedureVariableExists(ctx context.Context, name string) bool {
+	inSp, _ := ctx.Value(defines.InSp{}).(bool)
+	if !inSp {
+		return false
+	}
+	scopes, ok := ctx.Value(defines.VarScopeKey{}).(*[]map[string]interface{})
+	if !ok || scopes == nil {
+		return false
+	}
+	name = strings.ToLower(name)
+	for i := len(*scopes) - 1; i >= 0; i-- {
+		if _, ok := (*scopes)[i][name]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession, expr *plan2.Expr) (interface{}, error) {
@@ -1606,6 +1649,8 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 	return nil
 }
 
+const mysqlDecimalNotSpecified = 0x1f
+
 func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 	if typ.IsDecimal() {
 		// DECIMAL display length depends on scale and signedness, not just precision.
@@ -1613,10 +1658,42 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 	} else if typ.Oid == types.T_year {
 		// Keep YEAR metadata consistent with regular query result columns.
 		col.SetLength(uint32(types.MaxVarcharLen))
+	} else if typ.Oid == types.T_char || typ.Oid == types.T_varchar {
+		// Protocol::ColumnDefinition41 expresses column_length in bytes. Character
+		// string widths are declared in characters and use utf8mb3 metadata.
+		if typ.Oid == types.T_varchar && typ.Width == 0 {
+			// Synthesized VARCHAR result columns historically use zero as an
+			// unspecified width and must keep their unbounded metadata.
+			col.SetLength(math.MaxUint32)
+		} else {
+			col.SetLength(mysqlStringColumnLength(typ.Width, charsetVarcharMaxBytesPerCharacter))
+		}
+	} else if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
+		// Binary string widths are already declared in bytes.
+		col.SetLength(mysqlStringColumnLength(typ.Width, 1))
 	} else {
 		setColLength(col, typ.Width)
 	}
+	// MySQL uses 0x1f (DECIMAL_NOT_SPECIFIED) for FLOAT and DOUBLE
+	// without an explicit display scale. Clients use this metadata when
+	// converting binary floating-point results to text.
+	if (typ.Oid == types.T_float32 || typ.Oid == types.T_float64) &&
+		(typ.Scale < 0 || typ.Width == 0 && typ.Scale == 0) {
+		col.SetDecimal(mysqlDecimalNotSpecified)
+		return
+	}
 	col.SetDecimal(typ.Scale)
+}
+
+func mysqlStringColumnLength(width int32, maxBytesPerCharacter uint32) uint32 {
+	if width < 0 {
+		return math.MaxUint32
+	}
+	length := uint64(width) * uint64(maxBytesPerCharacter)
+	if length > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(length)
 }
 
 // errCodeRollbackWholeTxn denotes that the error code
@@ -2060,8 +2137,6 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 		return nil, err
 	}
 	setColFlag(c)
-
-	c.SetDecimal(col.Typ.Scale)
 
 	// For TIMESTAMPADD function compatibility with MySQL:
 	// GetResultColumnsFromPlan sets the return type based on input type and unit:

@@ -73,6 +73,12 @@ func TestPrepare(t *testing.T) {
 	}
 }
 
+func TestPrepareRequiresAllocationAccount(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	require.ErrorIs(t, (&Product{}).Prepare(proc), mpool.ErrAllocationAccountInvalid)
+}
+
 func TestProduct(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
 
@@ -98,6 +104,7 @@ func TestProduct(t *testing.T) {
 
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
+		require.Zero(t, tc.arg.allocationAccount.Snapshot().Used)
 
 		resetChildren(tc.arg, tc.proc.Mp())
 		resetHashBuildChildren(tc.barg, tc.proc.Mp())
@@ -122,12 +129,106 @@ func TestProduct(t *testing.T) {
 
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
+		require.Zero(t, tc.arg.allocationAccount.Snapshot().Used)
 
 		tc.arg.Free(tc.proc, false, nil)
 		tc.barg.Free(tc.proc, false, nil)
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestProductPassesRecursiveMarker(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		probeData  bool
+		emptyBuild bool
+	}{
+		{name: "marker before build"},
+		{name: "marker after empty build", probeData: true, emptyBuild: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+				colexec.NewResultPos(0, 0),
+				colexec.NewResultPos(1, 0),
+			})
+			marker := colexec.MakeMockBatchs(tc.proc.Mp())
+			marker.SetLast()
+			probeBatches := []*batch.Batch{marker}
+			if test.probeData {
+				probeBatches = append([]*batch.Batch{colexec.MakeMockBatchs(tc.proc.Mp())}, marker)
+			}
+			probe := colexec.NewMockOperator().WithBatchs(probeBatches)
+			tc.arg.Children = nil
+			tc.arg.AppendChild(probe)
+			if test.emptyBuild {
+				resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
+			} else {
+				resetHashBuildChildren(tc.barg, tc.proc.Mp())
+			}
+			defer func() {
+				tc.arg.Free(tc.proc, false, nil)
+				tc.barg.Free(tc.proc, false, nil)
+				probe.Free(tc.proc, false, nil)
+				tc.proc.Free()
+				tc.cancel()
+			}()
+
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+			require.NoError(t, tc.barg.Prepare(tc.proc))
+			res, err := vm.Exec(tc.barg, tc.proc)
+			require.NoError(t, err)
+			require.Nil(t, res.Batch)
+			res, err = vm.Exec(tc.arg, tc.proc)
+			require.NoError(t, err)
+			require.Same(t, marker, res.Batch)
+		})
+	}
+}
+
+func TestProductConsumesMultipleBuildBatchesWithoutCopy(t *testing.T) {
+	tc := newTestCase(
+		t,
+		[]bool{false},
+		[]types.Type{types.T_int32.ToType()},
+		[]colexec.ResultPos{
+			colexec.NewResultPos(0, 0),
+			colexec.NewResultPos(1, 0),
+		},
+	)
+	probe := colexec.MakeMockBatchs(tc.proc.Mp())
+	build1 := colexec.MakeMockBatchs(tc.proc.Mp())
+	build2 := colexec.MakeMockBatchs(tc.proc.Mp())
+	tc.arg.Children = nil
+	tc.arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{probe}))
+	tc.barg.Children = nil
+	tc.barg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{build1, build2}))
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	_, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	wantRows := probe.RowCount() * (build1.RowCount() + build2.RowCount())
+	rows := 0
+	for {
+		result, err := vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		if result.Batch != nil {
+			rows += result.Batch.RowCount()
+		}
+		if result.Status == vm.ExecStop {
+			break
+		}
+	}
+	require.Equal(t, wantRows, rows)
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.barg.Reset(tc.proc, false, nil)
+	require.Zero(t, tc.arg.allocationAccount.Snapshot().Used)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.barg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
 /*
@@ -170,7 +271,7 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 		resultBatch.Vecs[i] = vector.NewVec(*bat.Vecs[rp[i].Pos].GetType())
 	}
 	tag++
-	return productTestCase{
+	tc := productTestCase{
 		types:  ts,
 		flgs:   flgs,
 		proc:   proc,
@@ -200,6 +301,13 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 		},
 		resultBatch: resultBatch,
 	}
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<20)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 60)
+	require.NoError(t, err)
+	require.NoError(t, tc.arg.SetAllocationAccount(account))
+	require.NoError(t, tc.barg.SetAllocationAccount(account))
+	return tc
 }
 func resetChildren(arg *Product, m *mpool.MPool) {
 	bat := colexec.MakeMockBatchs(m)
@@ -210,6 +318,10 @@ func resetChildren(arg *Product, m *mpool.MPool) {
 
 func resetHashBuildChildren(arg *hashbuild.HashBuild, m *mpool.MPool) {
 	bat := colexec.MakeMockBatchs(m)
+	resetHashBuildChildrenWithBatch(arg, bat)
+}
+
+func resetHashBuildChildrenWithBatch(arg *hashbuild.HashBuild, bat *batch.Batch) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)

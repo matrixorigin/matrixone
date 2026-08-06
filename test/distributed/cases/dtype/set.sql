@@ -25,7 +25,28 @@ insert into set01 values
 
 select * from set01 order by id;
 select * from set01 where colors = 'red,green' order by id;
+-- SET keeps its comma-separated display value in string comparisons, but uses
+-- its member bitmap for arithmetic, bitwise, and numeric comparison contexts.
+select id, colors + 0, colors & 1, colors = 'red,blue' from set01 order by id;
+select id from set01 where colors & 1 order by id;
+select id from set01 where colors = 3 order by id;
 select * from set01 order by colors;
+-- SET bit-order, including multi-member values, must survive a derived table.
+select id, colors from (select id, colors from set01) d order by colors, id;
+select colors from (select colors from set01 group by colors) d order by colors;
+with c as (select colors from set01)
+select group_concat(colors order by colors separator '|') as ordered_values
+from c where colors is not null and colors <> '';
+
+-- SET('', 'a') maps bitmap 0 and bitmap 1 to the same display value. Direct
+-- sorting can use the raw bitmap, but a projected value must fail instead of
+-- silently collapsing the two definition-order keys.
+drop table if exists set_empty_member_order;
+create table set_empty_member_order (id int primary key, tags set('', 'a'));
+insert into set_empty_member_order values (2, 0), (1, 1), (3, 2);
+select id, tags from set_empty_member_order order by tags, id;
+select id, tags from (select id, tags from set_empty_member_order) d order by tags, id;
+drop table set_empty_member_order;
 
 drop table if exists set_idx;
 create table set_idx (

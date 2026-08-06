@@ -32,8 +32,16 @@ func init() {
 }
 
 func NewIntHashMap(hasNull bool, memPool *mpool.MPool) (*IntHashMap, error) {
+	return NewIntHashMapWithAllocation(hasNull, memPool, nil)
+}
+
+func NewIntHashMapWithAllocation(
+	hasNull bool,
+	memPool *mpool.MPool,
+	allocation *hashtable.AllocationAccountSelection,
+) (*IntHashMap, error) {
 	mp := &hashtable.Int64HashMap{}
-	if err := mp.Init(memPool); err != nil {
+	if err := mp.InitWithAllocation(memPool, allocation); err != nil {
 		return nil, err
 	}
 	return &IntHashMap{
@@ -47,6 +55,16 @@ func (m *IntHashMap) NewIterator() *intHashMapIterator {
 	return &intHashMapIterator{
 		mp: m,
 	}
+}
+
+// SetRejectNaN makes FLOAT NaN keys non-matching, as required by SQL join
+// equality. It must be selected before inserting the first row.
+func (m *IntHashMap) SetRejectNaN() error {
+	if m == nil || m.rows != 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	m.rejectNaN = true
+	return nil
 }
 
 func (m *IntHashMap) HasNull() bool {
@@ -538,15 +556,17 @@ func (m *IntHashMap) UnmarshalBinary(data []byte, mp *mpool.MPool) error {
 func (m *IntHashMap) WriteTo(w io.Writer) (int64, error) {
 	var n int64
 
-	// Serialize hasNull (1 byte)
+	// Historical payloads used 0/1 for hasNull. Bit one extends that byte with
+	// the join-only NaN admission contract while keeping old payloads readable.
+	flags := byte(0)
 	if m.hasNull {
-		if _, err := w.Write([]byte{1}); err != nil {
-			return 0, err
-		}
-	} else {
-		if _, err := w.Write([]byte{0}); err != nil {
-			return 0, err
-		}
+		flags |= 1
+	}
+	if m.rejectNaN {
+		flags |= 2
+	}
+	if _, err := w.Write([]byte{flags}); err != nil {
+		return 0, err
 	}
 	n++
 
@@ -571,14 +591,18 @@ func (m *IntHashMap) WriteTo(w io.Writer) (int64, error) {
 func (m *IntHashMap) UnmarshalFrom(r io.Reader, mp *mpool.MPool) (int64, error) {
 	var n int64
 
-	// Deserialize hasNull
+	// Deserialize key-domain flags.
 	b := make([]byte, 1)
 	rn, err := io.ReadFull(r, b)
 	if err != nil {
 		return 0, err
 	}
 	n += int64(rn)
-	m.hasNull = b[0] == 1
+	if b[0]&^byte(3) != 0 {
+		return 0, mpool.ErrAllocationAccountInvalid
+	}
+	m.hasNull = b[0]&1 != 0
+	m.rejectNaN = b[0]&2 != 0
 
 	// Deserialize rows
 	rowsData := make([]byte, 8)

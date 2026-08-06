@@ -121,6 +121,33 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
 		}
+		newExpr, _ := BindFuncExprImplByPlanExpr(b.builder.compCtx.GetContext(), "any_value", []*plan.Expr{expr})
+		colPos := len(b.ctx.aggregates)
+		b.ctx.aggregates = append(b.ctx.aggregates, newExpr)
+		return &plan.Expr{
+			Typ: b.ctx.aggregates[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: b.ctx.aggregateTag,
+					ColPos: int32(colPos),
+				},
+			},
+		}, nil
+	} else if b.builder.mysqlFullGroupByCompat {
+		expr, err := b.baseBindColRef(astExpr, depth, isRoot)
+		if err != nil {
+			return nil, err
+		}
+
+		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
+			if b.corrColRefTargetsCurrentGroup(corr.Corr) || b.corrColRefTargetsGroup(corr.Corr) {
+				return expr, nil
+			}
+			return nil, b.newGroupByColumnError(astExpr)
+		}
+		if !b.builder.mysqlFullGroupByAllowsColRef(b.ctx, expr) {
+			return nil, b.newGroupByColumnError(astExpr)
+		}
 
 		newExpr, _ := BindFuncExprImplByPlanExpr(b.builder.compCtx.GetContext(), "any_value", []*plan.Expr{expr})
 		colPos := len(b.ctx.aggregates)
@@ -448,7 +475,10 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 		}
 		// ENUM/SET values are exposed through display conversion functions, but
 		// ORDER BY must use their internal ordinal/bitmap representation.
-		orderKey := groupConcatOrderKey(boundExpr)
+		orderKey, err := b.groupConcatOrderKey(boundExpr)
+		if err != nil {
+			return err
+		}
 		if orderKey != boundExpr {
 			// ENUM/SET display arguments cannot be reused because their ORDER
 			// BY semantics use the internal index/bitmap value.
@@ -506,12 +536,17 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 	return nil
 }
 
-func groupConcatOrderKey(expr *plan.Expr) *plan.Expr {
-	if fn := expr.GetF(); fn != nil && len(fn.Args) > 1 &&
-		(fn.Func.ObjName == moEnumCastIndexToValueFun || fn.Func.ObjName == moSetCastIndexToValueFun) {
-		return fn.Args[1]
+func (b *HavingBinder) groupConcatOrderKey(expr *plan.Expr) (*plan.Expr, error) {
+	if isEnumOrSetDisplayValueExpr(expr) {
+		fn := expr.GetF()
+		if len(fn.Args) > 1 {
+			return fn.Args[1], nil
+		}
 	}
-	return expr
+	if storageType := b.ctx.mysqlSpecialOrderTypeForExpr(expr); storageType != nil {
+		return makeMySQLSpecialOrderKey(b.GetContext(), expr, storageType)
+	}
+	return expr, nil
 }
 
 func encodeGroupConcatOrderConfig(

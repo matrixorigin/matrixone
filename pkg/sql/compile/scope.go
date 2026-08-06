@@ -268,7 +268,7 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 
 	if err = vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
 		if op.OpType() == vm.Output {
-			op.(*output.Output).Func = c.fill
+			op.(*output.Output).Func = c.resultWriter()
 		}
 		return nil
 	}); err != nil {
@@ -751,6 +751,10 @@ func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			return nil, err
 		}
 	}
+	if err := c.attachRuntimeAllocationOwners(ss); err != nil {
+		s.discardParallelGeneration(ms)
+		return nil, err
+	}
 	return ms, nil
 }
 
@@ -801,6 +805,10 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			node:         s.DataSource.node,
 			RecvMsgList:  recvMsgList,
 		}
+	}
+	if err := c.attachRuntimeAllocationOwners(ss); err != nil {
+		s.discardParallelGeneration(ms)
+		return nil, err
 	}
 
 	return ms, nil
@@ -1192,9 +1200,7 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 					message := cnclient.AcquireMessage()
 					message.SetID(sender.streamSender.ID())
 					message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
-					if sender.requestFinishAck {
-						message.RequestedTeardownMode = pbpipeline.StreamTeardownMode_FinishAck
-					}
+					sender.requestStreamProtocols(message)
 					message.NeedNotReply = false
 					message.Uuid = uuid
 
@@ -1315,6 +1321,9 @@ func receiveMsgAndForward(sender *messageSenderOnClient, forwardReg *process.Wai
 
 		var receiverDone bool
 		if receiverDone, err = forwardRemoteBatchWithContext(sender, forwardReg, bat, sender.mp); err != nil || receiverDone {
+			return err
+		}
+		if err = sender.acknowledgeRemoteBatch(); err != nil {
 			return err
 		}
 	}

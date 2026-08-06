@@ -51,6 +51,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	plan0 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -2142,6 +2143,45 @@ func Test_HandlePrepareStringUsesSessionSQLMode(t *testing.T) {
 		}
 		defer preStmt.Close()
 		requirePreparedSelectConcat(t, preStmt)
+		return nil
+	})
+}
+
+func Test_HandlePrepareStringSupportsPipesAsConcatLikePattern(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ec := newTestExecCtx(ctx, ctrl)
+
+	runTestHandle("handlePrepareStringSupportsPipesAsConcatLikePattern", t, func(ses *Session) error {
+		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "PIPES_AS_CONCAT"))
+		ec.resper = ses.respr
+		prepareString := tree.NewPrepareString("stmt_like_concat", `select 'Jack' like '%'||?||'%'`)
+		defer prepareString.Free()
+		preStmt, err := handlePrepareString(
+			ses,
+			ec,
+			prepareString,
+		)
+		if err != nil {
+			return err
+		}
+		defer preStmt.Close()
+
+		selectStmt, ok := preStmt.PrepareStmt.(*tree.Select)
+		require.True(t, ok)
+		selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+		require.True(t, ok)
+		require.Len(t, selectClause.Exprs, 1)
+		likeExpr, ok := selectClause.Exprs[0].Expr.(*tree.ComparisonExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.LIKE, likeExpr.Op)
+		outerConcat, ok := likeExpr.Right.(*tree.FuncExpr)
+		require.True(t, ok)
+		name, ok := outerConcat.Func.FunctionReference.(*tree.UnresolvedName)
+		require.True(t, ok)
+		require.Equal(t, "concat", name.ColName())
 		return nil
 	})
 }
@@ -5184,6 +5224,7 @@ func Test_StatementClassify(t *testing.T) {
 		{&tree.ShowPublications{}, true},
 		{&tree.ShowCreatePublications{}, true},
 		{&tree.ShowBackendServers{}, true},
+		{&tree.ExplainPhyPlan{}, true},
 		{&tree.AnalyzeStmt{}, true},
 		{&tree.CheckTableStmt{}, true},
 		{&tree.ShowProfileStmt{}, true},
@@ -5727,6 +5768,124 @@ func TestExecRequestRewriteFailureMarksRowCountFailed(t *testing.T) {
 	}
 }
 
+func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	workspace := newTestWorkspace()
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+	txnOperator.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
+	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).AnyTimes()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.GetResponser().MysqlRrWr().(*MysqlProtocolImpl).SetSession(ses)
+	ses.txnHandler = InitTxnHandler(ses.GetService(), nil, ctx, txnOperator)
+	require.True(t, ses.txnHandler.InActiveTxn())
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+
+	resp, err := ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte("explain analyze select 1"),
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	stmtName := getPrepareStmtName(ses.GetLastStmtId())
+	prepared, err := ses.GetPrepareStmt(ctx, stmtName)
+	require.NoError(t, err)
+	require.IsType(t, &tree.ExplainAnalyze{}, prepared.PrepareStmt)
+
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte("explain phyplan select 1"),
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	stmtName = getPrepareStmtName(ses.GetLastStmtId())
+	prepared, err = ses.GetPrepareStmt(ctx, stmtName)
+	require.NoError(t, err)
+	require.IsType(t, &tree.ExplainPhyPlan{}, prepared.PrepareStmt)
+
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte("set @binary_value = ?"),
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+
+	stmtName = getPrepareStmtName(ses.GetLastStmtId())
+	prepared, err = ses.GetPrepareStmt(ctx, stmtName)
+	require.NoError(t, err)
+	require.IsType(t, &tree.SetVar{}, prepared.PrepareStmt)
+	require.Len(t, prepared.PreparePlan.GetDcl().GetPrepare().GetParamTypes(), 1)
+
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte("set @first = ?, @second = ?"),
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+
+	stmtName = getPrepareStmtName(ses.GetLastStmtId())
+	prepared, err = ses.GetPrepareStmt(ctx, stmtName)
+	require.NoError(t, err)
+	setVar, ok := prepared.PrepareStmt.(*tree.SetVar)
+	require.True(t, ok)
+	require.Len(t, setVar.Assignments, 2)
+	require.Len(t, prepared.PreparePlan.GetDcl().GetPrepare().GetParamTypes(), 2)
+}
+
+func TestExecRequestStmtPrepareRejectsNonPrepareableAndEmptyPayloads(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.GetResponser().MysqlRrWr().(*MysqlProtocolImpl).SetSession(ses)
+	ses.txnHandler = &TxnHandler{}
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{name: "values", payload: "values row(1)"},
+		{name: "lock tables", payload: "lock tables t read"},
+		{name: "unlock tables", payload: "unlock tables"},
+		{name: "empty", payload: ""},
+		{name: "whitespace", payload: " \t\r\n"},
+		{name: "line comment", payload: "-- comment"},
+		{name: "block comment", payload: "/* comment */"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := ExecRequest(ses, execCtx, &Request{
+				cmd:  COM_STMT_PREPARE,
+				data: []byte(tc.payload),
+			})
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+			require.Equal(t, ErrorResponse, resp.GetCategory())
+			moErr, ok := resp.GetData().(*moerr.Error)
+			require.True(t, ok)
+			require.Equal(t, moerr.ErrParseError, moErr.ErrorCode())
+		})
+	}
+}
+
 func TestExecRequestProtocolCommandRowCount(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -5942,6 +6101,35 @@ func Test_panic(t *testing.T) {
 
 	runPanic(fault.PanicUseMoErr)
 	runPanic(fault.PanicUseNonMoErr)
+}
+
+func TestExecRequestRecoverWithNilTxnHandler(t *testing.T) {
+	fault.EnableDomain(fault.DomainFrontend)
+	defer fault.DisableDomain(fault.DomainFrontend)
+	fault.AddFaultPointInDomain(
+		context.Background(),
+		fault.DomainFrontend,
+		"exec_request_panic",
+		":::",
+		"panic",
+		fault.PanicUseNonMoErr,
+		"has panic",
+		false,
+	)
+	defer fault.RemoveFaultPointFromDomain(context.Background(), fault.DomainFrontend, "exec_request_panic")
+
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	ses.mu.Lock()
+	ses.txnHandler = nil
+	ses.mu.Unlock()
+
+	resp, err := ExecRequest(ses, &ExecCtx{reqCtx: context.Background(), ses: ses}, &Request{cmd: COM_PING})
+	require.Error(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.GetCategory())
+	require.Zero(t, resp.GetStatus())
 }
 
 func Test_run_panic(t *testing.T) {

@@ -475,6 +475,11 @@ message TableFunction {
   string name = 1;
   bytes param = 2;
   bool is_single = 3;
+  // Planner-resolved references for an internal FULLTEXT scan over a
+  // subscription. SQL arguments remain user-visible data and must never carry
+  // the publisher execution identity.
+  ObjectRef fulltext_source_ref = 4;
+  ObjectRef fulltext_index_ref = 5;
 }
 
 enum ShuffleType {
@@ -634,6 +639,7 @@ message UpdateCtx {
   bool skip_insert_on_null_pk = 10;
   int32 insert_pk_col_idx = 11;
   bool count_delete_affect_rows = 12;
+  bool ignore_affected_rows = 13;
 }
 
 message InsertCtx {
@@ -995,6 +1001,12 @@ message Node {
   // FUZZY_FILTER only. Keeping this separate from runtime-filter metadata
   // makes build-side selection idempotent across repeated optimizer passes.
   FuzzyBuildSide fuzzy_build_side = 77;
+
+  // AGG only: positions in group_by that form the physical hash/equality key.
+  // An empty list preserves the legacy meaning that every group_by expression
+  // participates in hashing. A non-empty list must be a strict subset proven
+  // by the optimizer to determine all remaining group_by expressions.
+  repeated int32 group_by_hash_key = 78;
 }
 
 message SnapshotExtraInfo {
@@ -1149,6 +1161,16 @@ message PreInsertUkCtx {
   int32 pk_column = 2;
   Type pk_type = 3 [(gogoproto.nullable) = false];
   Type uk_type = 4 [(gogoproto.nullable) = false];
+  // INSERT IGNORE with multiple independent unique constraints cannot be
+  // implemented by chaining per-key dedup operators: a row rejected by one
+  // constraint must not reserve another key.  In this mode key_columns and
+  // conflict_columns are parallel arrays.  conflict_columns mark conflicts
+  // with rows that existed before the statement; key_columns are arbitrated
+  // together, in input order, against keys accepted earlier in the statement.
+  bool insert_ignore_multi_dedup = 5;
+  repeated int32 key_columns = 6;
+  repeated int32 conflict_columns = 7;
+  int32 output_columns = 8;
 }
 
 message PreInsertCtx {
@@ -1297,6 +1319,12 @@ message Query {
   // Catalog objects that a rewrite depends on even when the final plan no
   // longer contains the scans that originally carried those objects.
   repeated ObjectRef catalog_dependencies = 12;
+
+  // DML RETURNING is a deferred result: returning_step identifies the step
+  // whose rows are buffered until the statement has reached its terminal
+  // transaction outcome. It is a step-array index, not a node id.
+  bool has_returning = 13;
+  int32 returning_step = 14;
 }
 
 message TransationControl {

@@ -142,7 +142,11 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 	case plan.Node_LOCK_OP:
 		pname = "Lock"
 	case plan.Node_APPLY:
-		pname = "CROSS APPLY"
+		if ndesc.Node.ApplyType == plan.Node_OUTERAPPLY {
+			pname = "OUTER APPLY"
+		} else {
+			pname = "CROSS APPLY"
+		}
 	case plan.Node_MULTI_UPDATE:
 		pname = "Multi Update"
 	case plan.Node_POSTDML:
@@ -365,6 +369,13 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 			return nil, err
 		}
 		lines = append(lines, groupByInfo)
+		if len(ndesc.Node.GroupByHashKey) > 0 {
+			hashKeyInfo, err := ndesc.getGroupByHashKeyInfo(ctx, options)
+			if err != nil {
+				return nil, err
+			}
+			lines = append(lines, hashKeyInfo)
+		}
 	}
 	if ndesc.Node.NodeType == plan.Node_TIME_WINDOW && ndesc.Node.GapFillMode == plan.Node_GAP_FILL_PARTITION {
 		lines = append(lines, "Gap Fill: Partition")
@@ -992,6 +1003,23 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 
 		if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
 			buf.WriteString(" shuffle: REUSE")
+		}
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) getGroupByHashKeyInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 100))
+	buf.WriteString("Hash Key: ")
+	for i, idx := range ndesc.Node.GroupByHashKey {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		if idx < 0 || int(idx) >= len(ndesc.Node.GroupBy) {
+			return "", moerr.NewInternalErrorf(ctx, "invalid group-by hash key index %d", idx)
+		}
+		if err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf); err != nil {
+			return "", err
 		}
 	}
 	return buf.String(), nil

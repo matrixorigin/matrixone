@@ -60,6 +60,44 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestSetNamesAssignmentKind(t *testing.T) {
+	tests := []struct {
+		name     string
+		sql      string
+		setNames bool
+		system   bool
+	}{
+		{name: "set names syntax", sql: "set names 'utf8mb4'", setNames: true},
+		{name: "reserved user variable", sql: "set @names = 'utf8mb4'"},
+		{name: "optimizer hints system variable", sql: "set optimizer_hints = ''", system: true},
+		{name: "optimizer hints user variable", sql: "set @optimizer_hints = ''"},
+		{name: "clear privilege cache system variable", sql: "set clear_privilege_cache = 1", system: true},
+		{name: "clear privilege cache user variable", sql: "set @clear_privilege_cache = 1"},
+		{name: "enable privilege cache system variable", sql: "set enable_privilege_cache = 1", system: true},
+		{name: "enable privilege cache user variable", sql: "set @enable_privilege_cache = 1"},
+		{name: "runtime filter limit system variable", sql: "set runtime_filter_limit_in = 1", system: true},
+		{name: "runtime filter limit user variable", sql: "set @runtime_filter_limit_in = 1"},
+		{name: "runtime filter bloom system variable", sql: "set runtime_filter_limit_bloom_filter = 1", system: true},
+		{name: "runtime filter bloom user variable", sql: "set @runtime_filter_limit_bloom_filter = 1"},
+		{name: "disable aggregate statement system variable", sql: "set disable_agg_statement = 1", system: true},
+		{name: "disable aggregate statement user variable", sql: "set @disable_agg_statement = 1"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			setVar, ok := stmt.(*tree.SetVar)
+			require.True(t, ok)
+			require.Len(t, setVar.Assignments, 1)
+			require.Equal(t, test.setNames, setVar.Assignments[0].SetNames)
+			require.Equal(t, test.system, setVar.Assignments[0].System)
+		})
+	}
+}
+
 func TestDropFunctionIfExists(t *testing.T) {
 	tests := []struct {
 		sql      string
@@ -111,6 +149,39 @@ func TestQuantifiedTableSubqueryParse(t *testing.T) {
 			parenSelect := subquery.Select.(*tree.ParenSelect)
 
 			require.Equal(t, test.want, tree.String(parenSelect.Select, dialect.MYSQL))
+		})
+	}
+}
+
+func TestSelectSharedLockParse(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "for share",
+			sql:  "SELECT id FROM t WHERE id = '1' FOR SHARE",
+			want: "select id from t where id = 1 for share",
+		},
+		{
+			name: "lock in share mode",
+			sql:  "SELECT id FROM t WHERE id = '1' LOCK IN SHARE MODE",
+			want: "select id from t where id = 1 for share",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			selectStmt, ok := stmt.(*tree.Select)
+			require.True(t, ok)
+			require.NotNil(t, selectStmt.SelectLockInfo)
+			require.Equal(t, tree.SelectLockForShare, selectStmt.SelectLockInfo.LockType)
+			require.Equal(t, test.want, tree.String(stmt, dialect.MYSQL))
 		})
 	}
 }
@@ -183,6 +254,30 @@ func TestSQLModeParserModes(t *testing.T) {
 		require.Len(t, fn.Exprs, 2)
 		_, ok = fn.Exprs[1].(*tree.UnaryExpr)
 		require.True(t, ok)
+	})
+
+	t.Run("PIPES_AS_CONCAT works as an unparenthesized LIKE pattern", func(t *testing.T) {
+		stmt, err := ParseOneWithSQLMode(
+			context.Background(),
+			`select 'Jack' like '%'||?||'%'`,
+			1,
+			"PIPES_AS_CONCAT",
+		)
+		require.NoError(t, err)
+		defer stmt.Free()
+
+		likeExpr, ok := firstSelectExpr(t, stmt).(*tree.ComparisonExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.LIKE, likeExpr.Op)
+		outerConcat, ok := likeExpr.Right.(*tree.FuncExpr)
+		require.True(t, ok)
+		require.Equal(t, "concat", outerConcat.Func.FunctionReference.(*tree.UnresolvedName).ColName())
+		require.Len(t, outerConcat.Exprs, 2)
+		innerConcat, ok := outerConcat.Exprs[0].(*tree.FuncExpr)
+		require.True(t, ok)
+		require.Equal(t, "concat", innerConcat.Func.FunctionReference.(*tree.UnresolvedName).ColName())
+		require.Len(t, innerConcat.Exprs, 2)
+		require.IsType(t, &tree.ParamExpr{}, innerConcat.Exprs[1])
 	})
 
 	t.Run("session parser mode does not inject PIPES_AS_CONCAT", func(t *testing.T) {

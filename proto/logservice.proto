@@ -76,6 +76,7 @@ message TNStore {
   // QueryAddress is the address of the queryservice on tn
   string QueryAddress = 10;
   string  ShardServiceAddress   = 11;
+  bool AutoIncrEpochFenceSupported = 12;
 }
 
 message LogStore {
@@ -208,6 +209,9 @@ message TNStoreHeartbeat {
   string QueryAddress = 9;
   string  ShardServiceAddress   = 10;
   uint64  ReplayedLsn = 11;
+  // AutoIncrEpochFenceSupported reports that this TN rejects writes whose
+  // allocator epoch does not match the table epoch.
+  bool AutoIncrEpochFenceSupported = 12;
 };
 
 message RSMState {
@@ -601,6 +605,7 @@ message TNStoreInfo {
   string          QueryAddress       = 9;
   string  ShardServiceAddress   = 10;
   uint64 ReplayedLsn = 11;
+  bool AutoIncrEpochFenceSupported = 12;
 }
 
 // TNState contains all TN details known to the HAKeeper.
