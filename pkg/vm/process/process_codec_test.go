@@ -305,6 +305,8 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.True(t, decodedProc.GetPrepareParams().GetNulls().Contains(1))
 	require.True(t, decodedProc.GetPrepareParamIsBin(0))
 	require.False(t, decodedProc.GetPrepareParamIsBin(1))
+	require.Equal(t, vector.PrepareParamNone, decodedProc.GetPrepareParamKind(0))
+	require.Equal(t, vector.PrepareParamNone, decodedProc.GetPrepareParamKind(1))
 	require.Equal(t, int64(42), decodedProc.GetAffectedRows())
 	require.True(t, decodedProc.GetStmtProfile().GetStatementIgnore())
 	decodedParams := decodedProc.GetPrepareParams()
@@ -324,7 +326,12 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 	frameParams := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(frameParams, []byte("1"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(frameParams, []byte("0"), false, proc.Mp()))
-	proc.SetPrepareParamsWithIsBin(frameParams, []bool{true, false})
+	require.NoError(t, vector.AppendBytes(frameParams, []byte("true"), false, proc.Mp()))
+	proc.SetPrepareParamsWithMeta(frameParams, []bool{true, false, false}, []vector.PrepareParamKind{
+		vector.PrepareParamNone,
+		vector.PrepareParamDecimal,
+		vector.PrepareParamBoolean,
+	})
 
 	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
 	payload, err := svc.Encode(proc, "select sum(n) over (order by id rows between ? preceding and ? following)")
@@ -332,19 +339,30 @@ func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
 
 	info := pipeline.ProcessInfo{}
 	require.NoError(t, info.Unmarshal(payload))
+	require.Equal(t, []bool{
+		true, false, false,
+		false, true, false,
+		false, true, false,
+		false, false, true,
+	}, info.PrepareParams.IsBin)
 	decodedProc, err := svc.Decode(context.Background(), info)
 	require.NoError(t, err)
 	defer decodedProc.Free()
 
 	decodedParams := decodedProc.GetPrepareParams()
 	require.NotNil(t, decodedParams)
-	require.Equal(t, 2, decodedParams.Length())
+	require.Equal(t, 3, decodedParams.Length())
 	require.False(t, decodedParams.GetNulls().Contains(0))
 	require.False(t, decodedParams.GetNulls().Contains(1))
+	require.False(t, decodedParams.GetNulls().Contains(2))
 	require.True(t, decodedProc.GetPrepareParamIsBin(0))
 	require.False(t, decodedProc.GetPrepareParamIsBin(1))
+	require.Equal(t, vector.PrepareParamNone, decodedProc.GetPrepareParamKind(0))
+	require.Equal(t, vector.PrepareParamDecimal, decodedProc.GetPrepareParamKind(1))
+	require.Equal(t, vector.PrepareParamBoolean, decodedProc.GetPrepareParamKind(2))
 	require.Equal(t, "1", decodedParams.GetStringAt(0))
 	require.Equal(t, "0", decodedParams.GetStringAt(1))
+	require.Equal(t, "true", decodedParams.GetStringAt(2))
 }
 
 func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) {
@@ -369,6 +387,8 @@ func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) 
 	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())
 	require.False(t, decodedProc.GetPrepareParamIsBin(0))
 	require.False(t, decodedProc.GetPrepareParamIsBin(1))
+	require.Equal(t, vector.PrepareParamNone, decodedProc.GetPrepareParamKind(0))
+	require.Equal(t, vector.PrepareParamNone, decodedProc.GetPrepareParamKind(1))
 	require.False(t, decodedProc.GetStmtProfile().GetStatementIgnore())
 	decodedProc.Free()
 }

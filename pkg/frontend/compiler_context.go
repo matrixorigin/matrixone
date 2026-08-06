@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -829,6 +830,27 @@ func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar,
 		return false, err
 	}
 	return udVar.IsBin, nil
+}
+
+func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
+	varName string,
+	isSystemVar, isGlobalVar bool,
+) (vector.PrepareParamKind, error) {
+	if value, ok := resolveStoredProcedureVariable(tcc.execCtx.reqCtx, varName); ok {
+		return prepareParamKindFromValue(value), nil
+	}
+	if isSystemVar {
+		value, err := tcc.ResolveVariable(varName, true, isGlobalVar)
+		if err != nil {
+			return vector.PrepareParamNone, err
+		}
+		return prepareParamKindFromValue(value), nil
+	}
+	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
+	if err != nil {
+		return vector.PrepareParamNone, err
+	}
+	return udVar.PrepareParamKind, nil
 }
 
 func resolveStoredProcedureVariable(ctx context.Context, varName string) (interface{}, bool) {

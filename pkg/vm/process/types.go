@@ -362,26 +362,27 @@ type BaseProcess struct {
 	// statement in the same session, used by the ROW_COUNT() builtin.
 	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
 	// 0 after DDL, and the affected row count after DML.
-	AffectedRows             *int64
-	LoadLocalReader          *io.PipeReader
-	Aicm                     *defines.AutoIncrCacheManager
-	resolveVariableFunc      func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
-	resolveVariableIsBinFunc func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
-	prepareParams            *vector.Vector
-	prepareParamsIsBin       []bool
-	prepareParamsOwned       bool
-	QueryClient              qclient.QueryClient
-	Hakeeper                 logservice.CNHAKeeperClient
-	UdfService               udf.Service
-	WaitPolicy               lock.WaitPolicy
-	messageBoard             *message.MessageBoard
-	hashBuildBudgetMu        sync.Mutex
-	hashBuildBudget          *HashBuildBudgetGeneration
-	cteMemoryBudgetMu        sync.Mutex
-	cteMemoryBudget          *CTEMemoryBudget
-	logger                   *log.MOLogger
-	TxnOperator              client.TxnOperator
-	CloneTxnOperator         client.TxnOperator
+	AffectedRows                        *int64
+	LoadLocalReader                     *io.PipeReader
+	Aicm                                *defines.AutoIncrCacheManager
+	resolveVariableFunc                 func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	resolveVariableIsBinFunc            func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+	resolveVariablePrepareParamKindFunc func(varName string, isSystemVar, isGlobalVar bool) (vector.PrepareParamKind, error)
+	prepareParams                       *vector.Vector
+	prepareParamsIsBin                  []bool
+	prepareParamsOwned                  bool
+	QueryClient                         qclient.QueryClient
+	Hakeeper                            logservice.CNHAKeeperClient
+	UdfService                          udf.Service
+	WaitPolicy                          lock.WaitPolicy
+	messageBoard                        *message.MessageBoard
+	hashBuildBudgetMu                   sync.Mutex
+	hashBuildBudget                     *HashBuildBudgetGeneration
+	cteMemoryBudgetMu                   sync.Mutex
+	cteMemoryBudget                     *CTEMemoryBudget
+	logger                              *log.MOLogger
+	TxnOperator                         client.TxnOperator
+	CloneTxnOperator                    client.TxnOperator
 	// userLevelLockIdentity is session-scoped rather than statement-scoped.
 	// SessionInfo is rebuilt before every statement, so keeping this identity
 	// there would lose the synthetic transaction owner while locks are held.
@@ -534,16 +535,31 @@ func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
 }
 
 func (proc *Process) GetPrepareParamIsBin(i int) bool {
-	return i >= 0 && i < len(proc.Base.prepareParamsIsBin) && proc.Base.prepareParamsIsBin[i]
+	return proc.getPrepareParamMeta(i, 0)
 }
 
-func (proc *Process) GetPrepareParamIsSignedInteger(i int) bool {
+func (proc *Process) GetPrepareParamKind(i int) vector.PrepareParamKind {
+	var kind vector.PrepareParamKind
+	if proc.getPrepareParamMeta(i, 1) {
+		kind |= 1
+	}
+	if proc.getPrepareParamMeta(i, 2) {
+		kind |= 2
+	}
+	if proc.getPrepareParamMeta(i, 3) {
+		kind |= 4
+	}
+	return kind
+}
+
+func (proc *Process) getPrepareParamMeta(i, section int) bool {
 	paramCount := 0
 	if proc.Base.prepareParams != nil {
 		paramCount = proc.Base.prepareParams.Length()
 	}
-	return i >= 0 && i < paramCount && paramCount+i < len(proc.Base.prepareParamsIsBin) &&
-		proc.Base.prepareParamsIsBin[paramCount+i]
+	offset := section*paramCount + i
+	return section >= 0 && i >= 0 && i < paramCount && offset < len(proc.Base.prepareParamsIsBin) &&
+		proc.Base.prepareParamsIsBin[offset]
 }
 
 // SetIncrStatementDisabled marks this process (and every child process
@@ -573,6 +589,19 @@ func (proc *Process) SetResolveVariableIsBinFunc(f func(varName string, isSystem
 
 func (proc *Process) GetResolveVariableIsBinFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
 	return proc.Base.resolveVariableIsBinFunc
+}
+
+func (proc *Process) SetResolveVariablePrepareParamKindFunc(
+	f func(varName string, isSystemVar, isGlobalVar bool) (vector.PrepareParamKind, error),
+) {
+	proc.Base.resolveVariablePrepareParamKindFunc = f
+}
+
+func (proc *Process) GetResolveVariablePrepareParamKindFunc() func(
+	varName string,
+	isSystemVar, isGlobalVar bool,
+) (vector.PrepareParamKind, error) {
+	return proc.Base.resolveVariablePrepareParamKindFunc
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {
