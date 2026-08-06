@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
 func TestIDAllocatorDefaultState(t *testing.T) {
@@ -44,6 +45,25 @@ func TestIDAllocatorDefaultState(t *testing.T) {
 	v, ok := alloc.Next()
 	assert.False(t, ok)
 	assert.Equal(t, uint64(0), v)
+}
+
+func TestNextHAKeeperCheckIntervalUsesFastBootstrapInterval(t *testing.T) {
+	s := &store{
+		cfg: Config{
+			HAKeeperCheckInterval: toml.Duration{Duration: 3 * time.Second},
+		},
+	}
+
+	require.Equal(t, bootstrapHAKeeperCheckInterval, s.nextHAKeeperCheckInterval(nil))
+	require.Equal(t, bootstrapHAKeeperCheckInterval, s.nextHAKeeperCheckInterval(&pb.CheckerState{
+		State: pb.HAKeeperBootstrapping,
+	}))
+	require.Equal(t, bootstrapHAKeeperCheckInterval, s.nextHAKeeperCheckInterval(&pb.CheckerState{
+		State: pb.HAKeeperBootstrapCommandsReceived,
+	}))
+	require.Equal(t, 3*time.Second, s.nextHAKeeperCheckInterval(&pb.CheckerState{
+		State: pb.HAKeeperRunning,
+	}))
 }
 
 func TestIDAllocatorCapacity(t *testing.T) {
@@ -940,11 +960,16 @@ func testBootstrap(t *testing.T, fail bool, remoteRecoveryPending bool) {
 
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
+		bootstrapCommandsAdded := false
+		store.bootstrapCommandsAdded = func() {
+			bootstrapCommandsAdded = true
+		}
 		store.bootstrap(term, state)
 
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
+		assert.True(t, bootstrapCommandsAdded)
 		assert.Equal(t, uint64(checkBootstrapCycles), store.bootstrapCheckCycles)
 		require.NotNil(t, store.bootstrapMgr)
 		assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))

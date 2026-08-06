@@ -17,7 +17,9 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
 const (
@@ -44,6 +47,63 @@ func TestClusterAdmissionCoversServiceClusterLifecycle(t *testing.T) {
 	c.mu.running = true
 	require.NoError(t, c.Close())
 	require.Nil(t, c.mu.admission)
+}
+
+func TestSetInitialClusterInfoUsesHAKeeperLeader(t *testing.T) {
+	follower := &initialClusterInfoLogService{id: "follower"}
+	leader := &initialClusterInfoLogService{id: "leader", leader: true}
+	c := &testCluster{
+		t:      t,
+		logger: zap.NewNop(),
+	}
+	c.opt.initial.logServiceNum = 2
+	c.opt.initial.logShardNum = 3
+	c.opt.initial.tnShardNum = 4
+	c.opt.initial.logReplicaNum = 5
+	c.log.svcs = []LogService{follower, leader}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, c.setInitialClusterInfo(ctx))
+
+	require.Equal(t, 0, follower.initialClusterInfoCalls)
+	require.Equal(t, 1, leader.initialClusterInfoCalls)
+	require.Equal(t, [3]uint64{3, 4, 5}, leader.initialClusterInfoArgs)
+}
+
+type initialClusterInfoLogService struct {
+	id                      string
+	leader                  bool
+	initialClusterInfoCalls int
+	initialClusterInfoArgs  [3]uint64
+}
+
+func (s *initialClusterInfoLogService) Start() error { return nil }
+func (s *initialClusterInfoLogService) Close() error { return nil }
+func (s *initialClusterInfoLogService) Status() ServiceStatus {
+	return ServiceStarted
+}
+func (s *initialClusterInfoLogService) ID() string { return s.id }
+func (s *initialClusterInfoLogService) IsLeaderHakeeper() (bool, error) {
+	return s.leader, nil
+}
+func (s *initialClusterInfoLogService) GetClusterState() (*logpb.CheckerState, error) {
+	return nil, nil
+}
+func (s *initialClusterInfoLogService) SetInitialClusterInfo(
+	numOfLogShards, numOfTNShards, numOfLogReplicas uint64,
+) error {
+	s.initialClusterInfoCalls++
+	s.initialClusterInfoArgs = [3]uint64{numOfLogShards, numOfTNShards, numOfLogReplicas}
+	return nil
+}
+func (s *initialClusterInfoLogService) StartHAKeeperReplica(
+	replicaID uint64, initialReplicas map[uint64]dragonboat.Target, join bool,
+) error {
+	return nil
+}
+func (s *initialClusterInfoLogService) GetTaskService() (taskservice.TaskService, bool) {
+	return nil, false
 }
 
 func TestClusterStart(t *testing.T) {

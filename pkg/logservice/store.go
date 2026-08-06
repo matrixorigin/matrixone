@@ -139,8 +139,10 @@ type store struct {
 	tickerStopper     *stopper.Stopper
 	runtime           runtime.Runtime
 
-	bootstrapCheckCycles uint64
-	bootstrapMgr         *bootstrap.Manager
+	bootstrapCheckCycles   uint64
+	bootstrapMgr           *bootstrap.Manager
+	lastBootstrapLogTime   time.Time
+	bootstrapCommandsAdded func()
 
 	taskScheduler hakeeper.TaskScheduler
 
@@ -1230,8 +1232,8 @@ func (l *store) ticker(ctx context.Context) {
 	defer func() {
 		l.runtime.Logger().Info("HAKeeper ticker stopped")
 	}()
-	haTicker := time.NewTicker(l.cfg.HAKeeperCheckInterval.Duration)
-	defer haTicker.Stop()
+	haTimer := time.NewTimer(l.nextHAKeeperCheckInterval(nil))
+	defer haTimer.Stop()
 
 	// moving task schedule from the ticker normal routine to a
 	// separate goroutine can avoid the hakeeper's health check and tick update
@@ -1245,8 +1247,9 @@ func (l *store) ticker(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			l.hakeeperTick()
-		case <-haTicker.C:
-			l.hakeeperCheck()
+		case <-haTimer.C:
+			state := l.hakeeperCheck()
+			haTimer.Reset(l.nextHAKeeperCheckInterval(state))
 		case <-ctx.Done():
 			return
 		}
@@ -1266,6 +1269,33 @@ func (l *store) isLeaderHAKeeper() (bool, uint64, error) {
 	}
 	replicaID := atomic.LoadUint64(&l.haKeeperReplicaID)
 	return ok && replicaID != 0 && leaderID == replicaID, term, nil
+}
+
+func (l *store) waitHAKeeperLeaderReady(ctx context.Context, maxWait time.Duration) (bool, error) {
+	if leaderID, _, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID); err == nil && ok && leaderID != 0 {
+		return true, nil
+	}
+	if maxWait <= 0 {
+		return false, nil
+	}
+
+	ticker := time.NewTicker(time.Millisecond * 20)
+	defer ticker.Stop()
+	timer := time.NewTimer(maxWait)
+	defer timer.Stop()
+	for {
+		leaderID, _, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
+		if err == nil && ok && leaderID != 0 {
+			return true, nil
+		}
+		select {
+		case <-ctx.Done():
+			return false, moerr.AttachCause(ctx, ctx.Err())
+		case <-timer.C:
+			return false, nil
+		case <-ticker.C:
+		}
+	}
 }
 
 // TODO: add test for this

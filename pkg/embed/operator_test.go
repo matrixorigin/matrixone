@@ -169,6 +169,12 @@ func TestHAKeeperRunningTimeout(t *testing.T) {
 	assert.Equal(t, 5*time.Minute, (&operator{testing: true}).hakeeperRunningTimeout())
 }
 
+func TestClusterConditionCheckInterval(t *testing.T) {
+	interval := (&operator{}).clusterConditionCheckInterval()
+	assert.Greater(t, interval, time.Duration(0))
+	assert.Less(t, interval, time.Second)
+}
+
 func TestWaitClusterConditionClosesHAKeeperClient(t *testing.T) {
 	waitErr := errors.New("wait failed")
 	closeErr := errors.New("close failed")
