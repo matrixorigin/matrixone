@@ -846,26 +846,9 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 			}
 			return err
 		}
-		consumerRelease, requested, granted := reserveRuntimeFilterConsumerMemory(
-			proc, len(data), rowCount)
-		if !granted {
-			if release != nil {
-				release()
-			}
-			if hashBuild.OpAnalyzer != nil {
-				stats := hashBuild.OpAnalyzer.GetOpStats()
-				stats.AddExtraStat("HashBuildRuntimeFilterConsumerMemoryFallbacks", 1)
-				stats.SetMaxExtraStat(
-					"HashBuildRuntimeFilterConsumerMemoryRequestedBytes", requested)
-			}
-			runtimeFilter.Typ = message.RuntimeFilter_PASS
-			hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
-			return nil
-		}
 		runtimeFilter.Card = int32(rowCount)
 		runtimeFilter.Data = data
-		runtimeFilter.SetMemoryRelease(
-			combineRuntimeFilterMemoryReleases(release, consumerRelease))
+		runtimeFilter.SetMemoryRelease(release)
 		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
 		return nil
 	}

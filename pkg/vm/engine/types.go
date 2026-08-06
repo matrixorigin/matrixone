@@ -1429,8 +1429,8 @@ func GetPrefetchOnSubscribed() (bool, []*regexp.Regexp) {
 // MembershipFilter is a membership filter over the indexed primary-key values
 // (fulltext calls this PK doc_id) used to prune an index scan to the candidate
 // rows that pass the surrounding relational predicate. It is implemented in
-// pkg/common/docfilter by an exact bitset (cbitmap / CRoaring) for integer PKs
-// and by a CBloomFilter (approximate) for non-integer PKs.
+// pkg/common/docfilter by an exact set (dense cbitmap / sparse Sorted64) for
+// integer PKs and by a CBloomFilter (approximate) for non-integer PKs.
 //
 // This is the CONSUMER (probe) view, so it deliberately omits Share() — a plain
 // *bloomfilter.CBloomFilter satisfies it directly. The PRODUCER superset is

@@ -50,7 +50,22 @@ const (
 	loopJoinAllocationSiteResultGrouping
 )
 
+const (
+	loopJoinAllocationSiteConditionData mpool.AllocationSite = iota + 118
+	loopJoinAllocationSiteConditionArea
+	loopJoinAllocationSiteConditionNulls
+	loopJoinAllocationSiteConditionGrouping
+)
+
 const defaultLoopJoinResultBatchBytes = 64 * mpool.MB
+
+const (
+	// A non-equi condition returns a boolean vector. Cap it at one million rows
+	// and also budget copied null/grouping bitmaps by bytes for unusually wide
+	// batches. Ordinary batches stay on the original single-Eval fast path.
+	loopJoinConditionMaxWindowRows   = 1 << 20
+	loopJoinConditionWindowByteLimit = 8 * mpool.MB
+)
 
 type container struct {
 	state    int
@@ -63,12 +78,43 @@ type container struct {
 	// resultBatchByteLimit complements DefaultBatchSize for wide rows. Prepare
 	// installs the default unless the execution already has a tighter limit.
 	resultBatchByteLimit int
-	inBat                *batch.Batch
-	resBat               *batch.Batch
-	joinBat              *batch.Batch
-	expr                 colexec.ExpressionExecutor
-	cfs                  []func(*vector.Vector, *vector.Vector, int64, int) error
-	mp                   *message.JoinMap
+	// probeMatched is part of the resume cursor. It cannot be inferred from the
+	// batch/row cursor: a condition may have consumed an arbitrary number of
+	// false rows before a result batch fills.
+	probeMatched bool
+	// condVec is the read-only result for exactly one
+	// (probeIdx, batIdx, [condStart,condEnd)) window. Expression results stay
+	// valid until the next Eval call, so retaining this pointer prevents a split
+	// result batch from evaluating the same condition window again.
+	condVec      *vector.Vector
+	condProbeIdx int
+	condBatIdx   int
+	condStart    int
+	condEnd      int
+	// condWindow owns only its range bitmaps; vector data/area borrow the build
+	// batch. It must live as long as condVec because a column expression may
+	// return one of the window vectors directly.
+	condWindow   *batch.Batch
+	condWindowMP *mpool.MPool
+	// Bounded-cardinality joins scan the build before emitting their one result
+	// row. Keep that completed scan across a byte-limit yield so admission never
+	// causes the same condition to be evaluated again.
+	probeScanValid      bool
+	probeScanIdx        int
+	probeScanMatches    int
+	probeScanFirstBatch int
+	probeScanFirstRow   int
+	probeScanHasNull    bool
+	// FULL OUTER finalization consumes an iterator. If the next right row does
+	// not fit a non-empty result batch, keep it here rather than losing it.
+	rightPendingRow bool
+	rightPending    uint64
+	inBat           *batch.Batch
+	resBat          *batch.Batch
+	joinBat         *batch.Batch
+	expr            colexec.ExpressionExecutor
+	cfs             []func(*vector.Vector, *vector.Vector, int64, int) error
+	mp              *message.JoinMap
 
 	// FULL OUTER JOIN bookkeeping. rightRowsMatched is a flat bitmap over
 	// all build rows; bit i is set when build row i matched at least one
@@ -82,16 +128,17 @@ type container struct {
 }
 
 type LoopJoin struct {
-	ctr               container
-	LeftTypes         []types.Type
-	RightTypes        []types.Type
-	NonEqCond         *plan.Expr
-	ResultCols        []colexec.ResultPos
-	JoinMapTag        int32
-	JoinType          plan.Node_JoinType
-	MarkPos           int
-	allocationAccount *mpool.AllocationAccount
-	resultAllocation  *vector.AllocationAccountSelection
+	ctr                 container
+	LeftTypes           []types.Type
+	RightTypes          []types.Type
+	NonEqCond           *plan.Expr
+	ResultCols          []colexec.ResultPos
+	JoinMapTag          int32
+	JoinType            plan.Node_JoinType
+	MarkPos             int
+	allocationAccount   *mpool.AllocationAccount
+	resultAllocation    *vector.AllocationAccountSelection
+	conditionAllocation *vector.AllocationAccountSelection
 	// recursiveProbe is derived from the operator tree during Prepare. An empty
 	// INNER/SEMI build must still drain a recursive probe until its round marker.
 	recursiveProbe bool
@@ -123,8 +170,20 @@ func (loopJoin *LoopJoin) SetAllocationAccount(
 	if err != nil {
 		return err
 	}
+	conditionSelection, err := vector.NewAllocationAccountSelection(
+		account,
+		hashbuild.HashBuildAllocationOwner,
+		loopJoinAllocationSiteConditionData,
+		loopJoinAllocationSiteConditionArea,
+		loopJoinAllocationSiteConditionNulls,
+		loopJoinAllocationSiteConditionGrouping,
+	)
+	if err != nil {
+		return err
+	}
 	loopJoin.allocationAccount = account
 	loopJoin.resultAllocation = selection
+	loopJoin.conditionAllocation = conditionSelection
 	return nil
 }
 
@@ -139,11 +198,13 @@ func (loopJoin *LoopJoin) ClearAllocationAccount(
 	}
 	ctr := &loopJoin.ctr
 	if ctr.mp != nil || ctr.expr != nil || ctr.rightRowsMatched != nil ||
-		len(ctr.rightBatchOffset) != 0 || ctr.resBat != nil {
+		len(ctr.rightBatchOffset) != 0 || ctr.resBat != nil ||
+		ctr.condWindow != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	loopJoin.allocationAccount = nil
 	loopJoin.resultAllocation = nil
+	loopJoin.conditionAllocation = nil
 	return nil
 }
 
@@ -181,6 +242,7 @@ func (loopJoin *LoopJoin) Release() {
 func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &loopJoin.ctr
 
+	ctr.clearProbeResume()
 	// The executor owns allocations from this execution generation. Prepared
 	// statements must rebuild it after the next account is installed instead
 	// of carrying generation-bound storage across Reset.
@@ -218,6 +280,32 @@ func (ctr *container) cleanRightMatchState(proc *process.Process) {
 	ctr.rightBatchOffset = nil
 	ctr.rightMatchedIter = nil
 	ctr.rightMatchedBat = 0
+	ctr.rightPendingRow = false
+	ctr.rightPending = 0
+}
+
+func (ctr *container) clearConditionResult() {
+	if ctr.condWindow != nil {
+		ctr.condWindow.Clean(ctr.condWindowMP)
+	}
+	ctr.condVec = nil
+	ctr.condProbeIdx = 0
+	ctr.condBatIdx = 0
+	ctr.condStart = 0
+	ctr.condEnd = 0
+	ctr.condWindow = nil
+	ctr.condWindowMP = nil
+}
+
+func (ctr *container) clearProbeResume() {
+	ctr.probeMatched = false
+	ctr.clearConditionResult()
+	ctr.probeScanValid = false
+	ctr.probeScanIdx = 0
+	ctr.probeScanMatches = 0
+	ctr.probeScanFirstBatch = 0
+	ctr.probeScanFirstRow = 0
+	ctr.probeScanHasNull = false
 }
 
 func (loopJoin *LoopJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -225,6 +313,7 @@ func (loopJoin *LoopJoin) ExecProjection(proc *process.Process, input *batch.Bat
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
+	ctr.clearProbeResume()
 	if ctr.resBat != nil {
 		ctr.resBat.Clean(mp)
 		ctr.resBat = nil

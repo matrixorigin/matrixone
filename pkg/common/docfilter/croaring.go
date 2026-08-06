@@ -21,6 +21,7 @@ package docfilter
 import "C"
 
 import (
+	"runtime"
 	"sync/atomic"
 	"unsafe"
 
@@ -29,18 +30,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-// TagCRoaring marks a payload serialized by the CRoaring (C, roaring64) filter,
-// alongside docfilter.TagBitset (Go roaring) and TagBloom in the shared
-// reader-side transport. CRoaring is the C-backed, compact, exact integer-PK
-// filter (build/probe in C, one cgo call per vector).
+// TagCRoaring marks a legacy payload serialized by the CRoaring (C, roaring64)
+// filter. New producers use TagCbitmap or TagSorted64 for integer PKs, but the
+// reader keeps this portable format for rolling-upgrade compatibility.
 const TagCRoaring byte = 2
 
 // CRoaringFilter wraps a C roaring64_bitmap_t (via cgo/croaring) and
 // implements engine.MembershipFilter. It uses CBloomFilter-style refcounting so the
 // same C bitmap can be shared across parallel readers and freed exactly once.
 type CRoaringFilter struct {
-	ptr    unsafe.Pointer
-	refcnt int32
+	ptr           unsafe.Pointer
+	refcnt        int32
+	memoryRelease func()
 }
 
 // vecFixedArgs extracts the (data ptr, byte len, elemsz, nitem, nullmap ptr,
@@ -137,13 +138,17 @@ func buildCRoaringBytes(v *vector.Vector, runOpt bool) ([]byte, error) {
 		C.mo_croaring_run_optimize(r)
 	}
 
-	var clen C.size_t
-	buf := C.mo_croaring_serialize(r, &clen)
-	if buf == nil {
+	clen := C.mo_croaring_serialized_size(r)
+	if clen == 0 || uint64(clen) > uint64(^uint(0)>>1) {
 		return nil, moerr.NewInternalErrorNoCtx("croaring: serialize failed")
 	}
-	defer C.mo_croaring_free_buf(buf)
-	return C.GoBytes(unsafe.Pointer(buf), C.int(clen)), nil
+	serialized := make([]byte, int(clen))
+	if !bool(C.mo_croaring_serialize_into(
+		r, (*C.uint8_t)(unsafe.Pointer(unsafe.SliceData(serialized))), clen)) {
+		return nil, moerr.NewInternalErrorNoCtx("croaring: serialize failed")
+	}
+	runtime.KeepAlive(serialized)
+	return serialized, nil
 }
 
 // NewCRoaringFilter deserializes a portable roaring64 payload (no tag prefix).
@@ -207,6 +212,10 @@ func (f *CRoaringFilter) Free() {
 		if atomic.AddInt32(&f.refcnt, -1) == 0 {
 			C.mo_croaring_free(f.ptr)
 			f.ptr = nil
+			if f.memoryRelease != nil {
+				f.memoryRelease()
+				f.memoryRelease = nil
+			}
 		}
 	}
 }

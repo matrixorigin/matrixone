@@ -17,7 +17,6 @@ package loopjoin
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -234,6 +233,21 @@ func (ctr *container) resultBatchFull(rows int) bool {
 		rows > 0 && ctr.resBat.Size() >= ctr.resultBatchByteLimit
 }
 
+// canAppendRow is the single result-batch admission rule. A row may be added
+// when both row and byte limits remain satisfied. The only exception is an
+// intrinsically oversized first row: admitting it is required for progress,
+// and resultBatchFull forces an immediate yield afterwards.
+func (ctr *container) canAppendRow(rows, usedBytes, rowBytes int) bool {
+	if rows >= colexec.DefaultBatchSize {
+		return false
+	}
+	if rows == 0 {
+		return true
+	}
+	return usedBytes <= ctr.resultBatchByteLimit &&
+		rowBytes <= ctr.resultBatchByteLimit-usedBytes
+}
+
 func vectorLogicalRowBytes(vec *vector.Vector, row int) int {
 	size := vec.GetType().TypeSize()
 	if vec.GetType().IsVarlen() && !vec.IsNull(uint64(row)) {
@@ -262,7 +276,7 @@ func (ctr *container) emptyProbeChunk(ap *LoopJoin, start int) int {
 	used := 0
 	for count := 0; count < maxRows; count++ {
 		rowBytes := ctr.emptyProbeRowBytes(ap, start+count)
-		if count > 0 && rowBytes > ctr.resultBatchByteLimit-used {
+		if !ctr.canAppendRow(count, used, rowBytes) {
 			return count
 		}
 		used += rowBytes
@@ -278,324 +292,16 @@ func (ctr *container) joinedRowBytes(
 	buildRow int,
 ) int {
 	size := 0
-	for _, rp := range ap.ResultCols {
+	for i, rp := range ap.ResultCols {
 		if rp.Rel == 0 {
 			size += vectorLogicalRowBytes(inBat.Vecs[rp.Pos], probeRow)
 		} else if rp.Rel == 1 {
 			size += vectorLogicalRowBytes(buildBat.Vecs[rp.Pos], buildRow)
+		} else {
+			size += ctr.resBat.Vecs[i].GetType().TypeSize()
 		}
 	}
 	return size
-}
-
-func (ctr *container) noCondChunk(
-	ap *LoopJoin,
-	inBat *batch.Batch,
-	probeRow int,
-	buildBat *batch.Batch,
-	start, maxRows, currentRows int,
-) int {
-	used := ctr.resBat.Size()
-	for count := 0; count < maxRows; count++ {
-		rowBytes := ctr.joinedRowBytes(ap, inBat, probeRow, buildBat, start+count)
-		if currentRows+count > 0 && rowBytes > ctr.resultBatchByteLimit-used {
-			return count
-		}
-		used += rowBytes
-	}
-	return maxRows
-}
-
-func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.CallResult) error {
-	inbat := ctr.inBat
-	mpbat := ctr.mp.GetBatches()
-	count := inbat.RowCount()
-	if ctr.joinBat == nil {
-		ctr.joinBat, ctr.cfs = colexec.NewJoinBatch(inbat, proc.Mp())
-	}
-
-	rowCountIncrease := 0
-	for i := ctr.probeIdx; i < count; i++ {
-		if ap.JoinType == plan.Node_MARK && ctr.expr != nil {
-			if ctr.resultBatchFull(rowCountIncrease) {
-				result.Batch = ctr.resBat
-				ctr.resBat.SetRowCount(rowCountIncrease)
-				ctr.probeIdx = i
-				ctr.batIdx = 0
-				return nil
-			}
-
-			hasTrue := false
-			hasNull := false
-			for idx := 0; idx < len(mpbat); idx++ {
-				bat := mpbat[idx]
-				if err := colexec.SetJoinBatchValues(ctr.joinBat, inbat, int64(i),
-					bat.RowCount(), ctr.cfs); err != nil {
-					return err
-				}
-
-				vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, bat}, nil)
-				if err != nil {
-					return err
-				}
-
-				rs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
-				if vec.IsConst() {
-					v, null := rs.GetValue(0)
-					if null {
-						hasNull = true
-					} else if v {
-						hasTrue = true
-						break
-					}
-				} else {
-					for j := uint64(0); j < uint64(vec.Length()); j++ {
-						val, null := rs.GetValue(j)
-						if null {
-							hasNull = true
-						} else if val {
-							hasTrue = true
-							break
-						}
-					}
-					if hasTrue {
-						break
-					}
-				}
-			}
-
-			var err error
-			for k, rp := range ap.ResultCols {
-				if rp.Rel == 0 {
-					if err = ctr.resBat.Vecs[k].UnionOne(inbat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
-						return err
-					}
-				} else {
-					if hasTrue {
-						err = vector.AppendFixed(ctr.resBat.Vecs[k], true, false, proc.Mp())
-					} else if hasNull {
-						err = vector.AppendFixed(ctr.resBat.Vecs[k], false, true, proc.Mp())
-					} else {
-						err = vector.AppendFixed(ctr.resBat.Vecs[k], false, false, proc.Mp())
-					}
-					if err != nil {
-						return err
-					}
-				}
-			}
-			rowCountIncrease++
-			ctr.batIdx = 0
-			continue
-		}
-
-		matched := false
-		if ctr.batIdx != 0 || ctr.batRowIdx != 0 {
-			matched = true
-		}
-		for idx := ctr.batIdx; idx < len(mpbat); idx++ {
-			if ctr.resultBatchFull(rowCountIncrease) {
-				result.Batch = ctr.resBat
-				ctr.resBat.SetRowCount(rowCountIncrease)
-				ctr.probeIdx = i
-				ctr.batIdx = idx
-				return nil
-			}
-
-			bat := mpbat[idx]
-
-			if ctr.expr != nil {
-				if err := colexec.SetJoinBatchValues(ctr.joinBat, inbat, int64(i),
-					bat.RowCount(), ctr.cfs); err != nil {
-					return err
-				}
-
-				vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, bat}, nil)
-				if err != nil {
-					return err
-				}
-
-				rs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
-				l := uint64(bat.RowCount())
-				start := uint64(0)
-				if idx == ctr.batIdx {
-					start = uint64(ctr.batRowIdx)
-				}
-				for j := start; j < l; j++ {
-					b, null := rs.GetValue(j)
-					if !null && b {
-						if ap.JoinType == plan.Node_SINGLE && matched {
-							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
-						}
-
-						if ap.JoinType == plan.Node_ANTI {
-							matched = true
-							continue
-						}
-						if rowCountIncrease > 0 &&
-							ap.JoinType != plan.Node_SEMI &&
-							ap.JoinType != plan.Node_SINGLE &&
-							ctr.joinedRowBytes(ap, inbat, i, bat, int(j)) >
-								ctr.resultBatchByteLimit-ctr.resBat.Size() {
-							ctr.probeIdx = i
-							ctr.batIdx = idx
-							ctr.batRowIdx = int(j)
-							ctr.resBat.SetRowCount(rowCountIncrease)
-							result.Batch = ctr.resBat
-							return nil
-						}
-
-						matched = true
-
-						if ap.JoinType == plan.Node_OUTER {
-							ctr.rightRowsMatched.Add(ctr.rightBatchOffset[idx] + j)
-						}
-
-						for k, rp := range ap.ResultCols {
-							if rp.Rel == 0 {
-								if err = ctr.resBat.Vecs[k].UnionOne(inbat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
-									return err
-								}
-							} else {
-								if err = ctr.resBat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
-									return err
-								}
-							}
-						}
-						rowCountIncrease++
-						if ctr.resultBatchFull(rowCountIncrease) &&
-							ap.JoinType != plan.Node_SEMI &&
-							ap.JoinType != plan.Node_SINGLE && j+1 < l {
-							ctr.probeIdx = i
-							ctr.batIdx = idx
-							ctr.batRowIdx = int(j + 1)
-							ctr.resBat.SetRowCount(rowCountIncrease)
-							result.Batch = ctr.resBat
-							return nil
-						}
-
-						if ap.JoinType == plan.Node_SEMI {
-							break
-						}
-					}
-				}
-			} else {
-				matched = true
-				switch ap.JoinType {
-				case plan.Node_LEFT, plan.Node_OUTER:
-					start := 0
-					if idx == ctr.batIdx {
-						start = ctr.batRowIdx
-					}
-					remaining := colexec.DefaultBatchSize - rowCountIncrease
-					count := bat.RowCount() - start
-					if count > remaining {
-						count = remaining
-					}
-					count = ctr.noCondChunk(
-						ap, inbat, i, bat, start, count, rowCountIncrease)
-					if count == 0 {
-						ctr.probeIdx = i
-						ctr.batIdx = idx
-						ctr.batRowIdx = start
-						ctr.resBat.SetRowCount(rowCountIncrease)
-						result.Batch = ctr.resBat
-						return nil
-					}
-					for k, rp := range ap.ResultCols {
-						if rp.Rel == 0 {
-							if err := ctr.resBat.Vecs[k].UnionMulti(ctr.inBat.Vecs[rp.Pos], int64(i), count, proc.Mp()); err != nil {
-								return err
-							}
-						} else {
-							if err := ctr.resBat.Vecs[k].UnionBatch(bat.Vecs[rp.Pos], int64(start), count, nil, proc.Mp()); err != nil {
-								return err
-							}
-						}
-					}
-					rowCountIncrease += count
-					if ap.JoinType == plan.Node_OUTER {
-						base := ctr.rightBatchOffset[idx] + uint64(start)
-						ctr.rightRowsMatched.AddRange(base, base+uint64(count))
-					}
-					if start+count < bat.RowCount() {
-						ctr.probeIdx = i
-						ctr.batIdx = idx
-						ctr.batRowIdx = start + count
-						ctr.resBat.SetRowCount(rowCountIncrease)
-						result.Batch = ctr.resBat
-						return nil
-					}
-
-				case plan.Node_SINGLE:
-					if bat.RowCount() == 1 {
-						for k, rp := range ap.ResultCols {
-							if rp.Rel == 0 {
-								err := ctr.resBat.Vecs[k].UnionOne(ctr.inBat.Vecs[rp.Pos], int64(i), proc.Mp())
-								if err != nil {
-									return err
-								}
-							} else {
-								err := ctr.resBat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], 0, proc.Mp())
-								if err != nil {
-									return err
-								}
-							}
-						}
-						rowCountIncrease++
-					} else {
-						return moerr.NewErrSubqueryNo1Row(proc.Ctx)
-					}
-
-				case plan.Node_SEMI:
-					if bat.RowCount() > 0 {
-						for k, rp := range ap.ResultCols {
-							if err := ctr.resBat.Vecs[k].UnionOne(inbat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
-								return err
-							}
-						}
-						rowCountIncrease++
-					}
-
-				case plan.Node_ANTI:
-					if bat.RowCount() == 0 {
-						for k, rp := range ap.ResultCols {
-							if err := ctr.resBat.Vecs[k].UnionOne(inbat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
-								return err
-							}
-						}
-						rowCountIncrease++
-					}
-				}
-			}
-
-			if ap.JoinType == plan.Node_SEMI && matched {
-				break
-			}
-			ctr.batRowIdx = 0
-		}
-
-		if !matched && (ap.JoinType == plan.Node_ANTI || ap.JoinType == plan.Node_LEFT || ap.JoinType == plan.Node_SINGLE || ap.JoinType == plan.Node_OUTER) {
-			for k, rp := range ap.ResultCols {
-				if rp.Rel == 0 {
-					if err := ctr.resBat.Vecs[k].UnionOne(inbat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
-						return err
-					}
-				} else {
-					if err := ctr.resBat.Vecs[k].UnionNull(proc.Mp()); err != nil {
-						return err
-					}
-				}
-			}
-			rowCountIncrease++
-		}
-		ctr.batIdx = 0
-		ctr.batRowIdx = 0
-	}
-
-	ctr.inBat = nil
-	ctr.resBat.SetRowCount(rowCountIncrease)
-	result.Batch = ctr.resBat
-	return nil
 }
 
 func (loopJoin *LoopJoin) resetResultBat() error {
@@ -689,12 +395,30 @@ func (ctr *container) finalize(ap *LoopJoin, proc *process.Process, result *vm.C
 	}
 
 	rowCnt := 0
-	for rowCnt < colexec.DefaultBatchSize && ctr.rightMatchedIter.HasNext() {
-		row := ctr.rightMatchedIter.Next()
+	usedBytes := 0
+	for ctr.rightPendingRow || ctr.rightMatchedIter.HasNext() {
+		row := ctr.rightPending
+		if !ctr.rightPendingRow {
+			row = ctr.rightMatchedIter.Next()
+			ctr.rightPending = row
+			ctr.rightPendingRow = true
+		}
 		for ctr.rightMatchedBat+1 < len(ctr.rightBatchOffset) && ctr.rightBatchOffset[ctr.rightMatchedBat+1] <= row {
 			ctr.rightMatchedBat++
 		}
 		j := int64(row - ctr.rightBatchOffset[ctr.rightMatchedBat])
+		rowBytes := 0
+		for i, rp := range ap.ResultCols {
+			if rp.Rel == 1 {
+				rowBytes += vectorLogicalRowBytes(
+					bats[ctr.rightMatchedBat].Vecs[rp.Pos], int(j))
+			} else {
+				rowBytes += ctr.resBat.Vecs[i].GetType().TypeSize()
+			}
+		}
+		if !ctr.canAppendRow(rowCnt, usedBytes, rowBytes) {
+			break
+		}
 		for i, rp := range ap.ResultCols {
 			if rp.Rel == 1 {
 				if err := ctr.resBat.Vecs[i].UnionOne(bats[ctr.rightMatchedBat].Vecs[rp.Pos], j, proc.Mp()); err != nil {
@@ -702,16 +426,9 @@ func (ctr *container) finalize(ap *LoopJoin, proc *process.Process, result *vm.C
 				}
 			}
 		}
+		ctr.rightPendingRow = false
 		rowCnt++
-		projectedSize := ctr.resBat.Size()
-		for i, rp := range ap.ResultCols {
-			if rp.Rel != 1 {
-				projectedSize += rowCnt * ctr.resBat.Vecs[i].GetType().TypeSize()
-			}
-		}
-		if projectedSize >= ctr.resultBatchByteLimit {
-			break
-		}
+		usedBytes += rowBytes
 	}
 	if rowCnt == 0 {
 		result.Batch = nil
