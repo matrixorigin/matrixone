@@ -602,6 +602,15 @@ SELECT MIN(IF(name IS NOT NULL, name, wide_name)) AS min_if,
        MAX(IF(name IS NOT NULL, name, wide_name)) AS max_if
 FROM t_minmax_derived_bin;
 
+CREATE TABLE t_minmax_least_greatest_bin (
+    varchar_name VARCHAR(100),
+    text_name TEXT
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+INSERT INTO t_minmax_least_greatest_bin VALUES ('a', 'a'), ('B', 'B');
+SELECT MIN(LEAST(varchar_name, text_name)) AS min_least,
+       MAX(GREATEST(text_name, varchar_name)) AS max_greatest
+FROM t_minmax_least_greatest_bin;
+
 SELECT MIN(x) AS min_union, MAX(x) AS max_union
 FROM (
     SELECT name AS x FROM t_minmax_cast_ci

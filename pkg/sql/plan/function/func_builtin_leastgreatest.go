@@ -310,6 +310,19 @@ func leastGreatestExecutorSupportsOid(oid types.T) bool {
 func leastGreatestSameOidAlignedType(inputs []types.Type) (types.Type, bool) {
 	target := inputs[0]
 	switch target.Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+		mergedCharset := types.MergeStringCharset(inputs, target.Charset)
+		for i := range inputs {
+			if inputs[i].Charset != mergedCharset {
+				target.Charset = mergedCharset
+				// Aligning collation requires casts even when the OIDs already
+				// match. Use the widest source so that metadata alignment cannot
+				// truncate a wider CHAR/VARCHAR operand.
+				setMaxWidthFromSource(&target, inputs)
+				return target, true
+			}
+		}
+		return types.Type{}, false
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		if !leastGreatestMetadataDiffers(inputs) {
 			return types.Type{}, false
@@ -541,22 +554,29 @@ func leastGreatestStringMixedType(inputs []types.Type) (types.Type, bool) {
 			hasNumeric = true
 		}
 	}
+	var target types.Type
 	switch {
 	case hasText:
-		return types.T_text.ToType(), true
+		target = types.T_text.ToType()
 	case hasNonBinary:
-		return types.T_varchar.ToType(), true
+		target = types.T_varchar.ToType()
 	case hasTemporal && hasNumeric:
-		return types.T_varchar.ToType(), true
+		target = types.T_varchar.ToType()
 	case hasBlob:
-		return types.T_blob.ToType(), true
+		target = types.T_blob.ToType()
 	case hasBinary:
-		return types.T_varbinary.ToType(), true
+		target = types.T_varbinary.ToType()
 	case hasTemporal:
-		return types.T_varchar.ToType(), true
+		target = types.T_varchar.ToType()
 	default:
 		return types.Type{}, false
 	}
+
+	// The common physical OID is only half of the string type. Preserve the
+	// strongest input collation before leastGreatestCastTypes copies this target
+	// to every argument; the return-type callback receives those cast targets.
+	target.Charset = types.MergeStringCharset(inputs, target.Charset)
+	return target, true
 }
 
 // leastGreatestCommonNumericType derives the common type used to compare a set
