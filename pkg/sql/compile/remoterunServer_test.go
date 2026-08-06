@@ -35,6 +35,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -241,6 +242,8 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 			unixTime:               time.Now().Unix(),
 			affectedRows:           42,
 			statementRuntimeIgnore: true,
+			planSnapshotTS:         timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
+			hasPlanSnapshotTS:      true,
 			txnClient:              txnClient,
 			txnOperator:            txnOperator,
 			prepareParams: pipeline.PrepareParamInfo{
@@ -268,6 +271,9 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	require.False(t, compile.proc.GetPrepareParamIsBin(1))
 	require.Equal(t, int64(42), compile.proc.GetAffectedRows())
 	require.True(t, compile.proc.GetStmtProfile().GetStatementIgnore())
+	planSnapshot, ok := compile.proc.GetPlanSnapshotTS()
+	require.True(t, ok)
+	require.Equal(t, timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, planSnapshot)
 	require.NotNil(t, compile.fill, "fill callback should be set")
 	remoteParams := compile.proc.GetPrepareParams()
 	require.NotPanics(t, compile.Release)
@@ -350,6 +356,7 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 		UnixTime:               time.Now().Unix(),
 		AffectedRows:           42,
 		StatementRuntimeIgnore: true,
+		PlanSnapshotTs:         &timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
 		Snapshot: txn.CNTxnSnapshot{
 			Txn: txn.TxnMeta{
 				ID: []byte("test-txn-id"),
@@ -376,6 +383,8 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	require.Equal(t, procInfo.PrepareParams.Area, helper.prepareParams.Area)
 	require.Equal(t, int64(42), helper.affectedRows)
 	require.True(t, helper.statementRuntimeIgnore)
+	require.True(t, helper.hasPlanSnapshotTS)
+	require.Equal(t, *procInfo.PlanSnapshotTs, helper.planSnapshotTS)
 	require.NotNil(t, helper.txnOperator, "txnOperator should be created from snapshot")
 	// Verify that rebuilt txnOperator has nil workspace (key point for remote run)
 	require.Nil(t, helper.txnOperator.GetWorkspace(), "rebuilt txnOperator should have nil workspace initially")
