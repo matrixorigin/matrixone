@@ -1015,6 +1015,12 @@ message Node {
   // FUZZY_FILTER only. Keeping this separate from runtime-filter metadata
   // makes build-side selection idempotent across repeated optimizer passes.
   FuzzyBuildSide fuzzy_build_side = 77;
+
+  // AGG only: positions in group_by that form the physical hash/equality key.
+  // An empty list preserves the legacy meaning that every group_by expression
+  // participates in hashing. A non-empty list must be a strict subset proven
+  // by the optimizer to determine all remaining group_by expressions.
+  repeated int32 group_by_hash_key = 78;
 }
 
 message SnapshotExtraInfo {

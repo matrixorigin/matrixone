@@ -1233,11 +1233,13 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		if len(node.GroupBy) > 0 {
 			incnt := childStats.Outcnt
 			outcnt := 1.0
-			for _, groupby := range node.GroupBy {
+			for i, groupby := range node.GroupBy {
 				ndv := getExprNdv(groupby, builder)
 				if ndv > 1 {
 					groupby.Ndv = ndv
-					outcnt *= ndv
+					if isPhysicalGroupByKey(node, i) {
+						outcnt *= ndv
+					}
 				}
 			}
 			if outcnt > incnt {
