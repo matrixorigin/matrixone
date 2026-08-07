@@ -50,6 +50,41 @@ func TestOrderedPercentileExecNumericAndDirection(t *testing.T) {
 	disc.Free()
 }
 
+func TestOrderedPercentileUsesNativeUint64Order(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	valueVec := buildFixedVec(t, mp, types.T_uint64.ToType(), []uint64{
+		9007199254740993,
+		9007199254740992,
+	})
+	defer valueVec.Free(mp)
+
+	for _, tc := range []struct {
+		name string
+		desc bool
+		want uint64
+	}{
+		{name: "ascending", want: 9007199254740992},
+		{name: "descending", desc: true, want: 9007199254740993},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			disc, err := makeOrderedPercentileExec(mp, AggIdOfPercentileDisc, false,
+				types.T_uint64.ToType(), orderedPercentileDiscrete)
+			require.NoError(t, err)
+			require.NoError(t, disc.GroupGrow(1))
+			require.NoError(t, disc.SetExtraInformation(
+				EncodeOrderedPercentileConfig([]byte("0"), tc.desc), 0))
+			require.NoError(t, disc.BulkFill(0, []*vector.Vector{valueVec}))
+			result, err := disc.Flush()
+			require.NoError(t, err)
+			require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[uint64](result[0], 0))
+			result[0].Free(mp)
+			disc.Free()
+		})
+	}
+}
+
 func TestOrderedPercentileExecGroupsNullsAndMerge(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()

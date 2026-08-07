@@ -16,13 +16,13 @@ package aggexec
 
 import (
 	"math/big"
-	"sort"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	mosort "github.com/matrixorigin/matrixone/pkg/sort"
 )
 
 const orderedPercentileConfigVersion byte = 1
@@ -162,20 +162,46 @@ func (exec *orderedPercentileExec[T, R]) Flush() ([]*vector.Vector, error) {
 
 func (exec *orderedPercentileExec[T, R]) flushGroup(group *Vectors[T], x, y int) error {
 	values := collectMedianValues(group)
-	compare := func(a, b T) int {
-		result := compareOrderedPercentileValue(a, b)
-		if exec.descending {
-			return -result
-		}
-		return result
+	selectors, err := sortOrderedPercentileValues(exec.mp, exec.argType, values, exec.descending)
+	if err != nil {
+		return err
 	}
-	sort.Slice(values, func(i, j int) bool { return compare(values[i], values[j]) < 0 })
 
 	lo, hi, frac := orderedPercentileRanks(uint64(len(values)), exec.percentile, exec.mode)
 	if exec.mode == orderedPercentileDiscrete {
-		return exec.setDiscreteResult(values[int(lo)], x, y)
+		return exec.setDiscreteResult(values[int(selectors[lo])], x, y)
 	}
-	return exec.setContinuousResult(values[int(lo)], values[int(hi)], frac, x, y)
+	return exec.setContinuousResult(values[int(selectors[lo])], values[int(selectors[hi])], frac, x, y)
+}
+
+// sortOrderedPercentileValues uses the same selector/vector sorter as the
+// query ORDER BY operator and ordered GROUP_CONCAT. The aggregate stores its
+// values in chunked Vectors, so flatten them into one temporary vector before
+// sorting; selectors still refer to the original values slice, avoiding a
+// second reordered copy.
+func sortOrderedPercentileValues[T numeric | types.Decimal64 | types.Decimal128](
+	mp *mpool.MPool, typ types.Type, values []T, descending bool,
+) ([]int64, error) {
+	selectors := make([]int64, len(values))
+	for i := range selectors {
+		selectors[i] = int64(i)
+	}
+	if len(values) < 2 {
+		return selectors, nil
+	}
+
+	orderVector := vector.NewOffHeapVecWithType(typ)
+	defer orderVector.Free(mp)
+	if err := vector.AppendFixedList(orderVector, values, nil, mp); err != nil {
+		return nil, err
+	}
+	mosort.SortByVectors(
+		selectors,
+		[]*vector.Vector{orderVector},
+		[]bool{descending},
+		[]bool{false}, // percentile aggregation removes NULLs before sorting.
+	)
+	return selectors, nil
 }
 
 func (exec *orderedPercentileExec[T, R]) setDiscreteResult(value T, x, y int) error {
@@ -335,36 +361,5 @@ func makeOrderedPercentileExec(mp *mpool.MPool, aggID int64, isDistinct bool, pa
 		return newOrderedPercentileExec[types.Decimal128, types.Decimal128](mp, info, mode, types.Decimal128{}), nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("unsupported type for ordered percentile")
-	}
-}
-
-func compareOrderedPercentileValue[T numeric | types.Decimal64 | types.Decimal128](a, b T) int {
-	switch av := any(a).(type) {
-	case int8:
-		return orderedCompare(av, any(b).(int8))
-	case int16:
-		return orderedCompare(av, any(b).(int16))
-	case int32:
-		return orderedCompare(av, any(b).(int32))
-	case int64:
-		return orderedCompare(av, any(b).(int64))
-	case uint8:
-		return orderedCompare(av, any(b).(uint8))
-	case uint16:
-		return orderedCompare(av, any(b).(uint16))
-	case uint32:
-		return orderedCompare(av, any(b).(uint32))
-	case uint64:
-		return orderedCompare(av, any(b).(uint64))
-	case float32:
-		return orderedCompare(av, any(b).(float32))
-	case float64:
-		return orderedCompare(av, any(b).(float64))
-	case types.Decimal64:
-		return av.Compare(any(b).(types.Decimal64))
-	case types.Decimal128:
-		return av.Compare(any(b).(types.Decimal128))
-	default:
-		panic("unsupported ordered percentile type")
 	}
 }
