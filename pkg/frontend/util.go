@@ -2137,7 +2137,7 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	if err = setMysqlColumnTypeInfo(ctx, typ, c); err != nil {
 		return nil, err
 	}
-	setColFlag(c)
+	setColFlag(c, col)
 
 	// For TIMESTAMPADD function compatibility with MySQL:
 	// GetResultColumnsFromPlan sets the return type based on input type and unit:

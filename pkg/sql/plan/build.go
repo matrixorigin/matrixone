@@ -18,6 +18,7 @@ import (
 	"context"
 	"reflect"
 	gotrace "runtime/trace"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -776,6 +777,14 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 				}
 			}
 
+			if source := findResultColumnSource(query, query.Steps[step], expr); source != nil {
+				columns[idx].Primary = source.primary
+				columns[idx].Unique = source.unique
+				columns[idx].NotNull = source.notNull
+				columns[idx].Typ.NotNullable = columns[idx].Typ.NotNullable || source.notNull
+				columns[idx].Typ.AutoIncr = columns[idx].Typ.AutoIncr || source.autoIncr
+			}
+
 		}
 
 		return columns
@@ -820,4 +829,188 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 		}
 	}
 	return nil
+}
+
+type resultColumnSource struct {
+	primary  bool
+	unique   bool
+	notNull  bool
+	autoIncr bool
+}
+
+// findResultColumnSource follows a result projection through the transparent
+// plan nodes until it reaches the table column that produced it. Expressions
+// such as arithmetic, aggregation, and DISTINCT intentionally do not produce
+// source metadata: marking those outputs as key columns would be less
+// compatible than leaving the flags unset.
+func findResultColumnSource(query *plan.Query, nodeID int32, expr *plan.Expr) *resultColumnSource {
+	if query == nil || expr == nil || expr.GetCol() == nil {
+		return nil
+	}
+	return findResultColumnSourceAtNode(query, nodeID, expr.GetCol(), make(map[int32]bool))
+}
+
+func findResultColumnSourceAtNode(
+	query *plan.Query,
+	nodeID int32,
+	ref *plan.ColRef,
+	visited map[int32]bool,
+) *resultColumnSource {
+	if query == nil || ref == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
+		return nil
+	}
+	visited[nodeID] = true
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return nil
+	}
+
+	if node.TableDef != nil && isResultColumnSourceNode(node.NodeType) {
+		if len(node.ProjectList) > 0 {
+			if sourceExpr := resultColumnProjectionAtNode(node, ref); sourceExpr != nil {
+				if sourceRef := sourceExpr.GetCol(); sourceRef != nil {
+					return resultColumnSourceFromTableDef(node.TableDef, sourceRef.ColPos)
+				}
+			}
+			return nil
+		}
+		if source := resultColumnSourceFromTableDef(node.TableDef, ref.ColPos); source != nil {
+			return source
+		}
+	}
+
+	if !isResultColumnTransparentNode(node.NodeType) || len(node.Children) == 0 {
+		return nil
+	}
+
+	projected := resultColumnProjectionAtNode(node, ref)
+	if projected == nil {
+		return nil
+	}
+	projectedRef := projected.GetCol()
+	if projectedRef == nil {
+		return nil
+	}
+
+	var found *resultColumnSource
+	for _, childID := range node.Children {
+		candidate := findResultColumnSourceAtNode(query, childID, projectedRef, cloneVisitedResultColumnNodes(visited))
+		if candidate == nil {
+			continue
+		}
+		if found != nil && *found != *candidate {
+			// The reference is ambiguous across children. Do not claim a key
+			// flag when the plan no longer identifies one source column.
+			return nil
+		}
+		found = candidate
+	}
+	return found
+}
+
+func cloneVisitedResultColumnNodes(visited map[int32]bool) map[int32]bool {
+	clone := make(map[int32]bool, len(visited)+1)
+	for nodeID, seen := range visited {
+		clone[nodeID] = seen
+	}
+	return clone
+}
+
+func resultColumnProjectionAtNode(node *plan.Node, ref *plan.ColRef) *plan.Expr {
+	if node == nil || ref == nil {
+		return nil
+	}
+	if ref.ColPos >= 0 && int(ref.ColPos) < len(node.ProjectList) {
+		return node.ProjectList[ref.ColPos]
+	}
+	for _, expr := range node.ProjectList {
+		col := expr.GetCol()
+		if col == nil {
+			continue
+		}
+		if resultColumnRefsMatch(ref, col) {
+			return expr
+		}
+	}
+	return nil
+}
+
+func resultColumnRefsMatch(left, right *plan.ColRef) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	if left.Name != "" && right.Name != "" && strings.EqualFold(left.Name, right.Name) {
+		return true
+	}
+	if left.TblName != "" && right.TblName != "" &&
+		strings.EqualFold(left.TblName, right.TblName) &&
+		(left.Name == "" || right.Name == "" || strings.EqualFold(left.Name, right.Name)) {
+		return true
+	}
+	return left.RelPos == right.RelPos && left.ColPos == right.ColPos
+}
+
+func isResultColumnSourceNode(nodeType plan.Node_NodeType) bool {
+	switch nodeType {
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_FUNCTION_SCAN:
+		return true
+	default:
+		return false
+	}
+}
+
+func isResultColumnTransparentNode(nodeType plan.Node_NodeType) bool {
+	switch nodeType {
+	case plan.Node_PROJECT,
+		plan.Node_FILTER,
+		plan.Node_SORT,
+		plan.Node_SAMPLE,
+		plan.Node_MATERIAL,
+		plan.Node_PARTITION,
+		plan.Node_GATHER:
+		return true
+	default:
+		return false
+	}
+}
+
+func resultColumnSourceFromTableDef(tableDef *plan.TableDef, colPos int32) *resultColumnSource {
+	if tableDef == nil || colPos < 0 || int(colPos) >= len(tableDef.Cols) {
+		return nil
+	}
+	col := tableDef.Cols[colPos]
+	if col == nil {
+		return nil
+	}
+	primary := col.Primary
+	if !primary && tableDef.Pkey != nil {
+		primary = resultColumnNameInList(tableDef.Pkey.Names, col.Name)
+	}
+	unique := col.Unique && !primary
+	if !primary && !unique {
+		for _, index := range tableDef.Indexes {
+			if index == nil || !index.Unique {
+				continue
+			}
+			if resultColumnNameInList(index.Parts, col.Name) {
+				unique = true
+				break
+			}
+		}
+	}
+	return &resultColumnSource{
+		primary:  primary,
+		unique:   unique,
+		notNull:  primary || col.NotNull || col.Typ.NotNullable,
+		autoIncr: col.Typ.AutoIncr,
+	}
+}
+
+func resultColumnNameInList(names []string, name string) bool {
+	for _, candidate := range names {
+		if strings.EqualFold(candidate, name) {
+			return true
+		}
+	}
+	return false
 }
