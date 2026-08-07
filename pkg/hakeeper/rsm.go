@@ -518,6 +518,15 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 			if hasEquivalentScheduleCommand(l.Commands, c) {
 				continue
 			}
+			if commands, replaced := replacePendingJoinGossipCommand(l.Commands, c); replaced {
+				// A changed peer set is a retry of the same join operation, not a
+				// second operation. Keep the newest addresses so a stale seed list
+				// cannot consume the batch before the useful retry runs.
+				l.Commands = commands
+				l.BatchID = s.state.Index
+				s.state.ScheduleCommands[c.UUID] = l
+				continue
+			}
 			// The operator controller dispatches a newly generated command once.
 			// Dropping it merely because this UUID still has an unacknowledged
 			// batch would lose that command forever. Roll the old and new commands
@@ -545,6 +554,31 @@ func hasEquivalentScheduleCommand(commands []pb.ScheduleCommand, candidate pb.Sc
 		}
 	}
 	return false
+}
+
+func replacePendingJoinGossipCommand(
+	commands []pb.ScheduleCommand,
+	candidate pb.ScheduleCommand,
+) ([]pb.ScheduleCommand, bool) {
+	if candidate.JoinGossipCluster == nil {
+		return commands, false
+	}
+	result := make([]pb.ScheduleCommand, 0, len(commands))
+	replaced := false
+	for _, command := range commands {
+		if command.UUID == candidate.UUID &&
+			command.Bootstrapping == candidate.Bootstrapping &&
+			command.ServiceType == candidate.ServiceType &&
+			command.JoinGossipCluster != nil {
+			if !replaced {
+				result = append(result, candidate)
+				replaced = true
+			}
+			continue
+		}
+		result = append(result, command)
+	}
+	return result, replaced
 }
 
 func scheduleCommandsEqual(left, right pb.ScheduleCommand) bool {

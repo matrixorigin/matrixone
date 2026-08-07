@@ -1295,6 +1295,25 @@ func TestPendingScheduleCommandsDeduplicateRetries(t *testing.T) {
 		"a semantically identical retry must retain the current generation")
 	require.Equal(t, []pb.ScheduleCommand{task, join}, batch.Commands)
 
+	// A changed peer set is still the same join operation. Replace the stale
+	// seed list instead of retaining both commands (the handler marks itself
+	// joined before the asynchronous join, so running the stale command first
+	// could otherwise suppress the useful retry).
+	updatedJoin := join
+	updatedJoin.JoinGossipCluster = &pb.JoinGossipCluster{
+		Existing: []string{"cn-2", "cn-4"},
+	}
+	_, err = rsm.Update(sm.Entry{
+		Index: 15,
+		Cmd:   GetUpdateCommandsCmd(15, []pb.ScheduleCommand{updatedJoin}),
+	})
+	require.NoError(t, err)
+	value, err = rsm.Lookup(&ScheduleCommandQuery{UUID: task.UUID})
+	require.NoError(t, err)
+	batch = value.(*pb.CommandBatch)
+	require.Equal(t, uint64(15), batch.BatchID)
+	require.Equal(t, []pb.ScheduleCommand{task, updatedJoin}, batch.Commands)
+
 	// Replica IDs are allocated afresh by the checker when a target remains
 	// silent, but these are retries of one logical start operation. Coalesce
 	// them by shard/change type so the durable batch cannot grow forever.
