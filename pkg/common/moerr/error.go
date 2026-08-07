@@ -182,6 +182,7 @@ const (
 	ErrTableMustHaveAVisibleColumn              uint16 = 20474
 	ErrKeyDoesNotExist                          uint16 = 20475
 	ErrMaxPreparedStmtCountReached              uint16 = 20476
+	ErrWrongNumberOfColumnsInSelect             uint16 = 20477
 
 	// Group 5: rpc errors
 	//
@@ -433,6 +434,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrWindowInvalidUse:     {ER_WINDOW_INVALID_WINDOW_FUNC_USE, []string{"HY000"}, "You cannot use the window function '%s' in this context"},
 	ErrViewSelectTmpTable:   {ER_VIEW_SELECT_TMPTABLE, []string{MySQLDefaultSqlState}, "View's SELECT refers to a temporary table '%-.192s'"},
 	ErrTooManyRows:          {ER_TOO_MANY_ROWS, []string{"42000"}, "Result consisted of more than one row"},
+	ErrWrongNumberOfColumnsInSelect: {ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT, []string{"21000"},
+		"The used SELECT statements have a different number of columns"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -1533,6 +1536,10 @@ func NewErrSubqueryNo1Row(ctx context.Context) *Error {
 
 func NewTooManyRows(ctx context.Context) *Error {
 	return newError(ctx, ErrTooManyRows)
+}
+
+func NewWrongNumberOfColumnsInSelect(ctx context.Context) *Error {
+	return newError(ctx, ErrWrongNumberOfColumnsInSelect)
 }
 
 func NewDerivedMustHaveAlias(ctx context.Context) *Error {

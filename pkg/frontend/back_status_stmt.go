@@ -17,6 +17,8 @@ package frontend
 import (
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
@@ -30,10 +32,27 @@ func executeStatusStmtInBack(backSes *backSession,
 	if err != nil {
 		return err
 	}
+	intoVars := 0
+	if st, ok := execCtx.stmt.(*tree.Select); ok {
+		intoVars = len(st.IntoVars)
+	}
+	if intoVars > 0 {
+		if err = validateSelectIntoArity(execCtx.reqCtx, execCtx.cw.Plan(), intoVars); err != nil {
+			return
+		}
+	}
 
 	runBegin := time.Now()
 	if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 		return
+	}
+	if intoVars > 0 {
+		if execCtx.selectInto == nil {
+			return moerr.NewInternalError(execCtx.reqCtx, "SELECT INTO user-variable collector is not initialized")
+		}
+		if err = execCtx.selectInto.apply(execCtx.reqCtx, backSes, execCtx.sqlOfStmt); err != nil {
+			return
+		}
 	}
 	if isPerformStatement(execCtx.stmt) && execCtx.runResult != nil {
 		execCtx.runResult.AffectRows = 0

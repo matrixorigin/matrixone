@@ -68,6 +68,9 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 		if len(st.IntoVars) > 0 {
+			if err = validateSelectIntoArity(execCtx.reqCtx, execCtx.cw.Plan(), len(st.IntoVars)); err != nil {
+				return
+			}
 			runBegin := time.Now()
 			if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 				return

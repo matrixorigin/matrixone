@@ -231,6 +231,21 @@ func TestErrTooManyRowsContract(t *testing.T) {
 	require.Equal(t, err, decoded)
 }
 
+func TestErrWrongNumberOfColumnsInSelectContract(t *testing.T) {
+	err := NewWrongNumberOfColumnsInSelect(context.Background())
+	require.Equal(t, ErrWrongNumberOfColumnsInSelect, err.ErrorCode())
+	require.Equal(t, ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT, err.MySQLCode())
+	require.Equal(t, "21000", err.SqlState())
+	require.Equal(t, "The used SELECT statements have a different number of columns", err.Error())
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
+}
+
 type fakeErr struct {
 }
 

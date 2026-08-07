@@ -42,12 +42,36 @@ set @keep = 'old';
 select v from uv_src where id = 100 into @keep;
 select @keep;
 
+-- Column/user-variable arity is checked even when the result has zero rows.
+set @arity_a = 'old_a', @arity_b = 'old_b';
+-- @regex("The used SELECT statements have a different number of columns", true)
+select 1 where false into @arity_a, @arity_b;
+select @arity_a, @arity_b;
+
 -- Aggregates over empty input still produce one row and assign that value.
 select count(*) from uv_src where id = 100 into @empty_count;
 select @empty_count;
 
+-- SELECT ... INTO inside a stored procedure uses the background execution path.
+drop procedure if exists p_select_into_user_var;
+set @proc_out = 'old';
+create procedure p_select_into_user_var() 'begin select 123 into @proc_out; end';
+call p_select_into_user_var();
+select @proc_out;
+drop procedure p_select_into_user_var;
+
+-- Binary-string metadata is preserved for EXECUTE ... USING.
+create table uv_bin(id int primary key, b binary(4), key idx_b(b));
+insert into uv_bin values (1, x'41420000'), (2, x'41420020');
+select x'41420000' into @binary_value;
+prepare ps_bin from 'select id from uv_bin where b = ? order by id';
+execute ps_bin using @binary_value;
+deallocate prepare ps_bin;
+
 -- MySQL rejects SELECT ... INTO @var when more than one row is returned.
+set @too_many = 'old';
 -- @regex("Result consisted of more than one row", true)
 select id from uv_src into @too_many;
+select @too_many;
 
 drop database mysql_compat_user_variables;
