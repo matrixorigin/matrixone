@@ -1797,13 +1797,14 @@ func Test_setMysqlColumnTypeMetadataDecimalLength(t *testing.T) {
 	}
 }
 
-func TestColDef2MysqlColumnStringLengthMetadata(t *testing.T) {
+func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 	cases := []struct {
 		name      string
 		typ       types.Type
 		mysqlType defines.MysqlType
 		charset   uint16
 		length    uint32
+		flags     uint16
 	}{
 		{
 			name:      "varchar length is encoded in utf8mb3 bytes",
@@ -1832,6 +1833,7 @@ func TestColDef2MysqlColumnStringLengthMetadata(t *testing.T) {
 			mysqlType: defines.MYSQL_TYPE_VARCHAR,
 			charset:   charsetBinary,
 			length:    128,
+			flags:     uint16(defines.BINARY_FLAG),
 		},
 		{
 			name:      "binary length stays in bytes",
@@ -1839,6 +1841,7 @@ func TestColDef2MysqlColumnStringLengthMetadata(t *testing.T) {
 			mysqlType: defines.MYSQL_TYPE_VARCHAR,
 			charset:   charsetBinary,
 			length:    128,
+			flags:     uint16(defines.BINARY_FLAG),
 		},
 		{
 			name:      "unknown varchar width stays unbounded",
@@ -1867,6 +1870,7 @@ func TestColDef2MysqlColumnStringLengthMetadata(t *testing.T) {
 			mysqlType: defines.MYSQL_TYPE_VARCHAR,
 			charset:   charsetBinary,
 			length:    math.MaxUint32,
+			flags:     uint16(defines.BINARY_FLAG),
 		},
 		{
 			name:      "zero varbinary width stays zero",
@@ -1874,6 +1878,7 @@ func TestColDef2MysqlColumnStringLengthMetadata(t *testing.T) {
 			mysqlType: defines.MYSQL_TYPE_VARCHAR,
 			charset:   charsetBinary,
 			length:    0,
+			flags:     uint16(defines.BINARY_FLAG),
 		},
 	}
 
@@ -1891,6 +1896,7 @@ func TestColDef2MysqlColumnStringLengthMetadata(t *testing.T) {
 			require.Equal(t, tt.mysqlType, col.ColumnType())
 			require.Equal(t, tt.charset, col.Charset())
 			require.Equal(t, tt.length, col.Length())
+			require.Equal(t, tt.flags, col.Flag())
 
 			proto := &MysqlProtocolImpl{io: NewIOPackage(true)}
 			packet := proto.makeColumnDefinition41Payload(col, int(COM_QUERY))
@@ -1906,9 +1912,15 @@ func TestColDef2MysqlColumnStringLengthMetadata(t *testing.T) {
 			packetCharset, next, ok := proto.io.ReadUint16(packet, next)
 			require.True(t, ok)
 			require.Equal(t, tt.charset, packetCharset)
-			packetLength, _, ok := proto.io.ReadUint32(packet, next)
+			packetLength, next, ok := proto.io.ReadUint32(packet, next)
 			require.True(t, ok)
 			require.Equal(t, tt.length, packetLength)
+			packetType, next, ok := proto.io.ReadUint8(packet, next)
+			require.True(t, ok)
+			require.Equal(t, uint8(tt.mysqlType), packetType)
+			packetFlags, _, ok := proto.io.ReadUint16(packet, next)
+			require.True(t, ok)
+			require.Equal(t, tt.flags, packetFlags)
 		})
 	}
 }
