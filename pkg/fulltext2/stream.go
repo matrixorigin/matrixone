@@ -31,34 +31,63 @@ const streamBatch = 8192
 // WITHOUT materializing them all and WITHOUT boxing a pk per doc. On an emit error it
 // records it and stops (the walk checks stopped and bails).
 type streamSink struct {
-	emit        func(keys *vectorindex.ColumnBuffer, distances []float64, includes [][]any) error
-	keys        *vectorindex.ColumnBuffer // pooled; nil until the first push after a flush
-	pkType      types.T
-	scores      []float64
-	includes    [][]any // parallel to keys/scores when wantInclude; each entry = a doc's full include slice (segment order)
-	fixedW      int     // fixed pk width; 0 ⇒ varlena
-	err         error
-	stopped     bool
-	wantInclude bool // covered fast path: also carry each doc's INCLUDE values through emit
+	emit   func(keys *vectorindex.ColumnBuffer, distances []float64, includes []*vectorindex.ColumnBuffer) error
+	keys   *vectorindex.ColumnBuffer // pooled; nil until the first push after a flush
+	pkType types.T
+	scores []float64
+	// includeCols is COLUMN-MAJOR: one nullable ColumnBuffer per FULL index INCLUDE column
+	// (segment-include order), each covering the whole batch — the box-free analogue of the
+	// old per-row [][]any. nil until the first push after a flush; len == len(includeTypes)
+	// when wantInclude. Not pooled (per-batch, potentially varied types); the consumer copies
+	// each out via AppendColumnBuffer and drops it.
+	includeCols  []*vectorindex.ColumnBuffer
+	includeTypes []int32 // FULL index INCLUDE column types (drives includeCols alloc)
+	fixedW       int     // fixed pk width; 0 ⇒ varlena
+	err          error
+	stopped      bool
+	wantInclude  bool // covered fast path: also carry each doc's INCLUDE values through emit
 }
 
 // newStreamSink resolves the index's pk type (all segments share it). The batch buffer
 // itself is fetched from the pool lazily on the first push. Callers create it only after
 // the globalN==0 early-out, so segments is non-empty. wantInclude turns on the covered
-// fast path: each pushed doc also carries its decoded INCLUDE values through emit.
-func newStreamSink(idx *Index, wantInclude bool, emit func(keys *vectorindex.ColumnBuffer, distances []float64, includes [][]any) error) *streamSink {
+// fast path: each pushed doc also carries its INCLUDE values (box-free) through emit.
+func newStreamSink(idx *Index, wantInclude bool, emit func(keys *vectorindex.ColumnBuffer, distances []float64, includes []*vectorindex.ColumnBuffer) error) *streamSink {
 	pkType := idx.segments[0].PkType
 	w, fixed := fixedPkByteWidth(pkType)
 	if !fixed {
 		w = 0
 	}
-	return &streamSink{emit: emit, pkType: types.T(pkType), fixedW: w, wantInclude: wantInclude}
+	s := &streamSink{emit: emit, pkType: types.T(pkType), fixedW: w, wantInclude: wantInclude}
+	if wantInclude {
+		s.includeTypes = idx.segments[0].includeTypes
+	}
+	return s
 }
 
-// ensure lazily fetches a pooled batch buffer of the sink's pk type.
+// ensure lazily fetches a pooled batch buffer of the sink's pk type, and (when the covered
+// path is on) allocates one typed, nullable ColumnBuffer per FULL INCLUDE column.
 func (s *streamSink) ensure() {
 	if s.keys == nil {
 		s.keys = GetColumnBuffer(s.pkType)
+	}
+	if s.wantInclude && s.includeCols == nil {
+		s.includeCols = make([]*vectorindex.ColumnBuffer, len(s.includeTypes))
+		for c, t := range s.includeTypes {
+			s.includeCols[c] = &vectorindex.ColumnBuffer{Type: types.T(t)}
+		}
+	}
+}
+
+// appendIncludes appends doc (seg, ord)'s INCLUDE values to the per-column buffers box-free.
+// On a malformed segment it records the error and stops the sink so no torn batch is emitted.
+func (s *streamSink) appendIncludes(seg *Segment, ord int64) {
+	for c := range s.includeCols {
+		if err := seg.appendIncludeTo(s.includeCols[c], c, ord); err != nil {
+			s.err = err
+			s.stopped = true
+			return
+		}
 	}
 }
 
@@ -72,9 +101,10 @@ func (s *streamSink) pushPk(seg *Segment, ord int64, score float32) {
 	seg.appendPkTo(s.keys, s.fixedW, ord)
 	s.scores = append(s.scores, float64(score))
 	if s.wantInclude {
-		// decodeInclude returns the doc's full INCLUDE slice in segment/index order —
-		// the SAME order heapToResults / search use, so the consumer maps by position.
-		s.includes = append(s.includes, seg.decodeInclude(ord))
+		s.appendIncludes(seg, ord)
+		if s.stopped {
+			return
+		}
 	}
 	if s.keys.N >= streamBatch {
 		s.flush()
@@ -83,8 +113,8 @@ func (s *streamSink) pushPk(seg *Segment, ord int64, score float32) {
 
 // pushAny appends an already-boxed pk (the materialized-fallback path: NL phrase / full
 // boolean) by re-encoding its concrete value into ColumnBuffer.Data — no NEW box. When the
-// covered fast path is on, inc is the doc's decoded INCLUDE slice (nil otherwise).
-func (s *streamSink) pushAny(pk any, score float32, inc []any) {
+// covered fast path is on, the INCLUDE values are pulled box-free from (seg, ord).
+func (s *streamSink) pushAny(seg *Segment, ord int64, pk any, score float32) {
 	if s.stopped {
 		return
 	}
@@ -92,7 +122,10 @@ func (s *streamSink) pushAny(pk any, score float32, inc []any) {
 	appendAnyPk(s.keys, s.fixedW, pk)
 	s.scores = append(s.scores, float64(score))
 	if s.wantInclude {
-		s.includes = append(s.includes, inc)
+		s.appendIncludes(seg, ord)
+		if s.stopped {
+			return
+		}
 	}
 	if s.keys.N >= streamBatch {
 		s.flush()
@@ -103,19 +136,20 @@ func (s *streamSink) flush() {
 	if s.stopped || s.keys == nil || s.keys.N == 0 {
 		return
 	}
-	if e := s.emit(s.keys, s.scores, s.includes); e != nil {
+	if e := s.emit(s.keys, s.scores, s.includeCols); e != nil {
 		s.err = e
 		s.stopped = true
 		PutColumnBuffer(s.keys) // emit didn't hand it off; recycle here
 		s.keys = nil
-		s.includes = nil
+		s.includeCols = nil
 		return
 	}
-	// Ownership of this batch passes to the consumer, which PutColumnBuffers it back once
-	// it has copied Data out; the sink lazily Gets a fresh one on the next push.
+	// Ownership of this batch passes to the consumer, which PutColumnBuffers the pk buffer
+	// back once it has copied Data out (the include buffers are not pooled, just dropped);
+	// the sink lazily Gets fresh ones on the next push.
 	s.keys = nil
 	s.scores = nil
-	s.includes = nil
+	s.includeCols = nil
 }
 
 // appendPkTo decodes the pk at ord from seg's docmap into k.Data with no boxing: a
@@ -185,7 +219,7 @@ func (s *Segment) streamWAND(clauses []clause, algo ScoreAlgo, gs *globalStats, 
 // streamPhrase; and a full boolean with MUST/MUST-NOT/mixed-phrase via streamBoolean
 // (each segment's dense evalBoolean, freed before the next). All share the same sink — a
 // uniform emit interface, and no separate paginated copy in the caller.
-func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo ScoreAlgo, filter *prefilter, wantInclude bool, emit func(keys *vectorindex.ColumnBuffer, distances []float64, includes [][]any) error) error {
+func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo ScoreAlgo, filter *prefilter, wantInclude bool, emit func(keys *vectorindex.ColumnBuffer, distances []float64, includes []*vectorindex.ColumnBuffer) error) error {
 	if idx.globalN == 0 {
 		return nil
 	}
@@ -265,11 +299,7 @@ func (idx *Index) streamPhrase(slots []phraseSlot, algo ScoreAlgo, filter *prefi
 			}
 			if allowed(allow, h.ord) {
 				partial := seg.scoreTerm(algo, float64(h.tf), 1.0, h.ord, idx.globalAvgDocLen)
-				var inc []any
-				if sink.wantInclude {
-					inc = seg.decodeInclude(h.ord)
-				}
-				sink.pushAny(seg.pk(h.ord), partial*idf2, inc)
+				sink.pushAny(seg, h.ord, seg.pk(h.ord), partial*idf2)
 				if sink.err != nil {
 					return sink.err
 				}
@@ -285,7 +315,7 @@ func (idx *Index) streamPhrase(slots []phraseSlot, algo ScoreAlgo, filter *prefi
 // heap-free via streamWAND — the position-free analogue of StreamQuery's disjunctive
 // branch, but a CJK run is tokenized to OR terms instead of a positional phrase, so it
 // works on a POSITION_FREE index.
-func (idx *Index) StreamBagOfWords(pattern []byte, parser string, algo ScoreAlgo, filter *prefilter, wantInclude bool, emit func(keys *vectorindex.ColumnBuffer, distances []float64, includes [][]any) error) error {
+func (idx *Index) StreamBagOfWords(pattern []byte, parser string, algo ScoreAlgo, filter *prefilter, wantInclude bool, emit func(keys *vectorindex.ColumnBuffer, distances []float64, includes []*vectorindex.ColumnBuffer) error) error {
 	if idx.globalN == 0 {
 		return nil
 	}

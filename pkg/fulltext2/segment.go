@@ -18,6 +18,9 @@ import (
 	"encoding/binary"
 	"os"
 	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
 const (
@@ -444,11 +447,65 @@ func (s *Segment) decodeInclude(ord int64) []any {
 	return out
 }
 
+// includeRawAt locates INCLUDE column col at ord in a LOADED segment (includeVals == nil)
+// and returns the raw value bytes — for a FIXED column the width bytes, for a VARLENA
+// column the content WITHOUT its [nullFlag][u32 len] prefix — whether the value is SQL NULL,
+// and an error. It is the single decode primitive shared by includeVal (which then decodePk's
+// the bytes) and appendIncludeTo (which copies them box-free).
+//
+// Belt-and-suspenders bounds (F3): every computed offset into includeRaw / includeVarOffsets
+// is validated against the slice length, and a malformed/out-of-range segment returns an
+// error rather than panicking on an out-of-range slice. Callers must pass col in [0,nIncl);
+// includeRawAt still re-checks it defensively. The returned byte slice aliases includeRaw
+// (mmap-backed on a loaded base segment) — the caller must copy before the segment is freed.
+func (s *Segment) includeRawAt(ord int64, col int) (content []byte, isNull bool, err error) {
+	if col < 0 || col >= len(s.includeTypes) || ord < 0 {
+		return nil, false, moerr.NewInternalErrorNoCtxf("fulltext2: include access out of range (ord=%d col=%d)", ord, col)
+	}
+	lay := &s.includeLay
+	n := len(s.includeRaw)
+	if fi := lay.fixedIdx[col]; fi >= 0 {
+		// FIXED region: value at a stride-computed position, NULL via the per-row bitmask.
+		rowBase := s.includeFixedStart + int(ord)*lay.fixedStride
+		if rowBase < 0 || rowBase+lay.fixedStride > n {
+			return nil, false, moerr.NewInternalErrorNoCtxf("fulltext2: include fixed row out of range (ord=%d col=%d)", ord, col)
+		}
+		if s.includeRaw[rowBase+fi/8]&(1<<(uint(fi)&7)) != 0 {
+			return nil, true, nil
+		}
+		valOff := rowBase + lay.maskBytes + lay.fixedValOff[col]
+		w := lay.fixedWidth[col]
+		if valOff < 0 || valOff+w > n { // within rowBase+fixedStride, but re-check the exact span
+			return nil, false, moerr.NewInternalErrorNoCtxf("fulltext2: include fixed value out of range (ord=%d col=%d)", ord, col)
+		}
+		return s.includeRaw[valOff : valOff+w], false, nil
+	}
+	// VARLENA region: offset-addressed [nullFlag][u32 len][content].
+	oi := int(ord)*lay.nVarlena + lay.varlenaIdx[col]
+	if oi < 0 || oi >= len(s.includeVarOffsets) {
+		return nil, false, moerr.NewInternalErrorNoCtxf("fulltext2: include varlena offset out of range (ord=%d col=%d)", ord, col)
+	}
+	off := int(s.includeVarOffsets[oi])
+	if off < 0 || off >= n {
+		return nil, false, moerr.NewInternalErrorNoCtxf("fulltext2: include varlena entry out of range (ord=%d col=%d)", ord, col)
+	}
+	if s.includeRaw[off] == includeNull {
+		return nil, true, nil
+	}
+	if off+5 > n { // [nullFlag(1)][u32 len(4)]
+		return nil, false, moerr.NewInternalErrorNoCtxf("fulltext2: include varlena header out of range (ord=%d col=%d)", ord, col)
+	}
+	l := int(binary.LittleEndian.Uint32(s.includeRaw[off+1:]))
+	if l < 0 || off+5+l > n {
+		return nil, false, moerr.NewInternalErrorNoCtxf("fulltext2: include varlena content out of range (ord=%d col=%d)", ord, col)
+	}
+	return s.includeRaw[off+5 : off+5+l], false, nil
+}
+
 // includeVal returns the value of INCLUDE column col at ord and whether it is SQL NULL.
-// Build-side reads the resident includeVals; a loaded segment decodes on demand: a FIXED
-// (integer) column from the dense stride-addressed region (no offset — computed position + a
-// NULL bitmask), a VARLENA column from includeVarOffsets (a [nullFlag][u32 len][content]
-// entry). Returns (nil, true, nil) when the segment has no INCLUDE columns.
+// Build-side reads the resident includeVals; a loaded segment decodes on demand via
+// includeRawAt (bounds-checked) + decodePk. Returns (nil, true, nil) when the segment has
+// no INCLUDE columns.
 func (s *Segment) includeVal(ord int64, col int) (any, bool, error) {
 	nIncl := len(s.includeTypes)
 	if nIncl == 0 || col < 0 || col >= nIncl {
@@ -461,31 +518,87 @@ func (s *Segment) includeVal(ord int64, col int) (any, bool, error) {
 		}
 		return v, v == nil, nil
 	}
-	lay := &s.includeLay
-	if fi := lay.fixedIdx[col]; fi >= 0 {
-		// FIXED region: value at a stride-computed position, NULL via the per-row bitmask.
-		rowBase := s.includeFixedStart + int(ord)*lay.fixedStride
-		if s.includeRaw[rowBase+fi/8]&(1<<(uint(fi)&7)) != 0 {
-			return nil, true, nil
-		}
-		valOff := rowBase + lay.maskBytes + lay.fixedValOff[col]
-		v, err := decodePk(s.includeTypes[col], s.includeRaw[valOff:valOff+lay.fixedWidth[col]])
-		if err != nil {
-			return nil, false, err
-		}
-		return v, false, nil
+	content, isNull, err := s.includeRawAt(ord, col)
+	if err != nil || isNull {
+		return nil, isNull, err
 	}
-	// VARLENA region: offset-addressed [nullFlag][u32 len][content].
-	off := int(s.includeVarOffsets[int(ord)*lay.nVarlena+lay.varlenaIdx[col]])
-	if s.includeRaw[off] == includeNull {
-		return nil, true, nil
-	}
-	l := int(binary.LittleEndian.Uint32(s.includeRaw[off+1:]))
-	v, err := decodePk(s.includeTypes[col], s.includeRaw[off+1+4:off+1+4+l])
+	v, err := decodePk(s.includeTypes[col], content)
 	if err != nil {
 		return nil, false, err
 	}
 	return v, false, nil
+}
+
+// appendIncludeTo decodes INCLUDE column col at ord straight into k in the box-free
+// ColumnBuffer form (the mirror of appendPkTo, extended for NULLs): a fixed-width column
+// contributes its width bytes, a varlena column a [u32 len][content] entry, and a NULL is
+// recorded in k.Nulls with a well-formed placeholder (width zero-bytes / [u32 0]) so the
+// Data cursor stays aligned for AppendColumnBuffer. k.Type MUST be col's type. Returns an
+// error only on a malformed/out-of-range segment (includeRawAt bounds); the caller stops
+// the stream so a torn batch is never emitted.
+func (s *Segment) appendIncludeTo(k *vectorindex.ColumnBuffer, col int, ord int64) error {
+	fixedW, fixed := fixedPkByteWidth(int32(k.Type))
+	if s.includeVals != nil { // build-side: re-encode the already-boxed value (no NEW box)
+		var v any
+		if int(ord) < len(s.includeVals) && col >= 0 && col < len(s.includeVals[ord]) {
+			v = s.includeVals[ord][col]
+		}
+		if v == nil {
+			cbAppendNull(k, fixedW, fixed)
+			return nil
+		}
+		content, err := encodePk(int32(k.Type), v)
+		if err != nil {
+			return err
+		}
+		cbAppendVal(k, content, fixedW, fixed)
+		return nil
+	}
+	content, isNull, err := s.includeRawAt(ord, col)
+	if err != nil {
+		return err
+	}
+	if isNull {
+		cbAppendNull(k, fixedW, fixed)
+		return nil
+	}
+	cbAppendVal(k, content, fixedW, fixed)
+	return nil
+}
+
+// cbAppendVal appends a non-NULL value's bytes to a nullable ColumnBuffer: fixed types the
+// content verbatim (exactly fixedW bytes), varlena types a [u32 len][content] entry. It
+// keeps k.Nulls parallel to k.N once Nulls has been materialized (a prior NULL).
+func cbAppendVal(k *vectorindex.ColumnBuffer, content []byte, fixedW int, fixed bool) {
+	if fixed {
+		k.Data = append(k.Data, content...) // exactly fixedW bytes
+	} else {
+		var lp [4]byte
+		binary.LittleEndian.PutUint32(lp[:], uint32(len(content)))
+		k.Data = append(k.Data, lp[:]...)
+		k.Data = append(k.Data, content...)
+	}
+	if k.Nulls != nil {
+		k.Nulls = append(k.Nulls, false)
+	}
+	k.N++
+}
+
+// cbAppendNull appends a SQL-NULL element: a well-formed placeholder in Data (width
+// zero-bytes / a [u32 0] entry) so the Data cursor stays aligned, plus a true flag in
+// k.Nulls (lazily materialized, backfilling the prior all-non-null elements).
+func cbAppendNull(k *vectorindex.ColumnBuffer, fixedW int, fixed bool) {
+	if k.Nulls == nil {
+		k.Nulls = make([]bool, k.N, k.N+1) // backfill prior non-nulls as false
+	}
+	if fixed {
+		k.Data = append(k.Data, make([]byte, fixedW)...)
+	} else {
+		var lp [4]byte // [u32 0]: zero-length content
+		k.Data = append(k.Data, lp[:]...)
+	}
+	k.Nulls = append(k.Nulls, true)
+	k.N++
 }
 
 // Free releases a loaded segment's mmap (and its backing file, if linked). Safe on

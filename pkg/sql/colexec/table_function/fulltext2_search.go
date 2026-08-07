@@ -92,11 +92,12 @@ type ft2IncludeOut struct {
 // ft2StreamBatch is one emitted batch (<= streamBatch rows); the producer hands
 // ownership to the consumer, so the buffers are not reused. keys is a TYPED, box-free
 // ColumnBuffer (fixed-width or varlena) — no per-pk interface allocation. includes, when
-// the covered fast path is on, is one per-doc INCLUDE slice per row (segment order).
+// the covered fast path is on, is COLUMN-MAJOR: one nullable ColumnBuffer per FULL index
+// INCLUDE column (segment order), each covering the whole batch box-free.
 type ft2StreamBatch struct {
 	keys      *vectorindex.ColumnBuffer
 	distances []float64
-	includes  [][]any
+	includes  []*vectorindex.ColumnBuffer
 }
 
 func (u *fulltext2SearchState) end(tf *TableFunction, proc *process.Process) error { return nil }
@@ -171,8 +172,8 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 					return vm.CancelResult, err
 				}
 			}
-			for i := 0; i < b.keys.N; i++ {
-				if u.scoreVecIdx >= 0 {
+			if u.scoreVecIdx >= 0 {
+				for i := 0; i < b.keys.N; i++ {
 					// score is T_float32 (engine computes float64 relevance, narrow on append).
 					// Propagate the append error — else SetRowCount would publish a batch with
 					// fewer scores than keys (a malformed, mismatched-length batch).
@@ -180,15 +181,23 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 						return vm.CancelResult, err
 					}
 				}
-				for _, ic := range u.includeOut {
-					// b.includes[i] is the doc's FULL include slice in segment order; segPos
-					// maps this output col to its segment position. Out-of-range ⇒ SQL NULL.
-					var val any
-					if ic.segPos >= 0 && i < len(b.includes) && ic.segPos < len(b.includes[i]) {
-						val = b.includes[i][ic.segPos]
-					}
-					if err := vector.AppendAny(u.batch.Vecs[ic.vecIdx], val, val == nil, proc.Mp()); err != nil {
+			}
+			// Include columns: bulk box-free. b.includes is column-major (one nullable
+			// ColumnBuffer per FULL include col in segment order); segPos maps this output
+			// col to its segment position, so AppendColumnBuffer copies the whole column in
+			// one pass — no per-row boxing. A segPos out of range (should not happen on the
+			// covered path) fills N SQL NULLs to keep the batch column-aligned.
+			for _, ic := range u.includeOut {
+				vec := u.batch.Vecs[ic.vecIdx]
+				if ic.segPos >= 0 && ic.segPos < len(b.includes) {
+					if err := fulltext2.AppendColumnBuffer(b.includes[ic.segPos], vec, proc.Mp()); err != nil {
 						return vm.CancelResult, err
+					}
+				} else {
+					for i := 0; i < b.keys.N; i++ {
+						if err := vector.AppendAny(vec, nil, true, proc.Mp()); err != nil {
+							return vm.CancelResult, err
+						}
 					}
 				}
 			}
@@ -391,7 +400,7 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 		u.errCh = make(chan error, 1)
 		ctx, cancel := context.WithCancel(proc.Ctx)
 		u.cancel = cancel
-		rt := vectorindex.RuntimeConfig{Emit: func(keys *vectorindex.ColumnBuffer, dists []float64, includes [][]any) error {
+		rt := vectorindex.RuntimeConfig{Emit: func(keys *vectorindex.ColumnBuffer, dists []float64, includes []*vectorindex.ColumnBuffer) error {
 			select {
 			case u.streamCh <- ft2StreamBatch{keys: keys, distances: dists, includes: includes}:
 				return nil

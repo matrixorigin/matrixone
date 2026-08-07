@@ -278,12 +278,14 @@ type RuntimeConfig struct {
 	// (fixed-width or varlena) rather than []any, so a million-row stream does not
 	// allocate a million boxed interfaces.
 	//
-	// includes carries each batch row's per-doc INCLUDE column values (the covered
-	// fast-path side channel): includes[i] is the doc's FULL decoded include slice
-	// in segment-include order, or nil when the caller did not request include
-	// columns (RequestedIncludeColumns empty). The consumer maps the requested
-	// columns to output positions.
-	Emit func(keys *ColumnBuffer, distances []float64, includes [][]any) error
+	// includes carries the batch's INCLUDE column values as the covered fast-path side
+	// channel, in the SAME box-free columnar form as keys: includes[c] is the c-th FULL
+	// index INCLUDE column (segment-include order) as a nullable ColumnBuffer covering the
+	// whole batch, or nil when the caller did not request include columns
+	// (RequestedIncludeColumns empty). Column-major (one buffer per include col, not one
+	// []any per row) so a million-row stream boxes nothing — the consumer bulk-appends each
+	// buffer into its output vector and maps the requested columns to output positions.
+	Emit func(keys *ColumnBuffer, distances []float64, includes []*ColumnBuffer) error
 
 	// Optional raw runtime-filter payload from the build side. IVF search turns
 	// this into either an exact-pk filter or a membership filter for entries.

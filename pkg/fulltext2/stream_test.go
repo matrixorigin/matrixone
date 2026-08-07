@@ -46,7 +46,7 @@ func TestStreamQuery(t *testing.T) {
 	collect := func(pattern string, boolean bool) map[int64]float64 {
 		m := map[int64]float64{}
 		err := split.StreamQuery([]byte(pattern), boolean, ParserDefault, BM25, nil, false,
-			func(keys *vectorindex.ColumnBuffer, dists []float64, _ [][]any) error {
+			func(keys *vectorindex.ColumnBuffer, dists []float64, _ []*vectorindex.ColumnBuffer) error {
 				require.LessOrEqual(t, keys.N, streamBatch)
 				for i, k := range int64ColumnBuffer(keys) {
 					_, dup := m[k]
@@ -77,6 +77,6 @@ func TestStreamQuery(t *testing.T) {
 	// emit-error path: the callback error propagates and stops the walk.
 	sentinel := errors.New("consumer aborted")
 	err := split.StreamQuery([]byte("alpha beta"), true, ParserDefault, BM25, nil, false,
-		func(keys *vectorindex.ColumnBuffer, dists []float64, _ [][]any) error { return sentinel })
+		func(keys *vectorindex.ColumnBuffer, dists []float64, _ []*vectorindex.ColumnBuffer) error { return sentinel })
 	require.ErrorIs(t, err, sentinel)
 }

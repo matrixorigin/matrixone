@@ -32,6 +32,12 @@ type ColumnBuffer struct {
 	Type types.T
 	Data []byte // fixed: N×width bytes; varlena: [u32 len][content] entries
 	N    int    // element count
+	// Nulls is the per-element SQL-NULL flag, used only by NULLABLE columns (fulltext2
+	// INCLUDE cols). It stays nil for pk columns (a pk is never NULL) — a nil Nulls means
+	// "all non-null", so the pk path is unchanged. When non-nil it is kept parallel to N
+	// (len(Nulls) == N): a NULL element still carries a well-formed placeholder in Data (a
+	// zero-filled fixed value / a [u32 0] varlena entry) so the Data cursor stays aligned.
+	Nulls []bool
 }
 
 // Reset clears a ColumnBuffer for reuse without dropping its backing buffer. The
@@ -40,4 +46,7 @@ type ColumnBuffer struct {
 func (k *ColumnBuffer) Reset() {
 	k.Data = k.Data[:0]
 	k.N = 0
+	if k.Nulls != nil {
+		k.Nulls = k.Nulls[:0]
+	}
 }

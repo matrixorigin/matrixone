@@ -49,7 +49,7 @@ func TestStreamPhraseParity(t *testing.T) {
 
 	// streamed (no-LIMIT) — decode the box-free int64 ColumnBuffer batches.
 	got := make(map[int64]float32)
-	emit := func(keys *vectorindex.ColumnBuffer, dists []float64, _ [][]any) error {
+	emit := func(keys *vectorindex.ColumnBuffer, dists []float64, _ []*vectorindex.ColumnBuffer) error {
 		for i := 0; i < keys.N; i++ {
 			pk := int64(binary.LittleEndian.Uint64(keys.Data[i*8:]))
 			got[pk] = float32(dists[i])
@@ -79,7 +79,7 @@ func keysOf(m map[int64]float32) []int64 {
 func streamPhraseIDs(t *testing.T, idx *Index, pattern string) map[int64]float32 {
 	t.Helper()
 	got := make(map[int64]float32)
-	emit := func(keys *vectorindex.ColumnBuffer, dists []float64, _ [][]any) error {
+	emit := func(keys *vectorindex.ColumnBuffer, dists []float64, _ []*vectorindex.ColumnBuffer) error {
 		for i := 0; i < keys.N; i++ {
 			got[int64(binary.LittleEndian.Uint64(keys.Data[i*8:]))] = float32(dists[i])
 		}

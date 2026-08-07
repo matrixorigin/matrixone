@@ -274,6 +274,51 @@ func TestFulltext2SearchCallStreaming(t *testing.T) {
 	}
 }
 
+// TestFulltext2SearchCallStreamingCovered drives the COVERED streaming path: a batch with
+// an extra INCLUDE output vector, whose values arrive column-major (one nullable
+// ColumnBuffer per include col) and are bulk-decoded box-free via AppendColumnBuffer,
+// preserving NULLs. Mirrors what start() builds for `SELECT id, tag ... covered`.
+func TestFulltext2SearchCallStreamingCovered(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	st := &fulltext2SearchState{streaming: true}
+	st.batch = batch.NewWithSize(3)
+	st.batch.Attrs = []string{"doc_id", "score", "tag"}
+	st.batch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	st.batch.Vecs[1] = vector.NewVec(types.T_float32.ToType())
+	st.batch.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+	st.pkVecIdx, st.scoreVecIdx = 0, 1
+	st.includeOut = []ft2IncludeOut{{vecIdx: 2, segPos: 0, name: "tag"}}
+	st.streamCh = make(chan ft2StreamBatch, 4)
+	st.errCh = make(chan error, 1)
+
+	// One include col ("tag" varchar): ["x", NULL] — a well-formed [u32 len][content] entry
+	// plus a [u32 0] placeholder with Nulls[1]=true (the producer's cbAppendNull layout).
+	tag := &vectorindex.ColumnBuffer{Type: types.T_varchar}
+	tag.Data = append(tag.Data, 1, 0, 0, 0, 'x') // len=1, "x"
+	tag.Data = append(tag.Data, 0, 0, 0, 0)      // len=0 (NULL placeholder)
+	tag.N = 2
+	tag.Nulls = []bool{false, true}
+
+	st.streamCh <- ft2StreamBatch{keys: ft2Int64ColumnBuffer(7, 8), distances: []float64{1.5, 2.5}, includes: []*vectorindex.ColumnBuffer{tag}}
+	close(st.streamCh)
+	st.errCh <- nil
+
+	tf := &TableFunction{}
+	res, err := st.call(tf, proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, res.Status)
+	require.Equal(t, 2, res.Batch.RowCount())
+	require.Equal(t, int64(7), vector.GetFixedAtWithTypeCheck[int64](res.Batch.Vecs[0], 0))
+	require.Equal(t, float32(2.5), vector.GetFixedAtWithTypeCheck[float32](res.Batch.Vecs[1], 1))
+	require.Equal(t, "x", res.Batch.Vecs[2].GetStringAt(0))
+	require.False(t, res.Batch.Vecs[2].IsNull(0))
+	require.True(t, res.Batch.Vecs[2].IsNull(1)) // NULL include value surfaces as SQL NULL
+
+	st.free(tf, proc, false, nil)
+}
+
 // TestFulltext2SearchStopStreamDrains verifies stopStream cancels the producer context
 // and drains+recycles any buffered batch (no goroutine/buffer leak).
 func TestFulltext2SearchStopStreamDrains(t *testing.T) {
