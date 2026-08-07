@@ -1912,6 +1912,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		return err
 	}
 	if _, err := tbl.getTxn().writeBatchWithAutoIncrEpoch(
+		ctx,
 		INSERT,
 		"",
 		tbl.accountId,
@@ -2044,6 +2045,12 @@ func (tbl *txnTable) Delete(
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("delete operation is not allowed in snapshot transaction")
 	}
+	if ctx == nil {
+		return moerr.NewInvalidInputNoCtx("disttae table delete context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	var (
 		deletionTyp = bat.Attrs[0]
@@ -2148,12 +2155,12 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 	return nil
 }
 
-func (tbl *txnTable) writeTnPartition(_ context.Context, bat *batch.Batch) error {
+func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) error {
 	ibat, err := util.CopyBatch(bat, tbl.getTxn().proc)
 	if err != nil {
 		return err
 	}
-	if _, err := tbl.getTxn().writeBatchWithAutoIncrEpoch(DELETE, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
+	if _, err := tbl.getTxn().writeBatchWithAutoIncrEpoch(ctx, DELETE, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
 		tbl.db.databaseName, tbl.tableName, ibat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
 		ibat.Clean(tbl.getTxn().proc.Mp())
 		return err
