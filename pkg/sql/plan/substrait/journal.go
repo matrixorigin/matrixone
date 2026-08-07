@@ -137,7 +137,7 @@ func (j *FileServiceLeaseJournal) Load(ctx context.Context, visit func(*Lease) e
 	for _, encoded := range names {
 		name := encoded + ".json"
 		readRef, err := hex.DecodeString(encoded)
-		if err != nil || len(readRef) != 32 {
+		if err != nil || len(readRef) != 32 || hex.EncodeToString(readRef) != encoded {
 			return moerr.NewInternalErrorNoCtxf("substrait: invalid lease journal name %q", name)
 		}
 		b, err := j.read(ctx, path.Join(dir, name))

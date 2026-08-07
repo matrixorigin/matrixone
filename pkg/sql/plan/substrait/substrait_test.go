@@ -21,10 +21,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"path"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -290,6 +293,9 @@ func TestProtocolRejectsMalformedWireShapes(t *testing.T) {
 	read.ExpiresAtUnixMS = now
 	require.ErrorContains(t, read.Validate(now), "expired")
 	read = valid()
+	read.ExpiresAtUnixMS = maxTaeReadExpiryUnixMS + 1
+	require.ErrorContains(t, read.Validate(now), "expired")
+	read = valid()
 	read.CapabilityHash = bytes.Repeat([]byte{9}, sha256.Size)
 	require.ErrorContains(t, read.Validate(now), "capability mismatch")
 
@@ -322,7 +328,13 @@ func TestProtocolRejectsMalformedWireShapes(t *testing.T) {
 	require.Equal(t, []byte("schema"), decoded.RequestedSchema)
 	_, err = UnmarshalResolveRequest(appendBytes(nil, 1, []byte("read")))
 	require.ErrorContains(t, err, "missing protobuf field")
+	oversizedRequest := appendBytes(nil, 1, make([]byte, maxTaeReadSize+1))
+	oversizedRequest = appendBytes(oversizedRequest, 2, []byte("schema"))
+	_, err = UnmarshalResolveRequest(oversizedRequest)
+	require.ErrorContains(t, err, "invalid resolve request")
 	_, err = MarshalResolveResponse(ResolveTaeReadResponse{})
+	require.ErrorContains(t, err, "invalid resolve response")
+	_, err = MarshalResolveResponse(ResolveTaeReadResponse{TaeRead: make([]byte, maxTaeReadSize+1), Manifest: []byte("manifest"), CanonicalSchema: []byte("schema")})
 	require.ErrorContains(t, err, "invalid resolve response")
 	response, err := MarshalResolveResponse(ResolveTaeReadResponse{TaeRead: []byte("read"), Manifest: []byte("manifest"), CanonicalSchema: []byte("schema")})
 	require.NoError(t, err)
@@ -380,15 +392,17 @@ func (f *fakeProvider) PrepareSnapshotRead(context.Context, Read, []byte) (Snaps
 }
 
 type fakeProtector struct {
-	begun, closed, registered, unregistered int
-	active                                  bool
-	fail, failUnregister                    bool
+	begun, closed, registered, rolledBack, unregistered int
+	failRegisterAt                                      int
+	active, fail, failUnregister                        bool
+	sawCleanupDeadline, sawRollbackDeadline             bool
+	unregisterContextErr, rollbackContextErr            error
 }
 
-func (f *fakeProtector) Begin(context.Context) (func(context.Context, []byte, []string, time.Time) error, func(), error) {
+func (f *fakeProtector) Begin(context.Context) (func(context.Context, []byte, []string, time.Time) error, func(context.Context, []byte) error, func(), error) {
 	f.begun++
 	f.active = true
-	return f.Register, func() {
+	return f.Register, f.Rollback, func() {
 		f.closed++
 		f.active = false
 	}, nil
@@ -396,9 +410,16 @@ func (f *fakeProtector) Begin(context.Context) (func(context.Context, []byte, []
 
 func (f *fakeProtector) Register(context.Context, []byte, []string, time.Time) error {
 	f.registered++
-	if f.fail {
+	if f.fail || f.failRegisterAt == f.registered {
 		return context.Canceled
 	}
+	return nil
+}
+
+func (f *fakeProtector) Rollback(ctx context.Context, _ []byte) error {
+	f.rolledBack++
+	_, f.sawRollbackDeadline = ctx.Deadline()
+	f.rollbackContextErr = ctx.Err()
 	return nil
 }
 
@@ -537,8 +558,39 @@ func TestReplayStopsAfterBoundedLiveCapacity(t *testing.T) {
 	require.Zero(t, protector.registered)
 	require.False(t, manager.Ready())
 }
-func (f *fakeProtector) Unregister(context.Context, []byte) error {
+
+func TestReplayDoesNotPreallocateConfiguredCapacity(t *testing.T) {
+	manager := NewPersistentLeaseManager(int(^uint(0)>>1), new(fakeProtector), new(fakeLeaseJournal))
+	require.NoError(t, manager.Replay(context.Background()))
+	require.True(t, manager.Ready())
+}
+
+func TestReplayRollsBackPartialProtectionWithCleanupContext(t *testing.T) {
+	now := time.Now()
+	journal := new(fakeLeaseJournal)
+	for seed := byte(1); seed <= 2; seed++ {
+		journal.leases = append(journal.leases, testDurableLease(t, seed, uint64(now.Add(time.Minute).UnixMilli())))
+	}
+	protector := &fakeProtector{failRegisterAt: 2}
+	manager := NewPersistentLeaseManager(2, protector, journal)
+	manager.now = func() time.Time { return now }
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.ErrorContains(t, manager.Replay(canceled), "replay read lease protection")
+	require.Equal(t, 2, protector.registered)
+	require.Equal(t, 1, protector.rolledBack)
+	require.True(t, protector.sawRollbackDeadline)
+	require.NoError(t, protector.rollbackContextErr)
+	require.False(t, manager.Ready())
+	require.Empty(t, manager.leases)
+	require.Len(t, journal.leases, 2)
+}
+
+func (f *fakeProtector) Unregister(ctx context.Context, _ []byte) error {
 	f.unregistered++
+	_, f.sawCleanupDeadline = ctx.Deadline()
+	f.unregisterContextErr = ctx.Err()
 	if f.failUnregister {
 		return context.Canceled
 	}
@@ -624,7 +676,7 @@ func TestAdmissionRollbackDurablyRevokesAndReportsCleanupFailure(t *testing.T) {
 		manager := NewLeaseManager(1, protector)
 		manager.journal = journal
 		lease := &Lease{Read: &TaeRead{ReadRef: bytes.Repeat([]byte{3}, 32)}}
-		err := manager.rollbackAcquisition(context.Background(), []*Lease{lease}, []*Lease{lease})
+		err := manager.rollbackAcquisition(context.Background(), protector.Rollback, []*Lease{lease}, []*Lease{lease})
 		require.ErrorContains(t, err, markErr.Error())
 		require.ErrorContains(t, err, deleteErr.Error())
 		require.Zero(t, protector.unregistered)
@@ -977,6 +1029,10 @@ func TestResolverServerLifecycle(t *testing.T) {
 	require.Error(t, err)
 	_, err = NewResolverServer("127.0.0.1:0", validTLS, leases, nil)
 	require.ErrorContains(t, err, "audit recorder")
+	neverStarted, err := NewResolverServer("127.0.0.1:0", validTLS, leases, auditor)
+	require.NoError(t, err)
+	require.NoError(t, neverStarted.Close(context.Background()))
+	require.ErrorContains(t, neverStarted.Start(), "closed")
 
 	server, err := NewResolverServer("127.0.0.1:0", validTLS, leases, auditor)
 	require.NoError(t, err)
@@ -1045,6 +1101,25 @@ func TestFileServiceLeaseJournalRejectsCorruption(t *testing.T) {
 			require.ErrorContains(t, err, tc.want)
 		})
 	}
+}
+
+func TestFileServiceLeaseJournalRejectsNonCanonicalName(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS("journal-name", fileservice.CacheConfig{}, nil)
+	require.NoError(t, err)
+	journal, err := NewFileServiceLeaseJournal(fs, "sirius/read-leases")
+	require.NoError(t, err)
+	lease := testDurableLease(t, 0xab, uint64(time.Now().Add(time.Minute).UnixMilli()))
+	require.NoError(t, journal.Store(ctx, lease))
+	data, err := journal.read(ctx, journal.activePath(lease.Read.ReadRef))
+	require.NoError(t, err)
+	require.NoError(t, journal.Delete(ctx, lease.Read.ReadRef))
+	upper := strings.ToUpper(hex.EncodeToString(lease.Read.ReadRef)) + ".json"
+	name := path.Join(journal.prefix, "active", upper)
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{FilePath: name, Entries: []fileservice.IOEntry{{Offset: 0, Size: int64(len(data)), Data: data}}}))
+
+	err = journal.Load(ctx, func(*Lease) error { return nil })
+	require.ErrorContains(t, err, "invalid lease journal name")
 }
 
 func TestSubstraitTypeAndLiteralMappings(t *testing.T) {

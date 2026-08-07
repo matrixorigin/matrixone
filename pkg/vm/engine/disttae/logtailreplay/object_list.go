@@ -126,6 +126,33 @@ func VisitSnapshotObjects(
 	return visitIndex(state.tombstoneObjectsNameIndex.Iter(), true)
 }
 
+// HasSnapshotTombstones checks row and object tombstones without retaining the
+// delete set. The row-tombstone index gives a constant-time conservative
+// presence check; the object index streams only tombstone metadata and stops
+// at the first visible match.
+func (p *PartitionState) HasSnapshotTombstones(ctx context.Context, snapshotTS types.TS) (bool, error) {
+	if p == nil {
+		return false, moerr.NewInternalErrorNoCtx("invalid snapshot tombstone probe")
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if p.ApproxInMemTombstones() != 0 {
+		return true, nil
+	}
+	objects := p.tombstoneObjectsNameIndex.Iter()
+	defer objects.Release()
+	for objects.Next() {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		if snapshotCheckFn(objects.Item(), snapshotTS) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func CollectObjectList(
 	ctx context.Context,
 	state *PartitionState,

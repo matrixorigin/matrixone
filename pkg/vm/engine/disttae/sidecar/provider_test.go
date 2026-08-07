@@ -96,17 +96,25 @@ func TestSnapshotProviderRejectsPartitionedRelationBeforeStorageAccess(t *testin
 
 type snapshotRelationStub struct {
 	engine.Relation
-	def       *planpb.TableDef
-	stats     []objectio.ObjectStats
-	visible   uint64
-	visits    int
-	starCalls int
+	def             *planpb.TableDef
+	stats           []objectio.ObjectStats
+	visible         uint64
+	visits          int
+	starCalls       int
+	tombstoneChecks int
+	nonLocal        bool
+	hasTombstones   bool
 }
 
 func (s *snapshotRelationStub) GetTableDef(context.Context) *planpb.TableDef { return s.def }
 
-func (s *snapshotRelationStub) CollectTombstones(context.Context, int, engine.TombstoneCollectPolicy) (engine.Tombstoner, error) {
-	return nil, nil
+func (s *snapshotRelationStub) CanVisitSnapshotLocally() (bool, error) {
+	return !s.nonLocal, nil
+}
+
+func (s *snapshotRelationStub) HasSnapshotTombstones(context.Context, int, types.TS) (bool, error) {
+	s.tombstoneChecks++
+	return s.hasTombstones, nil
 }
 
 func (s *snapshotRelationStub) VisitSnapshotObjects(_ context.Context, _ types.TS, visit func(objectio.ObjectStats, bool) error) error {
@@ -122,6 +130,29 @@ func (s *snapshotRelationStub) VisitSnapshotObjects(_ context.Context, _ types.T
 func (s *snapshotRelationStub) StarCount(context.Context) (uint64, error) {
 	s.starCalls++
 	return s.visible, nil
+}
+
+func TestSnapshotProviderRejectsDelegatedAndDeletedSnapshotsBeforeEnumeration(t *testing.T) {
+	def := testTableDef()
+	read := testRead(t, def)
+	relation := &snapshotRelationStub{def: def, stats: []objectio.ObjectStats{objectStats(t, 1)}, visible: 1, nonLocal: true}
+	provider := &SnapshotProvider{MPool: mpool.MustNewZero(), DataDir: "shared", Relations: map[uint64]engine.Relation{42: relation}}
+
+	facts, err := provider.PrepareSnapshotRead(context.Background(), read, make([]byte, types.TxnTsSize))
+	require.NoError(t, err)
+	require.True(t, facts.NonTAE)
+	require.Zero(t, relation.tombstoneChecks)
+	require.Zero(t, relation.visits)
+	require.Zero(t, relation.starCalls)
+
+	relation.nonLocal = false
+	relation.hasTombstones = true
+	facts, err = provider.PrepareSnapshotRead(context.Background(), read, make([]byte, types.TxnTsSize))
+	require.NoError(t, err)
+	require.True(t, facts.VisibleTombstones)
+	require.Equal(t, 1, relation.tombstoneChecks)
+	require.Zero(t, relation.visits)
+	require.Zero(t, relation.starCalls)
 }
 
 func TestSnapshotProviderPinsPhysicalSchemaAndRejectsAppendableObjects(t *testing.T) {

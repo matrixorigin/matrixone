@@ -54,9 +54,12 @@ type SnapshotProvider interface {
 
 // Protector is the narrow GC-protection seam. Begin must fail if GC is already
 // running and must prevent GC from starting until the returned close function
-// is called. The returned register function is valid only within that scope.
+// is called. Register and rollback are valid only within that scope; rollback
+// removes only a registration created by that session, and close publishes
+// every remaining registration. Unregister is the terminal release path for a
+// published lease.
 type Protector interface {
-	Begin(context.Context) (register func(context.Context, []byte, []string, time.Time) error, close func(), err error)
+	Begin(context.Context) (register func(context.Context, []byte, []string, time.Time) error, rollback func(context.Context, []byte) error, close func(), err error)
 	Unregister(context.Context, []byte) error
 }
 
@@ -121,11 +124,11 @@ func (m *LeaseManager) acquirePrepared(ctx context.Context, prepare func() ([]*L
 	if protector == nil {
 		return moerr.NewInternalErrorNoCtx("substrait: read lease GC protection is not configured")
 	}
-	register, closeProtection, err := protector.Begin(ctx)
+	register, rollback, closeProtection, err := protector.Begin(ctx)
 	if err != nil {
 		return moerr.NewInternalErrorNoCtxf("substrait: begin read lease protection: %v", err)
 	}
-	if register == nil || closeProtection == nil {
+	if register == nil || rollback == nil || closeProtection == nil {
 		if closeProtection != nil {
 			closeProtection()
 		}
@@ -136,10 +139,15 @@ func (m *LeaseManager) acquirePrepared(ctx context.Context, prepare func() ([]*L
 	if err != nil {
 		return err
 	}
-	return m.acquireProtected(ctx, register, leases)
+	return m.acquireProtected(ctx, register, rollback, leases)
 }
 
-func (m *LeaseManager) acquireProtected(ctx context.Context, register func(context.Context, []byte, []string, time.Time) error, leases []*Lease) error {
+func (m *LeaseManager) acquireProtected(
+	ctx context.Context,
+	register func(context.Context, []byte, []string, time.Time) error,
+	rollback func(context.Context, []byte) error,
+	leases []*Lease,
+) error {
 	if len(leases) == 0 {
 		return moerr.NewInternalErrorNoCtx("substrait: empty lease acquisition")
 	}
@@ -148,7 +156,7 @@ func (m *LeaseManager) acquireProtected(ctx context.Context, register func(conte
 		m.mu.Unlock()
 		return moerr.NewInternalErrorNoCtx("substrait: durable read leases have not been replayed")
 	}
-	if m.protector == nil || register == nil {
+	if m.protector == nil || register == nil || rollback == nil {
 		m.mu.Unlock()
 		return moerr.NewInternalErrorNoCtx("substrait: read lease GC protection is not configured")
 	}
@@ -181,7 +189,7 @@ func (m *LeaseManager) acquireProtected(ctx context.Context, register func(conte
 				// Store can fail after the write became visible. Include the
 				// ambiguous record in the durable revocation set.
 				stored = append(stored, l)
-				rollbackErr := m.rollbackAcquisition(ctx, stored, nil)
+				rollbackErr := m.rollbackAcquisition(ctx, rollback, stored, nil)
 				m.mu.Unlock()
 				return errors.Join(moerr.NewInternalErrorNoCtxf("substrait: persist read lease: %v", err), rollbackErr)
 			}
@@ -192,7 +200,7 @@ func (m *LeaseManager) acquireProtected(ctx context.Context, register func(conte
 	for _, l := range leases {
 		err := register(ctx, l.Read.ReadRef, l.ObjectNames, time.UnixMilli(int64(l.Read.ExpiresAtUnixMS)))
 		if err != nil {
-			rollbackErr := m.rollbackAcquisition(ctx, stored, registered)
+			rollbackErr := m.rollbackAcquisition(ctx, rollback, stored, registered)
 			m.mu.Unlock()
 			return errors.Join(moerr.NewInternalErrorNoCtxf("substrait: protect read lease: %v", err), rollbackErr)
 		}
@@ -208,7 +216,11 @@ func (m *LeaseManager) acquireProtected(ctx context.Context, register func(conte
 // rollbackAcquisition first makes every possibly stored lease non-replayable,
 // removes journal debris, then removes protection only for durably revoked
 // leases. A caller cancellation must not suppress this crash-safety cleanup.
-func (m *LeaseManager) rollbackAcquisition(ctx context.Context, stored, registered []*Lease) error {
+func (m *LeaseManager) rollbackAcquisition(
+	ctx context.Context,
+	rollback func(context.Context, []byte) error,
+	stored, registered []*Lease,
+) error {
 	cleanupCtx, cancel := context.WithTimeoutCause(
 		context.WithoutCancel(ctx),
 		rollbackCleanupTimeout,
@@ -242,7 +254,7 @@ func (m *LeaseManager) rollbackAcquisition(ctx context.Context, stored, register
 	for i := len(registered) - 1; i >= 0; i-- {
 		readRef := registered[i].Read.ReadRef
 		if revoked[string(readRef)] {
-			result = errors.Join(result, m.protector.Unregister(cleanupCtx, readRef))
+			result = errors.Join(result, rollback(cleanupCtx, readRef))
 		}
 	}
 	return result
@@ -339,14 +351,15 @@ func (m *LeaseManager) Replay(ctx context.Context) error {
 		return moerr.NewInternalErrorNoCtx("substrait: cannot replay into a live lease manager")
 	}
 	var register func(context.Context, []byte, []string, time.Time) error
+	var rollback func(context.Context, []byte) error
 	var closeProtection func()
 	var err error
 	if m.protector != nil {
-		register, closeProtection, err = m.protector.Begin(ctx)
+		register, rollback, closeProtection, err = m.protector.Begin(ctx)
 		if err != nil {
 			return moerr.NewInternalErrorNoCtxf("substrait: begin replay read lease protection: %v", err)
 		}
-		if register == nil || closeProtection == nil {
+		if register == nil || rollback == nil || closeProtection == nil {
 			if closeProtection != nil {
 				closeProtection()
 			}
@@ -355,7 +368,7 @@ func (m *LeaseManager) Replay(ctx context.Context) error {
 		defer closeProtection()
 	}
 	now := uint64(m.now().UnixMilli())
-	live := make([]*Lease, 0, m.maximum)
+	var live []*Lease
 	var replayErr error
 	err = m.journal.Load(ctx, func(l *Lease) error {
 		if err := validateLease(l, now, true); err != nil {
@@ -382,11 +395,14 @@ func (m *LeaseManager) Replay(ctx context.Context) error {
 	if err != nil {
 		return moerr.NewInternalErrorNoCtxf("substrait: load read leases: %v", err)
 	}
+	registered := make([]*Lease, 0, len(live))
 	for _, l := range live {
 		if register != nil {
 			if err := register(ctx, l.Read.ReadRef, l.ObjectNames, time.UnixMilli(int64(l.Read.ExpiresAtUnixMS))); err != nil {
-				return moerr.NewInternalErrorNoCtxf("substrait: replay read lease protection: %v", err)
+				rollbackErr := m.rollbackReplayProtections(ctx, rollback, registered)
+				return errors.Join(moerr.NewInternalErrorNoCtxf("substrait: replay read lease protection: %v", err), rollbackErr)
 			}
+			registered = append(registered, l)
 		}
 	}
 	for _, l := range live {
@@ -394,6 +410,20 @@ func (m *LeaseManager) Replay(ctx context.Context) error {
 	}
 	m.ready = true
 	return nil
+}
+
+func (m *LeaseManager) rollbackReplayProtections(
+	ctx context.Context,
+	rollback func(context.Context, []byte) error,
+	registered []*Lease,
+) error {
+	cleanupCtx, cancel := leaseCleanupContext(ctx)
+	defer cancel()
+	var result error
+	for i := len(registered) - 1; i >= 0; i-- {
+		result = errors.Join(result, rollback(cleanupCtx, registered[i].Read.ReadRef))
+	}
+	return result
 }
 
 func (m *LeaseManager) Ready() bool {
@@ -604,7 +634,7 @@ func ResolveHandler(leases *LeaseManager, now func() time.Time, auditor ResolveA
 			return
 		}
 		principalHash := sha256.Sum256(r.TLS.VerifiedChains[0][0].RawSubjectPublicKeyInfo)
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 17<<20))
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxResolveRequestSize))
 		if err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
@@ -645,7 +675,11 @@ func ResolveHandler(leases *LeaseManager, now func() time.Time, auditor ResolveA
 			ClientSPKIHash: append([]byte(nil), principalHash[:]...),
 			ReadRefSHA256:  append([]byte(nil), readRefHash[:]...),
 		}
-		auditCtx, cancelAudit := context.WithTimeout(r.Context(), resolveAuditTimeout)
+		auditCtx, cancelAudit := context.WithTimeoutCause(
+			r.Context(),
+			resolveAuditTimeout,
+			moerr.NewInternalErrorNoCtx("substrait: resolution audit timed out"),
+		)
 		err = auditor.RecordResolve(auditCtx, audit)
 		cancelAudit()
 		if err != nil {

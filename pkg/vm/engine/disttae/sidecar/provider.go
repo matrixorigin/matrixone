@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"math"
 	"sort"
 
@@ -31,8 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/substrait"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
-
-var errSnapshotRejected = errors.New("sidecar snapshot rejected")
 
 // SnapshotProvider resolves relations which were opened with the compiling
 // transaction. Object visitation is explicitly bounded by the same 12-byte
@@ -58,6 +55,19 @@ func (p *SnapshotProvider) prepareSnapshotRead(ctx context.Context, read substra
 		return rejected, moerr.NewInternalErrorNoCtxf("TAE relation %d is not open", read.TableID)
 	}
 	if partitioned, ok := rel.(interface{ IsPartitionedRelation() bool }); ok && partitioned.IsPartitionedRelation() {
+		rejected.NonTAE = true
+		return rejected, nil
+	}
+	locality, ok := rel.(interface{ CanVisitSnapshotLocally() (bool, error) })
+	if !ok {
+		rejected.NonTAE = true
+		return rejected, nil
+	}
+	local, err := locality.CanVisitSnapshotLocally()
+	if err != nil {
+		return rejected, err
+	}
+	if !local {
 		rejected.NonTAE = true
 		return rejected, nil
 	}
@@ -89,13 +99,21 @@ func (p *SnapshotProvider) prepareSnapshotRead(ctx context.Context, read substra
 		return rejected, nil
 	}
 
+	tombstoneChecker, ok := rel.(interface {
+		HasSnapshotTombstones(context.Context, int, types.TS) (bool, error)
+	})
+	if !ok {
+		rejected.NonTAE = true
+		return rejected, nil
+	}
 	// Any visible delete changes the scanner contract; v1 therefore rejects
-	// both row tombstones and tombstone objects instead of approximating them.
-	tombstones, err := rel.CollectTombstones(ctx, p.TxnOffset, engine.Policy_CollectAllTombstones)
+	// both row tombstones and tombstone objects. The presence probe must stop at
+	// the first match instead of materializing and sorting the delete set.
+	hasTombstones, err := tombstoneChecker.HasSnapshotTombstones(ctx, p.TxnOffset, ts)
 	if err != nil {
 		return rejected, err
 	}
-	if tombstones != nil && (tombstones.HasAnyInMemoryTombstone() || tombstones.HasAnyTombstoneFile()) {
+	if hasTombstones {
 		rejected.VisibleTombstones = true
 		return rejected, nil
 	}
@@ -107,15 +125,15 @@ func (p *SnapshotProvider) prepareSnapshotRead(ctx context.Context, read substra
 	err = collector.VisitSnapshotObjects(ctx, ts, func(stats objectio.ObjectStats, isTombstone bool) error {
 		if isTombstone {
 			rejected.VisibleTombstones = true
-			return errSnapshotRejected
+			return moerr.NewInternalErrorNoCtx("sidecar snapshot rejected")
 		}
 		if stats.GetAppendable() {
 			rejected.Uncommitted = true
-			return errSnapshotRejected
+			return moerr.NewInternalErrorNoCtx("sidecar snapshot rejected")
 		}
 		return builder.add(stats)
 	})
-	if errors.Is(err, errSnapshotRejected) {
+	if rejected.VisibleTombstones || rejected.Uncommitted {
 		return rejected, nil
 	}
 	if err != nil {

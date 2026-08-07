@@ -56,15 +56,37 @@ func TestSidecarReadProtectionScopeExcludesGC(t *testing.T) {
 	ctx := context.Background()
 	manager := NewSyncProtectionManager()
 	protector := SidecarReadProtector{Manager: manager}
-	register, closeProtection, err := protector.Begin(ctx)
+	register, rollback, closeProtection, err := protector.Begin(ctx)
 	require.NoError(t, err)
 	require.False(t, manager.protectionBarrier.TryLock())
 	require.NoError(t, register(ctx, []byte("scoped-read"), []string{"obj"}, time.Now().Add(time.Minute)))
+	require.NoError(t, rollback(ctx, []byte("scoped-read")))
+	require.False(t, manager.HasProtection(sidecarReadJobID([]byte("scoped-read"))))
 	closeProtection()
 	closeProtection()
 	require.Error(t, register(ctx, []byte("late-read"), []string{"obj"}, time.Now().Add(time.Minute)))
+	require.Error(t, rollback(ctx, []byte("late-read")))
 	require.True(t, manager.protectionBarrier.TryLock())
 	manager.protectionBarrier.Unlock()
+}
+
+func TestSidecarReadProtectionRollbackDoesNotDeletePreexistingProtection(t *testing.T) {
+	ctx := context.Background()
+	manager := NewSyncProtectionManager()
+	protector := SidecarReadProtector{Manager: manager}
+	ref := []byte("preexisting-read")
+	objects := []string{"obj"}
+	expires := time.Now().Add(time.Minute)
+	require.NoError(t, protector.Register(ctx, ref, objects, expires))
+
+	register, rollback, closeProtection, err := protector.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, register(ctx, ref, objects, expires))
+	require.NoError(t, rollback(ctx, ref))
+	closeProtection()
+
+	require.True(t, manager.HasProtection(sidecarReadJobID(ref)))
+	require.True(t, manager.IsProtected("obj"))
 }
 
 func TestSidecarReadProtectorEmptyTableAndGCExclusion(t *testing.T) {

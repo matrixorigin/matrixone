@@ -79,6 +79,7 @@ func (s *ResolverServer) Close(ctx context.Context) error {
 	}
 	started := s.listener != nil
 	if !started {
+		s.closed = true
 		return nil
 	}
 	if err := s.server.Shutdown(ctx); err != nil {

@@ -65,6 +65,34 @@ func TestVisitSnapshotObjectsFiltersAndStopsOnVisitorError(t *testing.T) {
 	require.Equal(t, 1, calls)
 }
 
+func TestHasSnapshotTombstonesStopsAtVisiblePresence(t *testing.T) {
+	state := NewPartitionState("test", false, 42, false)
+	snapshot := types.BuildTS(20, 0)
+
+	has, err := state.HasSnapshotTombstones(context.Background(), snapshot)
+	require.NoError(t, err)
+	require.False(t, has)
+
+	tombstone := &PrimaryIndexEntry{Bytes: []byte("row-tombstone"), Time: types.BuildTS(15, 0), Deleted: true}
+	state.inMemTombstoneRowIdIndex.Set(tombstone)
+	has, err = state.HasSnapshotTombstones(context.Background(), snapshot)
+	require.NoError(t, err)
+	require.True(t, has)
+
+	state.inMemTombstoneRowIdIndex.Delete(tombstone)
+	id := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&id, false, false, false)
+	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{ObjectStats: *stats, CreateTime: types.BuildTS(15, 0)})
+	has, err = state.HasSnapshotTombstones(context.Background(), snapshot)
+	require.NoError(t, err)
+	require.True(t, has)
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = state.HasSnapshotTombstones(canceled, snapshot)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 // TestTailCheckFn tests the tailCheckFn function which filters objects based on time range
 func TestTailCheckFn(t *testing.T) {
 	// Test case 1: CreateTime within range [start, end]
