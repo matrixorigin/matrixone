@@ -37,7 +37,17 @@ func TestGetChangedTableListWithNoTN(t *testing.T) {
 	ctx := context.Background()
 
 	client.RunTxnTests(func(cli client.TxnClient, _ rpc.TxnSender) {
-		runtime.ServiceRuntime("").SetGlobalVariables(runtime.ClusterService, mockCluster{})
+		rt := runtime.ServiceRuntime("")
+		oldCluster, hadOldCluster := rt.GetGlobalVariables(runtime.ClusterService)
+		emptyCluster := mockCluster{}
+		rt.SetGlobalVariables(runtime.ClusterService, emptyCluster)
+		t.Cleanup(func() {
+			if hadOldCluster {
+				rt.SetGlobalVariables(runtime.ClusterService, oldCluster)
+			} else {
+				rt.CompareAndDeleteGlobalVariables(runtime.ClusterService, emptyCluster)
+			}
+		})
 
 		eng := &Engine{cli: cli}
 		var (

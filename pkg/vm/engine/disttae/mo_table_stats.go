@@ -2940,11 +2940,11 @@ func getChangedTableList(
 		if err != nil {
 			return err
 		}
-		responses := ret.Data.([]any)
-		if len(responses) == 0 {
-			return moerr.NewNoAvailableBackend(ctx)
+		response, err := ctl.GetFirstTNResponse(ctx, ret)
+		if err != nil {
+			return err
 		}
-		resp = responses[0].(*cmd_util.GetChangedTableListResp)
+		resp = response.(*cmd_util.GetChangedTableListResp)
 	}
 
 	//if resp.Newest == nil {
