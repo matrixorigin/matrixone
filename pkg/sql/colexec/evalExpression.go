@@ -532,6 +532,14 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		expr.vec, err = util.GenVectorByVarValueWithAllocation(
 			proc, expr.typ, val, expr.allocation,
 		)
+	} else if !expr.typ.IsVarlen() {
+		// Fixed-width user-variable values (including DECIMAL) are stored as
+		// text on the frontend session. Reusing the old varlena update path
+		// would reinterpret the fixed vector's backing memory as a Varlena.
+		expr.vec.Free(expr.mp)
+		expr.vec, err = util.GenVectorByVarValueWithAllocation(
+			proc, expr.typ, val, expr.allocation,
+		)
 	} else {
 		switch v := val.(type) {
 		case []byte:

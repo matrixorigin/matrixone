@@ -443,29 +443,23 @@ func TestVarExpressionExecutor(t *testing.T) {
 	require.NoError(t, err)
 	t.Log(tree)
 
-	// after vector.SetConstBytes pass go test -v, can comment out below line
-	// vec, err := varExprExecutor.Eval(proc, []*batch.Batch{nil}, nil)
-	// require.NoError(t, err)
-	// curr := proc.Mp().CurrNB()
-	// {
-	// 	require.Equal(t, 1, vec.Length())
-	// 	require.Equal(t, types.T_int64.ToType(), *vec.GetType())
-	// 	val := string(vec.GetBytesAt(0))
-	// 	result, err := strconv.ParseInt(val, 10, 64)
-	// 	require.NoError(t, err)
-	// 	require.Equal(t, int64(12345), result)
-	// 	require.Equal(t, false, vec.GetNulls().Contains(0))
-	// }
+	input := &batch.Batch{}
+	input.SetRowCount(1)
+	vec, err := varExprExecutor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, vec.Length())
+	require.Equal(t, types.T_int64.ToType(), *vec.GetType())
+	require.Equal(t, int64(12345), vector.MustFixedColNoTypeCheck[int64](vec)[0])
+	require.False(t, vec.GetNulls().Contains(0))
 
-	// varExprExecutor.ResetForNextQuery()
-	// _, err = varExprExecutor.Eval(proc, []*batch.Batch{nil}, nil)
-	// require.NoError(t, err)
-	// tree, err = DebugShowExecutor(varExprExecutor)
-	// require.NoError(t, err)
-	// t.Log(tree)
-	// require.Equal(t, curr, proc.Mp().CurrNB()) // check memory reuse
-	// varExprExecutor.Free()
-	// require.Equal(t, int64(0), proc.Mp().CurrNB())
+	// A reused executor must reparse the new value into the fixed-width vector,
+	// rather than treating its backing memory as a varlena descriptor.
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return int64(67890), nil
+	})
+	vec, err = varExprExecutor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(67890), vector.MustFixedColNoTypeCheck[int64](vec)[0])
 }
 
 func TestVarExpressionExecutorPreservesBinaryFlagOnReuse(t *testing.T) {

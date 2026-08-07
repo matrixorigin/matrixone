@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
@@ -165,4 +166,38 @@ func TestSelectIntoUserVariablesStopsOnSecondRowDuringCapture(t *testing.T) {
 	variable, err := ses.GetUserDefinedVar("out")
 	require.NoError(t, err)
 	require.Equal(t, "old", variable.Value)
+}
+
+func TestSelectIntoUserVariablesOutputCallbackReinitializesCollector(t *testing.T) {
+	execCtx := &ExecCtx{reqCtx: context.Background()}
+	ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+	firstStmt := &tree.Select{IntoVars: []*tree.VarExpr{{Name: "first"}}}
+	secondStmt := &tree.Select{IntoVars: []*tree.VarExpr{{Name: "second"}}}
+
+	selectIntoUserVariablesOutputCallback(execCtx, ses, firstStmt, func(*batch.Batch, *perfcounter.CounterSet) error {
+		return nil
+	})
+	firstCollector := execCtx.selectInto
+	require.NotNil(t, firstCollector)
+
+	selectIntoUserVariablesOutputCallback(execCtx, ses, secondStmt, func(*batch.Batch, *perfcounter.CounterSet) error {
+		return nil
+	})
+	require.NotNil(t, execCtx.selectInto)
+	require.NotSame(t, firstCollector, execCtx.selectInto)
+	require.Equal(t, "second", execCtx.selectInto.vars[0].Name)
+}
+
+func TestSelectIntoUserVariablesZeroRowsAddsNoDataDiagnostic(t *testing.T) {
+	ctx := context.Background()
+	ses := &Session{
+		userDefinedVars: make(map[string]*UserDefinedVar),
+		errInfo:         &errInfo{maxCnt: MoDefaultErrorCount},
+	}
+	collector := newSelectIntoUserVariables([]*tree.VarExpr{{Name: "out"}})
+
+	require.NoError(t, collector.apply(ctx, ses, "select value from empty_table into @out"))
+	info := ses.diagnosticsSnapshot()
+	require.Contains(t, info.codes, moerr.ER_SP_FETCH_NO_DATA)
+	require.Contains(t, info.msgs, "No data - zero rows fetched, selected, or processed")
 }

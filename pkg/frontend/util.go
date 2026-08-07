@@ -197,6 +197,17 @@ func getExprValueWithPrepareMode(
 	preparedExpression bool,
 	isBin ...*bool,
 ) (interface{}, error) {
+	value, _, err := getExprValueWithPrepareModeAndType(e, ses, execCtx, preparedExpression, isBin...)
+	return value, err
+}
+
+func getExprValueWithPrepareModeAndType(
+	e tree.Expr,
+	ses *Session,
+	execCtx *ExecCtx,
+	preparedExpression bool,
+	isBin ...*bool,
+) (interface{}, plan.Type, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -209,7 +220,7 @@ func getExprValueWithPrepareMode(
 		if len(isBin) > 0 {
 			*isBin[0] = false
 		}
-		return v.ColName(), nil
+		return v.ColName(), plan.Type{Id: int32(types.T_text)}, nil
 	}
 
 	var err error
@@ -251,16 +262,16 @@ func getExprValueWithPrepareMode(
 	err = executeStmtInSameSession(
 		tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect, preparedExpression)
 	if err != nil {
-		return nil, err
+		return nil, plan.Type{}, err
 	}
 
 	batches := ses.GetResultBatches()
 	if len(batches) == 0 {
-		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
+		return nil, plan.Type{}, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
 	}
 
 	if batches[0].VectorCount() > 1 {
-		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi columns value", e.String())
+		return nil, plan.Type{}, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi columns value", e.String())
 	}
 
 	//evaluate the count of rows, the count of columns
@@ -272,7 +283,7 @@ func getExprValueWithPrepareMode(
 		}
 		count += b.RowCount()
 		if count > 1 {
-			return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi rows value", e.String())
+			return nil, plan.Type{}, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi rows value", e.String())
 		}
 		if resultVec == nil && b.GetVector(0).Length() != 0 {
 			resultVec = b.GetVector(0)
@@ -280,7 +291,7 @@ func getExprValueWithPrepareMode(
 	}
 
 	if resultVec == nil {
-		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
+		return nil, plan.Type{}, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
 	}
 
 	// for the decimal type, we need the type of expr
@@ -291,14 +302,15 @@ func getExprValueWithPrepareMode(
 		planExpr, err = bindSetVariableResultExpr(
 			e, ses.GetTxnCompileCtx(), preparedExpression)
 		if err != nil {
-			return nil, err
+			return nil, plan.Type{}, err
 		}
 	}
 
 	if len(isBin) > 0 {
 		*isBin[0] = resultVec.GetIsBin()
 	}
-	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
+	value, err := getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
+	return value, plan2.MakePlan2Type(resultVec.GetType()), err
 }
 
 func bindSetVariableResultExpr(

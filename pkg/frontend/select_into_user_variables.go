@@ -35,6 +35,7 @@ type selectIntoUserVariables struct {
 	vars     []*tree.VarExpr
 	row      []any
 	rowIsBin []bool
+	rowType  []plan2.Type
 	rowCount uint64
 }
 
@@ -65,11 +66,14 @@ func selectIntoUserVariablesOutputCallback(
 	if !ok || len(selectStmt.IntoVars) == 0 {
 		return fill
 	}
-	if execCtx.selectInto == nil {
-		execCtx.selectInto = newSelectIntoUserVariables(selectStmt.IntoVars)
-	}
+	// ExecCtx is reused for every statement in a COM_QUERY request.  A
+	// collector belongs to exactly one SELECT ... INTO statement; retaining it
+	// across statement generation leaks rowCount and assignments into the next
+	// statement.
+	collector := newSelectIntoUserVariables(selectStmt.IntoVars)
+	execCtx.selectInto = collector
 	return func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
-		return execCtx.selectInto.capture(execCtx.reqCtx, ses, bat)
+		return collector.capture(execCtx.reqCtx, ses, bat)
 	}
 }
 
@@ -92,11 +96,13 @@ func (collector *selectIntoUserVariables) capture(ctx context.Context, ses FeSes
 	if collector.rowCount == 0 {
 		collector.row = make([]any, len(collector.vars))
 		collector.rowIsBin = make([]bool, len(collector.vars))
+		collector.rowType = make([]plan2.Type, len(collector.vars))
 		if err := extractRowFromEveryVector(ctx, ses, bat, 0, collector.row, false); err != nil {
 			return err
 		}
 		for i, vec := range bat.Vecs {
 			collector.rowIsBin[i] = vec.GetIsBin()
+			collector.rowType[i] = plan2.MakePlan2Type(vec.GetType())
 		}
 	}
 	collector.rowCount += uint64(bat.RowCount())
@@ -107,13 +113,22 @@ func (collector *selectIntoUserVariables) apply(ctx context.Context, ses FeSessi
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	if collector.rowCount == 0 {
+		appendSelectIntoNoDataWarning(ses)
 		return nil
 	}
 	if collector.rowCount > 1 {
 		return moerr.NewTooManyRows(ctx)
 	}
 	for i, variable := range collector.vars {
-		if err := setUserDefinedVarWithIsBin(ses, variable.Name, collector.row[i], sql, collector.rowIsBin[i]); err != nil {
+		var isBin bool
+		if i < len(collector.rowIsBin) {
+			isBin = collector.rowIsBin[i]
+		}
+		var typ plan2.Type
+		if i < len(collector.rowType) {
+			typ = collector.rowType[i]
+		}
+		if err := setUserDefinedVarWithType(ses, variable.Name, collector.row[i], sql, isBin, typ); err != nil {
 			return err
 		}
 	}
@@ -121,18 +136,33 @@ func (collector *selectIntoUserVariables) apply(ctx context.Context, ses FeSessi
 }
 
 func setUserDefinedVarWithIsBin(ses FeSession, name string, value interface{}, sql string, isBin bool) error {
+	return setUserDefinedVarWithType(ses, name, value, sql, isBin, plan2.Type{})
+}
+
+func setUserDefinedVarWithType(ses FeSession, name string, value interface{}, sql string, isBin bool, typ plan2.Type) error {
 	switch session := ses.(type) {
 	case *Session:
-		return session.setUserDefinedVar(name, value, sql, isBin)
+		return session.setUserDefinedVarWithType(name, value, sql, isBin, typ)
 	case *backSession:
 		if session.upstream == nil {
 			return moerr.NewInternalError(context.Background(), "do not support set user defined var in background exec")
 		}
-		return setUserDefinedVarWithIsBin(session.upstream, name, value, sql, isBin)
+		return setUserDefinedVarWithType(session.upstream, name, value, sql, isBin, typ)
 	default:
 		if isBin {
 			return moerr.NewInternalError(context.Background(), "do not support binary user defined var assignment")
 		}
 		return ses.SetUserDefinedVar(name, value, sql)
+	}
+}
+
+func appendSelectIntoNoDataWarning(ses FeSession) {
+	switch session := ses.(type) {
+	case *Session:
+		session.appendWarningDiagnostic(moerr.ER_SP_FETCH_NO_DATA, "No data - zero rows fetched, selected, or processed")
+	case *backSession:
+		if session.upstream != nil {
+			appendSelectIntoNoDataWarning(session.upstream)
+		}
 	}
 }

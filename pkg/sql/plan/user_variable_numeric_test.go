@@ -76,6 +76,65 @@ func TestUserVariablesUseNumericContextInArithmetic(t *testing.T) {
 	require.True(t, types.T(varTypes["float_var"].Id).ToType().IsNumeric())
 }
 
+func TestUserVariableNumericContextPreservesAssignedType(t *testing.T) {
+	tests := []struct {
+		name      string
+		sql       string
+		varName   string
+		validType func(types.Type) bool
+	}{
+		{
+			name:    "decimal variable is not narrowed by integer literal",
+			sql:     "select @decimal_var + 0",
+			varName: "decimal_var",
+			validType: func(typ types.Type) bool {
+				return typ.IsDecimal() || typ.IsFloat()
+			},
+		},
+		{
+			name:    "float variable is not narrowed by integer literal",
+			sql:     "select @float_var + 0",
+			varName: "float_var",
+			validType: func(typ types.Type) bool {
+				return typ.IsFloat()
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+
+			varTypes := userVariableEffectiveTypes(logicPlan)
+			variableType, ok := varTypes[test.varName]
+			require.True(t, ok, "user variable %s is missing from the plan", test.varName)
+			require.Truef(t, test.validType(types.T(variableType.Id).ToType()),
+				"user variable %s was narrowed to %s", test.varName, types.T(variableType.Id).ToType())
+		})
+	}
+}
+
+func TestUserVariableNumericContextCoercesNumericString(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	optimizer.ctxt.ResolveVariableFunc = func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if name == "numeric_text_var" && !isSystemVar {
+			return "1.5", nil
+		}
+		return (&MockCompilerContext{ctx: optimizer.ctxt.ctx}).ResolveVariable(name, isSystemVar, isGlobalVar)
+	}
+
+	logicPlan, err := runOneStmt(optimizer, t, "select @numeric_text_var + 0")
+	require.NoError(t, err)
+
+	varTypes := userVariableEffectiveTypes(logicPlan)
+	variableType, ok := varTypes["numeric_text_var"]
+	require.True(t, ok, "numeric string user variable is missing from the plan")
+	require.True(t, types.T(variableType.Id).ToType().IsDecimal(),
+		"numeric string user variable was not bound to a decimal context: %s",
+		types.T(variableType.Id).ToType())
+}
+
 func TestPreparedParametersUseDefaultNumericContextInArithmetic(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, "prepare ps_count from 'select ? + ? as sum_val'")
 	require.NoError(t, err)

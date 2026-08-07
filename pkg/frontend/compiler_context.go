@@ -862,6 +862,31 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 	return
 }
 
+// ResolveVariableType returns the type fixed when a user variable was
+// assigned. The value itself may be represented as text for protocol and
+// compatibility reasons (notably DECIMAL), so planner numeric binding must
+// not infer a narrower type from a sibling literal.
+func (tcc *TxnCompilerContext) ResolveVariableType(varName string, isSystemVar, isGlobalVar bool) (plan2.Type, error) {
+	if isSystemVar {
+		return plan2.Type{}, nil
+	}
+	if tcc.execCtx != nil {
+		if value, ok := resolveStoredProcedureVariable(tcc.execCtx.reqCtx, varName); ok {
+			return inferUserDefinedVarType(value), nil
+		}
+	}
+	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
+	if err != nil {
+		// An unassigned user variable is NULL; TEXT is the neutral binding type
+		// and lets a numeric context perform the normal MySQL coercion.
+		return inferUserDefinedVarType(nil), nil
+	}
+	if udVar.Type.Id != 0 {
+		return udVar.Type, nil
+	}
+	return inferUserDefinedVarType(udVar.Value), nil
+}
+
 func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar, _ bool) (bool, error) {
 	if _, ok := resolveStoredProcedureVariable(tcc.execCtx.reqCtx, varName); ok {
 		return false, nil

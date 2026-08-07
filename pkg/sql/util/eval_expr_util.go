@@ -127,6 +127,29 @@ func GenVectorByVarValueWithAllocation(
 		return vector.NewConstNullWithAllocation(typ, 1, selection)
 	}
 	strVal := getVal(val)
+	if !typ.IsVarlen() {
+		var vec *vector.Vector
+		var err error
+		if selection == nil {
+			vec = vector.NewVec(typ)
+		} else {
+			vec, err = vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if err = vec.PreExtend(1, proc.Mp()); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		vec.SetLength(1)
+		if err = SetBytesToAnyVector(proc.Ctx, strVal, 0, false, vec, proc); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		vec.ToConst()
+		return vec, nil
+	}
 	if selection == nil {
 		return vector.NewConstBytes(typ, []byte(strVal), 1, proc.Mp())
 	}
@@ -248,6 +271,12 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 			return err
 		}
 		return vector.SetFixedAtNoTypeCheck(vec, row, v)
+	case types.T_decimal256:
+		v, err := types.ParseDecimal256(val, vec.GetType().Width, vec.GetType().Scale)
+		if err != nil {
+			return err
+		}
+		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink, types.T_geometry:
 		return vector.SetBytesAt(vec, row, []byte(val), proc.Mp())
 	case types.T_array_float32:
@@ -298,6 +327,12 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 			return moerr.NewOutOfRangef(ctx, "enum", "value '%v'", val)
 		}
 		return vector.SetFixedAtNoTypeCheck(vec, row, types.Enum(v))
+	case types.T_year:
+		v, err := strconv.ParseInt(val, 10, 16)
+		if err != nil {
+			return moerr.NewOutOfRangef(ctx, "year", "value '%v'", val)
+		}
+		return vector.SetFixedAtNoTypeCheck(vec, row, types.MoYear(v))
 	default:
 		panic(fmt.Sprintf("unsupported type %v", vec.GetType().Oid))
 	}

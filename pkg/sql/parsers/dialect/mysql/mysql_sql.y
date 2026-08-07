@@ -347,7 +347,9 @@ func sqlTaskInt64(v any) int64 {
 %token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR OF CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
-%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER OVERWRITE
+%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC
+%nonassoc <str> INTO
+%token <str> DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER OVERWRITE
 %token <str> INSTANT INPLACE COPY DISABLE ENABLE UNDEFINED MERGE TEMPTABLE DEFINER INVOKER SQL SECURITY CASCADED
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
@@ -6188,6 +6190,7 @@ into_table_name:
     }
 
 select_into_param_opt:
+    %prec EMPTY
     {
         $$ = &tree.SelectInto{}
     }
@@ -6378,27 +6381,27 @@ select_stmt:
 select_no_parens:
     simple_select time_window_opt order_by_opt limit_opt rank_opt select_into_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6.Export, IntoVars: $6.UserVars, SelectLockInfo: $7}
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: append(tree.SelectIntoVariables($1), $6.UserVars...), SelectLockInfo: $7}
     }
 |   select_with_parens time_window_opt order_by_clause select_into_param_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Ep: $4.Export, IntoVars: $4.UserVars}
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Ep: tree.SelectIntoExportOr($1, $4.Export), IntoVars: append(tree.SelectIntoVariables($1), $4.UserVars...)}
     }
 |   select_with_parens time_window_opt order_by_opt limit_clause rank_opt select_into_param_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6.Export, IntoVars: $6.UserVars}
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: append(tree.SelectIntoVariables($1), $6.UserVars...)}
     }
 |   with_clause simple_select time_window_opt order_by_opt limit_opt rank_opt select_into_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: $7.Export, IntoVars: $7.UserVars, SelectLockInfo:$8, With: $1}
+        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: tree.SelectIntoExportOr($2, $7.Export), IntoVars: append(tree.SelectIntoVariables($2), $7.UserVars...), SelectLockInfo:$8, With: $1}
     }
 |   with_clause select_with_parens order_by_clause select_into_param_opt
     {
-        $$ = &tree.Select{Select: $2, OrderBy: $3, Ep: $4.Export, IntoVars: $4.UserVars, With: $1}
+        $$ = &tree.Select{Select: $2, OrderBy: $3, Ep: tree.SelectIntoExportOr($2, $4.Export), IntoVars: append(tree.SelectIntoVariables($2), $4.UserVars...), With: $1}
     }
 |   with_clause select_with_parens order_by_opt limit_clause rank_opt select_into_param_opt
     {
-        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6.Export, IntoVars: $6.UserVars, With: $1}
+        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($2, $6.Export), IntoVars: append(tree.SelectIntoVariables($2), $6.UserVars...), With: $1}
     }
 
 time_window_opt:
@@ -6949,15 +6952,17 @@ union_op:
     }
 
 simple_select_clause:
-    SELECT select_options_opt select_expression_list from_opt where_expression_opt group_by_opt having_opt
+    SELECT select_options_opt select_expression_list select_into_param_opt from_opt where_expression_opt group_by_opt having_opt
     {
         $$ = &tree.SelectClause{
             Distinct: tree.QuerySpecOptionDistinct & $2 != 0,
             Exprs: $3,
-            From: $4,
-            Where: $5,
-            GroupBy: $6,
-            Having: $7,
+            IntoVars: $4.UserVars,
+            IntoExport: $4.Export,
+            From: $5,
+            Where: $6,
+            GroupBy: $7,
+            Having: $8,
             Option: $2,
         }
     }
@@ -14554,11 +14559,11 @@ perform_stmt:
 perform_select:
     simple_select time_window_opt order_by_opt limit_opt rank_opt select_into_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6.Export, IntoVars: $6.UserVars, SelectLockInfo: $7}
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: append(tree.SelectIntoVariables($1), $6.UserVars...), SelectLockInfo: $7}
     }
 |   with_clause simple_select time_window_opt order_by_opt limit_opt rank_opt select_into_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: $7.Export, IntoVars: $7.UserVars, SelectLockInfo: $8, With: $1}
+        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: tree.SelectIntoExportOr($2, $7.Export), IntoVars: append(tree.SelectIntoVariables($2), $7.UserVars...), SelectLockInfo: $8, With: $1}
     }
 
 declare_stmt:

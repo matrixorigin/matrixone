@@ -72,10 +72,10 @@ func (node *Select) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.RankOption.Format(ctx)
 	}
-	if node.Ep != nil {
+	if node.Ep != nil && SelectIntoExport(node.Select) == nil {
 		ctx.WriteByte(' ')
 		node.Ep.Format(ctx)
-	} else if len(node.IntoVars) > 0 {
+	} else if len(node.IntoVars) > 0 && len(SelectIntoVariables(node.Select)) == 0 {
 		ctx.WriteString(" into ")
 		for i, variable := range node.IntoVars {
 			if i > 0 {
@@ -418,11 +418,16 @@ type SelectClause struct {
 	SelectStatement
 	Distinct bool
 	Exprs    SelectExprs
-	From     *From
-	Where    *Where
-	GroupBy  *GroupByClause
-	Having   *Where
-	Option   uint64
+	// IntoVars is populated for MySQL's pre-FROM SELECT ... INTO @var form.
+	// The enclosing Select also copies it so frontend execution can handle both
+	// the pre-FROM and terminal placements uniformly.
+	IntoVars   []*VarExpr
+	IntoExport *ExportParam
+	From       *From
+	Where      *Where
+	GroupBy    *GroupByClause
+	Having     *Where
+	Option     uint64
 }
 
 func (node *SelectClause) Format(ctx *FmtCtx) {
@@ -445,6 +450,18 @@ func (node *SelectClause) Format(ctx *FmtCtx) {
 		}
 	}
 	node.Exprs.Format(ctx)
+	if node.IntoExport != nil {
+		ctx.WriteByte(' ')
+		node.IntoExport.Format(ctx)
+	} else if len(node.IntoVars) > 0 {
+		ctx.WriteString(" into ")
+		for i, variable := range node.IntoVars {
+			if i > 0 {
+				ctx.WriteString(", ")
+			}
+			variable.Format(ctx)
+		}
+	}
 	if len(node.From.Tables) > 0 {
 		canFrom := true
 		als, ok := node.From.Tables[0].(*AliasedTableExpr)
@@ -473,6 +490,31 @@ func (node *SelectClause) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.Having.Format(ctx)
 	}
+}
+
+// SelectIntoVariables returns variables attached to the pre-FROM SELECT
+// clause. It intentionally does not clear the clause field: tree formatting
+// needs the original placement while the enclosing Select uses the same list
+// for execution.
+func SelectIntoVariables(stmt SelectStatement) []*VarExpr {
+	if clause, ok := stmt.(*SelectClause); ok {
+		return clause.IntoVars
+	}
+	return nil
+}
+
+func SelectIntoExport(stmt SelectStatement) *ExportParam {
+	if clause, ok := stmt.(*SelectClause); ok {
+		return clause.IntoExport
+	}
+	return nil
+}
+
+func SelectIntoExportOr(stmt SelectStatement, fallback *ExportParam) *ExportParam {
+	if export := SelectIntoExport(stmt); export != nil {
+		return export
+	}
+	return fallback
 }
 
 func (node *SelectClause) GetStatementType() string { return "Select" }

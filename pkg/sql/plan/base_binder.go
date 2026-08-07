@@ -370,6 +370,11 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 
 func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	typ := types.T_text.ToType()
+	if !astExpr.System {
+		if resolved, ok := b.resolveUserVariableType(astExpr); ok {
+			typ = makeTypeByPlan2Type(resolved)
+		}
+	}
 	variable := &Expr{
 		Typ: makePlan2Type(&typ),
 		Expr: &plan.Expr_V{
@@ -384,6 +389,65 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 		return appendCastBeforeExpr(b.GetContext(), variable, *b.numericParamType)
 	}
 	return variable, nil
+}
+
+func (b *baseBinder) resolveUserVariableType(expr *tree.VarExpr) (Type, bool) {
+	if b.builder == nil || b.builder.compCtx == nil {
+		return Type{}, false
+	}
+	resolver, ok := b.builder.compCtx.(UserVariableTypeResolver)
+	if !ok {
+		return Type{}, false
+	}
+	typ, err := resolver.ResolveVariableType(expr.Name, expr.System, expr.Global)
+	if err != nil || typ.Id == 0 {
+		return Type{}, false
+	}
+	return typ, true
+}
+
+// resolveUserVariableNumericType returns the numeric type to use when a user
+// variable participates in an arithmetic expression. Variables assigned a
+// numeric value already carry that assignment type. Text-backed variables are
+// still accepted by MySQL in numeric contexts; when their current value is a
+// numeric string, infer a numeric target instead of letting an integer sibling
+// literal force an invalid integer cast.
+func (b *baseBinder) resolveUserVariableNumericType(expr *tree.VarExpr) (Type, bool) {
+	if typ, ok := b.resolveUserVariableType(expr); ok && makeTypeByPlan2Type(typ).IsNumeric() {
+		return typ, true
+	}
+	if b.builder == nil || b.builder.compCtx == nil {
+		return Type{}, false
+	}
+	value, err := b.builder.compCtx.ResolveVariable(expr.Name, expr.System, expr.Global)
+	if err != nil {
+		return Type{}, false
+	}
+	var text string
+	switch value := value.(type) {
+	case string:
+		text = value
+	case []byte:
+		text = string(value)
+	default:
+		return Type{}, false
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return Type{}, false
+	}
+	if _, err = strconv.ParseInt(text, 10, 64); err == nil {
+		return makeSimplePlan2Type(types.T_int64), true
+	}
+	if _, err = strconv.ParseUint(text, 10, 64); err == nil {
+		return makeSimplePlan2Type(types.T_uint64), true
+	}
+	if _, err = types.ParseDecimal128(text, 38, 18); err == nil {
+		typ := types.T_decimal128.ToType()
+		typ.Width, typ.Scale = 38, 18
+		return makePlan2Type(&typ), true
+	}
+	return Type{}, false
 }
 
 const (
@@ -1051,6 +1115,11 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 	case *tree.VarExpr:
 		if expr.System {
 			return numericAstTypeScan{hasUnknown: true}, nil
+		}
+		if typ, ok := b.resolveUserVariableNumericType(expr); ok {
+			scan := numericAstTypedOperand(typ)
+			scan.hasVar = true
+			return scan, nil
 		}
 		return numericAstTypeScan{hasVar: true}, nil
 	case *tree.Subquery:

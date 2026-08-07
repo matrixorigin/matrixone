@@ -40,6 +40,11 @@ func TestSelectIntoUserVariablesParse(t *testing.T) {
 			vars:    []string{"row_id", "row_v"},
 		},
 		{
+			sql:     "select id into @pre_from_id from uv_src where id = 2",
+			wantSQL: "select id into @pre_from_id from uv_src where id = 2",
+			vars:    []string{"pre_from_id"},
+		},
+		{
 			sql:     "select v from uv_src order by id desc limit 1 into @last_v",
 			wantSQL: "select v from uv_src order by id desc limit 1 into @last_v",
 			vars:    []string{"last_v"},

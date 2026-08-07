@@ -367,9 +367,16 @@ func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string
 }
 
 func (ses *Session) setUserDefinedVar(name string, value interface{}, sql string, isBin bool) error {
+	return ses.setUserDefinedVarWithType(name, value, sql, isBin, inferUserDefinedVarType(value))
+}
+
+func (ses *Session) setUserDefinedVarWithType(name string, value interface{}, sql string, isBin bool, typ plan.Type) error {
+	if typ.Id == 0 {
+		typ = inferUserDefinedVarType(value)
+	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{Value: value, Sql: sql, IsBin: isBin}
+	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{Value: value, Sql: sql, IsBin: isBin, Type: typ}
 	return nil
 }
 
@@ -731,27 +738,36 @@ func parseNoAutoValueOnZero(val interface{}) (bool, bool) {
 type errInfo struct {
 	codes  []uint16
 	msgs   []string
+	levels []string
 	maxCnt int
 }
 
 func (e *errInfo) push(code uint16, msg string) {
+	e.pushWithLevel(code, msg, "Error")
+}
+
+func (e *errInfo) pushWithLevel(code uint16, msg, level string) {
 	if e.maxCnt > 0 && len(e.codes) > e.maxCnt {
 		e.codes = e.codes[1:]
 		e.msgs = e.msgs[1:]
+		e.levels = e.levels[1:]
 	}
 	e.codes = append(e.codes, code)
 	e.msgs = append(e.msgs, msg)
+	e.levels = append(e.levels, level)
 }
 
 func (e *errInfo) reset() {
 	e.codes = e.codes[:0]
 	e.msgs = e.msgs[:0]
+	e.levels = e.levels[:0]
 }
 
 func (e *errInfo) snapshot() errInfo {
 	return errInfo{
 		codes:  append([]uint16(nil), e.codes...),
 		msgs:   append([]string(nil), e.msgs...),
+		levels: append([]string(nil), e.levels...),
 		maxCnt: e.maxCnt,
 	}
 }
@@ -1249,6 +1265,14 @@ func (ses *Session) appendErrorDiagnostic(code uint16, msg string) {
 	defer ses.mu.Unlock()
 	if ses.errInfo != nil {
 		ses.errInfo.push(code, msg)
+	}
+}
+
+func (ses *Session) appendWarningDiagnostic(code uint16, msg string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo != nil {
+		ses.errInfo.pushWithLevel(code, msg, "Warning")
 	}
 }
 

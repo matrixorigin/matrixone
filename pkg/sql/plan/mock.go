@@ -51,14 +51,15 @@ type MockCompilerContext struct {
 	ctx context.Context
 
 	// Add function fields for test overrides
-	GetAccountNameFunc    func() string
-	GetAccountIdFunc      func() (uint32, error)
-	DatabaseExistsFunc    func(string, *Snapshot) bool
-	GetDatabaseIdFunc     func(string, *Snapshot) (uint64, error)
-	ResolveAccountIdsFunc func([]string) ([]uint32, error)
-	ResolveFunc           func(string, string, *Snapshot) (*ObjectRef, *TableDef)
-	ResolveVariableFunc   func(string, bool, bool) (interface{}, error)
-	GetProcessFunc        func() *process.Process
+	GetAccountNameFunc      func() string
+	GetAccountIdFunc        func() (uint32, error)
+	DatabaseExistsFunc      func(string, *Snapshot) bool
+	GetDatabaseIdFunc       func(string, *Snapshot) (uint64, error)
+	ResolveAccountIdsFunc   func([]string) ([]uint32, error)
+	ResolveFunc             func(string, string, *Snapshot) (*ObjectRef, *TableDef)
+	ResolveVariableFunc     func(string, bool, bool) (interface{}, error)
+	ResolveVariableTypeFunc func(string, bool, bool) (Type, error)
+	GetProcessFunc          func() *process.Process
 }
 
 func (m *MockCompilerContext) GetLowerCaseTableNames() int64 {
@@ -143,6 +144,31 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 	}
 
 	return nil, moerr.NewInternalError(m.ctx, "var not found")
+}
+
+func (m *MockCompilerContext) ResolveVariableType(varName string, isSystemVar, isGlobalVar bool) (Type, error) {
+	if m.ResolveVariableTypeFunc != nil {
+		return m.ResolveVariableTypeFunc(varName, isSystemVar, isGlobalVar)
+	}
+	if isSystemVar {
+		return Type{}, nil
+	}
+	switch varName {
+	case "int_var":
+		return makeSimplePlan2Type(types.T_int64), nil
+	case "float_var":
+		return makeSimplePlan2Type(types.T_float64), nil
+	case "decimal_var":
+		typ := types.T_decimal128.ToType()
+		typ.Width, typ.Scale = 38, 3
+		return makePlan2Type(&typ), nil
+	case "bool_var":
+		return makeSimplePlan2Type(types.T_bool), nil
+	case "null_var", "str_var":
+		return makeSimplePlan2Type(types.T_text), nil
+	default:
+		return Type{}, nil
+	}
 }
 
 type col struct {

@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 )
 
@@ -4268,6 +4269,47 @@ type UserDefinedVar struct {
 	Value interface{}
 	Sql   string
 	IsBin bool
+	// Type is the type of the value at the time the variable was assigned.
+	// User variables are exposed to the planner as text values for wire
+	// compatibility, but MySQL fixes their effective type at statement start.
+	// Keeping the assignment type here prevents a numeric sibling operand from
+	// silently narrowing a decimal or floating-point variable.
+	Type planpb.Type
+}
+
+// inferUserDefinedVarType supplies a conservative type for callers which set
+// a variable without an explicit expression type (for example tests and
+// stored-procedure helpers). Expression evaluation records the exact plan
+// type separately when it is available.
+func inferUserDefinedVarType(value interface{}) planpb.Type {
+	var oid types.T
+	switch value.(type) {
+	case bool:
+		oid = types.T_bool
+	case int, int8, int16, int32, int64:
+		oid = types.T_int64
+	case uint, uint8, uint16, uint32, uint64:
+		oid = types.T_uint64
+	case float32:
+		oid = types.T_float32
+	case float64:
+		oid = types.T_float64
+	case types.Decimal64:
+		oid = types.T_decimal64
+	case types.Decimal128:
+		oid = types.T_decimal128
+	case types.Decimal256:
+		oid = types.T_decimal256
+	case types.Enum:
+		oid = types.T_enum
+	case []byte:
+		oid = types.T_varbinary
+	case nil:
+		oid = types.T_text
+	default:
+		oid = types.T_text
+	}
+	return planpb.Type{Id: int32(oid)}
 }
 
 func autocommitValue(ses FeSession) (bool, error) {

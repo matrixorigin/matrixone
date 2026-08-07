@@ -928,14 +928,16 @@ func doSetVar(
 	var err error = nil
 	var ok bool
 	var userVarIsBin bool
+	var userVarType plan.Type
 	type evaluatedAssignment struct {
 		assign       *tree.VarAssignmentExpr
 		value        interface{}
 		userVarIsBin bool
+		valueType    plan.Type
 	}
 	evaluateAssignment := func(assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
-		value, evalErr := getExprValueWithPrepareMode(
+		value, valueType, evalErr := getExprValueWithPrepareModeAndType(
 			assign.Value, ses, execCtx, preparedExpression, &isBin)
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr
@@ -950,6 +952,7 @@ func doSetVar(
 			assign:       assign,
 			value:        value,
 			userVarIsBin: isBin,
+			valueType:    valueType,
 		}, nil
 	}
 
@@ -989,7 +992,7 @@ func doSetVar(
 				}
 			}
 		} else {
-			err = ses.setUserDefinedVar(name, value, sql, userVarIsBin)
+			err = ses.setUserDefinedVarWithType(name, value, sql, userVarIsBin, userVarType)
 			if err != nil {
 				return err
 			}
@@ -1002,6 +1005,7 @@ func doSetVar(
 		name := assign.Name
 		value := item.value
 		userVarIsBin = item.userVarIsBin
+		userVarType = item.valueType
 
 		//TODO : fix SET NAMES after parser is ready
 		if assign.SetNames {
@@ -1195,6 +1199,9 @@ func doShowErrors(ses *Session, execCtx *ExecCtx) error {
 	for i := info.length() - 1; i >= 0; i-- {
 		row := make([]interface{}, 3)
 		row[0] = "Error"
+		if i < len(info.levels) && info.levels[i] != "" {
+			row[0] = info.levels[i]
+		}
 		row[1] = int16(info.codes[i])
 		row[2] = info.msgs[i]
 		mrs.AddRow(row)
