@@ -604,7 +604,8 @@ func (s *Service) handleCNHeartbeat(ctx context.Context, req pb.Request) pb.Resp
 	} else {
 		resp.CommandBatch = &cb
 	}
-	resp.CommandPollSupported = s.store.commandDeliveryEnabled.Load()
+	resp.CommandPollSupported = s.store.commandDeliveryEnabled.Load() &&
+		hb.CommandDeliveryAckSupported
 
 	return resp
 }
@@ -634,7 +635,8 @@ func (s *Service) handleTNHeartbeat(ctx context.Context, req pb.Request) pb.Resp
 	} else {
 		resp.CommandBatch = &cb
 	}
-	resp.CommandPollSupported = s.store.commandDeliveryEnabled.Load()
+	resp.CommandPollSupported = s.store.commandDeliveryEnabled.Load() &&
+		hb.CommandDeliveryAckSupported
 
 	return resp
 }

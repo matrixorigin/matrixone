@@ -459,13 +459,25 @@ func TestServicePollCommandsIsNonDestructiveAndDeduplicable(t *testing.T) {
 		})
 		require.Equal(t, *pollResp.CommandBatch, *secondResp.CommandBatch)
 
-		// The ordinary heartbeat path remains the sole destructive delivery
-		// operation, preserving old-client and mixed-version behavior.
+		// An upgraded heartbeat remains the delivery path; a heartbeat without
+		// the capability is intentionally handled as an admission-safe no-op.
 		heartbeatResp := s.handleTNHeartbeat(ctx, pb.Request{
-			Method:      pb.TN_HEARTBEAT,
-			TNHeartbeat: &pb.TNStoreHeartbeat{UUID: "uuid1"},
+			Method: pb.TN_HEARTBEAT,
+			TNHeartbeat: &pb.TNStoreHeartbeat{
+				UUID:                        "uuid1",
+				CommandDeliveryAckSupported: true,
+			},
 		})
 		require.Equal(t, *pollResp.CommandBatch, *heartbeatResp.CommandBatch)
+		ackedResp := s.handleTNHeartbeat(ctx, pb.Request{
+			Method: pb.TN_HEARTBEAT,
+			TNHeartbeat: &pb.TNStoreHeartbeat{
+				UUID:                        "uuid1",
+				AckedCommandBatchID:         pollResp.CommandBatch.BatchID,
+				CommandDeliveryAckSupported: true,
+			},
+		})
+		require.Empty(t, ackedResp.CommandBatch.Commands)
 
 		afterDelivery := s.handleGetScheduleCommands(ctx, pb.Request{
 			Method: pb.GET_SCHEDULE_COMMANDS,
@@ -525,6 +537,59 @@ func TestServiceRejectsInvalidScheduleCommandQueries(t *testing.T) {
 		})
 		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 		require.Equal(t, []pb.ScheduleCommand{command}, resp.CommandBatch.Commands)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceCommandDeliveryActivationWaitsForServiceCapabilities(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		sendCNHeartbeat := func(supported bool) pb.Response {
+			return s.handleCNHeartbeat(ctx, pb.Request{
+				Method: pb.CN_HEARTBEAT,
+				CNHeartbeat: &pb.CNStoreHeartbeat{
+					UUID:                        "cn-1",
+					CommandDeliveryAckSupported: supported,
+				},
+			})
+		}
+		sendTNHeartbeat := func(supported bool) pb.Response {
+			return s.handleTNHeartbeat(ctx, pb.Request{
+				Method: pb.TN_HEARTBEAT,
+				TNHeartbeat: &pb.TNStoreHeartbeat{
+					UUID:                        "tn-1",
+					CommandDeliveryAckSupported: supported,
+				},
+			})
+		}
+		sendLogHeartbeat := func() pb.Response {
+			logHeartbeat := s.store.getHeartbeatMessage()
+			return s.handleLogHeartbeat(ctx, pb.Request{
+				Method:       pb.LOG_HEARTBEAT,
+				LogHeartbeat: &logHeartbeat,
+			})
+		}
+
+		require.Equal(t, uint32(moerr.Ok), sendCNHeartbeat(false).ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), sendTNHeartbeat(false).ErrorCode)
+		// HAKeeper/logservice may already be upgraded, but activation cannot
+		// begin while a current command target still advertises the old protocol.
+		first := sendLogHeartbeat()
+		require.False(t, first.CommandPollSupported)
+
+		require.Equal(t, uint32(moerr.Ok), sendCNHeartbeat(true).ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), sendTNHeartbeat(true).ErrorCode)
+		phaseOne := sendLogHeartbeat()
+		require.False(t, phaseOne.CommandPollSupported)
+
+		// Phase-one is a replicated cutover point. The capability observations
+		// above are intentionally insufficient; repeat them after the barrier.
+		require.Equal(t, uint32(moerr.Ok), sendCNHeartbeat(true).ErrorCode)
+		require.Equal(t, uint32(moerr.Ok), sendTNHeartbeat(true).ErrorCode)
+		phaseTwo := sendLogHeartbeat()
+		require.True(t, phaseTwo.CommandPollSupported)
 	}
 	runServiceTest(t, true, true, fn)
 }

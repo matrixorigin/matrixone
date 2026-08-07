@@ -1129,6 +1129,184 @@ func TestCommandDeliveryActivationUsesPostBarrierCapabilities(t *testing.T) {
 	require.Equal(t, rsms[0].state, rsms[1].state)
 }
 
+func TestCommandDeliveryActivationWaitsForServiceCapabilities(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.LogState.Shards[DefaultHAKeeperShardID] = pb.LogShardInfo{
+		ShardID: DefaultHAKeeperShardID,
+		Replicas: map[uint64]string{
+			1: "log-1",
+		},
+	}
+	// These stores advertised support before the barrier. That observation is
+	// deliberately not sufficient: an old service can still be running while
+	// HAKeeper is upgraded first, so readiness must be observed after phase one.
+	rsm.state.LogState.Stores["log-1"] = pb.LogStoreInfo{
+		CommandDeliverySupported: true,
+	}
+	rsm.state.CNState.Stores["cn-1"] = pb.CNStoreInfo{
+		CommandDeliveryAckSupported: true,
+	}
+	rsm.state.TNState.Stores["tn-1"] = pb.TNStoreInfo{
+		CommandDeliveryAckSupported: true,
+	}
+
+	result, err := rsm.Update(sm.Entry{Index: 10, Cmd: GetEnableCommandDeliveryCmd()})
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), result.Value)
+	require.True(t, rsm.state.CommandDeliveryPreparing)
+	require.Empty(t, rsm.state.CommandDeliveryCNReady)
+	require.Empty(t, rsm.state.CommandDeliveryTNReady)
+
+	heartbeatLog := func(index uint64) {
+		data, err := (&pb.LogStoreHeartbeat{
+			UUID:                     "log-1",
+			CommandDeliverySupported: true,
+		}).Marshal()
+		require.NoError(t, err)
+		_, err = rsm.Update(sm.Entry{Index: index, Cmd: GetLogStoreHeartbeatCmd(data)})
+		require.NoError(t, err)
+	}
+	heartbeatCN := func(index uint64, supported bool) {
+		data, err := (&pb.CNStoreHeartbeat{
+			UUID:                        "cn-1",
+			CommandDeliveryAckSupported: supported,
+		}).Marshal()
+		require.NoError(t, err)
+		_, err = rsm.Update(sm.Entry{Index: index, Cmd: GetCNStoreHeartbeatCmd(data)})
+		require.NoError(t, err)
+	}
+	heartbeatTN := func(index uint64, supported bool) {
+		data, err := (&pb.TNStoreHeartbeat{
+			UUID:                        "tn-1",
+			CommandDeliveryAckSupported: supported,
+		}).Marshal()
+		require.NoError(t, err)
+		_, err = rsm.Update(sm.Entry{Index: index, Cmd: GetTNStoreHeartbeatCmd(data)})
+		require.NoError(t, err)
+	}
+
+	heartbeatLog(11)
+	// An old heartbeat is explicit negative capability and must keep the
+	// transition disabled rather than falling through to legacy semantics.
+	heartbeatCN(12, false)
+	heartbeatTN(13, false)
+	result, err = rsm.Update(sm.Entry{Index: 14, Cmd: GetEnableCommandDeliveryCmd()})
+	require.NoError(t, err)
+	require.Zero(t, result.Value)
+	require.False(t, rsm.state.CommandDeliveryEnabled)
+
+	heartbeatCN(15, true)
+	heartbeatTN(16, true)
+	result, err = rsm.Update(sm.Entry{Index: 17, Cmd: GetEnableCommandDeliveryCmd()})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), result.Value)
+	require.True(t, rsm.state.CommandDeliveryEnabled)
+	require.Nil(t, rsm.state.CommandDeliveryCNReady)
+	require.Nil(t, rsm.state.CommandDeliveryTNReady)
+}
+
+func TestCommandDeliveryActivationRebuildsServiceBarrierAfterOldSnapshot(t *testing.T) {
+	oldState := pb.NewRSMState()
+	oldState.CommandDeliveryPreparing = true
+	// This is the state shape produced before CN/TN readiness was added.
+	oldState.CommandDeliveryReady = map[string]bool{"log-1": true}
+	oldState.CommandDeliveryCNReady = nil
+	oldState.CommandDeliveryTNReady = nil
+	oldState.LogState.Shards[DefaultHAKeeperShardID] = pb.LogShardInfo{
+		ShardID: DefaultHAKeeperShardID,
+		Replicas: map[uint64]string{
+			1: "log-1",
+		},
+	}
+	oldState.LogState.Stores["log-1"] = pb.LogStoreInfo{
+		CommandDeliverySupported: true,
+	}
+	data, err := oldState.Marshal()
+	require.NoError(t, err)
+
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	require.NoError(t, rsm.RecoverFromSnapshot(bytes.NewReader(data), nil, nil))
+	require.Nil(t, rsm.state.CommandDeliveryCNReady)
+	require.Nil(t, rsm.state.CommandDeliveryTNReady)
+	result, err := rsm.Update(sm.Entry{Index: 20, Cmd: GetEnableCommandDeliveryCmd()})
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), result.Value)
+	require.Empty(t, rsm.state.CommandDeliveryReady)
+	require.Empty(t, rsm.state.CommandDeliveryCNReady)
+	require.Empty(t, rsm.state.CommandDeliveryTNReady)
+	require.True(t, rsm.state.CommandDeliveryPreparing)
+}
+
+func TestLegacyServiceCannotConsumeAfterCommandDeliveryActivation(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.CommandDeliveryEnabled = true
+	rsm.state.ScheduleCommands["old-cn"] = pb.CommandBatch{
+		BatchID: 7,
+		Commands: []pb.ScheduleCommand{{
+			UUID:        "old-cn",
+			ServiceType: pb.CNService,
+		}},
+	}
+
+	hb, err := (&pb.CNStoreHeartbeat{
+		UUID: "old-cn",
+	}).Marshal()
+	require.NoError(t, err)
+	result, err := rsm.Update(sm.Entry{Index: 8, Cmd: GetCNStoreHeartbeatCmd(hb)})
+	require.NoError(t, err)
+	require.Empty(t, result.Data)
+	_, ok := rsm.state.ScheduleCommands["old-cn"]
+	require.True(t, ok, "an old service must not consume a durable batch")
+}
+
+func TestPreparingCommandDeliveryIsNonDestructiveForSupportedService(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.CommandDeliveryPreparing = true
+	command := pb.ScheduleCommand{
+		UUID:        "tn-1",
+		ServiceType: pb.TNService,
+		ShutdownStore: &pb.ShutdownStore{
+			StoreID: "tn-1",
+		},
+	}
+	_, err := rsm.Update(sm.Entry{
+		Index: 10,
+		Cmd:   GetUpdateCommandsCmd(1, []pb.ScheduleCommand{command}),
+	})
+	require.NoError(t, err)
+
+	heartbeat := func(ack uint64) sm.Result {
+		t.Helper()
+		data, err := (&pb.TNStoreHeartbeat{
+			UUID:                        command.UUID,
+			AckedCommandBatchID:         ack,
+			CommandDeliveryAckSupported: true,
+		}).Marshal()
+		require.NoError(t, err)
+		result, err := rsm.Update(sm.Entry{
+			Index: rsm.state.Index + 1,
+			Cmd:   GetTNStoreHeartbeatCmd(data),
+		})
+		require.NoError(t, err)
+		return result
+	}
+
+	// Losing the first response cannot remove work during the preparation
+	// window; the exact batch remains available for the next heartbeat.
+	result := heartbeat(0)
+	var delivered pb.CommandBatch
+	require.NoError(t, delivered.Unmarshal(result.Data))
+	require.Equal(t, []pb.ScheduleCommand{command}, delivered.Commands)
+	require.NotZero(t, delivered.BatchID)
+	_, ok := rsm.state.ScheduleCommands[command.UUID]
+	require.True(t, ok)
+
+	result = heartbeat(delivered.BatchID)
+	require.Empty(t, result.Data)
+	_, ok = rsm.state.ScheduleCommands[command.UUID]
+	require.False(t, ok)
+}
+
 func TestAcknowledgedCommandDeliverySurvivesLostResponse(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	rsm.state.CommandDeliveryEnabled = true
@@ -1224,17 +1402,18 @@ func TestAcknowledgedCommandDeliverySurvivesLostResponse(t *testing.T) {
 	_, ok = rsm.state.ScheduleCommands[first.UUID]
 	require.False(t, ok)
 
-	// Old CN/TN binaries do not send the capability bit and retain the legacy
-	// consume-on-heartbeat contract during a rolling service upgrade.
+	// An old CN/TN binary that appears after activation must not fall back to
+	// consume-on-heartbeat. The command remains durable until the service is
+	// upgraded and can acknowledge it.
 	_, err = rsm.Update(sm.Entry{
 		Index: rsm.state.Index + 1,
 		Cmd:   GetUpdateCommandsCmd(4, []pb.ScheduleCommand{first}),
 	})
 	require.NoError(t, err)
 	result = heartbeat(0, false)
-	require.NotEmpty(t, result.Data)
+	require.Empty(t, result.Data)
 	_, ok = rsm.state.ScheduleCommands[first.UUID]
-	require.False(t, ok)
+	require.True(t, ok)
 }
 
 func TestPendingScheduleCommandsDeduplicateRetries(t *testing.T) {

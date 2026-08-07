@@ -71,6 +71,8 @@ type CommandDeliveryState struct {
 	Preparing bool
 	Enabled   bool
 	Ready     map[string]bool
+	CNReady   map[string]bool
+	TNReady   map[string]bool
 }
 
 type stateMachine struct {
@@ -483,13 +485,13 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	}
 
 	s.state.Term = b.Term
-	if s.state.CommandDeliveryEnabled {
+	if s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing {
 		if s.state.ScheduleCommands == nil {
 			s.state.ScheduleCommands = make(map[string]pb.CommandBatch)
 		}
 	} else {
 		// Preserve the legacy replacement contract until the cluster-wide
-		// capability transition has committed.
+		// capability transition has entered its preparation barrier.
 		s.state.ScheduleCommands = make(map[string]pb.CommandBatch)
 	}
 	for _, c := range b.Commands {
@@ -511,10 +513,10 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 			l = pb.CommandBatch{
 				Commands: make([]pb.ScheduleCommand, 0),
 			}
-			if s.state.CommandDeliveryEnabled {
+			if s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing {
 				l.BatchID = s.state.Index
 			}
-		} else if s.state.CommandDeliveryEnabled {
+		} else if s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing {
 			if hasEquivalentScheduleCommand(l.Commands, c) {
 				continue
 			}
@@ -767,8 +769,22 @@ func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.CNState.Update(hb, s.state.Tick)
-	if s.state.CommandDeliveryEnabled && hb.CommandDeliveryAckSupported {
+	if s.state.CommandDeliveryPreparing {
+		if s.state.CommandDeliveryCNReady == nil {
+			s.state.CommandDeliveryCNReady = make(map[string]bool)
+		}
+		s.state.CommandDeliveryCNReady[hb.UUID] = hb.CommandDeliveryAckSupported
+	}
+	if (s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing) &&
+		hb.CommandDeliveryAckSupported {
 		return s.getCommandBatchWithAck(hb.UUID, hb.AckedCommandBatchID)
+	}
+	if s.state.CommandDeliveryEnabled {
+		// An old CN may still heartbeat after HAKeeper activates the protocol
+		// (for example, after a restart). Do not fall back to destructive
+		// delivery: that would recreate the command-loss window. The command
+		// remains durable until this CN is upgraded and starts acknowledging it.
+		return sm.Result{}
 	}
 	return s.getCommandBatch(hb.UUID)
 }
@@ -780,8 +796,20 @@ func (s *stateMachine) handleTNHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.TNState.Update(hb, s.state.Tick)
-	if s.state.CommandDeliveryEnabled && hb.CommandDeliveryAckSupported {
+	if s.state.CommandDeliveryPreparing {
+		if s.state.CommandDeliveryTNReady == nil {
+			s.state.CommandDeliveryTNReady = make(map[string]bool)
+		}
+		s.state.CommandDeliveryTNReady[hb.UUID] = hb.CommandDeliveryAckSupported
+	}
+	if (s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing) &&
+		hb.CommandDeliveryAckSupported {
 		return s.getCommandBatchWithAck(hb.UUID, hb.AckedCommandBatchID)
+	}
+	if s.state.CommandDeliveryEnabled {
+		// See the CN path above. A legacy TN must not consume a pending batch
+		// once acknowledged delivery is active.
+		return sm.Result{}
 	}
 	return s.getCommandBatch(hb.UUID)
 }
@@ -807,12 +835,13 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 }
 
 func (s *stateMachine) handleTick(cmd []byte) sm.Result {
-	// A replica upgraded from an older snapshot can contain pending batches
-	// without delivery IDs. Reuse an ordinary replicated tick to make them
-	// poll-safe. The decision depends only on replicated state, so replicas that
-	// recovered at different times still produce the same state. Current batches
-	// are skipped, and an empty command map makes this loop constant-time.
-	if s.state.CommandDeliveryEnabled {
+	// A replica entering the preparation barrier or upgraded from an older
+	// snapshot can contain pending batches without delivery IDs. Reuse an
+	// ordinary replicated tick to make them poll-safe. The decision depends only
+	// on replicated state, so replicas that recovered at different times still
+	// produce the same state. Current batches are skipped, and an empty command
+	// map makes this loop constant-time.
+	if s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing {
 		for uuid, batch := range s.state.ScheduleCommands {
 			if batch.BatchID == 0 {
 				batch.BatchID = s.state.Index
@@ -834,6 +863,20 @@ func (s *stateMachine) handleEnableCommandDelivery() sm.Result {
 		// entry are interpreted by one protocol version on every replica.
 		s.state.CommandDeliveryPreparing = true
 		s.state.CommandDeliveryReady = make(map[string]bool)
+		s.state.CommandDeliveryCNReady = make(map[string]bool)
+		s.state.CommandDeliveryTNReady = make(map[string]bool)
+		return sm.Result{Value: 2}
+	}
+	// A snapshot created by the first version of the barrier can have
+	// CommandDeliveryPreparing=true without the service readiness maps. Restart
+	// the barrier instead of waiting forever on readiness that cannot exist in
+	// that snapshot.
+	if s.state.CommandDeliveryReady == nil ||
+		s.state.CommandDeliveryCNReady == nil ||
+		s.state.CommandDeliveryTNReady == nil {
+		s.state.CommandDeliveryReady = make(map[string]bool)
+		s.state.CommandDeliveryCNReady = make(map[string]bool)
+		s.state.CommandDeliveryTNReady = make(map[string]bool)
 		return sm.Result{Value: 2}
 	}
 	shard, ok := s.state.LogState.Shards[DefaultHAKeeperShardID]
@@ -850,9 +893,21 @@ func (s *stateMachine) handleEnableCommandDelivery() sm.Result {
 			return sm.Result{}
 		}
 	}
+	for uuid := range s.state.CNState.Stores {
+		if !s.state.CommandDeliveryCNReady[uuid] {
+			return sm.Result{}
+		}
+	}
+	for uuid := range s.state.TNState.Stores {
+		if !s.state.CommandDeliveryTNReady[uuid] {
+			return sm.Result{}
+		}
+	}
 	s.state.CommandDeliveryEnabled = true
 	s.state.CommandDeliveryPreparing = false
 	s.state.CommandDeliveryReady = nil
+	s.state.CommandDeliveryCNReady = nil
+	s.state.CommandDeliveryTNReady = nil
 	for uuid, batch := range s.state.ScheduleCommands {
 		if batch.BatchID == 0 {
 			batch.BatchID = s.state.Index
@@ -1443,10 +1498,26 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 		for uuid, value := range s.state.CommandDeliveryReady {
 			ready[uuid] = value
 		}
+		var cnReady map[string]bool
+		if s.state.CommandDeliveryCNReady != nil {
+			cnReady = make(map[string]bool, len(s.state.CommandDeliveryCNReady))
+			for uuid, value := range s.state.CommandDeliveryCNReady {
+				cnReady[uuid] = value
+			}
+		}
+		var tnReady map[string]bool
+		if s.state.CommandDeliveryTNReady != nil {
+			tnReady = make(map[string]bool, len(s.state.CommandDeliveryTNReady))
+			for uuid, value := range s.state.CommandDeliveryTNReady {
+				tnReady[uuid] = value
+			}
+		}
 		return CommandDeliveryState{
 			Preparing: s.state.CommandDeliveryPreparing,
 			Enabled:   s.state.CommandDeliveryEnabled,
 			Ready:     ready,
+			CNReady:   cnReady,
+			TNReady:   tnReady,
 		}, nil
 	} else if q, ok := query.(*ClusterDetailsQuery); ok {
 		return s.handleClusterDetailsQuery(q.Cfg), nil
@@ -1474,5 +1545,11 @@ func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	if err != nil {
 		return err
 	}
+	// The state machine is initialized with maps for normal operation. Clear
+	// fields introduced after the original preparation barrier before decoding,
+	// otherwise an old snapshot would leave empty maps that look like a fresh
+	// barrier and could wait forever for readiness that was never recorded.
+	s.state.CommandDeliveryCNReady = nil
+	s.state.CommandDeliveryTNReady = nil
 	return s.state.Unmarshal(data)
 }

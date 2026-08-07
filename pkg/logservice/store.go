@@ -882,9 +882,11 @@ func (l *store) tryEnableCommandDelivery(ctx context.Context) (bool, error) {
 		return true, nil
 	}
 	// Phase one is proposed only after the leader has observed support from
-	// every current voter/non-voter. An old replica cannot decode the new update
-	// tag. The committed phase-one barrier then discards these possibly
-	// divergent pre-upgrade observations on every replica.
+	// every current HAKeeper voter/non-voter and every current CN/TN command
+	// target. An old replica cannot decode the new update tag, and an old
+	// service would otherwise consume a command destructively. The committed
+	// phase-one barrier then discards these possibly divergent pre-upgrade
+	// observations on every replica.
 	state, err := l.getCheckerStateWithContext(ctx)
 	if err != nil {
 		return false, err
@@ -893,6 +895,8 @@ func (l *store) tryEnableCommandDelivery(ctx context.Context) (bool, error) {
 	if !ok || len(shard.Replicas) == 0 {
 		return false, nil
 	}
+	resetServiceBarrier := delivery.Preparing &&
+		(delivery.CNReady == nil || delivery.TNReady == nil)
 	allMembers := func(replicas map[uint64]string, predicate func(string) bool) bool {
 		for _, uuid := range replicas {
 			if !predicate(uuid) {
@@ -902,7 +906,7 @@ func (l *store) tryEnableCommandDelivery(ctx context.Context) (bool, error) {
 		return true
 	}
 	ready := func(uuid string) bool {
-		if delivery.Preparing {
+		if delivery.Preparing && !resetServiceBarrier {
 			return delivery.Ready[uuid]
 		}
 		store, ok := state.LogState.Stores[uuid]
@@ -910,6 +914,29 @@ func (l *store) tryEnableCommandDelivery(ctx context.Context) (bool, error) {
 	}
 	if !allMembers(shard.Replicas, ready) || !allMembers(shard.NonVotingReplicas, ready) {
 		return false, nil
+	}
+	if delivery.Preparing && !resetServiceBarrier {
+		for uuid := range state.CNState.Stores {
+			if !delivery.CNReady[uuid] {
+				return false, nil
+			}
+		}
+		for uuid := range state.TNState.Stores {
+			if !delivery.TNReady[uuid] {
+				return false, nil
+			}
+		}
+	} else {
+		for _, store := range state.CNState.Stores {
+			if !store.CommandDeliveryAckSupported {
+				return false, nil
+			}
+		}
+		for _, store := range state.TNState.Stores {
+			if !store.CommandDeliveryAckSupported {
+				return false, nil
+			}
+		}
 	}
 	cmd := hakeeper.GetEnableCommandDeliveryCmd()
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)

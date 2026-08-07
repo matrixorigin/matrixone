@@ -95,15 +95,17 @@ func (m LogRecord) Clone() LogRecord {
 // NewRSMState creates a new HAKeeperRSMState instance.
 func NewRSMState() HAKeeperRSMState {
 	return HAKeeperRSMState{
-		NextIDByKey:          make(map[string]uint64),
-		ScheduleCommands:     make(map[string]CommandBatch),
-		CommandDeliveryReady: make(map[string]bool),
-		LogShards:            make(map[string]uint64),
-		CNState:              NewCNState(),
-		TNState:              NewTNState(),
-		LogState:             NewLogState(),
-		ProxyState:           NewProxyState(),
-		ClusterInfo:          newClusterInfo(),
+		NextIDByKey:            make(map[string]uint64),
+		ScheduleCommands:       make(map[string]CommandBatch),
+		CommandDeliveryReady:   make(map[string]bool),
+		CommandDeliveryCNReady: make(map[string]bool),
+		CommandDeliveryTNReady: make(map[string]bool),
+		LogShards:              make(map[string]uint64),
+		CNState:                NewCNState(),
+		TNState:                NewTNState(),
+		LogState:               NewLogState(),
+		ProxyState:             NewProxyState(),
+		ClusterInfo:            newClusterInfo(),
 	}
 }
 
@@ -153,6 +155,7 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	}
 	storeInfo.Resource = hb.Resource
 	storeInfo.CommitID = hb.CommitID
+	storeInfo.CommandDeliveryAckSupported = hb.CommandDeliveryAckSupported
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -228,6 +231,7 @@ func (s *TNState) Update(hb TNStoreHeartbeat, tick uint64) {
 	storeInfo.QueryAddress = hb.QueryAddress
 	storeInfo.ReplayedLsn = hb.ReplayedLsn
 	storeInfo.AutoIncrEpochFenceSupported = hb.AutoIncrEpochFenceSupported
+	storeInfo.CommandDeliveryAckSupported = hb.CommandDeliveryAckSupported
 	s.Stores[hb.UUID] = storeInfo
 }
 

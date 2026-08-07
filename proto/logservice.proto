@@ -610,6 +610,10 @@ message CNStoreInfo {
   int64           UpTime             = 15;
   string       ShardServiceAddress   = 16;
   string          CommitID           = 17;
+  // CommandDeliveryAckSupported reports whether this CN can use the
+  // non-destructive acknowledged schedule-command protocol. It is copied
+  // from CNStoreHeartbeat so HAKeeper can gate activation and admission.
+  bool CommandDeliveryAckSupported = 18;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -638,6 +642,10 @@ message TNStoreInfo {
   string  ShardServiceAddress   = 10;
   uint64 ReplayedLsn = 11;
   bool AutoIncrEpochFenceSupported = 12;
+  // CommandDeliveryAckSupported reports whether this TN can use the
+  // non-destructive acknowledged schedule-command protocol. It is copied
+  // from TNStoreHeartbeat so HAKeeper can gate activation and admission.
+  bool CommandDeliveryAckSupported = 13;
 }
 
 // TNState contains all TN details known to the HAKeeper.
@@ -795,6 +803,11 @@ message HAKeeperRSMState {
   // before every RSM replica upgraded cannot be used to enable new semantics.
   bool CommandDeliveryPreparing = 24;
   map<string, bool> CommandDeliveryReady = 25;
+  // Service readiness is tracked separately from log-service readiness. The
+  // maps are reset by the first barrier entry, so only CN/TN heartbeats
+  // observed after the barrier can enable acknowledged delivery.
+  map<string, bool> CommandDeliveryCNReady = 26;
+  map<string, bool> CommandDeliveryTNReady = 27;
 }
 
 // ReplicaInfo contains details of a replica
