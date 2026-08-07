@@ -15,10 +15,23 @@
 package fileservice
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 )
+
+type waitStartedContext struct {
+	context.Context
+	once    sync.Once
+	started chan struct{}
+}
+
+func (c *waitStartedContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.started) })
+	return c.Context.Done()
+}
 
 func TestIOMerger(t *testing.T) {
 	merger := NewIOMerger()
@@ -149,5 +162,84 @@ func TestIOMergerIsMerging(t *testing.T) {
 	done()
 	if merger.IsMerging(key) {
 		t.Fatal("expected key to stop merging")
+	}
+}
+
+func TestIOMergerWaitContext(t *testing.T) {
+	merger := NewIOMerger()
+	key := IOMergeKey{Path: "foo"}
+	done, waiter := merger.merge(key)
+	if done == nil || waiter != nil {
+		t.Fatal("expected first merge to initiate")
+	}
+	defer func() {
+		if merger.IsMerging(key) {
+			done()
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, waiter = merger.merge(key)
+	if waiter == nil {
+		t.Fatal("expected second merge to wait")
+	}
+	completed, err := waitForIOGeneration(ctx, key, waiter, time.Second)
+	if completed || !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled wait, got %v", err)
+	}
+	completed, err = waitForIOGeneration(context.Background(), key, waiter, time.Millisecond)
+	if completed || err != nil {
+		t.Fatalf("expected bounded wait to expire, got completed=%v, err=%v", completed, err)
+	}
+
+	waitCtx := &waitStartedContext{
+		Context: context.Background(),
+		started: make(chan struct{}),
+	}
+	type waitResult struct {
+		completed bool
+		err       error
+	}
+	waitDone := make(chan waitResult, 1)
+	go func() {
+		completed, err := waitForIOGeneration(waitCtx, key, waiter, time.Second)
+		waitDone <- waitResult{completed: completed, err: err}
+	}()
+	<-waitCtx.started
+	done()
+	result := <-waitDone
+	if !result.completed || result.err != nil {
+		t.Fatalf("merge completion wait failed: completed=%v, err=%v", result.completed, result.err)
+	}
+	completed, err = waitForIOGeneration(context.Background(), key, waiter, time.Second)
+	if !completed || err != nil {
+		t.Fatalf("completed merge wait failed: completed=%v, err=%v", completed, err)
+	}
+}
+
+func TestIOMergerWaiterRemainsBoundToGeneration(t *testing.T) {
+	merger := NewIOMerger()
+	key := IOMergeKey{Path: "foo"}
+
+	finishFirst, waiter := merger.merge(key)
+	if finishFirst == nil || waiter != nil {
+		t.Fatal("expected first merge to initiate")
+	}
+	_, firstWaiter := merger.merge(key)
+	if firstWaiter == nil {
+		t.Fatal("expected waiter for first generation")
+	}
+	finishFirst()
+
+	finishSecond, waiter := merger.merge(key)
+	if finishSecond == nil || waiter != nil {
+		t.Fatal("expected second generation to initiate")
+	}
+	defer finishSecond()
+
+	completed, err := waitForIOGeneration(context.Background(), key, firstWaiter, time.Second)
+	if !completed || err != nil {
+		t.Fatalf("first-generation waiter followed a later generation: completed=%v, err=%v", completed, err)
 	}
 }
