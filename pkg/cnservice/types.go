@@ -700,6 +700,8 @@ type service struct {
 	stopper             *stopper.Stopper
 	heartbeatInFlight   atomic.Bool
 	commandPollNeeded   atomic.Bool
+	commandPollReset    atomic.Uint64
+	commandPollWakeup   chan struct{}
 	commandMu           sync.Mutex
 	lastCommandBatchID  uint64
 	ackedCommandBatchID atomic.Uint64

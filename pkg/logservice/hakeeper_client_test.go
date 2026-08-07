@@ -18,6 +18,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
@@ -127,6 +129,134 @@ func TestHAKeeperClientsCanBeCreated(t *testing.T) {
 		assert.NoError(t, c3.Close())
 	}
 	runServiceTest(t, true, true, fn)
+}
+
+func TestScheduleCommandPollUsesIndependentMORPCConnection(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.NewRuntime(
+		metadata.ServiceType_LOG,
+		"schedule-command-test",
+		logutil.GetGlobalLogger(),
+	))
+	requestPool := &sync.Pool{}
+	requestPool.New = func() any {
+		return &RPCRequest{pool: requestPool}
+	}
+	codec := morpc.NewMessageCodec(
+		"",
+		func() morpc.Message { return requestPool.Get().(*RPCRequest) },
+		morpc.WithCodecEnableChecksum(),
+		morpc.WithCodecMaxBodySize(defaultMaxMessageSize),
+	)
+	socketPath := "/tmp/mo-hakeeper-" + uuid.NewString() + ".sock"
+	address := "unix://" + socketPath
+	server, err := morpc.NewRPCServer("schedule-command-server", address, codec)
+	require.NoError(t, err)
+	heartbeatEntered := make(chan struct{}, 1)
+	heartbeatRelease := make(chan struct{})
+	var releaseHeartbeat sync.Once
+	t.Cleanup(func() {
+		releaseHeartbeat.Do(func() { close(heartbeatRelease) })
+		require.NoError(t, server.Close())
+		removeErr := os.Remove(socketPath)
+		require.True(t, removeErr == nil || os.IsNotExist(removeErr), removeErr)
+	})
+	server.RegisterRequestHandler(func(
+		ctx context.Context,
+		message morpc.RPCMessage,
+		_ uint64,
+		session morpc.ClientSession,
+	) error {
+		request := message.Message.(*RPCRequest)
+		defer request.Release()
+		response := pb.Response{
+			RequestID: request.RequestID,
+			Method:    request.Method,
+		}
+		switch request.Method {
+		case pb.CHECK_HAKEEPER:
+			response.IsHAKeeper = true
+			response.CommandPollSupported = true
+			response.CommandDeliverySupported = true
+		case pb.CN_HEARTBEAT:
+			select {
+			case heartbeatEntered <- struct{}{}:
+			default:
+			}
+			select {
+			case <-heartbeatRelease:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		case pb.GET_SCHEDULE_COMMANDS:
+			response.CommandPollSupported = true
+			response.CommandBatch = &pb.CommandBatch{BatchID: 7}
+		default:
+			return moerr.NewInternalErrorf(ctx, "unexpected request method %s", request.Method)
+		}
+		return session.Write(ctx, &RPCResponse{Response: response})
+	})
+	require.NoError(t, server.Start())
+
+	connectCtx, cancelConnect := context.WithTimeout(context.Background(), 5*time.Second)
+	client, err := connectToHAKeeper(
+		connectCtx,
+		"",
+		[]string{address},
+		HAKeeperClientConfig{},
+	)
+	cancelConnect()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.close()) })
+
+	heartbeatDone := make(chan error, 1)
+	heartbeatCtx, cancelHeartbeat := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancelHeartbeat)
+	go func() {
+		_, err := client.sendCNHeartbeat(heartbeatCtx, pb.CNStoreHeartbeat{UUID: "cn-1"})
+		heartbeatDone <- err
+	}()
+	select {
+	case <-heartbeatEntered:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat did not enter the synchronous MORPC handler")
+	}
+
+	pollCtx, cancelPoll := context.WithTimeout(context.Background(), time.Second)
+	batch, err := client.getScheduleCommands(pollCtx, "cn-1", pb.CNService)
+	cancelPoll()
+	require.NoError(t, err)
+	require.Equal(t, uint64(7), batch.BatchID)
+	select {
+	case err := <-heartbeatDone:
+		t.Fatalf("heartbeat unexpectedly completed before its handler was released: %v", err)
+	default:
+	}
+
+	releaseHeartbeat.Do(func() { close(heartbeatRelease) })
+	require.NoError(t, <-heartbeatDone)
+}
+
+func TestScheduleCommandPollBackoffIsBounded(t *testing.T) {
+	require.Equal(t, time.Second, ScheduleCommandPollBackoff("cn-1", 0))
+	for _, test := range []struct {
+		attempt uint32
+		min     time.Duration
+		max     time.Duration
+	}{
+		{attempt: 1, min: 2 * time.Second, max: 2500 * time.Millisecond},
+		{attempt: 4, min: 16 * time.Second, max: 20 * time.Second},
+		{attempt: 5, min: 24 * time.Second, max: 30 * time.Second},
+		{attempt: ^uint32(0), min: 24 * time.Second, max: 30 * time.Second},
+	} {
+		delay := ScheduleCommandPollBackoff("cn-1", test.attempt)
+		require.GreaterOrEqual(t, delay, test.min)
+		require.LessOrEqual(t, delay, test.max)
+		require.Equal(t, delay, ScheduleCommandPollBackoff("cn-1", test.attempt))
+	}
+	require.NotEqual(t,
+		ScheduleCommandPollBackoff("cn-1", 5),
+		ScheduleCommandPollBackoff("cn-2", 5),
+	)
 }
 
 func TestAllocateIDByKeyWithRequestID(t *testing.T) {

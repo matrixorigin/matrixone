@@ -72,6 +72,7 @@ func (s *service) heartbeatTask(ctx context.Context) {
 }
 
 func (s *service) controlTask(ctx context.Context) {
+	s.commandPollWakeup = make(chan struct{}, 1)
 	commandDone := make(chan struct{})
 	go func() {
 		defer close(commandDone)
@@ -86,14 +87,12 @@ func (s *service) commandTask(ctx context.Context) {
 	if !ok {
 		return
 	}
-	poll := func() {
+	var lastPolledBatchID uint64
+	poll := func() bool {
 		// A healthy heartbeat remains the primary command-delivery RPC. Polling
 		// is a bounded hedge while it is in flight, and remains enabled after a
 		// failed/deadline heartbeat until one succeeds; the healthy steady state
 		// therefore adds no network or Raft traffic.
-		if !s.heartbeatInFlight.Load() && !s.commandPollNeeded.Load() {
-			return
-		}
 		start := time.Now()
 		defer func() {
 			v2.CNCommandPollHistogram.Observe(time.Since(start).Seconds())
@@ -108,24 +107,86 @@ func (s *service) commandTask(ctx context.Context) {
 					zap.String("uuid", s.cfg.UUID),
 					zap.Error(err))
 			}
-			return
+			return false
 		}
 		if ctx2.Err() != nil {
-			return
+			return false
 		}
 		s.handleCommandBatch(batch)
+		if len(batch.Commands) == 0 || batch.BatchID == 0 || batch.BatchID == lastPolledBatchID {
+			return false
+		}
+		lastPolledBatchID = batch.BatchID
+		return true
 	}
 
-	poll()
-	ticker := time.NewTicker(logservice.ScheduleCommandPollInterval)
-	defer ticker.Stop()
+	active := func() bool {
+		return s.heartbeatInFlight.Load() || s.commandPollNeeded.Load()
+	}
+	timer := time.NewTimer(time.Hour)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	defer timer.Stop()
+	var timerC <-chan time.Time
+	var backoffAttempt uint32
+	resetVersion := s.commandPollReset.Load()
+	arm := func(delay time.Duration) {
+		timer.Reset(delay)
+		timerC = timer.C
+	}
+	disarm := func() {
+		if timerC != nil && !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timerC = nil
+	}
+	resetBackoff := func() {
+		current := s.commandPollReset.Load()
+		if current != resetVersion {
+			resetVersion = current
+			backoffAttempt = 0
+			disarm()
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			poll()
+		case <-s.commandPollWakeup:
+			resetBackoff()
+			if !active() {
+				disarm()
+				backoffAttempt = 0
+			} else if timerC == nil {
+				arm(logservice.ScheduleCommandPollBackoff(s.cfg.UUID, 0))
+			}
+		case <-timerC:
+			timerC = nil
+			if !active() {
+				backoffAttempt = 0
+				continue
+			}
+			if poll() {
+				backoffAttempt = 0
+			} else if backoffAttempt < 5 {
+				backoffAttempt++
+			}
+			resetBackoff()
+			if active() {
+				arm(logservice.ScheduleCommandPollBackoff(s.cfg.UUID, backoffAttempt))
+			}
 		}
+	}
+}
+
+func (s *service) notifyCommandPoll() {
+	select {
+	case s.commandPollWakeup <- struct{}{}:
+	default:
 	}
 }
 
@@ -165,12 +226,12 @@ func (s *service) heartbeat(ctx context.Context) {
 	}
 
 	s.heartbeatInFlight.Store(true)
-	cb, err := func() (logservicepb.CommandBatch, error) {
-		defer s.heartbeatInFlight.Store(false)
-		return s._hakeeperClient.SendCNHeartbeat(ctx2, hb)
-	}()
+	s.notifyCommandPoll()
+	cb, err := s._hakeeperClient.SendCNHeartbeat(ctx2, hb)
+	s.heartbeatInFlight.Store(false)
 	if err != nil {
 		s.commandPollNeeded.Store(true)
+		s.notifyCommandPoll()
 		err = moerr.AttachCause(ctx2, err)
 		v2.CNHeartbeatFailureCounter.Inc()
 		s.logger.Error("failed to send cn heartbeat", zap.Error(err))
@@ -178,9 +239,12 @@ func (s *service) heartbeat(ctx context.Context) {
 	}
 	if ctx2.Err() != nil {
 		s.commandPollNeeded.Store(true)
+		s.notifyCommandPoll()
 		return
 	}
 	s.commandPollNeeded.Store(false)
+	s.commandPollReset.Add(1)
+	s.notifyCommandPoll()
 
 	select {
 	case <-s.hakeeperConnected:

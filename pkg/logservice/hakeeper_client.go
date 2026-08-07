@@ -42,9 +42,34 @@ const (
 	// ScheduleCommandPollInterval is the maximum time a command read waits
 	// before hedging an in-flight heartbeat. ScheduleCommandPollTimeout bounds
 	// that read. Neither value inherits the heartbeat RPC timeout.
-	ScheduleCommandPollInterval = time.Second
-	ScheduleCommandPollTimeout  = 3 * time.Second
+	ScheduleCommandPollInterval     = time.Second
+	ScheduleCommandPollTimeout      = 3 * time.Second
+	scheduleCommandPollMaxBaseDelay = 24 * time.Second
 )
+
+// ScheduleCommandPollBackoff returns the delay before the next degraded-path
+// command read. attempt zero preserves the one-second progress budget; repeated
+// empty/error reads back off to bound the load on an unavailable HAKeeper. A
+// stable service-specific jitter prevents a fleet-wide retry spike without
+// requiring shared random state.
+func ScheduleCommandPollBackoff(serviceID string, attempt uint32) time.Duration {
+	if attempt == 0 {
+		return ScheduleCommandPollInterval
+	}
+	base := scheduleCommandPollMaxBaseDelay
+	if attempt < 5 {
+		base = ScheduleCommandPollInterval << attempt
+	}
+	hash := uint64(14695981039346656037)
+	for i := range len(serviceID) {
+		hash ^= uint64(serviceID[i])
+		hash *= 1099511628211
+	}
+	hash ^= uint64(attempt)
+	hash *= 1099511628211
+	jitterRange := base / 4
+	return base + time.Duration(hash%uint64(jitterRange+1))
+}
 
 var hakeeperClientRetryInterval = 10 * time.Millisecond
 
@@ -1201,8 +1226,14 @@ type hakeeperClient struct {
 	cfg                      HAKeeperClientConfig
 	client                   morpc.RPCClient
 	addr                     string
+	sid                      string
 	pool                     *sync.Pool
 	respPool                 *sync.Pool
+	backendOptions           []morpc.BackendOption
+	clientOptions            []morpc.ClientOption
+	pollMu                   sync.Mutex
+	pollClient               morpc.RPCClient
+	closed                   bool
 	commandPollSupported     atomic.Bool
 	commandDeliverySupported atomic.Bool
 }
@@ -1277,9 +1308,12 @@ func connectToHAKeeper(
 		return &RPCResponse{pool: respPool}
 	}
 	c := &hakeeperClient{
-		cfg:      cfg,
-		pool:     pool,
-		respPool: respPool,
+		cfg:            cfg,
+		sid:            sid,
+		pool:           pool,
+		respPool:       respPool,
+		backendOptions: append([]morpc.BackendOption(nil), GetBackendOptions(ctx)...),
+		clientOptions:  append([]morpc.ClientOption(nil), GetClientOptions(ctx)...),
 	}
 	var e error
 	addresses := append([]string{}, targets...)
@@ -1326,10 +1360,20 @@ func (c *hakeeperClient) close() error {
 		panic("!!!")
 	}
 
+	c.pollMu.Lock()
+	c.closed = true
+	pollClient := c.pollClient
+	c.pollClient = nil
+	c.pollMu.Unlock()
+
+	var err error
 	if c.client != nil {
-		return c.client.Close()
+		err = c.client.Close()
 	}
-	return nil
+	if pollClient != nil {
+		err = errors.Join(err, pollClient.Close())
+	}
+	return err
 }
 
 func (c *hakeeperClient) getClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
@@ -1432,7 +1476,48 @@ func (c *hakeeperClient) getScheduleCommands(
 			ServiceType: serviceType,
 		},
 	}
-	return c.sendHeartbeat(ctx, req)
+	client, err := c.getScheduleCommandClient(ctx)
+	if err != nil {
+		return pb.CommandBatch{}, err
+	}
+	return c.sendHeartbeatWithClient(ctx, client, req)
+}
+
+// getScheduleCommandClient owns a transport that is independent from the
+// heartbeat transport. MORPC dispatches requests synchronously per connection,
+// so a second goroutine on the primary client would still queue behind a blocked
+// heartbeat handler on the server.
+func (c *hakeeperClient) getScheduleCommandClient(ctx context.Context) (morpc.RPCClient, error) {
+	c.pollMu.Lock()
+	defer c.pollMu.Unlock()
+	if c.closed {
+		return nil, moerr.NewNoHAKeeper(ctx)
+	}
+	if c.pollClient != nil {
+		return c.pollClient, nil
+	}
+	pollCtx := ctx
+	if len(c.backendOptions) > 0 {
+		pollCtx = SetBackendOptions(pollCtx, c.backendOptions...)
+	}
+	if len(c.clientOptions) > 0 {
+		pollCtx = SetClientOptions(pollCtx, c.clientOptions...)
+	}
+	client, err := getRPCClient(
+		pollCtx,
+		c.sid,
+		c.addr,
+		c.respPool,
+		defaultMaxMessageSize,
+		c.cfg.EnableCompress,
+		defaultBackendReadTimeout,
+		"schedule-command-poll",
+	)
+	if err != nil {
+		return nil, err
+	}
+	c.pollClient = client
+	return client, nil
 }
 
 func (c *hakeeperClient) sendLogHeartbeat(ctx context.Context,
@@ -1453,7 +1538,15 @@ func (c *hakeeperClient) sendLogHeartbeat(ctx context.Context,
 
 func (c *hakeeperClient) sendHeartbeat(ctx context.Context,
 	req pb.Request) (pb.CommandBatch, error) {
-	resp, err := c.request(ctx, req)
+	return c.sendHeartbeatWithClient(ctx, c.client, req)
+}
+
+func (c *hakeeperClient) sendHeartbeatWithClient(
+	ctx context.Context,
+	client morpc.RPCClient,
+	req pb.Request,
+) (pb.CommandBatch, error) {
+	resp, err := c.requestWithClient(ctx, client, req)
 	if err != nil {
 		return pb.CommandBatch{}, err
 	}
@@ -1594,6 +1687,20 @@ func (c *hakeeperClient) request(ctx context.Context, req pb.Request) (pb.Respon
 	if c == nil {
 		return pb.Response{}, moerr.NewNoHAKeeper(ctx)
 	}
+	return c.requestWithClient(ctx, c.client, req)
+}
+
+func (c *hakeeperClient) requestWithClient(
+	ctx context.Context,
+	client morpc.RPCClient,
+	req pb.Request,
+) (pb.Response, error) {
+	if c == nil {
+		return pb.Response{}, moerr.NewNoHAKeeper(ctx)
+	}
+	if client == nil {
+		return pb.Response{}, moerr.NewNoHAKeeper(ctx)
+	}
 	if err := validateHAKeeperClientContext(ctx); err != nil {
 		return pb.Response{}, err
 	}
@@ -1601,7 +1708,7 @@ func (c *hakeeperClient) request(ctx context.Context, req pb.Request) (pb.Respon
 	defer span.End()
 	r := c.pool.Get().(*RPCRequest)
 	r.Request = req
-	future, err := c.client.Send(ctx, c.addr, r)
+	future, err := client.Send(ctx, c.addr, r)
 	if err != nil {
 		return pb.Response{}, normalizeHAKeeperClientError(ctx, err)
 	}

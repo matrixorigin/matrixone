@@ -116,6 +116,8 @@ type store struct {
 	shutdownC           chan struct{}
 	heartbeatInFlight   atomic.Bool
 	commandPollNeeded   atomic.Bool
+	commandPollReset    atomic.Uint64
+	commandPollWakeup   chan struct{}
 	commandMu           sync.Mutex
 	shutdownAckMu       sync.Mutex
 	lastCommandBatchID  uint64
