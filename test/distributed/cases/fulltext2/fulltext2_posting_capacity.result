@@ -13,7 +13,7 @@ insert into docs values
 create fulltext2 index ft on docs(body) max_index_capacity 1000000 max_postings_capacity 8;
 select distinct algo, algo_params from mo_catalog.mo_indexes where name = 'ft';
 ➤ algo[12,11,0]  ¦  algo_params[12,2048,0]  𝄀
-fulltext2  ¦  {"max_index_capacity":"1000000","max_postings_capacity":"8","parser":"ngram"}
+fulltext2  ¦  {"max_index_capacity":"1000000","max_postings_capacity":"8","parser":"ngram","session_vars":{"cfg":{"lower_case_table_names":{"t":"I","v":1}}}}
 select id from docs where match(body) against('quick brown fox') order by id;
 ➤ id[-5,64,0]  𝄀
 0
@@ -39,7 +39,7 @@ select id from docs where match(body) against('brown') order by id;
 alter table docs alter reindex ft fulltext2 max_postings_capacity 4000000;
 select distinct algo_params from mo_catalog.mo_indexes where name = 'ft' and table_id = (select rel_id from mo_catalog.mo_tables where relname = 'docs');
 ➤ algo_params[12,2048,0]  𝄀
-{"max_index_capacity":"1000000","max_postings_capacity":"4000000","parser":"ngram"}
+{"max_index_capacity":"1000000","max_postings_capacity":"4000000","parser":"ngram","session_vars":{"cfg":{"lower_case_table_names":{"t":"I","v":1}}}}
 select id from docs where match(body) against('brown') order by id;
 ➤ id[-5,64,0]  𝄀
 0  𝄀
@@ -54,7 +54,7 @@ insert into docs2 values
 create fulltext2 index ft on docs2(body) max_postings_capacity 8000000;
 select distinct algo_params from mo_catalog.mo_indexes where name = 'ft' and table_id = (select rel_id from mo_catalog.mo_tables where relname = 'docs2');
 ➤ algo_params[12,2048,0]  𝄀
-{"max_postings_capacity":"8000000","parser":"ngram"}
+{"max_postings_capacity":"8000000","parser":"ngram","session_vars":{"cfg":{"lower_case_table_names":{"t":"I","v":1}}}}
 select id from docs2 where match(body) against('brown') order by id;
 ➤ id[-5,64,0]  𝄀
 0  𝄀
