@@ -515,6 +515,11 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 
 	case pipeline.Method_StopSending:
 		receiver.colexecServer.CancelPipelineSending(receiver.clientSession, receiver.messageId)
+		abortPipelineBatchFlow(
+			receiver.clientSession,
+			receiver.messageId,
+			moerr.NewQueryInterrupted(receiver.messageCtx),
+		)
 
 	default:
 		panic(fmt.Sprintf("unknown pipeline message type %d.", receiver.messageTyp))

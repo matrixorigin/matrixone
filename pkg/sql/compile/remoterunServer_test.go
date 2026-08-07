@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -548,6 +549,48 @@ func TestCnServerMessageHandlerWaitObservesConnectionClose(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("wait did not observe connection close")
 	}
+}
+
+func TestHandlePipelineStopSendingAbortsOutstandingBatchFlow(t *testing.T) {
+	server := colexec.NewServer("")
+	session := &lifecycleTestSession{ctx: context.Background()}
+	flow := newPipelineBatchFlow(1, 1024)
+	lifecycle, err := registerPipelineStreamLifecycle(session, 400, flow)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		lifecycle.remove()
+		server.RemoveRelatedPipeline(session, 400)
+	})
+
+	seq, err := flow.reserve(context.Background(), context.Background(), 10)
+	require.NoError(t, err)
+	drainStarted := make(chan struct{})
+	drainDone := make(chan error, 1)
+	go func() {
+		close(drainStarted)
+		drainDone <- flow.waitUntilDrained(context.Background(), context.Background(), nil)
+	}()
+	<-drainStarted
+
+	receiver := &messageReceiverOnServer{
+		messageCtx:    context.Background(),
+		messageId:     400,
+		messageTyp:    pipeline.Method_StopSending,
+		clientSession: session,
+		colexecServer: server,
+	}
+	require.NoError(t, handlePipelineMessage(receiver))
+
+	select {
+	case err = <-drainDone:
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted), err)
+	case <-time.After(time.Second):
+		t.Fatal("StopSending did not release the terminal-response drain barrier")
+	}
+	require.NoError(t, handlePipelineBatchAck(
+		&pipeline.Message{Id: 400, BatchAckSequence: seq}, session),
+		"a concurrently flushed ACK must remain harmless after StopSending")
+	require.Zero(t, session.closeCalls)
 }
 
 func TestMessageReceiverSendBatchUsesNegotiatedCredits(t *testing.T) {
