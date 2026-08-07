@@ -52,8 +52,10 @@ func TestNormalizePKCheckErrorPreservesRollingRestart(t *testing.T) {
 
 func TestTxnTableDelegate_CollectChanges(t *testing.T) {
 	table := &txnTableDelegate{}
+	require.False(t, table.IsPartitionedRelation())
 	table.combined.is = true
 	table.combined.tbl = newMockCombinedTxnTable()
+	require.True(t, table.IsPartitionedRelation())
 
 	handle, err := table.CollectChanges(
 		context.Background(),

@@ -60,12 +60,13 @@ type Protector interface {
 
 // LeaseJournal is the durable boundary for resolver authority. Store must
 // make a complete lease durable before returning. MarkReleased must durably
-// prevent replay before GC protection is removed.
+// prevent replay before GC protection is removed. Load must visit records one
+// at a time and must not retain a record after visit returns.
 type LeaseJournal interface {
 	Store(context.Context, *Lease) error
 	MarkReleased(context.Context, []byte) error
 	Delete(context.Context, []byte) error
-	Load(context.Context) ([]*Lease, error)
+	Load(context.Context, func(*Lease) error) error
 }
 
 type Lease struct {
@@ -354,33 +355,42 @@ func (m *LeaseManager) Replay(ctx context.Context) error {
 		}
 		defer closeProtection()
 	}
-	loaded, err := m.journal.Load(ctx)
-	if err != nil {
-		return moerr.NewInternalErrorNoCtxf("substrait: load read leases: %v", err)
-	}
-	if len(loaded) > m.maximum {
-		return moerr.NewInternalErrorNoCtx("substrait: durable read leases exceed capacity")
-	}
 	now := uint64(m.now().UnixMilli())
-	registered := make([]*Lease, 0, len(loaded))
-	for _, l := range loaded {
+	live := make([]*Lease, 0, m.maximum)
+	var replayErr error
+	err = m.journal.Load(ctx, func(l *Lease) error {
 		if err := validateLease(l, now, true); err != nil {
-			return moerr.NewInternalErrorNoCtxf("substrait: invalid durable read lease: %v", err)
+			replayErr = moerr.NewInternalErrorNoCtxf("substrait: invalid durable read lease: %v", err)
+			return replayErr
 		}
 		if l.Released || l.Read.ExpiresAtUnixMS <= now {
 			if err := m.releaseLocked(ctx, l); err != nil {
-				return moerr.NewInternalErrorNoCtxf("substrait: clean durable read lease: %v", err)
+				replayErr = moerr.NewInternalErrorNoCtxf("substrait: clean durable read lease: %v", err)
+				return replayErr
 			}
-			continue
+			return nil
 		}
+		if len(live) == m.maximum {
+			replayErr = moerr.NewInternalErrorNoCtx("substrait: durable read leases exceed capacity")
+			return replayErr
+		}
+		live = append(live, l)
+		return nil
+	})
+	if replayErr != nil {
+		return replayErr
+	}
+	if err != nil {
+		return moerr.NewInternalErrorNoCtxf("substrait: load read leases: %v", err)
+	}
+	for _, l := range live {
 		if register != nil {
 			if err := register(ctx, l.Read.ReadRef, l.ObjectNames, time.UnixMilli(int64(l.Read.ExpiresAtUnixMS))); err != nil {
 				return moerr.NewInternalErrorNoCtxf("substrait: replay read lease protection: %v", err)
 			}
 		}
-		registered = append(registered, l)
 	}
-	for _, l := range registered {
+	for _, l := range live {
 		m.leases[string(l.Read.ReadRef)] = cloneLease(l)
 	}
 	m.ready = true

@@ -63,6 +63,24 @@ func TestSnapshotProviderRejectsInvalidSetupBeforeStorageAccess(t *testing.T) {
 	require.ErrorContains(t, err, "is not open")
 }
 
+type partitionedRelationStub struct{ engine.Relation }
+
+func (*partitionedRelationStub) IsPartitionedRelation() bool { return true }
+
+func TestSnapshotProviderRejectsPartitionedRelationBeforeStorageAccess(t *testing.T) {
+	provider := &SnapshotProvider{
+		MPool:     mpool.MustNewZero(),
+		Relations: map[uint64]engine.Relation{42: new(partitionedRelationStub)},
+	}
+	facts, err := provider.PrepareSnapshotRead(
+		context.Background(),
+		substrait.Read{TableID: 42},
+		make([]byte, types.TxnTsSize),
+	)
+	require.NoError(t, err)
+	require.True(t, facts.NonTAE)
+}
+
 func objectStats(t *testing.T, rows uint32) objectio.ObjectStats {
 	id := types.NewObjectid()
 	s := objectio.NewObjectStatsWithObjectID(&id, false, true, false)

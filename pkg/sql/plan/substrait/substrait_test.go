@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -278,6 +279,7 @@ func (f *fakeProtector) Register(context.Context, []byte, []string, time.Time) e
 type fakeLeaseJournal struct {
 	events                       []string
 	leases                       []*Lease
+	loaded                       int
 	storeErr, markErr, deleteErr error
 	sawCleanupDeadline           bool
 }
@@ -313,12 +315,97 @@ func (f *fakeLeaseJournal) Delete(_ context.Context, readRef []byte) error {
 	return nil
 }
 
-func (f *fakeLeaseJournal) Load(context.Context) ([]*Lease, error) {
-	result := make([]*Lease, 0, len(f.leases))
-	for _, lease := range f.leases {
-		result = append(result, cloneLease(lease))
+func (f *fakeLeaseJournal) Load(_ context.Context, visit func(*Lease) error) error {
+	leases := append([]*Lease(nil), f.leases...)
+	for _, lease := range leases {
+		f.loaded++
+		if err := visit(cloneLease(lease)); err != nil {
+			return err
+		}
 	}
-	return result, nil
+	return nil
+}
+
+func collectJournalLeases(ctx context.Context, journal LeaseJournal) ([]*Lease, error) {
+	result := make([]*Lease, 0)
+	err := journal.Load(ctx, func(lease *Lease) error {
+		result = append(result, cloneLease(lease))
+		return nil
+	})
+	return result, err
+}
+
+func testDurableLease(t *testing.T, seed byte, expiresAt uint64) *Lease {
+	manifest := []byte{'m', seed}
+	schema := []byte{'s', seed}
+	manifestHash := sha256.Sum256(manifest)
+	schemaHash := sha256.Sum256(schema)
+	read := &TaeRead{
+		ProtocolVersion: TaeReadProtocolVersion,
+		ReadRef:         bytes.Repeat([]byte{seed}, 32),
+		QueryID:         []byte{'q', seed},
+		AccountID:       1,
+		TableID:         uint64(seed),
+		SnapshotTS:      make([]byte, types.TxnTsSize),
+		SchemaDigest:    schemaHash[:],
+		ManifestSHA256:  manifestHash[:],
+		CapabilityHash:  CapabilityHash[:],
+		ExpiresAtUnixMS: expiresAt,
+	}
+	wire, err := MarshalTaeRead(read)
+	require.NoError(t, err)
+	return &Lease{Read: read, Wire: wire, Manifest: manifest, CanonicalSchema: schema, AuthorizedClientSPKIHash: testClientSPKIHash()}
+}
+
+func TestReplayCleansTerminalRecordsBeforeLiveCapacity(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name     string
+		released bool
+		expires  time.Time
+	}{
+		{name: "released", released: true, expires: now.Add(time.Minute)},
+		{name: "expired", expires: now.Add(-time.Minute)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			journal := new(fakeLeaseJournal)
+			for seed := byte(1); seed <= 3; seed++ {
+				lease := testDurableLease(t, seed, uint64(tc.expires.UnixMilli()))
+				lease.Released = tc.released
+				journal.leases = append(journal.leases, lease)
+			}
+			live := testDurableLease(t, 4, uint64(now.Add(time.Minute).UnixMilli()))
+			journal.leases = append(journal.leases, live)
+			protector := new(fakeProtector)
+			manager := NewPersistentLeaseManager(1, protector, journal)
+			manager.now = func() time.Time { return now }
+
+			require.NoError(t, manager.Replay(context.Background()))
+			require.True(t, manager.Ready())
+			_, ok := manager.Resolve(live.Read.ReadRef)
+			require.True(t, ok)
+			require.Len(t, journal.leases, 1)
+			require.Equal(t, 4, journal.loaded)
+			require.Equal(t, 1, protector.registered)
+			require.Equal(t, 3, protector.unregistered)
+		})
+	}
+}
+
+func TestReplayStopsAfterBoundedLiveCapacity(t *testing.T) {
+	now := time.Now()
+	journal := new(fakeLeaseJournal)
+	for seed := byte(1); seed <= 5; seed++ {
+		journal.leases = append(journal.leases, testDurableLease(t, seed, uint64(now.Add(time.Minute).UnixMilli())))
+	}
+	protector := new(fakeProtector)
+	manager := NewPersistentLeaseManager(1, protector, journal)
+	manager.now = func() time.Time { return now }
+
+	require.ErrorContains(t, manager.Replay(context.Background()), "exceed capacity")
+	require.Equal(t, 2, journal.loaded)
+	require.Zero(t, protector.registered)
+	require.False(t, manager.Ready())
 }
 func (f *fakeProtector) Unregister(context.Context, []byte) error {
 	f.unregistered++
@@ -475,7 +562,7 @@ func TestPersistentLeaseReplayAndReleasedCrashRecovery(t *testing.T) {
 	require.NoError(t, afterCrash.Replay(ctx))
 	_, ok = afterCrash.Resolve(tr.ReadRef)
 	require.False(t, ok)
-	loaded, err := journal.Load(ctx)
+	loaded, err := collectJournalLeases(ctx, journal)
 	require.NoError(t, err)
 	require.Empty(t, loaded)
 }
@@ -503,7 +590,7 @@ func TestPersistentLeaseReplayExpiresWithoutResurrection(t *testing.T) {
 	require.NoError(t, replayed.Replay(ctx))
 	_, ok := replayed.Resolve(tr.ReadRef)
 	require.False(t, ok)
-	loaded, err := journal.Load(ctx)
+	loaded, err := collectJournalLeases(ctx, journal)
 	require.NoError(t, err)
 	require.Empty(t, loaded)
 }
@@ -745,6 +832,12 @@ func TestFileServiceLeaseJournalValidationAndReleaseMarker(t *testing.T) {
 	require.ErrorContains(t, journal.Store(context.Background(), &Lease{Read: &TaeRead{ReadRef: ref}}), "released read reference")
 	require.NoError(t, journal.Delete(context.Background(), ref))
 	require.NoError(t, journal.Delete(context.Background(), ref))
+
+	orphanRef := bytes.Repeat([]byte{5}, 32)
+	require.NoError(t, journal.MarkReleased(context.Background(), orphanRef))
+	require.NoError(t, journal.Load(context.Background(), func(*Lease) error { return nil }))
+	_, err = fs.StatFile(context.Background(), journal.releasedPath(orphanRef))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 }
 
 func TestJournalBoundIncludesJSONBase64Expansion(t *testing.T) {
@@ -770,7 +863,7 @@ func TestFileServiceLeaseJournalRejectsCorruption(t *testing.T) {
 			require.NoError(t, err)
 			name := journal.activePath(bytes.Repeat([]byte{5}, 32))
 			require.NoError(t, fs.Write(ctx, fileservice.IOVector{FilePath: name, Entries: []fileservice.IOEntry{{Offset: 0, Size: int64(len(tc.data)), Data: tc.data}}}))
-			_, err = journal.Load(ctx)
+			err = journal.Load(ctx, func(*Lease) error { return nil })
 			require.ErrorContains(t, err, tc.want)
 		})
 	}

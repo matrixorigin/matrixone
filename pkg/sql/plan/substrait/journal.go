@@ -111,78 +111,89 @@ func (j *FileServiceLeaseJournal) Delete(ctx context.Context, readRef []byte) er
 	return nil
 }
 
-func (j *FileServiceLeaseJournal) Load(ctx context.Context) ([]*Lease, error) {
+func (j *FileServiceLeaseJournal) Load(ctx context.Context, visit func(*Lease) error) error {
+	if visit == nil {
+		return moerr.NewInternalErrorNoCtx("substrait: missing lease journal visitor")
+	}
 	dir := path.Join(j.prefix, "active")
-	var names []string
 	active := make(map[string]struct{})
 	for entry, err := range j.fs.List(ctx, dir) {
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if entry == nil || entry.IsDir || !strings.HasSuffix(entry.Name, ".json") {
 			continue
 		}
 		if entry.Size <= 0 || entry.Size > maxJournalRecordSize {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: invalid lease journal record %q", entry.Name)
+			return moerr.NewInternalErrorNoCtxf("substrait: invalid lease journal record %q", entry.Name)
 		}
-		names = append(names, entry.Name)
 		active[strings.TrimSuffix(entry.Name, ".json")] = struct{}{}
 	}
+	names := make([]string, 0, len(active))
+	for name := range active {
+		names = append(names, name)
+	}
 	sort.Strings(names)
-	result := make([]*Lease, 0, len(names))
-	for _, name := range names {
-		encoded := strings.TrimSuffix(name, ".json")
+	for _, encoded := range names {
+		name := encoded + ".json"
 		readRef, err := hex.DecodeString(encoded)
 		if err != nil || len(readRef) != 32 {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: invalid lease journal name %q", name)
+			return moerr.NewInternalErrorNoCtxf("substrait: invalid lease journal name %q", name)
 		}
 		b, err := j.read(ctx, path.Join(dir, name))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		var envelope journalEnvelope
 		decoder := json.NewDecoder(bytes.NewReader(b))
 		decoder.DisallowUnknownFields()
 		if err = decoder.Decode(&envelope); err != nil {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: decode lease journal record %q: %v", name, err)
+			return moerr.NewInternalErrorNoCtxf("substrait: decode lease journal record %q: %v", name, err)
 		}
 		if err = ensureJSONEOF(decoder); err != nil {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: decode lease journal record %q: %v", name, err)
+			return moerr.NewInternalErrorNoCtxf("substrait: decode lease journal record %q: %v", name, err)
 		}
 		recordBytes, err := json.Marshal(envelope.Record)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		digest := sha256.Sum256(recordBytes)
 		if !equalBytes(digest[:], envelope.SHA256) {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: lease journal checksum mismatch %q", name)
+			return moerr.NewInternalErrorNoCtxf("substrait: lease journal checksum mismatch %q", name)
 		}
 		record := envelope.Record
 		tr, err := UnmarshalTaeRead(record.Wire, 0)
 		if err != nil || !equalBytes(tr.ReadRef, readRef) {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: lease journal identity mismatch %q", name)
+			return moerr.NewInternalErrorNoCtxf("substrait: lease journal identity mismatch %q", name)
 		}
 		_, statErr := j.fs.StatFile(ctx, j.releasedPath(readRef))
 		released := statErr == nil
 		if statErr != nil && !moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound) {
-			return nil, statErr
+			return statErr
 		}
-		result = append(result, &Lease{Read: tr, Wire: record.Wire, Manifest: record.Manifest, CanonicalSchema: record.CanonicalSchema, AuthorizedClientSPKIHash: record.AuthorizedClientSPKIHash, ObjectNames: record.ObjectNames, Released: released})
+		if err := visit(&Lease{Read: tr, Wire: record.Wire, Manifest: record.Manifest, CanonicalSchema: record.CanonicalSchema, AuthorizedClientSPKIHash: record.AuthorizedClientSPKIHash, ObjectNames: record.ObjectNames, Released: released}); err != nil {
+			return err
+		}
 	}
-	for entry, err := range j.fs.List(ctx, path.Join(j.prefix, "released")) {
+	releasedDir := path.Join(j.prefix, "released")
+	orphans := make(map[string]struct{})
+	for entry, err := range j.fs.List(ctx, releasedDir) {
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if entry == nil || entry.IsDir {
 			continue
 		}
 		if _, ok := active[entry.Name]; !ok {
-			if err := j.fs.Delete(ctx, path.Join(j.prefix, "released", entry.Name)); err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				return nil, err
-			}
+			orphans[entry.Name] = struct{}{}
 		}
 	}
-	return result, nil
+	for name := range orphans {
+		if err := j.fs.Delete(ctx, path.Join(releasedDir, name)); err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (j *FileServiceLeaseJournal) writeOnce(ctx context.Context, name string, data []byte) error {

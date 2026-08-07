@@ -1127,6 +1127,12 @@ func (tbl *txnTableDelegate) GetExtraInfo() *api.SchemaExtra {
 	return tbl.origin.extraInfo
 }
 
+// IsPartitionedRelation reports whether reads are delegated across physical
+// partition or partition-index tables instead of one TAE relation.
+func (tbl *txnTableDelegate) IsPartitionedRelation() bool {
+	return tbl != nil && tbl.combined.is
+}
+
 func (tbl *txnTableDelegate) GetFlushTS(
 	ctx context.Context,
 ) (types.TS, error) {

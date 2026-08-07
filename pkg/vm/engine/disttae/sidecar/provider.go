@@ -51,6 +51,10 @@ func (p *SnapshotProvider) PrepareSnapshotRead(ctx context.Context, read substra
 	if rel == nil {
 		return rejected, moerr.NewInternalErrorNoCtxf("TAE relation %d is not open", read.TableID)
 	}
+	if partitioned, ok := rel.(interface{ IsPartitionedRelation() bool }); ok && partitioned.IsPartitionedRelation() {
+		rejected.NonTAE = true
+		return rejected, nil
+	}
 	def := rel.GetTableDef(ctx)
 	if def == nil || def.TblId != read.TableID || def.IsTemporary || (def.TableType != "" && def.TableType != "r") {
 		rejected.NonTAE = true
