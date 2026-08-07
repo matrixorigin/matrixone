@@ -5153,7 +5153,11 @@ func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
 	day := uint64(0)
 	hasDay := false
 	if space := mysqlFirstWhitespaceForExtract(prefix); space >= 0 {
-		postDay := mysqlTrimLeftWhitespaceForExtract(prefix[space:])
+		// Keep the complete post-day candidate, including bytes that terminate
+		// mysqlTimePrefixForExtract. MySQL uses a nonempty suffix to establish
+		// day-TIME ownership for a one-digit hour (for example, "1 2x" and
+		// "1 2 "), while the suffix-free "1 2" remains compact TIME.
+		postDay := mysqlTrimLeftWhitespaceForExtract(str[space:])
 		if space > 0 && asciiDigits(prefix[:space]) && mysqlDayTimeClockCandidateForExtract(postDay) {
 			day = mysqlClampedDigitsForExtract(prefix[:space], 35)
 			hasDay = true
@@ -5282,9 +5286,9 @@ func mysqlDayTimeClockCandidateForExtract(str string) bool {
 		digits++
 	}
 	// A zero-padded/multi-digit field owns day-TIME even without a separator.
-	// A one-digit field owns it only when ':' proves that the field is an hour;
-	// otherwise inputs such as "1 2" retain the already consumed compact prefix.
-	return digits >= 2 || (digits == 1 && digits < len(str) && str[digits] == ':')
+	// A one-digit field owns it when the complete candidate has any suffix;
+	// otherwise inputs such as "1 2" retain the compact-TIME prefix.
+	return digits >= 2 || (digits == 1 && digits < len(str))
 }
 
 func mysqlClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
