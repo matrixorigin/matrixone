@@ -357,8 +357,14 @@ func performLock(
 			continue
 		}
 
+		if defChanged && !lockOp.ctr.defChanged {
+			lockOp.ctr.defChanged = true
+		}
+
 		// refreshTS is last commit ts + 1, because we need see the committed data.
-		if proc.Base.TxnClient.RefreshExpressionEnabled() &&
+		// A definition change must rebuild the plan instead; forwarding only the
+		// refreshed row timestamp would keep the stale physical table ID.
+		if !defChanged && proc.Base.TxnClient.RefreshExpressionEnabled() &&
 			target.refreshTimestampIndexInBatch != -1 {
 			priVec := bat.GetVector(target.primaryColumnIndexInBatch)
 			vec := bat.GetVector(target.refreshTimestampIndexInBatch)
@@ -374,9 +380,6 @@ func performLock(
 		// the locks to avoid another conflict when retrying
 		if !needRetry && !refreshTS.IsEmpty() {
 			needRetry = true
-		}
-		if !lockOp.ctr.defChanged {
-			lockOp.ctr.defChanged = defChanged
 		}
 	}
 	// when a transaction needs to operate on many data, there may be multiple conflicts on the
@@ -748,9 +751,43 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, err
 	}
 
-	snapshotTS := txnOp.Txn().SnapshotTS
+	snapshotTS := txn.SnapshotTS
+	// The transaction snapshot is mutable under RC: an earlier target, batch,
+	// pre-pipeline lock, or remote fragment may already have advanced it. A DDL
+	// fence describes whether the plan generation is stale, so compare it with
+	// the immutable snapshot captured for that plan. Keep using the current
+	// transaction snapshot for ordinary row-version scans so their range stays
+	// minimal. Callers without a compiled plan retain the legacy fallback.
+	planSnapshotTS, hasPlanSnapshot := proc.GetPlanSnapshotTS()
+	if !hasPlanSnapshot {
+		planSnapshotTS = snapshotTS
+	}
 	// if has no conflict, lockedTS means the latest commit ts of this table
 	lockedTS := result.Timestamp
+
+	// A table-definition lock used to report the change only to transactions
+	// that were already waiting on that lock. Retain the last committed DDL
+	// timestamp in the lock table as well, so a late locker can detect that its
+	// statement was compiled against an older physical table generation.
+	definitionChanged := (result.TableDefChanged && result.HasPrevCommit) ||
+		(result.TableDefChangedAt != nil && planSnapshotTS.Less(*result.TableDefChangedAt))
+	if definitionChanged {
+		if !txnOp.Txn().IsRCIsolation() {
+			return false, false, timestamp.Timestamp{},
+				moerr.NewTxnWWConflict(ctx, tableID, "table definition changed")
+		}
+
+		start = time.Now()
+		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+		analyzeLockWaitTime(analyzer, start)
+		if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+		return true, true, newSnapshotTS, nil
+	}
 
 	// Normal path: NewLockAdd=true, no conflict - original check
 	if result.NewLockAdd &&

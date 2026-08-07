@@ -27,6 +27,7 @@ const (
 	VarlenaSize       = 24
 	VarlenaBigHdr     = 0xffffffff
 	MaxCharLen        = 255
+	MaxTinyTextLen    = 255
 	MaxBinaryLen      = 255
 	MaxEnumLen        = 65535
 	MaxBitLen         = 64

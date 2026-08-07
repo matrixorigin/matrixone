@@ -530,7 +530,13 @@ func reindexSpecifiedParams(stmt tree.Statement, indexName string) map[string]st
 	return m
 }
 
-func (s *Scope) AlterTableInplace(c *Compile) error {
+func (s *Scope) AlterTableInplace(c *Compile) (err error) {
+	cleanup := newAlterAutoIncrementResetCleanup(c)
+	defer cleanup.finish(&err)
+	return s.alterTableInplace(c, cleanup)
+}
+
+func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCleanup) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := qry.Database
 	if dbName == "" {
@@ -1124,6 +1130,23 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				did, tid,
 				act.AlterComment.NewComment,
 			))
+		case *plan.AlterTable_Action_AlterAutoIncrement:
+			targetTableDef := qry.GetCopyTableDef()
+			if targetTableDef == nil {
+				targetTableDef = qry.GetTableDef()
+			}
+			if err := c.appendAlterAutoIncrementReqs(
+				dbName,
+				qry.GetTableDef(),
+				targetTableDef,
+				did,
+				tid,
+				act.AlterAutoIncrement.NewOffset,
+				cleanup,
+				&reqs,
+			); err != nil {
+				return err
+			}
 		case *plan.AlterTable_Action_AlterName:
 			reqs = append(reqs, api.NewRenameTableReq(
 				did, tid,
@@ -1547,12 +1570,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 			dedupFkName.Insert(fkey.Name)
 			newDef := &plan.ForeignKeyDef{
-				Name:        fkey.Name,
-				Cols:        make([]uint64, len(fkey.Cols)),
-				ForeignTbl:  fkey.ForeignTbl,
-				ForeignCols: make([]uint64, len(fkey.ForeignCols)),
-				OnDelete:    fkey.OnDelete,
-				OnUpdate:    fkey.OnUpdate,
+				Name:                fkey.Name,
+				Cols:                make([]uint64, len(fkey.Cols)),
+				ForeignTbl:          fkey.ForeignTbl,
+				ForeignCols:         make([]uint64, len(fkey.ForeignCols)),
+				OnDelete:            fkey.OnDelete,
+				OnUpdate:            fkey.OnUpdate,
+				ReferencedIndexName: fkey.ReferencedIndexName,
+				OnDeleteOrigin:      fkey.OnDeleteOrigin,
+				OnUpdateOrigin:      fkey.OnUpdateOrigin,
 			}
 			copy(newDef.ForeignCols, fkey.ForeignCols)
 
@@ -1687,12 +1713,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 		for _, info := range fkRefersToMe {
 			//update foreignCols in fk
 			newDef := &plan.ForeignKeyDef{
-				Name:        info.Def.Name,
-				Cols:        make([]uint64, len(info.Def.Cols)),
-				ForeignTbl:  tblId,
-				ForeignCols: make([]uint64, len(info.Def.ForeignCols)),
-				OnDelete:    info.Def.OnDelete,
-				OnUpdate:    info.Def.OnUpdate,
+				Name:                info.Def.Name,
+				Cols:                make([]uint64, len(info.Def.Cols)),
+				ForeignTbl:          tblId,
+				ForeignCols:         make([]uint64, len(info.Def.ForeignCols)),
+				OnDelete:            info.Def.OnDelete,
+				OnUpdate:            info.Def.OnUpdate,
+				ReferencedIndexName: info.Def.ReferencedIndexName,
+				OnDeleteOrigin:      info.Def.OnDeleteOrigin,
+				OnUpdateOrigin:      info.Def.OnUpdateOrigin,
 			}
 			//child table column ids of the child table
 			copy(newDef.Cols, info.Def.Cols)
@@ -4809,6 +4838,114 @@ func maybeResetAutoIncrement(
 		}
 	}
 
+	return nil
+}
+
+func (c *Compile) getAlterAutoIncrementOffset(
+	dbName string,
+	tblName string,
+	colName string,
+	requestedOffset uint64,
+) (uint64, error) {
+	colIdent := sqlquote.Ident(colName)
+	sql := fmt.Sprintf(
+		"select cast(coalesce(max(case when %s > 0 then %s else 0 end), 0) as unsigned) from %s",
+		colIdent,
+		colIdent,
+		sqlquote.QualifiedIdent(dbName, tblName),
+	)
+	res, err := c.runSqlWithResultAndOptions(
+		sql,
+		NoAccountId,
+		executor.StatementOption{}.WithDisableLog(),
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer res.Close()
+
+	maxStored := uint64(0)
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 || len(cols) == 0 || cols[0].IsNull(0) {
+			return false
+		}
+		maxStored = executor.GetFixedRows[uint64](cols[0])[0]
+		return false
+	})
+	return max(requestedOffset, maxStored), nil
+}
+
+func (c *Compile) appendAlterAutoIncrementReqs(
+	dbName string,
+	tableDef *plan.TableDef,
+	targetTableDef *plan.TableDef,
+	did uint64,
+	tid uint64,
+	requestedOffset uint64,
+	cleanup *alterAutoIncrementResetCleanup,
+	reqs *[]*api.AlterTableReq,
+) error {
+	if c.proc.Ctx != nil {
+		if err := c.proc.Ctx.Err(); err != nil {
+			return err
+		}
+	}
+	if !engine.TxnSupportsAutoIncrEpochFence(c.proc.GetTxnOperator()) {
+		return moerr.NewNotSupported(
+			c.proc.Ctx,
+			"AUTO_INCREMENT allocator reset requires epoch fencing on every TN service",
+		)
+	}
+
+	svc := incrservice.GetAutoIncrementService(c.proc.GetService())
+	for _, col := range incrservice.GetUserAutoColumnFromDef(tableDef) {
+		targetCol := plan2.FindColumnByColId(
+			targetTableDef.Cols,
+			tableDef.Cols[col.ColIndex].ColId,
+		)
+		if targetCol == nil || !targetCol.Typ.AutoIncr {
+			return moerr.NewInternalErrorNoCtxf(
+				"AUTO_INCREMENT column %q is missing from final table definition",
+				col.ColName,
+			)
+		}
+		offset, err := c.getAlterAutoIncrementOffset(
+			dbName,
+			tableDef.Name,
+			col.ColName,
+			requestedOffset,
+		)
+		if err != nil {
+			return err
+		}
+		if err := incrservice.ValidateAutoColumnOffset(
+			c.proc.Ctx,
+			types.T(targetCol.Typ.Id),
+			offset,
+		); err != nil {
+			return err
+		}
+		if err = svc.SetOffset(
+			c.proc.Ctx,
+			tid,
+			col.ColIndex,
+			targetCol.Name,
+			offset,
+			c.proc.GetTxnOperator(),
+		); err != nil {
+			return err
+		}
+		cleanup.track(tid)
+		if c.proc.Ctx != nil {
+			if err := c.proc.Ctx.Err(); err != nil {
+				return err
+			}
+		}
+		// disttae assigns the next catalog epoch when applying this request.
+		// Do not refresh relation metadata after allocation and substitute a
+		// different allocator generation.
+		*reqs = append(*reqs, api.NewUpdateAutoIncrementReq(did, tid, offset, 0))
+	}
 	return nil
 }
 

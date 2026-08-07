@@ -78,6 +78,8 @@ type fileServiceCloser interface {
 const (
 	defaultHAKeeperRunningTimeout = 2 * time.Minute
 	testingHAKeeperRunningTimeout = 5 * time.Minute
+	defaultAnyShardReadyTimeout   = 30 * time.Second
+	testingAnyShardReadyTimeout   = 5 * time.Minute
 )
 
 func newService(
@@ -448,7 +450,13 @@ func (op *operator) waitHAKeeperRunningLocked(
 		moerr.CauseWaitHAKeeperRunningLocked,
 	)
 	defer cancel()
+	return op.waitHAKeeperRunning(ctx, client)
+}
 
+func (op *operator) waitHAKeeperRunning(
+	ctx context.Context,
+	client logservice.CNHAKeeperClient,
+) error {
 	// wait HAKeeper running
 	for {
 		state, err := client.GetClusterState(ctx)
@@ -459,7 +467,9 @@ func (op *operator) waitHAKeeperRunningLocked(
 			state.State != logpb.HAKeeperRunning {
 			// not ready
 			op.reset.logger.Info("hakeeper not ready, retry")
-			time.Sleep(time.Second)
+			if err := waitStartupRetry(ctx, op.cfg.HAKeeperRunningRetryInterval.Duration); err != nil {
+				return err
+			}
 			continue
 		}
 		return err
@@ -474,9 +484,23 @@ func (op *operator) hakeeperRunningTimeout() time.Duration {
 }
 
 func (op *operator) waitAnyShardReadyLocked(client logservice.CNHAKeeperClient) error {
-	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Second*30, moerr.CauseWaitAnyShardReadyLocked)
+	ctx, cancel := context.WithTimeoutCause(
+		context.TODO(),
+		op.anyShardReadyTimeout(),
+		moerr.CauseWaitAnyShardReadyLocked,
+	)
 	defer cancel()
+	return op.waitAnyShardReady(ctx, client)
+}
 
+func (op *operator) anyShardReadyTimeout() time.Duration {
+	if op.testing {
+		return testingAnyShardReadyTimeout
+	}
+	return defaultAnyShardReadyTimeout
+}
+
+func (op *operator) waitAnyShardReady(ctx context.Context, client logservice.CNHAKeeperClient) error {
 	// wait shard ready
 	for {
 		if ok, err := func() (bool, error) {
@@ -509,7 +533,21 @@ func (op *operator) waitAnyShardReadyLocked(client logservice.CNHAKeeperClient) 
 			op.reset.logger.Info("shard ready")
 			return nil
 		}
-		time.Sleep(time.Second)
+		if err := waitStartupRetry(ctx, op.cfg.TNShardReadyRetryInterval.Duration); err != nil {
+			return err
+		}
+	}
+}
+
+func waitStartupRetry(ctx context.Context, interval time.Duration) error {
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return moerr.AttachCause(ctx, ctx.Err())
+	case <-timer.C:
+		return nil
 	}
 }
 

@@ -9772,202 +9772,34 @@ func Test_initProcedure(t *testing.T) {
 	})
 }
 
-func TestDoSetSecondaryRoleAll(t *testing.T) {
-	convey.Convey("do set secondary role succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
+func TestDoSwitchRoleIgnoresSecondaryRole(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 
-		bh := &backgroundExecTest{}
-		bh.init()
+	ses := newSes(&privilege{}, ctrl)
+	tenant := &TenantInfo{
+		Tenant:        "test_account",
+		User:          "test_user",
+		DefaultRole:   "role1",
+		TenantID:      3001,
+		UserID:        3,
+		DefaultRoleID: 5,
+	}
+	ses.SetTenantInfo(tenant)
 
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		stmt := &tree.SetRole{
-			SecondaryRole: false,
-		}
-
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
-		tenant := &TenantInfo{
-			Tenant:        "test_account",
-			User:          "test_user",
-			DefaultRole:   "role1",
-			TenantID:      3001,
-			UserID:        3,
-			DefaultRoleID: 5,
-		}
-		ses.SetTenantInfo(tenant)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForgetUserRolesExpectPublicRole(publicRoleID, ses.GetTenantInfo().UserID)
-		mrs := newMrsForPasswordOfUser([][]interface{}{
-			{"6", "role5"},
-		})
-		bh.sql2result[sql] = mrs
-
-		err := doSetSecondaryRoleAll(ses.GetTxnHandler().GetTxnCtx(), ses)
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(5))
-		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role1")
-	})
-
-	convey.Convey("do set secondary role succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		stmt := &tree.SetRole{
-			SecondaryRole: false,
-		}
-
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
-		tenant := &TenantInfo{
-			Tenant:        "test_account",
-			User:          "test_user",
-			DefaultRole:   "role1",
-			TenantID:      3001,
-			UserID:        3,
-			DefaultRoleID: 5,
-		}
-		ses.SetTenantInfo(tenant)
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		sql := getSqlForgetUserRolesExpectPublicRole(publicRoleID, ses.GetTenantInfo().UserID)
-		mrs := newMrsForPasswordOfUser([][]interface{}{})
-		bh.sql2result[sql] = mrs
-
-		err := doSetSecondaryRoleAll(ses.GetTxnHandler().GetTxnCtx(), ses)
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(5))
-		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role1")
-	})
-}
-
-func TestDoSwitchRoleSecondaryRoleAllInvalidatesRuleCache(t *testing.T) {
-	convey.Convey("set secondary role all invalidates rule cache", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		ses := newSes(&privilege{}, ctrl)
-		tenant := &TenantInfo{
-			Tenant:        "test_account",
-			User:          "test_user",
-			DefaultRole:   "role1",
-			TenantID:      3001,
-			UserID:        3,
-			DefaultRoleID: 5,
-		}
-		ses.SetTenantInfo(tenant)
-		ses.ruleCache = map[string]string{"db1.t1": "select a from db1.t1"}
-
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-		bh.sql2result[getSqlForgetUserRolesExpectPublicRole(publicRoleID, tenant.UserID)] = newMrsForPasswordOfUser([][]interface{}{
-			{"6", "role5"},
-		})
-
+	for _, secondaryRoleType := range []tree.SecondaryRoleType{
+		tree.SecondaryRoleTypeAll,
+		tree.SecondaryRoleTypeNone,
+	} {
 		err := doSwitchRole(ses.GetTxnHandler().GetTxnCtx(), ses, &tree.SetRole{
 			SecondaryRole:     true,
-			SecondaryRoleType: tree.SecondaryRoleTypeAll,
+			SecondaryRoleType: secondaryRoleType,
 		})
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(tenant.GetUseSecondaryRole(), convey.ShouldBeTrue)
-		convey.So(tenant.GetDefaultRoleID(), convey.ShouldEqual, uint32(5))
-		convey.So(tenant.GetDefaultRole(), convey.ShouldEqual, "role1")
-
-		ses.ruleCacheMu.RLock()
-		cacheIsNil := ses.ruleCache == nil
-		ses.ruleCacheMu.RUnlock()
-		convey.So(cacheIsNil, convey.ShouldBeTrue)
-	})
-
-	convey.Convey("set secondary role all returns setup error", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
-
-		ses := newSes(&privilege{}, ctrl)
-		tenant := &TenantInfo{
-			Tenant:        "test_account",
-			User:          "test_user",
-			DefaultRole:   "role1",
-			TenantID:      3001,
-			UserID:        3,
-			DefaultRoleID: 5,
-		}
-		ses.SetTenantInfo(tenant)
-
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-		bh.sql2err[getSqlForgetUserRolesExpectPublicRole(publicRoleID, tenant.UserID)] = fmt.Errorf("load roles failed")
-
-		err := doSwitchRole(ses.GetTxnHandler().GetTxnCtx(), ses, &tree.SetRole{
-			SecondaryRole:     true,
-			SecondaryRoleType: tree.SecondaryRoleTypeAll,
-		})
-		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(tenant.GetUseSecondaryRole(), convey.ShouldBeFalse)
-	})
-}
-
-func TestDoSwitchRoleSecondaryRoleNoneInvalidatesRuleCache(t *testing.T) {
-	convey.Convey("set secondary role none invalidates rule cache", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ses := newSes(&privilege{}, ctrl)
-		tenant := &TenantInfo{
-			Tenant:        "test_account",
-			User:          "test_user",
-			DefaultRole:   "role1",
-			TenantID:      3001,
-			UserID:        3,
-			DefaultRoleID: 5,
-		}
-		tenant.SetUseSecondaryRole(true)
-		ses.SetTenantInfo(tenant)
-		ses.ruleCache = map[string]string{"db1.t1": "select a from db1.t1"}
-
-		err := doSwitchRole(ses.GetTxnHandler().GetTxnCtx(), ses, &tree.SetRole{
-			SecondaryRole:     true,
-			SecondaryRoleType: tree.SecondaryRoleTypeNone,
-		})
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(tenant.GetUseSecondaryRole(), convey.ShouldBeFalse)
-
-		ses.ruleCacheMu.RLock()
-		cacheIsNil := ses.ruleCache == nil
-		ses.ruleCacheMu.RUnlock()
-		convey.So(cacheIsNil, convey.ShouldBeTrue)
-	})
+		require.NoError(t, err)
+		require.Equal(t, uint32(5), tenant.GetDefaultRoleID())
+		require.Equal(t, "role1", tenant.GetDefaultRole())
+		require.False(t, tenant.GetUseSecondaryRole())
+	}
 }
 
 func TestDoSwitchRolePrimaryRoleInvalidatesRuleCache(t *testing.T) {
