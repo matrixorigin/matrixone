@@ -165,3 +165,35 @@ func TestDataCacheSetUsesCapacityWithoutExposingBytes(t *testing.T) {
 		t.Fatalf("cache used bytes = %d, want physical capacity 7", got)
 	}
 }
+
+func TestDataCacheCallbacksReceiveCapturedLogicalSize(t *testing.T) {
+	type callbackSizes struct {
+		logical int64
+		backing int64
+	}
+
+	var postSet, postEvict callbackSizes
+	cache := NewDataCache(
+		fscache.ConstCapacity(8),
+		func(_ context.Context, _ fscache.CacheKey, _ fscache.Data, logicalSize, size int64, _ uint64) {
+			postSet = callbackSizes{logical: logicalSize, backing: size}
+		},
+		nil,
+		func(_ context.Context, _ fscache.CacheKey, _ fscache.Data, logicalSize, size int64, _ uint64) {
+			postEvict = callbackSizes{logical: logicalSize, backing: size}
+		},
+	)
+	key := fscache.CacheKey{Path: "foo", Sz: 3}
+	if err := cache.Set(context.Background(), key, testBytes(make([]byte, 3, 8))); err != nil {
+		t.Fatal(err)
+	}
+	cache.DeletePaths(context.Background(), []string{"foo"})
+
+	want := callbackSizes{logical: 3, backing: 8}
+	if postSet != want {
+		t.Fatalf("post-set sizes = %+v, want %+v", postSet, want)
+	}
+	if postEvict != want {
+		t.Fatalf("post-evict sizes = %+v, want %+v", postEvict, want)
+	}
+}

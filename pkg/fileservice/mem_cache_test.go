@@ -591,6 +591,47 @@ func BenchmarkMemoryCacheRead(b *testing.B) {
 
 }
 
+func BenchmarkMemCacheSetSequential(b *testing.B) {
+	benchmarkMemCacheSet(b, false)
+}
+
+func BenchmarkMemCacheSetParallel(b *testing.B) {
+	benchmarkMemCacheSet(b, true)
+}
+
+func benchmarkMemCacheSet(b *testing.B, parallel bool) {
+	ctx := context.Background()
+	cache := NewMemCache(fscache.ConstCapacity(1024), nil, nil, "")
+	b.Cleanup(func() { cache.Close(ctx) })
+
+	keys := make([]fscache.CacheKey, 2048)
+	for i := range keys {
+		keys[i] = fscache.CacheKey{Path: fmt.Sprintf("benchmark-%d", i), Sz: 1, Offset: int64(i)}
+	}
+	data := staticTestData([]byte("a"))
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	if !parallel {
+		for i := 0; i < b.N; i++ {
+			if err := cache.cache.Set(ctx, keys[i%len(keys)], data); err != nil {
+				b.Fatal(err)
+			}
+		}
+		return
+	}
+
+	var next atomic.Uint64
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			i := next.Add(1) - 1
+			if err := cache.cache.Set(ctx, keys[i%uint64(len(keys))], data); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
 func TestMemoryCacheGlobalSizeHint(t *testing.T) {
 	ctx := context.Background()
 

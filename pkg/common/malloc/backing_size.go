@@ -69,7 +69,25 @@ func (s ShardedAllocator[T]) BackingSize(size uint64) (uint64, error) {
 	if len(s) == 0 {
 		return 0, moerr.NewInternalErrorNoCtx("backing size requested from empty sharded allocator")
 	}
-	return BackingSize(s[0].Allocator, size)
+	backingSize, err := BackingSize(s[0].Allocator, size)
+	if err != nil {
+		return 0, err
+	}
+	for i := 1; i < len(s); i++ {
+		shardBackingSize, err := BackingSize(s[i].Allocator, size)
+		if err != nil {
+			return 0, err
+		}
+		if shardBackingSize != backingSize {
+			return 0, moerr.NewInvalidStateNoCtxf(
+				"sharded allocator backing sizes differ: shard 0 reports %d, shard %d reports %d",
+				backingSize,
+				i,
+				shardBackingSize,
+			)
+		}
+	}
+	return backingSize, nil
 }
 
 func (m *MetricsAllocator[U]) BackingSize(size uint64) (uint64, error) {

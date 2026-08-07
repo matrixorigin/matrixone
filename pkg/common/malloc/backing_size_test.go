@@ -101,4 +101,15 @@ func TestBackingSizeRejectsInconsistentContracts(t *testing.T) {
 	classAllocator := NewClassAllocator(NewFixedSizeMakeAllocator)
 	_, err = BackingSize(NewRandomAllocator(classAllocator, NewCAllocator(), 100), 3)
 	require.Error(t, err)
+
+	nextShard := 0
+	inconsistentShards := NewShardedAllocator[Allocator](2, func() Allocator {
+		nextShard++
+		if nextShard == 1 {
+			return NewCAllocator()
+		}
+		return NewClassAllocator(NewFixedSizeMakeAllocator)
+	})
+	_, err = BackingSize(inconsistentShards, 3)
+	require.Error(t, err)
 }

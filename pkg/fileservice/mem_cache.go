@@ -30,21 +30,9 @@ import (
 )
 
 type MemCache struct {
-	cache        fscache.DataCache
-	counterSets  []*perfcounter.CounterSet
-	callbacksMu  [256]sync.Mutex
-	accountingMu sync.Mutex
-	accounting   map[memCacheEntry]memCacheAccounting
-}
-
-type memCacheEntry struct {
-	key fscache.CacheKey
-	seq uint64
-}
-
-type memCacheAccounting struct {
-	logicalSize int64
-	accounted   bool
+	cache       fscache.DataCache
+	counterSets []*perfcounter.CounterSet
+	callbacksMu [256]sync.Mutex
 }
 
 var memCacheCallbackSeed = maphash.MakeSeed()
@@ -190,54 +178,40 @@ func NewMemCache(
 	var dataCache *fifocache.DataCache
 	ret := &MemCache{
 		counterSets: counterSets,
-		accounting:  make(map[memCacheEntry]memCacheAccounting),
 	}
 
-	prepareSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64) func(inserted bool) {
-		entry := memCacheEntry{key: key, seq: seq}
-		ret.accountingMu.Lock()
-		ret.accounting[entry] = memCacheAccounting{logicalSize: logicalSize}
-		ret.accountingMu.Unlock()
+	prepareSetFn := func(_ context.Context, _ fscache.CacheKey, value fscache.Data, _, _ int64, _ uint64) func(inserted bool) {
 		value.Retain()
 		return func(inserted bool) {
 			if !inserted {
-				ret.accountingMu.Lock()
-				delete(ret.accounting, entry)
-				ret.accountingMu.Unlock()
 				value.Release()
 			}
 		}
 	}
 
-	postSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64) {
+	postSetFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64) {
 		// events
 		LogEvent(ctx, str_memory_cache_post_set_begin)
 		defer LogEvent(ctx, str_memory_cache_post_set_end)
 
 		// metrics
 		LogEvent(ctx, str_update_metrics_begin)
-		entry := memCacheEntry{key: key, seq: seq}
-		ret.accountingMu.Lock()
-		accounting, ok := ret.accounting[entry]
-		if ok {
-			accounting.accounted = true
-			ret.accounting[entry] = accounting
-			inuseBytes.Add(float64(size))
-			logicalInuseBytes.Add(float64(accounting.logicalSize))
-			backingOverheadBytes.Add(float64(size - accounting.logicalSize))
-			capacityBytes.Set(float64(capacityFunc()))
-		}
-		ret.accountingMu.Unlock()
+		inuseBytes.Add(float64(size))
+		logicalInuseBytes.Add(float64(logicalSize))
+		backingOverheadBytes.Add(float64(size - logicalSize))
+		capacityBytes.Set(float64(capacityFunc()))
 		LogEvent(ctx, str_update_metrics_end)
-		if !ok {
-			return
-		}
 
 		// callbacks
 		if callbacks != nil {
 			callbackLock := ret.callbacksLock(key)
 			callbackLock.Lock()
 			defer callbackLock.Unlock()
+			if dataCache != nil {
+				if currentSeq, ok := dataCache.CurrentSeq(key); !ok || currentSeq != seq {
+					return
+				}
+			}
 			LogEvent(ctx, str_memory_cache_callbacks_begin)
 			for _, fn := range callbacks.PostSet {
 				fn(key, value)
@@ -264,29 +238,17 @@ func NewMemCache(
 		}
 	}
 
-	postEvictFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64) {
+	postEvictFn := func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64) {
 		// events
 		LogEvent(ctx, str_memory_cache_post_evict_begin)
 		defer LogEvent(ctx, str_memory_cache_post_evict_end)
 
 		// metrics
 		LogEvent(ctx, str_update_metrics_begin)
-		entry := memCacheEntry{key: key, seq: seq}
-		ret.accountingMu.Lock()
-		accounting, ok := ret.accounting[entry]
-		if ok {
-			delete(ret.accounting, entry)
-			if accounting.accounted {
-				inuseBytes.Add(float64(-size))
-				logicalInuseBytes.Add(float64(-accounting.logicalSize))
-				backingOverheadBytes.Add(float64(accounting.logicalSize - size))
-				capacityBytes.Set(float64(capacityFunc()))
-			}
-		}
-		ret.accountingMu.Unlock()
-		if !ok {
-			panic("memory cache eviction is missing logical-size accounting")
-		}
+		inuseBytes.Add(float64(-size))
+		logicalInuseBytes.Add(float64(-logicalSize))
+		backingOverheadBytes.Add(float64(logicalSize - size))
+		capacityBytes.Set(float64(capacityFunc()))
 		LogEvent(ctx, str_update_metrics_end)
 
 		// release

@@ -38,9 +38,9 @@ type dataCacheValue struct {
 
 func NewDataCache(
 	capacity fscache.CapacityFunc,
-	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
+	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64),
 	postGet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
-	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
+	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64),
 ) *DataCache {
 	return NewDataCacheWithPrepareSet(capacity, nil, postSet, postGet, postEvict)
 }
@@ -48,9 +48,9 @@ func NewDataCache(
 func NewDataCacheWithPrepareSet(
 	capacity fscache.CapacityFunc,
 	prepareSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64) func(inserted bool),
-	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
+	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64),
 	postGet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
-	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64, seq uint64),
+	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, logicalSize, size int64, seq uint64),
 ) *DataCache {
 	var fifoPrepareSet func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64, seq uint64) func(inserted bool)
 	if prepareSet != nil {
@@ -61,7 +61,7 @@ func NewDataCacheWithPrepareSet(
 	var fifoPostSet func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64, seq uint64)
 	if postSet != nil {
 		fifoPostSet = func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64, seq uint64) {
-			postSet(ctx, key, value.data, size, seq)
+			postSet(ctx, key, value.data, value.logicalSize, size, seq)
 		}
 	}
 	var fifoPostGet func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64)
@@ -73,7 +73,7 @@ func NewDataCacheWithPrepareSet(
 	var fifoPostEvict func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64, seq uint64)
 	if postEvict != nil {
 		fifoPostEvict = func(ctx context.Context, key fscache.CacheKey, value dataCacheValue, size int64, seq uint64) {
-			postEvict(ctx, key, value.data, size, seq)
+			postEvict(ctx, key, value.data, value.logicalSize, size, seq)
 		}
 	}
 	return &DataCache{
