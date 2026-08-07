@@ -126,9 +126,9 @@ func TestDocmapIncludeFixedNoOffsetTable(t *testing.T) {
 	require.Equal(t, 2, loaded.includeLay.nFixed)
 	require.Equal(t, 0, loaded.includeLay.nVarlena)
 	// values round-trip (incl. NULL int64 at ord1 col0).
-	v, isNull, _ := loaded.includeVal(1, 0)
+	_, isNull, _ := loaded.includeVal(1, 0)
 	require.True(t, isNull)
-	v, _, _ = loaded.includeVal(1, 1)
+	v, _, _ := loaded.includeVal(1, 1)
 	require.Equal(t, int32(200), v)
 	v, _, _ = loaded.includeVal(0, 0)
 	require.Equal(t, int64(10), v)
