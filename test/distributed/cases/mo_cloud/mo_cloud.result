@@ -696,7 +696,7 @@ value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  0.0  ¦    ¦    𝄀
 node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
 role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
 account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  0  ¦    ¦
+account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  0  ¦    ¦  
 DESC `system_metrics`.`server_storage_usage` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 collecttime  ¦  DATETIME(6)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
@@ -704,7 +704,7 @@ value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  0.0  ¦    ¦    𝄀
 node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
 role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
 account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  0  ¦    ¦
+account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  0  ¦    ¦  
 DESC `system_metrics`.`sql_statement_errors` ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 collecttime  ¦  DATETIME(6)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
@@ -721,7 +721,7 @@ value  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  0.0  ¦    ¦    𝄀
 node  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
 role  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  monolithic  ¦    ¦    𝄀
 account  ¦  VARCHAR(1024)  ¦  YES  ¦    ¦  sys  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  0  ¦    ¦
+account_id  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  0  ¦    ¦  
 INSERT INTO `mo_catalog`.`statement_mo` (`statement_id`,`account`,`response_at`,`stu`,`account_id`) VALUES ('057247c5-2d0c-11ee-9e81-96ce077ba0f3','91731e77_49ea_4a8a_b1c7_d5512c7ae96e','2023-07-28 06:00:20','0.0003963262009632',2);
 no such table mo_catalog.statement_mo
 INSERT INTO `mo_mo`.`statement_time` (`cluster`,`last_time`) VALUES ('ab','2023-07-28 04:50:00');
