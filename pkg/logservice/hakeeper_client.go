@@ -801,9 +801,13 @@ func (c *managedHAKeeperClient) GetScheduleCommands(
 	if err := validateHAKeeperClientContext(ctx); err != nil {
 		return pb.CommandBatch{}, err
 	}
-	client, err := c.getPreparedClient(ctx)
-	if err != nil {
-		return pb.CommandBatch{}, err
+	// Heartbeat owns HAKeeper discovery and managed-generation replacement.
+	// Polling only hedges a heartbeat through an already admitted generation;
+	// preparing one here would inherit the general client's inner reconnect
+	// policy and create a second retry owner during an outage.
+	client := c.getCurrentClient()
+	if client == nil {
+		return pb.CommandBatch{}, moerr.NewNoHAKeeper(ctx)
 	}
 	// Never gate the recovery path on a capability cached by an earlier
 	// connection. MORPC can reconnect the same managed generation after a server
@@ -816,10 +820,13 @@ func (c *managedHAKeeperClient) GetScheduleCommands(
 		// the read on the next outer cadence.
 		return pb.CommandBatch{}, nil
 	}
-	if shouldResetHAKeeperClient(err) {
-		c.resetClientIfCurrent(client)
-	}
 	return batch, err
+}
+
+func (c *managedHAKeeperClient) getCurrentClient() *hakeeperClient {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.mu.client
 }
 
 func (c *managedHAKeeperClient) SendLogHeartbeat(ctx context.Context,

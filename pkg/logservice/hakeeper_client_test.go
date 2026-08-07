@@ -769,9 +769,30 @@ func TestManagedHAKeeperClientCommandPollMakesOneAttempt(t *testing.T) {
 	_, err := client.GetScheduleCommands(ctx, pb.TNService)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF))
 	require.Equal(t, int32(1), transport.sends.Load())
-	require.Equal(t, int32(1), transport.closes.Load())
+	require.Zero(t, transport.closes.Load(),
+		"a poll failure must not close the heartbeat's managed generation")
 	require.Zero(t, reconnectAttempts.Load(),
 		"the outer command worker owns the next retry cadence")
+
+	// A later cadence gets exactly one new transport attempt. MORPC owns the
+	// failed poll backend; polling must neither replace the managed generation
+	// nor close the independent client between cadences.
+	_, err = client.GetScheduleCommands(ctx, pb.TNService)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF))
+	require.Equal(t, int32(2), transport.sends.Load())
+	require.Zero(t, transport.closes.Load())
+	require.Zero(t, reconnectAttempts.Load(),
+		"heartbeat exclusively owns managed-generation replacement")
+
+	// With no admitted generation, polling returns immediately instead of
+	// entering the heartbeat client's discovery/reconnect policy.
+	empty := &managedHAKeeperClient{}
+	_, err = empty.GetScheduleCommands(ctx, pb.TNService)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper))
+	require.Zero(t, reconnectAttempts.Load())
+
+	require.NoError(t, client.Close())
+	require.Equal(t, int32(1), transport.closes.Load())
 }
 
 func TestManagedHAKeeperClientResetIsGenerationScoped(t *testing.T) {
