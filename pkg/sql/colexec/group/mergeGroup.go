@@ -32,6 +32,8 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 		mergeGroup.ctr.free()
 	}
 	mergeGroup.ctr.prepareParamKind.Reset(mergeGroup.Aggs)
+	mergeGroup.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
+		hasPrepareParamKindPreservingAgg(mergeGroup.Aggs)
 	mergeGroup.ctr.mp = mpool.MustNew("merge_group_mpool")
 	mergeGroup.ctr.groupByTypes = nil
 	mergeGroup.ctr.keyNullable = false
@@ -194,21 +196,14 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 			return false, moerr.NewInternalError(proc.Ctx, "nAggs != len(mergeGroup.ctr.spillAggList)")
 		}
 		for i := int32(0); i < nAggs; i++ {
-			encoded, err := types.ReadByte(reader)
-			if err != nil {
-				return false, err
-			}
-			kind, seen, ok := decodePrepareParamKindState(encoded)
-			if !ok {
-				return false, moerr.NewInternalErrorf(proc.Ctx,
-					"invalid aggregate prepared parameter state %d", encoded)
-			}
-			mergeGroup.ctr.prepareParamKind.ObserveState(int(i), kind, seen)
-		}
-
-		for i := int32(0); i < nAggs; i++ {
 			ag := mergeGroup.ctr.spillAggList[i]
 			if err := ag.UnmarshalFromReader(reader, mergeGroup.ctr.mp); err != nil {
+				return false, err
+			}
+		}
+		if mergeGroup.ctr.prepareParamKindWireV1 && reader.Len() > 0 {
+			if err := readPrepareParamKindTrailer(proc.Ctx, reader, nAggs,
+				&mergeGroup.ctr.prepareParamKind); err != nil {
 				return false, err
 			}
 		}

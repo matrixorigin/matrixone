@@ -63,6 +63,8 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		group.ctr.free()
 	}
 	group.ctr.prepareParamKind.Reset(group.Aggs)
+	group.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
+		hasPrepareParamKindPreservingAgg(group.Aggs)
 	group.ctr.mp = mpool.MustNewNoLock("group_mpool")
 
 	// debug,
@@ -633,17 +635,14 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	buf.Write(types.EncodeBool(&group.ctr.keyNullable))
 	nAggs := int32(len(group.ctr.aggList))
 	buf.Write(types.EncodeInt32(&nAggs))
-	for i := range group.ctr.aggList {
-		kind, seen := group.ctr.prepareParamKind.GetState(i)
-		encoded, ok := encodePrepareParamKindState(kind, seen)
-		if !ok {
-			return vm.CancelResult, false, moerr.NewInternalErrorf(proc.Ctx,
-				"invalid aggregate prepared parameter kind %d", kind)
-		}
-		buf.WriteByte(encoded)
-	}
 	for _, ag := range group.ctr.aggList {
 		ag.SaveIntermediateResultOfChunk(curr, &buf)
+	}
+	if group.ctr.prepareParamKindWireV1 {
+		if err := writePrepareParamKindTrailer(proc.Ctx, &buf, group.Aggs,
+			&group.ctr.prepareParamKind); err != nil {
+			return vm.CancelResult, false, err
+		}
 	}
 	batch.ExtraBuf = buf.Bytes()
 
