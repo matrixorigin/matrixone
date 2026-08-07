@@ -76,10 +76,10 @@ func (s *store) commandTask(ctx context.Context) {
 		return
 	}
 	poll := func() {
-		// Keep the normal heartbeat as the zero-overhead delivery path. This
-		// read is issued only when that RPC is in flight beyond the local poll
-		// cadence, so healthy clusters do not receive duplicate proposals.
-		if !s.heartbeatInFlight.Load() {
+		// Keep the normal heartbeat as the primary delivery path. This read is
+		// issued while that RPC is in flight, or after a failed/deadline heartbeat
+		// until one succeeds; healthy clusters do not receive duplicate proposals.
+		if !s.heartbeatInFlight.Load() && !s.commandPollNeeded.Load() {
 			return
 		}
 		start := time.Now()
@@ -151,14 +151,17 @@ func (s *store) heartbeat(ctx context.Context) {
 		return s.hakeeperClient.SendTNHeartbeat(ctx2, hb)
 	}()
 	if err != nil {
+		s.commandPollNeeded.Store(true)
 		err = moerr.AttachCause(ctx2, err)
 		v2.TNHeartbeatFailureCounter.Inc()
 		s.rt.Logger().Error("failed to send tn heartbeat", zap.Error(err))
 		return
 	}
 	if ctx2.Err() != nil {
+		s.commandPollNeeded.Store(true)
 		return
 	}
+	s.commandPollNeeded.Store(false)
 
 	s.config.DecrCount()
 	s.handleCommandBatch(cb)

@@ -115,6 +115,7 @@ type store struct {
 	stopper             *stopper.Stopper
 	shutdownC           chan struct{}
 	heartbeatInFlight   atomic.Bool
+	commandPollNeeded   atomic.Bool
 	commandMu           sync.Mutex
 	lastCommandBatchID  uint64
 	ackedCommandBatchID atomic.Uint64

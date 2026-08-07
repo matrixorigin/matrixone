@@ -1040,6 +1040,27 @@ func TestTickAssignsIDsToLegacyScheduleCommandBatchesOnce(t *testing.T) {
 		"subsequent ticks must not rewrite a stable delivery generation")
 }
 
+func TestAcknowledgedHeartbeatAssignsMissingBatchID(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.CommandDeliveryEnabled = true
+	command := pb.ScheduleCommand{UUID: "tn-1", ServiceType: pb.TNService}
+	rsm.state.ScheduleCommands[command.UUID] = pb.CommandBatch{
+		Commands: []pb.ScheduleCommand{command},
+	}
+
+	hb, err := (&pb.TNStoreHeartbeat{
+		UUID:                        command.UUID,
+		CommandDeliveryAckSupported: true,
+	}).Marshal()
+	require.NoError(t, err)
+	result, err := rsm.Update(sm.Entry{Index: 10, Cmd: GetTNStoreHeartbeatCmd(hb)})
+	require.NoError(t, err)
+	var batch pb.CommandBatch
+	require.NoError(t, batch.Unmarshal(result.Data))
+	require.Equal(t, uint64(10), batch.BatchID)
+	require.Equal(t, uint64(10), rsm.state.ScheduleCommands[command.UUID].BatchID)
+}
+
 func TestCommandDeliveryActivationUsesPostBarrierCapabilities(t *testing.T) {
 	newRSM := func(allCapabilitiesObserved bool) *stateMachine {
 		rsm := NewStateMachine(0, 1).(*stateMachine)
@@ -1214,6 +1235,97 @@ func TestAcknowledgedCommandDeliverySurvivesLostResponse(t *testing.T) {
 	require.NotEmpty(t, result.Data)
 	_, ok = rsm.state.ScheduleCommands[first.UUID]
 	require.False(t, ok)
+}
+
+func TestPendingScheduleCommandsDeduplicateRetries(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.CommandDeliveryEnabled = true
+
+	task := pb.ScheduleCommand{
+		UUID:        "cn-1",
+		ServiceType: pb.CNService,
+		CreateTaskService: &pb.CreateTaskService{
+			TaskDatabase: "mo_task",
+		},
+	}
+	for i := uint64(10); i < 13; i++ {
+		_, err := rsm.Update(sm.Entry{
+			Index: i,
+			Cmd:   GetUpdateCommandsCmd(i, []pb.ScheduleCommand{task}),
+		})
+		require.NoError(t, err)
+	}
+
+	value, err := rsm.Lookup(&ScheduleCommandQuery{UUID: task.UUID})
+	require.NoError(t, err)
+	batch := value.(*pb.CommandBatch)
+	require.Equal(t, uint64(10), batch.BatchID,
+		"a repeated checker command does not create a new delivery generation")
+	require.Equal(t, []pb.ScheduleCommand{task}, batch.Commands)
+
+	join := pb.ScheduleCommand{
+		UUID:        task.UUID,
+		ServiceType: pb.CNService,
+		JoinGossipCluster: &pb.JoinGossipCluster{
+			Existing: []string{"cn-2", "cn-3"},
+		},
+	}
+	_, err = rsm.Update(sm.Entry{
+		Index: 13,
+		Cmd:   GetUpdateCommandsCmd(13, []pb.ScheduleCommand{join}),
+	})
+	require.NoError(t, err)
+
+	// The checker builds the peer list from a map. Its order is not part of
+	// the command's meaning, so a reordered retry must not grow the batch.
+	reorderedJoin := join
+	reorderedJoin.JoinGossipCluster = &pb.JoinGossipCluster{
+		Existing: []string{"cn-3", "cn-2"},
+	}
+	_, err = rsm.Update(sm.Entry{
+		Index: 14,
+		Cmd:   GetUpdateCommandsCmd(14, []pb.ScheduleCommand{reorderedJoin}),
+	})
+	require.NoError(t, err)
+
+	value, err = rsm.Lookup(&ScheduleCommandQuery{UUID: task.UUID})
+	require.NoError(t, err)
+	batch = value.(*pb.CommandBatch)
+	require.Equal(t, uint64(13), batch.BatchID,
+		"a semantically identical retry must retain the current generation")
+	require.Equal(t, []pb.ScheduleCommand{task, join}, batch.Commands)
+
+	// Replica IDs are allocated afresh by the checker when a target remains
+	// silent, but these are retries of one logical start operation. Coalesce
+	// them by shard/change type so the durable batch cannot grow forever.
+	start := func(replicaID uint64) pb.ScheduleCommand {
+		return pb.ScheduleCommand{
+			UUID:        "tn-1",
+			ServiceType: pb.TNService,
+			ConfigChange: &pb.ConfigChange{
+				Replica: pb.Replica{
+					ShardID:    7,
+					ReplicaID:  replicaID,
+					LogShardID: 8,
+				},
+				ChangeType: pb.StartReplica,
+			},
+		}
+	}
+	for i, replicaID := range []uint64{101, 102, 103} {
+		_, err = rsm.Update(sm.Entry{
+			Index: uint64(20 + i),
+			Cmd:   GetUpdateCommandsCmd(uint64(20+i), []pb.ScheduleCommand{start(replicaID)}),
+		})
+		require.NoError(t, err)
+	}
+	value, err = rsm.Lookup(&ScheduleCommandQuery{UUID: "tn-1"})
+	require.NoError(t, err)
+	batch = value.(*pb.CommandBatch)
+	require.Equal(t, uint64(20), batch.BatchID)
+	require.Len(t, batch.Commands, 1)
+	require.Equal(t, uint64(101), batch.Commands[0].ConfigChange.Replica.ReplicaID,
+		"the first valid retry remains the durable command")
 }
 
 func TestBootstrapReplicaCommandsRetriedUntilHeartbeatAcknowledges(t *testing.T) {

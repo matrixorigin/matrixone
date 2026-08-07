@@ -22,9 +22,11 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/lni/dragonboat/v4/logger"
 	sm "github.com/lni/dragonboat/v4/statemachine"
 	"github.com/mohae/deepcopy"
@@ -513,6 +515,9 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 				l.BatchID = s.state.Index
 			}
 		} else if s.state.CommandDeliveryEnabled {
+			if hasEquivalentScheduleCommand(l.Commands, c) {
+				continue
+			}
 			// The operator controller dispatches a newly generated command once.
 			// Dropping it merely because this UUID still has an unacknowledged
 			// batch would lose that command forever. Roll the old and new commands
@@ -527,6 +532,77 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	}
 
 	return sm.Result{}
+}
+
+// hasEquivalentScheduleCommand prevents a stalled target from accumulating
+// the same logical operator command on every checker cycle. It handles exact
+// retries, allocator-ID churn for add/start operations, and unordered gossip
+// peer lists without relaxing equality for unrelated command shapes.
+func hasEquivalentScheduleCommand(commands []pb.ScheduleCommand, candidate pb.ScheduleCommand) bool {
+	for _, command := range commands {
+		if scheduleCommandsEqual(command, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func scheduleCommandsEqual(left, right pb.ScheduleCommand) bool {
+	if proto.Equal(&left, &right) {
+		return true
+	}
+	if left.UUID != right.UUID ||
+		left.Bootstrapping != right.Bootstrapping ||
+		left.ServiceType != right.ServiceType {
+		return false
+	}
+
+	// A checker can allocate a new replica ID while retrying the same add/start
+	// operation after a target stopped responding. ReplicaID is the identity of
+	// the requested replica, not a new piece of work in that situation; keeping
+	// both commands would eventually create duplicate replicas when the target
+	// recovers. Preserve every other field, including protobuf unknown fields,
+	// so this coalescing remains safe during rolling upgrades.
+	if left.ConfigChange != nil && right.ConfigChange != nil &&
+		left.ConfigChange.ChangeType == right.ConfigChange.ChangeType &&
+		coalescibleReplicaChange(left.ServiceType, left.ConfigChange) {
+		left = *proto.Clone(&left).(*pb.ScheduleCommand)
+		right = *proto.Clone(&right).(*pb.ScheduleCommand)
+		left.ConfigChange.Replica.ReplicaID = 0
+		right.ConfigChange.Replica.ReplicaID = 0
+		return proto.Equal(&left, &right)
+	}
+
+	// Gossip peer order is not semantically significant, so compare that field
+	// as an order-insensitive list while retaining normal protobuf equality for
+	// every other command field.
+	if left.JoinGossipCluster != nil && right.JoinGossipCluster != nil {
+		left = *proto.Clone(&left).(*pb.ScheduleCommand)
+		right = *proto.Clone(&right).(*pb.ScheduleCommand)
+		leftPeers := append([]string(nil), left.JoinGossipCluster.Existing...)
+		rightPeers := append([]string(nil), right.JoinGossipCluster.Existing...)
+		sort.Strings(leftPeers)
+		sort.Strings(rightPeers)
+		left.JoinGossipCluster.Existing = leftPeers
+		right.JoinGossipCluster.Existing = rightPeers
+		return proto.Equal(&left, &right)
+	}
+
+	return false
+}
+
+func coalescibleReplicaChange(serviceType pb.ServiceType, change *pb.ConfigChange) bool {
+	switch change.ChangeType {
+	case pb.AddReplica, pb.AddNonVotingReplica:
+		return true
+	case pb.StartReplica, pb.StartNonVotingReplica:
+		// TN add/start commands carry the mapped log-shard ID. Keep commands
+		// without that field distinct because there is not enough target identity
+		// to prove that two operations with the same shard number are retries.
+		return serviceType == pb.TNService && change.Replica.LogShardID != 0
+	default:
+		return false
+	}
 }
 
 func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
@@ -573,6 +649,14 @@ func (s *stateMachine) getCommandBatchWithAck(uuid string, ack uint64) sm.Result
 	batch, ok := s.state.ScheduleCommands[uuid]
 	if !ok {
 		return sm.Result{}
+	}
+	if batch.BatchID == 0 {
+		// A snapshot produced before delivery IDs were introduced can still
+		// contain pending work after the feature is enabled. Assign the ID on
+		// this first acknowledged heartbeat instead of exposing a zero-ID batch
+		// that the poll path must reject and the service cannot acknowledge.
+		batch.BatchID = s.state.Index
+		s.state.ScheduleCommands[uuid] = batch
 	}
 	if ack != 0 && ack == batch.BatchID {
 		pending := make([]pb.ScheduleCommand, 0, len(batch.Commands))

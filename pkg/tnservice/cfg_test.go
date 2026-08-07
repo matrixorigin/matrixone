@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/assert"
@@ -32,10 +31,9 @@ func TestValidateRejectsInvalidLogtailRPCMessageSize(t *testing.T) {
 	}
 }
 
-func TestValidateHeartbeatCommandProgressBudget(t *testing.T) {
+func TestValidateHeartbeatDurations(t *testing.T) {
 	for name, interval := range map[string]time.Duration{
-		"negative":             -time.Nanosecond,
-		"exceeds-local-budget": logservice.ScheduleCommandPollInterval + time.Nanosecond,
+		"negative interval": -time.Nanosecond,
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := Config{UUID: "tn1"}

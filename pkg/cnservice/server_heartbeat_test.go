@@ -233,6 +233,61 @@ func TestCNCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {
 	}
 }
 
+func TestCNCommandPollProgressesAfterHeartbeatFailure(t *testing.T) {
+	conf := &Config{UUID: "cn-1"}
+	conf.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
+	conf.HAKeeper.HeatbeatTimeout.Duration = 10 * time.Millisecond
+	commandBatch := pb.CommandBatch{
+		BatchID: 2,
+		Commands: []pb.ScheduleCommand{{
+			UUID:        conf.UUID,
+			ServiceType: pb.CNService,
+			CreateTaskService: &pb.CreateTaskService{
+				User: pb.TaskTableUser{Username: "cn-command-poll-failure"},
+			},
+		}},
+	}
+	client := &blockingCNHeartbeatCommandClient{
+		testHAKClient:      &testHAKClient{cfg: conf},
+		heartbeatEntered:   make(chan struct{}),
+		heartbeatRelease:   make(chan struct{}),
+		heartbeatReentered: make(chan struct{}),
+		pollEntered:        make(chan struct{}),
+		commandBatch:       commandBatch,
+	}
+	holder := &observingTaskHolder{createErr: errors.New("stop after observing command application"), created: make(chan struct{}, 1)}
+	service := &service{
+		cfg:               conf,
+		_hakeeperClient:   client,
+		config:            &util.ConfigData{},
+		logger:            logutil.GetPanicLogger(),
+		hakeeperConnected: make(chan struct{}),
+	}
+	service.task.holder = holder
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("control-plane workers did not terminate during cleanup")
+		}
+	})
+	go func() {
+		defer close(done)
+		service.controlTask(ctx)
+	}()
+
+	select {
+	case <-holder.created:
+	case <-time.After(2 * time.Second):
+		t.Fatal("poll did not take over after heartbeat failure")
+	}
+	require.Equal(t, int32(1), holder.createCount.Load())
+}
+
 func TestCNCommandTaskSkipsPollWithoutInFlightHeartbeat(t *testing.T) {
 	conf := &Config{UUID: "cn-1"}
 	client := &blockingCNHeartbeatCommandClient{

@@ -216,6 +216,56 @@ func TestCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {
 	}
 }
 
+func TestCommandPollProgressesAfterHeartbeatFailure(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	client := &blockingHeartbeatCommandClient{
+		testHAClient:     &testHAClient{},
+		heartbeatEntered: make(chan struct{}),
+		pollEntered:      make(chan struct{}),
+		command: pb.ScheduleCommand{
+			UUID:        "tn-1",
+			ServiceType: pb.TNService,
+			ShutdownStore: &pb.ShutdownStore{
+				StoreID: "tn-1",
+			},
+		},
+	}
+	store := &store{
+		cfg: &Config{
+			UUID: "tn-1",
+		},
+		replicas:       &sync.Map{},
+		config:         &util.ConfigData{},
+		hakeeperClient: client,
+		rt:             rt,
+		shutdownC:      make(chan struct{}, 1),
+	}
+	store.cfg.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
+	store.cfg.HAKeeper.HeatbeatTimeout.Duration = 10 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("control-plane workers did not terminate during cleanup")
+		}
+	})
+	go func() {
+		defer close(done)
+		store.controlTask(ctx)
+	}()
+
+	select {
+	case <-store.shutdownC:
+	case <-time.After(2 * time.Second):
+		t.Fatal("poll did not take over after heartbeat failure")
+	}
+}
+
 func TestCommandTaskSkipsPollWithoutInFlightHeartbeat(t *testing.T) {
 	client := &blockingHeartbeatCommandClient{
 		testHAClient:     &testHAClient{},

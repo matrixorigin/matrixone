@@ -87,10 +87,11 @@ func (s *service) commandTask(ctx context.Context) {
 		return
 	}
 	poll := func() {
-		// A healthy heartbeat remains the only command-delivery RPC. Polling is
-		// a bounded hedge only while that RPC is in flight, so the steady-state
-		// path adds no network or Raft traffic.
-		if !s.heartbeatInFlight.Load() {
+		// A healthy heartbeat remains the primary command-delivery RPC. Polling
+		// is a bounded hedge while it is in flight, and remains enabled after a
+		// failed/deadline heartbeat until one succeeds; the healthy steady state
+		// therefore adds no network or Raft traffic.
+		if !s.heartbeatInFlight.Load() && !s.commandPollNeeded.Load() {
 			return
 		}
 		start := time.Now()
@@ -169,14 +170,17 @@ func (s *service) heartbeat(ctx context.Context) {
 		return s._hakeeperClient.SendCNHeartbeat(ctx2, hb)
 	}()
 	if err != nil {
+		s.commandPollNeeded.Store(true)
 		err = moerr.AttachCause(ctx2, err)
 		v2.CNHeartbeatFailureCounter.Inc()
 		s.logger.Error("failed to send cn heartbeat", zap.Error(err))
 		return
 	}
 	if ctx2.Err() != nil {
+		s.commandPollNeeded.Store(true)
 		return
 	}
+	s.commandPollNeeded.Store(false)
 
 	select {
 	case <-s.hakeeperConnected:
