@@ -106,16 +106,24 @@ func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := runtime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-	textMin := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
-		aggexec.AggIdOfMin,
-		false,
-		[]*plan.Expr{makeTestVarExpr("value")},
-		nil,
-	)}
+	textMinForCharset := func(charset uint32) []aggexec.AggFuncExecExpression {
+		expr := makeTestVarExpr("value")
+		expr.Typ.Charset = charset
+		return []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfMin,
+			false,
+			[]*plan.Expr{expr},
+			nil,
+		)}
+	}
+	generalCIMin := textMinForCharset(uint32(types.CharsetUTF8))
+	binMin := textMinForCharset(uint32(types.CharsetUTF8MB4Bin))
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion10)
-	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, textMin),
-		"requires MORPC protocol version 11")
+	for _, collationAwareMin := range [][]aggexec.AggFuncExecExpression{generalCIMin, binMin} {
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, collationAwareMin),
+			"requires MORPC protocol version 11")
+	}
 
 	ordered := aggexec.MakeAggFunctionExpression(
 		aggexec.AggIdOfGroupConcat,
@@ -126,18 +134,18 @@ func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {
 	)
 	require.ErrorContains(t,
 		validateRemoteAggregateProtocol(proc,
-			append([]aggexec.AggFuncExecExpression{ordered}, textMin...)),
+			append([]aggexec.AggFuncExecExpression{ordered}, generalCIMin...)),
 		"requires MORPC protocol version 11",
 	)
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion11)
-	require.NoError(t, validateRemoteAggregateProtocol(proc, textMin))
+	require.NoError(t, validateRemoteAggregateProtocol(proc, generalCIMin))
+	require.NoError(t, validateRemoteAggregateProtocol(proc, binMin))
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion9)
 	for _, charset := range []uint32{
 		uint32(types.CharsetLegacy),
 		uint32(types.CharsetBinary),
-		uint32(types.CharsetUTF8MB4Bin),
 	} {
 		binaryText := makeTestVarExpr("packed")
 		binaryText.Typ.Charset = charset

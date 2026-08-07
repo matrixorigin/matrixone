@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -93,6 +94,52 @@ func TestTextMinMaxGeneralCIWeights(t *testing.T) {
 	require.Negative(t, exec.comp([]byte("中"), []byte("文")))
 	require.Zero(t, exec.comp([]byte("😜"), []byte("😃")))
 	require.Positive(t, exec.comp([]byte{0xff}, []byte{0xfe}))
+}
+
+func TestTextMinMaxUTF8mb4BinUsesPadSpace(t *testing.T) {
+	space := []byte("a ")
+	nul := []byte{'a', 0}
+
+	// Raw byte order places the trailing space after NUL. PAD SPACE removes
+	// that space first, so the ordering reverses rather than merely selecting a
+	// different representative from an equal pair.
+	require.Positive(t, bytes.Compare(space, nul))
+	require.Negative(t, compareUTF8mb4Bin(space, nul))
+	require.Zero(t, compareUTF8mb4Bin([]byte("a  "), []byte("a")))
+
+	testCases := []struct {
+		name    string
+		charset uint8
+		aggID   int64
+		expect  []byte
+	}{
+		{name: "utf8mb4_bin min", charset: types.CharsetUTF8MB4Bin, aggID: AggIdOfMin, expect: space},
+		{name: "utf8mb4_bin max", charset: types.CharsetUTF8MB4Bin, aggID: AggIdOfMax, expect: nul},
+		{name: "binary text remains raw", charset: types.CharsetBinary, aggID: AggIdOfMin, expect: nul},
+		{name: "legacy text remains raw", charset: types.CharsetLegacy, aggID: AggIdOfMin, expect: nul},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			typ := types.NewWithCharset(types.T_varchar, 10, 0, tc.charset)
+			vec := vector.NewVec(typ)
+			require.NoError(t, vector.AppendBytes(vec, space, false, mp))
+			require.NoError(t, vector.AppendBytes(vec, nul, false, mp))
+			defer vec.Free(mp)
+
+			agg := makeMinMaxExec(mp, tc.aggID, tc.aggID == AggIdOfMin, typ)
+			defer agg.Free()
+			require.NoError(t, agg.GroupGrow(1))
+			require.NoError(t, agg.BulkFill(0, []*vector.Vector{vec}))
+
+			results, err := agg.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			defer results[0].Free(mp)
+			require.Equal(t, tc.expect, results[0].GetBytesAt(0))
+		})
+	}
 }
 
 func TestTextMinMaxGeneralCIMalformedUTF8IsTransitive(t *testing.T) {
