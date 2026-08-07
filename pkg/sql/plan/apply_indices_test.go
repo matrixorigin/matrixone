@@ -1719,6 +1719,18 @@ func TestFullTextJoinRewriteLeftChild(t *testing.T) {
 	require.Len(t, joinNode.OnList, 1)
 }
 
+func TestFullTextJoinRewritePreservesPrimaryKeyCharset(t *testing.T) {
+	builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, false)
+	builder.qry.Nodes[leftScanID].TableDef.Cols[0].Typ.Charset = uint32(types.CharsetUTF8MB4Bin)
+
+	_, err := builder.applyIndicesForJoins(joinID, builder.qry.Nodes[joinID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+
+	functionScans := collectFullTextFunctionScans(builder, builder.qry.Nodes[joinID].Children[0])
+	require.Len(t, functionScans, 1)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), functionScans[0].TableDef.Cols[0].Typ.Charset)
+}
+
 func TestFullTextJoinRewriteRightChild(t *testing.T) {
 	builder, joinID, leftScanID, rightScanID := buildFullTextJoinRewriteTestPlan(t, false, true, false)
 

@@ -1050,7 +1050,7 @@ func TestDumpLoadLegacyTinyTextUpgrade(t *testing.T) {
 	require.NoError(t, err)
 	manifest, err := readTableDumpManifest(ctx, dumpFS)
 	require.NoError(t, err)
-	require.Equal(t, createSQL, manifest.CreateSQL)
+	require.Contains(t, manifest.CreateSQL, "COLLATE=utf8mb4_bin")
 
 	// Recreate the target definition from the DDL carried by the manifest. A
 	// fixed binary persists the recovered 255-byte TINYTEXT marker.
@@ -1065,10 +1065,14 @@ func TestDumpLoadLegacyTinyTextUpgrade(t *testing.T) {
 	targetType, err := sqlplan.GetTypeFromAst(ctx, column.Type)
 	require.NoError(t, err)
 	require.Equal(t, int32(types.MaxTinyTextLen), targetType.Width)
+	// The manifest's table-level compatibility collation is applied by CREATE
+	// TABLE planning in production. Model that planned target metadata here.
+	targetType.Charset = uint32(types.CharsetUTF8MB4Bin)
 	targetDef := &plan.TableDef{
-		Name:      "source",
-		TableType: catalog.SystemOrdinaryRel,
-		Createsql: manifest.CreateSQL,
+		Name:           "source",
+		TableType:      catalog.SystemOrdinaryRel,
+		Createsql:      manifest.CreateSQL,
+		DefaultCharset: uint32(types.CharsetUTF8MB4Bin),
 		Cols: []*plan.ColDef{{
 			Name: column.Name.ColName(),
 			Typ:  targetType,
@@ -1772,7 +1776,15 @@ func TestTableDumpManifestCreateSQLRebuildsAlteredLegacyText(t *testing.T) {
 
 	createSQL, err := tableDumpManifestCreateSQL(t.Context(), definition(0, 10, 10), nil)
 	require.NoError(t, err)
-	require.Equal(t, legacySQL, createSQL)
+	require.Contains(t, strings.ToUpper(createSQL), "`PAYLOAD` TINYTEXT")
+	require.Contains(t, createSQL, "COLLATE=utf8mb4_bin")
+
+	partiallyMigrated := definition(0, 10, 10)
+	partiallyMigrated.Cols[0].Typ.Charset = uint32(types.CharsetUTF8)
+	createSQL, err = tableDumpManifestCreateSQL(t.Context(), partiallyMigrated, nil)
+	require.NoError(t, err)
+	require.Contains(t, createSQL, "COLLATE utf8mb4_general_ci")
+	require.Contains(t, createSQL, "COLLATE=utf8mb4_bin")
 
 	createSQL, err = tableDumpManifestCreateSQL(t.Context(), definition(1, 10, 10), nil)
 	require.NoError(t, err)

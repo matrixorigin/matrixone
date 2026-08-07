@@ -952,9 +952,10 @@ func buildCreateTable(
 		// CHECK expressions are stored in source-session SQL syntax. Exclude them
 		// from the temporary SQL skeleton because the rewrite parser uses the
 		// current/default SQL mode, then restore the structured metadata below.
+		likeSkeletonDef := normalizeLegacyTextCollationForCreateLike(tableDef)
 		_, newStmt, err := constructCreateTableSQL(
 			ctx,
-			tableDef,
+			likeSkeletonDef,
 			snapshot,
 			true,
 			cloneStmt,
@@ -1272,6 +1273,41 @@ func buildCreateTable(
 	}, nil
 }
 
+func normalizeLegacyTextCollationForCreateLike(tableDef *plan.TableDef) *plan.TableDef {
+	legacy := tableDef.DefaultCharset == uint32(types.CharsetLegacy)
+	if !legacy {
+		for _, col := range tableDef.Cols {
+			switch types.T(col.Typ.Id) {
+			case types.T_char, types.T_varchar, types.T_text:
+				if col.Typ.Charset == uint32(types.CharsetLegacy) {
+					legacy = true
+				}
+			}
+		}
+	}
+	if !legacy {
+		return tableDef
+	}
+
+	// Charset zero was persisted before the field had semantics. CREATE LIKE
+	// reparses a generated DDL skeleton, so spell legacy text as utf8mb4_bin to
+	// retain its historical bytewise ordering. SHOW CREATE uses the same public
+	// compatibility spelling for catalog rows that still contain legacy text.
+	clone := DeepCopyTableDef(tableDef, true)
+	if clone.DefaultCharset == uint32(types.CharsetLegacy) {
+		clone.DefaultCharset = uint32(types.CharsetUTF8MB4Bin)
+	}
+	for _, col := range clone.Cols {
+		switch types.T(col.Typ.Id) {
+		case types.T_char, types.T_varchar, types.T_text:
+			if col.Typ.Charset == uint32(types.CharsetLegacy) {
+				col.Typ.Charset = uint32(types.CharsetUTF8MB4Bin)
+			}
+		}
+	}
+	return clone
+}
+
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
 	// all below fields' key is lower case
 	var primaryKeys []string
@@ -1289,6 +1325,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		enforced   bool
 	}
 	pendingChecks := make([]pendingCheckDef, 0)
+	tableCharset, err := tableDefaultCharset(ctx, stmt.Options)
+	if err != nil {
+		return err
+	}
+	createTable.TableDef.DefaultCharset = tableCharset
 
 	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
@@ -1304,6 +1345,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		if def, ok := item.(*tree.ColumnTableDef); ok {
 			cType, err := getTypeFromAst(ctx.GetContext(), def.Type)
 			if err != nil {
+				return err
+			}
+			cType.Charset = uint32(types.CharsetType(types.T(cType.Id)))
+			if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &cType, tableCharset, def.Attributes); err != nil {
 				return err
 			}
 			isGen := false
@@ -1328,7 +1373,8 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if err != nil {
 				return err
 			}
-			if err = applyColumnAttributesToType(ctx.GetContext(), &colType, def.Attributes); err != nil {
+			colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
+			if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &colType, tableCharset, def.Attributes); err != nil {
 				return err
 			}
 			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
@@ -1909,7 +1955,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 
 	// check Constraint Name (include index/ unique)
-	err := checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
+	err = checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
 	if err != nil {
 		return err
 	}
@@ -2375,10 +2421,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
-				Typ: Type{
-					Id:    int32(types.T_varchar),
-					Width: types.MaxVarcharLen,
-				},
+				Typ:  makeHiddenColTyp(),
 				Default: &plan.Default{
 					NullAbility:  false,
 					Expr:         nil,
@@ -2397,9 +2440,10 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				Alg:  plan.CompressType_Lz4,
 				Typ: plan.Type{
 					// don't copy auto increment
-					Id:    colMap[pkeyName].Typ.Id,
-					Width: colMap[pkeyName].Typ.Width,
-					Scale: colMap[pkeyName].Typ.Scale,
+					Id:      colMap[pkeyName].Typ.Id,
+					Width:   colMap[pkeyName].Typ.Width,
+					Scale:   colMap[pkeyName].Typ.Scale,
+					Charset: colMap[pkeyName].Typ.Charset,
 				},
 				Default: &plan.Default{
 					NullAbility:  false,
@@ -2567,10 +2611,7 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 	colDef := &ColDef{
 		Name: keyName,
 		Alg:  plan.CompressType_Lz4,
-		Typ: Type{
-			Id:    int32(types.T_varchar),
-			Width: types.MaxVarcharLen,
-		},
+		Typ:  makeHiddenColTyp(),
 		Default: &plan.Default{
 			NullAbility:  false,
 			Expr:         nil,
@@ -2588,9 +2629,10 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
 				// don't copy auto increment
-				Id:    colMap[pkeyName].Typ.Id,
-				Width: colMap[pkeyName].Typ.Width,
-				Scale: colMap[pkeyName].Typ.Scale,
+				Id:      colMap[pkeyName].Typ.Id,
+				Width:   colMap[pkeyName].Typ.Width,
+				Scale:   colMap[pkeyName].Typ.Scale,
+				Charset: colMap[pkeyName].Typ.Charset,
 			},
 			Default: &plan.Default{
 				NullAbility:  false,
@@ -2725,9 +2767,10 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
 				// don't copy auto increment
-				Id:    colMap[pkeyName].Typ.Id,
-				Width: colMap[pkeyName].Typ.Width,
-				Scale: colMap[pkeyName].Typ.Scale,
+				Id:      colMap[pkeyName].Typ.Id,
+				Width:   colMap[pkeyName].Typ.Width,
+				Scale:   colMap[pkeyName].Typ.Scale,
+				Charset: colMap[pkeyName].Typ.Charset,
 			},
 			Default: &plan.Default{
 				NullAbility:  false,
@@ -2742,10 +2785,7 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		}
 	} else {
 		keyName = catalog.IndexTableIndexColName
-		idxColType := Type{
-			Id:    int32(types.T_varchar),
-			Width: types.MaxVarcharLen,
-		}
+		idxColType := makeHiddenColTyp()
 		if spatialIndex {
 			idxColType = colMap[indexParts[0]].Typ
 		}
@@ -2771,9 +2811,10 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
 				// don't copy auto increment
-				Id:    colMap[pkeyName].Typ.Id,
-				Width: colMap[pkeyName].Typ.Width,
-				Scale: colMap[pkeyName].Typ.Scale,
+				Id:      colMap[pkeyName].Typ.Id,
+				Width:   colMap[pkeyName].Typ.Width,
+				Scale:   colMap[pkeyName].Typ.Scale,
+				Charset: colMap[pkeyName].Typ.Charset,
 			},
 			Default: &plan.Default{
 				NullAbility:  false,
@@ -5696,6 +5737,7 @@ func validateAndSetHivePartitionOptions(ctx context.Context, stmt *tree.CreateTa
 			Width:       col.Typ.Width,
 			Scale:       col.Typ.Scale,
 			Enumvalues:  col.Typ.Enumvalues,
+			Charset:     col.Typ.Charset,
 			NullAbility: nullable,
 		})
 	}

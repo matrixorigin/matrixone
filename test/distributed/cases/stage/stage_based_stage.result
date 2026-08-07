@@ -587,8 +587,8 @@ select * from ex_table_1;
 show create table ex_table_1;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 ex_table_1  ¦  CREATE EXTERNAL TABLE `ex_table_1` (
-  `char_1` char(20) DEFAULT NULL,
-  `char_2` varchar(10) DEFAULT NULL,
+  `char_1` char(20) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `char_2` varchar(10) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `date_1` date DEFAULT NULL,
   `date_2` datetime DEFAULT NULL,
   `date_3` timestamp NULL DEFAULT NULL
@@ -668,7 +668,7 @@ ex_table_2  ¦  CREATE EXTERNAL TABLE `ex_table_2` (
   `col8` bigint unsigned DEFAULT NULL,
   `col9` float DEFAULT NULL,
   `col10` double DEFAULT NULL,
-  `col11` varchar(255) DEFAULT NULL,
+  `col11` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `col12` date DEFAULT NULL
 ) INFILE{'FILEPATH'='','COMPRESSION'='auto','FORMAT'='csv','JSONDATA'=''} FIELDS TERMINATED BY ',' ENCLOSED BY '' LINES TERMINATED BY '\n' IGNORE 1 LINES
 drop table ex_table_2;

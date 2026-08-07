@@ -293,7 +293,7 @@ func validateTupleEncodingComponents(
 }
 
 func planType(typ plan.Type) types.Type {
-	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
+	return types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
 }
 
 // CloseFloatSignedZero appends the complementary representation when an exact

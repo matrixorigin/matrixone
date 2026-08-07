@@ -22,6 +22,10 @@ const (
 	ProvenanceUnknown ProvenanceState = iota
 	ProvenanceNone
 	ProvenanceSingleSource
+	// ProvenancePureNull marks a bare, untyped NULL and transparent projections
+	// of it. Unlike a source column, it contributes no type or collation contract
+	// when a set operation resolves a common output type.
+	ProvenancePureNull
 )
 
 // SourceColumnMetadata is an immutable planner-local snapshot. It deliberately
@@ -93,6 +97,9 @@ func transparentOutputSourceExpr(expr *plan.Expr) (*plan.Expr, bool) {
 func (bc *BindContext) outputColumnProvenanceForExpr(expr *plan.Expr) OutputColumnProvenance {
 	if expr == nil {
 		return OutputColumnProvenance{State: ProvenanceNone}
+	}
+	if isPureNullLiteralExpr(expr) {
+		return OutputColumnProvenance{State: ProvenancePureNull}
 	}
 	if sourceExpr, ok := transparentOutputSourceExpr(expr); ok {
 		return bc.outputColumnProvenanceForExpr(sourceExpr)

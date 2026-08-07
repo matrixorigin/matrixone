@@ -32,6 +32,7 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 		mergeGroup.ctr.free()
 	}
 	mergeGroup.ctr.mp = mpool.MustNew("merge_group_mpool")
+	mergeGroup.ctr.legacyTextMinMax = useLegacyTextMinMaxForRemote(proc)
 	mergeGroup.ctr.groupByTypes = nil
 	mergeGroup.ctr.keyNullable = false
 	mergeGroup.ctr.keyWidth = 0

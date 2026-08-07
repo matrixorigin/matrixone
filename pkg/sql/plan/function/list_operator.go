@@ -2445,9 +2445,7 @@ var supportedOperators = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				retType: func(parameters []types.Type) types.Type {
-					return parameters[1]
-				},
+				retType:    caseReturnType,
 				newOp: func() executeLogicOfOverload {
 					return caseFn
 				},
@@ -2467,7 +2465,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return coalesceStringReturnType(types.T_varchar, parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
@@ -2477,7 +2475,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_char.ToType()
+					return coalesceStringReturnType(types.T_char, parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
@@ -2698,7 +2696,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 22,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_text.ToType()
+					return coalesceStringReturnType(types.T_text, parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr

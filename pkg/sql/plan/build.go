@@ -801,10 +801,7 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 	case *plan.Plan_Ddl:
 		switch logicPlan.Ddl.DdlType {
 		case plan.DataDefinition_SHOW_VARIABLES:
-			typ := plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: 1024,
-			}
+			typ := makeGeneratedPlan2Type(types.T_varchar, 1024, 0, false)
 			return []*ColDef{
 				{Typ: typ, Name: "Variable_name"},
 				{Typ: typ, Name: "Value"},

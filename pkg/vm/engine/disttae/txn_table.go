@@ -1471,6 +1471,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 						Table:       tbl.tableName,
 						NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
 						Enumvalues:  attr.Attr.EnumVlaues,
+						Charset:     uint32(attr.Attr.Type.Charset),
 					},
 					Primary:      attr.Attr.Primary,
 					Default:      attr.Attr.Default,
@@ -1601,6 +1602,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			tbl.tableDef.AutoIncrOffset = tbl.extraInfo.AutoIncrOffset
 			tbl.tableDef.AutoIncrEpoch = tbl.extraInfo.AutoIncrEpoch
 			tbl.tableDef.Checks = tbl.extraInfo.Checks
+			tbl.tableDef.DefaultCharset = tbl.extraInfo.DefaultCharset
 		}
 	}
 	return tbl.tableDef
