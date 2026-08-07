@@ -1645,6 +1645,7 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 	setCharacter(col)
 	if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
 		col.SetCharset(charsetBinary)
+		col.SetFlag(col.Flag() | uint16(defines.BINARY_FLAG))
 	}
 	return nil
 }
