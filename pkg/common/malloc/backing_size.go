@@ -14,11 +14,7 @@
 
 package malloc
 
-import (
-	"sync"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-)
+import "github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 // BackingSizer reports the number of bytes an allocator reserves for a
 // requested allocation. Cache admission must use this value before allocating,
@@ -124,26 +120,20 @@ func (*CAllocator) BackingSizeContract() (BackingSizeContract, error) {
 }
 
 func (s ShardedAllocator[T]) BackingSize(size uint64) (uint64, error) {
-	if len(s) == 0 {
+	if len(s.shards) == 0 {
 		return 0, moerr.NewInternalErrorNoCtx("backing size requested from empty sharded allocator")
 	}
 	if _, err := s.BackingSizeContract(); err != nil {
 		return 0, err
 	}
-	return BackingSize(s[0].Allocator, size)
-}
-
-type shardedBackingSizeContractState struct {
-	once     sync.Once
-	contract BackingSizeContract
-	err      error
+	return BackingSize(s.shards[0].allocator, size)
 }
 
 func (s ShardedAllocator[T]) BackingSizeContract() (BackingSizeContract, error) {
-	if len(s) == 0 {
+	if len(s.shards) == 0 {
 		return backingSizeContractUnknown, moerr.NewInternalErrorNoCtx("backing-size contract requested from empty sharded allocator")
 	}
-	if state := s[0].backingSizeContractState; state != nil {
+	if state := s.backingSizeContractState; state != nil {
 		state.once.Do(func() {
 			state.contract, state.err = s.validateBackingSizeContract()
 		})
@@ -153,12 +143,12 @@ func (s ShardedAllocator[T]) BackingSizeContract() (BackingSizeContract, error) 
 }
 
 func (s ShardedAllocator[T]) validateBackingSizeContract() (BackingSizeContract, error) {
-	contract, err := backingSizeContract(s[0].Allocator)
+	contract, err := backingSizeContract(s.shards[0].allocator)
 	if err != nil {
 		return backingSizeContractUnknown, err
 	}
-	for i := 1; i < len(s); i++ {
-		shardContract, err := backingSizeContract(s[i].Allocator)
+	for i := 1; i < len(s.shards); i++ {
+		shardContract, err := backingSizeContract(s.shards[i].allocator)
 		if err != nil {
 			return backingSizeContractUnknown, err
 		}
