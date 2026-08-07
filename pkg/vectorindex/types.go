@@ -277,7 +277,13 @@ type RuntimeConfig struct {
 	// Other algorithms ignore this field. Keys are a typed, box-free ColumnBuffer
 	// (fixed-width or varlena) rather than []any, so a million-row stream does not
 	// allocate a million boxed interfaces.
-	Emit func(keys *ColumnBuffer, distances []float64) error
+	//
+	// includes carries each batch row's per-doc INCLUDE column values (the covered
+	// fast-path side channel): includes[i] is the doc's FULL decoded include slice
+	// in segment-include order, or nil when the caller did not request include
+	// columns (RequestedIncludeColumns empty). The consumer maps the requested
+	// columns to output positions.
+	Emit func(keys *ColumnBuffer, distances []float64, includes [][]any) error
 
 	// Optional raw runtime-filter payload from the build side. IVF search turns
 	// this into either an exact-pk filter or a membership filter for entries.

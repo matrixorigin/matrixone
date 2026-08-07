@@ -90,14 +90,14 @@ func BenchmarkPhraseSearchConcurrent(b *testing.B) {
 func BenchmarkPhraseStreamNoLimit(b *testing.B) {
 	idx := benchPhraseIndex(b, 20000, 3)
 	pat := []byte("alpha beta")
-	emit := func(keys *vectorindex.ColumnBuffer, _ []float64) error {
+	emit := func(keys *vectorindex.ColumnBuffer, _ []float64, _ [][]any) error {
 		PutColumnBuffer(keys) // recycle like the real consumer
 		return nil
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := idx.StreamQuery(pat, false /*NL phrase → materializing fallback*/, ParserDefault, BM25, nil, emit); err != nil {
+		if err := idx.StreamQuery(pat, false /*NL phrase → materializing fallback*/, ParserDefault, BM25, nil, false, emit); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -110,14 +110,14 @@ func BenchmarkPhraseStreamNoLimit(b *testing.B) {
 func BenchmarkDisjunctionStreamNoLimit(b *testing.B) {
 	idx := benchPhraseIndex(b, 20000, 3)
 	pat := []byte("alpha beta")
-	emit := func(keys *vectorindex.ColumnBuffer, _ []float64) error {
+	emit := func(keys *vectorindex.ColumnBuffer, _ []float64, _ [][]any) error {
 		PutColumnBuffer(keys)
 		return nil
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := idx.StreamQuery(pat, true /*boolean OR → heap-free stream*/, ParserDefault, BM25, nil, emit); err != nil {
+		if err := idx.StreamQuery(pat, true /*boolean OR → heap-free stream*/, ParserDefault, BM25, nil, false, emit); err != nil {
 			b.Fatal(err)
 		}
 	}

@@ -206,11 +206,15 @@ func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectori
 	// batches — no top-K heap, no materialization of the whole result set. Results are
 	// handed off through Emit, so return empty keys/distances (mirrors bm25).
 	if rt.Emit != nil {
+		// Covered fast path: when the caller requested INCLUDE columns, tell the stream
+		// to carry each doc's decoded INCLUDE values (in segment order) through Emit's 3rd
+		// arg. The consumer (fulltext2_search TVF) maps its requested columns by position.
+		wantInclude := rt.IncludeResult != nil && len(rt.RequestedIncludeColumns) > 0
 		var serr error
 		if q.BagOfWords {
-			serr = s.idx.StreamBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, pf, rt.Emit)
+			serr = s.idx.StreamBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, pf, wantInclude, rt.Emit)
 		} else {
-			serr = s.idx.StreamQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, pf, rt.Emit)
+			serr = s.idx.StreamQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, pf, wantInclude, rt.Emit)
 		}
 		if serr != nil {
 			return nil, nil, serr

@@ -109,7 +109,7 @@ func BenchmarkStreamAlloc(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		sink := newStreamSink(idx, func(k *vectorindex.ColumnBuffer, d []float64) error { PutColumnBuffer(k); return nil })
+		sink := newStreamSink(idx, false, func(k *vectorindex.ColumnBuffer, d []float64, _ [][]any) error { PutColumnBuffer(k); return nil })
 		_ = idx.streamDisjunction(cs, BM25, nil, sink)
 	}
 }

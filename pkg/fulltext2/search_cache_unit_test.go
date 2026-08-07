@@ -150,7 +150,7 @@ func TestFulltext2SearchStreamingEmit(t *testing.T) {
 	// Emit set + no pushed LIMIT → streaming: results handed off via Emit, empty return.
 	for _, bagOfWords := range []bool{false, true} {
 		emitted := 0
-		emit := func(k *vectorindex.ColumnBuffer, _ []float64) error {
+		emit := func(k *vectorindex.ColumnBuffer, _ []float64, _ [][]any) error {
 			emitted += k.N
 			return nil
 		}

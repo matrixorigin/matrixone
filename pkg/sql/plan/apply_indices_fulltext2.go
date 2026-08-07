@@ -23,6 +23,7 @@ package plan
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -97,6 +98,55 @@ func (builder *QueryBuilder) buildFulltext2SearchNode(ctx *BindContext, exprs []
 		Children:        children,
 	}
 	return builder.appendNode(node, ctx), nil
+}
+
+// buildFulltext2SearchNodeCovered builds the fulltext2_search FUNCTION_SCAN node for the
+// COVERED fast path: its output coldefs are [doc_id, score] PLUS one column per INCLUDE
+// column (at positions 2+), so a fully-covered projection reads pk/score/include straight
+// from the TVF with NO base-table JOIN. includeCols are the INCLUDE column NAMES in the
+// SAME order as the cfg's include_columns (= the order decodeInclude returns), so output
+// col 2+j maps to the j-th include value. Each include coldef takes the base column's real
+// type (looked up from scanNode.TableDef.Cols by name). Everything else matches the plain
+// buildFulltext2SearchNode (used by the JOIN path).
+func (builder *QueryBuilder) buildFulltext2SearchNodeCovered(ctx *BindContext, exprs []*plan.Expr, children []int32, scanNode *plan.Node, includeCols []string) (int32, error) {
+	colDefs := DeepCopyColDefList(ftIndexColdefs)
+	for _, name := range includeCols {
+		colTyp, ok := baseColTypeByName(scanNode, name)
+		if !ok {
+			return -1, moerr.NewInternalErrorf(builder.GetContext(),
+				"fulltext2 covered path: INCLUDE column %q not found on base table %q", name, scanNode.TableDef.Name)
+		}
+		colDefs = append(colDefs, &plan.ColDef{Name: name, Typ: colTyp})
+	}
+	node := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		Stats:    &plan.Stats{},
+		TableDef: &plan.TableDef{
+			TableType: "func_table",
+			TblFunc: &plan.TableFunction{
+				Name: fulltext2_search_func_name,
+			},
+			Cols: colDefs,
+		},
+		BindingTags:     []int32{builder.genNewBindTag()},
+		TblFuncExprList: exprs,
+		Children:        children,
+	}
+	return builder.appendNode(node, ctx), nil
+}
+
+// baseColTypeByName returns the plan type of the named column on scanNode's base table
+// (case-insensitive), and whether it was found.
+func baseColTypeByName(scanNode *plan.Node, name string) (plan.Type, bool) {
+	if scanNode == nil || scanNode.TableDef == nil {
+		return plan.Type{}, false
+	}
+	for _, c := range scanNode.TableDef.Cols {
+		if strings.EqualFold(c.Name, name) {
+			return c.Typ, true
+		}
+	}
+	return plan.Type{}, false
 }
 
 // fulltext2ParserFromParams extracts the "parser" field from an index's

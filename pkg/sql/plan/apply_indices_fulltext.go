@@ -77,6 +77,18 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 		internalLimit, internalOffset = nil, nil
 	}
 
+	// Covered fast path (Phase 6): a fully-covered SELECT over a single fulltext2 index
+	// WITH include columns can DROP the base-table JOIN and serve pk/score/include-cols
+	// straight from the fulltext2_search TVF. Purely additive: when not covered, falls
+	// through to the existing JOIN path below byte-for-byte.
+	if handled, herr := builder.tryApplyCoveredFulltext2(nodeID, projNode, sortNode, scanNode,
+		filterids, filterIndexDefs, projids, projIndexDef, eqmap,
+		paginationLimit, paginationOffset); herr != nil {
+		return -1, herr
+	} else if handled {
+		return nodeID, nil
+	}
+
 	idxID, filter_node_ids, proj_node_ids, err := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
 		internalLimit, internalOffset, filterids, filterIndexDefs, projids, projIndexDef, eqmap, colRefCnt, idxColMap)
 	if err != nil {
@@ -699,6 +711,291 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		return -1, nil, nil, err
 	}
 	return joinnodeID, ret_filter_node_ids, ret_proj_node_ids, nil
+}
+
+// tryApplyCoveredFulltext2 implements the covered fast path (Phase 6): a fully-covered
+// projection over a SINGLE fulltext2 index WITH include columns drops the base-table JOIN
+// and reads pk/score/include-cols straight from the fulltext2_search TVF. It returns
+// (handled=true) only when EVERY guard holds:
+//
+//	(a) a single MATCH driving a single fulltext2 index (len(filterids)==1, and any
+//	    projection MATCH is the SAME func — i.e. eqmap-equal, no independent extra MATCH);
+//	(b) the index is fulltext2 (not classic) with >=1 include column;
+//	(c) AFTER peeling numeric/pk predicates into the TVF prefilter JSON, scanNode.FilterList
+//	    is EMPTY (no residual varchar/complex predicate left on the base scan);
+//	(d) every base-scan column the outer query projects is the pk or an include column
+//	    (no non-covered base column; the only MATCH is the one replaced by score).
+//
+// When handled it builds the include-coldef TVF, keeps the score-DESC SORT above it, and
+// remaps the projection (pk -> TVF col 0, MATCH -> score col 1, include col -> col 2+j).
+// On any guard miss it returns (false, nil) and mutates NOTHING, so the caller runs the
+// existing JOIN path unchanged.
+func (builder *QueryBuilder) tryApplyCoveredFulltext2(nodeID int32, projNode, sortNode, scanNode *plan.Node,
+	filterids []int32, filterIndexDefs []*plan.IndexDef, projids []int32, projIndexDef []*plan.IndexDef,
+	eqmap map[int32]int32, paginationLimit, paginationOffset *plan.Expr) (bool, error) {
+
+	// (a) exactly one MATCH filter, driving one index.
+	if len(filterids) != 1 || len(filterIndexDefs) != 1 {
+		return false, nil
+	}
+	// Every projection MATCH must be eqmap-equal to the single filter MATCH — otherwise
+	// there is an independent extra MATCH (multi-stream), which the covered path can't serve.
+	for i := range projids {
+		if _, ok := eqmap[int32(i)]; !ok {
+			return false, nil
+		}
+	}
+
+	idxdef := filterIndexDefs[0]
+	// (b) fulltext2 index with >=1 include column.
+	if !catalog.IsFullText2IndexAlgo(idxdef.IndexAlgo) {
+		return false, nil
+	}
+	incCols := indexDefIncludedColumnsBestEffort(idxdef)
+	if len(incCols) == 0 {
+		return false, nil
+	}
+	if scanNode.TableDef == nil || scanNode.TableDef.Pkey == nil || scanNode.TableDef.Pkey.PkeyColName == "" {
+		return false, nil
+	}
+	if len(scanNode.BindingTags) == 0 {
+		return false, nil
+	}
+	scanTag := scanNode.BindingTags[0]
+	pkColName := scanNode.TableDef.Pkey.PkeyColName
+	var pkColPos int32 = -1
+	for i, c := range scanNode.TableDef.Cols {
+		if strings.EqualFold(c.Name, pkColName) {
+			pkColPos = int32(i)
+			break
+		}
+	}
+	if pkColPos < 0 {
+		return false, nil
+	}
+
+	// The single MATCH func + its mode.
+	ftFilterExpr := scanNode.FilterList[filterids[0]]
+	fn := ftFilterExpr.GetF()
+	if fn == nil || len(fn.Args) < 2 {
+		return false, nil
+	}
+	modeLit := fn.Args[1].GetLit()
+	if modeLit == nil {
+		return false, nil
+	}
+	mode := modeLit.GetI64Val()
+
+	// (c) peel numeric/pk predicates into the TVF prefilter; residual MUST be empty. Do the
+	// peel on a COPY of FilterList so a residual miss leaves scanNode untouched (still covered
+	// only when peel consumes ALL non-MATCH filters). Exclude the MATCH filter itself.
+	nonMatchFilters := make([]*plan.Expr, 0, len(scanNode.FilterList))
+	for i, f := range scanNode.FilterList {
+		if int32(i) == filterids[0] {
+			continue
+		}
+		nonMatchFilters = append(nonMatchFilters, f)
+	}
+	ft2PredsJSON, _, residual, perr := buildFilterPredicateJSON(nonMatchFilters, scanNode, incCols, pkColName)
+	if perr != nil {
+		return false, nil // a peel error → fall back to the safe JOIN path
+	}
+	if len(residual) != 0 {
+		return false, nil // residual varchar/complex predicate stays on the base scan → not covered
+	}
+
+	// (d) coverage: every projected base-scan ColRef must be the pk or an include column
+	// (the MATCH funcs are replaced by score, so skip them). Build the include-name set.
+	incSet := make(map[string]int, len(incCols))
+	for j, n := range incCols {
+		incSet[strings.ToLower(n)] = j
+	}
+	covered := true
+	for i, expr := range projNode.ProjectList {
+		if isProjIndexPosition(projids, int32(i)) {
+			continue // this projection is the MATCH → becomes score, handled below
+		}
+		coveredBaseColRefs(expr, scanTag, func(colPos int32, name string) bool {
+			if colPos == pkColPos {
+				return true
+			}
+			cn := name
+			if cn == "" && colPos >= 0 && int(colPos) < len(scanNode.TableDef.Cols) {
+				cn = scanNode.TableDef.Cols[colPos].Name
+			}
+			if _, ok := incSet[strings.ToLower(cn)]; ok {
+				return true
+			}
+			covered = false
+			return false
+		})
+		if !covered {
+			return false, nil
+		}
+	}
+
+	// ---- All guards passed: build the covered plan. From here on we mutate. ----
+	ctx := builder.ctxByNode[nodeID]
+
+	// Remove the MATCH filter from the base scan (it is fully served by the TVF now). This is
+	// the last filter standing (residual is empty), so FilterList becomes empty.
+	scanNode.FilterList = append(scanNode.FilterList[:filterids[0]], scanNode.FilterList[filterids[0]+1:]...)
+
+	cfg, cfgErr := builder.buildFulltext2SearchCfg(scanNode, idxdef, mode)
+	if cfgErr != nil {
+		return false, cfgErr
+	}
+	exprs := []*plan.Expr{
+		makePlan2StringConstExprWithType(cfg),
+		DeepCopyExpr(fn.Args[0]), // pattern (may be a bound '?' parameter)
+		DeepCopyExpr(fn.Args[1]), // mode (a constant)
+	}
+	if ft2PredsJSON != "" {
+		exprs = append(exprs, makePlan2StringConstExprWithType(ft2PredsJSON))
+	}
+	ftnodeID, err := builder.buildFulltext2SearchNodeCovered(ctx, exprs, nil, scanNode, incCols)
+	if err != nil {
+		return false, err
+	}
+	ftnode := builder.qry.Nodes[ftnodeID]
+	ftTag := ftnode.BindingTags[0]
+
+	// The TVF's doc_id (col 0) carries the source pk; retype it to the pk's real type, as the
+	// JOIN path does (change doc_id type to the primary type).
+	pkType := scanNode.TableDef.Cols[pkColPos].Typ
+	ftnode.TableDef.Cols[0].Typ.Id = pkType.Id
+	ftnode.TableDef.Cols[0].Typ.Width = pkType.Width
+	ftnode.TableDef.Cols[0].Typ.Scale = pkType.Scale
+
+	// Register the TVF's output column names for EXPLAIN/name resolution.
+	for colPos, colDef := range ftnode.TableDef.Cols {
+		builder.nameByColRef[[2]int32{ftTag, int32(colPos)}] = "mo_fulltext_alias_0." + colDef.Name
+	}
+
+	// Keep the score-DESC SORT above the TVF (heap tie order is unspecified, so the Sort
+	// stays). No JOIN: the SORT/PROJECT reads directly from the TVF.
+	scoreOrderBy := []*OrderBySpec{{
+		Expr: &Expr{
+			Typ:  ftnode.TableDef.Cols[1].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: ftTag, ColPos: 1}},
+		},
+		Flag: plan.OrderBySpec_DESC,
+	}}
+	if sortNode != nil {
+		sortNode.Children[0] = ftnodeID
+		sortNode.Limit = DeepCopyExpr(paginationLimit)
+		sortNode.Offset = DeepCopyExpr(paginationOffset)
+	} else {
+		sortByID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_SORT,
+			Children: []int32{ftnodeID},
+			OrderBy:  scoreOrderBy,
+			Limit:    DeepCopyExpr(paginationLimit),
+			Offset:   DeepCopyExpr(paginationOffset),
+			SpillMem: builder.sortSpillMem,
+		}, ctx)
+		projNode.Children[0] = sortByID
+	}
+
+	// Pagination now belongs to the SORT above the TVF, not the base scan.
+	scanNode.Limit = nil
+	scanNode.Offset = nil
+
+	// Remap the projection off the TVF: MATCH -> score (col 1); pk base ColRef -> col 0;
+	// include base ColRef -> col 2+j.
+	scoreType := ftnode.TableDef.Cols[1].Typ
+	for i := range projNode.ProjectList {
+		if isProjIndexPosition(projids, int32(i)) {
+			projNode.ProjectList[i] = &Expr{
+				Typ:  scoreType,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: ftTag, ColPos: 1}},
+			}
+			continue
+		}
+		projNode.ProjectList[i] = remapCoveredBaseColRefs(projNode.ProjectList[i], scanTag, ftTag,
+			pkColPos, incSet, scanNode)
+	}
+
+	if err := builder.recordPreparedPluginDependencies(scanNode); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// isProjIndexPosition reports whether projList index i is one of the MATCH projection
+// positions (projids holds ProjectList indices of the fulltext MATCH funcs).
+func isProjIndexPosition(projids []int32, i int32) bool {
+	for _, p := range projids {
+		if p == i {
+			return true
+		}
+	}
+	return false
+}
+
+// coveredBaseColRefs walks expr and invokes visit(colPos, name) for every base-scan ColRef
+// (RelPos == scanTag). visit returns false to stop the walk early (coverage failed).
+func coveredBaseColRefs(expr *plan.Expr, scanTag int32, visit func(colPos int32, name string) bool) bool {
+	if expr == nil {
+		return true
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if impl.Col.RelPos == scanTag {
+			return visit(impl.Col.ColPos, impl.Col.Name)
+		}
+	case *plan.Expr_F:
+		for _, arg := range impl.F.Args {
+			if !coveredBaseColRefs(arg, scanTag, visit) {
+				return false
+			}
+		}
+	case *plan.Expr_List:
+		for _, sub := range impl.List.List {
+			if !coveredBaseColRefs(sub, scanTag, visit) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// remapCoveredBaseColRefs rewrites, in place, every base-scan ColRef (RelPos == scanTag) in
+// expr to the equivalent TVF output column: the pk -> TVF col 0, an include column -> TVF
+// col 2+j (j = its include index). All such ColRefs are guaranteed pk/include by the (d)
+// coverage guard, so no default branch is needed. Returns expr for convenience.
+func remapCoveredBaseColRefs(expr *plan.Expr, scanTag, ftTag, pkColPos int32,
+	incSet map[string]int, scanNode *plan.Node) *plan.Expr {
+	if expr == nil {
+		return nil
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if impl.Col.RelPos == scanTag {
+			if impl.Col.ColPos == pkColPos {
+				impl.Col.RelPos = ftTag
+				impl.Col.ColPos = 0
+			} else {
+				name := impl.Col.Name
+				if name == "" && impl.Col.ColPos >= 0 && int(impl.Col.ColPos) < len(scanNode.TableDef.Cols) {
+					name = scanNode.TableDef.Cols[impl.Col.ColPos].Name
+				}
+				if j, ok := incSet[strings.ToLower(name)]; ok {
+					impl.Col.RelPos = ftTag
+					impl.Col.ColPos = int32(2 + j)
+				}
+			}
+		}
+	case *plan.Expr_F:
+		for _, arg := range impl.F.Args {
+			remapCoveredBaseColRefs(arg, scanTag, ftTag, pkColPos, incSet, scanNode)
+		}
+	case *plan.Expr_List:
+		for _, sub := range impl.List.List {
+			remapCoveredBaseColRefs(sub, scanTag, ftTag, pkColPos, incSet, scanNode)
+		}
+	}
+	return expr
 }
 
 func (builder *QueryBuilder) scanHasMatchedFullTextFilter(node *plan.Node) bool {
