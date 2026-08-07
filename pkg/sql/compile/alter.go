@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
@@ -687,20 +688,20 @@ func convertDBEOBToNoSuchTable(ctx context.Context, e error, dbName, tblName str
 	return e
 }
 
-type alterCopyAutoIncrementCleanup struct {
+type alterAutoIncrementResetCleanup struct {
 	c        *Compile
 	tableIDs []uint64
 	tracked  map[uint64]struct{}
 }
 
-func newAlterCopyAutoIncrementCleanup(c *Compile) *alterCopyAutoIncrementCleanup {
-	return &alterCopyAutoIncrementCleanup{
+func newAlterAutoIncrementResetCleanup(c *Compile) *alterAutoIncrementResetCleanup {
+	return &alterAutoIncrementResetCleanup{
 		c:       c,
 		tracked: make(map[uint64]struct{}),
 	}
 }
 
-func (cleanup *alterCopyAutoIncrementCleanup) track(tableID uint64) {
+func (cleanup *alterAutoIncrementResetCleanup) track(tableID uint64) {
 	if _, ok := cleanup.tracked[tableID]; ok {
 		return
 	}
@@ -708,7 +709,7 @@ func (cleanup *alterCopyAutoIncrementCleanup) track(tableID uint64) {
 	cleanup.tableIDs = append(cleanup.tableIDs, tableID)
 }
 
-func (cleanup *alterCopyAutoIncrementCleanup) finish(statementErr *error) {
+func (cleanup *alterAutoIncrementResetCleanup) finish(statementErr *error) {
 	if *statementErr == nil && cleanup.c.proc.Ctx != nil {
 		*statementErr = cleanup.c.proc.Ctx.Err()
 	}
@@ -736,7 +737,7 @@ func (cleanup *alterCopyAutoIncrementCleanup) finish(statementErr *error) {
 	if _, ok := (*statementErr).(*moerr.Error); ok {
 		cleanup.c.proc.Error(
 			ctx,
-			"alter.table.copy.discard.auto.increment.reset",
+			"alter.table.discard.auto.increment.reset",
 			zap.Error(cleanupErr),
 		)
 		return
@@ -1034,9 +1035,12 @@ func (c *Compile) precheckAlterCopyPkDedup(dbName, tblName string, qry *plan.Alt
 }
 
 func (s *Scope) AlterTableCopy(c *Compile) (err error) {
-	cleanup := newAlterCopyAutoIncrementCleanup(c)
+	cleanup := newAlterAutoIncrementResetCleanup(c)
 	defer cleanup.finish(&err)
+	return s.alterTableCopy(c, cleanup)
+}
 
+func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetCleanup) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := qry.Database
 
@@ -1306,6 +1310,7 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 		qry.TableDef,
 		qry.CopyTableDef,
 		newRel,
+		hasAlterAutoIncrementReset(qry.Actions),
 		cleanup,
 	); err != nil {
 		return err
@@ -1596,6 +1601,15 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 	return nil
 }
 
+func hasAlterAutoIncrementReset(actions []*plan.AlterTable_Action) bool {
+	for _, action := range actions {
+		if action != nil && action.GetAlterAutoIncrement() != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // reconcileAlterCopyAutoIncrement publishes allocator state for the temporary
 // table only after copied rows are visible in the ALTER transaction. Retained
 // source columns are matched by stable planner column ID, never by position or
@@ -1605,13 +1619,14 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 	srcDef *plan.TableDef,
 	copyDef *plan.TableDef,
 	newRel engine.Relation,
-	cleanup *alterCopyAutoIncrementCleanup,
+	explicitReset bool,
+	cleanup *alterAutoIncrementResetCleanup,
 ) error {
 	if err := c.proc.Ctx.Err(); err != nil {
 		return err
 	}
-	autoCols := incrservice.GetUserAutoColumnFromDef(copyDef)
-	if len(autoCols) == 0 {
+	plannedAutoCols := incrservice.GetUserAutoColumnFromDef(copyDef)
+	if len(plannedAutoCols) == 0 {
 		return nil
 	}
 	if !engine.TxnSupportsAutoIncrEpochFence(c.proc.GetTxnOperator()) {
@@ -1620,10 +1635,43 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 			"AUTO_INCREMENT allocator reset requires epoch fencing on every TN service",
 		)
 	}
+	// The planner copy definition can retain hidden source columns that are not
+	// emitted into the temporary CREATE SQL. Use the created relation definition
+	// so ColIndex matches mo_increment_columns for SetOffset.
+	createdDef := newRel.GetTableDef(c.proc.Ctx)
+	if createdDef == nil {
+		return moerr.NewInternalError(c.proc.Ctx, "missing ALTER COPY table definition")
+	}
+	autoCols := incrservice.GetUserAutoColumnFromDef(createdDef)
+	plannedNames := make(map[string]struct{}, len(plannedAutoCols))
+	for _, col := range plannedAutoCols {
+		plannedNames[strings.ToLower(col.ColName)] = struct{}{}
+	}
+	for _, col := range autoCols {
+		name := strings.ToLower(col.ColName)
+		if _, ok := plannedNames[name]; !ok {
+			return moerr.NewInternalErrorf(
+				c.proc.Ctx,
+				"unexpected AUTO_INCREMENT column %q on ALTER COPY table",
+				col.ColName,
+			)
+		}
+		delete(plannedNames, name)
+	}
+	if len(plannedNames) != 0 {
+		return moerr.NewInternalError(c.proc.Ctx, "missing AUTO_INCREMENT column on ALTER COPY table")
+	}
 
 	sourceOffsets := make(map[string]uint64)
 	sourceNames := mapCloneAutoIncrColumns(srcDef, copyDef, true)
-	if len(sourceNames) > 0 {
+	retainedNames := make(map[string]struct{}, len(sourceNames))
+	for _, name := range sourceNames {
+		retainedNames[name] = struct{}{}
+	}
+	// Ordinary COPY preserves the source allocator high-water mark because old
+	// CN caches can still own reserved values. An explicit AUTO_INCREMENT reset
+	// is epoch-fenced, so its contract intentionally replaces those reservations.
+	if !explicitReset && len(sourceNames) > 0 {
 		sql := fmt.Sprintf(
 			"select col_index, offset from mo_catalog.mo_increment_columns where table_id = %d",
 			srcDef.TblId,
@@ -1654,6 +1702,11 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 
 	tableID := newRel.GetTableID(c.proc.Ctx)
 	svc := incrservice.GetAutoIncrementService(c.proc.GetService())
+	epochReqs := make([]*api.AlterTableReq, 0, len(autoCols))
+	var (
+		freshColumnOffset         uint64
+		freshColumnOffsetResolved bool
+	)
 	for _, col := range autoCols {
 		if err := c.proc.Ctx.Err(); err != nil {
 			return err
@@ -1686,10 +1739,46 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 		}()
 
 		name := strings.ToLower(col.ColName)
-		effectiveOffset := max(copyDef.AutoIncrOffset, copiedMax, sourceOffsets[name])
+		_, retained := retainedNames[name]
+		// Internal ALTER COPY SQL may execute without the client session variables.
+		// Reapply a non-default session offset to an empty newly added column from
+		// the outer compile instead of assuming the temporary CREATE inherited it.
+		if !explicitReset && !retained && copyDef.AutoIncrOffset == 0 && copiedMax == 0 {
+			if !freshColumnOffsetResolved {
+				value, err := resolveVariableOrDefault(
+					c.proc,
+					"auto_increment_offset",
+					true,
+					false,
+				)
+				if err != nil {
+					return err
+				}
+				offset, ok := value.(int64)
+				if !ok {
+					return moerr.NewInternalErrorf(
+						c.proc.Ctx,
+						"invalid auto_increment_offset type %T",
+						value,
+					)
+				}
+				if offset > 1 {
+					freshColumnOffset = uint64(offset - 1)
+				}
+				freshColumnOffsetResolved = true
+			}
+			if freshColumnOffset == 0 {
+				continue
+			}
+			copiedMax = freshColumnOffset
+		}
+		effectiveOffset := max(copyDef.AutoIncrOffset, copiedMax)
+		if !explicitReset {
+			effectiveOffset = max(effectiveOffset, sourceOffsets[name])
+		}
 		if err := incrservice.ValidateAutoColumnOffset(
 			c.proc.Ctx,
-			types.T(copyDef.Cols[col.ColIndex].Typ.Id),
+			types.T(createdDef.Cols[col.ColIndex].Typ.Id),
 			effectiveOffset,
 		); err != nil {
 			return err
@@ -1697,6 +1786,7 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 		if err := svc.SetOffset(
 			c.proc.Ctx,
 			tableID,
+			col.ColIndex,
 			col.ColName,
 			effectiveOffset,
 			c.proc.GetTxnOperator(),
@@ -1704,8 +1794,27 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 			return err
 		}
 		cleanup.track(tableID)
+		epochReqs = append(epochReqs, api.NewUpdateAutoIncrementReq(
+			0,
+			tableID,
+			effectiveOffset,
+			0,
+		))
 	}
-	return nil
+	if err := c.proc.Ctx.Err(); err != nil {
+		return err
+	}
+	if len(epochReqs) == 0 {
+		return nil
+	}
+	// SetOffset publishes the next allocator generation. Publish the matching
+	// catalog generation on the COPY replacement before it becomes visible, so
+	// the next implicit insert does not observe a stale table definition.
+	databaseID := newRel.GetDBID(c.proc.Ctx)
+	for _, req := range epochReqs {
+		req.DbId = databaseID
+	}
+	return newRel.AlterTable(c.proc.Ctx, nil, epochReqs)
 }
 
 func (s *Scope) AlterTable(c *Compile) (err error) {
@@ -1714,6 +1823,8 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	}
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
+	cleanup := newAlterAutoIncrementResetCleanup(c)
+	defer cleanup.finish(&err)
 
 	qry := s.Plan.GetDdl().GetAlterTable()
 
@@ -1725,16 +1836,16 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	ps := c.proc.GetPartitionService()
 	if !ps.Enabled() ||
 		!features.IsPartitioned(qry.TableDef.FeatureFlag) {
-		return s.doAlterTable(c)
+		return s.doAlterTable(c, cleanup)
 	}
 
 	if qry.AlterPartition == nil {
 		switch qry.AlgorithmType {
 		case plan.AlterTable_COPY:
-			return s.doAlterTable(c)
+			return s.doAlterTable(c, cleanup)
 		default:
 			// alter primary table
-			if err := s.doAlterTable(c); err != nil {
+			if err := s.doAlterTable(c, cleanup); err != nil {
 				return err
 			}
 
@@ -1771,26 +1882,12 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 				qry.RawSQL,
 				c.getLower(),
 			)
-			stmt := st.(*tree.AlterTable)
-			table := stmt.Table
-			stmt.PartitionOption = nil
-			for _, p := range metadata.Partitions {
-				stmt.Table = tree.NewTableName(
-					tree.Identifier(p.PartitionTableName),
-					table.ObjectNamePrefix,
-					table.AtTsExpr,
-				)
-				sql := tree.StringWithOpts(
-					stmt,
-					dialect.MYSQL,
-					tree.WithQuoteIdentifier(),
-					tree.WithSingleQuoteString(),
-				)
-				if err := c.runSql(sql); err != nil {
-					return err
-				}
-			}
-			return nil
+			return c.alterPartitionTables(
+				st.(*tree.AlterTable),
+				metadata.Partitions,
+				hasAlterAutoIncrementReset(qry.Actions),
+				cleanup,
+			)
 		}
 	}
 
@@ -1868,16 +1965,45 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	return moerr.NewInternalError(c.proc.Ctx, "unsupported alter partition type")
 }
 
-func (s *Scope) doAlterTable(c *Compile) error {
+func (c *Compile) alterPartitionTables(
+	stmt *tree.AlterTable,
+	partitions []partition.Partition,
+	trackAutoIncrementReset bool,
+	cleanup *alterAutoIncrementResetCleanup,
+) error {
+	table := stmt.Table
+	stmt.PartitionOption = nil
+	for _, p := range partitions {
+		stmt.Table = tree.NewTableName(
+			tree.Identifier(p.PartitionTableName),
+			table.ObjectNamePrefix,
+			table.AtTsExpr,
+		)
+		sql := tree.StringWithOpts(
+			stmt,
+			dialect.MYSQL,
+			tree.WithQuoteIdentifier(),
+			tree.WithSingleQuoteString(),
+		)
+		if err := c.runSql(sql); err != nil {
+			return err
+		}
+		if trackAutoIncrementReset {
+			cleanup.track(p.PartitionID)
+		}
+	}
+	return nil
+}
+
+func (s *Scope) doAlterTable(c *Compile, cleanup *alterAutoIncrementResetCleanup) (err error) {
 	qry := s.Plan.GetDdl().GetAlterTable()
 
-	var err error
 	if qry.AlgorithmType == plan.AlterTable_COPY {
 		// COPY ALTER transfers mo_foreign_keys around the source-table drop,
 		// so its catalog statements are executed inside AlterTableCopy.
-		return s.AlterTableCopy(c)
+		return s.alterTableCopy(c, cleanup)
 	} else {
-		err = s.AlterTableInplace(c)
+		err = s.alterTableInplace(c, cleanup)
 	}
 	if err != nil {
 		return err
