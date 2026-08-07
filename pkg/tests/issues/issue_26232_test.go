@@ -56,6 +56,18 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 				"nullable_blob blob default ('nullable-blob-seed'), " +
 				"nullable_expr uuid default (uuid()), " +
 				"expr_col uuid not null default (uuid()), " +
+				"int_expr int not null default (1 + 2), " +
+				"decimal_expr decimal(10,2) not null default (1.25 + 1), " +
+				"double_expr double not null default (1.5 + 1), " +
+				"varchar_expr varchar(40) not null default (uuid()), " +
+				"varbinary_expr varbinary(40) not null default (uuid()), " +
+				"date_expr date not null default (cast('2024-02-03' as date)), " +
+				"datetime_expr datetime not null default (cast('2024-02-03 04:05:06' as datetime)), " +
+				"timestamp_expr timestamp not null default (cast('2024-02-03 04:05:06' as datetime)), " +
+				"time_expr time not null default (cast('01:30:00' as time)), " +
+				"year_expr year not null default (2024), " +
+				"nullable_int_expr int default (1 + 2), " +
+				"nullable_varchar_expr varchar(40) default (uuid()), " +
 				"priority enum('low','medium','high') not null default 'medium', " +
 				"flags set('a','b') not null default 'a')",
 			"create table " + db + ".source_t2 (id int primary key, qty int not null default 9)",
@@ -78,7 +90,9 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			"create table " + db + ".ctas_view as select id, qty, nullable_col, null_col, str_col, amount, " +
 				"date_col, datetime_col, time_col, timestamp_col, binary_col, varbinary_col, blob_col, " +
 				"float_col, double_col, bit_col, year_col, text_col, nullable_text, nullable_blob, nullable_expr, " +
-				"expr_col, priority, flags from " + db + ".v_source_t",
+				"expr_col, int_expr, decimal_expr, double_expr, varchar_expr, varbinary_expr, " +
+				"date_expr, datetime_expr, timestamp_expr, time_expr, year_expr, nullable_int_expr, " +
+				"nullable_varchar_expr, priority, flags from " + db + ".v_source_t",
 		} {
 			execSQLRequire(t, ctx, dbConn, stmt)
 		}
@@ -182,6 +196,25 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 				descColumnDefault(t, ctx, dbConn, db+".ctas_view", test.column), test.column)
 		}
 
+		for _, column := range []string{
+			"expr_col", "int_expr", "decimal_expr", "double_expr", "varchar_expr", "varbinary_expr",
+			"date_expr", "datetime_expr", "timestamp_expr", "time_expr", "year_expr",
+			"nullable_int_expr", "nullable_varchar_expr",
+		} {
+			var viewDefault, ctasDefault sql.NullString
+			require.NoError(t, dbConn.QueryRowContext(ctx,
+				"select column_default from information_schema.columns "+
+					"where table_schema = ? and table_name = 'v_source_t' and column_name = ?",
+				db, column).Scan(&viewDefault), column)
+			require.NoError(t, dbConn.QueryRowContext(ctx,
+				"select column_default from information_schema.columns "+
+					"where table_schema = ? and table_name = 'ctas_view' and column_name = ?",
+				db, column).Scan(&ctasDefault), column)
+			require.True(t, viewDefault.Valid, column)
+			require.Equal(t, viewDefault, ctasDefault, column)
+			require.Equal(t, ctasDefault, descColumnDefault(t, ctx, dbConn, db+".ctas_view", column), column)
+		}
+
 		var tableName, createTableSQL string
 		require.NoError(t, dbConn.QueryRowContext(ctx, "show create table "+db+".ctas_view").
 			Scan(&tableName, &createTableSQL))
@@ -249,6 +282,34 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 		require.Zero(t, insertedBit)
 		require.False(t, nullableExprIsNull)
 		require.False(t, exprIsNull)
+		var insertedIntExpr, insertedYearExpr int
+		var insertedDecimalExpr string
+		var insertedDoubleExpr float64
+		var insertedVarcharExpr, insertedVarbinaryExprHex string
+		var insertedDateExpr, insertedDatetimeExpr, insertedTimestampExpr, insertedTimeExpr string
+		var insertedNullableIntExpr sql.NullInt64
+		var insertedNullableVarcharExpr sql.NullString
+		require.NoError(t, dbConn.QueryRowContext(ctx,
+			"select int_expr, decimal_expr, double_expr, varchar_expr, hex(varbinary_expr), "+
+				"date_expr, datetime_expr, timestamp_expr, time_expr, year_expr, "+
+				"nullable_int_expr, nullable_varchar_expr "+
+				"from "+db+".ctas_view where id = 2").
+			Scan(&insertedIntExpr, &insertedDecimalExpr, &insertedDoubleExpr, &insertedVarcharExpr,
+				&insertedVarbinaryExprHex, &insertedDateExpr, &insertedDatetimeExpr, &insertedTimestampExpr,
+				&insertedTimeExpr, &insertedYearExpr, &insertedNullableIntExpr, &insertedNullableVarcharExpr))
+		require.Equal(t, 3, insertedIntExpr)
+		require.Equal(t, "2.25", insertedDecimalExpr)
+		require.Equal(t, 2.5, insertedDoubleExpr)
+		require.NotEmpty(t, insertedVarcharExpr)
+		require.NotEmpty(t, insertedVarbinaryExprHex)
+		require.Equal(t, "2024-02-03", insertedDateExpr)
+		require.Equal(t, "2024-02-03 04:05:06", insertedDatetimeExpr)
+		require.Equal(t, "2024-02-03 04:05:06", insertedTimestampExpr)
+		require.Equal(t, "01:30:00", insertedTimeExpr)
+		require.Equal(t, 2024, insertedYearExpr)
+		require.Equal(t, sql.NullInt64{Int64: 3, Valid: true}, insertedNullableIntExpr)
+		require.True(t, insertedNullableVarcharExpr.Valid)
+		require.NotEmpty(t, insertedNullableVarcharExpr.String)
 		var insertedYear int
 		var insertedText string
 		var insertedNullableText, insertedNullableBlob sql.NullString

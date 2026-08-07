@@ -749,6 +749,7 @@ func TestCTASViewDefaultPolicyMatrix(t *testing.T) {
 		{name: "datetime expression", typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}, defaultDef: expressionDefault("(now())", false), wantPolicy: CTASDefaultInheritViewSource},
 		{name: "timestamp expression", typ: plan.Type{Id: int32(types.T_timestamp), NotNullable: true}, defaultDef: expressionDefault("(now())", false), wantPolicy: CTASDefaultInheritViewSource},
 		{name: "int expression", typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}, defaultDef: expressionDefault("(1 + 2)", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "constant folded int expression", typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}, defaultDef: &plan.Default{Expr: makePlan2Int32ConstExprWithType(3), OriginString: "(1 + 2)"}, wantPolicy: CTASDefaultInheritViewSource},
 		{name: "decimal expression", typ: plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2, NotNullable: true}, defaultDef: expressionDefault("(1.25 + 1)", false), wantPolicy: CTASDefaultInheritViewSource},
 		{name: "double expression", typ: plan.Type{Id: int32(types.T_float64), NotNullable: true}, defaultDef: expressionDefault("(1.5 + 1)", false), wantPolicy: CTASDefaultInheritViewSource},
 		{name: "varchar expression", typ: plan.Type{Id: int32(types.T_varchar), Width: 40, NotNullable: true}, defaultDef: expressionDefault("(uuid())", false), wantPolicy: CTASDefaultInheritViewSource},
