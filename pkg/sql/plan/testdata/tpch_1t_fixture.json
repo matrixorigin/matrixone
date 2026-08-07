@@ -1,0 +1,448 @@
+{
+  "database": "tpch",
+  "tables": {
+    "customer": {
+      "accurate_object_number": 256,
+      "approx_object_number": 256,
+      "block_number": 18334,
+      "max_val_map": {
+        "c_acctbal": 9999.99,
+        "c_address": 8825501086226263000,
+        "c_comment": 8825485601892496000,
+        "c_custkey": 148862592,
+        "c_mktsegment": 5566804592153216000,
+        "c_name": 4860918316739159000,
+        "c_nationkey": 24,
+        "c_phone": 3689623718519713300
+      },
+      "min_val_map": {
+        "c_acctbal": -999.99,
+        "c_address": 2314885531124058000,
+        "c_comment": 2329602847306640000,
+        "c_custkey": 598017,
+        "c_mktsegment": 4707761685061912000,
+        "c_name": 4860918316739159000,
+        "c_nationkey": 0,
+        "c_phone": 3544382596025691600
+      },
+      "ndv_map": {
+        "c_acctbal": 3876260.140739416,
+        "c_address": 4950000,
+        "c_comment": 4950000,
+        "c_custkey": 148500000,
+        "c_mktsegment": 5,
+        "c_name": 4950000,
+        "c_nationkey": 25,
+        "c_phone": 4950000
+      },
+      "null_cnt_map": {
+        "c_acctbal": 0,
+        "c_address": 0,
+        "c_comment": 0,
+        "c_custkey": 0,
+        "c_mktsegment": 0,
+        "c_name": 0,
+        "c_nationkey": 0,
+        "c_phone": 0
+      },
+      "size_map": {
+        "c_acctbal": 1200696320,
+        "c_address": 6232958206,
+        "c_comment": 14476423374,
+        "c_custkey": 600696320,
+        "c_mktsegment": 3600696320,
+        "c_name": 3600696320,
+        "c_nationkey": 600696320,
+        "c_phone": 3600696320
+      },
+      "table_cnt": 150000000.0
+    },
+    "lineitem": {
+      "accurate_object_number": 10189,
+      "approx_object_number": 10189,
+      "block_number": 732456,
+      "max_val_map": {
+        "__mo_cpkey_col": 4258436457790906400,
+        "l_comment": 8825485601892496000,
+        "l_commitdate": 729692,
+        "l_discount": 0.1,
+        "l_extendedprice": 104950,
+        "l_linenumber": 7,
+        "l_linestatus": 5692549928996307000,
+        "l_orderkey": 5996622624,
+        "l_partkey": 200000000,
+        "l_quantity": 50,
+        "l_receiptdate": 729753,
+        "l_returnflag": 5908722711110091000,
+        "l_shipdate": 729723,
+        "l_shipinstruct": 6071216532938179000,
+        "l_shipmode": 6076012594785681000,
+        "l_suppkey": 10000000,
+        "l_tax": 0.08
+      },
+      "min_val_map": {
+        "__mo_cpkey_col": 4258069919242524000,
+        "l_comment": 2329602847306640000,
+        "l_commitdate": 727227,
+        "l_discount": 0,
+        "l_extendedprice": 900,
+        "l_linenumber": 1,
+        "l_linestatus": 5044031582654956000,
+        "l_orderkey": 11798533,
+        "l_partkey": 1,
+        "l_quantity": 1,
+        "l_receiptdate": 727199,
+        "l_returnflag": 4683743612465316000,
+        "l_shipdate": 727198,
+        "l_shipinstruct": 4850179214164579000,
+        "l_shipmode": 4704381445718671000,
+        "l_suppkey": 1,
+        "l_tax": 0
+      },
+      "ndv_map": {
+        "__mo_cpkey_col": 197999660.39699998,
+        "l_comment": 180011573.6015538,
+        "l_commitdate": 2474,
+        "l_discount": 11,
+        "l_extendedprice": 180269871.83132914,
+        "l_linenumber": 7,
+        "l_linestatus": 2,
+        "l_orderkey": 1499663867.9249723,
+        "l_partkey": 197999660.39699998,
+        "l_quantity": 50,
+        "l_receiptdate": 2820.4,
+        "l_returnflag": 3,
+        "l_shipdate": 2789.6000000000004,
+        "l_shipinstruct": 4,
+        "l_shipmode": 7,
+        "l_suppkey": 193666938.74992642,
+        "l_tax": 9
+      },
+      "null_cnt_map": {
+        "__mo_cpkey_col": 0,
+        "l_comment": 0,
+        "l_commitdate": 0,
+        "l_discount": 0,
+        "l_extendedprice": 0,
+        "l_linenumber": 0,
+        "l_linestatus": 0,
+        "l_orderkey": 0,
+        "l_partkey": 0,
+        "l_quantity": 0,
+        "l_receiptdate": 0,
+        "l_returnflag": 0,
+        "l_shipdate": 0,
+        "l_shipinstruct": 0,
+        "l_shipmode": 0,
+        "l_suppkey": 0,
+        "l_tax": 0
+      },
+      "size_map": {
+        "__mo_cpkey_col": 144027585662,
+        "l_comment": 262253734335,
+        "l_commitdate": 24027791482,
+        "l_discount": 48027750318,
+        "l_extendedprice": 48027750318,
+        "l_linenumber": 24027791482,
+        "l_linestatus": 144027585662,
+        "l_orderkey": 48027750318,
+        "l_partkey": 24027791482,
+        "l_quantity": 48027750318,
+        "l_receiptdate": 24027791482,
+        "l_returnflag": 144027585662,
+        "l_shipdate": 24027791482,
+        "l_shipinstruct": 144027585662,
+        "l_shipmode": 144027585662,
+        "l_suppkey": 24027791482,
+        "l_tax": 48027750318
+      },
+      "table_cnt": 5999989709.0
+    },
+    "nation": {
+      "accurate_object_number": 1,
+      "approx_object_number": 2,
+      "block_number": 1,
+      "max_val_map": {
+        "n_comment": 8728088680853499000,
+        "n_name": 6217576988954152000,
+        "n_nationkey": 24,
+        "n_regionkey": 4
+      },
+      "min_val_map": {
+        "n_comment": 2335223503536285000,
+        "n_name": 4705214073754173000,
+        "n_nationkey": 0,
+        "n_regionkey": 0
+      },
+      "ndv_map": {
+        "n_comment": 25,
+        "n_name": 25,
+        "n_nationkey": 25,
+        "n_regionkey": 5
+      },
+      "null_cnt_map": {
+        "n_comment": 0,
+        "n_name": 0,
+        "n_nationkey": 0,
+        "n_regionkey": 0
+      },
+      "size_map": {
+        "n_comment": 2495,
+        "n_name": 638,
+        "n_nationkey": 138,
+        "n_regionkey": 138
+      },
+      "table_cnt": 25.0
+    },
+    "orders": {
+      "accurate_object_number": 1930,
+      "approx_object_number": 1930,
+      "block_number": 183130,
+      "max_val_map": {
+        "o_clerk": 4858369640124068000,
+        "o_comment": 8825485601892496000,
+        "o_custkey": 149999999,
+        "o_orderdate": 729602,
+        "o_orderkey": 5969306178,
+        "o_orderpriority": 3831802761607905300,
+        "o_orderstatus": 5764607523034235000,
+        "o_shippriority": 0,
+        "o_totalprice": 584508.95
+      },
+      "min_val_map": {
+        "o_clerk": 4858369640124068000,
+        "o_comment": 2329602847306640000,
+        "o_custkey": 1,
+        "o_orderdate": 727197,
+        "o_orderkey": 1,
+        "o_orderpriority": 3543582293681852000,
+        "o_orderstatus": 5044031582654956000,
+        "o_shippriority": 0,
+        "o_totalprice": 815.42
+      },
+      "ndv_map": {
+        "o_clerk": 34538546.61706902,
+        "o_comment": 49500000,
+        "o_custkey": 49500000,
+        "o_orderdate": 2658.7000000000003,
+        "o_orderkey": 1485000000,
+        "o_orderpriority": 5,
+        "o_orderstatus": 3,
+        "o_shippriority": 1,
+        "o_totalprice": 49327762.11838134
+      },
+      "null_cnt_map": {
+        "o_clerk": 0,
+        "o_comment": 0,
+        "o_custkey": 0,
+        "o_orderdate": 0,
+        "o_orderkey": 0,
+        "o_orderpriority": 0,
+        "o_orderstatus": 0,
+        "o_shippriority": 0,
+        "o_totalprice": 0
+      },
+      "size_map": {
+        "o_clerk": 36006959043,
+        "o_comment": 106134245756,
+        "o_custkey": 6006959043,
+        "o_orderdate": 6006959043,
+        "o_orderkey": 12006959043,
+        "o_orderpriority": 36006959043,
+        "o_orderstatus": 36006959043,
+        "o_shippriority": 6006959043,
+        "o_totalprice": 12006959043
+      },
+      "table_cnt": 1500000000.0
+    },
+    "part": {
+      "accurate_object_number": 290,
+      "approx_object_number": 354,
+      "block_number": 24415,
+      "max_val_map": {
+        "p_brand": 4787996480602584000,
+        "p_comment": 8825485601892496000,
+        "p_container": 6292163441785327000,
+        "p_mfgr": 5575859264169272000,
+        "p_name": 8747517064219402000,
+        "p_partkey": 198978103,
+        "p_retailprice": 2099,
+        "p_size": 50,
+        "p_type": 6004496007600100000
+      },
+      "min_val_map": {
+        "p_brand": 4787996480602583000,
+        "p_comment": 2329602847299076000,
+        "p_container": 5356272279017768000,
+        "p_mfgr": 5575859264169272000,
+        "p_name": 7020106244524614000,
+        "p_partkey": 1,
+        "p_retailprice": 900,
+        "p_size": 1,
+        "p_type": 4990920009813154000
+      },
+      "ndv_map": {
+        "p_brand": 25,
+        "p_comment": 3469286.653037383,
+        "p_container": 39,
+        "p_mfgr": 5,
+        "p_name": 6600000,
+        "p_partkey": 198000000,
+        "p_retailprice": 245379.12529205607,
+        "p_size": 50,
+        "p_type": 150
+      },
+      "null_cnt_map": {
+        "p_brand": 0,
+        "p_comment": 0,
+        "p_container": 0,
+        "p_mfgr": 0,
+        "p_name": 0,
+        "p_partkey": 0,
+        "p_retailprice": 0,
+        "p_size": 0,
+        "p_type": 0
+      },
+      "size_map": {
+        "p_brand": 4800927734,
+        "p_comment": 4800927734,
+        "p_container": 4800927734,
+        "p_mfgr": 4800927734,
+        "p_name": 11343160618,
+        "p_partkey": 800927734,
+        "p_retailprice": 1600927734,
+        "p_size": 800927734,
+        "p_type": 5123493164
+      },
+      "table_cnt": 200000000.0
+    },
+    "partsupp": {
+      "accurate_object_number": 1144,
+      "approx_object_number": 1176,
+      "block_number": 97677,
+      "max_val_map": {
+        "__mo_cpkey_col": 4186108960840891000,
+        "ps_availqty": 9999,
+        "ps_comment": 8825485601892496000,
+        "ps_partkey": 200000000,
+        "ps_suppkey": 10000000,
+        "ps_supplycost": 1000
+      },
+      "min_val_map": {
+        "__mo_cpkey_col": 4185817333622249500,
+        "ps_availqty": 1,
+        "ps_comment": 2329602847306640000,
+        "ps_partkey": 176129,
+        "ps_suppkey": 1,
+        "ps_supplycost": 1
+      },
+      "ndv_map": {
+        "__mo_cpkey_col": 26400000,
+        "ps_availqty": 10953.800000000001,
+        "ps_comment": 26400000,
+        "ps_partkey": 200040067.95503005,
+        "ps_suppkey": 9900000,
+        "ps_supplycost": 3810309.702870185
+      },
+      "null_cnt_map": {
+        "__mo_cpkey_col": 0,
+        "ps_availqty": 0,
+        "ps_comment": 0,
+        "ps_partkey": 0,
+        "ps_suppkey": 0,
+        "ps_supplycost": 0
+      },
+      "size_map": {
+        "__mo_cpkey_col": 19203712058,
+        "ps_availqty": 3203712058,
+        "ps_comment": 118006618619,
+        "ps_partkey": 3203712058,
+        "ps_suppkey": 3203712058,
+        "ps_supplycost": 6403712058
+      },
+      "table_cnt": 800000000.0
+    },
+    "region": {
+      "accurate_object_number": 1,
+      "approx_object_number": 2,
+      "block_number": 1,
+      "max_val_map": {
+        "r_comment": 8460402688024715000,
+        "r_name": 5569057474348392000,
+        "r_regionkey": 4
+      },
+      "min_val_map": {
+        "r_comment": 7450487800504543000,
+        "r_name": 4703537335449485000,
+        "r_regionkey": 0
+      },
+      "ndv_map": {
+        "r_comment": 5,
+        "r_name": 5,
+        "r_regionkey": 5
+      },
+      "null_cnt_map": {
+        "r_comment": 0,
+        "r_name": 0,
+        "r_regionkey": 0
+      },
+      "size_map": {
+        "r_comment": 488,
+        "r_name": 158,
+        "r_regionkey": 58
+      },
+      "table_cnt": 5.0
+    },
+    "supplier": {
+      "accurate_object_number": 15,
+      "approx_object_number": 25,
+      "block_number": 1221,
+      "max_val_map": {
+        "s_acctbal": 9999.99,
+        "s_address": 8825501086105226000,
+        "s_comment": 8825485601892496000,
+        "s_name": 6013836505580660000,
+        "s_nationkey": 24,
+        "s_phone": 3689623718519713300,
+        "s_suppkey": 10000000
+      },
+      "min_val_map": {
+        "s_acctbal": -999.99,
+        "s_address": 2314885599876827600,
+        "s_comment": 2324830971388456400,
+        "s_name": 6013836505580660000,
+        "s_nationkey": 0,
+        "s_phone": 3544382596025691600,
+        "s_suppkey": 1
+      },
+      "ndv_map": {
+        "s_acctbal": 3926569.812770392,
+        "s_address": 9989181.222784117,
+        "s_comment": 9653299.627773158,
+        "s_name": 2148795,
+        "s_nationkey": 25,
+        "s_phone": 9653299.617896698,
+        "s_suppkey": 10000000
+      },
+      "null_cnt_map": {
+        "s_acctbal": 0,
+        "s_address": 0,
+        "s_comment": 0,
+        "s_name": 0,
+        "s_nationkey": 0,
+        "s_phone": 0,
+        "s_suppkey": 0
+      },
+      "size_map": {
+        "s_acctbal": 80046398,
+        "s_address": 415517669,
+        "s_comment": 864908723,
+        "s_name": 240046398,
+        "s_nationkey": 40046398,
+        "s_phone": 240046398,
+        "s_suppkey": 40046398
+      },
+      "table_cnt": 10000000.0
+    }
+  }
+}

@@ -627,6 +627,407 @@ func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 	return -1
 }
 
+type equiJoinKeyPair struct {
+	left  *plan.Expr
+	right *plan.Expr
+	pred  *plan.Expr
+}
+
+func getEquiJoinKeyPairs(node *plan.Node, builder *QueryBuilder) []equiJoinKeyPair {
+	leftTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(node.Children[0]) {
+		leftTags[tag] = true
+	}
+	rightTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(node.Children[1]) {
+		rightTags[tag] = true
+	}
+
+	pairs := make([]equiJoinKeyPair, 0, len(node.OnList))
+	for _, pred := range node.OnList {
+		fn := pred.GetF()
+		if fn == nil || len(fn.Args) != 2 || !IsEqualFunc(fn.Func.GetObj()) {
+			continue
+		}
+
+		arg0Side := getJoinSide(fn.Args[0], leftTags, rightTags, 0)
+		arg1Side := getJoinSide(fn.Args[1], leftTags, rightTags, 0)
+		var leftExpr, rightExpr *plan.Expr
+		switch {
+		case arg0Side == JoinSideLeft && arg1Side == JoinSideRight:
+			leftExpr, rightExpr = fn.Args[0], fn.Args[1]
+		case arg0Side == JoinSideRight && arg1Side == JoinSideLeft:
+			leftExpr, rightExpr = fn.Args[1], fn.Args[0]
+		default:
+			continue
+		}
+		pairs = append(pairs, equiJoinKeyPair{left: leftExpr, right: rightExpr, pred: pred})
+	}
+	return pairs
+}
+
+// estimateEquiJoinNDV returns the largest usable NDV among the equi-join keys.
+//
+// The collected NDVs describe base columns, while the join inputs may already
+// have been filtered.  Capping each side by its current cardinality keeps the
+// denominator meaningful for the actual join inputs.  For multiple equality
+// predicates we deliberately use the largest single-key NDV instead of
+// multiplying NDVs: without multi-column statistics, multiplication can turn
+// correlated keys into a severe cardinality underestimate.
+func estimateEquiJoinNDV(
+	node *plan.Node, leftStats, rightStats *Stats, builder *QueryBuilder,
+) (float64, bool, map[*plan.Expr]struct{}) {
+	joinNDV := float64(0)
+	pairs := getEquiJoinKeyPairs(node, builder)
+	equiPredicates := make(map[*plan.Expr]struct{}, len(pairs))
+	for _, pair := range pairs {
+		equiPredicates[pair.pred] = struct{}{}
+		leftExpr, rightExpr := pair.left, pair.right
+
+		leftNDV := getExprNdv(leftExpr, builder)
+		rightNDV := getExprNdv(rightExpr, builder)
+		if leftNDV <= 0 || rightNDV <= 0 {
+			continue
+		}
+
+		leftNDV = math.Min(leftNDV, leftStats.Outcnt)
+		rightNDV = math.Min(rightNDV, rightStats.Outcnt)
+		keyNDV := math.Max(leftNDV, rightNDV)
+		if keyNDV <= 0 || math.IsNaN(keyNDV) || math.IsInf(keyNDV, 0) {
+			continue
+		}
+		pair.pred.Ndv = keyNDV
+		joinNDV = math.Max(joinNDV, keyNDV)
+	}
+
+	return joinNDV, joinNDV > 0, equiPredicates
+}
+
+// estimateJoinResidualSelectivity estimates only predicates not already
+// represented by the equi-join NDV denominator. Reapplying equality
+// selectivity double-counts the same condition, while dropping residual
+// predicates makes mixed equality/range/OR joins systematically too large.
+func estimateJoinResidualSelectivity(
+	node *plan.Node, equiPredicates map[*plan.Expr]struct{}, builder *QueryBuilder,
+) float64 {
+	selectivity := 1.0
+	for _, pred := range node.OnList {
+		if _, ok := equiPredicates[pred]; ok {
+			continue
+		}
+		selectivity = andSelectivity(selectivity, estimateExprSelectivity(pred, builder, nil))
+	}
+	return selectivity
+}
+
+func colRefKey(col *plan.ColRef) uint64 {
+	return uint64(uint32(col.RelPos))<<32 | uint64(uint32(col.ColPos))
+}
+
+func exprColSet(exprs []*plan.Expr) (map[uint64]struct{}, bool) {
+	cols := make(map[uint64]struct{}, len(exprs))
+	for _, expr := range exprs {
+		col := expr.GetCol()
+		if col == nil {
+			return nil, false
+		}
+		cols[colRefKey(col)] = struct{}{}
+	}
+	return cols, len(cols) > 0
+}
+
+// uniqueColsInSubtree proves a relational property, not a statistical guess:
+// the requested base columns form a unique key in the subtree output. An inner
+// join preserves a child's unique key only when the other join side is unique
+// on all of its equality keys, so the child cannot be duplicated.
+func uniqueColsInSubtree(nodeID int32, cols map[uint64]struct{}, builder *QueryBuilder) bool {
+	node := builder.qry.Nodes[nodeID]
+	switch node.NodeType {
+	case plan.Node_TABLE_SCAN:
+		if node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
+			return false
+		}
+		tag := node.BindingTags[0]
+		for _, name := range node.TableDef.Pkey.Names {
+			pos, ok := node.TableDef.Name2ColIndex[name]
+			if !ok {
+				return false
+			}
+			key := uint64(uint32(tag))<<32 | uint64(uint32(pos))
+			if _, ok = cols[key]; !ok {
+				return false
+			}
+		}
+		return len(node.TableDef.Pkey.Names) > 0
+
+	case plan.Node_FILTER, plan.Node_PROJECT:
+		return len(node.Children) == 1 && uniqueColsInSubtree(node.Children[0], cols, builder)
+
+	case plan.Node_JOIN:
+		if node.JoinType != plan.Node_INNER || len(node.Children) != 2 {
+			return false
+		}
+		leftTags := make(map[int32]bool)
+		for _, tag := range builder.enumerateTags(node.Children[0]) {
+			leftTags[tag] = true
+		}
+		rightTags := make(map[int32]bool)
+		for _, tag := range builder.enumerateTags(node.Children[1]) {
+			rightTags[tag] = true
+		}
+		leftRequested := make(map[uint64]struct{})
+		rightRequested := make(map[uint64]struct{})
+		for key := range cols {
+			tag := int32(uint32(key >> 32))
+			if leftTags[tag] {
+				leftRequested[key] = struct{}{}
+			} else if rightTags[tag] {
+				rightRequested[key] = struct{}{}
+			} else {
+				return false
+			}
+		}
+
+		pairs := getEquiJoinKeyPairs(node, builder)
+		leftExprs := make([]*plan.Expr, 0, len(pairs))
+		rightExprs := make([]*plan.Expr, 0, len(pairs))
+		for _, pair := range pairs {
+			leftExprs = append(leftExprs, pair.left)
+			rightExprs = append(rightExprs, pair.right)
+		}
+		leftJoinCols, leftOK := exprColSet(leftExprs)
+		rightJoinCols, rightOK := exprColSet(rightExprs)
+		if !leftOK || !rightOK {
+			return false
+		}
+		if len(rightRequested) == 0 {
+			return uniqueColsInSubtree(node.Children[0], cols, builder) &&
+				uniqueColsInSubtree(node.Children[1], rightJoinCols, builder)
+		}
+		if len(leftRequested) == 0 {
+			return uniqueColsInSubtree(node.Children[1], cols, builder) &&
+				uniqueColsInSubtree(node.Children[0], leftJoinCols, builder)
+		}
+
+		// A requested key can span both join inputs. Equality keys represented
+		// on the opposite side carry the same value, so add their equivalents
+		// before proving that the requested tuple identifies one row from each
+		// child. A pair of identified child rows can occur at most once in an
+		// inner join result.
+		for _, pair := range pairs {
+			leftCol := pair.left.GetCol()
+			rightCol := pair.right.GetCol()
+			if leftCol == nil || rightCol == nil {
+				continue
+			}
+			leftKey := colRefKey(leftCol)
+			rightKey := colRefKey(rightCol)
+			if _, ok := rightRequested[rightKey]; ok {
+				leftRequested[leftKey] = struct{}{}
+			}
+			if _, ok := leftRequested[leftKey]; ok {
+				rightRequested[rightKey] = struct{}{}
+			}
+		}
+		return uniqueColsInSubtree(node.Children[0], leftRequested, builder) &&
+			uniqueColsInSubtree(node.Children[1], rightRequested, builder)
+	}
+	return false
+}
+
+func isIntegerJoinKey(typ int32) bool {
+	switch types.T(typ) {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		return true
+	}
+	return false
+}
+
+func isFiniteStatValue(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+func getEquiJoinKeyUniqueness(node *plan.Node, builder *QueryBuilder) (bool, bool) {
+	pairs := getEquiJoinKeyPairs(node, builder)
+	leftExprs := make([]*plan.Expr, 0, len(pairs))
+	rightExprs := make([]*plan.Expr, 0, len(pairs))
+	for _, pair := range pairs {
+		leftExprs = append(leftExprs, pair.left)
+		rightExprs = append(rightExprs, pair.right)
+	}
+	leftCols, leftOK := exprColSet(leftExprs)
+	rightCols, rightOK := exprColSet(rightExprs)
+	if !leftOK || !rightOK {
+		return false, false
+	}
+	return uniqueColsInSubtree(node.Children[0], leftCols, builder),
+		uniqueColsInSubtree(node.Children[1], rightCols, builder)
+}
+
+// estimateContainedUniqueJoinCardinality recognizes a high-confidence
+// foreign-key-like join from constraints plus value-domain statistics. The
+// unique side must be complete and dense, and cover nearly all of every probe
+// key range. This
+// deliberately declines filtered, sparse, expression, and non-integer keys;
+// those continue through the generic NDV estimator.
+func estimateContainedUniqueJoinCardinality(
+	node *plan.Node, leftStats, rightStats *Stats, leftUnique, rightUnique bool, builder *QueryBuilder,
+) (float64, bool) {
+	pairs := getEquiJoinKeyPairs(node, builder)
+	if len(pairs) == 0 {
+		return 0, false
+	}
+	leftExprs := make([]*plan.Expr, 0, len(pairs))
+	rightExprs := make([]*plan.Expr, 0, len(pairs))
+	for _, pair := range pairs {
+		leftExprs = append(leftExprs, pair.left)
+		rightExprs = append(rightExprs, pair.right)
+	}
+	_, leftOK := exprColSet(leftExprs)
+	_, rightOK := exprColSet(rightExprs)
+	if !leftOK || !rightOK {
+		return 0, false
+	}
+
+	type candidate struct {
+		probeExprs  []*plan.Expr
+		uniqueExprs []*plan.Expr
+		probeStats  *Stats
+		uniqueStats *Stats
+		unique      bool
+	}
+	candidates := []candidate{
+		{leftExprs, rightExprs, leftStats, rightStats, rightUnique},
+		{rightExprs, leftExprs, rightStats, leftStats, leftUnique},
+	}
+
+	best := math.Inf(1)
+	found := false
+	for _, c := range candidates {
+		if !c.unique || c.uniqueStats.Selectivity < 0.99 {
+			continue
+		}
+
+		contained := true
+		for i := range c.probeExprs {
+			probeCol := c.probeExprs[i].GetCol()
+			uniqueCol := c.uniqueExprs[i].GetCol()
+			if probeCol == nil || uniqueCol == nil ||
+				!isIntegerJoinKey(c.probeExprs[i].Typ.Id) ||
+				!isIntegerJoinKey(c.uniqueExprs[i].Typ.Id) {
+				contained = false
+				break
+			}
+			probeWrapper := builder.getStatsInfoByCol(probeCol)
+			uniqueWrapper := builder.getStatsInfoByCol(uniqueCol)
+			if probeWrapper == nil || uniqueWrapper == nil ||
+				probeWrapper.GetStats() == nil || uniqueWrapper.GetStats() == nil {
+				contained = false
+				break
+			}
+			probeInfo := probeWrapper.GetStats()
+			uniqueInfo := uniqueWrapper.GetStats()
+			probeMin, probeMinOK := probeInfo.MinValMap[probeCol.Name]
+			probeMax, probeMaxOK := probeInfo.MaxValMap[probeCol.Name]
+			uniqueMin, uniqueMinOK := uniqueInfo.MinValMap[uniqueCol.Name]
+			uniqueMax, uniqueMaxOK := uniqueInfo.MaxValMap[uniqueCol.Name]
+			uniqueNDV := math.Min(uniqueInfo.NdvMap[uniqueCol.Name], uniqueInfo.TableCnt)
+			uniqueSpan := uniqueMax - uniqueMin + 1
+			probeSpan := probeMax - probeMin + 1
+			overlapSpan := math.Max(0, math.Min(probeMax, uniqueMax)-math.Max(probeMin, uniqueMin)+1)
+			uniqueDensity := uniqueNDV / uniqueSpan
+			if !probeMinOK || !probeMaxOK || !uniqueMinOK || !uniqueMaxOK ||
+				!isFiniteStatValue(probeMin) || !isFiniteStatValue(probeMax) ||
+				!isFiniteStatValue(uniqueMin) || !isFiniteStatValue(uniqueMax) ||
+				probeSpan <= 0 || uniqueSpan <= 0 || uniqueDensity < 0.99 || uniqueDensity > 1.01 ||
+				overlapSpan/probeSpan < 0.99 ||
+				c.uniqueStats.Outcnt < uniqueInfo.TableCnt*0.99 {
+				contained = false
+				break
+			}
+		}
+		if contained {
+			// Min/max prove only domain coverage, not how probe rows are
+			// distributed within that domain. Keep the unique-side upper bound
+			// instead of inventing a uniform overlap or multi-column NULL rate.
+			best = math.Min(best, c.probeStats.Outcnt)
+			found = true
+		}
+	}
+	return best, found
+}
+
+// estimateFilteredCompositeUniqueJoinCardinality uses the retained-key ratio
+// from a filtered composite unique side to compensate for the missing tuple
+// NDV. Single-key joins already have a direct NDV estimate and must not multiply
+// an unrelated table-wide filter ratio into that domain estimate.
+func estimateFilteredCompositeUniqueJoinCardinality(
+	node *plan.Node, leftStats, rightStats *Stats, leftUnique, rightUnique bool, builder *QueryBuilder,
+) (float64, bool) {
+	pairs := getEquiJoinKeyPairs(node, builder)
+	if len(pairs) <= 1 {
+		return 0, false
+	}
+
+	best := math.Inf(1)
+	found := false
+	leftUsable := leftUnique && leftStats.Selectivity > 0 && leftStats.Selectivity < 0.99
+	rightUsable := rightUnique && rightStats.Selectivity > 0 && rightStats.Selectivity < 0.99
+	if leftUsable {
+		best = math.Min(best, rightStats.Outcnt*clampSelectivity(leftStats.Selectivity, 1))
+		found = true
+	}
+	if rightUsable {
+		best = math.Min(best, leftStats.Outcnt*clampSelectivity(rightStats.Selectivity, 1))
+		found = true
+	}
+	return best, found
+}
+
+func uniqueSideNarrowsProbeDomain(
+	node *plan.Node, leftStats, rightStats *Stats, leftUnique, rightUnique bool, builder *QueryBuilder,
+) bool {
+	pairs := getEquiJoinKeyPairs(node, builder)
+	if len(pairs) == 0 {
+		return false
+	}
+	type candidate struct {
+		probeExprs  []*plan.Expr
+		probeStats  *Stats
+		uniqueStats *Stats
+		unique      bool
+	}
+	leftExprs := make([]*plan.Expr, 0, len(pairs))
+	rightExprs := make([]*plan.Expr, 0, len(pairs))
+	for _, pair := range pairs {
+		leftExprs = append(leftExprs, pair.left)
+		rightExprs = append(rightExprs, pair.right)
+	}
+	for _, c := range []candidate{
+		{rightExprs, rightStats, leftStats, leftUnique},
+		{leftExprs, leftStats, rightStats, rightUnique},
+	} {
+		if !c.unique {
+			continue
+		}
+		if c.uniqueStats.Selectivity >= 0.99 {
+			return true
+		}
+		probeNDV := float64(0)
+		for _, expr := range c.probeExprs {
+			ndv := getExprNdv(expr, builder)
+			if ndv > 0 {
+				probeNDV = math.Max(probeNDV, math.Min(ndv, c.probeStats.Outcnt))
+			}
+		}
+		if probeNDV > c.uniqueStats.Outcnt {
+			return true
+		}
+	}
+	return false
+}
+
 func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.StatsInfo) float64 {
 	// only filter like func(col)=1 or col=? can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
@@ -1125,14 +1526,14 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			return //dont calc shuffle nodes again
 		}
 
-		ndv := math.Min(leftStats.Outcnt, rightStats.Outcnt)
-		if ndv < 1 {
-			ndv = 1
+		ndv, hasEquiJoinNDV, equiPredicates := estimateEquiJoinNDV(node, leftStats, rightStats, builder)
+		if !hasEquiJoinNDV {
+			ndv = math.Min(leftStats.Outcnt, rightStats.Outcnt)
+			if ndv < 1 {
+				ndv = 1
+			}
 		}
-		//assume all join is not cross join
-		//will fix this in the future
-		//isCrossJoin := (len(node.OnList) == 0)
-		isCrossJoin := false
+		residualSelectivity := estimateJoinResidualSelectivity(node, equiPredicates, builder)
 		leftSelectivity := clampSelectivity(leftStats.Selectivity, 1)
 		rightSelectivity := clampSelectivity(rightStats.Selectivity, 1)
 		selectivity := clampSelectivity(math.Pow(rightSelectivity, math.Pow(leftSelectivity, 0.2)), 1)
@@ -1148,12 +1549,66 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 		switch node.JoinType {
 		case plan.Node_INNER:
-			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if !isCrossJoin {
-				outcnt *= selectivity
+			leftUnique, rightUnique := getEquiJoinKeyUniqueness(node, builder)
+			// A unique equality-key tuple has exactly one distinct value per
+			// surviving row, regardless of a stale sampled column NDV.
+			if leftUnique {
+				ndv = math.Max(ndv, leftStats.Outcnt)
 			}
-			if outcnt < rightStats.Outcnt && leftStats.Selectivity > 0.95 {
-				outcnt = rightStats.Outcnt
+			if rightUnique {
+				ndv = math.Max(ndv, rightStats.Outcnt)
+			}
+			// Sampled single-column NDVs can be badly low and do not bound the
+			// fanout of a many-to-many join. Until tuple-frequency or multi-column
+			// statistics are available, let NDV change the physical plan only when
+			// a proven unique side supplies an exact cardinality upper bound and
+			// its surviving keys actually narrow the sampled probe-key domain.
+			if !uniqueSideNarrowsProbeDomain(node, leftStats, rightStats, leftUnique, rightUnique, builder) {
+				fallbackNDV := math.Min(leftStats.Outcnt, rightStats.Outcnt)
+				if fallbackNDV < 1 {
+					fallbackNDV = 1
+				}
+				outcnt := leftStats.Outcnt * rightStats.Outcnt / fallbackNDV
+				outcnt *= selectivity
+				if outcnt < rightStats.Outcnt && leftStats.Selectivity > 0.95 {
+					outcnt = rightStats.Outcnt
+				}
+				outcnt *= residualSelectivity
+				if leftUnique {
+					outcnt = math.Min(outcnt, rightStats.Outcnt)
+				}
+				if rightUnique {
+					outcnt = math.Min(outcnt, leftStats.Outcnt)
+				}
+				node.Stats.Outcnt = outcnt
+				node.Stats.Cost = leftStats.Cost + rightStats.Cost
+				node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+				node.Stats.Selectivity = selectivity_out
+				node.Stats.BlockNum = leftStats.BlockNum
+				break
+			}
+			outcnt, containedUniqueJoin := estimateContainedUniqueJoinCardinality(
+				node, leftStats, rightStats, leftUnique, rightUnique, builder,
+			)
+			if !containedUniqueJoin {
+				outcnt = leftStats.Outcnt * rightStats.Outcnt / ndv
+				if residualSelectivity == 1 && outcnt < rightStats.Outcnt && leftStats.Selectivity > 0.95 {
+					outcnt = rightStats.Outcnt
+				}
+				if filteredUniqueEstimate, ok := estimateFilteredCompositeUniqueJoinCardinality(
+					node, leftStats, rightStats, leftUnique, rightUnique, builder,
+				); ok {
+					outcnt = math.Min(outcnt, filteredUniqueEstimate)
+				}
+			}
+			outcnt *= residualSelectivity
+			// Uniqueness is an exact upper bound even when overlap statistics are
+			// insufficient to estimate the match rate.
+			if leftUnique {
+				outcnt = math.Min(outcnt, rightStats.Outcnt)
+			}
+			if rightUnique {
+				outcnt = math.Min(outcnt, leftStats.Outcnt)
 			}
 			node.Stats.Outcnt = outcnt
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
@@ -1361,13 +1816,13 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		}
 
 	case plan.Node_FILTER:
-		//filters which can not push down to scan nodes. hard to estimate selectivity
-		node.Stats.Outcnt = childStats.Outcnt * 0.05
+		filterSelectivity := estimateExprSelectivity(colexec.RewriteFilterExprList(node.FilterList), builder, nil)
+		node.Stats.Outcnt = childStats.Outcnt * filterSelectivity
 		if node.Stats.Outcnt < 1 {
 			node.Stats.Outcnt = 1
 		}
 		node.Stats.Cost = childStats.Cost
-		node.Stats.Selectivity = 0.05
+		node.Stats.Selectivity = filterSelectivity
 		node.Stats.BlockNum = childStats.BlockNum
 
 	case plan.Node_FUNCTION_SCAN:
