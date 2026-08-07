@@ -78,13 +78,14 @@ type cluster struct {
 	testAdmission  *clusteradmission.Lease
 
 	options struct {
-		dataPath         string
-		cn               int
-		withProxy        bool
-		preStart         func(ServiceOperator)
-		testing          bool
-		heartbeatTimeout time.Duration
-		storeTimeout     time.Duration
+		dataPath                    string
+		cn                          int
+		withProxy                   bool
+		preStart                    func(ServiceOperator)
+		testing                     bool
+		allowConcurrentTestClusters bool
+		heartbeatTimeout            time.Duration
+		storeTimeout                time.Duration
 	}
 
 	ports struct {
@@ -155,7 +156,11 @@ func (c *cluster) Start() (err error) {
 				"embedded test cluster cleanup is incomplete",
 			)
 		}
-		admission, acquireErr := clusteradmission.Acquire(context.Background())
+		mode := clusteradmission.Exclusive
+		if c.options.allowConcurrentTestClusters {
+			mode = clusteradmission.AllowConcurrent
+		}
+		admission, acquireErr := clusteradmission.Acquire(context.Background(), mode)
 		if acquireErr != nil {
 			return acquireErr
 		}
