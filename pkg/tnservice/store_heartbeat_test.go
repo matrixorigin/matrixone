@@ -17,6 +17,7 @@ package tnservice
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,6 +41,30 @@ type canceledTNResponseClient struct {
 	heartbeatEntered chan struct{}
 	pollEntered      chan struct{}
 	command          pb.ScheduleCommand
+}
+
+type lateTNCommandClient struct {
+	*testHAClient
+	heartbeatEntered chan struct{}
+	firstPollDone    chan struct{}
+	pollCalls        atomic.Int32
+	commandReady     atomic.Bool
+	commandBatch     pb.CommandBatch
+}
+
+func testCommandBatch(batchID uint64, commands ...pb.ScheduleCommand) pb.CommandBatch {
+	commandIDs := make([]pb.ScheduleCommandID, len(commands))
+	for i := range commands {
+		commandIDs[i] = pb.ScheduleCommandID{
+			OriginBatchID: batchID,
+			CommandIndex:  uint64(i),
+		}
+	}
+	return pb.CommandBatch{
+		BatchID:    batchID,
+		Commands:   commands,
+		CommandIDs: commandIDs,
+	}
 }
 
 func (c *canceledTNResponseClient) SendTNHeartbeat(
@@ -93,7 +118,37 @@ func (c *blockingHeartbeatCommandClient) GetScheduleCommands(
 	default:
 		close(c.pollEntered)
 	}
-	return pb.CommandBatch{BatchID: 1, Commands: []pb.ScheduleCommand{c.command}}, nil
+	return testCommandBatch(1, c.command), nil
+}
+
+func (c *lateTNCommandClient) SendTNHeartbeat(
+	ctx context.Context,
+	hb pb.TNStoreHeartbeat,
+) (pb.CommandBatch, error) {
+	if hb.AckedCommandBatchID != 0 {
+		return pb.CommandBatch{}, nil
+	}
+	select {
+	case <-c.heartbeatEntered:
+	default:
+		close(c.heartbeatEntered)
+	}
+	<-ctx.Done()
+	return pb.CommandBatch{}, ctx.Err()
+}
+
+func (c *lateTNCommandClient) GetScheduleCommands(
+	context.Context,
+	pb.ServiceType,
+) (pb.CommandBatch, error) {
+	if c.pollCalls.Add(1) == 1 {
+		close(c.firstPollDone)
+		return pb.CommandBatch{}, nil
+	}
+	if c.commandReady.Load() {
+		return c.commandBatch, nil
+	}
+	return pb.CommandBatch{}, nil
 }
 
 var _ logservice.TNHAKeeperClient = new(testHAClient)
@@ -269,6 +324,66 @@ func TestCommandPollProgressesAfterHeartbeatFailure(t *testing.T) {
 	}
 }
 
+func TestCommandPollDiscoversCommandCreatedAfterEmptyRead(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	command := pb.ScheduleCommand{
+		UUID:        "tn-1",
+		ServiceType: pb.TNService,
+		ShutdownStore: &pb.ShutdownStore{
+			StoreID: "tn-1",
+		},
+	}
+	client := &lateTNCommandClient{
+		testHAClient:     &testHAClient{},
+		heartbeatEntered: make(chan struct{}),
+		firstPollDone:    make(chan struct{}),
+		commandBatch:     testCommandBatch(2, command),
+	}
+	store := &store{
+		cfg:            &Config{UUID: "tn-1"},
+		replicas:       &sync.Map{},
+		config:         &util.ConfigData{},
+		hakeeperClient: client,
+		rt:             rt,
+		shutdownC:      make(chan struct{}, 1),
+	}
+	store.cfg.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
+	store.cfg.HAKeeper.HeatbeatTimeout.Duration = 10 * time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("control-plane workers did not terminate during cleanup")
+		}
+	})
+	go func() {
+		defer close(done)
+		store.controlTask(ctx)
+	}()
+
+	select {
+	case <-client.heartbeatEntered:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat did not enter the injected blocked RPC")
+	}
+	select {
+	case <-client.firstPollDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first empty command poll did not complete")
+	}
+	client.commandReady.Store(true)
+	select {
+	case <-store.shutdownC:
+	case <-time.After(2 * time.Second):
+		t.Fatal("command created after an empty read exceeded the poll progress bound")
+	}
+}
+
 func TestCommandTaskSkipsPollWithoutInFlightHeartbeat(t *testing.T) {
 	client := &blockingHeartbeatCommandClient{
 		testHAClient:     &testHAClient{},
@@ -396,16 +511,16 @@ func TestCommandBatchDeduplicatesPollHeartbeatRace(t *testing.T) {
 		shutdownC: make(chan struct{}, 4),
 	}
 
-	store.handleCommandBatch(pb.CommandBatch{BatchID: 10, Commands: []pb.ScheduleCommand{command}})
+	store.handleCommandBatch(testCommandBatch(10, command))
 	require.Equal(t, uint64(10), store.ackedCommandBatchID.Load())
 	require.Equal(t, uint64(10), store.shutdownBatchID.Load())
-	require.Len(t, store.appliedCommands, 1)
-	store.handleCommandBatch(pb.CommandBatch{BatchID: 10, Commands: []pb.ScheduleCommand{command}})
-	store.handleCommandBatch(pb.CommandBatch{BatchID: 9, Commands: []pb.ScheduleCommand{command}})
+	require.Len(t, store.appliedCommandIDs, 1)
+	store.handleCommandBatch(testCommandBatch(10, command))
+	store.handleCommandBatch(testCommandBatch(9, command))
 	require.Empty(t, store.shutdownC, "shutdown must wait for its durable acknowledgement")
 	store.handleHeartbeatResponse(9, pb.CommandBatch{})
 	require.Empty(t, store.shutdownC, "a stale acknowledgement must not complete shutdown")
-	store.handleHeartbeatResponse(10, pb.CommandBatch{BatchID: 10, Commands: []pb.ScheduleCommand{command}})
+	store.handleHeartbeatResponse(10, testCommandBatch(10, command))
 	require.Empty(t, store.shutdownC, "a retained shutdown command is not acknowledged")
 	store.handleHeartbeatResponse(10, pb.CommandBatch{})
 	require.Equal(t, 1, len(store.shutdownC), "an exact committed acknowledgement completes shutdown")
@@ -414,14 +529,14 @@ func TestCommandBatchDeduplicatesPollHeartbeatRace(t *testing.T) {
 	store.handleCommandBatch(pb.CommandBatch{Commands: []pb.ScheduleCommand{command}})
 	require.Equal(t, 2, len(store.shutdownC), "a later legacy checker retry must remain applicable")
 
-	store.handleCommandBatch(pb.CommandBatch{BatchID: 11, Commands: []pb.ScheduleCommand{command}})
+	store.handleCommandBatch(testCommandBatch(11, command))
 	require.Equal(t, 2, len(store.shutdownC), "a new acknowledged generation must wait for its own ack")
 	require.Equal(t, uint64(11), store.ackedCommandBatchID.Load())
-	require.Len(t, store.appliedCommands, 1,
+	require.Len(t, store.appliedCommandIDs, 1,
 		"an inherited terminal command must retain one bounded command identity")
 	store.handleHeartbeatResponse(11, pb.CommandBatch{})
 	require.Equal(t, 3, len(store.shutdownC), "a new checker generation remains independently completable")
-	require.Empty(t, store.appliedCommands)
+	require.Empty(t, store.appliedCommandIDs)
 }
 
 func TestShutdownWaitsForAcknowledgementTransport(t *testing.T) {
@@ -447,12 +562,7 @@ func TestShutdownWaitsForAcknowledgementTransport(t *testing.T) {
 		},
 	}
 
-	store.handlePolledCommandBatch(context.Background(), pb.CommandBatch{
-		BatchID: 10,
-		Commands: []pb.ScheduleCommand{
-			command,
-		},
-	})
+	store.handlePolledCommandBatch(context.Background(), testCommandBatch(10, command))
 	require.Equal(t, uint64(10), client.lastHeartbeat.AckedCommandBatchID)
 	require.Equal(t, uint64(10), store.shutdownBatchID.Load())
 	require.Empty(t, store.shutdownC,

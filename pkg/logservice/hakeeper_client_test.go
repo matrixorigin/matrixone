@@ -236,26 +236,16 @@ func TestScheduleCommandPollUsesIndependentMORPCConnection(t *testing.T) {
 	require.NoError(t, <-heartbeatDone)
 }
 
-func TestScheduleCommandPollBackoffIsBounded(t *testing.T) {
-	require.Equal(t, time.Second, ScheduleCommandPollBackoff("cn-1", 0))
-	for _, test := range []struct {
-		attempt uint32
-		min     time.Duration
-		max     time.Duration
-	}{
-		{attempt: 1, min: 2 * time.Second, max: 2500 * time.Millisecond},
-		{attempt: 4, min: 16 * time.Second, max: 20 * time.Second},
-		{attempt: 5, min: 24 * time.Second, max: 30 * time.Second},
-		{attempt: ^uint32(0), min: 24 * time.Second, max: 30 * time.Second},
-	} {
-		delay := ScheduleCommandPollBackoff("cn-1", test.attempt)
-		require.GreaterOrEqual(t, delay, test.min)
-		require.LessOrEqual(t, delay, test.max)
-		require.Equal(t, delay, ScheduleCommandPollBackoff("cn-1", test.attempt))
+func TestScheduleCommandInitialPollDelayPreservesProgressBound(t *testing.T) {
+	for _, serviceID := range []string{"cn-1", "cn-2", "tn-1"} {
+		delay := ScheduleCommandInitialPollDelay(serviceID)
+		require.GreaterOrEqual(t, delay, 750*time.Millisecond)
+		require.LessOrEqual(t, delay, ScheduleCommandPollInterval)
+		require.Equal(t, delay, ScheduleCommandInitialPollDelay(serviceID))
 	}
 	require.NotEqual(t,
-		ScheduleCommandPollBackoff("cn-1", 5),
-		ScheduleCommandPollBackoff("cn-2", 5),
+		ScheduleCommandInitialPollDelay("cn-1"),
+		ScheduleCommandInitialPollDelay("cn-2"),
 	)
 }
 
@@ -827,35 +817,63 @@ func TestFilterUnappliedScheduleCommandsAcrossGenerations(t *testing.T) {
 	}
 	first := command(1)
 	second := command(2)
+	firstID := pb.ScheduleCommandID{OriginBatchID: 10}
+	secondID := pb.ScheduleCommandID{OriginBatchID: 11}
 
-	filtered, applied := FilterUnappliedScheduleCommands(
-		[]pb.ScheduleCommand{first},
+	filtered, applied, ok := FilterUnappliedScheduleCommands(
+		pb.CommandBatch{
+			BatchID:    10,
+			Commands:   []pb.ScheduleCommand{first},
+			CommandIDs: []pb.ScheduleCommandID{firstID},
+		},
 		nil,
 	)
+	require.True(t, ok)
 	require.Equal(t, []pb.ScheduleCommand{first}, filtered)
 	require.Len(t, applied, 1)
 
-	filtered, next := FilterUnappliedScheduleCommands(
-		[]pb.ScheduleCommand{first, second},
+	filtered, next, ok := FilterUnappliedScheduleCommands(
+		pb.CommandBatch{
+			BatchID:    11,
+			Commands:   []pb.ScheduleCommand{first, second},
+			CommandIDs: []pb.ScheduleCommandID{firstID, secondID},
+		},
 		applied,
 	)
+	require.True(t, ok)
 	require.Equal(t, []pb.ScheduleCommand{second}, filtered)
 	require.Len(t, next, 2)
 
-	filtered, next = FilterUnappliedScheduleCommands(
-		[]pb.ScheduleCommand{first, first},
+	filtered, next, ok = FilterUnappliedScheduleCommands(
+		pb.CommandBatch{
+			BatchID:    11,
+			Commands:   []pb.ScheduleCommand{first, first},
+			CommandIDs: []pb.ScheduleCommandID{firstID, secondID},
+		},
 		applied,
 	)
+	require.True(t, ok)
 	require.Equal(t, []pb.ScheduleCommand{first}, filtered,
-		"a newly appended identical occurrence must not be hidden by its inherited peer")
-	require.Equal(t, uint32(2), next[scheduleCommandFingerprint(&first)])
+		"a newly scheduled identical command has a distinct identity")
+	require.Len(t, next, 2)
 
-	first.ConfigChange.InitialMembers = map[uint64]string{1: "a", 2: "b"}
-	filtered, _ = FilterUnappliedScheduleCommands(
-		[]pb.ScheduleCommand{first},
+	filtered, _, ok = FilterUnappliedScheduleCommands(
+		pb.CommandBatch{BatchID: 12, Commands: []pb.ScheduleCommand{first}},
 		applied,
 	)
-	require.Empty(t, filtered, "map iteration order must not change command identity")
+	require.False(t, ok)
+	require.Empty(t, filtered, "a batch without stable command IDs must not be acknowledged")
+
+	filtered, _, ok = FilterUnappliedScheduleCommands(
+		pb.CommandBatch{
+			BatchID:    12,
+			Commands:   []pb.ScheduleCommand{first, second},
+			CommandIDs: []pb.ScheduleCommandID{firstID, firstID},
+		},
+		applied,
+	)
+	require.False(t, ok)
+	require.Empty(t, filtered, "duplicate command IDs must fail closed")
 }
 
 func TestIsRetryableScheduleCommand(t *testing.T) {

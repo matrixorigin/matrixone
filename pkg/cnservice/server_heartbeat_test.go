@@ -45,10 +45,34 @@ type canceledCNResponseClient struct {
 	pollEntered      chan struct{}
 }
 
+type lateCNCommandClient struct {
+	*testHAKClient
+	heartbeatEntered chan struct{}
+	firstPollDone    chan struct{}
+	pollCalls        atomic.Int32
+	commandReady     atomic.Bool
+	commandBatch     pb.CommandBatch
+}
+
 type observingTaskHolder struct {
 	createErr   error
 	createCount atomic.Int32
 	created     chan struct{}
+}
+
+func testCommandBatch(batchID uint64, commands ...pb.ScheduleCommand) pb.CommandBatch {
+	commandIDs := make([]pb.ScheduleCommandID, len(commands))
+	for i := range commands {
+		commandIDs[i] = pb.ScheduleCommandID{
+			OriginBatchID: batchID,
+			CommandIndex:  uint64(i),
+		}
+	}
+	return pb.CommandBatch{
+		BatchID:    batchID,
+		Commands:   commands,
+		CommandIDs: commandIDs,
+	}
 }
 
 func (h *observingTaskHolder) Close() error {
@@ -92,6 +116,33 @@ func (c *canceledCNResponseClient) GetScheduleCommands(
 	}
 	<-ctx.Done()
 	return pb.CommandBatch{BatchID: 7, Commands: []pb.ScheduleCommand{{ServiceType: pb.TNService}}}, nil
+}
+
+func (c *lateCNCommandClient) SendCNHeartbeat(
+	ctx context.Context,
+	_ pb.CNStoreHeartbeat,
+) (pb.CommandBatch, error) {
+	select {
+	case <-c.heartbeatEntered:
+	default:
+		close(c.heartbeatEntered)
+	}
+	<-ctx.Done()
+	return pb.CommandBatch{}, ctx.Err()
+}
+
+func (c *lateCNCommandClient) GetScheduleCommands(
+	context.Context,
+	pb.ServiceType,
+) (pb.CommandBatch, error) {
+	if c.pollCalls.Add(1) == 1 {
+		close(c.firstPollDone)
+		return pb.CommandBatch{}, nil
+	}
+	if c.commandReady.Load() {
+		return c.commandBatch, nil
+	}
+	return pb.CommandBatch{}, nil
 }
 
 func (c *blockingCNHeartbeatCommandClient) SendCNHeartbeat(
@@ -151,19 +202,16 @@ func TestCNCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {
 	conf.UUID = "cn-1"
 	conf.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
 	conf.HAKeeper.HeatbeatTimeout.Duration = 5 * time.Second
-	commandBatch := pb.CommandBatch{
-		BatchID: 1,
-		Commands: []pb.ScheduleCommand{{
-			UUID:        conf.UUID,
-			ServiceType: pb.CNService,
-			CreateTaskService: &pb.CreateTaskService{
-				User: pb.TaskTableUser{
-					Username: "cn-command-poll-test",
-					Password: "test-password",
-				},
+	commandBatch := testCommandBatch(1, pb.ScheduleCommand{
+		UUID:        conf.UUID,
+		ServiceType: pb.CNService,
+		CreateTaskService: &pb.CreateTaskService{
+			User: pb.TaskTableUser{
+				Username: "cn-command-poll-test",
+				Password: "test-password",
 			},
-		}},
-	}
+		},
+	})
 	client := &blockingCNHeartbeatCommandClient{
 		testHAKClient:      &testHAKClient{cfg: conf},
 		heartbeatEntered:   make(chan struct{}),
@@ -237,16 +285,13 @@ func TestCNCommandPollProgressesAfterHeartbeatFailure(t *testing.T) {
 	conf := &Config{UUID: "cn-1"}
 	conf.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
 	conf.HAKeeper.HeatbeatTimeout.Duration = 10 * time.Millisecond
-	commandBatch := pb.CommandBatch{
-		BatchID: 2,
-		Commands: []pb.ScheduleCommand{{
-			UUID:        conf.UUID,
-			ServiceType: pb.CNService,
-			CreateTaskService: &pb.CreateTaskService{
-				User: pb.TaskTableUser{Username: "cn-command-poll-failure"},
-			},
-		}},
-	}
+	commandBatch := testCommandBatch(2, pb.ScheduleCommand{
+		UUID:        conf.UUID,
+		ServiceType: pb.CNService,
+		CreateTaskService: &pb.CreateTaskService{
+			User: pb.TaskTableUser{Username: "cn-command-poll-failure"},
+		},
+	})
 	client := &blockingCNHeartbeatCommandClient{
 		testHAKClient:      &testHAKClient{cfg: conf},
 		heartbeatEntered:   make(chan struct{}),
@@ -284,6 +329,70 @@ func TestCNCommandPollProgressesAfterHeartbeatFailure(t *testing.T) {
 	case <-holder.created:
 	case <-time.After(2 * time.Second):
 		t.Fatal("poll did not take over after heartbeat failure")
+	}
+	require.Equal(t, int32(1), holder.createCount.Load())
+}
+
+func TestCNCommandPollDiscoversCommandCreatedAfterEmptyRead(t *testing.T) {
+	conf := &Config{UUID: "cn-1"}
+	conf.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
+	conf.HAKeeper.HeatbeatTimeout.Duration = 10 * time.Second
+	command := pb.ScheduleCommand{
+		UUID:        conf.UUID,
+		ServiceType: pb.CNService,
+		CreateTaskService: &pb.CreateTaskService{
+			User: pb.TaskTableUser{Username: "late-command"},
+		},
+	}
+	client := &lateCNCommandClient{
+		testHAKClient:    &testHAKClient{cfg: conf},
+		heartbeatEntered: make(chan struct{}),
+		firstPollDone:    make(chan struct{}),
+		commandBatch:     testCommandBatch(3, command),
+	}
+	holder := &observingTaskHolder{
+		createErr: errors.New("observe command application"),
+		created:   make(chan struct{}, 1),
+	}
+	service := &service{
+		cfg:               conf,
+		_hakeeperClient:   client,
+		config:            &util.ConfigData{},
+		logger:            logutil.GetPanicLogger(),
+		hakeeperConnected: make(chan struct{}),
+	}
+	service.task.holder = holder
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("control-plane workers did not terminate during cleanup")
+		}
+	})
+	go func() {
+		defer close(done)
+		service.controlTask(ctx)
+	}()
+
+	select {
+	case <-client.heartbeatEntered:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat did not enter the injected blocked RPC")
+	}
+	select {
+	case <-client.firstPollDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first empty command poll did not complete")
+	}
+	client.commandReady.Store(true)
+	select {
+	case <-holder.created:
+	case <-time.After(2 * time.Second):
+		t.Fatal("command created after an empty read exceeded the poll progress bound")
 	}
 	require.Equal(t, int32(1), holder.createCount.Load())
 }
@@ -395,12 +504,14 @@ func TestCNCommandGenerationRolloverDoesNotReplayInheritedCommands(t *testing.T)
 	}
 	first := command("first")
 	second := command("second")
+	firstID := pb.ScheduleCommandID{OriginBatchID: 10}
+	secondID := pb.ScheduleCommandID{OriginBatchID: 11}
+	thirdID := pb.ScheduleCommandID{OriginBatchID: 12}
 
 	service.handleCommandBatch(pb.CommandBatch{
-		BatchID: 10,
-		Commands: []pb.ScheduleCommand{
-			first,
-		},
+		BatchID:    10,
+		Commands:   []pb.ScheduleCommand{first},
+		CommandIDs: []pb.ScheduleCommandID{firstID},
 	})
 	service.handleCommandBatch(pb.CommandBatch{
 		BatchID: 11,
@@ -408,6 +519,7 @@ func TestCNCommandGenerationRolloverDoesNotReplayInheritedCommands(t *testing.T)
 			first,
 			second,
 		},
+		CommandIDs: []pb.ScheduleCommandID{firstID, secondID},
 	})
 	require.Equal(t, int32(2), holder.createCount.Load(),
 		"a newer generation must apply only newly appended commands")
@@ -420,17 +532,44 @@ func TestCNCommandGenerationRolloverDoesNotReplayInheritedCommands(t *testing.T)
 			second,
 			command("third"),
 		},
+		CommandIDs: []pb.ScheduleCommandID{firstID, secondID, thirdID},
 	})
 	require.Equal(t, int32(3), holder.createCount.Load(),
 		"a stale acknowledgement must not erase the newer generation's lineage")
 
 	service.handleHeartbeatResponse(12, pb.CommandBatch{})
 	service.handleCommandBatch(pb.CommandBatch{
-		BatchID: 13,
-		Commands: []pb.ScheduleCommand{
-			first,
-		},
+		BatchID:    13,
+		Commands:   []pb.ScheduleCommand{first},
+		CommandIDs: []pb.ScheduleCommandID{{OriginBatchID: 13}},
 	})
 	require.Equal(t, int32(4), holder.createCount.Load(),
 		"the same command may be intentional work after the prior batch is acknowledged")
+}
+
+func TestCNIdenticalCommandAfterAckIsNotHiddenByDelayedResponse(t *testing.T) {
+	conf := &Config{UUID: "cn-1"}
+	holder := &observingTaskHolder{
+		createErr: errors.New("observe command application"),
+		created:   make(chan struct{}, 2),
+	}
+	service := &service{cfg: conf, logger: logutil.GetPanicLogger()}
+	service.task.holder = holder
+	command := pb.ScheduleCommand{
+		UUID:        conf.UUID,
+		ServiceType: pb.CNService,
+		CreateTaskService: &pb.CreateTaskService{
+			User: pb.TaskTableUser{Username: "same-payload"},
+		},
+	}
+
+	service.handleCommandBatch(testCommandBatch(20, command))
+	// HAKeeper has committed ack 20 and independently installed new work with
+	// the same payload. Polling can deliver it before the old heartbeat response.
+	service.handleCommandBatch(testCommandBatch(21, command))
+	service.handleHeartbeatResponse(20, pb.CommandBatch{})
+
+	require.Equal(t, int32(2), holder.createCount.Load(),
+		"a new identity must execute even when its payload equals acknowledged work")
+	require.Equal(t, uint64(21), service.ackedCommandBatchID.Load())
 }

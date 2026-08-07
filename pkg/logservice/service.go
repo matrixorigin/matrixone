@@ -417,12 +417,12 @@ func (s *Service) handleGetScheduleCommands(ctx context.Context, req pb.Request)
 			return resp
 		}
 	}
-	// A batch installed before every HAKeeper replica understood BatchID cannot
-	// be safely deduplicated against a concurrent heartbeat response. Let the
-	// legacy heartbeat path consume it; protocol activation (or a later existing
-	// TickUpdate after snapshot recovery) assigns a stable ID without adding a
-	// delivery-specific Raft write.
-	if len(batch.Commands) > 0 && batch.BatchID == 0 {
+	// A batch installed before every HAKeeper replica understood stable delivery
+	// IDs cannot be safely deduplicated against a concurrent heartbeat response
+	// or generation rollover. Let the acknowledged heartbeat path migrate it;
+	// protocol activation (or a later existing TickUpdate after snapshot
+	// recovery) also fills the IDs without adding a delivery-specific Raft write.
+	if len(batch.Commands) > 0 && !ScheduleCommandBatchHasStableIDs(batch) {
 		resp.CommandBatch = &pb.CommandBatch{}
 		return resp
 	}

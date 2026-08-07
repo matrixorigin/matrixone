@@ -576,14 +576,18 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 				l.BatchID = s.state.Index
 			}
 		} else if s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing {
+			if ensureScheduleCommandIDs(&l, s.state.Index) {
+				s.state.ScheduleCommands[c.UUID] = l
+			}
 			if hasEquivalentScheduleCommand(l.Commands, c) {
 				continue
 			}
-			if commands, replaced := replacePendingJoinGossipCommand(l.Commands, c); replaced {
+			commandID := nextScheduleCommandID(l, s.state.Index)
+			if replaced, ok := replacePendingJoinGossipCommand(l, c, commandID); ok {
 				// A changed peer set is a retry of the same join operation, not a
 				// second operation. Keep the newest addresses so a stale seed list
 				// cannot consume the batch before the useful retry runs.
-				l.Commands = commands
+				l = replaced
 				l.BatchID = s.state.Index
 				s.state.ScheduleCommands[c.UUID] = l
 				continue
@@ -591,17 +595,91 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 			// The operator controller dispatches a newly generated command once.
 			// Dropping it merely because this UUID still has an unacknowledged
 			// batch would lose that command forever. Roll the old and new commands
-			// into a new generation instead. A service that already applied the
-			// old generation may replay it, while its stale ack cannot delete the
-			// newly appended commands.
+			// into a new generation instead. Stable per-command IDs let the service
+			// skip inherited work without confusing a later identical command with
+			// the earlier operation.
 			l.BatchID = s.state.Index
 		}
 		plog.Infof("adding schedule command to hakeeper rsm: %s", c.LogString())
 		l.Commands = append(l.Commands, c)
+		if s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing {
+			l.CommandIDs = append(l.CommandIDs, nextScheduleCommandID(l, s.state.Index))
+		}
 		s.state.ScheduleCommands[c.UUID] = l
 	}
 
 	return sm.Result{}
+}
+
+type scheduleCommandIDKey struct {
+	originBatchID uint64
+	commandIndex  uint64
+}
+
+func nextScheduleCommandID(batch pb.CommandBatch, originBatchID uint64) pb.ScheduleCommandID {
+	var next uint64
+	for i := range batch.CommandIDs {
+		if batch.CommandIDs[i].OriginBatchID == originBatchID &&
+			batch.CommandIDs[i].CommandIndex >= next {
+			next = batch.CommandIDs[i].CommandIndex + 1
+		}
+	}
+	return pb.ScheduleCommandID{OriginBatchID: originBatchID, CommandIndex: next}
+}
+
+// ensureScheduleCommandIDs migrates a batch created by an older HAKeeper. It
+// preserves every unique valid ID and repairs missing or duplicate positions.
+// The caller supplies the current replicated log index, so all replicas make
+// the same repair and the new IDs cannot collide with an earlier log entry.
+func ensureScheduleCommandIDs(batch *pb.CommandBatch, originBatchID uint64) bool {
+	changed := false
+	if batch.BatchID == 0 {
+		batch.BatchID = originBatchID
+		changed = true
+	}
+	if len(batch.CommandIDs) != len(batch.Commands) {
+		ids := make([]pb.ScheduleCommandID, len(batch.Commands))
+		copy(ids, batch.CommandIDs)
+		batch.CommandIDs = ids
+		changed = true
+	}
+	used := make(map[scheduleCommandIDKey]struct{}, len(batch.CommandIDs))
+	for i := range batch.CommandIDs {
+		if batch.CommandIDs[i].OriginBatchID == 0 {
+			continue
+		}
+		key := scheduleCommandIDKey{
+			originBatchID: batch.CommandIDs[i].OriginBatchID,
+			commandIndex:  batch.CommandIDs[i].CommandIndex,
+		}
+		if _, ok := used[key]; ok {
+			batch.CommandIDs[i] = pb.ScheduleCommandID{}
+			changed = true
+			continue
+		}
+		used[key] = struct{}{}
+	}
+	var next uint64
+	for i := range batch.CommandIDs {
+		if batch.CommandIDs[i].OriginBatchID != 0 {
+			continue
+		}
+		for {
+			key := scheduleCommandIDKey{originBatchID: originBatchID, commandIndex: next}
+			next++
+			if _, ok := used[key]; ok {
+				continue
+			}
+			batch.CommandIDs[i] = pb.ScheduleCommandID{
+				OriginBatchID: key.originBatchID,
+				CommandIndex:  key.commandIndex,
+			}
+			used[key] = struct{}{}
+			changed = true
+			break
+		}
+	}
+	return changed
 }
 
 // hasEquivalentScheduleCommand prevents a stalled target from accumulating
@@ -618,28 +696,37 @@ func hasEquivalentScheduleCommand(commands []pb.ScheduleCommand, candidate pb.Sc
 }
 
 func replacePendingJoinGossipCommand(
-	commands []pb.ScheduleCommand,
+	batch pb.CommandBatch,
 	candidate pb.ScheduleCommand,
-) ([]pb.ScheduleCommand, bool) {
+	candidateID pb.ScheduleCommandID,
+) (pb.CommandBatch, bool) {
 	if candidate.JoinGossipCluster == nil {
-		return commands, false
+		return batch, false
 	}
-	result := make([]pb.ScheduleCommand, 0, len(commands))
+	commands := make([]pb.ScheduleCommand, 0, len(batch.Commands))
+	commandIDs := make([]pb.ScheduleCommandID, 0, len(batch.CommandIDs))
 	replaced := false
-	for _, command := range commands {
+	for i, command := range batch.Commands {
 		if command.UUID == candidate.UUID &&
 			command.Bootstrapping == candidate.Bootstrapping &&
 			command.ServiceType == candidate.ServiceType &&
 			command.JoinGossipCluster != nil {
 			if !replaced {
-				result = append(result, candidate)
+				commands = append(commands, candidate)
+				commandIDs = append(commandIDs, candidateID)
 				replaced = true
 			}
 			continue
 		}
-		result = append(result, command)
+		commands = append(commands, command)
+		commandIDs = append(commandIDs, batch.CommandIDs[i])
 	}
-	return result, replaced
+	if !replaced {
+		return batch, false
+	}
+	batch.Commands = commands
+	batch.CommandIDs = commandIDs
+	return batch, true
 }
 
 func scheduleCommandsEqual(left, right pb.ScheduleCommand) bool {
@@ -704,14 +791,25 @@ func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
 	if batch, ok := s.state.ScheduleCommands[uuid]; ok {
 		deliver := make([]pb.ScheduleCommand, 0, len(batch.Commands))
 		pending := make([]pb.ScheduleCommand, 0, len(batch.Commands))
-		for _, cmd := range batch.Commands {
+		var deliverIDs, pendingIDs []pb.ScheduleCommandID
+		if len(batch.CommandIDs) == len(batch.Commands) {
+			deliverIDs = make([]pb.ScheduleCommandID, 0, len(batch.CommandIDs))
+			pendingIDs = make([]pb.ScheduleCommandID, 0, len(batch.CommandIDs))
+		}
+		for i, cmd := range batch.Commands {
 			retryable, applied := s.bootstrapReplicaCommandStatus(cmd)
 			if applied {
 				continue
 			}
 			deliver = append(deliver, cmd)
+			if deliverIDs != nil {
+				deliverIDs = append(deliverIDs, batch.CommandIDs[i])
+			}
 			if retryable {
 				pending = append(pending, cmd)
+				if pendingIDs != nil {
+					pendingIDs = append(pendingIDs, batch.CommandIDs[i])
+				}
 			}
 		}
 
@@ -720,10 +818,12 @@ func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
 		} else {
 			retained := batch
 			retained.Commands = pending
+			retained.CommandIDs = pendingIDs
 			s.state.ScheduleCommands[uuid] = retained
 		}
 
 		batch.Commands = deliver
+		batch.CommandIDs = deliverIDs
 		data, err := batch.Marshal()
 		if err != nil {
 			panic(err)
@@ -745,20 +845,21 @@ func (s *stateMachine) getCommandBatchWithAck(uuid string, ack uint64) sm.Result
 	if !ok {
 		return sm.Result{}
 	}
-	if batch.BatchID == 0 {
+	if ensureScheduleCommandIDs(&batch, s.state.Index) {
 		// A snapshot produced before delivery IDs were introduced can still
-		// contain pending work after the feature is enabled. Assign the ID on
-		// this first acknowledged heartbeat instead of exposing a zero-ID batch
-		// that the poll path must reject and the service cannot acknowledge.
-		batch.BatchID = s.state.Index
+		// contain pending work after the feature is enabled. Assign stable IDs on
+		// this first acknowledged heartbeat instead of exposing a batch that the
+		// poll path must reject and the service cannot acknowledge.
 		s.state.ScheduleCommands[uuid] = batch
 	}
 	if ack != 0 && ack == batch.BatchID {
 		pending := make([]pb.ScheduleCommand, 0, len(batch.Commands))
-		for _, command := range batch.Commands {
+		pendingIDs := make([]pb.ScheduleCommandID, 0, len(batch.CommandIDs))
+		for i, command := range batch.Commands {
 			retryable, applied := s.bootstrapReplicaCommandStatus(command)
 			if retryable && !applied {
 				pending = append(pending, command)
+				pendingIDs = append(pendingIDs, batch.CommandIDs[i])
 			}
 		}
 		if len(pending) == 0 {
@@ -766,6 +867,7 @@ func (s *stateMachine) getCommandBatchWithAck(uuid string, ack uint64) sm.Result
 			return sm.Result{}
 		}
 		batch.Commands = pending
+		batch.CommandIDs = pendingIDs
 		s.state.ScheduleCommands[uuid] = batch
 	}
 	data, err := batch.Marshal()
@@ -899,18 +1001,19 @@ func (s *stateMachine) handleTick(cmd []byte) sm.Result {
 	// snapshot can contain pending batches without delivery IDs. Reuse one
 	// ordinary replicated tick to make them poll-safe. The decision depends only
 	// on replicated state, so replicas that recovered at different times still
-	// produce the same state. New batches are assigned an ID when inserted, so
-	// this potentially large scan is never repeated on the steady-state tick
-	// path.
+	// produce the same state. New batches and commands are assigned stable IDs
+	// when inserted, so this potentially large scan is never repeated on the
+	// steady-state tick path.
 	if (s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing) &&
-		!s.state.CommandDeliveryBatchIDsAssigned {
+		(!s.state.CommandDeliveryBatchIDsAssigned ||
+			!s.state.CommandDeliveryCommandIDsAssigned) {
 		for uuid, batch := range s.state.ScheduleCommands {
-			if batch.BatchID == 0 {
-				batch.BatchID = s.state.Index
+			if ensureScheduleCommandIDs(&batch, s.state.Index) {
 				s.state.ScheduleCommands[uuid] = batch
 			}
 		}
 		s.state.CommandDeliveryBatchIDsAssigned = true
+		s.state.CommandDeliveryCommandIDsAssigned = true
 	}
 	s.state.Tick++
 	return sm.Result{}
@@ -1011,12 +1114,12 @@ func (s *stateMachine) handleEnableCommandDelivery(cmd []byte) sm.Result {
 	s.state.CommandDeliveryCNReady = nil
 	s.state.CommandDeliveryTNReady = nil
 	for uuid, batch := range s.state.ScheduleCommands {
-		if batch.BatchID == 0 {
-			batch.BatchID = s.state.Index
+		if ensureScheduleCommandIDs(&batch, s.state.Index) {
 			s.state.ScheduleCommands[uuid] = batch
 		}
 	}
 	s.state.CommandDeliveryBatchIDsAssigned = true
+	s.state.CommandDeliveryCommandIDsAssigned = true
 	return sm.Result{Value: 1}
 }
 
@@ -1658,5 +1761,6 @@ func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	s.state.CommandDeliveryCNReady = nil
 	s.state.CommandDeliveryTNReady = nil
 	s.state.CommandDeliveryBatchIDsAssigned = false
+	s.state.CommandDeliveryCommandIDsAssigned = false
 	return s.state.Unmarshal(data)
 }

@@ -39,36 +39,26 @@ import (
 const (
 	defaultBackendReadTimeout = time.Second * 8
 
-	// ScheduleCommandPollInterval is the maximum time a command read waits
-	// before hedging an in-flight heartbeat. ScheduleCommandPollTimeout bounds
-	// that read. Neither value inherits the heartbeat RPC timeout.
-	ScheduleCommandPollInterval     = time.Second
-	ScheduleCommandPollTimeout      = 3 * time.Second
-	scheduleCommandPollMaxBaseDelay = 24 * time.Second
+	// ScheduleCommandPollInterval bounds the start-to-start delay between
+	// degraded-path command reads. ScheduleCommandPollTimeout bounds each read.
+	// Neither value inherits the heartbeat RPC timeout.
+	ScheduleCommandPollInterval           = time.Second
+	ScheduleCommandPollTimeout            = 3 * time.Second
+	scheduleCommandInitialPollJitterRange = 250 * time.Millisecond
 )
 
-// ScheduleCommandPollBackoff returns the delay before the next degraded-path
-// command read. attempt zero preserves the one-second progress budget; repeated
-// empty/error reads back off to bound the load on an unavailable HAKeeper. A
-// stable service-specific jitter prevents a fleet-wide retry spike without
-// requiring shared random state.
-func ScheduleCommandPollBackoff(serviceID string, attempt uint32) time.Duration {
-	if attempt == 0 {
-		return ScheduleCommandPollInterval
-	}
-	base := scheduleCommandPollMaxBaseDelay
-	if attempt < 5 {
-		base = ScheduleCommandPollInterval << attempt
-	}
+// ScheduleCommandInitialPollDelay spreads the first degraded-path poll across
+// the final quarter of the one-second progress budget. Subsequent polls keep a
+// one-second start-to-start cadence, so this only avoids fleet-wide bursts and
+// never weakens the discovery bound.
+func ScheduleCommandInitialPollDelay(serviceID string) time.Duration {
 	hash := uint64(14695981039346656037)
 	for i := range len(serviceID) {
 		hash ^= uint64(serviceID[i])
 		hash *= 1099511628211
 	}
-	hash ^= uint64(attempt)
-	hash *= 1099511628211
-	jitterRange := base / 4
-	return base + time.Duration(hash%uint64(jitterRange+1))
+	return ScheduleCommandPollInterval - scheduleCommandInitialPollJitterRange +
+		time.Duration(hash%uint64(scheduleCommandInitialPollJitterRange+1))
 }
 
 var hakeeperClientRetryInterval = 10 * time.Millisecond
@@ -91,29 +81,74 @@ func ScheduleCommandBatchFingerprint(batch pb.CommandBatch) ScheduleCommandFinge
 	return scheduleCommandFingerprint(&normalized)
 }
 
+// ScheduleCommandIdentity is the comparable client-side form of the protobuf
+// identity assigned by HAKeeper.
+type ScheduleCommandIdentity struct {
+	OriginBatchID uint64
+	CommandIndex  uint64
+}
+
+// ScheduleCommandBatchHasStableIDs validates the delivery boundary. A batch
+// without a complete set of identities must not be acknowledged: doing so
+// would make an inherited command indistinguishable from intentionally new,
+// identical work.
+func ScheduleCommandBatchHasStableIDs(batch pb.CommandBatch) bool {
+	if batch.BatchID == 0 || len(batch.CommandIDs) != len(batch.Commands) {
+		return false
+	}
+	seen := make(map[ScheduleCommandIdentity]struct{}, len(batch.CommandIDs))
+	for i := range batch.CommandIDs {
+		if batch.CommandIDs[i].OriginBatchID == 0 {
+			return false
+		}
+		identity := ScheduleCommandIdentity{
+			OriginBatchID: batch.CommandIDs[i].OriginBatchID,
+			CommandIndex:  batch.CommandIDs[i].CommandIndex,
+		}
+		if _, ok := seen[identity]; ok {
+			return false
+		}
+		seen[identity] = struct{}{}
+	}
+	return true
+}
+
 // FilterUnappliedScheduleCommands suppresses commands inherited by a newer
 // batch generation while preserving the existing retry-until-state-confirmed
-// contract for bootstrap commands. Fingerprint occurrence counts preserve
-// intentionally repeated equal commands. The returned multiset is bounded by
-// the current pending batch and replaces, rather than grows, caller state.
+// contract for bootstrap commands. Stable identities distinguish a newly
+// scheduled command from earlier work with identical payload. The returned set
+// is bounded by the current pending batch and replaces, rather than grows,
+// caller state.
 func FilterUnappliedScheduleCommands(
-	commands []pb.ScheduleCommand,
-	applied map[ScheduleCommandFingerprint]uint32,
-) ([]pb.ScheduleCommand, map[ScheduleCommandFingerprint]uint32) {
-	filtered := make([]pb.ScheduleCommand, 0, len(commands))
-	current := make(map[ScheduleCommandFingerprint]uint32, len(commands))
-	for i := range commands {
-		if IsRetryableScheduleCommand(commands[i]) {
-			filtered = append(filtered, commands[i])
+	batch pb.CommandBatch,
+	applied map[ScheduleCommandIdentity]struct{},
+) ([]pb.ScheduleCommand, map[ScheduleCommandIdentity]struct{}, bool) {
+	if batch.BatchID == 0 || len(batch.CommandIDs) != len(batch.Commands) {
+		return nil, applied, false
+	}
+	filtered := make([]pb.ScheduleCommand, 0, len(batch.Commands))
+	current := make(map[ScheduleCommandIdentity]struct{}, len(batch.Commands))
+	for i := range batch.Commands {
+		if batch.CommandIDs[i].OriginBatchID == 0 {
+			return nil, applied, false
+		}
+		identity := ScheduleCommandIdentity{
+			OriginBatchID: batch.CommandIDs[i].OriginBatchID,
+			CommandIndex:  batch.CommandIDs[i].CommandIndex,
+		}
+		if _, ok := current[identity]; ok {
+			return nil, applied, false
+		}
+		current[identity] = struct{}{}
+		if IsRetryableScheduleCommand(batch.Commands[i]) {
+			filtered = append(filtered, batch.Commands[i])
 			continue
 		}
-		fingerprint := scheduleCommandFingerprint(&commands[i])
-		current[fingerprint]++
-		if current[fingerprint] > applied[fingerprint] {
-			filtered = append(filtered, commands[i])
+		if _, ok := applied[identity]; !ok {
+			filtered = append(filtered, batch.Commands[i])
 		}
 	}
-	return filtered, current
+	return filtered, current, true
 }
 
 // IsRetryableScheduleCommand reports commands whose existing HAKeeper

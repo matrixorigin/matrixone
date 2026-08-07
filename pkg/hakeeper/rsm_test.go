@@ -54,6 +54,14 @@ func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 	tsm1.state.IDWatermarkRestoreGeneration = 7
 	tsm1.state.LogShards["test1"] = 23456
 	tsm1.state.LogShards["test2"] = 34567
+	tsm1.state.CommandDeliveryEnabled = true
+	tsm1.state.CommandDeliveryBatchIDsAssigned = true
+	tsm1.state.CommandDeliveryCommandIDsAssigned = true
+	tsm1.state.ScheduleCommands["tn-1"] = pb.CommandBatch{
+		BatchID:    9,
+		Commands:   []pb.ScheduleCommand{{UUID: "tn-1", ServiceType: pb.TNService}},
+		CommandIDs: []pb.ScheduleCommandID{{OriginBatchID: 8, CommandIndex: 1}},
+	}
 
 	buf := bytes.NewBuffer(nil)
 	assert.Nil(t, tsm1.SaveSnapshot(buf, nil, nil))
@@ -62,6 +70,9 @@ func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 	assert.Equal(t, tsm1.state.LogShards, tsm2.state.LogShards)
 	assert.True(t, tsm2.state.LogServiceRecoveryPending)
 	assert.Equal(t, uint64(7), tsm2.state.IDWatermarkRestoreGeneration)
+	assert.True(t, tsm2.state.CommandDeliveryEnabled)
+	assert.True(t, tsm2.state.CommandDeliveryCommandIDsAssigned)
+	assert.Equal(t, tsm1.state.ScheduleCommands, tsm2.state.ScheduleCommands)
 	assert.True(t, tsm1.replicaID != tsm2.replicaID)
 }
 
@@ -1033,13 +1044,43 @@ func TestTickAssignsIDsToLegacyScheduleCommandBatchesOnce(t *testing.T) {
 
 	_, err := rsm.Update(sm.Entry{Index: 41, Cmd: GetTickCmd()})
 	require.NoError(t, err)
-	require.Equal(t, uint64(41), rsm.state.ScheduleCommands[command.UUID].BatchID)
+	assigned := rsm.state.ScheduleCommands[command.UUID]
+	require.Equal(t, uint64(41), assigned.BatchID)
+	require.Equal(t, []pb.ScheduleCommandID{{OriginBatchID: 41}}, assigned.CommandIDs)
 	require.True(t, rsm.state.CommandDeliveryBatchIDsAssigned)
+	require.True(t, rsm.state.CommandDeliveryCommandIDsAssigned)
 
 	_, err = rsm.Update(sm.Entry{Index: 42, Cmd: GetTickCmd()})
 	require.NoError(t, err)
 	require.Equal(t, uint64(41), rsm.state.ScheduleCommands[command.UUID].BatchID,
 		"subsequent ticks must not rewrite a stable delivery generation")
+	require.Equal(t, assigned.CommandIDs, rsm.state.ScheduleCommands[command.UUID].CommandIDs,
+		"subsequent ticks must not rewrite stable command identities")
+}
+
+func TestTickAssignsCommandIDsFromBatchOnlySnapshot(t *testing.T) {
+	oldState := pb.NewRSMState()
+	oldState.CommandDeliveryEnabled = true
+	oldState.CommandDeliveryBatchIDsAssigned = true
+	command := pb.ScheduleCommand{UUID: "tn-1", ServiceType: pb.TNService}
+	oldState.ScheduleCommands[command.UUID] = pb.CommandBatch{
+		BatchID:  7,
+		Commands: []pb.ScheduleCommand{command},
+	}
+	data, err := oldState.Marshal()
+	require.NoError(t, err)
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	require.NoError(t, rsm.RecoverFromSnapshot(bytes.NewReader(data), nil, nil))
+	require.True(t, rsm.state.CommandDeliveryBatchIDsAssigned)
+	require.False(t, rsm.state.CommandDeliveryCommandIDsAssigned)
+
+	_, err = rsm.Update(sm.Entry{Index: 41, Cmd: GetTickCmd()})
+	require.NoError(t, err)
+	batch := rsm.state.ScheduleCommands[command.UUID]
+	require.Equal(t, uint64(7), batch.BatchID,
+		"the migration must preserve an existing batch acknowledgement identity")
+	require.Equal(t, []pb.ScheduleCommandID{{OriginBatchID: 41}}, batch.CommandIDs)
+	require.True(t, rsm.state.CommandDeliveryCommandIDsAssigned)
 }
 
 func TestAcknowledgedHeartbeatAssignsMissingBatchID(t *testing.T) {
@@ -1060,7 +1101,74 @@ func TestAcknowledgedHeartbeatAssignsMissingBatchID(t *testing.T) {
 	var batch pb.CommandBatch
 	require.NoError(t, batch.Unmarshal(result.Data))
 	require.Equal(t, uint64(10), batch.BatchID)
+	require.Equal(t, []pb.ScheduleCommandID{{OriginBatchID: 10}}, batch.CommandIDs)
 	require.Equal(t, uint64(10), rsm.state.ScheduleCommands[command.UUID].BatchID)
+}
+
+func TestScheduleCommandUpdateMigratesLegacyIDsBeforeRollover(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.CommandDeliveryEnabled = true
+	oldCommand := pb.ScheduleCommand{
+		UUID:        "tn-1",
+		ServiceType: pb.TNService,
+		ConfigChange: &pb.ConfigChange{
+			ChangeType: pb.StopReplica,
+			Replica:    pb.Replica{ShardID: 1},
+		},
+	}
+	rsm.state.ScheduleCommands[oldCommand.UUID] = pb.CommandBatch{
+		Commands: []pb.ScheduleCommand{oldCommand},
+	}
+	newCommand := oldCommand
+	newCommand.ConfigChange = &pb.ConfigChange{
+		ChangeType: pb.StopReplica,
+		Replica:    pb.Replica{ShardID: 2},
+	}
+	anotherCommand := oldCommand
+	anotherCommand.ConfigChange = &pb.ConfigChange{
+		ChangeType: pb.StopReplica,
+		Replica:    pb.Replica{ShardID: 3},
+	}
+
+	_, err := rsm.Update(sm.Entry{
+		Index: 20,
+		Cmd: GetUpdateCommandsCmd(1, []pb.ScheduleCommand{
+			newCommand,
+			anotherCommand,
+		}),
+	})
+	require.NoError(t, err)
+	batch := rsm.state.ScheduleCommands[oldCommand.UUID]
+	require.Equal(t, []pb.ScheduleCommandID{
+		{OriginBatchID: 20, CommandIndex: 0},
+		{OriginBatchID: 20, CommandIndex: 1},
+		{OriginBatchID: 20, CommandIndex: 2},
+	}, batch.CommandIDs)
+	require.Len(t, batch.Commands, 3)
+}
+
+func TestEnsureScheduleCommandIDsRepairsPartialDuplicateState(t *testing.T) {
+	batch := pb.CommandBatch{
+		BatchID: 5,
+		Commands: []pb.ScheduleCommand{
+			{UUID: "tn-1"},
+			{UUID: "tn-1"},
+			{UUID: "tn-1"},
+		},
+		CommandIDs: []pb.ScheduleCommandID{
+			{OriginBatchID: 5},
+			{OriginBatchID: 5},
+		},
+	}
+
+	require.True(t, ensureScheduleCommandIDs(&batch, 7))
+	require.Equal(t, []pb.ScheduleCommandID{
+		{OriginBatchID: 5},
+		{OriginBatchID: 7},
+		{OriginBatchID: 7, CommandIndex: 1},
+	}, batch.CommandIDs)
+	require.False(t, ensureScheduleCommandIDs(&batch, 8),
+		"a valid migrated batch must not be rewritten on later entries")
 }
 
 func TestCommandDeliveryActivationUsesPostBarrierCapabilities(t *testing.T) {
@@ -1324,10 +1432,12 @@ func TestCommandDeliveryActivationRebuildsServiceBarrierAfterOldSnapshot(t *test
 
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	rsm.state.CommandDeliveryBatchIDsAssigned = true
+	rsm.state.CommandDeliveryCommandIDsAssigned = true
 	require.NoError(t, rsm.RecoverFromSnapshot(bytes.NewReader(data), nil, nil))
 	require.Nil(t, rsm.state.CommandDeliveryCNReady)
 	require.Nil(t, rsm.state.CommandDeliveryTNReady)
 	require.False(t, rsm.state.CommandDeliveryBatchIDsAssigned)
+	require.False(t, rsm.state.CommandDeliveryCommandIDsAssigned)
 	result, err := rsm.Update(sm.Entry{Index: 20, Cmd: GetEnableCommandDeliveryCmd()})
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), result.Value)
@@ -1527,6 +1637,8 @@ func TestAcknowledgedCommandDeliverySurvivesLostResponse(t *testing.T) {
 	pending := value.(*pb.CommandBatch)
 	require.Equal(t, uint64(42), pending.BatchID)
 	require.Equal(t, []pb.ScheduleCommand{first}, pending.Commands)
+	require.Equal(t, []pb.ScheduleCommandID{{OriginBatchID: 42}}, pending.CommandIDs)
+	firstCommandID := pending.CommandIDs[0]
 
 	// A second operator for the same store is dispatched only once. It must be
 	// merged with the unacknowledged commands under a new generation; dropping
@@ -1546,6 +1658,10 @@ func TestAcknowledgedCommandDeliverySurvivesLostResponse(t *testing.T) {
 	pending = value.(*pb.CommandBatch)
 	require.Equal(t, uint64(44), pending.BatchID)
 	require.Equal(t, []pb.ScheduleCommand{first, second}, pending.Commands)
+	require.Equal(t, []pb.ScheduleCommandID{
+		firstCommandID,
+		{OriginBatchID: 44},
+	}, pending.CommandIDs, "rollover must preserve inherited command identity")
 
 	// A delayed ack for the old generation cannot delete either command.
 	result := heartbeat(42, true)
@@ -1578,6 +1694,7 @@ func TestAcknowledgedCommandDeliverySurvivesLostResponse(t *testing.T) {
 	require.NoError(t, delivered.Unmarshal(result.Data))
 	require.Equal(t, uint64(47), delivered.BatchID)
 	require.Equal(t, []pb.ScheduleCommand{third}, delivered.Commands)
+	require.Equal(t, []pb.ScheduleCommandID{{OriginBatchID: 47}}, delivered.CommandIDs)
 
 	result = heartbeat(47, true)
 	require.Empty(t, result.Data)
@@ -1596,6 +1713,9 @@ func TestAcknowledgedCommandDeliverySurvivesLostResponse(t *testing.T) {
 	require.Empty(t, result.Data)
 	_, ok = rsm.state.ScheduleCommands[first.UUID]
 	require.True(t, ok)
+	require.NotEqual(t, firstCommandID,
+		rsm.state.ScheduleCommands[first.UUID].CommandIDs[0],
+		"identical work installed after acknowledgement needs a new identity")
 }
 
 func TestPendingScheduleCommandsDeduplicateRetries(t *testing.T) {

@@ -448,6 +448,7 @@ func TestServicePollCommandsIsNonDestructiveAndDeduplicable(t *testing.T) {
 		require.Equal(t, uint32(moerr.Ok), pollResp.ErrorCode)
 		require.Equal(t, []pb.ScheduleCommand{command}, pollResp.CommandBatch.Commands)
 		require.NotZero(t, pollResp.CommandBatch.BatchID)
+		require.True(t, ScheduleCommandBatchHasStableIDs(*pollResp.CommandBatch))
 
 		// A retry observes the same stable batch ID and does not mutate the RSM.
 		secondResp := s.handleGetScheduleCommands(ctx, pb.Request{

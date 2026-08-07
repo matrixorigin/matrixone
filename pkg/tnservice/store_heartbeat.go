@@ -76,8 +76,7 @@ func (s *store) commandTask(ctx context.Context) {
 	if !ok {
 		return
 	}
-	var lastPolledBatchID uint64
-	poll := func() bool {
+	poll := func() {
 		// Keep the normal heartbeat as the primary delivery path. This read is
 		// issued while that RPC is in flight, or after a failed/deadline heartbeat
 		// until one succeeds; healthy clusters do not receive duplicate proposals.
@@ -95,17 +94,12 @@ func (s *store) commandTask(ctx context.Context) {
 					zap.String("uuid", s.cfg.UUID),
 					zap.Error(err))
 			}
-			return false
+			return
 		}
 		if ctx2.Err() != nil {
-			return false
+			return
 		}
 		s.handlePolledCommandBatch(ctx, batch)
-		if len(batch.Commands) == 0 || batch.BatchID == 0 || batch.BatchID == lastPolledBatchID {
-			return false
-		}
-		lastPolledBatchID = batch.BatchID
-		return true
 	}
 
 	active := func() bool {
@@ -117,8 +111,6 @@ func (s *store) commandTask(ctx context.Context) {
 	}
 	defer timer.Stop()
 	var timerC <-chan time.Time
-	var backoffAttempt uint32
-	resetVersion := s.commandPollReset.Load()
 	arm := func(delay time.Duration) {
 		timer.Reset(delay)
 		timerC = timer.C
@@ -132,40 +124,31 @@ func (s *store) commandTask(ctx context.Context) {
 		}
 		timerC = nil
 	}
-	resetBackoff := func() {
-		current := s.commandPollReset.Load()
-		if current != resetVersion {
-			resetVersion = current
-			backoffAttempt = 0
-			disarm()
-		}
-	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-s.commandPollWakeup:
-			resetBackoff()
 			if !active() {
 				disarm()
-				backoffAttempt = 0
 			} else if timerC == nil {
-				arm(logservice.ScheduleCommandPollBackoff(s.cfg.UUID, 0))
+				arm(logservice.ScheduleCommandInitialPollDelay(s.cfg.UUID))
 			}
 		case <-timerC:
 			timerC = nil
 			if !active() {
-				backoffAttempt = 0
 				continue
 			}
-			if poll() {
-				backoffAttempt = 0
-			} else if backoffAttempt < 5 {
-				backoffAttempt++
-			}
-			resetBackoff()
+			pollStarted := time.Now()
+			poll()
 			if active() {
-				arm(logservice.ScheduleCommandPollBackoff(s.cfg.UUID, backoffAttempt))
+				// Pull delivery has no server-side wakeup. Keep a start-to-start
+				// cadence so RPC latency cannot silently extend the discovery bound.
+				delay := logservice.ScheduleCommandPollInterval - time.Since(pollStarted)
+				if delay < 0 {
+					delay = 0
+				}
+				arm(delay)
 			}
 		}
 	}
@@ -206,7 +189,6 @@ func (s *store) heartbeat(ctx context.Context) {
 		return
 	}
 	s.commandPollNeeded.Store(false)
-	s.commandPollReset.Add(1)
 	s.notifyCommandPoll()
 
 	s.config.DecrCount()
@@ -256,7 +238,7 @@ func (s *store) handleCommandBatchLocked(batch logservicepb.CommandBatch) {
 		return
 	}
 	if batch.BatchID == 0 {
-		s.appliedCommands = nil
+		s.appliedCommandIDs = nil
 		fingerprint := logservice.ScheduleCommandBatchFingerprint(batch)
 		if s.legacyDedupeArmed && fingerprint == s.lastCommandHash {
 			s.legacyDedupeArmed = false
@@ -264,6 +246,8 @@ func (s *store) handleCommandBatchLocked(batch logservicepb.CommandBatch) {
 			return
 		}
 		s.legacyDedupeArmed = false
+		s.handleCommandsLocked(batch.Commands)
+		return
 	} else {
 		if batch.BatchID < s.lastCommandBatchID {
 			return
@@ -273,10 +257,15 @@ func (s *store) handleCommandBatchLocked(batch logservicepb.CommandBatch) {
 			return
 		}
 	}
-	commands, applied := logservice.FilterUnappliedScheduleCommands(
-		batch.Commands,
-		s.appliedCommands,
+	commands, applied, ok := logservice.FilterUnappliedScheduleCommands(
+		batch,
+		s.appliedCommandIDs,
 	)
+	if !ok {
+		s.rt.Logger().Error("received acknowledged schedule-command batch without stable command IDs",
+			zap.Uint64("batch-id", batch.BatchID))
+		return
+	}
 	shutdown := batch.BatchID != 0 && hasShutdownCommand(batch.Commands)
 	if shutdown {
 		// Shutdown is the one command whose side effect prevents a later
@@ -287,7 +276,7 @@ func (s *store) handleCommandBatchLocked(batch logservicepb.CommandBatch) {
 	} else {
 		s.handleCommandsLocked(commands)
 	}
-	s.appliedCommands = applied
+	s.appliedCommandIDs = applied
 	if batch.BatchID != 0 {
 		s.lastCommandBatchID = batch.BatchID
 		s.ackedCommandBatchID.Store(batch.BatchID)
@@ -343,7 +332,7 @@ func (s *store) handleHeartbeatResponse(
 	defer s.commandMu.Unlock()
 	if sentAck != 0 && sentAck == s.lastCommandBatchID &&
 		(batch.BatchID == 0 || batch.BatchID == sentAck) {
-		s.appliedCommands = nil
+		s.appliedCommandIDs = nil
 	}
 	s.handleCommandBatchLocked(batch)
 	for {

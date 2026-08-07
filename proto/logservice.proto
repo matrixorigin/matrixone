@@ -607,6 +607,13 @@ message CommandBatch {
   // suppress the same batch when those paths race. Zero denotes a batch
   // created by an older HAKeeper and is never used as a delivery ID.
   uint64 BatchID                    = 3;
+  // CommandIDs is positionally aligned with Commands. HAKeeper preserves an
+  // ID when a command is carried into a newer batch and assigns a new ID only
+  // to newly scheduled work. This distinguishes inherited commands from a
+  // later, intentionally identical command without depending on payload
+  // fingerprints. A non-empty acknowledged batch must contain one valid ID per
+  // command before it is exposed to CN/TN services.
+  repeated ScheduleCommandID CommandIDs = 4 [(gogoproto.nullable) = false];
 }
 
 // CNStoreInfo contains information on a CN store.
@@ -829,6 +836,11 @@ message HAKeeperRSMState {
   // Once true, every pending batch known at the first upgraded tick has a
   // non-zero BatchID. New batches are assigned an ID at insertion time.
   bool CommandDeliveryBatchIDsAssigned = 28;
+  // Kept separate from CommandDeliveryBatchIDsAssigned because snapshots made
+  // by the first acknowledged-delivery implementation can have BatchIDs but no
+  // per-command identities. An absent field therefore triggers one migration
+  // scan after upgrade.
+  bool CommandDeliveryCommandIDsAssigned = 29;
 }
 
 // ReplicaInfo contains details of a replica
@@ -880,4 +892,13 @@ message Locality {
 
 message CheckHealth {
   uint64 ShardID = 1;
+}
+
+// ScheduleCommandID is unique within one target service. OriginBatchID is the
+// replicated HAKeeper log index that assigned the identity (normally the
+// command's install entry, or the migration entry for legacy pending work);
+// CommandIndex disambiguates commands assigned by the same log entry.
+message ScheduleCommandID {
+  uint64 OriginBatchID = 1;
+  uint64 CommandIndex  = 2;
 }

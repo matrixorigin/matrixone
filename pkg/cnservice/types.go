@@ -700,12 +700,11 @@ type service struct {
 	stopper             *stopper.Stopper
 	heartbeatInFlight   atomic.Bool
 	commandPollNeeded   atomic.Bool
-	commandPollReset    atomic.Uint64
 	commandPollWakeup   chan struct{}
 	commandMu           sync.Mutex
 	lastCommandBatchID  uint64
 	ackedCommandBatchID atomic.Uint64
-	appliedCommands     map[logservice.ScheduleCommandFingerprint]uint32
+	appliedCommandIDs   map[logservice.ScheduleCommandIdentity]struct{}
 	lastCommandHash     [32]byte
 	legacyDedupeArmed   bool
 	aicm                *defines.AutoIncrCacheManager
