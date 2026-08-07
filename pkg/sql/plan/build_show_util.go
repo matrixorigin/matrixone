@@ -823,10 +823,11 @@ func tableCharsetForShowCreate(ctx CompilerContext, charset uint32) string {
 	switch charset {
 	case uint32(types.CharsetUTF8):
 		// collation_server is runtime-configurable. Spell general_ci whenever it
-		// differs from the effective runtime default; otherwise the historical
-		// concise output is already round-trip safe in this compiler context.
+		// differs from the effective runtime default. Callers such as CDC and
+		// table dump have no compiler context, so they must also spell it: an
+		// unknown target default is not safe to inherit during DDL replay.
 		if ctx == nil {
-			return ""
+			return " COLLATE=utf8mb4_general_ci"
 		}
 		serverCharset, err := tableDefaultCharset(ctx, nil)
 		if err == nil && serverCharset == uint32(types.CharsetUTF8) {

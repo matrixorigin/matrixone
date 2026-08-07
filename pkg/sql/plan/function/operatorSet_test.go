@@ -1322,6 +1322,8 @@ func Test_CaseCheck_TextStringBranchesStayText(t *testing.T) {
 	require.Equal(t, types.T_bool, result.finalType[0].Oid)
 	require.Equal(t, types.T_text, result.finalType[1].Oid)
 	require.Equal(t, types.T_text, result.finalType[2].Oid)
+	require.Zero(t, result.finalType[1].Width)
+	require.Zero(t, result.finalType[2].Width)
 }
 
 func Test_IffCheck_TextStringBranchesStayText(t *testing.T) {
@@ -1336,6 +1338,8 @@ func Test_IffCheck_TextStringBranchesStayText(t *testing.T) {
 	require.Equal(t, types.T_bool, result.finalType[0].Oid)
 	require.Equal(t, types.T_text, result.finalType[1].Oid)
 	require.Equal(t, types.T_text, result.finalType[2].Oid)
+	require.Zero(t, result.finalType[1].Width)
+	require.Zero(t, result.finalType[2].Width)
 }
 
 func Test_CoalesceCheck_MixedStringNumeric(t *testing.T) {
@@ -1376,6 +1380,7 @@ func Test_CoalesceCheck_TextStringBranchesStayText(t *testing.T) {
 	require.Len(t, result.finalType, len(inputs))
 	for _, typ := range result.finalType {
 		require.Equal(t, types.T_text, typ.Oid)
+		require.Zero(t, typ.Width)
 	}
 }
 

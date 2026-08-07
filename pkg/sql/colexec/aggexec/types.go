@@ -229,7 +229,7 @@ func MakeAgg(
 }
 
 // MakeAggWithLegacyTextMinMax is used only while decoding a remote pipeline
-// during the MORPC v9 -> v10 rollout. It preserves the old bytewise text
+// during the MORPC v10 -> v11 rollout. It preserves the old bytewise text
 // MIN/MAX comparator without changing the argument or result type metadata.
 func MakeAggWithLegacyTextMinMax(
 	mg *mpool.MPool,

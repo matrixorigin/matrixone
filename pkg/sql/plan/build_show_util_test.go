@@ -995,6 +995,17 @@ func TestShowCreateSerializesGeneralCIDefault(t *testing.T) {
 	require.Contains(t, showSQL, ") COLLATE=utf8mb4_general_ci")
 }
 
+func TestCreateSQLWithoutContextSerializesGeneralCIDefault(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock,
+		"create table general_replay(v varchar(10)) collate utf8mb4_general_ci")
+	require.NoError(t, err)
+
+	createSQL, _, err := ConstructCreateTableSQL(nil, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, createSQL, ") COLLATE=utf8mb4_general_ci")
+}
+
 func TestShowCreateKeepsLegacyDefaultOutputStable(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	tableDef, err := buildTestCreateTableStmt(mock,

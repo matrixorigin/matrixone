@@ -827,6 +827,30 @@ func TestLeastGreatestStringResolutionPreservesMergedCharset(t *testing.T) {
 	}
 }
 
+func TestLeastGreatestSameTextOIDKeepsUnboundedWidth(t *testing.T) {
+	generalText := types.NewWithCharset(types.T_text, 0, 0, types.CharsetUTF8)
+	binaryTinyText := types.NewWithCharset(
+		types.T_text, types.MaxTinyTextLen, 0, types.CharsetUTF8MB4Bin)
+
+	for _, functionName := range []string{"least", "greatest"} {
+		fn, err := GetFunctionByName(
+			context.Background(), functionName, []types.Type{generalText, binaryTinyText})
+		require.NoError(t, err)
+		require.Equal(t, types.T_text, fn.GetReturnType().Oid)
+		require.Equal(t, types.CharsetUTF8MB4Bin, fn.GetReturnType().Charset)
+		require.Zero(t, fn.GetReturnType().Width)
+
+		castTypes, shouldCast := fn.ShouldDoImplicitTypeCast()
+		require.True(t, shouldCast)
+		require.Len(t, castTypes, 2)
+		for _, castType := range castTypes {
+			require.Equal(t, types.T_text, castType.Oid)
+			require.Equal(t, types.CharsetUTF8MB4Bin, castType.Charset)
+			require.Zero(t, castType.Width)
+		}
+	}
+}
+
 func TestLeastGreatestTemporalStringResolutionPreservesMergedCharset(t *testing.T) {
 	utf8mb4BinVarchar := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4Bin)
 	tests := []struct {

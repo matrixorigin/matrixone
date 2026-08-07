@@ -80,13 +80,26 @@ func commonConditionalStringType(result types.Type, source []types.Type) types.T
 
 	allText := true
 	hasText := false
+	hasUnboundedText := false
 	maxWidth := int32(-1)
 	for _, typ := range source {
 		switch typ.Oid {
 		case types.T_any:
 			// An untyped NULL has no width or collation of its own.
-		case types.T_char, types.T_varchar, types.T_text:
+		case types.T_char, types.T_varchar:
 			hasText = true
+			if typ.Width > maxWidth {
+				maxWidth = typ.Width
+			}
+		case types.T_text:
+			hasText = true
+			// T_text/Width=0 is unbounded TEXT, while Width=255 is the
+			// persisted TINYTEXT subtype marker. Numeric max-width merging
+			// must not turn TEXT + VARCHAR(255) into TINYTEXT and truncate
+			// the TEXT branch before CASE/IF/COALESCE selects it.
+			if typ.Width != types.MaxTinyTextLen {
+				hasUnboundedText = true
+			}
 			if typ.Width > maxWidth {
 				maxWidth = typ.Width
 			}
@@ -95,7 +108,12 @@ func commonConditionalStringType(result types.Type, source []types.Type) types.T
 		}
 	}
 	if hasText && allText {
-		result.Width = maxWidth
+		if result.Oid == types.T_text &&
+			(hasUnboundedText || maxWidth > types.MaxTinyTextLen) {
+			result.Width = 0
+		} else {
+			result.Width = maxWidth
+		}
 	}
 	return result
 }
