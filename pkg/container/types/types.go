@@ -173,8 +173,9 @@ const (
 	// CharsetBinary marks binary string types and opaque bytes carried in a
 	// text-shaped container.
 	CharsetBinary uint8 = 1
-	// CharsetUTF8MB4Bin is bytewise utf8mb4 text, which remains nonbinary in
-	// MySQL protocol metadata (collation 46 rather than binary charset 63).
+	// CharsetUTF8MB4Bin is utf8/utf8mb4 text using the legacy binary
+	// collations' PAD SPACE ordering. It remains nonbinary in MySQL protocol
+	// metadata (collation 46 rather than binary charset 63).
 	CharsetUTF8MB4Bin uint8 = 2
 	// CharsetUTF8 is the explicit utf8mb4_general_ci text identity. It must not
 	// use zero: old catalog rows have zero in this formerly dummy field.
@@ -183,8 +184,8 @@ const (
 
 // MergeStringCharset derives one collation identity for a value composed from
 // multiple MySQL strings. Binary bytes must never be reinterpreted as UTF-8;
-// bytewise utf8mb4 and legacy text likewise retain their stronger ordering
-// identity when combined with default general-ci text.
+// binary-collated utf8mb4 and legacy text likewise retain their stronger
+// ordering identity when combined with default general-ci text.
 func MergeStringCharset(parameters []Type, fallback uint8) uint8 {
 	result := fallback
 	for _, parameter := range parameters {

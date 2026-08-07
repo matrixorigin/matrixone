@@ -17,24 +17,24 @@ utf8mb4    utf8mb4_bin    4
 SHOW COLLATION;
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
 binary    binary    63    YES    Yes    1    NO PAD
-utf8_bin    utf8    83        Yes    1    NO PAD
+utf8_bin    utf8    83        Yes    1    PAD SPACE
 utf8_general_ci    utf8    33    YES    Yes    1    PAD SPACE
-utf8mb4_bin    utf8mb4    46        Yes    1    NO PAD
+utf8mb4_bin    utf8mb4    46        Yes    1    PAD SPACE
 utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 SHOW COLLATION LIKE 'utf8mb4%';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_bin    utf8mb4    46        Yes    1    NO PAD
+utf8mb4_bin    utf8mb4    46        Yes    1    PAD SPACE
 utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 SHOW COLLATION WHERE Charset = 'utf8mb4';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_bin    utf8mb4    46        Yes    1    NO PAD
+utf8mb4_bin    utf8mb4    46        Yes    1    PAD SPACE
 utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 SHOW COLLATION WHERE Collation = 'utf8mb4_bin';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_bin    utf8mb4    46        Yes    1    NO PAD
+utf8mb4_bin    utf8mb4    46        Yes    1    PAD SPACE
 SHOW COLLATION WHERE Charset = 'utf8mb4' AND Collation LIKE '%bin%';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
-utf8mb4_bin    utf8mb4    46        Yes    1    NO PAD
+utf8mb4_bin    utf8mb4    46        Yes    1    PAD SPACE
 CREATE DATABASE charset_test;
 USE charset_test;
 CREATE TABLE charset_metadata_repro (
@@ -624,6 +624,14 @@ INSERT INTO t_minmax_bin VALUES (1, 'Apple'), (2, 'apple'), (3, 'APPLE');
 SELECT MIN(name) as min_name, MAX(name) as max_name FROM t_minmax_bin;
 min_name    max_name
 APPLE    apple
+CREATE TABLE t_minmax_bin_pad (
+name VARCHAR(100)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+INSERT INTO t_minmax_bin_pad VALUES ('a '), (CONCAT('a', CHAR(0)));
+SELECT HEX(MIN(name)) AS min_name, HEX(MAX(name)) AS max_name
+FROM t_minmax_bin_pad;
+min_name    max_name
+6120    6100
 CREATE TABLE t_minmax_cast_ci (
 name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;

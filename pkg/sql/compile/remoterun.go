@@ -1495,7 +1495,7 @@ func validateRemoteAggregateProtocol(
 				)
 			}
 		}
-		if aggregateUsesGeneralCITextMinMax(agg) &&
+		if aggregateUsesCollationAwareTextMinMax(agg) &&
 			(proc == nil || !supportsRemoteTextCollationAggregates(proc.GetService())) {
 			return moerr.NewNotSupportedNoCtx(
 				"collation-aware text MIN/MAX remote execution requires MORPC protocol version 12",
@@ -1505,13 +1505,14 @@ func validateRemoteAggregateProtocol(
 	return nil
 }
 
-func aggregateUsesGeneralCITextMinMax(agg aggexec.AggFuncExecExpression) bool {
+func aggregateUsesCollationAwareTextMinMax(agg aggexec.AggFuncExecExpression) bool {
 	if agg.GetAggID() != aggexec.AggIdOfMin && agg.GetAggID() != aggexec.AggIdOfMax {
 		return false
 	}
 	args := agg.GetArgExpressions()
 	if len(args) == 0 || args[0] == nil ||
-		args[0].Typ.Charset != uint32(types.CharsetUTF8) {
+		(args[0].Typ.Charset != uint32(types.CharsetUTF8) &&
+			args[0].Typ.Charset != uint32(types.CharsetUTF8MB4Bin)) {
 		return false
 	}
 	switch types.T(args[0].Typ.Id) {

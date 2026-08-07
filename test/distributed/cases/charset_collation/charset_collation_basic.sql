@@ -567,6 +567,15 @@ INSERT INTO t_minmax_bin VALUES (1, 'Apple'), (2, 'apple'), (3, 'APPLE');
 
 SELECT MIN(name) as min_name, MAX(name) as max_name FROM t_minmax_bin;
 
+CREATE TABLE t_minmax_bin_pad (
+    name VARCHAR(100)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+
+INSERT INTO t_minmax_bin_pad VALUES ('a '), (CONCAT('a', CHAR(0)));
+
+SELECT HEX(MIN(name)) AS min_name, HEX(MAX(name)) AS max_name
+FROM t_minmax_bin_pad;
+
 CREATE TABLE t_minmax_cast_ci (
     name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;

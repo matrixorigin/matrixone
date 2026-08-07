@@ -30,7 +30,7 @@ type Collation struct {
 var Collations []*Collation = []*Collation{
 	{"utf8_general_ci", "utf8", 33, "YES", "Yes", 1, "PAD SPACE"},
 	{"binary", "binary", 63, "YES", "Yes", 1, "NO PAD"},
-	{"utf8_bin", "utf8", 83, "", "Yes", 1, "NO PAD"},
+	{"utf8_bin", "utf8", 83, "", "Yes", 1, "PAD SPACE"},
 	{"utf8mb4_general_ci", "utf8mb4", 45, "YES", "Yes", 1, "PAD SPACE"},
-	{"utf8mb4_bin", "utf8mb4", 46, "", "Yes", 1, "NO PAD"},
+	{"utf8mb4_bin", "utf8mb4", 46, "", "Yes", 1, "PAD SPACE"},
 }
