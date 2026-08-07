@@ -15,10 +15,15 @@
 package table_function
 
 import (
+	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,4 +67,51 @@ func TestAppendCheckConstraintRowsHandlesEmptyChecks(t *testing.T) {
 	// predicate in collectCheckConstraintRows; this helper only decodes rows.
 	appendCheckConstraintRows(&rows, "app", nil)
 	require.Empty(t, rows)
+}
+
+func TestCheckConstraintOutputPositionsAllowPrunedColumns(t *testing.T) {
+	require.Equal(t,
+		[4]int{checkConstraintCatalogColumn, checkConstraintSchemaColumn, checkConstraintNameColumn, -1},
+		checkConstraintOutputPositions([]string{
+			"constraint_catalog",
+			"constraint_schema",
+			"constraint_name",
+		}))
+	require.Equal(t,
+		[4]int{-1, 0, 1, 2},
+		checkConstraintOutputPositions([]string{
+			"CONSTRAINT_SCHEMA",
+			"CONSTRAINT_NAME",
+			"CHECK_CLAUSE",
+		}))
+}
+
+func TestAppendCheckConstraintRowAllowsPrunedColumns(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	proc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	defer proc.Free()
+
+	vectors := []*vector.Vector{
+		vector.NewVec(types.T_varchar.ToType()),
+		vector.NewVec(types.T_varchar.ToType()),
+		vector.NewVec(types.T_varchar.ToType()),
+	}
+	for _, vec := range vectors {
+		defer vec.Free(mp)
+	}
+
+	positions := checkConstraintOutputPositions([]string{
+		"constraint_catalog",
+		"constraint_schema",
+		"constraint_name",
+	})
+	require.NoError(t, appendCheckConstraintRow(vectors, positions, checkConstraintRow{
+		schema: "app",
+		name:   "amount_positive",
+		clause: "`amount` > 0",
+	}, proc))
+	require.Equal(t, "def", vectors[0].GetStringAt(0))
+	require.Equal(t, "app", vectors[1].GetStringAt(0))
+	require.Equal(t, "amount_positive", vectors[2].GetStringAt(0))
 }

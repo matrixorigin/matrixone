@@ -16,8 +16,10 @@ package table_function
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -33,6 +35,34 @@ type checkConstraintRow struct {
 
 type checkConstraintsState struct {
 	simpleOneBatchState
+}
+
+const (
+	checkConstraintCatalogColumn = iota
+	checkConstraintSchemaColumn
+	checkConstraintNameColumn
+	checkConstraintClauseColumn
+)
+
+// checkConstraintOutputPositions maps the logical CHECK_CONSTRAINTS columns to
+// the vectors retained by the optimizer.  A projection such as COUNT(*) may
+// prune CHECK_CLAUSE (or any other column), so the executor must not assume
+// that all four vectors are present.
+func checkConstraintOutputPositions(attrs []string) [4]int {
+	positions := [4]int{-1, -1, -1, -1}
+	for i, attr := range attrs {
+		switch strings.ToLower(attr) {
+		case "constraint_catalog":
+			positions[checkConstraintCatalogColumn] = i
+		case "constraint_schema":
+			positions[checkConstraintSchemaColumn] = i
+		case "constraint_name":
+			positions[checkConstraintNameColumn] = i
+		case "check_clause":
+			positions[checkConstraintClauseColumn] = i
+		}
+	}
+	return positions
 }
 
 func checkConstraintsPrepare(_ *process.Process, _ *TableFunction) (tvfState, error) {
@@ -55,21 +85,41 @@ func (s *checkConstraintsState) start(
 		return err
 	}
 
+	positions := checkConstraintOutputPositions(s.batch.Attrs)
 	for _, row := range rows {
-		if err := vector.AppendBytes(s.batch.Vecs[0], []byte(catalog.SystemCatalogName), false, proc.Mp()); err != nil {
-			return err
-		}
-		if err := vector.AppendBytes(s.batch.Vecs[1], []byte(row.schema), false, proc.Mp()); err != nil {
-			return err
-		}
-		if err := vector.AppendBytes(s.batch.Vecs[2], []byte(row.name), false, proc.Mp()); err != nil {
-			return err
-		}
-		if err := vector.AppendBytes(s.batch.Vecs[3], []byte(row.clause), false, proc.Mp()); err != nil {
+		if err := appendCheckConstraintRow(s.batch.Vecs, positions, row, proc); err != nil {
 			return err
 		}
 	}
 	s.batch.SetRowCount(len(rows))
+	return nil
+}
+
+func appendCheckConstraintRow(
+	vectors []*vector.Vector,
+	positions [4]int,
+	row checkConstraintRow,
+	proc *process.Process,
+) error {
+	values := [...]string{
+		catalog.SystemCatalogName,
+		row.schema,
+		row.name,
+		row.clause,
+	}
+	for column, value := range values {
+		vectorIndex := positions[column]
+		if vectorIndex < 0 {
+			continue
+		}
+		if vectorIndex >= len(vectors) {
+			return moerr.NewInternalErrorf(proc.Ctx,
+				"check constraints output vector %d is unavailable", vectorIndex)
+		}
+		if err := vector.AppendBytes(vectors[vectorIndex], []byte(value), false, proc.Mp()); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
