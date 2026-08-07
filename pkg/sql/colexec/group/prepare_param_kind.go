@@ -40,7 +40,7 @@ func prepareParamKindWireV1Enabled(proc *process.Process) bool {
 	}
 	// Deployment raises the shared protocol only after every participating CN
 	// can emit and consume the trailer, and lowers it before rollback.
-	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+	value, _ := moruntime.ServiceRuntime(proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, ok := value.(int64)
 	return ok && version >= defines.MORPCVersion11
