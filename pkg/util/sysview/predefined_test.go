@@ -102,6 +102,27 @@ func TestInformationSchemaReferentialConstraintsDDL_Parses(t *testing.T) {
 	}
 }
 
+func TestInformationSchemaCheckConstraintsDDL(t *testing.T) {
+	assert.True(t, strings.HasPrefix(
+		InformationSchemaCheckConstraintsDDL,
+		"CREATE VIEW information_schema.CHECK_CONSTRAINTS AS"))
+	assert.Contains(t, InformationSchemaCheckConstraintsDDL, "mo_check_constraints()")
+	for _, column := range []string{
+		"CONSTRAINT_CATALOG",
+		"CONSTRAINT_SCHEMA",
+		"CONSTRAINT_NAME",
+		"CHECK_CLAUSE",
+	} {
+		assert.Contains(t, InformationSchemaCheckConstraintsDDL, column)
+	}
+
+	statements, err := mysql.Parse(context.Background(), InformationSchemaCheckConstraintsDDL, 1)
+	assert.NoError(t, err)
+	for _, statement := range statements {
+		statement.Free()
+	}
+}
+
 func TestInformationSchemaCharacterSetsData(t *testing.T) {
 	for _, expected := range []string{
 		"('binary','binary','Binary pseudo charset',1)",
