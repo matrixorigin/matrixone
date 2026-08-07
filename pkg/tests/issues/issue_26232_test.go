@@ -78,7 +78,7 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			"create table " + db + ".ctas_view as select id, qty, nullable_col, null_col, str_col, amount, " +
 				"date_col, datetime_col, time_col, timestamp_col, binary_col, varbinary_col, blob_col, " +
 				"float_col, double_col, bit_col, year_col, text_col, nullable_text, nullable_blob, nullable_expr, " +
-				"priority, flags from " + db + ".v_source_t",
+				"expr_col, priority, flags from " + db + ".v_source_t",
 		} {
 			execSQLRequire(t, ctx, dbConn, stmt)
 		}
@@ -169,7 +169,8 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			{column: "text_col", wantInfo: sql.NullString{String: "('text-seed')", Valid: true}, wantDesc: sql.NullString{String: "('text-seed')", Valid: true}},
 			{column: "nullable_text", wantInfo: sql.NullString{String: "('nullable-text-seed')", Valid: true}, wantDesc: sql.NullString{String: "('nullable-text-seed')", Valid: true}},
 			{column: "nullable_blob", wantInfo: sql.NullString{String: "('nullable-blob-seed')", Valid: true}, wantDesc: sql.NullString{String: "('nullable-blob-seed')", Valid: true}},
-			{column: "nullable_expr"},
+			{column: "nullable_expr", wantInfo: sql.NullString{String: "(uuid())", Valid: true}, wantDesc: sql.NullString{String: "(uuid())", Valid: true}},
+			{column: "expr_col", wantInfo: sql.NullString{String: "(uuid())", Valid: true}, wantDesc: sql.NullString{String: "(uuid())", Valid: true}},
 		} {
 			var infoDefault sql.NullString
 			require.NoError(t, dbConn.QueryRowContext(ctx,
@@ -194,6 +195,8 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 		require.Contains(t, strings.ToLower(createTableSQL), "`text_col` text not null default ('text-seed')")
 		require.Contains(t, strings.ToLower(createTableSQL), "`nullable_text` text default ('nullable-text-seed')")
 		require.Contains(t, strings.ToLower(createTableSQL), "`nullable_blob` blob default ('nullable-blob-seed')")
+		require.Contains(t, strings.ToLower(createTableSQL), "`nullable_expr` uuid default (uuid())")
+		require.Contains(t, strings.ToLower(createTableSQL), "`expr_col` uuid not null default (uuid())")
 
 		execSQLRequire(t, ctx, dbConn, "insert into "+db+".ctas_view"+
 			"(id,date_col,datetime_col,timestamp_col) values "+
@@ -231,18 +234,21 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 		var binaryHex, varbinaryHex, insertedBlob string
 		var insertedFloat, insertedDouble float64
 		var insertedBit uint64
-		var nullableExprIsNull bool
+		var nullableExprIsNull, exprIsNull bool
 		require.NoError(t, dbConn.QueryRowContext(ctx,
-			"select hex(binary_col), hex(varbinary_col), blob_col, float_col, double_col, bit_col + 0, nullable_expr is null "+
+			"select hex(binary_col), hex(varbinary_col), blob_col, float_col, double_col, bit_col + 0, "+
+				"nullable_expr is null, expr_col is null "+
 				"from "+db+".ctas_view where id = 2").
-			Scan(&binaryHex, &varbinaryHex, &insertedBlob, &insertedFloat, &insertedDouble, &insertedBit, &nullableExprIsNull))
+			Scan(&binaryHex, &varbinaryHex, &insertedBlob, &insertedFloat, &insertedDouble, &insertedBit,
+				&nullableExprIsNull, &exprIsNull))
 		require.Equal(t, "00000000", binaryHex)
 		require.Empty(t, varbinaryHex)
 		require.Equal(t, "blob-seed", insertedBlob)
 		require.Zero(t, insertedFloat)
 		require.Zero(t, insertedDouble)
 		require.Zero(t, insertedBit)
-		require.True(t, nullableExprIsNull)
+		require.False(t, nullableExprIsNull)
+		require.False(t, exprIsNull)
 		var insertedYear int
 		var insertedText string
 		var insertedNullableText, insertedNullableBlob sql.NullString

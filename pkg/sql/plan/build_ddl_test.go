@@ -629,9 +629,30 @@ func TestBuildCTASFromViewUsesIndependentExecutableDefault(t *testing.T) {
 				OriginString: "7",
 			},
 		},
+		&plan.ColDef{
+			Name: "expr_col",
+			Typ:  plan.Type{Id: int32(types.T_uuid), NotNullable: true},
+			Default: &plan.Default{
+				Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_uuid), NotNullable: true}, Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "uuid"},
+				}}},
+				OriginString: "(uuid())",
+			},
+		},
+		&plan.ColDef{
+			Name: "nullable_expr",
+			Typ:  plan.Type{Id: int32(types.T_uuid)},
+			Default: &plan.Default{
+				NullAbility: true,
+				Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_uuid)}, Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "uuid"},
+				}}},
+				OriginString: "(uuid())",
+			},
+		},
 	)
 	const createViewSQL = "create view v_source_t as " +
-		"select n_nationkey as qty, str_col, amount, priority, flags, nullable_col from nation"
+		"select n_nationkey as qty, str_col, amount, priority, flags, nullable_col, expr_col, nullable_expr from nation"
 	createCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createViewSQL}
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createViewSQL, 1)
 	require.NoError(t, err)
@@ -651,9 +672,9 @@ func TestBuildCTASFromViewUsesIndependentExecutableDefault(t *testing.T) {
 		name      string
 		selectSQL string
 	}{
-		{name: "direct view", selectSQL: "select qty, str_col, amount, priority, flags, nullable_col from v_source_t"},
-		{name: "view through derived", selectSQL: "select * from (select qty, str_col, amount, priority, flags, nullable_col from v_source_t) d"},
-		{name: "view through cte", selectSQL: "with d as (select qty, str_col, amount, priority, flags, nullable_col from v_source_t) select * from d"},
+		{name: "direct view", selectSQL: "select qty, str_col, amount, priority, flags, nullable_col, expr_col, nullable_expr from v_source_t"},
+		{name: "view through derived", selectSQL: "select * from (select qty, str_col, amount, priority, flags, nullable_col, expr_col, nullable_expr from v_source_t) d"},
+		{name: "view through cte", selectSQL: "with d as (select qty, str_col, amount, priority, flags, nullable_col, expr_col, nullable_expr from v_source_t) select * from d"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
@@ -663,7 +684,7 @@ func TestBuildCTASFromViewUsesIndependentExecutableDefault(t *testing.T) {
 			ctasPlan, err := BuildPlan(ctx, stmt, false)
 			require.NoError(t, err)
 			cols := ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()
-			require.GreaterOrEqual(t, len(cols), 6)
+			require.GreaterOrEqual(t, len(cols), 8)
 			for i, wantOrigin := range []string{"0", "''", "0.00", "'low'", "''", ""} {
 				def := cols[i].GetDefault()
 				require.NotNil(t, def)
@@ -677,6 +698,13 @@ func TestBuildCTASFromViewUsesIndependentExecutableDefault(t *testing.T) {
 				require.NotNil(t, def.GetExpr(), cols[i].GetName())
 				require.Equal(t, cols[i].Typ.Id, def.GetExpr().Typ.Id, cols[i].GetName())
 			}
+			for _, i := range []int{6, 7} {
+				def := cols[i].GetDefault()
+				require.NotNil(t, def)
+				require.Equal(t, "(uuid())", def.GetOriginString(), cols[i].GetName())
+				require.Equal(t, i == 7, def.GetNullAbility(), cols[i].GetName())
+				require.Equal(t, "uuid", def.GetExpr().GetF().GetFunc().GetObjName(), cols[i].GetName())
+			}
 		})
 	}
 }
@@ -686,11 +714,17 @@ func TestCTASViewDefaultPolicyMatrix(t *testing.T) {
 		Expr:         makePlan2Int32ConstExprWithType(1),
 		OriginString: "1",
 	}
-	blobExpr := &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_blob), NotNullable: true},
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{ObjName: "blob_default"},
-		}},
+	expressionDefault := func(origin string, nullable bool) *plan.Default {
+		return &plan.Default{
+			NullAbility: nullable,
+			Expr: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_int32), NotNullable: !nullable},
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "generated_default"},
+				}},
+			},
+			OriginString: origin,
+		}
 	}
 
 	for _, test := range []struct {
@@ -710,11 +744,23 @@ func TestCTASViewDefaultPolicyMatrix(t *testing.T) {
 		{name: "float", typ: plan.Type{Id: int32(types.T_float32), NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "0"},
 		{name: "double", typ: plan.Type{Id: int32(types.T_float64), NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "0"},
 		{name: "bit", typ: plan.Type{Id: int32(types.T_bit), Width: 8, NotNullable: true}, defaultDef: explicitDefault, wantPolicy: CTASDefaultUseTypeDefault, wantOrigin: "0"},
-		{name: "blob expression", typ: plan.Type{Id: int32(types.T_blob), NotNullable: true}, defaultDef: &plan.Default{Expr: blobExpr, OriginString: "(blob_default())"}, wantPolicy: CTASDefaultInheritViewSource},
-		{name: "text expression", typ: plan.Type{Id: int32(types.T_text), NotNullable: true}, defaultDef: &plan.Default{Expr: makePlan2StringConstExprWithType("seed"), OriginString: "('seed')"}, wantPolicy: CTASDefaultInheritViewSource},
-		{name: "nullable blob expression", typ: plan.Type{Id: int32(types.T_blob)}, defaultDef: &plan.Default{NullAbility: true, Expr: blobExpr, OriginString: "(blob_default())"}, wantPolicy: CTASDefaultInheritViewSource},
-		{name: "nullable text expression", typ: plan.Type{Id: int32(types.T_text)}, defaultDef: &plan.Default{NullAbility: true, Expr: makePlan2StringConstExprWithType("seed"), OriginString: "('seed')"}, wantPolicy: CTASDefaultInheritViewSource},
-		{name: "nullable expression", typ: plan.Type{Id: int32(types.T_varchar)}, defaultDef: &plan.Default{NullAbility: true, Expr: makePlan2StringConstExprWithType("seed"), OriginString: "('seed')"}},
+		{name: "uuid expression", typ: plan.Type{Id: int32(types.T_uuid), NotNullable: true}, defaultDef: expressionDefault("(uuid())", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "date expression", typ: plan.Type{Id: int32(types.T_date), NotNullable: true}, defaultDef: expressionDefault("(curdate())", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "datetime expression", typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}, defaultDef: expressionDefault("(now())", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "timestamp expression", typ: plan.Type{Id: int32(types.T_timestamp), NotNullable: true}, defaultDef: expressionDefault("(now())", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "int expression", typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}, defaultDef: expressionDefault("(1 + 2)", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "decimal expression", typ: plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2, NotNullable: true}, defaultDef: expressionDefault("(1.25 + 1)", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "double expression", typ: plan.Type{Id: int32(types.T_float64), NotNullable: true}, defaultDef: expressionDefault("(1.5 + 1)", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "varchar expression", typ: plan.Type{Id: int32(types.T_varchar), Width: 40, NotNullable: true}, defaultDef: expressionDefault("(uuid())", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "varbinary expression", typ: plan.Type{Id: int32(types.T_varbinary), Width: 40, NotNullable: true}, defaultDef: expressionDefault("(uuid())", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "time expression", typ: plan.Type{Id: int32(types.T_time), NotNullable: true}, defaultDef: expressionDefault("('01:30:00')", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "year expression", typ: plan.Type{Id: int32(types.T_year), NotNullable: true}, defaultDef: expressionDefault("(2024)", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "blob expression", typ: plan.Type{Id: int32(types.T_blob), NotNullable: true}, defaultDef: expressionDefault("(blob_default())", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "text expression", typ: plan.Type{Id: int32(types.T_text), NotNullable: true}, defaultDef: expressionDefault("('seed')", false), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "nullable int expression", typ: plan.Type{Id: int32(types.T_int32)}, defaultDef: expressionDefault("(1 + 2)", true), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "nullable varchar expression", typ: plan.Type{Id: int32(types.T_varchar)}, defaultDef: expressionDefault("(uuid())", true), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "nullable blob expression", typ: plan.Type{Id: int32(types.T_blob)}, defaultDef: expressionDefault("(blob_default())", true), wantPolicy: CTASDefaultInheritViewSource},
+		{name: "nullable text expression", typ: plan.Type{Id: int32(types.T_text)}, defaultDef: expressionDefault("('seed')", true), wantPolicy: CTASDefaultInheritViewSource},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			metadata := SourceColumnMetadata{Typ: test.typ, Default: DeepCopyDefault(test.defaultDef)}
@@ -723,7 +769,7 @@ func TestCTASViewDefaultPolicyMatrix(t *testing.T) {
 			if test.wantPolicy == CTASDefaultUseTypeDefault {
 				require.True(t, ok)
 				require.Equal(t, test.wantOrigin, origin)
-			} else if test.typ.NotNullable && test.wantPolicy != CTASDefaultUseTypeDefault {
+			} else if test.wantPolicy == CTASDefaultNone && test.typ.NotNullable {
 				require.False(t, ok)
 			}
 		})

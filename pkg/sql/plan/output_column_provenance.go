@@ -15,7 +15,8 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -84,12 +85,24 @@ func hasExplicitSourceDefault(metadata SourceColumnMetadata) bool {
 	return metadata.Default != nil
 }
 
+// isGeneratedExpressionDefault follows buildDefaultExpr's persisted contract:
+// a DEFAULT whose source AST is a tree.ParenExpr keeps the outer parentheses
+// in OriginString. Expr alone is insufficient because constant folding may turn
+// a generated expression into a literal while its CTAS semantics stay distinct
+// from an ordinary literal default.
+func isGeneratedExpressionDefault(def *plan.Default) bool {
+	if def == nil {
+		return false
+	}
+	origin := strings.TrimSpace(def.OriginString)
+	return len(origin) >= 2 && origin[0] == '(' && origin[len(origin)-1] == ')'
+}
+
 func ctasViewDefaultPolicy(metadata SourceColumnMetadata) CTASDefaultPolicy {
 	if !hasExplicitSourceDefault(metadata) {
 		return CTASDefaultNone
 	}
-	if (types.T(metadata.Typ.Id) == types.T_blob || types.T(metadata.Typ.Id) == types.T_text) &&
-		(metadata.Default.Expr != nil || metadata.Default.OriginString != "") {
+	if isGeneratedExpressionDefault(metadata.Default) {
 		return CTASDefaultInheritViewSource
 	}
 	if !metadata.Typ.NotNullable {
