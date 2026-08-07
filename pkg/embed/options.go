@@ -53,6 +53,15 @@ func WithTesting() Option {
 	}
 }
 
+// WithConcurrentTestClusters is only for a test whose assertion requires two
+// complete embedded clusters to remain live together. Ordinary tests must use
+// the default exclusive admission so an accidental second cluster fails fast.
+func WithConcurrentTestClusters() Option {
+	return func(c *cluster) {
+		c.options.allowConcurrentTestClusters = true
+	}
+}
+
 // WithHAKeeperHeartbeatTimeout overrides the CN and TN HAKeeper heartbeat RPC
 // deadline for this embedded cluster. Heartbeats are issued serially, so a
 // larger deadline also delays retries and command delivery after a failed RPC.
