@@ -727,23 +727,12 @@ func (c *managedHAKeeperClient) GetScheduleCommands(
 		if !client.commandDeliverySupported.Load() {
 			return pb.CommandBatch{}, nil
 		}
-		if !client.commandPollSupported.Load() {
-			if _, err := client.checkIsHAKeeper(ctx); err != nil {
-				if shouldResetHAKeeperClient(err) {
-					c.resetClientIfCurrent(client)
-				}
-				if c.isRetryableError(err) {
-					if err := c.waitRetry(ctx); err != nil {
-						return pb.CommandBatch{}, err
-					}
-					continue
-				}
-				return pb.CommandBatch{}, err
-			}
-			if !client.commandPollSupported.Load() {
-				return pb.CommandBatch{}, nil
-			}
-		}
+		// The read-only endpoint is safe as soon as the server binary advertises
+		// delivery support. Before the replicated barrier it hides zero-ID legacy
+		// batches; during preparation it can already return durable batches while
+		// the heartbeat RPC is blocked. Do not gate this on CommandPollSupported,
+		// which is intentionally false until phase two and would reintroduce the
+		// startup liveness dependency this independent read is meant to remove.
 		batch, err := client.getScheduleCommands(ctx, c.sid, serviceType)
 		if shouldResetHAKeeperClient(err) {
 			c.resetClientIfCurrent(client)
@@ -1441,6 +1430,10 @@ func (c *hakeeperClient) sendHeartbeat(ctx context.Context,
 	}
 	if resp.CommandPollSupported {
 		c.commandPollSupported.Store(true)
+		// A server can be upgraded in place while this client generation stays
+		// connected. Poll support is stronger evidence than the initial
+		// CHECK_HAKEEPER capability bit, so promote the delivery capability too.
+		c.commandDeliverySupported.Store(true)
 	}
 	if resp.CommandBatch == nil {
 		return pb.CommandBatch{}, nil

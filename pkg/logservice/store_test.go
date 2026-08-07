@@ -66,6 +66,28 @@ func TestNodeHostConfig(t *testing.T) {
 	assert.True(t, nhConfig.AddressByNodeHostID)
 }
 
+func TestGetCommandDeliveryTargetsFiltersExpiredStores(t *testing.T) {
+	store := &store{cfg: DefaultConfig()}
+	store.cfg.HAKeeperConfig.TickPerSecond = 1
+	store.cfg.HAKeeperConfig.CNStoreTimeout = toml.Duration{Duration: 10 * time.Second}
+	store.cfg.HAKeeperConfig.TNStoreTimeout = toml.Duration{Duration: 10 * time.Second}
+	state := &pb.CheckerState{
+		Tick: 20,
+		CNState: pb.CNState{Stores: map[string]pb.CNStoreInfo{
+			"cn-live": {Tick: 20},
+			"cn-dead": {Tick: 1},
+		}},
+		TNState: pb.TNState{Stores: map[string]pb.TNStoreInfo{
+			"tn-live": {Tick: 20},
+			"tn-dead": {Tick: 1},
+		}},
+	}
+
+	cn, tn := store.getCommandDeliveryTargets(state)
+	require.Equal(t, []string{"cn-live"}, cn)
+	require.Equal(t, []string{"tn-live"}, tn)
+}
+
 func TestRaftConfig(t *testing.T) {
 	cfg := getRaftConfig(1, 1)
 	assert.True(t, cfg.CheckQuorum)

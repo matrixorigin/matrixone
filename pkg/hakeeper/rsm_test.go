@@ -1033,6 +1033,7 @@ func TestTickAssignsIDsToLegacyScheduleCommandBatchesOnce(t *testing.T) {
 	_, err := rsm.Update(sm.Entry{Index: 41, Cmd: GetTickCmd()})
 	require.NoError(t, err)
 	require.Equal(t, uint64(41), rsm.state.ScheduleCommands[command.UUID].BatchID)
+	require.True(t, rsm.state.CommandDeliveryBatchIDsAssigned)
 
 	_, err = rsm.Update(sm.Entry{Index: 42, Cmd: GetTickCmd()})
 	require.NoError(t, err)
@@ -1205,6 +1206,57 @@ func TestCommandDeliveryActivationWaitsForServiceCapabilities(t *testing.T) {
 	require.Nil(t, rsm.state.CommandDeliveryTNReady)
 }
 
+func TestCommandDeliveryActivationIgnoresExpiredServiceRecords(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.CommandDeliveryPreparing = true
+	rsm.state.CommandDeliveryReady = map[string]bool{"log-1": true}
+	rsm.state.CommandDeliveryCNReady = map[string]bool{
+		"cn-live": true,
+		"cn-dead": false,
+	}
+	rsm.state.CommandDeliveryTNReady = map[string]bool{
+		"tn-live": true,
+		"tn-dead": false,
+	}
+	rsm.state.LogState.Shards[DefaultHAKeeperShardID] = pb.LogShardInfo{
+		ShardID:  DefaultHAKeeperShardID,
+		Replicas: map[uint64]string{1: "log-1"},
+	}
+	// TN records are retained after a store stops heartbeating. The replicated
+	// target list must be allowed to omit such a record, otherwise one dead
+	// pre-upgrade TN would keep every HAKeeper replica in Preparing forever.
+	rsm.state.CNState.Stores["cn-live"] = pb.CNStoreInfo{}
+	rsm.state.CNState.Stores["cn-dead"] = pb.CNStoreInfo{}
+	rsm.state.TNState.Stores["tn-live"] = pb.TNStoreInfo{}
+	rsm.state.TNState.Stores["tn-dead"] = pb.TNStoreInfo{}
+
+	result, err := rsm.Update(sm.Entry{
+		Index: 10,
+		Cmd:   GetEnableCommandDeliveryCmdForTargets([]string{"cn-live"}, []string{"tn-live"}),
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), result.Value)
+	require.True(t, rsm.state.CommandDeliveryEnabled)
+
+	// An active unsupported target remains a hard barrier.
+	rsm = NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.CommandDeliveryPreparing = true
+	rsm.state.CommandDeliveryReady = map[string]bool{"log-1": true}
+	rsm.state.CommandDeliveryTNReady = map[string]bool{"tn-live": false}
+	rsm.state.LogState.Shards[DefaultHAKeeperShardID] = pb.LogShardInfo{
+		ShardID:  DefaultHAKeeperShardID,
+		Replicas: map[uint64]string{1: "log-1"},
+	}
+	rsm.state.TNState.Stores["tn-live"] = pb.TNStoreInfo{}
+	result, err = rsm.Update(sm.Entry{
+		Index: 10,
+		Cmd:   GetEnableCommandDeliveryCmdForTargets(nil, []string{"tn-live"}),
+	})
+	require.NoError(t, err)
+	require.Zero(t, result.Value)
+	require.False(t, rsm.state.CommandDeliveryEnabled)
+}
+
 func TestCommandDeliveryActivationRebuildsServiceBarrierAfterOldSnapshot(t *testing.T) {
 	oldState := pb.NewRSMState()
 	oldState.CommandDeliveryPreparing = true
@@ -1225,9 +1277,11 @@ func TestCommandDeliveryActivationRebuildsServiceBarrierAfterOldSnapshot(t *test
 	require.NoError(t, err)
 
 	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.CommandDeliveryBatchIDsAssigned = true
 	require.NoError(t, rsm.RecoverFromSnapshot(bytes.NewReader(data), nil, nil))
 	require.Nil(t, rsm.state.CommandDeliveryCNReady)
 	require.Nil(t, rsm.state.CommandDeliveryTNReady)
+	require.False(t, rsm.state.CommandDeliveryBatchIDsAssigned)
 	result, err := rsm.Update(sm.Entry{Index: 20, Cmd: GetEnableCommandDeliveryCmd()})
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), result.Value)

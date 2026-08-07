@@ -546,6 +546,20 @@ message ScheduleCommandQuery {
   ServiceType ServiceType = 2;
 }
 
+// CommandDeliveryTargets is the set of CN/TN stores that were live when the
+// leader evaluated the second phase of the command-delivery barrier. Stores
+// that have already expired are intentionally omitted: CN/TN state keeps
+// historical records, and an offline legacy store must not block activation
+// forever. A store that returns before activation is still observed by its
+// post-barrier heartbeat and can block the transition if it is unsupported.
+message CommandDeliveryTargets {
+  repeated string CNStoreUUIDs = 1;
+  repeated string TNStoreUUIDs = 2;
+  // Explicit distinguishes a replicated empty target set from the legacy
+  // no-payload activation command.
+  bool Explicit = 3;
+}
+
 message JoinGossipCluster {
   repeated string Existing = 1;
 }
@@ -808,6 +822,9 @@ message HAKeeperRSMState {
   // observed after the barrier can enable acknowledged delivery.
   map<string, bool> CommandDeliveryCNReady = 26;
   map<string, bool> CommandDeliveryTNReady = 27;
+  // Once true, every pending batch known at the first upgraded tick has a
+  // non-zero BatchID. New batches are assigned an ID at insertion time.
+  bool CommandDeliveryBatchIDsAssigned = 28;
 }
 
 // ReplicaInfo contains details of a replica

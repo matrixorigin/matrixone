@@ -156,13 +156,53 @@ func GetCompleteLogServiceRecoveryCmd() []byte {
 	return cmd
 }
 
-// GetEnableCommandDeliveryCmd creates the one-way protocol activation entry.
-// It must only be proposed after every current HAKeeper replica has advertised
-// support; older state machines deliberately reject the unknown command tag.
+// GetEnableCommandDeliveryCmd creates the phase-one, one-way protocol
+// activation entry. It must only be proposed after every current HAKeeper
+// replica has advertised support; older state machines deliberately reject the
+// unknown command tag.
 func GetEnableCommandDeliveryCmd() []byte {
-	cmd := make([]byte, headerSize)
+	return getEnableCommandDeliveryCmd(nil)
+}
+
+// GetEnableCommandDeliveryCmdForTargets creates the phase-two activation entry
+// with the CN/TN stores that were live when the leader evaluated the barrier.
+// HAKeeper keeps historical TN records, so carrying this replicated target set
+// lets every RSM ignore stores that had already expired without making
+// activation depend on leader-local state.
+func GetEnableCommandDeliveryCmdForTargets(
+	cnStoreUUIDs, tnStoreUUIDs []string,
+) []byte {
+	targets := pb.CommandDeliveryTargets{
+		CNStoreUUIDs: append([]string(nil), cnStoreUUIDs...),
+		TNStoreUUIDs: append([]string(nil), tnStoreUUIDs...),
+		Explicit:     true,
+	}
+	return getEnableCommandDeliveryCmd(&targets)
+}
+
+func getEnableCommandDeliveryCmd(targets *pb.CommandDeliveryTargets) []byte {
+	payload := []byte(nil)
+	if targets != nil {
+		payload = make([]byte, targets.ProtoSize())
+		if _, err := targets.MarshalTo(payload); err != nil {
+			panic(err)
+		}
+	}
+	cmd := make([]byte, headerSize+len(payload))
 	binaryEnc.PutUint32(cmd, uint32(pb.EnableCommandDeliveryUpdate))
+	copy(cmd[headerSize:], payload)
 	return cmd
+}
+
+func parseEnableCommandDeliveryCmd(cmd []byte) (pb.CommandDeliveryTargets, bool) {
+	if len(cmd) <= headerSize {
+		return pb.CommandDeliveryTargets{}, false
+	}
+	var targets pb.CommandDeliveryTargets
+	if err := targets.Unmarshal(cmd[headerSize:]); err != nil {
+		panic(err)
+	}
+	return targets, targets.Explicit
 }
 
 func parseInitialClusterRequestCmd(cmd []byte) pb.InitialClusterRequest {
@@ -836,24 +876,27 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 
 func (s *stateMachine) handleTick(cmd []byte) sm.Result {
 	// A replica entering the preparation barrier or upgraded from an older
-	// snapshot can contain pending batches without delivery IDs. Reuse an
+	// snapshot can contain pending batches without delivery IDs. Reuse one
 	// ordinary replicated tick to make them poll-safe. The decision depends only
 	// on replicated state, so replicas that recovered at different times still
-	// produce the same state. Current batches are skipped, and an empty command
-	// map makes this loop constant-time.
-	if s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing {
+	// produce the same state. New batches are assigned an ID when inserted, so
+	// this potentially large scan is never repeated on the steady-state tick
+	// path.
+	if (s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing) &&
+		!s.state.CommandDeliveryBatchIDsAssigned {
 		for uuid, batch := range s.state.ScheduleCommands {
 			if batch.BatchID == 0 {
 				batch.BatchID = s.state.Index
 				s.state.ScheduleCommands[uuid] = batch
 			}
 		}
+		s.state.CommandDeliveryBatchIDsAssigned = true
 	}
 	s.state.Tick++
 	return sm.Result{}
 }
 
-func (s *stateMachine) handleEnableCommandDelivery() sm.Result {
+func (s *stateMachine) handleEnableCommandDelivery(cmd []byte) sm.Result {
 	if s.state.CommandDeliveryEnabled {
 		return sm.Result{Value: 1}
 	}
@@ -893,14 +936,32 @@ func (s *stateMachine) handleEnableCommandDelivery() sm.Result {
 			return sm.Result{}
 		}
 	}
-	for uuid := range s.state.CNState.Stores {
-		if !s.state.CommandDeliveryCNReady[uuid] {
-			return sm.Result{}
+	targets, hasTargets := parseEnableCommandDeliveryCmd(cmd)
+	if hasTargets {
+		for _, uuid := range targets.CNStoreUUIDs {
+			if _, ok := s.state.CNState.Stores[uuid]; ok &&
+				!s.state.CommandDeliveryCNReady[uuid] {
+				return sm.Result{}
+			}
 		}
-	}
-	for uuid := range s.state.TNState.Stores {
-		if !s.state.CommandDeliveryTNReady[uuid] {
-			return sm.Result{}
+		for _, uuid := range targets.TNStoreUUIDs {
+			if _, ok := s.state.TNState.Stores[uuid]; ok &&
+				!s.state.CommandDeliveryTNReady[uuid] {
+				return sm.Result{}
+			}
+		}
+	} else {
+		// Keep the no-payload form strict for old snapshots and direct callers.
+		// Production phase two entries carry the replicated live-target set above.
+		for uuid := range s.state.CNState.Stores {
+			if !s.state.CommandDeliveryCNReady[uuid] {
+				return sm.Result{}
+			}
+		}
+		for uuid := range s.state.TNState.Stores {
+			if !s.state.CommandDeliveryTNReady[uuid] {
+				return sm.Result{}
+			}
 		}
 	}
 	s.state.CommandDeliveryEnabled = true
@@ -914,6 +975,7 @@ func (s *stateMachine) handleEnableCommandDelivery() sm.Result {
 			s.state.ScheduleCommands[uuid] = batch
 		}
 	}
+	s.state.CommandDeliveryBatchIDsAssigned = true
 	return sm.Result{Value: 1}
 }
 
@@ -1321,7 +1383,7 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	case pb.CompleteLogServiceRecoveryUpdate:
 		return s.handleCompleteLogServiceRecoveryCmd(), nil
 	case pb.EnableCommandDeliveryUpdate:
-		return s.handleEnableCommandDelivery(), nil
+		return s.handleEnableCommandDelivery(cmd), nil
 	case pb.SetTaskTableUserUpdate:
 		s.assertState()
 		return s.handleTaskTableUserCmd(cmd), nil
@@ -1545,11 +1607,15 @@ func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	if err != nil {
 		return err
 	}
-	// The state machine is initialized with maps for normal operation. Clear
-	// fields introduced after the original preparation barrier before decoding,
-	// otherwise an old snapshot would leave empty maps that look like a fresh
-	// barrier and could wait forever for readiness that was never recorded.
+	// The state machine is initialized with maps for normal operation. Clear all
+	// delivery fields before decoding so an older snapshot, or a snapshot
+	// recovery on a reused instance, cannot retain a newer barrier generation or
+	// the one-time BatchID scan marker when those fields are absent on disk.
+	s.state.CommandDeliveryEnabled = false
+	s.state.CommandDeliveryPreparing = false
+	s.state.CommandDeliveryReady = nil
 	s.state.CommandDeliveryCNReady = nil
 	s.state.CommandDeliveryTNReady = nil
+	s.state.CommandDeliveryBatchIDsAssigned = false
 	return s.state.Unmarshal(data)
 }
