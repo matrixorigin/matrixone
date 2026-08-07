@@ -170,6 +170,53 @@ func TestFulltext2SearchCallMaterialized(t *testing.T) {
 	st.free(tf, proc, false, nil)
 }
 
+// TestFulltext2SearchCallMaterializedCovered drives the COVERED non-streaming call() path:
+// pre-loaded keys/distances plus a box-free Ft2IncludeResult (column-major, whole result set)
+// are drained into a batch, the include column bulk-appended via AppendColumnBufferRange
+// mapped by segPos — the pull-path mirror of the streaming covered consumer, NULL-aware.
+func TestFulltext2SearchCallMaterializedCovered(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	// One include col ("prio" int64): [10, NULL, 30] — placeholder + Nulls flag (the
+	// buildIncludeBuffers layout). segPos 0 in the FULL include list.
+	prio := &vectorindex.ColumnBuffer{Type: types.T_int64}
+	var b [8]byte
+	binary.LittleEndian.PutUint64(b[:], 10)
+	prio.Data = append(prio.Data, b[:]...)
+	prio.Data = append(prio.Data, make([]byte, 8)...) // NULL placeholder
+	binary.LittleEndian.PutUint64(b[:], 30)
+	prio.Data = append(prio.Data, b[:]...)
+	prio.N = 3
+	prio.Nulls = []bool{false, true, false}
+
+	st := &fulltext2SearchState{
+		limit:         10,
+		keys:          []any{int64(11), int64(22), int64(33)},
+		distances:     []float64{0.5, 0.4, 0.3},
+		includeResult: &vectorindex.IncludeResult{Cols: []*vectorindex.ColumnBuffer{prio}},
+		includeOut:    []ft2IncludeOut{{vecIdx: 2, segPos: 0, name: "prio"}},
+	}
+	st.batch = batch.NewWithSize(3)
+	st.batch.Attrs = []string{"doc_id", "score", "prio"}
+	st.batch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	st.batch.Vecs[1] = vector.NewVec(types.T_float32.ToType())
+	st.batch.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	st.pkVecIdx, st.scoreVecIdx = 0, 1
+
+	tf := &TableFunction{}
+	res, err := st.call(tf, proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, res.Status)
+	require.Equal(t, 3, res.Batch.RowCount())
+	require.Equal(t, int64(11), vector.GetFixedAtWithTypeCheck[int64](res.Batch.Vecs[0], 0))
+	require.Equal(t, int64(10), vector.GetFixedAtWithTypeCheck[int64](res.Batch.Vecs[2], 0))
+	require.True(t, res.Batch.Vecs[2].IsNull(1)) // NULL include -> SQL NULL
+	require.Equal(t, int64(30), vector.GetFixedAtWithTypeCheck[int64](res.Batch.Vecs[2], 2))
+
+	st.free(tf, proc, false, nil)
+}
+
 // TestFulltext2SearchMaterializedAppendError drives the materialized call() drain with a
 // capped mpool that is pre-filled to a few KB of headroom, so an append fails PARTWAY
 // through the batch. The fix must surface that error (vm.CancelResult + err) instead of

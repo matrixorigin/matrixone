@@ -584,6 +584,25 @@ func cbAppendVal(k *vectorindex.ColumnBuffer, content []byte, fixedW int, fixed 
 	k.N++
 }
 
+// appendAnyInclude appends a boxed INCLUDE value (or nil ⇒ SQL NULL) to a nullable
+// ColumnBuffer, re-encoding via encodePk — the boxed-source analogue of appendIncludeTo,
+// used by the LIMIT path whose top-k already materialized boxed Result.Include values.
+// k.Type MUST be the column's type. An unsupported value never reaches here (validated at
+// build), so an encode failure is treated as NULL rather than propagated.
+func appendAnyInclude(k *vectorindex.ColumnBuffer, v any) {
+	fixedW, fixed := fixedPkByteWidth(int32(k.Type))
+	if v == nil {
+		cbAppendNull(k, fixedW, fixed)
+		return
+	}
+	content, err := encodePk(int32(k.Type), v)
+	if err != nil {
+		cbAppendNull(k, fixedW, fixed)
+		return
+	}
+	cbAppendVal(k, content, fixedW, fixed)
+}
+
 // cbAppendNull appends a SQL-NULL element: a well-formed placeholder in Data (width
 // zero-bytes / a [u32 0] entry) so the Data cursor stays aligned, plus a true flag in
 // k.Nulls (lazily materialized, backfilling the prior all-non-null elements).

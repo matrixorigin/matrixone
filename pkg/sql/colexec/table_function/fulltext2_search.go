@@ -71,12 +71,14 @@ type fulltext2SearchState struct {
 	// column of that name. pkVecIdx/scoreVecIdx are the batch vector indices for doc_id /
 	// score (-1 when pruned); includeOut lists the surviving include output vectors.
 	// includeNames (== includeOut names) drives rt.RequestedIncludeColumns; includeResult
-	// carries the non-streaming (LIMIT) per-doc include values (keyed by output name).
+	// carries the non-streaming (LIMIT) include values box-free — one ColumnBuffer per FULL
+	// index include column (segment order), indexed by includeOut.segPos, EXACTLY like the
+	// streaming ft2StreamBatch.includes, so both paths share one consumer.
 	pkVecIdx      int
 	scoreVecIdx   int
 	includeOut    []ft2IncludeOut
 	includeNames  []string
-	includeResult *vectorindex.IvfIncludeResult
+	includeResult *vectorindex.IncludeResult
 }
 
 // ft2IncludeOut maps one surviving INCLUDE output vector to its source: vecIdx is the
@@ -168,7 +170,7 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 			// vector (column pruning may have dropped or shifted any of them).
 			if u.pkVecIdx >= 0 {
 				// Typed bulk decode of the pk column — no per-pk boxing.
-				if err := fulltext2.AppendColumnBuffer(b.keys, u.batch.Vecs[u.pkVecIdx], proc.Mp()); err != nil {
+				if err := vectorindex.AppendColumnBuffer(b.keys, u.batch.Vecs[u.pkVecIdx], proc.Mp()); err != nil {
 					return vm.CancelResult, err
 				}
 			}
@@ -190,7 +192,7 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 			for _, ic := range u.includeOut {
 				vec := u.batch.Vecs[ic.vecIdx]
 				if ic.segPos >= 0 && ic.segPos < len(b.includes) {
-					if err := fulltext2.AppendColumnBuffer(b.includes[ic.segPos], vec, proc.Mp()); err != nil {
+					if err := vectorindex.AppendColumnBuffer(b.includes[ic.segPos], vec, proc.Mp()); err != nil {
 						return vm.CancelResult, err
 					}
 				} else {
@@ -209,6 +211,7 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 	}
 
 	nkeys := len(u.keys)
+	start := u.offset
 	n := 0
 	for i := u.offset; i < nkeys && n < 8192; i++ {
 		// Check each append before incrementing n / publishing the batch — an mpool
@@ -224,26 +227,26 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 				return vm.CancelResult, err
 			}
 		}
-		for _, ic := range u.includeOut {
-			// IncludeResult is indexed by the ABSOLUTE result position i (this loop pages via
-			// u.offset), NOT the page-relative n. Keyed by output name (fillIncludeResult
-			// mapped name -> full-list position).
-			var val any
-			isNull := true
-			if data := u.includeResult.Data[ic.name]; i < len(data) {
-				nulls := u.includeResult.Nulls[ic.name]
-				if i < len(nulls) && nulls[i] {
-					isNull = true
-				} else {
-					val = data[i]
-					isNull = val == nil
-				}
-			}
-			if err := vector.AppendAny(u.batch.Vecs[ic.vecIdx], val, isNull, proc.Mp()); err != nil {
+		n++
+	}
+	// Include columns: bulk box-free, paged over the [start, start+n) rows just emitted.
+	// u.includeResult.Cols is column-major (one nullable ColumnBuffer per FULL include col,
+	// segment order); segPos maps each output col — IDENTICAL to the streaming consumer, so
+	// AppendColumnBufferRange pages the whole-result buffer into this batch with no per-row
+	// boxing. A segPos out of range (should not happen on the covered path) fills SQL NULLs.
+	for _, ic := range u.includeOut {
+		vec := u.batch.Vecs[ic.vecIdx]
+		if u.includeResult != nil && ic.segPos >= 0 && ic.segPos < len(u.includeResult.Cols) {
+			if err := vectorindex.AppendColumnBufferRange(u.includeResult.Cols[ic.segPos], vec, start, n, proc.Mp()); err != nil {
 				return vm.CancelResult, err
 			}
+		} else {
+			for j := 0; j < n; j++ {
+				if err := vector.AppendAny(vec, nil, true, proc.Mp()); err != nil {
+					return vm.CancelResult, err
+				}
+			}
 		}
-		n++
 	}
 	u.offset += n
 	u.batch.SetRowCount(n)
@@ -409,11 +412,11 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 			}
 		}}
 		// Covered fast path: signal the stream to carry each doc's INCLUDE values. The gate
-		// in Fulltext2Search.Search is (IncludeResult != nil && RequestedIncludeColumns > 0),
-		// so set both — the streaming path uses the Emit includes, not IncludeResult.
+		// in Fulltext2Search.Search is (IncludeBuffers != nil && RequestedIncludeColumns > 0),
+		// so set both — the streaming path carries includes through Emit, not IncludeBuffers.
 		if len(u.includeNames) > 0 {
 			rt.RequestedIncludeColumns = u.includeNames
-			rt.IncludeResult = &vectorindex.IvfIncludeResult{}
+			rt.IncludeBuffers = &vectorindex.IncludeResult{}
 		}
 		go func() {
 			_, _, serr := veccache.Cache.Search(sp, u.tblcfg.IndexTable, newsearch, q, rt)
@@ -425,12 +428,12 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 
 	// With a pushed LIMIT: WAND top-K, returned all at once (bounded by the LIMIT).
 	rt := vectorindex.RuntimeConfig{Limit: uint(u.limit)}
-	// Covered fast path: request the INCLUDE column values; Search fills IncludeResult
-	// (indexed by absolute result position), which call() reads on the paged output.
+	// Covered fast path: request the INCLUDE column values; Search fills IncludeBuffers
+	// (box-free, column-major, whole result set), which call() pages on the output.
 	if len(u.includeNames) > 0 {
-		u.includeResult = &vectorindex.IvfIncludeResult{}
+		u.includeResult = &vectorindex.IncludeResult{}
 		rt.RequestedIncludeColumns = u.includeNames
-		rt.IncludeResult = u.includeResult
+		rt.IncludeBuffers = u.includeResult
 	}
 	keys, dists, serr := veccache.Cache.Search(sp, u.tblcfg.IndexTable, newsearch, q, rt)
 	if serr != nil {

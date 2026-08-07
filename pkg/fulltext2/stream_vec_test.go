@@ -45,7 +45,7 @@ func TestColumnBufferRoundTrip(t *testing.T) {
 	}
 	toVec := func(pkType types.T, vals []any) *vector.Vector {
 		vec := vector.NewVec(pkType.ToType())
-		require.NoError(t, AppendColumnBuffer(build(pkType, vals), vec, mp))
+		require.NoError(t, vectorindex.AppendColumnBuffer(build(pkType, vals), vec, mp))
 		require.Equal(t, len(vals), vec.Length())
 		return vec
 	}
@@ -127,7 +127,7 @@ func TestStreamLoadedSegmentAllPkTypes(t *testing.T) {
 		out := vector.NewVec(pkType.ToType())
 		err = idx.StreamBagOfWords([]byte("alpha"), ParserDefault, BM25, nil, false,
 			func(k *vectorindex.ColumnBuffer, _ []float64, _ []*vectorindex.ColumnBuffer) error {
-				e := AppendColumnBuffer(k, out, mp)
+				e := vectorindex.AppendColumnBuffer(k, out, mp)
 				PutColumnBuffer(k) // recycle, as the real consumer does
 				return e
 			})

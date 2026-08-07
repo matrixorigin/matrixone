@@ -17,11 +17,11 @@ package fulltext2
 import (
 	"context"
 	"math"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -210,7 +210,7 @@ func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectori
 		// Covered fast path: when the caller requested INCLUDE columns, tell the stream
 		// to carry each doc's decoded INCLUDE values (in segment order) through Emit's 3rd
 		// arg. The consumer (fulltext2_search TVF) maps its requested columns by position.
-		wantInclude := rt.IncludeResult != nil && len(rt.RequestedIncludeColumns) > 0
+		wantInclude := rt.IncludeBuffers != nil && len(rt.RequestedIncludeColumns) > 0
 		var serr error
 		if q.BagOfWords {
 			serr = s.idx.StreamBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, pf, wantInclude, rt.Emit)
@@ -238,56 +238,44 @@ func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectori
 		keysOut[i] = r.Pk
 		dist[i] = float64(r.Score)
 	}
-	s.fillIncludeResult(rt, results)
+	s.buildIncludeBuffers(rt, results)
 	return keysOut, dist, nil
 }
 
-// fillIncludeResult populates rt.IncludeResult (the covering side channel, shared with the
-// vector plugins) from each result's positional Include values, keyed by the caller's
-// RequestedIncludeColumns names — so a covered query reads the projected INCLUDE columns
-// straight from the index with no base-table JOIN. No-op when no include columns were
-// requested. rt is passed by value but IncludeResult is a pointer, so the caller observes
-// the population (same contract as the IVF plugins).
-func (s *Fulltext2Search) fillIncludeResult(rt vectorindex.RuntimeConfig, results []Result) {
-	if rt.IncludeResult == nil || len(rt.RequestedIncludeColumns) == 0 {
+// buildIncludeBuffers populates rt.IncludeBuffers (fulltext2's box-free covering side
+// channel) with one nullable ColumnBuffer per FULL index INCLUDE column (segment-include
+// order), covering the whole result set — so a covered LIMIT query reads its projected
+// INCLUDE columns straight from the index with no base-table JOIN, no map[string][]any
+// intermediate, and no per-row reflection append. The TVF maps its requested output columns
+// to segment positions exactly as it does for the streaming path (by includeOut.segPos), so
+// both paths share one box-free consumer. No-op when no include columns were requested. rt is
+// by value but IncludeBuffers is a pointer, so the caller observes the population.
+//
+// The buffers are built in FULL include order (not just the requested subset) to match the
+// stream, which also carries the full set; the TVF projects what it needs. Source note: this
+// re-encodes each result's already-materialized boxed Include value — the top-k's per-winner
+// decodeInclude boxing (O(limit), bounded) is retained; what this removes is the transport
+// map + the reflection AppendAny, the parts the streaming path never paid.
+func (s *Fulltext2Search) buildIncludeBuffers(rt vectorindex.RuntimeConfig, results []Result) {
+	if rt.IncludeBuffers == nil || len(rt.RequestedIncludeColumns) == 0 {
 		return
 	}
-	// Map each requested name to its position in the index's INCLUDE columns (from cfg).
-	// EqualFold to match the streaming path's mapper (fulltext2_search includeOut) — the
-	// requested names come from the plan coldef Attrs and the cfg names from algo_params,
-	// so a case difference between the two sources must not silently NULL the column.
-	pos := make([]int, len(rt.RequestedIncludeColumns))
-	for i, name := range rt.RequestedIncludeColumns {
-		pos[i] = -1
-		for j, c := range s.cfg.IncludeColumns {
-			if strings.EqualFold(c, name) {
-				pos[i] = j
-				break
+	it := s.idx.includeTypes()
+	cols := make([]*vectorindex.ColumnBuffer, len(it))
+	for c := range cols {
+		cols[c] = &vectorindex.ColumnBuffer{Type: types.T(it[c])}
+	}
+	for r := range results {
+		inc := results[r].Include
+		for c := range cols {
+			var v any
+			if c < len(inc) {
+				v = inc[c]
 			}
+			appendAnyInclude(cols[c], v)
 		}
 	}
-	ir := rt.IncludeResult
-	ir.ColNames = rt.RequestedIncludeColumns
-	if ir.Data == nil {
-		ir.Data = make(map[string][]any, len(rt.RequestedIncludeColumns))
-	}
-	if ir.Nulls == nil {
-		ir.Nulls = make(map[string][]bool, len(rt.RequestedIncludeColumns))
-	}
-	for i, name := range rt.RequestedIncludeColumns {
-		data := make([]any, len(results))
-		nulls := make([]bool, len(results))
-		p := pos[i]
-		for r := range results {
-			if p >= 0 && p < len(results[r].Include) && results[r].Include[p] != nil {
-				data[r] = results[r].Include[p]
-			} else {
-				nulls[r] = true
-			}
-		}
-		ir.Data[name] = data
-		ir.Nulls[name] = nulls
-	}
+	rt.IncludeBuffers.Cols = cols
 }
 
 // SearchFloat32 is unsupported (fulltext scores are float64; the vector float32

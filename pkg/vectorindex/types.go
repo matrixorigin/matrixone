@@ -304,16 +304,32 @@ type RuntimeConfig struct {
 	RequestedIncludeColumns []string
 	PushdownFilterSQL       string
 	IncludeResult           *IvfIncludeResult
-	TargetRows              uint
-	SearchRoundLimit        uint
-	BucketExpandStep        uint
-	SearchCursor            *IvfSearchCursor
+	// IncludeBuffers is the box-free LIMIT-path covered-INCLUDE carrier (see IncludeResult).
+	// ivfflat uses the legacy []any IncludeResult field above; fulltext2 uses this.
+	IncludeBuffers   *IncludeResult
+	TargetRows       uint
+	SearchRoundLimit uint
+	BucketExpandStep uint
+	SearchCursor     *IvfSearchCursor
 }
 
 type IvfIncludeResult struct {
 	ColNames []string
 	Data     map[string][]any
 	Nulls    map[string][]bool
+}
+
+// IncludeResult is the box-free, column-major covered-INCLUDE result for the LIMIT
+// (non-streaming) path — the pull-path analogue of RuntimeConfig.Emit's includes arg (which
+// serves the no-LIMIT streaming path). Cols[c] is the c-th FULL index INCLUDE column
+// (segment-include order) as a nullable ColumnBuffer covering the whole result set; the TVF
+// maps its requested output columns to segment positions exactly as it does for the stream,
+// then bulk-appends each buffer with AppendColumnBuffer(Range) — no per-row boxing, no
+// reflection append, no map[string][]any intermediate. Carried on RuntimeConfig.IncludeBuffers.
+// fulltext2 uses this; ivfflat keeps the legacy []any IvfIncludeResult, so this path leaves
+// it untouched (ivfpq/cagra do not use covered-INCLUDE results at all).
+type IncludeResult struct {
+	Cols []*ColumnBuffer
 }
 
 type IvfSearchCursor struct {

@@ -62,7 +62,7 @@ func TestAppendIncludeToBoxFree(t *testing.T) {
 		require.Equal(t, 4, k0.N)
 		require.Equal(t, []bool{false, true, false, true}, k0.Nulls)
 		vec0 := vector.NewVec(types.T_int64.ToType())
-		require.NoError(t, AppendColumnBuffer(k0, vec0, mp))
+		require.NoError(t, vectorindex.AppendColumnBuffer(k0, vec0, mp))
 		require.Equal(t, 4, vec0.Length())
 		vals0 := vector.MustFixedColWithTypeCheck[int64](vec0)
 		require.Equal(t, int64(100), vals0[0])
@@ -80,7 +80,7 @@ func TestAppendIncludeToBoxFree(t *testing.T) {
 		}
 		require.Equal(t, []bool{false, false, true, true}, k1.Nulls)
 		vec1 := vector.NewVec(types.T_varchar.ToType())
-		require.NoError(t, AppendColumnBuffer(k1, vec1, mp))
+		require.NoError(t, vectorindex.AppendColumnBuffer(k1, vec1, mp))
 		require.Equal(t, "active", vec1.GetStringAt(0))
 		require.Equal(t, "b", vec1.GetStringAt(1))
 		require.False(t, vec1.IsNull(0))
@@ -111,7 +111,7 @@ func TestColumnBufferAllNonNull(t *testing.T) {
 	require.NoError(t, seg.appendIncludeTo(k, 1, 1))
 	require.Nil(t, k.Nulls, "no NULL seen -> Nulls stays nil")
 	vec := vector.NewVec(types.T_varchar.ToType())
-	require.NoError(t, AppendColumnBuffer(k, vec, mp))
+	require.NoError(t, vectorindex.AppendColumnBuffer(k, vec, mp))
 	require.False(t, vec.IsNull(0))
 	require.False(t, vec.IsNull(1))
 }
